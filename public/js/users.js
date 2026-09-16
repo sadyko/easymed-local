@@ -68,7 +68,7 @@ function actionsCell(u) {
   btn.className = 'ghost';
   btn.textContent = 'Reset password';
   btn.addEventListener('click', async () => {
-    const pw = prompt(`New password for ${u.username} (min 8 characters):`);
+    const pw = prompt(`New password for ${u.username}:`);
     if (pw === null) return;
     await update(u.id, { password: pw });
   });

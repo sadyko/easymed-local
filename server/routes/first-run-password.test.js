@@ -82,7 +82,7 @@ test('change-password with the right current password lifts the gate for the SAM
   assert.equal(wrong.status, 401);
 
   const weak = await request(server, cookie, 'POST', '/api/auth/change-password',
-    { current_password: FIRST_RUN_PASSWORD, new_password: 'short' });
+    { current_password: FIRST_RUN_PASSWORD, new_password: '' });   // PASSWORD_CLINIC_RULE_V1 — коротким отказа больше нет, пустому есть
   assert.equal(weak.status, 400);
   assert.equal((await weak.json()).error.code, 'weak_password');
 

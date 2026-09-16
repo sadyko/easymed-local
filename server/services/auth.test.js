@@ -33,7 +33,7 @@ test('changeOwnPassword: verifies current, applies the shared strength rule, cle
   const { id } = db.prepare("SELECT id FROM users WHERE username = 'admin'").get();
 
   assert.equal(changeOwnPassword(db, id, 'wrong-current', 'a-fine-new-password').error, 'invalid_current');
-  assert.equal(changeOwnPassword(db, id, FIRST_RUN_PASSWORD, 'short').error, 'weak_password');
+  assert.equal(changeOwnPassword(db, id, FIRST_RUN_PASSWORD, '').error, 'weak_password');   // PASSWORD_CLINIC_RULE_V1 — пустой пароль это вход без пароля
   // the flag must still be set — nothing above was allowed to change anything
   assert.equal(db.prepare('SELECT must_change_password FROM users WHERE id = ?').get(id).must_change_password, 1);
 
@@ -55,9 +55,11 @@ test('changeOwnPassword ends every other session but keeps the caller\'s own', (
   assert.equal(sessionUser(db, other.session), null, 'a stale session elsewhere dies with the old password');
 });
 
-test('validPassword counts bytes, not characters (bcrypt truncates at 72 BYTES)', () => {
-  assert.equal(validPassword('1234567'), false);           // 7 chars — too short
-  assert.equal(validPassword('12345678'), true);
+test('validPassword: длину решает клиника, но пустого пароля нет и 72 БАЙТА — потолок', () => {
+  // PASSWORD_CLINIC_RULE_V1 — владелец: «can we accept the 1 digit password».
+  assert.equal(validPassword('1'), true);                  // одна цифра — решение клиники
+  assert.equal(validPassword('1234567'), true);
+  assert.equal(validPassword(''), false);                  // пустой = вход без пароля
   assert.equal(validPassword('ж'.repeat(36)), true);       // 72 bytes exactly
   assert.equal(validPassword('ж'.repeat(37)), false);      // 74 bytes — silently truncated by bcrypt, so refused
   assert.equal(validPassword(12345678), false);

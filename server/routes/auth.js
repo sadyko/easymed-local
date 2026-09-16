@@ -79,7 +79,7 @@ export function authRoutes(db) {
     const { current_password, new_password } = req.body || {};
     const result = changeOwnPassword(db, req.user.id, current_password, new_password, req.sessionId);
     if (result.error === 'weak_password') {
-      return res.status(400).json({ error: { code: 'weak_password', message: 'Password must be 8 characters or more (max 72 bytes).' } });
+      return res.status(400).json({ error: { code: 'weak_password', message: 'Password must not be empty (max 72 bytes).' } });
     }
     if (result.error) {
       return res.status(401).json({ error: { code: 'invalid_credentials', message: 'Current password is wrong.' } });

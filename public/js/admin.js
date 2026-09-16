@@ -2560,7 +2560,7 @@ function showFirstLoginReset(user) {
     if (existing) existing.remove();
 
     const errEl = h('div', { style: { color: 'var(--crit-700)', fontSize: '12.5px', minHeight: '16px', textAlign: 'center' } });
-    const newPwd  = h('input', { type: 'password', placeholder: 'New password (min 8 characters)', autocomplete: 'new-password', style: loginInputStyle() });
+    const newPwd  = h('input', { type: 'password', placeholder: 'Новый пароль', autocomplete: 'new-password', style: loginInputStyle() });
     const confirm = h('input', { type: 'password', placeholder: 'Repeat new password',            autocomplete: 'new-password', style: loginInputStyle() });
     const btn = h('button', {
         type: 'submit', class: 'btn btn-primary',
@@ -2575,7 +2575,7 @@ function showFirstLoginReset(user) {
             return;
         }
         if ((newPwd.value || '').length < 8) {
-            errEl.textContent = 'Use at least 8 characters.';
+            errEl.textContent = 'Введите новый пароль.';
             newPwd.focus(); newPwd.select();
             return;
         }

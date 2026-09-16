@@ -50,7 +50,7 @@
 import { supabase } from '../../supabase.js';
 import { isAccommodationLine, isServiceLine, isGoodsLine, ACCOMMODATION_LABEL } from '../../shared/accommodation-line.js';
 // INPATIENT_FLOW_V1 — «в койке» это ЧЕТЫРЕ состояния, а не 'active' (миграция 091).
-import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';
+import { IN_BED_STATUSES } from '../../shared/admission-status.js';
 import { fitViewport } from './dash-kpi.js';   // WARD_BOARD_V3 — доска в один экран, как сводка
 import { CAT_ORDER, categoryOf, filterCatalog, categoryCounts } from '../../shared/service-categories.js';   // SERVICE_CATALOG_FILTER_V1   // ACCOMMODATION_AS_SERVICE_V1
 import { h, Icon, clear, toast, Tag, field, fmtDateTime, initials } from '../ui.js';
@@ -1092,56 +1092,94 @@ export async function admissionsHistoryCard() { return admissionsTable(); }
 // колонки справа (баланс с минусом — красный) и поле «фильтр» под каждой
 // колонкой. Данные — один вызов admissions_register (rpc/admissions-register.js),
 // фильтры — на экране, по тексту ячейки. Клик и Enter по строке — в обзор.
+// ADMISSIONS_REGISTER_V2 (2026-09-16) — ЖУРНАЛ ВЕДЁТСЯ ПО ОБРАЗЦУ КЛИНИКИ.
+//
+// Владелец прислал свой Excel («Лист Microsoft Excel (4).xlsx») и сказал: «it
+// should be like the excel table and exportable into a excel». Это не вкусовая
+// правка: по такому листу стационар отчитывается, и колонки в нём — те, что
+// спрашивают проверяющие: № по порядку, № истории, ФИО, ГОД рождения (не
+// дата), отделение с палатой и классом, дата поступления, дата выписки,
+// лечащий врач, страна, регион, адрес, паспорт, диагноз.
+//
+// Прежние колонки (статус, койка, покрытие, сумма акта, выставлено, баланс)
+// убраны по прямому ответу владельца «строго как в Excel»: деньги
+// госпитализации видны в её карточке и в кассе, а журнал — не финансовый
+// отчёт. Если понадобятся — вернуть их значит вернуть строки в этот список.
+//
+// Одно описание колонки служит трижды: заголовок, фильтр под ним и ячейка
+// выгрузки. Две копии разошлись бы в первый же день, и выгрузка перестала бы
+// совпадать с тем, что человек видит на экране.
+const BED_CLASS_RU = {
+    standard: 'Обычная', icu: 'Реанимационная', isolation: 'Изоляционная',
+    vip: 'Люкс', recovery: 'Послеоперационная', observation: 'Наблюдения',
+};
+const WARD_CLASS_RU = {
+    general: 'Общая', icu: 'Реанимация', maternity: 'Родильная', pediatrics: 'Детская',
+    surgery: 'Хирургическая', oncology: 'Онкологическая', isolation: 'Изолятор', other: 'Прочая',
+};
+// «Неврология 309 · Люкс» — как в образце: отделение, палата, класс палаты.
+// Отделение берём у госпитализации, а если там пусто — у палаты (её отделение
+// заведено в настройках). Класс — у койки, а если у койки его нет — у палаты.
+function deptText(r) {
+    const dept = String(r.department || '').trim() || String(r.ward_department || '').trim();
+    const room = String(r.ward_name || '').trim();
+    const cls = BED_CLASS_RU[r.bed_type] || WARD_CLASS_RU[r.ward_type] || '';
+    const head = [dept, room].filter(Boolean).join(' ');
+    return [head, cls].filter(Boolean).join(' · ');
+}
+function birthYear(r) {
+    const y = String(r.date_of_birth || '').slice(0, 4);
+    return /^\d{4}$/.test(y) ? y : '';
+}
+function dayText(iso) {
+    return iso ? dateNumeric(iso) : '';
+}
+function idDocText(r) {
+    return String(r.passport_number || '').trim() || String(r.national_id || '').trim();
+}
 const REGISTER_COLS = [
-    { key: 'patient',    label: 'Пациент',    text: (r) => [r.mrn, r.full_name].filter(Boolean).join(' ') },
-    { key: 'dob',        label: 'Дата рожд.', text: (r) => dobText(r) },
-    { key: 'no',         label: '№ истории',  text: (r) => r.admission_no || ('#' + r.id) },
-    { key: 'status',     label: 'Статус',     text: (r) => admissionStatusLabel(r.status) + (Number(r.debt_total) > 0 ? ' ' + tr('Долг') : '') },   // DEBT_FLOW_V1 — фильтр по слову «долг»
-    { key: 'admitted',   label: 'Госпит.',    text: (r) => (r.admitted_at && r.status !== 'ordered' ? fmtDateTime(r.admitted_at) : '') },
-    { key: 'discharged', label: 'Выписка',    text: (r) => (r.discharged_at ? fmtDateTime(r.discharged_at) : '') },
-    { key: 'dept',       label: 'Отделение',  text: (r) => r.department || '' },
-    { key: 'bed',        label: 'Койка',      text: (r) => [r.ward_name, r.bed_code].filter(Boolean).join(' / ') },
-    { key: 'doctor',     label: 'Врач',       text: (r) => r.attending_name || '' },
-    { key: 'payer',      label: 'Покрытие',   text: (r) => r.payer_name || tr('Пациент') },
-    { key: 'act',        label: 'Сумма акта', num: true, text: (r) => fmtPrice(r.act_total) },
-    { key: 'invoiced',   label: 'Выставлено', num: true, text: (r) => fmtPrice(r.invoiced_total) },
-    { key: 'balance',    label: 'Баланс',     num: true, text: (r) => fmtPrice(r.balance) },
+    { key: 'no',        label: '№',                w: 46,  text: (r, i) => String(i + 1) },
+    { key: 'admno',     label: 'ИБ №',             w: 96,  text: (r) => r.admission_no || ('#' + r.id) },
+    { key: 'name',      label: 'ФИО',              w: 210, text: (r) => r.full_name || '' },
+    { key: 'born',      label: 'Год рождения',     w: 96,  text: (r) => birthYear(r) },
+    { key: 'dept',      label: 'Отделение',        w: 180, text: (r) => deptText(r) },
+    { key: 'admitted',  label: 'Дата рег',         w: 96,  text: (r) => dayText(r.status === 'ordered' ? '' : r.admitted_at) },
+    { key: 'discharged', label: 'Дата выписки',    w: 100, text: (r) => dayText(r.discharged_at) },
+    { key: 'doctor',    label: 'ФИО ЛВ',           w: 160, text: (r) => r.attending_name || '' },
+    { key: 'country',   label: 'Страна',           w: 100, text: (r) => r.country || '' },
+    { key: 'region',    label: 'Регион',           w: 120, text: (r) => r.region || '' },
+    { key: 'address',   label: 'Адрес',            w: 240, text: (r) => [r.district, r.address].map((x) => String(x || '').trim()).filter(Boolean).join(', ') },
+    { key: 'passport',  label: 'Паспортные данные', w: 160, text: (r) => idDocText(r) },
+    { key: 'dx',        label: 'Диагноз',          w: 260, text: (r) => r.diagnosis || '' },
 ];
-function ageYears(dob) {
-    const b = new Date(dob); const n = new Date();
-    if (Number.isNaN(b.getTime())) return null;
-    let age = n.getFullYear() - b.getFullYear();
-    const m = n.getMonth() - b.getMonth();
-    if (m < 0 || (m === 0 && n.getDate() < b.getDate())) age -= 1;
-    return age >= 0 ? age : null;
-}
-function dobText(r) {
-    if (!r.date_of_birth) return '';
-    const age = ageYears(r.date_of_birth);
-    return dateNumeric(r.date_of_birth) + (age !== null ? ' (' + age + ')' : '');
-}
 async function admissionsTable() {
     const filters = {};
     const tbody = h('tbody');
     const count = h('div', { class: 'ar-count' });
-    const filterCells = REGISTER_COLS.map((c) => h('th', { class: 'ar-filter-cell' + (c.num ? ' ar-num' : '') },
+    let rows = [];
+    let shownRows = [];
+    const filterCells = REGISTER_COLS.map((c) => h('th', { class: 'ar-filter-cell' },
         h('input', {
             class: 'ar-filter', type: 'search', placeholder: 'фильтр…', autocomplete: 'off', spellcheck: 'false',
             'aria-label': trf('Фильтр: {col}', { col: tr(c.label) }),
             oninput: (e) => { filters[c.key] = String((e.target || e.currentTarget).value || '').trim().toLowerCase(); paintRows(); },
         })));
     const table = h('table', { class: 'ar-table' },
+        h('colgroup', null, ...REGISTER_COLS.map((c) => h('col', { style: { width: c.w + 'px' } }))),
         h('thead', null,
-            h('tr', null, ...REGISTER_COLS.map((c) => h('th', { class: c.num ? 'ar-num' : '', scope: 'col' }, tr(c.label)))),
+            h('tr', null, ...REGISTER_COLS.map((c) => h('th', { scope: 'col' }, tr(c.label)))),
             h('tr', { class: 'ar-filters' }, ...filterCells)),
         tbody);
+    // ADMISSIONS_REGISTER_V2 — выгрузка ровно того, что на экране: те же
+    // колонки, тот же порядок, те же строки после фильтров.
+    const exportBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => exportRegister() },
+        Icon('Download', { size: 13 }), ' ', tr('Экспорт в Excel'));
     const card = h('div', { class: 'card ar-card' },
         h('div', { class: 'ar-head' },
             h('h3', { class: 'ar-title' }, Icon('Doc', { size: 15 }), ' ', tr('Госпитализации')),
-            count),
+            h('div', { class: 'ar-head-r' }, count, exportBtn)),
         h('div', { class: 'ar-scroll' }, table));
 
-    let rows = [];
     const msg = (text, tone = '') => {
         clear(tbody);
         tbody.appendChild(h('tr', null, h('td', { colspan: String(REGISTER_COLS.length), class: 'ar-msg' + (tone ? ' ar-' + tone : '') }, text)));
@@ -1151,43 +1189,49 @@ async function admissionsTable() {
     if (error) { msg(trf('Не удалось загрузить: {msg}', { msg: (error && error.message) || '' }), 'crit'); return card; }
     rows = (data && data.rows) || [];
 
-    function rowEl(r) {
-        const active = IN_BED_STATUSES.includes(r.status);
-        const tone = active ? (r.status === 'discharging' ? 'warn' : 'ok') : (r.status === 'ordered' ? 'warn' : '');
-        const neg = Number(r.balance) < 0;
+    function rowEl(r, i) {
         const open = () => openCaseOverview(r.id);
         return h('tr', {
             class: 'ar-row', tabindex: '0', onclick: open,
             onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { if (e.preventDefault) e.preventDefault(); open(); } },
-        },
-            h('td', null, h('div', { class: 'ar-pat' },
-                h('span', { class: 'ar-av ' + pastelFor(r.patient_id || r.full_name || ''), 'aria-hidden': 'true' }, initials(r.full_name || '?')),
-                h('span', { class: 'ar-id' }, r.mrn || ''),
-                h('span', { class: 'ar-name' }, r.full_name || '—'))),
-            h('td', { class: 'ar-nowrap' }, dobText(r) || '—'),
-            h('td', { class: 'ar-nowrap' }, r.admission_no || ('#' + r.id)),
-            h('td', null, Tag(admissionStatusLabel(r.status), { kind: tone, dot: true }),
-                // DEBT_FLOW_V1 — оформленный долг стоит красной меткой при статусе.
-                Number(r.debt_total) > 0
-                    ? h('span', { class: 'tag tag-crit ar-debt', title: trf('Оформлен долг: {sum}', { sum: fmtPrice(r.debt_total) }) }, tr('Долг'))
-                    : null),
-            h('td', { class: 'ar-nowrap' }, REGISTER_COLS[4].text(r) || '—'),
-            h('td', { class: 'ar-nowrap' }, REGISTER_COLS[5].text(r) || '—'),
-            h('td', null, r.department || '—'),
-            h('td', { class: 'ar-nowrap' }, REGISTER_COLS[7].text(r) || '—'),
-            h('td', null, r.attending_name || '—'),
-            h('td', null, r.payer_name || tr('Пациент')),
-            h('td', { class: 'ar-num' }, fmtPrice(r.act_total)),
-            h('td', { class: 'ar-num' }, fmtPrice(r.invoiced_total)),
-            h('td', { class: 'ar-num' + (neg ? ' ar-neg' : '') }, fmtPrice(r.balance)));
+        }, ...REGISTER_COLS.map((c) => {
+            const v = c.text(r, i);
+            const cls = ['no', 'admno', 'born', 'admitted', 'discharged'].includes(c.key) ? 'ar-nowrap' : '';
+            return h('td', { class: cls + (c.key === 'name' ? ' ar-strong' : '') }, v || '—');
+        }));
     }
     function paintRows() {
-        if (!rows.length) { msg(tr('Госпитализаций пока нет.')); count.textContent = ''; return; }
-        const shown = rows.filter((r) => REGISTER_COLS.every((c) => !filters[c.key] || c.text(r).toLowerCase().includes(filters[c.key])));
+        if (!rows.length) { shownRows = []; msg(tr('Госпитализаций пока нет.')); count.textContent = ''; return; }
+        // Фильтр читает ту же строку, что видно в ячейке; № по порядку не
+        // фильтруется по смыслу — он у отфильтрованного списка свой.
+        shownRows = rows.filter((r, i) => REGISTER_COLS.every((c) => !filters[c.key] || c.key === 'no' || c.text(r, i).toLowerCase().includes(filters[c.key])));
         clear(tbody);
-        if (!shown.length) msg(tr('По фильтру ничего не найдено.'));
-        for (const r of shown) tbody.appendChild(rowEl(r));
-        count.textContent = trf('Показано {n} из {total}', { n: shown.length, total: rows.length });
+        if (!shownRows.length) msg(tr('По фильтру ничего не найдено.'));
+        shownRows.forEach((r, i) => tbody.appendChild(rowEl(r, i)));
+        count.textContent = trf('Показано {n} из {total}', { n: shownRows.length, total: rows.length });
+    }
+    async function exportRegister() {
+        const list = shownRows.length || Object.keys(filters).some((k) => filters[k]) ? shownRows : rows;
+        if (!list.length) { toast(tr('Нечего выгружать.'), 'info'); return; }
+        exportBtn.disabled = true;
+        try {
+            const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
+            const header = REGISTER_COLS.map((c) => tr(c.label));
+            const aoa = [header, ...list.map((r, i) => REGISTER_COLS.map((c) => c.text(r, i)))];
+            const ws = XLSX.utils.aoa_to_sheet(aoa);
+            ws['!cols'] = REGISTER_COLS.map((c) => ({ wch: Math.max(8, Math.round(c.w / 7)) }));
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Госпитализации');
+            const d = new Date();
+            const stamp = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+            XLSX.writeFile(wb, 'gospitalizacii_' + stamp + '.xlsx');
+            toast(trf('Выгружено строк: {n}', { n: list.length }), 'ok');
+        } catch (e) {
+            console.error('[register] xlsx:', e);
+            toast(tr('Не удалось сформировать файл.'), 'fail');
+        } finally {
+            exportBtn.disabled = false;
+        }
     }
     paintRows();
     return card;

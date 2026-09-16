@@ -30,12 +30,28 @@ export function hashPassword(pw) {
   return bcrypt.hashSync(pw, BCRYPT_COST);
 }
 
-// bcrypt only hashes the first 72 BYTES — a 72-char Cyrillic password is 126
-// bytes, so counting characters would silently ignore the tail. Count bytes.
-// Lives here (not routes/users.js, where it started) because the self-service
-// change-password path below applies the identical rule — one implementation.
+// PASSWORD_CLINIC_RULE_V1 (2026-09-16) — ДЛИНУ ПАРОЛЯ РЕШАЕТ КЛИНИКА.
+//
+// Владелец: «can we accept the 1 digit password … for the users created by
+// admin and admin itself?». Раньше здесь стояло «не короче 8 символов», и
+// администратор не мог завести медсестре короткий пароль, который она наберёт
+// одной рукой у койки.
+//
+// Что это значит по-честному: короткий пароль подбирается. Установка работает
+// в локальной сети клиники, вход к тому же придержан троттлингом неудачных
+// попыток (см. noteFailure ниже), но если база окажется доступна снаружи,
+// пароль из одной цифры не защитит ничего. Решение владельца, и оно записано
+// здесь, а не растворено по экранам.
+//
+// Что осталось: пароль не может быть ПУСТЫМ (пустой — это вход без пароля), и
+// он не длиннее 72 БАЙТ — bcrypt хеширует только первые 72 байта, а 72 буквы
+// кириллицей это 126 байт, и хвост молча пропал бы. Считаем байты.
+//
+// Правило одно на всё приложение: его же применяет самостоятельная смена
+// пароля ниже и обе ручки /api/users. Пароль ВЕНДОРСКОЙ панели
+// (control-plane) живёт по своему, строгому правилу: та смотрит в интернет.
 export function validPassword(pw) {
-  return typeof pw === 'string' && pw.length >= 8 && Buffer.byteLength(pw, 'utf8') <= 72;
+  return typeof pw === 'string' && pw.length >= 1 && Buffer.byteLength(pw, 'utf8') <= 72;
 }
 
 export function login(db, username, password) {

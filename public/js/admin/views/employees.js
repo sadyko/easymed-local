@@ -565,7 +565,7 @@ function openEditor(user, root) {
                 // веткой внутри append.
                 );
             if (!isEdit) {
-                body.append(hint('Логин 3–30 символов (латиница, цифры, . _ -). Пароль от 8 символов.'));
+                body.append(hint('Логин 3–30 символов (латиница, цифры, . _ -). Пароль — любой, длину выбирает клиника.'));
             }
         }
         if (readOnly) disableAll(body);

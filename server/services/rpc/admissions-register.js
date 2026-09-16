@@ -28,7 +28,20 @@ export function admissionsRegister(db, args, user) {
     SELECT a.id, a.admission_no, a.status, a.admitted_at, a.discharged_at, a.department, a.admission_type,
            a.planned_discharge_at,
            p.id AS patient_id, p.mrn, p.full_name, p.date_of_birth,
-           w.name AS ward_name, b.code AS bed_code,
+           -- ADMISSIONS_REGISTER_V2 — журнал ведут по образцу клиники (Excel
+           -- владельца): страна, регион, адрес, паспорт и диагноз стоят в нём
+           -- рядом с номером истории, потому что по этому листу отчитываются, а
+           -- не ищут пациента в программе.
+           p.country, p.region, p.district, p.address, p.passport_number, p.national_id,
+           a.admission_diagnosis,
+           w.name AS ward_name, w.type AS ward_type, b.code AS bed_code, b.type AS bed_type,
+           dep.name AS ward_department,
+           -- Диагноз пишет осмотр: в заявке его часто ещё нет, а в журнале он
+           -- обязан быть. Берём последний ОПУБЛИКОВАННЫЙ непустой.
+           (SELECT r.diagnosis FROM admission_reviews r
+             WHERE r.admission_id = a.id AND r.published_at IS NOT NULL
+               AND r.diagnosis IS NOT NULL AND TRIM(r.diagnosis) <> ''
+             ORDER BY r.published_at DESC, r.id DESC LIMIT 1) AS review_diagnosis,
            doc.full_name AS attending_name,
            py.name AS payer_name,
            (SELECT COALESCE(SUM(s.total), 0) FROM admission_services s WHERE s.admission_id = a.id) AS act_total,
@@ -43,6 +56,7 @@ export function admissionsRegister(db, args, user) {
       FROM admissions a
       LEFT JOIN patients p ON p.id = a.patient_id
       LEFT JOIN wards w ON w.id = a.ward_id
+      LEFT JOIN departments dep ON dep.id = w.department_id
       LEFT JOIN beds b ON b.id = a.bed_id
       LEFT JOIN users doc ON doc.id = a.attending_doctor_id
       LEFT JOIN payers py ON py.id = p.payer_id
@@ -51,6 +65,8 @@ export function admissionsRegister(db, args, user) {
   return {
     rows: rows.map((r) => ({
       ...r,
+      // ADMISSIONS_REGISTER_V2 — одно слово «диагноз» на экране и в выгрузке.
+      diagnosis: String(r.admission_diagnosis || '').trim() || String(r.review_diagnosis || '').trim() || '',
       act_total: round2(r.act_total),
       invoiced_total: round2(r.invoiced_total),
       paid_total: round2(r.paid_total),

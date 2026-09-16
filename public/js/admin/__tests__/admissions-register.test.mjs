@@ -1,4 +1,7 @@
-// ADMISSIONS_REGISTER_V1 — журнал госпитализаций: колонки образца, фильтры, красный долг, переход в обзор.
+// ADMISSIONS_REGISTER_V2 — журнал госпитализаций по образцу клиники (Excel
+// владельца): колонки, фильтры под ними, переход в обзор и выгрузка того же,
+// что на экране. Деньги и статус из журнала убраны по прямому решению
+// владельца («строго как в Excel») — они живут в карточке госпитализации.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -62,12 +65,18 @@ const textOf = (e) => walk(e).map((x) => x._text || '').join(' ');
 const settle = () => new Promise((r) => setTimeout(r, 30));
 
 const ROWS = [
-    { id: 51, admission_no: '2026/00051', status: 'active', admitted_at: '2026-06-06T22:10:00Z', discharged_at: null, department: 'Реанимация',
-        patient_id: 31002, mrn: '31002', full_name: 'Каримов Темур Алишерович', date_of_birth: '1971-07-03', ward_name: 'Реанимация', bed_code: '01-01/1',
-        attending_name: 'Каримов Рустам Шухратович', payer_name: null, act_total: 22795500, invoiced_total: 16452000, paid_total: 0, balance: -16452000 },
-    { id: 46, admission_no: '2026/00046', status: 'discharged', admitted_at: '2026-06-01T06:50:00Z', discharged_at: '2026-06-04T18:10:00Z', department: 'Реанимация',
-        patient_id: 27431, mrn: '27431', full_name: 'Юлдашев Сардор Комилович', date_of_birth: '1985-03-30', ward_name: 'Реанимация', bed_code: null,
-        attending_name: 'Каримов Рустам Шухратович', payer_name: 'Страховая А', act_total: 20798500, invoiced_total: 20798500, paid_total: 20798500, balance: 0 },
+    { id: 51, admission_no: '2026/00051', status: 'active', admitted_at: '2026-06-06T09:10:00Z', discharged_at: null, department: 'Неврология',
+        patient_id: 31002, mrn: '31002', full_name: 'Каримов Темур Алишерович', date_of_birth: '1971-07-03', ward_name: '309', bed_code: '01-01/1',
+        bed_type: 'vip', ward_type: 'general', ward_department: 'Неврология',
+        country: 'Узбекистан', region: 'г. Ташкент', district: 'Юнусабадский район', address: 'ул. Амира Темура, 12',
+        passport_number: 'AB 9779703', national_id: '', diagnosis: 'Сурункали бош мия ишемияси',
+        attending_name: 'Каримов Рустам Шухратович' },
+    { id: 46, admission_no: '2026/00046', status: 'discharged', admitted_at: '2026-06-01T06:50:00Z', discharged_at: '2026-06-04T18:10:00Z', department: '',
+        patient_id: 27431, mrn: '27431', full_name: 'Юлдашев Сардор Комилович', date_of_birth: '1985-03-30', ward_name: '215', bed_code: null,
+        bed_type: 'standard', ward_type: 'general', ward_department: 'Терапия',
+        country: 'Узбекистан', region: 'Сурхандарьинская область', district: 'Жаркурганский район', address: 'махалля Куштепа, 85',
+        passport_number: '', national_id: 'AD 8351269', diagnosis: 'Гипертония касаллиги II',
+        attending_name: 'Ахмедова Умида Маратовна' },
 ];
 let registerAnswer = () => ({ ok: true, data: { rows: ROWS, total: ROWS.length } });
 globalThis.fetch = async (url, opts = {}) => {
@@ -86,40 +95,45 @@ async function renderRegister() {
 }
 const rowsOf = (card) => walk(card).filter((e) => e.tagName === 'TR' && String(e.className).split(/\s+/).includes('ar-row'));
 
-test('журнал: колонки образца, аватар с номером и именем, возраст, чипы статуса, деньги, красный долг', async () => {
+test('журнал: тринадцать колонок образца, год рождения, отделение с палатой и классом, документ и диагноз', async () => {
     const card = await renderRegister();
     const t = textOf(card);
-    for (const col of ['Пациент', 'Дата рожд.', '№ истории', 'Статус', 'Госпит.', 'Выписка', 'Отделение', 'Койка', 'Врач', 'Покрытие', 'Сумма акта', 'Выставлено', 'Баланс']) {
+    for (const col of ['№', 'ИБ №', 'ФИО', 'Год рождения', 'Отделение', 'Дата рег', 'Дата выписки', 'ФИО ЛВ',
+        'Страна', 'Регион', 'Адрес', 'Паспортные данные', 'Диагноз']) {
         assert.ok(t.includes(col), 'нет колонки ' + col);
     }
-    assert.ok(!t.includes('Филиал'), 'колонки «Филиал» быть не должно — у госпитализаций нет филиала');
-    for (const piece of ['31002', 'Каримов Темур Алишерович', '03.07.1971', '2026/00051', 'Реанимация / 01-01/1', 'Каримов Рустам Шухратович',
-        '22 795 500', '16 452 000', '-16 452 000', 'Страховая А', 'Пациент', 'Показано 2 из 2']) {
+    for (const gone of ['Сумма акта', 'Выставлено', 'Баланс', 'Покрытие']) {
+        assert.ok(!t.includes(gone), 'денежной колонки «' + gone + '» в журнале быть не должно');
+    }
+    for (const piece of ['2026/00051', 'Каримов Темур Алишерович', '1971', 'Неврология 309 · Люкс', '06.06.2026',
+        'Каримов Рустам Шухратович', 'Узбекистан', 'г. Ташкент', 'Юнусабадский район, ул. Амира Темура, 12',
+        'AB 9779703', 'Сурункали бош мия ишемияси', 'Показано 2 из 2']) {
         assert.ok(t.includes(piece), 'в журнале нет: ' + piece);
     }
+    // вторая строка: отделение подставляется от палаты, документ — из ПИНФЛ,
+    // когда паспорта нет, и выписка проставлена.
+    assert.ok(t.includes('Терапия 215 · Обычная'), 'отделение палаты, когда у госпитализации оно не заполнено');
+    assert.ok(t.includes('AD 8351269'), 'документ берётся из ПИНФЛ, если паспорта нет');
+    assert.ok(t.includes('04.06.2026'), 'дата выписки');
     const rows = rowsOf(card);
     assert.equal(rows.length, 2);
-    const neg = walk(rows[0]).find((e) => String(e.className).includes('ar-neg'));
-    assert.ok(neg && textOf(neg).includes('-16 452 000'), 'долг должен быть выделен');
-    assert.ok(!walk(rows[1]).some((e) => String(e.className).includes('ar-neg')), 'нулевой баланс не красный');
-    const av = walk(rows[0]).find((e) => String(e.className).includes('ar-av'));
-    assert.ok(av && textOf(av).trim().length >= 1, 'аватара с инициалами нет');
+    assert.ok(textOf(rows[0]).trim().startsWith('1'), 'первая колонка — номер по порядку');
     assert.equal(walk(card).filter((e) => e.tagName === 'INPUT' && e.className === 'ar-filter').length, 13, 'фильтр под каждой колонкой');
 });
 
 test('фильтр под колонкой сужает список по тексту ячейки; пусто — «ничего не найдено»', async () => {
     const card = await renderRegister();
     const inputs = walk(card).filter((e) => e.tagName === 'INPUT' && e.className === 'ar-filter');
-    const { admissionStatusLabel } = await import('../../shared/admission-status.js');
-    const status = inputs[3];
-    status.value = admissionStatusLabel('discharged').toLowerCase();   // подпись закрытой госпитализации — какая есть в системе
-    status.dispatchEvent({ type: 'input' });
+    const region = inputs[9];
+    region.value = 'сурхандар';
+    region.dispatchEvent({ type: 'input' });
     let rows = rowsOf(card);
     assert.equal(rows.length, 1);
     assert.ok(textOf(rows[0]).includes('Юлдашев'));
     assert.ok(textOf(card).includes('Показано 1 из 2'));
-    inputs[0].value = 'Каримов';
-    inputs[0].dispatchEvent({ type: 'input' });
+    const name = inputs[2];
+    name.value = 'Каримов';
+    name.dispatchEvent({ type: 'input' });
     assert.equal(rowsOf(card).length, 0, 'два фильтра складываются');
     assert.ok(textOf(card).includes('По фильтру ничего не найдено'));
 });

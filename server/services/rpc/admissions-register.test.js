@@ -91,3 +91,42 @@ test('DEBT_FLOW_V1: журнал знает оформленный долг — 
     assert.equal(r.invoiced_total, 600000);
     assert.equal(r.balance, -380000);
 });
+
+// ADMISSIONS_REGISTER_V2 — журнал по образцу клиники: адрес, документ и диагноз
+// стоят в нём рядом с номером истории, потому что по этому листу отчитываются.
+test('строка журнала несёт географию пациента, документ и диагноз', () => {
+    const ctx = seed();
+    ctx.db.prepare(`UPDATE patients SET country = 'Узбекистан', region = 'Сурхандарья', district = 'Жаркурганский район',
+                    address = 'махалля Куштепа, 85', passport_number = 'AD 8351269' WHERE id = ?`).run(ctx.p1);
+    const a = inBed(ctx, ctx.p1, ctx.bed1, '2026-06-06T22:10:00Z');
+    ctx.db.prepare("UPDATE admissions SET admission_diagnosis = 'Гипертония II' WHERE id = ?").run(a.id);
+    const r = admissionsRegister(ctx.db, {}, nurse).rows[0];
+    assert.equal(r.country, 'Узбекистан');
+    assert.equal(r.region, 'Сурхандарья');
+    assert.equal(r.district, 'Жаркурганский район');
+    assert.equal(r.address, 'махалля Куштепа, 85');
+    assert.equal(r.passport_number, 'AD 8351269');
+    assert.equal(r.diagnosis, 'Гипертония II');
+    assert.equal(r.ward_name, 'Реанимация', 'палата — для колонки «Отделение»');
+});
+
+test('диагноза в заявке нет — берём из последнего опубликованного осмотра', () => {
+    const ctx = seed();
+    const a = inBed(ctx, ctx.p2, ctx.bed2, '2026-06-02T08:00:00Z');
+    ctx.db.prepare(`INSERT INTO admission_reviews (admission_id, kind, diagnosis, author_id, published_at)
+                    VALUES (?, 'primary', 'J18.9 — Пневмония', 5, '2026-06-02T09:00:00Z')`).run(a.id);
+    ctx.db.prepare(`INSERT INTO admission_reviews (admission_id, kind, diagnosis, author_id, published_at)
+                    VALUES (?, 'round', 'J18.9 — Пневмония, улучшение', 5, '2026-06-03T09:00:00Z')`).run(a.id);
+    ctx.db.prepare(`INSERT INTO admission_reviews (admission_id, kind, diagnosis, author_id, published_at)
+                    VALUES (?, 'round', '', 5, '2026-06-04T09:00:00Z')`).run(a.id);
+    const r = admissionsRegister(ctx.db, {}, nurse).rows[0];
+    assert.equal(r.diagnosis, 'J18.9 — Пневмония, улучшение', 'последний непустой опубликованный');
+});
+
+test('черновик осмотра диагнозом журнала не становится', () => {
+    const ctx = seed();
+    const a = inBed(ctx, ctx.p2, ctx.bed2, '2026-06-02T08:00:00Z');
+    ctx.db.prepare(`INSERT INTO admission_reviews (admission_id, kind, diagnosis, author_id, published_at)
+                    VALUES (?, 'primary', 'Черновик', 5, NULL)`).run(a.id);
+    assert.equal(admissionsRegister(ctx.db, {}, nurse).rows[0].diagnosis, '');
+});

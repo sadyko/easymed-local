@@ -317,8 +317,12 @@ test('employees import: a new employee without a usable password is rejected', a
   t.after(() => { server.close(); sqlite.close(); });
   const cookie = await loginAdmin(base);
 
+  // PASSWORD_CLINIC_RULE_V1 — короткий пароль клиника разрешила себе сама;
+  // «непригодный» теперь значит ПУСТОЙ или отсутствующий.
   const short = await usersApi(base, cookie, '', 'POST', { username: 'x.short', password: 'abc', role: 'nurse' });
-  assert.equal(short.status, 400);
+  assert.equal(short.status, 201, 'короткий пароль — решение клиники, а не ошибка');
+  const empty = await usersApi(base, cookie, '', 'POST', { username: 'x.empty', password: '', role: 'nurse' });
+  assert.equal(empty.status, 400);
   const none = await usersApi(base, cookie, '', 'POST', { username: 'x.none', role: 'nurse' });
   assert.equal(none.status, 400);
   const badRole = await usersApi(base, cookie, '', 'POST', { username: 'x.role', password: 'ChangeMe123', role: 'wizard' });

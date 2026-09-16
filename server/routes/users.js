@@ -348,7 +348,7 @@ export function userRoutes(db) {
     const { username, password, full_name = '', role } = req.body || {};
     const name = String(username || '').trim().toLowerCase();
     if (!/^[a-z0-9._-]{3,30}$/.test(name)) return bad(res, 'Username must be 3-30 characters: letters, digits, . _ -');
-    if (!validPassword(password)) return bad(res, 'Password must be 8 characters or more (max 72 bytes).');
+    if (!validPassword(password)) return bad(res, 'Password must not be empty (max 72 bytes).');
     if (typeof full_name !== 'string') return bad(res, 'Full name must be text.');
     // INPATIENT_FLOW_V1 — ОСНОВНОЙ ролью может быть только профессия.
     // 'head_doctor'/'senior_nurse' — надстройки поверх неё и живут в
@@ -396,7 +396,7 @@ export function userRoutes(db) {
     }
     if (role !== undefined && !PRIMARY_ROLES.includes(role)) return bad(res, 'Unknown role.');   // INPATIENT_FLOW_V1 — см. POST выше
     if (password !== undefined && !validPassword(password)) {
-      return bad(res, 'Password must be 8 characters or more (max 72 bytes).');
+      return bad(res, 'Password must not be empty (max 72 bytes).');
     }
     if (full_name !== undefined && typeof full_name !== 'string') return bad(res, 'Full name must be text.');
     if (user.id === req.user.id && (active === false || (role !== undefined && role !== 'admin'))) {

@@ -600,7 +600,7 @@ const IMPORT_CONFIGS = {
                 return trf('роль «{role}» неизвестна ({list})', { role: payload.role || '', list: VALID_ROLE_KEYS.join(' · ') });
             }
             if (!payload.password || String(payload.password).length < 8) {
-                return 'новому сотруднику нужен пароль от 8 символов';
+                return 'новому сотруднику нужен пароль';
             }
             return null;
         },
