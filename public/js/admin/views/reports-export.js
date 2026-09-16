@@ -24,36 +24,36 @@ import { originTag } from '../record-origin.js';
 // The exact column order the owner spec'd. Keys map to fields we produce
 // in buildRevenueRow(); labels are the header row in the .xlsx.
 export const REVENUE_COLUMNS = [
-    { key: 'patient_id',           label: 'Patient ID' },
-    { key: 'patient_full_name',    label: 'Patient Full name' },
-    { key: 'patient_phone',        label: 'Number' },
-    { key: 'visit_kind',           label: 'Outpatient or inpatient' },
-    { key: 'service_group',        label: 'Service group' },
-    { key: 'service_type',         label: 'Service type' },
-    { key: 'service_category',     label: 'Service category' },
-    { key: 'service_name',         label: 'Service' },
-    { key: 'price',                label: 'Price' },
-    { key: 'amount',               label: 'Amount' },
-    { key: 'discount',             label: 'discount' },
-    { key: 'amount_after_discount',label: 'Amount After discount' },
-    { key: 'tax_rate',             label: 'Tax rate' },
-    { key: 'amount_after_tax',     label: 'Amount after tax' },
-    { key: 'service_date',         label: 'Service date' },
-    { key: 'done_date',            label: 'Done date' },
-    { key: 'coverage_type',        label: 'Coverage type' },
-    { key: 'coverer',              label: 'Coverer' },
-    { key: 'payment_state',        label: 'Payment state' },
-    { key: 'doctor_name',          label: 'Doctor Name' },
-    { key: 'doctor_payroll_pct',   label: 'Doctor Payroll for Service (%)' },
-    { key: 'doctor_payroll_amt',   label: 'Doctor Payroll for Service' },
-    { key: 'branch',               label: 'Branch' },
-    { key: 'building',             label: 'Building' },
-    { key: 'registrar_name',       label: 'Registrar Name' },
-    { key: 'referral_category',    label: 'Referal source category' },
-    { key: 'referrer_name',        label: 'Referrer Name' },
-    { key: 'referral_payroll_pct', label: 'Referral Payroll (%)' },
-    { key: 'referral_payroll_amt', label: 'Referral Payroll' },
-    { key: 'invoice_number',       label: 'Invoice number' },
+    { key: 'patient_id',           label: 'Номер карты' },
+    { key: 'patient_full_name',    label: 'ФИО пациента' },
+    { key: 'patient_phone',        label: 'Телефон' },
+    { key: 'visit_kind',           label: 'Амбулаторно или стационар' },
+    { key: 'service_group',        label: 'Группа услуги' },
+    { key: 'service_type',         label: 'Тип услуги' },
+    { key: 'service_category',     label: 'Категория услуги' },
+    { key: 'service_name',         label: 'Услуга' },
+    { key: 'price',                label: 'Цена' },
+    { key: 'amount',               label: 'Сумма' },
+    { key: 'discount',             label: 'Скидка' },
+    { key: 'amount_after_discount',label: 'Сумма после скидки' },
+    { key: 'tax_rate',             label: 'Ставка налога, %' },
+    { key: 'amount_after_tax',     label: 'Сумма без налога' },
+    { key: 'service_date',         label: 'Дата услуги' },
+    { key: 'done_date',            label: 'Дата выполнения' },
+    { key: 'coverage_type',        label: 'Кто платит' },
+    { key: 'coverer',              label: 'Плательщик' },
+    { key: 'payment_state',        label: 'Состояние оплаты' },
+    { key: 'doctor_name',          label: 'Врач' },
+    { key: 'doctor_payroll_pct',   label: 'Доля врача, %' },
+    { key: 'doctor_payroll_amt',   label: 'Доля врача, сумма' },
+    { key: 'branch',               label: 'Филиал' },
+    { key: 'building',             label: 'Здание' },
+    { key: 'registrar_name',       label: 'Регистратор' },
+    { key: 'referral_category',    label: 'Категория источника' },
+    { key: 'referrer_name',        label: 'Кто направил' },
+    { key: 'referral_payroll_pct', label: 'Вознаграждение, %' },
+    { key: 'referral_payroll_amt', label: 'Вознаграждение, сумма' },
+    { key: 'invoice_number',       label: '№ счёта' },
 ];
 
 // BUILDING_REPORTS_V1 — подписи зданий приходят от сервера (report_buildings):
@@ -126,8 +126,8 @@ function isoToDateInput(iso) {
 
 // Turn "outpatient" / "inpatient" from what the data tells us.
 function visitKindLabel(inv) {
-    if (inv.admission_id) return 'Inpatient';
-    if (inv.visit_id)     return 'Outpatient';
+    if (inv.admission_id) return 'Стационар';
+    if (inv.visit_id)     return 'Амбулаторно';
     return '—';
 }
 
@@ -139,14 +139,30 @@ function fmtDateTime(iso) {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// OFFLINE_REPORTS_V1 — пять групп услуг словами; ключи те же, что в базе.
+const SERVICE_GROUP_RU = {
+    consultation: 'Консультации', lab: 'Лаборатория', imaging: 'Диагностика',
+    procedure: 'Процедуры', other: 'Хирургия',
+};
+
 // One invoice_items row + all resolved sidecar lookups → one Excel row.
 function buildRevenueRow({ ii, inv, svc, svcType, svcCategory, doctor, registrar, branch, building, payer, referral, admittingVisit, admissionRow, sourceServiceRow }) {
     const price     = Number(svc?.price   ?? ii.unit_price ?? 0);
     const qty       = Number(ii.quantity  ?? 1);
     const amount    = Number(ii.unit_price ?? 0) * qty;
-    // invoice_items.discount_percentage → row-level discount amount.
-    const discPct   = Number(ii.discount_percentage ?? 0);
-    const discAmt   = amount * discPct / 100;
+    // OFFLINE_REPORTS_V1 — СКИДКА ЖИВЁТ НА СЧЁТЕ, А НЕ В СТРОКЕ.
+    //
+    // В облачной схеме у строки счёта был свой процент скидки
+    // (invoice_items.discount_percentage). Здесь его нет: касса применяет
+    // скидку ко ВСЕМУ счёту (invoices.discount_amount), и запрос с этой
+    // колонкой сервер отвергал целиком — отчёт «Общая выручка» не открывался.
+    //
+    // Раскладываем скидку счёта по его строкам ПРОПОРЦИОНАЛЬНО их суммам: так
+    // сумма скидок по строкам всегда равна скидке счёта, а строка остаётся
+    // сопоставимой с чеком. Долю строки считает вызывающий (invShare) — здесь
+    // остаётся только арифметика.
+    const discAmt   = Number(ii.__discount_share ?? 0);
+    const discPct   = amount > 0 ? Math.round(discAmt / amount * 10000) / 100 : 0;
     const afterDisc = amount - discAmt;
     const taxRate   = Number(svc?.tax_rate ?? 0);
     // VAT_INCLUSIVE_V1 — VAT is baked INTO the price. «Amount after tax» is the
@@ -169,6 +185,7 @@ function buildRevenueRow({ ii, inv, svc, svcType, svcCategory, doctor, registrar
     // Payment state — invoice.status is authoritative (unpaid/partial/paid/refunded).
     const paid = Number(inv.paid_amount ?? 0);
     const total = Number(inv.total_amount ?? 0);
+    const PAY_RU = { unpaid: 'Не оплачен', partial: 'Оплачен частично', paid: 'Оплачен', debt: 'Долг', void: 'Отменён', refunded: 'Возврат' };
     let paymentState = inv.status || '';
     if (!paymentState) {
         if (paid <= 0)             paymentState = 'unpaid';
@@ -181,7 +198,10 @@ function buildRevenueRow({ ii, inv, svc, svcType, svcCategory, doctor, registrar
         patient_full_name:     inv.patients?.full_name || '',
         patient_phone:         inv.patients?.phone || '',
         visit_kind:            visitKindLabel(inv),
-        service_group:         svc?.type || '',
+        // OFFLINE_REPORTS_V1 — группа услуги СЛОВОМ: в базе это ключ ('lab',
+        // 'other'), и в отчёте он читался как мусор. Подписи — те же пять, что
+        // на экране услуг (shared/service-group.js).
+        service_group:         SERVICE_GROUP_RU[svc?.type] || svc?.type || '',
         service_type:          svcType?.name || '',
         service_category:      svcCategory?.name || '',
         service_name:          svc?.name || ii.description || '',
@@ -193,9 +213,11 @@ function buildRevenueRow({ ii, inv, svc, svcType, svcCategory, doctor, registrar
         amount_after_tax:      Math.round(afterTax * 100) / 100,
         service_date:          fmtDateTime(sourceServiceRow?.scheduled_at || sourceServiceRow?.performed_at || admittingVisit?.visit_date || admissionRow?.admitted_at || inv.created_at),
         done_date:             fmtDateTime(sourceServiceRow?.performed_at || sourceServiceRow?.verified_at || inv.paid_at || ''),
-        coverage_type:         inv.coverage_type || 'patient',
-        coverer:               payer?.name || (inv.coverage_type === 'patient' ? 'Self-pay' : ''),
-        payment_state:         paymentState,
+        // OFFLINE_REPORTS_V1 — кто платит, видно по плательщику счёта: он есть
+        // (invoices.payer_id) — значит, счёт на организацию; нет — на пациента.
+        coverage_type:         payer ? (payer.kind || 'payer') : 'patient',
+        coverer:               payer?.name || 'Пациент',
+        payment_state:         PAY_RU[paymentState] || paymentState,
         doctor_name:           doctor?.full_name || '',
         doctor_payroll_pct:    docPct,
         doctor_payroll_amt:    Math.round(docAmt * 100) / 100,
@@ -204,8 +226,10 @@ function buildRevenueRow({ ii, inv, svc, svcType, svcCategory, doctor, registrar
         registrar_name:        registrar?.full_name || '',
         referral_category:     referral?.category || '',
         referrer_name:         referral?.name || '',
-        referral_payroll_pct:  Number(referral?.commission_percent ?? 0),
-        referral_payroll_amt:  referral ? (Math.round(afterDisc * Number(referral.commission_percent || 0) / 100 * 100) / 100) : 0,
+        // OFFLINE_REPORTS_V1 — ставка партнёра называется own_percent
+        // (referral_sources), commission_percent — облачное имя.
+        referral_payroll_pct:  Number(referral?.own_percent ?? 0),
+        referral_payroll_amt:  referral ? (Math.round(afterDisc * Number(referral.own_percent || 0) / 100 * 100) / 100) : 0,
         invoice_number:        inv.invoice_number || '',
     };
 }
@@ -224,23 +248,25 @@ export async function buildRevenueReport({ period, branchId, branchIds, clinicId
     const buildingLabel = await loadBuildingLabels();
     let q = supabase.from('invoice_items')
         .select(`
-            id, invoice_id, service_id, description, quantity, unit_price, discount_percentage, total, created_at,
+            id, invoice_id, service_id, description, quantity, unit_price, total, created_at,
             services (
                 id, name, type, tax_rate, default_doctor_percent, category_id, type_id
             ),
             invoices!inner (
                 id, invoice_number, visit_id, admission_id, patient_id, branch_id,
-                payer_id, coverage_type, subtotal, discount_amount, tax_amount,
+                payer_id, subtotal, discount_amount,
                 total_amount, paid_amount, status, created_by, created_at, paid_at, sync_origin,
-                patients ( id, mrn, full_name, phone, referral_source_id ),
+                patients ( id, mrn, full_name, phone ),
                 branches ( id, name ),
-                payers   ( id, name, type )
+                payers   ( id, name, kind )
             )
         `)
         .gte('invoices.created_at', fromIso)
         .lte('invoices.created_at', toIso)
         .limit(10000);
-    if (clinicId) q = q.eq('company_id', clinicId);
+    // OFFLINE_REPORTS_V1 — отбора по клинике здесь нет: установка обслуживает
+    // ОДНУ клинику, колонки company_id в схеме не существует, и запрос с ней
+    // сервер отвергал целиком — отчёт не открывался вовсе.
     // branchIds wins if it's a real subset; else fall back to the legacy single-branch selector.
     if (Array.isArray(branchIds) && branchIds.length > 0) {
         q = q.in('invoices.branch_id', branchIds);
@@ -254,13 +280,40 @@ export async function buildRevenueReport({ period, branchId, branchIds, clinicId
 
     if (items.length === 0) return [];
 
+    // OFFLINE_REPORTS_V1 — СКИДКА СЧЁТА ПО СТРОКАМ, ПРОПОРЦИОНАЛЬНО СУММАМ.
+    // Касса применяет скидку ко всему счёту (invoices.discount_amount); строка
+    // своей скидки не хранит. Раскладываем так, чтобы сумма скидок по строкам
+    // счёта в точности равнялась скидке счёта: последняя строка забирает
+    // остаток от округлений — иначе выгрузка расходилась бы с чеком на копейки.
+    const _byInvoice = new Map();
+    for (const it of items) {
+        const key = it.invoice_id;
+        if (!_byInvoice.has(key)) _byInvoice.set(key, []);
+        _byInvoice.get(key).push(it);
+    }
+    for (const [, lines] of _byInvoice) {
+        const disc = Math.max(0, Number(lines[0].invoices?.discount_amount ?? 0));
+        const base = lines.reduce((sum, it) => sum + Number(it.unit_price ?? 0) * Number(it.quantity ?? 1), 0);
+        let left = disc;
+        lines.forEach((it, i) => {
+            const amt = Number(it.unit_price ?? 0) * Number(it.quantity ?? 1);
+            const share = (disc <= 0 || base <= 0) ? 0
+                : (i === lines.length - 1 ? left : Math.round(disc * (amt / base) * 100) / 100);
+            it.__discount_share = share;
+            left = Math.round((left - share) * 100) / 100;
+        });
+    }
+
     // Batch the sidecar lookups.
     const visitIds       = [...new Set(items.map(r => r.invoices.visit_id).filter(Boolean))];
     const admissionIds   = [...new Set(items.map(r => r.invoices.admission_id).filter(Boolean))];
     const registrarIds   = [...new Set(items.map(r => r.invoices.created_by).filter(Boolean))];
     const typeIds        = [...new Set(items.map(r => r.services?.type_id).filter(Boolean))];
     const categoryIds    = [...new Set(items.map(r => r.services?.category_id).filter(Boolean))];
-    const referralSrcIds = [...new Set(items.map(r => r.invoices.patients?.referral_source_id).filter(Boolean))];
+    // OFFLINE_REPORTS_V1 — партнёр берётся у ВИЗИТА (visits.referral_source_id):
+    // в карточке пациента этой колонки реестр не отдаёт, и запрос с ней
+    // отвергался целиком. Визит по счёту уже загружается ниже (visitsRes).
+    const referralSrcIds = [];
     const itemIds        = items.map(r => r.id);
 
     const [
@@ -272,13 +325,23 @@ export async function buildRevenueReport({ period, branchId, branchIds, clinicId
         supabase.from('visit_services').select('id, visit_id, doctor_id, invoice_item_id, status, scheduled_at, verified_at, created_at, sample_collected_at').in('invoice_item_id', itemIds),
         supabase.from('admission_services').select('id, admission_id, doctor_id, invoice_item_id, performed_at, created_at').in('invoice_item_id', itemIds),
         // Fallbacks for doctor/date when the row link is missing.
-        visitIds.length     ? supabase.from('visits').select('id, doctor_id, visit_date, visit_type').in('id', visitIds) : Promise.resolve({ data: [] }),
+        visitIds.length     ? supabase.from('visits').select('id, doctor_id, visit_date, visit_type, referral_source_id').in('id', visitIds) : Promise.resolve({ data: [] }),
         admissionIds.length ? supabase.from('admissions').select('id, attending_doctor_id, admitted_at').in('id', admissionIds) : Promise.resolve({ data: [] }),
         registrarIds.length ? supabase.from('users').select('id, full_name').in('id', registrarIds) : Promise.resolve({ data: [] }),
         typeIds.length      ? supabase.from('service_types').select('id, name').in('id', typeIds) : Promise.resolve({ data: [] }),
         categoryIds.length  ? supabase.from('service_categories').select('id, name').in('id', categoryIds) : Promise.resolve({ data: [] }),
-        referralSrcIds.length ? supabase.from('referral_sources').select('id, name, category, commission_percent').in('id', referralSrcIds) : Promise.resolve({ data: [] }),
+        Promise.resolve({ data: [] }),   // OFFLINE_REPORTS_V1 — партнёров добираем ниже, по визитам
     ]);
+
+    // OFFLINE_REPORTS_V1 — ПАРТНЁР У ВИЗИТА. Источник направления живёт на
+    // визите (visits.referral_source_id); в карточке пациента реестр эту
+    // колонку не отдаёт. Визиты уже загружены выше, поэтому справочник
+    // партнёров добираем здесь — одним запросом на всю выгрузку.
+    const _srcIds = [...new Set((visitsRes.data || []).map((v) => v.referral_source_id).filter(Boolean))];
+    const _refRes = _srcIds.length
+        ? await supabase.from('referral_sources').select('id, name, category, own_percent, reward_mode').in('id', _srcIds)
+        : { data: [] };
+    referralsRes.data = _refRes.data || [];
 
     // Distinct doctor ids from ALL sources — visit_services, admission_services,
     // and the fallback visits/admissions.
@@ -337,7 +400,8 @@ export async function buildRevenueReport({ period, branchId, branchIds, clinicId
             branch:       inv.branches                  || null,
             building:     buildingLabel(inv),
             payer:        inv.payers                    || null,
-            referral:     inv.patients?.referral_source_id ? referralsById[inv.patients.referral_source_id] : null,
+            referral:     (visitsById[inv.visit_id] && visitsById[inv.visit_id].referral_source_id)
+                              ? referralsById[visitsById[inv.visit_id].referral_source_id] : null,
             admittingVisit: inv.visit_id                ? visitsById[inv.visit_id]                                    : null,
             admissionRow:   inv.admission_id            ? admissionsById[inv.admission_id]                            : null,
             sourceServiceRow,
@@ -403,12 +467,12 @@ export async function buildReferralReport({ period, branchId, branchIds, clinicI
         .select(`
             id, total, quantity, status, referral_source_id, service_id,
             services ( id, name, type_id ),
-            visits!inner ( id, visit_date, branch_id, company_id, status, referral_source_id )
+            visits!inner ( id, visit_date, branch_id, status, referral_source_id )
         `)
         .gte('visits.visit_date', fromIso)
         .lte('visits.visit_date', toIso)
         .limit(10000);
-    if (clinicId) q = q.eq('visits.company_id', clinicId);
+    // OFFLINE_REPORTS_V1 — одна клиника на установку, колонки company_id нет.
     if (Array.isArray(branchIds) && branchIds.length > 0) {
         q = q.in('visits.branch_id', branchIds);
     } else if (branchId && branchId !== 'all') {
@@ -493,11 +557,14 @@ async function downloadReferralsXlsx(rows, filenameBase = 'referrals') {
 // ---------------------------------------------------------------------------
 async function ownerFetchVS(fromIso, toIso, clinicId, branchIds, branchId) {
     let q = supabase.from('visit_services')
-        .select('id, total, status, payer_covered, services ( type_id ), visits!inner ( visit_date, branch_id, company_id, status, coverage_type )')
+        // OFFLINE_REPORTS_V1 — покрытие считается по ПЛАТЕЛЬЩИКУ СЧЁТА строки
+        // (visit_services → invoice_items → invoices.payer_id): колонок
+        // payer_covered и coverage_type в офлайн-схеме нет.
+        .select('id, total, status, invoice_item_id, services ( type_id ), visits!inner ( visit_date, branch_id, status )')
         .gte('visits.visit_date', fromIso)
         .lte('visits.visit_date', toIso)
         .limit(10000);
-    if (clinicId) q = q.eq('visits.company_id', clinicId);
+    // OFFLINE_REPORTS_V1 — одна клиника на установку, колонки company_id нет.
     if (Array.isArray(branchIds) && branchIds.length > 0) q = q.in('visits.branch_id', branchIds);
     else if (branchId && branchId !== 'all') q = q.eq('visits.branch_id', branchId);
     const { data, error } = await q;
@@ -543,13 +610,31 @@ export async function buildOwnerReport({ period, branchId, branchIds, clinicId, 
     }
     for (const m of monthly) m.value = Math.round(m.value);
 
+    // OFFLINE_REPORTS_V1 — КТО ПЛАТИТ, РЕШАЕТ СЧЁТ СТРОКИ.
+    //
+    // Облачная схема помечала покрытие прямо на услуге (payer_covered) и
+    // хранила вид покрытия у визита (coverage_type). Здесь ни того, ни другого
+    // нет: счёт выставляется либо пациенту (invoices.payer_id пуст), либо
+    // плательщику, и вид берётся у него же (payers.kind). Услуга, за которую
+    // ещё не выставлен счёт, считается оплатой пациента — так же, как её
+    // считает касса.
     const P = { patient: 0, insurance: 0, corporate: 0, state: 0 };
+    const _iiIds = [...new Set(rows.map((r) => r.invoice_item_id).filter(Boolean))];
+    const _payerByItem = new Map();
+    if (_iiIds.length) {
+        const { data: iiRows } = await supabase.from('invoice_items')
+            .select('id, invoices ( id, payer_id, payers ( id, kind ) )').in('id', _iiIds);
+        for (const ii of (iiRows || [])) {
+            const kind = ii.invoices?.payers?.kind || '';
+            _payerByItem.set(ii.id, ii.invoices?.payer_id ? (kind || 'insurance') : '');
+        }
+    }
     for (const r of rows) {
         const amt = Number(r.total || 0);
-        if (!r.payer_covered) { P.patient += amt; continue; }
-        const c = r.visits.coverage_type;
-        if (c === 'corporate') P.corporate += amt;
-        else if (c === 'state' || c === 'government') P.state += amt;
+        const kind = r.invoice_item_id ? (_payerByItem.get(r.invoice_item_id) || '') : '';
+        if (!kind) { P.patient += amt; continue; }
+        if (kind === 'corporate') P.corporate += amt;
+        else if (kind === 'state' || kind === 'government') P.state += amt;
         else P.insurance += amt;
     }
     // Fixed categorical order + hues (validated palette) — never re-assigned by rank.
@@ -725,12 +810,12 @@ export async function buildInvoicesReport({ branchId, branchIds, clinicId, fromI
     const buildingLabel = await loadBuildingLabels();
     let q = supabase.from('invoices')
         .select(`id, invoice_number, created_at, paid_at, status, subtotal, discount_amount, total_amount, paid_amount,
-            coverage_type, created_by, branch_id, sync_origin,
+            created_by, branch_id, sync_origin,
             patients ( full_name, mrn, phone ), branches ( name ), payers ( name )`)
         .gte('created_at', fromIso).lte('created_at', toIso)
         .order('created_at', { ascending: false })
         .limit(10000);
-    if (clinicId) q = q.eq('company_id', clinicId);
+    // OFFLINE_REPORTS_V1 — одна клиника на установку.
     if (Array.isArray(branchIds) && branchIds.length > 0) q = q.in('branch_id', branchIds);
     else if (branchId && branchId !== 'all') q = q.eq('branch_id', branchId);
     const { data, error } = await q;
@@ -751,7 +836,7 @@ export async function buildInvoicesReport({ branchId, branchIds, clinicId, fromI
             phone:     r.patients?.phone || '',
             branch:    r.branches?.name || '',
             building:  buildingLabel(r),
-            payer:     r.payers?.name || (r.coverage_type === 'patient' || !r.coverage_type ? 'Пациент' : r.coverage_type),
+            payer:     r.payers?.name || 'Пациент',
             subtotal:  Number(r.subtotal || 0),
             discount:  Number(r.discount_amount || 0),
             total, paid,
@@ -837,7 +922,7 @@ async function buildSurgeryReport({ period, branchId, branchIds, clinicId, fromI
         .gte('invoices.created_at', fromIso)
         .lte('invoices.created_at', toIso)
         .limit(10000);
-    if (clinicId) q = q.eq('company_id', clinicId);
+    // OFFLINE_REPORTS_V1 — одна клиника на установку.
     if (Array.isArray(branchIds) && branchIds.length > 0) q = q.in('invoices.branch_id', branchIds);
     else if (branchId && branchId !== 'all') q = q.eq('invoices.branch_id', branchId);
 
