@@ -108,7 +108,11 @@ export const REGISTRY = {
     // чужое в браузере после limit. НЕ writable ни в одной операции: метку
     // ставит только приём порции (branch-sync/records.js) — экран, способный её
     // выставить, мог бы выдать чужую работу за свою.
-    filters: ['id','mrn','phone','national_id','full_name','email','gender','date_of_birth','branch_id','primary_doctor_id','payer_id','payer_policy_id','active','created_at','registration_date','sync_origin'],
+    // PATIENT_DUP_RULE_V2 — поиск дублей ищет по ФАМИЛИИ и ИМЕНИ (префикс + расстояние
+    // Левенштейна на экране). Этих двух колонок в списке не было, сервер отвечал
+    // «unknown filter column», и предупреждение о дубле не показывалось НИ РАЗУ —
+    // хотя окно заведения пациента им прямо обещает защиту от повторной карты.
+    filters: ['id','mrn','phone','national_id','full_name','last_name','first_name','email','gender','date_of_birth','branch_id','primary_doctor_id','payer_id','payer_policy_id','active','created_at','registration_date','sync_origin'],
     embed:   { branches: { table:'branches', fk:'branch_id', columns:['id','name'] },
                payers:   { table:'payers',   fk:'payer_id',  columns:['id','name'] },
                // creator:created_by(full_name) — кто завёл карту. Имя сотрудника

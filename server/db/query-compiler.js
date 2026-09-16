@@ -41,10 +41,36 @@ function bindable(v) {
 // the registry declares as JSON (SQLite has no jsonb — these are TEXT blobs).
 // The route parses them back on read (see meta.json). Scalars pass through
 // bindable unchanged, so a client that already stringified still works.
+// EMPTY_ID_IS_NULL_V1 (2026-09-16) — ПУСТОЙ ВЫБОР В ССЫЛОЧНОЙ КОЛОНКЕ ЭТО NULL.
+//
+// Владелец: «i cant register patient». Окно заведения пациента отправляло
+// `category_id: ""` — так выглядит невыбранный выпадающий список в браузере, —
+// и SQLite отвечал «FOREIGN KEY constraint failed»: пустая строка для него не
+// «ничего не выбрано», а ссылка на строку справочника с идентификатором «».
+// Карта не создавалась, а регистратор видел только слова про внешний ключ.
+//
+// Правило стоит в ОДНОМ месте — там, где значение становится параметром
+// запроса, — и потому действует на все таблицы, и на вставку, и на правку.
+//
+// КАКИЕ КОЛОНКИ СЧИТАТЬ ССЫЛКАМИ, СПРАШИВАЕМ У БАЗЫ (PRAGMA foreign_key_list),
+// а не угадываем по имени: `national_id` — это ПИНФЛ, обычный текст и NOT NULL,
+// и «умное» правило «всё, что кончается на _id» превращало пустой ПИНФЛ в NULL
+// и роняло вставку уже по другой причине. Пустая строка в обычной колонке
+// (адрес, примечание, ПИНФЛ) не трогается: там она значит «не заполнено».
+let foreignKeyColumnsOf = null;
+export function setForeignKeyColumns(fn) { foreignKeyColumnsOf = typeof fn === 'function' ? fn : null; }
+
+function isReferenceColumn(table, col) {
+  if (!foreignKeyColumnsOf) return false;   // не подключено (чистые тесты) — ведём себя как прежде
+  const set = foreignKeyColumnsOf(table);
+  return !!(set && set.has(col));
+}
+
 function bindWrite(table, col, v) {
   if (v !== null && typeof v === 'object' && jsonColumns(table).includes(col)) {
     return JSON.stringify(v);
   }
+  if (v === '' && isReferenceColumn(table, col)) return null;
   return bindable(v);
 }
 

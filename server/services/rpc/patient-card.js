@@ -404,6 +404,22 @@ function assertWrite(table, op, roles) {
 }
 
 /** Правка анкеты/отметок/плательщика пациента — вкладка «Деталь». */
+// EMPTY_ID_IS_NULL_V1 — является ли колонка ССЫЛКОЙ на другую таблицу.
+// Спрашиваем базу (PRAGMA foreign_key_list) и запоминаем ответ: список внешних
+// ключей меняют миграции, и вторая его копия в коде разошлась бы с первой.
+const _fkCache = new Map();
+function isForeignKeyColumn(db, table, col) {
+  let set = _fkCache.get(table);
+  if (set === undefined) {
+    try {
+      const rows = db.prepare(`PRAGMA foreign_key_list("${String(table).replace(/"/g, '')}")`).all();
+      set = new Set((rows || []).map((r) => r.from));
+    } catch { set = new Set(); }
+    _fkCache.set(table, set);
+  }
+  return set.has(col);
+}
+
 export function patientCardSavePatient(db, args, user) {
   const roles = requireCard(db, user);
   requireEdit(db, user, 'details');
@@ -417,7 +433,12 @@ export function patientCardSavePatient(db, args, user) {
   for (const [k, v] of Object.entries(values)) {
     if (!allowed.has(k)) continue;
     set.push('"' + k + '" = ?');
-    params.push(v === undefined ? null : v);
+    // EMPTY_ID_IS_NULL_V1 — то же правило, что у компилятора запросов: пустой
+    // выбор в ссылочной колонке это NULL, а не ссылка на строку с пустым id
+    // (иначе «FOREIGN KEY constraint failed» при сохранении карты). Ссылки
+    // спрашиваем у базы — `national_id` (ПИНФЛ) ссылкой не является.
+    const empty = v === undefined || (v === '' && isForeignKeyColumn(db, 'patients', k));
+    params.push(empty ? null : v);
   }
   if (!set.length) throw new RpcError('Нечего сохранять.', 400);
   params.push(id);

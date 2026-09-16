@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { setLiveColumns, compile, CompileError } from '../db/query-compiler.js';
+import { setLiveColumns, setForeignKeyColumns, compile, CompileError } from '../db/query-compiler.js';
 import { readableColumns, MAIN_CLINIC_TABLES } from '../db/schema-registry.js';
 // STAFF_SYNC_V1 — «филиал я или сама по себе клиника» решается по базе, а не по
 // сборке: одна и та же установка сегодня одиночная, завтра филиал.
@@ -14,6 +14,23 @@ import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 // Читаются лениво и запоминаются: PRAGMA на каждый запрос — это лишний поход в
 // базу там, где схема не меняется между перезапусками (миграции идут ДО того,
 // как поднимутся маршруты).
+// EMPTY_ID_IS_NULL_V1 — какие колонки таблицы являются ССЫЛКАМИ на другие
+// таблицы. Спрашиваем саму базу: список внешних ключей меняется миграциями, и
+// вторая его копия в коде разошлась бы с первой.
+function foreignKeyColumnsReader(db) {
+    const cache = new Map();
+    return (table) => {
+        if (cache.has(table)) return cache.get(table);
+        let set = null;
+        try {
+            const rows = db.prepare(`PRAGMA foreign_key_list("${String(table).replace(/"/g, '')}")`).all();
+            if (rows && rows.length) set = new Set(rows.map((r) => r.from));
+        } catch { set = null; }
+        cache.set(table, set);
+        return set;
+    };
+}
+
 function liveColumnsReader(db) {
     const cache = new Map();
     return (table) => {
@@ -83,6 +100,7 @@ function refuseSurgeryWithoutBed(db, meta, body) {
 
 export function dbRoutes(db) {
     setLiveColumns(liveColumnsReader(db));
+    setForeignKeyColumns(foreignKeyColumnsReader(db));
   const r = Router();
 
   r.post('/', (req, res) => {

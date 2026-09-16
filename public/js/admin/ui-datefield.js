@@ -206,16 +206,31 @@ export function enhanceDateField(input) {
         // рождения, либо дата приёма, и оба случая сюда попадают.
         const yFrom = min ? Number(min.slice(0, 4)) : (new Date().getFullYear() - 120);
         const yTo   = max ? Number(max.slice(0, 4)) : (new Date().getFullYear() + 5);
+        // CALENDAR_MONTH_INDEX_V1 (2026-09-16) — МЕСЯЦЫ СЧИТАЮТСЯ С НУЛЯ.
+        //
+        // Владелец прислал снимок календаря: «Февраль 2031», хотя на дворе
+        // сентябрь 2026, и дата рождения так не выбиралась. Причина — сдвиг на
+        // единицу: сетка месяца (shared/month-grid.js) и разбор даты считают
+        // месяцы с НУЛЯ, а этот список строился с ЕДИНИЦЫ. Отсюда всё сразу:
+        // первым пунктом стоял «Февраль» (monthName(1) — это февраль),
+        // двенадцатый пункт был пустым (monthName(12) не существует), ни один
+        // пункт не совпадал с показанным месяцем — и браузер показывал первый,
+        // то есть февраль; выбор месяца из списка листал календарь на месяц
+        // вперёд. С годом то же самое: ни один год не был отмечен выбранным, и
+        // сверху оказывался самый дальний — 2031.
         const monthSel = h('select', { class: 'uidate-pick', 'data-no-enhance': '',
             onchange: (e) => { view = { year: view.year, month: Number(e.currentTarget.value) }; paintPop(); } },
             ...Array.from({ length: 12 }, (_, i) => h('option',
-                { value: String(i + 1), selected: view.month === i + 1 ? '' : null },
-                monthName(i + 1, { standalone: true }))));
+                // `selected: true`, а не '': h() ставит эти атрибуты «если значение
+                // истинно», а пустая строка ложна — ни один месяц не был
+                // отмечен, и список показывал первый пункт вместо текущего.
+                { value: String(i), selected: view.month === i ? true : null },
+                monthName(i, { standalone: true }))));
         const yearSel = h('select', { class: 'uidate-pick', 'data-no-enhance': '',
             onchange: (e) => { view = { year: Number(e.currentTarget.value), month: view.month }; paintPop(); } },
             ...Array.from({ length: Math.max(1, yTo - yFrom + 1) }, (_, i) => {
                 const y = yTo - i;   // сверху ближайшие годы: чаще нужны они
-                return h('option', { value: String(y), selected: view.year === y ? '' : null }, String(y));
+                return h('option', { value: String(y), selected: view.year === y ? true : null }, String(y));
             }));
         const head = h('div', { class: 'uidate-head' },
             h('button', {
@@ -311,7 +326,12 @@ export function enhanceDateField(input) {
     // нельзя: чтобы изменить год, пришлось бы стирать её целиком.
     field.addEventListener('focus', () => {
         const p2 = parseIso(input.value);
-        if (p2) field.value = `${String(p2.day).padStart(2, '0')}.${String(p2.month).padStart(2, '0')}.${p2.year}`;
+        // CALENDAR_MONTH_INDEX_V1 — +1: parseIso отдаёт месяц С НУЛЯ. Без него
+        // щелчок в поле молча уменьшал месяц на единицу («15.11.1994» →
+        // «15.10.1994»), и стоило нажать Enter или уйти из поля, как в карту
+        // уходила дата рождения на месяц раньше — вместе с возрастом, нормами
+        // анализов и печатными бланками.
+        if (p2) field.value = `${String(p2.day).padStart(2, '0')}.${String(p2.month + 1).padStart(2, '0')}.${p2.year}`;
         if (field.select) field.select();
     });
     // Разбираем на лету: как только цифр стало восемь, дата уходит в поле.

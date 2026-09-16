@@ -252,6 +252,10 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null }
     // сохранённую дату рождения; `off` здесь просто отказывался от помощи.
     const dobInput = reg('date_of_birth', h('input', {
         name: 'date_of_birth', type: 'date', placeholder: '15.11.1994',
+        // CALENDAR_MONTH_INDEX_V1 — верхняя граница у ДАТЫ РОЖДЕНИЯ это сегодня:
+        // тогда в списке годов нет будущих (он и открывался на 2031-м), а
+        // «завтра» календарь просто не даст выбрать — вместо отказа после.
+        max: new Date().toISOString().slice(0, 10),
         'data-date-numeric': '', autocomplete: 'bday', value: pv('date_of_birth').slice(0, 10),
     }));
     const ageInput = h('input', { name: '__age', readOnly: true, placeholder: '—' });

@@ -323,3 +323,21 @@ test('DEBT_FLOW_V1: карта отдаёт долг пациента — тол
   assert.deepEqual(patientCard(db, { patient_id: pid }, DOCTOR).debt, { amount: 350000, invoices: 2 });
   db.close();
 });
+
+// EMPTY_ID_IS_NULL_V1 — правка карты: снятая категория это NULL, а не ссылка на
+// строку справочника с пустым идентификатором (FOREIGN KEY constraint failed).
+test('patient_card_save: пустая ссылка ложится как NULL, пустой ПИНФЛ остаётся строкой', () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  try {
+    db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (1,'reg','x','Регистратор','registrar')").run();
+    const catId = db.prepare("INSERT INTO patient_categories (name) VALUES ('Сотрудник')").run().lastInsertRowid;
+    const pid = db.prepare("INSERT INTO patients (full_name, mrn, date_of_birth, gender, category_id, national_id) VALUES ('Ким Олег','K-1','1980-05-05','male',?,'123')").run(catId).lastInsertRowid;
+
+    patientCardSavePatient(db, { patient_id: pid, values: { category_id: '', national_id: '' } }, { id: 1, role: 'registrar' });
+
+    const row = db.prepare('SELECT category_id, national_id FROM patients WHERE id = ?').get(pid);
+    assert.equal(row.category_id, null, 'снятая категория обязана стать NULL');
+    assert.equal(row.national_id, '', 'ПИНФЛ — обычный текст: пустая строка остаётся строкой');
+  } finally { db.close(); }
+});

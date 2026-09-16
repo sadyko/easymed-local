@@ -476,3 +476,51 @@ test('место под значок календаря не отбираетс�
     assert.ok(!/^\.uidate-field \{[^}]*padding-left/m.test(css),
         'вернулась одноклассовая запись, которую перебивает .field input');
 });
+
+// ===========================================================================
+// CALENDAR_MONTH_INDEX_V1 (2026-09-16) — МЕСЯЦЫ СЧИТАЮТСЯ С НУЛЯ
+// ===========================================================================
+// Владелец прислал снимок: календарь даты рождения открыт на «Феврале 2031»,
+// хотя на дворе сентябрь 2026, — и дата рождения так не выбиралась. Причин
+// было три, и все про единицу:
+//   • список месяцев строился с 1, а сетка и разбор даты считают с 0: первым
+//     пунктом стоял февраль, двенадцатый был пустым;
+//   • отметку «выбран» ставили пустой строкой, а h() ставит такие атрибуты
+//     только по истинному значению — ни месяц, ни год не были отмечены, и
+//     браузер показывал первые пункты списков;
+//   • при щелчке в поле дата перерисовывалась с месяцем на единицу меньше, и
+//     уход из поля сохранял «15.10.1994» вместо «15.11.1994».
+test('календарь открывается на СВОЁМ месяце и годе, а не на первом пункте списка', () => {
+    document.body.replaceChildren();
+    const { el } = dateInput('1994-11-15', { 'data-date-numeric': '' });
+    const wrap = enhanceDateField(el);
+    wrap.querySelector('.uidate-ic').click();
+    const pop = lastPop('uidate-pop');
+    const picks = pop.querySelectorAll('.uidate-pick');
+
+    const months = picks[0].children;
+    assert.equal(months.length, 12, 'месяцев должно быть двенадцать');
+    assert.equal(text(months[0]).trim(), 'Январь', 'список месяцев начинается с января');
+    assert.ok(text(months[11]).trim(), 'последний месяц пуст — значит счёт съехал на единицу');
+    assert.equal(text(months[11]).trim(), 'Декабрь');
+
+    const onMonth = months.filter((o) => o.hasAttribute('selected'));
+    assert.equal(onMonth.length, 1, 'ровно один месяц обязан быть отмечен выбранным');
+    assert.equal(text(onMonth[0]).trim(), 'Ноябрь', 'отмечен не тот месяц, который показывает сетка');
+
+    const onYear = picks[1].children.filter((o) => o.hasAttribute('selected'));
+    assert.equal(onYear.length, 1, 'ровно один год обязан быть отмечен выбранным');
+    assert.equal(text(onYear[0]).trim(), '1994');
+    document.body.replaceChildren();
+});
+
+test('щелчок в поле даты НЕ сдвигает месяц назад', () => {
+    document.body.replaceChildren();
+    const { el } = dateInput('1994-11-15', { 'data-date-numeric': '' });
+    const wrap = enhanceDateField(el);
+    const field = wrap.querySelector('.uidate-field');
+    field.dispatchEvent({ type: 'focus' });
+    assert.equal(field.value, '15.11.1994',
+        'при фокусе месяц уехал на единицу — уход из поля сохранил бы чужую дату рождения');
+    document.body.replaceChildren();
+});

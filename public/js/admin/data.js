@@ -654,8 +654,14 @@ async function findDuplicateCandidates(insert) {
     };
 
     const safeQuery = async (q) => { try { const { data } = await q; return data || []; } catch { return []; } };
-    const _dupCid = _tenantClinicId();   // TENANT_SCOPE_V3 — duplicates are per-clinic
-    const base = () => { const b = supabase.from('patients').select(COLS); return _dupCid ? b.eq('company_id', _dupCid) : b; };
+    // CLOUD_LEFTOVER_COLUMNS_V1 (2026-09-16) — ПОИСК ДУБЛЕЙ НЕ РАБОТАЛ ВОВСЕ.
+    //
+    // Здесь стоял облачный отбор по company_id (TENANT_SCOPE_V3: «дубли — в
+    // пределах клиники»). В офлайн-установке клиника одна, колонки company_id
+    // в реестре нет, и сервер отвечал «unknown filter column» — то есть КАЖДЫЙ
+    // запрос поиска падал, а safeQuery молча возвращал пустоту. Регистратор
+    // ни разу не увидел предупреждения о дубле, хотя оно обещано окном.
+    const base = () => supabase.from('patients').select(COLS);
 
     // PATIENT_DUP_RULE_V2 — a shared phone is a FAMILY signal, not an identity
     // one: parents register their children and grandparents on their own number.
@@ -708,10 +714,11 @@ async function findDuplicateCandidates(insert) {
 // thousands of patients: one query plus an in-memory grouping. Returns Set<id>.
 export async function findAllDuplicatePatientIds() {
     try {
-        let _q = supabase.from('patients')
+        // CLOUD_LEFTOVER_COLUMNS_V1 — отбор по company_id убран по той же причине,
+        // что и в поиске дублей выше: колонки нет в реестре, запрос отвергался
+        // целиком, и чип «Дубли» всегда показывал ноль.
+        const _q = supabase.from('patients')
             .select('id, phone, national_id, first_name, full_name').limit(1000);
-        const _tcid2 = _tenantClinicId();   // TENANT_SCOPE_V3
-        if (_tcid2) _q = _q.eq('company_id', _tcid2);
         const { data, error } = await _q;
         if (error) { console.warn('[findAllDuplicatePatientIds]', error.message); return new Set(); }
         return duplicateIdSet(data || []);
