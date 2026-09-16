@@ -244,10 +244,35 @@ function parseJsonArray(raw) {
 // Trimmed, minimal-but-complete view of a staff record for the employee
 // editor (unlike auth.js's publicUser, which stays deliberately tiny for
 // session/roster contexts elsewhere in the app).
+// CUSTOM_ROLES_V1 (2026-09-16) — СВОЯ РОЛЬ КЛИНИКИ У СОТРУДНИКА.
+//
+// Своя роль — это НАЗВАНИЕ и набор разделов поверх штатной ОСНОВЫ. Права к
+// данным сервер по-прежнему решает по штатной роли, поэтому основа записывается
+// в users.role сама: выбрали «Старший регистратор» — в role ляжет 'registrar'.
+// Разойтись этим двум полям нельзя, иначе человек видел бы разделы, которых
+// сервер ему не отдаст.
+//
+// Возвращает: { ok, code, role } — code === null означает «снять свою роль»,
+// undefined — «не трогать».
+export function resolveCustomRole(db, body, sentRole) {
+  const raw = body ? body.custom_role_code : undefined;
+  if (raw === undefined) return { ok: true, code: undefined, role: sentRole };
+  if (raw === null || String(raw).trim() === '') return { ok: true, code: null, role: sentRole };
+  const code = String(raw).trim();
+  let row = null;
+  try { row = db.prepare('SELECT code, base_role, active FROM custom_roles WHERE code = ?').get(code); }
+  catch { row = null; }   // таблицы ещё нет (база до миграции 133)
+  if (!row) return { ok: false, message: 'Такой роли клиники нет.' };
+  if (!row.active) return { ok: false, message: 'Эта роль отключена — выберите другую.' };
+  if (!PRIMARY_ROLES.includes(row.base_role)) return { ok: false, message: 'У роли клиники неизвестная основа.' };
+  return { ok: true, code: row.code, role: row.base_role };
+}
+
 export function employeeView(u) {
   return {
     id: u.id, username: u.username, full_name: u.full_name, role: u.role, is_active: !!u.is_active,
     extra_roles: parseJsonArray(u.extra_roles),
+    custom_role_code: u.custom_role_code || null,   // CUSTOM_ROLES_V1
     first_name: u.first_name, last_name: u.last_name, middle_name: u.middle_name,
     phone: u.phone, email: u.email, specialty: u.specialty, is_doctor: !!u.is_doctor,
     department_id: u.department_id, position: u.position, doctor_category: u.doctor_category,
@@ -354,7 +379,11 @@ export function userRoutes(db) {
     // 'head_doctor'/'senior_nurse' — надстройки поверх неё и живут в
     // extra_roles (см. EXTRA_ONLY_ROLES в services/roles.js): человек с такой
     // основной ролью не имел бы прав ни на одну таблицу реестра.
-    if (!PRIMARY_ROLES.includes(role)) return bad(res, 'Unknown role.');
+    // CUSTOM_ROLES_V1 — своя роль подставляет свою основу вместо присланной.
+    const cr = resolveCustomRole(db, req.body, role);
+    if (!cr.ok) return bad(res, cr.message);
+    const finalRole = cr.code ? cr.role : role;
+    if (!PRIMARY_ROLES.includes(finalRole)) return bad(res, 'Unknown role.');
     if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(name)) return bad(res, 'Username already exists.');
 
     const parsed = parseEmployeeFields(req.body, db);
@@ -367,9 +396,10 @@ export function userRoutes(db) {
     const hasNameParts = req.body && (req.body.last_name !== undefined || req.body.first_name !== undefined || req.body.middle_name !== undefined);
     const finalFullName = hasNameParts ? deriveFullName(ef) : full_name.slice(0, 100).trim();
 
-    const columns = ['username', 'password_hash', 'full_name', 'role', ...Object.keys(ef)];
+    const columns = ['username', 'password_hash', 'full_name', 'role', ...(cr.code !== undefined ? ['custom_role_code'] : []), ...Object.keys(ef)];
     const placeholders = columns.map(() => '?').join(',');
-    const values = [name, hashPassword(password), finalFullName, role, ...Object.values(ef)];
+    const values = [name, hashPassword(password), finalFullName, finalRole,
+                    ...(cr.code !== undefined ? [cr.code] : []), ...Object.values(ef)];
     const info = db.prepare(`INSERT INTO users (${columns.join(',')}) VALUES (${placeholders})`).run(...values);
     if (specs.list) writeSpecialties(db, Number(info.lastInsertRowid), specs.list);
     res.status(201).json({ user: withSpecialties(db, employeeView(db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid))) });
@@ -395,11 +425,15 @@ export function userRoutes(db) {
       active = is_active;
     }
     if (role !== undefined && !PRIMARY_ROLES.includes(role)) return bad(res, 'Unknown role.');   // INPATIENT_FLOW_V1 — см. POST выше
+    // CUSTOM_ROLES_V1 — выбрали свою роль: её основа становится ролью строки.
+    const cr = resolveCustomRole(db, req.body, role);
+    if (!cr.ok) return bad(res, cr.message);
+    const roleToWrite = cr.code ? cr.role : role;
     if (password !== undefined && !validPassword(password)) {
       return bad(res, 'Password must not be empty (max 72 bytes).');
     }
     if (full_name !== undefined && typeof full_name !== 'string') return bad(res, 'Full name must be text.');
-    if (user.id === req.user.id && (active === false || (role !== undefined && role !== 'admin'))) {
+    if (user.id === req.user.id && (active === false || (roleToWrite !== undefined && roleToWrite !== 'admin'))) {
       return bad(res, 'You cannot deactivate or demote your own account.');
     }
     // Belt-and-braces: the clinic must never end up with zero active admins.
@@ -433,6 +467,7 @@ export function userRoutes(db) {
     const setClauses = [
       'full_name     = COALESCE(?, full_name)',
       'role          = COALESCE(?, role)',
+      ...(cr.code !== undefined ? ['custom_role_code = ?'] : []),
       'is_active     = COALESCE(?, is_active)',
       'password_hash = COALESCE(?, password_hash)',
       ...efKeys.map(k => `${k} = ?`),
@@ -440,7 +475,8 @@ export function userRoutes(db) {
     ];
     const values = [
       finalFullName !== undefined ? finalFullName : null,
-      role ?? null,
+      roleToWrite ?? null,
+      ...(cr.code !== undefined ? [cr.code] : []),
       active === undefined ? null : (active ? 1 : 0),
       password !== undefined ? hashPassword(password) : null,
       ...efKeys.map(k => ef[k]),

@@ -88,6 +88,32 @@ const ROLE_LEVELS = [
 ];
 const DEFAULT_LEVEL = 'editor';
 
+// CUSTOM_ROLES_V1 (2026-09-16) — СВОИ РОЛИ КЛИНИКИ.
+//
+// Владелец: «and also aviable option to create a new role with editing
+// permissions?». Штатных ролей восемь, и они не переименовываются: сервер
+// раздаёт данные по их именам. Своя роль клиники — это НАЗВАНИЕ и свой набор
+// разделов поверх ОСНОВЫ, одной из штатных: «Старший регистратор» на базе
+// регистратуры видит то, что ему отметили, а данные сервер отдаёт как
+// регистратуре. Ниже основы — сколько угодно; выше — нельзя, и это главное,
+// что нужно понимать про эту кнопку.
+const BASE_ROLES = [
+    ['registrar', 'Регистратор'], ['doctor', 'Врач'], ['cashier', 'Кассир'], ['lab', 'Лаборант'],
+    ['nurse', 'Медсестра'], ['inventory', 'Склад'], ['callcenter', 'Колл-центр'], ['admin', 'Администратор'],
+];
+// Код роли — латиница: он ложится в role_permissions.role рядом со штатными
+// именами. Русское название транслитерируется, а если от него ничего не
+// осталось (название на другом алфавите) — берём «role» и номер.
+const TRANSLIT = { а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'c',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya' };
+export function roleCodeFrom(name, taken = []) {
+    const base = String(name || '').toLowerCase().split('').map((ch) => (TRANSLIT[ch] !== undefined ? TRANSLIT[ch] : ch))
+        .join('').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'role';
+    const busy = new Set(taken);
+    if (!busy.has(base)) return base;
+    for (let i = 2; i < 999; i += 1) { const c = base + '-' + i; if (!busy.has(c)) return c; }
+    return base + '-' + Date.now();
+}
+
 const roleLabel = (key) => (ROLE_LIST.find(r => r.key === key) || { label: key }).label;
 
 // window.confirm обёрнут: в тестовой фейковой DOM диалогов нет, и отсутствие
@@ -127,6 +153,7 @@ export async function renderRolesEditor(container, { onBack } = {}) {
     // roles-ed — область действия стилей экрана (см. блок в admin-views.css).
     const root = h('div', { class: 'fade-in roles-ed' });
     const state = {
+        custom: [],       // CUSTOM_ROLES_V1 — роли клиники (и включённые, и отключённые)
         selected: ROLE_LIST[0].key,
         controls: {},     // moduleKey -> { chk, level }
         tabControls: {},  // PATIENT_TAB_ACCESS_V1: tabId -> { view, edit, del }
@@ -156,14 +183,16 @@ export async function renderRolesEditor(container, { onBack } = {}) {
     ));
 
     root.appendChild(roleBtns);
+    // CUSTOM_ROLES_V1 — форма «новой роли» живёт прямо под полосой ролей:
+    // заводят её редко, и отдельное окно ради двух полей было бы лишним шагом.
+    const newRoleBox = h('div', { class: 'roles-new' });
+    root.appendChild(newRoleBox);
     root.appendChild(matrixWrap);
     container.appendChild(root);
 
-    for (const r of ROLE_LIST) {
-        const b = h('button', { class: 'segmented-btn', type: 'button', onclick: () => selectRole(r.key) }, r.label);
-        b.dataset.role = r.key;
-        roleBtns.appendChild(b);
-    }
+    await loadCustomRoles();
+    paintRoleTabs();
+    paintNewRole();
 
     await selectRole(state.selected);
     return root;
@@ -206,6 +235,93 @@ export async function renderRolesEditor(container, { onBack } = {}) {
             patient_tabs[tab] = tabLevelOf({ view: ctl.view.checked, edit: !!(ctl.edit && ctl.edit.checked), del: !!(ctl.del && ctl.del.checked) });
         }
         return { sections, levels, patient_tabs };
+    }
+
+    // CUSTOM_ROLES_V1 ---------------------------------------------------------
+    // Объявлены ФУНКЦИЯМИ, а не стрелками в const: полоса ролей рисуется выше по
+    // файлу, до этой строки, и const там ещё не существует (TDZ).
+    function allRoles() {
+        return [...ROLE_LIST, ...state.custom.map((c) => ({ key: c.code, label: c.name, custom: c }))];
+    }
+    function customOf(key) { return state.custom.find((c) => c.code === key) || null; }
+    function labelOf(key) { const c = customOf(key); return c ? c.name : roleLabel(key); }
+
+    async function loadCustomRoles() {
+        try {
+            const { data, error } = await supabase.from('custom_roles').select('*').order('name');
+            if (!error && Array.isArray(data)) state.custom = data;
+        } catch (e) { /* таблицы ещё нет (база до миграции 133) — только штатные роли */ }
+    }
+
+    function paintRoleTabs() {
+        clear(roleBtns);
+        for (const r of allRoles()) {
+            const off = r.custom && !r.custom.active;
+            const b = h('button', { class: 'segmented-btn' + (off ? ' is-off' : ''), type: 'button',
+                title: r.custom ? trf('Своя роль клиники · основа: {base}', { base: tr(roleLabel(r.custom.base_role)) }) : '',
+                onclick: () => selectRole(r.key) }, r.label + (off ? ' · ' + tr('отключена') : ''));
+            b.dataset.role = r.key;
+            roleBtns.appendChild(b);
+        }
+        paintActive();
+    }
+
+    function paintNewRole() {
+        clear(newRoleBox);
+        const nameInp = h('input', { class: 'roles-new-inp', type: 'text', placeholder: 'Название роли', 'aria-label': 'Название новой роли' });
+        const baseSel = h('select', { class: 'roles-new-sel', 'aria-label': 'Основа новой роли' },
+            ...BASE_ROLES.map(([k, l]) => h('option', { value: k }, l)));
+        const addBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, Icon('Plus', { size: 13 }), ' ', 'Новая роль');
+        addBtn.addEventListener('click', () => createRole(nameInp, baseSel, addBtn));
+        newRoleBox.appendChild(h('div', { class: 'roles-new-row' }, nameInp, baseSel, addBtn));
+        newRoleBox.appendChild(h('div', { class: 'muted roles-new-hint' },
+            'Своя роль клиники: название ваше, разделы вы отмечаете сами. Основа решает, какие данные отдаёт сервер, — больше основы роль не получит.'));
+    }
+
+    async function createRole(nameInp, baseSel, addBtn) {
+        const name = String(nameInp.value || '').trim();
+        if (!name) { toast(tr('Введите название роли.'), 'fail'); return; }
+        const base = baseSel.value;
+        const taken = [...ROLE_LIST.map((r) => r.key), ...state.custom.map((c) => c.code)];
+        const code = roleCodeFrom(name, taken);
+        addBtn.disabled = true;
+        try {
+            const ins = await supabase.from('custom_roles').insert({ code, name, base_role: base, active: 1 }).select().single();
+            if (ins.error) throw new Error(ins.error.message || String(ins.error));
+            // Новая роль начинает с прав СВОЕЙ ОСНОВЫ: пустая роль, выданная
+            // человеку, заперла бы его в пустом приложении, а сузить готовый
+            // набор — работа на минуту.
+            let permissions = JSON.stringify({ sections: [], levels: {}, patient_tabs: {} });
+            try {
+                const { data: baseRow } = await supabase.from('role_permissions').select('permissions').eq('role', base).maybeSingle();
+                if (baseRow && baseRow.permissions) permissions = typeof baseRow.permissions === 'string' ? baseRow.permissions : JSON.stringify(baseRow.permissions);
+            } catch (e) { /* нет строки основы — начнём с пустой */ }
+            const perm = await supabase.from('role_permissions').insert({ role: code, permissions }).select().single();
+            if (perm.error) throw new Error(perm.error.message || String(perm.error));
+            state.custom.push(ins.data || { code, name, base_role: base, active: 1 });
+            nameInp.value = '';
+            paintRoleTabs();
+            toast(trf('Роль «{name}» создана — отметьте её разделы и сохраните.', { name }), 'ok');
+            await selectRole(code);
+        } catch (e) {
+            toast(tr('Не удалось создать роль.') + ' ' + ((e && e.message) || ''), 'fail');
+        } finally {
+            addBtn.disabled = false;
+        }
+    }
+
+    async function toggleRoleActive(role, btn) {
+        btn.disabled = true;
+        const next = role.active ? 0 : 1;
+        try {
+            const { error } = await supabase.from('custom_roles').update({ active: next }).eq('code', role.code).select().single();
+            if (error) throw new Error(error.message || String(error));
+            role.active = next;
+            paintRoleTabs();
+            toast(next ? tr('Роль включена.') : tr('Роль отключена — новым сотрудникам её не предложат.'), 'ok');
+        } catch (e) {
+            toast(tr('Не удалось изменить роль.') + ' ' + ((e && e.message) || ''), 'fail');
+        } finally { btn.disabled = false; }
     }
 
     function paintActive() {
@@ -283,10 +399,24 @@ export async function renderRolesEditor(container, { onBack } = {}) {
 
         const card = h('div', { class: 'card roles-card' },
             h('div', { class: 'card-header' },
-                h('h3', null, Icon('Shield', { size: 16 }), ' ', 'Разделы и уровень доступа', ' · ', roleLabel(state.selected)),
+                h('h3', null, Icon('Shield', { size: 16 }), ' ', 'Разделы и уровень доступа', ' · ', labelOf(state.selected)),
                 saveBtn,
             ),
         );
+
+        // CUSTOM_ROLES_V1 — у своей роли видно, на чём она стоит, и её можно
+        // отключить: удаления нет намеренно (людей с этой ролью нельзя оставить
+        // с кодом, которого нет).
+        const cur = customOf(state.selected);
+        if (cur) {
+            const offBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' },
+                cur.active ? 'Отключить роль' : 'Включить роль');
+            offBtn.addEventListener('click', () => toggleRoleActive(cur, offBtn));
+            card.appendChild(h('div', { class: 'roles-base' },
+                h('span', { class: 'muted' }, trf('Своя роль клиники · основа: {base}', { base: tr(roleLabel(cur.base_role)) })),
+                h('span', { class: 'grow' }),
+                offBtn));
+        }
 
         if (!perms.configured) {
             card.appendChild(h('p', { class: 'roles-unset' },
@@ -310,7 +440,7 @@ export async function renderRolesEditor(container, { onBack } = {}) {
             if (!nav) return;
             const ids = nav.filter((it) => !it.section).map((it) => it.id);
             const reach = roleReach(
-                { name: roleLabel(state.selected), permissions: collect() },
+                { name: labelOf(state.selected), permissions: collect() },
                 ids,
                 (id) => t('sidebar.nav.' + id, id),
                 tr,   // перевод СНАЧАЛА: слова уровня и ролей едут в {дырках}
@@ -485,7 +615,7 @@ export async function renderRolesEditor(container, { onBack } = {}) {
                 .update({ permissions }).eq('role', role).select().single();
             if (error) throw new Error(error.message || String(error));
             state.baseline = snapshot(sections, levels, patient_tabs);
-            toast(tr('Права сохранены — сотрудники увидят их при следующем входе.') + ' · ' + tr(roleLabel(role)), 'ok');
+            toast(tr('Права сохранены — сотрудники увидят их при следующем входе.') + ' · ' + (customOf(role) ? customOf(role).name : tr(roleLabel(role))), 'ok');
         } catch (e) {
             // В сообщении есть следующий шаг, а не только беда.
             toast(tr('Не удалось сохранить права. Проверьте связь с сервером и повторите.') + ' ' + ((e && e.message) || ''), 'fail');

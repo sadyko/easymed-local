@@ -108,7 +108,9 @@ export function logout(db, sid) {
 export function sessionUser(db, sid) {
   if (!sid) return null;
   const row = db.prepare(
-    'SELECT u.id, u.username, u.full_name, u.role, u.extra_roles, u.is_active, u.must_change_password, s.expires_at AS session_expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?'
+    // CUSTOM_ROLES_V1 — код своей роли едет вместе с ролью: по нему экран
+    // грузит права и подписывает роль человеку её собственным названием.
+    'SELECT u.id, u.username, u.full_name, u.role, u.extra_roles, u.custom_role_code, u.is_active, u.must_change_password, s.expires_at AS session_expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?'
   ).get(sid);
   if (!row) return null;
   if (row.session_expires_at <= isoSeconds(Date.now()) || !row.is_active) {
@@ -131,7 +133,9 @@ function parseRoleList(v) {
 
 export function publicUser(u) {
   return { id: u.id, username: u.username, full_name: u.full_name, role: u.role,
-           extra_roles: parseRoleList(u.extra_roles), is_active: !!u.is_active,
+           extra_roles: parseRoleList(u.extra_roles),
+           custom_role_code: (typeof u.custom_role_code === 'string' && u.custom_role_code.trim()) || null,   // CUSTOM_ROLES_V1
+           is_active: !!u.is_active,
            // !! also maps SQLite's 0/1 — and an undefined column (rows selected
            // by callers that don't need the flag) — to a clean boolean.
            must_change_password: !!u.must_change_password };

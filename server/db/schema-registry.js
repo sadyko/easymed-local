@@ -390,6 +390,10 @@ export const REGISTRY = {
                 // `photo_url` СЮДА НЕ ДОБАВЛЯТЬ: этой колонки у сотрудника в
                 // офлайн-схеме нет вовсе (проверка соответствия реестра схеме
                 // поймала её здесь же). Фото врача офлайн не хранится.
+                // CUSTOM_ROLES_V1 (миграция 133) — код своей роли клиники. Читают
+                // экраны сотрудников и загрузчик прав; пишет его только
+                // routes/users.js (как и саму роль).
+                'custom_role_code',
                 'license_number']},   // SCHED_V1 — the wizard's slot engine; branch_id — CALENDAR_BOOKING_V1
                write:{insert:{roles:[]},update:{roles:[]},delete:{roles:[]}},
                // room_id: настройки кабинетов спрашивают «кто закреплён за этим
@@ -610,6 +614,22 @@ export const REGISTRY = {
   // STAFF_SYNC_V1 (migration 086) — GOVERNED BY THE MAIN CLINIC, and the role
   // list below is deliberately NOT where that is enforced. See
   // MAIN_CLINIC_TABLES at the bottom of this file for the whole argument.
+  // CUSTOM_ROLES_V1 (миграция 133) — СВОИ РОЛИ КЛИНИКИ. Список видит весь
+  // персонал (по нему подписывают роль сотрудника на экранах), заводит и правит
+  // только администратор. Удаление есть: роль, которую ещё никому не выдали,
+  // должно быть можно убрать — routes/users.js не даст удалить занятую.
+  custom_roles: {
+    read:  { roles: ALL_STAFF, columns: ['id','code','name','base_role','active','created_at','updated_at'] },
+    // УДАЛЕНИЯ НЕТ НАРОЧНО: роль, которую кому-то уже выдали, удалить значит
+    // оставить людей с кодом, которого нет, — и без прав. Ненужную роль
+    // ОТКЛЮЧАЮТ (active = 0): её не предложат при найме, а те, кто на ней
+    // сидит, продолжат работать по основе, пока их не переведут.
+    write: { insert: { roles: ['admin'], columns: ['code','name','base_role','active'] },
+             update: { roles: ['admin'], columns: ['name','base_role','active'] },
+             delete: { roles: [] } },
+    filters: ['id','code','active','base_role'], embed: {},
+  },
+
   role_permissions: {
     read:  { roles: ALL_STAFF, columns: ['id','role','permissions','updated_at'] },
     write: { insert: { roles: ['admin'], columns: ['role','permissions'] },

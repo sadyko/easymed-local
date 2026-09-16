@@ -2110,16 +2110,32 @@ async function applyActorPermissions(actor) {
                 if (Array.isArray(e)) extra = e.filter(Boolean);
             } catch (_) { /* column absent pre-migration 020 → primary role only */ }
         }
-        const roleNames = [actor.role, ...extra].filter((r, i, a) => r && a.indexOf(r) === i);
+        // CUSTOM_ROLES_V1 — своя роль клиники ЗАМЕНЯЕТ права своей основы на
+        // экранах (ради неё роль и заводят: видеть МЕНЬШЕ основы), а
+        // дополнительные роли по-прежнему прибавляются. Если у своей роли ещё
+        // нет строки прав — работаем по основе: ненастроенная роль не должна
+        // запирать человека в пустом приложении.
+        const customCode = typeof actor.custom_role_code === 'string' ? actor.custom_role_code.trim() : '';
+        const queryNames = [customCode, actor.role, ...extra].filter((r, i, a) => r && a.indexOf(r) === i);
         try {
-            const { data, error } = await supabase.from('role_permissions').select('role, permissions').in('role', roleNames);
+            const { data, error } = await supabase.from('role_permissions').select('role, permissions').in('role', queryNames);
             if (!error && Array.isArray(data) && data.length) {
+                const hasCustom = !!(customCode && data.some((x) => x.role === customCode));
+                const roleNames = [hasCustom ? customCode : actor.role, ...extra].filter((r, i, a) => r && a.indexOf(r) === i);
+                // Подпись роли — её собственное название, а не код.
+                let customName = '';
+                if (hasCustom) {
+                    try {
+                        const { data: cr } = await supabase.from('custom_roles').select('name').eq('code', customCode).maybeSingle();
+                        customName = (cr && cr.name) || '';
+                    } catch (_) { /* название не вышло — останется код */ }
+                }
                 const rows = roleNames.map((rn) => {
                     const d = data.find((x) => x.role === rn);
                     if (!d || !d.permissions) return null;
                     let p = d.permissions;
                     if (typeof p === 'string') { try { p = JSON.parse(p); } catch (_) { p = null; } }
-                    return (p && Array.isArray(p.sections)) ? { name: rn, permissions: p } : null;
+                    return (p && Array.isArray(p.sections)) ? { name: (rn === customCode && customName) ? customName : rn, permissions: p } : null;
                 }).filter(Boolean);
                 if (rows.length) { setEffectiveFromRoles(rows); return; }
             }

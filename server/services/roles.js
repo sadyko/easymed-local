@@ -63,7 +63,7 @@ export function hasAnyRole(user, allowed) {
 const LEVEL_RANK = { viewer: 1, editor: 2, admin: 3 };
 
 export function sectionLevel(db, user, key) {
-  const roles = effectiveRoles(user);
+  const roles = rolesForPermissions(db, user);   // CUSTOM_ROLES_V1
   if (!roles.length) return null;
 
   let best = null;
@@ -82,6 +82,37 @@ export function sectionLevel(db, user, key) {
     if (!best || (LEVEL_RANK[lvl] || 0) > (LEVEL_RANK[best] || 0)) best = lvl;
   }
   return best;
+}
+
+// CUSTOM_ROLES_V1 (2026-09-16) — ПО КАКИМ РОЛЯМ СЧИТАТЬ ПРАВА НА РАЗДЕЛЫ.
+//
+// У своей роли клиники есть ОСНОВА (штатная роль) — по ней сервер отдаёт
+// данные, и это потолок. А вот РАЗДЕЛЫ своя роль решает сама: её строка в
+// role_permissions ЗАМЕНЯЕТ строку основы, а не добавляется к ней. Иначе
+// «Старший регистратор» не мог бы видеть МЕНЬШЕ регистратуры — ради чего роль
+// обычно и заводят.
+//
+// Дополнительные роли («Дополнительные роли» в карточке сотрудника) остаются
+// прибавкой: их права объединяются, как и раньше.
+export function permissionRoles(user) {
+  const custom = user && typeof user.custom_role_code === 'string' ? user.custom_role_code.trim() : '';
+  const all = effectiveRoles(user);
+  if (!custom) return all;
+  const primary = user && user.role;
+  return [custom, ...all.filter((r) => r !== primary)];
+}
+
+// Своя роль, которую ещё НЕ НАСТРОИЛИ (строки в role_permissions нет), не
+// должна отнимать у человека работу: он продолжает работать по основе. Пустой
+// набор разделов у настроенной роли — это решение администратора, а вот
+// отсутствие строки — просто «ещё не дошли руки».
+function rolesForPermissions(db, user) {
+  const list = permissionRoles(user);
+  const custom = user && typeof user.custom_role_code === 'string' ? user.custom_role_code.trim() : '';
+  if (!custom) return list;
+  let has = false;
+  try { has = !!db.prepare('SELECT 1 FROM role_permissions WHERE role = ?').get(custom); } catch { has = false; }
+  return has ? list : effectiveRoles(user);
 }
 
 // Может ли пользователь хотя бы смотреть раздел?
@@ -174,7 +205,7 @@ function tabCeiling(tab) {
  */
 export function patientTabLevel(db, user, tab) {
   const key = normalizePatientTab(tab);
-  const roles = effectiveRoles(user);
+  const roles = rolesForPermissions(db, user);   // CUSTOM_ROLES_V1 — своя роль решает вкладки сама
   if (!roles.length) return 'none';
 
   const ceiling = tabCeiling(key);

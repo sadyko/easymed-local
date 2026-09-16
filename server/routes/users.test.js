@@ -568,3 +568,47 @@ test('specialties: up to four stored, first = users.specialty, GET returns them,
     assert.deepEqual((await res.json()).users.find((u) => u.id === created.id).specialties, [{ slug: null, name: 'Хирург' }]);
   } finally { server.close(); }
 });
+
+// CUSTOM_ROLES_V1 — своя роль клиники у сотрудника: код едет рядом с ролью, а
+// РОЛЬЮ становится основа этой роли — по ней сервер и отдаёт данные.
+test('своя роль клиники: код сохраняется, а users.role становится её основой', async (t) => {
+  const { db, server, base } = await startServer();
+  t.after(() => { server.close(); db.close(); });
+  const admin = await loginAdmin(base);
+  db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('starshiy-registrator','Старший регистратор','registrar')").run();
+
+  // при создании роль в теле может быть любой — решает основа своей роли
+  let res = await post(base, '/api/users', {
+    username: 'reg.senior', password: '1', role: 'doctor', custom_role_code: 'starshiy-registrator',
+  }, admin);
+  assert.equal(res.status, 201);
+  let body = await res.json();
+  assert.equal(body.user.role, 'registrar', 'ролью стала основа');
+  assert.equal(body.user.custom_role_code, 'starshiy-registrator');
+
+  // снять свою роль — пустой строкой; роль остаётся прежней
+  res = await patch(base, '/api/users/' + body.user.id, { custom_role_code: '' }, admin);
+  assert.equal(res.status, 200);
+  body = await res.json();
+  assert.equal(body.user.custom_role_code, null);
+  assert.equal(body.user.role, 'registrar');
+
+  // выдать обратно
+  res = await patch(base, '/api/users/' + body.user.id, { custom_role_code: 'starshiy-registrator' }, admin);
+  assert.equal((await res.json()).user.custom_role_code, 'starshiy-registrator');
+});
+
+test('несуществующая или отключённая роль клиники — отказ словами', async (t) => {
+  const { db, server, base } = await startServer();
+  t.after(() => { server.close(); db.close(); });
+  const admin = await loginAdmin(base);
+  db.prepare("INSERT INTO custom_roles (code, name, base_role, active) VALUES ('off-role','Отключённая','registrar',0)").run();
+
+  let res = await post(base, '/api/users', { username: 'no.role', password: '1', role: 'registrar', custom_role_code: 'net-takoy' }, admin);
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error.message, /роли клиники нет/i);
+
+  res = await post(base, '/api/users', { username: 'off.role', password: '1', role: 'registrar', custom_role_code: 'off-role' }, admin);
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error.message, /отключена/i);
+});

@@ -32,6 +32,19 @@ const EXTRA_ONLY_ROLES = [
     ['senior_nurse', 'Старшая медсестра'],
 ];
 const ALL_ASSIGNABLE_ROLES = [...ROLES, ...EXTRA_ONLY_ROLES];
+// CUSTOM_ROLES_V1 (2026-09-16) — роли, заведённые самой клиникой («Настройки →
+// Роли»). У каждой есть ОСНОВА из списка выше: её и получает users.role, а код
+// своей роли едет рядом и решает, какие разделы человек увидит. Список
+// подгружается вместе с сотрудниками; пусто — значит клиника своих ролей не
+// заводила, и экран выглядит как раньше.
+let CUSTOM_ROLES = [];
+const customRoleOf = (code) => CUSTOM_ROLES.find((c) => c.code === code) || null;
+const roleTitle = (u) => {
+    const c = u && u.custom_role_code ? customRoleOf(u.custom_role_code) : null;
+    if (c) return c.name;
+    const r = ALL_ASSIGNABLE_ROLES.find((x) => x[0] === (u && u.role));
+    return r ? r[1] : ((u && u.role) || '—');
+};
 const STAFF_TYPES = [['doctor', 'Врачи'], ['admin_staff', 'Административный персонал'], ['mid_low', 'Средний и младший персонал']];
 const DOCTOR_CATEGORIES = [['', '—'], ['highest', 'Высшая'], ['first', 'Первая'], ['second', 'Вторая'], ['none', 'Без категории']];
 const EMPLOYMENT_TYPES = [['', '—'], ['official', 'Официально'], ['civil_law', 'ГПХ (договор)'], ['unofficial', 'Неофициально']];
@@ -240,7 +253,7 @@ async function paint(root) {
                     // чтобы понять, кого из них он вообще вправе править.
                     fromMain(u) ? h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '8px', padding: '1px 7px', border: '1px solid var(--ink-100)', borderRadius: '20px', whiteSpace: 'nowrap' } }, 'Главная клиника') : null),
                 h('td', null, u.staff_type ? staffLabel(u.staff_type) : (u.is_doctor ? 'Врачи' : '—')),
-                h('td', null, roleLabel(u.role)),
+                h('td', null, roleTitle(u)),   // CUSTOM_ROLES_V1 — своя роль зовётся своим именем
                 h('td', null, u.phone || '—'),
                 h('td', null, u.is_active ? h('span', { style: { color: 'var(--ok-700, #1a7a44)', fontWeight: 600, fontSize: '12.5px' } }, '● Активен') : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '○ Неактивен')),
                 h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } }, backBtn, openBtn),
@@ -266,6 +279,13 @@ async function paint(root) {
             departments = dep.data || []; branches = br.data || []; services = sv.data || [];
             serviceTypes = st.data || []; serviceCategories = sc.data || [];
         }
+        // CUSTOM_ROLES_V1 — свои роли клиники: их предлагают в «Основной роли» и
+        // ими подписывают строку сотрудника. Отказ (старая база без таблицы) —
+        // не беда: останутся штатные роли.
+        try {
+            const { data: cr } = await supabase.from('custom_roles').select('code, name, base_role, active').order('name');
+            CUSTOM_ROLES = (cr || []).filter((c) => c && c.code);
+        } catch (e) { CUSTOM_ROLES = []; }
         const { users } = await api('');
         allUsers = users || [];
         renderRows();
@@ -324,7 +344,7 @@ function openEditor(user, root) {
         specialty: '', specialties: [], doctor_category: '', hire_date: '', license_number: '', license_expiry_date: '',
         branch_id: '', employment_type: '', salary_type: '', salary_fixed: '', salary_percent: '',
         working_hours: {}, service_rates: [], referral_rates: [],
-        username: '', password: '', role: 'registrar', extra_roles: [], is_active: true,
+        username: '', password: '', role: 'registrar', custom_role_code: '', extra_roles: [], is_active: true,
         // SOLE_BRANCH_V1 — филиал в клинике один: подставляем его сразу, чтобы
         // раздел «Филиалы» не требовал выбора там, где выбирать не из чего.
         // У существующего сотрудника ниже победит его собственное значение.
@@ -347,7 +367,7 @@ function openEditor(user, root) {
             working_hours: parseHours(user.working_hours),
             service_rates: loadRates(user.service_rates),
             referral_rates: loadRates(user.referral_rates),
-            username: user.username || '', role: user.role || 'registrar',
+            username: user.username || '', role: user.role || 'registrar', custom_role_code: user.custom_role_code || '',
             extra_roles: asArr(user.extra_roles).slice(), is_active: !!user.is_active,
         } : {}),
     };
@@ -425,7 +445,10 @@ function openEditor(user, root) {
     const phonef = (key, ph) => { const w = phoneInput(key, ph, { value: emp[key] }); w.addEventListener('input', () => markDirty({ [key]: w.value })); return w; };
     const numf = (key, ph) => { const i = h('input', { type: 'number', min: '0', step: '1', value: emp[key] || '', placeholder: ph || '' }); i.addEventListener('input', () => markDirty({ [key]: i.value })); return i; };
     const datef = (key) => { const i = h('input', { type: 'date', value: (emp[key] || '').slice(0, 10) }); i.addEventListener('input', () => markDirty({ [key]: i.value })); return i; };
-    const sel = (key, opts, onset) => { const s = h('select', null, ...opts.map(([v, l]) => h('option', { value: v, selected: String(emp[key]) === String(v) }, l))); s.addEventListener('change', () => onset ? onset(s.value) : markDirty({ [key]: s.value })); return s; };
+    // CUSTOM_ROLES_V1 — четвёртым аргументом можно назвать ТЕКУЩЕЕ значение: у
+    // списка ролей оно собирается из двух полей (role + код своей роли) и в
+    // emp[key] не лежит.
+    const sel = (key, opts, onset, curValue) => { const cur = curValue !== undefined ? curValue : emp[key]; const s = h('select', null, ...opts.map(([v, l]) => h('option', { value: v, selected: String(cur) === String(v) }, l))); s.addEventListener('change', () => onset ? onset(s.value) : markDirty({ [key]: s.value })); return s; };
 
     function pickCategory(v) {
         const becomingDoctor = v === 'doctor';
@@ -540,7 +563,25 @@ function openEditor(user, root) {
             // users.referral_rates, so a fixed field would pay nobody.
             body.append(ratesSection(emp, 'referral_rates', { icon: sec.icon, title: 'Вознаграждение за направления', sub: '% от стоимости услуг, на которые врач направил пациента.', pctLabel: '% направления' }, touch));
         } else if (active === 'access') {
-            const roleSel = sel('role', ROLES.map(r => [r[0], r[1]]), (v) => { markDirty({ role: v, extra_roles: (emp.extra_roles || []).filter(r => r !== v) }); renderBody(); });
+            // CUSTOM_ROLES_V1 — в одном списке штатные роли и роли клиники. У своей
+            // роли значение 'custom:<код>': выбрали её — в role ложится ОСНОВА
+            // (её и проверяет сервер), а код едет отдельным полем.
+            const activeCustom = CUSTOM_ROLES.filter((c) => c.active || c.code === emp.custom_role_code);
+            const roleOptions = [
+                ...ROLES.map((r) => [r[0], r[1]]),
+                ...activeCustom.map((c) => ['custom:' + c.code, c.name + ' · ' + tr(roleLabel(c.base_role))]),
+            ];
+            const roleValue = emp.custom_role_code ? 'custom:' + emp.custom_role_code : emp.role;
+            const roleSel = sel('roleChoice', roleOptions, (v) => {
+                if (String(v).startsWith('custom:')) {
+                    const code = String(v).slice(7);
+                    const c = customRoleOf(code);
+                    markDirty({ custom_role_code: code, role: (c && c.base_role) || emp.role, extra_roles: (emp.extra_roles || []).filter(r => r !== ((c && c.base_role) || emp.role)) });
+                } else {
+                    markDirty({ custom_role_code: '', role: v, extra_roles: (emp.extra_roles || []).filter(r => r !== v) });
+                }
+                renderBody();
+            }, roleValue);
             const extraRoles = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px' } });
             for (const [rk, rl] of ALL_ASSIGNABLE_ROLES) {
                 if (rk === emp.role) continue;
@@ -640,7 +681,7 @@ function openEditor(user, root) {
             branch_id: emp.branch_id ? Number(emp.branch_id) : null, employment_type: emp.employment_type || '', salary_type: emp.salary_type || '',
             salary_fixed: Number(emp.salary_fixed) || 0, salary_percent: Number(emp.salary_percent) || 0, working_hours: JSON.stringify(emp.working_hours || {}),
             service_rates: asArr(emp.service_rates), referral_rates: asArr(emp.referral_rates),
-            role: emp.role, extra_roles: (emp.extra_roles || []).filter(r => r !== emp.role), is_active: !!emp.is_active,
+            role: emp.role, custom_role_code: emp.custom_role_code || '', extra_roles: (emp.extra_roles || []).filter(r => r !== emp.role), is_active: !!emp.is_active,
         };
         if (String(emp.password).trim()) payload.password = emp.password;
 
