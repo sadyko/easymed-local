@@ -109,6 +109,36 @@ function thermal(s) {
     const key = String((s && s.thermalWidth) || '58');
     return THERMAL_SIZES[key] || THERMAL_SIZES['58'];
 }
+// LAB_BLANK_COLUMNS_V1 (2026-09-16) — БЛАНК ПЕЧАТАЕТ ТЕ ГРАФЫ, КОТОРЫЕ ЕСТЬ У
+// ЭТИХ РЕЗУЛЬТАТОВ.
+//
+// Владелец: «у текстовых и вариантных анализов есть единицы и референс».
+// Антибиотикограмма («Пенициллин — устойчивый»), осадок мочи, группа крови —
+// это слова, а не числа: единиц у них нет, диапазона нет, флага нет. Лист всё
+// равно печатал четыре графы с прочерками и легенду «выше/ниже нормы» — и
+// выглядел сломанной таблицей вместо короткого ответа.
+//
+// Графа остаётся, если хоть одна строка документа её заполняет. Числовой
+// анализ печатается как прежде, целиком.
+function labColumns(groups) {
+    const rows = [].concat(...(groups || []).map((g) => (g && g.tests) || []));
+    const any = (fn) => rows.some(fn);
+    const txt = (v) => String(v == null ? '' : v).trim();
+    return {
+        unit: any((t) => txt(t.unit) && txt(t.unit) !== '—'),
+        ref:  any((t) => txt(t.ref) && txt(t.ref) !== '—'),
+        bar:  any((t) => t.pos != null),
+        flag: any((t) => txt(t.flag)),
+    };
+}
+
+// Ширины граф заданы «долями»: оставшиеся делят лист между собой, и таблица из
+// трёх колонок не жмётся в треть страницы.
+function labColWidths(cols) {
+    const total = cols.reduce((a, c) => a + c.w, 0) || 1;
+    return cols.map((c) => (c.w / total * 100).toFixed(2));
+}
+
 function refCellHtml(ref) {
     const raw = String(ref == null ? '' : ref);
     if (!raw) return '';
@@ -553,8 +583,27 @@ function labClassic(s, d) {
     // вверх — выше нормы, вниз — ниже. Буквы H/L читались как часть
     // результата, а направление отклонения приходилось расшифровывать.
     const fsym = (f) => f === 'H' ? '\u2303' : f === 'L' ? '\u2304' : '\u00b7';
-    const row = (t) => `<tr><td class="pname">${esc(t.name)}${t.code ? ` <small>${esc(t.code)}</small>` : ''}</td><td class="r"><span class="val ${fcl(t.flag)}">${esc(t.value)}</span></td><td>${esc(t.unit || '')}</td><td class="ref">${refCellHtml(t.ref)}</td><td>${t.pos == null ? '<span class="rng-na">—</span>' : `<div class="range"><div class="track"></div><div class="band"></div><div class="mk ${fcl(t.flag)}" style="left:${Math.max(2, Math.min(98, t.pos))}%"></div></div>`}</td><td class="c">${t.flag ? `<span class="flag ${t.flag === 'H' ? 'h' : t.flag === 'L' ? 'l' : 'n'}">${fsym(t.flag)}</span>` : ''}</td></tr>`;
-    const grp = (g) => `<div class="grp"><div class="grp-h"><span class="ru">${esc(g.title)}</span>${g.titleUz ? `<span class="uz">· ${esc(g.titleUz)}</span>` : ''}</div><table class="res"><colgroup><col style="width:33%"><col style="width:12%"><col style="width:13%"><col style="width:24%"><col style="width:10%"><col style="width:8%"></colgroup><thead><tr><th>Показатель<span class="uz">Ko‘rsatkich</span></th><th class="r">Результат<span class="uz">Natija</span></th><th>Ед.</th><th>Референс<span class="uz">Norma</span></th><th>Диапазон</th><th class="c">Флаг</th></tr></thead><tbody>${(g.tests || []).map(row).join('')}</tbody></table></div>`;
+    // LAB_BLANK_COLUMNS_V1 — графы по составу результатов (см. labColumns).
+    const C = labColumns(d.groups);
+    const COLS = [
+        { w: 33, th: 'Показатель<span class="uz">Ko‘rsatkich</span>',
+          td: (t) => `<td class="pname">${esc(t.name)}${t.code ? ` <small>${esc(t.code)}</small>` : ''}</td>` },
+        { w: 12, cls: 'r', th: 'Результат<span class="uz">Natija</span>',
+          td: (t) => `<td class="r"><span class="val ${fcl(t.flag)}">${esc(t.value)}</span></td>` },
+        { w: 13, on: C.unit, th: 'Ед.',
+          td: (t) => `<td>${esc(t.unit || '')}</td>` },
+        { w: 24, on: C.ref, th: 'Референс<span class="uz">Norma</span>',
+          td: (t) => `<td class="ref">${refCellHtml(t.ref)}</td>` },
+        { w: 10, on: C.bar, th: 'Диапазон',
+          td: (t) => `<td>${t.pos == null ? '<span class="rng-na">—</span>' : `<div class="range"><div class="track"></div><div class="band"></div><div class="mk ${fcl(t.flag)}" style="left:${Math.max(2, Math.min(98, t.pos))}%"></div></div>`}</td>` },
+        { w: 8, on: C.flag, cls: 'c', th: 'Флаг',
+          td: (t) => `<td class="c">${t.flag ? `<span class="flag ${t.flag === 'H' ? 'h' : t.flag === 'L' ? 'l' : 'n'}">${fsym(t.flag)}</span>` : ''}</td>` },
+    ].filter((c) => c.on !== false);
+    const W = labColWidths(COLS);
+    const colGroupHtml = COLS.map((c, i) => `<col style="width:${W[i]}%">`).join('');
+    const headHtml = COLS.map((c) => `<th${c.cls ? ` class="${c.cls}"` : ''}>${c.th}</th>`).join('');
+    const row = (t) => `<tr>${COLS.map((c) => c.td(t)).join('')}</tr>`;
+    const grp = (g) => `<div class="grp"><div class="grp-h"><span class="ru">${esc(g.title)}</span>${g.titleUz ? `<span class="uz">· ${esc(g.titleUz)}</span>` : ''}</div><table class="res"><colgroup>${colGroupHtml}</colgroup><thead><tr>${headHtml}</tr></thead><tbody>${(g.tests || []).map(row).join('')}</tbody></table></div>`;
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Результаты анализов · ${esc(d.patientName || '')}</title><style>
 ${PRINT_FONT_FACE_CSS}
 :root{ --accent:${esc(s.accent)}; --accent-2:${esc(s.accent)}; --accent-soft:${esc(s.accentSoft || '#eef6f5')}; --ink:${esc(s.ink || '#16213f')}; --ink-2:#3a4258; --muted:#454e63; --faint:#6b7285; --line:#e3e6ec; --line-2:#eef0f4; --paper:#fff; --page-bg:#e9eaee; --card-line:#e7eceb; --low:#2a6fb0; }
@@ -591,7 +640,7 @@ table.res{ width:100%; table-layout:fixed; border-collapse:collapse; font-size:1
     ],
   })}
   ${(d.groups || []).map(grp).join('')}
-  <div class="legend"><span><i class="dh"></i> \u2303 выше нормы</span><span><i class="dl"></i> \u2304 ниже нормы</span><span><i class="dn"></i> · в норме</span></div>
+  ${(C.flag || C.bar) ? `<div class="legend"><span><i class="dh"></i> \u2303 выше нормы</span><span><i class="dl"></i> \u2304 ниже нормы</span><span><i class="dn"></i> · в норме</span></div>` : ''}
   ${d.conclusion ? `<div class="concl"><div class="ch">Заключение <span class="uz">· Xulosa</span></div><p>${esc(d.conclusion)}</p></div>` : ''}
   <div class="signoff"><div class="sig"><div class="role">Заведующий лабораторией <i>· Laboratoriya boshlig‘i</i></div><div class="mark">${SIG_SVG}</div><div class="name">${esc(d.labChief || '—')}</div><div class="spec">${esc(d.labChiefSpec || '')} · подпись</div></div>
     <div class="sign-right"></div></div>
@@ -605,8 +654,22 @@ table.res{ width:100%; table-layout:fixed; border-collapse:collapse; font-size:1
 // ---------------------------------------------------------------------------
 function labCompact(s, d) {
     const fsym = (f) => f === 'H' ? '⌃' : f === 'L' ? '⌄' : '·';
-    const row = (t) => `<tr><td class="pname">${esc(t.name)}${t.code ? ` <small>${esc(t.code)}</small>` : ''}</td><td class="r"><b${(t.flag === 'H' || t.flag === 'L') ? ' style="text-decoration:underline"' : ''}>${esc(t.value)}</b></td><td>${esc(t.unit || '')}</td><td class="ref">${refCellHtml(t.ref)}</td><td class="c flag">${fsym(t.flag)}</td></tr>`;
-    const grp = (g) => `<div class="secbar"><span class="ru">${esc(g.title)}</span></div><table class="res"><colgroup><col style="width:36%"><col style="width:13%"><col style="width:15%"><col style="width:26%"><col style="width:10%"></colgroup><thead><tr><th>Показатель</th><th class="r">Результат</th><th>Ед.</th><th>Референс</th><th class="c">Флаг</th></tr></thead><tbody>${(g.tests || []).map(row).join('')}</tbody></table>`;
+    // LAB_BLANK_COLUMNS_V1 — то же правило, что и в полном бланке.
+    const C = labColumns(d.groups);
+    const COLS = [
+        { w: 36, th: 'Показатель',
+          td: (t) => `<td class="pname">${esc(t.name)}${t.code ? ` <small>${esc(t.code)}</small>` : ''}</td>` },
+        { w: 13, cls: 'r', th: 'Результат',
+          td: (t) => `<td class="r"><b${(t.flag === 'H' || t.flag === 'L') ? ' style="text-decoration:underline"' : ''}>${esc(t.value)}</b></td>` },
+        { w: 15, on: C.unit, th: 'Ед.', td: (t) => `<td>${esc(t.unit || '')}</td>` },
+        { w: 26, on: C.ref, th: 'Референс', td: (t) => `<td class="ref">${refCellHtml(t.ref)}</td>` },
+        { w: 10, on: C.flag, cls: 'c', th: 'Флаг', td: (t) => `<td class="c flag">${t.flag ? fsym(t.flag) : ''}</td>` },
+    ].filter((c) => c.on !== false);
+    const W = labColWidths(COLS);
+    const colGroupHtml = COLS.map((c, i) => `<col style="width:${W[i]}%">`).join('');
+    const headHtml = COLS.map((c) => `<th${c.cls ? ` class="${c.cls}"` : ''}>${c.th}</th>`).join('');
+    const row = (t) => `<tr>${COLS.map((c) => c.td(t)).join('')}</tr>`;
+    const grp = (g) => `<div class="secbar"><span class="ru">${esc(g.title)}</span></div><table class="res"><colgroup>${colGroupHtml}</colgroup><thead><tr>${headHtml}</tr></thead><tbody>${(g.tests || []).map(row).join('')}</tbody></table>`;
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Результаты анализов · ${esc(d.patientName || '')}</title><style>
 ${PRINT_FONT_FACE_CSS}
 :root{ --accent:${esc(s.accent)}; --ink:${esc(s.ink || '#16213f')}; --ink-2:#39414f; --muted:#474f5e; --faint:#727a88; --line:#e2e4e9; --line-2:#eef0f3; --bar:#f2f3f5; --paper:#fff; --page-bg:#e9eaee; }

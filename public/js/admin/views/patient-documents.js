@@ -36,7 +36,7 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';
 // LAB_BLANK_ONE_TEMPLATE_V1 — печатаем шаблоном из «Настройки → Документы»,
 // тем же, что лаборатория, карта пациента и Telegram-бот.
 import { printableSheet } from './doc-settings.js?v=noqr1';
-import { labFlagCell, labPosFor, fmtDMY, labSexRu, labRefLines, labRefText, matchResultsToAnalytes,
+import { labFlagCell, labPosCell, fmtDMY, labSexRu, labRefLines, labRefText, matchResultsToAnalytes,
          namedRangeCell, ageYears, labAccession, labIssueDates, labMaxDate } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';
 
@@ -718,7 +718,7 @@ async function printLabReport(visit, results, brand, patient) {
                     unit: r.unit || (analyte && analyte.unit) || '',
                     ref: labRefText(analyte, named.marked ? '' : gender, r.reference_range, named.texts),
                     flag: manyRanges ? '' : labFlagCell(r),
-                    pos: manyRanges ? null : labPosFor(r),
+                    pos: manyRanges ? null : labPosCell(r, analyte, gender),   // LAB_BAR_FROM_REF_V1
                 };
             }),
         };

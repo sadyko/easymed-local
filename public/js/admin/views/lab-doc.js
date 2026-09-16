@@ -44,6 +44,50 @@ export function labPosFor(x) {
     return Math.max(2, Math.min(98, 22 + ((v - lo) / (hi - lo)) * 56));
 }
 
+// LAB_BAR_FROM_REF_V1 (2026-09-16) — ПОЛОСКА «ДИАПАЗОН» РИСУЕТСЯ ПО ТЕМ ЖЕ
+// ГРАНИЦАМ, ЧТО НАПЕЧАТАНЫ В ГРАФЕ «РЕФЕРЕНС».
+//
+// Владелец: «в лаборатории диапазон не работает». И правда: норма в бланке
+// берётся у показателя из справочника (или из панели услуги), а полоска —
+// только из самой строки результата (ref_low/ref_high). Эти два поля
+// заполняются далеко не всегда: анализатор их не присылает, руками их никто не
+// вводит. Выходил лист, где норма «4,0 – 9,0» напечатана, а диапазон —
+// прочерк.
+//
+// Порядок источников тот же, что у «Референса»: сначала то, что сохранено в
+// самой строке (её границы — исторические, и лист обязан показывать ту норму,
+// по которой результат оценивали), затем норма по полу пациента, затем общая.
+// Именованные диапазоны (фазы цикла, менопауза) сюда НЕ попадают: при двух и
+// более диапазонах полоска не рисуется вовсе — какая из них про этого пациента,
+// решает врач (то же правило, что и у флага).
+export function labBounds(x, analyte, gender) {
+    const a = analyte || {};
+    const g = String(gender || '').toLowerCase();
+    const pairs = [
+        [x && x.ref_low, x && x.ref_high],
+        g === 'male' ? [a.ref_low_m, a.ref_high_m] : g === 'female' ? [a.ref_low_f, a.ref_high_f] : [null, null],
+        [a.ref_low, a.ref_high],
+    ];
+    for (const [lo, hi] of pairs) if (lo != null && hi != null) return [Number(lo), Number(hi)];
+    return [null, null];
+}
+
+// Число результата: сохранённое numeric_value, а если его нет — само значение
+// («6,8» с запятой — обычная запись бланка). Строка «Устойчивый» числом не
+// станет, и полоски у неё не будет.
+export function labValueNumber(x) {
+    if (x && x.numeric_value != null) return Number(x.numeric_value);
+    const v = x && x.value;
+    if (!isNumericValue(v)) return null;
+    return Number(String(v).trim().replace(',', '.'));
+}
+
+// Положение метки для строки бланка — с нормой показателя за спиной.
+export function labPosCell(x, analyte, gender) {
+    const [lo, hi] = labBounds(x, analyte, gender);
+    return labPosFor({ numeric_value: labValueNumber(x), ref_low: lo, ref_high: hi });
+}
+
 // 'YYYY-MM-DD…' -> 'DD.MM.YYYY'. Пустая строка, если даты нет или она не в том
 // виде: в шапке бланка лучше прочерк, чем 'Invalid Date'.
 export function fmtDMY(iso) {

@@ -52,7 +52,7 @@ import { IN_BED_STATUSES } from '../../shared/admission-status.js';
 // врача, и та же подгонка «в один экран», что у сводки.
 import { pastelFor } from '../pastel.js';
 import { fitViewport } from './dash-kpi.js';
-import { labFlagCell, labPosFor, fmtDMY, labSexRu, labRefText, matchResultsToAnalytes, labAccession, labIssueDates, labMaxDate,
+import { labFlagCell, labPosCell, fmtDMY, labSexRu, labRefText, matchResultsToAnalytes, labAccession, labIssueDates, labMaxDate,
          namedRangeCell, ageYears } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, resolveAnalyteWhy, nk } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
 import { branchSyncButton } from './branch-sync-button.js';   // BRANCH_SYNC_HOURLY_V1
@@ -1677,12 +1677,20 @@ function wsAnalyteLine(e, onRemove) {
     // сделать: заполнить можно только в настройках, то есть не сейчас и не
     // здесь. Введённое сохраняется в самом результате (lab_results.unit /
     // reference_range) и попадает в печатный бланк.
-    const unitEl = (e.seeded && e.a.unit)
+    // LAB_WORDS_NO_UNITS_V1 (2026-09-16) — у СЛОВА нет ни единиц, ни нормы-числа.
+    // «Пенициллин — устойчивый», «Хеликобактер — положительно», группа крови:
+    // пустые поля «ед.» и «норма» в такой строке не заполнить осмысленно, а
+    // заполненные уезжают на печатный бланк графой с прочерком. Заданное в
+    // справочнике (например, норма «Отрицательно») показываем как есть.
+    const isWords = e.a.value_type === 'text' || e.a.value_type === 'select';
+    const unitEl = e.a.unit
         ? h('span', { class: 'le-unit' }, e.a.unit)
+        : isWords ? h('span', { class: 'le-unit' })
         : h('input', { class: 'le-inp-sm', tabindex: '-1', value: e.a.unit || '', placeholder: 'ед.',
             oninput: (ev) => { e.a.unit = ev.target.value; } });
-    const refEl = (e.seeded && e.ref.text)
+    const refEl = e.ref.text
         ? h('span', { class: 'le-ref' }, e.ref.text)
+        : isWords ? h('span', { class: 'le-ref' })
         : h('input', { class: 'le-inp-sm', tabindex: '-1', value: e.ref.text || '', placeholder: 'норма',
             oninput: (ev) => { e.ref.text = ev.target.value; } });
 
@@ -2032,7 +2040,7 @@ async function labGroupFor(r, patient, results) {
             unit: x.unit || (analyte && analyte.unit) || '',
             ref: refText,
             flag: manyRanges ? '' : labFlagCell(x),
-            pos: manyRanges ? null : labPosFor(x),
+            pos: manyRanges ? null : labPosCell(x, analyte, gender),   // LAB_BAR_FROM_REF_V1
         };
     });
 

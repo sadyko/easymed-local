@@ -18,7 +18,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, StatusTag, fmtDate, fmtDateTime, field, Avatar, avColor, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { labFlagCell, labPosFor, fmtDMY, labSexRu, labRefLines, labRefText, matchResultsToAnalytes, labAccession, labIssueDates, labMaxDate,
+import { labFlagCell, labPosCell, fmtDMY, labSexRu, labRefLines, labRefText, matchResultsToAnalytes, labAccession, labIssueDates, labMaxDate,
          namedRangeCell, ageYears } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
 import { originTag } from '../record-origin.js';   // BRANCH_ORIGIN_V1 — откуда запись
@@ -1587,10 +1587,10 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                         unit: r.unit || (analyte && analyte.unit) || '',
                         ref: labRefText(analyte, named.marked ? '' : gender, r.reference, named.texts),
                         flag: manyRanges ? '' : labFlagCell(r),
-                        // Строки этого документа собираются без числовых границ
-                        // (ref_low/ref_high), поэтому полоску диапазона не рисуем:
-                        // метка по умолчанию села бы в середину и читалась как норма.
-                        pos: manyRanges ? null : labPosFor(r),
+                        // LAB_BAR_FROM_REF_V1 — строки этого документа собираются БЕЗ
+                        // числовых границ, поэтому полоску рисуем по норме самого
+                        // показателя (той же, что напечатана в «Референсе»).
+                        pos: manyRanges ? null : labPosCell(r, analyte, gender),
                     };
                 }),
                 };
