@@ -26,6 +26,7 @@ import { leadFromCall } from '../crm/lead-from-call.js';
 import { pbxHistory, normalizePbxCall } from './onlinepbx.js';
 import { pbxOptions, recordProviderPoll, noteProviderCall, providerKind } from './providers.js';
 import { recordingUrlOf } from './recording.js';   // CALL_RECORDING_V1
+import { uzE164 } from '../../../public/js/admin/views/crm-phone-match.js';   // UZ_PHONE_V1
 
 // Cursor overlap. Binotel's since-methods key on the call's startTime; a call
 // that STARTED just before our last poll but was still ringing at poll time
@@ -100,6 +101,10 @@ export function recordCall(db, d, source, provider = null) {
   }
   if (!row.general_call_id || !row.started_at) return false;
 
+  // UZ_PHONE_V1 — номер приводится к «+998…» ОДИН раз, здесь, на входе. Дальше
+  // его читают и журнал, и заявка, и поиск пациента: разные написания одного
+  // номера в разных местах — это то же самое, что разные номера.
+  row.external_number = uzE164(row.external_number);
   const externalNumber = row.external_number;
   // One phone number can be a whole family (telegram/documents.js's accepted
   // reality); a call row has one patient column, so take the top match —

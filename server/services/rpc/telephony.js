@@ -16,7 +16,7 @@ import { listProviders, saveProvider, deleteProvider, testProvider, ProviderErro
 import { dialCall } from '../telephony/dial.js';
 // CALL_RECORDING_V1 — разбор ссылки на запись и история станции.
 import { recordingUrlOf } from '../telephony/recording.js';
-import { pbxHistory } from '../telephony/onlinepbx.js';
+import { pbxHistory, pbxRecordingUrl } from '../telephony/onlinepbx.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -273,38 +273,41 @@ export function telephonyOperatorStats(db, args, user) {
 }
 
 // ---------------------------------------------------------------------------
-// CALL_RECORDING_V1 — ПОДТЯНУТЬ ЗАПИСИ ЗА НЕДЕЛЮ.
+// CALL_RECORDING_V1 — ЗАПИСЬ ЭТОГО РАЗГОВОРА, ПО ТРЕБОВАНИЮ.
 //
 // Владелец: «we dont have any audios uploaded to the system. we cannot play the
-// records». Записей не было по простой причине: программа спрашивала у станции
-// историю БЕЗ флага download, и станция честно отдавала её без ссылок. Флаг
-// добавлен — но он поможет только новым звонкам, а слушать хочется сегодняшние.
+// records».
 //
-// Поэтому одно разовое действие: спросить историю за неделю (дольше onlinePBX и
-// не хранит) и дописать ссылки тем звонкам, у которых их нет. ТОЛЬКО дописать:
-// ни одной новой строки, ни одной новой заявки — иначе кнопка «подтянуть
-// записи» завела бы клинике сотню старых лидов. Уже стоящую ссылку не трогаем.
-export async function telephonyFetchRecordings(db, _args, user, { pbxHistoryImpl = pbxHistory } = {}) {
-  requireAdmin(user);
-  const since = Math.floor(Date.now() / 1000) - 7 * 86400 + 120;
-  const upd = db.prepare(`UPDATE calls SET recording_url = @url
-      WHERE general_call_id = @id AND (recording_url IS NULL OR recording_url = '')`);
-
-  let found = 0, filled = 0, lines = 0;
-  for (const p of listProviders(db)) {
-    if (!p.enabled || p.kind !== 'onlinepbx') continue;
-    const row = getProviderRow(db, p.id);
-    const cfg = providerConfig(row);
-    const r = await pbxHistoryImpl(cfg.domain, since, pbxOptions(db, row));
-    lines += 1;
-    if (!r.ok) continue;
-    for (const c of (Array.isArray(r.data) ? r.data : [])) {
-      const url = recordingUrlOf(c);
-      if (!url || !c || !c.uuid) continue;
-      found += 1;
-      // Идентификатор в журнале — тот же, что кладёт normalizePbxCall.
-      filled += upd.run({ url, id: 'onlinepbx:' + c.uuid }).changes;
-    }
+// ПОЧЕМУ ПО ТРЕБОВАНИЮ, А НЕ ЗАРАНЕЕ. У onlinePBX нет поля «ссылка на запись» в
+// истории — проверено на живой станции: в ответе только номера, время и причина
+// завершения. Ссылку станция выдаёт отдельным запросом ПРО ОДИН звонок, и в
+// адресе стоит подпись, которая живёт недолго. Складывать такие адреса заранее
+// на все звонки значило бы хранить тысячи ссылок, половина из которых протухнет
+// раньше, чем кто-нибудь нажмёт «прослушать».
+//
+// Поэтому: нажали «Прослушать» — спросили станцию про этот звонок — отдали
+// адрес браузеру. Он ведёт на mp3, понимает перемотку и ключа не требует.
+//
+// Для Binotel и «Моих Звонков» ссылка приезжает вместе со звонком и лежит в
+// самой строке — тогда станцию не тревожим вовсе.
+export async function telephonyCallRecording(db, args, user, { pbxRecordingUrlImpl = pbxRecordingUrl } = {}) {
+  if (!hasAnyRole(user, CALL_LOG_ROLES)) {
+    throw new RpcError('Записи разговоров доступны регистратуре и колл-центру.', 403);
   }
-  return { lines, found, filled };
+  const id = Number((args && args.call_id) || 0);
+  const call = id ? db.prepare('SELECT id, general_call_id, provider, provider_id, billsec, recording_url FROM calls WHERE id = ?').get(id) : null;
+  if (!call) throw new RpcError('Звонок не найден.', 404);
+  if (call.recording_url) return { url: call.recording_url };
+  if (!Number(call.billsec)) return { url: '', reason: 'no_talk' };
+  if (String(call.provider) !== 'onlinepbx') return { url: '', reason: 'not_supported' };
+
+  const row = call.provider_id ? getProviderRow(db, call.provider_id) : null;
+  if (!row) return { url: '', reason: 'no_line' };
+  // Идентификатор звонка у станции — то, что стоит после «onlinepbx:» (так его
+  // кладёт normalizePbxCall). Без этого запрос уйдёт с чужим номером.
+  const uuid = String(call.general_call_id || '').replace(/^onlinepbx:/, '');
+  const r = await pbxRecordingUrlImpl(providerConfig(row).domain, uuid, pbxOptions(db, row));
+  const url = (r && r.ok && typeof r.data === 'string' && /^https?:\/\//.test(r.data)) ? r.data : '';
+  if (!url) return { url: '', reason: 'not_found' };
+  return { url };
 }

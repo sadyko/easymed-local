@@ -1501,14 +1501,45 @@ async function paint() {
                             h('span', { class: 'muted', style: { fontSize: '12.5px' } }, fmtDateTime(c.started_at)),
                             h('span', { class: 'muted', style: { fontSize: '12.5px' } }, dur),
                             who ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, trf('Оператор: {who}', { who })) : null));
-                    // Плеер — только там, где запись ЕСТЬ: пустой плеер выглядит
-                    // как сломанный, а записи не бывает у неотвеченного звонка и
-                    // у клиники, где запись не включена.
-                    if (c.recording_url) {
-                        line.appendChild(h('audio', {
-                            controls: true, preload: 'none', src: c.recording_url,
-                            style: { width: '100%', marginTop: '8px' },
-                        }));
+                    // ЗАПИСЬ ПРОСИТСЯ У СТАНЦИИ В МОМЕНТ НАЖАТИЯ, а не заранее.
+                    // У onlinePBX в истории звонка ссылки нет вовсе: станция
+                    // выдаёт её отдельным запросом про один звонок, и в адресе
+                    // стоит подпись, которая живёт недолго. Плеер, поставленный
+                    // заранее на каждый звонок, был бы плеером с протухшим
+                    // адресом — то есть молчащим.
+                    //
+                    // Кнопка есть только у звонков, где РАЗГОВОР БЫЛ: у
+                    // недозвона записывать нечего, и предлагать её — врать.
+                    if (Number(c.billsec) > 0) {
+                        const play = h('button', { class: 'btn btn-sm', type: 'button',
+                            style: { marginTop: '8px' },
+                            onclick: async (ev) => {
+                                ev.stopPropagation();
+                                play.disabled = true;
+                                const wasText = play.textContent;
+                                play.textContent = tr('Ищем запись…');
+                                try {
+                                    const { data, error } = await supabase.rpc('telephony_call_recording', { call_id: c.id });
+                                    if (error) { toast(error.message, 'fail'); return; }
+                                    if (!data || !data.url) {
+                                        // Причину называем словами: «нет записи» и
+                                        // «станция не хранит так давно» — разные вещи.
+                                        toast(data && data.reason === 'not_supported'
+                                            ? 'Эта телефония записи не отдаёт.'
+                                            : 'Записи этого разговора у станции нет.', 'warn');
+                                        return;
+                                    }
+                                    play.replaceWith(h('audio', {
+                                        controls: true, autoplay: true, preload: 'none', src: data.url,
+                                        style: { width: '100%', marginTop: '8px' },
+                                    }));
+                                } finally {
+                                    play.disabled = false;
+                                    play.textContent = wasText;
+                                }
+                            },
+                        }, Icon('Headset', { size: 13 }), h('span', null, 'Прослушать'));
+                        line.appendChild(play);
                     }
                     callsList.appendChild(line);
                 }

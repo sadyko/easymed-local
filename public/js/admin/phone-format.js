@@ -56,8 +56,14 @@ export function isCodeOnly(value) {
 
 /** Display form of anything typed or stored; '' when there is no number. */
 export function formatPhone(value) {
-    const d = phoneDigits(value);
-    if (!d) return '';
+    const d0 = phoneDigits(value);
+    if (!d0) return '';
+    // UZ_PHONE_V1 — девять цифр без кода страны показываются как узбекский
+    // номер, а не как турецкий. Раньше «901234567» читалось по коду «90» и
+    // выходило «+90 009 397 9»: номер, которого не существует. Ни у одной
+    // страны из списка нет девятизначного международного номера, поэтому
+    // догадка тут однозначна.
+    const d = d0.length === 9 ? '998' + d0 : d0;
     const c = detectCountry(d);
     if (!c) return '+' + d;
     const nat = d.slice(c.code.length);

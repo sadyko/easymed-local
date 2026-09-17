@@ -98,19 +98,21 @@ test('обрывок номера не превращается в запрос 
 // запись, — и правильно: onlinePBX прикладывает ссылку только по флагу
 // download. Без него мы честно спрашивали историю без записей.
 
-test('историю у станции спрашиваем СО ССЫЛКОЙ на запись', async () => {
-  const { pbxHistory } = await import('./onlinepbx.js');
-  const seen = [];
-  await pbxHistory('clinic.onpbx.ru', 1758000000, {
-    creds: { key_id: 'i', key: 'k' },
-    fetchImpl: async (url, opts) => {
-      seen.push(String(opts && opts.body));
-      return { ok: true, status: 200, json: async () => ({}), text: async () => '{"status":"1","data":[]}',
-               body: null, headers: { get: () => null } };
-    },
-  });
-  assert.equal(seen.length, 1);
-  assert.match(seen[0], /download=1/, 'без этого флага станция записей не отдаёт — и не отдавала');
+test('историю спрашиваем БЕЗ флага download — иначе станция отдаёт не список, а одну ссылку', async () => {
+  const { pbxHistory, pbxRecordingUrl } = await import('./onlinepbx.js');
+  const bodies = [];
+  const fake = async (url, opts) => {
+    bodies.push(String(opts && opts.body));
+    return { ok: true, status: 200, text: async () => '{"status":"1","data":[]}', headers: { get: () => null } };
+  };
+  await pbxHistory('clinic.onpbx.ru', 1758000000, { creds: { key_id: 'i', key: 'k' }, fetchImpl: fake });
+  assert.equal(/download/.test(bodies[0]), false,
+    'download в общем запросе ПОДМЕНЯЕТ ответ одной ссылкой — журнал звонков перестал бы наполняться');
+
+  // А вот запись ОДНОГО разговора просится именно им — и только вместе с uuid.
+  await pbxRecordingUrl('clinic.onpbx.ru', 'u-1', { creds: { key_id: 'i', key: 'k' }, fetchImpl: fake });
+  assert.match(bodies[1], /uuid=u-1/);
+  assert.match(bodies[1], /download=1/);
 });
 
 test('ссылка, узнанная ПОЗЖЕ, дописывается к уже сохранённому звонку', async () => {

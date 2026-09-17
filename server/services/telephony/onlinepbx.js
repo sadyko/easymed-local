@@ -130,7 +130,27 @@ export async function pbxCall(domain, pathName, params, { creds, authKey, onRene
  */
 export function pbxHistory(domain, sinceUnix, o = {}) {
   const from = Math.max(Number(sinceUnix) || 0, Math.floor(Date.now() / 1000) - 7 * 86400 + 60);
-  return pbxCall(domain, 'mongo_history/search.json', { start_stamp_from: from, download: 1 }, o);
+  return pbxCall(domain, 'mongo_history/search.json', { start_stamp_from: from }, o);
+}
+
+/**
+ * CALL_RECORDING_V1 — ссылка на запись ОДНОГО разговора.
+ *
+ * Как это устроено у onlinePBX, проверено на живой станции клиники, а не по
+ * описанию: download=1 НЕ добавляет ссылку к строкам истории — он подменяет
+ * весь ответ одной ссылкой на скачивание того, что нашёл запрос. Поэтому
+ * спрашивать надо ПО ОДНОМУ звонку: {uuid, download:1} → адрес именно его
+ * записи.
+ *
+ * Тот адрес отдаёт audio/mpeg, понимает Range и не требует ключа — то есть
+ * играется прямо в браузере. Проверено ответом станции: 206, content-type
+ * audio/mpeg, первые байты — заголовок кадра mp3.
+ *
+ * ССЫЛКА ЖИВЁТ НЕДОЛГО (в адресе подпись), поэтому её берут в момент, когда
+ * человек хочет слушать, а не складывают заранее на все звонки.
+ */
+export function pbxRecordingUrl(domain, uuid, o = {}) {
+  return pbxCall(domain, 'mongo_history/search.json', { uuid: String(uuid), download: 1 }, o);
 }
 
 /** Позвонить: сначала набирается `from` (внутренний номер), затем `to`. */
