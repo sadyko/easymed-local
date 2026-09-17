@@ -71,6 +71,44 @@ export function dialableNumber(raw) {
 }
 
 /**
+ * AUTO_EXTENSION_V1 (2026-09-17) — ЧЬЮ ТРУБКУ ПОДНИМАТЬ, ЕСЛИ НИКТО НЕ СКАЗАЛ.
+ *
+ * Владелец: «я не знаю какой включен, прошу сделай так чтобы пользователь только
+ * настроил авторизацию и это сработало».
+ *
+ * Знать, какой аппарат сейчас в сети, клиника не обязана — и не может: софтфон
+ * закрыли, компьютер уснул, человек ушёл на обед. Список внутренних номеров у
+ * станции спросить можно, но кто из них ЖИВ прямо сейчас — она не говорит.
+ *
+ * Зато это знает СОБСТВЕННЫЙ журнал звонков клиники: если с номера недавно
+ * разговаривали, значит аппарат на нём был подключён. Поэтому кандидаты — это
+ * внутренние номера, которые реально отвечали за последние две недели, от
+ * самого свежего к более старым: сверху тот, кто работает сегодня.
+ *
+ * Дальше dialCall пробует их по очереди, пока станция не примет вызов. Это
+ * никого не беспокоит: отказ «нет подключённого телефона» приходит ДО того, как
+ * кому-либо позвонили.
+ */
+export function candidateExtensions(db, limit = 6) {
+  try {
+    return db.prepare(`
+      SELECT internal_number AS ext, MAX(started_at) AS last_at
+        FROM calls
+       WHERE internal_number <> ''
+         AND length(internal_number) BETWEEN 2 AND 5
+         AND internal_number GLOB '[0-9]*'
+         AND billsec > 0
+         AND started_at > datetime('now', '-14 day')
+       GROUP BY internal_number
+       ORDER BY last_at DESC
+       LIMIT ?`).all(limit).map((r) => String(r.ext));
+  } catch (e) {
+    // Журнала может не быть вовсе (новая установка) — это не повод падать.
+    return [];
+  }
+}
+
+/**
  * Через что звоним. Возвращает {kind:'binotel'} | {kind:'onlinepbx', row} |
  * {kind:'moizvonki', row} | null, если звонить не через что.
  *
@@ -156,19 +194,52 @@ export async function dialCall(db, { extension = '', phone = '' } = {}, seams = 
   // «кто звонит» — учётная запись (владелец: «my calls for personal numbers
   // only»). Требовать добавочный там значило бы запретить звонить.
   const lineExt = via.row ? String(providerConfig(via.row).default_extension || '').trim() : '';
-  const from = ext || lineExt;
-  if (via.kind !== 'moizvonki' && !from) return fail('no_extension');
+  // ПОРЯДОК ПОПЫТОК. Сначала то, что назвали люди: свой добавочный оператора
+  // (тогда в журнале видно, кто звонил), потом номер линии из настроек. И
+  // только если их нет или на них некому снять трубку — живые номера из
+  // собственного журнала клиники. Настройка остаётся главнее догадки, но её
+  // отсутствие больше не мешает позвонить.
+  const tried = [];
+  for (const cand of [ext, lineExt, ...candidateExtensions(db)]) {
+    const v = String(cand || '').trim();
+    if (v && !tried.includes(v)) tried.push(v);
+  }
+  if (via.kind !== 'moizvonki' && !tried.length) return fail('no_extension');
 
-  if (via.kind === 'binotel') {
-    const { key, secret } = getCredentials(db);
-    const r = await binotelDialImpl(from, dial, { key, secret });
-    if (!r.ok) return fail(r.reason, r.comment);
-    return { ok: true, provider: 'binotel', call_id: r.call_id || '' };
+  // Одна попытка набора с конкретной трубки; ответ драйвера отдаётся как есть.
+  const attempt = async (fromExt) => {
+    if (via.kind === 'binotel') {
+      const { key, secret } = getCredentials(db);
+      return binotelDialImpl(fromExt, dial, { key, secret });
+    }
+    const c = providerConfig(via.row);
+    return pbxCallNowImpl(normalizeDomain(c.domain), fromExt, dial, pbxOptions(db, via.row));
+  };
+
+  // ПЕРЕБИРАЕМ ТОЛЬКО ПО ОДНОЙ ПРИЧИНЕ: «на этом номере нет подключённого
+  // телефона». Прочие отказы (неверный ключ, нет связи, запрещены исходящие)
+  // повторять восемь раз бессмысленно и вредно — это стук в дверь вендора без
+  // единого шанса на успех.
+  const NO_DEVICE = /no registered user|no push token|not registered/i;
+  if (via.kind !== 'moizvonki') {
+    let last = null;
+    for (const fromExt of tried) {
+      const r = await attempt(fromExt);
+      if (r.ok) {
+        const id = via.kind === 'binotel' ? (r.call_id || '') : ((r.data && (r.data.data || r.data.uuid)) || '');
+        // `from` возвращается наверх: оператор должен знать, какая трубка сейчас
+        // зазвонит, особенно когда номер выбрала программа, а не человек.
+        return { ok: true, provider: via.kind, call_id: String(id || ''), from: fromExt };
+      }
+      last = r;
+      if (!NO_DEVICE.test(String(r.comment || ''))) break;
+    }
+    return fail(last ? last.reason : 'server_error', last ? last.comment : '');
   }
 
   const cfg = providerConfig(via.row);
 
-  if (via.kind === 'moizvonki') {
+  {
     // MOIZVONKI_V1 — подпись запроса решает, ЧЕЙ телефон зазвонит. Пока у
     // клиники одна учётная запись на всех, звонок уходит с её телефона; когда
     // у операторов появятся свои учётки, сюда придёт имя оператора, и разбор
@@ -180,18 +251,6 @@ export async function dialCall(db, { extension = '', phone = '' } = {}, seams = 
     if (!r.ok) return fail(r.reason, r.comment);
     return { ok: true, provider: 'moizvonki', call_id: r.call_id || '' };
   }
-
-  const r = await pbxCallNowImpl(normalizeDomain(cfg.domain), from, dial, pbxOptions(db, via.row));
-  // СЛОВА СТАНЦИИ ДОХОДЯТ ДО ОПЕРАТОРА. Отказ «телефония ответила ошибкой» не
-  // говорит ничего: станция отказывает по совершенно разным поводам — не тот
-  // внутренний номер, нет прав на исходящие, не выбран транк. Свой текст у неё
-  // есть всегда (поле comment), и прятать его — значит заставлять гадать. Мы
-  // по-прежнему НЕ показываем ничего, кроме этого текста: ни ключей, ни адресов.
-  if (!r.ok) return fail(r.reason, r.comment);
-  // onlinePBX отвечает идентификатором вызова в data.data; его формат у них
-  // свой, и связывать по нему журнал мы не обещаем — отдаём как есть.
-  const id = r.data && (r.data.data || r.data.uuid);
-  return { ok: true, provider: 'onlinepbx', call_id: id == null ? '' : String(id) };
 }
 
 // ЧТО СТАНЦИЯ СКАЗАЛА — ПО-РУССКИ И ПО ДЕЛУ.

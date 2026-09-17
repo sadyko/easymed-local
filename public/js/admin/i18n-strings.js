@@ -7497,6 +7497,8 @@ export const STRINGS = {
   "Отметка снята.": {"en":"The mark has been removed.","ru":"Отметка снята.","uz":"Belgi olib tashlandi."},
   "Выполнено: {name}": {"en":"Done: {name}","ru":"Выполнено: {name}","uz":"Bajarildi: {name}"},
   "Амбулаторно": {"en":"Outpatient","ru":"Амбулаторно","uz":"Ambulator"},
+  "Разговора не было — записывать нечего.": {"en":"There was no conversation — nothing to record.","ru":"Разговора не было — записывать нечего.","uz":"Suhbat bo‘lmagan — yozib olishga narsa yo‘q."},
+  "Сейчас зазвонит телефон {ext} — снимите трубку": {"en":"Handset {ext} is about to ring — pick it up","ru":"Сейчас зазвонит телефон {ext} — снимите трубку","uz":"Hozir {ext} telefoni jiringlaydi — go‘shakni ko‘taring"},
   "Удалить подключение": {"en":"Remove the connection","ru":"Удалить подключение","uz":"Ulanishni o‘chirish"},
   "Удалить подключение Binotel? Ключи будут стёрты, опрос выключен. Звонки в журнале останутся.": {"en":"Remove the Binotel connection? The keys will be erased and polling switched off. Calls in the log stay.","ru":"Удалить подключение Binotel? Ключи будут стёрты, опрос выключен. Звонки в журнале останутся.","uz":"Binotel ulanishi o‘chirilsinmi? Kalitlar o‘chiriladi, so‘rov to‘xtatiladi. Jurnaldagi qo‘ng‘iroqlar qoladi."},
   "Подключение Binotel удалено.": {"en":"The Binotel connection has been removed.","ru":"Подключение Binotel удалено.","uz":"Binotel ulanishi o‘chirildi."},

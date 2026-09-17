@@ -20,7 +20,7 @@
 // переписывают — иначе одна и та же причина звучала бы по-разному на четырёх
 // экранах.
 import { h, Icon, toast } from './ui.js';
-import { tr } from './i18n.js';
+import { tr, trf } from './i18n.js';
 import { hasActorRole } from './permissions.js';
 import { supabase } from '../supabase.js';
 
@@ -46,7 +46,12 @@ export async function placeCall(phone) {
         toast(error.message || tr('Телефония ответила ошибкой. Попробуйте ещё раз через минуту.'), 'fail');
         return false;
     }
-    toast(tr('Сейчас зазвонит ваш телефон — снимите трубку'), 'ok');
+    // AUTO_EXTENSION_V1 — когда трубку выбрала программа (в настройках номер не
+    // задан), оператор обязан знать, КАКАЯ именно сейчас зазвонит: иначе он ждёт
+    // свой аппарат, а звонит соседний стол.
+    const from = data && data.from ? String(data.from) : '';
+    toast(from ? trf('Сейчас зазвонит телефон {ext} — снимите трубку', { ext: from })
+               : tr('Сейчас зазвонит ваш телефон — снимите трубку'), 'ok');
     return !!(data && data.ok);
 }
 

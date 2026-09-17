@@ -12,7 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { dialableNumber, dialProvider, dialCall } from './dial.js';
+import { dialableNumber, dialProvider, dialCall, candidateExtensions } from './dial.js';
 import { telephonyDial } from '../rpc/telephony.js';
 
 function seed({ binotel = false, pbx = false, mz = false } = {}) {
@@ -86,7 +86,9 @@ test('Binotel: звонок уходит внутренним номером о�
     const r = await dialCall(db, { extension: '910', phone: '+998 90 123-45-67' }, {
       binotelDialImpl: async (internal, external) => { seen.push([internal, external]); return { ok: true, call_id: '77' }; },
     });
-    assert.deepEqual(r, { ok: true, provider: 'binotel', call_id: '77' });
+    // AUTO_EXTENSION_V1 — ответ несёт ещё и `from`: оператор должен знать, какая
+    // трубка сейчас зазвонит, особенно когда номер выбрала программа.
+    assert.deepEqual(r, { ok: true, provider: 'binotel', call_id: '77', from: '910' });
     // На станцию уходят ЦИФРЫ: плюс — способ записать номер, а не набрать его.
     assert.deepEqual(seen, [['910', '998901234567']]);
   } finally { db.close(); }
@@ -319,5 +321,80 @@ test('отказ телефонии — это 400, а не 500: иначе эк
         binotelDialImpl: async () => ({ ok: false, reason: 'offline' }),
       }),
       (e) => e.status === 400, 'маршрут RPC спрячет всё, что 500 и выше, за общей фразой');
+  } finally { db.close(); }
+});
+
+// --- AUTO_EXTENSION_V1: программа сама находит живую трубку -------------------
+//
+// Владелец: «я не знаю какой включен, прошу сделай так чтобы пользователь только
+// настроил авторизацию и это сработало».
+
+function seedJournal(db, rows) {
+  const ins = db.prepare(`INSERT INTO calls (general_call_id, started_at, call_type, external_number,
+      internal_number, billsec, disposition, source) VALUES (?,?,?,?,?,?,?,'poll')`);
+  rows.forEach(([ext, minutesAgo, talk], i) => {
+    const t = new Date(Date.now() - minutesAgo * 60000).toISOString().slice(0, 19) + 'Z';
+    ins.run('j' + i, t, 0, '+998901111111', ext, talk, talk ? 'ANSWER' : 'NOANSWER');
+  });
+}
+
+test('никто не назвал номер — берём трубку, которая недавно РАЗГОВАРИВАЛА', async () => {
+  const db = seed({ pbx: true });
+  try {
+    // 102 отвечал позже всех, 101 раньше, 900 вообще не разговаривал.
+    seedJournal(db, [['101', 300, 60], ['102', 30, 45], ['900', 10, 0]]);
+    assert.deepEqual(candidateExtensions(db), ['102', '101'], 'кандидаты не те или не в том порядке');
+    const seen = [];
+    const r = await dialCall(db, { extension: '', phone: '901234567' }, {
+      pbxCallNowImpl: async (d, from) => { seen.push(from); return { ok: true, data: { data: 'u' } }; },
+    });
+    assert.equal(r.ok, true, 'клинике без настроенного добавочного снова запретили звонить');
+    assert.deepEqual(seen, ['102']);
+    assert.equal(r.from, '102', 'оператору не сказали, какая трубка зазвонит');
+  } finally { db.close(); }
+});
+
+test('трубка не в сети — программа пробует следующую, а не сдаётся', async () => {
+  const db = seed({ pbx: true });
+  try {
+    seedJournal(db, [['101', 300, 60], ['102', 30, 45]]);
+    const seen = [];
+    const r = await dialCall(db, { extension: '', phone: '901234567' }, {
+      pbxCallNowImpl: async (d, from) => {
+        seen.push(from);
+        // Ровно тот ответ, который видела клиника.
+        if (from === '102') return { ok: false, reason: 'server_error', comment: 'There is no registered user and no push token' };
+        return { ok: true, data: { data: 'u' } };
+      },
+    });
+    assert.deepEqual(seen, ['102', '101'], 'перебор не дошёл до второй трубки');
+    assert.equal(r.ok, true);
+    assert.equal(r.from, '101');
+  } finally { db.close(); }
+});
+
+test('ПЕРЕБИРАЕМ НЕ ВСЕГДА: неверный ключ повторять восемь раз нельзя', async () => {
+  const db = seed({ pbx: true });
+  try {
+    seedJournal(db, [['101', 300, 60], ['102', 30, 45], ['103', 20, 30]]);
+    let calls = 0;
+    const r = await dialCall(db, { extension: '', phone: '901234567' }, {
+      pbxCallNowImpl: async () => { calls += 1; return { ok: false, reason: 'bad_credentials', comment: 'Wrong api key' }; },
+    });
+    assert.equal(calls, 1, 'в дверь вендора постучались несколько раз без шанса на успех');
+    assert.equal(r.ok, false);
+    assert.match(r.message, /ключ доступа/);
+  } finally { db.close(); }
+});
+
+test('настроенный номер главнее догадки — его пробуют первым', async () => {
+  const db = seed({ pbx: true });
+  try {
+    seedJournal(db, [['102', 30, 45]]);
+    const seen = [];
+    await dialCall(db, { extension: '777', phone: '901234567' }, {
+      pbxCallNowImpl: async (d, from) => { seen.push(from); return { ok: true, data: { data: 'u' } }; },
+    });
+    assert.deepEqual(seen, ['777'], 'свой добавочный оператора отодвинули догадкой');
   } finally { db.close(); }
 });
