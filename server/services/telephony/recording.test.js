@@ -90,3 +90,49 @@ test('обрывок номера не превращается в запрос 
     assert.deepEqual(crmLeadCalls(db, { phone: '' }, OPERATOR), []);
   } finally { db.close(); }
 });
+
+// --- ПОЧЕМУ ЗАПИСЕЙ НЕ БЫЛО ВОВСЕ -------------------------------------------
+//
+// Владелец: «we dont have any audios uploaded to the system. we cannot play the
+// records». В сохранённых ответах станции не было НИ ОДНОГО поля, похожего на
+// запись, — и правильно: onlinePBX прикладывает ссылку только по флагу
+// download. Без него мы честно спрашивали историю без записей.
+
+test('историю у станции спрашиваем СО ССЫЛКОЙ на запись', async () => {
+  const { pbxHistory } = await import('./onlinepbx.js');
+  const seen = [];
+  await pbxHistory('clinic.onpbx.ru', 1758000000, {
+    creds: { key_id: 'i', key: 'k' },
+    fetchImpl: async (url, opts) => {
+      seen.push(String(opts && opts.body));
+      return { ok: true, status: 200, json: async () => ({}), text: async () => '{"status":"1","data":[]}',
+               body: null, headers: { get: () => null } };
+    },
+  });
+  assert.equal(seen.length, 1);
+  assert.match(seen[0], /download=1/, 'без этого флага станция записей не отдаёт — и не отдавала');
+});
+
+test('ссылка, узнанная ПОЗЖЕ, дописывается к уже сохранённому звонку', async () => {
+  const { recordCall } = await import('./poller.js');
+  const db = openDb(':memory:');
+  migrate(db);
+  try {
+    const call = (rec) => ({
+      general_call_id: 'onlinepbx:u1', started_at: '2026-09-17T09:00:00Z', call_type: 1,
+      external_number: '+998901234567', internal_number: '101', billsec: 60,
+      disposition: 'ANSWER', raw: rec ? { uuid: 'u1', record_url: rec } : { uuid: 'u1' },
+    });
+    // Первый опрос: станция ещё дописывает файл, ссылки нет.
+    recordCall(db, call(null), 'poll');
+    assert.equal(db.prepare('SELECT recording_url FROM calls').get().recording_url, null);
+    // Второй опрос той же минуты: ссылка появилась. Строка уже есть, вставка
+    // молчит — и без дописки запись потерялась бы навсегда.
+    recordCall(db, call('https://pbx.uz/rec/u1.mp3'), 'poll');
+    assert.equal(db.prepare('SELECT recording_url FROM calls').get().recording_url, 'https://pbx.uz/rec/u1.mp3');
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM calls').get().n, 1, 'звонок раздвоился');
+    // Уже стоящую ссылку не перетираем.
+    recordCall(db, call('https://pbx.uz/OTHER.mp3'), 'poll');
+    assert.equal(db.prepare('SELECT recording_url FROM calls').get().recording_url, 'https://pbx.uz/rec/u1.mp3');
+  } finally { db.close(); }
+});

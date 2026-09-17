@@ -995,7 +995,38 @@ function callsCard() {
     paintCalls();
     return h('div', { class: 'card' },
         h('div', { class: 'card-header' }, h('h3', null, Icon('Headset', { size: 16 }), ' ', tr('Последние звонки'))),
-        refs.callsBody);
+        refs.callsBody,
+        recordingsRow());
+}
+
+// CALL_RECORDING_V1 — РАЗОВАЯ ДОПИСКА ЗАПИСЕЙ.
+//
+// Владелец: «we dont have any audios uploaded to the system». Причина была в
+// запросе к станции: историю спрашивали без флага, по которому onlinePBX
+// прикладывает ссылку на запись. Флаг добавлен, но сам по себе он поможет
+// только звонкам, которые случатся ПОСЛЕ него, — а слушать нужно вчерашние.
+// Эта кнопка спрашивает историю за неделю (дольше станция и не хранит) и
+// дописывает ссылки тем звонкам, у которых их нет. Ничего не создаёт и не
+// перезаписывает.
+function recordingsRow() {
+    const line = h('span', { class: 'muted', style: { fontSize: '12.5px' } });
+    const btn = h('button', { class: 'btn btn-sm', type: 'button',
+        onclick: async () => {
+            btn.disabled = true;
+            line.textContent = tr('Спрашиваем станцию…');
+            try {
+                const r = await rpc('telephony_fetch_recordings', {});
+                line.textContent = (r && r.filled)
+                    ? trf('Записи добавлены к {n} звонкам.', { n: r.filled })
+                    : tr('Новых записей станция не отдала.');
+                await loadCalls();
+                paintCalls();
+            } catch (e) {
+                line.textContent = e.message || tr('Не удалось подтянуть записи.');
+            } finally { btn.disabled = false; }
+        } },
+        Icon('Refresh', { size: 13 }), ' ', tr('Подтянуть записи за неделю'));
+    return h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', padding: '0 18px 18px' } }, btn, line);
 }
 
 async function loadCalls() {

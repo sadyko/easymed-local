@@ -108,6 +108,19 @@ export function recordCall(db, d, source, provider = null) {
   const matches = externalNumber ? findPatientsByPhone(db, externalNumber, 1) : [];
   const startedAt = row.started_at;
 
+  // CALL_RECORDING_V1 — ЗАПИСЬ УЗНАЁТСЯ ПОЗЖЕ САМОГО ЗВОНКА. Станция отдаёт
+  // ссылку не сразу: звонок попадает в историю раньше, чем дописывается файл.
+  // Вставка у нас «первый записал — остальные молчат» (ON CONFLICT DO NOTHING),
+  // и без этой дописки строка навсегда осталась бы без записи, даже когда та
+  // появилась. Поэтому: если строка уже есть, записи у неё нет, а сейчас ссылка
+  // пришла — дописываем. Существующую ссылку не трогаем никогда.
+  const fillRecording = (url) => {
+    if (!url) return;
+    db.prepare(`UPDATE calls SET recording_url = @url
+                 WHERE general_call_id = @id AND (recording_url IS NULL OR recording_url = '')`)
+      .run({ url, id: row.general_call_id });
+  };
+
   // CALL_RECORDING_V1 — адрес записи разбирается ОДИН раз, здесь: у каждой
   // телефонии поле зовётся по-своему, и держать этот список на экранах значило
   // бы завести его в трёх местах.
@@ -127,6 +140,9 @@ export function recordCall(db, d, source, provider = null) {
     provider: provider && provider.kind ? String(provider.kind) : 'binotel',
     provider_id: provider && provider.id ? Number(provider.id) : null,
   });
+  // Дописка работает В ОБОИХ случаях: и когда строку только что завели (у
+  // станции запись уже была), и когда она лежала с прошлого опроса без записи.
+  fillRecording(recordingUrl);
   if (info.changes) {
     if (provider && provider.id) noteProviderCall(db, provider.id, startedAt);
     else noteCallSeen(db, startedAt);

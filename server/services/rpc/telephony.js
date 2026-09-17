@@ -10,9 +10,13 @@ import { publicSettings, saveSettings, getCredentials, listDispositions, Setting
 import { binotelCall } from '../telephony/binotel.js';
 import { wakePolling } from '../telephony/poller.js';
 // TELEPHONY_PROVIDERS_V1 — провайдеры кроме Binotel.
-import { listProviders, saveProvider, deleteProvider, testProvider, ProviderError, KINDS } from '../telephony/providers.js';
+import { listProviders, saveProvider, deleteProvider, testProvider, ProviderError, KINDS,
+         getProviderRow, pbxOptions, providerConfig } from '../telephony/providers.js';
 // CALL_FROM_CRM_V1 — один разъём набора на все телефонии.
 import { dialCall } from '../telephony/dial.js';
+// CALL_RECORDING_V1 — разбор ссылки на запись и история станции.
+import { recordingUrlOf } from '../telephony/recording.js';
+import { pbxHistory } from '../telephony/onlinepbx.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -266,4 +270,41 @@ export function telephonyOperatorStats(db, args, user) {
      WHERE c.started_at >= @from AND c.started_at < @to
      GROUP BY operator_name, extension
      ORDER BY calls DESC`).all({ from, to });
+}
+
+// ---------------------------------------------------------------------------
+// CALL_RECORDING_V1 — ПОДТЯНУТЬ ЗАПИСИ ЗА НЕДЕЛЮ.
+//
+// Владелец: «we dont have any audios uploaded to the system. we cannot play the
+// records». Записей не было по простой причине: программа спрашивала у станции
+// историю БЕЗ флага download, и станция честно отдавала её без ссылок. Флаг
+// добавлен — но он поможет только новым звонкам, а слушать хочется сегодняшние.
+//
+// Поэтому одно разовое действие: спросить историю за неделю (дольше onlinePBX и
+// не хранит) и дописать ссылки тем звонкам, у которых их нет. ТОЛЬКО дописать:
+// ни одной новой строки, ни одной новой заявки — иначе кнопка «подтянуть
+// записи» завела бы клинике сотню старых лидов. Уже стоящую ссылку не трогаем.
+export async function telephonyFetchRecordings(db, _args, user, { pbxHistoryImpl = pbxHistory } = {}) {
+  requireAdmin(user);
+  const since = Math.floor(Date.now() / 1000) - 7 * 86400 + 120;
+  const upd = db.prepare(`UPDATE calls SET recording_url = @url
+      WHERE general_call_id = @id AND (recording_url IS NULL OR recording_url = '')`);
+
+  let found = 0, filled = 0, lines = 0;
+  for (const p of listProviders(db)) {
+    if (!p.enabled || p.kind !== 'onlinepbx') continue;
+    const row = getProviderRow(db, p.id);
+    const cfg = providerConfig(row);
+    const r = await pbxHistoryImpl(cfg.domain, since, pbxOptions(db, row));
+    lines += 1;
+    if (!r.ok) continue;
+    for (const c of (Array.isArray(r.data) ? r.data : [])) {
+      const url = recordingUrlOf(c);
+      if (!url || !c || !c.uuid) continue;
+      found += 1;
+      // Идентификатор в журнале — тот же, что кладёт normalizePbxCall.
+      filled += upd.run({ url, id: 'onlinepbx:' + c.uuid }).changes;
+    }
+  }
+  return { lines, found, filled };
 }

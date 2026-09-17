@@ -117,10 +117,20 @@ export async function pbxCall(domain, pathName, params, { creds, authKey, onRene
   return r;
 }
 
-/** История звонков с момента `sinceUnix` (не старше недели — так у провайдера). */
+/**
+ * История звонков с момента `sinceUnix` (не старше недели — так у провайдера).
+ *
+ * CALL_RECORDING_V1 — download=1 ОБЯЗАТЕЛЕН, иначе записи разговоров не будет
+ * вовсе. Владелец: «we dont have any audios uploaded to the system. we cannot
+ * play the records» — и он прав: в сохранённых ответах станции нет ни одного
+ * поля, похожего на запись (uuid, caller_id_*, start_stamp, hangup_cause,
+ * events — и всё). Ссылку onlinePBX добавляет к ответу ТОЛЬКО по этому флагу;
+ * без него мы честно спрашивали историю без записей и честно ничего не
+ * получали.
+ */
 export function pbxHistory(domain, sinceUnix, o = {}) {
   const from = Math.max(Number(sinceUnix) || 0, Math.floor(Date.now() / 1000) - 7 * 86400 + 60);
-  return pbxCall(domain, 'mongo_history/search.json', { start_stamp_from: from }, o);
+  return pbxCall(domain, 'mongo_history/search.json', { start_stamp_from: from, download: 1 }, o);
 }
 
 /** Позвонить: сначала набирается `from` (внутренний номер), затем `to`. */
