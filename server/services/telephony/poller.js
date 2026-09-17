@@ -25,6 +25,7 @@ import { leadFromCall } from '../crm/lead-from-call.js';
 // recordCall'ом: журнал, пациент по номеру и «звонок → заявка» одни на всех.
 import { pbxHistory, normalizePbxCall } from './onlinepbx.js';
 import { pbxOptions, recordProviderPoll, noteProviderCall, providerKind } from './providers.js';
+import { recordingUrlOf } from './recording.js';   // CALL_RECORDING_V1
 
 // Cursor overlap. Binotel's since-methods key on the call's startTime; a call
 // that STARTED just before our last poll but was still ringing at poll time
@@ -107,13 +108,19 @@ export function recordCall(db, d, source, provider = null) {
   const matches = externalNumber ? findPatientsByPhone(db, externalNumber, 1) : [];
   const startedAt = row.started_at;
 
+  // CALL_RECORDING_V1 — адрес записи разбирается ОДИН раз, здесь: у каждой
+  // телефонии поле зовётся по-своему, и держать этот список на экранах значило
+  // бы завести его в трёх местах.
+  const recordingUrl = recordingUrlOf(row.raw);
+
   const info = db.prepare(`INSERT INTO calls
       (general_call_id, started_at, call_type, external_number, internal_number,
-       waitsec, billsec, disposition, is_new_call, patient_id, raw, source, provider, provider_id)
+       waitsec, billsec, disposition, is_new_call, patient_id, raw, source, provider, provider_id, recording_url)
     VALUES (@general_call_id, @started_at, @call_type, @external_number, @internal_number,
-       @waitsec, @billsec, @disposition, @is_new_call, @patient_id, @raw, @source, @provider, @provider_id)
+       @waitsec, @billsec, @disposition, @is_new_call, @patient_id, @raw, @source, @provider, @provider_id, @recording_url)
     ON CONFLICT(general_call_id) DO NOTHING`).run({
     ...row,
+    recording_url: recordingUrl || null,
     raw: JSON.stringify(row.raw),
     patient_id: matches.length ? matches[0].id : null,
     source,

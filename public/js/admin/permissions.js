@@ -743,6 +743,15 @@ export function selfDoctorId() {
     return (u && u.is_doctor && u.id) ? u.id : null;
 }
 
+// CRM_OWNERSHIP_V1 — «кто я» для заявок CRM: чья это карточка и могу ли я её
+// взять. Свой ответ, а не scopedProviderId: тот отвечает null администратору
+// (ему видно всё), а здесь номер нужен и администратору — чтобы «Взять в
+// работу» записало заявку на него, а не обнулило владельца.
+export function selfUserId() {
+    const u = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || null;
+    return (u && u.id) || null;
+}
+
 // SERVICE_SCOPE_V1 — «My services» / «Procedures» scope to the current user AS PROVIDER:
 // any non-admin (doctor OR nurse) sees only rows assigned to them; full admins see all.
 export function scopedProviderId() {

@@ -35,10 +35,22 @@ export const REGISTRY = {
     write: { insert: { roles: ['admin','registrar','callcenter'], columns: ['full_name','phone','source','note','status','assigned_to','created_by','service_id','patient_id','scheduled_date'] },   // patient_id: CRM_V5; scheduled_date: CRM_V7
              update: { roles: ['admin','registrar','callcenter'], columns: ['full_name','phone','source','note','status','patient_id','assigned_to','service_id','scheduled_date'] },
              delete: { roles: ['admin'] } },
-    filters: ['id','status','source','phone','full_name','created_at','patient_id','scheduled_date'],
+    filters: ['id','status','source','phone','full_name','created_at','patient_id','scheduled_date','assigned_to'],
     embed:   { patients: { table:'patients', fk:'patient_id', columns:['id','full_name','mrn'] },
                users:    { table:'users',    fk:'assigned_to', columns:['id','full_name'] },
                services: { table:'services', fk:'service_id',  columns:['id','name','price'] } },
+    // CRM_OWNERSHIP_V1 (2026-09-17). Владелец про чужие заявки: «do not show».
+    //
+    // Заявка принадлежит оператору, который взял её в работу. Оператор видит
+    // свои и НИЧЬИ — общую стопку, из которой берут следующую («operator gets
+    // his own from batch»); чужие ему не отдаются вовсе, даже по номеру.
+    // Администратор видит доску целиком: иначе некому передать заявку и не из
+    // чего собрать отчёт по смене.
+    //
+    // Ограничение накладывает компилятор запросов (query-compiler.js), то есть
+    // оно действует на ВСЁ сразу: доску, список, поиск, выгрузку и отчёт. Прятать
+    // чужое на экранах поштучно означало бы забыть об этом в седьмом.
+    scope: { column: 'assigned_to', allRoles: ['admin'], nullVisible: true },
   },
 
   // CRM_MULTI_SERVICE_V1 (mig 057) — the services a call-centre request covers,
@@ -1347,6 +1359,8 @@ export const REGISTRY = {
 };
 
 export function tableEntry(t) { return Object.prototype.hasOwnProperty.call(REGISTRY, t) ? { table: t, ...REGISTRY[t] } : null; }
+// CRM_OWNERSHIP_V1 — правило «чьи это строки», если у таблицы оно есть.
+export function rowScope(t) { const e = REGISTRY[t]; return (e && e.scope) || null; }
 // MULTI_ROLE_SERVER_V1 — `role` is a single role name OR the caller's full
 // effective set (primary + extra_roles). A grant to ANY role in the set allows
 // the op: that is what «Дополнительные роли» means. An empty set allows nothing.

@@ -187,3 +187,83 @@ export async function telephonyDial(db, args, user, seams = {}) {
   }
   return { ok: true, provider: r.provider, call_id: r.call_id };
 }
+
+// ---------------------------------------------------------------------------
+// CALL_RECORDING_V1 (2026-09-17) — ЗВОНКИ ЭТОГО ЧЕЛОВЕКА, С ЗАПИСЯМИ.
+//
+// Владелец: «also include into a card the audio record of the call».
+//
+// Почему RPC, а не обычный запрос к базе: таблица calls намеренно НЕ заведена в
+// реестре таблиц — через общий доступ к базе её не спросить (там сырые ответы
+// вендора, а в них бывает и номер, и служебные поля). Здесь отдаётся ровно то,
+// что нужно карточке, и ничего больше: raw наружу не выходит.
+//
+// КТО ЗВОНИЛ — ИМЕНЕМ. Внутренний номер звонка сверяется с внутренним номером
+// сотрудника (миграция 134), поэтому в карточке видно «Насиба А.», а не «102».
+// Совпадения может не быть (номер сменили, звонок входящий на общую линию) —
+// тогда остаётся сам номер, и это честнее выдуманного имени.
+const CALL_LOG_ROLES = ['admin', 'registrar', 'callcenter'];
+
+export function crmLeadCalls(db, args, user) {
+  if (!hasAnyRole(user, CALL_LOG_ROLES)) {
+    throw new RpcError('Журнал звонков доступен регистратуре и колл-центру.', 403);
+  }
+  // Номер сверяется ПО ЦИФРАМ: в заявке он записан как его набрала регистратура,
+  // а телефония отдаёт свой формат — «+998 90 123-45-67» и «998901234567» это
+  // один и тот же человек.
+  const digits = String((args && args.phone) || '').replace(/\D+/g, '');
+  if (digits.length < 7) return [];
+  // Сравниваем по ХВОСТУ из девяти цифр: у одного и того же номера городской
+  // код то есть, то нет, и точное равенство теряло бы половину звонков.
+  const tail = digits.slice(-9);
+  const limit = Math.max(1, Math.min(50, Number((args && args.limit) || 20)));
+  return db.prepare(`
+    SELECT c.id, c.started_at, c.call_type, c.billsec, c.waitsec, c.disposition,
+           c.internal_number, c.recording_url, u.full_name AS operator_name
+      FROM calls c
+      LEFT JOIN users u ON u.pbx_extension IS NOT NULL
+                       AND u.pbx_extension <> ''
+                       AND u.pbx_extension = c.internal_number
+     WHERE replace(replace(replace(replace(c.external_number,' ',''),'-',''),'(',''),')','') LIKE ?
+     ORDER BY c.started_at DESC, c.id DESC
+     LIMIT ?`).all('%' + tail, limit);
+}
+
+// ---------------------------------------------------------------------------
+// CALLCENTER_SHIFT_V1 (2026-09-17) — РАЗБОР ЗВОНКОВ ПО ОПЕРАТОРАМ.
+//
+// Владелец: «breakdown by call-center users».
+//
+// СЧИТАЕТСЯ ПО САМИМ ЗВОНКАМ, А НЕ ПО ОТМЕТКАМ. Внутренний номер в звонке —
+// это и есть подпись оператора (миграция 134), поэтому в отчёт не нужно ничего
+// отмечать руками: он показывает то, что было на линии, а не то, что кто-то
+// вспомнил записать. Звонки с номера, который никому не принадлежит (общая
+// линия, уволенный сотрудник), собираются отдельной строкой «Не опознан» —
+// прятать их значило бы, что сумма по операторам не сходится с журналом.
+//
+// АДМИНИСТРАТОРУ. Это отчёт о работе людей: кто сколько отговорил за смену.
+// Оператору чужие цифры не нужны, а заведующей нужны все — поэтому здесь тот
+// же admin-only, что и у остальной телефонии.
+export function telephonyOperatorStats(db, args, user) {
+  requireAdmin(user);
+  // Границы периода приходят готовыми ISO-строками: «сегодня» у клиники
+  // местное, и считать его на сервере по UTC значило бы показывать смену,
+  // сдвинутую на пять часов.
+  const from = String((args && args.from) || '').slice(0, 30);
+  const to   = String((args && args.to) || '').slice(0, 30);
+  if (!from || !to) throw new RpcError('Не указан период.', 400);
+  return db.prepare(`
+    SELECT COALESCE(u.full_name, '') AS operator_name,
+           COALESCE(NULLIF(c.internal_number, ''), '') AS extension,
+           COUNT(*)                                                   AS calls,
+           SUM(CASE WHEN c.call_type = 1 THEN 1 ELSE 0 END)           AS outgoing,
+           SUM(CASE WHEN COALESCE(c.billsec, 0) > 0 THEN 1 ELSE 0 END) AS answered,
+           SUM(COALESCE(c.billsec, 0))                                AS talk_sec
+      FROM calls c
+      LEFT JOIN users u ON u.pbx_extension IS NOT NULL
+                       AND u.pbx_extension <> ''
+                       AND u.pbx_extension = c.internal_number
+     WHERE c.started_at >= @from AND c.started_at < @to
+     GROUP BY operator_name, extension
+     ORDER BY calls DESC`).all({ from, to });
+}

@@ -1,4 +1,4 @@
-import { tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns } from './schema-registry.js';
+import { tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns, rowScope } from './schema-registry.js';
 import { effectiveRoles } from '../services/roles.js';
 
 export class CompileError extends Error {
@@ -96,6 +96,42 @@ function starColumns(table) {
   return kept.length ? kept : declared;
 }
 
+
+// ---------------------------------------------------------------------------
+// CRM_OWNERSHIP_V1 (2026-09-17) — ЧУЖИЕ СТРОКИ НЕ ОТДАЮТСЯ, И ЭТО РЕШАЕТ СЕРВЕР.
+//
+// Владелец про чужие заявки CRM: «do not show».
+//
+// Спрятать кнопку мало. Доска, список, поиск, выгрузка и отчёт спрашивают одну
+// и ту же таблицу через один и тот же /api/db, и любая забытая проверка на
+// экране означала бы, что чужая заявка всё-таки видна — достаточно знать её
+// номер. Поэтому ограничение живёт ЗДЕСЬ, в одном месте, через которое проходят
+// ВСЕ запросы к базе: что бы экран ни спросил, строка чужого оператора в ответ
+// не попадёт.
+//
+// Правило описано у таблицы в реестре (scope), а не зашито тут по имени:
+//   column     — колонка-владелец («чей это»);
+//   allRoles   — кто видит всё (заведующая, администратор);
+//   nullVisible — видна ли ничья строка. Для заявок — да: это общая стопка,
+//                 из которой оператор берёт себе следующую.
+//
+// Ограничение накладывается и на ЧТЕНИЕ, и на правку, и на удаление: право
+// видеть и право менять здесь одно и то же — чужую заявку нельзя ни открыть,
+// ни исправить, ни закрыть.
+function scopeFor(table, user) {
+  const sc = rowScope(table);
+  if (!sc || !sc.column) return null;
+  const roles = effectiveRoles(user);
+  if ((sc.allRoles || []).some((r) => roles.includes(r))) return null;
+  // Сессии без номера пользователя (их не бывает у живого входа) остаются с
+  // самым узким доступом: ничьи строки да ничего больше.
+  const me = user && Number.isFinite(Number(user.id)) ? Number(user.id) : 0;
+  const parts = [`"${table}"."${sc.column}" = ?`];
+  const params = [me];
+  if (sc.nullVisible) parts.push(`"${table}"."${sc.column}" IS NULL`);
+  return { clause: '(' + parts.join(' OR ') + ')', params };
+}
+
 export function compile(desc, user) {
   const table = validateTable(desc.table);
   const op = desc.op;
@@ -109,7 +145,7 @@ export function compile(desc, user) {
   const role = effectiveRoles(user);
   if (op === 'select') {
     if (!canRead(table, role)) throw new CompileError('not allowed', 403);
-    return compileSelect(desc, table);
+    return compileSelect(desc, table, user);
   }
   // upsert = insert + update: it needs BOTH permissions (a role that can only
   // insert must not gain an update path through ON CONFLICT DO UPDATE).
@@ -121,8 +157,8 @@ export function compile(desc, user) {
   }
   if (!canWrite(table, op, role)) throw new CompileError('not allowed', 403);
   if (op === 'insert') return compileInsert(desc, table);
-  if (op === 'update') return compileUpdate(desc, table);
-  return compileDelete(desc, table);
+  if (op === 'update') return compileUpdate(desc, table, user);
+  return compileDelete(desc, table, user);
 }
 
 function validateTable(name) {
@@ -131,7 +167,7 @@ function validateTable(name) {
   return name;
 }
 
-function compileSelect(desc, table) {
+function compileSelect(desc, table, user) {
   const { projection, joins, embeds, joined } = parseColumns(desc.columns, table);
   // EMBED_FILTER_V1 — фильтр по колонке присоединённой таблицы может ПОТРЕБОВАТЬ
   // соединения, которого нет в проекции (см. compileTerm). Поэтому WHERE
@@ -140,9 +176,15 @@ function compileSelect(desc, table) {
   // между FROM и WHERE, как того требует синтаксис.
   const { clause, params } = compileFilters(desc.filters, table, { qualify: true, joins, joined });
 
+  // CRM_OWNERSHIP_V1 — ограничение по владельцу дописывается к WHERE ПОСЛЕ
+  // фильтров экрана и снять его запросом нельзя: оно не из descriptor'а.
+  const scope = scopeFor(table, user);
+  const where = scope ? (clause ? `(${clause}) AND ${scope.clause}` : scope.clause) : clause;
+  if (scope) params.push(...scope.params);
+
   let sql = `SELECT ${projection.join(', ')} FROM "${table}"`;
   for (const j of joins) sql += ` ${j}`;
-  if (clause) sql += ` WHERE ${clause}`;
+  if (where) sql += ` WHERE ${where}`;
 
   if (desc.order !== undefined) {
     if (!Array.isArray(desc.order)) throw new CompileError('order must be an array', 400);
@@ -555,7 +597,7 @@ function compileUpsert(desc, table) {
   };
 }
 
-function compileUpdate(desc, table) {
+function compileUpdate(desc, table, user) {
   const values = desc.values || {};
   const allowed = writableColumns(table, 'update');
   // Compat layer: silently drop payload keys outside the writable allow-list
@@ -573,8 +615,11 @@ function compileUpdate(desc, table) {
   }
 
   const { clause, params: filterParams } = compileFilters(desc.filters, table);
-  const sql = `UPDATE "${table}" SET ${setParts.join(', ')} WHERE ${clause}`;
+  const scope = scopeFor(table, user);
+  const where = scope ? `(${clause}) AND ${scope.clause}` : clause;
+  const sql = `UPDATE "${table}" SET ${setParts.join(', ')} WHERE ${where}`;
   params.push(...filterParams);
+  if (scope) params.push(...scope.params);
 
   return {
     sql,
@@ -583,11 +628,14 @@ function compileUpdate(desc, table) {
   };
 }
 
-function compileDelete(desc, table) {
+function compileDelete(desc, table, user) {
   if (!desc.filters || desc.filters.length === 0) {
     throw new CompileError('delete requires a filter', 400);
   }
   const { clause, params } = compileFilters(desc.filters, table);
-  const sql = `DELETE FROM "${table}" WHERE ${clause}`;
+  const scope = scopeFor(table, user);
+  const where = scope ? `(${clause}) AND ${scope.clause}` : clause;
+  if (scope) params.push(...scope.params);
+  const sql = `DELETE FROM "${table}" WHERE ${where}`;
   return { sql, params, meta: { op: 'delete', table } };
 }

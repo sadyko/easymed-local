@@ -15,6 +15,8 @@ import { phoneInput } from '../phone-input.js?v=ph1';
 import { formatPhone } from '../phone-format.js';
 // CALL_FROM_CRM_V1 — одна кнопка звонка на всю программу.
 import { callButton } from '../call-action.js?v=call1';
+// CRM_OWNERSHIP_V1 — «кто я»: кому записывается взятая заявка.
+import { selfUserId } from '../permissions.js';
 import { filterServicePool, serviceGroupCounts } from './service-search.js';   // CRM_SERVICE_FILTER_V1
 import { openCustDev } from './custdev.js';           // CUSTDEV_V1 — обзвон после визита
 import { canView } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev»
@@ -657,12 +659,31 @@ async function paint() {
             if (!key || key === r.status) return;
             if (await setStatus(r, key)) { toast(trf('Статус: {status}', { status: tr((STATUS_RU[key] || [key])[0]) })); await paint(); }
         });
+        // CRM_OWNERSHIP_V1 — «ВЗЯТЬ В РАБОТУ». Владелец: «operator gets his own
+        // from batch» — ничьи заявки лежат общей стопкой, и оператор берёт из
+        // неё следующую сам, а не ждёт, пока раздадут. Взятая пропадает у
+        // соседей: это решает сервер (schema-registry, scope), здесь только
+        // кнопка и обновление доски.
+        const take = (!r.assigned_to && selfUserId()) ? h('button', {
+            class: 'btn btn-sm', type: 'button',
+            title: 'Взять заявку себе — у других она пропадёт',
+            onclick: async (ev) => {
+                ev.stopPropagation();
+                const { error } = await supabase.from('crm_requests')
+                    .update({ assigned_to: selfUserId() }).eq('id', r.id);
+                if (error) return toast(trf('Не удалось взять заявку: {msg}', { msg: error.message }), 'fail');
+                toast('Заявка у вас', 'ok');
+                await paint();
+            },
+        }, Icon('User', { size: 13 }), h('span', null, 'Взять в работу')) : null;
+
         // CALL_FROM_CRM_V1 — «Позвонить» стоит ЗДЕСЬ, в общих действиях заявки,
         // и поэтому появляется сразу в двух видах: на карточке доски и в строке
         // списка. Кнопки нет вовсе, когда звонить нечему (нет номера) или
         // некому (роль без права звонить) — см. call-action.js.
         const call = callButton(r.phone, { small: true });
         return [
+            ...(take ? [take] : []),
             ...(call ? [call] : []),
             h('div', { class: 'crm-move' }, sel,
                 h('span', { class: 'crm-move-chev', 'aria-hidden': 'true' }, Icon('ChevronDown', { size: 12 }))),
@@ -1444,6 +1465,56 @@ async function paint() {
             document.body.appendChild(ov);
         }
 
+        // CALL_RECORDING_V1 — журнал звонков по номеру заявки. Грузится ПОСЛЕ
+        // того, как окно уже на экране: список звонков — справка, и заставлять
+        // ждать её тех, кто открыл карточку ради правки имени, незачем.
+        const callsList = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загружаем…'));
+        const callsBlock = field('Звонки по этому номеру', callsList);
+        if (isEdit) {
+            (async () => {
+                const { data, error } = await supabase.rpc('crm_lead_calls', { phone: (r && r.phone) || '' });
+                clear(callsList);
+                if (error) {
+                    callsList.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                        trf('Журнал звонков недоступен: {msg}', { msg: error.message })));
+                    return;
+                }
+                const rows = Array.isArray(data) ? data : [];
+                if (!rows.length) {
+                    callsList.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                        'Звонков по этому номеру пока нет.'));
+                    return;
+                }
+                for (const c of rows) {
+                    // Длительность СЛОВАМИ: «0 сек» и «нет ответа» — разные вещи,
+                    // и оператор решает по ним по-разному.
+                    const sec = Number(c.billsec) || 0;
+                    const dur = sec > 0
+                        ? (sec >= 60 ? trf('{m} мин {s} сек', { m: Math.floor(sec / 60), s: sec % 60 }) : trf('{s} сек', { s: sec }))
+                        : 'нет ответа';
+                    const who = c.operator_name || (c.internal_number ? String(c.internal_number) : '');
+                    const line = h('div', { style: { border: '1px solid var(--ink-100)', borderRadius: '10px', padding: '9px 11px' } },
+                        h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+                            h('span', { style: { fontSize: '13.5px', fontWeight: 600 } },
+                                Number(c.call_type) === 1 ? 'Исходящий' : 'Входящий'),
+                            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, fmtDateTime(c.started_at)),
+                            h('span', { class: 'muted', style: { fontSize: '12.5px' } }, dur),
+                            who ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, trf('Оператор: {who}', { who })) : null));
+                    // Плеер — только там, где запись ЕСТЬ: пустой плеер выглядит
+                    // как сломанный, а записи не бывает у неотвеченного звонка и
+                    // у клиники, где запись не включена.
+                    if (c.recording_url) {
+                        line.appendChild(h('audio', {
+                            controls: true, preload: 'none', src: c.recording_url,
+                            style: { width: '100%', marginTop: '8px' },
+                        }));
+                    }
+                    callsList.appendChild(line);
+                }
+            })();
+        }
+
         const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' },
             Icon(isEdit ? 'Check' : 'Plus', { size: 14 }), ' ', isEdit ? 'Сохранить' : 'Создать заявку');
         saveBtn.addEventListener('click', async () => {
@@ -1479,6 +1550,12 @@ async function paint() {
                 field('Интересующие услуги', h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
                     svcChips, svcWrap, pickedList)),
                 field('Комментарий', noteInp),
+                // CALL_RECORDING_V1 — ЗВОНКИ ЭТОГО ЧЕЛОВЕКА, С ЗАПИСЯМИ.
+                // Владелец: «also include into a card the audio record of the
+                // call». Блок появляется только у сохранённой заявки: у новой
+                // ещё нет номера, по которому искать, а пустая рамка «звонков
+                // нет» на каждом создании — шум.
+                isEdit ? callsBlock : null,
             ),
             h('footer', { class: 'modal-foot' },
                 // CRM_CONVERT_V1 — конверсия одной кнопкой: интересующая услуга
@@ -1536,6 +1613,46 @@ async function paint() {
                 kpi('Пришло', conv, 'var(--ok-600, #16a34a)'),
                 kpi('Конверсия', rate + '%', 'var(--primary-700)'),
                 kpi('Потеряно', lost, 'var(--crit-600, #dc2626)')));
+
+            // CALLCENTER_SHIFT_V1 — ЗВОНКИ ПО ОПЕРАТОРАМ за тот же период.
+            // Владелец: «breakdown by call-center users». Стоит в отчёте, а не
+            // отдельным экраном: заведующая приходит сюда за одним вопросом —
+            // «как отработали», — и заявки со звонками отвечают на него вместе.
+            // Считается по журналу звонков, а не по отметкам: внутренний номер
+            // в звонке и есть подпись оператора.
+            const opsBox = h('div', { style: { marginBottom: '14px' } });
+            bodyEl.appendChild(opsBox);
+            (async () => {
+                const to = new Date();
+                const from = period ? new Date(Date.now() - period * 86400000) : new Date(2000, 0, 1);
+                const { data, error } = await supabase.rpc('telephony_operator_stats',
+                    { from: from.toISOString(), to: new Date(to.getTime() + 60000).toISOString() });
+                clear(opsBox);
+                // Отчёт о работе людей открыт администратору; оператору сервер
+                // откажет, и это не ошибка экрана — просто раздела у него нет.
+                if (error || !Array.isArray(data) || !data.length) return;
+                const secText = (n) => {
+                    const v = Math.max(0, Math.round(Number(n) || 0));
+                    return v >= 60 ? trf('{m} мин', { m: Math.round(v / 60) }) : trf('{s} сек', { s: v });
+                };
+                const tb = h('tbody');
+                for (const o of data) {
+                    const who = o.operator_name || (o.extension ? trf('Внутренний {n}', { n: o.extension }) : 'Не опознан');
+                    tb.appendChild(h('tr', null,
+                        h('td', { class: 'cell-strong' }, who),
+                        h('td', { class: 'num' }, String(o.calls || 0)),
+                        h('td', { class: 'num' }, String(o.outgoing || 0)),
+                        h('td', { class: 'num' }, String(o.answered || 0)),
+                        h('td', { class: 'num' }, secText(o.talk_sec))));
+                }
+                opsBox.appendChild(h('div', { class: 'card' },
+                    h('div', { class: 'card-header' }, h('h3', null, Icon('Phone', { size: 15 }), ' ', tr('Звонки по операторам'))),
+                    h('div', { style: { overflowX: 'auto' } }, h('table', { class: 'tbl' },
+                        h('thead', null, h('tr', null,
+                            h('th', null, 'Оператор'), h('th', null, 'Звонков'),
+                            h('th', null, 'Исходящих'), h('th', null, 'Дозвонов'), h('th', null, 'Разговор'))),
+                        tb))));
+            })();
 
             // разбивка по всем статусам воронки
             bodyEl.appendChild(h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap', marginBottom: '14px' } },

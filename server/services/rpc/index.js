@@ -50,7 +50,7 @@ import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegram
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
 import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls, telephonyDispositions,
          telephonyProvidersList, telephonyProviderSave, telephonyProviderDelete, telephonyProviderTest,
-         telephonyDial } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1 / TELEPHONY_PROVIDERS_V1
+         telephonyDial, crmLeadCalls, telephonyOperatorStats } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1 / TELEPHONY_PROVIDERS_V1
 import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss } from './lis.js';   // LIS_INGEST_V1
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
@@ -467,6 +467,10 @@ export const RPC = {
   // CALL_FROM_CRM_V1 — «Позвонить»: единственный вызов телефонии не для
   // администратора. Внутренний номер берётся из сессии, не из запроса.
   telephony_dial:            (db, args, user) => telephonyDial(db, args, user),
+  // CALL_RECORDING_V1 — звонки этого человека с записями разговоров.
+  crm_lead_calls:            (db, args, user) => crmLeadCalls(db, args, user),
+  // CALLCENTER_SHIFT_V1 — разбор звонков по операторам за период.
+  telephony_operator_stats:  (db, args, user) => telephonyOperatorStats(db, args, user),
 
   // CRM_CONFIG_V1 — Настройки → «CRM-канбан»: колонки доски, источники и
   // «звонок -> карточка» (миграция 077). _get читают И доска, и экран
