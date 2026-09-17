@@ -61,6 +61,10 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));   // sc
 export const ALLOWLIST = Object.freeze([
   'server',
   'public',
+  // EASYPHONE_V1 — вторая программа поставки (рабочее место телефонии, свой
+  // порт). Без этой строки она просто НЕ ДОЕХАЛА БЫ до клиник: список
+  // разрешающий, и всё, чего в нём нет, молча остаётся дома.
+  'phone',
   'install',
   'package.json',
   'package-lock.json',
