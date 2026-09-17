@@ -32,6 +32,9 @@
 // или ТОЛЬКО календарь, без картотеки (permissions.js).
 
 import { h, Icon, clear } from '../ui.js';
+// I18N_COVERAGE_V1 — причина сбоя подставляется В ПЕРЕВЕДЁННЫЙ шаблон, а не
+// склеивается из кусков: склейка непереводима целиком ни на один язык.
+import { trf } from '../i18n.js';
 // Те же адреса модулей, что у admin.js: одна строка импорта — один экземпляр
 // модуля. Разошедшийся ?v= развёл бы состояние экрана на две копии.
 import { renderPatients } from './patients.js?v=regfit2';
@@ -65,22 +68,50 @@ async function defaultCalendarLoader() {
 // Договор с календарём — тот же, что у списка пациентов:
 // renderRoomCalendar(container, { onNavigate, embedded }). `embedded` снимает
 // его собственную полосу вкладок, потому что полосу рисует хост.
-export async function mountCalendarInto(host, ctx = {}, load = defaultCalendarLoader) {
+export async function mountCalendarInto(host, ctx = {}, load = defaultCalendarLoader, { onRetry = null } = {}) {
     clear(host);
     try {
         const renderRoomCalendar = await load();
         await renderRoomCalendar(host, { onNavigate: ctx.onNavigate, embedded: true });
         return true;
     } catch (e) {
-        // Вкладка обязана СМОНТИРОВАТЬСЯ в любом случае и сказать словами, что
-        // именно недоступно. Пустая вкладка без объяснения читается как
-        // сломанная программа, а исключение отсюда унесло бы весь хост.
+        // CALENDAR_RETRY_V1 (владелец: «в клиниках календарь не открывается,
+        // пишет, что готовится»). Здесь было ДВЕ ошибки, и обе клиника видела
+        // как «программа не доделана».
+        //
+        // 1. ЗАГЛУШКА ВРАЛА. «Календарь записи готовится» читается как «этот
+        //    экран ещё не написан» — и клиника просто перестаёт им пользоваться.
+        //    А на самом деле экран написан и работает: не загрузился ФАЙЛ. Чаще
+        //    всего потому, что окно открыли раньше, чем поднялась сама
+        //    программа (после включения компьютера или после обновления): один
+        //    неотвеченный запрос — и вкладка мертва. Теперь заглушка говорит
+        //    правду и НАЗЫВАЕТ причину: с одного снимка экрана видно, что
+        //    случилось, без похода к компьютеру клиники.
+        // 2. ВТОРОЙ ПОПЫТКИ НЕ БЫЛО. Вкладка помечалась смонтированной ДО
+        //    загрузки и назад не отмечалась, поэтому одна неудача гасила
+        //    календарь до конца рабочего дня — переключение вкладок не помогало.
+        //    Теперь есть кнопка «Повторить», и возврат на вкладку пробует снова.
+        //
+        // Исключение отсюда по-прежнему не выпускает: оно унесло бы весь
+        // раздел, то есть ещё и список пациентов с очередью.
+        const reason = String((e && (e.message || e)) || '').slice(0, 200);
+        // Причина нужна и в консоли целиком: в заглушке она обрезана, а разбор
+        // идёт по стеку. Сам console.error обёрнут — браузер в жёстком режиме
+        // может отказать и в нём.
+        try { console.error('[patients-hub] календарь не загрузился:', e); } catch (_) { /* не повод ронять вкладку */ }
         clear(host);
+        const retry = h('button', {
+            class: 'btn', type: 'button', style: { marginTop: '14px' },
+            onclick: () => { if (typeof onRetry === 'function') onRetry(); },
+        }, Icon('Refresh', { size: 14 }), h('span', null, 'Повторить'));
         host.appendChild(h('div', { class: 'empty', style: { padding: '48px 24px', textAlign: 'center' } },
             h('div', { style: { color: 'var(--ink-300, #c3ced2)' } }, Icon('Calendar', { size: 28 })),
-            h('div', { style: { marginTop: '10px', fontWeight: '600' } }, 'Календарь записи готовится'),
+            h('div', { style: { marginTop: '10px', fontWeight: '600' } }, 'Календарь записи не открылся'),
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
-                'Экран записи сейчас обновляется. Список пациентов и очередь работают как обычно.')));
+                'Экран записи не загрузился. Список пациентов и очередь работают как обычно.'),
+            onRetry ? retry : null,
+            reason ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '10px', opacity: '0.75' } },
+                trf('Причина: {reason}', { reason })) : null));
         return false;
     }
 }
@@ -211,7 +242,14 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
         }
         if (mounted.calendar) return;
         mounted.calendar = true;
-        await mountCalendarInto(hosts.calendar, ctx, calendarLoader);
+        // CALENDAR_RETRY_V1 — флаг снимается обратно, если смонтировать не
+        // удалось. Иначе одна неудачная загрузка (программа ещё поднималась,
+        // сеть моргнула) держала бы заглушку до конца рабочего дня: переход на
+        // соседнюю вкладку и обратно упирался бы в `mounted.calendar`.
+        const ok = await mountCalendarInto(hosts.calendar, ctx, calendarLoader, {
+            onRetry: () => { mounted.calendar = false; ensureMounted('calendar'); },
+        });
+        if (!ok) mounted.calendar = false;
     }
 
     async function select(id, { initial = false } = {}) {

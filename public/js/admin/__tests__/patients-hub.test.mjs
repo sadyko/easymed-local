@@ -387,14 +387,18 @@ test('регистратура видит все три вкладки, и ка�
   setFullAccess('Admin');
 });
 
-test('вкладка «Записи» монтируется, даже когда календаря ещё нет', async () => {
+test('вкладка «Записи» монтируется, даже когда календарь не загрузился, и НАЗЫВАЕТ причину', async () => {
   reset();
   const host = mk('div');
   const okFalse = await mountCalendarInto(host, ctxFor(), async () => { throw new Error('half-written'); });
   assert.equal(okFalse, false);
   const said = textOf(host);
-  assert.ok(said.includes('Календарь записи готовится'), 'вкладка молчит о том, что экран недоступен');
+  assert.ok(said.includes('Календарь записи не открылся'), 'вкладка молчит о том, что экран недоступен');
   assert.ok(said.includes('очередь работают как обычно'), 'не сказано, что остальные вкладки живы');
+  // CALENDAR_RETRY_V1 — с одного снимка экрана клиники должно быть видно, ЧТО
+  // случилось. «Готовится» читалось как «ещё не написано» и уводило разбор в
+  // сторону на неделю.
+  assert.ok(said.includes('half-written'), 'причина сбоя не показана — со снимка экрана её не прочитать');
 
   // И в самом хосте: поломка календаря не уносит список и очередь.
   const box = mk('div');
@@ -402,9 +406,51 @@ test('вкладка «Записи» монтируется, даже когд�
   const btns = tabButtons(box);
   btns[2].click(); await tick();
   assert.equal(hub.activeTab(), 'calendar');
-  assert.ok(textOf(panelFor(box, 'calendar')).includes('Календарь записи готовится'));
+  assert.ok(textOf(panelFor(box, 'calendar')).includes('Календарь записи не открылся'));
   btns[0].click(); await tick();
   assert.ok(textOf(panelFor(box, 'list')).includes('Эргашев Жахонгир'), 'список пострадал из-за календаря');
+  hub.destroy();
+});
+
+test('CALENDAR_RETRY_V1: одна неудачная загрузка не гасит календарь до конца дня', async () => {
+  reset();
+  // Первая попытка падает (программа ещё поднималась), вторая — удаётся.
+  let attempt = 0;
+  const loader = async () => {
+    attempt += 1;
+    if (attempt === 1) throw new Error('сеть моргнула');
+    return async (host) => { host.appendChild(mk('div')).textContent = 'СЕТКА ЗАПИСИ'; };
+  };
+  const box = mk('div');
+  const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: loader });
+  const btns = tabButtons(box);
+  btns[2].click(); await tick();
+  assert.ok(textOf(panelFor(box, 'calendar')).includes('Календарь записи не открылся'), 'первая попытка должна была упасть');
+
+  // Возврат на вкладку пробует снова — раньше флаг mounted держал заглушку.
+  btns[0].click(); await tick();
+  btns[2].click(); await tick();
+  assert.equal(attempt, 2, 'вторая попытка не состоялась — вкладка залипла на заглушке');
+  assert.ok(textOf(panelFor(box, 'calendar')).includes('СЕТКА ЗАПИСИ'), 'календарь не поднялся со второй попытки');
+  hub.destroy();
+});
+
+test('CALENDAR_RETRY_V1: кнопка «Повторить» грузит календарь заново', async () => {
+  reset();
+  let attempt = 0;
+  const loader = async () => {
+    attempt += 1;
+    if (attempt === 1) throw new Error('сеть моргнула');
+    return async (host) => { host.appendChild(mk('div')).textContent = 'СЕТКА ЗАПИСИ'; };
+  };
+  const box = mk('div');
+  const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: loader });
+  tabButtons(box)[2].click(); await tick();
+  const panel = panelFor(box, 'calendar');
+  const again = walk(panel).filter((n) => n.tagName === 'BUTTON').find((b) => textOf(b).includes('Повторить'));
+  assert.ok(again, 'кнопки «Повторить» нет — оператору нечем поднять экран');
+  again.click(); await tick(); await tick();
+  assert.ok(textOf(panelFor(box, 'calendar')).includes('СЕТКА ЗАПИСИ'), '«Повторить» не подняло календарь');
   hub.destroy();
 });
 
