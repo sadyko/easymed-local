@@ -40,6 +40,9 @@ export function publicSettings(db) {
     webhooks_enabled: !!row.webhooks_enabled,
     public_base_url: row.public_base_url || '',
     company_id: row.company_id || '',
+    // DIAL_LINE_V1 — с какой линии звонит программа: '' = сама (по свежести
+    // журнала), 'binotel' или 'pbx:<номер подключения>'.
+    dial_provider: row.dial_provider || '',
     last_poll_at: row.last_poll_at || null,
     last_call_at: row.last_call_at || null,
     last_error: row.last_error || '',
@@ -57,6 +60,11 @@ export function saveSettings(db, args = {}, userId = null) {
     enabled: args.enabled === undefined ? row.enabled : (args.enabled ? 1 : 0),
     webhooks_enabled: args.webhooks_enabled === undefined ? row.webhooks_enabled : (args.webhooks_enabled ? 1 : 0),
     api_key: args.api_key === undefined ? row.api_key : String(args.api_key).trim().slice(0, 200),
+    // DIAL_LINE_V1 — выбор линии для исходящих. Проверяется по ФОРМЕ, а не по
+    // списку живых линий: линию могут выключить на день и включить назад, и
+    // терять из-за этого выбор клиники нельзя.
+    dial_provider: args.dial_provider === undefined ? (row.dial_provider || '')
+      : String(args.dial_provider || '').trim().slice(0, 40),
     api_secret: row.api_secret,
     poll_interval_sec: row.poll_interval_sec,
     // Trailing slashes are stripped once, here, so URL-building call sites
@@ -99,7 +107,7 @@ export function saveSettings(db, args = {}, userId = null) {
       enabled = @enabled, webhooks_enabled = @webhooks_enabled,
       api_key = @api_key, api_secret = @api_secret,
       poll_interval_sec = @poll_interval_sec, public_base_url = @public_base_url,
-      company_id = @company_id,
+      company_id = @company_id, dial_provider = @dial_provider,
       updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'), updated_by = @updated_by
     WHERE id = 1`).run({ ...patch, updated_by: userId });
 

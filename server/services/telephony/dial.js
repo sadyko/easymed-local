@@ -38,8 +38,8 @@ import { listProviders, getProviderRow, pbxOptions, providerConfig, providerSecr
 // Словарь отказов — СЛОВАМИ КЛИНИКИ. Оператор видит их вместо кода ошибки, и
 // каждый говорит, что делать дальше.
 export const DIAL_MESSAGES = {
-  no_provider:     'Телефония не подключена. Включите её в настройках — раздел «Телефония».',
-  no_extension:    'У вас не указан внутренний номер. Его вписывает администратор в карточке сотрудника.',
+  no_provider:     'Линия для звонков не выбрана или выключена. Проверьте настройки — раздел «Телефония».',
+  no_extension:    'Не указан номер, с которого звонить: ни у вас в карточке сотрудника, ни у самой линии в настройках телефонии.',
   no_phone:        'У этой записи нет телефона, по которому можно позвонить.',
   bad_credentials: 'Телефония не приняла ключ доступа. Проверьте настройки подключения.',
   offline:         'Нет связи с телефонией. Проверьте интернет на этом компьютере.',
@@ -82,18 +82,40 @@ export function dialableNumber(raw) {
  * решается выключением лишнего в настройках, а не догадкой кода.
  */
 export function dialProvider(db) {
-  const row = readSettingsRow(db);
+  const settings = readSettingsRow(db);
   const creds = getCredentials(db);
-  if (row && row.enabled && creds && creds.key && creds.secret) return { kind: 'binotel' };
 
+  // Все линии, с которых ВООБЩЕ можно позвонить: включена и ключи на месте.
+  const lines = [];
+  if (settings && settings.enabled && creds && creds.key && creds.secret) {
+    lines.push({ key: 'binotel', kind: 'binotel', row: null, lastCall: (settings && settings.last_call_at) || '' });
+  }
   for (const p of listProviders(db)) {
     if (!p.enabled) continue;
     const full = getProviderRow(db, p.id);
     const cfg = providerConfig(full);
-    if (p.kind === 'onlinepbx' && normalizeDomain(cfg.domain)) return { kind: 'onlinepbx', row: full };
-    if (p.kind === 'moizvonki' && normalizeMzDomain(cfg.domain)) return { kind: 'moizvonki', row: full };
+    const ok = (p.kind === 'onlinepbx' && normalizeDomain(cfg.domain))
+            || (p.kind === 'moizvonki' && normalizeMzDomain(cfg.domain));
+    if (ok) lines.push({ key: 'pbx:' + p.id, kind: p.kind, row: full, lastCall: p.last_call_at || '' });
   }
-  return null;
+  if (!lines.length) return null;
+
+  // 1. ВЫБОР КЛИНИКИ, если он сделан. Названа линия, которой больше нет или
+  //    которую выключили — молча подставлять другую нельзя: человек думает, что
+  //    звонит с одной линии, а звонит с другой. Отказ скажет об этом словами.
+  const chosen = String((settings && settings.dial_provider) || '').trim();
+  if (chosen) {
+    const found = lines.find((l) => l.key === chosen);
+    return found ? { kind: found.kind, row: found.row } : null;
+  }
+
+  // 2. Выбора нет — берём ЖИВУЮ линию: ту, по которой в журнале самый свежий
+  //    звонок. Раньше здесь стояло «Binotel — главная», и в клинике с мёртвым
+  //    Binotel и рабочим onlinePBX каждый звонок уходил в никуда (владелец:
+  //    «why i cant call from pbx in the system?»). Свежесть журнала — проверяемый
+  //    факт о том, чем клиника пользуется; старшинство — догадка.
+  const live = lines.slice().sort((a, b) => String(b.lastCall || '').localeCompare(String(a.lastCall || '')))[0];
+  return { kind: live.kind, row: live.row };
 }
 
 /**
@@ -116,15 +138,23 @@ export async function dialCall(db, { extension = '', phone = '' } = {}, seams = 
   const via = dialProvider(db);
   if (!via) return fail('no_provider');
 
-  // Внутренний номер спрашивается ТОЛЬКО у станций. У «Моих Звонков» его нет
-  // вовсе: там звонит смартфон сотрудника, а «кто звонит» — учётная запись.
-  // Требовать добавочный у оператора, у которого его физически не бывает,
-  // значило бы запретить ему звонить.
-  if (via.kind !== 'moizvonki' && !ext) return fail('no_extension');
+  // ОДИН НОМЕР НА КЛИНИКУ — обычный случай, а не исключение. Владелец: «pbx
+  // should have one number». У станции есть свой номер, с которого она звонит
+  // наружу (настройка линии, default_extension), и у большинства сотрудников
+  // личного добавочного нет и не будет. Поэтому: свой добавочный, если он есть
+  // (тогда в журнале видно, кто звонил), иначе — номер линии. Отказ остаётся
+  // только там, где не задано ни то ни другое.
+  //
+  // У «Моих Звонков» добавочных нет вовсе: там звонит смартфон сотрудника, а
+  // «кто звонит» — учётная запись (владелец: «my calls for personal numbers
+  // only»). Требовать добавочный там значило бы запретить звонить.
+  const lineExt = via.row ? String(providerConfig(via.row).default_extension || '').trim() : '';
+  const from = ext || lineExt;
+  if (via.kind !== 'moizvonki' && !from) return fail('no_extension');
 
   if (via.kind === 'binotel') {
     const { key, secret } = getCredentials(db);
-    const r = await binotelDialImpl(ext, to, { key, secret });
+    const r = await binotelDialImpl(from, to, { key, secret });
     if (!r.ok) return fail(r.reason);
     return { ok: true, provider: 'binotel', call_id: r.call_id || '' };
   }
@@ -144,7 +174,7 @@ export async function dialCall(db, { extension = '', phone = '' } = {}, seams = 
     return { ok: true, provider: 'moizvonki', call_id: r.call_id || '' };
   }
 
-  const r = await pbxCallNowImpl(normalizeDomain(cfg.domain), ext, to, pbxOptions(db, via.row));
+  const r = await pbxCallNowImpl(normalizeDomain(cfg.domain), from, to, pbxOptions(db, via.row));
   if (!r.ok) return fail(r.reason);
   // onlinePBX отвечает идентификатором вызова в data.data; его формат у них
   // свой, и связывать по нему журнал мы не обещаем — отдаём как есть.

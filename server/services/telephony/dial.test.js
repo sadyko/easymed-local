@@ -55,16 +55,17 @@ test('без подключённой телефонии звонок отказ
     const r = await dialCall(db, { extension: '101', phone: '+998901234567' });
     assert.equal(r.ok, false);
     assert.equal(r.reason, 'no_provider');
-    assert.match(r.message, /Телефония не подключена/);
+    assert.match(r.message, /Линия для звонков не выбрана/);
   } finally { db.close(); }
 });
 
-test('без внутреннего номера станция звонить не может — и так и сказано', async () => {
+test('номера нет ни у оператора, ни у линии — отказ называет ОБА места', async () => {
   const db = seed({ binotel: true });
   try {
     const r = await dialCall(db, { extension: '', phone: '+998901234567' });
     assert.equal(r.reason, 'no_extension');
-    assert.match(r.message, /внутренний номер/);
+    assert.match(r.message, /карточке сотрудника/);
+    assert.match(r.message, /линии в настройках/);
   } finally { db.close(); }
 });
 
@@ -180,6 +181,87 @@ test('у оператора без внутреннего номера отка�
     addUser(db, { id: 1, role: 'callcenter', ext: null });
     await assert.rejects(
       () => telephonyDial(db, { phone: '+998901234567' }, user('callcenter', 1), {}),
-      (e) => e.status === 400 && /внутренний номер/.test(e.message));
+      (e) => e.status === 400 && /с которого звонить/.test(e.message));
+  } finally { db.close(); }
+});
+
+
+// --- ВЫБОР ЛИНИИ (DIAL_LINE_V1) ---------------------------------------------
+//
+// Ровно та ошибка, на которую владелец и указал: «why i cant call from pbx in
+// the system?». Обе линии включены, но Binotel не работает месяц, а onlinePBX
+// принимает сотни звонков в сутки — и звонок уходил в мёртвую.
+
+function seedTwoLines(db, { binotelLast, pbxLast }) {
+  db.prepare("UPDATE telephony_settings SET enabled = 1, api_key = 'k', api_secret = 's', last_call_at = ? WHERE id = 1").run(binotelLast);
+  db.prepare(`INSERT INTO telephony_providers (kind, vendor, name, enabled, config, secret, last_call_at)
+              VALUES ('onlinepbx', 'onlinepbx', 'onlinePBX', 1, '{"domain":"clinic.onpbx.ru"}', '{"auth_key":"a","key_id":"i","key":"k"}', ?)`).run(pbxLast);
+}
+
+test('включены обе линии — звонок идёт по ЖИВОЙ, а не по «главной»', () => {
+  const db = openDb(':memory:'); migrate(db);
+  try {
+    seedTwoLines(db, { binotelLast: '2026-09-07T07:50:40Z', pbxLast: '2026-09-17T11:54:58Z' });
+    assert.equal(dialProvider(db).kind, 'onlinepbx',
+      'звонок снова уходит на линию, которой клиника не пользуется');
+  } finally { db.close(); }
+});
+
+test('и наоборот: где живой Binotel, звонит он', () => {
+  const db = openDb(':memory:'); migrate(db);
+  try {
+    seedTwoLines(db, { binotelLast: '2026-09-17T12:00:00Z', pbxLast: '2026-09-01T09:00:00Z' });
+    assert.equal(dialProvider(db).kind, 'binotel');
+  } finally { db.close(); }
+});
+
+test('выбор клиники сильнее любой догадки', () => {
+  const db = openDb(':memory:'); migrate(db);
+  try {
+    seedTwoLines(db, { binotelLast: '2026-09-07T07:50:40Z', pbxLast: '2026-09-17T11:54:58Z' });
+    db.prepare("UPDATE telephony_settings SET dial_provider = 'binotel' WHERE id = 1").run();
+    assert.equal(dialProvider(db).kind, 'binotel', 'выбранную линию подменили свежей');
+  } finally { db.close(); }
+});
+
+test('выбранная линия выключена — молча подменять другой НЕЛЬЗЯ', async () => {
+  const db = openDb(':memory:'); migrate(db);
+  try {
+    seedTwoLines(db, { binotelLast: '2026-09-07T07:50:40Z', pbxLast: '2026-09-17T11:54:58Z' });
+    db.prepare("UPDATE telephony_settings SET dial_provider = 'pbx:999' WHERE id = 1").run();
+    assert.equal(dialProvider(db), null);
+    const r = await dialCall(db, { extension: '101', phone: '+998901234567' });
+    assert.equal(r.reason, 'no_provider', 'звонок ушёл не с той линии, которую выбрала клиника');
+  } finally { db.close(); }
+});
+
+test('ОДИН НОМЕР НА КЛИНИКУ: у оператора добавочного нет — звоним номером линии', async () => {
+  const db = openDb(':memory:'); migrate(db);
+  try {
+    db.prepare(`INSERT INTO telephony_providers (kind, vendor, name, enabled, config, secret)
+                VALUES ('onlinepbx', 'onlinepbx', 'onlinePBX', 1,
+                        '{"domain":"clinic.onpbx.ru","default_extension":"100"}',
+                        '{"auth_key":"a","key_id":"i","key":"k"}')`).run();
+    const seen = [];
+    const r = await dialCall(db, { extension: '', phone: '+998901234567' }, {
+      pbxCallNowImpl: async (domain, from, to) => { seen.push(from); return { ok: true, data: { data: 'u1' } }; },
+    });
+    assert.equal(r.ok, true, 'клинике с одним номером запретили звонить');
+    assert.deepEqual(seen, ['100'], 'звонок ушёл не с номера линии');
+  } finally { db.close(); }
+});
+
+test('свой добавочный ГЛАВНЕЕ номера линии — иначе в журнале не видно, кто звонил', async () => {
+  const db = openDb(':memory:'); migrate(db);
+  try {
+    db.prepare(`INSERT INTO telephony_providers (kind, vendor, name, enabled, config, secret)
+                VALUES ('onlinepbx', 'onlinepbx', 'onlinePBX', 1,
+                        '{"domain":"clinic.onpbx.ru","default_extension":"100"}',
+                        '{"auth_key":"a","key_id":"i","key":"k"}')`).run();
+    const seen = [];
+    await dialCall(db, { extension: '102', phone: '+998901234567' }, {
+      pbxCallNowImpl: async (domain, from) => { seen.push(from); return { ok: true, data: { data: 'u1' } }; },
+    });
+    assert.deepEqual(seen, ['102']);
   } finally { db.close(); }
 });

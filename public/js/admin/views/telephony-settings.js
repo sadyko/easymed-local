@@ -174,8 +174,55 @@ function paint() {
     // бессмысленны, пока связь не работает (потому не выше), но это всё ещё
     // настройка, а журнал — не настройка, а доказательство жизни (потому не
     // ниже него).
+    // DIAL_LINE_V1 — «с какой линии звонит программа». Стоит рядом с маршрутом:
+    // обе карточки отвечают на вопрос «что программа делает сама», и обе нужны
+    // только когда связь уже работает.
+    refs.body.appendChild(dialLineCard());
     refs.body.appendChild(routingCard());
     refs.body.appendChild(callsCard());
+}
+
+// ---------------------------------------------------------------------------
+// DIAL_LINE_V1 — С КАКОЙ ЛИНИИ ЗВОНИТ ПРОГРАММА.
+//
+// Владелец: «why i cant call from pbx in the system?» — и это была не поломка
+// связи, а выбор программы. Линий включено несколько, а звонок уходил по
+// правилу «Binotel — главная»; в клинике Binotel не работал месяц, зато
+// onlinePBX принимал по восемь сотен звонков в сутки.
+//
+// Теперь линию называет клиника. «Сама» осталась как значение по умолчанию, но
+// и она больше не гадает по старшинству: берётся линия с самым свежим звонком в
+// журнале — то есть та, которой клиника действительно пользуется.
+// ---------------------------------------------------------------------------
+function dialLineCard() {
+    const s = state.s;
+    const opts = [['', 'Сама — по той линии, где идут звонки']];
+    if (s.api_key && s.api_secret_set) opts.push(['binotel', providerLabel('binotel')]);
+    for (const p of state.providers) opts.push(['pbx:' + p.id, p.name || p.kind_label]);
+
+    const sel = h('select', { style: { width: '100%', maxWidth: '360px', height: '38px', padding: '0 10px',
+        border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', fontFamily: 'inherit' } },
+        ...opts.map(([v, label]) => h('option', { value: v, selected: (s.dial_provider || '') === v ? true : null }, label)));
+    sel.addEventListener('change', async () => {
+        try {
+            await rpc('telephony_settings_save', { dial_provider: sel.value });
+            // Состояние перечитываем, а не додумываем — та же осторожность, что
+            // у сохранения ключа Binotel строкой ниже.
+            state.s = await rpc('telephony_settings_get', {});
+            toast('Сохранено.', 'success');
+        } catch (e) {
+            toast(e.message || 'Не удалось сохранить.', 'fail');
+        }
+    });
+
+    const card = h('div', { style: { padding: '18px' } },
+        field('Звонки из программы уходят через', sel),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '-6px' } },
+            'Это линия, которой программа набирает пациента по кнопке «Позвонить». Приём звонков и журнал работают по всем включённым линиям независимо от этого выбора.'));
+
+    return h('div', { class: 'card', style: { marginBottom: '16px' } },
+        h('div', { class: 'card-header' }, h('h3', null, Icon('Phone', { size: 16 }), ' ', tr('Исходящие звонки'))),
+        card);
 }
 
 // ---------------------------------------------------------------------------
@@ -303,7 +350,7 @@ const CONNECTION_FIELDS = {
         extraField: 'default_extension',
         extraLabel: 'Внутренний номер, с которого звонить пациенту',
         extraPlaceholder: 'например, 101',
-        extraHint: 'Добавочный номер регистратуры в АТС. Можно оставить пустым — тогда звонок пойдёт с личного внутреннего номера сотрудника.',
+        extraHint: 'Номер клиники в АТС, с которого уходят звонки пациентам. Если у сотрудника в карточке указан свой внутренний номер, звонок пойдёт с него — тогда в журнале видно, кто звонил. Пусто и там и тут — позвонить из программы не получится.',
     },
     moizvonki: {
         hint: 'Адрес — тот, по которому вы входите в личный кабинет «Моих Звонков». Ключ API и почта сотрудника — в личном кабинете, раздел «Интеграция».',
@@ -856,11 +903,11 @@ function paintRouting() {
         const nameIsCode = ru === r.disposition;
         // Список действий управляет списком колонок: у «не создавать» колонки
         // нет, и поле выключается, а не притворяется, что выбор ещё важен.
-        const stageSel = h('select', { class: 'tel-route-stage', disabled: r.action !== 'create' },
+        const stageSel = h('select', { class: 'tel-route-stage', 'data-route-select': 'stage', disabled: r.action !== 'create' },
             ...state.stages.map((st) => h('option', { value: st.key, selected: r.stage_key === st.key }, st.label)));
         stageSel.addEventListener('change', () => { r.stage_key = stageSel.value; });
 
-        const actionSel = h('select', { class: 'tel-route-action' },
+        const actionSel = h('select', { class: 'tel-route-action', 'data-route-select': 'action' },
             ...ROUTING_ACTIONS.map((a) => h('option', { value: a.value, selected: r.action === a.value }, a.label)));
         actionSel.addEventListener('change', () => {
             r.action = actionSel.value;
