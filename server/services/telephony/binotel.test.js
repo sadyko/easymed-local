@@ -60,10 +60,13 @@ test('a body over the size bound is discarded as bad_response', async () => {
 test('in-body errors: credential words → bad_credentials, anything else → server_error', async () => {
   // Binotel reports a wrong key at HTTP 200 with status:'error' in the body.
   const bad = await binotelCall('m', {}, { ...CREDS, fetchImpl: async () => fakeRes(200, '{"status":"error","message":"Wrong api key or secret"}') });
-  assert.deepEqual(bad, { ok: false, reason: 'bad_credentials' });
+  // `comment` carries Binotel's OWN words to the operator (dial.js turns them
+  // into a Russian sentence): «ошибка телефонии» with no cause cannot be acted
+  // on, and the clinic saw exactly that.
+  assert.deepEqual(bad, { ok: false, reason: 'bad_credentials', comment: 'Wrong api key or secret' });
   // An unrecognised in-body error blames the vendor, never the admin's typing.
   const other = await binotelCall('m', {}, { ...CREDS, fetchImpl: async () => fakeRes(200, '{"status":"error","message":"internal failure"}') });
-  assert.deepEqual(other, { ok: false, reason: 'server_error' });
+  assert.deepEqual(other, { ok: false, reason: 'server_error', comment: 'internal failure' });
 });
 
 test('never writes to the console — so the secret can never reach a log', async () => {

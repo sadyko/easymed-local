@@ -87,7 +87,8 @@ test('Binotel: звонок уходит внутренним номером о�
       binotelDialImpl: async (internal, external) => { seen.push([internal, external]); return { ok: true, call_id: '77' }; },
     });
     assert.deepEqual(r, { ok: true, provider: 'binotel', call_id: '77' });
-    assert.deepEqual(seen, [['910', '+998901234567']]);
+    // На станцию уходят ЦИФРЫ: плюс — способ записать номер, а не набрать его.
+    assert.deepEqual(seen, [['910', '998901234567']]);
   } finally { db.close(); }
 });
 
@@ -122,7 +123,7 @@ test('«Мои Звонки»: внутренний номер не нужен �
     });
     assert.equal(r.ok, true, 'оператору без добавочного запретили звонить там, где добавочных не бывает');
     assert.equal(r.provider, 'moizvonki');
-    assert.deepEqual(seen, [['clinic.moizvonki.ru', '+998901234567', 'a@b.uz', 'z']]);
+    assert.deepEqual(seen, [['clinic.moizvonki.ru', '998901234567', 'a@b.uz', 'z']]);
   } finally { db.close(); }
 });
 
@@ -263,5 +264,46 @@ test('свой добавочный ГЛАВНЕЕ номера линии — �
       pbxCallNowImpl: async (domain, from) => { seen.push(from); return { ok: true, data: { data: 'u1' } }; },
     });
     assert.deepEqual(seen, ['102']);
+  } finally { db.close(); }
+});
+
+// --- ОТКАЗ СТАНЦИИ ДОЛЖЕН ДОХОДИТЬ ДО ЧЕЛОВЕКА ------------------------------
+//
+// Владелец видел на экране «RPC failed» и справедливо спрашивал, что не так.
+// Станция в тот момент отвечала вполне внятно: «There is no registered user and
+// no push token» — на внутреннем номере не было подключённого телефона.
+
+test('«нет зарегистрированного телефона» объясняется по-русски и с подсказкой', async () => {
+  const db = seed({ binotel: true });
+  try {
+    const r = await dialCall(db, { extension: '108', phone: '+998901234567' }, {
+      binotelDialImpl: async () => ({ ok: false, reason: 'server_error', comment: 'There is no registered user and no push token' }),
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.message, /нет подключённого телефона/);
+    assert.match(r.message, /другой внутренний номер/, 'сказано, что делать дальше');
+    assert.equal(/RPC failed|push token/i.test(r.message), false, 'человеку показали английский текст вендора');
+  } finally { db.close(); }
+});
+
+test('незнакомый ответ станции показывается как есть — чужой текст лучше пустоты', async () => {
+  const db = seed({ binotel: true });
+  try {
+    const r = await dialCall(db, { extension: '108', phone: '+998901234567' }, {
+      binotelDialImpl: async () => ({ ok: false, reason: 'server_error', comment: 'Quota exceeded for today' }),
+    });
+    assert.match(r.message, /Quota exceeded for today/);
+  } finally { db.close(); }
+});
+
+test('отказ телефонии — это 400, а не 500: иначе экран покажет «RPC failed»', async () => {
+  const db = seed({ binotel: true });
+  try {
+    addUser(db, { id: 1, role: 'callcenter', ext: '108' });
+    await assert.rejects(
+      () => telephonyDial(db, { phone: '+998901234567' }, user('callcenter', 1), {
+        binotelDialImpl: async () => ({ ok: false, reason: 'offline' }),
+      }),
+      (e) => e.status === 400, 'маршрут RPC спрячет всё, что 500 и выше, за общей фразой');
   } finally { db.close(); }
 });

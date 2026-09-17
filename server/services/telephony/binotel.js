@@ -88,7 +88,9 @@ export async function binotelCall(method, params, {
   // control/gate.js applies to its locked messages.
   if (body.status !== 'success') {
     const msg = String(body.message || '');
-    return { ok: false, reason: /key|secret|auth/i.test(msg) ? 'bad_credentials' : 'server_error' };
+    // comment — СВОИМИ СЛОВАМИ СТАНЦИИ. Оператору показывают именно его (после
+    // перевода в dial.js): «ошибка телефонии» без причины не лечится.
+    return { ok: false, reason: /key|secret|auth/i.test(msg) ? 'bad_credentials' : 'server_error', comment: msg };
   }
   return { ok: true, data: body };
 }

@@ -131,6 +131,13 @@ export async function dialCall(db, { extension = '', phone = '' } = {}, seams = 
   const ext = String(extension || '').trim();
 
   const to = dialableNumber(phone);
+  // СТАНЦИИ НАБИРАЮТ ЦИФРЫ, А НЕ «+». Плюс — это способ ЗАПИСАТЬ номер, а не
+  // набрать его: в собственном журнале onlinePBX номера лежат без него
+  // («998771050404»), и примеры набора у Binotel тоже без. Мы же храним номера
+  // пациентов в виде «+998 …», и именно этот плюс уезжал на станцию, когда
+  // звонили из карточки. Убираем ровно на границе с телефонией — внутри
+  // программы номер остаётся таким, каким его видит человек.
+  const dial = to.replace(/\D+/g, '');
   // Семь цифр — короче любого городского номера в стране; такой «телефон» в
   // карточке значит опечатку или добавочный, и набирать его станцией нельзя.
   if (to.replace(/\D+/g, '').length < 7) return fail('no_phone');
@@ -154,8 +161,8 @@ export async function dialCall(db, { extension = '', phone = '' } = {}, seams = 
 
   if (via.kind === 'binotel') {
     const { key, secret } = getCredentials(db);
-    const r = await binotelDialImpl(from, to, { key, secret });
-    if (!r.ok) return fail(r.reason);
+    const r = await binotelDialImpl(from, dial, { key, secret });
+    if (!r.ok) return fail(r.reason, r.comment);
     return { ok: true, provider: 'binotel', call_id: r.call_id || '' };
   }
 
@@ -167,22 +174,54 @@ export async function dialCall(db, { extension = '', phone = '' } = {}, seams = 
     // у операторов появятся свои учётки, сюда придёт имя оператора, и разбор
     // по операторам станет таким же честным, как у станций.
     const sec = providerSecrets(via.row);
-    const r = await mzDialImpl(normalizeMzDomain(cfg.domain), to, {
+    const r = await mzDialImpl(normalizeMzDomain(cfg.domain), dial, {
       userName: cfg.user_name || '', apiKey: sec.api_key || '',
     });
-    if (!r.ok) return fail(r.reason);
+    if (!r.ok) return fail(r.reason, r.comment);
     return { ok: true, provider: 'moizvonki', call_id: r.call_id || '' };
   }
 
-  const r = await pbxCallNowImpl(normalizeDomain(cfg.domain), from, to, pbxOptions(db, via.row));
-  if (!r.ok) return fail(r.reason);
+  const r = await pbxCallNowImpl(normalizeDomain(cfg.domain), from, dial, pbxOptions(db, via.row));
+  // СЛОВА СТАНЦИИ ДОХОДЯТ ДО ОПЕРАТОРА. Отказ «телефония ответила ошибкой» не
+  // говорит ничего: станция отказывает по совершенно разным поводам — не тот
+  // внутренний номер, нет прав на исходящие, не выбран транк. Свой текст у неё
+  // есть всегда (поле comment), и прятать его — значит заставлять гадать. Мы
+  // по-прежнему НЕ показываем ничего, кроме этого текста: ни ключей, ни адресов.
+  if (!r.ok) return fail(r.reason, r.comment);
   // onlinePBX отвечает идентификатором вызова в data.data; его формат у них
   // свой, и связывать по нему журнал мы не обещаем — отдаём как есть.
   const id = r.data && (r.data.data || r.data.uuid);
   return { ok: true, provider: 'onlinepbx', call_id: id == null ? '' : String(id) };
 }
 
-function fail(reason) {
+// ЧТО СТАНЦИЯ СКАЗАЛА — ПО-РУССКИ И ПО ДЕЛУ.
+//
+// onlinePBX отвечает по-английски и терминами, которые регистратуре ничего не
+// говорят. Здесь переводятся те ответы, которые клиника реально видит, — с
+// указанием, что делать. Незнакомый ответ показывается как есть: чужой текст
+// лучше пустоты.
+const STATION_SAID = [
+  [/no registered user and no push token/i,
+   'На этом внутреннем номере сейчас нет подключённого телефона: аппарат выключен, либо приложение АТС закрыто. Включите телефон оператора или укажите в настройках другой внутренний номер.'],
+  [/not found|no such user|unknown user/i,
+   'Станция не знает такого внутреннего номера. Проверьте номер в настройках телефонии.'],
+  [/denied|forbidden|not allowed/i,
+   'Станция не разрешает исходящие с этого номера. Откройте их в панели onlinePBX для этой учётной записи.'],
+  [/no gate|no trunk|gate not found/i,
+   'У станции не выбрана линия для исходящих звонков. Укажите её в панели onlinePBX.'],
+];
+
+function stationSaid(comment) {
+  const said = String(comment || '').trim();
+  if (!said) return '';
+  for (const [re, ru] of STATION_SAID) if (re.test(said)) return ru;
+  return 'Станция ответила: ' + said.slice(0, 160);
+}
+
+function fail(reason, comment = '') {
   const r = reason || 'server_error';
-  return { ok: false, reason: r, message: dialMessage(r) };
+  const said = stationSaid(comment);
+  // Когда станция объяснила причину понятными словами, её объяснение и есть
+  // ответ: наша общая фраза «попробуйте через минуту» рядом с ним только мешает.
+  return { ok: false, reason: r, message: said || dialMessage(r) };
 }
