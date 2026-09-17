@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ru" translate="no">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EasyPhone — телефония клиники</title>
+<style>
+  /* EASYPHONE_V1 — рабочее место телефониста. Свой скромный вид: это не второй
+     EasyMed, а один экран, за которым сидят весь день. Шкала размеров та же,
+     что в основной программе (12.5 / 13.5 / 15 / 17 / 20 / 24). */
+  :root {
+    --ground: #f4f7f8; --paper: #fff; --ink: #14212b; --muted: #55636d;
+    --line: #e2e9ec; --mint: #0d7a6a; --mint-soft: #e6f3f0; --warn: #9a5b06;
+    --stop: #a3341f; --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink);
+    font: 15px/1.5 "Onest", "Segoe UI", system-ui, sans-serif; }
+  header { background: var(--paper); border-bottom: 1px solid var(--line); padding: 12px 20px;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 700; letter-spacing: -.01em; }
+  .who { color: var(--muted); font-size: 13.5px; }
+  .grow { flex: 1; }
+  main { max-width: 1080px; margin: 0 auto; padding: 18px 16px 48px;
+    display: grid; grid-template-columns: 300px 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); }
+  .card h2 { font-size: 13.5px; margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line);
+    text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+  .card .body { padding: 16px; }
+  label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+  input, select { width: 100%; height: 38px; padding: 0 10px; font: inherit; font-size: 13.5px;
+    border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); }
+  button { font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer;
+    border: 1px solid var(--line); background: #fff; color: var(--ink);
+    border-radius: 8px; padding: 9px 14px; }
+  button.primary { background: var(--mint); border-color: var(--mint); color: #fff; width: 100%; }
+  button:disabled { opacity: .55; cursor: default; }
+  .num { font-size: 24px; font-weight: 600; min-height: 32px; letter-spacing: .01em;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hint { font-size: 12.5px; color: var(--muted); margin-top: 2px; min-height: 32px; }
+  .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 12px 0; }
+  .pad button { height: 44px; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 0; line-height: 1.1; }
+  .pad b { font-size: 17px; }
+  .pad span { font-size: 12.5px; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; font-size: 12.5px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--muted); font-weight: 600; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  .in { color: var(--mint); font-weight: 600; }
+  .out { color: var(--muted); font-weight: 600; }
+  .miss { color: var(--stop); font-weight: 600; }
+  .msg { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; font-size: 13.5px; }
+  .msg.ok { background: var(--mint-soft); color: var(--mint); }
+  .msg.bad { background: #fdeeea; color: var(--stop); }
+  audio { width: 220px; height: 32px; vertical-align: middle; }
+  .live { padding: 12px 16px; background: var(--mint-soft); border-bottom: 1px solid var(--line);
+    font-size: 13.5px; color: var(--mint); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>EasyPhone</h1>
+  <span class="who" id="who">…</span>
+  <span class="grow"></span>
+  <span class="who" id="line"></span>
+</header>
+
+<main>
+  <section>
+    <div class="card">
+      <h2>Моя трубка</h2>
+      <div class="body">
+        <label for="ext">Внутренний номер, на котором я работаю</label>
+        <select id="ext"></select>
+        <p class="hint" id="extHint">Звонок сначала поднимает эту трубку, потом набирает пациента. Выберите тот номер, на котором у вас включён телефон или приложение АТС.</p>
+        <button id="saveExt">Запомнить номер</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:18px">
+      <h2>Позвонить</h2>
+      <div class="body">
+        <div class="num" id="num">Наберите номер</div>
+        <div class="hint" id="dialHint">Сначала зазвонит ваша трубка</div>
+        <div class="pad" id="pad"></div>
+        <button class="primary" id="call" disabled>Позвонить</button>
+        <div id="dialMsg"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Звонки</h2>
+    <div class="live" id="live" hidden></div>
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th>Когда</th><th>Кто</th><th>Номер</th><th>Итог</th><th>Оператор</th><th>Запись</th>
+        </tr></thead>
+        <tbody id="rows"><tr><td colspan="6">Загружаем…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

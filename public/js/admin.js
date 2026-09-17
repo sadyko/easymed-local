@@ -75,9 +75,7 @@ import { renderMarNurse }    from './admin/views/mar-nurse.js?v=inp5';   // MAR_
 import { renderKitchenSheet } from './admin/views/kitchen-sheet.js?v=diet1';   // KITCHEN_SHEET_V1 — порционник (Задача 7; экран был написан без маршрута)
 import { renderDischarge }   from './admin/views/discharge.js?v=disch1';   // TWO_STEP_DISCHARGE_V1 — «Выписки к оформлению» (Задача 8; экран был написан без маршрута)
 import { renderDoctorRoom }   from './admin/views/doctor-room.js?v=docroom1';   // DOCTOR_ROOM_V1 — Кабинет врача (consultation queue)
-import { renderEmployees }    from './admin/views/employees.js?v=arch1';
-// DIALPAD_V1 — телефон в углу экрана (набор номера с любого экрана).
-import { mountDialpad }      from './admin/dialpad.js?v=dial1';   // EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen)
+import { renderEmployees }    from './admin/views/employees.js?v=arch1';   // EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen)
 import { renderMarketing }    from './admin/views/marketing.js?v=btnright1';
 import { renderCallCenter }   from './admin/views/callcenter.js';
 import { renderDocuments }    from './admin/views/documents.js?v=noqr1';
@@ -2736,10 +2734,9 @@ async function onAuthed(userRow, { fresh = false } = {}) {
     await applyActorPermissions(state.user);
     startApp({ fresh });
     renderLicenceBanner();   // LICENCE_CORE_V1 — after the shell exists, so `.app` is there to mount above
-    // DIALPAD_V1 — телефон в углу экрана: набрать номер и позвонить с любого
-    // экрана. Ставится ПОСЛЕ прав (applyActorPermissions выше): у роли без
-    // права звонить панели нет вовсе. Идемпотентен, как и баннер лицензии.
-    mountDialpad();
+    // EASYPHONE_V1 — панели набора здесь больше нет: звонки живут в отдельной
+    // программе EasyPhone (своё окно, свой порт). Владелец: «remove calling
+    // from the easymed. but leave the cards and the audios only».
     // UPDATE_DELIVERY_V1 — fire-and-forget, same posture as boot()'s own
     // renderNotifications() call: a check that cannot run (offline, RPC
     // error) must never block login or surface as an error to the clinic.

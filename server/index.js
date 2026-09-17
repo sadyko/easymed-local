@@ -234,6 +234,32 @@ if (isMain) {
     console.log('Easy-Med Local is running.');
     console.log(`  On this PC:      http://localhost:${PORT}`);
     for (const ip of lanAddresses()) console.log(`  On the network:  http://${ip}:${PORT}`);
+
+    // EASYPHONE_V1 — рабочее место телефонии поднимается ТЕМ ЖЕ запуском, но на
+    // своём порту. Владелец: «отдельная программа … started and used as similar
+    // to easymed but in the different port».
+    //
+    // Почему один процесс, а не второй ярлык: клинике нельзя давать вторую
+    // вещь, которую надо помнить запустить и отдельно обновлять. Для человека
+    // это отдельная программа — своё окно, свой адрес, свой экран; для клиники
+    // это одна поставка, которая чинится одним обновлением.
+    //
+    // Падение телефонии не должно стоить работы всей клиники, поэтому запуск
+    // обёрнут: занятый порт или ошибка в этом экране не трогают главный сервер.
+    if (process.env.EASYPHONE_OFF !== '1') {
+      import('../phone/index.js')
+        .then(({ createPhoneApp }) => {
+          const phonePort = Number(process.env.EASYPHONE_PORT) || (PORT + 20);
+          const phone = createPhoneApp(db).listen(phonePort, '0.0.0.0', () => {
+            console.log('');
+            console.log('EasyPhone (телефония) — отдельное окно:');
+            console.log(`  On this PC:      http://localhost:${phonePort}`);
+            for (const ip of lanAddresses()) console.log(`  On the network:  http://${ip}:${phonePort}`);
+          });
+          phone.on('error', (e) => console.warn('[easyphone] не поднялся:', e && e.message));
+        })
+        .catch((e) => console.warn('[easyphone] не запустился:', e && e.message));
+    }
     if (firstRunPassword) {
       console.log('');
       console.log('FIRST RUN - admin account created:');

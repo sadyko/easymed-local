@@ -13,8 +13,6 @@ import { phoneInput } from '../phone-input.js?v=ph1';
 // полях ввода телефона (PHONE_INPUT_V1). Второй способ печатать номер означал
 // бы, что один и тот же человек выглядит по-разному в заявке и в своей карте.
 import { formatPhone } from '../phone-format.js';
-// CALL_FROM_CRM_V1 — одна кнопка звонка на всю программу.
-import { callButton } from '../call-action.js?v=call1';
 // CRM_OWNERSHIP_V1 — «кто я»: кому записывается взятая заявка.
 import { selfUserId } from '../permissions.js';
 import { filterServicePool, serviceGroupCounts } from './service-search.js';   // CRM_SERVICE_FILTER_V1
@@ -677,14 +675,17 @@ async function paint() {
             },
         }, Icon('User', { size: 13 }), h('span', null, 'Взять в работу')) : null;
 
-        // CALL_FROM_CRM_V1 — «Позвонить» стоит ЗДЕСЬ, в общих действиях заявки,
-        // и поэтому появляется сразу в двух видах: на карточке доски и в строке
-        // списка. Кнопки нет вовсе, когда звонить нечему (нет номера) или
-        // некому (роль без права звонить) — см. call-action.js.
-        const call = callButton(r.phone, { small: true });
+        // EASYPHONE_V1 — КНОПКИ «ПОЗВОНИТЬ» ЗДЕСЬ БОЛЬШЕ НЕТ, и это решение
+        // владельца: «remove calling from the easymed. but leave the cards and
+        // the audios only». Звонки переехали в отдельную программу EasyPhone
+        // (своё окно, свой порт), потому что рабочее место телефониста — это
+        // не вкладка в карте пациента: там свой экран, свой журнал и своя
+        // трубка у каждого оператора.
+        //
+        // В EasyMed остаётся ровно то, ради чего сюда приходит клиника:
+        // КАРТОЧКИ заявок и ЗАПИСИ разговоров в них.
         return [
             ...(take ? [take] : []),
-            ...(call ? [call] : []),
             h('div', { class: 'crm-move' }, sel,
                 h('span', { class: 'crm-move-chev', 'aria-hidden': 'true' }, Icon('ChevronDown', { size: 12 }))),
         ];
