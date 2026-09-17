@@ -286,16 +286,52 @@ async function loadProviders() {
 // Тот же сценарий, что у Binotel: ввёл ключи → проверил → сохранил → включил
 // опрос. `p` = null — черновик: первое сохранение заводит строку.
 // ---------------------------------------------------------------------------
+// MOIZVONKI_V1 — ЧЕМ ПОДКЛЮЧЕНИЯ ОТЛИЧАЮТСЯ ДРУГ ОТ ДРУГА, описано данными, а
+// не разветвлениями по всей карточке. У обеих телефоний три поля: адрес, ключ
+// и третье — своё. У onlinePBX это внутренний номер по умолчанию, у «Моих
+// Звонков» — почта сотрудника, от чьего имени уходит звонок (у них нет АТС:
+// звонит смартфон этого человека).
+const CONNECTION_FIELDS = {
+    onlinepbx: {
+        hint: 'Домен показан вверху панели onlinePBX. Ключ — в разделе «Интеграция → API»; там же снимите галочку «Проверка IP», иначе АТС не будет отвечать клинике.',
+        domainLabel: 'Домен АТС из панели onlinePBX',
+        domainPlaceholder: 'например, pbx38631.onpbx.ru',
+        secretField: 'auth_key',
+        secretLabel: 'Ключ API из панели onlinePBX',
+        secretSavedLabel: 'Ключ API из панели onlinePBX: сохранён (заменить)',
+        secretPlaceholder: 'ключ из раздела «Интеграция → API» панели onlinePBX',
+        extraField: 'default_extension',
+        extraLabel: 'Внутренний номер, с которого звонить пациенту',
+        extraPlaceholder: 'например, 101',
+        extraHint: 'Добавочный номер регистратуры в АТС. Можно оставить пустым — тогда звонок пойдёт с личного внутреннего номера сотрудника.',
+    },
+    moizvonki: {
+        hint: 'Адрес — тот, по которому вы входите в личный кабинет «Моих Звонков». Ключ API и почта сотрудника — в личном кабинете, раздел «Интеграция».',
+        domainLabel: 'Адрес кабинета «Моих Звонков»',
+        domainPlaceholder: 'например, clinic.moizvonki.ru',
+        secretField: 'api_key',
+        secretLabel: 'Ключ API из личного кабинета',
+        secretSavedLabel: 'Ключ API из личного кабинета: сохранён (заменить)',
+        secretPlaceholder: 'ключ из раздела «Интеграция»',
+        extraField: 'user_name',
+        extraLabel: 'Почта сотрудника, с чьего телефона звонить',
+        extraPlaceholder: 'например, registratura@clinic.uz',
+        extraHint: 'У «Моих Звонков» нет АТС: команда уходит на смартфон этого сотрудника, и звонит его сим-карта.',
+        testNeedsExtra: true,
+    },
+};
+const connFields = (kind) => CONNECTION_FIELDS[kind] || CONNECTION_FIELDS.onlinepbx;
+
 function pbxConnectionCard(p) {
     const kind = p ? p.kind : state.draftKind;
+    const F = connFields(kind);
     const card = h('div', { style: { padding: '18px' } });
 
     card.appendChild(field('Провайдер', h('div', { style: { fontWeight: '600' } }, providerLabel(kind))));
     // TEL_FIELDS_PLAIN_V1 — где взять: домен — вверху панели onlinePBX, ключ —
     // «Интеграция → API» (и там же снять «Проверка IP», иначе АТС отвечает
     // только адресам из своего списка, а адрес клиники меняется).
-    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 14px' } },
-        'Домен показан вверху панели onlinePBX. Ключ — в разделе «Интеграция → API»; там же снимите галочку «Проверка IP», иначе АТС не будет отвечать клинике.'));
+    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 14px' } }, F.hint));
 
     const nameInput = h('input', {
         type: 'text', autocomplete: 'off', spellcheck: 'false', style: { width: '100%' },
@@ -305,13 +341,13 @@ function pbxConnectionCard(p) {
 
     const domainInput = h('input', {
         type: 'text', autocomplete: 'off', spellcheck: 'false', style: { width: '100%' },
-        value: p ? p.domain : '', placeholder: 'например, pbx38631.onpbx.ru',
+        value: p ? p.domain : '', placeholder: F.domainPlaceholder,
     });
-    card.appendChild(field('Домен АТС из панели onlinePBX', domainInput));
+    card.appendChild(field(F.domainLabel, domainInput));
 
     const keyInput = h('input', {
         type: 'password', autocomplete: 'off', spellcheck: 'false', style: { width: '100%' },
-        placeholder: p && p.auth_key_set ? 'сохранён — введите новый, чтобы заменить' : 'ключ из раздела «Интеграция → API» панели onlinePBX',
+        placeholder: p && p.secret_set_any ? 'сохранён — введите новый, чтобы заменить' : F.secretPlaceholder,
     });
     const showBtn = h('button', { class: 'btn btn-sm', type: 'button',
         onclick: () => {
@@ -319,17 +355,17 @@ function pbxConnectionCard(p) {
             showBtn.textContent = tr(keyInput.type === 'password' ? 'Показать' : 'Скрыть');
         } }, 'Показать');
     card.appendChild(field(
-        p && p.auth_key_set ? 'Ключ API из панели onlinePBX: сохранён (заменить)' : 'Ключ API из панели onlinePBX',
+        p && p.secret_set_any ? F.secretSavedLabel : F.secretLabel,
         h('div', { class: 'row', style: { gap: '8px' } },
             h('div', { style: { flex: '1' } }, keyInput), showBtn)));
 
     const extInput = h('input', {
-        type: 'text', autocomplete: 'off', spellcheck: 'false', style: { width: '160px' },
-        value: p ? p.default_extension : '', placeholder: 'например, 101',
+        type: 'text', autocomplete: 'off', spellcheck: 'false',
+        style: { width: F.extraField === 'user_name' ? '100%' : '160px' },
+        value: (p && p[F.extraField]) || '', placeholder: F.extraPlaceholder,
     });
-    card.appendChild(field('Внутренний номер, с которого звонить пациенту', extInput));
-    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 14px' } },
-        'Добавочный номер регистратуры в АТС. Можно оставить пустым — тогда звонок из системы будет недоступен.'));
+    card.appendChild(field(F.extraLabel, extInput));
+    card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 14px' } }, F.extraHint));
 
     const resultLine = h('div', { role: 'status', style: { marginTop: '10px', fontSize: '13.5px', minHeight: '18px' } });
     const setResult = (ok, text) => {
@@ -342,11 +378,11 @@ function pbxConnectionCard(p) {
     const payload = () => {
         const out = {
             kind, name: nameInput.value.trim(),
-            config: { domain: domainInput.value.trim(), default_extension: extInput.value.trim() },
+            config: { domain: domainInput.value.trim(), [F.extraField]: extInput.value.trim() },
         };
         if (p) out.id = p.id;
         const key = keyInput.value.trim();
-        if (key) out.secret = { auth_key: key };
+        if (key) out.secret = { [F.secretField]: key };
         return out;
     };
 
@@ -373,8 +409,15 @@ function pbxConnectionCard(p) {
                 if (p) args.id = p.id;
                 const domain = domainInput.value.trim();
                 const key = keyInput.value.trim();
-                if (domain) args.config = { domain };
-                if (key) args.secret = { auth_key: key };
+                // Третье поле уходит на проверку ТОЛЬКО там, где оно часть
+                // доступа: у «Моих Звонков» запрос подписывается почтой
+                // сотрудника, без неё проверять нечего. Внутренний номер
+                // onlinePBX к доступу отношения не имеет.
+                if (domain) args.config = F.testNeedsExtra
+                    ? { domain, [F.extraField]: extInput.value.trim() }
+                    : { domain };
+                if (key) args.secret = { [F.secretField]: key };
+                args.kind = kind;   // черновик ещё без id — сервер иначе не знает, что проверять
                 resultLine.style.color = '';
                 resultLine.textContent = tr('Проверка…');
                 try {

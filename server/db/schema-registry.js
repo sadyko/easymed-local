@@ -398,6 +398,12 @@ export const REGISTRY = {
                 // экраны сотрудников и загрузчик прав; пишет его только
                 // routes/users.js (как и саму роль).
                 'custom_role_code',
+                // CALL_FROM_CRM_V1 (миграция 134) — внутренний номер сотрудника
+                // на АТС. Читает его весь персонал, и круга это не расширяет: в
+                // журнале звонков internal_number и так видит каждый, кто видит
+                // сам журнал, а без сопоставления «номер → человек» разбор по
+                // операторам показывал бы четырёхзначные числа вместо имён.
+                'pbx_extension',
                 'license_number']},   // SCHED_V1 — the wizard's slot engine; branch_id — CALENDAR_BOOKING_V1
                write:{insert:{roles:[]},update:{roles:[]},delete:{roles:[]}},
                // room_id: настройки кабинетов спрашивают «кто закреплён за этим

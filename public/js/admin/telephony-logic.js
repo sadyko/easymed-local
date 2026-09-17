@@ -205,7 +205,7 @@ export function shapeCalls(data) {
 
 // Vendor names are brands, not words: they render the same in ru/uz/en and
 // are deliberately NOT dictionary keys.
-const PROVIDER_LABELS = { binotel: 'Binotel', onlinepbx: 'onlinePBX' };
+const PROVIDER_LABELS = { binotel: 'Binotel', onlinepbx: 'onlinePBX', moizvonki: 'Мои Звонки' };   // MOIZVONKI_V1
 
 /** kind → brand name; unknown kinds show their raw key; absent → Binotel (see shapeCalls). */
 export function providerLabel(kind) {
@@ -269,7 +269,15 @@ export function shapeProviders(data) {
                 poll_interval_sec: Number.isFinite(n) && n >= 10 ? n : 30,
                 domain: typeof cfg.domain === 'string' ? cfg.domain : '',
                 default_extension: typeof cfg.default_extension === 'string' ? cfg.default_extension : '',
+                // MOIZVONKI_V1 — почта сотрудника: у «Моих Звонков» она заменяет
+                // внутренний номер (звонит смартфон этого человека).
+                user_name: typeof cfg.user_name === 'string' ? cfg.user_name : '',
                 auth_key_set: !!set.auth_key,
+                // Ключ у каждого вида зовётся по-своему (auth_key, api_key), а
+                // экрану нужно знать только ОДНО: сохранён ли он вообще. Иначе
+                // карточка «Моих Звонков» всегда предлагала бы ввести ключ
+                // заново, как будто его нет.
+                secret_set_any: Object.values(set).some((v) => !!v),
                 authorized: !!p.authorized,
                 last_poll_at: p.last_poll_at ?? null,
                 last_call_at: p.last_call_at ?? null,

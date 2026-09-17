@@ -231,7 +231,9 @@ test('provider RPCs: admin-only counting extra roles; the secret never crosses t
   assert.equal(saved.kind, 'onlinepbx');
   assert.deepEqual(saved.secret_set, { auth_key: true });
   const list = telephonyProvidersList(db, {}, admin);
-  assert.deepEqual(list.kinds, [{ kind: 'onlinepbx', label: 'onlinePBX' }]);
+  // MOIZVONKI_V1 — видов два: экран предлагает завести и «Мои Звонки».
+  assert.deepEqual(list.kinds, [{ kind: 'onlinepbx', label: 'onlinePBX' },
+                                { kind: 'moizvonki', label: 'Мои Звонки' }]);
   assert.equal(list.providers.length, 1);
   assert.equal(JSON.stringify(list).includes('AUTH'), false, 'auth_key is server-only');
 

@@ -92,3 +92,26 @@ export async function binotelCall(method, params, {
   }
   return { ok: true, data: body };
 }
+
+/**
+ * CALL_FROM_CRM_V1 — позвонить: сначала звонит ВНУТРЕННИЙ номер сотрудника, он
+ * поднимает трубку, и только тогда набирается пациент. Метод и имена полей —
+ * ровно те, что назвала поддержка Binotel (breadcrumb выше, письмо 2026-08):
+ * 'calls/internal-number-to-external-number' + {internalNumber, externalNumber}.
+ *
+ * Ответ несёт generalCallID — ТОТ ЖЕ идентификатор, под которым звонок потом
+ * приедет вебхуком и ляжет в calls.general_call_id. Возвращаем его наверх:
+ * благодаря ему набор из программы и строка в журнале — один звонок, а не два
+ * похожих.
+ *
+ * Ничего не логирует и не бросает — те же два обещания, что у binotelCall.
+ */
+export async function binotelDial(internalNumber, externalNumber, opts = {}) {
+  const r = await binotelCall('calls/internal-number-to-external-number', {
+    internalNumber: String(internalNumber),
+    externalNumber: String(externalNumber),
+  }, opts);
+  if (!r.ok) return r;
+  const id = r.data && (r.data.generalCallID ?? r.data.general_call_id);
+  return { ok: true, call_id: id == null ? '' : String(id) };
+}

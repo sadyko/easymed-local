@@ -11,6 +11,8 @@ import { binotelCall } from '../telephony/binotel.js';
 import { wakePolling } from '../telephony/poller.js';
 // TELEPHONY_PROVIDERS_V1 — провайдеры кроме Binotel.
 import { listProviders, saveProvider, deleteProvider, testProvider, ProviderError, KINDS } from '../telephony/providers.js';
+// CALL_FROM_CRM_V1 — один разъём набора на все телефонии.
+import { dialCall } from '../telephony/dial.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -148,4 +150,40 @@ export function telephonyProviderDelete(db, args, user) {
 export async function telephonyProviderTest(db, args, user, seams = {}) {
   requireAdmin(user);
   return testProvider(db, args || {}, seams);
+}
+
+// ---------------------------------------------------------------------------
+// CALL_FROM_CRM_V1 (2026-09-17) — ПОЗВОНИТЬ ИЗ ПРОГРАММЫ.
+//
+// Единственный вызов этого раздела, доступный НЕ администратору: звонит
+// регистратура и колл-центр, ради них всё и делалось. Сами настройки телефонии
+// остаются админскими — оператор может позвонить, но не может увидеть ключ,
+// которым звонок подписан.
+//
+// ВНУТРЕННИЙ НОМЕР БЕРЁТСЯ ИЗ СЕССИИ, А НЕ ИЗ ЗАПРОСА. Это не удобство, а
+// правило: приезжай номер с экрана, любой оператор мог бы позвонить «от имени»
+// чужой трубки — и разбор по операторам врал бы ровно там, где его читают как
+// отчёт о работе смены.
+//
+// Кому звонить, решает ЭКРАН (заявка, карта пациента, очередь), поэтому номер
+// пациента приходит аргументом. Проверка номера — в dial.js, одна на всех.
+const DIAL_ROLES = ['admin', 'registrar', 'callcenter'];
+
+export async function telephonyDial(db, args, user, seams = {}) {
+  if (!hasAnyRole(user, DIAL_ROLES)) {
+    throw new RpcError('Звонить из программы могут регистратура и колл-центр.', 403);
+  }
+  const me = db.prepare('SELECT pbx_extension FROM users WHERE id = ?').get(user && user.id ? user.id : 0);
+  const r = await dialCall(db, {
+    extension: (me && me.pbx_extension) || '',
+    phone: (args && args.phone) || '',
+  }, seams);
+  if (!r.ok) {
+    // Причина — слово из словаря dial.js, сообщение уже написано словами
+    // клиники. 400 значит «поправьте у себя» (нет номера, не настроено),
+    // 502 — «телефония не ответила»: разные причины и разные действия.
+    const mine = r.reason === 'no_extension' || r.reason === 'no_provider' || r.reason === 'no_phone';
+    throw new RpcError(r.message, mine ? 400 : 502);
+  }
+  return { ok: true, provider: r.provider, call_id: r.call_id };
 }

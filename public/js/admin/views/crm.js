@@ -13,6 +13,8 @@ import { phoneInput } from '../phone-input.js?v=ph1';
 // полях ввода телефона (PHONE_INPUT_V1). Второй способ печатать номер означал
 // бы, что один и тот же человек выглядит по-разному в заявке и в своей карте.
 import { formatPhone } from '../phone-format.js';
+// CALL_FROM_CRM_V1 — одна кнопка звонка на всю программу.
+import { callButton } from '../call-action.js?v=call1';
 import { filterServicePool, serviceGroupCounts } from './service-search.js';   // CRM_SERVICE_FILTER_V1
 import { openCustDev } from './custdev.js';           // CUSTDEV_V1 — обзвон после визита
 import { canView } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev»
@@ -655,8 +657,16 @@ async function paint() {
             if (!key || key === r.status) return;
             if (await setStatus(r, key)) { toast(trf('Статус: {status}', { status: tr((STATUS_RU[key] || [key])[0]) })); await paint(); }
         });
-        return [h('div', { class: 'crm-move' }, sel,
-            h('span', { class: 'crm-move-chev', 'aria-hidden': 'true' }, Icon('ChevronDown', { size: 12 })))];
+        // CALL_FROM_CRM_V1 — «Позвонить» стоит ЗДЕСЬ, в общих действиях заявки,
+        // и поэтому появляется сразу в двух видах: на карточке доски и в строке
+        // списка. Кнопки нет вовсе, когда звонить нечему (нет номера) или
+        // некому (роль без права звонить) — см. call-action.js.
+        const call = callButton(r.phone, { small: true });
+        return [
+            ...(call ? [call] : []),
+            h('div', { class: 'crm-move' }, sel,
+                h('span', { class: 'crm-move-chev', 'aria-hidden': 'true' }, Icon('ChevronDown', { size: 12 }))),
+        ];
     }
 
     // ---------------- СПИСОК ----------------

@@ -698,7 +698,7 @@ test('проверка onlinePBX: шлёт id и введённое; прова�
   const testBtn = findButtonByText(root, /Проверить подключение/);
   testBtn.click();
   await tick();
-  assert.deepStrictEqual(lastProvTestBody, { id: 7, config: { domain: 'clinic.onpbx.ru' }, secret: { auth_key: 'NEW' } });
+  assert.deepStrictEqual(lastProvTestBody, { id: 7, kind: 'onlinepbx', config: { domain: 'clinic.onpbx.ru' }, secret: { auth_key: 'NEW' } });
   assert.strictEqual(findByRole(root, 'status').textContent, 'Домен или ключ API не подходят.');
   provTestRespond = () => jsonOk({ ok: true, calls_last_minute: 3 });
   testBtn.click();

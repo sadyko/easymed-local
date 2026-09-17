@@ -6,9 +6,22 @@
 // секреты в secret (JSON) — и наружу секреты не выходят никогда: экран видит
 // только «ключ сохранён».
 //
-// Сегодня один вид — onlinePBX. Второй добавляется строкой в KINDS и своим
-// клиентом; таблица, права и экран не меняются.
+// Видов два: onlinePBX и «Мои Звонки». Третий добавляется строкой в KINDS и
+// своим клиентом; таблица, права и экран не меняются.
+//
+// ГДЕ ЛЕЖИТ ВИД ПОДКЛЮЧЕНИЯ, и почему не в колонке kind (миграция 135).
+// Колонка kind заведена (миграция 126) с ограничением CHECK (kind IN
+// ('onlinepbx')): «Мои Звонки» в неё физически не вставляются. Расширить CHECK
+// в SQLite можно только пересборкой таблицы — то есть удалив старую, а этого
+// правило миграций не разрешает; вдобавок на эту таблицу смотрит внешний ключ
+// calls.provider_id, и пересборка оторвала бы от подключений уже собранные
+// звонки. Поэтому настоящий вид живёт в ДОБАВЛЕННОЙ колонке vendor, а kind
+// остаётся историей: у каждой строки там 'onlinepbx' независимо от вида.
+//
+// ЧИТАТЬ НАДО vendor (через providerKind ниже) И НИКОГДА kind. Это закреплено
+// тестом: запрос с фильтром по kind молча потеряет «Мои Звонки».
 import { pbxAuth, pbxCall, pbxHistory, normalizeDomain } from './onlinepbx.js';
+import { mzHistory, normalizeMzDomain } from './moizvonki.js';   // MOIZVONKI_V1
 
 export class ProviderError extends Error {
   constructor(message, status = 400) { super(message); this.message = message; this.status = status; }
@@ -21,6 +34,22 @@ export const KINDS = {
     publicFields: ['domain', 'default_extension'],
     // Что хранится закрыто. auth_key вводит человек; key_id/key выдаёт провайдер.
     secretFields: ['auth_key'],
+    // Без чего провайдера нельзя ВКЛЮЧИТЬ. Включённый провайдер без ключа — это
+    // молчаливый отказ на каждом звонке вместо честного «заполните поля».
+    requiredToEnable: { config: ['domain'], secret: ['auth_key'] },
+    requiredMessage: 'Чтобы включить onlinePBX, укажите домен и ключ API.',
+  },
+  // MOIZVONKI_V1 (2026-09-17). Владелец: «do not hardcode the my calls. leave
+  // only the fields for call and api (like in the pbx and binotel)» — поэтому
+  // адрес и ключ живут ЗДЕСЬ, в тех же полях настроек, что у onlinePBX, а не в
+  // коде. user_name — почта сотрудника: у «Моих Звонков» она и подписывает
+  // запрос, и решает, чей телефон зазвонит (разбор — в moizvonki.js).
+  moizvonki: {
+    label: 'Мои Звонки',
+    publicFields: ['domain', 'user_name'],
+    secretFields: ['api_key'],
+    requiredToEnable: { config: ['domain', 'user_name'], secret: ['api_key'] },
+    requiredMessage: 'Чтобы включить «Мои Звонки», укажите адрес, почту сотрудника и ключ API.',
   },
 };
 
@@ -31,12 +60,22 @@ function parseJson(s, fallback) {
   try { const v = JSON.parse(s || ''); return v && typeof v === 'object' ? v : fallback; } catch { return fallback; }
 }
 
+/**
+ * Вид подключения строки. vendor — настоящий (миграция 135), kind — история:
+ * у всех строк там 'onlinepbx' из-за старого CHECK. Пустой vendor значит, что
+ * строка заведена до миграции, то есть onlinePBX.
+ */
+export function providerKind(row) {
+  return String((row && (row.vendor || row.kind)) || '');
+}
+
 function rowToPublic(row) {
   const cfg = parseJson(row.config, {});
   const sec = parseJson(row.secret, {});
-  const kind = KINDS[row.kind] || { publicFields: [], secretFields: [] };
+  const k = providerKind(row);
+  const kind = KINDS[k] || { publicFields: [], secretFields: [] };
   const out = {
-    id: row.id, kind: row.kind, kind_label: kind.label || row.kind, name: row.name,
+    id: row.id, kind: k, kind_label: kind.label || k, name: row.name,
     enabled: !!row.enabled, poll_interval_sec: row.poll_interval_sec,
     last_poll_at: row.last_poll_at || null, last_call_at: row.last_call_at || null,
     last_error: row.last_error || '', updated_at: row.updated_at || null,
@@ -66,7 +105,7 @@ export function getProviderRow(db, id) {
 export function saveProvider(db, args = {}, userId = null) {
   const existing = args.id ? getProviderRow(db, args.id) : null;
   if (args.id && !existing) throw new ProviderError('Провайдер не найден.', 404);
-  const kind = String(existing ? existing.kind : (args.kind || ''));
+  const kind = existing ? providerKind(existing) : String(args.kind || '');
   const def = KINDS[kind];
   if (!def) throw new ProviderError('Неизвестный провайдер телефонии.', 400);
 
@@ -92,8 +131,13 @@ export function saveProvider(db, args = {}, userId = null) {
     poll = Math.max(MIN_POLL, Math.min(MAX_POLL, Math.round(n)));
   }
   const enabled = args.enabled === undefined ? (existing ? !!existing.enabled : false) : !!args.enabled;
-  if (kind === 'onlinepbx' && enabled && (!cfg.domain || !sec.auth_key)) {
-    throw new ProviderError('Чтобы включить onlinePBX, укажите домен и ключ API.', 400);
+  // Проверка «чего не хватает, чтобы включить» описана У ВИДА, а не написана
+  // здесь по имени: третий провайдер не должен требовать правки этой функции.
+  const need = def.requiredToEnable || { config: [], secret: [] };
+  if (enabled) {
+    const missing = (need.config || []).some((f) => !String(cfg[f] || '').trim())
+                 || (need.secret || []).some((f) => !String(sec[f] || '').trim());
+    if (missing) throw new ProviderError(def.requiredMessage || 'Заполните настройки подключения.', 400);
   }
 
   if (existing) {
@@ -102,9 +146,11 @@ export function saveProvider(db, args = {}, userId = null) {
       .run({ id: existing.id, name, enabled: enabled ? 1 : 0, config: JSON.stringify(cfg), secret: JSON.stringify(sec), poll });
     return rowToPublic(getProviderRow(db, existing.id));
   }
-  const info = db.prepare(`INSERT INTO telephony_providers (kind, name, enabled, config, secret, poll_interval_sec)
-      VALUES (@kind, @name, @enabled, @config, @secret, @poll)`)
-    .run({ kind, name, enabled: enabled ? 1 : 0, config: JSON.stringify(cfg), secret: JSON.stringify(sec), poll });
+  // kind ЗАПОЛНЯЕТСЯ ЛЕГЕНДОЙ: старый CHECK принимает только 'onlinepbx', а
+  // настоящий вид кладётся в vendor (миграция 135 объясняет, почему так).
+  const info = db.prepare(`INSERT INTO telephony_providers (kind, vendor, name, enabled, config, secret, poll_interval_sec)
+      VALUES ('onlinepbx', @vendor, @name, @enabled, @config, @secret, @poll)`)
+    .run({ vendor: kind, name, enabled: enabled ? 1 : 0, config: JSON.stringify(cfg), secret: JSON.stringify(sec), poll });
   return rowToPublic(getProviderRow(db, info.lastInsertRowid));
 }
 
@@ -165,16 +211,48 @@ export const TEST_MESSAGES = {
   rate_limited:    'onlinePBX просит не чаще: подождите минуту и повторите.',
 };
 
+// Тот же набор причин, но ИМЕНЕМ ПРОВАЙДЕРА: администратор видит «Нет связи с
+// „Моими Звонками“», а не «Нет связи с onlinePBX» на экране «Моих Звонков».
+// TEST_MESSAGES остаётся как есть — на него уже ссылаются экран и тесты.
+export function testMessage(reason, kind = 'onlinepbx') {
+  const name = (KINDS[kind] && KINDS[kind].label) || 'телефония';
+  const by = {
+    bad_credentials: `Адрес или ключ API не подходят. Проверьте данные в личном кабинете «${name}».`,
+    offline:         `Нет связи с «${name}». Проверьте интернет на этом компьютере.`,
+    server_error:    `«${name}» ответили ошибкой. Попробуйте позже.`,
+    bad_response:    `Ответ «${name}» не удалось разобрать. Попробуйте позже.`,
+    rate_limited:    `«${name}» просят не чаще: подождите минуту и повторите.`,
+  };
+  if (kind === 'onlinepbx') return TEST_MESSAGES[reason] || TEST_MESSAGES.server_error;
+  return by[reason] || by.server_error;
+}
+
 /**
  * «Проверить подключение»: введённые домен/ключ, если поля заполнены, иначе
  * сохранённые. Проверка — настоящий запрос истории за последнюю минуту:
  * ключ выдан, домен отвечает, история читается.
  */
-export async function testProvider(db, args = {}, { pbxHistoryImpl = pbxHistory, pbxAuthImpl = pbxAuth } = {}) {
+export async function testProvider(db, args = {}, { pbxHistoryImpl = pbxHistory, pbxAuthImpl = pbxAuth, mzHistoryImpl = mzHistory } = {}) {
   const row = args.id ? getProviderRow(db, args.id) : null;
   const cfg = row ? providerConfig(row) : {};
   const sec = row ? providerSecrets(row) : {};
   const typed = (v) => (typeof v === 'string' && v.trim() ? v.trim() : '');
+
+  // MOIZVONKI_V1 — у «Моих Звонков» нет выдаваемой пары ключей: подпись едет в
+  // каждом запросе. Поэтому проверка короче — один безобидный запрос истории,
+  // который никому не звонит.
+  const kind = providerKind(row) || String(args.kind || 'onlinepbx');
+  if (kind === 'moizvonki') {
+    const mzDomain = normalizeMzDomain(typed(args.config && args.config.domain) || cfg.domain);
+    const userName = typed(args.config && args.config.user_name) || cfg.user_name || '';
+    const apiKey = typed(args.secret && args.secret.api_key) || sec.api_key || '';
+    if (!mzDomain || !userName || !apiKey) return { ok: false, reason: 'bad_credentials', message: testMessage('bad_credentials', 'moizvonki') };
+    const r = await mzHistoryImpl(mzDomain, Math.floor(Date.now() / 1000) - 60, { userName, apiKey });
+    if (!r.ok) return { ok: false, reason: r.reason, message: testMessage(r.reason, 'moizvonki') };
+    const list = r.data && (Array.isArray(r.data.calls) ? r.data.calls : (Array.isArray(r.data.result) ? r.data.result : []));
+    return { ok: true, calls_last_minute: list.length };
+  }
+
   const domain = normalizeDomain(typed(args.config && args.config.domain) || cfg.domain);
   const authKey = typed(args.secret && args.secret.auth_key) || sec.auth_key || '';
   if (!domain || !authKey) return { ok: false, reason: 'bad_credentials', message: TEST_MESSAGES.bad_credentials };

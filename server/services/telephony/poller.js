@@ -24,7 +24,7 @@ import { leadFromCall } from '../crm/lead-from-call.js';
 // тиком, каждый своим клиентом, и складываются в ТУ ЖЕ таблицу звонков тем же
 // recordCall'ом: журнал, пациент по номеру и «звонок → заявка» одни на всех.
 import { pbxHistory, normalizePbxCall } from './onlinepbx.js';
-import { pbxOptions, recordProviderPoll, noteProviderCall } from './providers.js';
+import { pbxOptions, recordProviderPoll, noteProviderCall, providerKind } from './providers.js';
 
 // Cursor overlap. Binotel's since-methods key on the call's startTime; a call
 // that STARTED just before our last poll but was still ringing at poll time
@@ -226,7 +226,10 @@ async function pollProviders(db, { fetchImpl, timeoutMs, maxBytes, pbxHistoryImp
   let rows = [];
   try { rows = db.prepare('SELECT * FROM telephony_providers WHERE enabled = 1 ORDER BY id').all(); } catch { return; }
   for (const p of rows) {
-    if (p.kind !== 'onlinepbx') continue;
+    // MOIZVONKI_V1 — вид берётся из vendor, а не из kind: в kind у ВСЕХ строк
+    // стоит 'onlinepbx' из-за старого CHECK (миграция 135). По kind опрос
+    // полез бы в onlinePBX за историей «Моих Звонков».
+    if (providerKind(p) !== 'onlinepbx') continue;
     try {
       const o = pbxOptions(db, p, { fetchImpl, timeoutMs, maxBytes });
       if (!o.domain || (!o.authKey && !o.creds)) { recordProviderPoll(db, p.id, { ok: false, error: 'bad_credentials' }); continue; }
@@ -238,7 +241,7 @@ async function pollProviders(db, { fetchImpl, timeoutMs, maxBytes, pbxHistoryImp
       for (const c of (Array.isArray(r.data) ? r.data : [])) {
         const norm = normalizePbxCall(c);
         if (!norm) continue;
-        try { recordCall(db, norm, 'poll', { id: p.id, kind: p.kind }); }
+        try { recordCall(db, norm, 'poll', { id: p.id, kind: providerKind(p) }); }
         catch (e) { console.warn('[telephony] onlinepbx call not recorded:', e && e.message); }
       }
       recordProviderPoll(db, p.id, { ok: true });

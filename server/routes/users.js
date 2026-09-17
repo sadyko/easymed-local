@@ -14,6 +14,11 @@ const DATE_FIELDS = ['hire_date', 'license_expiry_date'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}/;
 const STAFF_TYPES = ['', 'doctor', 'admin_staff', 'mid_low'];
 const SCHEDULING_MODES = ['schedulable', 'live_queue'];
+// CALL_FROM_CRM_V1 — a PBX extension as the exchanges accept it: onlinePBX uses
+// 100…4999, Binotel's own numbering differs, and leading zeros occur. Digits
+// plus the two keypad symbols, twelve characters at most — long enough for any
+// house numbering, short enough that a full outside number cannot hide here.
+const EXTENSION_RE = /^[0-9*#]{1,12}$/;
 
 // Parses/validates the "employee record" fields shared by POST and PATCH.
 // Returns only the keys present in `body` (so PATCH can do a partial update),
@@ -84,6 +89,19 @@ export function parseEmployeeFields(body, db, currentRole) {
   if (body.scheduling_mode !== undefined) {
     if (!SCHEDULING_MODES.includes(body.scheduling_mode)) return { ok: false, message: 'Unknown scheduling mode.' };
     fields.scheduling_mode = body.scheduling_mode;
+  }
+
+  // CALL_FROM_CRM_V1 (migration 134) — the employee's PBX extension. Deliberately
+  // NOT one of TEXT_FIELDS: those take any 120 characters, and this value gets
+  // DIALLED. Whatever lands here is handed to the PBX as "which handset to
+  // ring", so it is checked the way a dialled string must be — digits and the
+  // two keypad symbols, nothing else, and short. Empty clears it: plenty of
+  // staff are not on the phone system at all, and that is not an error.
+  if (body.pbx_extension !== undefined) {
+    const ext = String(body.pbx_extension ?? '').trim();
+    if (ext === '') fields.pbx_extension = null;
+    else if (!EXTENSION_RE.test(ext)) return { ok: false, message: 'Invalid extension.' };
+    else fields.pbx_extension = ext;
   }
 
   if (body.branch_id !== undefined) {
@@ -280,6 +298,7 @@ export function employeeView(u) {
     employment_type: u.employment_type, salary_type: u.salary_type,
     salary_fixed: u.salary_fixed, salary_percent: u.salary_percent,
     staff_type: u.staff_type, scheduling_mode: u.scheduling_mode, branch_id: u.branch_id,
+    pbx_extension: u.pbx_extension || '',   // CALL_FROM_CRM_V1 — внутренний номер на АТС
     working_hours: u.working_hours, service_rate_default: u.service_rate_default,
     referral_rate_default: u.referral_rate_default,
     service_rates: parseJsonArray(u.service_rates), referral_rates: parseJsonArray(u.referral_rates),

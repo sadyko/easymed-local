@@ -341,6 +341,7 @@ function openEditor(user, root) {
     const emp = {
         last_name: '', first_name: '', middle_name: '', phone: '', email: '',
         staff_type: '', scheduling_mode: 'schedulable', department_id: '', is_doctor: false,
+        pbx_extension: '',   // CALL_FROM_CRM_V1
         specialty: '', specialties: [], doctor_category: '', hire_date: '', license_number: '', license_expiry_date: '',
         branch_id: '', employment_type: '', salary_type: '', salary_fixed: '', salary_percent: '',
         working_hours: {}, service_rates: [], referral_rates: [],
@@ -353,6 +354,7 @@ function openEditor(user, root) {
             last_name: user.last_name || '', first_name: user.first_name || '', middle_name: user.middle_name || '',
             phone: user.phone || '', email: user.email || '',
             staff_type: user.staff_type || (user.is_doctor ? 'doctor' : ''), scheduling_mode: user.scheduling_mode || 'schedulable',
+            pbx_extension: user.pbx_extension || '',   // CALL_FROM_CRM_V1
             department_id: user.department_id != null ? String(user.department_id) : '',
             is_doctor: !!user.is_doctor, specialty: user.specialty || '', doctor_category: user.doctor_category || '', hire_date: user.hire_date || '',
             // MULTI_SPECIALTY_V1 — the list from the server (primary first); an old record has only the column
@@ -524,7 +526,13 @@ function openEditor(user, root) {
         if (active === 'personal') {
             body.append(head('Личные данные', 'Личные и контактные данные сотрудника.'),
                 grid(field('Фамилия', txt('last_name', 'Каюмов'), { required: true }), field('Имя', txt('first_name', 'Араббек'), { required: true }),
-                    field('Отчество', txt('middle_name', 'Акмалович')), field('Телефон', phonef('phone', '+998 90 961 00 04'), { required: true }), field('Email', txt('email', 'name@example.uz'))));
+                    field('Отчество', txt('middle_name', 'Акмалович')), field('Телефон', phonef('phone', '+998 90 961 00 04'), { required: true }), field('Email', txt('email', 'name@example.uz')),
+                    // CALL_FROM_CRM_V1 — внутренний номер на АТС. Среди контактов,
+                    // а не в «Должности»: это способ дозвониться до человека, как
+                    // телефон и почта. Пустое поле — обычное дело: не все сидят на
+                    // телефоне, и кнопка «Позвонить» тогда честно скажет, чего нет.
+                    field('Внутренний номер (АТС)', txt('pbx_extension', '101'))),
+                hint('Внутренний номер нужен, чтобы звонить пациенту из программы: сначала звонит трубка сотрудника, потом набирается пациент. Номер выдаёт ваша телефония.'));
         } else if (active === 'job') {
             body.append(head('Должность', 'Роль, отдел и должность в клинике.'),
                 field('Категория сотрудника', sel('staff_type', [['', 'Выберите категорию…']].concat(STAFF_TYPES), pickCategory), { required: true }),
@@ -669,6 +677,11 @@ function openEditor(user, root) {
         const payload = {
             last_name: emp.last_name.trim(), first_name: emp.first_name.trim(), middle_name: emp.middle_name.trim(),
             phone: emp.phone.trim(), email: emp.email.trim(), staff_type: emp.staff_type, scheduling_mode: emp.scheduling_mode || 'schedulable',
+            // CALL_FROM_CRM_V1 — внутренний номер. Пустая строка здесь ОСМЫСЛЕННА:
+            // сервер понимает её как «стереть номер» (routes/users.js), поэтому
+            // сотрудника можно снять с телефона, не заводя для этого отдельного
+            // действия.
+            pbx_extension: String(emp.pbx_extension || '').trim(),
             // `position` is deliberately NOT sent: the field is gone from the UI,
             // and PATCH only writes keys it receives, so any value an existing
             // record already carries is left untouched rather than blanked.
