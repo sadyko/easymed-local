@@ -114,6 +114,33 @@ export function saveSettings(db, args = {}, userId = null) {
   return publicSettings(db);
 }
 
+/**
+ * FORGET_BINOTEL_V1 (2026-09-17) — УБРАТЬ ПОДКЛЮЧЕНИЕ BINOTEL.
+ *
+ * Владелец: «я не могу удалить бинотел, можешь настроить так чтоб можно было
+ * удалить бинотел?» — и он прав, кнопки не было: у остальных линий карточка
+ * своя строка в telephony_providers и её можно удалить, а Binotel живёт
+ * ЕДИНСТВЕННОЙ строкой telephony_settings (миграция 125), которая должна
+ * существовать всегда — её читают опрос, вебхуки и экран.
+ *
+ * Поэтому «удалить» здесь значит ЗАБЫТЬ: стереть ключ, секрет и номер компании,
+ * выключить опрос и вебхуки, убрать последнюю ошибку. Строка остаётся пустой —
+ * ровно в том виде, в каком она приезжает в новую клинику, — и Binotel можно
+ * подключить заново, введя ключи.
+ *
+ * ЧТО НЕ ТРОГАЕТСЯ: звонки в журнале. Они уже случились, и стирать историю
+ * разговоров клиники из-за смены провайдера нельзя ни при каких обстоятельствах.
+ */
+export function forgetBinotel(db) {
+  db.prepare(`UPDATE telephony_settings SET
+      enabled = 0, webhooks_enabled = 0,
+      api_key = '', api_secret = '', company_id = '',
+      last_error = '', dial_provider = CASE WHEN dial_provider = 'binotel' THEN '' ELSE dial_provider END,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+    WHERE id = 1`).run();
+  return publicSettings(db);
+}
+
 // Server-only: the poller and «Проверить подключение» need the real secret.
 // Never called from anything that builds an HTTP response.
 export function getCredentials(db) {

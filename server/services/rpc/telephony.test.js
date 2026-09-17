@@ -223,11 +223,15 @@ test("'callcenter' is sellable — the locked-module screen's request must not 4
 test('provider RPCs: admin-only counting extra roles; the secret never crosses the boundary; validation is 400/404, not 500', async () => {
   const db = fresh();
   assert.throws(() => telephonyProvidersList(db, {}, registrar), (e) => e instanceof RpcError && e.status === 403);
-  assert.throws(() => telephonyProviderSave(db, {}, registrar), (e) => e.status === 403);
+  // KEY_GUARD_V1 — сохранение стало async: новый ключ проверяется у станции ДО
+  // записи, чтобы неверный не стирал рабочую пару ключей.
+  await assert.rejects(() => telephonyProviderSave(db, {}, registrar), (e) => e.status === 403);
   assert.throws(() => telephonyProviderDelete(db, {}, registrar), (e) => e.status === 403);
   await assert.rejects(() => telephonyProviderTest(db, {}, registrar), (e) => e.status === 403);
 
-  const saved = telephonyProviderSave(db, { kind: 'onlinepbx', name: 'Офис', config: { domain: 'c.onpbx.ru' }, secret: { auth_key: 'AUTH' } }, doctorAdmin);
+  // Ключ проверяется у станции — в тесте она отвечает «принят», сети нет.
+  const authOk = { pbxAuthImpl: async () => ({ ok: true, key_id: 'i', key: 'k' }) };
+  const saved = await telephonyProviderSave(db, { kind: 'onlinepbx', name: 'Офис', config: { domain: 'c.onpbx.ru' }, secret: { auth_key: 'AUTH' } }, doctorAdmin, authOk);
   assert.equal(saved.kind, 'onlinepbx');
   assert.deepEqual(saved.secret_set, { auth_key: true });
   const list = telephonyProvidersList(db, {}, admin);
@@ -237,9 +241,18 @@ test('provider RPCs: admin-only counting extra roles; the secret never crosses t
   assert.equal(list.providers.length, 1);
   assert.equal(JSON.stringify(list).includes('AUTH'), false, 'auth_key is server-only');
 
-  assert.throws(() => telephonyProviderSave(db, { kind: 'skype' }, admin), (e) => e instanceof RpcError && e.status === 400);
-  assert.throws(() => telephonyProviderSave(db, { id: saved.id, enabled: true, config: { domain: '' } }, admin),
+  await assert.rejects(() => telephonyProviderSave(db, { kind: 'skype' }, admin), (e) => e instanceof RpcError && e.status === 400);
+  await assert.rejects(() => telephonyProviderSave(db, { id: saved.id, enabled: true, config: { domain: '' } }, admin),
     (e) => e instanceof RpcError && e.status === 400);
+
+  // KEY_GUARD_V1 — ключ, который станция не приняла, НЕ сохраняется: рабочая
+  // линия клиники не должна ломаться от одной опечатки.
+  await assert.rejects(
+    () => telephonyProviderSave(db, { id: saved.id, secret: { auth_key: 'WRONG' } }, admin,
+      { pbxAuthImpl: async () => ({ ok: false, reason: 'bad_credentials' }) }),
+    (e) => e.status === 400 && /не подошёл/.test(e.message));
+  // И прежний ключ остался на месте.
+  assert.deepEqual(telephonyProvidersList(db, {}, admin).providers[0].secret_set, { auth_key: true });
   assert.throws(() => telephonyProviderDelete(db, { id: 999 }, admin), (e) => e instanceof RpcError && e.status === 404);
 
   const r = await telephonyProviderTest(db, { id: saved.id }, admin, {

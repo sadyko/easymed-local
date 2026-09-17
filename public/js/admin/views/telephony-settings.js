@@ -234,11 +234,18 @@ function providersCard() {
 
     // Binotel — карточка из строки telephony_settings: настроен, если есть
     // ключ и secret; статус — по тем же трём фактам, что у остальных.
-    grid.appendChild(providerTile({
-        key: 'binotel', kind: 'binotel', name: 'Binotel', kindLabel: providerLabel('binotel'),
-        status: providerStatus({ enabled: !!s.enabled, configured: !!(s.api_key && s.api_secret_set), last_error: s.last_error || '' }),
-        lastCall: s.last_call_at, lastError: s.last_error || '',
-    }));
+    // FORGET_BINOTEL_V1 — плитка есть, пока линия ЖИВА (ключ, включённость) или
+    // пока её карточка открыта. Удалённый Binotel из ряда пропадает — иначе
+    // «удалить» выглядело бы как «ничего не произошло», — и возвращается через
+    // «Добавить», как любая другая линия.
+    const binotelLives = !!(s.api_key || s.api_secret_set || s.enabled) || state.selected === 'binotel';
+    if (binotelLives) {
+        grid.appendChild(providerTile({
+            key: 'binotel', kind: 'binotel', name: 'Binotel', kindLabel: providerLabel('binotel'),
+            status: providerStatus({ enabled: !!s.enabled, configured: !!(s.api_key && s.api_secret_set), last_error: s.last_error || '' }),
+            lastCall: s.last_call_at, lastError: s.last_error || '',
+        }));
+    }
     for (const p of state.providers) {
         grid.appendChild(providerTile({
             key: p.id, kind: p.kind, name: p.name, kindLabel: p.kind_label,
@@ -314,6 +321,14 @@ function kindPicker() {
     return h('div', { class: 'tel-kinds', role: 'group', 'aria-label': tr('Какую АТС подключить?') },
         h('div', { class: 'tel-kinds-title' }, 'Какую АТС подключить?'),
         h('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap' } },
+            // FORGET_BINOTEL_V1 — удалённый Binotel возвращается отсюда же, что и
+            // остальные линии. Он не заводит новую строку (она одна и всегда
+            // есть) — просто открывается его карточка для ввода ключей.
+            ...(!(state.s.api_key || state.s.api_secret_set || state.s.enabled)
+                ? [h('button', { class: 'btn', type: 'button',
+                    onclick: () => { state.selected = 'binotel'; state.picking = false; paint(); } },
+                    providerLabel('binotel'))]
+                : []),
             ...state.kinds.map((k) => h('button', { class: 'btn', type: 'button',
                 onclick: () => { state.draftKind = k.kind; state.selected = 'new'; state.picking = false; paint(); } },
                 Icon('Phone', { size: 13 }), ' ', k.label))));
@@ -675,7 +690,32 @@ function connectionCard() {
             });
         } }, Icon('Refresh', { size: 13 }), ' ', tr('Проверить подключение'));
 
-    card.appendChild(h('div', { class: 'row', style: { gap: '8px', marginTop: '12px' } }, saveBtn, testBtn));
+    // FORGET_BINOTEL_V1 — владелец: «я не могу удалить бинотел». И правда не мог:
+    // у остальных линий карточку можно удалить, а у Binotel кнопки не было, хотя
+    // клиника им уже не пользуется. «Удалить» здесь значит забыть ключи и
+    // выключить линию: её строка настроек нужна программе всегда, но пустая она
+    // ничем не отличается от «не подключено». Кнопки нет, когда и забывать
+    // нечего, — пустая линия и так не мешает.
+    const actions = h('div', { class: 'row', style: { gap: '8px', marginTop: '12px' } }, saveBtn, testBtn);
+    if (s.api_key || s.api_secret_set || s.enabled) {
+        const forgetBtn = h('button', { class: 'btn btn-ghost tel-prov-del', type: 'button',
+            onclick: async () => {
+                if (!window.confirm(tr('Удалить подключение Binotel? Ключи будут стёрты, опрос выключен. Звонки в журнале останутся.'))) return;
+                await run(forgetBtn, async () => {
+                    await rpc('telephony_forget_binotel', {});
+                    state.s = await rpc('telephony_settings_get', {});
+                    await loadProviders();
+                    // Смотреть на пустую карточку незачем: показываем ту линию,
+                    // которая у клиники осталась.
+                    state.selected = state.providers.length ? state.providers[0].id : 'binotel';
+                    toast('Подключение Binotel удалено.', 'success');
+                    paint();
+                });
+            } }, Icon('Trash', { size: 13 }), ' ', tr('Удалить подключение'));
+        actions.appendChild(h('span', { class: 'grow' }));
+        actions.appendChild(forgetBtn);
+    }
+    card.appendChild(actions);
     card.appendChild(resultLine);
 
     return h('div', { class: 'card', style: { marginBottom: '16px' } },

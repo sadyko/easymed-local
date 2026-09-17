@@ -286,13 +286,27 @@ test('«нет зарегистрированного телефона» объ�
   } finally { db.close(); }
 });
 
-test('незнакомый ответ станции показывается как есть — чужой текст лучше пустоты', async () => {
+test('незнакомый ответ станции: СНАЧАЛА по-русски, чужой текст в скобках', async () => {
   const db = seed({ binotel: true });
   try {
     const r = await dialCall(db, { extension: '108', phone: '+998901234567' }, {
       binotelDialImpl: async () => ({ ok: false, reason: 'server_error', comment: 'Quota exceeded for today' }),
     });
-    assert.match(r.message, /Quota exceeded for today/);
+    // Оператор читает русскую фразу, а английский остаётся для разбора.
+    assert.match(r.message, /^Телефония ответила ошибкой/);
+    assert.match(r.message, /\(станция: Quota exceeded for today\)/);
+  } finally { db.close(); }
+});
+
+test('«Wrong api key» — это НЕ «ошибка телефонии», а «ключ не подошёл»', async () => {
+  const db = seed({ binotel: true });
+  try {
+    // Живой ответ Binotel на снимке владельца: ключ линии давно недействителен.
+    const r = await dialCall(db, { extension: '108', phone: '+998901234567' }, {
+      binotelDialImpl: async () => ({ ok: false, reason: 'bad_credentials', comment: 'Wrong api key' }),
+    });
+    assert.match(r.message, /ключ доступа/, 'по-русски сказано, в чём дело');
+    assert.match(r.message, /Wrong api key/, 'ответ станции сохранён для разбора');
   } finally { db.close(); }
 });
 

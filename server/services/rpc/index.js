@@ -50,7 +50,8 @@ import { telegramSettingsGet, telegramSettingsSave, telegramTokenClear, telegram
 import { licenceStatus, licenceUnlock, licenceEnroll, moduleRequest } from './licence.js';   // LICENCE_CORE_V1
 import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls, telephonyDispositions,
          telephonyProvidersList, telephonyProviderSave, telephonyProviderDelete, telephonyProviderTest,
-         telephonyDial, crmLeadCalls, telephonyOperatorStats, telephonyCallRecording } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1 / TELEPHONY_PROVIDERS_V1
+         telephonyDial, crmLeadCalls, telephonyOperatorStats, telephonyCallRecording,
+         telephonyForgetBinotel } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1 / TELEPHONY_PROVIDERS_V1
 import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss } from './lis.js';   // LIS_INGEST_V1
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
@@ -463,6 +464,8 @@ export const RPC = {
   telephony_providers_list:  (db, args, user) => telephonyProvidersList(db, args, user),
   telephony_provider_save:   (db, args, user) => telephonyProviderSave(db, args, user),
   telephony_provider_delete: (db, args, user) => telephonyProviderDelete(db, args, user),
+  // FORGET_BINOTEL_V1 — убрать подключение Binotel (строка настроек остаётся пустой).
+  telephony_forget_binotel:  (db, args, user) => telephonyForgetBinotel(db, args, user),
   telephony_provider_test:   (db, args, user) => telephonyProviderTest(db, args, user),
   // CALL_FROM_CRM_V1 — «Позвонить»: единственный вызов телефонии не для
   // администратора. Внутренний номер берётся из сессии, не из запроса.

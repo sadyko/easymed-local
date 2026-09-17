@@ -6,17 +6,17 @@
 // Nothing returned here ever contains api_secret — only api_secret_set.
 
 import { hasAnyRole } from '../roles.js';
-import { publicSettings, saveSettings, getCredentials, listDispositions, SettingsError } from '../telephony/settings.js';
+import { publicSettings, saveSettings, getCredentials, listDispositions, SettingsError, forgetBinotel } from '../telephony/settings.js';
 import { binotelCall } from '../telephony/binotel.js';
 import { wakePolling } from '../telephony/poller.js';
 // TELEPHONY_PROVIDERS_V1 — провайдеры кроме Binotel.
 import { listProviders, saveProvider, deleteProvider, testProvider, ProviderError, KINDS,
-         getProviderRow, pbxOptions, providerConfig } from '../telephony/providers.js';
+         getProviderRow, pbxOptions, providerConfig, providerSecrets, providerKind } from '../telephony/providers.js';
 // CALL_FROM_CRM_V1 — один разъём набора на все телефонии.
 import { dialCall } from '../telephony/dial.js';
 // CALL_RECORDING_V1 — разбор ссылки на запись и история станции.
 import { recordingUrlOf } from '../telephony/recording.js';
-import { pbxHistory, pbxRecordingUrl } from '../telephony/onlinepbx.js';
+import { pbxHistory, pbxRecordingUrl, pbxAuth } from '../telephony/onlinepbx.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -131,15 +131,59 @@ export function telephonyDispositions(db, _args, user) {
 // не выходят (secret_set), а сохранение с пустым секретом не стирает
 // сохранённый — та же защита, что у Binotel.
 // ---------------------------------------------------------------------------
+// FORGET_BINOTEL_V1 — «удалить» Binotel: его строка настроек остаётся, но
+// становится пустой, как в новой клинике. Админское действие, как и все
+// остальные в этом разделе.
+export function telephonyForgetBinotel(db, _args, user) {
+  requireAdmin(user);
+  const out = forgetBinotel(db);
+  // Опрос просыпается сразу: иначе выключённая линия ещё интервал стучалась бы
+  // к вендору со стёртым ключом и писала бы себе ошибку.
+  wakePolling();
+  return out;
+}
+
 export function telephonyProvidersList(db, _args, user) {
   requireAdmin(user);
   return { kinds: Object.entries(KINDS).map(([k, v]) => ({ kind: k, label: v.label })), providers: listProviders(db) };
 }
 
-export function telephonyProviderSave(db, args, user) {
+// KEY_GUARD_V1 (2026-09-17) — НЕВЕРНЫЙ КЛЮЧ НЕ ДОЛЖЕН ЛОМАТЬ РАБОЧУЮ ЛИНИЮ.
+//
+// Что случилось у клиники и почему это стоило дня работы. В настройках был
+// сохранён новый ключ API onlinePBX — и он оказался не тем. Сохранение при этом
+// СТИРАЕТ выданную станцией пару ключей (правильно: они выданы под старый ключ),
+// а новый ключ станция не принимает. В итоге линия, которая только что работала,
+// начинает на КАЖДЫЙ запрос отвечать «Wrong api key»: не идут ни звонки, ни
+// записи, ни опрос журнала. Причём молча — сохранение прошло «успешно».
+//
+// Поэтому теперь ключ ПРОВЕРЯЕТСЯ ДО СОХРАНЕНИЯ. Не подошёл — не сохраняем: у
+// клиники остаётся прежний, работающий, и человек видит словами, что ключ не
+// тот. Это ровно та защита, которой не хватило: «сохранил и всё сломалось» не
+// должно быть возможным в разделе, где одна опечатка глушит телефонию.
+//
+// Проверка — только при СМЕНЕ секрета: сохранение названия или добавочного
+// номера не должно ходить к вендору.
+export async function telephonyProviderSave(db, args, user, { pbxAuthImpl = pbxAuth } = {}) {
   requireAdmin(user);
+  const a = args || {};
+  const existing = a.id ? getProviderRow(db, a.id) : null;
+  const kind = existing ? providerKind(existing) : String(a.kind || '');
+  const typedKey = String((a.secret && a.secret.auth_key) || '').trim();
+  const oldSecret = existing ? providerSecrets(existing) : {};
+
+  if (kind === 'onlinepbx' && typedKey && typedKey !== oldSecret.auth_key) {
+    const domain = String((a.config && a.config.domain) || (existing ? providerConfig(existing).domain : '')).trim();
+    const check = await pbxAuthImpl(domain, typedKey);
+    if (!check.ok) {
+      throw new RpcError(
+        'Ключ API не подошёл — станция его не приняла. Прежние настройки оставлены без изменений: возьмите ключ в личном кабинете onlinePBX («Интеграция → API») и вставьте его целиком, без пробелов.',
+        400);
+    }
+  }
+
   let out;
-  try { out = saveProvider(db, args || {}, user && user.id ? user.id : null); }
+  try { out = saveProvider(db, a, user && user.id ? user.id : null); }
   catch (e) { if (e instanceof ProviderError) throw new RpcError(e.message, e.status); throw e; }
   wakePolling();
   return out;

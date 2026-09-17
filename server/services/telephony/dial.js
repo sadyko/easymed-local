@@ -221,7 +221,15 @@ function stationSaid(comment) {
 function fail(reason, comment = '') {
   const r = reason || 'server_error';
   const said = stationSaid(comment);
-  // Когда станция объяснила причину понятными словами, её объяснение и есть
-  // ответ: наша общая фраза «попробуйте через минуту» рядом с ним только мешает.
-  return { ok: false, reason: r, message: said || dialMessage(r) };
+  // ПОРЯДОК ВАЖЕН, и вот почему. Если ответ станции удалось ПЕРЕВЕСТИ (мы знаем
+  // эту причину), он и есть ответ: он точнее нашей общей фразы и говорит, что
+  // делать. Если перевести не удалось, впереди идёт НАША фраза — оператор
+  // читает по-русски, — а чужой текст остаётся в скобках для того, кто будет
+  // разбираться: «Телефония не приняла ключ доступа… (станция: Wrong api key)».
+  // Раньше здесь оставался только английский, и владелец справедливо спросил:
+  // «what is this?»
+  const known = said && said !== 'Станция ответила: ' + String(comment || '').trim().slice(0, 160);
+  if (known) return { ok: false, reason: r, message: said };
+  const raw = String(comment || '').trim().slice(0, 120);
+  return { ok: false, reason: r, message: raw ? `${dialMessage(r)} (станция: ${raw})` : dialMessage(r) };
 }
