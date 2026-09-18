@@ -55,7 +55,7 @@ import { levelsFor, openAction, actionFor, levelFromActions, actionsFromLevel }
 // ROLES_MATRIX_V1 — матрица «раздел → окно → действие» по общему справочнику
 // прав (shared/permission-catalog.js). Старые поля sections/levels выводятся
 // из неё при сохранении, чтобы прежние ворота продолжали работать.
-import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm3';
+import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm4';
 
 // ROLE_KEYS_V2 — матрица строится из permissions.js NAV_MODULES, того же
 // списка, который читают сами ворота бокового меню. Когда-то это была вторая

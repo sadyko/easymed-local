@@ -7234,6 +7234,9 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .rm-toggle:hover .rm-title { color: var(--primary-700, var(--ink-900)); }
 .rm-toggle:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--primary-50); }
 .rm-chev { display: inline-grid; place-items: center; flex: 0 0 auto; color: var(--ink-400); transition: transform .15s ease; }
+.rm-chev.is-blank { width: 14px; height: 14px; }
+.rm-toggle.is-static { cursor: default; }
+.rm-toggle.is-static:hover .rm-title { color: var(--ink-900); }
 .rm-section.is-open .rm-chev { transform: rotate(90deg); }
 .rm-count { font-size: 12.5px; }
 .rm-section.is-open .rm-count { display: none; }

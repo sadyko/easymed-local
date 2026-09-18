@@ -167,6 +167,12 @@ function paintNote(box, row, lvl) {
 // новый заход на экран начинается свёрнутым списком. Смена уровня самого
 // раздела раскрывает его: строки внутри должны быть перед глазами, а не за
 // шевроном.
+//
+// РАЗДЕЛ БЕЗ ОКОН И ДЕЙСТВИЙ (касса, отчёты, настройки…) не раскрывается
+// вовсе: у него нет шеврона и нет тела. Владелец раскрыл «Настройки», увидел
+// пустоту и написал «nothing is found» — шеврон, за которым ничего нет, это
+// обещание, которое экран не держит. Всё, что про такой раздел можно сказать,
+// уже в его строке: подпись и уровень справа.
 
 /** Счёт открытого внутри раздела — для свёрнутой строки. */
 function paintCount(box, s, controls) {
@@ -219,23 +225,28 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
         });
         controls[s.key] = picker;
 
-        const chev = h('span', { class: 'rm-chev' }, Icon('ChevronRight', { size: 14 }));
-        const toggle = h('button', {
-            type: 'button', class: 'rm-toggle', 'aria-expanded': 'false',
-            title: 'Показать окна и действия раздела',
-            onclick: () => setOpen(body.hidden),
-        }, chev,
-            h('span', { class: 'rm-name' },
-                h('span', { class: 'rm-title' }, s.label),
-                h('span', { class: 'rm-desc' }, note, count)));
+        const hasInner = !!((s.windows || []).length || (s.actions || []).length);
+        const name = h('span', { class: 'rm-name' },
+            h('span', { class: 'rm-title' }, s.label),
+            h('span', { class: 'rm-desc' }, note, count));
+        // Раздел без окон и действий — просто строка: шеврон, за которым пусто,
+        // обещал бы то, чего нет.
+        const toggle = hasInner
+            ? h('button', {
+                type: 'button', class: 'rm-toggle', 'aria-expanded': 'false',
+                title: 'Показать окна и действия раздела',
+                onclick: () => setOpen(body.hidden),
+            }, h('span', { class: 'rm-chev' }, Icon('ChevronRight', { size: 14 })), name)
+            : h('div', { class: 'rm-toggle is-static' }, h('span', { class: 'rm-chev is-blank', 'aria-hidden': 'true' }), name);
         const setOpen = (on) => {
+            if (!hasInner) return;
             body.hidden = !on;
             toggle.setAttribute('aria-expanded', on ? 'true' : 'false');
             toggle.setAttribute('title', tr(on ? 'Свернуть раздел' : 'Показать окна и действия раздела'));
             block.classList.toggle('is-open', on);
             if (on) openSections.add(s.key); else openSections.delete(s.key);
         };
-        panels.push({ key: s.key, open: setOpen });
+        if (hasInner) panels.push({ key: s.key, open: setOpen });
 
         block.appendChild(h('div', { class: 'rm-row rm-row-section' }, toggle, picker.el));
 
@@ -265,8 +276,10 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
         sub(tr('Действия'), s.actions);
         paintCount(count, s, controls);
 
-        block.appendChild(body);
-        setOpen(openSections.has(s.key));
+        if (hasInner) {
+            block.appendChild(body);
+            setOpen(openSections.has(s.key));
+        }
         host.appendChild(block);
     }
     return controls;

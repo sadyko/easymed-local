@@ -303,6 +303,12 @@ test('ROLES_ACCORDION_V1: разделы свёрнуты, раскрывают�
 
   // Радио внутри свёрнутого тела никуда не делись — сохранение читает их как прежде.
   assert.ok(radiosFor(root, 'inpatient.vitals').length > 0);
+
+  // Раздел без окон и действий не раскрывается: ни кнопки, ни тела — владелец
+  // раскрыл «Настройки», увидел пустоту и написал «nothing is found».
+  assert.ok(!toggleOf('settings') || toggleOf('settings').tagName !== 'BUTTON', 'у пустого раздела шеврон-кнопка');
+  assert.equal(bodyOf('settings'), undefined, 'у пустого раздела есть тело, в котором ничего нет');
+  assert.ok(radiosFor(root, 'settings').length > 0, 'уровень пустого раздела остался в форме');
 });
 
 test('ошибка загрузки: видимая ошибка с повтором, а НЕ пустая матрица', async () => {
