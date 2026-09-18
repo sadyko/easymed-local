@@ -32,7 +32,7 @@ const KNOWN_CLOUD_LEFTOVERS = new Set([
     'claim_promo_use',
     'release_promo_use',
     'restore_patient_discount',
-    'create_requisition',             // «Закупки»: заявки и партии — облачные таблицы
+    // 'create_requisition' — реализован (DEPARTMENTS_V1): заявка отдела на склад.
     'dispose_batch_stock',
     'get_or_create_batch',
     'get_or_create_batch_v2',

@@ -88,7 +88,9 @@ function paintChips() {
         refs.chipsEl.appendChild(h('button', {
             class: 'btn btn-sm ' + (active ? 'btn-primary' : 'btn-outline'),
             type: 'button',
-            onclick: () => setPane(c.id),
+            // DEPARTMENTS_V1 — «Отделения» больше не заглушка: это экран отделов
+            // (руководитель, команда, помещения, что выдано и на руках).
+            onclick: () => (c.id === 'departments' && refs.onNavigate ? refs.onNavigate('departments') : setPane(c.id)),
         }, Icon(c.icon, { size: 14 }), ' ' + c.label));
     }
     refs.chipsEl.appendChild(h('button', {
@@ -122,9 +124,9 @@ async function repaint() {
         case 'requisitions':    return renderRequisitionsTab(container);
         case 'purchase_orders': return renderPurchaseOrdersTab(container);
         case 'stockcount':      return renderStockCountsTab(container);
-        case 'departments':
+        case 'departments':   // DEPARTMENTS_V1 — сюда попадают только без onNavigate; иначе чип ведёт на #departments
             return void container.appendChild(comingSoon('Отделения',
-                'Товары и остатки по отделениям. Появится следующим шагом.', 'Building'));
+                'Товары и остатки по отделениям смотрите в «Настройки → Отделы».', 'Building'));
         case 'expiry':
             return void container.appendChild(comingSoon('Сроки годности',
                 'Партии и сроки годности (FEFO). Появится следующим шагом.', 'Clock'));

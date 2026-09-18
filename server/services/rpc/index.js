@@ -4,7 +4,8 @@
 import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDebt, changeUnpaidService, removeUnpaidService, refundPayment, createInvoiceForAdmission, removeAdmissionLineFromInvoice } from './billing.js';
 import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDispensedAdmissionItem } from './inventory.js';
 import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOARD_TREND_V1
-import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel } from './procurement.js';
+import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel, createRequisition } from './procurement.js';
+import { departmentList, departmentCard, departmentForm, departmentHeadSet, departmentMemberSet, departmentPlaceSet, departmentStaffOptions, departmentPlaceOptions } from './departments.js';   // DEPARTMENTS_V1
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit,
@@ -118,6 +119,16 @@ export const RPC = {
   approve_requisition_and_issue: (db, args, user) => approveRequisitionAndIssue(db, args, user),    // PROC_P2 — issue a requisition from the pool
   post_stock_count:              (db, args, user) => postStockCount(db, args, user),                // PROC_P2 — reconcile a physical count
   issue_stock_lines:             (db, args, user) => issueStockLines(db, args, user),               // PROCUREMENT_REDESIGN_V1 — Выдача со склада
+  create_requisition:            (db, args, user) => createRequisition(db, args, user),             // DEPARTMENTS_V1 — заявка отдела на склад
+  // DEPARTMENTS_V1 — отделы: список, карточка, формирование, мелкие правки, справочники для шагов.
+  department_list:               (db, args, user) => departmentList(db, args, user),
+  department_card:               (db, args, user) => departmentCard(db, args, user),
+  department_form:               (db, args, user) => departmentForm(db, args, user),
+  department_head_set:           (db, args, user) => departmentHeadSet(db, args, user),
+  department_member_set:         (db, args, user) => departmentMemberSet(db, args, user),
+  department_place_set:          (db, args, user) => departmentPlaceSet(db, args, user),
+  department_staff_options:      (db, args, user) => departmentStaffOptions(db, args, user),
+  department_place_options:      (db, args, user) => departmentPlaceOptions(db, args, user),
   // HOLDINGS_V1 — что выдано со склада медсестре / в кабинет / в отделение и
   // ещё не израсходовано; выдача пациенту с рук, а не со склада.
   holdings_list:                 (db, args, user) => holdingsList(db, args, user),

@@ -7246,3 +7246,76 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
     .rm-row { flex-direction: column; align-items: stretch; }
     .rm-levels { justify-content: flex-start; }
 }
+
+/* ---- DEPARTMENTS_V1 — отделы: список, мастер, карточка ---- */
+.dept-tools { display: flex; align-items: center; gap: 10px; padding: 6px 0 12px; font-size: 12.5px; }
+.dept-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.dept-name { font-weight: 600; color: var(--ink-900); }
+table.list td.num, table.list th.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.list tr.is-off td { color: var(--ink-400); }
+.dept-steps { display: flex; gap: 6px; list-style: none; margin: 0 0 14px; padding: 0; flex-wrap: wrap; }
+.dept-steps li { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border: 1px solid var(--ink-100); border-radius: 999px;
+  font-size: 13.5px; color: var(--ink-500); background: var(--white); }
+.dept-steps li.is-done { cursor: pointer; color: var(--ink-700); }
+.dept-steps li.is-on { border-color: var(--primary-500); color: var(--primary-700); font-weight: 600; }
+.dept-step-n { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--ink-100); font-size: 12.5px; font-weight: 600; }
+.dept-steps li.is-on .dept-step-n { background: var(--primary-600); color: #fff; }
+.dept-steps li.is-done .dept-step-n { background: var(--ok-50); color: var(--ok-700); }
+.dept-wizard-body { padding: 18px 20px 6px; }
+.dept-wizard-foot { display: flex; align-items: center; gap: 10px; padding: 12px 20px 16px; border-top: 1px solid var(--ink-100); }
+.dept-form { display: grid; gap: 14px; max-width: 760px; }
+.dept-form .field { margin: 0; }
+.dept-two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.dept-pick { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--ink-100); border-radius: 10px; background: var(--ink-25); }
+.dept-picker { position: relative; }
+.dept-check-list { max-height: 420px; overflow-y: auto; border: 1px solid var(--ink-100); border-radius: 10px; }
+.dept-check-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-top: 1px solid var(--ink-100); cursor: pointer; }
+.dept-check-row:first-child { border-top: 0; }
+.dept-check-row.is-on { background: var(--primary-50); }
+.dept-check-row.is-static { cursor: default; }
+.dept-check-row input[type="checkbox"] { flex: 0 0 auto; }
+.dept-check-main { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; font-size: 13.5px; }
+.dept-check-main .muted { font-size: 12.5px; }
+.dept-foreign { flex: 0 0 auto; font-size: 12.5px; color: var(--warn-700); background: var(--warn-50); border: 1px solid #fde9b6; border-radius: 999px; padding: 2px 8px; }
+.dept-floor { border: 1px solid var(--ink-100); border-radius: 10px; overflow: hidden; }
+.dept-floor + .dept-floor { margin-top: 10px; }
+.dept-floor-name { padding: 8px 12px; font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-500); background: var(--ink-25); border-bottom: 1px solid var(--ink-100); }
+.dept-floor .dept-check-row:first-of-type { border-top: 0; }
+.dept-review-row { display: grid; grid-template-columns: 160px 1fr; gap: 12px; padding: 8px 0; border-top: 1px solid var(--ink-100); font-size: 13.5px; align-items: start; }
+.dept-review-row:first-child { border-top: 0; }
+.dept-review-list { margin: 0; padding-left: 18px; }
+.dept-overview { padding: 6px 20px; }
+.dept-banner { display: flex; align-items: center; gap: 6px; padding: 10px 14px; margin-bottom: 14px; border-radius: 10px; background: var(--ok-50); color: var(--ok-700); border: 1px solid #c6efd9; font-size: 13.5px; }
+.dept-section { padding: 14px 20px; }
+.dept-section + .dept-section { margin-top: 14px; }
+.dept-section-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: var(--ink-900); margin-bottom: 8px; }
+.dept-events { display: flex; flex-direction: column; }
+.dept-event { display: grid; grid-template-columns: 150px 1fr; gap: 12px; padding: 9px 20px; border-top: 1px solid var(--ink-100); font-size: 13.5px; }
+.dept-event:first-child { border-top: 0; }
+.dept-event-when { font-size: 12.5px; }
+@media (max-width: 720px) {
+  .dept-two { grid-template-columns: 1fr; }
+  .dept-review-row, .dept-event { grid-template-columns: 1fr; gap: 2px; }
+}
+
+/* ---- STOCK_ISSUE_MODAL_V1 — общий диалог выдачи и заявки ---- */
+.sim-head { display: grid; grid-template-columns: 1fr 170px 36px; gap: 10px; font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-400); padding: 0 0 4px; }
+.sim-lines { display: flex; flex-direction: column; gap: 8px; }
+.sim-line { display: grid; grid-template-columns: 1fr 170px 36px; gap: 10px; align-items: start; }
+.sim-line.is-over .sim-avail { color: var(--crit-700); }
+.sim-line-prod { position: relative; min-width: 0; }
+.sim-line-qty { display: flex; align-items: center; gap: 8px; }
+.sim-avail { font-size: 12.5px; margin-top: 3px; }
+.sim-drop { position: absolute; left: 0; right: 0; top: 36px; z-index: 5; background: var(--white); border: 1px solid var(--ink-200); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(11, 20, 24, .12); overflow: hidden; }
+.sim-drop-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 12px; border: 0; background: none;
+  text-align: left; font: inherit; font-size: 13.5px; color: var(--ink-900); cursor: pointer; }
+.sim-drop-item:hover { background: var(--primary-50); }
+.sim-drop-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sim-drop-avail { flex: 0 0 auto; font-size: 12.5px; }
+.sim-drop-empty { padding: 8px 12px; font-size: 12.5px; }
+.sim-fixed { padding: 8px 12px; border: 1px solid var(--ink-100); border-radius: 8px; background: var(--ink-25); font-size: 13.5px; }
+.sim-review { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--ink-100); border-radius: 10px; background: var(--ink-25); font-size: 13.5px; }
+.sim-review-row { display: grid; grid-template-columns: 130px 1fr; gap: 10px; }
+.sim-card .modal-body { display: block; }
+.sim-card .modal-body > * + * { margin-top: 12px; }

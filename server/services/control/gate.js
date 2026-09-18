@@ -119,6 +119,11 @@ const READ_ONLY_RPCS = new Set([
   // (calendar_book) сюда НЕ входит: это запись, и через блокировку она не
   // проходит.
   'calendar_slots', 'calendar_windows',
+  // DEPARTMENTS_V1 — список и карточка отдела, справочники для шагов
+  // «Команда» и «Помещения». Чистое чтение: клиника с просроченной лицензией
+  // видит, кто где работает и что у отдела на руках. Формирование, правки и
+  // выдача — записи, сюда не входят.
+  'department_list', 'department_card', 'department_staff_options', 'department_place_options',
 ]);
 
 // The way back in. These must work while locked or a clinic that wants to pay

@@ -10,6 +10,8 @@
 
 import { hasAnyRole } from '../roles.js';
 import { resolveHolder, moveHolding } from './holdings.js';   // HOLDINGS_V1
+import { requireGrant } from '../grants.js';                  // GRANTS_V1 — выдача со склада по матрице прав
+import { logDepartmentEvent } from './departments.js';       // DEPARTMENTS_V1 — журнал отдела
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -270,9 +272,13 @@ export function approveRequisitionAndIssue(db, args, user) {
 
     const getProduct = db.prepare('SELECT * FROM products WHERE id = ?');
     const updateProduct = db.prepare(`UPDATE products SET on_hand = ?, updated_at = ${NOW} WHERE id = ?`);
+    // DEPARTMENTS_V1 — заявка от отдела выдаётся ЕМУ: движение помнит держателя,
+    // остаток отдела растёт — та же передача, что у issue_stock_lines. Раньше
+    // склад списывался, а отдел ничего не получал (вызов написан до миграции 128).
+    const holder = req.department_id ? resolveHolder(db, { type: 'department', id: req.department_id }) : null;
     const insertMovement = db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, branch_id)
-      VALUES (?, 'dispense', ?, ?, 'requisition', ?, ?, ?, 1)`);
+      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, branch_id, holder_type, holder_id)
+      VALUES (?, 'dispense', ?, ?, 'requisition', ?, ?, ?, 1, ?, ?)`);
 
     const issued = [];
     for (const it of items) {
@@ -287,11 +293,18 @@ export function approveRequisitionAndIssue(db, args, user) {
         throw new RpcError(`insufficient stock to issue ${product.name} (have ${product.on_hand}, need ${qty}).`, 400);
       }
       updateProduct.run(newOnHand, product.id);
-      insertMovement.run(product.id, -qty, round2(product.avg_cost || 0), reqId, `REQ ${req.req_number}`, user.id);
-      issued.push({ product_id: product.id, qty, on_hand: newOnHand });
+      insertMovement.run(product.id, -qty, round2(product.avg_cost || 0), reqId, `REQ ${req.req_number}`, user.id, holder ? holder.type : null, holder ? holder.id : null);
+      if (holder) moveHolding(db, holder, product.id, qty);   // HOLDINGS_V1 — склад → отдел
+      issued.push({ product_id: product.id, name: product.name, qty, on_hand: newOnHand });
     }
 
     db.prepare("UPDATE purchase_requisitions SET status = 'issued' WHERE id = ?").run(reqId);
+    if (holder) {
+      logDepartmentEvent(db, holder.id, 'issued', user.id, {
+        lines: issued.map((i) => ({ product_id: i.product_id, name: i.name, base_qty: i.qty })),
+        note: `REQ ${req.req_number}`, req_id: reqId,
+      });
+    }
     return { req_id: reqId, status: 'issued', issued };
   });
 
@@ -401,8 +414,18 @@ export function adjustStock(db, args, user) {
 // (import_products_excel), перенесены с ветки phase15-procurement.
 // =============================================================================
 const ISSUE_UNITS = ['base', 'consumption'];
+// DEPARTMENTS_V1 — ключ квитанции: экран присылает случайную строку вместе с
+// формой; повторная отправка той же формы (обновили страницу, нажали дважды)
+// получает сохранённый ответ, а склад не списывается второй раз.
+const IDEM_KEY_RE = /^[A-Za-z0-9_-]{8,80}$/;
 export function issueStockLines(db, args, user) {
-  requireRole(user, PROCUREMENT_ROLES);
+  requireGrant(db, user, 'procurement.issue', 'edit', PROCUREMENT_ROLES, 'выдавать со склада');
+
+  const idemKey = args && typeof args.idempotency_key === 'string' && IDEM_KEY_RE.test(args.idempotency_key) ? args.idempotency_key : null;
+  if (idemKey) {
+    const seen = db.prepare('SELECT result FROM stock_issue_receipts WHERE key = ?').get(idemKey);
+    if (seen) { try { return { ...JSON.parse(seen.result), repeated: true }; } catch { /* испорченная квитанция — выдаём заново */ } }
+  }
 
   // HOLDINGS_V1 — a structured recipient {type: staff|room|department, id}
   // makes the issue a MOVE: the holder's own ledger receives what the
@@ -481,11 +504,68 @@ export function issueStockLines(db, args, user) {
       updateProduct.run(newOnHand, productId);
       insertMovement.run(productId, -baseQty, product.avg_cost, note, user.id, holder ? holder.type : null, holder ? holder.id : null);
       if (holder) moveHolding(db, holder, productId, baseQty);   // HOLDINGS_V1 — warehouse → holder
-      issued.push({ product_id: productId, base_qty: baseQty, on_hand: newOnHand });
+      issued.push({ product_id: productId, name: product.name, base_qty: baseQty, on_hand: newOnHand });
     }
-    return { issued };
+    // DEPARTMENTS_V1 — журнал отдела: что выдано, сколько, кем.
+    if (holder && holder.type === 'department') {
+      logDepartmentEvent(db, holder.id, 'issued', user.id, {
+        lines: issued.map((i) => ({ product_id: i.product_id, name: i.name, base_qty: i.base_qty })),
+        note: extraNote || null,
+      });
+    }
+    const result = { issued };
+    if (idemKey) db.prepare('INSERT INTO stock_issue_receipts (key, result) VALUES (?, ?)').run(idemKey, JSON.stringify(result));
+    return result;
   });
 
+  return run();
+}
+
+// -----------------------------------------------------------------------------
+// DEPARTMENTS_V1 — create_requisition: заявка отдела на склад.
+//
+// Экран «Закупки → Новая заявка» звал этот вызов с облачных времён, а на
+// офлайн-сервере его не было — кнопка отвечала «RPC not implemented». Теперь
+// заявка создаётся здесь: номер REQ-ГГГГММДД-NNN, статус «submitted», строки в
+// БАЗОВЫХ единицах (как и ждёт approve_requisition_and_issue).
+// args: { p_department, p_notes?, p_lines: [{ item_id, qty, note? }] }
+// Роли — как у таблицы в реестре: снабжение, администратор, врач, медсестра.
+// -----------------------------------------------------------------------------
+const REQUISITION_ROLES = ['admin', 'inventory', 'doctor', 'head_doctor', 'nurse', 'senior_nurse'];
+export function createRequisition(db, args, user) {
+  requireRole(user, REQUISITION_ROLES);
+  const a = args || {};
+  const departmentId = Number(a.p_department);
+  if (!isPositiveInt(departmentId)) throw new RpcError('Выберите отдел, для которого запрашиваются товары.', 400);
+  const dept = db.prepare('SELECT id, name FROM departments WHERE id = ?').get(departmentId);
+  if (!dept) throw new RpcError('Отдел не найден.', 404);
+  const notes = typeof a.p_notes === 'string' ? a.p_notes.trim().slice(0, 500) : '';
+  const rawLines = a.p_lines;
+  if (!Array.isArray(rawLines) || rawLines.length === 0) throw new RpcError('Добавьте хотя бы одну позицию.', 400);
+  const lines = rawLines.map((l) => {
+    const productId = l ? Number(l.item_id ?? l.product_id) : NaN;
+    const qty = l ? Number(l.qty) : NaN;
+    if (!isPositiveInt(productId)) throw new RpcError('Позиция заявки: товар не выбран.', 400);
+    if (!(Number.isFinite(qty) && qty > 0 && qty <= MAX_QTY)) throw new RpcError('Позиция заявки: количество должно быть больше нуля.', 400);
+    const note = l && typeof l.note === 'string' ? l.note.trim().slice(0, 200) : '';
+    return { productId, qty: round2(qty), note };
+  });
+
+  const run = db.transaction(() => {
+    for (const l of lines) {
+      if (!db.prepare('SELECT 1 FROM products WHERE id = ?').get(l.productId)) throw new RpcError('Товар заявки не найден.', 404);
+    }
+    const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const n = db.prepare("SELECT COUNT(*) AS n FROM purchase_requisitions WHERE req_number LIKE ?").get(`REQ-${day}-%`).n + 1;
+    const reqNumber = `REQ-${day}-${String(n).padStart(3, '0')}`;
+    const reqId = Number(db.prepare(`
+      INSERT INTO purchase_requisitions (req_number, status, department_id, notes, requested_by)
+      VALUES (?, 'submitted', ?, ?, ?)`).run(reqNumber, departmentId, notes || null, user.id).lastInsertRowid);
+    const ins = db.prepare('INSERT INTO purchase_requisition_items (req_id, product_id, qty, note) VALUES (?, ?, ?, ?)');
+    for (const l of lines) ins.run(reqId, l.productId, l.qty, l.note || null);
+    logDepartmentEvent(db, departmentId, 'requisition_created', user.id, { req_id: reqId, req_number: reqNumber, lines: lines.length });
+    return { req_id: reqId, req_number: reqNumber, status: 'submitted' };
+  });
   return run();
 }
 

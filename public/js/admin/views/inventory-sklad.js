@@ -7,8 +7,9 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { fetchGuard, loadingCard, fmtPrice, fmtMoney2, fmtQty, selStyle, numStyle, isLowStock } from './inventory-shared.js';
+import { fetchGuard, loadingCard, fmtPrice, fmtMoney2, fmtQty, selStyle, isLowStock } from './inventory-shared.js';
 import { openReceiveModal, openAdjustModal } from './inventory-products.js';
+import { openStockIssueModal } from './stock-issue-modal.js';   // STOCK_ISSUE_MODAL_V1 — общий диалог выдачи
 
 const sklad = {
     products: [], suppliers: [],
@@ -108,7 +109,7 @@ export async function renderSkladTab(container) {
             toolBtn('Excel', 'Download', exportExcel),
             toolBtn('Шаблон', 'Doc', downloadTemplate),
             toolBtn('Импорт из Excel', 'ArrowUp', () => openImportModal(reload)),
-            toolBtn('Выдать', 'Send', () => openIssueModal(reload)),
+            toolBtn('Выдать', 'Send', () => openStockIssueModal({ onDone: reload })),   // STOCK_ISSUE_MODAL_V1
             toolBtn('Корректировка', 'Edit', () => openAdjustModal(null, reload)),
             h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openReceiveModal(reload) },
                 Icon('Plus', { size: 14 }), ' Принять'),
@@ -357,184 +358,9 @@ function openImportModal(onDone) {
 }
 
 // ---------------------------------------------------------------------------
-// ВЫДАТЬ — выдача со склада отделению/сотруднику без визита. Кол-во вводится
-// в единицах выдачи (consumption); сервер (issue_stock_lines) конвертирует и
-// не даёт уйти в минус.
+// ВЫДАТЬ — STOCK_ISSUE_MODAL_V1: диалог переехал в views/stock-issue-modal.js и
+// стал общим с карточкой отдела (поиск товара, несколько строк, остаток,
+// проверка перед отправкой, квитанция от двойного списания). Здесь он
+// открывается с выбором получателя; из карточки отдела — с получателем уже
+// подставленным. Одна дверь, один вызов issue_stock_lines.
 // ---------------------------------------------------------------------------
-function openIssueModal(onDone) {
-    const overlay = h('div', { class: 'modal' });
-    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
-    function onKey(e) { if (e.key === 'Escape') close(); }
-    document.addEventListener('keydown', onKey);
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
-
-    const modal = { products: [], departments: [], rooms: [], staff: [] };
-    const lineObjs = [];
-    const linesBody = h('tbody');
-    linesBody.appendChild(h('tr', null, h('td', { colspan: '4', style: { textAlign: 'center', padding: '16px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Загрузка товаров…')));
-
-    const addLineBtn = h('button', {
-        class: 'btn btn-sm', type: 'button', disabled: true,
-        onclick: () => addLine(),
-    }, Icon('Plus', { size: 13 }), ' Добавить строку');
-
-    // HOLDINGS_V1 — получатель выбирается, а не вписывается: сотрудник, кабинет
-    // или отделение. Выдача ПЕРЕКЛАДЫВАЕТ товар на его остаток, и медсестра
-    // потом выдаёт пациенту с рук, а не со склада (второго списания нет).
-    const holderType = h('select', { style: { width: '180px' } },
-        h('option', { value: 'staff' }, 'Сотруднику'),
-        h('option', { value: 'room' }, 'В кабинет'),
-        h('option', { value: 'department' }, 'В отделение'));
-    const holderSel = h('select', { style: { flex: '1' } }, h('option', { value: '' }, '— Выберите —'));
-    const noteInp = h('input', { type: 'text', placeholder: 'Основание (необязательно)' });
-    function paintHolders() {
-        clear(holderSel);
-        holderSel.appendChild(h('option', { value: '' }, '— Выберите —'));
-        const rows = holderType.value === 'staff' ? modal.staff : holderType.value === 'room' ? modal.rooms : modal.departments;
-        for (const r of rows) holderSel.appendChild(h('option', { value: String(r.id) }, r.label));
-    }
-    holderType.addEventListener('change', paintHolders);
-
-    const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Выдать');
-    saveBtn.addEventListener('click', save);
-
-    function addLine() {
-        const line = { product: null, qty: '' };
-        lineObjs.push(line);
-        linesBody.appendChild(buildLineRow(line));
-    }
-
-    function buildLineRow(line) {
-        const prodSel = h('select', { style: selStyle },
-            h('option', { value: '' }, '— Выберите товар —'),
-            ...modal.products.map(pr => h('option', { value: String(pr.id) }, pr.name)));
-        const hintEl = h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '3px' } }, '');
-        const unitEl = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, '—');
-
-        function refresh() {
-            if (!line.product) { hintEl.textContent = ''; unitEl.textContent = '—'; return; }
-            const iu = issueUnitOf(line.product);
-            unitEl.textContent = iu.unit || '—';
-            const avail = (Number(line.product.on_hand) || 0) * iu.factor;
-            hintEl.textContent = trf('Доступно: {qty} {unit}', { qty: fmtQty(avail), unit: iu.unit || '' }).trim();
-        }
-
-        prodSel.addEventListener('change', () => {
-            const pid = Number(prodSel.value) || null;
-            line.product = modal.products.find(pr => pr.id === pid) || null;
-            refresh();
-        });
-
-        const qtyInp = h('input', { type: 'number', min: '0', step: 'any', value: '', style: numStyle });
-        qtyInp.addEventListener('input', () => { line.qty = qtyInp.value; });
-
-        const removeBtn = h('button', {
-            class: 'btn btn-ghost btn-sm', type: 'button', title: 'Убрать строку',
-            onclick: () => {
-                const i = lineObjs.indexOf(line);
-                if (i >= 0) lineObjs.splice(i, 1);
-                tr.remove();
-                if (lineObjs.length === 0) addLine();
-            },
-        }, '×');
-
-        refresh();
-        const tr = h('tr', null,
-            h('td', null, prodSel, hintEl),
-            h('td', { style: { width: '110px' } }, unitEl),
-            h('td', { style: { width: '110px' } }, qtyInp),
-            h('td', { style: { width: '36px', textAlign: 'center' } }, removeBtn),
-        );
-        return tr;
-    }
-
-    async function save() {
-        const holderId = Number(holderSel.value) || 0;
-        if (!holderId) { toast('Укажите, кому выдаётся товар.', 'fail'); return; }
-        const holder = { type: holderType.value, id: holderId };
-        const lines = [];
-        for (const line of lineObjs) {
-            if (!line.product) continue;
-            const qty = Number(line.qty);
-            if (!Number.isFinite(qty) || qty <= 0) continue;
-            lines.push({ product_id: line.product.id, qty, unit: 'consumption' });
-        }
-        if (!lines.length) { toast('Добавьте хотя бы одну позицию.', 'fail'); return; }
-
-        saveBtn.disabled = true;
-        const prev = saveBtn.textContent;
-        saveBtn.textContent = tr('Выдаём…');
-        try {
-            const note = noteInp.value.trim() || undefined;
-            const { error } = await supabase.rpc('issue_stock_lines', { lines, holder, note });
-            if (error) throw error;
-            toast('Выдано со склада', 'ok');
-            close();
-            if (typeof onDone === 'function') onDone();
-        } catch (e) {
-            toast((e && e.message) || 'Не удалось выдать.', 'fail');
-            saveBtn.disabled = false;
-            saveBtn.textContent = prev;
-        }
-    }
-
-    overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '680px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column' } },
-        h('header', { class: 'modal-head' },
-            h('h2', null, Icon('Send', { size: 16 }), ' Выдать со склада'),
-            h('button', { class: 'modal-close', onclick: close }, '×')),
-        h('div', { class: 'modal-body', style: { flex: 1, minHeight: 0, overflowY: 'auto' } },
-            h('div', { style: { overflowX: 'auto', border: '1px solid var(--ink-100)', borderRadius: '10px', marginBottom: '10px' } },
-                h('table', { class: 'tbl' },
-                    h('thead', null, h('tr', null,
-                        h('th', null, 'Товар'),
-                        h('th', null, 'Ед. выдачи'),
-                        h('th', null, 'Кол-во'),
-                        h('th', null, ''),
-                    )),
-                    linesBody,
-                ),
-            ),
-            addLineBtn,
-            field('Кому', h('div', { class: 'row', style: { gap: '8px' } }, holderType, holderSel), { required: true }),
-            h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 10px' } },
-                'Выданное числится за получателем: медсестра выдаёт пациенту из своих запасов, кабинета или отделения — склад второй раз не списывается.'),
-            field('Примечание', noteInp),
-        ),
-        h('footer', { class: 'modal-foot' },
-            h('button', { class: 'btn', type: 'button', onclick: close }, 'Отмена'),
-            h('span', { class: 'grow' }),
-            saveBtn),
-    ));
-    document.body.appendChild(overlay);
-
-    (async () => {
-        try {
-            const [pr, dr, rr, ur] = await Promise.all([
-                supabase.from('products')
-                    .select('id,name,base_unit,consumption_unit,consumption_factor,on_hand')
-                    .eq('active', 1).order('name', { ascending: true }),
-                supabase.from('departments').select('id,name').eq('active', 1).order('name', { ascending: true }),
-                supabase.from('rooms').select('id,name,code').eq('active', 1).order('name', { ascending: true }),
-                supabase.from('users').select('id,full_name,role').eq('active', 1).order('full_name', { ascending: true }),
-            ]);
-            if (pr.error) throw pr.error;
-            modal.products = pr.data || [];
-            modal.departments = ((dr.error ? [] : dr.data) || []).map((d) => ({ id: d.id, label: d.name || '' }));
-            modal.rooms = ((rr.error ? [] : rr.data) || []).map((r) => ({ id: r.id, label: (r.name || '') + (r.code ? ' · ' + r.code : '') }));
-            modal.staff = ((ur.error ? [] : ur.data) || []).map((u) => ({ id: u.id, label: (u.full_name || '') + (u.role ? ' · ' + u.role : '') }));
-            paintHolders();
-        } catch (e) {
-            toast(trf('Не удалось загрузить товары: {msg}', { msg: (e && e.message) || e }), 'fail');
-            modal.products = [];
-        } finally {
-            clear(linesBody);
-            addLineBtn.disabled = false;
-            if (!modal.products.length) {
-                linesBody.appendChild(h('tr', null,
-                    h('td', { colspan: '4', style: { textAlign: 'center', padding: '16px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Нет активных товаров.')));
-            } else {
-                addLine();
-            }
-        }
-    })();
-}

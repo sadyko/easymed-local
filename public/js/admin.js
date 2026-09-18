@@ -84,6 +84,7 @@ import { renderApiSettings } from './admin/views/api-settings.js?v=api4';   // C
 import { renderDoctorPay } from './admin/views/doctor-pay.js?v=dp1';   // DOCTOR_PAY_BULK_V1
 import { renderCashierSettings } from './admin/views/cashier-settings.js?v=shiftmode1';   // CASHIER_SHIFT_MODE_V1
 import { renderRoomsSetup } from './admin/views/rooms-setup.js?v=rooms7';   // ROOMS_SETUP_V1 — кабинеты и палаты одним разделом
+import { renderDepartments } from './admin/views/departments.js?v=dept1';   // DEPARTMENTS_V1 — отделы: руководитель, команда, помещения, снабжение
 import { renderTelegramSettings } from './admin/views/telegram-settings.js?v=tg3';   // TELEGRAM_BOT_V1
 import { renderTelephonySettings } from './admin/views/telephony-settings.js?v=tel1';   // TELEPHONY_V1 — Binotel call-center integration
 import { renderCrmSettings } from './admin/views/crm-settings.js?v=crmcfg2';   // CRM_CONFIG_V1 — configurable kanban stages/sources/call routing
@@ -92,7 +93,7 @@ import { renderConsultationTypes } from './admin/views/consultation-types.js?v=c
 import { renderPharmacy }    from './admin/views/pharmacy.js?v=ph2';   // PHARMACY_V1
 import { renderRequestsInbox } from './admin/views/requests-inbox.js?v=btnright1';
 import { renderPacs }         from './admin/views/pacs.js';
-import { renderInventory }    from './admin/views/inventory.js?v=inv4';   // INVENTORY_UI_V1 — Suppliers/PO/Requisitions/Counts tabs live
+import { renderInventory }    from './admin/views/inventory.js?v=inv5';   // INVENTORY_UI_V1 — Suppliers/PO/Requisitions/Counts tabs live
 import { renderSettingsHub }  from './admin/views/settings-hub.js?v=updbadge1';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route
 import { renderPatientDocuments } from './admin/views/patient-documents.js?v=docstoolbar1';   // PATIENT_DOCUMENTS_V1 + DOCS_TOOLBAR_V1
 import { renderDocumentsSettings } from './admin/views/documents-settings.js?v=doc2';   // DOCUMENTS_SETTINGS_V1
@@ -243,6 +244,7 @@ const CRUMBS = {
     'api-settings': ['Insights', 'Settings', 'API'],   // CLINIC_API_V1
     'telegram-settings': ['Insights', 'Settings', 'Telegram-бот'],   // TELEGRAM_BOT_V1
     'telephony-settings': ['Insights', 'Settings', 'Телефония'],   // TELEPHONY_V1
+    'departments': ['Insights', 'Settings', 'Отделы'],   // DEPARTMENTS_V1
     'crm-settings': ['Insights', 'Settings', 'CRM-канбан'],   // CRM_CONFIG_V1
     'telegram-chat': ['Insights', 'Чат с пациентами'],   // TELEGRAM_CHAT_V1
     'consultation-types': ['Insights', 'Settings', 'Консультации врачей'],   // CONSULTATION_TYPES_RESTORE
@@ -605,6 +607,7 @@ const PARENT_OF = {
     'api-settings': 'settings', 'telegram-settings': 'settings', 'telephony-settings': 'settings',
     'crm-settings': 'settings', 'doctor-pay': 'settings',
     'cashier-settings': 'settings', 'rooms-setup': 'settings', 'updates': 'settings',
+    'departments': 'settings',   // DEPARTMENTS_V1
     'subscription': 'settings', 'clinic-data': 'settings', 'public-site': 'settings',
     // Пациенты
     'patient-card': 'patients', 'appointments': 'patients',
@@ -1099,6 +1102,7 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'doctor-pay': return void await renderDoctorPay(viewRoot, ctx);   // DOCTOR_PAY_BULK_V1
             case 'cashier-settings':  return void await renderCashierSettings(viewRoot);    // CASHIER_SHIFT_MODE_V1
             case 'rooms-setup':       return void await renderRoomsSetup(viewRoot);       // ROOMS_SETUP_V1
+            case 'departments':       return void await renderDepartments(viewRoot, ctx);   // DEPARTMENTS_V1
             case 'settings':      return void await renderSettingsHub(viewRoot, ctx);   // SETTINGS_HUB_V1
             case 'employees':     return void await renderEmployees(viewRoot, ctx);   // EMPLOYEE_EDITOR_V1 — Сотрудники
             case 'documents-settings': return void await renderDocumentsSettings(viewRoot, ctx);   // DOCUMENTS_SETTINGS_V1

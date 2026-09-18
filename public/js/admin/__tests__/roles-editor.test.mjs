@@ -306,9 +306,10 @@ test('ROLES_ACCORDION_V1: разделы свёрнуты, раскрывают�
 
   // Раздел без окон и действий не раскрывается: ни кнопки, ни тела — владелец
   // раскрыл «Настройки», увидел пустоту и написал «nothing is found».
-  assert.ok(!toggleOf('settings') || toggleOf('settings').tagName !== 'BUTTON', 'у пустого раздела шеврон-кнопка');
-  assert.equal(bodyOf('settings'), undefined, 'у пустого раздела есть тело, в котором ничего нет');
-  assert.ok(radiosFor(root, 'settings').length > 0, 'уровень пустого раздела остался в форме');
+  // («Настройки» с DEPARTMENTS_V1 обзавелись окном «Отделы» — пустым примером служит касса.)
+  assert.ok(!toggleOf('cashier') || toggleOf('cashier').tagName !== 'BUTTON', 'у пустого раздела шеврон-кнопка');
+  assert.equal(bodyOf('cashier'), undefined, 'у пустого раздела есть тело, в котором ничего нет');
+  assert.ok(radiosFor(root, 'cashier').length > 0, 'уровень пустого раздела остался в форме');
 });
 
 test('ошибка загрузки: видимая ошибка с повтором, а НЕ пустая матрица', async () => {

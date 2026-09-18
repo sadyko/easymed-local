@@ -146,7 +146,8 @@ const GROUPS = [
         items: [
             { label: 'Сотрудники', desc: 'Врачи, медсёстры, регистратура, администрация', icon: 'ID',       live: true, action: nav('employees') },
             { label: 'Роли',       desc: 'Кто что видит: роли и разделы меню',       icon: 'Settings', live: true, action: () => openSection('roles') },
-            { label: 'Отделы',     desc: 'Отделения клиники и кто ими руководит',       icon: 'Building', live: true, action: () => openSection('departments') },
+            // DEPARTMENTS_V1 — свой экран вместо таблицы из трёх колонок.
+            { label: 'Отделы',     desc: 'Руководитель, команда, помещения и снабжение каждого отдела', icon: 'Building', live: true, action: nav('departments') },
         ],
     },
     {

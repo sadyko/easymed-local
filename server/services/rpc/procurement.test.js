@@ -139,7 +139,8 @@ test('issue_stock_lines rejects overdraw atomically, missing recipient, bad role
   assert.throws(() => issueStockLines(db, { lines: [{ product_id: prod, qty: 1 }], recipient: '' }, inv), /recipient/i);
   assert.throws(() => issueStockLines(db, { lines: [{ product_id: prod, qty: 1 }] }, inv), /recipient/i);
   assert.throws(() => issueStockLines(db, { lines: [], recipient: 'X' }, inv), /lines/i);
-  assert.throws(() => issueStockLines(db, { lines: [{ product_id: prod, qty: 1 }], recipient: 'X' }, doc), /(role|allow)/i);
+  // GRANTS_V1 — отказ теперь словами матрицы прав.
+  assert.throws(() => issueStockLines(db, { lines: [{ product_id: prod, qty: 1 }], recipient: 'X' }, doc), (e) => e.status === 403 && /недоступно вашей роли/.test(e.message));
 });
 
 test('import_products_excel creates, updates, receives with WAC, auto-creates suppliers', () => {

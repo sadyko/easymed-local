@@ -140,10 +140,17 @@ export const CATALOG = [
   { key: 'chat',        label: 'Чат с пациентами',    legacy: 'telegram-chat', desc: 'Переписка в Telegram-боте.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Читает переписку.', edit: 'Отвечает пациенту от имени клиники.' }, windows: [], actions: [] },
   { key: 'cashier',     label: 'Касса',               legacy: 'cashier', desc: 'Смена кассира и приём оплат.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит смену и счета.', edit: 'Принимает оплату, открывает и закрывает смену.' }, windows: [], actions: [] },
   { key: 'cashier_head',label: 'Старший кассир',      legacy: 'cashier-head', desc: 'Все смены и сверка.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит все смены.', edit: 'Проводит сверку и правит смены.' }, windows: [], actions: [] },
-  { key: 'procurement', label: 'Закупки',             legacy: 'inventory', desc: 'Товары, остатки, поступления, заявки на закупку.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит склад и остатки.', edit: 'Оформляет приход, заявки и списания.' }, windows: [], actions: [] },
+  { key: 'procurement', label: 'Закупки',             legacy: 'inventory', desc: 'Товары, остатки, поступления, заявки на закупку.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит склад и остатки.', edit: 'Оформляет приход, заявки и списания.' }, windows: [], actions: [
+      // DEPARTMENTS_V1 — выдача со склада получателю (отдел, кабинет, сотрудник):
+      // ворота issue_stock_lines. По умолчанию — администратор и снабженец.
+      { key: 'procurement.issue', label: 'Выдача со склада', desc: 'Выдать товар отделу, кабинету или сотруднику.', levels: ['none', 'edit'], levelDesc: { edit: 'Выдаёт товар со склада получателю; склад списывается, получатель получает остаток.' }, enforced: 'rpc:issue_stock_lines' },
+    ] },
   { key: 'dashboard',   label: 'Дашборд',             legacy: 'dashboard', desc: 'Сводка по клинике за день.', levels: ['none', 'view'], windows: [], actions: [] },
   { key: 'reports',     label: 'Отчёты',              legacy: 'reports-hub', desc: 'Отчёты за период и выгрузка в Excel.', levels: ['none', 'view'], windows: [], actions: [] },
-  { key: 'settings',    label: 'Настройки',           legacy: 'settings', desc: 'Вся конфигурация клиники: услуги, сотрудники, роли, телефония.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Смотрит настройки.', edit: 'Меняет настройки.' }, windows: [], actions: [] },
+  { key: 'settings',    label: 'Настройки',           legacy: 'settings', desc: 'Вся конфигурация клиники: услуги, сотрудники, роли, телефония.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Смотрит настройки.', edit: 'Меняет настройки.' }, windows: [
+      // DEPARTMENTS_V1 — экран «Отделы»: список, карточка, формирование.
+      { key: 'settings.departments', label: 'Отделы', desc: 'Отделы клиники: руководитель, команда, помещения, снабжение.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит список отделов и их карточки.', edit: 'Формирует отделы: руководитель, команда, помещения.' }, enforced: 'rpc:department_form' },
+    ], actions: [] },
 ];
 
 /** Все строки матрицы плоским списком: раздел, его окна и действия. */

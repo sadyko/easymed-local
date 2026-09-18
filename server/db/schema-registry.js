@@ -472,9 +472,18 @@ export const REGISTRY = {
     json:    ['settings'],
     embed:   {},
   },
-  departments: { read:{roles:ALL_STAFF,columns:['id','name','code','kind','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','code','kind','active']},update:{roles:['admin'],columns:['name','code','kind','active']},delete:{roles:[]}},
-    filters:['id','active','kind'], embed:{} },
+  // DEPARTMENTS_V1 (mig 138) — head_user_id: руководитель отдела (врач или
+  // медсестра — правило проверяет rpc/departments.js, сюда колонка добавлена,
+  // чтобы списки и карточки могли её прочитать и показать имя через embed).
+  departments: { read:{roles:ALL_STAFF,columns:['id','name','code','kind','active','created_at','head_user_id']},
+    write:{insert:{roles:['admin'],columns:['name','code','kind','active','head_user_id']},update:{roles:['admin'],columns:['name','code','kind','active','head_user_id']},delete:{roles:[]}},
+    filters:['id','active','kind','head_user_id'], embed:{ users: { table:'users', fk:'head_user_id', columns:['id','full_name'] } } },
+  // DEPARTMENTS_V1 — журнал отдела: пишет только сервер (rpc/departments.js,
+  // issue_stock_lines, create_requisition); читает карточка отдела.
+  department_events: { read:{roles:ALL_STAFF,columns:['id','department_id','kind','actor_id','details','created_at']},
+    write:{insert:{roles:[]},update:{roles:[]},delete:{roles:[]}},
+    filters:['id','department_id','kind','created_at'], json:['details'],
+    embed:{ users: { table:'users', fk:'actor_id', columns:['id','full_name'] } } },
   service_types: { read:{roles:ALL_STAFF,columns:['id','name','code','billing_mode','active','created_at']},
     write:{insert:{roles:['admin'],columns:['name','code','billing_mode','active']},update:{roles:['admin'],columns:['name','code','billing_mode','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
