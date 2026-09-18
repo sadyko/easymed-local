@@ -1390,6 +1390,10 @@ function voidModal(root, inv) {
     // сервер без него откажет (void_invoice, in_bed_ack).
     const inBed = !!inv.admission_id && IN_BED_STATUSES.includes(inv.admission_status);
     const ackBox = h('input', { type: 'checkbox' });
+    // CANCEL_MEANS_CANCEL_V1 — по умолчанию отмена снимает неначатые услуги с
+    // визита; галочка оставляет их, чтобы выставить счёт заново. У счёта
+    // стационара своё правило (услуги возвращаются в невыставленные до выписки).
+    const keepBox = h('input', { type: 'checkbox' });
     const inBedBlock = inBed
         ? h('div', { class: 'cd-inbed' },
             h('div', { class: 'cd-inbed-t' }, Icon('Bed', { size: 14 }), ' ', tr('Пациент ещё в стационаре')),
@@ -1400,12 +1404,16 @@ function voidModal(root, inv) {
         [h('div', { style: { fontSize: '13.5px', lineHeight: 1.55 } },
             'Счёт пациента ', h('strong', null, inv.patient_name || '—'), ' на ',
             h('strong', null, fmtPrice(inv.total_amount)), ' сум будет отменён. ',
-            h('span', { class: 'muted' }, 'Неначатые услуги счёта снова станут доступны для выставления.')),
+            h('span', { class: 'muted' }, inv.admission_id
+                ? 'Неначатые услуги счёта снова станут доступны для выставления.'
+                : 'Неначатые услуги счёта будут сняты с визита — пациент не останется ждать кассу.')),
+         inv.admission_id ? null : h('label', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12.5px', marginTop: '10px', cursor: 'pointer' } },
+            keepBox, h('span', null, 'Оставить услуги в визите — выставлю счёт заново')),
          inBedBlock],
         'Отменить счёт',
         async () => {
             if (inBed && !ackBox.checked) { toast(tr('Подтвердите, что счёт отменяется как ошибочный, а пациент остаётся на койке.'), 'fail'); return false; }
-            const { error } = await supabase.rpc('void_invoice', { invoice_id: inv.id, in_bed_ack: inBed && !!ackBox.checked });
+            const { error } = await supabase.rpc('void_invoice', { invoice_id: inv.id, in_bed_ack: inBed && !!ackBox.checked, keep_services: !inv.admission_id && !!keepBox.checked });
             if (error) { toast((error.message) || 'Не удалось отменить счёт.', 'fail'); return false; }
             toast('Счёт отменён', 'ok');
             await paint(root);

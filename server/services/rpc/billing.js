@@ -726,6 +726,8 @@ export function refundPayment(db, args, user) {
     } else {
       // No longer fully paid — clear paid_at so reports don't count it as settled.
       db.prepare('UPDATE invoices SET paid_amount = ?, status = ?, paid_at = NULL WHERE id = ?').run(newPaid, status, invoice.id);
+      // CANCEL_MEANS_CANCEL_V1 — полный возврат это отмена: плитка «ОТМЕНЁН» считает его по этому дню.
+      if (status === 'refunded') db.prepare("UPDATE invoices SET voided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(invoice.id);
     }
 
     return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id) };

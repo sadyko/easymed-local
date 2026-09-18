@@ -292,7 +292,7 @@ export const REGISTRY = {
   },
   invoices: {
     // payer_id: COVERAGE_SPLIT_V1 (mig 054) — кому выставлен счёт (null = пациенту)
-    read:  { roles: ALL_STAFF, columns: ['id','invoice_number','visit_id','patient_id','branch_id','subtotal','discount_amount','total_amount','paid_amount','status','created_by','created_at','paid_at','admission_id','payer_id',
+    read:  { roles: ALL_STAFF, columns: ['id','invoice_number','visit_id','patient_id','branch_id','subtotal','discount_amount','total_amount','paid_amount','status','created_by','created_at','voided_at','paid_at','admission_id','payer_id',
              'sync_origin'] },   // admission_id: BED_CONSOLE_V1 (mig 040); sync_origin: BUILDING_REPORTS_V1 — из какого ЗДАНИЯ счёт (мигр. 087); ставится только приёмом порции, поэтому не writable
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },  // invoices are created/updated ONLY via billing RPCs (server-computed money)
     // created_at/created_by: REPORT_PERIOD_V1 — выручка и «мои счета» считаются

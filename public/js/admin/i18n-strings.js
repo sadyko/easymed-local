@@ -7497,6 +7497,8 @@ export const STRINGS = {
   "Отметка снята.": {"en":"The mark has been removed.","ru":"Отметка снята.","uz":"Belgi olib tashlandi."},
   "Выполнено: {name}": {"en":"Done: {name}","ru":"Выполнено: {name}","uz":"Bajarildi: {name}"},
   "Амбулаторно": {"en":"Outpatient","ru":"Амбулаторно","uz":"Ambulator"},
+  "Неначатые услуги счёта будут сняты с визита — пациент не останется ждать кассу.": {"en": "The invoice’s unstarted services will be removed from the visit — the patient will not be left waiting for the cashier.", "ru": "Неначатые услуги счёта будут сняты с визита — пациент не останется ждать кассу.", "uz": "Hisobdagi boshlanmagan xizmatlar tashrifdan olib tashlanadi — bemor kassani kutib qolmaydi."},
+  "Оставить услуги в визите — выставлю счёт заново": {"en": "Keep the services in the visit — I will re-issue the invoice", "ru": "Оставить услуги в визите — выставлю счёт заново", "uz": "Xizmatlarni tashrifda qoldirish — hisobni qaytadan chiqaraman"},
   "Товары и остатки по отделениям смотрите в «Настройки → Отделы».": {"en": "Goods and balances by department are in “Settings → Departments”.", "ru": "Товары и остатки по отделениям смотрите в «Настройки → Отделы».", "uz": "Bo‘limlar bo‘yicha tovarlar va qoldiqlar — «Sozlamalar → Bo‘limlar»da."},
   "Хозяйственное": {"en": "Utility", "ru": "Хозяйственное", "uz": "Xo‘jalik"},
   "Добавить позицию": {"en": "Add an item", "ru": "Добавить позицию", "uz": "Pozitsiya qo‘shish"},

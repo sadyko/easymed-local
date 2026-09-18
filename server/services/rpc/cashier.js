@@ -368,7 +368,7 @@ export function cashierInvoices(db, args, user) {
        AND i.total_amount > 0
        AND (${outstandingWhere('i.status')}                                            -- DAY_ZERO_V1: неоплаченные висят, пока не оплачены
         OR (i.status = 'paid' AND ${isLocalToday('COALESCE(i.paid_at, i.created_at)')})
-        OR (i.status IN ('void', 'refunded') AND ${isLocalToday('i.created_at')}))
+        OR (i.status IN ('void', 'refunded') AND ${isLocalToday('COALESCE(i.voided_at, i.created_at)')}))   -- CANCEL_MEANS_CANCEL_V1: по дню отмены
      ORDER BY i.created_at DESC, i.id DESC
      LIMIT 500
   `).all();
@@ -382,7 +382,7 @@ export function cashierInvoices(db, args, user) {
     WHERE payer_id IS NULL                                                             -- COVERAGE_SPLIT_V1: чипы считают только кассовые счета
       AND (${outstandingWhere()}
        OR (status = 'paid' AND ${isLocalToday('COALESCE(paid_at, created_at)')})
-       OR (status IN ('void', 'refunded') AND ${isLocalToday('created_at')}))
+       OR (status IN ('void', 'refunded') AND ${isLocalToday('COALESCE(voided_at, created_at)')}))   -- CANCEL_MEANS_CANCEL_V1
     GROUP BY status
   `).all()) {
     const key = (r.status === 'void' || r.status === 'refunded') ? 'cancelled' : r.status;
@@ -538,14 +538,66 @@ export function voidInvoice(db, args, user) {
     }
 
     assertTransition('invoice', invoice.status, 'void');
-    db.prepare("UPDATE invoices SET status = 'void' WHERE id = ?").run(invoiceId);
-    // Free the visit lines for re-billing (started/finished work keeps its link).
+    db.prepare("UPDATE invoices SET status = 'void', voided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(invoiceId);
+
+    // CANCEL_MEANS_CANCEL_V1 (2026-09-18) — ОТМЕНА СЧЁТА СНИМАЕТ УСЛУГИ С ВИЗИТА.
+    //
+    // Владелец: «why in the cashier's cancelled invoices goes to the unpaid? and
+    // if we were to cancel it should be cancelled».
+    //
+    // Раньше отмена возвращала неначатые услуги в «не выставлено» (status
+    // 'added' без счёта) — «чтобы выставить заново». Но 'added' без счёта во
+    // всей программе значит «ждёт кассу»: доска очереди показывала пациента как
+    // «ожидает оплату», лаборатория — во вкладке «Не оплачено», кабинет врача
+    // отказывал «услуга ещё не проведена кассой», а регистратура нажимала
+    // «Выставить счёт» — и отменённый счёт возрождался в «НЕ ОПЛАЧЕН». Отмена
+    // выглядела как ничего.
+    //
+    // Теперь неначатая услуга уходит вместе со счётом (как её убирает и
+    // «Убрать услугу» в карте пациента); строки счёта остаются навсегда — это
+    // и есть запись о том, что было выставлено. Начатая или оказанная работа
+    // по-прежнему не трогается. Кассир, который отменяет счёт, чтобы выставить
+    // его заново (скидка, другой плательщик), ставит галочку keep_services —
+    // тогда услуги остаются в визите, как раньше. Услуга со следом работы
+    // (результат анализа, документ, сообщение прибора) не удаляется никогда:
+    // она остаётся в визите невыставленной, и это названо в ответе.
+    // Стационар (admission_services) живёт по своему правилу ниже.
+    const keepServices = args.keep_services === true || args.keep_services === 1;
+    const lines = db.prepare(`
+      SELECT vs.id, vs.status, COALESCE(s.name, p.name, '') AS name
+        FROM visit_services vs
+        LEFT JOIN services s ON s.id = vs.service_id
+        LEFT JOIN products p ON p.id = vs.clinic_item_id
+       WHERE vs.invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
+         AND vs.status NOT IN ('in_progress', 'completed')`).all(invoiceId);
+    const hasTrace = db.prepare(`
+      SELECT (EXISTS(SELECT 1 FROM lab_results WHERE visit_service_id = ?)
+           OR EXISTS(SELECT 1 FROM visit_documents WHERE visit_service_id = ?)
+           OR EXISTS(SELECT 1 FROM lab_device_messages WHERE visit_service_id = ?)) AS t`);
+    const release = db.prepare("UPDATE visit_services SET invoice_item_id = NULL, status = 'added' WHERE id = ?");
+    const removed = [];
+    const released = [];
+    for (const l of lines) {
+      if (!keepServices && !hasTrace.get(l.id, l.id, l.id).t) {
+        // Талон очереди на снятую услугу тоже уходит: номер без услуги — мусор на доске.
+        db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(l.id);
+        db.prepare('DELETE FROM visit_services WHERE id = ?').run(l.id);
+        removed.push(l.name);
+      } else {
+        release.run(l.id);
+        released.push(l.name);
+      }
+    }
+    // Журнал счёта: кто отменил и что стало с услугами. Раньше строку писал
+    // только облачный экран, и «История» кассы об отменах молчала.
+    const actor = db.prepare('SELECT full_name, role FROM users WHERE id = ?').get(user.id) || {};
+    const note = (removed.length ? 'Сняты с визита: ' + removed.join(', ') : '')
+      + (removed.length && released.length ? '. ' : '')
+      + (released.length ? 'Оставлены в визите невыставленными: ' + released.join(', ') : '');
     db.prepare(`
-      UPDATE visit_services
-         SET invoice_item_id = NULL, status = 'added'
-       WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
-         AND status NOT IN ('in_progress', 'completed')
-    `).run(invoiceId);
+      INSERT INTO invoice_audit_log (invoice_id, invoice_number, visit_id, action, from_status, to_status, amount, refund_amount, actor_user_id, actor_name, actor_role, reason, notes)
+      VALUES (?, ?, ?, 'void', ?, 'void', 0, 0, ?, ?, ?, NULL, ?)`)
+      .run(invoiceId, invoice.invoice_number || null, invoice.visit_id || null, invoice.status, user.id, actor.full_name || null, actor.role || null, note || null);
 
     // ADM_LINE_RELEASE_V1 — inpatient lines must be released too. Voiding used
     // to touch visit_services only, so an admission's lines kept pointing at the
@@ -558,7 +610,7 @@ export function voidInvoice(db, args, user) {
        WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
     `).run(invoiceId);
 
-    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) };
+    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId), removed_services: removed, released_services: released };
   });
 
   return run();

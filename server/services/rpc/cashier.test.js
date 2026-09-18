@@ -255,10 +255,13 @@ test('void_invoice cancels only money-free invoices and re-opens visit services'
 
   const res = voidInvoice(db, { invoice_id: inv1.id }, cashier);
   assert.equal(res.invoice.status, 'void');
-  // the visit line is free for re-billing again
-  const vsRow = db.prepare('SELECT invoice_item_id, status FROM visit_services WHERE id=?').get(vs1);
-  assert.equal(vsRow.invoice_item_id, null);
-  assert.equal(vsRow.status, 'added');
+  assert.ok(res.invoice.voided_at, 'момент отмены записан');
+  // CANCEL_MEANS_CANCEL_V1 — неначатая услуга снята с визита: пациент не ждёт кассу.
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE id=?').get(vs1).n, 0, 'услуга ушла вместе со счётом');
+  assert.equal(res.removed_services.length, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM invoice_items WHERE invoice_id=?").get(inv1.id).n, 1, 'строка счёта — запись о выставленном, остаётся');
+  const log = db.prepare("SELECT action, to_status, actor_user_id, notes FROM invoice_audit_log WHERE invoice_id=?").get(inv1.id);
+  assert.equal(log.to_status, 'void'); assert.equal(log.actor_user_id, cashier.id); assert.match(log.notes, /Сняты с визита/);
   // double-void rejected; paid invoice rejected
   assert.throws(() => voidInvoice(db, { invoice_id: inv1.id }, cashier), /отмен/i);
   assert.throws(() => voidInvoice(db, { invoice_id: inv2.id }, cashier), /возврат|деньги/i);
@@ -423,4 +426,43 @@ test('DEBT_FLOW_V1: выписанному пациенту счёт отмен�
   assert.equal(cashierInvoices(db, {}, cashier).rows.find((r) => r.id === invoice.id).admission_status, 'discharged');
   voidInvoice(db, { invoice_id: invoice.id }, cashier);
   assert.equal(db.prepare('SELECT status FROM invoices WHERE id=?').get(invoice.id).status, 'void');
+});
+
+// CANCEL_MEANS_CANCEL_V1 — отмена = отмена; галочка «оставить услуги» — прежний путь;
+// плитка «ОТМЕНЁН» считает по дню отмены, а не по дню выставления.
+test('void: галочка keep_services оставляет услугу в визите невыставленной — прежнее поведение', () => {
+  const { db, vid, vs1 } = seed();
+  const inv = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar).invoice;
+  const res = voidInvoice(db, { invoice_id: inv.id, keep_services: true }, cashier);
+  const row = db.prepare('SELECT invoice_item_id, status FROM visit_services WHERE id=?').get(vs1);
+  assert.equal(row.invoice_item_id, null);
+  assert.equal(row.status, 'added');
+  assert.deepEqual(res.released_services.length, 1);
+  assert.equal(res.removed_services.length, 0);
+  // И её можно выставить заново.
+  const again = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar).invoice;
+  assert.notEqual(again.id, inv.id);
+});
+
+test('void: начатая работа остаётся привязанной к отменённому счёту, а не удаляется', () => {
+  const { db, vid, vs1, vs2 } = seed();
+  const inv = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1, vs2] }, registrar).invoice;
+  db.prepare("UPDATE visit_services SET status = 'in_progress' WHERE id = ?").run(vs2);
+  const res = voidInvoice(db, { invoice_id: inv.id }, cashier);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE id=?').get(vs1).n, 0, 'неначатая — снята');
+  const kept = db.prepare('SELECT invoice_item_id, status FROM visit_services WHERE id=?').get(vs2);
+  assert.ok(kept && kept.invoice_item_id, 'начатая — на месте и со ссылкой на счёт');
+  assert.equal(res.removed_services.length, 1);
+});
+
+test('плитка «ОТМЕНЁН»: счёт, выставленный вчера и отменённый сегодня, виден сегодня', () => {
+  const { db, vid, vs1 } = seed();
+  const inv = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar).invoice;
+  db.prepare("UPDATE invoices SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 day') WHERE id = ?").run(inv.id);
+  openCashShift(db, { opening_float: 0 }, cashier);
+  voidInvoice(db, { invoice_id: inv.id }, cashier);
+  const r = cashierInvoices(db, {}, cashier);
+  assert.equal(r.counts.cancelled.n, 1, 'считается по дню отмены');
+  assert.ok(r.rows.some((x) => x.id === inv.id && x.status === 'void'), 'и стоит в списке');
+  assert.equal(r.counts.unpaid.n, 0, 'в «НЕ ОПЛАЧЕН» ничего не вернулось');
 });

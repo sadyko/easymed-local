@@ -46,7 +46,7 @@ test('главный админ удаляет отменённый счёт —
 
 test('услуга визита остаётся и снова доступна к выставлению', () => {
   const { db, invoice, vs } = seed();
-  voidInvoice(db, { invoice_id: invoice.id }, CASH);
+  voidInvoice(db, { invoice_id: invoice.id, keep_services: true }, CASH);   // CANCEL_MEANS_CANCEL_V1 — здесь проверяется удаление счёта, услуга оставлена нарочно
   deleteInvoice(db, { invoice_id: invoice.id }, ADMIN);
   const line = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vs);
   assert.ok(line, 'сама услуга не удаляется вместе со счётом');

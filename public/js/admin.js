@@ -60,7 +60,7 @@ import { renderServiceWorkspace } from './admin/views/service-workspace.js?v=aug
 import { renderPatientCard }  from './admin/views/patient-card.js?v=labshared1';   // PATIENT_CARD_DESIGN_V2 + SVC_ROW_ACTIONS_V1 (?v must match service-workspace.js)
 import { renderPlaceholder }  from './admin/views/placeholder.js';
 import { renderSectionCrud }  from './admin/views/section-crud.js?v=svceditor1';
-import { renderCashier, renderCashierHead } from './admin/views/cashier-desk.js?v=cash6';   // CASHIER_DESIGN_V2 + CASHIER_ROW_FIT_V1 — patient cell width, RU status, compact date
+import { renderCashier, renderCashierHead } from './admin/views/cashier-desk.js?v=cash7';   // CASHIER_DESIGN_V2 + CASHIER_ROW_FIT_V1 — patient cell width, RU status, compact date
 import { renderReport }       from './admin/views/report.js';
 import { renderLaboratory }   from './admin/views/laboratory.js?v=labwords1';   // LAB_STATS_V1 — third mode «Статистика» (usage counters, no money) on the shared LAB_HEAD_ONE_V1 head
 import { renderProcedures }   from './admin/views/procedures.js?v=unassigned1';
