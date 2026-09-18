@@ -20,6 +20,8 @@
 // не сведения, поэтому её здесь нет.
 import { RpcError } from './inpatient-flow.js';
 import { hasAnyRole } from '../roles.js';
+// GRANTS_V1 — права по справочнику (Настройки → Роли); прежние списки ролей — значение по умолчанию.
+import { requireGrant } from '../grants.js';
 import { ACCOMMODATION_NOTE_PREFIX } from '../../../public/js/shared/accommodation-line.js';
 
 /** Кто видит деньги госпитализации — тот же круг, что и у проживания. */
@@ -52,7 +54,7 @@ function lineKind(row) {
  * той сумме, которую он увидел.
  */
 export function admissionCharges(db, args, user) {
-  requireRole(user, CHARGES_READ_ROLES, 'Акт выполненных работ');
+  requireGrant(db, user, 'inpatient.services', 'view', CHARGES_READ_ROLES, 'смотреть услуги стационара');
   const admissionId = Number(args && args.admission_id) || null;
   if (!admissionId) throw new RpcError('Госпитализация не выбрана.', 400);
   const adm = db.prepare('SELECT id, admission_no, patient_id FROM admissions WHERE id = ?').get(admissionId);
@@ -173,7 +175,7 @@ export const SERVICE_ADD_ROLES = ['admin', 'head_doctor', 'doctor'];
  * пробирку никто не возьмёт.
  */
 export function admissionServiceAdd(db, args, user) {
-  requireRole(user, SERVICE_ADD_ROLES, 'Назначение услуги');
+  requireGrant(db, user, 'inpatient.services', 'edit', SERVICE_ADD_ROLES, 'добавлять услуги в стационаре');
   const a = args || {};
   const admissionId = Number(a.admission_id) || null;
   const serviceId = Number(a.service_id) || null;
@@ -229,7 +231,7 @@ export const SERVICE_UNDO_MIN = 15;
  * числом нельзя. Строку, ушедшую в счёт, не трогаем вовсе: за ней деньги.
  */
 export function admissionServiceDone(db, args, user) {
-  requireRole(user, SERVICE_DONE_ROLES, 'Отметка выполнения');
+  requireGrant(db, user, 'inpatient.services', 'edit', SERVICE_DONE_ROLES, 'отмечать выполнение услуг');
   const id = Number(args && args.line_id) || null;
   if (!id) throw new RpcError('Строка не выбрана.', 400);
   const row = db.prepare('SELECT * FROM admission_services WHERE id = ?').get(id);

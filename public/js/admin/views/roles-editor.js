@@ -52,6 +52,10 @@ import { roleReach, reachSentences } from '../role-reach.js?v=reach1';
 // программа действительно проверяет (см. шапку role-actions.js).
 import { levelsFor, openAction, actionFor, levelFromActions, actionsFromLevel }
     from '../role-actions.js?v=acts1';
+// ROLES_MATRIX_V1 — матрица «раздел → окно → действие» по общему справочнику
+// прав (shared/permission-catalog.js). Старые поля sections/levels выводятся
+// из неё при сохранении, чтобы прежние ворота продолжали работать.
+import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm1';
 
 // ROLE_KEYS_V2 — матрица строится из permissions.js NAV_MODULES, того же
 // списка, который читают сами ворота бокового меню. Когда-то это была вторая
@@ -131,12 +135,14 @@ function askDiscard() {
 // снимком того же вида: у роли, сохранённой до появления уровней, уровня в
 // JSON нет, и наивное сравнение объявляло бы такую роль изменённой сразу
 // после загрузки — предупреждение, которое всегда врёт, перестают читать.
-function snapshot(sections, levels, tabs) {
+function snapshot(sections, levels, tabs, grants) {
     const keys = [...sections].sort();
     const tkeys = Object.keys(tabs || {}).sort();
+    const gkeys = Object.keys(grants || {}).sort();
     return JSON.stringify({
         s: keys, l: keys.map(k => levels[k] || DEFAULT_LEVEL),
         t: tkeys.map(k => k + '=' + tabs[k]),
+        g: gkeys.map(k => k + '=' + grants[k]),
     });
 }
 
@@ -215,18 +221,17 @@ export async function renderRolesEditor(container, { onBack } = {}) {
     }
 
     function current() {
-        const { sections, levels, patient_tabs } = collect();
-        return snapshot(sections, levels, patient_tabs);
+        const { sections, levels, patient_tabs, grants } = collect();
+        return snapshot(sections, levels, patient_tabs, grants);
     }
 
     // Одно место, где состояние экрана превращается в то, что уходит в базу —
     // и «изменено ли», и «что сохранить» считаются по нему, иначе они разойдутся.
     function collect() {
-        const sections = [];
-        const levels = {};
-        for (const [key, ctl] of Object.entries(state.controls)) {
-            if (ctl.chk.checked) { sections.push(key); levels[key] = ctl.level.value || DEFAULT_LEVEL; }
-        }
+        // ROLES_MATRIX_V1 — источник правды теперь grants; старые sections/levels
+        // выводятся из них, а неизвестные справочнику ключи переносятся как есть.
+        const grants = collectGrants(state.grantControls || {});
+        const { sections, levels } = legacyFromGrants(grants, state.prevLegacy || {});
         // ROLE_SAVE_PRESERVE_V1 — вкладки, которых этот экран не рисует,
         // переносим как есть: иначе сохранение роли молча стирало бы настройку,
         // сделанную где-то ещё.
@@ -234,7 +239,7 @@ export async function renderRolesEditor(container, { onBack } = {}) {
         for (const [tab, ctl] of Object.entries(state.tabControls)) {
             patient_tabs[tab] = tabLevelOf({ view: ctl.view.checked, edit: !!(ctl.edit && ctl.edit.checked), del: !!(ctl.del && ctl.del.checked) });
         }
-        return { sections, levels, patient_tabs };
+        return { sections, levels, patient_tabs, grants };
     }
 
     // CUSTOM_ROLES_V1 ---------------------------------------------------------
@@ -337,6 +342,8 @@ export async function renderRolesEditor(container, { onBack } = {}) {
         state.selected = key;
         state.baseline = null;
         state.controls = {};
+        state.grantControls = {};
+        state.prevLegacy = {};
         state.tabControls = {};
         state.otherTabs = {};
         paintActive();
@@ -355,9 +362,10 @@ export async function renderRolesEditor(container, { onBack } = {}) {
             let p = data && data.permissions;
             if (typeof p === 'string') p = JSON.parse(p);
             const tabs = (p && p.patient_tabs && typeof p.patient_tabs === 'object') ? p.patient_tabs : {};
+            const grants = (p && p.grants && typeof p.grants === 'object') ? p.grants : null;
             perms = (p && Array.isArray(p.sections))
-                ? { sections: p.sections, levels: p.levels || {}, patient_tabs: tabs, configured: true }
-                : { sections: [], levels: {}, patient_tabs: tabs, configured: false };
+                ? { sections: p.sections, levels: p.levels || {}, patient_tabs: tabs, grants, configured: true }
+                : { sections: [], levels: {}, patient_tabs: tabs, grants, configured: false };
         } catch (e) {
             failure = (e && e.message) || String(e);
         }
@@ -456,15 +464,20 @@ export async function renderRolesEditor(container, { onBack } = {}) {
         // из трёх десятков галочек и списков.
         card.addEventListener('change', paintReach);
 
-        for (const grp of ROLE_MODULES) {
-            // Заголовок группы несёт подпись колонки уровня: одна видимая
-            // подпись на группу вместо двадцати повторов над каждым списком.
-            card.appendChild(h('div', { class: 'roles-group' },
-                h('span', { class: 'roles-group-name' }, grp.group),
-                h('span', { class: 'roles-group-lvl' }, 'Отметьте, что сотрудник может делать'),
-            ));
-            for (const it of grp.items) card.appendChild(moduleRow(it, granted, levels));
-        }
+        // ROLES_MATRIX_V1 — раздел → окно → действие. Роль без grants получает
+        // их из старых полей: экран показывает то, что действует сейчас, а не
+        // пустую матрицу, которая читалась бы как «у роли нет ничего».
+        state.prevLegacy = { sections: perms.sections || [], levels: perms.levels || {} };
+        const grants = perms.grants || grantsFromLegacy(perms);
+        card.appendChild(h('div', { class: 'roles-group' },
+            h('span', { class: 'roles-group-name' }, 'Разделы, окна и действия'),
+            h('span', { class: 'roles-group-lvl' }, 'Нет · Просмотр · Изменение · Удаление'),
+        ));
+        card.appendChild(h('p', { class: 'roles-unset' },
+            'Уровни вложены: «Изменение» включает «Просмотр», «Удаление» — всё вместе. Под каждой строкой написано, что даёт выбранный уровень.'));
+        const matrixHost = h('div', { class: 'rm' });
+        card.appendChild(matrixHost);
+        state.grantControls = paintCatalog(matrixHost, grants, { onAnyChange: paintReach });
 
         // PATIENT_TAB_ACCESS_V1 — вкладки карты пациента. Владелец: «we need to
         // add a patients card tabs to the view/edit/delete option». Отдельная
@@ -603,8 +616,8 @@ export async function renderRolesEditor(container, { onBack } = {}) {
 
     async function save(saveBtn) {
         if (state.busy) return;
-        const { sections, levels, patient_tabs } = collect();
-        const permissions = JSON.stringify({ sections, levels, patient_tabs });
+        const { sections, levels, patient_tabs, grants } = collect();
+        const permissions = JSON.stringify({ sections, levels, patient_tabs, grants });
         const role = state.selected;
 
         // Кнопка остаётся активной ДО начала запроса и запирается на время
@@ -614,7 +627,7 @@ export async function renderRolesEditor(container, { onBack } = {}) {
             const { error } = await supabase.from('role_permissions')
                 .update({ permissions }).eq('role', role).select().single();
             if (error) throw new Error(error.message || String(error));
-            state.baseline = snapshot(sections, levels, patient_tabs);
+            state.baseline = snapshot(sections, levels, patient_tabs, grants);
             toast(tr('Права сохранены — сотрудники увидят их при следующем входе.') + ' · ' + (customOf(role) ? customOf(role).name : tr(roleLabel(role))), 'ok');
         } catch (e) {
             // В сообщении есть следующий шаг, а не только беда.
@@ -636,11 +649,9 @@ export async function renderRolesEditor(container, { onBack } = {}) {
         // И сами галочки: отмеченное во время запроса не попало бы в него, но
         // попало бы в новый снимок «сохранено» — экран считал бы себя чистым,
         // а на сервере этой галочки не было бы.
-        for (const ctl of Object.values(state.controls)) {
-            ctl.chk.disabled = on;
-            // Уровень запирается и по своему обычному правилу — «раздел не отмечен».
-            ctl.level.disabled = on || !ctl.chk.checked;
-        }
+        // ROLES_MATRIX_V1 — переключатели матрицы гаснут на время записи по той
+        // же причине, что и галочки вкладок ниже.
+        for (const ctl of Object.values(state.grantControls || {})) ctl.disable(on);
         // PATIENT_TAB_ACCESS_V1 — галочки вкладок по той же причине.
         for (const ctl of Object.values(state.tabControls)) {
             ctl.view.disabled = on;

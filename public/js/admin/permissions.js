@@ -113,6 +113,7 @@ const ALWAYS_ALLOWED = new Set(['specialties', 'updates', 'subscription', 'clini
 let _effective    = null;   // Set<string> | null (null = full access)
 let _levels       = {};     // { key: 'viewer'|'editor'|'admin' }
 let _patientTabs  = {};     // { tabId: 'none'|'view'|'edit' } — absent key = visible (default)
+let _grants       = {};     // GRANTS_V1 — { 'inpatient.vitals': 'edit', … } по справочнику прав
 let _roleLabel    = null;   // human label of the role currently in force
 let _actorRoles   = [];     // INPATIENT_ROLE_GATE_V1 — role CODES currently in force
 
@@ -206,6 +207,7 @@ export function hasRestriction()   { return _effective instanceof Set; }
 
 // Grant full access (super admin / no role / "view as Super Admin").
 export function setFullAccess(label = null) {
+    _grants = {};   // GRANTS_V1 — полному доступу окна не закрывают
     _effective = null;
     _levels    = {};
     _patientTabs = {};
@@ -217,9 +219,36 @@ export function setFullAccess(label = null) {
 
 // Apply a role row's permissions. An empty/missing sections list means the
 // role is unconfigured → full access (don't lock the user out).
+// GRANTS_V1 — права по справочнику (shared/permission-catalog.js): ключ → уровень.
+// Читаются экранами с ВКЛАДКАМИ (пациенты, кабинет врача, лист медсестры),
+// чтобы не показывать окно, которое роли закрыли. Действия проверяет сервер —
+// это его ворота (server/services/grants.js), а здесь только «что видно».
+const _GRANT_RANK = { none: 0, view: 1, edit: 2, delete: 3 };
+
+function grantsOf(perms) {
+    return (perms && perms.grants && typeof perms.grants === 'object') ? perms.grants : null;
+}
+
+/**
+ * Уровень по ключу справочника — или null, если роль этот ключ не настраивала.
+ * null значит «как раньше»: экраны обязаны тогда решать по старым ключам
+ * (isRouteAllowed / canView), а не считать окно закрытым.
+ */
+export function grantLevel(key) {
+    return Object.prototype.hasOwnProperty.call(_grants, key) ? _grants[key] : null;
+}
+
+/** Видно ли окно/действие: настроенный уровень выше «Нет», либо не настроено вовсе. */
+export function grantAllows(key, need = 'view') {
+    const lvl = grantLevel(key);
+    if (lvl === null) return true;
+    return (_GRANT_RANK[lvl] || 0) >= (_GRANT_RANK[need] || 0);
+}
+
 export function setEffectiveFromRole(roleRow) {
     const perms    = (roleRow && roleRow.permissions) || null;
     const sections = perms && Array.isArray(perms.sections) ? perms.sections : null;
+    _grants = { ...(grantsOf(perms) || {}) };
     _levels = (perms && perms.levels && typeof perms.levels === 'object') ? { ...perms.levels } : {};
     _patientTabs = (perms && perms.patient_tabs && typeof perms.patient_tabs === 'object') ? { ...perms.patient_tabs } : {};
     // SERVICES_TAB_V1 shim — the Услуги tab split out of Визиты; role configs saved
@@ -278,9 +307,20 @@ export function setEffectiveFromRoles(roleRows) {
     }
     if (tabs.visits === 'none' && tabs.services == null) tabs.services = 'none';   // SERVICES_TAB_V1 shim
 
+    // GRANTS_V1 — по каждому ключу самая щедрая из ролей; ключ, который ни
+    // одна роль не настраивала, остаётся ненастроенным («как раньше»).
+    const grants = {};
+    for (const r of rows) {
+        const g = grantsOf(r && r.permissions) || {};
+        for (const [k, v] of Object.entries(g)) {
+            if (!(k in grants) || (_GRANT_RANK[v] || 0) > (_GRANT_RANK[grants[k]] || 0)) grants[k] = v;
+        }
+    }
+
     _effective   = sections.size ? sections : new Set(['__no_access__']);
     _levels      = levels;
     _patientTabs = tabs;
+    _grants      = grants;
     _roleLabel   = (rows[0] && rows[0].name) || 'Roles';
     rememberRoles(rows.map((r) => r && r.name));
 }

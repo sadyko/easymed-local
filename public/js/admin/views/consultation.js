@@ -20,7 +20,7 @@ import { h, Icon, Tag, PageHead, toast, clear, avColor, initials, fmtDateTime, f
 import { kpiTile, fitViewport } from './dash-kpi.js';
 import { areaChart, legend } from './dash-charts.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { scopedDoctorId, selfDoctorId, scopedProviderId } from '../permissions.js';   // ADMIN_DOCTOR_V2 / SERVICE_SCOPE_V1
+import { scopedDoctorId, selfDoctorId, scopedProviderId, grantAllows } from '../permissions.js';   // ADMIN_DOCTOR_V2 / SERVICE_SCOPE_V1
 import { renderDoctorProfile } from './doctor-profile.js?v=btnright1';
 // DOCTOR_DASHBOARD_V1 — кабинет открывается дашбордом, и ДЕНЬГИ ЖИВУТ ТАМ.
 // serviceRateMap/serviceShare переехали в doctor-dashboard.js целиком: две
@@ -690,7 +690,12 @@ function syncSubUrl() {
     }
 }
 
+// GRANTS_V1 — окно кабинета врача можно закрыть роли в «Настройки → Роли».
+// Ключ справочника у каждой вкладки; ненастроенный ключ = вкладка видна.
+const TAB_GRANT = { dashboard: 'doctor.dashboard', appointments: 'doctor.visits', inpatients: 'doctor.inpatients', pay: 'doctor.pay', profile: 'doctor.profile' };
+
 function topTab(id, label, icon, badge) {
+    if (TAB_GRANT[id] && !grantAllows(TAB_GRANT[id], 'view')) return null;
     const on = state.tab === id;
     // CABINET_TABS_SYSTEM_V1 — системная вкладка: подчёркивание, а не таблетка.
     // Свои размеры и цвета здесь не задаются вовсе — их задаёт .tab, и вкладка

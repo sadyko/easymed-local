@@ -12,6 +12,8 @@
 // Балл NEWS не хранится: одна шкала на сервер и экран, считается при чтении.
 import { RpcError, loadAdmission } from './inpatient-flow.js';
 import { hasAnyRole } from '../roles.js';
+// GRANTS_V1 — права по справочнику (Настройки → Роли); прежние списки ролей — значение по умолчанию.
+import { requireGrant } from '../grants.js';
 import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 import { news2Score, vitalError, VITAL_RANGES, CONSCIOUSNESS } from '../../../public/js/shared/news2.js';
 
@@ -58,7 +60,7 @@ function withScore(r) {
  * @param {{admission_id, measured_at?, temp_c?, bp_sys?, bp_dia?, pulse_bpm?, resp_rate?, spo2?, on_oxygen?, consciousness?, note?}} args
  */
 export function admissionVitalsAdd(db, args, user) {
-  if (!hasAnyRole(user, VITALS_WRITE_ROLES)) throw new RpcError('Измерения вносит медсестра или врач.', 403);
+  requireGrant(db, user, 'inpatient.vitals', 'edit', VITALS_WRITE_ROLES, 'записывать измерения');
   const a = args || {};
   const run = db.transaction(() => {
     const adm = loadAdmission(db, a.admission_id);
@@ -91,9 +93,34 @@ export function admissionVitalsAdd(db, args, user) {
   return run();
 }
 
+/**
+ * GRANTS_V1 — удалить ОШИБОЧНОЕ измерение. Владелец: «adding measurements etc.
+ * deleting, view and editing options too».
+ *
+ * Удаление здесь — настоящее, а не «пометить»: у измерения нет своей истории
+ * правок, и ошибочно вбитая температура 93,6 не должна оставаться в динамике
+ * ни в каком виде — по ней считается NEWS, и ложная точка искажает тренд.
+ * Кто удалил, остаётся в журнале сервера. Право — отдельное («Удаление» у
+ * строки «Измерения» в матрице), по умолчанию его нет ни у кого, кроме
+ * администратора: медсестра вносит, а стирать — решение заведующей.
+ */
+export function admissionVitalsDelete(db, args, user) {
+  requireGrant(db, user, 'inpatient.vitals', 'delete', ['admin'], 'удалять измерения');
+  const id = Number(args && args.vital_id);
+  if (!Number.isInteger(id) || id <= 0) throw new RpcError('vital_id must be a positive integer.', 400);
+  const row = db.prepare('SELECT id, admission_id FROM admission_vitals WHERE id = ?').get(id);
+  if (!row) throw new RpcError('Измерение не найдено.', 404);
+  const adm = loadAdmission(db, row.admission_id);
+  if (!IN_BED_STATUSES.includes(adm.status)) {
+    throw new RpcError('Госпитализация закрыта — её измерения больше не меняют.', 400);
+  }
+  db.prepare('DELETE FROM admission_vitals WHERE id = ?').run(id);
+  return { ok: true, summary: vitalsSummary(db, adm) };
+}
+
 /** Все измерения госпитализации, новые первыми. */
 export function admissionVitalsList(db, args, user) {
-  if (!hasAnyRole(user, VITALS_READ_ROLES)) throw new RpcError('Показатели — недоступно вашей роли.', 403);
+  requireGrant(db, user, 'inpatient.vitals', 'view', VITALS_READ_ROLES, 'смотреть измерения');
   const adm = loadAdmission(db, args && args.admission_id);
   const rows = db.prepare(`
     SELECT v.*, u.full_name AS measured_by_name FROM admission_vitals v

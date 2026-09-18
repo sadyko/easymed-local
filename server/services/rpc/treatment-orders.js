@@ -31,6 +31,8 @@ import {
   RpcError, loadAdmission, assertAdmissionAtLeast, assertCanPrescribe,
 } from './inpatient-flow.js';
 import { hasAnyRole } from '../roles.js';
+// GRANTS_V1 — права по справочнику (Настройки → Роли); прежние списки ролей — значение по умолчанию.
+import { requireGrant } from '../grants.js';
 import { today, localDate } from '../domain/day.js';   // SERVICE_TASKS_V1 — день задачи МЕСТНЫЙ
 import {
   FREQ_CODES, ROUTES, freqSlots, isPrnFreq,
@@ -139,6 +141,10 @@ function loadOrder(db, orderId) {
  */
 export function treatmentOrderCreate(db, args, user) {
   const a = args || {};
+  // GRANTS_V1 — сначала право РОЛИ (его выдаёт заведующая), потом медицинское
+  // правило «лечащий врач своего пациента» (assertCanPrescribe): право не
+  // отменяет правило, оно стоит перед ним.
+  requireGrant(db, user, 'inpatient.prescriptions', 'edit', ['doctor', 'head_doctor', 'admin'], 'добавлять назначения');
   const adm = assertCanPrescribe(db, a.admission_id, user);
 
   const kind = str(a.kind, 20, 'med') || 'med';
@@ -220,6 +226,7 @@ export function treatmentOrderCreate(db, args, user) {
  */
 export function treatmentOrderCancel(db, args, user) {
   const a = args || {};
+  requireGrant(db, user, 'inpatient.prescriptions', 'delete', ['doctor', 'head_doctor', 'admin'], 'отменять назначения');
   const order = loadOrder(db, a.order_id);
   assertCanPrescribe(db, order.admission_id, user);
 
@@ -261,7 +268,7 @@ function parseSlots(order) {
  * Записи (создание, отметка, снятие) охранник проверяют, чтение — нет.
  */
 export function treatmentOrdersList(db, args, user) {
-  requireRole(user, READ_ROLES, 'Лист назначений');
+  requireGrant(db, user, 'inpatient.prescriptions', 'view', READ_ROLES, 'смотреть лист назначений');
   const a = args || {};
   const adm = loadAdmission(db, a.admission_id);
 
@@ -614,7 +621,7 @@ function liveMark(db, orderId, date, slot) {
  * распространяется (частичный UNIQUE в миграции 093).
  */
 export function treatmentAdminMark(db, args, user) {
-  requireRole(user, MARK_ROLES, 'Отметка выполнения');
+  requireGrant(db, user, 'inpatient.marks', 'edit', MARK_ROLES, 'отмечать введение препаратов');
   const a = args || {};
   const order = loadOrder(db, a.order_id);
   assertAdmissionAtLeast(db, order.admission_id, 'active');
@@ -791,7 +798,7 @@ export function unmarkVerdict(row, user, nowMs, windowMin = UNMARK_WINDOW_MIN) {
  * меткой этой отметки уже нет, и возвращать нечего.
  */
 export function treatmentAdminUnmark(db, args, user) {
-  requireRole(user, UNMARK_ROLES, 'Снятие отметки');
+  requireGrant(db, user, 'inpatient.marks', 'edit', UNMARK_ROLES, 'снимать отметки о введении');
   const a = args || {};
   const id = posIntOrNull(a.administration_id);
   if (id === null) throw new RpcError('administration_id must be a positive integer.', 400);
@@ -862,7 +869,7 @@ function groupOf(state, dueMs, nowMs) {
  * строится.
  */
 export function treatmentTasksDue(db, args, user) {
-  requireRole(user, READ_ROLES, 'Список задач');
+  requireGrant(db, user, 'inpatient.marks', 'view', READ_ROLES, 'смотреть задачи по назначениям');
   const a = args || {};
 
   const date = a.date && isDate(str(a.date, 10)) ? str(a.date, 10) : today(db);

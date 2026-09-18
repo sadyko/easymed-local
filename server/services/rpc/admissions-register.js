@@ -16,12 +16,14 @@
 // нет (стационар живёт в одном здании) — рисовать пустую колонку значит врать.
 import { RpcError } from './inpatient-flow.js';
 import { hasAnyRole } from '../roles.js';
+// GRANTS_V1 — права по справочнику (Настройки → Роли); прежние списки ролей — значение по умолчанию.
+import { requireGrant } from '../grants.js';
 
 export const REGISTER_ROLES = ['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse', 'registrar', 'cashier'];
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 export function admissionsRegister(db, args, user) {
-  if (!hasAnyRole(user, REGISTER_ROLES)) throw new RpcError('Журнал госпитализаций — недоступно вашей роли.', 403);
+  requireGrant(db, user, 'inpatient.history', 'view', REGISTER_ROLES, 'смотреть журнал госпитализаций');
   const raw = Number(args && args.limit);
   const limit = Number.isInteger(raw) && raw > 0 ? Math.min(raw, 1000) : 500;
   const rows = db.prepare(`

@@ -102,6 +102,15 @@ const tagsOf = (root, tag) => walk(root).filter((n) => n.tagName === tag);
 const findButtonByText = (root, re) => tagsOf(root, 'BUTTON').find((b) => re.test(textOf(b)));
 const roleButton = (root, key) => tagsOf(root, 'BUTTON').find((b) => b.dataset.role === key);
 const checkboxes = (root) => tagsOf(root, 'INPUT').filter((n) => n.attrs.type === 'checkbox');
+// ROLES_MATRIX_V1 — уровни в матрице это radio-группы: name = 'grant:<ключ>'.
+const radios = (root) => tagsOf(root, 'INPUT').filter((n) => n.attrs.type === 'radio' && String(n.attrs.name || '').startsWith('grant:'));
+const radiosFor = (root, key) => radios(root).filter((n) => n.attrs.name === 'grant:' + key);
+const pick = (root, key, lvl) => {
+  const r = radiosFor(root, key).find((n) => n.attrs.value === lvl);
+  for (const x of radiosFor(root, key)) x.checked = x === r;
+  r.dispatchEvent({ type: 'change' });
+  return r;
+};
 // PATIENT_TAB_ACCESS_V1 — на экране теперь ДВА рода галочек: разделы меню
 // (у каждой свой список уровня) и вкладки карты пациента (у них три галочки
 // вместо списка). Считать их одним числом больше нельзя.
@@ -184,14 +193,15 @@ test('экран говорит по-русски: заголовок, пояс�
     'Назад в настройки',
     'Разделы и уровень доступа',
     'Сохранить роль',
-    'Отметьте, что сотрудник может делать',
+    // ROLES_MATRIX_V1 — шапка матрицы и подсказка про вложенные уровни.
+    'Разделы, окна и действия',
+    'Нет · Просмотр · Изменение · Удаление',
+    'Уровни вложены',
     'Регистратор',
+    // Строки справочника — словами клиники, с описанием.
+    'Стационар', 'Назначения', 'Измерения', 'Кабинет врача', 'Мои визиты',
   ]) assert.ok(text.includes(s), 'нет русской строки: ' + s);
-
-  // «Overview» — единственная группа с английским ИСХОДНИКОМ (permissions.js);
-  // без словарной записи она осталась бы английской посреди русского экрана.
-  assert.ok(text.includes('Обзор'), 'группа Overview переведена');
-  assert.ok(!text.includes('Overview'), 'английская группа не осталась: ' + text.slice(0, 200));
+  assert.ok(!/Overview|Clinical|Operational/.test(text), 'английских групп на экране нет');
 
   // ROLE_ACTIONS_V1 — уровни больше не выпадающий список «просмотр /
   // изменение / удаление» у каждого раздела: он был у всех семнадцати, а
@@ -217,40 +227,35 @@ test('экран говорит по-русски: заголовок, пояс�
   }
 });
 
-test('действия предлагаются только там, где программа их проверяет', async () => {
+test('матрица рисует ровно справочник: у строки только те уровни, которые в ней что-то значат', async () => {
   resetServer();
   const root = await render();
+  const { CATALOG, catalogRows } = await import('../../shared/permission-catalog.js');
 
-  // ROLE_ACTIONS_V1. Здесь стоял тест про выпадающий список уровня у КАЖДОГО
-  // раздела и про подпись «Сначала отметьте раздел» у заблокированного списка.
-  // Он проверял аккуратность органа управления, которого не должно было быть:
-  // уровень читают пять ключей во всей программе, а список висел у всех
-  // семнадцати — и «Только просмотр» у кассы оставляло кассу ровно такой же.
-  //
-  // Новый договор: у раздела, где уровень ничего не значит, выбора нет вовсе;
-  // у остальных — названные действия, и они появляются только когда раздел
-  // отмечен. Согласие этого списка с кодом держит __tests__/role-actions.test.mjs.
-  const rows = byClass(root, 'roles-row');
-  const rowOf = (key) => rows.find((r) => walk(r).some((n) => n.attrs && n.attrs['data-perm-key'] === key
-      || (n.dataset && n.dataset.permKey === key)));
-  const actionsIn = (row) => walk(row).filter((n) => n.dataset && n.dataset.permAction);
+  // ROLES_MATRIX_V1. Каждая строка справочника — на экране, и у неё ровно тот
+  // набор уровней, что объявлен: «Удаление» у окна, где нечего удалять, было бы
+  // галочкой-обманкой.
+  for (const row of catalogRows()) {
+    const offered = radiosFor(root, row.key).map((n) => n.attrs.value);
+    assert.deepStrictEqual(offered, row.levels || ['none', 'view'], 'уровни у ' + row.key);
+  }
+  // И ничего сверх справочника: лишняя строка — это право, которого код не проверяет.
+  const onScreen = new Set(radios(root).map((n) => n.attrs.name.slice('grant:'.length)));
+  assert.deepStrictEqual([...onScreen].sort(), catalogRows().map((r) => r.key).sort());
 
-  // Касса: уровень ей ничего не даёт — значит и предлагать нечего.
-  assert.deepStrictEqual(actionsIn(rowOf('cashier')).map((n) => n.dataset.permAction), [],
-    'у кассы снова появился выбор права, которого программа не проверяет');
-  assert.deepStrictEqual(actionsIn(rowOf('queue')).map((n) => n.dataset.permAction), []);
+  // Закрытый раздел гасит свои окна и действия и говорит почему.
+  const inpatient = CATALOG.find((x) => x.key === 'inpatient');
+  pick(root, 'inpatient', 'none');
+  for (const r of [...inpatient.windows, ...inpatient.actions]) {
+    assert.ok(radiosFor(root, r.key).every((n) => n.disabled), r.key + ' остался доступен при закрытом разделе');
+  }
+  assert.ok(textOf(root).includes('Сначала откройте раздел'), 'закрытый раздел не объяснил, почему строки погасли');
+  pick(root, 'inpatient', 'view');
+  assert.ok(radiosFor(root, 'inpatient.vitals').every((n) => !n.disabled), 'открытый раздел не вернул строки');
 
-  // Пациенты: два настоящих добавочных права.
-  const patientActs = actionsIn(rowOf('patients')).map((n) => n.dataset.permAction);
-  assert.deepStrictEqual(patientActs, ['patients:editor', 'patients:admin']);
-
-  // «Удаление» без «изменения» бессмысленно — отметка тянет за собой вторую.
-  const [edit, del] = actionsIn(rowOf('patients'));
-  edit.checked = false; del.checked = false;
-  del.checked = true; del.dispatchEvent({ type: 'change' });
-  assert.strictEqual(edit.checked, true, 'отмеченное удаление не включило изменение');
-  edit.checked = false; edit.dispatchEvent({ type: 'change' });
-  assert.strictEqual(del.checked, false, 'снятое изменение оставило удаление отмеченным');
+  // Под строкой — последствие выбранного уровня, словами.
+  pick(root, 'inpatient.vitals', 'delete');
+  assert.ok(textOf(root).includes('Удаляет ошибочное измерение'), 'выбор уровня не объяснён');
 });
 
 test('ошибка загрузки: видимая ошибка с повтором, а НЕ пустая матрица', async () => {
@@ -306,10 +311,16 @@ test('сохранение: кнопка заперта на время запр
   assert.strictEqual(roleButton(root, 'doctor').disabled, false);
   assert.strictEqual(checkboxes(root)[0].disabled, false);
   assert.strictEqual(lastUpdate.role, 'registrar');
-  // Контракт хранения не менялся: те же sections + levels в role_permissions.
+  // ROLES_MATRIX_V1 — в базу уходят grants по справочнику, а старые
+  // sections/levels ВЫВОДЯТСЯ из них: «Пациенты: изменение» открывает и кнопку
+  // регистрации, а окно «Очередь» — и отдельный маршрут очереди. Это те ключи,
+  // которыми живут прежние ворота, и они не должны остаться без ответа.
   const written = JSON.parse(lastUpdate.values.permissions);
-  assert.deepStrictEqual(written.sections.sort(), ['dashboard', 'patients']);
-  assert.deepStrictEqual(written.levels, { patients: 'editor', dashboard: 'viewer' });
+  assert.deepStrictEqual(written.sections.sort(), ['dashboard', 'patients', 'queue', 'registration']);
+  assert.deepStrictEqual(written.levels, { patients: 'editor', dashboard: 'viewer', registration: 'editor', queue: 'viewer' });
+  assert.strictEqual(written.grants.patients, 'edit');
+  assert.strictEqual(written.grants['patients.queue'], 'view');
+  assert.strictEqual(written.grants.inpatient, 'none');
   assert.ok(String(toastMsg).includes('Права сохранены'), toastMsg);
 });
 
@@ -324,10 +335,8 @@ test('несохранённые изменения: смена роли и ух
   assert.strictEqual(confirmCalls, 0, 'без изменений не спрашиваем');
   assert.ok(textOf(root).includes('Врач'));
 
-  // Отмечаем раздел и пробуем уйти, ответив «нет».
-  const box = checkboxes(root).find((c) => !c.checked);
-  box.checked = true;
-  box.dispatchEvent({ type: 'change' });
+  // Меняем уровень в матрице и пробуем уйти, ответив «нет».
+  const box = pick(root, 'labs', 'view');
   confirmAnswer = false;
   roleButton(root, 'cashier').click();
   await tick();
@@ -349,8 +358,7 @@ test('несохранённые изменения: смена роли и ух
   assert.ok(textOf(root).includes('Кассир'));
 
   // После сохранения экран снова «чистый»: повторный уход не спрашивает.
-  const chk = checkboxes(root).find((c) => !c.checked);
-  chk.checked = true; chk.dispatchEvent({ type: 'change' });
+  pick(root, 'reports', 'view');
   findButtonByText(root, /Сохранить роль/).click();
   await tick();
   const after = confirmCalls;

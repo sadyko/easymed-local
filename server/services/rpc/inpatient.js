@@ -9,6 +9,8 @@ import { generateAdmissionBill } from './admission-bill.js';   // CASE_OVERVIEW_
 import { assertTransition } from '../domain/lifecycle.js';
 import { outstandingWhere } from '../domain/money.js';   // DEBT_FLOW_V1 — «ещё должен» одним списком на весь продукт
 import { hasAnyRole } from '../roles.js';
+// GRANTS_V1 — права по справочнику (Настройки → Роли); прежние списки ролей — значение по умолчанию.
+import { requireGrant } from '../grants.js';
 // INPATIENT_FLOW_V1 (миграция 091) — «в койке» это ЧЕТЫРЕ состояния, а не одно.
 // Каждый запрос ниже, который раньше спрашивал status='active', спрашивает этот
 // список: поступивший, но ещё не осмотренный пациент лежит в койке точно так же,
@@ -422,7 +424,7 @@ export function admitPatient(db, args, user) {
 }
 
 export function dischargePatient(db, args, user) {
-  requireRole(user, DISCHARGE_ROLES);
+  requireGrant(db, user, 'inpatient.discharge', 'edit', DISCHARGE_ROLES, 'выписывать пациентов');
 
   const admissionId = args && args.admission_id;
   if (!isPositiveInt(admissionId)) {
@@ -597,7 +599,7 @@ export function dischargePatient(db, args, user) {
 }
 
 export function setBedStatus(db, args, user) {
-  requireRole(user, BED_STATUS_ROLES);
+  requireGrant(db, user, 'inpatient.beds', 'edit', BED_STATUS_ROLES, 'менять состояние койки');
 
   const bedId = args && args.bed_id;
   if (!isPositiveInt(bedId)) {
@@ -727,9 +729,7 @@ function textArg(v, max) {
  *          planned_at?:string, note?:string, doctor_id?:number}} args
  */
 export function admissionOrderCreate(db, args, user) {
-  if (!hasAnyRole(user, ORDER_CREATE_ROLES)) {
-    throw new RpcError('Оформить заявку на госпитализацию может регистратура, старшая медсестра, врач, главный врач или администратор.', 403);
-  }
+  requireGrant(db, user, 'inpatient.requests', 'edit', ORDER_CREATE_ROLES, 'оформить заявку на госпитализацию');
 
   const patientId = args && args.patient_id;
   if (!isPositiveInt(patientId)) throw new RpcError('patient_id must be a positive integer.', 400);

@@ -19,6 +19,8 @@
 // главный врач, администратор и пост — по всем: у них и обход по всем.
 import { RpcError, loadAdmission } from './inpatient-flow.js';
 import { hasAnyRole, effectiveRoles } from '../roles.js';
+// GRANTS_V1 — права по справочнику (Настройки → Роли); прежние списки ролей — значение по умолчанию.
+import { requireGrant } from '../grants.js';
 import { sheetView } from './title-sheet.js';
 import { admissionCaseDocs } from './inpatient-reviews.js';
 import { accommodationState } from './accommodation.js';
@@ -37,8 +39,8 @@ const FREQ_PER_DAY = { '1x': 1, '2x': 2, '3x': 3, '4x': 4, q6h: 4, once: 1, prn:
 function nowUtc(db) {
   return db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now') t").get().t;
 }
-function requireRead(user) {
-  if (!hasAnyRole(user, OVERVIEW_ROLES)) throw new RpcError('Обзор госпитализации — недоступно вашей роли.', 403);
+function requireRead(db, user) {
+  requireGrant(db, user, 'inpatient.patients', 'view', OVERVIEW_ROLES, 'открывать обзор госпитализации');
 }
 function slotsPerDay(o) {
   try {
@@ -77,7 +79,7 @@ export function wardNeighbours(db, adm, user) {
 }
 
 export function admissionOverview(db, args, user) {
-  requireRead(user);
+  requireRead(db, user);
   const adm = loadAdmission(db, args && args.admission_id);
   const now = nowUtc(db);
   // CLINIC_DAY_V1 — «сегодня» у клиники МЕСТНОЕ, а не по Гринвичу. Обзор резал

@@ -35,6 +35,7 @@ import { h, Icon, clear } from '../ui.js';
 // I18N_COVERAGE_V1 — причина сбоя подставляется В ПЕРЕВЕДЁННЫЙ шаблон, а не
 // склеивается из кусков: склейка непереводима целиком ни на один язык.
 import { trf } from '../i18n.js';
+import { grantAllows } from '../permissions.js';   // GRANTS_V1 — окна раздела по матрице прав
 // Те же адреса модулей, что у admin.js: одна строка импорта — один экземпляр
 // модуля. Разошедшийся ?v= развёл бы состояние экрана на две копии.
 import { renderPatients } from './patients.js?v=regfit2';
@@ -135,7 +136,11 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     const strip = h('div', { class: 'reg-tabs', role: 'tablist', 'aria-label': 'Разделы «Пациенты»' });
     const buttons = {};
     const hosts = {};
-    for (const t of TABS) {
+    // GRANTS_V1 — «Очередь» и «Записи» можно закрыть роли в «Настройки → Роли».
+    // Ненастроенный ключ = вкладка видна, как и была.
+    const TAB_GRANT = { queue: 'patients.queue', calendar: 'patients.calendar' };
+    const visibleTabs = TABS.filter((t) => !TAB_GRANT[t.id] || grantAllows(TAB_GRANT[t.id], 'view'));
+    for (const t of visibleTabs) {
         hosts[t.id] = h('div', {
             id: 'phub-panel-' + t.id, role: 'tabpanel',
             'aria-labelledby': 'phub-tab-' + t.id, 'data-tab-panel': t.id,
@@ -151,7 +156,7 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
         strip.appendChild(buttons[t.id]);
     }
     root.appendChild(strip);
-    for (const t of TABS) root.appendChild(hosts[t.id]);
+    for (const t of visibleTabs) root.appendChild(hosts[t.id]);
 
     // Вкладка монтируется при первом показе и дальше ЖИВЁТ: прокрутка списка,
     // страница пагинации и наполовину введённый поиск переживают уход на
@@ -159,6 +164,8 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     const mounted = { list: false, queue: false, calendar: false };
     let queue = null;        // пульт доски очереди (views/queue.js)
     let active = SUB_TO_TAB[sub] || 'list';
+    // GRANTS_V1 — адрес просит закрытую вкладку: открываем список, а не пустой экран.
+    if (!visibleTabs.some((t) => t.id === active)) active = 'list';
 
     // Полоса объявлена как tablist, а в tablist по стрелкам ходят: из порядка
     // обхода Tab вынуты все кнопки, кроме активной (это и есть роль tablist),
@@ -169,10 +176,10 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
         const step = key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0;
         let next = null;
         if (step) {
-            const i = TABS.findIndex((t) => t.id === id);
-            next = TABS[(i + step + TABS.length) % TABS.length];
-        } else if (key === 'Home') next = TABS[0];
-        else if (key === 'End') next = TABS[TABS.length - 1];
+            const i = visibleTabs.findIndex((t) => t.id === id);
+            next = visibleTabs[(i + step + visibleTabs.length) % visibleTabs.length];
+        } else if (key === 'Home') next = visibleTabs[0];
+        else if (key === 'End') next = visibleTabs[visibleTabs.length - 1];
         if (!next) return;
         if (typeof ev.preventDefault === 'function') ev.preventDefault();
         select(next.id);
@@ -180,7 +187,7 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     }
 
     function paintStrip({ animate = false } = {}) {
-        for (const t of TABS) {
+        for (const t of visibleTabs) {
             const on = t.id === active;
             const b = buttons[t.id];
             b.className = 'reg-tab' + (on ? ' on' : '');

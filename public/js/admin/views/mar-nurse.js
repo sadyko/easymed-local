@@ -76,7 +76,7 @@ import { fitViewport } from './dash-kpi.js';   // MAR_ONE_SCREEN_V1 — смен
 import { mountOutpatients } from './mar-outpatients.js';
 import { currentUser } from '../data.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { isModuleAllowed } from '../permissions.js';
+import { isModuleAllowed, grantAllows } from '../permissions.js';
 import { inpatientModal } from './admission-modal.js?v=inp5';
 // MAR_OUTCOME_VISIBLE_V1 — знак, цвет и тон состояния берутся у ЛИСТА ВРАЧА, а
 // не заводятся здесь заново: «отказ пациента» обязан выглядеть одинаково на
@@ -605,8 +605,9 @@ export async function renderMarNurse(root, ctx = {}) {
     const tabsEl = h('div', { class: 'tabs', role: 'tablist', style: { marginBottom: '10px' } });
     function paintTabs() {
         clear(tabsEl);
-        tabsEl.appendChild(tabBtn('ward', tr('Стационар')));
-        tabsEl.appendChild(tabBtn('outpatient', tr('Амбулаторные')));
+        // GRANTS_V1 — вкладку можно закрыть роли в «Настройки → Роли».
+        if (grantAllows('mar.inpatient', 'view')) tabsEl.appendChild(tabBtn('ward', tr('Стационар')));
+        if (grantAllows('mar.outpatient', 'view')) tabsEl.appendChild(tabBtn('outpatient', tr('Амбулаторные')));
         wardField.style.display = state.mode === 'ward' ? '' : 'none';
     }
     paintTabs();

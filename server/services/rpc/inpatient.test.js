@@ -264,7 +264,8 @@ test('set_bed_status: free->cleaning ok; rejects occupied, a bed with an active 
   legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse);
   assert.throws(() => setBedStatus(db, { bed_id: bed1, status: 'free' }, nurse), /400|active|admission/i);
 
-  assert.throws(() => setBedStatus(db, { bed_id: bed2, status: 'free' }, lab), /403|allow|forbid|role/i);
+  // GRANTS_V1 — отказ теперь словами матрицы прав: «… недоступно вашей роли».
+  assert.throws(() => setBedStatus(db, { bed_id: bed2, status: 'free' }, lab), (e) => e.status === 403 && /недоступно вашей роли/.test(e.message));
 });
 
 // ---- BED_CONSOLE_V1 ---------------------------------------------------------

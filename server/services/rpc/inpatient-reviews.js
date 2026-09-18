@@ -59,6 +59,8 @@ import {
   isAdmittingDoctor,   // ADMITTING_DOCTOR_V1
 } from './inpatient-flow.js';
 import { hasAnyRole, effectiveRoles } from '../roles.js';
+// GRANTS_V1 — права по справочнику (Настройки → Роли); прежние списки ролей — значение по умолчанию.
+import { requireGrant } from '../grants.js';
 import { titleSheetCaseItem, sheetView } from './title-sheet.js';   // TITLE_SHEET_V1
 import { sanitizeStoredHtml, htmlToText } from '../../../public/js/shared/rich-text.js';   // CASE_DOC_A4_V1
 
@@ -432,7 +434,7 @@ export function admissionReviewSave(db, args, user) {
   // «Документах», обязан приниматься так же, как встроенный.
   if (!knownKinds(db).includes(kind)) throw new RpcError(`Неизвестный род записи: ${kind}.`, 400);
 
-  requireRole(user, WRITE_ROLES, 'Врачебная запись');
+  requireGrant(db, user, 'inpatient.reviews', 'edit', WRITE_ROLES, 'писать осмотры');
 
   const publish = a.publish === true || a.publish === 1 || a.publish === 'true';
   // CASE_DOC_A4_V1 — разделы документа пишутся форматируемым текстом (лист A4,
@@ -897,7 +899,7 @@ export function admissionAttendingCandidates(db, _args, user) {
  * Его видит автор, главный врач и администратор — те, кто его и допишет.
  */
 export function admissionReviewsList(db, args, user) {
-  requireRole(user, READ_ROLES, 'Врачебные записи');
+  requireGrant(db, user, 'inpatient.reviews', 'view', READ_ROLES, 'читать осмотры');
   const adm = loadAdmission(db, args && args.admission_id);
 
   const rows = db.prepare(`
@@ -1088,7 +1090,7 @@ function groupRowsByKind(rows) {
  *        времени.
  */
 export function admissionCaseDocs(db, args, user) {
-  requireRole(user, READ_ROLES, 'Документы истории болезни');
+  requireGrant(db, user, 'inpatient.patients', 'view', READ_ROLES, 'открывать документы истории болезни');
   const adm = loadAdmission(db, args && args.admission_id);
   const nowIso = str(args && args.now, 40) || nowUtc(db);
   const now = msOf(nowIso);
@@ -1438,7 +1440,7 @@ export function admissionCaseFileSave(db, args, user) {
 }
 
 export function admissionCaseFile(db, args, user) {
-  requireRole(user, READ_ROLES, 'История болезни');
+  requireGrant(db, user, 'inpatient.patients', 'view', READ_ROLES, 'открывать историю болезни');
   const state = admissionCaseDocs(db, args, user);
   const adm = loadAdmission(db, args && args.admission_id);
 
