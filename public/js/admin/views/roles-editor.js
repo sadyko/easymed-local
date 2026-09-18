@@ -55,7 +55,7 @@ import { levelsFor, openAction, actionFor, levelFromActions, actionsFromLevel }
 // ROLES_MATRIX_V1 — матрица «раздел → окно → действие» по общему справочнику
 // прав (shared/permission-catalog.js). Старые поля sections/levels выводятся
 // из неё при сохранении, чтобы прежние ворота продолжали работать.
-import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm1';
+import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm2';
 
 // ROLE_KEYS_V2 — матрица строится из permissions.js NAV_MODULES, того же
 // списка, который читают сами ворота бокового меню. Когда-то это была вторая
@@ -166,6 +166,7 @@ export async function renderRolesEditor(container, { onBack } = {}) {
         otherTabs: {},    // настройки вкладок, которых этот экран НЕ рисует — переносим как есть
         baseline: null,   // снимок на момент загрузки; null = данных нет
         busy: false,      // идёт сохранение — форма и переключатель заперты
+        openSections: new Set(),   // ROLES_ACCORDION_V1 — раскрытые разделы матрицы, живут пока открыт экран
     };
 
     const roleBtns   = h('div', { class: 'segmented roles-tabs', role: 'group', 'aria-label': 'Выберите роль' });
@@ -477,7 +478,7 @@ export async function renderRolesEditor(container, { onBack } = {}) {
             'Уровни вложены: «Изменение» включает «Просмотр», «Удаление» — всё вместе. Под каждой строкой написано, что даёт выбранный уровень.'));
         const matrixHost = h('div', { class: 'rm' });
         card.appendChild(matrixHost);
-        state.grantControls = paintCatalog(matrixHost, grants, { onAnyChange: paintReach });
+        state.grantControls = paintCatalog(matrixHost, grants, { onAnyChange: paintReach, openSections: state.openSections });
 
         // PATIENT_TAB_ACCESS_V1 — вкладки карты пациента. Владелец: «we need to
         // add a patients card tabs to the view/edit/delete option». Отдельная

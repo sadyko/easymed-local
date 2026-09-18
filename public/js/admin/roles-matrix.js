@@ -21,8 +21,8 @@
 // без ответа. И наоборот: роль, у которой grants ещё нет, получает их из
 // старых полей при открытии — экран показывает то, что действует сейчас, а не
 // пустую матрицу, которая читалась бы как «у роли нет ничего».
-import { h } from './ui.js';
-import { tr } from './i18n.js';
+import { h, Icon } from './ui.js';
+import { tr, trf } from './i18n.js';
 import { CATALOG, LEVELS, LEVEL_LABELS, levelAllows } from '../shared/permission-catalog.js';
 
 // Старый уровень ↔ новый.
@@ -155,18 +155,55 @@ function paintNote(box, row, lvl) {
     if (lvl === 'none') box.appendChild(h('div', { class: 'rm-note-line is-none' }, tr('Сейчас: недоступно.')));
 }
 
+// ROLES_ACCORDION_V1 (2026-09-18) — владелец: «make the sections (modules) in
+// the roles section a collapsible (accordion like)».
+//
+// Семнадцать разделов с окнами, действиями и описанием каждого уровня — это
+// экран на несколько прокруток; свёрнутый раздел занимает одну строку: имя,
+// уровень и счёт «Окна 2 из 3 · Действия 4 из 6», чтобы и в закрытом виде
+// было видно, что внутри уже открыто. Какие разделы раскрыты — помнится между
+// ролями, пока экран открыт (`openSections` держит редактор ролей): админист-
+// ратор сравнивает две роли по одному и тому же разделу, не раскрывая его
+// заново; новый заход на экран начинается свёрнутым списком. Смена уровня
+// самого раздела раскрывает его: последствие выбора и строки внутри должны
+// быть перед глазами, а не за шевроном.
+
+/** Счёт открытого внутри раздела — для свёрнутой строки. */
+function paintCount(box, s, controls) {
+    while (box.firstChild) box.removeChild(box.firstChild);
+    const parts = [];
+    const tally = (rows, template) => {
+        if (!rows || !rows.length) return;
+        const on = rows.filter((r) => controls[r.key] && controls[r.key].value() !== 'none').length;
+        parts.push(trf(template, { on, all: rows.length }));
+    };
+    tally(s.windows, 'Окна {on} из {all}');
+    tally(s.actions, 'Действия {on} из {all}');
+    if (parts.length) box.appendChild(h('span', null, parts.join(' · ')));
+}
+
 /**
  * Нарисовать матрицу в `host`. `grants` — текущие значения. Возвращает
  * controls (ключ → {value, set, disable}) для collectGrants.
  * `onAnyChange` зовётся после каждого переключения — для сводки словами.
+ * `openSections` — Set ключей раскрытых разделов; экран отдаёт один и тот же
+ * на все свои перерисовки, чтобы раскрытое пережило смену роли.
  */
-export function paintCatalog(host, grants, { onAnyChange = null } = {}) {
+export function paintCatalog(host, grants, { onAnyChange = null, openSections = new Set() } = {}) {
     const controls = {};
+    const panels = [];   // [{key, open(bool)}] — для «Развернуть все / Свернуть все»
+
+    host.appendChild(h('div', { class: 'rm-toolbar' },
+        h('button', { type: 'button', class: 'link-btn rm-toolbar-btn', onclick: () => { for (const p of panels) p.open(true); } }, tr('Развернуть все')),
+        h('span', { class: 'rm-toolbar-sep', 'aria-hidden': 'true' }, '·'),
+        h('button', { type: 'button', class: 'link-btn rm-toolbar-btn', onclick: () => { for (const p of panels) p.open(false); } }, tr('Свернуть все'))));
 
     for (const s of CATALOG) {
         const sectionLvl = grants[s.key] || 'none';
-        const block = h('div', { class: 'rm-section' + (sectionLvl === 'none' ? ' is-off' : '') });
+        const block = h('div', { class: 'rm-section' + (sectionLvl === 'none' ? ' is-off' : ''), dataset: { section: s.key } });
         const kids = [];
+        const body = h('div', { class: 'rm-body' });
+        const count = h('div', { class: 'rm-count muted' });
 
         const note = h('div', { class: 'rm-note' });
         paintNote(note, s, sectionLvl);
@@ -177,43 +214,62 @@ export function paintCatalog(host, grants, { onAnyChange = null } = {}) {
             // говорим почему, вместо галочек, которые не работают.
             for (const k of kids) k.disable(lvl === 'none');
             hint.hidden = lvl !== 'none' || !kids.length;
+            setOpen(true);
             if (onAnyChange) onAnyChange();
         });
         controls[s.key] = picker;
 
-        block.appendChild(h('div', { class: 'rm-row rm-row-section' },
-            h('div', { class: 'rm-name' },
-                h('div', { class: 'rm-title' }, s.label),
-                h('div', { class: 'rm-desc' }, s.desc || '')),
-            picker.el));
-        block.appendChild(note);
+        const chev = h('span', { class: 'rm-chev' }, Icon('ChevronRight', { size: 14 }));
+        const toggle = h('button', {
+            type: 'button', class: 'rm-toggle', 'aria-expanded': 'false',
+            title: 'Показать окна и действия раздела',
+            onclick: () => setOpen(body.hidden),
+        }, chev,
+            h('span', { class: 'rm-name' },
+                h('span', { class: 'rm-title' }, s.label),
+                h('span', { class: 'rm-desc' }, s.desc || ''),
+                count));
+        const setOpen = (on) => {
+            body.hidden = !on;
+            toggle.setAttribute('aria-expanded', on ? 'true' : 'false');
+            toggle.setAttribute('title', tr(on ? 'Свернуть раздел' : 'Показать окна и действия раздела'));
+            block.classList.toggle('is-open', on);
+            if (on) openSections.add(s.key); else openSections.delete(s.key);
+        };
+        panels.push({ key: s.key, open: setOpen });
+
+        block.appendChild(h('div', { class: 'rm-row rm-row-section' }, toggle, picker.el));
+        body.appendChild(note);
 
         const hint = h('div', { class: 'rm-hint muted' }, tr('Сначала откройте раздел — тогда можно выбрать, что в нём доступно.'));
         hint.hidden = sectionLvl !== 'none' || !((s.windows || []).length || (s.actions || []).length);
-        block.appendChild(hint);
+        body.appendChild(hint);
 
         const sub = (title, rows) => {
             if (!rows || !rows.length) return;
-            block.appendChild(h('div', { class: 'rm-subhead' }, title));
+            body.appendChild(h('div', { class: 'rm-subhead' }, title));
             for (const r of rows) {
                 const lvl = grants[r.key] || 'none';
                 const rnote = h('div', { class: 'rm-note rm-note-sub' });
                 paintNote(rnote, r, lvl);
-                const p = levelPicker(r, lvl, (l) => { paintNote(rnote, r, l); if (onAnyChange) onAnyChange(); },
+                const p = levelPicker(r, lvl, (l) => { paintNote(rnote, r, l); paintCount(count, s, controls); if (onAnyChange) onAnyChange(); },
                     { disabled: sectionLvl === 'none' });
                 controls[r.key] = p;
                 kids.push(p);
-                block.appendChild(h('div', { class: 'rm-row rm-row-sub' },
+                body.appendChild(h('div', { class: 'rm-row rm-row-sub' },
                     h('div', { class: 'rm-name' },
                         h('div', { class: 'rm-title' }, r.label),
                         h('div', { class: 'rm-desc' }, r.desc || '')),
                     p.el));
-                block.appendChild(rnote);
+                body.appendChild(rnote);
             }
         };
         sub(tr('Окна раздела'), s.windows);
         sub(tr('Действия'), s.actions);
+        paintCount(count, s, controls);
 
+        block.appendChild(body);
+        setOpen(openSections.has(s.key));
         host.appendChild(block);
     }
     return controls;

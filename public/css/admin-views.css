@@ -7232,6 +7232,23 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .rm-note-lvl { flex: 0 0 auto; min-width: 82px; font-weight: 600; color: var(--ink-400); }
 .rm-note-line.is-on .rm-note-lvl { color: var(--ink-900); }
 .rm-hint { font-size: 12.5px; margin-top: 6px; }
+/* ROLES_ACCORDION_V1 — раздел сворачивается: заголовок — кнопка с шевроном, тело прячется. */
+.rm-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 16px 8px; font-size: 12.5px; }
+.rm-toolbar-btn { font-size: 12.5px; padding: 0; }
+.rm-toolbar-sep { color: var(--ink-300); }
+.rm-toggle { display: flex; align-items: flex-start; gap: 8px; flex: 1; min-width: 0; padding: 2px 0; margin: 0;
+  background: none; border: 0; text-align: left; font: inherit; color: inherit; cursor: pointer; border-radius: 6px; }
+.rm-toggle:hover .rm-title { color: var(--primary-700, var(--ink-900)); }
+.rm-toggle:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--primary-50); }
+.rm-toggle .rm-name { display: flex; flex-direction: column; }
+.rm-toggle .rm-title, .rm-toggle .rm-desc { display: block; }
+.rm-chev { display: inline-grid; place-items: center; flex: 0 0 auto; margin-top: 3px; color: var(--ink-400);
+  transition: transform .15s ease; }
+.rm-section.is-open .rm-chev { transform: rotate(90deg); }
+.rm-count { font-size: 12.5px; margin-top: 2px; }
+.rm-section.is-open .rm-count { display: none; }
+.rm-body { padding-left: 22px; }
+@media (prefers-reduced-motion: reduce) { .rm-chev { transition: none; } }
 @media (max-width: 720px) {
     .rm-row { flex-direction: column; align-items: stretch; }
     .rm-levels { justify-content: flex-start; }

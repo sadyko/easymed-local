@@ -258,6 +258,43 @@ test('матрица рисует ровно справочник: у строк
   assert.ok(textOf(root).includes('Удаляет ошибочное измерение'), 'выбор уровня не объяснён');
 });
 
+test('ROLES_ACCORDION_V1: разделы свёрнуты, раскрываются по шеврону, смена уровня раскрывает, «все» — обе кнопки', async () => {
+  resetServer();
+  const root = await render();
+  const byClass = (cls) => walk(root).filter((n) => String(n.className).split(/\s+/).includes(cls));
+  const section = (key) => byClass('rm-section').find((n) => n.dataset.section === key);
+  const bodyOf = (key) => walk(section(key)).find((n) => String(n.className).split(/\s+/).includes('rm-body'));
+  const toggleOf = (key) => walk(section(key)).find((n) => String(n.className).split(/\s+/).includes('rm-toggle'));
+
+  // Семнадцать разделов — семнадцать панелей, и все свёрнуты: экран открывается списком, а не простынёй.
+  assert.equal(byClass('rm-section').length, 17);
+  assert.ok(byClass('rm-body').every((b) => b.hidden === true), 'раздел раскрыт при открытии экрана');
+  assert.equal(toggleOf('inpatient').attrs['aria-expanded'], 'false');
+
+  // Свёрнутый раздел всё же говорит, что внутри: счёт открытых окон и действий.
+  assert.ok(textOf(section('inpatient')).includes('из 4'), 'нет счёта окон у свёрнутого стационара');
+
+  // Шеврон раскрывает и сворачивает; aria-expanded честно следует.
+  toggleOf('inpatient').click();
+  assert.equal(bodyOf('inpatient').hidden, false);
+  assert.equal(toggleOf('inpatient').attrs['aria-expanded'], 'true');
+  toggleOf('inpatient').click();
+  assert.equal(bodyOf('inpatient').hidden, true);
+
+  // Смена уровня самого раздела раскрывает его: последствие выбора — перед глазами.
+  pick(root, 'mar', 'view');
+  assert.equal(bodyOf('mar').hidden, false, 'раздел не раскрылся после смены уровня');
+
+  // «Развернуть все» / «Свернуть все».
+  findButtonByText(root, /^Развернуть все$/).click();
+  assert.ok(byClass('rm-body').every((b) => b.hidden === false), 'не все раскрылись');
+  findButtonByText(root, /^Свернуть все$/).click();
+  assert.ok(byClass('rm-body').every((b) => b.hidden === true), 'не все свернулись');
+
+  // Радио внутри свёрнутого тела никуда не делись — сохранение читает их как прежде.
+  assert.ok(radiosFor(root, 'inpatient.vitals').length > 0);
+});
+
 test('ошибка загрузки: видимая ошибка с повтором, а НЕ пустая матрица', async () => {
   resetServer();
   selectRespond = () => ({ ok: false, status: 400, json: async () => ({ error: { message: 'database is locked' } }) });
