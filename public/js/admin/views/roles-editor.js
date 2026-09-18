@@ -55,7 +55,7 @@ import { levelsFor, openAction, actionFor, levelFromActions, actionsFromLevel }
 // ROLES_MATRIX_V1 — матрица «раздел → окно → действие» по общему справочнику
 // прав (shared/permission-catalog.js). Старые поля sections/levels выводятся
 // из неё при сохранении, чтобы прежние ворота продолжали работать.
-import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm2';
+import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm3';
 
 // ROLE_KEYS_V2 — матрица строится из permissions.js NAV_MODULES, того же
 // списка, который читают сами ворота бокового меню. Когда-то это была вторая
@@ -475,7 +475,7 @@ export async function renderRolesEditor(container, { onBack } = {}) {
             h('span', { class: 'roles-group-lvl' }, 'Нет · Просмотр · Изменение · Удаление'),
         ));
         card.appendChild(h('p', { class: 'roles-unset' },
-            'Уровни вложены: «Изменение» включает «Просмотр», «Удаление» — всё вместе. Под каждой строкой написано, что даёт выбранный уровень.'));
+            'Уровни вложены: «Изменение» включает «Просмотр», «Удаление» — всё вместе. Подпись под строкой — что даёт выбранный уровень; наведите на уровень, чтобы узнать, что даст он.'));
         const matrixHost = h('div', { class: 'rm' });
         card.appendChild(matrixHost);
         state.grantControls = paintCatalog(matrixHost, grants, { onAnyChange: paintReach, openSections: state.openSections });

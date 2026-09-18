@@ -7202,20 +7202,24 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
    значат. Под строкой — что даёт каждый уровень, текущий выделен. Закрытый
    раздел приглушён вместе со своими окнами и действиями. */
 .rm { display: flex; flex-direction: column; }
-.rm-section { border-top: 1px solid var(--ink-100); padding: 10px 16px 12px; }
+/* ROLES_MATRIX_LEAN_V1 — матрица прав: строка = имя + одна подпись + уровень; между строками линия. */
+.rm-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 16px 8px; font-size: 12.5px; }
+.rm-toolbar-btn { font-size: 12.5px; padding: 0; }
+.rm-toolbar-sep { color: var(--ink-300); }
+.rm-section { border-top: 1px solid var(--ink-100); padding: 0 16px; }
 .rm-section.is-off { background: var(--ink-25); }
-.rm-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-.rm-row-sub { padding: 8px 0 0 18px; }
-.rm-name { min-width: 0; flex: 1; }
+.rm-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 48px; padding: 8px 0; }
+.rm-row-sub { padding-left: 22px; border-top: 1px solid var(--ink-100); }
+.rm-name { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
 .rm-title { font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
 .rm-row-section .rm-title { font-size: 15px; }
-.rm-desc { font-size: 12.5px; color: var(--ink-500); margin-top: 1px; }
+.rm-desc { font-size: 12.5px; color: var(--ink-500); display: flex; flex-wrap: wrap; gap: 0 10px; }
 .rm-subhead { font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-400);
-    padding: 12px 0 2px 18px; font-weight: 600; }
+  padding: 10px 0 4px 22px; border-top: 1px solid var(--ink-100); }
 .rm-levels { display: inline-flex; gap: 4px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
 .rm-pill { position: relative; display: inline-flex; align-items: center; height: 28px; padding: 0 10px;
-    border: 1px solid var(--ink-200); border-radius: 999px; font-size: 12.5px; cursor: pointer;
-    background: #fff; color: var(--ink-700); user-select: none; }
+  border: 1px solid var(--ink-200); border-radius: 999px; background: #fff; font-size: 12.5px; font-weight: 600;
+  color: var(--ink-700); cursor: pointer; user-select: none; }
 .rm-pill input { position: absolute; opacity: 0; width: 0; height: 0; margin: 0; }
 .rm-pill:hover { border-color: var(--ink-300); }
 .rm-pill:has(input:checked) { background: var(--ink-900); border-color: var(--ink-900); color: #fff; }
@@ -7223,31 +7227,17 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .rm-pill.is-delete:has(input:checked) { background: var(--crit-600, #b03a3a); border-color: var(--crit-600, #b03a3a); }
 .rm-pill:has(input:focus-visible) { box-shadow: 0 0 0 3px var(--primary-50); border-color: var(--primary-500); }
 .rm-pill:has(input:disabled) { opacity: .5; cursor: not-allowed; }
-.rm-note { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-500); display: flex; flex-direction: column; gap: 2px; }
-.rm-note-sub { margin-left: 18px; }
-.rm-note-line { display: flex; gap: 8px; align-items: baseline; opacity: .7; }
-.rm-note-line.is-in { opacity: 1; }
-.rm-note-line.is-on { color: var(--ink-900); font-weight: 600; }
-.rm-note-line.is-none { color: var(--ink-400); font-style: italic; }
-.rm-note-lvl { flex: 0 0 auto; min-width: 82px; font-weight: 600; color: var(--ink-400); }
-.rm-note-line.is-on .rm-note-lvl { color: var(--ink-900); }
-.rm-hint { font-size: 12.5px; margin-top: 6px; }
+.rm-hint { font-size: 12.5px; padding: 0 0 10px 22px; }
 /* ROLES_ACCORDION_V1 — раздел сворачивается: заголовок — кнопка с шевроном, тело прячется. */
-.rm-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 16px 8px; font-size: 12.5px; }
-.rm-toolbar-btn { font-size: 12.5px; padding: 0; }
-.rm-toolbar-sep { color: var(--ink-300); }
-.rm-toggle { display: flex; align-items: flex-start; gap: 8px; flex: 1; min-width: 0; padding: 2px 0; margin: 0;
+.rm-toggle { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 2px 0; margin: 0;
   background: none; border: 0; text-align: left; font: inherit; color: inherit; cursor: pointer; border-radius: 6px; }
 .rm-toggle:hover .rm-title { color: var(--primary-700, var(--ink-900)); }
 .rm-toggle:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--primary-50); }
-.rm-toggle .rm-name { display: flex; flex-direction: column; }
-.rm-toggle .rm-title, .rm-toggle .rm-desc { display: block; }
-.rm-chev { display: inline-grid; place-items: center; flex: 0 0 auto; margin-top: 3px; color: var(--ink-400);
-  transition: transform .15s ease; }
+.rm-chev { display: inline-grid; place-items: center; flex: 0 0 auto; color: var(--ink-400); transition: transform .15s ease; }
 .rm-section.is-open .rm-chev { transform: rotate(90deg); }
-.rm-count { font-size: 12.5px; margin-top: 2px; }
+.rm-count { font-size: 12.5px; }
 .rm-section.is-open .rm-count { display: none; }
-.rm-body { padding-left: 22px; }
+.rm-body { padding-bottom: 4px; }
 @media (prefers-reduced-motion: reduce) { .rm-chev { transition: none; } }
 @media (max-width: 720px) {
     .rm-row { flex-direction: column; align-items: stretch; }

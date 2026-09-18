@@ -110,6 +110,22 @@ export function collectGrants(controls) {
 // ---------------------------------------------------------------------------
 // Экран
 // ---------------------------------------------------------------------------
+//
+// ROLES_MATRIX_LEAN_V1 (2026-09-18) — владелец, глядя на первую версию: «its
+// still not understandable, i guess there is too many text. can we make the
+// line between lines».
+//
+// Было: под каждой строкой — описание строки И по фразе на КАЖДЫЙ уровень
+// (три-четыре строки текста на одну галочку). Стало: у строки одна подпись —
+// что даёт ВЫБРАННЫЙ уровень; пока уровень «Нет» — что это за окно или
+// действие. Остальные уровни объясняются подсказкой на самой таблетке.
+// Между строками — линия: глаз идёт по строкам, а не по абзацам.
+
+/** Одна подпись строки: что даёт выбранный уровень, а при «Нет» — что это. */
+function lineFor(row, lvl) {
+    const d = row.levelDesc && row.levelDesc[lvl];
+    return d || row.desc || '';
+}
 
 /** Переключатель уровня: одна группа radio на строку, только существующие уровни. */
 function levelPicker(row, value, onChange, { disabled = false } = {}) {
@@ -121,7 +137,9 @@ function levelPicker(row, value, onChange, { disabled = false } = {}) {
         const inp = h('input', { type: 'radio', name, id, value: lvl, checked: value === lvl ? true : null, disabled: disabled ? true : null });
         inp.addEventListener('change', () => onChange(lvl));
         inputs.push(inp);
-        box.appendChild(h('label', { class: 'rm-pill is-' + lvl, for: id }, inp, h('span', null, LEVEL_LABELS[lvl])));
+        // Подсказка на таблетке — что даст этот уровень, если его выбрать.
+        const tip = row.levelDesc && row.levelDesc[lvl];
+        box.appendChild(h('label', { class: 'rm-pill is-' + lvl, for: id, title: tip || null }, inp, h('span', null, LEVEL_LABELS[lvl])));
     }
     return {
         el: box,
@@ -131,42 +149,24 @@ function levelPicker(row, value, onChange, { disabled = false } = {}) {
     };
 }
 
-/**
- * Что даёт КАЖДЫЙ уровень строки — все строки сразу, текущий выделен.
- * Администратор решает, какой уровень выдать, ДО того как его выбрал: значит,
- * последствия всех вариантов должны быть перед глазами, а не по одному после
- * щелчка. Уровни, у которых своего описания нет, не выдумываются.
- */
+/** Подпись строки — перерисовать под новый уровень. */
 function paintNote(box, row, lvl) {
     while (box.firstChild) box.removeChild(box.firstChild);
-    const lines = [];
-    for (const l of (row.levels || [])) {
-        if (l === 'none') continue;
-        const d = row.levelDesc && row.levelDesc[l];
-        if (!d) continue;
-        lines.push([l, d]);
-    }
-    // У строки без своих описаний уровней (окно, которое можно только открыть)
-    // описание уже стоит под названием — повторять его строкой «Просмотр» незачем.
-    for (const [l, d] of lines) {
-        box.appendChild(h('div', { class: 'rm-note-line' + (l === lvl ? ' is-on' : '') + (levelAllows(lvl, l) ? ' is-in' : '') },
-            h('span', { class: 'rm-note-lvl' }, LEVEL_LABELS[l]), h('span', null, d)));
-    }
-    if (lvl === 'none') box.appendChild(h('div', { class: 'rm-note-line is-none' }, tr('Сейчас: недоступно.')));
+    box.appendChild(h('span', null, lineFor(row, lvl)));
 }
 
 // ROLES_ACCORDION_V1 (2026-09-18) — владелец: «make the sections (modules) in
 // the roles section a collapsible (accordion like)».
 //
-// Семнадцать разделов с окнами, действиями и описанием каждого уровня — это
-// экран на несколько прокруток; свёрнутый раздел занимает одну строку: имя,
-// уровень и счёт «Окна 2 из 3 · Действия 4 из 6», чтобы и в закрытом виде
-// было видно, что внутри уже открыто. Какие разделы раскрыты — помнится между
-// ролями, пока экран открыт (`openSections` держит редактор ролей): админист-
-// ратор сравнивает две роли по одному и тому же разделу, не раскрывая его
-// заново; новый заход на экран начинается свёрнутым списком. Смена уровня
-// самого раздела раскрывает его: последствие выбора и строки внутри должны
-// быть перед глазами, а не за шевроном.
+// Семнадцать разделов с окнами и действиями — это экран на несколько
+// прокруток; свёрнутый раздел занимает одну строку: имя, уровень и счёт
+// «Окна 2 из 3 · Действия 4 из 6», чтобы и в закрытом виде было видно, что
+// внутри уже открыто. Какие разделы раскрыты — помнится между ролями, пока
+// экран открыт (`openSections` держит редактор ролей): администратор
+// сравнивает две роли по одному и тому же разделу, не раскрывая его заново;
+// новый заход на экран начинается свёрнутым списком. Смена уровня самого
+// раздела раскрывает его: строки внутри должны быть перед глазами, а не за
+// шевроном.
 
 /** Счёт открытого внутри раздела — для свёрнутой строки. */
 function paintCount(box, s, controls) {
@@ -203,9 +203,9 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
         const block = h('div', { class: 'rm-section' + (sectionLvl === 'none' ? ' is-off' : ''), dataset: { section: s.key } });
         const kids = [];
         const body = h('div', { class: 'rm-body' });
-        const count = h('div', { class: 'rm-count muted' });
+        const count = h('span', { class: 'rm-count muted' });
 
-        const note = h('div', { class: 'rm-note' });
+        const note = h('span', { class: 'rm-note' });
         paintNote(note, s, sectionLvl);
         const picker = levelPicker(s, sectionLvl, (lvl) => {
             paintNote(note, s, lvl);
@@ -227,8 +227,7 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
         }, chev,
             h('span', { class: 'rm-name' },
                 h('span', { class: 'rm-title' }, s.label),
-                h('span', { class: 'rm-desc' }, s.desc || ''),
-                count));
+                h('span', { class: 'rm-desc' }, note, count)));
         const setOpen = (on) => {
             body.hidden = !on;
             toggle.setAttribute('aria-expanded', on ? 'true' : 'false');
@@ -239,7 +238,6 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
         panels.push({ key: s.key, open: setOpen });
 
         block.appendChild(h('div', { class: 'rm-row rm-row-section' }, toggle, picker.el));
-        body.appendChild(note);
 
         const hint = h('div', { class: 'rm-hint muted' }, tr('Сначала откройте раздел — тогда можно выбрать, что в нём доступно.'));
         hint.hidden = sectionLvl !== 'none' || !((s.windows || []).length || (s.actions || []).length);
@@ -250,7 +248,7 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
             body.appendChild(h('div', { class: 'rm-subhead' }, title));
             for (const r of rows) {
                 const lvl = grants[r.key] || 'none';
-                const rnote = h('div', { class: 'rm-note rm-note-sub' });
+                const rnote = h('div', { class: 'rm-desc' });
                 paintNote(rnote, r, lvl);
                 const p = levelPicker(r, lvl, (l) => { paintNote(rnote, r, l); paintCount(count, s, controls); if (onAnyChange) onAnyChange(); },
                     { disabled: sectionLvl === 'none' });
@@ -259,9 +257,8 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
                 body.appendChild(h('div', { class: 'rm-row rm-row-sub' },
                     h('div', { class: 'rm-name' },
                         h('div', { class: 'rm-title' }, r.label),
-                        h('div', { class: 'rm-desc' }, r.desc || '')),
+                        rnote),
                     p.el));
-                body.appendChild(rnote);
             }
         };
         sub(tr('Окна раздела'), s.windows);
