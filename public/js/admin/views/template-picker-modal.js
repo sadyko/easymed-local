@@ -29,7 +29,15 @@ export function openTemplatePickerModal({ onPick, title = 'Пакеты услу
     const pick = typeof onPick === 'function' ? onPick : () => {};
 
     const overlay = h('div', { class: 'modal', 'data-dialog': 'template-picker', style: { zIndex: '180' } });
-    const close = () => { document.removeEventListener('keydown', onKey); overlay.remove(); };
+    // Список пакетов спрашивается у сервера, и между вопросом и ответом окно
+    // можно закрыть — Esc, крестиком, кликом по подложке. Ответ от этого не
+    // исчезает: без этого флага он приходил в УЖЕ ЗАКРЫТОЕ окно и работал так,
+    // будто оно на экране, — отказ сервера выдавал тост поверх того, что
+    // регистратор открыл вместо него, и закрывал окно ВТОРОЙ раз, а второе
+    // закрытие в живом окне достаётся уже не ему, а тому, что встало на его
+    // место. Ответ закрытому окну не принадлежит.
+    let closed = false;
+    const close = () => { closed = true; document.removeEventListener('keydown', onKey); overlay.remove(); };
     const onKey = (e) => { if (e.key === 'Escape') close(); };
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
@@ -47,6 +55,7 @@ export function openTemplatePickerModal({ onPick, title = 'Пакеты услу
 
     (async () => {
         const { data, error } = await listTemplates(supabase);
+        if (closed) return;
         clear(listEl);
         if (error) {
             toast(trf('Не удалось загрузить пакеты: {msg}', { msg: error.message || error }), 'fail');

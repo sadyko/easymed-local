@@ -64,13 +64,30 @@ function mk(t){
 }
 globalThis.Node=F; globalThis.Event=class{constructor(t,o){this.type=t;Object.assign(this,o||{});}};
 const toastEl = mk('div');
+// Слушатели документа — НАСТОЯЩИЕ (записывающие), а не заглушки: Escape должен
+// дойти и до окна, и до дочернего диалога — ровно как в браузере, где оба
+// висят на одном document. Заглушённый addEventListener сделал бы проверку
+// «Esc под дочерним диалогом» невозможной (та же техника, что в
+// __tests__/template-picker-modal.test.mjs).
+const docListeners = {};
 globalThis.document={createElement:mk,createElementNS:(_n,t)=>mk(t),createTextNode:t=>new TX(t),
   head:mk('head'),body:mk('body'),documentElement:mk('html'),
-  addEventListener(){},removeEventListener(){},
+  addEventListener(type, fn){ (docListeners[type] || (docListeners[type] = [])).push(fn); },
+  removeEventListener(type, fn){ const a = docListeners[type]; if (!a) return; const i = a.indexOf(fn); if (i > -1) a.splice(i, 1); },
+  dispatchEvent(e){ for (const fn of (docListeners[e.type] || []).slice()) fn(e); return true; },
   getElementById:(id)=> (id === 'toast' ? toastEl : null),
   querySelector(){return null;},querySelectorAll(){return [];}};
 const toasts = [];
-Object.defineProperty(toastEl, 'textContent', { get(){ return toastEl._t; }, set(v){ toastEl._t = String(v); toasts.push(String(v)); } });
+// ВАЖНОСТЬ тоста записывается рядом с текстом и по тому же номеру: «тариф не
+// спрошен» обязано быть предупреждением, а не рядовым сообщением, которое
+// прочитают краем глаза (ui.js: textContent, затем dataset.kind).
+const toastKinds = [];
+Object.defineProperty(toastEl, 'textContent', { get(){ return toastEl._t; }, set(v){ toastEl._t = String(v); toasts.push(String(v)); toastKinds.push('info'); } });
+toastEl.dataset = {
+  get kind(){ return toastKinds[toastKinds.length - 1]; },
+  set kind(v){ if (toastKinds.length) toastKinds[toastKinds.length - 1] = String(v); },
+};
+const kindOf = (needle) => toastKinds[toasts.findIndex((t) => t.includes(needle))];
 
 function makeLocalStorage() {
   const store = new Map();
@@ -107,6 +124,10 @@ try { Object.defineProperty(globalThis, 'navigator', { value: { mediaDevices: nu
 const calls = [];            // { kind: 'rpc'|'insert'|'select', name/table, body }
 let patientRows = [];        // чем отвечает выборка по patients (страж дублей)
 let insertFail = null;       // { table, message } — отказ вставки
+// Отказы двух НЕобязательных шагов цепочки: тариф визита и номера очереди.
+// Регистрацию они не срывают, и именно поэтому о них надо сказать вслух.
+let quoteFail = null;        // текст отказа service_price_quote
+let queueFail = null;        // текст отказа issue_queue_numbers
 
 const SERVICES = [
   { id: 1, name: 'Приём терапевта', price: 112000, tax_rate: 12, requires_doctor: 1, type: 'consultation', active: 1 },
@@ -130,12 +151,14 @@ globalThis.fetch = async (url, opts = {}) => {
     calls.push({ kind: 'rpc', name, body });
     if (name === 'ensure_visit') return ok({ data: { visit: { id: 77 }, created: true } });
     if (name === 'service_price_quote') {
+      if (quoteFail) return { ok: false, status: 400, json: async () => ({ error: { message: quoteFail } }) };
       return ok({ data: { quotes: { 1: { price: 112000, tier: 'primary' }, 2: { price: 40000, tier: 'primary' } } } });
     }
     if (name === 'create_invoice_for_visit') {
       return ok({ data: { invoice: { id: 9, invoice_number: 'INV-9', total_amount: 152000 }, items: [] } });
     }
     if (name === 'issue_queue_numbers') {
+      if (queueFail) return { ok: false, status: 400, json: async () => ({ error: { message: queueFail } }) };
       const ids = (body && body.p_ids) || [];
       return ok({ data: ids.map((id, i) => ({ visit_service_id: id, label: 'A-' + (i + 1), number: i + 1, queue_key: 'k' })) });
     }
@@ -183,10 +206,15 @@ const buttons = (root) => walk(root).filter((n) => n.tagName === 'BUTTON');
 const btnByText = (root, text) => buttons(root).find((b) => textOf(b).replace(/\s+/g, ' ').trim().includes(text));
 
 function reset() {
-  calls.length = 0; toasts.length = 0; patientRows = []; insertFail = null; focused = null;
+  calls.length = 0; toasts.length = 0; toastKinds.length = 0;
+  patientRows = []; insertFail = null; quoteFail = null; queueFail = null; focused = null;
   document.body.children.length = 0;
+  // Окна прошлой проверки с экрана сняты — их слушатели Escape тоже.
+  for (const k of Object.keys(docListeners)) delete docListeners[k];
   setFullAccess('Admin');
 }
+
+const escapeKeydown = () => document.dispatchEvent({ type: 'keydown', key: 'Escape' });
 
 function fillMinimum(dlg) {
   dlg.fields.last_name.value = 'Каримова';
@@ -309,6 +337,14 @@ test('сохранение: пациент → визит → строки с в
   const print = btnByText(dlg.card, 'Печать');
   assert.ok(!print.disabled && !print.hasAttribute('disabled'), 'после сохранения «Печать» осталась выключенной');
   assert.strictEqual(savedWith, 1, 'onSaved вызван не один раз: ' + savedWith);
+
+  // «Сохранить» больше нажать НЕЛЬЗЯ — ни мышью, ни Enter'ом. registerWalkIn не
+  // идемпотентна: второе нажатие дописало бы те же услуги в тот же визит дня и
+  // выставило бы ВТОРОЙ счёт на них, а разбирались бы с этим уже в кассе.
+  // Поэтому кнопка и спрятана, и выключена: спрятанная, но живая кнопка всё
+  // ещё срабатывает по Enter.
+  assert.strictEqual(dlg.saveBtn.style.display, 'none', 'после сохранения «Сохранить» осталась на виду');
+  assert.ok(dlg.saveBtn.disabled, 'после сохранения «Сохранить» можно нажать ещё раз');
   // Номер очереди виден в таблице.
   assert.ok(textOf(dlg.table).includes('A-1'), 'номер очереди не показан');
   dlg.close();
@@ -366,6 +402,81 @@ test('дубликат: «использовать существующего» 
   assert.strictEqual(visit.body.patient_id, 42, 'визит уехал не на найденного пациента');
   assert.strictEqual(calls.filter((c) => c.kind === 'insert' && c.table === 'patients').length, 0,
     'завели вторую карту на того же человека');
+  dlg.close();
+});
+
+// ===========================================================================
+// Escape под дочерним диалогом.
+//
+// Окно открывает поверх себя ещё три: выбор пакета, каталог услуг и стража
+// дубликатов. Escape слушают все на одном document, поэтому нажатие достаётся
+// обоим — и без проверки «стоит ли кто-то поверх» Esc, закрывающий выбор
+// пакета, сносил бы вместе с ним и окно регистрации: заполненные поля, набранную
+// таблицу услуг и выбранных врачей. Набирать всё это заново — как раз то, ради
+// чего окно и сделали одним.
+// ===========================================================================
+test('Esc под дочерним диалогом закрывает ЕГО, а окно регистрации остаётся', async () => {
+  reset();
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg);
+  dlg.state.addLine(SERVICES[1], null);   // услуга в таблице — её терять нельзя
+
+  btnByText(dlg.card, '+Пакеты').click();
+  await tick(40);
+  assert.strictEqual(dialogs('template-picker').length, 1, 'выбор пакета не открылся');
+
+  escapeKeydown();
+  assert.strictEqual(dialogs('template-picker').length, 0, 'Esc не закрыл выбор пакета');
+  assert.strictEqual(dialogs('fast-registration').length, 1,
+    'Esc закрыл окно регистрации заодно с дочерним диалогом');
+  assert.strictEqual(dlg.state.rows.length, 1, 'набранные услуги потерялись');
+  assert.strictEqual(dlg.fields.last_name.value, 'Каримова', 'заполненные поля потерялись');
+
+  // А когда поверх никого нет, Esc по-прежнему закрывает само окно — проверка
+  // не должна была превратиться в «Esc не работает вовсе».
+  escapeKeydown();
+  await tick(20);
+  assert.strictEqual(dialogs('fast-registration').length, 0, 'Esc перестал закрывать окно');
+});
+
+// ===========================================================================
+// Тариф не спрошен / очередь не выдана — ГРОМКО.
+//
+// Оба шага необязательные: регистрацию они не срывают (walk-in-booking.js
+// возвращает quoteError/queueError и идёт дальше). Но счёт при провале тарифа
+// выставлен по цене каталога и слову «первичный приём» — то есть возможной
+// переплатой пациента, а без номера очереди его никто никуда не позовёт.
+// Молчаливый ответ здесь читается как «всё прошло», и разбираются с этим уже
+// в кассе.
+// ===========================================================================
+test('тариф не спрошен и очередь не выдана — регистратор видит предупреждения, а не тишину', async () => {
+  reset();
+  quoteFail = 'нет доступа к ценам';
+  queueFail = 'очередь недоступна';
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+
+  fillMinimum(dlg);
+  const row = dlg.state.addLine(SERVICES[0], null);
+  row.sel.value = '7';
+  row.sel.fireChange();
+
+  toasts.length = 0; toastKinds.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(80);
+
+  assert.ok(toasts.some((t) => t.includes('Тариф визита не спрошен') && t.includes('нет доступа к ценам')),
+    'о неспрошенном тарифе не сказали: ' + toasts.join(' | '));
+  assert.strictEqual(kindOf('Тариф визита не спрошен'), 'warn',
+    'о неспрошенном тарифе сказали рядовым сообщением');
+  assert.ok(toasts.some((t) => t.includes('Номера очереди не выданы') && t.includes('очередь недоступна')),
+    'о невыданной очереди не сказали: ' + toasts.join(' | '));
+  assert.strictEqual(kindOf('Номера очереди не выданы'), 'warn',
+    'о невыданной очереди сказали рядовым сообщением');
+
+  // И при этом регистрация ДОВЕДЕНА: счёт есть, окно в сохранённом состоянии.
+  assert.ok(dlg.state.result && dlg.state.result.invoice, 'предупреждение сорвало саму регистрацию');
   dlg.close();
 });
 

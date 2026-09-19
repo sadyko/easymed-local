@@ -211,6 +211,29 @@ test('ПОВТОРНЫЙ ВИЗИТ: цена по тарифу второго �
   assert.equal(out.invoice.total_amount, 60000);
 });
 
+test('ТОТ ЖЕ ДЕНЬ, ТА ЖЕ УСЛУГА: строка, уже лежащая на сегодняшнем визите, не делает новую «повторной»', async () => {
+  seed();
+  // Пациент уже приходил СЕГОДНЯ, и услуга с тарифом второго визита уже стоит
+  // на этом визите. ensure_visit переиспользует визит дня, значит новая строка
+  // ложится в ТОТ ЖЕ визит — а сам себе «предыдущим визитом» он быть не может:
+  // иначе вторая услуга того же дня продавалась бы по цене повторного приёма,
+  // которого не было. service_price_quote умеет исключать правимый визит —
+  // спрашивать надо С НИМ.
+  const todayIso = new Date().toISOString();
+  DB.prepare("INSERT INTO visits (id, patient_id, visit_date, visit_type, status) VALUES (91, ?, ?, 'outpatient', 'arrived')").run(PATIENT, todayIso);
+  DB.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (91, ?, 1, 200000, 200000, 'added')").run(TIERED);
+
+  const out = await registerWalkIn({ patientId: PATIENT, lines: [{ service: svc(TIERED), doctorId: null }] });
+
+  assert.equal(out.visit.id, 91, 'визит дня не переиспользован — тогда проверяется не то');
+  assert.equal(out.lines[0].tier, 'primary', 'строка того же визита посчиталась предыдущим визитом');
+  assert.equal(out.lines[0].unitPrice, 200000, 'цена уехала на тариф повторного приёма');
+  assert.equal(out.quoteError, undefined);
+  const row = one('SELECT * FROM visit_services WHERE visit_id = ? ORDER BY id DESC LIMIT 1', 91);
+  assert.equal(row.price_tier, 'primary');
+  assert.equal(row.unit_price, 200000);
+});
+
 test('УСЛУГА ТРЕБУЕТ ВРАЧА, ВРАЧА НЕТ: отказ ДО первой записи в базу', async () => {
   seed();
   await assert.rejects(

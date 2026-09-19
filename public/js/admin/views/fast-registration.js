@@ -88,7 +88,31 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
 
     const overlay = h('div', { class: 'modal', style: { zIndex: '150' } });
     const close = () => { document.removeEventListener('keydown', onKey); fadeOutAndRemove(overlay); };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
+
+    /**
+     * Стоит ли поверх этого окна ЧУЖОЙ диалог.
+     *
+     * Окно открывает поверх себя ещё три: выбор пакета («+Пакеты»), каталог
+     * услуг («+Услуги») и стража дубликатов. У каждого свой Escape, и слушают
+     * они один и тот же document — значит нажатие достаётся ОБОИМ. Без этой
+     * проверки Esc, закрывающий выбор пакета, заодно сносил бы и само окно
+     * регистрации вместе с набранной таблицей услуг и заполненными полями.
+     *
+     * Ищем не по имени: у каталога услуг нет data-dialog вовсе, а у стража
+     * дубликатов оно стоит на карточке, а не на подложке. Общее у всех троих
+     * одно — своя подложка .modal в document.body. Перечень имён разошёлся бы с
+     * жизнью при первом же четвёртом диалоге; «есть чужая подложка» — нет.
+     */
+    function childDialogOpen() {
+        const kids = (typeof document !== 'undefined' && document.body && document.body.children) || [];
+        for (const el of kids) {
+            if (!el || el === overlay) continue;
+            if (String(el.className || '').split(/\s+/).includes('modal')) return true;
+        }
+        return false;
+    }
+
+    const onKey = (e) => { if (e.key === 'Escape' && !childDialogOpen()) close(); };
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
     // MODAL_COMPACT_OPTOUT_V1 — без .modal-compact admin.css растягивает карточку

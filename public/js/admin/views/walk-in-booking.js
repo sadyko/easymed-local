@@ -22,6 +22,17 @@
  * виден в карте пациента, счёт выставляется из него же; удалять пациента,
  * который уже стоит у стойки, было бы хуже.
  *
+ * ЭТА ФУНКЦИЯ НЕ ИДЕМПОТЕНТНА. Второй вызов в тот же день не «повторит»
+ * регистрацию, а допишет строки в тот же визит дня и выставит ВТОРОЙ счёт на
+ * них. Поэтому вызывающий обязан выключить свою кнопку на время вызова и
+ * ОСТАВИТЬ её выключенной после успеха: пациент с двумя счетами за один приход
+ * разбирается уже в кассе, а не на экране.
+ *
+ * quoteError — ЭТО ГРОМКОЕ СОБЫТИЕ, А НЕ ПОМЕТКА В ОТВЕТЕ. Когда он заполнен,
+ * тариф визита спросить не удалось, и счёт выставлен по цене каталога и слову
+ * 'primary' (первичный приём) — то есть возможной переплатой пациента.
+ * Вызывающий обязан сказать об этом видимо, а не проглотить ответ молча.
+ *
  * lines: [{ service: {id, price, requires_doctor, name}, doctorId: number|null }]
  * → { visit, invoice, items, queue: Map(visit_service_id → row),
  *     lines: [{ visitServiceId, serviceId, doctorId, unitPrice, tier }],
@@ -62,10 +73,19 @@ function validate(patientId, items) {
  * Отказ RPC не срывает регистрацию: строка ложится по цене каталога и словом
  * 'primary' — тем же, по которому касса потом пересчитает её сама. О том, что
  * тариф не спрошен, вызывающий узнаёт из quoteError, а не из тишины.
+ *
+ * visit_id — ТОТ САМЫЙ визит, в который сейчас лягут строки, и сервер исключает
+ * его из поиска «предыдущего визита» (server/services/rpc/service-price-quote.js).
+ * Без него вторая услуга, выписанная тому же пациенту в тот же день, видела бы
+ * первую как прошлый приём и продавалась бы по тарифу повторного — за визит,
+ * которого не было. Визит дня переиспользуется (ensure_visit), так что это не
+ * редкий случай, а обычная вторая услуга у стойки.
  */
-async function quoteTiers(patientId, serviceIds) {
+async function quoteTiers(patientId, serviceIds, visitId) {
     try {
-        const res = await supabase.rpc('service_price_quote', { patient_id: patientId, service_ids: serviceIds });
+        const res = await supabase.rpc('service_price_quote', {
+            patient_id: patientId, service_ids: serviceIds, visit_id: visitId,
+        });
         if (res && res.error) return { quotes: {}, quoteError: msgOf(res.error) };
         const quotes = res && res.data && res.data.quotes;
         return { quotes: quotes && typeof quotes === 'object' ? quotes : {}, quoteError: null };
@@ -104,7 +124,7 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
     // 3. Тариф визита — до вставки строк: слово тарифа пишется В САМУЮ СТРОКУ,
     //    и касса потом считает цену по нему.
     const serviceIds = [...new Set(items.map((l) => Number(l.service.id)))];
-    const { quotes, quoteError } = await quoteTiers(pid, serviceIds);
+    const { quotes, quoteError } = await quoteTiers(pid, serviceIds, visit.id);
 
     // 4. Строки услуг. Провал вставки — наружу: половина визита лучше, чем счёт
     //    на услуги, которых в визите нет.

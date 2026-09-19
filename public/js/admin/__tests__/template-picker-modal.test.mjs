@@ -57,6 +57,11 @@ const toasts = [];
 Object.defineProperty(toastEl, 'textContent', { get() { return toastEl._t; }, set(v) { toastEl._t = String(v); toasts.push(String(v)); } });
 
 const bodyEl = mk('body');
+// Снятия окна считаются ПОИМЁННО: «закрыто» и «закрыто дважды» выглядят на
+// экране одинаково, а разница между ними и есть предмет одной из проверок.
+let bodyRemovals = 0;
+const realBodyRemoveChild = bodyEl.removeChild.bind(bodyEl);
+bodyEl.removeChild = (c) => { bodyRemovals++; return realBodyRemoveChild(c); };
 const docListeners = {};
 globalThis.document = {
   createElement: mk,
@@ -89,6 +94,9 @@ globalThis.localStorage.setItem('admin.lang', 'ru');
 // descriptor to '/api/db'. Only `service_templates` selects matter here.
 let templateRows = [];
 let templateError = null;
+// Задержка ответа. Без неё окно, закрытое ПОКА пакеты грузятся, в тесте
+// недостижимо вовсе: ответ приходит раньше, чем успеваешь нажать Esc.
+let templateGate = null;
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
@@ -96,6 +104,7 @@ globalThis.fetch = async (url, opts = {}) => {
   if (u.startsWith('/api/db')) {
     const table = body && body.table;
     if (table === 'service_templates') {
+      if (templateGate) await templateGate;
       if (templateError) return { ok: false, status: 400, json: async () => ({ error: templateError }) };
       return ok({ data: JSON.parse(JSON.stringify(templateRows)), error: null, count: templateRows.length });
     }
@@ -174,4 +183,45 @@ test('Esc закрывает без выбора', async () => {
 
   assert.equal(dialogs('template-picker').length, 0, 'окно снято по Esc');
   assert.equal(pickedCalled, false, 'onPick не вызван');
+});
+
+// ===========================================================================
+// Окно закрыли, пока пакеты ещё грузились.
+//
+// Список пакетов спрашивается у сервера, и между вопросом и ответом окно можно
+// закрыть — Esc, крестиком, кликом по подложке. Ответ от этого не исчезает: он
+// приходит в УЖЕ ЗАКРЫТОЕ окно и продолжает работать так, будто оно на экране.
+// Тогда отказ сервера выдаёт тост поверх того, что регистратор открыл вместо
+// этого окна («Не удалось загрузить пакеты» посреди счёта), и закрывает окно
+// ВТОРОЙ раз — а второе снятие в живом DOM уже не его, а того, что встало на
+// его место. Ответ закрытому окну не принадлежит, и делать с ним нечего.
+// ===========================================================================
+test('окно закрыли, пока грузились пакеты: ответ приходит в пустоту — ни тоста, ни второго закрытия', async () => {
+  templateError = null;
+  templateRows = [{ id: 9, name: 'Чек-ап', service_ids: [1] }];
+  toasts.length = 0;
+  let release;
+  templateGate = new Promise((r) => { release = r; });
+
+  const removalsBefore = bodyRemovals;
+  openTemplatePickerModal({ onPick: () => {} });
+  assert.equal(dialogs('template-picker').length, 1, 'окно не открылось');
+
+  // Закрыли ДО ответа.
+  escapeKeydown();
+  assert.equal(dialogs('template-picker').length, 0, 'Esc не снял окно');
+  assert.equal(bodyRemovals - removalsBefore, 1, 'закрытие сняло окно не один раз');
+
+  // Ответ приходит после закрытия — и приносит с собой отказ сервера.
+  templateError = { message: 'boom' };
+  release();
+  await tick(40);
+  templateGate = null;
+  templateError = null;
+
+  assert.deepEqual(toasts, [],
+    'закрытое окно всё равно отругалось тостом: ' + JSON.stringify(toasts));
+  assert.equal(dialogs('template-picker').length, 0, 'окно вернулось на экран');
+  assert.equal(bodyRemovals - removalsBefore, 1,
+    'окно сняли дважды: ' + (bodyRemovals - removalsBefore));
 });
