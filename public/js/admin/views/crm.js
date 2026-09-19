@@ -17,6 +17,10 @@ import { formatPhone } from '../phone-format.js';
 // CRM_REASSIGN_V1 — «я администратор»: кому видна раздача заявок.
 import { selfUserId, hasActorRole } from '../permissions.js';
 import { filterServicePool, serviceGroupCounts } from './service-search.js';   // CRM_SERVICE_FILTER_V1
+// CRM_LINKS_V1 — общий путь заведения карты: проверка дубля, штампы клиники и
+// филиала, привязка открытых заявок по телефону. Регистрация из CRM обязана
+// идти им же, иначе карта «почти правильная» (см. patientRegistrationModal).
+import { savePatient } from '../data.js';
 import { openCustDev } from './custdev.js';           // CUSTDEV_V1 — обзвон после визита
 import { canView } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev»
 import { boardConfig } from '../crm-settings-logic.js?v=crmcfg1';   // CRM_CONFIG_V1
@@ -854,8 +858,56 @@ async function paint() {
             if (mailInp.value.trim()) payload.email = mailInp.value.trim();
             if (noteInp.value.trim()) payload.notes = noteInp.value.trim();
             if (uid() != null) payload.created_by = uid();
-            const { data: p, error } = await supabase.from('patients').insert(payload).select('id, full_name, mrn, phone').single();
-            if (error) { toast(trf('Пациент не создан: {msg}', { msg: error.message }), 'fail'); saveBtn.disabled = false; return; }
+            // CRM_LINKS_V1 — КАРТА ЗАВОДИТСЯ ТЕМ ЖЕ ПУТЁМ, ЧТО И ВЕЗДЕ.
+            //
+            // Здесь стояла прямая вставка в `patients`, и мимо неё проходили три
+            // вещи, которые делает savePatient() и только он:
+            //   • поиск дубля — тот же человек звонил на прошлой неделе и уже
+            //     заведён; вторая карта означает вторую историю болезни;
+            //   • штампы клиники и филиала — карта без branch_id выпадает из
+            //     отчётов по филиалу;
+            //   • привязка ВСЕХ открытых заявок с этим номером
+            //     (linkCrmRequestsToPatient): звонили трижды — закрывалась одна.
+            let created;
+            try {
+                created = await savePatient(payload);
+            } catch (e) {
+                if (e && e.code === 'DUPLICATE_PATIENT' && e.existing) {
+                    saveBtn.disabled = false;
+                    // Дубль — это ВОПРОС, а не отказ: то же окно и тот же выбор,
+                    // что у регистратуры. «Открыть существующего» привязывает
+                    // заявку к найденной карте и продолжает, «Создать
+                    // принудительно» повторяет сохранение в обход проверки.
+                    const { openDuplicatePatientDialog } = await import('./patient-create-modal.js');
+                    openDuplicatePatientDialog(e, {
+                        onOpenExisting: async (c) => { await finishRegistration(c, { existing: true }); },
+                        onForceCreate: async () => {
+                            try {
+                                const forced = await savePatient(payload, { force: true });
+                                await finishRegistration(forced._raw || forced);
+                            } catch (e2) {
+                                toast(trf('Пациент не создан: {msg}', { msg: (e2 && e2.message) || e2 }), 'fail');
+                            }
+                        },
+                    });
+                    return;
+                }
+                toast(trf('Пациент не создан: {msg}', { msg: (e && e.message) || e }), 'fail');
+                saveBtn.disabled = false;
+                return;
+            }
+            // savePatient() отдаёт карту в виде экрана (fullName/…); дальше по
+            // цепочке идёт СТРОКА БАЗЫ, как и раньше.
+            await finishRegistration(created._raw || created);
+        });
+
+        /**
+         * Общий хвост регистрации: привязать заявку к карте, обновить её в
+         * памяти и отдать карту вызывающему. Один на все три исхода — новая
+         * карта, принудительно созданная и выбранная из дублей, — потому что
+         * для заявки они означают одно и то же: у человека теперь есть карта.
+         */
+        async function finishRegistration(p, { existing = false } = {}) {
             // Заявку обновляем, только если она УЖЕ сохранена: «Записать на
             // дату» может вызвать регистрацию из ещё не созданной заявки —
             // её patient_id запишет persist() при сохранении.
@@ -873,10 +925,13 @@ async function paint() {
                 requestRow.patients = { id: p.id, full_name: p.full_name, mrn: p.mrn };
                 if (markCame) requestRow.status = CONVERT_STATUS;
             }
-            toast(trf('Пациент зарегистрирован: {who}', { who: p.full_name + (p.mrn ? ' · ' + p.mrn : '') }), 'ok');
+            const who = (p.full_name || '') + (p.mrn ? ' · ' + p.mrn : '');
+            toast(existing
+                ? trf('Пациент уже в базе: {who} — заявка привязана.', { who })
+                : trf('Пациент зарегистрирован: {who}', { who }), 'ok');
             close();
             if (typeof onCreated === 'function') onCreated(p);
-        });
+        }
 
         const col = { flex: '1 1 0', minWidth: 0 };
         const regBody = h('div', { class: 'modal-body', style: { overflowY: 'auto' } },

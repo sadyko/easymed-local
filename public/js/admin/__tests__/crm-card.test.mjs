@@ -126,6 +126,10 @@ globalThis.fetch = async (url, opts) => {
     }
     if (body && body.table === 'services' && body.op === 'select') return jsonOk(SERVICES);
     if (body && body.table === 'crm_request_services' && body.op === 'select') return jsonOk(REQ_LINES);
+    // CRM_LINKS_V1 — регистрация пациента с карточки. Поиск дубля читает
+    // patients, вставка возвращает заведённую карту.
+    if (body && body.table === 'patients' && body.op === 'select') return jsonOk(PATIENT_DUPES);
+    if (body && body.table === 'patients' && body.op === 'insert') return jsonOk(NEW_PATIENT);
     return jsonOk([]);
   }
   return jsonOk([]);
@@ -659,5 +663,94 @@ test('самая РАННЯЯ дата становится датой заяв�
   assert.strictEqual(row.values.scheduled_date, BOOK_DAY,
     'датой заявки стала не ближайшая: карточка обещает приём позже, чем пациента ждут');
   SERVICES = []; REQ_LINES = [];
+  window.easymed.state.user = null;
+});
+
+// ═══ 8. РЕГИСТРАЦИЯ ПАЦИЕНТА С КАРТОЧКИ ═════════════════════════════════════
+//
+// CRM_LINKS_V1 (2026-09-20). Окно регистрации внутри CRM писало в `patients`
+// НАПРЯМУЮ, минуя savePatient() — единственный путь, на котором висят три
+// вещи, без которых карта заводится «почти правильно»:
+//
+//   • проверка дубля (findDuplicateCandidates): тот же человек звонил на
+//     прошлой неделе — и получает вторую карту, а с ней вторую историю;
+//   • штампы клиники и филиала (company_id / branch_id): карта без филиала
+//     выпадает из отчётов по филиалу;
+//   • привязка ВСЕХ открытых заявок с этим номером (linkCrmRequestsToPatient):
+//     пациент звонил трижды — закрывается одна заявка, две остаются висеть.
+//
+// Проверяется не «функция вызвана», а следы этого пути в запросах к серверу:
+// сначала поиск дубля, потом вставка, потом привязка заявок по номеру.
+
+let PATIENT_DUPES = [];
+const NEW_PATIENT = { id: 77, full_name: 'Каримова Азиза', mrn: 'A-000777', phone: '+' + UZ_RAW };
+
+/** Окно регистрации, открытое кнопкой «Записать на дату» у лида без карты. */
+async function openRegistration() {
+  SERVICES = [SVC];
+  REQ_LINES = [{ service_id: SVC.id, scheduled_date: '', status: 'pending', doctor_id: null }];
+  const modal = await openRequest({
+    id: 1, status: 'in_process', service_id: SVC.id, full_name: 'Каримова Азиза', phone: UZ_RAW,
+  }, { id: 7, full_name: 'Админ', role: 'admin', is_admin: true });
+  const btn = walk(modal).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Записать на дату'));
+  assert.ok(btn, 'кнопка «Записать на дату» пропала из окна заявки');
+  btn.click();
+  await tick(60);
+  const reg = document.body.children.filter((n) => hasClass(n, 'modal')).pop();
+  assert.ok(reg && reg !== modal, 'лид без карты не открыл окно регистрации пациента');
+  return reg;
+}
+
+async function pressRegister(reg) {
+  const btn = walk(reg).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Зарегистрировать'));
+  assert.ok(btn, 'кнопка «Зарегистрировать» пропала из окна регистрации');
+  btn.click();
+  await tick(90);
+}
+
+const patientInserts = () => CALLS.filter((c) => c.table === 'patients' && c.op === 'insert');
+const patientSelects = () => CALLS.filter((c) => c.table === 'patients' && c.op === 'select');
+
+test('карта с карточки заводится общим путём: сначала проверка дубля, потом вставка', async () => {
+  PATIENT_DUPES = [];
+  const reg = await openRegistration();
+  const before = CALLS.length;
+  await pressRegister(reg);
+
+  const after = CALLS.slice(before);
+  const ins = after.findIndex((c) => c.table === 'patients' && c.op === 'insert');
+  const dup = after.findIndex((c) => c.table === 'patients' && c.op === 'select');
+  assert.ok(ins > -1, 'пациент не создан вовсе');
+  assert.ok(dup > -1 && dup < ins,
+    'перед вставкой карты не было ни одного поиска по базе — окно CRM снова пишет в patients мимо проверки дубля');
+  window.easymed.state.user = null;
+});
+
+test('все открытые заявки с этим номером привязываются к новой карте, а не одна', async () => {
+  PATIENT_DUPES = [];
+  const reg = await openRegistration();
+  const before = CALLS.length;
+  await pressRegister(reg);
+
+  const link = CALLS.slice(before).find((c) => c.table === 'crm_requests' && c.op === 'update'
+    && (c.filters || []).some((f) => f.col === 'id' && f.op === 'in'));
+  assert.ok(link, 'привязки открытых заявок по телефону не было: пациент звонил трижды — две заявки останутся висеть');
+  assert.strictEqual(link.values.patient_id, NEW_PATIENT.id, 'заявки привязаны не к созданной карте');
+  window.easymed.state.user = null;
+});
+
+test('похожий пациент уже есть — окно спрашивает, а не заводит вторую карту', async () => {
+  PATIENT_DUPES = [{ id: 55, mrn: 'A-000055', full_name: 'Каримова Азиза', last_name: 'Каримова',
+                     first_name: 'Азиза', middle_name: '', phone: '+' + UZ_RAW, date_of_birth: '1990-01-01', national_id: '' }];
+  const reg = await openRegistration();
+  const before = CALLS.length;
+  await pressRegister(reg);
+  await tick(60);
+
+  assert.strictEqual(CALLS.slice(before).filter((c) => c.table === 'patients' && c.op === 'insert').length, 0,
+    'вторая карта заведена молча — именно это и есть дубль пациента');
+  const dlg = walk(document.body).find((n) => n.getAttribute && n.getAttribute('data-dialog') === 'patient-duplicate');
+  assert.ok(dlg, 'о найденном дубле никто не спросил: окно возможного дубликата не открылось');
+  PATIENT_DUPES = [];
   window.easymed.state.user = null;
 });
