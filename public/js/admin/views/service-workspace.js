@@ -410,6 +410,11 @@ function servicesCard(ctx) {
             patientTabCanEdit('services') && h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openServicePickerModal({
                 // SVC_WIZARD_V1 — open the full booking wizard (chips + СМЕТА + Оплата/Кто платит/Подтверждение),
                 // patient pre-attached. No onPick → the wizard creates the visit + invoice itself.
+                // PICKER_CATALOG_EVERYWHERE_V1 — мастер включается ЭТИМ флагом. Без
+                // него окно открывалось тремя колонками, а «Готово» звало onPick,
+                // которого здесь нет по замыслу, — и падало. И patient, и onBooked
+                // читает только мастер: в старом режиме оба не значили ничего.
+                calculator: true,
                 patient: ctx.patient,
                 onBooked: () => { try { loadPatientEmr(ctx.patient).then(() => paintEmr()); } catch (e) {} },
             }) }, Icon('Plus', { size: 12 }), ' Добавить'),

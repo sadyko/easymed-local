@@ -558,13 +558,23 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     // другим ?v это ДРУГОЙ модуль: вторая копия каталога со своим состоянием
     // (забронированные слоты, forgetSlots). Расхождение не видно ничем, кроме
     // потерянной брони, — поэтому оно и закреплено проверкой на исходнике.
+    //
+    // PICKER_CATALOG_EVERYWHERE_V1 — ИМЕННО КАТАЛОГ, а не три колонки. Владелец:
+    // «i see an old version with 3 columns». У окна выбора услуги два облика, и
+    // без attachMode оно открывалось старым: «Группы услуг» → «Услуги» → «Врачи».
+    // attachMode даёт тот же каталог со сметой, что видят мастер записи и визит,
+    // и зовёт onPick по строке сметы. requireSlot: false снимает бронь времени:
+    // пациента здесь ещё вводят, врача выбирают в самой строке регистрации, и
+    // требовать слот в каталоге не за что.
     async function openServicePicker() {
         if (locked()) return;
         try {
             const mod = await import('./service-picker-modal.js?v=aug17e');
             mod.openServicePickerModal({
+                attachMode: true,
+                requireSlot: false,
                 title: 'Добавить услуги',
-                confirmLabel: 'Готово',
+                ctaLabel: 'Готово',
                 onPick: (p) => { if (p && p.service) addLine(p.service, p.doctor || null); },
             });
         } catch (e) {
