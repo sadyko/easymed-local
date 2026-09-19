@@ -1041,27 +1041,39 @@ export function runReport(db, args, _user) {
   };
 }
 
-// DOCTOR_TIER_V1 — позиции строк врача за месяц 'YYYY-MM': кабинет получает
+// DOCTOR_TIER_V1 — позиции строк врача за месяц 'YYYY-MM' ({ month }) или за
+// диапазон месяцев ({ from, to }, оба 'YYYY-MM', включительно): кабинет получает
 // ГОТОВУЮ нумерацию и не считает её сам — две нумерации разошлись бы молча,
-// тот же довод, что у serviceShare/ITEM_FEE_SQL. Читает любой вошедший, как и
-// отчёты (шапка файла). Пусто — у врача в этом месяце нет строк по услугам со
-// ступенью.
+// тот же довод, что у serviceShare/ITEM_FEE_SQL. Диапазон — чтобы кабинет за
+// «12 месяцев» спрашивал ОДИН раз, а не звал RPC в цикле по месяцам; месяц
+// строки едет в ответе (ym), и раскладывает строки по месяцам уже клиент.
+// Читает любой вошедший, как и отчёты (шапка файла). Пусто — у врача в этих
+// месяцах нет строк по услугам со ступенью.
+const TIER_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 export function doctorTierPositions(db, args, _user) {
   const doctorId = Number(args && args.doctor_id);
   if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
-  const month = String((args && args.month) || '');
-  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new RpcError('month must be YYYY-MM.', 400);
+  const month = args && args.month != null ? String(args.month) : '';
+  const from = month ? month : String((args && args.from) || '');
+  const to = month ? month : String((args && args.to) || '');
+  if (!TIER_MONTH_RE.test(from) || !TIER_MONTH_RE.test(to)) {
+    throw new RpcError('month must be YYYY-MM (or from/to as YYYY-MM).', 400);
+  }
+  if (from > to) throw new RpcError('from must not be after to.', 400);
   const rows = db.prepare(`
     SELECT t.visit_service_id, t.service_id, s.name AS service_name,
+           t.ym,
            t.qty AS units,
            MAX(0, MIN(t.qty, t.running - t.tier_from)) AS units_above,
            t.tier_from, t.tier_percent, t.running AS count_so_far
       FROM (${TIER_RANK_SQL}) t
       JOIN services s ON s.id = t.service_id
-     WHERE t.doctor_id = ? AND t.ym = ?
-     ORDER BY t.service_id, t.running, t.visit_service_id
-  `).all(doctorId, month);
-  return { month, rows };
+     WHERE t.doctor_id = ? AND t.ym BETWEEN ? AND ?
+     ORDER BY t.ym, t.service_id, t.running, t.visit_service_id
+  `).all(doctorId, from, to);
+  // Форма { month } отвечает и month тоже: вызов одного месяца не обязан знать
+  // про диапазон.
+  return month ? { month, from, to, rows } : { from, to, rows };
 }
 
 // BUILDING_REPORTS_V1 — перечень ЗДАНИЙ для выборки в «Отчётах».

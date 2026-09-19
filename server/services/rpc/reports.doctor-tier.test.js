@@ -192,3 +192,33 @@ test('doctor_tier_positions зарегистрирован и считается
   assert.equal(typeof RPC.doctor_tier_positions, 'function');
   assert.ok(isReadOnlyRpc('doctor_tier_positions'), 'кабинет врача при просроченной лицензии обязан читать свои позиции');
 });
+
+// DOCTOR_TIER_V1 — кабинет спрашивает позиции ОДНИМ запросом за диапазон
+// месяцев: раньше он звал RPC в цикле по каждому затронутому месяцу, и на
+// «за 12 месяцев» это было двенадцать запросов подряд. Месяц строки едет в
+// ответе (ym), чтобы кабинет сам разложил строки по месяцам.
+test('doctor_tier_positions: диапазон from/to отдаёт строки обоих месяцев с их ym', () => {
+  const c = clinic();
+  c.lines(2);                        // сентябрь
+  c.line({ day: '2026-10-03' });     // октябрь
+  const res = doctorTierPositions(c.db, { doctor_id: 1, from: '2026-09', to: '2026-10' }, user);
+  assert.equal(res.from, '2026-09');
+  assert.equal(res.to, '2026-10');
+  assert.equal(res.rows.length, 3);
+  assert.deepEqual(res.rows.map((r) => r.ym).sort(), ['2026-09', '2026-09', '2026-10']);
+  // Нумерация у октября своя: счёт месяца начинается заново.
+  const oct = res.rows.find((r) => r.ym === '2026-10');
+  assert.equal(oct.count_so_far, 1);
+  // Один месяц через from/to — ровно то же, что через month.
+  const one = doctorTierPositions(c.db, { doctor_id: 1, from: '2026-09', to: '2026-09' }, user);
+  assert.equal(one.rows.length, 2);
+  assert.equal(doctorTierPositions(c.db, { doctor_id: 1, month: '2026-09' }, user).month, '2026-09');
+});
+
+test('doctor_tier_positions: перевёрнутый и кривой диапазон — 400', () => {
+  const c = clinic(); c.lines(1);
+  assert.throws(() => doctorTierPositions(c.db, { doctor_id: 1, from: '2026-10', to: '2026-09' }, user), (e) => e.status === 400);
+  assert.throws(() => doctorTierPositions(c.db, { doctor_id: 1, from: '2026-13', to: '2026-13' }, user), (e) => e.status === 400);
+  assert.throws(() => doctorTierPositions(c.db, { doctor_id: 1, from: '2026-09' }, user), (e) => e.status === 400);
+  assert.throws(() => doctorTierPositions(c.db, { doctor_id: 1 }, user), (e) => e.status === 400);
+});

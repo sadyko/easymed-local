@@ -1593,28 +1593,35 @@ async function loadDashboardData() {
         }
     } catch (e) { console.warn('[dash] discounts:', e && e.message); }
 
-    // DOCTOR_TIER_V1 — позиции строк по ступеням за каждый затронутый месяц.
-    // Нумерацию считает сервер (doctor_tier_positions); кабинет только
-    // применяет её тем же правилом, что отчёт (tierShare). Текущий месяц
-    // запрашивается всегда — прогресс «18 из 25» нужен и когда за выбранный
-    // период строк нет.
+    // DOCTOR_TIER_V1 — позиции строк по ступеням за ВЕСЬ затронутый диапазон
+    // месяцев, ОДНИМ запросом: раньше RPC звался по разу на месяц, и «за 12
+    // месяцев» это была дюжина запросов подряд. Нумерацию считает сервер
+    // (doctor_tier_positions); кабинет только применяет её тем же правилом, что
+    // отчёт (tierShare). Текущий месяц входит в диапазон всегда — прогресс
+    // «18 из 25» нужен и когда за выбранный период строк нет. Отказ сервера
+    // больше не молчит: без позиций доли считаются БЕЗ ступени, и это видно
+    // только в консоли, а не в цифрах.
     state.dash.tierPos = new Map();
     state.dash.tierProgress = [];
     try {
         const nowKey = localMonthKey(new Date());
         const months = new Set(state.dash.services.map(s => localMonthKey(s.visitDate)).filter(Boolean));
         months.add(nowKey);
-        for (const month of months) {
-            const { data, error } = await supabase.rpc('doctor_tier_positions', { doctor_id: docId, month });
-            if (error || !data || !Array.isArray(data.rows)) continue;
+        const sorted = [...months].sort();
+        const from = sorted[0];
+        const to = sorted[sorted.length - 1];
+        const { data, error } = await supabase.rpc('doctor_tier_positions', { doctor_id: docId, from, to });
+        if (error) {
+            console.warn('[dash] tier positions:', error.message);
+        } else if (data && Array.isArray(data.rows)) {
             for (const p of data.rows) state.dash.tierPos.set(String(p.visit_service_id), p);
-            if (month !== nowKey) continue;
             const byService = new Map();
             for (const p of data.rows) {
+                if (String(p.ym || '') !== nowKey) continue;
                 const key = String(p.service_id);
                 const cur = byService.get(key);
                 if (!cur || Number(p.count_so_far) > cur.count) {
-                    byService.set(key, { serviceName: p.service_name || '', count: Number(p.count_so_far) || 0,
+                    byService.set(key, { serviceId: key, serviceName: p.service_name || '', count: Number(p.count_so_far) || 0,
                                          from: Number(p.tier_from) || 0, pct: Number(p.tier_percent) || 0 });
                 }
             }
@@ -1986,6 +1993,17 @@ function salaryKindLabel(kind) {
     return tr({ fixed: 'Оклад помесячно', percentage: 'Процент от услуг', fix_plus_kpi: 'Оклад + процент', none: 'Не настроено' }[kind]) || kind;
 }
 
+// DOCTOR_TIER_V1 — строки прогресса ступени, которые ЭТОМУ врачу действительно
+// что-то обещают: платят ли ему поуслужно (то же правило, что у долей —
+// perServicePayApplies) и есть ли у него ставка на эту услугу. Ступень —
+// свойство услуги, а не врача, и сервер отдаёт её всем; без этой проверки
+// врачу на голом окладе рисовалось «с 26-й доля 50 %».
+function tierProgressRows(doc) {
+    if (!perServicePayApplies(doc)) return [];
+    const rateMap = serviceRateMap(doc);
+    return (state.dash.tierProgress || []).filter(p => rateMap.has(String(p.serviceId)));
+}
+
 function salaryConfigCard(salary) {
     const doc = state.dash.doctor;
     if (!doc) return h('div');
@@ -2004,7 +2022,11 @@ function salaryConfigCard(salary) {
             : '—'),
         // DOCTOR_TIER_V1 — прогресс ступени за ТЕКУЩИЙ месяц: сколько услуг уже
         // сделано, с какой начинается повышенная доля и действует ли она.
-        ...state.dash.tierProgress.map(p => kvRow(
+        // Показывается ТОЛЬКО тому, кому ступень вообще что-то меняет: врачу на
+        // окладе и врачу без ставки на эту услугу доля с неё не платится вовсе,
+        // и обещание «с 26-й доля 50 %» было бы обещанием денег, которых не
+        // будет.
+        ...tierProgressRows(doc).map(p => kvRow(
             trf('Ступень: {service}', { service: p.serviceName }),
             p.count > p.from
                 ? trf('{count} из {from} в этом месяце · ступень {pct}% действует', { count: p.count, from: p.from, pct: p.pct })
