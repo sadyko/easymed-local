@@ -7319,3 +7319,84 @@ table.list tr.is-off td { color: var(--ink-400); }
 .sim-review-row { display: grid; grid-template-columns: 130px 1fr; gap: 10px; }
 .sim-card .modal-body { display: block; }
 .sim-card .modal-body > * + * { margin-top: 12px; }
+
+/* ============================================================
+   FAST_REG_LAYOUT_V1 (2026-09-20) — «БЫСТРАЯ РЕГИСТРАЦИЯ»: ОКНО ВО ВСЮ
+   ДОСТУПНУЮ ШИРИНУ, ФОРМА «ПОДПИСЬ СЛЕВА — ПОЛЕ СПРАВА», КРУПНЫЙ ТЕКСТ.
+
+   Владелец: «the dialogue window is small and text is small, can you redesign
+   the fast registration dialog window so it fits content». Образец, который он
+   показал, — не окно, а страница во всю ширину: карточка «Реквизиты пациента»
+   с «Сохранить» в её же шапке справа, горизонтальная форма по две пары
+   «подпись/поле» в строке, ниже таблица услуг читаемым размером.
+
+   Что здесь было и почему это читалось мелким. Окно открывалось раскладкой
+   .mg-dense: поля 32 px, подписи 12.5 px. Ужимали не от любви к мелкому —
+   подпись стояла НАД полем, то есть КАЖДАЯ строка формы стоила две высоты, и
+   в окно 1240 px четыре ряда по три поля влезали только так. Подпись СЛЕВА
+   возвращает строке одну высоту — из этих пикселей и сделан крупный текст.
+   Поэтому правка не «увеличить шрифт», а смена раскладки: увеличенный шрифт в
+   прежней раскладке просто не поместился бы.
+
+   Классы-соседи переиспользуются намеренно: шапка блока — та же .card-header
+   (её h3 и .h-count уже оформлены), поле — та же .field (рамка, радиус, фокус
+   и высота 38 px живут там). Своё здесь только то, чего нигде нет: сетка
+   «подпись/поле», ширина окна и размеры таблицы услуг.
+   ============================================================ */
+/* Ширина — во всю доступную, с полем 24 px по краям. !important: .modal-card
+   задаёт 520 px, а окно больше не просит .modal-grouped (760 px) — без пометки
+   любое будущее правило карточки перебило бы это одним классом. */
+.fr-card { width: min(1400px, calc(100vw - 48px)) !important; max-width: none !important;
+    max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
+/* .modal-body по умолчанию display:grid с растягиванием строк — два блока
+   разной высоты стали бы двумя панелями во всю высоту окна. */
+.fr-card .modal-body { flex: 1 1 auto; display: block; overflow: auto; padding: 16px 20px 20px; }
+
+.fr-block { border: 1px solid var(--ink-100); border-radius: 12px; background: var(--white); margin-bottom: 16px; }
+.fr-block:last-child { margin-bottom: 0; }
+.fr-block-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    border-bottom: 1px solid var(--ink-100); font-size: 15px; font-weight: 600; }
+.fr-block-head .grow { flex: 1; }
+.fr-block-info { font-size: 13.5px; font-weight: 400; color: var(--ink-600); }
+/* Строка поиска существующего пациента стоит первой в блоке реквизитов; её
+   собственная рамка снизу — шов между «найти готового» и «завести нового». */
+.fr-block .mg-section { padding: 12px 16px; }
+/* Плашка выбранного пациента: имя слева, «Сменить» у правого края. */
+.fr-picked { display: flex; align-items: center; gap: 10px; }
+
+/* Сетка формы: подпись — поле — подпись — поле. Колонка подписи постоянная
+   (200 px), поле забирает остаток; minmax(0,1fr) — чтобы длинное содержимое
+   поля не раздувало колонку шире строки. */
+.fr-form { display: grid; grid-template-columns: 200px minmax(0, 1fr) 200px minmax(0, 1fr);
+    gap: 10px 14px; align-items: center; padding: 16px; }
+.fr-label { font-size: 13.5px; color: var(--ink-700); text-align: right; padding-right: 4px; }
+.fr-label .req { color: var(--crit-500); margin-left: 2px; }
+.fr-ctl { min-width: 0; }
+/* Высота одна на все виды полей — иначе строка выглядит собранной из двух
+   разных программ. 38 px приходит из .field; здесь только размер текста и те
+   обёртки, что рисуют своё поле мимо .field (телефон, календарь, список). */
+.fr-ctl > input, .fr-ctl > select { width: 100%; box-sizing: border-box; }
+.fr-ctl > input, .fr-ctl > select, .fr-ctl .ph-input,
+.fr-ctl .uidate-field, .fr-ctl .uisel-field { height: 38px; font-size: 15px; }
+.fr-ctl .uisel, .fr-ctl .uidate { min-width: 0; width: 100%; }
+/* SEARCHABLE_SELECT_V1 рисует своё поле ВСТРОЕННЫМ стилем (40 px, 13.5 px), а
+   встроенный стиль перебивается только пометкой. */
+.fr-ctl .fr-ref > input { height: 38px !important; font-size: 15px !important; border-radius: 8px !important; }
+.fr-ctl .radio-chips { min-height: 38px; align-items: center; }
+.fr-ctl .radio-chip { height: 38px; font-size: 13.5px; }
+/* Поле во всю строку: со второй колонки и до правого края. */
+.fr-span { grid-column: 2 / span 3; }
+.fr-names { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+
+.fr-table.tbl { font-size: 15px; }
+.fr-table.tbl th, .fr-table.tbl td { padding: 10px 12px; }
+.fr-table.tbl select, .fr-table.tbl .uisel-field { height: 34px; font-size: 15px; }
+
+/* Узкий экран: пара «подпись/поле» разворачивается в столбик, подпись слева. */
+@media (max-width: 960px) {
+    .fr-card { width: calc(100vw - 24px) !important; }
+    .fr-form { grid-template-columns: 1fr; padding: 12px; }
+    .fr-label { text-align: left; padding-right: 0; }
+    .fr-span { grid-column: auto; }
+    .fr-names { grid-template-columns: 1fr; }
+}

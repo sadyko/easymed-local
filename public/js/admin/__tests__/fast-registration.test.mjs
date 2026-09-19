@@ -266,8 +266,30 @@ function fillMinimum(dlg) {
 const rowsOf = (dlg) => walk(dlg.table).filter((n) => n.tagName === 'TR' && walk(n).some((c) => c.tagName === 'TD'));
 const cellsOf = (tr) => (tr.children || []).filter((c) => c.tagName === 'TD');
 
+// Подписи формы по порядку, без звёздочки обязательности.
+const frLabels = (form) => (form.children || []).filter((n) => hasClass(n, 'fr-label'))
+  .map((n) => textOf(n).replace(/\*/g, '').replace(/\s+/g, ' ').trim());
+const headOf = (block) => walk(block).find((n) => hasClass(n, 'fr-block-head'));
+const titleOf = (node) => textOf(walk(node).find((n) => n.tagName === 'H3') || node)
+  .replace(/<svg[\s\S]*?<\/svg>/g, '').replace(/\s+/g, ' ').trim();
+/** Кнопки узла, названные коротко и В ПОРЯДКЕ разметки. */
+const btnNames = (root, names) => buttons(root)
+  .map((b) => names.find((t) => textOf(b).includes(t)))
+  .filter(Boolean);
+
 // ===========================================================================
-test('окно рисует ОДИН раздел реквизитов по образцу и пустую таблицу услуг с кнопками', async () => {
+// FAST_REG_LAYOUT_V1 (2026-09-20) — ОКНО ВО ВСЮ ШИРИНУ, ФОРМА ГОРИЗОНТАЛЬНАЯ.
+//
+// Владелец: «the dialogue window is small and text is small, can you redesign
+// the fast registration dialog window so it fits content». На его образце это
+// не окно, а страница: блок «Реквизиты пациента» с «Сохранить» в ЕГО шапке
+// справа, форма «подпись слева — поле справа», ниже блок «Услуги» с «Печать /
+// +Пакеты / +Услуги» в шапке. Проверяется то, из чего это узнаётся: класс
+// карточки, два блока, место главной кнопки, порядок кнопок таблицы и порядок
+// подписей. Всё это ломается МОЛЧА — окно продолжает работать, просто
+// перестаёт быть похожим на образец.
+// ===========================================================================
+test('окно во всю ширину: два блока, «Сохранить» в шапке реквизитов, поля по образцу', async () => {
   reset();
   const dlg = openFastRegistrationDialog({});
   assert.ok(dlg, 'окно не открылось');
@@ -278,46 +300,53 @@ test('окно рисует ОДИН раздел реквизитов по об
   assert.ok(txt.includes('Быстрая регистрация'), 'нет заголовка окна');
   assert.ok(txt.includes('Пациент → услуги и врач → счёт → печать'), 'нет строки пути');
 
-  // FAST_REG_COMPACT_V1 — владелец: в быстром окне только необходимое, как на
-  // образце. Реквизиты пациента — ОДИН раздел компактной раскладки сборщика,
-  // и «Код отправителя» стоит В НЁМ: отдельный блок «Направление и скидка»
-  // был четвёртым разделом там, где разделов теперь один.
-  const titles = walk(dlg.body).filter((n) => n.tagName === 'H3')
-    .map((n) => textOf(n).replace(/<svg[\s\S]*?<\/svg>/g, '').replace(/\s+/g, ' ').trim())
-    .map((t) => t.replace(/^[1234]\s*/, ''));
-  for (const want of ['Реквизиты пациента', 'Услуги']) {
-    assert.ok(titles.some((t) => t.includes(want)), 'нет блока «' + want + '»: ' + titles.join(' | '));
-  }
+  // 1. Карточка просит ширину сама (.fr-card) и больше не ужата .mg-dense:
+  // именно ужатие и делало окно «мелким» — поле 32 px, подпись 12.5 px.
+  assert.ok(hasClass(dlg.card, 'fr-card'), 'карточка не просит раскладку во всю ширину: ' + dlg.card.className);
+  assert.ok(!hasClass(dlg.card, 'mg-dense'), 'окно осталось на ужатой раскладке .mg-dense');
+
+  // 2. Блоков два, и заголовки у них те же, что на образце.
+  const blocks = walk(dlg.body).filter((n) => hasClass(n, 'fr-block'));
+  assert.strictEqual(blocks.length, 2, 'блоков в окне не два: ' + blocks.length);
+  assert.deepStrictEqual(blocks.map(titleOf), ['Реквизиты пациента', 'Услуги 0'],
+    'заголовки блоков: ' + blocks.map(titleOf).join(' | '));
+  const titles = walk(dlg.body).filter((n) => n.tagName === 'H3').map(titleOf);
   for (const gone of ['Личные данные', 'Документы и резидентство', 'Контакты и адрес', 'Направление и скидка', 'Здоровье']) {
     assert.ok(!titles.some((t) => t.includes(gone)), 'в быстром окне остался раздел «' + gone + '»: ' + titles.join(' | '));
   }
-  const sections = walk(dlg.body).filter((n) => hasClass(n, 'mg-section') && !hasClass(n, 'mg-search'));
-  const reqs = sections.filter((n) => walk(n).some((c) => c.tagName === 'H3'
-    && textOf(c).replace(/<svg[\s\S]*?<\/svg>/g, '').includes('Реквизиты пациента')));
-  assert.strictEqual(reqs.length, 1, 'разделов реквизитов не один: ' + reqs.length);
 
-  // Поля раздела — ровно образец владельца, и «Код отправителя» с «Типом
-  // скидки» среди них.
-  const labels = walk(reqs[0]).filter((n) => n.tagName === 'LABEL')
-    .map((n) => textOf(n).replace(/\s+/g, ' ').trim());
+  // 3. «Сохранить» — в шапке блока реквизитов, а НЕ в подвале: окно теперь во
+  // всю высоту, и кнопка в подвале уезжала бы за нижний край формы.
+  const patientHead = headOf(dlg.patientBlock);
+  const foot = walk(dlg.card).find((n) => hasClass(n, 'modal-foot'));
+  assert.ok(patientHead && buttons(patientHead).some((b) => textOf(b).includes('Сохранить')),
+    'в шапке блока реквизитов нет «Сохранить»');
+  assert.ok(!buttons(foot).some((b) => textOf(b).includes('Сохранить')),
+    '«Сохранить» осталась в подвале — на образце её там нет');
+  assert.ok(buttons(foot).some((b) => textOf(b).includes('Отмена')), 'в подвале нет «Отмена»');
+
+  // 4. Кнопки блока услуг — в порядке образца: «Печать», «+Пакеты», «+Услуги».
+  const svcHead = headOf(dlg.servicesBlock);
+  const order = btnNames(svcHead, ['Печать', '+Пакеты', '+Услуги']);
+  assert.deepStrictEqual(order, ['Печать', '+Пакеты', '+Услуги'],
+    'порядок кнопок блока услуг: ' + order.join(' | '));
+  const print = btnByText(dlg.card, 'Печать');
+  assert.ok(print.hasAttribute('disabled') || print.disabled, 'до сохранения «Печать» должна быть выключена');
+  // Таблица услуг читается тем же размером, что и форма (.fr-table).
+  assert.ok(hasClass(dlg.table, 'fr-table'), 'таблица услуг осталась мелкой: ' + dlg.table.className);
+
+  // 5. Подписи формы — ровно образец, в порядке образца, и «Код отправителя»
+  // стоит ПЕРЕД «Типом скидки» (он поле визита, но место у него там же).
+  assert.ok(dlg.formEl && hasClass(dlg.formEl, 'fr-form'), 'окно не получило форму реквизитов');
+  const labels = frLabels(dlg.formEl);
   assert.deepStrictEqual(labels, [
-    'Фамилия *', 'Имя *', 'Отчество',
-    'Дата рождения *', 'Пол *', 'Телефон',
-    'Паспортные данные', 'Резидентство', 'Область',
-    'Адрес', 'Тип скидки',
-    'Код отправителя (лечащий врач)',
+    'Клиент', 'Дата рождения', 'Пол', 'Телефон', 'Паспортные данные',
+    'Резидентство', 'Область', 'Адрес',
+    'Код отправителя (лечащий врач)', 'Тип скидки',
   ], 'поля быстрой регистрации: ' + labels.join(' | '));
   for (const gone of ['Email', 'Махалля', 'ПИНФЛ (ЖШШИР)', 'Район', 'Страна', 'Предпочитаемый язык']) {
     assert.ok(!labels.includes(gone), 'в быстром окне осталось поле «' + gone + '»');
   }
-
-  // Кнопки таблицы услуг.
-  assert.ok(btnByText(dlg.card, '+Услуги'), 'нет кнопки «+Услуги»');
-  assert.ok(btnByText(dlg.card, '+Пакеты'), 'нет кнопки «+Пакеты»');
-  const print = btnByText(dlg.card, 'Печать');
-  assert.ok(print, 'нет кнопки «Печать»');
-  assert.ok(print.hasAttribute('disabled') || print.disabled, 'до сохранения «Печать» должна быть выключена');
-  assert.ok(btnByText(dlg.card, 'Сохранить'), 'нет кнопки «Сохранить»');
 
   // Пустое состояние подсказывает, чем наполнять таблицу.
   assert.ok(textOf(dlg.table).includes('Добавьте услуги'), 'нет подсказки пустой таблицы');
@@ -325,6 +354,25 @@ test('окно рисует ОДИН раздел реквизитов по об
   // Поле направления заполнено из справочника, подпись — «код · имя».
   assert.ok(textOf(dlg.referralSel).includes('0007 · Сайт клиники'), 'источник направления не подписан кодом');
   dlg.close();
+});
+
+// Раскладка живёт в файле стилей, а не в разметке окна: намерение «во всю
+// ширину, подпись слева, крупный текст» ничего не значит без правил — окно
+// осталось бы на умолчаниях .modal-card (520 px) и .tbl (13.5 px), а проверка
+// разметки этого не увидела бы.
+test('FAST_REG_LAYOUT_V1: правила раскладки есть в admin-views.css', () => {
+  const CSS = fs.readFileSync(path.resolve(HERE, '..', '..', '..', 'css', 'admin-views.css'), 'utf8');
+  const rule = (sel) => {
+    const m = new RegExp(sel.replace(/\./g, '\\.') + '\\s*\\{([^}]*)\\}').exec(CSS);
+    assert.ok(m, 'в admin-views.css нет правила ' + sel);
+    return m[1];
+  };
+  assert.ok(/width:\s*min\(/.test(rule('.fr-card')), 'окно не просит ширину во всю доступную');
+  assert.ok(/grid-template-columns:\s*200px/.test(rule('.fr-form')),
+    'у формы нет колонки подписей — подпись не встанет слева от поля');
+  assert.ok(/text-align:\s*right/.test(rule('.fr-label')), 'подпись не прижата к своему полю');
+  assert.ok(/font-size:\s*15px/.test(rule('.fr-table.tbl')), 'строки таблицы услуг остались мелкими');
+  for (const sel of ['.fr-ctl', '.fr-span', '.fr-names', '.fr-block', '.fr-block-head']) rule(sel);
 });
 
 test('+Услуги добавляет строку с ценой без НДС и с НДС, +Пакеты — все услуги пакета', async () => {
