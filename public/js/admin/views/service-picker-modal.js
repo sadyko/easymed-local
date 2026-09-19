@@ -42,8 +42,9 @@ import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS
 // эти услуги стоят ЭТОМУ пациенту сегодня, и кладёт ответ на строки.
 import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTierOf } from '../visit-tier-logic.js';
 import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionParts, localYmd } from '../discount-rules.js';   // DISCOUNT_RULES_V1
-import { closeCrmLines } from '../crm-lines.js';   // CRM_LINKS_V1 — одно правило закрытия строк заявки на все окна
-import { crmStageKeys } from '../crm-stages.js';   // CRM_LINKS_V1 — ступени воронки по виду, а не по имени
+// CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
+// строк живут в одном модуле на все окна: копии этого кода уже разъезжались.
+import { closeCrmLines, pendingCrmLines } from '../crm-lines.js';
 
 // PROC_PERFORMER_V1 — роли, которым можно поручить процедуру. Врач сюда
 // попадает НЕ отсюда, а по is_doctor (ADMIN_DOCTOR_LIST_V1) — см.
@@ -508,25 +509,12 @@ export function openServicePickerModal({
         try {
             // CRM_MULTI_SERVICE_V1 — the services live on crm_request_services,
             // one row per service with its OWN date, so a request covering three
-            // things on three days surfaces each on its own day. Two steps because
-            // the filter is on the PARENT (patient) and the CHILD (date), and the
-            // query compiler filters the base table only.
-            // CRM_LINKS_V1 — открытые ступени берутся из настроенной воронки:
-            // заявка в добавленной клиникой колонке тоже ждёт этого пациента.
-            const { open } = await crmStageKeys();
-            if (!open.length) return;
-            const { data: reqs, error: reqErr } = await supabase.from('crm_requests')
-                .select('id')
-                .eq('patient_id', pid)
-                .in('status', open);
-            if (reqErr || !reqs || !reqs.length) return;
-
-            const { data: lines, error } = await supabase.from('crm_request_services')
-                .select('id, request_id, service_id, scheduled_date, status')
-                .in('request_id', reqs.map(r => r.id))
-                .eq('scheduled_date', dayIso)
-                .eq('status', 'pending');
-            if (error || !lines || !lines.length) return;
+            // things on three days surfaces each on its own day.
+            // CRM_LINKS_V1 — само двухшаговое чтение («живые заявки пациента» →
+            // «их строки на этот день») живёт в crm-lines.js: его же зовёт мастер
+            // визита, а две копии одного чтения уже разъезжались.
+            const lines = await pendingCrmLines(pid, dayIso);
+            if (!lines.length) return;
 
             const added = [];
             for (const line of lines) {
@@ -536,14 +524,20 @@ export function openServicePickerModal({
                 if (state.added.some(x => x.service.id === svc.id)) continue;
                 if ((excludeServiceIds || []).some(id => String(id) === String(svc.id))) continue;   // already on the visit
                 await catAdd(svc);
+                // Отметка на строке СМЕТЫ: подставлено из заявки, а не набрано
+                // руками. По ней смета чистится при перепривязке пациента —
+                // услуги первого не должны достаться второму.
+                const item = state.added.find(x => x.service.id === svc.id);
+                if (item) item.__fromCrm = true;
                 added.push({ line, svc });
             }
             if (!added.length) return;
             // Remember which LINES these came from so attaching them can close the
             // loop (see attachCartToVisit) — per line, not per request: the other
             // services of the same request may be booked for another day.
-            state.crmLineIds = added.map(a => a.line.id);
-            state.crmRequestIds = [...new Set(added.map(a => a.line.request_id))];
+            // CRM_LINKS_V1 — вместе с id помним УСЛУГУ строки: закрывается то,
+            // что реально записали, а не то, что подставилось (см. closeCrmRequests).
+            state.crmLines = added.map(a => ({ id: a.line.id, request_id: a.line.request_id, service_id: a.line.service_id }));
             // i18n-exempt: заметка сохраняется В БАЗУ — хранимая запись, а не текст экрана
             state.crmNote = 'Из заявки колл-центра на ' + dayIso.split('-').reverse().join('.')
                 + ': ' + added.map(a => a.svc.name).join(', ');
@@ -1353,7 +1347,7 @@ export function openServicePickerModal({
                 ),
                 h('button', {
                     class: 'x', type: 'button', title: 'Отвязать пациента',
-                    onclick: () => { refs.attachedPatient = null; resetQuotes(state.added); renderCalcBar(); },
+                    onclick: () => { refs.attachedPatient = null; forgetCrmPrefill(); resetQuotes(state.added); renderCalcBar(); },
                 }, '×'),
             ));
             el.appendChild(h('button', {
@@ -1455,6 +1449,12 @@ export function openServicePickerModal({
     }
 
     function attachPatient(p) {
+        // CRM_LINKS_V1 — привязали ДРУГОГО человека: подставленное первому из
+        // сметы уходит вместе с памятью о его строках заявки. Иначе второй
+        // платит за чужую запись, а заявка первого закрывается визитом, на
+        // который он не приходил.
+        const was = refs.attachedPatient;
+        if (was && p && String(was.id) !== String(p.id)) forgetCrmPrefill();
         refs.attachedPatient = p;
         closeAttach();
         renderCalcBar();
@@ -1983,7 +1983,7 @@ export function openServicePickerModal({
                     h('div', { style: { fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, nm),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [p.mrn, p.phone].filter(Boolean).join(' · ') || '—')),
                 patient ? null : h('button', { class: 'x', type: 'button', title: 'Отвязать пациента',
-                    onclick: () => { refs.attachedPatient = null; resetQuotes(state.added); wiz.depositBalance = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); } }, '×')));
+                    onclick: () => { refs.attachedPatient = null; forgetCrmPrefill(); resetQuotes(state.added); wiz.depositBalance = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); } }, '×')));
         } else if (!attachMode) {
             // PICKER_CATALOG_EVERYWHERE_V1 — привязка пациента есть только у
             // мастера записи. В режиме привязки пациент либо уже известен (визит),
@@ -2093,10 +2093,12 @@ export function openServicePickerModal({
         const rows = state.added.slice();
         if (btn) { btn.disabled = true; btn.textContent = tr('Добавляем…'); }
         let added = 0, failed = 0;
+        const landed = [];   // CRM_LINKS_V1 — услуги, реально легшие в визит
         for (const a of rows) {
             try {
                 await onPick({ service: a.service, doctor: a.doctor || null, startISO: a.startISO || null, price_tier: priceTierOf(a) });   // VISIT_TIER_PRICING_V1
                 added++;
+                landed.push(a.service.id);
             } catch (e) {
                 failed++;
                 console.warn('[picker attach]', (a.service && a.service.name) || '?', e && e.message);
@@ -2113,7 +2115,7 @@ export function openServicePickerModal({
         // request is fulfilled. Without this it stays «Записан», and crm.js's
         // overnight sweep (status scheduled/approved + scheduled_date < today ->
         // 'no_show') would mark a patient who actually attended as a no-show.
-        if (added) await closeCrmRequests();
+        if (added) await closeCrmRequests(landed);
         overlay.remove();
     }
 
@@ -2124,12 +2126,41 @@ export function openServicePickerModal({
     // тогда, когда в нём не осталось ничего ждущего») переехало в crm-lines.js:
     // его зовёт и окно быстрой регистрации, а две копии одного правила
     // разъезжаются молча.
-    async function closeCrmRequests() {
-        const lineIds = state.crmLineIds || [];
-        if (!lineIds.length) return;
-        await closeCrmLines(lineIds, state.crmRequestIds || []);
-        state.crmLineIds = [];
-        state.crmRequestIds = [];
+    // CRM_LINKS_V1 — ЗАКРЫВАЕТСЯ ТО, ЧТО ЗАПИСАЛИ, А НЕ ТО, ЧТО ПОДСТАВИЛОСЬ.
+    //
+    // Смета — предложение, а не решение: регистратор вправе убрать услугу
+    // (пациент передумал, пришёл только за анализом). Закрывались же ВСЕ
+    // подставленные строки, потому что помнились с момента подстановки. Услуга,
+    // за которую не взяли денег, объявлялась оказанной: в следующий приход её
+    // никто не подставит, а заявка уйдёт в «Пришёл» целиком.
+    //
+    // serviceIds — услуги, реально легшие в визит. Без них (привязка к
+    // существующему визиту не различает строки поштучно) закрывается всё, как
+    // раньше.
+    async function closeCrmRequests(serviceIds) {
+        const lines = state.crmLines || [];
+        state.crmLines = [];
+        if (!lines.length) return;
+        const booked = serviceIds
+            ? lines.filter((l) => serviceIds.some((id) => String(id) === String(l.service_id)))
+            : lines;
+        if (!booked.length) return;
+        await closeCrmLines(booked.map((l) => l.id), [...new Set(booked.map((l) => l.request_id))]);
+    }
+
+    /**
+     * CRM_LINKS_V1 — ЗАБЫТЬ ПОДСТАВЛЕННОЕ. Регистратор привязал не того
+     * человека (однофамильцы, промах в списке) и перепривязал: услуги ПЕРВОГО
+     * оставались в смете, а вместе с ними память о его строках заявки. Второй
+     * получал в счёт чужие услуги, а заявка первого закрывалась визитом, на
+     * который он не приходил. Убираются только подставленные строки — набранное
+     * руками остаётся: его выбирал человек.
+     */
+    function forgetCrmPrefill() {
+        const keep = state.added.filter((a) => !a.__fromCrm);
+        if (keep.length !== state.added.length) state.added.splice(0, state.added.length, ...keep);
+        state.crmLines = [];
+        state.crmNote = '';
     }
 
     // WIZ_PAY_RAIL_V1 — «Оплата» в смете: кто платит (+плательщик/полис) для
@@ -2735,8 +2766,10 @@ export function openServicePickerModal({
             // ветку закрытие обходило, и запись из календаря оставляла заявку
             // «Записан» с прошедшей датой — ночная автоматика уносила
             // ПРИШЕДШЕГО пациента в «Не пришёл». Стоит ДО проверки полноты:
-            // строка заявки закрыта тем, что её услуга записана.
-            if (vsRows.length) await closeCrmRequests();
+            // строка заявки закрыта тем, что её услуга записана — ИМЕННО ЕЙ, а
+            // не фактом визита: услугу, убранную регистратором из сметы, никто
+            // не оказывал и денег за неё не брал.
+            if (vsRows.length) await closeCrmRequests(vsRows.map((r) => r.a.service.id));
 
             // CATALOG_WIZARD_V2 — a partially-recorded visit must not proceed to
             // billing: the invoice/balance math would diverge from what landed.

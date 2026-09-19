@@ -42,8 +42,9 @@ import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // 
 import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
          askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=aug17e';
 import { hasActorRole } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1
-import { closeCrmLines as closeCrmLinesShared } from '../crm-lines.js';   // CRM_LINKS_V1 — одно правило закрытия строк заявки на все окна
-import { crmStageKeys } from '../crm-stages.js';                          // CRM_LINKS_V1 — ступени воронки по виду, а не по имени
+// CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
+// строк живут в одном модуле на все окна: копии этого кода уже разъезжались.
+import { closeCrmLines as closeCrmLinesShared, pendingCrmLines } from '../crm-lines.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // WIZ_INVOICE_PRINT_V1 — тот же брендированный бланк «Счёт» (Настройки → Документы); ?v как у всех импортёров
 
 
@@ -643,29 +644,24 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const dayIso = String(wiz.when || '').slice(0, 10);
         if (!patient.id || !dayIso) return;
         try {
-            // CRM_LINKS_V1 — открытые ступени берутся из настроенной воронки:
-            // заявка в добавленной клиникой колонке тоже ждёт этого пациента.
-            const { open } = await crmStageKeys();
-            if (!open.length) return;
-            const { data: reqs, error: reqErr } = await supabase.from('crm_requests')
-                .select('id')
-                .eq('patient_id', patient.id)
-                .in('status', open);
+            // CRM_LINKS_V1 — само двухшаговое чтение («живые заявки пациента» →
+            // «их строки на этот день») переехало в crm-lines.js: его же зовёт
+            // каталог услуг, а две копии одного чтения уже разъезжались.
             // Ошибку показываем, а не проглатываем. Молчаливый catch здесь стоил
             // трёх кругов отладки: смета оставалась пустой и выглядела как «фича
             // не работает», хотя запрос падал (например, сервер не перезапущен
             // после добавления crm_request_services в реестр — таблица есть в
             // базе, но процесс о ней не знает).
-            if (reqErr) throw new Error(trf('заявки: {msg}', { msg: reqErr.message || reqErr }));
-            if (!reqs || !reqs.length) return;
-
-            const { data: lines, error: lineErr } = await supabase.from('crm_request_services')
-                .select('id, request_id, service_id, scheduled_date, status, doctor_id')
-                .in('request_id', reqs.map(r => r.id))
-                .eq('scheduled_date', dayIso)
-                .eq('status', 'pending');
-            if (lineErr) throw new Error(trf('услуги заявки: {msg}', { msg: lineErr.message || lineErr }));
-            if (!lines || !lines.length) return;
+            let lines = [];
+            try {
+                lines = await pendingCrmLines(patient.id, dayIso);
+            } catch (e) {
+                const msg = (e && e.message) || e;
+                throw new Error(e && e.where === 'lines'
+                    ? trf('услуги заявки: {msg}', { msg })
+                    : trf('заявки: {msg}', { msg }));
+            }
+            if (!lines.length) return;
 
             const names = [];
             for (const ln of lines) {

@@ -54,19 +54,31 @@ export function stageKeysFrom(data) {
 let cached = null;
 let inflight = null;
 
-/** Ключи ступеней живой воронки. Ошибка сети — запасная воронка, не отказ. */
+/**
+ * Ключи ступеней живой воронки. Ошибка сети — запасная воронка, не отказ.
+ *
+ * ЗАПАСНАЯ ВОРОНКА НЕ КЕШИРУЕТСЯ. Кеш здесь для НАСТРОЕННОЙ воронки: её правят
+ * раз в месяц, а спрашивают все фоновые действия. Оседавший в нём запасной
+ * вариант означал, что одна неудачная попытка — сервер ещё поднимается, сеть
+ * моргнула — оставляла вкладку до перезагрузки с сидовыми восемью колонками. У
+ * клиники со своей воронкой это значит, что её колонок не существует: заявки в
+ * них не привязываются к новой карте и не подставляются в смету. Отказ
+ * отвечает запасной воронкой ОДИН раз, а следующий спросивший спрашивает
+ * заново.
+ */
 export async function crmStageKeys() {
     if (cached) return cached;
     if (!inflight) {
         inflight = (async () => {
-            let data = null;
+            let data = null, failed = false;
             try {
                 const { data: cfg, error } = await supabase.rpc('crm_config_get', {});
-                if (!error) data = cfg;
-            } catch (e) { /* запасная воронка — молча, как у доски */ }
-            cached = stageKeysFrom(data);
+                if (error) failed = true; else data = cfg;
+            } catch (e) { failed = true; /* запасная воронка — молча, как у доски */ }
+            const keys = stageKeysFrom(data);
             inflight = null;
-            return cached;
+            if (!failed) cached = keys;
+            return keys;
         })();
     }
     return inflight;

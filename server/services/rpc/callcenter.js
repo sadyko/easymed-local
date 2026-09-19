@@ -15,7 +15,13 @@
 import { localDate, localHour, localWeekday, inLocalRange } from '../domain/day.js';
 // CRM_LINKS_V1 — воронка настраивается (миграция 077): «дошёл», «не пришёл» и
 // «потеряно» спрашиваются у справочника, а не берутся из зашитого списка.
-import { wonStageKey, lostStageKeys, noShowStageKey, listStages, listSources } from '../crm/config.js';
+import { wonStageKey, lostStageKeys, noShowStageKey, openStageKeys, listStages, listSources } from '../crm/config.js';
+
+// Сидовая колонка «Записан» (миграция 077) — граница между «заявку ещё ведёт
+// оператор» и «пациента уже ждут в конкретный день». Имя здесь не поведение, а
+// точка отсчёта в ПОРЯДКЕ колонок: переименованная или отсутствующая колонка
+// просто возвращает отбор к прежнему «все живые».
+const SCHEDULED_STAGE = 'scheduled';
 
 // CRM_LINKS_V1 — ПОДПИСИ ЖИВУТ В СПРАВОЧНИКАХ, А НЕ ЗДЕСЬ.
 //
@@ -234,13 +240,29 @@ export function callcenterReport(db, args, _user) {
   //
   //    Периодом НЕ фильтруется: зависшая заявка не перестаёт быть зависшей
   //    оттого, что оператор выбрал другой диапазон дат.
-  const staleRows = db.prepare(`
+  //
+  //    CRM_LINKS_V1 — КАКИЕ КОЛОНКИ СЧИТАЮТСЯ, РЕШАЕТ СПРАВОЧНИК. Здесь стояла
+  //    зашитая пара ('in_process','recall'), и клиника, добавившая свою колонку
+  //    в начало воронки («Ждём документы», «Уточняем»), теряла её заявки из
+  //    виду совсем: в отчёте они не зависшие, а на доске их никто не
+  //    перебирает — лид лежит, пока о нём случайно не вспомнят.
+  //
+  //    Граница та же, что у ночной автоматики «Не пришёл» (views/crm.js):
+  //    «Записан» делит воронку надвое. ДО него заявку ведёт ОПЕРАТОР, и
+  //    молчание три дня и есть «зависла». С «Записан» пациента уже ЖДУТ в
+  //    конкретный день — молчание там не значит ничего, такую заявку разбирает
+  //    автоматика по дате. Колонки «Записан» в воронке нет вовсе — считаются
+  //    все живые, как было: гадать, где кончается работа оператора, не по чему.
+  const openKeys = openStageKeys(db);
+  const bookedAt = openKeys.indexOf(SCHEDULED_STAGE);
+  const workedKeys = bookedAt >= 0 ? openKeys.slice(0, bookedAt) : openKeys;
+  const staleRows = !workedKeys.length ? [] : db.prepare(`
     SELECT r.id, r.full_name, r.phone, r.status,
            CAST(julianday('now','localtime') - julianday(COALESCE(r.updated_at, r.created_at), 'localtime') AS INTEGER) AS days,
            COALESCE(u.full_name, '—') AS operator
       FROM crm_requests r LEFT JOIN users u ON u.id = r.created_by
-     WHERE r.status IN ('in_process','recall')
-     ORDER BY days DESC LIMIT 200`).all()
+     WHERE r.status IN (${workedKeys.map(() => '?').join(',')})
+     ORDER BY days DESC LIMIT 200`).all(...workedKeys)
     .filter((x) => (x.days || 0) >= 3);
 
   const stale = {

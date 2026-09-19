@@ -19,6 +19,11 @@
 // Стенд — тот же поддельный DOM, что в service-picker-attach.test.mjs.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 class FakeNode {
     constructor(tag) {
@@ -91,7 +96,11 @@ const SERVICES = [
 const USERS = [
     { id: 7, full_name: 'Петров П.П.', specialty: 'Терапевт', is_doctor: true, active: 1, role: 'doctor' },
 ];
-const PATIENTS = [{ id: 3, full_name: 'Иванов Иван', mrn: 'A-3', phone: '+998901112233' }];
+const PATIENTS = [
+    { id: 3, full_name: 'Иванов Иван', mrn: 'A-3', phone: '+998901112233' },
+    // Второй пациент нужен ровно для одного — перепривязки. Заявок у него нет.
+    { id: 4, full_name: 'Петров Пётр', mrn: 'A-4', phone: '+998901112244' },
+];
 let CRM_REQS = [];
 let CRM_LINES = [];
 let CALLS = [];
@@ -106,7 +115,12 @@ globalThis.fetch = async (url, opts = {}) => {
         if (body.table === 'services') return ok(SERVICES);
         if (body.table === 'users') return ok(USERS);
         if (body.table === 'patients' && body.op === 'select') return ok(PATIENTS);
-        if (body.table === 'crm_requests' && body.op === 'select') return ok(CRM_REQS);
+        if (body.table === 'crm_requests' && body.op === 'select') {
+            // Заявки принадлежат ПАЦИЕНТУ: у второго их нет, и подстановке
+            // после перепривязки взять неоткуда.
+            const f = (body.filters || []).find((x) => x.col === 'patient_id');
+            return ok(f && String(f.val) !== '3' ? [] : CRM_REQS);
+        }
         if (body.table === 'crm_request_services' && body.op === 'select') return ok(CRM_LINES);
         if (body.op === 'insert') return ok({ id: 'row-1' });
         return ok([]);
@@ -146,14 +160,34 @@ async function openFromCalendar(extra = {}) {
 }
 
 /** Привязать пациента ТЕМ ЖЕ путём, что регистратор: кнопка → строка списка. */
-async function attachPatientViaUi(box) {
+async function attachPatientViaUi(box, nth = 0) {
     const attach = btnWith(topOverlay() || box, 'Привязать пациента');
     assert.ok(attach, 'в смете нет кнопки «Привязать пациента»');
     attach.click();
     await settle(60);
-    const row = byClass(topOverlay(), 'pk2-attach-row')[0];
+    const row = byClass(topOverlay(), 'pk2-attach-row')[nth];
     assert.ok(row, 'список пациентов пуст — привязать некого');
     row.click();
+    await settle(60);
+}
+
+/** Отвязать пациента — тот же крестик в смете. */
+async function detachPatientViaUi() {
+    const x = walk(topOverlay()).find((n) => n.tagName === 'BUTTON' && n.getAttribute('title') === 'Отвязать пациента');
+    assert.ok(x, 'в смете нет кнопки «Отвязать пациента»');
+    x.click();
+    await settle(60);
+}
+
+/** Строки СМЕТЫ (правая колонка мастера). */
+const cartLines = () => byClass(topOverlay(), 'wzc-ln');
+/** Убрать услугу из сметы — крестик той же строки. */
+async function removeFromCart(name) {
+    const row = cartLines().find((l) => textOf(l).includes(name));
+    assert.ok(row, 'в смете нет строки «' + name + '»');
+    const rm = walk(row).find((n) => n.tagName === 'BUTTON' && n.getAttribute('aria-label') === 'Убрать услугу');
+    assert.ok(rm, 'у строки сметы нет крестика «Убрать услугу»');
+    rm.click();
     await settle(60);
 }
 
@@ -212,4 +246,79 @@ test('после записи строки заявки закрываются �
     assert.ok(done, 'строки заявки остались «pending» после записи: ночная автоматика унесёт пришедшего пациента в «Не пришёл»');
     assert.deepEqual(filterOf(done, 'id'), { col: 'id', op: 'in', val: [901] },
         'закрыты не те строки, что подставились');
+});
+
+// CRM_LINKS_V1 — ЗАКРЫВАЕТСЯ ТО, ЧТО ЗАПИСАЛИ, А НЕ ТО, ЧТО ПОДСТАВИЛОСЬ.
+//
+// Подстановка кладёт услуги заявки в смету, но смета — это предложение, а не
+// решение: регистратор вправе убрать услугу (пациент передумал, пришёл только
+// за анализом). Закрывались же ВСЕ подставленные строки, потому что помнили
+// их с момента подстановки. Услуга, за которую не взяли денег, объявлялась
+// оказанной: в следующий приход её уже никто не подставит, а заявка уйдёт в
+// «Пришёл» целиком.
+test('убранная из сметы услуга остаётся ждать: закрываются только записанные строки', async () => {
+    const box = await openFromCalendar();
+    addBtnFor(box, 'Приём терапевта').click();
+    await settle();
+    await attachPatientViaUi(box);
+    assert.ok(cartLines().some((l) => textOf(l).includes('УЗИ почек')), 'услуга заявки не подставилась — убирать нечего');
+
+    await removeFromCart('УЗИ почек');
+    assert.ok(!cartLines().some((l) => textOf(l).includes('УЗИ почек')), 'услуга не убралась из сметы');
+
+    const create = btnWith(topOverlay(), 'Создать визит') || byClass(topOverlay(), 'wzc-cta')[0];
+    assert.ok(create, 'в мастере нет кнопки создания визита');
+    create.click();
+    await settle(120);
+
+    const done = lineUpdates().find((c) => c.values && c.values.status === 'done');
+    assert.equal(done, undefined,
+        'закрыта строка услуги, которую не записали и за которую не взяли денег: ' + JSON.stringify(done && done.filters));
+});
+
+// CRM_LINKS_V1 — ЧУЖАЯ ЗАЯВКА НЕ ПЕРЕЕЗЖАЕТ НА ДРУГОГО ПАЦИЕНТА.
+//
+// Регистратор привязал не того человека (однофамильцы, промах в списке) и
+// перепривязал. Подставленные услуги ПЕРВОГО оставались в смете, а вместе с
+// ними — память о его строках заявки. Второй пациент получал в счёт чужие
+// услуги, а заявка первого закрывалась визитом, на который он не приходил.
+test('перепривязка к другому пациенту убирает подставленное первому', async () => {
+    const box = await openFromCalendar();
+    addBtnFor(box, 'Приём терапевта').click();
+    await settle();
+    await attachPatientViaUi(box, 0);
+    assert.ok(cartLines().some((l) => textOf(l).includes('УЗИ почек')), 'услуга заявки не подставилась — проверять нечего');
+
+    await detachPatientViaUi();
+    await attachPatientViaUi(box, 1);
+
+    assert.ok(!cartLines().some((l) => textOf(l).includes('УЗИ почек')),
+        'услуга из заявки ПЕРВОГО пациента осталась в смете второго — он заплатит за чужую запись: '
+        + cartLines().map((l) => textOf(l)).join(' | '));
+
+    const create = btnWith(topOverlay(), 'Создать визит') || byClass(topOverlay(), 'wzc-cta')[0];
+    create.click();
+    await settle(120);
+
+    const done = lineUpdates().find((c) => c.values && c.values.status === 'done');
+    assert.equal(done, undefined,
+        'заявка первого пациента закрыта визитом второго: он на этот приём не приходил');
+});
+
+// CRM_LINKS_V1 — ОДНО ЧТЕНИЕ «ЧТО ЖДЁТ ЭТОГО ПАЦИЕНТА В ЭТОТ ДЕНЬ».
+//
+// Двухшаговое чтение (заявки пациента → их строки на день) стояло КОПИЕЙ в
+// мастере записи и в каталоге услуг. Копии уже расходились: одна молча
+// возвращала пустоту при отказе сервера, вторая — нет; у одной в выборке не
+// было doctor_id. Два ответа на один вопрос — это два разных поведения одной
+// кнопки в соседних окнах.
+test('оба мастера читают строки заявки одним кодом, а не копией на каждое окно', () => {
+    const views = path.join(HERE, '..', 'views');
+    for (const f of ['service-picker-modal.js', 'visit-wizard.js']) {
+        const src = fs.readFileSync(path.join(views, f), 'utf8');
+        assert.ok(!/from\(['"]crm_request_services['"]\)/.test(src),
+            f + ' снова читает crm_request_services сам: правило «что ждёт пациента в этот день» живёт в crm-lines.js');
+        assert.match(src, /pendingCrmLines/,
+            f + ' не зовёт общее чтение строк заявки (pendingCrmLines)');
+    }
 });

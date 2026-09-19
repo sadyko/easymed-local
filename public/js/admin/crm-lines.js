@@ -34,6 +34,45 @@ import { supabase } from '../supabase.js';
 import { crmStageKeys } from './crm-stages.js';
 
 /**
+ * ЧТО ЖДЁТ ЭТОГО ПАЦИЕНТА В ЭТОТ ДЕНЬ — одно чтение на оба мастера.
+ *
+ * Два шага, потому что отбор идёт по РОДИТЕЛЮ (пациент, живая ступень) и по
+ * РЕБЁНКУ (дата, 'pending'), а компилятор запроса фильтрует только базовую
+ * таблицу. Копия этого чтения стояла и в мастере записи, и в каталоге услуг, и
+ * копии уже разошлись: одна молча отдавала пустоту при отказе сервера, вторая
+ * нет; у одной в выборке не было doctor_id, из-за чего услуга с requires_doctor
+ * не доходила до сметы. Два ответа на один вопрос — это две разные кнопки.
+ *
+ * БРОСАЕТ при отказе сервера, а не отдаёт пустой список: пустая смета
+ * неотличима от «записей нет», и именно это стоило трёх кругов отладки (сервер
+ * не перезапущен после добавления таблицы в реестр — таблица есть, процесс о
+ * ней не знает). Что именно отказало, называет `.where`: 'requests' | 'lines'.
+ *
+ * @returns {Promise<Array<{id, request_id, service_id, scheduled_date, status, doctor_id}>>}
+ */
+export async function pendingCrmLines(patientId, dayIso) {
+    const day = String(dayIso || '').slice(0, 10);
+    // Без дня сверять дату строки не с чем — молчим, а не берём что попало.
+    if (!patientId || !day) return [];
+    const fail = (where, msg) => { const e = new Error(String(msg)); e.where = where; return e; };
+
+    const { open } = await crmStageKeys();
+    if (!open.length) return [];
+    const { data: reqs, error: reqErr } = await supabase.from('crm_requests')
+        .select('id').eq('patient_id', patientId).in('status', open);
+    if (reqErr) throw fail('requests', reqErr.message || reqErr);
+    if (!reqs || !reqs.length) return [];
+
+    const { data: lines, error: lineErr } = await supabase.from('crm_request_services')
+        .select('id, request_id, service_id, scheduled_date, status, doctor_id')
+        .in('request_id', reqs.map((r) => r.id))
+        .eq('scheduled_date', day)
+        .eq('status', 'pending');
+    if (lineErr) throw fail('lines', lineErr.message || lineErr);
+    return lines || [];
+}
+
+/**
  * Закрыть НАЗВАННЫЕ строки и, если в заявке больше нечего ждать, — саму заявку.
  * Лучшая попытка: услуги уже сохранены, и сбой здесь не должен выглядеть как
  * «не удалось записать».

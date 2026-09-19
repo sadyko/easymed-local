@@ -112,10 +112,19 @@ let failStaffOnce = false;
 // CRM_LINKS_V1 — НАСТРОЕННАЯ воронка. null = пустой ответ crm_config_get, то
 // есть запасные восемь колонок миграции 046 (как во всех тестах выше).
 let BOARD_CFG = null;
+// CRM_LINKS_V1 — отказ справочника воронки «по требованию» (см. раздел 11) и
+// СТРОКИ ЗАЯВКИ, которые ещё едут или не доехали вовсе (раздел 10): и то и
+// другое проверяется тем, что уходит на сервер СРАЗУ ПОСЛЕ, пока ответа нет.
+let CFG_FAIL = false;
+let LINES_HOLD = null;
+let LINES_ERROR = false;
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
-  if (u.startsWith('/api/rpc/crm_config_get')) return jsonOk(BOARD_CFG);
+  if (u.startsWith('/api/rpc/crm_config_get')) {
+    if (CFG_FAIL) return { ok: false, json: async () => ({ error: { message: 'настройки недоступны' } }) };
+    return jsonOk(BOARD_CFG);
+  }
   if (u.startsWith('/api/rpc/')) return jsonOk({});
   if (u.startsWith('/api/db')) {
     if (body) CALLS.push(body);
@@ -129,7 +138,11 @@ globalThis.fetch = async (url, opts) => {
       return jsonOk(STAFF);
     }
     if (body && body.table === 'services' && body.op === 'select') return jsonOk(SERVICES);
-    if (body && body.table === 'crm_request_services' && body.op === 'select') return jsonOk(REQ_LINES);
+    if (body && body.table === 'crm_request_services' && body.op === 'select') {
+      if (LINES_HOLD) await LINES_HOLD;
+      if (LINES_ERROR) return { ok: false, json: async () => ({ error: { message: 'строки не отданы' } }) };
+      return jsonOk(REQ_LINES);
+    }
     // CRM_LINKS_V1 — регистрация пациента с карточки. Поиск дубля читает
     // patients, вставка возвращает заведённую карту.
     if (body && body.table === 'patients' && body.op === 'select') return jsonOk(PATIENT_DUPES);
@@ -759,6 +772,38 @@ test('похожий пациент уже есть — окно спрашив�
   window.easymed.state.user = null;
 });
 
+// CRM_LINKS_V1 — «ОТКРЫТЬ СУЩЕСТВУЮЩЕГО» — ЭТО ТОЖЕ РЕГИСТРАЦИЯ.
+//
+// Три вещи savePatient() делает ПОСЛЕ вставки карты, и привязка открытых заявок
+// по номеру — одна из них. На пути «карта уже есть, беру её» вставки нет, а
+// значит не было и привязки: у человека, звонившего трижды, к найденной карте
+// цеплялась ровно та заявка, из которой открыли окно, а две другие оставались
+// висеть ничьими — их не подхватит ни смета, ни визит.
+test('«Открыть существующего» привязывает к карте ВСЕ открытые заявки с этим номером', async () => {
+  PATIENT_DUPES = [{ id: 55, mrn: 'A-000055', full_name: 'Каримова Азиза', last_name: 'Каримова',
+                     first_name: 'Азиза', middle_name: '', phone: '+' + UZ_RAW, date_of_birth: '1990-01-01', national_id: '' }];
+  const reg = await openRegistration();
+  await pressRegister(reg);
+  await tick(60);
+
+  const dlg = walk(document.body).find((n) => n.getAttribute && n.getAttribute('data-dialog') === 'patient-duplicate');
+  assert.ok(dlg, 'окно возможного дубликата не открылось — выбирать нечего');
+  const pick = walk(dlg).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'dup-row'));
+  assert.ok(pick, 'в окне дубликата нет строки найденного пациента');
+
+  const before = CALLS.length;
+  pick.click();
+  await tick(90);
+
+  const link = CALLS.slice(before).find((c) => c.table === 'crm_requests' && c.op === 'update'
+    && (c.filters || []).some((f) => f.col === 'id' && f.op === 'in'));
+  assert.ok(link, 'заявки по номеру к выбранной карте не привязаны: звонивший трижды оставит две ничьи заявки');
+  assert.strictEqual(link.values.patient_id, 55, 'заявки привязаны не к выбранной карте');
+
+  PATIENT_DUPES = [];
+  window.easymed.state.user = null;
+});
+
 // ═══ 9. НОЧНАЯ АВТОМАТИКА ЧИТАЕТ НАСТРОЕННУЮ ВОРОНКУ ════════════════════════
 //
 // CRM_LINKS_V1 (2026-09-20). Доска умеет любую воронку (миграция 077: «добавить
@@ -811,4 +856,164 @@ test('колонку «Не пришёл» переименовали — авт
   assert.strictEqual(sweep.values.status, 'missed',
     'автоматика пишет несуществующий ключ: вставка упадёт по внешнему ключу, и заявка останется висеть');
   BOARD_CFG = null;
+});
+
+// CRM_LINKS_V1 — «НЕ ПРИШЁЛ» БЫВАЕТ ТОЛЬКО У ТОГО, КОГО ЖДАЛИ.
+//
+// Автоматика брала ВСЕ живые колонки. Но «В обработке» и «Перезвонить» — это
+// колонки, в которых пациента ещё НЕ ЖДУТ: дата в такой карточке значит «когда
+// перезвонить», а не «когда придёт». Оператор, отложивший вчерашний лид на
+// «Перезвонить», наутро находил его в «Не пришёл» — заявка, с которой он ещё
+// работает, объявлена потерянной, и вернуть её можно только руками.
+//
+// Метится всё, что стоит в воронке С «Записан» И ДАЛЬШЕ: дальше по порядку
+// колонок — это дальше по пути пациента, и там дата уже значит приём.
+test('сметание «Не пришёл» начинается с «Записан» — отложенный на «Перезвонить» лид не трогают', async () => {
+  BOARD_CFG = { stages: [...SEEDED_STAGES, { key: 'waiting_pay', label: 'Ждёт оплаты', color: 'info', position: 9, is_active: 1, kind: 'open' }], sources: [], routing: [] };
+  CALLS.length = 0;
+  await board([]);
+
+  const sweep = sweepCall();
+  assert.ok(sweep, 'ночная автоматика не сработала вовсе');
+  const mine = (sweep.filters || []).find((f) => f.col === 'status' && f.op === 'in');
+  assert.ok(mine, 'автоматика не отбирает по ступени');
+  assert.ok(!mine.val.includes('in_process'),
+    'заявка «В обработке» с прошедшей датой уезжает в «Не пришёл»: её ещё никто не ждал — ' + JSON.stringify(mine.val));
+  assert.ok(!mine.val.includes('recall'),
+    'лид, отложенный оператором на «Перезвонить», объявлен не пришедшим: дата в нём значит «когда звонить»');
+  assert.ok(mine.val.includes('scheduled'), 'записанного пациента автоматика перестала проверять вовсе');
+  assert.ok(mine.val.includes('approved'), 'подтверждённая запись выпала из автоматики');
+  assert.ok(mine.val.includes('waiting_pay'),
+    'колонка клиники ПОСЛЕ «Записан» выпала из автоматики: заявки в ней зависнут навсегда');
+  BOARD_CFG = null;
+});
+
+// ═══ 10. ОКНО ЗАЯВКИ НЕ СТИРАЕТ ТО, ЧЕГО НЕ ВИДЕЛО ══════════════════════════
+//
+// CRM_LINKS_V1 (2026-09-20). saveLines() — «полная замена набора»: pending-строки
+// отменяются, выбранные пишутся заново. Набор этот собирается из ОТВЕТА сервера,
+// который едет отдельным запросом. Пока он не доехал, picked пуст — и сохранение,
+// сделанное в эту секунду (человек открыл карточку и сразу дописал комментарий),
+// отменяло ВСЕ строки заявки и не писало ни одной. Услуги и даты, набранные
+// колл-центром, исчезали молча.
+//
+// То же самое, когда запрос ОТКАЗАЛ: пустой список неотличим от «услуг нет».
+
+/** Правки/вставки строк заявки — то, чем saveLines() переписывает набор. */
+const lineWrites = () => CALLS.filter((c) => c.table === 'crm_request_services' && c.op !== 'select');
+
+test('сохранение до того, как строки доехали, не стирает их', async () => {
+  SERVICES = [SVC];
+  REQ_LINES = [{ service_id: SVC.id, scheduled_date: BOOK_DAY, status: 'pending', doctor_id: null }];
+  let release = null;
+  LINES_HOLD = new Promise((r) => { release = r; });
+  try {
+    const modal = await openRequest({
+      id: 1, status: 'scheduled', service_id: SVC.id, scheduled_date: BOOK_DAY,
+      full_name: 'Каримова Азиза', phone: UZ_RAW,
+    }, { id: 7, full_name: 'Админ', role: 'admin', is_admin: true });
+
+    CALLS.length = 0;
+    await saveRequest(modal);
+
+    assert.deepStrictEqual(lineWrites(), [],
+      'строки заявки переписаны до того, как их прочитали: услуги и даты колл-центра стёрты — ' + JSON.stringify(lineWrites()));
+    const row = savedRow();
+    assert.ok(row, 'сохранение не дошло до базы');
+    assert.strictEqual(row.values.scheduled_date, BOOK_DAY, 'дата заявки затёрта пустым набором строк');
+  } finally {
+    LINES_HOLD = null;
+    if (release) release();
+    await tick(40);
+    SERVICES = []; REQ_LINES = [];
+    window.easymed.state.user = null;
+  }
+});
+
+test('строки не отдались из-за ошибки — сохранение тоже их не трогает', async () => {
+  SERVICES = [SVC];
+  REQ_LINES = [{ service_id: SVC.id, scheduled_date: BOOK_DAY, status: 'pending', doctor_id: null }];
+  LINES_ERROR = true;
+  try {
+    const modal = await openRequest({
+      id: 1, status: 'scheduled', service_id: SVC.id, scheduled_date: BOOK_DAY,
+      full_name: 'Каримова Азиза', phone: UZ_RAW,
+    }, { id: 7, full_name: 'Админ', role: 'admin', is_admin: true });
+
+    CALLS.length = 0;
+    await saveRequest(modal);
+
+    assert.deepStrictEqual(lineWrites(), [],
+      'отказ выборки принят за «услуг нет», и набор строк переписан пустым — ' + JSON.stringify(lineWrites()));
+  } finally {
+    LINES_ERROR = false;
+    SERVICES = []; REQ_LINES = [];
+    window.easymed.state.user = null;
+  }
+});
+
+// CRM_LINKS_V1 — ВЫПОЛНЕННАЯ СТРОКА НЕ ПЕРЕПИСЫВАЕТСЯ.
+//
+// Строка со статусом 'done' — это уже оформленная и оплаченная услуга.
+// saveLines() отменяла только pending (это верно), но потом вставляла ЗАНОВО
+// ВЕСЬ picked, включая выполненные: у заявки появлялась вторая, «ждущая» копия
+// уже оплаченной услуги, и регистратура подставляла её в смету второй раз.
+// primaryDate() ту же строку считала датой заявки — карточка обещала приём,
+// который состоялся неделю назад, и ночная автоматика уносила заявку в
+// «Не пришёл», хотя ждали её совсем в другой день.
+test('выполненная строка не переписывается и не считается датой заявки', async () => {
+  const LAB = { id: 11, name: 'Анализ крови', price: 40000, requires_doctor: 0, active: 1, type: 'lab' };
+  SERVICES = [SVC, LAB];
+  REQ_LINES = [
+    { service_id: SVC.id, scheduled_date: '2026-09-01', status: 'done', doctor_id: null },
+    { service_id: LAB.id, scheduled_date: BOOK_DAY,     status: 'pending', doctor_id: null },
+  ];
+  const modal = await openRequest({
+    id: 1, status: 'scheduled', service_id: SVC.id, scheduled_date: '2026-09-01',
+    full_name: 'Каримова Азиза', phone: UZ_RAW,
+  }, { id: 7, full_name: 'Админ', role: 'admin', is_admin: true });
+
+  CALLS.length = 0;
+  await saveRequest(modal);
+
+  const row = savedRow();
+  assert.ok(row, 'сохранение не дошло до базы');
+  assert.strictEqual(row.values.scheduled_date, BOOK_DAY,
+    'датой заявки стала уже выполненная строка: карточка обещает приём, который прошёл, и ночью заявка уедет в «Не пришёл»');
+
+  const ins = CALLS.find((c) => c.table === 'crm_request_services' && c.op === 'insert');
+  assert.ok(ins, 'строки заявки не сохранены вовсе');
+  const written = (Array.isArray(ins.values) ? ins.values : [ins.values]).map((v) => v.service_id);
+  assert.deepStrictEqual(written, [LAB.id],
+    'выполненная строка вписана заново как ждущая: у оплаченной услуги появился второй, «ждущий» двойник — ' + JSON.stringify(written));
+
+  SERVICES = []; REQ_LINES = [];
+  window.easymed.state.user = null;
+});
+
+// ═══ 11. ЗАПАСНАЯ ВОРОНКА НЕ ЗАПОМИНАЕТСЯ ═══════════════════════════════════
+//
+// CRM_LINKS_V1 (2026-09-20). crmStageKeys() кеширует ответ справочника — это
+// верно: воронку правят раз в месяц, а спрашивают её все фоновые действия.
+// Но кешировался и ЗАПАСНОЙ вариант: одна неудачная попытка (сервер ещё
+// поднимается, сеть моргнула) — и вся вкладка до перезагрузки работала с
+// сидовыми восемью колонками. У клиники со своей воронкой это значит, что её
+// колонки не существуют: заявки в них не привязываются к карте, не
+// подставляются в смету и не закрываются визитом.
+const { crmStageKeys, invalidateCrmStages } = await import('../crm-stages.js');
+
+test('справочник не ответил — запасная воронка не запоминается, следующий спросит заново', async () => {
+  invalidateCrmStages();
+  CFG_FAIL = true;
+  const first = await crmStageKeys();
+  assert.ok(!first.open.includes('waiting_pay'), 'отказ отдал не запасную воронку');
+
+  CFG_FAIL = false;
+  BOARD_CFG = { stages: [...SEEDED_STAGES, { key: 'waiting_pay', label: 'Ждёт оплаты', color: 'info', position: 9, is_active: 1, kind: 'open' }], sources: [], routing: [] };
+  const second = await crmStageKeys();
+  assert.ok(second.open.includes('waiting_pay'),
+    'запасная воронка осела в кеше: одна неудачная попытка — и вкладка до перезагрузки не знает колонок клиники — ' + JSON.stringify(second.open));
+
+  BOARD_CFG = null;
+  invalidateCrmStages();
 });
