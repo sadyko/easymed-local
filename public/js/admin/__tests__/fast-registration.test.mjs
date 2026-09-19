@@ -245,6 +245,17 @@ function reset() {
 
 const escapeKeydown = () => document.dispatchEvent({ type: 'keydown', key: 'Escape' });
 
+// Нажатие Enter приходит НА КАРТОЧКУ окна (обработчик висит там), а `target` —
+// поле, в котором стоял курсор: фальшивый DOM события не всплывает, поэтому
+// цель задаём явно, как её увидел бы браузер (та же техника, что в
+// __tests__/patient-create-modal.test.mjs).
+function pressEnter(dlg, target) {
+  dlg.card.dispatchEvent({
+    type: 'keydown', key: 'Enter', target,
+    preventDefault() {}, stopPropagation() {},
+  });
+}
+
 function fillMinimum(dlg) {
   dlg.fields.last_name.value = 'Каримова';
   dlg.fields.first_name.value = 'Азиза';
@@ -478,6 +489,110 @@ test('Esc под дочерним диалогом закрывает ЕГО, а
 });
 
 // ===========================================================================
+// Enter под дочерним диалогом — ТА ЖЕ ПРИЧИНА, ЧТО У Escape.
+//
+// Enter в этом окне нажимает главное действие подвала, то есть «Сохранить». Но
+// пока поверх стоит страж дубликатов, вопрос ещё не решён: это тот самый миг,
+// когда регистратор смотрит, не заводит ли он второго такого же человека.
+// Нажатие в этот момент запускает сохранение ЗАНОВО — второй проход по той же
+// цепочке и второй диалог дубликата поверх первого. Поля окна при этом живые:
+// щелчок мимо диалога возвращает курсор в форму, и Enter из неё доходит до
+// обработчика карточки ровно так же, как при закрытом диалоге.
+// ===========================================================================
+test('Enter под дочерним диалогом не запускает сохранение заново', async () => {
+  reset();
+  // Страж дублей найдёт совпадение по ПИНФЛ и откроет свой диалог — настоящий,
+  // а не подставленный: проверяется поведение под ним.
+  patientRows = [{ id: 42, mrn: 'P-42', full_name: 'Каримова Азиза', last_name: 'Каримова', first_name: 'Азиза',
+                   middle_name: '', phone: '', date_of_birth: '1990-04-01', national_id: '12345678901234' }];
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+
+  fillMinimum(dlg);
+  dlg.fields.national_id.value = '12345678901234';
+  const row = dlg.state.addLine(SERVICES[0], null);
+  row.sel.value = '7';
+  row.sel.fireChange();
+
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(60);
+  assert.strictEqual(dialogs('patient-duplicate').length, 1, 'диалог дубликата не открылся — проверяется не то');
+
+  calls.length = 0;
+  pressEnter(dlg, dlg.fields.last_name);
+  await tick(60);
+
+  assert.strictEqual(dialogs('patient-duplicate').length, 1, 'Enter открыл второй диалог дубликата поверх первого');
+  assert.strictEqual(calls.filter((c) => c.kind === 'rpc').length, 0, 'Enter под диалогом отправил RPC');
+  assert.strictEqual(calls.filter((c) => c.kind === 'insert').length, 0, 'Enter под диалогом завёл карту, не спросив');
+
+  // А когда поверх никого нет, Enter по-прежнему сохраняет — проверка не должна
+  // была превратиться в «Enter не работает вовсе».
+  const dup = dialogs('patient-duplicate')[0];
+  const openExisting = walk(dup).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'dup-row'));
+  openExisting.click();
+  await tick(80);
+  assert.ok(calls.some((c) => c.kind === 'rpc' && c.name === 'ensure_visit'), 'выбор существующего не довёл до визита');
+  dlg.close();
+});
+
+test('Enter в обычном поле, когда поверх никого нет, сохраняет', async () => {
+  reset();
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg);
+  const row = dlg.state.addLine(SERVICES[0], null);
+  row.sel.value = '7';
+  row.sel.fireChange();
+
+  calls.length = 0;
+  pressEnter(dlg, dlg.fields.last_name);
+  await tick(80);
+
+  assert.strictEqual(calls.filter((c) => c.kind === 'insert' && c.table === 'patients').length, 1,
+    'Enter не сохранил пациента');
+  assert.ok(dlg.state.result, 'Enter не довёл цепочку до счёта');
+  dlg.close();
+});
+
+// ===========================================================================
+// WALK_IN_ROLE_GATE_V1 — РОЛЬ БЕЗ ПРАВА УЗНАЁТ ОБ ЭТОМ ДО ЗАВЕДЕНИЯ КАРТЫ.
+//
+// Право «Регистрация пациента» и РОЛЬ — разные вещи: право открывает окно,
+// роль решает, дойдёт ли цепочка до счёта (create_invoice_for_visit пускает
+// admin/registrar/cashier, вставка в patients — admin/registrar/callcenter).
+// Кассир или оператор колл-центра с этим правом завёл бы карту и визит и
+// получил отказ на счёте — то самое «визит без счёта», ради ухода от которого
+// окно и делали одним. Поэтому отказ стоит ПЕРЕД первой записью.
+// ===========================================================================
+test('роль без права на визит и счёт: отказ ДО заведения карты, ни одной записи', async () => {
+  reset();
+  const was = globalThis.window.easymed.state.user;
+  globalThis.window.easymed.state.user = { id: 4, full_name: 'Медсестра', role: 'nurse' };
+  try {
+    const dlg = openFastRegistrationDialog({});
+    await tick(40);
+    fillMinimum(dlg);
+    const row = dlg.state.addLine(SERVICES[0], null);
+    row.sel.value = '7';
+    row.sel.fireChange();
+
+    calls.length = 0; toasts.length = 0;
+    btnByText(dlg.card, 'Сохранить').click();
+    await tick(80);
+
+    assert.strictEqual(calls.filter((c) => c.kind === 'insert').length, 0, 'карту завели роли без права');
+    assert.strictEqual(calls.filter((c) => c.kind === 'rpc').length, 0, 'визит завели роли без права');
+    assert.ok(toasts.some((t) => t.includes('регистратор или администратор')),
+      'отказ промолчал — это читается как поломка кнопки: ' + toasts.join(' | '));
+    assert.ok(!dlg.state.result, 'окно считает регистрацию состоявшейся');
+    dlg.close();
+  } finally {
+    globalThis.window.easymed.state.user = was;
+  }
+});
+
+// ===========================================================================
 // Тариф не спрошен / очередь не выдана — ГРОМКО.
 //
 // Оба шага необязательные: регистрацию они не срывают (walk-in-booking.js
@@ -551,6 +666,18 @@ test('каталог услуг импортируется той же стро�
   assert.ok(mine && theirs, 'импорт каталога не найден');
   assert.strictEqual(mine[1], theirs[1],
     'быстрая регистрация грузит вторую копию каталога: ?v=' + mine[1] + ' против ?v=' + theirs[1]);
+});
+
+// И по той же причине — сборщик полей пациента. У него состояние есть тоже
+// (PATIENT_PHOTO_V1: снимок с веб-камеры ждёт сохранения в модуле, а не в
+// окне), и вторая копия модуля означала бы второй такой набор. Ровно этим
+// адресом его грузят картотека и регистрация — значит и это окно.
+test('сборщик полей пациента импортируется той же строкой запроса, что и остальные экраны (один модуль)', () => {
+  const mine = srcOf('views/fast-registration.js').match(/patient-create-modal\.js\?v=([a-z0-9]+)/i);
+  const theirs = srcOf('views/patients.js').match(/patient-create-modal\.js\?v=([a-z0-9]+)/i);
+  assert.ok(mine && theirs, 'импорт сборщика полей пациента не найден');
+  assert.strictEqual(mine[1], theirs[1],
+    'быстрая регистрация грузит вторую копию сборщика: ?v=' + mine[1] + ' против ?v=' + theirs[1]);
 });
 
 // ===========================================================================

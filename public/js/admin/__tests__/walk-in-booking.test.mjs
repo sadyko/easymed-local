@@ -280,6 +280,94 @@ test('СБОЙ ВСТАВКИ СТРОКИ: визит остаётся без �
   assert.equal(countOf('invoices'), 0);        // счёта на половину визита не бывает
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ВРАЧ ВИЗИТА — ПЕРВАЯ СТРОКА, У КОТОРОЙ ВРАЧ ЕСТЬ.
+//
+// Заказ у стойки чаще всего начинается с анализа (врач ему не нужен) и только
+// потом идёт приём. Если врача визита брать у ПЕРВОЙ строки, такой визит уходит
+// в базу с doctor_id = null — и приём, который в нём есть, не виден ни в списке
+// врача, ни в его кабинете: пациент дошёл до двери, а в дне врача его нет.
+// ═══════════════════════════════════════════════════════════════════════════
+test('ВРАЧ ВИЗИТА: анализ без врача первой строкой не оставляет визит без врача', async () => {
+  seed();
+  const out = await registerWalkIn({
+    patientId: PATIENT,
+    lines: [
+      { service: svc(LAB), doctorId: null },        // первая строка — без врача
+      { service: svc(CONSULT), doctorId: DOCTOR },  // а приём есть, и он с врачом
+    ],
+  });
+
+  assert.equal(one('SELECT doctor_id d FROM visits WHERE id = ?', out.visit.id).d, DOCTOR,
+    'визит записан без врача, хотя приём в нём есть');
+  assert.equal(out.visit.doctor_id, DOCTOR);
+  // Строки при этом каждая со своим: у анализа врача по-прежнему нет.
+  const rows = all('SELECT * FROM visit_services WHERE visit_id = ? ORDER BY id', out.visit.id);
+  assert.equal(rows[0].doctor_id, null, 'врач визита протёк в строку анализа');
+  assert.equal(rows[1].doctor_id, DOCTOR);
+});
+
+test('ВРАЧ ВИЗИТА: ни у одной строки врача нет — визит остаётся без врача', async () => {
+  seed();
+  const out = await registerWalkIn({ patientId: PATIENT, lines: [{ service: svc(LAB), doctorId: null }] });
+  assert.equal(one('SELECT doctor_id d FROM visits WHERE id = ?', out.visit.id).d, null);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// РОЛЬ БЕЗ ПРАВА — ОТКАЗ ДО ПЕРВОЙ ЗАПИСИ.
+//
+// Цепочку целиком проходят только две роли: вставку в patients сервер разрешает
+// admin/registrar/callcenter, а create_invoice_for_visit — admin/registrar/
+// cashier (server/services/rpc/billing.js). Их пересечение и есть список.
+//
+// Отказ здесь РАННИЙ, а не единственный: правда о правах остаётся на сервере.
+// Без него медсестра узнавала бы о запрете на полпути — отказом на счёте, уже
+// после заведённого визита, то есть ровно тем состоянием «визит без счёта»,
+// которое потом разбирают руками.
+// ═══════════════════════════════════════════════════════════════════════════
+test('РОЛЬ БЕЗ ПРАВА: отказ ДО первой записи — ни визита, ни строк, ни счёта', async () => {
+  seed();
+  await assert.rejects(
+    () => registerWalkIn({
+      patientId: PATIENT,
+      lines: [{ service: svc(CONSULT), doctorId: DOCTOR }],
+      actorRole: 'nurse',
+    }),
+    (e) => {
+      assert.match(e.message, /регистратор или администратор/);
+      return true;
+    },
+  );
+  assert.equal(countOf('visits'), 0, 'отказ по роли оставил визит');
+  assert.equal(countOf('visit_services'), 0);
+  assert.equal(countOf('invoices'), 0);
+});
+
+test('РОЛЬ: регистратор проходит, «Дополнительные роли» считаются, роль не передана — не отказываем', async () => {
+  seed();
+  const line = () => [{ service: svc(LAB), doctorId: null }];
+
+  const ok = await registerWalkIn({ patientId: PATIENT, lines: line(), actorRole: 'registrar' });
+  assert.ok(ok.invoice, 'регистратору отказали');
+
+  // MULTI_ROLE_SERVER_V1 — сервер авторизует по ОБЪЕДИНЕНИЮ основной и
+  // дополнительных ролей (server/services/roles.js effectiveRoles). Клиент,
+  // считающий только основную, отказал бы тому, кого сервер пропускает.
+  seed();
+  const extra = await registerWalkIn({
+    patientId: PATIENT, lines: line(),
+    actorRole: { id: 1, role: 'nurse', extra_roles: ['registrar'] },
+  });
+  assert.ok(extra.invoice, 'дополнительная роль регистратора не зачтена');
+
+  // Роли на руках нет вовсе — молча пропускаем: последнее слово о правах за
+  // сервером, и придумывать отказ на пустом месте значило бы ломать вызов,
+  // который сервер бы выполнил.
+  seed();
+  const unknown = await registerWalkIn({ patientId: PATIENT, lines: line() });
+  assert.ok(unknown.invoice, 'вызов без роли отказан на клиенте');
+});
+
 test('НАПРАВЛЕНИЕ: источник записывается в сам визит', async () => {
   seed();
   const out = await registerWalkIn({

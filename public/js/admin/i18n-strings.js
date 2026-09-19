@@ -8476,9 +8476,10 @@ export const STRINGS = {
   // FAST_REGISTRATION_V1 — быстрая регистрация из шапки списка пациентов.
   "Быстрая регистрация": {"en":"Fast registration","ru":"Быстрая регистрация","uz":"Tezkor roʻyxatga olish"},
   "Быстрая регистрация: пациент → услуги и врач → счёт → печать": {"en":"Fast registration: patient → services and doctor → invoice → print","ru":"Быстрая регистрация: пациент → услуги и врач → счёт → печать","uz":"Tezkor roʻyxatga olish: bemor → xizmatlar va shifokor → hisob → chop etish"},
-  "Сохранить и добавить услуги": {"en":"Save and add services","ru":"Сохранить и добавить услуги","uz":"Saqlash va xizmatlar qoʻshish"},
-  "Пациент → услуги и врач → счёт → печать. Пакеты услуг — через «Выбрать шаблон» на шаге услуг.": {"en":"Patient → services and doctor → invoice → print. Service packages — via “Pick a template” on the services step.","ru":"Пациент → услуги и врач → счёт → печать. Пакеты услуг — через «Выбрать шаблон» на шаге услуг.","uz":"Bemor → xizmatlar va shifokor → hisob → chop etish. Xizmat paketlari — xizmatlar bosqichidagi «Shablon tanlash» orqali."},
-  "— сохранить и добавить услуги": {"en":"— save and add services","ru":"— сохранить и добавить услуги","uz":"— saqlash va xizmatlar qoʻshish"},
+  // FAST_REG_ONE_SCREEN_V1 — второе лицо окна заведения («Сохранить и добавить
+  // услуги», его подсказка и подпись Enter) убрано вместе с самим режимом:
+  // быстрая регистрация стала своим окном. Ключей этих строк здесь больше нет —
+  // словарь, переживший свой экран, читается как живой текст продукта.
 
   // WALK_IN_BOOKING_V1 — отказы безоконной регистрации «пришёл сейчас» (views/walk-in-booking.js)
   "Укажите врача для услуги «{name}»": {"en":"Pick a doctor for the service “{name}”","ru":"Укажите врача для услуги «{name}»","uz":"«{name}» xizmati uchun shifokorni tanlang"},
@@ -8487,6 +8488,9 @@ export const STRINGS = {
   "Визит не создан: {msg}": {"en":"The visit was not created: {msg}","ru":"Визит не создан: {msg}","uz":"Tashrif yaratilmadi: {msg}"},
   "Визит не создан: сервер не вернул запись.": {"en":"The visit was not created: the server returned no record.","ru":"Визит не создан: сервер не вернул запись.","uz":"Tashrif yaratilmadi: server yozuvni qaytarmadi."},
   "Счёт не выставлен: {msg}": {"en":"The invoice was not issued: {msg}","ru":"Счёт не выставлен: {msg}","uz":"Hisob chiqarilmadi: {msg}"},
+  // WALK_IN_ROLE_GATE_V1 — ранний отказ по роли: цепочку «карта → визит → счёт»
+  // проходят целиком только администратор и регистратор.
+  "Регистрировать визиты и выставлять счета может регистратор или администратор.": {"en":"Only a registrar or an administrator may register visits and issue invoices.","ru":"Регистрировать визиты и выставлять счета может регистратор или администратор.","uz":"Tashriflarni qayd etish va hisob chiqarishni faqat registrator yoki administrator amalga oshira oladi."},
 
   // TEMPLATE_PICKER_V1 (FAST_REG_ONE_SCREEN_V1, T2) — reusable «Пакеты» modal.
   "Пакеты услуг": {"en":"Service packages","ru":"Пакеты услуг","uz":"Xizmat paketlari"},

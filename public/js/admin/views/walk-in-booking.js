@@ -59,6 +59,58 @@ const isPosInt = (v) => {
 /** Текст отказа сервера его словами; форма ответа одинакова у rpc и у /api/db. */
 const msgOf = (err) => (err && (err.message || err.msg)) || String(err || '');
 
+// WALK_IN_ROLE_GATE_V1 — КОМУ ЭТА ЦЕПОЧКА ПРОХОДИМА ЦЕЛИКОМ.
+//
+// Сервер и без нас никого лишнего не пропустит, но пропускает он ПОШАГОВО:
+// вставку в patients разрешает admin/registrar/callcenter, а
+// create_invoice_for_visit — admin/registrar/cashier (server/services/rpc/
+// billing.js, CREATE_INVOICE_ROLES). Пересечение этих двух списков и стоит
+// ниже: только оно доходит от карты пациента до счёта.
+//
+// Зачем повторять серверную проверку на клиенте. Кассир, взявшийся
+// зарегистрировать приход, завёл бы карту и визит и получил отказ НА СЧЁТЕ —
+// то самое «визит без счёта», которое потом разбирают руками. Ранний отказ
+// стоит перед первой записью, а последнее слово о правах остаётся за сервером:
+// это подсказка, а не охрана.
+const WALK_IN_ROLES = ['admin', 'registrar'];
+
+/**
+ * Роли человека: основная плюс «Дополнительные роли» (users.extra_roles) — тем
+ * же объединением, которым считает сервер (server/services/roles.js,
+ * effectiveRoles). Клиент, смотрящий только на основную, отказал бы медсестре с
+ * ролью регистратора в дополнительных, которую сервер пропускает.
+ *
+ * Принимаем и строку роли, и самого пользователя: вызывающему не приходится
+ * разбирать, что у него на руках.
+ */
+function rolesOf(actor) {
+    if (!actor) return [];
+    if (typeof actor === 'string') return [actor];
+    const extra = Array.isArray(actor.extra_roles) ? actor.extra_roles : [];
+    return [actor.role, ...extra].filter((r) => typeof r === 'string' && r);
+}
+
+/**
+ * Отказ по роли ТЕКСТОМ — или null, если человеку можно.
+ *
+ * Отдельно от registerWalkIn и наружу: экран спрашивает ДО заведения карты
+ * пациента, чтобы отказ не оставлял после себя половину работы. Ответ один и
+ * тот же, потому что список ролей один.
+ *
+ * Роль не передана — не отказываем. Молчание вызывающего не значит «нельзя»:
+ * придумать отказ на пустом месте значило бы сорвать вызов, который сервер
+ * выполнил бы.
+ *
+ * @param {string|{role?:string, extra_roles?:string[]}|null} actor
+ * @returns {string|null}
+ */
+export function walkInRoleRefusal(actor) {
+    const mine = rolesOf(actor);
+    if (!mine.length) return null;
+    if (mine.some((r) => WALK_IN_ROLES.includes(r))) return null;
+    return tr('Регистрировать визиты и выставлять счета может регистратор или администратор.');
+}
+
 /**
  * Проверка ДО ПЕРВОЙ ЗАПИСИ В БАЗУ. Услуга, которой нужен врач, без врача —
  * это строка, которую никто не выполнит и которую очередь не сможет никуда
@@ -102,9 +154,13 @@ async function quoteTiers(patientId, serviceIds, visitId) {
     }
 }
 
-export async function registerWalkIn({ patientId, lines, referralSourceId = null, createdBy = null, now = () => new Date() } = {}) {
+export async function registerWalkIn({ patientId, lines, referralSourceId = null, createdBy = null, actorRole = null, now = () => new Date() } = {}) {
     const pid = Number(patientId);
     const items = (Array.isArray(lines) ? lines : []).filter(Boolean);
+    // WALK_IN_ROLE_GATE_V1 — раньше всего остального: роль решает, дойдёт ли
+    // цепочка до конца вообще, а не эта строка или та.
+    const refusal = walkInRoleRefusal(actorRole);
+    if (refusal) throw new Error(refusal);
     validate(pid, items);
 
     // 1. Филиал — тот же первый действующий, что берёт мастер визита.
@@ -115,7 +171,13 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
     //    занимает, поэтому book не отправляется вовсе — проверять нечего.
     const when = now();
     const iso = new Date(when instanceof Date ? when.getTime() : when).toISOString();
-    const headDoctor = isPosInt(items[0].doctorId) ? Number(items[0].doctorId) : null;
+    //    ВРАЧ ВИЗИТА — ПЕРВАЯ СТРОКА, У КОТОРОЙ ВРАЧ ЕСТЬ, а не первая строка
+    //    вообще. Заказ у стойки обычно начинается с анализа (врач ему не нужен)
+    //    и только потом идёт приём: взяв врача у items[0], визит уходил бы в
+    //    базу без врача, хотя приём в нём есть, — и в дне врача такого пациента
+    //    не было бы вовсе, хотя он уже стоит у его двери.
+    const head = items.find((l) => isPosInt(l.doctorId));
+    const headDoctor = head ? Number(head.doctorId) : null;
     const { data: ev, error: evErr } = await supabase.rpc('ensure_visit', {
         patient_id: pid,
         date: iso,

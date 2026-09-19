@@ -37,10 +37,15 @@ import { savePatient, loadPatientById, currentUser } from '../data.js';
 import { canCreatePatient } from '../permissions.js';
 import { openAccessDeniedDialog } from '../access-denied.js';
 import { fadeOutAndRemove } from '../motion.js?v=mo1';   // MOTION_DIALOG_V1
-import { buildPatientFields, openDuplicatePatientDialog, runPatientSearch, uploadPendingPhoto } from './patient-create-modal.js?v=fastreg1';
+// MODULE_INSTANCE_V1 — строка запроса ТА ЖЕ, что у картотеки и регистрации
+// (?v=onewin1). Для браузера адрес с другим ?v это ДРУГОЙ модуль: вторая копия
+// сборщика со своим состоянием (PATIENT_PHOTO_V1 — снимок с веб-камеры ждёт
+// сохранения в модуле, а не в окне). Расхождение ничем не видно, кроме
+// потерянного снимка, — поэтому оно закреплено проверкой на исходнике.
+import { buildPatientFields, openDuplicatePatientDialog, runPatientSearch, uploadPendingPhoto } from './patient-create-modal.js?v=onewin1';
 import { openTemplatePickerModal } from './template-picker-modal.js?v=tpl1';   // TEMPLATE_PICKER_V1
 import { resolveTemplate } from './service-templates.js?v=tpl1';               // WIZ_TEMPLATES_LOCAL_V1
-import { registerWalkIn } from './walk-in-booking.js?v=wib1';                  // WALK_IN_BOOKING_V1
+import { registerWalkIn, walkInRoleRefusal } from './walk-in-booking.js?v=wib1';   // WALK_IN_BOOKING_V1
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';                        // DOCTOR_POOL_V1
 import { searchableSelect } from './searchable-select.js?v=ss2';               // SEARCHABLE_SELECT_V1
 import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';    // REFERRAL_SOURCE_CODE_V1
@@ -301,6 +306,12 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         if (t && t.closest && t.closest('.mg-search')) return;
         if (typeof document !== 'undefined' && document.querySelector
             && document.querySelector('.uisel-pop, .uidate-pop')) return;
+        // ...и пока поверх стоит ЧУЖОЙ диалог — по той же причине, что и Esc
+        // (см. childDialogOpen). Стража дубликатов открыт как раз в тот миг,
+        // когда вопрос «не второй ли это такой же человек» ещё не решён: Enter
+        // из живого поля формы прошёл бы мимо него и запустил сохранение
+        // ЗАНОВО — второй проход цепочки и второй диалог поверх первого.
+        if (childDialogOpen()) return;
         e.preventDefault();
         if (saveBtn.disabled || locked()) return;
         saveBtn.click();
@@ -569,6 +580,20 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
 
     async function doSave() {
         if (state.saving || state.result || state.stalled) return null;
+        // WALK_IN_ROLE_GATE_V1 — отказ по роли ДО заведения карты.
+        //
+        // Право «Регистрация пациента» открыло окно, но цепочку «карта → визит
+        // → счёт» проходят целиком только администратор и регистратор
+        // (walk-in-booking.js). Кассир с этим правом иначе завёл бы карту и
+        // визит и получил отказ на счёте — то самое «визит без счёта», ради
+        // ухода от которого окно и делали одним.
+        //
+        // Спрашиваем только когда услуги набраны: пустая таблица — это обычное
+        // заведение карты, а его сервер разрешает шире (и колл-центру тоже).
+        if (state.rows.length) {
+            const refusal = walkInRoleRefusal(currentUser());
+            if (refusal) { toast(refusal, 'fail'); return null; }
+        }
         if (!checkDoctors()) return null;
         state.saving = true;
         saveBtn.disabled = true;
@@ -643,6 +668,10 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                 lines: state.rows.map((r) => ({ service: r.service, doctorId: r.doctorId })),
                 referralSourceId: referralSel.value || null,
                 createdBy: (currentUser() || {}).id || null,
+                // WALK_IN_ROLE_GATE_V1 — тот же человек, что уходит в
+                // created_by, и его же «Дополнительные роли»: цепочка сама
+                // откажет до первой записи, если ему туда нельзя.
+                actorRole: currentUser(),
             });
         } catch (e) {
             // ЦЕПОЧКА СЛОМАЛАСЬ ПОСЛЕ ВИЗИТА — ПОВТОРА НЕ БУДЕТ.
