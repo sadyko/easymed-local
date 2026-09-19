@@ -101,6 +101,9 @@ let LEADS = [];
 // в списке.
 let STAFF = [];
 const CALLS = [];
+// CRM_REASSIGN_V1 — один отказ выборки персонала «по требованию»: список
+// операторов не грузится ровно один раз, дальше — как обычно.
+let failStaffOnce = false;
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
@@ -112,7 +115,10 @@ globalThis.fetch = async (url, opts) => {
     // самый, которым карточка спрашивает «кому можно передать». Выборка врачей
     // (.eq('role','doctor')) сюда не попадает.
     if (body && body.table === 'users' && body.op === 'select'
-        && (body.filters || []).some((f) => f.col === 'role' && f.op === 'in')) return jsonOk(STAFF);
+        && (body.filters || []).some((f) => f.col === 'role' && f.op === 'in')) {
+      if (failStaffOnce) { failStaffOnce = false; return { ok: false, json: async () => ({ error: { message: 'boom' } }) }; }
+      return jsonOk(STAFF);
+    }
     return jsonOk([]);
   }
   return jsonOk([]);
@@ -477,6 +483,12 @@ test('оператор колл-центра поля «Оператор» не 
   // у себя карточку, которую он больше не найдёт.
   const modal = await openRequest(LEAD, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
   assert.strictEqual(operatorSelect(modal), null, 'оператору показали чужой рычаг — раздачу заявок');
+  // Окно и так спрашивает users — список ВРАЧЕЙ для строки услуги (.eq('role',
+  // 'doctor'), CRM_LINE_DOCTOR_V1), это законно для любой роли. Здесь важно
+  // именно отсутствие СПИСКА ОПЕРАТОРОВ — тот же самый запрос (.in('role', …)),
+  // которым карточка ниже спрашивает «кому можно передать».
+  assert.ok(!CALLS.some((c) => c.table === 'users' && (c.filters || []).some((f) => f.col === 'role' && f.op === 'in')),
+    'список операторов запрошен для роли, которой раздавать заявки нельзя — лишний запрос на сервер');
 
   await saveRequest(modal);
   const row = savedRow();
@@ -497,5 +509,24 @@ test('снять оператора: «— не назначен —» возв�
   assert.ok(row, 'сохранение не дошло до базы');
   assert.strictEqual(row.values.assigned_to, null,
     'пустой выбор обязан записать NULL: только так заявка снова попадает в стопку «ничьих»');
+  window.easymed.state.user = null;
+});
+
+// Список персонала иногда транзиентно не грузится (сеть, перегруженный
+// сервер). Тишина здесь опаснее пустоты: молчаливо очищенное поле при
+// ближайшем сохранении сняло бы оператора с заявки, ничего не спросив.
+// Тост здесь НЕ проверяется: toast() (ui.js) переиспользует el._t сначала для
+// текста, а следующей же строкой — под возврат setTimeout (id таймера,
+// который прячет заглушку), затирая его; в services-catalog.test.mjs это
+// обойдено отдельным #toast с пишущим сеттером textContent, а этот харнесс
+// (document.getElementById всегда null) такого перехватчика не заводит —
+// значит, тексту неоткуда быть виден УЖЕ ПОСЛЕ возврата toast(). Проверяемо
+// здесь только состояние поля.
+test('сбой загрузки персонала — текущий оператор остаётся в поле', async () => {
+  failStaffOnce = true;
+  const modal = await openRequest(LEAD, { id: 7, full_name: 'Админ', role: 'admin', is_admin: true });
+  const sel = operatorSelect(modal);
+  assert.ok(sel, 'в карточке заявки нет поля «Оператор»');
+  assert.strictEqual(sel.value, '7', 'сбой загрузки списка снял текущего оператора с поля');
   window.easymed.state.user = null;
 });

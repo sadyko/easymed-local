@@ -1295,10 +1295,7 @@ async function paint() {
         const canReassign = hasActorRole(['admin']);
         let operSel = null;
         if (canReassign) {
-            operSel = h('select', {
-                'aria-label': 'Оператор, который ведёт заявку',
-                style: { width: '100%', boxSizing: 'border-box', padding: '10px 12px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px', background: 'var(--white, #fff)' },
-            });
+            operSel = h('select', { 'aria-label': 'Оператор, который ведёт заявку' });
             // Выбор человека НЕ теряется, если список операторов доехал позже:
             // без этой отметки перерисовка вернула бы поле к прежнему хозяину и
             // молча отменила уже сделанную передачу.
@@ -1323,7 +1320,14 @@ async function paint() {
             fillOper(ownerId ? [{ id: ownerId, full_name: ownerName }] : []);
             supabase.from('users').select('id, full_name, role')
                 .in('role', BOARD_ROLES).eq('is_active', 1).order('full_name')
-                .then(({ data }) => {
+                .then(({ data, error }) => {
+                    if (error) {
+                        // Список не загрузился — поле остаётся с текущим хозяином, а не
+                        // молча пустеет: пустой список читался бы как «operSel сбросил
+                        // назначение» при ближайшем сохранении.
+                        toast(trf('Не удалось загрузить список сотрудников: {msg}', { msg: error.message }), 'fail');
+                        return;
+                    }
                     const pool = (data || []).slice();
                     // Уволенного (is_active = 0) в списке нет, а его заявки есть.
                     // Без этой строки открытие такой карточки уже само по себе

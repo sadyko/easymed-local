@@ -5624,6 +5624,7 @@ export const STRINGS = {
   "Не найдено поле для вставки": {"en":"No field found to insert into","ru":"Не найдено поле для вставки","uz":"Qo'yish uchun maydon topilmadi"},
   "Не удалось выдать товары": {"en":"Could not dispense the items","ru":"Не удалось выдать товары","uz":"Tovarlarni berib bo'lmadi"},
   "Не удалось загрузить результаты: {msg}": {"en":"Could not load the results: {msg}","ru":"Не удалось загрузить результаты: {msg}","uz":"Natijalarni yuklab bo'lmadi: {msg}"},
+  "Не удалось загрузить список сотрудников: {msg}": {"en":"Could not load the staff list: {msg}","ru":"Не удалось загрузить список сотрудников: {msg}","uz":"Xodimlar ro‘yxatini yuklab bo‘lmadi: {msg}"},
   "Не удалось загрузить услуги: {msg}": {"en":"Could not load the services: {msg}","ru":"Не удалось загрузить услуги: {msg}","uz":"Xizmatlarni yuklab bo'lmadi: {msg}"},
   "Не удалось определить врача для повторного визита": {"en":"Could not determine the doctor for the follow-up visit","ru":"Не удалось определить врача для повторного визита","uz":"Takroriy tashrif uchun shifokorni aniqlab bo'lmadi"},
   "Не удалось открыть печать.": {"en":"Could not open printing.","ru":"Не удалось открыть печать.","uz":"Chop etishni ochib bo'lmadi."},
