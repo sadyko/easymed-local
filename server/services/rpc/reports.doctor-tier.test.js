@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { runReport, doctorTierPositions } from './reports.js';
+import { RPC } from './index.js';
+import { isReadOnlyRpc } from '../control/gate.js';
 
 const user = { id: 1, role: 'admin' };
 const SEP = { from: '2026-09-01', to: '2026-09-30' };
@@ -147,4 +149,9 @@ test('doctor_tier_positions: без ступени — пусто; кривые 
   assert.deepEqual(doctorTierPositions(c.db, { doctor_id: 1, month: '2026-09' }, user).rows, []);
   assert.throws(() => doctorTierPositions(c.db, { doctor_id: 1, month: 'сентябрь' }, user), (e) => e.status === 400);
   assert.throws(() => doctorTierPositions(c.db, { month: '2026-09' }, user), (e) => e.status === 400);
+});
+
+test('doctor_tier_positions зарегистрирован и считается чтением', () => {
+  assert.equal(typeof RPC.doctor_tier_positions, 'function');
+  assert.ok(isReadOnlyRpc('doctor_tier_positions'), 'кабинет врача при просроченной лицензии обязан читать свои позиции');
 });
