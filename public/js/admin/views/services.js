@@ -370,8 +370,7 @@ async function fetchAndPaint({ quiet = false } = {}) {
     } catch (e) {
         if (token !== lastFetchToken) return;
         toast(trf('Не удалось загрузить услуги: {msg}', { msg: (e && e.message) || e }), 'fail');
-        allServices = [];
-        renderRows();
+        if (!quiet) { allServices = []; renderRows(); }   // SERVICES_SCROLL_KEEP_V1 — тихая перезагрузка: данные в памяти целы, список не стираем
     }
 }
 

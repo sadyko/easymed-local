@@ -97,6 +97,9 @@ const rpcCalls = [];
 // промис, выборка services висит, и видно, ЧТО показывает таблица во время
 // перезагрузки (в жизни это секунда сети — на ней и происходил прыжок наверх).
 let holdServices = null;
+// SERVICES_SCROLL_KEEP_V1 — один отказ выборки services «по требованию»:
+// имитирует транзиентный сбой ровно на тихой перезагрузке (после сохранения).
+let failServicesOnce = false;
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   if (u === '/api/db') {
@@ -104,6 +107,10 @@ globalThis.fetch = async (url, opts) => {
     dbCalls.push(desc);
     if (desc.op === 'select') {
       if (desc.table === 'services' && holdServices) await holdServices;
+      if (desc.table === 'services' && failServicesOnce) {
+        failServicesOnce = false;
+        return { ok: false, json: async () => ({ error: { message: 'boom' } }) };
+      }
       return jsonOk(desc.table === 'services' ? services : desc.table === 'service_categories' ? categories : desc.table === 'service_types' ? serviceTypes : []);
     }
     return jsonOk({});
@@ -479,6 +486,28 @@ test('SERVICES_SCROLL_KEEP_V1: после сохранения услуги ст
   } finally {
     if (release) release();
     holdServices = null; SVC.requires_doctor = 1;
+  }
+});
+
+// SERVICES_SCROLL_KEEP_V1 — сбой самой перезагрузки (не только задержка):
+// владелец видел тот же прыжок наверх, когда тихий рефреш после сохранения
+// транзиентно отказывал — catch стирал allServices и рисовал пустой список,
+// хотя данные в памяти были целы. Тихий путь обязан ИХ оставить на экране.
+test('SERVICES_SCROLL_KEEP_V1: сбой тихой перезагрузки не стирает строки', async () => {
+  SVC.requires_doctor = 0;   // страж «отметьте исполнителя» не должен мешать этому тесту
+  try {
+    const c = await paint(ADMIN);
+    tags(c, 'tr').find((r) => r.className.includes('row-click')).click();
+    await flush();
+
+    failServicesOnce = true;
+    buttonWith(document.body, 'Сохранить').click();
+    await flush();
+
+    assert.ok(tags(c, 'tr').some((r) => r.className.includes('row-click') && textOf(r).includes(SVC.name)),
+      'сбой тихой перезагрузки стёр строки — список коллапсирует и страница прыгает вверх');
+  } finally {
+    failServicesOnce = false; SVC.requires_doctor = 1;
   }
 });
 
