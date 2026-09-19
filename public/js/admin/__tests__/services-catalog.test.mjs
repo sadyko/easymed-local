@@ -23,7 +23,7 @@ class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={};this.c
  setAttribute(k,v){this.attrs[k]=String(v); if (k === 'value') this.value = String(v);} getAttribute(k){return this.attrs[k]??null;} hasAttribute(k){return k in this.attrs;}
  addEventListener(t,fn){(this._l[t]||(this._l[t]=[])).push(fn);} removeEventListener(){}
  dispatchEvent(e){for(const fn of this._l[e.type]||[])fn(e);return true;}
- click(){this.dispatchEvent({type:'click',currentTarget:this,preventDefault(){},stopPropagation(){}});}
+ click(){this.dispatchEvent({type:'click',target:this,currentTarget:this,preventDefault(){},stopPropagation(){}});}   // target — как у настоящего события: обработчик «Сохранить» гасит им кнопку
  focus(){} blur(){} scrollTo(){} remove(){} select(){}
  querySelector(){return null;} querySelectorAll(){return [];}
  get textContent(){return this._t;} set textContent(v){this._t=String(v);this.children.length=0;}
@@ -346,4 +346,24 @@ test('ширины колонок — доли карточки: любой на
   assert.equal(ths.length, 5, 'у каждой колонки — доля от (100% − фикс. колонки)');
   const shares = ths.map((t) => Number(t.style.width.match(/\* ([\d.]+)\)/)[1]));
   assert.ok(Math.abs(shares.reduce((a, b) => a + b, 0) - 1) < 0.01, 'доли в сумме дают 1: ' + shares.join(', '));
+});
+
+test('DOCTOR_TIER_V1: в редакторе услуги есть порог и доля выше порога, и они уходят в service_save', async () => {
+  SVC.requires_doctor = 0;   // без исполнителей: страж «отметьте исполнителя» не должен мешать этому тесту
+  try {
+    const c = await paint();
+    tags(c, 'tr').find((r) => r.className.includes('row-click')).click();
+    await flush();
+    const inputs = tags(document.body, 'input');
+    const from = inputs.find((i) => i.attrs.placeholder === '0 — нет');
+    const pct  = inputs.find((i) => i.attrs.placeholder === 'напр. 40');
+    assert.ok(from && pct, 'поля ступени не нарисованы');
+    from.value = '25'; pct.value = '40';
+    buttonWith(document.body, 'Сохранить').click();
+    await flush();
+    const save = rpcCalls.find((r) => r.name === 'service_save');
+    assert.ok(save, 'service_save не вызван: ' + rpcCalls.map((r) => r.name).join(','));
+    assert.equal(save.args.doctor_tier_from, 25);
+    assert.equal(save.args.doctor_tier_percent, 40);
+  } finally { SVC.requires_doctor = 1; }
 });

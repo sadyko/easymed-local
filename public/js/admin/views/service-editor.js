@@ -159,6 +159,11 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
     const reqDoc   = h('input', { type: 'checkbox' });
     reqDoc.checked = row ? !!row.requires_doctor : false;
     const pctInp   = h('input', { type: 'number', step: '0.01', min: '0', max: '100', value: row && row.default_doctor_percent != null ? row.default_doctor_percent : 0 });
+    // DOCTOR_TIER_V1 — ступень доли по объёму (владелец: «more than 25 → 40 %»).
+    // Пара полей; пустые — ступени нет. Правило и нумерацию считает сервер
+    // (rpc/reports.js TIER_RANK_SQL); здесь только ввод.
+    const tierFromInp = h('input', { type: 'number', step: '1', min: '0', value: row && row.doctor_tier_from ? row.doctor_tier_from : '', placeholder: '0 — нет' });
+    const tierPctInp  = h('input', { type: 'number', step: '0.01', min: '0', max: '100', value: row && row.doctor_tier_percent ? row.doctor_tier_percent : '', placeholder: 'напр. 40' });
 
     // VISIT_TIER_PRICING_V1 — цена по счёту визита (владелец: «for the primary
     // visit, secondary, repeat visit and set dates between the first and
@@ -221,7 +226,8 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
         for (const el of [nameInp, typeSel, typeCombo.input, catCombo.input, depCombo.input, roomSel,
             specimenInp, tubeSel,   // LAB_REFS_IN_PANELS_V1 — единицы и нормы живут в панели
             priceInp, vatInp, durInp, reqDoc, pctInp, codeInp, activeChk, nameUzInp, nameEnInp, onlineChk,
-            secPriceInp, daysFromInp, daysToInp, repPriceInp, repFromInp, repToInp]) el.disabled = true;
+            secPriceInp, daysFromInp, daysToInp, repPriceInp, repFromInp, repToInp,
+            tierFromInp, tierPctInp]) el.disabled = true;   // DOCTOR_TIER_V1
     }
 
     const overlay = h('div', { class: 'modal' });
@@ -255,6 +261,8 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
             duration_minutes: numOrNull(durInp.value),
             requires_doctor: reqDoc.checked,
             default_doctor_percent: numOrNull(pctInp.value) ?? 0,
+            doctor_tier_from: numOrNull(tierFromInp.value) ?? 0,      // DOCTOR_TIER_V1
+            doctor_tier_percent: numOrNull(tierPctInp.value) ?? 0,
             room_id: roomSel.value ? Number(roomSel.value) : null,
             // VISIT_TIER_PRICING_V1 — пустое поле уходит как null (не 0): сервер
             // отличает «не задано» от «бесплатно».
@@ -366,7 +374,11 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
                     unitField('Длительность', durInp, 'мин')),
                 grid(2,
                     checkField('Услугу оказывает специалист (врач / медсестра)', reqDoc),
-                    unitField('Доля исполнителя по умолчанию', pctInp, '%'))),
+                    unitField('Доля исполнителя по умолчанию', pctInp, '%')),
+                h('div', { class: 'svc-ed-note' }, 'Ступень по объёму: начиная со следующей после порога услуги в календарном месяце доля исполнителя — не ниже указанной. Пусто — ступени нет.'),
+                grid(2,
+                    unitField('Порог, услуг в месяц', tierFromInp, 'шт.'),
+                    unitField('Доля выше порога', tierPctInp, '%'))),
             grp('Цена по счёту визита',
                 h('div', { class: 'svc-ed-note' }, 'Необязательно. Окно дней считается от предыдущего визита по этой же услуге; пришёл позже окна — снова первый визит. «Не раньше чем через 0» — второй визит в тот же день тоже считается.'),
                 grid(2,

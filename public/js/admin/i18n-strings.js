@@ -8452,4 +8452,10 @@ export const STRINGS = {
   "Текст раздела…": {"en":"Section text…","ru":"Текст раздела…","uz":"Boʻlim matni…"},
   "ОСМОТР": {"en":"EXAMINATION","ru":"ОСМОТР","uz":"KOʻRIK"},
   "Объективный осмотр по системам…": {"en":"Objective examination by systems…","ru":"Объективный осмотр по системам…","uz":"Tizimlar boʻyicha obyektiv koʻrik…"},
+  "Порог, услуг в месяц": {"en":"Threshold, services per month","ru":"Порог, услуг в месяц","uz":"Chegara, oyiga xizmatlar"},
+  "Доля выше порога": {"en":"Share above the threshold","ru":"Доля выше порога","uz":"Chegaradan yuqori ulush"},
+  "0 — нет": {"en":"0 — none","ru":"0 — нет","uz":"0 — yo‘q"},
+  "напр. 40": {"en":"e.g. 40","ru":"напр. 40","uz":"masalan, 40"},
+  "Ступень по объёму: начиная со следующей после порога услуги в календарном месяце доля исполнителя — не ниже указанной. Пусто — ступени нет.": {"en":"Volume tier: starting from the service after the threshold within a calendar month, the performer's share is not lower than this. Empty — no tier.","ru":"Ступень по объёму: начиная со следующей после порога услуги в календарном месяце доля исполнителя — не ниже указанной. Пусто — ступени нет.","uz":"Hajm bo‘yicha pog‘ona: kalendar oyida chegaradan keyingi xizmatdan boshlab ijrochi ulushi ko‘rsatilganidan kam bo‘lmaydi. Bo‘sh — pog‘ona yo‘q."},
+  "шт.": {"en":"pcs","ru":"шт.","uz":"dona"},
 };
