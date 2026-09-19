@@ -118,10 +118,24 @@ export function openServicePickerModal({
     // ATTACH_CATALOG_V1 — «Добавить услугу» from an EXISTING visit. Renders the
     // same catalog + смета UI as the booking wizard instead of the 3-column
     // cascade, but creates NO visit: the смета CTA fires onPick once per cart row
-    // so the caller appends them to the visit it already has. Requires `patient`
-    // (the visit's patient); no attach-patient step and no payment block — money
-    // stays with the visit's own invoice flow.
+    // so the caller appends them to the visit it already has. No attach-patient
+    // step and no payment block — money stays with the caller's own invoice flow.
+    //
+    // PICKER_CATALOG_EVERYWHERE_V1 — attach mode also serves screens that have no
+    // visit AND no patient yet (быстрая регистрация: the patient is being typed in
+    // the window behind). Two options make that possible, and nothing else in the
+    // mode changes:
+    //   • `patient` is OPTIONAL. Without it there are no tier quotes, no patient
+    //     chip and — the point — no «Привязать пациента» button: the patient is
+    //     the caller's business, not the catalogue's.
+    //   • `requireSlot: false` — a row counts as complete without a doctor and a
+    //     time. A walk-in registration must not be forced to book a slot; the
+    //     caller picks the performer in its own row.
+    //   • `ctaLabel` — the смета's action button (and the label it returns to
+    //     after adding). «Готово» for a list, «Добавить к визиту» for a visit.
     attachMode      = false,
+    requireSlot     = true,
+    ctaLabel        = 'Добавить к визиту',
 } = {}) {
     // Catalog UI is shared by the booking wizard and attach mode.
     const catalogUI = calculator || attachMode;
@@ -1535,6 +1549,10 @@ export function openServicePickerModal({
     }
 
     function itemComplete(a) {
+        // PICKER_CATALOG_EVERYWHERE_V1 — кто зовёт каталог без брони времени
+        // (быстрая регистрация), тот сам отвечает за исполнителя: строка готова
+        // и без врача со временем.
+        if (!requireSlot) return true;
         if (lockedDoctor) return true;
         if (!a.__needsDoc) return true;
         if (a.doctor && (a.doctor.scheduling_mode || 'schedulable') === 'live_queue') return true;   // SVC_LIVE_QUEUE_V1
@@ -1951,7 +1969,11 @@ export function openServicePickerModal({
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [p.mrn, p.phone].filter(Boolean).join(' · ') || '—')),
                 patient ? null : h('button', { class: 'x', type: 'button', title: 'Отвязать пациента',
                     onclick: () => { refs.attachedPatient = null; resetQuotes(state.added); wiz.depositBalance = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); } }, '×')));
-        } else {
+        } else if (!attachMode) {
+            // PICKER_CATALOG_EVERYWHERE_V1 — привязка пациента есть только у
+            // мастера записи. В режиме привязки пациент либо уже известен (визит),
+            // либо его заводит окно-хозяин (быстрая регистрация) — кнопка здесь
+            // предлагала бы завести второго.
             catRailEl.appendChild(h('button', { class: 'wzc-attach', type: 'button', onclick: () => openAttachPatientModal() },
                 h('div', { style: { fontWeight: 700, color: 'var(--primary-700)' } }, 'Привязать пациента'),
                 h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, 'поиск по ФИО / телефону · или создать нового')));
@@ -1968,6 +1990,11 @@ export function openServicePickerModal({
                     'выберите врача и время');
                 else if (a.doctor) who = h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     `${a.doctor.full_name || ''}${a.time ? ' · ' + (a.dateIso === catDays()[0].iso ? tr('сегодня') : (a.dateIso || '').slice(8) + '.' + (a.dateIso || '').slice(5, 7)) + ' ' + a.time : ''}`);
+                // PICKER_CATALOG_EVERYWHERE_V1 — «процедурный кабинет» это правда
+                // только для услуги, которой врач не нужен. Услуге с исполнителями,
+                // у которой врача ещё не выбрали (requireSlot: false), подпись не
+                // ставим: её выберут в окне-хозяине.
+                else if (a.__needsDoc) who = null;
                 else who = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'процедурный кабинет');
                 rowsWrap.appendChild(h('div', { class: 'wzc-ln' },
                     h('div', { style: { minWidth: 0 } }, h('div', { style: { fontSize: '12.5px' } }, a.service.name), who),
@@ -1999,7 +2026,7 @@ export function openServicePickerModal({
             onclick: () => {
                 if (attachMode) { if (cartComplete()) attachCartToVisit(ctaBtn); return; }
                 if (cartComplete() && refs.attachedPatient && wizStep2Valid()) wizGoto(2);
-            } }, attachMode ? 'Добавить к визиту' : 'Далее: Направление');
+            } }, attachMode ? ctaLabel : 'Далее: Направление');   // PICKER_CATALOG_EVERYWHERE_V1
         const hintEl = h('div', { class: 'wzc-hint' });
         const refreshRail = () => {
             const wt = wizTotals();
@@ -2058,8 +2085,11 @@ export function openServicePickerModal({
                 console.warn('[picker attach]', (a.service && a.service.name) || '?', e && e.message);
             }
         }
-        if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = tr('Добавить к визиту'); }
-        if (added && !failed)      toast(added === 1 ? 'Услуга добавлена к визиту.' : trf('Добавлено услуг: {n}.', { n: added }));
+        if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = tr(ctaLabel); }   // PICKER_CATALOG_EVERYWHERE_V1
+        // PICKER_CATALOG_EVERYWHERE_V1 — без пациента визита ещё нет: услуги ушли
+        // в список окна-хозяина, и обещать «добавлено к визиту» нельзя.
+        if (added && !failed)      toast(!patient ? 'Услуги добавлены в список.'
+                                        : added === 1 ? 'Услуга добавлена к визиту.' : trf('Добавлено услуг: {n}.', { n: added }));
         else if (added && failed)  toast(trf('Добавлено {ok}, не удалось {bad} — проверьте список.', { ok: added, bad: failed }), 'warn');
         else                       { toast('Не удалось добавить услуги.', 'fail'); return; }
         // CRM_SCHEDULE_V1 — the patient came and the service was attached, so the

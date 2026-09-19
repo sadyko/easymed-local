@@ -6010,6 +6010,7 @@ export const STRINGS = {
   "услуг: {n}": {"en":"services: {n}","ru":"услуг: {n}","uz":"xizmatlar: {n}"},
   "Услуга «{name}»: {msg}": {"en":"Service “{name}”: {msg}","ru":"Услуга «{name}»: {msg}","uz":"«{name}» xizmati: {msg}"},
   "Услуги добавлены": {"en":"Services added","ru":"Услуги добавлены","uz":"Xizmatlar qo'shildi"},
+  "Услуги добавлены в список.": {"en":"The services are added to the list.","ru":"Услуги добавлены в список.","uz":"Xizmatlar ro'yxatga qo'shildi."},
   "услуги заявки: {msg}": {"en":"the request's services: {msg}","ru":"услуги заявки: {msg}","uz":"ariza xizmatlari: {msg}"},
   "Услуги не загрузились: {msg}": {"en":"The services did not load: {msg}","ru":"Услуги не загрузились: {msg}","uz":"Xizmatlar yuklanmadi: {msg}"},
   "Услуги перенесены с первого шага. Отмеченные уйдут в счёт «{name}», снятые — в счёт пациента. Визит будет выставлен двумя счетами.": {"en":"The services carried over from the first step. Ticked ones go to the “{name}” invoice, unticked to the patient's. The visit is billed with two invoices.","ru":"Услуги перенесены с первого шага. Отмеченные уйдут в счёт «{name}», снятые — в счёт пациента. Визит будет выставлен двумя счетами.","uz":"Xizmatlar birinchi bosqichdan o'tkazildi. Belgilanganlari «{name}» hisob-fakturasiga, olib tashlanganlari bemor hisob-fakturasiga boradi. Tashrif ikkita hisob-faktura bilan chiqariladi."},
