@@ -193,7 +193,11 @@ function _tenantClinicId() {
 
 export async function loadPatientsPaged({
     limit = 30, offset = 0, search = '', filter = 'all', sort = 'recent', doctorId = null,
-    dob = '',   // PATIENT_SEARCH_DOB_V1
+    // FAST_REGISTRATION_V1 — параметра `dob` здесь больше нет: его передавал
+    // ровно один вызывающий — фильтр «Поиск по дате рождения» в шапке списка
+    // пациентов, а фильтр убран по просьбе владельца. Мёртвый параметр общего
+    // загрузчика переживает экран, который его завёл, и следующий читатель
+    // принимает его за возможность.
     // Optional restrict-to id set (e.g. precomputed "patients that share a
     // phone/PINFL with someone else" — used by the Duplicates filter card).
     // Empty array short-circuits to zero rows so an empty result is honest.
@@ -203,14 +207,12 @@ export async function loadPatientsPaged({
     // visit_services and is cheap enough to do client-side).
     if (doctorId) {
         const all = await loadPatientsForDoctor(doctorId, 5000);
-        // PATIENT_SEARCH_TOKENS_V1 / _DOB_V1 — врачебный список фильтруется в
-        // браузере, но правила поиска обязаны совпадать с общим списком, иначе
-        // один и тот же запрос находит разное в зависимости от того, кто вошёл.
+        // PATIENT_SEARCH_TOKENS_V1 — врачебный список фильтруется в браузере,
+        // но правила поиска обязаны совпадать с общим списком, иначе один и тот
+        // же запрос находит разное в зависимости от того, кто вошёл.
         const words = searchTokens(search).map(w => w.replace(/\\(.)/g, '$1').toLowerCase());
-        const dobT = (dob || '').trim();
         let filtered = all.filter(p => {
             if (filter === 'inpatient' && p.status !== 'inpatient') return false;
-            if (dobT && String(p.date_of_birth || '').slice(0, 10) !== dobT) return false;
             if (!words.length) return true;
             const hay = [p.firstName, p.lastName, p.full_name, p.mrn, p.phone, p.pinfl]
                 .map(v => (v || '').toLowerCase());
@@ -275,11 +277,6 @@ export async function loadPatientsPaged({
         if (loose) terms.push(`phone.ilike.${loose}`);
         q = q.or(terms.join(','));
     }
-
-    // PATIENT_SEARCH_DOB_V1 — поиск по дате рождения. Тёзок в регистратуре
-    // много, и дата рождения — то, чем их различают на стойке.
-    const dobTerm = (dob || '').trim();
-    if (dobTerm) q = q.eq('date_of_birth', dobTerm);
 
     // Sort order — only reference columns we know exist on the live schema.
     if (sort === 'az')         q = q.order('last_name',         { ascending: true,  nullsFirst: false });

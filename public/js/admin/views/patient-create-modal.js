@@ -136,6 +136,10 @@ export function fitsViewport(innerH) {
  * @param {object}   opts
  * @param {Function} opts.onNavigate  переход по приложению (как в ctx)
  * @param {Function} [opts.onSaved]   вызывается с сохранённым пациентом
+ * @param {boolean}  [opts.quick]     FAST_REGISTRATION_V1 — быстрый режим:
+ *   то же окно, но главное действие в подвале ведёт СРАЗУ в мастер услуг
+ *   (пациент → услуги и врач → счёт → печать), а не закрывается на карте.
+ *   Передаётся дальше как есть: решение одно, и живёт оно в сборщике.
  */
 export function openPatientCreateModal(opts = {}) {
     // PATIENT_CREATE_GATE_V1 — ЕДИНСТВЕННАЯ проверка права на заведение
@@ -177,10 +181,13 @@ export function openPatientEditModal(patient, opts = {}) {
  * проверять состав первого экрана, раскрытие и сбор значений можно без
  * document.body и без таймеров.
  */
-export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null } = {}) {
+export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, quick = false } = {}) {
     const navigate = typeof onNavigate === 'function' ? onNavigate : () => {};
     // PATIENT_FORM_ONE_V1 — режим правки: то же окно, заполненное строкой пациента.
     const editing = !!(patient && patient.id);
+    // FAST_REGISTRATION_V1 — быстрая регистрация. Правка уже заведённой карты
+    // быстрой не бывает: услуги к такому пациенту добавляют из его карты.
+    const fast = !!quick && !editing;
     const pv = (name) => (editing && patient[name] != null ? String(patient[name]) : '');
     const state = {
         gender:      editing ? ({ male: 'M', female: 'F', M: 'M', F: 'F' }[patient.gender] || '') : '',
@@ -230,8 +237,16 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null }
     // ряду с адресом и гражданством, и его искали глазами среди того, что
     // заполняют. Номер берётся у поля телефона этого же окна.
     const tg = telegramBlock(state, () => fields.phone && fields.phone.value);
+    // FAST_REGISTRATION_V1 — у быстрого режима своё имя и своя строка пути.
+    // Строка нужна не как украшение: окно то же самое, и без неё регистратор
+    // не отличит быструю регистрацию от обычной, пока не дочитает подвал.
+    // Вёрстки она не заводит — это готовая .mg-hint в готовой шапке.
+    const headTitle = fast ? 'Быстрая регистрация'
+        : (editing ? 'Редактирование карты пациента' : 'Создать пациента');
     card.appendChild(h('header', { class: 'modal-head' },
-        h('h2', null, Icon('Patients', { size: 16 }), ' ', tr(editing ? 'Редактирование карты пациента' : 'Создать пациента')),
+        h('h2', null, Icon(fast ? 'Rocket' : 'Patients', { size: 16 }), ' ', tr(headTitle)),
+        fast ? h('span', { class: 'mg-hint', style: { marginLeft: '12px' } },
+            'Пациент → услуги и врач → счёт → печать. Пакеты услуг — через «Выбрать шаблон» на шаге услуг.') : null,
         h('span', { class: 'grow' }),
         tg,
         h('button', { class: 'modal-close', onclick: close }, '×'),
@@ -386,22 +401,35 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null }
     // нет, но это дневной путь регистратуры — завести карту и сразу выписать
     // услугу; убрать её значило бы заставить искать пациента заново сразу
     // после того, как его завели.
+    //
+    // FAST_REGISTRATION_V1 — в быстром режиме те же две кнопки МЕНЯЮТСЯ
+    // ВЕСОМ, а не составом: главное действие — «Сохранить и добавить услуги»
+    // (тот же save({ openVisit: true }), тот же мастер услуг), а «Сохранить»
+    // остаётся рядом второстепенным. Заводить для этого третью кнопку или
+    // второе окно значило бы держать два пути к одному и тому же.
     const cancelBtn = h('button', { class: 'btn btn-outline', type: 'button', onclick: close },
         tr('Отмена'));
-    const saveAndServiceBtn = h('button', { class: 'btn btn-outline', type: 'button',
+    const saveAndServiceBtn = h('button', { class: 'btn ' + (fast ? 'btn-primary' : 'btn-outline'), type: 'button',
         onclick: (ev) => guarded(ev, () => save({ openVisit: true })) },
-        Icon('Plus', { size: 14 }), ' ', tr('Добавить услугу'));
-    const saveOnlyBtn = h('button', { class: 'btn btn-primary', type: 'button',
+        Icon('Plus', { size: 14 }), ' ', tr(fast ? 'Сохранить и добавить услуги' : 'Добавить услугу'));
+    const saveOnlyBtn = h('button', { class: 'btn ' + (fast ? 'btn-outline' : 'btn-primary'), type: 'button',
         onclick: (ev) => guarded(ev, () => save({ openVisit: false })) },
-        Icon('Check', { size: 14 }), ' ', tr(editing ? 'Сохранить' : 'Создать пациента'));
+        Icon('Check', { size: 14 }), ' ', tr(editing || fast ? 'Сохранить' : 'Создать пациента'));
+    // PATIENT_FORM_FLOW_V1 — Enter нажимает ГЛАВНОЕ действие подвала, каким бы
+    // оно ни было: в быстром режиме это переход к услугам, иначе — сохранение.
+    // Клавиша, делающая не то, что подсвечено главным, обманывает дважды.
+    const primaryBtn = fast ? saveAndServiceBtn : saveOnlyBtn;
     // Горячая клавиша, о которой нигде не написано, не существует: подпись в
     // подвале — часть самой возможности, а не украшение.
     card.appendChild(h('footer', { class: 'modal-foot' },
-        h('span', { class: 'mg-hint' }, h('kbd', null, 'Enter'), ' ', tr('— сохранить пациента')),
+        h('span', { class: 'mg-hint' }, h('kbd', null, 'Enter'), ' ',
+            tr(fast ? '— сохранить и добавить услуги' : '— сохранить пациента')),
         h('span', { class: 'grow' }),
         cancelBtn,
-        editing ? null : saveAndServiceBtn,   // PATIENT_FORM_ONE_V1 — услугу к уже заведённому добавляют из его карты
-        saveOnlyBtn,
+        // FAST_REGISTRATION_V1 — главное действие стоит последним, как во всех
+        // окнах продукта, поэтому в быстром режиме кнопки меняются местами.
+        editing ? null : (fast ? saveOnlyBtn : saveAndServiceBtn),   // PATIENT_FORM_ONE_V1 — услугу к уже заведённому добавляют из его карты
+        primaryBtn,
     ));
 
     // PATIENT_FORM_FLOW_V1 — Enter сохраняет пациента.
@@ -426,8 +454,8 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null }
         if (typeof document !== 'undefined' && document.querySelector
             && document.querySelector('.uisel-pop, .uidate-pop')) return;
         e.preventDefault();
-        if (saveOnlyBtn.disabled) return;
-        saveOnlyBtn.click();
+        if (primaryBtn.disabled) return;
+        primaryBtn.click();
     }
     card.addEventListener('keydown', onEnter);
 

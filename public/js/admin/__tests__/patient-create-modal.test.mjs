@@ -839,3 +839,58 @@ test('новая карта: раздел «Здоровье» и его пол�
   assert.equal(payload.citizenship, 'resident');
   assert.ok('emergency_contact_phone' in payload && 'blood_type' in payload && 'occupation' in payload);
 });
+
+// ===========================================================================
+// FAST_REGISTRATION_V1 (2026-09-19) — ТО ЖЕ окно, открытое как «Быстрая
+// регистрация» из шапки списка пациентов.
+//
+// Владелец показал экран чужой системы: реквизиты пациента сверху, таблица
+// услуг с врачом на строке снизу, кнопки «Печать» и «+Услуги». Это и есть
+// здешний путь «пациент → услуги → счёт → печать», просто пройденный в один
+// заход. Поэтому второго окна не заводится: у этого меняются ИМЯ и ГЛАВНОЕ
+// ДЕЙСТВИЕ, а поля, проверки и страж дубликатов остаются те же — иначе
+// быстрая регистрация тихо разошлась бы с обычной.
+// ===========================================================================
+test('FAST_REGISTRATION_V1: быстрый режим переименовывает окно и делает главным «Сохранить и добавить услуги»', () => {
+  reset();
+  const dlg = modal.buildPatientCreateDialog({ quick: true });
+
+  const h2 = walk(dlg.card).find((n) => n.tagName === 'H2');
+  assert.ok(h2 && textOf(h2).includes('Быстрая регистрация'),
+    'окно не назвалось быстрой регистрацией: ' + (h2 ? textOf(h2) : 'шапки нет вовсе'));
+
+  // Главное действие — с услугами. Это ТА ЖЕ кнопка, что и «Добавить услугу»
+  // в обычном режиме (save({ openVisit: true }) → мастер услуг), поэтому путь
+  // не дублируется: у неё меняются только подпись и вес.
+  assert.ok(textOf(dlg.saveAndServiceBtn).includes('Сохранить и добавить услуги'),
+    'главное действие подписано не так: ' + textOf(dlg.saveAndServiceBtn));
+  assert.ok(hasClass(dlg.saveAndServiceBtn, 'btn-primary'),
+    'переход к услугам не выглядит главным: ' + dlg.saveAndServiceBtn.className);
+
+  // «Сохранить» никуда не делось — регистратор вправе завести карту и без
+  // услуг (человек пришёл за справкой, услуги выпишут позже).
+  assert.ok(textOf(dlg.saveOnlyBtn).includes('Сохранить'),
+    'простое сохранение пропало: ' + textOf(dlg.saveOnlyBtn));
+  assert.ok(!hasClass(dlg.saveOnlyBtn, 'btn-primary'),
+    'в подвале два главных действия — выбирать придётся чтением');
+
+  // Путь сказан словами: за окном стоит мастер услуг, и пакеты живут в нём.
+  assert.ok(textOf(dlg.card).includes('Пациент → услуги и врач → счёт → печать'),
+    'окно не объяснило, что будет дальше');
+});
+
+test('FAST_REGISTRATION_V1: без быстрого режима окно ровно такое же, каким было', () => {
+  reset();
+  const dlg = modal.buildPatientCreateDialog({});
+
+  const h2 = walk(dlg.card).find((n) => n.tagName === 'H2');
+  assert.ok(textOf(h2).includes('Создать пациента'), 'обычное окно переименовалось: ' + textOf(h2));
+  assert.ok(textOf(dlg.saveOnlyBtn).includes('Создать пациента'),
+    'главная кнопка обычного окна изменилась: ' + textOf(dlg.saveOnlyBtn));
+  assert.ok(hasClass(dlg.saveOnlyBtn, 'btn-primary'), 'обычное окно осталось без главного действия');
+  assert.ok(textOf(dlg.saveAndServiceBtn).includes('Добавить услугу'),
+    'третья кнопка обычного окна изменилась: ' + textOf(dlg.saveAndServiceBtn));
+  assert.ok(!hasClass(dlg.saveAndServiceBtn, 'btn-primary'), 'в обычном окне стало два главных действия');
+  assert.ok(!textOf(dlg.card).includes('Быстрая регистрация'),
+    'быстрый режим просочился в обычное окно');
+});

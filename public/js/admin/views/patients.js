@@ -51,7 +51,6 @@ const PAGE_SIZE = 30;
 const state = {
     filter: 'all',
     search: '',
-    dob: '',        // PATIENT_SEARCH_DOB_V1
     sort:   'recent',
     page:   1,
     total:  0,
@@ -64,7 +63,6 @@ const refs = {
     tbody:     null,
     listCard:  null,   // MOTION_SCROLL_V1 — якорь прокрутки при листании
     searchInp: null,
-    dobInp: null,   // PATIENT_SEARCH_DOB_V1
     emptyEl:   null,
     pagerLabel:null,
     prevBtn:   null,
@@ -79,7 +77,6 @@ const refs = {
 export async function renderPatients(container, { onNavigate, embedded = false }) {
     state.filter = 'all';
     state.search = '';
-    state.dob = '';
     state.sort   = 'recent';
     state.page   = 1;
     state.total  = 0;
@@ -121,11 +118,21 @@ export async function renderPatients(container, { onNavigate, embedded = false }
 // PATIENT_ONE_WINDOW_V1 — единственная точка открытия окна заведения пациента
 // на этом экране. onSaved перечитывает страницу: новая карта обязана появиться
 // в списке, из которого её завели, а не после ручного обновления.
-function openCreatePatient() {
+function openCreatePatient({ quick = false } = {}) {
     return openPatientCreateModal({
         onNavigate: refs.onNavigate,
         onSaved: () => { state.page = 1; fetchAndPaint(); },
+        quick,
     });
+}
+
+// FAST_REGISTRATION_V1 — быстрая регистрация это НЕ вторая дверь, а та же самая
+// с одним признаком: окно открывается режимом «пациент → услуги и врач → счёт →
+// печать». Второй вызов openPatientCreateModal здесь завёл бы вход, мимо
+// которого можно однажды забыть протянуть право (PATIENT_CREATE_GATE_V1), —
+// поэтому его нет, и patients-hub.test.mjs сторожит именно это.
+function openFastRegistration() {
+    return openCreatePatient({ quick: true });
 }
 
 // MOTION_SCROLL_V1 — смена страницы списка: сначала везём к началу карточки,
@@ -167,20 +174,25 @@ function mount() {
         }, 250);
     });
 
-    // PATIENT_SEARCH_DOB_V1 — отдельное поле даты рождения рядом с поиском.
-    // Тёзок в регистратуре много, и на стойке их различают именно датой; искать
-    // её внутри той же строки нельзя — «1990» это ещё и кусок номера телефона.
-    // Пустое поле фильтр снимает, поэтому очистка возвращает весь список.
-    refs.dobInp = h('input', {
-        type: 'date',
-        title: 'Поиск по дате рождения',
-        style: { height: '34px', padding: '0 10px', borderRadius: '8px', border: '1px solid var(--ink-200)', fontSize: '13.5px', fontFamily: 'inherit', color: 'var(--ink-700)' },
-    });
-    refs.dobInp.addEventListener('change', () => {
-        state.dob = refs.dobInp.value;
-        state.page = 1;
-        fetchAndPaint();
-    });
+    // FAST_REGISTRATION_V1 — здесь стояло отдельное поле «Поиск по дате
+    // рождения» (PATIENT_SEARCH_DOB_V1). Владелец: «in the registrators window
+    // there is search by date of birth. we dont need that. actually create a
+    // pulsating button "fast registration"» — и это не просто уборка: место у
+    // строки поиска самое дорогое на экране регистратуры, а дата рождения
+    // по-прежнему видна у каждой строки реестра отдельной колонкой, так что
+    // тёзок различают там же, где и раньше.
+    //
+    // Кнопка на её месте ведёт в ТОТ ЖЕ путь, который владелец показал на
+    // снимке чужой системы (реквизиты пациента сверху, таблица услуг с врачом
+    // на строке снизу, «Печать»): окно заведения пациента в быстром режиме →
+    // мастер услуг → счёт → печать. Пульс — по домашнему правилу
+    // (admin-views.css): движение тенью, и ровно одна пульсирующая вещь на
+    // экран; других на списке пациентов нет.
+    const fastRegBtn = h('button', {
+        class: 'btn btn-primary btn-sm btn-pulse', type: 'button', 'data-onb': 'fast-registration',
+        title: 'Быстрая регистрация: пациент → услуги и врач → счёт → печать',
+        onclick: () => openFastRegistration(),
+    }, Icon('Rocket', { size: 14 }), ' Быстрая регистрация');
 
     refs.prevBtn = h('button', {
         class: 'icon-btn btn-sm',
@@ -270,7 +282,7 @@ function mount() {
                             Icon('Search', { size: 14 })),
                         refs.searchInp,
                     ),
-                    refs.dobInp,   // PATIENT_SEARCH_DOB_V1
+                    fastRegBtn,   // FAST_REGISTRATION_V1 — ровно там, где стоял фильтр по дате рождения
                     sortSegmented,
                 ),
                 h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
@@ -547,7 +559,6 @@ async function fetchAndPaint() {
         limit:    PAGE_SIZE,
         offset:   (state.page - 1) * PAGE_SIZE,
         search:   state.search,
-        dob:      state.dob,   // PATIENT_SEARCH_DOB_V1
         filter:   state.filter,
         sort:     state.sort,
         doctorId: refs.doctorId,
