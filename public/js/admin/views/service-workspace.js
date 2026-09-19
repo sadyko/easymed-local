@@ -408,15 +408,29 @@ function servicesCard(ctx) {
             h('h3', { style: { margin: 0 } }, Icon('Flask', { size: 15 }), ' Услуги приёма',
                 h('span', { class: 'h-count', 'data-own-svc-count': '', style: { marginLeft: '6px' } }, '')),
             patientTabCanEdit('services') && h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => openServicePickerModal({
-                // SVC_WIZARD_V1 — open the full booking wizard (chips + СМЕТА + Оплата/Кто платит/Подтверждение),
-                // patient pre-attached. No onPick → the wizard creates the visit + invoice itself.
-                // PICKER_CATALOG_EVERYWHERE_V1 — мастер включается ЭТИМ флагом. Без
-                // него окно открывалось тремя колонками, а «Готово» звало onPick,
-                // которого здесь нет по замыслу, — и падало. И patient, и onBooked
-                // читает только мастер: в старом режиме оба не значили ничего.
-                calculator: true,
-                patient: ctx.patient,
-                onBooked: () => { try { loadPatientEmr(ctx.patient).then(() => paintEmr()); } catch (e) {} },
+                // SVC_ATTACH_V1 — услуги ДОБАВЛЯЮТСЯ К ТЕКУЩЕМУ ПРИЁМУ (строка
+                // visit_services на ctx.visitId), а не в новый визит; карточка
+                // перерисовывается из addOwnService.
+                //
+                // До этой правки кнопка открывала мастер записи (calculator: true):
+                // он заводил ОТДЕЛЬНЫЙ визит со своим счётом, а карточка «Услуги
+                // приёма» показать его не могла — она рисуется из payload.services,
+                // который пишет только addOwnService. Получалось: врач добавил
+                // услугу, карточка пуста, в базе лишний визит.
+                //
+                // attachMode — тот же каталог со сметой, но БЕЗ создания визита:
+                // смета отдаёт строки в onPick по одной. requireSlot: false —
+                // приём уже идёт, время бронировать не нужно.
+                attachMode:    true,
+                requireSlot:   false,
+                patient:       ctx.patient,
+                visitDoctorId: ctx.patient?.__service?.doctorId || null,   // врач приёма — исполнитель по умолчанию
+                title:         'Добавить услуги к приёму',
+                ctaLabel:      'Добавить к приёму',
+                // Уже добавленные услуги в каталоге погашены — дважды одну и ту же
+                // в приём не добавить (вторую линию ловит и сам addOwnService).
+                excludeServiceIds: (wsState.payload?.services || []).map(s => s.serviceId).filter(Boolean),
+                onPick: (p) => addOwnService(ctx, p.service, p.doctor),
             }) }, Icon('Plus', { size: 12 }), ' Добавить'),
         ),
         h('div', { 'data-own-services-list': '', style: { padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: '6px' } }),
@@ -3607,8 +3621,16 @@ function paintOwnServices(ctx) {
     )));
 }
 
-async function addOwnService(ctx, svc) {
+// SVC_ATTACH_V1 — вызывается каталогом («Добавить» на карточке «Услуги приёма»)
+// по одной строке сметы: {service, doctor}. Исполнитель — выбранный в смете врач,
+// а если его не выбирали — врач текущего приёма.
+async function addOwnService(ctx, svc, doctor) {
     if (!svc) return;
+    // SVC_ATTACH_V1 — одну и ту же услугу в приём дважды не добавляем. Каталог
+    // гасит уже добавленные (excludeServiceIds), но строки, заведённые до этой
+    // правки, id услуги не хранят — поэтому проверка есть и здесь.
+    const already = (wsState.payload?.services || []).some(x => x.serviceId && svc.id && String(x.serviceId) === String(svc.id));
+    if (already) { toast(trf('«{name}» уже добавлена к приёму.', { name: svc.name || '' }), 'fail'); return; }
     // AURORA_SVC_SYNC_V1 — create a REAL visit_services line so the service shows on the patient
     // card (Услуги/Визиты) and the invoice. Consultation pseudo-services carry a
     // consultation_type_id; catalog services carry a real service_id. insertRow stamps created_by.
@@ -3630,7 +3652,8 @@ async function addOwnService(ctx, svc) {
             const row = {
                 visit_id:   ctx.visitId,
                 company_id: currentClinicId() || null,
-                doctor_id:  svc.__consultDoctorId || ctx.patient?.__service?.doctorId || null,
+                // SVC_ATTACH_V1 — исполнитель: выбранный в смете врач → врач консультации → врач приёма.
+                doctor_id:  doctor?.id || svc.__consultDoctorId || ctx.patient?.__service?.doctorId || null,
                 quantity:   1, unit_price: price, total: price, status: 'added',
             };
             if (priceTier) row.price_tier = priceTier;
@@ -3644,7 +3667,8 @@ async function addOwnService(ctx, svc) {
     // Keep the workspace's own JSON list (drives the left-column display + print).
     const payload = wsState.payload || await readPayload(ctx);
     if (!Array.isArray(payload.services)) payload.services = [];
-    payload.services.push({ name: svc.name, price: svc.price, vsId });   // catalog price for the doctor's list; the bill carries the quoted one
+    // SVC_ATTACH_V1 — serviceId нужен карточке: по нему каталог гасит уже добавленные.
+    payload.services.push({ name: svc.name, price: svc.price, vsId, serviceId: svc.id || null });   // catalog price for the doctor's list; the bill carries the quoted one
     if (!await writePayload(ctx, payload)) return;
     paintOwnServices(ctx);
     toast('Услуга добавлена в приём', 'ok');

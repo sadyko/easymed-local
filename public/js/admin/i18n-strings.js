@@ -5485,6 +5485,8 @@ export const STRINGS = {
   "промокод −{sum}": {"en":"promo code −{sum}","ru":"промокод −{sum}","uz":"promokod −{sum}"},
   "Промокод: −{sum}.": {"en":"Promo code: −{sum}.","ru":"Промокод: −{sum}.","uz":"Promokod: −{sum}."},
   "процедурный кабинет": {"en":"procedure room","ru":"процедурный кабинет","uz":"muolaja xonasi"},
+  // SVC_ATTACH_V1 (2026-09-20) — строка сметы без выбранного врача больше не пустая
+  "исполнитель не выбран": {"en":"no performer chosen","ru":"исполнитель не выбран","uz":"ijrochi tanlanmagan"},
   "Сам пациент": {"en":"The patient themselves","ru":"Сам пациент","uz":"Bemorning o'zi"},
   "Самооплата: все услуги оплачивает пациент. Чтобы распределить на плательщика, выберите ДМС / контракт на шаге «Оплата».": {"en":"Self-pay: the patient pays for every service. To split to a payer, choose VHI / a contract on the Payment step.","ru":"Самооплата: все услуги оплачивает пациент. Чтобы распределить на плательщика, выберите ДМС / контракт на шаге «Оплата».","uz":"O'zi to'laydi: barcha xizmatlarni bemor to'laydi. To'lovchiga taqsimlash uchun «To'lov» bosqichida DMS / shartnomani tanlang."},
   "Сбросьте группу или измените поиск.": {"en":"Reset the group or change the search.","ru":"Сбросьте группу или измените поиск.","uz":"Guruhni tozalang yoki qidiruvni o'zgartiring."},
@@ -5908,6 +5910,10 @@ export const STRINGS = {
   "Визит отменён": {"en":"The visit is cancelled","ru":"Визит отменён","uz":"Tashrif bekor qilindi"},
   "Визит уже закрыт.": {"en":"The visit is already closed.","ru":"Визит уже закрыт.","uz":"Tashrif allaqachon yopilgan."},
   "Добавить услуги к визиту": {"en":"Add services to the visit","ru":"Добавить услуги к визиту","uz":"Tashrifga xizmatlar qo'shish"},
+  // SVC_ATTACH_V1 (2026-09-20) — каталог, открытый с карточки «Услуги приёма» в кабинете врача
+  "Добавить услуги к приёму": {"en":"Add services to the consultation","ru":"Добавить услуги к приёму","uz":"Qabulga xizmatlar qo'shish"},
+  "Добавить к приёму": {"en":"Add to the consultation","ru":"Добавить к приёму","uz":"Qabulga qo'shish"},
+  "«{name}» уже добавлена к приёму.": {"en":"“{name}” is already added to the consultation.","ru":"«{name}» уже добавлена к приёму.","uz":"«{name}» allaqachon qabulga qo'shilgan."},
   "Отменить визит?": {"en":"Cancel the visit?","ru":"Отменить визит?","uz":"Tashrif bekor qilinsinmi?"},
   "—  без категории": {"en":"—  no category","ru":"—  без категории","uz":"—  kategoriyasiz"},
   "— Без врача —": {"en":"— No doctor —","ru":"— Без врача —","uz":"— Shifokorsiz —"},

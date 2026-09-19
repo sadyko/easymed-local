@@ -1992,9 +1992,11 @@ export function openServicePickerModal({
                     `${a.doctor.full_name || ''}${a.time ? ' · ' + (a.dateIso === catDays()[0].iso ? tr('сегодня') : (a.dateIso || '').slice(8) + '.' + (a.dateIso || '').slice(5, 7)) + ' ' + a.time : ''}`);
                 // PICKER_CATALOG_EVERYWHERE_V1 — «процедурный кабинет» это правда
                 // только для услуги, которой врач не нужен. Услуге с исполнителями,
-                // у которой врача ещё не выбрали (requireSlot: false), подпись не
-                // ставим: её выберут в окне-хозяине.
-                else if (a.__needsDoc) who = null;
+                // у которой врача ещё не выбрали (requireSlot: false), исполнителя
+                // назначит окно-хозяин: регистрация — своей строкой, кабинет врача —
+                // врачом приёма. Пустая строка это молчание, а не ответ: пишем
+                // нейтральную подсказку, чтобы строка сметы не выглядела недописанной.
+                else if (a.__needsDoc) who = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'исполнитель не выбран');
                 else who = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'процедурный кабинет');
                 rowsWrap.appendChild(h('div', { class: 'wzc-ln' },
                     h('div', { style: { minWidth: 0 } }, h('div', { style: { fontSize: '12.5px' } }, a.service.name), who),
