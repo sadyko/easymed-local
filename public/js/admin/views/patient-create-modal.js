@@ -136,10 +136,10 @@ export function fitsViewport(innerH) {
  * @param {object}   opts
  * @param {Function} opts.onNavigate  переход по приложению (как в ctx)
  * @param {Function} [opts.onSaved]   вызывается с сохранённым пациентом
- * @param {boolean}  [opts.quick]     FAST_REGISTRATION_V1 — быстрый режим:
- *   то же окно, но главное действие в подвале ведёт СРАЗУ в мастер услуг
- *   (пациент → услуги и врач → счёт → печать), а не закрывается на карте.
- *   Передаётся дальше как есть: решение одно, и живёт оно в сборщике.
+ *
+ * FAST_REG_ONE_SCREEN_V1 — «быстрого режима» у этого окна нет: быстрая
+ * регистрация живёт своим окном (views/fast-registration.js) и делает пациента,
+ * услуги, счёт и очередь одним нажатием.
  */
 export function openPatientCreateModal(opts = {}) {
     // PATIENT_CREATE_GATE_V1 — ЕДИНСТВЕННАЯ проверка права на заведение
@@ -198,9 +198,6 @@ export function openPatientEditModal(patient, opts = {}) {
  * @param {boolean}  [opts.withSearchStrip]  строка поиска существующего пациента (по умолчанию — при заведении)
  * @param {Function} [opts.onNavigate]       переход по приложению (как в ctx)
  * @param {Function} [opts.onSaved]          вызывается с сохранённой картой
- * @param {Function} [opts.onCreated]        вызывается после создания НОВОЙ карты — и после
- *   принудительного создания тоже: тем, кто продолжает путь (мастер услуг), важно
- *   не «как сохранили», а «карта появилась»
  * @param {Function} [opts.close]            закрыть то, во что встроены поля (окно — себя, страница — ничего)
  * @returns {{fields, state, collect, save, setGender, photo, searchStrip, tg}}
  */
@@ -210,7 +207,7 @@ export function buildPatientFields(container, {
     // Строка поиска дубликатов нужна при ЗАВЕДЕНИИ и бессмысленна при правке:
     // это и есть тот самый пациент (PATIENT_FORM_ONE_V1).
     withSearchStrip = !(patient && patient.id),
-    onNavigate, onSaved, onCreated, close,
+    onNavigate, onSaved, close,
 } = {}) {
     const navigate  = typeof onNavigate === 'function' ? onNavigate : () => {};
     const closeHost = typeof close === 'function' ? close : () => {};
@@ -266,13 +263,19 @@ export function buildPatientFields(container, {
     // ключ, который сервер молча выбросит. Список стоит в «Документах», а
     // подставляет его по возрасту «Дата рождения» из соседнего раздела —
     // поэтому оба контрола собираются здесь, до разделов.
-    const categorySel = categorySelect(editing ? patient.category_id : null);
+    //
+    // PATIENT_FIELDS_V1 — но собирается он ТОЛЬКО когда раздел «Документы»
+    // просят: categorySelect() спрашивает справочник категорий клиники
+    // запросом, и экрану, показывающему одни личные данные, этот запрос не
+    // нужен вовсе — как и скрытое поле, которого на нём нет.
+    const categorySel = has('documents') ? categorySelect(editing ? patient.category_id : null) : null;
     if (editing) { const age = computeAge(dobInput.value); ageInput.value = (age == null || age < 0 || age > 130) ? '' : String(age); }
     dobInput.addEventListener('input', () => {
         const age = computeAge(dobInput.value);
         ageInput.value = (age == null || age < 0 || age > 130) ? '' : String(age);
-        // Подставляем ТОЛЬКО если такая категория есть в справочнике клиники.
-        if (!categorySel.value) categorySel.value = categoryOptionByName(categorySel, categoryFromAge(age));
+        // Подставляем ТОЛЬКО если такая категория есть в справочнике клиники —
+        // и только если сам список на экране есть.
+        if (categorySel && !categorySel.value) categorySel.value = categoryOptionByName(categorySel, categoryFromAge(age));
     });
 
     const sexChips = radioChips('gender',
@@ -285,7 +288,10 @@ export function buildPatientFields(container, {
     // пациента узнаётся в лицо, и прятать снимок за раскрытием было неправильно.
     const photo = photoBlock(state);
     if (editing && patient.photo_url) photo.setPhoto(patient.photo_url);
-    const geo = geoCascade();
+    // PATIENT_FIELDS_V1 — каскад «страна → регион → район» строится ТОЛЬКО для
+    // раздела «Контакты»: он разворачивает справочник из 206 районов, и экрану
+    // без адреса это работа впустую.
+    const geo = has('contacts') ? geoCascade() : null;
 
     // ── Раздел 1: личные данные ────────────────────────────────────────────
     // Email здесь же, рядом с телефонами: это способ связи, а не документ.
@@ -429,7 +435,19 @@ export function buildPatientFields(container, {
         return payload;
     }
 
-    async function save({ force = false } = {}) {
+    /**
+     * Сохранить набранное.
+     * @param {object}   [o]
+     * @param {boolean}  [o.force]      создать вопреки найденному дубликату
+     * @param {Function} [o.onCreated]  что делать ПОСЛЕ появления НОВОЙ карты —
+     *   намерение ЭТОГО нажатия, а не состояние строителя. Продолжение пути
+     *   («Добавить услугу» → мастер услуг) решается на кнопке, и общая
+     *   изменяемая переменная здесь означала бы, что второе окно, открытое
+     *   поверх первого, уводит чужое нажатие за собой. Зовётся и после
+     *   принудительного создания: продолжающему важно, что карта появилась,
+     *   а не как её завели.
+     */
+    async function save({ force = false, onCreated = null } = {}) {
         const payload = collect();
         if (!payload) return null;
         const photoUrl = await uploadPendingPhoto(state);
@@ -471,7 +489,10 @@ export function buildPatientFields(container, {
                         if (p) navigate('patient-card', p);
                         else   toast('Не удалось открыть карту пациента.', 'fail');
                     },
-                    onForceCreate: () => save({ force: true }),
+                    // Намерение нажатия переживает переспрос: после «Создать
+                    // принудительно» продолжение обязано случиться ТАК ЖЕ, как
+                    // без него.
+                    onForceCreate: () => save({ force: true, onCreated }),
                 });
                 return null;
             }
@@ -507,13 +528,10 @@ export function buildPatientFields(container, {
  * переход в мастер услуг. Сами поля рисует buildPatientFields — те же, что у
  * «Быстрой регистрации в одном экране».
  */
-export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, quick = false } = {}) {
+export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null } = {}) {
     const navigate = typeof onNavigate === 'function' ? onNavigate : () => {};
     // PATIENT_FORM_ONE_V1 — режим правки: то же окно, заполненное строкой пациента.
     const editing = !!(patient && patient.id);
-    // FAST_REGISTRATION_V1 — быстрая регистрация. Правка уже заведённой карты
-    // быстрой не бывает: услуги к такому пациенту добавляют из его карты.
-    const fast = !!quick && !editing;
 
     const overlay = h('div', { class: 'modal', style: { zIndex: '150' } });
     const close = () => { document.removeEventListener('keydown', onKey); fadeOutAndRemove(overlay); };
@@ -544,42 +562,34 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
 
     const body = h('div', { class: 'modal-body' });
 
-    // FAST_REGISTRATION_V1 — намерение последнего нажатия («с услугами» или
-    // «просто сохранить») держится до конца цепочки: между нажатием и картой
-    // может встать страж дубликатов, и после «Создать принудительно» мастер
-    // услуг обязан открыться ТАК ЖЕ, как без переспроса.
-    let wantVisit = false;
-    const api = buildPatientFields(body, {
-        patient, onNavigate: navigate, onSaved, close,
-        // REG_ADD_SERVICE_V1 — мастер услуг монтируется в document.body и
-        // переживает переход; грузим его лениво, чтобы окно заведения пациента
-        // не тянуло каталог услуг при каждом открытии.
-        onCreated: (created) => {
-            if (!wantVisit || !created || !created.id) return;
-            import('./visit-wizard.js?v=tier2')
-                .then((mod) => mod.openVisitWizard(null, {
-                    id: created.id, full_name: created.fullName, mrn: created.mrn, phone: created.phone,
-                }))
-                .catch((e) => toast(trf('Не удалось открыть мастер услуг: {msg}', { msg: (e && e.message) || e }), 'fail'));
-        },
-    });
+    const api = buildPatientFields(body, { patient, onNavigate: navigate, onSaved, close });
     const { fields, state, collect, tg, photo } = api;
+
+    // REG_ADD_SERVICE_V1 — мастер услуг монтируется в document.body и переживает
+    // переход; грузим его лениво, чтобы окно заведения пациента не тянуло
+    // каталог услуг при каждом открытии.
+    function openServiceWizard(created) {
+        if (!created || !created.id) return;
+        import('./visit-wizard.js?v=tier2')
+            .then((mod) => mod.openVisitWizard(null, {
+                id: created.id, full_name: created.fullName, mrn: created.mrn, phone: created.phone,
+            }))
+            .catch((e) => toast(trf('Не удалось открыть мастер услуг: {msg}', { msg: (e && e.message) || e }), 'fail'));
+    }
 
     // PATIENT_FORM_REWRITE_V1 — приглашение в Telegram переехало в ШАПКУ.
     // Это не поле карты, а действие над пациентом: раньше оно стояло полем в
     // ряду с адресом и гражданством, и его искали глазами среди того, что
     // заполняют.
     //
-    // FAST_REGISTRATION_V1 — у быстрого режима своё имя и своя строка пути.
-    // Строка нужна не как украшение: окно то же самое, и без неё регистратор
-    // не отличит быструю регистрацию от обычной, пока не дочитает подвал.
-    // Вёрстки она не заводит — это готовая .mg-hint в готовой шапке.
-    const headTitle = fast ? 'Быстрая регистрация'
-        : (editing ? 'Редактирование карты пациента' : 'Создать пациента');
+    // FAST_REG_ONE_SCREEN_V1 — «быстрого режима» у этого окна БОЛЬШЕ НЕТ.
+    // Быстрая регистрация стала своим окном (views/fast-registration.js), где
+    // пациент, услуги, счёт и очередь делаются одним нажатием; двухоконный путь
+    // «сохранили карту → открылся мастер услуг» оставлял полпациента, если
+    // второе окно закрывали. Здесь осталось ровно то, чем окно было до него.
+    const headTitle = editing ? 'Редактирование карты пациента' : 'Создать пациента';
     card.appendChild(h('header', { class: 'modal-head' },
-        h('h2', null, Icon(fast ? 'Rocket' : 'Patients', { size: 16 }), ' ', tr(headTitle)),
-        fast ? h('span', { class: 'mg-hint', style: { marginLeft: '12px' } },
-            'Пациент → услуги и врач → счёт → печать. Пакеты услуг — через «Выбрать шаблон» на шаге услуг.') : null,
+        h('h2', null, Icon('Patients', { size: 16 }), ' ', tr(headTitle)),
         h('span', { class: 'grow' }),
         tg,
         h('button', { class: 'modal-close', onclick: close }, '×'),
@@ -598,34 +608,25 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
     // нет, но это дневной путь регистратуры — завести карту и сразу выписать
     // услугу; убрать её значило бы заставить искать пациента заново сразу
     // после того, как его завели.
-    //
-    // FAST_REGISTRATION_V1 — в быстром режиме те же две кнопки МЕНЯЮТСЯ
-    // ВЕСОМ, а не составом: главное действие — «Сохранить и добавить услуги»
-    // (тот же save({ openVisit: true }), тот же мастер услуг), а «Сохранить»
-    // остаётся рядом второстепенным. Заводить для этого третью кнопку или
-    // второе окно значило бы держать два пути к одному и тому же.
     const cancelBtn = h('button', { class: 'btn btn-outline', type: 'button', onclick: close },
         tr('Отмена'));
-    const saveAndServiceBtn = h('button', { class: 'btn ' + (fast ? 'btn-primary' : 'btn-outline'), type: 'button',
+    const saveAndServiceBtn = h('button', { class: 'btn btn-outline', type: 'button',
         onclick: (ev) => guarded(ev, () => save({ openVisit: true })) },
-        Icon('Plus', { size: 14 }), ' ', tr(fast ? 'Сохранить и добавить услуги' : 'Добавить услугу'));
-    const saveOnlyBtn = h('button', { class: 'btn ' + (fast ? 'btn-outline' : 'btn-primary'), type: 'button',
+        Icon('Plus', { size: 14 }), ' ', tr('Добавить услугу'));
+    const saveOnlyBtn = h('button', { class: 'btn btn-primary', type: 'button',
         onclick: (ev) => guarded(ev, () => save({ openVisit: false })) },
-        Icon('Check', { size: 14 }), ' ', tr(editing || fast ? 'Сохранить' : 'Создать пациента'));
-    // PATIENT_FORM_FLOW_V1 — Enter нажимает ГЛАВНОЕ действие подвала, каким бы
-    // оно ни было: в быстром режиме это переход к услугам, иначе — сохранение.
-    // Клавиша, делающая не то, что подсвечено главным, обманывает дважды.
-    const primaryBtn = fast ? saveAndServiceBtn : saveOnlyBtn;
+        Icon('Check', { size: 14 }), ' ', tr(editing ? 'Сохранить' : 'Создать пациента'));
+    // PATIENT_FORM_FLOW_V1 — Enter нажимает ГЛАВНОЕ действие подвала, и это
+    // сохранение. Клавиша, делающая не то, что подсвечено главным, обманывает
+    // дважды.
+    const primaryBtn = saveOnlyBtn;
     // Горячая клавиша, о которой нигде не написано, не существует: подпись в
     // подвале — часть самой возможности, а не украшение.
     card.appendChild(h('footer', { class: 'modal-foot' },
-        h('span', { class: 'mg-hint' }, h('kbd', null, 'Enter'), ' ',
-            tr(fast ? '— сохранить и добавить услуги' : '— сохранить пациента')),
+        h('span', { class: 'mg-hint' }, h('kbd', null, 'Enter'), ' ', tr('— сохранить пациента')),
         h('span', { class: 'grow' }),
         cancelBtn,
-        // FAST_REGISTRATION_V1 — главное действие стоит последним, как во всех
-        // окнах продукта, поэтому в быстром режиме кнопки меняются местами.
-        editing ? null : (fast ? saveOnlyBtn : saveAndServiceBtn),   // PATIENT_FORM_ONE_V1 — услугу к уже заведённому добавляют из его карты
+        editing ? null : saveAndServiceBtn,   // PATIENT_FORM_ONE_V1 — услугу к уже заведённому добавляют из его карты
         primaryBtn,
     ));
 
@@ -664,9 +665,13 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
     }
 
     // Сохранение — это сохранение полей плюс решение окна, куда идти дальше.
+    // Решение едет С НАЖАТИЕМ, а не лежит в переменной окна: общая изменяемая
+    // «хочу услуги» связывала бы два нажатия в одно, а между нажатием и картой
+    // успевает встать страж дубликатов. Услугу к уже заведённому добавляют из
+    // его карты — поэтому в правке продолжения нет вовсе.
     async function save({ openVisit = false, force = false } = {}) {
-        wantVisit = !!openVisit && !editing;   // услугу к уже заведённому добавляют из его карты
-        return api.save({ force });
+        const onCreated = (openVisit && !editing) ? openServiceWizard : null;
+        return api.save({ force, onCreated });
     }
 
     return {
