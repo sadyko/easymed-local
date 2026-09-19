@@ -14,7 +14,8 @@ import { phoneInput } from '../phone-input.js?v=ph1';
 // бы, что один и тот же человек выглядит по-разному в заявке и в своей карте.
 import { formatPhone } from '../phone-format.js';
 // CRM_OWNERSHIP_V1 — «кто я»: кому записывается взятая заявка.
-import { selfUserId } from '../permissions.js';
+// CRM_REASSIGN_V1 — «я администратор»: кому видна раздача заявок.
+import { selfUserId, hasActorRole } from '../permissions.js';
 import { filterServicePool, serviceGroupCounts } from './service-search.js';   // CRM_SERVICE_FILTER_V1
 import { openCustDev } from './custdev.js';           // CUSTDEV_V1 — обзвон после визита
 import { canView } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev»
@@ -79,6 +80,14 @@ const hasStage = (key) => STATUSES.some(([k]) => k === key);
 const defaultSource = () => (SOURCES.length ? SOURCES[0][0] : 'call');
 // CRM_KANBAN_PAGE_V1 — сколько карточек рисуется в колонке сразу.
 const KANBAN_PAGE = 20;
+
+// CRM_REASSIGN_V1 — КОМУ МОЖНО ПЕРЕДАТЬ ЗАЯВКУ.
+//
+// Ровно те роли, которым schema-registry разрешает писать в crm_requests
+// (write.insert/update). Список один и тот же с двух сторон нарочно: предложить
+// в поле «Оператор» человека, которому сервер откажет открыть доску, значило бы
+// потерять заявку — она уехала бы к тому, кто её не увидит.
+const BOARD_ROLES = ['admin', 'registrar', 'callcenter'];
 
 // CRM_FILTERS_V1 — источник и период сужают доску. Живут в state, потому что
 // paintBody() перерисовывает только тело, без повторного запроса к базе.
@@ -1269,6 +1278,63 @@ async function paint() {
         // CRM_V7 — дата записи: питает автоматику (день прошёл без визита → «Не пришёл»).
         const schedInp = h('input', { type: 'date', value: r ? (r.scheduled_date || '') : '' });
 
+        // CRM_REASSIGN_V1 — «ОПЕРАТОР»: ЕДИНСТВЕННОЕ МЕСТО, ГДЕ ЗАЯВКУ ПЕРЕДАЮТ.
+        //
+        // Владелец: «in the crm we as an administrator change the operator of the
+        // card». Взять заявку СЕБЕ умела кнопка «Взять в работу», и она остаётся
+        // как была; передать её ДРУГОМУ не умел никто — во всём экране номер
+        // оператора писала только та кнопка, и только себе. Оператор заболел,
+        // ушёл со смены, уволился — его заявки оставались его навсегда: сервер
+        // не показывает чужие заявки никому, кроме администратора, так что новый
+        // хозяин их даже не нашёл бы.
+        //
+        // Поле видит ТОЛЬКО администратор, и это не украшение прав, а то же
+        // правило, что стоит на сервере: schema-registry сужает доску по
+        // assigned_to всем, кроме роли admin. Раздавать заявки может лишь тот,
+        // кто видит их все, — иначе «передал» означало бы «потерял».
+        const canReassign = hasActorRole(['admin']);
+        let operSel = null;
+        if (canReassign) {
+            operSel = h('select', {
+                'aria-label': 'Оператор, который ведёт заявку',
+                style: { width: '100%', boxSizing: 'border-box', padding: '10px 12px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px', background: 'var(--white, #fff)' },
+            });
+            // Выбор человека НЕ теряется, если список операторов доехал позже:
+            // без этой отметки перерисовка вернула бы поле к прежнему хозяину и
+            // молча отменила уже сделанную передачу.
+            let operTouched = false;
+            operSel.addEventListener('change', () => { operTouched = true; });
+            const ownerId = (r && r.assigned_to) ? String(r.assigned_to) : '';
+            const ownerName = (r && r.users && r.users.full_name) || '';
+            const fillOper = (people) => {
+                const keep = operTouched ? operSel.value : ownerId;
+                clear(operSel);
+                operSel.appendChild(h('option', { value: '' }, '— не назначен —'));
+                for (const p of people) {
+                    operSel.appendChild(h('option', { value: String(p.id) }, p.full_name || trf('Сотрудник №{id}', { id: p.id })));
+                }
+                // Родной <select> молча отбрасывает значение, которого нет среди
+                // пунктов, и поле показало бы «не назначен» — а сохранение тогда
+                // СНЯЛО бы оператора, ничего не спросив.
+                operSel.value = people.some((p) => String(p.id) === keep) ? keep : '';
+            };
+            // Нынешний хозяин известен ДО ответа сервера: окно можно сохранить в
+            // первую же секунду, и поле обязано к этому моменту говорить правду.
+            fillOper(ownerId ? [{ id: ownerId, full_name: ownerName }] : []);
+            supabase.from('users').select('id, full_name, role')
+                .in('role', BOARD_ROLES).eq('is_active', 1).order('full_name')
+                .then(({ data }) => {
+                    const pool = (data || []).slice();
+                    // Уволенного (is_active = 0) в списке нет, а его заявки есть.
+                    // Без этой строки открытие такой карточки уже само по себе
+                    // означало бы «снять оператора» при ближайшем сохранении.
+                    if (ownerId && !pool.some((p) => String(p.id) === ownerId)) {
+                        pool.unshift({ id: ownerId, full_name: ownerName });
+                    }
+                    fillOper(pool);
+                });
+        }
+
         // CRM_CONVERT_V3 — сохранение вынесено из кнопки: его переиспользует
         // «Оформить услугу», которой нужна уже существующая строка заявки
         // (у новой заявки нет id, а конверсия работает по нему).
@@ -1281,6 +1347,11 @@ async function paint() {
             const phone = phoneInp.value.trim() || (linkedPatient ? (linkedPatient.phone || '') : '');
             if (!phone && !linkedPatient) { toast('Укажите телефон.', 'fail'); return null; }
             const payload = { full_name: name, phone, source: srcChosen, note: noteInp.value.trim(), service_id: svcChosen || null, patient_id: linkedPatient ? linkedPatient.id : null, scheduled_date: schedInp.value || null };
+            // CRM_REASSIGN_V1 — ключ уходит на сервер ТОЛЬКО когда поле было
+            // нарисовано. Оператор, правящий комментарий в своей заявке, не
+            // должен отправлять «хозяин = такой-то»: поля он не видел, значения
+            // не выбирал, и ответственность за него на себя не брал.
+            if (operSel) payload.assigned_to = operSel.value ? Number(operSel.value) : null;
             // Дата записи назначена — активная заявка сама переходит в «Записан».
             // CRM_CONFIG_V1 — правило прежнее (дата назначена → «Записан»), но
             // целевая колонка проверяется: если её удалили, статус не трогаем.
@@ -1582,6 +1653,10 @@ async function paint() {
                     h('div', { style: { flex: 1 } }, field('Телефон', phoneWrap, { required: true })),
                     h('div', { style: { flex: 1 } }, field('Дата рождения', dobWrap)))),
                 field('Источник', srcRow),
+                // CRM_REASSIGN_V1 — «кто ведёт» стоит сразу за «откуда пришла»:
+                // это два факта о самой заявке, а всё ниже — о том, что пациенту
+                // нужно. Видно только администратору (см. объявление поля).
+                operSel ? field('Оператор', operSel) : null,
                 // CRM_SCHEDULE_V1 + CRM_MULTI_SERVICE_V1 — колл-центр набирает
                 // список услуг и назначает каждой дату. Раньше вместо этого была
                 // одна услуга и кнопка «Оформить услугу», которая проваливалась в
