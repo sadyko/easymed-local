@@ -8476,7 +8476,53 @@ export const STRINGS = {
   // FAST_REGISTRATION_V1 — быстрая регистрация из шапки списка пациентов.
   "Быстрая регистрация": {"en":"Fast registration","ru":"Быстрая регистрация","uz":"Tezkor roʻyxatga olish"},
   "Быстрая регистрация: пациент → услуги и врач → счёт → печать": {"en":"Fast registration: patient → services and doctor → invoice → print","ru":"Быстрая регистрация: пациент → услуги и врач → счёт → печать","uz":"Tezkor roʻyxatga olish: bemor → xizmatlar va shifokor → hisob → chop etish"},
-  "Сохранить и добавить услуги": {"en":"Save and add services","ru":"Сохранить и добавить услуги","uz":"Saqlash va xizmatlar qoʻshish"},
-  "Пациент → услуги и врач → счёт → печать. Пакеты услуг — через «Выбрать шаблон» на шаге услуг.": {"en":"Patient → services and doctor → invoice → print. Service packages — via “Pick a template” on the services step.","ru":"Пациент → услуги и врач → счёт → печать. Пакеты услуг — через «Выбрать шаблон» на шаге услуг.","uz":"Bemor → xizmatlar va shifokor → hisob → chop etish. Xizmat paketlari — xizmatlar bosqichidagi «Shablon tanlash» orqali."},
-  "— сохранить и добавить услуги": {"en":"— save and add services","ru":"— сохранить и добавить услуги","uz":"— saqlash va xizmatlar qoʻshish"},
+  // FAST_REG_ONE_SCREEN_V1 — второе лицо окна заведения («Сохранить и добавить
+  // услуги», его подсказка и подпись Enter) убрано вместе с самим режимом:
+  // быстрая регистрация стала своим окном. Ключей этих строк здесь больше нет —
+  // словарь, переживший свой экран, читается как живой текст продукта.
+
+  // WALK_IN_BOOKING_V1 — отказы безоконной регистрации «пришёл сейчас» (views/walk-in-booking.js)
+  "Укажите врача для услуги «{name}»": {"en":"Pick a doctor for the service “{name}”","ru":"Укажите врача для услуги «{name}»","uz":"«{name}» xizmati uchun shifokorni tanlang"},
+  "Не выбран пациент — регистрировать некого.": {"en":"No patient is selected — there is nobody to register.","ru":"Не выбран пациент — регистрировать некого.","uz":"Bemor tanlanmagan — roʻyxatga oladigan kishi yoʻq."},
+  "Строка без услуги — выберите услугу из каталога.": {"en":"A row with no service — pick a service from the catalogue.","ru":"Строка без услуги — выберите услугу из каталога.","uz":"Xizmatsiz qator — katalogdan xizmatni tanlang."},
+  "Визит не создан: {msg}": {"en":"The visit was not created: {msg}","ru":"Визит не создан: {msg}","uz":"Tashrif yaratilmadi: {msg}"},
+  "Визит не создан: сервер не вернул запись.": {"en":"The visit was not created: the server returned no record.","ru":"Визит не создан: сервер не вернул запись.","uz":"Tashrif yaratilmadi: server yozuvni qaytarmadi."},
+  "Счёт не выставлен: {msg}": {"en":"The invoice was not issued: {msg}","ru":"Счёт не выставлен: {msg}","uz":"Hisob chiqarilmadi: {msg}"},
+  // WALK_IN_ROLE_GATE_V1 — ранний отказ по роли: цепочку «карта → визит → счёт»
+  // проходят целиком только администратор и регистратор.
+  "Регистрировать визиты и выставлять счета может регистратор или администратор.": {"en":"Only a registrar or an administrator may register visits and issue invoices.","ru":"Регистрировать визиты и выставлять счета может регистратор или администратор.","uz":"Tashriflarni qayd etish va hisob chiqarishni faqat registrator yoki administrator amalga oshira oladi."},
+
+  // TEMPLATE_PICKER_V1 (FAST_REG_ONE_SCREEN_V1, T2) — reusable «Пакеты» modal.
+  "Пакеты услуг": {"en":"Service packages","ru":"Пакеты услуг","uz":"Xizmat paketlari"},
+  "{n} усл.": {"en":"{n} services","ru":"{n} усл.","uz":"{n} xizmat"},
+  "Не удалось загрузить пакеты: {msg}": {"en":"Could not load the packages: {msg}","ru":"Не удалось загрузить пакеты: {msg}","uz":"Paketlarni yuklab bo'lmadi: {msg}"},
+  "Пакетов пока нет — соберите первый в мастере визита («Сохранить как шаблон»).": {"en":"No packages yet — build the first one in the visit wizard (“Save as template”).","ru":"Пакетов пока нет — соберите первый в мастере визита («Сохранить как шаблон»).","uz":"Hozircha paketlar yo'q — birinchisini tashrif ustasida yig'ing («Shablon sifatida saqlash»)."},
+
+  // FAST_REG_ONE_SCREEN_V1 (T4) — «Быстрая регистрация» одним окном (views/fast-registration.js)
+  "Пациент → услуги и врач → счёт → печать": {"en":"Patient → services and doctor → invoice → print","ru":"Пациент → услуги и врач → счёт → печать","uz":"Bemor → xizmatlar va shifokor → hisob → chop etish"},
+  "— выберите его, и услуги запишутся на эту карту": {"en":"— pick one, and the services go onto that card","ru":"— выберите его, и услуги запишутся на эту карту","uz":"— uni tanlang, xizmatlar oʻsha kartaga yoziladi"},
+  "Направление и скидка": {"en":"Referral and discount","ru":"Направление и скидка","uz":"Yoʻllanma va chegirma"},
+  "Код отправителя (лечащий врач)": {"en":"Referrer code (attending doctor)","ru":"Код отправителя (лечащий врач)","uz":"Yoʻllovchi kodi (davolovchi shifokor)"},
+  "Тип скидки — это «Категория пациента» в разделе «Документы и резидентство»: процент по ней применяет сервер при выставлении счёта.": {"en":"The discount type is the «Категория пациента» field in the «Документы и резидентство» section: the server applies its percentage when the invoice is issued.","ru":"Тип скидки — это «Категория пациента» в разделе «Документы и резидентство»: процент по ней применяет сервер при выставлении счёта.","uz":"Chegirma turi — «Hujjatlar va rezidentlik» boʻlimidagi «Bemor toifasi»: uning foizini hisob chiqarishda server qoʻllaydi."},
+  "+Услуги": {"en":"+Services","ru":"+Услуги","uz":"+Xizmatlar"},
+  "+Пакеты": {"en":"+Packages","ru":"+Пакеты","uz":"+Paketlar"},
+  "Открыть карту": {"en":"Open the card","ru":"Открыть карту","uz":"Kartani ochish"},
+  "— сохранить и записать услуги": {"en":"— save and book the services","ru":"— сохранить и записать услуги","uz":"— saqlash va xizmatlarni yozish"},
+  "С НДС": {"en":"With VAT","ru":"С НДС","uz":"QQS bilan"},
+  "№ очереди": {"en":"Queue no.","ru":"№ очереди","uz":"Navbat raqami"},
+  "Уд.": {"en":"Del.","ru":"Уд.","uz":"Oʻch."},
+  "Добавьте услуги кнопкой «+Услуги» или пакетом": {"en":"Add services with the «+Services» button or with a package","ru":"Добавьте услуги кнопкой «+Услуги» или пакетом","uz":"Xizmatlarni «+Xizmatlar» tugmasi yoki paket orqali qoʻshing"},
+  "Пакет: {n} услуг(и) не найдено в каталоге": {"en":"Package: {n} service(s) not found in the catalogue","ru":"Пакет: {n} услуг(и) не найдено в каталоге","uz":"Paket: katalogda {n} ta xizmat topilmadi"},
+  "Не удалось открыть каталог услуг: {msg}": {"en":"Could not open the service catalogue: {msg}","ru":"Не удалось открыть каталог услуг: {msg}","uz":"Xizmatlar katalogini ochib boʻlmadi: {msg}"},
+  "Пациент № {mrn} · {name}": {"en":"Patient no. {mrn} · {name}","ru":"Пациент № {mrn} · {name}","uz":"Bemor № {mrn} · {name}"},
+  "Услуги не записаны: {msg}": {"en":"The services were not booked: {msg}","ru":"Услуги не записаны: {msg}","uz":"Xizmatlar yozilmadi: {msg}"},
+  "Тариф визита не спрошен: {msg}": {"en":"The visit tariff was not requested: {msg}","ru":"Тариф визита не спрошен: {msg}","uz":"Tashrif tarifi soʻralmadi: {msg}"},
+  "Номера очереди не выданы: {msg}": {"en":"Queue numbers were not issued: {msg}","ru":"Номера очереди не выданы: {msg}","uz":"Navbat raqamlari berilmadi: {msg}"},
+  "Счёт № {no}": {"en":"Invoice no. {no}","ru":"Счёт № {no}","uz":"Hisob № {no}"},
+  "Пациент, визит и счёт созданы. Печать счёта — кнопкой в шапке таблицы.": {"en":"The patient, the visit and the invoice are created. Print the invoice with the button in the table header.","ru":"Пациент, визит и счёт созданы. Печать счёта — кнопкой в шапке таблицы.","uz":"Bemor, tashrif va hisob yaratildi. Hisobni jadval sarlavhasidagi tugma bilan chop eting."},
+  "Пациент зарегистрирован, счёт выставлен.": {"en":"The patient is registered and the invoice is issued.","ru":"Пациент зарегистрирован, счёт выставлен.","uz":"Bemor roʻyxatga olindi, hisob chiqarildi."},
+  "Скидка: {sum}": {"en":"Discount: {sum}","ru":"Скидка: {sum}","uz":"Chegirma: {sum}"},
+  "Услуги не добавлены — карта пациента не изменена.": {"en":"No services were added — the patient's card is unchanged.","ru":"Услуги не добавлены — карта пациента не изменена.","uz":"Xizmatlar qoʻshilmadi — bemor kartasi oʻzgarmadi."},
+  "Визит создан, счёт не выставлен: {msg} — выставьте счёт из карты пациента": {"en":"The visit is created, the invoice is not issued: {msg} — issue the invoice from the patient's card","ru":"Визит создан, счёт не выставлен: {msg} — выставьте счёт из карты пациента","uz":"Tashrif yaratildi, hisob chiqarilmadi: {msg} — hisobni bemor kartasidan chiqaring"},
+  "Визит создан, счёт не выставлен. Выставьте его из карты пациента.": {"en":"The visit is created, the invoice is not issued. Issue it from the patient's card.","ru":"Визит создан, счёт не выставлен. Выставьте его из карты пациента.","uz":"Tashrif yaratildi, hisob chiqarilmadi. Uni bemor kartasidan chiqaring."},
 };

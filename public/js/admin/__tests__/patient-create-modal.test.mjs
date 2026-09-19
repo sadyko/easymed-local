@@ -841,56 +841,116 @@ test('новая карта: раздел «Здоровье» и его пол�
 });
 
 // ===========================================================================
-// FAST_REGISTRATION_V1 (2026-09-19) — ТО ЖЕ окно, открытое как «Быстрая
-// регистрация» из шапки списка пациентов.
+// FAST_REG_ONE_SCREEN_V1 (2026-09-19) — БЫСТРОГО РЕЖИМА У ЭТОГО ОКНА НЕТ.
 //
-// Владелец показал экран чужой системы: реквизиты пациента сверху, таблица
-// услуг с врачом на строке снизу, кнопки «Печать» и «+Услуги». Это и есть
-// здешний путь «пациент → услуги → счёт → печать», просто пройденный в один
-// заход. Поэтому второго окна не заводится: у этого меняются ИМЯ и ГЛАВНОЕ
-// ДЕЙСТВИЕ, а поля, проверки и страж дубликатов остаются те же — иначе
-// быстрая регистрация тихо разошлась бы с обычной.
+// FAST_REGISTRATION_V1 давал этому окну второе лицо: имя «Быстрая регистрация»,
+// главное действие «Сохранить и добавить услуги» и второе окно (мастер услуг)
+// следом. Между двумя окнами карта успевала создаться, и регистратор, закрывший
+// второе, оставлял пациента без визита, счёта и очереди.
+//
+// Быстрая регистрация стала СВОИМ окном (views/fast-registration.js, проверяет
+// её __tests__/fast-registration.test.mjs), а это окно вернулось к тому, чем
+// было: заведение и правка карты. Здесь проверяется, что второго лица у него не
+// осталось — иначе к одному и тому же вело бы два разных пути.
 // ===========================================================================
-test('FAST_REGISTRATION_V1: быстрый режим переименовывает окно и делает главным «Сохранить и добавить услуги»', () => {
-  reset();
-  const dlg = modal.buildPatientCreateDialog({ quick: true });
-
-  const h2 = walk(dlg.card).find((n) => n.tagName === 'H2');
-  assert.ok(h2 && textOf(h2).includes('Быстрая регистрация'),
-    'окно не назвалось быстрой регистрацией: ' + (h2 ? textOf(h2) : 'шапки нет вовсе'));
-
-  // Главное действие — с услугами. Это ТА ЖЕ кнопка, что и «Добавить услугу»
-  // в обычном режиме (save({ openVisit: true }) → мастер услуг), поэтому путь
-  // не дублируется: у неё меняются только подпись и вес.
-  assert.ok(textOf(dlg.saveAndServiceBtn).includes('Сохранить и добавить услуги'),
-    'главное действие подписано не так: ' + textOf(dlg.saveAndServiceBtn));
-  assert.ok(hasClass(dlg.saveAndServiceBtn, 'btn-primary'),
-    'переход к услугам не выглядит главным: ' + dlg.saveAndServiceBtn.className);
-
-  // «Сохранить» никуда не делось — регистратор вправе завести карту и без
-  // услуг (человек пришёл за справкой, услуги выпишут позже).
-  assert.ok(textOf(dlg.saveOnlyBtn).includes('Сохранить'),
-    'простое сохранение пропало: ' + textOf(dlg.saveOnlyBtn));
-  assert.ok(!hasClass(dlg.saveOnlyBtn, 'btn-primary'),
-    'в подвале два главных действия — выбирать придётся чтением');
-
-  // Путь сказан словами: за окном стоит мастер услуг, и пакеты живут в нём.
-  assert.ok(textOf(dlg.card).includes('Пациент → услуги и врач → счёт → печать'),
-    'окно не объяснило, что будет дальше');
-});
-
-test('FAST_REGISTRATION_V1: без быстрого режима окно ровно такое же, каким было', () => {
+test('FAST_REG_ONE_SCREEN_V1: окно заведения — одно лицо, без быстрого режима', () => {
   reset();
   const dlg = modal.buildPatientCreateDialog({});
 
   const h2 = walk(dlg.card).find((n) => n.tagName === 'H2');
-  assert.ok(textOf(h2).includes('Создать пациента'), 'обычное окно переименовалось: ' + textOf(h2));
+  assert.ok(textOf(h2).includes('Создать пациента'), 'окно заведения переименовалось: ' + textOf(h2));
   assert.ok(textOf(dlg.saveOnlyBtn).includes('Создать пациента'),
-    'главная кнопка обычного окна изменилась: ' + textOf(dlg.saveOnlyBtn));
-  assert.ok(hasClass(dlg.saveOnlyBtn, 'btn-primary'), 'обычное окно осталось без главного действия');
+    'главная кнопка окна изменилась: ' + textOf(dlg.saveOnlyBtn));
+  assert.ok(hasClass(dlg.saveOnlyBtn, 'btn-primary'), 'окно осталось без главного действия');
+  // «Добавить услугу» — дневной путь регистратуры (завести карту и сразу
+  // выписать услугу), и она была здесь ДО быстрого режима: убирать её вместе с
+  // ним значило бы отнять то, чего он не приносил.
   assert.ok(textOf(dlg.saveAndServiceBtn).includes('Добавить услугу'),
-    'третья кнопка обычного окна изменилась: ' + textOf(dlg.saveAndServiceBtn));
-  assert.ok(!hasClass(dlg.saveAndServiceBtn, 'btn-primary'), 'в обычном окне стало два главных действия');
+    'третья кнопка окна изменилась: ' + textOf(dlg.saveAndServiceBtn));
+  assert.ok(!hasClass(dlg.saveAndServiceBtn, 'btn-primary'), 'в подвале стало два главных действия');
   assert.ok(!textOf(dlg.card).includes('Быстрая регистрация'),
-    'быстрый режим просочился в обычное окно');
+    'быстрый режим просочился в окно заведения');
+  assert.ok(!textOf(dlg.card).includes('Сохранить и добавить услуги'),
+    'главное действие быстрого режима осталось в окне заведения');
+
+  // И признака, которым его включали, тоже нет: quick:true ничего не меняет.
+  const quickish = modal.buildPatientCreateDialog({ quick: true });
+  assert.ok(!textOf(quickish.card).includes('Быстрая регистрация'),
+    'окно всё ещё знает про быстрый режим — значит, путей к одному и тому же снова два');
+});
+
+// ===========================================================================
+// PATIENT_FIELDS_V1 (2026-09-19) — набор полей пациента ОТДЕЛЬНО от окна.
+//
+// «Быстрая регистрация в одном экране» рисует те же поля пациента, но не в
+// окне, а на странице. Если бы она собрала их у себя, два набора полей
+// разошлись бы молча: поле, добавленное в окно, не появилось бы на экране, а
+// проверка, поправленная на экране, не сработала бы в окне. Поэтому поля —
+// ОДИН строитель, и вот проверка, что он рисует и собирает ровно то же.
+// ===========================================================================
+test('PATIENT_FIELDS_V1: набор полей рисуется в обычный контейнер, и collect() отдаёт то же, что окно', () => {
+  reset();
+  const box = mk('div');
+  const f = modal.buildPatientFields(box, {
+    sections: ['personal', 'documents', 'contacts'], withSearchStrip: false,
+  });
+
+  // 1. Нарисованы ровно запрошенные разделы — и ни одного лишнего.
+  const secs = walk(box).filter((n) => hasClass(n, 'mg-section'));
+  assert.equal(secs.length, 3, 'разделов не три: ' + secs.length);
+  const titles = walk(box).filter((n) => n.tagName === 'H3')
+    .map((n) => textOf(n).replace(/<svg[\s\S]*?<\/svg>/g, '').replace(/\s+/g, ' ').trim())
+    .map((t) => t.replace(/^[1234]\s*/, ''));
+  assert.deepEqual(titles, ['Личные данные', 'Документы и резидентство', 'Контакты и адрес'],
+    'разделы набора: ' + titles.join(' | '));
+  assert.ok(!titles.some((t) => t.startsWith('Здоровье')), 'раздел «Здоровье» нарисован, хотя его не просили');
+
+  // 2. Тот же минимум, собранный по реестру, даёт ТОТ ЖЕ payload, что окно.
+  f.fields.last_name.value = 'Иванов';
+  f.fields.first_name.value = 'Иван';
+  f.fields.date_of_birth.value = '1990-01-01';
+  f.setGender('M');
+  const got = f.collect();
+  assert.ok(got, 'набор полей не собрался: ' + toasts.join(' | '));
+
+  const dlg = modal.buildPatientCreateDialog({});
+  fillMinimum(dlg, { last_name: 'Иванов', first_name: 'Иван', date_of_birth: '1990-01-01', gender: 'M' });
+  const want = dlg.collect();
+  assert.ok(want, 'окно не собралось: ' + toasts.join(' | '));
+
+  for (const k of Object.keys(got)) {
+    assert.ok(k in want, 'в наборе полей есть ключ, которого нет у окна: ' + k);
+    assert.deepEqual(got[k], want[k], 'ключ «' + k + '» разошёлся с окном');
+  }
+  // Поля НЕнарисованного раздела в payload не попадают вовсе — пустыми в том
+  // числе: пустая строка затёрла бы то, что уже записано в карте.
+  for (const k of ['allergies', 'blood_type', 'chronic_conditions', 'occupation', 'emergency_contact_phone']) {
+    assert.ok(!(k in got), 'поле нерисованного раздела уехало в payload: ' + k);
+    assert.ok(k in want, 'окно потеряло поле «' + k + '» — проверка смотрит не туда');
+  }
+
+  // 3. При заведении строка поиска дубликатов приходит вместе с полями.
+  const box2 = mk('div');
+  const f2 = modal.buildPatientFields(box2, {});
+  assert.ok(walk(box2).some((n) => n.tagName === 'LABEL' && textOf(n).startsWith('Найти существующего пациента')),
+    'строка поиска существующего пациента не нарисовалась');
+  assert.ok(f2.searchStrip && f2.searchStrip.input, 'строка поиска не отдана вызвавшему');
+});
+
+test('PATIENT_FIELDS_V1: save() сохраняет пациента и отдаёт его — без всякого окна', async () => {
+  reset();
+  const box = mk('div');
+  const f = modal.buildPatientFields(box, {});
+  f.fields.last_name.value = 'Иванов';
+  f.fields.first_name.value = 'Иван';
+  f.fields.date_of_birth.value = '1990-01-01';
+  f.setGender('M');
+
+  const saved = await f.save();
+  assert.equal(inserted.length, 1, 'вставки не случилось: ' + toasts.join(' | '));
+  assert.equal(inserted[0].table, 'patients');
+  assert.equal(inserted[0].values.last_name, 'Иванов');
+  assert.equal(inserted[0].values.gender, 'male', 'пол не перевёлся в колонку');
+  assert.ok(saved && saved.id, 'сохранение не вернуло пациента');
+  assert.ok(String(saved.fullName || '').includes('Иванов'), 'у сохранённого нет имени: ' + JSON.stringify(saved));
 });

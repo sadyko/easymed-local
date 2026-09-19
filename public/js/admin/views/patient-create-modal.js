@@ -136,10 +136,10 @@ export function fitsViewport(innerH) {
  * @param {object}   opts
  * @param {Function} opts.onNavigate  переход по приложению (как в ctx)
  * @param {Function} [opts.onSaved]   вызывается с сохранённым пациентом
- * @param {boolean}  [opts.quick]     FAST_REGISTRATION_V1 — быстрый режим:
- *   то же окно, но главное действие в подвале ведёт СРАЗУ в мастер услуг
- *   (пациент → услуги и врач → счёт → печать), а не закрывается на карте.
- *   Передаётся дальше как есть: решение одно, и живёт оно в сборщике.
+ *
+ * FAST_REG_ONE_SCREEN_V1 — «быстрого режима» у этого окна нет: быстрая
+ * регистрация живёт своим окном (views/fast-registration.js) и делает пациента,
+ * услуги, счёт и очередь одним нажатием.
  */
 export function openPatientCreateModal(opts = {}) {
     // PATIENT_CREATE_GATE_V1 — ЕДИНСТВЕННАЯ проверка права на заведение
@@ -177,17 +177,43 @@ export function openPatientEditModal(patient, opts = {}) {
 }
 
 /**
- * Собрать окно, НЕ вставляя его в документ. Отдельно от open* ради теста:
- * проверять состав первого экрана, раскрытие и сбор значений можно без
- * document.body и без таймеров.
+ * PATIENT_FIELDS_V1 (2026-09-19) — НАБОР ПОЛЕЙ ПАЦИЕНТА БЕЗ ОКНА.
+ *
+ * Поля пациента жили одним замыканием вместе с оболочкой окна: шапкой,
+ * подвалом, Escape и переходом в мастер услуг. «Быстрая регистрация в одном
+ * экране» рисует ТЕ ЖЕ поля, но не окном, а страницей, — и если бы она
+ * собрала их у себя, два набора полей разошлись бы МОЛЧА: поле, добавленное
+ * сюда, не появилось бы там, а проверка, поправленная там, не сработала бы
+ * здесь. Для карты пациента это не косметика: расходятся обязательные поля и
+ * правила, по которым карта заводится.
+ *
+ * Поэтому набор полей — отдельный строитель: он рисует разделы в ЛЮБОЙ
+ * container и отдаёт реестр полей, collect() и save(). Окно заведения
+ * (buildPatientCreateDialog ниже) — оболочка вокруг него, и ничего больше.
+ *
+ * @param {HTMLElement} container            куда добавлять разделы
+ * @param {object}   [opts]
+ * @param {object}   [opts.patient]          строка пациента — правка (иначе заведение)
+ * @param {string[]} [opts.sections]         подмножество из personal · documents · contacts · health
+ * @param {boolean}  [opts.withSearchStrip]  строка поиска существующего пациента (по умолчанию — при заведении)
+ * @param {Function} [opts.onNavigate]       переход по приложению (как в ctx)
+ * @param {Function} [opts.onSaved]          вызывается с сохранённой картой
+ * @param {Function} [opts.close]            закрыть то, во что встроены поля (окно — себя, страница — ничего)
+ * @returns {{fields, state, collect, save, setGender, photo, searchStrip, tg}}
  */
-export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, quick = false } = {}) {
-    const navigate = typeof onNavigate === 'function' ? onNavigate : () => {};
-    // PATIENT_FORM_ONE_V1 — режим правки: то же окно, заполненное строкой пациента.
+export function buildPatientFields(container, {
+    patient = null,
+    sections = ['personal', 'documents', 'contacts', 'health'],
+    // Строка поиска дубликатов нужна при ЗАВЕДЕНИИ и бессмысленна при правке:
+    // это и есть тот самый пациент (PATIENT_FORM_ONE_V1).
+    withSearchStrip = !(patient && patient.id),
+    onNavigate, onSaved, close,
+} = {}) {
+    const navigate  = typeof onNavigate === 'function' ? onNavigate : () => {};
+    const closeHost = typeof close === 'function' ? close : () => {};
+    const has = (name) => sections.includes(name);
+    // PATIENT_FORM_ONE_V1 — режим правки: те же поля, заполненные строкой пациента.
     const editing = !!(patient && patient.id);
-    // FAST_REGISTRATION_V1 — быстрая регистрация. Правка уже заведённой карты
-    // быстрой не бывает: услуги к такому пациенту добавляют из его карты.
-    const fast = !!quick && !editing;
     const pv = (name) => (editing && patient[name] != null ? String(patient[name]) : '');
     const state = {
         gender:      editing ? ({ male: 'M', female: 'F', M: 'M', F: 'F' }[patient.gender] || '') : '',
@@ -200,87 +226,56 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
     // Реестр полей. Собираем значения ПО НЕМУ, а не querySelectorAll по DOM:
     // телефонный контрол — обёртка со своим .value (голый «+998» отдаёт пустоту),
     // и обход живого дерева этого не увидел бы.
+    //
+    // PATIENT_FIELDS_V1 — поле попадает в реестр ТАМ, ГДЕ ОНО НАРИСОВАНО:
+    // payload не должен нести пустые ключи разделов, которых на экране не было,
+    // иначе правка одного раздела затирала бы соседний.
     const fields = {};
     const phoneFields = new Set();
     const reg = (name, el) => { fields[name] = el; return el; };
     const regPhone = (name, el) => { phoneFields.add(name); return reg(name, el); };
 
-    const overlay = h('div', { class: 'modal', style: { zIndex: '150' } });
-    const close = () => { document.removeEventListener('keydown', onKey); fadeOutAndRemove(overlay); };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
-
-    // MODAL_COMPACT_OPTOUT_V1 — .modal-compact ОБЯЗАТЕЛЕН, а не украшение:
-    // admin.css растягивает всякую .modal-card, кроме помеченной этим классом,
-    // до calc(100vw - 24px) × calc(100vh - 24px) с !important — а авторский
-    // !important бьёт встроенный стиль, поэтому width: 1240px ниже без этого
-    // класса не значил ничего. На мониторе 1920 выверенная двухколоночная
-    // вёрстка расползалась на 1896 px. Тем же классом пользуются десять других
-    // окон (admission-modal, cashier-desk, crm…).
-    const card = h('div', {
-        // PATIENT_FORM_REWRITE_V1 — `has-groups` убран: разделы идут ОДИН ПОД
-        // ДРУГИМ во всю ширину, как на образце. Двухколоночная раскладка
-        // экономила высоту, но разрывала порядок: «Документы» читались справа
-        // от «Личных данных», а не после них.
-        class: 'modal-card modal-grouped mg-dense modal-compact pc-form',
-        'data-dialog': 'patient-create',
-        style: {
-            width: METRICS.cardWidth + 'px',
-            maxWidth: 'calc(100vw - 32px)',
-            maxHeight: 'calc(100vh - ' + METRICS.viewportGap + 'px)',
-        },
-    });
-    overlay.appendChild(card);
-
-    // PATIENT_FORM_REWRITE_V1 — приглашение в Telegram переехало в ШАПКУ.
-    // Это не поле карты, а действие над пациентом: раньше оно стояло полем в
-    // ряду с адресом и гражданством, и его искали глазами среди того, что
-    // заполняют. Номер берётся у поля телефона этого же окна.
+    // PATIENT_FORM_REWRITE_V1 — приглашение в Telegram НЕ поле карты, а действие
+    // над пациентом: раньше оно стояло полем в ряду с адресом и гражданством, и
+    // его искали глазами среди того, что заполняют. Строитель его отдаёт, а куда
+    // поставить (окно — в шапку) решает оболочка. Номер берётся у поля телефона.
     const tg = telegramBlock(state, () => fields.phone && fields.phone.value);
-    // FAST_REGISTRATION_V1 — у быстрого режима своё имя и своя строка пути.
-    // Строка нужна не как украшение: окно то же самое, и без неё регистратор
-    // не отличит быструю регистрацию от обычной, пока не дочитает подвал.
-    // Вёрстки она не заводит — это готовая .mg-hint в готовой шапке.
-    const headTitle = fast ? 'Быстрая регистрация'
-        : (editing ? 'Редактирование карты пациента' : 'Создать пациента');
-    card.appendChild(h('header', { class: 'modal-head' },
-        h('h2', null, Icon(fast ? 'Rocket' : 'Patients', { size: 16 }), ' ', tr(headTitle)),
-        fast ? h('span', { class: 'mg-hint', style: { marginLeft: '12px' } },
-            'Пациент → услуги и врач → счёт → печать. Пакеты услуг — через «Выбрать шаблон» на шаге услуг.') : null,
-        h('span', { class: 'grow' }),
-        tg,
-        h('button', { class: 'modal-close', onclick: close }, '×'),
-    ));
-
-    const body = h('div', { class: 'modal-body' });
-    card.appendChild(body);
 
     // ---- Поиск существующего пациента (одной строкой, во всю ширину) -------
-    const search = searchStrip(navigate, close);
-    if (!editing) body.appendChild(search.el);   // PATIENT_FORM_ONE_V1 — дубликаты ищут при заведении, не при правке
+    const search = searchStrip(navigate, closeHost);
+    if (withSearchStrip) container.appendChild(search.el);
 
-    // ---- Левая колонка: личные данные --------------------------------------
     // DATE_NUMERIC_V1 — дата рождения показана цифрами: её сверяют с паспортом.
     // Подпись пустого поля — сама дата примером: «15.11.1994» объясняет порядок
     // чисел лучше, чем «ДД.ММ.ГГГГ», и не требует расшифровки.
     // `autocomplete="bday"` — браузер знает это поле в лицо и подставляет
     // сохранённую дату рождения; `off` здесь просто отказывался от помощи.
-    const dobInput = reg('date_of_birth', h('input', {
+    const dobInput = h('input', {
         name: 'date_of_birth', type: 'date', placeholder: '15.11.1994',
         // CALENDAR_MONTH_INDEX_V1 — верхняя граница у ДАТЫ РОЖДЕНИЯ это сегодня:
         // тогда в списке годов нет будущих (он и открывался на 2031-м), а
         // «завтра» календарь просто не даст выбрать — вместо отказа после.
         max: new Date().toISOString().slice(0, 10),
         'data-date-numeric': '', autocomplete: 'bday', value: pv('date_of_birth').slice(0, 10),
-    }));
+    });
     const ageInput = h('input', { name: '__age', readOnly: true, placeholder: '—' });
-    const categorySel = reg('category_id', categorySelect(editing ? patient.category_id : null));   // CATEGORY_DISCOUNT_V1 — имя поля = имя колонки, иначе collect() соберёт ключ, который сервер молча выбросит
+    // CATEGORY_DISCOUNT_V1 — имя поля = имя колонки, иначе collect() соберёт
+    // ключ, который сервер молча выбросит. Список стоит в «Документах», а
+    // подставляет его по возрасту «Дата рождения» из соседнего раздела —
+    // поэтому оба контрола собираются здесь, до разделов.
+    //
+    // PATIENT_FIELDS_V1 — но собирается он ТОЛЬКО когда раздел «Документы»
+    // просят: categorySelect() спрашивает справочник категорий клиники
+    // запросом, и экрану, показывающему одни личные данные, этот запрос не
+    // нужен вовсе — как и скрытое поле, которого на нём нет.
+    const categorySel = has('documents') ? categorySelect(editing ? patient.category_id : null) : null;
     if (editing) { const age = computeAge(dobInput.value); ageInput.value = (age == null || age < 0 || age > 130) ? '' : String(age); }
     dobInput.addEventListener('input', () => {
         const age = computeAge(dobInput.value);
         ageInput.value = (age == null || age < 0 || age > 130) ? '' : String(age);
-        // Подставляем ТОЛЬКО если такая категория есть в справочнике клиники.
-        if (!categorySel.value) categorySel.value = categoryOptionByName(categorySel, categoryFromAge(age));
+        // Подставляем ТОЛЬКО если такая категория есть в справочнике клиники —
+        // и только если сам список на экране есть.
+        if (categorySel && !categorySel.value) categorySel.value = categoryOptionByName(categorySel, categoryFromAge(age));
     });
 
     const sexChips = radioChips('gender',
@@ -289,18 +284,18 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
         (v) => { state.gender = v; },
         { nowrap: true });
 
-    // ── Раздел 1: личные данные ────────────────────────────────────────────
-    // Фото стоит ПЛИТКОЙ слева и держит три ряда полей: карта пациента узнаётся
-    // в лицо, и прятать снимок за раскрытием было неправильно. Email здесь же,
-    // рядом с телефонами: это способ связи, а не документ.
+    // Фото стоит ПЛИТКОЙ слева и держит три ряда полей первого раздела: карта
+    // пациента узнаётся в лицо, и прятать снимок за раскрытием было неправильно.
     const photo = photoBlock(state);
     if (editing && patient.photo_url) photo.setPhoto(patient.photo_url);
-    const geo   = geoCascade();
-    reg('country',  geo.countrySel);
-    reg('region',   geo.regionSel);
-    reg('district', geo.districtSel);
+    // PATIENT_FIELDS_V1 — каскад «страна → регион → район» строится ТОЛЬКО для
+    // раздела «Контакты»: он разворачивает справочник из 206 районов, и экрану
+    // без адреса это работа впустую.
+    const geo = has('contacts') ? geoCascade() : null;
 
-    body.appendChild(mgSection('Личные данные', [
+    // ── Раздел 1: личные данные ────────────────────────────────────────────
+    // Email здесь же, рядом с телефонами: это способ связи, а не документ.
+    if (has('personal')) container.appendChild(mgSection('Личные данные', [
         h('div', { class: 'pc-id' },
             h('div', { class: 'pc-id-photo' }, photo.el),
             h('div', { class: 'pc-id-fields' },
@@ -310,7 +305,7 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
                     field('Отчество',          reg('middle_name', nameInput('middle_name', 'Рустамовна', pv('middle_name')))),
                 ),
                 mgGrid(3,
-                    field(['Дата рождения ', req()], dobInput),
+                    field(['Дата рождения ', req()], reg('date_of_birth', dobInput)),
                     field('Возраст', ageInput),
                     field(['Пол ', req()], sexChips),
                 ),
@@ -329,7 +324,7 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
     // ── Раздел 2: документы и резидентство ─────────────────────────────────
     // Резидентство и язык — сверху: от них зависит, какие документы вообще
     // спрашивать и на каком языке разговаривать с пациентом.
-    body.appendChild(mgSection('Документы и резидентство', [
+    if (has('documents')) container.appendChild(mgSection('Документы и резидентство', [
         mgGrid(3,
             field('Резидентство', radioChips('__residency',
                 [['resident', 'Резидент РУз'], ['nonresident', 'Нерезидент']],
@@ -347,7 +342,7 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
         // но обе возможности живые: категория считает деньги, а предупреждение
         // читают перед приёмом. Место им здесь — это тоже «учёт пациента».
         mgGrid(3,
-            field('Категория пациента', categorySel),
+            field('Категория пациента', reg('category_id', categorySel)),
             field('Поведение / предупреждение',
                 reg('behavior_note', textareaWith({
                     name: 'behavior_note', rows: '1',
@@ -357,113 +352,43 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
     ], { step: 2 }));
 
     // ── Раздел 3: контакты и адрес ─────────────────────────────────────────
-    body.appendChild(mgSection('Контакты и адрес', [
-        mgGrid(3,
-            field('Страна', geo.countrySel),
-            field('Регион', geo.regionSel),
-            field('Район',  geo.districtSel),
-        ),
-        mgGrid(3,
-            field('Махалля', reg('mahalla', h('input', { name: 'mahalla', placeholder: 'Юнусабад-3', value: pv('mahalla') }))),
-            field('Улица, дом, квартира', reg('address', h('input', { name: 'address', placeholder: 'ул. Амира Темура 12, кв. 47', value: pv('address') })), 2),
-        ),
-    ], { step: 3 }));
-    if (editing) geo.preset({ country: patient.country, region: patient.region, district: patient.district });
+    if (has('contacts')) {
+        reg('country',  geo.countrySel);
+        reg('region',   geo.regionSel);
+        reg('district', geo.districtSel);
+        container.appendChild(mgSection('Контакты и адрес', [
+            mgGrid(3,
+                field('Страна', geo.countrySel),
+                field('Регион', geo.regionSel),
+                field('Район',  geo.districtSel),
+            ),
+            mgGrid(3,
+                field('Махалля', reg('mahalla', h('input', { name: 'mahalla', placeholder: 'Юнусабад-3', value: pv('mahalla') }))),
+                field('Улица, дом, квартира', reg('address', h('input', { name: 'address', placeholder: 'ул. Амира Темура 12, кв. 47', value: pv('address') })), 2),
+            ),
+        ], { step: 3 }));
+        if (editing) geo.preset({ country: patient.country, region: patient.region, district: patient.district });
+    }
 
     // ── Раздел 4: здоровье и экстренная связь ──────────────────────────────
     // PATIENT_FORM_ONE_V1 — эти поля жили только в окне правки; теперь они в
     // ОДНОМ окне с заведением. Хронические заболевания — выбор из справочника
     // клиники (CHRONIC_REF_V1), а не свободный текст: одинаково названные
     // болезни потом считаются и ищутся.
-    const chronic = chronicPicker(pv('chronic_conditions'));
-    body.appendChild(mgSection('Здоровье и экстренная связь', [
-        mgGrid(3,
-            field('Группа крови', reg('blood_type', h('input', { name: 'blood_type', placeholder: 'напр. O(I) Rh+', value: pv('blood_type') }))),
-            field('Аллергии', reg('allergies', textareaWith({ name: 'allergies', rows: '1', placeholder: 'напр. пенициллин, йод' }, pv('allergies')))),
-            field('Хронические заболевания', reg('chronic_conditions', chronic)),
-        ),
-        mgGrid(3,
-            field('Профессия', reg('occupation', h('input', { name: 'occupation', placeholder: 'напр. учитель', value: pv('occupation') }))),
-            field('Экстренный контакт — имя', reg('emergency_contact_name', h('input', { name: 'emergency_contact_name', placeholder: 'напр. Каримов Рустам, супруг', value: pv('emergency_contact_name') }))),
-            field('Экстренный контакт — телефон', regPhone('emergency_contact_phone', phoneInput('emergency_contact_phone', '+998 90 000 00 00', { value: pv('emergency_contact_phone') }))),
-        ),
-    ], { step: 4 }));
-
-    // PATIENT_FORM_REWRITE_V1 — раскрытия «Подробнее» больше нет: всё, что оно
-    // прятало, разошлось по трём разделам выше. setMore/isMoreOpen оставлены
-    // заглушками — их зовут снаружи (возврат из мастера услуг открывал окно
-    // сразу раскрытым), и падать на несуществующей функции они не должны.
-    function setMore() { state.moreOpen = false; }
-
-    // ---- Подвал -------------------------------------------------------------
-    // PATIENT_FORM_REWRITE_V1 — подвал по образцу: «Отмена» и «Создать
-    // пациента». «Добавить услугу» ОСТАВЛЕНА третьей кнопкой: на образце её
-    // нет, но это дневной путь регистратуры — завести карту и сразу выписать
-    // услугу; убрать её значило бы заставить искать пациента заново сразу
-    // после того, как его завели.
-    //
-    // FAST_REGISTRATION_V1 — в быстром режиме те же две кнопки МЕНЯЮТСЯ
-    // ВЕСОМ, а не составом: главное действие — «Сохранить и добавить услуги»
-    // (тот же save({ openVisit: true }), тот же мастер услуг), а «Сохранить»
-    // остаётся рядом второстепенным. Заводить для этого третью кнопку или
-    // второе окно значило бы держать два пути к одному и тому же.
-    const cancelBtn = h('button', { class: 'btn btn-outline', type: 'button', onclick: close },
-        tr('Отмена'));
-    const saveAndServiceBtn = h('button', { class: 'btn ' + (fast ? 'btn-primary' : 'btn-outline'), type: 'button',
-        onclick: (ev) => guarded(ev, () => save({ openVisit: true })) },
-        Icon('Plus', { size: 14 }), ' ', tr(fast ? 'Сохранить и добавить услуги' : 'Добавить услугу'));
-    const saveOnlyBtn = h('button', { class: 'btn ' + (fast ? 'btn-outline' : 'btn-primary'), type: 'button',
-        onclick: (ev) => guarded(ev, () => save({ openVisit: false })) },
-        Icon('Check', { size: 14 }), ' ', tr(editing || fast ? 'Сохранить' : 'Создать пациента'));
-    // PATIENT_FORM_FLOW_V1 — Enter нажимает ГЛАВНОЕ действие подвала, каким бы
-    // оно ни было: в быстром режиме это переход к услугам, иначе — сохранение.
-    // Клавиша, делающая не то, что подсвечено главным, обманывает дважды.
-    const primaryBtn = fast ? saveAndServiceBtn : saveOnlyBtn;
-    // Горячая клавиша, о которой нигде не написано, не существует: подпись в
-    // подвале — часть самой возможности, а не украшение.
-    card.appendChild(h('footer', { class: 'modal-foot' },
-        h('span', { class: 'mg-hint' }, h('kbd', null, 'Enter'), ' ',
-            tr(fast ? '— сохранить и добавить услуги' : '— сохранить пациента')),
-        h('span', { class: 'grow' }),
-        cancelBtn,
-        // FAST_REGISTRATION_V1 — главное действие стоит последним, как во всех
-        // окнах продукта, поэтому в быстром режиме кнопки меняются местами.
-        editing ? null : (fast ? saveOnlyBtn : saveAndServiceBtn),   // PATIENT_FORM_ONE_V1 — услугу к уже заведённому добавляют из его карты
-        primaryBtn,
-    ));
-
-    // PATIENT_FORM_FLOW_V1 — Enter сохраняет пациента.
-    //
-    // Нажатие пропускается там, где Enter уже занят и значит другое:
-    //   • <textarea> «Поведение» — там это перенос строки;
-    //   • кнопка или ссылка в фокусе — Enter обязан нажать ИХ, иначе «Добавить
-    //     услугу» с клавиатуры срабатывала бы как «Сохранить»;
-    //   • открытый список (.uisel-pop) или календарь (.uidate-pop) — Enter
-    //     выбирает строку в нём;
-    //   • строка поиска существующего пациента — она ищет ДУБЛИКАТЫ, и
-    //     сохранять по Enter оттуда значило бы заводить второго такого же
-    //     ровно в тот миг, когда регистратор проверяет, нет ли первого;
-    //   • ввод с подсказкой (isComposing) — там Enter подтверждает подсказку.
-    function onEnter(e) {
-        if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
-        if (e.isComposing || e.keyCode === 229) return;
-        const t = e.target;
-        const tag = ((t && t.tagName) || '').toLowerCase();
-        if (tag === 'textarea' || tag === 'button' || tag === 'a') return;
-        if (t && t.closest && t.closest('.mg-search')) return;
-        if (typeof document !== 'undefined' && document.querySelector
-            && document.querySelector('.uisel-pop, .uidate-pop')) return;
-        e.preventDefault();
-        if (primaryBtn.disabled) return;
-        primaryBtn.click();
-    }
-    card.addEventListener('keydown', onEnter);
-
-    function guarded(ev, fn) {
-        const b = ev && ev.currentTarget;
-        if (b && b.disabled) return;
-        if (b) b.disabled = true;
-        Promise.resolve(fn()).finally(() => { if (b) b.disabled = false; });
+    if (has('health')) {
+        const chronic = chronicPicker(pv('chronic_conditions'));
+        container.appendChild(mgSection('Здоровье и экстренная связь', [
+            mgGrid(3,
+                field('Группа крови', reg('blood_type', h('input', { name: 'blood_type', placeholder: 'напр. O(I) Rh+', value: pv('blood_type') }))),
+                field('Аллергии', reg('allergies', textareaWith({ name: 'allergies', rows: '1', placeholder: 'напр. пенициллин, йод' }, pv('allergies')))),
+                field('Хронические заболевания', reg('chronic_conditions', chronic)),
+            ),
+            mgGrid(3,
+                field('Профессия', reg('occupation', h('input', { name: 'occupation', placeholder: 'напр. учитель', value: pv('occupation') }))),
+                field('Экстренный контакт — имя', reg('emergency_contact_name', h('input', { name: 'emergency_contact_name', placeholder: 'напр. Каримов Рустам, супруг', value: pv('emergency_contact_name') }))),
+                field('Экстренный контакт — телефон', regPhone('emergency_contact_phone', phoneInput('emergency_contact_phone', '+998 90 000 00 00', { value: pv('emergency_contact_phone') }))),
+            ),
+        ], { step: 4 }));
     }
 
     // ---- Сбор и сохранение ---------------------------------------------------
@@ -510,7 +435,19 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
         return payload;
     }
 
-    async function save({ openVisit = false, force = false } = {}) {
+    /**
+     * Сохранить набранное.
+     * @param {object}   [o]
+     * @param {boolean}  [o.force]      создать вопреки найденному дубликату
+     * @param {Function} [o.onCreated]  что делать ПОСЛЕ появления НОВОЙ карты —
+     *   намерение ЭТОГО нажатия, а не состояние строителя. Продолжение пути
+     *   («Добавить услугу» → мастер услуг) решается на кнопке, и общая
+     *   изменяемая переменная здесь означала бы, что второе окно, открытое
+     *   поверх первого, уводит чужое нажатие за собой. Зовётся и после
+     *   принудительного создания: продолжающему важно, что карта появилась,
+     *   а не как её завели.
+     */
+    async function save({ force = false, onCreated = null } = {}) {
         const payload = collect();
         if (!payload) return null;
         const photoUrl = await uploadPendingPhoto(state);
@@ -527,7 +464,7 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
             try {
                 const { data, error } = await supabase.rpc('patient_card_save', { patient_id: patient.id, values });
                 if (error) throw new Error(error.message || String(error));
-                close();
+                closeHost();
                 toast('Сохранено.');
                 if (typeof onSaved === 'function') onSaved(data || { ...patient, ...values });
                 return data || values;
@@ -548,32 +485,193 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
                 openDuplicatePatientDialog(e, {
                     onOpenExisting: async (c) => {
                         const p = await loadPatientById(c.id).catch(() => null);
-                        close();
+                        closeHost();
                         if (p) navigate('patient-card', p);
                         else   toast('Не удалось открыть карту пациента.', 'fail');
                     },
-                    onForceCreate: () => save({ openVisit, force: true }),
+                    // Намерение нажатия переживает переспрос: после «Создать
+                    // принудительно» продолжение обязано случиться ТАК ЖЕ, как
+                    // без него.
+                    onForceCreate: () => save({ force: true, onCreated }),
                 });
                 return null;
             }
             toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
             return null;
         }
-        close();
+        closeHost();
         toast('Пациент сохранён.');
         if (typeof onSaved === 'function') onSaved(created);
         else navigate('patients');
-        // REG_ADD_SERVICE_V1 — мастер услуг монтируется в document.body и
-        // переживает переход; грузим его лениво, чтобы окно заведения пациента
-        // не тянуло каталог услуг при каждом открытии.
-        if (openVisit && created && created.id) {
-            import('./visit-wizard.js?v=tier2')
-                .then((mod) => mod.openVisitWizard(null, {
-                    id: created.id, full_name: created.fullName, mrn: created.mrn, phone: created.phone,
-                }))
-                .catch((e) => toast(trf('Не удалось открыть мастер услуг: {msg}', { msg: (e && e.message) || e }), 'fail'));
-        }
+        // Путь после создания карты (мастер услуг) — дело того, кто эти поля
+        // показал, и он же решает, продолжать ли. Зовём и после принудительного
+        // создания: для продолжения важно, что карта появилась, а не как.
+        if (typeof onCreated === 'function') onCreated(created);
         return created;
+    }
+
+    return {
+        fields, state, collect, save,
+        setGender: (v) => { state.gender = v; sexChips.setValue(v); },
+        photo,          // PATIENT_PHOTO_V1 — { acceptPhoto, setPhoto, fileInp } для теста
+        searchStrip: search,
+        tg,
+    };
+}
+
+/**
+ * Собрать окно, НЕ вставляя его в документ. Отдельно от open* ради теста:
+ * проверять состав первого экрана, раскрытие и сбор значений можно без
+ * document.body и без таймеров.
+ *
+ * PATIENT_FIELDS_V1 — здесь осталась ОБОЛОЧКА: шапка, подвал, Escape, Enter и
+ * переход в мастер услуг. Сами поля рисует buildPatientFields — те же, что у
+ * «Быстрой регистрации в одном экране».
+ */
+export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null } = {}) {
+    const navigate = typeof onNavigate === 'function' ? onNavigate : () => {};
+    // PATIENT_FORM_ONE_V1 — режим правки: то же окно, заполненное строкой пациента.
+    const editing = !!(patient && patient.id);
+
+    const overlay = h('div', { class: 'modal', style: { zIndex: '150' } });
+    const close = () => { document.removeEventListener('keydown', onKey); fadeOutAndRemove(overlay); };
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
+
+    // MODAL_COMPACT_OPTOUT_V1 — .modal-compact ОБЯЗАТЕЛЕН, а не украшение:
+    // admin.css растягивает всякую .modal-card, кроме помеченной этим классом,
+    // до calc(100vw - 24px) × calc(100vh - 24px) с !important — а авторский
+    // !important бьёт встроенный стиль, поэтому width: 1240px ниже без этого
+    // класса не значил ничего. На мониторе 1920 выверенная двухколоночная
+    // вёрстка расползалась на 1896 px. Тем же классом пользуются десять других
+    // окон (admission-modal, cashier-desk, crm…).
+    const card = h('div', {
+        // PATIENT_FORM_REWRITE_V1 — `has-groups` убран: разделы идут ОДИН ПОД
+        // ДРУГИМ во всю ширину, как на образце. Двухколоночная раскладка
+        // экономила высоту, но разрывала порядок: «Документы» читались справа
+        // от «Личных данных», а не после них.
+        class: 'modal-card modal-grouped mg-dense modal-compact pc-form',
+        'data-dialog': 'patient-create',
+        style: {
+            width: METRICS.cardWidth + 'px',
+            maxWidth: 'calc(100vw - 32px)',
+            maxHeight: 'calc(100vh - ' + METRICS.viewportGap + 'px)',
+        },
+    });
+    overlay.appendChild(card);
+
+    const body = h('div', { class: 'modal-body' });
+
+    const api = buildPatientFields(body, { patient, onNavigate: navigate, onSaved, close });
+    const { fields, state, collect, tg, photo } = api;
+
+    // REG_ADD_SERVICE_V1 — мастер услуг монтируется в document.body и переживает
+    // переход; грузим его лениво, чтобы окно заведения пациента не тянуло
+    // каталог услуг при каждом открытии.
+    function openServiceWizard(created) {
+        if (!created || !created.id) return;
+        import('./visit-wizard.js?v=tier2')
+            .then((mod) => mod.openVisitWizard(null, {
+                id: created.id, full_name: created.fullName, mrn: created.mrn, phone: created.phone,
+            }))
+            .catch((e) => toast(trf('Не удалось открыть мастер услуг: {msg}', { msg: (e && e.message) || e }), 'fail'));
+    }
+
+    // PATIENT_FORM_REWRITE_V1 — приглашение в Telegram переехало в ШАПКУ.
+    // Это не поле карты, а действие над пациентом: раньше оно стояло полем в
+    // ряду с адресом и гражданством, и его искали глазами среди того, что
+    // заполняют.
+    //
+    // FAST_REG_ONE_SCREEN_V1 — «быстрого режима» у этого окна БОЛЬШЕ НЕТ.
+    // Быстрая регистрация стала своим окном (views/fast-registration.js), где
+    // пациент, услуги, счёт и очередь делаются одним нажатием; двухоконный путь
+    // «сохранили карту → открылся мастер услуг» оставлял полпациента, если
+    // второе окно закрывали. Здесь осталось ровно то, чем окно было до него.
+    const headTitle = editing ? 'Редактирование карты пациента' : 'Создать пациента';
+    card.appendChild(h('header', { class: 'modal-head' },
+        h('h2', null, Icon('Patients', { size: 16 }), ' ', tr(headTitle)),
+        h('span', { class: 'grow' }),
+        tg,
+        h('button', { class: 'modal-close', onclick: close }, '×'),
+    ));
+    card.appendChild(body);
+
+    // PATIENT_FORM_REWRITE_V1 — раскрытия «Подробнее» больше нет: всё, что оно
+    // прятало, разошлось по разделам. setMore/isMoreOpen оставлены заглушками —
+    // их зовут снаружи (возврат из мастера услуг открывал окно сразу раскрытым),
+    // и падать на несуществующей функции они не должны.
+    function setMore() { state.moreOpen = false; }
+
+    // ---- Подвал -------------------------------------------------------------
+    // PATIENT_FORM_REWRITE_V1 — подвал по образцу: «Отмена» и «Создать
+    // пациента». «Добавить услугу» ОСТАВЛЕНА третьей кнопкой: на образце её
+    // нет, но это дневной путь регистратуры — завести карту и сразу выписать
+    // услугу; убрать её значило бы заставить искать пациента заново сразу
+    // после того, как его завели.
+    const cancelBtn = h('button', { class: 'btn btn-outline', type: 'button', onclick: close },
+        tr('Отмена'));
+    const saveAndServiceBtn = h('button', { class: 'btn btn-outline', type: 'button',
+        onclick: (ev) => guarded(ev, () => save({ openVisit: true })) },
+        Icon('Plus', { size: 14 }), ' ', tr('Добавить услугу'));
+    const saveOnlyBtn = h('button', { class: 'btn btn-primary', type: 'button',
+        onclick: (ev) => guarded(ev, () => save({ openVisit: false })) },
+        Icon('Check', { size: 14 }), ' ', tr(editing ? 'Сохранить' : 'Создать пациента'));
+    // PATIENT_FORM_FLOW_V1 — Enter нажимает ГЛАВНОЕ действие подвала, и это
+    // сохранение. Клавиша, делающая не то, что подсвечено главным, обманывает
+    // дважды.
+    const primaryBtn = saveOnlyBtn;
+    // Горячая клавиша, о которой нигде не написано, не существует: подпись в
+    // подвале — часть самой возможности, а не украшение.
+    card.appendChild(h('footer', { class: 'modal-foot' },
+        h('span', { class: 'mg-hint' }, h('kbd', null, 'Enter'), ' ', tr('— сохранить пациента')),
+        h('span', { class: 'grow' }),
+        cancelBtn,
+        editing ? null : saveAndServiceBtn,   // PATIENT_FORM_ONE_V1 — услугу к уже заведённому добавляют из его карты
+        primaryBtn,
+    ));
+
+    // PATIENT_FORM_FLOW_V1 — Enter сохраняет пациента.
+    //
+    // Нажатие пропускается там, где Enter уже занят и значит другое:
+    //   • <textarea> «Поведение» — там это перенос строки;
+    //   • кнопка или ссылка в фокусе — Enter обязан нажать ИХ, иначе «Добавить
+    //     услугу» с клавиатуры срабатывала бы как «Сохранить»;
+    //   • открытый список (.uisel-pop) или календарь (.uidate-pop) — Enter
+    //     выбирает строку в нём;
+    //   • строка поиска существующего пациента — она ищет ДУБЛИКАТЫ, и
+    //     сохранять по Enter оттуда значило бы заводить второго такого же
+    //     ровно в тот миг, когда регистратор проверяет, нет ли первого;
+    //   • ввод с подсказкой (isComposing) — там Enter подтверждает подсказку.
+    function onEnter(e) {
+        if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (e.isComposing || e.keyCode === 229) return;
+        const t = e.target;
+        const tag = ((t && t.tagName) || '').toLowerCase();
+        if (tag === 'textarea' || tag === 'button' || tag === 'a') return;
+        if (t && t.closest && t.closest('.mg-search')) return;
+        if (typeof document !== 'undefined' && document.querySelector
+            && document.querySelector('.uisel-pop, .uidate-pop')) return;
+        e.preventDefault();
+        if (primaryBtn.disabled) return;
+        primaryBtn.click();
+    }
+    card.addEventListener('keydown', onEnter);
+
+    function guarded(ev, fn) {
+        const b = ev && ev.currentTarget;
+        if (b && b.disabled) return;
+        if (b) b.disabled = true;
+        Promise.resolve(fn()).finally(() => { if (b) b.disabled = false; });
+    }
+
+    // Сохранение — это сохранение полей плюс решение окна, куда идти дальше.
+    // Решение едет С НАЖАТИЕМ, а не лежит в переменной окна: общая изменяемая
+    // «хочу услуги» связывала бы два нажатия в одно, а между нажатием и картой
+    // успевает встать страж дубликатов. Услугу к уже заведённому добавляют из
+    // его карты — поэтому в правке продолжения нет вовсе.
+    async function save({ openVisit = false, force = false } = {}) {
+        const onCreated = (openVisit && !editing) ? openServiceWizard : null;
+        return api.save({ force, onCreated });
     }
 
     return {
@@ -581,9 +679,9 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
         setMore,                       // заглушка: раскрытия больше нет
         isMoreOpen: () => false,
         tg,                            // приглашение в бот живёт в шапке
-        setGender: (v) => { state.gender = v; sexChips.setValue(v); },
-        searchInput: search.input,
-        runSearch: search.run,
+        setGender: api.setGender,
+        searchInput: api.searchStrip.input,
+        runSearch: api.searchStrip.run,
         collect, save,
         saveOnlyBtn, saveAndServiceBtn, cancelBtn,
         photo,   // PATIENT_PHOTO_V1 — { acceptPhoto, setPhoto, fileInp } для теста
@@ -1086,7 +1184,11 @@ export function asPhotoFile(fileOrBlob) {
     catch (e) { try { fileOrBlob.name = 'photo.jpg'; } catch (e2) {} return fileOrBlob; }
 }
 
-async function uploadPendingPhoto(state) {
+// PATIENT_PHOTO_V1 — экспортировано ради FAST_REG_ONE_SCREEN_V1: окно быстрой
+// регистрации зовёт savePatient() САМО (у него свой диалог дубликата, см.
+// views/fast-registration.js), и без этой функции снимок с веб-камеры молча
+// не доезжал бы до карты. Поведение не изменилось ни на строку.
+export async function uploadPendingPhoto(state) {
     if (state.photoUrl) return state.photoUrl;
     if (!state.photoFile) return '';
     const file = asPhotoFile(state.photoFile);
