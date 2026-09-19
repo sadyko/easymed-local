@@ -13,16 +13,31 @@
 // скрыт — фильтр, который молча ничего не делает, хуже отсутствующего.
 
 import { localDate, localHour, localWeekday, inLocalRange } from '../domain/day.js';
+// CRM_LINKS_V1 — воронка настраивается (миграция 077): «дошёл», «не пришёл» и
+// «потеряно» спрашиваются у справочника, а не берутся из зашитого списка.
+import { wonStageKey, lostStageKeys, noShowStageKey, openStageKeys, listStages, listSources } from '../crm/config.js';
 
-const STATUS_RU = {
-  in_process: 'В работе', scheduled: 'Записан', came: 'Пришёл',
-  no_show: 'Не пришёл', stopped: 'Отказ', not_qualified: 'Не целевой',
-  converted: 'Конвертирован', recall: 'Перезвонить',
-};
-const SOURCE_RU = {
-  call: 'Звонок', instagram: 'Instagram', website: 'Сайт', telegram: 'Telegram',
-  walkin: 'Пришёл сам', referral: 'Рекомендация', other: 'Другое',
-};
+// Сидовая колонка «Записан» (миграция 077) — граница между «заявку ещё ведёт
+// оператор» и «пациента уже ждут в конкретный день». Имя здесь не поведение, а
+// точка отсчёта в ПОРЯДКЕ колонок: переименованная или отсутствующая колонка
+// просто возвращает отбор к прежнему «все живые».
+const SCHEDULED_STAGE = 'scheduled';
+
+// CRM_LINKS_V1 — ПОДПИСИ ЖИВУТ В СПРАВОЧНИКАХ, А НЕ ЗДЕСЬ.
+//
+// Тут стояли STATUS_RU и SOURCE_RU — ТРЕТИЙ словарь воронки, после самих
+// crm_stages/crm_sources (миграция 077) и запасного набора на клиенте. Он уже
+// разошёлся с первым: ключ источника в базе — 'walk_in', а здесь лежал
+// 'walkin', и «Пришёл сам» печатался в отчёте и в выгрузке Excel голым кодом.
+// Переименование колонки на экране настроек до отчёта не доезжало вовсе:
+// владелец правил «Пришёл» на «Дошёл», а отчёт продолжал звать её по-своему.
+//
+// Ключ вместо подписи — честный запасной вариант: он ничего не выдумывает, и
+// по нему видно, что строка пришла из колонки, которой в справочнике уже нет.
+function labelLookup(rows) {
+  const m = new Map((rows || []).map((r) => [r.key, r.label]));
+  return (key, empty = '') => m.get(key) || key || empty;
+}
 const WEEKDAY_RU = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
 const pct = (part, total) => (total > 0 ? Math.round((part / total) * 1000) / 10 : 0);
@@ -33,15 +48,41 @@ export function callcenterReport(db, args, _user) {
   const where = `WHERE ${inLocalRange('r.created_at')}`;
   const p = [from, to];
 
+  // CRM_LINKS_V1 — ступени воронки. Клиника вправе завести свою проигрышную
+  // колонку («Дорого»), и заявки в ней выпадали из «потеряно»: сумма по воронке
+  // не сходилась с общим числом заявок, а куда делись люди — не узнать.
+  //
+  // «Не пришёл» остаётся ОТДЕЛЬНЫМ показателем и потому вычитается из потерь:
+  // неявка — это повод перезвонить, а отказ — нет, и складывать их в одну
+  // цифру значит потерять единственный список, который можно отработать.
+  // Подписи ступеней и источников — из справочников CRM (см. labelLookup).
+  // Отчёт только читает, поэтому недоступный справочник не должен ронять его:
+  // без подписей строки называются своими ключами, и это по-прежнему отчёт.
+  let stageLabel = (k, e = '') => k || e;
+  let sourceLabel = (k, e = '') => k || e;
+  try { stageLabel = labelLookup(listStages(db)); sourceLabel = labelLookup(listSources(db)); } catch (e) { /* ключи вместо подписей */ }
+
+  const WON = wonStageKey(db);
+  const NO_SHOW = noShowStageKey(db) || '';
+  const LOST = lostStageKeys(db).filter((k) => k !== NO_SHOW);
+  // `IN ()` — синтаксическая ошибка SQLite, поэтому отсутствие проигрышных
+  // колонок выражается заведомо несовпадающим ключом, а не пустым списком.
+  const lostHoles = (LOST.length ? LOST : ['']).map(() => '?').join(',');
+  const lostVals = LOST.length ? LOST : [''];
+  //
+  // «Записан» остаётся ключом 'scheduled': это НЕ вид ступени. Воронка знает
+  // три вида — живая, выигранная, проигранная, — и «на какой из живых колонок
+  // человек записан» спросить не у чего. Сколько заявок с назначенной датой,
+  // отвечает with_date ниже, и он от переименований не зависит вовсе.
   const kpiRow = db.prepare(`
     SELECT COUNT(*) AS total,
-           SUM(r.status = 'came')                       AS came,
+           SUM(r.status = ?)                            AS came,
            SUM(r.status = 'scheduled')                  AS scheduled,
-           SUM(r.status = 'no_show')                    AS no_show,
-           SUM(r.status IN ('stopped','not_qualified')) AS lost,
+           SUM(r.status = ?)                            AS no_show,
+           SUM(r.status IN (${lostHoles}))              AS lost,
            SUM(r.patient_id IS NOT NULL)                AS became_patient,
            SUM(r.scheduled_date IS NOT NULL AND r.scheduled_date <> '') AS with_date
-      FROM crm_requests r ${where}`).get(...p);
+      FROM crm_requests r ${where}`).get(WON, NO_SHOW, ...lostVals, ...p);
 
   const total = kpiRow.total || 0;
 
@@ -76,19 +117,19 @@ export function callcenterReport(db, args, _user) {
   const byStatus = db.prepare(`
     SELECT r.status AS status, COUNT(*) AS count
       FROM crm_requests r ${where} GROUP BY r.status ORDER BY count DESC`).all(...p)
-    .map((x) => ({ ...x, label: STATUS_RU[x.status] || x.status }));
+    .map((x) => ({ ...x, label: stageLabel(x.status) }));
 
   const bySource = db.prepare(`
     SELECT r.source AS source, COUNT(*) AS count
       FROM crm_requests r ${where} GROUP BY r.source ORDER BY count DESC`).all(...p)
-    .map((x) => ({ ...x, label: SOURCE_RU[x.source] || x.source || '—' }));
+    .map((x) => ({ ...x, label: sourceLabel(x.source, '—') }));
 
   // По оператору — не только объём, но и доля дошедших: сто заявок, из которых
   // никто не пришёл, это не работа.
   const byOperator = db.prepare(`
-    SELECT COALESCE(u.full_name, '—') AS name, COUNT(*) AS count, SUM(r.status = 'came') AS came
+    SELECT COALESCE(u.full_name, '—') AS name, COUNT(*) AS count, SUM(r.status = ?) AS came
       FROM crm_requests r LEFT JOIN users u ON u.id = r.created_by
-     ${where} GROUP BY r.created_by ORDER BY count DESC`).all(...p)
+     ${where} GROUP BY r.created_by ORDER BY count DESC`).all(WON, ...p)
     .map((x) => ({ ...x, came: x.came || 0, came_pct: pct(x.came || 0, x.count) }));
 
   // Что именно спрашивают. Строки заявки (crm_request_services) — источник
@@ -184,10 +225,10 @@ export function callcenterReport(db, args, _user) {
   //    сорока заявками и конверсией 5% хуже канала с десятью и 60% — по
   //    столбикам объёма это неразличимо, и деньги уходят не туда.
   const sourceConv = db.prepare(`
-    SELECT r.source AS src, COUNT(*) AS count, SUM(r.status = 'came') AS came
-      FROM crm_requests r ${where} GROUP BY r.source ORDER BY count DESC`).all(...p)
+    SELECT r.source AS src, COUNT(*) AS count, SUM(r.status = ?) AS came
+      FROM crm_requests r ${where} GROUP BY r.source ORDER BY count DESC`).all(WON, ...p)
     .map((x) => ({
-      name: SOURCE_RU[x.src] || x.src || 'Другое',
+      name: sourceLabel(x.src, 'Другое'),
       count: x.count, came: x.came || 0, came_pct: pct(x.came || 0, x.count),
     }));
 
@@ -199,13 +240,29 @@ export function callcenterReport(db, args, _user) {
   //
   //    Периодом НЕ фильтруется: зависшая заявка не перестаёт быть зависшей
   //    оттого, что оператор выбрал другой диапазон дат.
-  const staleRows = db.prepare(`
+  //
+  //    CRM_LINKS_V1 — КАКИЕ КОЛОНКИ СЧИТАЮТСЯ, РЕШАЕТ СПРАВОЧНИК. Здесь стояла
+  //    зашитая пара ('in_process','recall'), и клиника, добавившая свою колонку
+  //    в начало воронки («Ждём документы», «Уточняем»), теряла её заявки из
+  //    виду совсем: в отчёте они не зависшие, а на доске их никто не
+  //    перебирает — лид лежит, пока о нём случайно не вспомнят.
+  //
+  //    Граница та же, что у ночной автоматики «Не пришёл» (views/crm.js):
+  //    «Записан» делит воронку надвое. ДО него заявку ведёт ОПЕРАТОР, и
+  //    молчание три дня и есть «зависла». С «Записан» пациента уже ЖДУТ в
+  //    конкретный день — молчание там не значит ничего, такую заявку разбирает
+  //    автоматика по дате. Колонки «Записан» в воронке нет вовсе — считаются
+  //    все живые, как было: гадать, где кончается работа оператора, не по чему.
+  const openKeys = openStageKeys(db);
+  const bookedAt = openKeys.indexOf(SCHEDULED_STAGE);
+  const workedKeys = bookedAt >= 0 ? openKeys.slice(0, bookedAt) : openKeys;
+  const staleRows = !workedKeys.length ? [] : db.prepare(`
     SELECT r.id, r.full_name, r.phone, r.status,
            CAST(julianday('now','localtime') - julianday(COALESCE(r.updated_at, r.created_at), 'localtime') AS INTEGER) AS days,
            COALESCE(u.full_name, '—') AS operator
       FROM crm_requests r LEFT JOIN users u ON u.id = r.created_by
-     WHERE r.status IN ('in_process','recall')
-     ORDER BY days DESC LIMIT 200`).all()
+     WHERE r.status IN (${workedKeys.map(() => '?').join(',')})
+     ORDER BY days DESC LIMIT 200`).all(...workedKeys)
     .filter((x) => (x.days || 0) >= 3);
 
   const stale = {
@@ -219,7 +276,7 @@ export function callcenterReport(db, args, _user) {
     // а не просто посмотреть на цифру.
     oldest: staleRows.slice(0, 6).map((x) => ({
       name: x.full_name || '—', phone: x.phone || '', days: x.days,
-      status: STATUS_RU[x.status] || x.status, operator: x.operator,
+      status: stageLabel(x.status), operator: x.operator,
     })),
   };
 
@@ -271,7 +328,7 @@ export function callcenterReport(db, args, _user) {
       LEFT JOIN services s ON s.id = r.service_id
      ${where} ORDER BY r.created_at DESC`).all(...p)
     .map((x) => [x.day, x.hour, x.name || '', x.phone || '',
-      SOURCE_RU[x.source] || x.source || '', STATUS_RU[x.status] || x.status,
+      sourceLabel(x.source), stageLabel(x.status),
       x.operator, x.service, x.sched, x.converted ? 'да' : 'нет']);
 
   return {

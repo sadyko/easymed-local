@@ -763,6 +763,16 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         state.result = res;
         if (res.quoteError) toast(trf('Тариф визита не спрошен: {msg}', { msg: res.quoteError }), 'warn');
         if (res.queueError) toast(trf('Номера очереди не выданы: {msg}', { msg: res.queueError }), 'warn');
+        // CRM_LINKS_V1 — ЗАПИСАННЫЙ ПО ТЕЛЕФОНУ ПРИШЁЛ И ОФОРМЛЕН ЗДЕСЬ.
+        //
+        // Строки заявки колл-центра закрывает СЕРВЕР, в той же транзакции, где
+        // заводится визит (ensure_visit → settleCrmForVisit). Здесь стоял вызов
+        // closeCrmLinesForPatient(), и он не работал НИКОГДА: его звали ПОСЛЕ
+        // ensure_visit, а искал он родителей по ОТКРЫТЫМ ступеням — к тому
+        // моменту сервер уже перевёл заявку в «Пришёл», открытых не
+        // находилось, и строки оставались «pending». Окно оформляет визит и
+        // счёт; про заявку оно больше не знает ничего — два писателя одной
+        // таблицы дают заявке две разные истории.
         notifySaved(patient);
         toSavedState();
         return res;

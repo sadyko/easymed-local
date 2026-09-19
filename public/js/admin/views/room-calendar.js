@@ -585,6 +585,16 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             roomId: state.resType === 'room' ? res.id : null,
             lockedDoctor: state.resType === 'doctor' ? { id: res.id, name: res.name, spec: res.spec } : null,   // CATALOG_WIZARD_V1
             scheduledISO: localIso(dayIso, min),
+            // CRM_LINKS_V1 — ДЕНЬ ЗАПИСИ. Подстановка услуг из заявки колл-центра
+            // сверяет дату строки заявки с днём, на который открыт мастер: без
+            // дня ей не с чем сверять, и она молча выходит первой же строкой.
+            // Записанный по телефону пациент не видел своей услуги в смете
+            // именно в тот день, на который его и записали.
+            //
+            // Берём день ДОРОЖКИ, а не первые десять знаков scheduledISO:
+            // scheduledISO — время в UTC, и у ранних часов его дата отличается
+            // от местной на сутки, а строка заявки датирована местным днём.
+            initialDateIso: String(dayIso).slice(0, 10),
             onCreatePatient: () => { if (onNavigate) onNavigate('registration'); },
             // BOOK_WIZARD_V1 — новая запись видна сразу. CROSS_BRANCH_CALENDAR_V1
             // — а если она в чужое здание, то ещё и привязывается к нему и

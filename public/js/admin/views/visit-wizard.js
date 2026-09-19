@@ -42,6 +42,9 @@ import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // 
 import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
          askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=aug17e';
 import { hasActorRole } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1
+// CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
+// строк живут в одном модуле на все окна: копии этого кода уже разъезжались.
+import { closeCrmLines as closeCrmLinesShared, pendingCrmLines } from '../crm-lines.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // WIZ_INVOICE_PRINT_V1 — тот же брендированный бланк «Счёт» (Настройки → Документы); ?v как у всех импортёров
 
 
@@ -624,22 +627,15 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // дня должна пережить первый визит, иначе остальные дни исчезнут у
     // регистратуры. Лучшая попытка: услуги уже сохранены, и сбой здесь не должен
     // выглядеть как «не удалось сохранить».
+    //
+    // CRM_LINKS_V1 — само правило переехало в crm-lines.js: его зовут мастер
+    // записи, каталог услуг и быстрая регистрация, а три копии одного правила
+    // разъезжаются молча. Заодно ступень «Пришёл» читается из настроенной
+    // воронки, а не берётся сидовым ключом 'came'.
     async function closeCrmLines() {
         const lineIds = wiz.crmLineIds || [];
-        const reqIds  = wiz.crmRequestIds || [];
         if (!lineIds.length) return;
-        try {
-            await supabase.from('crm_request_services').update({ status: 'done' }).in('id', lineIds);
-            for (const rid of reqIds) {
-                const { data: left } = await supabase.from('crm_request_services')
-                    .select('id').eq('request_id', rid).eq('status', 'pending').limit(1);
-                if (!left || !left.length) {
-                    await supabase.from('crm_requests').update({ status: 'came' }).eq('id', rid);
-                }
-            }
-        } catch (e) {
-            console.warn('[visit-wizard] CRM lines not closed:', e && e.message);
-        }
+        await closeCrmLinesShared(lineIds, wiz.crmRequestIds || []);
         wiz.crmLineIds = []; wiz.crmRequestIds = [];
     }
 
@@ -648,25 +644,24 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const dayIso = String(wiz.when || '').slice(0, 10);
         if (!patient.id || !dayIso) return;
         try {
-            const { data: reqs, error: reqErr } = await supabase.from('crm_requests')
-                .select('id')
-                .eq('patient_id', patient.id)
-                .in('status', ['scheduled', 'approved', 'in_process', 'recall']);
+            // CRM_LINKS_V1 — само двухшаговое чтение («живые заявки пациента» →
+            // «их строки на этот день») переехало в crm-lines.js: его же зовёт
+            // каталог услуг, а две копии одного чтения уже разъезжались.
             // Ошибку показываем, а не проглатываем. Молчаливый catch здесь стоил
             // трёх кругов отладки: смета оставалась пустой и выглядела как «фича
             // не работает», хотя запрос падал (например, сервер не перезапущен
             // после добавления crm_request_services в реестр — таблица есть в
             // базе, но процесс о ней не знает).
-            if (reqErr) throw new Error(trf('заявки: {msg}', { msg: reqErr.message || reqErr }));
-            if (!reqs || !reqs.length) return;
-
-            const { data: lines, error: lineErr } = await supabase.from('crm_request_services')
-                .select('id, request_id, service_id, scheduled_date, status, doctor_id')
-                .in('request_id', reqs.map(r => r.id))
-                .eq('scheduled_date', dayIso)
-                .eq('status', 'pending');
-            if (lineErr) throw new Error(trf('услуги заявки: {msg}', { msg: lineErr.message || lineErr }));
-            if (!lines || !lines.length) return;
+            let lines = [];
+            try {
+                lines = await pendingCrmLines(patient.id, dayIso);
+            } catch (e) {
+                const msg = (e && e.message) || e;
+                throw new Error(e && e.where === 'lines'
+                    ? trf('услуги заявки: {msg}', { msg })
+                    : trf('заявки: {msg}', { msg }));
+            }
+            if (!lines.length) return;
 
             const names = [];
             for (const ln of lines) {

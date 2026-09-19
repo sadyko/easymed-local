@@ -17,9 +17,14 @@ import { formatPhone } from '../phone-format.js';
 // CRM_REASSIGN_V1 — «я администратор»: кому видна раздача заявок.
 import { selfUserId, hasActorRole } from '../permissions.js';
 import { filterServicePool, serviceGroupCounts } from './service-search.js';   // CRM_SERVICE_FILTER_V1
+// CRM_LINKS_V1 — общий путь заведения карты: проверка дубля, штампы клиники и
+// филиала, привязка открытых заявок по телефону. Регистрация из CRM обязана
+// идти им же, иначе карта «почти правильная» (см. patientRegistrationModal).
+import { savePatient, linkCrmRequestsToPatient } from '../data.js';
 import { openCustDev } from './custdev.js';           // CUSTDEV_V1 — обзвон после визита
 import { canView } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev»
 import { boardConfig } from '../crm-settings-logic.js?v=crmcfg1';   // CRM_CONFIG_V1
+import { stageKeysFrom } from '../crm-stages.js';   // CRM_LINKS_V1 — ступени по виду, а не по имени
 // PASTEL_IDENTITY_V1 — оттенок ступени воронки. Словарь один на три доски
 // (канбан, календарь, очередь), чтобы «мятный» везде значил одно и то же.
 import { pastelAt } from '../pastel.js?v=pastel1';
@@ -42,12 +47,18 @@ import { pastelAt } from '../pastel.js?v=pastel1';
 // (цвета, значения по умолчанию, разбор ответа) лежит в crm-settings-logic.js,
 // чтобы доска и экран настроек не разъехались.
 let SOURCES, SOURCE_RU, STATUSES, STATUS_RU, CONVERT_STATUS, ACTIVE_STATUSES, LOST_STATUSES;
+// CRM_LINKS_V1 — ключи ступеней ПО ВИДУ (open/won/lost), включая скрытые
+// колонки: доска скрытую не предлагает, но лежащие в ней заявки живые, и
+// автоматика обязана их видеть. Считаются из ТОГО ЖЕ ответа, что и доска, —
+// второго запроса за настройками не нужно.
+let STAGE_KEYS = stageKeysFrom(null);
 function applyBoardConfig(data) {
     const c = boardConfig(data);
     SOURCES = c.sources; SOURCE_RU = c.sourceRu;
     STATUSES = c.statuses; STATUS_RU = c.statusRu;
     CONVERT_STATUS = c.convertStatus;
     ACTIVE_STATUSES = c.activeStatuses; LOST_STATUSES = c.lostStatuses;
+    STAGE_KEYS = stageKeysFrom(data);
 }
 applyBoardConfig(null);   // запасная воронка — до первого ответа сервера доска уже рабочая
 async function loadBoardConfig() {
@@ -185,12 +196,36 @@ async function load() {
     try {
         const d = new Date(); const pad = (n) => String(n).padStart(2, '0');
         const today = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
-        // CRM_CONFIG_V1 — если колонку «Не пришёл» из воронки убрали, автоматика
-        // просто не срабатывает: молча переложить заявку в другую колонку было бы
-        // хуже, чем оставить её там, где она есть.
-        if (hasStage('no_show')) {
-            await supabase.from('crm_requests').update({ status: 'no_show' })
-                .in('status', ['scheduled', 'approved']).lt('scheduled_date', today);
+        // CRM_CONFIG_V1 — если проигрышной колонки в воронке нет вовсе,
+        // автоматика просто не срабатывает: молча переложить заявку в живую
+        // колонку было бы хуже, чем оставить её там, где она есть.
+        //
+        // CRM_LINKS_V1 — и «откуда», и «куда» читаются из НАСТРОЕК. Здесь стояла
+        // зашитая пара ['scheduled','approved'] и ключ 'no_show': клиника,
+        // добавившая свою колонку или переименовавшая «Не пришёл», получала
+        // заявки, которые автоматика не подхватывала ничем, — они оставались
+        // ожидающими приёма навсегда.
+        //
+        // НО НЕ ВСЕ ЖИВЫЕ КОЛОНКИ. «Не пришёл» бывает только у того, кого
+        // ЖДАЛИ, а в начале воронки пациента ещё не ждут: дата в карточке
+        // «Перезвонить» значит «когда звонить», а не «когда придёт». Оператор,
+        // отложивший вчерашний лид на «Перезвонить», наутро находил его в
+        // «Не пришёл» — заявка, с которой он ещё работает, объявлена
+        // потерянной, и вернуть её можно только руками.
+        //
+        // Отсюда отбор: всё, что стоит в воронке С «Записан» И ДАЛЬШЕ. Дальше
+        // по порядку колонок — это дальше по пути пациента, и там дата уже
+        // значит приём; колонка, заведённая клиникой после «Записан», попадает
+        // сюда сама. Колонки «Записан» в воронке нет вовсе — берём все живые,
+        // как раньше: гадать, с какой начинается ожидание, не по чему.
+        if (STAGE_KEYS.noShow) {
+            const at = STAGE_KEYS.open.indexOf(stageKey('scheduled'));
+            const waiting = at >= 0 ? STAGE_KEYS.open.slice(at) : STAGE_KEYS.open;
+            const from = waiting.filter((k) => k !== STAGE_KEYS.noShow);
+            if (from.length) {
+                await supabase.from('crm_requests').update({ status: STAGE_KEYS.noShow })
+                    .in('status', from).lt('scheduled_date', today);
+            }
         }
     } catch (e) { /* фоновая автоматика — молча */ }
     const { data, error } = await supabase.from('crm_requests')
@@ -854,8 +889,67 @@ async function paint() {
             if (mailInp.value.trim()) payload.email = mailInp.value.trim();
             if (noteInp.value.trim()) payload.notes = noteInp.value.trim();
             if (uid() != null) payload.created_by = uid();
-            const { data: p, error } = await supabase.from('patients').insert(payload).select('id, full_name, mrn, phone').single();
-            if (error) { toast(trf('Пациент не создан: {msg}', { msg: error.message }), 'fail'); saveBtn.disabled = false; return; }
+            // CRM_LINKS_V1 — КАРТА ЗАВОДИТСЯ ТЕМ ЖЕ ПУТЁМ, ЧТО И ВЕЗДЕ.
+            //
+            // Здесь стояла прямая вставка в `patients`, и мимо неё проходили три
+            // вещи, которые делает savePatient() и только он:
+            //   • поиск дубля — тот же человек звонил на прошлой неделе и уже
+            //     заведён; вторая карта означает вторую историю болезни;
+            //   • штампы клиники и филиала — карта без branch_id выпадает из
+            //     отчётов по филиалу;
+            //   • привязка ВСЕХ открытых заявок с этим номером
+            //     (linkCrmRequestsToPatient): звонили трижды — закрывалась одна.
+            let created;
+            try {
+                created = await savePatient(payload);
+            } catch (e) {
+                if (e && e.code === 'DUPLICATE_PATIENT' && e.existing) {
+                    saveBtn.disabled = false;
+                    // Дубль — это ВОПРОС, а не отказ: то же окно и тот же выбор,
+                    // что у регистратуры. «Открыть существующего» привязывает
+                    // заявку к найденной карте и продолжает, «Создать
+                    // принудительно» повторяет сохранение в обход проверки.
+                    const { openDuplicatePatientDialog } = await import('./patient-create-modal.js');
+                    openDuplicatePatientDialog(e, {
+                        onOpenExisting: async (c) => {
+                            // CRM_LINKS_V1 — «БЕРУ СУЩЕСТВУЮЩУЮ КАРТУ» — ЭТО ТОЖЕ
+                            // РЕГИСТРАЦИЯ. Привязку всех открытых заявок по
+                            // номеру делает savePatient() ПОСЛЕ вставки, а здесь
+                            // вставки нет — и у человека, звонившего трижды, к
+                            // найденной карте цеплялась одна заявка, из которой
+                            // открыли окно. Две другие оставались ничьими:
+                            // ни в смете, ни в визите они уже не появятся.
+                            // Вызов идемпотентен — повтор ничего не испортит.
+                            await linkCrmRequestsToPatient(c);
+                            await finishRegistration(c, { existing: true });
+                        },
+                        onForceCreate: async () => {
+                            try {
+                                const forced = await savePatient(payload, { force: true });
+                                await finishRegistration(forced._raw || forced);
+                            } catch (e2) {
+                                toast(trf('Пациент не создан: {msg}', { msg: (e2 && e2.message) || e2 }), 'fail');
+                            }
+                        },
+                    });
+                    return;
+                }
+                toast(trf('Пациент не создан: {msg}', { msg: (e && e.message) || e }), 'fail');
+                saveBtn.disabled = false;
+                return;
+            }
+            // savePatient() отдаёт карту в виде экрана (fullName/…); дальше по
+            // цепочке идёт СТРОКА БАЗЫ, как и раньше.
+            await finishRegistration(created._raw || created);
+        });
+
+        /**
+         * Общий хвост регистрации: привязать заявку к карте, обновить её в
+         * памяти и отдать карту вызывающему. Один на все три исхода — новая
+         * карта, принудительно созданная и выбранная из дублей, — потому что
+         * для заявки они означают одно и то же: у человека теперь есть карта.
+         */
+        async function finishRegistration(p, { existing = false } = {}) {
             // Заявку обновляем, только если она УЖЕ сохранена: «Записать на
             // дату» может вызвать регистрацию из ещё не созданной заявки —
             // её patient_id запишет persist() при сохранении.
@@ -873,10 +967,13 @@ async function paint() {
                 requestRow.patients = { id: p.id, full_name: p.full_name, mrn: p.mrn };
                 if (markCame) requestRow.status = CONVERT_STATUS;
             }
-            toast(trf('Пациент зарегистрирован: {who}', { who: p.full_name + (p.mrn ? ' · ' + p.mrn : '') }), 'ok');
+            const who = (p.full_name || '') + (p.mrn ? ' · ' + p.mrn : '');
+            toast(existing
+                ? trf('Пациент уже в базе: {who} — заявка привязана.', { who })
+                : trf('Пациент зарегистрирован: {who}', { who }), 'ok');
             close();
             if (typeof onCreated === 'function') onCreated(p);
-        });
+        }
 
         const col = { flex: '1 1 0', minWidth: 0 };
         const regBody = h('div', { class: 'modal-body', style: { overflowY: 'auto' } },
@@ -1104,6 +1201,8 @@ async function paint() {
         // svcChosen остаётся первой услугой списка: crm_requests.service_id и
         // карточка канбана по-прежнему читают её (см. миграцию 057).
         let picked = [];
+        // CRM_LINKS_V1 — доехали ли строки услуг заявки из базы (см. primaryDate).
+        let linesLoaded = !r;
         let svcChosen = r ? (r.service_id || null) : null;
         let svcCatalog = [];
         let docCatalog = [];   // CRM_LINE_DOCTOR_V1
@@ -1155,14 +1254,38 @@ async function paint() {
             syncPrimary();
             paintPicked();
         }
-        // crm_requests.service_id / scheduled_date зеркалят ПЕРВУЮ строку —
+        // crm_requests.service_id / scheduled_date зеркалят строки услуг —
         // канбан-карточка и выгрузка Excel читают именно их (миграция 057).
         function syncPrimary() {
             svcChosen = picked.length ? picked[0].service_id : null;
-            // Зеркало ВСЕГДА, включая очистку: иначе у заявки оставалась старая
-            // дата в родителе, и карточка канбана показывала «Записан на …»,
-            // когда у услуг уже другие даты (или их нет вовсе).
-            schedInp.value = (picked.length && picked[0].date) ? picked[0].date : '';
+        }
+        // CRM_LINKS_V1 — ДАТА ЗАЯВКИ СЧИТАЕТСЯ ПО СТРОКАМ, А НЕ ПО ЗЕРКАЛУ.
+        //
+        // Здесь стояло отдельное поле-зеркало (`schedInp`), которое не было ни в
+        // одном окне и которое обновлял ровно один писатель — syncPrimary().
+        // Окно «Даты приёма» правит `picked[i].date` напрямую (и строкой, и
+        // «Применить ко всем»), мимо него, — и persist() уносил на сервер
+        // ПУСТОЕ зеркало: заявка оставалась в «В обработке» без даты.
+        //
+        // Цена этого — не метка на карточке. По scheduled_date/status живут
+        // отчёт колл-центра («Записан», «запись вперёд») и ночная автоматика
+        // «день прошёл без визита → Не пришёл»: записанный пациент был невидим
+        // всем троим.
+        //
+        // Зеркалим САМУЮ РАННЮЮ назначенную дату: карточка отвечает на вопрос
+        // «когда его ждут», а ждут — в ближайший из назначенных дней. Ни одной
+        // даты нет — зеркало пустое (включая очистку: иначе у заявки осталась бы
+        // прежняя дата, когда у услуг её уже нет).
+        function primaryDate() {
+            // Строки ещё не доехали из базы — сохранять «дат нет» нельзя: это
+            // стёрло бы дату у заявки, открытой и сохранённой в первую секунду.
+            if (isEdit && !linesLoaded) return (r && r.scheduled_date) || '';
+            // CRM_LINKS_V1 — ВЫПОЛНЕННЫЕ СТРОКИ НЕ СЧИТАЮТСЯ. Зеркало отвечает
+            // на вопрос «когда его ЖДУТ», а услуга, оформленная неделю назад,
+            // не ждёт никого: её дата делала карточку просроченной, и ночная
+            // автоматика уносила заявку в «Не пришёл», хотя ближайший её приём
+            // ещё впереди.
+            return picked.filter((p) => p.status !== 'done').map((p) => p.date).filter(Boolean).sort()[0] || '';
         }
         function paintPicked() {
             clear(pickedList);
@@ -1256,16 +1379,31 @@ async function paint() {
                 supabase.from('crm_request_services')
                     .select('service_id, scheduled_date, status, doctor_id')
                     .eq('request_id', r.id).neq('status', 'cancelled')
-                    .then(({ data: lines }) => {
+                    .then(({ data: lines, error }) => {
+                        // CRM_LINKS_V1 — ОТКАЗ ЭТО НЕ «УСЛУГ НЕТ». Пустой список
+                        // неотличим от несостоявшегося запроса, а saveLines()
+                        // переписывает набор строк ЦЕЛИКОМ: приняв отказ за
+                        // пустоту, ближайшее сохранение отменило бы все услуги
+                        // заявки. Флаг остаётся снятым — и сохранение строк не
+                        // тронет (см. saveLines).
+                        if (error) {
+                            toast(trf('Услуги заявки не загрузились: {msg} — сохранение их не тронет.',
+                                { msg: error.message || error }), 'fail');
+                            return;
+                        }
                         for (const ln of (lines || [])) {
                             const sv = svcCatalog.find(x => String(x.id) === String(ln.service_id));
-                            if (sv) picked.push({ service_id: sv.id, name: sv.name, price: sv.price, date: ln.scheduled_date || '', doctor_id: ln.doctor_id || null });
+                            // CRM_LINKS_V1 — статус строки едет вместе с ней:
+                            // выполненную услугу нельзя ни переписать, ни выдать
+                            // за дату, которую заявка ещё ждёт.
+                            if (sv) picked.push({ service_id: sv.id, name: sv.name, price: sv.price, date: ln.scheduled_date || '', doctor_id: ln.doctor_id || null, status: ln.status || 'pending' });
                         }
                         // Заявка до миграции 057 — единственная услуга в родителе.
                         if (!picked.length && svcChosen) {
                             const sv = svcCatalog.find(x => String(x.id) === String(svcChosen));
-                            if (sv) picked.push({ service_id: sv.id, name: sv.name, price: sv.price, date: r.scheduled_date || '' });
+                            if (sv) picked.push({ service_id: sv.id, name: sv.name, price: sv.price, date: r.scheduled_date || '', status: 'pending' });
                         }
+                        linesLoaded = true;
                         syncPrimary(); paintPicked();
                     });
             } else if (svcChosen) {
@@ -1275,8 +1413,6 @@ async function paint() {
         });
         const noteInp  = h('textarea', { rows: '3', placeholder: 'Что нужно пациенту, когда перезвонить…' });
         if (r) noteInp.value = r.note || '';
-        // CRM_V7 — дата записи: питает автоматику (день прошёл без визита → «Не пришёл»).
-        const schedInp = h('input', { type: 'date', value: r ? (r.scheduled_date || '') : '' });
 
         // CRM_REASSIGN_V1 — «ОПЕРАТОР»: ЕДИНСТВЕННОЕ МЕСТО, ГДЕ ЗАЯВКУ ПЕРЕДАЮТ.
         //
@@ -1350,7 +1486,9 @@ async function paint() {
             // скрыто и обязательным быть не может (CRM_V11).
             const phone = phoneInp.value.trim() || (linkedPatient ? (linkedPatient.phone || '') : '');
             if (!phone && !linkedPatient) { toast('Укажите телефон.', 'fail'); return null; }
-            const payload = { full_name: name, phone, source: srcChosen, note: noteInp.value.trim(), service_id: svcChosen || null, patient_id: linkedPatient ? linkedPatient.id : null, scheduled_date: schedInp.value || null };
+            // CRM_LINKS_V1 — дата берётся из строк услуг (см. primaryDate).
+            const bookedDate = primaryDate();
+            const payload = { full_name: name, phone, source: srcChosen, note: noteInp.value.trim(), service_id: svcChosen || null, patient_id: linkedPatient ? linkedPatient.id : null, scheduled_date: bookedDate || null };
             // CRM_REASSIGN_V1 — ключ уходит на сервер ТОЛЬКО когда поле было
             // нарисовано. Оператор, правящий комментарий в своей заявке, не
             // должен отправлять «хозяин = такой-то»: поля он не видел, значения
@@ -1359,7 +1497,18 @@ async function paint() {
             // Дата записи назначена — активная заявка сама переходит в «Записан».
             // CRM_CONFIG_V1 — правило прежнее (дата назначена → «Записан»), но
             // целевая колонка проверяется: если её удалили, статус не трогаем.
-            if (isEdit && schedInp.value && ['in_process', 'recall'].includes(r.status) && hasStage('scheduled')) payload.status = 'scheduled';
+            // CRM_LINKS_V1 — «какая заявка ещё не записана» читается из настроек.
+            // Зашитая пара ['in_process','recall'] не знала ни переименованной
+            // колонки, ни добавленной: заявка из такой не получала ступени
+            // «Записан», сколько дат ей ни назначай.
+            //
+            // Двигаем только ВПЕРЁД — по живым колонкам, стоящим В ВОРОНКЕ ДО
+            // «Записан». «Подтверждён» стоит после, и назначение новой даты не
+            // имеет права откатывать подтверждённую заявку назад.
+            const bookedStage = stageKey('scheduled');
+            const bookedAt = STAGE_KEYS.open.indexOf(bookedStage);
+            const notBookedYet = bookedAt > 0 ? STAGE_KEYS.open.slice(0, bookedAt) : [];
+            if (isEdit && bookedDate && notBookedYet.includes(r.status) && hasStage('scheduled')) payload.status = bookedStage;
             if (isEdit) {
                 const { error } = await supabase.from('crm_requests').update(payload).eq('id', r.id);
                 if (error) { toast(error.message, 'fail'); return null; }
@@ -1372,7 +1521,7 @@ async function paint() {
                 return r;
             }
             const { data, error } = await supabase.from('crm_requests')
-                .insert({ ...payload, status: schedInp.value ? stageKey('scheduled') : stageKey('in_process'), ...(uid() != null ? { created_by: uid() } : {}) })
+                .insert({ ...payload, status: bookedDate ? stageKey('scheduled') : stageKey('in_process'), ...(uid() != null ? { created_by: uid() } : {}) })
                 .select().single();
             if (error) { toast(error.message, 'fail'); return null; }
             // insert не возвращает join'ы — подставляем услугу из каталога, иначе
@@ -1389,12 +1538,24 @@ async function paint() {
         // должна пережить редактирование заявки.
         async function saveLines(requestId) {
             if (!requestId) return;
+            // CRM_LINKS_V1 — НЕ СТИРАТЬ ТО, ЧЕГО НЕ ВИДЕЛИ. Набор собирается из
+            // отдельного запроса, и пока он не доехал (или отказал), picked
+            // пуст. Полная замена набора в эту секунду — человек открыл
+            // карточку и сразу дописал комментарий — отменяла ВСЕ строки
+            // заявки и не писала ни одной: услуги и даты, набранные
+            // колл-центром, исчезали молча.
+            if (isEdit && !linesLoaded) return;
+            const writable = picked.filter((p) => p.status !== 'done');
             try {
                 await supabase.from('crm_request_services')
                     .update({ status: 'cancelled' })
                     .eq('request_id', requestId).eq('status', 'pending');
-                if (!picked.length) return;
-                await supabase.from('crm_request_services').insert(picked.map(p => ({
+                if (!writable.length) return;
+                // CRM_LINKS_V1 — выполненные строки не вписываются заново.
+                // Отменялись только pending (это верно), а вставлялся ВЕСЬ
+                // набор: у оплаченной услуги появлялся второй, «ждущий»
+                // двойник, и регистратура подставляла её в смету ещё раз.
+                await supabase.from('crm_request_services').insert(writable.map(p => ({
                     request_id: requestId,
                     service_id: p.service_id,
                     scheduled_date: p.date || null,

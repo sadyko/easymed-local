@@ -290,3 +290,126 @@ test('запись вперёд перечисляет 14 дней подряд,
   // Дыра в расписании обязана быть видна: это и есть повод звонить.
   assert.ok(out.forwardBook.some((x) => x.count === 0));
 });
+
+// CRM_LINKS_V1 (2026-09-20) — ВОРОНКА НАСТРАИВАЕТСЯ, А ОТЧЁТ СЧИТАЛ ПО
+// ЗАШИТОМУ СПИСКУ. Клиника завела свою проигрышную колонку — и заявки в ней
+// пропадали из «потеряно»: в отчёте сумма по воронке не сходилась с общим
+// числом заявок, и понять, куда делись люди, было нельзя.
+test('CRM_LINKS_V1: своя проигрышная колонка считается потерей, как и сидовые', () => {
+  const db = seed();
+  db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('refused_price','Дорого','crit',9,1,'lost')").run();
+  addLead(db, { day: '2026-08-17', localHour: 10, status: 'stopped' });
+  addLead(db, { day: '2026-08-17', localHour: 11, status: 'refused_price' });
+  addLead(db, { day: '2026-08-17', localHour: 12, status: 'no_show' });
+
+  const r = callcenterReport(db, RANGE, USER);
+
+  assert.equal(r.kpi.lost, 2, 'заявка из добавленной клиникой колонки не попала в «потеряно»');
+  assert.equal(r.kpi.no_show, 1, '«не пришёл» обязан остаться отдельным показателем, а не слиться с потерями');
+  db.close();
+});
+
+test('CRM_LINKS_V1: конверсия считается по колонке-конверсии справочника', () => {
+  const db = seed();
+  db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('waiting_pay','Ждёт оплаты','info',9,1,'open')").run();
+  addLead(db, { day: '2026-08-17', localHour: 10, status: 'came', by: 1 });
+  addLead(db, { day: '2026-08-17', localHour: 11, status: 'waiting_pay', by: 1 });
+
+  const r = callcenterReport(db, RANGE, USER);
+
+  assert.equal(r.kpi.came, 1);
+  assert.equal(r.kpi.lost, 0, 'живая колонка посчитана потерей');
+  const op = r.byOperator.find((x) => x.name === 'Sabirova Visola');
+  assert.equal(op.came, 1, 'у оператора не сошлось число доведённых до визита');
+  db.close();
+});
+
+// CRM_LINKS_V1 (2026-09-20) — ПОДПИСИ ВОРОНКИ И ИСТОЧНИКОВ БЕРУТСЯ ИЗ
+// СПРАВОЧНИКОВ, А НЕ ИЗ ТРЕТЬЕГО СЛОВАРЯ В КОДЕ ОТЧЁТА.
+//
+// Словарей было три: crm_stages/crm_sources в базе, DEFAULT_* на клиенте и
+// STATUS_RU/SOURCE_RU здесь. Третий уже разошёлся с первым: ключ источника в
+// базе — 'walk_in', а в словаре отчёта лежал 'walkin', и «Пришёл сам»
+// печатался в отчёте и в выгрузке Excel голым кодом. Переименование колонки на
+// экране настроек до отчёта не доезжало вовсе.
+test('CRM_LINKS_V1: источник печатается подписью справочника, а не кодом', () => {
+  const db = seed();
+  addLead(db, { day: '2026-08-17', localHour: 10, status: 'came', source: 'walk_in' });
+
+  const r = callcenterReport(db, RANGE, USER);
+
+  const src = r.bySource.find((x) => x.source === 'walk_in');
+  assert.ok(src, 'источник пропал из отчёта');
+  assert.equal(src.label, 'Пришёл сам',
+    'источник напечатан кодом: словарь отчёта разошёлся со справочником CRM');
+  const conv = r.sourceConv.find((x) => x.count === 1);
+  assert.equal(conv.name, 'Пришёл сам', 'в конверсии по источникам тот же код вместо подписи');
+  // Выгрузка Excel — та же подпись: стойка сводит её руками, и код в столбце
+  // «Источник» означает ручную расшифровку на каждой строке.
+  assert.ok(r.rows.some((row) => row.includes('Пришёл сам')), 'в выгрузке Excel источник остался кодом');
+  db.close();
+});
+
+test('CRM_LINKS_V1: колонку переименовали — отчёт называет её новым именем', () => {
+  const db = seed();
+  db.prepare("UPDATE crm_stages SET label = 'Дошёл' WHERE key = 'came'").run();
+  db.prepare("UPDATE crm_sources SET label = 'Входящий звонок' WHERE key = 'call'").run();
+  addLead(db, { day: '2026-08-17', localHour: 10, status: 'came', source: 'call' });
+
+  const r = callcenterReport(db, RANGE, USER);
+
+  assert.equal(r.byStatus.find((x) => x.status === 'came').label, 'Дошёл',
+    'переименование колонки не доехало до отчёта');
+  assert.equal(r.bySource.find((x) => x.source === 'call').label, 'Входящий звонок',
+    'переименование источника не доехало до отчёта');
+  db.close();
+});
+
+// CRM_LINKS_V1 — «ЗАВИСШАЯ» ЭТО ТА, С КОТОРОЙ ЕЩЁ НЕ ЗАКОНЧИЛИ РАБОТАТЬ.
+//
+// Отбор стоял зашитой парой ('in_process','recall'), и клиника, добавившая
+// свою колонку в начало воронки («Ждём документы», «Уточняем»), теряла её
+// заявки из виду совсем: в отчёте они не зависшие, а на доске их никто не
+// перебирает — лид просто лежит, пока о нём случайно не вспомнят.
+//
+// Граница та же, что у ночной автоматики «Не пришёл» (views/crm.js): «Записан»
+// делит воронку надвое. ДО него заявку ещё ведёт оператор, и молчание три дня
+// и есть «зависла». С «Записан» пациента уже ЖДУТ в конкретный день, и
+// молчание там не значит ничего: такую заявку разбирает автоматика по дате, а
+// не этот список.
+test('CRM_LINKS_V1: своя колонка до «Записан» тоже считается зависшей', () => {
+  const db = seed();
+  db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('awaiting_docs','Ждём документы','info',2,1,'open')").run();
+  const old = (status, name) => {
+    const id = addLead(db, { day: '2026-08-17', localHour: 10, status });
+    db.prepare("UPDATE crm_requests SET updated_at = datetime('now','localtime','-10 days'), full_name = ? WHERE id = ?").run(name, id);
+    return id;
+  };
+  old('awaiting_docs', 'Своя колонка');
+  old('in_process', 'Сидовая');
+  old('scheduled', 'Записанный');
+
+  const r = callcenterReport(db, RANGE, USER);
+  const names = r.stale.oldest.map((x) => x.name);
+  assert.ok(names.includes('Своя колонка'),
+    'заявка из колонки клиники до «Записан» не считается зависшей — её не увидит никто: ' + JSON.stringify(names));
+  assert.ok(names.includes('Сидовая'), 'сидовая колонка выпала из отбора');
+  assert.ok(!names.includes('Записанный'),
+    'записанного пациента объявили зависшим: его ждут в конкретный день, и этим занята автоматика по дате');
+  assert.equal(r.stale.total, 2);
+  db.close();
+});
+
+// И «зависшие заявки» зовут колонку так же, как её зовёт доска. Словарь отчёта
+// подписывал 'in_process' как «В работе», а справочник — как «В обработке»:
+// одна и та же колонка называлась в клинике двумя именами.
+test('CRM_LINKS_V1: в «зависших» колонка названа так же, как на доске', () => {
+  const db = seed();
+  const id = addLead(db, { day: '2026-08-17', localHour: 10, status: 'in_process' });
+  db.prepare("UPDATE crm_requests SET updated_at = '2026-01-01T10:00:00Z' WHERE id = ?").run(id);
+
+  const r = callcenterReport(db, RANGE, USER);
+  assert.equal(r.stale.oldest[0].status, 'В обработке',
+    'список зависших зовёт колонку по-своему — в клинике у одной колонки два имени');
+  db.close();
+});

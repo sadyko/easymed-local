@@ -12,6 +12,7 @@ import { getSelectedBranchIds, soleBranchId } from './branch-context.js?v=bc3'; 
 // PATIENT_DUP_RULE_V2 — one definition of "same person", shared by the register
 // scan and the registration-time guard. See the header of that file for the rule.
 import { duplicateIdSet, namesMatch, levenshtein as rawLevenshtein } from './patient-duplicates.js';
+import { crmStageKeys } from './crm-stages.js';   // CRM_LINKS_V1 — ступени воронки по виду, а не по имени
 
 // ---------------------------------------------------------------------------
 // DEMO DATA — used as fallback when Supabase is empty or unreachable.
@@ -584,10 +585,15 @@ export async function linkCrmRequestsToPatient(patient) {
     // rather than link a stranger's booking to this card.
     if (mine.length < 7) return 0;
     try {
+        // CRM_LINKS_V1 — какие заявки ещё ОТКРЫТЫ, решает настроенная воронка,
+        // а не зашитая четвёрка сидовых ключей: у клиники, добавившей свою
+        // колонку, заявки из неё не подхватывались новой картой никогда.
+        const { open } = await crmStageKeys();
+        if (!open.length) return 0;
         const { data, error } = await supabase.from('crm_requests')
             .select('id, phone, patient_id, status')
             .is('patient_id', null)
-            .in('status', ['scheduled', 'approved', 'in_process', 'recall']);
+            .in('status', open);
         if (error || !data || !data.length) return 0;
 
         // Compare on the local part so a number stored with the country code and

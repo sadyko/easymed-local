@@ -3271,6 +3271,7 @@ export const STRINGS = {
   "Пациент зарегистрирован: {who}": {"en":"Patient registered: {who}","ru":"Пациент зарегистрирован: {who}","uz":"Bemor ro'yxatga olindi: {who}"},
   "Из заявки: {src} · {when}": {"en":"From the request: {src} · {when}","ru":"Из заявки: {src} · {when}","uz":"Arizadan: {src} · {when}"},
   "Услуги заявки не сохранились: {msg}": {"en":"The request's services were not saved: {msg}","ru":"Услуги заявки не сохранились: {msg}","uz":"Ariza xizmatlari saqlanmadi: {msg}"},
+  "Услуги заявки не загрузились: {msg} — сохранение их не тронет.": {"en":"The request's services did not load: {msg} — saving will leave them alone.","ru":"Услуги заявки не загрузились: {msg} — сохранение их не тронет.","uz":"Ariza xizmatlari yuklanmadi: {msg} — saqlash ularga tegmaydi."},
   "Без даты: {names}": {"en":"No date: {names}","ru":"Без даты: {names}","uz":"Sanasiz: {names}"},
   "Не выбран врач: {names}": {"en":"No doctor chosen: {names}","ru":"Не выбран врач: {names}","uz":"Shifokor tanlanmagan: {names}"},
   "Записано услуг: {n} — регистратура увидит каждую в свой день.": {"en":"Services booked: {n} — reception will see each on its day.","ru":"Записано услуг: {n} — регистратура увидит каждую в свой день.","uz":"Yozilgan xizmatlar: {n} — registratura har birini o'z kunida ko'radi."},

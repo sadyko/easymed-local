@@ -129,6 +129,10 @@ try { Object.defineProperty(globalThis, 'navigator', { value: { mediaDevices: nu
 // ---------------------------------------------------------------------------
 const calls = [];            // { kind: 'rpc'|'insert'|'select', name/table, body }
 let patientRows = [];        // чем отвечает выборка по patients (страж дублей)
+// CRM_LINKS_V1 — заявка колл-центра на СЕГОДНЯ у этого пациента: окно
+// оформляет услуги само, минуя подстановку, и обязано её закрыть.
+let crmRequests = [];
+let crmLines = [];
 // { table, message, nth? } — отказ вставки. nth — номер вставки В ЭТУ таблицу
 // (1 — первая): цепочка вставляет строки услуг по одной, и «упала ВТОРАЯ» —
 // это отдельный случай, где часть строк уже лежит в базе.
@@ -209,6 +213,8 @@ globalThis.fetch = async (url, opts = {}) => {
     }
     calls.push({ kind: 'select', table, body });
     const rows = table === 'patients' ? patientRows
+      : table === 'crm_requests' ? crmRequests
+      : table === 'crm_request_services' ? crmLines
       : table === 'services' ? SERVICES
       : table === 'users' ? DOCTORS
       : table === 'referral_sources' ? SOURCES
@@ -236,6 +242,7 @@ const btnByText = (root, text) => buttons(root).find((b) => textOf(b).replace(/\
 function reset() {
   calls.length = 0; toasts.length = 0; toastKinds.length = 0; printed.length = 0;
   patientRows = []; insertFail = null; quoteFail = null; queueFail = null; focused = null;
+  crmRequests = []; crmLines = [];
   quotes = null; invoiceTotal = 152000; queueTickets = null; holdRpc = null;
   document.body.children.length = 0;
   // Окна прошлой проверки с экрана сняты — их слушатели Escape тоже.
@@ -421,7 +428,9 @@ test('сохранение: пациент → визит → строки с в
   btnByText(dlg.card, 'Сохранить').click();
   await tick(80);
 
-  const chain = calls.filter((c) => c.kind !== 'select')
+  // CRM_LINKS_V1 — crm_config_get сюда не входит: это ЧТЕНИЕ справочника
+  // воронки (какие ступени живые), а проверяется здесь порядок ЗАПИСЕЙ.
+  const chain = calls.filter((c) => c.kind !== 'select' && c.name !== 'crm_config_get')
     .map((c) => (c.kind === 'rpc' ? 'rpc:' + c.name : 'insert:' + c.table));
   assert.deepStrictEqual(chain, [
     'insert:patients',
@@ -1069,4 +1078,50 @@ test('медсестра без права «Регистрация пациен
   assert.strictEqual(dialogs('fast-registration').length, 0, 'окно быстрой регистрации всё-таки нарисовалось');
   assert.strictEqual(dialogs('access-denied').length, 1, 'отказ промолчал — это читается как поломка');
   setFullAccess('Admin');
+});
+
+// ===========================================================================
+// CRM_LINKS_V1 (2026-09-20) — ПРИШЁЛ ЗАПИСАННЫЙ, А ЗАКРЫВАЕТ ЗАЯВКУ СЕРВЕР.
+//
+// Это окно оформляет услуги само (registerWalkIn), не проходя через
+// подстановку из заявки колл-центра. Пациент, записанный по телефону на
+// сегодня и пришедший, оформлялся здесь — а его строка заявки оставалась
+// «pending» со СЕГОДНЯШНЕЙ датой. Ночью автоматика уносила пришедшего в
+// «Не пришёл», а завтра регистратура снова получала уже оплаченную услугу
+// подставленной в смету.
+//
+// Чинилось это здесь, на клиенте (closeCrmLinesForPatient), и не работало
+// никогда: звали её ПОСЛЕ ensure_visit, а искала она родителей по ОТКРЫТЫМ
+// ступеням — к тому моменту сервер уже перевёл заявку в «Пришёл», открытых
+// не находилось, и строки не закрывались. Теперь строки закрывает сам
+// ensure_visit, в одной транзакции с визитом, и это окно про CRM не знает
+// ВООБЩЕ: два писателя одной таблицы — это две разные правды о заявке.
+// ===========================================================================
+test('окно быстрой регистрации не пишет в CRM само — заявку закрывает ensure_visit', async () => {
+  reset();
+  crmRequests = [{ id: 501 }];
+  crmLines = [{ id: 901, request_id: 501 }];
+
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg);
+  const row = dlg.state.addLine(SERVICES[0], null);
+  row.sel.value = '7';
+  row.sel.fireChange();
+
+  calls.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(120);
+
+  const visit = calls.find((c) => c.kind === 'rpc' && c.name === 'ensure_visit');
+  assert.ok(visit, 'визит не заведён — закрывать заявку некому');
+  assert.strictEqual(visit.body.patient_id, 501, 'визит заведён не на этого пациента — закроется чужая заявка');
+  assert.match(String(visit.body.date), /^\d{4}-\d{2}-\d{2}/,
+    'визит заведён без дня: по дню сервер и отбирает строки заявки — ' + JSON.stringify(visit.body));
+
+  assert.ok(!calls.some((c) => c.table === 'crm_request_services'),
+    'окно снова ходит в crm_request_services само: закрытие строк живёт на сервере, в той же транзакции, что и визит');
+  assert.ok(!calls.some((c) => c.table === 'crm_requests'),
+    'окно правит заявки в обход сервера — два писателя дают заявке две разные истории');
+  dlg.close();
 });
