@@ -25,6 +25,15 @@
 // гражданство, почта, район, махалля, здоровье — работа КАРТЫ пациента, и
 // живёт в полной раскладке того же сборщика.
 //
+// FAST_REG_LAYOUT_V1 (2026-09-20) — И ОКНО ТЕПЕРЬ ВО ВСЮ ШИРИНУ.
+// Владелец: «the dialogue window is small and text is small, can you redesign
+// the fast registration dialog window so it fits content». Образец — страница
+// во всю ширину: блок «Реквизиты пациента» с «Сохранить» в его же шапке
+// справа, форма «подпись слева — поле справа» по две пары в строке, ниже
+// таблица услуг с «Печать / +Пакеты / +Услуги» в её шапке. Раскладка живёт в
+// .fr-card/.fr-form (admin-views.css), подвал окна оставлен уходу: «Отмена»
+// до записи, «Открыть карту» и «Закрыть» после.
+//
 // ЦЕПОЧКА СОХРАНЕНИЯ ТОЖЕ НЕ СВОЯ. Визит → строки → счёт → очередь ведёт
 // registerWalkIn (WALK_IN_BOOKING_V1, views/walk-in-booking.js) — та же
 // последовательность, что у мастера визита, без единого обращения к DOM.
@@ -37,7 +46,7 @@
 // (openDuplicatePatientDialog — тот же самый) получает свои обработчики.
 // Сборщик при этом НЕ ТРОНУТ: у формы заведения поведение прежнее.
 
-import { h, Icon, clear, toast, field } from '../ui.js';
+import { h, Icon, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { supabase } from '../../supabase.js';
 import { savePatient, loadPatientById, currentUser } from '../data.js';
@@ -60,8 +69,6 @@ import { doctorPoolFor } from './doctor-pool.js?v=dp1';                        /
 import { searchableSelect } from './searchable-select.js?v=ss2';               // SEARCHABLE_SELECT_V1
 import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';    // REFERRAL_SOURCE_CODE_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';                    // WIZ_INVOICE_PRINT_V1 — тот же бланк «Счёт»
-
-const CARD_WIDTH = 1240;   // как у формы заведения пациента (METRICS.cardWidth)
 
 /** Разряды тысяч пробелом — так цену читают во всех экранах продукта. */
 function fmtPrice(n) {
@@ -146,16 +153,17 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     const onKey = (e) => { if (e.key === 'Escape' && !childDialogOpen()) close(); };
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
-    // MODAL_COMPACT_OPTOUT_V1 — без .modal-compact admin.css растягивает карточку
-    // на весь экран с !important, и ширина 1240 ниже не значит ничего.
+    // FAST_REG_LAYOUT_V1 — ширину, высоту и раскладку тела задаёт .fr-card
+    // (admin-views.css), а не встроенный стиль: окно во всю доступную ширину.
+    //
+    // Что ушло и почему. .mg-dense — раскладка «подпись над полем», ужатая до
+    // 32 px, чтобы четыре ряда по три поля влезли в 1240 px; теперь подпись
+    // стоит СЛЕВА, строка стоит одну высоту, и ужимать нечего. .modal-grouped
+    // задавал ширину 760 px и своё тело; .modal-compact с MODAL_FITS_CONTENT_V1
+    // не значит ничего (это умолчание); .pc-form — оформление формы заведения.
     const card = h('div', {
-        class: 'modal-card modal-grouped mg-dense modal-compact pc-form',
+        class: 'modal-card fr-card',
         'data-dialog': 'fast-registration',
-        style: {
-            width: CARD_WIDTH + 'px',
-            maxWidth: 'calc(100vw - 32px)',
-            maxHeight: 'calc(100vh - 60px)',
-        },
     });
     overlay.appendChild(card);
     const body = h('div', { class: 'modal-body' });
@@ -214,7 +222,6 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             h('div', { class: 'mg-search-box' },
                 h('span', { class: 'mg-search-ic' }, Icon('Search', { size: 15 })),
                 searchInput, searchResults)));
-    body.appendChild(searchEl);
 
     // Плашка выбранного пациента: пока она видна, поля заперты — карта уже есть,
     // и править её из окна регистрации значило бы тихо менять чужие данные.
@@ -223,37 +230,40 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         class: 'link-btn', type: 'button',
         onclick: () => { if (!locked()) usePatient(null); },
     }, tr('Сменить'));
+    // FAST_REG_LAYOUT_V1 — .fr-picked раскладывает плашку в строку. Раньше
+    // здесь стояли встроенные flexDirection/alignItems/gap, но .mg-section это
+    // БЛОК: ни одно из трёх правил не действовало, и «Сменить» просто липла к
+    // имени вместо правого края.
     const pickedBar = h('div', {
-        class: 'mg-section span-full',
-        style: { display: 'none', flexDirection: 'row', alignItems: 'center', gap: '10px' },
+        class: 'mg-section fr-picked',
+        style: { display: 'none' },
     }, Icon('Patients', { size: 15 }), pickedName, h('span', { class: 'grow' }), changeBtn);
-    body.appendChild(pickedBar);
 
     // ── блок 1: реквизиты пациента (поля сборщика) ────────────────────────
-    // FAST_REG_COMPACT_V1 — компактная раскладка сборщика: ОДИН раздел ровно с
+    // FAST_REG_COMPACT_V1 — компактная раскладка сборщика: ОДНА форма ровно с
     // полями образца владельца. Раньше сюда брали три раздела карты пациента,
     // и в быстрое окно приезжали ПИНФЛ, язык, гражданство, район, махалля и
     // почта — владелец: «в быстрой регистрации должно быть только необходимое».
     //
-    // «Код отправителя» уходит ВНУТРЬ того же раздела пятым рядом: на образце
-    // он стоит там же, а своим разделом он был четвёртым блоком в окне, где
-    // блоков теперь один. Строит его окно, потому что это поле ВИЗИТА: карта
-    // пациента о направлении не знает и в patients его не пишут.
+    // «Код отправителя» уходит ВНУТРЬ той же формы — рядом перед «Типом
+    // скидки», как на образце. Строит его окно, потому что это поле ВИЗИТА:
+    // карта пациента о направлении не знает и в patients его не пишут.
     const referralSel = h('select', { name: '__referral_source' },
         h('option', { value: '' }, '— Без направления —'));
     const referralWrap = searchableSelect(referralSel, { placeholder: 'Номер или имя…' });
-    const referralField = field('Код отправителя (лечащий врач)', referralWrap);
-    referralField.style.gridColumn = 'span 2';
+    // FAST_REG_LAYOUT_V1 — своё имя обёртке: searchableSelect рисует поле
+    // ВСТРОЕННЫМ стилем (40 px, 13.5 px), и подогнать его под соседей по
+    // строке можно только правилом с пометкой (.fr-ctl .fr-ref > input).
+    referralWrap.className = 'fr-ref';
     // data-keep-enabled — метка для setPatientFormEnabled: поле стоит среди
     // полей карты, но запирается НЕ с ними (см. там же).
-    const referralRow = h('div', { class: 'mg-grid cols-3', dataset: { keepEnabled: '1' } }, referralField);
+    referralWrap.dataset.keepEnabled = '1';
 
     const patientBox = h('div');
-    body.appendChild(patientBox);
     const api = buildPatientFields(patientBox, {
         layout: 'compact',               // FAST_REG_COMPACT_V1 — только реквизиты образца
         withSearchStrip: false,          // строка поиска у окна своя, см. выше
-        extraRows: [referralRow],
+        extraRows: [{ label: 'Код отправителя (лечащий врач)', control: referralWrap, span: true }],
         onNavigate: navigate,
         close: () => {},                 // окно закрывает себя само
     });
@@ -269,7 +279,9 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     const printBtn = h('button', {
         class: 'btn btn-sm btn-outline', type: 'button', disabled: true, onclick: printInvoice,
     }, Icon('Print', { size: 13 }), ' ', tr('Печать'));
-    const table = h('table', { class: 'tbl' });
+    // FAST_REG_LAYOUT_V1 — .fr-table поднимает строки таблицы до 15 px: на
+    // образце услуги читаются с того же расстояния, что и поля формы.
+    const table = h('table', { class: 'tbl fr-table' });
     // Скидка категории пациента применяется сервером при выставлении счёта, и
     // до него её суммы не существует. После — она стоит под таблицей строкой:
     // «Итого» это уже сумма счёта, и без этой строки разница между ней и
@@ -278,20 +290,44 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         class: 'muted',
         style: { display: 'none', padding: '8px 14px 10px', fontSize: '12.5px', textAlign: 'right' },
     });
-    const servicesCard = h('div', { class: 'card', style: { margin: '14px 22px 18px' } },
-        h('div', { class: 'card-header' },
+    // FAST_REG_LAYOUT_V1 — порядок кнопок с образца: «Печать», «+Пакеты»,
+    // «+Услуги». Главное действие блока стоит у самого края, как «Сохранить» в
+    // шапке блока реквизитов.
+    const servicesBlock = h('div', { class: 'fr-block' },
+        h('div', { class: 'card-header fr-block-head' },
             h('h3', null, Icon('Receipt', { size: 14 }), ' ', tr('Услуги'), ' ', countEl),
             h('span', { class: 'grow' }),
-            addServicesBtn, addPackagesBtn, printBtn),
+            printBtn, addPackagesBtn, addServicesBtn),
         table, discountLine);
-    body.appendChild(servicesCard);
 
-    // ── подвал ────────────────────────────────────────────────────────────
+    // ── главное действие: «Сохранить» В ШАПКЕ БЛОКА РЕКВИЗИТОВ ─────────────
+    // На образце владельца «Сохранить» стоит справа в шапке карточки
+    // «Реквизиты пациента», а не в подвале окна: окно теперь во всю ширину и
+    // во всю высоту, и кнопка в подвале уезжала бы за нижний край формы —
+    // регистратор искал бы её прокруткой. Поведение кнопки прежнее: во время
+    // записи выключена, после записи спрятана и выключена (Enter по спрятанной,
+    // но живой кнопке всё ещё срабатывает).
     const cancelBtn = h('button', { class: 'btn btn-outline', type: 'button', onclick: close }, tr('Отмена'));
     const saveBtn = h('button', {
         class: 'btn btn-primary', type: 'button',
         onclick: () => { void doSave(); },
     }, Icon('Check', { size: 14 }), ' ', tr('Сохранить'));
+    // Номера карты и счёта после записи — здесь же, над формой, к которой они
+    // относятся (раньше стояли строкой в шапке окна).
+    const patientInfo = h('span', { class: 'fr-block-info' }, '');
+    const patientBlock = h('div', { class: 'fr-block' },
+        h('div', { class: 'card-header fr-block-head' },
+            h('h3', null, Icon('Patients', { size: 14 }), ' ', tr('Реквизиты пациента')),
+            patientInfo,
+            h('span', { class: 'grow' }),
+            saveBtn),
+        searchEl, pickedBar, patientBox);
+    body.appendChild(patientBlock);
+    body.appendChild(servicesBlock);
+
+    // ── подвал ────────────────────────────────────────────────────────────
+    // Здесь остаётся только уход: «Отмена» до записи, «Открыть карту» и
+    // «Закрыть» после неё. Главное действие уехало в шапку блока реквизитов.
     const openCardBtn = h('button', {
         class: 'btn btn-outline', type: 'button', style: { display: 'none' },
         onclick: async () => {
@@ -307,9 +343,9 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     }, Icon('Check', { size: 14 }), ' ', tr('Закрыть'));
     const footHint = h('span', { class: 'mg-hint' }, h('kbd', null, 'Enter'), ' ', tr('— сохранить и записать услуги'));
     card.appendChild(h('footer', { class: 'modal-foot' },
-        footHint, h('span', { class: 'grow' }), cancelBtn, openCardBtn, saveBtn, doneBtn));
+        footHint, h('span', { class: 'grow' }), cancelBtn, openCardBtn, doneBtn));
 
-    // PATIENT_FORM_FLOW_V1 — Enter нажимает ГЛАВНОЕ действие подвала. Пропускаем
+    // PATIENT_FORM_FLOW_V1 — Enter нажимает ГЛАВНОЕ действие окна. Пропускаем
     // там, где Enter уже занят и значит другое: перенос строки в <textarea>,
     // нажатие самой кнопки/ссылки, выбор строки в открытом списке и строка
     // поиска дубликатов (сохранять оттуда значило бы заводить второго такого же
@@ -725,7 +761,9 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     function toSavedState() {
         const inv = (state.result && state.result.invoice) || null;
         const p = state.patient || {};
-        headHint.textContent = [
+        // FAST_REG_LAYOUT_V1 — номера стоят в шапке блока реквизитов, над теми
+        // самыми полями, из которых карта и заведена.
+        patientInfo.textContent = [
             trf('Пациент № {mrn} · {name}', { mrn: p.mrn || '—', name: nameOf(p) || '—' }),
             trf('Счёт № {no}', { no: (inv && (inv.invoice_number || inv.id)) || '—' }),
         ].join(' · ');
@@ -881,5 +919,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         overlay, card, body, close, state,
         fields: api.fields, collect: api.collect, setGender: api.setGender,
         table, saveBtn, printBtn, addServicesBtn, addPackagesBtn, referralSel, searchInput,
+        // FAST_REG_LAYOUT_V1 — два блока окна: реквизиты и услуги.
+        patientBlock, servicesBlock, formEl: api.formEl,
     };
 }

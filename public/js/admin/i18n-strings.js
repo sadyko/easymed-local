@@ -8507,6 +8507,10 @@ export const STRINGS = {
   // его искать, стало нечего.
   "Код отправителя (лечащий врач)": {"en":"Referrer code (attending doctor)","ru":"Код отправителя (лечащий врач)","uz":"Yoʻllovchi kodi (davolovchi shifokor)"},
   "Реквизиты пациента": {"en":"Patient details","ru":"Реквизиты пациента","uz":"Bemor rekvizitlari"},
+  // FAST_REG_LAYOUT_V1 (2026-09-20) — на образце владельца ФИО подписано одним
+  // словом «Клиент»: фамилия, имя и отчество это ОДНО имя человека, а не три
+  // разных сведения, и три подписи над тремя полями их и разделяли.
+  "Клиент": {"en":"Client","ru":"Клиент","uz":"Mijoz"},
   "+Услуги": {"en":"+Services","ru":"+Услуги","uz":"+Xizmatlar"},
   "+Пакеты": {"en":"+Packages","ru":"+Пакеты","uz":"+Paketlar"},
   "Открыть карту": {"en":"Open the card","ru":"Открыть карту","uz":"Kartani ochish"},

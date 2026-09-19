@@ -205,11 +205,12 @@ export function openPatientEditModal(patient, opts = {}) {
  * @param {string[]} [opts.sections]         подмножество из personal · documents · contacts · health
  * @param {boolean}  [opts.withSearchStrip]  строка поиска существующего пациента (по умолчанию — при заведении)
  * @param {string}   [opts.layout]           'full' — разделы карты · 'compact' — один раздел образца
- * @param {HTMLElement[]} [opts.extraRows]   ряды в конец компактного раздела (поля не карты, а визита)
+ * @param {{label:string, control:HTMLElement, span?:boolean}[]} [opts.extraRows]
+ *        ряды компактной формы перед «Типом скидки» (поля не карты, а визита)
  * @param {Function} [opts.onNavigate]       переход по приложению (как в ctx)
  * @param {Function} [opts.onSaved]          вызывается с сохранённой картой
  * @param {Function} [opts.close]            закрыть то, во что встроены поля (окно — себя, страница — ничего)
- * @returns {{fields, state, collect, save, setGender, photo, searchStrip, tg}}
+ * @returns {{fields, state, collect, save, setGender, photo, searchStrip, tg, formEl}}
  */
 export function buildPatientFields(container, {
     patient = null,
@@ -220,8 +221,9 @@ export function buildPatientFields(container, {
     // FAST_REG_COMPACT_V1 (2026-09-19) — РАСКЛАДКА.
     //
     // 'full' — карта пациента: четыре раздела, всё, что у человека есть.
-    // 'compact' — ОДИН раздел «Реквизиты пациента» ровно с полями образца
-    // владельца. Владелец о быстрой регистрации: «в окне должно быть только
+    // 'compact' — ОДНА форма «подпись слева — поле справа» ровно с полями
+    // образца владельца (FAST_REG_LAYOUT_V1; заголовок «Реквизиты пациента»
+    // рисует окно). Владелец о быстрой регистрации: «в окне должно быть только
     // необходимое, как на образце, а вы добавили паспорта, географию и прочее,
     // что для быстрой не нужно». Паспорт, ПИНФЛ, язык, район, махалля,
     // почта — работа КАРТЫ пациента, и они остались в полной раскладке; здесь
@@ -230,9 +232,10 @@ export function buildPatientFields(container, {
     // Раскладка, а не ещё один набор разделов: поля, проверки и collect() у
     // обеих ОДНИ, иначе быстрая регистрация снова разошлась бы с картой молча.
     layout = 'full',
-    // Ряды в конец компактного раздела. У быстрой регистрации это «Код
-    // отправителя»: поле ВИЗИТА, а не карты, и строит его тот, кто про визит
-    // знает, — а стоит оно на образце в том же блоке.
+    // Ряды компактной формы — { label, control, span } — рисуются тем же
+    // frRow перед «Типом скидки». У быстрой регистрации это «Код отправителя»:
+    // поле ВИЗИТА, а не карты, и строит его тот, кто про визит знает, — а
+    // стоит оно на образце в том же блоке.
     extraRows = [],
     onNavigate, onSaved, close,
 } = {}) {
@@ -263,6 +266,10 @@ export function buildPatientFields(container, {
     // payload не должен нести пустые ключи разделов, которых на экране не было,
     // иначе правка одного раздела затирала бы соседний.
     const fields = {};
+    // FAST_REG_LAYOUT_V1 — сама форма компактной раскладки (.fr-form). Окно
+    // ставит её под СВОЮ шапку блока, где рядом с «Реквизитами пациента»
+    // стоит «Сохранить»: заголовок и кнопка — дело окна, а не набора полей.
+    let formEl = null;
     const phoneFields = new Set();
     const reg = (name, el) => { fields[name] = el; return el; };
     const regPhone = (name, el) => { phoneFields.add(name); return reg(name, el); };
@@ -325,14 +332,14 @@ export function buildPatientFields(container, {
     // без адреса это работа впустую.
     const geo = needs('contacts') ? geoCascade() : null;
 
-    // ── Компактная раскладка: ОДИН раздел «Реквизиты пациента» ─────────────
+    // ── Компактная раскладка: ОДНА форма реквизитов по образцу ─────────────
     // FAST_REG_COMPACT_V1 — образец владельца, поле в поле и в его порядке:
     // ФИО · дата рождения · пол · телефон · паспортные данные · резидентство ·
-    // область · адрес · тип скидки (+ «Код отправителя» рядом, extraRows).
-    // Номера у раздела нет: он один, и последовательности из одного шага не
-    // бывает. Контролы — ТЕ ЖЕ, что в полной раскладке (dobInput, sexChips,
-    // categorySel, каскад), поэтому collect(), save() и проверки не знают, в
-    // какой раскладке их заполняли.
+    // область · адрес (+ «Код отправителя», extraRows) · тип скидки.
+    // FAST_REG_LAYOUT_V1 — и в его РАСКЛАДКЕ: подпись слева, поле справа, по
+    // две пары в строке. Контролы — ТЕ ЖЕ, что в полной раскладке (dobInput,
+    // sexChips, categorySel, каскад), поэтому collect(), save() и проверки не
+    // знают, в какой раскладке их заполняли.
     if (compact) {
         // «ОБЛАСТЬ» БЕЗ «СТРАНЫ» — СТРАНА СТАВИТСЯ МОЛЧА.
         //
@@ -352,36 +359,77 @@ export function buildPatientFields(container, {
         });
         reg('country', geo.countrySel);
         reg('region',  geo.regionSel);
-        container.appendChild(mgSection('Реквизиты пациента', [
-            mgGrid(3,
-                field(['Фамилия ', req()], reg('last_name',   nameInput('last_name',   'Каримова', pv('last_name')))),
-                field(['Имя ',     req()], reg('first_name',  nameInput('first_name',  'Азиза', pv('first_name')))),
-                field('Отчество',          reg('middle_name', nameInput('middle_name', 'Рустамовна', pv('middle_name')))),
-            ),
-            mgGrid(3,
-                field(['Дата рождения ', req()], reg('date_of_birth', dobInput)),
-                field(['Пол ', req()], sexChips),
-                // REQUIRED_HONEST_V1 — у телефона звёздочки нет и здесь: правило
-                // «голый +998 сохраняется пустым» то же самое.
-                field('Телефон', regPhone('phone', phoneInput('phone', '+998 90 961 00 04', { value: pv('phone') }))),
-            ),
-            mgGrid(3,
-                field('Паспортные данные', reg('passport_number', h('input', { name: 'passport_number', placeholder: 'AB1234567', value: pv('passport_number') }))),
-                field('Резидентство', radioChips('__residency',
-                    [['resident', 'Резидент РУз'], ['nonresident', 'Нерезидент']],
-                    () => state.residency,
-                    (v) => { state.residency = v; })),
-                field('Область', geo.regionSel),
-            ),
-            mgGrid(3,
-                field('Адрес', reg('address', h('input', { name: 'address', placeholder: 'ул. Амира Темура 12, кв. 47', value: pv('address') })), 2),
-                // CATEGORY_DISCOUNT_V1 — на образце это «Тип скидки»: в карте
-                // список зовётся «Категория пациента», но процент по нему и
-                // есть скидка, которую регистратура здесь и выбирает.
-                field('Тип скидки', reg('category_id', categorySel)),
-            ),
-            ...extraRows,
-        ]));
+
+        // FAST_REG_LAYOUT_V1 (2026-09-20) — ПОДПИСЬ СЛЕВА, ПОЛЕ СПРАВА.
+        //
+        // Владелец: «the dialogue window is small and text is small... redesign
+        // the fast registration dialog window so it fits content», и показал
+        // образец: подпись прижата вправо в своей колонке, поле тянется от неё
+        // до края, по ДВЕ пары в строке.
+        //
+        // Здесь стояли четыре ряда mgGrid(3) со стопкой «подпись НАД полем».
+        // Такая строка стоит ДВЕ высоты, поэтому в окно влезала только ужатой
+        // (.mg-dense: поле 32 px, подпись 12.5 px) — это и читалось «мелко».
+        // Подпись сбоку возвращает строке одну высоту, и на освободившемся
+        // месте текст становится крупным без потери рядов.
+        //
+        // ЗАГОЛОВКА РАЗДЕЛА ЗДЕСЬ БОЛЬШЕ НЕТ. «Реквизиты пациента» стали
+        // шапкой блока окна — в ней же стоит «Сохранить» (тоже с образца), а
+        // строитель полей про кнопки окна не знает и знать не должен. Форму он
+        // отдаёт элементом (formEl), и окно кладёт её под свою шапку.
+        formEl = h('div', { class: 'fr-form' });
+        /**
+         * Ряд образца: подпись в своей колонке, поле в соседней.
+         *
+         * Оба — ПРЯМЫЕ дети сетки, а не пара в обёртке: в обёртке каждая пара
+         * мерила бы ширину подписи по себе, и колонка подписей перестала бы
+         * быть колонкой (у «Пол» она одна, у «Паспортных данных» другая).
+         *
+         * @param {string} label
+         * @param {HTMLElement} control
+         * @param {{required?:boolean, span?:boolean}} [o] span — поле во всю строку
+         */
+        const frRow = (label, control, { required = false, span = false } = {}) => {
+            // Звёздочка — ОТДЕЛЬНЫЙ узел, а не «подпись + ' *'»: I18N_COVERAGE_V1
+            // запрещает склейку русского литерала, да и в словаре подпись со
+            // звёздочкой в строке уже не нашлась бы по своему ключу.
+            formEl.appendChild(h('div', { class: 'fr-label' }, tr(label), required ? req() : null));
+            // Класс .field рядом с .fr-ctl — не украшение: рамка, радиус, высота
+            // 38 px и кольцо фокуса описаны ТОЛЬКО там, и телефон (.ph-input)
+            // без него остался бы полем вовсе без рамки.
+            formEl.appendChild(h('div', { class: 'fr-ctl field' + (span ? ' fr-span' : '') }, control));
+        };
+
+        // ФИО — одна подпись «Клиент» на три поля, как на образце: фамилия,
+        // имя и отчество это ОДНО имя человека, а не три разных сведения.
+        frRow('Клиент', h('div', { class: 'fr-names' },
+            reg('last_name',   nameInput('last_name',   'Фамилия',  pv('last_name'))),
+            reg('first_name',  nameInput('first_name',  'Имя',      pv('first_name'))),
+            reg('middle_name', nameInput('middle_name', 'Отчество', pv('middle_name'))),
+        ), { required: true, span: true });
+        frRow('Дата рождения', reg('date_of_birth', dobInput), { required: true });
+        frRow('Пол', sexChips, { required: true });
+        // REQUIRED_HONEST_V1 — у телефона звёздочки нет и здесь: правило
+        // «голый +998 сохраняется пустым» то же самое.
+        frRow('Телефон', regPhone('phone', phoneInput('phone', '+998 90 961 00 04', { value: pv('phone') })));
+        frRow('Паспортные данные', reg('passport_number', h('input', { name: 'passport_number', placeholder: 'AB1234567', value: pv('passport_number') })));
+        frRow('Резидентство', radioChips('__residency',
+            [['resident', 'Резидент РУз'], ['nonresident', 'Нерезидент']],
+            () => state.residency,
+            (v) => { state.residency = v; }));
+        frRow('Область', geo.regionSel);
+        frRow('Адрес', reg('address', h('input', { name: 'address', placeholder: 'ул. Амира Темура 12, кв. 47', value: pv('address') })), { span: true });
+        // Ряды окна (у быстрой регистрации это «Код отправителя») идут ПЕРЕД
+        // «Типом скидки» — на образце порядок такой.
+        for (const row of extraRows) {
+            if (!row || !row.control) continue;
+            frRow(row.label, row.control, { span: row.span !== false });
+        }
+        // CATEGORY_DISCOUNT_V1 — на образце это «Тип скидки»: в карте список
+        // зовётся «Категория пациента», но процент по нему и есть скидка,
+        // которую регистратура здесь и выбирает. На образце он ПОСЛЕДНИЙ.
+        frRow('Тип скидки', reg('category_id', categorySel), { span: true });
+        container.appendChild(formEl);
     }
 
     // ── Раздел 1: личные данные ────────────────────────────────────────────
@@ -607,6 +655,7 @@ export function buildPatientFields(container, {
         photo,          // PATIENT_PHOTO_V1 — { acceptPhoto, setPhoto, fileInp } для теста
         searchStrip: search,
         tg,
+        formEl,         // FAST_REG_LAYOUT_V1 — .fr-form компактной раскладки (в полной — null)
     };
 }
 

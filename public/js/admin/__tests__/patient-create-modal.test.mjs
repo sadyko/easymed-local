@@ -949,28 +949,72 @@ test('PATIENT_FIELDS_V1: набор полей рисуется в обычны�
 //
 // И обратная сторона: раз поле не нарисовано, его нет и в реестре, значит
 // collect() не шлёт по нему пустую строку (PATIENT_FIELDS_V1).
+//
+// FAST_REG_LAYOUT_V1 (2026-09-20) — И РАСКЛАДКА ТЕПЕРЬ ГОРИЗОНТАЛЬНАЯ.
+// Владелец: «the dialogue window is small and text is small... redesign the
+// fast registration dialog window so it fits content». На образце подпись
+// стоит СЛЕВА от поля, а не над ним, ФИО подписано одним словом «Клиент», и
+// «Тип скидки» — последним рядом. Проверяется список подписей В ПОРЯДКЕ: ряд,
+// уехавший на другое место, ломает узнавание формы ровно так же, как лишнее
+// поле, и молча.
 // ===========================================================================
-test('FAST_REG_COMPACT_V1: compact — одна секция «Реквизиты пациента» ровно с полями образца', () => {
+/** Подписи формы по порядку, без звёздочки обязательности. */
+const frLabels = (form) => (form.children || []).filter((n) => hasClass(n, 'fr-label'))
+  .map((n) => textOf(n).replace(/\*/g, '').replace(/\s+/g, ' ').trim());
+/** Поля формы по порядку — столько же, сколько подписей, и в паре с ними. */
+const frCtls = (form) => (form.children || []).filter((n) => hasClass(n, 'fr-ctl'));
+
+test('FAST_REG_LAYOUT_V1: compact — форма «подпись слева — поле справа» ровно с полями образца', () => {
   reset();
   const box = mk('div');
   const f = modal.buildPatientFields(box, { layout: 'compact', withSearchStrip: false });
 
-  // 1. Раздел ОДИН и без номера: нумеровать нечего.
-  const secs = walk(box).filter((n) => hasClass(n, 'mg-section'));
-  assert.equal(secs.length, 1, 'разделов в компактной раскладке не один: ' + secs.length);
-  const titles = walk(box).filter((n) => n.tagName === 'H3')
-    .map((n) => textOf(n).replace(/<svg[\s\S]*?<\/svg>/g, '').replace(/\s+/g, ' ').trim());
-  assert.deepEqual(titles, ['Реквизиты пациента'], 'заголовки компактной раскладки: ' + titles.join(' | '));
+  // 1. Раскладка — ОДНА форма, и заголовка у неё нет: «Реквизиты пациента»
+  // стали шапкой блока окна, где рядом стоит «Сохранить» (образец владельца),
+  // а набор полей про кнопки окна не знает.
+  const forms = walk(box).filter((n) => hasClass(n, 'fr-form'));
+  assert.equal(forms.length, 1, 'форм компактной раскладки не одна: ' + forms.length);
+  assert.equal(f.formEl, forms[0], 'строитель не отдал форму вызвавшему (formEl)');
+  assert.equal(walk(box).filter((n) => hasClass(n, 'mg-section')).length, 0,
+    'в компактной раскладке остался раздел со своим заголовком');
+  const form = forms[0];
 
-  // 2. Поля — РОВНО образец, в порядке образца.
-  assert.deepEqual(labelsOf(box), [
-    'Фамилия *', 'Имя *', 'Отчество',
-    'Дата рождения *', 'Пол *', 'Телефон',
-    'Паспортные данные', 'Резидентство', 'Область',
-    'Адрес', 'Тип скидки',
-  ], 'поля компактной раскладки: ' + labelsOf(box).join(' | '));
+  // 2. Подписи — РОВНО образец, в порядке образца, и каждая пара лежит ПРЯМО
+  // в сетке: обёртка вокруг пары мерила бы ширину подписи по себе, и колонка
+  // подписей перестала бы быть колонкой.
+  assert.deepEqual(frLabels(form), [
+    'Клиент', 'Дата рождения', 'Пол', 'Телефон', 'Паспортные данные',
+    'Резидентство', 'Область', 'Адрес', 'Тип скидки',
+  ], 'подписи компактной формы: ' + frLabels(form).join(' | '));
+  const ctls = frCtls(form);
+  assert.equal(ctls.length, frLabels(form).length, 'подписей и полей разное число');
 
-  // 3. Реестр полей: ничего сверх образца. Страна — предустановленная
+  // 3. Звёздочка — ровно у трёх обязательных (REQUIRED_HONEST_V1: у телефона
+  // её нет, потому что карта без номера — штатный случай).
+  const starred = (form.children || []).filter((n) => hasClass(n, 'fr-label'))
+    .map((n) => walk(n).some((c) => hasClass(c, 'req')));
+  assert.deepEqual(starred, [true, true, true, false, false, false, false, false, false],
+    'обязательными помечены не те поля: ' + starred.join(','));
+
+  // 4. «Клиент» — ОДНА подпись на три поля ФИО; «Адрес» и «Тип скидки» тянутся
+  // во всю строку (на образце они одни в своём ряду).
+  const inputsOf = (n) => walk(n).filter((x) => x.tagName === 'INPUT');
+  assert.equal(inputsOf(ctls[0]).length, 3, 'под подписью «Клиент» не три поля ФИО');
+  assert.ok(hasClass(ctls[7], 'fr-span'), '«Адрес» не тянется во всю строку');
+  assert.ok(hasClass(ctls[8], 'fr-span'), '«Тип скидки» не тянется во всю строку');
+
+  // 5. Ряды окна (у быстрой регистрации это «Код отправителя») встают ПЕРЕД
+  // «Типом скидки» — на образце порядок такой.
+  const box3 = mk('div');
+  const extra = mk('select');
+  const f3 = modal.buildPatientFields(box3, {
+    layout: 'compact', withSearchStrip: false,
+    extraRows: [{ label: 'Код отправителя (лечащий врач)', control: extra, span: true }],
+  });
+  assert.deepEqual(frLabels(f3.formEl).slice(-2), ['Код отправителя (лечащий врач)', 'Тип скидки'],
+    'ряд окна встал не перед «Типом скидки»: ' + frLabels(f3.formEl).join(' | '));
+
+  // 6. Реестр полей: ничего сверх образца. Страна — предустановленная
   // Узбекистан за «Областью»: выбирать её нечем и незачем, а без неё область
   // осталась бы именем без страны.
   const ALLOWED = new Set(['last_name', 'first_name', 'middle_name', 'date_of_birth',
@@ -984,7 +1028,7 @@ test('FAST_REG_COMPACT_V1: compact — одна секция «Реквизит�
     assert.ok(!(k in f.fields), 'поле «' + k + '» не убрано из компактной раскладки');
   }
 
-  // 4. Минимум собирается, и в payload нет ключей мимо образца: пустая строка
+  // 7. Минимум собирается, и в payload нет ключей мимо образца: пустая строка
   // по ненарисованному полю затёрла бы то, что уже записано в карте.
   f.fields.last_name.value = 'Иванов';
   f.fields.first_name.value = 'Иван';
@@ -997,7 +1041,7 @@ test('FAST_REG_COMPACT_V1: compact — одна секция «Реквизит�
   assert.equal(got.gender, 'M', 'пол не собрался');
   assert.equal(got.citizenship, 'resident', 'резидентство не собралось');
 
-  // 5. Обязательные поля те же: без пола карта не сохраняется.
+  // 8. Обязательные поля те же: без пола карта не сохраняется.
   const box2 = mk('div');
   const f2 = modal.buildPatientFields(box2, { layout: 'compact', withSearchStrip: false });
   f2.fields.last_name.value = 'Иванов';
