@@ -177,17 +177,46 @@ export function openPatientEditModal(patient, opts = {}) {
 }
 
 /**
- * Собрать окно, НЕ вставляя его в документ. Отдельно от open* ради теста:
- * проверять состав первого экрана, раскрытие и сбор значений можно без
- * document.body и без таймеров.
+ * PATIENT_FIELDS_V1 (2026-09-19) — НАБОР ПОЛЕЙ ПАЦИЕНТА БЕЗ ОКНА.
+ *
+ * Поля пациента жили одним замыканием вместе с оболочкой окна: шапкой,
+ * подвалом, Escape и переходом в мастер услуг. «Быстрая регистрация в одном
+ * экране» рисует ТЕ ЖЕ поля, но не окном, а страницей, — и если бы она
+ * собрала их у себя, два набора полей разошлись бы МОЛЧА: поле, добавленное
+ * сюда, не появилось бы там, а проверка, поправленная там, не сработала бы
+ * здесь. Для карты пациента это не косметика: расходятся обязательные поля и
+ * правила, по которым карта заводится.
+ *
+ * Поэтому набор полей — отдельный строитель: он рисует разделы в ЛЮБОЙ
+ * container и отдаёт реестр полей, collect() и save(). Окно заведения
+ * (buildPatientCreateDialog ниже) — оболочка вокруг него, и ничего больше.
+ *
+ * @param {HTMLElement} container            куда добавлять разделы
+ * @param {object}   [opts]
+ * @param {object}   [opts.patient]          строка пациента — правка (иначе заведение)
+ * @param {string[]} [opts.sections]         подмножество из personal · documents · contacts · health
+ * @param {boolean}  [opts.withSearchStrip]  строка поиска существующего пациента (по умолчанию — при заведении)
+ * @param {Function} [opts.onNavigate]       переход по приложению (как в ctx)
+ * @param {Function} [opts.onSaved]          вызывается с сохранённой картой
+ * @param {Function} [opts.onCreated]        вызывается после создания НОВОЙ карты — и после
+ *   принудительного создания тоже: тем, кто продолжает путь (мастер услуг), важно
+ *   не «как сохранили», а «карта появилась»
+ * @param {Function} [opts.close]            закрыть то, во что встроены поля (окно — себя, страница — ничего)
+ * @returns {{fields, state, collect, save, setGender, photo, searchStrip, tg}}
  */
-export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, quick = false } = {}) {
-    const navigate = typeof onNavigate === 'function' ? onNavigate : () => {};
-    // PATIENT_FORM_ONE_V1 — режим правки: то же окно, заполненное строкой пациента.
+export function buildPatientFields(container, {
+    patient = null,
+    sections = ['personal', 'documents', 'contacts', 'health'],
+    // Строка поиска дубликатов нужна при ЗАВЕДЕНИИ и бессмысленна при правке:
+    // это и есть тот самый пациент (PATIENT_FORM_ONE_V1).
+    withSearchStrip = !(patient && patient.id),
+    onNavigate, onSaved, onCreated, close,
+} = {}) {
+    const navigate  = typeof onNavigate === 'function' ? onNavigate : () => {};
+    const closeHost = typeof close === 'function' ? close : () => {};
+    const has = (name) => sections.includes(name);
+    // PATIENT_FORM_ONE_V1 — режим правки: те же поля, заполненные строкой пациента.
     const editing = !!(patient && patient.id);
-    // FAST_REGISTRATION_V1 — быстрая регистрация. Правка уже заведённой карты
-    // быстрой не бывает: услуги к такому пациенту добавляют из его карты.
-    const fast = !!quick && !editing;
     const pv = (name) => (editing && patient[name] != null ? String(patient[name]) : '');
     const state = {
         gender:      editing ? ({ male: 'M', female: 'F', M: 'M', F: 'F' }[patient.gender] || '') : '',
@@ -200,10 +229,291 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
     // Реестр полей. Собираем значения ПО НЕМУ, а не querySelectorAll по DOM:
     // телефонный контрол — обёртка со своим .value (голый «+998» отдаёт пустоту),
     // и обход живого дерева этого не увидел бы.
+    //
+    // PATIENT_FIELDS_V1 — поле попадает в реестр ТАМ, ГДЕ ОНО НАРИСОВАНО:
+    // payload не должен нести пустые ключи разделов, которых на экране не было,
+    // иначе правка одного раздела затирала бы соседний.
     const fields = {};
     const phoneFields = new Set();
     const reg = (name, el) => { fields[name] = el; return el; };
     const regPhone = (name, el) => { phoneFields.add(name); return reg(name, el); };
+
+    // PATIENT_FORM_REWRITE_V1 — приглашение в Telegram НЕ поле карты, а действие
+    // над пациентом: раньше оно стояло полем в ряду с адресом и гражданством, и
+    // его искали глазами среди того, что заполняют. Строитель его отдаёт, а куда
+    // поставить (окно — в шапку) решает оболочка. Номер берётся у поля телефона.
+    const tg = telegramBlock(state, () => fields.phone && fields.phone.value);
+
+    // ---- Поиск существующего пациента (одной строкой, во всю ширину) -------
+    const search = searchStrip(navigate, closeHost);
+    if (withSearchStrip) container.appendChild(search.el);
+
+    // DATE_NUMERIC_V1 — дата рождения показана цифрами: её сверяют с паспортом.
+    // Подпись пустого поля — сама дата примером: «15.11.1994» объясняет порядок
+    // чисел лучше, чем «ДД.ММ.ГГГГ», и не требует расшифровки.
+    // `autocomplete="bday"` — браузер знает это поле в лицо и подставляет
+    // сохранённую дату рождения; `off` здесь просто отказывался от помощи.
+    const dobInput = h('input', {
+        name: 'date_of_birth', type: 'date', placeholder: '15.11.1994',
+        // CALENDAR_MONTH_INDEX_V1 — верхняя граница у ДАТЫ РОЖДЕНИЯ это сегодня:
+        // тогда в списке годов нет будущих (он и открывался на 2031-м), а
+        // «завтра» календарь просто не даст выбрать — вместо отказа после.
+        max: new Date().toISOString().slice(0, 10),
+        'data-date-numeric': '', autocomplete: 'bday', value: pv('date_of_birth').slice(0, 10),
+    });
+    const ageInput = h('input', { name: '__age', readOnly: true, placeholder: '—' });
+    // CATEGORY_DISCOUNT_V1 — имя поля = имя колонки, иначе collect() соберёт
+    // ключ, который сервер молча выбросит. Список стоит в «Документах», а
+    // подставляет его по возрасту «Дата рождения» из соседнего раздела —
+    // поэтому оба контрола собираются здесь, до разделов.
+    const categorySel = categorySelect(editing ? patient.category_id : null);
+    if (editing) { const age = computeAge(dobInput.value); ageInput.value = (age == null || age < 0 || age > 130) ? '' : String(age); }
+    dobInput.addEventListener('input', () => {
+        const age = computeAge(dobInput.value);
+        ageInput.value = (age == null || age < 0 || age > 130) ? '' : String(age);
+        // Подставляем ТОЛЬКО если такая категория есть в справочнике клиники.
+        if (!categorySel.value) categorySel.value = categoryOptionByName(categorySel, categoryFromAge(age));
+    });
+
+    const sexChips = radioChips('gender',
+        [['M', 'Мужской'], ['F', 'Женский']],
+        () => state.gender,
+        (v) => { state.gender = v; },
+        { nowrap: true });
+
+    // Фото стоит ПЛИТКОЙ слева и держит три ряда полей первого раздела: карта
+    // пациента узнаётся в лицо, и прятать снимок за раскрытием было неправильно.
+    const photo = photoBlock(state);
+    if (editing && patient.photo_url) photo.setPhoto(patient.photo_url);
+    const geo = geoCascade();
+
+    // ── Раздел 1: личные данные ────────────────────────────────────────────
+    // Email здесь же, рядом с телефонами: это способ связи, а не документ.
+    if (has('personal')) container.appendChild(mgSection('Личные данные', [
+        h('div', { class: 'pc-id' },
+            h('div', { class: 'pc-id-photo' }, photo.el),
+            h('div', { class: 'pc-id-fields' },
+                mgGrid(3,
+                    field(['Фамилия ', req()], reg('last_name',   nameInput('last_name',   'Каримова', pv('last_name')))),
+                    field(['Имя ',     req()], reg('first_name',  nameInput('first_name',  'Азиза', pv('first_name')))),
+                    field('Отчество',          reg('middle_name', nameInput('middle_name', 'Рустамовна', pv('middle_name')))),
+                ),
+                mgGrid(3,
+                    field(['Дата рождения ', req()], reg('date_of_birth', dobInput)),
+                    field('Возраст', ageInput),
+                    field(['Пол ', req()], sexChips),
+                ),
+                mgGrid(3,
+                    // REQUIRED_HONEST_V1 — у телефона звёздочки НЕТ: правило «голый
+                    // +998 сохраняется пустым» означает, что карта без номера — штатный
+                    // случай (сопровождающий, ребёнок, экстренный приём).
+                    field('Номер телефона',      regPhone('phone',           phoneInput('phone', '+998 90 961 00 04', { value: pv('phone') }))),
+                    field('Доп. номер телефона', regPhone('phone_secondary', phoneInput('phone_secondary', '+998 90 000 00 00', { value: pv('phone_secondary') }))),
+                    field('Email', reg('email', h('input', { name: 'email', placeholder: 'name@example.com', value: pv('email') }))),
+                ),
+            ),
+        ),
+    ], { step: 1 }));
+
+    // ── Раздел 2: документы и резидентство ─────────────────────────────────
+    // Резидентство и язык — сверху: от них зависит, какие документы вообще
+    // спрашивать и на каком языке разговаривать с пациентом.
+    if (has('documents')) container.appendChild(mgSection('Документы и резидентство', [
+        mgGrid(3,
+            field('Резидентство', radioChips('__residency',
+                [['resident', 'Резидент РУз'], ['nonresident', 'Нерезидент']],
+                () => state.residency,
+                (v) => { state.residency = v; }), 2),
+            field('Предпочитаемый язык', reg('language', select('language', ['Узбекский', 'Русский', 'Английский', 'Каракалпакский'], pv('language')))),
+        ),
+        mgGrid(3,
+            field('ПИНФЛ (ЖШШИР)',        reg('national_id',     h('input', { name: 'national_id', placeholder: '14 цифр', maxLength: '14', value: pv('national_id') }))),
+            field('Паспорт / документ №', reg('passport_number', h('input', { name: 'passport_number', placeholder: 'AB1234567', value: pv('passport_number') }))),
+            field('Гражданство / национальность', reg('nationality', h('input', { name: 'nationality', placeholder: 'Узбек', value: pv('nationality') }))),
+        ),
+        // Категория несёт скидку группы (CATEGORY_DISCOUNT_V1), поведение —
+        // предупреждение для регистратуры. Ни того, ни другого на образце нет,
+        // но обе возможности живые: категория считает деньги, а предупреждение
+        // читают перед приёмом. Место им здесь — это тоже «учёт пациента».
+        mgGrid(3,
+            field('Категория пациента', reg('category_id', categorySel)),
+            field('Поведение / предупреждение',
+                reg('behavior_note', textareaWith({
+                    name: 'behavior_note', rows: '1',
+                    placeholder: 'напр. Грубил регистратуре; приходил в нетрезвом виде.',
+                }, pv('behavior_note'))), 2),
+        ),
+    ], { step: 2 }));
+
+    // ── Раздел 3: контакты и адрес ─────────────────────────────────────────
+    if (has('contacts')) {
+        reg('country',  geo.countrySel);
+        reg('region',   geo.regionSel);
+        reg('district', geo.districtSel);
+        container.appendChild(mgSection('Контакты и адрес', [
+            mgGrid(3,
+                field('Страна', geo.countrySel),
+                field('Регион', geo.regionSel),
+                field('Район',  geo.districtSel),
+            ),
+            mgGrid(3,
+                field('Махалля', reg('mahalla', h('input', { name: 'mahalla', placeholder: 'Юнусабад-3', value: pv('mahalla') }))),
+                field('Улица, дом, квартира', reg('address', h('input', { name: 'address', placeholder: 'ул. Амира Темура 12, кв. 47', value: pv('address') })), 2),
+            ),
+        ], { step: 3 }));
+        if (editing) geo.preset({ country: patient.country, region: patient.region, district: patient.district });
+    }
+
+    // ── Раздел 4: здоровье и экстренная связь ──────────────────────────────
+    // PATIENT_FORM_ONE_V1 — эти поля жили только в окне правки; теперь они в
+    // ОДНОМ окне с заведением. Хронические заболевания — выбор из справочника
+    // клиники (CHRONIC_REF_V1), а не свободный текст: одинаково названные
+    // болезни потом считаются и ищутся.
+    if (has('health')) {
+        const chronic = chronicPicker(pv('chronic_conditions'));
+        container.appendChild(mgSection('Здоровье и экстренная связь', [
+            mgGrid(3,
+                field('Группа крови', reg('blood_type', h('input', { name: 'blood_type', placeholder: 'напр. O(I) Rh+', value: pv('blood_type') }))),
+                field('Аллергии', reg('allergies', textareaWith({ name: 'allergies', rows: '1', placeholder: 'напр. пенициллин, йод' }, pv('allergies')))),
+                field('Хронические заболевания', reg('chronic_conditions', chronic)),
+            ),
+            mgGrid(3,
+                field('Профессия', reg('occupation', h('input', { name: 'occupation', placeholder: 'напр. учитель', value: pv('occupation') }))),
+                field('Экстренный контакт — имя', reg('emergency_contact_name', h('input', { name: 'emergency_contact_name', placeholder: 'напр. Каримов Рустам, супруг', value: pv('emergency_contact_name') }))),
+                field('Экстренный контакт — телефон', regPhone('emergency_contact_phone', phoneInput('emergency_contact_phone', '+998 90 000 00 00', { value: pv('emergency_contact_phone') }))),
+            ),
+        ], { step: 4 }));
+    }
+
+    // ---- Сбор и сохранение ---------------------------------------------------
+    function collect() {
+        const payload = {};
+        for (const [name, el] of Object.entries(fields)) {
+            if (name.startsWith('__')) continue;
+            // PHONE_INPUT_V1 — поле телефона предзаполнено «+998», поэтому
+            // нетронутое поле всё равно НЕ пустое. Обёртка phoneInput отдаёт
+            // пустоту сама; проверку повторяем явно, чтобы правило было видно
+            // здесь, а не только в чужом модуле. Телефон узнаём по реестру, а
+            // не по наличию свойства .input у элемента: «есть .input — значит
+            // телефон» ломается о любой элемент с таким же именем.
+            if (phoneFields.has(name)) {
+                const inner = el.input;
+                payload[name] = (inner && isCodeOnly(inner.value)) ? '' : el.value;
+            } else {
+                payload[name] = el.value;
+            }
+        }
+        payload.gender = state.gender;
+        payload.citizenship = state.residency === 'nonresident' ? 'nonresident' : 'resident';
+
+        // REQUIRED_HONEST_V1 — звёздочка теперь значит проверку. Обязательны
+        // фамилия, имя, дата рождения и пол: возраст и пол задают нормы
+        // анализов, дозировки и печатные бланки, и карта без них опасна.
+        if (!String(payload.last_name || '').trim() || !String(payload.first_name || '').trim()) {
+            toast('Фамилия и имя обязательны.', 'fail');
+            return null;
+        }
+        if (!payload.date_of_birth) {
+            toast('Укажите дату рождения — от неё зависят возраст, категория и нормы анализов.', 'fail');
+            return null;
+        }
+        const age = computeAge(payload.date_of_birth);
+        if (age == null || age < 0 || age > 130) {
+            toast('Проверьте дату рождения — такого возраста не бывает.', 'fail');
+            return null;
+        }
+        if (!payload.gender) {
+            toast('Укажите пол — от него зависят нормы анализов и печатные бланки.', 'fail');
+            return null;
+        }
+        return payload;
+    }
+
+    async function save({ force = false } = {}) {
+        const payload = collect();
+        if (!payload) return null;
+        const photoUrl = await uploadPendingPhoto(state);
+        if (photoUrl) payload.photo_url = photoUrl;
+        // PATIENT_FORM_ONE_V1 — правка: та же анкета уходит в patient_card_save,
+        // который пишет только разрешённые колонки. Без поиска дубликатов —
+        // это и есть тот самый пациент.
+        if (editing) {
+            const values = { ...payload };
+            values.gender = values.gender === 'M' ? 'male' : values.gender === 'F' ? 'female' : (values.gender || null);
+            values.full_name = [values.last_name, values.first_name, values.middle_name].map((x) => String(x || '').trim()).filter(Boolean).join(' ') || patient.full_name;
+            if (values.category_id === '') values.category_id = null;
+            for (const k of ['telegram_opt_in', 'telegram_invited_at']) delete values[k];
+            try {
+                const { data, error } = await supabase.rpc('patient_card_save', { patient_id: patient.id, values });
+                if (error) throw new Error(error.message || String(error));
+                closeHost();
+                toast('Сохранено.');
+                if (typeof onSaved === 'function') onSaved(data || { ...patient, ...values });
+                return data || values;
+            } catch (e) {
+                toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
+                return null;
+            }
+        }
+        if (state.tgSent) {
+            payload.telegram_opt_in = true;
+            payload.telegram_invited_at = new Date().toISOString();
+        }
+        let created;   // PATIENT_FORM_ONE_V1 — не `patient`: так зовётся правимая строка снаружи save()
+        try {
+            created = await savePatient(payload, { force });
+        } catch (e) {
+            if (e && e.code === 'DUPLICATE_PATIENT' && e.existing) {
+                openDuplicatePatientDialog(e, {
+                    onOpenExisting: async (c) => {
+                        const p = await loadPatientById(c.id).catch(() => null);
+                        closeHost();
+                        if (p) navigate('patient-card', p);
+                        else   toast('Не удалось открыть карту пациента.', 'fail');
+                    },
+                    onForceCreate: () => save({ force: true }),
+                });
+                return null;
+            }
+            toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
+            return null;
+        }
+        closeHost();
+        toast('Пациент сохранён.');
+        if (typeof onSaved === 'function') onSaved(created);
+        else navigate('patients');
+        // Путь после создания карты (мастер услуг) — дело того, кто эти поля
+        // показал, и он же решает, продолжать ли. Зовём и после принудительного
+        // создания: для продолжения важно, что карта появилась, а не как.
+        if (typeof onCreated === 'function') onCreated(created);
+        return created;
+    }
+
+    return {
+        fields, state, collect, save,
+        setGender: (v) => { state.gender = v; sexChips.setValue(v); },
+        photo,          // PATIENT_PHOTO_V1 — { acceptPhoto, setPhoto, fileInp } для теста
+        searchStrip: search,
+        tg,
+    };
+}
+
+/**
+ * Собрать окно, НЕ вставляя его в документ. Отдельно от open* ради теста:
+ * проверять состав первого экрана, раскрытие и сбор значений можно без
+ * document.body и без таймеров.
+ *
+ * PATIENT_FIELDS_V1 — здесь осталась ОБОЛОЧКА: шапка, подвал, Escape, Enter и
+ * переход в мастер услуг. Сами поля рисует buildPatientFields — те же, что у
+ * «Быстрой регистрации в одном экране».
+ */
+export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, quick = false } = {}) {
+    const navigate = typeof onNavigate === 'function' ? onNavigate : () => {};
+    // PATIENT_FORM_ONE_V1 — режим правки: то же окно, заполненное строкой пациента.
+    const editing = !!(patient && patient.id);
+    // FAST_REGISTRATION_V1 — быстрая регистрация. Правка уже заведённой карты
+    // быстрой не бывает: услуги к такому пациенту добавляют из его карты.
+    const fast = !!quick && !editing;
 
     const overlay = h('div', { class: 'modal', style: { zIndex: '150' } });
     const close = () => { document.removeEventListener('keydown', onKey); fadeOutAndRemove(overlay); };
@@ -232,11 +542,34 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
     });
     overlay.appendChild(card);
 
+    const body = h('div', { class: 'modal-body' });
+
+    // FAST_REGISTRATION_V1 — намерение последнего нажатия («с услугами» или
+    // «просто сохранить») держится до конца цепочки: между нажатием и картой
+    // может встать страж дубликатов, и после «Создать принудительно» мастер
+    // услуг обязан открыться ТАК ЖЕ, как без переспроса.
+    let wantVisit = false;
+    const api = buildPatientFields(body, {
+        patient, onNavigate: navigate, onSaved, close,
+        // REG_ADD_SERVICE_V1 — мастер услуг монтируется в document.body и
+        // переживает переход; грузим его лениво, чтобы окно заведения пациента
+        // не тянуло каталог услуг при каждом открытии.
+        onCreated: (created) => {
+            if (!wantVisit || !created || !created.id) return;
+            import('./visit-wizard.js?v=tier2')
+                .then((mod) => mod.openVisitWizard(null, {
+                    id: created.id, full_name: created.fullName, mrn: created.mrn, phone: created.phone,
+                }))
+                .catch((e) => toast(trf('Не удалось открыть мастер услуг: {msg}', { msg: (e && e.message) || e }), 'fail'));
+        },
+    });
+    const { fields, state, collect, tg, photo } = api;
+
     // PATIENT_FORM_REWRITE_V1 — приглашение в Telegram переехало в ШАПКУ.
     // Это не поле карты, а действие над пациентом: раньше оно стояло полем в
     // ряду с адресом и гражданством, и его искали глазами среди того, что
-    // заполняют. Номер берётся у поля телефона этого же окна.
-    const tg = telegramBlock(state, () => fields.phone && fields.phone.value);
+    // заполняют.
+    //
     // FAST_REGISTRATION_V1 — у быстрого режима своё имя и своя строка пути.
     // Строка нужна не как украшение: окно то же самое, и без неё регистратор
     // не отличит быструю регистрацию от обычной, пока не дочитает подвал.
@@ -251,148 +584,12 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
         tg,
         h('button', { class: 'modal-close', onclick: close }, '×'),
     ));
-
-    const body = h('div', { class: 'modal-body' });
     card.appendChild(body);
 
-    // ---- Поиск существующего пациента (одной строкой, во всю ширину) -------
-    const search = searchStrip(navigate, close);
-    if (!editing) body.appendChild(search.el);   // PATIENT_FORM_ONE_V1 — дубликаты ищут при заведении, не при правке
-
-    // ---- Левая колонка: личные данные --------------------------------------
-    // DATE_NUMERIC_V1 — дата рождения показана цифрами: её сверяют с паспортом.
-    // Подпись пустого поля — сама дата примером: «15.11.1994» объясняет порядок
-    // чисел лучше, чем «ДД.ММ.ГГГГ», и не требует расшифровки.
-    // `autocomplete="bday"` — браузер знает это поле в лицо и подставляет
-    // сохранённую дату рождения; `off` здесь просто отказывался от помощи.
-    const dobInput = reg('date_of_birth', h('input', {
-        name: 'date_of_birth', type: 'date', placeholder: '15.11.1994',
-        // CALENDAR_MONTH_INDEX_V1 — верхняя граница у ДАТЫ РОЖДЕНИЯ это сегодня:
-        // тогда в списке годов нет будущих (он и открывался на 2031-м), а
-        // «завтра» календарь просто не даст выбрать — вместо отказа после.
-        max: new Date().toISOString().slice(0, 10),
-        'data-date-numeric': '', autocomplete: 'bday', value: pv('date_of_birth').slice(0, 10),
-    }));
-    const ageInput = h('input', { name: '__age', readOnly: true, placeholder: '—' });
-    const categorySel = reg('category_id', categorySelect(editing ? patient.category_id : null));   // CATEGORY_DISCOUNT_V1 — имя поля = имя колонки, иначе collect() соберёт ключ, который сервер молча выбросит
-    if (editing) { const age = computeAge(dobInput.value); ageInput.value = (age == null || age < 0 || age > 130) ? '' : String(age); }
-    dobInput.addEventListener('input', () => {
-        const age = computeAge(dobInput.value);
-        ageInput.value = (age == null || age < 0 || age > 130) ? '' : String(age);
-        // Подставляем ТОЛЬКО если такая категория есть в справочнике клиники.
-        if (!categorySel.value) categorySel.value = categoryOptionByName(categorySel, categoryFromAge(age));
-    });
-
-    const sexChips = radioChips('gender',
-        [['M', 'Мужской'], ['F', 'Женский']],
-        () => state.gender,
-        (v) => { state.gender = v; },
-        { nowrap: true });
-
-    // ── Раздел 1: личные данные ────────────────────────────────────────────
-    // Фото стоит ПЛИТКОЙ слева и держит три ряда полей: карта пациента узнаётся
-    // в лицо, и прятать снимок за раскрытием было неправильно. Email здесь же,
-    // рядом с телефонами: это способ связи, а не документ.
-    const photo = photoBlock(state);
-    if (editing && patient.photo_url) photo.setPhoto(patient.photo_url);
-    const geo   = geoCascade();
-    reg('country',  geo.countrySel);
-    reg('region',   geo.regionSel);
-    reg('district', geo.districtSel);
-
-    body.appendChild(mgSection('Личные данные', [
-        h('div', { class: 'pc-id' },
-            h('div', { class: 'pc-id-photo' }, photo.el),
-            h('div', { class: 'pc-id-fields' },
-                mgGrid(3,
-                    field(['Фамилия ', req()], reg('last_name',   nameInput('last_name',   'Каримова', pv('last_name')))),
-                    field(['Имя ',     req()], reg('first_name',  nameInput('first_name',  'Азиза', pv('first_name')))),
-                    field('Отчество',          reg('middle_name', nameInput('middle_name', 'Рустамовна', pv('middle_name')))),
-                ),
-                mgGrid(3,
-                    field(['Дата рождения ', req()], dobInput),
-                    field('Возраст', ageInput),
-                    field(['Пол ', req()], sexChips),
-                ),
-                mgGrid(3,
-                    // REQUIRED_HONEST_V1 — у телефона звёздочки НЕТ: правило «голый
-                    // +998 сохраняется пустым» означает, что карта без номера — штатный
-                    // случай (сопровождающий, ребёнок, экстренный приём).
-                    field('Номер телефона',      regPhone('phone',           phoneInput('phone', '+998 90 961 00 04', { value: pv('phone') }))),
-                    field('Доп. номер телефона', regPhone('phone_secondary', phoneInput('phone_secondary', '+998 90 000 00 00', { value: pv('phone_secondary') }))),
-                    field('Email', reg('email', h('input', { name: 'email', placeholder: 'name@example.com', value: pv('email') }))),
-                ),
-            ),
-        ),
-    ], { step: 1 }));
-
-    // ── Раздел 2: документы и резидентство ─────────────────────────────────
-    // Резидентство и язык — сверху: от них зависит, какие документы вообще
-    // спрашивать и на каком языке разговаривать с пациентом.
-    body.appendChild(mgSection('Документы и резидентство', [
-        mgGrid(3,
-            field('Резидентство', radioChips('__residency',
-                [['resident', 'Резидент РУз'], ['nonresident', 'Нерезидент']],
-                () => state.residency,
-                (v) => { state.residency = v; }), 2),
-            field('Предпочитаемый язык', reg('language', select('language', ['Узбекский', 'Русский', 'Английский', 'Каракалпакский'], pv('language')))),
-        ),
-        mgGrid(3,
-            field('ПИНФЛ (ЖШШИР)',        reg('national_id',     h('input', { name: 'national_id', placeholder: '14 цифр', maxLength: '14', value: pv('national_id') }))),
-            field('Паспорт / документ №', reg('passport_number', h('input', { name: 'passport_number', placeholder: 'AB1234567', value: pv('passport_number') }))),
-            field('Гражданство / национальность', reg('nationality', h('input', { name: 'nationality', placeholder: 'Узбек', value: pv('nationality') }))),
-        ),
-        // Категория несёт скидку группы (CATEGORY_DISCOUNT_V1), поведение —
-        // предупреждение для регистратуры. Ни того, ни другого на образце нет,
-        // но обе возможности живые: категория считает деньги, а предупреждение
-        // читают перед приёмом. Место им здесь — это тоже «учёт пациента».
-        mgGrid(3,
-            field('Категория пациента', categorySel),
-            field('Поведение / предупреждение',
-                reg('behavior_note', textareaWith({
-                    name: 'behavior_note', rows: '1',
-                    placeholder: 'напр. Грубил регистратуре; приходил в нетрезвом виде.',
-                }, pv('behavior_note'))), 2),
-        ),
-    ], { step: 2 }));
-
-    // ── Раздел 3: контакты и адрес ─────────────────────────────────────────
-    body.appendChild(mgSection('Контакты и адрес', [
-        mgGrid(3,
-            field('Страна', geo.countrySel),
-            field('Регион', geo.regionSel),
-            field('Район',  geo.districtSel),
-        ),
-        mgGrid(3,
-            field('Махалля', reg('mahalla', h('input', { name: 'mahalla', placeholder: 'Юнусабад-3', value: pv('mahalla') }))),
-            field('Улица, дом, квартира', reg('address', h('input', { name: 'address', placeholder: 'ул. Амира Темура 12, кв. 47', value: pv('address') })), 2),
-        ),
-    ], { step: 3 }));
-    if (editing) geo.preset({ country: patient.country, region: patient.region, district: patient.district });
-
-    // ── Раздел 4: здоровье и экстренная связь ──────────────────────────────
-    // PATIENT_FORM_ONE_V1 — эти поля жили только в окне правки; теперь они в
-    // ОДНОМ окне с заведением. Хронические заболевания — выбор из справочника
-    // клиники (CHRONIC_REF_V1), а не свободный текст: одинаково названные
-    // болезни потом считаются и ищутся.
-    const chronic = chronicPicker(pv('chronic_conditions'));
-    body.appendChild(mgSection('Здоровье и экстренная связь', [
-        mgGrid(3,
-            field('Группа крови', reg('blood_type', h('input', { name: 'blood_type', placeholder: 'напр. O(I) Rh+', value: pv('blood_type') }))),
-            field('Аллергии', reg('allergies', textareaWith({ name: 'allergies', rows: '1', placeholder: 'напр. пенициллин, йод' }, pv('allergies')))),
-            field('Хронические заболевания', reg('chronic_conditions', chronic)),
-        ),
-        mgGrid(3,
-            field('Профессия', reg('occupation', h('input', { name: 'occupation', placeholder: 'напр. учитель', value: pv('occupation') }))),
-            field('Экстренный контакт — имя', reg('emergency_contact_name', h('input', { name: 'emergency_contact_name', placeholder: 'напр. Каримов Рустам, супруг', value: pv('emergency_contact_name') }))),
-            field('Экстренный контакт — телефон', regPhone('emergency_contact_phone', phoneInput('emergency_contact_phone', '+998 90 000 00 00', { value: pv('emergency_contact_phone') }))),
-        ),
-    ], { step: 4 }));
-
     // PATIENT_FORM_REWRITE_V1 — раскрытия «Подробнее» больше нет: всё, что оно
-    // прятало, разошлось по трём разделам выше. setMore/isMoreOpen оставлены
-    // заглушками — их зовут снаружи (возврат из мастера услуг открывал окно
-    // сразу раскрытым), и падать на несуществующей функции они не должны.
+    // прятало, разошлось по разделам. setMore/isMoreOpen оставлены заглушками —
+    // их зовут снаружи (возврат из мастера услуг открывал окно сразу раскрытым),
+    // и падать на несуществующей функции они не должны.
     function setMore() { state.moreOpen = false; }
 
     // ---- Подвал -------------------------------------------------------------
@@ -466,114 +663,10 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
         Promise.resolve(fn()).finally(() => { if (b) b.disabled = false; });
     }
 
-    // ---- Сбор и сохранение ---------------------------------------------------
-    function collect() {
-        const payload = {};
-        for (const [name, el] of Object.entries(fields)) {
-            if (name.startsWith('__')) continue;
-            // PHONE_INPUT_V1 — поле телефона предзаполнено «+998», поэтому
-            // нетронутое поле всё равно НЕ пустое. Обёртка phoneInput отдаёт
-            // пустоту сама; проверку повторяем явно, чтобы правило было видно
-            // здесь, а не только в чужом модуле. Телефон узнаём по реестру, а
-            // не по наличию свойства .input у элемента: «есть .input — значит
-            // телефон» ломается о любой элемент с таким же именем.
-            if (phoneFields.has(name)) {
-                const inner = el.input;
-                payload[name] = (inner && isCodeOnly(inner.value)) ? '' : el.value;
-            } else {
-                payload[name] = el.value;
-            }
-        }
-        payload.gender = state.gender;
-        payload.citizenship = state.residency === 'nonresident' ? 'nonresident' : 'resident';
-
-        // REQUIRED_HONEST_V1 — звёздочка теперь значит проверку. Обязательны
-        // фамилия, имя, дата рождения и пол: возраст и пол задают нормы
-        // анализов, дозировки и печатные бланки, и карта без них опасна.
-        if (!String(payload.last_name || '').trim() || !String(payload.first_name || '').trim()) {
-            toast('Фамилия и имя обязательны.', 'fail');
-            return null;
-        }
-        if (!payload.date_of_birth) {
-            toast('Укажите дату рождения — от неё зависят возраст, категория и нормы анализов.', 'fail');
-            return null;
-        }
-        const age = computeAge(payload.date_of_birth);
-        if (age == null || age < 0 || age > 130) {
-            toast('Проверьте дату рождения — такого возраста не бывает.', 'fail');
-            return null;
-        }
-        if (!payload.gender) {
-            toast('Укажите пол — от него зависят нормы анализов и печатные бланки.', 'fail');
-            return null;
-        }
-        return payload;
-    }
-
+    // Сохранение — это сохранение полей плюс решение окна, куда идти дальше.
     async function save({ openVisit = false, force = false } = {}) {
-        const payload = collect();
-        if (!payload) return null;
-        const photoUrl = await uploadPendingPhoto(state);
-        if (photoUrl) payload.photo_url = photoUrl;
-        // PATIENT_FORM_ONE_V1 — правка: та же анкета уходит в patient_card_save,
-        // который пишет только разрешённые колонки. Без поиска дубликатов —
-        // это и есть тот самый пациент.
-        if (editing) {
-            const values = { ...payload };
-            values.gender = values.gender === 'M' ? 'male' : values.gender === 'F' ? 'female' : (values.gender || null);
-            values.full_name = [values.last_name, values.first_name, values.middle_name].map((x) => String(x || '').trim()).filter(Boolean).join(' ') || patient.full_name;
-            if (values.category_id === '') values.category_id = null;
-            for (const k of ['telegram_opt_in', 'telegram_invited_at']) delete values[k];
-            try {
-                const { data, error } = await supabase.rpc('patient_card_save', { patient_id: patient.id, values });
-                if (error) throw new Error(error.message || String(error));
-                close();
-                toast('Сохранено.');
-                if (typeof onSaved === 'function') onSaved(data || { ...patient, ...values });
-                return data || values;
-            } catch (e) {
-                toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
-                return null;
-            }
-        }
-        if (state.tgSent) {
-            payload.telegram_opt_in = true;
-            payload.telegram_invited_at = new Date().toISOString();
-        }
-        let created;   // PATIENT_FORM_ONE_V1 — не `patient`: так зовётся правимая строка снаружи save()
-        try {
-            created = await savePatient(payload, { force });
-        } catch (e) {
-            if (e && e.code === 'DUPLICATE_PATIENT' && e.existing) {
-                openDuplicatePatientDialog(e, {
-                    onOpenExisting: async (c) => {
-                        const p = await loadPatientById(c.id).catch(() => null);
-                        close();
-                        if (p) navigate('patient-card', p);
-                        else   toast('Не удалось открыть карту пациента.', 'fail');
-                    },
-                    onForceCreate: () => save({ openVisit, force: true }),
-                });
-                return null;
-            }
-            toast(trf('Не удалось сохранить: {msg}', { msg: (e && e.message) || e }), 'fail');
-            return null;
-        }
-        close();
-        toast('Пациент сохранён.');
-        if (typeof onSaved === 'function') onSaved(created);
-        else navigate('patients');
-        // REG_ADD_SERVICE_V1 — мастер услуг монтируется в document.body и
-        // переживает переход; грузим его лениво, чтобы окно заведения пациента
-        // не тянуло каталог услуг при каждом открытии.
-        if (openVisit && created && created.id) {
-            import('./visit-wizard.js?v=tier2')
-                .then((mod) => mod.openVisitWizard(null, {
-                    id: created.id, full_name: created.fullName, mrn: created.mrn, phone: created.phone,
-                }))
-                .catch((e) => toast(trf('Не удалось открыть мастер услуг: {msg}', { msg: (e && e.message) || e }), 'fail'));
-        }
-        return created;
+        wantVisit = !!openVisit && !editing;   // услугу к уже заведённому добавляют из его карты
+        return api.save({ force });
     }
 
     return {
@@ -581,9 +674,9 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null, 
         setMore,                       // заглушка: раскрытия больше нет
         isMoreOpen: () => false,
         tg,                            // приглашение в бот живёт в шапке
-        setGender: (v) => { state.gender = v; sexChips.setValue(v); },
-        searchInput: search.input,
-        runSearch: search.run,
+        setGender: api.setGender,
+        searchInput: api.searchStrip.input,
+        runSearch: api.searchStrip.run,
         collect, save,
         saveOnlyBtn, saveAndServiceBtn, cancelBtn,
         photo,   // PATIENT_PHOTO_V1 — { acceptPhoto, setPhoto, fileInp } для теста

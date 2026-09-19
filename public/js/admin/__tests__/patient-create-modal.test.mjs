@@ -894,3 +894,79 @@ test('FAST_REGISTRATION_V1: без быстрого режима окно ров
   assert.ok(!textOf(dlg.card).includes('Быстрая регистрация'),
     'быстрый режим просочился в обычное окно');
 });
+
+// ===========================================================================
+// PATIENT_FIELDS_V1 (2026-09-19) — набор полей пациента ОТДЕЛЬНО от окна.
+//
+// «Быстрая регистрация в одном экране» рисует те же поля пациента, но не в
+// окне, а на странице. Если бы она собрала их у себя, два набора полей
+// разошлись бы молча: поле, добавленное в окно, не появилось бы на экране, а
+// проверка, поправленная на экране, не сработала бы в окне. Поэтому поля —
+// ОДИН строитель, и вот проверка, что он рисует и собирает ровно то же.
+// ===========================================================================
+test('PATIENT_FIELDS_V1: набор полей рисуется в обычный контейнер, и collect() отдаёт то же, что окно', () => {
+  reset();
+  const box = mk('div');
+  const f = modal.buildPatientFields(box, {
+    sections: ['personal', 'documents', 'contacts'], withSearchStrip: false,
+  });
+
+  // 1. Нарисованы ровно запрошенные разделы — и ни одного лишнего.
+  const secs = walk(box).filter((n) => hasClass(n, 'mg-section'));
+  assert.equal(secs.length, 3, 'разделов не три: ' + secs.length);
+  const titles = walk(box).filter((n) => n.tagName === 'H3')
+    .map((n) => textOf(n).replace(/<svg[\s\S]*?<\/svg>/g, '').replace(/\s+/g, ' ').trim())
+    .map((t) => t.replace(/^[1234]\s*/, ''));
+  assert.deepEqual(titles, ['Личные данные', 'Документы и резидентство', 'Контакты и адрес'],
+    'разделы набора: ' + titles.join(' | '));
+  assert.ok(!titles.some((t) => t.startsWith('Здоровье')), 'раздел «Здоровье» нарисован, хотя его не просили');
+
+  // 2. Тот же минимум, собранный по реестру, даёт ТОТ ЖЕ payload, что окно.
+  f.fields.last_name.value = 'Иванов';
+  f.fields.first_name.value = 'Иван';
+  f.fields.date_of_birth.value = '1990-01-01';
+  f.setGender('M');
+  const got = f.collect();
+  assert.ok(got, 'набор полей не собрался: ' + toasts.join(' | '));
+
+  const dlg = modal.buildPatientCreateDialog({});
+  fillMinimum(dlg, { last_name: 'Иванов', first_name: 'Иван', date_of_birth: '1990-01-01', gender: 'M' });
+  const want = dlg.collect();
+  assert.ok(want, 'окно не собралось: ' + toasts.join(' | '));
+
+  for (const k of Object.keys(got)) {
+    assert.ok(k in want, 'в наборе полей есть ключ, которого нет у окна: ' + k);
+    assert.deepEqual(got[k], want[k], 'ключ «' + k + '» разошёлся с окном');
+  }
+  // Поля НЕнарисованного раздела в payload не попадают вовсе — пустыми в том
+  // числе: пустая строка затёрла бы то, что уже записано в карте.
+  for (const k of ['allergies', 'blood_type', 'chronic_conditions', 'occupation', 'emergency_contact_phone']) {
+    assert.ok(!(k in got), 'поле нерисованного раздела уехало в payload: ' + k);
+    assert.ok(k in want, 'окно потеряло поле «' + k + '» — проверка смотрит не туда');
+  }
+
+  // 3. При заведении строка поиска дубликатов приходит вместе с полями.
+  const box2 = mk('div');
+  const f2 = modal.buildPatientFields(box2, {});
+  assert.ok(walk(box2).some((n) => n.tagName === 'LABEL' && textOf(n).startsWith('Найти существующего пациента')),
+    'строка поиска существующего пациента не нарисовалась');
+  assert.ok(f2.searchStrip && f2.searchStrip.input, 'строка поиска не отдана вызвавшему');
+});
+
+test('PATIENT_FIELDS_V1: save() сохраняет пациента и отдаёт его — без всякого окна', async () => {
+  reset();
+  const box = mk('div');
+  const f = modal.buildPatientFields(box, {});
+  f.fields.last_name.value = 'Иванов';
+  f.fields.first_name.value = 'Иван';
+  f.fields.date_of_birth.value = '1990-01-01';
+  f.setGender('M');
+
+  const saved = await f.save();
+  assert.equal(inserted.length, 1, 'вставки не случилось: ' + toasts.join(' | '));
+  assert.equal(inserted[0].table, 'patients');
+  assert.equal(inserted[0].values.last_name, 'Иванов');
+  assert.equal(inserted[0].values.gender, 'male', 'пол не перевёлся в колонку');
+  assert.ok(saved && saved.id, 'сохранение не вернуло пациента');
+  assert.ok(String(saved.fullName || '').includes('Иванов'), 'у сохранённого нет имени: ' + JSON.stringify(saved));
+});
