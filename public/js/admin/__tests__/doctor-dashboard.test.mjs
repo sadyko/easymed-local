@@ -239,6 +239,15 @@ const INVOICE_ROWS = [
 // чужого врача приезжали бы в любом случае и тест «не видно чужого» проходил бы
 // по причине, не имеющей отношения к делу.
 let dbCalls = [];
+// DOCTOR_TIER_V1 — ответ doctor_tier_positions: нумерацию строк по ступеням
+// считает СЕРВЕР, сводка её только применяет. Ответ — за ДИАПАЗОН месяцев
+// ({ from, to, rows }), у каждой строки свой ym. По умолчанию ступеней НЕТ:
+// иначе остальные тесты файла молча считали бы деньги по ступени.
+const NO_TIER = () => ({ from: '', to: '', rows: [] });
+let TIER_RESPONSE = NO_TIER();
+let tierCalls = [];
+const monthKey = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+const dayOff = (off) => { const d = new Date(NOW); d.setDate(d.getDate() + off); return d; };
 function matches(row, f) {
   if (f.or) return true;
   const v = row[f.col];
@@ -266,6 +275,10 @@ const TABLES = () => ({
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
+  if (u.startsWith('/api/rpc/doctor_tier_positions')) {
+    tierCalls.push(body);
+    return { ok: true, json: async () => ({ data: TIER_RESPONSE }) };
+  }
   if (u.startsWith('/api/db')) {
     dbCalls.push(body);
     let rows = TABLES()[body.table] || [];
@@ -285,7 +298,7 @@ const perms = await import('../permissions.js');
 perms.setFullAccess('test');
 
 function loginAs(user) { window.easymed.state.user = user ? { ...user, is_admin: false, is_super_admin: false } : null; }
-function reset() { dbCalls = []; tabSubCalls = []; lastHistoryUrl = null; dash.resetDoctorDashboard(); }
+function reset() { dbCalls = []; tierCalls = []; tabSubCalls = []; lastHistoryUrl = null; dash.resetDoctorDashboard(); }
 
 // Значения, посчитанные рукой в шапке фикстуры.
 const SV1_SHARE = 67680;
@@ -294,13 +307,15 @@ const SV5_SHARE = 150000;
 const SV6_SHARE = 37600;
 
 // «Услуги» в том виде, в каком их отдаёт загрузчик (скидка уже разнесена).
+// id — это id строки visit_services: по нему и только по нему сводка находит
+// позицию ступени (DOCTOR_TIER_V1), поэтому он посеян вместе с остальным.
 const A_SERVICES = [
-  { visitId: 'v-1', serviceId: 's-1', serviceName: 'Приём терапевта', status: 'completed', total: 200000, discount: 20000, taxRate: 6, invoiceStatus: 'paid' },
-  { visitId: 'v-1', serviceId: 's-2', serviceName: 'УЗИ брюшной полости', status: 'queued', total: 100000, discount: 0, taxRate: 0, invoiceStatus: null },
-  { visitId: 'v-2', serviceId: 's-1', serviceName: 'Приём терапевта', status: 'completed', total: 100000, discount: 0, taxRate: 6, invoiceStatus: 'unpaid' },
-  { visitId: 'v-3', serviceId: 's-2', serviceName: 'УЗИ брюшной полости', status: 'queued', total: 50000, discount: 0, taxRate: 0, invoiceStatus: null },
-  { visitId: 'v-5', serviceId: 's-2', serviceName: 'УЗИ брюшной полости', status: 'completed', total: 300000, discount: 0, taxRate: 0, invoiceStatus: null },
-  { visitId: 'v-6', serviceId: 's-1', serviceName: 'Приём терапевта', status: 'completed', total: 100000, discount: 0, taxRate: 6, invoiceStatus: null },
+  { id: 'sv1', visitId: 'v-1', serviceId: 's-1', serviceName: 'Приём терапевта', status: 'completed', total: 200000, discount: 20000, taxRate: 6, invoiceStatus: 'paid' },
+  { id: 'sv2', visitId: 'v-1', serviceId: 's-2', serviceName: 'УЗИ брюшной полости', status: 'queued', total: 100000, discount: 0, taxRate: 0, invoiceStatus: null },
+  { id: 'sv3', visitId: 'v-2', serviceId: 's-1', serviceName: 'Приём терапевта', status: 'completed', total: 100000, discount: 0, taxRate: 6, invoiceStatus: 'unpaid' },
+  { id: 'sv4', visitId: 'v-3', serviceId: 's-2', serviceName: 'УЗИ брюшной полости', status: 'queued', total: 50000, discount: 0, taxRate: 0, invoiceStatus: null },
+  { id: 'sv5', visitId: 'v-5', serviceId: 's-2', serviceName: 'УЗИ брюшной полости', status: 'completed', total: 300000, discount: 0, taxRate: 0, invoiceStatus: null },
+  { id: 'sv6', visitId: 'v-6', serviceId: 's-1', serviceName: 'Приём терапевта', status: 'completed', total: 100000, discount: 0, taxRate: 6, invoiceStatus: null },
 ];
 const A_VISITS = VISIT_ROWS.filter((v) => v.doctor_id === 'u-doc-a').map((v) => ({
   id: v.id, at: v.visit_date, status: v.status, patientId: v.patient_id,
@@ -407,6 +422,45 @@ test('каждая цифра дашборда сходится с ручным 
   ]);
 });
 
+// DOCTOR_TIER_V1 — СВОДКА СЧИТАЕТ ТУ ЖЕ ДОЛЮ, ЧТО ВКЛАДКА «ЗАРПЛАТА».
+//
+// Вкладка «Зарплата» уже применяет ступень (tierShare + позиции сервера), а
+// плитки сводки считали по serviceShare. Два числа про один день на одном
+// экране расходились бы ровно на ступень, и врач не смог бы понять, какому
+// верить. Плитки, «за 7 дней» и график дня обязаны считать по позициям.
+test('плитки «сегодня / 7 дней» и график дня считают по ступени, когда сервер дал позицию', () => {
+  const rateMap = dash.serviceRateMap(DOCTOR_A);
+  const args = { visits: A_VISITS, services: A_SERVICES, rateMap, now: NOW, perService: true };
+  const base = dash.computeDoctorStats(args);
+
+  // sv3 — 26-я «Приём терапевта» месяца: 1 единица ВЫШЕ порога, по ступени
+  // 50 % вместо личных 40 %. Ручной счёт (та же формула, что у ведомости):
+  //   база 100 000 − 0 = 100 000; налог 6 % → 100 000 × 0,94 = 94 000
+  //   было  94 000 × 0,40 = 37 600   (SV3_SHARE)
+  //   стало 94 000 × 0,50 = 47 000
+  //   разница 94 000 × (50 − 40) / 100 = 9 400
+  const posById = new Map([['sv3', {
+    visit_service_id: 'sv3', service_id: 's-1', service_name: 'Приём терапевта',
+    units: 1, units_above: 1, tier_from: 25, tier_percent: 50, count_so_far: 26, ym: monthKey(NOW),
+  }]]);
+  const tiered = dash.computeDoctorStats({ ...args, posById });
+
+  assert.strictEqual(base.todayEarned, SV1_SHARE + SV3_SHARE, 'исходная плитка — без ступени');
+  assert.strictEqual(tiered.todayEarned, SV1_SHARE + 47000);
+  assert.strictEqual(tiered.todayEarned, 114680);
+  assert.strictEqual(tiered.todayEarned - base.todayEarned, 9400, 'ровно (50 − 40) % от 94 000');
+  // Касса не при чём: ступень меняет ДОЛЮ, а оплачен по-прежнему только inv-1.
+  assert.strictEqual(tiered.todayPaid, SV1_SHARE);
+  // График дня — та же арифметика, что плитка: разойтись им нельзя.
+  assert.strictEqual(tiered.series[13].earned, 114680);
+  assert.strictEqual(tiered.week.earned, base.week.earned + 9400, '«за 7 дней» считает тем же правилом');
+
+  // Без позиций не меняется НИЧЕГО: пустая карта — это «ступени нет», а не 0 %.
+  const none = dash.computeDoctorStats({ ...args, posById: new Map() });
+  assert.strictEqual(none.todayEarned, base.todayEarned);
+  assert.deepStrictEqual(none.series, base.series);
+});
+
 test('фиксированный оклад: дневного заработка НЕТ, и ноль вместо него не рисуется', () => {
   assert.strictEqual(dash.perServicePayApplies(DOCTOR_FIX), false);
   assert.strictEqual(dash.perServicePayApplies(DOCTOR_A), true);
@@ -499,12 +553,35 @@ test('врач не может прочитать чужой заработок:
   assert.ok(!txtB.includes((105280).toLocaleString('ru-RU')), 'денег врача A у B нет');
 });
 
-test('дашборд рисует день, четыре плитки, график и колонку приёмов из живой загрузки', async () => {
+test('дашборд рисует день, четыре плитки, график и колонку приёмов из живой загрузки', async (t) => {
   reset();
   loginAs(DOCTOR_A);
+  // DOCTOR_TIER_V1 — сервер отдаёт позицию для sv3 (26-я «Приём терапевта»
+  // месяца): 94 000 × 50 % = 47 000 вместо 37 600, плитка дня — 114 680.
+  TIER_RESPONSE = { from: monthKey(dayOff(-9)), to: monthKey(NOW), rows: [{
+    visit_service_id: 'sv3', service_id: 's-1', service_name: 'Приём терапевта',
+    units: 1, units_above: 1, tier_from: 25, tier_percent: 50, count_so_far: 26, ym: monthKey(NOW),
+  }] };
+  t.after(() => { TIER_RESPONSE = NO_TIER(); });
   const host = mk('div');
   await dash.renderDoctorDashboard(host, {});
   const txt = textOf(host);
+
+  // Позиции спрашиваются ОДИН раз за диапазон месяцев, а не по разу на месяц.
+  assert.strictEqual(tierCalls.length, 1, 'запросов позиций: ' + tierCalls.length);
+  assert.strictEqual(tierCalls[0].doctor_id, 'u-doc-a', 'позиции запрошены не за своего врача');
+  assert.strictEqual(tierCalls[0].from, monthKey(dayOff(-9)), 'диапазон не накрыл самый старый месяц окна');
+  assert.strictEqual(tierCalls[0].to, monthKey(NOW), 'текущий месяц обязан входить в диапазон');
+  assert.ok(!('month' in tierCalls[0]), 'в запросе остался месяц: ' + JSON.stringify(tierCalls[0]));
+
+  // Плитка «Заработано сегодня» — по ступени, и проверяется НА ПЛИТКЕ:
+  // «114 680» в общем тексте мог бы нарисовать и соседний список.
+  const moneyFig = byClass(host, 'dd-fig').find((n) => textOf(n).includes('Заработано сегодня'));
+  assert.ok(moneyFig, 'нет плитки «Заработано сегодня»');
+  assert.ok(textOf(moneyFig).includes((114680).toLocaleString('ru-RU')),
+    'плитка дня не учла ступень: ' + textOf(moneyFig));
+  assert.ok(!textOf(moneyFig).includes((105280).toLocaleString('ru-RU')),
+    'на плитке осталась доля без ступени: ' + textOf(moneyFig));
 
   assert.ok(txt.includes('Каримова Азиза'), 'обращение — это имя врача, а не «Доброе утро»');
   assert.ok(!/Доброе утро|Добрый день|Добрый вечер/.test(txt), 'приветственная полоса не вернулась');
