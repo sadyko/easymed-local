@@ -685,3 +685,25 @@ test('DOCTOR_TIER_V1: ступень гасит фиксированная оп�
     Math.round(dash.tierShare(A_SERVICES[0], dash.serviceRateMap(DOCTOR_A), { units: 4, units_above: 3, tier_percent: 50 })),
     80370);
 });
+
+// CABINET_FEE_PARITY_V1 — доля кабинета обязана совпасть с гонораром ведомости
+// (ITEM_FEE_SQL в server/services/rpc/reports.js): фиксированная оплата идёт ЗА
+// ЕДИНИЦУ и ВМЕСТО процента, а «своя цена врача» (price) — это цена счёта, а не
+// оплата, и в гонорар не входит. Кабинет прибавлял price к доле и вовсе не видел
+// fix — и расхождение с ведомостью было молчаливым.
+test('CABINET_FEE_PARITY_V1: фикс платится за единицу вместо процента, своя цена не оплачивается', () => {
+  // (а) фикс 15 000 × 2 единицы = 30 000; ни процента, ни налога сверху.
+  const fixMap = dash.serviceRateMap({ service_rates: [{ service_id: 'x', pct: 30, fix: 15000 }] });
+  assert.strictEqual(
+    dash.serviceShare({ serviceId: 'x', quantity: 2, total: 100000, discount: 0, taxRate: 6 }, fixMap),
+    30000);
+
+  // (б) своя цена 120 000 не оплачивается: платится только процент — 30 % от 100 000.
+  const priceMap = dash.serviceRateMap({ service_rates: [{ service_id: 'x', pct: 30, price: 120000 }] });
+  assert.strictEqual(
+    dash.serviceShare({ serviceId: 'x', total: 100000, discount: 0, taxRate: 0 }, priceMap),
+    30000);
+
+  // (в) без количества строка — одна единица (COALESCE(ii.quantity, 1) на сервере).
+  assert.strictEqual(dash.serviceShare({ serviceId: 'x', total: 100000, discount: 0, taxRate: 0 }, fixMap), 15000);
+});

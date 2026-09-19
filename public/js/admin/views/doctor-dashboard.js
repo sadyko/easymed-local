@@ -216,16 +216,21 @@ export function serviceRateMap(doctorRow) {
  * как в отчётах (rpc/reports.js ITEM_FEE_SQL):
  *   база = сумма строки − доля скидки счёта
  *   налог = база × ставка налога услуги
- *   доля = фикс_за_единицу + (база − налог) × процент врача
+ *   доля = (база − налог) × процент врача
  * Ставки налога нет — считаем 0 и не выдумываем налог, которого нет в данных.
  */
 export function serviceShare(s, rateMap) {
     const rate = rateMap.get(String(s.serviceId));
     if (!rate) return 0;
+    // CABINET_FEE_PARITY_V1 — та же формула, что ITEM_FEE_SQL (rpc/reports.js):
+    // фикс — за единицу и ВМЕСТО процента; своя цена врача (price) — это цена
+    // счёта, а не оплата, и в гонорар не входит. Раньше кабинет прибавлял price
+    // к доле и не видел fix — ведомость и кабинет расходились молча.
+    if (rate.fixPay) return rate.fixPay * (Number(s.quantity) || 1);
     const base = Math.max(0, Number(s.total || 0) - Number(s.discount || 0));
     const taxRate = s.taxRate != null ? Number(s.taxRate) : 0;
     const net = base * (1 - taxRate / 100);
-    return (rate.price || 0) + net * (rate.percentage || 0) / 100;
+    return net * (rate.percentage || 0) / 100;
 }
 
 /**

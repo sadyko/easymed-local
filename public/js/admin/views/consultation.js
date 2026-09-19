@@ -1543,6 +1543,9 @@ async function loadDashboardData() {
         id:           r.id,
         status:       r.status,
         total:        Number(r.total || (r.unit_price || 0) * (r.quantity || 1)),
+        // CABINET_FEE_PARITY_V1 — количество нужно доле: фиксированная оплата
+        // врача считается ЗА ЕДИНИЦУ, как COALESCE(ii.quantity, 1) в ITEM_FEE_SQL.
+        quantity:     Number(r.quantity) || 1,
         serviceId:    r.service_id,
         // DOCTOR_SHARE_AFTER_TAX_V1 — фолбэк 0, а не 12: ставка налога есть в
         // карточке услуги, и придумывать её за данные нельзя — у клиники 6%.
