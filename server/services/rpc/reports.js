@@ -282,7 +282,10 @@ const INV_STATUS_RU = {
 // DOCTOR_TIER_V1 — нумерация строк врача по ТОЧНОЙ услуге внутри календарного
 // месяца (по дате визита, местное время; хвост — по id строки). Считается
 // строка, которая ОПЛАЧЕНА или которую врач НАЧАЛ/ЗАВЕРШИЛ — что раньше
-// (владелец: «both»). running — накопленное количество единиц; у строки, чьё
+// (владелец: «both»). «Начал» для лаборатории — с момента взятия материала:
+// у неё своя лестница статусов (миграция 041) added → queued → collected →
+// in_progress → resulted → completed, и работа по строке идёт уже с collected.
+// running — накопленное количество единиц; у строки, чьё
 // running перешагнуло порог, за порог выходит units_above единиц — они и идут
 // по ступени, остальные — по личной ставке. В выборке только услуги со
 // ступенью: без неё подзапрос пуст и отчёты не меняют ни одной цифры.
@@ -295,14 +298,17 @@ export const TIER_RANK_SQL = `
                           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running
     FROM (
       SELECT vs.id, vs.doctor_id, vs.service_id,
-             MAX(COALESCE(vs.quantity, 1), 1) AS qty,
+             -- Количество берём там же, где его берёт гонорар: у строки счёта,
+             -- если она есть, иначе у строки визита.
+             MAX(COALESCE(ti.quantity, vs.quantity, 1), 1) AS qty,
              v.visit_date, ${localMonth('v.visit_date')} AS ym
         FROM visit_services vs
         JOIN visits v ON v.id = vs.visit_id
         LEFT JOIN invoice_items ti ON ti.id = vs.invoice_item_id
         LEFT JOIN invoices tinv ON tinv.id = ti.invoice_id
        WHERE vs.doctor_id IS NOT NULL AND vs.service_id IS NOT NULL
-         AND (tinv.status = 'paid' OR vs.status IN ('in_progress', 'completed'))
+         AND (tinv.status = 'paid'
+              OR vs.status IN ('collected', 'in_progress', 'resulted', 'completed'))
     ) r
     JOIN services s ON s.id = r.service_id AND s.doctor_tier_from > 0
 `;
@@ -334,7 +340,10 @@ const ITEM_DOCTOR_JOIN = `
                   AND json_valid(u.service_rates)
              ) GROUP BY doctor_id, service_id) dr
          ON dr.doctor_id = vs.doctor_id AND dr.service_id = ii.service_id
+  -- Одна строка счёта ↔ несколько visit_services теоретически возможны; ступень
+  -- читаем только у строки того же врача, чей процент к строке и применяется.
   LEFT JOIN (${TIER_RANK_SQL}) tr ON tr.visit_service_id = vs.visit_service_id
+                                 AND tr.doctor_id = vs.doctor_id
 `;
 
 // DOC_RATE_JSON_V1 — процент строки: персональная ставка за услугу (таблица или
@@ -353,7 +362,10 @@ const ITEM_ABOVE_SQL = `COALESCE(MAX(0, MIN(${ITEM_QTY_SQL}, tr.running - tr.tie
 // Процент ступени — не ниже личного: ступень никого не понижает.
 const ITEM_TIER_PCT_SQL = `MAX(${ITEM_PCT_SQL}, COALESCE(tr.tier_percent, 0))`;
 // Действующий процент строки — смесь по единицам: до порога личный, выше — ступень.
-const ITEM_EFF_PCT_SQL = `((${ITEM_PCT_SQL} * (${ITEM_QTY_SQL} - ${ITEM_ABOVE_SQL}) + ${ITEM_TIER_PCT_SQL} * ${ITEM_ABOVE_SQL}) / (${ITEM_QTY_SQL} * 1.0))`;
+// Ветка без ступени выписана явно: строка без tr идёт по ITEM_PCT_SQL бит в бит,
+// а не через арифметику со смесью, где всё держалось бы на MIN(x, NULL).
+const ITEM_EFF_PCT_SQL = `CASE WHEN tr.visit_service_id IS NULL THEN ${ITEM_PCT_SQL}
+  ELSE ((${ITEM_PCT_SQL} * (${ITEM_QTY_SQL} - ${ITEM_ABOVE_SQL}) + ${ITEM_TIER_PCT_SQL} * ${ITEM_ABOVE_SQL}) / (${ITEM_QTY_SQL} * 1.0)) END`;
 
 // Invoice-level discount prorated onto this item (items carry no own discount).
 const ITEM_DISCOUNT_SQL = `CASE WHEN i.subtotal > 0
@@ -613,7 +625,7 @@ function totalRevenueReport(db, args, ctx) {
       // DOCTOR_FIX_RATE_V1 — the rate column states WHICH rate applied. Printing
       // a percentage for a fixed-rate line would read as "this doctor gets 0%"
       // next to a non-zero fee.
-      const rate = r.doctor_fix != null ? ('фикс ' + round2(r.doctor_fix)) : r.doctor_pct;
+      const rate = r.doctor_fix != null ? ('фикс ' + round2(r.doctor_fix)) : round2(r.doctor_pct);
       return [ctx.label(r.origin), r.date, r.invoice || '', r.patient, r.mrn || '', r.service || '', r.qty,
               round2(r.price), round2(r.amount), round2(r.discount), round2(after),
               r.tax_rate, round2(after * r.tax_rate / 100), doctorCell(ctx, r), rate,
@@ -1038,7 +1050,7 @@ export function doctorTierPositions(db, args, _user) {
   const doctorId = Number(args && args.doctor_id);
   if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
   const month = String((args && args.month) || '');
-  if (!/^\d{4}-\d{2}$/.test(month)) throw new RpcError('month must be YYYY-MM.', 400);
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new RpcError('month must be YYYY-MM.', 400);
   const rows = db.prepare(`
     SELECT t.visit_service_id, t.service_id, s.name AS service_name,
            t.qty AS units,

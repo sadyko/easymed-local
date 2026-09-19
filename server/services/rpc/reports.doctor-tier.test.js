@@ -83,6 +83,30 @@ test('не начатая и не оплаченная строка не счи�
   assert.equal(fee(c.db), 25 * 30000);
 });
 
+// Лаборатория идёт по своей лестнице статусов (миграция 041):
+// added → queued → collected → in_progress → resulted → completed.
+// «Начал» для неё — взятие материала: дальше работа уже идёт.
+test('лабораторная строка считается с момента взятия материала', () => {
+  const c = clinic();
+  c.line({ day: '2026-09-03', status: 'collected', paid: false });   // номер 1
+  c.lines(25);                                                       // номера 2..26
+  assert.equal(fee(c.db), 24 * 30000 + 40000);
+});
+
+test('лабораторная строка с внесённым результатом тоже считается', () => {
+  const c = clinic();
+  c.line({ day: '2026-09-03', status: 'resulted', paid: false });    // номер 1
+  c.lines(25);                                                       // номера 2..26
+  assert.equal(fee(c.db), 24 * 30000 + 40000);
+});
+
+test('строка в очереди на забор (queued) без оплаты не считается', () => {
+  const c = clinic();
+  c.line({ day: '2026-09-03', status: 'queued', paid: false });
+  c.lines(25);
+  assert.equal(fee(c.db), 25 * 30000);
+});
+
 test('отменённый счёт не считается', () => {
   const c = clinic();
   c.line({ day: '2026-09-03', status: 'added', invoiceStatus: 'void' });
@@ -128,6 +152,18 @@ test('«Общая выручка» показывает ту же долю, ч�
   assert.equal(Math.round(sum), fee(c.db));
 });
 
+// Смешанный процент строки — дробь (30·1 + 40·2)/3: в таблицу он должен попасть
+// округлённым, а не хвостом из double.
+test('«Ставка врача» в «Общей выручке» округлена до двух знаков', () => {
+  const c = clinic();
+  c.lines(24);
+  c.line({ qty: 3 });
+  const rev = runReport(c.db, { kind: 'total_revenue', ...SEP }, user);
+  const col = rev.columns.indexOf('Ставка врача');
+  const rates = rev.rows.map((r) => r[col]);
+  assert.ok(rates.includes(36.67), 'смешанная ставка печатается как 36.67, а не ' + JSON.stringify(rates.filter((x) => x !== 30)));
+});
+
 test('doctor_tier_positions отдаёт ту же нумерацию, что отчёт', () => {
   const c = clinic(); c.lines(24); c.line({ qty: 3 });
   const { rows } = doctorTierPositions(c.db, { doctor_id: 1, month: '2026-09' }, user);
@@ -148,6 +184,7 @@ test('doctor_tier_positions: без ступени — пусто; кривые 
   const c = clinic({ tierFrom: 0, tierPct: 0 }); c.lines(3);
   assert.deepEqual(doctorTierPositions(c.db, { doctor_id: 1, month: '2026-09' }, user).rows, []);
   assert.throws(() => doctorTierPositions(c.db, { doctor_id: 1, month: 'сентябрь' }, user), (e) => e.status === 400);
+  assert.throws(() => doctorTierPositions(c.db, { doctor_id: 1, month: '2026-13' }, user), (e) => e.status === 400);
   assert.throws(() => doctorTierPositions(c.db, { month: '2026-09' }, user), (e) => e.status === 400);
 });
 
