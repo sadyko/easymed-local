@@ -58,7 +58,10 @@ test('экспорт услуг несёт каждое поле редакто�
 
 test('колонки файла — только те, что реестр базы принимает на запись (иначе импорт молча теряет данные)', async () => {
     const { writableColumns } = await import('../../../../server/db/schema-registry.js');
-    const src = fs.readFileSync(path.join(HERE, '..', 'views', 'section-import-export.js'), 'utf8');
+    // FULL_EXPORT_EOL_V1 — страж режет исходник по '\n'; на Windows с
+    // core.autocrlf=true checkout отдаёт CRLF, и без нормализации срез пуст —
+    // «category» не находится, и тест падает, хотя код верен.
+    const src = fs.readFileSync(path.join(HERE, '..', 'views', 'section-import-export.js'), 'utf8').replace(/\r\n/g, '\n');
     const block = (name) => { const i = src.indexOf('    ' + name + ': {\n        table:'); return src.slice(i, src.indexOf('sampleRows', i)); };
     for (const [section, table] of [['patients', 'patients'], ['services', 'services']]) {
         const cfgSrc = block(section);
