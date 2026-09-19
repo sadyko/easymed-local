@@ -129,6 +129,10 @@ try { Object.defineProperty(globalThis, 'navigator', { value: { mediaDevices: nu
 // ---------------------------------------------------------------------------
 const calls = [];            // { kind: 'rpc'|'insert'|'select', name/table, body }
 let patientRows = [];        // чем отвечает выборка по patients (страж дублей)
+// CRM_LINKS_V1 — заявка колл-центра на СЕГОДНЯ у этого пациента: окно
+// оформляет услуги само, минуя подстановку, и обязано её закрыть.
+let crmRequests = [];
+let crmLines = [];
 // { table, message, nth? } — отказ вставки. nth — номер вставки В ЭТУ таблицу
 // (1 — первая): цепочка вставляет строки услуг по одной, и «упала ВТОРАЯ» —
 // это отдельный случай, где часть строк уже лежит в базе.
@@ -209,6 +213,8 @@ globalThis.fetch = async (url, opts = {}) => {
     }
     calls.push({ kind: 'select', table, body });
     const rows = table === 'patients' ? patientRows
+      : table === 'crm_requests' ? crmRequests
+      : table === 'crm_request_services' ? crmLines
       : table === 'services' ? SERVICES
       : table === 'users' ? DOCTORS
       : table === 'referral_sources' ? SOURCES
@@ -236,6 +242,7 @@ const btnByText = (root, text) => buttons(root).find((b) => textOf(b).replace(/\
 function reset() {
   calls.length = 0; toasts.length = 0; toastKinds.length = 0; printed.length = 0;
   patientRows = []; insertFail = null; quoteFail = null; queueFail = null; focused = null;
+  crmRequests = []; crmLines = [];
   quotes = null; invoiceTotal = 152000; queueTickets = null; holdRpc = null;
   document.body.children.length = 0;
   // Окна прошлой проверки с экрана сняты — их слушатели Escape тоже.
@@ -1069,4 +1076,61 @@ test('медсестра без права «Регистрация пациен
   assert.strictEqual(dialogs('fast-registration').length, 0, 'окно быстрой регистрации всё-таки нарисовалось');
   assert.strictEqual(dialogs('access-denied').length, 1, 'отказ промолчал — это читается как поломка');
   setFullAccess('Admin');
+});
+
+// ===========================================================================
+// CRM_LINKS_V1 (2026-09-20) — ПРИШЁЛ ЗАПИСАННЫЙ, А НЕ «БЕЗ ЗАПИСИ».
+//
+// Это окно оформляет услуги само (registerWalkIn), не проходя через
+// подстановку из заявки колл-центра. Пациент, записанный по телефону на
+// сегодня и пришедший, оформлялся здесь — а его строка заявки оставалась
+// «pending» со СЕГОДНЯШНЕЙ датой. Дальше два следствия, и оба видит клиника:
+// ночью автоматика уносит пришедшего в «Не пришёл», а завтра регистратура
+// снова получает уже оплаченную услугу подставленной в смету.
+// ===========================================================================
+test('записанный колл-центром пришёл и оформлен здесь — его заявка закрывается', async () => {
+  reset();
+  const today = (() => { const d = new Date(); const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; })();
+  crmRequests = [{ id: 501 }];
+  crmLines = [{ id: 901, request_id: 501 }];
+
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg);
+  const row = dlg.state.addLine(SERVICES[0], null);
+  row.sel.value = '7';
+  row.sel.fireChange();
+
+  calls.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(120);
+
+  const ask = calls.find((c) => c.body && c.body.table === 'crm_request_services' && (c.body.op || 'select') === 'select');
+  assert.ok(ask, 'строки заявки этого пациента на сегодня не спрошены — окно о заявке не знает');
+  assert.ok((ask.body.filters || []).some((f) => f.col === 'scheduled_date' && f.op === 'eq' && f.val === today),
+    'строки спрошены не на сегодня: ' + JSON.stringify(ask.body.filters));
+
+  const done = calls.find((c) => c.body && c.body.table === 'crm_request_services' && c.body.op === 'update');
+  assert.ok(done, 'строка заявки осталась «pending»: ночью пришедший пациент уедет в «Не пришёл»');
+  assert.strictEqual(done.body.values.status, 'done', 'строка закрыта не как выполненная');
+  dlg.close();
+});
+
+test('заявки у пациента нет — окно ничего лишнего не пишет', async () => {
+  reset();
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg);
+  const row = dlg.state.addLine(SERVICES[0], null);
+  row.sel.value = '7';
+  row.sel.fireChange();
+
+  calls.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(120);
+
+  assert.ok(!calls.some((c) => c.body && c.body.table === 'crm_request_services' && c.body.op === 'update'),
+    'закрыта строка заявки, которой нет — окно пишет в CRM вслепую');
+  dlg.close();
 });

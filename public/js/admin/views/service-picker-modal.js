@@ -42,6 +42,7 @@ import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS
 // эти услуги стоят ЭТОМУ пациенту сегодня, и кладёт ответ на строки.
 import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTierOf } from '../visit-tier-logic.js';
 import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionParts, localYmd } from '../discount-rules.js';   // DISCOUNT_RULES_V1
+import { closeCrmLines } from '../crm-lines.js';   // CRM_LINKS_V1 — одно правило закрытия строк заявки на все окна
 
 // PROC_PERFORMER_V1 — роли, которым можно поручить процедуру. Врач сюда
 // попадает НЕ отсюда, а по is_doctor (ADMIN_DOCTOR_LIST_V1) — см.
@@ -1456,6 +1457,15 @@ export function openServicePickerModal({
         refreshTierQuotes();   // VISIT_TIER_PRICING_V1 — the patient decides the tier
         const nm = (p.lastName || p.fullName || '').toString().trim();
         toast(nm ? trf('Пациент привязан: {name}', { name: nm }) : tr('Пациент привязан'));
+        // CRM_LINKS_V1 — ПАЦИЕНТ СТАЛ ИЗВЕСТЕН ТОЛЬКО СЕЙЧАС.
+        //
+        // Подстановка услуг из заявки колл-центра запускалась ровно один раз —
+        // при открытии окна. В мастере записи (щелчок по пустому слоту
+        // календаря) пациента привязывают ПОСЛЕ, и спрашивать в тот момент было
+        // не о ком: записанный колл-центром человек не видел своей услуги в
+        // смете, а его заявка потом уходила в «Не пришёл». Повтор безопасен:
+        // уже добавленные услуги подстановка пропускает.
+        if (catalogUI) prefillFromCrm();
     }
 
 
@@ -2105,30 +2115,14 @@ export function openServicePickerModal({
     // CRM_SCHEDULE_V1 — mark the prefilled requests as converted. Best-effort:
     // the services are already on the visit, so a failure here must not surface
     // as "adding failed".
+    // CRM_LINKS_V1 — само правило («строки → done, родитель → «Пришёл» только
+    // тогда, когда в нём не осталось ничего ждущего») переехало в crm-lines.js:
+    // его зовёт и окно быстрой регистрации, а две копии одного правила
+    // разъезжаются молча.
     async function closeCrmRequests() {
         const lineIds = state.crmLineIds || [];
-        const reqIds  = state.crmRequestIds || [];
         if (!lineIds.length) return;
-        try {
-            // The LINES that were actually attached are done.
-            await supabase.from('crm_request_services')
-                .update({ status: 'done' })
-                .in('id', lineIds);
-
-            // CRM_MULTI_SERVICE_V1 — the parent only becomes «Пришёл» once it has
-            // nothing pending left. A request booked across three days must stay
-            // open after the first visit, or the other two days would vanish from
-            // the registrar's prefill.
-            for (const rid of reqIds) {
-                const { data: left } = await supabase.from('crm_request_services')
-                    .select('id').eq('request_id', rid).eq('status', 'pending').limit(1);
-                if (!left || !left.length) {
-                    await supabase.from('crm_requests').update({ status: 'came' }).eq('id', rid);
-                }
-            }
-        } catch (e) {
-            console.warn('[picker] CRM request not closed:', e && e.message);
-        }
+        await closeCrmLines(lineIds, state.crmRequestIds || []);
         state.crmLineIds = [];
         state.crmRequestIds = [];
     }
@@ -2729,6 +2723,15 @@ export function openServicePickerModal({
                         entityId: a.service.id, entityLabel: a.service.name, action: 'created' });
                 } catch (_) {}
             }
+
+            // CRM_LINKS_V1 — услуги легли в визит, значит заявка колл-центра
+            // отработана: её строки закрываются здесь ТАК ЖЕ, как в режиме
+            // привязки к существующему визиту (attachCartToVisit). Раньше эту
+            // ветку закрытие обходило, и запись из календаря оставляла заявку
+            // «Записан» с прошедшей датой — ночная автоматика уносила
+            // ПРИШЕДШЕГО пациента в «Не пришёл». Стоит ДО проверки полноты:
+            // строка заявки закрыта тем, что её услуга записана.
+            if (vsRows.length) await closeCrmRequests();
 
             // CATALOG_WIZARD_V2 — a partially-recorded visit must not proceed to
             // billing: the invoice/balance math would diverge from what landed.
