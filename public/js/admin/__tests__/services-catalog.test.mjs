@@ -65,10 +65,17 @@ globalThis.localStorage = {
   removeItem: (k) => { store.delete(k); }, clear: () => store.clear(),
 };
 localStorage.setItem('admin.lang', 'ru');
+// SERVICES_SCROLL_KEEP_V1 — прокрутку страницы держит ОКНО (у оболочки нет
+// своего скроллера), поэтому окно умеет и scrollY, и scrollTo: так же, как в
+// __tests__/app-shell.test.mjs, каждый вызов записывается — утверждения ниже
+// читают именно их.
+const scrollCalls = [];
 globalThis.window = {
   location: { hostname: 'localhost' }, localStorage, addEventListener() {},
   easymed: { state: { user: null } },
   CLINIC: { id: 1 },
+  scrollY: 0,
+  scrollTo(...args) { scrollCalls.push(args); },
 };
 globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
@@ -86,12 +93,26 @@ let serviceTypes = [{ id: 5, name: 'Абдоминальное' }];   // SVC_VOC
 let deleteCheck = { deletable: true, name: SVC.name, blocking: [] };
 const dbCalls = [];
 const rpcCalls = [];
+// SERVICES_SCROLL_KEEP_V1 — задержка каталога по требованию: пока сюда положен
+// промис, выборка services висит, и видно, ЧТО показывает таблица во время
+// перезагрузки (в жизни это секунда сети — на ней и происходил прыжок наверх).
+let holdServices = null;
+// SERVICES_SCROLL_KEEP_V1 — один отказ выборки services «по требованию»:
+// имитирует транзиентный сбой ровно на тихой перезагрузке (после сохранения).
+let failServicesOnce = false;
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   if (u === '/api/db') {
     const desc = opts && opts.body ? JSON.parse(opts.body) : {};
     dbCalls.push(desc);
-    if (desc.op === 'select') return jsonOk(desc.table === 'services' ? services : desc.table === 'service_categories' ? categories : desc.table === 'service_types' ? serviceTypes : []);
+    if (desc.op === 'select') {
+      if (desc.table === 'services' && holdServices) await holdServices;
+      if (desc.table === 'services' && failServicesOnce) {
+        failServicesOnce = false;
+        return { ok: false, json: async () => ({ error: { message: 'boom' } }) };
+      }
+      return jsonOk(desc.table === 'services' ? services : desc.table === 'service_categories' ? categories : desc.table === 'service_types' ? serviceTypes : []);
+    }
     return jsonOk({});
   }
   if (u.startsWith('/api/rpc/')) {
@@ -125,6 +146,7 @@ async function paint(user = ADMIN) {
   window.easymed.state.user = user;
   document.body.children.length = 0;
   dbCalls.length = 0; rpcCalls.length = 0; confirms = []; confirmAnswer = true;
+  scrollCalls.length = 0; window.scrollY = 0;   // SERVICES_SCROLL_KEEP_V1
   services = [SVC];
   deleteCheck = { deletable: true, name: SVC.name, blocking: [] };
   const container = mk('div');
@@ -425,4 +447,93 @@ test('SAVE_BTN_TARGET_V1: клик по значку внутри «Сохран
       'услуга сохранена дважды: ' + rpcCalls.map((r) => r.name).join(','));
     assert.ok(!btn.disabled, 'кнопка осталась выключенной после сохранения');
   } finally { SVC.requires_doctor = 1; }
+});
+
+// SERVICES_SCROLL_KEEP_V1 — владелец: «после сохранения услуги список
+// перескакивает наверх, и приходится снова листать вниз». Причина не в самом
+// сохранении: перезагрузка списка сначала СТИРАЛА строки и ставила одну
+// «Loading…», страница на миг становилась короткой — и браузер сам обнулял
+// прокрутку окна (другого скроллера у оболочки нет). Здесь выборка каталога
+// держится на паузе: в этот момент строки обязаны остаться на экране, а после
+// возврата данных прокрутка — вернуться туда, где человек стоял.
+test('SERVICES_SCROLL_KEEP_V1: после сохранения услуги страница не прыгает вверх — строки не пропадают на время перезагрузки', async () => {
+  SVC.requires_doctor = 0;   // страж «отметьте исполнителя» не должен мешать этому тесту
+  let release = null;
+  try {
+    const c = await paint(ADMIN);
+    window.scrollY = 900;   // человек листал список и открыл услугу далеко внизу
+    tags(c, 'tr').find((r) => r.className.includes('row-click')).click();
+    await flush();
+
+    holdServices = new Promise((r) => { release = r; });
+    scrollCalls.length = 0;
+    buttonWith(document.body, 'Сохранить').click();
+    await flush();
+
+    const rowsNow = tags(c, 'tr').filter((r) => r.className.includes('row-click'));
+    assert.ok(rowsNow.some((r) => textOf(r).includes(SVC.name)),
+      'на время перезагрузки строки исчезли — страница становится короткой и браузер сбрасывает прокрутку');
+    assert.ok(!tags(c, 'tr').some((r) => /Loading|Загруз/.test(textOf(r))),
+      'вместо списка показана заглушка «Loading…» — именно она и обнуляет прокрутку');
+
+    release(); release = null; holdServices = null;
+    await flush();
+
+    assert.ok(tags(c, 'tr').some((r) => r.className.includes('row-click') && textOf(r).includes(SVC.name)),
+      'после ответа сервера список не перерисован');
+    assert.ok(scrollCalls.some((a) => a[0] && a[0].top === 900 && a[0].behavior === 'instant'),
+      'прокрутка не восстановлена мгновенно (behavior:instant из-за html{scroll-behavior:smooth}): ' + JSON.stringify(scrollCalls));
+  } finally {
+    if (release) release();
+    holdServices = null; SVC.requires_doctor = 1;
+  }
+});
+
+// SERVICES_SCROLL_KEEP_V1 — сбой самой перезагрузки (не только задержка):
+// владелец видел тот же прыжок наверх, когда тихий рефреш после сохранения
+// транзиентно отказывал — catch стирал allServices и рисовал пустой список,
+// хотя данные в памяти были целы. Тихий путь обязан ИХ оставить на экране.
+test('SERVICES_SCROLL_KEEP_V1: сбой тихой перезагрузки не стирает строки', async () => {
+  SVC.requires_doctor = 0;   // страж «отметьте исполнителя» не должен мешать этому тесту
+  try {
+    const c = await paint(ADMIN);
+    tags(c, 'tr').find((r) => r.className.includes('row-click')).click();
+    await flush();
+
+    failServicesOnce = true;
+    buttonWith(document.body, 'Сохранить').click();
+    await flush();
+
+    assert.ok(tags(c, 'tr').some((r) => r.className.includes('row-click') && textOf(r).includes(SVC.name)),
+      'сбой тихой перезагрузки стёр строки — список коллапсирует и страница прыгает вверх');
+  } finally {
+    failServicesOnce = false; SVC.requires_doctor = 1;
+  }
+});
+
+// Первая загрузка — другое дело: показывать нечего, и «Loading…» честно
+// говорит, что список едет. Тишина вместо него читалась бы как «услуг нет».
+test('SERVICES_SCROLL_KEEP_V1: первая отрисовка по-прежнему показывает «Loading…»', async () => {
+  let release = null;
+  try {
+    window.easymed.state.user = ADMIN;
+    document.body.children.length = 0;
+    services = [SVC];
+    scrollCalls.length = 0; window.scrollY = 0;
+    holdServices = new Promise((r) => { release = r; });
+
+    const container = mk('div');
+    const done = renderServices(container, {});   // без await: список ещё едет
+    await flush();
+    assert.ok(tags(container, 'tr').some((r) => /Loading|Загруз/.test(textOf(r))),
+      'при первой загрузке нет ни строк, ни «Loading…» — экран выглядит пустым');
+
+    release(); release = null; holdServices = null;
+    await done; await flush();
+    assert.ok(tags(container, 'tr').some((r) => r.className.includes('row-click') && textOf(r).includes(SVC.name)),
+      'после загрузки заглушка не сменилась списком');
+  } finally {
+    if (release) release();
+    holdServices = null;
+  }
 });

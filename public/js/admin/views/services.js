@@ -240,7 +240,7 @@ function mount() {
     // (insert/update on services are admin-only, like the editor's RPC).
     const addBtn = h('button', {
         class: 'btn btn-primary btn-sm', type: 'button',
-        onclick: () => openServiceEditor({ row: null, readOnly: !isAdmin(), onSaved: fetchAndPaint }),
+        onclick: () => openServiceEditor({ row: null, readOnly: !isAdmin(), onSaved: () => fetchAndPaint({ quiet: true }) }),
     }, Icon('Plus', { size: 14 }), ' ', tr('Создать'));
     const setupBtn = h('button', {
         class: 'btn btn-outline btn-sm', type: 'button', title: tr('Состав и порядок колонок таблицы'),
@@ -260,7 +260,7 @@ function mount() {
         h('div', { class: 'svc-tb-right' },
             // DATA_TRANSFER_V1 — Шаблон / Импорт / Экспорт. Export re-reads the
             // whole table rather than reusing the painted rows.
-            ...importExportButtons({ sectionKey: 'services', filenameStem: 'services', fetchRows: fetchAllServices, onImported: fetchAndPaint }),
+            ...importExportButtons({ sectionKey: 'services', filenameStem: 'services', fetchRows: fetchAllServices, onImported: () => fetchAndPaint({ quiet: true }) }),
             setupBtn,
             addBtn),
     );
@@ -323,9 +323,28 @@ function paintTable() {
 // -----------------------------------------------------------------------------
 let lastFetchToken = 0;
 
-async function fetchAndPaint() {
+// SERVICES_SCROLL_KEEP_V1 — окно прокручивает страницу целиком; пока строки
+// перерисовываются, документ короче и браузер сам сбрасывает scrollY.
+// behavior:'instant' — из-за html{scroll-behavior:smooth} (см. admin.js
+// snapshotActiveScroll).
+function restoreWindowScroll(y) {
+    const go = () => {
+        try { window.scrollTo({ top: y, behavior: 'instant' }); }
+        catch (_) { window.scrollTo(0, y); }   // браузер без значения 'instant'
+    };
+    // После перерисовки: высота документа должна вернуться раньше, чем мы
+    // просим прокрутку, иначе просить некуда.
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(go); else go();
+}
+
+// `quiet` — перезагрузка ПОСЛЕ действия (сохранили, импортировали, удалили):
+// список уже на экране, человек стоит где-то внизу. Такая перезагрузка не
+// стирает строки заглушкой «Loading…» (иначе страница на миг становится
+// короткой и прокрутка обнуляется) и возвращает прокрутку на место.
+async function fetchAndPaint({ quiet = false } = {}) {
     const token = ++lastFetchToken;
-    setLoadingRow();
+    const keepY = (typeof window !== 'undefined' && Number(window.scrollY)) || 0;
+    if (!quiet || !allServices.length) setLoadingRow();
     try {
         // SVC_COL_FILTERS_V1 — the list used to stop at 500 rows. Filtering a
         // truncated list is worse than not filtering at all. The whole catalogue
@@ -347,11 +366,11 @@ async function fetchAndPaint() {
         lookups.categories = cats;
         lookups.departments = deps;
         renderRows();
+        if (quiet) restoreWindowScroll(keepY);   // SERVICES_SCROLL_KEEP_V1
     } catch (e) {
         if (token !== lastFetchToken) return;
         toast(trf('Не удалось загрузить услуги: {msg}', { msg: (e && e.message) || e }), 'fail');
-        allServices = [];
-        renderRows();
+        if (!quiet) { allServices = []; renderRows(); }   // SERVICES_SCROLL_KEEP_V1 — тихая перезагрузка: данные в памяти целы, список не стираем
     }
 }
 
@@ -439,7 +458,7 @@ function serviceRow(s, cols) {
         style: { cursor: 'pointer', opacity: inactive ? '0.55' : '' },
         // SERVICES_ONE_EDITOR_V1 — the row opens the shared editor (read-only
         // below admin, matching the services write grant).
-        onclick: () => openServiceEditor({ row: s, readOnly: !isAdmin(), onSaved: fetchAndPaint }),
+        onclick: () => openServiceEditor({ row: s, readOnly: !isAdmin(), onSaved: () => fetchAndPaint({ quiet: true }) }),
     },
         h('td', { onclick: (e) => e.stopPropagation() }, box),
         ...cols.map((c) => {
@@ -489,7 +508,7 @@ function paintBulkBar() {
         }
         toast(active ? trf('Включено услуг: {n}', { n: ok }) : trf('Отключено услуг: {n}', { n: ok }), bad ? 'warn' : 'ok');
         selected.clear();
-        await fetchAndPaint();
+        await fetchAndPaint({ quiet: true });
     };
     const removeAll = async () => {
         const rows = picked();
@@ -512,7 +531,7 @@ function paintBulkBar() {
         }
         toast(trf('Удалено: {d}, отключено: {o}, не удалось: {b}', { d: deleted, o: disabled, b: bad }), bad ? 'warn' : 'ok');
         selected.clear();
-        await fetchAndPaint();
+        await fetchAndPaint({ quiet: true });
     };
     bar.appendChild(h('div', { class: 'bulk-bar' },
         h('span', { style: { color: 'var(--primary-700)' } }, Icon('Check', { size: 14 })),
@@ -569,7 +588,7 @@ async function confirmDelete(svc) {
         const { error: delErr } = await supabase.rpc('delete_service', { p_service_id: svc.id });
         if (delErr) throw delErr;
         toast(trf('Услуга «{name}» удалена', { name: chk.name }), 'ok');
-        await fetchAndPaint();
+        await fetchAndPaint({ quiet: true });
     } catch (e) {
         toast((e && e.message) || 'Не удалось удалить услугу.', 'fail');
     }
@@ -579,5 +598,5 @@ async function deactivateService(svc) {
     const { error } = await supabase.from('services').update({ active: 0 }).eq('id', svc.id);
     if (error) throw error;
     toast('Услуга отключена — история сохранена', 'ok');
-    await fetchAndPaint();
+    await fetchAndPaint({ quiet: true });
 }
