@@ -15,17 +15,23 @@
 import { localDate, localHour, localWeekday, inLocalRange } from '../domain/day.js';
 // CRM_LINKS_V1 — воронка настраивается (миграция 077): «дошёл», «не пришёл» и
 // «потеряно» спрашиваются у справочника, а не берутся из зашитого списка.
-import { wonStageKey, lostStageKeys, noShowStageKey } from '../crm/config.js';
+import { wonStageKey, lostStageKeys, noShowStageKey, listStages, listSources } from '../crm/config.js';
 
-const STATUS_RU = {
-  in_process: 'В работе', scheduled: 'Записан', came: 'Пришёл',
-  no_show: 'Не пришёл', stopped: 'Отказ', not_qualified: 'Не целевой',
-  converted: 'Конвертирован', recall: 'Перезвонить',
-};
-const SOURCE_RU = {
-  call: 'Звонок', instagram: 'Instagram', website: 'Сайт', telegram: 'Telegram',
-  walkin: 'Пришёл сам', referral: 'Рекомендация', other: 'Другое',
-};
+// CRM_LINKS_V1 — ПОДПИСИ ЖИВУТ В СПРАВОЧНИКАХ, А НЕ ЗДЕСЬ.
+//
+// Тут стояли STATUS_RU и SOURCE_RU — ТРЕТИЙ словарь воронки, после самих
+// crm_stages/crm_sources (миграция 077) и запасного набора на клиенте. Он уже
+// разошёлся с первым: ключ источника в базе — 'walk_in', а здесь лежал
+// 'walkin', и «Пришёл сам» печатался в отчёте и в выгрузке Excel голым кодом.
+// Переименование колонки на экране настроек до отчёта не доезжало вовсе:
+// владелец правил «Пришёл» на «Дошёл», а отчёт продолжал звать её по-своему.
+//
+// Ключ вместо подписи — честный запасной вариант: он ничего не выдумывает, и
+// по нему видно, что строка пришла из колонки, которой в справочнике уже нет.
+function labelLookup(rows) {
+  const m = new Map((rows || []).map((r) => [r.key, r.label]));
+  return (key, empty = '') => m.get(key) || key || empty;
+}
 const WEEKDAY_RU = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
 const pct = (part, total) => (total > 0 ? Math.round((part / total) * 1000) / 10 : 0);
@@ -43,6 +49,13 @@ export function callcenterReport(db, args, _user) {
   // «Не пришёл» остаётся ОТДЕЛЬНЫМ показателем и потому вычитается из потерь:
   // неявка — это повод перезвонить, а отказ — нет, и складывать их в одну
   // цифру значит потерять единственный список, который можно отработать.
+  // Подписи ступеней и источников — из справочников CRM (см. labelLookup).
+  // Отчёт только читает, поэтому недоступный справочник не должен ронять его:
+  // без подписей строки называются своими ключами, и это по-прежнему отчёт.
+  let stageLabel = (k, e = '') => k || e;
+  let sourceLabel = (k, e = '') => k || e;
+  try { stageLabel = labelLookup(listStages(db)); sourceLabel = labelLookup(listSources(db)); } catch (e) { /* ключи вместо подписей */ }
+
   const WON = wonStageKey(db);
   const NO_SHOW = noShowStageKey(db) || '';
   const LOST = lostStageKeys(db).filter((k) => k !== NO_SHOW);
@@ -98,12 +111,12 @@ export function callcenterReport(db, args, _user) {
   const byStatus = db.prepare(`
     SELECT r.status AS status, COUNT(*) AS count
       FROM crm_requests r ${where} GROUP BY r.status ORDER BY count DESC`).all(...p)
-    .map((x) => ({ ...x, label: STATUS_RU[x.status] || x.status }));
+    .map((x) => ({ ...x, label: stageLabel(x.status) }));
 
   const bySource = db.prepare(`
     SELECT r.source AS source, COUNT(*) AS count
       FROM crm_requests r ${where} GROUP BY r.source ORDER BY count DESC`).all(...p)
-    .map((x) => ({ ...x, label: SOURCE_RU[x.source] || x.source || '—' }));
+    .map((x) => ({ ...x, label: sourceLabel(x.source, '—') }));
 
   // По оператору — не только объём, но и доля дошедших: сто заявок, из которых
   // никто не пришёл, это не работа.
@@ -209,7 +222,7 @@ export function callcenterReport(db, args, _user) {
     SELECT r.source AS src, COUNT(*) AS count, SUM(r.status = ?) AS came
       FROM crm_requests r ${where} GROUP BY r.source ORDER BY count DESC`).all(WON, ...p)
     .map((x) => ({
-      name: SOURCE_RU[x.src] || x.src || 'Другое',
+      name: sourceLabel(x.src, 'Другое'),
       count: x.count, came: x.came || 0, came_pct: pct(x.came || 0, x.count),
     }));
 
@@ -241,7 +254,7 @@ export function callcenterReport(db, args, _user) {
     // а не просто посмотреть на цифру.
     oldest: staleRows.slice(0, 6).map((x) => ({
       name: x.full_name || '—', phone: x.phone || '', days: x.days,
-      status: STATUS_RU[x.status] || x.status, operator: x.operator,
+      status: stageLabel(x.status), operator: x.operator,
     })),
   };
 
@@ -293,7 +306,7 @@ export function callcenterReport(db, args, _user) {
       LEFT JOIN services s ON s.id = r.service_id
      ${where} ORDER BY r.created_at DESC`).all(...p)
     .map((x) => [x.day, x.hour, x.name || '', x.phone || '',
-      SOURCE_RU[x.source] || x.source || '', STATUS_RU[x.status] || x.status,
+      sourceLabel(x.source), stageLabel(x.status),
       x.operator, x.service, x.sched, x.converted ? 'да' : 'нет']);
 
   return {

@@ -323,3 +323,58 @@ test('CRM_LINKS_V1: конверсия считается по колонке-к
   assert.equal(op.came, 1, 'у оператора не сошлось число доведённых до визита');
   db.close();
 });
+
+// CRM_LINKS_V1 (2026-09-20) — ПОДПИСИ ВОРОНКИ И ИСТОЧНИКОВ БЕРУТСЯ ИЗ
+// СПРАВОЧНИКОВ, А НЕ ИЗ ТРЕТЬЕГО СЛОВАРЯ В КОДЕ ОТЧЁТА.
+//
+// Словарей было три: crm_stages/crm_sources в базе, DEFAULT_* на клиенте и
+// STATUS_RU/SOURCE_RU здесь. Третий уже разошёлся с первым: ключ источника в
+// базе — 'walk_in', а в словаре отчёта лежал 'walkin', и «Пришёл сам»
+// печатался в отчёте и в выгрузке Excel голым кодом. Переименование колонки на
+// экране настроек до отчёта не доезжало вовсе.
+test('CRM_LINKS_V1: источник печатается подписью справочника, а не кодом', () => {
+  const db = seed();
+  addLead(db, { day: '2026-08-17', localHour: 10, status: 'came', source: 'walk_in' });
+
+  const r = callcenterReport(db, RANGE, USER);
+
+  const src = r.bySource.find((x) => x.source === 'walk_in');
+  assert.ok(src, 'источник пропал из отчёта');
+  assert.equal(src.label, 'Пришёл сам',
+    'источник напечатан кодом: словарь отчёта разошёлся со справочником CRM');
+  const conv = r.sourceConv.find((x) => x.count === 1);
+  assert.equal(conv.name, 'Пришёл сам', 'в конверсии по источникам тот же код вместо подписи');
+  // Выгрузка Excel — та же подпись: стойка сводит её руками, и код в столбце
+  // «Источник» означает ручную расшифровку на каждой строке.
+  assert.ok(r.rows.some((row) => row.includes('Пришёл сам')), 'в выгрузке Excel источник остался кодом');
+  db.close();
+});
+
+test('CRM_LINKS_V1: колонку переименовали — отчёт называет её новым именем', () => {
+  const db = seed();
+  db.prepare("UPDATE crm_stages SET label = 'Дошёл' WHERE key = 'came'").run();
+  db.prepare("UPDATE crm_sources SET label = 'Входящий звонок' WHERE key = 'call'").run();
+  addLead(db, { day: '2026-08-17', localHour: 10, status: 'came', source: 'call' });
+
+  const r = callcenterReport(db, RANGE, USER);
+
+  assert.equal(r.byStatus.find((x) => x.status === 'came').label, 'Дошёл',
+    'переименование колонки не доехало до отчёта');
+  assert.equal(r.bySource.find((x) => x.source === 'call').label, 'Входящий звонок',
+    'переименование источника не доехало до отчёта');
+  db.close();
+});
+
+// И «зависшие заявки» зовут колонку так же, как её зовёт доска. Словарь отчёта
+// подписывал 'in_process' как «В работе», а справочник — как «В обработке»:
+// одна и та же колонка называлась в клинике двумя именами.
+test('CRM_LINKS_V1: в «зависших» колонка названа так же, как на доске', () => {
+  const db = seed();
+  const id = addLead(db, { day: '2026-08-17', localHour: 10, status: 'in_process' });
+  db.prepare("UPDATE crm_requests SET updated_at = '2026-01-01T10:00:00Z' WHERE id = ?").run(id);
+
+  const r = callcenterReport(db, RANGE, USER);
+  assert.equal(r.stale.oldest[0].status, 'В обработке',
+    'список зависших зовёт колонку по-своему — в клинике у одной колонки два имени');
+  db.close();
+});
