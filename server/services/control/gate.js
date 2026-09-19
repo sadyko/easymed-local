@@ -29,6 +29,9 @@ const READ_ONLY_RPCS = new Set([
   // молчащее здание и просроченная лицензия — две разные беды с двумя разными
   // починками, и путать их нельзя.
   'report_freshness',
+  // DOCTOR_TIER_V1 — нумерация строк врача по ступени; чистое чтение, как
+  // run_report рядом: кабинет показывает прогресс и при просроченной лицензии.
+  'doctor_tier_positions',
   'cashier_invoices', 'cash_shift_summary', 'shift_report', 'cashier_report',
   'callcenter_report', 'queue_board', 'documents_feed', 'accommodation_state',
   'deposit_balance', 'list_deposits', 'service_delete_check', 'get_clinic_by_slug',

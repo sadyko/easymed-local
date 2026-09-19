@@ -29,7 +29,7 @@ import { renderDoctorProfile } from './doctor-profile.js?v=btnright1';
 // специфике делает ОТДЕЛЬНЫЙ экземпляр модуля, а у дашборда есть состояние.
 import {
     renderDoctorDashboard, resetDoctorDashboard,
-    serviceRateMap, serviceShare, perServicePayApplies,
+    serviceRateMap, serviceShare, tierShare, perServicePayApplies,
 } from './doctor-dashboard.js';
 // HEAD_DOCTOR_WARD_VIEW_V1 — главный врач делает свою работу ПРЯМО ИЗ КАБИНЕТА:
 // оба окна те же самые, что в разделе «Стационар», а не их копии.
@@ -89,6 +89,11 @@ const state = {
         referrals: [],        // recommended_services where recommended_by = doctor
         rewardSource:null,    // INTERNAL_REFERRAL_V1 — карточка источника этого врача
         rewardCategory:null,  // и её категория: стандартная ставка
+        // DOCTOR_TIER_V1 — позиции строк по ступеням от сервера
+        // (doctor_tier_positions): visit_service_id → строка ответа; и прогресс
+        // текущего месяца по услугам — «N из M».
+        tierPos:   new Map(),
+        tierProgress: [],
         recent:    'services',   // PAY_ONE_SCREEN_V1 — какой из трёх списков открыт в «Последних»
         rootEl:    null,         // корень вкладки — ему подгоняется высота окна
     },
@@ -1474,6 +1479,14 @@ function periodRange(period) {
     return { startIso: start.toISOString(), endIso: now.toISOString() };
 }
 
+// DOCTOR_TIER_V1 — местный 'YYYY-MM' даты: календарный месяц ступени считается
+// по местному времени клиники, как localMonth() в отчётах.
+function localMonthKey(value) {
+    const d = value instanceof Date ? value : new Date(value);
+    if (isNaN(d)) return '';
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
 async function loadDoctorsForDash() {
     const { data, error } = await supabase.from('users')
         .select('id, full_name, is_doctor, specialty, role, salary_type, salary_fixed, salary_percent, doctor_category, kpi_links, service_rates, referral_rates, license_expiry_date')
@@ -1530,11 +1543,17 @@ async function loadDashboardData() {
         id:           r.id,
         status:       r.status,
         total:        Number(r.total || (r.unit_price || 0) * (r.quantity || 1)),
+        // CABINET_FEE_PARITY_V1 — количество нужно доле: фиксированная оплата
+        // врача считается ЗА ЕДИНИЦУ, как COALESCE(ii.quantity, 1) в ITEM_FEE_SQL.
+        quantity:     Number(r.quantity) || 1,
         serviceId:    r.service_id,
         // DOCTOR_SHARE_AFTER_TAX_V1 — фолбэк 0, а не 12: ставка налога есть в
         // карточке услуги, и придумывать её за данные нельзя — у клиники 6%.
         taxRate:      r.services?.tax_rate != null ? Number(r.services.tax_rate) : 0,
         createdAt:    r.created_at,
+        // DOCTOR_TIER_V1 — месяц ступени считается по дате ПРИЁМА, как на
+        // сервере; created_at — только запасной вариант.
+        visitDate:    r.visits?.visit_date || r.created_at,
         serviceName:  r.services?.name || '(removed)',
         serviceCat:   r.services?.service_categories?.name || '',
         serviceType:  r.services?.service_types?.name || '',
@@ -1573,6 +1592,43 @@ async function loadDashboardData() {
             }
         }
     } catch (e) { console.warn('[dash] discounts:', e && e.message); }
+
+    // DOCTOR_TIER_V1 — позиции строк по ступеням за ВЕСЬ затронутый диапазон
+    // месяцев. ПРАВИЛО: один запрос за диапазон месяцев, а не по одному на
+    // месяц — цикл по месяцам на «за 12 месяцев» это дюжина запросов подряд
+    // ради одного числа на плитке. Нумерацию считает сервер
+    // (doctor_tier_positions); кабинет только применяет её тем же правилом, что
+    // отчёт (tierShare). Текущий месяц входит в диапазон всегда — прогресс
+    // «18 из 25» нужен и когда за выбранный период строк нет. Отказ сервера
+    // больше не молчит: без позиций доли считаются БЕЗ ступени, и это видно
+    // только в консоли, а не в цифрах.
+    state.dash.tierPos = new Map();
+    state.dash.tierProgress = [];
+    try {
+        const nowKey = localMonthKey(new Date());
+        const months = new Set(state.dash.services.map(s => localMonthKey(s.visitDate)).filter(Boolean));
+        months.add(nowKey);
+        const sorted = [...months].sort();
+        const from = sorted[0];
+        const to = sorted[sorted.length - 1];
+        const { data, error } = await supabase.rpc('doctor_tier_positions', { doctor_id: docId, from, to });
+        if (error) {
+            console.warn('[dash] tier positions:', error.message);
+        } else if (data && Array.isArray(data.rows)) {
+            for (const p of data.rows) state.dash.tierPos.set(String(p.visit_service_id), p);
+            const byService = new Map();
+            for (const p of data.rows) {
+                if (String(p.ym || '') !== nowKey) continue;
+                const key = String(p.service_id);
+                const cur = byService.get(key);
+                if (!cur || Number(p.count_so_far) > cur.count) {
+                    byService.set(key, { serviceId: key, serviceName: p.service_name || '', count: Number(p.count_so_far) || 0,
+                                         from: Number(p.tier_from) || 0, pct: Number(p.tier_percent) || 0 });
+                }
+            }
+            state.dash.tierProgress = [...byService.values()];
+        }
+    } catch (e) { console.warn('[dash] tier positions:', e && e.message); }
 
     // 3. Referrals THIS doctor made (recommended_services where recommended_by = me).
     const { data: refs, error: refErr } = await supabase
@@ -1664,7 +1720,9 @@ function computeSalary() {
     const rateMap = serviceRateMap(doc);
     const earning = state.dash.services.filter(s => s.status === 'completed' || s.status === 'in_progress');
     const revenue = earning.reduce((sum, s) => sum + Number(s.total || 0), 0);
-    const variableComponent = earning.reduce((sum, s) => sum + serviceShare(s, rateMap), 0);
+    // DOCTOR_TIER_V1 — доля строки считается со ступенью, если сервер прислал
+    // её позицию; без позиции tierShare равна serviceShare.
+    const variableComponent = earning.reduce((sum, s) => sum + tierShare(s, rateMap, state.dash.tierPos.get(String(s.id)) || null), 0);
     const fixedMonth = Number(doc.salary_fixed || 0);
 
     // Pro-rate the fixed portion for non-month periods (rough estimate).
@@ -1884,7 +1942,9 @@ function earningsSeries() {
         for (const s of state.dash.services) {
             if (s.status !== 'completed' && s.status !== 'in_progress') continue;
             const row = byKey.get(dayKey(s.createdAt));
-            if (row) row.services += serviceShare(s, rateMap);
+            // CABINET_REDESIGN_V1 правило 1 — график это разложенная по дням
+            // плитка: со ступенью считается и он, иначе суммы разойдутся.
+            if (row) row.services += tierShare(s, rateMap, state.dash.tierPos.get(String(s.id)) || null);
         }
     }
     for (const r of state.dash.referrals) {
@@ -1934,6 +1994,17 @@ function salaryKindLabel(kind) {
     return tr({ fixed: 'Оклад помесячно', percentage: 'Процент от услуг', fix_plus_kpi: 'Оклад + процент', none: 'Не настроено' }[kind]) || kind;
 }
 
+// DOCTOR_TIER_V1 — строки прогресса ступени, которые ЭТОМУ врачу действительно
+// что-то обещают: платят ли ему поуслужно (то же правило, что у долей —
+// perServicePayApplies) и есть ли у него ставка на эту услугу. Ступень —
+// свойство услуги, а не врача, и сервер отдаёт её всем; без этой проверки
+// врачу на голом окладе рисовалось «с 26-й доля 50 %».
+function tierProgressRows(doc) {
+    if (!perServicePayApplies(doc)) return [];
+    const rateMap = serviceRateMap(doc);
+    return (state.dash.tierProgress || []).filter(p => rateMap.has(String(p.serviceId)));
+}
+
 function salaryConfigCard(salary) {
     const doc = state.dash.doctor;
     if (!doc) return h('div');
@@ -1950,6 +2021,17 @@ function salaryConfigCard(salary) {
         kvRow(tr('Показатели KPI'), (doc.kpi_links || []).length
             ? (doc.kpi_links || []).join(', ')
             : '—'),
+        // DOCTOR_TIER_V1 — прогресс ступени за ТЕКУЩИЙ месяц: сколько услуг уже
+        // сделано, с какой начинается повышенная доля и действует ли она.
+        // Показывается ТОЛЬКО тому, кому ступень вообще что-то меняет: врачу на
+        // окладе и врачу без ставки на эту услугу доля с неё не платится вовсе,
+        // и обещание «с 26-й доля 50 %» было бы обещанием денег, которых не
+        // будет.
+        ...tierProgressRows(doc).map(p => kvRow(
+            trf('Ступень: {service}', { service: p.serviceName }),
+            p.count > p.from
+                ? trf('{count} из {from} в этом месяце · ступень {pct}% действует', { count: p.count, from: p.from, pct: p.pct })
+                : trf('{count} из {from} в этом месяце · с {next}-й доля {pct}%', { count: p.count, from: p.from, next: p.from + 1, pct: p.pct }))),
         h('div', { class: 'row', style: { gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--ink-100)' } },
             h('span', { style: { fontSize: '12.5px', color: 'var(--ink-600)' } }, tr('Итого за период:')),
             h('span', { class: 'grow' }),
@@ -2220,7 +2302,9 @@ function openSalaryDetails() {
                 const rate = rateMap.get(String(s.serviceId));
                 const tax  = s.taxRate != null ? Number(s.taxRate) : 12;
                 const net  = Number(s.total || 0) * (1 - tax / 100);
-                const share = Math.round(serviceShare(s, rateMap));
+                // DOCTOR_TIER_V1 — разбор показывает ту же долю, что и плитка.
+                const pos = state.dash.tierPos.get(String(s.id)) || null;
+                const share = Math.round(tierShare(s, rateMap, pos));
                 const ruleParts = [];
                 if (rate && rate.price) ruleParts.push(rate.price.toLocaleString('ru-RU') + ' UZS');
                 if (rate && rate.percentage) ruleParts.push(rate.percentage + '%');
@@ -2232,7 +2316,13 @@ function openSalaryDetails() {
                     h('td', { class: 'num', style: { textAlign: 'right' } }, s.total.toLocaleString('ru-RU')),
                     h('td', { class: 'num', style: { textAlign: 'right' } }, Math.round(net).toLocaleString('ru-RU')),
                     h('td', { class: 'num muted', style: { textAlign: 'right', fontSize: '12.5px' } }, ruleLabel),
-                    h('td', { class: 'num cell-strong', style: { textAlign: 'right', color: share ? 'var(--ok-700)' : 'var(--ink-400)' } }, share.toLocaleString('ru-RU')),
+                    h('td', { class: 'num cell-strong', style: { textAlign: 'right', color: share ? 'var(--ok-700)' : 'var(--ink-400)' } },
+                        share.toLocaleString('ru-RU'),
+                        // Пометка стоит только там, где ступень действительно
+                        // сработала — единиц выше порога больше нуля.
+                        pos && Number(pos.units_above) > 0
+                            ? h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } }, tr('ступень'))
+                            : null),
                 );
             })),
         ));

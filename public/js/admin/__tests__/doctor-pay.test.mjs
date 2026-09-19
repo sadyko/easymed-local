@@ -104,6 +104,13 @@ const REFERRALS = [
     patients: P1 },
 ];
 
+// DOCTOR_TIER_V1 — ответ doctor_tier_positions: нумерацию строк по ступеням
+// считает СЕРВЕР, кабинет её только применяет. Ответ — за ДИАПАЗОН месяцев
+// ({ from, to, rows }), и у каждой строки есть свой ym: кабинет спрашивает
+// один раз и раскладывает строки по месяцам сам. По умолчанию ступеней нет.
+const monthKeyOf = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+let TIER_RESPONSE = { from: '', to: '', rows: [] };
+
 function matches(row, f) {
   if (f.or) return true;
   const v = row[f.col];
@@ -125,9 +132,14 @@ const TABLES = () => ({
   referral_sources: [], referral_source_categories: [], admissions: [],
 });
 let dbCalls = [];
+let tierCalls = [];
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
+  if (u.startsWith('/api/rpc/doctor_tier_positions')) {
+    tierCalls.push(body);
+    return { ok: true, json: async () => ({ data: TIER_RESPONSE }) };
+  }
   if (u.startsWith('/api/rpc/')) return { ok: true, json: async () => ({ data: null }) };
   if (u.startsWith('/api/db')) {
     dbCalls.push(body);
@@ -255,4 +267,53 @@ test('«Мои приёмы» помещается в экран: прокруч
   // Шапка с поиском и фильтрами — вне прокрутки.
   const header = byClass(card, 'card-header')[0];
   assert.ok(header && walk(header).some((n) => n.tagName === 'INPUT'), 'поиск не в шапке карточки');
+});
+
+test('DOCTOR_TIER_V1: позиции сервера меняют сумму и рисуют прогресс ступени', async () => {
+  // sv-1 — 26-я строка месяца: 1 единица по ступени 50 % вместо личных 40 %.
+  // ym у каждой строки свой, как отдаёт сервер: прогресс месяца собирается
+  // только по строкам ТЕКУЩЕГО месяца.
+  TIER_RESPONSE = { from: monthKeyOf(yesterday), to: monthKeyOf(now), rows: [
+    { visit_service_id: 'sv-1', service_id: 's-1', service_name: 'Приём', ym: monthKeyOf(now), units: 1, units_above: 1, tier_from: 25, tier_percent: 50, count_so_far: 26 },
+    { visit_service_id: 'sv-2', service_id: 's-1', service_name: 'Приём', ym: monthKeyOf(yesterday), units: 1, units_above: 0, tier_from: 25, tier_percent: 50, count_so_far: 25 },
+  ] };
+  let root = null;
+  try {
+    root = await openPay();
+    // Вкладка грузит деньги ОДИН раз на процесс, и первый тест файла уже успел
+    // их прочитать без ступеней. Переключение периода — тот же путь, которым
+    // это делает врач: оно перечитывает всё заново, теперь уже с позициями.
+    tierCalls = [];
+    buttonByText(root, /7 дней/).click();
+    await tick(80);
+    // ПРАВИЛО: позиции спрашиваются ОДНИМ запросом за диапазон месяцев, а не по
+    // одному запросу на месяц — цикл по месяцам на «12 месяцев» это двенадцать
+    // запросов подряд.
+    assert.strictEqual(tierCalls.length, 1, 'запросов позиций: ' + tierCalls.length);
+    assert.ok(tierCalls[0].from && tierCalls[0].to, 'позиции запрошены не диапазоном: ' + JSON.stringify(tierCalls[0]));
+    assert.ok(!('month' in tierCalls[0]), 'в запросе остался месяц: ' + JSON.stringify(tierCalls[0]));
+    const txt = textOf(root);
+    // 100 000 × 50 % + 100 000 × 40 % = 90 000 (без ступени было бы 80 000).
+    // Число проверяется НА ПЛИТКЕ, а не где-нибудь на вкладке: «90 000» в общем
+    // тексте мог бы нарисовать и соседний список.
+    const salary = byClass(root, 'dash-kpi').find((t) => textOf(t).includes('Зарплата'));
+    assert.ok(salary, 'нет плитки «Зарплата»');
+    assert.ok(textOf(salary).includes('90 000'), 'плитка не учла ступень: ' + textOf(salary));
+    assert.ok(/Ступень: Приём/.test(txt), 'нет строки прогресса ступени');
+    assert.ok(/26 из 25/.test(txt), 'прогресс не показывает счёт месяца');
+    // И график — та же арифметика, что плитка: сегодняшняя услуга по ступени
+    // 50 % даёт 50 000. Без этого график и плитка могли бы разойтись под
+    // ступенью и никто бы не заметил.
+    const card = byClass(root, 'card').find((c) => textOf(c).includes('Начисления по дням'));
+    const chart = byClass(card, 'dash-chart')[0];
+    chart.getBoundingClientRect = () => ({ left: 0, width: 640, height: 240 });
+    chart.dispatchEvent({ type: 'mousemove', clientX: 700 });
+    const tip = byClass(chart, 'dash-chart-tip')[0];
+    assert.ok(tip && !tip.hidden, 'подсказка не показалась');
+    assert.ok(textOf(tip).includes('50 000'), 'подсказка дня не учла ступень: ' + textOf(tip));
+  } finally {
+    TIER_RESPONSE = { from: '', to: '', rows: [] };
+    // Вернуть вкладку в исходный период — состояние живёт дольше теста.
+    if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
+  }
 });

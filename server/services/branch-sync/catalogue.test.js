@@ -792,3 +792,12 @@ test('холостой прогон видит ровно то же, что на
   assert.equal(preview.changed, real.changed, 'предсказание и приём обязаны согласиться');
   main.close(); branch.close();
 });
+
+test('DOCTOR_TIER_V1: порог и доля ступени едут с прайсом и приземляются', () => {
+  const main = seedMain(fresh());
+  main.prepare("UPDATE services SET doctor_tier_from = 25, doctor_tier_percent = 40 WHERE code='S-CARD'").run();
+  const dst = receiver();
+  apply(dst, exportCatalogue(main));
+  const svc = dst.prepare("SELECT doctor_tier_from, doctor_tier_percent FROM services WHERE code='S-CARD'").get();
+  assert.deepEqual(svc, { doctor_tier_from: 25, doctor_tier_percent: 40 });
+});

@@ -22,8 +22,10 @@ class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={};this.c
  get firstChild(){return this.children[0]||null;} replaceChildren(){this.children.length=0;}
  setAttribute(k,v){this.attrs[k]=String(v); if (k === 'value') this.value = String(v);} getAttribute(k){return this.attrs[k]??null;} hasAttribute(k){return k in this.attrs;}
  addEventListener(t,fn){(this._l[t]||(this._l[t]=[])).push(fn);} removeEventListener(){}
- dispatchEvent(e){for(const fn of this._l[e.type]||[])fn(e);return true;}
- click(){this.dispatchEvent({type:'click',currentTarget:this,preventDefault(){},stopPropagation(){}});}
+ // Выключенной кнопке настоящий браузер пользовательский клик НЕ доставляет —
+ // на этом и держится защита от двойного сохранения (SAVE_BTN_TARGET_V1).
+ dispatchEvent(e){if(e.type==='click'&&this.disabled)return false;for(const fn of this._l[e.type]||[])fn(e);return true;}
+ click(){this.dispatchEvent({type:'click',target:this,currentTarget:this,preventDefault(){},stopPropagation(){}});}   // target — как у настоящего события: обработчик «Сохранить» гасит им кнопку
  focus(){} blur(){} scrollTo(){} remove(){} select(){}
  querySelector(){return null;} querySelectorAll(){return [];}
  get textContent(){return this._t;} set textContent(v){this._t=String(v);this.children.length=0;}
@@ -45,6 +47,17 @@ globalThis.document = {
   head: mk('head'), body: mk('body'), documentElement: mk('html'),
   addEventListener() {}, removeEventListener() {}, getElementById() { return null; },
 };
+// Тосты. toast() (ui.js) ищет #toast, пишет в него текст — и сразу кладёт в
+// el._t таймер, затирая то же поле, в котором фейковый DOM держит текст.
+// Поэтому ловим текст в момент записи: один общий элемент с пишущим сеттером.
+const toasts = [];
+const toastEl = {
+  dataset: {}, _t: null, setAttribute() {},
+  classList: { add() {}, remove() {}, contains() { return false; } },
+  set textContent(v) { toasts.push(String(v)); },
+  get textContent() { return toasts[toasts.length - 1] || ''; },
+};
+globalThis.document.getElementById = (id) => (id === 'toast' ? toastEl : null);
 const store = new Map();
 globalThis.localStorage = {
   getItem: (k) => (store.has(k) ? store.get(k) : null),
@@ -346,4 +359,70 @@ test('ширины колонок — доли карточки: любой на
   assert.equal(ths.length, 5, 'у каждой колонки — доля от (100% − фикс. колонки)');
   const shares = ths.map((t) => Number(t.style.width.match(/\* ([\d.]+)\)/)[1]));
   assert.ok(Math.abs(shares.reduce((a, b) => a + b, 0) - 1) < 0.01, 'доли в сумме дают 1: ' + shares.join(', '));
+});
+
+test('DOCTOR_TIER_V1: в редакторе услуги есть порог и доля выше порога, и они уходят в service_save', async () => {
+  SVC.requires_doctor = 0;   // без исполнителей: страж «отметьте исполнителя» не должен мешать этому тесту
+  try {
+    const c = await paint();
+    tags(c, 'tr').find((r) => r.className.includes('row-click')).click();
+    await flush();
+    const inputs = tags(document.body, 'input');
+    const from = inputs.find((i) => i.attrs.placeholder === '0 — нет');
+    const pct  = inputs.find((i) => i.attrs.placeholder === 'напр. 40');
+    assert.ok(from && pct, 'поля ступени не нарисованы');
+    from.value = '25'; pct.value = '40';
+    buttonWith(document.body, 'Сохранить').click();
+    await flush();
+    const save = rpcCalls.find((r) => r.name === 'service_save');
+    assert.ok(save, 'service_save не вызван: ' + rpcCalls.map((r) => r.name).join(','));
+    assert.equal(save.args.doctor_tier_from, 25);
+    assert.equal(save.args.doctor_tier_percent, 40);
+  } finally { SVC.requires_doctor = 1; }
+});
+
+// Полупара — порог без доли (или наоборот) — это отказ 400 на сервере
+// (rpc/service-save.js). Редактор не обязан его дожидаться: проверка здесь
+// ставит курсор в незаполненное поле, а на сервер не уходит ничего.
+test('DOCTOR_TIER_V1: половина ступени не уходит на сервер — редактор просит вторую половину', async () => {
+  SVC.requires_doctor = 0;   // страж «отметьте исполнителя» не должен мешать этому тесту
+  try {
+    const c = await paint();
+    tags(c, 'tr').find((r) => r.className.includes('row-click')).click();
+    await flush();
+    const from = tags(document.body, 'input').find((i) => i.attrs.placeholder === '0 — нет');
+    assert.ok(from, 'поле порога не нарисовано');
+    from.value = '25';   // доля выше порога осталась пустой
+    rpcCalls.length = 0; toasts.length = 0;
+    buttonWith(document.body, 'Сохранить').click();
+    await flush();
+    assert.ok(!rpcCalls.some((r) => r.name === 'service_save'),
+      'полупара ушла на сервер: ' + rpcCalls.map((r) => r.name).join(','));
+    assert.ok(toasts.some((t) => t.includes('Ступень задаётся парой')),
+      'подсказки о второй половине нет: ' + toasts.join(' | '));
+  } finally { SVC.requires_doctor = 1; }
+});
+
+// SAVE_BTN_TARGET_V1 — внутри «Сохранить» лежит значок, и палец попадает
+// обычно в него: у такого события target — значок, а не кнопка. Гасить надо
+// кнопку (currentTarget), иначе она остаётся живой и второй клик создаёт
+// услугу второй раз.
+test('SAVE_BTN_TARGET_V1: клик по значку внутри «Сохранить» гасит кнопку — двойной клик сохраняет один раз', async () => {
+  SVC.requires_doctor = 0;   // страж «отметьте исполнителя» не должен мешать этому тесту
+  try {
+    const c = await paint();
+    tags(c, 'tr').find((r) => r.className.includes('row-click')).click();
+    await flush();
+    const btn = buttonWith(document.body, 'Сохранить');
+    const icon = btn.children[0];
+    assert.ok(icon && icon !== btn, 'внутри кнопки нет значка — тогда тест ничего не проверяет');
+    const fire = () => btn.dispatchEvent({ type: 'click', target: icon, currentTarget: btn,
+      preventDefault() {}, stopPropagation() {} });
+    rpcCalls.length = 0;
+    fire(); fire();   // два клика подряд, без ожидания между ними
+    await flush();
+    assert.equal(rpcCalls.filter((r) => r.name === 'service_save').length, 1,
+      'услуга сохранена дважды: ' + rpcCalls.map((r) => r.name).join(','));
+    assert.ok(!btn.disabled, 'кнопка осталась выключенной после сохранения');
+  } finally { SVC.requires_doctor = 1; }
 });

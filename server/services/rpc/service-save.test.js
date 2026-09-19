@@ -352,3 +352,35 @@ test('the three dynamic refusals carry machine codes + params — the dialog tra
     assert.deepEqual(e.params, { name: 'Врач Битый Код' });
   }
 });
+
+// ---------------------------------------------------------------------------
+// DOCTOR_TIER_V1 — the tier pair: threshold + share above it, or neither
+// ---------------------------------------------------------------------------
+
+test('DOCTOR_TIER_V1: пара порог+доля сохраняется, нули = ступени нет', () => {
+  const db = freshDb();
+  const { id } = serviceSave(db, baseArgs({ doctor_tier_from: 25, doctor_tier_percent: 40 }), admin);
+  assert.deepEqual(db.prepare('SELECT doctor_tier_from, doctor_tier_percent FROM services WHERE id = ?').get(id),
+    { doctor_tier_from: 25, doctor_tier_percent: 40 });
+  serviceSave(db, baseArgs({ id, doctor_tier_from: '', doctor_tier_percent: '' }), admin);
+  assert.deepEqual(db.prepare('SELECT doctor_tier_from, doctor_tier_percent FROM services WHERE id = ?').get(id),
+    { doctor_tier_from: 0, doctor_tier_percent: 0 });
+});
+
+test('DOCTOR_TIER_V1: одно без другого, дробный порог и доля > 100 — отказ 400', () => {
+  const db = freshDb();
+  const before = db.prepare('SELECT COUNT(*) n FROM services').get().n;
+  for (const bad of [
+    { doctor_tier_from: 25 },                             // без доли
+    { doctor_tier_percent: 40 },                          // без порога
+    { doctor_tier_from: 2.5, doctor_tier_percent: 40 },   // не целое
+    { doctor_tier_from: -1, doctor_tier_percent: 40 },
+    { doctor_tier_from: 25, doctor_tier_percent: 101 },
+    // не число вовсе: Number('abc') = NaN, и NaN обязан быть отказом, а не нулём
+    { doctor_tier_from: 'abc', doctor_tier_percent: 40 },
+    { doctor_tier_from: 25, doctor_tier_percent: 'abc' },
+  ]) {
+    assert.throws(() => serviceSave(db, baseArgs(bad), admin), (e) => e.status === 400, JSON.stringify(bad));
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM services').get().n, before, 'отказ ничего не создаёт');
+});
