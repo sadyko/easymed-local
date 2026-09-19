@@ -95,12 +95,30 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 // Воронка — ЗАПАСНАЯ (та, что в crm-settings-logic.js): пустой ответ
 // crm_config_get оставляет доску с восемью колонками миграции 046.
 let LEADS = [];
+// CRM_REASSIGN_V1 — персонал, который может вести доску, и ЖУРНАЛ ЗАПРОСОВ.
+// Журнал нужен потому, что проверяется не вид поля, а то, что уходит на
+// сервер: «передал заявку другому» — это строка в базе, а не выбранный пункт
+// в списке.
+let STAFF = [];
+const CALLS = [];
+// CRM_REASSIGN_V1 — один отказ выборки персонала «по требованию»: список
+// операторов не грузится ровно один раз, дальше — как обычно.
+let failStaffOnce = false;
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (u.startsWith('/api/rpc/')) return jsonOk({});
   if (u.startsWith('/api/db')) {
+    if (body) CALLS.push(body);
     if (body && body.table === 'crm_requests' && body.op === 'select') return jsonOk(LEADS);
+    // Список операторов отдаётся только на запрос с отбором ПО РОЛЯМ — тот
+    // самый, которым карточка спрашивает «кому можно передать». Выборка врачей
+    // (.eq('role','doctor')) сюда не попадает.
+    if (body && body.table === 'users' && body.op === 'select'
+        && (body.filters || []).some((f) => f.col === 'role' && f.op === 'in')) {
+      if (failStaffOnce) { failStaffOnce = false; return { ok: false, json: async () => ({ error: { message: 'boom' } }) }; }
+      return jsonOk(STAFF);
+    }
     return jsonOk([]);
   }
   return jsonOk([]);
@@ -379,4 +397,136 @@ test('порядок разметки и есть иерархия: кто → �
   for (const s of ['.crm-card-name', '.crm-card-tel-n', '.crm-card-note', '.crm-card-when', '.crm-card-kicker', '.crm-move-sel']) {
     assert.ok(size(s) >= 12.5, `${s}: ${size(s)}px — ниже пола шкалы (12.5px)`);
   }
+});
+
+// ═══ 6. КТО ВЕДЁТ ЗАЯВКУ ════════════════════════════════════════════════════
+//
+// CRM_REASSIGN_V1 (2026-09-19). Владелец: «in the crm we as an administrator
+// change the operator of the card. please fix that too.»
+//
+// Взять заявку СЕБЕ умели все («Взять в работу», CRM_OWNERSHIP_V1), а передать
+// её ДРУГОМУ — никто: единственная запись `assigned_to` во всём экране ставила
+// туда номер нажавшего, и появлялась она только у ничьей заявки. Оператор
+// заболел, ушёл со смены, уволился — его заявки оставались его: заведующая
+// видела их (доска администратора не сужена), но сделать с ними ничего не
+// могла, потому что чужие заявки не показываются их новому хозяину.
+//
+// Сервер это умел всегда: schema-registry отдаёт `assigned_to` в write.update
+// и открывает администратору всю доску (scope.allRoles). Не хватало ровно
+// одного поля в карточке — и тестам ниже важно не оно, а строка, которая после
+// него уходит в базу.
+
+/** Персонал, который может вести доску: ровно роли crm_requests.write. */
+const OPERATORS = [
+  { id: 7,  full_name: 'Админ',           role: 'admin' },
+  { id: 12, full_name: 'Оператор Ольга',  role: 'callcenter' },
+];
+
+/** Открыть карточку заявки ТЕМ ЖЕ способом, что и человек, — щелчком по ней. */
+async function openRequest(lead, user) {
+  window.easymed.state.user = user;
+  STAFF = OPERATORS;
+  CALLS.length = 0;
+  document.body.children.length = 0;
+  const card = await oneCard(lead);
+  card.dispatchEvent({ type: 'click', target: card, currentTarget: card, preventDefault() {}, stopPropagation() {} });
+  await tick(60);
+  const overlay = document.body.children.find((n) => hasClass(n, 'modal'));
+  assert.ok(overlay, 'щелчок по карточке не открыл окно заявки');
+  return overlay;
+}
+
+/** Выпадающий список операторов в окне заявки (или null, если его нет). */
+const operatorSelect = (modal) =>
+  walk(modal).find((n) => n.tagName === 'SELECT' && /Оператор/.test(String(n.getAttribute('aria-label') || ''))) || null;
+
+/** Сохранение заявки — та же кнопка, что нажимает человек. */
+async function saveRequest(modal) {
+  const btn = walk(modal).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Сохранить'));
+  assert.ok(btn, 'кнопка «Сохранить» пропала из окна заявки');
+  btn.click();
+  await tick(60);
+}
+
+/** Запись ЭТОЙ заявки в базу (автоматика «Не пришёл» правит пачку по .in — не она). */
+const savedRow = () => CALLS.filter((c) => c.table === 'crm_requests' && c.op === 'update'
+  && (c.filters || []).some((f) => f.col === 'id' && f.op === 'eq')).pop();
+
+const LEAD = { id: 1, full_name: 'Каримова Азиза', phone: UZ_RAW, assigned_to: 7, users: { full_name: 'Админ' } };
+
+test('администратор видит «Оператор» в карточке заявки и может передать её другому', async () => {
+  const modal = await openRequest(LEAD, { id: 7, full_name: 'Админ', role: 'admin', is_admin: true });
+  const sel = operatorSelect(modal);
+  assert.ok(sel, 'в карточке заявки нет поля «Оператор» — передать её некому и нечем');
+
+  const opts = sel.children.filter((n) => n.tagName === 'OPTION').map((o) => ({ v: o.value, t: textOf(o) }));
+  assert.ok(opts.some((o) => o.v === '' && o.t.includes('не назначен')),
+    'нет пункта «снять оператора» — заявку можно было бы только передать, но не вернуть в общую стопку');
+  assert.ok(opts.some((o) => o.v === '7' && o.t.includes('Админ')), 'в списке нет самого администратора');
+  assert.ok(opts.some((o) => o.v === '12' && o.t.includes('Оператор Ольга')), 'в списке нет оператора колл-центра');
+  assert.strictEqual(sel.value, '7', 'поле не показывает НЫНЕШНЕГО хозяина заявки');
+
+  sel.value = '12';
+  sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel });
+  await saveRequest(modal);
+
+  const row = savedRow();
+  assert.ok(row, 'сохранение не дошло до базы');
+  assert.strictEqual(row.values.assigned_to, 12,
+    'заявка сохранилась, но хозяин у неё прежний — именно это владелец и просил починить');
+  window.easymed.state.user = null;
+});
+
+test('оператор колл-центра поля «Оператор» не видит и не шлёт assigned_to', async () => {
+  // Раздать заявки может только тот, кто видит доску целиком. Оператор видит
+  // свои и ничьи (scope в schema-registry), и «передать» для него — это отнять
+  // у себя карточку, которую он больше не найдёт.
+  const modal = await openRequest(LEAD, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+  assert.strictEqual(operatorSelect(modal), null, 'оператору показали чужой рычаг — раздачу заявок');
+  // Окно и так спрашивает users — список ВРАЧЕЙ для строки услуги (.eq('role',
+  // 'doctor'), CRM_LINE_DOCTOR_V1), это законно для любой роли. Здесь важно
+  // именно отсутствие СПИСКА ОПЕРАТОРОВ — тот же самый запрос (.in('role', …)),
+  // которым карточка ниже спрашивает «кому можно передать».
+  assert.ok(!CALLS.some((c) => c.table === 'users' && (c.filters || []).some((f) => f.col === 'role' && f.op === 'in')),
+    'список операторов запрошен для роли, которой раздавать заявки нельзя — лишний запрос на сервер');
+
+  await saveRequest(modal);
+  const row = savedRow();
+  assert.ok(row, 'сохранение не дошло до базы');
+  assert.ok(!('assigned_to' in row.values),
+    'ключ assigned_to ушёл на сервер от роли, которая его не правит: сохранение комментария молча меняло бы хозяина');
+  window.easymed.state.user = null;
+});
+
+test('снять оператора: «— не назначен —» возвращает заявку в общую стопку', async () => {
+  const modal = await openRequest(LEAD, { id: 7, full_name: 'Админ', role: 'admin', is_admin: true });
+  const sel = operatorSelect(modal);
+  sel.value = '';
+  sel.dispatchEvent({ type: 'change', target: sel, currentTarget: sel });
+  await saveRequest(modal);
+
+  const row = savedRow();
+  assert.ok(row, 'сохранение не дошло до базы');
+  assert.strictEqual(row.values.assigned_to, null,
+    'пустой выбор обязан записать NULL: только так заявка снова попадает в стопку «ничьих»');
+  window.easymed.state.user = null;
+});
+
+// Список персонала иногда транзиентно не грузится (сеть, перегруженный
+// сервер). Тишина здесь опаснее пустоты: молчаливо очищенное поле при
+// ближайшем сохранении сняло бы оператора с заявки, ничего не спросив.
+// Тост здесь НЕ проверяется: toast() (ui.js) переиспользует el._t сначала для
+// текста, а следующей же строкой — под возврат setTimeout (id таймера,
+// который прячет заглушку), затирая его; в services-catalog.test.mjs это
+// обойдено отдельным #toast с пишущим сеттером textContent, а этот харнесс
+// (document.getElementById всегда null) такого перехватчика не заводит —
+// значит, тексту неоткуда быть виден УЖЕ ПОСЛЕ возврата toast(). Проверяемо
+// здесь только состояние поля.
+test('сбой загрузки персонала — текущий оператор остаётся в поле', async () => {
+  failStaffOnce = true;
+  const modal = await openRequest(LEAD, { id: 7, full_name: 'Админ', role: 'admin', is_admin: true });
+  const sel = operatorSelect(modal);
+  assert.ok(sel, 'в карточке заявки нет поля «Оператор»');
+  assert.strictEqual(sel.value, '7', 'сбой загрузки списка снял текущего оператора с поля');
+  window.easymed.state.user = null;
 });

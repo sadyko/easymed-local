@@ -5624,6 +5624,7 @@ export const STRINGS = {
   "Не найдено поле для вставки": {"en":"No field found to insert into","ru":"Не найдено поле для вставки","uz":"Qo'yish uchun maydon topilmadi"},
   "Не удалось выдать товары": {"en":"Could not dispense the items","ru":"Не удалось выдать товары","uz":"Tovarlarni berib bo'lmadi"},
   "Не удалось загрузить результаты: {msg}": {"en":"Could not load the results: {msg}","ru":"Не удалось загрузить результаты: {msg}","uz":"Natijalarni yuklab bo'lmadi: {msg}"},
+  "Не удалось загрузить список сотрудников: {msg}": {"en":"Could not load the staff list: {msg}","ru":"Не удалось загрузить список сотрудников: {msg}","uz":"Xodimlar ro‘yxatini yuklab bo‘lmadi: {msg}"},
   "Не удалось загрузить услуги: {msg}": {"en":"Could not load the services: {msg}","ru":"Не удалось загрузить услуги: {msg}","uz":"Xizmatlarni yuklab bo'lmadi: {msg}"},
   "Не удалось определить врача для повторного визита": {"en":"Could not determine the doctor for the follow-up visit","ru":"Не удалось определить врача для повторного визита","uz":"Takroriy tashrif uchun shifokorni aniqlab bo'lmadi"},
   "Не удалось открыть печать.": {"en":"Could not open printing.","ru":"Не удалось открыть печать.","uz":"Chop etishni ochib bo'lmadi."},
@@ -7773,6 +7774,11 @@ export const STRINGS = {
   "Взять в работу": {"en":"Take it on","ru":"Взять в работу","uz":"Ishga olish"},
   "Взять заявку себе — у других она пропадёт": {"en":"Take this lead for yourself — it disappears for the others","ru":"Взять заявку себе — у других она пропадёт","uz":"So‘rovni o‘zingizga oling — boshqalarda u yo‘qoladi"},
   "Заявка у вас": {"en":"The lead is yours","ru":"Заявка у вас","uz":"So‘rov sizda"},
+  // CRM_REASSIGN_V1 — поле «Оператор» в карточке заявки (сам заголовок
+  // «Оператор» уже есть выше, в разборе звонков по операторам).
+  "Оператор, который ведёт заявку": {"en":"The operator handling this lead","ru":"Оператор, который ведёт заявку","uz":"So‘rovni yuritayotgan operator"},
+  "— не назначен —": {"en":"— not assigned —","ru":"— не назначен —","uz":"— tayinlanmagan —"},
+  "Сотрудник №{id}": {"en":"Employee #{id}","ru":"Сотрудник №{id}","uz":"Xodim №{id}"},
   "Не удалось взять заявку: {msg}": {"en":"Could not take the lead: {msg}","ru":"Не удалось взять заявку: {msg}","uz":"So‘rovni olish imkoni bo‘lmadi: {msg}"},
   "Позвонить": {"en":"Call","ru":"Позвонить","uz":"Qo‘ng‘iroq qilish"},
   "Телефония ответила ошибкой. Попробуйте ещё раз через минуту.": {"en":"The phone system returned an error. Try again in a minute.","ru":"Телефония ответила ошибкой. Попробуйте ещё раз через минуту.","uz":"Telefoniya xatolik qaytardi. Bir daqiqadan so‘ng qayta urinib ko‘ring."},
