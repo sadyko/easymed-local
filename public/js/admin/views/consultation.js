@@ -2320,7 +2320,7 @@ function openSalaryDetails() {
                         // Пометка стоит только там, где ступень действительно
                         // сработала — единиц выше порога больше нуля.
                         pos && Number(pos.units_above) > 0
-                            ? h('span', { class: 'muted', style: { fontSize: '11px', marginLeft: '6px' } }, tr('ступень'))
+                            ? h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } }, tr('ступень'))
                             : null),
                 );
             })),
