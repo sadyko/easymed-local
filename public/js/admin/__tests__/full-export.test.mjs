@@ -24,7 +24,7 @@ globalThis.document = { createElement: mk, createElementNS: (_n, t) => mk(t), cr
 globalThis.window = { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, addEventListener() {}, removeEventListener() {} };
 globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
-const { exportColumnKeys } = await import('../views/section-import-export.js');
+const { exportColumnKeys, buildImportRow } = await import('../views/section-import-export.js');
 
 // Что хранит анкета пациента (patient-create-modal.js reg(...)) — по именам полей.
 const PATIENT_FORM_FIELDS = [
@@ -83,4 +83,52 @@ test('реестр разделов: экспорт всего раздела п
     assert.match(crud, /if \(hasImporter\(state\.sectionKey\)\) \{\s*await exportSectionRows/, 'экспорт выбранных — тем же полным форматом');
     const svc = fs.readFileSync(path.join(HERE, '..', 'views', 'services.js'), 'utf8');
     assert.match(svc, /exportSectionRows\(\{ sectionKey: 'services', rows: picked\(\)/, 'услуги: экспорт выбранных — полным форматом');
+});
+
+// DOCTOR_TIER_V1 — ИМПОРТ НЕ ИМЕЕТ ПРАВА СТИРАТЬ ТО, ЧЕГО В ФАЙЛЕ НЕТ.
+//
+// Обратная сторона того же договора, что и тесты выше: файл несёт ВСЁ, значит
+// файл, который чего-то не несёт, ничего об этом и не говорит. Числовые
+// колонки писались в payload всегда — даже когда заголовка в листе не было
+// вовсе, — и обновление услуг файлом, выгруженным ДО ступеней, обнуляло
+// ступень по всему прайс-листу. Молча: ни ошибки, ни предупреждения.
+test('импорт услуг: колонок ступени в файле нет — ступень не трогается', () => {
+    const { payload } = buildImportRow('services', {
+        name: 'Приём терапевта', group: 'Консультация', price: 100000,
+    });
+    assert.ok(!('doctor_tier_from' in payload),
+        'порог ступени попал в запись из файла, где такой колонки нет: ' + JSON.stringify(payload));
+    assert.ok(!('doctor_tier_percent' in payload),
+        'доля ступени попала в запись из файла, где такой колонки нет: ' + JSON.stringify(payload));
+    // Остальные колонки листа при этом пишутся как раньше.
+    assert.strictEqual(payload.name, 'Приём терапевта');
+    assert.strictEqual(payload.price, 100000);
+});
+
+test('импорт услуг: пустая ячейка под своим заголовком по-прежнему значит «ступени нет»', () => {
+    const { payload, status } = buildImportRow('services', {
+        name: 'Приём терапевта', group: 'Консультация', price: 100000, doctor_tier_from: '', doctor_tier_percent: '',
+    });
+    assert.strictEqual(payload.doctor_tier_from, 0, 'колонка в файле есть — её значение и пишется');
+    assert.strictEqual(payload.doctor_tier_percent, 0);
+    assert.strictEqual(status, 'ok', 'осознанно пустая пара — не повод пугать предупреждением');
+});
+
+test('импорт услуг: полупара обнуляется И называется вслух', () => {
+    const row = buildImportRow('services', {
+        name: 'Приём терапевта', group: 'Консультация', price: 100000, doctor_tier_percent: 50,
+    });
+    assert.strictEqual(row.payload.doctor_tier_from, 0, 'полупара сохранилась — редактор её не примет');
+    assert.strictEqual(row.payload.doctor_tier_percent, 0);
+    assert.strictEqual(row.status, 'warn', 'строка уехала без предупреждения: ' + JSON.stringify(row.notes));
+    assert.ok(row.notes.some((n) => /полупара/.test(String(n))),
+        'предупреждение не сказало, что именно отброшено: ' + JSON.stringify(row.notes));
+
+    // Полная пара проходит и остаётся в границах сервера (целый порог, доля 0–100).
+    const ok = buildImportRow('services', {
+        name: 'Приём терапевта', group: 'Консультация', price: 100000, doctor_tier_from: '25.6', doctor_tier_percent: '140',
+    });
+    assert.strictEqual(ok.payload.doctor_tier_from, 26);
+    assert.strictEqual(ok.payload.doctor_tier_percent, 100);
+    assert.strictEqual(ok.status, 'ok');
 });

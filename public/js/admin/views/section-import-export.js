@@ -400,19 +400,35 @@ const IMPORT_CONFIGS = {
         validations: [{ column: 'group', list: SERVICE_GROUP_LABELS }],   // native Excel dropdown
         // SERVICE_GROUP_ROUTING_V1 — «Раздел» both ROUTES (services.type) and GROUPS
         // (mirrored into a service_type / type_id) so a 7-column sheet is enough.
-        transform: function (payload, r) {
+        transform: function (payload, r, ctx) {
             if (payload.type && payload.type_id == null) {
                 var lbl = { consultation: 'Консультации', lab: 'Лаборатория', procedure: 'Процедуры', imaging: 'Диагностика', other: 'Хирургия' }[payload.type];
                 if (lbl) payload.type_id = { __autoCreate: { table: 'service_types', keyField: 'name', value: lbl } };
             }
-            // DOCTOR_TIER_V1 — пара или ничего, и в границах сервера (целый
-            // порог ≥ 0, доля 0–100): полупара из файла застряла бы в редакторе
-            // (service_save отказывает половине настройки), а импорт пишет мимо
-            // service_save, поэтому границы повторяются здесь.
+            // DOCTOR_TIER_V1 — КОЛОНКИ, КОТОРОЙ В ФАЙЛЕ НЕТ, В ПАМЯТИ НЕ БЫВАЕТ.
+            // Числовые колонки пишутся в payload всегда, даже когда заголовка в
+            // листе нет вовсе: обновление услуг файлом, выгруженным ДО ступеней,
+            // писало ступени в ноль и молча стирало настройку по всему
+            // прайс-листу. `in r` — это «заголовок был в листе» (buildRow кладёт
+            // ключ на каждый ЗАГОЛОВОК, даже с пустой ячейкой), а не «ячейка
+            // заполнена»: пустая ячейка под своим заголовком по-прежнему значит
+            // «ступени нет», и это осознанное решение клиники.
+            var hasFrom = 'doctor_tier_from' in r, hasPct = 'doctor_tier_percent' in r;
+            if (!hasFrom && !hasPct) {
+                delete payload.doctor_tier_from; delete payload.doctor_tier_percent;
+                return;
+            }
+            // Пара или ничего, и в границах сервера (целый порог ≥ 0, доля
+            // 0–100): полупара из файла застряла бы в редакторе (service_save
+            // отказывает половине настройки), а импорт пишет мимо service_save,
+            // поэтому границы повторяются здесь. Отброшенная полупара теперь
+            // называется вслух — раньше строка молча приезжала без ступени.
             payload.doctor_tier_from = Math.max(0, Math.round(Number(payload.doctor_tier_from) || 0));
             payload.doctor_tier_percent = Math.min(100, Math.max(0, Number(payload.doctor_tier_percent) || 0));
             if (!payload.doctor_tier_from || !payload.doctor_tier_percent) {
+                var half = payload.doctor_tier_from || payload.doctor_tier_percent;
                 payload.doctor_tier_from = 0; payload.doctor_tier_percent = 0;
+                if (half && ctx) ctx.warn(tr('Ступень: заполните и порог, и долю — полупара не сохранена'));
             }
         },
         columns: [
@@ -690,6 +706,20 @@ function getCfg(sectionKey) {
 export function exportColumnKeys(sectionKey) {
     const cfg = getCfg(sectionKey);
     return cfg ? cfg.columns.filter(c => !c.capture && c.tmpl !== false).map(c => c.key) : [];
+}
+
+/**
+ * DOCTOR_TIER_V1 — one sheet row as the importer reads it: the payload that
+ * would be written, its status and its notes. Exported so a test can pin what
+ * an import DOES to a column (writing a zero over a live setting is a data
+ * loss, and only the payload shows it) without a browser and an .xlsx file.
+ * `raw` is keyed by the sheet's headers — a key present with an empty value
+ * means "the column is in the file and blank", a missing key means "no such
+ * column in the file", and the two must not mean the same thing.
+ */
+export function buildImportRow(sectionKey, raw, { rowNum = 2, lookups = {} } = {}) {
+    const cfg = getCfg(sectionKey);
+    return cfg ? buildRow(raw, rowNum, lookups, cfg) : null;
 }
 
 // Field types we deliberately skip in the auto-derived importer — they
@@ -1598,8 +1628,15 @@ function buildRow(raw, rowNum, lookups, cfg) {
     // Per-section post-processing (e.g. patients synthesize full_name and
     // normalise gender). Runs after the column loop so it sees the full
     // payload. FK placeholders (__autoCreate) are left untouched.
+    //
+    // The third argument is the row's own voice: ctx.warn() adds a note and
+    // flags the row (the IMPORT_PRICE_OPTIONAL_V1 pattern, same notes list the
+    // column loop uses), so a hook that DROPS a value can say so instead of
+    // dropping it silently. `r` is the raw row keyed by the sheet's headers —
+    // a hook can ask which headers the file actually carried.
     if (typeof cfg.transform === 'function') {
-        try { cfg.transform(payload, r); }
+        const ctx = { notes, warn(msg) { notes.push(msg); if (status !== 'error') status = 'warn'; } };
+        try { cfg.transform(payload, r, ctx); }
         catch (e) { console.warn('[section-import] transform failed:', e); }
     }
 
