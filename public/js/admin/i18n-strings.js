@@ -8461,4 +8461,8 @@ export const STRINGS = {
   "Ступень задаётся парой: порог услуг в месяц И доля выше порога.": {"en":"A tier is set as a pair: services per month AND the share above it.","ru":"Ступень задаётся парой: порог услуг в месяц И доля выше порога.","uz":"Pog‘ona juftlik bilan beriladi: oyiga xizmatlar chegarasi VA undan yuqori ulush."},
   "Порог ступени — целое число услуг в месяц (0 — без ступени).": {"en":"The tier threshold is a whole number of services per month (0 — no tier).","ru":"Порог ступени — целое число услуг в месяц (0 — без ступени).","uz":"Pog‘ona chegarasi — oyiga butun son xizmatlar (0 — pog‘ona yo‘q)."},
   "Доля выше порога — от 0 до 100 %.": {"en":"The share above the threshold is between 0 and 100 %.","ru":"Доля выше порога — от 0 до 100 %.","uz":"Chegaradan yuqori ulush — 0 dan 100 % gacha."},
+  "Ступень: {service}": {"en":"Tier: {service}","ru":"Ступень: {service}","uz":"Pog‘ona: {service}"},
+  "{count} из {from} в этом месяце · ступень {pct}% действует": {"en":"{count} of {from} this month · {pct}% tier active","ru":"{count} из {from} в этом месяце · ступень {pct}% действует","uz":"Shu oyda {from} dan {count} · {pct}% pog‘ona amalda"},
+  "{count} из {from} в этом месяце · с {next}-й доля {pct}%": {"en":"{count} of {from} this month · from the {next}th the share is {pct}%","ru":"{count} из {from} в этом месяце · с {next}-й доля {pct}%","uz":"Shu oyda {from} dan {count} · {next}-chisidan ulush {pct}%"},
+  "ступень": {"en":"tier","ru":"ступень","uz":"pog‘ona"},
 };

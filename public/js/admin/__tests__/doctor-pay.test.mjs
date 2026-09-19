@@ -104,6 +104,10 @@ const REFERRALS = [
     patients: P1 },
 ];
 
+// DOCTOR_TIER_V1 — ответ doctor_tier_positions: нумерацию строк по ступеням
+// считает СЕРВЕР, кабинет её только применяет. По умолчанию ступеней нет.
+let TIER_RESPONSE = { month: '', rows: [] };
+
 function matches(row, f) {
   if (f.or) return true;
   const v = row[f.col];
@@ -128,6 +132,9 @@ let dbCalls = [];
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
+  if (u.startsWith('/api/rpc/doctor_tier_positions')) {
+    return { ok: true, json: async () => ({ data: TIER_RESPONSE }) };
+  }
   if (u.startsWith('/api/rpc/')) return { ok: true, json: async () => ({ data: null }) };
   if (u.startsWith('/api/db')) {
     dbCalls.push(body);
@@ -255,4 +262,30 @@ test('«Мои приёмы» помещается в экран: прокруч
   // Шапка с поиском и фильтрами — вне прокрутки.
   const header = byClass(card, 'card-header')[0];
   assert.ok(header && walk(header).some((n) => n.tagName === 'INPUT'), 'поиск не в шапке карточки');
+});
+
+test('DOCTOR_TIER_V1: позиции сервера меняют сумму и рисуют прогресс ступени', async () => {
+  // sv-1 — 26-я строка месяца: 1 единица по ступени 50 % вместо личных 40 %.
+  TIER_RESPONSE = { month: 'any', rows: [
+    { visit_service_id: 'sv-1', service_id: 's-1', service_name: 'Приём', units: 1, units_above: 1, tier_from: 25, tier_percent: 50, count_so_far: 26 },
+    { visit_service_id: 'sv-2', service_id: 's-1', service_name: 'Приём', units: 1, units_above: 0, tier_from: 25, tier_percent: 50, count_so_far: 25 },
+  ] };
+  let root = null;
+  try {
+    root = await openPay();
+    // Вкладка грузит деньги ОДИН раз на процесс, и первый тест файла уже успел
+    // их прочитать без ступеней. Переключение периода — тот же путь, которым
+    // это делает врач: оно перечитывает всё заново, теперь уже с позициями.
+    buttonByText(root, /7 дней/).click();
+    await tick(80);
+    const txt = textOf(root);
+    // 100 000 × 50 % + 100 000 × 40 % = 90 000 (без ступени было бы 80 000)
+    assert.ok(/90 000/.test(txt), 'сумма не учла ступень: ' + txt.slice(0, 300));
+    assert.ok(/Ступень: Приём/.test(txt), 'нет строки прогресса ступени');
+    assert.ok(/26 из 25/.test(txt), 'прогресс не показывает счёт месяца');
+  } finally {
+    TIER_RESPONSE = { month: '', rows: [] };
+    // Вернуть вкладку в исходный период — состояние живёт дольше теста.
+    if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
+  }
 });
