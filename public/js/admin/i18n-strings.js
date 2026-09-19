@@ -8479,4 +8479,18 @@ export const STRINGS = {
   "Сохранить и добавить услуги": {"en":"Save and add services","ru":"Сохранить и добавить услуги","uz":"Saqlash va xizmatlar qoʻshish"},
   "Пациент → услуги и врач → счёт → печать. Пакеты услуг — через «Выбрать шаблон» на шаге услуг.": {"en":"Patient → services and doctor → invoice → print. Service packages — via “Pick a template” on the services step.","ru":"Пациент → услуги и врач → счёт → печать. Пакеты услуг — через «Выбрать шаблон» на шаге услуг.","uz":"Bemor → xizmatlar va shifokor → hisob → chop etish. Xizmat paketlari — xizmatlar bosqichidagi «Shablon tanlash» orqali."},
   "— сохранить и добавить услуги": {"en":"— save and add services","ru":"— сохранить и добавить услуги","uz":"— saqlash va xizmatlar qoʻshish"},
+
+  // WALK_IN_BOOKING_V1 — отказы безоконной регистрации «пришёл сейчас» (views/walk-in-booking.js)
+  "Укажите врача для услуги «{name}»": {"en":"Pick a doctor for the service “{name}”","ru":"Укажите врача для услуги «{name}»","uz":"«{name}» xizmati uchun shifokorni tanlang"},
+  "Не выбран пациент — регистрировать некого.": {"en":"No patient is selected — there is nobody to register.","ru":"Не выбран пациент — регистрировать некого.","uz":"Bemor tanlanmagan — roʻyxatga oladigan kishi yoʻq."},
+  "Строка без услуги — выберите услугу из каталога.": {"en":"A row with no service — pick a service from the catalogue.","ru":"Строка без услуги — выберите услугу из каталога.","uz":"Xizmatsiz qator — katalogdan xizmatni tanlang."},
+  "Визит не создан: {msg}": {"en":"The visit was not created: {msg}","ru":"Визит не создан: {msg}","uz":"Tashrif yaratilmadi: {msg}"},
+  "Визит не создан: сервер не вернул запись.": {"en":"The visit was not created: the server returned no record.","ru":"Визит не создан: сервер не вернул запись.","uz":"Tashrif yaratilmadi: server yozuvni qaytarmadi."},
+  "Счёт не выставлен: {msg}": {"en":"The invoice was not issued: {msg}","ru":"Счёт не выставлен: {msg}","uz":"Hisob chiqarilmadi: {msg}"},
+
+  // TEMPLATE_PICKER_V1 (FAST_REG_ONE_SCREEN_V1, T2) — reusable «Пакеты» modal.
+  "Пакеты услуг": {"en":"Service packages","ru":"Пакеты услуг","uz":"Xizmat paketlari"},
+  "{n} усл.": {"en":"{n} services","ru":"{n} усл.","uz":"{n} xizmat"},
+  "Не удалось загрузить пакеты: {msg}": {"en":"Could not load the packages: {msg}","ru":"Не удалось загрузить пакеты: {msg}","uz":"Paketlarni yuklab bo'lmadi: {msg}"},
+  "Пакетов пока нет — соберите первый в мастере визита («Сохранить как шаблон»).": {"en":"No packages yet — build the first one in the visit wizard (“Save as template”).","ru":"Пакетов пока нет — соберите первый в мастере визита («Сохранить как шаблон»).","uz":"Hozircha paketlar yo'q — birinchisini tashrif ustasida yig'ing («Shablon sifatida saqlash»)."},
 };
