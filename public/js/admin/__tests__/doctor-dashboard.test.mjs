@@ -653,3 +653,35 @@ test('плитки дашборда красятся по СМЫСЛУ числ�
   assert.strictEqual(services[0], services[1], 'услуги дня и услуги недели покрашены по-разному');
   assert.notStrictEqual(services[0], money[0], 'услуги и деньги слились в один оттенок');
 });
+
+// DOCTOR_TIER_V1 (разбор) — ступень гасится только ФИКСИРОВАННОЙ ОПЛАТОЙ за
+// единицу (service_rates[].fix), как и на сервере. «Своя цена» врача (price) —
+// это ЦЕНА, по которой выставляется счёт, а не его оплата: такой врач ступень
+// получает. Подавление было повешено не на то поле, и вся «своя цена» молча
+// оставалась без ступени.
+test('DOCTOR_TIER_V1: ступень гасит фиксированная оплата (fix), а не своя цена врача (price)', () => {
+  const s = { serviceId: 'x', total: 500000, discount: 0, taxRate: 0 };
+  const pos = { units: 1, units_above: 1, tier_percent: 90 };
+
+  // (а) фиксированная оплата за единицу — ступени нет, доля равна serviceShare.
+  const fixMap = dash.serviceRateMap({ service_rates: [{ service_id: 'x', pct: 30, fix: 15000 }] });
+  assert.strictEqual(fixMap.get('x').fixPay, 15000, 'fix не прочитан как фиксированная оплата');
+  assert.strictEqual(dash.tierShare(s, fixMap, pos), dash.serviceShare(s, fixMap));
+
+  // (б) своя ЦЕНА врача + процент — ступень применяется и поднимает долю.
+  const priceMap = dash.serviceRateMap({ service_rates: [{ service_id: 'x', pct: 30, price: 120000 }] });
+  assert.strictEqual(priceMap.get('x').fixPay, 0, 'своя цена принята за фиксированную оплату');
+  assert.ok(dash.tierShare(s, priceMap, pos) > dash.serviceShare(s, priceMap),
+    'врач со своей ценой остался без ступени');
+
+  // (в) старая форма {mode:'fixed', value} — та же фиксированная оплата.
+  const legacyMap = dash.serviceRateMap({ service_rates: [{ service_id: 'x', mode: 'fixed', value: 15000 }] });
+  assert.strictEqual(legacyMap.get('x').fixPay, 15000, 'старая форма {mode:fixed} не прочитана');
+  assert.strictEqual(dash.tierShare(s, legacyMap, pos), dash.serviceShare(s, legacyMap));
+
+  // (г) ступень считается от ЧИСТОЙ суммы (скидка 20 000 + налог 6 %):
+  // (200 000 − 20 000) × 0,94 = 169 200; 169 200 × (40·1 + 50·3) / 4 / 100 = 80 370.
+  assert.strictEqual(
+    Math.round(dash.tierShare(A_SERVICES[0], dash.serviceRateMap(DOCTOR_A), { units: 4, units_above: 3, tier_percent: 50 })),
+    80370);
+});

@@ -201,7 +201,12 @@ export function serviceRateMap(doctorRow) {
         let percentage = Number(r.percentage != null ? r.percentage : r.pct) || 0;
         if (!price && r.mode === 'fixed' && r.value != null) price = Number(r.value) || 0;
         if (!percentage && r.mode !== 'fixed' && r.value != null) percentage = Number(r.value) || 0;
-        m.set(String(r.service_id), { price, percentage });
+        // DOCTOR_TIER_V1 — fix = фиксированная ОПЛАТА за единицу (её ступень не
+        // трогает); price — своя ЦЕНА врача, по ней выставляется счёт, и такой
+        // врач ступень получает.
+        let fixPay = Number(r.fix) || 0;
+        if (!fixPay && r.mode === 'fixed' && r.value != null) fixPay = Number(r.value) || 0;
+        m.set(String(r.service_id), { price, percentage, fixPay });
     }
     return m;
 }
@@ -228,13 +233,13 @@ export function serviceShare(s, rateMap) {
  * doctor_tier_positions для этой visit_service ({units, units_above,
  * tier_percent}) или null. Нумерацию считает СЕРВЕР; здесь только смесь по
  * единицам — та же формула, что ITEM_EFF_PCT_SQL в rpc/reports.js. Без
- * позиции, без единиц за порогом или при фиксированной ставке равна
- * serviceShare().
+ * позиции, без единиц за порогом или при фиксированной ОПЛАТЕ за единицу
+ * (fix) равна serviceShare(); своя цена врача (price) ступень не отменяет.
  */
 export function tierShare(s, rateMap, pos) {
     const rate = rateMap.get(String(s.serviceId));
     if (!rate) return 0;
-    if (rate.price) return serviceShare(s, rateMap);
+    if (rate.fixPay) return serviceShare(s, rateMap);
     const units = pos && Number(pos.units) > 0 ? Number(pos.units) : 0;
     const above = units ? Math.max(0, Math.min(units, Number(pos.units_above) || 0)) : 0;
     if (!above) return serviceShare(s, rateMap);
