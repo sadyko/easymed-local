@@ -1179,7 +1179,11 @@ export function asPhotoFile(fileOrBlob) {
     catch (e) { try { fileOrBlob.name = 'photo.jpg'; } catch (e2) {} return fileOrBlob; }
 }
 
-async function uploadPendingPhoto(state) {
+// PATIENT_PHOTO_V1 — экспортировано ради FAST_REG_ONE_SCREEN_V1: окно быстрой
+// регистрации зовёт savePatient() САМО (у него свой диалог дубликата, см.
+// views/fast-registration.js), и без этой функции снимок с веб-камеры молча
+// не доезжал бы до карты. Поведение не изменилось ни на строку.
+export async function uploadPendingPhoto(state) {
     if (state.photoUrl) return state.photoUrl;
     if (!state.photoFile) return '';
     const file = asPhotoFile(state.photoFile);

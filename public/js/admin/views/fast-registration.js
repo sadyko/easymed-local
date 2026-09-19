@@ -37,7 +37,7 @@ import { savePatient, loadPatientById, currentUser } from '../data.js';
 import { canCreatePatient } from '../permissions.js';
 import { openAccessDeniedDialog } from '../access-denied.js';
 import { fadeOutAndRemove } from '../motion.js?v=mo1';   // MOTION_DIALOG_V1
-import { buildPatientFields, openDuplicatePatientDialog, runPatientSearch } from './patient-create-modal.js?v=fastreg1';
+import { buildPatientFields, openDuplicatePatientDialog, runPatientSearch, uploadPendingPhoto } from './patient-create-modal.js?v=fastreg1';
 import { openTemplatePickerModal } from './template-picker-modal.js?v=tpl1';   // TEMPLATE_PICKER_V1
 import { resolveTemplate } from './service-templates.js?v=tpl1';               // WIZ_TEMPLATES_LOCAL_V1
 import { registerWalkIn } from './walk-in-booking.js?v=wib1';                  // WALK_IN_BOOKING_V1
@@ -430,6 +430,11 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             if (!state.patient) {
                 const payload = api.collect();
                 if (!payload) return null;
+                // PATIENT_PHOTO_V1 — снимок кладётся в хранилище ДО вставки
+                // карты, ровно как в форме заведения: иначе фото, снятое с
+                // веб-камеры прямо здесь, молча не доехало бы до карты.
+                const photoUrl = await uploadPendingPhoto(api.state);
+                if (photoUrl) payload.photo_url = photoUrl;
                 const created = await createPatient(payload, false);
                 // null значит либо отказ с тостом, либо открытый диалог
                 // дубликата — он продолжит сохранение сам, своим doSave().
