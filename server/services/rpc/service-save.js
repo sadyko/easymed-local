@@ -96,6 +96,7 @@ function resolveRefTx(db, table, ref) {
  * service_save — создать или обновить услугу целиком, как её видит диалог.
  * args: { id?, name, type, price, tax_rate?, duration_minutes?, requires_doctor?,
  *         default_doctor_percent?, room_id?, code?, active?,
+ *         doctor_tier_from?, doctor_tier_percent?  (DOCTOR_TIER_V1 — pair: both or neither)
  *         price_secondary?, secondary_days_from?, secondary_days_to?, price_repeat?  (VISIT_TIER_PRICING_V1, all nullable)
  *         repeat_days_from?, repeat_days_to?  (REPEAT_WINDOW_V1, nullable — empty = the second-visit window)
  *         name_uz?, name_en?, online_booking?  (SERVICE_NAMES_ONLINE_V1 — online needs name AND name_uz)
@@ -141,6 +142,16 @@ export function serviceSave(db, args, user) {
 
   const requiresDoctor = asBool(a.requires_doctor);
   const defaultPct = clampPct(a.default_doctor_percent);
+
+  // DOCTOR_TIER_V1 — ступень доли по объёму: порог (целое ≥ 0, 0 = нет) и
+  // доля выше порога (0–100). Одно без другого — ошибка ввода, а не «половина
+  // настройки»: экран не должен притворяться, что ступень есть.
+  const optNum = (v) => (v === undefined || v === null || v === '' ? 0 : Number(v));
+  const tierFrom = optNum(a.doctor_tier_from);
+  if (!Number.isInteger(tierFrom) || tierFrom < 0) throw new RpcError('Порог ступени — целое число услуг в месяц (0 — без ступени).', 400);
+  const tierPct = optNum(a.doctor_tier_percent);
+  if (!Number.isFinite(tierPct) || tierPct < 0 || tierPct > 100) throw new RpcError('Доля выше порога — от 0 до 100 %.', 400);
+  if ((tierFrom > 0) !== (tierPct > 0)) throw new RpcError('Ступень задаётся парой: порог услуг в месяц И доля выше порога.', 400);
 
   // VISIT_TIER_PRICING_V1 — цены по счёту визита. Все четыре поля могут быть
   // пустыми (услуга с одной ценой); заданная цена — неотрицательное число,
@@ -243,6 +254,7 @@ export function serviceSave(db, args, user) {
         requires_doctor: requiresDoctor, active, type, is_lab: isLab,
         type_id: refs.type_id, category_id: refs.category_id, department_id: refs.department_id,
         default_doctor_percent: defaultPct, room_id: roomId,
+        doctor_tier_from: tierFrom, doctor_tier_percent: tierPct,   // DOCTOR_TIER_V1
         price_secondary: priceSecondary, secondary_days_from: daysFrom, secondary_days_to: daysTo, price_repeat: priceRepeat,
         repeat_days_from: repDaysFrom, repeat_days_to: repDaysTo,
         name_uz: nameUz, name_en: nameEn, online_booking: onlineBooking,
@@ -265,6 +277,7 @@ export function serviceSave(db, args, user) {
         requires_doctor: requiresDoctor, active, type, is_lab: isLab,
         type_id: refs.type_id, category_id: refs.category_id, department_id: refs.department_id,
         default_doctor_percent: defaultPct, room_id: roomId,
+        doctor_tier_from: tierFrom, doctor_tier_percent: tierPct,   // DOCTOR_TIER_V1
         price_secondary: priceSecondary, secondary_days_from: daysFrom, secondary_days_to: daysTo, price_repeat: priceRepeat,
         repeat_days_from: repDaysFrom, repeat_days_to: repDaysTo,
         name_uz: nameUz, name_en: nameEn, online_booking: onlineBooking,
