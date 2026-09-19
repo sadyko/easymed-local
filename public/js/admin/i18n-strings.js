@@ -8458,4 +8458,7 @@ export const STRINGS = {
   "напр. 40": {"en":"e.g. 40","ru":"напр. 40","uz":"masalan, 40"},
   "Ступень по объёму: начиная со следующей после порога услуги в календарном месяце доля исполнителя — не ниже указанной. Пусто — ступени нет.": {"en":"Volume tier: starting from the service after the threshold within a calendar month, the performer's share is not lower than this. Empty — no tier.","ru":"Ступень по объёму: начиная со следующей после порога услуги в календарном месяце доля исполнителя — не ниже указанной. Пусто — ступени нет.","uz":"Hajm bo‘yicha pog‘ona: kalendar oyida chegaradan keyingi xizmatdan boshlab ijrochi ulushi ko‘rsatilganidan kam bo‘lmaydi. Bo‘sh — pog‘ona yo‘q."},
   "шт.": {"en":"pcs","ru":"шт.","uz":"dona"},
+  "Ступень задаётся парой: порог услуг в месяц И доля выше порога.": {"en":"A tier is set as a pair: services per month AND the share above it.","ru":"Ступень задаётся парой: порог услуг в месяц И доля выше порога.","uz":"Pog‘ona juftlik bilan beriladi: oyiga xizmatlar chegarasi VA undan yuqori ulush."},
+  "Порог ступени — целое число услуг в месяц (0 — без ступени).": {"en":"The tier threshold is a whole number of services per month (0 — no tier).","ru":"Порог ступени — целое число услуг в месяц (0 — без ступени).","uz":"Pog‘ona chegarasi — oyiga butun son xizmatlar (0 — pog‘ona yo‘q)."},
+  "Доля выше порога — от 0 до 100 %.": {"en":"The share above the threshold is between 0 and 100 %.","ru":"Доля выше порога — от 0 до 100 %.","uz":"Chegaradan yuqori ulush — 0 dan 100 % gacha."},
 };

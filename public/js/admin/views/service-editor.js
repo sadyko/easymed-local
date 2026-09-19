@@ -245,6 +245,13 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
         if (priceInp.value === '' || !Number.isFinite(price) || price < 0) {
             toast('Укажите цену услуги.', 'warn'); goTo('price', priceInp); return;
         }
+        // DOCTOR_TIER_V1 — ступень задаётся парой; сервер откажет 400, а здесь
+        // курсор сразу встаёт в незаполненное поле (rpc/service-save.js).
+        const tFrom = Number(tierFromInp.value) > 0, tPct = Number(tierPctInp.value) > 0;
+        if (tFrom !== tPct) {
+            toast('Ступень задаётся парой: порог услуг в месяц И доля выше порога.', 'warn');
+            goTo('price', tFrom ? tierPctInp : tierFromInp); return;
+        }
         // performers — авторитетный СПИСОК ЧЛЕНСТВА: сервер добавит недостающих
         // и снимет неотмеченных. Отправляется и при выключенном «оказывает
         // специалист» — членство меняют галочки, а не видимость блока.

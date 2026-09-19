@@ -405,8 +405,12 @@ const IMPORT_CONFIGS = {
                 var lbl = { consultation: 'Консультации', lab: 'Лаборатория', procedure: 'Процедуры', imaging: 'Диагностика', other: 'Хирургия' }[payload.type];
                 if (lbl) payload.type_id = { __autoCreate: { table: 'service_types', keyField: 'name', value: lbl } };
             }
-            // DOCTOR_TIER_V1 — пара или ничего: полупара из файла застряла бы в
-            // редакторе (service_save отказывает половине настройки).
+            // DOCTOR_TIER_V1 — пара или ничего, и в границах сервера (целый
+            // порог ≥ 0, доля 0–100): полупара из файла застряла бы в редакторе
+            // (service_save отказывает половине настройки), а импорт пишет мимо
+            // service_save, поэтому границы повторяются здесь.
+            payload.doctor_tier_from = Math.max(0, Math.round(Number(payload.doctor_tier_from) || 0));
+            payload.doctor_tier_percent = Math.min(100, Math.max(0, Number(payload.doctor_tier_percent) || 0));
             if (!payload.doctor_tier_from || !payload.doctor_tier_percent) {
                 payload.doctor_tier_from = 0; payload.doctor_tier_percent = 0;
             }

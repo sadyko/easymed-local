@@ -376,6 +376,9 @@ test('DOCTOR_TIER_V1: одно без другого, дробный порог 
     { doctor_tier_from: 2.5, doctor_tier_percent: 40 },   // не целое
     { doctor_tier_from: -1, doctor_tier_percent: 40 },
     { doctor_tier_from: 25, doctor_tier_percent: 101 },
+    // не число вовсе: Number('abc') = NaN, и NaN обязан быть отказом, а не нулём
+    { doctor_tier_from: 'abc', doctor_tier_percent: 40 },
+    { doctor_tier_from: 25, doctor_tier_percent: 'abc' },
   ]) {
     assert.throws(() => serviceSave(db, baseArgs(bad), admin), (e) => e.status === 400, JSON.stringify(bad));
   }

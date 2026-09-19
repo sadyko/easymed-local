@@ -45,6 +45,17 @@ globalThis.document = {
   head: mk('head'), body: mk('body'), documentElement: mk('html'),
   addEventListener() {}, removeEventListener() {}, getElementById() { return null; },
 };
+// Тосты. toast() (ui.js) ищет #toast, пишет в него текст — и сразу кладёт в
+// el._t таймер, затирая то же поле, в котором фейковый DOM держит текст.
+// Поэтому ловим текст в момент записи: один общий элемент с пишущим сеттером.
+const toasts = [];
+const toastEl = {
+  dataset: {}, _t: null, setAttribute() {},
+  classList: { add() {}, remove() {}, contains() { return false; } },
+  set textContent(v) { toasts.push(String(v)); },
+  get textContent() { return toasts[toasts.length - 1] || ''; },
+};
+globalThis.document.getElementById = (id) => (id === 'toast' ? toastEl : null);
 const store = new Map();
 globalThis.localStorage = {
   getItem: (k) => (store.has(k) ? store.get(k) : null),
@@ -365,5 +376,27 @@ test('DOCTOR_TIER_V1: в редакторе услуги есть порог и 
     assert.ok(save, 'service_save не вызван: ' + rpcCalls.map((r) => r.name).join(','));
     assert.equal(save.args.doctor_tier_from, 25);
     assert.equal(save.args.doctor_tier_percent, 40);
+  } finally { SVC.requires_doctor = 1; }
+});
+
+// Полупара — порог без доли (или наоборот) — это отказ 400 на сервере
+// (rpc/service-save.js). Редактор не обязан его дожидаться: проверка здесь
+// ставит курсор в незаполненное поле, а на сервер не уходит ничего.
+test('DOCTOR_TIER_V1: половина ступени не уходит на сервер — редактор просит вторую половину', async () => {
+  SVC.requires_doctor = 0;   // страж «отметьте исполнителя» не должен мешать этому тесту
+  try {
+    const c = await paint();
+    tags(c, 'tr').find((r) => r.className.includes('row-click')).click();
+    await flush();
+    const from = tags(document.body, 'input').find((i) => i.attrs.placeholder === '0 — нет');
+    assert.ok(from, 'поле порога не нарисовано');
+    from.value = '25';   // доля выше порога осталась пустой
+    rpcCalls.length = 0; toasts.length = 0;
+    buttonWith(document.body, 'Сохранить').click();
+    await flush();
+    assert.ok(!rpcCalls.some((r) => r.name === 'service_save'),
+      'полупара ушла на сервер: ' + rpcCalls.map((r) => r.name).join(','));
+    assert.ok(toasts.some((t) => t.includes('Ступень задаётся парой')),
+      'подсказки о второй половине нет: ' + toasts.join(' | '));
   } finally { SVC.requires_doctor = 1; }
 });
