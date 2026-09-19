@@ -224,6 +224,29 @@ export function serviceShare(s, rateMap) {
 }
 
 /**
+ * DOCTOR_TIER_V1 — доля строки с учётом ступени по объёму. pos — строка ответа
+ * doctor_tier_positions для этой visit_service ({units, units_above,
+ * tier_percent}) или null. Нумерацию считает СЕРВЕР; здесь только смесь по
+ * единицам — та же формула, что ITEM_EFF_PCT_SQL в rpc/reports.js. Без
+ * позиции, без единиц за порогом или при фиксированной ставке равна
+ * serviceShare().
+ */
+export function tierShare(s, rateMap, pos) {
+    const rate = rateMap.get(String(s.serviceId));
+    if (!rate) return 0;
+    if (rate.price) return serviceShare(s, rateMap);
+    const units = pos && Number(pos.units) > 0 ? Number(pos.units) : 0;
+    const above = units ? Math.max(0, Math.min(units, Number(pos.units_above) || 0)) : 0;
+    if (!above) return serviceShare(s, rateMap);
+    const base = Math.max(0, Number(s.total || 0) - Number(s.discount || 0));
+    const taxRate = s.taxRate != null ? Number(s.taxRate) : 0;
+    const net = base * (1 - taxRate / 100);
+    const pct = rate.percentage || 0;
+    const tierPct = Math.max(pct, Number(pos.tier_percent) || 0);
+    return net * (pct * (units - above) + tierPct * above) / units / 100;
+}
+
+/**
  * Платят ли этому врачу ПОУСЛУЖНО. DOCTOR_PAY_KPI_WIRE_V1 — у «фикс + KPI»
  * переменная часть начисляется, только если отмечен хоть один сервисный KPI;
  * один лишь «направления пациентов» переменной с услуг не даёт (вознаграждение

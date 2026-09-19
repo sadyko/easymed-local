@@ -336,6 +336,25 @@ test('доля врача считается по формуле отчёта: �
   assert.strictEqual(disc.get('ii-2'), 0);
 });
 
+test('DOCTOR_TIER_V1: tierShare без позиции = serviceShare; с units_above делит по единицам и не понижает', () => {
+  const rateMap = dash.serviceRateMap(DOCTOR_A);
+  const s = { serviceId: A_SERVICES[0].serviceId, total: 300000, discount: 0, taxRate: 0 };
+  const base = dash.serviceShare(s, rateMap);
+  assert.strictEqual(dash.tierShare(s, rateMap, null), base);
+  assert.strictEqual(dash.tierShare(s, rateMap, { units: 3, units_above: 0, tier_percent: 40 }), base);
+  const pct = rateMap.get(String(s.serviceId)).percentage;
+  // DOCTOR_A: личный процент s-1 = 40, т.е. ≥ 40 — ступень 40 % не была бы видна
+  // (MAX(40, 40) = 40, неотличимо от serviceShare), поэтому ступень выше личного.
+  const tierPct = pct >= 40 ? pct + 10 : 40;
+  // 3 единицы, 2 выше порога по tierPct %: 300000 × (pct·1 + tierPct·2) / 3 / 100
+  const expect = 300000 * (pct * 1 + tierPct * 2) / 3 / 100;
+  assert.strictEqual(Math.round(dash.tierShare(s, rateMap, { units: 3, units_above: 2, tier_percent: tierPct })), Math.round(expect));
+  // ступень ниже личного процента ничего не понижает
+  assert.strictEqual(dash.tierShare(s, rateMap, { units: 1, units_above: 1, tier_percent: 1 }), base);
+  // чужая услуга — 0, как у serviceShare
+  assert.strictEqual(dash.tierShare({ serviceId: 's-99', total: 1000, discount: 0, taxRate: 0 }, rateMap, { units: 1, units_above: 1, tier_percent: 90 }), 0);
+});
+
 test('каждая цифра дашборда сходится с ручным счётом по посеянным данным', () => {
   const stats = dash.computeDoctorStats({
     visits: A_VISITS, services: A_SERVICES,
