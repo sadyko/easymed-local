@@ -40,6 +40,7 @@ import { h, Icon, PageHead, Tag, clear, toast, checkField } from '../ui.js';
 // the render through .textContent bypasses h() — those places call tr()
 // explicitly (same trick as telephony-settings.js).
 import { tr, trf } from '../i18n.js';
+import { invalidateCrmStages } from '../crm-stages.js';   // CRM_LINKS_V1
 import {
     COLORS, tagKind, LABEL_MAX,
     UNDELETABLE_STAGE_KEYS, UNDELETABLE_SOURCE_KEYS,
@@ -74,6 +75,12 @@ const state = { cfg: null, busy: false };
 let refs = { root: null, body: null, stages: null, sources: null };
 
 async function rpc(name, args = {}) {
+    // CRM_LINKS_V1 — воронку правят здесь, а читают её ещё и фоновые действия
+    // других экранов (привязка заявок при регистрации, подстановка услуг в
+    // смету, закрытие строк) — через кешированный crm-stages.js. Сохранение
+    // сбрасывает этот кеш: иначе до перезагрузки страницы они работали бы по
+    // прежней воронке, в том числе по только что удалённой колонке.
+    if (name === 'crm_config_save') invalidateCrmStages();
     const { data, error } = await supabase.rpc(name, args);
     if (error) {
         const e = new Error(error.message || 'Не удалось выполнить запрос.');

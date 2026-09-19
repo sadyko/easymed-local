@@ -109,9 +109,13 @@ const CALLS = [];
 // CRM_REASSIGN_V1 — один отказ выборки персонала «по требованию»: список
 // операторов не грузится ровно один раз, дальше — как обычно.
 let failStaffOnce = false;
+// CRM_LINKS_V1 — НАСТРОЕННАЯ воронка. null = пустой ответ crm_config_get, то
+// есть запасные восемь колонок миграции 046 (как во всех тестах выше).
+let BOARD_CFG = null;
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
+  if (u.startsWith('/api/rpc/crm_config_get')) return jsonOk(BOARD_CFG);
   if (u.startsWith('/api/rpc/')) return jsonOk({});
   if (u.startsWith('/api/db')) {
     if (body) CALLS.push(body);
@@ -753,4 +757,58 @@ test('похожий пациент уже есть — окно спрашив�
   assert.ok(dlg, 'о найденном дубле никто не спросил: окно возможного дубликата не открылось');
   PATIENT_DUPES = [];
   window.easymed.state.user = null;
+});
+
+// ═══ 9. НОЧНАЯ АВТОМАТИКА ЧИТАЕТ НАСТРОЕННУЮ ВОРОНКУ ════════════════════════
+//
+// CRM_LINKS_V1 (2026-09-20). Доска умеет любую воронку (миграция 077: «добавить
+// колонку "Ждёт оплаты" больше не значит выпустить релиз»), а автоматика
+// «день записи прошёл, визита не было → Не пришёл» сверялась с зашитой парой
+// ['scheduled','approved']. Клиника, переименовавшая или добавившая колонку,
+// получала заявки, которые не подхватывались НИЧЕМ: они оставались в своей
+// колонке навсегда, и отчёт считал их всё ещё ожидающими приёма.
+
+const SEEDED_STAGES = [
+  { key: 'in_process',    label: 'В обработке',           color: 'info',   position: 1, is_active: 1, kind: 'open' },
+  { key: 'recall',        label: 'Перезвонить',           color: 'warn',   position: 2, is_active: 1, kind: 'open' },
+  { key: 'scheduled',     label: 'Записан',               color: 'purple', position: 3, is_active: 1, kind: 'open' },
+  { key: 'approved',      label: 'Подтверждён',           color: 'teal',   position: 4, is_active: 1, kind: 'open' },
+  { key: 'came',          label: 'Пришёл',                color: 'ok',     position: 5, is_active: 1, kind: 'won' },
+  { key: 'no_show',       label: 'Не пришёл',             color: 'crit',   position: 6, is_active: 1, kind: 'lost' },
+  { key: 'stopped',       label: 'Обработка остановлена', color: '',       position: 7, is_active: 1, kind: 'lost' },
+  { key: 'not_qualified', label: 'Нецелевой',             color: '',       position: 8, is_active: 1, kind: 'lost' },
+];
+
+/** Отбор по статусу у автоматики «Не пришёл» (правка ПАЧКИ, без фильтра по id). */
+const sweepCall = () => CALLS.find((c) => c.table === 'crm_requests' && c.op === 'update'
+  && (c.filters || []).some((f) => f.col === 'scheduled_date' && f.op === 'lt'));
+
+test('автоматика «Не пришёл» берёт живые колонки из настроек, а не из зашитой пары', async () => {
+  BOARD_CFG = { stages: [...SEEDED_STAGES, { key: 'waiting_pay', label: 'Ждёт оплаты', color: 'info', position: 9, is_active: 1, kind: 'open' }], sources: [], routing: [] };
+  CALLS.length = 0;
+  await board([]);
+
+  const sweep = sweepCall();
+  assert.ok(sweep, 'ночная автоматика не сработала вовсе');
+  const mine = (sweep.filters || []).find((f) => f.col === 'status' && f.op === 'in');
+  assert.ok(mine, 'автоматика не отбирает по ступени');
+  assert.ok(mine.val.includes('waiting_pay'),
+    'заведённая клиникой живая колонка не попала в автоматику: заявки в ней зависнут навсегда — ' + JSON.stringify(mine.val));
+  assert.ok(!mine.val.includes('came'), 'автоматика метит «не пришёл» тем, кто уже дошёл');
+  assert.ok(!mine.val.includes('no_show'), 'автоматика перекладывает заявку саму в себя');
+  assert.strictEqual(sweep.values.status, 'no_show', 'заявка уходит не в проигрышную колонку');
+  BOARD_CFG = null;
+});
+
+test('колонку «Не пришёл» переименовали — автоматика уходит в неё, а не в исчезнувший ключ', async () => {
+  BOARD_CFG = { stages: SEEDED_STAGES.filter((s) => s.key !== 'no_show')
+    .concat([{ key: 'missed', label: 'Пропустил', color: 'crit', position: 6, is_active: 1, kind: 'lost' }]), sources: [], routing: [] };
+  CALLS.length = 0;
+  await board([]);
+
+  const sweep = sweepCall();
+  assert.ok(sweep, 'без сидовой колонки автоматика молчит — заявки зависают');
+  assert.strictEqual(sweep.values.status, 'missed',
+    'автоматика пишет несуществующий ключ: вставка упадёт по внешнему ключу, и заявка останется висеть');
+  BOARD_CFG = null;
 });

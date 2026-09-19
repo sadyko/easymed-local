@@ -290,3 +290,36 @@ test('запись вперёд перечисляет 14 дней подряд,
   // Дыра в расписании обязана быть видна: это и есть повод звонить.
   assert.ok(out.forwardBook.some((x) => x.count === 0));
 });
+
+// CRM_LINKS_V1 (2026-09-20) — ВОРОНКА НАСТРАИВАЕТСЯ, А ОТЧЁТ СЧИТАЛ ПО
+// ЗАШИТОМУ СПИСКУ. Клиника завела свою проигрышную колонку — и заявки в ней
+// пропадали из «потеряно»: в отчёте сумма по воронке не сходилась с общим
+// числом заявок, и понять, куда делись люди, было нельзя.
+test('CRM_LINKS_V1: своя проигрышная колонка считается потерей, как и сидовые', () => {
+  const db = seed();
+  db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('refused_price','Дорого','crit',9,1,'lost')").run();
+  addLead(db, { day: '2026-08-17', localHour: 10, status: 'stopped' });
+  addLead(db, { day: '2026-08-17', localHour: 11, status: 'refused_price' });
+  addLead(db, { day: '2026-08-17', localHour: 12, status: 'no_show' });
+
+  const r = callcenterReport(db, RANGE, USER);
+
+  assert.equal(r.kpi.lost, 2, 'заявка из добавленной клиникой колонки не попала в «потеряно»');
+  assert.equal(r.kpi.no_show, 1, '«не пришёл» обязан остаться отдельным показателем, а не слиться с потерями');
+  db.close();
+});
+
+test('CRM_LINKS_V1: конверсия считается по колонке-конверсии справочника', () => {
+  const db = seed();
+  db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('waiting_pay','Ждёт оплаты','info',9,1,'open')").run();
+  addLead(db, { day: '2026-08-17', localHour: 10, status: 'came', by: 1 });
+  addLead(db, { day: '2026-08-17', localHour: 11, status: 'waiting_pay', by: 1 });
+
+  const r = callcenterReport(db, RANGE, USER);
+
+  assert.equal(r.kpi.came, 1);
+  assert.equal(r.kpi.lost, 0, 'живая колонка посчитана потерей');
+  const op = r.byOperator.find((x) => x.name === 'Sabirova Visola');
+  assert.equal(op.came, 1, 'у оператора не сошлось число доведённых до визита');
+  db.close();
+});

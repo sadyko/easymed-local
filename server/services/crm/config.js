@@ -80,6 +80,60 @@ export function crmConfig(db) {
 }
 
 // --------------------------------------------------------------------------
+// CRM_LINKS_V1 — the funnel read by BEHAVIOUR, not by name.
+// --------------------------------------------------------------------------
+//
+// Migration 077's own header: «Переименовать "Пришёл" в "Дошёл" можно; сделать
+// две конверсии — нет». `kind` is what carries that promise, and code that ACTS
+// on the funnel (a visit closing a lead, the call-centre report counting one)
+// must ask for the keys instead of carrying a copy of the seeded eight. A
+// clinic that adds «Ждёт оплаты» is using the feature, not breaking it — and a
+// hardcoded list answers such a column by silently doing nothing.
+//
+// Hidden columns COUNT here: is_active decides whether the BOARD offers the
+// column, not whether the leads already sitting in it are still open.
+//
+// Defensive to the point of never throwing: openStageKeys runs inside
+// ensure_visit's write path, and a funnel lookup must not be able to refuse a
+// visit. A failed read falls back to the vocabulary migration 077 seeds.
+const SEED_OPEN = Object.freeze(['in_process', 'recall', 'scheduled', 'approved']);
+const SEED_WON = 'came';
+const SEED_LOST = Object.freeze(['no_show', 'stopped', 'not_qualified']);
+export const SEED_NO_SHOW_STAGE = 'no_show';
+
+function stageKeysOfKind(db, kind, fallback) {
+  try {
+    const rows = db.prepare('SELECT key FROM crm_stages WHERE kind = ? ORDER BY position, key').all(kind);
+    return rows.length ? rows.map((r) => r.key) : [...fallback];
+  } catch (e) {
+    return [...fallback];
+  }
+}
+
+/** Stages a lead is still ALIVE in. */
+export function openStageKeys(db) { return stageKeysOfKind(db, 'open', SEED_OPEN); }
+
+/** Stages a lead is lost in — the no-show column among them. */
+export function lostStageKeys(db) { return stageKeysOfKind(db, 'lost', SEED_LOST); }
+
+/** The one conversion column — schema-guaranteed unique, never undefined. */
+export function wonStageKey(db) {
+  const keys = stageKeysOfKind(db, 'won', [SEED_WON]);
+  return keys[0] || SEED_WON;
+}
+
+/**
+ * «Не пришёл»: the seeded column while the clinic still has it, otherwise the
+ * first lost one. Guessing another lost column BY NAME would be worse than
+ * naming the only thing that is known — that the lead is lost.
+ */
+export function noShowStageKey(db) {
+  const lost = lostStageKeys(db);
+  if (lost.includes(SEED_NO_SHOW_STAGE)) return SEED_NO_SHOW_STAGE;
+  return lost[0] || null;
+}
+
+// --------------------------------------------------------------------------
 // Shared normalisation
 // --------------------------------------------------------------------------
 

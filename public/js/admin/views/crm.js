@@ -24,6 +24,7 @@ import { savePatient } from '../data.js';
 import { openCustDev } from './custdev.js';           // CUSTDEV_V1 — обзвон после визита
 import { canView } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev»
 import { boardConfig } from '../crm-settings-logic.js?v=crmcfg1';   // CRM_CONFIG_V1
+import { stageKeysFrom } from '../crm-stages.js';   // CRM_LINKS_V1 — ступени по виду, а не по имени
 // PASTEL_IDENTITY_V1 — оттенок ступени воронки. Словарь один на три доски
 // (канбан, календарь, очередь), чтобы «мятный» везде значил одно и то же.
 import { pastelAt } from '../pastel.js?v=pastel1';
@@ -46,12 +47,18 @@ import { pastelAt } from '../pastel.js?v=pastel1';
 // (цвета, значения по умолчанию, разбор ответа) лежит в crm-settings-logic.js,
 // чтобы доска и экран настроек не разъехались.
 let SOURCES, SOURCE_RU, STATUSES, STATUS_RU, CONVERT_STATUS, ACTIVE_STATUSES, LOST_STATUSES;
+// CRM_LINKS_V1 — ключи ступеней ПО ВИДУ (open/won/lost), включая скрытые
+// колонки: доска скрытую не предлагает, но лежащие в ней заявки живые, и
+// автоматика обязана их видеть. Считаются из ТОГО ЖЕ ответа, что и доска, —
+// второго запроса за настройками не нужно.
+let STAGE_KEYS = stageKeysFrom(null);
 function applyBoardConfig(data) {
     const c = boardConfig(data);
     SOURCES = c.sources; SOURCE_RU = c.sourceRu;
     STATUSES = c.statuses; STATUS_RU = c.statusRu;
     CONVERT_STATUS = c.convertStatus;
     ACTIVE_STATUSES = c.activeStatuses; LOST_STATUSES = c.lostStatuses;
+    STAGE_KEYS = stageKeysFrom(data);
 }
 applyBoardConfig(null);   // запасная воронка — до первого ответа сервера доска уже рабочая
 async function loadBoardConfig() {
@@ -189,12 +196,23 @@ async function load() {
     try {
         const d = new Date(); const pad = (n) => String(n).padStart(2, '0');
         const today = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
-        // CRM_CONFIG_V1 — если колонку «Не пришёл» из воронки убрали, автоматика
-        // просто не срабатывает: молча переложить заявку в другую колонку было бы
-        // хуже, чем оставить её там, где она есть.
-        if (hasStage('no_show')) {
-            await supabase.from('crm_requests').update({ status: 'no_show' })
-                .in('status', ['scheduled', 'approved']).lt('scheduled_date', today);
+        // CRM_CONFIG_V1 — если проигрышной колонки в воронке нет вовсе,
+        // автоматика просто не срабатывает: молча переложить заявку в живую
+        // колонку было бы хуже, чем оставить её там, где она есть.
+        //
+        // CRM_LINKS_V1 — и «откуда», и «куда» читаются из НАСТРОЕК. Здесь стояла
+        // зашитая пара ['scheduled','approved'] и ключ 'no_show': клиника,
+        // добавившая свою колонку или переименовавшая «Не пришёл», получала
+        // заявки, которые автоматика не подхватывала ничем, — они оставались
+        // ожидающими приёма навсегда. Живые колонки берутся все: заявка с
+        // назначенной датой лежит в живой колонке какой угодно, а прошедшая
+        // дата без визита значит одно и то же в любой из них.
+        if (STAGE_KEYS.noShow) {
+            const from = STAGE_KEYS.open.filter((k) => k !== STAGE_KEYS.noShow);
+            if (from.length) {
+                await supabase.from('crm_requests').update({ status: STAGE_KEYS.noShow })
+                    .in('status', from).lt('scheduled_date', today);
+            }
         }
     } catch (e) { /* фоновая автоматика — молча */ }
     const { data, error } = await supabase.from('crm_requests')
@@ -1436,7 +1454,18 @@ async function paint() {
             // Дата записи назначена — активная заявка сама переходит в «Записан».
             // CRM_CONFIG_V1 — правило прежнее (дата назначена → «Записан»), но
             // целевая колонка проверяется: если её удалили, статус не трогаем.
-            if (isEdit && bookedDate && ['in_process', 'recall'].includes(r.status) && hasStage('scheduled')) payload.status = stageKey('scheduled');
+            // CRM_LINKS_V1 — «какая заявка ещё не записана» читается из настроек.
+            // Зашитая пара ['in_process','recall'] не знала ни переименованной
+            // колонки, ни добавленной: заявка из такой не получала ступени
+            // «Записан», сколько дат ей ни назначай.
+            //
+            // Двигаем только ВПЕРЁД — по живым колонкам, стоящим В ВОРОНКЕ ДО
+            // «Записан». «Подтверждён» стоит после, и назначение новой даты не
+            // имеет права откатывать подтверждённую заявку назад.
+            const bookedStage = stageKey('scheduled');
+            const bookedAt = STAGE_KEYS.open.indexOf(bookedStage);
+            const notBookedYet = bookedAt > 0 ? STAGE_KEYS.open.slice(0, bookedAt) : [];
+            if (isEdit && bookedDate && notBookedYet.includes(r.status) && hasStage('scheduled')) payload.status = bookedStage;
             if (isEdit) {
                 const { error } = await supabase.from('crm_requests').update(payload).eq('id', r.id);
                 if (error) { toast(error.message, 'fail'); return null; }

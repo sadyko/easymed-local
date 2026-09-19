@@ -113,3 +113,25 @@ test('CRM_FUTURE_LEAD_V2: a visit closes today\'s and overdue leads, never a fut
   assert.equal(st(5), 'came');
   assert.equal(st(6), 'came');   // by then it is overdue, so it closes too
 });
+
+// CRM_LINKS_V1 (2026-09-20) — ВОРОНКА НАСТРАИВАЕТСЯ, А СПИСОК СТУПЕНЕЙ БЫЛ
+// ЗАШИТ. Миграция 077 сделала колонки канбана ДАННЫМИ («добавить колонку "Ждёт
+// оплаты" больше не значит выпустить релиз»), но переход «пациент дошёл»
+// сверялся с константой из восьми сидовых ключей. Клиника заводила свою
+// колонку — и заявка из неё не закрывалась ничем: пациент приходил, визит
+// создавался, а лид оставался висеть и уходил в отчёт как недошедший.
+test('CRM_LINKS_V1: заявка в СВОЕЙ колонке воронки тоже закрывается визитом', async () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('waiting_pay','Ждёт оплаты','info',9,1,'open')").run();
+  const ins = db.prepare("INSERT INTO crm_requests (full_name, phone, status, patient_id) VALUES (?,?,?,?)");
+  ins.run('своя колонка', '1', 'waiting_pay', 1);
+  ins.run('сидовая',      '2', 'scheduled',   1);
+  ins.run('мёртвая',      '3', 'stopped',     1);
+
+  await ensureVisit(db, { patient_id: 1, date: '2026-08-09' }, REG);
+
+  const st = (id) => db.prepare('SELECT status FROM crm_requests WHERE id=?').get(id).status;
+  assert.equal(st(1), 'came', 'заявка из добавленной клиникой колонки не закрылась — воронка настраивается только на вид');
+  assert.equal(st(2), 'came');
+  assert.equal(st(3), 'stopped', 'закрытая заявка ожила');
+});

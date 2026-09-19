@@ -43,6 +43,7 @@ import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS
 import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTierOf } from '../visit-tier-logic.js';
 import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionParts, localYmd } from '../discount-rules.js';   // DISCOUNT_RULES_V1
 import { closeCrmLines } from '../crm-lines.js';   // CRM_LINKS_V1 — одно правило закрытия строк заявки на все окна
+import { crmStageKeys } from '../crm-stages.js';   // CRM_LINKS_V1 — ступени воронки по виду, а не по имени
 
 // PROC_PERFORMER_V1 — роли, которым можно поручить процедуру. Врач сюда
 // попадает НЕ отсюда, а по is_doctor (ADMIN_DOCTOR_LIST_V1) — см.
@@ -510,10 +511,14 @@ export function openServicePickerModal({
             // things on three days surfaces each on its own day. Two steps because
             // the filter is on the PARENT (patient) and the CHILD (date), and the
             // query compiler filters the base table only.
+            // CRM_LINKS_V1 — открытые ступени берутся из настроенной воронки:
+            // заявка в добавленной клиникой колонке тоже ждёт этого пациента.
+            const { open } = await crmStageKeys();
+            if (!open.length) return;
             const { data: reqs, error: reqErr } = await supabase.from('crm_requests')
                 .select('id')
                 .eq('patient_id', pid)
-                .in('status', ['scheduled', 'approved', 'in_process', 'recall']);
+                .in('status', open);
             if (reqErr || !reqs || !reqs.length) return;
 
             const { data: lines, error } = await supabase.from('crm_request_services')

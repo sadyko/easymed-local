@@ -12,6 +12,7 @@ import { migrate } from '../../db/migrate.js';
 import {
   listStages, listSources, listRouting, crmConfig,
   saveStages, saveSources, saveRouting, saveConfig, CrmConfigError,
+  openStageKeys, wonStageKey, lostStageKeys, noShowStageKey,
 } from './config.js';
 
 const fresh = () => { const db = openDb(':memory:'); migrate(db); return db; };
@@ -368,4 +369,38 @@ test('saveConfig reports routing turned off by a column that was hidden in the s
   // The answer is the FULL config, not just the list that was posted —
   // otherwise the routing card on screen would still show «Перезвонить».
   assert.equal(out.routing.find((r) => r.disposition === 'NOANSWER').action, 'ignore');
+});
+
+// --------------------------------------------------------------------------
+// CRM_LINKS_V1 — ключи ступеней для тех, кто работает с воронкой, а не рисует её
+// --------------------------------------------------------------------------
+//
+// «Переименовать "Пришёл" в "Дошёл" можно; сделать две конверсии — нет»
+// (шапка миграции 077). Значит код, которому нужен ключ конверсии или список
+// живых ступеней, обязан СПРОСИТЬ его, а не носить копию сидового списка.
+
+test('openStageKeys / wonStageKey / lostStageKeys читают настроенную воронку', () => {
+  const db = fresh();
+  assert.deepEqual(openStageKeys(db), ['in_process', 'recall', 'scheduled', 'approved']);
+  assert.equal(wonStageKey(db), 'came');
+  assert.deepEqual(lostStageKeys(db), ['no_show', 'stopped', 'not_qualified']);
+  assert.equal(noShowStageKey(db), 'no_show');
+
+  // Клиника завела свою колонку — она живая, и код обязан её увидеть.
+  db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('waiting_pay','Ждёт оплаты','info',9,1,'open')").run();
+  assert.ok(openStageKeys(db).includes('waiting_pay'), 'добавленная колонка не попала в список живых ступеней');
+});
+
+test('скрытая колонка остаётся ступенью: в ней лежат заявки', () => {
+  const db = fresh();
+  db.prepare("UPDATE crm_stages SET is_active = 0 WHERE key = 'recall'").run();
+  assert.ok(openStageKeys(db).includes('recall'),
+    'спрятанная колонка выпала из живых ступеней — лежащие в ней заявки перестали закрываться визитом');
+});
+
+test('колонка «не пришёл» — сидовая, если она есть, иначе первая проигрышная', () => {
+  const db = fresh();
+  assert.equal(noShowStageKey(db), 'no_show');
+  db.prepare("DELETE FROM crm_stages WHERE key = 'no_show'").run();
+  assert.equal(noShowStageKey(db), 'stopped', 'без сидовой колонки берётся первая проигрышная');
 });

@@ -18,11 +18,10 @@
 // и мастер записи, и окно быстрой регистрации, и он не должен тащить за собой
 // половину продукта.
 import { supabase } from '../supabase.js';
-
-// Ступени, на которых заявка ещё ЖИВАЯ, и ступень «пациент дошёл». Сид миграции
-// 077; настраиваемая воронка подменяет их (см. crm-stages.js).
-const OPEN_STAGES = ['scheduled', 'approved', 'in_process', 'recall'];
-const WON_STAGE = 'came';
+// CRM_LINKS_V1 — ступени берутся ПО ВИДУ из настроенной воронки (миграция 077),
+// а не по сидовым именам: клиника вправе переименовать «Пришёл» и завести свою
+// колонку, и закрытие заявок обязано это пережить.
+import { crmStageKeys } from './crm-stages.js';
 
 /**
  * Закрыть НАЗВАННЫЕ строки и, если в заявке больше нечего ждать, — саму заявку.
@@ -36,11 +35,13 @@ export async function closeCrmLines(lineIds, requestIds = []) {
     if (!ids.length) return 0;
     try {
         await supabase.from('crm_request_services').update({ status: 'done' }).in('id', ids);
-        for (const rid of [...new Set((requestIds || []).filter((x) => x != null))]) {
+        const parents = [...new Set((requestIds || []).filter((x) => x != null))];
+        const { won } = parents.length ? await crmStageKeys() : { won: null };
+        for (const rid of parents) {
             const { data: left } = await supabase.from('crm_request_services')
                 .select('id').eq('request_id', rid).eq('status', 'pending').limit(1);
             if (!left || !left.length) {
-                await supabase.from('crm_requests').update({ status: WON_STAGE }).eq('id', rid);
+                await supabase.from('crm_requests').update({ status: won }).eq('id', rid);
             }
         }
         return ids.length;
@@ -62,8 +63,10 @@ export async function closeCrmLinesForPatient(patientId, dayIso) {
     const day = String(dayIso || '').slice(0, 10);
     if (!patientId || !day) return 0;
     try {
+        const { open } = await crmStageKeys();
+        if (!open.length) return 0;
         const { data: reqs, error } = await supabase.from('crm_requests')
-            .select('id').eq('patient_id', patientId).in('status', OPEN_STAGES);
+            .select('id').eq('patient_id', patientId).in('status', open);
         if (error || !reqs || !reqs.length) return 0;
         const reqIds = reqs.map((r) => r.id);
         const { data: lines, error: lineErr } = await supabase.from('crm_request_services')

@@ -12,6 +12,9 @@ import { hasAnyRole } from '../roles.js';
 // calendar_book — единственный, кто ставит визиту время и врача.
 import { calendarSlots, calendarBook } from './calendar.js';
 import { DEFAULT_DURATION_MIN, serviceDurationMinutes } from './slot-engine.js';
+// CRM_LINKS_V1 — воронка настраивается (миграция 077), поэтому ступени
+// спрашиваются у справочника, а не берутся из зашитого списка.
+import { openStageKeys, wonStageKey, noShowStageKey } from '../crm/config.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400, code = null, params = null) {
@@ -170,14 +173,24 @@ export async function ensureVisit(db, args, user) {
   // scheduled list and the funnel counted a conversion that had not happened.
   // A lead is closed by this visit only if it was for this day or earlier;
   // an undated (walk-in) lead still closes, as before.
+  //
+  // CRM_LINKS_V1 — какие ступени закрываются, решает СПРАВОЧНИК, а не список в
+  // коде. Воронка настраивается (миграция 077): клиника, заведшая свою колонку
+  // «Ждёт оплаты», получала лид, который не закрывался ничем — пациент
+  // приходил, визит создавался, а заявка висела и уходила в отчёт недошедшей.
+  // Закрываются все ЖИВЫЕ ступени плюс «не пришёл»: человек, не пришедший в
+  // прошлый раз, пришёл сейчас — это и есть та самая конверсия.
   const flipCrmToCame = () => {
+    const closing = [...new Set([...openStageKeys(db), noShowStageKey(db)].filter(Boolean))];
+    if (!closing.length) return;
+    const holes = closing.map(() => '?').join(',');
     db.prepare(`
       UPDATE crm_requests
-         SET status = 'came', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+         SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
        WHERE patient_id = ?
-         AND status IN ('in_process','recall','scheduled','approved','no_show')
+         AND status IN (${holes})
          AND (scheduled_date IS NULL OR scheduled_date = '' OR date(scheduled_date) <= date(?))
-    `).run(patientId, day);
+    `).run(wonStageKey(db), patientId, ...closing, day);
   };
 
   // ─── ПРОВЕРКА ДО ПЕРВОЙ ЗАПИСИ В БАЗУ ─────────────────────────────────────

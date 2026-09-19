@@ -13,6 +13,9 @@
 // скрыт — фильтр, который молча ничего не делает, хуже отсутствующего.
 
 import { localDate, localHour, localWeekday, inLocalRange } from '../domain/day.js';
+// CRM_LINKS_V1 — воронка настраивается (миграция 077): «дошёл», «не пришёл» и
+// «потеряно» спрашиваются у справочника, а не берутся из зашитого списка.
+import { wonStageKey, lostStageKeys, noShowStageKey } from '../crm/config.js';
 
 const STATUS_RU = {
   in_process: 'В работе', scheduled: 'Записан', came: 'Пришёл',
@@ -33,15 +36,34 @@ export function callcenterReport(db, args, _user) {
   const where = `WHERE ${inLocalRange('r.created_at')}`;
   const p = [from, to];
 
+  // CRM_LINKS_V1 — ступени воронки. Клиника вправе завести свою проигрышную
+  // колонку («Дорого»), и заявки в ней выпадали из «потеряно»: сумма по воронке
+  // не сходилась с общим числом заявок, а куда делись люди — не узнать.
+  //
+  // «Не пришёл» остаётся ОТДЕЛЬНЫМ показателем и потому вычитается из потерь:
+  // неявка — это повод перезвонить, а отказ — нет, и складывать их в одну
+  // цифру значит потерять единственный список, который можно отработать.
+  const WON = wonStageKey(db);
+  const NO_SHOW = noShowStageKey(db) || '';
+  const LOST = lostStageKeys(db).filter((k) => k !== NO_SHOW);
+  // `IN ()` — синтаксическая ошибка SQLite, поэтому отсутствие проигрышных
+  // колонок выражается заведомо несовпадающим ключом, а не пустым списком.
+  const lostHoles = (LOST.length ? LOST : ['']).map(() => '?').join(',');
+  const lostVals = LOST.length ? LOST : [''];
+  //
+  // «Записан» остаётся ключом 'scheduled': это НЕ вид ступени. Воронка знает
+  // три вида — живая, выигранная, проигранная, — и «на какой из живых колонок
+  // человек записан» спросить не у чего. Сколько заявок с назначенной датой,
+  // отвечает with_date ниже, и он от переименований не зависит вовсе.
   const kpiRow = db.prepare(`
     SELECT COUNT(*) AS total,
-           SUM(r.status = 'came')                       AS came,
+           SUM(r.status = ?)                            AS came,
            SUM(r.status = 'scheduled')                  AS scheduled,
-           SUM(r.status = 'no_show')                    AS no_show,
-           SUM(r.status IN ('stopped','not_qualified')) AS lost,
+           SUM(r.status = ?)                            AS no_show,
+           SUM(r.status IN (${lostHoles}))              AS lost,
            SUM(r.patient_id IS NOT NULL)                AS became_patient,
            SUM(r.scheduled_date IS NOT NULL AND r.scheduled_date <> '') AS with_date
-      FROM crm_requests r ${where}`).get(...p);
+      FROM crm_requests r ${where}`).get(WON, NO_SHOW, ...lostVals, ...p);
 
   const total = kpiRow.total || 0;
 
@@ -86,9 +108,9 @@ export function callcenterReport(db, args, _user) {
   // По оператору — не только объём, но и доля дошедших: сто заявок, из которых
   // никто не пришёл, это не работа.
   const byOperator = db.prepare(`
-    SELECT COALESCE(u.full_name, '—') AS name, COUNT(*) AS count, SUM(r.status = 'came') AS came
+    SELECT COALESCE(u.full_name, '—') AS name, COUNT(*) AS count, SUM(r.status = ?) AS came
       FROM crm_requests r LEFT JOIN users u ON u.id = r.created_by
-     ${where} GROUP BY r.created_by ORDER BY count DESC`).all(...p)
+     ${where} GROUP BY r.created_by ORDER BY count DESC`).all(WON, ...p)
     .map((x) => ({ ...x, came: x.came || 0, came_pct: pct(x.came || 0, x.count) }));
 
   // Что именно спрашивают. Строки заявки (crm_request_services) — источник
@@ -184,8 +206,8 @@ export function callcenterReport(db, args, _user) {
   //    сорока заявками и конверсией 5% хуже канала с десятью и 60% — по
   //    столбикам объёма это неразличимо, и деньги уходят не туда.
   const sourceConv = db.prepare(`
-    SELECT r.source AS src, COUNT(*) AS count, SUM(r.status = 'came') AS came
-      FROM crm_requests r ${where} GROUP BY r.source ORDER BY count DESC`).all(...p)
+    SELECT r.source AS src, COUNT(*) AS count, SUM(r.status = ?) AS came
+      FROM crm_requests r ${where} GROUP BY r.source ORDER BY count DESC`).all(WON, ...p)
     .map((x) => ({
       name: SOURCE_RU[x.src] || x.src || 'Другое',
       count: x.count, came: x.came || 0, came_pct: pct(x.came || 0, x.count),

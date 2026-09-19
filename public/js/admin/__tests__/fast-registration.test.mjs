@@ -428,7 +428,9 @@ test('сохранение: пациент → визит → строки с в
   btnByText(dlg.card, 'Сохранить').click();
   await tick(80);
 
-  const chain = calls.filter((c) => c.kind !== 'select')
+  // CRM_LINKS_V1 — crm_config_get сюда не входит: это ЧТЕНИЕ справочника
+  // воронки (какие ступени живые), а проверяется здесь порядок ЗАПИСЕЙ.
+  const chain = calls.filter((c) => c.kind !== 'select' && c.name !== 'crm_config_get')
     .map((c) => (c.kind === 'rpc' ? 'rpc:' + c.name : 'insert:' + c.table));
   assert.deepStrictEqual(chain, [
     'insert:patients',
