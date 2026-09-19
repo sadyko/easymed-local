@@ -556,8 +556,10 @@ test('без права «Регистрация пациента» окно н�
   // Вход 3 — «Калькулятор услуг» отдаёт окну подбора обратный вызов
   // onCreatePatient, и это ТА ЖЕ функция openCreatePatient, что у двух входов
   // выше: в views/patients.js ровно ОДИН вызов openPatientCreateModal, через
-  // который проходят все входы экрана. Четвёртому пути взяться неоткуда — и
-  // это утверждение про «неоткуда».
+  // который проходят входы 1-3. FAST_REGISTRATION_V1 добавил вход 4 (ниже) —
+  // он зовёт СВОЮ обёртку openFastRegistration(), а не openCreatePatient()
+  // напрямую, так что пин на «=> openCreatePatient()» его не увидит и расти
+  // не обязан; у нового входа свой собственный пин следующей строкой.
   const src = read('public/js/admin/views/patients.js');
   assert.strictEqual((src.match(/openPatientCreateModal\(/g) || []).length, 1,
     'в списке пациентов появился второй вызов окна — он пройдёт мимо гейта');
@@ -565,8 +567,20 @@ test('без права «Регистрация пациента» окно н�
     'входов создания пациента стало не три — тест перечисляет не все');
   assert.ok(/onCreatePatient: \(\) => openCreatePatient\(\)/.test(src),
     'калькулятор услуг больше не ходит через общий вход');
+  assert.strictEqual((src.match(/=> openFastRegistration\(\)/g) || []).length, 1,
+    'входов быстрой регистрации стало не один — тест перечисляет не все');
 
-  // И сама дверь, куда ведут все трое, отвечает отказом.
+  // Вход 4 — кнопка «Быстрая регистрация» в шапке списка (views/patients.js);
+  // openFastRegistration() лишь подставляет quick:true и зовёт ту же
+  // openCreatePatient() → openPatientCreateModal — тот же гейт, что и выше.
+  document.body.children.length = 0;
+  const fastRegBtn = walk(box).find((n) => n.attrs['data-onb'] === 'fast-registration');
+  assert.ok(fastRegBtn, 'на вкладке «Список» нет кнопки быстрой регистрации');
+  fastRegBtn.click();
+  assert.strictEqual(openDialogs('patient-create').length, 0, 'быстрая регистрация открыла окно в обход права');
+  assert.strictEqual(openDialogs('access-denied').length, 1, 'быстрая регистрация промолчала — это читается как поломка');
+
+  // И сама дверь, куда ведут все четверо, отвечает отказом.
   document.body.children.length = 0;
   assert.strictEqual(openPatientCreateModal({}), null, 'дверь пустила роль без права');
   assert.strictEqual(openDialogs('access-denied').length, 1);

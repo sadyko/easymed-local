@@ -8472,4 +8472,11 @@ export const STRINGS = {
   "{count} из {from} в этом месяце · ступень {pct}% действует": {"en":"{count} of {from} this month · {pct}% tier active","ru":"{count} из {from} в этом месяце · ступень {pct}% действует","uz":"Shu oyda {from} dan {count} · {pct}% pog‘ona amalda"},
   "{count} из {from} в этом месяце · с {next}-й доля {pct}%": {"en":"{count} of {from} this month · from service {next} the share is {pct}%","ru":"{count} из {from} в этом месяце · с {next}-й доля {pct}%","uz":"Shu oyda {from} dan {count} · {next}-chisidan ulush {pct}%"},
   "ступень": {"en":"tier","ru":"ступень","uz":"pog‘ona"},
+
+  // FAST_REGISTRATION_V1 — быстрая регистрация из шапки списка пациентов.
+  "Быстрая регистрация": {"en":"Fast registration","ru":"Быстрая регистрация","uz":"Tezkor roʻyxatga olish"},
+  "Быстрая регистрация: пациент → услуги и врач → счёт → печать": {"en":"Fast registration: patient → services and doctor → invoice → print","ru":"Быстрая регистрация: пациент → услуги и врач → счёт → печать","uz":"Tezkor roʻyxatga olish: bemor → xizmatlar va shifokor → hisob → chop etish"},
+  "Сохранить и добавить услуги": {"en":"Save and add services","ru":"Сохранить и добавить услуги","uz":"Saqlash va xizmatlar qoʻshish"},
+  "Пациент → услуги и врач → счёт → печать. Пакеты услуг — через «Выбрать шаблон» на шаге услуг.": {"en":"Patient → services and doctor → invoice → print. Service packages — via “Pick a template” on the services step.","ru":"Пациент → услуги и врач → счёт → печать. Пакеты услуг — через «Выбрать шаблон» на шаге услуг.","uz":"Bemor → xizmatlar va shifokor → hisob → chop etish. Xizmat paketlari — xizmatlar bosqichidagi «Shablon tanlash» orqali."},
+  "— сохранить и добавить услуги": {"en":"— save and add services","ru":"— сохранить и добавить услуги","uz":"— saqlash va xizmatlar qoʻshish"},
 };
