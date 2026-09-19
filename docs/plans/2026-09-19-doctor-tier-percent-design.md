@@ -14,7 +14,7 @@ Owner's answers to the three questions that change the money (2026-09-19):
 
 ## The rule in plain words
 
-For each doctor and each exact service, the lines of one calendar month are numbered in the order they were performed. Lines numbered **above** the threshold are paid at the tier percent, never below the doctor's personal percent. Lines up to the threshold are paid at the personal percent. A line's number never changes afterwards: paying an old invoice later, or printing the report on another day, gives the same number. Nothing changes for any clinic until a service has a threshold.
+For each doctor and each exact service, the lines of one calendar month are numbered in the order they were performed. Lines numbered **above** the threshold are paid at the tier percent, never below the doctor's personal percent. Lines up to the threshold are paid at the personal percent. Numbering is computed live from the lines that count today, in (visit date, line id) order; a late payment of an earlier visit takes its place by date and later lines shift by one, so the line marked «ступень» can change and a weekly report can change after the fact. The month's total for a same-priced service does not change. Nothing changes for any clinic until a service has a threshold.
 
 Example: threshold 25, personal share 30 %, tier 40 %. In September Dr A performs «Приём кардиолога» 31 times. Lines 1–25 pay 30 %, lines 26–31 pay 40 %. October starts again from 1.
 
@@ -25,7 +25,7 @@ Example: threshold 25, personal share 30 %, tier 40 %. In September Dr A perform
 | 1 | Period | calendar month of the **visit date**, local time (the reports' `localDate()` helper) |
 | 2 | Scope | the exact service (`services.id`) — owner |
 | 3 | Which lines get the tier | only lines numbered above the threshold — owner |
-| 4 | Which lines count | a line counts once it is **paid** or once the doctor has **started or finished** it (`visit_services.status` in `in_progress`, `completed`), whichever comes first. A registered line that is neither paid nor started does not count yet. A line removed by invoice cancellation is gone (`CANCEL_MEANS_CANCEL_V1` deletes not-started lines on void) — owner («both») |
+| 4 | Which lines count | a line counts once it is **paid** or once the doctor has **started or finished** it (`visit_services.status` in `in_progress`, `completed`), whichever comes first. For a lab line "started" means the **sample is collected** (`collected`) — the lab's own status ladder (migration 041) runs `added → queued → collected → in_progress → resulted → completed`, and work on the line is under way from `collected`; `resulted` counts too, `queued` (waiting for the draw) does not. A registered line that is neither paid nor started does not count yet. A line removed by invoice cancellation is gone (`CANCEL_MEANS_CANCEL_V1` deletes not-started lines on void) — owner («both») |
 | 5 | "More than 25" | strictly more: line 26 is the first at the tier |
 | 6 | Tier vs personal rate | effective percent = MAX(personal, tier); the tier never lowers anyone |
 | 7 | Number of steps | one step per service; a second step would be two more columns, not a redesign |

@@ -45,7 +45,7 @@
 - Modify: `server/db/schema-registry.js:215-229`
 - Modify: `public/js/admin/views/section-import-export.js:451`
 
-- [ ] **Step 1: Write the failing migration test**
+- [x] **Step 1: Write the failing migration test**
 
 `server/db/migrations/140.test.js`:
 
@@ -104,12 +104,12 @@ test('миграция проходит на базе с услугами и н�
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `node --test server/db/migrations/140.test.js`
 Expected: FAIL — `нет колонки services.doctor_tier_from`.
 
-- [ ] **Step 3: Write the migration**
+- [x] **Step 3: Write the migration**
 
 `server/db/migrations/140_doctor_tier.sql`:
 
@@ -136,11 +136,11 @@ ALTER TABLE services ADD COLUMN doctor_tier_from    INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE services ADD COLUMN doctor_tier_percent REAL    NOT NULL DEFAULT 0;
 ```
 
-- [ ] **Step 4: Add the columns to the schema registry**
+- [x] **Step 4: Add the columns to the schema registry**
 
 In `server/db/schema-registry.js`, in the `services:` entry, add `'doctor_tier_from','doctor_tier_percent'` right after `'default_doctor_percent'` in **all three** lists: `read.columns` (~line 217), `write.insert.columns` (~line 224) and `write.update.columns` (~line 228). Append to the trailing comment on line 219: `; doctor_tier_from/doctor_tier_percent: DOCTOR_TIER_V1 (mig 140) — written by service_save and the Excel importer`.
 
-- [ ] **Step 5: Add the Excel columns**
+- [x] **Step 5: Add the Excel columns**
 
 In `public/js/admin/views/section-import-export.js`, directly after the `default_doctor_percent` row (~line 451) add:
 
@@ -149,12 +149,12 @@ In `public/js/admin/views/section-import-export.js`, directly after the `default
             { key: 'doctor_tier_percent', coerce: 'num', hint: 'Ступень: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
 ```
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: `node --test server/db/migrations/140.test.js server/db/schema-registry.test.js server/db/star-meets-schema.test.js`
 Expected: all PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add server/db/migrations/140_doctor_tier.sql server/db/migrations/140.test.js server/db/schema-registry.js public/js/admin/views/section-import-export.js
@@ -169,7 +169,7 @@ git commit -m "feat(услуги): колонки ступени доли вра
 - Modify: `server/services/branch-sync/catalogue.js:100`
 - Modify: `server/services/branch-sync/catalogue.test.js` (append)
 
-- [ ] **Step 1: Write the failing test** (append to `catalogue.test.js`; the helpers `fresh`, `seedMain`, `receiver`, `apply`, `exportCatalogue` already exist in that file)
+- [x] **Step 1: Write the failing test** (append to `catalogue.test.js`; the helpers `fresh`, `seedMain`, `receiver`, `apply`, `exportCatalogue` already exist in that file)
 
 ```js
 test('DOCTOR_TIER_V1: порог и доля ступени едут с прайсом и приземляются', () => {
@@ -182,12 +182,12 @@ test('DOCTOR_TIER_V1: порог и доля ступени едут с прай
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `node --test server/services/branch-sync/catalogue.test.js`
 Expected: the new test FAILS with `{ doctor_tier_from: 0, doctor_tier_percent: 0 }`.
 
-- [ ] **Step 3: Add the columns to the services spec**
+- [x] **Step 3: Add the columns to the services spec**
 
 In `catalogue.js` after line 100 (`'default_doctor_percent',`) add:
 
@@ -197,12 +197,12 @@ In `catalogue.js` after line 100 (`'default_doctor_percent',`) add:
       'doctor_tier_from', 'doctor_tier_percent',
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `node --test server/services/branch-sync/catalogue.test.js`
 Expected: PASS (including the pre-081 compatibility tests — a missing key still means "old exporter").
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/services/branch-sync/catalogue.js server/services/branch-sync/catalogue.test.js
@@ -217,7 +217,7 @@ git commit -m "feat(филиалы): ступень доли врача едет
 - Modify: `server/services/rpc/reports.js` (block 282-350, line 372, line 803)
 - Create: `server/services/rpc/reports.doctor-tier.test.js`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `server/services/rpc/reports.doctor-tier.test.js`:
 
@@ -377,12 +377,12 @@ test('doctor_tier_positions: без ступени — пусто; кривые 
 });
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `node --test server/services/rpc/reports.doctor-tier.test.js`
 Expected: FAIL at import — `doctorTierPositions` is not exported (and the 26-line test would give 780000).
 
-- [ ] **Step 3: Add `TIER_RANK_SQL` and the per-line pieces to `reports.js`**
+- [x] **Step 3: Add `TIER_RANK_SQL` and the per-line pieces to `reports.js`**
 
 Insert **before** `const ITEM_DOCTOR_JOIN` (~line 282):
 
@@ -459,7 +459,7 @@ END`;
 Line ~372 (`itemRowsQuery`): `${ITEM_PCT_SQL} AS doctor_pct,` → `${ITEM_EFF_PCT_SQL} AS doctor_pct,`.
 Line ~803 (`doctorSalariesReport`): `AVG(CASE WHEN ${ITEM_FIX_SQL} IS NULL THEN ${ITEM_PCT_SQL} END) AS avg_pct,` → use `${ITEM_EFF_PCT_SQL}` inside the CASE.
 
-- [ ] **Step 4: Add the RPC function** (append near `runReport`, still in `reports.js`)
+- [x] **Step 4: Add the RPC function** (append near `runReport`, still in `reports.js`)
 
 ```js
 // DOCTOR_TIER_V1 — позиции строк врача за месяц 'YYYY-MM': кабинет получает
@@ -486,12 +486,12 @@ export function doctorTierPositions(db, args, _user) {
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `node --test server/services/rpc/reports.doctor-tier.test.js server/services/rpc/reports.doctor-share.test.js server/services/rpc/reports.test.js`
 Expected: all PASS. If SQLite complains about the window function inside a LEFT JOIN subquery, wrap `TIER_RANK_SQL` as `(SELECT * FROM (...))` — but SQLite 3.53 accepts it as written.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add server/services/rpc/reports.js server/services/rpc/reports.doctor-tier.test.js
@@ -506,7 +506,7 @@ git commit -m "feat(зарплата): ступень доли врача по �
 - Modify: `server/services/rpc/index.js:9` (import) and the `RPC` map next to `run_report` (~line 141)
 - Modify: `server/services/control/gate.js:20-34` (`READ_ONLY_RPCS`)
 
-- [ ] **Step 1: Write the failing test** (append to `server/services/rpc/reports.doctor-tier.test.js`)
+- [x] **Step 1: Write the failing test** (append to `server/services/rpc/reports.doctor-tier.test.js`)
 
 ```js
 import { RPC } from './index.js';
@@ -518,12 +518,12 @@ test('doctor_tier_positions зарегистрирован и считается
 });
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `node --test server/services/rpc/reports.doctor-tier.test.js`
 Expected: FAIL — `RPC.doctor_tier_positions` is undefined.
 
-- [ ] **Step 3: Register**
+- [x] **Step 3: Register**
 
 `index.js` line 9: add `doctorTierPositions` to the import from `./reports.js`. In the `RPC` map, right after `run_report:` add:
 
@@ -539,12 +539,12 @@ Expected: FAIL — `RPC.doctor_tier_positions` is undefined.
   'doctor_tier_positions',
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `node --test server/services/rpc/reports.doctor-tier.test.js server/services/control/gate.test.js server/routes/rpc.test.js`
 Expected: PASS (if `server/routes/rpc.test.js` does not exist, run `node --test server/services/control/` instead).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/services/rpc/index.js server/services/control/gate.js server/services/rpc/reports.doctor-tier.test.js
@@ -559,7 +559,7 @@ git commit -m "feat(rpc): doctor_tier_positions — позиции строк в
 - Modify: `server/services/rpc/service-save.js` (~143 validation; ~245 and ~267 the `cols`/`sets` objects)
 - Modify: `server/services/rpc/service-save.test.js` (append; `freshDb()`, `admin`, `baseArgs(over)` and `serviceSave` already exist in that file — lines 17-39)
 
-- [ ] **Step 1: Write the failing tests** (append)
+- [x] **Step 1: Write the failing tests** (append)
 
 ```js
 test('DOCTOR_TIER_V1: пара порог+доля сохраняется, нули = ступени нет', () => {
@@ -587,12 +587,12 @@ test('DOCTOR_TIER_V1: одно без другого, дробный порог 
 });
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `node --test server/services/rpc/service-save.test.js`
 Expected: the first new test FAILS (`{ doctor_tier_from: 0, doctor_tier_percent: 0 }` after saving 25/40); the second fails on the first `assert.throws`.
 
-- [ ] **Step 3: Validate and store**
+- [x] **Step 3: Validate and store**
 
 In `serviceSave`, right after `const defaultPct = clampPct(a.default_doctor_percent);` add:
 
@@ -616,12 +616,12 @@ In both the `cols` (insert) and `sets` (update) objects, after `default_doctor_p
 
 Update the JSDoc `args:` line to list `doctor_tier_from?, doctor_tier_percent?  (DOCTOR_TIER_V1, pair)`.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `node --test server/services/rpc/service-save.test.js`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/services/rpc/service-save.js server/services/rpc/service-save.test.js
@@ -637,7 +637,7 @@ git commit -m "feat(услуги): service_save принимает ступен�
 - Modify: `public/js/admin/i18n-strings.js` (append entries)
 - Modify: `public/js/admin/__tests__/services-catalog.test.mjs` (append). The file already has: `SVC` (the one service row, `requires_doctor: 1`), `paint(user)` → renders the page and returns the container, `tags(root, 'tr'|'input'|'button')`, `buttonWith(root, text)`, `flush()`, and a fetch stub that records every `/api/rpc/<name>` call into `rpcCalls` as `{ name, args }` (lines 67-92). The editor mounts its overlay on `document.body`.
 
-- [ ] **Step 1: Write the failing test** (append to `services-catalog.test.mjs`)
+- [x] **Step 1: Write the failing test** (append to `services-catalog.test.mjs`)
 
 ```js
 test('DOCTOR_TIER_V1: в редакторе услуги есть порог и доля выше порога, и они уходят в service_save', async () => {
@@ -663,12 +663,12 @@ test('DOCTOR_TIER_V1: в редакторе услуги есть порог и 
 
 If the fetch stub's `service_save` answer (`jsonOk({})`) makes the editor complain, extend the stub with `if (name === 'service_save') return jsonOk({ id: SVC.id, created: false, refs: {}, created_refs: [] });`.
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `node --test public/js/admin/__tests__/services-catalog.test.mjs`
 Expected: FAIL — `поля ступени не нарисованы`.
 
-- [ ] **Step 3: Add the inputs, payload and layout**
+- [x] **Step 3: Add the inputs, payload and layout**
 
 After `const pctInp = ...` (~line 161):
 
@@ -698,7 +698,7 @@ In the layout, inside `grp('Цена и время', ...)` after the `grid(2, ch
 
 If the editor has a `readOnly` branch that disables inputs (search `readOnly` in the file), include the two new inputs there the same way as `pctInp`.
 
-- [ ] **Step 4: Dictionary entries** — append to the `STRINGS` object in `i18n-strings.js` (keep the file's existing key order convention; the coverage test tells you if it must be sorted):
+- [x] **Step 4: Dictionary entries** — append to the `STRINGS` object in `i18n-strings.js` (keep the file's existing key order convention; the coverage test tells you if it must be sorted):
 
 ```js
   "Порог, услуг в месяц": {"en":"Threshold, services per month","ru":"Порог, услуг в месяц","uz":"Chegara, oyiga xizmatlar"},
@@ -711,12 +711,12 @@ If the editor has a `readOnly` branch that disables inputs (search `readOnly` in
 
 (Skip any key that already exists — grep first.)
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `node --test public/js/admin/__tests__/services-catalog.test.mjs public/js/admin/__tests__/i18n-coverage.test.mjs public/js/admin/__tests__/service-editor-lab-block.test.mjs public/js/admin/__tests__/service-editor-logic.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add public/js/admin/views/service-editor.js public/js/admin/i18n-strings.js public/js/admin/__tests__/services-catalog.test.mjs
@@ -731,7 +731,7 @@ git commit -m "feat(услуги): в редакторе услуги — пор
 - Modify: `public/js/admin/views/doctor-dashboard.js` (after `serviceShare`, ~line 231)
 - Modify: `public/js/admin/__tests__/doctor-dashboard.test.mjs` (append; `dash`, `DOCTOR_A`, `A_SERVICES` exist there)
 
-- [ ] **Step 1: Write the failing test** (append)
+- [x] **Step 1: Write the failing test** (append)
 
 ```js
 test('DOCTOR_TIER_V1: tierShare без позиции = serviceShare; с units_above делит по единицам и не понижает', () => {
@@ -751,12 +751,12 @@ test('DOCTOR_TIER_V1: tierShare без позиции = serviceShare; с units_a
 });
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `node --test public/js/admin/__tests__/doctor-dashboard.test.mjs`
 Expected: FAIL — `dash.tierShare is not a function`.
 
-- [ ] **Step 3: Implement** (right after `serviceShare`)
+- [x] **Step 3: Implement** (right after `serviceShare`)
 
 ```js
 /**
@@ -783,12 +783,12 @@ export function tierShare(s, rateMap, pos) {
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `node --test public/js/admin/__tests__/doctor-dashboard.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add public/js/admin/views/doctor-dashboard.js public/js/admin/__tests__/doctor-dashboard.test.mjs
@@ -804,7 +804,7 @@ git commit -m "feat(кабинет): tierShare — доля строки со с
 - Modify: `public/js/admin/__tests__/doctor-pay.test.mjs` (~131 fetch stub; append test)
 - Modify: `public/js/admin/i18n-strings.js` (append entries)
 
-- [ ] **Step 1: Write the failing test** (in `doctor-pay.test.mjs`)
+- [x] **Step 1: Write the failing test** (in `doctor-pay.test.mjs`)
 
 Change the `/api/rpc/` stub at line ~131 to:
 
@@ -841,12 +841,12 @@ test('DOCTOR_TIER_V1: позиции сервера меняют сумму и �
 });
 ```
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `node --test public/js/admin/__tests__/doctor-pay.test.mjs`
 Expected: FAIL — `сумма не учла ступень` (80 000 shown).
 
-- [ ] **Step 3: Wire the cabinet**
+- [x] **Step 3: Wire the cabinet**
 
 (a) Import: add `tierShare` to the list imported from `./doctor-dashboard.js` (~line 26-33).
 
@@ -919,7 +919,7 @@ Also line ~1887 (`row.services += serviceShare(s, rateMap)`) → `tierShare(s, r
 
 (g) Salary details row (~line 2223): `const share = Math.round(serviceShare(s, rateMap));` → `const pos = state.dash.tierPos.get(String(s.id)) || null; const share = Math.round(tierShare(s, rateMap, pos));` and, where the share cell is built, append a marker when `pos && Number(pos.units_above) > 0`: `h('span', { class: 'muted', style: { fontSize: '11px', marginLeft: '6px' } }, tr('ступень'))`.
 
-- [ ] **Step 4: Dictionary entries** (append to `i18n-strings.js`)
+- [x] **Step 4: Dictionary entries** (append to `i18n-strings.js`)
 
 ```js
   "Ступень: {service}": {"en":"Tier: {service}","ru":"Ступень: {service}","uz":"Pog‘ona: {service}"},
@@ -928,12 +928,12 @@ Also line ~1887 (`row.services += serviceShare(s, rateMap)`) → `tierShare(s, r
   "ступень": {"en":"tier","ru":"ступень","uz":"pog‘ona"},
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `node --test public/js/admin/__tests__/doctor-pay.test.mjs public/js/admin/__tests__/doctor-dashboard.test.mjs public/js/admin/__tests__/head-doctor-cabinet.test.mjs public/js/admin/__tests__/i18n-coverage.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add public/js/admin/views/consultation.js public/js/admin/__tests__/doctor-pay.test.mjs public/js/admin/i18n-strings.js
@@ -944,11 +944,11 @@ git commit -m "feat(кабинет): вкладка «Зарплата» счи�
 
 ### Task 9: Whole suite, plan checkboxes
 
-- [ ] **Step 1: Run everything**
+- [x] **Step 1: Run everything**
 
 Run: `npm test` (10–15 minutes). Expected: all green. Fix anything red before continuing; a red test is never "unrelated" until proven so.
 
-- [ ] **Step 2: Tick the checkboxes in this plan** and commit the plan file:
+- [x] **Step 2: Tick the checkboxes in this plan** and commit the plan file:
 
 ```bash
 git add docs/plans/2026-09-19-doctor-tier-percent.md

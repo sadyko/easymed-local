@@ -286,8 +286,9 @@ test('DOCTOR_TIER_V1: позиции сервера меняют сумму и �
     tierCalls = [];
     buttonByText(root, /7 дней/).click();
     await tick(80);
-    // Позиции спрашиваются ОДИН раз за диапазон месяцев, а не по разу на месяц:
-    // на «12 месяцев» цикл давал двенадцать запросов подряд.
+    // ПРАВИЛО: позиции спрашиваются ОДНИМ запросом за диапазон месяцев, а не по
+    // одному запросу на месяц — цикл по месяцам на «12 месяцев» это двенадцать
+    // запросов подряд.
     assert.strictEqual(tierCalls.length, 1, 'запросов позиций: ' + tierCalls.length);
     assert.ok(tierCalls[0].from && tierCalls[0].to, 'позиции запрошены не диапазоном: ' + JSON.stringify(tierCalls[0]));
     assert.ok(!('month' in tierCalls[0]), 'в запросе остался месяц: ' + JSON.stringify(tierCalls[0]));
