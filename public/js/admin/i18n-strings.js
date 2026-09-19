@@ -8501,9 +8501,12 @@ export const STRINGS = {
   // FAST_REG_ONE_SCREEN_V1 (T4) — «Быстрая регистрация» одним окном (views/fast-registration.js)
   "Пациент → услуги и врач → счёт → печать": {"en":"Patient → services and doctor → invoice → print","ru":"Пациент → услуги и врач → счёт → печать","uz":"Bemor → xizmatlar va shifokor → hisob → chop etish"},
   "— выберите его, и услуги запишутся на эту карту": {"en":"— pick one, and the services go onto that card","ru":"— выберите его, и услуги запишутся на эту карту","uz":"— uni tanlang, xizmatlar oʻsha kartaga yoziladi"},
-  "Направление и скидка": {"en":"Referral and discount","ru":"Направление и скидка","uz":"Yoʻllanma va chegirma"},
+  // FAST_REG_COMPACT_V1 — «Направление и скидка» и подсказка про «Категорию
+  // пациента» ушли вместе со своим блоком: направление стоит теперь рядом с
+  // «Типом скидки» в единственном разделе, и объяснять, в каком другом разделе
+  // его искать, стало нечего.
   "Код отправителя (лечащий врач)": {"en":"Referrer code (attending doctor)","ru":"Код отправителя (лечащий врач)","uz":"Yoʻllovchi kodi (davolovchi shifokor)"},
-  "Тип скидки — это «Категория пациента» в разделе «Документы и резидентство»: процент по ней применяет сервер при выставлении счёта.": {"en":"The discount type is the «Категория пациента» field in the «Документы и резидентство» section: the server applies its percentage when the invoice is issued.","ru":"Тип скидки — это «Категория пациента» в разделе «Документы и резидентство»: процент по ней применяет сервер при выставлении счёта.","uz":"Chegirma turi — «Hujjatlar va rezidentlik» boʻlimidagi «Bemor toifasi»: uning foizini hisob chiqarishda server qoʻllaydi."},
+  "Реквизиты пациента": {"en":"Patient details","ru":"Реквизиты пациента","uz":"Bemor rekvizitlari"},
   "+Услуги": {"en":"+Services","ru":"+Услуги","uz":"+Xizmatlar"},
   "+Пакеты": {"en":"+Packages","ru":"+Пакеты","uz":"+Paketlar"},
   "Открыть карту": {"en":"Open the card","ru":"Открыть карту","uz":"Kartani ochish"},

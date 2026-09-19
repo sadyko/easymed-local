@@ -61,6 +61,14 @@ import { downscalePhoto } from '../../shared/photo-downscale.js?v=pph1';
 const PHOTO_BUCKET = 'patient-photos';
 const PHOTO_PREFIX = 'patients/';
 
+// FAST_REG_COMPACT_V1 — страна, которую компактная раскладка ставит за
+// пациента (её поля на образце нет, а без страны каскад не даст областей).
+// Имя — РОВНО как в справочнике: countries.name русское (миграция 030
+// «Узбекистан», миграция 132 добавляет к нему name_uz/name_en, но не трогает
+// name). Экспортируется, чтобы тест сверил его с самой миграцией: имя мимо
+// справочника оставило бы «Область» пустой молча.
+export const DEFAULT_COUNTRY = 'Узбекистан';
+
 // ===========================================================================
 // Модель высоты. Числа — из admin.css (блок .mg-dense); тест сверяет их с CSS,
 // поэтому «подогнать модель» под желаемый ответ нельзя, не подогнав вёрстку.
@@ -196,6 +204,8 @@ export function openPatientEditModal(patient, opts = {}) {
  * @param {object}   [opts.patient]          строка пациента — правка (иначе заведение)
  * @param {string[]} [opts.sections]         подмножество из personal · documents · contacts · health
  * @param {boolean}  [opts.withSearchStrip]  строка поиска существующего пациента (по умолчанию — при заведении)
+ * @param {string}   [opts.layout]           'full' — разделы карты · 'compact' — один раздел образца
+ * @param {HTMLElement[]} [opts.extraRows]   ряды в конец компактного раздела (поля не карты, а визита)
  * @param {Function} [opts.onNavigate]       переход по приложению (как в ctx)
  * @param {Function} [opts.onSaved]          вызывается с сохранённой картой
  * @param {Function} [opts.close]            закрыть то, во что встроены поля (окно — себя, страница — ничего)
@@ -207,11 +217,33 @@ export function buildPatientFields(container, {
     // Строка поиска дубликатов нужна при ЗАВЕДЕНИИ и бессмысленна при правке:
     // это и есть тот самый пациент (PATIENT_FORM_ONE_V1).
     withSearchStrip = !(patient && patient.id),
+    // FAST_REG_COMPACT_V1 (2026-09-19) — РАСКЛАДКА.
+    //
+    // 'full' — карта пациента: четыре раздела, всё, что у человека есть.
+    // 'compact' — ОДИН раздел «Реквизиты пациента» ровно с полями образца
+    // владельца. Владелец о быстрой регистрации: «в окне должно быть только
+    // необходимое, как на образце, а вы добавили паспорта, географию и прочее,
+    // что для быстрой не нужно». Паспорт, ПИНФЛ, язык, район, махалля,
+    // почта — работа КАРТЫ пациента, и они остались в полной раскладке; здесь
+    // же ровно то, чего хватает на визит и счёт.
+    //
+    // Раскладка, а не ещё один набор разделов: поля, проверки и collect() у
+    // обеих ОДНИ, иначе быстрая регистрация снова разошлась бы с картой молча.
+    layout = 'full',
+    // Ряды в конец компактного раздела. У быстрой регистрации это «Код
+    // отправителя»: поле ВИЗИТА, а не карты, и строит его тот, кто про визит
+    // знает, — а стоит оно на образце в том же блоке.
+    extraRows = [],
     onNavigate, onSaved, close,
 } = {}) {
     const navigate  = typeof onNavigate === 'function' ? onNavigate : () => {};
     const closeHost = typeof close === 'function' ? close : () => {};
-    const has = (name) => sections.includes(name);
+    const compact = layout === 'compact';
+    // Полные разделы в компактной раскладке не рисуются вовсе...
+    const has = (name) => !compact && sections.includes(name);
+    // ...а справочники, которые они заводят (категории и география), нужны ей
+    // обоим: «Тип скидки» — это категория, «Область» — регион каскада.
+    const needs = (name) => compact || sections.includes(name);
     // PATIENT_FORM_ONE_V1 — режим правки: те же поля, заполненные строкой пациента.
     const editing = !!(patient && patient.id);
     const pv = (name) => (editing && patient[name] != null ? String(patient[name]) : '');
@@ -268,7 +300,7 @@ export function buildPatientFields(container, {
     // просят: categorySelect() спрашивает справочник категорий клиники
     // запросом, и экрану, показывающему одни личные данные, этот запрос не
     // нужен вовсе — как и скрытое поле, которого на нём нет.
-    const categorySel = has('documents') ? categorySelect(editing ? patient.category_id : null) : null;
+    const categorySel = needs('documents') ? categorySelect(editing ? patient.category_id : null) : null;
     if (editing) { const age = computeAge(dobInput.value); ageInput.value = (age == null || age < 0 || age > 130) ? '' : String(age); }
     dobInput.addEventListener('input', () => {
         const age = computeAge(dobInput.value);
@@ -291,7 +323,66 @@ export function buildPatientFields(container, {
     // PATIENT_FIELDS_V1 — каскад «страна → регион → район» строится ТОЛЬКО для
     // раздела «Контакты»: он разворачивает справочник из 206 районов, и экрану
     // без адреса это работа впустую.
-    const geo = has('contacts') ? geoCascade() : null;
+    const geo = needs('contacts') ? geoCascade() : null;
+
+    // ── Компактная раскладка: ОДИН раздел «Реквизиты пациента» ─────────────
+    // FAST_REG_COMPACT_V1 — образец владельца, поле в поле и в его порядке:
+    // ФИО · дата рождения · пол · телефон · паспортные данные · резидентство ·
+    // область · адрес · тип скидки (+ «Код отправителя» рядом, extraRows).
+    // Номера у раздела нет: он один, и последовательности из одного шага не
+    // бывает. Контролы — ТЕ ЖЕ, что в полной раскладке (dobInput, sexChips,
+    // categorySel, каскад), поэтому collect(), save() и проверки не знают, в
+    // какой раскладке их заполняли.
+    if (compact) {
+        // «ОБЛАСТЬ» БЕЗ «СТРАНЫ» — СТРАНА СТАВИТСЯ МОЛЧА.
+        //
+        // Каскад грузит области ТОЛЬКО от выбранной страны, а выбирать её в
+        // быстром окне нечем: на образце страны нет. Поэтому она ставится
+        // здесь — по имени из справочника (GEO_HARDCODE_V1: countries.name
+        // русское, «Узбекистан», миграции 030 и 132; собственный запасной
+        // вариант каскада написан латиницей и не совпадает с ним ни с одной
+        // строкой). Без этой строки «Область» осталась бы пустым списком с
+        // подписью «сначала выберите страну» — и выбрать её было бы негде.
+        //
+        // Сам <select> страны не рисуется, но в реестре он есть: иначе в карте
+        // осталась бы область без страны.
+        geo.preset({
+            country: (editing && patient.country) || DEFAULT_COUNTRY,
+            region:  editing ? patient.region : '',
+        });
+        reg('country', geo.countrySel);
+        reg('region',  geo.regionSel);
+        container.appendChild(mgSection('Реквизиты пациента', [
+            mgGrid(3,
+                field(['Фамилия ', req()], reg('last_name',   nameInput('last_name',   'Каримова', pv('last_name')))),
+                field(['Имя ',     req()], reg('first_name',  nameInput('first_name',  'Азиза', pv('first_name')))),
+                field('Отчество',          reg('middle_name', nameInput('middle_name', 'Рустамовна', pv('middle_name')))),
+            ),
+            mgGrid(3,
+                field(['Дата рождения ', req()], reg('date_of_birth', dobInput)),
+                field(['Пол ', req()], sexChips),
+                // REQUIRED_HONEST_V1 — у телефона звёздочки нет и здесь: правило
+                // «голый +998 сохраняется пустым» то же самое.
+                field('Телефон', regPhone('phone', phoneInput('phone', '+998 90 961 00 04', { value: pv('phone') }))),
+            ),
+            mgGrid(3,
+                field('Паспортные данные', reg('passport_number', h('input', { name: 'passport_number', placeholder: 'AB1234567', value: pv('passport_number') }))),
+                field('Резидентство', radioChips('__residency',
+                    [['resident', 'Резидент РУз'], ['nonresident', 'Нерезидент']],
+                    () => state.residency,
+                    (v) => { state.residency = v; })),
+                field('Область', geo.regionSel),
+            ),
+            mgGrid(3,
+                field('Адрес', reg('address', h('input', { name: 'address', placeholder: 'ул. Амира Темура 12, кв. 47', value: pv('address') })), 2),
+                // CATEGORY_DISCOUNT_V1 — на образце это «Тип скидки»: в карте
+                // список зовётся «Категория пациента», но процент по нему и
+                // есть скидка, которую регистратура здесь и выбирает.
+                field('Тип скидки', reg('category_id', categorySel)),
+            ),
+            ...extraRows,
+        ]));
+    }
 
     // ── Раздел 1: личные данные ────────────────────────────────────────────
     // Email здесь же, рядом с телефонами: это способ связи, а не документ.

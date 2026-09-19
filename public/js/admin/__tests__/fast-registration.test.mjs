@@ -267,7 +267,7 @@ const rowsOf = (dlg) => walk(dlg.table).filter((n) => n.tagName === 'TR' && walk
 const cellsOf = (tr) => (tr.children || []).filter((c) => c.tagName === 'TD');
 
 // ===========================================================================
-test('окно рисует реквизиты пациента (три секции) и пустую таблицу услуг с кнопками', async () => {
+test('окно рисует ОДИН раздел реквизитов по образцу и пустую таблицу услуг с кнопками', async () => {
   reset();
   const dlg = openFastRegistrationDialog({});
   assert.ok(dlg, 'окно не открылось');
@@ -278,17 +278,38 @@ test('окно рисует реквизиты пациента (три секц
   assert.ok(txt.includes('Быстрая регистрация'), 'нет заголовка окна');
   assert.ok(txt.includes('Пациент → услуги и врач → счёт → печать'), 'нет строки пути');
 
-  // Реквизиты пациента — ТРИ раздела сборщика (четвёртый, «Здоровье», остаётся
-  // карте пациента), плюс свой «Направление и скидка».
+  // FAST_REG_COMPACT_V1 — владелец: в быстром окне только необходимое, как на
+  // образце. Реквизиты пациента — ОДИН раздел компактной раскладки сборщика,
+  // и «Код отправителя» стоит В НЁМ: отдельный блок «Направление и скидка»
+  // был четвёртым разделом там, где разделов теперь один.
   const titles = walk(dlg.body).filter((n) => n.tagName === 'H3')
     .map((n) => textOf(n).replace(/<svg[\s\S]*?<\/svg>/g, '').replace(/\s+/g, ' ').trim())
     .map((t) => t.replace(/^[1234]\s*/, ''));
-  for (const want of ['Личные данные', 'Документы и резидентство', 'Контакты и адрес', 'Направление и скидка', 'Услуги']) {
+  for (const want of ['Реквизиты пациента', 'Услуги']) {
     assert.ok(titles.some((t) => t.includes(want)), 'нет блока «' + want + '»: ' + titles.join(' | '));
   }
-  assert.ok(!titles.some((t) => t.includes('Здоровье')), 'раздел «Здоровье» попал в окно регистрации');
+  for (const gone of ['Личные данные', 'Документы и резидентство', 'Контакты и адрес', 'Направление и скидка', 'Здоровье']) {
+    assert.ok(!titles.some((t) => t.includes(gone)), 'в быстром окне остался раздел «' + gone + '»: ' + titles.join(' | '));
+  }
   const sections = walk(dlg.body).filter((n) => hasClass(n, 'mg-section') && !hasClass(n, 'mg-search'));
-  assert.ok(sections.length >= 4, 'разделов меньше четырёх: ' + sections.length);
+  const reqs = sections.filter((n) => walk(n).some((c) => c.tagName === 'H3'
+    && textOf(c).replace(/<svg[\s\S]*?<\/svg>/g, '').includes('Реквизиты пациента')));
+  assert.strictEqual(reqs.length, 1, 'разделов реквизитов не один: ' + reqs.length);
+
+  // Поля раздела — ровно образец владельца, и «Код отправителя» с «Типом
+  // скидки» среди них.
+  const labels = walk(reqs[0]).filter((n) => n.tagName === 'LABEL')
+    .map((n) => textOf(n).replace(/\s+/g, ' ').trim());
+  assert.deepStrictEqual(labels, [
+    'Фамилия *', 'Имя *', 'Отчество',
+    'Дата рождения *', 'Пол *', 'Телефон',
+    'Паспортные данные', 'Резидентство', 'Область',
+    'Адрес', 'Тип скидки',
+    'Код отправителя (лечащий врач)',
+  ], 'поля быстрой регистрации: ' + labels.join(' | '));
+  for (const gone of ['Email', 'Махалля', 'ПИНФЛ (ЖШШИР)', 'Район', 'Страна', 'Предпочитаемый язык']) {
+    assert.ok(!labels.includes(gone), 'в быстром окне осталось поле «' + gone + '»');
+  }
 
   // Кнопки таблицы услуг.
   assert.ok(btnByText(dlg.card, '+Услуги'), 'нет кнопки «+Услуги»');
@@ -419,14 +440,17 @@ test('услуга требует врача, врач не выбран — с�
 
 test('дубликат: «использовать существующего» регистрирует визит на найденного пациента', async () => {
   reset();
-  // Страж дублей ищет по patients: совпадение по ПИНФЛ — сильный признак.
+  // Страж дублей ищет по patients: телефон И имя — тот же человек
+  // (PATIENT_DUP_RULE_V2). ПИНФЛ здесь больше не спрашивают: быстрое окно
+  // показывает только реквизиты образца (FAST_REG_COMPACT_V1), и признаком
+  // дубля работает то, что в нём есть.
   patientRows = [{ id: 42, mrn: 'P-42', full_name: 'Каримова Азиза', last_name: 'Каримова', first_name: 'Азиза',
-                   middle_name: '', phone: '', date_of_birth: '1990-04-01', national_id: '12345678901234' }];
+                   middle_name: '', phone: '+998 90 961 00 04', date_of_birth: '1990-04-01' }];
   const dlg = openFastRegistrationDialog({});
   await tick(40);
 
   fillMinimum(dlg);
-  dlg.fields.national_id.value = '12345678901234';
+  dlg.fields.phone.value = '+998909610004';
   const row = dlg.state.addLine(SERVICES[0], null);
   row.sel.value = '7';
   row.sel.fireChange();
@@ -501,15 +525,15 @@ test('Esc под дочерним диалогом закрывает ЕГО, а
 // ===========================================================================
 test('Enter под дочерним диалогом не запускает сохранение заново', async () => {
   reset();
-  // Страж дублей найдёт совпадение по ПИНФЛ и откроет свой диалог — настоящий,
-  // а не подставленный: проверяется поведение под ним.
+  // Страж дублей найдёт совпадение по телефону и имени и откроет свой диалог —
+  // настоящий, а не подставленный: проверяется поведение под ним.
   patientRows = [{ id: 42, mrn: 'P-42', full_name: 'Каримова Азиза', last_name: 'Каримова', first_name: 'Азиза',
-                   middle_name: '', phone: '', date_of_birth: '1990-04-01', national_id: '12345678901234' }];
+                   middle_name: '', phone: '+998 90 961 00 04', date_of_birth: '1990-04-01' }];
   const dlg = openFastRegistrationDialog({});
   await tick(40);
 
   fillMinimum(dlg);
-  dlg.fields.national_id.value = '12345678901234';
+  dlg.fields.phone.value = '+998909610004';
   const row = dlg.state.addLine(SERVICES[0], null);
   row.sel.value = '7';
   row.sel.fireChange();
@@ -864,6 +888,11 @@ test('пациент найден строкой поиска: форма зап
   assert.ok(dlg.state.patient && dlg.state.patient.id === 42, 'выбор не взял карту найденного');
   assert.ok(dlg.fields.last_name.disabled, 'поля чужой карты остались редактируемыми');
   assert.ok(textOf(dlg.card).includes('P-42'), 'в окне не видно, на кого записываем');
+  // FAST_REG_COMPACT_V1 — «Код отправителя» стоит в том же разделе, что и поля
+  // карты, но он поле ВИЗИТА: у найденного пациента карту трогать нельзя, а
+  // направление у сегодняшнего визита своё, и запирать его вместе с картой
+  // значило бы терять его на каждом найденном пациенте.
+  assert.ok(!dlg.referralSel.disabled, 'направление заперто вместе с чужой картой');
 
   // «Сменить» возвращает форму заведения новой карты.
   btnByText(dlg.card, 'Сменить').click();
