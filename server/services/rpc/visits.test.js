@@ -135,3 +135,122 @@ test('CRM_LINKS_V1: заявка в СВОЕЙ колонке воронки т�
   assert.equal(st(2), 'came');
   assert.equal(st(3), 'stopped', 'закрытая заявка ожила');
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_LINKS_V1 (2026-09-20) — ЗАКРЫТИЕ СТРОК ЗАЯВКИ ЖИВЁТ ЗДЕСЬ, НА СЕРВЕРЕ
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Заявка колл-центра — это НЕ одна дата. С миграции 057 у неё строки
+// (crm_request_services), у каждой своя услуга и свой день: «УЗИ во вторник,
+// анализы в среду» — одна заявка. А переход «Пришёл» смотрел ТОЛЬКО на
+// родителя: первый же визит закрывал заявку целиком, и оставшиеся два дня
+// исчезали у регистратуры — в смете ничего не подставлялось, в отчёте
+// «запись вперёд» их не было.
+//
+// Зеркальная половина того же бага жила на клиенте: окно быстрой регистрации
+// звало closeCrmLinesForPatient(), а та отбирала родителей по ОТКРЫТЫМ
+// ступеням — после серверного перехода в «Пришёл» открытых уже не было, и
+// строки оставались 'pending' навсегда. Код, который никогда ничего не делал.
+//
+// Правило теперь одно и стоит там, где заводится визит: строки этого дня (и
+// просроченные) → 'done'; родитель уходит в «Пришёл» ТОЛЬКО когда ждать
+// больше нечего, иначе остаётся в своей колонке с датой ближайшей оставшейся
+// строки.
+const addReq = (db, { status = 'scheduled', date = null, patient = 1, name = 'Лид' } = {}) =>
+  db.prepare('INSERT INTO crm_requests (full_name, phone, status, patient_id, scheduled_date) VALUES (?,?,?,?,?)')
+    .run(name, '998900000000', status, patient, date).lastInsertRowid;
+const addLine = (db, requestId, { date = null, status = 'pending' } = {}) =>
+  db.prepare('INSERT INTO crm_request_services (request_id, service_id, scheduled_date, status) VALUES (?,NULL,?,?)')
+    .run(requestId, date, status).lastInsertRowid;
+const lineStatus = (db, id) => db.prepare('SELECT status FROM crm_request_services WHERE id=?').get(id).status;
+const reqRow = (db, id) => db.prepare('SELECT status, scheduled_date FROM crm_requests WHERE id=?').get(id);
+
+test('CRM_LINKS_V1: заявка на один день — строка закрыта, заявка «Пришёл»', async () => {
+  const db = freshDb();
+  const rid = addReq(db, { date: '2026-08-09' });
+  const lid = addLine(db, rid, { date: '2026-08-09' });
+
+  await ensureVisit(db, { patient_id: 1, date: '2026-08-09' }, REG);
+
+  assert.equal(lineStatus(db, lid), 'done',
+    'строка заявки осталась «pending»: завтра регистратура снова увидит в смете уже оплаченную услугу');
+  assert.equal(reqRow(db, rid).status, 'came', 'ждать больше нечего, а заявка не закрылась');
+});
+
+test('CRM_LINKS_V1: заявка на три дня переживает первый визит', async () => {
+  const db = freshDb();
+  const rid = addReq(db, { date: '2026-08-09' });
+  const d1 = addLine(db, rid, { date: '2026-08-09' });
+  const d2 = addLine(db, rid, { date: '2026-08-10' });
+  const d3 = addLine(db, rid, { date: '2026-08-11' });
+
+  await ensureVisit(db, { patient_id: 1, date: '2026-08-09' }, REG);
+
+  assert.equal(lineStatus(db, d1), 'done', 'услуга первого дня оформлена, а её строка всё ещё ждёт');
+  assert.equal(lineStatus(db, d2), 'pending', 'второй день закрылся вместе с первым — регистратура его не увидит');
+  assert.equal(lineStatus(db, d3), 'pending', 'третий день закрылся вместе с первым');
+  const after1 = reqRow(db, rid);
+  assert.equal(after1.status, 'scheduled', 'заявка ушла в «Пришёл», хотя два дня ещё впереди');
+  assert.equal(after1.scheduled_date, '2026-08-10',
+    'дата заявки осталась вчерашней: ночная автоматика унесёт живую заявку в «Не пришёл»');
+
+  await ensureVisit(db, { patient_id: 1, date: '2026-08-10' }, REG);
+  assert.equal(lineStatus(db, d2), 'done');
+  assert.equal(reqRow(db, rid).scheduled_date, '2026-08-11');
+  assert.equal(reqRow(db, rid).status, 'scheduled');
+
+  await ensureVisit(db, { patient_id: 1, date: '2026-08-11' }, REG);
+  assert.equal(lineStatus(db, d3), 'done');
+  assert.equal(reqRow(db, rid).status, 'came', 'последний день оформлен, а заявка так и не закрылась');
+});
+
+test('CRM_LINKS_V1: строка на завтра не закрывается сегодняшним визитом', async () => {
+  const db = freshDb();
+  const rid = addReq(db, { status: 'approved', date: '2026-08-10' });
+  const lid = addLine(db, rid, { date: '2026-08-10' });
+
+  await ensureVisit(db, { patient_id: 1, date: '2026-08-09' }, REG);
+
+  assert.equal(lineStatus(db, lid), 'pending',
+    'завтрашняя услуга закрыта сегодняшним приходом — завтра её никто не подставит');
+  const row = reqRow(db, rid);
+  assert.equal(row.status, 'approved', 'завтрашняя запись отмечена состоявшейся');
+  assert.equal(row.scheduled_date, '2026-08-10', 'у завтрашней записи переписали дату');
+});
+
+test('CRM_LINKS_V1: справочник ступеней пуст — визит закрывает заявку сидовой воронкой', async () => {
+  const db = freshDb();
+  const rid = addReq(db, { status: 'scheduled' });
+  const lid = addLine(db, rid, { date: '2026-08-09' });
+  // Справочник недоступен (пустая таблица — тот же исход, что отказ чтения):
+  // ссылку на него снимаем, иначе удалить строки не даст внешний ключ.
+  db.pragma('foreign_keys = OFF');
+  db.prepare('DELETE FROM crm_stages').run();
+
+  await ensureVisit(db, { patient_id: 1, date: '2026-08-09' }, REG);
+
+  assert.equal(lineStatus(db, lid), 'done', 'без справочника визит перестал закрывать строки');
+  assert.equal(reqRow(db, rid).status, 'came', 'без справочника переход «Пришёл» пропал совсем');
+  db.pragma('foreign_keys = ON');
+});
+
+// CRM_LINKS_V1 — «НЕ ПРИШЁЛ» ЭТО ИМЯ, А НЕ «ЛЮБАЯ ПРОИГРЫШНАЯ КОЛОНКА».
+//
+// Закрывать визитом надо и того, кто в прошлый раз не пришёл: он пришёл
+// сейчас, и это та самая конверсия. Но запасной вариант noShowStageKey()
+// отдаёт ПЕРВУЮ проигрышную колонку, когда сидовой нет, — и клиника,
+// переименовавшая «Не пришёл», получала визит, воскрешающий «Обработка
+// остановлена»: заявку, с которой осознанно перестали работать, продукт
+// объявлял дошедшей.
+test('CRM_LINKS_V1: визит не воскрешает «Обработка остановлена» вместо «Не пришёл»', async () => {
+  const db = freshDb();
+  const stopped = addReq(db, { status: 'stopped', name: 'мёртвая' });
+  // Сидовой колонки «Не пришёл» в этой клинике больше нет — первой проигрышной
+  // стала «Обработка остановлена».
+  db.prepare("DELETE FROM crm_stages WHERE key = 'no_show'").run();
+
+  await ensureVisit(db, { patient_id: 1, date: '2026-08-09' }, REG);
+
+  assert.equal(reqRow(db, stopped).status, 'stopped',
+    'визит объявил дошедшей заявку, с которой перестали работать: запасная проигрышная колонка попала в переход');
+});

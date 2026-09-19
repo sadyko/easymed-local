@@ -1081,19 +1081,24 @@ test('медсестра без права «Регистрация пациен
 });
 
 // ===========================================================================
-// CRM_LINKS_V1 (2026-09-20) — ПРИШЁЛ ЗАПИСАННЫЙ, А НЕ «БЕЗ ЗАПИСИ».
+// CRM_LINKS_V1 (2026-09-20) — ПРИШЁЛ ЗАПИСАННЫЙ, А ЗАКРЫВАЕТ ЗАЯВКУ СЕРВЕР.
 //
 // Это окно оформляет услуги само (registerWalkIn), не проходя через
 // подстановку из заявки колл-центра. Пациент, записанный по телефону на
 // сегодня и пришедший, оформлялся здесь — а его строка заявки оставалась
-// «pending» со СЕГОДНЯШНЕЙ датой. Дальше два следствия, и оба видит клиника:
-// ночью автоматика уносит пришедшего в «Не пришёл», а завтра регистратура
-// снова получает уже оплаченную услугу подставленной в смету.
+// «pending» со СЕГОДНЯШНЕЙ датой. Ночью автоматика уносила пришедшего в
+// «Не пришёл», а завтра регистратура снова получала уже оплаченную услугу
+// подставленной в смету.
+//
+// Чинилось это здесь, на клиенте (closeCrmLinesForPatient), и не работало
+// никогда: звали её ПОСЛЕ ensure_visit, а искала она родителей по ОТКРЫТЫМ
+// ступеням — к тому моменту сервер уже перевёл заявку в «Пришёл», открытых
+// не находилось, и строки не закрывались. Теперь строки закрывает сам
+// ensure_visit, в одной транзакции с визитом, и это окно про CRM не знает
+// ВООБЩЕ: два писателя одной таблицы — это две разные правды о заявке.
 // ===========================================================================
-test('записанный колл-центром пришёл и оформлен здесь — его заявка закрывается', async () => {
+test('окно быстрой регистрации не пишет в CRM само — заявку закрывает ensure_visit', async () => {
   reset();
-  const today = (() => { const d = new Date(); const p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; })();
   crmRequests = [{ id: 501 }];
   crmLines = [{ id: 901, request_id: 501 }];
 
@@ -1108,31 +1113,15 @@ test('записанный колл-центром пришёл и оформл�
   btnByText(dlg.card, 'Сохранить').click();
   await tick(120);
 
-  const ask = calls.find((c) => c.body && c.body.table === 'crm_request_services' && (c.body.op || 'select') === 'select');
-  assert.ok(ask, 'строки заявки этого пациента на сегодня не спрошены — окно о заявке не знает');
-  assert.ok((ask.body.filters || []).some((f) => f.col === 'scheduled_date' && f.op === 'eq' && f.val === today),
-    'строки спрошены не на сегодня: ' + JSON.stringify(ask.body.filters));
+  const visit = calls.find((c) => c.kind === 'rpc' && c.name === 'ensure_visit');
+  assert.ok(visit, 'визит не заведён — закрывать заявку некому');
+  assert.strictEqual(visit.body.patient_id, 501, 'визит заведён не на этого пациента — закроется чужая заявка');
+  assert.match(String(visit.body.date), /^\d{4}-\d{2}-\d{2}/,
+    'визит заведён без дня: по дню сервер и отбирает строки заявки — ' + JSON.stringify(visit.body));
 
-  const done = calls.find((c) => c.body && c.body.table === 'crm_request_services' && c.body.op === 'update');
-  assert.ok(done, 'строка заявки осталась «pending»: ночью пришедший пациент уедет в «Не пришёл»');
-  assert.strictEqual(done.body.values.status, 'done', 'строка закрыта не как выполненная');
-  dlg.close();
-});
-
-test('заявки у пациента нет — окно ничего лишнего не пишет', async () => {
-  reset();
-  const dlg = openFastRegistrationDialog({});
-  await tick(40);
-  fillMinimum(dlg);
-  const row = dlg.state.addLine(SERVICES[0], null);
-  row.sel.value = '7';
-  row.sel.fireChange();
-
-  calls.length = 0;
-  btnByText(dlg.card, 'Сохранить').click();
-  await tick(120);
-
-  assert.ok(!calls.some((c) => c.body && c.body.table === 'crm_request_services' && c.body.op === 'update'),
-    'закрыта строка заявки, которой нет — окно пишет в CRM вслепую');
+  assert.ok(!calls.some((c) => c.table === 'crm_request_services'),
+    'окно снова ходит в crm_request_services само: закрытие строк живёт на сервере, в той же транзакции, что и визит');
+  assert.ok(!calls.some((c) => c.table === 'crm_requests'),
+    'окно правит заявки в обход сервера — два писателя дают заявке две разные истории');
   dlg.close();
 });

@@ -14,9 +14,19 @@
 // обязана пережить первый визит — иначе остальные два дня исчезнут у
 // регистратуры.
 //
+// ГДЕ ПРОХОДИТ ГРАНИЦА С СЕРВЕРОМ. Окна, которые заводят визит через
+// ensure_visit (мастер визита, быстрая регистрация), НЕ закрывают строки сами:
+// это делает сервер, в одной транзакции с визитом (rpc/visits.js →
+// settleCrmForVisit). Здесь остаются ровно те два пути, которые до ensure_visit
+// не доходят:
+//   • привязка сметы к УЖЕ существующему визиту (окно услуг визита) — RPC там
+//     нет вовсе, строки пишутся прямо в visit_services;
+//   • запись из каталога услуг, которая идёт через calendar_book, а тот про
+//     CRM не знает ничего.
+// Без этого модуля обе оставляли бы заявку «Записан» с прошедшей датой.
+//
 // Модуль не знает про экраны (нет DOM, нет тостов) — только про базу: его зовут
-// и мастер записи, и окно быстрой регистрации, и он не должен тащить за собой
-// половину продукта.
+// два мастера, и он не должен тащить за собой половину продукта.
 import { supabase } from '../supabase.js';
 // CRM_LINKS_V1 — ступени берутся ПО ВИДУ из настроенной воронки (миграция 077),
 // а не по сидовым именам: клиника вправе переименовать «Пришёл» и завести свою
@@ -51,31 +61,10 @@ export async function closeCrmLines(lineIds, requestIds = []) {
     }
 }
 
-/**
- * Закрыть ВСЕ ожидающие строки этого пациента на этот день.
- *
- * Для окон, которые оформляют услуги, не проходя через подстановку из заявки
- * (быстрая регистрация: пришедшего без записи заводят и сразу выставляют счёт).
- * Пациент записывался на сегодня и пришёл — его заявка обязана закрыться так
- * же, как если бы услугу подставил мастер.
- */
-export async function closeCrmLinesForPatient(patientId, dayIso) {
-    const day = String(dayIso || '').slice(0, 10);
-    if (!patientId || !day) return 0;
-    try {
-        const { open } = await crmStageKeys();
-        if (!open.length) return 0;
-        const { data: reqs, error } = await supabase.from('crm_requests')
-            .select('id').eq('patient_id', patientId).in('status', open);
-        if (error || !reqs || !reqs.length) return 0;
-        const reqIds = reqs.map((r) => r.id);
-        const { data: lines, error: lineErr } = await supabase.from('crm_request_services')
-            .select('id, request_id').in('request_id', reqIds)
-            .eq('scheduled_date', day).eq('status', 'pending');
-        if (lineErr || !lines || !lines.length) return 0;
-        return await closeCrmLines(lines.map((l) => l.id), lines.map((l) => l.request_id));
-    } catch (e) {
-        console.warn('[crm-lines] заявка пациента не закрыта:', e && e.message);
-        return 0;
-    }
-}
+// ЗДЕСЬ БЫЛА closeCrmLinesForPatient(patientId, dayIso) — «закрыть все
+// ожидающие строки этого пациента на этот день», для окна быстрой регистрации.
+// Удалена, потому что не работала НИ РАЗУ: её звали ПОСЛЕ ensure_visit, а
+// родителей она отбирала по ОТКРЫТЫМ ступеням — к тому моменту сервер уже
+// переводил заявку в «Пришёл», открытых не находилось, и строки оставались
+// «pending» навсегда. Теперь это делает сам ensure_visit (rpc/visits.js →
+// settleCrmForVisit), в одной транзакции с визитом и без гонки с клиентом.

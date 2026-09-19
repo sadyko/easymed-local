@@ -69,8 +69,6 @@ import { doctorPoolFor } from './doctor-pool.js?v=dp1';                        /
 import { searchableSelect } from './searchable-select.js?v=ss2';               // SEARCHABLE_SELECT_V1
 import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';    // REFERRAL_SOURCE_CODE_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';                    // WIZ_INVOICE_PRINT_V1 — тот же бланк «Счёт»
-import { closeCrmLinesForPatient } from '../crm-lines.js';                     // CRM_LINKS_V1
-import { localYmd } from '../discount-rules.js';                               // CRM_LINKS_V1 — местная дата «сегодня», как у строк заявки
 
 /** Разряды тысяч пробелом — так цену читают во всех экранах продукта. */
 function fmtPrice(n) {
@@ -767,13 +765,14 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         if (res.queueError) toast(trf('Номера очереди не выданы: {msg}', { msg: res.queueError }), 'warn');
         // CRM_LINKS_V1 — ЗАПИСАННЫЙ ПО ТЕЛЕФОНУ ПРИШЁЛ И ОФОРМЛЕН ЗДЕСЬ.
         //
-        // Это окно оформляет услуги само (registerWalkIn), не проходя через
-        // подстановку из заявки, — и заявка колл-центра на сегодня оставалась
-        // «Записан» с сегодняшней датой. Ночью автоматика уносила пришедшего
-        // пациента в «Не пришёл», а завтра регистратура снова видела уже
-        // оплаченную услугу подставленной в смету. Лучшая попытка: пациент,
-        // визит и счёт уже созданы, и сбой здесь не отменяет записи.
-        await closeCrmLinesForPatient(patient.id, localYmd());
+        // Строки заявки колл-центра закрывает СЕРВЕР, в той же транзакции, где
+        // заводится визит (ensure_visit → settleCrmForVisit). Здесь стоял вызов
+        // closeCrmLinesForPatient(), и он не работал НИКОГДА: его звали ПОСЛЕ
+        // ensure_visit, а искал он родителей по ОТКРЫТЫМ ступеням — к тому
+        // моменту сервер уже перевёл заявку в «Пришёл», открытых не
+        // находилось, и строки оставались «pending». Окно оформляет визит и
+        // счёт; про заявку оно больше не знает ничего — два писателя одной
+        // таблицы дают заявке две разные истории.
         notifySaved(patient);
         toSavedState();
         return res;

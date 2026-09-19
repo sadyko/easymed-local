@@ -14,7 +14,7 @@ import { calendarSlots, calendarBook } from './calendar.js';
 import { DEFAULT_DURATION_MIN, serviceDurationMinutes } from './slot-engine.js';
 // CRM_LINKS_V1 — воронка настраивается (миграция 077), поэтому ступени
 // спрашиваются у справочника, а не берутся из зашитого списка.
-import { openStageKeys, wonStageKey, noShowStageKey } from '../crm/config.js';
+import { openStageKeys, wonStageKey, noShowStageKey, SEED_NO_SHOW_STAGE } from '../crm/config.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400, code = null, params = null) {
@@ -180,17 +180,94 @@ export async function ensureVisit(db, args, user) {
   // приходил, визит создавался, а заявка висела и уходила в отчёт недошедшей.
   // Закрываются все ЖИВЫЕ ступени плюс «не пришёл»: человек, не пришедший в
   // прошлый раз, пришёл сейчас — это и есть та самая конверсия.
-  const flipCrmToCame = () => {
-    const closing = [...new Set([...openStageKeys(db), noShowStageKey(db)].filter(Boolean))];
-    if (!closing.length) return;
-    const holes = closing.map(() => '?').join(',');
-    db.prepare(`
-      UPDATE crm_requests
-         SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
-       WHERE patient_id = ?
-         AND status IN (${holes})
-         AND (scheduled_date IS NULL OR scheduled_date = '' OR date(scheduled_date) <= date(?))
-    `).run(wonStageKey(db), patientId, ...closing, day);
+  //
+  // CRM_LINKS_V1 (2026-09-20) — И СТРОКИ ЗАЯВКИ ТОЖЕ, А НЕ ОДИН РОДИТЕЛЬ.
+  //
+  // С миграции 057 заявка колл-центра — это НЕ одна дата: у неё строки
+  // (crm_request_services), у каждой своя услуга и свой день. «УЗИ во вторник,
+  // анализы в среду» — одна заявка. Переход же смотрел только на родителя, и
+  // первый визит закрывал заявку ЦЕЛИКОМ: оставшиеся дни исчезали у
+  // регистратуры (в смете не подставлялось ничего) и из «записи вперёд».
+  //
+  // Закрывать строки пробовал клиент — closeCrmLinesForPatient() в окне
+  // быстрой регистрации. Но звали её ПОСЛЕ ensure_visit, а отбирала она
+  // родителей по ОТКРЫТЫМ ступеням: к тому моменту родитель уже стоял в
+  // «Пришёл», открытых не находилось, и строки оставались 'pending' навсегда.
+  // Код, который не делал ничего. Правило переехало сюда, в ту же транзакцию,
+  // где заводится визит, и стало одним на все окна.
+  //
+  // «Не пришёл» берётся ТОЛЬКО сидовым именем: запасной вариант
+  // noShowStageKey() отдаёт первую проигрышную колонку, и у клиники без
+  // сидовой визит воскрешал бы «Обработка остановлена» — заявку, с которой
+  // осознанно перестали работать.
+  //
+  // Молчит при любой ошибке (как и раньше): справочник CRM не вправе отказать
+  // в визите.
+  const settleCrmForVisit = () => {
+    try {
+      const noShow = noShowStageKey(db);
+      const closing = [...new Set([
+        ...openStageKeys(db),
+        noShow === SEED_NO_SHOW_STAGE ? noShow : null,
+      ].filter(Boolean))];
+      if (!closing.length) return;
+      const holes = closing.map(() => '?').join(',');
+      const reqs = db.prepare(`
+        SELECT id, scheduled_date FROM crm_requests
+         WHERE patient_id = ? AND status IN (${holes})
+      `).all(patientId, ...closing);
+      if (!reqs.length) return;
+
+      const won = wonStageKey(db);
+      // Строка закрывается СВОЕЙ датой: сегодняшняя и просроченная визитом
+      // отработаны, завтрашняя ждёт своего дня. Строка без даты — это «когда
+      // придёт», и приход как раз случился.
+      const closeLines = db.prepare(`
+        UPDATE crm_request_services
+           SET status = 'done'
+         WHERE request_id = ? AND status = 'pending'
+           AND (scheduled_date IS NULL OR scheduled_date = '' OR date(scheduled_date) <= date(?))
+      `);
+      // Осталось ли чего ждать — и когда ближайшее. Родительские
+      // service_id/scheduled_date зеркалят строки (миграция 057), и по этой
+      // дате живут карточка, отчёт колл-центра и ночная автоматика «Не пришёл»:
+      // заявка на три дня обязана уехать на свой следующий день, а не остаться
+      // со вчерашней датой — иначе автоматика унесёт живую заявку.
+      const pendingLeft = db.prepare(`
+        SELECT COUNT(*) AS n, MIN(NULLIF(scheduled_date, '')) AS next
+          FROM crm_request_services WHERE request_id = ? AND status = 'pending'
+      `);
+      const moveOn = db.prepare(`
+        UPDATE crm_requests
+           SET scheduled_date = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+         WHERE id = ?
+      `);
+      const toWon = db.prepare(`
+        UPDATE crm_requests
+           SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+         WHERE id = ?
+      `);
+
+      for (const r of reqs) {
+        closeLines.run(r.id, day);
+        const left = pendingLeft.get(r.id);
+        if (left && left.n) {
+          // Ждать ещё есть чего — заявка остаётся в своей колонке.
+          if ((r.scheduled_date || null) !== (left.next || null)) moveOn.run(left.next, r.id);
+          continue;
+        }
+        // CRM_FUTURE_LEAD_V2 — заявка, назначенная на день ПОСЛЕ визита, не
+        // закрывается сегодняшним приходом: консультация, записанная на месяц
+        // вперёд, пропадала из списка записанных, а воронка засчитывала
+        // конверсию, которой не было. Заявка без даты (обращение «просто так»)
+        // закрывается, как и прежде.
+        const at = String(r.scheduled_date || '').trim().slice(0, 10);
+        if (at && at > day) continue;
+        toWon.run(won, r.id);
+      }
+    } catch (e) {
+      console.error('[ensure_visit] заявки CRM не пересчитаны:', e && e.message);
+    }
   };
 
   // ─── ПРОВЕРКА ДО ПЕРВОЙ ЗАПИСИ В БАЗУ ─────────────────────────────────────
@@ -252,7 +329,7 @@ export async function ensureVisit(db, args, user) {
         db.prepare('UPDATE visits SET doctor_id = ? WHERE id = ?').run(doctorId, existing.id);
         existing.doctor_id = doctorId;
       }
-      if (!book) flipCrmToCame();
+      if (!book) settleCrmForVisit();
       return { visit: existing, created: false };
     }
 
@@ -263,7 +340,7 @@ export async function ensureVisit(db, args, user) {
       INSERT INTO visits (patient_id, doctor_id, branch_id, visit_date, visit_type, status, referral_source_id, notes, created_by)
       VALUES (?, ?, ?, ?, ?, 'scheduled', ?, ?, ?)
     `).run(patientId, doctorId, branchId, whenIso, visitType, sourceId, notes, user.id);
-    if (!book) flipCrmToCame();
+    if (!book) settleCrmForVisit();
     return { visit: db.prepare('SELECT * FROM visits WHERE id = ?').get(info.lastInsertRowid), created: true };
   });
 
@@ -299,12 +376,12 @@ export async function ensureVisit(db, args, user) {
       // те миллисекунды, что прошли между проверкой и записью. Строка,
       // созданная секунду назад, удаляется целиком: после отказа не остаётся
       // ни визита-сироты, ни услуги, ни счёта. Заявка CRM тоже не закрывается
-      // — flipCrmToCame ниже до неё не доходит.
+      // — settleCrmForVisit ниже до неё не доходит.
       try { db.prepare('DELETE FROM visits WHERE id = ?').run(out.visit.id); }
       catch (delErr) { console.error('[ensure_visit] откат визита', out.visit.id, 'не удался:', delErr && delErr.message); }
       throw e;
     }
   }
-  flipCrmToCame();
+  settleCrmForVisit();
   return { ...out, booked: !!out.created };
 }
