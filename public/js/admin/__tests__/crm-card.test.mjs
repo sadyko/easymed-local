@@ -100,6 +100,11 @@ let LEADS = [];
 // сервер: «передал заявку другому» — это строка в базе, а не выбранный пункт
 // в списке.
 let STAFF = [];
+// CRM_LINKS_V1 — каталог услуг и СТРОКИ заявки (crm_request_services): окно
+// заявки собирает из них свой список услуг, а «Записать на дату» назначает
+// каждой дату. Без каталога окно не знает ни одной услуги, и записывать нечего.
+let SERVICES = [];
+let REQ_LINES = [];
 const CALLS = [];
 // CRM_REASSIGN_V1 — один отказ выборки персонала «по требованию»: список
 // операторов не грузится ровно один раз, дальше — как обычно.
@@ -119,6 +124,8 @@ globalThis.fetch = async (url, opts) => {
       if (failStaffOnce) { failStaffOnce = false; return { ok: false, json: async () => ({ error: { message: 'boom' } }) }; }
       return jsonOk(STAFF);
     }
+    if (body && body.table === 'services' && body.op === 'select') return jsonOk(SERVICES);
+    if (body && body.table === 'crm_request_services' && body.op === 'select') return jsonOk(REQ_LINES);
     return jsonOk([]);
   }
   return jsonOk([]);
@@ -528,5 +535,129 @@ test('сбой загрузки персонала — текущий опера
   const sel = operatorSelect(modal);
   assert.ok(sel, 'в карточке заявки нет поля «Оператор»');
   assert.strictEqual(sel.value, '7', 'сбой загрузки списка снял текущего оператора с поля');
+  window.easymed.state.user = null;
+});
+
+// ═══ 7. «ЗАПИСАТЬ НА ДАТУ» СТАВИТ ДАТУ И СТУПЕНЬ ════════════════════════════
+//
+// CRM_LINKS_V1 (2026-09-20). Колл-центр назначает дату каждой услуге в окне
+// «Даты приёма» — и карточка на доске оставалась в «В обработке» без метки
+// даты: crm_requests.scheduled_date / status считались по ОТДЕЛЬНОМУ,
+// оторванному от документа полю-зеркалу, которое окно дат не трогало.
+//
+// Цена — не косметика. По этим двум колонкам живут: метка «записан на …» на
+// карточке, отчёт колл-центра (KPI «Записан» и «запись вперёд») и ночная
+// автоматика «день прошёл без визита → Не пришёл». Записанный пациент был
+// невидим всем троим.
+//
+// Проверяется то, что уходит на сервер, а не вид окна: дата ставится ТЕМ ЖЕ
+// полем, что и человеком, и после «Сохранить и записать» строка заявки обязана
+// нести и дату, и ступень «Записан».
+
+const SVC = { id: 10, name: 'УЗИ почек', price: 120000, requires_doctor: 0, active: 1, type: 'imaging' };
+const BOOK_DAY = '2026-10-05';
+
+/** Заявка привязанного пациента с одной услугой — и открытое окно этой заявки. */
+async function openBookable() {
+  SERVICES = [SVC];
+  REQ_LINES = [{ service_id: SVC.id, scheduled_date: '', status: 'pending', doctor_id: null }];
+  const modal = await openRequest({
+    id: 1, status: 'in_process', service_id: SVC.id, scheduled_date: null,
+    full_name: 'Каримова Азиза', phone: UZ_RAW,
+    patient_id: 7, patients: { id: 7, full_name: 'Каримова Азиза', mrn: 'A-000123' },
+  }, { id: 7, full_name: 'Админ', role: 'admin', is_admin: true });
+  return modal;
+}
+
+/** Окно «Даты приёма» — открывается той же кнопкой, что нажимает оператор. */
+async function openScheduleSheet(modal) {
+  const btn = walk(modal).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Записать на дату'));
+  assert.ok(btn, 'кнопка «Записать на дату» пропала из окна заявки');
+  btn.click();
+  await tick(60);
+  const sheet = document.body.children.filter((n) => hasClass(n, 'modal')).pop();
+  assert.ok(sheet && sheet !== modal, 'окно «Даты приёма» не открылось');
+  return sheet;
+}
+
+const dateInputs = (root) => walk(root).filter((n) => n.tagName === 'INPUT' && n.getAttribute('type') === 'date');
+
+test('«Записать на дату»: дата из окна дат доезжает до заявки, а заявка — в «Записан»', async () => {
+  const modal = await openBookable();
+  const sheet = await openScheduleSheet(modal);
+
+  // В окне два поля даты: «одна дата для всех» и строка услуги. Ставим дату
+  // строке — тем же действием, что человек.
+  const inputs = dateInputs(sheet);
+  assert.ok(inputs.length >= 2, 'в окне «Даты приёма» нет поля даты у строки услуги');
+  const rowDate = inputs[inputs.length - 1];
+  rowDate.value = BOOK_DAY;
+  rowDate.dispatchEvent({ type: 'change', target: rowDate, currentTarget: rowDate });
+
+  const save = walk(sheet).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Сохранить и записать'));
+  assert.ok(save, 'кнопка «Сохранить и записать» пропала из окна дат');
+  save.click();
+  await tick(80);
+
+  const row = savedRow();
+  assert.ok(row, 'сохранение не дошло до базы');
+  assert.strictEqual(row.values.scheduled_date, BOOK_DAY,
+    'заявка сохранилась без даты записи: карточка останется без метки, а ночная автоматика «Не пришёл» никогда не сработает');
+  assert.strictEqual(row.values.status, 'scheduled',
+    'записанная заявка осталась в «В обработке» — в воронке нет ни одного «записан»');
+  window.easymed.state.user = null;
+});
+
+test('«Применить ко всем» — тот же результат: дата уходит в заявку', async () => {
+  const modal = await openBookable();
+  const sheet = await openScheduleSheet(modal);
+
+  const all = dateInputs(sheet)[0];
+  all.value = BOOK_DAY;
+  const applyAll = walk(sheet).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Применить ко всем'));
+  assert.ok(applyAll, 'кнопка «Применить ко всем» пропала из окна дат');
+  applyAll.click();
+  await tick();
+
+  walk(sheet).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Сохранить и записать')).click();
+  await tick(80);
+
+  const row = savedRow();
+  assert.ok(row, 'сохранение не дошло до базы');
+  assert.strictEqual(row.values.scheduled_date, BOOK_DAY,
+    '«Применить ко всем» проставило даты в окне, но заявка ушла на сервер без даты');
+  window.easymed.state.user = null;
+});
+
+test('самая РАННЯЯ дата становится датой заявки: карточка показывает ближайший приём', async () => {
+  SERVICES = [SVC, { id: 11, name: 'Анализ крови', price: 40000, requires_doctor: 0, active: 1, type: 'lab' }];
+  REQ_LINES = [
+    { service_id: 11, scheduled_date: '', status: 'pending', doctor_id: null },
+    { service_id: 10, scheduled_date: '', status: 'pending', doctor_id: null },
+  ];
+  const modal = await openRequest({
+    id: 1, status: 'in_process', service_id: 11, scheduled_date: null,
+    full_name: 'Каримова Азиза', phone: UZ_RAW,
+    patient_id: 7, patients: { id: 7, full_name: 'Каримова Азиза', mrn: 'A-000123' },
+  }, { id: 7, full_name: 'Админ', role: 'admin', is_admin: true });
+  const sheet = await openScheduleSheet(modal);
+
+  // Первой строкой идёт «Анализ крови» (порядок строк заявки), но назначена она
+  // на ПОЗДНИЙ день. Ближайший приём — второй строкой.
+  const rows = dateInputs(sheet).slice(1);
+  assert.strictEqual(rows.length, 2, 'ожидались две строки услуг');
+  rows[0].value = '2026-10-09';
+  rows[0].dispatchEvent({ type: 'change', target: rows[0], currentTarget: rows[0] });
+  rows[1].value = BOOK_DAY;
+  rows[1].dispatchEvent({ type: 'change', target: rows[1], currentTarget: rows[1] });
+
+  walk(sheet).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Сохранить и записать')).click();
+  await tick(80);
+
+  const row = savedRow();
+  assert.ok(row, 'сохранение не дошло до базы');
+  assert.strictEqual(row.values.scheduled_date, BOOK_DAY,
+    'датой заявки стала не ближайшая: карточка обещает приём позже, чем пациента ждут');
+  SERVICES = []; REQ_LINES = [];
   window.easymed.state.user = null;
 });

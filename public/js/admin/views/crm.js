@@ -1104,6 +1104,8 @@ async function paint() {
         // svcChosen остаётся первой услугой списка: crm_requests.service_id и
         // карточка канбана по-прежнему читают её (см. миграцию 057).
         let picked = [];
+        // CRM_LINKS_V1 — доехали ли строки услуг заявки из базы (см. primaryDate).
+        let linesLoaded = !r;
         let svcChosen = r ? (r.service_id || null) : null;
         let svcCatalog = [];
         let docCatalog = [];   // CRM_LINE_DOCTOR_V1
@@ -1155,14 +1157,33 @@ async function paint() {
             syncPrimary();
             paintPicked();
         }
-        // crm_requests.service_id / scheduled_date зеркалят ПЕРВУЮ строку —
+        // crm_requests.service_id / scheduled_date зеркалят строки услуг —
         // канбан-карточка и выгрузка Excel читают именно их (миграция 057).
         function syncPrimary() {
             svcChosen = picked.length ? picked[0].service_id : null;
-            // Зеркало ВСЕГДА, включая очистку: иначе у заявки оставалась старая
-            // дата в родителе, и карточка канбана показывала «Записан на …»,
-            // когда у услуг уже другие даты (или их нет вовсе).
-            schedInp.value = (picked.length && picked[0].date) ? picked[0].date : '';
+        }
+        // CRM_LINKS_V1 — ДАТА ЗАЯВКИ СЧИТАЕТСЯ ПО СТРОКАМ, А НЕ ПО ЗЕРКАЛУ.
+        //
+        // Здесь стояло отдельное поле-зеркало (`schedInp`), которое не было ни в
+        // одном окне и которое обновлял ровно один писатель — syncPrimary().
+        // Окно «Даты приёма» правит `picked[i].date` напрямую (и строкой, и
+        // «Применить ко всем»), мимо него, — и persist() уносил на сервер
+        // ПУСТОЕ зеркало: заявка оставалась в «В обработке» без даты.
+        //
+        // Цена этого — не метка на карточке. По scheduled_date/status живут
+        // отчёт колл-центра («Записан», «запись вперёд») и ночная автоматика
+        // «день прошёл без визита → Не пришёл»: записанный пациент был невидим
+        // всем троим.
+        //
+        // Зеркалим САМУЮ РАННЮЮ назначенную дату: карточка отвечает на вопрос
+        // «когда его ждут», а ждут — в ближайший из назначенных дней. Ни одной
+        // даты нет — зеркало пустое (включая очистку: иначе у заявки осталась бы
+        // прежняя дата, когда у услуг её уже нет).
+        function primaryDate() {
+            // Строки ещё не доехали из базы — сохранять «дат нет» нельзя: это
+            // стёрло бы дату у заявки, открытой и сохранённой в первую секунду.
+            if (isEdit && !linesLoaded) return (r && r.scheduled_date) || '';
+            return picked.map((p) => p.date).filter(Boolean).sort()[0] || '';
         }
         function paintPicked() {
             clear(pickedList);
@@ -1266,6 +1287,7 @@ async function paint() {
                             const sv = svcCatalog.find(x => String(x.id) === String(svcChosen));
                             if (sv) picked.push({ service_id: sv.id, name: sv.name, price: sv.price, date: r.scheduled_date || '' });
                         }
+                        linesLoaded = true;
                         syncPrimary(); paintPicked();
                     });
             } else if (svcChosen) {
@@ -1275,8 +1297,6 @@ async function paint() {
         });
         const noteInp  = h('textarea', { rows: '3', placeholder: 'Что нужно пациенту, когда перезвонить…' });
         if (r) noteInp.value = r.note || '';
-        // CRM_V7 — дата записи: питает автоматику (день прошёл без визита → «Не пришёл»).
-        const schedInp = h('input', { type: 'date', value: r ? (r.scheduled_date || '') : '' });
 
         // CRM_REASSIGN_V1 — «ОПЕРАТОР»: ЕДИНСТВЕННОЕ МЕСТО, ГДЕ ЗАЯВКУ ПЕРЕДАЮТ.
         //
@@ -1350,7 +1370,9 @@ async function paint() {
             // скрыто и обязательным быть не может (CRM_V11).
             const phone = phoneInp.value.trim() || (linkedPatient ? (linkedPatient.phone || '') : '');
             if (!phone && !linkedPatient) { toast('Укажите телефон.', 'fail'); return null; }
-            const payload = { full_name: name, phone, source: srcChosen, note: noteInp.value.trim(), service_id: svcChosen || null, patient_id: linkedPatient ? linkedPatient.id : null, scheduled_date: schedInp.value || null };
+            // CRM_LINKS_V1 — дата берётся из строк услуг (см. primaryDate).
+            const bookedDate = primaryDate();
+            const payload = { full_name: name, phone, source: srcChosen, note: noteInp.value.trim(), service_id: svcChosen || null, patient_id: linkedPatient ? linkedPatient.id : null, scheduled_date: bookedDate || null };
             // CRM_REASSIGN_V1 — ключ уходит на сервер ТОЛЬКО когда поле было
             // нарисовано. Оператор, правящий комментарий в своей заявке, не
             // должен отправлять «хозяин = такой-то»: поля он не видел, значения
@@ -1359,7 +1381,7 @@ async function paint() {
             // Дата записи назначена — активная заявка сама переходит в «Записан».
             // CRM_CONFIG_V1 — правило прежнее (дата назначена → «Записан»), но
             // целевая колонка проверяется: если её удалили, статус не трогаем.
-            if (isEdit && schedInp.value && ['in_process', 'recall'].includes(r.status) && hasStage('scheduled')) payload.status = 'scheduled';
+            if (isEdit && bookedDate && ['in_process', 'recall'].includes(r.status) && hasStage('scheduled')) payload.status = stageKey('scheduled');
             if (isEdit) {
                 const { error } = await supabase.from('crm_requests').update(payload).eq('id', r.id);
                 if (error) { toast(error.message, 'fail'); return null; }
@@ -1372,7 +1394,7 @@ async function paint() {
                 return r;
             }
             const { data, error } = await supabase.from('crm_requests')
-                .insert({ ...payload, status: schedInp.value ? stageKey('scheduled') : stageKey('in_process'), ...(uid() != null ? { created_by: uid() } : {}) })
+                .insert({ ...payload, status: bookedDate ? stageKey('scheduled') : stageKey('in_process'), ...(uid() != null ? { created_by: uid() } : {}) })
                 .select().single();
             if (error) { toast(error.message, 'fail'); return null; }
             // insert не возвращает join'ы — подставляем услугу из каталога, иначе
