@@ -12,8 +12,18 @@
 // счёт. Промежуточного состояния «полпациента» больше нет.
 //
 // ПОЛЯ ПАЦИЕНТА ЗДЕСЬ НЕ СВОИ. Их рисует buildPatientFields (PATIENT_FIELDS_V1,
-// views/patient-create-modal.js) — тот же набор, те же обязательные поля, та же
-// проверка. Второй набор полей разошёлся бы с первым МОЛЧА.
+// views/patient-create-modal.js) — те же контролы, те же обязательные поля, та
+// же проверка. Второй набор полей разошёлся бы с первым МОЛЧА.
+//
+// FAST_REG_COMPACT_V1 (2026-09-19) — НО НАБОР ЗДЕСЬ КОРОЧЕ, И ЭТО РЕШЕНИЕ.
+// Владелец: «смысл быстрой регистрации в том, чтобы в окне было только
+// необходимое, как на образце, а вы добавили паспорта, географию и прочее, что
+// для быстрой не нужно». Поэтому сборщик зовётся компактной раскладкой
+// (layout: 'compact') — ОДИН раздел «Реквизиты пациента» ровно с полями
+// образца: ФИО, дата рождения, пол, телефон, паспортные данные, резидентство,
+// область, адрес, код отправителя, тип скидки. Всё остальное — ПИНФЛ, язык,
+// гражданство, почта, район, махалля, здоровье — работа КАРТЫ пациента, и
+// живёт в полной раскладке того же сборщика.
 //
 // ЦЕПОЧКА СОХРАНЕНИЯ ТОЖЕ НЕ СВОЯ. Визит → строки → счёт → очередь ведёт
 // registerWalkIn (WALK_IN_BOOKING_V1, views/walk-in-booking.js) — та же
@@ -220,26 +230,33 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     body.appendChild(pickedBar);
 
     // ── блок 1: реквизиты пациента (поля сборщика) ────────────────────────
-    const patientBox = h('div');
-    body.appendChild(patientBox);
-    const api = buildPatientFields(patientBox, {
-        sections: ['personal', 'documents', 'contacts'],
-        withSearchStrip: false,          // строка поиска у окна своя, см. выше
-        onNavigate: navigate,
-        close: () => {},                 // окно закрывает себя само
-    });
-
-    // ── блок 1а: направление и скидка ─────────────────────────────────────
+    // FAST_REG_COMPACT_V1 — компактная раскладка сборщика: ОДИН раздел ровно с
+    // полями образца владельца. Раньше сюда брали три раздела карты пациента,
+    // и в быстрое окно приезжали ПИНФЛ, язык, гражданство, район, махалля и
+    // почта — владелец: «в быстрой регистрации должно быть только необходимое».
+    //
+    // «Код отправителя» уходит ВНУТРЬ того же раздела пятым рядом: на образце
+    // он стоит там же, а своим разделом он был четвёртым блоком в окне, где
+    // блоков теперь один. Строит его окно, потому что это поле ВИЗИТА: карта
+    // пациента о направлении не знает и в patients его не пишут.
     const referralSel = h('select', { name: '__referral_source' },
         h('option', { value: '' }, '— Без направления —'));
     const referralWrap = searchableSelect(referralSel, { placeholder: 'Номер или имя…' });
-    const referralSection = h('div', { class: 'mg-section' },
-        h('h3', { class: 'has-step' }, h('span', { class: 'mg-step' }, '4'), tr('Направление и скидка')),
-        h('div', { class: 'mg-grid cols-3' },
-            field('Код отправителя (лечащий врач)', referralWrap)),
-        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
-            tr('Тип скидки — это «Категория пациента» в разделе «Документы и резидентство»: процент по ней применяет сервер при выставлении счёта.')));
-    body.appendChild(referralSection);
+    const referralField = field('Код отправителя (лечащий врач)', referralWrap);
+    referralField.style.gridColumn = 'span 2';
+    // data-keep-enabled — метка для setPatientFormEnabled: поле стоит среди
+    // полей карты, но запирается НЕ с ними (см. там же).
+    const referralRow = h('div', { class: 'mg-grid cols-3', dataset: { keepEnabled: '1' } }, referralField);
+
+    const patientBox = h('div');
+    body.appendChild(patientBox);
+    const api = buildPatientFields(patientBox, {
+        layout: 'compact',               // FAST_REG_COMPACT_V1 — только реквизиты образца
+        withSearchStrip: false,          // строка поиска у окна своя, см. выше
+        extraRows: [referralRow],
+        onNavigate: navigate,
+        close: () => {},                 // окно закрывает себя само
+    });
 
     // ── блок 2: услуги ────────────────────────────────────────────────────
     const countEl = h('span', { class: 'h-count' }, '0');
@@ -550,6 +567,11 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     function setPatientFormEnabled(on) {
         const walk = (node) => {
             for (const c of (node.children || [])) {
+                // FAST_REG_COMPACT_V1 — «Код отправителя» живёт среди полей
+                // карты, но это поле ВИЗИТА: у найденного пациента карта
+                // запирается (её не наша забота), а направление у сегодняшнего
+                // визита своё — и запертым оно терялось бы на каждом найденном.
+                if (c.dataset && c.dataset.keepEnabled) continue;
                 const tag = String(c.tagName || '').toUpperCase();
                 if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON') {
                     c.disabled = !on;

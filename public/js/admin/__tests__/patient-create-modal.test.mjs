@@ -937,6 +937,111 @@ test('PATIENT_FIELDS_V1: набор полей рисуется в обычны�
   assert.ok(f2.searchStrip && f2.searchStrip.input, 'строка поиска не отдана вызвавшему');
 });
 
+// ===========================================================================
+// FAST_REG_COMPACT_V1 (2026-09-19) — КОМПАКТНАЯ РАСКЛАДКА ТОГО ЖЕ СТРОИТЕЛЯ.
+//
+// Владелец: «смысл быстрой регистрации в том, чтобы в окне было только
+// необходимое, как на образце, а вы добавили паспорта, географию и прочее,
+// что для быстрой не нужно». Образец — один блок реквизитов: ФИО, дата
+// рождения, пол, телефон, паспортные данные, резидентство, область, адрес,
+// код отправителя и тип скидки. Ровно это и проверяется — СПИСКОМ, а не
+// «примерно теми же полями»: лишнее поле возвращается в окно молча.
+//
+// И обратная сторона: раз поле не нарисовано, его нет и в реестре, значит
+// collect() не шлёт по нему пустую строку (PATIENT_FIELDS_V1).
+// ===========================================================================
+test('FAST_REG_COMPACT_V1: compact — одна секция «Реквизиты пациента» ровно с полями образца', () => {
+  reset();
+  const box = mk('div');
+  const f = modal.buildPatientFields(box, { layout: 'compact', withSearchStrip: false });
+
+  // 1. Раздел ОДИН и без номера: нумеровать нечего.
+  const secs = walk(box).filter((n) => hasClass(n, 'mg-section'));
+  assert.equal(secs.length, 1, 'разделов в компактной раскладке не один: ' + secs.length);
+  const titles = walk(box).filter((n) => n.tagName === 'H3')
+    .map((n) => textOf(n).replace(/<svg[\s\S]*?<\/svg>/g, '').replace(/\s+/g, ' ').trim());
+  assert.deepEqual(titles, ['Реквизиты пациента'], 'заголовки компактной раскладки: ' + titles.join(' | '));
+
+  // 2. Поля — РОВНО образец, в порядке образца.
+  assert.deepEqual(labelsOf(box), [
+    'Фамилия *', 'Имя *', 'Отчество',
+    'Дата рождения *', 'Пол *', 'Телефон',
+    'Паспортные данные', 'Резидентство', 'Область',
+    'Адрес', 'Тип скидки',
+  ], 'поля компактной раскладки: ' + labelsOf(box).join(' | '));
+
+  // 3. Реестр полей: ничего сверх образца. Страна — предустановленная
+  // Узбекистан за «Областью»: выбирать её нечем и незачем, а без неё область
+  // осталась бы именем без страны.
+  const ALLOWED = new Set(['last_name', 'first_name', 'middle_name', 'date_of_birth',
+    'phone', 'passport_number', 'address', 'category_id', 'country', 'region']);
+  for (const k of Object.keys(f.fields)) {
+    assert.ok(ALLOWED.has(k), 'в компактной раскладке зарегистрировано лишнее поле: ' + k);
+  }
+  for (const k of ['email', 'phone_secondary', 'national_id', 'nationality', 'language',
+                   'behavior_note', 'district', 'mahalla', 'blood_type', 'allergies',
+                   'chronic_conditions', 'occupation', 'emergency_contact_name', 'emergency_contact_phone']) {
+    assert.ok(!(k in f.fields), 'поле «' + k + '» не убрано из компактной раскладки');
+  }
+
+  // 4. Минимум собирается, и в payload нет ключей мимо образца: пустая строка
+  // по ненарисованному полю затёрла бы то, что уже записано в карте.
+  f.fields.last_name.value = 'Иванов';
+  f.fields.first_name.value = 'Иван';
+  f.fields.date_of_birth.value = '1990-01-01';
+  f.setGender('M');
+  const got = f.collect();
+  assert.ok(got, 'компактный набор не собрался: ' + toasts.join(' | '));
+  const KEYS = new Set([...ALLOWED, 'gender', 'citizenship']);
+  for (const k of Object.keys(got)) assert.ok(KEYS.has(k), 'в payload ключ вне образца: ' + k);
+  assert.equal(got.gender, 'M', 'пол не собрался');
+  assert.equal(got.citizenship, 'resident', 'резидентство не собралось');
+
+  // 5. Обязательные поля те же: без пола карта не сохраняется.
+  const box2 = mk('div');
+  const f2 = modal.buildPatientFields(box2, { layout: 'compact', withSearchStrip: false });
+  f2.fields.last_name.value = 'Иванов';
+  f2.fields.first_name.value = 'Иван';
+  f2.fields.date_of_birth.value = '1990-01-01';
+  assert.equal(f2.collect(), null, 'компактная раскладка приняла карту без пола');
+});
+
+// «Область» в компактной раскладке стоит БЕЗ «Страны», а каскад отдаёт области
+// только от выбранной страны. Значит, страну ставит сама раскладка — и имя
+// обязано быть тем, что лежит в справочнике: countries.name русское
+// (миграция 030). Собственный запасной вариант каскада написан латиницей
+// («Uzbekistan») и не совпадает с ним ни одной строкой — с ним «Область»
+// осталась бы пустым списком «сначала выберите страну», а выбрать её в быстром
+// окне негде. Проверяется поэтому не комментарий, а само имя против миграции.
+test('FAST_REG_COMPACT_V1: страна, которую компактная раскладка ставит молча, ЕСТЬ в справочнике', () => {
+  const seed = fs.readFileSync(path.resolve(PUB, '..', 'server', 'db', 'migrations', '030_seed_address.sql'), 'utf8');
+  assert.ok(modal.DEFAULT_COUNTRY, 'компактная раскладка не называет страну по умолчанию');
+  assert.ok(seed.includes("'" + modal.DEFAULT_COUNTRY + "'"),
+    'страна «' + modal.DEFAULT_COUNTRY + '» не заведена миграцией 030 — «Область» в быстром окне останется пустой');
+
+  // И она ДЕЙСТВИТЕЛЬНО ставится: без этого вызова список областей не приедет.
+  const src = fs.readFileSync(path.join(PUB, 'js', 'admin', 'views', 'patient-create-modal.js'), 'utf8');
+  const compactBlock = src.slice(src.indexOf('if (compact) {'), src.indexOf('// ── Раздел 1'));
+  assert.ok(compactBlock.length > 200, 'блок компактной раскладки не найден — проверка смотрит не туда');
+  assert.ok(/geo\.preset\(/.test(compactBlock) && /DEFAULT_COUNTRY/.test(compactBlock),
+    'компактная раскладка не ставит страну — «Область» останется пустой');
+});
+
+test('FAST_REG_COMPACT_V1: полная раскладка компактом НЕ тронута — окно заведения прежнее', () => {
+  reset();
+  const box = mk('div');
+  modal.buildPatientFields(box, { withSearchStrip: false });
+  const titles = walk(box).filter((n) => n.tagName === 'H3')
+    .map((n) => textOf(n).replace(/<svg[\s\S]*?<\/svg>/g, '').replace(/\s+/g, ' ').trim())
+    .map((t) => t.replace(/^[1234]\s*/, ''));
+  assert.deepEqual(titles, ['Личные данные', 'Документы и резидентство', 'Контакты и адрес', 'Здоровье и экстренная связь'],
+    'разделы полной раскладки: ' + titles.join(' | '));
+  const labels = labelsOf(box);
+  assert.ok(labels.includes('Email'), 'полная раскладка потеряла Email');
+  assert.ok(labels.includes('Махалля'), 'полная раскладка потеряла Махаллю');
+  assert.ok(labels.includes('ПИНФЛ (ЖШШИР)'), 'полная раскладка потеряла ПИНФЛ');
+});
+
 test('PATIENT_FIELDS_V1: save() сохраняет пациента и отдаёт его — без всякого окна', async () => {
   reset();
   const box = mk('div');
