@@ -234,6 +234,9 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
     const close = () => overlay.remove();
 
     async function save(e) {
+        // SAVE_BTN_TARGET_V1 — клик по иконке внутри кнопки делает e.target
+        // свгшкой, и кнопка не выключалась: двойной клик создавал услугу дважды.
+        const btn = e && e.currentTarget;
         const name = nameInp.value.trim();
         if (!name) { toast('Укажите название услуги.', 'warn'); goTo('main', nameInp); return; }
         // SERVICE_NAMES_ONLINE_V1 — the server refuses this too; the check here
@@ -301,7 +304,7 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
             };
         }
 
-        e.target.disabled = true;
+        if (btn) btn.disabled = true;
         try {
             const { error } = await supabase.rpc('service_save', args);
             if (error) {
@@ -316,7 +319,7 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
             if (onSaved) await onSaved();
         } catch (err) {
             toast(err.message || String(err), 'fail');
-        } finally { e.target.disabled = false; }
+        } finally { if (btn) btn.disabled = false; }
     }
 
     // ---- сборка: шапка · рельс вкладок · содержимое · подвал --------------

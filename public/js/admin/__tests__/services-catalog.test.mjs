@@ -22,7 +22,9 @@ class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={};this.c
  get firstChild(){return this.children[0]||null;} replaceChildren(){this.children.length=0;}
  setAttribute(k,v){this.attrs[k]=String(v); if (k === 'value') this.value = String(v);} getAttribute(k){return this.attrs[k]??null;} hasAttribute(k){return k in this.attrs;}
  addEventListener(t,fn){(this._l[t]||(this._l[t]=[])).push(fn);} removeEventListener(){}
- dispatchEvent(e){for(const fn of this._l[e.type]||[])fn(e);return true;}
+ // Выключенной кнопке настоящий браузер пользовательский клик НЕ доставляет —
+ // на этом и держится защита от двойного сохранения (SAVE_BTN_TARGET_V1).
+ dispatchEvent(e){if(e.type==='click'&&this.disabled)return false;for(const fn of this._l[e.type]||[])fn(e);return true;}
  click(){this.dispatchEvent({type:'click',target:this,currentTarget:this,preventDefault(){},stopPropagation(){}});}   // target — как у настоящего события: обработчик «Сохранить» гасит им кнопку
  focus(){} blur(){} scrollTo(){} remove(){} select(){}
  querySelector(){return null;} querySelectorAll(){return [];}
@@ -398,5 +400,29 @@ test('DOCTOR_TIER_V1: половина ступени не уходит на с�
       'полупара ушла на сервер: ' + rpcCalls.map((r) => r.name).join(','));
     assert.ok(toasts.some((t) => t.includes('Ступень задаётся парой')),
       'подсказки о второй половине нет: ' + toasts.join(' | '));
+  } finally { SVC.requires_doctor = 1; }
+});
+
+// SAVE_BTN_TARGET_V1 — внутри «Сохранить» лежит значок, и палец попадает
+// обычно в него: у такого события target — значок, а не кнопка. Гасить надо
+// кнопку (currentTarget), иначе она остаётся живой и второй клик создаёт
+// услугу второй раз.
+test('SAVE_BTN_TARGET_V1: клик по значку внутри «Сохранить» гасит кнопку — двойной клик сохраняет один раз', async () => {
+  SVC.requires_doctor = 0;   // страж «отметьте исполнителя» не должен мешать этому тесту
+  try {
+    const c = await paint();
+    tags(c, 'tr').find((r) => r.className.includes('row-click')).click();
+    await flush();
+    const btn = buttonWith(document.body, 'Сохранить');
+    const icon = btn.children[0];
+    assert.ok(icon && icon !== btn, 'внутри кнопки нет значка — тогда тест ничего не проверяет');
+    const fire = () => btn.dispatchEvent({ type: 'click', target: icon, currentTarget: btn,
+      preventDefault() {}, stopPropagation() {} });
+    rpcCalls.length = 0;
+    fire(); fire();   // два клика подряд, без ожидания между ними
+    await flush();
+    assert.equal(rpcCalls.filter((r) => r.name === 'service_save').length, 1,
+      'услуга сохранена дважды: ' + rpcCalls.map((r) => r.name).join(','));
+    assert.ok(!btn.disabled, 'кнопка осталась выключенной после сохранения');
   } finally { SVC.requires_doctor = 1; }
 });
