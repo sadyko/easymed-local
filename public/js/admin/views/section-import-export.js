@@ -405,6 +405,11 @@ const IMPORT_CONFIGS = {
                 var lbl = { consultation: 'Консультации', lab: 'Лаборатория', procedure: 'Процедуры', imaging: 'Диагностика', other: 'Хирургия' }[payload.type];
                 if (lbl) payload.type_id = { __autoCreate: { table: 'service_types', keyField: 'name', value: lbl } };
             }
+            // DOCTOR_TIER_V1 — пара или ничего: полупара из файла застряла бы в
+            // редакторе (service_save отказывает половине настройки).
+            if (!payload.doctor_tier_from || !payload.doctor_tier_percent) {
+                payload.doctor_tier_from = 0; payload.doctor_tier_percent = 0;
+            }
         },
         columns: [
             { key: 'name',             required: true, hint: 'Название услуги (обязательно)' },
@@ -449,7 +454,7 @@ const IMPORT_CONFIGS = {
             { key: 'duration_minutes', coerce: 'int',  defaultNum: 30, hint: 'Длительность, мин (по умолчанию 30, если пусто)' },
             { key: 'requires_doctor',  coerce: 'bool', defaultBool: true, hint: 'true / false — нужен врач (по умолчанию true)' },
             { key: 'default_doctor_percent', coerce: 'num', hint: 'Доля исполнителя по умолчанию, % (необязательно)' },
-            { key: 'doctor_tier_from',    coerce: 'int', hint: 'Ступень: порог услуг в месяц (0 или пусто — ступени нет)' },
+            { key: 'doctor_tier_from',    coerce: 'int', hint: 'Ступень: порог услуг в месяц — повышенная доля начинается со следующей услуги (0 или пусто — ступени нет)' },
             { key: 'doctor_tier_percent', coerce: 'num', hint: 'Ступень: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
             { key: 'room',             fk: { source: 'rooms', keyField: 'name', target: 'room_id' }, hint: 'Кабинет (очередь диагностики) — по названию из справочника; необязательно' },
             { key: 'specimen',         hint: 'Лаборатория: материал (кровь, моча…) — необязательно' },
