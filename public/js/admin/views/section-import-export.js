@@ -449,6 +449,8 @@ const IMPORT_CONFIGS = {
             { key: 'duration_minutes', coerce: 'int',  defaultNum: 30, hint: 'Длительность, мин (по умолчанию 30, если пусто)' },
             { key: 'requires_doctor',  coerce: 'bool', defaultBool: true, hint: 'true / false — нужен врач (по умолчанию true)' },
             { key: 'default_doctor_percent', coerce: 'num', hint: 'Доля исполнителя по умолчанию, % (необязательно)' },
+            { key: 'doctor_tier_from',    coerce: 'int', hint: 'Ступень: порог услуг в месяц (0 или пусто — ступени нет)' },
+            { key: 'doctor_tier_percent', coerce: 'num', hint: 'Ступень: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
             { key: 'room',             fk: { source: 'rooms', keyField: 'name', target: 'room_id' }, hint: 'Кабинет (очередь диагностики) — по названию из справочника; необязательно' },
             { key: 'specimen',         hint: 'Лаборатория: материал (кровь, моча…) — необязательно' },
             { key: 'tube_color',       hint: 'Лаборатория: пробирка — light_blue, red, gold, green, lavender, pink, grey, royal_blue, yellow_acd, black, none' },
