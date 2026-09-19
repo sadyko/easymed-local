@@ -86,8 +86,24 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     const navigate = typeof onNavigate === 'function' ? onNavigate : () => {};
     const notifySaved = typeof onSaved === 'function' ? onSaved : () => {};
 
-    const overlay = h('div', { class: 'modal', style: { zIndex: '150' } });
-    const close = () => { document.removeEventListener('keydown', onKey); fadeOutAndRemove(overlay); };
+    // ЭТАЖ ОКНА. Оно открывает поверх себя каталог услуг (130), стража
+    // дубликатов и предпросмотр печати (160), выбор пакета (180) — и все они
+    // такие же подложки на весь экран, соседи в document.body. Кто выше,
+    // решает ТОЛЬКО z-index: окно выше каталога — и «+Услуги» открывается за
+    // ним, то есть выглядит как неработающая кнопка. Поэтому 120: выше
+    // страничных модалок (100) и ниже каждого своего ребёнка.
+    const overlay = h('div', { class: 'modal', style: { zIndex: '120' } });
+    /** Снять окно с экрана. Своё решение окна — оно и знает, что запись дошла. */
+    const dismiss = () => { document.removeEventListener('keydown', onKey); fadeOutAndRemove(overlay); };
+    /**
+     * Закрытие ПО ЖЕЛАНИЮ ЧЕЛОВЕКА: Esc, щелчок мимо, «Отмена», крестик.
+     *
+     * Пока идёт запись, оно не срабатывает: между нажатием и ответом сервера
+     * окно — единственное место, где известно, что именно записывается.
+     * Закрытие цепочку не остановит (она уже в пути), и визит со счётом
+     * появились бы молча — без номера счёта, без номеров очереди, без печати.
+     */
+    const close = () => { if (state.saving) return; dismiss(); };
 
     /**
      * Стоит ли поверх этого окна ЧУЖОЙ диалог.
@@ -140,8 +156,17 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         sources: [],
         result: null,       // { visit, invoice, items, queue, lines } после записи
         saving: false,
+        // Визит заведён, а счёт — нет: цепочка сломалась посередине. Повтор в
+        // этом состоянии допишет строки в тот же визит дня, поэтому «Сохранить»
+        // больше нет (см. toStalledState).
+        stalled: false,
         addLine, applyTemplate, removeLine,
     };
+    // Была ли карта заведена ЗДЕСЬ. Для найденного пациента без услуг «Пациент
+    // сохранён» — неправда: его карту никто не трогал.
+    let patientCreatedHere = false;
+    /** Записывать больше нельзя: либо всё записано, либо визит уже заведён без счёта. */
+    const locked = () => !!state.result || !!state.stalled;
 
     // ── шапка ─────────────────────────────────────────────────────────────
     const headHint = h('span', { class: 'mg-hint', style: { marginLeft: '12px' } },
@@ -181,7 +206,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     const pickedName = h('span', { class: 'cell-strong', style: { fontSize: '13.5px' } }, '');
     const changeBtn = h('button', {
         class: 'link-btn', type: 'button',
-        onclick: () => { if (!state.result) usePatient(null); },
+        onclick: () => { if (!locked()) usePatient(null); },
     }, tr('Сменить'));
     const pickedBar = h('div', {
         class: 'mg-section span-full',
@@ -223,12 +248,20 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         class: 'btn btn-sm btn-outline', type: 'button', disabled: true, onclick: printInvoice,
     }, Icon('Print', { size: 13 }), ' ', tr('Печать'));
     const table = h('table', { class: 'tbl' });
+    // Скидка категории пациента применяется сервером при выставлении счёта, и
+    // до него её суммы не существует. После — она стоит под таблицей строкой:
+    // «Итого» это уже сумма счёта, и без этой строки разница между ней и
+    // ценами строк выглядела бы ошибкой сложения.
+    const discountLine = h('div', {
+        class: 'muted',
+        style: { display: 'none', padding: '8px 14px 10px', fontSize: '12.5px', textAlign: 'right' },
+    });
     const servicesCard = h('div', { class: 'card', style: { margin: '14px 22px 18px' } },
         h('div', { class: 'card-header' },
             h('h3', null, Icon('Receipt', { size: 14 }), ' ', tr('Услуги'), ' ', countEl),
             h('span', { class: 'grow' }),
             addServicesBtn, addPackagesBtn, printBtn),
-        table);
+        table, discountLine);
     body.appendChild(servicesCard);
 
     // ── подвал ────────────────────────────────────────────────────────────
@@ -269,23 +302,85 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         if (typeof document !== 'undefined' && document.querySelector
             && document.querySelector('.uisel-pop, .uidate-pop')) return;
         e.preventDefault();
-        if (saveBtn.disabled || state.result) return;
+        if (saveBtn.disabled || locked()) return;
         saveBtn.click();
     });
 
     // =======================================================================
     // Таблица услуг
     // =======================================================================
-    function totalGross() {
-        return state.rows.reduce((a, r) => a + (Number(r.service.price) || 0), 0);
+    /**
+     * ЦЕНА СТРОКИ ПОСЛЕ СОХРАНЕНИЯ — ТА, ПО КОТОРОЙ ВЫСТАВЛЕН СЧЁТ.
+     *
+     * До нажатия другой цены нет: показываем каталог. После нажатия цена
+     * известна точно — тариф визита вернул её построчно (первичный/повторный
+     * приём), и именно она легла в visit_services. Оставить на экране каталог
+     * значило бы называть пациенту одну сумму, пока касса берёт другую.
+     *
+     * Сверяемся по услуге, а не только по месту: строки уезжают в registerWalkIn
+     * в том же порядке, но молчаливое смещение на один — это чужая цена в чужой
+     * строке, а такое обязано выродиться в цену каталога, а не в ошибку.
+     */
+    function savedLine(i) {
+        const row = state.rows[i];
+        const line = state.result && state.result.lines && state.result.lines[i];
+        if (!row || !line) return null;
+        return Number(line.serviceId) === Number(row.service.id) ? line : null;
     }
 
+    function rowPrice(i) {
+        const line = savedLine(i);
+        const row = state.rows[i];
+        if (line && Number.isFinite(Number(line.unitPrice))) return Number(line.unitPrice);
+        return Number(row && row.service.price) || 0;
+    }
+
+    /** Сумма строк в тех деньгах, что показаны: до записи — каталог, после — счёт. */
+    function totalGross() {
+        return state.rows.reduce((a, r, i) => a + rowPrice(i), 0);
+    }
+
+    /** Итог — это итог СЧЁТА: процент категории пациента применяет сервер. */
+    function totalDue() {
+        const inv = state.result && state.result.invoice;
+        const total = inv && Number(inv.total_amount);
+        return Number.isFinite(total) ? total : totalGross();
+    }
+
+    /** Насколько счёт меньше суммы строк — это и есть применённая скидка. */
+    function discountApplied() {
+        if (!state.result || !state.result.invoice) return 0;
+        return Math.max(0, Math.round(totalGross() - totalDue()));
+    }
+
+    /** Имя исполнителя строки: из справочника, а иначе — как его отдал каталог. */
+    function doctorNameOf(row) {
+        if (!row || row.doctorId == null) return '';
+        const d = (state.doctors || []).find((x) => String(x.id) === String(row.doctorId));
+        if (d) return d.full_name || d.username || '';
+        if (row.doctor) return row.doctor.full_name || row.doctor.username || '';
+        return trf('Сотрудник №{id}', { id: row.doctorId });
+    }
+
+    /**
+     * ЧТО ЗАПИСАНО, ТО И ПОКАЗАНО. Каталог услуг отдаёт услугу вместе с
+     * исполнителем, и это может быть человек ВНЕ пула услуги — медсестра на
+     * заборе крови, которой эта услуга в «Ставках» не отмечена. Пул такого не
+     * содержит, и без своей строки список показывал бы «не выбран», пока в базу
+     * уезжает он: выбор, сделанный регистратором, пропадал бы с глаз, оставшись
+     * в записи.
+     */
     function doctorCell(row) {
         const pool = doctorPoolFor(state.doctors, row.service);
-        if (!pool.length && !row.service.requires_doctor) return h('td', { class: 'muted' }, '—');
+        if (!pool.length && !row.service.requires_doctor && row.doctorId == null) {
+            return h('td', { class: 'muted' }, '—');
+        }
         const sel = h('select', { style: { width: '100%' } },
             h('option', { value: '' }, '— выберите врача —'),
             ...pool.map((d) => h('option', { value: String(d.id) }, d.full_name || d.username || String(d.id))));
+        if (row.doctorId != null && !pool.some((d) => String(d.id) === String(row.doctorId))) {
+            sel.appendChild(h('option', { value: String(row.doctorId) }, doctorNameOf(row)));
+        }
         sel.value = row.doctorId == null ? '' : String(row.doctorId);
         sel.addEventListener('change', () => { row.doctorId = sel.value ? Number(sel.value) : null; });
         if (state.result) sel.disabled = true;
@@ -293,11 +388,24 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         return h('td', null, sel);
     }
 
-    function queueLabel(i) {
+    /** Талон строки: сама запись очереди, а не её пересказ. */
+    function queueTicket(i) {
         const line = state.result && state.result.lines && state.result.lines[i];
-        const ticket = line && state.result.queue && state.result.queue.get(line.visitServiceId);
-        if (!ticket) return '—';
-        return ticket.label || (ticket.number != null ? String(ticket.number) : '—');
+        if (!line || !state.result.queue) return null;
+        return state.result.queue.get(line.visitServiceId) || null;
+    }
+
+    /**
+     * НОМЕР — ЭТО НОМЕР, А НЕ ДВЕРЬ. issue_queue_numbers возвращает и label
+     * (чья дверь: врач, кабинет, лаборатория), и number (какой по счёту). В
+     * столбце «№ очереди» стояло имя врача — то есть номера у пациента не было
+     * вовсе, хотя он выдан и записан в строку.
+     */
+    function queueCell(i) {
+        const t = queueTicket(i);
+        if (!t || t.number == null) return h('td', { class: 'muted' }, '—');
+        return h('td', { class: 'cell-strong' }, String(t.number),
+            t.label ? h('span', { class: 'muted', style: { fontWeight: '400', marginLeft: '6px' } }, t.label) : null);
     }
 
     function paintTable() {
@@ -319,14 +427,15 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                 tr('Добавьте услуги кнопкой «+Услуги» или пакетом'))));
         }
         state.rows.forEach((row, i) => {
+            const price = rowPrice(i);
             tbody.appendChild(h('tr', null,
                 h('td', { class: 'muted' }, String(i + 1)),
                 h('td', { class: 'cell-strong' }, row.service.name || '—'),
-                h('td', null, fmtPrice(netOfVat(row.service.price, row.service.tax_rate))),
-                h('td', { class: 'cell-strong' }, fmtPrice(row.service.price)),
+                h('td', null, fmtPrice(netOfVat(price, row.service.tax_rate))),
+                h('td', { class: 'cell-strong' }, fmtPrice(price)),
                 doctorCell(row),
                 done
-                    ? h('td', { class: 'cell-strong' }, queueLabel(i))
+                    ? queueCell(i)
                     : h('td', null, h('button', {
                         class: 'icon-btn btn-sm', type: 'button',
                         title: 'Убрать услугу', 'aria-label': 'Убрать услугу',
@@ -337,9 +446,14 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
 
         table.appendChild(h('tfoot', null, h('tr', null,
             h('td', { colspan: '3', class: 'cell-strong', style: { textAlign: 'right' } }, tr('Итого')),
-            h('td', { class: 'cell-strong' }, fmtPrice(totalGross())),
+            h('td', { class: 'cell-strong' }, fmtPrice(done ? totalDue() : totalGross())),
             h('td', null, ''),
             h('td', null, ''))));
+
+        // Скидка названа, а не оставлена разницей, которую пациент сложит сам.
+        const off = discountApplied();
+        discountLine.style.display = off > 0 ? '' : 'none';
+        discountLine.textContent = off > 0 ? trf('Скидка: {sum}', { sum: fmtPrice(off) }) : '';
 
         countEl.textContent = String(state.rows.length);
     }
@@ -349,6 +463,9 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         const row = {
             service,
             doctorId: doctor && doctor.id != null ? Number(doctor.id) : null,
+            // Кого выбрал каталог — целиком: в справочнике окна его может не
+            // быть вовсе, а показать в строке надо именно его.
+            doctor: doctor || null,
             sel: null,
         };
         state.rows.push(row);
@@ -372,10 +489,15 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     // зовёт onPick по одному разу на выбранную услугу, а строку рисуем мы.
     // Импорт динамический: каталог тянет полмодуля продукта, и грузить его при
     // каждом открытии окна регистрации незачем (и кольца импортов не завести).
+    //
+    // СТРОКА ЗАПРОСА — ТА ЖЕ, ЧТО У ВСЕХ (?v=aug17e). Для браузера адрес с
+    // другим ?v это ДРУГОЙ модуль: вторая копия каталога со своим состоянием
+    // (забронированные слоты, forgetSlots). Расхождение не видно ничем, кроме
+    // потерянной брони, — поэтому оно и закреплено проверкой на исходнике.
     async function openServicePicker() {
-        if (state.result) return;
+        if (locked()) return;
         try {
-            const mod = await import('./service-picker-modal.js?v=fastreg1');
+            const mod = await import('./service-picker-modal.js?v=aug17e');
             mod.openServicePickerModal({
                 title: 'Добавить услуги',
                 confirmLabel: 'Готово',
@@ -387,7 +509,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     }
 
     function openPackagePicker() {
-        if (state.result) return;
+        if (locked()) return;
         openTemplatePickerModal({ onPick: (t) => applyTemplate(t) });
     }
 
@@ -446,7 +568,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     }
 
     async function doSave() {
-        if (state.saving || state.result) return null;
+        if (state.saving || state.result || state.stalled) return null;
         if (!checkDoctors()) return null;
         state.saving = true;
         saveBtn.disabled = true;
@@ -468,7 +590,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             return await bookServices();
         } finally {
             state.saving = false;
-            saveBtn.disabled = !!state.result;
+            saveBtn.disabled = !!state.result || !!state.stalled;
         }
     }
 
@@ -480,7 +602,9 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
      */
     async function createPatient(payload, force) {
         try {
-            return await savePatient(payload, { force });
+            const created = await savePatient(payload, { force });
+            if (created) patientCreatedHere = true;
+            return created;
         } catch (e) {
             if (!force && e && e.code === 'DUPLICATE_PATIENT' && e.existing) {
                 openDuplicatePatientDialog(e, {
@@ -504,9 +628,12 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         const patient = state.patient;
         if (!patient) return null;
         if (!state.rows.length) {
-            toast('Пациент сохранён.');
+            // Найденного пациента без услуг никто не сохранял: «Пациент
+            // сохранён» здесь читалось бы как «изменения записаны», и
+            // регистратор уходил бы с экрана уверенным, что что-то сделал.
+            toast(patientCreatedHere ? tr('Пациент сохранён.') : tr('Услуги не добавлены — карта пациента не изменена.'));
             notifySaved(patient);
-            close();
+            dismiss();   // не close(): запись ещё «идёт» (state.saving), а решение — наше
             return patient;
         }
         let res;
@@ -518,9 +645,22 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                 createdBy: (currentUser() || {}).id || null,
             });
         } catch (e) {
-            // Карта уже существует (state.patient), поэтому повтор нажатия не
-            // заведёт второго пациента — он продолжит с того же места.
-            toast(trf('Услуги не записаны: {msg}', { msg: (e && e.message) || e }), 'fail');
+            // ЦЕПОЧКА СЛОМАЛАСЬ ПОСЛЕ ВИЗИТА — ПОВТОРА НЕ БУДЕТ.
+            //
+            // registerWalkIn отдаёт в e.partial то, что уже легло в базу. Визит
+            // дня переиспользуется, так что второе нажатие допишет в него те же
+            // строки заново и выставит счёт на всё сразу: пациент с задвоенными
+            // услугами разбирается уже в кассе. Дальше — из карты пациента, где
+            // визит виден и счёт выставляется по нему.
+            const msg = (e && e.message) || e;
+            if (e && e.partial) {
+                toast(trf('Визит создан, счёт не выставлен: {msg} — выставьте счёт из карты пациента', { msg }), 'fail');
+                toStalledState();
+                return null;
+            }
+            // Ни визита, ни строк: отказ до первой записи. Карта уже есть
+            // (state.patient), поэтому повтор нажатия продолжит с того же места.
+            toast(trf('Услуги не записаны: {msg}', { msg }), 'fail');
             return null;
         }
         state.result = res;
@@ -538,12 +678,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             trf('Пациент № {mrn} · {name}', { mrn: p.mrn || '—', name: nameOf(p) || '—' }),
             trf('Счёт № {no}', { no: (inv && (inv.invoice_number || inv.id)) || '—' }),
         ].join(' · ');
-        setPatientFormEnabled(false);
-        searchInput.disabled = true;
-        referralSel.disabled = true;
-        changeBtn.style.display = 'none';
-        addServicesBtn.style.display = 'none';
-        addPackagesBtn.style.display = 'none';
+        lockInputs();
         printBtn.disabled = false;
         if (printBtn.removeAttribute) printBtn.removeAttribute('disabled');
         saveBtn.style.display = 'none';
@@ -552,17 +687,84 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         doneBtn.style.display = '';
         footHint.textContent = tr('Пациент, визит и счёт созданы. Печать счёта — кнопкой в шапке таблицы.');
         paintTable();
-        toast('Пациент зарегистрирован, счёт выставлен.');
+        toast(tr('Пациент зарегистрирован, счёт выставлен.'));
     }
 
+    /**
+     * Визит есть, счёта нет. Кнопки «Сохранить» больше нет — повтор дописал бы
+     * строки в тот же визит дня (см. bookServices). Печатать нечего: счёт не
+     * выставлен. Остаётся уйти в карту пациента, где визит виден, и закрыть.
+     */
+    function toStalledState() {
+        state.stalled = true;
+        lockInputs();
+        saveBtn.style.display = 'none';
+        saveBtn.disabled = true;
+        if (saveBtn.setAttribute) saveBtn.setAttribute('disabled', '');
+        cancelBtn.style.display = 'none';
+        openCardBtn.style.display = '';
+        doneBtn.style.display = '';
+        footHint.textContent = tr('Визит создан, счёт не выставлен. Выставьте его из карты пациента.');
+    }
+
+    /** Всё, чем можно ещё что-то изменить, запирается одним местом. */
+    function lockInputs() {
+        setPatientFormEnabled(false);
+        searchInput.disabled = true;
+        referralSel.disabled = true;
+        // SEARCHABLE_SELECT_V1 — у направления два лица: скрытый <select>
+        // (источник правды) и строка поиска поверх него. Выключенный select
+        // при живой строке — поле, которое по-прежнему открывается, ищет и
+        // выбирает, ничего уже не меняя.
+        const input = referralInput();
+        if (input) {
+            input.disabled = true;
+            if (input.setAttribute) input.setAttribute('disabled', '');
+        }
+        changeBtn.style.display = 'none';
+        addServicesBtn.style.display = 'none';
+        addPackagesBtn.style.display = 'none';
+    }
+
+    /** Видимая строка поиска обёртки searchableSelect (сам select скрыт внутри). */
+    function referralInput() {
+        const kids = (referralWrap && referralWrap.children) || [];
+        for (const c of kids) if (String(c.tagName || '').toUpperCase() === 'INPUT') return c;
+        return null;
+    }
+
+    /**
+     * Печатный счёт — тот же бланк и та же форма данных, что у мастера визита
+     * (visit-wizard.js, WIZ_INVOICE_PRINT_V1). Отсюда три вещи, каждая из
+     * которых уже была утеряна:
+     *
+     *   • НОМЕР ОЧЕРЕДИ. Блок очереди на бланке собирается только из строк с
+     *     непустым number (doc-variants.js queueGroups): талон без номера с
+     *     бумаги просто исчезает, и пациент идёт обратно к стойке спрашивать,
+     *     какой он по счёту.
+     *   • ЦЕНЫ И СКИДКА. Позиции печатаются по цене СЧЁТА, подытог — их сумма,
+     *     «Итого» — сумма счёта; разницу называет строка «Скидка», иначе она
+     *     читается как ошибка сложения.
+     *   • ВРАЧ. Кто выполняет — в самой позиции, а при одном враче на весь
+     *     заказ ещё и строкой в шапке (как в счёте мастера).
+     */
     function printInvoice() {
         const inv = state.result && state.result.invoice;
         if (!inv) return;
         const p = state.patient || {};
-        const queueRows = state.rows.map((row, i) => ({
-            service: row.service.name || '', label: queueLabel(i), number: '', key: '',
-        }));
-        const total = state.rows.reduce((a, r) => a + (Number(r.service.price) || 0), 0);
+        const queueRows = [];
+        state.rows.forEach((row, i) => {
+            const t = queueTicket(i);
+            if (!t) return;
+            queueRows.push({
+                service: row.service.name || '', label: t.label || '',
+                number: t.number, key: t.queue_key || '',
+            });
+        });
+        const subtotal = totalGross();
+        const total = totalDue();
+        const off = discountApplied();
+        const docNames = [...new Set(state.rows.map((r) => doctorNameOf(r)).filter(Boolean))];
         /* i18n-exempt-start: печатный счёт — бланк документа, намеренно русский (как в мастере визита) */
         printableSheet({ type: 'invoice', idLine: inv.invoice_number || String(inv.id), data: {
             title: 'Амбулаторные услуги',
@@ -573,17 +775,23 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                 ['ФИО', nameOf(p) || '—'],
                 ['Карта №', p.mrn || '—'],
                 ['Телефон', p.phone || '—'],
+                ...(docNames.length === 1 ? [['Врач', docNames[0]]] : []),
             ],
             billing: [
                 ['Дата', new Date().toLocaleDateString('ru-RU')],
                 ['Оплата', 'Пациент — оплата в кассе'],
+                ...(off > 0 ? [['Скидка', '−' + fmtPrice(off) + ' сум']] : []),
             ],
-            items: state.rows.map((row, i) => ({
-                name: row.service.name || '', qty: 1, price: Number(row.service.price) || 0, _alt: i % 2 === 1,
-            })),
+            items: state.rows.map((row, i) => {
+                const dn = doctorNameOf(row);
+                return {
+                    name: (row.service.name || '') + (dn ? ' · ' + dn : ''),
+                    qty: 1, price: rowPrice(i), _alt: i % 2 === 1,
+                };
+            }),
             queue: queueRows,
-            subtotal: total,
-            total: Number(inv.total_amount) || total,
+            subtotal,
+            total,
             paid: 0,
         } });
         /* i18n-exempt-end */

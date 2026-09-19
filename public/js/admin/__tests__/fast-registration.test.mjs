@@ -23,6 +23,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const srcOf = (rel) => fs.readFileSync(path.join(HERE, '..', rel), 'utf8');
 
 // ---------------------------------------------------------------------------
 // Фальшивый DOM — тот же, что в patient-create-modal.test.mjs / patients-hub.
@@ -123,11 +129,30 @@ try { Object.defineProperty(globalThis, 'navigator', { value: { mediaDevices: nu
 // ---------------------------------------------------------------------------
 const calls = [];            // { kind: 'rpc'|'insert'|'select', name/table, body }
 let patientRows = [];        // чем отвечает выборка по patients (страж дублей)
-let insertFail = null;       // { table, message } — отказ вставки
+// { table, message, nth? } — отказ вставки. nth — номер вставки В ЭТУ таблицу
+// (1 — первая): цепочка вставляет строки услуг по одной, и «упала ВТОРАЯ» —
+// это отдельный случай, где часть строк уже лежит в базе.
+let insertFail = null;
 // Отказы двух НЕобязательных шагов цепочки: тариф визита и номера очереди.
 // Регистрацию они не срывают, и именно поэтому о них надо сказать вслух.
 let quoteFail = null;        // текст отказа service_price_quote
 let queueFail = null;        // текст отказа issue_queue_numbers
+// Деньги: чем отвечают тариф и счёт. По умолчанию — цена каталога и сумма,
+// которую видит окно; проверки «цена после сохранения» ставят сюда своё,
+// потому что расхождение каталога и счёта и есть их предмет.
+let quotes = null;           // { [serviceId]: { price, tier } } | null — цена каталога
+let invoiceTotal = 152000;   // total_amount ответа create_invoice_for_visit
+let queueTickets = null;     // (ids) => [ticket] | null — талоны по умолчанию
+// Задержка одного rpc: { name, promise } — цепочка встаёт на нём, и в этот миг
+// проверяется поведение окна «пока идёт запись».
+let holdRpc = null;
+// Печать открывает окно и пишет в него документ: ловим написанное (та же
+// техника, что в case-file-tabs.test.mjs).
+let printed = [];
+globalThis.window.open = () => ({
+  document: { open() {}, write(html) { printed.push(String(html)); }, close() {} },
+  focus() {}, print() {},
+});
 
 const SERVICES = [
   { id: 1, name: 'Приём терапевта', price: 112000, tax_rate: 12, requires_doctor: 1, type: 'consultation', active: 1 },
@@ -149,17 +174,19 @@ globalThis.fetch = async (url, opts = {}) => {
   if (u.startsWith('/api/rpc/')) {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     calls.push({ kind: 'rpc', name, body });
+    if (holdRpc && holdRpc.name === name) await holdRpc.promise;
     if (name === 'ensure_visit') return ok({ data: { visit: { id: 77 }, created: true } });
     if (name === 'service_price_quote') {
       if (quoteFail) return { ok: false, status: 400, json: async () => ({ error: { message: quoteFail } }) };
-      return ok({ data: { quotes: { 1: { price: 112000, tier: 'primary' }, 2: { price: 40000, tier: 'primary' } } } });
+      return ok({ data: { quotes: quotes || { 1: { price: 112000, tier: 'primary' }, 2: { price: 40000, tier: 'primary' } } } });
     }
     if (name === 'create_invoice_for_visit') {
-      return ok({ data: { invoice: { id: 9, invoice_number: 'INV-9', total_amount: 152000 }, items: [] } });
+      return ok({ data: { invoice: { id: 9, invoice_number: 'INV-9', total_amount: invoiceTotal }, items: [] } });
     }
     if (name === 'issue_queue_numbers') {
       if (queueFail) return { ok: false, status: 400, json: async () => ({ error: { message: queueFail } }) };
       const ids = (body && body.p_ids) || [];
+      if (queueTickets) return ok({ data: queueTickets(ids) });
       return ok({ data: ids.map((id, i) => ({ visit_service_id: id, label: 'A-' + (i + 1), number: i + 1, queue_key: 'k' })) });
     }
     return ok({ data: null });
@@ -170,7 +197,8 @@ globalThis.fetch = async (url, opts = {}) => {
     const op = (body && body.op) || 'select';
     if (op === 'insert') {
       calls.push({ kind: 'insert', table, body: body.values });
-      if (insertFail && insertFail.table === table) {
+      const nth = calls.filter((c) => c.kind === 'insert' && c.table === table).length;
+      if (insertFail && insertFail.table === table && (!insertFail.nth || insertFail.nth === nth)) {
         return { ok: false, status: 409, json: async () => ({ error: { message: insertFail.message } }) };
       }
       let row;
@@ -206,8 +234,9 @@ const buttons = (root) => walk(root).filter((n) => n.tagName === 'BUTTON');
 const btnByText = (root, text) => buttons(root).find((b) => textOf(b).replace(/\s+/g, ' ').trim().includes(text));
 
 function reset() {
-  calls.length = 0; toasts.length = 0; toastKinds.length = 0;
+  calls.length = 0; toasts.length = 0; toastKinds.length = 0; printed.length = 0;
   patientRows = []; insertFail = null; quoteFail = null; queueFail = null; focused = null;
+  quotes = null; invoiceTotal = 152000; queueTickets = null; holdRpc = null;
   document.body.children.length = 0;
   // Окна прошлой проверки с экрана сняты — их слушатели Escape тоже.
   for (const k of Object.keys(docListeners)) delete docListeners[k];
@@ -347,6 +376,14 @@ test('сохранение: пациент → визит → строки с в
   assert.ok(dlg.saveBtn.disabled, 'после сохранения «Сохранить» можно нажать ещё раз');
   // Номер очереди виден в таблице.
   assert.ok(textOf(dlg.table).includes('A-1'), 'номер очереди не показан');
+
+  // SEARCHABLE_SELECT_V1 — у поля направления ДВА лица: скрытый <select>
+  // (источник правды) и видимая строка поиска поверх него. Выключенный
+  // select при живой строке — это поле, которое по-прежнему открывается,
+  // ищет и выбирает, ничего уже не меняя: выбор уехал бы в никуда.
+  const refInput = (dlg.referralSel.parentNode.children || []).find((c) => c.tagName === 'INPUT');
+  assert.ok(refInput, 'у поля направления нет строки поиска');
+  assert.ok(refInput.disabled, 'после сохранения строка поиска направления осталась живой');
   dlg.close();
 });
 
@@ -477,6 +514,321 @@ test('тариф не спрошен и очередь не выдана — р�
 
   // И при этом регистрация ДОВЕДЕНА: счёт есть, окно в сохранённом состоянии.
   assert.ok(dlg.state.result && dlg.state.result.invoice, 'предупреждение сорвало саму регистрацию');
+  dlg.close();
+});
+
+// ===========================================================================
+// ЭТАЖИ ОКОН. Окно регистрации открывает поверх себя каталог услуг, и оба —
+// подложки .modal на всё окно браузера, соседи в document.body. Кто выше,
+// решает только z-index: окно с бо́льшим числом накрывает каталог, и нажатие
+// «+Услуги» выглядит как «кнопка не работает» — каталог открыт, но за окном.
+//
+// Числа продукта: страницы-модалки 100, каталог услуг 130, дубликат и
+// предпросмотр печати 160, выбор пакета 180. Окно регистрации обязано быть
+// выше страницы и НИЖЕ всех своих детей — то есть 120.
+// ===========================================================================
+test('окно стоит ниже каталога услуг: подложка 120 против 130 у каталога (иначе «+Услуги» открывается ЗА окном)', async () => {
+  reset();
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  assert.strictEqual(dlg.overlay.style.zIndex, '120', 'подложка окна не на своём этаже');
+  // Второе число — не выдумка проверки, а то, что стоит в каталоге сегодня.
+  const picker = srcOf('views/service-picker-modal.js');
+  const m = picker.match(/const overlay = h\('div', \{ class: 'modal', style: \{ zIndex: '(\d+)' \} \}\)/);
+  assert.ok(m, 'в каталоге услуг больше нет подложки с z-index — проверку надо пересобрать');
+  assert.ok(Number(m[1]) > Number(dlg.overlay.style.zIndex),
+    'каталог услуг (' + m[1] + ') не выше окна регистрации (' + dlg.overlay.style.zIndex + ')');
+  dlg.close();
+});
+
+// MODULE_INSTANCE_V1 — каталог грузится ТЕМ ЖЕ адресом, что и у всех.
+// Строка запроса — часть адреса модуля: './x.js?v=a' и './x.js?v=b' это для
+// браузера ДВА разных модуля с двумя копиями состояния. У каталога состояние
+// есть (забронированные слоты, forgetSlots), и вторая копия теряет его молча.
+test('каталог услуг импортируется той же строкой запроса, что и у остальных экранов (один модуль, одно состояние)', () => {
+  const mine = srcOf('views/fast-registration.js').match(/service-picker-modal\.js\?v=([a-z0-9]+)/i);
+  const theirs = srcOf('views/patients.js').match(/service-picker-modal\.js\?v=([a-z0-9]+)/i);
+  assert.ok(mine && theirs, 'импорт каталога не найден');
+  assert.strictEqual(mine[1], theirs[1],
+    'быстрая регистрация грузит вторую копию каталога: ?v=' + mine[1] + ' против ?v=' + theirs[1]);
+});
+
+// ===========================================================================
+// ДЕНЬГИ ПОСЛЕ СОХРАНЕНИЯ — ТЕ, ЧТО В СЧЁТЕ.
+//
+// До нажатия таблица показывает каталог: другой цены ещё нет. После нажатия
+// цена известна точно — тариф визита вернул её построчно, а сервер применил
+// процент категории пациента и вернул итог счёта. Если таблица продолжает
+// показывать каталог, регистратор называет пациенту одну сумму, а касса берёт
+// другую — и разбираются они между собой, без экрана.
+// ===========================================================================
+test('после сохранения таблица и печать показывают цену СЧЁТА, а не каталога, и называют скидку', async () => {
+  reset();
+  quotes = { 1: { price: 60000, tier: 'secondary' }, 2: { price: 40000, tier: 'primary' } };
+  invoiceTotal = 90000;   // 60 000 + 40 000 − 10 000 скидки категории
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg);
+  const row = dlg.state.addLine(SERVICES[0], null);
+  row.sel.value = '7';
+  row.sel.fireChange();
+  dlg.state.addLine(SERVICES[1], null);
+
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(80);
+  assert.ok(dlg.state.result, 'регистрация не прошла — проверяется не то');
+
+  const rows = rowsOf(dlg).filter((r) => textOf(r).includes('Приём терапевта'));
+  const cells = cellsOf(rows[0]).map((c) => textOf(c).replace(/\s+/g, ' ').trim());
+  assert.ok(cells[3].includes('60 000'), 'в строке не цена счёта: ' + cells[3]);
+  assert.ok(!cells[3].includes('112 000'), 'в строке осталась цена каталога: ' + cells[3]);
+
+  const tbl = textOf(dlg.table).replace(/\s+/g, ' ');
+  assert.ok(tbl.includes('90 000'), '«Итого» не равно сумме счёта: ' + tbl.slice(-160));
+  assert.ok(!tbl.includes('152 000'), 'в итоге осталась сумма каталога');
+
+  // Скидка названа прямо под таблицей: разницу «сложил сам» пациент не обязан.
+  const card = textOf(dlg.table.parentNode).replace(/\s+/g, ' ');
+  assert.ok(/Скидка/.test(card) && card.includes('10 000'), 'скидка не названа под таблицей: ' + card.slice(-200));
+
+  // И на бумаге — то же самое.
+  btnByText(dlg.card, 'Печать').click();
+  await tick(20);
+  assert.strictEqual(printed.length, 1, 'счёт не напечатался');
+  assert.ok(printed[0].includes('60 000'), 'на печати нет цены счёта');
+  assert.ok(!printed[0].includes('112 000'), 'на печати осталась цена каталога');
+  assert.ok(printed[0].includes('<div class="fl">Скидка</div>'), 'на печати нет строки скидки');
+  assert.ok(/Скидка<\/div><div class="fv">[^<]*10 000/.test(printed[0]), 'сумма скидки на печати другая');
+  // INVOICE_DOCTOR_V1 — кто выполняет, написано и на бумаге: пациент с этим
+  // счётом идёт к конкретному человеку, а не «в клинику».
+  assert.ok(printed[0].includes('Петров Пётр'), 'на печати нет исполнителя услуги');
+  dlg.close();
+});
+
+// ===========================================================================
+// НОМЕР ОЧЕРЕДИ — ЭТО НОМЕР, А НЕ ДВЕРЬ.
+//
+// issue_queue_numbers возвращает и label (чья дверь: врач, кабинет,
+// лаборатория), и number (какой по счёту). Пациенту нужен номер: с ним он
+// садится ждать. Дверь — уточнение к номеру, а не замена ему.
+//
+// На печатном счёте блок очереди собирается только из строк с truthy number
+// (doc-variants.js queueGroups): счёт, отданный пациенту без номера, отправляет
+// его обратно к стойке спрашивать, какой он.
+// ===========================================================================
+test('номер очереди виден в таблице и ПЕЧАТАЕТСЯ на счёте, дверь — подписью к нему', async () => {
+  reset();
+  queueTickets = (ids) => ids.map((id) => ({
+    visit_service_id: id, queue_key: 'doc:5', label: 'Петров Пётр', number: 3,
+  }));
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg);
+  const row = dlg.state.addLine(SERVICES[0], null);
+  row.sel.value = '7';
+  row.sel.fireChange();
+
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(80);
+
+  const rows = rowsOf(dlg).filter((r) => textOf(r).includes('Приём терапевта'));
+  const queueCell = cellsOf(rows[0])[5];
+  const cellText = textOf(queueCell).replace(/\s+/g, ' ').trim();
+  assert.ok(/^3\b/.test(cellText), 'в столбце «№ очереди» не номер: ' + cellText);
+  assert.ok(cellText.includes('Петров Пётр'), 'дверь не подписана рядом с номером: ' + cellText);
+
+  btnByText(dlg.card, 'Печать').click();
+  await tick(20);
+  assert.strictEqual(printed.length, 1, 'счёт не напечатался');
+  const i = printed[0].indexOf('Номер очереди');
+  assert.ok(i > 0, 'на счёте нет блока номера очереди');
+  const block = printed[0].slice(i, i + 700);
+  assert.ok(block.includes('>3<'), 'номер не попал на счёт: ' + block.slice(0, 300));
+  assert.ok(block.includes('Петров Пётр'), 'дверь не попала на счёт');
+  dlg.close();
+});
+
+// ===========================================================================
+// СБОЙ ПОСРЕДИ ЦЕПОЧКИ — ПОВТОР НЕВОЗМОЖЕН.
+//
+// Визит дня переиспользуется (ensure_visit). Значит второе нажатие «Сохранить»
+// после сбоя на второй строке допишет в ТОТ ЖЕ визит обе строки заново и
+// выставит счёт на четыре. Поэтому после такого сбоя кнопки «Сохранить» больше
+// нет: визит создан, счёт выставляется из карты пациента.
+// ===========================================================================
+test('сбой на второй строке: окно говорит «визит создан, счёт не выставлен» и больше не даёт сохранить', async () => {
+  reset();
+  insertFail = { table: 'visit_services', message: 'услуга недоступна', nth: 2 };
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg);
+  const row = dlg.state.addLine(SERVICES[0], null);
+  row.sel.value = '7';
+  row.sel.fireChange();
+  dlg.state.addLine(SERVICES[1], null);
+
+  toasts.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(80);
+
+  assert.ok(toasts.some((t) => t.includes('Визит создан, счёт не выставлен') && t.includes('услуга недоступна')),
+    'регистратору не сказали, что визит остался без счёта: ' + toasts.join(' | '));
+  assert.ok(dlg.state.patient && dlg.state.patient.id, 'созданный пациент потерялся');
+  assert.strictEqual(dlg.saveBtn.style.display, 'none', '«Сохранить» осталась на виду после сбоя');
+  assert.ok(dlg.saveBtn.disabled, '«Сохранить» можно нажать ещё раз после сбоя');
+  assert.ok(btnByText(dlg.card, 'Открыть карту'), 'нечем уйти в карту пациента');
+
+  // Второе нажатие — ни второй карты, ни второго визита, ни новых строк.
+  calls.length = 0;
+  dlg.saveBtn.click();
+  await tick(60);
+  assert.strictEqual(calls.filter((c) => c.kind === 'insert' && c.table === 'patients').length, 0,
+    'повтор завёл вторую карту');
+  assert.strictEqual(calls.filter((c) => c.kind === 'rpc' && c.name === 'ensure_visit').length, 0,
+    'повтор пошёл заводить визит заново');
+  assert.strictEqual(calls.filter((c) => c.kind === 'insert' && c.table === 'visit_services').length, 0,
+    'повтор задвоил строки услуг');
+  dlg.close();
+});
+
+// ===========================================================================
+// ВЫБРАННЫЙ ИСПОЛНИТЕЛЬ ВИДЕН ВСЕГДА.
+//
+// Каталог услуг отдаёт услугу вместе с выбранным исполнителем, и это может
+// быть человек ВНЕ пула услуги (медсестра на заборе крови). Пул рисует
+// <select>, в котором его нет, — и в строке показывается «не выбран», а
+// записывается он. Что записано, то и должно быть видно.
+// ===========================================================================
+test('исполнитель из каталога вне пула услуги показан в строке, а не записан втихую', async () => {
+  reset();
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  const row = dlg.state.addLine(SERVICES[1], { id: 99, full_name: 'Медсестра Нина' });
+  assert.strictEqual(row.doctorId, 99, 'исполнитель не доехал до строки — проверяется не то');
+
+  const rows = rowsOf(dlg).filter((r) => textOf(r).includes('Общий анализ крови'));
+  const sel = walk(rows[0]).find((n) => n.tagName === 'SELECT');
+  assert.ok(sel, 'в строке с выбранным исполнителем нет выбора');
+  assert.strictEqual(sel.value, '99', 'выбранный исполнитель не выбран в списке');
+  const opts = sel.children.filter((o) => o.tagName === 'OPTION').map((o) => textOf(o));
+  assert.ok(opts.some((o) => o.includes('Медсестра Нина')), 'исполнителя нет среди вариантов: ' + opts.join(' | '));
+  dlg.close();
+});
+
+// ===========================================================================
+// ПОИСК СУЩЕСТВУЮЩЕГО — ВТОРАЯ КАРТА НЕ ЗАВОДИТСЯ.
+// ===========================================================================
+test('пациент найден строкой поиска: форма заперта, «Сменить» отпирает, визит уезжает на его карту', async () => {
+  reset();
+  patientRows = [{ id: 42, mrn: 'P-42', full_name: 'Каримова Азиза', last_name: 'Каримова',
+                   first_name: 'Азиза', middle_name: '', phone: '+998901112233', date_of_birth: '1990-04-01' }];
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+
+  dlg.searchInput.value = 'Кари';
+  dlg.searchInput.fireInput();
+  await tick(600);   // SEARCH_DEBOUNCE_V1 — поиск ждёт паузы в наборе
+
+  const hit = walk(dlg.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt'));
+  assert.ok(hit, 'найденный пациент не показан строкой выбора');
+  hit.click();
+  await tick(60);
+
+  assert.ok(dlg.state.patient && dlg.state.patient.id === 42, 'выбор не взял карту найденного');
+  assert.ok(dlg.fields.last_name.disabled, 'поля чужой карты остались редактируемыми');
+  assert.ok(textOf(dlg.card).includes('P-42'), 'в окне не видно, на кого записываем');
+
+  // «Сменить» возвращает форму заведения новой карты.
+  btnByText(dlg.card, 'Сменить').click();
+  await tick(20);
+  assert.ok(!dlg.fields.last_name.disabled, '«Сменить» не отперла форму');
+  assert.strictEqual(dlg.state.patient, null, '«Сменить» не отпустила выбранного пациента');
+
+  // Берём его снова и записываем услугу.
+  dlg.searchInput.fireInput();
+  await tick(600);
+  walk(dlg.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')).click();
+  await tick(60);
+  const row = dlg.state.addLine(SERVICES[0], null);
+  row.sel.value = '7';
+  row.sel.fireChange();
+
+  calls.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(80);
+
+  assert.strictEqual(calls.filter((c) => c.kind === 'insert' && c.table === 'patients').length, 0,
+    'на найденного пациента завели вторую карту');
+  const visit = calls.find((c) => c.kind === 'rpc' && c.name === 'ensure_visit');
+  assert.ok(visit, 'визит не заведён');
+  assert.strictEqual(visit.body.patient_id, 42, 'визит уехал не на найденную карту');
+
+  // И после успеха повторное нажатие не уходит в базу ВООБЩЕ.
+  calls.length = 0;
+  dlg.saveBtn.click();
+  await tick(60);
+  assert.strictEqual(calls.length, 0, 'после сохранения повторное нажатие пошло в базу: ' + calls.length);
+  dlg.close();
+});
+
+test('найденный пациент без услуг: окно говорит, что карта не изменена, и закрывается', async () => {
+  reset();
+  patientRows = [{ id: 42, mrn: 'P-42', full_name: 'Каримова Азиза', last_name: 'Каримова',
+                   first_name: 'Азиза', date_of_birth: '1990-04-01' }];
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  dlg.searchInput.value = 'Кари';
+  dlg.searchInput.fireInput();
+  await tick(600);
+  walk(dlg.card).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'mg-search-opt')).click();
+  await tick(60);
+
+  calls.length = 0; toasts.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(60);
+
+  assert.ok(toasts.some((t) => t.includes('Услуги не добавлены')),
+    'сказали «Пациент сохранён», хотя ничего не сохраняли: ' + toasts.join(' | '));
+  assert.strictEqual(calls.filter((c) => c.kind === 'rpc').length, 0, 'без услуг ушли вызовы RPC');
+  assert.strictEqual(calls.filter((c) => c.kind === 'insert').length, 0, 'без услуг что-то записали');
+  await tick(30);
+  assert.strictEqual(dialogs('fast-registration').length, 0, 'окно не закрылось');
+});
+
+// ===========================================================================
+// ПОКА ИДЁТ ЗАПИСЬ, ОКНО НЕ ЗАКРЫВАЕТСЯ.
+//
+// Между «Сохранить» и ответом сервера окно держит единственное знание о том,
+// что именно записывается. Esc или щелчок мимо в этот миг снимают его с
+// экрана, а цепочка идёт дальше: визит и счёт появятся, а регистратор об этом
+// не узнает — ни номера счёта, ни номера очереди, ни печати.
+// ===========================================================================
+test('во время сохранения Esc и щелчок по подложке не закрывают окно', async () => {
+  reset();
+  let release;
+  holdRpc = { name: 'ensure_visit', promise: new Promise((r) => { release = r; }) };
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg);
+  const row = dlg.state.addLine(SERVICES[0], null);
+  row.sel.value = '7';
+  row.sel.fireChange();
+
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(40);
+  assert.strictEqual(dlg.state.saving, true, 'запись не идёт — проверяется не то');
+
+  escapeKeydown();
+  assert.strictEqual(dialogs('fast-registration').length, 1, 'Esc закрыл окно посреди записи');
+  const backdrop = walk(dlg.overlay).find((n) => hasClass(n, 'modal-backdrop'));
+  assert.ok(backdrop, 'у окна нет подложки');
+  backdrop.click();
+  assert.strictEqual(dialogs('fast-registration').length, 1, 'щелчок мимо закрыл окно посреди записи');
+
+  release();
+  holdRpc = null;
+  await tick(80);
+  assert.ok(dlg.state.result, 'запись не довелась до конца');
   dlg.close();
 });
 

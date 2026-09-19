@@ -22,6 +22,14 @@
  * виден в карте пациента, счёт выставляется из него же; удалять пациента,
  * который уже стоит у стойки, было бы хуже.
  *
+ * НО ОШИБКА ОБЯЗАНА СКАЗАТЬ, ЧТО УЖЕ ЗАПИСАНО. Провал после визита несёт
+ * err.partial = { visit, lines } — заведённый визит и строки, которые в него
+ * уже легли. Без этого вызывающему остаётся одно «не получилось», а самое
+ * естественное движение регистратора после неудачи — нажать ещё раз; второй
+ * вызов переиспользует ТОТ ЖЕ визит дня (ensure_visit) и допишет в него те же
+ * строки заново. Пациент с задвоенными услугами разбирается уже в кассе,
+ * поэтому повтор должен быть НЕВОЗМОЖЕН, а не «просто не рекомендован».
+ *
  * ЭТА ФУНКЦИЯ НЕ ИДЕМПОТЕНТНА. Второй вызов в тот же день не «повторит»
  * регистрацию, а допишет строки в тот же визит дня и выставит ВТОРОЙ счёт на
  * них. Поэтому вызывающий обязан выключить свою кнопку на время вызова и
@@ -130,6 +138,12 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
     //    на услуги, которых в визите нет.
     const saved = [];
     const vsIds = [];
+    /** Отказ ПОСЛЕ визита: к сообщению прикладывается уже записанное (см. шапку). */
+    const failAfterVisit = (msg) => {
+        const err = new Error(msg);
+        err.partial = { visit, lines: saved.slice() };
+        return err;
+    };
     for (const line of items) {
         const svc = line.service;
         const q = quotes[svc.id] != null ? quotes[svc.id] : quotes[String(svc.id)];
@@ -149,7 +163,7 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
         if (doctorId) row.doctor_id = doctorId;
         if (isPosInt(createdBy)) row.created_by = Number(createdBy);
         const res = await supabase.from('visit_services').insert(row).select().single();
-        if (res.error) throw new Error(trf('Услуга «{name}»: {msg}', { name: svc.name || '', msg: msgOf(res.error) }));
+        if (res.error) throw failAfterVisit(trf('Услуга «{name}»: {msg}', { name: svc.name || '', msg: msgOf(res.error) }));
         vsIds.push(res.data.id);
         saved.push({ visitServiceId: res.data.id, serviceId: Number(svc.id), doctorId, unitPrice, tier });
     }
@@ -162,7 +176,7 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
         discount_amount: 0,
         payer_id: null,
     });
-    if (invErr) throw new Error(trf('Счёт не выставлен: {msg}', { msg: msgOf(invErr) }));
+    if (invErr) throw failAfterVisit(trf('Счёт не выставлен: {msg}', { msg: msgOf(invErr) }));
 
     // 6. Номера очереди. Провал — предупреждение, а не отказ: деньги приняты,
     //    визит заведён, а талон печатается повторно тем же вызовом.

@@ -8517,4 +8517,8 @@ export const STRINGS = {
   "Счёт № {no}": {"en":"Invoice no. {no}","ru":"Счёт № {no}","uz":"Hisob № {no}"},
   "Пациент, визит и счёт созданы. Печать счёта — кнопкой в шапке таблицы.": {"en":"The patient, the visit and the invoice are created. Print the invoice with the button in the table header.","ru":"Пациент, визит и счёт созданы. Печать счёта — кнопкой в шапке таблицы.","uz":"Bemor, tashrif va hisob yaratildi. Hisobni jadval sarlavhasidagi tugma bilan chop eting."},
   "Пациент зарегистрирован, счёт выставлен.": {"en":"The patient is registered and the invoice is issued.","ru":"Пациент зарегистрирован, счёт выставлен.","uz":"Bemor roʻyxatga olindi, hisob chiqarildi."},
+  "Скидка: {sum}": {"en":"Discount: {sum}","ru":"Скидка: {sum}","uz":"Chegirma: {sum}"},
+  "Услуги не добавлены — карта пациента не изменена.": {"en":"No services were added — the patient's card is unchanged.","ru":"Услуги не добавлены — карта пациента не изменена.","uz":"Xizmatlar qoʻshilmadi — bemor kartasi oʻzgarmadi."},
+  "Визит создан, счёт не выставлен: {msg} — выставьте счёт из карты пациента": {"en":"The visit is created, the invoice is not issued: {msg} — issue the invoice from the patient's card","ru":"Визит создан, счёт не выставлен: {msg} — выставьте счёт из карты пациента","uz":"Tashrif yaratildi, hisob chiqarilmadi: {msg} — hisobni bemor kartasidan chiqaring"},
+  "Визит создан, счёт не выставлен. Выставьте его из карты пациента.": {"en":"The visit is created, the invoice is not issued. Issue it from the patient's card.","ru":"Визит создан, счёт не выставлен. Выставьте его из карты пациента.","uz":"Tashrif yaratildi, hisob chiqarilmadi. Uni bemor kartasidan chiqaring."},
 };
