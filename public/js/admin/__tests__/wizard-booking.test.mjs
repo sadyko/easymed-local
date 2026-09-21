@@ -89,6 +89,13 @@ globalThis.localStorage = { getItem: (k) => (k === 'admin.lang' ? 'ru' : null), 
 globalThis.window = { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, innerWidth: 1440, innerHeight: 900, addEventListener() {}, open: () => null };
 globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
+// QUICK_PATIENT_V1 — каталог спрашивает перед уходом (confirmLeaveCatalog) ГОЛЫМ
+// confirm(), как это делает браузер. В node его нет вовсе, и любая проверка,
+// дошедшая до Escape с набранной сметой, падала бы на «confirm is not defined»
+// — то есть по причине, к предмету проверки отношения не имеющей. Умолчание
+// «да, закрывай»; проверке, которой важен сам вопрос, эту заглушку подменяют и
+// возвращают обратно.
+globalThis.confirm = () => true;
 
 function walk(e, o = []) { for (const c of e.children || []) { o.push(c); walk(c, o); } return o; }
 const textOf = (el) => [el, ...walk(el)].map((n) => n._t || '').join(' ');

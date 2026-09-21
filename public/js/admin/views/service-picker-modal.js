@@ -158,9 +158,30 @@ export function openServicePickerModal({
     // Catalog UI is shared by the booking wizard and attach mode.
     const catalogUI = calculator || attachMode;
     const overlay = h('div', { class: 'modal', style: { zIndex: '130' } });
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: () => {
-        if (catalogUI && state.added.length && !confirm(attachMode ? 'Закрыть? Выбранные услуги не будут добавлены.' : 'Закрыть мастер записи? Подбор услуг будет потерян.')) return;
+
+    /**
+     * QUICK_PATIENT_V1 — ОДНА ДВЕРЬ НАРУЖУ У ВСЕГО КАТАЛОГА.
+     *
+     * Каталог живёт не только подложкой: он слушает Escape на document. Выходов
+     * из него восемь (крестик, «Отмена», «Готово», подложка, «Полная анкета»,
+     * три конца записи визита), и половина снимала подложку, забыв снять
+     * слушателя. Оставшийся обработчик держит ЗАМКНУТОЕ состояние ушедшего
+     * окна и отвечает на Escape где угодно потом: нажатие в совсем другом
+     * экране поднимало вопрос «Закрыть мастер записи?», а «Отмена» в нём
+     * ничего не чинила — вопрос возвращался на каждое следующее нажатие.
+     *
+     * Поэтому закрытие ровно одно и на всех: снять подложку И снять слушателя.
+     */
+    function closePicker() {
         overlay.remove();
+        document.removeEventListener('keydown', onKey);
+    }
+
+    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: () => {
+        // Правило «что теряется при уходе» ОДНО (confirmLeaveCatalog): здесь
+        // стояла его вторая копия, а две копии одного правила расходятся молча.
+        if (!confirmLeaveCatalog()) return;
+        closePicker();
     } }));
 
     const state = {
@@ -253,7 +274,7 @@ export function openServicePickerModal({
 
     card.appendChild(h('header', { class: 'modal-head' },
         h('h2', null, Icon(titleIcon, { size: 16 }), ' ', title),
-        h('button', { class: 'modal-close', onclick: () => overlay.remove() }, '×'),
+        h('button', { class: 'modal-close', onclick: () => closePicker() }, '×'),
     ));
     // BOOK_WIZARD_V1 — step chips (calculator mode only)
     const wizChipsEl = h('div', { class: 'pkw-steps', style: calculator ? {} : { display: 'none' } });
@@ -327,7 +348,7 @@ export function openServicePickerModal({
                 toast('Pick a service first.', 'fail');
                 return;
             }
-            overlay.remove();
+            closePicker();
         },
     }, Icon(confirmIcon, { size: 14 }), ' ' + confirmLabel);
 
@@ -343,7 +364,7 @@ export function openServicePickerModal({
     card.appendChild(h('footer', { class: 'modal-foot' },
         summary,
         h('span', { class: 'grow' }),
-        h('button', { class: 'btn', onclick: () => overlay.remove() }, 'Отмена'),
+        h('button', { class: 'btn', onclick: () => closePicker() }, 'Отмена'),
         wizBackBtn,
         addAnotherBtn,
         confirmBtn,
@@ -1375,19 +1396,23 @@ export function openServicePickerModal({
     /**
      * QUICK_PATIENT_V1 — ОДИН ВОПРОС НА ВСЕ ВЫХОДЫ, СНОСЯЩИЕ КАТАЛОГ.
      *
-     * Каталог сносят двое: Escape и кнопка «Полная анкета» в окне привязки
-     * (она уводит в карту пациента вызывающего). Теряется при этом одно и то
-     * же — набранная смета и выбранный в календаре слот, — и спрашивать об
-     * этом обязаны одинаково: второй выход без вопроса и есть та дыра, в
-     * которую уходит работа регистратора.
+     * Каталог сносят трое: Escape, щелчок мимо окна и кнопка «Полная анкета» в
+     * окне привязки (она уводит в карту пациента вызывающего). Теряется при
+     * этом одно и то же — набранная смета, — и спрашивать об этом обязаны
+     * одинаково: выход без вопроса и есть та дыра, в которую уходит работа
+     * регистратора.
      *
-     * Слот считается наравне со сметой: из пустой дорожки календаря каталог
-     * открывают уже С ВЫБРАННЫМ временем, и уход его тоже теряет.
+     * СПРАШИВАЕМ ТОЛЬКО О НАБРАННОЙ СМЕТЕ. Выбранный в календаре слот сюда
+     * тоже входил — и вопрос выходил неправдой: «Подбор услуг будет потерян»
+     * при пустой смете терять было нечего, а слот теряется ровно на одно
+     * нажатие (его выбирают тем же щелчком по той же пустой дорожке). Вопрос,
+     * на который правильный ответ всегда «да», люди перестают читать — и
+     * перестают читать его и тогда, когда смета набрана.
      *
      * @returns {boolean} можно ли закрывать
      */
     function confirmLeaveCatalog() {
-        const hasWork = (catalogUI && state.added.length > 0) || !!scheduledISO;
+        const hasWork = catalogUI && state.added.length > 0;
         if (!hasWork) return true;
         return confirm(attachMode
             ? 'Закрыть? Выбранные услуги не будут добавлены.'
@@ -1505,8 +1530,7 @@ export function openServicePickerModal({
                     // просто не доходили. Теперь путь один и вопрос один.
                     if (!confirmLeaveCatalog()) return;
                     closeAttach();
-                    overlay.remove();
-                    document.removeEventListener('keydown', onKey);
+                    closePicker();
                     onCreatePatient();
                 },
             }, Icon('User', { size: 14 }), ' Полная анкета'),
@@ -1573,9 +1597,20 @@ export function openServicePickerModal({
         // Окно заведения закрывает себя само, а привязку снимает attachPatient:
         // оставшаяся подложка 150 накрыла бы каталог невидимым стеклом — смета
         // на экране есть, но мышь до неё не доходит.
-        _qpDlg = mod.openQuickPatientModal({ onCreated: (p) => attachPatient(p) });
-        // null — права заводить пациента нет, и отказ уже показан окном.
-        release();
+        //
+        // ЗАМОК СНИМАЕТСЯ ВСЕГДА (finally). Открытие окна — чужой код, и упасть
+        // оно может: тогда замок «модуль в пути» оставался поднятым навсегда, а
+        // кнопка — погашенной. Наружу это выходило как «„Новый пациент“ больше
+        // не работает», и починить это можно было только закрыв весь каталог.
+        try {
+            _qpDlg = mod.openQuickPatientModal({ onCreated: (p) => attachPatient(p) });
+            // null — права заводить пациента нет, и отказ уже показан окном.
+        } catch (e) {
+            console.warn('[picker] quick-patient:', e);
+            toast('Не удалось открыть окно заведения пациента.', 'fail');
+        } finally {
+            release();
+        }
     }
 
     function attachPatient(p) {
@@ -2260,7 +2295,7 @@ export function openServicePickerModal({
         // overnight sweep (status scheduled/approved + scheduled_date < today ->
         // 'no_show') would mark a patient who actually attended as a no-show.
         if (added) await closeCrmRequests(landed);
-        overlay.remove();
+        closePicker();
     }
 
     // CRM_SCHEDULE_V1 — mark the prefilled requests as converted. Best-effort:
@@ -2919,8 +2954,7 @@ export function openServicePickerModal({
             // billing: the invoice/balance math would diverge from what landed.
             if (vsRows.length !== state.added.length) {
                 toast(trf('Записались не все услуги ({got} из {want}) — счёт НЕ выставлен. Откройте визит и добавьте услуги вручную.', { got: vsRows.length, want: state.added.length }), 'fail');
-                overlay.remove();
-                document.removeEventListener('keydown', onKey);
+                closePicker();
                 if (typeof onBooked === 'function') { try { onBooked(bookedSummary(visit, vsRows)); } catch (_) {} }
                 return;
             }
@@ -3208,8 +3242,7 @@ export function openServicePickerModal({
             }
             /* i18n-exempt-end */
             toast(tr('Визит создан') + note);
-            overlay.remove();
-            document.removeEventListener('keydown', onKey);
+            closePicker();
             // DOCTOR_ROUTE_V1 — the caller learns WHAT landed (visit + lines in the
             // picked order), so the doctor's cabinet can print the route sheet.
             // Older callers take no argument and are unaffected.
@@ -3233,12 +3266,18 @@ export function openServicePickerModal({
 
     function onKey(e) {
         if (e.key !== 'Escape') return;
+        // Каталога на экране уже нет — значит и нажатие не наше. Снимает
+        // слушателя closePicker, и это главная защита; но обработчик, который
+        // пережил своё окно, отвечал бы вопросом «Закрыть мастер записи?» в
+        // совсем другом экране, а «Отмена» возвращала бы его на каждое
+        // следующее нажатие. Цена проверки — одно сравнение.
+        if (overlay.isConnected === false) return;
         // QUICK_PATIENT_V1 — поверх каталога стоит чужое окно (привязка 150,
         // заведение пациента 155, страж дубликатов 160): Escape закрывает ЕГО,
         // а каталог со сметой обязан остаться. См. coveredByHigherModal.
         if (coveredByHigherModal(overlay)) return;
         if (!confirmLeaveCatalog()) return;
-        overlay.remove(); document.removeEventListener('keydown', onKey);
+        closePicker();
     }
     document.addEventListener('keydown', onKey);
 }

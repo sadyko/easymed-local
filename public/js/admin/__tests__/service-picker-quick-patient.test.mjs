@@ -450,11 +450,16 @@ test('своей мини-формы заведения пациента в ка
 const { coveredByHigherModal, modalZ, BASE_MODAL_Z } = await import('../views/modal-stack.js');
 
 test('правило «кто поверх меня» живёт в одном месте, а не в двух копиях', () => {
-  for (const rel of ['views/service-picker-modal.js', 'views/quick-patient-modal.js']) {
+  // Быстрая регистрация держала ТРЕТЬЮ копию — и самую грубую: любая чужая
+  // подложка считалась дочерней, даже страничное окно ПОД ней (100), которое
+  // заслонить её не может. Esc глох ровно там, где его ждут.
+  for (const rel of ['views/service-picker-modal.js', 'views/quick-patient-modal.js', 'views/fast-registration.js']) {
     const src = srcOf(rel);
     assert.ok(/from '\.\/modal-stack\.js/.test(src), rel + ' не зовёт общее правило этажей');
     assert.ok(!/function coveredByHigherModal/.test(src), rel + ' держит свою копию coveredByHigherModal');
     assert.ok(!/function overlayZ/.test(src), rel + ' держит свою копию overlayZ');
+    assert.ok(!src.includes(".includes('modal')"),
+      rel + ' сам перебирает чужие подложки .modal — это ещё одна копия правила этажей');
   }
 
   // Окно без встроенного z-index стоит НА ОБЩЕМ ЭТАЖЕ ОКОН (правило .modal в
@@ -528,3 +533,149 @@ for (const [label, what] of [['Сохранить как шаблон', 'сох�
       'Esc снёс каталог из-под диалога ' + what + ' — набранная смета пропала');
   });
 }
+
+// ===========================================================================
+// 8. КАТАЛОГ УХОДИТ ЦЕЛИКОМ — ВМЕСТЕ СО СВОИМ ESCAPE.
+//
+// Каталог живёт не только подложкой: он слушает Escape на document. Выходов из
+// него восемь, и половина снимала подложку, забыв снять слушателя. Оставшийся
+// обработчик держит замкнутое состояние ушедшего окна и отвечает на Escape где
+// угодно потом: нажатие в совсем другом экране поднимало вопрос «Закрыть
+// мастер записи?», а «Отмена» в нём ничего не чинила — вопрос возвращался на
+// каждое следующее нажатие.
+// ===========================================================================
+test('× снимает мастер записи вместе с его Escape: клавиша потом ни о чём не спрашивает', async () => {
+  reset();
+  const asked = [];
+  const savedConfirm = globalThis.confirm;
+  globalThis.confirm = (q) => { asked.push(String(q)); return false; };
+  try {
+    // Мастер записи из пустой дорожки календаря: со слотом и набранной сметой.
+    openServicePickerModal({
+      calculator: true, title: 'Мастер записи', onPick: () => {},
+      scheduledISO: '2026-10-08T10:00:00.000Z',
+    });
+    await tick(40);
+    const box = overlays()[overlays().length - 1];
+    assert.ok(box, 'мастер записи не открылся');
+    const add = byClass(box, 'wzc-svc').filter((r) => textOf(r).includes('Приём терапевта'))
+      .map((r) => byClass(r, 'wzc-add')[0]).find(Boolean);
+    assert.ok(add, 'услугу нечем добавить в смету');
+    add.click();
+    await tick(30);
+
+    const x = byClass(box, 'modal-close')[0];
+    assert.ok(x, 'у мастера записи нет крестика');
+    x.click();
+    await tick(30);
+    assert.ok(!document.body.children.includes(box), '× не снял мастер записи с экрана');
+
+    document.dispatchEvent({ type: 'keydown', key: 'Escape' });
+    await tick(30);
+
+    assert.deepStrictEqual(asked, [],
+      'Escape после закрытого мастера поднял вопрос ушедшего окна: ' + JSON.stringify(asked));
+    assert.strictEqual((docListeners.keydown || []).length, 0,
+      'обработчик Escape пережил своё окно — он отвечает на клавишу в любом другом экране');
+  } finally { globalThis.confirm = savedConfirm; }
+});
+
+// ===========================================================================
+// 9. ВОПРОС ЗАДАЮТ О ТОМ, ЧТО ТЕРЯЕТСЯ.
+//
+// Выбранный в календаре слот считался работой наравне со сметой, и на пустой
+// смете вопрос выходил неправдой: «Подбор услуг будет потерян» — терять нечего,
+// а слот выбирается тем же щелчком по той же пустой дорожке. Вопрос, на
+// который правильный ответ всегда «да», перестают читать — и перестают читать
+// его тогда, когда смета набрана.
+// ===========================================================================
+test('пустая смета: Esc в мастере записи со слотом закрывает молча', async () => {
+  reset();
+  const asked = [];
+  const savedConfirm = globalThis.confirm;
+  globalThis.confirm = (q) => { asked.push(String(q)); return true; };
+  try {
+    openServicePickerModal({
+      calculator: true, title: 'Мастер записи', onPick: () => {},
+      scheduledISO: '2026-10-08T10:00:00.000Z',
+    });
+    await tick(40);
+    const box = overlays()[overlays().length - 1];
+    assert.ok(box, 'мастер записи не открылся');
+
+    document.dispatchEvent({ type: 'keydown', key: 'Escape' });
+    await tick(30);
+
+    assert.deepStrictEqual(asked, [],
+      'спросили о потере подбора услуг, которого нет: ' + JSON.stringify(asked));
+    assert.ok(!document.body.children.includes(box), 'Esc не закрыл мастер записи');
+  } finally { globalThis.confirm = savedConfirm; }
+});
+
+// ===========================================================================
+// 10. ЩЕЛЧОК МИМО ОКНА СПРАШИВАЕТ ТО ЖЕ САМОЕ.
+//
+// У подложки стояла СВОЯ копия правила «что теряется при уходе». Две копии
+// одного правила расходятся молча: Escape спрашивал бы об одном, щелчок мимо —
+// о другом, и работа уходила бы через тот выход, который отстал.
+// ===========================================================================
+test('щелчок мимо окна спрашивает тем же вопросом, и «Отмена» оставляет смету', async () => {
+  reset();
+  const asked = [];
+  const savedConfirm = globalThis.confirm;
+  globalThis.confirm = (q) => { asked.push(String(q)); return false; };
+  try {
+    const box = await openCalc();
+    const backdrop = byClass(box, 'modal-backdrop')[0];
+    assert.ok(backdrop, 'у каталога нет подложки');
+    backdrop.click();
+    await tick(30);
+
+    assert.strictEqual(asked.length, 1, 'щелчок мимо окна с набранной сметой не спросил ни о чём');
+    assert.match(asked[0], /Подбор услуг будет потерян/,
+      'щелчок мимо спрашивает не тем вопросом, что Escape: ' + asked[0]);
+    assert.ok(document.body.children.includes(box), 'передумали, а каталог со сметой уже снесён');
+
+    globalThis.confirm = () => true;
+    backdrop.click();
+    await tick(30);
+    assert.ok(!document.body.children.includes(box), 'согласились, а каталог остался');
+    assert.strictEqual((docListeners.keydown || []).length, 0,
+      'щелчок мимо снял подложку, но оставил Escape ушедшего окна');
+  } finally { globalThis.confirm = savedConfirm; }
+});
+
+// ===========================================================================
+// 11. ОКНО ЗАВЕДЕНИЯ НЕ ОТКРЫЛОСЬ — КНОПКА ОСТАЁТСЯ РАБОЧЕЙ.
+//
+// Замок «модуль в пути» снимался ПОСЛЕ открытия окна. Открытие — чужой код, и
+// упасть оно может: тогда замок оставался поднятым навсегда, а кнопка —
+// погашенной. Наружу это выходит как «„Новый пациент“ перестал работать
+// вовсе», и починить это можно было только закрыв весь каталог.
+// ===========================================================================
+test('сбой при открытии окна заведения не выводит кнопку «Новый пациент» из строя', async () => {
+  reset();
+  const { attach } = await openAttach();
+  const btn = btnByText(attach, 'Новый пациент');
+  assert.ok(btn, 'в окне привязки нет кнопки «Новый пациент»');
+
+  // Ломаем окну постановку подложки в документ — ровно тот сбой, после
+  // которого замок оставался поднятым.
+  const realAppend = document.body.appendChild;
+  document.body.appendChild = () => { throw new Error('окно не построилось'); };
+  try {
+    btn.click();
+    await tick(80);
+  } finally { document.body.appendChild = realAppend; }
+
+  assert.strictEqual(overlays().filter((o) => String(o.style.zIndex) === '155').length, 0,
+    'окно заведения всё-таки встало — проверяется не то');
+  assert.notStrictEqual(btn.disabled, true,
+    'кнопка осталась погашенной: «Новый пациент» больше не открыть ничем, кроме перезакрытия каталога');
+
+  // И она действительно работает: следующее нажатие открывает окно.
+  btn.click();
+  await tick(80);
+  assert.ok(dialog('quick-patient'),
+    'замок «модуль в пути» остался поднятым — кнопка мертва до конца сеанса');
+});
