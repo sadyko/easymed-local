@@ -581,7 +581,9 @@ export function isModuleAllowed(navId) {
     // назначений ниже. Лечащий врач ведёт её из кабинета, поэтому
     // `consultation` открывает её тоже — иначе единственный, кто вправе писать
     // документы, не дошёл бы до экрана, на котором их пишут.
-    if (navId === 'case-file') return _effective.has('admissions') || _effective.has('beds') || _effective.has('consultation');
+    // CASE_OVERVIEW_ROUTE_V1 — обзор (#case-overview) и документы (#case-file)
+    // это две вкладки ОДНОЙ истории болезни (общий caseHead), ключ у них один.
+    if (navId === 'case-file' || navId === 'case-overview') return _effective.has('admissions') || _effective.has('beds') || _effective.has('consultation');
     // MAR_SHEET_V1 / MAR_NURSE_V1 / KITCHEN_SHEET_V1 — ещё три экрана ОДНОГО
     // раздела «Стационар и палаты», и ключ у них тот же `beds`, по тому же
     // доводу, что строкой выше: клиника, которой стационар уже выдан, обязана
@@ -673,13 +675,23 @@ export function isRouteAllowed(view) {
 
     if (view === 'patient-card')      return isModuleAllowed('patients');
     if (view === 'service-workspace') return isModuleAllowed('consultation');
+    // ROUTE_GATE_COVERS_PARENT_OF_V1 — прежний кабинет врача (#doctor-room,
+    // DOCTOR_ROOM_V1): из меню недостижим, но адрес живёт в закладках. Ключ тот
+    // же, что у кабинета (`consultation`), как у service-workspace строкой выше,
+    // а не мёртвый `doctor-room`, который редактор ролей перестал предлагать
+    // ещё в ROLE_KEYS_V2 — на него маршрут и падал.
+    if (view === 'doctor-room')       return isModuleAllowed('consultation');
     if (view === 'settings')          return isModuleAllowed('settings');
     // ROLE_AUDIT_V1 (fix #4) — each Settings sub-section must be granted
     // explicitly; bare «Settings (home)» no longer unlocks every sub-table
     // (staff accounts, price lists — a disclosure). Bare settings still opens
     // the Settings home index itself.
     if (view.startsWith('settings:')) return _effective.has(view);
-    if (view.startsWith('report:'))   return isModuleAllowed('reports');
+    // ROUTE_GATE_COVERS_PARENT_OF_V1 — пункт меню отчётов называется
+    // `reports-hub` (REPORTS_HUB_V1), ключа `reports` нет ни в одной роли: и
+    // прежний «Обзор владельца» (#reports), и отчёты-справочники (report:<key>)
+    // спрашивали несуществующий ключ и отказывали каждой настроенной роли.
+    if (view === 'reports' || view.startsWith('report:')) return isModuleAllowed('reports-hub');
     if (view === 'consultation-types') return _effective.has('consultation-types') || _effective.has('settings:consultation_types') || _effective.has('settings');
     if (view === 'communications')     return _effective.has('communications') || _effective.has('settings');
     if (view === 'discounts-settings') return _effective.has('discounts-settings') || _effective.has('settings');   // PATIENT_DISCOUNTS_V2
@@ -725,6 +737,20 @@ export function isRouteAllowed(view) {
     // could never pass. Every role except full-access hit Access-denied on the
     // one screen that sets the clinic name, contacts and printed logo.
     if (view === 'documents-settings') return _effective.has('documents-settings') || _effective.has('documents') || _effective.has('settings');
+    // ROUTE_GATE_COVERS_PARENT_OF_V1 — дизайнер печатных форм (#documents,
+    // плитка «Документы» хаба) пишет ТУ ЖЕ запись doc_settings, что «Компания»
+    // строкой выше, и ключ у него тот же: своего грантового ключа `documents`
+    // в локальном редакторе ролей нет, и маршрут падал на него так же, как
+    // documents-settings до COMPANY_ROUTE_GRANT_V1. Сервер отвечает второй раз:
+    // update doc_settings — только admin (schema-registry.js).
+    if (view === 'documents') return _effective.has('documents') || _effective.has('settings');
+    // ROUTE_GATE_COVERS_PARENT_OF_V1 — «Список услуг» (#services, плитка хаба)
+    // это лицо того же раздела, что 'settings:services' (та же таблица
+    // services), и открывается тем же грантом; собственного ключа `services`
+    // ни у одной роли нет. Голый `settings` его НЕ открывает нарочно: прайс —
+    // тот самый «disclosure» из ROLE_AUDIT_V1 (fix #4) выше. Сервер отвечает
+    // второй раз: чтение ALL_STAFF, запись — admin (schema-registry.js).
+    if (view === 'services') return _effective.has('services') || _effective.has('settings:services');
 
     if (view === 'docs-archive') return _effective.has('docs-archive');   // ROLE_AUDIT_V2 — explicit grant only
     if (view === 'cashier-shifts') return _effective.has('cashier-shifts') || _effective.has('cashier');   // CASHIER_SHIFTS_MAP_V1
@@ -734,10 +760,25 @@ export function isRouteAllowed(view) {
     // экран показывает лежащих и просит выбрать. Право одно на оба случая.
     if (view === 'mar-sheet' || view === 'mar-nurse' || view === 'kitchen-sheet' || view === 'discharge') return isModuleAllowed(view);   // TWO_STEP_DISCHARGE_V1 добавил #discharge
     if (view === 'case-file') return isModuleAllowed('case-file');   // CASE_WORKSPACE_V1
+    // CASE_OVERVIEW_ROUTE_V1 — обзор и документы это две вкладки ОДНОЙ истории
+    // болезни (общий caseHead), ключ у них один; без этой строки маршрут падал
+    // на `_effective.has('case-overview')` — ключ, которого нет ни в одной роли,
+    // — и «экран врача» отказывал врачу. Сервер отвечает второй раз через грант
+    // inpatient.patients (rpc/case-overview.js, OVERVIEW_ROLES).
+    if (view === 'case-overview') return isModuleAllowed('case-file');
     if (view === 'appointments') return isModuleAllowed('appointments');   // PATIENTS_HUB_V1 — «Календарь записи» едет с ключом `patients`
+    // ROUTE_GATE_COVERS_PARENT_OF_V1 — «Заявки» (#requests, REQUESTS_INBOX) —
+    // входящие регистратуры, подэкран CRM (PARENT_OF в admin.js); ключ тот же
+    // `crm`, а не несуществующий `requests`.
+    if (view === 'requests') return isModuleAllowed('crm');
     if (view === 'cashier-head') return isModuleAllowed('cashier-head');   // CASHIER_HEAD_NAV_V1
     if (view === 'registration') return _effective.has('registration') && canEdit('patients');   // ROLE_AUDIT_V1 (fix #2)
-    if (view === 'procurement') return _effective.has('procurement') || _effective.has('procurement:requisitions');   // PROCUREMENT_REQ_GRANT_V1
+    // PROCUREMENT_REQ_GRANT_V1 — свои ключи закупок как были.
+    // ROUTE_GATE_COVERS_PARENT_OF_V1 — маршрутизатор уводит #procurement в
+    // #inventory (WAREHOUSE_NAMES_V1), но право спрашивается ДО switch, и
+    // настроенная роль со складом упиралась в «Нет доступа» вместо
+    // перенаправления. Ключ склада открывает и старый адрес.
+    if (view === 'procurement') return _effective.has('procurement') || _effective.has('procurement:requisitions') || isModuleAllowed('inventory');
     return _effective.has(view);
 }
 
