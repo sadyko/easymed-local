@@ -122,6 +122,9 @@ let patientRows = [];        // чем отвечает выборка по pati
 // Задержка ВСТАВКИ: { table, promise } — окно встаёт на записи, и в этот миг
 // проверяется, что Escape его не закрывает.
 let holdInsert = null;
+// ОТКАЗ ВСТАВКИ: имя таблицы — сервер отвечает ошибкой. Нужен, чтобы проверить
+// «не вышло» там, где окно и диалог обязаны остаться на экране.
+let failInsert = null;
 
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
@@ -142,6 +145,9 @@ globalThis.fetch = async (url, opts = {}) => {
     if (op === 'insert') {
       calls.push({ kind: 'insert', table, body: body.values });
       if (holdInsert && holdInsert.table === table) await holdInsert.promise;
+      if (failInsert === table) {
+        return { ok: false, status: 500, json: async () => ({ error: { message: 'запись отклонена' } }) };
+      }
       const row = table === 'patients'
         ? { id: 501, mrn: 'P-501', ...body.values }
         : { id: 1, ...body.values };
@@ -174,7 +180,7 @@ const frLabels = (form) => (form.children || []).filter((n) => hasClass(n, 'fr-l
 
 function reset() {
   calls.length = 0; toasts.length = 0; focused = null;
-  patientRows = []; holdInsert = null;
+  patientRows = []; holdInsert = null; failInsert = null;
   document.body.children.length = 0;
   for (const k of Object.keys(docListeners)) delete docListeners[k];
   setFullAccess('Admin');
@@ -625,6 +631,107 @@ test('карту дубликата не дочитали — выбор ост�
   assert.strictEqual(dialogs('quick-patient').length, 1, 'окно заведения снято вместе с несостоявшимся выбором');
   assert.ok(toasts.some((t) => /не удалось открыть карту/i.test(t)),
     'о несостоявшемся чтении никто не сказал: ' + JSON.stringify(toasts));
+});
+
+// ===========================================================================
+// 8г. ДВА СОВПАДЕНИЯ — ОДИН ИСХОД.
+//
+// Страж дубликатов гасил ТОЛЬКО нажатую строку, а ответ на нажатие ждёт
+// позвавшего до самого конца (хвост регистрации заявки, мастер визита,
+// привязка к смете) — и всё это время на экране не меняется ничего.
+// Совпадений бывает два: регистратор щёлкает первое, отклика не видит и
+// щёлкает второе. Наружу уходили ДВА РАЗНЫХ пациента на одно заведение —
+// заявка колл-центра привязывалась к чужой карте, — а окно снималось дважды.
+//
+// Заслонок здесь две, и обе нужны: окно знает, что исход у него один
+// (state.finishing), а диалог гасит ВЕСЬ выбор, пока ответ в пути.
+// ===========================================================================
+test('два совпадения: второй щелчок не отдаёт позвавшему второго пациента', async () => {
+  reset();
+  // Оба — «тот же человек» по правилу PATIENT_DUP_RULE_V2 (телефон И имя).
+  patientRows = [
+    { id: 42, mrn: 'P-42', full_name: 'Каримова Азиза', last_name: 'Каримова', first_name: 'Азиза',
+      middle_name: '', phone: '+998 90 961 00 04', date_of_birth: '1990-04-01' },
+    { id: 43, mrn: 'P-43', full_name: 'Каримова Азиза', last_name: 'Каримова', first_name: 'Азиза',
+      middle_name: 'Бахтиёровна', phone: '+998 90 961 00 04', date_of_birth: '1990-04-01' },
+  ];
+  // Позвавший ещё работает — ровно тот миг, когда на экране «ничего не
+  // произошло» и руки тянутся щёлкнуть второе совпадение.
+  let release;
+  const pending = new Promise((r) => { release = r; });
+  const created = [];
+  const dlg = openQuickPatientModal({ onCreated: (p) => { created.push(p); return pending; } });
+  await tick(40);
+
+  fillMinimum(dlg);
+  dlg.state.api.fields.phone.value = '+998909610004';
+  btnByText(dlg.card, 'Создать пациента').click();
+  await tick(60);
+
+  const dup = dialogs('patient-duplicate');
+  assert.strictEqual(dup.length, 1, 'страж дубликатов промолчал — проверять нечего');
+  const rows = walk(dup[0]).filter((n) => n.tagName === 'BUTTON' && hasClass(n, 'dup-row'));
+  assert.strictEqual(rows.length, 2, 'в диалоге не два совпадения, а ' + rows.length + ' — проверяется не то');
+  const force = walk(dup[0]).find((n) => n.attrs && n.attrs['data-act'] === 'force-create');
+  assert.ok(force, 'в диалоге нет «Создать принудительно»');
+
+  rows[0].click();
+  await tick(60);
+  assert.strictEqual(created.length, 1, 'первый выбор не дошёл до позвавшего — проверяется не то');
+  assert.strictEqual(rows[1].disabled, true,
+    'второе совпадение осталось живым, пока ответ по первому в пути');
+  assert.strictEqual(force.disabled, true,
+    '«Создать принудительно» осталась живой, пока ответ по выбранной строке в пути');
+
+  rows[1].click();
+  await tick(80);
+  assert.strictEqual(created.length, 1,
+    'позвавший получил ДВУХ пациентов на одно заведение: заявка привяжется к чужой карте');
+
+  release();
+  await tick(90);
+  assert.strictEqual(dialogs('quick-patient').length, 0, 'окно заведения осталось на экране');
+  assert.strictEqual(dialogs('patient-duplicate').length, 0, 'выбор дубликата остался на экране');
+});
+
+// ===========================================================================
+// 8д. «СОЗДАТЬ ПРИНУДИТЕЛЬНО» НЕ ВЫШЛО — ВЫБОР ОСТАЁТСЯ.
+//
+// То же правило, что и у «Открыть существующего»: runSave на отказе записи
+// отдаёт null, и отданный наружу как есть он читался диалогом как «готово».
+// Человек видел отказ, а под ним пустой экран — ни выбора, ни набранной карты.
+// ===========================================================================
+test('запись вопреки дубликату сорвалась — выбор остаётся открытым', async () => {
+  reset();
+  patientRows = [{ id: 42, mrn: 'P-42', full_name: 'Каримова Азиза', last_name: 'Каримова', first_name: 'Азиза',
+                   middle_name: '', phone: '+998 90 961 00 04', date_of_birth: '1990-04-01' }];
+  const created = [];
+  const dlg = openQuickPatientModal({ onCreated: (p) => created.push(p) });
+  await tick(40);
+
+  fillMinimum(dlg);
+  dlg.state.api.fields.phone.value = '+998909610004';
+  btnByText(dlg.card, 'Создать пациента').click();
+  await tick(60);
+
+  const dup = dialogs('patient-duplicate');
+  assert.strictEqual(dup.length, 1, 'страж дубликатов промолчал — проверять нечего');
+
+  // Запись вопреки совпадению не удалась: сервер отвечает отказом.
+  failInsert = 'patients';
+  const force = walk(dup[0]).find((n) => n.attrs && n.attrs['data-act'] === 'force-create');
+  assert.ok(force, 'в диалоге нет «Создать принудительно»');
+  force.click();
+  await tick(90);
+  failInsert = null;
+
+  assert.strictEqual(created.length, 0, 'позвавшему отдали карту, которую не завели');
+  assert.strictEqual(dialogs('patient-duplicate').length, 1,
+    'выбор закрылся, хотя записать не вышло: под отказом остался пустой экран');
+  assert.strictEqual(dialogs('quick-patient').length, 1,
+    'окно заведения снято вместе с несостоявшейся записью — набранное потеряно');
+  assert.strictEqual(force.disabled, false,
+    'кнопка осталась погашенной: повторить попытку нечем');
 });
 
 // ===========================================================================
