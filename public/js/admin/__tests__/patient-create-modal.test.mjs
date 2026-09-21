@@ -625,6 +625,58 @@ test('маршрут #registration ходит в ту же дверь — сво
 });
 
 // ===========================================================================
+// CALLCENTER_OPERATOR_V1 — НОВЫЙ КЛЮЧ `crm.convert` ТОЛЬКО ДОБАВЛЯЕТ ПРАВО
+// ===========================================================================
+// Экран «Роли» сохраняет матрицу ЦЕЛИКОМ: после первого же «Сохранить роль»
+// у роли появляется явная запись по КАЖДОЙ строке справочника, в том числе
+// `crm.convert: none` — у врача, кассира и регистратуры без CRM она именно
+// такой и будет. Если новый ключ решает вопрос в одиночку, это сохранение
+// молча отнимает заведение карты у тех, кто заводил её годами по ключу
+// `registration`, — поломка, которую никто не связал бы с «просто сохранил
+// роль».
+//
+// Поэтому правило одностороннее: выданный `crm.convert` ДАЁТ право тому, у
+// кого ключа регистрации нет (ради чего строка и появилась — оператор
+// колл-центра), а «Нет» по нему НЕ ОТНИМАЕТ ничего: решает прежний ключ.
+const DOCTOR_WITH_REGISTRATION = { name: 'doctor', permissions: {
+  sections: ['patients', 'registration', 'labs'],
+  levels: { patients: 'editor', registration: 'editor', labs: 'admin' },
+  grants: { 'crm.convert': 'none' },   // так выглядит роль после «Сохранить роль»
+} };
+const CALLCENTER = { name: 'callcenter', permissions: {
+  sections: ['crm', 'dashboard'],
+  levels: { crm: 'admin', dashboard: 'viewer' },
+  grants: { 'crm.convert': 'edit' },   // так её настраивает миграция 141
+} };
+
+test('crm.convert добавляет право, но не отнимает: врач с «Регистрацией» заводит карту и с «Нет» по новому ключу', () => {
+  reset();
+  setEffectiveFromRole(DOCTOR_WITH_REGISTRATION);
+  assert.equal(canCreatePatient(), true,
+    'сохранение роли отняло заведение карты у того, кому его выдали ключом registration');
+
+  // Оператор колл-центра — ради него строка и появилась: ключа `registration`
+  // у него нет и не будет (он открывает весь раздел регистратуры), а карту из
+  // заявки он заводит.
+  reset();
+  setEffectiveFromRole(CALLCENTER);
+  assert.equal(canCreatePatient(), true, 'выданный crm.convert не открыл заведение карты');
+  const dlg = modal.openPatientCreateModal({});
+  assert.ok(dlg, 'оператора не пустили в окно заведения карты');
+  assert.equal(dialogs('access-denied').length, 0);
+  dlg.close();
+
+  // Ничего не настроено — отвечает прежний ключ, как и до этого дня.
+  reset();
+  setEffectiveFromRole(NURSE);
+  assert.equal(canCreatePatient(), false, 'медсестре открылось заведение карты');
+  reset();
+  setEffectiveFromRole(REGISTRAR);
+  assert.equal(canCreatePatient(), true, 'регистратура потеряла свою работу');
+  setFullAccess('Admin');
+});
+
+// ===========================================================================
 // PATIENT_FORM_FLOW_V1 — клавиатура: Tab ходит по полям, Enter сохраняет
 // ===========================================================================
 

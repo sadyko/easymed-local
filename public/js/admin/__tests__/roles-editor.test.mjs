@@ -590,6 +590,44 @@ test('роль с частично выданными grants рисуется п
   }
 });
 
+// ---------------------------------------------------------------------------
+// CALLCENTER_OPERATOR_V1 — ЯВНЫЙ ЗАПРЕТ ГЛАВНЕЕ ВЫВЕДЕННОГО ИЗ СТАРЫХ ПОЛЕЙ.
+// ---------------------------------------------------------------------------
+// Слияние `{...grantsFromLegacy(perms), ...perms.grants}` имеет порядок, и он
+// не украшение: старые поля — ОСНОВА, настроенные ключи ложатся ПОВЕРХ.
+// Перепутай стороны — и «Нет», поставленное заведующей руками (или выданное
+// миграцией 141, чтобы первое сохранение никому не расширило телефонию),
+// молча заменится выводом из галочки раздела: роль с открытым разделом CRM
+// получила бы обратно и звонок, и запись разговора.
+test('явное «Нет» в grants не перебивается старыми полями — ни на экране, ни при сохранении', async () => {
+  resetServer();
+  SAVED.registrar.sections = [...SAVED.registrar.sections, 'crm'];
+  SAVED.registrar.levels = { ...SAVED.registrar.levels, crm: 'admin' };
+  SAVED.registrar.grants = { 'crm.dial': 'none', 'crm.recording': 'none' };
+  try {
+    const root = await render();
+    const chosen = (key) => (radiosFor(root, key).find((n) => n.checked) || {}).attrs.value;
+
+    // Раздел CRM открыт — из него вывелись бы все его строки…
+    assert.equal(chosen('crm'), 'edit', 'раздел из старых полей не доехал');
+    assert.equal(chosen('crm.calls'), 'view', 'ненастроенная строка обязана читаться по старым полям');
+    // …но у этих двух есть решение администратора, и оно главнее.
+    assert.equal(chosen('crm.dial'), 'none', 'явный запрет перебит выводом из старых полей');
+    assert.equal(chosen('crm.recording'), 'none', 'явный запрет перебит выводом из старых полей');
+
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    assert.equal(saved.grants['crm.dial'], 'none', 'сохранение вернуло роли отнятое право');
+    assert.equal(saved.grants['crm.recording'], 'none', 'сохранение вернуло роли отнятое право');
+    assert.equal(saved.grants['crm.calls'], 'view', 'сохранение отняло то, что роль имела по старым полям');
+  } finally {
+    SAVED.registrar.sections = ['patients', 'dashboard'];
+    SAVED.registrar.levels = { patients: 'editor', dashboard: 'viewer' };
+    delete SAVED.registrar.grants;
+  }
+});
+
 test('изменение галочки вкладки считается несохранённым — уход спрашивает', async () => {
   resetServer();
   const root = await render();
