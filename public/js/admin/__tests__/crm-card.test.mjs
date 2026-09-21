@@ -1639,6 +1639,8 @@ test('визит дня занят работой — время НЕ занят
   assert.ok(someToast(/Петров Пётр/), 'отказ не называет врача того приёма — ' + JSON.stringify(TOASTS));
   assert.ok(someToast(/время не занято/),
     'из отказа не следует главное: выбранный час СВОБОДЕН и на него никто не записан — ' + JSON.stringify(TOASTS));
+  assert.ok(someToast(/Услуга привязана к этому приёму\./),
+    'оператору не сказано, что строка заявки не потеряна, а привязана к уже стоящему приёму — ' + JSON.stringify(TOASTS));
   assert.ok(document.body.children.some((n) => hasClass(n, 'modal') && textOf(n).includes('Даты приёма')),
     'окно дат закрылось после отказа — исправлять оператору уже нечем');
   window.easymed.state.user = null;

@@ -6,6 +6,8 @@ export const STRINGS = {
   // CRM_REAL_BOOKING_V1 (2026-09-21, разбор ревью) — ответ сервера о дне и перенос
   "В этот день у пациента уже есть приём в {t}{doc} — время не занято, откройте календарь": {"en":"The patient already has an appointment that day at {t}{doc} — the time you picked is NOT taken, open the calendar","ru":"В этот день у пациента уже есть приём в {t}{doc} — время не занято, откройте календарь","uz":"Bemorning o‘sha kuni allaqachon {t} da qabuli bor{doc} — siz tanlagan vaqt band qilinmadi, kalendarni oching"},
   "у {doc}": {"en":"with {doc}","ru":"у {doc}","uz":"{doc} qabulida"},
+  "Услуги записаны на существующий приём.": {"en":"The services were added to the existing appointment.","ru":"Услуги записаны на существующий приём.","uz":"Xizmatlar mavjud qabulga yozildi."},
+  "Услуга привязана к этому приёму.": {"en":"The service line is linked to that appointment.","ru":"Услуга привязана к этому приёму.","uz":"Xizmat o‘sha qabulga bog‘landi."},
   "Приём перенесён с {t0}{doc0} на {t1}": {"en":"The appointment was moved from {t0}{doc0} to {t1}","ru":"Приём перенесён с {t0}{doc0} на {t1}","uz":"Qabul {t0}{doc0} dan {t1} ga ko‘chirildi"},
   "Старый приём на {d} в {t} отменить?": {"en":"Cancel the old appointment on {d} at {t}?","ru":"Старый приём на {d} в {t} отменить?","uz":"{d} kunidagi {t} dagi eski qabul bekor qilinsinmi?"},
   "Старый приём на {d} остаётся в календаре — отмените его там.": {"en":"The old appointment on {d} stays in the calendar — cancel it there.","ru":"Старый приём на {d} остаётся в календаре — отмените его там.","uz":"{d} kunidagi eski qabul kalendarda qoladi — uni o‘sha yerda bekor qiling."},
