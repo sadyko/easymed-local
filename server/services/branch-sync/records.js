@@ -21,6 +21,10 @@
 import { SqliteError } from 'better-sqlite3';
 import { compareStamps, isStamp, nextStamp, parseStamp, stampAt } from './hlc.js';
 import { SHIPPED, REFS, CODE_REFS, SOFT_REFS, readClock, writeClock, authoredAt } from './journal.js';
+// CRM_REAL_BOOKING_V1 — «пришёл», нажатый в соседнем здании, закрывает заявку
+// колл-центра ЗДЕСЬ: доска заявок своя у каждого здания, и visit_id строки
+// указывает в нашу базу. Правило — то же самое, что у calendar_book.
+import { crmVisitStatus } from '../crm/visit-status.js';
 
 // sync_seen (миграция 084): метка последнего ПРИНЯТОГО изменения каждой
 // колонки. Местная правка метки не имеет — до отправки её защищает журнал.
@@ -192,6 +196,9 @@ export function applyBatch(db, records, {
   // Счета, у которых в этой порции менялись платежи: им в конце пересчитывается
   // paid_amount (BRANCH_MONEY_V1, recomputePaid).
   ctx.money = new Set();
+  // CRM_REAL_BOOKING_V1 — визиты, у которых в этой порции сменился статус:
+  // им в конце пересчитываются заявки колл-центра (crmFromSync).
+  ctx.crm = new Map();
   // Допуск вынесен в параметр ради теста: подождать пять минут он не может.
   ctx.skewMax = Number.isFinite(Number(skewMaxMs)) && Number(skewMaxMs) >= 0 ? Number(skewMaxMs) : SKEW_MAX_MS;
 
@@ -240,6 +247,10 @@ export function applyBatch(db, records, {
     // в ожидании и применяется именно там — пересчитай мы раньше, счёт остался
     // бы с нулём оплаты до следующей порции.
     recomputePaid(db, ctx);
+    // И там же, СТРОГО ПОСЛЕ освобождения: запись, приехавшая раньше своего
+    // пациента, применяется из ожидания, и её статус тоже обязан дойти до
+    // заявки.
+    crmFromSync(db, ctx);
 
     // Ребёнок, чей родитель удалён у источника (или чья услуга так и не
     // появилась в справочнике), ждал бы вечно.
@@ -901,6 +912,24 @@ function applyOne(db, rec, stats, ctx) {
     if (write.length) {
       ctx.q(`UPDATE ${rec.tbl} SET ${write.map(c => c + ' = ?').join(', ')} WHERE id = ?`)
         .run(...writeVals, id);
+      // CRM_REAL_BOOKING_V1 — ПРИХОД, ОТМЕЧЕННЫЙ В СОСЕДНЕМ ЗДАНИИ, ЗАКРЫВАЕТ
+      // ЗАЯВКУ ЗДЕСЬ. Оператор колл-центра записывает пациента в любое здание
+      // (CROSS_BRANCH_CALENDAR_V1), но строка заявки и её visit_id остаются у
+      // НАС: доска заявок своя у каждого здания. Поэтому «пришёл», нажатый там,
+      // приезжает сюда единственным путём — этой правкой visits.status, — и
+      // если её не заметить, заявка так и останется в «Записан», а ночная
+      // автоматика унесёт дошедшего пациента в «Не пришёл».
+      //
+      // Собираем здесь, считаем ОДИН РАЗ в конце транзакции (crmFromSync) — по
+      // той же причине, что и деньги ниже: статус одной записи в порции может
+      // приехать не один раз, и часть строк освободится из ожидания уже после
+      // этого места.
+      const at = write.indexOf('status');
+      if (rec.tbl === 'visits' && at >= 0) {
+        const seen = ctx.crm.get(id);
+        // Первое «до» и последнее «после»: порция — это одно событие для нас.
+        ctx.crm.set(id, { from: seen ? seen.from : (before ? before.status : null), to: writeVals[at] });
+      }
     }
   }
   // BRANCH_MONEY_V1 — приехал платёж, значит счёту, к которому он относится,
@@ -1156,6 +1185,29 @@ function round2(n) {
  * колонок журнального триггера (087), поэтому UPDATE ниже не даёт ни записи в
  * журнал, ни строки авторства — иначе пересчёт гонял бы счёт по сети кругами.
  */
+/**
+ * CRM_REAL_BOOKING_V1 — ЗАЯВКИ ПО ЗАПИСЯМ, СТАТУС КОТОРЫХ ПРИЕХАЛ ИЗ ДРУГОГО
+ * ЗДАНИЯ.
+ *
+ * Правило одно на весь продукт и живёт в crm/visit-status.js — тот же хук, что
+ * зовёт calendar_book. Разница только в том, КТО нажал: там регистратура этого
+ * здания, здесь — соседнего, куда оператор колл-центра записал пациента.
+ *
+ * Сетевым событием это не становится: заявки и их строки не перечислены ни в
+ * SHIPPED, ни в журнальных триггерах (084), поэтому переход заявки не уезжает
+ * никуда и не гоняет порции по кругу.
+ *
+ * Хук не бросается по построению, но try здесь всё равно свой: отказ воронки не
+ * вправе отменить ПРИЁМ ПОРЦИИ — данные соседа важнее учёта колл-центра.
+ */
+function crmFromSync(db, ctx) {
+  if (!ctx.crm || !ctx.crm.size) return;
+  for (const [visitId, change] of ctx.crm) {
+    try { crmVisitStatus(db, { visitId, from: change.from, to: change.to }); }
+    catch (e) { console.error('[sync] заявки по визиту', visitId, 'не пересчитаны:', e && e.message); }
+  }
+}
+
 function recomputePaid(db, ctx) {
   if (!ctx.money || !ctx.money.size) return;
   const read = ctx.q('SELECT paid_amount FROM invoices WHERE id = ?');
