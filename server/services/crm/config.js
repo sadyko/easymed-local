@@ -100,6 +100,7 @@ const SEED_OPEN = Object.freeze(['in_process', 'recall', 'scheduled', 'approved'
 const SEED_WON = 'came';
 const SEED_LOST = Object.freeze(['no_show', 'stopped', 'not_qualified']);
 export const SEED_NO_SHOW_STAGE = 'no_show';
+export const SEED_SCHEDULED_STAGE = 'scheduled';
 
 function stageKeysOfKind(db, kind, fallback) {
   try {
@@ -131,6 +132,29 @@ export function noShowStageKey(db) {
   const lost = lostStageKeys(db);
   if (lost.includes(SEED_NO_SHOW_STAGE)) return SEED_NO_SHOW_STAGE;
   return lost[0] || null;
+}
+
+/**
+ * CRM_REAL_BOOKING_V1 — «ЗАПИСАН»: КОЛОНКА ЗАЯВКИ, ДЕРЖАЩЕЙ НАСТОЯЩИЙ СЛОТ.
+ *
+ * Владелец (2026-09-21) развёл два разных факта, которые продукт до сих пор
+ * записывал одним: «человека записали» и «человек пришёл». Первому нужна своя
+ * колонка, и у сидовой воронки она есть — «Записан» (миграция 077).
+ *
+ * Спрашивается так же, как «Не пришёл»: сидовое имя, ПОКА ОНО ЖИВОЕ, — а
+ * клиника, которая его переименовала или убрала, получает ПОСЛЕДНЮЮ открытую
+ * колонку перед конверсией. Догадываться о названии чужой колонки хуже, чем
+ * назвать единственное, что о ней известно: дальше неё живой заявке идти
+ * некуда, следующий шаг — приход.
+ *
+ * null отдаётся только у воронки без единой открытой колонки (справочник
+ * вычищен руками). Звонящий обязан это пережить: переход заявки не вправе
+ * отказать в визите.
+ */
+export function scheduledStageKey(db) {
+  const open = openStageKeys(db);
+  if (open.includes(SEED_SCHEDULED_STAGE)) return SEED_SCHEDULED_STAGE;
+  return open.length ? open[open.length - 1] : null;
 }
 
 // --------------------------------------------------------------------------

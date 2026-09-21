@@ -46,7 +46,9 @@ import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTie
 import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionParts, localYmd } from '../discount-rules.js';   // DISCOUNT_RULES_V1
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
 // строк живут в одном модуле на все окна: копии этого кода уже разъезжались.
-import { closeCrmLines, pendingCrmLines } from '../crm-lines.js';
+// CRM_REAL_BOOKING_V1 (2026-09-21) — закрытия строк здесь больше нет: приход
+// доказывает событие, и видит его сервер (crm/visit-status.js).
+import { pendingCrmLines } from '../crm-lines.js';
 // MODAL_STACK_V1 — ESCAPE ПРИНАДЛЕЖИТ ВЕРХНЕМУ ОКНУ.
 //
 // Каталог услуг слушает Escape на document всё время, пока открыт. Но поверх
@@ -101,6 +103,11 @@ export function openServicePickerModal({
     // Optional — lets the schedule skip the patient's own existing same-day
     // visit when deciding which slots are busy.
     patientId       = null,
+    // CRM_REAL_BOOKING_V1 — необязательный: НА КАКОМ визите открыто окно.
+    // Подстановка из заявки колл-центра предпочтёт строки ИМЕННО этого приёма
+    // (у строки есть свой visit_id), а не весь день пациента. Окна, у которых
+    // визита ещё нет (мастер, запись из календаря), его не передают.
+    visitId         = null,
     // Optional — start hunting for the nearest free slot from this day instead
     // of today (e.g. the visit's own day). Never goes earlier than today.
     initialDateIso  = null,
@@ -556,7 +563,7 @@ export function openServicePickerModal({
             // CRM_LINKS_V1 — само двухшаговое чтение («живые заявки пациента» →
             // «их строки на этот день») живёт в crm-lines.js: его же зовёт мастер
             // визита, а две копии одного чтения уже разъезжались.
-            const lines = await pendingCrmLines(pid, dayIso);
+            const lines = await pendingCrmLines(pid, dayIso, visitId);
             if (!lines.length) return;
 
             const added = [];
@@ -575,12 +582,6 @@ export function openServicePickerModal({
                 added.push({ line, svc });
             }
             if (!added.length) return;
-            // Remember which LINES these came from so attaching them can close the
-            // loop (see attachCartToVisit) — per line, not per request: the other
-            // services of the same request may be booked for another day.
-            // CRM_LINKS_V1 — вместе с id помним УСЛУГУ строки: закрывается то,
-            // что реально записали, а не то, что подставилось (см. closeCrmRequests).
-            state.crmLines = added.map(a => ({ id: a.line.id, request_id: a.line.request_id, service_id: a.line.service_id }));
             // i18n-exempt: заметка сохраняется В БАЗУ — хранимая запись, а не текст экрана
             state.crmNote = 'Из заявки колл-центра на ' + dayIso.split('-').reverse().join('.')
                 + ': ' + added.map(a => a.svc.name).join(', ');
@@ -2297,42 +2298,21 @@ export function openServicePickerModal({
                                         : added === 1 ? 'Услуга добавлена к визиту.' : trf('Добавлено услуг: {n}.', { n: added }));
         else if (added && failed)  toast(trf('Добавлено {ok}, не удалось {bad} — проверьте список.', { ok: added, bad: failed }), 'warn');
         else                       { toast('Не удалось добавить услуги.', 'fail'); return; }
-        // CRM_SCHEDULE_V1 — the patient came and the service was attached, so the
-        // request is fulfilled. Without this it stays «Записан», and crm.js's
-        // overnight sweep (status scheduled/approved + scheduled_date < today ->
-        // 'no_show') would mark a patient who actually attended as a no-show.
-        if (added) await closeCrmRequests(landed);
+        // ЗДЕСЬ СТОЯЛО closeCrmRequests(landed) — «услугу привязали, значит
+        // пациент дошёл». CRM_REAL_BOOKING_V1 (2026-09-21): не значит. Привязка
+        // услуги к визиту это намерение, а приход доказывают деньги по счёту
+        // этого визита и работа над пациентом; и то и другое видит сервер в
+        // своей транзакции (crm/visit-status.js). Ночное сметание «Не пришёл»
+        // записанного больше не трогает — у его строки есть визит (crm.js).
         closePicker();
     }
 
-    // CRM_SCHEDULE_V1 — mark the prefilled requests as converted. Best-effort:
-    // the services are already on the visit, so a failure here must not surface
-    // as "adding failed".
-    // CRM_LINKS_V1 — само правило («строки → done, родитель → «Пришёл» только
-    // тогда, когда в нём не осталось ничего ждущего») переехало в crm-lines.js:
-    // его зовёт и окно быстрой регистрации, а две копии одного правила
-    // разъезжаются молча.
-    // CRM_LINKS_V1 — ЗАКРЫВАЕТСЯ ТО, ЧТО ЗАПИСАЛИ, А НЕ ТО, ЧТО ПОДСТАВИЛОСЬ.
-    //
-    // Смета — предложение, а не решение: регистратор вправе убрать услугу
-    // (пациент передумал, пришёл только за анализом). Закрывались же ВСЕ
-    // подставленные строки, потому что помнились с момента подстановки. Услуга,
-    // за которую не взяли денег, объявлялась оказанной: в следующий приход её
-    // никто не подставит, а заявка уйдёт в «Пришёл» целиком.
-    //
-    // serviceIds — услуги, реально легшие в визит. Без них (привязка к
-    // существующему визиту не различает строки поштучно) закрывается всё, как
-    // раньше.
-    async function closeCrmRequests(serviceIds) {
-        const lines = state.crmLines || [];
-        state.crmLines = [];
-        if (!lines.length) return;
-        const booked = serviceIds
-            ? lines.filter((l) => serviceIds.some((id) => String(id) === String(l.service_id)))
-            : lines;
-        if (!booked.length) return;
-        await closeCrmLines(booked.map((l) => l.id), [...new Set(booked.map((l) => l.request_id))]);
-    }
+    // ЗДЕСЬ БЫЛА closeCrmRequests(serviceIds) — закрытие подставленных строк
+    // заявки в тот миг, когда услуга легла в визит. CRM_REAL_BOOKING_V1
+    // (2026-09-21): оформленная услуга это ещё не приход пациента. Строки
+    // закрывает сервер, увидев деньги по счёту этого визита или начатую над
+    // пациентом работу, — и правило «услуга, за которую не взяли денег, не
+    // считается оказанной» стало там не оговоркой, а самим определением.
 
     /**
      * CRM_LINKS_V1 — ЗАБЫТЬ ПОДСТАВЛЕННОЕ. Регистратор привязал не того
@@ -2345,7 +2325,6 @@ export function openServicePickerModal({
     function forgetCrmPrefill() {
         const keep = state.added.filter((a) => !a.__fromCrm);
         if (keep.length !== state.added.length) state.added.splice(0, state.added.length, ...keep);
-        state.crmLines = [];
         state.crmNote = '';
     }
 
@@ -2946,16 +2925,10 @@ export function openServicePickerModal({
                 } catch (_) {}
             }
 
-            // CRM_LINKS_V1 — услуги легли в визит, значит заявка колл-центра
-            // отработана: её строки закрываются здесь ТАК ЖЕ, как в режиме
-            // привязки к существующему визиту (attachCartToVisit). Раньше эту
-            // ветку закрытие обходило, и запись из календаря оставляла заявку
-            // «Записан» с прошедшей датой — ночная автоматика уносила
-            // ПРИШЕДШЕГО пациента в «Не пришёл». Стоит ДО проверки полноты:
-            // строка заявки закрыта тем, что её услуга записана — ИМЕННО ЕЙ, а
-            // не фактом визита: услугу, убранную регистратором из сметы, никто
-            // не оказывал и денег за неё не брал.
-            if (vsRows.length) await closeCrmRequests(vsRows.map((r) => r.a.service.id));
+            // ЗДЕСЬ ТОЖЕ ЗАКРЫВАЛИСЬ СТРОКИ ЗАЯВКИ — см. закомментированный
+            // разбор выше. Ночное сметание «Не пришёл» записанного пациента
+            // больше не трогает и без этого: у его строки есть visit_id, и
+            // crm.js такие заявки из сметания исключает.
 
             // CATALOG_WIZARD_V2 — a partially-recorded visit must not proceed to
             // billing: the invoice/balance math would diverge from what landed.

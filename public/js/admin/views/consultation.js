@@ -1186,22 +1186,19 @@ async function transition(r, newStatus, btn) {
             .update({ status: newStatus }).eq('id', r.id);
         if (error) { toast(error.message, 'fail'); return false; }
         r.status = newStatus;
-        // Mirror onto the parent visit so the scheduling calendar block
-        // recolors immediately. Starting a service puts the visit in_progress;
-        // completing one only completes the visit once every (non-cancelled)
-        // service on it is done. Best-effort — failures are logged, not toasted.
-        if (r.visitId) {
-            let visitStatus = 'in_progress';
-            if (newStatus === 'completed') {
-                const { data: sib } = await supabase.from('visit_services')
-                    .select('status').eq('visit_id', r.visitId);
-                const active = (sib || []).filter(s => s.status !== 'cancelled');
-                if (active.length > 0 && active.every(s => s.status === 'completed')) visitStatus = 'completed';
-            }
-            const { error: vErr } = await supabase.from('visits')
-                .update({ status: visitStatus }).eq('id', r.visitId);
-            if (vErr) console.warn('[my-services] visit status mirror failed:', vErr);
-        }
+        // ЗДЕСЬ СТОЯЛО ЗЕРКАЛО СТАТУСА НА САМ ВИЗИТ: visits.status →
+        // 'in_progress' / 'completed'. Оно не работало НИ РАЗУ и работать не
+        // могло. Словарь статусов визита — пять слов миграции 003 (scheduled,
+        // confirmed, arrived, cancelled, no_show), и ни 'in_progress', ни
+        // 'completed' в нём нет; сверх того visits.status браузеру на правку
+        // реестром не отдаётся вовсе. Отказ уходил в console.warn — то есть
+        // никуда. Удалено вместе с лишним чтением соседних строк.
+        //
+        // CRM_REAL_BOOKING_V1 (2026-09-21) — и удалять его стало обязательно:
+        // теперь по статусу услуги сервер судит, что над пациентом НАЧАЛИ
+        // работать, и закрывает строку заявки колл-центра. Переход услуги
+        // (ниже, через /api/db) — и есть то самое доказательство; вторая,
+        // молча отказывающая запись рядом с ним только сбивала бы с толку.
         toast(newStatus === 'in_progress' ? 'Приём начат.' : 'Услуга завершена.');
         paintBody();
         return true;

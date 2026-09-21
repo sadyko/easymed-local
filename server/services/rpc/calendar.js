@@ -145,6 +145,9 @@ import { networkBuildings } from './branch-sync.js';
 import { publishBookingNow } from '../branch-sync/relay.js';
 import { readIdentity } from '../branch-sync/identity.js';
 import { getDataDir } from '../control/config.js';
+// CRM_REAL_BOOKING_V1 — смена статуса визита это событие ЗАЯВКИ: пришёл,
+// не пришёл, отменили. Правило живёт в crm/visit-status.js, здесь только дверь.
+import { crmVisitStatus } from '../crm/visit-status.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400, code = null, params = null) {
@@ -158,7 +161,18 @@ export class RpcError extends Error {
 // Кто записывает. Ровно те же роли, что уже могут вставлять и править visits
 // через /api/db (schema-registry): RPC не должен быть ни щедрее, ни строже
 // таблицы, иначе «через календарь нельзя, а через список можно».
-const BOOK_ROLES = ['admin', 'registrar', 'doctor'];
+//
+// CRM_REAL_BOOKING_V1 (2026-09-21) — И КОЛЛ-ЦЕНТР. Запись из заявки перестала
+// быть пожеланием на дату и стала настоящим слотом, а значит оператору нужны
+// обе половины одной работы: calendar_slots — чтобы назвать пациенту свободное
+// время, и calendar_book — чтобы это время занять. Обе живут на ЭТОМ списке
+// (он же у calendar_windows), поэтому строка одна.
+//
+// Сам оператор ходит сюда через ensure_visit с `book:` — той же дверью, что и
+// мастер визита. Прямой calendar_book ему открыт по той же причине, по которой
+// открыт регистратуре: запрет двойной записи живёт ВНУТРИ этой двери, и
+// закрытая дверь означала бы вторую, обходную.
+const BOOK_ROLES = ['admin', 'registrar', 'doctor', 'callcenter'];
 
 function requireRole(user, allowed) {
   if (!hasAnyRole(user, allowed)) {
@@ -1059,6 +1073,22 @@ export async function calendarBook(db, args, user, deps = {}) {
   const out = run();
   const seq = out.seq;
   delete out.seq;
+
+  // CRM_REAL_BOOKING_V1 (2026-09-21) — ОТМЕТКА ПРИХОДА ЗАКРЫВАЕТ ЗАЯВКУ.
+  //
+  // «Пришёл» значит, что пациент ФИЗИЧЕСКИ пришёл (решение владельца), поэтому
+  // конверсию объявляет смена статуса визита, а не его создание. Дверь для
+  // этого одна: visits.status пишет ТОЛЬКО calendar_book (VISITS_ONE_DOOR_V1),
+  // и через него идут все способы её нажать — плитка календаря, окно визита,
+  // кабинет врача, мастер записи. Реестр таблиц статус визита браузеру не
+  // отдаёт вовсе (schema-registry, visits.update), так что обойти эту строку
+  // нечем.
+  //
+  // ЗА ТРАНЗАКЦИЕЙ, А НЕ В НЕЙ: заявка не вправе отменить запись. Хук молчит
+  // при любой ошибке, но даже так его место — после того, как визит уже
+  // сохранён.
+  crmVisitStatus(db, { visitId: out.visit.id, from: existing ? existing.status : null, to: status });
+
   out.emergency = !!(conflict && emergency);
   out.day = dayIso;
   if (!target) return out;

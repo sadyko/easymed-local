@@ -12,7 +12,7 @@ import { migrate } from '../../db/migrate.js';
 import {
   listStages, listSources, listRouting, crmConfig,
   saveStages, saveSources, saveRouting, saveConfig, CrmConfigError,
-  openStageKeys, wonStageKey, lostStageKeys, noShowStageKey,
+  openStageKeys, wonStageKey, lostStageKeys, noShowStageKey, scheduledStageKey,
 } from './config.js';
 
 const fresh = () => { const db = openDb(':memory:'); migrate(db); return db; };
@@ -403,4 +403,42 @@ test('колонка «не пришёл» — сидовая, если она �
   assert.equal(noShowStageKey(db), 'no_show');
   db.prepare("DELETE FROM crm_stages WHERE key = 'no_show'").run();
   assert.equal(noShowStageKey(db), 'stopped', 'без сидовой колонки берётся первая проигрышная');
+});
+
+// CRM_REAL_BOOKING_V1 — «ЗАПИСАН» СПРАШИВАЕТСЯ ТАК ЖЕ, КАК «НЕ ПРИШЁЛ».
+//
+// Владелец развёл запись и приход: у заявки, держащей настоящий слот, своя
+// колонка. Сидовая — «Записан»; клиника вправе её переименовать или убрать, и
+// тогда честный ответ один — последняя открытая колонка перед конверсией.
+test('колонка «записан» — сидовая, если она есть, иначе последняя открытая перед конверсией', () => {
+  const db = fresh();
+  assert.equal(scheduledStageKey(db), 'scheduled');
+
+  // Своя колонка ПОСЛЕ «Записан» ничего не меняет: сидовая жива.
+  db.prepare("INSERT INTO crm_stages (key,label,color,position,is_active,kind) VALUES ('waiting_pay','Ждёт оплаты','info',9,1,'open')").run();
+  assert.equal(scheduledStageKey(db), 'scheduled');
+
+  // Клиника убрала сидовую — берётся последняя открытая, дальше неё живой
+  // заявке идти некуда.
+  db.prepare("DELETE FROM crm_stages WHERE key = 'scheduled'").run();
+  assert.equal(scheduledStageKey(db), 'waiting_pay');
+});
+
+test('скрытая колонка «Записан» всё равно та самая: в ней лежат записанные заявки', () => {
+  const db = fresh();
+  db.prepare("UPDATE crm_stages SET is_active = 0 WHERE key = 'scheduled'").run();
+  assert.equal(scheduledStageKey(db), 'scheduled',
+    'спрятанная колонка перестала быть «Записан» — записанные заявки уехали бы в другую');
+});
+
+// Переход заявки не вправе отказать в визите (settleCrmOnBooking в
+// rpc/visits.js зовёт это внутри записи), поэтому пустой и сломанный
+// справочник обязаны отвечать, а не бросаться.
+test('scheduledStageKey не бросается ни на пустой воронке, ни на сломанной базе', () => {
+  const db = fresh();
+  db.pragma('foreign_keys = OFF');
+  db.prepare('DELETE FROM crm_stages').run();
+  assert.equal(scheduledStageKey(db), 'scheduled', 'пустой справочник обязан отвечать сидовой воронкой');
+  db.prepare('DROP TABLE crm_stages').run();
+  assert.equal(scheduledStageKey(db), 'scheduled', 'без таблицы справочника ответ обязан остаться сидовым');
 });

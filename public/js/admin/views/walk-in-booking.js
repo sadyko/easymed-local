@@ -50,6 +50,9 @@
  */
 import { supabase } from '../../supabase.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+// CRM_REAL_BOOKING_V1 — ответ ensure_visit читается ОДНИМ кодом на три двери:
+// у него три исхода, и визит есть во всех трёх (см. ensure-visit-answer.js).
+import { readEnsureVisit } from '../ensure-visit-answer.js';
 
 const isPosInt = (v) => {
     const n = Number(v);
@@ -190,6 +193,14 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
     if (evErr) throw new Error(trf('Визит не создан: {msg}', { msg: msgOf(evErr) }));
     const visit = ev && ev.visit;
     if (!visit || !isPosInt(visit.id)) throw new Error(tr('Визит не создан: сервер не вернул запись.'));
+    // CRM_REAL_BOOKING_V1 — ОТВЕТ ЧИТАЕТСЯ ЦЕЛИКОМ. book: отсюда не уходит, и
+    // сервер на такой вызов ни переноса, ни отказа по занятому дню не отдаёт —
+    // но дверь читает ответ тем же кодом, что и две другие: если сюда
+    // когда-нибудь придёт «время НЕ занято», регистрация обязана остановиться
+    // ДО первой строки, а не выставить счёт на час, которого в календаре нет.
+    // Перенос — успех, о котором вызывающий говорит вслух (movedNote).
+    const answer = readEnsureVisit(ev);
+    if (answer.busy) throw new Error(answer.text);
 
     // 3. Тариф визита — до вставки строк: слово тарифа пишется В САМУЮ СТРОКУ,
     //    и касса потом считает цену по нему.
@@ -261,5 +272,6 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
     };
     if (quoteError) out.quoteError = quoteError;
     if (queueError) out.queueError = queueError;
+    if (answer.moved) out.movedNote = answer.text;
     return out;
 }

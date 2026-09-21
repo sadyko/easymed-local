@@ -372,7 +372,20 @@ test('МАСТЕР: свободное время — визит дня созд
   assert.equal(new Date(row.visit_date).getHours(), 11);
 });
 
-test('МАСТЕР: ВИЗИТ ДНЯ УЖЕ ЕСТЬ — время его не двигают, но выбранный слот всё равно проверяют', async () => {
+// CRM_REAL_BOOKING_V1 (2026-09-21) — ЭТОТ ТЕСТ ПОМЕНЯЛ ОЖИДАНИЕ В КОНЦЕ.
+//
+// Раньше здесь стояло «визит дня двигать нельзя» и booked:false. Ревью
+// показало, чем это оборачивается: выбранное оператором время не занималось
+// НИЧЕМ — calendar_book для существующего визита не звался вовсе, — а
+// карточка считала ответ успехом и называла пациенту час, на который его
+// никто не ждал.
+//
+// Теперь различается, БЫЛА ЛИ ПО ВИЗИТУ РАБОТА. Пустой визит дня (ни строки
+// услуг, ни счёта) — это сама запись, и новое время для неё ПЕРЕНОС
+// (booked:true, moved:true). Визит, по которому уже есть смета или счёт, —
+// это время прихода пациента: его не переписывают, ответ честно говорит
+// booked:false с reason:'day_visit_busy' и временем того визита.
+test('МАСТЕР: ВИЗИТ ДНЯ УЖЕ ЕСТЬ — выбранный слот проверяют, а пустой визит переносят', async () => {
   const { day } = seed();
   // Пациент 4 уже приходил сегодня утром.
   const morning = await supabase.rpc('ensure_visit', {
@@ -402,8 +415,37 @@ test('МАСТЕР: ВИЗИТ ДНЯ УЖЕ ЕСТЬ — время его не
   });
   assert.ok(!third.error, JSON.stringify(third.error));
   assert.equal(third.data.created, false);
-  assert.equal(third.data.booked, false, 'визит дня двигать нельзя — это время первого прихода пациента');
-  assert.equal(third.data.visit.id, morning.data.visit.id);
+  assert.equal(third.data.booked, true, 'выбранное время снова не занято ничем: пациента ждут не тогда, когда обещали');
+  assert.equal(third.data.moved, true, 'перенос обязан быть назван переносом');
+  assert.equal(third.data.visit.id, morning.data.visit.id, "день пациента — один визит");
+  assert.equal(new Date(DB.prepare('SELECT visit_date v FROM visits WHERE id=?').get(morning.data.visit.id).v).getHours(), 17,
+    'запись осталась на прежнем часе — перенос не доехал до базы');
+});
+
+// ВТОРАЯ ПОЛОВИНА ТОГО ЖЕ ПРАВИЛА: по визиту уже есть работа.
+test('МАСТЕР: визит дня со сметой не переносится — отказ называет его время', async () => {
+  const { day } = seed();
+  const morning = await supabase.rpc('ensure_visit', {
+    patient_id: 4, date: at(day, 9),
+    book: { doctor_id: 7, service_id: 21, start: at(day, 9), duration_minutes: 30 },
+  });
+  assert.ok(!morning.error, JSON.stringify(morning.error));
+  // Пациент пришёл: услуга в смете. С этого мига время визита — время его
+  // прихода, и записью его переписывать нельзя.
+  DB.prepare("INSERT INTO visit_services (visit_id, service_id, status) VALUES (?, 21, 'queued')").run(morning.data.visit.id);
+
+  const later = await supabase.rpc('ensure_visit', {
+    patient_id: 4, date: at(day, 17),
+    book: { doctor_id: 7, service_id: 21, start: at(day, 17), duration_minutes: 30 },
+  });
+
+  assert.ok(!later.error, JSON.stringify(later.error));
+  assert.equal(later.data.booked, false, 'время прихода пациента переписано записью');
+  assert.equal(later.data.reason, 'day_visit_busy', 'отказ без причины экрану бесполезен');
+  assert.equal(later.data.day_visit.id, morning.data.visit.id);
+  assert.match(later.data.day_visit.start, /^\d{2}:\d{2}$/, 'в ответе нет времени существующего визита');
+  assert.equal(new Date(DB.prepare('SELECT visit_date v FROM visits WHERE id=?').get(morning.data.visit.id).v).getHours(), 9,
+    'визит со сметой всё-таки передвинули');
 });
 
 test('МАСТЕР: собственный визит пациента не закрывает ему же время', async () => {
@@ -469,11 +511,16 @@ function stripComments(src) {
 
 // Экраны, которые расписание ПИШУТ. Каждый обязан ходить общей дверью.
 const BOOKING_VIEWS = ['visits.js', 'doctor-room.js', 'service-workspace.js', 'visit-modal.js', 'requests-inbox.js'];
+// Двери КЛАССА МАСТЕРА: заводят визит дня и занимают слот ОДНИМ вызовом
+// (ensure_visit + book). CRM_REAL_BOOKING_V1 (2026-09-21) — карточка заявки
+// колл-центра стала третьей такой дверью: «Сохранить и записать» держит
+// настоящее время врача, а не пишет пожелание с датой.
+const WIZARD_DOORS = ['visit-wizard.js', 'crm.js'];
 const read = (f) => fs.readFileSync(path.join(VIEWS, f), 'utf8');
 
 test('ни один экран не пишет расписание визита через /api/db', () => {
   const offences = [];
-  for (const f of [...BOOKING_VIEWS, 'visit-wizard.js']) {
+  for (const f of [...BOOKING_VIEWS, ...WIZARD_DOORS]) {
     const code = stripComments(read(f));
     if (/from\('visits'\)[\s\S]{0,200}\.insert\(/.test(code)) offences.push(f + ': снова вставляет визит через /api/db');
     // UPDATE по visits с колонкой расписания в полезной нагрузке.
@@ -489,12 +536,40 @@ test('ни один экран не пишет расписание визита
   assert.deepEqual(offences, [], 'вторая дверь к расписанию открылась заново:\n' + offences.join('\n'));
 });
 
-test('МАСТЕР ВИЗИТА: визит и слот — ОДИН вызов, окна для сироты больше нет', () => {
-  const code = stripComments(read('visit-wizard.js'));
-  assert.match(code, /rpc\('ensure_visit'/, 'мастер обязан заводить визит дня через ensure_visit');
-  assert.match(code, /\.book\s*=\s*\{|book:\s*\{/, 'мастер обязан просить слот ТЕМ ЖЕ вызовом');
-  assert.ok(!/rpc\('calendar_book'/.test(code),
-    'мастер снова записывает вторым вызовом — между ним и ensure_visit живёт визит-сирота');
+test('ДВЕРИ КЛАССА МАСТЕРА: визит и слот — ОДИН вызов, окна для сироты больше нет', () => {
+  for (const f of WIZARD_DOORS) {
+    const code = stripComments(read(f));
+    assert.match(code, /rpc\('ensure_visit'/, f + ' обязан заводить визит дня через ensure_visit');
+    assert.match(code, /\.book\s*=\s*\{|book:\s*\{/, f + ' обязан просить слот ТЕМ ЖЕ вызовом');
+    assert.ok(!/rpc\('calendar_book'/.test(code),
+      f + ' снова записывает вторым вызовом — между ним и ensure_visit живёт визит-сирота');
+  }
+  // Запись РАСПИСАНИЯ мимо RPC проверяет тест выше, поимённо по колонкам:
+  // мастеру визита остаётся законная правка visits.notes (причина экстренной
+  // записи живёт в самой записи и уезжает филиалам), и запрещать ему всю
+  // таблицу значило бы запретить это.
+});
+
+// CRM_REAL_BOOKING_V1 (2026-09-21) — КАРТОЧКА ЗАЯВКИ СПРАШИВАЕТ ВРЕМЯ ТАМ ЖЕ,
+// ГДЕ ЕГО ЗАНИМАЕТ.
+//
+// Окно «Даты приёма» называет оператору свободные начала — и это ровно тот
+// вопрос, на котором четыре реализации расписания разошлись в прошлый раз
+// (форма графика, обед, окно по умолчанию). Ответ один и он на сервере;
+// клиент у ответа тоже один — service-picker-modal.js. Своего вызова
+// calendar_slots у карточки заявки быть не должно: второй вызов это второй
+// кэш занятости, а значит второй ответ на тот же вопрос в соседнем окне.
+test('КАРТОЧКА ЗАЯВКИ: свободное время — у общего клиента слотов, а не своим вызовом', () => {
+  const code = stripComments(read('crm.js'));
+  assert.ok(!/rpc\('calendar_slots'/.test(code),
+    'карточка заявки спрашивает слоты сама — это снова вторая реализация доступности');
+  assert.match(code, /from '\.\/service-picker-modal\.js/, 'карточка заявки не берёт общий клиент слотов');
+  assert.match(code, /loadSlotDay/, 'карточка заявки не спрашивает свободное время у сервера вовсе');
+  assert.match(code, /freeStartMinutes/, 'карточка заявки раскладывает ответ сервера сама');
+  // Отказ «время занято» — тот же, что у календаря и мастера: словами сервера
+  // и с причиной экстренной записи, а не молчаливой галочкой.
+  assert.match(code, /bookErrorText/, 'отказ сервера переводится не общим переводчиком');
+  assert.match(code, /askEmergencyReason/, 'экстренная запись из карточки заявки идёт без причины');
 });
 
 test('каждый пишущий экран ходит ОБЩЕЙ дверью visit-booking.js', () => {
@@ -512,7 +587,7 @@ test('ОДНА реализация «когда врач свободен» н�
   // calendar_slots (общий клиент — service-picker-modal.js). Своих выборок из
   // visits «кто занят» в экранах быть не должно.
   const offences = [];
-  for (const f of [...BOOKING_VIEWS, 'visit-wizard.js']) {
+  for (const f of [...BOOKING_VIEWS, ...WIZARD_DOORS]) {
     const code = stripComments(read(f));
     const lines = code.split(/\r?\n/);
     lines.forEach((L, i) => {

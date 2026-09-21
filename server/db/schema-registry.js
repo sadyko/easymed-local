@@ -60,15 +60,25 @@ export const REGISTRY = {
   crm_request_services: {
     // doctor_id: CRM_LINE_DOCTOR_V1 (mig 058) — a service that requires a doctor
     // is booked WITH one; the registrar's prefill carries it into the смета.
-    read:  { roles: ALL_STAFF, columns: ['id','request_id','service_id','scheduled_date','status','note','doctor_id','created_at'] },
+    // visit_id: CRM_REAL_BOOKING_V1 (mig 142) — НАСТОЯЩИЙ слот, который держит
+    // эта строка. Читается сеткой календаря («из какой заявки эта запись» —
+    // одним `in('visit_id', …)` на все блоки дня) и карточкой заявки, которой
+    // после записи надо отличить строку со слотом от строки «на дату».
+    read:  { roles: ALL_STAFF, columns: ['id','request_id','service_id','scheduled_date','status','note','doctor_id','created_at','visit_id'] },
     // CALLCENTER_ROLE_V1 — «Сохранить и записать» writes the dated lines here,
     // and re-booking cancels the superseded ones by UPDATE, so the call centre
     // needs insert+update. It never deletes: saveLines() cancels, so that a line
     // the registrar already closed survives an edit of the request.
-    write: { insert: { roles: ['admin','registrar','callcenter'], columns: ['request_id','service_id','scheduled_date','status','note','doctor_id'] },
-             update: { roles: ['admin','registrar','callcenter'], columns: ['service_id','scheduled_date','status','note','doctor_id'] },
+    //
+    // visit_id пишут ТЕ ЖЕ роли, что и саму строку. Сервер проставляет его сам
+    // (settleCrmOnBooking в rpc/visits.js, та же транзакция, что заводит визит),
+    // но закрывать колонку экрану от этого нельзя: строка и её слот заводятся
+    // ОДНИМ действием оператора, и разведи их права — получилась бы строка, у
+    // которой слот есть, а ссылки на него нет.
+    write: { insert: { roles: ['admin','registrar','callcenter'], columns: ['request_id','service_id','scheduled_date','status','note','doctor_id','visit_id'] },
+             update: { roles: ['admin','registrar','callcenter'], columns: ['service_id','scheduled_date','status','note','doctor_id','visit_id'] },
              delete: { roles: ['admin','registrar'] } },
-    filters: ['id','request_id','service_id','scheduled_date','status','doctor_id'],
+    filters: ['id','request_id','service_id','scheduled_date','status','doctor_id','visit_id'],
     embed:   { services: { table:'services', fk:'service_id', columns:['id','name','price','requires_doctor'] },
                users:    { table:'users',    fk:'doctor_id',  columns:['id','full_name','specialty'] },
                crm_requests: { table:'crm_requests', fk:'request_id', columns:['id','patient_id','full_name','phone','status'] } },

@@ -15,6 +15,8 @@
 // сохраняются все показатели и статус, либо не меняется ничего.
 
 import { hasAnyRole } from '../roles.js';
+// CRM_REAL_BOOKING_V1 — работа над пациентом это доказательство его прихода.
+import { crmServiceEvidence } from '../crm/visit-status.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -92,5 +94,9 @@ export function saveLabResults(db, args, user) {
     setStatus.run(vsId);
   })();
 
+  // CRM_REAL_BOOKING_V1 — результат анализа заочно не появляется: пробу у
+  // человека взяли здесь. Для заявки колл-центра это доказательство прихода
+  // (разбор — в шапке crm/visit-status.js).
+  crmServiceEvidence(db, [vsId]);
   return { visit_service_id: vsId, inserted, updated, saved: inserted + updated };
 }

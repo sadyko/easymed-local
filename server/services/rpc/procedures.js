@@ -39,6 +39,8 @@
 
 import { hasAnyRole } from '../roles.js';
 import { hasColumn } from '../domain/buildings.js';
+// CRM_REAL_BOOKING_V1 — работа над пациентом это доказательство его прихода.
+import { crmServiceEvidence } from '../crm/visit-status.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -356,5 +358,9 @@ export function procedureComplete(db, args, user) {
                        performer_id = COALESCE(performer_id, ?)
                  WHERE id = ?`).run(notes || null, me, id);
   }
+  // CRM_REAL_BOOKING_V1 — процедуру делают человеку, а не заочно: для заявки
+  // колл-центра это доказательство прихода (crm/visit-status.js). Палатная
+  // строка живёт в admission_services и к визиту отношения не имеет.
+  if (kind === 'outpatient') crmServiceEvidence(db, [id]);
   return { kind, id, done: true };
 }

@@ -33,6 +33,26 @@ import { stageKeysFrom } from '../crm-stages.js';   // CRM_LINKS_V1 — ступ
 // PASTEL_IDENTITY_V1 — оттенок ступени воронки. Словарь один на три доски
 // (канбан, календарь, очередь), чтобы «мятный» везде значил одно и то же.
 import { pastelAt } from '../pastel.js?v=pastel1';
+// CRM_REAL_BOOKING_V1 (2026-09-21) — СВОБОДНОЕ ВРЕМЯ НАЗЫВАЕТ СЕРВЕР, И ТОЛЬКО ОН.
+//
+// Запись колл-центра — настоящий слот в календаре, а не пожелание. Значит, окно
+// «Даты приёма» обязано спрашивать занятость у того же движка, который рисует
+// сетку и который откажет при записи (server/services/rpc/slot-engine.js).
+// Клиент у этого вопроса ОДИН на весь продукт — service-picker-modal.js, и
+// адрес модуля здесь тот же (?v=aug17e): другой адрес это для браузера другой
+// модуль, то есть второй кэш занятости и второй ответ на один вопрос.
+import { loadSlotDay, freeStartMinutes, forgetSlots, bookErrorText, askEmergencyReason }
+    from './service-picker-modal.js?v=aug17e';
+// CRM_REAL_BOOKING_V1 — ОТМЕНА СТАРОГО ПРИЁМА ИДЁТ ОБЩЕЙ ДВЕРЬЮ. Смена статуса
+// визита — это тоже расписание (возврат отменённой записи перепродаёт слот), и
+// делает её один файл на весь продукт. Своего calendar_book у карточки заявки
+// нет и быть не должно: запрет двойной записи живёт внутри него, а копия вызова
+// — это копия правила.
+import { setVisitStatus } from './visit-booking.js';
+// CRM_REAL_BOOKING_V1 — ответ ensure_visit читается ОДНИМ кодом на все три
+// двери (мастер визита, быстрая регистрация, эта карточка): три исхода, и
+// визит есть во всех трёх, поэтому «есть id — значит записано» это ошибка.
+import { readEnsureVisit } from '../ensure-visit-answer.js';
 
 // CRM_CONFIG_V1 — воронка перестала быть константой.
 //
@@ -228,8 +248,45 @@ async function load() {
             const waiting = at >= 0 ? STAGE_KEYS.open.slice(at) : STAGE_KEYS.open;
             const from = waiting.filter((k) => k !== STAGE_KEYS.noShow);
             if (from.length) {
-                await supabase.from('crm_requests').update({ status: STAGE_KEYS.noShow })
-                    .in('status', from).lt('scheduled_date', today);
+                // CRM_REAL_BOOKING_V1 (2026-09-21) — СЛЕПОЕ СМЕТАНИЕ КОНЧИЛОСЬ
+                // ТАМ, ГДЕ НАЧАЛАСЬ НАСТОЯЩАЯ ЗАПИСЬ.
+                //
+                // Эта автоматика — догадка: «день прошёл, визита мы не видим,
+                // значит не пришёл». Для заявки, у строки которой есть слот в
+                // календаре, догадываться больше не о чем: её судьбу объявляет
+                // сам приём — «Не пришёл» в сетке, отметка прихода, деньги по
+                // счёту, — и переносит это в заявку сервер
+                // (crm/visit-status.js), а не ночная выборка по дате. Оставь мы
+                // догадку здесь — записанного пациента уносили бы в «Не пришёл»
+                // ДВА писателя с разными правилами, и второй делал бы это
+                // раньше первого: приём назначен на утро, а карточка уже
+                // потеряна, потому что дата вчерашняя.
+                //
+                // Поэтому метим ТОЛЬКО заявки без единой записанной строки:
+                // те, что так и остались пожеланием на дату.
+                const { data: cands, error: candErr } = await supabase.from('crm_requests')
+                    .select('id').in('status', from).lt('scheduled_date', today).limit(500);
+                const ids = (!candErr && cands ? cands : []).map((c) => c.id).filter((id) => id != null);
+                if (ids.length) {
+                    // ВИЗИТ ДЕРЖИТ ТОЛЬКО ЖДУЩАЯ СТРОКА (разбор ревью 2026-09-21).
+                    // Без отбора по статусу заявка, у которой ссылку несёт одна
+                    // ОТМЕНЁННАЯ строка — а их заводит сама же замена набора в
+                    // saveLines, — становилась невидимой для автоматики навсегда:
+                    // ждать её никто не ждёт, а «записанной» она числится.
+                    const { data: held, error: heldErr } = await supabase.from('crm_request_services')
+                        .select('request_id').in('request_id', ids)
+                        .eq('status', 'pending').not('visit_id', 'is', null);
+                    // Отказ выборки — НЕ повод считать, что записанных нет:
+                    // молча смести записанного хуже, чем не смести никого.
+                    if (!heldErr) {
+                        const booked = new Set((held || []).map((l) => String(l.request_id)));
+                        const blind = ids.filter((id) => !booked.has(String(id)));
+                        if (blind.length) {
+                            await supabase.from('crm_requests').update({ status: STAGE_KEYS.noShow })
+                                .in('id', blind).in('status', from).lt('scheduled_date', today);
+                        }
+                    }
+                }
             }
         }
     } catch (e) { /* фоновая автоматика — молча */ }
@@ -787,15 +844,22 @@ async function paint() {
         }
         if (!p) { toast('Пациент заявки не найден — привязка потеряна.', 'fail'); return; }
         p = { id: p.id, full_name: p.full_name, mrn: p.mrn, phone: p.phone || r.phone };
-        // Пациента выбрали в форме заявки, но ещё не сохранили — конверсия и
-        // закрепляет привязку: иначе она потеряется вместе с закрытым попапом.
-        const patch = { status: CONVERT_STATUS };
-        if (String(r.patient_id || '') !== String(p.id)) patch.patient_id = p.id;
-        const { error } = await supabase.from('crm_requests').update(patch).eq('id', r.id);
-        if (error) { toast(error.message, 'fail'); return; }
+        // Пациента выбрали в форме заявки, но ещё не сохранили — привязка
+        // закрепляется здесь: иначе она потеряется вместе с закрытым попапом.
+        //
+        // CRM_REAL_BOOKING_V1 (2026-09-21) — А СТУПЕНЬ ЗДЕСЬ БОЛЬШЕ НЕ СТАВИТСЯ.
+        // Кнопка «Оформить услугу» объявляла заявку дошедшей в тот миг, когда
+        // её нажали, — до визита, до кассы, до того, как человек вышел из дома.
+        // «Пришёл» теперь значит приход, и доказывает его событие, которое
+        // видит сервер: отметка прихода, платёж по счёту визита, начатая над
+        // пациентом работа (crm/visit-status.js). Нажатие кнопки в окне таким
+        // доказательством не является.
+        if (String(r.patient_id || '') !== String(p.id)) {
+            const { error } = await supabase.from('crm_requests').update({ patient_id: p.id }).eq('id', r.id);
+            if (error) { toast(error.message, 'fail'); return; }
+        }
         r.patient_id = p.id;
         r.patients = { id: p.id, full_name: p.full_name, mrn: p.mrn };
-        r.status = CONVERT_STATUS;
         if (refs.onNavigate) refs.onNavigate('patient-card', p);
         // CRM_CONVERT_V1 — мастер открывается всегда: с услугой заявки в смете,
         // либо пустым, чтобы регистратор выбрал её сам.
@@ -816,7 +880,6 @@ async function paint() {
         }
         patientRegistrationModal({
             requestRow: r,
-            markCame: true,
             onCreated: (p) => {
                 if (refs.onNavigate) refs.onNavigate('patient-card', p);
                 // Мастер сам подберёт врача, дату и очередь — как при обычном заказе.
@@ -880,10 +943,14 @@ async function paint() {
     // копии в patients.notes, которая устаревала в тот же день.
     //
     // `requestRow` может быть null — заявку ещё не сохранили (её создаст
-    // persist() уже с patient_id). `markCame` разделяет два случая: конверсия
-    // означает «пациент пришёл», а запись на будущую дату — нет, и ставить ей
-    // статус «Пришёл» было бы враньём в канбане.
-    function patientRegistrationModal({ requestRow = null, prefill = null, markCame = true, onCreated } = {}) {
+    // persist() уже с patient_id).
+    //
+    // CRM_REAL_BOOKING_V1 (2026-09-21) — ЗДЕСЬ БЫЛ ФЛАГ `markCame`: завести
+    // карту «по конверсии» значило заодно объявить заявку дошедшей, а завести
+    // её перед записью на будущую дату — нет. Флага больше нет, потому что нет
+    // и первого случая: карта пациента — это не приход. Ступень «Пришёл»
+    // ставит только событие, и ставит его сервер.
+    function patientRegistrationModal({ requestRow = null, prefill = null, onCreated } = {}) {
         const r = requestRow || {};
         const src = prefill || {
             full_name: r.full_name || '', phone: r.phone || '', dob: '',
@@ -969,7 +1036,6 @@ async function paint() {
             // её patient_id запишет persist() при сохранении.
             if (requestRow && requestRow.id) {
                 const patch = { patient_id: p.id };
-                if (markCame) patch.status = CONVERT_STATUS;
                 const { error: upErr } = await supabase.from('crm_requests').update(patch).eq('id', requestRow.id);
                 if (upErr) toast(trf('Пациент создан, но заявка не обновилась: {msg}', { msg: upErr.message }), 'fail');
             }
@@ -979,7 +1045,6 @@ async function paint() {
             if (requestRow) {
                 requestRow.patient_id = p.id;
                 requestRow.patients = { id: p.id, full_name: p.full_name, mrn: p.mrn };
-                if (markCame) requestRow.status = CONVERT_STATUS;
             }
             // О самой карте окно уже отчиталось («Пациент сохранён»), поэтому
             // здесь говорим о ЗАЯВКЕ — и только тогда, когда ей действительно
@@ -1171,6 +1236,19 @@ async function paint() {
         // svcChosen остаётся первой услугой списка: crm_requests.service_id и
         // карточка канбана по-прежнему читают её (см. миграцию 057).
         let picked = [];
+        // CRM_REAL_BOOKING_V1 — визиты, с которых строки уехали на другой день.
+        // Их предлагают отменить, когда новый день уже записан.
+        const supersededVisits = [];
+        // CRM_REAL_BOOKING_V1 (разбор ревью, N2) — ДНИ, ПО КОТОРЫМ СЕРВЕР
+        // ОТКАЗАЛ «ВИЗИТ ДНЯ ЗАНЯТ». Строки такого дня сервер всё-таки связал с
+        // существующим визитом, и перечитывание приносит visit_id, тот же день,
+        // того же врача — по всем признакам «нетронутая записанная строка»
+        // (keptBooking). Поверь мы этому, второе нажатие «Сохранить и
+        // записать» пропустило бы день, окно закрылось бы с «Записано услуг»,
+        // а время так и осталось бы не занятым. День снимается с учёта, когда
+        // оператор меняет у строки время или врача — то есть делает то, ради
+        // чего отказ и показан.
+        const busyDays = new Set();
         // CRM_LINKS_V1 — доехали ли строки услуг заявки из базы (см. primaryDate).
         let linesLoaded = !r;
         let svcChosen = r ? (r.service_id || null) : null;
@@ -1196,6 +1274,62 @@ async function paint() {
             const sv = svcCatalog.find(x => String(x.id) === String(p.service_id));
             return !!(sv && sv.requires_doctor);
         };
+        // CRM_REAL_BOOKING_V1 — ДЛИТЕЛЬНОСТЬ СТРОКИ. Та же, что возьмёт сервер:
+        // длительность услуги, а без неё — получас, как в мастере визита
+        // (lineDuration в visit-wizard.js). Считай мы иначе — оператору
+        // предлагались бы начала, которых сервер при записи не подтвердит.
+        const SLOT_FALLBACK_MIN = 30;
+        const lineDuration = (p) => {
+            const sv = svcCatalog.find(x => String(x.id) === String(p.service_id));
+            return Math.max(5, Number(sv && sv.duration_minutes) || SLOT_FALLBACK_MIN);
+        };
+        // CRM_REAL_BOOKING_V1 — МЕСТНОЕ ВРЕМЯ В ISO ТАК ЖЕ, КАК ЭТО ДЕЛАЕТ МАСТЕР.
+        //
+        // Строка «ГГГГ-ММ-ДДTчч:мм» без зоны читается движком как МЕСТНАЯ и
+        // только потом переводится в UTC — ровно то же, что делает мастер визита
+        // (new Date(c.when).toISOString()). ДЕНЬ при этом нигде не считается из
+        // полученного ISO: днём распоряжается поле даты строки (p.date), потому
+        // что toISOString() в UTC+5 отправил бы ночной приём во вчера.
+        function localIsoAt(dayIso, hhmm) {
+            if (!dayIso || !hhmm) return null;
+            const d = new Date(String(dayIso) + 'T' + String(hhmm));
+            return Number.isNaN(d.getTime()) ? null : d.toISOString();
+        }
+        const pad2 = (n) => String(n).padStart(2, '0');
+        const minToHhmm = (m) => pad2(Math.floor(m / 60)) + ':' + pad2(m % 60);
+        /** Время строки: 'ЧЧ:ММ' для человека и ISO, который уйдёт на сервер. */
+        function setLineTime(p, hhmm) {
+            p.time = hhmm || '';
+            p.start_iso = p.time ? localIsoAt(p.date, p.time) : null;
+        }
+        /**
+         * CRM_REAL_BOOKING_V1 — СТРОКА, У КОТОРОЙ ПРИЁМ УЖЕ СТОИТ И НИЧЕГО НЕ
+         * МЕНЯЛОСЬ (разбор ревью 2026-09-21).
+         *
+         * Время записи хранится в ВИЗИТЕ, а не в строке заявки, поэтому открыть
+         * записанную заявку ради правки комментария было нельзя: поле времени
+         * открывалось пустым, и «Сохранить и записать» отказывало «не выбрано
+         * время» — на строке, приём по которой в календаре уже стоит.
+         *
+         * Такой день не записывают заново и не отказывают по нему: делать
+         * попросту нечего. «Не менялось» — это тот же день, тот же врач и время,
+         * которого человек не касался (подстановка из визита касанием не
+         * считается: её сделали мы, а не он).
+         */
+        const keptBooking = (p) => !!(p && p.visit_id)
+            && !busyDays.has(p.date)   // отказанный день записанным не считается
+            && String(p.date || '') === String(p.booked_date || '')
+            && String(p.doctor_id || '') === String(p.booked_doctor_id || '')
+            && !p.time_touched;
+
+        /**
+         * Вопрос «да/нет» тем же окном браузера, что у отмены депозита и
+         * удаления шаблона. Окна нет вовсе (печать, встроенный просмотр) —
+         * считаем ответом «нет»: молча отменить чужую запись в календаре
+         * нельзя, а оставить её — можно и сказать об этом.
+         */
+        const askYesNo = (text) => (typeof window !== 'undefined' && typeof window.confirm === 'function'
+            ? window.confirm(text) : false);
         const svcInp = h('input', {
             type: 'text', placeholder: 'Поиск услуги — начните вводить название…', autocomplete: 'off',
             style: { width: '100%', boxSizing: 'border-box', padding: '10px 12px 10px 32px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px', outline: 'none' },
@@ -1341,13 +1475,17 @@ async function paint() {
         // потому, что type_id у большей части каталога NULL (миграция 056).
         supabase.from('service_types').select('id, name').eq('active', 1).order('name')
             .then(({ data }) => { svcTypes = data || []; paintSvcChips(); });
-        supabase.from('services').select('id, name, price, requires_doctor, type, type_id, is_lab').eq('active', 1).order('name').limit(1000).then(({ data }) => {
+        // CRM_REAL_BOOKING_V1 — duration_minutes: слот спрашивается на ту же
+        // длительность, которую возьмёт сервер при записи.
+        supabase.from('services').select('id, name, price, requires_doctor, duration_minutes, type, type_id, is_lab').eq('active', 1).order('name').limit(1000).then(({ data }) => {
             svcCatalog = data || [];
             paintSvcChips();
             // Правка существующей заявки — подтягиваем её строки услуг.
             if (isEdit && r.id) {
                 supabase.from('crm_request_services')
-                    .select('service_id, scheduled_date, status, doctor_id')
+                    // CRM_REAL_BOOKING_V1 — id и visit_id: строка, которая уже
+                    // держит слот, переписыванию набора не подлежит (saveLines).
+                    .select('id, service_id, scheduled_date, status, doctor_id, visit_id')
                     .eq('request_id', r.id).neq('status', 'cancelled')
                     .then(({ data: lines, error }) => {
                         // CRM_LINKS_V1 — ОТКАЗ ЭТО НЕ «УСЛУГ НЕТ». Пустой список
@@ -1366,7 +1504,13 @@ async function paint() {
                             // CRM_LINKS_V1 — статус строки едет вместе с ней:
                             // выполненную услугу нельзя ни переписать, ни выдать
                             // за дату, которую заявка ещё ждёт.
-                            if (sv) picked.push({ service_id: sv.id, name: sv.name, price: sv.price, date: ln.scheduled_date || '', doctor_id: ln.doctor_id || null, status: ln.status || 'pending' });
+                            // CRM_REAL_BOOKING_V1 — чем строка БЫЛА в базе: её
+                            // номер, её визит и день, на который её записали. По
+                            // ним saveLines решает, что можно переписать, а что
+                            // уже держит время врача.
+                            if (sv) picked.push({ service_id: sv.id, name: sv.name, price: sv.price, date: ln.scheduled_date || '', doctor_id: ln.doctor_id || null, status: ln.status || 'pending',
+                                line_id: ln.id || null, visit_id: ln.visit_id || null,
+                                booked_date: ln.scheduled_date || '', booked_doctor_id: ln.doctor_id || null });
                         }
                         // Заявка до миграции 057 — единственная услуга в родителе.
                         if (!picked.length && svcChosen) {
@@ -1375,6 +1519,7 @@ async function paint() {
                         }
                         linesLoaded = true;
                         syncPrimary(); paintPicked();
+                        prefillBookedTimes();   // CRM_REAL_BOOKING_V1 — час уже записанной строки
                     });
             } else if (svcChosen) {
                 const sv = svcCatalog.find(x => String(x.id) === String(svcChosen));
@@ -1516,16 +1661,55 @@ async function paint() {
             // колл-центром, исчезали молча.
             if (isEdit && !linesLoaded) return;
             const writable = picked.filter((p) => p.status !== 'done');
+            // CRM_REAL_BOOKING_V1 — СТРОКА, ДЕРЖАЩАЯ СЛОТ, НЕ ПЕРЕПИСЫВАЕТСЯ.
+            //
+            // «Полная замена набора» (отменить pending и вписать заново) была
+            // безобидна, пока строка была всего лишь пожеланием. Теперь у неё
+            // есть visit_id — настоящая запись в календаре. Отмени её и вставь
+            // копию — и слот остался бы за строкой, которой больше нет: в сетке
+            // приём, в заявке ничего, а регистратура в день приёма не
+            // подставит ни услуги, ни врача.
+            //
+            // Поэтому строка со слотом правится НА МЕСТЕ, а отменяется и
+            // вписывается заново только то, что слота не держит. Переехала
+            // строка на ДРУГОЙ день — она снимается со своего визита
+            // (visit_id: null) и записывается заново ниже; сам визит остаётся
+            // календарю: отменять запись вправе тот, кто её видит, а не
+            // редактор заявки.
+            const linked = writable.filter((p) => p.line_id && p.visit_id);
+            const plain = writable.filter((p) => !(p.line_id && p.visit_id));
             try {
                 await supabase.from('crm_request_services')
                     .update({ status: 'cancelled' })
-                    .eq('request_id', requestId).eq('status', 'pending');
-                if (!writable.length) return;
+                    .eq('request_id', requestId).eq('status', 'pending')
+                    .is('visit_id', null);
+                for (const p of linked) {
+                    const moved = String(p.date || '') !== String(p.booked_date || '');
+                    const patch = {
+                        scheduled_date: p.date || null,
+                        doctor_id: p.doctor_id || null,   // CRM_LINE_DOCTOR_V1
+                        ...(moved ? { visit_id: null } : {}),
+                    };
+                    const { error } = await supabase.from('crm_request_services')
+                        .update(patch).eq('id', p.line_id);
+                    if (error) throw new Error(error.message || error);
+                    if (moved) {
+                        // CRM_REAL_BOOKING_V1 — СТАРЫЙ ПРИЁМ НЕ ИСЧЕЗАЕТ САМ.
+                        // Строку со своего визита мы сняли, а сам визит остался
+                        // держать время врача и уже ничем с заявкой не связан:
+                        // найти его можно было бы только глазами. Запоминаем —
+                        // и после удачной записи нового дня спрашиваем, отменять
+                        // ли старый (см. offerCancelSuperseded).
+                        if (p.visit_id) supersededVisits.push({ visitId: p.visit_id, fromDate: p.booked_date || '', toDate: p.date || '' });
+                        p.visit_id = null; p.booked_date = p.date || '';
+                    }
+                }
+                if (!plain.length) return;
                 // CRM_LINKS_V1 — выполненные строки не вписываются заново.
                 // Отменялись только pending (это верно), а вставлялся ВЕСЬ
                 // набор: у оплаченной услуги появлялся второй, «ждущий»
                 // двойник, и регистратура подставляла её в смету ещё раз.
-                await supabase.from('crm_request_services').insert(writable.map(p => ({
+                await supabase.from('crm_request_services').insert(plain.map(p => ({
                     request_id: requestId,
                     service_id: p.service_id,
                     scheduled_date: p.date || null,
@@ -1534,6 +1718,74 @@ async function paint() {
                 })));
             } catch (e) {
                 toast(trf('Услуги заявки не сохранились: {msg}', { msg: (e && e.message) || e }), 'fail');
+            }
+        }
+
+        /**
+         * CRM_REAL_BOOKING_V1 — ПЕРЕЧИТАТЬ СТРОКИ ПОСЛЕ ЗАПИСИ.
+         *
+         * Слот записан — строки в базе уже не те, что в окне: у них появился
+         * визит, а у только что вписанных — ещё и номер. Без этого повторное
+         * сохранение (оператор исправляет день, который не записался) вписало
+         * бы уже записанные строки ЗАНОВО, рядом с их же слотом: отмену они
+         * переживают (visit_id у них не пуст), а вставку — нет.
+         *
+         * Молча: это сверка памяти окна с базой, а не работа, о которой надо
+         * отчитываться.
+         */
+        async function reloadLines(requestId) {
+            if (!requestId) return;
+            const { data, error } = await supabase.from('crm_request_services')
+                .select('id, service_id, scheduled_date, status, doctor_id, visit_id')
+                .eq('request_id', requestId).neq('status', 'cancelled');
+            if (error || !data) return;
+            for (const p of picked) {
+                // Ключ сопоставления — услуга, день И ВРАЧ: одну и ту же услугу
+                // в один день назначают двум разным врачам (второе мнение,
+                // разные кабинеты), и без врача строка забирала бы чужой визит.
+                // Полностью одинаковые строки (та же услуга, тот же день, тот же
+                // врач) этим ключом всё равно не различить — их и в окне нельзя
+                // завести две: addPicked() не пускает одну услугу дважды.
+                const ln = data.find((x) => String(x.service_id) === String(p.service_id)
+                    && String(x.scheduled_date || '') === String(p.date || '')
+                    && String(x.doctor_id || '') === String(p.doctor_id || ''));
+                if (!ln) continue;
+                p.line_id = ln.id || null;
+                p.visit_id = ln.visit_id || null;
+                p.status = ln.status || p.status;
+                p.booked_date = ln.scheduled_date || '';
+                p.booked_doctor_id = ln.doctor_id || null;
+                p.time_touched = false;   // строка и база снова сходятся
+            }
+        }
+
+        /**
+         * CRM_REAL_BOOKING_V1 — ЧАС УЖЕ ЗАПИСАННОЙ СТРОКИ ЖИВЁТ В ЕЁ ВИЗИТЕ.
+         *
+         * crm_request_services времени не хранит вовсе — только день: время
+         * записи это свойство ПРИЁМА, и второе его хранилище разошлось бы с
+         * первым в тот же день, когда запись перенесут из календаря. Поэтому
+         * час подставляется из самого визита.
+         *
+         * МОЛЧА. Выборка визитов роли колл-центра открыта (реестр, ALL_STAFF),
+         * но если она когда-нибудь закроется — окно просто откроется без
+         * подставленного часа, и сохранить заявку это всё равно не помешает
+         * (см. keptBooking). Красная плашка на месте удобства была бы хуже
+         * самого неудобства.
+         */
+        async function prefillBookedTimes() {
+            const ids = [...new Set(picked.filter((p) => p.visit_id).map((p) => p.visit_id))];
+            if (!ids.length) return;
+            const { data, error } = await supabase.from('visits')
+                .select('id, visit_date, duration_minutes').in('id', ids);
+            if (error || !data) return;
+            const byId = new Map(data.map((v) => [String(v.id), v]));
+            for (const p of picked) {
+                if (!p.visit_id || p.time) continue;
+                const v = byId.get(String(p.visit_id));
+                const d = v && v.visit_date ? new Date(v.visit_date) : null;
+                if (!d || Number.isNaN(d.getTime())) continue;
+                setLineTime(p, pad2(d.getHours()) + ':' + pad2(d.getMinutes()));
             }
         }
 
@@ -1569,10 +1821,6 @@ async function paint() {
 
             patientRegistrationModal({
                 requestRow: r || null,
-                // Запись на будущую дату — это НЕ «пациент пришёл»: статус
-                // заявки трогать нельзя, иначе канбан покажет визит, которого
-                // ещё не было.
-                markCame: false,
                 // CRM_LEAD_CONTEXT_V1 — заявки в базе может ещё и не быть
                 // (её создаст persist()), поэтому контекст для окна берётся из
                 // самой формы: выбранный источник и первая из набранных услуг.
@@ -1598,6 +1846,11 @@ async function paint() {
             const shut = () => ov.remove();
             ov.appendChild(h('div', { class: 'modal-backdrop', onclick: shut }));
 
+            // CRM_REAL_BOOKING_V1 — дни, запись на которые не удалась. Окно
+            // остаётся открытым, а их строки — помеченными: частичный отказ не
+            // имеет права выглядеть удачей.
+            const failedDays = new Set();
+
             const rows = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
             const inputs = new Map();   // service_id -> <input type=date>
             const paintRows = () => {
@@ -1605,8 +1858,72 @@ async function paint() {
                 for (const p of picked) {
                     const inp = h('input', { type: 'date', value: p.date || '',
                         style: { width: '155px', flex: '0 0 auto', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13.5px' } });
-                    inp.addEventListener('change', () => { p.date = inp.value; });
                     inputs.set(String(p.service_id), inp);
+
+                    // CRM_REAL_BOOKING_V1 — ВРЕМЯ СТРОКИ, НАЗВАННОЕ СЕРВЕРОМ.
+                    //
+                    // Ячейка перерисовывает себя сама: список свободных начал
+                    // приезжает ответом, и перекрашивать ради него всё окно
+                    // значило бы вырывать фокус из соседних полей у оператора,
+                    // который разговаривает по телефону. `token` отсекает
+                    // опоздавший ответ: врача и дату успевают сменить дважды,
+                    // пока едет первый.
+                    const timeCell = h('div', { style: { width: '150px', flex: '0 0 auto' } });
+                    const note = (t) => h('div', { class: 'muted', style: { fontSize: '12.5px' } }, t);
+                    let token = 0;
+                    const paintTime = async () => {
+                        const mine = ++token;
+                        clear(timeCell);
+                        if (!p.doctor_id) {
+                            // Строка без врача — «на дату»: времени врача она не
+                            // занимает, слота у неё нет и быть не может.
+                            setLineTime(p, '');
+                            timeCell.appendChild(note('без времени'));
+                            return;
+                        }
+                        if (!p.date) { timeCell.appendChild(note('сначала дата')); return; }
+                        timeCell.appendChild(note('Ищем время…'));
+                        const day = await loadSlotDay(Number(p.doctor_id), p.date, lineDuration(p),
+                            linkedPatient ? { patientId: linkedPatient.id } : {});
+                        if (mine !== token) return;   // пока ждали, врача или дату сменили
+                        clear(timeCell);
+                        if (!day) {
+                            // Сервер не ответил. Запрещать запись из-за этого
+                            // нельзя: последнее слово о времени всё равно за ним
+                            // при ensure_visit. Поэтому время вписывается руками,
+                            // и сказано, ПОЧЕМУ списка нет, — пустой список читался
+                            // бы как «у врача нет ни одного окна».
+                            const free = h('input', { type: 'time', value: p.time || '',
+                                style: { width: '100%', boxSizing: 'border-box', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13.5px' } });
+                            free.addEventListener('change', () => { setLineTime(p, free.value); p.time_touched = true; busyDays.delete(p.date); });
+                            timeCell.appendChild(free);
+                            timeCell.appendChild(note('расписание не ответило — впишите время'));
+                            return;
+                        }
+                        const opts = freeStartMinutes(day).map(minToHhmm);
+                        // Выбранное время переживает смену дня, только если оно
+                        // свободно и в новом дне: молча оставить занятое значило
+                        // бы обещать пациенту час, который сервер не подтвердит.
+                        //
+                        // ИСКЛЮЧЕНИЕ — УЖЕ ЗАПИСАННАЯ СТРОКА. Её час занимает
+                        // сам этот приём, и в списке свободных его может не
+                        // оказаться (сервер вычитает собственный визит пациента
+                        // не всегда — например, когда врача в строке сменили).
+                        // Выбросить его значило бы показать пустое поле там, где
+                        // приём в календаре стоит.
+                        const keep = p.time && (opts.includes(p.time) || keptBooking(p)) ? p.time : '';
+                        if (keep && !opts.includes(keep)) opts.unshift(keep);
+                        setLineTime(p, keep);
+                        if (!opts.length) { timeCell.appendChild(note('свободного времени нет')); return; }
+                        const sel = h('select', { 'aria-label': 'Время приёма',
+                            style: { width: '100%', boxSizing: 'border-box', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13.5px', background: 'var(--white,#fff)' } },
+                            h('option', { value: '' }, '— время —'),
+                            ...opts.map((t) => h('option', { value: t, selected: t === keep }, t)));
+                        sel.value = keep;
+                        sel.addEventListener('change', () => { setLineTime(p, sel.value); p.time_touched = true; busyDays.delete(p.date); });
+                        timeCell.appendChild(sel);
+                    };
+                    inp.addEventListener('change', () => { p.date = inp.value; setLineTime(p, p.time); paintTime(); });
 
                     // CRM_LINE_DOCTOR_V1 — врач выбирается ТОЛЬКО там, где услуга
                     // его требует. Мастер записи не пустит такую услугу в смету
@@ -1619,27 +1936,230 @@ async function paint() {
                             h('option', { value: '' }, '— выберите врача —'),
                             ...pool.map(d => h('option', { value: String(d.id), selected: String(p.doctor_id || '') === String(d.id) },
                                 d.full_name + (d.specialty ? ' · ' + d.specialty : ''))));
-                        sel.addEventListener('change', () => { p.doctor_id = sel.value ? Number(sel.value) : null; });
+                        sel.addEventListener('change', () => { p.doctor_id = sel.value ? Number(sel.value) : null; setLineTime(p, ''); busyDays.delete(p.date); paintTime(); });
                         docCell = sel;
                     } else {
                         docCell = h('span', { class: 'muted', style: { width: '210px', flex: '0 0 auto', fontSize: '12.5px' } }, 'врач не требуется');
                     }
 
-                    rows.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 11px', border: '1px solid var(--ink-100)', borderRadius: '10px' } },
+                    const bad = failedDays.has(p.date);
+                    rows.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 11px', border: '1px solid ' + (bad ? 'var(--crit-400, #f87171)' : 'var(--ink-100)'), borderRadius: '10px' } },
                         h('div', { style: { flex: 1, minWidth: 0 } },
-                            h('div', { style: { fontSize: '13.5px', fontWeight: 600, overflowWrap: 'anywhere' } }, p.name),
-                            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, String(p.price || 0), ' сум')),
-                        docCell, inp));
+                            h('div', { class: 'row', style: { gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
+                                h('span', { style: { fontSize: '13.5px', fontWeight: 600, overflowWrap: 'anywhere' } }, p.name),
+                                // CRM_REAL_BOOKING_V1 — у строки есть настоящий слот.
+                                // Не на отказанном дне: там visit_id указывает на
+                                // приём, время которого НЕ то, что выбрал оператор.
+                                p.visit_id && !busyDays.has(p.date) ? Tag('записан', { kind: 'ok' }) : null),
+                            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, String(p.price || 0), ' сум'),
+                            bad ? h('div', { style: { fontSize: '12.5px', color: 'var(--crit-700, #b91c1c)' } }, 'время занять не удалось') : null),
+                        docCell, timeCell, inp));
+                    paintTime();
                 }
             };
             paintRows();
+
+            /**
+             * CRM_REAL_BOOKING_V1 — ЗАПИСЬ ДНЯ ИДЁТ ТОЙ ЖЕ ДВЕРЬЮ, ЧТО У ВСЕХ.
+             *
+             * Один визит на пациента в день (DAY_VISIT_V1), поэтому вызов —
+             * один на ДЕНЬ, а не на строку: услуги дня лягут в него строками
+             * сметы у регистратуры. Время врача держит ПЕРВАЯ строка дня, у
+             * которой есть и врач, и время, — ровно так же выбирает головную
+             * строку мастер визита (headTimedLine).
+             *
+             * День, в котором врача нет ни у одной строки, остаётся «на дату»:
+             * лаборатория ничьего времени в календаре не занимает, и записывать
+             * там нечего.
+             *
+             * ОТКАЗ ОДНОГО ДНЯ НЕ ОТМЕНЯЕТ ОСТАЛЬНЫЕ. Заявка на три дня — это
+             * три отдельных визита; бросить работу на первом занятом слоте
+             * значило бы потерять два уже возможных. Поэтому цикл идёт до конца,
+             * а неудавшиеся дни называются поимённо и остаются в окне.
+             *
+             * @returns {Promise<boolean>} записалось всё, что можно было записать
+             */
+            async function bookDays(row) {
+                const requestId = row && row.id;
+                const patientId = (linkedPatient && linkedPatient.id) || (row && row.patient_id) || null;
+                failedDays.clear();
+                const live = picked.filter((p) => p.status !== 'done' && p.date);
+                const days = [...new Set(live.map((p) => p.date))].sort();
+                let booked = 0, touched = 0;
+                for (const day of days) {
+                    const timed = live.filter((p) => p.date === day && p.doctor_id);
+                    if (!timed.length) continue;              // день «на дату» — слота нет
+                    // CRM_REAL_BOOKING_V1 — ДЕНЬ, В КОТОРОМ НИЧЕГО НЕ МЕНЯЛОСЬ,
+                    // НЕ ЗАПИСЫВАЮТ ЗАНОВО: приём по нему уже стоит, и повторный
+                    // вызов заставил бы сервер перенести визит на то же время.
+                    if (timed.every(keptBooking)) continue;
+                    // Головная строка — та, ради которой день и записывают:
+                    // сначала изменённая, и только если таких нет — любая со
+                    // временем (день, где одну строку тронули, а вторую нет).
+                    const head = timed.find((p) => !keptBooking(p) && p.start_iso) || timed.find((p) => p.start_iso);
+                    const human = day.split('-').reverse().join('.');
+                    if (!head || !patientId || !requestId) { failedDays.add(day); continue; }
+                    const args = {
+                        patient_id: Number(patientId),
+                        date: head.start_iso,
+                        doctor_id: Number(head.doctor_id),
+                        book: {
+                            doctor_id: Number(head.doctor_id),
+                            service_id: head.service_id,
+                            start: head.start_iso,
+                            duration_minutes: lineDuration(head),
+                        },
+                    };
+                    let res = await supabase.rpc('ensure_visit', args);
+                    // ЗАНЯТО — ЭТО ВОПРОС ЧЕЛОВЕКУ, А НЕ ГАЛОЧКА. Слова отказа
+                    // и окно причины — те же, что у календаря и у мастера:
+                    // экстренная запись поверх занятого времени существует, но
+                    // она отдельное действие с причиной в самой записи.
+                    if (res.error && res.error.code === 'slot_taken') {
+                        const reason = await askEmergencyReason(bookErrorText(res.error));
+                        if (!reason) { failedDays.add(day); continue; }
+                        res = await supabase.rpc('ensure_visit', {
+                            ...args,
+                            book: { ...args.book, emergency: true, emergency_reason: reason },
+                        });
+                    }
+                    const data = res.data || {};
+                    const visitId = data.visit && data.visit.id;
+                    if (res.error || !visitId) {
+                        failedDays.add(day);
+                        toast(trf('Запись на {day} не сохранена: {msg}', { day: human, msg: bookErrorText(res.error || {}) }), 'fail');
+                        continue;
+                    }
+                    // ОТВЕТ ЧИТАЕТСЯ ЦЕЛИКОМ, А НЕ ПО НАЛИЧИЮ id (разбор ревью
+                    // 2026-09-21). У ensure_visit с `book:` три разных исхода, и
+                    // визит есть во всех трёх:
+                    //
+                    //   booked:true                — время занято нами;
+                    //   booked:true, moved:true    — визит дня БЫЛ ПУСТ и
+                    //                                перенесён на это время;
+                    //   booked:false,
+                    //   reason:'day_visit_busy'    — по визиту дня УЖЕ БЫЛА
+                    //                                работа: время ему не
+                    //                                меняли, и выбранный час
+                    //                                НИКЕМ НЕ ЗАНЯТ.
+                    //
+                    // Третий исход считался успехом, и пациенту называли час, на
+                    // который его никто не ждёт. Теперь это отказ дня — с тем
+                    // единственным, что оператору нужно сказать вслух: во сколько
+                    // и у кого человека уже ждут.
+                    //
+                    // Само чтение — общее на три двери (ensure-visit-answer.js).
+                    const answer = readEnsureVisit(data, { time: head.time || '' });
+                    if (answer.busy) {
+                        failedDays.add(day);
+                        busyDays.add(day);   // см. keptBooking: этот день записанным не считать
+                        // Строки этому визиту сервер всё-таки связал (в этот день
+                        // пациента держит именно он) — перечитываем, а СВОЙ visit_id
+                        // не пишем: писать нам нечего, времени мы не занимали.
+                        touched++;
+                        // «Ничего не потеряно»: строка заявки привязана к тому
+                        // приёму, который в этот день у пациента уже есть.
+                        toast(answer.text + ' ' + tr('Услуга привязана к этому приёму.'), 'fail');
+                        continue;
+                    }
+                    busyDays.delete(day);
+                    forgetSlots();   // время занято — кэш занятости больше не правда
+                    booked++; touched++;
+                    // ПЕРЕНОС НАЗЫВАЕТСЯ ПЕРЕНОСОМ И НАЗЫВАЕТ, ОТКУДА: «записано»
+                    // и «время приёма изменилось» — разные новости, и вторую
+                    // оператор обязан сказать пациенту в ту же трубку.
+                    if (answer.moved) toast(answer.text, 'ok');
+                    // ВИЗИТ ПРОСТАВЛЯЕТ СТРОКАМ СЕРВЕР (settleCrmOnBooking, та же
+                    // транзакция, что заводит визит) — и всё-таки пишем отсюда
+                    // тоже. Сервер берёт только СВОБОДНЫЕ строки; строка,
+                    // оставшаяся на несостоявшейся записи, для него свободна лишь
+                    // потому, что тот визит мёртв, — а строка, которую оператор
+                    // переносит с живого визита на новый, нет. Явная запись
+                    // делает перезапись однозначной: в заявке стоит тот визит,
+                    // который оператор только что назначил.
+                    //
+                    // ТОЛЬКО ЖДУЩИМ СТРОКАМ. Без этого отбора ссылку получали и
+                    // отменённые двойники, которые saveLines заводит своей же
+                    // заменой набора, и выполненные услуги прошлых приходов, —
+                    // а ночное сметание, считавшее заявку записанной по ЛЮБОЙ
+                    // строке со ссылкой, переставало видеть её навсегда.
+                    const { error: linkErr } = await supabase.from('crm_request_services')
+                        .update({ visit_id: visitId })
+                        .eq('request_id', requestId).eq('scheduled_date', day).eq('status', 'pending');
+                    if (linkErr) {
+                        toast(trf('Запись на {day} сохранена, но строки не связаны с визитом: {msg}',
+                            { day: human, msg: linkErr.message || linkErr }), 'fail');
+                    }
+                }
+                if (touched) await reloadLines(requestId);
+                await offerCancelSuperseded();
+                if (!failedDays.size) return true;
+                toast(trf('Не удалось записать дни: {days}',
+                    { days: [...failedDays].map((d) => d.split('-').reverse().join('.')).join(', ') }), 'fail');
+                return false;
+            }
+
+            /**
+             * CRM_REAL_BOOKING_V1 — СТАРЫЙ ПРИЁМ НЕ ОСТАЁТСЯ ВИСЕТЬ МОЛЧА.
+             *
+             * Строка, уехавшая на другой день, снимается со своего визита
+             * (saveLines) — и прежний приём остаётся в календаре: время врача
+             * занято, пациента в этот день не будет, и связи с заявкой у записи
+             * больше нет. Найти её можно было бы только глазами.
+             *
+             * СПРАШИВАЕМ, А НЕ ОТМЕНЯЕМ САМИ. Тот приём мог быть заведён не
+             * колл-центром и не под эту услугу; отменить чужую запись в
+             * календаре — решение человека. Отказались — говорим вслух, что она
+             * осталась, и где её искать.
+             *
+             * Отмена идёт ОБЩЕЙ ДВЕРЬЮ (visit-booking.js → calendar_book), той
+             * же, которой календарь двигает и отменяет записи: серверный хук на
+             * отмене сам снимет строки с визита и вернёт заявку в работу.
+             *
+             * Только те дни, которые УДАЛОСЬ записать: отменить старое, не
+             * записав новое, значило бы оставить пациента вовсе без приёма.
+             */
+            async function offerCancelSuperseded() {
+                const list = supersededVisits.splice(0, supersededVisits.length);
+                if (!list.length) return;
+                const ids = [...new Set(list.map((it) => it.visitId).filter(Boolean))];
+                const { data, error } = await supabase.from('visits')
+                    .select('id, visit_date, duration_minutes').in('id', ids);
+                const byId = new Map((((!error && data) || [])).map((v) => [String(v.id), v]));
+                for (const it of list) {
+                    const day = String(it.fromDate || '').split('-').reverse().join('.');
+                    const v = byId.get(String(it.visitId));
+                    if (!v) continue;                       // визита уже нет — отменять нечего
+                    if (failedDays.has(it.toDate)) {
+                        // Новый день не записался: старый приём — единственное,
+                        // что у пациента осталось, и трогать его нельзя.
+                        toast(trf('Старый приём на {d} остаётся в календаре — отмените его там.', { d: day }), 'warn');
+                        continue;
+                    }
+                    const at = new Date(v.visit_date);
+                    const time = Number.isNaN(at.getTime()) ? '' : pad2(at.getHours()) + ':' + pad2(at.getMinutes());
+                    if (!askYesNo(trf('Старый приём на {d} в {t} отменить?', { d: day, t: time }))) {
+                        toast(trf('Старый приём на {d} остаётся в календаре — отмените его там.', { d: day }), 'warn');
+                        continue;
+                    }
+                    try {
+                        await setVisitStatus(v, 'cancelled');
+                        toast(trf('Старый приём на {d} отменён.', { d: day }), 'ok');
+                    } catch (e) {
+                        toast(trf('Старый приём на {d} отменить не удалось: {msg}', { d: day, msg: (e && e.message) || e }), 'fail');
+                    }
+                }
+            }
 
             const allInp = h('input', { type: 'date',
                 style: { width: '160px', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13.5px' } });
             const applyAll = h('button', { class: 'btn btn-outline btn-sm', type: 'button',
                 onclick: () => {
                     if (!allInp.value) { toast('Выберите дату.', 'fail'); return; }
-                    for (const p of picked) { p.date = allInp.value; const i = inputs.get(String(p.service_id)); if (i) i.value = allInp.value; }
+                    for (const p of picked) { p.date = allInp.value; setLineTime(p, p.time); }
+                    // Перерисовываем целиком: у каждой строки сменился день, а
+                    // значит и список свободного времени у её врача.
+                    paintRows();
                     toast('Дата проставлена всем услугам.', 'ok');
                 } }, 'Применить ко всем');
 
@@ -1652,22 +2172,32 @@ async function paint() {
                 // записи не покажет в смете.
                 const noDoc = picked.filter(p => needsDoctor(p) && !p.doctor_id);
                 if (noDoc.length) { toast(trf('Не выбран врач: {names}', { names: noDoc.map(p => p.name).join(', ') }), 'fail'); return; }
+                // CRM_REAL_BOOKING_V1 — ВРАЧ БЕЗ ВРЕМЕНИ ЭТО НЕ ЗАПИСЬ. Строка с
+                // врачом занимает его время в календаре; без времени занимать
+                // нечего, и пациенту по телефону сказать тоже нечего.
+                // keptBooking — строка, приём по которой уже стоит и которую не
+                // трогали: требовать у неё время значило бы запереть окно
+                // записанной заявки (время хранится в визите, а не в строке).
+                const noTime = picked.filter(p => p.status !== 'done' && p.doctor_id && !p.start_iso && !keptBooking(p));
+                if (noTime.length) { toast(trf('Не выбрано время: {names}', { names: noTime.map(p => p.name).join(', ') }), 'fail'); return; }
                 saveAll.disabled = true;
                 const row = await persist();
                 if (!row) { saveAll.disabled = false; return; }
+                const all = await bookDays(row);
+                if (!all) { saveAll.disabled = false; paintRows(); return; }
                 shut(); close();
                 toast(trf('Записано услуг: {n} — регистратура увидит каждую в свой день.', { n: picked.length }), 'ok');
                 await paint();
             });
 
-            // Шире прежнего: в строке теперь три поля — услуга, врач и дата.
-            ov.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '860px', maxWidth: 'calc(100vw - 32px)' } },
+            // Шире прежнего: в строке теперь четыре поля — услуга, врач, время и дата.
+            ov.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '920px', maxWidth: 'calc(100vw - 32px)' } },
                 h('header', { class: 'modal-head' },
                     h('h2', { style: { margin: 0, fontSize: '15px' } }, Icon('Check', { size: 16 }), ' Даты приёма'),
                     h('button', { class: 'modal-close', onclick: shut }, '×')),
                 h('div', { class: 'modal-body', style: { display: 'block', maxHeight: '62vh', overflowY: 'auto' } },
                     h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } },
-                        'Назначьте дату каждой услуге и врача там, где он нужен. Регистратура увидит услугу в смете именно в этот день.'),
+                        'Назначьте дату и время каждой услуге. Время предлагает расписание врача — записанный слот сразу виден в календаре.'),
                     h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 11px', marginBottom: '12px', background: 'var(--ink-25, #f6f8f9)', border: '1px solid var(--ink-100)', borderRadius: '10px' } },
                         h('span', { style: { flex: 1, fontSize: '13.5px', fontWeight: 600 } }, 'Одна дата для всех'),
                         allInp, applyAll),
