@@ -4,6 +4,7 @@
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
   // CRM_REAL_BOOKING_V1 (2026-09-21) — запись колл-центра держит настоящий слот
+  "заявки": {"en":"requests","ru":"заявки","uz":"arizalar"},
   "сначала дата": {"en":"pick a date first","ru":"сначала дата","uz":"avval sana"},
   "Ищем время…": {"en":"Looking for a time…","ru":"Ищем время…","uz":"Vaqt qidirilmoqda…"},
   "расписание не ответило — впишите время": {"en":"the schedule did not answer — type the time in","ru":"расписание не ответило — впишите время","uz":"jadval javob bermadi — vaqtni o‘zingiz kiriting"},
@@ -16,7 +17,6 @@ export const STRINGS = {
   "Запись на {day} сохранена, но строки не связаны с визитом: {msg}": {"en":"The booking for {day} was saved, but its lines are not linked to the visit: {msg}","ru":"Запись на {day} сохранена, но строки не связаны с визитом: {msg}","uz":"{day} uchun yozuv saqlandi, lekin qatorlar tashrifga bog‘lanmadi: {msg}"},
   "Не удалось записать дни: {days}": {"en":"These days could not be booked: {days}","ru":"Не удалось записать дни: {days}","uz":"Bu kunlarga yozib bo‘lmadi: {days}"},
   "Назначьте дату и время каждой услуге. Время предлагает расписание врача — записанный слот сразу виден в календаре.": {"en":"Set a date and a time for every service. The times come from the doctor's own schedule — a booked slot shows up in the calendar at once.","ru":"Назначьте дату и время каждой услуге. Время предлагает расписание врача — записанный слот сразу виден в календаре.","uz":"Har bir xizmatga sana va vaqt belgilang. Vaqtlarni shifokorning jadvali taklif qiladi — band qilingan vaqt kalendarda darhol ko‘rinadi."},
-  "колл-центр": {"en":"call centre","ru":"колл-центр","uz":"call-markaz"},
   "Заявка №{n}": {"en":"Request No. {n}","ru":"Заявка №{n}","uz":"Ariza №{n}"},
   // LIS_FORWARDER_V1 (2026-09-14) — приборы на COM-кабеле подключаются через переадресатор
   "Прибор, подключённый к компьютеру только кабелем COM (BC-2800, BC-3000 Plus, AutoLumo A1000 и другие)": {"en":"A device connected to a computer only by a COM cable (BC-2800, BC-3000 Plus, AutoLumo A1000 and others)","ru":"Прибор, подключённый к компьютеру только кабелем COM (BC-2800, BC-3000 Plus, AutoLumo A1000 и другие)","uz":"Kompyuterga faqat COM kabeli bilan ulangan qurilma (BC-2800, BC-3000 Plus, AutoLumo A1000 va boshqalar)"},

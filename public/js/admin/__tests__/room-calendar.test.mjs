@@ -71,10 +71,21 @@ class TX extends F { constructor(t) { super('#text'); this.nodeType = 3; this._t
 const mk = (t) => { const e = new F(t); if (String(t).toLowerCase() === 'template') e.content = new F('#fragment'); return e; };
 globalThis.Node = F;
 globalThis.Event = class { constructor(t, o) { this.type = t; Object.assign(this, o || {}); } };
+// CRM_REAL_BOOKING_V1 — У ДОКУМЕНТА ПОЯВИЛИСЬ НАСТОЯЩИЕ СЛУШАТЕЛИ.
+//
+// Карточка приёма открывается не щелчком по блоку, а отпусканием мыши: экран
+// начинает перетаскивание (mousedown на блоке) и решает на mouseup, тянули его
+// или просто нажали. Оба хвоста висят на ДОКУМЕНТЕ, и с немым стендом карточку
+// нельзя было открыть вовсе — то есть нельзя было и проверить, что в ней
+// написано.
+const _docL = {};
 globalThis.document = {
   createElement: mk, createElementNS: (_n, t) => mk(t), createTextNode: (t) => new TX(t),
   head: mk('head'), body: mk('body'), documentElement: mk('html'),
-  addEventListener() {}, removeEventListener() {}, getElementById() { return null; },
+  addEventListener(t, fn) { (_docL[t] || (_docL[t] = [])).push(fn); },
+  removeEventListener(t, fn) { if (_docL[t]) _docL[t] = _docL[t].filter((f) => f !== fn); },
+  dispatchEvent(e) { for (const fn of (_docL[e.type] || []).slice()) fn(e); return true; },
+  getElementById() { return null; },
 };
 // I18N_LOCALE_PIN_V1 — язык пришпилен к ru ДО импорта экрана.
 //
@@ -109,6 +120,7 @@ const { getRpc } = await import('../../../../server/services/rpc/index.js');
 const USER = { id: 1, role: 'admin', extra_roles: [] };
 let DB = null;
 let FAIL_TABLE = null;   // «пусть этот запрос упадёт» — для проверки честности ошибки
+const DB_CALLS = [];     // что экран спросил у /api/db — «лишний запрос» это тоже поведение
 
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
@@ -124,6 +136,7 @@ globalThis.fetch = async (url, opts) => {
     catch (e) { return { ok: false, status: e.status || 500, json: async () => ({ error: { code: e.code, message: e.message, params: e.params } }) }; }
   }
   if (u === '/api/db') {
+    DB_CALLS.push(body);
     if (FAIL_TABLE && body.table === FAIL_TABLE) return bad('unknown column');
     let compiled;
     try { compiled = compile(body, USER); } catch (e) { return bad(e.message); }
@@ -169,7 +182,7 @@ const EXTRA_DOCTORS = [
   [75, 'jurayev', 'Жураев Бекзод', 'офтальмолог'],
 ];
 
-function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false } = {}) {
+function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, crm = false } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   const day = nextWeekday();
@@ -205,6 +218,16 @@ function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, 
   const start = new Date(day); start.setHours(10, 0, 0, 0);
   db.prepare(`INSERT INTO visits (id, patient_id, doctor_id, room_id, service_id, visit_date, duration_minutes, status)
               VALUES (55, 3, 7, 11, 21, ?, 30, 'confirmed')`).run(start.toISOString());
+
+  // CRM_REAL_BOOKING_V1 — ЗАЯВКА КОЛЛ-ЦЕНТРА, ДЕРЖАЩАЯ ЭТОТ ВИЗИТ. Ссылка
+  // живёт на СТРОКЕ заявки (миграция 142): у заявки на три дня три строки и
+  // три визита, и «из какой заявки эта запись» — вопрос к строке, а не к
+  // заявке.
+  if (crm) {
+    db.prepare("INSERT INTO crm_requests (id, full_name, phone, source, note, status, patient_id) VALUES (77,'Иванов Иван','+998901112233','call','','scheduled',3)").run();
+    db.prepare("INSERT INTO crm_request_services (id, request_id, service_id, scheduled_date, status, visit_id) VALUES (301, 77, 21, ?, 'pending', 55)")
+      .run(isoOf(day));
+  }
 
   // PASTEL_IDENTITY_V1 — отменённый приём ТОГО ЖЕ врача, что и действующий:
   // только так проверяется, что отмена читается не цветом (цвет у них общий).
@@ -285,8 +308,8 @@ const WORKING_SET_KEY = 'rcal.workingset.v1';
 function putWorkingSet(ws) { LS.set(WORKING_SET_KEY, JSON.stringify(ws)); }
 
 /** Отрисовать экран на нужный день. */
-async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, workingSet = null } = {}) {
-  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue, manyDoctors });
+async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, workingSet = null, crm = false } = {}) {
+  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue, manyDoctors, crm });
   if (DB) DB.close();
   DB = s.db;
   FAIL_TABLE = failTable;
@@ -957,4 +980,71 @@ test('ВСЁ, ЧТО room-calendar.js БЕРЁТ ИЗ rcal-layout.js, ИМПОР
   assert.deepEqual(missing, [],
     'room-calendar.js пользуется именами rcal-layout.js, которых нет в его списке импорта — '
     + 'в браузере это ReferenceError на отрисовке и пустая вкладка «Записи»: ' + missing.join(', '));
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_REAL_BOOKING_V1 (2026-09-21) — ИЗ КАКОЙ ЗАЯВКИ ЭТА ЗАПИСЬ
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Запись колл-центра — обычная строка visits, и в сетке она видна и без метки.
+// Но регистратуре важно ОТКУДА она: по этому человеку звонили, его обещали
+// ждать, и за записью стоит заявка с её комментарием и оператором. Без метки
+// сетка выглядит так, будто все пациенты пришли сами.
+
+/** Открыть карточку приёма ТЕМ ЖЕ способом, что и регистратор: нажал — отпустил. */
+async function openAppt(box, at = /10:00–10:30/) {
+  const block = byClass(box, 'rcal-appt').find((c) => at.test(textOf(c)));
+  assert.ok(block, 'записи, по которой нужно щёлкнуть, нет в сетке');
+  block.dispatchEvent({
+    type: 'mousedown', currentTarget: block, clientX: 20, clientY: 20,
+    target: { classList: { contains: () => false } },
+    preventDefault() {}, stopPropagation() {},
+  });
+  document.dispatchEvent({ type: 'mouseup' });
+  await flush();
+  const modal = document.body.children.filter((n) => String(n.className).split(/\s+/).includes('modal')).pop();
+  assert.ok(modal, 'карточка приёма не открылась');
+  return modal;
+}
+
+test('ЗАПИСЬ ИЗ ЗАЯВКИ помечена в сетке и названа номером в карточке приёма', async () => {
+  document.body.children.length = 0;
+  const { box } = await render({ crm: true });
+
+  const card = byClass(box, 'rcal-appt').find((c) => /10:00–10:30/.test(textOf(c)));
+  assert.ok(card, 'запись пропала из сетки');
+  assert.ok(/колл-центр/.test(textOf(card)),
+    'на блоке нет метки колл-центра: сетка показывает запись так, будто пациент пришёл сам — ' + textOf(card));
+
+  const modal = await openAppt(box);
+  assert.ok(/Заявка №77/.test(textOf(modal)),
+    'в карточке приёма не сказано, КАКУЮ заявку открывать — метка на блоке остаётся без продолжения: '
+    + textOf(modal).replace(/\s+/g, ' ').slice(0, 300));
+});
+
+test('обычная запись метки колл-центра не несёт — метка означает факт, а не украшение', async () => {
+  document.body.children.length = 0;
+  const { box } = await render();
+  const card = byClass(box, 'rcal-appt').find((c) => /10:00–10:30/.test(textOf(c)));
+  assert.ok(card, 'запись пропала из сетки');
+  assert.ok(!/колл-центр/.test(textOf(card)),
+    'метка стоит на записи, которую колл-центр не делал: ' + textOf(card));
+
+  const modal = await openAppt(box);
+  assert.ok(!/Заявка №/.test(textOf(modal)), 'в карточке приёма появился номер несуществующей заявки');
+});
+
+test('записей в окне нет — про заявки никто не спрашивает', async () => {
+  const { box } = await render({ crm: true });
+  const dateInp = walk(box).find((n) => String(n.className).includes('rcal-date'));
+  DB_CALLS.length = 0;
+  // Пустой день далеко впереди: визитов нет, значит и спрашивать не о чем.
+  dateInp.value = '2030-01-09';
+  dateInp.dispatchEvent({ type: 'change', target: dateInp });
+  await flush();
+
+  const asked = DB_CALLS.filter((c) => c.table === 'crm_request_services');
+  assert.deepEqual(asked, [],
+    'экран спросил «из каких заявок эти записи», когда записей нет вовсе — лишний запрос на каждое перелистывание: '
+    + JSON.stringify(asked));
 });

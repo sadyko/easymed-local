@@ -378,7 +378,11 @@ test('МАСТЕР И КАЛЕНДАРЬ ПРЕДЛАГАЮТ ОДИН И ТОТ
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const VIEWS = path.join(HERE, '..', 'views');
-const WIZARD_FILES = ['service-picker-modal.js', 'visit-wizard.js'];
+// CRM_REAL_BOOKING_V1 (2026-09-21) — карточка заявки колл-центра предлагает
+// оператору свободное время, то есть задаёт ТОТ ЖЕ вопрос, на котором четыре
+// реализации расписания разошлись. Значит, и запрет «не считать слоты самому»
+// относится к ней так же, как к двум мастерам.
+const WIZARD_FILES = ['service-picker-modal.js', 'visit-wizard.js', 'crm.js'];
 
 /** Убрать комментарии и не тронуть длину строк: разбор здесь про КОД. */
 function stripComments(src) {

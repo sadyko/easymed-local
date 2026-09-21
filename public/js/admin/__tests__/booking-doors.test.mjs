@@ -469,11 +469,16 @@ function stripComments(src) {
 
 // Экраны, которые расписание ПИШУТ. Каждый обязан ходить общей дверью.
 const BOOKING_VIEWS = ['visits.js', 'doctor-room.js', 'service-workspace.js', 'visit-modal.js', 'requests-inbox.js'];
+// Двери КЛАССА МАСТЕРА: заводят визит дня и занимают слот ОДНИМ вызовом
+// (ensure_visit + book). CRM_REAL_BOOKING_V1 (2026-09-21) — карточка заявки
+// колл-центра стала третьей такой дверью: «Сохранить и записать» держит
+// настоящее время врача, а не пишет пожелание с датой.
+const WIZARD_DOORS = ['visit-wizard.js', 'crm.js'];
 const read = (f) => fs.readFileSync(path.join(VIEWS, f), 'utf8');
 
 test('ни один экран не пишет расписание визита через /api/db', () => {
   const offences = [];
-  for (const f of [...BOOKING_VIEWS, 'visit-wizard.js']) {
+  for (const f of [...BOOKING_VIEWS, ...WIZARD_DOORS]) {
     const code = stripComments(read(f));
     if (/from\('visits'\)[\s\S]{0,200}\.insert\(/.test(code)) offences.push(f + ': снова вставляет визит через /api/db');
     // UPDATE по visits с колонкой расписания в полезной нагрузке.
@@ -489,12 +494,40 @@ test('ни один экран не пишет расписание визита
   assert.deepEqual(offences, [], 'вторая дверь к расписанию открылась заново:\n' + offences.join('\n'));
 });
 
-test('МАСТЕР ВИЗИТА: визит и слот — ОДИН вызов, окна для сироты больше нет', () => {
-  const code = stripComments(read('visit-wizard.js'));
-  assert.match(code, /rpc\('ensure_visit'/, 'мастер обязан заводить визит дня через ensure_visit');
-  assert.match(code, /\.book\s*=\s*\{|book:\s*\{/, 'мастер обязан просить слот ТЕМ ЖЕ вызовом');
-  assert.ok(!/rpc\('calendar_book'/.test(code),
-    'мастер снова записывает вторым вызовом — между ним и ensure_visit живёт визит-сирота');
+test('ДВЕРИ КЛАССА МАСТЕРА: визит и слот — ОДИН вызов, окна для сироты больше нет', () => {
+  for (const f of WIZARD_DOORS) {
+    const code = stripComments(read(f));
+    assert.match(code, /rpc\('ensure_visit'/, f + ' обязан заводить визит дня через ensure_visit');
+    assert.match(code, /\.book\s*=\s*\{|book:\s*\{/, f + ' обязан просить слот ТЕМ ЖЕ вызовом');
+    assert.ok(!/rpc\('calendar_book'/.test(code),
+      f + ' снова записывает вторым вызовом — между ним и ensure_visit живёт визит-сирота');
+  }
+  // Запись РАСПИСАНИЯ мимо RPC проверяет тест выше, поимённо по колонкам:
+  // мастеру визита остаётся законная правка visits.notes (причина экстренной
+  // записи живёт в самой записи и уезжает филиалам), и запрещать ему всю
+  // таблицу значило бы запретить это.
+});
+
+// CRM_REAL_BOOKING_V1 (2026-09-21) — КАРТОЧКА ЗАЯВКИ СПРАШИВАЕТ ВРЕМЯ ТАМ ЖЕ,
+// ГДЕ ЕГО ЗАНИМАЕТ.
+//
+// Окно «Даты приёма» называет оператору свободные начала — и это ровно тот
+// вопрос, на котором четыре реализации расписания разошлись в прошлый раз
+// (форма графика, обед, окно по умолчанию). Ответ один и он на сервере;
+// клиент у ответа тоже один — service-picker-modal.js. Своего вызова
+// calendar_slots у карточки заявки быть не должно: второй вызов это второй
+// кэш занятости, а значит второй ответ на тот же вопрос в соседнем окне.
+test('КАРТОЧКА ЗАЯВКИ: свободное время — у общего клиента слотов, а не своим вызовом', () => {
+  const code = stripComments(read('crm.js'));
+  assert.ok(!/rpc\('calendar_slots'/.test(code),
+    'карточка заявки спрашивает слоты сама — это снова вторая реализация доступности');
+  assert.match(code, /from '\.\/service-picker-modal\.js/, 'карточка заявки не берёт общий клиент слотов');
+  assert.match(code, /loadSlotDay/, 'карточка заявки не спрашивает свободное время у сервера вовсе');
+  assert.match(code, /freeStartMinutes/, 'карточка заявки раскладывает ответ сервера сама');
+  // Отказ «время занято» — тот же, что у календаря и мастера: словами сервера
+  // и с причиной экстренной записи, а не молчаливой галочкой.
+  assert.match(code, /bookErrorText/, 'отказ сервера переводится не общим переводчиком');
+  assert.match(code, /askEmergencyReason/, 'экстренная запись из карточки заявки идёт без причины');
 });
 
 test('каждый пишущий экран ходит ОБЩЕЙ дверью visit-booking.js', () => {
@@ -512,7 +545,7 @@ test('ОДНА реализация «когда врач свободен» н�
   // calendar_slots (общий клиент — service-picker-modal.js). Своих выборок из
   // visits «кто занят» в экранах быть не должно.
   const offences = [];
-  for (const f of [...BOOKING_VIEWS, 'visit-wizard.js']) {
+  for (const f of [...BOOKING_VIEWS, ...WIZARD_DOORS]) {
     const code = stripComments(read(f));
     const lines = code.split(/\r?\n/);
     lines.forEach((L, i) => {

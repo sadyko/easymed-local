@@ -219,6 +219,9 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         // CROSS_BRANCH_CALENDAR_V1. branch — БУКВА выбранного здания ('' = все).
         // cross — то, что про эти записи знает только сервер (см. шапку).
         branch: '', cross: { self: '', buildings: [], visits: {} },
+        // CRM_REAL_BOOKING_V1 — из какой заявки колл-центра эта запись:
+        // id визита -> номер заявки. Одним ответом на всё видимое окно.
+        crmByVisit: {},
     };
 
     clear(container);
@@ -326,6 +329,50 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 status: normStatus(v.status),
             };
         });
+        await loadCrmLinks(visits.map((v) => v.id));
+    }
+
+    // CRM_REAL_BOOKING_V1 (2026-09-21) — ИЗ КАКОЙ ЗАЯВКИ ЭТА ЗАПИСЬ.
+    //
+    // Запись колл-центра — обычная строка visits, и в сетке она видна без
+    // всякой доработки. Но регистратуре важно ОТКУДА она: по этому человеку
+    // звонили, его обещали ждать, и за записью стоит заявка с её комментарием
+    // и оператором. Метка на блоке отвечает на это одним взглядом, а номер
+    // заявки в карточке приёма говорит, какую именно открыть.
+    //
+    // ОДИН ЗАПРОС НА ВСЁ ОКНО, а не по запросу на блок: ссылка живёт на СТРОКЕ
+    // заявки (миграция 142), и обратный вопрос «чьи это визиты» — это ровно
+    // один `in('visit_id', …)`, ради которого там и стоит индекс. Пачками по
+    // 200: список `in (…)` на тысячу значений упирается в предел параметров
+    // SQLite, и тем же потолком ограничены окна расписания выше.
+    //
+    // Отказ — НЕ «заявок нет»: метка просто не появляется, а полоса «Не
+    // загрузилось» называет, чего не хватает. Молча пустая метка читалась бы
+    // как «этот пациент пришёл сам».
+    const CRM_LINK_CHUNK = 200;
+    async function loadCrmLinks(visitIds) {
+        state.crmByVisit = {};
+        const ids = [...new Set((visitIds || []).filter(Boolean))];
+        if (!ids.length) return;
+        for (let i = 0; i < ids.length; i += CRM_LINK_CHUNK) {
+            const { data, error } = await supabase.from('crm_request_services')
+                .select('visit_id, request_id').in('visit_id', ids.slice(i, i + CRM_LINK_CHUNK));
+            if (error) { state.failed = [...new Set([...state.failed, tr('заявки')])]; return; }
+            for (const l of (data || [])) {
+                // Заявка на три дня — три строки и три визита; на ОДИН визит их
+                // может лечь несколько (все услуги дня). Номер заявки у них
+                // один и тот же, поэтому берём первый и не спорим.
+                if (l.visit_id != null && state.crmByVisit[l.visit_id] == null) {
+                    state.crmByVisit[l.visit_id] = l.request_id;
+                }
+            }
+        }
+    }
+
+    /** Номер заявки колл-центра, из которой эта запись (или null). */
+    function crmRequestOf(a) {
+        const n = a && a.id != null ? state.crmByVisit[a.id] : null;
+        return n == null ? null : n;
     }
 
     // Рабочие окна и МЕЖФИЛИАЛЬНЫЙ КОНТЕКСТ — ОДНИМ запросом на всю видимую
@@ -827,6 +874,11 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                     h('div', { style: { minWidth: 0 } },
                         h('div', { style: { fontWeight: 700, fontSize: '13.5px' } }, a.patient),
                         a.phone ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, a.phone) : null)),
+                // CRM_REAL_BOOKING_V1 — ЧЕЙ ЭТО ЗВОНОК. Номер заявки стоит
+                // рядом с пациентом и услугой, потому что отвечает на тот же
+                // вопрос «кто это и зачем»: по нему заявку открывают в
+                // колл-центре и читают, о чём с человеком договаривались.
+                crmRequestOf(a) ? row(tr('Колл-центр'), trf('Заявка №{n}', { n: crmRequestOf(a) })) : null,
                 editRow(tr('Услуга'), svcSel),
                 editRow(tr('Врач'), docSel),
                 a.roomId ? row(tr('Кабинет'), roomName(a.roomId)) : null,
@@ -1289,6 +1341,15 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                             class: 'rcal-appt-bld', title: buildingName(cx.building),
                             style: { marginLeft: '5px', padding: '0 4px', borderRadius: '4px', fontWeight: 700, fontSize: '12.5px', background: 'var(--ink-100, #eef2f7)', color: 'var(--ink-600, #475569)' },
                         }, cx.building)
+                        : null,
+                    // CRM_REAL_BOOKING_V1 — записал колл-центр. Метка той же
+                    // формы, что и буква здания рядом: это факт о происхождении
+                    // записи, а не её состояние.
+                    crmRequestOf(a)
+                        ? h('span', {
+                            class: 'rcal-appt-crm', title: trf('Заявка №{n}', { n: crmRequestOf(a) }),
+                            style: { marginLeft: '5px', padding: '0 4px', borderRadius: '4px', fontWeight: 700, fontSize: '12.5px', background: 'var(--teal-50, #e0f2f1)', color: 'var(--teal-700, #00796b)' },
+                        }, 'колл-центр')
                         : null,
                     a.doctorId ? h('span', { class: 'rcal-appt-d', title: doctorName(a.doctorId) }, doctorName(a.doctorId)) : null),
                 h('div', { class: 'rcal-appt-p' }, a.patient),
