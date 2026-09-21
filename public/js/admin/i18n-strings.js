@@ -8548,5 +8548,8 @@ export const STRINGS = {
   "Пациент не создан.": {"en":"The patient was not created.","ru":"Пациент не создан.","uz":"Bemor yaratilmadi."},
   "Заявка привязана к карте: {who}": {"en":"The lead is linked to the record: {who}","ru":"Заявка привязана к карте: {who}","uz":"Soʻrov kartaga bogʻlandi: {who}"},
   "Полная анкета": {"en":"Full form","ru":"Полная анкета","uz":"Toʻliq anketa"},
+  // CRM_LEAD_CONTEXT_V1 — строка «откуда этот человек» в окне заведения пациента
+  "Из заявки: {src}": {"en":"From the request: {src}","ru":"Из заявки: {src}","uz":"Arizadan: {src}"},
+  "услуга: {svc}": {"en":"service: {svc}","ru":"услуга: {svc}","uz":"xizmat: {svc}"},
   "Полная анкета — отдельным окном.": {"en":"The full form opens in its own window.","ru":"Полная анкета — отдельным окном.","uz":"Toʻliq anketa alohida oynada ochiladi."},
 };

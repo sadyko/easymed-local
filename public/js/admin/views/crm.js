@@ -825,6 +825,36 @@ async function paint() {
         });
     }
 
+    /**
+     * CRM_LEAD_CONTEXT_V1 — ОДНА СТРОКА О ЗАЯВКЕ ДЛЯ ОКНА ЗАВЕДЕНИЯ ПАЦИЕНТА.
+     *
+     * Окно «Новый пациент» одно на все потоки и про заявку не знает ничего.
+     * А регистратор, у которого открыто несколько заявок, обязан видеть, ЧЬЮ
+     * именно карту он сейчас заводит: источник, день обращения и услугу, за
+     * которой человек пришёл. Всё это было в прежней форме CRM и пропало
+     * вместе с ней.
+     *
+     * Куски переводятся ПОРОЗНЬ и склеиваются разделителем без букв: tr()
+     * ищет строку целиком, и собранное предложение не нашлось бы ни в одном
+     * словаре (I18N_COVERAGE_V1).
+     *
+     * @returns {string} пустая строка — сказать нечего, и окно оставит свою
+     *   обычную подсказку про полную анкету.
+     */
+    function leadHintLine({ source, when, service } = {}) {
+        const bits = [];
+        const srcLabel = source ? ((SOURCE_RU && SOURCE_RU[source]) || source) : '';
+        // Дату печатаем так же, как на карточке заявки: день.месяц.год.
+        const raw = String(when || '').slice(0, 10).split('-').reverse().join('.');
+        const day = raw.length === 10 ? raw : '';
+        if (srcLabel && day) bits.push(trf('Из заявки: {src} · {when}', { src: srcLabel, when: day }));
+        else if (srcLabel)  bits.push(trf('Из заявки: {src}', { src: srcLabel }));
+        else if (day)       bits.push(trf('Заявка от {d}', { d: day }));
+        const svc = String(service || '').trim();
+        if (svc) bits.push(trf('услуга: {svc}', { svc }));
+        return bits.join(' · ');
+    }
+
     // QUICK_PATIENT_V1 (2026-09-21) — ПАЦИЕНТА С ЗАЯВКИ ЗАВОДИТ ОБЩЕЕ ОКНО.
     //
     // Здесь стояла СВОЯ форма: три поля имени, телефон, дата рождения, пол,
@@ -856,19 +886,38 @@ async function paint() {
     function patientRegistrationModal({ requestRow = null, prefill = null, markCame = true, onCreated } = {}) {
         const r = requestRow || {};
         const src = prefill || {
-            full_name: r.full_name || '', phone: r.phone || '', dob: '', note: r.note || '',
+            full_name: r.full_name || '', phone: r.phone || '', dob: '',
         };
 
-        const dlg = openQuickPatientModal({
+        const opts = {
             // Заголовок говорит, ОТКУДА пришёл человек: окно то же самое, а
             // повод — заявка колл-центра, и это единственное, чем оно здесь
             // отличается от окна регистратуры.
             title: 'Пациент из заявки',
-            onNavigate: refs.onNavigate,
             // savePatient() отдаёт карту в виде экрана (fullName/…); дальше по
             // цепочке идёт СТРОКА БАЗЫ, как и раньше.
-            onCreated: (p) => { void finishRegistration(p && p._raw ? p._raw : p); },
+            //
+            // ОБЕЩАНИЕ ВОЗВРАЩАЕТСЯ ОКНУ, а не бросается в пустоту. Хвост
+            // регистрации — привязка открытых заявок, правка карточки, лист
+            // дат — асинхронный, и брошенное обещание не ловится ничем: окно к
+            // тому мигу уже снято, отказ уходит в «unhandled rejection», а на
+            // экране это выглядит как «нажал — и ничего не произошло».
+            onCreated: (p) => finishRegistration(p && p._raw ? p._raw : p),
+        };
+        // CRM_LEAD_CONTEXT_V1 — ОТКУДА ЭТОТ ЧЕЛОВЕК, ВИДНО В САМОМ ОКНЕ.
+        //
+        // Прежняя форма CRM писала это над полями: «Из заявки: {источник} ·
+        // {дата}» и «После регистрации оформим услугу: X». Общее окно про
+        // заявку не знает, и контекст пропал — регистратор, у которого открыто
+        // несколько заявок, заводил карту, не видя, ЧЬЮ именно.
+        const ctx = leadHintLine({
+            source:  prefill && prefill.source  !== undefined ? prefill.source  : r.source,
+            when:    prefill && prefill.when    !== undefined ? prefill.when    : r.created_at,
+            service: prefill && prefill.service !== undefined ? prefill.service : (r.services && r.services.name),
         });
+        if (ctx) opts.hint = ctx;
+
+        const dlg = openQuickPatientModal(opts);
         // null — права заводить пациента нет, и отказ уже показан окном.
         if (!dlg) return null;
 
@@ -1524,7 +1573,14 @@ async function paint() {
                 // заявки трогать нельзя, иначе канбан покажет визит, которого
                 // ещё не было.
                 markCame: false,
-                prefill: { full_name: name, phone, dob: dobInp.value || '', note: noteInp.value.trim() },
+                // CRM_LEAD_CONTEXT_V1 — заявки в базе может ещё и не быть
+                // (её создаст persist()), поэтому контекст для окна берётся из
+                // самой формы: выбранный источник и первая из набранных услуг.
+                prefill: {
+                    full_name: name, phone, dob: dobInp.value || '',
+                    source: srcChosen, when: (r && r.created_at) || '',
+                    service: picked.length ? picked[0].name : '',
+                },
                 onCreated: (p) => {
                     linkedPatient = { id: p.id, full_name: p.full_name, mrn: p.mrn, phone: p.phone || phone };
                     paintLinked();

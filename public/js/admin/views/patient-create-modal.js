@@ -1163,6 +1163,17 @@ export async function runPatientSearch(term, resultsEl, onPick) {
 // ---------------------------------------------------------------------------
 // Диалог дубликата — открывает существующую карту или создаёт принудительно.
 // Экспортируется: тот же диалог показывает встроенная форма в мастере услуг.
+//
+// QUICK_PATIENT_V1 — У ВЫБОРА ЕСТЬ ПРАВО СКАЗАТЬ «НЕ ВЫШЛО».
+//
+// Диалог закрывался всегда, ЧЕМ БЫ ни кончился onOpenExisting. А кончиться он
+// может ничем: окно «Новый пациент» на этом пути ДОЧИТЫВАЕТ выбранную карту
+// (в диалоге она урезана до полей сравнения), и если чтение не удалось, оно
+// показывает отказ — а выбора под ним уже нет. Человек видит сообщение об
+// ошибке и пустой экран, и заводить карту приходится заново.
+//
+// Поэтому onOpenExisting (и onForceCreate) могут вернуть false — «оставь
+// открытым». Всё остальное (undefined, карта, что угодно) значит «готово».
 // ---------------------------------------------------------------------------
 export function openDuplicatePatientDialog(err, { onOpenExisting, onForceCreate }) {
     const list = Array.isArray(err.existing) ? err.existing : (err.existing ? [err.existing] : []);
@@ -1193,8 +1204,10 @@ export function openDuplicatePatientDialog(err, { onOpenExisting, onForceCreate 
                 onclick: async (ev) => {
                     const b = ev.currentTarget;
                     b.disabled = true;
-                    try { await onOpenExisting(c); close(); }
-                    finally { if (b && b.isConnected) b.disabled = false; }
+                    try {
+                        const ok = await onOpenExisting(c);
+                        if (ok !== false) close();
+                    } finally { if (b && b.isConnected) b.disabled = false; }
                 },
             },
                 h('div', { style: { flex: '1', minWidth: '0' } },
@@ -1238,8 +1251,10 @@ export function openDuplicatePatientDialog(err, { onOpenExisting, onForceCreate 
                 onclick: async (ev) => {
                     const b = ev.currentTarget;
                     b.disabled = true;
-                    try { await onForceCreate(); close(); }
-                    finally { if (b && b.isConnected) b.disabled = false; }
+                    try {
+                        const ok = await onForceCreate();
+                        if (ok !== false) close();
+                    } finally { if (b && b.isConnected) b.disabled = false; }
                 },
             }, Icon('Plus', { size: 13 }), ' ', tr('Создать принудительно'))),
     ));

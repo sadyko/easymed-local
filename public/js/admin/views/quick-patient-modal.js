@@ -34,7 +34,7 @@
 // значит выбрать или снять фото в этом окне нечем, и uploadPendingPhoto
 // отправляла бы в хранилище заведомую пустоту. Фото — работа карты пациента.
 
-import { h, Icon, toast } from '../ui.js';
+import { h, Icon, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { savePatient, loadPatientById } from '../data.js';
 // PATIENT_CREATE_GATE_V1 — тот же ключ и тот же видимый отказ, что у формы
@@ -90,8 +90,8 @@ const QUICK_CARD_CLASS = 'modal-card fr-card fr-card-narrow';
  * @param {object}   [opts]
  * @param {Function} [opts.onCreated]  получает ГОТОВУЮ карту (shapePatient) —
  *   и заведённую здесь, и выбранную в диалоге дубликата. Для позвавшего это
- *   одно и то же событие: «пациент есть, продолжай с ним».
- * @param {Function} [opts.onNavigate] переход по разделам (нужен сборщику полей)
+ *   одно и то же событие: «пациент есть, продолжай с ним». МОЖЕТ ВЕРНУТЬ
+ *   ОБЕЩАНИЕ: окно дожидается его и уходит только после (см. finish).
  * @param {string}   [opts.title]      заголовок окна
  * @param {string}   [opts.hint]       строка под формой: где заполняют остальное
  * @returns {{overlay, card, body, formEl, close, state, saveBtn}|null}
@@ -99,13 +99,11 @@ const QUICK_CARD_CLASS = 'modal-card fr-card fr-card-narrow';
  */
 export function openQuickPatientModal({
     onCreated,
-    onNavigate,
     title = 'Новый пациент',
     hint = 'Полная анкета — в карте пациента.',
 } = {}) {
     if (!canCreatePatient()) { openAccessDeniedDialog(); return null; }
 
-    const navigate = typeof onNavigate === 'function' ? onNavigate : () => {};
     const notifyCreated = typeof onCreated === 'function' ? onCreated : () => {};
 
     const overlay = h('div', { class: 'modal', style: { zIndex: String(QUICK_PATIENT_Z) } });
@@ -171,11 +169,13 @@ export function openQuickPatientModal({
     // withSearchStrip: false — искать существующего здесь нечего. Это окно
     // открывают ИЗ поиска (привязка в каталоге ищет сама), и второй поиск
     // внутри означал бы «найдите его ещё раз».
+    // onNavigate и close сборщику НЕ передаются намеренно: он зовёт их только
+    // из своего api.save(), а этот путь здесь не используется вовсе (см. шапку
+    // модуля — сохранение своё). Переданные «на всякий случай», они читались бы
+    // как живые: «окно умеет уходить в карту пациента», чего оно не умеет.
     const api = buildPatientFields(body, {
         layout: 'compact',
         withSearchStrip: false,
-        onNavigate: navigate,
-        close,
     });
 
     /**
@@ -188,6 +188,11 @@ export function openQuickPatientModal({
      * (см. шапку модуля): уход потерял бы всё, из чего окно позвали — набранный
      * счёт калькулятора, слот календаря, заявку колл-центра. Отдать наружу
      * вторую дверь к нему значило бы перечеркнуть решение молча.
+     *
+     * Пол сюда не выходит: подставлять его некому. Заявка колл-центра знает
+     * имя, телефон и дату — пол в ней не спрашивают, и отданная наружу
+     * setGender стояла без единого вызова, обещая возможность, которой никто
+     * не пользуется.
      */
     const publicApi = {
         /** Реестр полей: имя колонки → элемент. Отсюда берут .value и .focus(). */
@@ -213,8 +218,6 @@ export function openQuickPatientModal({
             }
             return true;
         },
-        /** Пол живёт не в поле, а в плитках выбора — у него своя подстановка. */
-        setGender: (v) => api.setGender(v),
     };
     state.api = publicApi;
 
@@ -232,6 +235,20 @@ export function openQuickPatientModal({
         class: 'btn btn-primary', type: 'button',
         onclick: () => { void doSave(); },
     }, Icon('Check', { size: 14 }), ' ', tr('Создать пациента'));
+
+    /**
+     * Вид кнопки, пока окно занято.
+     *
+     * Серая кнопка без слов читается как поломка, а ждать приходится не только
+     * вставку: после неё окно дожидается позвавшего (см. finish). «Сохраняем…»
+     * — это единственное, чем окно может сказать «я занято, а не зависло».
+     */
+    function setSaveLabel(busy) {
+        clear(saveBtn);
+        if (busy) { saveBtn.appendChild(document.createTextNode(tr('Сохраняем…'))); return; }
+        saveBtn.appendChild(Icon('Check', { size: 14 }));
+        saveBtn.appendChild(document.createTextNode(' ' + tr('Создать пациента')));
+    }
     // Горячая клавиша, о которой нигде не написано, не существует: подпись в
     // подвале — часть самой возможности, а не украшение.
     card.appendChild(h('footer', { class: 'modal-foot' },
@@ -272,27 +289,43 @@ export function openQuickPatientModal({
     /**
      * Карта есть — отдать её позвавшему и уйти.
      *
-     * СБОЙ ПОЗВАВШЕГО ОКНО НЕ ДЕРЖИТ. onCreated — чужой код: привязка к смете,
-     * мастер визита, хвост регистрации заявки. К этому мигу карта УЖЕ в базе и
-     * окно своё дело сделало; оставшись на экране, оно показывает ту же форму с
-     * теми же полями — и следующее нажатие «Создать пациента» заводит вторую
-     * карту на того же человека. Поэтому dismiss() зовётся в любом случае, а
-     * сбой не проглатывается: молчание здесь — это «всё хорошо» на экране и
-     * потерянный поток на самом деле (пациент есть, а смета/заявка его не
-     * получили).
+     * ОКНО ЖДЁТ ПОЗВАВШЕГО ДО КОНЦА, и это решение, а не вежливость. onCreated —
+     * чужой код, и почти всегда он АСИНХРОННЫЙ: хвост регистрации заявки
+     * (привязка открытых лидов, правка карточки, лист дат), мастер визита,
+     * привязка к смете. Отданное ему обещание нужно дождаться по двум причинам:
+     *
+     *   • сбой. Брошенное обещание не ловится никаким try/catch вокруг вызова:
+     *     окно к тому мигу уже снято, отказ уходит в «unhandled rejection», и
+     *     на экране это выглядит как «нажал — и ничего не произошло». Именно
+     *     так пропадала кнопка «Записать на дату»: пациент заведён, а лист дат
+     *     не открылся и никто ничего не сказал;
+     *   • зазор. Окно исчезало РАНЬШЕ, чем открывалось следующее, и между ними
+     *     был кадр пустого экрана — читается как «всё закрылось, работа
+     *     потеряна».
+     *
+     * Пока идёт ожидание, окно держит вид записи: кнопка недоступна и говорит
+     * «Сохраняем…». А уходит оно ВСЕГДА (finally): карта уже в базе, и окно с
+     * теми же полями на экране — это второе нажатие «Создать пациента» и вторая
+     * карта на того же человека.
      */
-    function finish(patient, { saved = true } = {}) {
+    async function finish(patient, { saved = true } = {}) {
         // Найденного пациента никто не сохранял: «Пациент сохранён» здесь
         // читалось бы как «изменения записаны», и регистратор уходил бы
         // уверенным, что что-то поменял в чужой карте.
         if (saved) toast('Пациент сохранён.');
+        // Диалог дубликата зовёт finish() уже ПОСЛЕ того, как runSave снял с
+        // себя признак записи, — поэтому вид записи ставим здесь и заново.
+        state.saving = true;
+        saveBtn.disabled = true;
+        setSaveLabel(true);
         try {
-            notifyCreated(patient);
+            await Promise.resolve(notifyCreated(patient));
         } catch (e) {
             console.warn('[quick-patient] onCreated:', e);
             toast('Пациент заведён, но продолжить не удалось.', 'fail');
+        } finally {
+            dismiss();   // не close(): запись дошла, и решение — наше
         }
-        dismiss();   // не close(): запись дошла, и решение — наше
     }
 
     async function doSave() {
@@ -312,9 +345,10 @@ export function openQuickPatientModal({
         if (state.saving) return null;
         state.saving = true;
         saveBtn.disabled = true;
+        setSaveLabel(true);
         try {
             const created = await savePatient(payload, { force });
-            finish(created);
+            await finish(created);
             return created;
         } catch (e) {
             if (!force && e && e.code === 'DUPLICATE_PATIENT' && e.existing) {
@@ -323,10 +357,15 @@ export function openQuickPatientModal({
                     // найденного»: строку стража берём полной карточкой — она
                     // в диалоге урезана до полей сравнения, а позвавшему нужна
                     // та же карта, что и у заведённой (номер, телефон, имя).
+                    //
+                    // Не дочитали — ВЫБОР ОСТАЁТСЯ ОТКРЫТЫМ (false). Иначе
+                    // человек видит отказ, а под ним пустой экран: ни выбора,
+                    // ни набранной карты, и заводить всё заново.
                     onOpenExisting: async (c) => {
                         const p = await loadPatientById(c.id).catch(() => null);
-                        if (!p) { toast('Не удалось открыть карту пациента.', 'fail'); return; }
-                        finish(p, { saved: false });
+                        if (!p) { toast('Не удалось открыть карту пациента.', 'fail'); return false; }
+                        await finish(p, { saved: false });
+                        return true;
                     },
                     onForceCreate: () => runSave(payload, true),
                 });
@@ -337,6 +376,7 @@ export function openQuickPatientModal({
         } finally {
             state.saving = false;
             saveBtn.disabled = false;
+            setSaveLabel(false);
         }
     }
 

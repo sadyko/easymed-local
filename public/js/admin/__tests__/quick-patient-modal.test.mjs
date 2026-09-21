@@ -217,7 +217,11 @@ function fillMinimum(dlg) {
   f.last_name.value = 'Каримова';
   f.first_name.value = 'Азиза';
   f.date_of_birth.value = '1990-04-01';
-  dlg.state.api.setGender('F');
+  // Пол выбирают ПЛИТКОЙ — так же, как рукой: наружу окно подстановку пола не
+  // отдаёт (подставлять его некому, см. проверку про state.api ниже).
+  const chip = walk(dlg.card).find((e) => e.dataset && e.dataset.name === 'gender' && e.dataset.value === 'F');
+  assert.ok(chip, 'в окне нет выбора пола — а он обязателен');
+  chip.click();
 }
 
 const insertsInto = (table) => calls.filter((c) => c.kind === 'insert' && c.table === table).length;
@@ -532,6 +536,98 @@ test('сбой позвавшего не оставляет окно откры�
 });
 
 // ===========================================================================
+// 8б. ПОЗВАВШИЙ ПОЧТИ ВСЕГДА АСИНХРОННЫЙ — И ОКНО ЖДЁТ ЕГО ДО КОНЦА.
+//
+// onCreated карточки CRM возвращает обещание: привязка открытых заявок, правка
+// карточки, лист дат. Брошенное обещание не ловится НИКАКИМ try/catch вокруг
+// вызова — окно к тому мигу уже снято, отказ уходит в «unhandled rejection», и
+// на экране это читается как «нажал „Записать на дату“ — и ничего». Ровно так
+// молчала кнопка «Записать на дату»: пациент заведён, лист дат не открылся.
+//
+// И обратная сторона того же решения: пока позвавший работает, окно стоит на
+// экране. Иначе между исчезнувшим окном и открывшимся листом дат — кадр
+// пустого экрана, который читается как «всё закрылось, работа потеряна».
+// ===========================================================================
+test('обещание позвавшего сорвалось — окно уходит и говорит об этом', async () => {
+  reset();
+  const dlg = openQuickPatientModal({ onCreated: () => Promise.reject(new Error('хвост регистрации упал')) });
+  await tick(40);
+
+  fillMinimum(dlg);
+  calls.length = 0;
+  btnByText(dlg.card, 'Создать пациента').click();
+  await tick(120);
+
+  assert.strictEqual(insertsInto('patients'), 1, 'карта не заведена — проверяется не то');
+  assert.strictEqual(dialogs('quick-patient').length, 0, 'окно осталось на экране после сорванного продолжения');
+  assert.ok(toasts.some((t) => /продолжить/i.test(t)),
+    'сорванное обещание позвавшего прошло молча: ' + JSON.stringify(toasts));
+});
+
+test('позвавший ещё работает — окно стоит на экране и говорит «Сохраняем…»', async () => {
+  reset();
+  let release;
+  const pending = new Promise((r) => { release = r; });
+  const dlg = openQuickPatientModal({ onCreated: () => pending });
+  await tick(40);
+
+  fillMinimum(dlg);
+  calls.length = 0;
+  btnByText(dlg.card, 'Создать пациента').click();
+  await tick(90);
+
+  assert.strictEqual(insertsInto('patients'), 1, 'карта не заведена — проверяется не то');
+  assert.strictEqual(dialogs('quick-patient').length, 1,
+    'окно ушло, не дождавшись позвавшего: между ним и следующим окном — кадр пустого экрана');
+  assert.strictEqual(dlg.saveBtn.disabled, true, 'кнопка снова доступна — можно завести вторую карту');
+  assert.ok(textOf(dlg.saveBtn).includes('Сохраняем'),
+    'кнопка молчит о том, что окно занято, и читается как зависшая: ' + textOf(dlg.saveBtn));
+
+  release();
+  await tick(90);
+  assert.strictEqual(dialogs('quick-patient').length, 0, 'позвавший закончил, а окно осталось');
+});
+
+// ===========================================================================
+// 8в. ВЫБОР ДУБЛИКАТА НЕ ЗАКРЫВАЕТСЯ, ЕСЛИ ВЫБРАТЬ НЕ ВЫШЛО.
+//
+// «Открыть существующего» здесь ДОЧИТЫВАЕТ карту (в диалоге она урезана до
+// полей сравнения). Чтение может не удаться — и тогда диалог закрывался всё
+// равно: человек видел отказ, а под ним пустой экран, ни выбора, ни набранной
+// карты, и заводить всё заново.
+// ===========================================================================
+test('карту дубликата не дочитали — выбор остаётся открытым', async () => {
+  reset();
+  patientRows = [{ id: 42, mrn: 'P-42', full_name: 'Каримова Азиза', last_name: 'Каримова', first_name: 'Азиза',
+                   middle_name: '', phone: '+998 90 961 00 04', date_of_birth: '1990-04-01' }];
+  const created = [];
+  const dlg = openQuickPatientModal({ onCreated: (p) => created.push(p) });
+  await tick(40);
+
+  fillMinimum(dlg);
+  dlg.state.api.fields.phone.value = '+998909610004';
+  btnByText(dlg.card, 'Создать пациента').click();
+  await tick(60);
+
+  const dup = dialogs('patient-duplicate');
+  assert.strictEqual(dup.length, 1, 'страж дубликатов промолчал — проверять нечего');
+
+  // Дочитать карту не удалось: выборка по id отвечает пустотой.
+  patientRows = [];
+  const openExisting = walk(dup[0]).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'dup-row'));
+  assert.ok(openExisting, 'в диалоге нет строки найденного пациента');
+  openExisting.click();
+  await tick(90);
+
+  assert.strictEqual(dialogs('patient-duplicate').length, 1,
+    'выбор закрылся, хотя выбрать не вышло: под отказом остался пустой экран');
+  assert.strictEqual(created.length, 0, 'позвавшему отдали карту, которой не смогли прочесть');
+  assert.strictEqual(dialogs('quick-patient').length, 1, 'окно заведения снято вместе с несостоявшимся выбором');
+  assert.ok(toasts.some((t) => /не удалось открыть карту/i.test(t)),
+    'о несостоявшемся чтении никто не сказал: ' + JSON.stringify(toasts));
+});
+
+// ===========================================================================
 // 9. ЧТО ОКНО ОТДАЁТ ПОЗВАВШЕМУ. Через state.api позвавший подставляет
 // известное (карточка CRM — имя и телефон из заявки). Весь сборщик анкеты
 // отдавать нельзя: у него есть save(), который на «Открыть существующего»
@@ -547,9 +643,11 @@ test('state.api отдаёт только подстановку полей, а 
 
   assert.ok(api.fields && api.fields.last_name, 'позвавшему нечем добраться до полей');
   assert.strictEqual(typeof api.setValue, 'function', 'нет setValue — подставлять значения нечем');
-  assert.strictEqual(typeof api.setGender, 'function', 'нет setGender — пол подставить нечем');
 
-  for (const leaked of ['save', 'collect', 'photo', 'searchStrip', 'state', 'tg']) {
+  // Пол сюда не выходит намеренно: подставлять его некому. Заявка колл-центра
+  // знает имя, телефон и дату — пола в ней не спрашивают, и setGender стояла
+  // без единого вызова, обещая возможность, которой никто не пользуется.
+  for (const leaked of ['save', 'collect', 'photo', 'searchStrip', 'state', 'tg', 'setGender']) {
     assert.strictEqual(api[leaked], undefined,
       'через state.api наружу торчит ' + leaked + '() сборщика анкеты');
   }
