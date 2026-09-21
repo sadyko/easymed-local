@@ -103,13 +103,12 @@ test('уровень «Только просмотр» читает, но оце
   const cardId = custdevList(db, period(db), operator)[0].id;
 
   // Понижаем колл-центр до просмотра — ровно то, что владелец делает галочкой.
-  // CALLCENTER_OPERATOR_V1: «галочка» теперь пишет ОБА языка — строку матрицы
-  // (custdev.rate) и старый уровень раздела, потому что экран выводит второе из
-  // первого (roles-matrix.js legacyFromGrants). Матрица главнее: настроенный
-  // ключ бьёт старый уровень, иначе правило перехода не имело бы смысла.
-  db.prepare(`UPDATE role_permissions
-                 SET permissions = json_set(json_patch(permissions, '{"grants":{"custdev.rate":"view"}}'),
-                                            '$.levels.custdev', 'viewer')
+  // CALLCENTER_OPERATOR_V1: галочка обязана действовать и ПОСЛЕ появления строк
+  // матрицы. Поэтому миграция 141 ключей Cust Dev не выдаёт вовсе: выданный
+  // `custdev.rate: edit` заморозил бы оценки в положении «можно» и отменил бы
+  // решение, принятое клиникой старой галочкой, — то самое молчаливое
+  // расширение прав, которого обновление делать не вправе.
+  db.prepare(`UPDATE role_permissions SET permissions = json_set(permissions, '$.levels.custdev', 'viewer')
                WHERE role = 'callcenter'`).run();
 
   assert.equal(custdevList(db, period(db), operator).length, 1);
@@ -142,6 +141,29 @@ test('строки матрицы главнее старой галочки —
   assert.throws(() => custdevRate(db, {
     card_id: cardId, registrar: 'good', cashier: 'good', doctor: 'good',
   }, doctor), (e) => e.status === 403);
+});
+
+// ADMIN_DOCTOR_V1 — у администратора клиники основная роль сплошь и рядом
+// `doctor`, а `admin` стоит дополнительной, и матрица читается по ОБЕИМ. «Нет»,
+// поставленное врачам, не должно запирать владельца в его же отчёте: ворота
+// пускают администратора тем же предикатом, что и везде (grants.js isAdminUser).
+test('администратор-врач ведёт обзвон, даже когда врачам раздел закрыт строкой матрицы', () => {
+  const db = fresh();
+  paidVisit(db, 1, dayOffset(db, -1));
+  custdevSync(db, period(db), admin);
+  const cardId = custdevList(db, period(db), admin)[0].id;
+  db.prepare(`UPDATE role_permissions
+                 SET permissions = json_patch(permissions, '{"grants":{"custdev.list":"none","custdev.rate":"none"}}')
+               WHERE role = 'doctor'`).run();
+
+  const adminDoctor = { id: 1, role: 'doctor', extra_roles: ['admin'] };
+  assert.equal(custdevList(db, period(db), adminDoctor).length, 1, 'владелец заперт «Нет», записанным врачам');
+  assert.equal(custdevRate(db, {
+    card_id: cardId, registrar: 'good', cashier: 'good', doctor: 'good',
+  }, adminDoctor).status, 'satisfied');
+
+  // Рядовому врачу — по-прежнему нет.
+  assert.throws(() => custdevList(db, period(db), doctor), (e) => e.status === 403);
 });
 
 test('жалоба без комментария отклоняется с текстом для оператора', () => {

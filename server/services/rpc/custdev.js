@@ -9,7 +9,7 @@
 import { canViewSection, canEditSection } from '../roles.js';
 // CALLCENTER_OPERATOR_V1 — у раздела появились свои строки в справочнике прав
 // (custdev.list, custdev.rate), и ворота спрашивают СНАЧАЛА их.
-import { grantLevel } from '../grants.js';
+import { grantLevel, isAdminUser } from '../grants.js';
 import { levelAllows } from '../../../public/js/shared/permission-catalog.js';
 import { RpcError } from './crm-config.js';
 import { syncCards } from '../custdev/sync.js';
@@ -23,6 +23,11 @@ const KEY = 'custdev';
 // здесь — ПРЕЖНЯЯ ГАЛОЧКА РАЗДЕЛА, а не hasAnyRole: пока роль ключ не
 // трогала, решает canViewSection/canEditSection, как и до этого дня.
 function grantedOr(db, user, key, need, legacy) {
+  // Администратор проходит всегда — то же правило и тот же предикат, что у
+  // grantAllows(): у администратора-врача матрица читается ещё и по врачебной
+  // роли, и чужое «Нет» иначе заперло бы владельца в его собственном отчёте
+  // (ADMIN_DOCTOR_V1).
+  if (isAdminUser(user)) return true;
   const lvl = grantLevel(db, user, key);
   return lvl !== null ? levelAllows(lvl, need) : legacy();
 }

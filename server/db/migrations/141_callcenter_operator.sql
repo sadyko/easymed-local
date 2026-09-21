@@ -19,9 +19,10 @@
 --
 -- ЧТО ТЕПЕРЬ. У справочника прав (public/js/shared/permission-catalog.js)
 -- появились строки crm.calls / crm.dial / crm.recording / crm.convert и раздел
--- custdev со строками custdev.list / custdev.rate. Эта миграция выдаёт их тем,
--- у кого эта работа есть СЕГОДНЯ, — чтобы после обновления ни у кого ничего не
--- изменилось молча.
+-- custdev со строками custdev.list / custdev.rate. Эта миграция выдаёт ЧЕТЫРЕ
+-- первые тем, у кого эта работа есть СЕГОДНЯ, и закрывает их явным «Нет» у
+-- всех остальных, — чтобы после обновления ни у кого ничего не изменилось
+-- молча. Строки custdev.* она не трогает вовсе: почему — в разделе 1.
 --
 -- ПОЧЕМУ ВООБЩЕ НАДО ВЫДАВАТЬ, если ворота и так живут правилом перехода
 -- (grants.js: ключ не настроен — решает прежний список ролей). Потому что
@@ -37,10 +38,21 @@
 -- Защита та же: NOT LIKE по имени ключа — повторный накат и клиника, уже
 -- настроившая этот ключ руками, ничего не получают заново.
 --
+-- ЗАЧЕМ ЗАПИСЫВАТЬ «НЕТ» ТЕМ, КОМУ НИЧЕГО НЕ ВЫДАЁМ (раздел 3). По той же
+-- причине, только с другой стороны. Экран достраивает КАЖДЫЙ ненастроенный
+-- ключ из старых полей (roles-matrix.js grantsFromLegacy: «раздел выдан —
+-- значит, внутри доступно всё»), а старая галочка `crm` значила ДОСКУ ЗАЯВОК и
+-- никогда — право позвонить и прослушать чужой разговор: это решал список
+-- ролей в коде. Оставь ключи пустыми — и первое же «Сохранить роль» у любой
+-- роли с доской CRM (врач, медсестра, своя роль клиники) молча выдало бы ей
+-- телефон. Явное «Нет» не отнимает ничего: этих прав у них нет и сегодня.
+--
 -- АДМИНИСТРАТОРА ЗДЕСЬ НЕТ, и это решение. Его строка в «Настройки → Роли» не
 -- редактируется (ROLE_LIST админа не содержит), поэтому матрица его роли
--- никогда не будет записана, и правило перехода действует для него вечно:
--- admin остаётся в обоих списках из кода и звонит, как звонил.
+-- никогда не будет записана; а ворота пускают администратора отдельным
+-- правилом (grants.js isAdminUser) — в том числе администратора-врача, у
+-- которого основная роль `doctor` и чьё «Нет» из раздела 3 иначе заперло бы
+-- заведующего без телефона (ADMIN_DOCTOR_V1).
 
 -- ---------------------------------------------------------------------------
 -- 1. Оператор колл-центра: вся его работа — строками матрицы
@@ -48,9 +60,14 @@
 -- crm.calls «Просмотр» — журнал звонков в карточке заявки (rpc crm_lead_calls);
 -- crm.dial «Изменение» — набор номера из программы (rpc telephony_dial);
 -- crm.recording «Изменение» — прослушать запись (rpc telephony_call_recording);
--- crm.convert «Изменение» — завести пациента из заявки (ключ `registration`);
--- custdev.list / custdev.rate — обзвон после визита (миграция 078 уже выдала
--- ему раздел целиком, здесь это лишь сказано языком новой матрицы).
+-- crm.convert «Изменение» — завести пациента из заявки (ключ `registration`).
+--
+-- CUST DEV ЗДЕСЬ НЕТ НАМЕРЕННО. Раздел выдан оператору старой галочкой
+-- (миграция 078), и его ворота живут тем же правилом перехода — пока ключ не
+-- настроен, решает галочка. Выдай мы `custdev.rate: edit` — и решение клиники,
+-- понизившей оператора до просмотра, было бы молча отменено: настроенный ключ
+-- старую галочку перебивает. Строки custdev.* существуют на экране, чтобы их
+-- можно было настроить; выдавать их обновлением незачем и нельзя.
 UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"crm.calls":"view"}}')
  WHERE role = 'callcenter' AND json_valid(permissions) AND permissions NOT LIKE '%"crm.calls"%';
 
@@ -62,12 +79,6 @@ UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"c
 
 UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"crm.convert":"edit"}}')
  WHERE role = 'callcenter' AND json_valid(permissions) AND permissions NOT LIKE '%"crm.convert"%';
-
-UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"custdev.list":"view"}}')
- WHERE role = 'callcenter' AND json_valid(permissions) AND permissions NOT LIKE '%"custdev.list"%';
-
-UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"custdev.rate":"edit"}}')
- WHERE role = 'callcenter' AND json_valid(permissions) AND permissions NOT LIKE '%"custdev.rate"%';
 
 -- ---------------------------------------------------------------------------
 -- 2. Регистратура — ровно то, что у неё есть сегодня, и ни ключом больше
@@ -85,3 +96,40 @@ UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"c
 
 UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"crm.recording":"edit"}}')
  WHERE role = 'registrar' AND json_valid(permissions) AND permissions NOT LIKE '%"crm.recording"%';
+
+-- ---------------------------------------------------------------------------
+-- 3. Всем остальным — явное «Нет», чтобы первое сохранение никому не расширило
+-- ---------------------------------------------------------------------------
+-- См. шапку: ненастроенный ключ экран достраивает из старой галочки раздела, а
+-- она этих прав никогда не значила. Роль, у которой ключ УЖЕ настроен (клиника
+-- решила сама, или это повторный накат), не трогается — тот же NOT LIKE.
+--
+-- СВОИ РОЛИ КЛИНИКИ (CUSTOM_ROLES_V1) ПОПАДАЮТ СЮДА ПО ОСНОВЕ, а не по имени:
+-- имён их никто заранее не знает, а звонит роль сегодня ровно потому, что её
+-- ОСНОВА стоит в списках из кода (hasAnyRole смотрит users.role, то есть
+-- основу). Поэтому «Старший регистратор» на основе регистратуры не трогается —
+-- у него это право есть, — а «Старшая смена» на основе врача закрывается, как
+-- и сам врач. Роль, заведённая ПОСЛЕ обновления, берёт права своей основы
+-- копией (roles-editor.js createRole), то есть получает то же «Нет» сама.
+UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"crm.calls":"none"}}')
+ WHERE json_valid(permissions) AND permissions NOT LIKE '%"crm.calls"%'
+   AND role NOT IN ('admin', 'registrar', 'callcenter')
+   AND role NOT IN (SELECT code FROM custom_roles WHERE base_role IN ('admin', 'registrar', 'callcenter'));
+
+UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"crm.dial":"none"}}')
+ WHERE json_valid(permissions) AND permissions NOT LIKE '%"crm.dial"%'
+   AND role NOT IN ('admin', 'registrar', 'callcenter')
+   AND role NOT IN (SELECT code FROM custom_roles WHERE base_role IN ('admin', 'registrar', 'callcenter'));
+
+UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"crm.recording":"none"}}')
+ WHERE json_valid(permissions) AND permissions NOT LIKE '%"crm.recording"%'
+   AND role NOT IN ('admin', 'registrar', 'callcenter')
+   AND role NOT IN (SELECT code FROM custom_roles WHERE base_role IN ('admin', 'registrar', 'callcenter'));
+
+-- `crm.convert` — то же самое, и «Нет» по нему НИЧЕГО не отнимает: оболочка
+-- спрашивает новый ключ ТОЛЬКО как прибавку, а отказ по нему возвращает
+-- вопрос прежнему ключу `registration` (permissions.js canCreatePatient).
+UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"crm.convert":"none"}}')
+ WHERE json_valid(permissions) AND permissions NOT LIKE '%"crm.convert"%'
+   AND role NOT IN ('admin', 'registrar', 'callcenter')
+   AND role NOT IN (SELECT code FROM custom_roles WHERE base_role IN ('admin', 'registrar', 'callcenter'));

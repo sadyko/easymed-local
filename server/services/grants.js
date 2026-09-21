@@ -74,10 +74,30 @@ export function grantLevel(db, user, key) {
 }
 
 /**
+ * АДМИНИСТРАТОР КЛИНИКИ — ОДИН ПРЕДИКАТ НА ВСЮ ПРОГРАММУ.
+ *
+ * hasAnyRole, а не `user.role === 'admin'`: у администратора клиники ОСНОВНАЯ
+ * роль сплошь и рядом `doctor`, а `admin` стоит дополнительной — он же и
+ * принимает пациентов (ADMIN_DOCTOR_V1; тот же предикат у rpc/backup.js,
+ * rpc/telephony.js requireAdmin, rpc/updates.js).
+ */
+export function isAdminUser(user) {
+  return hasAnyRole(user, ['admin']);
+}
+
+/**
  * Пускать ли: настроенный уровень, а если его нет — прежний список ролей.
  * @param {string[]} fallbackRoles  тот самый список из кода, что работал до grants
  */
 export function grantAllows(db, user, key, need, fallbackRoles = []) {
+  // АДМИНИСТРАТОР ПРОХОДИТ ВСЕГДА, и это не поблажка, а согласие с экраном:
+  // строки админа в «Настройки → Роли» нет (roles-editor.js ROLE_LIST), значит
+  // настроить ему матрицу нельзя и «Нет» у него взяться неоткуда. А вот ЧУЖОЕ
+  // «Нет» прочиталось бы: у админа-врача ролей две (doctor + admin), и
+  // grantLevel() вернул бы уровень, выданный ВРАЧУ, — после чего заведующий,
+  // он же администратор, остался бы без звонка и без записи разговора ровно
+  // потому, что клиника (или миграция 141) закрыла эти ключи врачам.
+  if (isAdminUser(user)) return true;
   const lvl = grantLevel(db, user, key);
   if (lvl !== null) return levelAllows(lvl, need);
   return hasAnyRole(user, fallbackRoles);

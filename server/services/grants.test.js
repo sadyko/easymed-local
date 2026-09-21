@@ -76,6 +76,40 @@ test('несколько ролей — самая щедрая; своя рол
   } finally { db.close(); }
 });
 
+// CALLCENTER_OPERATOR_V1 — АДМИНИСТРАТОР ПРОХОДИТ ВСЕГДА, И ЭТО ПРО АДМИНА-ВРАЧА.
+//
+// Строку админа экран «Роли» не рисует (ROLE_LIST её не содержит), то есть
+// настроить его матрицу нельзя в принципе — и «Нет» у него взяться неоткуда.
+// А вот прочитаться чужое «Нет» у него могло: у администратора клиники
+// ОСНОВНАЯ роль сплошь и рядом `doctor`, а `admin` стоит дополнительной
+// (ADMIN_DOCTOR_V1). grantLevel() берёт САМЫЙ ЩЕДРЫЙ уровень из его ролей, но
+// щедрее «Нет» у врача ничего нет, если админ ключа не настраивал, — и
+// администратор клиники оставался бы без звонка ровно после того, как миграция
+// 141 проставит врачу явные `none`.
+//
+// Предикат — тот же `hasAnyRole(user, ['admin'])`, что у всех админских ворот
+// (rpc/backup.js, rpc/telephony.js requireAdmin): один ответ на вопрос «это
+// администратор?» во всей программе.
+test('администратор проходит, даже если его ВРАЧЕБНОЙ роли ключ запрещён (ADMIN_DOCTOR_V1)', () => {
+  const db = seed();
+  try {
+    setGrants(db, 'doctor', { 'inpatient.vitals': 'none', 'crm.dial': 'none' });
+    const adminDoctor = { id: 34, role: 'doctor', extra_roles: ['admin'] };
+    const doctor = { id: 35, role: 'doctor', extra_roles: [] };
+
+    assert.equal(grantAllows(db, doctor, 'crm.dial', 'edit', ['registrar']), false, 'врачу «Нет» обязано значить нет');
+    assert.equal(grantAllows(db, adminDoctor, 'crm.dial', 'edit', ['registrar']), true,
+      'администратор клиники заперт «Нет» своей врачебной роли');
+    assert.equal(grantAllows(db, adminDoctor, 'inpatient.vitals', 'delete', []), true);
+    assert.doesNotThrow(() => requireGrant(db, adminDoctor, 'inpatient.vitals', 'edit', [], 'записывать измерения'));
+
+    // Уровень при этом ЧИТАЕТСЯ как есть: grantLevel — это «что настроено»,
+    // а не «пустить ли». Экраны, которые показывают настройку, не должны
+    // видеть у врачебной роли админа несуществующее «Удаление».
+    assert.equal(grantLevel(db, adminDoctor, 'inpatient.vitals'), 'none');
+  } finally { db.close(); }
+});
+
 test('отказ — понятной фразой с адресом, где выдают права', () => {
   const db = seed();
   try {
@@ -122,6 +156,11 @@ test('каждая строка справочника называет пров
     assert.ok(r.label && r.desc, 'у строки нет подписи или описания: ' + r.key);
     assert.ok(Array.isArray(r.levels) && r.levels[0] === 'none', 'уровни строки начинаются с «Нет»: ' + r.key);
     if (r.kind !== 'section') assert.ok(r.enforced, 'окно/действие без проверки — галочка-обманка: ' + r.key);
+    // CALLCENTER_OPERATOR_V1 — приставка говорит, ГДЕ проверяют, и словарь её
+    // закрыт: rpc: (ворота серверного вызова), route: (маршрут оболочки),
+    // client: (предикат оболочки, сервер ключа не читает). Выдуманная приставка
+    // читалась бы как обещание серверной проверки, которой нет.
+    if (r.enforced) assert.match(r.enforced, /^(rpc|route|client):\S/, 'непонятно, где проверяют ' + r.key + ': ' + r.enforced);
   }
   // Ключи действий стационара, на которые переведены ворота сервера.
   for (const k of ['inpatient.prescriptions', 'inpatient.marks', 'inpatient.vitals', 'inpatient.reviews', 'inpatient.services', 'inpatient.discharge', 'inpatient.requests', 'inpatient.beds', 'inpatient.patients', 'inpatient.history']) {

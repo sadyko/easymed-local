@@ -281,6 +281,31 @@ test('запись разговора — отдельное право: стр�
   await assert.rejects(() => telephonyCallRecording(db, { call_id: 1 }, registrar), deniedByGrants);
 });
 
+// ADMIN_DOCTOR_V1 — АДМИНИСТРАТОР КЛИНИКИ, КОТОРЫЙ ЕЩЁ И ВРАЧ.
+//
+// Его основная роль `doctor`, а `admin` стоит дополнительной, и матрица прав
+// читается по ОБЕИМ. Миграция 141 проставляет врачу явные «Нет» по телефонии
+// (чтобы первое «Сохранить роль» никому её не расширило) — и без отдельного
+// правила для администратора заведующий-врач потерял бы и кнопку «Позвонить»,
+// и журнал, и записи разговоров, ничего не настраивая.
+test('администратор-врач звонит, видит журнал и слушает записи, даже когда врачам это закрыто', async () => {
+  const db = fresh();
+  db.prepare("INSERT INTO calls (general_call_id, started_at, external_number, billsec, recording_url) VALUES ('1','2026-09-20T08:00:00Z','998901112233',42,'https://rec/1.mp3')").run();
+  setGrants(db, 'doctor', { 'crm.calls': 'none', 'crm.dial': 'none', 'crm.recording': 'none' });
+
+  // Рядовой врач — действительно нет.
+  const doctor = { id: 2, role: 'doctor', extra_roles: [] };
+  await assert.rejects(() => telephonyDial(db, { phone: '+998901112233' }, doctor), deniedByGrants);
+  assert.throws(() => crmLeadCalls(db, { phone: '+998901112233' }, doctor), deniedByGrants);
+  await assert.rejects(() => telephonyCallRecording(db, { call_id: 1 }, doctor), deniedByGrants);
+
+  // Администратор клиники — да, и отказ набора приходит от ТЕЛЕФОНИИ (400),
+  // а не от ворот прав.
+  await assert.rejects(() => telephonyDial(db, { phone: '+998901112233' }, doctorAdmin), (e) => e.status === 400);
+  assert.equal(crmLeadCalls(db, { phone: '+998901112233' }, doctorAdmin).length, 1);
+  assert.deepEqual(await telephonyCallRecording(db, { call_id: 1 }, doctorAdmin), { url: 'https://rec/1.mp3' });
+});
+
 test('RPC матрицы зарегистрированы под теми именами, что названы в справочнике прав (enforced)', () => {
   for (const name of ['telephony_dial', 'crm_lead_calls', 'telephony_call_recording']) {
     assert.equal(typeof getRpc(name), 'function', name);
