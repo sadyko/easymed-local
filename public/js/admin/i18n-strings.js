@@ -8543,4 +8543,5 @@ export const STRINGS = {
   // QUICK_PATIENT_V1 (2026-09-21) — одно окно «Новый пациент» на все потоки
   "Полная анкета — в карте пациента.": {"en":"The full form is in the patient's card.","ru":"Полная анкета — в карте пациента.","uz":"Toʻliq anketa — bemor kartasida."},
   "— создать пациента": {"en":"— create the patient","ru":"— создать пациента","uz":"— bemorni yaratish"},
+  "Не удалось открыть окно заведения пациента.": {"en":"The new-patient window could not be opened.","ru":"Не удалось открыть окно заведения пациента.","uz":"Bemor yaratish oynasini ochib boʻlmadi."},
 };

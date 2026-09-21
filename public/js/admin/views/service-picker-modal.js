@@ -30,13 +30,15 @@ import { supabase } from '../../supabase.js';
 // REFERRAL_SOURCE_CODE_V1 — подпись партнёра одна на все экраны регистратора.
 import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';
 import { h, Icon, clear, toast, Avatar, initials, avColor } from '../ui.js';
-import { loadPatientsPaged, savePatient, loadPatientById, insertRow, currentUser } from '../data.js';
+// QUICK_PATIENT_V1 — savePatient/loadPatientById ушли отсюда вместе с
+// мини-формой заведения пациента: карту заводит общее окно быстрой
+// регистрации (quick-patient-modal.js), и путь сохранения теперь один.
+import { loadPatientsPaged, insertRow, currentUser } from '../data.js';
 import { logPatientActivity } from './activity-log.js';   // BOOK_WIZARD_V1
 import { gw } from '../gateway.js';
 import { clinicFlags } from '../clinic-flags.js';   // CUSTOM_CLINIC_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';   // insurance/B2B: print statistics act
 import { tr, trf } from '../i18n.js';   // WIZ_TEMPLATES_V1 + I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { phoneInput } from '../phone-input.js?v=ph1';
 import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — group filtering must survive a NULL type_id
 // VISIT_TIER_PRICING_V1 — цена по счёту визита: смета спрашивает сервер, что
 // эти услуги стоят ЭТОМУ пациенту сегодня, и кладёт ответ на строки.
@@ -1422,14 +1424,18 @@ export function openServicePickerModal({
             h('button', { class: 'modal-close', onclick: () => closeAttach() }, '×'),
         ));
         card.appendChild(h('div', { class: 'modal-body', style: { padding: '16px 22px' } }, inp, resultsEl));
+        // Две двери, и разница между ними — не в словах, а в том, что останется
+        // на экране. «Новый пациент» заводит карту ПОВЕРХ каталога: набранная
+        // смета и окно привязки живы, а созданный пациент тут же привязан.
+        // «Создать пациента» уводит в полную анкету вызывающего и каталог
+        // закрывает — поэтому строка слева говорит, куда она ведёт.
         card.appendChild(h('footer', { class: 'modal-foot' },
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Полная анкета — на странице «Регистратура».'),
             h('span', { class: 'grow' }),
             h('button', { class: 'btn', onclick: () => closeAttach() }, 'Отмена'),
             h('button', {
                 class: 'btn btn-outline',
                 onclick: () => {
-                    // BOOK_WIZARD_V1 — inline create keeps the staged cart alive.
-                    if (calculator) { openCreatePatientInline(); return; }
                     if (typeof onCreatePatient === 'function') {
                         closeAttach();
                         overlay.remove();
@@ -1439,13 +1445,53 @@ export function openServicePickerModal({
                         toast('Откройте «Создать пациента» на странице пациентов.', 'info');
                     }
                 },
-            }, Icon('Plus', { size: 14 }), ' Создать пациента'),
+            }, Icon('User', { size: 14 }), ' Создать пациента'),
+            h('button', {
+                class: 'btn btn-primary',
+                onclick: () => { void openQuickPatient(); },
+            }, Icon('Plus', { size: 14 }), ' Новый пациент'),
         ));
         ov.appendChild(card);
         document.body.appendChild(ov);
         // Initial list (recent patients) so the registrar can pick without typing.
         search('');
         setTimeout(() => inp.focus(), 30);
+    }
+
+    // QUICK_PATIENT_V1 (2026-09-21) — «НОВЫЙ ПАЦИЕНТ» ЗДЕСЬ ОТКРЫВАЕТ ОБЩЕЕ ОКНО.
+    //
+    // Здесь стояла СВОЯ мини-форма из пяти полей (openCreatePatientInline):
+    // фамилия, имя, телефон, дата рождения, пол — причём пол и дата были
+    // необязательны, а паспорта, области и типа скидки не было вовсе. Карта,
+    // заведённая по дороге к смете, выходила хуже карты, заведённой в
+    // регистратуре, и разницу никто не видел: обе выглядели как заведённая
+    // карта. Четвёртый набор полей расходился с первыми тремя молча.
+    //
+    // Теперь это то же окно, что у регистратуры и у карточки CRM
+    // (views/quick-patient-modal.js): блок «Реквизиты пациента» быстрой
+    // регистрации, тот же сборщик полей, тот же collect(), тот же страж
+    // дубликатов. Оно стоит на 155-м этаже — поверх окна привязки (150) — и
+    // ничего из набранного не трогает: смета остаётся, каталог остаётся.
+    //
+    // Импорт ДИНАМИЧЕСКИЙ: окно тянет за собой весь сборщик анкеты (справочник
+    // категорий, каскад географии, телефонный контрол), и каталогу услуг это
+    // не нужно ни при открытии, ни в большинстве случаев вовсе. Строка запроса
+    // (?v=qp1) — ТА ЖЕ, что в карточке CRM: для браузера адрес с другим ?v это
+    // ДРУГОЙ модуль, то есть вторая копия со своим состоянием.
+    async function openQuickPatient() {
+        let mod;
+        try {
+            mod = await import('./quick-patient-modal.js?v=qp1');
+        } catch (e) {
+            toast('Не удалось открыть окно заведения пациента.', 'fail');
+            return;
+        }
+        mod.openQuickPatientModal({
+            // Привязка сама снимает окно поиска (attachPatient → closeAttach),
+            // а окно заведения закрывает себя: на экране остаётся каталог с той
+            // же сметой — и пациентом в ней.
+            onCreated: (p) => { attachPatient(p); },
+        });
     }
 
     function attachPatient(p) {
@@ -3083,64 +3129,6 @@ export function openServicePickerModal({
             toast(trf('Не удалось создать визит: {msg}', { msg: e.message || e }), 'fail');
             if (btn && btn.isConnected) btn.disabled = false;
         }
-    }
-
-    // ---- inline create-patient (cart preserved; canonical savePatient path) ----
-    function openCreatePatientInline() {
-        const ov = h('div', { class: 'modal', style: { zIndex: '160' } });
-        const close = () => ov.remove();
-        ov.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
-        const fLast  = h('input', { style: { width: '100%' }, placeholder: 'Фамилия *' });
-        const fFirst = h('input', { style: { width: '100%' }, placeholder: 'Имя *' });
-        const fPhone = phoneInput('phone', '+998 90 961 00 04');
-        const fDob   = h('input', { type: 'date', style: { width: '100%' } });
-        const fSex   = h('select', { style: { width: '100%' } },
-            h('option', { value: '' }, '—'), h('option', { value: 'male' }, 'Мужской'), h('option', { value: 'female' }, 'Женский'));
-        const fld = (label, el) => h('div', { class: 'field' }, h('label', null, label), el);
-        async function doCreate(force) {
-            const payload = {
-                last_name: fLast.value.trim(), first_name: fFirst.value.trim(),
-                phone: fPhone.value.trim() || null, date_of_birth: fDob.value || null,
-                gender: fSex.value || null,
-            };
-            if (!payload.last_name || !payload.first_name) { toast('Фамилия и имя обязательны.', 'fail'); return; }
-            try {
-                const created = await savePatient(payload, { force });
-                close(); closeAttach();
-                attachPatient(created);
-            } catch (e) {
-                if (e?.code === 'DUPLICATE_PATIENT' && e.existing) {
-                    close();
-                    try {
-                        const mod = await import('./registration.js?v=aug17f');
-                        mod.openDuplicatePatientDialog(e, {
-                            onOpenExisting: async (c) => {
-                                const full = await loadPatientById(c.id);
-                                if (full) { closeAttach(); attachPatient(full); }
-                            },
-                            onForceCreate: () => doCreate(true),
-                        });
-                    } catch (_) { toast('Похожий пациент уже существует — найдите его через поиск.', 'fail'); }
-                } else {
-                    toast(trf('Не удалось создать: {msg}', { msg: e.message || e }), 'fail');
-                }
-            }
-        }
-        ov.appendChild(h('div', { class: 'modal-card', style: { width: '440px', maxWidth: 'calc(100vw - 32px)' } },
-            h('header', { class: 'modal-head' },
-                h('h2', null, Icon('Plus', { size: 16 }), ' Новый пациент'),
-                h('button', { class: 'modal-close', onclick: close }, '×')),
-            h('div', { class: 'modal-body', style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 14px' } },
-                fld('Фамилия *', fLast), fld('Имя *', fFirst),
-                fld('Телефон', fPhone), fld('Дата рождения', fDob),
-                fld('Пол', fSex)),
-            h('footer', { class: 'modal-foot' },
-                h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Полная анкета — на странице «Регистратура».'),
-                h('span', { class: 'grow' }),
-                h('button', { class: 'btn', onclick: close }, 'Отмена'),
-                h('button', { class: 'btn btn-primary', onclick: (ev) => { const b = ev.currentTarget; if (b.disabled) return; b.disabled = true; Promise.resolve(doCreate(false)).finally(() => { b.disabled = false; }); } }, Icon('Check', { size: 14 }), ' Создать и привязать'))));
-        document.body.appendChild(ov);
-        setTimeout(() => fLast.focus(), 30);
     }
 
     document.body.appendChild(overlay);
