@@ -129,6 +129,9 @@ let BOARD_CFG = null;
 let CFG_FAIL = false;
 let LINES_HOLD = null;
 let LINES_ERROR = false;
+// CRM_REAL_BOOKING_V1 — ЧТО ВИДИТ НОЧНОЕ СМЕТАНИЕ, спрашивая «у каких из этих
+// заявок есть записанная строка». null = то же, что видит окно заявки.
+let SWEEP_LINES = null;
 // QUICK_PATIENT_V1 — ХВОСТ РЕГИСТРАЦИИ, ЗАДЕРЖАННЫЙ НА ПОЛПУТИ.
 //
 // Держим правку САМОЙ карточки (crm_requests по id) — она есть только в хвосте
@@ -195,9 +198,14 @@ globalThis.fetch = async (url, opts) => {
       return jsonOk(DOCTORS);
     }
     if (body && body.table === 'crm_request_services' && body.op === 'select') {
-      if (LINES_HOLD) await LINES_HOLD;
-      if (LINES_ERROR) return { ok: false, json: async () => ({ error: { message: 'строки не отданы' } }) };
-      return jsonOk(REQ_LINES);
+      // CRM_REAL_BOOKING_V1 — задержка и отказ касаются ТОЛЬКО выборки строк
+      // ОДНОЙ заявки (.eq('request_id', …)), которую делает её окно. Ночное
+      // сметание читает ту же таблицу ПАЧКОЙ (.in('request_id', …)), и
+      // задержанный ответ повесил бы загрузку доски целиком.
+      const own = (body.filters || []).some((f) => f.col === 'request_id' && f.op === 'eq');
+      if (own && LINES_HOLD) await LINES_HOLD;
+      if (own && LINES_ERROR) return { ok: false, json: async () => ({ error: { message: 'строки не отданы' } }) };
+      return jsonOk(SWEEP_LINES !== null && !own ? SWEEP_LINES : REQ_LINES);
     }
     // CRM_LINKS_V1 — регистрация пациента с карточки. Поиск дубля читает
     // patients, вставка возвращает заведённую карту.
@@ -1017,6 +1025,14 @@ const SEEDED_STAGES = [
   { key: 'not_qualified', label: 'Нецелевой',             color: '',       position: 8, is_active: 1, kind: 'lost' },
 ];
 
+
+// CRM_REAL_BOOKING_V1 — у сметания появился ПЕРВЫЙ шаг: сначала «кто просрочен»,
+// потом «у кого из них есть записанная строка». Без единой просроченной заявки
+// метить теперь нечего и второй запрос не уходит — поэтому доска этих трёх
+// проверок посеяна одним просроченным лидом.
+const OVERDUE_LEAD = { id: 1, status: 'scheduled', source: 'call', full_name: 'Каримова Азиза',
+  phone: UZ_RAW, scheduled_date: '2020-01-01', created_at: '2020-01-01T10:00:00Z' };
+
 /** Отбор по статусу у автоматики «Не пришёл» (правка ПАЧКИ, без фильтра по id). */
 const sweepCall = () => CALLS.find((c) => c.table === 'crm_requests' && c.op === 'update'
   && (c.filters || []).some((f) => f.col === 'scheduled_date' && f.op === 'lt'));
@@ -1024,7 +1040,7 @@ const sweepCall = () => CALLS.find((c) => c.table === 'crm_requests' && c.op ===
 test('автоматика «Не пришёл» берёт живые колонки из настроек, а не из зашитой пары', async () => {
   BOARD_CFG = { stages: [...SEEDED_STAGES, { key: 'waiting_pay', label: 'Ждёт оплаты', color: 'info', position: 9, is_active: 1, kind: 'open' }], sources: [], routing: [] };
   CALLS.length = 0;
-  await board([]);
+  await board([OVERDUE_LEAD]);
 
   const sweep = sweepCall();
   assert.ok(sweep, 'ночная автоматика не сработала вовсе');
@@ -1042,7 +1058,7 @@ test('колонку «Не пришёл» переименовали — авт
   BOARD_CFG = { stages: SEEDED_STAGES.filter((s) => s.key !== 'no_show')
     .concat([{ key: 'missed', label: 'Пропустил', color: 'crit', position: 6, is_active: 1, kind: 'lost' }]), sources: [], routing: [] };
   CALLS.length = 0;
-  await board([]);
+  await board([OVERDUE_LEAD]);
 
   const sweep = sweepCall();
   assert.ok(sweep, 'без сидовой колонки автоматика молчит — заявки зависают');
@@ -1064,7 +1080,7 @@ test('колонку «Не пришёл» переименовали — авт
 test('сметание «Не пришёл» начинается с «Записан» — отложенный на «Перезвонить» лид не трогают', async () => {
   BOARD_CFG = { stages: [...SEEDED_STAGES, { key: 'waiting_pay', label: 'Ждёт оплаты', color: 'info', position: 9, is_active: 1, kind: 'open' }], sources: [], routing: [] };
   CALLS.length = 0;
-  await board([]);
+  await board([OVERDUE_LEAD]);
 
   const sweep = sweepCall();
   assert.ok(sweep, 'ночная автоматика не сработала вовсе');
@@ -1499,4 +1515,45 @@ test('записанную строку перенесли на другой д�
 
   SERVICES = []; REQ_LINES = []; DOCTORS = [];
   window.easymed.state.user = null;
+});
+
+// CRM_REAL_BOOKING_V1 (2026-09-21) — У ЗАПИСАННОГО ЕСТЬ КТО СУДИТЬ, И ЭТО НЕ
+// НОЧНАЯ ВЫБОРКА ПО ДАТЕ.
+//
+// Сметание — догадка: «день прошёл, визита мы не видим, значит не пришёл».
+// Заявка, строка которой держит настоящий слот, в догадках не нуждается: её
+// судьбу объявляет сам приём — «Не пришёл» в сетке, отметка прихода, деньги по
+// счёту, — и переносит это в заявку сервер. Оставь догадку здесь — записанного
+// пациента метили бы ДВА писателя с разными правилами, и ночной успевал бы
+// первым: приём назначен на утро, а карточка уже потеряна.
+
+test('заявка с записанной строкой ночью не метится: её судьбу объявляет сам приём', async () => {
+  BOARD_CFG = null;
+  SWEEP_LINES = [{ request_id: 1, visit_id: 555 }];
+  CALLS.length = 0;
+  await board([OVERDUE_LEAD]);
+
+  const ask = CALLS.find((c) => c.table === 'crm_request_services' && c.op === 'select'
+    && (c.filters || []).some((f) => f.col === 'visit_id' && String(f.op).startsWith('not')));
+  assert.ok(ask, 'автоматика не спрашивает, у кого из просроченных есть записанный слот — значит метит вслепую');
+  assert.deepStrictEqual((ask.filters || []).find((f) => f.col === 'request_id'),
+    { col: 'request_id', op: 'in', val: [1] }, 'спрошены строки не тех заявок, что просрочены');
+
+  assert.strictEqual(sweepCall(), undefined,
+    'записанного пациента ночная автоматика всё-таки унесла в «Не пришёл» — а его приём ещё даже не начался');
+  SWEEP_LINES = null;
+});
+
+test('заявка без единой записанной строки метится, как и раньше', async () => {
+  BOARD_CFG = null;
+  SWEEP_LINES = [];
+  CALLS.length = 0;
+  await board([OVERDUE_LEAD]);
+
+  const sweep = sweepCall();
+  assert.ok(sweep, 'просроченное пожелание на дату перестало метиться вовсе — заявка зависнет навсегда');
+  assert.strictEqual(sweep.values.status, 'no_show');
+  assert.deepStrictEqual((sweep.filters || []).find((f) => f.col === 'id'),
+    { col: 'id', op: 'in', val: [1] }, 'метится пачка по статусу, а не названные заявки');
+  SWEEP_LINES = null;
 });

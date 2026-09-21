@@ -44,7 +44,9 @@ import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
 import { hasActorRole } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
 // строк живут в одном модуле на все окна: копии этого кода уже разъезжались.
-import { closeCrmLines as closeCrmLinesShared, pendingCrmLines } from '../crm-lines.js';
+// CRM_REAL_BOOKING_V1 (2026-09-21) — закрытия строк здесь больше нет: приход
+// доказывает событие (отметка, платёж, начатая работа), и видит его сервер.
+import { pendingCrmLines } from '../crm-lines.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // WIZ_INVOICE_PRINT_V1 — тот же брендированный бланк «Счёт» (Настройки → Документы); ?v как у всех импортёров
 
 
@@ -621,23 +623,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // день смета открывается пустой, как и раньше.
     await prefillFromCrm();
 
-    // CRM_SCHEDULE_V1 — пациент пришёл и услуги оформлены: закрываем именно те
-    // строки заявки, которые подставились. Родительская заявка переходит в
-    // «Пришёл» ТОЛЬКО когда в ней не осталось незакрытых строк — заявка на три
-    // дня должна пережить первый визит, иначе остальные дни исчезнут у
-    // регистратуры. Лучшая попытка: услуги уже сохранены, и сбой здесь не должен
-    // выглядеть как «не удалось сохранить».
-    //
-    // CRM_LINKS_V1 — само правило переехало в crm-lines.js: его зовут мастер
-    // записи, каталог услуг и быстрая регистрация, а три копии одного правила
-    // разъезжаются молча. Заодно ступень «Пришёл» читается из настроенной
-    // воронки, а не берётся сидовым ключом 'came'.
-    async function closeCrmLines() {
-        const lineIds = wiz.crmLineIds || [];
-        if (!lineIds.length) return;
-        await closeCrmLinesShared(lineIds, wiz.crmRequestIds || []);
-        wiz.crmLineIds = []; wiz.crmRequestIds = [];
-    }
+    // ЗДЕСЬ БЫЛА closeCrmLines() — «услуги оформлены, значит заявка дошла».
+    // CRM_REAL_BOOKING_V1 (2026-09-21): оформление услуги это не приход, а
+    // намерение. Строки закрывает сервер, когда увидит ДОКАЗАТЕЛЬСТВО прихода —
+    // отметку «пришёл», платёж по счёту визита или начатую работу
+    // (server/services/crm/visit-status.js). Мастер их только подставляет.
 
     async function prefillFromCrm() {
         // День, на который открыт мастер (по умолчанию — сегодня).
@@ -685,9 +675,6 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 names.push(svc.name);
             }
             if (!names.length) return;
-            // Какие строки заявки закрыть после создания визита.
-            wiz.crmLineIds = lines.map(l => l.id);
-            wiz.crmRequestIds = [...new Set(lines.map(l => l.request_id))];
             paint();
             toast(trf('Из заявки колл-центра на {date}: {names}', { date: dayIso.split('-').reverse().join('.'), names: names.join(', ') }), 'ok');
         } catch (e) {
@@ -2678,7 +2665,6 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 aktJobs.length ? ' ' + tr('Услуги плательщика — по акту, в кассу не идут.') : '',
             ].join('');
             toast(tr('Услуги добавлены') + dayWord + '.' + invMsg, invoiceFail ? 'info' : 'ok');
-            await closeCrmLines();   // CRM_SCHEDULE_V1
             close();
             if (typeof onSaved === 'function') {
                 await onSaved({

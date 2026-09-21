@@ -238,8 +238,39 @@ async function load() {
             const waiting = at >= 0 ? STAGE_KEYS.open.slice(at) : STAGE_KEYS.open;
             const from = waiting.filter((k) => k !== STAGE_KEYS.noShow);
             if (from.length) {
-                await supabase.from('crm_requests').update({ status: STAGE_KEYS.noShow })
-                    .in('status', from).lt('scheduled_date', today);
+                // CRM_REAL_BOOKING_V1 (2026-09-21) — СЛЕПОЕ СМЕТАНИЕ КОНЧИЛОСЬ
+                // ТАМ, ГДЕ НАЧАЛАСЬ НАСТОЯЩАЯ ЗАПИСЬ.
+                //
+                // Эта автоматика — догадка: «день прошёл, визита мы не видим,
+                // значит не пришёл». Для заявки, у строки которой есть слот в
+                // календаре, догадываться больше не о чем: её судьбу объявляет
+                // сам приём — «Не пришёл» в сетке, отметка прихода, деньги по
+                // счёту, — и переносит это в заявку сервер
+                // (crm/visit-status.js), а не ночная выборка по дате. Оставь мы
+                // догадку здесь — записанного пациента уносили бы в «Не пришёл»
+                // ДВА писателя с разными правилами, и второй делал бы это
+                // раньше первого: приём назначен на утро, а карточка уже
+                // потеряна, потому что дата вчерашняя.
+                //
+                // Поэтому метим ТОЛЬКО заявки без единой записанной строки:
+                // те, что так и остались пожеланием на дату.
+                const { data: cands, error: candErr } = await supabase.from('crm_requests')
+                    .select('id').in('status', from).lt('scheduled_date', today).limit(500);
+                const ids = (!candErr && cands ? cands : []).map((c) => c.id).filter((id) => id != null);
+                if (ids.length) {
+                    const { data: held, error: heldErr } = await supabase.from('crm_request_services')
+                        .select('request_id').in('request_id', ids).not('visit_id', 'is', null);
+                    // Отказ выборки — НЕ повод считать, что записанных нет:
+                    // молча смести записанного хуже, чем не смести никого.
+                    if (!heldErr) {
+                        const booked = new Set((held || []).map((l) => String(l.request_id)));
+                        const blind = ids.filter((id) => !booked.has(String(id)));
+                        if (blind.length) {
+                            await supabase.from('crm_requests').update({ status: STAGE_KEYS.noShow })
+                                .in('id', blind).in('status', from).lt('scheduled_date', today);
+                        }
+                    }
+                }
             }
         }
     } catch (e) { /* фоновая автоматика — молча */ }
@@ -797,15 +828,22 @@ async function paint() {
         }
         if (!p) { toast('Пациент заявки не найден — привязка потеряна.', 'fail'); return; }
         p = { id: p.id, full_name: p.full_name, mrn: p.mrn, phone: p.phone || r.phone };
-        // Пациента выбрали в форме заявки, но ещё не сохранили — конверсия и
-        // закрепляет привязку: иначе она потеряется вместе с закрытым попапом.
-        const patch = { status: CONVERT_STATUS };
-        if (String(r.patient_id || '') !== String(p.id)) patch.patient_id = p.id;
-        const { error } = await supabase.from('crm_requests').update(patch).eq('id', r.id);
-        if (error) { toast(error.message, 'fail'); return; }
+        // Пациента выбрали в форме заявки, но ещё не сохранили — привязка
+        // закрепляется здесь: иначе она потеряется вместе с закрытым попапом.
+        //
+        // CRM_REAL_BOOKING_V1 (2026-09-21) — А СТУПЕНЬ ЗДЕСЬ БОЛЬШЕ НЕ СТАВИТСЯ.
+        // Кнопка «Оформить услугу» объявляла заявку дошедшей в тот миг, когда
+        // её нажали, — до визита, до кассы, до того, как человек вышел из дома.
+        // «Пришёл» теперь значит приход, и доказывает его событие, которое
+        // видит сервер: отметка прихода, платёж по счёту визита, начатая над
+        // пациентом работа (crm/visit-status.js). Нажатие кнопки в окне таким
+        // доказательством не является.
+        if (String(r.patient_id || '') !== String(p.id)) {
+            const { error } = await supabase.from('crm_requests').update({ patient_id: p.id }).eq('id', r.id);
+            if (error) { toast(error.message, 'fail'); return; }
+        }
         r.patient_id = p.id;
         r.patients = { id: p.id, full_name: p.full_name, mrn: p.mrn };
-        r.status = CONVERT_STATUS;
         if (refs.onNavigate) refs.onNavigate('patient-card', p);
         // CRM_CONVERT_V1 — мастер открывается всегда: с услугой заявки в смете,
         // либо пустым, чтобы регистратор выбрал её сам.
@@ -826,7 +864,6 @@ async function paint() {
         }
         patientRegistrationModal({
             requestRow: r,
-            markCame: true,
             onCreated: (p) => {
                 if (refs.onNavigate) refs.onNavigate('patient-card', p);
                 // Мастер сам подберёт врача, дату и очередь — как при обычном заказе.
@@ -890,10 +927,14 @@ async function paint() {
     // копии в patients.notes, которая устаревала в тот же день.
     //
     // `requestRow` может быть null — заявку ещё не сохранили (её создаст
-    // persist() уже с patient_id). `markCame` разделяет два случая: конверсия
-    // означает «пациент пришёл», а запись на будущую дату — нет, и ставить ей
-    // статус «Пришёл» было бы враньём в канбане.
-    function patientRegistrationModal({ requestRow = null, prefill = null, markCame = true, onCreated } = {}) {
+    // persist() уже с patient_id).
+    //
+    // CRM_REAL_BOOKING_V1 (2026-09-21) — ЗДЕСЬ БЫЛ ФЛАГ `markCame`: завести
+    // карту «по конверсии» значило заодно объявить заявку дошедшей, а завести
+    // её перед записью на будущую дату — нет. Флага больше нет, потому что нет
+    // и первого случая: карта пациента — это не приход. Ступень «Пришёл»
+    // ставит только событие, и ставит его сервер.
+    function patientRegistrationModal({ requestRow = null, prefill = null, onCreated } = {}) {
         const r = requestRow || {};
         const src = prefill || {
             full_name: r.full_name || '', phone: r.phone || '', dob: '',
@@ -979,7 +1020,6 @@ async function paint() {
             // её patient_id запишет persist() при сохранении.
             if (requestRow && requestRow.id) {
                 const patch = { patient_id: p.id };
-                if (markCame) patch.status = CONVERT_STATUS;
                 const { error: upErr } = await supabase.from('crm_requests').update(patch).eq('id', requestRow.id);
                 if (upErr) toast(trf('Пациент создан, но заявка не обновилась: {msg}', { msg: upErr.message }), 'fail');
             }
@@ -989,7 +1029,6 @@ async function paint() {
             if (requestRow) {
                 requestRow.patient_id = p.id;
                 requestRow.patients = { id: p.id, full_name: p.full_name, mrn: p.mrn };
-                if (markCame) requestRow.status = CONVERT_STATUS;
             }
             // О самой карте окно уже отчиталось («Пациент сохранён»), поэтому
             // здесь говорим о ЗАЯВКЕ — и только тогда, когда ей действительно
@@ -1675,10 +1714,6 @@ async function paint() {
 
             patientRegistrationModal({
                 requestRow: r || null,
-                // Запись на будущую дату — это НЕ «пациент пришёл»: статус
-                // заявки трогать нельзя, иначе канбан покажет визит, которого
-                // ещё не было.
-                markCame: false,
                 // CRM_LEAD_CONTEXT_V1 — заявки в базе может ещё и не быть
                 // (её создаст persist()), поэтому контекст для окна берётся из
                 // самой формы: выбранный источник и первая из набранных услуг.

@@ -591,6 +591,11 @@ function servicesPane(state, onReload) {
                         visitDoctorId:  state.visit.doctor_id || state.doctor?.id || null,
                         showSchedule:   true,
                         patientId:      state.visit.patient_id || state.patient?.id || null,
+                        // CRM_REAL_BOOKING_V1 — окно открыто НА ЭТОМ визите, и
+                        // подстановка из заявки колл-центра предпочтёт строки
+                        // именно этого приёма: у пациента, записанного в один
+                        // день к двум врачам, вторая строка ждёт своей сметы.
+                        visitId:        state.visit.id || null,
                         initialDateIso: (state.visit?.visit_date || state.visit?.date || '').slice(0, 10) || null,
                         // Already-attached services render disabled in the picker
                         // so the same service can't be added to this visit twice.
