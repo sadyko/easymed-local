@@ -8544,4 +8544,7 @@ export const STRINGS = {
   "Полная анкета — в карте пациента.": {"en":"The full form is in the patient's card.","ru":"Полная анкета — в карте пациента.","uz":"Toʻliq anketa — bemor kartasida."},
   "— создать пациента": {"en":"— create the patient","ru":"— создать пациента","uz":"— bemorni yaratish"},
   "Не удалось открыть окно заведения пациента.": {"en":"The new-patient window could not be opened.","ru":"Не удалось открыть окно заведения пациента.","uz":"Bemor yaratish oynasini ochib boʻlmadi."},
+  "Пациент из заявки": {"en":"Patient from the lead","ru":"Пациент из заявки","uz":"Soʻrovdan kelgan bemor"},
+  "Пациент не создан.": {"en":"The patient was not created.","ru":"Пациент не создан.","uz":"Bemor yaratilmadi."},
+  "Заявка привязана к карте: {who}": {"en":"The lead is linked to the record: {who}","ru":"Заявка привязана к карте: {who}","uz":"Soʻrov kartaga bogʻlandi: {who}"},
 };

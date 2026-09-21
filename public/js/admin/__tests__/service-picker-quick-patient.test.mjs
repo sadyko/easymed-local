@@ -308,4 +308,13 @@ test('своей мини-формы заведения пациента в ка
   assert.ok(!/savePatient\(/.test(picker),
     'каталог всё ещё сохраняет пациента сам — путь заведения обязан быть один');
   assert.ok(/quick-patient-modal\.js\?v=/.test(picker), 'каталог не зовёт окно быстрой регистрации');
+
+  // MODULE_INSTANCE_V1 — окно грузится ТЕМ ЖЕ адресом, что и из карточки CRM.
+  // Строка запроса — часть адреса модуля: './x.js?v=a' и './x.js?v=b' это для
+  // браузера ДВА разных модуля с двумя копиями состояния.
+  const mine = picker.match(/quick-patient-modal\.js\?v=([a-z0-9]+)/i);
+  const theirs = srcOf('views/crm.js').match(/quick-patient-modal\.js\?v=([a-z0-9]+)/i);
+  assert.ok(theirs, 'карточка CRM не зовёт окно быстрой регистрации');
+  assert.strictEqual(mine[1], theirs[1],
+    'каталог и CRM грузят ДВЕ копии окна: ?v=' + mine[1] + ' против ?v=' + theirs[1]);
 });
