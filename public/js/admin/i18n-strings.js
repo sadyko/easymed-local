@@ -937,6 +937,7 @@ export const STRINGS = {
   "Паспорт опекуна": {"en":"Guardian passport","ru":"Паспорт опекуна","uz":"Vasiyning pasporti"},
   "Пациент": {"en":"Patient","ru":"Пациент","uz":"Bemor"},
   "Пациент записался через Symptex. Подтвердите запись, чтобы зафиксировать слот, или отклоните её.": {"en":"Patient booked via Symptex. Confirm the appointment to fix the slot, or decline it.","ru":"Пациент записался через Symptex. Подтвердите запись, чтобы зафиксировать слот, или отклоните её.","uz":"Bemor Symptex orqali yozildi. Slotni belgilash uchun yozuvni tasdiqlang yoki rad eting."},
+  "Пациент заведён, но продолжить не удалось.": {"en":"Patient created, but could not continue.","ru":"Пациент заведён, но продолжить не удалось.","uz":"Bemor yaratildi, lekin davom ettirib boʻlmadi."},
   "Пациент зарегистрирован — добавьте визит.": {"en":"Patient registered — add a visit.","ru":"Пациент зарегистрирован — добавьте визит.","uz":"Bemor ro'yxatga olindi — tashrif qo'shing."},
   "Пациент не найден.": {"en":"Patient not found.","ru":"Пациент не найден.","uz":"Bemor topilmadi."},
   "Пациент передумал — закрыть без приёма": {"en":"Patient changed mind — close without service","ru":"Пациент передумал — закрыть без приёма","uz":"Bemor fikrdan qaytdi — xizmatsiz yopish"},

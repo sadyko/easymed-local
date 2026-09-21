@@ -876,19 +876,20 @@ async function paint() {
         // CRM_NAME_PARTS_V1 — в заявке имя лежит ОДНОЙ строкой, а карта хранит
         // его тремя полями. Раскладываем тем же правилом, что и раньше.
         const fio = splitFio(src.full_name);
-        const f = dlg.state.api.fields;
-        const put = (name, value) => { if (f[name] && value) f[name].value = value; };
-        put('last_name', fio.last);
-        put('first_name', fio.first);
-        put('middle_name', fio.middle);
-        put('phone', src.phone);
-        if (src.dob && f.date_of_birth) {
-            f.date_of_birth.value = src.dob;
-            // Тем же событием, что и набор руками: от даты рождения зависят
-            // возраст рядом с полем и подставляемый тип скидки, а их считает
-            // слушатель поля — подставленное значение его не будит.
-            try { f.date_of_birth.dispatchEvent(new Event('input')); } catch (e) { /* без события — просто не подставится категория */ }
-        }
+        // Окно отдаёт наружу ТОЛЬКО подстановку полей (fields + setValue), а не
+        // весь сборщик анкеты: у того есть save(), который на «Открыть
+        // существующего» уводит в карту пациента — и заявка, из которой окно
+        // позвали, теряется вместе с этим уходом.
+        const api = dlg.state.api;
+        const f = api.fields;
+        api.setValue('last_name', fio.last);
+        api.setValue('first_name', fio.first);
+        api.setValue('middle_name', fio.middle);
+        api.setValue('phone', src.phone);
+        // notify — тем же событием, что и набор руками: от даты рождения
+        // зависят возраст рядом с полем и подставляемый тип скидки, а их
+        // считает слушатель поля, и положенное молча значение его не будит.
+        api.setValue('date_of_birth', src.dob, { notify: true });
         // CRM_NAME_PARTS_V1 — курсор в первое незаполненное обязательное поле:
         // из заявки обычно приходит только имя, и дописать нужно фамилию.
         const firstEmpty = !fio.last ? f.last_name : !fio.first ? f.first_name : f.date_of_birth;

@@ -67,8 +67,16 @@ import { buildPatientFields, openDuplicatePatientDialog } from './patient-create
  */
 export const QUICK_PATIENT_Z = 155;
 
-/** Ширина окна: у него нет таблицы услуг, поэтому оно уже, чем быстрая регистрация. */
-const QUICK_WIDTH = 'min(1100px, calc(100vw - 48px))';
+/**
+ * Ширину окна задаёт КЛАСС .fr-card-narrow (admin-views.css), а не стиль
+ * отсюда: у этого окна нет таблицы услуг, поэтому оно уже быстрой регистрации.
+ *
+ * Здесь стоял встроенный style + setProperty('width', …, 'important') — и
+ * встроенный !important не перебивается ничем, кроме такого же. Медиазапрос
+ * .fr-card (≤ 960 px) остался бы ни с чем, и на узком экране окно в 1100 px
+ * вылезало бы за край. Класс живёт в одном весе с .fr-card и стоит ниже него.
+ */
+const QUICK_CARD_CLASS = 'modal-card fr-card fr-card-narrow';
 
 /**
  * Окно «Новый пациент» — блок реквизитов быстрой регистрации отдельным окном.
@@ -109,7 +117,24 @@ export function openQuickPatientModal({
     const close = () => { if (state.saving) return; dismiss(); };
 
     /**
-     * Стоит ли поверх этого окна ЧУЖОЙ диалог.
+     * Этаж чужой подложки. Встроенный стиль — то, чем его задают все окна
+     * продукта (h('div', { class: 'modal', style: { zIndex: '150' } })).
+     * Вычисленный стиль спрашиваем только там, где он есть: в поддельном DOM
+     * проверок его нет, и без этой оговорки проверка падала бы на ровном месте.
+     */
+    function overlayZ(el) {
+        const inline = Number((el.style && el.style.zIndex) || 0);
+        if (inline) return inline;
+        try {
+            if (typeof window !== 'undefined' && typeof window.getComputedStyle === 'function') {
+                return Number(window.getComputedStyle(el).zIndex) || 0;
+            }
+        } catch (e) { /* вычисленного стиля нет — считаем по встроенному */ }
+        return 0;
+    }
+
+    /**
+     * Стоит ли ПОВЕРХ этого окна чужой диалог.
      *
      * Окно открывает поверх себя стража дубликатов, а тот слушает тот же
      * document. Без этой проверки Esc, закрывающий вопрос о дубле, сносил бы
@@ -117,12 +142,20 @@ export function openQuickPatientModal({
      *
      * Ищем не по имени: у стража дубликатов data-dialog стоит на карточке, а
      * не на подложке. Общее у всех одно — своя подложка .modal в document.body.
+     *
+     * СЧИТАЕТСЯ ТОЛЬКО ЭТАЖ ВЫШЕ НАШЕГО, и это вся суть проверки. Соседняя
+     * подложка — это ещё и ТЕ, КТО ОКНО ПОЗВАЛ: каталог услуг (130), привязка
+     * пациента в нём (150), карточка CRM. Они стоят ПОД окном и заслонить его
+     * не могут. Считая их дочерними, окно глохло ровно в самом частом случае —
+     * когда его открыли из каталога: Esc не закрывал, Enter не сохранял, и на
+     * экране это читалось как «окно зависло».
      */
     function childDialogOpen() {
         const kids = (typeof document !== 'undefined' && document.body && document.body.children) || [];
         for (const el of kids) {
             if (!el || el === overlay) continue;
-            if (String(el.className || '').split(/\s+/).includes('modal')) return true;
+            if (!String(el.className || '').split(/\s+/).includes('modal')) continue;
+            if (overlayZ(el) > QUICK_PATIENT_Z) return true;
         }
         return false;
     }
@@ -133,25 +166,16 @@ export function openQuickPatientModal({
     // Раскладку формы задаёт .fr-card/.fr-form (admin-views.css) — та же, что у
     // быстрой регистрации: подпись слева, поле справа, по две пары в строке.
     const card = h('div', {
-        class: 'modal-card fr-card',
+        class: QUICK_CARD_CLASS,
         'data-dialog': 'quick-patient',
-        style: { width: QUICK_WIDTH },
     });
-    // .fr-card просит свою ширину с !important (иначе MODAL_FULLSCREEN_V1
-    // растянул бы её на весь экран), а авторский !important бьёт встроенный
-    // стиль — поэтому просим тем же весом там, где это умеют. В поддельном DOM
-    // проверок setProperty нет, и встроенного значения выше достаточно.
-    try {
-        if (card.style && typeof card.style.setProperty === 'function') {
-            card.style.setProperty('width', QUICK_WIDTH, 'important');
-        }
-    } catch (e) { /* стиль без setProperty — остаётся встроенное значение */ }
     overlay.appendChild(card);
 
     const body = h('div', { class: 'modal-body' });
 
     // Состояние окна. `api` лежит здесь, а не рядом: позвавший (и проверка)
-    // добирается до полей через ОДНУ дверь.
+    // добирается до полей через ОДНУ дверь — и в эту дверь проходит НЕ ВЕСЬ
+    // сборщик анкеты, а только подстановка значений (см. publicApi ниже).
     const state = { saving: false, api: null };
 
     card.appendChild(h('header', { class: 'modal-head' },
@@ -174,7 +198,46 @@ export function openQuickPatientModal({
         onNavigate: navigate,
         close,
     });
-    state.api = api;
+
+    /**
+     * ЧТО ОКНО ОТДАЁТ ПОЗВАВШЕМУ — и почему не всё.
+     *
+     * Позвавшему нужно ровно одно: подставить известное (карточка CRM кладёт
+     * в поля имя и телефон из заявки). Сборщик анкеты умеет куда больше, и
+     * среди этого — api.save(), который на «Открыть существующего» в диалоге
+     * дубликата УХОДИТ В КАРТУ пациента. Ровно от этого пути окно и отказалось
+     * (см. шапку модуля): уход потерял бы всё, из чего окно позвали — набранный
+     * счёт калькулятора, слот календаря, заявку колл-центра. Отдать наружу
+     * вторую дверь к нему значило бы перечеркнуть решение молча.
+     */
+    const publicApi = {
+        /** Реестр полей: имя колонки → элемент. Отсюда берут .value и .focus(). */
+        fields: api.fields,
+        /**
+         * Подставить значение поля.
+         *
+         * @param {string}  name             имя колонки (реестр полей)
+         * @param {*}       value            что подставить; пустое игнорируется
+         * @param {boolean} [opts.notify]    разбудить слушателя поля — так же,
+         *   как его будит набор руками. От даты рождения зависят возраст рядом
+         *   с полем и подставляемый тип скидки, а их считает слушатель:
+         *   положенное молча значение он не увидит.
+         * @returns {boolean} подставили ли
+         */
+        setValue(name, value, { notify = false } = {}) {
+            const el = api.fields[name];
+            if (!el || value === null || value === undefined || value === '') return false;
+            el.value = String(value);
+            if (notify) {
+                try { el.dispatchEvent(new Event('input')); }
+                catch (e) { /* без события — просто не пересчитается зависимое */ }
+            }
+            return true;
+        },
+        /** Пол живёт не в поле, а в плитках выбора — у него своя подстановка. */
+        setGender: (v) => api.setGender(v),
+    };
+    state.api = publicApi;
 
     // Строка под формой — ответ на вопрос, который возникает сразу: «а где
     // всё остальное?». Без неё короткий набор полей читается как потеря.
@@ -215,6 +278,10 @@ export function openQuickPatientModal({
         // запустил сохранение ЗАНОВО.
         if (childDialogOpen()) return;
         e.preventDefault();
+        // Окно открывают ИЗ окон, и у позвавшего свой Enter: у формы заявки в
+        // карточке CRM, у каталога услуг. Всплывший наверх Enter — это второе
+        // действие на одно нажатие, и увидят его только по последствиям.
+        if (typeof e.stopPropagation === 'function') e.stopPropagation();
         if (saveBtn.disabled) return;
         saveBtn.click();
     });
@@ -223,13 +290,29 @@ export function openQuickPatientModal({
     // Сохранение
     // =======================================================================
 
-    /** Карта есть — отдать её позвавшему и уйти. */
+    /**
+     * Карта есть — отдать её позвавшему и уйти.
+     *
+     * СБОЙ ПОЗВАВШЕГО ОКНО НЕ ДЕРЖИТ. onCreated — чужой код: привязка к смете,
+     * мастер визита, хвост регистрации заявки. К этому мигу карта УЖЕ в базе и
+     * окно своё дело сделало; оставшись на экране, оно показывает ту же форму с
+     * теми же полями — и следующее нажатие «Создать пациента» заводит вторую
+     * карту на того же человека. Поэтому dismiss() зовётся в любом случае, а
+     * сбой не проглатывается: молчание здесь — это «всё хорошо» на экране и
+     * потерянный поток на самом деле (пациент есть, а смета/заявка его не
+     * получили).
+     */
     function finish(patient, { saved = true } = {}) {
         // Найденного пациента никто не сохранял: «Пациент сохранён» здесь
         // читалось бы как «изменения записаны», и регистратор уходил бы
         // уверенным, что что-то поменял в чужой карте.
         if (saved) toast('Пациент сохранён.');
-        notifyCreated(patient);
+        try {
+            notifyCreated(patient);
+        } catch (e) {
+            console.warn('[quick-patient] onCreated:', e);
+            toast('Пациент заведён, но продолжить не удалось.', 'fail');
+        }
         dismiss();   // не close(): запись дошла, и решение — наше
     }
 

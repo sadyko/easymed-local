@@ -185,11 +185,31 @@ const escapeKeydown = () => document.dispatchEvent({ type: 'keydown', key: 'Esca
 // Enter приходит НА КАРТОЧКУ окна (обработчик висит там), а `target` — поле, в
 // котором стоял курсор: фальшивый DOM события не всплывает, поэтому цель
 // задаём явно, как её увидел бы браузер.
+// Возвращает, ЧТО окно сделало с событием: Enter внутри окна обязан остановить
+// всплытие — иначе тот же Enter доберётся до формы или каталога, из которых
+// окно позвали, и сработает дважды.
 function pressEnter(dlg, target) {
+  const seen = { prevented: 0, stopped: 0 };
   dlg.card.dispatchEvent({
     type: 'keydown', key: 'Enter', target,
-    preventDefault() {}, stopPropagation() {},
+    preventDefault() { seen.prevented++; }, stopPropagation() { seen.stopped++; },
   });
+  return seen;
+}
+
+/**
+ * Чужая подложка .modal в документе — сосед этого окна.
+ *
+ * Ровно так выглядят и те, кто окно ПОЗВАЛ (каталог услуг 130, привязка
+ * пациента 150), и те, кого оно открывает ПОВЕРХ себя (страж дубликатов 160).
+ * Разница между ними — только этаж.
+ */
+function foreignModal(z) {
+  const ov = document.createElement('div');
+  ov.className = 'modal';
+  ov.style.zIndex = String(z);
+  document.body.appendChild(ov);
+  return ov;
 }
 
 function fillMinimum(dlg) {
@@ -215,8 +235,19 @@ test('окно — реквизиты пациента как в быстрой 
   assert.strictEqual(dlg.overlay.style.zIndex, '155', 'подложка окна не на своём этаже');
   assert.strictEqual(QUICK_PATIENT_Z, 155, 'этаж окна не вынесен наружу — привязать его будет нечем');
   assert.ok(hasClass(dlg.card, 'fr-card'), 'карточка не просит раскладку быстрой регистрации: ' + dlg.card.className);
-  assert.ok(/min\(1100px/.test(String(dlg.card.style.width || '')),
-    'окно не просит свою ширину (у него нет таблицы услуг, значит оно уже): ' + dlg.card.style.width);
+  // Ширина — КЛАССОМ, а не встроенным стилем с пометкой !important. Встроенный
+  // !important не перебить ничем, кроме такого же: узкий экран (медиазапрос
+  // .fr-card) остался бы с окном в 1100 px, вылезающим за край.
+  assert.ok(hasClass(dlg.card, 'fr-card-narrow'),
+    'окно не просит свою ширину классом (у него нет таблицы услуг, значит оно уже): ' + dlg.card.className);
+  assert.ok(!dlg.card.style.width,
+    'ширину всё ещё просят встроенным стилем — медиазапросу её будет не перебить: ' + dlg.card.style.width);
+  const css = fs.readFileSync(path.join(HERE, '..', '..', '..', 'css', 'admin-views.css'), 'utf8');
+  const narrow = css.match(/\.fr-card-narrow\s*\{[^}]*\}/);
+  assert.ok(narrow, 'правила .fr-card-narrow нет в admin-views.css — класс ничего не значит');
+  assert.ok(/min\(1100px/.test(narrow[0]), 'у .fr-card-narrow не та ширина: ' + narrow[0]);
+  assert.ok(css.indexOf('.fr-card-narrow') > css.indexOf('.fr-card {'),
+    '.fr-card-narrow стоит ВЫШЕ .fr-card — при равном весе победит .fr-card, и окно станет широким');
 
   const txt = textOf(dlg.card).replace(/\s+/g, ' ');
   assert.ok(txt.includes('Новый пациент'), 'нет заголовка окна');
@@ -347,10 +378,14 @@ test('Enter сохраняет, Esc во время сохранения не з
 
   fillMinimum(dlg);
   calls.length = 0;
-  pressEnter(dlg, dlg.state.api.fields.last_name);
+  const seen = pressEnter(dlg, dlg.state.api.fields.last_name);
   await tick(60);
 
   assert.strictEqual(insertsInto('patients'), 1, 'Enter не сохранил пациента');
+  assert.strictEqual(seen.prevented, 1, 'Enter не отменил своё обычное действие — форма отправится сама');
+  // Окно открывают ИЗ окон: из привязки каталога, из карточки CRM. У них свой
+  // Enter, и всплывший туда — это второе действие на одно нажатие.
+  assert.strictEqual(seen.stopped, 1, 'Enter ушёл наверх — тот же Enter сработает и у позвавшего');
   assert.strictEqual(dlg.state.saving, true, 'окно не считает себя записывающим — проверяется не то');
 
   escapeKeydown();
@@ -407,5 +442,124 @@ test('этаж 155: выше окна привязки каталога и ни�
   assert.ok(mine < Number(dup[1]),
     'окно заведения (' + mine + ') не ниже стража дубликатов (' + dup[1] + ') — вопрос о дубле откроется ЗА ним');
 
+  dlg.close();
+});
+
+// ===========================================================================
+// 7. ДОЧЕРНИМ СЧИТАЕТСЯ ТОЛЬКО ОКНО ВЫШЕ ЭТАЖОМ.
+//
+// Окно глушит Esc и Enter, пока поверх него стоит чужой диалог: страж
+// дубликатов слушает тот же document, и Esc, закрывающий вопрос о дубле, снёс
+// бы заодно и само окно с набранными полями.
+//
+// Но «чужой диалог в документе» — это ещё и ТЕ, КТО ОКНО ПОЗВАЛ: каталог услуг
+// (130) и привязка пациента в нём (150). Они стоят ПОД окном и заслонить его
+// не могут. Считая их дочерними, окно глохло ровно в самом частом случае —
+// когда его открыли из каталога: Esc не закрывал, Enter не сохранял, и это
+// читалось как «окно зависло».
+// ===========================================================================
+test('окно ПОД нами не глушит окно: Esc закрывает, Enter сохраняет', async () => {
+  reset();
+  foreignModal(150);   // привязка пациента в каталоге — она нас и позвала
+  const created = [];
+  const dlg = openQuickPatientModal({ onCreated: (p) => created.push(p) });
+  await tick(40);
+
+  fillMinimum(dlg);
+  calls.length = 0;
+  pressEnter(dlg, dlg.state.api.fields.last_name);
+  await tick(80);
+  assert.strictEqual(insertsInto('patients'), 1,
+    'Enter не сохранил: окно приняло позвавшего (150) за диалог поверх себя');
+  assert.strictEqual(created.length, 1, 'позвавший не получил карту');
+
+  // И то же самое для Esc — на чистом окне, без записи.
+  reset();
+  foreignModal(150);
+  openQuickPatientModal({});
+  await tick(40);
+  escapeKeydown();
+  await tick(20);
+  assert.strictEqual(dialogs('quick-patient').length, 0,
+    'Esc не закрыл окно: позвавшего (150) снова приняли за диалог поверх');
+});
+
+test('окно НАД нами глушит окно: Esc не закрывает, Enter не сохраняет', async () => {
+  reset();
+  foreignModal(160);   // страж дубликатов / отказ доступа — он поверх нас
+  const dlg = openQuickPatientModal({});
+  await tick(40);
+
+  fillMinimum(dlg);
+  calls.length = 0;
+  pressEnter(dlg, dlg.state.api.fields.last_name);
+  await tick(60);
+  assert.strictEqual(insertsInto('patients'), 0,
+    'Enter прошёл мимо диалога поверх окна и запустил сохранение заново');
+
+  escapeKeydown();
+  await tick(20);
+  assert.strictEqual(dialogs('quick-patient').length, 1,
+    'Esc закрыл окно вместе с диалогом, стоящим поверх него');
+  dlg.close();
+});
+
+// ===========================================================================
+// 8. ПОЗВАВШИЙ УПАЛ — ОКНО ВСЁ РАВНО УХОДИТ.
+//
+// onCreated — чужой код: привязка к смете, мастер визита, хвост регистрации
+// заявки. Карта на этот момент УЖЕ в базе, и окно своё дело сделало. Если его
+// оставить на экране, регистратор видит форму с теми же полями и нажимает
+// «Создать пациента» ещё раз — вторая карта на того же человека.
+// ===========================================================================
+test('сбой позвавшего не оставляет окно открытым', async () => {
+  reset();
+  const dlg = openQuickPatientModal({ onCreated: () => { throw new Error('позвавший упал'); } });
+  await tick(40);
+
+  fillMinimum(dlg);
+  calls.length = 0;
+  btnByText(dlg.card, 'Создать пациента').click();
+  await tick(90);
+
+  assert.strictEqual(insertsInto('patients'), 1, 'карта не заведена — проверяется не то');
+  assert.strictEqual(dialogs('quick-patient').length, 0,
+    'окно осталось на экране: следующее нажатие заведёт вторую карту на того же человека');
+  // Молча проглоченный сбой — это «всё хорошо» на экране и потерянный поток на
+  // самом деле: пациент заведён, но смета/заявка его не получили.
+  assert.ok(toasts.some((t) => /продолжить/i.test(t)),
+    'о сбое позвавшего никто не сказал: ' + JSON.stringify(toasts));
+});
+
+// ===========================================================================
+// 9. ЧТО ОКНО ОТДАЁТ ПОЗВАВШЕМУ. Через state.api позвавший подставляет
+// известное (карточка CRM — имя и телефон из заявки). Весь сборщик анкеты
+// отдавать нельзя: у него есть save(), который на «Открыть существующего»
+// УХОДИТ В КАРТУ пациента — и поток, из которого окно позвали, теряется. Этот
+// путь здесь свой намеренно (см. шапку модуля), и вторая дверь к нему
+// перечеркнула бы решение.
+// ===========================================================================
+test('state.api отдаёт только подстановку полей, а не весь сборщик анкеты', async () => {
+  reset();
+  const dlg = openQuickPatientModal({});
+  await tick(40);
+  const api = dlg.state.api;
+
+  assert.ok(api.fields && api.fields.last_name, 'позвавшему нечем добраться до полей');
+  assert.strictEqual(typeof api.setValue, 'function', 'нет setValue — подставлять значения нечем');
+  assert.strictEqual(typeof api.setGender, 'function', 'нет setGender — пол подставить нечем');
+
+  for (const leaked of ['save', 'collect', 'photo', 'searchStrip', 'state', 'tg']) {
+    assert.strictEqual(api[leaked], undefined,
+      'через state.api наружу торчит ' + leaked + '() сборщика анкеты');
+  }
+
+  // setValue подставляет так же, как набрали бы руками: от даты рождения
+  // зависят возраст и тип скидки, а их считает слушатель поля.
+  let fired = 0;
+  api.fields.date_of_birth.addEventListener('input', () => { fired++; });
+  api.setValue('date_of_birth', '1990-04-01', { notify: true });
+  assert.strictEqual(api.fields.date_of_birth.value, '1990-04-01', 'setValue не положил значение в поле');
+  assert.strictEqual(fired, 1, 'setValue не разбудил слушателя поля — зависимое не пересчитается');
   dlg.close();
 });
