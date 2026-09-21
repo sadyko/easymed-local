@@ -110,6 +110,67 @@ test('администратор проходит, даже если его ВР
   } finally { db.close(); }
 });
 
+// CALLCENTER_OPERATOR_V1 — ПОБЛАЖКА АДМИНИСТРАТОРА НЕ РАСПРОСТРАНЯЕТСЯ НА
+// СВОЮ РОЛЬ КЛИНИКИ, СДЕЛАННУЮ НА ЕГО ОСНОВЕ.
+//
+// «Старший администратор» — своя роль клиники (CUSTOM_ROLES_V1) на основе
+// `admin`: routes/users.js пишет в users.role ОСНОВУ, поэтому такой человек
+// читается как администратор, а матрицу ему настраивают СВОЮ. Безусловный
+// пропуск администратора отменял бы в ней каждое «Нет» — экран показывал бы
+// запрет, которого нет, хотя свою роль заводят ровно затем, чтобы что-то
+// отнять.
+//
+// ПРАВИЛО: поблажка действует, пока по этому ключу (или по его разделу) у
+// СОБСТВЕННОЙ роли человека ничего не настроено. Администратор-врач под неё
+// по-прежнему попадает: своей роли клиники у него нет, а «Нет» ему записано
+// ЧУЖОЙ, врачебной ролью (ADMIN_DOCTOR_V1) — ради этого случая поблажка и
+// существует.
+test('своя роль клиники на основе администратора слушается своей же матрицы', () => {
+  const db = seed();
+  try {
+    db.prepare('INSERT INTO users (id, username, password_hash, full_name, role, custom_role_code) VALUES (?,?,?,?,?,?)')
+      .run(36, 'sadm', 'x', 'Старший администратор', 'admin', 'starshiy_admin');
+    const boss = { id: 36, role: 'admin', extra_roles: [], custom_role_code: 'starshiy_admin' };
+
+    // Своя роль есть, но этого ключа она не трогала — администратор проходит.
+    setGrants(db, 'starshiy_admin', { 'inpatient.vitals': 'edit' });
+    assert.equal(grantAllows(db, boss, 'inpatient.prescriptions', 'edit', []), true,
+      'ненастроенный ключ отнял у администратора то, чего ему никто не запрещал');
+
+    // А теперь клиника закрыла ему назначения — и это обязано значить нет.
+    setGrants(db, 'starshiy_admin', { 'inpatient.vitals': 'edit', 'inpatient.prescriptions': 'none' });
+    assert.equal(grantAllows(db, boss, 'inpatient.prescriptions', 'edit', ['admin']), false,
+      'поблажка администратора отменила запрет, записанный его СОБСТВЕННОЙ роли');
+    assert.equal(grantAllows(db, boss, 'inpatient.vitals', 'edit', []), true,
+      'выданное той же своей ролью перестало работать');
+
+    // Штатный администратор и администратор-врач — ровно как были.
+    setGrants(db, 'doctor', { 'crm.dial': 'none' });
+    assert.equal(grantAllows(db, { id: 1, role: 'admin', extra_roles: [] }, 'inpatient.prescriptions', 'edit', []), true,
+      'штатному администратору настроить матрицу негде — его пускают всегда');
+    assert.equal(grantAllows(db, { id: 34, role: 'doctor', extra_roles: ['admin'] }, 'crm.dial', 'edit', ['registrar']), true,
+      'администратор-врач заперт «Нет» чужой, врачебной роли');
+  } finally { db.close(); }
+});
+
+// CALLCENTER_OPERATOR_V1 — ЗАКРЫТЫЙ РАЗДЕЛ ЗАКРЫВАЕТ ВСЁ, ЧТО В НЁМ.
+//
+// Уровни у окон и действий остаются лежать в матрице и после того, как раздел
+// поставили в «Нет» (экран их гасит, но значение у них прежнее, а клиника
+// могла записать такую матрицу и руками). Спроси ворота только про окно — и
+// закрытый раздел открылся бы изнутри: «Cust Dev: Нет» при `custdev.list:
+// Просмотр` пускал бы на доску обзвона.
+test('раздел «Нет» перевешивает уровень, оставшийся у его окна', () => {
+  const db = seed();
+  try {
+    setGrants(db, 'nurse', { custdev: 'none', 'custdev.list': 'view', inpatient: 'view', 'inpatient.vitals': 'edit' });
+    assert.equal(grantAllows(db, NURSE, 'custdev.list', 'view', ['nurse']), false,
+      'окно осталось открытым в закрытом разделе');
+    assert.equal(grantAllows(db, NURSE, 'inpatient.vitals', 'edit', []), true,
+      'открытый раздел ничего не отнимает у своих строк');
+  } finally { db.close(); }
+});
+
 test('отказ — понятной фразой с адресом, где выдают права', () => {
   const db = seed();
   try {

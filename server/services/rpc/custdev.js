@@ -9,8 +9,7 @@
 import { canViewSection, canEditSection } from '../roles.js';
 // CALLCENTER_OPERATOR_V1 — у раздела появились свои строки в справочнике прав
 // (custdev.list, custdev.rate), и ворота спрашивают СНАЧАЛА их.
-import { grantLevel, isAdminUser } from '../grants.js';
-import { levelAllows } from '../../../public/js/shared/permission-catalog.js';
+import { grantAllowsOr } from '../grants.js';
 import { RpcError } from './crm-config.js';
 import { syncCards } from '../custdev/sync.js';
 import { listCards, reportFor } from '../custdev/board.js';
@@ -18,18 +17,16 @@ import { rateOutcome, ScoreError } from '../custdev/score.js';
 
 const KEY = 'custdev';
 
-// Правило перехода — то же, что у grants.js, только основа другая. У Cust Dev
-// никогда не было списка ролей в коде (см. шапку файла), поэтому «как было»
-// здесь — ПРЕЖНЯЯ ГАЛОЧКА РАЗДЕЛА, а не hasAnyRole: пока роль ключ не
-// трогала, решает canViewSection/canEditSection, как и до этого дня.
+// Правило перехода — ТО ЖЕ САМОЕ, что у всех ворот, и живёт оно в одном месте
+// (grants.js grantAllowsOr): поблажка администратору, закрытый раздел поверх
+// оставшихся уровней его строк, настроенный уровень, а дальше — «как было».
+// Здесь отличается только это «как было»: списка ролей в коде у Cust Dev
+// никогда не было (см. шапку файла), поэтому прежнее поведение — ПРЕЖНЯЯ
+// ГАЛОЧКА РАЗДЕЛА, а не hasAnyRole. Своя копия правила рядом с общим разошлась
+// бы с ним в первый же выпуск — ровно так этот раздел и пускал на доску,
+// закрытую строкой «Cust Dev: Нет».
 function grantedOr(db, user, key, need, legacy) {
-  // Администратор проходит всегда — то же правило и тот же предикат, что у
-  // grantAllows(): у администратора-врача матрица читается ещё и по врачебной
-  // роли, и чужое «Нет» иначе заперло бы владельца в его собственном отчёте
-  // (ADMIN_DOCTOR_V1).
-  if (isAdminUser(user)) return true;
-  const lvl = grantLevel(db, user, key);
-  return lvl !== null ? levelAllows(lvl, need) : legacy();
+  return grantAllowsOr(db, user, key, need, legacy);
 }
 
 function requireView(db, user) {
