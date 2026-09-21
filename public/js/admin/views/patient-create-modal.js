@@ -1163,6 +1163,28 @@ export async function runPatientSearch(term, resultsEl, onPick) {
 // ---------------------------------------------------------------------------
 // Диалог дубликата — открывает существующую карту или создаёт принудительно.
 // Экспортируется: тот же диалог показывает встроенная форма в мастере услуг.
+//
+// QUICK_PATIENT_V1 — У ВЫБОРА ЕСТЬ ПРАВО СКАЗАТЬ «НЕ ВЫШЛО».
+//
+// Диалог закрывался всегда, ЧЕМ БЫ ни кончился onOpenExisting. А кончиться он
+// может ничем: окно «Новый пациент» на этом пути ДОЧИТЫВАЕТ выбранную карту
+// (в диалоге она урезана до полей сравнения), и если чтение не удалось, оно
+// показывает отказ — а выбора под ним уже нет. Человек видит сообщение об
+// ошибке и пустой экран, и заводить карту приходится заново.
+//
+// Поэтому onOpenExisting (и onForceCreate) могут вернуть false — «оставь
+// открытым». Всё остальное (undefined, карта, что угодно) значит «готово».
+//
+// QUICK_PATIENT_V1 — ПОКА ОТВЕТ В ПУТИ, ВЫБИРАТЬ БОЛЬШЕ НЕЧЕМ.
+//
+// Гасла ТОЛЬКО нажатая строка. Совпадений бывает два, а ответ теперь ждёт
+// позвавшего до самого конца (окно «Новый пациент» отдаёт карту в смету, в
+// мастер визита, в заявку колл-центра) — и всё это время на экране не меняется
+// ничего. Регистратор щёлкает первую строку, отклика не видит и щёлкает
+// вторую: наружу уходят ДВА РАЗНЫХ пациента на одно заведение, а заявка
+// колл-центра привязывается к чужой карте. Поэтому гаснет ВЕСЬ выбор — строки
+// и «Создать принудительно», — и оживает ровно тогда, когда выбор отклонили
+// (false): диалог остаётся, значит в нём надо работать.
 // ---------------------------------------------------------------------------
 export function openDuplicatePatientDialog(err, { onOpenExisting, onForceCreate }) {
     const list = Array.isArray(err.existing) ? err.existing : (err.existing ? [err.existing] : []);
@@ -1171,6 +1193,32 @@ export function openDuplicatePatientDialog(err, { onOpenExisting, onForceCreate 
     const close = () => { document.removeEventListener('keydown', onKey); fadeOutAndRemove(overlay); };
     const onKey = (e) => { if (e.key === 'Escape') close(); };
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
+
+    // Всё, чем в этом диалоге выбирают: строки совпадений и «Создать
+    // принудительно». Гаснут и оживают они ВМЕСТЕ — порознь и получалось
+    // «первая строка погасла, вторая осталась живой».
+    const choosers = [];
+    let busy = false;
+    const setBusy = (v) => { busy = v; for (const el of choosers) if (el) el.disabled = v; };
+
+    /**
+     * Один ответ на диалог: спросить позвавшего, закрыться или остаться.
+     *
+     * @param {Function} run что спросить (onOpenExisting / onForceCreate)
+     */
+    async function choose(run) {
+        if (busy) return;
+        setBusy(true);
+        let ok;
+        try {
+            ok = await run();
+        } catch (e) {
+            setBusy(false);   // сорвалось — диалог остаётся рабочим
+            throw e;
+        }
+        if (ok === false) { setBusy(false); return; }   // «оставь открытым»
+        close();
+    }
 
     const rowsEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' } },
         ...list.map((c) => {
@@ -1182,7 +1230,7 @@ export function openDuplicatePatientDialog(err, { onOpenExisting, onForceCreate 
                     color: 'var(--primary-700)', textTransform: 'uppercase', letterSpacing: '0.04em',
                 },
             }, r));
-            return h('button', {
+            const row = h('button', {
                 type: 'button', class: 'dup-row',
                 style: {
                     display: 'flex', alignItems: 'center', gap: '12px',
@@ -1190,12 +1238,7 @@ export function openDuplicatePatientDialog(err, { onOpenExisting, onForceCreate 
                     border: '1px solid var(--ink-200)', background: 'white',
                     cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', width: '100%',
                 },
-                onclick: async (ev) => {
-                    const b = ev.currentTarget;
-                    b.disabled = true;
-                    try { await onOpenExisting(c); close(); }
-                    finally { if (b && b.isConnected) b.disabled = false; }
-                },
+                onclick: () => { void choose(() => onOpenExisting(c)); },
             },
                 h('div', { style: { flex: '1', minWidth: '0' } },
                     h('div', { class: 'row', style: { gap: '8px', marginBottom: '3px', flexWrap: 'wrap' } },
@@ -1211,8 +1254,17 @@ export function openDuplicatePatientDialog(err, { onOpenExisting, onForceCreate 
                 ),
                 Icon('ArrowRight', { size: 14 }),
             );
+            choosers.push(row);
+            return row;
         }),
     );
+
+    const forceBtn = h('button', {
+        class: 'btn btn-outline', 'data-act': 'force-create',
+        style: { color: 'var(--crit-700)', borderColor: 'var(--crit-500)' },
+        onclick: () => { void choose(() => onForceCreate()); },
+    }, Icon('Plus', { size: 13 }), ' ', tr('Создать принудительно'));
+    choosers.push(forceBtn);
 
     overlay.appendChild(h('div', { class: 'modal-card', 'data-dialog': 'patient-duplicate', style: { width: '560px', maxWidth: 'calc(100vw - 32px)' } },
         h('header', { class: 'modal-head' },
@@ -1232,16 +1284,7 @@ export function openDuplicatePatientDialog(err, { onOpenExisting, onForceCreate 
         h('footer', { class: 'modal-foot' },
             h('span', { class: 'grow' }),
             h('button', { class: 'btn', onclick: close }, tr('Отмена')),
-            h('button', {
-                class: 'btn btn-outline', 'data-act': 'force-create',
-                style: { color: 'var(--crit-700)', borderColor: 'var(--crit-500)' },
-                onclick: async (ev) => {
-                    const b = ev.currentTarget;
-                    b.disabled = true;
-                    try { await onForceCreate(); close(); }
-                    finally { if (b && b.isConnected) b.disabled = false; }
-                },
-            }, Icon('Plus', { size: 13 }), ' ', tr('Создать принудительно'))),
+            forceBtn),
     ));
     document.body.appendChild(overlay);
     document.addEventListener('keydown', onKey);

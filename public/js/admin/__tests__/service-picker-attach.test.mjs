@@ -17,6 +17,9 @@
 // врача, а по умолчанию — по-прежнему нет.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ─── минимальный DOM (тот же, что в service-picker-groups.test.mjs) ─────────
 class FakeNode {
@@ -71,6 +74,13 @@ globalThis.window = { location: { hostname: 'localhost' }, localStorage: { getIt
 globalThis.localStorage = { getItem: (k) => (k === 'admin.lang' ? 'ru' : null), setItem() {}, removeItem() {}, clear() {} };
 globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
+// QUICK_PATIENT_V1 — каталог спрашивает перед уходом (confirmLeaveCatalog) ГОЛЫМ
+// confirm(), как это делает браузер. В node его нет вовсе, и любая проверка,
+// дошедшая до Escape с набранной сметой, падала бы на «confirm is not defined»
+// — то есть по причине, к предмету проверки отношения не имеющей. Умолчание
+// «да, закрывай»; проверке, которой важен сам вопрос, эту заглушку подменяют и
+// возвращают обратно.
+globalThis.confirm = () => true;
 
 const walk = (e, out = []) => { if (!e || typeof e !== 'object') return out; out.push(e); for (const c of e.children || []) walk(c, out); return out; };
 const textOf = (e) => walk(e).map((x) => x._text || '').join(' ');
@@ -171,6 +181,54 @@ test('быстрая регистрация: каталог со сметой, �
     assert.equal(picked[0].service.id, 10, 'дошла не та услуга');
     assert.equal(picked[0].doctor, null, 'врач выдуман там, где его не выбирали');
     assert.ok(!BODY.children.includes(box), 'окно каталога осталось открытым поверх регистрации');
+});
+
+// QUICK_PATIENT_V1 — ПОДВАЛ ОКНА ПРИВЯЗКИ ПЕРЕСТАЛ ПОМЕЩАТЬСЯ В ОДНУ СТРОКУ.
+//
+// В нём теперь четыре места: подсказка, распорка и три кнопки («Отмена»,
+// «Полная анкета», «Новый пациент»). Карточка была 460 px, а .modal-foot
+// переноса не знает вовсе — значит лишнее не переносилось, а выдавливалось за
+// край карточки. Ломается это ТОЛЬКО в браузере и только на узком экране:
+// проверка смотрит на те самые три решения, которыми это и держится.
+test('подвал окна привязки: подсказка своей строкой, кнопки переносятся, карточка шире', async () => {
+    const box = await openPicker({ calculator: true, title: 'Калькулятор услуг' });
+    const add = addBtnFor(box, 'Приём терапевта');
+    assert.ok(add, 'услугу нечем добавить в смету — привязку не открыть');
+    add.click();
+    await settle();
+
+    const attachBtn = byClass(box, 'wzc-attach')[0];
+    assert.ok(attachBtn, 'в смете нет «Привязать пациента»');
+    attachBtn.click();
+    await settle();
+
+    const attach = overlays().find((o) => String(o.style.zIndex) === '150');
+    assert.ok(attach, 'окно привязки пациента не открылось');
+
+    const card = walk(attach).find((n) => hasClass(n, 'modal-card'));
+    assert.ok(card, 'у окна привязки нет карточки');
+    assert.equal(card.style.width, '560px',
+        'карточка привязки осталась узкой — подвал с тремя кнопками в неё не влезает: ' + card.style.width);
+    assert.equal(card.style.maxWidth, 'calc(100vw - 32px)',
+        'карточка перестала ужиматься по экрану — на телефоне она вылезет за край');
+
+    const foot = walk(attach).find((n) => hasClass(n, 'modal-foot'));
+    assert.ok(foot, 'у окна привязки нет подвала');
+    assert.equal(foot.style.flexWrap, 'wrap',
+        'подвал не умеет переносить — четвёртое место в ряду выдавит кнопки за край карточки');
+
+    const hint = foot.children.find((n) => hasClass(n, 'muted'));
+    assert.ok(hint, 'из подвала пропала подсказка про полную анкету');
+    assert.equal(hint.style.flex, '1 1 100%',
+        'подсказка делит строку с кнопками вместо своей собственной: ' + hint.style.flex);
+
+    // Подписи кнопок не переносятся по словам — это правило .btn в admin.css, и
+    // без него «Полная анкета» разъезжается на две строки, ломая высоту ряда.
+    const CSS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'css', 'admin.css');
+    const btnRule = fs.readFileSync(CSS, 'utf8').match(/\n\.btn \{[^}]*\}/);
+    assert.ok(btnRule, 'правила .btn в admin.css нет — проверку надо пересобрать');
+    assert.ok(/white-space:\s*nowrap/.test(btnRule[0]),
+        'у .btn пропал white-space: nowrap — подписи кнопок разъедутся на две строки');
 });
 
 test('по умолчанию слот по-прежнему обязателен: без врача и времени «Добавить к визиту» не нажать', async () => {

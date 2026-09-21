@@ -939,6 +939,7 @@ export const STRINGS = {
   "Паспорт опекуна": {"en":"Guardian passport","ru":"Паспорт опекуна","uz":"Vasiyning pasporti"},
   "Пациент": {"en":"Patient","ru":"Пациент","uz":"Bemor"},
   "Пациент записался через Symptex. Подтвердите запись, чтобы зафиксировать слот, или отклоните её.": {"en":"Patient booked via Symptex. Confirm the appointment to fix the slot, or decline it.","ru":"Пациент записался через Symptex. Подтвердите запись, чтобы зафиксировать слот, или отклоните её.","uz":"Bemor Symptex orqali yozildi. Slotni belgilash uchun yozuvni tasdiqlang yoki rad eting."},
+  "Пациент заведён, но продолжить не удалось.": {"en":"Patient created, but could not continue.","ru":"Пациент заведён, но продолжить не удалось.","uz":"Bemor yaratildi, lekin davom ettirib boʻlmadi."},
   "Пациент зарегистрирован — добавьте визит.": {"en":"Patient registered — add a visit.","ru":"Пациент зарегистрирован — добавьте визит.","uz":"Bemor ro'yxatga olindi — tashrif qo'shing."},
   "Пациент не найден.": {"en":"Patient not found.","ru":"Пациент не найден.","uz":"Bemor topilmadi."},
   "Пациент передумал — закрыть без приёма": {"en":"Patient changed mind — close without service","ru":"Пациент передумал — закрыть без приёма","uz":"Bemor fikrdan qaytdi — xizmatsiz yopish"},
@@ -5484,7 +5485,6 @@ export const STRINGS = {
   "Показать ещё {n} · всего {total}": {"en":"Show {n} more · {total} total","ru":"Показать ещё {n} · всего {total}","uz":"Yana {n} ko'rsatish · jami {total}"},
   "Покрывает плательщик — распределение на шаге «Кто платит».": {"en":"Covered by the payer — the split is on the “Who pays” step.","ru":"Покрывает плательщик — распределение на шаге «Кто платит».","uz":"To'lovchi qoplaydi — taqsimlash «Kim to'laydi» bosqichida."},
   "Покрытые услуги: счёт не выставляется, печатается акт оказанных услуг.": {"en":"Covered services: no invoice is issued; an act of delivered services prints.","ru":"Покрытые услуги: счёт не выставляется, печатается акт оказанных услуг.","uz":"Qoplangan xizmatlar: hisob-faktura chiqarilmaydi, ko'rsatilgan xizmatlar dalolatnomasi chop etiladi."},
-  "Полная анкета — на странице «Регистратура».": {"en":"The full form is on the Reception page.","ru":"Полная анкета — на странице «Регистратура».","uz":"To'liq anketa — «Registratura» sahifasida."},
   "Похожий пациент уже существует — найдите его через поиск.": {"en":"A similar patient already exists — find them via the search.","ru":"Похожий пациент уже существует — найдите его через поиск.","uz":"O'xshash bemor allaqachon mavjud — uni qidiruv orqali toping."},
   "привяжите пациента": {"en":"link a patient","ru":"привяжите пациента","uz":"bemorni bog'lang"},
   "Промокод {code} исчерпан — не применён.": {"en":"Promo code {code} is used up — not applied.","ru":"Промокод {code} исчерпан — не применён.","uz":"{code} promokodi tugagan — qo'llanmadi."},
@@ -8546,4 +8546,16 @@ export const STRINGS = {
   "Услуги не добавлены — карта пациента не изменена.": {"en":"No services were added — the patient's card is unchanged.","ru":"Услуги не добавлены — карта пациента не изменена.","uz":"Xizmatlar qoʻshilmadi — bemor kartasi oʻzgarmadi."},
   "Визит создан, счёт не выставлен: {msg} — выставьте счёт из карты пациента": {"en":"The visit is created, the invoice is not issued: {msg} — issue the invoice from the patient's card","ru":"Визит создан, счёт не выставлен: {msg} — выставьте счёт из карты пациента","uz":"Tashrif yaratildi, hisob chiqarilmadi: {msg} — hisobni bemor kartasidan chiqaring"},
   "Визит создан, счёт не выставлен. Выставьте его из карты пациента.": {"en":"The visit is created, the invoice is not issued. Issue it from the patient's card.","ru":"Визит создан, счёт не выставлен. Выставьте его из карты пациента.","uz":"Tashrif yaratildi, hisob chiqarilmadi. Uni bemor kartasidan chiqaring."},
+  // QUICK_PATIENT_V1 (2026-09-21) — одно окно «Новый пациент» на все потоки
+  "Полная анкета — в карте пациента.": {"en":"The full form is in the patient's card.","ru":"Полная анкета — в карте пациента.","uz":"Toʻliq anketa — bemor kartasida."},
+  "— создать пациента": {"en":"— create the patient","ru":"— создать пациента","uz":"— bemorni yaratish"},
+  "Не удалось открыть окно заведения пациента.": {"en":"The new-patient window could not be opened.","ru":"Не удалось открыть окно заведения пациента.","uz":"Bemor yaratish oynasini ochib boʻlmadi."},
+  "Пациент из заявки": {"en":"Patient from the lead","ru":"Пациент из заявки","uz":"Soʻrovdan kelgan bemor"},
+  "Пациент не создан.": {"en":"The patient was not created.","ru":"Пациент не создан.","uz":"Bemor yaratilmadi."},
+  "Заявка привязана к карте: {who}": {"en":"The lead is linked to the record: {who}","ru":"Заявка привязана к карте: {who}","uz":"Soʻrov kartaga bogʻlandi: {who}"},
+  "Полная анкета": {"en":"Full form","ru":"Полная анкета","uz":"Toʻliq anketa"},
+  // CRM_LEAD_CONTEXT_V1 — строка «откуда этот человек» в окне заведения пациента
+  "Из заявки: {src}": {"en":"From the request: {src}","ru":"Из заявки: {src}","uz":"Arizadan: {src}"},
+  "услуга: {svc}": {"en":"service: {svc}","ru":"услуга: {svc}","uz":"xizmat: {svc}"},
+  "Полная анкета — отдельным окном.": {"en":"The full form opens in its own window.","ru":"Полная анкета — отдельным окном.","uz":"Toʻliq anketa alohida oynada ochiladi."},
 };

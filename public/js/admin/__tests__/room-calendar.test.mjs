@@ -24,6 +24,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ─── крошечный DOM (стенд kitchen-sheet/discharge-view) ─────────────────────
 class F {
@@ -74,7 +77,20 @@ globalThis.document = {
   addEventListener() {}, removeEventListener() {}, getElementById() { return null; },
 };
 // I18N_LOCALE_PIN_V1 — язык пришпилен к ru ДО импорта экрана.
-globalThis.localStorage = { getItem: (k) => (k === 'admin.lang' ? 'ru' : null), setItem() {}, removeItem() {}, clear() {} };
+//
+// RCAL_MAX_COLUMNS_IMPORT_V1 — хранилище стало НАСТОЯЩИМ (было немое: getItem
+// всегда отдавал null, setItem молчал). Рабочий набор регистратора — врачи,
+// число дней и шаг сетки — живёт именно здесь и читается ДО первой отрисовки,
+// поэтому «у регистратора не открывается, у администратора открывается»
+// воспроизводится только через него. Каждая отрисовка стенда чистит хранилище,
+// чтобы набор одного теста не протёк в следующий.
+const LS = new Map();
+globalThis.localStorage = {
+  getItem: (k) => (k === 'admin.lang' ? 'ru' : (LS.has(k) ? LS.get(k) : null)),
+  setItem: (k, v) => { LS.set(k, String(v)); },
+  removeItem: (k) => { LS.delete(k); },
+  clear: () => LS.clear(),
+};
 globalThis.window = { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, innerWidth: 1440, innerHeight: 900, addEventListener() {}, open: () => null };
 globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
@@ -123,6 +139,11 @@ const { becomeSecondary } = await import('../../../../server/services/branch-syn
 const { exportCatalogue, applyCatalogue } = await import('../../../../server/services/branch-sync/catalogue.js');
 
 const { renderRoomCalendar } = await import('../views/room-calendar.js');
+// RCAL_MAX_COLUMNS_IMPORT_V1 — заглушку «Календарь записи не открылся» рисует
+// НЕ календарь, а вкладка-хост: она ловит исключение отрисовки. Чтобы тест
+// видел ровно то, что видит регистратура, календарь монтируется через
+// настоящий mountCalendarInto, а не зовётся напрямую.
+const { mountCalendarInto } = await import('../views/patients-hub.js');
 
 // ─── посев ──────────────────────────────────────────────────────────────────
 // День берётся ЗАВТРАШНИЙ и приводится к рабочему дню недели: сетка не должна
@@ -136,7 +157,19 @@ function nextWeekday(offset = 1) {
 const WD = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const isoOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false } = {}) {
+// RCAL_MAX_COLUMNS_IMPORT_V1 — «первые шесть врачей» из жизни регистратуры.
+// В стенде врач был один, поэтому предел в 24 колонки не достигался НИКОГДА и
+// ветка подсказки степпера не исполнялась ни разу. Пятеро добавленных врачей —
+// не украшение стенда, а само условие поломки.
+const EXTRA_DOCTORS = [
+  [71, 'abdullaeva', 'Абдуллаева Нигора', 'терапевт'],
+  [72, 'ganiev', 'Ганиев Тимур', 'кардиолог'],
+  [73, 'dadajonova', 'Дадажонова Малика', 'невролог'],
+  [74, 'ermatov', 'Ерматов Санжар', 'хирург'],
+  [75, 'jurayev', 'Жураев Бекзод', 'офтальмолог'],
+];
+
+function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   const day = nextWeekday();
@@ -158,6 +191,12 @@ function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, 
   // режим из НАСТОЯЩЕЙ колонки scheduling_mode, той же, что читает мастер
   // визита. Врач живой очереди заводится тем же полем, а не флагом в экране.
   if (liveQueue) db.prepare("UPDATE users SET scheduling_mode = 'live_queue' WHERE id = 7").run();
+  if (manyDoctors) {
+    for (const [id, login, name, spec] of EXTRA_DOCTORS) {
+      db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, specialty, working_hours) VALUES (?,?,'x',?,'doctor',1,?,?)")
+        .run(id, login, name, spec, JSON.stringify(wh));
+    }
+  }
   db.prepare("INSERT INTO patients (id, full_name, phone) VALUES (3,'Иванов Иван','+998901112233')").run();
   db.prepare("INSERT INTO floors (id, name, level) VALUES (1,'2-й этаж',2)").run();
   db.prepare("INSERT INTO rooms (id, name, code, room_type, floor_id) VALUES (11,'Кабинет 201','201','consultation',1)").run();
@@ -241,12 +280,20 @@ function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, 
   return { db, dayIso: isoOf(day) };
 }
 
+/** Рабочий набор оператора в хранилище ДО отрисовки (rcal-layout.js). */
+const WORKING_SET_KEY = 'rcal.workingset.v1';
+function putWorkingSet(ws) { LS.set(WORKING_SET_KEY, JSON.stringify(ws)); }
+
 /** Отрисовать экран на нужный день. */
-async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false } = {}) {
-  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue });
+async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, workingSet = null } = {}) {
+  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue, manyDoctors });
   if (DB) DB.close();
   DB = s.db;
   FAIL_TABLE = failTable;
+  // Хранилище — часть входных данных отрисовки: чистое, если тест не попросил
+  // запомненный набор.
+  LS.clear();
+  if (workingSet) putWorkingSet(workingSet);
   const box = mk('div');
   await renderRoomCalendar(box, { onNavigate: () => {}, embedded: false });
   // Дата по умолчанию — сегодня; переводим на посеянный день кнопкой «вперёд»
@@ -256,6 +303,26 @@ async function render({ doctorOff = false, failTable = null, cross = false, stal
   dateInp.dispatchEvent({ type: 'change', target: dateInp });
   await flush();
   return { box, dayIso: s.dayIso };
+}
+
+/**
+ * RCAL_MAX_COLUMNS_IMPORT_V1 — та же отрисовка, но ЧЕРЕЗ ВКЛАДКУ «Записи», как
+ * в клинике: Пациенты → «Записи» зовут календарь из patients-hub.js, и ошибку
+ * отрисовки ловит именно хост, превращая её в заглушку «Календарь записи не
+ * открылся … Причина: …». Прямой вызов календаря такую заглушку не покажет
+ * никогда — исключение просто улетит в тест, и проверять было бы нечего.
+ */
+async function renderViaHub(opts = {}) {
+  const s = seed(opts);
+  if (DB) DB.close();
+  DB = s.db;
+  FAIL_TABLE = null;
+  LS.clear();
+  if (opts.workingSet) putWorkingSet(opts.workingSet);
+  const box = mk('div');
+  const ok = await mountCalendarInto(box, { onNavigate: () => {} }, async () => renderRoomCalendar);
+  await flush();
+  return { box, dayIso: s.dayIso, ok };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -789,4 +856,105 @@ test('МИНИ-МЕСЯЦ показывает точку на дне с зап�
   await flush();
   assert.equal(byClass(box, 'rcal-appt').length, 0, 'в другой день приёма нет — сетка обязана это показать');
   assert.equal(byClass(box, 'rcal-mini-d').filter((d) => String(d.className).includes('sel')).length, 1);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RCAL_MAX_COLUMNS_IMPORT_V1 (2026-09-21) — «ЗАПИСИ» НЕ ОТКРЫВАЛИСЬ У
+// РЕГИСТРАТОРА, А У АДМИНИСТРАТОРА ОТКРЫВАЛИСЬ
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// В клинике (v3.3.0) регистратор открывал Пациенты → «Записи» и получал
+// заглушку «Календарь записи не открылся … Причина: MAX_COLUMNS is not
+// defined». Администратор на той же версии открывал календарь как обычно, и
+// именно это расхождение держало разбор на месте: ищут разницу в правах, а
+// разницы в правах нет.
+//
+// Разница была в РАБОЧЕМ НАБОРЕ. MAX_COLUMNS (= 24, rcal-layout.js) читается
+// ровно в одной строке — в подсказке кнопки «Больше дней», и только когда
+// dayStepBlock() вернул 'columns', то есть когда ВЫБРАННЫЕ РЕСУРСЫ × ДНИ уже
+// упёрлись в предел ширины. Имя в импорт не попало, поэтому та строка была
+// ReferenceError'ом, а ReferenceError на отрисовке уносит весь экран.
+// Регистратура работает шестью врачами (первые шесть — набор по умолчанию), а
+// maxDaysFor(6) = 4: у запомнившего четыре дня оператора первая же отрисовка
+// падала. Администратор держал два-три врача — у него та ветка не исполнялась
+// НИ РАЗУ, и экран открывался.
+//
+// Тестов было двадцать, и все зелёные: в стенде стоял ОДИН врач, а с одним
+// врачом 24 колонки недостижимы. Поэтому здесь два теста, а не один: первый
+// воспроизводит случай, второй запрещает весь класс — «взял из rcal-layout.js,
+// но не импортировал».
+
+test('РЕГИСТРАТОР С ШЕСТЬЮ ВРАЧАМИ И ЧЕТЫРЬМЯ ДНЯМИ: календарь ОТКРЫВАЕТСЯ, а подсказка степпера называет предел колонок', async () => {
+  const sixDoctors = [7, ...EXTRA_DOCTORS.map((d) => d[0])];
+  const { box, ok } = await renderViaHub({
+    manyDoctors: true,
+    // Рабочее место регистратора, каким оно лежит в его браузере: шесть врачей
+    // и четыре дня. maxDaysFor(6) = 4 — то есть период УЖЕ на пределе, и
+    // подсказка «Больше дней» обязана назвать причину числом.
+    workingSet: { resType: 'doctor', selected: { doctor: sixDoctors, room: [] }, period: 4, step: 15 },
+  });
+
+  // ГЛАВНОЕ: вкладка показывает календарь, а не заглушку с причиной.
+  const said = textOf(box);
+  assert.ok(!/Календарь записи не открылся/.test(said),
+    'регистратор снова видит заглушку вместо сетки: ' + said.slice(0, 400));
+  assert.equal(ok, true, 'mountCalendarInto сообщил о неудаче — значит отрисовка бросила');
+
+  // И условие поломки действительно воспроизведено, а не обойдено: шесть
+  // ресурсов на четыре дня — ровно 24 колонки, тот самый предел.
+  assert.equal(byClass(box, 'rcal-colhead').length, 24,
+    'в сетке не 24 колонки — ветка «упёрлись в ширину» не исполнялась, тест проверяет не то');
+
+  // Кнопка «+» погашена НЕ МОЛЧА: рядом написано, что упёрлось — и написано
+  // это строкой, которая и читает MAX_COLUMNS.
+  const plus = dayBtn(box, +1);
+  assert.ok(plus, 'кнопки «Больше дней» нет вовсе');
+  assert.ok('disabled' in plus.attrs, 'на пределе колонок кнопка «Больше дней» обязана быть погашена');
+  assert.ok(/24 колонок/.test(plus.attrs.title || ''),
+    'подсказка обязана назвать предел числом (это и есть строка с MAX_COLUMNS): ' + (plus.attrs.title || ''));
+
+  // Шаг НАЗАД по-прежнему работает: предел гасит только рост.
+  const minus = dayBtn(box, -1);
+  assert.ok(!('disabled' in minus.attrs), 'на четырёх днях кнопка «Меньше дней» обязана оставаться живой');
+});
+
+test('ВСЁ, ЧТО room-calendar.js БЕРЁТ ИЗ rcal-layout.js, ИМПОРТИРОВАНО (RCAL_MAX_COLUMNS_IMPORT_V1)', () => {
+  // Эта проверка ловит не одно имя, а весь класс: счётная часть раскладки
+  // лежит в соседнем файле, и забытое в списке импорта имя становится
+  // ReferenceError'ом на отрисовке — то есть пустой вкладкой в клинике, а не
+  // красным тестом. Разбор строится ЧТЕНИЕМ, а не исполнением: ветка может
+  // исполняться раз в месяц (MAX_COLUMNS исполнилась впервые через две недели
+  // после выпуска), а в тексте файла имя видно всегда.
+  //
+  // Точность намеренно грубая: снимаются комментарии, пропускаются обращения к
+  // свойствам (`load.workingSlots`) и имена, объявленные в самом файле
+  // (dateToIso/isoToLocalDay живут в обоих файлах своими копиями). Строковые
+  // литералы не разбираются — ложное срабатывание на них честнее пропуска.
+  const HERE = path.dirname(fileURLToPath(import.meta.url));
+  const VIEWS = path.join(HERE, '..', 'views');
+  const readView = (f) => fs.readFileSync(path.join(VIEWS, f), 'utf8');
+  const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+  const exported = [...readView('rcal-layout.js').matchAll(/^export\s+(?:const|function)\s+([A-Za-z_$][\w$]*)/gm)]
+    .map((m) => m[1]);
+  assert.ok(exported.length >= 20, 'экспортов rcal-layout.js не нашлось — регулярка устарела: ' + exported.length);
+  assert.ok(exported.includes('MAX_COLUMNS'), 'MAX_COLUMNS перестал экспортироваться — проверка потеряла смысл');
+
+  const src = readView('room-calendar.js');
+  const imp = /import\s*\{([\s\S]*?)\}\s*from\s*'\.\/rcal-layout\.js(?:\?[^']*)?'/.exec(src);
+  assert.ok(imp, 'room-calendar.js больше не импортирует rcal-layout.js списком имён — проверка устарела');
+  const imported = new Set(stripComments(imp[1]).split(',')
+    .map((s) => s.trim().split(/\s+as\s+/)[0].trim()).filter(Boolean));
+
+  // Тело файла — всё, кроме самого блока импорта и комментариев.
+  const body = stripComments(src.slice(0, imp.index) + src.slice(imp.index + imp[0].length));
+  const declared = new Set([...body.matchAll(/(?:^|[^\w$.])(?:function|const|let|var)\s+([A-Za-z_$][\w$]*)/g)]
+    .map((m) => m[1]));
+
+  const missing = exported.filter((name) => !imported.has(name) && !declared.has(name)
+    && new RegExp('(^|[^.\\w$])' + name + '\\b').test(body));
+
+  assert.deepEqual(missing, [],
+    'room-calendar.js пользуется именами rcal-layout.js, которых нет в его списке импорта — '
+    + 'в браузере это ReferenceError на отрисовке и пустая вкладка «Записи»: ' + missing.join(', '));
 });

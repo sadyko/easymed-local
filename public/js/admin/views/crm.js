@@ -20,7 +20,12 @@ import { filterServicePool, serviceGroupCounts } from './service-search.js';   /
 // CRM_LINKS_V1 — общий путь заведения карты: проверка дубля, штампы клиники и
 // филиала, привязка открытых заявок по телефону. Регистрация из CRM обязана
 // идти им же, иначе карта «почти правильная» (см. patientRegistrationModal).
-import { savePatient, linkCrmRequestsToPatient } from '../data.js';
+import { linkCrmRequestsToPatient } from '../data.js';
+// QUICK_PATIENT_V1 — пациента с заявки заводит ОБЩЕЕ окно быстрой регистрации:
+// те же реквизиты, что в регистратуре и в привязке каталога услуг. Строка
+// запроса (?v=qp1) — ТА ЖЕ, что у каталога: адрес с другим ?v это для браузера
+// другой модуль, то есть вторая копия окна со своим состоянием.
+import { openQuickPatientModal } from './quick-patient-modal.js?v=qp1';
 import { openCustDev } from './custdev.js';           // CUSTDEV_V1 — обзвон после визита
 import { canView } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev»
 import { boardConfig } from '../crm-settings-logic.js?v=crmcfg1';   // CRM_CONFIG_V1
@@ -820,15 +825,59 @@ async function paint() {
         });
     }
 
-    // CRM_REG_BEFORE_SCHEDULE_V1 — карточка пациента заводится ДО выбора врача
-    // и даты.
+    /**
+     * CRM_LEAD_CONTEXT_V1 — ОДНА СТРОКА О ЗАЯВКЕ ДЛЯ ОКНА ЗАВЕДЕНИЯ ПАЦИЕНТА.
+     *
+     * Окно «Новый пациент» одно на все потоки и про заявку не знает ничего.
+     * А регистратор, у которого открыто несколько заявок, обязан видеть, ЧЬЮ
+     * именно карту он сейчас заводит: источник, день обращения и услугу, за
+     * которой человек пришёл. Всё это было в прежней форме CRM и пропало
+     * вместе с ней.
+     *
+     * Куски переводятся ПОРОЗНЬ и склеиваются разделителем без букв: tr()
+     * ищет строку целиком, и собранное предложение не нашлось бы ни в одном
+     * словаре (I18N_COVERAGE_V1).
+     *
+     * @returns {string} пустая строка — сказать нечего, и окно оставит свою
+     *   обычную подсказку про полную анкету.
+     */
+    function leadHintLine({ source, when, service } = {}) {
+        const bits = [];
+        const srcLabel = source ? ((SOURCE_RU && SOURCE_RU[source]) || source) : '';
+        // Дату печатаем так же, как на карточке заявки: день.месяц.год.
+        const raw = String(when || '').slice(0, 10).split('-').reverse().join('.');
+        const day = raw.length === 10 ? raw : '';
+        if (srcLabel && day) bits.push(trf('Из заявки: {src} · {when}', { src: srcLabel, when: day }));
+        else if (srcLabel)  bits.push(trf('Из заявки: {src}', { src: srcLabel }));
+        else if (day)       bits.push(trf('Заявка от {d}', { d: day }));
+        const svc = String(service || '').trim();
+        if (svc) bits.push(trf('услуга: {svc}', { svc }));
+        return bits.join(' · ');
+    }
+
+    // QUICK_PATIENT_V1 (2026-09-21) — ПАЦИЕНТА С ЗАЯВКИ ЗАВОДИТ ОБЩЕЕ ОКНО.
     //
-    // Раньше эта форма была только внутри конверсии. Но колл-центр назначает
-    // даты («Записать на дату») ещё до того, как пациент вообще появился в
-    // базе, и регистратура получала строки услуг, привязанные к заявке, а не к
-    // карте: в день приёма пациента приходилось заводить заново и сверять
-    // руками, тот ли это человек. Поэтому форма вынесена сюда и вызывается из
-    // обоих мест.
+    // Здесь стояла СВОЯ форма: три поля имени, телефон, дата рождения, пол,
+    // email, адрес и примечание. Набор близкий к регистратуре, но не тот же —
+    // без паспорта, резидентства, области и типа скидки, — и расходился он
+    // молча: правку делали в одном месте, а «почти такие же» поля оставались
+    // в трёх других. Владелец: «the linking patient, and the creating patient
+    // in the linking, in the calendar and in the calculator should add a new
+    // patient by flow of fast registration».
+    //
+    // Теперь это окно views/quick-patient-modal.js — то же, что открывает
+    // регистратура и привязка пациента в каталоге услуг: тот же сборщик полей,
+    // тот же collect(), тот же страж дубликатов, то же право на заведение
+    // карты (canCreatePatient(): роль без ключа «Регистрация пациента» видит
+    // отказ, а не окно).
+    //
+    // ЧТО ОСТАЛОСЬ ЗДЕСЬ — то, что знает про ЗАЯВКУ, а не про пациента:
+    // подстановка набранного в лиде и finishRegistration() — общий хвост на
+    // все исходы.
+    //
+    // Примечание лида в карту пациента больше не переписывается: заявка
+    // привязана к карте, и её комментарий читается в ней же — в отличие от
+    // копии в patients.notes, которая устаревала в тот же день.
     //
     // `requestRow` может быть null — заявку ещё не сохранили (её создаст
     // persist() уже с patient_id). `markCame` разделяет два случая: конверсия
@@ -837,119 +886,84 @@ async function paint() {
     function patientRegistrationModal({ requestRow = null, prefill = null, markCame = true, onCreated } = {}) {
         const r = requestRow || {};
         const src = prefill || {
-            full_name: r.full_name || '', phone: r.phone || '', dob: '', note: r.note || '',
+            full_name: r.full_name || '', phone: r.phone || '', dob: '',
         };
-        const overlay = h('div', { class: 'modal' });
-        const close = () => overlay.remove();
-        overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
-        // CRM_NAME_PARTS_V1 — ФИО по частям, как в «Регистрации пациента»:
-        // в заявке имя лежит одной строкой, поэтому раскладываем её на три поля.
-        const fio = splitFio(src.full_name);
-        const lastInp  = h('input', { type: 'text', value: fio.last,   placeholder: 'Каримова' });
-        const firstInp = h('input', { type: 'text', value: fio.first,  placeholder: 'Азиза' });
-        const midInp   = h('input', { type: 'text', value: fio.middle, placeholder: 'Рустамовна' });
-        const phoneInp = phoneInput('phone', '+998 90 961 00 04', { value: src.phone });
-        const dobInp   = h('input', { type: 'date' });
-        const sexSel   = h('select', null, h('option', { value: '' }, '—'),
-            h('option', { value: 'male' }, 'Мужской'), h('option', { value: 'female' }, 'Женский'));
-        const addrInp  = h('input', { type: 'text', placeholder: 'Город, улица, дом' });
-        const mailInp  = h('input', { type: 'email', placeholder: 'Необязательно' });
-        const noteInp  = h('textarea', { rows: '2', placeholder: 'Заметки регистратора' });
-        if (src.dob) dobInp.value = src.dob;
-        // i18n-exempt: префикс уходит в сохраняемую заметку пациента — хранимые данные, а не текст экрана
-        if (src.note) noteInp.value = 'Из заявки CRM: ' + src.note;
-
-        // CRM_CONVERT_V1 — кнопка «Оформить услугу» и означает конверсию, поэтому
-        // выбора здесь нет: сразу после регистрации откроется мастер «Добавить
-        // услуги» с интересующей услугой в смете. Строка ниже — просто анонс.
-        const svcName = r.services ? r.services.name : null;
-        const orderRow = r.service_id
-            ? h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', padding: '9px 12px', border: '1px solid var(--teal-200, #b2dfdb)', background: 'var(--teal-25, #f0faf9)', borderRadius: '10px', fontSize: '13.5px' } },
-                Icon('Check', { size: 14 }),
-                h('span', null, 'После регистрации оформим услугу: ', h('b', null, svcName || ('#' + r.service_id))))
-            : null;
-
-        const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, Icon('Check', { size: 14 }), ' Зарегистрировать');
-        saveBtn.addEventListener('click', async () => {
-            // CRM_NAME_PARTS_V1 — те же обязательные поля, что в «Регистрации
-            // пациента»: фамилия и имя. full_name собираем сами — колонка NOT NULL,
-            // а порядок «Фамилия Имя Отчество» повторяет savePatient().
-            const last = lastInp.value.trim(), first = firstInp.value.trim(), mid = midInp.value.trim();
-            if (!last || !first) { toast('Фамилия и имя обязательны.', 'fail'); return; }
-            saveBtn.disabled = true;
-            const payload = {
-                full_name: [last, first, mid].filter(Boolean).join(' '),
-                last_name: last, first_name: first, middle_name: mid,
-            };
-            if (phoneInp.value.trim()) payload.phone = phoneInp.value.trim();
-            if (dobInp.value) payload.date_of_birth = dobInp.value;
-            if (sexSel.value) payload.gender = sexSel.value;
-            if (addrInp.value.trim()) payload.address = addrInp.value.trim();
-            if (mailInp.value.trim()) payload.email = mailInp.value.trim();
-            if (noteInp.value.trim()) payload.notes = noteInp.value.trim();
-            if (uid() != null) payload.created_by = uid();
-            // CRM_LINKS_V1 — КАРТА ЗАВОДИТСЯ ТЕМ ЖЕ ПУТЁМ, ЧТО И ВЕЗДЕ.
-            //
-            // Здесь стояла прямая вставка в `patients`, и мимо неё проходили три
-            // вещи, которые делает savePatient() и только он:
-            //   • поиск дубля — тот же человек звонил на прошлой неделе и уже
-            //     заведён; вторая карта означает вторую историю болезни;
-            //   • штампы клиники и филиала — карта без branch_id выпадает из
-            //     отчётов по филиалу;
-            //   • привязка ВСЕХ открытых заявок с этим номером
-            //     (linkCrmRequestsToPatient): звонили трижды — закрывалась одна.
-            let created;
-            try {
-                created = await savePatient(payload);
-            } catch (e) {
-                if (e && e.code === 'DUPLICATE_PATIENT' && e.existing) {
-                    saveBtn.disabled = false;
-                    // Дубль — это ВОПРОС, а не отказ: то же окно и тот же выбор,
-                    // что у регистратуры. «Открыть существующего» привязывает
-                    // заявку к найденной карте и продолжает, «Создать
-                    // принудительно» повторяет сохранение в обход проверки.
-                    const { openDuplicatePatientDialog } = await import('./patient-create-modal.js');
-                    openDuplicatePatientDialog(e, {
-                        onOpenExisting: async (c) => {
-                            // CRM_LINKS_V1 — «БЕРУ СУЩЕСТВУЮЩУЮ КАРТУ» — ЭТО ТОЖЕ
-                            // РЕГИСТРАЦИЯ. Привязку всех открытых заявок по
-                            // номеру делает savePatient() ПОСЛЕ вставки, а здесь
-                            // вставки нет — и у человека, звонившего трижды, к
-                            // найденной карте цеплялась одна заявка, из которой
-                            // открыли окно. Две другие оставались ничьими:
-                            // ни в смете, ни в визите они уже не появятся.
-                            // Вызов идемпотентен — повтор ничего не испортит.
-                            await linkCrmRequestsToPatient(c);
-                            await finishRegistration(c, { existing: true });
-                        },
-                        onForceCreate: async () => {
-                            try {
-                                const forced = await savePatient(payload, { force: true });
-                                await finishRegistration(forced._raw || forced);
-                            } catch (e2) {
-                                toast(trf('Пациент не создан: {msg}', { msg: (e2 && e2.message) || e2 }), 'fail');
-                            }
-                        },
-                    });
-                    return;
-                }
-                toast(trf('Пациент не создан: {msg}', { msg: (e && e.message) || e }), 'fail');
-                saveBtn.disabled = false;
-                return;
-            }
+        const opts = {
+            // Заголовок говорит, ОТКУДА пришёл человек: окно то же самое, а
+            // повод — заявка колл-центра, и это единственное, чем оно здесь
+            // отличается от окна регистратуры.
+            title: 'Пациент из заявки',
             // savePatient() отдаёт карту в виде экрана (fullName/…); дальше по
             // цепочке идёт СТРОКА БАЗЫ, как и раньше.
-            await finishRegistration(created._raw || created);
+            //
+            // ОБЕЩАНИЕ ВОЗВРАЩАЕТСЯ ОКНУ, а не бросается в пустоту. Хвост
+            // регистрации — привязка открытых заявок, правка карточки, лист
+            // дат — асинхронный, и брошенное обещание не ловится ничем: окно к
+            // тому мигу уже снято, отказ уходит в «unhandled rejection», а на
+            // экране это выглядит как «нажал — и ничего не произошло».
+            onCreated: (p) => finishRegistration(p && p._raw ? p._raw : p),
+        };
+        // CRM_LEAD_CONTEXT_V1 — ОТКУДА ЭТОТ ЧЕЛОВЕК, ВИДНО В САМОМ ОКНЕ.
+        //
+        // Прежняя форма CRM писала это над полями: «Из заявки: {источник} ·
+        // {дата}» и «После регистрации оформим услугу: X». Общее окно про
+        // заявку не знает, и контекст пропал — регистратор, у которого открыто
+        // несколько заявок, заводил карту, не видя, ЧЬЮ именно.
+        const ctx = leadHintLine({
+            source:  prefill && prefill.source  !== undefined ? prefill.source  : r.source,
+            when:    prefill && prefill.when    !== undefined ? prefill.when    : r.created_at,
+            service: prefill && prefill.service !== undefined ? prefill.service : (r.services && r.services.name),
         });
+        if (ctx) opts.hint = ctx;
+
+        const dlg = openQuickPatientModal(opts);
+        // null — права заводить пациента нет, и отказ уже показан окном.
+        if (!dlg) return null;
+
+        // ---- что уже знает заявка, повторно не набирают -------------------
+        // CRM_NAME_PARTS_V1 — в заявке имя лежит ОДНОЙ строкой, а карта хранит
+        // его тремя полями. Раскладываем тем же правилом, что и раньше.
+        const fio = splitFio(src.full_name);
+        // Окно отдаёт наружу ТОЛЬКО подстановку полей (fields + setValue), а не
+        // весь сборщик анкеты: у того есть save(), который на «Открыть
+        // существующего» уводит в карту пациента — и заявка, из которой окно
+        // позвали, теряется вместе с этим уходом.
+        const api = dlg.state.api;
+        const f = api.fields;
+        api.setValue('last_name', fio.last);
+        api.setValue('first_name', fio.first);
+        api.setValue('middle_name', fio.middle);
+        api.setValue('phone', src.phone);
+        // notify — тем же событием, что и набор руками: от даты рождения
+        // зависят возраст рядом с полем и подставляемый тип скидки, а их
+        // считает слушатель поля, и положенное молча значение его не будит.
+        api.setValue('date_of_birth', src.dob, { notify: true });
+        // CRM_NAME_PARTS_V1 — курсор в первое незаполненное обязательное поле:
+        // из заявки обычно приходит только имя, и дописать нужно фамилию.
+        const firstEmpty = !fio.last ? f.last_name : !fio.first ? f.first_name : f.date_of_birth;
+        try { if (firstEmpty && firstEmpty.focus) firstEmpty.focus(); } catch (e) { /* нет фокуса — не беда */ }
 
         /**
          * Общий хвост регистрации: привязать заявку к карте, обновить её в
          * памяти и отдать карту вызывающему. Один на все три исхода — новая
          * карта, принудительно созданная и выбранная из дублей, — потому что
          * для заявки они означают одно и то же: у человека теперь есть карта.
+         *
+         * @param {object} p строка базы (patients), а не карточка экрана
          */
-        async function finishRegistration(p, { existing = false } = {}) {
+        async function finishRegistration(p) {
+            if (!p || !p.id) { toast('Пациент не создан.', 'fail'); return; }
+            // CRM_LINKS_V1 — ПРИВЯЗКА ВСЕХ ОТКРЫТЫХ ЗАЯВОК С ЭТИМ НОМЕРОМ.
+            //
+            // savePatient() делает это сам ПОСЛЕ вставки, но на пути «карта уже
+            // есть, беру её» вставки нет — и у человека, звонившего трижды, к
+            // найденной карте цеплялась ровно та заявка, из которой открыли
+            // окно. Две другие оставались ничьими: их не подхватит ни смета,
+            // ни визит. Зовём всегда: вызов идемпотентен (берёт только заявки
+            // без пациента), и различать исходы здесь было бы лишним знанием
+            // о чужом окне.
+            await linkCrmRequestsToPatient(p);
             // Заявку обновляем, только если она УЖЕ сохранена: «Записать на
             // дату» может вызвать регистрацию из ещё не созданной заявки —
             // её patient_id запишет persist() при сохранении.
@@ -967,62 +981,18 @@ async function paint() {
                 requestRow.patients = { id: p.id, full_name: p.full_name, mrn: p.mrn };
                 if (markCame) requestRow.status = CONVERT_STATUS;
             }
+            // О самой карте окно уже отчиталось («Пациент сохранён»), поэтому
+            // здесь говорим о ЗАЯВКЕ — и только тогда, когда ей действительно
+            // есть что сказать. Слова одни на оба исхода: и для заведённой
+            // карты, и для выбранной в дубликатах заявка теперь привязана.
             const who = (p.full_name || '') + (p.mrn ? ' · ' + p.mrn : '');
-            toast(existing
-                ? trf('Пациент уже в базе: {who} — заявка привязана.', { who })
+            toast(requestRow && requestRow.id
+                ? trf('Заявка привязана к карте: {who}', { who })
                 : trf('Пациент зарегистрирован: {who}', { who }), 'ok');
-            close();
             if (typeof onCreated === 'function') onCreated(p);
         }
 
-        const col = { flex: '1 1 0', minWidth: 0 };
-        const regBody = h('div', { class: 'modal-body', style: { overflowY: 'auto' } },
-            // CRM_NAME_PARTS_V1 — три поля в строку, как в «Регистрации пациента».
-            h('div', { class: 'row', style: { gap: '12px', alignItems: 'flex-start' } },
-                h('div', { style: col }, field('Фамилия', lastInp, { required: true })),
-                h('div', { style: col }, field('Имя', firstInp, { required: true })),
-                h('div', { style: col }, field('Отчество', midInp))),
-            h('div', { class: 'row', style: { gap: '12px', alignItems: 'flex-start' } },
-                h('div', { style: col }, field('Телефон', phoneInp, { required: true })),
-                h('div', { style: col }, field('Дата рождения', dobInp))),
-            h('div', { class: 'row', style: { gap: '12px', alignItems: 'flex-start' } },
-                h('div', { style: col }, field('Пол', sexSel)),
-                h('div', { style: col }, field('Email', mailInp))),
-            field('Адрес', addrInp),
-            field('Примечание', noteInp),
-            orderRow,
-            h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                'MRN присвоится автоматически. Остальные данные можно дозаполнить позже в карте пациента.'));
-        // CRM_REG_WIDTH_V1 — вне .modal-grouped у .field input нет width:100%, и
-        // поля держат ширину по умолчанию (~200px). Три имени в строку переставали
-        // помещаться, и попап уезжал в горизонтальный скролл. Пусть поля тянутся
-        // по колонке — тогда ширина карточки решает всё, а переполнения нет.
-        // .ph-input is a flex child of .ph-wrap next to the 46px country button —
-        // forcing width:100% on it would overflow the row, so it opts out.
-        for (const el of regBody.querySelectorAll('input:not(.ph-input), select, textarea')) {
-            el.style.width = '100%';
-            el.style.boxSizing = 'border-box';
-        }
-
-        overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '760px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column' } },
-            h('header', { class: 'modal-head' },
-                h('div', null,
-                    h('h2', { style: { margin: 0 } }, 'Регистрация пациента'),
-                    h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
-                        requestRow && requestRow.created_at
-                            ? trf('Из заявки: {src} · {when}', { src: tr(SOURCE_RU[r.source] || r.source), when: fmtDateTime(r.created_at) })
-                            : 'Карта заводится сразу — дальше выберем врача и дату')),
-                h('button', { class: 'modal-close', onclick: close }, '×')),
-            regBody,
-            h('footer', { class: 'modal-foot' },
-                h('button', { class: 'btn', type: 'button', onclick: close }, 'Отмена'),
-                h('span', { class: 'grow' }),
-                saveBtn),
-        ));
-        document.body.appendChild(overlay);
-        // CRM_NAME_PARTS_V1 — курсор в первое незаполненное обязательное поле:
-        // из заявки обычно приходит только имя, и дописать нужно фамилию.
-        (!fio.last ? lastInp : !fio.first ? firstInp : dobInp).focus();
+        return dlg;
     }
 
     // ---------------- ЗАЯВКА: создание / редактирование ----------------
@@ -1603,7 +1573,14 @@ async function paint() {
                 // заявки трогать нельзя, иначе канбан покажет визит, которого
                 // ещё не было.
                 markCame: false,
-                prefill: { full_name: name, phone, dob: dobInp.value || '', note: noteInp.value.trim() },
+                // CRM_LEAD_CONTEXT_V1 — заявки в базе может ещё и не быть
+                // (её создаст persist()), поэтому контекст для окна берётся из
+                // самой формы: выбранный источник и первая из набранных услуг.
+                prefill: {
+                    full_name: name, phone, dob: dobInp.value || '',
+                    source: srcChosen, when: (r && r.created_at) || '',
+                    service: picked.length ? picked[0].name : '',
+                },
                 onCreated: (p) => {
                     linkedPatient = { id: p.id, full_name: p.full_name, mrn: p.mrn, phone: p.phone || phone };
                     paintLinked();

@@ -7348,6 +7348,12 @@ table.list tr.is-off td { color: var(--ink-400); }
    любое будущее правило карточки перебило бы это одним классом. */
 .fr-card { width: min(1400px, calc(100vw - 48px)) !important; max-width: none !important;
     max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
+/* QUICK_PATIENT_V1 — окно «Новый пациент»: та же раскладка, но без таблицы
+   услуг, поэтому уже. Ширина классом, а не встроенным стилем окна: встроенный
+   !important не перебивается ничем, кроме такого же, и медиазапрос ниже
+   (≤ 960 px) остался бы ни с чем — окно в 1100 px вылезало бы за край. Вес тот
+   же, что у .fr-card, поэтому правило стоит НИЖЕ него. */
+.fr-card-narrow { width: min(1100px, calc(100vw - 48px)) !important; }
 /* .modal-body по умолчанию display:grid с растягиванием строк — два блока
    разной высоты стали бы двумя панелями во всю высоту окна. */
 .fr-card .modal-body { flex: 1 1 auto; display: block; overflow: auto; padding: 16px 20px 20px; }

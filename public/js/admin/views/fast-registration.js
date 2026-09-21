@@ -62,6 +62,12 @@ import { fadeOutAndRemove } from '../motion.js?v=mo1';   // MOTION_DIALOG_V1
 // сохранения в модуле, а не в окне). Расхождение ничем не видно, кроме
 // потерянного снимка, — поэтому оно закреплено проверкой на исходнике.
 import { buildPatientFields, openDuplicatePatientDialog, runPatientSearch, uploadPendingPhoto } from './patient-create-modal.js?v=onewin1';
+// MODAL_STACK_V1 — «стоит ли кто-то поверх меня» считает ОДИН помощник на всё
+// приложение. Здесь это правило было написано ТРЕТЬЕЙ копией — и самой грубой:
+// любая чужая подложка .modal считалась дочерней, даже страничное окно под
+// нами. Копии одного правила расходятся молча, а наружу это выходит как «Esc
+// закрыл не то окно». Модуль сам не импортирует ничего (NO_IMPORT_CYCLES_V1).
+import { coveredByHigherModal } from './modal-stack.js?v=ms1';
 import { openTemplatePickerModal } from './template-picker-modal.js?v=tpl1';   // TEMPLATE_PICKER_V1
 import { resolveTemplate } from './service-templates.js?v=tpl1';               // WIZ_TEMPLATES_LOCAL_V1
 import { registerWalkIn, walkInRoleRefusal } from './walk-in-booking.js?v=wib1';   // WALK_IN_BOOKING_V1
@@ -140,15 +146,13 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
      * дубликатов оно стоит на карточке, а не на подложке. Общее у всех троих
      * одно — своя подложка .modal в document.body. Перечень имён разошёлся бы с
      * жизнью при первом же четвёртом диалоге; «есть чужая подложка» — нет.
+     *
+     * СЧИТАЕТСЯ ТОЛЬКО ЭТАЖ ВЫШЕ НАШЕГО, и правило это ОДНО на всё приложение
+     * (modal-stack.js). Здесь стояла его третья копия — «любая чужая подложка
+     * дочерняя», — и она считала дочерним даже страничное окно ПОД нами (100),
+     * которое заслонить нас не может: Esc глох ровно там, где его ждут.
      */
-    function childDialogOpen() {
-        const kids = (typeof document !== 'undefined' && document.body && document.body.children) || [];
-        for (const el of kids) {
-            if (!el || el === overlay) continue;
-            if (String(el.className || '').split(/\s+/).includes('modal')) return true;
-        }
-        return false;
-    }
+    const childDialogOpen = () => coveredByHigherModal(overlay);
 
     const onKey = (e) => { if (e.key === 'Escape' && !childDialogOpen()) close(); };
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));

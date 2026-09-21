@@ -30,13 +30,15 @@ import { supabase } from '../../supabase.js';
 // REFERRAL_SOURCE_CODE_V1 — подпись партнёра одна на все экраны регистратора.
 import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';
 import { h, Icon, clear, toast, Avatar, initials, avColor } from '../ui.js';
-import { loadPatientsPaged, savePatient, loadPatientById, insertRow, currentUser } from '../data.js';
+// QUICK_PATIENT_V1 — savePatient/loadPatientById ушли отсюда вместе с
+// мини-формой заведения пациента: карту заводит общее окно быстрой
+// регистрации (quick-patient-modal.js), и путь сохранения теперь один.
+import { loadPatientsPaged, insertRow, currentUser } from '../data.js';
 import { logPatientActivity } from './activity-log.js';   // BOOK_WIZARD_V1
 import { gw } from '../gateway.js';
 import { clinicFlags } from '../clinic-flags.js';   // CUSTOM_CLINIC_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';   // insurance/B2B: print statistics act
 import { tr, trf } from '../i18n.js';   // WIZ_TEMPLATES_V1 + I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { phoneInput } from '../phone-input.js?v=ph1';
 import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — group filtering must survive a NULL type_id
 // VISIT_TIER_PRICING_V1 — цена по счёту визита: смета спрашивает сервер, что
 // эти услуги стоят ЭТОМУ пациенту сегодня, и кладёт ответ на строки.
@@ -45,6 +47,19 @@ import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionPa
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
 // строк живут в одном модуле на все окна: копии этого кода уже разъезжались.
 import { closeCrmLines, pendingCrmLines } from '../crm-lines.js';
+// MODAL_STACK_V1 — ESCAPE ПРИНАДЛЕЖИТ ВЕРХНЕМУ ОКНУ.
+//
+// Каталог услуг слушает Escape на document всё время, пока открыт. Но поверх
+// него встают чужие окна на своих этажах: привязка пациента (150), окно
+// «Новый пациент» (155), страж дубликатов (160), шаблоны сметы (170). Слушают
+// они ТОТ ЖЕ document, и один Escape доходил до обоих: верхнее окно
+// закрывалось правильно, а каталог под ним — заодно, вместе с набранной сметой
+// и привязанным пациентом.
+//
+// Правило живёт в одном месте на всё приложение (views/modal-stack.js): две
+// копии одного правила расходятся молча, и наружу это выходит как «Esc закрыл
+// не то окно».
+import { coveredByHigherModal } from './modal-stack.js?v=ms1';
 
 // PROC_PERFORMER_V1 — роли, которым можно поручить процедуру. Врач сюда
 // попадает НЕ отсюда, а по is_doctor (ADMIN_DOCTOR_LIST_V1) — см.
@@ -143,9 +158,30 @@ export function openServicePickerModal({
     // Catalog UI is shared by the booking wizard and attach mode.
     const catalogUI = calculator || attachMode;
     const overlay = h('div', { class: 'modal', style: { zIndex: '130' } });
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: () => {
-        if (catalogUI && state.added.length && !confirm(attachMode ? 'Закрыть? Выбранные услуги не будут добавлены.' : 'Закрыть мастер записи? Подбор услуг будет потерян.')) return;
+
+    /**
+     * QUICK_PATIENT_V1 — ОДНА ДВЕРЬ НАРУЖУ У ВСЕГО КАТАЛОГА.
+     *
+     * Каталог живёт не только подложкой: он слушает Escape на document. Выходов
+     * из него восемь (крестик, «Отмена», «Готово», подложка, «Полная анкета»,
+     * три конца записи визита), и половина снимала подложку, забыв снять
+     * слушателя. Оставшийся обработчик держит ЗАМКНУТОЕ состояние ушедшего
+     * окна и отвечает на Escape где угодно потом: нажатие в совсем другом
+     * экране поднимало вопрос «Закрыть мастер записи?», а «Отмена» в нём
+     * ничего не чинила — вопрос возвращался на каждое следующее нажатие.
+     *
+     * Поэтому закрытие ровно одно и на всех: снять подложку И снять слушателя.
+     */
+    function closePicker() {
         overlay.remove();
+        document.removeEventListener('keydown', onKey);
+    }
+
+    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: () => {
+        // Правило «что теряется при уходе» ОДНО (confirmLeaveCatalog): здесь
+        // стояла его вторая копия, а две копии одного правила расходятся молча.
+        if (!confirmLeaveCatalog()) return;
+        closePicker();
     } }));
 
     const state = {
@@ -238,7 +274,14 @@ export function openServicePickerModal({
 
     card.appendChild(h('header', { class: 'modal-head' },
         h('h2', null, Icon(titleIcon, { size: 16 }), ' ', title),
-        h('button', { class: 'modal-close', onclick: () => overlay.remove() }, '×'),
+        // Крестик — тот же уход, что Escape и щелчок мимо окна, и спрашивает
+        // он тем же ОДНИМ правилом (confirmLeaveCatalog): молчаливый крестик
+        // уносил набранную смету, а человек узнавал разницу между выходами
+        // ровно один раз — когда терять уже было нечего.
+        h('button', { class: 'modal-close', onclick: () => {
+            if (!confirmLeaveCatalog()) return;
+            closePicker();
+        } }, '×'),
     ));
     // BOOK_WIZARD_V1 — step chips (calculator mode only)
     const wizChipsEl = h('div', { class: 'pkw-steps', style: calculator ? {} : { display: 'none' } });
@@ -312,7 +355,7 @@ export function openServicePickerModal({
                 toast('Pick a service first.', 'fail');
                 return;
             }
-            overlay.remove();
+            closePicker();
         },
     }, Icon(confirmIcon, { size: 14 }), ' ' + confirmLabel);
 
@@ -328,7 +371,7 @@ export function openServicePickerModal({
     card.appendChild(h('footer', { class: 'modal-foot' },
         summary,
         h('span', { class: 'grow' }),
-        h('button', { class: 'btn', onclick: () => overlay.remove() }, 'Отмена'),
+        h('button', { class: 'btn', onclick: () => closePicker() }, 'Отмена'),
         wizBackBtn,
         addAnotherBtn,
         confirmBtn,
@@ -1357,11 +1400,47 @@ export function openServicePickerModal({
         }
     }
 
+    /**
+     * QUICK_PATIENT_V1 — ОДИН ВОПРОС НА ВСЕ ВЫХОДЫ, СНОСЯЩИЕ КАТАЛОГ.
+     *
+     * Каталог сносят трое: Escape, щелчок мимо окна и кнопка «Полная анкета» в
+     * окне привязки (она уводит в карту пациента вызывающего). Теряется при
+     * этом одно и то же — набранная смета, — и спрашивать об этом обязаны
+     * одинаково: выход без вопроса и есть та дыра, в которую уходит работа
+     * регистратора.
+     *
+     * СПРАШИВАЕМ ТОЛЬКО О НАБРАННОЙ СМЕТЕ. Выбранный в календаре слот сюда
+     * тоже входил — и вопрос выходил неправдой: «Подбор услуг будет потерян»
+     * при пустой смете терять было нечего, а слот теряется ровно на одно
+     * нажатие (его выбирают тем же щелчком по той же пустой дорожке). Вопрос,
+     * на который правильный ответ всегда «да», люди перестают читать — и
+     * перестают читать его и тогда, когда смета набрана.
+     *
+     * @returns {boolean} можно ли закрывать
+     */
+    function confirmLeaveCatalog() {
+        const hasWork = catalogUI && state.added.length > 0;
+        if (!hasWork) return true;
+        return confirm(attachMode
+            ? 'Закрыть? Выбранные услуги не будут добавлены.'
+            : 'Закрыть мастер записи? Подбор услуг будет потерян.');
+    }
+
     // Second-level modal (z 150, above the picker's 130). Search existing
-    // patients by ФИО / ID / телефон, or «Создать пациента» → onCreatePatient.
+    // patients by ФИО / ID / телефон, or «Полная анкета» → onCreatePatient.
     let _attachOverlay = null;
     function closeAttach() {
         if (_attachOverlay) { _attachOverlay.remove(); _attachOverlay = null; }
+        document.removeEventListener('keydown', onAttachKey);
+    }
+    // QUICK_PATIENT_V1 — у окна привязки СВОЙ Escape. Каталог под ним свой
+    // Escape теперь не берёт (coveredByHigherModal), и без этого обработчика
+    // клавиша перестала бы делать что-либо вовсе. Закрываем только когда
+    // верхнее окно — это мы: поверх привязки встаёт окно заведения (155).
+    function onAttachKey(e) {
+        if (e.key !== 'Escape' || !_attachOverlay) return;
+        if (coveredByHigherModal(_attachOverlay)) return;
+        closeAttach();
     }
     function openAttachPatientModal() {
         if (state.added.length === 0) { toast('Сначала добавьте услуги.', 'fail'); return; }
@@ -1369,6 +1448,7 @@ export function openServicePickerModal({
         const ov = h('div', { class: 'modal', style: { zIndex: '150' } });
         ov.appendChild(h('div', { class: 'modal-backdrop', onclick: () => closeAttach() }));
         _attachOverlay = ov;
+        document.addEventListener('keydown', onAttachKey);
 
         const resultsEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px', maxHeight: '46vh', overflow: 'auto' } });
         const inp = h('input', {
@@ -1416,36 +1496,128 @@ export function openServicePickerModal({
             timer = setTimeout(() => search(inp.value.trim()), 250);
         });
 
-        const card = h('div', { class: 'modal-card', style: { width: '460px', maxWidth: 'calc(100vw - 32px)', display: 'flex', flexDirection: 'column' } });
+        // QUICK_PATIENT_V1 — 560 px, а не 460: в подвале теперь подсказка и три
+        // кнопки, и на 460 они наезжали друг на друга. maxWidth оставлен —
+        // на узком экране окно по-прежнему ужимается по экрану, а не по числу.
+        const card = h('div', { class: 'modal-card', style: { width: '560px', maxWidth: 'calc(100vw - 32px)', display: 'flex', flexDirection: 'column' } });
         card.appendChild(h('header', { class: 'modal-head' },
             h('h2', null, Icon('User', { size: 16 }), ' Привязать пациента'),
             h('button', { class: 'modal-close', onclick: () => closeAttach() }, '×'),
         ));
         card.appendChild(h('div', { class: 'modal-body', style: { padding: '16px 22px' } }, inp, resultsEl));
-        card.appendChild(h('footer', { class: 'modal-foot' },
+        // Две двери, и разница между ними — не в словах, а в том, что останется
+        // на экране. «Новый пациент» заводит карту ПОВЕРХ каталога: набранная
+        // смета и окно привязки живы, а созданный пациент тут же привязан.
+        // «Полная анкета» уводит в карту пациента вызывающего и каталог
+        // закрывает — поэтому она и названа иначе, и спрашивает перед уходом.
+        //
+        // Подсказка занимает ЦЕЛУЮ строку (flex: 1 1 100%), а подвал умеет
+        // переносить (flexWrap): .modal-foot переноса не знает, и четвёртый
+        // элемент в ряду выдавливал кнопки за край карточки.
+        const quickBtn = h('button', {
+            class: 'btn btn-primary',
+            onclick: () => { void openQuickPatient(quickBtn); },
+        }, Icon('Plus', { size: 14 }), ' Новый пациент');
+        card.appendChild(h('footer', { class: 'modal-foot', style: { flexWrap: 'wrap' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', flex: '1 1 100%' } }, 'Полная анкета — отдельным окном.'),
             h('span', { class: 'grow' }),
             h('button', { class: 'btn', onclick: () => closeAttach() }, 'Отмена'),
             h('button', {
                 class: 'btn btn-outline',
                 onclick: () => {
-                    // BOOK_WIZARD_V1 — inline create keeps the staged cart alive.
-                    if (calculator) { openCreatePatientInline(); return; }
-                    if (typeof onCreatePatient === 'function') {
-                        closeAttach();
-                        overlay.remove();
-                        document.removeEventListener('keydown', onKey);
-                        onCreatePatient();
-                    } else {
+                    if (typeof onCreatePatient !== 'function') {
                         toast('Откройте «Создать пациента» на странице пациентов.', 'info');
+                        return;
                     }
+                    // ЭТА КНОПКА СНОСИТ КАТАЛОГ — и спрашивает так же, как Esc.
+                    //
+                    // Из календаря она уводит в Регистратуру, а набранная смета
+                    // и выбранный слот уходят вместе с каталогом. Раньше
+                    // вопроса не было: в режиме калькулятора до этой ветки
+                    // просто не доходили. Теперь путь один и вопрос один.
+                    if (!confirmLeaveCatalog()) return;
+                    closeAttach();
+                    closePicker();
+                    onCreatePatient();
                 },
-            }, Icon('Plus', { size: 14 }), ' Создать пациента'),
+            }, Icon('User', { size: 14 }), ' Полная анкета'),
+            quickBtn,
         ));
         ov.appendChild(card);
         document.body.appendChild(ov);
         // Initial list (recent patients) so the registrar can pick without typing.
         search('');
         setTimeout(() => inp.focus(), 30);
+    }
+
+    // QUICK_PATIENT_V1 (2026-09-21) — «НОВЫЙ ПАЦИЕНТ» ЗДЕСЬ ОТКРЫВАЕТ ОБЩЕЕ ОКНО.
+    //
+    // Здесь стояла СВОЯ мини-форма из пяти полей (openCreatePatientInline):
+    // фамилия, имя, телефон, дата рождения, пол — причём пол и дата были
+    // необязательны, а паспорта, области и типа скидки не было вовсе. Карта,
+    // заведённая по дороге к смете, выходила хуже карты, заведённой в
+    // регистратуре, и разницу никто не видел: обе выглядели как заведённая
+    // карта. Четвёртый набор полей расходился с первыми тремя молча.
+    //
+    // Теперь это то же окно, что у регистратуры и у карточки CRM
+    // (views/quick-patient-modal.js): блок «Реквизиты пациента» быстрой
+    // регистрации, тот же сборщик полей, тот же collect(), тот же страж
+    // дубликатов. Оно стоит на 155-м этаже — поверх окна привязки (150) — и
+    // ничего из набранного не трогает: смета остаётся, каталог остаётся.
+    //
+    // Импорт ДИНАМИЧЕСКИЙ: окно тянет за собой весь сборщик анкеты (справочник
+    // категорий, каскад географии, телефонный контрол), и каталогу услуг это
+    // не нужно ни при открытии, ни в большинстве случаев вовсе. Строка запроса
+    // (?v=qp1) — ТА ЖЕ, что в карточке CRM: для браузера адрес с другим ?v это
+    // ДРУГОЙ модуль, то есть вторая копия со своим состоянием.
+    //
+    // ОДНО ОКНО НА НАЖАТИЕ, И ЭТО НЕ ПРИДИРКА. Импорт — это ожидание, кнопка
+    // всё это время нажимается, а два окна на 155-м этаже друг друга не видят
+    // (дочерним считается только этаж ВЫШЕ). Второе, пустое, всплывало бы
+    // ровно после того, как первое сохранило карту, — и следующее нажатие
+    // «Создать пациента» заводило бы вторую карту на того же человека.
+    let _qpLoading = false;   // модуль в пути
+    let _qpDlg = null;        // открытое окно (пока его подложка в документе)
+
+    /** Стоит ли уже открытое окно заведения на экране. */
+    function quickPatientOpen() {
+        if (!_qpDlg || !_qpDlg.overlay) return false;
+        const kids = (typeof document !== 'undefined' && document.body && document.body.children) || [];
+        for (const el of kids) if (el === _qpDlg.overlay) return true;
+        _qpDlg = null;   // окно ушло — замок снят
+        return false;
+    }
+
+    async function openQuickPatient(btn) {
+        if (_qpLoading || quickPatientOpen()) return;
+        _qpLoading = true;
+        if (btn) btn.disabled = true;
+        const release = () => { _qpLoading = false; if (btn) btn.disabled = false; };
+        let mod;
+        try {
+            mod = await import('./quick-patient-modal.js?v=qp1');
+        } catch (e) {
+            release();
+            toast('Не удалось открыть окно заведения пациента.', 'fail');
+            return;
+        }
+        // Окно заведения закрывает себя само, а привязку снимает attachPatient:
+        // оставшаяся подложка 150 накрыла бы каталог невидимым стеклом — смета
+        // на экране есть, но мышь до неё не доходит.
+        //
+        // ЗАМОК СНИМАЕТСЯ ВСЕГДА (finally). Открытие окна — чужой код, и упасть
+        // оно может: тогда замок «модуль в пути» оставался поднятым навсегда, а
+        // кнопка — погашенной. Наружу это выходило как «„Новый пациент“ больше
+        // не работает», и починить это можно было только закрыв весь каталог.
+        try {
+            _qpDlg = mod.openQuickPatientModal({ onCreated: (p) => attachPatient(p) });
+            // null — права заводить пациента нет, и отказ уже показан окном.
+        } catch (e) {
+            console.warn('[picker] quick-patient:', e);
+            toast('Не удалось открыть окно заведения пациента.', 'fail');
+        } finally {
+            release();
+        }
     }
 
     function attachPatient(p) {
@@ -1580,7 +1752,15 @@ export function openServicePickerModal({
     function saveCartTemplate() {
         if (!state.added.length) return;
         const ov = h('div', { class: 'modal', style: { zIndex: '170' } });
-        ov.appendChild(h('div', { class: 'modal-backdrop', onclick: () => ov.remove() }));
+        // MODAL_STACK_V1 — У ВЕРХНЕГО ОКНА ДОЛЖЕН БЫТЬ СВОЙ ESCAPE.
+        //
+        // Каталог услуг под этим диалогом Escape больше не берёт (он проверяет
+        // coveredByHigherModal), и без своего обработчика диалог стал окном,
+        // которое клавишей не закрыть вовсе. Закрывает он ТОЛЬКО себя: каталог
+        // со сметой, из которой шаблон и собирают, обязан остаться.
+        const shut = () => { document.removeEventListener('keydown', onEsc); ov.remove(); };
+        const onEsc = (e) => { if (e.key === 'Escape') shut(); };
+        ov.appendChild(h('div', { class: 'modal-backdrop', onclick: shut }));
         const nameIn = h('input', { class: 'tp-input', placeholder: 'Название шаблона', style: { width: '100%', marginTop: '10px' } });
         const doSave = async (btn) => {
             const name = nameIn.value.trim();
@@ -1598,33 +1778,39 @@ export function openServicePickerModal({
                 toast(tr('Шаблон не сохранён') + ': ' + msg, 'fail'); btn.disabled = false; return;
             }
             toast(tr('Шаблон сохранён'), 'ok');
-            ov.remove();
+            shut();
         };
         nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSave(ov.querySelector('.btn-primary')); });
         ov.appendChild(h('div', { class: 'modal-card', style: { width: '380px', maxWidth: 'calc(100vw - 32px)' } },
             h('header', { class: 'modal-head' }, h('h2', null, 'Сохранить как шаблон'),
-                h('button', { class: 'modal-close', onclick: () => ov.remove() }, '×')),
+                h('button', { class: 'modal-close', onclick: shut }, '×')),
             h('div', { class: 'modal-body', style: { display: 'block' } },
                 h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Шаблон сохранит список услуг — врач и время выбираются при записи.'),
                 nameIn),
             h('footer', { class: 'modal-foot' },
-                h('button', { class: 'btn', onclick: () => ov.remove() }, 'Отмена'),
+                h('button', { class: 'btn', onclick: shut }, 'Отмена'),
                 h('button', { class: 'btn btn-primary', onclick: (e) => doSave(e.currentTarget) }, 'Сохранить'))));
         document.body.appendChild(ov);
+        document.addEventListener('keydown', onEsc);
         setTimeout(() => nameIn.focus(), 50);
     }
 
     async function openTemplatePicker() {
         const ov = h('div', { class: 'modal', style: { zIndex: '170' } });
-        ov.appendChild(h('div', { class: 'modal-backdrop', onclick: () => ov.remove() }));
+        // MODAL_STACK_V1 — свой Escape, закрывающий ТОЛЬКО этот диалог (см.
+        // saveCartTemplate выше): каталог под ним Escape больше не берёт.
+        const shut = () => { document.removeEventListener('keydown', onEsc); ov.remove(); };
+        const onEsc = (e) => { if (e.key === 'Escape') shut(); };
+        ov.appendChild(h('div', { class: 'modal-backdrop', onclick: shut }));
         const listEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '50vh', overflowY: 'auto' } },
             h('div', { class: 'muted', style: { padding: '14px', textAlign: 'center' } }, 'Загрузка…'));
         ov.appendChild(h('div', { class: 'modal-card', style: { width: '420px', maxWidth: 'calc(100vw - 32px)' } },
             h('header', { class: 'modal-head' }, h('h2', null, 'Шаблоны'),
-                h('button', { class: 'modal-close', onclick: () => ov.remove() }, '×')),
+                h('button', { class: 'modal-close', onclick: shut }, '×')),
             h('div', { class: 'modal-body', style: { display: 'block' } }, listEl),
-            h('footer', { class: 'modal-foot' }, h('button', { class: 'btn', onclick: () => ov.remove() }, 'Закрыть'))));
+            h('footer', { class: 'modal-foot' }, h('button', { class: 'btn', onclick: shut }, 'Закрыть'))));
         document.body.appendChild(ov);
+        document.addEventListener('keydown', onEsc);
         let q = supabase.from('service_templates').select('id, name, service_ids').eq('active', true).order('name');
         if (window.CLINIC && window.CLINIC.id) q = q.eq('company_id', window.CLINIC.id);
         const { data, error } = await q;
@@ -1642,7 +1828,7 @@ export function openServicePickerModal({
             const ids = Array.isArray(t.service_ids) ? t.service_ids : [];
             const row = h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', border: '1px solid var(--ink-100, #e8ecef)', borderRadius: '10px', padding: '9px 12px' } },
                 h('button', { type: 'button', style: { flex: '1 1 auto', minWidth: 0, border: '0', background: 'none', cursor: 'pointer', font: 'inherit', textAlign: 'left', padding: '0' },
-                    onclick: async () => { ov.remove(); await applyServiceTemplate(t); } },
+                    onclick: async () => { shut(); await applyServiceTemplate(t); } },
                     h('div', { style: { fontWeight: 700, fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('услуг') + ': ' + ids.length)),
                 h('button', { type: 'button', title: 'Удалить шаблон',
@@ -2116,7 +2302,7 @@ export function openServicePickerModal({
         // overnight sweep (status scheduled/approved + scheduled_date < today ->
         // 'no_show') would mark a patient who actually attended as a no-show.
         if (added) await closeCrmRequests(landed);
-        overlay.remove();
+        closePicker();
     }
 
     // CRM_SCHEDULE_V1 — mark the prefilled requests as converted. Best-effort:
@@ -2775,8 +2961,7 @@ export function openServicePickerModal({
             // billing: the invoice/balance math would diverge from what landed.
             if (vsRows.length !== state.added.length) {
                 toast(trf('Записались не все услуги ({got} из {want}) — счёт НЕ выставлен. Откройте визит и добавьте услуги вручную.', { got: vsRows.length, want: state.added.length }), 'fail');
-                overlay.remove();
-                document.removeEventListener('keydown', onKey);
+                closePicker();
                 if (typeof onBooked === 'function') { try { onBooked(bookedSummary(visit, vsRows)); } catch (_) {} }
                 return;
             }
@@ -3064,8 +3249,7 @@ export function openServicePickerModal({
             }
             /* i18n-exempt-end */
             toast(tr('Визит создан') + note);
-            overlay.remove();
-            document.removeEventListener('keydown', onKey);
+            closePicker();
             // DOCTOR_ROUTE_V1 — the caller learns WHAT landed (visit + lines in the
             // picked order), so the doctor's cabinet can print the route sheet.
             // Older callers take no argument and are unaffected.
@@ -3085,70 +3269,22 @@ export function openServicePickerModal({
         }
     }
 
-    // ---- inline create-patient (cart preserved; canonical savePatient path) ----
-    function openCreatePatientInline() {
-        const ov = h('div', { class: 'modal', style: { zIndex: '160' } });
-        const close = () => ov.remove();
-        ov.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
-        const fLast  = h('input', { style: { width: '100%' }, placeholder: 'Фамилия *' });
-        const fFirst = h('input', { style: { width: '100%' }, placeholder: 'Имя *' });
-        const fPhone = phoneInput('phone', '+998 90 961 00 04');
-        const fDob   = h('input', { type: 'date', style: { width: '100%' } });
-        const fSex   = h('select', { style: { width: '100%' } },
-            h('option', { value: '' }, '—'), h('option', { value: 'male' }, 'Мужской'), h('option', { value: 'female' }, 'Женский'));
-        const fld = (label, el) => h('div', { class: 'field' }, h('label', null, label), el);
-        async function doCreate(force) {
-            const payload = {
-                last_name: fLast.value.trim(), first_name: fFirst.value.trim(),
-                phone: fPhone.value.trim() || null, date_of_birth: fDob.value || null,
-                gender: fSex.value || null,
-            };
-            if (!payload.last_name || !payload.first_name) { toast('Фамилия и имя обязательны.', 'fail'); return; }
-            try {
-                const created = await savePatient(payload, { force });
-                close(); closeAttach();
-                attachPatient(created);
-            } catch (e) {
-                if (e?.code === 'DUPLICATE_PATIENT' && e.existing) {
-                    close();
-                    try {
-                        const mod = await import('./registration.js?v=aug17f');
-                        mod.openDuplicatePatientDialog(e, {
-                            onOpenExisting: async (c) => {
-                                const full = await loadPatientById(c.id);
-                                if (full) { closeAttach(); attachPatient(full); }
-                            },
-                            onForceCreate: () => doCreate(true),
-                        });
-                    } catch (_) { toast('Похожий пациент уже существует — найдите его через поиск.', 'fail'); }
-                } else {
-                    toast(trf('Не удалось создать: {msg}', { msg: e.message || e }), 'fail');
-                }
-            }
-        }
-        ov.appendChild(h('div', { class: 'modal-card', style: { width: '440px', maxWidth: 'calc(100vw - 32px)' } },
-            h('header', { class: 'modal-head' },
-                h('h2', null, Icon('Plus', { size: 16 }), ' Новый пациент'),
-                h('button', { class: 'modal-close', onclick: close }, '×')),
-            h('div', { class: 'modal-body', style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 14px' } },
-                fld('Фамилия *', fLast), fld('Имя *', fFirst),
-                fld('Телефон', fPhone), fld('Дата рождения', fDob),
-                fld('Пол', fSex)),
-            h('footer', { class: 'modal-foot' },
-                h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Полная анкета — на странице «Регистратура».'),
-                h('span', { class: 'grow' }),
-                h('button', { class: 'btn', onclick: close }, 'Отмена'),
-                h('button', { class: 'btn btn-primary', onclick: (ev) => { const b = ev.currentTarget; if (b.disabled) return; b.disabled = true; Promise.resolve(doCreate(false)).finally(() => { b.disabled = false; }); } }, Icon('Check', { size: 14 }), ' Создать и привязать'))));
-        document.body.appendChild(ov);
-        setTimeout(() => fLast.focus(), 30);
-    }
-
     document.body.appendChild(overlay);
 
     function onKey(e) {
         if (e.key !== 'Escape') return;
-        if (catalogUI && state.added.length && !confirm(attachMode ? 'Закрыть? Выбранные услуги не будут добавлены.' : 'Закрыть мастер записи? Подбор услуг будет потерян.')) return;
-        overlay.remove(); document.removeEventListener('keydown', onKey);
+        // Каталога на экране уже нет — значит и нажатие не наше. Снимает
+        // слушателя closePicker, и это главная защита; но обработчик, который
+        // пережил своё окно, отвечал бы вопросом «Закрыть мастер записи?» в
+        // совсем другом экране, а «Отмена» возвращала бы его на каждое
+        // следующее нажатие. Цена проверки — одно сравнение.
+        if (overlay.isConnected === false) return;
+        // QUICK_PATIENT_V1 — поверх каталога стоит чужое окно (привязка 150,
+        // заведение пациента 155, страж дубликатов 160): Escape закрывает ЕГО,
+        // а каталог со сметой обязан остаться. См. coveredByHigherModal.
+        if (coveredByHigherModal(overlay)) return;
+        if (!confirmLeaveCatalog()) return;
+        closePicker();
     }
     document.addEventListener('keydown', onKey);
 }

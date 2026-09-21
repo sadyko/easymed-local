@@ -32,13 +32,21 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={};this.children=[];this.attrs={};this.className='';this._t='';this._l={};this.dataset={};this.value='';}
- appendChild(c){this.children.push(c);return c;} removeChild(c){const i=this.children.indexOf(c);if(i>-1)this.children.splice(i,1);return c;}
+ // QUICK_PATIENT_V1 — у узла НАСТОЯЩИЙ родитель, и remove() действительно
+ // снимает окно с экрана: регистрация пациента переехала в окно, которое
+ // закрывает само себя (fadeOutAndRemove), и «окно ушло» — это утверждение,
+ // а не надежда.
+ appendChild(c){this.children.push(c); if (c && typeof c === 'object') c.parentNode = this; return c;}
+ append(...cs){for(const c of cs) if(c) this.appendChild(c);}
+ removeChild(c){const i=this.children.indexOf(c);if(i>-1)this.children.splice(i,1); if(c&&c.parentNode===this)c.parentNode=null; return c;}
  get firstChild(){return this.children[0]||null;} replaceChildren(){this.children.length=0;}
  setAttribute(k,v){this.attrs[k]=String(v); if (k === 'value') this.value = String(v);} getAttribute(k){return this.attrs[k]??null;} hasAttribute(k){return k in this.attrs;}
  addEventListener(t,fn){(this._l[t]||(this._l[t]=[])).push(fn);} removeEventListener(){}
  dispatchEvent(e){for(const fn of this._l[e.type]||[])fn(e);return true;}
  click(){this.dispatchEvent({type:'click',currentTarget:this,preventDefault(){},stopPropagation(){}});}
- focus(){} blur(){} scrollTo(){} remove(){} select(){} closest(){return null;}
+ focus(){} blur(){} scrollTo(){} scrollIntoView(){} select(){} closest(){return null;}
+ remove(){ if (this.parentNode) this.parentNode.removeChild(this); }
+ getBoundingClientRect(){return {top:0,left:0,width:0,height:0,bottom:0,right:0};}
  querySelector(sel){
    const m = /^\[([^\]=]+)\]$/.exec(String(sel));
    if (!m) return null;
@@ -65,7 +73,10 @@ function mk(t){
   return el;
 }
 globalThis.Node=F; globalThis.Event=class{constructor(t,o){this.type=t;Object.assign(this,o||{});}};
-globalThis.document={createElement:mk,createElementNS:(_n,t)=>mk(t),createTextNode:t=>new TX(t),head:mk('head'),body:mk('body'),documentElement:mk('html'),addEventListener(){},removeEventListener(){},getElementById(){return null;}};
+globalThis.document={createElement:mk,createElementNS:(_n,t)=>mk(t),createTextNode:t=>new TX(t),head:mk('head'),body:mk('body'),documentElement:mk('html'),addEventListener(){},removeEventListener(){},getElementById(){return null;},
+  // QUICK_PATIENT_V1 — окно заведения спрашивает документ, не открыт ли поверх
+  // него список или календарь (тогда Enter значит «выбрать», а не «сохранить»).
+  querySelector(){return null;},querySelectorAll(){return [];}};
 
 const store = new Map();
 const fakeLocalStorage = {
@@ -118,6 +129,14 @@ let BOARD_CFG = null;
 let CFG_FAIL = false;
 let LINES_HOLD = null;
 let LINES_ERROR = false;
+// QUICK_PATIENT_V1 — ХВОСТ РЕГИСТРАЦИИ, ЗАДЕРЖАННЫЙ НА ПОЛПУТИ.
+//
+// Держим правку САМОЙ карточки (crm_requests по id) — она есть только в хвосте
+// регистрации: привязку открытых заявок по номеру делает ещё и savePatient(),
+// то есть ДО того, как окно вообще узнало о карте. Задержав правку карточки,
+// видно порядок: ушло ли окно заведения раньше, чем заявка получила карту
+// (тогда между ним и листом дат — кадр пустого экрана).
+let LINK_HOLD = null;
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
@@ -129,6 +148,11 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/db')) {
     if (body) CALLS.push(body);
     if (body && body.table === 'crm_requests' && body.op === 'select') return jsonOk(LEADS);
+    // Правка ИМЕННО этой заявки — то, что делает только хвост регистрации.
+    if (LINK_HOLD && body && body.table === 'crm_requests' && body.op === 'update'
+        && (body.filters || []).some((f) => f.col === 'id' && f.op === 'eq')) {
+      await LINK_HOLD;
+    }
     // Список операторов отдаётся только на запрос с отбором ПО РОЛЯМ — тот
     // самый, которым карточка спрашивает «кому можно передать». Выборка врачей
     // (.eq('role','doctor')) сюда не попадает.
@@ -145,7 +169,12 @@ globalThis.fetch = async (url, opts) => {
     }
     // CRM_LINKS_V1 — регистрация пациента с карточки. Поиск дубля читает
     // patients, вставка возвращает заведённую карту.
-    if (body && body.table === 'patients' && body.op === 'select') return jsonOk(PATIENT_DUPES);
+    // QUICK_PATIENT_V1 — выбор существующего пациента в диалоге дубликата
+    // дочитывает его карту ОДНОЙ строкой (loadPatientById): без учёта `single`
+    // окно получило бы массив вместо карты и привязало заявку к пустоте.
+    if (body && body.table === 'patients' && body.op === 'select') {
+      return jsonOk(body.single ? (PATIENT_DUPES[0] || null) : PATIENT_DUPES);
+    }
     if (body && body.table === 'patients' && body.op === 'insert') return jsonOk(NEW_PATIENT);
     return jsonOk([]);
   }
@@ -698,6 +727,13 @@ test('самая РАННЯЯ дата становится датой заяв�
 //
 // Проверяется не «функция вызвана», а следы этого пути в запросах к серверу:
 // сначала поиск дубля, потом вставка, потом привязка заявок по номеру.
+//
+// QUICK_PATIENT_V1 (2026-09-21). Своей формы у этого окна больше нет: карточка
+// зовёт ОБЩЕЕ окно быстрой регистрации (views/quick-patient-modal.js) — то же,
+// что и регистратура, и привязка пациента в каталоге услуг. Смысл проверок
+// ниже не изменился ни на слово; изменилось то, В ЧЁМ их проверяют: подписи и
+// кнопка стали общими, а пол и дата рождения — обязательными, потому что от
+// них зависят нормы анализов и печатные бланки. Своя форма их не спрашивала.
 
 let PATIENT_DUPES = [];
 const NEW_PATIENT = { id: 77, full_name: 'Каримова Азиза', mrn: 'A-000777', phone: '+' + UZ_RAW };
@@ -715,15 +751,38 @@ async function openRegistration() {
   await tick(60);
   const reg = document.body.children.filter((n) => hasClass(n, 'modal')).pop();
   assert.ok(reg && reg !== modal, 'лид без карты не открыл окно регистрации пациента');
+  assert.ok(walk(reg).some((n) => n.attrs && n.attrs['data-dialog'] === 'quick-patient'),
+    'карточка рисует СВОЮ форму заведения пациента вместо общего окна быстрой регистрации');
   return reg;
 }
 
-async function pressRegister(reg) {
-  const btn = walk(reg).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Зарегистрировать'));
-  assert.ok(btn, 'кнопка «Зарегистрировать» пропала из окна регистрации');
+/** Поле общего окна по имени колонки (реестр полей = имена в разметке). */
+const fieldByName = (root, name) => walk(root).find((e) => e.attrs && e.attrs.name === name) || null;
+
+/** Заполнить обязательное и нажать «Создать пациента» — БЕЗ ожидания хвоста. */
+function clickRegister(reg) {
+  // Дата рождения и пол в общем окне ОБЯЗАТЕЛЬНЫ — своя форма CRM их не
+  // спрашивала вовсе, и карта уходила в базу без возраста и пола.
+  const dob = fieldByName(reg, 'date_of_birth');
+  assert.ok(dob, 'в окне регистрации нет даты рождения');
+  dob.value = '1990-01-01';
+  const sex = walk(reg).find((e) => e.dataset && e.dataset.name === 'gender' && e.dataset.value === 'F');
+  assert.ok(sex, 'в окне регистрации нечем указать пол');
+  sex.click();
+
+  const btn = walk(reg).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Создать пациента'));
+  assert.ok(btn, 'кнопка «Создать пациента» пропала из окна регистрации');
   btn.click();
+}
+
+async function pressRegister(reg) {
+  clickRegister(reg);
   await tick(90);
 }
+
+/** Правка ИМЕННО этой заявки (привязка карточки к карте), а не пачки по номеру. */
+const cardPatch = (from) => CALLS.slice(from).find((c) => c.table === 'crm_requests' && c.op === 'update'
+  && (c.filters || []).some((f) => f.col === 'id' && f.op === 'eq'));
 
 const patientInserts = () => CALLS.filter((c) => c.table === 'patients' && c.op === 'insert');
 const patientSelects = () => CALLS.filter((c) => c.table === 'patients' && c.op === 'select');
@@ -740,6 +799,98 @@ test('карта с карточки заводится общим путём: �
   assert.ok(ins > -1, 'пациент не создан вовсе');
   assert.ok(dup > -1 && dup < ins,
     'перед вставкой карты не было ни одного поиска по базе — окно CRM снова пишет в patients мимо проверки дубля');
+  // Заведённая карта достаётся ЗАЯВКЕ: ради этого регистрацию и открывали.
+  const patch = cardPatch(before);
+  assert.ok(patch, 'карточка не получила пациента: заявка останется без карты');
+  assert.strictEqual(patch.values.patient_id, NEW_PATIENT.id, 'к заявке привязали не созданную карту');
+  assert.strictEqual(walk(document.body).some((n) => n.attrs && n.attrs['data-dialog'] === 'quick-patient'), false,
+    'окно регистрации осталось на экране после заведения карты');
+  window.easymed.state.user = null;
+});
+
+// QUICK_PATIENT_V1 — ЧТО УЖЕ ЗНАЕТ ЗАЯВКА, ПОВТОРНО НЕ НАБИРАЮТ.
+//
+// Имя в заявке лежит ОДНОЙ строкой, а карта хранит его тремя полями; телефон
+// — единственное, что в лиде есть всегда. Регистратор, перенабирающий их
+// руками, ошибается ровно в номере — и заявка расходится с картой.
+test('окно регистрации открывается заполненным: имя и телефон приходят из заявки', async () => {
+  PATIENT_DUPES = [];
+  const reg = await openRegistration();
+
+  assert.strictEqual(fieldByName(reg, 'last_name').value, 'Каримова',
+    'фамилия из заявки не подставлена — её придётся набирать заново');
+  assert.strictEqual(fieldByName(reg, 'first_name').value, 'Азиза', 'имя из заявки не подставлено');
+  const phone = fieldByName(reg, 'phone');
+  assert.ok(phone, 'в окне регистрации нет телефона');
+  assert.strictEqual(String(phone.value).replace(/\D/g, ''), UZ_RAW,
+    'телефон заявки не подставлен или искажён: ' + phone.value);
+  window.easymed.state.user = null;
+});
+
+// QUICK_PATIENT_V1 — ХВОСТ РЕГИСТРАЦИИ ОТДАЁТСЯ ОКНУ ОБЕЩАНИЕМ, А НЕ БРОСАЕТСЯ.
+//
+// Хвост здесь асинхронный: привязка открытых заявок по номеру, правка карточки,
+// лист дат. Карточка запускала его и СРАЗУ отпускала (`void finish…`), а окно,
+// получив в ответ пустоту, тут же уходило с экрана. Две беды на одном решении:
+//
+//   • сорванный хвост никто не ловил. Отказ уходил в «unhandled rejection»,
+//     окна к тому мигу уже не было, и «Записать на дату» выглядело как «нажал —
+//     и ничего не произошло»: пациент заведён, лист дат не открылся, никто
+//     ничего не сказал;
+//   • между исчезнувшим окном и открывшимся листом дат оставался кадр пустого
+//     экрана — он читается как «всё закрылось, работа потеряна».
+//
+// Проверяется ПОРЯДОК: пока хвост в пути, окно стоит; лист дат открывается
+// раньше, чем окно уходит.
+test('окно регистрации ждёт хвост заявки: ни пустого кадра, ни потерянного листа дат', async () => {
+  PATIENT_DUPES = [];
+  let release;
+  LINK_HOLD = new Promise((r) => { release = r; });
+  try {
+    const reg = await openRegistration();
+    // Окна прошлых проверок с экрана не снимаются, поэтому смотрим на ЭТО окно
+    // и на лист дат, которого до нажатия не было.
+    const before = document.body.children.slice();
+    const isSheet = (n) => hasClass(n, 'modal') && !before.includes(n) && textOf(n).includes('Даты приёма');
+    const regOpen = () => document.body.children.includes(reg);
+    const sheetOpen = () => document.body.children.some(isSheet);
+
+    const insertsBefore = patientInserts().length;
+    clickRegister(reg);
+    await tick(80);
+
+    assert.strictEqual(patientInserts().length, insertsBefore + 1, 'карта не заведена — проверяется не то');
+    assert.ok(regOpen(),
+      'окно ушло, не дождавшись заявки: между ним и листом дат остаётся кадр пустого экрана');
+    assert.ok(!sheetOpen(), 'лист дат открылся раньше, чем заявка получила карту');
+
+    release();
+    LINK_HOLD = null;
+    await tick(140);
+
+    assert.ok(!regOpen(), 'хвост дошёл, а окно регистрации осталось на экране');
+    assert.ok(sheetOpen(), 'лист дат так и не открылся — «Записать на дату» молча ничего не делает');
+  } finally {
+    if (release) release();
+    LINK_HOLD = null;
+    window.easymed.state.user = null;
+  }
+});
+
+// CRM_LEAD_CONTEXT_V1 — ОКНО ГОВОРИТ, ЧЬЮ ЗАЯВКУ СЕЙЧАС ЗАВОДЯТ.
+//
+// Прежняя форма CRM писала это над полями: «Из заявки: {источник} · {дата}» и
+// «После регистрации оформим услугу: X». Общее окно про заявку не знает, и
+// вместе с формой контекст пропал: у оператора открыто несколько заявок, и
+// карту он заводил, не видя, ЧЬЮ именно.
+test('окно регистрации говорит, из какой заявки человек: источник, день и услуга', async () => {
+  PATIENT_DUPES = [];
+  const reg = await openRegistration();
+  const txt = textOf(reg).replace(/\s+/g, ' ');
+
+  assert.ok(/Из заявки/.test(txt), 'в окне не сказано, что человек пришёл с заявки: ' + txt);
+  assert.ok(txt.includes('03.09.2026'), 'в окне нет дня обращения — заявок у оператора несколько: ' + txt);
+  assert.ok(txt.includes('УЗИ почек'), 'в окне нет услуги, за которой человек пришёл: ' + txt);
   window.easymed.state.user = null;
 });
 
@@ -799,6 +950,11 @@ test('«Открыть существующего» привязывает к к
     && (c.filters || []).some((f) => f.col === 'id' && f.op === 'in'));
   assert.ok(link, 'заявки по номеру к выбранной карте не привязаны: звонивший трижды оставит две ничьи заявки');
   assert.strictEqual(link.values.patient_id, 55, 'заявки привязаны не к выбранной карте');
+  // И та заявка, ИЗ КОТОРОЙ открыли окно, — тоже: она могла быть без телефона
+  // или с другим его написанием, и привязка по номеру её бы не подхватила.
+  const patch = cardPatch(before);
+  assert.ok(patch, 'сама карточка осталась без пациента');
+  assert.strictEqual(patch.values.patient_id, 55, 'карточку привязали не к выбранной карте');
 
   PATIENT_DUPES = [];
   window.easymed.state.user = null;
