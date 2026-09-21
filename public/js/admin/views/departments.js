@@ -31,7 +31,7 @@ const KIND_LABEL = {
 };
 const ROLE_LABEL = {
     admin: 'Администратор', registrar: 'Регистратор', doctor: 'Врач', cashier: 'Кассир', lab: 'Лаборант',
-    nurse: 'Медсестра', inventory: 'Снабжение', callcenter: 'Колл-центр', head_doctor: 'Главный врач', senior_nurse: 'Старшая медсестра',
+    nurse: 'Медсестра', inventory: 'Снабжение', callcenter: 'Оператор колл-центра', head_doctor: 'Главный врач', senior_nurse: 'Старшая медсестра',
 };
 // Подписи типов помещений — те же слова, что в «Настройки → Помещения»
 // (rooms-setup.js TYPES) плюс старые коды кабинетов, которые там не заводятся.

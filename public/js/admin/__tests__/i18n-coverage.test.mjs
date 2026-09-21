@@ -5,6 +5,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { STRINGS } from '../i18n-strings.js';
+// CALLCENTER_OPERATOR_V1 — справочник прав живёт в public/js/shared и этой
+// проверкой НЕ обходится (walk() ходит только по public/js/admin), а на экран
+// его подписи попадают: их рисует roles-matrix.js. Отсюда и брались русские
+// слова в узбекском и английском экране «Роли».
+import { catalogRows } from '../../shared/permission-catalog.js';
 
 // I18N_COVERAGE_V1 (2026-08-31) — the repo-wide guard that makes the whole
 // CLASS of bug die, not one screen's instance of it.
@@ -379,6 +384,33 @@ test('dictionary invariants: complete languages, hole parity, no ru-copies', () 
     }
   }
   assert.deepEqual(bad, [], bad.join('\n'));
+});
+
+// CALLCENTER_OPERATOR_V1 — СТРОКИ СПРАВОЧНИКА ПРАВ ПРО РАБОТУ ОПЕРАТОРА.
+//
+// Проверяются ИМЕННО ОНИ, а не весь справочник, и это честный долг, а не
+// лазейка: семнадцать прежних разделов справочника тоже не переведены и ждут
+// своего прохода. Расширить этот список — значит перевести очередной раздел;
+// сузить — значит вернуть на экран русские слова там, где их только что не
+// стало.
+const CALLCENTER_CATALOG_ROWS = new Set([
+  'crm.calls', 'crm.dial', 'crm.recording', 'crm.convert',
+  'custdev', 'custdev.list', 'custdev.rate',
+]);
+
+test('строки справочника прав про работу оператора переведены на все три языка', () => {
+  const bad = [];
+  let checked = 0;
+  for (const r of catalogRows()) {
+    if (!CALLCENTER_CATALOG_ROWS.has(r.key)) continue;
+    for (const s of [r.label, r.desc, ...Object.values(r.levelDesc || {})]) {
+      if (!s) continue;
+      checked++;
+      if (!dictComplete(s)) bad.push(`  ${r.key}  ${JSON.stringify(String(s).slice(0, 100))}`);
+    }
+  }
+  assert.ok(checked >= 20, `expected 20+ catalogue strings on the call-centre rows, saw ${checked}`);
+  assert.deepEqual(bad, [], 'roles-matrix.js рисует их через tr() — добавьте ru/uz/en в i18n-strings.js:\n' + bad.join('\n'));
 });
 
 test('every i18n-exempt pragma states its reason (an exclusion is a decision, not a skip)', () => {

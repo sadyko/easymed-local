@@ -103,6 +103,11 @@ test('уровень «Только просмотр» читает, но оце
   const cardId = custdevList(db, period(db), operator)[0].id;
 
   // Понижаем колл-центр до просмотра — ровно то, что владелец делает галочкой.
+  // CALLCENTER_OPERATOR_V1: галочка обязана действовать и ПОСЛЕ появления строк
+  // матрицы. Поэтому миграция 141 ключей Cust Dev не выдаёт вовсе: выданный
+  // `custdev.rate: edit` заморозил бы оценки в положении «можно» и отменил бы
+  // решение, принятое клиникой старой галочкой, — то самое молчаливое
+  // расширение прав, которого обновление делать не вправе.
   db.prepare(`UPDATE role_permissions SET permissions = json_set(permissions, '$.levels.custdev', 'viewer')
                WHERE role = 'callcenter'`).run();
 
@@ -110,6 +115,79 @@ test('уровень «Только просмотр» читает, но оце
   assert.throws(() => custdevRate(db, {
     card_id: cardId, registrar: 'good', cashier: 'good', doctor: 'good',
   }, operator), (e) => e instanceof RpcError && e.status === 403);
+});
+
+// CALLCENTER_OPERATOR_V1 — раздел появился в справочнике прав, и его ворота
+// живут по тому же правилу перехода, что и стационар: пока роль ключ не
+// трогала, решает ПРЕЖНЯЯ галочка раздела, а не пустая матрица.
+test('строки матрицы главнее старой галочки — но только там, где их настроили', () => {
+  const db = fresh();
+  paidVisit(db, 1, dayOffset(db, -1));
+  custdevSync(db, period(db), operator);
+  const cardId = custdevList(db, period(db), operator)[0].id;
+
+  // Врач раздела не имеет и ключей не настраивал — отказ, как и был.
+  assert.throws(() => custdevList(db, period(db), doctor), (e) => e.status === 403);
+
+  // Клиника выдала врачу доску СТРОКОЙ МАТРИЦЫ — старого раздела ему так и не
+  // дали, и раньше выдать одну доску было нечем.
+  db.prepare(`UPDATE role_permissions
+                 SET permissions = json_patch(permissions, '{"grants":{"custdev.list":"view"}}')
+               WHERE role = 'doctor'`).run();
+  assert.equal(custdevList(db, period(db), doctor).length, 1, 'выданная строка доску не открыла');
+
+  // Оценивать он всё равно не может: custdev.rate ему не выдавали, а старой
+  // галочки раздела у него нет — правило перехода отвечает «как было».
+  assert.throws(() => custdevRate(db, {
+    card_id: cardId, registrar: 'good', cashier: 'good', doctor: 'good',
+  }, doctor), (e) => e.status === 403);
+});
+
+// CALLCENTER_OPERATOR_V1 — ЗАКРЫТЫЙ РАЗДЕЛ НЕ ОТКРЫВАЕТСЯ ИЗНУТРИ.
+//
+// Экран «Роли» гасит окна и действия раздела, поставленного в «Нет», но
+// ЗНАЧЕНИЯ у них при этом остаются прежние и так и уезжают в базу: матрица
+// «custdev: Нет, custdev.list: Просмотр» — обычная её запись, а не выдумка.
+// Спроси ворота только про окно — и закрытый раздел откроется изнутри: до
+// появления строк матрицы одна галочка раздела отказывала, а после стала бы
+// пускать. Правило одно на все ворота (grants.js): раздел «Нет» перевешивает
+// всё, что в нём осталось.
+test('раздел, закрытый строкой матрицы, не открывается оставшимся уровнем своего окна', () => {
+  const db = fresh();
+  paidVisit(db, 1, dayOffset(db, -1));
+  custdevSync(db, period(db), admin);
+
+  db.prepare(`UPDATE role_permissions
+                 SET permissions = json_patch(permissions, '{"grants":{"custdev":"none","custdev.list":"view","custdev.rate":"edit"}}')
+               WHERE role = 'callcenter'`).run();
+
+  assert.throws(() => custdevList(db, period(db), operator),
+    (e) => e instanceof RpcError && e.status === 403,
+    'закрытый раздел открылся уровнем, оставшимся у его окна');
+  assert.throws(() => custdevReport(db, period(db), operator), (e) => e.status === 403);
+});
+
+// ADMIN_DOCTOR_V1 — у администратора клиники основная роль сплошь и рядом
+// `doctor`, а `admin` стоит дополнительной, и матрица читается по ОБЕИМ. «Нет»,
+// поставленное врачам, не должно запирать владельца в его же отчёте: ворота
+// пускают администратора тем же предикатом, что и везде (grants.js isAdminUser).
+test('администратор-врач ведёт обзвон, даже когда врачам раздел закрыт строкой матрицы', () => {
+  const db = fresh();
+  paidVisit(db, 1, dayOffset(db, -1));
+  custdevSync(db, period(db), admin);
+  const cardId = custdevList(db, period(db), admin)[0].id;
+  db.prepare(`UPDATE role_permissions
+                 SET permissions = json_patch(permissions, '{"grants":{"custdev.list":"none","custdev.rate":"none"}}')
+               WHERE role = 'doctor'`).run();
+
+  const adminDoctor = { id: 1, role: 'doctor', extra_roles: ['admin'] };
+  assert.equal(custdevList(db, period(db), adminDoctor).length, 1, 'владелец заперт «Нет», записанным врачам');
+  assert.equal(custdevRate(db, {
+    card_id: cardId, registrar: 'good', cashier: 'good', doctor: 'good',
+  }, adminDoctor).status, 'satisfied');
+
+  // Рядовому врачу — по-прежнему нет.
+  assert.throws(() => custdevList(db, period(db), doctor), (e) => e.status === 403);
 });
 
 test('жалоба без комментария отклоняется с текстом для оператора', () => {

@@ -7,6 +7,9 @@
 // Тот же выбор и по той же причине сделан для «Чата с пациентами».
 
 import { canViewSection, canEditSection } from '../roles.js';
+// CALLCENTER_OPERATOR_V1 — у раздела появились свои строки в справочнике прав
+// (custdev.list, custdev.rate), и ворота спрашивают СНАЧАЛА их.
+import { grantAllowsOr } from '../grants.js';
 import { RpcError } from './crm-config.js';
 import { syncCards } from '../custdev/sync.js';
 import { listCards, reportFor } from '../custdev/board.js';
@@ -14,15 +17,27 @@ import { rateOutcome, ScoreError } from '../custdev/score.js';
 
 const KEY = 'custdev';
 
+// Правило перехода — ТО ЖЕ САМОЕ, что у всех ворот, и живёт оно в одном месте
+// (grants.js grantAllowsOr): поблажка администратору, закрытый раздел поверх
+// оставшихся уровней его строк, настроенный уровень, а дальше — «как было».
+// Здесь отличается только это «как было»: списка ролей в коде у Cust Dev
+// никогда не было (см. шапку файла), поэтому прежнее поведение — ПРЕЖНЯЯ
+// ГАЛОЧКА РАЗДЕЛА, а не hasAnyRole. Своя копия правила рядом с общим разошлась
+// бы с ним в первый же выпуск — ровно так этот раздел и пускал на доску,
+// закрытую строкой «Cust Dev: Нет».
+function grantedOr(db, user, key, need, legacy) {
+  return grantAllowsOr(db, user, key, need, legacy);
+}
+
 function requireView(db, user) {
-  if (!canViewSection(db, user, KEY)) {
+  if (!grantedOr(db, user, 'custdev.list', 'view', () => canViewSection(db, user, KEY))) {
     throw new RpcError('Раздел «Cust Dev» вам не выдан.', 403);
   }
 }
 
 function requireEdit(db, user) {
   requireView(db, user);
-  if (!canEditSection(db, user, KEY)) {
+  if (!grantedOr(db, user, 'custdev.rate', 'edit', () => canEditSection(db, user, KEY))) {
     throw new RpcError('У вас доступ «Только просмотр»: оценивать карточки нельзя.', 403);
   }
 }

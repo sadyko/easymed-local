@@ -276,8 +276,9 @@ test('ROLES_ACCORDION_V1: разделы свёрнуты, раскрывают�
   const bodyOf = (key) => walk(section(key)).find((n) => String(n.className).split(/\s+/).includes('rm-body'));
   const toggleOf = (key) => walk(section(key)).find((n) => String(n.className).split(/\s+/).includes('rm-toggle'));
 
-  // Семнадцать разделов — семнадцать панелей, и все свёрнуты: экран открывается списком, а не простынёй.
-  assert.equal(byClass('rm-section').length, 17);
+  // Сколько разделов в справочнике — столько панелей, и все свёрнуты: экран
+  // открывается списком, а не простынёй. (CALLCENTER_OPERATOR_V1 добавил Cust Dev.)
+  assert.equal(byClass('rm-section').length, 18);
   assert.ok(byClass('rm-body').every((b) => b.hidden === true), 'раздел раскрыт при открытии экрана');
   assert.equal(toggleOf('inpatient').attrs['aria-expanded'], 'false');
 
@@ -374,7 +375,12 @@ test('сохранение: кнопка заперта на время запр
   assert.deepStrictEqual(written.levels, { patients: 'editor', dashboard: 'viewer', registration: 'editor', queue: 'viewer' });
   assert.strictEqual(written.grants.patients, 'edit');
   assert.strictEqual(written.grants['patients.queue'], 'view');
-  assert.strictEqual(written.grants.inpatient, 'none');
+  // CALLCENTER_OPERATOR_V1 — РАЗДЕЛ, ЗАКРЫТЫЙ ЛИШЬ ВЫВОДОМ ИЗ СТАРОЙ ГАЛОЧКИ, В
+  // МАТРИЦУ НЕ ПИШЕТСЯ. Записанное «Нет» сервер читает как РЕШЕНИЕ и закрывает
+  // по нему всё, что внутри (grants.js), — а решения такого никто не принимал:
+  // раздела просто нет в старых полях. Раньше здесь стояло «inpatient: none».
+  assert.ok(!('inpatient' in written.grants), 'выведенное «Нет» уехало в базу решением');
+  assert.strictEqual(written.grants['inpatient.vitals'], 'none', 'строки раздела пишутся как были');
   assert.ok(String(toastMsg).includes('Права сохранены'), toastMsg);
 });
 
@@ -538,6 +544,294 @@ test('сохранение роли НЕ стирает настройку вк�
     assert.equal(saved.loyalty, 'none', 'чужая настройка стёрта сохранением');
   } finally {
     delete SAVED.registrar.patient_tabs;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// CALLCENTER_OPERATOR_V1 — роль `callcenter` называется ЧЕЛОВЕКОМ.
+// ---------------------------------------------------------------------------
+// Список ролей — это список ПРОФЕССИЙ: «Регистратор», «Кассир», «Лаборант».
+// «Колл-центр» стоял среди них отделом, и заведующая, раздавая права, читала
+// строку как участок работы, а не как того, КОМУ их выдают.
+//
+// Проверяется ЭКРАН, а не константа: подпись обязана доехать до кнопки роли.
+// Код роли при этом не тронут — он остаётся ключом кнопки (dataset.role),
+// потому что по нему живут role_permissions и реестр таблиц.
+test('роль callcenter подписана «Оператор колл-центра», а её код прежний', async () => {
+  resetServer();
+  const root = await render();
+  const btn = roleButton(root, 'callcenter');
+  assert.ok(btn, 'кнопки роли callcenter нет на экране');
+  assert.match(textOf(btn), /Оператор колл-центра/, 'роль подписана отделом, а не человеком');
+});
+
+// ---------------------------------------------------------------------------
+// CALLCENTER_OPERATOR_V1 — ТОЧЕЧНО ВЫДАННЫЙ КЛЮЧ НЕ ОБНУЛЯЕТ ВСЮ МАТРИЦУ.
+// ---------------------------------------------------------------------------
+// Экран читал `perms.grants || grantsFromLegacy(perms)`: ОДНОГО ключа в grants
+// хватало, чтобы весь остальной справочник нарисовался «Нет», и первое же
+// «Сохранить роль» отняло бы у роли всё, что она имела по старым полям.
+// Миграция 141 выдаёт ключи именно так — точечно; и так же выглядит любая
+// роль, настроенная ДО появления новой строки справочника.
+test('роль с частично выданными grants рисуется по старым полям, а сохранение ничего не отнимает', async () => {
+  resetServer();
+  SAVED.registrar.grants = { 'crm.dial': 'edit' };   // ровно то, что пишет миграция 141
+  try {
+    const root = await render();
+    const chosen = (key) => (radiosFor(root, key).find((n) => n.checked) || {}).attrs.value;
+
+    assert.equal(chosen('crm.dial'), 'edit', 'выданный ключ не доехал до экрана');
+    assert.equal(chosen('patients'), 'edit', 'раздел из старых полей нарисовался «Нет»');
+    assert.equal(chosen('patients.list'), 'view', 'окно раздела нарисовалось «Нет»');
+    assert.equal(chosen('dashboard'), 'view');
+
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    assert.ok(saved.sections.includes('patients'), 'сохранение отняло раздел «Пациенты»');
+    assert.equal(saved.grants['crm.dial'], 'edit', 'сохранение потеряло выданный ключ');
+  } finally {
+    delete SAVED.registrar.grants;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// CALLCENTER_OPERATOR_V1 — ЯВНЫЙ ЗАПРЕТ ГЛАВНЕЕ ВЫВЕДЕННОГО ИЗ СТАРЫХ ПОЛЕЙ.
+// ---------------------------------------------------------------------------
+// Слияние `{...grantsFromLegacy(perms), ...perms.grants}` имеет порядок, и он
+// не украшение: старые поля — ОСНОВА, настроенные ключи ложатся ПОВЕРХ.
+// Перепутай стороны — и «Нет», поставленное заведующей руками (или выданное
+// миграцией 141, чтобы первое сохранение никому не расширило телефонию),
+// молча заменится выводом из галочки раздела: роль с открытым разделом CRM
+// получила бы обратно и звонок, и запись разговора.
+test('явное «Нет» в grants не перебивается старыми полями — ни на экране, ни при сохранении', async () => {
+  resetServer();
+  SAVED.registrar.sections = [...SAVED.registrar.sections, 'crm'];
+  SAVED.registrar.levels = { ...SAVED.registrar.levels, crm: 'admin' };
+  SAVED.registrar.grants = { 'crm.dial': 'none', 'crm.recording': 'none' };
+  try {
+    const root = await render();
+    const chosen = (key) => (radiosFor(root, key).find((n) => n.checked) || {}).attrs.value;
+
+    // Раздел CRM открыт — из него вывелись бы все его строки…
+    assert.equal(chosen('crm'), 'edit', 'раздел из старых полей не доехал');
+    assert.equal(chosen('crm.calls'), 'view', 'ненастроенная строка обязана читаться по старым полям');
+    // …но у этих двух есть решение администратора, и оно главнее.
+    assert.equal(chosen('crm.dial'), 'none', 'явный запрет перебит выводом из старых полей');
+    assert.equal(chosen('crm.recording'), 'none', 'явный запрет перебит выводом из старых полей');
+
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    assert.equal(saved.grants['crm.dial'], 'none', 'сохранение вернуло роли отнятое право');
+    assert.equal(saved.grants['crm.recording'], 'none', 'сохранение вернуло роли отнятое право');
+    assert.equal(saved.grants['crm.calls'], 'view', 'сохранение отняло то, что роль имела по старым полям');
+  } finally {
+    SAVED.registrar.sections = ['patients', 'dashboard'];
+    SAVED.registrar.levels = { patients: 'editor', dashboard: 'viewer' };
+    delete SAVED.registrar.grants;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// CALLCENTER_OPERATOR_V1 — «НЕТ» У РАЗДЕЛА ЗАКРЫВАЕТ ВСЁ, ЧТО В НЁМ.
+// ---------------------------------------------------------------------------
+// Экран гасит окна и действия закрытого раздела, но гасит ТОЛЬКО на экране:
+// input.disabled не меняет значения, а сбор читает и погашенные переключатели.
+// В базу уезжало «custdev: Нет, custdev.list: Просмотр, custdev.rate:
+// Изменение» — и сервер, спрошенный про окно, пускал на доску закрытого
+// раздела. Погасить — это про экран; ОТНЯТЬ — это про то, что уезжает в базу.
+test('раздел, поставленный в «Нет», сохраняется закрытым вместе со всеми своими строками', async () => {
+  resetServer();
+  // Колл-центр ровно таким, каким его оставляют миграции 059 (доска CRM), 078
+  // (Cust Dev) и 141 (ключи телефонии), — то есть без единой настройки руками.
+  SAVED.callcenter = {
+    sections: ['crm', 'custdev', 'patients'],
+    levels: { crm: 'admin', custdev: 'admin', patients: 'editor' },
+    grants: { 'crm.calls': 'view', 'crm.dial': 'edit', 'crm.recording': 'edit', 'crm.convert': 'edit' },
+  };
+  try {
+    const root = await render();
+    roleButton(root, 'callcenter').click();
+    await tick();
+
+    pick(root, 'custdev', 'none');
+    pick(root, 'crm', 'none');
+
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    assert.equal(lastUpdate.role, 'callcenter');
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    for (const key of ['custdev.list', 'custdev.rate', 'crm.calls', 'crm.dial', 'crm.recording', 'crm.convert']) {
+      assert.equal(saved.grants[key], 'none', 'строка закрытого раздела уехала в базу открытой: ' + key);
+    }
+    assert.equal(saved.grants.custdev, 'none');
+    assert.equal(saved.grants.crm, 'none');
+    assert.ok(!saved.sections.includes('custdev'), 'старая галочка закрытого раздела осталась выданной');
+    assert.ok(!saved.sections.includes('crm'));
+    assert.equal(saved.grants.patients, 'edit', 'закрытие одного раздела задело соседний');
+  } finally {
+    delete SAVED.callcenter;
+  }
+});
+
+// Та же беда, доставшаяся по наследству: запись «раздел Нет, окно Просмотр»
+// уже лежит в базе (её и писал экран до этой правки). Сохранение роли обязано
+// её ПОЧИНИТЬ, даже если администратор к этому разделу не прикасался, — иначе
+// сломанная строка живёт вечно и ждёт ворот, которые спросят только про окно.
+//
+// И ровно этого НЕЛЬЗЯ делать по «Нет», ВЫВЕДЕННОМУ из старой галочки: у
+// колл-центра ключи телефонии выданы точечно (миграция 141), а раздел CRM
+// здесь закрыт — обнуление по нему отняло бы у оператора телефон, которого
+// никто не закрывал.
+test('унаследованное «раздел Нет, окно Просмотр» чинится при сохранении, а выведенное «Нет» ничего не отнимает', async () => {
+  resetServer();
+  SAVED.callcenter = {
+    sections: ['patients'],
+    levels: { patients: 'editor' },
+    grants: {
+      custdev: 'none', 'custdev.list': 'view', 'custdev.rate': 'edit',
+      'crm.calls': 'view', 'crm.dial': 'edit', 'crm.recording': 'edit', 'crm.convert': 'edit',
+    },
+  };
+  try {
+    const root = await render();
+    roleButton(root, 'callcenter').click();
+    await tick();
+
+    // Ничего не трогаем — просто сохраняем роль.
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    assert.equal(saved.grants['custdev.list'], 'none', 'сломанная строка закрытого раздела пережила сохранение');
+    assert.equal(saved.grants['custdev.rate'], 'none');
+    // Раздел CRM закрыт лишь ВЫВОДОМ из старых полей — ни ключи не тронуты, ни
+    // сам раздел не записан решением.
+    assert.ok(!('crm' in saved.grants), 'выведенное «Нет» уехало в базу решением');
+    assert.equal(saved.grants['crm.dial'], 'edit', 'сохранение отняло телефон, которого администратор не закрывал');
+    assert.equal(saved.grants['crm.calls'], 'view');
+  } finally {
+    delete SAVED.callcenter;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// CALLCENTER_OPERATOR_V1 — ВЫВЕДЕННОЕ «НЕТ» НЕ СТАНОВИТСЯ РЕШЕНИЕМ ПРИ
+// СОХРАНЕНИИ ЧУЖОЙ СТРОКИ.
+// ---------------------------------------------------------------------------
+// Сохранение пишет матрицу ЦЕЛИКОМ, и пока раздел, закрытый лишь выводом из
+// старой галочки, уезжал в неё как `crm: none`, беда приходила через шаг:
+// сервер такое «Нет» от решения не отличает и закрывает по нему ВСЁ, что
+// внутри, — включая `crm.dial`, выданный колл-центру миграцией 141. Оператор
+// терял телефон после того, как администратор открыл его роль, поправил
+// что-то постороннее и нажал «Сохранить», а экран всё это время показывал
+// «Позвонить пациенту: Изменение».
+test('раздел, закрытый лишь выводом из старых полей, не уезжает в базу решением', async () => {
+  resetServer();
+  // Колл-центр с неотмеченной доской CRM и ключами телефонии от миграции 141.
+  SAVED.callcenter = {
+    sections: ['dashboard', 'telegram-chat', 'custdev'],
+    levels: { dashboard: 'viewer', 'telegram-chat': 'editor', custdev: 'admin' },
+    grants: { 'crm.calls': 'view', 'crm.dial': 'edit', 'crm.recording': 'edit', 'crm.convert': 'edit' },
+  };
+  try {
+    const root = await render();
+    roleButton(root, 'callcenter').click();
+    await tick();
+    const chosen = (key) => (radiosFor(root, key).find((n) => n.checked) || {}).attrs.value;
+    assert.equal(chosen('crm'), 'none', 'раздел CRM обязан читаться закрытым — его нет в старых полях');
+    assert.equal(chosen('crm.dial'), 'edit', 'выданный миграцией ключ не доехал до экрана');
+
+    // Администратор правит ПОСТОРОННЕЕ и сохраняет.
+    pick(root, 'documents', 'view');
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    assert.equal(lastUpdate.role, 'callcenter');
+    assert.equal(saved.grants['crm.dial'], 'edit', 'сохранение отняло телефон, выданный миграцией');
+    assert.equal(saved.grants['crm.calls'], 'view');
+    assert.equal(saved.grants['crm.recording'], 'edit');
+    assert.ok(!('crm' in saved.grants),
+      'выведенное «Нет» записано решением — сервер закроет по нему все ключи телефонии');
+    assert.ok(!saved.sections.includes('crm'), 'старые поля не должны были измениться');
+    assert.equal(saved.grants.documents, 'view', 'посторонняя правка не сохранилась');
+  } finally {
+    delete SAVED.callcenter;
+  }
+});
+
+// Закрыть раздел и тут же передумать — обычное движение руки. Обнуление строк
+// при закрытии не должно стоить администратору всей настройки раздела: пока
+// экран открыт, прежние уровни помнятся и возвращаются.
+test('раздел, закрытый и снова открытый, возвращает свои строки', async () => {
+  resetServer();
+  SAVED.callcenter = {
+    sections: ['crm', 'custdev', 'patients'],
+    levels: { crm: 'admin', custdev: 'admin', patients: 'editor' },
+    grants: { 'crm.calls': 'view', 'crm.dial': 'edit', 'crm.recording': 'edit', 'crm.convert': 'edit' },
+  };
+  try {
+    const root = await render();
+    roleButton(root, 'callcenter').click();
+    await tick();
+    const chosen = (key) => (radiosFor(root, key).find((n) => n.checked) || {}).attrs.value;
+
+    pick(root, 'crm', 'none');
+    assert.equal(chosen('crm.dial'), 'none', 'закрытие раздела не обнулило его строку');
+    assert.equal(chosen('crm.calls'), 'none');
+
+    pick(root, 'crm', 'edit');
+    assert.equal(chosen('crm.dial'), 'edit', 'открытый обратно раздел не вернул свои строки');
+    assert.equal(chosen('crm.calls'), 'view');
+    assert.equal(chosen('crm.recording'), 'edit');
+
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    assert.equal(saved.grants.crm, 'edit');
+    assert.equal(saved.grants['crm.dial'], 'edit', 'сохранение записало обнулённую строку');
+  } finally {
+    delete SAVED.callcenter;
+  }
+});
+
+// Память о закрытых строках живёт до ПЕРВОГО возврата, и не дольше. Иначе
+// выходит вот что: закрыли раздел и открыли обратно, потом сняли право руками,
+// потом снова закрыли и открыли — и снятое право возвращается само, из записи,
+// сделанной до того, как администратор передумал. Экран молча отменяет решение
+// человека, и заметить это можно только по спискам в базе.
+test('закрыть → открыть → снять право → закрыть → открыть: снятое право не возвращается', async () => {
+  resetServer();
+  SAVED.callcenter = { sections: ['custdev', 'patients'], levels: { custdev: 'admin', patients: 'editor' } };
+  try {
+    const root = await render();
+    roleButton(root, 'callcenter').click();
+    await tick();
+    const chosen = (key) => (radiosFor(root, key).find((n) => n.checked) || {}).attrs.value;
+    assert.equal(chosen('custdev.rate'), 'edit', 'строка раздела не доехала до экрана');
+
+    // Закрыли и передумали — строки вернулись, как и задумано.
+    pick(root, 'custdev', 'none');
+    assert.equal(chosen('custdev.rate'), 'none');
+    pick(root, 'custdev', 'edit');
+    assert.equal(chosen('custdev.rate'), 'edit', 'открытый обратно раздел не вернул свою строку');
+
+    // А теперь администратор снимает право САМ — и снова закрывает-открывает.
+    pick(root, 'custdev.rate', 'none');
+    pick(root, 'custdev', 'none');
+    pick(root, 'custdev', 'edit');
+    assert.equal(chosen('custdev.rate'), 'none', 'снятое администратором право вернулось само');
+    assert.equal(chosen('custdev.list'), 'view', 'заодно потерялась соседняя строка');
+
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    assert.equal(saved.grants['custdev.rate'], 'none', 'в базу уехало право, которое администратор снял');
+    assert.equal(saved.grants['custdev.list'], 'view');
+    assert.equal(saved.grants.custdev, 'edit');
+  } finally {
+    delete SAVED.callcenter;
   }
 });
 

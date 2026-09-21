@@ -55,7 +55,7 @@ import { levelsFor, openAction, actionFor, levelFromActions, actionsFromLevel }
 // ROLES_MATRIX_V1 — матрица «раздел → окно → действие» по общему справочнику
 // прав (shared/permission-catalog.js). Старые поля sections/levels выводятся
 // из неё при сохранении, чтобы прежние ворота продолжали работать.
-import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm4';
+import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm6';
 
 // ROLE_KEYS_V2 — матрица строится из permissions.js NAV_MODULES, того же
 // списка, который читают сами ворота бокового меню. Когда-то это была вторая
@@ -72,7 +72,12 @@ const ROLE_LIST = [
     { key: 'lab',        label: 'Лаборант' },
     { key: 'nurse',      label: 'Медсестра' },
     { key: 'inventory',  label: 'Склад' },
-    { key: 'callcenter', label: 'Колл-центр' },   // CALLCENTER_ROLE_V1
+    // CALLCENTER_OPERATOR_V1 — роль зовётся ЧЕЛОВЕКОМ, а не участком работы:
+    // рядом стоят «Регистратор», «Кассир», «Лаборант» — профессии, и «Колл-центр»
+    // читался среди них как отдел, а не как тот, кому выдают права. Код роли не
+    // тронут: в базе она по-прежнему `callcenter` (role_permissions.role и
+    // реестр таблиц зовут её так), поменялось только слово на экране.
+    { key: 'callcenter', label: 'Оператор колл-центра' },   // CALLCENTER_ROLE_V1
     // INPATIENT_FLOW_V1 — надстроечные роли стационара. Права на РАЗДЕЛЫ у них
     // такие же настраиваемые, как у остальных; полномочия в маршруте
     // госпитализации проверяет сервер (rpc/inpatient-flow.js) и здесь не
@@ -103,7 +108,7 @@ const DEFAULT_LEVEL = 'editor';
 // что нужно понимать про эту кнопку.
 const BASE_ROLES = [
     ['registrar', 'Регистратор'], ['doctor', 'Врач'], ['cashier', 'Кассир'], ['lab', 'Лаборант'],
-    ['nurse', 'Медсестра'], ['inventory', 'Склад'], ['callcenter', 'Колл-центр'], ['admin', 'Администратор'],
+    ['nurse', 'Медсестра'], ['inventory', 'Склад'], ['callcenter', 'Оператор колл-центра'], ['admin', 'Администратор'],
 ];
 // Код роли — латиница: он ложится в role_permissions.role рядом со штатными
 // именами. Русское название транслитерируется, а если от него ничего не
@@ -231,7 +236,16 @@ export async function renderRolesEditor(container, { onBack } = {}) {
     function collect() {
         // ROLES_MATRIX_V1 — источник правды теперь grants; старые sections/levels
         // выводятся из них, а неизвестные справочнику ключи переносятся как есть.
-        const grants = collectGrants(state.grantControls || {});
+        // CALLCENTER_OPERATOR_V1 — сбор должен отличать РЕШЕНИЕ от догадки
+        // экрана, и для этого ему нужны оба списка: ключи, записанные у роли
+        // САМИ (explicitGrants), и разделы, закрытые в этот заход
+        // (closedSections). «Нет», выведенное из старой галочки, ничего не
+        // отнимает и само в матрицу не пишется — иначе сервер прочитал бы его
+        // как решение. Подробности — в collectGrants.
+        const grants = collectGrants(state.grantControls || {}, {
+            explicit: state.explicitGrants || {},
+            closed: state.closedSections,
+        });
         const { sections, levels } = legacyFromGrants(grants, state.prevLegacy || {});
         // ROLE_SAVE_PRESERVE_V1 — вкладки, которых этот экран не рисует,
         // переносим как есть: иначе сохранение роли молча стирало бы настройку,
@@ -468,8 +482,20 @@ export async function renderRolesEditor(container, { onBack } = {}) {
         // ROLES_MATRIX_V1 — раздел → окно → действие. Роль без grants получает
         // их из старых полей: экран показывает то, что действует сейчас, а не
         // пустую матрицу, которая читалась бы как «у роли нет ничего».
+        //
+        // CALLCENTER_OPERATOR_V1 — СТАРЫЕ ПОЛЯ ЧИТАЮТСЯ ВСЕГДА, а настроенные
+        // ключи ложатся ПОВЕРХ. Раньше стояло `perms.grants || grantsFromLegacy(perms)`:
+        // достаточно было ОДНОГО ключа в grants, чтобы весь остальной справочник
+        // нарисовался «Нет», и первое же «Сохранить» отняло бы у роли всё, что
+        // она имела по старым полям. Так и случилось бы теперь: миграция
+        // выдаёт колл-центру и регистратуре несколько ключей точечно, а не
+        // переписывает им всю матрицу. То же самое ждало бы КАЖДУЮ роль,
+        // настроенную до появления новой строки справочника: новый ключ
+        // (crm.calls, custdev.list…) в её grants не лежит, и без старых полей
+        // он читался бы как запрет, которого администратор не ставил.
         state.prevLegacy = { sections: perms.sections || [], levels: perms.levels || {} };
-        const grants = perms.grants || grantsFromLegacy(perms);
+        state.explicitGrants = (perms.grants && typeof perms.grants === 'object') ? perms.grants : {};
+        const grants = { ...grantsFromLegacy(perms), ...(perms.grants || {}) };
         card.appendChild(h('div', { class: 'roles-group' },
             h('span', { class: 'roles-group-name' }, 'Разделы, окна и действия'),
             h('span', { class: 'roles-group-lvl' }, 'Нет · Просмотр · Изменение · Удаление'),
@@ -478,7 +504,12 @@ export async function renderRolesEditor(container, { onBack } = {}) {
             'Уровни вложены: «Изменение» включает «Просмотр», «Удаление» — всё вместе. Подпись под строкой — что даёт выбранный уровень; наведите на уровень, чтобы узнать, что даст он.'));
         const matrixHost = h('div', { class: 'rm' });
         card.appendChild(matrixHost);
-        state.grantControls = paintCatalog(matrixHost, grants, { onAnyChange: paintReach, openSections: state.openSections });
+        // Набор закрытых заводится НА КАЖДУЮ РОЛЬ заново: решение, принятое про
+        // одну роль, про соседнюю не значит ничего.
+        state.closedSections = new Set();
+        state.grantControls = paintCatalog(matrixHost, grants, {
+            onAnyChange: paintReach, openSections: state.openSections, closedSections: state.closedSections,
+        });
 
         // PATIENT_TAB_ACCESS_V1 — вкладки карты пациента. Владелец: «we need to
         // add a patients card tabs to the view/edit/delete option». Отдельная

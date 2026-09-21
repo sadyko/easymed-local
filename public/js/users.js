@@ -1,6 +1,13 @@
 import { api } from './api.js';
 
-const ROLES = ['admin', 'registrar', 'doctor', 'cashier', 'lab', 'nurse', 'inventory'];
+// CALLCENTER_OPERATOR_V1 — 'callcenter' отсутствовал здесь с самого появления
+// роли (миграция 059): эта служебная страница — единственное место, где роль
+// видно КОДОМ, и её список молча отставал от server/services/roles.js
+// PRIMARY_ROLES. Сотруднику колл-центра нельзя было ни завести здесь учётку, ни
+// сменить роль, не сбросив её на чужую. Надстроечные роли (head_doctor,
+// senior_nurse) сюда не входят намеренно — сервер отвечает «Unknown role.» на
+// попытку поставить их ОСНОВНОЙ (EXTRA_ONLY_ROLES).
+const ROLES = ['admin', 'registrar', 'doctor', 'cashier', 'lab', 'nurse', 'inventory', 'callcenter'];
 let me = null;
 
 async function boot() {
