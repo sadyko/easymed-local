@@ -80,7 +80,11 @@ import { registrarHeader } from './registrar-header.js?v=aurora5';   // NO_GREET
 // файлом: этот в node не загружается, а те правила надо проверять числами.
 import {
     STEP_CHOICES, rowPx, pxPerMin, showsSlotLabel,
-    MAX_DAYS, maxDaysFor, dayStepBlock,
+    // RCAL_MAX_COLUMNS_IMPORT_V1 — MAX_COLUMNS читается в подсказке степпера
+    // «Больше дней», когда следующий день уже не помещается по колонкам; без
+    // импорта это ReferenceError на отрисовке — регистратор с шестью врачами и
+    // четырьмя днями видел «Календарь записи не открылся», администратор нет.
+    MAX_DAYS, MAX_COLUMNS, maxDaysFor, dayStepBlock,
     monthKey, monthGrid, monthRange, countByDay,
     groupByBranch, keepsWorkingFilter, columnLoad, buildColumns,
     slotMode, MODE_LIVE_QUEUE,
