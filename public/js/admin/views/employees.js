@@ -18,7 +18,7 @@ import { specialtyOptions, canonicalSpecialty, SPECIALTY_ROWS } from '../special
 const ROLES = [
     ['registrar', 'Регистратор'], ['doctor', 'Врач'], ['nurse', 'Медсестра'],
     ['cashier', 'Кассир'], ['lab', 'Лаборант'], ['inventory', 'Склад'],
-    ['callcenter', 'Колл-центр'],   // CALLCENTER_ROLE_V1
+    ['callcenter', 'Оператор колл-центра'],   // CALLCENTER_ROLE_V1 + CALLCENTER_OPERATOR_V1
     ['admin', 'Администратор'],
 ];
 // INPATIENT_FLOW_V1 — НАДСТРОЕЧНЫЕ роли: только «Дополнительные роли», в

@@ -59,7 +59,7 @@ export const TAB_WORD = {
 const ROLE_WORD = {
     admin: 'администратор', registrar: 'регистратор', doctor: 'врач',
     nurse: 'медсестра', cashier: 'кассир', lab: 'лаборант', inventory: 'склад',
-    callcenter: 'колл-центр', head_doctor: 'главный врач', senior_nurse: 'старшая медсестра',
+    callcenter: 'оператор колл-центра', head_doctor: 'главный врач', senior_nurse: 'старшая медсестра',
 };
 
 /**

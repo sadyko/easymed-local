@@ -196,6 +196,8 @@ export const STRINGS = {
   "лаборант": {"en":"lab technician","ru":"лаборант","uz":"laborant"},
   "склад": {"en":"warehouse","ru":"склад","uz":"ombor"},
   "колл-центр": {"en":"call centre","ru":"колл-центр","uz":"call-markaz"},
+  // CALLCENTER_OPERATOR_V1 — роль зовётся человеком, а не участком работы.
+  "оператор колл-центра": {"en":"call-centre operator","ru":"оператор колл-центра","uz":"kol-markaz operatori"},
   "главный врач": {"en":"head doctor","ru":"главный врач","uz":"bosh shifokor"},
   "старшая медсестра": {"en":"senior nurse","ru":"старшая медсестра","uz":"katta hamshira"},
   // LIST_ACTIONS_V1 — действия строки списка
@@ -3130,6 +3132,10 @@ export const STRINGS = {
   "Лаборант": {"en":"Lab technician","ru":"Лаборант","uz":"Laborant"},
   "Склад": {"en":"Stock","ru":"Склад","uz":"Ombor"},
   "Колл-центр": {"en":"Call center","ru":"Колл-центр","uz":"Qo'ng'iroq markazi"},
+  // CALLCENTER_OPERATOR_V1 — так роль `callcenter` называется в списках ролей
+  // («Настройки → Роли», карточка сотрудника, отделы). «Колл-центр» выше —
+  // РАЗДЕЛ меню и модуль лицензии, и он остался собой.
+  "Оператор колл-центра": {"en":"Call-centre operator","ru":"Оператор колл-центра","uz":"Kol-markaz operatori"},
   // Группы и модули permissions.js NAV_MODULES. «Overview» — единственная
   // группа, чей ИСХОДНИК английский (permissions.js:41); запись здесь даёт ей
   // русское имя, не трогая общий для всех ворот файл.
