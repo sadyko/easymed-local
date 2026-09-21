@@ -55,7 +55,7 @@ import { levelsFor, openAction, actionFor, levelFromActions, actionsFromLevel }
 // ROLES_MATRIX_V1 — матрица «раздел → окно → действие» по общему справочнику
 // прав (shared/permission-catalog.js). Старые поля sections/levels выводятся
 // из неё при сохранении, чтобы прежние ворота продолжали работать.
-import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm5';
+import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm6';
 
 // ROLE_KEYS_V2 — матрица строится из permissions.js NAV_MODULES, того же
 // списка, который читают сами ворота бокового меню. Когда-то это была вторая
@@ -236,12 +236,16 @@ export async function renderRolesEditor(container, { onBack } = {}) {
     function collect() {
         // ROLES_MATRIX_V1 — источник правды теперь grants; старые sections/levels
         // выводятся из них, а неизвестные справочнику ключи переносятся как есть.
-        // CALLCENTER_OPERATOR_V1 — второй довод у сбора: ключи, записанные у роли
-        // САМИ. По ним видно, какое «Нет» у раздела — решение администратора
-        // (тогда оно закрывает и всё, что внутри), а какое лишь выведено из
-        // старой галочки (тогда оно ничего не отнимает у точечно выданного
-        // ключа). Подробности — в collectGrants.
-        const grants = collectGrants(state.grantControls || {}, state.explicitGrants || {});
+        // CALLCENTER_OPERATOR_V1 — сбор должен отличать РЕШЕНИЕ от догадки
+        // экрана, и для этого ему нужны оба списка: ключи, записанные у роли
+        // САМИ (explicitGrants), и разделы, закрытые в этот заход
+        // (closedSections). «Нет», выведенное из старой галочки, ничего не
+        // отнимает и само в матрицу не пишется — иначе сервер прочитал бы его
+        // как решение. Подробности — в collectGrants.
+        const grants = collectGrants(state.grantControls || {}, {
+            explicit: state.explicitGrants || {},
+            closed: state.closedSections,
+        });
         const { sections, levels } = legacyFromGrants(grants, state.prevLegacy || {});
         // ROLE_SAVE_PRESERVE_V1 — вкладки, которых этот экран не рисует,
         // переносим как есть: иначе сохранение роли молча стирало бы настройку,
@@ -500,7 +504,12 @@ export async function renderRolesEditor(container, { onBack } = {}) {
             'Уровни вложены: «Изменение» включает «Просмотр», «Удаление» — всё вместе. Подпись под строкой — что даёт выбранный уровень; наведите на уровень, чтобы узнать, что даст он.'));
         const matrixHost = h('div', { class: 'rm' });
         card.appendChild(matrixHost);
-        state.grantControls = paintCatalog(matrixHost, grants, { onAnyChange: paintReach, openSections: state.openSections });
+        // Набор закрытых заводится НА КАЖДУЮ РОЛЬ заново: решение, принятое про
+        // одну роль, про соседнюю не значит ничего.
+        state.closedSections = new Set();
+        state.grantControls = paintCatalog(matrixHost, grants, {
+            onAnyChange: paintReach, openSections: state.openSections, closedSections: state.closedSections,
+        });
 
         // PATIENT_TAB_ACCESS_V1 — вкладки карты пациента. Владелец: «we need to
         // add a patients card tabs to the view/edit/delete option». Отдельная

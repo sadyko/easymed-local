@@ -111,24 +111,34 @@ export function legacyFromGrants(grants, prev = {}) {
  * появления строк матрицы одна галочка раздела отказывала. Погасить — это про
  * экран; ОТНЯТЬ — это про то, что уезжает в базу.
  *
- * `explicit` — ключи, записанные у роли САМИ (perms.grants), а не выведенные
- * экраном из старых полей, и разница тут решающая. «Нет» у раздела бывает
- * ВЫВЕДЕННЫМ: роли, которой миграция выдала один ключ точечно (crm.dial
- * регистратуре), раздел CRM рисуется из старой галочки, и она может быть
- * закрыта. Обнули мы по такому «Нет» всё внутри — и сохранение молча отняло бы
- * у роли выданный телефон, хотя администратор ничего не закрывал. Поэтому
- * раздел закрывает только то «Нет», которое в матрице роли ЗАПИСАНО: решение,
- * а не догадка экрана. Ровно так же смотрит и сервер (services/grants.js:
- * раздел закрыт, когда его уровень настроен явно).
+ * ЧТО СЧИТАЕТСЯ РЕШЕНИЕМ. «Нет» у раздела бывает ВЫВЕДЕННЫМ: у роли, которой
+ * миграция выдала ключ точечно (crm.dial колл-центру), раздел CRM рисуется из
+ * старой галочки, и она может быть не отмечена. Решение — это `explicit`
+ * (ключи, записанные у роли САМИ, perms.grants) и `closed` (разделы, которые
+ * закрыли ЗДЕСЬ И СЕЙЧАС). Всё остальное — догадка экрана, и с ней делается
+ * две вещи, обе обязательные:
  *
- * Раздел, закрытый ЗДЕСЬ И СЕЙЧАС, обнуляет свои строки сразу (paintCatalog),
- * поэтому сюда они приходят уже нулями — и этой оговорки не касаются.
+ *   1. по ней НИЧЕГО не обнуляется — иначе сохранение молча отняло бы у роли
+ *      выданный телефон, хотя администратор ничего не закрывал;
+ *   2. она и сама НЕ ЗАПИСЫВАЕТСЯ. Это второе важнее первого и стоило
+ *      отдельного разбора: сохранение пишет матрицу ЦЕЛИКОМ, и уехавшее в неё
+ *      `crm: none` сервер от решения уже не отличит (grants.js: раздел закрыт,
+ *      когда его уровень настроен ЯВНО) — он закроет по нему все ключи
+ *      телефонии, а экран будет показывать «Позвонить пациенту: Изменение».
+ *      Беда приходила через шаг: достаточно было открыть роль, поправить
+ *      постороннее и нажать «Сохранить».
+ *
+ * Раздел, закрытый здесь и сейчас, обнуляет свои строки сразу (paintCatalog),
+ * поэтому сюда они приходят уже нулями; clamp ниже — страховка и починка тех
+ * записей, что сделаны до этой правки.
  */
-export function collectGrants(controls, explicit = {}) {
+export function collectGrants(controls, { explicit = {}, closed = null } = {}) {
     const out = {};
     for (const [key, ctl] of Object.entries(controls)) out[key] = ctl.value();
     for (const s of CATALOG) {
-        if (!(s.key in (explicit || {})) || out[s.key] !== 'none') continue;
+        if (!(s.key in out) || out[s.key] !== 'none') continue;
+        const decided = (s.key in (explicit || {})) || !!(closed && closed.has(s.key));
+        if (!decided) { delete out[s.key]; continue; }
         for (const r of [...(s.windows || []), ...(s.actions || [])]) {
             if (r.key in out) out[r.key] = 'none';
         }
@@ -232,10 +242,17 @@ function paintCount(box, s, controls) {
  * `onAnyChange` зовётся после каждого переключения — для сводки словами.
  * `openSections` — Set ключей раскрытых разделов; экран отдаёт один и тот же
  * на все свои перерисовки, чтобы раскрытое пережило смену роли.
+ * `closedSections` — Set, куда складываются разделы, закрытые В ЭТОТ ЗАХОД:
+ * по нему collectGrants отличает решение администратора от «Нет», выведенного
+ * из старых полей. Его заводят на КАЖДУЮ роль заново — решение, принятое про
+ * одну роль, про соседнюю ничего не значит.
  */
-export function paintCatalog(host, grants, { onAnyChange = null, openSections = new Set() } = {}) {
+export function paintCatalog(host, grants, { onAnyChange = null, openSections = new Set(), closedSections = null } = {}) {
     const controls = {};
     const panels = [];   // [{key, open(bool)}] — для «Развернуть все / Свернуть все»
+    // Уровни строк, обнулённых закрытием раздела: закрыть и тут же передумать —
+    // обычное движение руки, и оно не должно стоить всей настройки раздела.
+    const closedLevels = new Map();
 
     host.appendChild(h('div', { class: 'rm-toolbar' },
         h('button', { type: 'button', class: 'link-btn rm-toolbar-btn', onclick: () => { for (const p of panels) p.open(true); } }, tr('Развернуть все')),
@@ -259,7 +276,12 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
             // Обнулять обязательно: погашенный переключатель сохраняет прежний
             // уровень, и «Нет» у раздела при «Просмотре» у его окна — это не
             // выдумка, а ровно то, что уезжало в базу (см. collectGrants).
-            for (const k of kids) { k.disable(lvl === 'none'); if (lvl === 'none') k.close(); }
+            // Открыли обратно — строки возвращаются: передумать администратору
+            // не должно стоить всей настройки раздела.
+            for (const k of kids) { k.disable(lvl === 'none'); if (lvl === 'none') k.close(); else k.reopen(); }
+            // Закрытие ЗДЕСЬ И СЕЙЧАС — решение, и только оно уезжает в базу как
+            // «Нет» раздела (collectGrants).
+            if (closedSections) { if (lvl === 'none') closedSections.add(s.key); else closedSections.delete(s.key); }
             paintCount(count, s, controls);
             hint.hidden = lvl !== 'none' || !kids.length;
             setOpen(true);
@@ -306,7 +328,21 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
                 const p = levelPicker(r, lvl, (l) => { paintNote(rnote, r, l); paintCount(count, s, controls); if (onAnyChange) onAnyChange(); },
                     { disabled: sectionLvl === 'none' });
                 controls[r.key] = p;
-                kids.push({ disable: (on) => p.disable(on), close: () => { p.set('none'); paintNote(rnote, r, 'none'); } });
+                kids.push({
+                    disable: (on) => p.disable(on),
+                    close: () => {
+                        const was = p.value();
+                        if (was !== 'none') closedLevels.set(r.key, was);
+                        p.set('none'); paintNote(rnote, r, 'none');
+                    },
+                    // Возвращаем только то, что сами же и обнулили, и только если
+                    // строка так и стоит в «Нет»: чужого выбора трогать нельзя.
+                    reopen: () => {
+                        const was = closedLevels.get(r.key);
+                        if (!was || p.value() !== 'none') return;
+                        p.set(was); paintNote(rnote, r, was);
+                    },
+                });
                 body.appendChild(h('div', { class: 'rm-row rm-row-sub' },
                     h('div', { class: 'rm-name' },
                         h('div', { class: 'rm-title' }, tr(r.label)),
