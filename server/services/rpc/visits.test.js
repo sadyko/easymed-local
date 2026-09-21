@@ -451,3 +451,43 @@ test('CRM_REAL_BOOKING_V1: выставленный счёт делает виз
   assert.equal(out.reason, 'day_visit_busy');
   assert.equal(Date.parse(out.visit.visit_date), Date.parse(first.visit.visit_date));
 });
+
+// ПЕРЕНОС НАЗЫВАЕТ, ОТКУДА (разбор ревью). Перенос молча переписывал и время,
+// и врача: оператор видел «записано» и не знал, что запись у Иванова на
+// 16:00 только что стала записью у Петрова на 09:15. Ответ несёт прежние
+// значения, чтобы экран мог сказать это словами.
+test('CRM_REAL_BOOKING_V1: перенос отдаёт прежнее время и врача, а в базе — новые', async () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_active, specialty) VALUES (3,'d2','x','Петров','doctor',1,'')").run();
+  const first = await ensureVisit(db, {
+    patient_id: 1, date: '2026-08-09',
+    book: { doctor_id: 2, start: '2026-08-09T11:00:00Z' },
+  }, REG);
+  assert.equal(first.booked, true);
+
+  const moved = await ensureVisit(db, {
+    patient_id: 1, date: '2026-08-09',
+    book: { doctor_id: 3, start: '2026-08-09T04:15:00Z' },
+  }, REG);
+
+  assert.equal(moved.moved, true);
+  assert.equal(moved.booked, true);
+  assert.deepEqual(moved.from, { start: hhmm('2026-08-09T11:00:00Z'), doctor_id: 2, doctor_name: 'Doc' },
+    'перенос не назвал, откуда: экрану нечего сказать оператору');
+  const row = db.prepare('SELECT visit_date, doctor_id FROM visits WHERE id=?').get(first.visit.id);
+  assert.equal(Date.parse(row.visit_date), Date.parse('2026-08-09T04:15:00Z'), 'в базе осталось старое время');
+  assert.equal(row.doctor_id, 3, 'в базе остался старый врач');
+  assert.equal(moved.visit.doctor_id, 3);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visits WHERE patient_id=1').get().n, 1, 'один пациент — один визит дня');
+});
+
+test('CRM_REAL_BOOKING_V1: у переноса визита без врача from.doctor_id пуст, а не выдуман', async () => {
+  const db = freshDb();
+  const first = await ensureVisit(db, { patient_id: 1, date: '2026-08-09T09:00:00Z' }, REG);   // без врача
+  const moved = await ensureVisit(db, {
+    patient_id: 1, date: '2026-08-09',
+    book: { doctor_id: 2, start: '2026-08-09T14:30:00Z' },
+  }, REG);
+  assert.equal(moved.moved, true);
+  assert.deepEqual(moved.from, { start: hhmm(first.visit.visit_date), doctor_id: null, doctor_name: '' });
+});

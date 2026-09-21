@@ -420,6 +420,15 @@ export async function ensureVisit(db, args, user) {
   // ставит время, пустому визиту дня — переносит. Сюда доходят только те,
   // кого просили записать (выше стоит ранний возврат без `book`).
   if (book) {
+    // Прежние время и врач — ДО переноса, для ответа `from` (см. ниже).
+    const wasDoctor = !out.created && out.visit.doctor_id
+      ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(out.visit.doctor_id)
+      : null;
+    const was = out.created ? null : {
+      start: formatHhmm(minutesOfLocal(Date.parse(out.visit.visit_date))),
+      doctor_id: out.visit.doctor_id,
+      doctor_name: (wasDoctor && wasDoctor.full_name) || '',
+    };
     try {
       const bk = await calendarBook(db, {
         visit_id: out.visit.id,
@@ -434,9 +443,12 @@ export async function ensureVisit(db, args, user) {
       out.visit = bk.visit;
       out.emergency = !!bk.emergency;
       if (bk.cross_branch) out.cross_branch = bk.cross_branch;
-      // ПЕРЕНОС НАЗЫВАЕТСЯ ПЕРЕНОСОМ: экрану надо сказать оператору не
-      // «записано», а «запись перенесена на 14:30» — это разные новости.
-      if (!out.created) out.moved = true;
+      // ПЕРЕНОС НАЗЫВАЕТСЯ ПЕРЕНОСОМ И НАЗЫВАЕТ, ОТКУДА: экрану надо сказать
+      // оператору не «записано», а «приём перенесён с 16:00 (Иванов) на
+      // 09:15» — это разные новости, и вторая половина фразы берётся из
+      // `from`. Врач переносится вместе со временем (день пациента — один
+      // визит), и если он сменился, прежний тоже назван.
+      if (!out.created) { out.moved = true; out.from = was; }
     } catch (e) {
       // ОТКАТ. Сюда попадает настоящая гонка — соседний оператор занял слот в
       // те миллисекунды, что прошли между проверкой и записью. Строка,
