@@ -48,6 +48,12 @@ import { fadeOutAndRemove } from '../motion.js?v=mo1';   // MOTION_DIALOG_V1
 // модуль: вторая копия сборщика со своим состоянием, и расхождение ничем не
 // видно, кроме потерянных данных.
 import { buildPatientFields, openDuplicatePatientDialog } from './patient-create-modal.js?v=onewin1';
+// MODAL_STACK_V1 — «стоит ли кто-то поверх меня» считает ОДИН помощник на всё
+// приложение. Здесь и в каталоге услуг это правило было написано дважды и
+// по-разному (один читал только встроенный z-index, другой — ещё и
+// вычисленный), а две копии одного правила расходятся молча: наружу это
+// выходит как «Esc закрыл не то окно».
+import { coveredByHigherModal } from './modal-stack.js?v=ms1';
 
 /**
  * ЭТАЖ ЭТОГО ОКНА — и он вынесен наружу намеренно.
@@ -117,48 +123,21 @@ export function openQuickPatientModal({
     const close = () => { if (state.saving) return; dismiss(); };
 
     /**
-     * Этаж чужой подложки. Встроенный стиль — то, чем его задают все окна
-     * продукта (h('div', { class: 'modal', style: { zIndex: '150' } })).
-     * Вычисленный стиль спрашиваем только там, где он есть: в поддельном DOM
-     * проверок его нет, и без этой оговорки проверка падала бы на ровном месте.
-     */
-    function overlayZ(el) {
-        const inline = Number((el.style && el.style.zIndex) || 0);
-        if (inline) return inline;
-        try {
-            if (typeof window !== 'undefined' && typeof window.getComputedStyle === 'function') {
-                return Number(window.getComputedStyle(el).zIndex) || 0;
-            }
-        } catch (e) { /* вычисленного стиля нет — считаем по встроенному */ }
-        return 0;
-    }
-
-    /**
      * Стоит ли ПОВЕРХ этого окна чужой диалог.
      *
      * Окно открывает поверх себя стража дубликатов, а тот слушает тот же
      * document. Без этой проверки Esc, закрывающий вопрос о дубле, сносил бы
      * заодно и само окно вместе с набранными полями.
      *
-     * Ищем не по имени: у стража дубликатов data-dialog стоит на карточке, а
-     * не на подложке. Общее у всех одно — своя подложка .modal в document.body.
-     *
-     * СЧИТАЕТСЯ ТОЛЬКО ЭТАЖ ВЫШЕ НАШЕГО, и это вся суть проверки. Соседняя
-     * подложка — это ещё и ТЕ, КТО ОКНО ПОЗВАЛ: каталог услуг (130), привязка
-     * пациента в нём (150), карточка CRM. Они стоят ПОД окном и заслонить его
-     * не могут. Считая их дочерними, окно глохло ровно в самом частом случае —
-     * когда его открыли из каталога: Esc не закрывал, Enter не сохранял, и на
-     * экране это читалось как «окно зависло».
+     * СЧИТАЕТСЯ ТОЛЬКО ЭТАЖ ВЫШЕ НАШЕГО, и это вся суть проверки (правило —
+     * в modal-stack.js). Соседняя подложка — это ещё и ТЕ, КТО ОКНО ПОЗВАЛ:
+     * каталог услуг (130), привязка пациента в нём (150), карточка CRM. Они
+     * стоят ПОД окном и заслонить его не могут. Считая их дочерними, окно
+     * глохло ровно в самом частом случае — когда его открыли из каталога: Esc
+     * не закрывал, Enter не сохранял, и на экране это читалось как «окно
+     * зависло».
      */
-    function childDialogOpen() {
-        const kids = (typeof document !== 'undefined' && document.body && document.body.children) || [];
-        for (const el of kids) {
-            if (!el || el === overlay) continue;
-            if (!String(el.className || '').split(/\s+/).includes('modal')) continue;
-            if (overlayZ(el) > QUICK_PATIENT_Z) return true;
-        }
-        return false;
-    }
+    const childDialogOpen = () => coveredByHigherModal(overlay);
 
     const onKey = (e) => { if (e.key === 'Escape' && !childDialogOpen()) close(); };
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));

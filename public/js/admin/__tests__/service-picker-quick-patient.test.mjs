@@ -374,3 +374,94 @@ test('своей мини-формы заведения пациента в ка
   assert.strictEqual(mine[1], theirs[1],
     'каталог и CRM грузят ДВЕ копии окна: ?v=' + mine[1] + ' против ?v=' + theirs[1]);
 });
+
+// ===========================================================================
+// 6. ПРАВИЛО «КТО СТОИТ ПОВЕРХ МЕНЯ» — ОДНО НА ВСЕХ.
+//
+// Оно было написано дважды и по-разному: каталог услуг читал только встроенный
+// style.zIndex, окно заведения — встроенный, а при его отсутствии вычисленный.
+// Две копии одного правила расходятся молча: окно, чей этаж задан классом, для
+// одного считается нулевым, а для другого — своим, и наружу это выходит как
+// «Esc закрыл не то окно».
+// ===========================================================================
+const { coveredByHigherModal, modalZ, BASE_MODAL_Z } = await import('../views/modal-stack.js');
+
+test('правило «кто поверх меня» живёт в одном месте, а не в двух копиях', () => {
+  for (const rel of ['views/service-picker-modal.js', 'views/quick-patient-modal.js']) {
+    const src = srcOf(rel);
+    assert.ok(/from '\.\/modal-stack\.js/.test(src), rel + ' не зовёт общее правило этажей');
+    assert.ok(!/function coveredByHigherModal/.test(src), rel + ' держит свою копию coveredByHigherModal');
+    assert.ok(!/function overlayZ/.test(src), rel + ' держит свою копию overlayZ');
+  }
+
+  // Окно без встроенного z-index стоит НА ОБЩЕМ ЭТАЖЕ ОКОН (правило .modal в
+  // admin.css), а не на нулевом: считать его ниже всех значило бы пускать
+  // Escape мимо него.
+  assert.strictEqual(BASE_MODAL_Z, 100, 'общий этаж окон разошёлся с правилом .modal в admin.css');
+  const bare = document.createElement('div');
+  bare.className = 'modal';
+  assert.strictEqual(modalZ(bare), BASE_MODAL_Z, 'окно без встроенного этажа посчитано нулевым');
+});
+
+test('окно выше — накрывает, окно ниже — нет', () => {
+  reset();
+  const mineOv = document.createElement('div');
+  mineOv.className = 'modal'; mineOv.style.zIndex = '150';
+  document.body.appendChild(mineOv);
+  assert.strictEqual(coveredByHigherModal(mineOv), false, 'чужих окон нет, а окно считает себя накрытым');
+
+  const below = document.createElement('div');
+  below.className = 'modal'; below.style.zIndex = '130';
+  document.body.appendChild(below);
+  assert.strictEqual(coveredByHigherModal(mineOv), false,
+    'позвавшего (130) приняли за окно поверх — Esc и Enter заглохнут ровно там, где их ждут');
+
+  const above = document.createElement('div');
+  above.className = 'modal'; above.style.zIndex = '160';
+  document.body.appendChild(above);
+  assert.strictEqual(coveredByHigherModal(mineOv), true, 'окно поверх (160) не замечено');
+});
+
+// ===========================================================================
+// 7. У ВЕРХНЕГО ОКНА ДОЛЖЕН БЫТЬ СВОЙ ESCAPE.
+//
+// Каталог услуг под чужим окном Escape больше не берёт (правило выше). Значит
+// диалог, у которого своего обработчика нет, стал окном, которое клавишей не
+// закрыть ВОВСЕ — а два диалога шаблонов сметы (170) именно такими и были.
+// ===========================================================================
+
+/** Калькулятор с одной услугой в смете — без окна привязки пациента. */
+async function openCalc() {
+  openServicePickerModal({ calculator: true, title: 'Калькулятор услуг', onPick: () => {} });
+  await tick(40);
+  const box = overlays()[overlays().length - 1];
+  assert.ok(box, 'каталог не открылся');
+  const add = byClass(box, 'wzc-svc').filter((r) => textOf(r).includes('Приём терапевта'))
+    .map((r) => byClass(r, 'wzc-add')[0]).find(Boolean);
+  assert.ok(add, 'услугу нечем добавить в смету');
+  add.click();
+  await tick(30);
+  return box;
+}
+
+for (const [label, what] of [['Сохранить как шаблон', 'сохранения шаблона'], ['Выбрать шаблон', 'выбора шаблона']]) {
+  test('Esc в диалоге «' + label + '» закрывает его, а каталог оставляет', async () => {
+    reset();
+    const box = await openCalc();
+    const btn = btnByText(box, label);
+    assert.ok(btn, 'в каталоге нет кнопки «' + label + '»');
+    btn.click();
+    await tick(40);
+
+    const dlg = overlays().find((o) => String(o.style.zIndex) === '170');
+    assert.ok(dlg, 'диалог ' + what + ' не открылся');
+
+    document.dispatchEvent({ type: 'keydown', key: 'Escape' });
+    await tick(40);
+
+    assert.ok(!document.body.children.includes(dlg),
+      'Esc не закрыл диалог ' + what + ' — клавишей его теперь не закрыть вовсе');
+    assert.ok(document.body.children.includes(box),
+      'Esc снёс каталог из-под диалога ' + what + ' — набранная смета пропала');
+  });
+}

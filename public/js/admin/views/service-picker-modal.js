@@ -47,6 +47,19 @@ import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionPa
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
 // строк живут в одном модуле на все окна: копии этого кода уже разъезжались.
 import { closeCrmLines, pendingCrmLines } from '../crm-lines.js';
+// MODAL_STACK_V1 — ESCAPE ПРИНАДЛЕЖИТ ВЕРХНЕМУ ОКНУ.
+//
+// Каталог услуг слушает Escape на document всё время, пока открыт. Но поверх
+// него встают чужие окна на своих этажах: привязка пациента (150), окно
+// «Новый пациент» (155), страж дубликатов (160), шаблоны сметы (170). Слушают
+// они ТОТ ЖЕ document, и один Escape доходил до обоих: верхнее окно
+// закрывалось правильно, а каталог под ним — заодно, вместе с набранной сметой
+// и привязанным пациентом.
+//
+// Правило живёт в одном месте на всё приложение (views/modal-stack.js): две
+// копии одного правила расходятся молча, и наружу это выходит как «Esc закрыл
+// не то окно».
+import { coveredByHigherModal } from './modal-stack.js?v=ms1';
 
 // PROC_PERFORMER_V1 — роли, которым можно поручить процедуру. Врач сюда
 // попадает НЕ отсюда, а по is_doctor (ADMIN_DOCTOR_LIST_V1) — см.
@@ -65,34 +78,6 @@ function bookedSummary(visit, vsRows) {
             scheduled_at: (r.a && r.a.startISO) || null,
         })),
     };
-}
-
-/**
- * QUICK_PATIENT_V1 — ESCAPE ПРИНАДЛЕЖИТ ВЕРХНЕМУ ОКНУ.
- *
- * Каталог услуг слушает Escape на document всё время, пока открыт. Но поверх
- * него встают чужие окна на своих этажах: привязка пациента (150), общее окно
- * заведения (155), страж дубликатов (160). Слушают они ТОТ ЖЕ document, и один
- * Escape доходил до обоих: верхнее окно закрывалось правильно, а каталог под
- * ним — заодно, вместе с набранной сметой и привязанным пациентом. На экране
- * это читалось как «нажал Esc в окне заведения — пропал весь расчёт».
- *
- * Правило одно на все этажи и не зависит от имён окон: есть в документе
- * подложка .modal выше моей — Escape не мой.
- *
- * @param {object} own моя подложка (.modal со своим z-index)
- */
-function coveredByHigherModal(own) {
-    if (!own) return false;
-    const zOf = (el) => Number((el && el.style && el.style.zIndex) || 0);
-    const mine = zOf(own);
-    const kids = (typeof document !== 'undefined' && document.body && document.body.children) || [];
-    for (const el of kids) {
-        if (!el || el === own) continue;
-        if (!String(el.className || '').split(/\s+/).includes('modal')) continue;
-        if (zOf(el) > mine) return true;
-    }
-    return false;
 }
 
 export function openServicePickerModal({
@@ -1668,7 +1653,15 @@ export function openServicePickerModal({
     function saveCartTemplate() {
         if (!state.added.length) return;
         const ov = h('div', { class: 'modal', style: { zIndex: '170' } });
-        ov.appendChild(h('div', { class: 'modal-backdrop', onclick: () => ov.remove() }));
+        // MODAL_STACK_V1 — У ВЕРХНЕГО ОКНА ДОЛЖЕН БЫТЬ СВОЙ ESCAPE.
+        //
+        // Каталог услуг под этим диалогом Escape больше не берёт (он проверяет
+        // coveredByHigherModal), и без своего обработчика диалог стал окном,
+        // которое клавишей не закрыть вовсе. Закрывает он ТОЛЬКО себя: каталог
+        // со сметой, из которой шаблон и собирают, обязан остаться.
+        const shut = () => { document.removeEventListener('keydown', onEsc); ov.remove(); };
+        const onEsc = (e) => { if (e.key === 'Escape') shut(); };
+        ov.appendChild(h('div', { class: 'modal-backdrop', onclick: shut }));
         const nameIn = h('input', { class: 'tp-input', placeholder: 'Название шаблона', style: { width: '100%', marginTop: '10px' } });
         const doSave = async (btn) => {
             const name = nameIn.value.trim();
@@ -1686,33 +1679,39 @@ export function openServicePickerModal({
                 toast(tr('Шаблон не сохранён') + ': ' + msg, 'fail'); btn.disabled = false; return;
             }
             toast(tr('Шаблон сохранён'), 'ok');
-            ov.remove();
+            shut();
         };
         nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSave(ov.querySelector('.btn-primary')); });
         ov.appendChild(h('div', { class: 'modal-card', style: { width: '380px', maxWidth: 'calc(100vw - 32px)' } },
             h('header', { class: 'modal-head' }, h('h2', null, 'Сохранить как шаблон'),
-                h('button', { class: 'modal-close', onclick: () => ov.remove() }, '×')),
+                h('button', { class: 'modal-close', onclick: shut }, '×')),
             h('div', { class: 'modal-body', style: { display: 'block' } },
                 h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Шаблон сохранит список услуг — врач и время выбираются при записи.'),
                 nameIn),
             h('footer', { class: 'modal-foot' },
-                h('button', { class: 'btn', onclick: () => ov.remove() }, 'Отмена'),
+                h('button', { class: 'btn', onclick: shut }, 'Отмена'),
                 h('button', { class: 'btn btn-primary', onclick: (e) => doSave(e.currentTarget) }, 'Сохранить'))));
         document.body.appendChild(ov);
+        document.addEventListener('keydown', onEsc);
         setTimeout(() => nameIn.focus(), 50);
     }
 
     async function openTemplatePicker() {
         const ov = h('div', { class: 'modal', style: { zIndex: '170' } });
-        ov.appendChild(h('div', { class: 'modal-backdrop', onclick: () => ov.remove() }));
+        // MODAL_STACK_V1 — свой Escape, закрывающий ТОЛЬКО этот диалог (см.
+        // saveCartTemplate выше): каталог под ним Escape больше не берёт.
+        const shut = () => { document.removeEventListener('keydown', onEsc); ov.remove(); };
+        const onEsc = (e) => { if (e.key === 'Escape') shut(); };
+        ov.appendChild(h('div', { class: 'modal-backdrop', onclick: shut }));
         const listEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '50vh', overflowY: 'auto' } },
             h('div', { class: 'muted', style: { padding: '14px', textAlign: 'center' } }, 'Загрузка…'));
         ov.appendChild(h('div', { class: 'modal-card', style: { width: '420px', maxWidth: 'calc(100vw - 32px)' } },
             h('header', { class: 'modal-head' }, h('h2', null, 'Шаблоны'),
-                h('button', { class: 'modal-close', onclick: () => ov.remove() }, '×')),
+                h('button', { class: 'modal-close', onclick: shut }, '×')),
             h('div', { class: 'modal-body', style: { display: 'block' } }, listEl),
-            h('footer', { class: 'modal-foot' }, h('button', { class: 'btn', onclick: () => ov.remove() }, 'Закрыть'))));
+            h('footer', { class: 'modal-foot' }, h('button', { class: 'btn', onclick: shut }, 'Закрыть'))));
         document.body.appendChild(ov);
+        document.addEventListener('keydown', onEsc);
         let q = supabase.from('service_templates').select('id, name, service_ids').eq('active', true).order('name');
         if (window.CLINIC && window.CLINIC.id) q = q.eq('company_id', window.CLINIC.id);
         const { data, error } = await q;
@@ -1730,7 +1729,7 @@ export function openServicePickerModal({
             const ids = Array.isArray(t.service_ids) ? t.service_ids : [];
             const row = h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', border: '1px solid var(--ink-100, #e8ecef)', borderRadius: '10px', padding: '9px 12px' } },
                 h('button', { type: 'button', style: { flex: '1 1 auto', minWidth: 0, border: '0', background: 'none', cursor: 'pointer', font: 'inherit', textAlign: 'left', padding: '0' },
-                    onclick: async () => { ov.remove(); await applyServiceTemplate(t); } },
+                    onclick: async () => { shut(); await applyServiceTemplate(t); } },
                     h('div', { style: { fontWeight: 700, fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('услуг') + ': ' + ids.length)),
                 h('button', { type: 'button', title: 'Удалить шаблон',
