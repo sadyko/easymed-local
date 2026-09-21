@@ -5479,7 +5479,6 @@ export const STRINGS = {
   "Показать ещё {n} · всего {total}": {"en":"Show {n} more · {total} total","ru":"Показать ещё {n} · всего {total}","uz":"Yana {n} ko'rsatish · jami {total}"},
   "Покрывает плательщик — распределение на шаге «Кто платит».": {"en":"Covered by the payer — the split is on the “Who pays” step.","ru":"Покрывает плательщик — распределение на шаге «Кто платит».","uz":"To'lovchi qoplaydi — taqsimlash «Kim to'laydi» bosqichida."},
   "Покрытые услуги: счёт не выставляется, печатается акт оказанных услуг.": {"en":"Covered services: no invoice is issued; an act of delivered services prints.","ru":"Покрытые услуги: счёт не выставляется, печатается акт оказанных услуг.","uz":"Qoplangan xizmatlar: hisob-faktura chiqarilmaydi, ko'rsatilgan xizmatlar dalolatnomasi chop etiladi."},
-  "Полная анкета — на странице «Регистратура».": {"en":"The full form is on the Reception page.","ru":"Полная анкета — на странице «Регистратура».","uz":"To'liq anketa — «Registratura» sahifasida."},
   "Похожий пациент уже существует — найдите его через поиск.": {"en":"A similar patient already exists — find them via the search.","ru":"Похожий пациент уже существует — найдите его через поиск.","uz":"O'xshash bemor allaqachon mavjud — uni qidiruv orqali toping."},
   "привяжите пациента": {"en":"link a patient","ru":"привяжите пациента","uz":"bemorni bog'lang"},
   "Промокод {code} исчерпан — не применён.": {"en":"Promo code {code} is used up — not applied.","ru":"Промокод {code} исчерпан — не применён.","uz":"{code} promokodi tugagan — qo'llanmadi."},
@@ -8548,4 +8547,6 @@ export const STRINGS = {
   "Пациент из заявки": {"en":"Patient from the lead","ru":"Пациент из заявки","uz":"Soʻrovdan kelgan bemor"},
   "Пациент не создан.": {"en":"The patient was not created.","ru":"Пациент не создан.","uz":"Bemor yaratilmadi."},
   "Заявка привязана к карте: {who}": {"en":"The lead is linked to the record: {who}","ru":"Заявка привязана к карте: {who}","uz":"Soʻrov kartaga bogʻlandi: {who}"},
+  "Полная анкета": {"en":"Full form","ru":"Полная анкета","uz":"Toʻliq anketa"},
+  "Полная анкета — отдельным окном.": {"en":"The full form opens in its own window.","ru":"Полная анкета — отдельным окном.","uz":"Toʻliq anketa alohida oynada ochiladi."},
 };

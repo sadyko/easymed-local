@@ -1372,8 +1372,30 @@ export function openServicePickerModal({
         }
     }
 
+    /**
+     * QUICK_PATIENT_V1 — ОДИН ВОПРОС НА ВСЕ ВЫХОДЫ, СНОСЯЩИЕ КАТАЛОГ.
+     *
+     * Каталог сносят двое: Escape и кнопка «Полная анкета» в окне привязки
+     * (она уводит в карту пациента вызывающего). Теряется при этом одно и то
+     * же — набранная смета и выбранный в календаре слот, — и спрашивать об
+     * этом обязаны одинаково: второй выход без вопроса и есть та дыра, в
+     * которую уходит работа регистратора.
+     *
+     * Слот считается наравне со сметой: из пустой дорожки календаря каталог
+     * открывают уже С ВЫБРАННЫМ временем, и уход его тоже теряет.
+     *
+     * @returns {boolean} можно ли закрывать
+     */
+    function confirmLeaveCatalog() {
+        const hasWork = (catalogUI && state.added.length > 0) || !!scheduledISO;
+        if (!hasWork) return true;
+        return confirm(attachMode
+            ? 'Закрыть? Выбранные услуги не будут добавлены.'
+            : 'Закрыть мастер записи? Подбор услуг будет потерян.');
+    }
+
     // Second-level modal (z 150, above the picker's 130). Search existing
-    // patients by ФИО / ID / телефон, or «Создать пациента» → onCreatePatient.
+    // patients by ФИО / ID / телефон, or «Полная анкета» → onCreatePatient.
     let _attachOverlay = null;
     function closeAttach() {
         if (_attachOverlay) { _attachOverlay.remove(); _attachOverlay = null; }
@@ -1442,7 +1464,10 @@ export function openServicePickerModal({
             timer = setTimeout(() => search(inp.value.trim()), 250);
         });
 
-        const card = h('div', { class: 'modal-card', style: { width: '460px', maxWidth: 'calc(100vw - 32px)', display: 'flex', flexDirection: 'column' } });
+        // QUICK_PATIENT_V1 — 560 px, а не 460: в подвале теперь подсказка и три
+        // кнопки, и на 460 они наезжали друг на друга. maxWidth оставлен —
+        // на узком экране окно по-прежнему ужимается по экрану, а не по числу.
+        const card = h('div', { class: 'modal-card', style: { width: '560px', maxWidth: 'calc(100vw - 32px)', display: 'flex', flexDirection: 'column' } });
         card.appendChild(h('header', { class: 'modal-head' },
             h('h2', null, Icon('User', { size: 16 }), ' Привязать пациента'),
             h('button', { class: 'modal-close', onclick: () => closeAttach() }, '×'),
@@ -1451,29 +1476,41 @@ export function openServicePickerModal({
         // Две двери, и разница между ними — не в словах, а в том, что останется
         // на экране. «Новый пациент» заводит карту ПОВЕРХ каталога: набранная
         // смета и окно привязки живы, а созданный пациент тут же привязан.
-        // «Создать пациента» уводит в полную анкету вызывающего и каталог
-        // закрывает — поэтому строка слева говорит, куда она ведёт.
-        card.appendChild(h('footer', { class: 'modal-foot' },
-            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Полная анкета — на странице «Регистратура».'),
+        // «Полная анкета» уводит в карту пациента вызывающего и каталог
+        // закрывает — поэтому она и названа иначе, и спрашивает перед уходом.
+        //
+        // Подсказка занимает ЦЕЛУЮ строку (flex: 1 1 100%), а подвал умеет
+        // переносить (flexWrap): .modal-foot переноса не знает, и четвёртый
+        // элемент в ряду выдавливал кнопки за край карточки.
+        const quickBtn = h('button', {
+            class: 'btn btn-primary',
+            onclick: () => { void openQuickPatient(quickBtn); },
+        }, Icon('Plus', { size: 14 }), ' Новый пациент');
+        card.appendChild(h('footer', { class: 'modal-foot', style: { flexWrap: 'wrap' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', flex: '1 1 100%' } }, 'Полная анкета — отдельным окном.'),
             h('span', { class: 'grow' }),
             h('button', { class: 'btn', onclick: () => closeAttach() }, 'Отмена'),
             h('button', {
                 class: 'btn btn-outline',
                 onclick: () => {
-                    if (typeof onCreatePatient === 'function') {
-                        closeAttach();
-                        overlay.remove();
-                        document.removeEventListener('keydown', onKey);
-                        onCreatePatient();
-                    } else {
+                    if (typeof onCreatePatient !== 'function') {
                         toast('Откройте «Создать пациента» на странице пациентов.', 'info');
+                        return;
                     }
+                    // ЭТА КНОПКА СНОСИТ КАТАЛОГ — и спрашивает так же, как Esc.
+                    //
+                    // Из календаря она уводит в Регистратуру, а набранная смета
+                    // и выбранный слот уходят вместе с каталогом. Раньше
+                    // вопроса не было: в режиме калькулятора до этой ветки
+                    // просто не доходили. Теперь путь один и вопрос один.
+                    if (!confirmLeaveCatalog()) return;
+                    closeAttach();
+                    overlay.remove();
+                    document.removeEventListener('keydown', onKey);
+                    onCreatePatient();
                 },
-            }, Icon('User', { size: 14 }), ' Создать пациента'),
-            h('button', {
-                class: 'btn btn-primary',
-                onclick: () => { void openQuickPatient(); },
-            }, Icon('Plus', { size: 14 }), ' Новый пациент'),
+            }, Icon('User', { size: 14 }), ' Полная анкета'),
+            quickBtn,
         ));
         ov.appendChild(card);
         document.body.appendChild(ov);
@@ -1502,23 +1539,43 @@ export function openServicePickerModal({
     // не нужно ни при открытии, ни в большинстве случаев вовсе. Строка запроса
     // (?v=qp1) — ТА ЖЕ, что в карточке CRM: для браузера адрес с другим ?v это
     // ДРУГОЙ модуль, то есть вторая копия со своим состоянием.
-    async function openQuickPatient() {
+    //
+    // ОДНО ОКНО НА НАЖАТИЕ, И ЭТО НЕ ПРИДИРКА. Импорт — это ожидание, кнопка
+    // всё это время нажимается, а два окна на 155-м этаже друг друга не видят
+    // (дочерним считается только этаж ВЫШЕ). Второе, пустое, всплывало бы
+    // ровно после того, как первое сохранило карту, — и следующее нажатие
+    // «Создать пациента» заводило бы вторую карту на того же человека.
+    let _qpLoading = false;   // модуль в пути
+    let _qpDlg = null;        // открытое окно (пока его подложка в документе)
+
+    /** Стоит ли уже открытое окно заведения на экране. */
+    function quickPatientOpen() {
+        if (!_qpDlg || !_qpDlg.overlay) return false;
+        const kids = (typeof document !== 'undefined' && document.body && document.body.children) || [];
+        for (const el of kids) if (el === _qpDlg.overlay) return true;
+        _qpDlg = null;   // окно ушло — замок снят
+        return false;
+    }
+
+    async function openQuickPatient(btn) {
+        if (_qpLoading || quickPatientOpen()) return;
+        _qpLoading = true;
+        if (btn) btn.disabled = true;
+        const release = () => { _qpLoading = false; if (btn) btn.disabled = false; };
         let mod;
         try {
             mod = await import('./quick-patient-modal.js?v=qp1');
         } catch (e) {
+            release();
             toast('Не удалось открыть окно заведения пациента.', 'fail');
             return;
         }
-        mod.openQuickPatientModal({
-            // Окно поиска снимаем ЗДЕСЬ И ЯВНО, а не надеясь на то, что это
-            // сделает привязка. Пациента искать больше незачем — его только что
-            // завели, — а оставшаяся подложка 150 накрыла бы каталог невидимым
-            // стеклом: смета на экране есть, но мышь до неё не доходит.
-            // Окно заведения закрывает себя само: остаётся каталог с той же
-            // сметой — и пациентом в ней.
-            onCreated: (p) => { closeAttach(); attachPatient(p); },
-        });
+        // Окно заведения закрывает себя само, а привязку снимает attachPatient:
+        // оставшаяся подложка 150 накрыла бы каталог невидимым стеклом — смета
+        // на экране есть, но мышь до неё не доходит.
+        _qpDlg = mod.openQuickPatientModal({ onCreated: (p) => attachPatient(p) });
+        // null — права заводить пациента нет, и отказ уже показан окном.
+        release();
     }
 
     function attachPatient(p) {
@@ -3180,7 +3237,7 @@ export function openServicePickerModal({
         // заведение пациента 155, страж дубликатов 160): Escape закрывает ЕГО,
         // а каталог со сметой обязан остаться. См. coveredByHigherModal.
         if (coveredByHigherModal(overlay)) return;
-        if (catalogUI && state.added.length && !confirm(attachMode ? 'Закрыть? Выбранные услуги не будут добавлены.' : 'Закрыть мастер записи? Подбор услуг будет потерян.')) return;
+        if (!confirmLeaveCatalog()) return;
         overlay.remove(); document.removeEventListener('keydown', onKey);
     }
     document.addEventListener('keydown', onKey);
