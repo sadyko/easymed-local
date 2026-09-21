@@ -5,7 +5,7 @@
 import { ensureOpenShift } from './cashier.js';   // SHIFT_AUTO_V2
 // CRM_REAL_BOOKING_V1 — платёж на кассе это доказательство, что пациент
 // здесь: заочно деньги у окна не появляются. См. шапку crm/visit-status.js.
-import { crmInvoiceEvidence } from '../crm/visit-status.js';
+import { crmInvoiceEvidence, crmVisitEvidence } from '../crm/visit-status.js';
 import { invoiceStatusFor } from '../domain/money.js';
 import { unitPriceFor } from '../domain/pricing.js';
 // VISIT_TIER_PRICING_V1 — a line quoted as a second/repeat visit keeps that
@@ -335,7 +335,22 @@ export function createInvoiceForVisit(db, args, user) {
     return { invoice, items };
   });
 
-  return run();
+  const out = run();
+  // CRM_REAL_BOOKING_V1 — СЧЁТ ПО АКТУ ЭТО САМО ПО СЕБЕ ДОКАЗАТЕЛЬСТВО.
+  //
+  // У консультации, выставленной контрагенту (COVERAGE_SPLIT_V1), денег на
+  // кассе не будет НИКОГДА: такие счета из списка кассы исключены, а строки
+  // их услуг остаются в 'added', потому что в очередь их переводит только
+  // оплата — и врачебное «Начать приём» оказывается заперто тем же счётом.
+  // Ни одно из трёх доказательств прихода не наступало, и заявка по такому
+  // пациенту висела вечно.
+  //
+  // Но акт подписывают С ЧЕЛОВЕКОМ: в тот миг, когда счёт по визиту
+  // выставляется контрагенту, пациент стоит у стойки. Обычный счёт пациенту
+  // доказательством не является и здесь не считается — его заводят заранее,
+  // а приходом является оплата (crmInvoiceEvidence).
+  if (out.invoice && out.invoice.payer_id) crmVisitEvidence(db, visitId);
+  return out;
 }
 
 export function recordPayment(db, args, user) {
@@ -539,7 +554,13 @@ export function markInvoiceDebt(db, args, user) {
     return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) };
   });
 
-  return run();
+  const out = run();
+  // CRM_REAL_BOOKING_V1 — «Оставить как долг» нажимают ПЕРЕД ПАЦИЕНТОМ:
+  // кассир договаривается с человеком, что тот заплатит позже. Денег при
+  // этом не появилось, поэтому crmInvoiceEvidence (он требует оплаты) тут не
+  // подходит — доказательством является сам факт разговора у окна.
+  if (out.invoice && out.invoice.visit_id) crmVisitEvidence(db, out.invoice.visit_id);
+  return out;
 }
 
 // SVC_UNPAID_REMOVE_V1 — remove a service line AND repair its invoice in one

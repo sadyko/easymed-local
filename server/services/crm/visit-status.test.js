@@ -15,7 +15,7 @@ import { migrate } from '../../db/migrate.js';
 import { crmVisitStatus, crmVisitEvidence, crmInvoiceEvidence, crmServiceEvidence, ARRIVED_STATUSES, EVIDENCE_SERVICE_STATUSES } from './visit-status.js';
 // Деньги проверяются НАСТОЯЩЕЙ кассой, а не имитацией платежа: доказательством
 // является то, что делает record_payment, а не то, что мы про него думаем.
-import { recordPayment } from '../rpc/billing.js';
+import { recordPayment, markInvoiceDebt, createInvoiceForVisit } from '../rpc/billing.js';
 // CROSS_BRANCH_CALENDAR_V1 — вторая дверь, через которую статус визита может
 // смениться: порция обмена от соседнего здания (branch-sync/records.js).
 import { applyBatch } from '../branch-sync/records.js';
@@ -575,5 +575,113 @@ test('работа над услугой, приехавшая из соседн
 
   assert.equal(line(db, lid).status, 'done', 'услугу выдали в соседнем здании, а строка заявки так и ждёт');
   assert.equal(reqRow(db, rid).status, 'came');
+  db.close();
+});
+
+// ─── ДЕНЬГИ, КОТОРЫХ КАССА НЕ ВИДИТ ────────────────────────────────────────
+//
+// Разбор ревью: у консультации по акту (счёт выставлен контрагенту,
+// COVERAGE_SPLIT_V1) денег на кассе не будет НИКОГДА — такие счета из списка
+// кассы исключены, — а строки её услуг остаются в 'added', потому что в
+// очередь их переводит только оплата. Врачебное «Начать приём» при этом
+// заперто счётом. Итог: ни одного из трёх доказательств не наступает, и
+// заявка по такому пациенту висит вечно.
+//
+// Но в тот миг, когда счёт по акту ВЫСТАВЛЯЕТСЯ по визиту, пациент стоит у
+// стойки: акт подписывают с человеком, а не заочно. Это и есть событие.
+test('счёт по акту (контрагенту) — сам по себе доказательство прихода', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (9,'reg','x','Регистратор','registrar')").run();
+  db.prepare("INSERT INTO services (id, name, price) VALUES (40,'Консультация',100000)").run();
+  db.prepare("INSERT INTO payers (id, name, kind, active) VALUES (3,'Завод','contract',1)").run();
+  const vid = addVisit(db);
+  const rid = addReq(db, { date: '2026-08-09' });
+  const lid = addLine(db, rid, { date: '2026-08-09', visit: vid });
+  const vs = db.prepare(
+    "INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (?,40,1,100000,100000,'added')",
+  ).run(vid).lastInsertRowid;
+
+  createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs], payer_id: 3 }, { id: 9, role: 'registrar' });
+
+  assert.equal(line(db, lid).status, 'done',
+    'акт по визиту выставлен, а строка заявки ждёт: денег на кассе по нему не будет никогда');
+  assert.equal(reqRow(db, rid).status, 'came');
+  db.close();
+});
+
+test('обычный счёт пациенту доказательством НЕ является — он ждёт денег', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (9,'reg','x','Регистратор','registrar')").run();
+  db.prepare("INSERT INTO services (id, name, price) VALUES (40,'Консультация',100000)").run();
+  const vid = addVisit(db);
+  const rid = addReq(db, { date: '2026-08-09' });
+  const lid = addLine(db, rid, { date: '2026-08-09', visit: vid });
+  const vs = db.prepare(
+    "INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (?,40,1,100000,100000,'added')",
+  ).run(vid).lastInsertRowid;
+
+  createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs] }, { id: 9, role: 'registrar' });
+
+  assert.equal(line(db, lid).status, 'pending',
+    'счёт пациенту заводят заранее — приходом является оплата, а не документ');
+  assert.equal(reqRow(db, rid).status, 'scheduled');
+  db.close();
+});
+
+test('долг у кассы — тоже доказательство: человек стоял у окна', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (9,'kassa','x','Кассир','cashier')").run();
+  const vid = addVisit(db);
+  const rid = addReq(db, { date: '2026-08-09' });
+  const lid = addLine(db, rid, { date: '2026-08-09', visit: vid });
+  const inv = db.prepare(`INSERT INTO invoices
+      (invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_by)
+    VALUES ('INV-D', ?, 1, 100000, 0, 100000, 0, 'unpaid', 9)`).run(vid).lastInsertRowid;
+
+  markInvoiceDebt(db, { invoice_id: inv }, { id: 9, role: 'cashier' });
+
+  assert.equal(line(db, lid).status, 'done',
+    'кассир оформил долг — пациент стоял перед ним, — а строка заявки так и ждёт');
+  assert.equal(reqRow(db, rid).status, 'came');
+  db.close();
+});
+
+test('долг по ОТМЕНЁННОМУ визиту доказательством не является', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (9,'kassa','x','Кассир','cashier')").run();
+  const vid = addVisit(db, '2026-08-09T09:00:00Z', 'cancelled');
+  const rid = addReq(db, { date: '2026-08-09' });
+  const lid = addLine(db, rid, { date: '2026-08-09', visit: vid });
+  const inv = db.prepare(`INSERT INTO invoices
+      (invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_by)
+    VALUES ('INV-D2', ?, 1, 100000, 0, 100000, 0, 'unpaid', 9)`).run(vid).lastInsertRowid;
+
+  markInvoiceDebt(db, { invoice_id: inv }, { id: 9, role: 'cashier' });
+
+  assert.equal(line(db, lid).status, 'pending');
+  assert.equal(reqRow(db, rid).status, 'scheduled');
+  db.close();
+});
+
+test('счёт по акту у заявки на три дня оставляет её в «Записан» с ближайшей датой', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (9,'reg','x','Регистратор','registrar')").run();
+  db.prepare("INSERT INTO services (id, name, price) VALUES (40,'Консультация',100000)").run();
+  db.prepare("INSERT INTO payers (id, name, kind, active) VALUES (3,'Завод','contract',1)").run();
+  const vid = addVisit(db);
+  const rid = addReq(db, { date: '2026-08-09' });
+  const d1 = addLine(db, rid, { date: '2026-08-09', visit: vid });
+  const d2 = addLine(db, rid, { date: '2026-08-14' });
+  const vs = db.prepare(
+    "INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (?,40,1,100000,100000,'added')",
+  ).run(vid).lastInsertRowid;
+
+  createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs], payer_id: 3 }, { id: 9, role: 'registrar' });
+
+  assert.equal(line(db, d1).status, 'done');
+  assert.equal(line(db, d2).status, 'pending');
+  const row = reqRow(db, rid);
+  assert.equal(row.status, 'scheduled');
+  assert.equal(row.scheduled_date, '2026-08-14');
   db.close();
 });

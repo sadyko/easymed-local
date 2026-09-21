@@ -120,12 +120,17 @@ function refuseSurgeryWithoutBed(db, meta, body) {
  */
 function crmEvidenceTargets(db, meta, body, user) {
   if (!meta || meta.table !== 'visit_services' || meta.op !== 'update') return [];
-  const status = body && body.values && body.values.status;
-  if (!status || !EVIDENCE_SERVICE_STATUSES.includes(String(status))) return [];
+  if (!hasEvidenceStatus(body)) return [];
   try {
     const sel = compile({ table: body.table, op: 'select', columns: 'id', filters: body.filters }, user);
     return db.prepare(sel.sql).all(...sel.params).map((r) => r.id);
   } catch { return []; }   // отбор не сложился — заявке это не повод падать
+}
+
+/** Несёт ли запрос статус, который человек ставит, только работая с пациентом. */
+function hasEvidenceStatus(body) {
+  const status = body && body.values && body.values.status;
+  return !!status && EVIDENCE_SERVICE_STATUSES.includes(String(status));
 }
 
 export function dbRoutes(db) {
@@ -209,6 +214,17 @@ export function dbRoutes(db) {
           return res.json({ data: null });
         }
         const info = db.prepare(sql).run(...params);
+        // CRM_REAL_BOOKING_V1 — строку услуги заводят и СРАЗУ в рабочем
+        // статусе: кабинет врача добавляет услугу «с ходу» уже начатой. Такая
+        // вставка — то же доказательство прихода, что и перевод статуса
+        // правкой, и пропускать её только потому, что она пришла другой
+        // операцией, значило бы держать правило, работающее через раз.
+        //
+        // Пакетная (массивом) вставка сюда не доходит и не должна: это
+        // выгрузка Excel, а не работа с пациентом у стойки.
+        if (meta.table === 'visit_services' && hasEvidenceStatus(req.body)) {
+          crmServiceEvidence(db, [Number(info.lastInsertRowid)]);
+        }
         if (!meta.returning) return res.json({ data: null });
         const row = db.prepare(
           `SELECT ${readableColumns(meta.table).map((c) => `"${c}"`).join(', ')} FROM "${meta.table}" WHERE rowid = ?`

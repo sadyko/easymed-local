@@ -125,3 +125,42 @@ test('работа по чужому визиту заявку не трогае
     assert.equal(req(db, rid).status, 'scheduled');
   } finally { server.close(); db.close(); }
 });
+
+// M1 (разбор ревью): правило ловило только ПРАВКУ статуса. Строку услуги
+// заводят и сразу в рабочем статусе — кабинет врача добавляет услугу «с
+// ходу» уже начатой, — и такая вставка проходила мимо доказательства.
+test('услуга, заведённая сразу выполненной, тоже закрывает заявку', async () => {
+  const { db, server, base, rid, lid } = await startServer();
+  try {
+    const cookie = await login(base);
+    const res = await fetch(base + '/api/db', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({
+        table: 'visit_services', op: 'insert',
+        values: { visit_id: 500, service_id: 30, quantity: 1, unit_price: 0, total: 0, status: 'completed' },
+      }),
+    });
+    assert.equal(res.status, 200, await res.text());
+
+    assert.equal(line(db, lid).status, 'done', 'услуга заведена выполненной, а строка заявки так и ждёт');
+    assert.equal(req(db, rid).status, 'came');
+  } finally { server.close(); db.close(); }
+});
+
+test('услуга, заведённая в смету, заявку не трогает', async () => {
+  const { db, server, base, rid, lid } = await startServer();
+  try {
+    const cookie = await login(base);
+    const res = await fetch(base + '/api/db', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({
+        table: 'visit_services', op: 'insert',
+        values: { visit_id: 500, service_id: 30, quantity: 1, unit_price: 0, total: 0, status: 'added' },
+      }),
+    });
+    assert.equal(res.status, 200, await res.text());
+
+    assert.equal(line(db, lid).status, 'pending');
+    assert.equal(req(db, rid).status, 'scheduled');
+  } finally { server.close(); db.close(); }
+});
