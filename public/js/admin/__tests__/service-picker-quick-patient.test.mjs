@@ -548,7 +548,10 @@ test('× снимает мастер записи вместе с его Escape:
   reset();
   const asked = [];
   const savedConfirm = globalThis.confirm;
-  globalThis.confirm = (q) => { asked.push(String(q)); return false; };
+  // Здесь проверяется УБОРКА за ушедшим окном, а не вопрос перед уходом: на
+  // вопрос крестика (проверка 11) отвечаем «да», чтобы окно действительно
+  // ушло, а считаем то, что спросят ПОСЛЕ его ухода.
+  globalThis.confirm = (q) => { asked.push(String(q)); return true; };
   try {
     // Мастер записи из пустой дорожки календаря: со слотом и набранной сметой.
     openServicePickerModal({
@@ -570,6 +573,7 @@ test('× снимает мастер записи вместе с его Escape:
     await tick(30);
     assert.ok(!document.body.children.includes(box), '× не снял мастер записи с экрана');
 
+    asked.length = 0;   // вопрос крестика задан и отвечен — дальше считаем чужие
     document.dispatchEvent({ type: 'keydown', key: 'Escape' });
     await tick(30);
 
@@ -646,7 +650,44 @@ test('щелчок мимо окна спрашивает тем же вопро
 });
 
 // ===========================================================================
-// 11. ОКНО ЗАВЕДЕНИЯ НЕ ОТКРЫЛОСЬ — КНОПКА ОСТАЁТСЯ РАБОЧЕЙ.
+// 11. КРЕСТИК СПРАШИВАЕТ ТО ЖЕ САМОЕ.
+//
+// Выходов из каталога много, а правило «что теряется при уходе» одно
+// (confirmLeaveCatalog). Escape и щелчок мимо окна спрашивали, а крестик —
+// самый заметный и самый частый выход — уносил набранную смету молча. Для
+// человека это один и тот же жест «закрыть окно», и разницу между ними он
+// узнаёт ровно один раз: когда смета уже пропала.
+// ===========================================================================
+test('× спрашивает тем же вопросом, и «Отмена» оставляет смету', async () => {
+  reset();
+  const asked = [];
+  const savedConfirm = globalThis.confirm;
+  globalThis.confirm = (q) => { asked.push(String(q)); return false; };
+  try {
+    const box = await openCalc();
+    const x = byClass(box, 'modal-close')[0];
+    assert.ok(x, 'у каталога нет крестика');
+    x.click();
+    await tick(30);
+
+    assert.strictEqual(asked.length, 1, '× с набранной сметой не спросил ни о чём');
+    assert.match(asked[0], /Подбор услуг будет потерян/,
+      '× спрашивает не тем вопросом, что Escape и щелчок мимо: ' + asked[0]);
+    assert.ok(document.body.children.includes(box), 'передумали, а каталог со сметой уже снесён');
+    assert.strictEqual((docListeners.keydown || []).length, 1,
+      'каталог остался на экране, а его Escape уже снят — клавиша перестала его закрывать');
+
+    globalThis.confirm = () => true;
+    x.click();
+    await tick(30);
+    assert.ok(!document.body.children.includes(box), 'согласились, а каталог остался');
+    assert.strictEqual((docListeners.keydown || []).length, 0,
+      '× снял подложку, но оставил Escape ушедшего окна');
+  } finally { globalThis.confirm = savedConfirm; }
+});
+
+// ===========================================================================
+// 12. ОКНО ЗАВЕДЕНИЯ НЕ ОТКРЫЛОСЬ — КНОПКА ОСТАЁТСЯ РАБОЧЕЙ.
 //
 // Замок «модуль в пути» снимался ПОСЛЕ открытия окна. Открытие — чужой код, и
 // упасть оно может: тогда замок оставался поднятым навсегда, а кнопка —

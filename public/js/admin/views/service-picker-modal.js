@@ -274,7 +274,14 @@ export function openServicePickerModal({
 
     card.appendChild(h('header', { class: 'modal-head' },
         h('h2', null, Icon(titleIcon, { size: 16 }), ' ', title),
-        h('button', { class: 'modal-close', onclick: () => closePicker() }, '×'),
+        // Крестик — тот же уход, что Escape и щелчок мимо окна, и спрашивает
+        // он тем же ОДНИМ правилом (confirmLeaveCatalog): молчаливый крестик
+        // уносил набранную смету, а человек узнавал разницу между выходами
+        // ровно один раз — когда терять уже было нечего.
+        h('button', { class: 'modal-close', onclick: () => {
+            if (!confirmLeaveCatalog()) return;
+            closePicker();
+        } }, '×'),
     ));
     // BOOK_WIZARD_V1 — step chips (calculator mode only)
     const wizChipsEl = h('div', { class: 'pkw-steps', style: calculator ? {} : { display: 'none' } });
