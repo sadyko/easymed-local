@@ -38,6 +38,10 @@ const { getRpc } = await import('../../../../server/services/rpc/index.js');
 
 const USER = { id: 1, role: 'registrar', extra_roles: [] };
 let DB = null;
+// CRM_REAL_BOOKING_V1 — подменить ОДИН ответ ensure_visit: перенос и занятый
+// день сервер отдаёт только на просьбу занять время (book:), а этот модуль
+// её не шлёт — но читать ответ целиком обязан, как и остальные две двери.
+let ENSURE_OVERRIDE = null;
 
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
@@ -47,6 +51,7 @@ globalThis.fetch = async (url, opts) => {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     const handler = getRpc(name);
     if (!handler) return { ok: false, status: 501, json: async () => ({ error: { message: 'no rpc ' + name } }) };
+    if (name === 'ensure_visit' && ENSURE_OVERRIDE) return ok(ENSURE_OVERRIDE);
     try { return ok(await handler(DB, body, USER)); }
     catch (e) { return { ok: false, status: e.status || 500, json: async () => ({ error: { code: e.code, message: e.message, params: e.params } }) }; }
   }
@@ -377,4 +382,46 @@ test('НАПРАВЛЕНИЕ: источник записывается в са�
   });
   assert.equal(one('SELECT referral_source_id r FROM visits WHERE id = ?', out.visit.id).r, SOURCE);
   assert.equal(out.visit.referral_source_id, SOURCE);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_REAL_BOOKING_V1 — ОТВЕТ ensure_visit ЧИТАЕТСЯ ЦЕЛИКОМ, А НЕ ПО НАЛИЧИЮ id
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// У ensure_visit с book: три исхода, и визит есть во всех трёх. Эта дверь
+// book: не шлёт, но читала только ev.booked — и ответ «визит дня с работой,
+// время НЕ занято» прошёл бы здесь как обычный успех. Правило одно на все
+// двери (ensure-visit-answer.js), и здесь прибито, что дверь его слушает.
+
+test('ПЕРЕНОС: ответ moved доезжает до вызывающего словами «откуда и куда»', async () => {
+  seed();
+  DB.prepare("INSERT INTO visits (id, patient_id, doctor_id, visit_date, duration_minutes, status) VALUES (55, ?, ?, ?, 30, 'scheduled')")
+    .run(PATIENT, DOCTOR, new Date().toISOString());
+  const at = new Date(); at.setHours(9, 15, 0, 0);
+  ENSURE_OVERRIDE = { visit: DB.prepare('SELECT * FROM visits WHERE id = 55').get(), created: false, booked: true, moved: true,
+    from: { start: '16:00', doctor_id: 9, doctor_name: 'Иванов Иван' } };
+  ENSURE_OVERRIDE.visit.visit_date = at.toISOString();
+  try {
+    const res = await registerWalkIn({ patientId: PATIENT, lines: [{ service: svc(LAB), doctorId: null }] });
+    assert.equal(res.visit.id, 55);
+    assert.match(String(res.movedNote || ''), /перенесён с 16:00 \(Иванов Иван\) на 09:15/,
+      'перенос прошёл молча — регистратор не скажет пациенту, что прежнего часа больше нет: ' + res.movedNote);
+    assert.equal(countOf('visit_services'), 1, 'услуга после переноса не легла в визит');
+  } finally { ENSURE_OVERRIDE = null; }
+});
+
+test('ЗАНЯТЫЙ ДЕНЬ: отказ ДО первой строки — ни услуги, ни счёта, и сказано, во сколько ждут', async () => {
+  seed();
+  DB.prepare("INSERT INTO visits (id, patient_id, doctor_id, visit_date, duration_minutes, status) VALUES (55, ?, ?, ?, 30, 'arrived')")
+    .run(PATIENT, DOCTOR, new Date().toISOString());
+  ENSURE_OVERRIDE = { visit: DB.prepare('SELECT * FROM visits WHERE id = 55').get(), created: false, booked: false,
+    reason: 'day_visit_busy', day_visit: { id: 55, start: '11:20', duration_minutes: 30, doctor_id: DOCTOR, doctor_name: 'Петров Пётр' } };
+  try {
+    await assert.rejects(
+      () => registerWalkIn({ patientId: PATIENT, lines: [{ service: svc(LAB), doctorId: null }] }),
+      (e) => /11:20/.test(e.message) && /Петров Пётр/.test(e.message) && /время не занято/.test(e.message),
+    );
+    assert.equal(countOf('visit_services'), 0, 'услуга легла в визит, хотя день отказан');
+    assert.equal(countOf('invoices'), 0, 'счёт выставлен на отказанный день');
+  } finally { ENSURE_OVERRIDE = null; }
 });

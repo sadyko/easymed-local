@@ -47,6 +47,9 @@ import { hasActorRole } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1
 // CRM_REAL_BOOKING_V1 (2026-09-21) — закрытия строк здесь больше нет: приход
 // доказывает событие (отметка, платёж, начатая работа), и видит его сервер.
 import { pendingCrmLines } from '../crm-lines.js';
+// CRM_REAL_BOOKING_V1 — ответ ensure_visit читается ОДНИМ кодом на три двери:
+// у него три исхода, и визит есть во всех трёх (см. ensure-visit-answer.js).
+import { readEnsureVisit } from '../ensure-visit-answer.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // WIZ_INVOICE_PRINT_V1 — тот же брендированный бланк «Счёт» (Настройки → Документы); ?v как у всех импортёров
 
 
@@ -1181,7 +1184,16 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // ---------------------------------------------------------------------
     // RU_DOW объявлен выше первого paint() — см. TDZ_FIX_V2.
 
-    const lineDuration = (line) => Math.max(5, Number(line.svc.duration_minutes) || 30);
+    // TDZ_FIX_V3 (2026-09-21) — ОБЪЯВЛЕНИЕ, А НЕ const. Та же ловушка, что
+    // RU_DOW и _lastPaintedStep выше: мастер, открытый из CRM с предзаполненной
+    // услугой (presetServiceIds), рисует смету ДО того, как исполнение доходит
+    // сюда, — и если на услугу назначен ровно один врач, addToCart выбирает
+    // его сама, а планировщик строки тут же спрашивает slotsForDay →
+    // lineDuration. С `const` это был ReferenceError «before initialization»,
+    // отклонявший весь openVisitWizard: окно оставалось нарисованным
+    // наполовину, а отказ уходил в unhandled rejection. Объявление функции
+    // поднимается на всю область и доступно с первой отрисовки.
+    function lineDuration(line) { return Math.max(5, Number(line.svc.duration_minutes) || 30); }
 
     /** Прогреть у сервера дни врача для этой строки (по местным полуночам ms). */
     async function loadSlots(line, dayMsList) {
@@ -2460,6 +2472,18 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     throw new Error(trf('Визит на {day}: {msg}', { day, msg: bookErrorText(evErr) }));
                 }
                 const visit = ev.visit;
+                // CRM_REAL_BOOKING_V1 — ОТВЕТ ЧИТАЕТСЯ ЦЕЛИКОМ. Здесь читали только
+                // ev.booked, и ответ «визит дня УЖЕ С РАБОТОЙ, время ему не меняли»
+                // (booked:false, reason:'day_visit_busy') проходил как обычный
+                // визит дня: услуги ложились строками, а выбранный слот не
+                // занимал НИКТО — регистратор обещал час, которого в календаре
+                // нет. Теперь это отказ дня, тем же путём, что и занятый слот:
+                // с названным временем и врачом, у которых пациента уже ждут.
+                // Перенос ПУСТОГО визита дня (moved) — успех, но о нём говорят
+                // вслух: прежнего часа у пациента больше нет.
+                const answer = readEnsureVisit(ev, { time: timedHead ? fmtSlot(new Date(timedHead.when).getTime()) : '' });
+                if (answer.busy) throw new Error(trf('Визит на {day}: {msg}', { day, msg: answer.text }));
+                if (answer.moved) toast(answer.text, 'info');
                 if (ev.booked) forgetSlots();
 
                 if (!ev.booked && emgReason) {

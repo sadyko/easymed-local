@@ -1644,9 +1644,10 @@ test('визит дня занят работой — время НЕ занят
   window.easymed.state.user = null;
 });
 
-test('визит дня был пуст — это ПЕРЕНОС, и он назван переносом', async () => {
+test('визит дня был пуст — это ПЕРЕНОС, и он назван переносом: откуда и куда', async () => {
   const { sheet } = await readyToBook({ time: '10:00' });
-  ENSURE_PLAN = [{ data: { visit: { id: 555 }, created: false, booked: true, moved: true } }]; ENSURE_N = 0;
+  ENSURE_PLAN = [{ data: { visit: { id: 555 }, created: false, booked: true, moved: true,
+    from: { start: '16:00', doctor_id: 9, doctor_name: 'Иванов Иван' } } }]; ENSURE_N = 0;
   saveSheet(sheet);
   await tick(150);
 
@@ -1654,7 +1655,61 @@ test('визит дня был пуст — это ПЕРЕНОС, и он на�
   assert.ok(someToast(/перенес/i),
     'о переносе сказано теми же словами, что о новой записи: оператор не поймёт, что время у пациента ИЗМЕНИЛОСЬ — '
     + JSON.stringify(TOASTS));
-  assert.ok(someToast(/10:00/), 'в сообщении о переносе нет нового времени — ' + JSON.stringify(TOASTS));
+  assert.ok(someToast(/с 16:00 \(Иванов Иван\) на 10:00/),
+    'перенос не называет, ОТКУДА перенесли: пациенту скажут новый час и не скажут, что старого больше нет — ' + JSON.stringify(TOASTS));
+  window.easymed.state.user = null;
+});
+
+// CRM_REAL_BOOKING_V1, разбор ревью (N2). После отказа day_visit_busy сервер
+// всё-таки связал строки дня с СУЩЕСТВУЮЩИМ визитом, и перечитывание строк
+// приносило visit_id, тот же день, того же врача — строка становилась
+// «нетронутой записанной» (keptBooking), и ВТОРОЕ нажатие «Сохранить и
+// записать» день пропускало: отказов нет, окно закрывается, «Записано услуг:
+// N» — а время так и не занято. Заодно строка носила зелёный «записан» рядом
+// с красным отказом.
+test('занятый день не становится «записанным» от перечитывания: второе нажатие снова спрашивает сервер', async () => {
+  const { sheet } = await readyToBook();
+  // Сервер связал строки дня с существующим визитом — перечитывание это
+  // увидит: у строки в базе уже стоят день и врач (их записал persist()).
+  Object.assign(REQ_LINES[0], { scheduled_date: BOOK_DAY, doctor_id: DOCTOR.id, visit_id: 555 });
+  ENSURE_PLAN = [{ data: BUSY_ANSWER }, { data: BUSY_ANSWER }]; ENSURE_N = 0;
+  saveSheet(sheet);
+  await tick(150);
+  assert.strictEqual(rpcOf('ensure_visit').length, 1);
+
+  const tags = byClass(sheet, 'tag').filter((n) => textOf(n).trim() === 'записан');
+  assert.deepStrictEqual(tags, [],
+    'строка, время которой НЕ занято, носит метку «записан» — рядом с красным отказом');
+
+  saveSheet(sheet);
+  await tick(150);
+  assert.strictEqual(rpcOf('ensure_visit').length, 2,
+    'второе нажатие пропустило занятый день как «уже записанный» — окно закрылось бы с «Записано услуг», а время так и не занято');
+  assert.ok(document.body.children.some((n) => hasClass(n, 'modal') && textOf(n).includes('Даты приёма')),
+    'окно дат закрылось после повторного отказа');
+  window.easymed.state.user = null;
+});
+
+test('после занятого дня оператор меняет время — обычный путь записи', async () => {
+  const { sheet } = await readyToBook();
+  Object.assign(REQ_LINES[0], { scheduled_date: BOOK_DAY, doctor_id: DOCTOR.id, visit_id: 555 });
+  ENSURE_PLAN = [{ data: BUSY_ANSWER }]; ENSURE_N = 0;
+  saveSheet(sheet);
+  await tick(150);
+  assert.strictEqual(rpcOf('ensure_visit').length, 1);
+
+  const sel = timeSelects(sheet)[0];
+  assert.ok(sel, 'после отказа поле времени пропало');
+  sel.value = '10:00'; fire(sel);
+  TOASTS.length = 0;
+  saveSheet(sheet);
+  await tick(150);
+
+  const ev = rpcOf('ensure_visit');
+  assert.strictEqual(ev.length, 2, 'новое время до сервера не дошло');
+  assert.strictEqual(new Date(ev[1].body.book.start).getTime(), new Date(BOOK_DAY + 'T10:00').getTime());
+  assert.ok(!document.body.children.some((n) => hasClass(n, 'modal') && textOf(n).includes('Даты приёма')),
+    'запись прошла, а окно дат осталось открытым');
   window.easymed.state.user = null;
 });
 

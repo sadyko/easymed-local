@@ -128,6 +128,7 @@ try { Object.defineProperty(globalThis, 'navigator', { value: { mediaDevices: nu
 // в /api/db — порядок вызовов и есть предмет проверки.
 // ---------------------------------------------------------------------------
 const calls = [];            // { kind: 'rpc'|'insert'|'select', name/table, body }
+let ensureAnswer = null;     // CRM_REAL_BOOKING_V1 — что ответит ensure_visit (null = завёл и записал)
 let patientRows = [];        // чем отвечает выборка по patients (страж дублей)
 // CRM_LINKS_V1 — заявка колл-центра на СЕГОДНЯ у этого пациента: окно
 // оформляет услуги само, минуя подстановку, и обязано её закрыть.
@@ -179,7 +180,9 @@ globalThis.fetch = async (url, opts = {}) => {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     calls.push({ kind: 'rpc', name, body });
     if (holdRpc && holdRpc.name === name) await holdRpc.promise;
-    if (name === 'ensure_visit') return ok({ data: { visit: { id: 77 }, created: true } });
+    // CRM_REAL_BOOKING_V1 — ответ ensure_visit подменяется целиком: перенос и
+    // занятый день — те же три исхода, что у карточки заявки и мастера.
+    if (name === 'ensure_visit') return ok({ data: ensureAnswer || { visit: { id: 77 }, created: true } });
     if (name === 'service_price_quote') {
       if (quoteFail) return { ok: false, status: 400, json: async () => ({ error: { message: quoteFail } }) };
       return ok({ data: { quotes: quotes || { 1: { price: 112000, tier: 'primary' }, 2: { price: 40000, tier: 'primary' } } } });
@@ -241,6 +244,7 @@ const btnByText = (root, text) => buttons(root).find((b) => textOf(b).replace(/\
 
 function reset() {
   calls.length = 0; toasts.length = 0; toastKinds.length = 0; printed.length = 0;
+  ensureAnswer = null;
   patientRows = []; insertFail = null; quoteFail = null; queueFail = null; focused = null;
   crmRequests = []; crmLines = [];
   quotes = null; invoiceTotal = 152000; queueTickets = null; holdRpc = null;
@@ -1123,5 +1127,56 @@ test('окно быстрой регистрации не пишет в CRM са
     'окно снова ходит в crm_request_services само: закрытие строк живёт на сервере, в той же транзакции, что и визит');
   assert.ok(!calls.some((c) => c.table === 'crm_requests'),
     'окно правит заявки в обход сервера — два писателя дают заявке две разные истории');
+  dlg.close();
+});
+
+// ===========================================================================
+// CRM_REAL_BOOKING_V1 — ОТВЕТ ensure_visit ЧИТАЕТСЯ ЦЕЛИКОМ. Окно читало только
+// «визит есть» — и ответ «визит дня с работой, время НЕ занято» прошёл бы как
+// успех: пациенту назвали бы час, на который его никто не ждёт. Перенос же
+// проходил молча, а регистратор обязан сказать вслух, что прежнего часа нет.
+// ===========================================================================
+test('перенос визита дня назван вслух: откуда и куда', async () => {
+  reset();
+  const at = new Date(); at.setHours(9, 15, 0, 0);
+  ensureAnswer = { visit: { id: 77, visit_date: at.toISOString() }, created: false, booked: true, moved: true,
+    from: { start: '16:00', doctor_id: 9, doctor_name: 'Иванов Иван' } };
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg);
+  const row = dlg.state.addLine(SERVICES[0], null);
+  row.sel.value = '7';
+  row.sel.fireChange();
+
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(120);
+
+  assert.ok(toasts.some((t) => /перенесён с 16:00 \(Иванов Иван\) на 09:15/.test(t)),
+    'перенос прошёл молча — регистратор не скажет пациенту, что прежнего часа больше нет: ' + toasts.join(' | '));
+  assert.ok(calls.some((c) => c.kind === 'insert' && c.table === 'visit_services'), 'после переноса услуги не записаны');
+  dlg.close();
+});
+
+test('визит дня с работой: услуги НЕ записаны, окно не «сохранено», и сказано, во сколько ждут', async () => {
+  reset();
+  ensureAnswer = { visit: { id: 77 }, created: false, booked: false, reason: 'day_visit_busy',
+    day_visit: { id: 77, start: '11:20', duration_minutes: 30, doctor_id: 7, doctor_name: 'Петров Пётр' } };
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg);
+  const row = dlg.state.addLine(SERVICES[0], null);
+  row.sel.value = '7';
+  row.sel.fireChange();
+
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(120);
+
+  assert.ok(!calls.some((c) => c.kind === 'insert' && c.table === 'visit_services'),
+    'услуги легли в визит, хотя время не занято и день отказан');
+  assert.ok(!calls.some((c) => c.kind === 'rpc' && c.name === 'create_invoice_for_visit'), 'счёт выставлен на отказанный день');
+  assert.ok(toasts.some((t) => /11:20/.test(t) && /Петров Пётр/.test(t) && /время не занято/.test(t)),
+    'отказ не называет, во сколько и у кого человека уже ждут: ' + toasts.join(' | '));
+  assert.ok(!textOf(dlg.card).includes('INV-9'), 'окно перешло в «сохранено» — счёта нет, а шапка обещает его номер');
+  assert.strictEqual(dialogs('fast-registration').length, 1, 'окно закрылось после отказа');
   dlg.close();
 });

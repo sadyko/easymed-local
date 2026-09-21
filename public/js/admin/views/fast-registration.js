@@ -765,6 +765,9 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             return null;
         }
         state.result = res;
+        // CRM_REAL_BOOKING_V1 — визит дня перенесли: прежнего часа у пациента
+        // больше нет, и сказать это надо сейчас, пока он у стойки.
+        if (res.movedNote) toast(res.movedNote, 'info');
         if (res.quoteError) toast(trf('Тариф визита не спрошен: {msg}', { msg: res.quoteError }), 'warn');
         if (res.queueError) toast(trf('Номера очереди не выданы: {msg}', { msg: res.queueError }), 'warn');
         // CRM_LINKS_V1 — ЗАПИСАННЫЙ ПО ТЕЛЕФОНУ ПРИШЁЛ И ОФОРМЛЕН ЗДЕСЬ.

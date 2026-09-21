@@ -80,10 +80,17 @@ class TX extends F { constructor(t) { super('#text'); this.nodeType = 3; this._t
 const mk = (t) => { const e = new F(t); if (String(t).toLowerCase() === 'template') e.content = new F('#fragment'); return e; };
 globalThis.Node = F;
 globalThis.Event = class { constructor(t, o) { this.type = t; Object.assign(this, o || {}); } };
+// CRM_REAL_BOOKING_V1 — ТОСТЫ СЛЫШНЫ. toast() (ui.js) пишет текст в
+// el.textContent и следующей строкой кладёт в el._t идентификатор таймера —
+// затирая текст. Свой #toast записывает всё сказанное в журнал (тот же обход,
+// что в services-catalog.test.mjs и crm-card.test.mjs).
+const TOASTS = [];
+const TOAST_EL = mk('div');
+Object.defineProperty(TOAST_EL, 'textContent', { get() { return ''; }, set(v) { TOASTS.push(String(v)); }, configurable: true });
 globalThis.document = {
   createElement: mk, createElementNS: (_n, t) => mk(t), createTextNode: (t) => new TX(t),
   head: mk('head'), body: mk('body'), documentElement: mk('html'),
-  addEventListener() {}, removeEventListener() {}, getElementById() { return null; },
+  addEventListener() {}, removeEventListener() {}, getElementById(id) { return id === 'toast' ? TOAST_EL : null; },
 };
 globalThis.localStorage = { getItem: (k) => (k === 'admin.lang' ? 'ru' : null), setItem() {}, removeItem() {}, clear() {} };
 globalThis.window = { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, innerWidth: 1440, innerHeight: 900, addEventListener() {}, open: () => null };
@@ -105,10 +112,15 @@ const { openDb } = await import('../../../../server/db/connection.js');
 const { migrate } = await import('../../../../server/db/migrate.js');
 const { compile } = await import('../../../../server/db/query-compiler.js');
 const { getRpc } = await import('../../../../server/services/rpc/index.js');
+const { readableColumns } = await import('../../../../server/db/schema-registry.js');
 const { calendarSlots, calendarWindows } = await import('../../../../server/services/rpc/calendar.js');
 
 const USER = { id: 1, role: 'registrar', extra_roles: [] };
 let DB = null;
+// CRM_REAL_BOOKING_V1 — подменить ОДИН ответ ensure_visit (перенос / занятый
+// день) при настоящей базе за всем остальным; RPC — журнал вызовов.
+let ENSURE_OVERRIDE = null;
+const RPC = [];
 
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
@@ -116,8 +128,10 @@ globalThis.fetch = async (url, opts) => {
   const ok = (data) => ({ ok: true, status: 200, json: async () => ({ data }) });
   if (u.startsWith('/api/rpc/')) {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
+    RPC.push({ name, body });
     const handler = getRpc(name);
     if (!handler) return { ok: false, status: 501, json: async () => ({ error: { message: 'no rpc ' + name } }) };
+    if (name === 'ensure_visit' && ENSURE_OVERRIDE) return ok(ENSURE_OVERRIDE);
     try { return ok(await handler(DB, body, USER)); }
     catch (e) { return { ok: false, status: e.status || 500, json: async () => ({ error: { code: e.code, message: e.message, params: e.params } }) }; }
   }
@@ -125,10 +139,32 @@ globalThis.fetch = async (url, opts) => {
     let compiled;
     try { compiled = compile(body, USER); }
     catch (e) { return { ok: false, status: 400, json: async () => ({ error: { code: 'bad_request', message: e.message } }) }; }
-    const rows = DB.prepare(compiled.sql).all(...compiled.params);
-    if (compiled.meta.single === 'single') return ok(rows[0]);
-    if (compiled.meta.single === 'maybe') return ok(rows[0] ?? null);
-    return ok(rows);
+    const { sql, params, meta } = compiled;
+    // CRM_REAL_BOOKING_V1 — мастер визита, открытый как экран, ПИШЕТ: строки
+    // услуг и правки. Вставка отдаётся так же, как настоящим маршрутом
+    // (routes/db.js): строка перечитывается по rowid колонками реестра.
+    try {
+      if (meta.op === 'select') {
+        const rows = DB.prepare(sql).all(...params);
+        if (meta.single === 'single') return ok(rows[0]);
+        if (meta.single === 'maybe') return ok(rows[0] ?? null);
+        return ok(rows);
+      }
+      if (meta.op === 'insert') {
+        const info = DB.prepare(sql).run(...params);
+        if (!meta.returning) return ok(null);
+        const row = DB.prepare(
+          `SELECT ${readableColumns(meta.table).map((c) => `"${c}"`).join(', ')} FROM "${meta.table}" WHERE rowid = ?`
+        ).get(info.lastInsertRowid);
+        if (meta.single === 'single') return ok(row);
+        if (meta.single === 'maybe') return ok(row ?? null);
+        return ok([row]);
+      }
+      DB.prepare(sql).run(...params);
+      return ok(null);
+    } catch (e) {
+      return { ok: false, status: 500, json: async () => ({ error: { code: 'internal', message: e.message } }) };
+    }
   }
   return { ok: false, status: 404, json: async () => ({ error: { message: 'no route ' + u } }) };
 };
@@ -444,4 +480,105 @@ test('оба мастера СПРАШИВАЮТ сервер и НЕ ПИШУТ
     assert.ok(!/from\('visits'\)[\s\S]{0,120}\.insert\(/.test(code),
       name + ' снова вставляет визит через /api/db — запрет двойной записи так обходится');
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_REAL_BOOKING_V1 — МАСТЕР ЧИТАЕТ ОТВЕТ ensure_visit ЦЕЛИКОМ
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// У ensure_visit с book: три исхода, и визит есть во всех трёх (см.
+// ensure-visit-answer.js). Мастер читал только ev.booked: ответ «визит дня
+// УЖЕ С РАБОТОЙ, время ему не меняли» проходил как обычный визит дня — услуги
+// ложились строками, а выбранный слот не занимал НИКТО. Регистратор обещал
+// час, которого в календаре нет. Перенос ПУСТОГО визита дня проходил молча.
+//
+// Здесь мастер открывается КАК ЭКРАН — с настоящим каталогом, настоящими
+// слотами врача и настоящей записью строк; подменяется только ответ
+// ensure_visit, потому что именно его чтение и проверяется.
+
+// Окно мастера — полноэкранный слой без класса: узнаётся по position:fixed.
+const isWizard = (n) => !!(n && n.style && n.style.position === 'fixed');
+const flush = async (n = 12) => { for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0)); };
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Мастер визита на пациента 3 с врачебной услугой 21, врач выбран, слот подобран. */
+async function openWizardReady() {
+  const s = seed({ shape: 'card', from: '10:00', to: '16:00' });
+  DB.prepare('UPDATE services SET requires_doctor = 1 WHERE id = 21').run();
+  document.body.children.length = 0;
+  TOASTS.length = 0; RPC.length = 0;
+  const { openVisitWizard } = await import('../views/visit-wizard.js');
+  let saved = 0;
+  await openVisitWizard(() => { saved++; }, { id: 3, full_name: 'Иванов Иван' }, { presetServiceIds: [21] });
+  await flush(20);
+  const overlay = document.body.children.find(isWizard);
+  assert.ok(overlay, 'мастер визита не открылся');
+
+  // Врач — тем же полем, что и человек: фокус → список → выбор.
+  const docInp = walk(overlay).find((n) => n.tagName === 'INPUT' && n.getAttribute('placeholder') === 'Врач — поиск…');
+  assert.ok(docInp, 'в строке сметы нет поля выбора врача');
+  docInp.dispatchEvent({ type: 'focus' });
+  const docList = docInp.parentElement.children.find((n) => n !== docInp);
+  const item = docList && docList.children.find((n) => textOf(n).includes('Петров'));
+  assert.ok(item, 'врач не предложен строке: ' + (docList ? textOf(docList) : '—'));
+  item.dispatchEvent({ type: 'mousedown', preventDefault() {}, currentTarget: item });
+  await wait(60); await flush(20);   // autoPickSlot → calendar_slots (настоящий) → время строки
+  return { overlay: () => document.body.children.find(isWizard), day: s.day, dayIso: s.dayIso, saved: () => saved };
+}
+
+/** Кнопка сметы «Далее / Сформировать счёт» — нажимать, пока не дошли до записи. */
+async function pressUntilCreate() {
+  for (let i = 0; i < 6; i++) {
+    const ov = document.body.children.find(isWizard);
+    if (!ov) break;
+    const btn = walk(ov).filter((n) => n.tagName === 'BUTTON')
+      .find((n) => /^\s*(Далее|Сформировать счёт|Записать услуги)/.test(textOf(n).replace(/\s+/g, ' ').trim()));
+    if (!btn) break;
+    btn.click();
+    await wait(60); await flush(30);
+    if (RPC.some((c) => c.name === 'ensure_visit')) break;
+  }
+  await wait(80); await flush(30);
+}
+
+test('МАСТЕР: визит дня с работой — день ОТКАЗАН словами про занятый час, услуги не записаны, мастер открыт', async () => {
+  const w = await openWizardReady();
+  const start = at(w.day, 11, 20);
+  DB.prepare("INSERT INTO visits (id, patient_id, doctor_id, service_id, visit_date, duration_minutes, status) VALUES (55,3,7,21,?,30,'arrived')").run(start);
+  ENSURE_OVERRIDE = { visit: DB.prepare('SELECT * FROM visits WHERE id = 55').get(), created: false, booked: false,
+    reason: 'day_visit_busy', day_visit: { id: 55, start: '11:20', duration_minutes: 30, doctor_id: 7, doctor_name: 'Петров Пётр' } };
+  try {
+    await pressUntilCreate();
+    assert.ok(RPC.some((c) => c.name === 'ensure_visit' && c.body.book), 'мастер не дошёл до записи с book: — стенд не довёл его до конца');
+    assert.equal(DB.prepare('SELECT COUNT(*) c FROM visit_services').get().c, 0,
+      'услуги легли в визит, время которого мастер не занимал: регистратор обещал час, которого в календаре нет');
+    assert.ok(TOASTS.some((t) => /11:20/.test(t) && /Петров Пётр/.test(t) && /время не занято/.test(t)),
+      'отказ не называет, во сколько и у кого человека уже ждут: ' + JSON.stringify(TOASTS));
+    assert.ok(!TOASTS.some((t) => /Услуги добавлены/.test(t)), 'мастер отчитался об успехе на отказанном дне: ' + JSON.stringify(TOASTS));
+    assert.ok(w.overlay(), 'мастер закрылся после отказа — исправлять регистратору нечем');
+    assert.equal(w.saved(), 0, 'onSaved вызван, хотя ничего не записано');
+  } finally { ENSURE_OVERRIDE = null; }
+});
+
+test('МАСТЕР: пустой визит дня перенесён — сказано, откуда и куда, и услуги записаны', async () => {
+  const w = await openWizardReady();
+  const start = at(w.day, 16, 0);
+  DB.prepare("INSERT INTO visits (id, patient_id, doctor_id, visit_date, duration_minutes, status) VALUES (55,3,7,?,30,'scheduled')").run(start);
+  const wizEnsure = RPC.length;
+  const moved = DB.prepare('SELECT * FROM visits WHERE id = 55').get();
+  moved.visit_date = at(w.day, 10, 0);   // куда перенёс сервер — на выбранный слот
+  ENSURE_OVERRIDE = { visit: moved, created: false, booked: true, moved: true,
+    from: { start: '16:00', doctor_id: 7, doctor_name: 'Петров Пётр' } };
+  try {
+    await pressUntilCreate();
+    const ev = RPC.slice(wizEnsure).find((c) => c.name === 'ensure_visit');
+    assert.ok(ev && ev.body.book, 'мастер не дошёл до записи с book:');
+    const picked = new Date(ev.body.book.start);
+    const hhmm = String(picked.getHours()).padStart(2, '0') + ':' + String(picked.getMinutes()).padStart(2, '0');
+    assert.ok(TOASTS.some((t) => t.includes('Приём перенесён с 16:00 (Петров Пётр) на ' + hhmm)),
+      'перенос прошёл молча или без «откуда»: регистратор не скажет пациенту, что прежнего часа больше нет — ' + JSON.stringify(TOASTS));
+    assert.equal(DB.prepare('SELECT COUNT(*) c FROM visit_services WHERE visit_id = 55').get().c, 1,
+      'после переноса услуга не легла в визит');
+    assert.ok(TOASTS.some((t) => /Услуги добавлены/.test(t)), 'перенос — это успех, а об успехе не сказано: ' + JSON.stringify(TOASTS));
+  } finally { ENSURE_OVERRIDE = null; }
 });

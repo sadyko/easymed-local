@@ -49,6 +49,10 @@ import { loadSlotDay, freeStartMinutes, forgetSlots, bookErrorText, askEmergency
 // нет и быть не должно: запрет двойной записи живёт внутри него, а копия вызова
 // — это копия правила.
 import { setVisitStatus } from './visit-booking.js';
+// CRM_REAL_BOOKING_V1 — ответ ensure_visit читается ОДНИМ кодом на все три
+// двери (мастер визита, быстрая регистрация, эта карточка): три исхода, и
+// визит есть во всех трёх, поэтому «есть id — значит записано» это ошибка.
+import { readEnsureVisit } from '../ensure-visit-answer.js';
 
 // CRM_CONFIG_V1 — воронка перестала быть константой.
 //
@@ -1235,6 +1239,16 @@ async function paint() {
         // CRM_REAL_BOOKING_V1 — визиты, с которых строки уехали на другой день.
         // Их предлагают отменить, когда новый день уже записан.
         const supersededVisits = [];
+        // CRM_REAL_BOOKING_V1 (разбор ревью, N2) — ДНИ, ПО КОТОРЫМ СЕРВЕР
+        // ОТКАЗАЛ «ВИЗИТ ДНЯ ЗАНЯТ». Строки такого дня сервер всё-таки связал с
+        // существующим визитом, и перечитывание приносит visit_id, тот же день,
+        // того же врача — по всем признакам «нетронутая записанная строка»
+        // (keptBooking). Поверь мы этому, второе нажатие «Сохранить и
+        // записать» пропустило бы день, окно закрылось бы с «Записано услуг»,
+        // а время так и осталось бы не занятым. День снимается с учёта, когда
+        // оператор меняет у строки время или врача — то есть делает то, ради
+        // чего отказ и показан.
+        const busyDays = new Set();
         // CRM_LINKS_V1 — доехали ли строки услуг заявки из базы (см. primaryDate).
         let linesLoaded = !r;
         let svcChosen = r ? (r.service_id || null) : null;
@@ -1303,6 +1317,7 @@ async function paint() {
          * считается: её сделали мы, а не он).
          */
         const keptBooking = (p) => !!(p && p.visit_id)
+            && !busyDays.has(p.date)   // отказанный день записанным не считается
             && String(p.date || '') === String(p.booked_date || '')
             && String(p.doctor_id || '') === String(p.booked_doctor_id || '')
             && !p.time_touched;
@@ -1880,7 +1895,7 @@ async function paint() {
                             // бы как «у врача нет ни одного окна».
                             const free = h('input', { type: 'time', value: p.time || '',
                                 style: { width: '100%', boxSizing: 'border-box', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '13.5px' } });
-                            free.addEventListener('change', () => { setLineTime(p, free.value); p.time_touched = true; });
+                            free.addEventListener('change', () => { setLineTime(p, free.value); p.time_touched = true; busyDays.delete(p.date); });
                             timeCell.appendChild(free);
                             timeCell.appendChild(note('расписание не ответило — впишите время'));
                             return;
@@ -1905,7 +1920,7 @@ async function paint() {
                             h('option', { value: '' }, '— время —'),
                             ...opts.map((t) => h('option', { value: t, selected: t === keep }, t)));
                         sel.value = keep;
-                        sel.addEventListener('change', () => { setLineTime(p, sel.value); p.time_touched = true; });
+                        sel.addEventListener('change', () => { setLineTime(p, sel.value); p.time_touched = true; busyDays.delete(p.date); });
                         timeCell.appendChild(sel);
                     };
                     inp.addEventListener('change', () => { p.date = inp.value; setLineTime(p, p.time); paintTime(); });
@@ -1921,7 +1936,7 @@ async function paint() {
                             h('option', { value: '' }, '— выберите врача —'),
                             ...pool.map(d => h('option', { value: String(d.id), selected: String(p.doctor_id || '') === String(d.id) },
                                 d.full_name + (d.specialty ? ' · ' + d.specialty : ''))));
-                        sel.addEventListener('change', () => { p.doctor_id = sel.value ? Number(sel.value) : null; setLineTime(p, ''); paintTime(); });
+                        sel.addEventListener('change', () => { p.doctor_id = sel.value ? Number(sel.value) : null; setLineTime(p, ''); busyDays.delete(p.date); paintTime(); });
                         docCell = sel;
                     } else {
                         docCell = h('span', { class: 'muted', style: { width: '210px', flex: '0 0 auto', fontSize: '12.5px' } }, 'врач не требуется');
@@ -1933,7 +1948,9 @@ async function paint() {
                             h('div', { class: 'row', style: { gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
                                 h('span', { style: { fontSize: '13.5px', fontWeight: 600, overflowWrap: 'anywhere' } }, p.name),
                                 // CRM_REAL_BOOKING_V1 — у строки есть настоящий слот.
-                                p.visit_id ? Tag('записан', { kind: 'ok' }) : null),
+                                // Не на отказанном дне: там visit_id указывает на
+                                // приём, время которого НЕ то, что выбрал оператор.
+                                p.visit_id && !busyDays.has(p.date) ? Tag('записан', { kind: 'ok' }) : null),
                             h('div', { class: 'muted', style: { fontSize: '12.5px' } }, String(p.price || 0), ' сум'),
                             bad ? h('div', { style: { fontSize: '12.5px', color: 'var(--crit-700, #b91c1c)' } }, 'время занять не удалось') : null),
                         docCell, timeCell, inp));
@@ -2030,27 +2047,26 @@ async function paint() {
                     // который его никто не ждёт. Теперь это отказ дня — с тем
                     // единственным, что оператору нужно сказать вслух: во сколько
                     // и у кого человека уже ждут.
-                    if (data.booked === false && data.reason === 'day_visit_busy') {
+                    //
+                    // Само чтение — общее на три двери (ensure-visit-answer.js).
+                    const answer = readEnsureVisit(data, { time: head.time || '' });
+                    if (answer.busy) {
                         failedDays.add(day);
+                        busyDays.add(day);   // см. keptBooking: этот день записанным не считать
                         // Строки этому визиту сервер всё-таки связал (в этот день
                         // пациента держит именно он) — перечитываем, а СВОЙ visit_id
                         // не пишем: писать нам нечего, времени мы не занимали.
                         touched++;
-                        const dv = data.day_visit || {};
-                        // Врач приписывается к фразе уже ПЕРЕВЕДЁННЫМ куском:
-                        // склеивать русское слово с именем нельзя, tr() ищет
-                        // строку целиком (I18N_COVERAGE_V1).
-                        const doc = dv.doctor_name ? ' ' + trf('у {doc}', { doc: dv.doctor_name }) : '';
-                        toast(trf('В этот день у пациента уже есть приём в {t}{doc} — время не занято, откройте календарь',
-                            { t: dv.start || '—', doc }), 'fail');
+                        toast(answer.text, 'fail');
                         continue;
                     }
+                    busyDays.delete(day);
                     forgetSlots();   // время занято — кэш занятости больше не правда
                     booked++; touched++;
-                    // ПЕРЕНОС НАЗЫВАЕТСЯ ПЕРЕНОСОМ: «записано» и «время приёма
-                    // изменилось» — разные новости, и вторую оператор обязан
-                    // сказать пациенту в ту же трубку.
-                    if (data.moved) toast(trf('Приём перенесён на {t}', { t: head.time || '' }), 'ok');
+                    // ПЕРЕНОС НАЗЫВАЕТСЯ ПЕРЕНОСОМ И НАЗЫВАЕТ, ОТКУДА: «записано»
+                    // и «время приёма изменилось» — разные новости, и вторую
+                    // оператор обязан сказать пациенту в ту же трубку.
+                    if (answer.moved) toast(answer.text, 'ok');
                     // ВИЗИТ ПРОСТАВЛЯЕТ СТРОКАМ СЕРВЕР (settleCrmOnBooking, та же
                     // транзакция, что заводит визит) — и всё-таки пишем отсюда
                     // тоже. Сервер берёт только СВОБОДНЫЕ строки; строка,
