@@ -104,6 +104,16 @@ UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"c
 -- она этих прав никогда не значила. Роль, у которой ключ УЖЕ настроен (клиника
 -- решила сама, или это повторный накат), не трогается — тот же NOT LIKE.
 --
+-- РОЛЬ, У КОТОРОЙ НАСТРОЕК НЕТ ВОВСЕ, ПРОПУСКАЛАСЬ МОЛЧА — и оставалась
+-- открытой для расширения ровно в том смысле, ради которого этот раздел и
+-- написан. json_valid(NULL) и json_valid('') истиной не бывают, а `permissions
+-- NOT LIKE …` по NULL и вовсе NULL: строка, которую завели, а матрицу ни разу
+-- не трогали, не получала ни одного «Нет». COALESCE(NULLIF(...), '{}') читает
+-- такую строку как пустой словарь — это и есть правда о ней. Строку с
+-- ИСПОРЧЕННЫМ содержимым (не JSON) миграция по-прежнему не трогает, и это
+-- решение: json_patch по не-JSON вернул бы NULL и стёр бы то немногое, что там
+-- лежит; такую строку чинит человек, а не обновление.
+--
 -- СВОИ РОЛИ КЛИНИКИ (CUSTOM_ROLES_V1) ПОПАДАЮТ СЮДА ПО ОСНОВЕ, а не по имени:
 -- имён их никто заранее не знает, а звонит роль сегодня ровно потому, что её
 -- ОСНОВА стоит в списках из кода (hasAnyRole смотрит users.role, то есть
@@ -111,25 +121,25 @@ UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"c
 -- у него это право есть, — а «Старшая смена» на основе врача закрывается, как
 -- и сам врач. Роль, заведённая ПОСЛЕ обновления, берёт права своей основы
 -- копией (roles-editor.js createRole), то есть получает то же «Нет» сама.
-UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"crm.calls":"none"}}')
- WHERE json_valid(permissions) AND permissions NOT LIKE '%"crm.calls"%'
+UPDATE role_permissions SET permissions = json_patch(COALESCE(NULLIF(permissions, ''), '{}'), '{"grants":{"crm.calls":"none"}}')
+ WHERE json_valid(COALESCE(NULLIF(permissions, ''), '{}')) AND COALESCE(permissions, '') NOT LIKE '%"crm.calls"%'
    AND role NOT IN ('admin', 'registrar', 'callcenter')
    AND role NOT IN (SELECT code FROM custom_roles WHERE base_role IN ('admin', 'registrar', 'callcenter'));
 
-UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"crm.dial":"none"}}')
- WHERE json_valid(permissions) AND permissions NOT LIKE '%"crm.dial"%'
+UPDATE role_permissions SET permissions = json_patch(COALESCE(NULLIF(permissions, ''), '{}'), '{"grants":{"crm.dial":"none"}}')
+ WHERE json_valid(COALESCE(NULLIF(permissions, ''), '{}')) AND COALESCE(permissions, '') NOT LIKE '%"crm.dial"%'
    AND role NOT IN ('admin', 'registrar', 'callcenter')
    AND role NOT IN (SELECT code FROM custom_roles WHERE base_role IN ('admin', 'registrar', 'callcenter'));
 
-UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"crm.recording":"none"}}')
- WHERE json_valid(permissions) AND permissions NOT LIKE '%"crm.recording"%'
+UPDATE role_permissions SET permissions = json_patch(COALESCE(NULLIF(permissions, ''), '{}'), '{"grants":{"crm.recording":"none"}}')
+ WHERE json_valid(COALESCE(NULLIF(permissions, ''), '{}')) AND COALESCE(permissions, '') NOT LIKE '%"crm.recording"%'
    AND role NOT IN ('admin', 'registrar', 'callcenter')
    AND role NOT IN (SELECT code FROM custom_roles WHERE base_role IN ('admin', 'registrar', 'callcenter'));
 
 -- `crm.convert` — то же самое, и «Нет» по нему НИЧЕГО не отнимает: оболочка
 -- спрашивает новый ключ ТОЛЬКО как прибавку, а отказ по нему возвращает
 -- вопрос прежнему ключу `registration` (permissions.js canCreatePatient).
-UPDATE role_permissions SET permissions = json_patch(permissions, '{"grants":{"crm.convert":"none"}}')
- WHERE json_valid(permissions) AND permissions NOT LIKE '%"crm.convert"%'
+UPDATE role_permissions SET permissions = json_patch(COALESCE(NULLIF(permissions, ''), '{}'), '{"grants":{"crm.convert":"none"}}')
+ WHERE json_valid(COALESCE(NULLIF(permissions, ''), '{}')) AND COALESCE(permissions, '') NOT LIKE '%"crm.convert"%'
    AND role NOT IN ('admin', 'registrar', 'callcenter')
    AND role NOT IN (SELECT code FROM custom_roles WHERE base_role IN ('admin', 'registrar', 'callcenter'));

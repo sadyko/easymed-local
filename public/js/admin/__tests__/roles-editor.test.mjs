@@ -628,6 +628,87 @@ test('явное «Нет» в grants не перебивается старым
   }
 });
 
+// ---------------------------------------------------------------------------
+// CALLCENTER_OPERATOR_V1 — «НЕТ» У РАЗДЕЛА ЗАКРЫВАЕТ ВСЁ, ЧТО В НЁМ.
+// ---------------------------------------------------------------------------
+// Экран гасит окна и действия закрытого раздела, но гасит ТОЛЬКО на экране:
+// input.disabled не меняет значения, а сбор читает и погашенные переключатели.
+// В базу уезжало «custdev: Нет, custdev.list: Просмотр, custdev.rate:
+// Изменение» — и сервер, спрошенный про окно, пускал на доску закрытого
+// раздела. Погасить — это про экран; ОТНЯТЬ — это про то, что уезжает в базу.
+test('раздел, поставленный в «Нет», сохраняется закрытым вместе со всеми своими строками', async () => {
+  resetServer();
+  // Колл-центр ровно таким, каким его оставляют миграции 059 (доска CRM), 078
+  // (Cust Dev) и 141 (ключи телефонии), — то есть без единой настройки руками.
+  SAVED.callcenter = {
+    sections: ['crm', 'custdev', 'patients'],
+    levels: { crm: 'admin', custdev: 'admin', patients: 'editor' },
+    grants: { 'crm.calls': 'view', 'crm.dial': 'edit', 'crm.recording': 'edit', 'crm.convert': 'edit' },
+  };
+  try {
+    const root = await render();
+    roleButton(root, 'callcenter').click();
+    await tick();
+
+    pick(root, 'custdev', 'none');
+    pick(root, 'crm', 'none');
+
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    assert.equal(lastUpdate.role, 'callcenter');
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    for (const key of ['custdev.list', 'custdev.rate', 'crm.calls', 'crm.dial', 'crm.recording', 'crm.convert']) {
+      assert.equal(saved.grants[key], 'none', 'строка закрытого раздела уехала в базу открытой: ' + key);
+    }
+    assert.equal(saved.grants.custdev, 'none');
+    assert.equal(saved.grants.crm, 'none');
+    assert.ok(!saved.sections.includes('custdev'), 'старая галочка закрытого раздела осталась выданной');
+    assert.ok(!saved.sections.includes('crm'));
+    assert.equal(saved.grants.patients, 'edit', 'закрытие одного раздела задело соседний');
+  } finally {
+    delete SAVED.callcenter;
+  }
+});
+
+// Та же беда, доставшаяся по наследству: запись «раздел Нет, окно Просмотр»
+// уже лежит в базе (её и писал экран до этой правки). Сохранение роли обязано
+// её ПОЧИНИТЬ, даже если администратор к этому разделу не прикасался, — иначе
+// сломанная строка живёт вечно и ждёт ворот, которые спросят только про окно.
+//
+// И ровно этого НЕЛЬЗЯ делать по «Нет», ВЫВЕДЕННОМУ из старой галочки: у
+// колл-центра ключи телефонии выданы точечно (миграция 141), а раздел CRM
+// здесь закрыт — обнуление по нему отняло бы у оператора телефон, которого
+// никто не закрывал.
+test('унаследованное «раздел Нет, окно Просмотр» чинится при сохранении, а выведенное «Нет» ничего не отнимает', async () => {
+  resetServer();
+  SAVED.callcenter = {
+    sections: ['patients'],
+    levels: { patients: 'editor' },
+    grants: {
+      custdev: 'none', 'custdev.list': 'view', 'custdev.rate': 'edit',
+      'crm.calls': 'view', 'crm.dial': 'edit', 'crm.recording': 'edit', 'crm.convert': 'edit',
+    },
+  };
+  try {
+    const root = await render();
+    roleButton(root, 'callcenter').click();
+    await tick();
+
+    // Ничего не трогаем — просто сохраняем роль.
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    assert.equal(saved.grants['custdev.list'], 'none', 'сломанная строка закрытого раздела пережила сохранение');
+    assert.equal(saved.grants['custdev.rate'], 'none');
+    // Раздел CRM закрыт лишь ВЫВОДОМ из старых полей — выданные ключи целы.
+    assert.equal(saved.grants.crm, 'none');
+    assert.equal(saved.grants['crm.dial'], 'edit', 'сохранение отняло телефон, которого администратор не закрывал');
+    assert.equal(saved.grants['crm.calls'], 'view');
+  } finally {
+    delete SAVED.callcenter;
+  }
+});
+
 test('изменение галочки вкладки считается несохранённым — уход спрашивает', async () => {
   resetServer();
   const root = await render();

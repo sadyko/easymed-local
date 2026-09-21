@@ -100,10 +100,39 @@ export function legacyFromGrants(grants, prev = {}) {
     return { sections, levels };
 }
 
-/** grants из нарисованных переключателей. */
-export function collectGrants(controls) {
+/**
+ * grants из нарисованных переключателей — С ОГЛЯДКОЙ НА ЗАКРЫТЫЙ РАЗДЕЛ.
+ *
+ * ЧТО ЧИНИМ. Раздел, поставленный в «Нет», гасит свои окна и действия
+ * (levelPicker disable), но погашенный переключатель ЗНАЧЕНИЯ не теряет: он
+ * так и стоит на прежнем уровне. Прочитанные как есть, они уезжали в базу
+ * строкой «custdev: Нет, custdev.list: Просмотр, custdev.rate: Изменение» — и
+ * сервер, спрошенный про ОКНО, пускал на доску закрытого раздела, хотя до
+ * появления строк матрицы одна галочка раздела отказывала. Погасить — это про
+ * экран; ОТНЯТЬ — это про то, что уезжает в базу.
+ *
+ * `explicit` — ключи, записанные у роли САМИ (perms.grants), а не выведенные
+ * экраном из старых полей, и разница тут решающая. «Нет» у раздела бывает
+ * ВЫВЕДЕННЫМ: роли, которой миграция выдала один ключ точечно (crm.dial
+ * регистратуре), раздел CRM рисуется из старой галочки, и она может быть
+ * закрыта. Обнули мы по такому «Нет» всё внутри — и сохранение молча отняло бы
+ * у роли выданный телефон, хотя администратор ничего не закрывал. Поэтому
+ * раздел закрывает только то «Нет», которое в матрице роли ЗАПИСАНО: решение,
+ * а не догадка экрана. Ровно так же смотрит и сервер (services/grants.js:
+ * раздел закрыт, когда его уровень настроен явно).
+ *
+ * Раздел, закрытый ЗДЕСЬ И СЕЙЧАС, обнуляет свои строки сразу (paintCatalog),
+ * поэтому сюда они приходят уже нулями — и этой оговорки не касаются.
+ */
+export function collectGrants(controls, explicit = {}) {
     const out = {};
     for (const [key, ctl] of Object.entries(controls)) out[key] = ctl.value();
+    for (const s of CATALOG) {
+        if (!(s.key in (explicit || {})) || out[s.key] !== 'none') continue;
+        for (const r of [...(s.windows || []), ...(s.actions || [])]) {
+            if (r.key in out) out[r.key] = 'none';
+        }
+    }
     return out;
 }
 
@@ -121,10 +150,19 @@ export function collectGrants(controls) {
 // действие. Остальные уровни объясняются подсказкой на самой таблетке.
 // Между строками — линия: глаз идёт по строкам, а не по абзацам.
 
+// CALLCENTER_OPERATOR_V1 — СПРАВОЧНИК ГОВОРИТ НА ЯЗЫКЕ ЭКРАНА.
+//
+// permission-catalog.js лежит в public/js/shared и общей проверкой переводов
+// (__tests__/i18n-coverage.test.mjs) не охвачен: она ходит только по
+// public/js/admin. Поэтому подписи справочника печатались по-русски и в
+// узбекском, и в английском экране — ошибка, которую ни один тест не поймал
+// бы. Переводятся они ЗДЕСЬ, в месте отрисовки: tr() отдаёт неизвестную строку
+// как есть, поэтому строка без перевода остаётся читаемой, а не пустой.
+
 /** Одна подпись строки: что даёт выбранный уровень, а при «Нет» — что это. */
 function lineFor(row, lvl) {
     const d = row.levelDesc && row.levelDesc[lvl];
-    return d || row.desc || '';
+    return tr(d || row.desc || '');
 }
 
 /** Переключатель уровня: одна группа radio на строку, только существующие уровни. */
@@ -139,7 +177,7 @@ function levelPicker(row, value, onChange, { disabled = false } = {}) {
         inputs.push(inp);
         // Подсказка на таблетке — что даст этот уровень, если его выбрать.
         const tip = row.levelDesc && row.levelDesc[lvl];
-        box.appendChild(h('label', { class: 'rm-pill is-' + lvl, for: id, title: tip || null }, inp, h('span', null, LEVEL_LABELS[lvl])));
+        box.appendChild(h('label', { class: 'rm-pill is-' + lvl, for: id, title: tip ? tr(tip) : null }, inp, h('span', null, tr(LEVEL_LABELS[lvl]))));
     }
     return {
         el: box,
@@ -216,9 +254,13 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
         const picker = levelPicker(s, sectionLvl, (lvl) => {
             paintNote(note, s, lvl);
             block.classList.toggle('is-off', lvl === 'none');
-            // Раздел закрыт — окна и действия в нём ничего не значат: гасим их и
-            // говорим почему, вместо галочек, которые не работают.
-            for (const k of kids) k.disable(lvl === 'none');
+            // Раздел закрыт — окна и действия в нём ничего не значат: гасим их,
+            // ОБНУЛЯЕМ и говорим почему, вместо галочек, которые не работают.
+            // Обнулять обязательно: погашенный переключатель сохраняет прежний
+            // уровень, и «Нет» у раздела при «Просмотре» у его окна — это не
+            // выдумка, а ровно то, что уезжало в базу (см. collectGrants).
+            for (const k of kids) { k.disable(lvl === 'none'); if (lvl === 'none') k.close(); }
+            paintCount(count, s, controls);
             hint.hidden = lvl !== 'none' || !kids.length;
             setOpen(true);
             if (onAnyChange) onAnyChange();
@@ -227,7 +269,7 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
 
         const hasInner = !!((s.windows || []).length || (s.actions || []).length);
         const name = h('span', { class: 'rm-name' },
-            h('span', { class: 'rm-title' }, s.label),
+            h('span', { class: 'rm-title' }, tr(s.label)),
             h('span', { class: 'rm-desc' }, note, count));
         // Раздел без окон и действий — просто строка: шеврон, за которым пусто,
         // обещал бы то, чего нет.
@@ -264,10 +306,10 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
                 const p = levelPicker(r, lvl, (l) => { paintNote(rnote, r, l); paintCount(count, s, controls); if (onAnyChange) onAnyChange(); },
                     { disabled: sectionLvl === 'none' });
                 controls[r.key] = p;
-                kids.push(p);
+                kids.push({ disable: (on) => p.disable(on), close: () => { p.set('none'); paintNote(rnote, r, 'none'); } });
                 body.appendChild(h('div', { class: 'rm-row rm-row-sub' },
                     h('div', { class: 'rm-name' },
-                        h('div', { class: 'rm-title' }, r.label),
+                        h('div', { class: 'rm-title' }, tr(r.label)),
                         rnote),
                     p.el));
             }

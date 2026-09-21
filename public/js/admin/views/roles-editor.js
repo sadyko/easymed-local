@@ -55,7 +55,7 @@ import { levelsFor, openAction, actionFor, levelFromActions, actionsFromLevel }
 // ROLES_MATRIX_V1 — матрица «раздел → окно → действие» по общему справочнику
 // прав (shared/permission-catalog.js). Старые поля sections/levels выводятся
 // из неё при сохранении, чтобы прежние ворота продолжали работать.
-import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm4';
+import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm5';
 
 // ROLE_KEYS_V2 — матрица строится из permissions.js NAV_MODULES, того же
 // списка, который читают сами ворота бокового меню. Когда-то это была вторая
@@ -236,7 +236,12 @@ export async function renderRolesEditor(container, { onBack } = {}) {
     function collect() {
         // ROLES_MATRIX_V1 — источник правды теперь grants; старые sections/levels
         // выводятся из них, а неизвестные справочнику ключи переносятся как есть.
-        const grants = collectGrants(state.grantControls || {});
+        // CALLCENTER_OPERATOR_V1 — второй довод у сбора: ключи, записанные у роли
+        // САМИ. По ним видно, какое «Нет» у раздела — решение администратора
+        // (тогда оно закрывает и всё, что внутри), а какое лишь выведено из
+        // старой галочки (тогда оно ничего не отнимает у точечно выданного
+        // ключа). Подробности — в collectGrants.
+        const grants = collectGrants(state.grantControls || {}, state.explicitGrants || {});
         const { sections, levels } = legacyFromGrants(grants, state.prevLegacy || {});
         // ROLE_SAVE_PRESERVE_V1 — вкладки, которых этот экран не рисует,
         // переносим как есть: иначе сохранение роли молча стирало бы настройку,
@@ -485,6 +490,7 @@ export async function renderRolesEditor(container, { onBack } = {}) {
         // (crm.calls, custdev.list…) в её grants не лежит, и без старых полей
         // он читался бы как запрет, которого администратор не ставил.
         state.prevLegacy = { sections: perms.sections || [], levels: perms.levels || {} };
+        state.explicitGrants = (perms.grants && typeof perms.grants === 'object') ? perms.grants : {};
         const grants = { ...grantsFromLegacy(perms), ...(perms.grants || {}) };
         card.appendChild(h('div', { class: 'roles-group' },
             h('span', { class: 'roles-group-name' }, 'Разделы, окна и действия'),

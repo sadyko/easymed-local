@@ -102,6 +102,31 @@ test('141 закрывает телефонию и своим ролям кли�
   } finally { db.close(); }
 });
 
+// РОЛЬ БЕЗ НАСТРОЕК ПРОПУСКАЛАСЬ МОЛЧА — И ОСТАВАЛАСЬ ОТКРЫТОЙ ДЛЯ РАСШИРЕНИЯ.
+//
+// Раздел 3 отбирал строки по `json_valid(permissions)` и `permissions NOT LIKE
+// '%…%'`. Обе проверки по пустому (и по NULL) значению истиной не бывают,
+// поэтому роль, чью строку завели, а матрицу ни разу не трогали, не получала
+// ни одного явного «Нет» — и первое же «Сохранить роль» на экране выдало бы ей
+// телефонию, выведя её из старой галочки раздела. Пустая строка — достижимая
+// форма этой дыры (колонка объявлена NOT NULL ещё в 013), и закрывается она
+// тем же COALESCE, что и NULL.
+test('141 закрывает телефонию и роли, у которой настроек нет вовсе', () => {
+  const db = freshDb();
+  try {
+    db.prepare("INSERT INTO role_permissions (role, permissions) VALUES ('novaya_rol', '')").run();
+    db.prepare("INSERT INTO role_permissions (role, permissions) VALUES ('krivaya_rol', 'не json')").run();
+    db.prepare("DELETE FROM schema_migrations WHERE name LIKE '141%'").run();
+    migrate(db);
+
+    assert.deepEqual(grantsOf(db, 'novaya_rol'), allNone(), 'роль без настроек осталась открытой для расширения');
+    // Испорченную строку миграция не трогает и трогать не должна: json_patch по
+    // не-JSON вернул бы NULL и стёр бы то немногое, что там есть. Такую строку
+    // чинит человек, а не обновление.
+    assert.equal(db.prepare("SELECT permissions FROM role_permissions WHERE role='krivaya_rol'").get().permissions, 'не json');
+  } finally { db.close(); }
+});
+
 test('141 идемпотентна: повторный прогон не задваивает и не переписывает', () => {
   const db = freshDb();
   try {
