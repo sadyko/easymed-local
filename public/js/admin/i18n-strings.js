@@ -8540,4 +8540,7 @@ export const STRINGS = {
   "Услуги не добавлены — карта пациента не изменена.": {"en":"No services were added — the patient's card is unchanged.","ru":"Услуги не добавлены — карта пациента не изменена.","uz":"Xizmatlar qoʻshilmadi — bemor kartasi oʻzgarmadi."},
   "Визит создан, счёт не выставлен: {msg} — выставьте счёт из карты пациента": {"en":"The visit is created, the invoice is not issued: {msg} — issue the invoice from the patient's card","ru":"Визит создан, счёт не выставлен: {msg} — выставьте счёт из карты пациента","uz":"Tashrif yaratildi, hisob chiqarilmadi: {msg} — hisobni bemor kartasidan chiqaring"},
   "Визит создан, счёт не выставлен. Выставьте его из карты пациента.": {"en":"The visit is created, the invoice is not issued. Issue it from the patient's card.","ru":"Визит создан, счёт не выставлен. Выставьте его из карты пациента.","uz":"Tashrif yaratildi, hisob chiqarilmadi. Uni bemor kartasidan chiqaring."},
+  // QUICK_PATIENT_V1 (2026-09-21) — одно окно «Новый пациент» на все потоки
+  "Полная анкета — в карте пациента.": {"en":"The full form is in the patient's card.","ru":"Полная анкета — в карте пациента.","uz":"Toʻliq anketa — bemor kartasida."},
+  "— создать пациента": {"en":"— create the patient","ru":"— создать пациента","uz":"— bemorni yaratish"},
 };
