@@ -67,6 +67,34 @@ function bookedSummary(visit, vsRows) {
     };
 }
 
+/**
+ * QUICK_PATIENT_V1 — ESCAPE ПРИНАДЛЕЖИТ ВЕРХНЕМУ ОКНУ.
+ *
+ * Каталог услуг слушает Escape на document всё время, пока открыт. Но поверх
+ * него встают чужие окна на своих этажах: привязка пациента (150), общее окно
+ * заведения (155), страж дубликатов (160). Слушают они ТОТ ЖЕ document, и один
+ * Escape доходил до обоих: верхнее окно закрывалось правильно, а каталог под
+ * ним — заодно, вместе с набранной сметой и привязанным пациентом. На экране
+ * это читалось как «нажал Esc в окне заведения — пропал весь расчёт».
+ *
+ * Правило одно на все этажи и не зависит от имён окон: есть в документе
+ * подложка .modal выше моей — Escape не мой.
+ *
+ * @param {object} own моя подложка (.modal со своим z-index)
+ */
+function coveredByHigherModal(own) {
+    if (!own) return false;
+    const zOf = (el) => Number((el && el.style && el.style.zIndex) || 0);
+    const mine = zOf(own);
+    const kids = (typeof document !== 'undefined' && document.body && document.body.children) || [];
+    for (const el of kids) {
+        if (!el || el === own) continue;
+        if (!String(el.className || '').split(/\s+/).includes('modal')) continue;
+        if (zOf(el) > mine) return true;
+    }
+    return false;
+}
+
 export function openServicePickerModal({
     visitDoctorId   = null,
     onPick,
@@ -1364,6 +1392,16 @@ export function openServicePickerModal({
     let _attachOverlay = null;
     function closeAttach() {
         if (_attachOverlay) { _attachOverlay.remove(); _attachOverlay = null; }
+        document.removeEventListener('keydown', onAttachKey);
+    }
+    // QUICK_PATIENT_V1 — у окна привязки СВОЙ Escape. Каталог под ним свой
+    // Escape теперь не берёт (coveredByHigherModal), и без этого обработчика
+    // клавиша перестала бы делать что-либо вовсе. Закрываем только когда
+    // верхнее окно — это мы: поверх привязки встаёт окно заведения (155).
+    function onAttachKey(e) {
+        if (e.key !== 'Escape' || !_attachOverlay) return;
+        if (coveredByHigherModal(_attachOverlay)) return;
+        closeAttach();
     }
     function openAttachPatientModal() {
         if (state.added.length === 0) { toast('Сначала добавьте услуги.', 'fail'); return; }
@@ -1371,6 +1409,7 @@ export function openServicePickerModal({
         const ov = h('div', { class: 'modal', style: { zIndex: '150' } });
         ov.appendChild(h('div', { class: 'modal-backdrop', onclick: () => closeAttach() }));
         _attachOverlay = ov;
+        document.addEventListener('keydown', onAttachKey);
 
         const resultsEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px', maxHeight: '46vh', overflow: 'auto' } });
         const inp = h('input', {
@@ -1487,10 +1526,13 @@ export function openServicePickerModal({
             return;
         }
         mod.openQuickPatientModal({
-            // Привязка сама снимает окно поиска (attachPatient → closeAttach),
-            // а окно заведения закрывает себя: на экране остаётся каталог с той
-            // же сметой — и пациентом в ней.
-            onCreated: (p) => { attachPatient(p); },
+            // Окно поиска снимаем ЗДЕСЬ И ЯВНО, а не надеясь на то, что это
+            // сделает привязка. Пациента искать больше незачем — его только что
+            // завели, — а оставшаяся подложка 150 накрыла бы каталог невидимым
+            // стеклом: смета на экране есть, но мышь до неё не доходит.
+            // Окно заведения закрывает себя само: остаётся каталог с той же
+            // сметой — и пациентом в ней.
+            onCreated: (p) => { closeAttach(); attachPatient(p); },
         });
     }
 
@@ -3135,6 +3177,10 @@ export function openServicePickerModal({
 
     function onKey(e) {
         if (e.key !== 'Escape') return;
+        // QUICK_PATIENT_V1 — поверх каталога стоит чужое окно (привязка 150,
+        // заведение пациента 155, страж дубликатов 160): Escape закрывает ЕГО,
+        // а каталог со сметой обязан остаться. См. coveredByHigherModal.
+        if (coveredByHigherModal(overlay)) return;
         if (catalogUI && state.added.length && !confirm(attachMode ? 'Закрыть? Выбранные услуги не будут добавлены.' : 'Закрыть мастер записи? Подбор услуг будет потерян.')) return;
         overlay.remove(); document.removeEventListener('keydown', onKey);
     }
