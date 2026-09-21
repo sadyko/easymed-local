@@ -685,3 +685,92 @@ test('счёт по акту у заявки на три дня оставляе
   assert.equal(row.scheduled_date, '2026-08-14');
   db.close();
 });
+
+// ─── ДОКАЗАТЕЛЬСТВО НЕ МОЖЕТ ОПЕРЕЖАТЬ ДЕНЬ ВИЗИТА ─────────────────────────
+//
+// Разбор ревью (критическое). Мастер визита выставляет счёт по акту В ТОТ ЖЕ
+// КЛИК, что и записывает, — на каждый день корзины, включая будущие
+// (visit-wizard.js, raiseInvoice включён по умолчанию). Счёт с payer_id →
+// доказательство → заявка на следующий вторник становилась «Пришёл» сегодня,
+// её строки — done, а лиды без строк на тот день — выигранными.
+//
+// Сторож стоит ВНУТРИ crmVisitEvidence и crmVisitStatus, а не у одной из
+// дверей: дверей шесть, и любая новая обязана получить его даром. День —
+// местный день клиники (domain/day.js), как у кассы, дневника и документов.
+const dayShift = (db, days) => db.prepare("SELECT date('now','localtime', ? || ' days') d").get(String(days)).d;
+const noonOf = (day) => day + 'T12:00:00Z';   // в любом поясе ±12 ч это тот же местный день
+
+function payerInvoiceFor(db, vid) {
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (9,'reg','x','Регистратор','registrar')").run();
+  db.prepare("INSERT INTO services (id, name, price) VALUES (40,'Консультация',100000)").run();
+  db.prepare("INSERT INTO payers (id, name, kind, active) VALUES (3,'Завод','contract',1)").run();
+  const vs = db.prepare(
+    "INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (?,40,1,100000,100000,'added')",
+  ).run(vid).lastInsertRowid;
+  createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs], payer_id: 3 }, { id: 9, role: 'registrar' });
+}
+
+test('будущий визит: счёт по акту сегодня НЕ делает заявку дошедшей', () => {
+  const db = freshDb();
+  const day = dayShift(db, 22);
+  const vid = addVisit(db, noonOf(day));
+  const rid = addReq(db, { date: day });
+  const lid = addLine(db, rid, { date: day, visit: vid });
+  const bare = addReq(db, { status: 'in_process', date: day, name: 'лид без строк на тот же день' });
+
+  payerInvoiceFor(db, vid);
+
+  assert.equal(line(db, lid).status, 'pending', 'строка на следующий вторник закрыта сегодня');
+  assert.equal(reqRow(db, rid).status, 'scheduled', 'заявка на будущий день объявлена дошедшей — воронка считает конверсию, которой не было');
+  assert.equal(reqRow(db, bare).status, 'in_process', 'лид без строк на будущий день выигран сегодняшним актом');
+  db.close();
+});
+
+test('сегодняшний визит: счёт по акту — приход', () => {
+  const db = freshDb();
+  const day = dayShift(db, 0);
+  const vid = addVisit(db, noonOf(day));
+  const rid = addReq(db, { date: day });
+  const lid = addLine(db, rid, { date: day, visit: vid });
+
+  payerInvoiceFor(db, vid);
+
+  assert.equal(line(db, lid).status, 'done');
+  assert.equal(reqRow(db, rid).status, 'came', 'сегодняшний акт не засчитан приходом');
+  db.close();
+});
+
+test('вчерашний визит, оплаченный сегодня, — приход: деньги за прошлое законны', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (8,'kassa','x','Кассир','cashier')").run();
+  const day = dayShift(db, -1);
+  const vid = addVisit(db, noonOf(day));
+  const rid = addReq(db, { date: day });
+  const lid = addLine(db, rid, { date: day, visit: vid });
+  const inv = db.prepare(`INSERT INTO invoices
+      (invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_by)
+    VALUES ('INV-Y', ?, 1, 100000, 0, 100000, 0, 'unpaid', 8)`).run(vid).lastInsertRowid;
+
+  recordPayment(db, { invoice_id: inv, amount: 100000, method: 'cash' }, { id: 8, role: 'cashier' });
+
+  assert.equal(line(db, lid).status, 'done');
+  assert.equal(reqRow(db, rid).status, 'came', 'оплата вчерашнего приёма не засчитана');
+  db.close();
+});
+
+test('будущий визит: отметка «пришёл» тоже не засчитывается', () => {
+  const db = freshDb();
+  const day = dayShift(db, 3);
+  const vid = addVisit(db, noonOf(day));
+  const rid = addReq(db, { date: day });
+  const lid = addLine(db, rid, { date: day, visit: vid });
+
+  crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'arrived' });
+
+  assert.equal(line(db, lid).status, 'pending', 'нельзя прийти на приём, который ещё не наступил');
+  assert.equal(reqRow(db, rid).status, 'scheduled');
+  // Неявка и отмена будущего визита — законные события, сторож их не трогает.
+  crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'cancelled' });
+  assert.equal(line(db, lid).visit_id, null, 'отмена будущей записи обязана освободить строку');
+  db.close();
+});

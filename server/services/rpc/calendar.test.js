@@ -561,20 +561,30 @@ test('до квитанции: карточка «подтверждается»
 // через который идут и плитка календаря, и окно визита, и кабинет врача.
 // Правило живёт в crm/visit-status.js; здесь пришпилена сама дверь — что хук
 // действительно зовётся оттуда, а не остался написанным в стороне.
+//
+// СЕГОДНЯ, А НЕ ФИКСТУРНЫЙ ПОНЕДЕЛЬНИК. Сторож в crm/visit-status.js не
+// засчитывает приход по визиту, чей местный день ещё не наступил (разбор
+// ревью: мастер выставлял акт на будущие дни корзины, и заявка на следующий
+// вторник становилась «Пришёл» сегодня). Поэтому здесь визит на сегодня:
+// calendar_book прошедший час не отвергает (это делает только calendar_slots),
+// и «сегодня 10:00» записывается в любое время суток.
+const todayAt = (hh) => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, 0, 0, 0).toISOString(); };
+const TODAY = iso(new Date());
+
 test('CRM_REAL_BOOKING_V1: «пришёл» через calendar_book закрывает строки заявки и ставит конверсию', async () => {
   const db = freshDb();
-  const out = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });
+  const out = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: todayAt(10) });
   const rid = db.prepare(
     "INSERT INTO crm_requests (full_name, phone, status, patient_id, scheduled_date) VALUES ('Лид','998900000000','scheduled',3,?)",
-  ).run(DAY).lastInsertRowid;
+  ).run(TODAY).lastInsertRowid;
   const lid = db.prepare(
     'INSERT INTO crm_request_services (request_id, service_id, scheduled_date, status, visit_id) VALUES (?,21,?,\'pending\',?)',
-  ).run(rid, DAY, out.visit.id).lastInsertRowid;
+  ).run(rid, TODAY, out.visit.id).lastInsertRowid;
 
   // Запись сама по себе конверсией не является.
   assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id=?').get(rid).status, 'scheduled');
 
-  const arrived = await book(db, { visit_id: out.visit.id, start: at(10), status: 'arrived' });
+  const arrived = await book(db, { visit_id: out.visit.id, start: todayAt(10), status: 'arrived' });
 
   assert.equal(arrived.visit.status, 'arrived');
   assert.equal(db.prepare('SELECT status FROM crm_request_services WHERE id=?').get(lid).status, 'done',
@@ -601,5 +611,24 @@ test('CRM_REAL_BOOKING_V1: отмена записи возвращает стр
   assert.equal(line.status, 'pending');
   assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id=?').get(rid).status, 'in_process',
     'отменённая запись осталась «записанной»: оператор не увидит её в работе');
+  db.close();
+});
+
+test('CRM_REAL_BOOKING_V1: «пришёл» на БУДУЩИЙ визит дверь пропускает, а заявку не трогает', async () => {
+  const db = freshDb();
+  const out = await book(db, { patient_id: 3, doctor_id: 7, service_id: 21, start: at(10) });   // DAY — будущий понедельник
+  const rid = db.prepare(
+    "INSERT INTO crm_requests (full_name, phone, status, patient_id, scheduled_date) VALUES ('Лид','998900000001','scheduled',3,?)",
+  ).run(DAY).lastInsertRowid;
+  const lid = db.prepare(
+    'INSERT INTO crm_request_services (request_id, service_id, scheduled_date, status, visit_id) VALUES (?,21,?,\'pending\',?)',
+  ).run(rid, DAY, out.visit.id).lastInsertRowid;
+
+  const arrived = await book(db, { visit_id: out.visit.id, start: at(10), status: 'arrived' });
+
+  assert.equal(arrived.visit.status, 'arrived', 'сам визит дверь помечает как просили — это её дело');
+  assert.equal(db.prepare('SELECT status FROM crm_request_services WHERE id=?').get(lid).status, 'pending',
+    'на приём, который ещё не наступил, прийти нельзя — строка закрыта заранее');
+  assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id=?').get(rid).status, 'scheduled');
   db.close();
 });

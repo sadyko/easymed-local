@@ -30,6 +30,9 @@
 // пациента. Любая ошибка попадает в лог и там остаётся.
 
 import { openStageKeys, wonStageKey, noShowStageKey, scheduledStageKey, SEED_NO_SHOW_STAGE } from './config.js';
+// CLINIC_DAY_V1 — «сегодня» и «день визита» — местные дни клиники, теми же
+// словами, какими их считают касса, дневник и документы.
+import { localDate } from '../domain/day.js';
 
 /** Статусы визита, означающие «пациент здесь». Словарь — из миграции 003. */
 export const ARRIVED_STATUSES = Object.freeze(['arrived']);
@@ -143,8 +146,18 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
     if (!now || now === norm(from)) return;
     if (!ARRIVED_STATUSES.includes(now) && now !== 'no_show' && now !== 'cancelled') return;
 
-    const visit = db.prepare('SELECT id, patient_id, substr(visit_date, 1, 10) AS day FROM visits WHERE id = ?').get(id);
+    const visit = db.prepare(`
+      SELECT id, patient_id, substr(visit_date, 1, 10) AS day,
+             (${localDate('visit_date')} > date('now','localtime')) AS future
+        FROM visits WHERE id = ?
+    `).get(id);
     if (!visit) return;
+    // НА ПРИЁМ, КОТОРЫЙ ЕЩЁ НЕ НАСТУПИЛ, ПРИЙТИ НЕЛЬЗЯ. Сторож стоит здесь, а
+    // не у одной из дверей, чтобы любая новая дверь получила его даром:
+    // будущий визит не закрывает заявку ни оплатой, ни актом, ни работой,
+    // ни отметкой «пришёл». Неявка и отмена будущего визита — законные
+    // события, их сторож не трогает.
+    if (visit.future && ARRIVED_STATUSES.includes(now)) return;
 
     const lines = linesOf(db, id);
     const requestIds = [...new Set(lines.map((l) => l.request_id).filter(Boolean))];
@@ -265,8 +278,17 @@ export function crmVisitEvidence(db, visitId) {
   try {
     const id = Number(visitId);
     if (!Number.isInteger(id) || id <= 0) return;
-    const visit = db.prepare('SELECT status FROM visits WHERE id = ?').get(id);
-    if (!visit || DEAD_VISIT_STATUSES.includes(visit.status)) return;
+    // ДОКАЗАТЕЛЬСТВО НЕ МОЖЕТ ОПЕРЕЖАТЬ ДЕНЬ ВИЗИТА (разбор ревью). Мастер
+    // визита выставляет счёт по акту В ТОТ ЖЕ КЛИК, что и записывает, — на
+    // каждый день корзины, включая будущие. Без этой строки заявка на
+    // следующий вторник становилась «Пришёл» сегодня. Вчерашний визит,
+    // оплаченный сегодня, наоборот, законен: деньги за прошлое приходят
+    // позже сплошь и рядом.
+    const visit = db.prepare(`
+      SELECT status, (${localDate('visit_date')} > date('now','localtime')) AS future
+        FROM visits WHERE id = ?
+    `).get(id);
+    if (!visit || DEAD_VISIT_STATUSES.includes(visit.status) || visit.future) return;
     crmVisitStatus(db, { visitId: id, from: null, to: ARRIVED_STATUSES[0] });
   } catch (e) {
     console.error('[crm] доказательство прихода по визиту', visitId, 'не учтено:', e && e.message);
