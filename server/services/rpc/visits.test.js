@@ -366,3 +366,88 @@ test('CRM_REAL_BOOKING_V1: колл-центр заводит визит, кас
   assert.equal(out.created, true, 'оператор колл-центра не может записать пациента, которого сам же принял');
   await assert.rejects(() => ensureVisit(db, { patient_id: 1, date: '2026-08-10' }, { id: 9, role: 'cashier' }), /not allowed/);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CRM_REAL_BOOKING_V1 — ВИЗИТ ДНЯ УЖЕ ЕСТЬ, А ВРЕМЯ ВСЁ РАВНО НАДО ЗАНЯТЬ
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// ЧТО БЫЛО (разбор ревью, 2026-09-21). ensure_visit с `book:` на день, где у
+// пациента уже есть живой визит, возвращал {created:false, booked:false} и
+// НЕ звал calendar_book вовсе: выбранное оператором время не занималось
+// ничем и никогда, а карточка считала это успехом. Человеку называли час, на
+// который его никто не ждал.
+//
+// Теперь различаются два разных случая, и разница между ними — БЫЛА ЛИ ПО
+// ЭТОМУ ВИЗИТУ РАБОТА:
+//   пустой визит дня (ни услуг, ни счёта — заведён записью же) → запись
+//     ПЕРЕНОСИТСЯ на новое время тем же calendar_book: это та же запись, у
+//     неё просто поменялся час;
+//   визит с работой (пациент уже пришёл, услуги в смете, счёт выставлен) →
+//     честный отказ booked:false + reason, и в ответе лежит время того
+//     визита — оператору есть что сказать вслух.
+const hhmm = (iso) => { const d = new Date(iso); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+
+test('CRM_REAL_BOOKING_V1: пустой визит дня ПЕРЕНОСИТСЯ на выбранное время', async () => {
+  const db = freshDb();
+  const rid = addReq(db, { status: 'in_process', date: '2026-08-09' });
+  const lid = addLine(db, rid, { date: '2026-08-09' });
+  // Визит дня уже заведён — например, прошлой записью этой же заявки.
+  const first = await ensureVisit(db, { patient_id: 1, date: '2026-08-09T09:00:00Z' }, REG);
+  assert.equal(first.created, true);
+
+  const again = await ensureVisit(db, {
+    patient_id: 1, date: '2026-08-09',
+    book: { doctor_id: 2, start: '2026-08-09T14:30:00Z' },
+  }, REG);
+
+  assert.equal(again.created, false, 'день пациента — один визит');
+  assert.equal(again.visit.id, first.visit.id);
+  assert.equal(again.booked, true, 'выбранное оператором время молча не занято — пациента ждут не тогда, когда обещали');
+  assert.equal(again.moved, true, 'перенос обязан быть назван переносом: карточке есть что показать');
+  assert.equal(Date.parse(again.visit.visit_date), Date.parse('2026-08-09T14:30:00Z'));
+  assert.equal(again.visit.doctor_id, 2);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visits WHERE patient_id=1').get().n, 1, 'перенос завёл второй визит');
+  assert.equal(line(db, lid).visit_id, first.visit.id,
+    'строка заявки осталась без слота: перенос обязан связывать её так же, как первая запись');
+  assert.equal(reqRow(db, rid).status, 'scheduled');
+});
+
+test('CRM_REAL_BOOKING_V1: визит дня с услугами не переносится молча — отказ называет время', async () => {
+  const db = freshDb();
+  const first = await ensureVisit(db, { patient_id: 1, date: '2026-08-09T09:00:00Z', doctor_id: 2 }, REG);
+  // Пациент уже пришёл: услуга в смете.
+  db.prepare("INSERT INTO visit_services (visit_id, service_id, status) VALUES (?, NULL, 'queued')").run(first.visit.id);
+
+  const out = await ensureVisit(db, {
+    patient_id: 1, date: '2026-08-09',
+    book: { doctor_id: 2, start: '2026-08-09T14:30:00Z' },
+  }, REG);
+
+  assert.equal(out.created, false);
+  assert.equal(out.booked, false, 'занятый визит дня объявлен записанным');
+  assert.equal(out.moved, undefined);
+  assert.equal(out.reason, 'day_visit_busy', 'отказ без причины экрану бесполезен');
+  assert.equal(out.day_visit.id, first.visit.id);
+  assert.equal(out.day_visit.start, hhmm(first.visit.visit_date),
+    'в ответе нет времени существующего визита — оператору нечего сказать пациенту');
+  assert.equal(out.day_visit.doctor_id, 2);
+  assert.equal(out.day_visit.doctor_name, 'Doc');
+  assert.equal(Date.parse(out.visit.visit_date), Date.parse(first.visit.visit_date),
+    'время визита, по которому уже идёт работа, переписано записью');
+});
+
+test('CRM_REAL_BOOKING_V1: выставленный счёт делает визит дня занятым так же, как услуги', async () => {
+  const db = freshDb();
+  const first = await ensureVisit(db, { patient_id: 1, date: '2026-08-09T09:00:00Z', doctor_id: 2 }, REG);
+  db.prepare(`INSERT INTO invoices (invoice_number, visit_id, patient_id, subtotal, total_amount, status)
+    VALUES ('INV-9', ?, 1, 100000, 100000, 'unpaid')`).run(first.visit.id);
+
+  const out = await ensureVisit(db, {
+    patient_id: 1, date: '2026-08-09',
+    book: { doctor_id: 2, start: '2026-08-09T14:30:00Z' },
+  }, REG);
+
+  assert.equal(out.booked, false);
+  assert.equal(out.reason, 'day_visit_busy');
+  assert.equal(Date.parse(out.visit.visit_date), Date.parse(first.visit.visit_date));
+});

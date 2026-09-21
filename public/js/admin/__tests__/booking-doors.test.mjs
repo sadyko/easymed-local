@@ -372,7 +372,20 @@ test('МАСТЕР: свободное время — визит дня созд
   assert.equal(new Date(row.visit_date).getHours(), 11);
 });
 
-test('МАСТЕР: ВИЗИТ ДНЯ УЖЕ ЕСТЬ — время его не двигают, но выбранный слот всё равно проверяют', async () => {
+// CRM_REAL_BOOKING_V1 (2026-09-21) — ЭТОТ ТЕСТ ПОМЕНЯЛ ОЖИДАНИЕ В КОНЦЕ.
+//
+// Раньше здесь стояло «визит дня двигать нельзя» и booked:false. Ревью
+// показало, чем это оборачивается: выбранное оператором время не занималось
+// НИЧЕМ — calendar_book для существующего визита не звался вовсе, — а
+// карточка считала ответ успехом и называла пациенту час, на который его
+// никто не ждал.
+//
+// Теперь различается, БЫЛА ЛИ ПО ВИЗИТУ РАБОТА. Пустой визит дня (ни строки
+// услуг, ни счёта) — это сама запись, и новое время для неё ПЕРЕНОС
+// (booked:true, moved:true). Визит, по которому уже есть смета или счёт, —
+// это время прихода пациента: его не переписывают, ответ честно говорит
+// booked:false с reason:'day_visit_busy' и временем того визита.
+test('МАСТЕР: ВИЗИТ ДНЯ УЖЕ ЕСТЬ — выбранный слот проверяют, а пустой визит переносят', async () => {
   const { day } = seed();
   // Пациент 4 уже приходил сегодня утром.
   const morning = await supabase.rpc('ensure_visit', {
@@ -402,8 +415,37 @@ test('МАСТЕР: ВИЗИТ ДНЯ УЖЕ ЕСТЬ — время его не
   });
   assert.ok(!third.error, JSON.stringify(third.error));
   assert.equal(third.data.created, false);
-  assert.equal(third.data.booked, false, 'визит дня двигать нельзя — это время первого прихода пациента');
-  assert.equal(third.data.visit.id, morning.data.visit.id);
+  assert.equal(third.data.booked, true, 'выбранное время снова не занято ничем: пациента ждут не тогда, когда обещали');
+  assert.equal(third.data.moved, true, 'перенос обязан быть назван переносом');
+  assert.equal(third.data.visit.id, morning.data.visit.id, "день пациента — один визит");
+  assert.equal(new Date(DB.prepare('SELECT visit_date v FROM visits WHERE id=?').get(morning.data.visit.id).v).getHours(), 17,
+    'запись осталась на прежнем часе — перенос не доехал до базы');
+});
+
+// ВТОРАЯ ПОЛОВИНА ТОГО ЖЕ ПРАВИЛА: по визиту уже есть работа.
+test('МАСТЕР: визит дня со сметой не переносится — отказ называет его время', async () => {
+  const { day } = seed();
+  const morning = await supabase.rpc('ensure_visit', {
+    patient_id: 4, date: at(day, 9),
+    book: { doctor_id: 7, service_id: 21, start: at(day, 9), duration_minutes: 30 },
+  });
+  assert.ok(!morning.error, JSON.stringify(morning.error));
+  // Пациент пришёл: услуга в смете. С этого мига время визита — время его
+  // прихода, и записью его переписывать нельзя.
+  DB.prepare("INSERT INTO visit_services (visit_id, service_id, status) VALUES (?, 21, 'queued')").run(morning.data.visit.id);
+
+  const later = await supabase.rpc('ensure_visit', {
+    patient_id: 4, date: at(day, 17),
+    book: { doctor_id: 7, service_id: 21, start: at(day, 17), duration_minutes: 30 },
+  });
+
+  assert.ok(!later.error, JSON.stringify(later.error));
+  assert.equal(later.data.booked, false, 'время прихода пациента переписано записью');
+  assert.equal(later.data.reason, 'day_visit_busy', 'отказ без причины экрану бесполезен');
+  assert.equal(later.data.day_visit.id, morning.data.visit.id);
+  assert.match(later.data.day_visit.start, /^\d{2}:\d{2}$/, 'в ответе нет времени существующего визита');
+  assert.equal(new Date(DB.prepare('SELECT visit_date v FROM visits WHERE id=?').get(morning.data.visit.id).v).getHours(), 9,
+    'визит со сметой всё-таки передвинули');
 });
 
 test('МАСТЕР: собственный визит пациента не закрывает ему же время', async () => {

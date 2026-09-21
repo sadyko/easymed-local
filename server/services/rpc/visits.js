@@ -11,7 +11,7 @@ import { hasAnyRole } from '../roles.js';
 // строки: calendar_slots — единственный источник занятости на весь продукт,
 // calendar_book — единственный, кто ставит визиту время и врача.
 import { calendarSlots, calendarBook } from './calendar.js';
-import { DEFAULT_DURATION_MIN, serviceDurationMinutes } from './slot-engine.js';
+import { DEFAULT_DURATION_MIN, serviceDurationMinutes, formatHhmm } from './slot-engine.js';
 // CRM_LINKS_V1 — воронка настраивается (миграция 077), поэтому ступени
 // спрашиваются у справочника, а не берутся из зашитого списка.
 import { openStageKeys, scheduledStageKey, noShowStageKey, SEED_NO_SHOW_STAGE } from '../crm/config.js';
@@ -372,10 +372,54 @@ export async function ensureVisit(db, args, user) {
   // calendar_book — та же дверь, что у календаря, с тем же запретом и той же
   // записью причины экстренной записи в visits.notes.
   //
-  // Визит дня, который УЖЕ БЫЛ, не двигается: его время — это время первого
-  // прихода пациента, и вторая услуга дня ложится своей строкой
-  // visit_services. Проверку выбранного времени он всё равно прошёл выше.
-  if (out.created) {
+  // ВИЗИТ ДНЯ, КОТОРЫЙ УЖЕ БЫЛ, — ДВА РАЗНЫХ СЛУЧАЯ (разбор ревью 2026-09-21).
+  //
+  // Здесь стояло «не двигается», и выбранное оператором время не занималось
+  // НИЧЕМ: ответ приходил с booked:false, карточка считала его успехом, и
+  // человеку называли час, на который его никто не ждал. Разница между
+  // случаями — БЫЛА ЛИ ПО ЭТОМУ ВИЗИТУ РАБОТА:
+  //
+  //   ПУСТОЙ (ни строки услуг, ни счёта) — это и есть запись, заведённая
+  //   такой же записью: мастером визита или прошлым «Сохранить и записать»
+  //   той же заявки. Новое время для неё — ПЕРЕНОС, и делает его тот же
+  //   calendar_book, что и всегда (запрет двойной записи живёт внутри него).
+  //
+  //   С РАБОТОЙ — пациент уже пришёл: услуги в смете, счёт выставлен, и
+  //   время визита это время его прихода. Переписать его записью нельзя,
+  //   поэтому ответ честно говорит booked:false, называет причину и отдаёт
+  //   ВРЕМЯ И ВРАЧА того визита: оператору надо что-то сказать вслух.
+  const dayVisitIsBare = (visitId) => {
+    const has = (sql) => !!db.prepare(sql).get(visitId);
+    if (has('SELECT 1 FROM visit_services WHERE visit_id = ? LIMIT 1')) return false;
+    return !has('SELECT 1 FROM invoices WHERE visit_id = ? LIMIT 1');
+  };
+
+  if (!out.created && !dayVisitIsBare(out.visit.id)) {
+    // Строки заявки с этим визитом всё равно связываются: в этот день
+    // пациента держит именно он, и в смете регистратуры они нужны.
+    settleCrmOnBooking(out.visit);
+    const doctor = out.visit.doctor_id
+      ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(out.visit.doctor_id)
+      : null;
+    return {
+      ...out,
+      booked: false,
+      reason: 'day_visit_busy',
+      day_visit: {
+        id: out.visit.id,
+        visit_date: out.visit.visit_date,
+        start: formatHhmm(minutesOfLocal(Date.parse(out.visit.visit_date))),
+        duration_minutes: out.visit.duration_minutes,
+        doctor_id: out.visit.doctor_id,
+        doctor_name: (doctor && doctor.full_name) || '',
+      },
+    };
+  }
+
+  // Дальше путь ОДИН на оба случая: свежесозданному визиту calendar_book
+  // ставит время, пустому визиту дня — переносит. Сюда доходят только те,
+  // кого просили записать (выше стоит ранний возврат без `book`).
+  if (book) {
     try {
       const bk = await calendarBook(db, {
         visit_id: out.visit.id,
@@ -390,17 +434,26 @@ export async function ensureVisit(db, args, user) {
       out.visit = bk.visit;
       out.emergency = !!bk.emergency;
       if (bk.cross_branch) out.cross_branch = bk.cross_branch;
+      // ПЕРЕНОС НАЗЫВАЕТСЯ ПЕРЕНОСОМ: экрану надо сказать оператору не
+      // «записано», а «запись перенесена на 14:30» — это разные новости.
+      if (!out.created) out.moved = true;
     } catch (e) {
       // ОТКАТ. Сюда попадает настоящая гонка — соседний оператор занял слот в
       // те миллисекунды, что прошли между проверкой и записью. Строка,
       // созданная секунду назад, удаляется целиком: после отказа не остаётся
       // ни визита-сироты, ни услуги, ни счёта. Строка заявки тоже не берёт
       // себе этот визит — settleCrmOnBooking ниже до неё не доходит.
-      try { db.prepare('DELETE FROM visits WHERE id = ?').run(out.visit.id); }
-      catch (delErr) { console.error('[ensure_visit] откат визита', out.visit.id, 'не удался:', delErr && delErr.message); }
+      //
+      // УДАЛЯЕТСЯ ТОЛЬКО ТО, ЧТО МЫ ЖЕ И ЗАВЕЛИ. Перенос идёт этим же путём,
+      // но его визит существовал ДО вызова: отказ переноса обязан оставить
+      // запись на прежнем времени, а не стереть её вместе с днём пациента.
+      if (out.created) {
+        try { db.prepare('DELETE FROM visits WHERE id = ?').run(out.visit.id); }
+        catch (delErr) { console.error('[ensure_visit] откат визита', out.visit.id, 'не удался:', delErr && delErr.message); }
+      }
       throw e;
     }
   }
   settleCrmOnBooking(out.visit);
-  return { ...out, booked: !!out.created };
+  return { ...out, booked: true };
 }
