@@ -796,6 +796,45 @@ test('раздел, закрытый и снова открытый, возвр�
   }
 });
 
+// Память о закрытых строках живёт до ПЕРВОГО возврата, и не дольше. Иначе
+// выходит вот что: закрыли раздел и открыли обратно, потом сняли право руками,
+// потом снова закрыли и открыли — и снятое право возвращается само, из записи,
+// сделанной до того, как администратор передумал. Экран молча отменяет решение
+// человека, и заметить это можно только по спискам в базе.
+test('закрыть → открыть → снять право → закрыть → открыть: снятое право не возвращается', async () => {
+  resetServer();
+  SAVED.callcenter = { sections: ['custdev', 'patients'], levels: { custdev: 'admin', patients: 'editor' } };
+  try {
+    const root = await render();
+    roleButton(root, 'callcenter').click();
+    await tick();
+    const chosen = (key) => (radiosFor(root, key).find((n) => n.checked) || {}).attrs.value;
+    assert.equal(chosen('custdev.rate'), 'edit', 'строка раздела не доехала до экрана');
+
+    // Закрыли и передумали — строки вернулись, как и задумано.
+    pick(root, 'custdev', 'none');
+    assert.equal(chosen('custdev.rate'), 'none');
+    pick(root, 'custdev', 'edit');
+    assert.equal(chosen('custdev.rate'), 'edit', 'открытый обратно раздел не вернул свою строку');
+
+    // А теперь администратор снимает право САМ — и снова закрывает-открывает.
+    pick(root, 'custdev.rate', 'none');
+    pick(root, 'custdev', 'none');
+    pick(root, 'custdev', 'edit');
+    assert.equal(chosen('custdev.rate'), 'none', 'снятое администратором право вернулось само');
+    assert.equal(chosen('custdev.list'), 'view', 'заодно потерялась соседняя строка');
+
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    assert.equal(saved.grants['custdev.rate'], 'none', 'в базу уехало право, которое администратор снял');
+    assert.equal(saved.grants['custdev.list'], 'view');
+    assert.equal(saved.grants.custdev, 'edit');
+  } finally {
+    delete SAVED.callcenter;
+  }
+});
+
 test('изменение галочки вкладки считается несохранённым — уход спрашивает', async () => {
   resetServer();
   const root = await render();

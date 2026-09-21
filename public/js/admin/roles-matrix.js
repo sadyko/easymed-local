@@ -330,15 +330,23 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
                 controls[r.key] = p;
                 kids.push({
                     disable: (on) => p.disable(on),
+                    // Память живёт до ПЕРВОГО возврата, и не дольше. Запомненный
+                    // навсегда уровень отменял бы решение администратора: снял
+                    // право руками, закрыл раздел и открыл обратно — а право
+                    // вернулось из записи, сделанной ДО того, как он передумал.
+                    // Поэтому закрытие строки, уже стоящей в «Нет», не дописывает
+                    // память, а СТИРАЕТ её.
                     close: () => {
                         const was = p.value();
                         if (was !== 'none') closedLevels.set(r.key, was);
+                        else closedLevels.delete(r.key);
                         p.set('none'); paintNote(rnote, r, 'none');
                     },
                     // Возвращаем только то, что сами же и обнулили, и только если
                     // строка так и стоит в «Нет»: чужого выбора трогать нельзя.
                     reopen: () => {
                         const was = closedLevels.get(r.key);
+                        closedLevels.delete(r.key);
                         if (!was || p.value() !== 'none') return;
                         p.set(was); paintNote(rnote, r, was);
                     },
