@@ -9,7 +9,7 @@ import { hasAnyRole } from '../roles.js';
 // CALLCENTER_OPERATOR_V1 — звонок, журнал и запись спрашивают МАТРИЦУ ПРАВ,
 // а список ролей ниже остаётся правилом перехода для ролей, которых в ней ещё
 // не настраивали (server/services/grants.js).
-import { requireGrant } from '../grants.js';
+import { grantAllows, requireGrant } from '../grants.js';
 import { publicSettings, saveSettings, getCredentials, listDispositions, SettingsError, forgetBinotel } from '../telephony/settings.js';
 import { binotelCall } from '../telephony/binotel.js';
 import { wakePolling } from '../telephony/poller.js';
@@ -283,7 +283,18 @@ export function crmLeadCalls(db, args, user) {
   // код то есть, то нет, и точное равенство теряло бы половину звонков.
   const tail = digits.slice(-9);
   const limit = Math.max(1, Math.min(50, Number((args && args.limit) || 20)));
-  return db.prepare(`
+  // САМА ССЫЛКА НА ЗАПИСЬ В ЖУРНАЛ НЕ ЕДЕТ, и это то, ради чего право
+  // «Прослушать» существует отдельно. Адрес записи у Binotel и «Моих Звонков»
+  // прямой и ничем не подписан: доехав до карточки, он отдаёт голос пациента
+  // каждому, кто журнал открыл, — и отдельные ворота telephony_call_recording
+  // остались бы замком на распахнутой двери.
+  //
+  // Флаг has_recording при этом честный: кнопка «Прослушать» рисуется по нему,
+  // а нажатие уходит в ворота записи и получает внятный отказ. Строка «звонил,
+  // 2 минуты, запись есть» и сам голос — разный объём доверия, и клиника
+  // вправе выдать первое без второго.
+  const mayHear = grantAllows(db, user, 'crm.recording', 'edit', CALL_LOG_ROLES);
+  const rows = db.prepare(`
     SELECT c.id, c.started_at, c.call_type, c.billsec, c.waitsec, c.disposition,
            c.internal_number, c.recording_url, u.full_name AS operator_name
       FROM calls c
@@ -293,6 +304,7 @@ export function crmLeadCalls(db, args, user) {
      WHERE replace(replace(replace(replace(c.external_number,' ',''),'-',''),'(',''),')','') LIKE ?
      ORDER BY c.started_at DESC, c.id DESC
      LIMIT ?`).all('%' + tail, limit);
+  return rows.map((c) => ({ ...c, recording_url: mayHear ? c.recording_url : null, has_recording: !!c.recording_url }));
 }
 
 // ---------------------------------------------------------------------------

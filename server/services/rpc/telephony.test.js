@@ -277,8 +277,23 @@ test('запись разговора — отдельное право: стр�
 
   // Клиника оставила ей журнал, но закрыла прослушивание.
   setGrants(db, 'registrar', { 'crm.calls': 'view', 'crm.recording': 'none' });
-  assert.equal(crmLeadCalls(db, { phone: '+998901112233' }, registrar).length, 1, 'журнал закрылся заодно с записью');
+  const [row] = crmLeadCalls(db, { phone: '+998901112233' }, registrar);
+  assert.ok(row, 'журнал закрылся заодно с записью');
+  // CALLCENTER_OPERATOR_V1 — И САМА ССЫЛКА В ЖУРНАЛ НЕ ЕДЕТ. Адрес записи у
+  // Binotel и «Моих Звонков» прямой и ничем не подписан: доехав до карточки,
+  // он даёт голос пациента каждому, кто журнал открыл, — и отдельное право
+  // «Прослушать» осталось бы украшением при закрытой двери. Строка при этом
+  // честно говорит, что запись ЕСТЬ: кнопка рисуется по has_recording и
+  // получает внятный отказ, а не молчание.
+  assert.equal(row.recording_url, null, 'ссылка на запись уехала в журнал мимо права «Прослушать»');
+  assert.equal(row.has_recording, true, 'журнал скрыл сам факт записи — кнопке не из чего взяться');
   await assert.rejects(() => telephonyCallRecording(db, { call_id: 1 }, registrar), deniedByGrants);
+
+  // А тому, кому прослушивание выдано, ссылка приходит как приходила.
+  setGrants(db, 'registrar', { 'crm.calls': 'view', 'crm.recording': 'edit' });
+  const [heard] = crmLeadCalls(db, { phone: '+998901112233' }, registrar);
+  assert.equal(heard.recording_url, 'https://rec/1.mp3', 'выданное право прослушивания не отдало запись');
+  assert.equal(heard.has_recording, true);
 });
 
 // ADMIN_DOCTOR_V1 — АДМИНИСТРАТОР КЛИНИКИ, КОТОРЫЙ ЕЩЁ И ВРАЧ.

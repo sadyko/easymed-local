@@ -46,20 +46,28 @@ import { telephonyCallRecording } from '../server/services/rpc/telephony.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
-// Кто вправе работать в этой программе. То же право, что у кнопки «Позвонить» в
-// EasyMed: одно правило на обе двери, а не два расходящихся.
+// Кто вправе работать в этой программе. Те же права, что у кнопки «Позвонить»
+// и у журнала звонков в EasyMed: одно правило на обе двери, а не два
+// расходящихся.
 //
-// CALLCENTER_OPERATOR_V1 — правило переехало в матрицу прав (ключ `crm.dial`),
-// и список остался тем, чем стал в telephony.js: ПРЕЖНИМ ПОВЕДЕНИЕМ для ролей,
-// которым этот ключ ещё не настраивали. Иначе двери разошлись бы ровно в тот
-// день, когда клиника выдала телефон своей роли: в EasyMed кнопка бы работала,
-// а эта программа отвечала бы «недоступна».
+// CALLCENTER_OPERATOR_V1 — правило переехало в матрицу прав, и список остался
+// тем, чем стал в telephony.js: ПРЕЖНИМ ПОВЕДЕНИЕМ для ролей, которым эти
+// ключи ещё не настраивали. Иначе двери разошлись бы ровно в тот день, когда
+// клиника выдала телефон своей роли: в EasyMed кнопка бы работала, а эта
+// программа отвечала бы «недоступна».
 const PHONE_ROLES = ['admin', 'registrar', 'callcenter'];
 
-function phoneRoleGate(db) {
+// ОДНА ДВЕРЬ — ОДНО ПРАВО, и это разбор настоящей дыры. Раньше ворота здесь
+// были ОДНИ на все маршруты — право ПОЗВОНИТЬ (`crm.dial`), — а за ними лежал
+// в том числе `GET /api/calls`: весь журнал звонков клиники, с номерами и
+// ссылками на записи разговоров. Выдай человеку набор номера — и он получал
+// голоса пациентов за всю историю; а тому, кому выдали журнал без набора,
+// программа отвечала «недоступна». В EasyMed эти два права давно разные
+// (rpc/telephony.js: crm.calls и crm.dial), и здесь они обязаны быть теми же.
+function gate(db, key, need, message) {
   return (req, res, next) => {
-    if (!grantAllows(db, req.user, 'crm.dial', 'edit', PHONE_ROLES)) {
-      return res.status(403).json({ error: { code: 'forbidden', message: 'Программа телефонии доступна тем, кому выдано право звонить из программы («Настройки → Роли»).' } });
+    if (!grantAllows(db, req.user, key, need, PHONE_ROLES)) {
+      return res.status(403).json({ error: { code: 'forbidden', message } });
     }
     next();
   };
@@ -67,12 +75,25 @@ function phoneRoleGate(db) {
 
 export function createPhoneApp(db) {
   const app = express();
-  const requirePhoneRole = phoneRoleGate(db);
+  const requireDial = gate(db, 'crm.dial', 'edit',
+    'Звонить из программы можно тем, кому выдано право «Позвонить пациенту» («Настройки → Роли»).');
+  const requireCallLog = gate(db, 'crm.calls', 'view',
+    'Журнал звонков открыт тем, кому выдано право «Звонки и записи разговоров» («Настройки → Роли»).');
+  // Само рабочее место открывается тому, у кого есть ХОТЬ ОДНО из двух прав:
+  // человек, которому выдали журнал без набора, иначе упирался бы в «программа
+  // недоступна» на пустом экране — при открытом ему журнале.
+  const requireWorkplace = (req, res, next) => {
+    if (!grantAllows(db, req.user, 'crm.dial', 'edit', PHONE_ROLES)
+        && !grantAllows(db, req.user, 'crm.calls', 'view', PHONE_ROLES)) {
+      return res.status(403).json({ error: { code: 'forbidden', message: 'Программа телефонии доступна тем, кому выдано право звонить из программы или смотреть журнал звонков («Настройки → Роли»).' } });
+    }
+    next();
+  };
   app.use(express.json({ limit: '64kb' }));
   app.use(attachUser(db));
 
   // --- кто я и чем звоню --------------------------------------------------
-  app.get('/api/me', requireAuth, requirePhoneRole, (req, res) => {
+  app.get('/api/me', requireAuth, requireWorkplace, (req, res) => {
     const me = db.prepare('SELECT id, full_name, pbx_extension FROM users WHERE id = ?').get(req.user.id) || {};
     const via = dialProvider(db);
     res.json({
@@ -86,7 +107,7 @@ export function createPhoneApp(db) {
 
   // Мой внутренний номер. Пишет ТОЛЬКО себе: чужую трубку назначать нельзя —
   // иначе звонок уйдёт от чужого имени, и разбор смены соврёт.
-  app.post('/api/my-extension', requireAuth, requirePhoneRole, (req, res) => {
+  app.post('/api/my-extension', requireAuth, requireDial, (req, res) => {
     const ext = String((req.body && req.body.extension) || '').trim();
     if (ext && !/^[0-9*#]{1,12}$/.test(ext)) {
       return res.status(400).json({ error: { code: 'bad_request', message: 'Внутренний номер — это цифры, не длиннее двенадцати.' } });
@@ -97,7 +118,7 @@ export function createPhoneApp(db) {
 
   // Список внутренних номеров у самой станции — чтобы выбирать из настоящего,
   // а не вспоминать.
-  app.get('/api/extensions', requireAuth, requirePhoneRole, async (req, res) => {
+  app.get('/api/extensions', requireAuth, requireDial, async (req, res) => {
     const line = (listProviders(db) || []).find((p) => p.enabled && p.kind === 'onlinepbx');
     if (!line) return res.json({ extensions: [] });
     const row = getProviderRow(db, line.id);
@@ -109,7 +130,7 @@ export function createPhoneApp(db) {
   });
 
   // --- позвонить -----------------------------------------------------------
-  app.post('/api/dial', requireAuth, requirePhoneRole, async (req, res) => {
+  app.post('/api/dial', requireAuth, requireDial, async (req, res) => {
     const me = db.prepare('SELECT pbx_extension FROM users WHERE id = ?').get(req.user.id) || {};
     const r = await dialCall(db, { extension: me.pbx_extension || '', phone: (req.body && req.body.phone) || '' });
     if (!r.ok) return res.status(400).json({ error: { code: 'telephony', message: r.message } });
@@ -120,10 +141,16 @@ export function createPhoneApp(db) {
   // Один запрос на весь экран: последние звонки с именем пациента и именем
   // оператора (по внутреннему номеру). Экран телефониста обновляет его каждые
   // несколько секунд, поэтому лишних запросов быть не должно.
-  app.get('/api/calls', requireAuth, requirePhoneRole, (req, res) => {
+  app.get('/api/calls', requireAuth, requireCallLog, (req, res) => {
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
-    res.json({
-      calls: db.prepare(`
+    // ССЫЛКА НА ЗАПИСЬ — ТРЕТЬЕ ПРАВО, и в журнал она не едет. Адрес у Binotel
+    // и «Моих Звонков» прямой: уехав сюда, он отдал бы голос пациента каждому,
+    // кто журнал открыл, и маршрут /api/recording остался бы замком на
+    // распахнутой двери. Флаг has_recording остаётся — кнопка «Прослушать»
+    // рисуется по нему и получает внятный отказ (rpc/telephony.js crmLeadCalls
+    // делает ровно то же самое в карточке заявки).
+    const mayHear = grantAllows(db, req.user, 'crm.recording', 'edit', PHONE_ROLES);
+    const rows = db.prepare(`
         SELECT c.id, c.started_at, c.call_type, c.external_number, c.internal_number,
                c.waitsec, c.billsec, c.disposition, c.recording_url,
                p.full_name AS patient_name, p.mrn AS patient_mrn,
@@ -133,11 +160,16 @@ export function createPhoneApp(db) {
           LEFT JOIN users u ON u.pbx_extension IS NOT NULL AND u.pbx_extension <> ''
                            AND u.pbx_extension = c.internal_number
          ORDER BY c.started_at DESC, c.id DESC
-         LIMIT ?`).all(limit),
+         LIMIT ?`).all(limit);
+    res.json({
+      calls: rows.map((c) => ({ ...c, recording_url: mayHear ? c.recording_url : null, has_recording: !!c.recording_url })),
     });
   });
 
-  app.get('/api/recording', requireAuth, requirePhoneRole, async (req, res) => {
+  // Прослушивание спрашивает СВОЁ право внутри (rpc/telephony.js
+  // telephonyCallRecording, ключ `crm.recording`), поэтому на двери стоит
+  // право журнала: слушать записи, не видя журнала, всё равно неоткуда.
+  app.get('/api/recording', requireAuth, requireCallLog, async (req, res) => {
     try {
       const r = await telephonyCallRecording(db, { call_id: Number(req.query.call_id) }, req.user);
       res.json(r);
