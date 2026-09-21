@@ -138,10 +138,20 @@ test('a callcenter user can register the patient they are talking to', async (t)
   assert.equal(pat.status, 200, 'callcenter must create the patient card: ' + JSON.stringify(pat.json));
 });
 
-// Scope. The call centre books and hands over; it does not open visits, and
-// CRM_SCHEDULE_V1 says so in as many words («он не берёт деньги и не оформляет
-// визит»). This is what separates the new role from the registrar workaround.
-test('a callcenter user cannot open a visit', async (t) => {
+// Scope. CRM_REAL_BOOKING_V1 (2026-09-21) MOVED THIS LINE, deliberately.
+//
+// Прежде здесь стояло «оператор не заводит визит»: CRM_SCHEDULE_V1 обещал, что
+// он «не берёт деньги и не оформляет визит», и «Сохранить и записать» писало
+// только услугу и дату. Владелец (2026-09-21) решил иначе: запись колл-центра —
+// это НАСТОЯЩИЙ слот в календаре, иначе время у врача не держит никто, и в день
+// приёма о записи узнаёт только смета. Значит оператор обязан уметь спросить
+// свободное время и занять его — той же дверью, что регистратура
+// (ensure_visit + calendar_slots/calendar_book).
+//
+// Граница роли осталась там же, где была, и проходит по ДЕНЬГАМ и КАРТОЧКЕ
+// визита: оформляет приём, берёт оплату и правит визит по-прежнему
+// регистратура — visits.update в реестре так и открыт admin/registrar/doctor.
+test('a callcenter user books a real slot: the visit is theirs to open', async (t) => {
   const { db, server, base } = await startServer();
   t.after(() => { server.close(); db.close(); });
   const cookie = await login(base, 'operator');
@@ -149,10 +159,45 @@ test('a callcenter user cannot open a visit', async (t) => {
     table: 'patients', op: 'insert', returning: true, single: 'single',
     values: { full_name: 'Пациент Тест', phone: '+998950768008' },
   });
+  const doctorId = db.prepare("SELECT id FROM users WHERE username = 'cardio'").get().id;
 
-  const res = await rpc(base, cookie, 'ensure_visit', { patient_id: pat.json.data.id, date: '2026-08-20' });
+  // Сначала «что свободно» — без этого оператору нечего назвать пациенту.
+  const slots = await rpc(base, cookie, 'calendar_slots', { doctor_id: doctorId, date: '2026-08-20' });
+  assert.equal(slots.status, 200, 'callcenter must see free slots: ' + JSON.stringify(slots.json));
+  assert.ok(slots.json.data.slots.length, 'у врача нет ни одного свободного начала');
+  const start = slots.json.data.slots[0].start_iso;
 
-  assert.equal(res.status, 403, 'callcenter must not create visits: ' + JSON.stringify(res.json));
+  // И запись — одним вызовом, тем же, что у мастера визита.
+  const res = await rpc(base, cookie, 'ensure_visit', {
+    patient_id: pat.json.data.id, date: '2026-08-20',
+    book: { doctor_id: doctorId, start },
+  });
+
+  assert.equal(res.status, 200, 'callcenter must create the visit it booked: ' + JSON.stringify(res.json));
+  assert.equal(res.json.data.booked, true, 'визит заведён, но слот не занят — время у врача не держит никто');
+  const visit = db.prepare('SELECT doctor_id, status FROM visits WHERE id = ?').get(res.json.data.visit.id);
+  assert.equal(visit.doctor_id, doctorId);
+  assert.equal(visit.status, 'scheduled', '«Пришёл» ставит приход, а не запись');
+});
+
+// Граница роли: оформление визита деньгами и карточкой осталось у регистратуры.
+test('a callcenter user still cannot edit the visit card', async (t) => {
+  const { db, server, base } = await startServer();
+  t.after(() => { server.close(); db.close(); });
+  const cookie = await login(base, 'operator');
+  const pat = await dbCall(base, cookie, {
+    table: 'patients', op: 'insert', returning: true, single: 'single',
+    values: { full_name: 'Пациент Тест', phone: '+998950768009' },
+  });
+  const made = await rpc(base, cookie, 'ensure_visit', { patient_id: pat.json.data.id, date: '2026-08-21' });
+  assert.equal(made.status, 200, JSON.stringify(made.json));
+
+  const res = await dbCall(base, cookie, {
+    table: 'visits', op: 'update', values: { notes: 'правка оператора' },
+    filters: [{ col: 'id', op: 'eq', val: made.json.data.visit.id }],
+  });
+
+  assert.equal(res.status, 403, 'карточка визита осталась за регистратурой: ' + JSON.stringify(res.json));
 });
 
 test('a callcenter user cannot delete a CRM request', async (t) => {
