@@ -120,3 +120,32 @@ test('142 ложится на базу с заявками и не трогае�
   assert.equal(db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='index' AND name='idx_crm_req_services_visit'").get().n, 1);
   db.close();
 });
+
+// УДАЛЕНИЕ ВИЗИТА НЕ ЗАПИРАЕТСЯ ССЫЛКОЙ ЗАЯВКИ (разбор ревью, 2026-09-21).
+//
+// Первая версия этой миграции завела ссылку без ON DELETE, то есть с
+// поведением по умолчанию — NO ACTION, а при `foreign_keys = ON`
+// (connection.js) это запрет. Окно визита умеет удалять визит целиком
+// (visit-modal.js), и с той версией любой визит, записанный колл-центром,
+// удалить было уже нельзя: регистратура получала «FOREIGN KEY constraint
+// failed» — сообщение, из которого не следует ровно ничего.
+//
+// SET NULL — единственный честный ответ: запись удалили, значит слота больше
+// нет, а строка заявки остаётся и снова ждёт записи. Ни строку, ни заявку
+// удаление визита уносить с собой не вправе.
+test('142: визит с записанной строкой заявки удаляется, а ссылка гаснет', () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  try {
+    const rid = seedPatientVisit(db);
+    const lid = db.prepare('INSERT INTO crm_request_services (request_id, scheduled_date, visit_id) VALUES (?,?,10)')
+      .run(rid, '2026-09-21').lastInsertRowid;
+
+    db.prepare('DELETE FROM visits WHERE id = 10').run();
+
+    const line = db.prepare('SELECT status, visit_id FROM crm_request_services WHERE id=?').get(lid);
+    assert.ok(line, 'строка заявки исчезла вместе с визитом — работа колл-центра не принадлежит визиту');
+    assert.equal(line.visit_id, null, 'ссылка на удалённый визит осталась висеть');
+    assert.equal(line.status, 'pending', 'строка обязана снова ждать записи');
+  } finally { db.close(); }
+});
