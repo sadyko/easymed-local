@@ -103,13 +103,45 @@ test('уровень «Только просмотр» читает, но оце
   const cardId = custdevList(db, period(db), operator)[0].id;
 
   // Понижаем колл-центр до просмотра — ровно то, что владелец делает галочкой.
-  db.prepare(`UPDATE role_permissions SET permissions = json_set(permissions, '$.levels.custdev', 'viewer')
+  // CALLCENTER_OPERATOR_V1: «галочка» теперь пишет ОБА языка — строку матрицы
+  // (custdev.rate) и старый уровень раздела, потому что экран выводит второе из
+  // первого (roles-matrix.js legacyFromGrants). Матрица главнее: настроенный
+  // ключ бьёт старый уровень, иначе правило перехода не имело бы смысла.
+  db.prepare(`UPDATE role_permissions
+                 SET permissions = json_set(json_patch(permissions, '{"grants":{"custdev.rate":"view"}}'),
+                                            '$.levels.custdev', 'viewer')
                WHERE role = 'callcenter'`).run();
 
   assert.equal(custdevList(db, period(db), operator).length, 1);
   assert.throws(() => custdevRate(db, {
     card_id: cardId, registrar: 'good', cashier: 'good', doctor: 'good',
   }, operator), (e) => e instanceof RpcError && e.status === 403);
+});
+
+// CALLCENTER_OPERATOR_V1 — раздел появился в справочнике прав, и его ворота
+// живут по тому же правилу перехода, что и стационар: пока роль ключ не
+// трогала, решает ПРЕЖНЯЯ галочка раздела, а не пустая матрица.
+test('строки матрицы главнее старой галочки — но только там, где их настроили', () => {
+  const db = fresh();
+  paidVisit(db, 1, dayOffset(db, -1));
+  custdevSync(db, period(db), operator);
+  const cardId = custdevList(db, period(db), operator)[0].id;
+
+  // Врач раздела не имеет и ключей не настраивал — отказ, как и был.
+  assert.throws(() => custdevList(db, period(db), doctor), (e) => e.status === 403);
+
+  // Клиника выдала врачу доску СТРОКОЙ МАТРИЦЫ — старого раздела ему так и не
+  // дали, и раньше выдать одну доску было нечем.
+  db.prepare(`UPDATE role_permissions
+                 SET permissions = json_patch(permissions, '{"grants":{"custdev.list":"view"}}')
+               WHERE role = 'doctor'`).run();
+  assert.equal(custdevList(db, period(db), doctor).length, 1, 'выданная строка доску не открыла');
+
+  // Оценивать он всё равно не может: custdev.rate ему не выдавали, а старой
+  // галочки раздела у него нет — правило перехода отвечает «как было».
+  assert.throws(() => custdevRate(db, {
+    card_id: cardId, registrar: 'good', cashier: 'good', doctor: 'good',
+  }, doctor), (e) => e.status === 403);
 });
 
 test('жалоба без комментария отклоняется с текстом для оператора', () => {

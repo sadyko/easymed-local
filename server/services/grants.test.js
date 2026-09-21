@@ -127,7 +127,16 @@ test('каждая строка справочника называет пров
   for (const k of ['inpatient.prescriptions', 'inpatient.marks', 'inpatient.vitals', 'inpatient.reviews', 'inpatient.services', 'inpatient.discharge', 'inpatient.requests', 'inpatient.beds', 'inpatient.patients', 'inpatient.history']) {
     assert.ok(keys.has(k), 'сервер проверяет ' + k + ', а в справочнике его нет');
   }
+  // CALLCENTER_OPERATOR_V1 — ключи работы оператора: звонки, набор номера,
+  // записи разговоров, заведение пациента из заявки и Cust Dev. Пропадёт ключ
+  // отсюда — галочка исчезнет с экрана, а проверка на сервере останется, и
+  // право станет невыдаваемым.
+  for (const k of ['crm.calls', 'crm.dial', 'crm.recording', 'crm.convert', 'custdev.list', 'custdev.rate']) {
+    assert.ok(keys.has(k), 'сервер проверяет ' + k + ', а в справочнике его нет');
+  }
   assert.equal(levelAllows('edit', 'view'), true);
   assert.equal(levelAllows('view', 'edit'), false);
-  assert.equal(CATALOG.length, 17, 'в справочнике семнадцать разделов — как в списке владельца');
+  // Восемнадцатый раздел — Cust Dev. Он выдавался миграцией 078, а на экране
+  // «Роли» его не было вовсе (CALLCENTER_OPERATOR_V1).
+  assert.equal(CATALOG.length, 18, 'в справочнике восемнадцать разделов');
 });

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRecentCalls, telephonyDispositions, RpcError,
-         telephonyProvidersList, telephonyProviderSave, telephonyProviderDelete, telephonyProviderTest } from './telephony.js';
+         telephonyProvidersList, telephonyProviderSave, telephonyProviderDelete, telephonyProviderTest,
+         telephonyDial, crmLeadCalls, telephonyCallRecording } from './telephony.js';
 import { getRpc } from './index.js';
 import { SELLABLE_MODULES } from './licence.js';
 
@@ -216,6 +217,74 @@ test("'callcenter' is sellable — the locked-module screen's request must not 4
   // The telephony tile gates on the callcenter module; a locked clinic asks
   // for it through module_request, which validates against this exact set.
   assert.ok(SELLABLE_MODULES.has('callcenter'));
+});
+
+// ---------------------------------------------------------------------------
+// CALLCENTER_OPERATOR_V1 — ЗВОНОК, ЖУРНАЛ И ЗАПИСЬ СПРАШИВАЮТ МАТРИЦУ ПРАВ.
+// ---------------------------------------------------------------------------
+// Списки DIAL_ROLES / CALL_LOG_ROLES остались в коде, но перестали быть
+// решением: теперь это ПРЕЖНЕЕ ПОВЕДЕНИЕ для ролей, у которых ключа ещё нет
+// (правило перехода grants.js). Проверяются все три случая, потому что
+// ошибиться можно в каждом: выдать галочкой, отнять галочкой и не тронуть того,
+// кому никто ничего не настраивал.
+function setGrants(db, role, grants) {
+  const row = db.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get(role);
+  const perms = row && row.permissions ? JSON.parse(row.permissions) : { sections: [], levels: {} };
+  perms.grants = { ...(perms.grants || {}), ...grants };
+  if (row) db.prepare('UPDATE role_permissions SET permissions = ? WHERE role = ?').run(JSON.stringify(perms), role);
+  else db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run(role, JSON.stringify(perms));
+}
+// Ворота прав отвечают 403 и адресом, где право выдают; отказ САМОЙ телефонии —
+// 400 («нет линии»). Различать обязательно: иначе «пустил» не отличить от
+// «не пустил».
+const deniedByGrants = (e) => e.status === 403 && /Настройки → Роли/.test(e.message);
+
+test('матрица решает, кто звонит: своя роль клиники — по галочке, медсестра — нет, ненастроенная регистратура — как раньше', async () => {
+  const db = fresh();
+  const ins = db.prepare('INSERT INTO users (id, username, password_hash, role, custom_role_code) VALUES (?,?,?,?,?)');
+  ins.run(4, 'nurse1', 'x', 'nurse', null);
+  ins.run(5, 'op', 'x', 'nurse', 'operator');
+  const nurse = { id: 4, role: 'nurse', extra_roles: [] };
+  // CUSTOM_ROLES_V1 — своя роль клиники на основе медсестры: списком ролей в
+  // коде ей телефон было не выдать НИКАК, галочкой — можно.
+  const custom = { id: 5, role: 'nurse', extra_roles: [], custom_role_code: 'operator' };
+  setGrants(db, 'operator', { 'crm.dial': 'edit', 'crm.calls': 'view' });
+
+  // Медсестра не звонит и журнала не видит — как и до матрицы.
+  await assert.rejects(() => telephonyDial(db, { phone: '+998901112233' }, nurse), deniedByGrants);
+  assert.throws(() => crmLeadCalls(db, { phone: '+998901112233' }, nurse), deniedByGrants);
+
+  // Своя роль с галочкой звонит: ворота прав пропустили, отказала телефония
+  // (линии в тесте нет) — и это 400, а не 403.
+  await assert.rejects(() => telephonyDial(db, { phone: '+998901112233' }, custom), (e) => e.status === 400);
+  assert.deepEqual(crmLeadCalls(db, { phone: '+998901112233' }, custom), []);
+
+  // Регистратура ключа не настраивала — работает по прежнему списку из кода.
+  await assert.rejects(() => telephonyDial(db, { phone: '+998901112233' }, registrar), (e) => e.status === 400);
+  assert.deepEqual(crmLeadCalls(db, { phone: '+998901112233' }, registrar), []);
+
+  // И обратно: клиника отняла телефон — список из кода её больше не спасает.
+  setGrants(db, 'registrar', { 'crm.dial': 'none' });
+  await assert.rejects(() => telephonyDial(db, { phone: '+998901112233' }, registrar), deniedByGrants);
+});
+
+test('запись разговора — отдельное право: строку в журнале видно, голос пациента нет', async () => {
+  const db = fresh();
+  db.prepare("INSERT INTO calls (general_call_id, started_at, external_number, billsec, recording_url) VALUES ('1','2026-09-20T08:00:00Z','998901112233',42,'https://rec/1.mp3')").run();
+
+  // До всякой настройки регистратура слышит запись — как и до этого дня.
+  assert.deepEqual(await telephonyCallRecording(db, { call_id: 1 }, registrar), { url: 'https://rec/1.mp3' });
+
+  // Клиника оставила ей журнал, но закрыла прослушивание.
+  setGrants(db, 'registrar', { 'crm.calls': 'view', 'crm.recording': 'none' });
+  assert.equal(crmLeadCalls(db, { phone: '+998901112233' }, registrar).length, 1, 'журнал закрылся заодно с записью');
+  await assert.rejects(() => telephonyCallRecording(db, { call_id: 1 }, registrar), deniedByGrants);
+});
+
+test('RPC матрицы зарегистрированы под теми именами, что названы в справочнике прав (enforced)', () => {
+  for (const name of ['telephony_dial', 'crm_lead_calls', 'telephony_call_recording']) {
+    assert.equal(typeof getRpc(name), 'function', name);
+  }
 });
 
 // --- TELEPHONY_PROVIDERS_V1 --------------------------------------------------

@@ -36,7 +36,9 @@ import express from 'express';
 
 import { openDb } from '../server/db/connection.js';
 import { attachUser, requireAuth } from '../server/middleware/auth.js';
-import { hasAnyRole } from '../server/services/roles.js';
+// CALLCENTER_OPERATOR_V1 — «одно правило на обе двери» теперь значит одну
+// СТРОКУ МАТРИЦЫ (crm.dial), а не один список ролей.
+import { grantAllows } from '../server/services/grants.js';
 import { dialCall, candidateExtensions, dialProvider } from '../server/services/telephony/dial.js';
 import { pbxCall } from '../server/services/telephony/onlinepbx.js';
 import { getProviderRow, pbxOptions, providerConfig, listProviders } from '../server/services/telephony/providers.js';
@@ -44,19 +46,28 @@ import { telephonyCallRecording } from '../server/services/rpc/telephony.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
-// Кто вправе работать в этой программе. Тот же список, что у кнопки «Позвонить»
-// в EasyMed: одно правило на обе двери, а не два расходящихся.
+// Кто вправе работать в этой программе. То же право, что у кнопки «Позвонить» в
+// EasyMed: одно правило на обе двери, а не два расходящихся.
+//
+// CALLCENTER_OPERATOR_V1 — правило переехало в матрицу прав (ключ `crm.dial`),
+// и список остался тем, чем стал в telephony.js: ПРЕЖНИМ ПОВЕДЕНИЕМ для ролей,
+// которым этот ключ ещё не настраивали. Иначе двери разошлись бы ровно в тот
+// день, когда клиника выдала телефон своей роли: в EasyMed кнопка бы работала,
+// а эта программа отвечала бы «недоступна».
 const PHONE_ROLES = ['admin', 'registrar', 'callcenter'];
 
-function requirePhoneRole(req, res, next) {
-  if (!hasAnyRole(req.user, PHONE_ROLES)) {
-    return res.status(403).json({ error: { code: 'forbidden', message: 'Программа телефонии доступна регистратуре и колл-центру.' } });
-  }
-  next();
+function phoneRoleGate(db) {
+  return (req, res, next) => {
+    if (!grantAllows(db, req.user, 'crm.dial', 'edit', PHONE_ROLES)) {
+      return res.status(403).json({ error: { code: 'forbidden', message: 'Программа телефонии доступна тем, кому выдано право звонить из программы («Настройки → Роли»).' } });
+    }
+    next();
+  };
 }
 
 export function createPhoneApp(db) {
   const app = express();
+  const requirePhoneRole = phoneRoleGate(db);
   app.use(express.json({ limit: '64kb' }));
   app.use(attachUser(db));
 

@@ -276,8 +276,9 @@ test('ROLES_ACCORDION_V1: разделы свёрнуты, раскрывают�
   const bodyOf = (key) => walk(section(key)).find((n) => String(n.className).split(/\s+/).includes('rm-body'));
   const toggleOf = (key) => walk(section(key)).find((n) => String(n.className).split(/\s+/).includes('rm-toggle'));
 
-  // Семнадцать разделов — семнадцать панелей, и все свёрнуты: экран открывается списком, а не простынёй.
-  assert.equal(byClass('rm-section').length, 17);
+  // Сколько разделов в справочнике — столько панелей, и все свёрнуты: экран
+  // открывается списком, а не простынёй. (CALLCENTER_OPERATOR_V1 добавил Cust Dev.)
+  assert.equal(byClass('rm-section').length, 18);
   assert.ok(byClass('rm-body').every((b) => b.hidden === true), 'раздел раскрыт при открытии экрана');
   assert.equal(toggleOf('inpatient').attrs['aria-expanded'], 'false');
 
@@ -557,6 +558,36 @@ test('роль callcenter подписана «Оператор колл-цен�
   const btn = roleButton(root, 'callcenter');
   assert.ok(btn, 'кнопки роли callcenter нет на экране');
   assert.match(textOf(btn), /Оператор колл-центра/, 'роль подписана отделом, а не человеком');
+});
+
+// ---------------------------------------------------------------------------
+// CALLCENTER_OPERATOR_V1 — ТОЧЕЧНО ВЫДАННЫЙ КЛЮЧ НЕ ОБНУЛЯЕТ ВСЮ МАТРИЦУ.
+// ---------------------------------------------------------------------------
+// Экран читал `perms.grants || grantsFromLegacy(perms)`: ОДНОГО ключа в grants
+// хватало, чтобы весь остальной справочник нарисовался «Нет», и первое же
+// «Сохранить роль» отняло бы у роли всё, что она имела по старым полям.
+// Миграция 141 выдаёт ключи именно так — точечно; и так же выглядит любая
+// роль, настроенная ДО появления новой строки справочника.
+test('роль с частично выданными grants рисуется по старым полям, а сохранение ничего не отнимает', async () => {
+  resetServer();
+  SAVED.registrar.grants = { 'crm.dial': 'edit' };   // ровно то, что пишет миграция 141
+  try {
+    const root = await render();
+    const chosen = (key) => (radiosFor(root, key).find((n) => n.checked) || {}).attrs.value;
+
+    assert.equal(chosen('crm.dial'), 'edit', 'выданный ключ не доехал до экрана');
+    assert.equal(chosen('patients'), 'edit', 'раздел из старых полей нарисовался «Нет»');
+    assert.equal(chosen('patients.list'), 'view', 'окно раздела нарисовалось «Нет»');
+    assert.equal(chosen('dashboard'), 'view');
+
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    assert.ok(saved.sections.includes('patients'), 'сохранение отняло раздел «Пациенты»');
+    assert.equal(saved.grants['crm.dial'], 'edit', 'сохранение потеряло выданный ключ');
+  } finally {
+    delete SAVED.registrar.grants;
+  }
 });
 
 test('изменение галочки вкладки считается несохранённым — уход спрашивает', async () => {

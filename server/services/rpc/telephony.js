@@ -6,6 +6,10 @@
 // Nothing returned here ever contains api_secret — only api_secret_set.
 
 import { hasAnyRole } from '../roles.js';
+// CALLCENTER_OPERATOR_V1 — звонок, журнал и запись спрашивают МАТРИЦУ ПРАВ,
+// а список ролей ниже остаётся правилом перехода для ролей, которых в ней ещё
+// не настраивали (server/services/grants.js).
+import { requireGrant } from '../grants.js';
 import { publicSettings, saveSettings, getCredentials, listDispositions, SettingsError, forgetBinotel } from '../telephony/settings.js';
 import { binotelCall } from '../telephony/binotel.js';
 import { wakePolling } from '../telephony/poller.js';
@@ -215,12 +219,17 @@ export async function telephonyProviderTest(db, args, user, seams = {}) {
 //
 // Кому звонить, решает ЭКРАН (заявка, карта пациента, очередь), поэтому номер
 // пациента приходит аргументом. Проверка номера — в dial.js, одна на всех.
+//
+// CALLCENTER_OPERATOR_V1 — КТО ЗВОНИТ, РЕШАЕТ МАТРИЦА, А НЕ ЭТОТ СПИСОК.
+// Список остался, но сменил роль: он — ПРЕЖНЕЕ ПОВЕДЕНИЕ для ролей, которым
+// ключ `crm.dial` ещё не настраивали (правило перехода, grants.js). Клиника,
+// которая ничего не трогала, после обновления звонит ровно теми же людьми; а
+// своя роль клиники («Старший регистратор», «Оператор») получает право
+// галочкой, чего списком в коде не добиться было никак.
 const DIAL_ROLES = ['admin', 'registrar', 'callcenter'];
 
 export async function telephonyDial(db, args, user, seams = {}) {
-  if (!hasAnyRole(user, DIAL_ROLES)) {
-    throw new RpcError('Звонить из программы могут регистратура и колл-центр.', 403);
-  }
+  requireGrant(db, user, 'crm.dial', 'edit', DIAL_ROLES, 'звонить из программы');
   const me = db.prepare('SELECT pbx_extension FROM users WHERE id = ?').get(user && user.id ? user.id : 0);
   const r = await dialCall(db, {
     extension: (me && me.pbx_extension) || '',
@@ -256,12 +265,15 @@ export async function telephonyDial(db, args, user, seams = {}) {
 // сотрудника (миграция 134), поэтому в карточке видно «Насиба А.», а не «102».
 // Совпадения может не быть (номер сменили, звонок входящий на общую линию) —
 // тогда остаётся сам номер, и это честнее выдуманного имени.
+//
+// CALLCENTER_OPERATOR_V1 — и здесь список из кода стал правилом перехода:
+// журнал открывает ключ `crm.calls`, запись разговора — `crm.recording`. Они
+// РАЗНЫЕ намеренно: строка «звонил, 2 минуты» и голос пациента в наушниках —
+// это разный объём доверия, и клиника вправе выдать одно без другого.
 const CALL_LOG_ROLES = ['admin', 'registrar', 'callcenter'];
 
 export function crmLeadCalls(db, args, user) {
-  if (!hasAnyRole(user, CALL_LOG_ROLES)) {
-    throw new RpcError('Журнал звонков доступен регистратуре и колл-центру.', 403);
-  }
+  requireGrant(db, user, 'crm.calls', 'view', CALL_LOG_ROLES, 'смотреть журнал звонков');
   // Номер сверяется ПО ЦИФРАМ: в заявке он записан как его набрала регистратура,
   // а телефония отдаёт свой формат — «+998 90 123-45-67» и «998901234567» это
   // один и тот же человек.
@@ -341,9 +353,7 @@ export function telephonyOperatorStats(db, args, user) {
 // Для Binotel и «Моих Звонков» ссылка приезжает вместе со звонком и лежит в
 // самой строке — тогда станцию не тревожим вовсе.
 export async function telephonyCallRecording(db, args, user, { pbxRecordingUrlImpl = pbxRecordingUrl } = {}) {
-  if (!hasAnyRole(user, CALL_LOG_ROLES)) {
-    throw new RpcError('Записи разговоров доступны регистратуре и колл-центру.', 403);
-  }
+  requireGrant(db, user, 'crm.recording', 'edit', CALL_LOG_ROLES, 'слушать записи разговоров');
   const id = Number((args && args.call_id) || 0);
   const call = id ? db.prepare('SELECT id, general_call_id, provider, provider_id, billsec, recording_url FROM calls WHERE id = ?').get(id) : null;
   if (!call) throw new RpcError('Звонок не найден.', 404);

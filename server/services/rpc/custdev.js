@@ -7,6 +7,10 @@
 // Тот же выбор и по той же причине сделан для «Чата с пациентами».
 
 import { canViewSection, canEditSection } from '../roles.js';
+// CALLCENTER_OPERATOR_V1 — у раздела появились свои строки в справочнике прав
+// (custdev.list, custdev.rate), и ворота спрашивают СНАЧАЛА их.
+import { grantLevel } from '../grants.js';
+import { levelAllows } from '../../../public/js/shared/permission-catalog.js';
 import { RpcError } from './crm-config.js';
 import { syncCards } from '../custdev/sync.js';
 import { listCards, reportFor } from '../custdev/board.js';
@@ -14,15 +18,24 @@ import { rateOutcome, ScoreError } from '../custdev/score.js';
 
 const KEY = 'custdev';
 
+// Правило перехода — то же, что у grants.js, только основа другая. У Cust Dev
+// никогда не было списка ролей в коде (см. шапку файла), поэтому «как было»
+// здесь — ПРЕЖНЯЯ ГАЛОЧКА РАЗДЕЛА, а не hasAnyRole: пока роль ключ не
+// трогала, решает canViewSection/canEditSection, как и до этого дня.
+function grantedOr(db, user, key, need, legacy) {
+  const lvl = grantLevel(db, user, key);
+  return lvl !== null ? levelAllows(lvl, need) : legacy();
+}
+
 function requireView(db, user) {
-  if (!canViewSection(db, user, KEY)) {
+  if (!grantedOr(db, user, 'custdev.list', 'view', () => canViewSection(db, user, KEY))) {
     throw new RpcError('Раздел «Cust Dev» вам не выдан.', 403);
   }
 }
 
 function requireEdit(db, user) {
   requireView(db, user);
-  if (!canEditSection(db, user, KEY)) {
+  if (!grantedOr(db, user, 'custdev.rate', 'edit', () => canEditSection(db, user, KEY))) {
     throw new RpcError('У вас доступ «Только просмотр»: оценивать карточки нельзя.', 403);
   }
 }

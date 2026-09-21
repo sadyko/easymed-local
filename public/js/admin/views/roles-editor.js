@@ -473,8 +473,19 @@ export async function renderRolesEditor(container, { onBack } = {}) {
         // ROLES_MATRIX_V1 — раздел → окно → действие. Роль без grants получает
         // их из старых полей: экран показывает то, что действует сейчас, а не
         // пустую матрицу, которая читалась бы как «у роли нет ничего».
+        //
+        // CALLCENTER_OPERATOR_V1 — СТАРЫЕ ПОЛЯ ЧИТАЮТСЯ ВСЕГДА, а настроенные
+        // ключи ложатся ПОВЕРХ. Раньше стояло `perms.grants || grantsFromLegacy(perms)`:
+        // достаточно было ОДНОГО ключа в grants, чтобы весь остальной справочник
+        // нарисовался «Нет», и первое же «Сохранить» отняло бы у роли всё, что
+        // она имела по старым полям. Так и случилось бы теперь: миграция
+        // выдаёт колл-центру и регистратуре несколько ключей точечно, а не
+        // переписывает им всю матрицу. То же самое ждало бы КАЖДУЮ роль,
+        // настроенную до появления новой строки справочника: новый ключ
+        // (crm.calls, custdev.list…) в её grants не лежит, и без старых полей
+        // он читался бы как запрет, которого администратор не ставил.
         state.prevLegacy = { sections: perms.sections || [], levels: perms.levels || {} };
-        const grants = perms.grants || grantsFromLegacy(perms);
+        const grants = { ...grantsFromLegacy(perms), ...(perms.grants || {}) };
         card.appendChild(h('div', { class: 'roles-group' },
             h('span', { class: 'roles-group-name' }, 'Разделы, окна и действия'),
             h('span', { class: 'roles-group-lvl' }, 'Нет · Просмотр · Изменение · Удаление'),
