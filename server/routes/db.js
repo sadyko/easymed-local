@@ -6,6 +6,9 @@ import { readableColumns, MAIN_CLINIC_TABLES } from '../db/schema-registry.js';
 import { readIdentity } from '../services/branch-sync/identity.js';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
+// CRM_REAL_BOOKING_V1 — статус услуги двигают экраны, и двигают они его через
+// эту дверь: работа над пациентом доказывает, что он пришёл.
+import { crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../services/crm/visit-status.js';
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -96,6 +99,33 @@ function refuseSurgeryWithoutBed(db, meta, body) {
     }
   }
   return null;
+}
+
+/**
+ * CRM_REAL_BOOKING_V1 — РАБОТА НАД ПАЦИЕНТОМ ДОКАЗЫВАЕТ, ЧТО ОН ПРИШЁЛ.
+ *
+ * Статус услуги двигают ЧЕТЫРЕ экрана (кабинет врача, лаборатория, процедуры,
+ * счёт визита), и двигают они его отсюда: колонка `status` открыта на правку в
+ * реестре (schema-registry, visit_services.update). Поэтому правило стоит в
+ * единственной двери /api/db — ровно по той же причине, по которой здесь стоит
+ * запрет хирургии без койки: проверка в одном экране означала бы правило,
+ * которое соблюдают три экрана из четырёх.
+ *
+ * Строки выбираются ДО правки: фильтр запроса часто сам ссылается на статус
+ * («всем, кто ещё не in_progress»), и после UPDATE он не нашёл бы ничего. Тем
+ * же compile(), то есть с теми же правами и тем же отбором по роли.
+ *
+ * Пустой список — обычный случай, и он ничего не стоит: ни одного запроса в
+ * базу, пока в правке нет доказательного статуса.
+ */
+function crmEvidenceTargets(db, meta, body, user) {
+  if (!meta || meta.table !== 'visit_services' || meta.op !== 'update') return [];
+  const status = body && body.values && body.values.status;
+  if (!status || !EVIDENCE_SERVICE_STATUSES.includes(String(status))) return [];
+  try {
+    const sel = compile({ table: body.table, op: 'select', columns: 'id', filters: body.filters }, user);
+    return db.prepare(sel.sql).all(...sel.params).map((r) => r.id);
+  } catch { return []; }   // отбор не сложился — заявке это не повод падать
 }
 
 export function dbRoutes(db) {
@@ -202,7 +232,12 @@ export function dbRoutes(db) {
       }
 
       if (meta.op === 'update') {
+        // CRM_REAL_BOOKING_V1 — кого коснётся правка, спрашиваем ДО неё (см.
+        // crmEvidenceTargets), а заявки считаем ПОСЛЕ: хук молчит при любой
+        // ошибке, но и запускать его по строкам, которые не записались, незачем.
+        const evidence = crmEvidenceTargets(db, meta, req.body, req.user);
         db.prepare(sql).run(...params);
+        if (evidence.length) crmServiceEvidence(db, evidence);
         if (!meta.returning) return res.json({ data: null });
         // Re-select the affected rows using the SAME filters that scoped the
         // update (never the whole table) so `returning` reflects only what

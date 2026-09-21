@@ -3,6 +3,9 @@
 // Both handlers run their DB work inside db.transaction(...)() for atomicity.
 
 import { ensureOpenShift } from './cashier.js';   // SHIFT_AUTO_V2
+// CRM_REAL_BOOKING_V1 — платёж на кассе это доказательство, что пациент
+// здесь: заочно деньги у окна не появляются. См. шапку crm/visit-status.js.
+import { crmInvoiceEvidence } from '../crm/visit-status.js';
 import { invoiceStatusFor } from '../domain/money.js';
 import { unitPriceFor } from '../domain/pricing.js';
 // VISIT_TIER_PRICING_V1 — a line quoted as a second/repeat visit keeps that
@@ -418,7 +421,14 @@ export function recordPayment(db, args, user) {
     return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) };
   });
 
-  return run();
+  const out = run();
+  // CRM_REAL_BOOKING_V1 — заявка колл-центра закрывается приходом, а кнопку
+  // «Пришёл» в клинике не нажимает никто (разбор — в crm/visit-status.js).
+  // Деньги у окна кассы заочно не появляются, поэтому платёж по счёту визита
+  // — доказательство не хуже. За транзакцией: воронка не вправе отменить
+  // платёж, и молчит она сама.
+  crmInvoiceEvidence(db, invoiceId);
+  return out;
 }
 
 // SPLIT_PAY_V1 — оплата одного счёта несколькими способами за один приём
@@ -491,7 +501,9 @@ export function recordPaymentSplit(db, args, user) {
     return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) };
   });
 
-  return run();
+  const out = run();
+  crmInvoiceEvidence(db, invoiceId);   // CRM_REAL_BOOKING_V1 — см. record_payment
+  return out;
 }
 
 // DEBT_BTN_V1 — «Оставить как долг»: кассир фиксирует, что пациент заплатит

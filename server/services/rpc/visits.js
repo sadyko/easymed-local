@@ -239,10 +239,21 @@ export async function ensureVisit(db, args, user) {
       const scheduled = scheduledStageKey(db);
       const schedAt = scheduled ? open.indexOf(scheduled) : -1;
 
+      // МЁРТВЫЙ ВИЗИТ СТРОКУ НЕ ДЕРЖИТ. Ссылка на отменённую или не
+      // состоявшуюся запись — это история, а не занятый слот: пациента, не
+      // пришедшего во вторник, в среду записывают заново, и строка обязана
+      // переехать на новый визит. Отмена visit_id у своих строк снимает сама
+      // (crm/visit-status.js), а неявка его НАМЕРЕННО оставляет — как след
+      // того, что запись была; поэтому правило смотрит не на пустоту ссылки,
+      // а на то, ЖИВ ЛИ визит, на который она указывает.
       const linkLines = db.prepare(`
         UPDATE crm_request_services
            SET visit_id = ?
-         WHERE request_id = ? AND status = 'pending' AND visit_id IS NULL
+         WHERE request_id = ? AND status = 'pending'
+           AND (visit_id IS NULL
+                OR NOT EXISTS (SELECT 1 FROM visits v
+                                WHERE v.id = crm_request_services.visit_id
+                                  AND v.status NOT IN ('cancelled', 'no_show')))
            AND (scheduled_date IS NULL OR scheduled_date = '' OR date(scheduled_date) = date(?))
       `);
       const moveOn = db.prepare(`
@@ -251,11 +262,21 @@ export async function ensureVisit(db, args, user) {
          WHERE id = ?
       `);
 
+      // ЗАЯВКА БЕЗ СТРОК ВОВСЕ — ЭТО ЛИД ИЗ ЗВОНКА (crm/lead-from-call.js):
+      // оператор поговорил с человеком, услуг не называл. Взять visit_id ей
+      // нечем, поэтому ссылочное правило до неё не дотягивается никогда — а
+      // записан человек ровно так же, как все. Двигаем её саму, по тем же
+      // правилам, и только из ЖИВЫХ ступеней: воскрешать «Не пришёл» записью
+      // нельзя (это делает приход).
+      const anyLines = db.prepare('SELECT COUNT(*) AS n FROM crm_request_services WHERE request_id = ?');
+
       for (const r of reqs) {
         // Заявка, от которой этот визит не взял ни строки, не трогается вовсе:
         // пациент, пришедший сегодня сдать кровь, не «записан» на консультацию
         // следующего месяца — она так и ждёт своего дня в своей колонке.
-        if (!linkLines.run(visitId, r.id, day).changes) continue;
+        const linked = linkLines.run(visitId, r.id, day).changes;
+        const bare = !linked && open.includes(r.status) && !anyLines.get(r.id).n;
+        if (!linked && !bare) continue;
         const at = open.indexOf(r.status);
         const status = (schedAt >= 0 && at >= 0 && at < schedAt) ? scheduled : r.status;
         const was = String(r.scheduled_date || '').trim().slice(0, 10);

@@ -197,19 +197,67 @@ test('CRM_REAL_BOOKING_V1: врач строки остаётся тем, ког
   assert.equal(line(db, named).doctor_id, 2);
 });
 
-test('CRM_REAL_BOOKING_V1: строка, уже занятая другим визитом, не перецепляется', async () => {
+test('CRM_REAL_BOOKING_V1: строка, занятая ЖИВЫМ визитом, не перецепляется', async () => {
   const db = freshDb();
   const rid = addReq(db, { status: 'scheduled', date: '2026-08-09' });
-  const first = await ensureVisit(db, { patient_id: 1, date: '2026-08-09' }, REG);
-  // Строка держит слот ЧУЖОГО (прошлого) визита того же дня.
-  const lid = addLine(db, rid, { date: '2026-08-09', visit: first.visit.id });
-  db.prepare("UPDATE visits SET status='cancelled' WHERE id=?").run(first.visit.id);
+  // Пациент уже записан на завтра, и эта строка держит ТОТ слот.
+  const tomorrow = await ensureVisit(db, { patient_id: 1, date: '2026-08-10' }, REG);
+  const lid = addLine(db, rid, { date: '2026-08-09', visit: tomorrow.visit.id });
 
-  const again = await ensureVisit(db, { patient_id: 1, date: '2026-08-09' }, REG);
+  const today = await ensureVisit(db, { patient_id: 1, date: '2026-08-09' }, REG);
 
-  assert.notEqual(again.visit.id, first.visit.id, 'отменённый день обязан уступить место новому визиту');
-  assert.equal(line(db, lid).visit_id, first.visit.id,
-    'строку с уже проставленным слотом перецепили на новый визит — ссылка на запись должна меняться человеком');
+  assert.equal(line(db, lid).visit_id, tomorrow.visit.id,
+    'строку увели с живой записи: пациента ждут завтра, а слот у него отобрали');
+  assert.notEqual(today.visit.id, tomorrow.visit.id);
+});
+
+// МЁРТВЫЙ ВИЗИТ СТРОКУ НЕ ДЕРЖИТ. Пациент не пришёл во вторник — его строка
+// осталась со ссылкой на ту запись (неявка её НАМЕРЕННО не стирает: это след
+// того, что запись была). В среду регистратура записывает его заново, и если
+// бы правило смотрело только на «ссылка пуста», строка навсегда осталась бы
+// висеть на несостоявшемся визите: в новый слот она бы не переехала никогда.
+test('CRM_REAL_BOOKING_V1: строку с несостоявшейся записи можно записать заново', async () => {
+  const db = freshDb();
+  const rid = addReq(db, { status: 'scheduled', date: '2026-08-09' });
+  const missed = await ensureVisit(db, { patient_id: 1, date: '2026-08-09' }, REG);
+  const lid = addLine(db, rid, { date: '2026-08-09', visit: missed.visit.id });
+  db.prepare("UPDATE visits SET status='no_show' WHERE id=?").run(missed.visit.id);
+  // Перезапись двигает и дату строки — так это делает карточка заявки.
+  db.prepare("UPDATE crm_request_services SET scheduled_date='2026-08-10' WHERE id=?").run(lid);
+
+  const again = await ensureVisit(db, { patient_id: 1, date: '2026-08-10' }, REG);
+
+  assert.equal(line(db, lid).visit_id, again.visit.id,
+    'строка осталась на несостоявшемся визите — новый слот её не получил, и в четверг регистратура её не увидит');
+  assert.equal(line(db, lid).status, 'pending');
+});
+
+// ЗАЯВКА БЕЗ СТРОК — ЛИД ИЗ ЗВОНКА. Взять visit_id ей нечем, и до этого
+// прохода запись её не касалась вовсе: доска показывала «В обработке» у
+// человека, которому уже назвали время.
+test('CRM_REAL_BOOKING_V1: заявка без строк тоже уезжает в «Записан»', async () => {
+  const db = freshDb();
+  const bare = addReq(db, { status: 'in_process' });
+  const other = addReq(db, { status: 'in_process', date: '2026-09-15', name: 'на сентябрь' });
+  addLine(db, other, { date: '2026-09-15' });
+
+  await ensureVisit(db, { patient_id: 1, date: '2026-08-09' }, REG);
+
+  const row = reqRow(db, bare);
+  assert.equal(row.status, 'scheduled', 'лид из звонка так и висит в «В обработке» у записанного пациента');
+  assert.equal(row.scheduled_date, '2026-08-09', 'у лида без строк не появилась дата записи');
+  assert.equal(reqRow(db, other).status, 'in_process',
+    'заявку со строкой на сентябрь подвинула сегодняшняя запись');
+});
+
+test('CRM_REAL_BOOKING_V1: запись не воскрешает недошедшую заявку без строк', async () => {
+  const db = freshDb();
+  const missed = addReq(db, { status: 'no_show', name: 'не пришёл' });
+
+  await ensureVisit(db, { patient_id: 1, date: '2026-08-09' }, REG);
+
+  assert.equal(reqRow(db, missed).status, 'no_show',
+    'запись объявила недошедшую заявку живой: воскресить её вправе только приход');
 });
 
 test('CRM_REAL_BOOKING_V1: второй ensure_visit того же дня досчитывает незанятую строку', async () => {

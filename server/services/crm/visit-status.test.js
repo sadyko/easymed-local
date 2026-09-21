@@ -12,7 +12,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { crmVisitStatus, ARRIVED_STATUSES } from './visit-status.js';
+import { crmVisitStatus, crmVisitEvidence, crmInvoiceEvidence, crmServiceEvidence, ARRIVED_STATUSES, EVIDENCE_SERVICE_STATUSES } from './visit-status.js';
+// Деньги проверяются НАСТОЯЩЕЙ кассой, а не имитацией платежа: доказательством
+// является то, что делает record_payment, а не то, что мы про него думаем.
+import { recordPayment } from '../rpc/billing.js';
 // CROSS_BRANCH_CALENDAR_V1 — вторая дверь, через которую статус визита может
 // смениться: порция обмена от соседнего здания (branch-sync/records.js).
 import { applyBatch } from '../branch-sync/records.js';
@@ -323,5 +326,254 @@ test('приход, приехавший из соседнего здания, �
     'приход отмечен в соседнем здании, а строка заявки так и ждёт');
   assert.equal(reqRow(db, rid).status, 'came',
     'заявка осталась в «Записан»: ночная автоматика унесёт дошедшего пациента в «Не пришёл»');
+  db.close();
+});
+
+// ─── ЗАЯВКА БЕЗ СТРОК: ЛИД ИЗ ЗВОНКА ───────────────────────────────────────
+//
+// У лида, заведённого из звонка (crm/lead-from-call.js), нет ни одной строки
+// услуг: оператор поговорил с человеком, и всё. Взять visit_id такой заявке
+// нечем, то есть ссылочное правило до неё не дотягивается НИКОГДА — а до сих
+// пор её закрывал приход. Без этого прохода она висела бы вечно и уезжала бы
+// в отчёт недошедшей.
+test('пришёл: заявка без строк закрывается приходом того же пациента', () => {
+  const db = freshDb();
+  const vid = addVisit(db);
+  const bare = addReq(db, { status: 'in_process', name: 'лид из звонка' });
+  const dated = addReq(db, { status: 'scheduled', date: '2026-08-09', name: 'на сегодня' });
+
+  crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'arrived' });
+
+  assert.equal(reqRow(db, bare).status, 'came', 'лид из звонка не закрылся приходом — он не закроется уже ничем');
+  assert.equal(reqRow(db, dated).status, 'came', 'заявка на сегодня без строк тоже обязана закрыться');
+  db.close();
+});
+
+test('пришёл: заявка без строк на ДРУГОЙ день сегодняшним приходом не закрывается', () => {
+  const db = freshDb();
+  const vid = addVisit(db);   // визит 2026-08-09
+  const future = addReq(db, { status: 'scheduled', date: '2026-09-15', name: 'на сентябрь' });
+  const overdue = addReq(db, { status: 'scheduled', date: '2026-08-01', name: 'просрочена' });
+
+  crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'arrived' });
+
+  assert.equal(reqRow(db, future).status, 'scheduled',
+    'консультация, записанная на месяц вперёд, объявлена состоявшейся сегодняшним приходом');
+  assert.equal(reqRow(db, overdue).status, 'scheduled',
+    'вчерашняя несостоявшаяся заявка закрыта сегодняшним визитом: у неё был свой день');
+  db.close();
+});
+
+test('пришёл: заявка без строк у ДРУГОГО пациента не трогается', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO patients (id, full_name) VALUES (2,'Другой')").run();
+  const vid = addVisit(db);
+  const other = db.prepare(
+    "INSERT INTO crm_requests (full_name, phone, status, patient_id) VALUES ('Чужой','998900000002','in_process',2)",
+  ).run().lastInsertRowid;
+
+  crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'arrived' });
+
+  assert.equal(reqRow(db, other).status, 'in_process', 'закрылась заявка чужого пациента');
+  db.close();
+});
+
+// ─── ДОКАЗАТЕЛЬСТВА ПРИХОДА, КОТОРЫЕ НЕ ЯВЛЯЮТСЯ СТАТУСОМ ВИЗИТА ───────────
+//
+// Кнопку «Пришёл» в клинике не нажимает никто: на боевой базе ВСЕ 390 визитов
+// стоят в 'scheduled' и ни один в 'arrived', при этом 389 счетов оплачены
+// (разбор — в шапке custdev/sync.js). Вешать правило «Пришёл = пришёл» на одну
+// эту кнопку значило бы оставить воронку колл-центра пустой навсегда.
+
+test('словарь доказательной работы — четыре статуса услуги из миграции 041', () => {
+  assert.deepEqual([...EVIDENCE_SERVICE_STATUSES], ['collected', 'in_progress', 'resulted', 'completed']);
+});
+
+test('деньги: оплата счёта визита закрывает заявку', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (9,'kassa','x','Кассир','cashier')").run();
+  const vid = addVisit(db);
+  const rid = addReq(db, { date: '2026-08-09' });
+  const lid = addLine(db, rid, { date: '2026-08-09', visit: vid });
+  const inv = db.prepare(`INSERT INTO invoices
+      (invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_by)
+    VALUES ('INV-1', ?, 1, 100000, 0, 100000, 0, 'unpaid', 9)`).run(vid).lastInsertRowid;
+
+  recordPayment(db, { invoice_id: inv, amount: 100000, method: 'cash' }, { id: 9, role: 'cashier' });
+
+  assert.equal(line(db, lid).status, 'done',
+    'пациент заплатил на кассе — заочно это не происходит, — а строка заявки так и ждёт');
+  assert.equal(reqRow(db, rid).status, 'came', 'оплата не закрыла заявку: воронка колл-центра останется пустой');
+  db.close();
+});
+
+test('деньги: у заявки на три дня оплата одного дня оставляет её в «Записан»', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (9,'kassa','x','Кассир','cashier')").run();
+  const vid = addVisit(db);
+  const rid = addReq(db, { date: '2026-08-09' });
+  const d1 = addLine(db, rid, { date: '2026-08-09', visit: vid });
+  const d2 = addLine(db, rid, { date: '2026-08-12' });
+  const inv = db.prepare(`INSERT INTO invoices
+      (invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_by)
+    VALUES ('INV-2', ?, 1, 50000, 0, 50000, 0, 'unpaid', 9)`).run(vid).lastInsertRowid;
+
+  // Частичная оплата — те же деньги у того же окна.
+  recordPayment(db, { invoice_id: inv, amount: 20000, method: 'cash' }, { id: 9, role: 'cashier' });
+
+  assert.equal(line(db, d1).status, 'done');
+  assert.equal(line(db, d2).status, 'pending');
+  const row = reqRow(db, rid);
+  assert.equal(row.status, 'scheduled', 'заявка объявлена дошедшей, хотя второй день ещё впереди');
+  assert.equal(row.scheduled_date, '2026-08-12', 'дата не уехала на ближайший оставшийся день');
+  db.close();
+});
+
+test('деньги: оплата по ОТМЕНЁННОМУ визиту доказательством не является', () => {
+  const db = freshDb();
+  const vid = addVisit(db, '2026-08-09T09:00:00Z', 'cancelled');
+  const rid = addReq(db, { date: '2026-08-09' });
+  const lid = addLine(db, rid, { date: '2026-08-09', visit: vid });
+  const inv = db.prepare(`INSERT INTO invoices
+      (invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status)
+    VALUES ('INV-3', ?, 1, 100000, 0, 100000, 100000, 'paid')`).run(vid).lastInsertRowid;
+
+  crmInvoiceEvidence(db, inv);
+
+  assert.equal(line(db, lid).status, 'pending',
+    'предоплата по отменённой записи выдана за приход: деньги вносят заранее, а возвращают потом');
+  assert.equal(reqRow(db, rid).status, 'scheduled');
+  db.close();
+});
+
+test('деньги: выставленный, но НЕ оплаченный счёт ничего не доказывает', () => {
+  const db = freshDb();
+  const vid = addVisit(db);
+  const rid = addReq(db, { date: '2026-08-09' });
+  const lid = addLine(db, rid, { date: '2026-08-09', visit: vid });
+  const inv = db.prepare(`INSERT INTO invoices
+      (invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status)
+    VALUES ('INV-4', ?, 1, 100000, 0, 100000, 0, 'unpaid')`).run(vid).lastInsertRowid;
+
+  crmInvoiceEvidence(db, inv);
+
+  assert.equal(line(db, lid).status, 'pending', 'счёт заводят заочно — доказательством являются деньги, а не документ');
+  db.close();
+});
+
+test('работа: начатая услуга визита закрывает заявку, а внесённая в смету — нет', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO services (id, name, price) VALUES (30,'Приём',100000)").run();
+  const vid = addVisit(db);
+  const rid = addReq(db, { date: '2026-08-09' });
+  const lid = addLine(db, rid, { date: '2026-08-09', visit: vid });
+  const vs = db.prepare(
+    "INSERT INTO visit_services (visit_id, service_id, status) VALUES (?, 30, 'added')",
+  ).run(vid).lastInsertRowid;
+
+  // «Внесли в смету» — это ещё не работа: строку заводят заочно.
+  crmServiceEvidence(db, [vs]);
+  assert.equal(line(db, lid).status, 'pending');
+
+  // «Приём начат» человеком не бывает заочным.
+  db.prepare("UPDATE visit_services SET status = 'in_progress' WHERE id = ?").run(vs);
+  crmServiceEvidence(db, [vs]);
+
+  assert.equal(line(db, lid).status, 'done', 'врач начал приём, а строка заявки так и ждёт');
+  assert.equal(reqRow(db, rid).status, 'came');
+  db.close();
+});
+
+test('доказательство после отметки прихода ничего не делает второй раз', () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (9,'kassa','x','Кассир','cashier')").run();
+  const vid = addVisit(db);
+  const rid = addReq(db, { date: '2026-08-09' });
+  addLine(db, rid, { date: '2026-08-09', visit: vid });
+  crmVisitStatus(db, { visitId: vid, from: 'scheduled', to: 'arrived' });
+  const after = reqRow(db, rid);
+  const stamp = db.prepare('SELECT updated_at FROM crm_requests WHERE id=?').get(rid).updated_at;
+
+  const inv = db.prepare(`INSERT INTO invoices
+      (invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_by)
+    VALUES ('INV-5', ?, 1, 100000, 0, 100000, 0, 'unpaid', 9)`).run(vid).lastInsertRowid;
+  recordPayment(db, { invoice_id: inv, amount: 100000, method: 'cash' }, { id: 9, role: 'cashier' });
+  crmVisitEvidence(db, vid);
+
+  assert.deepEqual(reqRow(db, rid), after, 'второе доказательство переписало уже закрытую заявку');
+  assert.equal(db.prepare('SELECT updated_at FROM crm_requests WHERE id=?').get(rid).updated_at, stamp);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM crm_request_services WHERE status='done'").get().n, 1);
+  db.close();
+});
+
+test('доказательства не бросаются на мусоре и на несуществующих строках', () => {
+  const db = freshDb();
+  assert.doesNotThrow(() => crmVisitEvidence(db, null));
+  assert.doesNotThrow(() => crmVisitEvidence(db, 'нет'));
+  assert.doesNotThrow(() => crmVisitEvidence(db, 999999));
+  assert.doesNotThrow(() => crmInvoiceEvidence(db, 999999));
+  assert.doesNotThrow(() => crmServiceEvidence(db, []));
+  assert.doesNotThrow(() => crmServiceEvidence(db, [999999]));
+  assert.doesNotThrow(() => crmServiceEvidence(db, null));
+  db.close();
+});
+
+// ДЕНЬГИ ТОЖЕ ПРИЕЗЖАЮТ ИЗ СОСЕДНЕГО ЗДАНИЯ. invoices и payments перечислены
+// в SHIPPED (branch-sync/journal.js), то есть оплата, принятая там, ложится
+// сюда общим применителем — без человека и мимо record_payment. Для заявки
+// колл-центра это то же доказательство прихода, и оно обязано дойти.
+test('оплата, приехавшая из соседнего здания, закрывает заявку здесь', () => {
+  const db = freshDb();
+  const stamp = (ms) => Math.floor(ms).toString(16).padStart(12, '0') + '-0000-C';
+  const T0 = Date.now() - 24 * 3600000;
+  const put = (tbl, uid, st, data, refs = {}) => ({ tbl, uid, op: 'put', stamp: st, data, refs, origin: 'C' });
+
+  applyBatch(db, [put('patients', 'p9', stamp(T0), { full_name: 'Пациент' })], { self: 'B' });
+  applyBatch(db, [put('visits', 'v9', stamp(T0 + 1000), { visit_date: '2026-08-09T09:00:00Z', status: 'scheduled' }, { patient_id: 'p9' })], { self: 'B' });
+  const vid = db.prepare("SELECT id FROM visits WHERE uid = 'v9'").get().id;
+  const pid = db.prepare("SELECT id FROM patients WHERE uid = 'p9'").get().id;
+  const rid = db.prepare(
+    "INSERT INTO crm_requests (full_name, phone, status, patient_id, scheduled_date) VALUES (?,?,?,?,?)",
+  ).run('Лид', '998900000009', 'scheduled', pid, '2026-08-09').lastInsertRowid;
+  const lid = addLine(db, rid, { date: '2026-08-09', visit: vid });
+
+  // Счёт и платёж по нему — одной порцией, как их и везёт обмен.
+  applyBatch(db, [
+    put('invoices', 'i9', stamp(T0 + 2000), { invoice_number: 'B-1', subtotal: 100000, total_amount: 100000, status: 'paid' }, { patient_id: 'p9', visit_id: 'v9' }),
+    put('payments', 'pay9', stamp(T0 + 3000), { amount: 100000, method: 'cash' }, { invoice_id: 'i9' }),
+  ], { self: 'B' });
+
+  assert.equal(db.prepare("SELECT paid_amount FROM invoices WHERE uid = 'i9'").get().paid_amount, 100000,
+    'платёж не доехал — проверять нечего');
+  assert.equal(line(db, lid).status, 'done',
+    'пациент заплатил в соседнем здании, а строка заявки так и ждёт');
+  assert.equal(reqRow(db, rid).status, 'came',
+    'заявка осталась открытой: деньги приехали, а воронка их не заметила');
+  db.close();
+});
+
+test('работа над услугой, приехавшая из соседнего здания, тоже закрывает заявку', () => {
+  const db = freshDb();
+  const stamp = (ms) => Math.floor(ms).toString(16).padStart(12, '0') + '-0000-C';
+  const T0 = Date.now() - 24 * 3600000;
+  const put = (tbl, uid, st, data, refs = {}) => ({ tbl, uid, op: 'put', stamp: st, data, refs, origin: 'C' });
+  db.prepare("INSERT INTO services (id, code, name, price) VALUES (31,'A1','Анализ',50000)").run();
+
+  applyBatch(db, [put('patients', 'p8', stamp(T0), { full_name: 'Пациент' })], { self: 'B' });
+  applyBatch(db, [put('visits', 'v8', stamp(T0 + 1000), { visit_date: '2026-08-09T09:00:00Z', status: 'scheduled' }, { patient_id: 'p8' })], { self: 'B' });
+  const vid = db.prepare("SELECT id FROM visits WHERE uid = 'v8'").get().id;
+  const pid = db.prepare("SELECT id FROM patients WHERE uid = 'p8'").get().id;
+  const rid = db.prepare(
+    "INSERT INTO crm_requests (full_name, phone, status, patient_id, scheduled_date) VALUES (?,?,?,?,?)",
+  ).run('Лид', '998900000008', 'scheduled', pid, '2026-08-09').lastInsertRowid;
+  const lid = addLine(db, rid, { date: '2026-08-09', visit: vid });
+
+  applyBatch(db, [put('visit_services', 'vs8', stamp(T0 + 2000), { quantity: 1, status: 'added' }, { visit_id: 'v8', service_code: 'A1' })], { self: 'B' });
+  assert.equal(line(db, lid).status, 'pending', 'строка в смете — это ещё не работа над пациентом');
+
+  applyBatch(db, [put('visit_services', 'vs8', stamp(T0 + 3000), { status: 'completed' }, { visit_id: 'v8' })], { self: 'B' });
+
+  assert.equal(line(db, lid).status, 'done', 'услугу выдали в соседнем здании, а строка заявки так и ждёт');
+  assert.equal(reqRow(db, rid).status, 'came');
   db.close();
 });

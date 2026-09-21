@@ -34,12 +34,25 @@ import { openStageKeys, wonStageKey, noShowStageKey, scheduledStageKey, SEED_NO_
 /** Статусы визита, означающие «пациент здесь». Словарь — из миграции 003. */
 export const ARRIVED_STATUSES = Object.freeze(['arrived']);
 
-const norm = (v) => String(v ?? '').trim();
+// ОТМЕНЁННАЯ И НЕ ПРИШЕДШАЯ ЗАПИСЬ ДОКАЗАТЕЛЬСТВОМ НЕ БЫВАЕТ НИКОГДА, чем бы
+// за неё ни заплатили: предоплату вносят заранее, а возвращают потом. Ровно
+// этот же вырез стоит у доски Cust Dev (custdev/sync.js), и по той же причине.
+const DEAD_VISIT_STATUSES = Object.freeze(['cancelled', 'no_show']);
 
 /**
- * Заявки, которым принадлежат строки этого визита, и сами строки.
- * Пусто — визит заведён не из заявки, и делать здесь нечего.
+ * СТАТУСЫ УСЛУГИ, КОТОРЫЕ МОГ ПОСТАВИТЬ ТОЛЬКО ЧЕЛОВЕК ПЕРЕД ВРАЧОМ.
+ *
+ * Машина состояний услуги — из шапки миграции 041: added → queued → collected
+ * → in_progress → resulted → completed. Первые два заочны: 'added' это «внесли
+ * в смету», 'queued' ставит оплата. Остальные четыре означают работу НАД
+ * ПАЦИЕНТОМ: пробу взяли, приём начали, результат внесли, выдали. Ни одного из
+ * них не бывает у человека, который до клиники не доехал.
  */
+export const EVIDENCE_SERVICE_STATUSES = Object.freeze(['collected', 'in_progress', 'resulted', 'completed']);
+
+const norm = (v) => String(v ?? '').trim();
+
+/** Строки заявок, держащие этот визит. Пусто — визит заведён не из заявки. */
 function linesOf(db, visitId) {
   return db.prepare(`
     SELECT id, request_id, status, scheduled_date
@@ -65,6 +78,34 @@ function writeParent(stmt, parent, status, when) {
 }
 
 /**
+ * ЗАЯВКА БЕЗ СТРОК — ТОЖЕ ЗАЯВКА, И ЕЁ ТОЖЕ НАДО ЗАКРЫТЬ.
+ *
+ * Лид, заведённый из звонка (crm/lead-from-call.js), не имеет ни одной строки
+ * услуг: оператор поговорил с человеком, и всё. Такой заявке нечем взять
+ * visit_id, то есть ссылочное правило выше до неё не дотягивается НИКОГДА —
+ * а до сегодня её закрывал приход (CRM_AUTO_CAME_V1). Без этого прохода она
+ * висела бы в своей колонке вечно и уезжала бы в отчёт недошедшей.
+ *
+ * Условие то же, что у строки: заявка ЖИВА, ждать ей нечего (ни одной строки
+ * 'pending') и она либо без даты («когда придёт»), либо ровно на этот день.
+ * Заявка, назначенная на другой день, сегодняшним приходом не закрывается —
+ * то самое правило CRM_FUTURE_LEAD_V2, ради которого оно однажды и появилось.
+ */
+function settleLineless(db, { patientId, day, open, won, write }) {
+  if (!patientId || !open.length) return;
+  const holes = open.map(() => '?').join(',');
+  const reqs = db.prepare(`
+    SELECT r.id, r.status, r.scheduled_date
+      FROM crm_requests r
+     WHERE r.patient_id = ? AND r.status IN (${holes})
+       AND (r.scheduled_date IS NULL OR r.scheduled_date = '' OR date(r.scheduled_date) = date(?))
+       AND NOT EXISTS (SELECT 1 FROM crm_request_services l
+                        WHERE l.request_id = r.id AND l.status = 'pending')
+  `).all(patientId, ...open, day);
+  for (const p of reqs) writeParent(write, p, won, p.scheduled_date);
+}
+
+/**
  * ЧТО ДЕЛАЕТ СМЕНА СТАТУСА ВИЗИТА С ЗАЯВКАМИ, ЧЬИ СТРОКИ ЕГО ДЕРЖАТ.
  *
  *   arrived    — строки этого визита закрываются ('done'), и только теперь
@@ -76,8 +117,12 @@ function writeParent(stmt, parent, status, when) {
  *                пришёл»). Пришедший воскрешает и недошедшую заявку: он
  *                пришёл сейчас, и это та самая конверсия. Назад по ЖИВЫМ
  *                ступеням заявка не откатывается — стоящая в «Согласован»
- *                там и остаётся.
+ *                там и остаётся. Плюс проход по заявкам БЕЗ СТРОК того же
+ *                пациента (settleLineless).
  *   no_show    — заявка уходит в «Не пришёл», и только из живых ступеней.
+ *                Строки остаются со своим visit_id: неявка — это факт об
+ *                этой записи, и он не стирается. Записать такую строку заново
+ *                можно (см. settleCrmOnBooking: мёртвый визит не держит).
  *   cancelled  — строки снимаются со слота и снова ждут записи; заявка
  *                откатывается из «Записан» в первую открытую колонку, если
  *                занятых дней у неё больше не осталось.
@@ -98,12 +143,15 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
     if (!now || now === norm(from)) return;
     if (!ARRIVED_STATUSES.includes(now) && now !== 'no_show' && now !== 'cancelled') return;
 
+    const visit = db.prepare('SELECT id, patient_id, substr(visit_date, 1, 10) AS day FROM visits WHERE id = ?').get(id);
+    if (!visit) return;
+
     const lines = linesOf(db, id);
-    if (!lines.length) return;
     const requestIds = [...new Set(lines.map((l) => l.request_id).filter(Boolean))];
-    if (!requestIds.length) return;
-    const parents = parentsOf(db, requestIds);
-    if (!parents.length) return;
+    const parents = requestIds.length ? parentsOf(db, requestIds) : [];
+    // Приход обязан дойти до заявки БЕЗ СТРОК, поэтому выходим раньше времени
+    // только там, где работать действительно не с чем.
+    if (!parents.length && !ARRIVED_STATUSES.includes(now)) return;
 
     const open = openStageKeys(db);
     const scheduled = scheduledStageKey(db);
@@ -116,22 +164,27 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
     `);
 
     if (ARRIVED_STATUSES.includes(now)) {
-      db.prepare("UPDATE crm_request_services SET status = 'done' WHERE visit_id = ? AND status = 'pending'").run(id);
       const won = wonStageKey(db);
-      for (const p of parents) {
-        const left = pendingLeft.get(p.id);
-        if (!left || !left.n) {
-          // Ждать больше нечего — вот теперь конверсия.
-          writeParent(write, p, won, p.scheduled_date);
-          continue;
+      if (parents.length) {
+        db.prepare("UPDATE crm_request_services SET status = 'done' WHERE visit_id = ? AND status = 'pending'").run(id);
+        for (const p of parents) {
+          const left = pendingLeft.get(p.id);
+          if (!left || !left.n) {
+            // Ждать больше нечего — вот теперь конверсия.
+            writeParent(write, p, won, p.scheduled_date);
+            continue;
+          }
+          // Ещё есть чего ждать. Заявка стоит в «Записан» — кроме случая, когда
+          // она уже ДАЛЬШЕ него по живым ступеням: назад её не отбрасываем.
+          const at = open.indexOf(p.status);
+          const ahead = at >= 0 && schedAt >= 0 && at > schedAt;
+          const status = (scheduled && !ahead) ? scheduled : p.status;
+          writeParent(write, p, status, left.next ?? null);
         }
-        // Ещё есть чего ждать. Заявка стоит в «Записан» — кроме случая, когда
-        // она уже ДАЛЬШЕ него по живым ступеням: назад её не отбрасываем.
-        const at = open.indexOf(p.status);
-        const ahead = at >= 0 && schedAt >= 0 && at > schedAt;
-        const status = (scheduled && !ahead) ? scheduled : p.status;
-        writeParent(write, p, status, left.next ?? null);
       }
+      // Строго ПОСЛЕ: заявка, у которой строки только что закрылись, уже
+      // стоит в «Пришёл» и живой не считается — второй раз её не тронут.
+      settleLineless(db, { patientId: visit.patient_id, day: visit.day, open, won, write });
       return;
     }
 
@@ -175,5 +228,92 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
     }
   } catch (e) {
     console.error('[crm] заявки по визиту', visitId, 'не пересчитаны:', e && e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ДОКАЗАТЕЛЬСТВА ПРИХОДА, КОТОРЫЕ НЕ ЯВЛЯЮТСЯ СТАТУСОМ ВИЗИТА
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// КНОПКУ «ПРИШЁЛ» В КЛИНИКЕ НЕ НАЖИМАЕТ НИКТО. Это не предположение: на боевой
+// базе ВСЕ 390 визитов имеют статус 'scheduled' и ни один — 'arrived', при этом
+// 389 счетов оплачены (разбор — в шапке custdev/sync.js). Регистратура
+// принимает человека, он платит на кассе, врач его принимает, и статус визита
+// за всё это время не трогает никто.
+//
+// Значит правило «Пришёл = пришёл» нельзя вешать на одну эту кнопку: воронка
+// колл-центра осталась бы пустой навсегда, а ночная автоматика уносила бы в
+// «Не пришёл» пациентов, которые сидели в коридоре. Отметка прихода — ЛУЧШЕЕ
+// доказательство, но не единственное. Ещё два не могут произойти заочно:
+//
+//   ДЕНЬГИ. Платёж на кассе — событие с человеком у окна. Его же считает
+//   доказательством присутствия доска Cust Dev, и по той же причине.
+//   РАБОТА НАД ПАЦИЕНТОМ. Проба взята, приём начат, результат внесён, услуга
+//   выдана — ни одного из этих статусов не бывает у того, кто не доехал.
+//
+// Статус самого визита при этом НЕ МЕНЯЕТСЯ: доказательство — это факт о
+// пациенте, а visits.status остаётся тем, что поставил человек (и тем, что
+// уедет филиалам). Здесь он только ЧИТАЕТСЯ — чтобы не принять предоплату за
+// приход по отменённой записи.
+
+/**
+ * «Есть доказательство, что пациент был здесь» — тот же переход, что у
+ * отметки прихода. Идемпотентен по построению: строки уже закрыты, заявка уже
+ * в «Пришёл», и повторный вызов не находит, что менять.
+ */
+export function crmVisitEvidence(db, visitId) {
+  try {
+    const id = Number(visitId);
+    if (!Number.isInteger(id) || id <= 0) return;
+    const visit = db.prepare('SELECT status FROM visits WHERE id = ?').get(id);
+    if (!visit || DEAD_VISIT_STATUSES.includes(visit.status)) return;
+    crmVisitStatus(db, { visitId: id, from: null, to: ARRIVED_STATUSES[0] });
+  } catch (e) {
+    console.error('[crm] доказательство прихода по визиту', visitId, 'не учтено:', e && e.message);
+  }
+}
+
+/** Оплата счёта: доказательством является ВИЗИТ этого счёта, если он есть. */
+export function crmInvoiceEvidence(db, invoiceId) {
+  try {
+    const id = Number(invoiceId);
+    if (!Number.isInteger(id) || id <= 0) return;
+    // Счёт госпитализации и счёт-депозит визита не имеют вовсе — тогда и
+    // доказывать нечего.
+    //
+    // paid_amount > 0 — потому что доказательством являются ДЕНЬГИ, а не
+    // существование счёта: выставленный и неоплаченный счёт заводят заочно, а
+    // возврат обнуляет оплату обратно.
+    const inv = db.prepare('SELECT visit_id, paid_amount FROM invoices WHERE id = ?').get(id);
+    if (inv && inv.visit_id && Number(inv.paid_amount) > 0) crmVisitEvidence(db, inv.visit_id);
+  } catch (e) {
+    console.error('[crm] оплата счёта', invoiceId, 'не учтена:', e && e.message);
+  }
+}
+
+/**
+ * Работа над услугами: доказательством является визит каждой из них.
+ * @param {number[]} visitServiceIds строки visit_services, которые только что
+ *        перешли в один из EVIDENCE_SERVICE_STATUSES.
+ */
+export function crmServiceEvidence(db, visitServiceIds) {
+  try {
+    const ids = (Array.isArray(visitServiceIds) ? visitServiceIds : [visitServiceIds])
+      .map(Number).filter((n) => Number.isInteger(n) && n > 0);
+    if (!ids.length) return;
+    const holes = ids.map(() => '?').join(',');
+    // Доказательство читается С САМОЙ СТРОКИ, а не со слов вызывающего: строку
+    // заводят в смету заочно ('added'), и оплата её тоже не трогает руками
+    // пациента ('queued'). Работой считаются только четыре статуса из
+    // EVIDENCE_SERVICE_STATUSES — и проверяются они здесь, в одном месте, чтобы
+    // ни один из пяти вызывающих не мог ошибиться этим по-своему.
+    const marks = EVIDENCE_SERVICE_STATUSES.map(() => '?').join(',');
+    const rows = db.prepare(
+      `SELECT DISTINCT visit_id FROM visit_services
+        WHERE id IN (${holes}) AND status IN (${marks})`,
+    ).all(...ids, ...EVIDENCE_SERVICE_STATUSES);
+    for (const r of rows) if (r.visit_id) crmVisitEvidence(db, r.visit_id);
+  } catch (e) {
+    console.error('[crm] работа по услугам', visitServiceIds, 'не учтена:', e && e.message);
   }
 }

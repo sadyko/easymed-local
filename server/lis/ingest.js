@@ -14,6 +14,8 @@
 //   D7           выданный результат молча не переписывается
 import { parseMessage } from './hl7.js';
 import { recordMessage, touchDevice } from './inbox.js';
+// CRM_REAL_BOOKING_V1 — работа над пациентом это доказательство его прихода.
+import { crmServiceEvidence } from '../services/crm/visit-status.js';
 
 /**
  * 'LAB-000123' → 123. Голые цифры принимаются: сканер может передавать
@@ -188,6 +190,9 @@ export function ingestMessage(db, raw, peer = '', deviceId = null) {
       // sample_collected_at не подставляем: времени забора мы не наблюдали, и
       // выдумать его значило бы записать в карту факт, которого не было.
       db.prepare("UPDATE visit_services SET status = 'resulted' WHERE id = ?").run(order.id);
+      // CRM_REAL_BOOKING_V1 — прибор отдал результат по пробе, которую взяли у
+      // человека здесь: для заявки колл-центра это доказательство прихода.
+      crmServiceEvidence(db, [order.id]);
     }
 
     recordMessage(db, {
