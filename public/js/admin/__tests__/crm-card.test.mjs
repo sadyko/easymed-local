@@ -73,7 +73,24 @@ function mk(t){
   return el;
 }
 globalThis.Node=F; globalThis.Event=class{constructor(t,o){this.type=t;Object.assign(this,o||{});}};
-globalThis.document={createElement:mk,createElementNS:(_n,t)=>mk(t),createTextNode:t=>new TX(t),head:mk('head'),body:mk('body'),documentElement:mk('html'),addEventListener(){},removeEventListener(){},getElementById(){return null;},
+// CRM_REAL_BOOKING_V1 — ТОСТЫ СТАЛИ СЛЫШНЫ.
+//
+// Раньше их нельзя было прочитать: toast() (ui.js) пишет текст в el.textContent,
+// а следующей строкой кладёт в el._t идентификатор таймера — и затирает его.
+// Тот же обход, что в services-catalog.test.mjs: свой #toast, у которого
+// textContent не хранит значение, а записывает его в журнал. Отказ, который
+// нельзя прочитать, проверить нельзя — а половина правил этого экрана живёт
+// именно в словах отказа.
+const TOASTS = [];
+const TOAST_EL = mk('div');
+Object.defineProperty(TOAST_EL, 'textContent', {
+  get() { return ''; },
+  set(v) { TOASTS.push(String(v)); },
+  configurable: true,
+});
+const lastToast = () => TOASTS[TOASTS.length - 1] || '';
+const someToast = (re) => TOASTS.some((t) => re.test(t));
+globalThis.document={createElement:mk,createElementNS:(_n,t)=>mk(t),createTextNode:t=>new TX(t),head:mk('head'),body:mk('body'),documentElement:mk('html'),addEventListener(){},removeEventListener(){},getElementById(id){return id==='toast'?TOAST_EL:null;},
   // QUICK_PATIENT_V1 — окно заведения спрашивает документ, не открыт ли поверх
   // него список или календарь (тогда Enter значит «выбрать», а не «сохранить»).
   querySelector(){return null;},querySelectorAll(){return [];}};
@@ -89,7 +106,14 @@ globalThis.localStorage = fakeLocalStorage;
 // пин стоит ДО импорта вида: иначе английская локаль сборочной машины ломала бы
 // русские утверждения ниже.
 fakeLocalStorage.setItem('admin.lang', 'ru');
-globalThis.window = { location: { hostname: 'localhost' }, localStorage: fakeLocalStorage, addEventListener(){}, easymed: { state: { user: null } } };
+// CRM_REAL_BOOKING_V1 — ОТВЕТ ЧЕЛОВЕКА НА «ОТМЕНИТЬ СТАРЫЙ ПРИЁМ?».
+// Оба ответа — поведение: «да» отменяет чужую запись в календаре, «нет»
+// оставляет её висеть, и об этом обязаны сказать вслух.
+let CONFIRM_ANSWER = false;
+const CONFIRMS = [];
+globalThis.window = { location: { hostname: 'localhost' }, localStorage: fakeLocalStorage, addEventListener(){},
+  confirm: (text) => { CONFIRMS.push(String(text)); return CONFIRM_ANSWER; },
+  easymed: { state: { user: null } } };
 globalThis.MutationObserver=class{observe(){}disconnect(){}};
 globalThis.requestAnimationFrame=(fn)=>fn();
 
@@ -132,6 +156,9 @@ let LINES_ERROR = false;
 // CRM_REAL_BOOKING_V1 — ЧТО ВИДИТ НОЧНОЕ СМЕТАНИЕ, спрашивая «у каких из этих
 // заявок есть записанная строка». null = то же, что видит окно заявки.
 let SWEEP_LINES = null;
+// CRM_REAL_BOOKING_V1 — ВИЗИТЫ, читаемые карточкой: из них подставляется время
+// уже записанной строки и берётся день старого приёма при переносе.
+let VISITS = [];
 // QUICK_PATIENT_V1 — ХВОСТ РЕГИСТРАЦИИ, ЗАДЕРЖАННЫЙ НА ПОЛПУТИ.
 //
 // Держим правку САМОЙ карточки (crm_requests по id) — она есть только в хвосте
@@ -205,8 +232,14 @@ globalThis.fetch = async (url, opts) => {
       const own = (body.filters || []).some((f) => f.col === 'request_id' && f.op === 'eq');
       if (own && LINES_HOLD) await LINES_HOLD;
       if (own && LINES_ERROR) return { ok: false, json: async () => ({ error: { message: 'строки не отданы' } }) };
-      return jsonOk(SWEEP_LINES !== null && !own ? SWEEP_LINES : REQ_LINES);
+      const rows = SWEEP_LINES !== null && !own ? SWEEP_LINES : REQ_LINES;
+      // Отбор по статусу стенд выполняет ПО-НАСТОЯЩЕМУ: правило «отменённая
+      // строка визита не держит» проверяется тем, что сметание её не видит, а
+      // не тем, что в запросе есть нужный ключ.
+      const st = (body.filters || []).find((f) => f.col === 'status' && f.op === 'eq');
+      return jsonOk(st ? rows.filter((r) => String(r.status || 'pending') === String(st.val)) : rows);
     }
+    if (body && body.table === 'visits' && body.op === 'select') return jsonOk(VISITS);
     // CRM_LINKS_V1 — регистрация пациента с карточки. Поиск дубля читает
     // patients, вставка возвращает заведённую карту.
     // QUICK_PATIENT_V1 — выбор существующего пациента в диалоге дубликата
@@ -1556,4 +1589,218 @@ test('заявка без единой записанной строки мет�
   assert.deepStrictEqual((sweep.filters || []).find((f) => f.col === 'id'),
     { col: 'id', op: 'in', val: [1] }, 'метится пачка по статусу, а не названные заявки');
   SWEEP_LINES = null;
+});
+
+// ═══ 13. ОТВЕТ СЕРВЕРА ЧИТАЕТСЯ ЦЕЛИКОМ, А НЕ ПО НАЛИЧИЮ id ═════════════════
+//
+// CRM_REAL_BOOKING_V1, разбор ревью (2026-09-21). ensure_visit с `book:` отвечает
+// тремя разными новостями, и у всех трёх в ответе есть визит:
+//
+//   created:true,  booked:true              — завели и заняли время;
+//   created:false, booked:true, moved:true  — визит дня БЫЛ ПУСТ, его перенесли
+//                                             на выбранное время (тот же id);
+//   created:false, booked:false,
+//   reason:'day_visit_busy', day_visit:{…}  — визит дня УЖЕ С РАБОТОЙ: время
+//                                             ему не меняли, и слот НЕ ЗАНЯТ.
+//
+// Карточка считала успехом любой ответ с id визита. Третий случай — это
+// пациент, которому назвали час, на который его никто не ждёт: в календаре на
+// это время пусто, а в заявке стоит «записан».
+
+const BUSY_ANSWER = {
+  visit: { id: 555 }, created: false, booked: false, reason: 'day_visit_busy',
+  day_visit: { id: 555, visit_date: BOOK_DAY + 'T06:20:00.000Z', start: '11:20', duration_minutes: 30, doctor_id: 31, doctor_name: 'Петров Пётр' },
+};
+
+/** Открыть лист дат, назначить строке день, врача и время. */
+async function readyToBook({ time = '09:30' } = {}) {
+  const { modal, sheet } = await doctorSheet();
+  await fillRow(sheet, 0, BOOK_DAY, DOCTOR.id);
+  const sel = timeSelects(sheet)[0];
+  assert.ok(sel, 'у строки с врачом нет поля времени');
+  sel.value = time; fire(sel);
+  TOASTS.length = 0;
+  CALLS.length = 0;
+  return { modal, sheet };
+}
+
+test('визит дня занят работой — время НЕ занято, и сказано, во сколько человека уже ждут', async () => {
+  const { sheet } = await readyToBook();
+  ENSURE_PLAN = [{ data: BUSY_ANSWER }]; ENSURE_N = 0;
+  saveSheet(sheet);
+  await tick(150);
+
+  assert.strictEqual(rpcOf('ensure_visit').length, 1, 'вызов записи не ушёл вовсе');
+  assert.deepStrictEqual(visitLinks(), [],
+    'карточка записала визит строкам, хотя сервер сказал, что времени он не занимал: '
+    + 'в календаре на этот час пусто, а заявка стоит «записан» — ' + JSON.stringify(visitLinks()));
+  assert.ok(someToast(/11:20/),
+    'отказ не называет, во сколько пациента уже ждут: оператору нечего сказать в трубку — ' + JSON.stringify(TOASTS));
+  assert.ok(someToast(/Петров Пётр/), 'отказ не называет врача того приёма — ' + JSON.stringify(TOASTS));
+  assert.ok(someToast(/время не занято/),
+    'из отказа не следует главное: выбранный час СВОБОДЕН и на него никто не записан — ' + JSON.stringify(TOASTS));
+  assert.ok(document.body.children.some((n) => hasClass(n, 'modal') && textOf(n).includes('Даты приёма')),
+    'окно дат закрылось после отказа — исправлять оператору уже нечем');
+  window.easymed.state.user = null;
+});
+
+test('визит дня был пуст — это ПЕРЕНОС, и он назван переносом', async () => {
+  const { sheet } = await readyToBook({ time: '10:00' });
+  ENSURE_PLAN = [{ data: { visit: { id: 555 }, created: false, booked: true, moved: true } }]; ENSURE_N = 0;
+  saveSheet(sheet);
+  await tick(150);
+
+  assert.strictEqual(visitLinks().length, 1, 'перенос не проставил строкам их визит');
+  assert.ok(someToast(/перенес/i),
+    'о переносе сказано теми же словами, что о новой записи: оператор не поймёт, что время у пациента ИЗМЕНИЛОСЬ — '
+    + JSON.stringify(TOASTS));
+  assert.ok(someToast(/10:00/), 'в сообщении о переносе нет нового времени — ' + JSON.stringify(TOASTS));
+  window.easymed.state.user = null;
+});
+
+// ═══ 14. ВИЗИТ ПРОСТАВЛЯЕТСЯ ТОЛЬКО ЖДУЩИМ СТРОКАМ ═════════════════════════
+//
+// Разбор ревью. Запись проставляла visit_id ВСЕМ строкам дня — в том числе
+// отменённым двойникам, которые saveLines() только что создала своей же
+// заменой набора, и выполненным строкам прошлых приходов. Дальше это
+// возвращалось с другой стороны: сметание «Не пришёл» считало заявку
+// записанной по ЛЮБОЙ строке со ссылкой, и заявка, у которой ссылку несёт одна
+// отменённая строка, становилась невидимой для автоматики навсегда.
+
+test('визит проставляется только ждущим строкам — отменённые двойники его не берут', async () => {
+  const { sheet } = await readyToBook();
+  ENSURE_PLAN = []; ENSURE_N = 0;
+  saveSheet(sheet);
+  await tick(150);
+
+  const link = visitLinks();
+  assert.strictEqual(link.length, 1, 'визит строкам не проставлен');
+  assert.deepStrictEqual((link[0].filters || []).find((f) => f.col === 'status'),
+    { col: 'status', op: 'eq', val: 'pending' },
+    'визит проставлен всем строкам дня: отменённый двойник и выполненная услуга получили ссылку на приём, '
+    + 'которого у них нет — ' + JSON.stringify(link[0].filters));
+  window.easymed.state.user = null;
+});
+
+test('ссылку несёт только ОТМЕНЁННАЯ строка — заявка всё равно метится ночью', async () => {
+  BOARD_CFG = null;
+  SWEEP_LINES = [{ request_id: 1, visit_id: 555, status: 'cancelled' }];
+  CALLS.length = 0;
+  await board([OVERDUE_LEAD]);
+
+  const sweep = sweepCall();
+  assert.ok(sweep, 'заявка, у которой записана только отменённая строка, стала невидимой для автоматики навсегда');
+  assert.deepStrictEqual((sweep.filters || []).find((f) => f.col === 'id'),
+    { col: 'id', op: 'in', val: [1] });
+  SWEEP_LINES = null;
+});
+
+test('ссылку несёт ЖДУЩАЯ строка — заявку ночью не трогают', async () => {
+  BOARD_CFG = null;
+  SWEEP_LINES = [{ request_id: 1, visit_id: 555, status: 'pending' }];
+  CALLS.length = 0;
+  await board([OVERDUE_LEAD]);
+  assert.strictEqual(sweepCall(), undefined, 'записанного пациента унесли в «Не пришёл» до его приёма');
+  SWEEP_LINES = null;
+});
+
+// ═══ 15. УЖЕ ЗАПИСАННУЮ СТРОКУ НЕ ЗАСТАВЛЯЮТ ЗАПИСЫВАТЬСЯ ЗАНОВО ═══════════
+//
+// Разбор ревью. Открыть записанную заявку ради правки комментария было нельзя:
+// время в crm_request_services не хранится, поле открывалось пустым, и
+// «Сохранить и записать» отказывало «не выбрано время» — на строке, у которой
+// приём в календаре уже стоит.
+
+const BOOKED_LINE = { id: 901, service_id: 20, scheduled_date: BOOK_DAY, status: 'pending', doctor_id: 31, visit_id: 555 };
+const bookedVisit = (hhmm) => ({ id: 555, visit_date: new Date(BOOK_DAY + 'T' + hhmm).toISOString(), duration_minutes: 30 });
+
+test('время записанной строки подставляется из её визита', async () => {
+  VISITS = [bookedVisit('09:30')];
+  const { sheet } = await doctorSheet({ lines: [BOOKED_LINE] });
+  await tick(60);
+  const sel = timeSelects(sheet)[0];
+  assert.ok(sel, 'у записанной строки нет поля времени');
+  assert.strictEqual(sel.value, '09:30',
+    'поле времени открылось пустым, хотя приём в календаре стоит: оператор обязан гадать, на какой час записан пациент');
+  VISITS = [];
+  window.easymed.state.user = null;
+});
+
+test('записанную строку не трогали — сохранение проходит и НИЧЕГО не перезаписывает', async () => {
+  VISITS = [];   // время подставить неоткуда — правило обязано работать и так
+  const { sheet } = await doctorSheet({ lines: [BOOKED_LINE] });
+  await tick(60);
+  CALLS.length = 0; TOASTS.length = 0;
+  saveSheet(sheet);
+  await tick(150);
+
+  assert.deepStrictEqual(rpcOf('ensure_visit'), [],
+    'строку, которая уже держит слот и которую не трогали, записали заново — сервер перенёс бы визит на то же время: '
+    + JSON.stringify(rpcOf('ensure_visit').map((c) => c.body)));
+  assert.ok(savedRow(), 'сохранение отказало на строке, у которой приём в календаре уже стоит');
+  assert.ok(!document.body.children.some((n) => hasClass(n, 'modal') && textOf(n).includes('Даты приёма')),
+    'окно дат осталось открытым, хотя сохранять было нечего');
+  window.easymed.state.user = null;
+});
+
+test('оператор выбрал другое время — уходит запись с НОВЫМ началом', async () => {
+  VISITS = [bookedVisit('09:30')];
+  const { sheet } = await doctorSheet({ lines: [BOOKED_LINE] });
+  await tick(60);
+  const sel = timeSelects(sheet)[0];
+  sel.value = '10:00'; fire(sel);
+  CALLS.length = 0; TOASTS.length = 0;
+  ENSURE_PLAN = [{ data: { visit: { id: 555 }, created: false, booked: true, moved: true } }]; ENSURE_N = 0;
+  saveSheet(sheet);
+  await tick(150);
+
+  const ev = rpcOf('ensure_visit');
+  assert.strictEqual(ev.length, 1, 'новое время до сервера не дошло: ' + JSON.stringify(ev.map((c) => c.body)));
+  assert.strictEqual(new Date(ev[0].body.book.start).getTime(), new Date(BOOK_DAY + 'T10:00').getTime(),
+    'на сервер ушло не то время, что выбрал оператор: ' + ev[0].body.book.start);
+  VISITS = [];
+  window.easymed.state.user = null;
+});
+
+// ═══ 16. ПЕРЕНОС НА ДРУГОЙ ДЕНЬ НЕ ОСТАВЛЯЕТ СТАРЫЙ ПРИЁМ ВИСЕТЬ ═══════════
+//
+// Разбор ревью. Строка, уехавшая на другой день, снималась со своего визита
+// (visit_id: null) — и прежний приём оставался в календаре держать время врача,
+// и уже ничем с заявкой не связанный: найти его можно было только глазами.
+
+async function moveBookedDay({ answer }) {
+  CONFIRM_ANSWER = answer;
+  CONFIRMS.length = 0;
+  VISITS = [bookedVisit('09:30')];
+  const { sheet } = await doctorSheet({ lines: [BOOKED_LINE] });
+  await tick(60);
+  await fillRow(sheet, 0, LAB_DAY, DOCTOR.id);
+  const sel = timeSelects(sheet)[0];
+  assert.ok(sel, 'после переноса дня пропало поле времени');
+  sel.value = '09:00'; fire(sel);
+  CALLS.length = 0; TOASTS.length = 0;
+  ENSURE_PLAN = []; ENSURE_N = 0;
+  saveSheet(sheet);
+  await tick(200);
+  VISITS = [];
+  return rpcOf('calendar_book');
+}
+
+test('согласились — старый приём отменяется той же дверью, что и весь календарь', async () => {
+  const cancels = await moveBookedDay({ answer: true });
+  assert.ok(CONFIRMS.length, 'про старый приём не спросили вовсе — он остался бы висеть молча');
+  assert.ok(/09:30/.test(CONFIRMS[0]), 'в вопросе не названо время старого приёма: ' + CONFIRMS[0]);
+  assert.strictEqual(cancels.length, 1,
+    'старый приём не отменён: он держит время врача, и связи с заявкой у него больше нет — ' + JSON.stringify(cancels.map((c) => c.body)));
+  assert.strictEqual(cancels[0].body.visit_id, 555);
+  assert.strictEqual(cancels[0].body.status, 'cancelled');
+  window.easymed.state.user = null;
+});
+
+test('отказались — старый приём остаётся, и об этом сказано вслух', async () => {
+  const cancels = await moveBookedDay({ answer: false });
+  assert.deepStrictEqual(cancels, [], 'приём отменили, не спросив согласия');
+  assert.ok(someToast(/остаётся в календаре/),
+    'старый приём оставили висеть молча — регистратура найдёт его только глазами: ' + JSON.stringify(TOASTS));
+  window.easymed.state.user = null;
 });

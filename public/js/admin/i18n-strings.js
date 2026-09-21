@@ -3,6 +3,14 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CRM_REAL_BOOKING_V1 (2026-09-21, разбор ревью) — ответ сервера о дне и перенос
+  "В этот день у пациента уже есть приём в {t}{doc} — время не занято, откройте календарь": {"en":"The patient already has an appointment that day at {t}{doc} — the time you picked is NOT taken, open the calendar","ru":"В этот день у пациента уже есть приём в {t}{doc} — время не занято, откройте календарь","uz":"Bemorning o‘sha kuni allaqachon {t} da qabuli bor{doc} — siz tanlagan vaqt band qilinmadi, kalendarni oching"},
+  "у {doc}": {"en":"with {doc}","ru":"у {doc}","uz":"{doc} qabulida"},
+  "Приём перенесён на {t}": {"en":"The appointment was moved to {t}","ru":"Приём перенесён на {t}","uz":"Qabul {t} ga ko‘chirildi"},
+  "Старый приём на {d} в {t} отменить?": {"en":"Cancel the old appointment on {d} at {t}?","ru":"Старый приём на {d} в {t} отменить?","uz":"{d} kunidagi {t} dagi eski qabul bekor qilinsinmi?"},
+  "Старый приём на {d} остаётся в календаре — отмените его там.": {"en":"The old appointment on {d} stays in the calendar — cancel it there.","ru":"Старый приём на {d} остаётся в календаре — отмените его там.","uz":"{d} kunidagi eski qabul kalendarda qoladi — uni o‘sha yerda bekor qiling."},
+  "Старый приём на {d} отменён.": {"en":"The old appointment on {d} was cancelled.","ru":"Старый приём на {d} отменён.","uz":"{d} kunidagi eski qabul bekor qilindi."},
+  "Старый приём на {d} отменить не удалось: {msg}": {"en":"The old appointment on {d} could not be cancelled: {msg}","ru":"Старый приём на {d} отменить не удалось: {msg}","uz":"{d} kunidagi eski qabulni bekor qilib bo‘lmadi: {msg}"},
   // CRM_REAL_BOOKING_V1 (2026-09-21) — запись колл-центра держит настоящий слот
   "заявки": {"en":"requests","ru":"заявки","uz":"arizalar"},
   "сначала дата": {"en":"pick a date first","ru":"сначала дата","uz":"avval sana"},
