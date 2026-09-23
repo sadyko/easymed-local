@@ -463,7 +463,14 @@ export async function renderRolesEditor(container, { onBack } = {}) {
             if (!nav) return;
             const ids = nav.filter((it) => !it.section).map((it) => it.id);
             const reach = roleReach(
-                { name: labelOf(state.selected), permissions: collect() },
+                // MY_STOCK_V1 — сюда едет КОД роли, а не её подпись. Сводка
+                // спрашивает настоящие ворота, а часть из них смотрит на роль
+                // по коду (permissions.js ROLE_GATED_SCREENS: лист назначений,
+                // задачи медсестры, порционник, выписка, «Мои запасы»);
+                // подпись «Кассир» такие ворота читают как «роль неизвестна» и
+                // молча пропускают — то есть обещают экран, которого не будет.
+                // Название роли рисуется отдельно, в заголовке карточки выше.
+                { name: state.selected, permissions: collect() },
                 ids,
                 (id) => t('sidebar.nav.' + id, id),
                 tr,   // перевод СНАЧАЛА: слова уровня и ролей едут в {дырках}

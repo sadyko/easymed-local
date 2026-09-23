@@ -19,7 +19,7 @@ import { pulseFade, revealOn, HIDDEN_CLASS, SHOWN_CLASS } from './admin/motion.j
 import {
     isModuleAllowed, isRouteAllowed, actorRoleCodes,   // actorRoleCodes — ROLE_HOME_V1
     setFullAccess, setEffectiveFromRole, setEffectiveFromRoles, currentRoleLabel,
-    scopedProviderId, ownDepartmentId,   // ownDepartmentId — MY_STOCK_V1
+    scopedProviderId, ownDepartmentId, PERSONAL_VIEWS,   // ownDepartmentId / PERSONAL_VIEWS — MY_STOCK_V1
 } from './admin/permissions.js';
 import {
     verifyLogin, actorFromUser,
@@ -172,16 +172,17 @@ const NAV = [
     // КЛИНИЧЕСКОМ БЛОКЕ НАМЕРЕННО.
     //
     // «Мои запасы» — свой подотчёт: что выдали, кто выдал, сколько осталось,
-    // что списано на пациентов (решение владельца 23.09). Права у пункта нет и
-    // быть не может — экран показывает только самого вошедшего, — поэтому его
-    // видимость решает РОЛЬ (permissions.js MY_STOCK_ROLES), а не галочка.
-    // «Мой отдел» ведёт на карточку СВОЕГО отдела и виден только тому, у кого
-    // отдел есть (users.department_id приезжает с сессией).
+    // что списано на пациентов (решение владельца 23.09). «Мой отдел» ведёт на
+    // карточку СВОЕГО отдела. Оба выдаются ОДНОЙ галочкой «Мои запасы и мой
+    // отдел» (permissions.js personalStockAllowed, миграция 144), а поверх неё
+    // спрашивается факт о человеке: роль-держатель для подотчёта и наличие
+    // отдела (users.department_id приезжает с сессией) для карточки отдела.
     //
-    // Порядок важен не на глаз: firstAllowedView() отдаёт человеку ПЕРВЫЙ
-    // доступный пункт меню как домашний экран. Личный экран домашним быть не
-    // должен ни у кого, поэтому оба стоят после всей клинической работы —
-    // впереди них у любой роли найдётся её собственный раздел.
+    // ДОМАШНИМ ЭКРАНОМ НИ ОДИН ИЗ НИХ НЕ БЫВАЕТ, и решается это не порядком в
+    // меню, а списком: firstAllowedView() пропускает PERSONAL_VIEWS. Порядок
+    // от этой беды не спасает — при любом порядке найдётся роль, у которой
+    // первым доступным окажется личный экран (кассир с отделом вместо кассы,
+    // главный врач вместо дашборда).
     { id: 'my-stock', label: 'My stock', icon: 'Layers' },   // MY_STOCK_V1
     { id: 'my-department', label: 'My department', icon: 'Building' },   // MY_STOCK_V1
     { section: 'Operations' },
@@ -363,6 +364,9 @@ function firstAllowedView() {
     if (actorRoleCodes().includes('admin') && isModuleAllowed('dashboard')) return 'dashboard';
     for (const item of NAV) {
         if (item.section) continue;
+        // MY_STOCK_V1 — личный экран домашним не бывает ни у кого: сюда
+        // приходят посмотреть на себя, а не начать смену. См. PERSONAL_VIEWS.
+        if (PERSONAL_VIEWS.has(item.id)) continue;
         if (isModuleAllowed(item.id)) return item.id;
     }
     return 'dashboard';   // unreachable in practice (super admin sees all)

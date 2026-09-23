@@ -116,6 +116,12 @@ test('every sidebar module can be granted to a role', () => {
     // `beds` key. Who may PRESS «Оформить выписку» is a server question
     // (TRANSITION_ROLES 'discharging→discharged'), not a menu one.
     if (id === 'discharge') return !grantable.has('beds');
+    // MY_STOCK_V1 — and the same shape once more: «Мои запасы» (#my-stock) and
+    // «Мой отдел» (#my-department) are two personal screens of ONE job, granted
+    // by the single key `my-stock` (permissions.js personalStockAllowed,
+    // migration 144); belonging to a department is a FACT about the person on
+    // top of that key, not a second right.
+    if (id === 'my-department') return !grantable.has('my-stock');
     return true;
   });
   assert.deepEqual(ungrantable, [], 'sidebar modules with no way to grant them:\n' + ungrantable.join('\n'));

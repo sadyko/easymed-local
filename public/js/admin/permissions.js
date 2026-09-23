@@ -59,6 +59,14 @@ export const NAV_MODULES = [
         { key: 'procedures',        label: 'Процедуры',     desc: 'Очередь процедур (медсестра)' },
         { key: 'beds',              label: 'Стационар и палаты', desc: 'Окно медсестры (заявки и размещение) и коечный фонд' },   // ADMISSION_ORDER_V1 — ключ открывает ОБА экрана: #admissions и #beds
         { key: 'patient-documents', label: 'Документы пациентов', desc: 'Печатные документы по пациентам' },
+        // MY_STOCK_V1 — ОДИН КЛЮЧ НА ОБА ЛИЧНЫХ ЭКРАНА: «Мои запасы» (#my-stock)
+        // и «Мой отдел» (#my-department). Тот же приём, что у `beds` строкой
+        // выше, и по той же причине: это две стороны одной работы — что у меня
+        // на руках и что у моего отдела, — и второй ключ был бы ловушкой в обе
+        // стороны (клиника, выдавшая подотчёт, молча не увидела бы карточку
+        // отдела, а роль могла бы получить право тратить, не получив права
+        // видеть, чем она тратит).
+        { key: 'my-stock',          label: 'Мои запасы и мой отдел', desc: 'Свой подотчёт (что выдали, кто выдал, что списано) и карточка своего отдела' },
     ] },
     { group: 'Операционные', items: [
         { key: 'cashier',      label: 'Касса',          desc: 'Смена кассира и приём оплат' },
@@ -159,11 +167,12 @@ export const INPATIENT_SCREEN_ROLES = Object.freeze({
 
 // MY_STOCK_V1 — КТО ДЕРЖИТ ТОВАР НА РУКАХ, ТОТ И ВИДИТ «МОИ ЗАПАСЫ».
 //
-// Это не грантовый ключ и не может им быть: экран показывает ТОЛЬКО собственные
-// строки вошедшего (отбор считает сервер — rpc/holdings.js `mine`,
-// rpc/stock-log.js `only`), и выдавать право «видеть себя» галочкой значило бы
-// заводить право, которое администратору пришлось бы проставить каждому
-// поимённо, иначе врач не увидел бы того, что сам же и тратит.
+// Ключ `my-stock` у экрана ЕСТЬ (NAV_MODULES выше, роздан миграцией 144), но
+// одного ключа мало: экран показывает ТОЛЬКО собственные строки вошедшего
+// (отбор считает сервер — rpc/holdings.js `mine`, rpc/stock-log.js `only`), и
+// роли, которой товар на руки не выдают, он был бы всегда пуст. Поэтому список
+// ниже спрашивается ВМЕСТЕ с ключом — тот же приём «право И роль», что у
+// четырёх экранов стационара выше.
 //
 // Список — те, кому склад вообще выдаёт под отчёт (rpc/procurement.js
 // issue_stock_lines): врач, медсестра, старшая, главный врач; администратор
@@ -172,6 +181,24 @@ export const INPATIENT_SCREEN_ROLES = Object.freeze({
 // роли (руководителем отдела бывает только врач или медсестра — eligibleHead
 // в rpc/departments.js), и по собственному отделу (ownDepartmentId ниже).
 export const MY_STOCK_ROLES = Object.freeze(['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse']);
+
+// MY_STOCK_V1 — ЛИЧНЫЕ ЭКРАНЫ НИКОГДА НЕ БЫВАЮТ ДОМАШНИМИ.
+//
+// «Домашний экран» роли считают ДВА места, и оба перебирают меню сверху вниз:
+// оболочка (admin.js firstAllowedView) — и как место, куда человек попадает,
+// войдя, и как место, куда его возвращают с ЛЮБОГО закрытого маршрута; сводка
+// прав (role-reach.js landingScreen) — чтобы сказать это владельцу словами.
+//
+// «Мои запасы» стоят в клиническом блоке, то есть раньше кассы, закупок и
+// дашборда, и открыты всякому, у кого есть отдел. Без этого списка кассир с
+// отделом входил бы в свой подотчёт вместо кассы, главный врач — вместо
+// дашборда, кладовщик — вместо «Закупок», а экран «Роли» уверенно сообщал бы
+// владельцу, что дом кассира — «Мои запасы».
+//
+// Порядком пунктов это не лечится: любой порядок оставляет роль, у которой
+// первым доступным окажется личный экран. Личный экран — то, куда заходят
+// посмотреть на себя, а не работа смены; домашним он не бывает ни у кого.
+export const PERSONAL_VIEWS = Object.freeze(new Set(['my-stock', 'my-department']));
 
 // Экраны, которые ключ роли открывает, а видит их только человек нужной роли.
 // Сводка прав (role-reach.js) обязана называть такие экраны отдельно, иначе она
@@ -188,11 +215,49 @@ export const ROLE_GATED_SCREENS = Object.freeze({ ...INPATIENT_SCREEN_ROLES, 'my
  * запасов». Руководитель отдела всегда состоит и в его команде
  * (department_form добавляет его сам), поэтому одного этого поля хватает и для
  * заведующей.
+ *
+ * ПРЕДПРОСМОТР РОЛИ НЕ НАСЛЕДУЕТ О ЧИТАТЕЛЕ НИЧЕГО. previewRole() подменял
+ * права и роль, а отдел молча оставался ОТ ТОГО, КТО СМОТРИТ: администратор,
+ * состоящий в отделе, открывал «Настройки → Роли», выбирал «Кассир» — и сводка
+ * сообщала, что кассирам открыты «Мои запасы» и «Мой отдел». Это неправда о
+ * роли и правда о самом читателе — худший вид ошибки именно на экране прав.
+ * Поэтому предпросмотр объявляет отдел САМ (_preview ниже), а по умолчанию —
+ * «отдела нет». Тем же одним флагом закрыта вторая половина той же течи: пока
+ * предпросмотр в силе, actorRoleCodes() не подмешивает роль вошедшего.
  */
+let _preview = null;   // null — не предпросмотр; { departmentId: number|null } — предпросмотр
+
 export function ownDepartmentId() {
+    if (_preview) return _preview.departmentId;
     const u = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || null;
     const id = u ? Number(u.department_id) : NaN;
     return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+/**
+ * MY_STOCK_V1 — ЗАБЫТЬ СВОЙ ОТДЕЛ, КОГДА СЕРВЕР СКАЗАЛ, ЧТО ОН НЕ СВОЙ.
+ *
+ * users.department_id приезжает с сессией ОДИН раз, при входе (auth.js
+ * actorFromUser), и пункт «Мой отдел» рисуется по нему. Медсестру перевели в
+ * другое отделение — до перезагрузки страницы пункт остаётся на месте и ведёт
+ * в отказ; орган управления, который ведёт в отказ, читается как поломка
+ * программы.
+ *
+ * Чинится НЕ перечитыванием отдела на каждом переходе: better-sqlite3
+ * синхронна, и лишний запрос на КАЖДУЮ навигацию стоит дороже самой беды.
+ * Протухшее поле вредит ровно в ту минуту, когда им воспользовались, — а в эту
+ * минуту программа и так спрашивает сервер (department_card) и получает отказ.
+ * Отказ по СВОЕМУ отделу и означает «он больше не свой»: поле забывается, и
+ * пункт исчезает с ближайшей отрисовки меню.
+ *
+ * Возвращает true, если поле действительно забыли, — ради вызывающего и теста.
+ */
+export function forgetOwnDepartment(departmentId) {
+    const u = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || null;
+    if (!u || !Number.isInteger(Number(departmentId))) return false;
+    if (Number(u.department_id) !== Number(departmentId)) return false;   // отказ по ЧУЖОМУ отделу ничего о своём не говорит
+    u.department_id = null;
+    return true;
 }
 
 function rememberRoles(names) {
@@ -220,6 +285,9 @@ export function setActorRoles(roles) { rememberRoles(roles); }
  */
 export function actorRoleCodes() {
     const out = [..._actorRoles];
+    // MY_STOCK_V1 — в предпросмотре роли вошедшего нет: иначе сводка отвечала
+    // бы про кассира ролью АДМИНИСТРАТОРА, который её читает (см. _preview).
+    if (_preview) return out;
     const u = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || null;
     if (u) {
         const extra = Array.isArray(u.extra_roles) ? u.extra_roles : [];
@@ -383,15 +451,23 @@ export function getEffectiveSet() { return _effective; }
  *
  * Только СИНХРОННО: подмена глобальна, и await внутри fn означал бы, что чужие
  * права действуют, пока мы ждём.
+ *
+ * MY_STOCK_V1 — ОТДЕЛ ПОДМЕНЯЕТСЯ ВМЕСТЕ С ПРАВАМИ. `opts.departmentId`:
+ * число — «сотрудник этой роли состоит в отделе», null (и по умолчанию) — «не
+ * состоит». Наследовать отдел ЧИТАТЕЛЯ нельзя: см. ownDepartmentId() выше.
+ *
+ * @param opts.departmentId  номер отдела предпросматриваемого сотрудника (null — отдела нет)
  */
-export function previewRole(roleRow, fn) {
-    const saved = { eff: _effective, levels: _levels, tabs: _patientTabs, label: _roleLabel, roles: _actorRoles };
+export function previewRole(roleRow, fn, opts = {}) {
+    const saved = { eff: _effective, levels: _levels, tabs: _patientTabs, label: _roleLabel, roles: _actorRoles, preview: _preview };
     try {
         setEffectiveFromRole(roleRow);
+        const id = Number(opts && opts.departmentId);
+        _preview = { departmentId: Number.isInteger(id) && id > 0 ? id : null };
         return fn();
     } finally {
         _effective = saved.eff; _levels = saved.levels; _patientTabs = saved.tabs;
-        _roleLabel = saved.label; _actorRoles = saved.roles;
+        _roleLabel = saved.label; _actorRoles = saved.roles; _preview = saved.preview;
     }
 }
 
@@ -579,23 +655,39 @@ export function patientTabCanDelete(tab) {
 // ---------------------------------------------------------------------------
 // Checks
 // ---------------------------------------------------------------------------
+// MY_STOCK_V1 — ДВА ЛИЧНЫХ ЭКРАНА: ПРАВО КЛИНИКИ, А ПОВЕРХ НЕГО — ФАКТ О
+// ЧЕЛОВЕКЕ.
+//
+// ПРАВО. Ключ один на оба экрана (MY_STOCK_KEY, NAV_MODULES выше), роздан
+// миграцией 144 тем, кому склад выдаёт под отчёт, и администратору. Клиника,
+// снявшая галочку в «Настройки → Роли», прячет ОБА пункта — иначе ключ был бы
+// бутафорией, а экран прав обещал бы то, чего не делает.
+//
+// ФАКТ. Принадлежность к отделу правом не является и галочкой не выдаётся:
+// «Мой отдел» ведёт на карточку ТВОЕГО отдела, и человеку, который ни в одном
+// отделе не состоит, вести туда некуда — полный доступ этого не меняет
+// (администратор без отдела увидел бы пункт, открывающий чужой справочник;
+// свои отделы он открывает из «Настройки → Отделы», как и открывал).
+//
+// «Мои запасы» спрашивают ещё и РОЛЬ (MY_STOCK_ROLES): кассиру и регистратуре
+// товар на руки не выдают, и экран был бы у них всегда пустым. Заведующая
+// отделом проходит и тогда, когда её роль в список не попала, — у неё есть
+// отдел. Это ИЛИ, а не И: ключ · (роль или отдел).
+function personalStockAllowed(navId) {
+    if (navId === 'my-department' && (ownDepartmentId() == null || !isRouteAllowed('departments'))) return false;
+    if (_effective == null) return true;
+    if (!_effective.has('my-stock')) return false;
+    if (navId === 'my-department') return true;
+    return hasActorRole(MY_STOCK_ROLES) || ownDepartmentId() != null;
+}
+
 // Is a top-level sidebar module visible? The Settings module is special: it
 // shows when the role can reach the Settings home OR any single sub-section.
 export function isModuleAllowed(navId) {
-    // MY_STOCK_V1 — «МОЙ ОТДЕЛ» РЕШАЕТСЯ РАНЬШЕ ВСЕХ ПРАВ, ПОТОМУ ЧТО ЭТО НЕ
-    // ПРАВО. Пункт ведёт на карточку ТВОЕГО отдела; человеку, который ни в
-    // одном отделе не состоит, вести туда некуда — и полный доступ этого не
-    // меняет: администратор без отдела увидел бы пункт, который открывает
-    // чужой справочник. Свои отделы он открывает из «Настройки → Отделы», как
-    // и открывал. Право на сам экран проверяется тут же, вторым условием.
-    if (navId === 'my-department') return ownDepartmentId() != null && isRouteAllowed('departments');
+    // MY_STOCK_V1 — оба личных экрана решаются одним местом, см. ниже.
+    if (navId === 'my-stock' || navId === 'my-department') return personalStockAllowed(navId);
     if (_effective == null) return true;
     if (ALWAYS_ALLOWED.has(navId)) return true;
-    // MY_STOCK_V1 — «Мои запасы»: свой подотчёт, свои выдачи, свои списания.
-    // Спрашивается РОЛЬ, а не ключ: грантового ключа у экрана нет и быть не
-    // может (см. MY_STOCK_ROLES выше). Заведующая отделом видит пункт и тогда,
-    // когда её роль в список не попала, — у неё есть отдел.
-    if (navId === 'my-stock') return hasActorRole(MY_STOCK_ROLES) || ownDepartmentId() != null;
     if (navId === 'settings') {
         if (_effective.has('settings')) return true;
         for (const k of _effective) if (k.startsWith('settings:')) return true;

@@ -221,21 +221,41 @@ test('MY_STOCK_V1: оба экрана — пункты меню: есть в NA
 });
 
 test('MY_STOCK_V1: «Мои запасы» видят те, кому склад выдаёт под отчёт, и не видит тот, кому не выдаёт', () => {
+    // Ключ `my-stock` (миграция 144) роздан этим ролям, поэтому он стоит в
+    // выданных разделах: пункт решается «ключ И (роль ИЛИ отдел)».
     const sees = (code, sections) => { perms.setEffectiveFromRole(role(code, sections)); return perms.isModuleAllowed('my-stock'); };
     try {
         for (const code of ['doctor', 'nurse', 'senior_nurse', 'head_doctor']) {
-            assert.equal(sees(code, ['patients']), true, 'пункт «Мои запасы» не виден роли ' + code + ' — она держит товар на руках');
+            assert.equal(sees(code, ['patients', 'my-stock']), true, 'пункт «Мои запасы» не виден роли ' + code + ' — она держит товар на руках');
         }
         for (const code of ['cashier', 'registrar', 'lab', 'callcenter']) {
-            assert.equal(sees(code, ['patients', 'cashier']), false,
+            assert.equal(sees(code, ['patients', 'cashier', 'my-stock']), false,
                 'пункт «Мои запасы» показан роли ' + code + ': товар на руки ей не выдают, экран был бы всегда пустым');
         }
         // Раздел «Закупки» этим НЕ расширяется и не требуется.
-        perms.setEffectiveFromRole(role('nurse', ['patients']));
+        perms.setEffectiveFromRole(role('nurse', ['patients', 'my-stock']));
         assert.equal(perms.isModuleAllowed('inventory'), false, 'права склада разъехались: медсестре открылись «Закупки»');
         // Заведующая отделом видит пункт даже с ролью вне списка — у неё есть отдел.
-        assert.equal(withDepartment(11, () => sees('lab', ['labs'])), true,
+        assert.equal(withDepartment(11, () => sees('lab', ['labs', 'my-stock'])), true,
             'сотруднику отдела «Мои запасы» не видны — а отдел ему выдают под отчёт');
+    } finally { perms.setFullAccess('Admin'); }
+});
+
+// MY_STOCK_V1 — КЛЮЧ, КОТОРЫЙ НЕЛЬЗЯ ОТНЯТЬ, — НЕ КЛЮЧ. Клиника снимает
+// галочку «Мои запасы и мой отдел» в «Настройки → Роли» и обязана потерять ОБА
+// пункта: экран прав, который обещает больше, чем делает, хуже отсутствия
+// экрана прав.
+test('MY_STOCK_V1: снятая в «Ролях» галочка прячет ОБА личных пункта', () => {
+    try {
+        perms.setEffectiveFromRole(role('nurse', ['patients', 'my-stock']));
+        assert.equal(perms.isModuleAllowed('my-stock'), true, 'подготовка: с ключом пункт виден');
+        assert.equal(withDepartment(11, () => perms.isModuleAllowed('my-department')), true, 'подготовка: с ключом и отделом виден и «Мой отдел»');
+
+        perms.setEffectiveFromRole(role('nurse', ['patients']));
+        assert.equal(perms.isModuleAllowed('my-stock'), false,
+            'клиника сняла галочку, а «Мои запасы» остались — ключ бутафория');
+        assert.equal(withDepartment(11, () => perms.isModuleAllowed('my-department')), false,
+            'клиника сняла галочку, а «Мой отдел» остался — один ключ обязан закрывать оба экрана');
     } finally { perms.setFullAccess('Admin'); }
 });
 
@@ -250,6 +270,52 @@ test('MY_STOCK_V1: маршрут «Мои запасы» открыт всем 
     } finally { perms.setFullAccess('Admin'); }
 });
 
+// MY_STOCK_V1 — ПРОТУХШИЙ ОТДЕЛ В СЕССИИ.
+//
+// users.department_id приезжает с сессией ОДИН раз, при входе, и пункт «Мой
+// отдел» рисуется по нему. Медсестру перевели в другое отделение — и до
+// перезагрузки страницы пункт оставался на месте, а вёл в отказ сервера.
+// Орган управления, который ведёт в отказ, читается как поломка программы:
+// человек жмёт ещё раз, потом звонит.
+//
+// Перечитывать отдел на каждом переходе дороже самой беды (better-sqlite3
+// синхронна). Протухшее поле вредит ровно в ту минуту, когда им
+// воспользовались, — и в эту минуту программа уже спросила сервер.
+test('MY_STOCK_V1: отказ по СВОЕМУ отделу забывает его — пункт меню исчезает сам', () => {
+    const was = globalThis.window.easymed;
+    globalThis.window.easymed = { state: { user: { id: 7, role: 'nurse', department_id: 11 } } };
+    try {
+        perms.setEffectiveFromRole(role('nurse', ['patients', 'my-stock']));
+        assert.equal(perms.isModuleAllowed('my-department'), true, 'подготовка: пункт виден');
+
+        // Отказ по ЧУЖОМУ отделу о своём ничего не говорит.
+        assert.equal(perms.forgetOwnDepartment(12), false);
+        assert.equal(perms.isModuleAllowed('my-department'), true);
+
+        // А отказ по своему — говорит: он больше не свой.
+        assert.equal(perms.forgetOwnDepartment(11), true);
+        assert.equal(perms.isModuleAllowed('my-department'), false,
+            'сервер отказал по своему отделу, а пункт меню остался вести в отказ');
+        // «Мои запасы» при этом целы: подотчёт от отдела не зависит.
+        assert.equal(perms.isModuleAllowed('my-stock'), true);
+    } finally { globalThis.window.easymed = was; perms.setFullAccess('Admin'); }
+});
+
+// Карточка отдела — ЕДИНСТВЕННОЕ место, где эта правда узнаётся, и дубликат
+// правила прикрыт чтением самого файла: без вызова забывание не случится
+// никогда, а тест выше остался бы зелёным.
+test('MY_STOCK_V1: карточка отдела действительно забывает отдел на отказе, и только на нём', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const url = await import('node:url');
+    const here = path.dirname(url.fileURLToPath(import.meta.url));
+    const src = fs.readFileSync(path.join(here, '..', 'views', 'departments.js'), 'utf8');
+    assert.match(src, /forgetOwnDepartment\(state\.cardId\)/,
+        'карточка отдела больше не забывает протухший отдел — пункт «Мой отдел» снова ведёт в отказ');
+    assert.match(src, /e\.code === 'forbidden' && forgetOwnDepartment/,
+        'отдел забывается на ЛЮБОЙ ошибке: сбой сети гасил бы пункт меню без причины');
+});
+
 test('MY_STOCK_V1: «Мой отдел» — только у того, у кого отдел есть; полный доступ этого не меняет', () => {
     try {
         perms.setFullAccess('Admin');
@@ -257,10 +323,13 @@ test('MY_STOCK_V1: «Мой отдел» — только у того, у ког
             'администратору без отдела показан «Мой отдел» — он открывает чужой справочник, а свои отделы живут в настройках');
         assert.equal(withDepartment(11, () => perms.isModuleAllowed('my-department')), true);
 
-        perms.setEffectiveFromRole(role('nurse', ['patients']));
+        perms.setEffectiveFromRole(role('nurse', ['patients', 'my-stock']));
         assert.equal(perms.isModuleAllowed('my-department'), false, 'отдела нет — пункта нет');
         assert.equal(withDepartment(11, () => perms.isModuleAllowed('my-department')), true,
             'медсестра отделения не видит пункта на карточку своего отдела');
+        // И «Мои запасы» ей видны БЕЗ отдела: она в списке держателей.
+        assert.equal(perms.isModuleAllowed('my-stock'), true,
+            'медсестра без отдела потеряла свой подотчёт — а он у неё на руках');
         // Право то же, что у «Отделов»: карточку чужого отдела сервер всё равно не отдаст.
         assert.equal(perms.isRouteAllowed('my-department'), perms.isRouteAllowed('departments'));
     } finally { perms.setFullAccess('Admin'); }

@@ -23,7 +23,7 @@
 import {
     previewRole, isModuleAllowed, accessLevelFor, actorRoleCodes,
     patientTabLevel, patientTabCaps, canCreatePatient,
-    PATIENT_CARD_TAB_IDS, PATIENT_TABS, ROLE_GATED_SCREENS,
+    PATIENT_CARD_TAB_IDS, PATIENT_TABS, ROLE_GATED_SCREENS, PERSONAL_VIEWS,
 } from './permissions.js';
 // ПЕРЕВОДЧИК ПРИХОДИТ АРГУМЕНТОМ, А НЕ ИМПОРТОМ. i18n.js трогает document на
 // загрузке, и импорт превратил бы этот модуль в экранный — то есть непроверяемый
@@ -67,7 +67,7 @@ const ROLE_WORD = {
  *
  * Правило повторяет admin.js firstAllowedView() (ROLE_HOME_V1): роль admin с
  * открытым дашбордом входит в «Дашборд», остальные — в первый доступный пункт
- * меню. Оно продублировано ЗДЕСЬ намеренно и прикрыто тестом, который читает
+ * меню, КРОМЕ личных экранов (MY_STOCK_V1, PERSONAL_VIEWS). Оно продублировано ЗДЕСЬ намеренно и прикрыто тестом, который читает
  * admin.js: вынести его в общий модуль значило бы тянуть оболочку в вид
  * настроек (круговая зависимость), а молча разойтись с ней — обещать не тот
  * экран. actorRoleCodes() внутри previewRole() отвечает именем ПРЕДПРОСМОТРЕННОЙ
@@ -75,7 +75,10 @@ const ROLE_WORD = {
  */
 export function landingScreen(navIds) {
     if (actorRoleCodes().includes('admin') && isModuleAllowed('dashboard')) return { id: 'dashboard', kind: 'nav' };
-    for (const id of navIds) if (isModuleAllowed(id)) return { id, kind: 'nav' };
+    // MY_STOCK_V1 — личные экраны пропускаются здесь ровно так же, как в
+    // оболочке (PERSONAL_VIEWS): иначе сводка обещала бы владельцу, что дом
+    // кассира с отделом — «Мои запасы», и обещала бы это уверенным голосом.
+    for (const id of navIds) if (!PERSONAL_VIEWS.has(id) && isModuleAllowed(id)) return { id, kind: 'nav' };
     return null;
 }
 
@@ -90,17 +93,31 @@ export function roleReach(roleRow, navIds, labelOf, translate) {
     const label = (id) => (labelOf ? labelOf(id) : id);
     const tr = translate || SELF;
     return previewRole(roleRow, () => {
+        // MY_STOCK_V1 — ВТОРОЙ ВОПРОС ТЕМ ЖЕ ВОРОТАМ: «а если бы отдел был?».
+        //
+        // «Мои запасы» и «Мой отдел» открываются не только ролью, но и ФАКТОМ
+        // о человеке — состоит ли он в отделе (permissions.js
+        // personalStockAllowed). Предпросмотр этого факта о себе не знает и
+        // знать не должен (отдел читателя — не свойство роли), поэтому ответ
+        // спрашивается ДВАЖДЫ: без отдела и с отделом. Разница и есть условие,
+        // и сводка называет его словами, вместо того чтобы записать экран в
+        // «открыт» (вранье про кассиров) или в «закрыт» (вранье про медсестёр).
+        //
+        // Номер отдела здесь любой: ворота спрашивают «есть ли отдел», а не
+        // «какой». Спрашивается снова через previewRole, чтобы подмена по
+        // выходе вернулась сама — как и всюду в этом файле.
+        const withDept = new Set(previewRole(roleRow, () => navIds.filter((id) => isModuleAllowed(id)), { departmentId: 1 }));
+
         const opens = [], closed = [], conditional = [];
         for (const id of navIds) {
-            if (!isModuleAllowed(id)) { closed.push({ id, label: label(id) }); continue; }
+            const open = isModuleAllowed(id);
+            if (!open && !withDept.has(id)) { closed.push({ id, label: label(id) }); continue; }
             const need = ROLE_GATED_SCREENS[id];
             const entry = { id, label: label(id), level: accessLevelFor(id) };
-            if (need && need.length) {
-                entry.roles = need.map((r) => tr(ROLE_WORD[r] || r));
-                conditional.push(entry);
-            } else {
-                opens.push(entry);
-            }
+            if (need && need.length) entry.roles = need.map((r) => tr(ROLE_WORD[r] || r));
+            if (!open) entry.needsDepartment = true;
+            if (entry.roles || entry.needsDepartment) conditional.push(entry);
+            else opens.push(entry);
         }
 
         // Вкладки карты пациента перечисляются ТОЛЬКО когда они ограничены:
@@ -154,12 +171,29 @@ export function reachSentences(reach, translate) {
         },
     });
 
+    // MY_STOCK_V1 — условие называется ЦЕЛИКОМ и одной строкой. Ворота у
+    // личных экранов спрашивают «роль ИЛИ отдел», и две отдельные строки
+    // прочитались бы как «роль И отдел» — то есть соврали бы в другую сторону.
     for (const c of reach.conditional) {
-        out.push({
-            tone: 'warn',
-            template: '{screen} откроется только сотруднику с ролью: {roles}.',
-            params: { screen: c.label, roles: c.roles.join(', ') },
-        });
+        if (c.roles && c.needsDepartment) {
+            out.push({
+                tone: 'warn',
+                template: '{screen} откроется сотруднику с ролью {roles} — или любому, кто состоит в отделе.',
+                params: { screen: c.label, roles: c.roles.join(', ') },
+            });
+        } else if (c.needsDepartment) {
+            out.push({
+                tone: 'warn',
+                template: '{screen} откроется только сотруднику, состоящему в отделе.',
+                params: { screen: c.label },
+            });
+        } else {
+            out.push({
+                tone: 'warn',
+                template: '{screen} откроется только сотруднику с ролью: {roles}.',
+                params: { screen: c.label, roles: c.roles.join(', ') },
+            });
+        }
     }
 
     if (reach.closed.length) {
