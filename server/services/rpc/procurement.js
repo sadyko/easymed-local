@@ -288,6 +288,14 @@ export function approveRequisitionAndIssue(db, args, user) {
     const holder = req.holder_type
       ? resolveHolder(db, { type: req.holder_type, id: req.holder_id })
       : (req.department_id ? resolveHolder(db, { type: 'department', id: req.department_id }) : null);
+    // Разбор ревью: отключённому сотруднику на руки не выдаём — товар повис бы
+    // за человеком, который его уже не потратит и не вернёт.
+    if (holder && holder.type === 'staff') {
+      const u = db.prepare('SELECT is_active FROM users WHERE id = ?').get(holder.id);
+      if (u && Number(u.is_active) === 0) {
+        throw new RpcError(`${holder.name || 'Сотрудник'} отключён — выдать ему на руки нельзя. Отклоните заявку или выдайте отделу через «Выдать со склада».`, 400);
+      }
+    }
     const insertMovement = db.prepare(`
       INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, branch_id, holder_type, holder_id)
       VALUES (?, 'dispense', ?, ?, 'requisition', ?, ?, ?, 1, ?, ?)`);

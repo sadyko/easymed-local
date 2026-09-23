@@ -29,8 +29,9 @@
 // же consumption_factor, что «Выдать со склада».
 import { hasAnyRole } from '../roles.js';
 import { grantAllowsOr } from '../grants.js';
-import { logDepartmentEvent } from './departments.js';
+import { logDepartmentEvent, canSeeAll as canSeeAllDepartments } from './departments.js';
 import { canSeeAllMovements } from './stock-log.js';
+import { today, localDate } from '../domain/day.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -83,9 +84,16 @@ export function parseRequisitionLines(rawLines) {
  * holder: { type: 'staff'|'department', id } или null (выдача без держателя).
  */
 export function insertRequisition(db, { holder, notes, lines, userId, auto = false }) {
-  const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  const n = db.prepare('SELECT COUNT(*) AS n FROM purchase_requisitions WHERE req_number LIKE ?').get(`REQ-${day}-%`).n + 1;
-  const reqNumber = `REQ-${day}-${String(n).padStart(3, '0')}`;
+  // Разбор ревью: день — КЛИНИКИ (domain/day.js), а не UTC: между 00:00 и 05:00
+  // по Ташкенту номер нёс вчерашнюю дату. Порядковый номер — наибольший за
+  // день + 1, а не COUNT + 1: после удаления заявки COUNT повторял номер.
+  const day = today(db).replace(/-/g, '');
+  const prefix = `REQ-${day}-`;
+  const last = db.prepare(`
+    SELECT MAX(CAST(substr(req_number, ?) AS INTEGER)) AS n
+      FROM purchase_requisitions WHERE req_number LIKE ?`).get(prefix.length + 1, `${prefix}%`).n;
+  const n = (Number(last) || 0) + 1;
+  const reqNumber = `${prefix}${String(n).padStart(3, '0')}`;
   const departmentId = holder && holder.type === 'department' ? holder.id : null;
   const reqId = Number(db.prepare(`
     INSERT INTO purchase_requisitions (req_number, status, department_id, notes, requested_by, holder_type, holder_id, auto)
@@ -119,12 +127,18 @@ function headedDepartments(db, userId) {
   return db.prepare('SELECT id FROM departments WHERE head_user_id = ? ORDER BY id').all(userId).map((r) => r.id);
 }
 
-/** Ставить минимум этому держателю: себе, отделу, которым руководишь, или любому. */
+/**
+ * Ставить минимум этому держателю: себе, отделу, которым руководишь, или любому.
+ * Разбор ревью: минимум себе — это автозаявка от своего имени, поэтому ставит
+ * его себе только тот, кто и так вправе подать заявку (REQUISITION_ROLES), —
+ * иначе регистратор, которому stock_request_create отказывает, подал бы
+ * заявку в обход через минимум.
+ */
 function canSetFor(db, user, holder, manageAll) {
   if (manageAll) return true;
   const uid = Number(user && user.id);
   if (!isPosInt(uid)) return false;
-  if (holder.type === 'staff') return holder.id === uid;
+  if (holder.type === 'staff') return holder.id === uid && hasAnyRole(user, REQUISITION_ROLES);
   return !!db.prepare('SELECT 1 FROM departments WHERE id = ? AND head_user_id = ?').get(holder.id, uid);
 }
 
@@ -149,6 +163,9 @@ function loadProduct(db, productId) {
 
 function requireSetter(db, user, holder) {
   if (canSetFor(db, user, holder, canManageAll(db, user))) return;
+  if (holder.type === 'staff' && holder.id === Number(user && user.id)) {
+    throw new RpcError('Ставить себе минимум — то есть подавать заявки на склад — вашей роли нельзя.', 403);
+  }
   throw new RpcError('Минимум можно ставить себе, а отделу — его заведующей. Любому — кладовщик или администратор.', 403);
 }
 
@@ -183,6 +200,29 @@ function openAutoRequest(db, holder, productId) {
  * { req_id, req_number, qty } или null. Бросает — зовущий решает, что с этим
  * делать (списание глушит, установка минимума показывает).
  */
+/**
+ * Сотрудник-держатель, от чьего имени автозаявка вообще возможна: активный и
+ * с ролью, которой заявки подавать можно. Иначе кладовщик, поставивший
+ * минимум регистратору или уволенной медсестре, завёл бы вечный источник
+ * заявок, которые никто не просил.
+ */
+function staffMayRequest(db, userId) {
+  const u = db.prepare('SELECT role, extra_roles, is_active FROM users WHERE id = ?').get(userId);
+  if (!u || Number(u.is_active) === 0) return false;
+  let extra = [];
+  try { extra = Array.isArray(u.extra_roles) ? u.extra_roles : JSON.parse(u.extra_roles || '[]'); } catch { extra = []; }
+  return hasAnyRole({ role: u.role, extra_roles: Array.isArray(extra) ? extra : [] }, REQUISITION_ROLES);
+}
+
+/** Отклонял ли кладовщик автозаявку этому держателю на этот товар сегодня (день клиники). */
+function autoRejectedToday(db, holder, productId) {
+  return !!db.prepare(`
+    SELECT 1 FROM purchase_requisitions r JOIN purchase_requisition_items i ON i.req_id = r.id
+     WHERE r.holder_type = ? AND r.holder_id = ? AND i.product_id = ? AND r.auto = 1
+       AND r.status = 'rejected' AND r.rejected_at IS NOT NULL AND ${localDate('r.rejected_at')} = ?
+     LIMIT 1`).get(holder.type, holder.id, productId, today(db));
+}
+
 export function autoRequestCheck(db, holder, productId, actorId) {
   if (!holder || !REQUEST_HOLDER_TYPES.includes(holder.type)) return null;
   const min = db.prepare('SELECT min_qty, target_qty FROM stock_minimums WHERE holder_type = ? AND holder_id = ? AND product_id = ?')
@@ -190,17 +230,22 @@ export function autoRequestCheck(db, holder, productId, actorId) {
   if (!min) return null;
   const remaining = heldQty(db, holder, productId);
   if (!(remaining + 1e-9 < Number(min.min_qty))) return null;
+  if (holder.type === 'staff' && !staffMayRequest(db, holder.id)) return null;
   if (openAutoRequest(db, holder, productId)) return null;   // одно пересечение — одна заявка
+  // Разбор ревью: отклонили сегодня (обычно — «на складе пусто») — до конца
+  // дня клиники не подаём снова, иначе каждое списание слало бы её заново.
+  if (autoRejectedToday(db, holder, productId)) return null;
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
   if (!product) return null;
-  const need = Number(min.target_qty) - remaining - openRequestedQty(db, holder, productId);
-  if (!(need > 1e-9)) return null;
-  // Вверх до целой единицы расхода. Округление до миллионных перед ceil —
-  // иначе (5 − 1.7) × 10 = 33.000000000000004 превращалось бы в 34 таблетки.
+  // Считаем В ЕДИНИЦАХ РАСХОДА и только потом переводим в базовые: заявка —
+  // целое число таблеток (миллилитров), а не 1.43 уп. = 10.01 таблетки.
+  // Округление до миллионных перед ceil — иначе 33.000000000000004 таблетки
+  // превращались бы в 34.
   const cf = factorOf(product);
-  const units = Math.ceil(Math.round(need * cf * 1e6) / 1e6);
-  const qty = round2(units / cf);
-  if (!(qty > 0)) return null;
+  const needUnits = (Number(min.target_qty) - remaining - openRequestedQty(db, holder, productId)) * cf;
+  const units = Math.ceil(Math.round(needUnits * 1e6) / 1e6);
+  if (!(units > 0)) return null;
+  const qty = units / cf;
   const unit = unitLabel(product);
   const note = `Автозаявка: остаток ${num(remaining * cf)} ${unit} при минимуме ${num(Number(min.min_qty) * cf)} ${unit}`
     .replace(/\s+/g, ' ').trim();
@@ -258,15 +303,19 @@ export function stockMinimumSet(db, args, user) {
     const holder = parseHolder(db, a);
     const product = loadProduct(db, Number(a.product_id));
     requireSetter(db, user, holder);
+    // Разбор ревью: хранится БЕЗ округления. round2 в базовых единицах делал из
+    // «5 таб при 30 в упаковке» 0.17 уп. = 5.1 таб, а из «4 мл» в литрах — ноль,
+    // и такой минимум не срабатывал никогда. Округляется только показ.
+    const rawMin = minQ; const rawTarget = targetQ;
     if (unit === 'consumption') {
       const cf = factorOf(product);
-      minQ = round2(minQ / cf);
-      targetQ = round2(targetQ / cf);
-    } else {
-      minQ = round2(minQ);
-      targetQ = round2(targetQ);
+      minQ /= cf;
+      targetQ /= cf;
     }
-    if (targetQ + 1e-9 < minQ) throw new RpcError('Норма не может быть меньше минимума.', 400);
+    if ((rawMin > 0 && !(minQ > 0)) || (rawTarget > 0 && !(targetQ > 0))) {
+      throw new RpcError(`Число слишком мало для товара «${product.name}» — укажите больше.`, 400);
+    }
+    if (targetQ + 1e-12 < minQ) throw new RpcError('Норма не может быть меньше минимума.', 400);
     db.prepare(`
       INSERT INTO stock_minimums (holder_type, holder_id, product_id, min_qty, target_qty, set_by, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ${NOW})
@@ -315,8 +364,8 @@ const LIST_SCOPES = ['mine', 'department', 'all'];
  *      product_id, product_name, base_unit, consumption_unit, consumption_factor,
  *      held_qty, held_units, min_qty, min_units, target_qty, target_units, below_min,
  *      set_by, set_by_name, updated_at, can_edit,
- *      open_qty, open_request: { req_id, req_number, status, qty, auto } | null }] }
- * *_qty — базовые единицы, *_units — единицы расхода.
+ *      open_qty, open_request: { req_id, req_number, status, qty, units, auto } | null }] }
+ * *_qty — базовые единицы (без округления), *_units — единицы расхода (до сотых).
  */
 export function stockMinimumsList(db, args, user) {
   const a = args || {};
@@ -341,7 +390,10 @@ export function stockMinimumsList(db, args, user) {
     if (a.department_id !== undefined && a.department_id !== null && a.department_id !== '') {
       const d = Number(a.department_id);
       if (!isPosInt(d)) throw new RpcError('Отдел не выбран.', 400);
-      if (!own.has(d) && !seeAll) throw new RpcError('Минимумы чужого отдела недоступны: видны свой отдел и отдел, которым вы руководите.', 403);
+      // Разбор ревью: кому открыта карточка любого отдела (departments.js
+      // canSeeAll — окно «Отделы» или раздел «Настройки»), тому видны и его
+      // минимумы — только для чтения: can_edit решает canSetFor, а не это.
+      if (!own.has(d) && !seeAll && !canSeeAllDepartments(db, user)) throw new RpcError('Минимумы чужого отдела недоступны: видны свой отдел и отдел, которым вы руководите.', 403);
       ids = [d];
     }
     if (!ids.length) return { scope, can_manage_all: manageAll, rows: [] };
@@ -377,13 +429,17 @@ export function stockMinimumsList(db, args, user) {
         product_id: r.product_id, product_name: r.product_name,
         base_unit: r.base_unit || r.unit || '', consumption_unit: r.consumption_unit || r.base_unit || r.unit || '', consumption_factor: cf,
         held_qty: round2(r.held), held_units: round2(r.held * cf),
-        min_qty: round2(r.min_qty), min_units: round2(r.min_qty * cf),
-        target_qty: round2(r.target_qty), target_units: round2(r.target_qty * cf),
+        // Разбор ревью: базовые количества минимума, нормы и заявки отдаются
+        // БЕЗ округления — экран умножает их на множитель расхода, и 17/30 уп.,
+        // округлённые до 0.57, показались бы как 17.1 таблетки. Округлены
+        // только *_units — то, что читает человек.
+        min_qty: Number(r.min_qty), min_units: round2(r.min_qty * cf),
+        target_qty: Number(r.target_qty), target_units: round2(r.target_qty * cf),
         below_min: r.held + 1e-9 < r.min_qty,
         set_by: r.set_by, set_by_name: r.set_by_name || '', updated_at: r.updated_at,
         can_edit: canSetFor(db, user, holder, manageAll),
-        open_qty: round2(openRequestedQty(db, holder, r.product_id)),
-        open_request: open ? { req_id: open.id, req_number: open.req_number, status: open.status, qty: round2(open.qty), auto: !!open.auto } : null,
+        open_qty: openRequestedQty(db, holder, r.product_id),
+        open_request: open ? { req_id: open.id, req_number: open.req_number, status: open.status, qty: Number(open.qty), units: round2(open.qty * cf), auto: !!open.auto } : null,
       };
     }),
   };
@@ -428,7 +484,7 @@ export function stockRequestCreate(db, args, user) {
     const base = lines.map((l) => {
       const product = db.prepare('SELECT * FROM products WHERE id = ?').get(l.productId);
       if (!product) throw new RpcError('Товар заявки не найден.', 404);
-      const qty = l.unit === 'consumption' ? round2(l.qty / factorOf(product)) : l.qty;
+      const qty = l.unit === 'consumption' ? l.qty / factorOf(product) : l.qty;   // без округления — как минимум (разбор ревью)
       if (!(qty > 0)) throw new RpcError(`Позиция заявки: слишком мало — ${product.name}.`, 400);
       return { productId: l.productId, qty, note: l.note };
     });

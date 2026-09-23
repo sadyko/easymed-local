@@ -76,7 +76,11 @@ test('минимум: медсестра не ставит чужой, член 
     assert.throws(() => stockMinimumSet(db, { holder_type: 'department', holder_id: 9, product_id: gloves, min_qty: 1, target_qty: 2 }, NURSE), forbidden,
       'член отдела — не заведующая: минимум отдела ставит руководитель');
     assert.throws(() => stockMinimumSet(db, { holder_type: 'department', holder_id: 10, product_id: gloves, min_qty: 1, target_qty: 2 }, HEAD), forbidden);
+    // Регистратор заявок не подаёт — и минимум себе (то есть автозаявку) не ставит.
+    assert.throws(() => stockMinimumSet(db, { holder_type: 'staff', holder_id: 8, product_id: gloves, min_qty: 100, target_qty: 1000 }, REG), forbidden,
+      'регистратор поставил себе минимум — и через него подал заявку, которую сам подать не вправе');
     assert.equal(db.prepare('SELECT COUNT(*) n FROM stock_minimums').get().n, 0);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM purchase_requisitions').get().n, 0);
 
     // Слова отказа — по-русски и по делу.
     assert.throws(() => stockMinimumSet(db, { holder_type: 'staff', holder_id: 6, product_id: gloves, min_qty: 1, target_qty: 2 }, NURSE), /себе/);
@@ -404,4 +408,125 @@ test('вызовы зарегистрированы под своими имен
   for (const name of ['stock_minimum_set', 'stock_minimum_clear', 'stock_minimums_list', 'stock_request_create', 'stock_requests_mine']) {
     assert.equal(typeof getRpc(name), 'function', `${name} не зарегистрирован`);
   }
+});
+
+// --- Разбор ревью (2026-09-23) --------------------------------------------------
+
+function setGrants(db, role, grants) {
+  const row = db.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get(role);
+  const perms = row && row.permissions ? JSON.parse(row.permissions) : { sections: [], levels: {} };
+  perms.grants = { ...(perms.grants || {}), ...grants };
+  if (row) db.prepare('UPDATE role_permissions SET permissions = ? WHERE role = ?').run(JSON.stringify(perms), role);
+  else db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run(role, JSON.stringify(perms));
+}
+const product = (db, name, base, cons, cf, stock = 100) => Number(db.prepare(`INSERT INTO products (name, unit, base_unit, consumption_unit, consumption_factor, sale_price, on_hand, avg_cost)
+  VALUES (?, ?, ?, ?, ?, 1000, ?, 100)`).run(name, base, base, cons, cf, stock).lastInsertRowid);
+const autoLines = (db) => db.prepare('SELECT i.qty FROM purchase_requisitions r JOIN purchase_requisition_items i ON i.req_id = r.id WHERE r.auto = 1 ORDER BY r.id').all().map((r) => r.qty);
+
+test('ревью 1: кладовщик поставил минимум регистратору или отключённому — автозаявки нет', () => {
+  const { db, gloves } = seed();
+  try {
+    const r = stockMinimumSet(db, { holder_type: 'staff', holder_id: 8, product_id: gloves, min_qty: 5, target_qty: 10 }, INV);
+    assert.equal(r.request, null, 'автозаявка подана держателю, который заявок не подаёт');
+    db.prepare('UPDATE users SET is_active = 0 WHERE id = 6').run();
+    const r2 = stockMinimumSet(db, { holder_type: 'staff', holder_id: 6, product_id: gloves, min_qty: 5, target_qty: 10 }, INV);
+    assert.equal(r2.request, null, 'автозаявка подана отключённому сотруднику');
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM purchase_requisitions').get().n, 0);
+    // Медсестра — может, и её автозаявка подаётся.
+    assert.ok(stockMinimumSet(db, { holder_type: 'staff', holder_id: 5, product_id: gloves, min_qty: 5, target_qty: 10 }, NURSE).request);
+  } finally { db.close(); }
+});
+
+test('ревью 2: минимум хранится без округления; автозаявка — целое число единиц расхода (30, 7, 1000 в упаковке)', () => {
+  const { db, visit } = seed();
+  try {
+    // 30 таблеток в упаковке: минимум 5, норма 20 — ровно, а не «5.1 / 20.1».
+    const p30 = product(db, 'Таблетки-30', 'уп', 'таб', 30);
+    give(db, 'staff', 5, p30, 1);
+    const set = stockMinimumSet(db, { holder_type: 'staff', holder_id: 5, product_id: p30, min_qty: 5, target_qty: 20, unit: 'consumption' }, NURSE);
+    assert.ok(Math.abs(set.minimum.min_qty * 30 - 5) < 1e-9, 'минимум округлён при хранении: ' + set.minimum.min_qty);
+    const row = stockMinimumsList(db, {}, NURSE).rows.find((x) => x.product_id === p30);
+    assert.deepEqual([row.min_units, row.target_units], [5, 20]);
+    dispenseFromHolding(db, { holder: { type: 'staff', id: 5 }, product_id: p30, quantity: 27, visit_id: visit }, NURSE);   // 30 → 3 таб
+    assert.ok(Math.abs(autoLines(db)[0] * 30 - 17) < 1e-9, 'норма 20 − 3 = 17 таблеток ровно: ' + autoLines(db)[0] * 30);
+    // Список отдаёт заявку так, что экран (qty × множитель) покажет 17, а не 17.1.
+    const open = stockMinimumsList(db, {}, NURSE).rows.find((x) => x.product_id === p30).open_request;
+    assert.equal(open.units, 17);
+    assert.ok(Math.abs(open.qty * 30 - 17) < 1e-9, 'qty заявки в списке округлён: ' + open.qty * 30);
+
+    // 7 таблеток в упаковке: 10 таблеток — это 10/7 уп., а не 1.43 (= 10.01 таб).
+    const p7 = product(db, 'Таблетки-7', 'уп', 'таб', 7);
+    stockMinimumSet(db, { holder_type: 'staff', holder_id: 5, product_id: p7, min_qty: 2, target_qty: 10, unit: 'consumption' }, NURSE);
+    assert.ok(Math.abs(autoLines(db)[1] * 7 - 10) < 1e-9, 'заявка не целым числом таблеток: ' + autoLines(db)[1] * 7);
+
+    // Литр и миллилитры: минимум 4 мл не превращается в ноль и срабатывает.
+    const pL = product(db, 'Физраствор', 'л', 'мл', 1000);
+    const s = stockMinimumSet(db, { holder_type: 'staff', holder_id: 5, product_id: pL, min_qty: 4, target_qty: 10, unit: 'consumption' }, NURSE);
+    assert.ok(s.minimum.min_qty > 0, 'минимум 4 мл сохранён нулём');
+    assert.ok(s.request, 'минимум 4 мл при пустых руках заявку не подал');
+    assert.ok(Math.abs(s.request.qty * 1000 - 10) < 1e-9);
+
+    // Положительное число, которое после перевода стало нулём, — отказ словами.
+    assert.throws(() => stockMinimumSet(db, { holder_type: 'staff', holder_id: 5, product_id: pL, min_qty: 5e-324, target_qty: 5e-324, unit: 'consumption' }, NURSE),
+      (e) => e.status === 400 && /слишком мал/i.test(e.message));
+  } finally { db.close(); }
+});
+
+test('ревью 3: кто вправе открыть карточку отдела, видит его минимумы — только для чтения', () => {
+  const { db, gloves } = seed();
+  try {
+    stockMinimumSet(db, { holder_type: 'department', holder_id: 10, product_id: gloves, min_qty: 0, target_qty: 4 }, ADMIN);
+    assert.throws(() => stockMinimumsList(db, { scope: 'department', department_id: 10 }, REG), forbidden);
+    setGrants(db, 'registrar', { 'settings.departments': 'view' });
+    const seen = stockMinimumsList(db, { scope: 'department', department_id: 10 }, REG);
+    assert.deepEqual(seen.rows.map((r) => [r.holder_id, r.can_edit]), [[10, false]]);
+  } finally { db.close(); }
+});
+
+test('ревью 4: отклонённая сегодня автозаявка не подаётся снова в тот же день', () => {
+  const { db, gloves, visit } = seed();
+  try {
+    give(db, 'staff', 5, gloves, 8);
+    stockMinimumSet(db, { holder_type: 'staff', holder_id: 5, product_id: gloves, min_qty: 5, target_qty: 20 }, NURSE);
+    const d = (q) => dispenseFromHolding(db, { holder: { type: 'staff', id: 5 }, product_id: gloves, quantity: q, visit_id: visit }, NURSE);
+    d(4);
+    const first = db.prepare('SELECT id FROM purchase_requisitions WHERE auto = 1').get().id;
+    // Кладовщик отклонил («на складе пусто») — так пишет экран «Заявки».
+    db.prepare("UPDATE purchase_requisitions SET status = 'rejected', reject_reason = 'нет на складе' WHERE id = ?").run(first);
+    assert.ok(db.prepare('SELECT rejected_at FROM purchase_requisitions WHERE id = ?').get(first).rejected_at, 'время отклонения не записано');
+    d(1);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM purchase_requisitions WHERE auto = 1').get().n, 1, 'отклонённая автозаявка подана снова в тот же день');
+    // Отклонили позавчера — сегодня подаётся.
+    db.prepare("UPDATE purchase_requisitions SET rejected_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','-2 days') WHERE id = ?").run(first);
+    d(1);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM purchase_requisitions WHERE auto = 1 AND status = 'submitted'").get().n, 1);
+  } finally { db.close(); }
+});
+
+test('ревью 5: заявку отключённого сотрудника одобрение не выдаёт — отказ называет человека', () => {
+  const { db, gloves } = seed();
+  try {
+    const r = stockRequestCreate(db, { for: 'me', lines: [{ product_id: gloves, qty: 3 }] }, NURSE);
+    db.prepare('UPDATE users SET is_active = 0 WHERE id = 5').run();
+    assert.throws(() => approveRequisitionAndIssue(db, { req_id: r.req_id }, INV),
+      (e) => e.status === 400 && /Медсестра Ирина/.test(e.message) && /отключ/i.test(e.message));
+    assert.equal(onHand(db, gloves), 100, 'склад списан, хотя выдача отказана');
+    assert.equal(held(db, 'staff', 5, gloves), 0);
+    assert.equal(db.prepare('SELECT status FROM purchase_requisitions WHERE id = ?').get(r.req_id).status, 'submitted');
+  } finally { db.close(); }
+});
+
+test('ревью 6: номер заявки — по дню клиники и без повторов после удаления', () => {
+  const { db, gloves } = seed();
+  try {
+    const day = db.prepare("SELECT strftime('%Y%m%d','now','localtime') d").get().d;
+    const mk = () => stockRequestCreate(db, { for: 'me', lines: [{ product_id: gloves, qty: 1 }] }, NURSE);
+    const a = mk(); const b = mk();
+    assert.equal(a.req_number, `REQ-${day}-001`, 'дата номера — не день клиники');
+    assert.equal(b.req_number, `REQ-${day}-002`);
+    db.prepare('DELETE FROM purchase_requisitions WHERE id = ?').run(a.req_id);
+    const c = mk();
+    assert.equal(c.req_number, `REQ-${day}-003`, 'номер повторился после удаления');
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM purchase_requisitions WHERE req_number = ?').get(c.req_number).n, 1);
+  } finally { db.close(); }
 });
