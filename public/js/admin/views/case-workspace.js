@@ -27,6 +27,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, PageHead } from '../ui.js';
 import { tr, trf } from '../i18n.js';
+import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 import { caseDocsView, assembleCaseFile, canEditDocSet, caseDocSetDrop, caseDocSetAdd,
     caseDocSetRestore, caseDocSetRename, caseDocSetDelete, loadDocTypeSet } from './case-docs.js?v=cw1';
 import { buildReviewEditor } from './admission-modal.js?v=inp2';
@@ -353,12 +354,15 @@ function paintTab(root, onNavigate) {
                     title: tr('Добавить расход'), confirmLabel: tr('Списать'),
                     onConfirm: async (lines) => {
                         let ok = 0; const fails = [];
+                        const warned = [];   // EXPIRY_BALANCE_V1 — просроченные партии всех строк
                         for (const { item, qty } of lines) {
                             try {
-                                const { error } = await supabase.rpc('dispense_admission_item',
+                                const { data, error } = await supabase.rpc('dispense_admission_item',
                                     { p_admission_id: state.admissionId, p_item_id: item.id, p_qty: Number(qty) });
                                 if (error) throw error;
                                 ok += 1;
+                                const res = Array.isArray(data) ? data[0] : data;
+                                if (res && Array.isArray(res.warnings)) warned.push(...res.warnings);
                             } catch (e) { fails.push((item.name || '') + ': ' + ((e && e.message) || e)); }
                         }
                         await reload();
@@ -367,6 +371,10 @@ function paintTab(root, onNavigate) {
                         if (!ok) throw new Error(fails[0] || tr('Не удалось списать расход.'));
                         toast(trf('Списано позиций: {n}', { n: ok }), 'ok');
                         if (fails.length) toast(fails.join('; '), 'fail');
+                        // EXPIRY_BALANCE_V1 — ПОСЛЕ итога и не вместо него: расход
+                        // прошёл, но партию надо проверить. Одной плашкой на все
+                        // строки: две подряд превратились бы в одну — вторую.
+                        toastStockWarnings({ warnings: warned });
                     },
                 });
             },

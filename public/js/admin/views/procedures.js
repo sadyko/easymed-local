@@ -31,6 +31,7 @@ import { h, Icon, PageHead, toast, clear, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { currentUser } from '../data.js';
 import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // PROC_PRODUCTS_V1 — reuse the dispense picker
+import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 
 const STATUS_RU = { added: 'Назначено', queued: 'В очереди', in_progress: 'Выполняется', completed: 'Выполнено' };
 const OPEN = ['added', 'queued', 'in_progress'];
@@ -206,10 +207,10 @@ function openDone(r, body) {
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, it.total.toLocaleString('ru-RU') + ' UZS' + (it.invoiced ? ' · ' + tr('в счёте') : ''))),
                 it.invoiced
                     ? h('span', { class: 'muted', style: { fontSize: '12.5px' }, title: tr('Уже в счёте — убрать нельзя') }, Icon('Check', { size: 12 }))
-                    : h('button', { class: 'btn btn-ghost btn-sm', type: 'button', style: { color: 'var(--crit-700)' }, title: tr('Убрать (вернуть на склад)'),
+                    : h('button', { class: 'btn btn-ghost btn-sm', type: 'button', style: { color: 'var(--crit-700)' }, title: tr('Убрать (вернуть туда, откуда взят)'),
                         onclick: async () => {
-                            if (!confirm(trf('Убрать «{name}»? Товар вернётся на склад.', { name: it.name }))) return;
-                            try { const { error } = await supabase.rpc('void_dispensed_visit_item', { p_line: it.id }); if (error) throw error; toast(tr('Товар возвращён на склад.')); await refreshItems(); }
+                            if (!confirm(trf('Убрать «{name}»? Товар вернётся туда, откуда взят.', { name: it.name }))) return;
+                            try { const { error } = await supabase.rpc('void_dispensed_visit_item', { p_line: it.id }); if (error) throw error; toast(tr('Товар возвращён туда, откуда взят.')); await refreshItems(); }
                             catch (e) { toast(e?.message || String(e), 'fail'); }
                         } }, Icon('Trash', { size: 12 }))));
         }
@@ -220,16 +221,23 @@ function openDone(r, body) {
             title: tr('Добавить товары'), confirmLabel: tr('Добавить'),
             onConfirm: async (lines) => {
                 let ok = 0; const fails = [];
+                const warned = [];   // EXPIRY_BALANCE_V1 — просроченные партии всех строк
                 for (const { item, qty } of lines) {
                     try {
-                        const { error } = await supabase.rpc('dispense_visit_item', { p_visit_id: r.visit_id, p_item_id: item.id, p_qty: Number(qty), p_doctor_id: r.performer_id || null });
+                        const { data, error } = await supabase.rpc('dispense_visit_item', { p_visit_id: r.visit_id, p_item_id: item.id, p_qty: Number(qty), p_doctor_id: r.performer_id || null });
                         if (error) throw error; ok++;
+                        const res = Array.isArray(data) ? data[0] : data;
+                        if (res && Array.isArray(res.warnings)) warned.push(...res.warnings);
                     } catch (e) { fails.push(`${item.name}: ${e?.message || e}`); }
                 }
                 await refreshItems();
                 if (ok === 0) throw new Error(fails[0] || tr('Не удалось добавить товары'));
                 toast(trf('Добавлено позиций: {n}', { n: ok }) + (fails.length ? ' · ' + trf('ошибок: {n}', { n: fails.length }) : ''));
                 if (fails.length) toast(fails.join('; '), 'fail');
+                // EXPIRY_BALANCE_V1 — ПОСЛЕ итога и не вместо него: товар добавлен,
+                // но партию нужно проверить. Ответ разбирался до `{ error }`, и
+                // предупреждение сервера уезжало в мусор.
+                toastStockWarnings({ warnings: warned });
             },
         }) }, Icon('Plus', { size: 13 }), ' ' + tr('Добавить товары'));
 

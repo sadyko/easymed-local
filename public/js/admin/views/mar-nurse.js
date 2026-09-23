@@ -531,7 +531,7 @@ export function openUndoModal({ task, patient, onDone } = {}) {
                     task.given_at ? hhmm(task.given_at) : null, doneLine(task)].filter(Boolean).join(' · '))),
         field(tr('Причина'), reasonInp, { required: true }),
         h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-            tr('Отметка не исчезнет: в истории останется, кто её снял, когда и почему. Списанный препарат вернётся на склад, начисление снимется — кроме уже выставленного в счёт.')),
+            tr('Отметка не исчезнет: в истории останется, кто её снял, когда и почему. Списанный препарат вернётся туда, откуда взят, начисление снимется — кроме уже выставленного в счёт.')),
     ], tr('Снять отметку'), async () => {
         const reason = reasonInp.value.trim();
         if (!reason) { toast(tr('Укажите причину: без неё отметка не снимается.'), 'fail'); return false; }

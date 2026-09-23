@@ -16,6 +16,7 @@ import { h, Icon, Tag, StatusTag, statusLabel, toast, clear } from '../ui.js';
 import { canDelete } from '../permissions.js';
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // DISPENSE_ITEM_V1
+import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 import { creditCashbackOnPaid } from './cashback.js?v=cb1';
 import { openCancelInvoiceDialog, logInvoiceAction as _logInvoiceAction } from './invoice-actions.js?v=ia3';
 import { logPatientActivity } from './activity-log.js';
@@ -998,6 +999,7 @@ function openDispenseItem(state, onReload) {
         // DISPENSE_MULTI_V1 — dispense each cart line with its own atomic RPC.
         onConfirm: async (lines) => {
             let ok = 0; const fails = [];
+            const warned = [];   // EXPIRY_BALANCE_V1 — просроченные партии всех строк
             for (const { item, qty } of lines) {
                 try {
                     const { data, error } = await supabase.rpc('dispense_visit_item', {
@@ -1017,6 +1019,10 @@ function openDispenseItem(state, onReload) {
                     if (res && usedWarehouse && Number(res.on_hand) <= 0) {
                         toast(`Warning: ${name} stock is now ${Number(res.on_hand).toLocaleString('ru-RU')} (low/negative).`, 'fail');
                     }
+                    // EXPIRY_BALANCE_V1 — просрочка это ДРУГАЯ беда, чем пустой
+                    // склад строкой выше: сервер называет её своими словами, а
+                    // окно визита их разбирало (res.sources) и выбрасывало.
+                    if (res && Array.isArray(res.warnings)) warned.push(...res.warnings);
                 } catch (err) { fails.push(`${item.name}: ${err?.message || err}`); }
             }
             if (ok === 0) throw new Error(fails[0] || 'Dispense failed');
@@ -1024,6 +1030,7 @@ function openDispenseItem(state, onReload) {
             await onReload();
             toast(`Dispensed: ${ok}` + (fails.length ? ` · failed: ${fails.length}` : ''));
             if (fails.length) toast(fails.join('; '), 'fail');
+            toastStockWarnings({ warnings: warned });   // EXPIRY_BALANCE_V1 — после итога, одной плашкой на все строки
         },
     });
 }
