@@ -193,6 +193,79 @@ test('remove_unpaid_service: shrinks an unpaid invoice, deletes it when emptied'
   assert.equal(db.prepare('SELECT COUNT(*) n FROM invoice_items WHERE invoice_id=?').get(invId).n, 0);
 });
 
+// ── SVC_UNPAID_REMOVE_V1 × HOLDINGS_FIRST_V1 ────────────────────────────────
+// «Убрать» на вкладке «Услуги» карточки пациента достаёт и ТОВАРНЫЕ строки:
+// вкладка показывает все строки визита, а списанный на пациента бинт — такая
+// же строка. До этой правки удаление просто стирало её: товар не возвращался
+// никому, подотчёт медсестры оставался пустым, а в журнале навсегда повисало
+// движение расхода, у которого больше нет ни строки, ни пациента.
+function stockSeed(base) {
+  const { db } = base;
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (11,'nurse1','x','Медсестра Алиева','nurse')").run();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (12,'inv1','x','Кладовщик Каримов','inventory')").run();
+  db.prepare("INSERT INTO products (id, name, code, unit, base_unit, sale_price, on_hand, avg_cost, active) VALUES (3,'Бинт','BND','шт','шт',2000,20,100,1)").run();
+  return { nurse: { id: 11, role: 'nurse', extra_roles: [] }, inv: { id: 12, role: 'inventory', extra_roles: [] } };
+}
+const heldBy = (db, type, id, product) => {
+  const r = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type=? AND holder_id=? AND product_id=?').get(type, id, product);
+  return r ? r.qty : 0;
+};
+const onHandOf = (db, id) => db.prepare('SELECT on_hand FROM products WHERE id=?').get(id).on_hand;
+
+test('remove_unpaid_service возвращает товар в подотчёт, из которого его взяли', async () => {
+  const base = seed();
+  const { db, vid } = base;
+  const { nurse, inv } = stockSeed(base);
+  const { issueStockLines } = await import('./procurement.js');
+  const { dispenseItem } = await import('./inventory.js');
+
+  issueStockLines(db, { holder: { type: 'staff', id: 11 }, lines: [{ product_id: 3, qty: 5, unit: 'base' }] }, inv);
+  assert.equal(heldBy(db, 'staff', 11, 3), 5);
+  assert.equal(onHandOf(db, 3), 15);
+
+  const d = dispenseItem(db, { product_id: 3, quantity: 3, visit_id: vid }, nurse);
+  assert.deepEqual(d.sources.map((s) => [s.type, s.qty]), [['staff', 3]], 'списали не с подотчёта — проверять нечего');
+  assert.equal(heldBy(db, 'staff', 11, 3), 2);
+
+  removeUnpaidService(db, { visit_service_id: d.visit_service_id }, registrar);
+
+  assert.equal(heldBy(db, 'staff', 11, 3), 5, 'три бинта исчезли у медсестры: подотчёт съеден удалением строки');
+  assert.equal(onHandOf(db, 3), 15, 'товар вернулся НЕ туда, откуда его брали — склад получил чужое');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE id=?').get(d.visit_service_id).n, 0);
+
+  // Журнал сошёлся: на каждое движение расхода есть отмена, и «висящего»
+  // расхода на пациента, у которого больше нет ни строки, ни получателя, не
+  // осталось — иначе он навсегда сидел бы в «Расходе на пациентов» отдела.
+  const net = db.prepare("SELECT COALESCE(SUM(qty),0) s FROM stock_movements WHERE reference_type='visit' AND reference_id=?").get(d.visit_service_id).s;
+  assert.equal(net, 0, 'в журнале остался расход без строки визита — сирота');
+});
+
+test('remove_unpaid_service не трогает склад на строке без товара', () => {
+  const base = seed();
+  const { db, vs1 } = base;
+  stockSeed(base);
+  removeUnpaidService(db, { visit_service_id: vs1 }, registrar);
+  assert.equal(onHandOf(db, 3), 20);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM stock_movements').get().n, 0,
+      'удаление услуги без товара написало движение склада');
+});
+
+test('товарная строка в ОПЛАЧЕННОМ счёте не удаляется — прежняя защита на месте', async () => {
+  const base = seed();
+  const { db, vid } = base;
+  const { nurse, inv } = stockSeed(base);
+  const { issueStockLines } = await import('./procurement.js');
+  const { dispenseItem } = await import('./inventory.js');
+  issueStockLines(db, { holder: { type: 'staff', id: 11 }, lines: [{ product_id: 3, qty: 5, unit: 'base' }] }, inv);
+  const d = dispenseItem(db, { product_id: 3, quantity: 3, visit_id: vid }, nurse);
+  const { invoice } = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [d.visit_service_id] }, registrar);
+  recordPayment(db, { invoice_id: invoice.id, amount: invoice.total_amount, method: 'cash' }, cashier);
+
+  assert.throws(() => removeUnpaidService(db, { visit_service_id: d.visit_service_id }, registrar), /оплачен/);
+  assert.equal(heldBy(db, 'staff', 11, 3), 2, 'отказ всё-таки вернул товар — транзакция не откатилась');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE id=?').get(d.visit_service_id).n, 1);
+});
+
 // DEBT_STICKY_V2 — «Оставить как долг» records an arrangement, not just an
 // amount. The old amount-only ladder turned the invoice into 'partial' on the
 // first instalment, so the arrangement vanished from the Долг chip the moment

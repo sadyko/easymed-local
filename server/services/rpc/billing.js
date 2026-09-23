@@ -12,6 +12,12 @@ import { unitPriceFor } from '../domain/pricing.js';
 // price at the till: the catalog price is the FIRST visit's price.
 import { tierUnitPrice } from '../domain/visit-tier.js';
 import { hasAnyRole } from '../roles.js';
+// HOLDINGS_FIRST_V1 — «вернуть КАЖДУЮ часть туда, откуда она пришла» живёт в
+// одном месте на весь сервер (rpc/inventory.js): подотчёт сотрудника, кабинет,
+// отдел, склад. Кольцо импортов здесь такое же, как у billing ↔ cashier строкой
+// выше, и по той же причине: обе стороны — объявленные функции, ни одна не
+// зовётся при загрузке модуля.
+import { restoreSources } from './inventory.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -568,6 +574,29 @@ export function markInvoiceDebt(db, args, user) {
 // money has moved: an unpaid invoice shrinks by the line (discount re-clamped),
 // an emptied invoice is deleted outright; paid/partial/debt bills refuse.
 // An un-invoiced line simply deletes.
+//
+// HOLDINGS_FIRST_V1 (23.09) — И ВОЗВРАЩАЕТ ТОВАР, ЕСЛИ СТРОКА ТОВАРНАЯ.
+//
+// Вкладка «Услуги» карточки пациента показывает ВСЕ строки визита, товарные в
+// том числе (списанный бинт — такая же строка visit_services, только с
+// clinic_item_id вместо услуги), и корзина стоит на каждой. Значит эта дверь
+// удаляет и выдачи — а удаляла она их так, будто товара в них не было: строка
+// исчезала, товар не возвращался НИКОМУ, и подотчёт медсестры, из которого его
+// взяли, оставался пустым. В журнале при этом навсегда повисало движение
+// расхода, у которого больше нет ни строки визита, ни пациента: карточка
+// отдела считала его «расходом на пациентов», а на какого — сказать было уже
+// нечем.
+//
+// ОТКАЗАТЬ БЫЛО НЕЛЬЗЯ: тогда регистратура видит в карточке строку с корзиной,
+// которую корзина не убирает, и уходит искать «Отменить выдачу» на другом
+// экране — где её ждёт своя защита, отказывающая по счёту (rpc/inventory.js
+// voidDispense не трогает строку, попавшую в счёт, даже неоплаченный). Здесь же
+// счёт чинится в той же транзакции, поэтому дверь остаётся одна.
+//
+// ЗАЩИТЫ ОСТАЛИСЬ ТЕ, ЧТО БЫЛИ. Оказанную строку не удалить, чужое здание не
+// тронуть, счёт с деньгами — отказ. Возврат идёт ПО ИСТОЧНИКАМ движений
+// (restoreSources), поэтому выдача, покрытая наполовину подотчётом и наполовину
+// складом, возвращается двумя частями, каждая своему держателю.
 const REMOVE_SERVICE_ROLES = ['admin', 'registrar'];
 
 export function removeUnpaidService(db, args, user) {
@@ -601,6 +630,14 @@ export function removeUnpaidService(db, args, user) {
       throw new RpcError('счёт уже ' + (inv.paid_amount > 0 ? 'оплачен (частично)' : inv.status) + ' — сначала отмените его в кассе.', 400);
     }
 
+    // HOLDINGS_FIRST_V1 — товар возвращается ДО удаления строки: источники
+    // читаются из движений ЭТОЙ строки (reference_id = vsId), а после DELETE
+    // их не с чем было бы связать. Возврат пишет свои движения 'void', и
+    // журнал сходится в ноль по этой строке — сироты не остаётся.
+    const sources = vs.clinic_item_id != null
+      ? restoreSources(db, 'visit', vsId, vs.clinic_item_id, vs.quantity, user)
+      : [];
+
     db.prepare('DELETE FROM visit_services WHERE id = ?').run(vsId);
 
     let invoiceDeleted = false;
@@ -619,7 +656,7 @@ export function removeUnpaidService(db, args, user) {
         invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
       }
     }
-    return { removed: true, invoice_deleted: invoiceDeleted, invoice };
+    return { removed: true, invoice_deleted: invoiceDeleted, invoice, sources };
   });
 
   return run();
