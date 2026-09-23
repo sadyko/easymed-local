@@ -85,6 +85,7 @@ const settle = () => new Promise((r) => setTimeout(r, 30));
 const rpcCalls = [];
 let ANSWER = null;
 let FAIL = null;
+let ONFETCH = null;   // что успевает случиться, пока журнал ждёт ответ
 
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
@@ -92,6 +93,7 @@ globalThis.fetch = async (url, opts = {}) => {
     if (u.startsWith('/api/rpc/')) {
         const name = decodeURIComponent(u.slice('/api/rpc/'.length));
         rpcCalls.push({ name, args: body });
+        if (ONFETCH) { const f = ONFETCH; ONFETCH = null; f(); }
         if (FAIL) return { ok: false, status: 400, json: async () => ({ error: { message: FAIL } }), headers: { getSetCookie: () => [] } };
         return { ok: true, status: 200, json: async () => ({ data: ANSWER }), headers: { getSetCookie: () => [] } };
     }
@@ -272,4 +274,77 @@ test('отказ сервера виден: экран говорит о нём,
     await settle();
     assert.match(textOf(root), /Не удалось загрузить движения/);
     FAIL = null;
+});
+
+// STOCK_LOG_V1 — ЗАКУПОЧНАЯ ЦЕНА НЕ ЕДЕТ ВМЕСТЕ С ОБЛАСТЬЮ ВИДИМОСТИ.
+//
+// Журнал был экраном администратора и кладовщика, и колонка «Цена за ед.» —
+// закупочная цена — была там уместна. Область видимости («своё / свой отдел /
+// вся клиника») открыла журнал медсестре и заведующей, и та же колонка молча
+// показала заведующей отделением, почём клиника закупает. Расширение области
+// видимости не должно быть расширением видимости ДЕНЕГ: это разные вопросы, и
+// решались они одной строкой разметки.
+test('закупочная цена видна только тому, кто видит всю клинику', async () => {
+    const all = await open(answer([RECEIVE], { scope: 'all' }));
+    assert.ok(findAll(all, 'TH').map((th) => textOf(th).trim()).includes('Цена за ед.'),
+        'администратор потерял колонку цены — её убирают у отдела, а не у всех');
+    assert.match(textOf(all), /20 000/);
+
+    for (const scope of ['department', 'own']) {
+        const root = await open(answer([RECEIVE], { scope }));
+        const heads = findAll(root, 'TH').map((th) => textOf(th).trim());
+        assert.deepEqual(heads, ['Когда', 'Товар', 'Тип', 'Кол-во', 'Кому', 'Партия', 'Срок', 'Основание', 'Кто'],
+            'область «' + scope + '» видит закупочную цену клиники');
+        assert.equal(/20 000/.test(textOf(root)), false,
+            'колонку убрали из шапки, а число осталось в строке — область «' + scope + '»');
+        // И строка не разъезжается с шапкой: ячеек ровно столько же.
+        const row = findAll(root, 'TR').filter((tr) => findAll(tr, 'TD').length)[0];
+        assert.equal(findAll(row, 'TD').length, heads.length);
+    }
+});
+
+// STOCK_LOG_V1 — У ЖУРНАЛА СВОЙ СЧЁТЧИК ЗАПРОСОВ.
+//
+// Оболочка держит до трёх смонтированных панелей, и «Журнал движений» живёт
+// рядом с «Закупками». Общий fetchGuard закупок означал, что перерисовка
+// любой их вкладки отменяет отрисовку журнала: журнал оставался пустым, а
+// причины на экране не было. Тот же довод и то же решение, что у «Моих
+// запасов» (views/my-stock.js).
+test('чужая перерисовка не отменяет журнал: счётчик запросов у него свой', async () => {
+    const root = await open(answer([RECEIVE]));
+    const { fetchGuard } = await import('../views/inventory-shared.js');
+    // Пока журнал ждёт ответ, соседняя панель «Закупок» перерисовывает себя.
+    ONFETCH = () => { fetchGuard.token += 1; };
+    const sel = findAll(root, 'SELECT')[0];
+    sel.value = 'issue';
+    sel.dispatchEvent({ type: 'change' });
+    await settle();
+    assert.match(textOf(root), /Перчатки/,
+        'журнал отменил САМ СЕБЯ из-за перерисовки соседней панели — и остался пустым молча');
+});
+
+// I2 / SEARCH_DEBOUNCE_V1 — КАЖДЫЙ СИМВОЛ НЕ ПЕРЕСЧИТЫВАЕТ КЛИНИКУ.
+//
+// better-sqlite3 синхронна: запрос журнала блокирует сервер целиком, и поиск
+// «на каждый символ» означал бы, что клиника замирает на всё время, пока
+// кладовщик набирает название товара.
+//
+// Задержка здесь НЕ СВОЯ. Она одна на все поисковые поля программы и живёт в
+// ui.js (h() оборачивает 'input' у полей с подсказкой «Поиск…», 500 мс) —
+// поэтому чинить тут нечего, а закрепить есть что: переименуй кто-нибудь
+// подсказку на «Найти товар», и поле молча выпадет из общего правила, а
+// заметит это клиника, а не тест.
+test('поиск ждёт паузы в наборе: три символа подряд — ОДИН запрос, а не три', async () => {
+    const root = await open(answer([RECEIVE]));
+    const q = walk(root).find((e) => e.tagName === 'INPUT' && /Поиск/.test(e.attrs.placeholder || ''));
+    assert.ok(q, 'поля поиска на экране нет — тест смотрит не туда');
+
+    rpcCalls.length = 0;
+    for (const typed of ['п', 'пе', 'пер']) { q.value = typed; q.dispatchEvent({ type: 'input' }); }
+    await settle();
+    assert.equal(rpcCalls.length, 0, 'запрос ушёл, не дождавшись паузы: набор из трёх символов — три блокировки базы');
+
+    await new Promise((r) => setTimeout(r, 700));
+    assert.equal(rpcCalls.length, 1, 'на три символа ушло запросов: ' + rpcCalls.length);
+    assert.equal(rpcCalls[0].args.q, 'пер', 'ушёл не последний набранный текст');
 });

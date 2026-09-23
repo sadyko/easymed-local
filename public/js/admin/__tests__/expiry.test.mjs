@@ -155,6 +155,29 @@ test('экран просит ГОТОВЫЙ расклад у сервера, �
     assert.deepEqual(expiryQuery(), {});
 });
 
+// I2 / SEARCH_DEBOUNCE_V1 — КАЖДЫЙ СИМВОЛ НЕ ПЕРЕСЧИТЫВАЕТ КЛИНИКУ.
+//
+// better-sqlite3 синхронна: расклад партий блокирует сервер целиком, и поиск
+// «на каждый символ» означал бы, что клиника замирает на всё время набора.
+// Задержка здесь НЕ СВОЯ — она одна на все поисковые поля программы и живёт в
+// ui.js (h() оборачивает 'input' у полей с подсказкой «Поиск…», 500 мс);
+// закрепляется она тут потому, что держится на ПОДСКАЗКЕ поля: переименуй её
+// кто-нибудь — и поле молча выпадет из общего правила.
+test('поиск ждёт паузы в наборе: три символа подряд — ОДИН запрос, а не три', async () => {
+    const root = await open({ lots: [EXPIRED] });
+    const q = walk(root).find((e) => e.tagName === 'INPUT' && /Поиск/.test(e.attrs.placeholder || ''));
+    assert.ok(q, 'поля поиска на экране нет — тест смотрит не туда');
+
+    rpcCalls.length = 0;
+    for (const typed of ['п', 'пе', 'пер']) { q.value = typed; q.dispatchEvent({ type: 'input' }); }
+    await settle();
+    assert.equal(rpcCalls.length, 0, 'запрос ушёл, не дождавшись паузы: набор из трёх символов — три блокировки базы');
+
+    await settle(700);
+    assert.equal(rpcCalls.length, 1, 'на три символа ушло запросов: ' + rpcCalls.length);
+    assert.equal(rpcCalls[0].args.q, 'пер', 'ушёл не последний набранный текст');
+});
+
 test('партии — ближайший срок первым, и у каждой строки названо состояние', async () => {
     const root = await open({ lots: [EXPIRED, SOON, OK, NO_DATE] });
     const r = rows(root);

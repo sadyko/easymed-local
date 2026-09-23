@@ -23,7 +23,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { fetchGuard, loadingCard, fmtPrice, fmtSignedQty, movementTag } from './inventory-shared.js';
+import { loadingCard, fmtPrice, fmtSignedQty, movementTag } from './inventory-shared.js';
 
 const PAGE = 200;
 const MAX_PAGE = 1000;
@@ -46,6 +46,12 @@ const SCOPE_NOTE = {
 
 const state = { from: '', to: '', kind: 'all', q: '', limit: PAGE };
 const refs = { host: null, body: null, withHead: false };
+// STOCK_LOG_V1 — СВОЙ СЧЁТЧИК, а не общий fetchGuard закупок. Оболочка держит
+// до трёх смонтированных панелей, и журнал живёт рядом с «Закупками»: на общем
+// счётчике перерисовка любой их вкладки отменяла отрисовку журнала, и он
+// оставался пустым молча. Тот же довод и то же решение, что у «Моих запасов»
+// (views/my-stock.js).
+let token = 0;
 
 /** Параметры запроса из состояния фильтров — ровно то, что понимает RPC. */
 export function journalQuery() {
@@ -105,9 +111,9 @@ async function paint() {
     refs.body = body;
     body.appendChild(loadingCard());
 
-    const token = ++fetchGuard.token;
+    const mine = ++token;
     const { data, error } = await supabase.rpc('stock_movements_list', journalQuery());
-    if (token !== fetchGuard.token || refs.body !== body) return;
+    if (mine !== token || refs.body !== body) return;
     clear(body);
 
     if (error) {
@@ -119,14 +125,20 @@ async function paint() {
     const res = data || {};
     const rows = res.movements || [];
     const f = filterBar();
+    // STOCK_LOG_V1 — ЗАКУПОЧНАЯ ЦЕНА ТОЛЬКО ТОМУ, КТО ВИДИТ ВСЮ КЛИНИКУ.
+    // Журнал был экраном администратора и кладовщика; область видимости
+    // («своё / свой отдел / вся клиника») открыла его медсестре и заведующей,
+    // и та же колонка молча показала бы заведующей отделением, почём клиника
+    // закупает. Расширение области видимости — не расширение видимости ДЕНЕГ.
+    const withPrice = res.scope === 'all';
 
     const tbody = h('tbody');
     if (!rows.length) {
         tbody.appendChild(h('tr', null,
-            h('td', { colspan: '10', style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } },
+            h('td', { colspan: withPrice ? '10' : '9', style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } },
                 'Нет подходящих движений.')));
     } else {
-        for (const m of rows) tbody.appendChild(auditRow(m));
+        for (const m of rows) tbody.appendChild(auditRow(m, withPrice));
     }
 
     const note = SCOPE_NOTE[res.scope];
@@ -144,7 +156,7 @@ async function paint() {
                     h('th', null, 'Товар'),
                     h('th', null, 'Тип'),
                     h('th', null, 'Кол-во'),
-                    h('th', null, 'Цена за ед.'),
+                    withPrice ? h('th', null, 'Цена за ед.') : null,
                     h('th', null, 'Кому'),
                     h('th', null, 'Партия'),
                     h('th', null, 'Срок'),
@@ -181,13 +193,13 @@ export function receiverCell(m) {
         h('div', { class: 'muted', style: { fontSize: '12.5px' } }, HOLDER_LABEL[m.holder_type] || ''));
 }
 
-function auditRow(m) {
+function auditRow(m, withPrice) {
     return h('tr', null,
         h('td', null, fmtDateTime(m.created_at)),
         h('td', null, m.product_name || '—'),
         h('td', null, movementTag(m)),
         h('td', { class: 'num' }, fmtSignedQty(m.qty, m.unit || '')),
-        h('td', { class: 'num' }, m.unit_cost != null ? fmtPrice(m.unit_cost) : '—'),
+        withPrice ? h('td', { class: 'num' }, m.unit_cost != null ? fmtPrice(m.unit_cost) : '—') : null,
         h('td', null, receiverCell(m)),
         h('td', null, m.batch_no || '—'),
         h('td', null, m.expiry_date || '—'),
