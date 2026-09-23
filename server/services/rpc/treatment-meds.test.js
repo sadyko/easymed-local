@@ -472,7 +472,9 @@ test('пустой склад не отменяет отметку, но вед�
   // Медицинский факт записан — это главное.
   assert.equal(r.administration.status, 'given');
   assert.equal(r.stock.status, 'short');
-  assert.match(r.stock.note, /insufficient stock/);
+  // HOLDINGS_FIRST_V1 — отказ склада стал русским и называет всю цепочку
+  // (свой подотчёт, кабинет, отдел), а не один склад.
+  assert.match(r.stock.note, /не списано: Недостаточно: Кеторол — на складе 0 из 1/);
   assert.equal(r.warnings[0].code, 'stock');
 
   // Остаток В МИНУС НЕ УХОДИТ и строки счёта нет — ровно то же самое склад
@@ -482,7 +484,7 @@ test('пустой склад не отменяет отметку, но вед�
   assert.equal(movements(db, 4).length, 0);
   assert.equal(lines(db, adm).length, 0);
   assert.throws(() => dispenseItem(db, { product_id: 4, quantity: 1 }, ACTOR.nurse),
-    (e) => e instanceof StockError && /insufficient stock/.test(e.message));
+    (e) => e instanceof StockError && /Недостаточно: Кеторол — на складе 0 из 1/.test(e.message));
 
   // И это тоже считается: несписанное видно человеку.
   const list = treatmentOrdersList(db, { admission_id: adm, from: START, to: START }, ACTOR.nurse);

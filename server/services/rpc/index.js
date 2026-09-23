@@ -221,7 +221,9 @@ export const RPC = {
 
   // BED_CONSOLE_V1 — стационарная консоль койки: выдача препаратов (easymed
   // p_* имена), счёт по госпитализации, перевод и скидка на проживание.
-  dispense_admission_item:        (db, args, user) => dispenseAdmissionItem(db, { admission_id: args.p_admission_id, product_id: args.p_item_id, quantity: args.p_qty, doctor_id: args.p_doctor_id ?? null, billable: args.p_billable === undefined ? true : !!args.p_billable, note: args.p_note ?? null }, user),
+  // HOLDINGS_FIRST_V1 — флага источника здесь нет и не нужно: подотчёт →
+  // кабинет → отдел → склад решает сам обработчик, одинаково для всех дверей.
+  dispense_admission_item:      (db, args, user) => dispenseAdmissionItem(db, { admission_id: args.p_admission_id, product_id: args.p_item_id, quantity: args.p_qty, doctor_id: args.p_doctor_id ?? null, billable: args.p_billable === undefined ? true : !!args.p_billable, note: args.p_note ?? null }, user),
   void_dispensed_admission_item:  (db, args, user) => voidDispensedAdmissionItem(db, { line_id: args.p_line }, user),
   create_invoice_for_admission:   (db, args, user) => createInvoiceForAdmission(db, args, user),
   remove_admission_line_from_invoice: (db, args, user) => removeAdmissionLineFromInvoice(db, args, user),   // BED_CONSOLE_V3 — «Из счёта»
