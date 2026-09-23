@@ -51,3 +51,18 @@ named».
   лаборатории, окно ввода результатов, результаты анализов в карте пациента.
 - **Больше ничего не меняется:** забор, штрихкод, анализатор, оплата, цены, печать — как сегодня.
 - Excel: одна колонка `external_lab`; нет заголовка — отметка не трогается.
+
+## Что изменено
+
+**DOCTOR_TIER_V2:** `server/services/rpc/reports.js` (TIER_RANK_SQL, ITEM_EFF_PCT_SQL,
+doctor_tier_positions), `server/services/rpc/service-save.js`, `public/js/admin/service-editor-logic.js`
+(TIER_STEP_COLUMNS, tierStepsProblem), `views/service-editor.js` + `css/admin-views.css`
+(`.svc-ed-steprow`), `views/doctor-dashboard.js` (tierShare, tierProgressText), `views/consultation.js`
+(прогресс ступеней на вкладке «Зарплата»), `views/section-import-export.js`, `i18n-strings.js`.
+
+**EXTERNAL_LAB_V1:** `public/js/admin/external-lab.js` (одна подпись на все экраны),
+`server/services/rpc/service-save.js`, `views/service-editor.js` (галочка на вкладке «Лаборатория»),
+`views/services.js` (колонка «Наименование»), `views/laboratory.js` (строка очереди, бланк
+«Результаты…», лист пациента), `server/services/rpc/patient-card.js` + `views/patient-card.js` (вкладка
+«Лаборатория»), `views/section-import-export.js`, `server/db/schema-registry.js` (embed services у
+visit_services), `i18n-strings.js`.

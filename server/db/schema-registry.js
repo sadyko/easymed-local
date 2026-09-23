@@ -274,7 +274,7 @@ export const REGISTRY = {
     // consultation type, the provider (doctor_id -> users, easymed aliases it
     // `users:doctor_id(...)`), the visit (+nested patient), and the dispensed
     // product (easymed calls that relation clinic_items; the table is products).
-    embed:   { services: { table:'services', fk:'service_id', columns:['id','name','code','price','is_lab','result_unit','ref_low','ref_high','ref_text','specimen','type','duration_minutes','tax_rate','type_id','category_id','tube_color','department_id'] },   // department_id: PROCEDURES_V1; code — шапка документа приёма
+    embed:   { services: { table:'services', fk:'service_id', columns:['id','name','code','price','is_lab','result_unit','ref_low','ref_high','ref_text','specimen','type','duration_minutes','tax_rate','type_id','category_id','tube_color','department_id','external_lab'] },   // department_id: PROCEDURES_V1; code — шапка документа приёма; external_lab: EXTERNAL_LAB_V1 (подпись в очереди лаборатории)
                products: { table:'products', fk:'clinic_item_id', columns:['id','name','unit'] },
                clinic_items: { table:'products', fk:'clinic_item_id', columns:['id','name','unit'] },
                consultation_types: { table:'consultation_types', fk:'consultation_type_id', columns:['id','name','name_ru','name_uz','price'] },

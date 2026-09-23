@@ -607,3 +607,57 @@ test('все размеры карточки — со шкалы восьми с
     assert.ok(STEPS.has(v), sel + ': ' + v + 'px — не ступень шкалы');
   }
 });
+
+// ═══ EXTERNAL_LAB_V1 ═══════════════════════════════════════════════════════
+//
+// Владелец: «tick the "внешняя лаборатория" … nothing, as it is but labeled as
+// external lab». Поэтому здесь две проверки: подпись есть там, где лаборант
+// видит анализ (очередь, бланк ввода, лист пациента), и ОЧЕРЕДЬ ВЕДЁТ СЕБЯ
+// ТАК ЖЕ — тот же набор действий на карточке и на строке в каждом статусе.
+const extVs = (id, status, ext) => vs(id, status, { services: { ...SVC('ПЦР на COVID', 'Мазок'), external_lab: ext } });
+const extTags = (root) => walk(root).filter((n) => n.attrs && n.attrs['data-external-lab'] === '1');
+const actionsOf = (c) => ({
+  card: buttons(byClass(c, 'lq-do')[0] || mk('div')).map((b) => clean(b) + '|' + (b.getAttribute('title') || '')).sort(),
+  row: buttons(byClass(c, 'lq-item-do')[0] || mk('div')).map((b) => clean(b) + '|' + (b.getAttribute('title') || '')).sort(),
+});
+
+test('EXTERNAL_LAB_V1: строка очереди подписана «Внешняя лаборатория», без отметки — нет', async () => {
+  const on = await card([extVs(805, 'queued', 1)]);
+  const item = byClass(on, 'lq-item')[0];
+  assert.strictEqual(extTags(item).length, 1, 'нет подписи у внешнего анализа');
+  assert.ok(textOf(item).includes('Внешняя лаборатория'));
+  const off = await card([extVs(805, 'queued', 0)]);
+  assert.strictEqual(extTags(off).length, 0, 'подпись у анализа своей лаборатории');
+});
+
+test('EXTERNAL_LAB_V1: отметка не меняет поведения очереди — те же действия в каждом статусе', async () => {
+  for (const status of ['added', 'queued', 'collected', 'in_progress', 'resulted', 'completed']) {
+    const results = status === 'resulted' || status === 'completed' ? [res(1, 805, 'normal', '138')] : [];
+    const filter = status === 'completed' ? 'Все' : status === 'added' ? 'Не оплачено' : null;
+    const off = actionsOf(await card([extVs(805, status, 0)], results, { filter }));
+    const on = actionsOf(await card([extVs(805, status, 1)], results, { filter }));
+    if (status !== 'added') assert.ok(off.row.length > 0, status + ': стенд не нашёл действий строки — сравнение было бы пустым');
+    assert.deepStrictEqual(on, off, status + ': у внешнего анализа другой набор действий');
+  }
+});
+
+test('EXTERNAL_LAB_V1: подпись видна в бланке ввода результатов и в листе пациента', async () => {
+  // Бланк одного анализа — «Результаты…» на строке.
+  const c = await card([extVs(805, 'in_progress', 1)]);
+  fakeBody.children.length = 0;
+  const btn = buttons(byClass(c, 'lq-item-do')[0]).find((b) => clean(b) === 'Результаты…');
+  assert.ok(btn, 'нет кнопки «Результаты…»');
+  btn.click();
+  await tick(60);
+  assert.ok(extTags(fakeBody).length >= 1, 'в бланке ввода нет подписи «Внешняя лаборатория»');
+
+  // Лист пациента — «Внести результаты» на карточке.
+  const w = await card([extVs(805, 'queued', 1), extVs(806, 'collected', 0)]);
+  fakeBody.children.length = 0;
+  buttons(byClass(w, 'lq-do')[0])[0].click();
+  await tick(60);
+  assert.ok(byClass(fakeBody, 'lw-patient').length === 1, 'лист пациента не открылся');
+  const titles = byClass(fakeBody, 'lw-sec-title');
+  assert.strictEqual(titles.length, 2);
+  assert.strictEqual(titles.filter((t) => extTags(t).length).length, 1, 'подпись должна стоять ровно у внешнего анализа');
+});

@@ -426,3 +426,35 @@ test('DOCTOR_TIER_V2: половина ступени, пропуск ступе
   }
   assert.equal(db.prepare('SELECT COUNT(*) n FROM services').get().n, before, 'отказ ничего не создаёт');
 });
+
+// ---------------------------------------------------------------------------
+// EXTERNAL_LAB_V1 — отметка «Внешняя лаборатория» у лабораторной услуги
+// ---------------------------------------------------------------------------
+
+const labArgs = (over = {}) => baseArgs({
+  name: 'ПЦР', type: 'lab',
+  lab: { specimen: 'кровь', result_unit: null, ref_low: null, ref_high: null, ref_text: null, tube_color: null },
+  ...over,
+});
+const extOf = (db, id) => db.prepare('SELECT external_lab FROM services WHERE id = ?').get(id).external_lab;
+
+test('EXTERNAL_LAB_V1: отметка сохраняется и снимается; без ключа — остаётся как была', () => {
+  const db = freshDb();
+  const { id } = serviceSave(db, labArgs({ external_lab: true }), admin);
+  assert.equal(extOf(db, id), 1);
+  serviceSave(db, labArgs({ id }), admin);                 // старый клиент без ключа
+  assert.equal(extOf(db, id), 1);
+  serviceSave(db, labArgs({ id, external_lab: false }), admin);
+  assert.equal(extOf(db, id), 0);
+  const fresh = serviceSave(db, labArgs({ name: 'ОАМ' }), admin);
+  assert.equal(extOf(db, fresh.id), 0, 'по умолчанию — своя лаборатория');
+});
+
+test('EXTERNAL_LAB_V1: у не-лабораторной услуги отметки не бывает', () => {
+  const db = freshDb();
+  const { id } = serviceSave(db, baseArgs({ external_lab: true }), admin);
+  assert.equal(extOf(db, id), 0);
+  const lab = serviceSave(db, labArgs({ external_lab: true }), admin);
+  serviceSave(db, baseArgs({ id: lab.id, name: 'ПЦР' }), admin);   // раздел сменили на приём
+  assert.equal(extOf(db, lab.id), 0);
+});

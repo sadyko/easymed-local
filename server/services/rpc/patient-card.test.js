@@ -373,3 +373,16 @@ test('patient_card_save: пустая ссылка ложится как NULL, �
     assert.equal(row.national_id, '', 'ПИНФЛ — обычный текст: пустая строка остаётся строкой');
   } finally { db.close(); }
 });
+
+// EXTERNAL_LAB_V1 — вкладка «Лаборатория» подписывает анализ другой клиники:
+// отметка едет у заказа вместе с остальными полями услуги.
+test('EXTERNAL_LAB_V1: заказ анализа везёт отметку «Внешняя лаборатория»', () => {
+  const { db, pid } = seed();
+  const before = patientCard(db, { patient_id: pid }, REGISTRAR);
+  assert.equal(before.lab_orders[0].services.external_lab, 0);
+  db.prepare("UPDATE services SET external_lab = 1 WHERE name = 'ОАК'").run();
+  const after = patientCard(db, { patient_id: pid }, REGISTRAR);
+  assert.equal(after.lab_orders[0].services.external_lab, 1);
+  assert.equal(after.services.find((r) => r.service_id != null).services.external_lab, 1);
+  db.close();
+});

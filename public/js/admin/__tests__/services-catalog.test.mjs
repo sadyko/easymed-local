@@ -472,6 +472,49 @@ test('DOCTOR_TIER_V2: ступень 3 без ступени 2 и нерасту
   } finally { SVC.requires_doctor = 1; }
 });
 
+// EXTERNAL_LAB_V1 — «Внешняя лаборатория»: подпись в списке услуг и галочка в
+// редакторе (только у лаборатории).
+const LAB_SVC = { id: 9, name: 'ПЦР на COVID', code: 'L-09', price: 90000, tax_rate: 12,
+  duration_minutes: 15, requires_doctor: 0, active: 1, is_lab: 1, type: 'lab', external_lab: 1 };
+const extTags = (root) => walk(root).filter((n) => n.attrs && n.attrs['data-external-lab'] === '1' && n.tagName === 'SPAN');
+
+test('EXTERNAL_LAB_V1: в списке услуг отмеченная лаборатория подписана, прочие — нет', async () => {
+  try {
+    const c = await paintRows([SVC, LAB_SVC]);
+    const rows = dataRows(c);
+    const labRow = rows.find((r) => textOf(r).includes('ПЦР на COVID'));
+    const other = rows.find((r) => textOf(r).includes('УЗИ печени'));
+    assert.equal(extTags(labRow).length, 1, 'у внешней лаборатории нет подписи');
+    assert.ok(textOf(labRow).includes('Внешняя лаборатория'));
+    assert.equal(extTags(other).length, 0, 'подпись у услуги без отметки');
+    LAB_SVC.external_lab = 0;
+    const c2 = await paintRows([SVC, LAB_SVC]);
+    assert.equal(extTags(dataRows(c2).find((r) => textOf(r).includes('ПЦР на COVID'))).length, 0, 'подпись осталась после снятия отметки');
+  } finally { services = [SVC]; LAB_SVC.external_lab = 1; }
+});
+
+test('EXTERNAL_LAB_V1: галочка в редакторе лабораторной услуги приходит отмеченной и уходит в service_save', async () => {
+  try {
+    const c = await paintRows([LAB_SVC]);
+    tags(c, 'tr').find((r) => r.className.includes('row-click') && textOf(r).includes('ПЦР')).click();
+    await flush();
+    const boxes = tags(document.body, 'input').filter((i) => i.attrs['data-external-lab'] === '1');
+    const chk = boxes[boxes.length - 1];
+    assert.ok(chk, 'нет галочки «Внешняя лаборатория»');
+    assert.equal(chk.checked, true, 'сохранённая отметка не пришла в редактор');
+    assert.ok(textOf(document.body).includes('Внешняя лаборатория'));
+    chk.checked = false;
+    rpcCalls.length = 0;
+    const saves = tags(document.body, 'button').filter((b) => textOf(b).includes('Сохранить'));
+    saves[saves.length - 1].click();
+    await flush();
+    const save = rpcCalls.find((r) => r.name === 'service_save');
+    assert.ok(save, 'service_save не вызван');
+    assert.strictEqual(save.args.external_lab, false);
+    assert.strictEqual(save.args.id, 9);
+  } finally { services = [SVC]; }
+});
+
 // SAVE_BTN_TARGET_V1 — внутри «Сохранить» лежит значок, и палец попадает
 // обычно в него: у такого события target — значок, а не кнопка. Гасить надо
 // кнопку (currentTarget), иначе она остаётся живой и второй клик создаёт

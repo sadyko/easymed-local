@@ -56,6 +56,7 @@ import { labFlagCell, labPosCell, fmtDMY, labSexRu, labRefText, matchResultsToAn
          namedRangeCell, ageYears } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, resolveAnalyteWhy, nk } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
 import { branchSyncButton } from './branch-sync-button.js';   // BRANCH_SYNC_HOURLY_V1
+import { externalLabTag } from '../external-lab.js';   // EXTERNAL_LAB_V1 — только подпись, поведение очереди то же
 
 function currentUser() {
     try { return (window.easymed && window.easymed.state && window.easymed.state.user) || {}; }
@@ -670,14 +671,14 @@ async function fetchAndPaint() {
             scopeQuery(supabase.from('visit_services')
                 // department_id/type_id ride along so the lab-service rule can check
                 // the department and catalogue-type branches (LAB_SERVICE_ROUTING_V1).
-                .select('*, services(name,is_lab,type,department_id,type_id,result_unit,ref_low,ref_high,ref_text,specimen,tube_color)'), state.labScope)
+                .select('*, services(name,is_lab,type,department_id,type_id,result_unit,ref_low,ref_high,ref_text,specimen,tube_color,external_lab)'), state.labScope)
                 .in('status', ['added', 'queued', 'collected', 'in_progress', 'resulted'])
                 .order('id', { ascending: false })
                 .limit(5000),
             // Та же граница на истории закрытых: отфильтровать только половину
             // значило бы показывать чужую работу во вкладке «Готово», но не в очереди.
             scopeQuery(supabase.from('visit_services')
-                .select('*, services(name,is_lab,type,department_id,type_id,result_unit,ref_low,ref_high,ref_text,specimen,tube_color)'), state.labScope)
+                .select('*, services(name,is_lab,type,department_id,type_id,result_unit,ref_low,ref_high,ref_text,specimen,tube_color,external_lab)'), state.labScope)
                 .eq('status', 'completed')
                 .order('id', { ascending: false })
                 .limit(LAB_DONE_WINDOW),
@@ -958,7 +959,7 @@ function lqItem(r, patient) {
     return h('div', { class: 'lq-item', 'data-status': r.status || '' },
         tubePill(svc.tube_color),
         h('div', { class: 'lq-item-main' },
-            h('div', { class: 'lq-name' }, svc.name || '—'),
+            h('div', { class: 'lq-name' }, svc.name || '—', externalLabTag(svc)),   // EXTERNAL_LAB_V1
             h('div', { class: 'lq-type' },
                 svc.specimen ? h('span', null, svc.specimen) : null,
                 results.length ? h('span', null, trf('{n} показателей', { n: results.length })) : null,
@@ -1541,7 +1542,8 @@ async function openResultsModal(r, patient) {
     const m = labModal(
         (panel ? panel.name : (svc.name || 'Результаты')) + ' · ' + accession(r),
         (patient.full_name || '—') + (patient.mrn ? ' · ' + patient.mrn : '') + (gender ? ' · ' + (gender === 'male' ? 'муж' : gender === 'female' ? 'жен' : gender) : ''),
-        [grid, field('Комментарий', notesTa)],
+        // EXTERNAL_LAB_V1 — подпись над бланком: результат пришёл из другой клиники.
+        [externalLabTag(svc), grid, field('Комментарий', notesTa)],
         [saveBtn], 640);
 
     saveBtn.addEventListener('click', async () => {
@@ -1749,7 +1751,7 @@ function wsSection(section) {
     return h('div', { class: 'lw-sec' },
         h('div', { class: 'lw-sec-head' },
             tubePill(svc.tube_color),
-            h('div', { class: 'lw-sec-title' }, svc.name || '—'),
+            h('div', { class: 'lw-sec-title' }, svc.name || '—', externalLabTag(svc)),   // EXTERNAL_LAB_V1
             Tag(st.label, { kind: st.kind, dot: true }),
             h('span', { style: { flex: 1 } }),
             collectSlot,

@@ -99,6 +99,7 @@ function resolveRefTx(db, table, ref) {
  *         doctor_tier_from?, doctor_tier_percent?  (DOCTOR_TIER_V1 — pair: both or neither)
  *         doctor_tier_from_2?, doctor_tier_percent_2?, doctor_tier_from_3?, doctor_tier_percent_3?
  *           (DOCTOR_TIER_V2 — each a pair, filled in order, thresholds strictly ascending)
+ *         external_lab?  (EXTERNAL_LAB_V1 — lab services only; absent on update = unchanged)
  *         price_secondary?, secondary_days_from?, secondary_days_to?, price_repeat?  (VISIT_TIER_PRICING_V1, all nullable)
  *         repeat_days_from?, repeat_days_to?  (REPEAT_WINDOW_V1, nullable — empty = the second-visit window)
  *         name_uz?, name_en?, online_booking?  (SERVICE_NAMES_ONLINE_V1 — online needs name AND name_uz)
@@ -268,6 +269,11 @@ export function serviceSave(db, args, user) {
     // миграция 022 backfill'ила type='lab' WHERE is_lab=1 — в обратную сторону).
     const isLab = labBlockVisible(type) ? 1 : 0;
     const lab = (isLab && a.lab && typeof a.lab === 'object') ? a.lab : null;
+    // EXTERNAL_LAB_V1 — «Внешняя лаборатория»: только у лабораторной услуги.
+    // Отметка ничего не переключает, это подпись для персонала. Ключа нет
+    // (старый клиент) — при правке остаётся как была; не-лаборатория — 0.
+    const extGiven = a.external_lab !== undefined;
+    const externalLab = isLab && asBool(a.external_lab) ? 1 : 0;
 
     let serviceId = editId;
     if (serviceId === null) {
@@ -280,6 +286,7 @@ export function serviceSave(db, args, user) {
         price_secondary: priceSecondary, secondary_days_from: daysFrom, secondary_days_to: daysTo, price_repeat: priceRepeat,
         repeat_days_from: repDaysFrom, repeat_days_to: repDaysTo,
         name_uz: nameUz, name_en: nameEn, online_booking: onlineBooking,
+        external_lab: externalLab,   // EXTERNAL_LAB_V1
         // Не-лабораторная услуга рождается с пустым лаб-блоком; лабораторная —
         // с тем, что ввели.
         specimen: lab ? (lab.specimen ?? null) : null,
@@ -307,6 +314,7 @@ export function serviceSave(db, args, user) {
       // Лаб-колонки пишутся ТОЛЬКО когда раздел = лаборатория. Скрытый блок
       // не затирает сохранённое (прецедент sections.js visibleWhen).
       if (lab) for (const c of LAB_COLS) sets[c] = lab[c] ?? null;
+      if (!isLab || extGiven) sets.external_lab = externalLab;   // EXTERNAL_LAB_V1
       const names = Object.keys(sets);
       db.prepare(
         `UPDATE services SET ${names.map((c) => `"${c}" = ?`).join(', ')}, `

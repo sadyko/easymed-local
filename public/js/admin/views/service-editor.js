@@ -152,6 +152,11 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
     const specimenInp = h('input', { type: 'text', value: (row && row.specimen) || '' });
     const tubeSel = h('select', null,
         ...TUBE_OPTIONS.map(([v, l]) => h('option', { value: v, selected: !!(row && (row.tube_color || '') === v) }, l)));
+    // EXTERNAL_LAB_V1 — «Внешняя лаборатория» (владелец: «Just a tick, no lab
+    // named»). Только подпись для персонала: анализ делает другая клиника,
+    // результат вносят у нас. Ничего другого отметка не переключает.
+    const extLabChk = h('input', { type: 'checkbox', 'data-external-lab': '1' });
+    extLabChk.checked = !!(row && Number(row.external_lab) === 1);
 
     // ---- цены и время ------------------------------------------------------
     const priceInp = h('input', { type: 'number', step: '0.01', min: '0', value: row && row.price != null ? row.price : '' });
@@ -232,7 +237,7 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
 
     if (readOnly) {
         for (const el of [nameInp, typeSel, typeCombo.input, catCombo.input, depCombo.input, roomSel,
-            specimenInp, tubeSel,   // LAB_REFS_IN_PANELS_V1 — единицы и нормы живут в панели
+            specimenInp, tubeSel, extLabChk,   // LAB_REFS_IN_PANELS_V1 — единицы и нормы живут в панели; EXTERNAL_LAB_V1
             priceInp, vatInp, durInp, reqDoc, pctInp, codeInp, activeChk, nameUzInp, nameEnInp, onlineChk,
             secPriceInp, daysFromInp, daysToInp, repPriceInp, repFromInp, repToInp,
             ...tierInputs.flatMap((t) => [t.from, t.pct])]) el.disabled = true;   // DOCTOR_TIER_V1/V2
@@ -298,6 +303,8 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
             name_uz: nameUzInp.value.trim() || null,
             name_en: nameEnInp.value.trim() || null,
             online_booking: onlineChk.checked,
+            // EXTERNAL_LAB_V1 — отметка есть только у лаборатории; у прочих групп 0.
+            external_lab: labBlockVisible(typeSel.value) ? extLabChk.checked : false,
             type_ref: typeCombo.resolve(),
             category_ref: catCombo.resolve(),
             department_ref: depCombo.resolve(),
@@ -353,7 +360,9 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
         grid(2,
             field('Материал (кровь, моча…)', specimenInp),
             field('Цвет пробирки', tubeSel)),
-        h('div', { class: 'svc-ed-note' }, 'Показатели, единицы и нормы задаются в панели анализа: Лаборатория → Панели.'));
+        h('div', { class: 'svc-ed-note' }, 'Показатели, единицы и нормы задаются в панели анализа: Лаборатория → Панели.'),
+        checkField('Внешняя лаборатория', extLabChk),   // EXTERNAL_LAB_V1
+        h('div', { class: 'svc-ed-note' }, 'Анализ делает другая клиника, результат вносится у нас. Меняет только подпись «Внешняя лаборатория» в списках и в лаборатории — забор, штрих-код, оплата и печать остаются как есть.'));
 
     // The uz name is required only while online booking is on: the label
     // gets its star and the field its highlight the moment the box is ticked.

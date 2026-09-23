@@ -33,6 +33,7 @@ import { importExportButtons, exportSectionRows } from './section-import-export.
 import { ratesOf } from './doctor-pool.js?v=dp1';   // SVC_PERFORMERS_V1 — тот же разбор service_rates, что и в мастере визита
 import { openServiceEditor } from './service-editor.js?v=svceditor1';   // SERVICES_ONE_EDITOR_V1
 import { openTableSetup, readColPrefs, writeColPrefs, widthShare } from './table-setup.js';   // TABLE_SETUP_V1
+import { externalLabTag } from '../external-lab.js';   // EXTERNAL_LAB_V1 — только подпись
 
 // SVC_PERFORMERS_V1 — кто выполняет услугу.
 //
@@ -110,7 +111,7 @@ const performerNames = (s) => performersBySvc.get(String(s.id)) || [];
 
 const COLUMNS = [
     { key: 'name',       label: 'Наименование', w: 34, text: (s) => s.name || '',
-      cell: (s) => h('td', { class: 'cell-strong' }, s.name || '—') },
+      cell: (s) => h('td', { class: 'cell-strong' }, s.name || '—', externalLabTag(s)) },   // EXTERNAL_LAB_V1
     { key: 'category',   label: 'Категория',    w: 16, text: (s) => nameOf(lookups.categories, s.category_id) },
     { key: 'type',       label: 'Тип',          w: 14, text: (s) => nameOf(lookups.types, s.type_id) },
     { key: 'group',      label: 'Группа',       w: 12, optional: true, text: (s) => groupLabel(s) },

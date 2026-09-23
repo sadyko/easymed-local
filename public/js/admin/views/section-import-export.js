@@ -406,6 +406,11 @@ const IMPORT_CONFIGS = {
                 var lbl = { consultation: 'Консультации', lab: 'Лаборатория', procedure: 'Процедуры', imaging: 'Диагностика', other: 'Хирургия' }[payload.type];
                 if (lbl) payload.type_id = { __autoCreate: { table: 'service_types', keyField: 'name', value: lbl } };
             }
+            // EXTERNAL_LAB_V1 — «Внешняя лаборатория»: заголовка в листе нет —
+            // отметка не трогается (тот же договор, что у ступеней ниже); у
+            // не-лабораторной услуги отметки не бывает (как в service_save).
+            if (!('external_lab' in r)) delete payload.external_lab;
+            else payload.external_lab = payload.type === 'lab' ? !!payload.external_lab : false;
             // DOCTOR_TIER_V1 — КОЛОНКИ, КОТОРОЙ В ФАЙЛЕ НЕТ, В ПАМЯТИ НЕ БЫВАЕТ.
             // Числовые колонки пишутся в payload всегда, даже когда заголовка в
             // листе нет вовсе: обновление услуг файлом, выгруженным ДО ступеней,
@@ -507,6 +512,8 @@ const IMPORT_CONFIGS = {
             { key: 'room',             fk: { source: 'rooms', keyField: 'name', target: 'room_id' }, hint: 'Кабинет (очередь диагностики) — по названию из справочника; необязательно' },
             { key: 'specimen',         hint: 'Лаборатория: материал (кровь, моча…) — необязательно' },
             { key: 'tube_color',       hint: 'Лаборатория: пробирка — light_blue, red, gold, green, lavender, pink, grey, royal_blue, yellow_acd, black, none' },
+            // EXTERNAL_LAB_V1 — только подпись; пустая ячейка под заголовком = нет.
+            { key: 'external_lab',     coerce: 'bool', defaultBool: false, hint: 'Лаборатория: true / false — внешняя лаборатория (анализ делает другая клиника, результат вносится у нас)' },
             { key: 'active',           coerce: 'bool', defaultBool: true, hint: 'true / false — активна (по умолчанию true)' },
         ],
         // SERVICE_IMPORT_TYPE_NO_AUTOCREATE_V1 — sample rows leave `type` blank so

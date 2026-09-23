@@ -41,6 +41,7 @@ const SERVICE_EDITOR_FIELDS = [
     'name_uz', 'name_en', 'online_booking', 'doctor_tier_from', 'doctor_tier_percent',
     // DOCTOR_TIER_V2 — ступени 2 и 3.
     'doctor_tier_from_2', 'doctor_tier_percent_2', 'doctor_tier_from_3', 'doctor_tier_percent_3',
+    'external_lab',   // EXTERNAL_LAB_V1
 ];
 
 test('экспорт пациентов несёт каждое поле окна пациента (категория — по названию)', () => {
@@ -181,4 +182,23 @@ test('DOCTOR_TIER_V2: ступень 3 без ступени 2 и нерасту
         doctor_tier_from_2: 20, doctor_tier_percent_2: 45, doctor_tier_from_3: 100, doctor_tier_percent_3: 50 });
     assert.deepEqual(SIX.map((k) => desc.payload[k]), [25, 40, 0, 0, 0, 0], 'со сломанной ступени и дальше — не сохраняется');
     assert.ok(desc.notes.some((n) => /Порог ступени 2 должен быть больше/.test(String(n))), JSON.stringify(desc.notes));
+});
+
+// ---------------------------------------------------------------------------
+// EXTERNAL_LAB_V1 — одна колонка «external_lab»: едет туда и обратно, без
+// заголовка отметка не трогается, у не-лабораторной услуги её не бывает.
+// ---------------------------------------------------------------------------
+test('EXTERNAL_LAB_V1: колонка в файле есть и возвращается импортом', () => {
+    assert.ok(exportColumnKeys('services').includes('external_lab'), 'нет колонки external_lab');
+    const on = buildImportRow('services', { name: 'ПЦР', group: 'Лаборатория', price: 100000, external_lab: 1 });
+    assert.strictEqual(on.payload.external_lab, true);
+    const off = buildImportRow('services', { name: 'ПЦР', group: 'Лаборатория', price: 100000, external_lab: '' });
+    assert.strictEqual(off.payload.external_lab, false, 'пустая ячейка под заголовком — «своя лаборатория»');
+});
+
+test('EXTERNAL_LAB_V1: заголовка нет — отметка не трогается; не лаборатория — отметки нет', () => {
+    const none = buildImportRow('services', { name: 'ПЦР', group: 'Лаборатория', price: 100000 });
+    assert.ok(!('external_lab' in none.payload), 'отметка попала в запись из файла без такой колонки');
+    const consult = buildImportRow('services', { ...SVC_BASE, external_lab: 'true' });
+    assert.strictEqual(consult.payload.external_lab, false);
 });
