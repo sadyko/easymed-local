@@ -224,18 +224,18 @@ export const REGISTRY = {
   services: {
     read:  { roles: ALL_STAFF, columns: ['id','name','code','price','tax_rate','duration_minutes','requires_doctor','active','created_at','updated_at',
              'is_lab','specimen','result_unit','ref_low','ref_high','ref_text','type','type_id','category_id','department_id','tube_color',
-             'default_doctor_percent','doctor_tier_from','doctor_tier_percent','room_id',
+             'default_doctor_percent','doctor_tier_from','doctor_tier_percent','doctor_tier_from_2','doctor_tier_percent_2','doctor_tier_from_3','doctor_tier_percent_3','external_lab','room_id',
              'price_secondary','secondary_days_from','secondary_days_to','price_repeat','repeat_days_from','repeat_days_to',
-             'name_uz','name_en','online_booking'] },   // tube_color: LAB_HANDLING_V1 (mig 041); default_doctor_percent/room_id: SERVICE_EDITOR_V1 (mig 081) — read-only here, written ONLY by the service_save RPC (rates merge must be transactional); price_secondary…price_repeat: VISIT_TIER_PRICING_V1 (mig 127) — written by service_save too; doctor_tier_from/doctor_tier_percent: DOCTOR_TIER_V1 (mig 140) — пишут service_save (пара или 400) и Excel-импортёр
+             'name_uz','name_en','online_booking'] },   // tube_color: LAB_HANDLING_V1 (mig 041); default_doctor_percent/room_id: SERVICE_EDITOR_V1 (mig 081) — read-only here, written ONLY by the service_save RPC (rates merge must be transactional); price_secondary…price_repeat: VISIT_TIER_PRICING_V1 (mig 127) — written by service_save too; doctor_tier_from/doctor_tier_percent: DOCTOR_TIER_V1 (mig 140) — пишут service_save (пара или 400) и Excel-импортёр; doctor_tier_*_2/_3 (DOCTOR_TIER_V2) и external_lab (EXTERNAL_LAB_V1): mig 147, те же писатели
     // FULL_EXPORT_V1 — the Excel importer writes these directly (admin only);
     // the dialog still goes through service_save, which merges performer rates.
     write: { insert: { roles: ['admin'], columns: ['name','code','price','tax_rate','duration_minutes','requires_doctor','active',
              'is_lab','specimen','result_unit','ref_low','ref_high','ref_text','type','type_id','category_id','department_id','tube_color',
-             'price_secondary','secondary_days_from','secondary_days_to','price_repeat','repeat_days_from','repeat_days_to','default_doctor_percent','doctor_tier_from','doctor_tier_percent','room_id',
+             'price_secondary','secondary_days_from','secondary_days_to','price_repeat','repeat_days_from','repeat_days_to','default_doctor_percent','doctor_tier_from','doctor_tier_percent','doctor_tier_from_2','doctor_tier_percent_2','doctor_tier_from_3','doctor_tier_percent_3','external_lab','room_id',
              'name_uz','name_en','online_booking'] },
              update: { roles: ['admin'], columns: ['name','code','price','tax_rate','duration_minutes','requires_doctor','active',
              'is_lab','specimen','result_unit','ref_low','ref_high','ref_text','type','type_id','category_id','department_id','tube_color',
-             'price_secondary','secondary_days_from','secondary_days_to','price_repeat','repeat_days_from','repeat_days_to','default_doctor_percent','doctor_tier_from','doctor_tier_percent','room_id',
+             'price_secondary','secondary_days_from','secondary_days_to','price_repeat','repeat_days_from','repeat_days_to','default_doctor_percent','doctor_tier_from','doctor_tier_percent','doctor_tier_from_2','doctor_tier_percent_2','doctor_tier_from_3','doctor_tier_percent_3','external_lab','room_id',
              'name_uz','name_en','online_booking'] },
              delete: { roles: [] } },
     // `type` is the routing column ('lab','consultation','procedure','imaging',
