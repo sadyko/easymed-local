@@ -99,32 +99,28 @@ export function movementTag(m) {
     return Tag(t.label, { kind: t.kind, dot: true });
 }
 
-// stock_movements with the products embed — «Последние приходы» на Дашборде.
-// Falls back to narrower selects if an embed is rejected, and finally to no
-// embed at all so callers can still show product_id.
+// Движения склада — «Последние приходы» на Дашборде склада.
 //
-// STOCK_LOG_V1 — первым запросом стоял `users(full_name,username)`, и он
-// ОТВЕРГАЛСЯ ЦЕЛИКОМ: реестр регистрирует связь с сотрудником под именем
-// `created_by`, а не `users` (server/db/schema-registry.js), и компилятор
-// отвечал 403 «unknown embed». Каждая загрузка тратила лишний круг к серверу,
-// а журнал (он тоже звал отсюда) молча рисовал «—» в колонке «Кто». Журнал
-// теперь ходит своим RPC (rpc/stock-log.js), а имя встраивается правильно —
-// `users:created_by(full_name)`: слева имя ключа в ответе, справа имя связи.
+// STOCK_LOG_V1 — ХОДИТ RPC, А НЕ В ТАБЛИЦУ. Журнал движений закрыт в реестре
+// (server/db/schema-registry.js: читать stock_movements напрямую может только
+// склад), потому что «кому выдали» и «почём куплено» — это не то, что видит
+// каждый вошедший. Кто и сколько из журнала увидит, решает ОДНО правило на
+// сервере (rpc/stock-log.js journalScope: своё / свой отдел / вся клиника), и
+// оно же знает про настроенные клиникой уровни доступа, которых восемь основных
+// ролей реестра выразить не могут. Поэтому карточка спрашивает у той же двери,
+// что и сам журнал, а не у второй, открытой шире.
+//
+// Форма ответа остаётся прежней (`products.name` рядом со строкой): вызывающие
+// читают её так с первого дня, и менять их ради имени поля незачем.
 export async function fetchMovements({ kind, limit } = {}) {
-    const selects = [
-        '*, products(name,base_unit), users:created_by(full_name)',
-        '*, products(name,unit)',
-        '*',
-    ];
-    let lastError = null;
-    for (const sel of selects) {
-        let q = supabase.from('stock_movements').select(sel);
-        if (kind) q = q.eq('kind', kind);
-        q = q.order('id', { ascending: false });
-        if (limit) q = q.limit(limit);
-        const { data, error } = await q;
-        if (!error) return { data: data || [], error: null };
-        lastError = error;
-    }
-    return { data: null, error: lastError };
+    const { data, error } = await supabase.rpc('stock_movements_list', {
+        kind: kind || 'all',
+        ...(limit ? { limit } : {}),
+    });
+    if (error) return { data: null, error };
+    const rows = (data && data.movements) || [];
+    return {
+        data: rows.map(m => ({ ...m, products: { name: m.product_name, base_unit: m.unit, unit: m.unit } })),
+        error: null,
+    };
 }
