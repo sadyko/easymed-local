@@ -290,9 +290,25 @@ const INV_STATUS_RU = {
 // по ступени, остальные — по личной ставке. В выборке только услуги со
 // ступенью: без неё подзапрос пуст и отчёты не меняют ни одной цифры.
 // Одно место на всю систему: и отчёты, и кабинет (doctor_tier_positions).
+//
+// DOCTOR_TIER_V2 (миграция 147) — до трёх ступеней. Ступень 2/3 действует,
+// только если заполнены все ступени до неё и её порог СТРОГО выше предыдущего
+// (service_save и импорт так и проверяют; здесь то же условие ещё раз, чтобы
+// кривая строка, пришедшая мимо них, не дала отрицательных полос). Иначе её
+// порог читается как 0 — «ступени нет».
+// Правка ревью: страховка проверяет и ПАРЫ — порог без доли платил бы полосу
+// по личной ставке, ниже ступени 1. Ступень действует, только если её пара
+// полна, предыдущая действует и порог выше предыдущего.
+const TIER2_OK = `(s.doctor_tier_percent > 0 AND s.doctor_tier_percent_2 > 0
+               AND s.doctor_tier_from_2 > s.doctor_tier_from)`;
+const TIER3_OK = `(s.doctor_tier_percent_3 > 0 AND s.doctor_tier_from_3 > s.doctor_tier_from_2)`;
 export const TIER_RANK_SQL = `
   SELECT r.id AS visit_service_id, r.doctor_id, r.service_id, r.qty, r.ym,
          s.doctor_tier_from AS tier_from, s.doctor_tier_percent AS tier_percent,
+         CASE WHEN ${TIER2_OK} THEN s.doctor_tier_from_2 ELSE 0 END AS tier_from_2,
+         s.doctor_tier_percent_2 AS tier_percent_2,
+         CASE WHEN ${TIER2_OK} AND ${TIER3_OK} THEN s.doctor_tier_from_3 ELSE 0 END AS tier_from_3,
+         s.doctor_tier_percent_3 AS tier_percent_3,
          SUM(r.qty) OVER (PARTITION BY r.doctor_id, r.service_id, r.ym
                           ORDER BY r.visit_date, r.id
                           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running
@@ -359,13 +375,26 @@ const ITEM_FIX_SQL = `dr.fix`;
 const ITEM_QTY_SQL = `MAX(COALESCE(ii.quantity, 1), 1)`;
 // Единицы, ушедшие за порог: 0..qty. Без ступени (tr пуст) MIN даёт NULL → 0.
 const ITEM_ABOVE_SQL = `COALESCE(MAX(0, MIN(${ITEM_QTY_SQL}, tr.running - tr.tier_from)), 0)`;
+// DOCTOR_TIER_V2 — единицы за порогами 2 и 3; ступени нет (порог 0) — 0.
+// Пороги строго растут (TIER_RANK_SQL), поэтому above ≥ above_2 ≥ above_3.
+const itemAboveK = (k) => `CASE WHEN COALESCE(tr.tier_from_${k}, 0) > 0
+  THEN MAX(0, MIN(${ITEM_QTY_SQL}, tr.running - tr.tier_from_${k})) ELSE 0 END`;
+const ITEM_ABOVE_2_SQL = itemAboveK(2);
+const ITEM_ABOVE_3_SQL = itemAboveK(3);
 // Процент ступени — не ниже личного: ступень никого не понижает.
 const ITEM_TIER_PCT_SQL = `MAX(${ITEM_PCT_SQL}, COALESCE(tr.tier_percent, 0))`;
-// Действующий процент строки — смесь по единицам: до порога личный, выше — ступень.
+const ITEM_TIER_PCT_2_SQL = `MAX(${ITEM_PCT_SQL}, COALESCE(tr.tier_percent_2, 0))`;
+const ITEM_TIER_PCT_3_SQL = `MAX(${ITEM_PCT_SQL}, COALESCE(tr.tier_percent_3, 0))`;
+// Действующий процент строки — смесь по единицам: до первого порога личный,
+// дальше каждая единица — по ступени САМОГО ВЫСОКОГО порога, который она
+// перешагнула (полосы: above−above_2, above_2−above_3, above_3).
 // Ветка без ступени выписана явно: строка без tr идёт по ITEM_PCT_SQL бит в бит,
 // а не через арифметику со смесью, где всё держалось бы на MIN(x, NULL).
 const ITEM_EFF_PCT_SQL = `CASE WHEN tr.visit_service_id IS NULL THEN ${ITEM_PCT_SQL}
-  ELSE ((${ITEM_PCT_SQL} * (${ITEM_QTY_SQL} - ${ITEM_ABOVE_SQL}) + ${ITEM_TIER_PCT_SQL} * ${ITEM_ABOVE_SQL}) / (${ITEM_QTY_SQL} * 1.0)) END`;
+  ELSE ((${ITEM_PCT_SQL} * (${ITEM_QTY_SQL} - ${ITEM_ABOVE_SQL})
+       + ${ITEM_TIER_PCT_SQL} * (${ITEM_ABOVE_SQL} - ${ITEM_ABOVE_2_SQL})
+       + ${ITEM_TIER_PCT_2_SQL} * (${ITEM_ABOVE_2_SQL} - ${ITEM_ABOVE_3_SQL})
+       + ${ITEM_TIER_PCT_3_SQL} * ${ITEM_ABOVE_3_SQL}) / (${ITEM_QTY_SQL} * 1.0)) END`;
 
 // Invoice-level discount prorated onto this item (items carry no own discount).
 const ITEM_DISCOUNT_SQL = `CASE WHEN i.subtotal > 0
@@ -1065,7 +1094,12 @@ export function doctorTierPositions(db, args, _user) {
            t.ym,
            t.qty AS units,
            MAX(0, MIN(t.qty, t.running - t.tier_from)) AS units_above,
-           t.tier_from, t.tier_percent, t.running AS count_so_far
+           -- DOCTOR_TIER_V2 — единицы за порогами 2 и 3 (0, если ступени нет).
+           CASE WHEN t.tier_from_2 > 0 THEN MAX(0, MIN(t.qty, t.running - t.tier_from_2)) ELSE 0 END AS units_above_2,
+           CASE WHEN t.tier_from_3 > 0 THEN MAX(0, MIN(t.qty, t.running - t.tier_from_3)) ELSE 0 END AS units_above_3,
+           t.tier_from, t.tier_percent,
+           t.tier_from_2, t.tier_percent_2, t.tier_from_3, t.tier_percent_3,
+           t.running AS count_so_far
       FROM (${TIER_RANK_SQL}) t
       JOIN services s ON s.id = t.service_id
      WHERE t.doctor_id = ? AND t.ym BETWEEN ? AND ?

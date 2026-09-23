@@ -384,3 +384,92 @@ test('DOCTOR_TIER_V1: одно без другого, дробный порог 
   }
   assert.equal(db.prepare('SELECT COUNT(*) n FROM services').get().n, before, 'отказ ничего не создаёт');
 });
+
+// ---------------------------------------------------------------------------
+// DOCTOR_TIER_V2 — три ступени: каждая парой, по порядку, пороги строго растут
+// ---------------------------------------------------------------------------
+
+const STEPS = ['doctor_tier_from', 'doctor_tier_percent', 'doctor_tier_from_2', 'doctor_tier_percent_2', 'doctor_tier_from_3', 'doctor_tier_percent_3'];
+const stepsOf = (db, id) => db.prepare(`SELECT ${STEPS.join(', ')} FROM services WHERE id = ?`).get(id);
+
+test('DOCTOR_TIER_V2: три ступени сохраняются; пустые = ступени нет', () => {
+  const db = freshDb();
+  const full = { doctor_tier_from: 25, doctor_tier_percent: 40, doctor_tier_from_2: 50, doctor_tier_percent_2: 45, doctor_tier_from_3: 100, doctor_tier_percent_3: 50 };
+  const { id } = serviceSave(db, baseArgs(full), admin);
+  assert.deepEqual(stepsOf(db, id), full);
+  serviceSave(db, baseArgs({ id, doctor_tier_from: 25, doctor_tier_percent: 40, doctor_tier_from_2: '', doctor_tier_percent_2: '', doctor_tier_from_3: '', doctor_tier_percent_3: '' }), admin);
+  assert.deepEqual(stepsOf(db, id), { ...Object.fromEntries(STEPS.map((c) => [c, 0])), doctor_tier_from: 25, doctor_tier_percent: 40 });
+});
+
+test('DOCTOR_TIER_V2: проценты ступеней не обязаны расти', () => {
+  const db = freshDb();
+  const { id } = serviceSave(db, baseArgs({ doctor_tier_from: 25, doctor_tier_percent: 50, doctor_tier_from_2: 50, doctor_tier_percent_2: 35 }), admin);
+  assert.equal(stepsOf(db, id).doctor_tier_percent_2, 35);
+});
+
+test('DOCTOR_TIER_V2: половина ступени, пропуск ступени, нерастущие пороги — 400 с внятным текстом', () => {
+  const db = freshDb();
+  const before = db.prepare('SELECT COUNT(*) n FROM services').get().n;
+  const s1 = { doctor_tier_from: 25, doctor_tier_percent: 40 };
+  const cases = [
+    [{ ...s1, doctor_tier_from_2: 50 }, 'Ступень 2 задаётся парой: порог услуг в месяц И доля выше порога.'],
+    [{ ...s1, doctor_tier_percent_3: 50 }, 'Ступень 3 задаётся парой: порог услуг в месяц И доля выше порога.'],
+    [{ doctor_tier_from_2: 50, doctor_tier_percent_2: 45 }, 'Ступени заполняются по порядку: ступень 2 без ступени 1 не действует.'],
+    [{ ...s1, doctor_tier_from_3: 100, doctor_tier_percent_3: 50 }, 'Ступени заполняются по порядку: ступень 3 без ступени 2 не действует.'],
+    [{ ...s1, doctor_tier_from_2: 25, doctor_tier_percent_2: 45 }, 'Порог ступени 2 должен быть больше порога ступени 1.'],
+    [{ ...s1, doctor_tier_from_2: 50, doctor_tier_percent_2: 45, doctor_tier_from_3: 40, doctor_tier_percent_3: 50 }, 'Порог ступени 3 должен быть больше порога ступени 2.'],
+    [{ ...s1, doctor_tier_from_2: 7.5, doctor_tier_percent_2: 45 }, 'Порог ступени 2 — целое число услуг в месяц (0 — без ступени).'],
+    [{ ...s1, doctor_tier_from_2: 50, doctor_tier_percent_2: 120 }, 'Доля ступени 2 — от 0 до 100 %.'],
+  ];
+  for (const [bad, msg] of cases) {
+    assert.throws(() => serviceSave(db, baseArgs(bad), admin), (e) => e.status === 400 && e.message === msg, JSON.stringify(bad));
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM services').get().n, before, 'отказ ничего не создаёт');
+});
+
+// ---------------------------------------------------------------------------
+// EXTERNAL_LAB_V1 — отметка «Внешняя лаборатория» у лабораторной услуги
+// ---------------------------------------------------------------------------
+
+const labArgs = (over = {}) => baseArgs({
+  name: 'ПЦР', type: 'lab',
+  lab: { specimen: 'кровь', result_unit: null, ref_low: null, ref_high: null, ref_text: null, tube_color: null },
+  ...over,
+});
+const extOf = (db, id) => db.prepare('SELECT external_lab FROM services WHERE id = ?').get(id).external_lab;
+
+test('EXTERNAL_LAB_V1: отметка сохраняется и снимается; без ключа — остаётся как была', () => {
+  const db = freshDb();
+  const { id } = serviceSave(db, labArgs({ external_lab: true }), admin);
+  assert.equal(extOf(db, id), 1);
+  serviceSave(db, labArgs({ id }), admin);                 // старый клиент без ключа
+  assert.equal(extOf(db, id), 1);
+  serviceSave(db, labArgs({ id, external_lab: false }), admin);
+  assert.equal(extOf(db, id), 0);
+  const fresh = serviceSave(db, labArgs({ name: 'ОАМ' }), admin);
+  assert.equal(extOf(db, fresh.id), 0, 'по умолчанию — своя лаборатория');
+});
+
+test('EXTERNAL_LAB_V1: у не-лабораторной услуги отметки не бывает', () => {
+  const db = freshDb();
+  const { id } = serviceSave(db, baseArgs({ external_lab: true }), admin);
+  assert.equal(extOf(db, id), 0);
+  const lab = serviceSave(db, labArgs({ external_lab: true }), admin);
+  serviceSave(db, baseArgs({ id: lab.id, name: 'ПЦР' }), admin);   // раздел сменили на приём
+  assert.equal(extOf(db, lab.id), 0);
+});
+
+// DOCTOR_TIER_V2 (правка ревью) — старый редактор из кэша браузера не знает
+// ступеней 2 и 3 и не шлёт их ключей: при правке отсутствующий ключ значит
+// «не трогать», а не «обнулить».
+test('DOCTOR_TIER_V2: правка без ключей ступеней 2–3 оставляет их как были', () => {
+  const db = freshDb();
+  const full = { doctor_tier_from: 25, doctor_tier_percent: 40, doctor_tier_from_2: 50, doctor_tier_percent_2: 45, doctor_tier_from_3: 100, doctor_tier_percent_3: 50 };
+  const { id } = serviceSave(db, baseArgs(full), admin);
+  serviceSave(db, baseArgs({ id, doctor_tier_from: 20, doctor_tier_percent: 35 }), admin);   // старый клиент
+  assert.deepEqual(stepsOf(db, id), { ...full, doctor_tier_from: 20, doctor_tier_percent: 35 });
+  // Порядок проверяется по СЛИТЫМ ступеням: порог 1 выше сохранённого порога 2 — отказ.
+  assert.throws(() => serviceSave(db, baseArgs({ id, doctor_tier_from: 60, doctor_tier_percent: 40 }), admin),
+    (e) => e.status === 400 && e.message === 'Порог ступени 2 должен быть больше порога ступени 1.');
+  assert.equal(stepsOf(db, id).doctor_tier_from, 20, 'отказ ничего не записал');
+});

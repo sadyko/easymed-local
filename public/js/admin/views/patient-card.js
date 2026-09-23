@@ -22,6 +22,7 @@ import { labFlagCell, labPosCell, fmtDMY, labSexRu, labRefLines, labRefText, mat
          namedRangeCell, ageYears } from './lab-doc.js?v=labshared1';
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
 import { originTag } from '../record-origin.js';   // BRANCH_ORIGIN_V1 — откуда запись
+import { externalLabTag } from '../external-lab.js';   // EXTERNAL_LAB_V1 — подпись у результата
 import { openVisitWizard } from './visit-wizard.js?v=tier2';
 import { printInvoiceCheck } from './receipt-print.js?v=rp1';   // REPRINT_SERVICE_CHECK_V1
 import { printableSheet as _printSheet } from './doc-settings.js?v=noqr1';   // VISIT_WIZARD_LOCAL_V1 — full-screen «Добавить услугу к визиту»
@@ -408,6 +409,8 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 // BRANCH_ORIGIN_V1 — сам результат мог приехать строкой lab_results, а мог
                 // приехать вместе с заказом: берём ту метку, которая есть.
                 origin:    originTag(lr) || originTag(vs),
+                // EXTERNAL_LAB_V1 — анализ сделан в другой клинике, результат внесён у нас.
+                external:  svc ? { external_lab: svc.external_lab } : null,
                 date:      (vs && vs.visit_date) || lr.entered_at || lr.created_at || null,
                 _id:       lr.id,
             });
@@ -1322,7 +1325,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             tbody.appendChild(h('tr', null,
                 // BRANCH_ORIGIN_V1 — не фильтр, а подпись: анализы других зданий здесь и
                 // должны быть видны, но врач обязан знать, чья это лаборатория.
-                h('td', null, r.name, r.origin ? branchLabel(r.origin) : null),
+                h('td', null, r.name, r.origin ? branchLabel(r.origin) : null, externalLabTag(r.external)),   // EXTERNAL_LAB_V1
                 h('td', { class: 'num' }, [r.value, r.unit].filter(Boolean).join(' ') || '—'),
                 h('td', null, r.reference),
                 h('td', null, r.flag ? StatusTag(r.flag) : '—'),

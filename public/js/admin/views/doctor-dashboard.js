@@ -245,19 +245,54 @@ export function serviceShare(s, rateMap) {
  * позиции, без единиц за порогом или при фиксированной ОПЛАТЕ за единицу
  * (fix) равна serviceShare(); своя цена врача (price) ступень не отменяет.
  */
+//
+// DOCTOR_TIER_V2 — ступеней до трёх: сервер отдаёт ещё units_above_2 /
+// units_above_3 (единицы за порогами 2 и 3) и tier_percent_2 / _3. Каждая
+// единица идёт по ступени САМОГО ВЫСОКОГО порога, который она перешагнула:
+// полосы above−above_2, above_2−above_3, above_3 — ровно ITEM_EFF_PCT_SQL.
+// Ответ без этих полей (старый сервер) — одна ступень, как раньше.
 export function tierShare(s, rateMap, pos) {
     const rate = rateMap.get(String(s.serviceId));
     if (!rate) return 0;
     if (rate.fixPay) return serviceShare(s, rateMap);
     const units = pos && Number(pos.units) > 0 ? Number(pos.units) : 0;
-    const above = units ? Math.max(0, Math.min(units, Number(pos.units_above) || 0)) : 0;
+    const clampU = (v) => Math.max(0, Math.min(units, Number(v) || 0));
+    const above = units ? clampU(pos.units_above) : 0;
     if (!above) return serviceShare(s, rateMap);
+    const above2 = Math.min(above, clampU(pos.units_above_2));
+    const above3 = Math.min(above2, clampU(pos.units_above_3));
     const base = Math.max(0, Number(s.total || 0) - Number(s.discount || 0));
     const taxRate = s.taxRate != null ? Number(s.taxRate) : 0;
     const net = base * (1 - taxRate / 100);
     const pct = rate.percentage || 0;
-    const tierPct = Math.max(pct, Number(pos.tier_percent) || 0);
-    return net * (pct * (units - above) + tierPct * above) / units / 100;
+    const tierPct  = Math.max(pct, Number(pos.tier_percent) || 0);
+    const tierPct2 = Math.max(pct, Number(pos.tier_percent_2) || 0);
+    const tierPct3 = Math.max(pct, Number(pos.tier_percent_3) || 0);
+    return net * (pct * (units - above) + tierPct * (above - above2) + tierPct2 * (above2 - above3) + tierPct3 * above3) / units / 100;
+}
+
+/**
+ * DOCTOR_TIER_V2 — строка прогресса ступеней за месяц: count — сколько услуг
+ * уже в счёте месяца, steps — действующие ступени по порядку [{from, pct}].
+ * Прогресс идёт К СЛЕДУЮЩЕМУ порогу; после последнего — «ступень действует».
+ * personalPct — личная ставка врача по услуге: показывается ставка, по
+ * которой РЕАЛЬНО платят, — MAX(личная, ступень), как в ITEM_EFF_PCT_SQL.
+ */
+export function tierProgressText(count, steps, personalPct = 0) {
+    const paid = (p) => Math.max(Number(personalPct) || 0, Number(p) || 0);
+    const list = (steps || []).filter((st) => st && Number(st.from) > 0);
+    if (!list.length) return '';
+    const nextIdx = list.findIndex((st) => count <= Number(st.from));
+    if (nextIdx === -1) {
+        const top = list[list.length - 1];
+        return trf('{count} из {from} в этом месяце · ступень {pct}% действует', { count, from: top.from, pct: paid(top.pct) });
+    }
+    const next = list[nextIdx];
+    if (nextIdx === 0) {
+        return trf('{count} из {from} в этом месяце · с {next}-й доля {pct}%', { count, from: next.from, next: Number(next.from) + 1, pct: paid(next.pct) });
+    }
+    return trf('{count} из {from} в этом месяце · действует {cur}%, с {next}-й доля {pct}%',
+        { count, from: next.from, cur: paid(list[nextIdx - 1].pct), next: Number(next.from) + 1, pct: paid(next.pct) });
 }
 
 /**

@@ -370,3 +370,21 @@ test('строка визита не открывает счёт визита, �
   const rows = walk(box).filter((n) => n.tagName === 'TR' && String(n.className).includes('row-click'));
   assert.equal(rows.length, 0, 'клик по визиту всё ещё открывает окно с деньгами');
 });
+
+// EXTERNAL_LAB_V1 — результат анализа, сделанного в другой клинике, подписан
+// «Внешняя лаборатория» на вкладке «Лаборатория»; без отметки — подписи нет.
+test('EXTERNAL_LAB_V1: результат внешнего анализа подписан на вкладке «Лаборатория»', async () => {
+  const extTags = (root) => walk(root).filter((n) => n.attrs && n.attrs['data-external-lab'] === '1');
+  const p = fullPayload();
+  p.lab_orders = [{ ...SERVICE_ROW, services: { ...SERVICE_ROW.services, external_lab: 1 } }];
+  const box = await render(p);
+  openTab(box, 'Лаборатория');
+  await tick();
+  assert.strictEqual(extTags(box).length, 1, 'нет подписи у внешнего анализа');
+  assert.ok(textOf(box).includes('Внешняя лаборатория'));
+
+  const plain = await render(fullPayload());
+  openTab(plain, 'Лаборатория');
+  await tick();
+  assert.strictEqual(extTags(plain).length, 0, 'подпись у анализа своей лаборатории');
+});

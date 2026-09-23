@@ -244,3 +244,60 @@ test('неизвестный код или его отсутствие — null:
   // trf оставит дырку видимой, это честнее пустоты.
   assert.deepEqual(rpcErrorTemplate({ code: 'employee_missing' }).params, {});
 });
+
+// ---------------------------------------------------------------------------
+// DOCTOR_TIER_V2 — три ступени доли: одно правило порядка на сервер, редактор
+// и импорт (tierStepsProblem).
+// ---------------------------------------------------------------------------
+import { tierStepsProblem, TIER_STEP_COLUMNS } from '../service-editor-logic.js';
+
+test('DOCTOR_TIER_V2: колонки ступеней — три пары по порядку', () => {
+  assert.deepEqual(TIER_STEP_COLUMNS, [
+    { n: 1, from: 'doctor_tier_from', pct: 'doctor_tier_percent' },
+    { n: 2, from: 'doctor_tier_from_2', pct: 'doctor_tier_percent_2' },
+    { n: 3, from: 'doctor_tier_from_3', pct: 'doctor_tier_percent_3' },
+  ]);
+});
+
+test('DOCTOR_TIER_V2: tierStepsProblem — пары, порядок, растущие пороги', () => {
+  const S = (f1, p1, f2 = 0, p2 = 0, f3 = 0, p3 = 0) => [{ from: f1, pct: p1 }, { from: f2, pct: p2 }, { from: f3, pct: p3 }];
+  assert.equal(tierStepsProblem(S(0, 0)), null, 'пусто — ступеней нет');
+  assert.equal(tierStepsProblem(S(25, 40, 50, 45, 100, 50)), null, 'пример владельца');
+  assert.equal(tierStepsProblem(S(25, 50, 50, 35)), null, 'проценты расти не обязаны');
+  const p = (steps) => { const r = tierStepsProblem(steps); return r && [r.step, r.field, r.message]; };
+  assert.deepEqual(p(S(25, 0)), [1, 'pct', 'Ступень задаётся парой: порог услуг в месяц И доля выше порога.']);
+  assert.deepEqual(p(S(0, 40)), [1, 'from', 'Ступень задаётся парой: порог услуг в месяц И доля выше порога.']);
+  assert.deepEqual(p(S(25, 40, 50, 0)), [2, 'pct', 'Ступень 2 задаётся парой: порог услуг в месяц И доля выше порога.']);
+  assert.deepEqual(p(S(25, 40, 50, 45, 0, 50)), [3, 'from', 'Ступень 3 задаётся парой: порог услуг в месяц И доля выше порога.']);
+  assert.deepEqual(p(S(0, 0, 50, 45)), [2, 'from', 'Ступени заполняются по порядку: ступень 2 без ступени 1 не действует.']);
+  assert.deepEqual(p(S(25, 40, 0, 0, 100, 50)), [3, 'from', 'Ступени заполняются по порядку: ступень 3 без ступени 2 не действует.']);
+  assert.deepEqual(p(S(25, 40, 25, 45)), [2, 'from', 'Порог ступени 2 должен быть больше порога ступени 1.']);
+  assert.deepEqual(p(S(25, 40, 50, 45, 50, 50)), [3, 'from', 'Порог ступени 3 должен быть больше порога ступени 2.']);
+  // null — ступень неизвестна (в файле импорта нет её колонок): проверки с ней пропускаются.
+  assert.equal(tierStepsProblem([null, { from: 50, pct: 45 }, { from: 100, pct: 50 }]), null);
+  assert.deepEqual(p([null, { from: 50, pct: 45 }, { from: 40, pct: 50 }]), [3, 'from', 'Порог ступени 3 должен быть больше порога ступени 2.']);
+});
+
+// DOCTOR_TIER_V2 (правки ревью) — границы чисел одной ступени и мягкое
+// предупреждение о падающей доле: одно правило на сервер, редактор и импорт.
+import { tierStepRangeProblem, tierPctDropWarnings } from '../service-editor-logic.js';
+
+test('DOCTOR_TIER_V2: tierStepRangeProblem — те же отказы, что у service_save', () => {
+  assert.equal(tierStepRangeProblem(1, 25, 40), null);
+  assert.equal(tierStepRangeProblem(2, '', ''), null, 'пусто — ступени нет, это не ошибка');
+  assert.equal(tierStepRangeProblem(1, 7.5, 40), 'Порог ступени — целое число услуг в месяц (0 — без ступени).');
+  assert.equal(tierStepRangeProblem(2, 7.5, 40), 'Порог ступени 2 — целое число услуг в месяц (0 — без ступени).');
+  assert.equal(tierStepRangeProblem(3, -1, 40), 'Порог ступени 3 — целое число услуг в месяц (0 — без ступени).');
+  assert.equal(tierStepRangeProblem(3, 'abc', 40), 'Порог ступени 3 — целое число услуг в месяц (0 — без ступени).');
+  assert.equal(tierStepRangeProblem(1, 25, 120), 'Доля выше порога — от 0 до 100 %.');
+  assert.equal(tierStepRangeProblem(2, 50, 120), 'Доля ступени 2 — от 0 до 100 %.');
+  assert.equal(tierStepRangeProblem(2, 50, 'abc'), 'Доля ступени 2 — от 0 до 100 %.');
+});
+
+test('DOCTOR_TIER_V2: tierPctDropWarnings — доля ниже предыдущей ступени называется, но не запрещается', () => {
+  const S = (...a) => [{ from: a[0], pct: a[1] }, { from: a[2] || 0, pct: a[3] || 0 }, { from: a[4] || 0, pct: a[5] || 0 }];
+  assert.deepEqual(tierPctDropWarnings(S(25, 40, 50, 45, 100, 50)), []);
+  assert.deepEqual(tierPctDropWarnings(S(25, 50, 50, 35)), ['Доля ступени 2 ниже предыдущей — после порога врачу будут платить меньше.']);
+  assert.deepEqual(tierPctDropWarnings(S(25, 40, 50, 45, 100, 42)), ['Доля ступени 3 ниже предыдущей — после порога врачу будут платить меньше.']);
+  assert.deepEqual(tierPctDropWarnings(S(25, 40, 0, 0, 0, 0)), [], 'пустые ступени не сравниваются');
+});

@@ -51,6 +51,110 @@ export function labBlockVisible(type) {
 }
 
 // ---------------------------------------------------------------------------
+// DOCTOR_TIER_V2 — три ступени доли исполнителя по объёму (миграции 140 + 147).
+// Владелец: «another 2 (overall 3) steps of the percentage for the service».
+// Правило ПОРЯДКА — одно на три потребителя: rpc/service-save.js (отказ 400),
+// редактор (курсор в нужное поле) и импорт Excel (ступень не сохраняется):
+//   • каждая ступень — парой: порог И доля, или ничего;
+//   • ступени заполняются по порядку: 3 без 2 и 2 без 1 не действуют;
+//   • пороги строго растут. Проценты — как решит клиника, о них ни слова.
+// ---------------------------------------------------------------------------
+export const TIER_STEP_COLUMNS = [
+    { n: 1, from: 'doctor_tier_from',   pct: 'doctor_tier_percent' },
+    { n: 2, from: 'doctor_tier_from_2', pct: 'doctor_tier_percent_2' },
+    { n: 3, from: 'doctor_tier_from_3', pct: 'doctor_tier_percent_3' },
+];
+
+const TIER_PAIR_MSG = {
+    1: 'Ступень задаётся парой: порог услуг в месяц И доля выше порога.',
+    2: 'Ступень 2 задаётся парой: порог услуг в месяц И доля выше порога.',
+    3: 'Ступень 3 задаётся парой: порог услуг в месяц И доля выше порога.',
+};
+const TIER_ORDER_MSG = {
+    2: 'Ступени заполняются по порядку: ступень 2 без ступени 1 не действует.',
+    3: 'Ступени заполняются по порядку: ступень 3 без ступени 2 не действует.',
+};
+const TIER_ASC_MSG = {
+    2: 'Порог ступени 2 должен быть больше порога ступени 1.',
+    3: 'Порог ступени 3 должен быть больше порога ступени 2.',
+};
+
+/**
+ * Первая проблема в ступенях или null. steps — три элемента {from, pct}
+ * (числа, 0 = пусто) по порядку ступеней; null на месте ступени — «неизвестно»
+ * (у импорта нет её колонок в файле): проверки с ней пропускаются.
+ * -> { step, field: 'from'|'pct', message } | null
+ */
+export function tierStepsProblem(steps) {
+    const on = (st) => !!st && Number(st.from) > 0;
+    for (let i = 0; i < 3; i++) {
+        const st = steps[i];
+        if (!st) continue;
+        const hasFrom = Number(st.from) > 0, hasPct = Number(st.pct) > 0;
+        if (hasFrom !== hasPct) return { step: i + 1, field: hasFrom ? 'pct' : 'from', message: TIER_PAIR_MSG[i + 1] };
+    }
+    for (let i = 1; i < 3; i++) {
+        const st = steps[i], prev = steps[i - 1];
+        if (!on(st) || !prev) continue;
+        if (!on(prev)) return { step: i + 1, field: 'from', message: TIER_ORDER_MSG[i + 1] };
+        if (Number(st.from) <= Number(prev.from)) return { step: i + 1, field: 'from', message: TIER_ASC_MSG[i + 1] };
+    }
+    return null;
+}
+
+/**
+ * Правка ревью: нарушенные СОХРАНЁННЫЕ ступени не должны быть тихими — отчёт
+ * читает сломанную ступень и следующие за ней как «нет». Строка services →
+ * первая проблема (как у tierStepsProblem) или null. Её показывают список
+ * услуг (бейдж «Ступени нарушены») и редактор (строка-предупреждение).
+ */
+export function storedTierProblem(row) {
+    if (!row) return null;
+    return tierStepsProblem(TIER_STEP_COLUMNS.map((c) => ({ from: Number(row[c.from]) || 0, pct: Number(row[c.pct]) || 0 })));
+}
+
+// Границы чисел ОДНОЙ ступени — те же отказы, что у service_save: порог —
+// целое ≥ 0, доля — 0..100. Пусто — «ступени нет», не ошибка. Редактор не
+// пропускает 7.5 до отказа сервера, импорт не округляет молча.
+const TIER_FROM_MSG = {
+    1: 'Порог ступени — целое число услуг в месяц (0 — без ступени).',
+    2: 'Порог ступени 2 — целое число услуг в месяц (0 — без ступени).',
+    3: 'Порог ступени 3 — целое число услуг в месяц (0 — без ступени).',
+};
+const TIER_PCT_MSG = {
+    1: 'Доля выше порога — от 0 до 100 %.',
+    2: 'Доля ступени 2 — от 0 до 100 %.',
+    3: 'Доля ступени 3 — от 0 до 100 %.',
+};
+const tierNum = (v) => (v === undefined || v === null || String(v).trim() === '' ? 0 : Number(v));
+
+/** Отказ по границам чисел ступени n или null. */
+export function tierStepRangeProblem(n, from, pct) {
+    const f = tierNum(from);
+    if (!Number.isInteger(f) || f < 0) return TIER_FROM_MSG[n];
+    const p = tierNum(pct);
+    if (!Number.isFinite(p) || p < 0 || p > 100) return TIER_PCT_MSG[n];
+    return null;
+}
+
+// Доля ступени НИЖЕ предыдущей — разрешено (решение за владельцем), но
+// редактор говорит вслух: после порога врачу будут платить меньше.
+const TIER_DROP_MSG = {
+    2: 'Доля ступени 2 ниже предыдущей — после порога врачу будут платить меньше.',
+    3: 'Доля ступени 3 ниже предыдущей — после порога врачу будут платить меньше.',
+};
+/** Предупреждения о падающей доле (массив строк, пустой — всё в порядке). */
+export function tierPctDropWarnings(steps) {
+    const out = [];
+    for (let i = 1; i < 3; i++) {
+        const st = steps[i], prev = steps[i - 1];
+        if (!st || !prev || !(Number(st.from) > 0) || !(Number(prev.from) > 0)) continue;
+        if (Number(st.pct) < Number(prev.pct)) out.push(TIER_DROP_MSG[i + 1]);
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // Комбобокс «выбери или впиши новую».
 // ---------------------------------------------------------------------------
 

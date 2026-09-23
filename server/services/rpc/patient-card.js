@@ -250,6 +250,7 @@ export function patientCard(db, args, user) {
     vsRows = db.prepare('SELECT ' + cols('visit_services', 'vs') + ','
       + ' s.name AS _s_name, s.result_unit AS _s_unit, s.ref_low AS _s_low,'
       + ' s.ref_high AS _s_high, s.is_lab AS _s_is_lab, s.type AS _s_type,'
+      + ' s.external_lab AS _s_ext,'   // EXTERNAL_LAB_V1 — подпись «Внешняя лаборатория»
       + ' pr.name AS _pr_name, pr.unit AS _pr_unit,'
       + ' du.full_name AS _d_name'
       + ' FROM visit_services vs'
@@ -259,11 +260,11 @@ export function patientCard(db, args, user) {
       + ' WHERE vs.visit_id IN (' + inClause(visitIds.length) + ')').all(...visitIds);
   }
   const shapeVs = (r) => {
-    const { _s_name, _s_unit, _s_low, _s_high, _s_is_lab, _s_type, _pr_name, _pr_unit, _d_name, ...rest } = r;
+    const { _s_name, _s_unit, _s_low, _s_high, _s_is_lab, _s_type, _s_ext, _pr_name, _pr_unit, _d_name, ...rest } = r;
     return {
       ...rest,
       visit_date: visitDate.get(r.visit_id) || null,
-      services: { name: _s_name, result_unit: _s_unit, ref_low: _s_low, ref_high: _s_high, is_lab: _s_is_lab, type: _s_type },
+      services: { name: _s_name, result_unit: _s_unit, ref_low: _s_low, ref_high: _s_high, is_lab: _s_is_lab, type: _s_type, external_lab: _s_ext },
       products: r.clinic_item_id ? { name: _pr_name, unit: _pr_unit } : null,
       users: r.doctor_id ? { full_name: _d_name } : null,
     };
