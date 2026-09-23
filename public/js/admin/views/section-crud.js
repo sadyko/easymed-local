@@ -30,6 +30,7 @@ import { openServiceEditor } from './service-editor.js?v=svceditor1';   // SERVI
 import { openTableSetup, readColPrefs, writeColPrefs, widthShare } from './table-setup.js';   // CRUD_LIST_V2
 import { renderItemsLedger } from './items-ledger.js?v=ledger3';   // ITEMS_LEDGER_V1
 import { phoneInput, isCodeOnly } from '../phone-input.js?v=ph1';
+import { todayIso } from '../../shared/month-grid.js?v=mg1';   // DATE_LIMITS_V1 — местный день, а не UTC
 
 const state = {
     sectionKey:    null,
@@ -1504,7 +1505,14 @@ function renderField(f, values) {
     switch (f.type) {
         case 'textarea': input = h('textarea', { name: f.key }, v != null ? v : ''); break;
         case 'number':   input = h('input', { type: 'number', name: f.key, step: f.step || '1', value: v != null ? v : (f.default != null ? f.default : '') }); break;
-        case 'date':     input = h('input', { type: 'date', name: f.key, value: v ? String(v).slice(0, 10) : '' }); break;
+        // DATE_LIMITS_V1 — границу задаёт САМО поле. Правило «не в будущем»
+        // раньше сидело в календарном поле (ui-datefield.js) и потому
+        // доставалось каждой дате программы, включая срок годности. `max:
+        // 'today'` в описании раздела — способ сказать это про дату рождения
+        // и только про неё.
+        case 'date':     input = h('input', { type: 'date', name: f.key, value: v ? String(v).slice(0, 10) : '',
+                             min: f.min === 'today' ? todayIso() : (f.min || null),
+                             max: f.max === 'today' ? todayIso() : (f.max || null) }); break;
         case 'email':    input = h('input', { type: 'email', name: f.key, value: v != null ? v : '' }); break;
         // PHONE_INPUT_V1 — country picker + grouping, defaulting to Uzbekistan.
         // The wrapper contains the real <input name=…>, so the generic value

@@ -15,9 +15,26 @@
 //
 // Арифметика календаря — в чистом ../shared/month-grid.js: високосный год,
 // начало недели и переход через месяц проверяются числами, а не глазами.
+//
+// DATE_LIMITS_V1 (2026-09-23) — ГРАНИЦУ ЗАДАЁТ ПОЛЕ, А НЕ ЭТОТ МОДУЛЬ.
+//
+// Владелец прислал снимок приходной накладной: в «Сроке годности» набрано
+// 15.11.2026, а поле красным отвечает, что такая дата не может быть в будущем.
+// Здесь было вписано правило ДАТЫ РОЖДЕНИЯ — «не позже сегодняшнего дня», — а
+// поле это надевается на каждый <input type="date"> программы (ui-enhance.js).
+// Правило одного поля стало правилом всех тридцати семи дат: срока годности,
+// даты приёма, планируемой записи.
+//
+// Выпадающий календарь так не ошибался НИКОГДА: он с самого начала спрашивал
+// границы у самого поля (limits() → атрибуты min/max, withinRange), и будущую
+// дату отдавал спокойно. То есть мышью получалось, а руками нет.
+//
+// Теперь набор и календарь спрашивают ОДНО И ТО ЖЕ: withinRange(iso, limits()).
+// Поле без max принимает любую дату; «не в будущем» ставится там, где оно
+// действительно верно, — атрибутом max у самого поля (дата рождения).
 
 import { h, Icon, fmtDate } from './ui.js';
-import { tr } from './i18n.js';
+import { tr, trf } from './i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { monthName } from './i18n.js';
 import { monthGrid, parseIso, shiftMonth, todayIso, withinRange } from '../shared/month-grid.js?v=mg1';
 import { watchValue, insideEditable } from './ui-select.js?v=uisel1';
@@ -128,13 +145,20 @@ export function enhanceDateField(input) {
     // Почему набранное не стало датой — словами. Молчащее поле человек
     // объяснить себе не может: он видит, что возраст рядом не посчитался, и
     // всё.
+    //
+    // DATE_LIMITS_V1 — про границы говорим ТО, ЧТО СТОИТ НА ПОЛЕ, и называем
+    // саму границу: «не позже 23.09.2026» человек проверит глазами, а «нельзя»
+    // объяснить себе нечем. Граница показывается так же, как поле показывает
+    // дату: цифрами там, где цифрами.
     function complain(text) {
         const d = String(text || '').replace(/\D+/g, '');
         if (!d.length) return setError('');
         if (d.length < 8) return setError('');            // ещё набирает — не мешаем
         if (parseTyped(text)) {
             const iso = parseTyped(text);
-            if (iso > todayIso()) return setError('Дата рождения не может быть в будущем');
+            const { min, max } = limits();
+            if (max && iso > max) return setError(trf('Дата не может быть позже {d}', { d: showDate(max) }));
+            if (min && iso < min) return setError(trf('Дата не может быть раньше {d}', { d: showDate(min) }));
             return setError('');
         }
         const day = Number(d.slice(0, 2)), mon = Number(d.slice(2, 4));
@@ -346,7 +370,8 @@ export function enhanceDateField(input) {
         }
         complain(field.value);
         const iso = parseTyped(field.value);
-        if (iso && iso <= todayIso()) {
+        // DATE_LIMITS_V1 — пропускаем то же, что пропускает календарь.
+        if (iso && withinRange(iso, limits())) {
             if (iso !== input.value) { typing = true; try { commit(iso); } finally { typing = false; } }
             const p = parseIso(iso);
             if (pop && p) { view = { year: p.year, month: p.month }; paintPop(); }
@@ -357,7 +382,7 @@ export function enhanceDateField(input) {
     // Ушли из поля — приводим текст к единому виду или возвращаем прежний.
     field.addEventListener('blur', () => {
         const iso = parseTyped(field.value);
-        if (iso && iso <= todayIso()) { setError(''); commit(iso); }
+        if (iso && withinRange(iso, limits())) { setError(''); commit(iso); }
         else complain(field.value);
         if (!wrap.classList.contains('is-bad')) paintField();
     });

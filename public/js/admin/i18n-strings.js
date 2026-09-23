@@ -6848,6 +6848,9 @@ export const STRINGS = {
   "Такого месяца нет — второе число это месяц": {"en":"No such month — the second number is the month","ru":"Такого месяца нет — второе число это месяц","uz":"Bunday oy yo'q — ikkinchi son bu oy"},
   "Такого дня нет — первое число это день": {"en":"No such day — the first number is the day","ru":"Такого дня нет — первое число это день","uz":"Bunday kun yo'q — birinchi son bu kun"},
   "Такой даты не существует": {"en":"No such date exists","ru":"Такой даты не существует","uz":"Bunday sana mavjud emas"},
+  // DATE_LIMITS_V1 (2026-09-23) — границу называет САМО поле (ui-datefield.js)
+  "Дата не может быть позже {d}": {"en":"The date cannot be later than {d}","ru":"Дата не может быть позже {d}","uz":"Sana {d} dan keyin bo'lishi mumkin emas"},
+  "Дата не может быть раньше {d}": {"en":"The date cannot be earlier than {d}","ru":"Дата не может быть раньше {d}","uz":"Sana {d} dan oldin bo'lishi mumkin emas"},
   "Telegram подключён": {"en":"Telegram connected","ru":"Telegram подключён","uz":"Telegram ulangan"},
   "Telegram: бот заблокирован": {"en":"Telegram: bot blocked","ru":"Telegram: бот заблокирован","uz":"Telegram: bot bloklangan"},
   "Telegram отвязан": {"en":"Telegram unlinked","ru":"Telegram отвязан","uz":"Telegram uzilgan"},

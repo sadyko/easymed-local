@@ -1203,7 +1203,10 @@ async function paint() {
         }, 'Не он? Просто продолжайте вводить номер — заявка создастся как новый лид.');   // no leading icon: the country button already occupies that slot
         // CRM_V9 — дата рождения: точное совпадение по date_of_birth (формат
         // input type=date = формат хранения, YYYY-MM-DD — нормализация не нужна).
-        const dobInp = h('input', { type: 'date', style: { width: '100%', boxSizing: 'border-box' } });
+        // DATE_LIMITS_V1 — верхняя граница живёт НА ПОЛЕ: родиться завтра
+        // нельзя. Раньше это правило сидело в календарном поле и потому
+        // доставалось всем датам программы, включая срок годности.
+        const dobInp = h('input', { type: 'date', max: ymdLocal(new Date()), style: { width: '100%', boxSizing: 'border-box' } });
         const dobWrap = patientFinder(dobInp, () => {
             const v = dobInp.value;
             if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;

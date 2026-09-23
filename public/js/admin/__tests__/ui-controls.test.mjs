@@ -243,6 +243,13 @@ test('отказ работает без правок в местах вызов
 
 // --------------------------- поле даты -------------------------------------
 
+// DATE_LIMITS_V1 — «сегодня» по МЕСТНОМУ календарю, ровно как его считает
+// shared/month-grid.js: toISOString() в Ташкенте после семи вечера отдаёт уже
+// вчерашний день, и граница поля разошлась бы с границей календаря.
+const pad2 = (n) => String(n).padStart(2, '0');
+const TODAY = (() => { const d = new Date(); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); })();
+const TODAY_SHOWN = TODAY.slice(8, 10) + '.' + TODAY.slice(5, 7) + '.' + TODAY.slice(0, 4);
+
 function dateInput(value, attrs = {}) {
     const el = mk('input');
     el.setAttribute('type', 'date');
@@ -438,7 +445,10 @@ test('точки в дате расставляются сами', () => {
 
 test('поле ГОВОРИТ, что не так с датой, а не молчит', () => {
     document.body.replaceChildren();
-    const { el } = dateInput('', { 'data-date-numeric': '' });
+    // DATE_LIMITS_V1 — верхнюю границу ставит САМО поле: это дата рождения, у
+    // неё max = сегодня. Раньше правило «не в будущем» жило в календарном поле
+    // и потому досталось всем датам программы, включая срок годности.
+    const { el } = dateInput('', { 'data-date-numeric': '', max: TODAY });
     const wrap = enhanceDateField(el);
     const f = wrap.querySelector('.uidate-field');
     const err = wrap.querySelector('.uidate-err');
@@ -453,7 +463,9 @@ test('поле ГОВОРИТ, что не так с датой, а не мол�
     assert.match(say('15.13.1994'), /месяц/i, 'о несуществующем месяце молчит');
     assert.match(say('45.11.1994'), /день/i, 'о несуществующем дне молчит');
     assert.match(say('31.02.1994'), /не существует/i, 'о 31 февраля молчит');
-    assert.match(say('15.11.2999'), /будущ/i, 'дата рождения в будущем принята молча');
+    assert.match(say('15.11.2999'), /позже/i, 'дата рождения в будущем принята молча');
+    assert.ok(say('15.11.2999').includes(TODAY_SHOWN),
+        'сообщение не называет границу — человеку нечем понять, что именно не так: ' + say('15.11.2999'));
     assert.ok(wrap.classList.contains('is-bad'), 'поле не помечено как ошибочное');
     assert.equal(say('15.1'), '', 'ругается на недонабранную дату');
     assert.equal(say('15.11.1994'), '');
@@ -523,4 +535,127 @@ test('щелчок в поле даты НЕ сдвигает месяц наз�
     assert.equal(field.value, '15.11.1994',
         'при фокусе месяц уехал на единицу — уход из поля сохранил бы чужую дату рождения');
     document.body.replaceChildren();
+});
+
+// ===========================================================================
+// DATE_LIMITS_V1 (2026-09-23) — ГРАНИЦУ ЗАДАЁТ ПОЛЕ, А НЕ КАЛЕНДАРЬ
+// ===========================================================================
+// Владелец прислал снимок приходной накладной: в «Сроке годности» набрано
+// 15.11.2026, а поле красным отвечает, что дата рождения не может быть в
+// будущем. Правило даты рождения было вписано в САМО календарное поле, а поле
+// это надевается на каждый <input type="date"> программы (ui-enhance.js) — то
+// есть на срок годности, на дату приёма и на все тридцать семь дат.
+//
+// При этом выпадающий календарь всегда спрашивал границы у поля (limits() +
+// withinRange) и будущую дату отдавал спокойно: щелчком мыши получалось, а
+// руками — нет. Ни одно поле программы не объявляло min/max, поэтому граница
+// даты рождения и стала границей всех.
+
+test('срок годности: поле без границ принимает набранную будущую дату', () => {
+    document.body.replaceChildren();
+    const { el } = dateInput('');            // строка приходной накладной: границ нет
+    const wrap = enhanceDateField(el);
+    const f = wrap.querySelector('.uidate-field');
+    const err = wrap.querySelector('.uidate-err');
+    const seen = [];
+    el.addEventListener('change', () => seen.push(el.value));
+
+    f.value = '15.11.2026';                  // ровно то, что набирал владелец
+    f.dispatchEvent({ type: 'input', target: f, currentTarget: f });
+    assert.equal(el.value, '2026-11-15', 'набранный срок годности не дошёл до поля');
+    assert.equal(String(err._t || ''), '',
+        'поле отругалось на будущую дату, а срок годности будущим и бывает: ' + err._t);
+    assert.ok(!wrap.classList.contains('is-bad'), 'поле помечено ошибочным без ошибки');
+    assert.deepEqual(seen, ['2026-11-15'], 'change не отправлен — строка накладной срока не увидит');
+
+    // Уход из поля возвращал прежнее значение — на этом шаге дата и пропадала.
+    f.dispatchEvent({ type: 'blur', target: f, currentTarget: f });
+    assert.equal(el.value, '2026-11-15', 'уход из поля откатил набранную дату');
+
+    // И то же самое для даты, которая останется будущей и через годы.
+    const far = (new Date().getFullYear() + 10) + '-11-15';
+    f.value = '15.11.' + (new Date().getFullYear() + 10);
+    f.dispatchEvent({ type: 'input', target: f, currentTarget: f });
+    assert.equal(el.value, far, 'дальняя будущая дата не принята');
+    assert.equal(String(err._t || ''), '', 'на дальнюю будущую дату поле ругается');
+    document.body.replaceChildren();
+});
+
+test('поле с max = сегодня (дата рождения) будущее не принимает и называет границу', () => {
+    document.body.replaceChildren();
+    const { el } = dateInput('', { 'data-date-numeric': '', max: TODAY });
+    const wrap = enhanceDateField(el);
+    const f = wrap.querySelector('.uidate-field');
+    const err = wrap.querySelector('.uidate-err');
+
+    f.value = '15.11.2999';
+    f.dispatchEvent({ type: 'input', target: f, currentTarget: f });
+    assert.equal(el.value, '', 'дата рождения в будущем дошла до поля');
+    const msg = String(err._t || '');
+    assert.match(msg, /позже/i, 'поле молчит о нарушенной границе: ' + JSON.stringify(msg));
+    assert.ok(msg.includes(TODAY_SHOWN),
+        'сообщение не называет саму границу — понять, что не так, нечем: ' + msg);
+    assert.ok(!/рожден/i.test(msg),
+        'общее поле снова говорит про дату рождения — это же поле стоит на сроке годности');
+    assert.ok(wrap.classList.contains('is-bad'), 'поле не помечено как ошибочное');
+
+    f.value = '15.11.1994';
+    f.dispatchEvent({ type: 'input', target: f, currentTarget: f });
+    assert.equal(el.value, '1994-11-15', 'прошлая дата рождения не принята');
+    assert.equal(String(err._t || ''), '', 'на прошлую дату рождения поле ругается');
+    document.body.replaceChildren();
+});
+
+test('поле с min ведёт себя зеркально: «раньше» названо своим словом', () => {
+    document.body.replaceChildren();
+    const { el } = dateInput('', { 'data-date-numeric': '', min: '2026-01-01' });
+    const wrap = enhanceDateField(el);
+    const f = wrap.querySelector('.uidate-field');
+    const err = wrap.querySelector('.uidate-err');
+
+    f.value = '31.12.2025';
+    f.dispatchEvent({ type: 'input', target: f, currentTarget: f });
+    assert.equal(el.value, '', 'дата до нижней границы дошла до поля');
+    const msg = String(err._t || '');
+    assert.match(msg, /раньше/i, 'поле молчит о нижней границе: ' + JSON.stringify(msg));
+    assert.ok(msg.includes('01.01.2026'), 'сообщение не называет нижнюю границу: ' + msg);
+
+    f.value = '15.11.2026';
+    f.dispatchEvent({ type: 'input', target: f, currentTarget: f });
+    assert.equal(el.value, '2026-11-15', 'дата внутри границ не принята');
+    assert.equal(String(err._t || ''), '', 'на дату внутри границ поле ругается');
+    document.body.replaceChildren();
+});
+
+test('границы не отменили прежних правил: 31 февраля, недонабор, очистка', () => {
+    document.body.replaceChildren();
+    const { el } = dateInput('2020-03-10');
+    const wrap = enhanceDateField(el);
+    const f = wrap.querySelector('.uidate-field');
+    const err = wrap.querySelector('.uidate-err');
+    const say = (typed) => {
+        f.value = typed;
+        f.dispatchEvent({ type: 'input', target: f, currentTarget: f });
+        return String(err._t || '');
+    };
+
+    assert.match(say('31.02.2020'), /не существует/i, 'о несуществующем дне поле замолчало');
+    assert.equal(el.value, '2020-03-10', '31 февраля принято как дата');
+    assert.equal(say('15.1'), '', 'ругается на недонабранную дату');
+    assert.equal(say(''), '', 'ругается на пустое поле');
+    assert.equal(el.value, '', 'стёрли всё, а дата осталась');
+    document.body.replaceChildren();
+});
+
+test('правило даты рождения не вернётся в общее поле (DATE_LIMITS_V1)', () => {
+    // Источник, а не поведение: правило «не в будущем» вернуть в это поле —
+    // значит снова надеть его на все тридцать семь дат программы. Сравнение с
+    // сегодняшним днём здесь недопустимо ни в одном виде; «Сегодня» кнопкой
+    // спрашивает не сегодняшний день, а границы поля (withinRange).
+    const src = fs.readFileSync(path.join(HERE, '..', 'ui-datefield.js'), 'utf8');
+    const cmp = src.match(/[<>]=?\s*todayIso\(\)|todayIso\(\)\s*[<>]=?/g) || [];
+    assert.deepEqual(cmp, [],
+        'дату снова сравнивают с сегодняшним днём внутри поля: ' + cmp.join(' | '));
+    assert.ok(/withinRange\(/.test(src) && /limits\(\)/.test(src),
+        'поле перестало спрашивать границы у самого себя');
 });

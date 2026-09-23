@@ -530,7 +530,9 @@ export const SECTIONS = {
         fields: [
             { key: 'mrn',                label: 'Medical record # (MRN)', type: 'text' },
             { key: 'full_name',          label: 'Full name', type: 'text', required: true },
-            { key: 'date_of_birth',      label: 'Date of birth', type: 'date' },
+            // DATE_LIMITS_V1 — родиться завтра нельзя, и говорит это поле, а не
+            // общее правило календаря: то доставалось и сроку годности.
+            { key: 'date_of_birth',      label: 'Date of birth', type: 'date', max: 'today' },
             { key: 'gender',             label: 'Gender', type: 'select',
               options: [['', '—'], ['male','Male'], ['female','Female'], ['other','Other']] },
             { key: 'blood_type',         label: 'Blood type', type: 'select',

@@ -30,6 +30,7 @@ import { openAdmissionOrderModal } from './admission-modal.js?v=inp2';   // ADMI
 import { caseFilePrintHtml } from './case-docs.js?v=cw1';   // PATIENT_HISTORY_TAB_V1 — печать подшитой истории тем же бланком
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // PATIENT_HISTORY_TAB_V1
 import { moneyDisplay } from '../../shared/money-input.js?v=mi2';   // DEBT_FLOW_V1 — сумма долга у имени
+import { todayIso } from '../../shared/month-grid.js?v=mg1';   // DATE_LIMITS_V1 — местный день, а не UTC
 import { outcomeTitle } from './discharge.js';   // PATIENT_HISTORY_TAB_V1 — исход словами
 import { BRANCH_BUCKET, uploadFile, signedUrl } from '../storage.js?v=aurora20b';   // PATIENT_DOCS_TAB_V1 — same URL as service-workspace (one instance)
 // PATIENT_FILE_ATTACH_V1 — пределы и список допустимых форматов ОДНИ на
@@ -2093,7 +2094,10 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
         const lastInp   = h('input', { type: 'text', value: p.last_name || '' });
         const firstInp  = h('input', { type: 'text', value: p.first_name || '' });
         const midInp    = h('input', { type: 'text', value: p.middle_name || '' });
-        const dobInp    = h('input', { type: 'date', value: (p.date_of_birth || '').slice(0, 10) });
+        // DATE_LIMITS_V1 — верхняя граница живёт НА ПОЛЕ: родиться завтра
+        // нельзя, и поле скажет это само. Общее правило «не в будущем» из
+        // календарного поля убрано — оно доставалось и сроку годности.
+        const dobInp    = h('input', { type: 'date', max: todayIso(), value: (p.date_of_birth || '').slice(0, 10) });
         let genderVal   = ['male', 'female', 'other'].includes(p.gender) ? p.gender : 'other';
         const genderChips = radioChips('__edit_gender',
             [['male', 'Мужской'], ['female', 'Женский'], ['other', 'Другое']],
