@@ -279,6 +279,28 @@ function reqStatusTag(s) {
     return Tag(l, { kind: k, dot: true });
 }
 
+// STOCK_REQUEST_V1 (R2) — ДЛЯ КОГО ЗАЯВКА. После R1 заявку подаёт не только
+// отдел: сотрудник просит себе, а минимум подаёт заявку сам («авто»).
+// Одобрение выдаёт держателю заявки (approve_requisition_and_issue), поэтому
+// кладовщику нужно видеть, КОМУ уйдёт товар: имя сотрудника или отдел. Старая
+// заявка без держателя (до миграции 145 триггер ставит его сам) — по отделу.
+function reqHolderLabel(rq, staffNames) {
+    if (rq.holder_type === 'staff') return staffNames.get(rq.holder_id) || trf('Сотрудник №{id}', { id: rq.holder_id });
+    return (rq.departments && rq.departments.name) || null;
+}
+const autoMark = () => h('span', { style: { marginLeft: '6px' } }, Tag(tr('авто'), { kind: 'info' }));
+
+/** Имена сотрудников-держателей одним запросом; не загрузились — номер вместо имени. */
+async function loadStaffNames(rows) {
+    const ids = [...new Set(rows.filter((r) => r.holder_type === 'staff' && r.holder_id).map((r) => r.holder_id))];
+    const names = new Map();
+    if (!ids.length) return names;
+    const { data, error } = await supabase.from('users').select('id,full_name').in('id', ids);
+    if (error) return names;
+    for (const u of data || []) names.set(u.id, u.full_name);
+    return names;
+}
+
 export function renderRequisitionsTab(container) {
     reqRefs.tbody = h('tbody');
     reqRefs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } }, 'Заявок пока нет — создайте первую.');
@@ -288,7 +310,7 @@ export function renderRequisitionsTab(container) {
     container.appendChild(h('div', null,
         h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' } },
             reqRefs.totalEl, h('div', { class: 'page-head-actions' }, addBtn)),
-        tableCard(['№ заявки', 'Отдел', 'Статус', 'Позиции', 'Дата'], reqRefs.tbody, reqRefs.emptyEl)));
+        tableCard(['№ заявки', 'Для кого', 'Статус', 'Позиции', 'Дата'], reqRefs.tbody, reqRefs.emptyEl)));
     fetchReqsAndPaint();
 }
 
@@ -298,20 +320,23 @@ async function fetchReqsAndPaint() {
     try {
         const [{ data, error }, lineCount] = await Promise.all([
             supabase.from('purchase_requisitions')
-                .select('id,req_number,status,created_at, departments(id,name)')
+                .select('id,req_number,status,created_at,holder_type,holder_id,auto, departments(id,name)')
                 .order('id', { ascending: false }).limit(200),
             countLines('purchase_requisition_items', 'req_id'),
         ]);
         if (token !== lastFetchToken) return;
         if (error) throw error;
         const rows = data || [];
+        const staffNames = await loadStaffNames(rows);
+        if (token !== lastFetchToken) return;
         clear(reqRefs.tbody);
         if (!rows.length) { reqRefs.emptyEl.style.display = ''; }
         else for (const rq of rows) {
             const nLines = lineCount.get(rq.id) || 0;
-            reqRefs.tbody.appendChild(h('tr', { class: 'row-click', style: { cursor: 'pointer' }, onclick: () => openReqDetail(rq, fetchReqsAndPaint) },
-                h('td', { class: 'cell-strong' }, rq.req_number || '—'),
-                h('td', null, (rq.departments && rq.departments.name) || h('span', { class: 'muted' }, '—')),
+            const holderName = reqHolderLabel(rq, staffNames);
+            reqRefs.tbody.appendChild(h('tr', { class: 'row-click', style: { cursor: 'pointer' }, onclick: () => openReqDetail({ ...rq, holder_name: holderName }, fetchReqsAndPaint) },
+                h('td', { class: 'cell-strong' }, rq.req_number || '—', rq.auto ? autoMark() : null),
+                h('td', null, holderName || h('span', { class: 'muted' }, '—')),
                 h('td', null, reqStatusTag(rq.status)),
                 h('td', { class: 'num' }, String(nLines)),
                 h('td', null, fmtDateTime(rq.created_at))));
@@ -455,7 +480,10 @@ async function openReqDetail(rq, onSaved) {
     const { close } = docModal({
         title: trf('Заявка {no}', { no: rq.req_number }), icon: 'Send', width: 560,
         body: [h('div', { style: { marginBottom: '8px' } }, reqStatusTag(rq.status),
-            (rq.departments && rq.departments.name) ? h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '12.5px' } }, rq.departments.name) : null),
+            rq.auto ? autoMark() : null,
+            (rq.holder_name || (rq.departments && rq.departments.name))
+                ? h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '12.5px' } }, trf('Для кого: {name}', { name: rq.holder_name || rq.departments.name }))
+                : null),
             bodyWrap],
         footer: () => footWrap,
     });
