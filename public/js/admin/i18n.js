@@ -66,6 +66,9 @@ const I18N = {
                 'cashier-head':      'Head cashier',
                 inventory:           'Procurement',
                 'reports-hub':       'Reports',
+                // MY_STOCK_V1 — личные экраны: свой подотчёт и своя карточка отдела
+                'my-stock':          'My stock',
+                'my-department':     'My department',
             },
             logout: 'Log out',
             viewAsRole: 'View as role',
@@ -159,6 +162,8 @@ const I18N = {
                 'cashier-head':      'Старший кассир',
                 inventory:           'Закупки',
                 'reports-hub':       'Отчёты',
+                'my-stock':          'Мои запасы',   // MY_STOCK_V1
+                'my-department':     'Мой отдел',
             },
             logout: 'Выйти',
             viewAsRole: 'Просмотр как роль',
@@ -253,6 +258,8 @@ const I18N = {
                 'cashier-head':      'Bosh kassir',
                 inventory:           'Xaridlar',
                 'reports-hub':       'Hisobotlar',
+                'my-stock':          'Mening zaxiram',   // MY_STOCK_V1
+                'my-department':     'Mening boʻlimim',
             },
             logout: 'Chiqish',
             viewAsRole: 'Rol sifatida koʻrish',

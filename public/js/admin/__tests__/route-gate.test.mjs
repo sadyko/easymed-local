@@ -166,3 +166,102 @@ test('ROUTE_GATE_COVERS_PARENT_OF_V1: список «только полный �
     const ghosts = Object.keys(FULL_ACCESS_ONLY).filter((k) => !(k in parents));
     assert.deepEqual(ghosts, [], 'в FULL_ACCESS_ONLY есть маршруты, которых нет в PARENT_OF: ' + ghosts.join(', '));
 });
+
+// ===========================================================================
+// 3. MY_STOCK_V1 — ДВА ЛИЧНЫХ ПУНКТА МЕНЮ: «МОИ ЗАПАСЫ» И «МОЙ ОТДЕЛ».
+//
+// Владелец (23.09): «личный экран "Мои запасы" … плюс пункт меню на карточку
+// отдела для медсестры и заведующей».
+//
+// Оба пункта — не грантовые ключи, и это главное, что здесь закреплено. «Мои
+// запасы» показывает ТОЛЬКО самого вошедшего (отбор считает сервер), поэтому
+// маршрут открыт, а меню решает РОЛЬ: галочка-право означала бы, что врач не
+// видит того, что сам же тратит, пока администратор не обойдёт все роли
+// поимённо. «Мой отдел» и вовсе не про право: пункт ведёт на карточку СВОЕГО
+// отдела, и человеку без отдела вести туда некуда — даже с полным доступом.
+// ===========================================================================
+
+/** Идентификаторы пунктов бокового меню — из самой таблицы NAV (как в appbar-back). */
+function navIds() {
+    const at = shellSrc.indexOf('const NAV =');
+    const block = shellSrc.slice(at, shellSrc.indexOf('\nconst CRUMBS', at));
+    return new Set([...block.matchAll(/id:\s*'([^']+)'/g)].map((m) => m[1]));
+}
+/** Маршруты, которые роутер умеет открыть. */
+function routedViews() {
+    const at = shellSrc.indexOf('switch (state.view) {');
+    return new Set([...shellSrc.slice(at, shellSrc.indexOf('\n        }', at)).matchAll(/case '([^']+)':/g)].map((m) => m[1]));
+}
+/** Крошки — по ним оболочка узнаёт маршрут при перезагрузке (isKnownView). */
+function crumbKeys() {
+    const at = shellSrc.indexOf('const CRUMBS = {');
+    return new Set([...shellSrc.slice(at, shellSrc.indexOf('\n};', at)).matchAll(/^\s*'?([A-Za-z-]+)'?:\s*\[/gm)].map((m) => m[1]));
+}
+
+const withDepartment = (id, fn) => {
+    const was = globalThis.window.easymed;
+    globalThis.window.easymed = { state: { user: { id: 7, role: 'nurse', department_id: id } } };
+    try { return fn(); } finally { globalThis.window.easymed = was; }
+};
+
+test('MY_STOCK_V1: оба экрана — пункты меню: есть в NAV, есть в роутере, есть в крошках и НЕ в PARENT_OF', () => {
+    const nav = navIds();
+    const routed = routedViews();
+    const crumbs = crumbKeys();
+    const parents = parentTable();
+    for (const view of ['my-stock', 'my-department']) {
+        assert.ok(nav.has(view), view + ' пропал из бокового меню');
+        assert.ok(routed.has(view), 'у ' + view + ' нет ветки маршрута — адрес провалится в «неизвестный экран»');
+        assert.ok(crumbs.has(view), view + ' не назван в CRUMBS — перезагрузка и прямая ссылка уведут на домашний экран');
+        assert.equal(view in parents, false,
+            'у пункта бокового меню появилась кнопка «назад» — это лишний орган управления: ' + view);
+    }
+    // «Мой отдел» пересылает на карточку отдела, и у ТОЙ кнопка «назад» осталась.
+    assert.equal(parents['departments'], 'settings', 'карточка отдела потеряла путь назад');
+});
+
+test('MY_STOCK_V1: «Мои запасы» видят те, кому склад выдаёт под отчёт, и не видит тот, кому не выдаёт', () => {
+    const sees = (code, sections) => { perms.setEffectiveFromRole(role(code, sections)); return perms.isModuleAllowed('my-stock'); };
+    try {
+        for (const code of ['doctor', 'nurse', 'senior_nurse', 'head_doctor']) {
+            assert.equal(sees(code, ['patients']), true, 'пункт «Мои запасы» не виден роли ' + code + ' — она держит товар на руках');
+        }
+        for (const code of ['cashier', 'registrar', 'lab', 'callcenter']) {
+            assert.equal(sees(code, ['patients', 'cashier']), false,
+                'пункт «Мои запасы» показан роли ' + code + ': товар на руки ей не выдают, экран был бы всегда пустым');
+        }
+        // Раздел «Закупки» этим НЕ расширяется и не требуется.
+        perms.setEffectiveFromRole(role('nurse', ['patients']));
+        assert.equal(perms.isModuleAllowed('inventory'), false, 'права склада разъехались: медсестре открылись «Закупки»');
+        // Заведующая отделом видит пункт даже с ролью вне списка — у неё есть отдел.
+        assert.equal(withDepartment(11, () => sees('lab', ['labs'])), true,
+            'сотруднику отдела «Мои запасы» не видны — а отдел ему выдают под отчёт');
+    } finally { perms.setFullAccess('Admin'); }
+});
+
+test('MY_STOCK_V1: маршрут «Мои запасы» открыт всем — чужого за ним нет, отбор считает сервер', () => {
+    try {
+        perms.setEffectiveFromRole(role('cashier', ['cashier']));
+        assert.equal(perms.isRouteAllowed('my-stock'), true,
+            'адрес закрыт роли, у которой экран всё равно показал бы только её саму');
+        assert.equal(perms.isModuleAllowed('my-stock'), false, 'меню и маршрут обязаны отвечать по-разному: пункт — по роли, адрес — открыт');
+        perms.setEffectiveFromRole(role('nurse', ['patients']));
+        assert.equal(perms.isRouteAllowed('my-stock'), true);
+    } finally { perms.setFullAccess('Admin'); }
+});
+
+test('MY_STOCK_V1: «Мой отдел» — только у того, у кого отдел есть; полный доступ этого не меняет', () => {
+    try {
+        perms.setFullAccess('Admin');
+        assert.equal(perms.isModuleAllowed('my-department'), false,
+            'администратору без отдела показан «Мой отдел» — он открывает чужой справочник, а свои отделы живут в настройках');
+        assert.equal(withDepartment(11, () => perms.isModuleAllowed('my-department')), true);
+
+        perms.setEffectiveFromRole(role('nurse', ['patients']));
+        assert.equal(perms.isModuleAllowed('my-department'), false, 'отдела нет — пункта нет');
+        assert.equal(withDepartment(11, () => perms.isModuleAllowed('my-department')), true,
+            'медсестра отделения не видит пункта на карточку своего отдела');
+        // Право то же, что у «Отделов»: карточку чужого отдела сервер всё равно не отдаст.
+        assert.equal(perms.isRouteAllowed('my-department'), perms.isRouteAllowed('departments'));
+    } finally { perms.setFullAccess('Admin'); }
+});

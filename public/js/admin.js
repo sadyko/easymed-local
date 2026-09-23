@@ -19,7 +19,7 @@ import { pulseFade, revealOn, HIDDEN_CLASS, SHOWN_CLASS } from './admin/motion.j
 import {
     isModuleAllowed, isRouteAllowed, actorRoleCodes,   // actorRoleCodes — ROLE_HOME_V1
     setFullAccess, setEffectiveFromRole, setEffectiveFromRoles, currentRoleLabel,
-    scopedProviderId,
+    scopedProviderId, ownDepartmentId,   // ownDepartmentId — MY_STOCK_V1
 } from './admin/permissions.js';
 import {
     verifyLogin, actorFromUser,
@@ -95,6 +95,7 @@ import { renderRequestsInbox } from './admin/views/requests-inbox.js?v=btnright1
 import { renderPacs }         from './admin/views/pacs.js';
 import { renderInventory }    from './admin/views/inventory.js?v=inv5';   // INVENTORY_UI_V1 — Suppliers/PO/Requisitions/Counts tabs live
 import { renderStockLog }     from './admin/views/stock-log.js?v=stocklog1';   // STOCK_LOG_V1 — журнал движений (кто, кому, партия, срок)
+import { renderMyStock }      from './admin/views/my-stock.js?v=mystock1';   // MY_STOCK_V1 — свой подотчёт: что выдали, кто выдал, что списал
 import { renderSettingsHub }  from './admin/views/settings-hub.js?v=updbadge1';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route
 import { renderPatientDocuments } from './admin/views/patient-documents.js?v=docstoolbar1';   // PATIENT_DOCUMENTS_V1 + DOCS_TOOLBAR_V1
 import { renderDocumentsSettings } from './admin/views/documents-settings.js?v=doc2';   // DOCUMENTS_SETTINGS_V1
@@ -167,6 +168,22 @@ const NAV = [
     // же работу. Ветка `case 'beds'` в renderViewInner тоже цела: это пол под
     // маршрутом, чтобы адрес никогда не проваливался в «неизвестный экран».
     { id: 'patient-documents', label: 'Documents', icon: 'Doc' },   // PATIENT_DOCUMENTS_V1
+    // MY_STOCK_V1 (2026-09-23) — ДВА ЛИЧНЫХ ЭКРАНА, И ОНИ СТОЯТ ПОСЛЕДНИМИ В
+    // КЛИНИЧЕСКОМ БЛОКЕ НАМЕРЕННО.
+    //
+    // «Мои запасы» — свой подотчёт: что выдали, кто выдал, сколько осталось,
+    // что списано на пациентов (решение владельца 23.09). Права у пункта нет и
+    // быть не может — экран показывает только самого вошедшего, — поэтому его
+    // видимость решает РОЛЬ (permissions.js MY_STOCK_ROLES), а не галочка.
+    // «Мой отдел» ведёт на карточку СВОЕГО отдела и виден только тому, у кого
+    // отдел есть (users.department_id приезжает с сессией).
+    //
+    // Порядок важен не на глаз: firstAllowedView() отдаёт человеку ПЕРВЫЙ
+    // доступный пункт меню как домашний экран. Личный экран домашним быть не
+    // должен ни у кого, поэтому оба стоят после всей клинической работы —
+    // впереди них у любой роли найдётся её собственный раздел.
+    { id: 'my-stock', label: 'My stock', icon: 'Layers' },   // MY_STOCK_V1
+    { id: 'my-department', label: 'My department', icon: 'Building' },   // MY_STOCK_V1
     { section: 'Operations' },
     // TELEGRAM_CHAT_V1 — переписка с пациентами это работа стойки, а не приём:
     // её ведут регистратура и call-центр, поэтому раздел живёт в «Операциях».
@@ -221,6 +238,8 @@ const CRUMBS = {
     labs:          ['Clinical', 'Laboratory'],
     inventory:     ['Clinical', 'Procurement'],   // INVENTORY_UI_V1 — PROCUREMENT_WORKSPACE_V1
     'stock-log':   ['Clinical', 'Procurement', 'Журнал движений'],   // STOCK_LOG_V1
+    'my-stock':    ['Clinical', 'Мои запасы'],   // MY_STOCK_V1
+    'my-department': ['Clinical', 'Мой отдел'],   // MY_STOCK_V1
     'patient-documents': ['Clinical', 'Documents'],   // PATIENT_DOCUMENTS_V1
     procedures:    ['Clinical', 'Procedures'],
     admissions:    ['Clinical', 'Inpatient ward'],   // ADMISSION_ORDER_V1
@@ -1045,6 +1064,20 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             // медсестра видят его, не получая весь раздел «Закупки». Что именно
             // им видно, решает сервер (rpc/stock-log.js), а не этот маршрут.
             case 'stock-log':     return void await renderStockLog(viewRoot, { withHead: true });
+            // MY_STOCK_V1 — «Мои запасы»: свой подотчёт и свои движения. Что
+            // именно человеку видно, решает сервер (`mine` у holdings_list,
+            // `only` у stock_movements_list), а не этот маршрут: адрес открыт
+            // всем, но чужих строк за ним нет.
+            case 'my-stock':      return void await renderMyStock(viewRoot, ctx);
+            // MY_STOCK_V1 — «Мой отдел» это та же карточка отдела, открытая
+            // сразу на СВОЁМ отделе: номер берётся из сессии, а не гадается
+            // экраном. Пересылкой, а не вторым экраном (приём mar-sheet выше):
+            // два экрана одной карточки разошлись бы на первой же правке, а
+            // право и содержимое у них одни (rpc/departments.js isOwn).
+            case 'my-department': {
+                const _dep = ownDepartmentId();
+                return void navigate('departments', _dep ? { sub: String(_dep) } : undefined);
+            }
             case 'patient-documents': return void await renderPatientDocuments(viewRoot, ctx);   // PATIENT_DOCUMENTS_V1
             case 'procedures':    return void await renderProcedures(viewRoot, ctx);
             // QUEUE_BOARD_V1 — собственный маршрут доски цел: он и пункт меню
