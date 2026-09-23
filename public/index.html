@@ -19,6 +19,8 @@
       <p class="error" id="login-error"></p>
       <button class="full" type="submit">Sign in</button>
     </form>
+    <!-- PASSWORD_CHANGE_V2: no minlength — any non-empty password is the clinic's
+         rule (server/services/auth.js validPassword); "required" keeps it non-empty. -->
     <!-- FIRST_RUN_PASSWORD_V1: shown instead of the login card when the signed-in
          user still carries the first-run default password. The server refuses
          every other API call until this succeeds, so there is no way around it
@@ -26,10 +28,10 @@
     <form class="card" id="newpass-form" hidden>
       <h1 class="brand">Easy-<span>Med</span></h1>
       <p class="sub">Set a new password before continuing</p>
-      <label for="new-password">New password (8+ characters)</label>
-      <input id="new-password" name="new_password" type="password" autocomplete="new-password" minlength="8" required>
+      <label for="new-password">New password</label>
+      <input id="new-password" name="new_password" type="password" autocomplete="new-password" required>
       <label for="new-password2">Repeat new password</label>
-      <input id="new-password2" name="new_password2" type="password" autocomplete="new-password" minlength="8" required>
+      <input id="new-password2" name="new_password2" type="password" autocomplete="new-password" required>
       <p class="error" id="newpass-error"></p>
       <button class="full" type="submit">Save and continue</button>
     </form>

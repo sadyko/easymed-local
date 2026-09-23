@@ -14,20 +14,15 @@
 // at, or reachable on a real mail server. Supabase Auth only needs an
 // email-shaped string.
 //
-// FIRST-LOGIN reset: migration 032 set every auth.identities.last_sign_in_at
-// to null. We check `auth.users.last_sign_in_at` on the first authed call;
-// if absent, the caller (admin.js) renders the "Set new password" screen
-// instead of the dashboard. After the user sets a new password,
-// last_sign_in_at gets populated by the next signIn and the gate clears.
+// FIRST-LOGIN: the offline build forces the first-run password change on the
+// login page (index.html + login.js, FIRST_RUN_PASSWORD_V1), not here.
 
 import { supabase } from '../supabase.js';
 
 // ---------------------------------------------------------------------------
-// Sign-in. Returns { user, needsPasswordReset } on success or { error }.
+// Sign-in. Returns { user } on success or { error }.
 //
-// `user` is the public.users row (with computed flags from actorFromUser);
-// `needsPasswordReset` is true when this is the user's first sign-in (we
-// then render the reset screen instead of the dashboard).
+// `user` is the public.users row (with computed flags from actorFromUser).
 //
 // The `admin/admin123` bootstrap fallback from the old auth.js is gone:
 // when Supabase Auth is the source of truth, a hardcoded escape hatch is
@@ -54,41 +49,12 @@ export async function rehydrateUserFromSession() {
     return user;
 }
 
-// ---------------------------------------------------------------------------
-// Force-reset flow — called from admin.js when needsPasswordReset is true.
-// Updates the password AND marks the metadata so future logins skip the
-// reset screen.
-// ---------------------------------------------------------------------------
-// Shared client-side password policy (M6). Server-side enforcement (Supabase
-// Auth min length + leaked-password protection) should mirror this — the client
-// check is UX only and is bypassable by calling the API directly.
-const COMMON_WEAK_PASSWORDS = new Set([
-    'password', 'password1', 'password123', '12345678', '123456789', '1234567890',
-    'qwerty123', 'admin123', 'welcome1', 'iloveyou', 'letmein1', 'changeme',
-    'easymed', 'easymed123', 'clinic123',
-]);
-
-export function validatePasswordStrength(pwd) {
-    const p = String(pwd || '');
-    if (p.length < 10) return { error: 'Use at least 10 characters.' };
-    if (COMMON_WEAK_PASSWORDS.has(p.toLowerCase())) return { error: 'This password is too common — choose another.' };
-    const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter((re) => re.test(p)).length;
-    if (classes < 3) return { error: 'Mix upper- and lower-case letters, digits and a symbol (at least 3 of 4).' };
-    return { ok: true };
-}
-
-export async function completeFirstLoginReset(newPassword) {
-    const pwd = String(newPassword || '');
-    const strength = validatePasswordStrength(pwd);
-    if (strength.error) return { error: strength.error };
-
-    const { error } = await supabase.auth.updateUser({
-        password: pwd,
-        data: { password_set: true },
-    });
-    if (error) return { error: 'Password update failed: ' + error.message };
-    return { ok: true };
-}
+// PASSWORD_CHANGE_V2 (2026-09-23) — здесь жили облачный сброс пароля при
+// первом входе и его правило «10 символов, три вида знаков». Сброс звал
+// supabase.auth.updateUser, которого офлайн нет (db-auth.js отказывает всегда),
+// а звал его экран, до которого вход не доходил никогда. Удалены оба. Правило
+// длины на клиенте одно — admin/password-change.js (не пустой); на сервере —
+// server/services/auth.js validPassword.
 
 // ---------------------------------------------------------------------------
 // Logout — single source of truth. Calls Supabase Auth and lets its own

@@ -10,6 +10,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, field, checkField, Ring, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { openEmployeePasswordModal } from '../password-change.js';   // PASSWORD_CHANGE_V2
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { importExportButtons } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1
 import { soleBranchId } from '../branch-context.js?v=bc3';                  // SOLE_BRANCH_V1
@@ -638,6 +639,16 @@ function openEditor(user, root) {
             Icon('Trash', { size: 14 }), ' Удалить')
         : null;
 
+    // PASSWORD_CHANGE_V2 — пароль существующего сотрудника меняется ОТДЕЛЬНО от
+    // карточки: окно шлёт PATCH только с { password }, и потому не упирается в
+    // проверку ФИО, телефона и категории в save() ниже. Без этого учётная
+    // запись первого запуска `admin` (в ней не заполнено ничего) и сотрудники
+    // без телефона не могли получить новый пароль вовсе.
+    const passwordBtn = isEdit
+        ? h('button', { class: 'btn btn-outline', type: 'button', onclick: () => openEmployeePasswordModal(user) },
+            Icon('Lock', { size: 14 }), ' Сменить пароль')
+        : null;
+
     async function confirmDelete() {
         deleteBtn.disabled = true;
         try {
@@ -718,7 +729,7 @@ function openEditor(user, root) {
         // не отключённых, а отсутствующих: отключённая кнопка предлагает
         // действие и молчит о том, почему оно недоступно, а причина уже сказана
         // строкой над полями.
-        h('footer', { class: 'modal-foot' }, readOnly ? null : deleteBtn, dirtyEl, h('span', { class: 'grow' }), h('button', { class: 'btn', type: 'button', onclick: close }, readOnly ? 'Закрыть' : 'Отмена'), readOnly ? null : saveBtn),
+        h('footer', { class: 'modal-foot' }, readOnly ? null : deleteBtn, readOnly ? null : passwordBtn, dirtyEl, h('span', { class: 'grow' }), h('button', { class: 'btn', type: 'button', onclick: close }, readOnly ? 'Закрыть' : 'Отмена'), readOnly ? null : saveBtn),
     ));
     document.body.appendChild(overlay);
     renderHead(); renderRail(); renderBody();

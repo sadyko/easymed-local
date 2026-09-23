@@ -946,7 +946,7 @@ const SECTION_RENDERERS = {
         h('div', { style: { display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '680px' } },
             grid2(
                 fld('Login (username \u2014 unique within this clinic)', textInput(emp.username, v => markDirty({ username: v }), 'username', { autocomplete: 'off' })),
-                fld('Password', textInput(emp.password, v => markDirty({ password: v }), 'Leave blank to keep current', { type: 'password', autocomplete: 'new-password' }), { hint: 'Leave blank to keep existing. Minimum 6 characters.' }),
+                fld('Password', textInput(emp.password, v => markDirty({ password: v }), 'Leave blank to keep current', { type: 'password', autocomplete: 'new-password' }), { hint: 'Leave blank to keep existing.' }),
             ),
             h('div', { style: { height: '1px', background: 'var(--ink-100)', margin: '4px 0' } }),
             h('label', { class: 'row', style: { gap: '12px', cursor: 'pointer' } },
@@ -1378,9 +1378,8 @@ export async function saveEmployee(emp, row) {
     if (emp.salary_type === 'fix_plus_kpi' && emp.kpis.size === 0) {   // DOCTOR_PAY_KPI_WIRE_V1
         throw new EmpValidationError('Для «Fix + KPI» отметьте хотя бы один KPI (вкладка «Employment & salary»).');
     }
-    if (emp.password && emp.password.length < 6) {   // EMP_PW_MIN_V1 — auth RPC requires >=6; catch it before saving
-        throw new EmpValidationError('Пароль должен содержать минимум 6 символов (вкладка «Login & access»).');
-    }
+    // PASSWORD_CHANGE_V2 — здесь было «минимум 6 символов» (EMP_PW_MIN_V1, для
+    // облачного RPC). Правило клиники — пароль не пустой, и только (PASSWORD_RULE_ONE_PLACE_V1).
     // NEW_EMP_PASSWORD_V1 — a login (auth account) is minted ONLY when a
     // password is set. A new employee saved with a username but no password
     // looked "created" yet could never sign in ("access is not provided").

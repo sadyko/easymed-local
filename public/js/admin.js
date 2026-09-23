@@ -23,8 +23,10 @@ import {
 } from './admin/permissions.js';
 import {
     verifyLogin, actorFromUser,
-    rehydrateUserFromSession, completeFirstLoginReset, signOutAndReload,
+    rehydrateUserFromSession, signOutAndReload,
 } from './admin/auth.js?v=admdoc3';
+// PASSWORD_CHANGE_V2 — «Сменить пароль» в меню аватара: одно окно, POST /api/auth/change-password
+import { openChangeOwnPasswordModal } from './admin/password-change.js';
 import { t, tr, trf, getLang, setLang, onLangChange } from './admin/i18n.js?v=pathway1';   // TS_TAB_I18N_V1 — tr() for tab labels; trf() — I18N_COVERAGE_V1 (перевод СНАЧАЛА, подстановка ПОТОМ)
 // ACCESS_DENIED_ONE_PLACE_V1 — отказ рисуется одним помощником на всё приложение
 // (его же зовёт окно заведения пациента, у которого своего маршрута нет).
@@ -2065,7 +2067,7 @@ function renderAccountControls() {
     wrap.appendChild(h('button', {
         class: 'btn btn-outline',
         style: { width: '100%', justifyContent: 'center', fontSize: '12.5px' },
-        onclick: () => { document.getElementById('user-popover')?.setAttribute('hidden', ''); openChangePasswordModal(); },
+        onclick: () => { document.getElementById('user-popover')?.setAttribute('hidden', ''); openChangeOwnPasswordModal(); },
     }, Icon('Shield', { size: 13 }), ' Сменить пароль'));
 
     wrap.appendChild(h('button', {
@@ -2077,64 +2079,9 @@ function renderAccountControls() {
     foot.appendChild(wrap);
 }
 
-// Change-password modal — uses supabase.auth.updateUser, which rotates the
-// password of the CURRENT session's user. No admin rights needed; every role
-// can change their own password here.
-function openChangePasswordModal() {
-    const overlay = h('div', { class: 'modal', style: { zIndex: '9000' } });
-    const close = () => overlay.remove();
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
-
-    const errEl  = h('div', { style: { color: 'var(--crit-700)', fontSize: '12.5px', minHeight: '16px' } });
-    const inpStyle = {
-        width: '100%', height: '38px', padding: '0 12px', boxSizing: 'border-box',
-        border: '1px solid var(--ink-200)', borderRadius: '9px',
-        fontSize: '13.5px', fontFamily: 'inherit', outline: 'none',
-    };
-    const passInp  = h('input', { type: 'password', placeholder: 'Новый пароль (мин. 8 символов)', autocomplete: 'new-password', style: inpStyle });
-    const pass2Inp = h('input', { type: 'password', placeholder: 'Повторите пароль', autocomplete: 'new-password', style: inpStyle });
-
-    const saveBtn = h('button', { class: 'btn btn-primary', style: { minWidth: '120px', justifyContent: 'center' } }, 'Сохранить');
-    saveBtn.addEventListener('click', async () => {
-        errEl.textContent = '';
-        const p1 = passInp.value, p2 = pass2Inp.value;
-        if (p1.length < 8)  { errEl.textContent = 'Минимум 8 символов.'; passInp.focus(); return; }
-        if (p1 !== p2)      { errEl.textContent = 'Пароли не совпадают.'; pass2Inp.focus(); return; }
-        saveBtn.disabled = true;
-        try {
-            const { error } = await supabase.auth.updateUser({ password: p1, data: { password_set: true } });
-            if (error) { errEl.textContent = 'Не удалось сменить пароль: ' + error.message; return; }
-            close();
-            toast('Пароль изменён.');
-        } catch (e) {
-            errEl.textContent = 'Ошибка: ' + (e.message || e);
-        } finally {
-            saveBtn.disabled = false;
-        }
-    });
-
-    const card = h('div', { class: 'modal-card', style: { width: '380px', maxWidth: 'calc(100vw - 32px)' } },
-        h('header', { class: 'modal-head' },
-            h('h2', null, Icon('Shield', { size: 16 }), ' Сменить пароль'),
-            h('button', { class: 'modal-close', onclick: close }, '×'),
-        ),
-        h('div', { class: 'modal-body', style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
-            h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                'Новый пароль вступает в силу сразу; активные сессии на других устройствах не разрываются.'),
-            passInp, pass2Inp, errEl,
-        ),
-        h('footer', { class: 'modal-foot' },
-            h('span', { class: 'grow' }),   // BTNS_RIGHT_V1
-            h('button', { class: 'btn', onclick: close }, 'Отмена'),
-            saveBtn,
-        ),
-    );
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-    setTimeout(() => passInp.focus(), 0);
-    const onKey = (ev) => { if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); } };
-    document.addEventListener('keydown', onKey);
-}
+// PASSWORD_CHANGE_V2 — окно смены своего пароля живёт в admin/password-change.js.
+// Прежнее звало supabase.auth.updateUser: офлайн-прослойка (db-auth.js) его не
+// умеет и отказывает всегда, так что сменить пароль отсюда не мог никто.
 
 function logout() {
     // Clear role-preview pick (Supabase Auth's session is wiped by signOut
@@ -2262,14 +2209,6 @@ function showLogin() {
             if (res.error) { errEl.textContent = res.error; passInp.focus(); passInp.select(); return; }
             const overlay = document.getElementById('login-overlay');
             if (overlay) overlay.remove();
-            // First-login force-reset: signed in successfully with the temp
-            // password from migration 032's distribution table, but never
-            // set their own password yet. Render the reset screen instead
-            // of dropping into the dashboard.
-            if (res.needsPasswordReset) {
-                showFirstLoginReset(res.user);
-                return;
-            }
             await onAuthed(res.user, { fresh: true });   // ROLE_HOME_V1 — вход → домашний экран роли
         } catch (e) {
             console.error('[login]', e);
@@ -2640,93 +2579,11 @@ function showPendingReview(clinic) {
     document.body.appendChild(overlay);
 }
 
-// ---------------------------------------------------------------------------
-// First-login force-reset screen — rendered once per user, right after
-// their first successful sign-in with the temp password from migration 032.
-// Locked from being skipped: closes only on successful password update,
-// then drops into onAuthed() as if they'd logged in normally.
-// ---------------------------------------------------------------------------
-function showFirstLoginReset(user) {
-    const existing = document.getElementById('login-overlay');
-    if (existing) existing.remove();
-
-    const errEl = h('div', { style: { color: 'var(--crit-700)', fontSize: '12.5px', minHeight: '16px', textAlign: 'center' } });
-    const newPwd  = h('input', { type: 'password', placeholder: 'Новый пароль', autocomplete: 'new-password', style: loginInputStyle() });
-    const confirm = h('input', { type: 'password', placeholder: 'Repeat new password',            autocomplete: 'new-password', style: loginInputStyle() });
-    const btn = h('button', {
-        type: 'submit', class: 'btn btn-primary',
-        style: { width: '100%', justifyContent: 'center', height: '40px', fontSize: '13.5px' },
-    }, 'Set new password');
-
-    const submit = async () => {
-        errEl.textContent = '';
-        if (newPwd.value !== confirm.value) {
-            errEl.textContent = 'Passwords do not match.';
-            confirm.focus(); confirm.select();
-            return;
-        }
-        if ((newPwd.value || '').length < 8) {
-            errEl.textContent = 'Введите новый пароль.';
-            newPwd.focus(); newPwd.select();
-            return;
-        }
-        btn.disabled = true;
-        try {
-            const res = await completeFirstLoginReset(newPwd.value);
-            if (res.error) { errEl.textContent = res.error; return; }
-            const overlay = document.getElementById('login-overlay');
-            if (overlay) overlay.remove();
-            await onAuthed(user, { fresh: true });   // ROLE_HOME_V1
-        } catch (e) {
-            console.error('[first-login reset]', e);
-            errEl.textContent = 'Reset failed — ' + (e.message || e);
-        } finally {
-            btn.disabled = false;
-        }
-    };
-
-    const form = h('form', {
-        onsubmit: (e) => { e.preventDefault(); submit(); },
-        style: { display: 'flex', flexDirection: 'column', gap: '12px', width: '100%' },
-    }, newPwd, confirm, btn, errEl);
-
-    const card = h('div', {
-        style: {
-            width: '380px', maxWidth: 'calc(100vw - 32px)',
-            background: 'white', borderRadius: '16px', padding: '28px 26px',
-            boxShadow: '0 24px 60px rgba(11,20,24,0.22)', display: 'flex',
-            flexDirection: 'column', alignItems: 'center', gap: '16px',
-        },
-    },
-        h('div', {
-            style: {
-                width: '52px', height: '52px', borderRadius: '14px',
-                background: 'linear-gradient(135deg, var(--primary-600, #167873), var(--primary-800, #0f4f4b))',
-                display: 'grid', placeItems: 'center', color: 'white',
-            },
-            html: '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="26" height="26"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
-        }),
-        h('div', { style: { textAlign: 'center' } },
-            h('div', { style: { fontSize: '17px', fontWeight: 700, color: 'var(--ink-900)' } }, 'Set your password'),
-            h('div', { style: { fontSize: '12.5px', color: 'var(--ink-500)', marginTop: '4px', lineHeight: '1.5' } },
-                'Signed in as ', h('b', null, user.username || user.full_name || ''),
-                '. Replace the temporary password to continue.'),
-        ),
-        form,
-    );
-
-    const overlay = h('div', {
-        id: 'login-overlay',
-        style: {
-            position: 'fixed', inset: '0', zIndex: '9999',
-            display: 'grid', placeItems: 'center',
-            background: 'linear-gradient(160deg, #e7ebee, #f3f5f7)',
-        },
-    }, card);
-
-    document.body.appendChild(overlay);
-    setTimeout(() => newPwd.focus(), 0);
-}
+// PASSWORD_CHANGE_V2 — здесь был облачный экран принудительной смены пароля
+// (со своим помощником сброса в admin/auth.js, оба — через supabase.auth.updateUser).
+// Он был недостижим: verifyLogin никогда не возвращал needsPasswordReset, а
+// офлайн updateUser отказывает всегда. Первый вход с заводским паролем ведёт
+// страница входа (index.html + login.js, FIRST_RUN_PASSWORD_V1).
 
 // ---------------------------------------------------------------------------
 // Boot
