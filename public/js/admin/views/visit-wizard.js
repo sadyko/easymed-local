@@ -86,6 +86,23 @@ const REF_UNCAT = '—  без категории';
 // написанием слились бы в одну группу, а переименование категории потеряло бы
 // уже выбранное направление. Пустая строка означает «без категории».
 const refCatOf = (s) => (s && s.category_id != null ? String(s.category_id) : '');
+
+// REPORTS_V2 — «Направить на услуги» из кабинета врача (DOCTOR_REFER_WIZARD_V1):
+// направившим сразу ставится сам врач — его внутренний источник направления
+// (referral_sources.doctor_id, мигр. 122), если он у врача есть. Без этого
+// отчёт «Рефералы» не видел ни одного направления из кабинета: регистратор
+// должен был вспомнить поставить врача руками. Шаг «Направление» при этом
+// включён и показывает выбор — регистратор может поменять его или снять
+// галочку. Источника нет (не врач, источник выключен) — ничего не ставится.
+export function presetReferrer(wiz, doctorId) {
+    if (doctorId === undefined || doctorId === null || doctorId === '') return false;
+    const src = (wiz.sources || []).find(s => s && s.doctor_id != null && String(s.doctor_id) === String(doctorId));
+    if (!src) return false;
+    wiz.hasReferral = true;
+    wiz.sourceId = String(src.id);
+    wiz.sourceCat = refCatOf(src) || REF_UNCAT;
+    return true;
+}
 const refSourcesIn = (sources, cat) => (sources || []).filter(s => (cat === REF_UNCAT ? !refCatOf(s) : refCatOf(s) === cat));
 
 // INVOICE_ROLE_HONEST_V1 (2026-09-16) — ЗЕРКАЛО CREATE_INVOICE_ROLES
@@ -502,7 +519,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const [svcRes, docRes, srcRes, refCatRes, payerRes] = await Promise.all([
             supabase.from('services').select('id, name, price, duration_minutes, requires_doctor, is_lab, type').eq('active', true).order('name').limit(1000),
             supabase.from('users').select('id, full_name, username, role, is_active, service_rates').eq('role', 'doctor').eq('is_active', true).order('full_name'),   // SVC_DOCTORS_V1 — назначения услуг
-            supabase.from('referral_sources').select('id, name, code, category_id').eq('active', true).order('name'),
+            supabase.from('referral_sources').select('id, name, code, category_id, doctor_id').eq('active', true).order('name'),   // REPORTS_V2 — doctor_id: направивший врач из кабинета
             // REFERRAL_CAT_FROM_BOOK_V1 — список категорий берётся из СПРАВОЧНИКА,
             // а не собирается из загруженных источников. Собранный из источников
             // он показывал только те категории, в которых уже кто-то есть: заведи
@@ -539,6 +556,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         wiz.doctors  = docRes.data || [];
         wiz.sources  = srcRes.data || [];
         wiz.refCats  = refCatRes.data || [];
+        presetReferrer(wiz, opts.referrerDoctorId);   // REPORTS_V2 — врач из кабинета направляет сам
         // PAYER_LOAD_V2 — ошибка загрузки и «не заведены» — РАЗНЫЕ факты (тот же
         // урок, что CATALOG_DIAG_V4 ниже): раньше ошибка превращалась в пустой
         // массив, и мастер уверенно сообщал «Плательщики не заведены», когда они

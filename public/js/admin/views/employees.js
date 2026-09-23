@@ -15,6 +15,7 @@ import { phoneInput } from '../phone-input.js?v=ph1';
 import { importExportButtons } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1
 import { soleBranchId } from '../branch-context.js?v=bc3';                  // SOLE_BRANCH_V1
 import { specialtyOptions, canonicalSpecialty, SPECIALTY_ROWS } from '../specialties.js?v=spec2';   // SPECIALTY_LIST_V1 + SPECIALTIES_CLONED_V1 + MULTI_SPECIALTY_V1
+import { referralRewardEditor, saveReferralReward } from './referral-reward-editor.js';   // REPORTS_V2 — рабочая ставка за направления (источник врача)
 
 const ROLES = [
     ['registrar', 'Регистратор'], ['doctor', 'Врач'], ['nurse', 'Медсестра'],
@@ -572,11 +573,13 @@ function openEditor(user, root) {
         } else if (active === 'services') {
             body.append(ratesSection(emp, 'service_rates', { icon: sec.icon, title: 'Услуги и ставки', sub: 'Сколько врач получает за оказанную услугу: процент от суммы после скидки либо фиксированная сумма за единицу. Своя цена — если этот врач берёт за услугу не как в каталоге; пусто = цена каталога.', rateLabel: 'Ставка врача', allowFix: true, ownPrice: true, inpatient: true }, touch));
         } else if (active === 'referral') {
-            // No fixed-sum mode here: referral payouts are computed from the
-            // «Реферальное вознаграждение» table by source name (see
-            // referralsReport in server/services/rpc/reports.js) and never read
-            // users.referral_rates, so a fixed field would pay nobody.
-            body.append(ratesSection(emp, 'referral_rates', { icon: sec.icon, title: 'Вознаграждение за направления', sub: '% от стоимости услуг, на которые врач направил пациента.', pctLabel: '% направления' }, touch));
+            // REPORTS_V2 — вкладка была МЁРТВОЙ: таблица писала users.referral_rates,
+            // а вознаграждение за направления (отчёт «Рефералы», кабинет врача)
+            // читает ставку источника этого врача (referral_sources, мигр. 122).
+            // Процент вводился, сохранялся и не платился. Теперь здесь та же
+            // рабочая правка, что в старой карточке, — общим модулем.
+            body.append(head('Вознаграждение за направления', 'Что врач получает, когда пациент пришёл по его направлению.'),
+                referralRewardEditor({ doctorId: isEdit ? user.id : null, holder: emp, onChange: () => markDirty({}), readOnly }));
         } else if (active === 'access') {
             // CUSTOM_ROLES_V1 — в одном списке штатные роли и роли клиники. У своей
             // роли значение 'custom:<код>': выбрали её — в role ложится ОСНОВА
@@ -719,6 +722,13 @@ function openEditor(user, root) {
         try {
             if (isEdit) await api('/' + user.id, { method: 'PATCH', body: JSON.stringify(payload) });
             else await api('', { method: 'POST', body: JSON.stringify({ ...payload, username: emp.username.trim() }) });
+            // REPORTS_V2 — ставка за направления лежит на источнике врача, а не в
+            // карточке: пишется своей попыткой, и её отказ не выдаётся за неудачу
+            // сохранения самого сотрудника. Вкладку не открывали — не пишется вовсе.
+            if (isEdit && emp.referralReward) {
+                const err = await saveReferralReward(user.id, emp.referralReward);
+                if (err) toast(trf('Сотрудник сохранён, но ставка за направления — нет: {msg}', { msg: err }), 'fail');
+            }
             toast('Сотрудник сохранён', 'ok'); close(); await paint(root);
         } catch (e) { toast(e.message || 'Не удалось сохранить.', 'fail'); saveBtn.disabled = false; saveBtn.textContent = prev; }
     }

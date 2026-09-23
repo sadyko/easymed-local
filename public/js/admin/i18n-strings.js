@@ -8767,4 +8767,5 @@ export const STRINGS = {
   "Внутренние": {"en":"In-house","ru":"Внутренние","uz":"Ichki"},
   "Внешние": {"en":"External","ru":"Внешние","uz":"Tashqi"},
   "Оплачено (после скидки)": {"en":"Paid (after discount)","ru":"Оплачено (после скидки)","uz":"To'langan (chegirmadan keyin)"},
+  "Сотрудник сохранён, но ставка за направления — нет: {msg}": {"en":"The employee is saved, but the referral rate is not: {msg}","ru":"Сотрудник сохранён, но ставка за направления — нет: {msg}","uz":"Xodim saqlandi, lekin yo'llanma stavkasi saqlanmadi: {msg}"},
 };

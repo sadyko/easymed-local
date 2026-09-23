@@ -502,14 +502,14 @@ const flush = async (n = 12) => { for (let i = 0; i < n; i++) await new Promise(
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Мастер визита на пациента 3 с врачебной услугой 21, врач выбран, слот подобран. */
-async function openWizardReady() {
+async function openWizardReady(opts = {}) {
   const s = seed({ shape: 'card', from: '10:00', to: '16:00' });
   DB.prepare('UPDATE services SET requires_doctor = 1 WHERE id = 21').run();
   document.body.children.length = 0;
   TOASTS.length = 0; RPC.length = 0;
   const { openVisitWizard } = await import('../views/visit-wizard.js');
   let saved = 0;
-  await openVisitWizard(() => { saved++; }, { id: 3, full_name: 'Иванов Иван' }, { presetServiceIds: [21] });
+  await openVisitWizard(() => { saved++; }, { id: 3, full_name: 'Иванов Иван' }, { presetServiceIds: [21], ...opts });
   await flush(20);
   const overlay = document.body.children.find(isWizard);
   assert.ok(overlay, 'мастер визита не открылся');
@@ -589,4 +589,45 @@ test('МАСТЕР: пустой визит дня перенесён — ска
       'после переноса услуга не легла в визит');
     assert.ok(TOASTS.some((t) => /Услуги добавлены/.test(t)), 'перенос — это успех, а об успехе не сказано: ' + JSON.stringify(TOASTS));
   } finally { ENSURE_OVERRIDE = null; }
+});
+
+// REPORTS_V2 — «Направить на услуги» из кабинета врача: направившим сразу
+// стоит сам врач (его внутренний источник, мигр. 122). Без этого отчёт
+// «Рефералы» не видел ни одного направления из кабинета.
+test('МАСТЕР из кабинета: направившим стоит сам врач, и визит уходит с его источником', async () => {
+  const w = await openWizardReady({ referrerDoctorId: 7 });
+  const src = DB.prepare('SELECT id FROM referral_sources WHERE doctor_id = 7').get();
+  assert.ok(src, 'у врача нет внутреннего источника — посев не тот');
+  await pressUntilCreate();
+  const ev = RPC.find((c) => c.name === 'ensure_visit');
+  assert.ok(ev, 'мастер не дошёл до записи');
+  assert.equal(ev.body.referral_source_id, src.id, 'направивший не подставлен: ' + JSON.stringify(ev.body));
+  const v = DB.prepare('SELECT referral_source_id FROM visits WHERE patient_id = 3 ORDER BY id DESC LIMIT 1').get();
+  assert.equal(v && v.referral_source_id, src.id, 'визит записан без направившего');
+  assert.equal(w.saved(), 1);
+});
+
+test('МАСТЕР у стойки (без врача-направителя) направившего не подставляет', async () => {
+  await openWizardReady();
+  await pressUntilCreate();
+  const ev = RPC.find((c) => c.name === 'ensure_visit');
+  assert.ok(ev, 'мастер не дошёл до записи');
+  assert.equal(ev.body.referral_source_id, null);
+});
+
+test('presetReferrer: источник врача ставится, чужого или отсутствующего — нет', async () => {
+  const { presetReferrer } = await import('../views/visit-wizard.js');
+  const wiz = { sources: [{ id: 5, doctor_id: 7, category_id: 2 }, { id: 6, doctor_id: null, category_id: 3 }], hasReferral: false, sourceId: '', sourceCat: '' };
+  assert.equal(presetReferrer(wiz, 7), true);
+  assert.deepEqual([wiz.hasReferral, wiz.sourceId, wiz.sourceCat], [true, '5', '2']);
+  const none = { sources: wiz.sources, hasReferral: false, sourceId: '', sourceCat: '' };
+  assert.equal(presetReferrer(none, 8), false);
+  assert.equal(presetReferrer(none, null), false);
+  assert.deepEqual([none.hasReferral, none.sourceId], [false, '']);
+});
+
+test('кабинет врача открывает мастер с направившим — самим врачом', () => {
+  const sw = fs.readFileSync(path.join(VIEWS, 'service-workspace.js'), 'utf8');
+  assert.match(sw, /title: 'Направить на услуги', referrerDoctorId: referringDoctorId\(ctx\)/,
+    '«Направить на услуги» не передаёт мастеру врача-направителя');
 });

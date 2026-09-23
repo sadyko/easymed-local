@@ -16,6 +16,7 @@ import { isBranchRestricted, getAvailableBranchIds, soleBranchId } from '../bran
 import { canEdit } from '../permissions.js';   // ROLE_DELEGATION_V1
 import { getLang, tr, trf } from '../i18n.js';   // EMP_STAFF_TYPE_V1 + I18N_COVERAGE_V1
 import { phoneInput } from '../phone-input.js?v=ph1';
+import { referralRewardEditor, saveReferralReward } from './referral-reward-editor.js';   // REPORTS_V2 — одна правка ставки на обе карточки
 
 // ROLE_ADMIN_ONLY_V1 — assigning a user's role is the clinic owner's job alone
 // (the DB also enforces it: users.role_id writes require current_user_is_admin()).
@@ -1030,131 +1031,13 @@ const SECTION_RENDERERS = {
 // markDirty (not set) so its own row re-render isn't clobbered by a full panel
 // rebuild, which would also reset the local search/filter.
 // INTERNAL_REFERRAL_V1 (мигр. 122) — вознаграждение врача за НАПРАВЛЕНИЕ.
-//
-// Редактируется здесь, а хранится НЕ в карточке сотрудника, а на его источнике
-// направления — той же строке, которую читают отчёт «Рефералы» и кабинет врача.
-// Поэтому три экрана не могут показать три разные суммы за одно направление.
-//
-// Стандартная ставка сразу для всех — в Настройках, на категории «Внутренние
-// врачи»; здесь её можно перекрыть одному врачу.
+// REPORTS_V2 — сам редактор живёт в referral-reward-editor.js: его же рисует
+// живая карточка сотрудника (employees.js), и второй копии правила нет.
 function internalReferralSection({ emp, markDirty }) {
     const wrap = h('div', { class: 'fade-in' });
     wrap.appendChild(secHead('Coins', tr('Вознаграждение за направление'),
         tr('Что врач получает, когда пациент пришёл по его направлению.')));
-    const body = h('div', { style: { maxWidth: '640px' } },
-        h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Загрузка…')));
-    wrap.appendChild(body);
-
-    (async () => {
-        if (!emp.__id) {
-            clear(body);
-            body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                tr('Ставка задаётся после того, как сотрудник сохранён.')));
-            return;
-        }
-        let src = null, cat = null, types = [];
-        try {
-            const [srcRes, typeRes] = await Promise.all([
-                supabase.from('referral_sources')
-                    .select('id, reward_mode, own_percent, own_rates, category_id').eq('doctor_id', emp.__id).limit(1),
-                supabase.from('service_types').select('id, name').eq('active', 1).order('name'),
-            ]);
-            src = (srcRes.data && srcRes.data[0]) || null;
-            types = typeRes.data || [];
-            if (src && src.category_id != null) {
-                const catRes = await supabase.from('referral_source_categories')
-                    .select('id, name, standard_percent').eq('id', src.category_id).limit(1);
-                cat = (catRes.data && catRes.data[0]) || null;
-            }
-        } catch (e) { /* показываем ниже */ }
-
-        clear(body);
-        if (!src) {
-            body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                tr('У этого сотрудника нет карточки источника направления — она заводится только врачам.')));
-            return;
-        }
-
-        let rates = [];
-        try {
-            rates = Array.isArray(src.own_rates) ? src.own_rates
-                : (typeof src.own_rates === 'string' && src.own_rates.trim() ? JSON.parse(src.own_rates) : []);
-        } catch { rates = []; }
-        if (!Array.isArray(rates)) rates = [];
-        const byType = new Map(rates.map(e => [Number(e && e.type_id), e]).filter(([k]) => Number.isFinite(k)));
-
-        const stdNote = cat
-            ? trf('Стандарт категории «{cat}»: {pct}% со всех услуг, кроме заданных в ней по группам.',
-                  { cat: cat.name, pct: cat.standard_percent })
-            : tr('Категория у источника не выбрана — без своей ставки вознаграждение будет нулевым.');
-
-        const modeChk = h('input', { type: 'checkbox', checked: src.reward_mode !== 'own' });
-        const pctInp = h('input', { type: 'number', min: '0', step: '0.01',
-            value: src.own_percent != null && Number(src.own_percent) !== 0 ? String(src.own_percent) : '',
-            placeholder: '0', style: { width: '140px' } });
-
-        const tbody = h('tbody');
-        for (const t of types) {
-            const cur = byType.get(Number(t.id));
-            tbody.appendChild(h('tr', null,
-                h('td', null, t.name),
-                h('td', null, h('div', { class: 'rate-cell' },
-                    h('input', { type: 'number', min: '0', step: '0.01', 'data-rate-type': String(t.id),
-                        value: cur && Number.isFinite(Number(cur.value)) ? String(cur.value) : '',
-                        placeholder: tr('по стандарту') }),
-                    h('select', { 'data-rate-unit': String(t.id) },
-                        h('option', { value: 'pct', selected: !cur || cur.unit !== 'fix' }, '%'),
-                        h('option', { value: 'fix', selected: !!(cur && cur.unit === 'fix') }, 'сум'))))));
-        }
-        if (!types.length) tbody.appendChild(h('tr', null, h('td', { colspan: '2', class: 'muted' }, tr('Группы услуг не заведены.'))));
-
-        const ownBox = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
-            h('div', { class: 'field' },
-                h('label', null, tr('Свой процент — со всех услуг, кроме перечисленных ниже')), pctInp),
-            h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                tr('Пусто — действует стандартный процент сверху. Заполненная строка его перекрывает: % — доля от стоимости услуги, сум — фиксированная сумма за услугу.')),
-            h('table', { class: 'tbl' },
-                h('thead', null, h('tr', null,
-                    h('th', null, tr('Группа услуг')),
-                    h('th', { style: { textAlign: 'right', width: '240px' } }, tr('Ставка')))),
-                tbody));
-
-        function collect() {
-            const out = [];
-            for (const inp of tbody.querySelectorAll('input[data-rate-type]')) {
-                const raw = inp.value.trim();
-                if (raw === '') continue;
-                const value = Number(raw);
-                if (!Number.isFinite(value) || value < 0) continue;
-                const sel = tbody.querySelector('select[data-rate-unit="' + inp.dataset.rateType + '"]');
-                out.push({ type_id: Number(inp.dataset.rateType), unit: sel && sel.value === 'fix' ? 'fix' : 'pct', value });
-            }
-            return out;
-        }
-        function snapshot() {
-            return { mode: modeChk.checked ? 'category' : 'own',
-                     percent: Number(pctInp.value) || 0, rates: collect() };
-        }
-        function push() {
-            emp.referralReward = snapshot();
-            ownBox.hidden = modeChk.checked;
-            markDirty();
-        }
-        // Стартовое состояние без markDirty: открытая вкладка — не правка.
-        emp.referralReward = snapshot();
-        ownBox.hidden = modeChk.checked;
-        modeChk.addEventListener('change', push);
-        pctInp.addEventListener('input', push);
-        tbody.addEventListener('change', push);
-        tbody.addEventListener('input', push);
-
-        body.appendChild(h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
-            h('div', { class: 'field checkbox' }, modeChk,
-                h('label', null, tr('Вознаграждение по категории (общая ставка)'))),
-            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, stdNote),
-            ownBox));
-    })();
-
+    wrap.appendChild(referralRewardEditor({ doctorId: emp.__id, holder: emp, onChange: () => markDirty() }));
     return wrap;
 }
 
@@ -1525,15 +1408,8 @@ export async function saveEmployee(emp, row) {
     // специальности ниже — своей попыткой, со своим предупреждением, чтобы
     // отказ здесь не выдавал за неудачу сохранение самого сотрудника.
     if (emp.referralReward && userId) {
-        try {
-            const rr = emp.referralReward;
-            const { error } = await supabase.from('referral_sources').update({
-                reward_mode: rr.mode === 'own' ? 'own' : 'category',
-                own_percent: rr.mode === 'own' ? (Number(rr.percent) || 0) : 0,
-                own_rates:   rr.mode === 'own' ? (rr.rates || []) : [],
-            }).eq('doctor_id', userId);
-            if (error) { console.warn('[emp-editor] referral reward:', error.message); syncWarnings.push('вознаграждение за направление'); }
-        } catch (e) { console.warn('[emp-editor] referral reward:', e.message); syncWarnings.push('вознаграждение за направление'); }
+        const err = await saveReferralReward(userId, emp.referralReward);   // REPORTS_V2 — общий модуль
+        if (err) { console.warn('[emp-editor] referral reward:', err); syncWarnings.push('вознаграждение за направление'); }
     }
 
     // Specialties mirror (local) + medcore sync. SPECIALTIES_SYNC_V1
