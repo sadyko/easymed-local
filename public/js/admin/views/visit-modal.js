@@ -1010,7 +1010,11 @@ function openDispenseItem(state, onReload) {
                     const res = Array.isArray(data) ? data[0] : data;
                     const name = res?.item_name || item.name;
                     ok++;
-                    if (res && Number(res.on_hand) <= 0) {
+                    // HOLDINGS_FIRST_V1 — warn about an empty warehouse only when
+                    // the warehouse was actually used: a dispense from the
+                    // doctor's own holding or the cabinet never touches it.
+                    const usedWarehouse = !Array.isArray(res?.sources) || res.sources.some((s) => s && s.type === 'warehouse');
+                    if (res && usedWarehouse && Number(res.on_hand) <= 0) {
                         toast(`Warning: ${name} stock is now ${Number(res.on_hand).toLocaleString('ru-RU')} (low/negative).`, 'fail');
                     }
                 } catch (err) { fails.push(`${item.name}: ${err?.message || err}`); }

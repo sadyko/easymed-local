@@ -4026,7 +4026,14 @@ function openDispenseConsultItem(ctx) {
                     const res = Array.isArray(data) ? data[0] : data;
                     const name = res?.item_name || item.name;
                     ok++;
-                    if (res && Number(res.on_hand) <= 0) {
+                    // HOLDINGS_FIRST_V1 — предупреждение о пустом складе имеет
+                    // смысл, только если со склада И БРАЛИ: выдача из своего
+                    // подотчёта или кабинета склада не касается, и кричать
+                    // «остаток 0» на каждую такую выдачу — ложная тревога.
+                    // Сервер называет источники (sources); старый ответ без
+                    // них ведёт себя как раньше.
+                    const usedWarehouse = !Array.isArray(res?.sources) || res.sources.some((s) => s && s.type === 'warehouse');
+                    if (res && usedWarehouse && Number(res.on_hand) <= 0) {
                         toast(trf('Внимание: остаток {name} теперь {n} (мало/в минусе).', { name, n: Number(res.on_hand).toLocaleString('ru-RU') }), 'fail');
                     }
                     // Log the dispense to the patient timeline (best-effort).
