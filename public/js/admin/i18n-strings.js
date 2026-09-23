@@ -3,6 +3,23 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // MY_STOCK_V1 (2026-09-23) — экран «Мои запасы»: свой подотчёт, свои выдачи, свои списания
+  "Мой отдел": {"en":"My department","ru":"Мой отдел","uz":"Mening bo'limim"},
+  "Карточка отдела: команда, помещения, снабжение и журнал.": {"en":"The department card: team, rooms, supplies and the log.","ru":"Карточка отдела: команда, помещения, снабжение и журнал.","uz":"Bo'lim kartasi: jamoa, xonalar, ta'minot va jurnal."},
+  "Что выдали вам и когда, кто выдал, сколько осталось на руках и что вы списали на пациентов.": {"en":"What was issued to you and when, who issued it, how much is left on hand and what you wrote off on patients.","ru":"Что выдали вам и когда, кто выдал, сколько осталось на руках и что вы списали на пациентов.","uz":"Sizga nima va qachon berilgan, kim bergan, qo'lda qancha qolgan va bemorlarga nimani hisobdan chiqargansiz."},
+  "Что у меня на руках": {"en":"What I have on hand","ru":"Что у меня на руках","uz":"Qo'limda nima bor"},
+  "Числится лично за вами. Запасы кабинета и отдела — в карточке отдела.": {"en":"Held in your own name. The room's and the department's stock is on the department card.","ru":"Числится лично за вами. Запасы кабинета и отдела — в карточке отдела.","uz":"Shaxsan sizning hisobingizda. Xona va bo'lim zaxiralari — bo'lim kartasida."},
+  "Осталось": {"en":"Left","ru":"Осталось","uz":"Qoldi"},
+  "На руках у вас ничего не числится: со склада вам ещё ничего не выдавали.": {"en":"Nothing is held in your name: the warehouse has not issued you anything yet.","ru":"На руках у вас ничего не числится: со склада вам ещё ничего не выдавали.","uz":"Sizning hisobingizda hech narsa yo'q: ombor sizga hali hech narsa bermagan."},
+  "Не удалось загрузить ваши остатки.": {"en":"Could not load your stock.","ru":"Не удалось загрузить ваши остатки.","uz":"Qoldiqlaringizni yuklab bo'lmadi."},
+  "Что мне выдали": {"en":"What was issued to me","ru":"Что мне выдали","uz":"Menga nima berilgan"},
+  "Вам ничего не выдавали.": {"en":"Nothing has been issued to you.","ru":"Вам ничего не выдавали.","uz":"Sizga hech narsa berilmagan."},
+  "Не удалось загрузить выдачи.": {"en":"Could not load the issues.","ru":"Не удалось загрузить выдачи.","uz":"Berishlarni yuklab bo'lmadi."},
+  "Что я списал на пациентов": {"en":"What I wrote off on patients","ru":"Что я списал на пациентов","uz":"Bemorlarga nimani hisobdan chiqardim"},
+  "Вы ещё ничего не списывали на пациентов.": {"en":"You have not written anything off on patients yet.","ru":"Вы ещё ничего не списывали на пациентов.","uz":"Siz hali bemorlarga hech narsani hisobdan chiqarmagansiz."},
+  "Не удалось загрузить списания.": {"en":"Could not load the write-offs.","ru":"Не удалось загрузить списания.","uz":"Hisobdan chiqarishlarni yuklab bo'lmadi."},
+  "Не удалось загрузить «Мои запасы»: {msg}": {"en":"Could not load «My stock»: {msg}","ru":"Не удалось загрузить «Мои запасы»: {msg}","uz":"«Mening zaxiram» yuklanmadi: {msg}"},
+  "Показаны последние {n} — список длиннее.": {"en":"Showing the latest {n} — the list is longer.","ru":"Показаны последние {n} — список длиннее.","uz":"Oxirgi {n} ta ko'rsatilyapti — ro'yxat undan uzunroq."},
   // STOCK_LOG_V1 (2026-09-23) — журнал движений: кто, кому, партия, срок, период
   "Дата с": {"en":"Date from","ru":"Дата с","uz":"Sana dan"},
   "Дата по": {"en":"Date to","ru":"Дата по","uz":"Sana gacha"},

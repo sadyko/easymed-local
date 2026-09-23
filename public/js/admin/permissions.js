@@ -157,6 +157,44 @@ export const INPATIENT_SCREEN_ROLES = Object.freeze({
     'discharge':     Object.freeze(['senior_nurse', 'head_doctor', 'admin']),
 });
 
+// MY_STOCK_V1 — КТО ДЕРЖИТ ТОВАР НА РУКАХ, ТОТ И ВИДИТ «МОИ ЗАПАСЫ».
+//
+// Это не грантовый ключ и не может им быть: экран показывает ТОЛЬКО собственные
+// строки вошедшего (отбор считает сервер — rpc/holdings.js `mine`,
+// rpc/stock-log.js `only`), и выдавать право «видеть себя» галочкой значило бы
+// заводить право, которое администратору пришлось бы проставить каждому
+// поимённо, иначе врач не увидел бы того, что сам же и тратит.
+//
+// Список — те, кому склад вообще выдаёт под отчёт (rpc/procurement.js
+// issue_stock_lines): врач, медсестра, старшая, главный врач; администратор
+// тоже, чтобы увидеть СВОЁ. Кассиру и регистратуре товар на руки не выдают —
+// у них экран был бы всегда пустым. Заведующая отделом сюда попадает и по
+// роли (руководителем отдела бывает только врач или медсестра — eligibleHead
+// в rpc/departments.js), и по собственному отделу (ownDepartmentId ниже).
+export const MY_STOCK_ROLES = Object.freeze(['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse']);
+
+// Экраны, которые ключ роли открывает, а видит их только человек нужной роли.
+// Сводка прав (role-reach.js) обязана называть такие экраны отдельно, иначе она
+// обещает роли то, чего роль не получит.
+export const ROLE_GATED_SCREENS = Object.freeze({ ...INPATIENT_SCREEN_ROLES, 'my-stock': MY_STOCK_ROLES });
+
+/**
+ * MY_STOCK_V1 — отдел вошедшего (users.department_id, приезжает с сессией —
+ * server/services/auth.js sessionUser). null — отдела нет.
+ *
+ * Принадлежность к отделу — ФАКТ о человеке, а не право: по нему решается,
+ * есть ли смысл показывать пункт «Мой отдел» (карточка ЧУЖОГО отдела ему всё
+ * равно не откроется — rpc/departments.js isOwn) и ссылку на отдел с «Моих
+ * запасов». Руководитель отдела всегда состоит и в его команде
+ * (department_form добавляет его сам), поэтому одного этого поля хватает и для
+ * заведующей.
+ */
+export function ownDepartmentId() {
+    const u = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || null;
+    const id = u ? Number(u.department_id) : NaN;
+    return Number.isInteger(id) && id > 0 ? id : null;
+}
+
 function rememberRoles(names) {
     const out = [];
     for (const n of (names || [])) {
@@ -544,8 +582,20 @@ export function patientTabCanDelete(tab) {
 // Is a top-level sidebar module visible? The Settings module is special: it
 // shows when the role can reach the Settings home OR any single sub-section.
 export function isModuleAllowed(navId) {
+    // MY_STOCK_V1 — «МОЙ ОТДЕЛ» РЕШАЕТСЯ РАНЬШЕ ВСЕХ ПРАВ, ПОТОМУ ЧТО ЭТО НЕ
+    // ПРАВО. Пункт ведёт на карточку ТВОЕГО отдела; человеку, который ни в
+    // одном отделе не состоит, вести туда некуда — и полный доступ этого не
+    // меняет: администратор без отдела увидел бы пункт, который открывает
+    // чужой справочник. Свои отделы он открывает из «Настройки → Отделы», как
+    // и открывал. Право на сам экран проверяется тут же, вторым условием.
+    if (navId === 'my-department') return ownDepartmentId() != null && isRouteAllowed('departments');
     if (_effective == null) return true;
     if (ALWAYS_ALLOWED.has(navId)) return true;
+    // MY_STOCK_V1 — «Мои запасы»: свой подотчёт, свои выдачи, свои списания.
+    // Спрашивается РОЛЬ, а не ключ: грантового ключа у экрана нет и быть не
+    // может (см. MY_STOCK_ROLES выше). Заведующая отделом видит пункт и тогда,
+    // когда её роль в список не попала, — у неё есть отдел.
+    if (navId === 'my-stock') return hasActorRole(MY_STOCK_ROLES) || ownDepartmentId() != null;
     if (navId === 'settings') {
         if (_effective.has('settings')) return true;
         for (const k of _effective) if (k.startsWith('settings:')) return true;
@@ -790,6 +840,19 @@ export function isRouteAllowed(view) {
     // маршрут открыт, доступ к данным закрыт сервером. Права склада этим НЕ
     // расширяются — ключ `inventory` по-прежнему открывает только #inventory.
     if (view === 'stock-log') return true;
+    // MY_STOCK_V1 — «МОИ ЗАПАСЫ» ОТКРЫТ, ПОТОМУ ЧТО ПОКАЗЫВАЕТ ТОЛЬКО ТЕБЯ.
+    // Тот же довод, что у журнала строкой выше, и на ступень сильнее: журналу
+    // область видимости считают («своё / свой отдел / вся клиника»), а здесь
+    // считать нечего — все три списка экрана по построению чужих строк не
+    // содержат: holdings_list спрашивается с `mine`, движения — с `only`, и
+    // имя человека оба раза берёт сервер из сессии, а не из аргумента. Роль
+    // решает, показывать ли ПУНКТ МЕНЮ (isModuleAllowed выше); адрес,
+    // набранный руками, откроет пустой экран, а не чужой.
+    if (view === 'my-stock') return true;
+    // MY_STOCK_V1 — «Мой отдел» это карточка отдела под своим адресом: право
+    // то же, что у «Отделов» (сервер отдаёт сотруднику только его отдел —
+    // rpc/departments.js isOwn), а меню сверх того требует, чтобы отдел был.
+    if (view === 'my-department') return isRouteAllowed('departments');
     return _effective.has(view);
 }
 

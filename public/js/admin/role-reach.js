@@ -23,7 +23,7 @@
 import {
     previewRole, isModuleAllowed, accessLevelFor, actorRoleCodes,
     patientTabLevel, patientTabCaps, canCreatePatient,
-    PATIENT_CARD_TAB_IDS, PATIENT_TABS, INPATIENT_SCREEN_ROLES,
+    PATIENT_CARD_TAB_IDS, PATIENT_TABS, ROLE_GATED_SCREENS,
 } from './permissions.js';
 // ПЕРЕВОДЧИК ПРИХОДИТ АРГУМЕНТОМ, А НЕ ИМПОРТОМ. i18n.js трогает document на
 // загрузке, и импорт превратил бы этот модуль в экранный — то есть непроверяемый
@@ -53,7 +53,7 @@ export const TAB_WORD = {
  * Экраны, которые ключ открывает, но человек увидит их, только если ОН САМ
  * нужной роли: лист назначений ведёт врач, задачи и порционник — медсестра,
  * выписку оформляет старшая. Это не дубль правила, а его чтение: сам список
- * ролей берётся из permissions.js (INPATIENT_SCREEN_ROLES), а здесь только
+ * ролей берётся из permissions.js (ROLE_GATED_SCREENS), а здесь только
  * человеческие названия ролей для этой подписи.
  */
 const ROLE_WORD = {
@@ -93,7 +93,7 @@ export function roleReach(roleRow, navIds, labelOf, translate) {
         const opens = [], closed = [], conditional = [];
         for (const id of navIds) {
             if (!isModuleAllowed(id)) { closed.push({ id, label: label(id) }); continue; }
-            const need = INPATIENT_SCREEN_ROLES[id];
+            const need = ROLE_GATED_SCREENS[id];
             const entry = { id, label: label(id), level: accessLevelFor(id) };
             if (need && need.length) {
                 entry.roles = need.map((r) => tr(ROLE_WORD[r] || r));
