@@ -69,11 +69,24 @@ export const REPORT_DEFS = [
         title: 'Счета',
         desc:  'Все счета за период: суммы, скидки, оплачено, остаток/долг, статус, плательщик и регистратор.',
     },
+    // REPORTS_V2 — «Закупки и склад»: четыре вида (владелец выбрал все четыре).
+    // Прежняя карточка «Закупки» — это первый вид; в колонке поставщика у неё
+    // стояло примечание движения, теперь — поставщик.
     {
         kind:  'procurement',
         icon:  'Layers',
-        title: 'Закупки',
-        desc:  'Позиции поступлений от поставщиков: товар, поставщик, количество и сумма.',
+        title: 'Закупки и склад',
+        desc:  'Приход по поставщикам; расход по отделам, сотрудникам и пациентам по себестоимости; ведомость остатков (начало + приход − расход = конец, количество и сумма); просроченное и истекающее со стоимостью.',
+        views: [
+            { kind: 'procurement',       label: 'Приход по поставщикам' },
+            { kind: 'stock_consumption', label: 'Расход' },
+            { kind: 'stock_statement',   label: 'Остатки' },
+            { kind: 'stock_expiry',      label: 'Сроки годности' },
+        ],
+        options: [
+            { arg: 'by', label: 'Разрез', kinds: ['stock_consumption'],
+              choices: [['lines', 'По движениям'], ['holder', 'По получателям'], ['patient', 'По пациентам']] },
+        ],
     },
     {
         kind:  'surgery_profit',
@@ -179,6 +192,16 @@ export function reportKinds(rep) {
 export function defaultReportOptions(rep) {
     const out = {};
     for (const o of rep.options || []) out[o.arg] = o.choices[0][0];
+    return out;
+}
+// Фильтр может относиться только к некоторым видам (kinds): «Разрез» есть у
+// расхода, но не у ведомости. Чужой фильтр не показывается и не уезжает.
+export function optionsFor(rep, kind) {
+    return (rep.options || []).filter(o => !Array.isArray(o.kinds) || o.kinds.includes(kind));
+}
+export function reportArgs(rep, kind, opts) {
+    const out = {};
+    for (const o of optionsFor(rep, kind)) out[o.arg] = opts[o.arg];
     return out;
 }
 
@@ -648,7 +671,7 @@ async function openReportBuilder(rep) {
             // владельца: определение отчёта само называет свой RPC и рисовалку.
             const { data, error } = rep.mode === 'charts'
                 ? await supabase.rpc(rep.rpc || 'owner_report', args)
-                : await supabase.rpc('run_report', { kind: st.kind, ...args, ...st.opts });
+                : await supabase.rpc('run_report', { kind: st.kind, ...args, ...reportArgs(rep, st.kind, st.opts) });
             if (error) throw new Error(error.message || String(error));
             st.result = data;
             // Отчёт с графиками МОЖЕТ отдавать и плоские строки (колл-центр отдаёт
@@ -726,7 +749,7 @@ async function openReportBuilder(rep) {
                     st.kind = v.kind; paintChoices(); resetResult();
                 }))));
         }
-        for (const o of rep.options || []) {
+        for (const o of optionsFor(rep, st.kind)) {
             choiceRow.appendChild(label(o.label));
             choiceRow.appendChild(h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
                 ...o.choices.map(([value, text]) => pill(st.opts[o.arg] === value, text, () => {

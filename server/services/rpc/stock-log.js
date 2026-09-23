@@ -150,6 +150,27 @@ function kindClause(view) {
 
 const viewKindOf = (row) => (row.kind === 'dispense' && row.reference_type === 'issue' ? 'issue' : row.kind);
 
+// REPORTS_V2 — КОМУ и НА КОГО, одним куском SQL на журнал и на отчёты склада
+// (rpc/reports.js, «Расход»): две копии разрешения получателя и пациента
+// разошлись бы — журнал назвал бы одного получателя, отчёт другого.
+// a — псевдоним stock_movements в запросе.
+export function holderNameSql(a) {
+  return `CASE ${a}.holder_type
+             WHEN 'staff'      THEN (SELECT full_name FROM users WHERE id = ${a}.holder_id)
+             WHEN 'room'       THEN (SELECT name FROM rooms WHERE id = ${a}.holder_id)
+             WHEN 'department' THEN (SELECT name FROM departments WHERE id = ${a}.holder_id)
+             ELSE NULL END`;
+}
+// Пациент движения: у списания на пациента reference_id — строка визита
+// (visit_services) или госпитализации (admission_services). col — колонка
+// пациента: full_name для журнала, id для отчёта «по пациентам».
+export function movementPatientSql(a, col = 'full_name') {
+  return `CASE ${a}.reference_type
+             WHEN 'visit'     THEN (SELECT pt.${col} FROM visit_services vs JOIN visits v ON v.id = vs.visit_id JOIN patients pt ON pt.id = v.patient_id WHERE vs.id = ${a}.reference_id)
+             WHEN 'admission' THEN (SELECT pt.${col} FROM admission_services s JOIN admissions ad ON ad.id = s.admission_id JOIN patients pt ON pt.id = ad.patient_id WHERE s.id = ${a}.reference_id)
+             ELSE NULL END`;
+}
+
 /**
  * Имя получателя убирается из начала основания: issue_stock_lines пишет
  * «Кардиология — на неделю», и пока «кому» не было колонкой, имя приходилось
@@ -223,15 +244,8 @@ export function stockMovementsList(db, args, user) {
            m.created_by, m.holder_type, m.holder_id, m.batch_no, m.expiry_date, m.supplier_id,
            p.name AS product_name, p.unit, p.base_unit,
            u.full_name AS actor_full_name, u.username AS actor_username,
-           CASE m.holder_type
-             WHEN 'staff'      THEN (SELECT full_name FROM users WHERE id = m.holder_id)
-             WHEN 'room'       THEN (SELECT name FROM rooms WHERE id = m.holder_id)
-             WHEN 'department' THEN (SELECT name FROM departments WHERE id = m.holder_id)
-             ELSE NULL END AS holder_name,
-           CASE m.reference_type
-             WHEN 'visit'     THEN (SELECT pt.full_name FROM visit_services vs JOIN visits v ON v.id = vs.visit_id JOIN patients pt ON pt.id = v.patient_id WHERE vs.id = m.reference_id)
-             WHEN 'admission' THEN (SELECT pt.full_name FROM admission_services s JOIN admissions ad ON ad.id = s.admission_id JOIN patients pt ON pt.id = ad.patient_id WHERE s.id = m.reference_id)
-             ELSE NULL END AS patient_name
+           ${holderNameSql('m')} AS holder_name,
+           ${movementPatientSql('m')} AS patient_name
       FROM stock_movements m
       JOIN products p ON p.id = m.product_id
       LEFT JOIN users u ON u.id = m.created_by

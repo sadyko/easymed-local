@@ -12,6 +12,9 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { runReport, doctorReferralReward } from './reports.js';
 import { createInvoiceForAdmission } from './billing.js';
+import { receiveStockLines, issueStockLines, adjustStock } from './procurement.js';
+import { dispenseFromHolding } from './holdings.js';
+import { today as todayOf } from '../domain/day.js';
 
 const admin = { id: 9, role: 'admin' };
 const FROM = '2000-01-01';
@@ -277,5 +280,154 @@ test('врач × услуга: разбивка складывается в д�
     const own = rows.filter((o) => o['Врач'] === d['Врач']);
     assert.equal(sum(own, 'Доля врача'), d['Доля за услуги'] + d['Стационарная доля'], d['Врач']);
     assert.equal(sum(own, 'Выставлено'), d['Выставлено'], d['Врач']);
+  }
+});
+
+// ─── 4. ЗАКУПКИ И СКЛАД ──────────────────────────────────────────────────────
+//
+// Склад заводится НАСТОЯЩИМИ дверями (приход, выдача, списание из отдела и со
+// склада, корректировка): ведомость проверяется на тех движениях, которые
+// пишет программа, а не на придуманных руками.
+
+const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+
+function seedStock() {
+  const db = openDb(':memory:');
+  migrate(db);
+  db.prepare("INSERT INTO users (id, username, password_hash, role, full_name) VALUES (9,'adm','x','admin','Администратор')").run();
+  db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (1,'P-1','Азизов А.')").run();
+  db.prepare("INSERT INTO visits (id, patient_id, visit_date) VALUES (1,1,strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run();
+  const dep = db.prepare("INSERT INTO departments (name) VALUES ('Хирургия Р')").run().lastInsertRowid;
+  db.prepare("INSERT INTO suppliers (id, name) VALUES (1,'ООО МедСнаб')").run();
+  db.prepare("INSERT INTO purchase_orders (id, po_number, supplier_id, status) VALUES (1,'PO-1',1,'ordered')").run();
+  const p = db.prepare('INSERT INTO products (id, name, unit, base_unit, sale_price, on_hand, avg_cost) VALUES (?,?,?,?,?,0,0)');
+  p.run(1, 'Перчатки', 'шт', 'шт', 1500);
+  p.run(2, 'Бинт', 'шт', 'шт', 3000);
+  p.run(3, 'Шприц', 'шт', 'шт', 500);
+  const day = todayOf(db);
+  // Январский приход перчаток — ДО периода ведомости (он даёт начальный остаток).
+  receiveStockLines(db, { lines: [{ product_id: 1, qty: 100, unit_cost: 1000, supplier_id: 1 }] }, admin);
+  db.prepare("UPDATE stock_movements SET created_at = '2026-01-10T08:00:00Z' WHERE product_id = 1").run();
+  receiveStockLines(db, { lines: [
+    { product_id: 2, qty: 50, unit_cost: 2000, supplier_id: 1, batch_no: 'B-OLD', expiry_date: addDays(day, -5) },
+    { product_id: 3, qty: 40, unit_cost: 500, batch_no: 'S-SOON', expiry_date: addDays(day, 10) },
+  ] }, admin);
+  // Приход без поставщика по строке, но по ЗАКАЗУ: поставщик берётся у заказа.
+  db.prepare(`INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, branch_id)
+              VALUES (1, 'receive', 20, 1300, 'purchase_order', 1, 'PO PO-1', 9, 1)`).run();
+  db.prepare('UPDATE products SET on_hand = on_hand + 20, avg_cost = 1050 WHERE id = 1').run();
+  // Выдача в отдел — со склада; расход на пациента — из отдела и со склада.
+  issueStockLines(db, { holder: { type: 'department', id: dep }, lines: [{ product_id: 1, qty: 30, unit: 'base' }] }, admin);
+  dispenseFromHolding(db, { product_id: 1, quantity: 5, visit_id: 1, holder: { type: 'department', id: dep } }, admin);
+  dispenseFromHolding(db, { product_id: 1, quantity: 2, visit_id: 1, holder: { type: 'warehouse' } }, admin);
+  adjustStock(db, { product_id: 1, qty: -3, note: 'бой' }, admin);
+  return { db, day };
+}
+
+test('закупки: поставщик — из supplier_id (или заказа), а не примечание; итоги по поставщикам', () => {
+  const { db } = seedStock();
+  const r = run(db, 'procurement');
+  const rows = objects(r);
+  assert.equal(rows.length, 4);
+  const byProduct = (n) => rows.filter((o) => o['Товар'] === n);
+  assert.deepEqual(byProduct('Перчатки').map((o) => o['Поставщик']).sort(), ['ООО МедСнаб', 'ООО МедСнаб']);
+  assert.equal(byProduct('Шприц')[0]['Поставщик'], 'Поставщик не указан');
+  assert.equal(byProduct('Бинт')[0]['Партия'], 'B-OLD');
+  assert.equal(byProduct('Бинт')[0]['Сумма'], 100000);
+  // Примечание движения («PO PO-1») — своей колонкой, а не вместо поставщика.
+  assert.ok(rows.some((o) => o['Примечание'] === 'PO PO-1' && o['Поставщик'] === 'ООО МедСнаб'));
+  // 100×1000 + 20×1300 + 50×2000 = 226 000 у МедСнаба; шприцы 40×500 = 20 000 без поставщика.
+  assert.ok(r.notes.includes('Итого — ООО МедСнаб: 3 позиции, 226 000 сум.'), r.notes.join(' | '));
+  assert.ok(r.notes.includes('Итого — Поставщик не указан: 1 позиция, 20 000 сум.'), r.notes.join(' | '));
+});
+
+test('расход: выдача в отдел, расход на пациента из отдела и со склада — по себестоимости', () => {
+  const { db } = seedStock();
+  const lines = objects(run(db, 'stock_consumption'));
+  assert.deepEqual(lines.map((o) => o['Вид']).sort(), ['Выдача', 'Расход на пациента', 'Расход на пациента']);
+  const issue = lines.find((o) => o['Вид'] === 'Выдача');
+  assert.equal(issue['Получатель / откуда'], 'Отдел: Хирургия Р');
+  assert.equal(issue['Кол-во'], 30);
+  const fromDept = lines.find((o) => o['Вид'] === 'Расход на пациента' && o['Получатель / откуда'] === 'Отдел: Хирургия Р');
+  assert.equal(fromDept['Пациент'], 'Азизов А.');
+  assert.equal(fromDept['Кол-во'], 5);
+  assert.ok(lines.some((o) => o['Получатель / откуда'] === 'Склад' && o['Кол-во'] === 2));
+  for (const o of lines) assert.equal(o['Сумма'], Math.round(o['Кол-во'] * o['Себестоимость ед.'] * 100) / 100);
+
+  const holders = objects(run(db, 'stock_consumption', { by: 'holder' }));
+  const dept = holders.find((o) => o['Получатель / откуда'] === 'Отдел: Хирургия Р');
+  assert.equal(dept['Выдано со склада (себестоимость)'], issue['Сумма']);
+  assert.equal(dept['Списано на пациентов (себестоимость)'], fromDept['Сумма']);
+  const patients = objects(run(db, 'stock_consumption', { by: 'patient' }));
+  assert.equal(patients.length, 1);
+  assert.equal(patients[0]['Пациент'], 'Азизов А.');
+  assert.equal(patients[0]['Движений'], 2);
+  assert.equal(sum(patients, 'Списано (себестоимость)'), sum(lines.filter((o) => o['Вид'] !== 'Выдача'), 'Сумма'));
+  assert.throws(() => run(db, 'stock_consumption', { by: 'bogus' }), /by must be/);
+});
+
+test('ведомость: начало + приход − выдано − списано ± корректировки = конец; по сегодня сходится с остатком товара', () => {
+  const { db, day } = seedStock();
+  const r = runReport(db, { kind: 'stock_statement', from: '2026-02-01', to: day }, admin);
+  const rows = objects(r);
+  const g = rows.find((o) => o['Товар'] === 'Перчатки');
+  assert.equal(g['Начало: кол-во'], 100);              // январский приход — до периода
+  assert.equal(g['Приход: кол-во'], 20);
+  assert.equal(g['Выдано: кол-во'], 30);
+  assert.equal(g['Списано на пациентов: кол-во'], 2);  // только со склада; из отдела — не склад
+  assert.equal(g['Корректировки: кол-во'], -3);
+  assert.equal(g['Конец: кол-во'], 85);
+  for (const o of rows) {
+    const calc = o['Начало: кол-во'] + o['Приход: кол-во'] - o['Выдано: кол-во'] - o['Списано на пациентов: кол-во'] + o['Корректировки: кол-во'];
+    assert.equal(Math.round(calc * 100) / 100, o['Конец: кол-во'], o['Товар']);
+    const money = o['Начало: сумма'] + o['Приход: сумма'] - o['Выдано: сумма'] - o['Списано на пациентов: сумма'] + o['Корректировки: сумма'];
+    assert.equal(Math.round(money * 100) / 100, o['Конец: сумма'], o['Товар'] + ': деньги');
+    const onHand = db.prepare('SELECT on_hand FROM products WHERE name = ?').get(o['Товар']).on_hand;
+    assert.equal(o['Конец: кол-во'], onHand, o['Товар'] + ': конец периода по сегодня ≠ остаток товара');
+    assert.equal(o['В карточке товара'], onHand);
+    assert.equal(o['Расхождение'], 0);
+  }
+  assert.equal(g['Конец: сумма'], 85 * 1050);          // по средней себестоимости товара
+  assert.ok(r.notes.some((n) => n.includes('совпадает с остатком в карточке у всех товаров')), r.notes.join(' | '));
+});
+
+test('ведомость: остаток, поправленный мимо журнала, назван расхождением; прошлый период — без сверки', () => {
+  const { db, day } = seedStock();
+  db.prepare('UPDATE products SET on_hand = on_hand + 7 WHERE id = 1').run();
+  const r = runReport(db, { kind: 'stock_statement', from: '2026-02-01', to: day }, admin);
+  const g = objects(r).find((o) => o['Товар'] === 'Перчатки');
+  assert.equal(g['Расхождение'], -7);
+  assert.ok(r.notes.some((n) => n.includes('не совпадает с остатком в карточке')), r.notes.join(' | '));
+  const jan = runReport(db, { kind: 'stock_statement', from: '2026-01-01', to: '2026-01-31' }, admin);
+  assert.ok(!jan.columns.includes('Расхождение'), 'у прошлого периода сверять не с чем');
+  const gj = objects(jan).find((o) => o['Товар'] === 'Перчатки');
+  assert.deepEqual([gj['Начало: кол-во'], gj['Приход: кол-во'], gj['Конец: кол-во']], [0, 100, 100]);
+});
+
+test('сроки годности: просроченное и истекающее с ценой — расчётом «Сроков годности»', () => {
+  const { db } = seedStock();
+  const r = run(db, 'stock_expiry');
+  const rows = objects(r);
+  assert.deepEqual(rows.map((o) => o['Состояние']), ['Просрочено', 'Истекает']);
+  const bint = rows[0];
+  assert.equal(bint['Товар'], 'Бинт');
+  assert.equal(bint['Партия'], 'B-OLD');
+  assert.equal(bint['Остаток (расчёт)'], 50);
+  assert.equal(bint['Стоимость'], 100000);
+  assert.equal(bint['Поставщик'], 'ООО МедСнаб');
+  assert.equal(rows[1]['Товар'], 'Шприц');
+  assert.equal(rows[1]['Стоимость'], 20000);
+  assert.ok(r.notes.some((n) => n.includes('расчёт, а не факт')), 'нет оговорки «это расчёт»');
+  // Перчатки без срока в отчёт не попадают.
+  assert.ok(!rows.some((o) => o['Товар'] === 'Перчатки'));
+});
+
+test('склад не ездит: «только соседнее здание» — пусто во всех четырёх видах', () => {
+  const { db } = seedStock();
+  db.prepare("INSERT INTO branches (name, letter, active) VALUES ('Чиланзар','B',0)").run();
+  for (const kind of ['procurement', 'stock_consumption', 'stock_statement', 'stock_expiry']) {
+    const r = run(db, kind, { buildings: ['B'] });
+    assert.equal(r.rows.length, 0, kind);
+    assert.ok(r.notes.some((n) => n.includes('Складские движения')), kind + ': нет примечания про склад');
   }
 });

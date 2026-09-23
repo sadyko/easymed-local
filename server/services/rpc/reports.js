@@ -25,6 +25,10 @@ import { resolveReferralRate, rewardForLine } from '../../../public/js/shared/re
 // REPORTS_V2 — группа услуги (одна из пяти) подписью раздела каталога: тот же
 // модуль, что раскладывает каталог в мастере записи.
 import { categoryOf, CAT_ORDER } from '../../../public/js/shared/service-categories.js';
+// REPORTS_V2 — отчёты склада: КОМУ и НА КОГО тем же SQL, что журнал движений,
+// а партии и их остатки — тем же расчётом, что экран «Сроки годности».
+import { holderNameSql, movementPatientSql } from './stock-log.js';
+import { lotBalances, EXPIRING_SOON_DAYS } from './expiry.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -1004,6 +1008,18 @@ function invoicesFullReport(db, args, ctx) {
   };
 }
 
+// REPORTS_V2 — «Закупки и склад», четыре вида (владелец выбрал все четыре):
+// приход по поставщикам ('procurement'), расход по получателям и пациентам
+// ('stock_consumption'), ведомость остатков ('stock_statement') и просроченное
+// / истекающее ('stock_expiry'). Склад между зданиями не ездит — все четыре
+// считают только своё здание (STOCK_LOCAL_NOTE).
+const STOCK_UNIT_SQL = `COALESCE(NULLIF(pr.base_unit, ''), pr.unit, '')`;
+
+// (а) ПРИХОД ПО ПОСТАВЩИКАМ. Поставщик — stock_movements.supplier_id (приход
+// через «Принять товар»), у прихода по заказу — поставщик заказа
+// (reference_type 'purchase_order', reference_id = заказ). Прежде в колонке
+// «Поставщик / примечание» стояло свободное примечание движения, и поставщика
+// там не было почти никогда.
 function procurementReport(db, args, ctx) {
   const { from, to } = resolveRange(db, args);
   const bf = branchFilter(args, 'sm.branch_id');
@@ -1014,22 +1030,259 @@ function procurementReport(db, args, ctx) {
   const rows = db.prepare(`
     SELECT ${originExpr(db, 'stock_movements', 'sm')} AS origin,
            ${localDate('sm.created_at')} AS date, pr.name AS product, sm.note AS note,
-           sm.qty AS qty, sm.unit_cost AS unit_cost
+           sm.qty AS qty, sm.unit_cost AS unit_cost, ${STOCK_UNIT_SQL} AS unit,
+           sm.batch_no AS batch_no, sm.expiry_date AS expiry_date,
+           sup.name AS supplier
       FROM stock_movements sm
       JOIN products pr ON pr.id = sm.product_id
+      LEFT JOIN purchase_orders po ON sm.reference_type = 'purchase_order' AND po.id = sm.reference_id
+      LEFT JOIN suppliers sup ON sup.id = COALESCE(sm.supplier_id, po.supplier_id)
      WHERE sm.kind = 'receive'
        AND ${inLocalRange('sm.created_at')}${bf.clause}${gf.clause}
-     ORDER BY sm.created_at DESC
+     ORDER BY sup.name IS NULL, sup.name, sm.created_at DESC, sm.id DESC
   `).all(from, to, ...bf.params, ...gf.params);
+  const NO_SUPPLIER = 'Поставщик не указан';
+  const perSupplier = new Map();
+  for (const r of rows) {
+    const k = r.supplier || NO_SUPPLIER;
+    const t = perSupplier.get(k) || { lines: 0, sum: 0 };
+    t.lines += 1; t.sum += r.qty * (r.unit_cost || 0);
+    perSupplier.set(k, t);
+  }
+  // Итоги по поставщикам — примечаниями над таблицей, по убыванию суммы:
+  // строка-подытог внутри таблицы попала бы и в общее «Итого» под ней.
+  const totals = [...perSupplier.entries()].sort((a, b) => b[1].sum - a[1].sum)
+    .map(([name, t]) => 'Итого — ' + name + ': ' + t.lines + ' '
+      + pluralRu(t.lines, 'позиция', 'позиции', 'позиций') + ', ' + moneyRu(t.sum) + ' сум.');
   return {
-    columns: [BUILDING_COL, 'Дата', 'Товар', 'Поставщик / примечание', 'Количество', 'Цена за ед.', 'Сумма'],
-    rows: rows.map((r) => [ctx.label(r.origin), r.date, r.product, r.note || '', r.qty,
-      r.unit_cost == null ? null : round2(r.unit_cost),
-      round2(r.qty * (r.unit_cost || 0))]),
+    columns: [BUILDING_COL, 'Дата', 'Поставщик', 'Товар', 'Партия', 'Срок годности', 'Количество', 'Ед.',
+              'Цена за ед.', 'Сумма', 'Примечание'],
+    rows: rows.map((r) => [ctx.label(r.origin), r.date, r.supplier || NO_SUPPLIER, r.product, r.batch_no || '',
+      r.expiry_date || '', r.qty, r.unit || '', r.unit_cost == null ? null : round2(r.unit_cost),
+      round2(r.qty * (r.unit_cost || 0)), r.note || '']),
     by_building: summariseByBuilding(ctx, rows, { total: (r) => r.qty * (r.unit_cost || 0) }),
     total_label: 'Сумма закупок',
-    notes: [STOCK_LOCAL_NOTE],
+    notes: [STOCK_LOCAL_NOTE, ...totals],
   };
+}
+
+// (б) РАСХОД ПО ОТДЕЛАМ, СОТРУДНИКАМ И ПАЦИЕНТАМ — по себестоимости.
+// Журнал STOCK_FLOW_V1: выдача со склада получателю — kind 'dispense' с
+// reference_type 'issue'/'requisition' и держателем holder_type/holder_id;
+// расход на пациента — 'dispense' с reference_type 'visit'/'admission'
+// (держатель — откуда взяли: подотчёт, кабинет, отдел; пусто — склад);
+// отмена расхода — 'void' с тем же основанием, количество с плюсом.
+// Себестоимость — цена движения, у движения без цены — средняя цена товара.
+const ISSUE_REFS = ['issue', 'requisition'];
+const PATIENT_REFS = ['visit', 'admission'];
+const HOLDER_TYPE_RU = { staff: 'Сотрудник', room: 'Кабинет', department: 'Отдел' };
+const CONSUMPTION_KIND_RU = { issue: 'Выдача', patient: 'Расход на пациента', void: 'Отмена расхода' };
+const CONSUMPTION_BY = ['lines', 'holder', 'patient'];
+const CONSUMPTION_NOTE = 'Себестоимость — цена движения, а у движения без цены — средняя цена товара. «Выдача» — со склада получателю; «Расход на пациента» — из подотчёта, кабинета, отдела или со склада; отмена расхода вычитается.';
+
+function consumptionMovements(db, args, ctx) {
+  const { from, to } = resolveRange(db, args);
+  const gf = buildingWhere(db, ctx, args, 'stock_movements', 'm');
+  const refs = [...ISSUE_REFS, ...PATIENT_REFS];
+  return db.prepare(`
+    SELECT ${originExpr(db, 'stock_movements', 'm')} AS origin,
+           ${localDate('m.created_at')} AS date, m.kind, m.reference_type, m.qty,
+           COALESCE(m.unit_cost, pr.avg_cost, 0) AS cost,
+           pr.name AS product, ${STOCK_UNIT_SQL} AS unit,
+           m.holder_type, m.holder_id, ${holderNameSql('m')} AS holder_name,
+           ${movementPatientSql('m')} AS patient, ${movementPatientSql('m', 'id')} AS patient_id,
+           COALESCE(u.full_name, u.username) AS actor
+      FROM stock_movements m
+      JOIN products pr ON pr.id = m.product_id
+      LEFT JOIN users u ON u.id = m.created_by
+     WHERE m.kind IN ('dispense', 'void')
+       AND m.reference_type IN (${refs.map(() => '?').join(', ')})
+       AND ${inLocalRange('m.created_at')}${gf.clause}
+     ORDER BY m.created_at, m.id
+  `).all(...refs, from, to, ...gf.params).map((r) => {
+    const kind = r.kind === 'void' ? 'void' : ISSUE_REFS.includes(r.reference_type) ? 'issue' : 'patient';
+    const qty = -Number(r.qty || 0);   // расход с плюсом, отмена — с минусом
+    const holder = r.holder_type ? (HOLDER_TYPE_RU[r.holder_type] || r.holder_type) + ': ' + (r.holder_name || '#' + r.holder_id) : 'Склад';
+    return { ...r, kind, qty, sum: qty * Number(r.cost || 0), holder };
+  });
+}
+
+function consumptionBy(args) {
+  const v = args && args.by;
+  if (v === undefined || v === null || v === '') return 'lines';
+  if (!CONSUMPTION_BY.includes(v)) throw new RpcError('by must be one of: ' + CONSUMPTION_BY.join(', ') + '.', 400);
+  return v;
+}
+
+function stockConsumptionReport(db, args, ctx) {
+  const by = consumptionBy(args);
+  const mv = consumptionMovements(db, args, ctx);
+  const notes = [STOCK_LOCAL_NOTE, CONSUMPTION_NOTE];
+  if (by === 'holder') {
+    // По получателю: сколько ему выдали со склада и сколько из его рук (или со
+    // склада, если держателя нет) ушло на пациентов.
+    const buckets = new Map();
+    for (const r of mv) {
+      const key = ctx.keyOf(r.origin) + '\u0000' + r.holder;
+      const b = buckets.get(key) || { origin: r.origin, holder: r.holder, issued: 0, used: 0, lines: 0 };
+      if (r.kind === 'issue') b.issued += r.sum; else b.used += r.sum;
+      b.lines += 1;
+      buckets.set(key, b);
+    }
+    const list = [...buckets.values()].sort((a, b) => (b.issued + b.used) - (a.issued + a.used));
+    return {
+      columns: [BUILDING_COL, 'Получатель / откуда', 'Движений', 'Выдано со склада (себестоимость)', 'Списано на пациентов (себестоимость)'],
+      rows: list.map((b) => [ctx.label(b.origin), b.holder, b.lines, round2(b.issued), round2(b.used)]),
+      by_building: summariseByBuilding(ctx, list, { total: (b) => b.issued + b.used }),
+      total_label: 'Себестоимость',
+      notes,
+    };
+  }
+  if (by === 'patient') {
+    const buckets = new Map();
+    for (const r of mv) {
+      if (r.kind === 'issue') continue;
+      const key = ctx.keyOf(r.origin) + '\u0000' + (r.patient_id == null ? '' : r.patient_id);
+      const b = buckets.get(key) || { origin: r.origin, patient: r.patient || 'Пациент не определён', lines: 0, sum: 0 };
+      b.lines += 1; b.sum += r.sum;
+      buckets.set(key, b);
+    }
+    const list = [...buckets.values()].sort((a, b) => b.sum - a.sum);
+    return {
+      columns: [BUILDING_COL, 'Пациент', 'Движений', 'Списано (себестоимость)'],
+      rows: list.map((b) => [ctx.label(b.origin), b.patient, b.lines, round2(b.sum)]),
+      by_building: summariseByBuilding(ctx, list, { total: (b) => b.sum }),
+      total_label: 'Себестоимость',
+      notes: [...notes, 'Строка визита, удалённая вместе с отменой расхода, пациента уже не называет: такие движения собраны под «Пациент не определён» и в сумме гасят друг друга.'],
+    };
+  }
+  return {
+    columns: [BUILDING_COL, 'Дата', 'Вид', 'Товар', 'Кол-во', 'Ед.', 'Себестоимость ед.', 'Сумма',
+              'Получатель / откуда', 'Пациент', 'Кто провёл'],
+    rows: mv.map((r) => [ctx.label(r.origin), r.date, CONSUMPTION_KIND_RU[r.kind], r.product, round2(r.qty), r.unit || '',
+      round2(r.cost), round2(r.sum), r.holder, r.patient || '', r.actor || '']),
+    by_building: summariseByBuilding(ctx, mv, { total: (r) => r.sum }),
+    total_label: 'Себестоимость',
+    notes,
+  };
+}
+
+// (в) ВЕДОМОСТЬ ОСТАТКОВ СКЛАДА за период, по товару:
+//   начало + приход − выдано − списано на пациентов ± корректировки = конец,
+// количеством и деньгами. Остаток склада (products.on_hand) двигают ровно эти
+// движения журнала: всё, у чего нет держателя (приход, корректировка,
+// инвентаризация, списание и отмена со склада), плюс выдача со склада
+// получателю (issue / requisition — держатель это КОМУ, а не откуда). Расход
+// из подотчёта, кабинета и отдела остаток склада НЕ трогает (HOLDINGS_V1) и
+// сюда не входит.
+//
+// ДЕНЬГИ — ПО СРЕДНЕЙ ЦЕНЕ ТОВАРА НА СЕГОДНЯ (products.avg_cost) для всех
+// колонок сразу: только так «начало + приход − расход = конец» держится и в
+// деньгах. Фактическая цена прихода — в виде «Приход по поставщикам».
+//
+// СВЕРКА: период, который кончается сегодня (или позже), обязан кончаться
+// остатком из карточки товара. Не сошлось — значит остаток правили мимо
+// журнала, и ведомость это называет, а не прячет.
+const WAREHOUSE_LEDGER_SQL = `(m.holder_type IS NULL OR m.reference_type IN ('issue', 'requisition'))`;
+const STATEMENT_NOTE = 'Деньги — по средней себестоимости товара на сегодня (одна цена на все колонки, чтобы начало + приход − расход = конец сходилось и в сумах). Фактические цены прихода — в виде «Приход по поставщикам». Расход из подотчёта, кабинетов и отделов остаток склада не меняет — он уже ушёл со склада выдачей.';
+
+function stockStatementReport(db, args, ctx) {
+  const { from, to } = resolveRange(db, args);
+  const gf = buildingWhere(db, ctx, args, 'stock_movements', 'm');
+  if (gf.clause.includes('1 = 0')) {
+    return { columns: statementColumns(false), rows: [], by_building: summariseByBuilding(ctx, [], {}), total_label: 'Конец: сумма', notes: [STOCK_LOCAL_NOTE] };
+  }
+  const day = `${localDate('m.created_at')}`;
+  const rows = db.prepare(`
+    SELECT pr.id, pr.name, COALESCE(pr.code, '') AS code, ${STOCK_UNIT_SQL} AS unit,
+           COALESCE(pr.avg_cost, 0) AS avg_cost, COALESCE(pr.on_hand, 0) AS on_hand,
+           COALESCE(SUM(CASE WHEN ${day} < date(?) THEN m.qty END), 0) AS opening,
+           COALESCE(SUM(CASE WHEN ${day} BETWEEN date(?) AND date(?) AND m.kind = 'receive' THEN m.qty END), 0) AS received,
+           COALESCE(SUM(CASE WHEN ${day} BETWEEN date(?) AND date(?) AND m.kind = 'dispense'
+                              AND m.reference_type IN ('issue', 'requisition') THEN -m.qty END), 0) AS issued,
+           COALESCE(SUM(CASE WHEN ${day} BETWEEN date(?) AND date(?) AND m.kind IN ('dispense', 'void')
+                              AND COALESCE(m.reference_type, '') NOT IN ('issue', 'requisition') THEN -m.qty END), 0) AS used,
+           COALESCE(SUM(CASE WHEN ${day} BETWEEN date(?) AND date(?)
+                              AND m.kind NOT IN ('receive', 'dispense', 'void') THEN m.qty END), 0) AS adjusted,
+           COUNT(m.id) AS movements
+      FROM products pr
+      LEFT JOIN stock_movements m ON m.product_id = pr.id AND ${WAREHOUSE_LEDGER_SQL}
+                                 AND ${day} <= date(?)
+     GROUP BY pr.id
+     HAVING movements > 0 OR pr.on_hand <> 0
+     ORDER BY pr.name, pr.id
+  `).all(from, from, to, from, to, from, to, from, to, to);
+  const checkNow = String(to).slice(0, 10) >= today(db);
+  const list = rows.map((r) => {
+    const closing = round2(r.opening + r.received - r.issued - r.used + r.adjusted);
+    return { ...r, closing, diff: round2(closing - r.on_hand) };
+  }).filter((r) => r.opening || r.received || r.issued || r.used || r.adjusted || r.closing || (checkNow && r.on_hand));
+  const notes = [STOCK_LOCAL_NOTE, STATEMENT_NOTE];
+  if (checkNow) {
+    const bad = list.filter((r) => Math.abs(r.diff) > 1e-6);
+    notes.push(bad.length
+      ? 'Сверка с карточкой товара: у ' + bad.length + ' ' + pluralRu(bad.length, 'товара', 'товаров', 'товаров')
+        + ' конечный остаток не совпадает с остатком в карточке — остаток меняли мимо журнала движений (колонка «Расхождение»).'
+      : 'Сверка с карточкой товара: конечный остаток совпадает с остатком в карточке у всех товаров.');
+  }
+  const money = (q, r) => round2(q * r.avg_cost);
+  return {
+    columns: statementColumns(checkNow),
+    rows: list.map((r) => {
+      const row = [ctx.label(''), r.name, r.code, r.unit || '',
+        round2(r.opening), round2(r.received), round2(r.issued), round2(r.used), round2(r.adjusted), r.closing,
+        round2(r.avg_cost),
+        money(r.opening, r), money(r.received, r), money(r.issued, r), money(r.used, r), money(r.adjusted, r), money(r.closing, r)];
+      if (checkNow) row.push(round2(r.on_hand), r.diff);
+      return row;
+    }),
+    by_building: summariseByBuilding(ctx, list.map((r) => ({ origin: '', value: r.closing * r.avg_cost })), { total: (r) => r.value }),
+    total_label: 'Конец: сумма',
+    notes,
+  };
+}
+function statementColumns(checkNow) {
+  const cols = [BUILDING_COL, 'Товар', 'Код', 'Ед.',
+    'Начало: кол-во', 'Приход: кол-во', 'Выдано: кол-во', 'Списано на пациентов: кол-во', 'Корректировки: кол-во', 'Конец: кол-во',
+    'Средняя себестоимость',
+    'Начало: сумма', 'Приход: сумма', 'Выдано: сумма', 'Списано на пациентов: сумма', 'Корректировки: сумма', 'Конец: сумма'];
+  if (checkNow) cols.push('В карточке товара', 'Расхождение');
+  return cols;
+}
+
+// (г) ПРОСРОЧЕННОЕ И ИСТЕКАЮЩЕЕ — с ценой. Партии и их остатки считает тот же
+// расклад, что экран «Сроки годности» (EXPIRY_BALANCE_V1, rpc/expiry.js
+// lotBalances: остаток склада раскладывается по приходам, самый поздний
+// приход первым). Это РАСЧЁТ, а не измерение: расход партию не пишет, — и
+// отчёт говорит это теми же словами, что экран. Снимок на сегодня: период
+// отчёта здесь не участвует.
+const EXPIRY_STATE_RU = { expired: 'Просрочено', soon: 'Истекает' };
+const EXPIRY_NOTE = 'Остаток по партиям — расчёт, а не факт: программа не запоминает, из какой партии товар взяли, и считает, что первым расходуется ближайший срок. Стоимость — по средней себестоимости товара.';
+
+function stockExpiryReport(db, args, ctx) {
+  const gf = buildingWhere(db, ctx, args, 'stock_movements', 'm');
+  const day = today(db);
+  const snapNote = 'Снимок на сегодня (' + day + '): период отчёта здесь не участвует. «Истекает» — срок в ближайшие ' + EXPIRING_SOON_DAYS + ' дней.';
+  if (gf.clause.includes('1 = 0')) {
+    return { columns: expiryColumns(), rows: [], by_building: summariseByBuilding(ctx, [], {}), total_label: 'Стоимость', notes: [STOCK_LOCAL_NOTE, EXPIRY_NOTE, snapNote] };
+  }
+  const cost = new Map(db.prepare('SELECT id, COALESCE(avg_cost, 0) AS avg_cost FROM products').all().map((p) => [p.id, p.avg_cost]));
+  const lots = lotBalances(db, { todayStr: day })
+    .filter((l) => (l.state === 'expired' || l.state === 'soon') && l.remaining > 1e-9)
+    .sort((a, b) => (a.state === b.state ? (a.expiry_date < b.expiry_date ? -1 : a.expiry_date > b.expiry_date ? 1 : 0) : (a.state === 'expired' ? -1 : 1)));
+  const list = lots.map((l) => ({ ...l, origin: '', cost: cost.get(l.product_id) || 0, value: l.remaining * (cost.get(l.product_id) || 0) }));
+  return {
+    columns: expiryColumns(),
+    rows: list.map((l) => [ctx.label(''), EXPIRY_STATE_RU[l.state], l.product_name, l.product_code || '', l.batch_no || '',
+      l.expiry_date, l.days_left, round2(l.remaining), l.unit || '', round2(l.cost), round2(l.value), l.supplier_name || '']),
+    by_building: summariseByBuilding(ctx, list, { total: (l) => l.value }),
+    total_label: 'Стоимость',
+    notes: [STOCK_LOCAL_NOTE, EXPIRY_NOTE, snapNote],
+  };
+}
+function expiryColumns() {
+  return [BUILDING_COL, 'Состояние', 'Товар', 'Код', 'Партия', 'Срок годности', 'Дней до срока',
+          'Остаток (расчёт)', 'Ед.', 'Средняя себестоимость', 'Стоимость', 'Поставщик'];
 }
 
 const SURGERY_RE = /хирург|операц|surg|operat/i;
@@ -1456,6 +1709,10 @@ const REPORTS_RU = {
   by_services:      byServicesReport,        // REPORTS_V2 — по услугам
   by_doctors:       byDoctorsReport,         // REPORTS_V2 — по врачам: выплата и работа
   doctor_services:  doctorServicesReport,    // REPORTS_V2 — врач × услуга
+  // REPORTS_V2 — «Закупки и склад»: приход — 'procurement' выше.
+  stock_consumption: stockConsumptionReport,
+  stock_statement:   stockStatementReport,
+  stock_expiry:      stockExpiryReport,
 };
 
 // OWNER_REPORT_V1 — chart data for «Отчёт владельца»: period KPIs, last-12-months

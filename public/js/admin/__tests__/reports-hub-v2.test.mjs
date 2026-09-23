@@ -17,7 +17,7 @@ globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null)
 globalThis.document = globalThis.document || { documentElement: {}, addEventListener() {}, createElement: () => ({ style: {} }), head: { appendChild() {} }, body: { appendChild() {} }, getElementById: () => null };
 globalThis.window = globalThis.window || { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, addEventListener() {}, dispatchEvent() { return true; } };
 
-const { REPORT_DEFS, reportKinds, defaultReportOptions } = await import('../views/reports-hub.js');
+const { REPORT_DEFS, reportKinds, defaultReportOptions, optionsFor, reportArgs } = await import('../views/reports-hub.js');
 const { ICON_MAP } = await import('../icon-map.js');
 const { openDb } = await import('../../../../server/db/connection.js');
 const { migrate } = await import('../../../../server/db/migrate.js');
@@ -36,10 +36,10 @@ test('каждый вид и каждое значение фильтра таб
     for (const d of tableDefs) {
       assert.ok(ICON_MAP[d.icon], 'нет значка ' + d.icon + ' у «' + d.title + '»');
       for (const kind of reportKinds(d)) {
-        const base = { kind, from: '2026-01-01', to: '2026-01-31', ...defaultReportOptions(d) };
+        const base = { kind, from: '2026-01-01', to: '2026-01-31', ...reportArgs(d, kind, defaultReportOptions(d)) };
         const r = runReport(db, base, { id: 1, role: 'admin' });
         assert.equal(r.columns[0], 'Здание', kind + ': первая колонка — «Здание»');
-        for (const o of d.options || []) {
+        for (const o of optionsFor(d, kind)) {
           for (const [value] of o.choices) {
             assert.doesNotThrow(() => runReport(db, { ...base, [o.arg]: value }, { id: 1, role: 'admin' }),
               kind + ': значение ' + o.arg + '=' + value + ' не принято сервером');
@@ -60,7 +60,7 @@ test('«Рефералы»: сводка и детализация, фильтр
 });
 
 test('конструктор зовёт run_report ВЫБРАННЫМ видом и с выбранными фильтрами, и так же называет файл', () => {
-  assert.match(hub, /supabase\.rpc\('run_report', \{ kind: st\.kind, \.\.\.args, \.\.\.st\.opts \}\)/);
+  assert.match(hub, /supabase\.rpc\('run_report', \{ kind: st\.kind, \.\.\.args, \.\.\.reportArgs\(rep, st\.kind, st\.opts\) \}\)/);
   assert.match(hub, /XLSX\.writeFile\(wb, `\$\{st\.kind\}_/);
   // Смена вида или фильтра сбрасывает результат — старая таблица не уйдёт в Excel под новым именем.
   assert.match(hub, /function resetResult\(\) \{\s*st\.result = null;\s*downloadBtn\.disabled = true;/);
@@ -83,4 +83,16 @@ test('«По врачам»: два вида — врачи и врачи × у�
   assert.ok(d, 'нет карточки «По врачам»');
   assert.deepEqual(reportKinds(d), ['by_doctors', 'doctor_services']);
   assert.ok(ICON_MAP[d.icon]);
+});
+
+test('«Закупки и склад»: четыре вида, «Разрез» — только у расхода', () => {
+  const d = def('procurement');
+  assert.equal(d.title, 'Закупки и склад');
+  assert.deepEqual(reportKinds(d), ['procurement', 'stock_consumption', 'stock_statement', 'stock_expiry']);
+  assert.deepEqual(optionsFor(d, 'stock_consumption').map((o) => o.arg), ['by']);
+  assert.deepEqual(optionsFor(d, 'stock_statement'), []);
+  // Чужой фильтр не уезжает на сервер.
+  assert.deepEqual(reportArgs(d, 'stock_statement', { by: 'holder' }), {});
+  assert.deepEqual(reportArgs(d, 'stock_consumption', { by: 'holder' }), { by: 'holder' });
+  assert.deepEqual(optionsFor(d, 'stock_consumption')[0].choices.map((c) => c[0]), ['lines', 'holder', 'patient']);
 });
