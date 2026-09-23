@@ -30,6 +30,14 @@
 // РОЛЬ, КОТОРОЙ НЕЧЕГО ПОКАЗАТЬ, ПОЛУЧАЕТ ПУСТОЙ СПИСОК, А НЕ 403. Отказ на
 // журнале читается как поломка и кончается звонком администратору; пустой
 // список говорит правду — «за вами движений не числится».
+//
+// ЗАКУПОЧНАЯ ЦЕНА — ОТДЕЛЬНОЕ ПРАВО, И СНИМАЕТ ЕЁ СЕРВЕР. Право видеть строку
+// и право видеть, почём клиника закупает, — разные права: область видимости
+// открыла журнал медсестре и заведующей, видимость денег этим не расширилась.
+// Экран колонку «Цена за ед.» и так рисует только области 'all' (views/
+// stock-log.js), но разметка — не защита: ответ сервера виден во вкладке
+// «Сеть» браузера одним движением. Поэтому unit_cost уходит ЧИСЛОМ только
+// области 'all', а всем прочим — null.
 import { hasAnyRole, canViewSection } from '../roles.js';
 import { grantAllowsOr } from '../grants.js';
 import { inLocalRange, localDate } from '../domain/day.js';
@@ -173,6 +181,7 @@ function stripHolder(note, name) {
  *
  * qty и unit — БАЗОВЫЕ, те же, что products.on_hand: журнал говорит на языке
  * склада, а не потребления (минус 5 упаковок, а не минус 500 штук).
+ * unit_cost — число только области 'all'; всем прочим null (см. шапку файла).
  */
 export function stockMovementsList(db, args, user) {
   const a = args || {};
@@ -232,6 +241,8 @@ export function stockMovementsList(db, args, user) {
 
   const truncated = rows.length > limit;
   const page = truncated ? rows.slice(0, limit) : rows;
+  // Закупочная цена — только области «вся клиника» (см. шапку файла).
+  const withCost = scope.kind === 'all';
 
   return {
     scope: scope.kind,
@@ -251,7 +262,7 @@ export function stockMovementsList(db, args, user) {
         product_name: r.product_name || '',
         unit: r.base_unit || r.unit || '',
         qty: round2(r.qty),
-        unit_cost: r.unit_cost == null ? null : round2(r.unit_cost),
+        unit_cost: withCost && r.unit_cost != null ? round2(r.unit_cost) : null,
         note: stripHolder(r.note, holderName),
         actor_id: r.created_by || null,
         actor_name: r.actor_full_name || r.actor_username || '',
