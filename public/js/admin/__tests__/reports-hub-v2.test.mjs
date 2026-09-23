@@ -65,3 +65,15 @@ test('конструктор зовёт run_report ВЫБРАННЫМ видом
   // Смена вида или фильтра сбрасывает результат — старая таблица не уйдёт в Excel под новым именем.
   assert.match(hub, /function resetResult\(\) \{\s*st\.result = null;\s*downloadBtn\.disabled = true;/);
 });
+
+test('«По услугам»: табличная карточка с фильтрами «Счета» и «Группа» (пять групп)', () => {
+  const d = def('by_services');
+  assert.ok(d, 'нет карточки «По услугам»');
+  assert.deepEqual(reportKinds(d), ['by_services']);
+  const paid = d.options.find((o) => o.arg === 'paid');
+  assert.deepEqual(paid.choices.map((c) => c[0]), ['all', 'paid']);
+  const group = d.options.find((o) => o.arg === 'group');
+  assert.deepEqual(group.choices.map((c) => c[0]), ['all', 'consultation', 'lab', 'imaging', 'procedure', 'other']);
+  // SERVICE_VOCABULARY — пять групп не называются «Тип».
+  assert.equal(group.label, 'Группа');
+});

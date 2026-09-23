@@ -22,6 +22,9 @@ import { INFLOW_SQL } from '../../../public/js/shared/payment-methods.js';   // 
 // существует дважды — здесь и выгрузкой в reports-export.js, — и две копии
 // правила «какая ставка применяется» означали бы две разные суммы к выплате.
 import { resolveReferralRate, rewardForLine } from '../../../public/js/shared/referral-reward.js';
+// REPORTS_V2 — группа услуги (одна из пяти) подписью раздела каталога: тот же
+// модуль, что раскладывает каталог в мастере записи.
+import { categoryOf, CAT_ORDER } from '../../../public/js/shared/service-categories.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -1246,6 +1249,85 @@ export function doctorInpatientShare(db, args, _user) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// REPORTS_V2 — «По услугам» (kind 'by_services').
+//
+// Строка на услугу и место оказания (амбулатория / стационар — одна колонка
+// «Где», а не два набора денежных колонок: так таблица читается слева
+// направо и итог внизу складывает всё сразу). Деньги — ТЕ ЖЕ выражения, что в
+// «Общей выручке» и «Зарплатах врачей» (itemRowsQuery: ITEM_DISCOUNT_SQL,
+// ITEM_TAX_SQL, ITEM_NET_SQL, LINE_FEE_SQL), поэтому:
+//   «Все счета»        — «Доля врача» = «Доля врача» «Общей выручки»;
+//   «Только оплаченные» — «Доля врача» = «Итого к выплате» «Зарплат врачей».
+// Аннулированные счета не входят (прежний отчёт 'services' их считал — он не
+// используется). Период — по дате счёта.
+// ---------------------------------------------------------------------------
+const PAID_SCOPES = ['all', 'paid'];
+function paidScope(args) {
+  const v = args && args.paid;
+  if (v === undefined || v === null || v === '') return 'all';
+  if (!PAID_SCOPES.includes(v)) throw new RpcError('paid must be one of: all, paid.', 400);
+  return v;
+}
+// Группа — одна из пяти (services.type), подписью раздела каталога
+// (shared/service-categories.js): тот же словарь, что у мастера записи.
+const SERVICE_GROUPS = ['consultation', 'lab', 'imaging', 'procedure', 'other'];
+function groupFilter(args) {
+  const v = args && args.group;
+  if (v === undefined || v === null || v === '' || v === 'all') return null;
+  if (!SERVICE_GROUPS.includes(v)) throw new RpcError('group must be one of: all, ' + SERVICE_GROUPS.join(', ') + '.', 400);
+  return categoryOf({ type: v });
+}
+const lineGroup = (r) => (r.service_id == null && !r.service_group
+  ? 'Прочее'
+  : categoryOf({ type: r.service_group, is_lab: r.service_is_lab, name: r.service }));
+const isInpatientLine = (r) => r.inpatient_line_id != null || r.admission_id != null;
+const WHERE_RU = { out: 'Амбулатория', in: 'Стационар' };
+
+const SHARE_ACCRUAL_NOTE = 'Доля врача начисляется после оплаты счёта. В режиме «Все счета» показано, сколько причитается по всем строкам, включая ещё не оплаченные; «Только оплаченные» сходится с «Зарплатами врачей».';
+
+function byServicesReport(db, args, ctx) {
+  const scope = paidScope(args);
+  const group = groupFilter(args);
+  const src = itemRowsQuery(db, args, ctx)
+    .filter((r) => scope === 'all' || r.status === 'paid')
+    .filter((r) => !group || lineGroup(r) === group);
+  const buckets = new Map();
+  for (const r of src) {
+    const where = isInpatientLine(r) ? 'in' : 'out';
+    const who = r.service_id != null ? 'id:' + r.service_id : 'nm:' + (r.service || '');
+    const key = ctx.keyOf(r.origin) + '\u0000' + who + '\u0000' + where;
+    const b = buckets.get(key) || {
+      origin: r.origin, group: lineGroup(r), service: r.service || '—', where,
+      qty: 0, gross: 0, discount: 0, tax: 0, net: 0, fee: 0, paid: 0,
+    };
+    b.qty += Number(r.qty) || 1;
+    b.gross += r.amount || 0;
+    b.discount += r.discount || 0;
+    b.tax += r.tax || 0;
+    b.net += r.net || 0;
+    b.fee += r.doctor_fee || 0;
+    if (r.status === 'paid') b.paid += (r.amount || 0) - (r.discount || 0);
+    buckets.set(key, b);
+  }
+  const order = (g) => { const i = CAT_ORDER.indexOf(g); return i < 0 ? CAT_ORDER.length : i; };
+  const list = [...buckets.values()].sort((a, b) =>
+    (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
+    || order(a.group) - order(b.group) || b.gross - a.gross);
+  const notes = [SHARE_ACCRUAL_NOTE];
+  if (hasUnattributed(ctx, src)) notes.push(UNATTRIBUTED_NOTE);
+  return {
+    columns: [BUILDING_COL, 'Группа', 'Услуга', 'Где', 'Кол-во', 'Сумма', 'Скидка', 'Налог',
+              'После скидки и налога', 'Доля врача', 'Остаток клинике', 'Оплачено'],
+    rows: list.map((b) => [ctx.label(b.origin), b.group, b.service, WHERE_RU[b.where], round2(b.qty),
+      round2(b.gross), round2(b.discount), round2(b.tax), round2(b.net), round2(b.fee),
+      round2(b.net - b.fee), round2(b.paid)]),
+    by_building: summariseByBuilding(ctx, list, { total: (b) => b.gross - b.discount, fee: (b) => b.fee }),
+    total_label: 'Сумма после скидки',
+    notes,
+  };
+}
+
 const REPORTS_RU = {
   total_revenue:    totalRevenueReport,
   referrals:        referralsReport,
@@ -1256,6 +1338,7 @@ const REPORTS_RU = {
   inpatient_share:  inpatientShareReport,   // INPATIENT_SHARE_V1
   // REPORTS_V2 — детализация рефералов (сводка — 'referrals' выше).
   referrals_detail: referralsDetailReport,
+  by_services:      byServicesReport,        // REPORTS_V2 — по услугам
 };
 
 // OWNER_REPORT_V1 — chart data for «Отчёт владельца»: period KPIs, last-12-months
@@ -1369,6 +1452,7 @@ const ITEM_BASED_REPORTS = new Set([
   'total_revenue', 'referrals', 'surgery_profit', 'doctor_salaries',
   'inpatient_share',   // INPATIENT_SHARE_V1 — тоже читает строки счетов
   'referrals_detail',  // REPORTS_V2 — те же строки счетов, что у сводки
+  'by_services',       // REPORTS_V2
 ]);
 
 export function runReport(db, args, _user) {

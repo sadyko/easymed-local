@@ -167,3 +167,53 @@ test('кабинет врача: вознаграждение за направ�
   assert.equal(doctorReferralReward(db, { doctor_id: 2, from: FROM, to: TO }, admin).count, 0);
   assert.throws(() => doctorReferralReward(db, { doctor_id: 'x' }, admin), /doctor_id/);
 });
+
+// ─── 2. ПО УСЛУГАМ ───────────────────────────────────────────────────────────
+
+test('по услугам: строка на услугу и место, деньги по строке, аннулированный счёт не входит', () => {
+  const { db } = seed();
+  const rows = objects(run(db, 'by_services'));
+  const cons = rows.find((o) => o['Услуга'] === 'Консультация');
+  assert.equal(cons['Группа'], 'Консультации');
+  assert.equal(cons['Где'], 'Амбулатория');
+  assert.equal(cons['Кол-во'], 2);
+  assert.equal(cons['Сумма'], 200000);
+  assert.equal(cons['Скидка'], 10000);
+  assert.equal(cons['После скидки и налога'], 190000);
+  assert.equal(cons['Доля врача'], 57000);            // 30 % от 90 000 + 30 % от 100 000
+  assert.equal(cons['Остаток клинике'], 133000);
+  assert.equal(cons['Оплачено'], 90000);               // INV-3 не оплачен
+  const usi = rows.find((o) => o['Услуга'] === 'УЗИ');
+  assert.equal(usi['Кол-во'], 1, 'аннулированный INV-4 посчитан');
+  assert.equal(usi['Налог'], 12000);
+  assert.equal(usi['Доля врача'], 75200);              // 40 % от 188 000 (после налога)
+  const op = rows.find((o) => o['Услуга'] === 'Операция');
+  assert.equal(op['Где'], 'Стационар');
+  assert.equal(op['Группа'], 'Хирургия');
+  assert.equal(op['Доля врача'], 200000);              // стационарная доля 20 %
+});
+
+test('по услугам: «Доля врача» сходится с «Общей выручкой», а по оплаченным — с «Зарплатами врачей»', () => {
+  const { db } = seed();
+  const all = objects(run(db, 'by_services'));
+  const revenue = objects(run(db, 'total_revenue'));
+  assert.equal(sum(all, 'Доля врача'), sum(revenue, 'Доля врача'));
+  assert.equal(sum(all, 'Сумма') - sum(all, 'Скидка'), sum(revenue, 'После скидки'));
+  assert.equal(sum(all, 'Налог'), sum(revenue, 'Налог'));
+  const paid = objects(run(db, 'by_services', { paid: 'paid' }));
+  const salaries = objects(run(db, 'doctor_salaries'));
+  assert.equal(sum(paid, 'Доля врача'), sum(salaries, 'Итого к выплате'));
+  assert.equal(sum(paid, 'Доля врача'), 302200);
+  assert.ok(!paid.some((o) => o['Оплачено'] === 0), 'неоплаченная строка в режиме «Только оплаченные»');
+  assert.throws(() => run(db, 'by_services', { paid: 'maybe' }), /paid/);
+});
+
+test('по услугам: фильтр по группе', () => {
+  const { db } = seed();
+  const cons = objects(run(db, 'by_services', { group: 'consultation' }));
+  assert.deepEqual(cons.map((o) => o['Услуга']), ['Консультация']);
+  const surg = objects(run(db, 'by_services', { group: 'other' }));
+  assert.deepEqual(surg.map((o) => o['Услуга']), ['Операция']);
+  assert.equal(objects(run(db, 'by_services', { group: 'all' })).length, 3);
+  assert.throws(() => run(db, 'by_services', { group: 'bogus' }), /group/);
+});

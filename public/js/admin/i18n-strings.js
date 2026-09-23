@@ -8768,4 +8768,8 @@ export const STRINGS = {
   "Внешние": {"en":"External","ru":"Внешние","uz":"Tashqi"},
   "Оплачено (после скидки)": {"en":"Paid (after discount)","ru":"Оплачено (после скидки)","uz":"To'langan (chegirmadan keyin)"},
   "Сотрудник сохранён, но ставка за направления — нет: {msg}": {"en":"The employee is saved, but the referral rate is not: {msg}","ru":"Сотрудник сохранён, но ставка за направления — нет: {msg}","uz":"Xodim saqlandi, lekin yo'llanma stavkasi saqlanmadi: {msg}"},
+  "По услугам": {"en":"By services","ru":"По услугам","uz":"Xizmatlar bo'yicha"},
+  "По каждой услуге (амбулатория и стационар отдельно): количество, сумма, скидка, налог, доля врача и остаток клинике. Аннулированные счета не входят; можно смотреть только оплаченные и одну группу услуг.": {"en":"Per service (outpatient and inpatient separately): quantity, amount, discount, tax, the doctor's share and what remains to the clinic. Voided invoices are excluded; you can view paid invoices only and a single service group.","ru":"По каждой услуге (амбулатория и стационар отдельно): количество, сумма, скидка, налог, доля врача и остаток клинике. Аннулированные счета не входят; можно смотреть только оплаченные и одну группу услуг.","uz":"Har bir xizmat bo'yicha (ambulator va statsionar alohida): soni, summa, chegirma, soliq, shifokor ulushi va klinikaga qoladigan qism. Bekor qilingan hisoblar kirmaydi; faqat to'langanlarini va bitta xizmat guruhini ko'rish mumkin."},
+  "Все счета": {"en":"All invoices","ru":"Все счета","uz":"Barcha hisoblar"},
+  "Только оплаченные": {"en":"Paid only","ru":"Только оплаченные","uz":"Faqat to'langanlar"},
 };
