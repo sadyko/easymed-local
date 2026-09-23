@@ -1339,13 +1339,16 @@ export const REGISTRY = {
                purchase_orders: { table:'purchase_orders', fk:'po_id', columns:['id','po_number','status','order_date','created_at','received_at','supplier_id'] } },
   },
   purchase_requisitions: {
-    read:  { roles: ALL_STAFF, columns: ['id','req_number','status','department_id','notes','reject_reason','requested_by','converted_po_id','created_at'] },
+    // STOCK_REQUEST_V1 (mig 145) — держатель (для кого) и «авто» экран «Заявки»
+    // ЧИТАЕТ и фильтрует, но не пишет: их ставит сервер (rpc/stock-requests.js),
+    // а заявке, названной только отделом, держателя ставит триггер 145.
+    read:  { roles: ALL_STAFF, columns: ['id','req_number','status','department_id','notes','reject_reason','requested_by','converted_po_id','created_at','holder_type','holder_id','auto'] },
     // Any department head may raise a requisition; approving/issuing (the stock
     // move) and converting to a PO are Phase-2 RPCs.
     write: { insert: { roles: ['admin','inventory','doctor','nurse'], columns: ['req_number','status','department_id','notes','requested_by'] },
              update: { roles: ['admin','inventory'], columns: ['status','notes','reject_reason','converted_po_id'] },
              delete: { roles: ['admin','inventory'] } },
-    filters: ['id','status','department_id','requested_by'],
+    filters: ['id','status','department_id','requested_by','holder_type','holder_id','auto'],
     embed:   { departments: { table:'departments', fk:'department_id', columns:['id','name'] },
                users:       { table:'users',       fk:'requested_by',  columns:['id','full_name'] } },
   },
