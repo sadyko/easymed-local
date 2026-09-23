@@ -42,6 +42,11 @@ export const STRINGS = {
   "Видны движения вашего отдела и ваши собственные.": {"en":"You see your department's movements and your own.","ru":"Видны движения вашего отдела и ваши собственные.","uz":"Siz o‘z bo‘limingizning va o‘zingizning harakatlaringizni ko‘rasiz."},
   "Видны ваши движения: что выдали вам и что провели вы.": {"en":"You see your own movements: what was issued to you and what you recorded.","ru":"Видны ваши движения: что выдали вам и что провели вы.","uz":"Siz o‘z harakatlaringizni ko‘rasiz: sizga nima berilgani va nimani o‘zingiz qayd etganingiz."},
   "Приход, выдача и расход товара: кто провёл, кому выдал, из какой партии.": {"en":"Receipts, issues and dispenses: who recorded it, to whom and from which batch.","ru":"Приход, выдача и расход товара: кто провёл, кому выдал, из какой партии.","uz":"Kirim, berish va sarflash: kim qayd etgan, kimga bergan, qaysi partiyadan."},
+  // HOLDINGS_FIRST_V1 (2026-09-23) — карточка пациента: куда вернулся товар с убранной строки
+  "отдел": {"en":"department","ru":"отдел","uz":"bo‘lim"},
+  "подотчёт сотрудника": {"en":"the employee's holdings","ru":"подотчёт сотрудника","uz":"xodimning hisobi"},
+  "Товар убран и вернулся туда, откуда взят: {where}.": {"en":"The item was removed and went back where it came from: {where}.","ru":"Товар убран и вернулся туда, откуда взят: {where}.","uz":"Tovar olib tashlandi va olingan joyiga qaytdi: {where}."},
+  "Товар убран вместе с пустым счётом и вернулся туда, откуда взят: {where}.": {"en":"The item was removed along with the emptied invoice and went back where it came from: {where}.","ru":"Товар убран вместе с пустым счётом и вернулся туда, откуда взят: {where}.","uz":"Tovar bo‘shab qolgan hisob bilan birga olib tashlandi va olingan joyiga qaytdi: {where}."},
   // CRM_REAL_BOOKING_V1 (2026-09-21, разбор ревью) — ответ сервера о дне и перенос
   "В этот день у пациента уже есть приём в {t}{doc} — время не занято, откройте календарь": {"en":"The patient already has an appointment that day at {t}{doc} — the time you picked is NOT taken, open the calendar","ru":"В этот день у пациента уже есть приём в {t}{doc} — время не занято, откройте календарь","uz":"Bemorning o‘sha kuni allaqachon {t} da qabuli bor{doc} — siz tanlagan vaqt band qilinmadi, kalendarni oching"},
   "у {doc}": {"en":"with {doc}","ru":"у {doc}","uz":"{doc} qabulida"},

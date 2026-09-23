@@ -271,6 +271,38 @@ test('нет пациента / нет id — честная ошибка, а н
   db.close();
 });
 
+// HOLDINGS_FIRST_V1 — ТОВАРНАЯ СТРОКА ПРИЕЗЖАЕТ СО СВОИМ ИМЕНЕМ.
+//
+// Списанный на пациента бинт — такая же строка визита, только с clinic_item_id
+// вместо service_id, и вкладка «Услуги» показывает её наравне с услугами. Имя
+// ей давать некому: services по NULL не соединяется, и экран рисовал прочерк —
+// а подтверждение спрашивало «Убрать услугу «—»?» у строки, где убирают товар.
+//
+// Имя берётся здесь, а не в браузере: карта пациента — ОДНА дверь, и второй
+// запрос за названием товара был бы вторым местом, решающим, что сотруднику
+// видно. Отношение названо так же, как его знает реестр (schema-registry.js:
+// embed products по clinic_item_id), поэтому проверяется ИМЕННО поле products.
+test('товарная строка карты названа товаром, а не прочерком — иначе «Убрать услугу «—»?»', () => {
+  const { db, pid, vid } = seed();
+  const prod = db.prepare("INSERT INTO products (name, unit) VALUES ('Бинт','шт')").run().lastInsertRowid;
+  db.prepare("INSERT INTO visit_services (visit_id, clinic_item_id, quantity, unit_price, total, status) VALUES (?,?,3,2000,6000,'added')")
+    .run(vid, prod);
+
+  const out = patientCard(db, { patient_id: pid }, REGISTRAR);
+  const line = out.services.find((r) => r.clinic_item_id === prod);
+  assert.ok(line, 'товарной строки в карте нет вовсе');
+  assert.ok(line.products && line.products.name === 'Бинт',
+    'у товарной строки нет имени товара — экрану нечем её назвать: ' + JSON.stringify(line.products));
+  assert.equal(line.products.unit, 'шт');
+  assert.equal(line.services.name, null, 'товарная строка притворилась услугой');
+
+  // Услуга рядом не пострадала: у неё имя из services, а products — пусто.
+  const svc = out.services.find((r) => r.service_id != null);
+  assert.equal(svc.services.name, 'ОАК');
+  assert.equal(svc.products, null, 'у обычной услуги появился товар');
+  db.close();
+});
+
 test('документы: подписанные заключения кабинета врача едут вместе со вкладкой и исчезают вместе с ней', () => {
   const { db, pid } = seed();
   let out = patientCard(db, { patient_id: pid }, DOCTOR);

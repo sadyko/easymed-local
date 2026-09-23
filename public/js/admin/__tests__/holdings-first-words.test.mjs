@@ -27,7 +27,14 @@ const VIEWS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'vie
 const read = (f) => fs.readFileSync(path.join(VIEWS, f), 'utf8');
 
 // Экраны, где отменяют выдачу или снимают отметку о введении дозы.
-const VOID_SCREENS = ['procedures.js', 'service-workspace.js', 'mar-nurse.js', 'mar-outpatients.js'];
+//
+// ПЯТАЯ ДВЕРЬ — КАРТОЧКА ПАЦИЕНТА. Вкладка «Услуги» показывает ВСЕ строки
+// визита, товарные в том числе, и корзина на товарной строке — такая же отмена
+// выдачи: remove_unpaid_service возвращает товар по источникам (billing.js →
+// restoreSources) и называет их в ответе. Её подтверждение спрашивало «Убрать
+// услугу «—»?» и о складе молчало вовсе — то же враньё, только молчанием.
+// Правило одно на все пять дверей, поэтому и список один.
+const VOID_SCREENS = ['procedures.js', 'service-workspace.js', 'mar-nurse.js', 'mar-outpatients.js', 'patient-card.js'];
 
 test('ни один экран отмены не обещает возврат НА СКЛАД', () => {
     const lying = [];

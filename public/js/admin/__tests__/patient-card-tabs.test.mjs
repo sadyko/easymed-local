@@ -83,6 +83,14 @@ const VISIT = { id: 11, patient_id: 1, visit_date: '2026-08-12T09:00:00Z', statu
 const SERVICE_ROW = { id: 21, visit_id: 11, service_id: 5, doctor_id: 3, quantity: 1, unit_price: 50000, total: 50000,
   status: 'added', invoice_item_id: 31, scheduled_at: null, visit_date: '2026-08-12T09:00:00Z',
   services: { name: 'ОАК', is_lab: 1, type: 'lab' }, users: { full_name: 'Пулатов А.' } };
+// HOLDINGS_FIRST_V1 — ТОВАРНАЯ СТРОКА. Списанный на пациента бинт — такая же
+// строка визита, только с clinic_item_id вместо услуги, и вкладка «Услуги»
+// показывает её наравне с услугами. До этой правки она была безымянной («—»),
+// предлагала «Заменить услугу» и молчала о том, куда вернулся товар.
+const PRODUCT_ROW = { id: 22, visit_id: 11, service_id: null, clinic_item_id: 3, doctor_id: null,
+  quantity: 3, unit_price: 2000, total: 6000, status: 'added', invoice_item_id: null,
+  scheduled_at: null, visit_date: '2026-08-12T09:10:00Z',
+  services: { name: null }, products: { name: 'Бинт', unit: 'шт' }, users: null };
 const INVOICE = { id: 41, patient_id: 1, invoice_number: 'INV-A-26-00001', total_amount: 50000, paid_amount: 20000,
   status: 'partial', created_at: '2026-08-12T09:30:00Z' };
 
@@ -121,6 +129,9 @@ function visitsAndServicesOnly() {
 let dbCalls = [];
 let rpcCalls = [];
 let payload = fullPayload();
+// Ответы прочих RPC — по имени: «Убрать» обязан РАССКАЗАТЬ, куда вернулся
+// товар, а рассказывает он это из ответа сервера (sources).
+let rpcAnswers = {};
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
@@ -129,6 +140,7 @@ globalThis.fetch = async (url, opts = {}) => {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     rpcCalls.push(name);
     if (name === 'patient_card') return ok({ data: JSON.parse(JSON.stringify(payload)) });
+    if (Object.prototype.hasOwnProperty.call(rpcAnswers, name)) return ok({ data: rpcAnswers[name] });
     return ok({ data: null });
   }
   if (u.startsWith('/api/db')) {
@@ -154,6 +166,24 @@ function tabBar(root) {
   return buttons(root).filter((b) => labelOfTab(b) !== null);
 }
 const openTab = (root, label) => { const b = tabBar(root).find((x) => labelOfTab(x) === label); assert.ok(b, 'нет вкладки ' + label); b.click(); };
+
+// Подтверждение — ЧАСТЬ ПОВЕДЕНИЯ, а не украшение: в нём человек читает, что
+// именно он убирает. Поэтому стенд его запоминает, а не проглатывает.
+const confirms = [];
+globalThis.confirm = (msg) => { confirms.push(String(msg)); return true; };
+globalThis.window.confirm = globalThis.confirm;
+// Сообщение toast снимается В МОМЕНТ ЗАПИСИ: ui.js toast() кладёт текст в
+// textContent, а следующей строкой пишет в el._t дескриптор таймера — то же
+// поле, в котором стенд держит текст. Со страницы его потом уже не прочитать.
+const toasts = [];
+{
+  const d = Object.getOwnPropertyDescriptor(F.prototype, 'textContent');
+  Object.defineProperty(F.prototype, 'textContent', {
+    configurable: true, get: d.get,
+    set(v) { if (this.attrs && this.attrs.id === 'toast') toasts.push(String(v)); d.set.call(this, v); },
+  });
+}
+const lastToast = () => (toasts.length ? toasts[toasts.length - 1] : '');
 
 async function render(p, roleRow) {
   dbCalls = []; rpcCalls = [];
@@ -259,6 +289,76 @@ test('уровень «Просмотр» не показывает кнопок
   assert.ok(titles(box).some((x) => x.startsWith('Убрать услугу')), '«Удаление» не дало снять услугу');
   openTab(box, 'Документы');
   assert.ok(titles(box).includes('Отозвать документ'), '«Удаление» не дало отозвать документ');
+});
+
+// ── HOLDINGS_FIRST_V1 — ТОВАРНАЯ СТРОКА НА ВКЛАДКЕ «УСЛУГИ» ────────────────
+//
+// Вкладка показывает ВСЕ строки визита, товарные в том числе. Три вещи, из-за
+// которых она вела себя как чужая:
+//   1. БЕЗЫМЯННАЯ. У товарной строки нет services.name, и в таблице (а затем и
+//      в подтверждении «Убрать услугу «—»?») стоял прочерк.
+//   2. ПРЕДЛАГАЛА «ЗАМЕНИТЬ УСЛУГУ». Промах мимо корзины превращал списанный
+//      бинт в консультацию: товар остаётся у пациента, строка называется
+//      услугой. Сервер теперь отказывает (billing.js changeUnpaidService), но
+//      отказ, до которого человек дошёл, хуже кнопки, которой нет.
+//   3. МОЛЧАЛА О СКЛАДЕ. Возврат идёт ПО ИСТОЧНИКАМ (restoreSources) — и ответ
+//      сервера их называет. Медсестра, не нашедшая товар на складе, решает, что
+//      программа его потеряла; те же слова, что у четырёх дверей отмены.
+const rowWith = (root, text) => walk(root).filter((n) => n.tagName === 'TR').find((r) => textOf(r).includes(text));
+const titlesOf = (el) => buttons(el).map((b) => b.attrs.title || '').filter(Boolean);
+const withProduct = () => { const p = fullPayload(); p.services = [SERVICE_ROW, PRODUCT_ROW]; return p; };
+
+test('товарная строка названа товаром, а не прочерком', async () => {
+  const box = await render(withProduct());
+  openTab(box, 'Услуги');
+  assert.ok(rowWith(box, 'Бинт'), 'товарная строка безымянна: в таблице «—» вместо названия товара');
+});
+
+test('«Заменить услугу» не предлагается на товарной строке — кнопки, ведущей к отказу, нет', async () => {
+  const box = await render(withProduct());
+  openTab(box, 'Услуги');
+  assert.ok(titlesOf(rowWith(box, 'ОАК')).some((t) => t.startsWith('Заменить услугу')),
+    'подготовка: у обычной услуги замена на месте');
+  const prod = rowWith(box, 'Бинт');
+  assert.equal(titlesOf(prod).some((t) => t.startsWith('Заменить услугу')), false,
+    'товарную строку предлагают заменить услугой — промах мимо корзины даёт химеру');
+  assert.ok(titlesOf(prod).some((t) => t.startsWith('Убрать')),
+    'вместе с заменой с товарной строки исчезла корзина — убрать её стало нечем');
+});
+
+test('«Убрать» называет товар и говорит, куда он вернулся', async () => {
+  rpcAnswers = { remove_unpaid_service: { removed: true, invoice_deleted: false, invoice: null,
+    sources: [{ type: 'staff', id: 11, qty: 2 }, { type: 'warehouse', id: null, qty: 1 }] } };
+  const box = await render(withProduct());
+  openTab(box, 'Услуги');
+  confirms.length = 0; toasts.length = 0;
+  const del = buttons(rowWith(box, 'Бинт')).find((b) => (b.attrs.title || '').startsWith('Убрать'));
+  del.click();
+  await tick();
+
+  assert.equal(confirms.length, 1, 'товар убрали без подтверждения');
+  assert.ok(confirms[0].includes('Бинт'), 'подтверждение не называет товар: ' + confirms[0]);
+  assert.ok(/откуда взят/.test(confirms[0]), 'подтверждение молчит, куда вернётся товар: ' + confirms[0]);
+  assert.ok(rpcCalls.includes('remove_unpaid_service'), 'строка не убралась');
+  const t = lastToast();
+  assert.ok(/откуда взят/.test(t), 'toast молчит о возврате товара: ' + t);
+  assert.ok(t.includes('подотчёт сотрудника') && t.includes('склад'),
+    'toast не назвал ОБА источника возврата, а их было два: ' + t);
+  rpcAnswers = {};
+});
+
+test('обычная услуга убирается прежними словами — про склад ей сказать нечего', async () => {
+  rpcAnswers = { remove_unpaid_service: { removed: true, invoice_deleted: false, invoice: { id: 41 }, sources: [] } };
+  const box = await render(withProduct());
+  openTab(box, 'Услуги');
+  confirms.length = 0; toasts.length = 0;
+  const del = buttons(rowWith(box, 'ОАК')).find((b) => (b.attrs.title || '').startsWith('Убрать'));
+  del.click();
+  await tick();
+  assert.ok(confirms[0].includes('ОАК'), 'подтверждение не называет услугу: ' + confirms[0]);
+  assert.equal(/откуда взят/.test(confirms[0]), false, 'услуга без товара обещает возврат со склада: ' + confirms[0]);
+  assert.equal(/откуда взят/.test(lastToast()), false, 'у услуги без товара toast говорит о складе: ' + lastToast());
+  rpcAnswers = {};
 });
 
 test('строка визита не открывает счёт визита, когда «Счёт» закрыт', async () => {

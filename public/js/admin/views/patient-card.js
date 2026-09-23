@@ -59,6 +59,29 @@ import { currentRoleLabel } from '../permissions.js';
 export function openCreateVisitModal() { /* replaced by the per-patient Book visit flow */ }
 export function openVitalsDialog() { /* vitals UI is not part of the local patient view yet */ }
 
+// HOLDINGS_FIRST_V1 — КУДА ВЕРНУЛСЯ ТОВАР, СЛОВАМИ.
+//
+// «Убрать» на товарной строке возвращает товар ПО ИСТОЧНИКАМ движений
+// (server/services/rpc/inventory.js restoreSources): что взяли из подотчёта
+// медсестры — в подотчёт и вернётся, а выдача, покрытая наполовину складом,
+// вернётся двумя частями. Склад при этом может не получить ничего.
+//
+// Ответ сервера эти источники называет (remove_unpaid_service → sources), и
+// молчать о них нельзя: медсестра, не нашедшая товар на складе, заключает, что
+// программа его теряет. Ровно этот разговор HOLDINGS_FIRST_V1 и прекращает —
+// теми же словами, что четыре двери отмены («туда, откуда взят»).
+const RESTORED_TO = { warehouse: 'склад', staff: 'подотчёт сотрудника', room: 'кабинет', department: 'отдел' };
+
+/** Источники возврата одной строкой: «подотчёт сотрудника, склад». */
+export function restoredWhere(sources) {
+    const seen = [];
+    for (const s of Array.isArray(sources) ? sources : []) {
+        const label = RESTORED_TO[s && s.type];
+        if (label && !seen.includes(label)) seen.push(label);
+    }
+    return seen.map((x) => tr(x)).join(', ');   // I18N_COVERAGE_V1 — перевод ДО сборки
+}
+
 // Tab bar — module-level so the selected tab survives a repaint.
 // TAB_ORDER_V2 (user-requested): Услуги → Лаборатория → Документы → Счёт →
 // Визиты (визит = день, для статистики — DAY_VISIT_V1) → Деталь.
@@ -315,10 +338,16 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         if (vsRows.length) services = vsRows.map(r => ({
             id:            r.id,
             serviceId:     r.service_id,
+            // HOLDINGS_FIRST_V1 — ТОВАРНАЯ СТРОКА: списанный на пациента бинт
+            // приезжает такой же строкой визита, только с clinic_item_id вместо
+            // услуги. Вкладка показывает её наравне с услугами, поэтому она
+            // обязана её и ОТЛИЧАТЬ: товар не меняют на услугу, и убирают его
+            // другими словами — товар возвращается держателю.
+            clinicItemId:  r.clinic_item_id || null,
             doctorId:      r.doctor_id,
             doctorName:    (r.users && r.users.full_name) || '',
             invoiceItemId: r.invoice_item_id,
-            name:   (r.services && r.services.name) || '—',
+            name:   (r.services && r.services.name) || (r.products && r.products.name) || '—',
             qty:    r.quantity,
             total:  r.total,
             status: r.status,
@@ -1033,7 +1062,13 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
 
             // SVC_CHANGE_V1 — заменить услугу (пока не оказана и счёт не оплачен):
             // строка получает новую услугу/цену, неоплаченный счёт пересчитывается.
-            const swapBtn = editable && tabEdit('services') ? h('button', {
+            // HOLDINGS_FIRST_V1 — НЕ ДЛЯ ТОВАРНОЙ СТРОКИ. Корзина и замена стояли
+            // рядом, и промах мимо корзины превращал списанный бинт в
+            // консультацию: товар остаётся у пациента, строка называется услугой.
+            // Сервер такую подмену теперь отвергает (billing.js
+            // changeUnpaidService), но отказ, до которого человек дошёл, хуже
+            // кнопки, которой нет: товар убирают корзиной и списывают заново.
+            const swapBtn = editable && !s.clinicItemId && tabEdit('services') ? h('button', {
                 class: 'btn btn-outline btn-sm', type: 'button', title: 'Заменить услугу (цена и счёт пересчитаются)',
                 onclick: async (ev) => {
                     const btn = ev.currentTarget;
@@ -1061,19 +1096,34 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
 
             const delBtn = removable && tabDelete('services') ? h('button', {
                 class: 'btn btn-outline btn-sm', type: 'button',
-                title: s.invoiceItemId ? 'Убрать услугу вместе с неоплаченным счётом' : 'Убрать услугу',
+                title: s.clinicItemId ? 'Убрать (вернуть туда, откуда взят)'
+                    : s.invoiceItemId ? 'Убрать услугу вместе с неоплаченным счётом' : 'Убрать услугу',
                 style: { color: 'var(--crit-600, #dc2626)' },
                 onclick: async () => {
-                    const warn = s.invoiceItemId
-                        ? trf('Убрать услугу «{name}»? Неоплаченный счёт будет уменьшен (или удалён, если это единственная позиция).', { name: s.name })
-                        : trf('Убрать услугу «{name}»?', { name: s.name });
+                    // HOLDINGS_FIRST_V1 — товарная строка спрашивает СВОИМИ словами
+                    // и называет товар: у неё нет services.name, и подтверждение
+                    // спрашивало «Убрать услугу «—»?» — у строки, где убирают
+                    // товар. Формулировка та же, что у четырёх дверей отмены
+                    // (procedures.js, service-workspace.js, mar-*.js).
+                    const warn = s.clinicItemId
+                        ? trf('Убрать «{name}»? Товар вернётся туда, откуда взят.', { name: s.name })
+                        : s.invoiceItemId
+                            ? trf('Убрать услугу «{name}»? Неоплаченный счёт будет уменьшен (или удалён, если это единственная позиция).', { name: s.name })
+                            : trf('Убрать услугу «{name}»?', { name: s.name });
                     if (!confirm(warn)) return;
                     // SVC_UNPAID_REMOVE_V1 — атомарно: строка + ремонт счёта; сервер
                     // откажет, если счёт уже оплачен/частично оплачен.
                     const { data, error } = await supabase.rpc('remove_unpaid_service', { visit_service_id: s.id });
                     if (error) { toast(trf('Не удалось убрать: {msg}', { msg: error.message }), 'fail'); return; }
-                    toast(data && data.invoice_deleted ? 'Услуга и пустой счёт удалены.'
-                        : s.invoiceItemId ? 'Услуга убрана, счёт пересчитан.' : 'Услуга убрана.');
+                    // Куда именно вернулся товар — из ответа сервера, а не из
+                    // догадки экрана: возврат идёт ПО ИСТОЧНИКАМ движений.
+                    const back = restoredWhere(data && data.sources);
+                    toast(back
+                        ? trf(data && data.invoice_deleted
+                            ? 'Товар убран вместе с пустым счётом и вернулся туда, откуда взят: {where}.'
+                            : 'Товар убран и вернулся туда, откуда взят: {where}.', { where: back })
+                        : data && data.invoice_deleted ? 'Услуга и пустой счёт удалены.'
+                            : s.invoiceItemId ? 'Услуга убрана, счёт пересчитан.' : 'Услуга убрана.');
                     await reload();
                 },
             }, Icon('Trash', { size: 13 })) : null;

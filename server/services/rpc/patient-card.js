@@ -240,21 +240,31 @@ export function patientCard(db, args, user) {
   const needServices = tabs.services !== 'none' || tabs.labs !== 'none' || tabs.docs !== 'none';
   let vsRows = [];
   if (needServices && visitIds.length && canRead('visit_services', roles)) {
+    // HOLDINGS_FIRST_V1 — ТОВАР ПРИЕЗЖАЕТ СО СВОИМ ИМЕНЕМ. Списанный на пациента
+    // бинт — такая же строка визита, только с clinic_item_id вместо услуги, и
+    // вкладка «Услуги» показывает её наравне с услугами. Без этого соединения
+    // у неё нет НИКАКОГО имени: в таблице стоял прочерк, и подтверждение
+    // спрашивало «Убрать услугу «—»?» — у строки, где убирают товар. Имя
+    // отношения то же, которым его знает реестр (schema-registry.js: embed
+    // products по clinic_item_id).
     vsRows = db.prepare('SELECT ' + cols('visit_services', 'vs') + ','
       + ' s.name AS _s_name, s.result_unit AS _s_unit, s.ref_low AS _s_low,'
       + ' s.ref_high AS _s_high, s.is_lab AS _s_is_lab, s.type AS _s_type,'
+      + ' pr.name AS _pr_name, pr.unit AS _pr_unit,'
       + ' du.full_name AS _d_name'
       + ' FROM visit_services vs'
       + ' LEFT JOIN services s ON s.id = vs.service_id'
+      + ' LEFT JOIN products pr ON pr.id = vs.clinic_item_id'
       + ' LEFT JOIN users du ON du.id = vs.doctor_id'
       + ' WHERE vs.visit_id IN (' + inClause(visitIds.length) + ')').all(...visitIds);
   }
   const shapeVs = (r) => {
-    const { _s_name, _s_unit, _s_low, _s_high, _s_is_lab, _s_type, _d_name, ...rest } = r;
+    const { _s_name, _s_unit, _s_low, _s_high, _s_is_lab, _s_type, _pr_name, _pr_unit, _d_name, ...rest } = r;
     return {
       ...rest,
       visit_date: visitDate.get(r.visit_id) || null,
       services: { name: _s_name, result_unit: _s_unit, ref_low: _s_low, ref_high: _s_high, is_lab: _s_is_lab, type: _s_type },
+      products: r.clinic_item_id ? { name: _pr_name, unit: _pr_unit } : null,
       users: r.doctor_id ? { full_name: _d_name } : null,
     };
   };

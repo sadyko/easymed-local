@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { createInvoiceForVisit, recordPayment, removeUnpaidService, refundPayment, markInvoiceDebt } from './billing.js';
+import { createInvoiceForVisit, recordPayment, removeUnpaidService, changeUnpaidService, refundPayment, markInvoiceDebt } from './billing.js';
 import { closeCashShift } from './cashier.js';
 
 function seed() {
@@ -264,6 +264,41 @@ test('товарная строка в ОПЛАЧЕННОМ счёте не уд
   assert.throws(() => removeUnpaidService(db, { visit_service_id: d.visit_service_id }, registrar), /оплачен/);
   assert.equal(heldBy(db, 'staff', 11, 3), 2, 'отказ всё-таки вернул товар — транзакция не откатилась');
   assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE id=?').get(d.visit_service_id).n, 1);
+});
+
+// ── SVC_CHANGE_V1 × HOLDINGS_FIRST_V1 — ТОВАР НЕ ПОДМЕНЯЕТСЯ УСЛУГОЙ ────────
+//
+// Вкладка «Услуги» карточки пациента показывает и товарные строки, а рядом с
+// корзиной там же стояла «Заменить услугу». Промах мимо корзины давал химеру:
+// строка начинала считаться консультацией, три бинта оставались списанными,
+// clinic_item_id — на месте, и карточка отдела считала этот расход против
+// строки с названием «Консультация терапевта». Разобрать такую строку потом
+// нечем: цена уже от услуги, товар уже у пациента.
+test('товарную строку нельзя ПОДМЕНИТЬ услугой — иначе выдача превращается в консультацию', async () => {
+  const base = seed();
+  const { db, vid, s1, s2, vs1 } = base;
+  const { nurse, inv } = stockSeed(base);
+  const { issueStockLines } = await import('./procurement.js');
+  const { dispenseItem } = await import('./inventory.js');
+
+  issueStockLines(db, { holder: { type: 'staff', id: 11 }, lines: [{ product_id: 3, qty: 5, unit: 'base' }] }, inv);
+  const d = dispenseItem(db, { product_id: 3, quantity: 3, visit_id: vid }, nurse);
+  const before = db.prepare('SELECT * FROM visit_services WHERE id=?').get(d.visit_service_id);
+
+  assert.throws(() => changeUnpaidService(db, { visit_service_id: d.visit_service_id, new_service_id: s1 }, registrar),
+      (e) => e.status === 400 && /товар/i.test(e.message) && /спишите|верните|уберите/i.test(e.message));
+
+  const after = db.prepare('SELECT * FROM visit_services WHERE id=?').get(d.visit_service_id);
+  assert.equal(after.service_id, null, 'строка стала услугой: товар списан, а счёт говорит «консультация»');
+  assert.equal(after.clinic_item_id, 3, 'товар отвязали от строки — расход остался без хозяина');
+  assert.equal(after.unit_price, before.unit_price, 'цена товара подменена ценой услуги');
+  assert.equal(after.total, before.total);
+  assert.equal(heldBy(db, 'staff', 11, 3), 2, 'отказ тронул подотчёт — транзакция не откатилась');
+
+  // Обычную услугу по-прежнему меняют — запрет ровно про товар.
+  const ok = changeUnpaidService(db, { visit_service_id: vs1, new_service_id: s2 }, registrar);
+  assert.equal(ok.changed, true);
+  assert.equal(db.prepare('SELECT service_id FROM visit_services WHERE id=?').get(vs1).service_id, s2);
 });
 
 // DEBT_STICKY_V2 — «Оставить как долг» records an arrangement, not just an
