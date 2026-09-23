@@ -53,6 +53,9 @@ import { setVisitStatus } from './visit-booking.js';
 // двери (мастер визита, быстрая регистрация, эта карточка): три исхода, и
 // визит есть во всех трёх, поэтому «есть id — значит записано» это ошибка.
 import { readEnsureVisit } from '../ensure-visit-answer.js';
+// CRM_DEDUP_SEARCH_TASKS_V1 — задачи на карточке заявки (миграция 148): блок в
+// окне заявки, метка «задача: …» на карточке доски.
+import { crmTasksBlock, loadOpenTasks, nearestOpenTasks, isOverdue, nowIso } from './crm-tasks.js';
 
 // CRM_CONFIG_V1 — воронка перестала быть константой.
 //
@@ -136,7 +139,10 @@ const state = { view: 'kanban', filter: 'all', search: '', rows: [], source: '',
                 // заявки по ВСЕМ карточкам, а не только по загруженным 800.
                 // searchQ — для какой строки он получен: ответ на «бур» не
                 // должен показываться под «буронова».
-                searchRows: null, searchQ: '' };
+                searchRows: null, searchQ: '',
+                // CRM_DEDUP_SEARCH_TASKS_V1 — ближайшая открытая задача каждой
+                // заявки: Map(String(request_id) → задача).
+                openTasks: new Map() };
 let searchSeq = 0;   // CRM_DEDUP_SEARCH_TASKS_V1 — последний ответ поиска побеждает
 
 // Период считается по created_at — «когда обратились», а не когда записаны:
@@ -301,6 +307,9 @@ async function load() {
         .order('id', { ascending: false }).limit(800);
     if (error) { toast(trf('Не удалось загрузить заявки: {msg}', { msg: error.message }), 'fail'); state.rows = []; return; }
     state.rows = data || [];
+    // CRM_DEDUP_SEARCH_TASKS_V1 — метки задач на карточках. Отказ (у роли нет
+    // права на задачи) — доска без меток, а не без заявок.
+    state.openTasks = nearestOpenTasks(await loadOpenTasks());
 }
 
 // CRM_CARD_V2 — КТО это и КАК до него дозвониться, одним ответом на две строки.
@@ -741,6 +750,7 @@ async function paint() {
             tags.length ? h('div', { class: 'crm-card-tags' }, ...tags) : null,
             r.services ? h('div', { class: 'crm-card-line' }, h('span', { class: 'crm-card-lbl' }, 'Услуга: '), r.services.name) : null,
             r.note ? h('div', { class: 'crm-card-note', title: r.note }, r.note) : null,
+            taskChip(r),
             h('div', { class: 'crm-card-foot' },
                 h('span', { class: 'crm-card-when' }, trf('Заявка от {d}', { d: fmtD(r.created_at) })),
                 ...acts),
@@ -821,6 +831,19 @@ async function paint() {
             document.addEventListener('pointercancel', onCancel);
         });
         return card;
+    }
+
+    // CRM_DEDUP_SEARCH_TASKS_V1 — «задача: …» — ближайшая открытая задача
+    // заявки. Просроченная — в предупреждающем цвете: это то, с чего оператор
+    // начинает смену.
+    function taskChip(r) {
+        const t = state.openTasks.get(String(r.id));
+        if (!t) return null;
+        const late = isOverdue(t, nowIso());
+        const text = String(t.text || '');
+        return h('div', { class: 'crm-card-task' + (late ? ' crm-card-task-late' : ''), title: text },
+            Icon('Clock', { size: 12 }),
+            h('span', null, trf('задача: {text}', { text: text.length > 60 ? text.slice(0, 59) + '…' : text })));
     }
 
     function cardActions(r) {
@@ -1639,6 +1662,11 @@ async function paint() {
         // кто видит их все, — иначе «передал» означало бы «потерял».
         const canReassign = hasActorRole(['admin']);
         let operSel = null;
+        // CRM_DEDUP_SEARCH_TASKS_V1 — тот же список персонала нужен полю
+        // «Ответственный» у задач. Спрашивается ОДИН раз и только у
+        // администратора: оператору список сотрудников не отдаётся (см. ниже),
+        // и задачу он ставит себе или оператору заявки.
+        let staffForTasks = null;
         if (canReassign) {
             operSel = h('select', { 'aria-label': 'Оператор, который ведёт заявку' });
             // Выбор человека НЕ теряется, если список операторов доехал позже:
@@ -1663,7 +1691,7 @@ async function paint() {
             // Нынешний хозяин известен ДО ответа сервера: окно можно сохранить в
             // первую же секунду, и поле обязано к этому моменту говорить правду.
             fillOper(ownerId ? [{ id: ownerId, full_name: ownerName }] : []);
-            supabase.from('users').select('id, full_name, role')
+            staffForTasks = supabase.from('users').select('id, full_name, role')
                 .in('role', BOARD_ROLES).eq('is_active', 1).order('full_name')
                 .then(({ data, error }) => {
                     if (error) {
@@ -1671,7 +1699,7 @@ async function paint() {
                         // молча пустеет: пустой список читался бы как «operSel сбросил
                         // назначение» при ближайшем сохранении.
                         toast(trf('Не удалось загрузить список сотрудников: {msg}', { msg: error.message }), 'fail');
-                        return;
+                        return [];
                     }
                     const pool = (data || []).slice();
                     // Уволенного (is_active = 0) в списке нет, а его заявки есть.
@@ -1681,6 +1709,7 @@ async function paint() {
                         pool.unshift({ id: ownerId, full_name: ownerName });
                     }
                     fillOper(pool);
+                    return pool;
                 });
         }
 
@@ -2455,6 +2484,20 @@ async function paint() {
                 field('Интересующие услуги', h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
                     svcChips, svcWrap, pickedList)),
                 field('Комментарий', noteInp),
+                // CRM_DEDUP_SEARCH_TASKS_V1 — «ЗАДАЧИ»: что и когда сделать по этой
+                // заявке и кто отвечает. Только у сохранённой заявки: задаче
+                // нужна заявка, к которой она привязана.
+                (isEdit && r.id != null) ? field('Задачи', crmTasksBlock({
+                    request: r,
+                    me: selfUserId() != null ? { id: selfUserId(), full_name: (window.easymed.state.user || {}).full_name || '' } : null,
+                    isAdmin: canReassign,
+                    staff: staffForTasks,
+                    onChange: () => {
+                        // бейдж меню и метки на доске — сразу, не дожидаясь опроса
+                        try { if (window.easymed && window.easymed.refreshNav) window.easymed.refreshNav(); } catch (e) { /* подсказка */ }
+                        loadOpenTasks().then((t) => { state.openTasks = nearestOpenTasks(t); paintBody(); });
+                    },
+                })) : null,
                 // CALL_RECORDING_V1 — ЗВОНКИ ЭТОГО ЧЕЛОВЕКА, С ЗАПИСЯМИ.
                 // Владелец: «also include into a card the audio record of the
                 // call». Блок появляется только у сохранённой заявки: у новой

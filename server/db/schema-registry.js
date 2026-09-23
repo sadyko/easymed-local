@@ -84,6 +84,22 @@ export const REGISTRY = {
                crm_requests: { table:'crm_requests', fk:'request_id', columns:['id','patient_id','full_name','phone','status'] } },
   },
 
+  // CRM_DEDUP_SEARCH_TASKS_V1 (mig 148) — задачи на карточке заявки: текст,
+  // срок (UTC), ответственный, отметка «сделано». Ведут доску те же три роли,
+  // что пишут crm_requests; удаляет задачу только администратор — оператор
+  // закрывает её отметкой, и след «кто что обещал» остаётся.
+  // done_at/done_by при ВСТАВКЕ не принимаются: новая задача всегда открыта.
+  // Счётчик в меню (admin.js) спрашивает count по (assignee_id, done_at, due_at)
+  // — ровно по индексу idx_crm_tasks_assignee.
+  crm_tasks: {
+    read:  { roles: ['admin','registrar','callcenter'], columns: ['id','request_id','text','due_at','assignee_id','done_at','done_by','created_by','created_at'] },
+    write: { insert: { roles: ['admin','registrar','callcenter'], columns: ['request_id','text','due_at','assignee_id','created_by'] },
+             update: { roles: ['admin','registrar','callcenter'], columns: ['text','due_at','assignee_id','done_at','done_by'] },
+             delete: { roles: ['admin'] } },
+    filters: ['id','request_id','assignee_id','done_at','due_at'],
+    embed:   { users: { table:'users', fk:'assignee_id', columns:['id','full_name'] } },
+  },
+
   patients: {
     // PATIENTS_SECTION_V1 (mig 034) — marital/emergency-relation/insurance
     // columns + writable mrn/active/registration_date so easymed's Settings →

@@ -4440,6 +4440,42 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     overflow: hidden; overflow-wrap: anywhere;
 }
 
+/* CRM_DEDUP_SEARCH_TASKS_V1 — «задача: …» на карточке: ближайшая открытая
+   задача заявки. Одна строка с многоточием (весь текст — в title); просроченная
+   — в предупреждающем цвете, тем же, что у метки «Просрочено» в окне. */
+.crm-card-task {
+    display: flex; align-items: center; gap: 5px; margin-top: 7px;
+    font-size: 12.5px; line-height: 1.4; color: var(--ink-700);
+    min-width: 0;
+}
+.crm-card-task > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crm-card-task-late { color: var(--warn-700, #8a5a00); font-weight: 600; }
+
+/* Задачи в окне заявки: строка = отметка · текст и подпись · удалить. */
+.crm-tasks { display: flex; flex-direction: column; gap: 10px; }
+.crm-task-list { display: flex; flex-direction: column; gap: 6px; }
+.crm-task {
+    display: flex; align-items: flex-start; gap: 10px;
+    border: 1px solid var(--ink-100); border-radius: 10px; padding: 8px 10px;
+    background: var(--white, #fff);
+}
+.crm-task > input[type="checkbox"] { margin-top: 3px; flex: none; }
+.crm-task-main { flex: 1 1 auto; min-width: 0; }
+.crm-task-text { font-size: 13.5px; line-height: 1.45; color: var(--ink-900); overflow-wrap: anywhere; }
+.crm-task-meta {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 3px;
+    font-size: 12.5px; color: var(--ink-500);
+}
+.crm-task-meta > span { display: inline-flex; align-items: center; gap: 4px; }
+.crm-task-overdue { border-color: var(--warn-500); background: var(--warn-50, #fffbeb); }
+.crm-task-overdue .crm-task-meta { color: var(--warn-700, #8a5a00); }
+.crm-task-done .crm-task-text { color: var(--ink-500); text-decoration: line-through; }
+.crm-task-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.crm-task-form > input[type="text"] { flex: 1 1 220px; min-width: 0; }
+.crm-task-form > input[type="date"],
+.crm-task-form > input[type="time"],
+.crm-task-form > select { flex: 0 0 auto; }
+
 .crm-card-foot {
     display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
     gap: 6px 8px; margin-top: 9px; padding-top: 8px;

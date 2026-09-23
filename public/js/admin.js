@@ -68,6 +68,7 @@ import { renderLaboratory }   from './admin/views/laboratory.js?v=labwords1';   
 import { renderProcedures }   from './admin/views/procedures.js?v=unassigned1';
 import { renderQueue }       from './admin/views/queue.js?v=q7';   // QUEUE_BOARD_V1
 import { renderCrm }          from './admin/views/crm.js?v=aug18d';   // CRM_V10 — поиск пациента: телефон (и короткая форма), дата рождения; CRM_SERVICE_FILTER_V1 — рейка категорий (тег поднят, иначе браузер оставит старую копию)
+import { overdueTaskCount } from './admin/views/crm-tasks.js';   // CRM_DEDUP_SEARCH_TASKS_V1 — красный счётчик просроченных задач у пункта CRM
 import { renderDocsArchive }  from './admin/views/docs-archive.js?v=q3one';   // CLINICAL_DOCS_ARCHIVE_V1 — restored after concurrent clobber
 import { renderReports }      from './admin/views/reports.js?v=vatincl1';
 import { renderReportsHub }   from './admin/views/reports-hub.js?v=ru6';   // REPORTS_HUB_RU_V1 — «Отчёты» card grid + full-screen report builder
@@ -115,7 +116,7 @@ import { renderCaseOverview } from './admin/views/case-overview.js?v=co1';   // 
 const NAV = [
     { section: 'Clinical' },
     { id: 'patients', label: 'Patients', icon: 'Patients' },
-    { id: 'crm',      label: 'CRM · Заявки', icon: 'Headset' },   // CRM_V1
+    { id: 'crm',      label: 'CRM · Заявки', icon: 'Headset', badgeKind: 'alert' },   // CRM_V1; badge — CRM_DEDUP_SEARCH_TASKS_V1: просроченные задачи, красным
     { id: 'consultation', label: 'My services', icon: 'Stethoscope' },   // DOCTOR_WORKSPACE_V1 — easymed's provider queue (was the simplified doctor-room stand-in; that route still works, just unlisted)
     // QUEUE_BOARD_V1 — доска номеров по назначениям. Стоит сразу под кабинетом
     // врача: отвечает на вопрос «кто ко мне ещё стоит», а номера для неё
@@ -222,6 +223,9 @@ const navCounts = {
     // механизм рядом означал бы два места, где рисуется одна и та же точка.
     settings:     null,
     'telegram-chat': null,   // TELEGRAM_CHAT_BADGE_V1 — входящие без read_at
+    // CRM_DEDUP_SEARCH_TASKS_V1 — открытые задачи CRM со сроком до «сейчас»:
+    // оператору — назначенные ему, администратору — все.
+    crm:          null,
 };
 
 const CRUMBS = {
@@ -1496,6 +1500,22 @@ async function loadNavCounts() {
             if (!iRes.error) navCounts['cashier-shifts'] = iRes.count ?? 0;
         } catch (e) {
             console.warn('[nav counts] cashier:', e.message);
+        }
+    }
+    // CRM_DEDUP_SEARCH_TASKS_V1 — просроченные задачи CRM. Свой try, как у
+    // соседей. Только тем, кто ведёт доску: задачи читают admin/registrar/
+    // callcenter (schema-registry), и врач с разделом CRM иначе получал бы 403
+    // каждые 20 секунд.
+    if (isModuleAllowed('crm')) {
+        const roles = actorRoleCodes();
+        if (!roles.length || roles.some((r) => r === 'admin' || r === 'registrar' || r === 'callcenter')) {
+            try {
+                const me = (state.user && state.user.id) || null;
+                const n = await overdueTaskCount({ me, isAdmin: roles.includes('admin') });
+                navCounts.crm = n;
+            } catch (e) {
+                console.warn('[nav counts] crm tasks:', e.message);
+            }
         }
     }
     renderSidebar();
