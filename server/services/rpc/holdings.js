@@ -19,6 +19,9 @@ import { today, localDate } from '../domain/day.js';
 // EXPIRY_BALANCE_V1 — «выдача и списание просроченного предупреждают» (владелец
 // 23.09). Дверь медсестры отвечает теми же словами, что склад и койка.
 import { expiryWarnings } from './expiry.js';
+// STOCK_REQUEST_V1 — автозаявка по минимуму: зовётся ЗДЕСЬ, в единственной
+// записи остатка держателя, после каждого уменьшения.
+import { afterHoldingDecrease } from './stock-requests.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -58,8 +61,17 @@ export function consumptionFactor(product) {
   return product && product.consumption_unit && Number(product.consumption_factor) > 0 ? Number(product.consumption_factor) : 1;
 }
 
-/** Add `baseQty` (may be negative) to a holder's line; refuses to go below zero. */
-export function moveHolding(db, holder, productId, baseQty) {
+/**
+ * Add `baseQty` (may be negative) to a holder's line; refuses to go below zero.
+ *
+ * STOCK_REQUEST_V1 — ЭТО ЕДИНСТВЕННОЕ МЕСТО, где пишется stock_holdings (склад,
+ * одобрение заявки, цепочка списания inventory.js, дверь медсестры, отмены).
+ * Поэтому автозаявка по минимуму стоит здесь, одна на все двери: остаток
+ * уменьшился — проверяем минимум (rpc/stock-requests.js afterHoldingDecrease).
+ * Она никогда не бросает в списание и живёт в его транзакции. `actorId` — кто
+ * списал: он и значится подавшим автозаявку.
+ */
+export function moveHolding(db, holder, productId, baseQty, actorId = null) {
   const row = db.prepare('SELECT id, qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?')
     .get(holder.type, holder.id, productId);
   const next = round2((row ? row.qty : 0) + baseQty);
@@ -71,6 +83,7 @@ export function moveHolding(db, holder, productId, baseQty) {
   } else {
     db.prepare('INSERT INTO stock_holdings (holder_type, holder_id, product_id, qty) VALUES (?, ?, ?, ?)').run(holder.type, holder.id, productId, next);
   }
+  if (baseQty < 0) afterHoldingDecrease(db, holder, productId, actorId);
   return next;
 }
 
@@ -184,7 +197,7 @@ export function dispenseFromHolding(db, args, user) {
         const have = held ? round2(held.qty * cf) : 0;
         throw new RpcError(`Недостаточно на руках: ${product.name} — есть ${have} ${product.consumption_unit || product.base_unit || ''}`.trim(), 400);
       }
-      moveHolding(db, holder, productId, -baseQty);
+      moveHolding(db, holder, productId, -baseQty, user.id);
     }
 
     // Price per consumption unit — the sale price is per base unit.

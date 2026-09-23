@@ -212,7 +212,7 @@ function applySources(db, picks, productId, user, refType, refId) {
       db.prepare("UPDATE products SET on_hand = on_hand - ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?")
         .run(p.qty, productId);
     } else {
-      moveHolding(db, { type: p.type, id: p.id }, productId, -p.qty);
+      moveHolding(db, { type: p.type, id: p.id }, productId, -p.qty, user.id);   // STOCK_REQUEST_V1 — кто списал
     }
     db.prepare(`
       INSERT INTO stock_movements (product_id, kind, qty, reference_type, reference_id, created_by, holder_type, holder_id)
