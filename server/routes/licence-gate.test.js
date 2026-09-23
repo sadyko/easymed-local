@@ -103,6 +103,27 @@ test('a lapsed clinic can still call a read-only RPC', async (t) => {
   assert.notEqual((await post(server, cookie, '/api/rpc/dashboard_summary', {})).status, 402);
 });
 
+// STOCK_LOG_V1 / MY_STOCK_V1 / EXPIRY_BALANCE_V1 — ТРИ СКЛАДСКИХ ЭКРАНА ЧТЕНИЯ
+// ХОДЯТ ВМЕСТЕ. Они стоят в интерфейсе рядом («Журнал» и «Сроки годности» —
+// соседние вкладки склада, «Мои запасы» — пункт меню сотрудника), и отказ
+// одному при живых соседях читается не как «оплатите подписку», а как
+// «программа сломалась»: одна вкладка рисует список, вторая — красную ошибку,
+// а у медсестры «Не удалось загрузить ваши остатки». Все три только читают.
+test('заблокированная клиника читает все три складских экрана, но ничего не пишет', async (t) => {
+  const { app, password } = harness({ validUntil: '2020-01-01T00:00:00Z' });
+  const server = await listen(app); t.after(() => server.close());
+  const cookie = await login(server, password);
+  for (const rpc of ['stock_movements_list', 'stock_expiry_lots', 'holdings_list']) {
+    const res = await post(server, cookie, `/api/rpc/${rpc}`, {});
+    assert.notEqual(res.status, 402, `${rpc} закрылся вместе с соседями по экрану`);
+  }
+  // Приход, выдача и списание — записи, и через блокировку они не проходят.
+  for (const rpc of ['issue_stock_lines', 'adjust_stock', 'dispense_from_holding']) {
+    const res = await post(server, cookie, `/api/rpc/${rpc}`, {});
+    assert.equal(res.status, 402, `${rpc} — запись, а её заблокированная клиника делать не может`);
+  }
+});
+
 test('an unknown RPC is blocked while locked — the gate fails CLOSED', async (t) => {
   const { app, password } = harness({ validUntil: '2020-01-01T00:00:00Z' });
   const server = await listen(app); t.after(() => server.close());
