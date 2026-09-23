@@ -16,6 +16,9 @@
 import { hasAnyRole } from '../roles.js';
 import { assertAdmissionAtLeast } from './inpatient-flow.js';
 import { today, localDate } from '../domain/day.js';
+// EXPIRY_BALANCE_V1 — «выдача и списание просроченного предупреждают» (владелец
+// 23.09). Дверь медсестры отвечает теми же словами, что склад и койка.
+import { expiryWarnings } from './expiry.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -73,21 +76,40 @@ export function moveHolding(db, holder, productId, baseQty) {
 
 /**
  * holdings_list — what holders have on hand.
- * args: { holder_type?, holder_id?, include_empty? }  (no holder → every holder)
+ * args: { mine?, holder_type?, holder_id?, include_empty? }  (no holder → every holder)
  * → { holdings: [{ holder_type, holder_id, holder_name, product_id, product_name,
  *      base_unit, consumption_unit, consumption_factor, sale_price, qty_base, qty_units }] }
  * qty_units = qty in the consumption unit — what the nurse counts in.
+ *
+ * MY_STOCK_V1 — «МОЁ» СЧИТАЕТ СЕРВЕР, А НЕ ОТБОР В БРАУЗЕРЕ. Экран «Мои
+ * запасы» просит `mine: true` и НЕ называет держателя: имя берётся из сессии,
+ * чужие строки до экрана не доезжают, и подменить их в запросе нечем —
+ * holder_type/holder_id при `mine` не читаются вовсе. Роль тут не
+ * спрашивается: что числится за человеком, человек вправе видеть всегда, а
+ * заведующей и старшей медсестры в LIST_ROLES нет — они получили бы 403 на
+ * собственном подотчёте.
  */
 export function holdingsList(db, args, user) {
-  requireRole(user, LIST_ROLES);
   const a = args || {};
+  const mine = a.mine === true;
+  const selfId = Number(user && user.id);
+  if (mine) {
+    if (!isPosInt(selfId)) throw new RpcError('Вошедший не опознан.', 401);
+  } else {
+    requireRole(user, LIST_ROLES);
+  }
   const where = ['1=1'];
   const params = [];
-  if (a.holder_type) {
-    if (!HOLDER_TYPES.includes(a.holder_type)) throw new RpcError('holder_type неизвестен.', 400);
-    where.push('h.holder_type = ?'); params.push(a.holder_type);
+  if (mine) {
+    where.push("h.holder_type = 'staff'", 'h.holder_id = ?');
+    params.push(selfId);
+  } else {
+    if (a.holder_type) {
+      if (!HOLDER_TYPES.includes(a.holder_type)) throw new RpcError('holder_type неизвестен.', 400);
+      where.push('h.holder_type = ?'); params.push(a.holder_type);
+    }
+    if (a.holder_id != null) { where.push('h.holder_id = ?'); params.push(Number(a.holder_id)); }
   }
-  if (a.holder_id != null) { where.push('h.holder_id = ?'); params.push(Number(a.holder_id)); }
   if (!a.include_empty) where.push('h.qty > 0');
   const rows = db.prepare(`
     SELECT h.holder_type, h.holder_id, h.product_id, h.qty,
@@ -146,6 +168,10 @@ export function dispenseFromHolding(db, args, user) {
     const cf = consumptionFactor(product);
     const baseQty = round2(qtyUnits / cf);
     if (!(baseQty > 0)) throw new RpcError('Количество слишком мало.', 400);
+    // EXPIRY_BALANCE_V1 — партия смотрится ДО списания. Тревожит ТОВАР, а не
+    // источник: у подотчёта партии не записаны, но просроченная коробка в
+    // клинике одна, из чьих бы рук её ни взяли.
+    const warnings = expiryWarnings(db, [productId]);
     if (fromWarehouse) {
       if (!product.active) throw new RpcError('Товар отключён в каталоге.', 400);
       if (product.on_hand + 1e-9 < baseQty) {
@@ -191,7 +217,7 @@ export function dispenseFromHolding(db, args, user) {
     } else {
       leftBase = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(productId).on_hand;
     }
-    return { line_id: lineId, item_name: product.name, unit_price: unitPrice, total, left_units: round2(leftBase * cf), source: holder ? holder.type : WAREHOUSE };
+    return { line_id: lineId, item_name: product.name, unit_price: unitPrice, total, left_units: round2(leftBase * cf), source: holder ? holder.type : WAREHOUSE, warnings };
   });
   return run();
 }
@@ -216,16 +242,22 @@ export function voidHoldingDispense(db, args, user) {
     if (!line) throw new RpcError('Строка не найдена.', 404);
     if (line.clinic_item_id == null) throw new RpcError('Это не выдача товара.', 400);
     if (line.invoice_item_id != null) throw new RpcError('Строка уже в счёте — сначала уберите её из счёта.', 400);
-    const mv = db.prepare(`SELECT * FROM stock_movements WHERE reference_type = ? AND reference_id = ? AND kind = 'dispense' ORDER BY id DESC LIMIT 1`)
-      .get(refType, id);
-    if (!mv) throw new RpcError('Движение склада по этой строке не найдено.', 400);
-    const holder = mv.holder_type ? { type: mv.holder_type, id: mv.holder_id } : null;
-    // Back to where it came from: the holder the movement names, or the warehouse.
-    if (holder) moveHolding(db, holder, line.clinic_item_id, -mv.qty);   // mv.qty is negative
-    else db.prepare("UPDATE products SET on_hand = on_hand + ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(-mv.qty, line.clinic_item_id);
-    db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, reference_type, reference_id, created_by, holder_type, holder_id)
-      VALUES (?, 'void', ?, ?, ?, ?, ?, ?)`).run(line.clinic_item_id, -mv.qty, refType, id, user.id, holder ? holder.type : null, holder ? holder.id : null);
+    // HOLDINGS_FIRST_V1 — движений у строки может быть НЕСКОЛЬКО: цепочка
+    // списания покрывает дозу частями (3 из подотчёта, 7 со склада), и каждая
+    // часть возвращается своему источнику. Прежний «ORDER BY id DESC LIMIT 1»
+    // вернул бы только последнюю, а остальное растворилось бы.
+    const mvs = db.prepare(`SELECT * FROM stock_movements WHERE reference_type = ? AND reference_id = ? AND kind = 'dispense' ORDER BY id`)
+      .all(refType, id);
+    if (!mvs.length) throw new RpcError('Движение склада по этой строке не найдено.', 400);
+    for (const mv of mvs) {
+      const holder = mv.holder_type ? { type: mv.holder_type, id: mv.holder_id } : null;
+      // Back to where it came from: the holder the movement names, or the warehouse.
+      if (holder) moveHolding(db, holder, line.clinic_item_id, -mv.qty);   // mv.qty is negative
+      else db.prepare("UPDATE products SET on_hand = on_hand + ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(-mv.qty, line.clinic_item_id);
+      db.prepare(`
+        INSERT INTO stock_movements (product_id, kind, qty, reference_type, reference_id, created_by, holder_type, holder_id)
+        VALUES (?, 'void', ?, ?, ?, ?, ?, ?)`).run(line.clinic_item_id, -mv.qty, refType, id, user.id, holder ? holder.type : null, holder ? holder.id : null);
+    }
     db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(id);
     return { ok: true };
   });
@@ -262,16 +294,23 @@ export function visitItems(db, args, user) {
   requireRole(user, LIST_ROLES);
   const visitId = Number(args && args.visit_id);
   if (!isPosInt(visitId)) throw new RpcError('visit_id обязателен.', 400);
+  // HOLDINGS_FIRST_V1 — держатель читается ПОДЗАПРОСОМ, а не соединением:
+  // движений у одной строки теперь бывает несколько (доза, покрытая частями),
+  // и LEFT JOIN размножил бы саму строку выдачи — одна выдача выглядела бы
+  // двумя. holder_type — первый источник, holding_parts отвечает на вопрос
+  // «бралось ли хоть что-то из подотчёта».
+  const mvWhere = "m.reference_type = 'visit' AND m.reference_id = vs.id AND m.kind = 'dispense'";
   const rows = db.prepare(`
     SELECT vs.id, vs.clinic_item_id AS product_id, p.name AS product_name, p.consumption_unit, p.base_unit,
            vs.quantity, vs.unit_price, vs.total, vs.invoice_item_id, vs.created_at, vs.created_by,
            u.full_name AS created_by_name,
-           m.holder_type, m.holder_id
+           (SELECT m.holder_type FROM stock_movements m WHERE ${mvWhere} ORDER BY m.id LIMIT 1) AS holder_type,
+           (SELECT m.holder_id   FROM stock_movements m WHERE ${mvWhere} ORDER BY m.id LIMIT 1) AS holder_id,
+           (SELECT COUNT(*) FROM stock_movements m WHERE ${mvWhere} AND m.holder_type IS NOT NULL) AS holding_parts
       FROM visit_services vs
       JOIN products p ON p.id = vs.clinic_item_id
       LEFT JOIN users u ON u.id = vs.created_by
-      LEFT JOIN stock_movements m ON m.reference_type = 'visit' AND m.reference_id = vs.id AND m.kind = 'dispense'
      WHERE vs.visit_id = ? AND vs.clinic_item_id IS NOT NULL
      ORDER BY vs.id`).all(visitId);
-  return { items: rows.map((r) => ({ ...r, unit: r.consumption_unit || r.base_unit || '', from_holding: !!r.holder_type, invoiced: r.invoice_item_id != null, can_void: r.invoice_item_id == null })) };
+  return { items: rows.map((r) => ({ ...r, unit: r.consumption_unit || r.base_unit || '', from_holding: r.holding_parts > 0, invoiced: r.invoice_item_id != null, can_void: r.invoice_item_id == null })) };
 }

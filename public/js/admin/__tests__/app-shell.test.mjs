@@ -72,7 +72,15 @@ class FakeNode {
     removeAttribute(k) { delete this.attrs[k]; }
     addEventListener(t, fn) { (this._l[t] || (this._l[t] = [])).push(fn); }
     removeEventListener() {}
-    dispatchEvent(e) { for (const fn of this._l[e.type] || []) fn(e); return true; }
+    // BACK_TO_ALLOWED_V1 — обработчик, назначенный СВОЙСТВОМ (el.onclick = …,
+    // так оболочка вешает возврат), в браузере срабатывает наравне со
+    // слушателями; без этой строки стенд молча «нажимал» и ничего не делал.
+    dispatchEvent(e) {
+        for (const fn of this._l[e.type] || []) fn(e);
+        const prop = this['on' + e.type];
+        if (typeof prop === 'function') prop.call(this, e);
+        return true;
+    }
     click() { this.dispatchEvent({ type: 'click', currentTarget: this, target: this, preventDefault() {}, stopPropagation() {} }); }
     closest() { return null; }
     querySelector(sel) { return descendants(this).find((n) => matches(n, sel)) || null; }
@@ -157,6 +165,10 @@ const APP  = mkEl('div'); APP.className = 'app'; BODY.appendChild(APP);
 function shellEl(tag, id, cls) { const e = mkEl(tag); if (id) e.setAttribute('id', id); if (cls) e.className = cls; return e; }
 const SIDEBAR   = shellEl('nav', 'sidebar-body', 'sidebar-body');
 const APPBAR    = shellEl('header', 'topbar', 'appbar');
+// APPBAR_BACK_V1 / BACK_TO_ALLOWED_V1 — кнопка «назад» в верхней панели
+// (public/admin.html: <button id="section-back" class="appbar-back" hidden>).
+// Без неё оболочка ловит null и весь возврат в этом стенде молчал бы.
+const BACK_EL   = shellEl('button', 'section-back', 'appbar-back'); BACK_EL.hidden = true;
 const TITLE_EL  = shellEl('h1', 'section-title', 'appbar-title');
 const CONTROLS  = shellEl('div', null, 'appbar-controls');
 const RELOAD_EL = shellEl('button', 'topbar-reload', 'appbar-reload');
@@ -176,7 +188,7 @@ const UROLE_EL  = shellEl('div', 'user-role', 'user-role');
 USER_BTN.appendChild(AVATAR_EL); USER_BTN.appendChild(UNAME_EL); USER_BTN.appendChild(UROLE_EL);
 CONTROLS.appendChild(RELOAD_EL); CONTROLS.appendChild(BELL_EL); CONTROLS.appendChild(BRANCH_EL);
 CONTROLS.appendChild(LANG_EL); CONTROLS.appendChild(USER_BTN); CONTROLS.appendChild(USER_POP);
-APPBAR.appendChild(TITLE_EL); APPBAR.appendChild(CONTROLS);
+APPBAR.appendChild(BACK_EL); APPBAR.appendChild(TITLE_EL); APPBAR.appendChild(CONTROLS);
 const MAIN = mkEl('main'); MAIN.className = 'main';
 MAIN.appendChild(APPBAR); MAIN.appendChild(VIEW_ROOT);
 const ASIDE = shellEl('aside', null, 'sidebar');
@@ -796,6 +808,55 @@ test('«Очередь» — вкладка «Пациентов», а не вт
     perms.setFullAccess('Admin');
     await go('patients');
     assert.equal(navItemFor('Очередь'), undefined, 'дубликат вернулся');
+});
+
+// ===========================================================================
+// 10. BACK_TO_ALLOWED_V1 — «НАЗАД» НЕ ВЕДЁТ В «НЕТ ДОСТУПА»
+//
+// MY_STOCK_V1 (S4) дал медсестре и заведующей вход в карточку отдела
+// (#my-department → #departments), а карточка отдела — подэкран НАСТРОЕК
+// (PARENT_OF в admin.js). Настройки медсестре закрыты, и «назад» с законно
+// открытого экрана упиралось в панель «Нет доступа»: отказ вместо возврата
+// читается как поломка — человек жмёт снова, потом звонит.
+// ===========================================================================
+test('BACK_TO_ALLOWED_V1: медсестре «назад» с карточки отдела возвращает туда, куда ей можно', async () => {
+    const perms = await import('../permissions.js');
+    try {
+        // Настоящая медсестра отделения: картотека, процедуры, койки. Настроек нет.
+        perms.setEffectiveFromRole({ name: 'Медсестра', permissions: { sections: ['patients', 'procedures', 'beds'], levels: { patients: 'editor', beds: 'editor' } } });
+        assert.equal(perms.isRouteAllowed('departments'), true, 'тест подобран неверно: карточка отдела медсестре и так закрыта');
+        assert.equal(perms.isModuleAllowed('settings'), false, 'тест подобран неверно: настройки медсестре открыты');
+
+        await go('departments');
+        const back = byId('section-back');
+        assert.equal(back.hidden, false, 'с карточки отдела пропала кнопка «назад»');
+        assert.equal(/Настройки/.test(labelOf(back)), false,
+            '«назад» по-прежнему зовёт в Настройки — экран, на котором медсестру ждёт «Нет доступа»');
+
+        back.click();
+        await settle(80);
+        assert.notEqual(shell().state.view, 'settings');
+        assert.notEqual(shell().state.view, 'departments', 'кнопка «назад» не сработала вовсе — тест проверяет не то');
+        assert.ok(navItemFor('Пациенты'), 'у медсестры нет картотеки — тест подобран неверно');
+        assert.equal(perms.isRouteAllowed(shell().state.view), true,
+            '«назад» привело на закрытый маршрут — это и есть панель отказа вместо возврата');
+        assert.equal(/No access/.test(VIEW_ROOT.textContent), false,
+            'после «назад» на экране панель «Нет доступа»');
+    } finally {
+        perms.setFullAccess('Admin');
+    }
+});
+
+test('BACK_TO_ALLOWED_V1: у администратора «назад» не изменилось — оно ведёт к родителю', async () => {
+    await perms_setFull();
+    await go('departments');
+    const back = byId('section-back');
+    assert.equal(back.hidden, false);
+    assert.match(labelOf(back), /Настройки|Settings/,
+        'у полного доступа «назад» с карточки отдела обязано вести в Настройки, как вело');
+    back.click();
+    await settle(80);
+    assert.equal(shell().state.view, 'settings');
 });
 
 test('глушим таймеры экранов, чтобы прогон завершался', () => {

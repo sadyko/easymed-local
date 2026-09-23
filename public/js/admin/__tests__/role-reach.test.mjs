@@ -86,6 +86,49 @@ test('экраны стационара названы отдельно: клю�
         'условный экран не может стоять в списке безусловно открытых');
 });
 
+// MY_STOCK_V1 / I3 — СВОДКА НЕ РАССКАЗЫВАЕТ РОЛИ БИОГРАФИЮ ЧИТАТЕЛЯ.
+//
+// «Мои запасы» и «Мой отдел» открываются ещё и ФАКТОМ — состоит ли человек в
+// отделе. Предпросмотр подменял только права и роль, а отдел молча оставался
+// от того, кто смотрит: администратор, состоящий в отделе, выбирал «Кассир» —
+// и сводка сообщала, что кассирам открыты оба личных экрана. Неправда о роли,
+// сказанная уверенным голосом, и притом правда о самом читателе.
+test('предпросмотр роли НЕ наследует отдел читателя — и называет условие словами', () => {
+    const was = globalThis.window.easymed;
+    // Читатель — администратор, состоящий в отделе 11. Именно так это и врало.
+    globalThis.window.easymed = { state: { user: { id: 1, role: 'admin', department_id: 11 } } };
+    try {
+        const NAV_P = [...NAV, 'my-stock', 'my-department'];
+        // Роль названа КОДОМ: «Мои запасы» спрашивают роль (MY_STOCK_ROLES), и
+        // безымянная роль отвечала бы «неизвестна — не мешаем», то есть
+        // условие про отдел не проявилось бы вовсе.
+        const reach = roleReach({ name: 'cashier', permissions: { sections: ['cashier', 'my-stock'], levels: {}, patient_tabs: {} } }, NAV_P, LABEL);
+
+        assert.ok(!reach.opens.some((m) => m.id === 'my-stock' || m.id === 'my-department'),
+            'сводка обещала кассирам личные экраны безусловно — это отдел ЧИТАТЕЛЯ, а не свойство роли');
+        const cond = Object.fromEntries(reach.conditional.map((m) => [m.id, m]));
+        assert.ok(cond['my-stock'] && cond['my-stock'].needsDepartment,
+            '«Мои запасы» не названы условными: кассиру они откроются только с отделом');
+        assert.ok(cond['my-department'] && cond['my-department'].needsDepartment,
+            '«Мой отдел» не назван условным');
+
+        const said = reachSentences(reach).map((l) => l.template);
+        assert.ok(said.some((t) => /состоит в отделе|состоящему в отделе/.test(t)),
+            'условие про отдел не названо словами: ' + JSON.stringify(said));
+
+        // У медсестры «Мои запасы» открыты И БЕЗ отдела — по роли; условие
+        // читается как ИЛИ, а не как второе обязательное требование.
+        const nurseReach = roleReach({ name: 'nurse', permissions: { sections: ['patients', 'my-stock'], levels: {}, patient_tabs: {} } }, NAV_P, LABEL);
+        const nurseCond = Object.fromEntries(nurseReach.conditional.map((m) => [m.id, m]));
+        assert.equal(nurseCond['my-stock'].needsDepartment, undefined,
+            'медсестре подотчёт открыт по роли — условие про отдел здесь лишнее');
+        assert.ok(nurseCond['my-department'].needsDepartment, 'а карточка отдела без отдела не открывается никому');
+
+        // И состояние не течёт: отдел читателя на месте после предпросмотра.
+        assert.equal(perms.ownDepartmentId(), 11, 'предпросмотр не вернул отдел вошедшего на место');
+    } finally { globalThis.window.easymed = was; perms.setFullAccess('Admin'); }
+});
+
 test('роль без единого раздела названа неработающей, а не «почти настроенной»', () => {
     const reach = roleReach(role([]), NAV, LABEL);
     assert.equal(reach.opens.length, 0);
@@ -125,6 +168,68 @@ test('вкладки карты пациента перечисляются ТО
     assert.ok(!('labs' in byTab), 'неограниченная вкладка попала в список ограничений');
 });
 
+// MY_STOCK_V1 — ЛИЧНЫЙ ЭКРАН НЕ ДОМАШНИЙ, И ЭТО ГЛАВНОЕ ПРО ПОРЯДОК МЕНЮ.
+//
+// «Мои запасы» стоят в клиническом блоке — раньше кассы, закупок и дашборда, —
+// и открываются всякому, у кого есть отдел. Пока firstAllowedView()/
+// landingScreen() просто брали первый доступный пункт, кассир с отделом входил
+// в свой подотчёт вместо кассы, главный врач — вместо дашборда, кладовщик —
+// вместо «Закупок», а эта самая сводка уверенно сообщала владельцу, что дом
+// кассира — «Мои запасы».
+//
+// Порядок пунктов берётся ИЗ ОБОЛОЧКИ, а не переписывается сюда: беда была
+// именно в порядке, и список, списанный руками, перестал бы её ловить на
+// первой же перестановке пункта меню.
+const SHELL_NAV_IDS = await (async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const url = await import('node:url');
+    const here = path.dirname(url.fileURLToPath(import.meta.url));
+    const src = fs.readFileSync(path.join(here, '..', '..', 'admin.js'), 'utf8');
+    const at = src.indexOf('const NAV = [');
+    const block = src.slice(at, src.indexOf('\nconst CRUMBS', at));
+    return [...block.matchAll(/id:\s*'([^']+)'/g)].map((m) => m[1]);
+})();
+
+test('MY_STOCK_V1: личный экран не бывает домашним — ни у кассира с отделом, ни у главного врача, ни у кладовщика', () => {
+    const was = globalThis.window.easymed;
+    // У вошедшего ЕСТЬ отдел: ровно так «Мои запасы» и становились домом.
+    globalThis.window.easymed = { state: { user: { id: 7, role: 'nurse', department_id: 11 } } };
+    try {
+        assert.ok(SHELL_NAV_IDS.indexOf('my-stock') < SHELL_NAV_IDS.indexOf('cashier-shifts'),
+            'подготовка: «Мои запасы» обязаны стоять в меню РАНЬШЕ кассы — иначе тест ничего не ловит');
+
+        // Спрашивается САМА landingScreen на ЖИВОМ состоянии прав — то есть
+        // ровно то положение, в котором работает оболочка: вошедший человек,
+        // его отдел, его роль. Через previewRole() этот случай не проверить: в
+        // предпросмотре отдела нарочно нет (I3 ниже), и «Мои запасы» кассиру
+        // там не откроются вовсе — тест был бы зелёным и на сломанном коде.
+        const landing = (name, sections) => {
+            perms.setEffectiveFromRole({ name, permissions: { sections, levels: {}, patient_tabs: {} } });
+            return landingScreen(SHELL_NAV_IDS);
+        };
+
+        assert.equal(landing('cashier', ['cashier', 'my-stock']).id, 'cashier-shifts',
+            'кассир с отделом входит в свой подотчёт вместо кассы');
+        assert.equal(landing('head_doctor', ['dashboard', 'reports-hub', 'my-stock']).id, 'dashboard',
+            'главный врач входит в «Мои запасы» вместо дашборда');
+        assert.equal(landing('inventory', ['inventory', 'dashboard', 'my-stock']).id, 'inventory',
+            'кладовщик входит в «Мои запасы» вместо «Закупок»');
+
+        // И «Мой отдел» тоже не дом: роль, у которой открыт ТОЛЬКО он, дома не
+        // имеет — это честнее, чем обещать личный экран как рабочее место.
+        assert.equal(landing('nurse', ['my-stock']), null,
+            'роль без единого рабочего раздела получила домом личный экран');
+
+        // При этом сами пункты остаются ОТКРЫТЫМИ — их прячут от ДОМА, а не от
+        // человека: медсестра со своим подотчётом его по-прежнему видит.
+        perms.setEffectiveFromRole({ name: 'nurse', permissions: { sections: ['patients', 'my-stock'], levels: {} } });
+        assert.equal(perms.isModuleAllowed('my-stock'), true,
+            'личный экран пропал вовсе — его убирают из ДОМАШНИХ, а не из доступных');
+        assert.equal(landingScreen(SHELL_NAV_IDS).id, 'patients');
+    } finally { globalThis.window.easymed = was; perms.setFullAccess('Admin'); }
+});
+
 test('правило «куда попадёт» не разошлось с оболочкой', async () => {
     // Правило продублировано в role-reach.js намеренно (иначе вид настроек
     // тянул бы оболочку и получал круговую зависимость). Дубликат прикрыт
@@ -141,4 +246,8 @@ test('правило «куда попадёт» не разошлось с об
     assert.match(body, /actorRoleCodes\(\)\.includes\('admin'\)/, 'оболочка больше не отправляет администратора в дашборд, а сводка обещает именно это');
     assert.match(body, /isModuleAllowed\('dashboard'\)/);
     assert.ok(!/isRouteAllowed\('visits'\)/.test(body), 'журнал визитов удалён — оболочка не должна его обещать');
+    // MY_STOCK_V1 — и тот же пропуск личных экранов: без него оболочка сажала
+    // бы кассира с отделом в «Мои запасы», а сводка обещала бы кассу.
+    assert.match(body, /PERSONAL_VIEWS\.has\(item\.id\)/,
+        'оболочка снова предлагает личный экран как домашний');
 });

@@ -23,6 +23,7 @@ import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 import { loadSlotDay, freeStartMinutes, hhmmToMin } from './service-picker-modal.js?v=aug17e';
 import { bookVisit } from './visit-booking.js';
 import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // DISPENSE_ITEM_V1
+import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 import { logPatientActivity } from './activity-log.js';
 import { canDelete as canDeleteRole, patientTabCanEdit } from '../permissions.js';
 import { insertRow, currentUser } from '../data.js';   // AURORA_CONSULT_TOOLBAR_V1 + AURORA_CONSULT_TEMPLATES_V1
@@ -575,7 +576,7 @@ function paintDispensed(ctx) {
                 ? h('span', { class: 'muted', style: { fontSize: '12.5px' }, title: 'Уже в счёте — отмена недоступна' }, Icon('Check', { size: 12 }))
                 : (canDeleteRole('consultation')
                     ? h('button', {
-                        class: 'btn btn-ghost btn-sm', type: 'button', title: 'Отменить (вернуть на склад)',
+                        class: 'btn btn-ghost btn-sm', type: 'button', title: 'Отменить (вернуть туда, откуда взят)',
                         style: { color: 'var(--crit-700)' },
                         onclick: () => voidDispensedItemWs(ctx, it),
                       }, Icon('Trash', { size: 12 }), ' Отменить')
@@ -587,7 +588,7 @@ function paintDispensed(ctx) {
 // Void a dispensed line — returns stock + deletes the row via the RPC, then
 // reloads + repaints. RAISEs (toasted) if already invoiced.
 async function voidDispensedItemWs(ctx, it) {
-    if (!confirm(trf('Отменить «{name}»? Препарат вернётся на склад.', { name: it.name }))) return;
+    if (!confirm(trf('Отменить «{name}»? Препарат вернётся туда, откуда взят.', { name: it.name }))) return;
     try {
         const { error } = await supabase.rpc('void_dispensed_visit_item', { p_line: it.id });
         if (error) throw error;
@@ -4014,6 +4015,7 @@ function openDispenseConsultItem(ctx) {
         // batch failed (keeps the dialog open); partial success toasts a summary.
         onConfirm: async (lines) => {
             let ok = 0; const fails = [];
+            const warned = [];   // EXPIRY_BALANCE_V1 — просроченные партии всех строк
             for (const { item, qty } of lines) {
                 try {
                     const { data, error } = await supabase.rpc('dispense_visit_item', {
@@ -4026,9 +4028,22 @@ function openDispenseConsultItem(ctx) {
                     const res = Array.isArray(data) ? data[0] : data;
                     const name = res?.item_name || item.name;
                     ok++;
-                    if (res && Number(res.on_hand) <= 0) {
+                    // HOLDINGS_FIRST_V1 — предупреждение о пустом складе имеет
+                    // смысл, только если со склада И БРАЛИ: выдача из своего
+                    // подотчёта или кабинета склада не касается, и кричать
+                    // «остаток 0» на каждую такую выдачу — ложная тревога.
+                    // Сервер называет источники (sources); старый ответ без
+                    // них ведёт себя как раньше.
+                    const usedWarehouse = !Array.isArray(res?.sources) || res.sources.some((s) => s && s.type === 'warehouse');
+                    if (res && usedWarehouse && Number(res.on_hand) <= 0) {
                         toast(trf('Внимание: остаток {name} теперь {n} (мало/в минусе).', { name, n: Number(res.on_hand).toLocaleString('ru-RU') }), 'fail');
                     }
+                    // EXPIRY_BALANCE_V1 — просрочка это ДРУГАЯ беда, чем пустой
+                    // склад, и сервер называет её своими словами (warnings).
+                    // Кабинет врача их разбирал и выбрасывал: рядом, у койки и
+                    // на амбулаторной вкладке, они показывались — и молчание
+                    // здесь читалось как «партия свежая».
+                    if (res && Array.isArray(res.warnings)) warned.push(...res.warnings);
                     // Log the dispense to the patient timeline (best-effort).
                     try {
                         await logPatientActivity({
@@ -4049,6 +4064,7 @@ function openDispenseConsultItem(ctx) {
             if (ok === 0) throw new Error(fails[0] || 'Не удалось выдать товары');
             toast(trf('Выдано позиций: {n}', { n: ok }) + (fails.length ? ' · ' + trf('ошибок: {n}', { n: fails.length }) : ''));
             if (fails.length) toast(fails.join('; '), 'fail');
+            toastStockWarnings({ warnings: warned });   // EXPIRY_BALANCE_V1 — после итога, одной плашкой на все строки
         },
     });
 }

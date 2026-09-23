@@ -4,9 +4,12 @@
 // Заявки / Заказы на закупку / Товары / Поставщики).
 //
 // Live panes: Склад (inventory-sklad.js), Товары (inventory-products.js),
-// Поставщики (inventory-suppliers.js), Дашборд + Журнал (this file).
-// Заявки / Заказы / Отделения / Сроки годности / Инвентаризация are visible
-// «Во 2-й фазе» placeholders (spec 2026-08-05-procurement-redesign-design.md).
+// Поставщики (inventory-suppliers.js), Дашборд (this file), Журнал
+// (stock-log.js — STOCK_LOG_V1: у него свой маршрут #stock-log, потому что
+// журнал видит не только склад), Сроки годности (inventory-expiry.js —
+// EXPIRY_BALANCE_V1).
+// Заявки / Заказы / Инвентаризация — живые вкладки (PROCUREMENT_DOCS_V1);
+// «Отделения» ведут на #departments (DEPARTMENTS_V1).
 //
 // on_hand / avg_cost change ONLY through RPCs (receive_stock_lines,
 // adjust_stock, issue_stock_lines, dispense_item/void_dispense) — the
@@ -15,14 +18,21 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
 import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import {
-    fetchGuard, loadingCard, comingSoon, fmtPrice, fmtQty, fmtSignedQty,
-    movementTag, fetchMovements, isLowStock,
+    fetchGuard, loadingCard, comingSoon, fmtPrice, fmtQty,
+    fetchMovements, isLowStock,
 } from './inventory-shared.js';
+// STOCK_LOG_V1 — «Журнал» это отдельный экран (маршрут #stock-log): его видит
+// не только склад, поэтому он живёт своим файлом, а чип показывает его здесь же.
+import { renderStockLog } from './stock-log.js';
 import { renderProductsTab } from './inventory-products.js';
 import { renderSkladTab } from './inventory-sklad.js';
 import { renderSuppliersTab } from './inventory-suppliers.js';
 // PROCUREMENT_DOCS_V1 — живые вкладки Заявки / Заказы + Инвентаризация (Phase 2)
 import { renderRequisitionsTab, renderPurchaseOrdersTab, renderStockCountsTab } from './inventory-docs.js';
+// EXPIRY_BALANCE_V1 — «Сроки годности» больше не заглушка: остатки партиями,
+// ближайший срок первым. Расклад считает сервер (rpc/expiry.js), экран его
+// показывает и честно называет расчётом.
+import { renderExpiryTab } from './inventory-expiry.js';
 
 const refs = { container: null, onNavigate: null, chipsEl: null, tabBarEl: null, contentEl: null };
 const state = { pane: 'sklad' };
@@ -119,7 +129,7 @@ async function repaint() {
         case 'products':   return renderProductsTab(container);
         case 'suppliers':  return renderSuppliersTab(container);
         case 'dashboard':  return renderDashboardTab(container);
-        case 'audit':      return renderAuditTab(container);
+        case 'audit':      return renderStockLog(container);   // STOCK_LOG_V1
         // PROCUREMENT_DOCS_V1 — Заявки / Заказы / Инвентаризация живые (Phase 2)
         case 'requisitions':    return renderRequisitionsTab(container);
         case 'purchase_orders': return renderPurchaseOrdersTab(container);
@@ -127,9 +137,7 @@ async function repaint() {
         case 'departments':   // DEPARTMENTS_V1 — сюда попадают только без onNavigate; иначе чип ведёт на #departments
             return void container.appendChild(comingSoon('Отделения',
                 'Товары и остатки по отделениям смотрите в «Настройки → Отделы».', 'Building'));
-        case 'expiry':
-            return void container.appendChild(comingSoon('Сроки годности',
-                'Партии и сроки годности (FEFO). Появится следующим шагом.', 'Clock'));
+        case 'expiry':      return renderExpiryTab(container);   // EXPIRY_BALANCE_V1
         default:
             return;
     }
@@ -265,100 +273,5 @@ function recentReceiptsCard(rows, productsById) {
                 );
             })),
         ),
-    );
-}
-
-// =============================================================================
-// ЖУРНАЛ ДВИЖЕНИЙ
-// =============================================================================
-const audit = { kind: 'all', q: '' };
-
-async function renderAuditTab(container) {
-    container.appendChild(loadingCard());
-    const token = ++fetchGuard.token;
-
-    const { data, error } = await fetchMovements({ limit: 300 });
-    if (token !== fetchGuard.token) return;
-
-    clear(container);
-
-    if (error) {
-        toast(trf('Не удалось загрузить журнал: {msg}', { msg: error.message || error }), 'fail');
-        container.appendChild(h('div', { class: 'card' }, h('div', { class: 'empty' }, 'Не удалось загрузить движения.')));
-        return;
-    }
-
-    const rows = data || [];
-    const tbody = h('tbody');
-
-    const selStyleSmall = { height: '30px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '12.5px', background: 'white', fontFamily: 'inherit' };
-    const kindSel = h('select', { style: selStyleSmall },
-        ...[['all', 'Все типы'], ['receive', 'Приход'], ['issue', 'Выдача'], ['dispense', 'Списание'], ['adjust', 'Корректировка'], ['void', 'Отмена']]
-            .map(([v, label]) => h('option', { value: v, selected: v === audit.kind }, label)));
-    kindSel.addEventListener('change', () => { audit.kind = kindSel.value; paint(); });
-
-    const qInp = h('input', { type: 'text', placeholder: 'Поиск товара…', value: audit.q,
-        style: { height: '30px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '12.5px', fontFamily: 'inherit', width: '220px' } });
-    qInp.addEventListener('input', () => { audit.q = qInp.value; paint(); });
-
-    function paint() {
-        clear(tbody);
-        const q = audit.q.trim().toLowerCase();
-        const shown = rows.filter(m => {
-            const isIssue = m.kind === 'dispense' && m.reference_type === 'issue';
-            if (audit.kind === 'issue' && !isIssue) return false;
-            if (audit.kind === 'dispense' && (m.kind !== 'dispense' || isIssue)) return false;
-            if (audit.kind !== 'all' && audit.kind !== 'issue' && audit.kind !== 'dispense' && m.kind !== audit.kind) return false;
-            if (q) {
-                const name = (m.products && m.products.name) || '';
-                if (!name.toLowerCase().includes(q)) return false;
-            }
-            return true;
-        });
-        if (!shown.length) {
-            tbody.appendChild(h('tr', null,
-                h('td', { colspan: '7', style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Нет подходящих движений.')));
-            return;
-        }
-        for (const m of shown) tbody.appendChild(auditRow(m));
-    }
-
-    container.appendChild(h('div', { class: 'card' },
-        h('div', { class: 'card-header', style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-            h('h3', null, Icon('Activity', { size: 15 }), ' Журнал движений'),
-            h('span', { class: 'grow' }),
-            qInp,
-            kindSel,
-        ),
-        h('div', { style: { overflowX: 'auto' } },
-            h('table', { class: 'tbl' },
-                h('thead', null, h('tr', null,
-                    h('th', null, 'Когда'),
-                    h('th', null, 'Товар'),
-                    h('th', null, 'Тип'),
-                    h('th', null, 'Кол-во'),
-                    h('th', null, 'Цена за ед.'),
-                    h('th', null, 'Основание'),
-                    h('th', null, 'Кто'),
-                )),
-                tbody,
-            ),
-        ),
-    ));
-    paint();
-}
-
-function auditRow(m) {
-    const name = (m.products && m.products.name) || '—';
-    const unit = (m.products && (m.products.base_unit || m.products.unit)) || '';
-    const who = (m.users && (m.users.full_name || m.users.username)) || '—';
-    return h('tr', null,
-        h('td', null, fmtDateTime(m.created_at)),
-        h('td', null, name),
-        h('td', null, movementTag(m)),
-        h('td', { class: 'num' }, fmtSignedQty(m.qty, unit)),
-        h('td', { class: 'num' }, m.unit_cost != null ? fmtPrice(m.unit_cost) : '—'),
-        h('td', { class: 'muted' }, m.note || ''),
-        h('td', null, who),
     );
 }

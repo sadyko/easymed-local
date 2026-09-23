@@ -168,7 +168,10 @@ test('a successful login records no failed_login event', () => {
 
 test('login still works when the ops_events table does not exist yet (recordEvent must never break the login path)', () => {
   const db = openDb(':memory:'); // deliberately unmigrated: no users table either, so use raw SQL setup below
-  db.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, password_hash TEXT, full_name TEXT, role TEXT, extra_roles TEXT, is_active INTEGER DEFAULT 1, must_change_password INTEGER DEFAULT 0);
+  // MY_STOCK_V1 — department_id стоит и в этом слепке: это колонка НАСТОЯЩЕЙ
+  // таблицы (миграция 108), а тема теста — отсутствующий ops_events, а не
+  // урезанный справочник сотрудников.
+  db.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, password_hash TEXT, full_name TEXT, role TEXT, extra_roles TEXT, department_id INTEGER, is_active INTEGER DEFAULT 1, must_change_password INTEGER DEFAULT 0);
            CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id INTEGER, expires_at TEXT);`);
   db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?,?,?)').run('bare', hashPassword('secret123'), 'admin');
   assert.doesNotThrow(() => login(db, 'bare', 'wrong'));
@@ -200,4 +203,28 @@ test('adding the failed_login write does not break cost-equalisation between an 
   assert.ok(wrongPwMs > 2, `wrong-password login should cost real bcrypt time, took ${wrongPwMs}ms`);
   const ratio = Math.max(unknownMs, wrongPwMs) / Math.min(unknownMs, wrongPwMs);
   assert.ok(ratio < 4, `unknown-username (${unknownMs}ms) and wrong-password (${wrongPwMs}ms) should be comparable, ratio was ${ratio}`);
+});
+
+// MY_STOCK_V1 — ОТДЕЛ СОТРУДНИКА ЕДЕТ С СЕССИЕЙ.
+//
+// Оболочка решает по нему, показывать ли пункт меню «Мой отдел» и ссылку на
+// карточку отдела с экрана «Мои запасы». Спросить это экрану больше негде:
+// users читается через /api/db, а роль без прав на справочник сотрудников туда
+// не ходит — и «Мой отдел» пропал бы ровно у тех, ради кого он написан.
+test('сессия называет отдел сотрудника — и при входе, и при восстановлении', () => {
+  const db = freshDb();
+  bootstrapAdmin(db);
+  db.prepare("INSERT INTO departments (id, name, kind) VALUES (11, 'Кардиология', 'clinical')").run();
+  db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, department_id) VALUES (40, 'nurse', ?, 'Медсестра Алиева', 'nurse', 11)")
+    .run(hashPassword('nurse-password-1'));
+
+  const ok = login(db, 'nurse', 'nurse-password-1');
+  assert.equal(ok.user.department_id, 11, 'вход не назвал отдел — пункт «Мой отдел» появился бы только после перезагрузки');
+  assert.equal(sessionUser(db, ok.session).department_id, 11);
+
+  // Сотрудник без отдела говорит «отдела нет» — null, а не undefined: поле
+  // обязано ЛИБО называть отдел, ЛИБО отрицать его, но не молчать.
+  const admin = login(db, 'admin', FIRST_RUN_PASSWORD);
+  assert.equal(admin.user.department_id, null);
+  assert.equal(sessionUser(db, admin.session).department_id, null);
 });

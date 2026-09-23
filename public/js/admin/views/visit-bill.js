@@ -17,6 +17,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, StatusTag, Tag, fmtDateTime, field } from '../ui.js';
 import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 // BRANCH_BILL_GUARD_V1 — тот же предикат, на котором стоят рабочие списки
 // (visits.js:91, procedures.js:50 — там он же, но в SQL: .is('sync_origin', null)).
 import { isOwnBuilding, originTag } from '../record-origin.js';
@@ -263,13 +264,17 @@ export function openVisitBillModal(visit, onChanged) {
 
         dispenseBtn.disabled = true;
         try {
-            const { error } = await supabase.rpc('dispense_item', {
+            const { data, error } = await supabase.rpc('dispense_item', {
                 product_id: Number(dispenseSelect.value),
                 quantity: qty,
                 visit_id: visit.id,
             });
             if (error) throw error;
             toast('Dispensed', 'ok');
+            // EXPIRY_BALANCE_V1 — просроченная партия: ПОСЛЕ успеха, не вместо
+            // него. Ответ разбирался до `{ error }`, и предупреждение сервера
+            // уезжало в мусор — на соседних экранах оно при этом было.
+            toastStockWarnings(Array.isArray(data) ? data[0] : data);
             dispenseSelect.value = '';
             dispenseQty.value = '1';
             await reloadAll();

@@ -127,6 +127,11 @@ export function actorFromUser(u) {
         role_id:        u.role_id || null,
         company_id:     u.company_id || null,
         specialty:      u.specialty || '',
+        // MY_STOCK_V1 — отдел сотрудника приезжает с сессией (server/services/
+        // auth.js sessionUser) и живёт здесь, потому что actorFromUser —
+        // единственная дверь в state.user: поле, не названное тут, до экранов
+        // не доходит вообще. По нему меню решает, показывать ли «Мой отдел».
+        department_id:  Number(u.department_id) > 0 ? Number(u.department_id) : null,
         is_super_admin: isSuperAdmin,
         is_admin:       isAdmin,
         is_doctor:      isDoctor,

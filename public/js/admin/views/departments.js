@@ -24,6 +24,7 @@ import { h, Icon, PageHead, clear, toast, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { openStockIssueModal, productSearch, issueUnitOf, inpStyle } from './stock-issue-modal.js';
 import { fmtQty, numStyle } from './inventory-shared.js';
+import { forgetOwnDepartment } from '../permissions.js';   // MY_STOCK_V1 — протухший отдел в сессии
 
 const KIND_LABEL = {
     clinical: 'Клинический', laboratory: 'Лаборатория', diagnostics: 'Диагностика',
@@ -438,7 +439,20 @@ async function paintCard() {
     root.appendChild(h('div', { class: 'muted', style: { padding: '24px' } }, 'Загрузка…'));
     if (!state.card || state.card.department.id !== state.cardId) {
         try { await reloadCard(); state.cardError = ''; }
-        catch (e) { state.card = null; state.cardError = (e && e.message) || ''; }
+        catch (e) {
+            state.card = null; state.cardError = (e && e.message) || '';
+            // MY_STOCK_V1 — ОТКАЗ ПО СВОЕМУ ОТДЕЛУ ЗНАЧИТ, ЧТО ОН БОЛЬШЕ НЕ
+            // СВОЙ. Отдел приезжает с сессией один раз, при входе; сотрудницу
+            // перевели — и пункт «Мой отдел» до перезагрузки вёл сюда, в отказ.
+            // Перечитывать отдел на каждом переходе дороже самой беды, а здесь
+            // сервер уже ответил (см. permissions.js forgetOwnDepartment).
+            // Только 'forbidden': сбой сети или база на замке — не повод забыть
+            // отдел, иначе пункт исчезал бы от чихания.
+            if (e && e.code === 'forbidden' && forgetOwnDepartment(state.cardId)) {
+                try { window.easymed && window.easymed.refreshNav && window.easymed.refreshNav(); }
+                catch (_) { /* меню перерисуется на следующем переходе */ }
+            }
+        }
     }
     clear(root);
     const c = state.card;
@@ -642,6 +656,13 @@ async function addMember(c) {
 function cardSupply(c) {
     const host = h('div');
     const tools = h('div', { class: 'dept-tools' }, h('span', { class: 'grow' }));
+    // STOCK_LOG_V1 — ВХОД В ЖУРНАЛ ДВИЖЕНИЙ С КАРТОЧКИ ОТДЕЛА. Заведующей он
+    // нужен, а раздел «Закупки» ей не открыт и открывать его незачем: журнал —
+    // отдельный маршрут (#stock-log), и сервер покажет ей свой отдел и своё
+    // (rpc/stock-log.js journalScope). Кнопка стоит у всех, кто открыл карточку:
+    // прав она не даёт, их считает сервер.
+    tools.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: () => refs.onNavigate && refs.onNavigate('stock-log') },
+        Icon('Activity', { size: 13 }), ' ', tr('Журнал движений')));
     if (c.can_request) tools.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openRequisition(c) }, Icon('Doc', { size: 13 }), ' ', tr('Запросить у склада')));
     if (c.can_issue) tools.appendChild(h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openStockIssueModal({
         holder: { type: 'department', id: c.department.id, name: c.department.name },

@@ -93,9 +93,27 @@ test('inventory registry: products catalog-writable but on_hand is not; stock_mo
   assert.ok(canWrite('products','insert','inventory'));
   assert.ok(!writableColumns('products','insert').includes('on_hand'));  // stock never client-writable
   assert.ok(!writableColumns('products','update').includes('on_hand'));
-  assert.ok(canRead('stock_movements','doctor'));
   assert.ok(!canWrite('stock_movements','insert','admin'));  // RPC-only
   assert.equal(embedEntry('visit_services','products').fk, 'clinic_item_id');
+});
+
+// STOCK_LOG_V1 — ЖУРНАЛ ДВИЖЕНИЙ ЗАКРЫТ И В РЕЕСТРЕ, А НЕ ТОЛЬКО В RPC.
+//
+// rpc/stock-log.js считает область видимости («своё / свой отдел / вся
+// клиника») и не отдаёт чужих строк. Но /api/db стоит рядом и читает ту же
+// таблицу НАПРЯМУЮ: пока read.roles был ALL_STAFF, любая вошедшая медсестра
+// одним запросом получала весь журнал клиники — с holder_type/holder_id (кому
+// выдали) и unit_cost (почём куплено), то есть ровно то, что RPC у неё и
+// отнял. Дверь закрыта: напрямую журнал читают те же, кто видит весь склад, а
+// остальным его отдаёт RPC — столько, сколько им положено.
+test('журнал движений склада не читается через /api/db никем, кроме склада', () => {
+  for (const role of ['admin', 'inventory']) {
+    assert.ok(canRead('stock_movements', role), role + ' — склад, ему журнал нужен');
+  }
+  for (const role of ['doctor', 'nurse', 'registrar', 'cashier', 'lab', 'callcenter']) {
+    assert.ok(!canRead('stock_movements', role),
+        role + ' читает весь журнал склада напрямую — с получателями и закупочными ценами');
+  }
 });
 
 test('visit_services line amounts are not client-updatable via /api/db', () => {
