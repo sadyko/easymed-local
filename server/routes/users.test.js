@@ -456,16 +456,17 @@ test('rate entries expose exactly the keys the editor knows how to carry', () =>
 
   // Every optional key at once, on both lists.
   const svc = parseEmployeeFields({
-    service_rates: [{ service_id: 1, pct: 30, price: 75000, fix: 50000, branches: [2] }],
+    service_rates: [{ service_id: 1, pct: 30, price: 75000, fix: 50000, inpatient_pct: 15, branches: [2] }],
   }, db);
   assert.ok(svc.ok, svc.message);
   assert.deepEqual(
     Object.keys(JSON.parse(svc.fields.service_rates)[0]).sort(),
-    ['branches', 'fix', 'pct', 'price', 'service_id'],
+    ['branches', 'fix', 'inpatient_pct', 'pct', 'price', 'service_id'],
   );
 
   const ref = parseEmployeeFields({
-    referral_rates: [{ service_id: 1, pct: 10, fixed: 25000, fix: 5000, branches: [] }],
+    // INPATIENT_SHARE_V1 — у направления стационарной доли нет: ключ отброшен.
+    referral_rates: [{ service_id: 1, pct: 10, fixed: 25000, fix: 5000, inpatient_pct: 20, branches: [] }],
   }, db);
   assert.ok(ref.ok, ref.message);
   assert.deepEqual(
@@ -474,7 +475,7 @@ test('rate entries expose exactly the keys the editor knows how to carry', () =>
   );
 
   // The union is what the editor must carry through untouched.
-  const CARRIED_BY_EDITOR = ['price', 'fix', 'fixed'];
+  const CARRIED_BY_EDITOR = ['price', 'fix', 'fixed', 'inpatient_pct'];
   const emitted = new Set([
     ...Object.keys(JSON.parse(svc.fields.service_rates)[0]),
     ...Object.keys(JSON.parse(ref.fields.referral_rates)[0]),
@@ -611,4 +612,42 @@ test('несуществующая или отключённая роль кли
   res = await post(base, '/api/users', { username: 'off.role', password: '1', role: 'registrar', custom_role_code: 'off-role' }, admin);
   assert.equal(res.status, 400);
   assert.match((await res.json()).error.message, /отключена/i);
+});
+
+// INPATIENT_SHARE_V1 — «Стационар, %» на услугу: хранится как inpatient_pct,
+// пустое = доли нет (ключа нет, а не 0), вне 0..100 и не число — отказ по-русски.
+test('service_rates inpatient_pct: 0..100 хранится, пусто — ключа нет, мусор — отказ словами', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const admin = await loginAdmin(base);
+    let res = await post(base, '/api/users', {
+      username: 'inp.doc', password: 'p', role: 'doctor',
+      service_rates: [
+        { service_id: 1, pct: 30, inpatient_pct: 20 },
+        { service_id: 2, pct: 30, inpatient_pct: '' },
+        { service_id: 3, pct: 30, inpatient_pct: 0 },
+        { service_id: 4, pct: 30, inpatient_pct: '12.5' },
+        { service_id: 5, pct: 30 },
+      ],
+    }, admin);
+    assert.equal(res.status, 201);
+    const u = (await res.json()).user;
+    const of = (id) => u.service_rates.find(r => r.service_id === id);
+    assert.equal(of(1).inpatient_pct, 20);
+    assert.ok(!('inpatient_pct' in of(2)), 'пустое поле — доли нет, а не 0');
+    assert.equal(of(3).inpatient_pct, 0, 'введённый 0 — это решение, он хранится');
+    assert.equal(of(4).inpatient_pct, 12.5);
+    assert.ok(!('inpatient_pct' in of(5)));
+
+    for (const bad of [150, -1, 'abc', true]) {
+      res = await patch(base, `/api/users/${u.id}`, {
+        service_rates: [{ service_id: 1, pct: 30, inpatient_pct: bad }],
+      }, admin);
+      assert.equal(res.status, 400, 'значение ' + bad + ' должно быть отклонено');
+      assert.equal((await res.json()).error.message, 'Стационарная доля врача — число от 0 до 100 %.');
+    }
+    // Отказ ничего не записал.
+    const stored = JSON.parse(db.prepare('SELECT service_rates FROM users WHERE id = ?').get(u.id).service_rates);
+    assert.equal(stored.find(r => r.service_id === 1).inpatient_pct, 20);
+  } finally { server.close(); }
 });

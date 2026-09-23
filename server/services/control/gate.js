@@ -32,6 +32,8 @@ const READ_ONLY_RPCS = new Set([
   // DOCTOR_TIER_V1 — нумерация строк врача по ступени; чистое чтение, как
   // run_report рядом: кабинет показывает прогресс и при просроченной лицензии.
   'doctor_tier_positions',
+  // INPATIENT_SHARE_V1 — стационарная доля для кабинета; то же чистое чтение.
+  'doctor_inpatient_share',
   'cashier_invoices', 'cash_shift_summary', 'shift_report', 'cashier_report',
   'callcenter_report', 'queue_board', 'documents_feed', 'accommodation_state',
   'deposit_balance', 'list_deposits', 'service_delete_check', 'get_clinic_by_slug',

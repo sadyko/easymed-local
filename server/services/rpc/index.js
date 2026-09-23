@@ -9,7 +9,7 @@ import { departmentList, departmentCard, departmentForm, departmentHeadSet, depa
 import { stockMovementsList } from './stock-log.js';   // STOCK_LOG_V1
 import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCreate, stockRequestsMine } from './stock-requests.js';   // STOCK_REQUEST_V1
 import { expiryLots } from './expiry.js';   // EXPIRY_BALANCE_V1 — остатки партиями, ближайший срок первым
-import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
+import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions, doctorInpatientShare } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit,
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
@@ -162,6 +162,7 @@ export const RPC = {
   reports_overview:         (db, args, user) => reportsOverview(db, args, user),
   run_report:               (db, args, user) => runReport(db, args, user),
   doctor_tier_positions:    (db, args, user) => doctorTierPositions(db, args, user),   // DOCTOR_TIER_V1 — позиции строк для кабинета врача
+  doctor_inpatient_share:   (db, args, user) => doctorInpatientShare(db, args, user),  // INPATIENT_SHARE_V1 — стационарная доля для кабинета врача
   owner_report:             (db, args, user) => ownerReport(db, args, user),   // REPORTS_HUB_RU_V1 — «Отчёт владельца» charts
   // BUILDING_REPORTS_V1 — перечень ЗДАНИЙ клиники для выборки в «Отчётах».
   // Через /api/db его собрать нельзя: реестр не отдаёт браузеру branches.letter,
