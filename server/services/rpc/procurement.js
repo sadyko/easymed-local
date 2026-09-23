@@ -16,6 +16,9 @@ import { logDepartmentEvent } from './departments.js';       // DEPARTMENTS_V1 �
 // 23.09). Предупреждение считается СЕРВЕРОМ и едет в ответе: экранов выдачи
 // два (склад и карточка отдела), а слов о просрочке должно быть одно.
 import { expiryWarnings } from './expiry.js';
+// STOCK_REQUEST_V1 — ядро заявки (номер, держатель, строки, журнал отдела) одно
+// на ручную заявку отдела, заявку себе/отделу и автозаявку по минимуму.
+import { insertRequisition, parseRequisitionLines, REQUISITION_ROLES } from './stock-requests.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -279,7 +282,20 @@ export function approveRequisitionAndIssue(db, args, user) {
     // DEPARTMENTS_V1 — заявка от отдела выдаётся ЕМУ: движение помнит держателя,
     // остаток отдела растёт — та же передача, что у issue_stock_lines. Раньше
     // склад списывался, а отдел ничего не получал (вызов написан до миграции 128).
-    const holder = req.department_id ? resolveHolder(db, { type: 'department', id: req.department_id }) : null;
+    // STOCK_REQUEST_V1 — выдаётся ДЕРЖАТЕЛЮ заявки (mig 145): сотруднику — ему на
+    // руки, отделу — отделу. У заявки без держателя остаётся прежнее правило —
+    // её отдел, а без отдела выдача остаётся списанием.
+    const holder = req.holder_type
+      ? resolveHolder(db, { type: req.holder_type, id: req.holder_id })
+      : (req.department_id ? resolveHolder(db, { type: 'department', id: req.department_id }) : null);
+    // Разбор ревью: отключённому сотруднику на руки не выдаём — товар повис бы
+    // за человеком, который его уже не потратит и не вернёт.
+    if (holder && holder.type === 'staff') {
+      const u = db.prepare('SELECT is_active FROM users WHERE id = ?').get(holder.id);
+      if (u && Number(u.is_active) === 0) {
+        throw new RpcError(`${holder.name || 'Сотрудник'} отключён — выдать ему на руки нельзя. Отклоните заявку или выдайте отделу через «Выдать со склада».`, 400);
+      }
+    }
     const insertMovement = db.prepare(`
       INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, branch_id, holder_type, holder_id)
       VALUES (?, 'dispense', ?, ?, 'requisition', ?, ?, ?, 1, ?, ?)`);
@@ -303,7 +319,7 @@ export function approveRequisitionAndIssue(db, args, user) {
     }
 
     db.prepare("UPDATE purchase_requisitions SET status = 'issued' WHERE id = ?").run(reqId);
-    if (holder) {
+    if (holder && holder.type === 'department') {
       logDepartmentEvent(db, holder.id, 'issued', user.id, {
         lines: issued.map((i) => ({ product_id: i.product_id, name: i.name, base_qty: i.qty })),
         note: `REQ ${req.req_number}`, req_id: reqId,
@@ -543,7 +559,8 @@ export function issueStockLines(db, args, user) {
 // args: { p_department, p_notes?, p_lines: [{ item_id, qty, note? }] }
 // Роли — как у таблицы в реестре: снабжение, администратор, врач, медсестра.
 // -----------------------------------------------------------------------------
-const REQUISITION_ROLES = ['admin', 'inventory', 'doctor', 'head_doctor', 'nurse', 'senior_nurse'];
+// STOCK_REQUEST_V1 — список ролей, разбор строк и сама запись заявки живут в
+// rpc/stock-requests.js: заявку себе и автозаявку пишет то же ядро.
 export function createRequisition(db, args, user) {
   requireRole(user, REQUISITION_ROLES);
   const a = args || {};
@@ -552,31 +569,13 @@ export function createRequisition(db, args, user) {
   const dept = db.prepare('SELECT id, name FROM departments WHERE id = ?').get(departmentId);
   if (!dept) throw new RpcError('Отдел не найден.', 404);
   const notes = typeof a.p_notes === 'string' ? a.p_notes.trim().slice(0, 500) : '';
-  const rawLines = a.p_lines;
-  if (!Array.isArray(rawLines) || rawLines.length === 0) throw new RpcError('Добавьте хотя бы одну позицию.', 400);
-  const lines = rawLines.map((l) => {
-    const productId = l ? Number(l.item_id ?? l.product_id) : NaN;
-    const qty = l ? Number(l.qty) : NaN;
-    if (!isPositiveInt(productId)) throw new RpcError('Позиция заявки: товар не выбран.', 400);
-    if (!(Number.isFinite(qty) && qty > 0 && qty <= MAX_QTY)) throw new RpcError('Позиция заявки: количество должно быть больше нуля.', 400);
-    const note = l && typeof l.note === 'string' ? l.note.trim().slice(0, 200) : '';
-    return { productId, qty: round2(qty), note };
-  });
+  const lines = parseRequisitionLines(a.p_lines);
 
   const run = db.transaction(() => {
     for (const l of lines) {
       if (!db.prepare('SELECT 1 FROM products WHERE id = ?').get(l.productId)) throw new RpcError('Товар заявки не найден.', 404);
     }
-    const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const n = db.prepare("SELECT COUNT(*) AS n FROM purchase_requisitions WHERE req_number LIKE ?").get(`REQ-${day}-%`).n + 1;
-    const reqNumber = `REQ-${day}-${String(n).padStart(3, '0')}`;
-    const reqId = Number(db.prepare(`
-      INSERT INTO purchase_requisitions (req_number, status, department_id, notes, requested_by)
-      VALUES (?, 'submitted', ?, ?, ?)`).run(reqNumber, departmentId, notes || null, user.id).lastInsertRowid);
-    const ins = db.prepare('INSERT INTO purchase_requisition_items (req_id, product_id, qty, note) VALUES (?, ?, ?, ?)');
-    for (const l of lines) ins.run(reqId, l.productId, l.qty, l.note || null);
-    logDepartmentEvent(db, departmentId, 'requisition_created', user.id, { req_id: reqId, req_number: reqNumber, lines: lines.length });
-    return { req_id: reqId, req_number: reqNumber, status: 'submitted' };
+    return insertRequisition(db, { holder: { type: 'department', id: departmentId }, notes, lines, userId: user.id });
   });
   return run();
 }

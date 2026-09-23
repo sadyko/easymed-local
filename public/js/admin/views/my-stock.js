@@ -29,11 +29,20 @@
 // с разными вопросами: «что выдали мне» (kind=issue, only=to_me) и «что провёл
 // я» (kind=dispense, only=by_me). Второй запрос к тем же строкам разошёлся бы
 // с первым на следующей же правке.
+//
+// STOCK_REQUEST_V1 (R2, 23.09) — ЗАЯВКА И МИНИМУМ ОТСЮДА ЖЕ. Владелец:
+// «#my-stock should be able to request and set to auto request with minimum
+// amount». «Запросить» — себе или своему отделу; у каждой строки «на руках» —
+// минимум и норма (остаток ниже минимума сервер сам превращает в заявку до
+// нормы); «Мои заявки» — открытые заявки, поданные мне и мной для отдела.
+// Всё, что человек видит и вводит, — в единицах расхода (он считает ампулы, а
+// не коробки). Диалоги общие с карточкой отдела: stock-requests-ui.js.
 import { supabase } from '../../supabase.js';
-import { h, Icon, PageHead, clear, toast, fmtDateTime } from '../ui.js';
+import { h, Icon, PageHead, clear, toast, fmtDateTime, Tag } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { fmtQty, loadingCard } from './inventory-shared.js';
 import { ownDepartmentId } from '../permissions.js';
+import { openMinimumDialog, openStockRequestDialog, minimumCell, targetCell, requestCell } from './stock-requests-ui.js';
 
 const PAGE = 50;
 const MAX_PAGE = 500;
@@ -45,10 +54,12 @@ const refs = { host: null, body: null, onNavigate: null };
 // панелей), и общий счётчик отменял бы чужую отрисовку.
 let token = 0;
 
-/** Ровно те три вопроса, которые экран задаёт серверу. */
+/** Ровно те вопросы, которые экран задаёт серверу. */
 export function myStockQueries(limits = state) {
     return [
         ['holdings_list', { mine: true }],
+        ['stock_minimums_list', { scope: 'mine' }],   // STOCK_REQUEST_V1 — мои минимумы и норма
+        ['stock_requests_mine', {}],                   // STOCK_REQUEST_V1 — мои открытые заявки
         ['stock_movements_list', { kind: 'issue', only: 'to_me', limit: limits.issued }],
         ['stock_movements_list', { kind: 'dispense', only: 'by_me', limit: limits.spent }],
     ];
@@ -67,6 +78,11 @@ export async function renderMyStock(container, { onNavigate } = {}) {
 
 function pageHead() {
     const right = [];
+    // STOCK_REQUEST_V1 — главная кнопка экрана: попросить у склада.
+    right.push(h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: () => openStockRequestDialog({
+        departmentId: ownDepartmentId(),
+        onDone: () => paint(),
+    }) }, Icon('Send', { size: 14 }), ' ', tr('Запросить')));
     // MY_STOCK_V1 — путь на карточку отдела для того, у кого отдел есть
     // (медсестра отделения, заведующая). Отдел известен из сессии
     // (users.department_id), а не угадывается по роли.
@@ -81,7 +97,7 @@ function pageHead() {
         Icon('Refresh', { size: 14 }), ' ', tr('Обновить')));
     return PageHead({
         title: 'Мои запасы',
-        subtitle: 'Что выдали вам и когда, кто выдал, сколько осталось на руках и что вы списали на пациентов.',
+        subtitle: 'Что выдали вам и когда, кто выдал, сколько осталось на руках, что вы запросили и что списали на пациентов.',
         right,
     });
 }
@@ -97,20 +113,21 @@ async function paint() {
     body.appendChild(loadingCard());
 
     const mine = ++token;
-    const [held, issued, spent] = await Promise.all(
+    const [held, mins, reqs, issued, spent] = await Promise.all(
         myStockQueries().map(([name, args]) => supabase.rpc(name, args)));
     if (mine !== token || refs.body !== body) return;
     clear(body);
 
     // Отказ сервера ВИДЕН: молчание на этом месте читается как «мне ничего не
     // выдавали», то есть как спор со складом, которого не было.
-    const failed = [held, issued, spent].find((r) => r && r.error);
+    const failed = [held, mins, reqs, issued, spent].find((r) => r && r.error);
     if (failed) {
         const e = failed.error;
         toast(trf('Не удалось загрузить «Мои запасы»: {msg}', { msg: (e && e.message) || e }), 'fail');
     }
 
-    body.appendChild(heldCard(held));
+    body.appendChild(heldCard(held, mins));
+    body.appendChild(requestsCard(reqs));
     body.appendChild(movementsCard({
         icon: 'ArrowDown', title: 'Что мне выдали', res: issued,
         columns: ['Когда', 'Товар', 'Сколько', 'Кто выдал', 'Основание'],
@@ -158,24 +175,67 @@ function table(columns, tbody) {
             tbody));
 }
 
-/** Блок «Что у меня на руках» — остатки, числящиеся лично за вошедшим. */
-function heldCard(res) {
-    const rows = (res && res.data && res.data.holdings) || [];
-    const tbody = h('tbody');
-    if (res && res.error) {
-        tbody.appendChild(emptyRow(2, tr('Не удалось загрузить ваши остатки.')));
-    } else if (!rows.length) {
-        tbody.appendChild(emptyRow(2, tr('На руках у вас ничего не числится: со склада вам ещё ничего не выдавали.')));
-    } else {
-        for (const r of rows) tbody.appendChild(heldRow(r));
-    }
-    return card('Layers', 'Что у меня на руках',
-        h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '0 0 8px' } },
-            'Числится лично за вами. Запасы кабинета и отдела — в карточке отдела.'),
-        table(['Товар', 'Осталось'], tbody));
+/** Кто вошёл: минимум «себе» ставится на его имя (сервер всё равно проверит). */
+function meId() {
+    const u = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || null;
+    const id = u ? Number(u.id) : NaN;
+    return Number.isInteger(id) && id > 0 ? id : null;
 }
 
-function heldRow(r) {
+const HELD_COLUMNS = ['Товар', 'Осталось', 'Минимум', 'Норма', 'Заявка', ''];
+
+/**
+ * Блок «Что у меня на руках» — остатки, числящиеся лично за вошедшим, и
+ * рядом минимум, норма и открытая заявка (STOCK_REQUEST_V1). Товар с
+ * минимумом, которого на руках нет вовсе, — тоже строка: иначе минимум,
+ * поставленный «на будущее», было бы негде увидеть и поправить.
+ */
+function heldCard(res, minsRes) {
+    const rows = (res && res.data && res.data.holdings) || [];
+    const minRows = (minsRes && !minsRes.error && minsRes.data && minsRes.data.rows) || [];
+    const minByProduct = new Map(minRows.map((m) => [m.product_id, m]));
+    const tbody = h('tbody');
+    const cols = HELD_COLUMNS.length;
+    if (res && res.error) {
+        tbody.appendChild(emptyRow(cols, tr('Не удалось загрузить ваши остатки.')));
+    } else {
+        const heldIds = new Set(rows.map((r) => r.product_id));
+        const minOnly = minRows.filter((m) => !heldIds.has(m.product_id));
+        if (!rows.length && !minOnly.length) {
+            tbody.appendChild(emptyRow(cols, tr('На руках у вас ничего не числится: со склада вам ещё ничего не выдавали.')));
+        }
+        for (const r of rows) tbody.appendChild(heldRow(r, minByProduct.get(r.product_id) || null));
+        for (const m of minOnly) tbody.appendChild(heldRow(minimumAsHolding(m), m));
+    }
+    const addBtn = h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => editMinimum(null, null) },
+        Icon('Plus', { size: 13 }), ' ', tr('Добавить минимум'));
+    return card('Layers', 'Что у меня на руках',
+        h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap', padding: '0 0 8px' } },
+            h('span', { class: 'muted', style: { fontSize: '12.5px' } },
+                'Числится лично за вами. Запасы кабинета и отдела — в карточке отдела. Остаток ниже минимума сам подаёт заявку на склад — до нормы.'),
+            h('span', { class: 'grow' }),
+            addBtn),
+        minsRes && minsRes.error
+            ? h('div', { class: 'muted', role: 'alert', style: { fontSize: '12.5px', padding: '0 0 8px', color: 'var(--crit-700)' } },
+                trf('Не удалось загрузить минимумы: {msg}', { msg: (minsRes.error && minsRes.error.message) || '' }))
+            : null,
+        table(HELD_COLUMNS, tbody));
+}
+
+/** Строка минимума без остатка — в форме строки «на руках» с нулём. */
+function minimumAsHolding(m) {
+    return {
+        product_id: m.product_id, product_name: m.product_name,
+        base_unit: m.base_unit, consumption_unit: m.consumption_unit, consumption_factor: m.consumption_factor,
+        qty_base: 0, qty_units: 0,
+    };
+}
+
+function editMinimum(row, product) {
+    openMinimumDialog({ holder: { type: 'staff', id: meId() }, row, product, onDone: () => paint() });
+}
+
+function heldRow(r, min) {
     const unit = r.consumption_unit || r.base_unit || '';
     // Вторая строка — та же цифра в единицах СКЛАДА: медсестра считает
     // таблетками, склад упаковками, и спор «у меня 30, а у вас 3» начинается
@@ -183,9 +243,48 @@ function heldRow(r) {
     const base = r.base_unit && r.consumption_unit && r.base_unit !== r.consumption_unit
         ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [fmtQty(r.qty_base), r.base_unit].join(' '))
         : null;
+    let action = null;
+    if (min && min.can_edit) {
+        action = h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => editMinimum(min, null) }, Icon('Edit', { size: 13 }), ' ', tr('Изменить'));
+    } else if (!min) {
+        const product = { id: r.product_id, name: r.product_name, base_unit: r.base_unit, consumption_unit: r.consumption_unit, consumption_factor: r.consumption_factor };
+        action = h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => editMinimum(null, product) }, Icon('Plus', { size: 13 }), ' ', tr('Задать минимум'));
+    }
     return h('tr', null,
         h('td', null, r.product_name || '—'),
-        h('td', { class: 'num' }, h('div', null, [fmtQty(r.qty_units), unit].filter(Boolean).join(' ')), base));
+        h('td', { class: 'num' }, h('div', null, [fmtQty(r.qty_units), unit].filter(Boolean).join(' ')), base),
+        h('td', { class: 'num' }, minimumCell(min)),
+        h('td', { class: 'num' }, targetCell(min)),
+        h('td', null, min ? requestCell(min) : h('span', { class: 'muted' }, '—')),
+        h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } }, action));
+}
+
+const REQ_STATUS = { draft: 'Черновик', submitted: 'Подана', approved: 'Согласована', issued: 'Выдана', rejected: 'Отклонена', cancelled: 'Отменена' };
+const REQ_COLUMNS = ['Номер', 'Что', 'Для кого', 'Статус', 'Когда'];
+
+/** Блок «Мои заявки» — открытые заявки: мне и поданные мной для отдела. Только чтение. */
+function requestsCard(res) {
+    const rows = (res && res.data && res.data.rows) || [];
+    const tbody = h('tbody');
+    if (res && res.error) {
+        tbody.appendChild(emptyRow(REQ_COLUMNS.length, tr('Не удалось загрузить ваши заявки.')));
+    } else if (!rows.length) {
+        tbody.appendChild(emptyRow(REQ_COLUMNS.length, tr('Открытых заявок нет.')));
+    } else {
+        for (const r of rows) {
+            const what = (r.lines || []).map((l) => trf('{name} — {qty} {unit}', { name: l.product_name || '—', qty: fmtQty(Number(l.units) || 0), unit: l.unit || '' }).trim()).join('; ');
+            tbody.appendChild(h('tr', null,
+                h('td', { class: 'cell-strong' }, r.req_number || '—', r.auto ? h('span', { style: { marginLeft: '6px' } }, Tag(tr('авто'), { kind: 'info' })) : null),
+                h('td', null, what || '—'),
+                h('td', null, r.holder_type === 'staff' ? tr('Себе') : (r.holder_name || '—')),
+                h('td', null, tr(REQ_STATUS[r.status] || r.status || '—')),
+                h('td', null, fmtDateTime(r.created_at))));
+        }
+    }
+    return card('Send', 'Мои заявки',
+        h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '0 0 8px' } },
+            'Открытые заявки на склад: вам и поданные вами для отдела. «Авто» — подал минимум. Одобряет кладовщик в «Заявках».'),
+        table(REQ_COLUMNS, tbody));
 }
 
 /** Блок движений: одна и та же таблица для «выдали мне» и «списал я». */

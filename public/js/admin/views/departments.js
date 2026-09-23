@@ -25,6 +25,8 @@ import { tr, trf } from '../i18n.js';
 import { openStockIssueModal, productSearch, issueUnitOf, inpStyle } from './stock-issue-modal.js';
 import { fmtQty, numStyle } from './inventory-shared.js';
 import { forgetOwnDepartment } from '../permissions.js';   // MY_STOCK_V1 — протухший отдел в сессии
+// STOCK_REQUEST_V1 (R2) — минимумы отдела: тот же диалог и те же слова, что в «Моих запасах».
+import { openMinimumDialog, minimumCell, targetCell, requestCell } from './stock-requests-ui.js';
 
 const KIND_LABEL = {
     clinical: 'Клинический', laboratory: 'Лаборатория', diagnostics: 'Диагностика',
@@ -673,6 +675,8 @@ function cardSupply(c) {
     // На руках
     host.appendChild(sectionTable('На руках', c.holdings, ['Товар', 'Остаток'],
         (r) => [r.product_name, `${fmtQty(r.qty_units)} ${r.unit}`], 'Отделу ничего не выдано.', { numeric: [1] }));
+    // STOCK_REQUEST_V1 — минимумы отдела: остаток ниже минимума сам подаёт заявку до нормы.
+    host.appendChild(minimumsSection(c));
     // Выдано со склада
     host.appendChild(sectionTable('Выдано со склада', c.issues, ['Когда', 'Товар', 'Сколько', 'Кем', 'Основание'],
         (r) => [fmtDateTime(r.created_at), r.product_name, `${fmtQty(r.qty_units)} ${r.unit}`, r.issued_by || '—', r.note || (r.source === 'requisition' ? tr('по заявке') : '—')],
@@ -686,6 +690,65 @@ function cardSupply(c) {
         (r) => [r.req_number || '—', tr(REQ_STATUS[r.status] || r.status), String(r.lines || 0), r.requested_by_name || '—', fmtDateTime(r.created_at)],
         'Заявок пока нет.', { numeric: [2] }));
     return host;
+}
+
+// --- Минимумы отдела (STOCK_REQUEST_V1) ------------------------------------------
+// Решение владельца 4: минимум отделу ставит его заведующая, кладовщик и
+// администратор — любому; члены отдела видят их только для чтения. Права
+// строки считает сервер (`can_edit`), а «Добавить минимум» стоит у того, кому
+// сервер всё равно разрешит: заведующей этого отдела и тому, кто правит всё.
+const MIN_HEADS = ['Товар', 'На руках', 'Минимум', 'Норма', 'Заявка', ''];
+
+function currentUserId() {
+    const u = (window.easymed && window.easymed.state && window.easymed.state.user) || null;
+    const id = u ? Number(u.id) : NaN;
+    return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function minimumsSection(c) {
+    const card = h('div', { class: 'card dept-section dept-minimums' });
+    const holder = { type: 'department', id: c.department.id, name: c.department.name };
+    const isHead = !!(c.department.head && c.department.head.id === currentUserId());
+    async function load() {
+        clear(card);
+        card.appendChild(h('div', { class: 'dept-section-title' }, tr('Минимумы')));
+        const wait = h('div', { class: 'muted', style: { padding: '6px 0 4px' } }, 'Загрузка…');
+        card.appendChild(wait);
+        let res;
+        try { res = await rpc('stock_minimums_list', { scope: 'department', department_id: c.department.id }); }
+        catch (e) {
+            wait.remove(); clear(card);
+            card.appendChild(h('div', { class: 'dept-section-title' }, tr('Минимумы')));
+            card.appendChild(h('div', { class: 'muted', role: 'alert', style: { padding: '6px 0 4px', color: 'var(--crit-700)' } },
+                trf('Не удалось загрузить минимумы: {msg}', { msg: (e && e.message) || '' })));
+            return;
+        }
+        const rows = (res && res.rows) || [];
+        const canAdd = isHead || !!(res && res.can_manage_all);
+        clear(card);
+        card.appendChild(h('div', { class: 'dept-section-title' }, tr('Минимумы'),
+            rows.length ? h('span', { class: 'tab-count' }, String(rows.length)) : null,
+            h('span', { class: 'grow' }),
+            canAdd ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openMinimumDialog({ holder, onDone: load }) },
+                Icon('Plus', { size: 13 }), ' ', tr('Добавить минимум')) : null));
+        card.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '0 0 6px' } },
+            canAdd ? 'Когда остаток отдела станет меньше минимума, программа сама подаст заявку на склад — до нормы.'
+                : 'Минимумы отдела ставит заведующая. Когда остаток станет меньше минимума, заявка на склад подаётся сама.'));
+        if (!rows.length) { card.appendChild(h('div', { class: 'muted', style: { padding: '6px 0 4px' } }, 'Минимумов пока нет.')); return; }
+        card.appendChild(h('div', { style: { overflowX: 'auto' } }, h('table', { class: 'list' },
+            h('thead', null, h('tr', null, ...MIN_HEADS.map((t, i) => h('th', { class: i >= 1 && i <= 3 ? 'num' : null }, t)))),
+            h('tbody', null, ...rows.map((r) => h('tr', null,
+                h('td', null, r.product_name || '—'),
+                h('td', { class: 'num' }, `${fmtQty(Number(r.held_units) || 0)} ${r.consumption_unit || r.base_unit || ''}`.trim()),
+                h('td', { class: 'num' }, minimumCell(r)),
+                h('td', { class: 'num' }, targetCell(r)),
+                h('td', null, requestCell(r)),
+                h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } }, r.can_edit
+                    ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => openMinimumDialog({ holder, row: r, onDone: load }) }, Icon('Edit', { size: 13 }), ' ', tr('Изменить'))
+                    : null)))))));
+    }
+    load();
+    return card;
 }
 
 function sectionTable(title, rows, heads, cells, emptyText, { numeric = [] } = {}) {
