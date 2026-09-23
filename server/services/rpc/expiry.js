@@ -24,29 +24,38 @@
 //
 // ПРЕДПОЛОЖЕНИЕ, КОТОРОЕ МЫ ДЕЛАЕМ, И ПОЧЕМУ ИМЕННО ОНО. Остаток склада
 // (products.on_hand) раскладывается по приходам этого товара, начиная с
-// САМОГО РАННЕГО СРОКА: сколько влезло в первую партию — её, что осталось —
-// следующей, и так далее. Приходы без срока образуют отдельную корзину «без
-// срока» и забирают только ТО, ЧТО ОСТАЛОСЬ после партий со сроком.
+// САМОГО ПОЗДНЕГО ПРИХОДА и назад по времени: сколько влезло в последний
+// приход — его, что осталось — предыдущему, и так далее. Партия держит остаток
+// РОВНО В ТОЙ МЕРЕ, В КАКОЙ ЕЁ НЕ ПОКРЫЛИ ПРИХОДЫ, СЛУЧИВШИЕСЯ ПОЗЖЕ.
 //
-// Это то же самое, что сказать: «дальше со склада берут сначала то, что
-// портится раньше» — правило FEFO, по которому кладовщик и должен работать.
-// Обратное предположение (считать, что раннее УЖЕ израсходовано) выглядит
-// логичным, но делает экран бесполезным: просроченная партия всегда
-// показывала бы ноль, и предупредить о ней было бы не о чем — то есть ровно
-// та задача, ради которой экран и написан, решалась бы «просрочки нет».
-// Поэтому расчёт здесь ОСТОРОЖНЫЙ: пока остатка хватает, считаем, что старое
-// ещё лежит на полке, и говорим об этом.
+// Это и есть FEFO, записанное правильной стороной. FEFO говорит: «первым
+// расходуется ближайший срок» — то есть ранняя партия УХОДИТ ПЕРВОЙ, и на
+// полке остаётся поздняя. Прежний расклад читал то же правило наоборот и клал
+// остаток на самые ранние партии; выглядело это «осторожно», а на деле
+// ПРИДУМЫВАЛО ПРОСРОЧКУ. Перчатки пришли партией со старым сроком, разошлись
+// целиком, пришла новая коробка на 50 — и экран показывал 10 просроченных,
+// которых на складе нет, а выдача и списание тревожили о них при каждой
+// операции. Погасить эту тревогу было НЕЧЕМ: следующее списание расчёт снова
+// «брал» у той же старой партии, и она не пустела никогда.
 //
-// И поэтому же экран обязан назвать это расчётом словами (одна приглушённая
-// строка, views/inventory-expiry.js): выдать предположение за измерение —
-// значит однажды поспорить с полкой и оказаться неправым.
+// Приходы без срока — такие же приходы: они образуют ОДНУ корзину «без срока»
+// и встают в ту же очередь по времени своего последнего поступления. Особого
+// права у партий со сроком нет: если безымянный приход случился позже, значит
+// на полке лежит он, и просроченной партии там уже нет.
+//
+// Экран обязан назвать это расчётом словами (одна приглушённая строка,
+// views/inventory-expiry.js): выдать предположение за измерение — значит
+// однажды поспорить с полкой и оказаться неправым.
 //
 // ИНВАРИАНТ, КОТОРЫЙ ДЕРЖИТ ВСЁ: СУММА ПО ПАРТИЯМ РАВНА ОСТАТКУ СКЛАДА.
 // Всегда, при любых приходах, выдачах, корректировках и излишках
 // инвентаризации. Разойдись она — экран начнёт спорить со «Складом», и правым
 // окажется «Склад», а этот экран перестанут открывать. Корзина «без срока»
 // существует в том числе ради этого: она добирает разницу, когда остаток
-// больше, чем пришло известными партиями.
+// больше, чем пришло известными партиями, — и она же ПОКАЗЫВАЕТ МИНУС, если
+// остаток товара ушёл ниже нуля. Прежний Math.max(on_hand, 0) сводил такой
+// товар к нулю, то есть ломал инвариант ровно тем способом, от которого он и
+// поставлен: молча.
 import { journalScope } from './stock-log.js';   // S2 — одно правило видимости на весь склад
 import { today } from '../domain/day.js';
 
@@ -79,12 +88,34 @@ export function lotState(daysLeft) {
   return 'ok';
 }
 
+// ОТБОР СЧИТАЕТ SQL, А НЕ JS ПОВЕРХ ВСЕГО КАТАЛОГА (2026-09-23). Экран
+// перерисовывается на каждую букву в поиске, а better-sqlite3 синхронный: пока
+// сервер раскладывает по партиям ВЕСЬ каталог, чтобы потом отбросить 1499
+// товаров из 1500, стоит вся клиника — регистратура, касса, лаборатория.
+// Поэтому и товар, и поиск уезжают в WHERE, и до JS доезжает только то, что
+// человек попросил.
+//
+// lower_uni, а не lower: встроенный lower() в SQLite складывает регистр только
+// для латиницы, и «перч» никогда не нашло бы «Перчатки» (CYRILLIC_ILIKE_V1,
+// db/connection.js).
+function searchClause(q, nameCol, codeCol) {
+  if (!q) return null;
+  return { sql: `(lower_uni(${nameCol}) LIKE lower_uni(?) OR lower_uni(IFNULL(${codeCol}, '')) LIKE lower_uni(?))`,
+           params: [`%${q}%`, `%${q}%`] };
+}
+
 /**
  * Приходы, сгруппированные в партии: одна строка на пару (партия, срок).
  * Один и тот же товар, принятый дважды по одной накладной-партии, — это одна
  * партия, а не две одинаковые строки на экране.
+ *
+ * first_id — приход, которым партия ОТКРЫЛАСЬ: им она и называет поставщика.
+ * last_id — САМЫЙ ПОЗДНИЙ её приход: им партия встаёт в очередь расклада.
+ * Поставщик приезжает одним соединением здесь же: прежде на каждую партию
+ * уходил отдельный запрос, то есть на складе в 1500 товаров — двенадцать тысяч
+ * походов в базу за одним именем.
  */
-function receiptGroups(db, productIds) {
+function receiptGroups(db, { productIds = null } = {}) {
   const where = ["m.kind = 'receive'", 'm.qty > 0'];
   const params = [];
   if (productIds && productIds.length) {
@@ -92,34 +123,34 @@ function receiptGroups(db, productIds) {
     params.push(...productIds);
   }
   return db.prepare(`
-    SELECT m.product_id,
-           IFNULL(m.batch_no, '')    AS batch_no,
-           IFNULL(m.expiry_date, '') AS expiry_date,
-           SUM(m.qty)                AS received_qty,
-           MIN(m.id)                 AS first_id
-      FROM stock_movements m
-     WHERE ${where.join(' AND ')}
-     GROUP BY m.product_id, IFNULL(m.batch_no, ''), IFNULL(m.expiry_date, '')
-     ORDER BY m.product_id, IFNULL(m.expiry_date, ''), IFNULL(m.batch_no, ''), MIN(m.id)`).all(...params);
-}
-
-/** Поставщик того прихода, которым партия открылась (если он вообще назван). */
-function supplierOf(db, movementId) {
-  const row = db.prepare(`
-    SELECT s.id, s.name FROM stock_movements m
-      LEFT JOIN suppliers s ON s.id = m.supplier_id
-     WHERE m.id = ?`).get(movementId);
-  return row && row.id ? { id: row.id, name: row.name || '' } : { id: null, name: '' };
+    SELECT g.product_id, g.batch_no, g.expiry_date, g.received_qty, g.first_id, g.last_id,
+           m0.supplier_id AS supplier_id, s.name AS supplier_name
+      FROM (
+        SELECT m.product_id,
+               IFNULL(m.batch_no, '')    AS batch_no,
+               IFNULL(m.expiry_date, '') AS expiry_date,
+               SUM(m.qty)                AS received_qty,
+               MIN(m.id)                 AS first_id,
+               MAX(m.id)                 AS last_id
+          FROM stock_movements m
+         WHERE ${where.join(' AND ')}
+         GROUP BY m.product_id, IFNULL(m.batch_no, ''), IFNULL(m.expiry_date, '')
+      ) g
+      LEFT JOIN stock_movements m0 ON m0.id = g.first_id
+      LEFT JOIN suppliers s ON s.id = m0.supplier_id
+     ORDER BY g.product_id, g.expiry_date, g.batch_no, g.first_id`).all(...params);
 }
 
 /** Товары, у которых вообще есть что раскладывать: приход или остаток. */
-function stockedProducts(db, productIds) {
+function stockedProducts(db, { productIds = null, q = '' } = {}) {
   const where = [`(EXISTS (SELECT 1 FROM stock_movements m WHERE m.product_id = p.id AND m.kind = 'receive' AND m.qty > 0) OR p.on_hand <> 0)`];
   const params = [];
   if (productIds && productIds.length) {
     where.push(`p.id IN (${productIds.map(() => '?').join(', ')})`);
     params.push(...productIds);
   }
+  const s = searchClause(q, 'p.name', 'p.code');
+  if (s) { where.push(s.sql); params.push(...s.params); }
   return db.prepare(`
     SELECT p.id, p.name, IFNULL(p.code, '') AS code, p.unit, p.base_unit, p.on_hand
       FROM products p
@@ -128,13 +159,43 @@ function stockedProducts(db, productIds) {
 }
 
 /**
+ * Сколько партий СО СРОКОМ клиника вообще заводила — одним счётом в SQL.
+ *
+ * Экрану это нужно ради одной новости: «сроки годности ещё не заполняли»
+ * (0) против «по вашему отбору ничего не нашлось» (не 0). Раскладывать ради
+ * этого числа весь каталог на каждую букву поиска нельзя — см. отбор выше; а
+ * заодно ответ стал честнее прежнего. Прежде считались партии, У КОТОРЫХ ЕСТЬ
+ * ОСТАТОК, и клиника, однажды заполнившая срок и израсходовавшая товар, читала
+ * про себя «сроки годности ещё не заполняли» — неправду.
+ *
+ * ЧЕГО ЗДЕСЬ НЕ ХВАТАЕТ: индекса. Приходы лежат вперемешку с расходом, а
+ * индекс у stock_movements один — по товару (миграция 007), поэтому этот счёт
+ * читает таблицу целиком (~70 мс на 306 тысячах движений). Частичный индекс
+ * по (product_id, expiry_date, batch_no) WHERE kind='receive' AND qty>0 снял бы
+ * и его, и оставшийся проход receiptGroups. Здесь его НЕТ намеренно: индекс —
+ * это миграция, а номер миграции занимают три машины сразу, и ставить его
+ * заодно с починкой расчёта значит смешать две правки в одном откате.
+ */
+function datedLotCount(db) {
+  const row = db.prepare(`
+    SELECT COUNT(*) AS c FROM (
+      SELECT 1 FROM stock_movements m
+       WHERE m.kind = 'receive' AND m.qty > 0 AND IFNULL(m.expiry_date, '') <> ''
+       GROUP BY m.product_id, IFNULL(m.batch_no, ''), m.expiry_date)`).get();
+  return row ? row.c : 0;
+}
+
+/**
  * Разложить остаток ОДНОГО товара по его партиям.
  *
- * Правило целиком: партии со сроком идут по возрастанию срока и забирают
- * остаток в этом порядке, каждая — не больше, чем её пришло; всё, что не
- * досталось им, ложится в корзину «без срока». Корзина заводится и тогда,
- * когда приходов без срока не было вовсе, — иначе излишек инвентаризации
- * потерялся бы, и сумма перестала бы сходиться с остатком склада.
+ * Правило целиком: приходы встают в очередь ОТ САМОГО ПОЗДНЕГО К САМОМУ
+ * РАННЕМУ и забирают остаток в этом порядке, каждый — не больше, чем его
+ * пришло; приходы без срока идут одной корзиной «без срока» и стоят в той же
+ * очереди по своему последнему поступлению. Всё, что не досталось никому,
+ * ложится в ту же корзину: она заводится и тогда, когда приходов без срока не
+ * было вовсе, — иначе излишек инвентаризации (или минус на складе) потерялся
+ * бы, и сумма перестала бы сходиться с остатком склада. Показываются партии
+ * ближайшим сроком вперёд — в том порядке, в каком их и будут расходовать.
  *
  * @returns {{ product, lots: Array }} — ВСЕ партии, включая нулевые: отбор
  *   «остаток больше нуля» делает тот, кто показывает, а инвариант проверяется
@@ -144,37 +205,64 @@ export function productLots(db, productId, todayStr = null) {
   const product = db.prepare('SELECT id, name, IFNULL(code, \'\') AS code, unit, base_unit, on_hand FROM products WHERE id = ?').get(productId);
   if (!product) return { product: null, lots: [] };
   const day = todayStr || today(db);
-  return { product, lots: allocate(db, product, receiptGroups(db, [productId]), day) };
+  return { product, lots: allocate(product, receiptGroups(db, { productIds: [productId] }), day) };
 }
 
-/** Тот же расклад, но сразу по многим товарам — одним запросом на всё. */
-export function lotBalances(db, { productIds = null, todayStr = null } = {}) {
+/**
+ * Тот же расклад, но сразу по многим товарам — одним запросом на всё.
+ *
+ * ОТБОР РЕШАЕТСЯ НА ТОВАРАХ, А ПОТОМ ЕДЕТ В ЖУРНАЛ НОМЕРАМИ. Поиск по названию
+ * стоит одного прохода по products (полторы тысячи строк), а тот же поиск,
+ * приписанный к приходам, заставил бы базу выполнить его на КАЖДОЙ из трёхсот
+ * тысяч строк журнала. Найденные номера уходят в `product_id IN (…)` — по
+ * индексу idx_stock_movements_product. Когда отбора нет, номера не
+ * перечисляются вовсе: перечислять весь каталог дороже, чем не перечислять.
+ */
+export function lotBalances(db, { productIds = null, q = '', todayStr = null } = {}) {
   const day = todayStr || today(db);
-  const products = stockedProducts(db, productIds);
+  const products = stockedProducts(db, { productIds, q });
+  const filtered = !!(q || (productIds && productIds.length));
+  if (filtered && !products.length) return [];
   const groups = new Map();
-  for (const g of receiptGroups(db, productIds)) {
+  for (const g of receiptGroups(db, { productIds: filtered ? products.map((p) => p.id) : null })) {
     if (!groups.has(g.product_id)) groups.set(g.product_id, []);
     groups.get(g.product_id).push(g);
   }
   const out = [];
-  for (const p of products) out.push(...allocate(db, p, groups.get(p.id) || [], day));
+  for (const p of products) out.push(...allocate(p, groups.get(p.id) || [], day));
   return out;
 }
 
-/** Ядро расчёта: остаток склада → партии, ближайший срок первым. */
-function allocate(db, product, groups, day) {
+/** Ядро расчёта: остаток склада → партии, самый поздний приход первым. */
+function allocate(product, groups, day) {
+  const unit = product.base_unit || product.unit || '';
   const dated = groups.filter((g) => g.expiry_date);
   const undated = groups.filter((g) => !g.expiry_date);
-  const unit = product.base_unit || product.unit || '';
 
-  let left = Math.max(round2(product.on_hand), 0);
-  const lots = [];
-  for (const g of dated) {
-    const take = round2(Math.min(round2(g.received_qty), left));
+  // Корзина «без срока» — ОДНА на товар, и в очередь она встаёт по самому
+  // позднему из своих приходов.
+  const bucket = {
+    received: round2(undated.reduce((s, g) => s + Number(g.received_qty), 0)),
+    last_id: undated.reduce((m, g) => Math.max(m, Number(g.last_id) || 0), 0),
+    taken: 0,
+  };
+  const queue = dated.map((g) => ({ g, received: round2(g.received_qty), last_id: Number(g.last_id) || 0, taken: 0 }));
+  if (undated.length) queue.push(bucket);
+  queue.sort((a, b) => b.last_id - a.last_id);
+
+  let left = round2(product.on_hand);
+  for (const q of queue) {
+    // Остаток ушёл в минус — брать нечего: ни одна партия не «держит» товар,
+    // а сам минус ниже ляжет в корзину и будет НАЗВАН.
+    const take = left > 0 ? round2(Math.min(q.received, left)) : 0;
+    q.taken = take;
     left = round2(left - take);
+  }
+
+  const lots = dated.map((g) => {
     const daysLeft = daysBetween(day, g.expiry_date);
-    const sup = supplierOf(db, g.first_id);
-    lots.push({
+    const q = queue.find((x) => x.g === g);
+    return {
       product_id: product.id,
       product_name: product.name,
       product_code: product.code || '',
@@ -183,17 +271,21 @@ function allocate(db, product, groups, day) {
       expiry_date: g.expiry_date,
       no_expiry: false,
       received_qty: round2(g.received_qty),
-      remaining: take,
+      remaining: q.taken,
       days_left: daysLeft,
       state: lotState(daysLeft),
-      supplier_id: sup.id,
-      supplier_name: sup.name,
-    });
-  }
-  // «Без срока» — одна корзина на товар, и заводится она, только если есть что
-  // в неё положить или было чему прийти без срока.
-  const undatedReceived = round2(undated.reduce((s, g) => s + Number(g.received_qty), 0));
-  if (undated.length || left > 1e-9) {
+      supplier_id: g.supplier_id || null,
+      supplier_name: g.supplier_id ? (g.supplier_name || '') : '',
+    };
+  });
+  // Ближайший срок первым — порядок ПОКАЗА и порядок расхода, а не порядок
+  // расклада: расклад шёл от последнего прихода назад.
+  lots.sort((x, y) => (x.expiry_date === y.expiry_date
+    ? String(x.batch_no).localeCompare(String(y.batch_no))
+    : (x.expiry_date < y.expiry_date ? -1 : 1)));
+
+  const rest = round2(bucket.taken + left);
+  if (undated.length || Math.abs(rest) > 1e-9) {
     lots.push({
       product_id: product.id,
       product_name: product.name,
@@ -202,8 +294,8 @@ function allocate(db, product, groups, day) {
       batch_no: '',
       expiry_date: '',
       no_expiry: true,
-      received_qty: undatedReceived,
-      remaining: left,
+      received_qty: bucket.received,
+      remaining: rest,
       days_left: null,
       state: 'none',
       supplier_id: null,
@@ -244,23 +336,27 @@ export function expiryLots(db, args, user) {
     productId = Number(a.product_id);
     if (!isPosInt(productId)) throw new RpcError('product_id: положительное целое.', 400);
   }
-  const q = typeof a.q === 'string' ? a.q.trim().toLowerCase() : '';
+  const q = typeof a.q === 'string' ? a.q.trim() : '';
   const limit = isPosInt(Number(a.limit)) ? Math.min(Number(a.limit), 2000) : 500;
 
-  const all = lotBalances(db, { todayStr: day });
-  // Список товаров для отбора считается ДО отбора: иначе фильтр схлопывается в
-  // один пункт сразу после первого выбора, и вернуться к «всем» нечем.
-  const seen = new Map();
-  for (const l of all) if (!seen.has(l.product_id)) seen.set(l.product_id, { id: l.product_id, name: l.product_name });
-  const products = [...seen.values()].sort((x, y) => String(x.name).localeCompare(String(y.name), 'ru'));
+  // Список товаров для отбора считается БЕЗ отбора: иначе фильтр схлопывается в
+  // один пункт сразу после первого выбора, и вернуться к «всем» нечем. Партии
+  // ради этого списка не раскладываются — довольно имён (он стоит один запрос
+  // по products, а не разбор всего журнала прихода).
+  const products = stockedProducts(db, {})
+    .map((p) => ({ id: p.id, name: p.name }))
+    .sort((x, y) => String(x.name).localeCompare(String(y.name), 'ru'));
 
-  let lots = all.filter((l) => l.remaining > 1e-9);
-  // Сколько партий СО СРОКОМ есть вообще — считается ДО отбора. Пустой экран
-  // должен различать «ничего не нашлось по фильтру» и «срок не заполняли ни
-  // разу»: вторая новость просит объяснить, где этот срок вводится.
-  const datedTotal = lots.filter((l) => !l.no_expiry).length;
-  if (productId) lots = lots.filter((l) => l.product_id === productId);
-  if (q) lots = lots.filter((l) => l.product_name.toLowerCase().includes(q) || l.product_code.toLowerCase().includes(q));
+  // Сколько партий СО СРОКОМ есть вообще. Пустой экран должен различать
+  // «ничего не нашлось по фильтру» и «срок не заполняли ни разу»: вторая
+  // новость просит объяснить, где этот срок вводится.
+  const datedTotal = datedLotCount(db);
+
+  // Отбор — в SQL (см. receiptGroups/stockedProducts): раскладывать весь
+  // каталог, чтобы показать одну строку, значит держать клинику на каждой букве.
+  // Ноль в остатке не показываем; МИНУС показываем — он и есть новость.
+  const lots = lotBalances(db, { productIds: productId ? [productId] : null, q, todayStr: day })
+    .filter((l) => Math.abs(l.remaining) > 1e-9);
 
   // Ближайший срок первым; «без срока» — в конце: это не «ещё не скоро», это
   // «неизвестно», и смешивать их в одном порядке нельзя.

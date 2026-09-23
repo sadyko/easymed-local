@@ -9,12 +9,15 @@
 // Что закреплено здесь, по важности:
 //   1. ОСТАТОК ПАРТИИ — РАСЧЁТ, А НЕ ИЗМЕРЕНИЕ. Количество по партиям нигде не
 //      хранится: приход знает партию, расход — нет. Поэтому остаток склада
-//      РАСКЛАДЫВАЕТСЯ по приходам, ближайший срок первым, и сумма разложенного
-//      обязана совпадать с остатком склада ВСЕГДА. Разойдись она — экран
-//      начнёт спорить со складом, и правым окажется склад.
-//   2. ПРИХОД БЕЗ СРОКА НЕ ОТНИМАЕТ У ПАРТИЙ СО СРОКОМ. Иначе просрочка
-//      «растворилась» бы в безымянном остатке — ровно там, где о ней и нужно
-//      предупредить.
+//      РАСКЛАДЫВАЕТСЯ по приходам, и сумма разложенного обязана совпадать с
+//      остатком склада ВСЕГДА. Разойдись она — экран начнёт спорить со
+//      складом, и правым окажется склад.
+//   2. РАСКЛАД ИДЁТ ОТ ПОСЛЕДНЕГО ПРИХОДА НАЗАД. FEFO — это «первым расходуется
+//      ближайший срок», то есть ранняя партия УХОДИТ ПЕРВОЙ, а на полке
+//      остаётся поздняя. Прежний расклад говорил обратное — клал остаток на
+//      самые ранние партии, — и клиника видела просроченный товар, которого на
+//      складе нет, а предупреждение о нём не гасло уже никогда: гасить его было
+//      нечем, потому что и следующее списание «брало» у той же старой партии.
 //   3. ПРЕДУПРЕЖДЕНИЕ НЕ СТАНОВИТСЯ ОТКАЗОМ. Владелец сказал предупреждать, а
 //      не запрещать: и выдача, и списание на пациента проходят, ledger пишется
 //      как писался, а ответ несёт предупреждение сверх результата.
@@ -84,7 +87,11 @@ test('сумма по партиям РАВНА остатку склада — 
     assert.equal(sum(productLots(db, 7).lots), onHand(db, 7), 'после выдачи');
 
     adjustStock(db, { product_id: 7, qty: -3, note: 'бой' }, ADMIN);
-    assert.equal(sum(productLots(db, 7).lots), onHand(db, 7), 'после корректировки');
+    assert.equal(sum(productLots(db, 7).lots), onHand(db, 7), 'после корректировки в минус');
+
+    adjustStock(db, { product_id: 7, qty: -10, note: 'пересчёт: на полке меньше' }, ADMIN);
+    assert.equal(sum(productLots(db, 7).lots), onHand(db, 7),
+        'инвентаризация ниже всех приходов: партии обязаны съёжиться, а не оставить лишнее');
 
     adjustStock(db, { product_id: 7, qty: 50, note: 'найдено при инвентаризации' }, ADMIN);
     assert.equal(sum(productLots(db, 7).lots), onHand(db, 7),
@@ -92,15 +99,59 @@ test('сумма по партиям РАВНА остатку склада — 
   } finally { db.close(); }
 });
 
-test('ближайший срок первым, и расчёт кладёт остаток на самые ранние партии', () => {
+// ── C2: расход берёт РАННЮЮ партию, значит на полке остаётся ПОЗДНЯЯ ────────
+test('израсходованная партия не воскресает: остаток ложится на последний приход', () => {
+  const db = seed();
+  try {
+    // Ровно случай из клиники: перчатки пришли со старым сроком, разошлись
+    // целиком, потом пришла новая коробка. Старой на складе НЕТ.
+    receiveStockLines(db, { lines: [{ product_id: 7, qty: 10, unit: 'base', unit_cost: 1000, batch_no: 'OLD', expiry_date: shift(db, -200) }] }, ADMIN);
+    issueStockLines(db, { holder: { type: 'staff', id: 4 }, lines: [{ product_id: 7, qty: 10, unit: 'base' }] }, INV);
+    receiveStockLines(db, { lines: [{ product_id: 7, qty: 50, unit: 'base', unit_cost: 1000, batch_no: 'NEW', expiry_date: shift(db, 400) }] }, ADMIN);
+    assert.equal(onHand(db, 7), 50);
+
+    const shown = productLots(db, 7).lots.filter((l) => l.remaining > 1e-9);
+    assert.deepEqual(shown.map((l) => [l.batch_no, l.remaining]), [['NEW', 50]],
+        'экран придумал просроченный остаток, которого на складе нет');
+    assert.deepEqual(expiryWarnings(db, [7]), [],
+        'предупреждение о партии, которой нет, гасить нечем — оно не погаснет никогда');
+
+    // И следующая выдача молчит — до этой правки она тревожила вечно.
+    const res = issueStockLines(db, { holder: { type: 'staff', id: 4 }, lines: [{ product_id: 7, qty: 2, unit: 'base' }] }, INV);
+    assert.deepEqual(res.warnings, []);
+  } finally { db.close(); }
+});
+
+test('старая партия держит остаток ровно в той мере, в какой её не покрыли поздние приходы', () => {
+  const db = seed();
+  try {
+    receiveStockLines(db, { lines: [{ product_id: 7, qty: 10, unit: 'base', unit_cost: 1000, batch_no: 'OLD', expiry_date: shift(db, -200) }] }, ADMIN);
+    receiveStockLines(db, { lines: [{ product_id: 7, qty: 50, unit: 'base', unit_cost: 1000, batch_no: 'NEW', expiry_date: shift(db, 400) }] }, ADMIN);
+    issueStockLines(db, { holder: { type: 'staff', id: 4 }, lines: [{ product_id: 7, qty: 5, unit: 'base' }] }, INV);
+    assert.equal(onHand(db, 7), 55);
+
+    const lots = productLots(db, 7).lots;
+    assert.deepEqual(lots.map((l) => l.batch_no), ['OLD', 'NEW'], 'показ — ближайший срок первым');
+    assert.deepEqual(lots.map((l) => l.remaining), [5, 50],
+        'поздний приход закрывает 50 из 55, старой партии остаётся 5 — и о них надо предупредить');
+
+    const [w] = expiryWarnings(db, [7]);
+    assert.ok(w, 'просроченные 5 упаковок действительно лежат на складе — молчать нельзя');
+    assert.equal(w.batch_no, 'OLD');
+    assert.equal(w.remaining, 5, 'предупреждение обязано назвать, сколько именно просрочено');
+  } finally { db.close(); }
+});
+
+test('остаток ложится на ПОСЛЕДНИЕ приходы, а показывается ближайшим сроком вперёд', () => {
   const db = seed();
   try {
     threeLots(db);
     issueStockLines(db, { holder: { type: 'staff', id: 4 }, lines: [{ product_id: 7, qty: 12, unit: 'base' }] }, INV);
     const lots = productLots(db, 7).lots;
-    assert.deepEqual(lots.map((l) => l.batch_no), ['A-1', 'B-2', 'C-3'], 'порядок — по сроку, ближайший первым');
-    // 18 на складе: 10 легло на A-1, 8 на B-2, C-3 осталась пустой.
-    assert.deepEqual(lots.map((l) => l.remaining), [10, 8, 0]);
+    assert.deepEqual(lots.map((l) => l.batch_no), ['A-1', 'B-2', 'C-3'], 'порядок показа — по сроку, ближайший первым');
+    // 18 на складе. Последней пришла C-3 — её 10 целы; на B-2 приходится 8;
+    // A-1 разошлась первой, как ей и положено по FEFO.
+    assert.deepEqual(lots.map((l) => l.remaining), [0, 8, 10]);
   } finally { db.close(); }
 });
 
@@ -110,29 +161,68 @@ test('партия, которую расчёт считает израсход�
     threeLots(db);
     issueStockLines(db, { holder: { type: 'staff', id: 4 }, lines: [{ product_id: 7, qty: 25, unit: 'base' }] }, INV);
     const lots = productLots(db, 7).lots;
-    assert.equal(lots.find((l) => l.batch_no === 'C-3').remaining, 0);
+    assert.equal(lots.find((l) => l.batch_no === 'A-1').remaining, 0);
     assert.equal(lots.find((l) => l.batch_no === 'B-2').remaining, 0);
     const r = expiryLots(db, {}, ADMIN);
-    assert.deepEqual(r.lots.map((l) => l.batch_no), ['A-1'],
+    assert.deepEqual(r.lots.map((l) => l.batch_no), ['C-3'],
         'пустая партия попала в список остатков — её там нет, её остаток ноль');
     assert.equal(sum(r.lots), onHand(db, 7));
   } finally { db.close(); }
 });
 
-test('приход БЕЗ срока не отнимает у партий со сроком — иначе просрочка растворяется', () => {
+test('приход без срока — такой же приход: очередь решает, кто пришёл позже', () => {
   const db = seed();
   try {
+    // Просроченная партия, потом безымянный приход, потом расход ровно на
+    // просроченную. Позже пришёл безымянный — он и лежит на складе.
     receiveStockLines(db, { lines: [
       { product_id: 7, qty: 10, unit: 'base', unit_cost: 1000, batch_no: 'A-1', expiry_date: shift(db, -5) },
       { product_id: 7, qty: 10, unit: 'base', unit_cost: 1000 },   // без партии и без срока
     ] }, ADMIN);
     issueStockLines(db, { holder: { type: 'staff', id: 4 }, lines: [{ product_id: 7, qty: 10, unit: 'base' }] }, INV);
     const { lots } = productLots(db, 7);
-    const dated = lots.find((l) => l.batch_no === 'A-1');
-    const undated = lots.find((l) => l.no_expiry);
-    assert.equal(dated.remaining, 10, 'просроченная партия отдала свой остаток безымянному — так она и исчезала');
-    assert.equal(undated.remaining, 0);
+    assert.equal(lots.find((l) => l.batch_no === 'A-1').remaining, 0);
+    assert.equal(lots.find((l) => l.no_expiry).remaining, 10);
+    assert.deepEqual(expiryWarnings(db, [7]), [], 'просроченной партии на складе не осталось — тревожить не о чем');
     assert.equal(sum(lots), onHand(db, 7));
+  } finally { db.close(); }
+});
+
+test('безымянный приход СТАРШЕ партии со сроком — и остаток держит партия', () => {
+  const db = seed();
+  try {
+    receiveStockLines(db, { lines: [{ product_id: 7, qty: 10, unit: 'base', unit_cost: 1000 }] }, ADMIN);
+    receiveStockLines(db, { lines: [{ product_id: 7, qty: 10, unit: 'base', unit_cost: 1000, batch_no: 'A-1', expiry_date: shift(db, -5) }] }, ADMIN);
+    issueStockLines(db, { holder: { type: 'staff', id: 4 }, lines: [{ product_id: 7, qty: 10, unit: 'base' }] }, INV);
+    const { lots } = productLots(db, 7);
+    assert.equal(lots.find((l) => l.batch_no === 'A-1').remaining, 10,
+        'просрочка растворилась в безымянном остатке — ровно там, где о ней и нужно предупредить');
+    assert.equal(lots.find((l) => l.no_expiry).remaining, 0);
+    assert.equal(expiryWarnings(db, [7]).length, 1);
+    assert.equal(sum(lots), onHand(db, 7));
+  } finally { db.close(); }
+});
+
+// Решение по мелкому замечанию: ПОКАЗАТЬ МИНУС, А НЕ ПРЯТАТЬ ЕГО. Прежний
+// Math.max(on_hand, 0) сводил минусовой товар к нулю — сумма по партиям
+// переставала сходиться со складом молча, то есть ровно тем способом, от
+// которого экран и защищают. adjust_stock в минус не пускает, но остаток туда
+// попадает переносом справочника, восстановлением из копии и правкой руками, и
+// справочный экран обязан сказать об этом, а не упасть и не соврать нулём.
+test('минус на складе показывается строкой, а не прячется под ноль', () => {
+  const db = seed();
+  try {
+    threeLots(db);
+    db.prepare('UPDATE products SET on_hand = -4 WHERE id = 7').run();
+    const { lots } = productLots(db, 7);
+    assert.equal(sum(lots), -4, 'сумма по партиям разошлась с остатком склада');
+    const minus = lots.find((l) => l.no_expiry);
+    assert.ok(minus && minus.remaining === -4, 'минус обязан быть видимой строкой «без срока»');
+    assert.deepEqual(lots.filter((l) => !l.no_expiry).map((l) => l.remaining), [0, 0, 0],
+        'при минусе ни одна партия не «держит» товар');
+    const r = expiryLots(db, {}, ADMIN);
+    assert.equal(sum(r.lots), onHand(db, 7), 'экран показал не всё, что посчитал');
+    assert.deepEqual(expiryWarnings(db, [7]), [], 'минус — не повод тревожить о просрочке');
   } finally { db.close(); }
 });
 
@@ -228,6 +318,13 @@ test('отбор по товару и поиск считает сервер', (
     assert.deepEqual(expiryLots(db, { q: 'перч' }, ADMIN).lots.map((l) => l.product_name), ['Перчатки']);
     assert.deepEqual(expiryLots(db, { q: 'BND' }, ADMIN).lots.map((l) => l.product_name), ['Бинт'],
         'поиск по коду товара, как в журнале');
+    // Отбор уехал в SQL, и встроенный lower() в SQLite складывает регистр
+    // только для латиницы: без lower_uni «ПЕРЧ» не нашло бы «Перчатки», а
+    // «bnd» — код BND (CYRILLIC_ILIKE_V1).
+    assert.deepEqual(expiryLots(db, { q: 'ПЕРЧ' }, ADMIN).lots.map((l) => l.product_name), ['Перчатки'],
+        'поиск кириллицей перестал складывать регистр');
+    assert.deepEqual(expiryLots(db, { q: 'bnd' }, ADMIN).lots.map((l) => l.product_name), ['Бинт']);
+    assert.deepEqual(expiryLots(db, { q: 'нет такого' }, ADMIN).lots, []);
     // Список товаров для отбора не сужается вместе с отбором — иначе фильтр
     // схлопывается в один пункт после первого же выбора.
     assert.deepEqual(expiryLots(db, { product_id: 8 }, ADMIN).products.map((p) => p.name), ['Бинт', 'Перчатки']);
