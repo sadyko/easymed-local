@@ -497,6 +497,21 @@ test('doctor_salaries: оплаченные услуги соседнего зд
   assert.equal(own[0], 'Main Branch');
 });
 
+// REPORTS_V2 — «По врачам» на двух зданиях: строка соседа без врача не
+// пропадает, и доли по зданиям равны «Зарплатам врачей».
+test('by_doctors: соседнее здание под своей подписью, доли равны зарплатному отчёту', () => {
+  const { db } = seedTwoBuildings();
+  const sal = runReport(db, { kind: 'doctor_salaries', from: FROM, to: TO }, user);
+  const mine = runReport(db, { kind: 'by_doctors', from: FROM, to: TO }, user);
+  const col = (r, c) => r.columns.indexOf(c);
+  const foreign = mine.rows.find((x) => x[0] === 'Чиланзар');
+  assert.ok(foreign, 'строка соседнего здания пропала');
+  assert.equal(foreign[col(mine, 'Врач')], 'Чиланзар, врач не указан');
+  const total = (r, c) => Math.round(r.rows.reduce((n, x) => n + (Number(x[col(r, c)]) || 0), 0) * 100) / 100;
+  assert.equal(total(mine, 'Доля за услуги'), total(sal, 'Доля врача (гонорар)'));
+  assert.equal(total(mine, 'Оплачено'), total(sal, 'Сумма после скидки') + total(sal, 'Стационар: сумма после скидки'));
+});
+
 test('procurement: склад не ездит — цифры только по своему зданию, и это сказано', () => {
   const { db } = seedTwoBuildings();
   const r = runReport(db, { kind: 'procurement', from: FROM, to: TO }, user);

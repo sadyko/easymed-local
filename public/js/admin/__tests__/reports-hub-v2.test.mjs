@@ -77,3 +77,10 @@ test('«По услугам»: табличная карточка с фильт
   // SERVICE_VOCABULARY — пять групп не называются «Тип».
   assert.equal(group.label, 'Группа');
 });
+
+test('«По врачам»: два вида — врачи и врачи × услуги', () => {
+  const d = def('by_doctors');
+  assert.ok(d, 'нет карточки «По врачам»');
+  assert.deepEqual(reportKinds(d), ['by_doctors', 'doctor_services']);
+  assert.ok(ICON_MAP[d.icon]);
+});

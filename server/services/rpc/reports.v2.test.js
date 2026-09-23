@@ -217,3 +217,65 @@ test('по услугам: фильтр по группе', () => {
   assert.equal(objects(run(db, 'by_services', { group: 'all' })).length, 3);
   assert.throws(() => run(db, 'by_services', { group: 'bogus' }), /group/);
 });
+
+// ─── 3. ПО ВРАЧАМ ────────────────────────────────────────────────────────────
+
+test('по врачам: работа по всем счетам, выплата по оплаченным, вознаграждение как направившему', () => {
+  const { db } = seed();
+  const rows = objects(run(db, 'by_doctors'));
+  const v = rows.find((o) => o['Врач'] === 'Врачев В.В.');
+  assert.equal(v['Пациентов'], 1);
+  assert.equal(v['Визитов'], 1);
+  assert.equal(v['Услуг'], 1, 'аннулированный INV-4 посчитан как работа');
+  assert.equal(v['Выставлено'], 200000);
+  assert.equal(v['Доля за услуги'], 75200);
+  assert.equal(v['Вознаграждение за направления'], 4500);   // направил пациента INV-1
+  assert.equal(v['Итого к выплате'], 79700);
+  const s = rows.find((o) => o['Врач'] === 'Хирургов Х.Х.');
+  assert.equal(s['Пациентов'], 3);
+  assert.equal(s['Визитов'], 2);
+  assert.equal(s['Госпитализаций'], 1);
+  assert.equal(s['Услуг'], 3);
+  assert.equal(s['Выставлено'], 1190000);          // 90 000 + 100 000 (не оплачен) + 1 000 000
+  assert.equal(s['Оплачено'], 1090000);
+  assert.equal(s['Доля за услуги'], 27000);         // неоплаченная консультация доли не даёт
+  assert.equal(s['Стационарная доля'], 200000);
+  assert.equal(s['Итого к выплате'], 227000);
+});
+
+test('по врачам: доли в сумме равны «Зарплатам врачей», итог — они же плюс вознаграждение за направления', () => {
+  const { db } = seed();
+  const mine = objects(run(db, 'by_doctors'));
+  const sal = objects(run(db, 'doctor_salaries'));
+  assert.equal(sum(mine, 'Доля за услуги'), sum(sal, 'Доля врача (гонорар)'));
+  assert.equal(sum(mine, 'Стационарная доля'), sum(sal, 'Стационар: гонорар'));
+  const referral = sum(objects(run(db, 'referrals')).filter((o) => o['Вид'] === 'Внутренний'), 'Вознаграждение');
+  assert.equal(sum(mine, 'Вознаграждение за направления'), referral);
+  assert.equal(sum(mine, 'Итого к выплате'), sum(sal, 'Итого к выплате') + referral);
+  // По каждому врачу — тоже, а не только в сумме.
+  for (const o of sal) {
+    const m = mine.find((x) => x['Врач'] === o['Врач']);
+    assert.equal(m['Доля за услуги'], o['Доля врача (гонорар)'], o['Врач']);
+    assert.equal(m['Стационарная доля'], o['Стационар: гонорар'], o['Врач']);
+  }
+});
+
+test('врач × услуга: разбивка складывается в доли врача', () => {
+  const { db } = seed();
+  const rows = objects(run(db, 'doctor_services'));
+  const cons = rows.find((o) => o['Врач'] === 'Хирургов Х.Х.' && o['Услуга'] === 'Консультация');
+  assert.equal(cons['Где'], 'Амбулатория');
+  assert.equal(cons['Кол-во'], 2);
+  assert.equal(cons['Пациентов'], 2);
+  assert.equal(cons['Выставлено'], 190000);
+  assert.equal(cons['Оплачено'], 90000);
+  assert.equal(cons['Доля врача'], 27000);
+  const op = rows.find((o) => o['Врач'] === 'Хирургов Х.Х.' && o['Услуга'] === 'Операция');
+  assert.equal(op['Где'], 'Стационар');
+  const byDoc = objects(run(db, 'by_doctors'));
+  for (const d of byDoc) {
+    const own = rows.filter((o) => o['Врач'] === d['Врач']);
+    assert.equal(sum(own, 'Доля врача'), d['Доля за услуги'] + d['Стационарная доля'], d['Врач']);
+    assert.equal(sum(own, 'Выставлено'), d['Выставлено'], d['Врач']);
+  }
+});

@@ -1328,6 +1328,121 @@ function byServicesReport(db, args, ctx) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// REPORTS_V2 — «По врачам»: и выплата, и работа (kind 'by_doctors') плюс
+// разбивка врача по услугам (kind 'doctor_services').
+//
+// Строки — те же, что у «Зарплат врачей» (itemRowsQuery: врач строки — врач
+// visit_services, у стационара — исполнитель, иначе назначивший; доля —
+// LINE_FEE_SQL). Работа (пациенты, визиты, услуги, выставлено) считается по
+// ВСЕМ неаннулированным счетам периода; выплата (доли) — только по
+// оплаченным, ровно как в «Зарплатах врачей», поэтому колонки долей в сумме
+// равны им бит в бит. К выплате добавляется вознаграждение врача как
+// НАПРАВИВШЕГО (его внутренний источник, referralLines — то же, что отчёт
+// «Рефералы»). Период — по дате счёта.
+// ---------------------------------------------------------------------------
+const DOCTOR_PAY_NOTE = 'Работа (пациенты, визиты, услуги, выставлено) — по всем неаннулированным счетам периода; доли врача — только по оплаченным счетам, как в «Зарплатах врачей». «Вознаграждение за направления» — по внутреннему источнику врача, как в отчёте «Рефералы».';
+
+// Строки врача: своя строка без врача не входит (как в «Зарплатах врачей»),
+// строка соседнего здания без врача — входит под подписью здания.
+function doctorLines(db, args, ctx) {
+  return itemRowsQuery(db, args, ctx)
+    .filter((r) => r.doctor_id != null || ctx.keyOf(r.origin) !== ctx.ownKey);
+}
+const doctorKey = (ctx, origin, doctorId) => ctx.keyOf(origin) + '\u0000' + (doctorId == null ? '' : doctorId);
+
+function byDoctorsReport(db, args, ctx) {
+  const lines = doctorLines(db, args, ctx);
+  const names = new Map(db.prepare('SELECT id, full_name, username FROM users').all()
+    .map((u) => [u.id, u.full_name || u.username]));
+  const buckets = new Map();
+  const bucket = (origin, doctorId, doctor) => {
+    const key = doctorKey(ctx, origin, doctorId);
+    if (!buckets.has(key)) {
+      buckets.set(key, {
+        origin, doctor_id: doctorId, doctor: doctor || (doctorId != null ? names.get(doctorId) : null) || null,
+        patients: new Set(), visits: new Set(), admissions: new Set(), count: 0,
+        billed: 0, paid: 0, fee_out: 0, fee_in: 0, referral: 0,
+      });
+    }
+    return buckets.get(key);
+  };
+  for (const r of lines) {
+    const b = bucket(r.origin, r.doctor_id, r.doctor);
+    const after = (r.amount || 0) - (r.discount || 0);
+    b.patients.add(r.patient_id);
+    if (r.inpatient_line_id != null) { if (r.admission_id != null) b.admissions.add(r.admission_id); }
+    else if (r.visit_id != null) b.visits.add(r.visit_id);
+    b.count += 1;
+    b.billed += after;
+    if (r.status === 'paid') {
+      b.paid += after;
+      if (r.inpatient_line_id != null) b.fee_in += r.doctor_fee || 0;
+      else b.fee_out += r.doctor_fee || 0;
+    }
+  }
+  // Вознаграждение врача как направившего — только у внутренних источников,
+  // связанных с сотрудником. Врач, который в периоде сам ничего не оказал, но
+  // направлял, тоже получает строку: ему есть что платить.
+  for (const r of referralLines(db, { ...args, referrer: 'all' }, ctx)) {
+    if (r.referral_doctor_id == null || !r.reward) continue;
+    bucket(r.origin, r.referral_doctor_id, null).referral += r.reward;
+  }
+  const list = [...buckets.values()].sort((a, b) =>
+    (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
+    || (b.fee_out + b.fee_in + b.referral) - (a.fee_out + a.fee_in + a.referral) || b.billed - a.billed);
+  const notes = [DOCTOR_PAY_NOTE];
+  if (hasUnattributed(ctx, lines)) notes.push(UNATTRIBUTED_NOTE);
+  return {
+    columns: [BUILDING_COL, 'Врач', 'Пациентов', 'Визитов', 'Госпитализаций', 'Услуг', 'Выставлено',
+              'Оплачено', 'Доля за услуги', 'Стационарная доля', 'Вознаграждение за направления', 'Итого к выплате'],
+    rows: list.map((b) => [ctx.label(b.origin), doctorCell(ctx, b) || '—', b.patients.size, b.visits.size,
+      b.admissions.size, b.count, round2(b.billed), round2(b.paid), round2(b.fee_out), round2(b.fee_in),
+      round2(b.referral), round2(b.fee_out + b.fee_in + b.referral)]),
+    by_building: summariseByBuilding(ctx, list, {
+      total: (b) => b.billed,
+      fee: (b) => b.fee_out + b.fee_in + b.referral,
+    }),
+    total_label: 'Выставлено',
+    notes,
+  };
+}
+
+// Разбивка: врач × услуга × место. Сумма «Доля врача» по врачу равна «Доле за
+// услуги» + «Стационарной доле» его строки в 'by_doctors'.
+function doctorServicesReport(db, args, ctx) {
+  const lines = doctorLines(db, args, ctx);
+  const buckets = new Map();
+  for (const r of lines) {
+    const where = r.inpatient_line_id != null ? 'in' : 'out';
+    const who = r.service_id != null ? 'id:' + r.service_id : 'nm:' + (r.service || '');
+    const key = doctorKey(ctx, r.origin, r.doctor_id) + '\u0000' + who + '\u0000' + where;
+    const b = buckets.get(key) || {
+      origin: r.origin, doctor: r.doctor, service: r.service || '—', where,
+      patients: new Set(), qty: 0, billed: 0, paid: 0, fee: 0,
+    };
+    const after = (r.amount || 0) - (r.discount || 0);
+    b.patients.add(r.patient_id);
+    b.qty += Number(r.qty) || 1;
+    b.billed += after;
+    if (r.status === 'paid') { b.paid += after; b.fee += r.doctor_fee || 0; }
+    buckets.set(key, b);
+  }
+  const list = [...buckets.values()].sort((a, b) =>
+    (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
+    || String(a.doctor || '').localeCompare(String(b.doctor || ''), 'ru') || b.billed - a.billed);
+  const notes = [DOCTOR_PAY_NOTE];
+  if (hasUnattributed(ctx, lines)) notes.push(UNATTRIBUTED_NOTE);
+  return {
+    columns: [BUILDING_COL, 'Врач', 'Услуга', 'Где', 'Пациентов', 'Кол-во', 'Выставлено', 'Оплачено', 'Доля врача'],
+    rows: list.map((b) => [ctx.label(b.origin), doctorCell(ctx, b) || '—', b.service, WHERE_RU[b.where],
+      b.patients.size, round2(b.qty), round2(b.billed), round2(b.paid), round2(b.fee)]),
+    by_building: summariseByBuilding(ctx, list, { total: (b) => b.billed, fee: (b) => b.fee }),
+    total_label: 'Выставлено',
+    notes,
+  };
+}
+
 const REPORTS_RU = {
   total_revenue:    totalRevenueReport,
   referrals:        referralsReport,
@@ -1339,6 +1454,8 @@ const REPORTS_RU = {
   // REPORTS_V2 — детализация рефералов (сводка — 'referrals' выше).
   referrals_detail: referralsDetailReport,
   by_services:      byServicesReport,        // REPORTS_V2 — по услугам
+  by_doctors:       byDoctorsReport,         // REPORTS_V2 — по врачам: выплата и работа
+  doctor_services:  doctorServicesReport,    // REPORTS_V2 — врач × услуга
 };
 
 // OWNER_REPORT_V1 — chart data for «Отчёт владельца»: period KPIs, last-12-months
@@ -1452,7 +1569,7 @@ const ITEM_BASED_REPORTS = new Set([
   'total_revenue', 'referrals', 'surgery_profit', 'doctor_salaries',
   'inpatient_share',   // INPATIENT_SHARE_V1 — тоже читает строки счетов
   'referrals_detail',  // REPORTS_V2 — те же строки счетов, что у сводки
-  'by_services',       // REPORTS_V2
+  'by_services', 'by_doctors', 'doctor_services',   // REPORTS_V2
 ]);
 
 export function runReport(db, args, _user) {
