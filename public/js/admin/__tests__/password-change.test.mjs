@@ -204,6 +204,10 @@ test('ни один клиентский файл не меняет пароль
 
 test('карточка сотрудника: «Сменить пароль» шлёт только { password } — даже без ФИО и телефона', async () => {
   reset();
+  // Карточку открывает ДРУГОЙ администратор: своя карточка — отдельный случай ниже.
+  const me = window.easymed.state.user;
+  window.easymed.state.user = { id: 2, role: 'admin', is_admin: true };
+  try {
   const container = mk('div');
   await renderEmployees(container);
   await flush();
@@ -226,4 +230,31 @@ test('карточка сотрудника: «Сменить пароль» ш�
   assert.deepEqual(calls, [{ u: '/api/users/1', method: 'PATCH', body: { password: '1' } }]);
   assert.ok(modal.removed);
   assert.ok(!textOf(document.body).includes('Заполните личные данные.'), 'проверка всей карточки здесь не участвует');
+  } finally { window.easymed.state.user = me; }
+});
+
+// Ревью W1-M1 — своя карточка: пароль меняется ТЕМ ЖЕ окном, что в меню
+// аватара, с текущим паролем. PATCH /api/users без текущего пароля — это право
+// администратора на ЧУЖУЮ учётную запись; на своей он обходил бы проверку
+// «докажи, что это ты» (оставленный без присмотра открытый компьютер).
+test('своя карточка: «Сменить пароль» спрашивает текущий и идёт в /api/auth/change-password', async () => {
+  reset();
+  window.easymed.state.user = { id: 1, role: 'admin', is_admin: true };
+  const container = mk('div');
+  await renderEmployees(container);
+  await flush();
+  const row = tags(container, 'tr').find((r) => textOf(r).includes('@admin'));
+  row.dispatchEvent({ type: 'click', currentTarget: null, preventDefault() {}, stopPropagation() {} });
+  await flush();
+  const card = document.body.children.at(-1);
+  buttonWith(card, 'Сменить пароль').click();
+  await flush();
+  const modal = top();
+  assert.equal(tags(modal, 'input').length, 3, 'на своей карточке не спросили текущий пароль');
+  fill(modal, ['old', '1', '1']);
+  buttonWith(modal, 'Сохранить').click();
+  await flush();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].u, '/api/auth/change-password');
+  assert.ok(!calls.some((c) => c.method === 'PATCH'), 'свой пароль ушёл PATCH-ем без текущего');
 });

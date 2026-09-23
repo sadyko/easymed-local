@@ -10,7 +10,8 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, field, checkField, Ring, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { openEmployeePasswordModal } from '../password-change.js';   // PASSWORD_CHANGE_V2
+import { openEmployeePasswordModal, openChangeOwnPasswordModal } from '../password-change.js';   // PASSWORD_CHANGE_V2
+import { selfUserId } from '../permissions.js';   // PASSWORD_CHANGE_V2 — своя карточка меняет пароль через текущий
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { importExportButtons } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1
 import { soleBranchId } from '../branch-context.js?v=bc3';                  // SOLE_BRANCH_V1
@@ -648,8 +649,15 @@ function openEditor(user, root) {
     // проверку ФИО, телефона и категории в save() ниже. Без этого учётная
     // запись первого запуска `admin` (в ней не заполнено ничего) и сотрудники
     // без телефона не могли получить новый пароль вовсе.
+    //
+    // Ревью W1-M1: СВОЯ карточка — то же окно, что в меню аватара, с текущим
+    // паролем (/api/auth/change-password). PATCH без текущего — право
+    // администратора на чужую учётную запись; на своей он обходил бы проверку
+    // «докажи, что это ты».
+    const isSelf = isEdit && selfUserId() != null && String(selfUserId()) === String(user.id);
     const passwordBtn = isEdit
-        ? h('button', { class: 'btn btn-outline', type: 'button', onclick: () => openEmployeePasswordModal(user) },
+        ? h('button', { class: 'btn btn-outline', type: 'button',
+            onclick: () => (isSelf ? openChangeOwnPasswordModal() : openEmployeePasswordModal(user)) },
             Icon('Lock', { size: 14 }), ' Сменить пароль')
         : null;
 
