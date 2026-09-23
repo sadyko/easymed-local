@@ -335,3 +335,58 @@ test('фильтры и область видимости складываютс
     assert.equal(stockMovementsList(db, { kind: 'receive' }, NURSE).movements.length, 0);
   } finally { db.close(); }
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// MY_STOCK_V1 — СУЖЕНИЕ «ТОЛЬКО МОЁ» ДЛЯ ЭКРАНА «МОИ ЗАПАСЫ».
+//
+// Экран задаёт журналу два разных вопроса — «что выдали МНЕ» и «что списал Я» —
+// и оба обязаны считаться здесь же, а не отбором в браузере поверх обрезанной
+// выборки: последние двести строк клиники могут не содержать ни одной моей.
+// Аргумент только СУЖАЕТ: он приписывается к области видимости, а не заменяет
+// её, поэтому им нельзя выпросить чужое.
+// ───────────────────────────────────────────────────────────────────────────
+
+test('only=to_me: «что выдали мне» — только там, где я держатель; выдачи в мой отдел это не то же самое', () => {
+  const db = seed();
+  try {
+    const cardio = busyDay(db);
+    const r = stockMovementsList(db, { kind: 'issue', only: 'to_me' }, NURSE);
+    assert.deepEqual(r.movements.map((m) => [m.holder_type, m.holder_id, m.product_name]), [['staff', 4, 'Бинт']],
+        'в «что выдали мне» попало не только выданное лично мне');
+    assert.equal(r.movements[0].actor_name, 'Кладовщик Каримов', 'экран обязан назвать выдавшего');
+
+    // Кладовщик раздал товар отделу и кабинету — в его собственном «выдали
+    // мне» их нет: он их провёл, а не получил.
+    assert.deepEqual(stockMovementsList(db, { kind: 'issue', only: 'to_me' }, INV).movements, []);
+    // И отдельно: выдача В ОТДЕЛ медсестре видна в журнале, но это не её подотчёт.
+    const wide = stockMovementsList(db, { kind: 'issue' }, NURSE);
+    assert.equal(wide.movements.some((m) => m.holder_type === 'department' && m.holder_id === cardio), false,
+        'подготовка: медсестре отдела чужие выдачи и так не видны');
+  } finally { db.close(); }
+});
+
+test('only=by_me: «что я списал на пациентов» — движения, которые провёл я сам, с именем пациента', () => {
+  const db = seed();
+  try {
+    busyDay(db);
+    const r = stockMovementsList(db, { kind: 'dispense', only: 'by_me' }, NURSE);
+    assert.equal(r.movements.length, 1);
+    assert.equal(r.movements[0].patient_name, 'Сидоров Сидор');
+    assert.equal(r.movements[0].actor_id, NURSE.id);
+    // Заведующая отдела видит расход своего отдела в журнале — но не в «я списал».
+    assert.equal(stockMovementsList(db, { kind: 'dispense' }, HEAD).movements.length, 1);
+    assert.deepEqual(stockMovementsList(db, { kind: 'dispense', only: 'by_me' }, HEAD).movements, []);
+  } finally { db.close(); }
+});
+
+test('сужение НИКОГДА не расширяет: администратор с only=to_me видит только своё, а неизвестное значение — отказ', () => {
+  const db = seed();
+  try {
+    busyDay(db);
+    assert.ok(stockMovementsList(db, {}, ADMIN).movements.length >= 6, 'подготовка: администратору видно всё');
+    assert.deepEqual(stockMovementsList(db, { only: 'to_me' }, ADMIN).movements, [],
+        'администратору ничего не выдавали — «моё» обязано остаться пустым, а не показать всю клинику');
+    assert.equal(stockMovementsList(db, { only: 'by_me' }, ADMIN).movements.every((m) => m.actor_id === ADMIN.id), true);
+    assert.throws(() => stockMovementsList(db, { only: 'everything' }, ADMIN), (e) => e.status === 400);
+  } finally { db.close(); }
+});

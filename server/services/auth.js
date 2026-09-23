@@ -60,7 +60,10 @@ export function login(db, username, password) {
   if (fail && fail.lockedUntil > Date.now()) return { error: 'locked' };
 
   const user = db.prepare(
-    'SELECT id, username, password_hash, full_name, role, is_active, must_change_password FROM users WHERE username = ?'
+    // MY_STOCK_V1 — department_id едет с первой же минуты входа: вход НЕ
+    // перезагружает страницу (форма → onAuthed), и без него пункт «Мой отдел»
+    // появился бы в меню только после первого F5.
+    'SELECT id, username, password_hash, full_name, role, department_id, is_active, must_change_password FROM users WHERE username = ?'
   ).get(name);
   const match = bcrypt.compareSync(String(password ?? ''), user?.password_hash || DUMMY_HASH);
   if (!user || !user.is_active || !match) {
@@ -110,7 +113,12 @@ export function sessionUser(db, sid) {
   const row = db.prepare(
     // CUSTOM_ROLES_V1 — код своей роли едет вместе с ролью: по нему экран
     // грузит права и подписывает роль человеку её собственным названием.
-    'SELECT u.id, u.username, u.full_name, u.role, u.extra_roles, u.custom_role_code, u.is_active, u.must_change_password, s.expires_at AS session_expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?'
+    // MY_STOCK_V1 — department_id: оболочка решает по нему, показывать ли
+    // пункт «Мой отдел» (и ссылку на карточку отдела с «Моих запасов»).
+    // Принадлежность к отделу — ФАКТ о человеке, а не право, и спросить её
+    // экрану больше негде: users читается только через /api/db, а роль без
+    // прав на справочник сотрудников туда не ходит.
+    'SELECT u.id, u.username, u.full_name, u.role, u.extra_roles, u.custom_role_code, u.department_id, u.is_active, u.must_change_password, s.expires_at AS session_expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?'
   ).get(sid);
   if (!row) return null;
   if (row.session_expires_at <= isoSeconds(Date.now()) || !row.is_active) {
@@ -135,6 +143,10 @@ export function publicUser(u) {
   return { id: u.id, username: u.username, full_name: u.full_name, role: u.role,
            extra_roles: parseRoleList(u.extra_roles),
            custom_role_code: (typeof u.custom_role_code === 'string' && u.custom_role_code.trim()) || null,   // CUSTOM_ROLES_V1
+           // MY_STOCK_V1 — отдел сотрудника. Вызовы, которые его не выбирали,
+           // получают null, а не undefined: поле должно ЛИБО называть отдел,
+           // ЛИБО говорить «отдела нет», и никогда — «не знаю».
+           department_id: u.department_id == null ? null : Number(u.department_id),
            is_active: !!u.is_active,
            // !! also maps SQLite's 0/1 — and an undefined column (rows selected
            // by callers that don't need the flag) — to a clean boolean.

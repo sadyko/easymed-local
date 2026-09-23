@@ -282,3 +282,44 @@ test('призрак исчез: выдали 100 в отдел, списали 
   const total = onHand(db, prod) + db.prepare('SELECT COALESCE(SUM(qty),0) s FROM stock_holdings WHERE product_id = ?').get(prod).s;
   assert.equal(total, 490, '500 − 10 израсходованных на пациента');
 });
+
+// MY_STOCK_V1 — «МОИ ЗАПАСЫ» СПРАШИВАЕТ У СЕРВЕРА «МОЁ», А НЕ ВЕСЬ РЕЕСТР.
+//
+// До этого аргумента у экрана было два пути, и оба плохие: попросить весь
+// список и отфильтровать своё в браузере (чужие остатки уже приехали — их
+// видно в консоли и в сети) или назвать себя держателем самому (тогда любой
+// назовёт держателем кого угодно). Поэтому область считает сервер: имя берётся
+// из сессии, а holder_type/holder_id при `mine` не читаются вовсе.
+test('mine: только свой подотчёт, имя из сессии — чужого не показать даже подставив держателя', () => {
+  const { db, prod } = seed();
+  issueStockLines(db, { holder: { type: 'staff', id: 5 }, lines: [{ product_id: prod, qty: 30, unit: 'consumption' }] }, inv);
+  issueStockLines(db, { holder: { type: 'staff', id: 3 }, lines: [{ product_id: prod, qty: 2, unit: 'base' }] }, inv);
+  issueStockLines(db, { holder: { type: 'department', id: 9 }, lines: [{ product_id: prod, qty: 5, unit: 'base' }] }, inv);
+
+  const mine = holdingsList(db, { mine: true }, nurse).holdings;
+  assert.deepEqual(mine.map((h) => [h.holder_type, h.holder_id, h.qty_base, h.qty_units]), [['staff', 5, 3, 30]],
+    'в «Моих запасах» оказалось не только своё');
+  assert.equal(mine[0].product_name, 'Парацетамол');
+  assert.equal(mine[0].consumption_unit, 'таб');
+
+  // Подставленный держатель не читается: ответ всё равно про вошедшего.
+  const forged = holdingsList(db, { mine: true, holder_type: 'staff', holder_id: 3 }, nurse).holdings;
+  assert.deepEqual(forged.map((h) => h.holder_id), [5], 'чужой подотчёт открылся подстановкой holder_id');
+
+  // Тому, у кого на руках ничего нет, — пустой список, а не отказ.
+  assert.deepEqual(holdingsList(db, { mine: true }, cashier).holdings, []);
+});
+
+test('mine: роли, которых нет в списке склада, видят СВОЙ подотчёт — иначе заведующая получит 403 на самой себе', () => {
+  const { db, prod } = seed();
+  db.prepare("INSERT INTO users (id,username,password_hash,role,full_name) VALUES (11,'head','x','head_doctor','Заведующая Юсупова'),(12,'senior','x','senior_nurse','Старшая Каримова')").run();
+  issueStockLines(db, { holder: { type: 'staff', id: 11 }, lines: [{ product_id: prod, qty: 1, unit: 'base' }] }, inv);
+
+  const head = { id: 11, role: 'head_doctor' };
+  const senior = { id: 12, role: 'senior_nurse' };
+  assert.equal(holdingsList(db, { mine: true }, head).holdings.length, 1);
+  assert.deepEqual(holdingsList(db, { mine: true }, senior).holdings, []);
+  // А общий список им по-прежнему не положен — «моё» никого не расширяет.
+  assert.throws(() => holdingsList(db, {}, head), (e) => e.status === 403);
+  assert.throws(() => holdingsList(db, { mine: true }, { id: 0, role: 'nurse' }), (e) => e.status === 401);
+});

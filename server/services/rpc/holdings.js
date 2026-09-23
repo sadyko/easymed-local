@@ -73,21 +73,40 @@ export function moveHolding(db, holder, productId, baseQty) {
 
 /**
  * holdings_list — what holders have on hand.
- * args: { holder_type?, holder_id?, include_empty? }  (no holder → every holder)
+ * args: { mine?, holder_type?, holder_id?, include_empty? }  (no holder → every holder)
  * → { holdings: [{ holder_type, holder_id, holder_name, product_id, product_name,
  *      base_unit, consumption_unit, consumption_factor, sale_price, qty_base, qty_units }] }
  * qty_units = qty in the consumption unit — what the nurse counts in.
+ *
+ * MY_STOCK_V1 — «МОЁ» СЧИТАЕТ СЕРВЕР, А НЕ ОТБОР В БРАУЗЕРЕ. Экран «Мои
+ * запасы» просит `mine: true` и НЕ называет держателя: имя берётся из сессии,
+ * чужие строки до экрана не доезжают, и подменить их в запросе нечем —
+ * holder_type/holder_id при `mine` не читаются вовсе. Роль тут не
+ * спрашивается: что числится за человеком, человек вправе видеть всегда, а
+ * заведующей и старшей медсестры в LIST_ROLES нет — они получили бы 403 на
+ * собственном подотчёте.
  */
 export function holdingsList(db, args, user) {
-  requireRole(user, LIST_ROLES);
   const a = args || {};
+  const mine = a.mine === true;
+  const selfId = Number(user && user.id);
+  if (mine) {
+    if (!isPosInt(selfId)) throw new RpcError('Вошедший не опознан.', 401);
+  } else {
+    requireRole(user, LIST_ROLES);
+  }
   const where = ['1=1'];
   const params = [];
-  if (a.holder_type) {
-    if (!HOLDER_TYPES.includes(a.holder_type)) throw new RpcError('holder_type неизвестен.', 400);
-    where.push('h.holder_type = ?'); params.push(a.holder_type);
+  if (mine) {
+    where.push("h.holder_type = 'staff'", 'h.holder_id = ?');
+    params.push(selfId);
+  } else {
+    if (a.holder_type) {
+      if (!HOLDER_TYPES.includes(a.holder_type)) throw new RpcError('holder_type неизвестен.', 400);
+      where.push('h.holder_type = ?'); params.push(a.holder_type);
+    }
+    if (a.holder_id != null) { where.push('h.holder_id = ?'); params.push(Number(a.holder_id)); }
   }
-  if (a.holder_id != null) { where.push('h.holder_id = ?'); params.push(Number(a.holder_id)); }
   if (!a.include_empty) where.push('h.qty > 0');
   const rows = db.prepare(`
     SELECT h.holder_type, h.holder_id, h.product_id, h.qty,

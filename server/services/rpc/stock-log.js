@@ -99,6 +99,31 @@ function scopeClause(scope) {
   };
 }
 
+/**
+ * MY_STOCK_V1 — СУЖЕНИЕ «ТОЛЬКО МОЁ», о котором просит экран «Мои запасы».
+ *
+ * Оно НИКОГДА не расширяет видимость: условие приписывается к WHERE рядом с
+ * отбором области (scopeClause), то есть действует ВМЕСТЕ с ним, а не вместо.
+ * Администратор, попросивший 'to_me', получит только то, что выдали лично ему;
+ * медсестра — то же самое, потому что большего ей и так не видно.
+ *
+ * Два значения, и они РАЗНЫЕ — их путает даже «своё» из journalScope, где они
+ * склеены через ИЛИ:
+ *   to_me — что выдали МНЕ (я держатель). Кладовщик, раздающий товар отделам,
+ *           в свой «выдали мне» их не увидит.
+ *   by_me — что провёл Я САМ (я автор движения): расход на пациента, списанный
+ *           мной, — даже если товар брали из отдела, а не с моих рук.
+ */
+const ONLY_KINDS = ['to_me', 'by_me'];
+
+function onlyClause(only, userId) {
+  if (only === undefined || only === null || only === '') return null;
+  if (!ONLY_KINDS.includes(only)) throw new RpcError(`Неизвестное сужение: ${only}.`, 400);
+  if (!isPosInt(userId)) return { sql: '1 = 0', params: [] };
+  if (only === 'to_me') return { sql: "(m.holder_type = 'staff' AND m.holder_id = ?)", params: [userId] };
+  return { sql: 'm.created_by = ?', params: [userId] };
+}
+
 function checkDate(value, what) {
   if (value === undefined || value === null || value === '') return null;
   const s = String(value).trim();
@@ -137,6 +162,7 @@ function stripHolder(note, name) {
  * args: { from?, to? ('ГГГГ-ММ-ДД', по местному дню клиники),
  *         kind? ('receive'|'issue'|'dispense'|'adjust'|'void'),
  *         q? (поиск по названию или коду товара),
+ *         only? ('to_me' — что выдали мне, 'by_me' — что провёл я; MY_STOCK_V1),
  *         limit? (по умолчанию 200, потолок 1000), offset? }
  *
  * → { scope, departments, limit, offset, truncated, count, movements: [{
@@ -172,6 +198,11 @@ export function stockMovementsList(db, args, user) {
 
   const sc = scopeClause(scope);
   if (sc) { where.push(sc.sql); params.push(...sc.params); }
+
+  // MY_STOCK_V1 — сужение экрана «Мои запасы», ПОСЛЕ области видимости и
+  // вместе с ней: расширить этим аргументом ничего нельзя.
+  const oc = onlyClause(a.only, scope.user_id);
+  if (oc) { where.push(oc.sql); params.push(...oc.params); }
 
   const limit = isPosInt(Number(a.limit)) ? Math.min(Number(a.limit), MAX_LIMIT) : DEFAULT_LIMIT;
   const offset = isPosInt(Number(a.offset)) ? Number(a.offset) : 0;
