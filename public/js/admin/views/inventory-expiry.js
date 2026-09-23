@@ -32,7 +32,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, Tag, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { fetchGuard, fmtQty } from './inventory-shared.js';
+import { fmtQty } from './inventory-shared.js';
 
 // Состояние партии словами и цветом. Палитра — та же, что у остальных меток
 // склада (ui.js Tag): crit — беда, warn — скоро, ok — спокойно, off — нечего
@@ -55,6 +55,14 @@ const state = { productId: '', q: '' };
 // refs.prodSig — список товаров, которым фильтр заполнен сейчас: пока он не
 // изменился, опции не трогаются вовсе.
 const refs = { host: null, results: null, prod: null, prodSig: null };
+// EXPIRY_BALANCE_V1 — СВОЙ СЧЁТЧИК, а не общий fetchGuard закупок. Экран живёт
+// в оболочке «Закупок» рядом с её вкладками, и на общем счётчике перерисовка
+// ЛЮБОЙ соседней вкладки отменяла отрисовку этого экрана: он оставался пустым,
+// а причины на экране не было. До сих пор этого не случалось лишь потому, что
+// оболочка очищает панель перед переключением, — то есть безопасность держалась
+// на чужом порядке действий, а не на своём. Тот же довод и то же решение, что у
+// журнала движений (views/stock-log.js) и «Моих запасов» (views/my-stock.js).
+let token = 0;
 
 /** Параметры запроса из состояния фильтров — ровно то, что понимает RPC. */
 export function expiryQuery() {
@@ -143,9 +151,9 @@ async function paint() {
     clear(region);
     region.appendChild(loadingLine());
 
-    const token = ++fetchGuard.token;
+    const mine = ++token;
     const { data, error } = await supabase.rpc('stock_expiry_lots', expiryQuery());
-    if (token !== fetchGuard.token || refs.results !== region) return;
+    if (mine !== token || refs.results !== region) return;
     clear(region);
 
     if (error) {

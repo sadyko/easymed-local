@@ -114,6 +114,7 @@ const rpcCalls = [];
 let ANSWER = null;
 let ISSUE_ANSWER = null;
 let FAIL = null;
+let ONFETCH = null;   // что успевает случиться, пока экран ждёт ответ
 const PRODUCTS = [{ id: 7, name: 'Перчатки', code: 'GLV', base_unit: 'уп', consumption_unit: 'шт', consumption_factor: 100, on_hand: 30 }];
 
 globalThis.fetch = async (url, opts = {}) => {
@@ -122,6 +123,7 @@ globalThis.fetch = async (url, opts = {}) => {
     if (u.startsWith('/api/rpc/')) {
         const name = decodeURIComponent(u.slice('/api/rpc/'.length));
         rpcCalls.push({ name, args: body });
+        if (ONFETCH) { const f = ONFETCH; ONFETCH = null; f(); }
         if (FAIL) return { ok: false, status: 400, json: async () => ({ error: { message: FAIL } }), headers: { getSetCookie: () => [] } };
         const data = name === 'issue_stock_lines' ? ISSUE_ANSWER : ANSWER;
         return { ok: true, status: 200, json: async () => ({ data }), headers: { getSetCookie: () => [] } };
@@ -266,6 +268,28 @@ test('отбор по товару и поиск ДОЕЗЖАЮТ до серв�
 test('отказ сервера ВИДЕН: молчание тут читается как «просрочки нет»', async () => {
     const root = await open({ lots: [EXPIRED], fail: 'база недоступна' });
     assert.match(flat(root), /Не удалось загрузить сроки годности\./);
+});
+
+// EXPIRY_BALANCE_V1 — У ЭКРАНА СВОЙ СЧЁТЧИК ЗАПРОСОВ.
+//
+// «Сроки годности» живут в оболочке «Закупок» рядом с её вкладками, и на общем
+// счётчике (inventory-shared.js fetchGuard) перерисовка ЛЮБОЙ соседней вкладки
+// отменяла отрисовку этого экрана: он оставался пустым, а причины на экране не
+// было. Сегодня это не случается только потому, что оболочка очищает панель
+// перед переключением, — то есть держится на чужом порядке действий, а не на
+// своём. Тот же довод и то же решение, что у журнала движений (stock-log.js) и
+// «Моих запасов» (my-stock.js).
+test('чужая перерисовка не отменяет «Сроки годности»: счётчик запросов у экрана свой', async () => {
+    const root = await open({ lots: [EXPIRED] });
+    const { fetchGuard } = await import('../views/inventory-shared.js');
+    // Пока экран ждёт ответ, соседняя вкладка «Закупок» перерисовывает себя.
+    ONFETCH = () => { fetchGuard.token += 1; };
+    const sel = findAll(root, 'SELECT')[0];
+    sel.value = '7';
+    sel.dispatchEvent({ type: 'change' });
+    await settle();
+    assert.match(textOf(root), /A-1/,
+        'экран отменил САМ СЕБЯ из-за перерисовки соседней вкладки — и остался пустым молча');
 });
 
 // SEARCH_ALIVE_V1 — ПОЛЕ, В КОТОРОМ ПЕЧАТАЮТ, ПЕРЕЖИВАЕТ СВОЙ СОБСТВЕННЫЙ
