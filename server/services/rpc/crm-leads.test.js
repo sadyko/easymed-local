@@ -68,3 +68,60 @@ test('crm_leads_by_phone: only board readers ask, and it is a pure read', () => 
   assert.throws(() => getRpc('crm_leads_by_phone')(db, { phone: '942846494' }, { id: 99, role: 'nobody' }), /недоступны/);
   assert.equal(isReadOnlyRpc('crm_leads_by_phone'), true);
 });
+
+// ---------------------------------------------------------------------------
+// crm_search — поиск по всем заявкам, с примерами из базы клиники.
+// ---------------------------------------------------------------------------
+const search = (db, q, user) => getRpc('crm_search')(db, { q }, user).map((r) => r.full_name);
+
+test('crm_search: номер по цифрам в любом написании — точные случаи из базы', () => {
+  const { db, admin } = seed();
+  ins(db, { full_name: 'А', phone: '+998 91 566 22 78' });
+  ins(db, { full_name: 'Б', phone: '942846494' });
+  ins(db, { full_name: 'В', phone: '998904858855' });
+  assert.deepEqual(search(db, '915662278', admin), ['А']);
+  assert.deepEqual(search(db, '+998915662278', admin), ['А']);
+  assert.deepEqual(search(db, '94 284 64 94', admin), ['Б']);
+  assert.deepEqual(search(db, '+998904858855', admin), ['В']);
+  // часть номера тоже находит
+  assert.deepEqual(search(db, '4858', admin), ['В']);
+});
+
+test('crm_search: имя без учёта пробелов и регистра, и имя привязанного пациента', () => {
+  const { db, admin } = seed();
+  ins(db, { full_name: 'Буронова  Феруза', phone: '901111111' });
+  const pid = Number(db.prepare("INSERT INTO patients (full_name, phone) VALUES ('Каримова Азиза', '')").run().lastInsertRowid);
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status, patient_id) VALUES ('+998902222222','+998902222222','call','in_process',?)").run(pid);
+  assert.deepEqual(search(db, 'буронова феруза', admin), ['Буронова  Феруза']);
+  assert.deepEqual(search(db, 'буроноваферуза', admin), ['Буронова  Феруза']);
+  assert.deepEqual(search(db, 'БУРОНОВА', admin), ['Буронова  Феруза']);
+  assert.deepEqual(search(db, 'каримова азиза', admin), ['+998902222222']);
+});
+
+test('crm_search: находит заявку старше 800 последних и отдаёт форму доски', () => {
+  const { db, admin } = seed();
+  const old = ins(db, { full_name: 'Старая заявка', phone: '+998 97 700 00 01', created_at: '2025-01-01T10:00:00Z' });
+  const tx = db.transaction(() => { for (let i = 0; i < 900; i++) ins(db, { full_name: 'Лид ' + i, phone: String(930000000 + i) }); });
+  tx();
+  const rows = getRpc('crm_search')(db, { q: 'старая' }, admin);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, old);
+  for (const k of ['id', 'full_name', 'phone', 'source', 'status', 'created_at', 'assigned_to', 'patient_id']) {
+    assert.ok(k in rows[0], 'нет колонки ' + k);
+  }
+  assert.ok('patients' in rows[0] && 'users' in rows[0] && 'services' in rows[0], 'нет вложений доски');
+  // и не больше 200 на широкий запрос
+  assert.equal(getRpc('crm_search')(db, { q: 'лид' }, admin).length, 200);
+});
+
+test('crm_search: оператор не находит чужие; одна буква — не поиск', () => {
+  const { db, admin, op1, op2 } = seed();
+  ins(db, { full_name: 'Чужая Лола', phone: '901234567', assigned_to: op2.id });
+  ins(db, { full_name: 'Моя Лола', phone: '901234568', assigned_to: op1.id });
+  ins(db, { full_name: 'Ничья Лола', phone: '901234569' });
+  assert.deepEqual(search(db, 'лола', op1).sort(), ['Моя Лола', 'Ничья Лола']);
+  assert.equal(search(db, 'лола', admin).length, 3);
+  assert.deepEqual(search(db, 'л', admin), []);
+  assert.deepEqual(search(db, '', admin), []);
+  assert.equal(isReadOnlyRpc('crm_search'), true);
+});

@@ -58,7 +58,7 @@ import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRe
          telephonyForgetBinotel } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1 / TELEPHONY_PROVIDERS_V1
 import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss } from './lis.js';   // LIS_INGEST_V1
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
-import { crmLeadsByPhone } from './crm-leads.js';   // CRM_DEDUP_SEARCH_TASKS_V1
+import { crmLeadsByPhone, crmSearch } from './crm-leads.js';   // CRM_DEDUP_SEARCH_TASKS_V1
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
 import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
 import { custdevList, custdevSync, custdevRate, custdevMark, custdevReport } from './custdev.js';   // CUSTDEV_V1
@@ -526,6 +526,9 @@ export const RPC = {
   // созданием новой заявки. Номер сравнивается по одному ключу (последние девять
   // цифр) на сервере; чистое чтение (READ_ONLY_RPCS в control/gate.js).
   crm_leads_by_phone:       (db, args, user) => crmLeadsByPhone(db, args, user),
+  // CRM_DEDUP_SEARCH_TASKS_V1 — поиск доски по ВСЕМ заявкам (доска грузит 800):
+  // номер по цифрам, имя без пробелов, имя привязанного пациента. Чтение.
+  crm_search:               (db, args, user) => crmSearch(db, args, user),
 
   // LICENCE_CORE_V1 — the three that stay reachable while locked (see
   // control/gate.js ALWAYS_ALLOWED_RPCS). Without them a clinic that wants to

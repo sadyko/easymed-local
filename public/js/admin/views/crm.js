@@ -7,7 +7,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openVisitWizard } from './visit-wizard.js?v=tier2';   // CRM_V4 — конверсия сразу в реальный заказ услуги
-import { digitsOf, phoneLikePattern, filterPhoneMatches, uzLocalDigits, MIN_PHONE_DIGITS } from './crm-phone-match.js';
+import { digitsOf, phoneLikePattern, filterPhoneMatches, uzLocalDigits, MIN_PHONE_DIGITS, leadMatchesQuery } from './crm-phone-match.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
 // CRM_CARD_V2 — номер на карточке группируется ТЕМ ЖЕ правилом, что и во всех
 // полях ввода телефона (PHONE_INPUT_V1). Второй способ печатать номер означал
@@ -131,7 +131,13 @@ const state = { view: 'kanban', filter: 'all', search: '', rows: [], source: '',
                 // CRM_PERIOD_CUSTOM_V1 — границы своего периода, 'YYYY-MM-DD'.
                 // Пустая граница = без ограничения с этой стороны: «с 01.08 и
                 // далее» — нормальный вопрос, и запрещать его незачем.
-                customFrom: '', customTo: '' };
+                customFrom: '', customTo: '',
+                // CRM_DEDUP_SEARCH_TASKS_V1 — ответ сервера на поиск (crm_search):
+                // заявки по ВСЕМ карточкам, а не только по загруженным 800.
+                // searchQ — для какой строки он получен: ответ на «бур» не
+                // должен показываться под «буронова».
+                searchRows: null, searchQ: '' };
+let searchSeq = 0;   // CRM_DEDUP_SEARCH_TASKS_V1 — последний ответ поиска побеждает
 
 // Период считается по created_at — «когда обратились», а не когда записаны:
 // воронку смотрят от момента обращения.
@@ -446,8 +452,11 @@ async function paint() {
         searchInp.style.borderColor = 'var(--ink-200, #d1d5db)';
         searchInp.style.boxShadow = 'var(--shadow-sm)';
     });
-    searchInp.addEventListener('input', () => { state.search = searchInp.value; syncClear(); paintFilters(); paintBody(); });
-    searchClear.addEventListener('click', () => { searchInp.value = ''; state.search = ''; syncClear(); paintFilters(); paintBody(); searchInp.focus(); });
+    // SEARCH_DEBOUNCE_V1 — поле type="search" с плейсхолдером «Поиск…», поэтому
+    // h() сам откладывает этот обработчик до паузы в наборе (ui.js): запрос к
+    // серверу уходит один раз на слово, а не на каждую букву.
+    searchInp.addEventListener('input', () => { state.search = searchInp.value; syncClear(); paintFilters(); paintBody(); serverSearch(); });
+    searchClear.addEventListener('click', () => { searchInp.value = ''; state.search = ''; syncClear(); paintFilters(); paintBody(); serverSearch(); searchInp.focus(); });
     const searchBox = h('div', { style: { position: 'relative', flex: '0 0 300px', minWidth: '200px' } },
         h('span', { style: {
             position: 'absolute', left: '13px', top: '50%', transform: 'translateY(-50%)',
@@ -490,13 +499,42 @@ async function paint() {
     const bodyWrap = h('div', { 'data-crm-body': '' });
     root.appendChild(bodyWrap);
     paintBody();
+    // Доска перерисована (сохранение, перетаскивание) при набранном поиске —
+    // ответ сервера мог устареть, спрашиваем заново.
+    if (state.search.trim()) serverSearch();
 
+    // CRM_DEDUP_SEARCH_TASKS_V1 — одно правило с сервером (crm-phone-match.js):
+    // 4+ цифры — номер, сравниваются только цифры по последним девяти; иначе
+    // имя без единого пробела, в том числе имя привязанного пациента. Раньше
+    // сравнивался сырой текст: «+998 91 566 22 78» не находился по
+    // «915662278», а «Буронова  Феруза» (два пробела) — по «буронова феруза».
     function matchesSearch(r) {
-        const q = state.search.trim().toLowerCase();
-        return !q || (r.full_name || '').toLowerCase().includes(q) || (r.phone || '').includes(q);
+        return leadMatchesQuery(r, state.search);
+    }
+    // Что ищется: загруженные заявки ПЛЮС ответ сервера по всем заявкам (доска
+    // грузит последние 800 — остальные раньше не находились никогда). Строка
+    // сервера свежее загруженной, поэтому при совпадении id берётся она.
+    function searchBase() {
+        const q = state.search.trim();
+        if (!q || state.searchQ !== q || !Array.isArray(state.searchRows)) return state.rows;
+        const byId = new Map(state.rows.map((r) => [String(r.id), r]));
+        for (const r of state.searchRows) byId.set(String(r.id), r);
+        return [...byId.values()].sort((a, b) => Number(b.id) - Number(a.id));
+    }
+    async function serverSearch() {
+        const q = state.search.trim();
+        const my = ++searchSeq;
+        if (!q) { state.searchRows = null; state.searchQ = ''; return; }
+        const { data, error } = await supabase.rpc('crm_search', { q });
+        if (my !== searchSeq) return;   // пока ждали, набрали дальше
+        // Сервер не ответил — доска ищет по загруженным, как раньше.
+        state.searchRows = (!error && Array.isArray(data)) ? data : null;
+        state.searchQ = q;
+        paintFilters();
+        paintBody();
     }
     function filtered() {
-        return state.rows.filter(r => matchesSearch(r) && inSource(r) && inPeriod(r));
+        return searchBase().filter(r => matchesSearch(r) && inSource(r) && inPeriod(r));
     }
 
     // CRM_FILTERS_V1 — «Источник» и «Период» над доской.
@@ -513,7 +551,7 @@ async function paint() {
         } }, t);
         const chip = (on, label, onclick) => h('button', { class: 'wzc-cat' + (on ? ' on' : ''), type: 'button', onclick }, label);
 
-        const byPeriod = state.rows.filter(r => matchesSearch(r) && inPeriod(r));
+        const byPeriod = searchBase().filter(r => matchesSearch(r) && inPeriod(r));
         const counts = {};
         for (const r of byPeriod) { const k = r.source || 'other'; counts[k] = (counts[k] || 0) + 1; }
 
