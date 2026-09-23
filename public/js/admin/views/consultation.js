@@ -94,6 +94,9 @@ const state = {
         // текущего месяца по услугам — «N из M».
         tierPos:   new Map(),
         tierProgress: [],
+        // INPATIENT_SHARE_V1 — стационарная доля за период ГОТОВОЙ с сервера
+        // (doctor_inpatient_share): { rows:[{date, fee, …}], count, fee }.
+        inpatient: { rows: [], count: 0, fee: 0 },
         recent:    'services',   // PAY_ONE_SCREEN_V1 — какой из трёх списков открыт в «Последних»
         rootEl:    null,         // корень вкладки — ему подгоняется высота окна
     },
@@ -1630,6 +1633,20 @@ async function loadDashboardData() {
         }
     } catch (e) { console.warn('[dash] tier positions:', e && e.message); }
 
+    // INPATIENT_SHARE_V1 — стационарная доля за период. Считает СЕРВЕР тем же
+    // запросом, что отчёт «Стационар: доля врачей» (оплаченные счета, по дате
+    // счёта, исполнитель — иначе назначивший); кабинет её только показывает и
+    // прибавляет. Вторая копия этого SQL в браузере разошлась бы с ведомостью.
+    state.dash.inpatient = { rows: [], count: 0, fee: 0 };
+    try {
+        const { data, error } = await supabase.rpc('doctor_inpatient_share',
+            { doctor_id: docId, from: dayKey(startIso), to: dayKey(endIso) });
+        if (error) console.warn('[dash] inpatient share:', error.message);
+        else if (data && Array.isArray(data.rows)) {
+            state.dash.inpatient = { rows: data.rows, count: Number(data.count) || 0, fee: Number(data.fee) || 0 };
+        }
+    } catch (e) { console.warn('[dash] inpatient share:', e && e.message); }
+
     // 3. Referrals THIS doctor made (recommended_services where recommended_by = me).
     const { data: refs, error: refErr } = await supabase
         .from('recommended_services')
@@ -1739,11 +1756,22 @@ function computeSalary() {
     // дашборд по нему решает, рисовать ли дневной заработок вообще.
     const _varOut = perServicePayApplies(doc) || doc.salary_type !== 'fix_plus_kpi'
         ? variableComponent : 0;
+    // INPATIENT_SHARE_V1 — стационарная доля идёт в зарплату по ТОМУ ЖЕ правилу,
+    // что доля за услуги: при окладе её нет, при «оклад + KPI» — только если
+    // отмечен показатель по услугам.
+    const inpatient = inpatientPayApplies(doc) ? Number(state.dash.inpatient.fee) || 0 : 0;
     let total = 0;
     if (doc.salary_type === 'fixed')                 total = fixedComponent;
-    else if (doc.salary_type === 'fix_plus_kpi')     total = fixedComponent + _varOut;
-    else                                              total = variableComponent;   // 'percentage' or unset → per-service shares
-    return { fixed: fixedComponent, variable: _varOut, total, kind: doc.salary_type || 'none', revenue };
+    else if (doc.salary_type === 'fix_plus_kpi')     total = fixedComponent + _varOut + inpatient;
+    else                                              total = variableComponent + inpatient;   // 'percentage' or unset → per-service shares
+    return { fixed: fixedComponent, variable: _varOut, inpatient, total, kind: doc.salary_type || 'none', revenue };
+}
+
+// INPATIENT_SHARE_V1 — платится ли врачу поуслужно вообще (то же условие, что у
+// графика ниже): одно место на плитку, график и карточку «Как считается».
+function inpatientPayApplies(doc) {
+    return !!doc && doc.salary_type !== 'fixed'
+        && (doc.salary_type !== 'fix_plus_kpi' || perServicePayApplies(doc));
 }
 
 function computeReferralRewards() {
@@ -1928,7 +1956,7 @@ function earningsSeries() {
     for (let i = days - 1; i >= 0; i--) {
         const d = new Date(end);
         d.setDate(end.getDate() - i);
-        const row = { date: dayKey(d), services: 0, referrals: 0 };
+        const row = { date: dayKey(d), services: 0, inpatient: 0, referrals: 0 };
         list.push(row);
         byKey.set(row.date, row);
     }
@@ -1947,19 +1975,33 @@ function earningsSeries() {
             if (row) row.services += tierShare(s, rateMap, state.dash.tierPos.get(String(s.id)) || null);
         }
     }
+    // INPATIENT_SHARE_V1 — стационарная доля ложится в день СЧЁТА (date строки
+    // сервера — местная дата счёта), тем же правилом, что в computeSalary.
+    let inpatientAny = false;
+    if (inpatientPayApplies(doc)) {
+        for (const r of state.dash.inpatient.rows || []) {
+            const row = byKey.get(String(r.date || ''));
+            if (row) { row.inpatient += Number(r.fee) || 0; if (Number(r.fee) > 0) inpatientAny = true; }
+        }
+    }
     for (const r of state.dash.referrals) {
         const row = byKey.get(dayKey(r.createdAt));
         if (row) row.referrals += commissionFor(r);
     }
-    for (const row of list) { row.services = Math.round(row.services); row.referrals = Math.round(row.referrals); }
-    return { list, capped: span > CHART_DAYS_MAX };
+    for (const row of list) {
+        row.services = Math.round(row.services); row.inpatient = Math.round(row.inpatient); row.referrals = Math.round(row.referrals);
+    }
+    return { list, capped: span > CHART_DAYS_MAX, inpatientAny };
 }
 function earningsChartCard() {
+    const { list, capped, inpatientAny } = earningsSeries();
+    // Третий ряд — только когда за период есть стационарная доля: у врача без
+    // стационара легенда и график остаются прежними, из двух рядов.
     const keys = [
         { key: 'services',  label: tr('Услуги'),      color: 'var(--ok-700)' },
+        ...(inpatientAny ? [{ key: 'inpatient', label: tr('Стационар'), color: 'var(--purple-700, #6d28d9)' }] : []),
         { key: 'referrals', label: tr('Направления'), color: 'var(--info-700)' },
     ];
-    const { list, capped } = earningsSeries();
     return h('div', { class: 'card dash-card' },
         h('div', { class: 'card-header' },
             h('h3', null, Icon('Chart', { size: 16 }), ' ', tr('Начисления по дням')),
@@ -2018,6 +2060,13 @@ function salaryConfigCard(salary) {
         kvRow(tr('Ставки по услугам'), trf('услуг задано: {n}', { n: (Array.isArray(doc.service_rates) ? doc.service_rates.filter(r => Number(r.value != null ? r.value : r.percentage) > 0).length : 0) })),
         kvRow(tr('Выручка за период'), Math.round(salary.revenue).toLocaleString('ru-RU') + ' UZS'),
         kvRow(tr('Начислено (после налога)'), Math.round(salary.variable).toLocaleString('ru-RU') + ' UZS'),
+        // INPATIENT_SHARE_V1 — стационарная часть отдельной строкой: по
+        // оплаченным счетам стационара, исполнителю (иначе назначившему).
+        inpatientPayApplies(doc)
+            ? kvRow(tr('Стационар (оплаченные счета)'), trf('{sum} UZS · услуг: {n}', {
+                sum: Math.round(salary.inpatient || 0).toLocaleString('ru-RU'),
+                n: state.dash.inpatient.count || 0 }))
+            : null,
         kvRow(tr('Показатели KPI'), (doc.kpi_links || []).length
             ? (doc.kpi_links || []).join(', ')
             : '—'),

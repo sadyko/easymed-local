@@ -330,7 +330,8 @@ const asArr = (v) => (Array.isArray(v) ? v : []);
 // later with nothing to show what happened. One shared mapping means the two
 // tables cannot disagree; users.test.js pins the key set against the server so
 // a new key added there cannot go unnoticed here.
-const OPTIONAL_RATE_KEYS = ['price', 'fix', 'fixed'];
+// INPATIENT_SHARE_V1 — inpatient_pct: «Стационар, %» (only service_rates carries it).
+const OPTIONAL_RATE_KEYS = ['price', 'fix', 'fixed', 'inpatient_pct'];
 const loadRates = (list) => asArr(list).map((r) => {
     const out = { service_id: r.service_id, pct: Number(r.pct) || 0, branches: asArr(r.branches) };
     for (const k of OPTIONAL_RATE_KEYS) if (r[k] != null) out[k] = Number(r[k]);
@@ -569,7 +570,7 @@ function openEditor(user, root) {
         } else if (active === 'schedule') {
             body.append(head('Рабочее время', 'Дни и часы работы сотрудника.'), buildHours(emp, markDirty));
         } else if (active === 'services') {
-            body.append(ratesSection(emp, 'service_rates', { icon: sec.icon, title: 'Услуги и ставки', sub: 'Сколько врач получает за оказанную услугу: процент от суммы после скидки либо фиксированная сумма за единицу. Своя цена — если этот врач берёт за услугу не как в каталоге; пусто = цена каталога.', rateLabel: 'Ставка врача', allowFix: true, ownPrice: true }, touch));
+            body.append(ratesSection(emp, 'service_rates', { icon: sec.icon, title: 'Услуги и ставки', sub: 'Сколько врач получает за оказанную услугу: процент от суммы после скидки либо фиксированная сумма за единицу. Своя цена — если этот врач берёт за услугу не как в каталоге; пусто = цена каталога.', rateLabel: 'Ставка врача', allowFix: true, ownPrice: true, inpatient: true }, touch));
         } else if (active === 'referral') {
             // No fixed-sum mode here: referral payouts are computed from the
             // «Реферальное вознаграждение» table by source name (see
@@ -774,11 +775,13 @@ function ratesSection(emp, arrayKey, opts, touch) {
     // RATES_UI_V2 — header and rows share one .rt-row grid (defined once in CSS,
     // so the two cannot drift apart) and the header lives INSIDE the scroller,
     // sticky, so column labels stay visible down a long catalogue.
-    const rowCls = 'rt-row' + (opts.ownPrice ? '' : ' rt-row--noprice');
+    // INPATIENT_SHARE_V1 — «Стационар, %» is one more column of the same grid.
+    const rowCls = 'rt-row' + (opts.ownPrice ? '' : ' rt-row--noprice') + (opts.inpatient ? ' rt-row--inpatient' : '');
     const headRow = () => h('div', { class: rowCls + ' rt-head' },
         h('span'), h('span', null, 'Услуга'), h('span', null, 'Филиалы'),
         h('span', { class: 'r' }, opts.ownPrice ? 'Своя цена' : 'Цена'),
-        h('span', { class: 'r' }, opts.rateLabel || opts.pctLabel));
+        h('span', { class: 'r' }, opts.rateLabel || opts.pctLabel),
+        opts.inpatient ? h('span', { class: 'r' }, 'Стационар, %') : null);
 
     // SOLE_BRANCH_V1 — филиал в клинике один: «Все филиалы» и он же — одно и то
     // же, поэтому новая строка ставки сразу привязана к нему, а не к пустому
@@ -816,6 +819,30 @@ function ratesSection(emp, arrayKey, opts, touch) {
         else arr()[i].price = n;
         touch();
     };
+    // INPATIENT_SHARE_V1 — the doctor's share of this service when it is done
+    // IN THE WARD (paid to the line's performer, else to whoever ordered it,
+    // once the invoice is paid). EMPTY means "no inpatient share": the key is
+    // removed, and the report then pays 0 — it never falls back to the
+    // outpatient percentage. A typed 0 is kept as a real decision.
+    const setInpatient = (sid, raw) => {
+        const i = idxOf(sid); if (i < 0) return;
+        const t = String(raw).trim();
+        const n = Number(t);
+        if (t === '' || !Number.isFinite(n)) delete arr()[i].inpatient_pct;
+        else arr()[i].inpatient_pct = Math.min(100, Math.max(0, n));
+        touch();
+    };
+    function inpatientCell(s, r, on) {
+        const has = on && r && r.inpatient_pct != null;
+        const inp = h('input', {
+            type: 'number', min: '0', max: '100', step: '1', disabled: !on, class: 'rt-num rt-num--inp',
+            value: has ? String(r.inpatient_pct) : '', placeholder: '—',
+            title: !on ? tr('Отметьте услугу, чтобы задать долю')
+                : tr('Доля врача за услугу в стационаре: исполнителю, иначе назначившему, после оплаты счёта. Пусто — не платится.'),
+        });
+        inp.addEventListener('input', () => setInpatient(s.id, inp.value));
+        return h('div', { class: 'rt-field' }, inp, h('span', { class: 'rt-unit' }, '%'));
+    }
 
     const searchInp = h('input', { type: 'text', placeholder: 'Поиск услуг…' });
     searchInp.addEventListener('input', () => { q = searchInp.value; renderRows(); });
@@ -949,6 +976,7 @@ function ratesSection(emp, arrayKey, opts, touch) {
                 h('div', { class: 'rt-rate' },
                     modeSeg,
                     h('div', { class: 'rt-field' }, rateInp, h('span', { class: 'rt-unit' }, fixed ? 'сум' : '%'))),
+                opts.inpatient ? inpatientCell(s, r, on) : null,
             ));
         }
         scroll.scrollTop = keep;
