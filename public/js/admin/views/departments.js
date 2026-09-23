@@ -642,6 +642,13 @@ async function addMember(c) {
 function cardSupply(c) {
     const host = h('div');
     const tools = h('div', { class: 'dept-tools' }, h('span', { class: 'grow' }));
+    // STOCK_LOG_V1 — ВХОД В ЖУРНАЛ ДВИЖЕНИЙ С КАРТОЧКИ ОТДЕЛА. Заведующей он
+    // нужен, а раздел «Закупки» ей не открыт и открывать его незачем: журнал —
+    // отдельный маршрут (#stock-log), и сервер покажет ей свой отдел и своё
+    // (rpc/stock-log.js journalScope). Кнопка стоит у всех, кто открыл карточку:
+    // прав она не даёт, их считает сервер.
+    tools.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: () => refs.onNavigate && refs.onNavigate('stock-log') },
+        Icon('Activity', { size: 13 }), ' ', tr('Журнал движений')));
     if (c.can_request) tools.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openRequisition(c) }, Icon('Doc', { size: 13 }), ' ', tr('Запросить у склада')));
     if (c.can_issue) tools.appendChild(h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openStockIssueModal({
         holder: { type: 'department', id: c.department.id, name: c.department.name },

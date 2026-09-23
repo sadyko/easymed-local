@@ -94,6 +94,7 @@ import { renderPharmacy }    from './admin/views/pharmacy.js?v=ph2';   // PHARMA
 import { renderRequestsInbox } from './admin/views/requests-inbox.js?v=btnright1';
 import { renderPacs }         from './admin/views/pacs.js';
 import { renderInventory }    from './admin/views/inventory.js?v=inv5';   // INVENTORY_UI_V1 — Suppliers/PO/Requisitions/Counts tabs live
+import { renderStockLog }     from './admin/views/stock-log.js?v=stocklog1';   // STOCK_LOG_V1 — журнал движений (кто, кому, партия, срок)
 import { renderSettingsHub }  from './admin/views/settings-hub.js?v=updbadge1';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route
 import { renderPatientDocuments } from './admin/views/patient-documents.js?v=docstoolbar1';   // PATIENT_DOCUMENTS_V1 + DOCS_TOOLBAR_V1
 import { renderDocumentsSettings } from './admin/views/documents-settings.js?v=doc2';   // DOCUMENTS_SETTINGS_V1
@@ -219,6 +220,7 @@ const CRUMBS = {
     queue:         ['Clinical', 'Очередь'],   // QUEUE_BOARD_V1
     labs:          ['Clinical', 'Laboratory'],
     inventory:     ['Clinical', 'Procurement'],   // INVENTORY_UI_V1 — PROCUREMENT_WORKSPACE_V1
+    'stock-log':   ['Clinical', 'Procurement', 'Журнал движений'],   // STOCK_LOG_V1
     'patient-documents': ['Clinical', 'Documents'],   // PATIENT_DOCUMENTS_V1
     procedures:    ['Clinical', 'Procedures'],
     admissions:    ['Clinical', 'Inpatient ward'],   // ADMISSION_ORDER_V1
@@ -622,6 +624,9 @@ const PARENT_OF = {
     // них тоже нужно куда-то определённое.
     'pacs': 'dashboard', 'pharmacy': 'dashboard', 'marketing': 'dashboard',
     'callcenter': 'dashboard', 'procurement': 'inventory',
+    // STOCK_LOG_V1 — журнал движений это часть склада, и «назад» ведёт туда же,
+    // куда вёл чип «Журнал» до того, как экран стал отдельным адресом.
+    'stock-log': 'inventory',
 };
 
 /** Куда ведёт «назад» с этого экрана: id пункта меню или null. */
@@ -1036,6 +1041,10 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'cashier-head':   return void await renderCashierHead(viewRoot, ctx);   // CASHIER_LOCAL_V1 — head-cashier overview
             case 'labs':          return void await renderLaboratory(viewRoot, ctx);
             case 'inventory':     return void await renderInventory(viewRoot, ctx);   // INVENTORY_UI_V1
+            // STOCK_LOG_V1 — журнал движений отдельным адресом: заведующая и
+            // медсестра видят его, не получая весь раздел «Закупки». Что именно
+            // им видно, решает сервер (rpc/stock-log.js), а не этот маршрут.
+            case 'stock-log':     return void await renderStockLog(viewRoot, { withHead: true });
             case 'patient-documents': return void await renderPatientDocuments(viewRoot, ctx);   // PATIENT_DOCUMENTS_V1
             case 'procedures':    return void await renderProcedures(viewRoot, ctx);
             // QUEUE_BOARD_V1 — собственный маршрут доски цел: он и пункт меню
