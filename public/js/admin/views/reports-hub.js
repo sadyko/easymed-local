@@ -47,11 +47,21 @@ export const REPORT_DEFS = [
         title: 'Общая выручка',
         desc:  'Каждая строка счёта: пациент, услуга, цена, скидка и налог, доля врача, филиал, регистратор, реферал и выплата.',
     },
+    // REPORTS_V2 — «Рефералы» по тому, кто направил: внутренние врачи и внешние
+    // партнёры, сводка или детализация по строкам. Вид и фильтр — общими
+    // переключателями конструктора (views / options ниже).
     {
         kind:  'referrals',
         icon:  'Coins',
         title: 'Рефералы',
-        desc:  'Вознаграждение по источникам направлений: услуги, суммы и расчёт % по группам (режим «Общий» или «Вручную»).',
+        desc:  'Кто направил пациентов — свои врачи и внешние партнёры: пациенты, услуги, суммы и вознаграждение (только по оплаченным счетам). Сводка по направившим или детализация по каждой услуге.',
+        views: [
+            { kind: 'referrals',        label: 'Сводка' },
+            { kind: 'referrals_detail', label: 'Детализация' },
+        ],
+        options: [
+            { arg: 'referrer', label: 'Направившие', choices: [['all', 'Все'], ['internal', 'Внутренние'], ['external', 'Внешние']] },
+        ],
     },
     {
         kind:  'invoices_full',
@@ -132,6 +142,22 @@ export const REPORT_DEFS = [
         open:  () => import('./telegram-report.js?v=tgr5').then(m => m.openTelegramReport()),
     },
 ];
+
+// REPORTS_V2 — отчёт может иметь несколько ВИДОВ (сводка / детализация — это
+// разные kind на сервере) и ФИЛЬТРЫ (аргументы run_report). Оба — строками в
+// определении, без своего кода у каждой карточки: конструктор рисует их
+// одинаковыми переключателями, а выгрузка в Excel берёт ровно то, что показано.
+// Экспортируется ради теста: каждый kind каждой карточки обязан быть известен
+// серверу, иначе вид открывается и молча показывает «unknown report kind».
+export function reportKinds(rep) {
+    return Array.isArray(rep.views) && rep.views.length ? rep.views.map(v => v.kind) : [rep.kind];
+}
+// Значения фильтров по умолчанию — первый вариант каждого.
+export function defaultReportOptions(rep) {
+    const out = {};
+    for (const o of rep.options || []) out[o.arg] = o.choices[0][0];
+    return out;
+}
 
 // ---------------------------------------------------------------------------
 // Entry point — the hub page is only the cards.
@@ -348,6 +374,8 @@ async function openReportBuilder(rep) {
         buildings: [], buildingKeys: new Set(),
         result: null,        // {columns, rows} — or the owner charts object
         generating: false,
+        kind: reportKinds(rep)[0],          // REPORTS_V2 — выбранный вид
+        opts: defaultReportOptions(rep),    // REPORTS_V2 — выбранные фильтры
     };
     [st.from, st.to] = presetRange('month');
 
@@ -559,7 +587,7 @@ async function openReportBuilder(rep) {
                 ws['!cols'] = r.columns.map(c => ({ wch: c.length > 10 ? 20 : 13 }));
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, 'Report');
-                XLSX.writeFile(wb, `${rep.kind}_${st.from}_${st.to}.xlsx`);
+                XLSX.writeFile(wb, `${st.kind}_${st.from}_${st.to}.xlsx`);
                 toast('Файл скачан', 'ok');
             } catch (e) {
                 console.error('[reports-hub] download:', e);
@@ -597,7 +625,7 @@ async function openReportBuilder(rep) {
             // владельца: определение отчёта само называет свой RPC и рисовалку.
             const { data, error } = rep.mode === 'charts'
                 ? await supabase.rpc(rep.rpc || 'owner_report', args)
-                : await supabase.rpc('run_report', { kind: rep.kind, ...args });
+                : await supabase.rpc('run_report', { kind: st.kind, ...args, ...st.opts });
             if (error) throw new Error(error.message || String(error));
             st.result = data;
             // Отчёт с графиками МОЖЕТ отдавать и плоские строки (колл-центр отдаёт
@@ -638,6 +666,56 @@ async function openReportBuilder(rep) {
             downloadBtn,
         ),
     ));
+
+    // ---- REPORTS_V2: вид и фильтры ----
+    // Смена вида или фильтра сбрасывает предпросмотр: иначе в Excel ушла бы
+    // таблица прежнего вида под именем нового.
+    const pill = (active, text, onclick) => h('button', {
+        type: 'button',
+        style: {
+            height: '30px', padding: '0 13px', borderRadius: '999px', cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: '12.5px', fontWeight: 600,
+            border: '1px solid ' + (active ? 'var(--primary-600)' : 'var(--ink-200)'),
+            background: active ? 'var(--primary-600)' : 'var(--white, #fff)',
+            color: active ? '#fff' : 'var(--ink-700)',
+        },
+        onclick,
+    }, text);
+    const choiceRow = h('div', {
+        style: {
+            padding: '8px 22px', background: 'var(--white, #fff)',
+            borderBottom: '1px solid var(--ink-100)', flex: '0 0 auto',
+            display: 'flex', flexWrap: 'wrap', gap: '8px 16px', alignItems: 'center',
+        },
+    });
+    function resetResult() {
+        st.result = null;
+        downloadBtn.disabled = true;
+        paintPreviewEmpty();
+    }
+    function paintChoices() {
+        clear(choiceRow);
+        if (Array.isArray(rep.views) && rep.views.length > 1) {
+            choiceRow.appendChild(label('Вид'));
+            choiceRow.appendChild(h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
+                ...rep.views.map(v => pill(st.kind === v.kind, v.label, () => {
+                    if (st.kind === v.kind) return;
+                    st.kind = v.kind; paintChoices(); resetResult();
+                }))));
+        }
+        for (const o of rep.options || []) {
+            choiceRow.appendChild(label(o.label));
+            choiceRow.appendChild(h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
+                ...o.choices.map(([value, text]) => pill(st.opts[o.arg] === value, text, () => {
+                    if (st.opts[o.arg] === value) return;
+                    st.opts[o.arg] = value; paintChoices(); resetResult();
+                }))));
+        }
+    }
+    if ((Array.isArray(rep.views) && rep.views.length > 1) || (rep.options && rep.options.length)) {
+        paintChoices();
+        overlay.appendChild(choiceRow);
+    }
 
     // ---- preview ("mirror") ----
     const previewEl = h('div', { style: { flex: '1 1 auto', overflow: 'auto', padding: '16px 22px' } });

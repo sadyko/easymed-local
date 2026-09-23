@@ -533,7 +533,22 @@ function itemRowsQuery(db, args, ctx) {
            rs.code                            AS referral_code,
            rc.name                            AS referral_category,
            s.type_id                          AS service_type_id,
-           i.visit_id                         AS visit_id
+           i.visit_id                         AS visit_id,
+           -- REPORTS_V2 — для отчётов «Рефералы», «По услугам» и «По врачам»:
+           -- кто пациент (считаются РАЗНЫЕ пациенты), внутренний ли источник
+           -- (категория с флагом is_internal или источник, связанный с
+           -- сотрудником, мигр. 122), группа услуги (одна из пяти, services.type)
+           -- и стационар ли это (счёт госпитализации).
+           i.patient_id                       AS patient_id,
+           rc.is_internal                     AS referral_internal,
+           rs.doctor_id                       AS referral_doctor_id,
+           ii.service_id                      AS service_id,
+           s.type                             AS service_group,
+           s.is_lab                           AS service_is_lab,
+           i.admission_id                     AS admission_id,
+           ${ITEM_TAX_SQL}                    AS tax,
+           ${ITEM_NET_SQL}                    AS net,
+           ${LINE_DOCTOR_ID_SQL}              AS doctor_id
       FROM invoice_items ii
       JOIN invoices i  ON i.id = ii.invoice_id
       JOIN patients pt ON pt.id = i.patient_id
@@ -736,7 +751,7 @@ function totalRevenueReport(db, args, ctx) {
   };
 }
 
-// REFERRAL_CATEGORY_RATES_V1 (мигр. 120) — ставка берётся из КАРТОЧКИ источника
+/// REFERRAL_CATEGORY_RATES_V1 (мигр. 120) — ставка берётся из КАРТОЧКИ источника
 // и его категории, а не из правила вознаграждения, названного так же, как они.
 // Прежний способ искал ставку сравнением строк, и опечатка в названии молча
 // означала 0%: ошибки никто не показывал, партнёру просто не платили.
@@ -744,14 +759,107 @@ function totalRevenueReport(db, args, ctx) {
 // Считается ПО ПОЗИЦИЯМ, а не по итогу корзины: у одного источника теперь может
 // быть своя ставка на каждую группу услуг, и умножить общую сумму на один
 // процент больше нельзя.
-function referralsReport(db, args, ctx) {
+//
+// REPORTS_V2 (владелец, 23.09) — «рефералы: внутренние и внешние, по тому, кто
+// направил». Одна выборка строк (referralLines) на три потребителя: сводку по
+// направившим (kind 'referrals'), детализацию по строкам (kind
+// 'referrals_detail') и кабинет врача (doctor_referral_reward). Три копии
+// правила разошлись бы молча — врач видел бы одну сумму, ведомость другую.
+//
+// БАЗА ВОЗНАГРАЖДЕНИЯ (решение REPORTS_V2): сумма СТРОКИ СЧЁТА после доли скидки
+// счёта — то, что клиника действительно взяла за эту услугу, а не цена
+// каталога, — и только у ОПЛАЧЕННОГО счёта (status 'paid'), ровно как доля
+// врача в «Зарплатах врачей». Неоплаченная строка показывается в суммах, но
+// вознаграждения не приносит: платить партнёру с денег, которых клиника не
+// получила, значит платить дважды при отмене счёта. Период — по дате счёта.
+const REFERRER_SCOPES = ['all', 'internal', 'external'];
+const REFERRER_KIND_RU = { internal: 'Внутренний', external: 'Внешний' };
+
+function referrerScope(args) {
+  const v = args && args.referrer;
+  if (v === undefined || v === null || v === '') return 'all';
+  if (!REFERRER_SCOPES.includes(v)) throw new RpcError('referrer must be one of: all, internal, external.', 400);
+  return v;
+}
+
+// Внутренний — категория с флагом «внутренние врачи» (мигр. 122) ЛИБО источник,
+// связанный с сотрудником: у такого источника внешней стороны нет по смыслу.
+function isInternalReferral(r) {
+  return Number(r.referral_internal) === 1 || r.referral_doctor_id != null;
+}
+
+// Ставка словами для детализации: «10 %» или «фикс 30 000».
+function rateText(rate) {
+  if (!rate) return '0 %';
+  return rate.unit === 'fix' ? 'фикс ' + moneyRu(rate.value) : round2(rate.value) + ' %';
+}
+
+// Есть ли в клинике хоть одна ненулевая ставка вознаграждения. Нет — отчёт
+// говорит об этом словами: иначе столбец нулей читается как «никто никого не
+// направлял» или как поломка (на разработческой базе все 37 источников — 0 %).
+function anyReferralRate(db) {
+  const hasPositive = (raw) => {
+    let list = [];
+    try { list = typeof raw === 'string' && raw.trim() ? JSON.parse(raw) : (Array.isArray(raw) ? raw : []); } catch { list = []; }
+    return Array.isArray(list) && list.some((e) => e && Number(e.value) > 0);
+  };
+  for (const s of db.prepare("SELECT own_percent, own_rates FROM referral_sources WHERE reward_mode = 'own'").all()) {
+    if (Number(s.own_percent) > 0 || hasPositive(s.own_rates)) return true;
+  }
+  for (const c of db.prepare('SELECT standard_percent, rates FROM referral_source_categories').all()) {
+    if (Number(c.standard_percent) > 0 || hasPositive(c.rates)) return true;
+  }
+  return false;
+}
+
+const REFERRAL_ZERO_NOTE = 'У всех источников направлений ставка вознаграждения 0 % — поэтому вознаграждение в этом отчёте 0. Ставки вводятся в «Настройки → Направления» (на категории и на источнике) и в карточке врача, вкладка «Вознаграждение за направления».';
+const REFERRAL_BASE_NOTE = 'Вознаграждение считается от суммы строки счёта после скидки и только по оплаченным счетам; неоплаченные строки входят в «Сумму услуг», но вознаграждения не приносят. Период — по дате счёта.';
+
+/**
+ * Строки счетов, пришедшие по направлению, с посчитанным вознаграждением.
+ * @param {{doctorId?: number}} [opts] — только направления этого сотрудника
+ *   (его источник, referral_sources.doctor_id) — для кабинета врача.
+ */
+function referralLines(db, args, ctx, { doctorId = null } = {}) {
+  const scope = referrerScope(args);
   const sources = new Map(db.prepare(
-    'SELECT id, name, category_id, reward_mode, own_percent, own_rates FROM referral_sources').all()
+    'SELECT id, name, category_id, reward_mode, own_percent, own_rates, doctor_id FROM referral_sources').all()
     .map((r) => [r.id, r]));
   const categories = new Map(db.prepare(
     'SELECT id, name, standard_percent, rates FROM referral_source_categories').all()
     .map((r) => [r.id, r]));
+  const out = [];
+  for (const r of itemRowsQuery(db, args, ctx)) {
+    if (!r.referral) continue;
+    const internal = isInternalReferral(r);
+    if (scope === 'internal' && !internal) continue;
+    if (scope === 'external' && internal) continue;
+    if (doctorId != null && Number(r.referral_doctor_id) !== Number(doctorId)) continue;
+    const src = r.referral_source_id != null ? sources.get(r.referral_source_id) : null;
+    const cat = src && src.category_id != null ? categories.get(src.category_id) : null;
+    const rate = resolveReferralRate({ source: src, category: cat, serviceTypeId: r.service_type_id });
+    const paid = r.status === 'paid';
+    out.push({
+      ...r,
+      internal,
+      category_name: (cat && cat.name) || r.referral_category || '',
+      mode: src && src.reward_mode === 'own' ? 'Своя' : 'По категории',
+      rate,
+      paid,
+      after_discount: r.amount - r.discount,
+      reward: paid ? rewardForLine(rate, { amount: r.amount, discount: r.discount, qty: r.qty }) : 0,
+    });
+  }
+  return out;
+}
 
+function referralNotes(db, lines) {
+  const notes = [REFERRAL_BASE_NOTE];
+  if (lines.length && !anyReferralRate(db)) notes.push(REFERRAL_ZERO_NOTE);
+  return notes;
+}
+
+function referralsReport(db, args, ctx) {
   // Ключ корзины — ЗДАНИЕ и источник. Один и тот же партнёр может приводить
   // пациентов в оба здания, и складывать их в одну строку значило бы стереть
   // ровно то, что этот отчёт теперь обязан показывать.
@@ -759,43 +867,89 @@ function referralsReport(db, args, ctx) {
   // Источник в ключе — ПО ID, а не по имени: ставка принадлежит карточке, и два
   // однофамильца с разными ставками больше не имеют права сложиться в одну
   // строку. Для позиций, чей источник удалён из базы, ключом остаётся имя.
+  const lines = referralLines(db, args, ctx);
   const buckets = new Map();
-  for (const r of itemRowsQuery(db, args, ctx)) {
-    if (!r.referral) continue;
-    const src = r.referral_source_id != null ? sources.get(r.referral_source_id) : null;
-    const cat = src && src.category_id != null ? categories.get(src.category_id) : null;
+  for (const r of lines) {
     const who = r.referral_source_id != null ? 'id:' + r.referral_source_id : 'nm:' + r.referral;
     const key = ctx.keyOf(r.origin) + '\u0000' + who;
     const b = buckets.get(key) || {
       origin: r.origin, source: r.referral, code: r.referral_code || '',
-      category: (cat && cat.name) || r.referral_category || '',
-      mode: src && src.reward_mode === 'own' ? 'Своя' : 'По категории',
-      count: 0, amount: 0, reward: 0,
+      kind: r.internal ? 'internal' : 'external',
+      category: r.category_name, mode: r.mode,
+      patients: new Set(), count: 0, amount: 0, paid: 0, reward: 0,
     };
+    b.patients.add(r.patient_id);
     b.count += 1;
-    b.amount += r.amount - r.discount;
-    b.reward += rewardForLine(
-      resolveReferralRate({ source: src, category: cat, serviceTypeId: r.service_type_id }),
-      { amount: r.amount, discount: r.discount, qty: r.qty });
+    b.amount += r.after_discount;
+    if (r.paid) b.paid += r.after_discount;
+    b.reward += r.reward;
     buckets.set(key, b);
   }
   const list = [...buckets.values()].sort((a, b) => b.amount - a.amount);
   const rows = list.map((b) => {
-    // «Эфф. %» вместо прежнего «% вознаграждения»: одного процента у корзины
-    // больше нет — в ней могут смешаться шесть разных ставок и фиксированные
-    // суммы за услугу. Доля от суммы услуг верна всегда и остаётся тем числом,
-    // которое в этом отчёте ищут глазами.
-    const eff = b.amount ? b.reward / b.amount * 100 : 0;
-    return [ctx.label(b.origin), b.code, b.source, b.category, b.mode, b.count, round2(b.amount),
-            round2(eff), round2(b.reward)];
+    // «Эфф. %» — доля вознаграждения от ОПЛАЧЕННОЙ суммы: одного процента у
+    // корзины нет (в ней смешиваются ставки групп и фиксированные суммы), а
+    // вознаграждение начисляется только с оплаченного.
+    const eff = b.paid ? b.reward / b.paid * 100 : 0;
+    return [ctx.label(b.origin), b.code, b.source, REFERRER_KIND_RU[b.kind], b.category, b.mode,
+            b.patients.size, b.count, round2(b.amount), round2(b.paid), round2(eff), round2(b.reward)];
   });
   return {
-    columns: [BUILDING_COL, 'Номер', 'Источник', 'Категория', 'Режим ставок', 'Услуг', 'Сумма услуг',
-              'Эфф. %', 'Вознаграждение'],
+    columns: [BUILDING_COL, 'Номер', 'Источник', 'Вид', 'Категория', 'Режим ставок', 'Пациентов', 'Услуг',
+              'Сумма услуг', 'Оплачено', 'Эфф. %', 'Вознаграждение'],
     rows,
-    by_building: summariseByBuilding(ctx, list, { total: (b) => b.amount }),
+    by_building: summariseByBuilding(ctx, list, { total: (b) => b.amount, reward: (b) => b.reward }),
     total_label: 'Сумма услуг',
-    notes: [],
+    notes: referralNotes(db, lines),
+  };
+}
+
+// REPORTS_V2 — детализация «Рефералов»: строка на каждую услугу счёта, пришедшую
+// по направлению. Отдельный kind, а не раскрытие строки: конструктор отчётов
+// показывает плоскую таблицу и выгружает её в Excel как есть, и детализация
+// должна выгружаться так же.
+function referralsDetailReport(db, args, ctx) {
+  const lines = referralLines(db, args, ctx);
+  return {
+    columns: [BUILDING_COL, 'Дата', '№ счёта', 'Статус', 'Номер', 'Источник', 'Вид', 'Пациент', 'МРН',
+              'Услуга', 'Кол-во', 'Сумма после скидки', 'Ставка', 'Вознаграждение'],
+    rows: lines.map((r) => [ctx.label(r.origin), r.date, r.invoice || '', INV_STATUS_RU[r.status] || r.status,
+      r.referral_code || '', r.referral, REFERRER_KIND_RU[r.internal ? 'internal' : 'external'],
+      r.patient, r.mrn || '', r.service || '', r.qty, round2(r.after_discount), rateText(r.rate), round2(r.reward)]),
+    by_building: summariseByBuilding(ctx, lines, { total: (r) => r.after_discount, reward: (r) => r.reward }),
+    total_label: 'Сумма после скидки',
+    notes: referralNotes(db, lines),
+  };
+}
+
+// REPORTS_V2 — вознаграждение врача за направления для кабинета: ТЕ ЖЕ строки,
+// что в отчёте (referralLines), отобранные по источнику этого врача. Раньше
+// кабинет считал сам — от ЦЕНЫ КАТАЛОГА рекомендаций, включая ещё не дошедших
+// и отменённых, — и его сумма не сходилась с отчётом ни на одних данных.
+export function doctorReferralReward(db, args, _user) {
+  const doctorId = Number(args && args.doctor_id);
+  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
+  const { from, to } = resolveRange(db, args);
+  const ctx = buildingContext(db);
+  const lines = referralLines(db, { from, to }, ctx, { doctorId });
+  // Разделы кабинета («Вид услуги» / категория) — названиями справочников, как
+  // кабинет называет их у рекомендаций: суммы раскладываются по тем же словам.
+  const typeName = new Map(db.prepare('SELECT id, name FROM service_types').all().map((t) => [t.id, t.name]));
+  const catName = new Map(db.prepare(`SELECT s.id, c.name FROM services s
+                                        JOIN service_categories c ON c.id = s.category_id`).all().map((c) => [c.id, c.name]));
+  const rows = lines.map((r) => ({
+    date: r.date, invoice: r.invoice, status: r.status, paid: r.paid,
+    patient: r.patient, mrn: r.mrn || '', service: r.service || '',
+    service_type_id: r.service_type_id ?? null,
+    service_type: typeName.get(r.service_type_id) || '',
+    service_category: catName.get(r.service_id) || '',
+    qty: r.qty, amount: round2(r.after_discount), rate: rateText(r.rate), reward: round2(r.reward),
+  }));
+  return {
+    from, to, rows,
+    count: rows.length,
+    paid_amount: round2(lines.reduce((n, r) => n + (r.paid ? r.after_discount : 0), 0)),
+    reward: round2(lines.reduce((n, r) => n + r.reward, 0)),
   };
 }
 
@@ -1100,6 +1254,8 @@ const REPORTS_RU = {
   surgery_profit:   surgeryProfitReport,
   doctor_salaries:  doctorSalariesReport,
   inpatient_share:  inpatientShareReport,   // INPATIENT_SHARE_V1
+  // REPORTS_V2 — детализация рефералов (сводка — 'referrals' выше).
+  referrals_detail: referralsDetailReport,
 };
 
 // OWNER_REPORT_V1 — chart data for «Отчёт владельца»: period KPIs, last-12-months
@@ -1212,6 +1368,7 @@ export function ownerReport(db, args, _user) {
 const ITEM_BASED_REPORTS = new Set([
   'total_revenue', 'referrals', 'surgery_profit', 'doctor_salaries',
   'inpatient_share',   // INPATIENT_SHARE_V1 — тоже читает строки счетов
+  'referrals_detail',  // REPORTS_V2 — те же строки счетов, что у сводки
 ]);
 
 export function runReport(db, args, _user) {

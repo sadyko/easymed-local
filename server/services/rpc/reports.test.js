@@ -120,7 +120,9 @@ test('referrals: ставка берётся у категории, а не у �
   const r = runReport(db, { kind:'referrals', from:FROM, to:TO }, user);
   assert.equal(r.rows.length, 1);
   // BUILDING_REPORTS_V1 — первая колонка теперь «Здание».
-  const [building, code, source, category, mode, count, amount, pct, reward] = r.rows[0];
+  // REPORTS_V2 — колонки читаются по ИМЕНИ: в сводку добавились «Вид»,
+  // «Пациентов» и «Оплачено».
+  const [building, code, source, category, mode, count, amount, pct, reward] = refRow(r);
   assert.equal(building, 'Main Branch');    // своё здание подписано своим именем
   // REFERRAL_SOURCE_CODE_V1 — номер сверяем с тем, что в базе, а не с
   // константой: с мигр. 122 каждый врач клиники тоже источник, и кто именно
@@ -134,8 +136,17 @@ test('referrals: ставка берётся у категории, а не у �
   assert.equal(count, 2);
   assert.equal(amount, 1090000);            // 90 000 + 1 000 000
   assert.equal(pct, 10, 'взят процент из referral_rewards (99) вместо ставки категории');
-  assert.equal(reward, 109000);
+  // REPORTS_V2 — вознаграждение только с ОПЛАЧЕННОГО: INV-2 (1 000 000) не
+  // оплачен, поэтому 10 % от 90 000 оплаченной консультации.
+  assert.equal(reward, 9000);
 });
+
+// REPORTS_V2 — строка сводки «Рефералов» в прежнем порядке полей, по именам
+// колонок: [здание, номер, источник, категория, режим, услуг, сумма, эфф. %, вознаграждение].
+function refRow(r, i = 0) {
+  const at = (c) => { const k = r.columns.indexOf(c); assert.ok(k > -1, 'нет колонки «' + c + '»'); return r.rows[i][k]; };
+  return ['Здание', 'Номер', 'Источник', 'Категория', 'Режим ставок', 'Услуг', 'Сумма услуг', 'Эфф. %', 'Вознаграждение'].map(at);
+}
 
 // REFERRAL_CATEGORY_RATES_V1 — ставка на каждую группу услуг, процентом или
 // фиксированной суммой. Ровно то, чего прежний плоский процент не умел.
@@ -154,13 +165,15 @@ test('referrals: процент и фиксированная сумма в од
     JSON.stringify([{ type_id: tCons, unit: 'fix', value: 30000 },
                     { type_id: tSurg, unit: 'pct', value: 20 }]));
 
-  const [, , , , mode, , amount, pct, reward] = runReport(db, { kind:'referrals', from:FROM, to:TO }, user).rows[0];
+  // REPORTS_V2 — операцию оплачиваем: проверяется смесь фикса и процента.
+  db.prepare("UPDATE invoices SET status = 'paid', paid_amount = total_amount WHERE invoice_number = 'INV-2'").run();
+  const [, , , , mode, , amount, pct, reward] = refRow(runReport(db, { kind:'referrals', from:FROM, to:TO }, user));
   assert.equal(mode, 'По категории');
   assert.equal(amount, 1090000);
   // Консультаций ДВЕ по 30 000 фикса = 60 000 (фикс идёт за каждую услугу, а не
   // за строку счёта); операция — 20% от 1 000 000 = 200 000.
   assert.equal(reward, 260000);
-  // Одного процента у корзины больше нет — «Эфф. %» это доля от суммы услуг.
+  // Одного процента у корзины больше нет — «Эфф. %» это доля от оплаченной суммы.
   assert.equal(pct, 23.85);
 });
 
@@ -171,7 +184,8 @@ test('referrals: своя ставка источника перекрывает
     JSON.stringify([{ type_id: tCons, unit: 'pct', value: 50 }]));
   db.prepare("UPDATE referral_sources SET reward_mode = 'own', own_percent = 5 WHERE name = 'Клиника Х'").run();
 
-  const [, , , , mode, , amount, , reward] = runReport(db, { kind:'referrals', from:FROM, to:TO }, user).rows[0];
+  db.prepare("UPDATE invoices SET status = 'paid', paid_amount = total_amount WHERE invoice_number = 'INV-2'").run();
+  const [, , , , mode, , amount, , reward] = refRow(runReport(db, { kind:'referrals', from:FROM, to:TO }, user));
   assert.equal(mode, 'Своя');
   assert.equal(amount, 1090000);
   // 5% со всего. Ставка категории на консультации (50%) не подглядывается —

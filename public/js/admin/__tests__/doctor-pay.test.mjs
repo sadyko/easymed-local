@@ -113,6 +113,9 @@ let TIER_RESPONSE = { from: '', to: '', rows: [] };
 // INPATIENT_SHARE_V1 — ответ doctor_inpatient_share; по умолчанию стационара нет.
 let INPATIENT_RESPONSE = { rows: [], count: 0, fee: 0 };
 let inpatientCalls = [];
+// REPORTS_V2 — ответ doctor_referral_reward; по умолчанию вознаграждения нет.
+let REFERRAL_RESPONSE = { rows: [], count: 0, reward: 0, paid_amount: 0 };
+let referralCalls = [];
 
 function matches(row, f) {
   if (f.or) return true;
@@ -147,6 +150,11 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/rpc/doctor_inpatient_share')) {
     inpatientCalls.push(body);
     return { ok: true, json: async () => ({ data: INPATIENT_RESPONSE }) };
+  }
+  // REPORTS_V2 — вознаграждение за направления приходит готовым с сервера.
+  if (u.startsWith('/api/rpc/doctor_referral_reward')) {
+    referralCalls.push(body);
+    return { ok: true, json: async () => ({ data: REFERRAL_RESPONSE }) };
   }
   if (u.startsWith('/api/rpc/')) return { ok: true, json: async () => ({ data: null }) };
   if (u.startsWith('/api/db')) {
@@ -359,6 +367,38 @@ test('INPATIENT_SHARE_V1: стационарная доля с сервера в
     assert.ok(textOf(tip).includes('30 000') && textOf(tip).includes('40 000'), 'подсказка дня: ' + textOf(tip));
   } finally {
     INPATIENT_RESPONSE = { rows: [], count: 0, fee: 0 };
+    if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
+  }
+});
+
+// REPORTS_V2 — вознаграждение за направления в «Зарплате» кабинета. Сумму
+// считает СЕРВЕР (doctor_referral_reward — те же строки, что отчёт
+// «Рефералы»: строка счёта после скидки, только оплаченные счета); кабинет
+// больше не считает её от цены каталога рекомендаций.
+test('REPORTS_V2: вознаграждение за направления с сервера — в плитке, графике и разборе', async () => {
+  const dayKey = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  REFERRAL_RESPONSE = { rows: [
+    { date: dayKey(now), invoice: 'INV-9', status: 'paid', paid: true, patient: 'Иванов Пётр', service: 'УЗИ',
+      service_type: 'Диагностика', service_category: '', qty: 1, amount: 45000, rate: '10 %', reward: 4500 },
+  ], count: 1, reward: 4500, paid_amount: 45000 };
+  let root = null;
+  try {
+    root = await openPay();
+    referralCalls = [];
+    buttonByText(root, /7 дней/).click();
+    await tick(80);
+    assert.strictEqual(referralCalls.length, 1, 'вознаграждение спрошено одним запросом');
+    assert.strictEqual(String(referralCalls[0].doctor_id), 'u-doc');
+    assert.match(String(referralCalls[0].from), /^\d{4}-\d{2}-\d{2}$/);
+    const tile = byClass(root, 'dash-kpi').find((t) => textOf(t).includes('Вознаграждения за направления'));
+    // 4 500 с сервера, а не 50 000 × ставка от цены каталога рекомендации.
+    assert.ok(textOf(tile).includes('4 500'), 'плитка не взяла сумму сервера: ' + textOf(tile));
+    // Карточка «Разбор направлений» — та, где таблица по видам услуг (кнопка
+    // с тем же названием есть и в шапке графика).
+    const card = byClass(root, 'card').find((c) => textOf(c).includes('Вид услуги'));
+    assert.ok(textOf(card).includes('4 500') && textOf(card).includes('45 000'), 'разбор: ' + textOf(card));
+  } finally {
+    REFERRAL_RESPONSE = { rows: [], count: 0, reward: 0, paid_amount: 0 };
     if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
   }
 });
