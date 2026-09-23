@@ -653,23 +653,48 @@ export function parentViewOf(view) {
     return PARENT_OF[view] || (String(view).startsWith('settings:') ? 'settings' : null);
 }
 
+// BACK_TO_ALLOWED_V1 (2026-09-23) — «НАЗАД» НЕ ВЕДЁТ В «НЕТ ДОСТУПА».
+//
+// Родитель — это ЧАСТЬЮ ЧЕГО экран является, а не то, что человеку открыто, и
+// эти две вещи разошлись, как только у подэкрана появился второй вход.
+// MY_STOCK_V1 дал медсестре и заведующей путь в карточку отдела (#my-department
+// → #departments), а карточка отдела — подэкран НАСТРОЕК (PARENT_OF), и
+// настройки медсестре закрыты: «назад» с законно открытого экрана упиралось в
+// панель отказа. Отказ вместо возврата читается как поломка программы — человек
+// жмёт кнопку снова, потом звонит.
+//
+// Поэтому кнопка ведёт к ПЕРВОМУ, что этому человеку открыто, когда родитель
+// закрыт: firstAllowedView() — тот же домашний экран роли, куда оболочка
+// возвращает с любого закрытого маршрута (ROLE_HOME_V1), так что второго
+// понятия «куда деваться» не заводится. Кнопка при этом НАЗЫВАЕТ настоящую
+// цель: «Вернуться: Пациенты» — иначе она обманывает дважды.
+//
+// Идти некуда (человеку не открыт даже домашний экран) — кнопки нет вовсе:
+// органу управления, который ведёт в отказ, лучше не существовать.
+export function backTargetOf(parent) {
+    if (!parent) return null;
+    if (isRouteAllowed(parent)) return parent;
+    const home = firstAllowedView();
+    return home && isRouteAllowed(home) ? home : null;
+}
+
 function renderBackControl() {
     if (!backEl) return;
     const pane = state.panes.find((p) => p.key === state.activeKey);
     const view = pane ? pane.view : state.view;
-    const parent = parentViewOf(view);
+    const target = backTargetOf(parentViewOf(view));
     // Кнопка не просто прячется — она ОТКЛЮЧАЕТСЯ: спрятанная, но нажимаемая
     // кнопка ловит клавиатуру и уводит с экрана без предупреждения.
-    backEl.hidden = !parent;
-    backEl.disabled = !parent;
-    if (!parent) { backEl.replaceChildren(); return; }
+    backEl.hidden = !target;
+    backEl.disabled = !target;
+    if (!target) { backEl.replaceChildren(); return; }
     backEl.replaceChildren();
     backEl.appendChild(Icon('ChevronLeft', { size: 14 }));
-    const name = t('sidebar.nav.' + parent, sectionTitleFor(parent, null));
+    const name = t('sidebar.nav.' + target, sectionTitleFor(target, null));
     backEl.appendChild(document.createTextNode(' ' + tr(name)));
     backEl.setAttribute('title', tr('Вернуться') + ': ' + tr(name));
     backEl.setAttribute('aria-label', tr('Вернуться') + ': ' + tr(name));
-    backEl.onclick = () => navigate(parent);
+    backEl.onclick = () => navigate(target);
 }
 
 function renderSectionTitle() {
