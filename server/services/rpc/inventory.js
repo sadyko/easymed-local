@@ -15,6 +15,10 @@ import { assertAdmissionAtLeast } from './inpatient-flow.js';
 // HOLDINGS_V1 — what the ward already holds is used before the warehouse.
 // HOLDINGS_FIRST_V1 — и это теперь правило ВСЕХ дверей, а не флаг двух из них.
 import { moveHolding, WAREHOUSE } from './holdings.js';
+// EXPIRY_BALANCE_V1 — «выдача и списание просроченного предупреждают» (владелец
+// 23.09). Предупреждение НЕ отказ: оно едет в ответе рядом с результатом, и
+// считает его сервер — иначе каждая из восьми дверей сказала бы своими словами.
+import { expiryWarnings } from './expiry.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -322,6 +326,11 @@ export function dispenseItem(db, args, user) {
     // Отказ (нигде не хватило) звучит ДО первой записи: транзакция уходит
     // назад нетронутой, как и при прежней проверке остатка.
     const picks = planSources(db, holdingChain(db, user, { visit }), product, quantity);
+    // EXPIRY_BALANCE_V1 — партия смотрится ДО списания: тревожит та, которую
+    // возьмут сейчас. Предупреждение проверяет ТОВАР, а не источник: партии у
+    // подотчёта не записаны, но просроченная коробка стоит в клинике одна и та
+    // же, из чьих бы рук её ни взяли.
+    const warnings = expiryWarnings(db, [productId]);
 
     let visitServiceId = null;
     if (visit) {
@@ -338,7 +347,7 @@ export function dispenseItem(db, args, user) {
     applySources(db, picks, productId, user, visitId != null ? 'visit' : 'manual', visitServiceId);
 
     const fresh = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(productId);
-    return { product_id: productId, item_name: product.name, on_hand: fresh.on_hand, visit_service_id: visitServiceId, sources: picks };
+    return { product_id: productId, item_name: product.name, on_hand: fresh.on_hand, visit_service_id: visitServiceId, sources: picks, warnings };
   });
 
   return run();
@@ -458,6 +467,8 @@ export function dispenseAdmissionItemCore(db, args, user) {
     // HOLDINGS_FIRST_V1 — свой подотчёт → свой кабинет → отдел палаты → свой
     // отдел → склад. Не хватило нигде — отказ со словами, до первой записи.
     const picks = planSources(db, holdingChain(db, user, { admission: adm }), product, quantity);
+    // EXPIRY_BALANCE_V1 — та же тревога у койки, что и в амбулатории.
+    const warnings = expiryWarnings(db, [productId]);
 
     // Строка счёта — БЕЗ ИЗМЕНЕНИЙ: цена из каталога, billable как прислали.
     const unitPrice = product.sale_price;
@@ -470,7 +481,7 @@ export function dispenseAdmissionItemCore(db, args, user) {
     applySources(db, picks, productId, user, 'admission', info.lastInsertRowid);
 
     const fresh = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(productId);
-    return { line_id: info.lastInsertRowid, item_name: product.name, on_hand: fresh.on_hand, sources: picks };
+    return { line_id: info.lastInsertRowid, item_name: product.name, on_hand: fresh.on_hand, sources: picks, warnings };
   });
   return run();
 }

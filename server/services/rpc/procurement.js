@@ -12,6 +12,10 @@ import { hasAnyRole } from '../roles.js';
 import { resolveHolder, moveHolding } from './holdings.js';   // HOLDINGS_V1
 import { requireGrant } from '../grants.js';                  // GRANTS_V1 — выдача со склада по матрице прав
 import { logDepartmentEvent } from './departments.js';       // DEPARTMENTS_V1 — журнал отдела
+// EXPIRY_BALANCE_V1 — «выдача и списание просроченного предупреждают» (владелец
+// 23.09). Предупреждение считается СЕРВЕРОМ и едет в ответе: экранов выдачи
+// два (склад и карточка отдела), а слов о просрочке должно быть одно.
+import { expiryWarnings } from './expiry.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -470,6 +474,12 @@ export function issueStockLines(db, args, user) {
   const note = extraNote ? `${clean(recipient)} — ${clean(extraNote)}` : clean(recipient);
 
   const run = db.transaction(() => {
+    // EXPIRY_BALANCE_V1 — партия смотрится ДО списания: предупредить надо о той,
+    // которую со склада сейчас и возьмут, а не о той, что осталась после.
+    // Предупреждение НИКОГДА не отменяет выдачу — владелец сказал
+    // предупреждать, а не запрещать.
+    const warnings = expiryWarnings(db, lines.map((l) => l.productId));
+
     const getProduct = db.prepare('SELECT * FROM products WHERE id = ?');
     const updateProduct = db.prepare(`
       UPDATE products
@@ -513,7 +523,9 @@ export function issueStockLines(db, args, user) {
         note: extraNote || null,
       });
     }
-    const result = { issued };
+    // Предупреждение лежит В КВИТАНЦИИ: повторная отправка той же формы обязана
+    // вернуть тот же ответ целиком, а не «ничего страшного» вместо просрочки.
+    const result = { issued, warnings };
     if (idemKey) db.prepare('INSERT INTO stock_issue_receipts (key, result) VALUES (?, ?)').run(idemKey, JSON.stringify(result));
     return result;
   });

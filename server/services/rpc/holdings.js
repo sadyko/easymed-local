@@ -16,6 +16,9 @@
 import { hasAnyRole } from '../roles.js';
 import { assertAdmissionAtLeast } from './inpatient-flow.js';
 import { today, localDate } from '../domain/day.js';
+// EXPIRY_BALANCE_V1 — «выдача и списание просроченного предупреждают» (владелец
+// 23.09). Дверь медсестры отвечает теми же словами, что склад и койка.
+import { expiryWarnings } from './expiry.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -165,6 +168,10 @@ export function dispenseFromHolding(db, args, user) {
     const cf = consumptionFactor(product);
     const baseQty = round2(qtyUnits / cf);
     if (!(baseQty > 0)) throw new RpcError('Количество слишком мало.', 400);
+    // EXPIRY_BALANCE_V1 — партия смотрится ДО списания. Тревожит ТОВАР, а не
+    // источник: у подотчёта партии не записаны, но просроченная коробка в
+    // клинике одна, из чьих бы рук её ни взяли.
+    const warnings = expiryWarnings(db, [productId]);
     if (fromWarehouse) {
       if (!product.active) throw new RpcError('Товар отключён в каталоге.', 400);
       if (product.on_hand + 1e-9 < baseQty) {
@@ -210,7 +217,7 @@ export function dispenseFromHolding(db, args, user) {
     } else {
       leftBase = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(productId).on_hand;
     }
-    return { line_id: lineId, item_name: product.name, unit_price: unitPrice, total, left_units: round2(leftBase * cf), source: holder ? holder.type : WAREHOUSE };
+    return { line_id: lineId, item_name: product.name, unit_price: unitPrice, total, left_units: round2(leftBase * cf), source: holder ? holder.type : WAREHOUSE, warnings };
   });
   return run();
 }

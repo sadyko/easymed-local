@@ -7,6 +7,7 @@ import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOAR
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel, createRequisition } from './procurement.js';
 import { departmentList, departmentCard, departmentForm, departmentHeadSet, departmentMemberSet, departmentPlaceSet, departmentStaffOptions, departmentPlaceOptions } from './departments.js';   // DEPARTMENTS_V1
 import { stockMovementsList } from './stock-log.js';   // STOCK_LOG_V1
+import { expiryLots } from './expiry.js';   // EXPIRY_BALANCE_V1 — остатки партиями, ближайший срок первым
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit,
@@ -125,6 +126,11 @@ export const RPC = {
   // видимости («своё / свой отдел / вся клиника») считает обработчик, а не
   // экран: чужие строки до браузера не доезжают.
   stock_movements_list:          (db, args, user) => stockMovementsList(db, args, user),
+  // EXPIRY_BALANCE_V1 — «Сроки годности»: остаток склада, РАЗЛОЖЕННЫЙ по партиям
+  // приходов, ближайший срок первым. Количество по партиям нигде не хранится —
+  // расход партию не пишет; это расчёт, и экран говорит об этом словами.
+  // Область видимости — та же, что у журнала выше.
+  stock_expiry_lots:             (db, args, user) => expiryLots(db, args, user),
   // DEPARTMENTS_V1 — отделы: список, карточка, формирование, мелкие правки, справочники для шагов.
   department_list:               (db, args, user) => departmentList(db, args, user),
   department_card:               (db, args, user) => departmentCard(db, args, user),
