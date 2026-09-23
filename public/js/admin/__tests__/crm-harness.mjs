@@ -70,7 +70,7 @@ export const button = (root, re) => walk(root).find((n) => n.tagName === 'BUTTON
 
 // --- поддельный сервер -----------------------------------------------------
 // S — изменяемое состояние стенда; CALLS — журнал /api/db, RPC — журнал RPC.
-export const S = { leads: [], dups: [], search: [], tasks: [], staff: [], nextTaskId: 100, inserted: null };
+export const S = { leads: [], dups: [], search: [], tasks: [], staff: [], nextTaskId: 100, inserted: null, failInsertOnce: false };
 export const CALLS = [];
 export const RPC = [];
 const jsonOk = (data, count) => ({ ok: true, json: async () => ({ data, count }) });
@@ -108,6 +108,7 @@ globalThis.fetch = async (url, opts) => {
       return jsonOk(S.leads);
     }
     if (body.table === 'crm_requests' && body.op === 'insert') {
+      if (S.failInsertOnce) { S.failInsertOnce = false; return { ok: false, json: async () => ({ error: { message: 'сбой вставки' } }) }; }
       S.inserted = { id: 900, ...body.values };
       return jsonOk(S.inserted);
     }

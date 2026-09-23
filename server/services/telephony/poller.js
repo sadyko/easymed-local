@@ -170,6 +170,8 @@ export function recordCall(db, d, source, provider = null) {
         // CRM_DEDUP_SEARCH_TASKS_V1 — исходящий звонок заводит карточку только
         // номеру, у которого карточки нет вообще; входящий — как раньше.
         call_type: row.call_type,
+        // …а звонок между добавочными (onlinePBX 'local') — никакой.
+        internal: !!(d && d.internal),
       });
     } catch (e) {
       console.warn('[telephony] lead not created for call:', e && e.message);

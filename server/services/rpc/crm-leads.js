@@ -7,12 +7,12 @@
 //
 // ЧУЖИЕ ЗАЯВКИ. Правило CRM_OWNERSHIP_V1 (schema-registry: crm_requests.scope)
 // действует и здесь: оператор видит свои и ничьи, администратор — все. Для
-// проверки дубля чужая карточка всё-таки называется — иначе оператор завёл бы
-// вторую, не зная о первой, — но без имени и номера и без кнопки «Открыть».
+// проверки дубля о чужих карточках сообщается только сам факт — «есть у другого
+// оператора», — без имени, номера, стадии, хозяина и кнопки «Открыть».
 
 import { leadsForPhone } from '../crm/lead-from-call.js';
 import { canRead, rowScope, readableColumns } from '../../db/schema-registry.js';
-import { digitsOf, nameKey, leadMatchesQuery, MIN_PHONE_DIGITS }
+import { digitsOf, nameKey, leadMatchesQuery, phoneKey, isWholeUzPhone, uzLocalDigits, phoneLikePattern, MIN_PHONE_DIGITS }
   from '../../../public/js/admin/views/crm-phone-match.js';
 import { effectiveRoles } from '../roles.js';
 
@@ -38,7 +38,9 @@ export function leadVisibleTo(user, assignedTo) {
 
 /**
  * crm_leads_by_phone { phone } → [{ id, full_name, phone, status, stage_label,
- *   stage_kind, created_at, assigned_to, assigned_name, can_open }], новые сверху.
+ *   stage_kind, created_at, assigned_to, assigned_name, can_open: true }], новые
+ *   сверху, и в конце — { can_open: false, foreign: true }, если у номера есть
+ *   карточки, которых вызывающему видеть нельзя.
  *
  * Спрашивает окно новой заявки ПЕРЕД вставкой: «у этого номера уже есть
  * карточка?». Все стадии — открытые и закрытые: владельцу нужно предупреждение
@@ -51,21 +53,29 @@ export function crmLeadsByPhone(db, args, user) {
   const names = new Map(db.prepare(
     `SELECT id, full_name FROM users WHERE id IN (${rows.map(() => '?').join(',')})`)
     .all(...rows.map((r) => r.assigned_to ?? 0)).map((u) => [u.id, u.full_name]));
-  return rows.slice(0, 20).map((r) => {
-    const can = leadVisibleTo(user, r.assigned_to);
-    return {
+  // Ревью W2-M3: о чужих карточках — ТОЛЬКО факт «есть у другого оператора»,
+  // одной строкой на все: ни хозяина, ни стадии, ни даты. Этого хватает, чтобы
+  // не завести дубль, и не больше, чем разрешает CRM_OWNERSHIP_V1.
+  const out = [];
+  let foreign = false;
+  for (const r of rows) {
+    if (!leadVisibleTo(user, r.assigned_to)) { foreign = true; continue; }
+    if (out.length >= 20) continue;
+    out.push({
       id: r.id,
-      full_name: can ? r.full_name : '',
-      phone: can ? r.phone : '',
+      full_name: r.full_name,
+      phone: r.phone,
       status: r.status,
       stage_label: r.stage_label || r.status,
       stage_kind: r.stage_kind || 'open',
       created_at: r.created_at,
       assigned_to: r.assigned_to ?? null,
       assigned_name: r.assigned_to != null ? (names.get(r.assigned_to) || '') : '',
-      can_open: can,
-    };
-  });
+      can_open: true,
+    });
+  }
+  if (foreign) out.push({ can_open: false, foreign: true });
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,10 +100,18 @@ export function crmSearch(db, args, user) {
   if (digitsOf(q).length < MIN_PHONE_DIGITS && nameKey(q).length < 2) return [];
   const limit = Math.max(1, Math.min(SEARCH_LIMIT, Number(args && args.limit) || SEARCH_LIMIT));
 
+  // Ревью W2-M6 — в запросе 4+ цифры: это номер, и кандидатов отбирает LIKE
+  // (цифры по порядку, любые разделители между). Шаблон — те цифры, которые
+  // обязаны стоять в номере при любом совпадении leadMatchesQuery: ключ целого
+  // узбекского номера или местная часть набранного куска.
+  const d = digitsOf(q);
+  const byPhone = d.length >= MIN_PHONE_DIGITS;
+  const pattern = byPhone ? phoneLikePattern(isWholeUzPhone(d) ? phoneKey(d) : uzLocalDigits(d)) : null;
   const cand = db.prepare(`
     SELECT r.id, r.full_name, r.phone, r.assigned_to, p.full_name AS patient_name
       FROM crm_requests r LEFT JOIN patients p ON p.id = r.patient_id
-     ORDER BY r.id DESC`).all();
+     ${byPhone ? 'WHERE r.phone LIKE ?' : ''}
+     ORDER BY r.id DESC`).all(...(byPhone ? [pattern] : []));
   const ids = [];
   for (const r of cand) {
     if (!leadVisibleTo(user, r.assigned_to)) continue;

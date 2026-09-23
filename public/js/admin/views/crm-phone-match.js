@@ -31,19 +31,24 @@ export function uzLocalDigits(digits) {
 }
 
 // CRM_DEDUP_SEARCH_TASKS_V1 (2026-09-23) — ОДИН КЛЮЧ НОМЕРА на обе стороны
-// сравнения: последние девять цифр (местная часть узбекского номера).
+// сравнения.
 //
 // В заявках номер записан четырьмя способами сразу — «942846494», «+998…»,
-// «998…» и «+998 91 566 22 78» (живая база, 2026-09-23). Сравнение «строка
-// содержит строку» не находило «+998 91 566 22 78» по «915662278», а дубли
-// считались по-разному в трёх местах. Правило одно: номер из девяти и больше
-// цифр — это его последние девять; короче — местная часть без кода и нуля
-// (uzLocalDigits), чтобы короткий служебный номер тоже с чем-то сравнивался.
+// «998…» и «+998 91 566 22 78» (живая база, 2026-09-23). Узбекский номер
+// целиком — это 9 цифр, 10 с ведущим 0 или 12 с кодом 998; у всех трёх ключ —
+// местные девять цифр. ВСЁ ОСТАЛЬНОЕ сравнивается полной строкой цифр: ревью
+// показало, что «последние девять у всех» склеивает +7 991 234 56 78 с
+// +998 91 234 56 78, а два номера, вставленные в одно поле, — с последним из них.
 export const PHONE_KEY_DIGITS = 9;
+export function isWholeUzPhone(digits) {
+    const d = String(digits);
+    return d.length === 9
+        || (d.length === 10 && d.startsWith('0'))
+        || (d.length === 12 && d.startsWith('998'));
+}
 export function phoneKey(raw) {
     const d = digitsOf(raw);
-    if (d.length >= PHONE_KEY_DIGITS) return d.slice(-PHONE_KEY_DIGITS);
-    return uzLocalDigits(d);
+    return isWholeUzPhone(d) ? d.slice(-PHONE_KEY_DIGITS) : d;
 }
 
 // CRM_DEDUP_SEARCH_TASKS_V1 — ИМЯ ДЛЯ ПОИСКА: строчными, «ё» как «е», БЕЗ
@@ -71,10 +76,18 @@ export function leadMatchesQuery(row, query) {
     const r = row || {};
     const d = digitsOf(raw);
     if (d.length >= MIN_PHONE_DIGITS) {
-        const qk = d.length >= PHONE_KEY_DIGITS ? d.slice(-PHONE_KEY_DIGITS) : uzLocalDigits(d);
         const stored = digitsOf(r.phone);
         if (!stored) return false;
-        return phoneKey(stored).includes(qk) || stored.includes(d);
+        // Набран целый номер — ищется ИМЕННО он: ключи равны, или в поле лежит
+        // его полная форма 998… (два номера в одном поле). Хвост чужого номера
+        // (+7 991 234 56 78 под +998 91 234 56 78) совпадением не считается.
+        if (isWholeUzPhone(d)) {
+            const key = phoneKey(d);
+            return phoneKey(stored) === key || stored.includes('998' + key);
+        }
+        if (d.length >= 11) return phoneKey(stored) === d || stored.includes(d);
+        // Часть номера — подряд идущие цифры, без кода страны и ведущего нуля.
+        return stored.includes(uzLocalDigits(d)) || stored.includes(d);
     }
     const nk = nameKey(raw);
     if (!nk) return true;

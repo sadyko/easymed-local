@@ -7,7 +7,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openVisitWizard } from './visit-wizard.js?v=tier2';   // CRM_V4 — конверсия сразу в реальный заказ услуги
-import { digitsOf, phoneLikePattern, filterPhoneMatches, uzLocalDigits, MIN_PHONE_DIGITS, leadMatchesQuery } from './crm-phone-match.js';
+import { digitsOf, phoneLikePattern, filterPhoneMatches, uzLocalDigits, MIN_PHONE_DIGITS, leadMatchesQuery, phoneKey } from './crm-phone-match.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
 // CRM_CARD_V2 — номер на карточке группируется ТЕМ ЖЕ правилом, что и во всех
 // полях ввода телефона (PHONE_INPUT_V1). Второй способ печатать номер означал
@@ -369,7 +369,10 @@ function uid() {
 //
 // Отвечает промисом: { open: id } — открыть эту; 'create' — создать всё равно;
 // null — передумал (окно новой заявки остаётся открытым, введённое цело).
-export function askDuplicateLead(rows) {
+// Ревью W2-M3: о чужих карточках сервер присылает одну строку { foreign: true }
+// — она называется только фактом, без имени, стадии, хозяина и даты.
+// opts.edit — окно спрашивает при ПРАВКЕ номера: кнопка «Сохранить всё равно».
+export function askDuplicateLead(rows, opts = {}) {
     return new Promise((resolve) => {
         const ov = h('div', { class: 'modal', 'data-crm-dup': '' });
         let done = false;
@@ -377,6 +380,15 @@ export function askDuplicateLead(rows) {
         const fmtD = (iso) => (iso || '').slice(0, 10).split('-').reverse().join('.');
         const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
         for (const r of rows) {
+            if (!r.can_open) {
+                list.appendChild(h('div', { 'data-dup-foreign': '', class: 'row', style: {
+                    gap: '10px', alignItems: 'center',
+                    border: '1px solid var(--ink-100)', borderRadius: '10px', padding: '9px 11px',
+                } },
+                    Icon('Lock', { size: 14 }),
+                    h('span', { style: { fontSize: '13.5px', fontWeight: 600 } }, 'Есть карточка у другого оператора')));
+                continue;
+            }
             const kind = r.stage_kind === 'won' ? 'ok' : (r.stage_kind === 'lost' ? '' : 'info');
             list.appendChild(h('div', { 'data-dup-row': String(r.id), class: 'row', style: {
                 gap: '10px', alignItems: 'center', flexWrap: 'wrap',
@@ -384,14 +396,14 @@ export function askDuplicateLead(rows) {
             } },
                 h('div', { style: { flex: '1 1 200px', minWidth: 0 } },
                     h('div', { style: { fontSize: '13.5px', fontWeight: 600 } },
-                        r.can_open ? (r.full_name || formatPhone(r.phone) || r.phone || 'Без имени') : 'Карточка другого оператора'),
+                        r.full_name || formatPhone(r.phone) || r.phone || 'Без имени'),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                         trf('Заявка от {d}', { d: fmtD(r.created_at) }),
                         r.assigned_name ? ' · ' : null,
                         r.assigned_name ? trf('Ведёт {name}', { name: r.assigned_name }) : null)),
                 Tag(tr(r.stage_label || r.status || ''), { kind, dot: true }),
-                r.can_open ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-dup-open': String(r.id),
-                    onclick: () => finish({ open: r.id }) }, Icon('ArrowRight', { size: 13 }), ' ', 'Открыть') : null));
+                h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-dup-open': String(r.id),
+                    onclick: () => finish({ open: r.id }) }, Icon('ArrowRight', { size: 13 }), ' ', 'Открыть')));
         }
         ov.appendChild(h('div', { class: 'modal-backdrop', onclick: () => finish(null) }));
         ov.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '560px', maxWidth: 'calc(100vw - 32px)' } },
@@ -406,7 +418,7 @@ export function askDuplicateLead(rows) {
                 h('button', { class: 'btn', type: 'button', onclick: () => finish(null) }, 'Отмена'),
                 h('span', { class: 'grow' }),
                 h('button', { class: 'btn btn-primary', type: 'button', 'data-dup-create': '', onclick: () => finish('create') },
-                    Icon('Plus', { size: 14 }), ' ', 'Создать всё равно'))));
+                    Icon(opts.edit ? 'Check' : 'Plus', { size: 14 }), ' ', opts.edit ? 'Сохранить всё равно' : 'Создать всё равно'))));
         document.body.appendChild(ov);
     });
 }
@@ -1717,7 +1729,35 @@ async function paint() {
         // «Оформить услугу», которой нужна уже существующая строка заявки
         // (у новой заявки нет id, а конверсия работает по нему).
         // Возвращает сохранённую строку либо null, если форма не прошла проверку.
-        let dupAcked = false;   // CRM_DEDUP_SEARCH_TASKS_V1 — «Создать всё равно» уже нажато
+        // CRM_DEDUP_SEARCH_TASKS_V1 — «Создать/Сохранить всё равно» относится к
+        // ОДНОМУ номеру (ревью W2-M5): запоминается его ключ, а не «да вообще».
+        // Номер поменяли — спрашиваем заново.
+        let dupAckKey = null;
+        // true — сохранять; false — человек выбрал «Отмена» или «Открыть».
+        async function confirmNoDuplicate(phone, selfId) {
+            const key = phoneKey(phone);
+            if (!key || key === dupAckKey) return true;
+            const { data: dups, error: dupErr } = await supabase.rpc('crm_leads_by_phone', { phone });
+            // Проверка не ответила — не повод терять заявку: сохраняем как
+            // раньше, без предупреждения.
+            if (dupErr || !Array.isArray(dups)) return true;
+            // Сама редактируемая заявка себе не дубль.
+            const others = dups.filter((d) => !(selfId != null && d.can_open && String(d.id) === String(selfId)));
+            if (!others.length) return true;
+            const choice = await askDuplicateLead(others, { edit: selfId != null });
+            if (!choice) return false;
+            if (choice.open != null) {
+                const { data: existing, error: exErr } = await supabase.from('crm_requests')
+                    .select('*, patients(id, full_name, mrn), users(full_name), services(id, name, price)')
+                    .eq('id', choice.open).maybeSingle();
+                if (exErr || !existing) { toast(exErr ? exErr.message : 'Заявка не найдена.', 'fail'); return false; }
+                close();
+                requestModal(existing);
+                return false;
+            }
+            dupAckKey = key;
+            return true;
+        }
         async function persist() {
             const name = linkedPatient ? linkedPatient.full_name : nameInp.value.trim();
             if (!name) { toast('Укажите имя.', 'fail'); return null; }
@@ -1749,6 +1789,9 @@ async function paint() {
             const notBookedYet = bookedAt > 0 ? STAGE_KEYS.open.slice(0, bookedAt) : [];
             if (isEdit && bookedDate && notBookedYet.includes(r.status) && hasStage('scheduled')) payload.status = bookedStage;
             if (isEdit) {
+                // Ревью W2-M5 — номер заявки сменили на номер, у которого уже
+                // есть другая карточка: то же предупреждение, что при создании.
+                if (phone && phoneKey(phone) !== phoneKey(r.phone || '') && !(await confirmNoDuplicate(phone, r.id))) return null;
                 const { error } = await supabase.from('crm_requests').update(payload).eq('id', r.id);
                 if (error) { toast(error.message, 'fail'); return null; }
                 Object.assign(r, payload);
@@ -1760,28 +1803,10 @@ async function paint() {
                 return r;
             }
             // CRM_DEDUP_SEARCH_TASKS_V1 — у номера уже есть карточка? Спрашиваем
-            // сервер (там одно правило сравнения номера) и даём выбрать.
-            // Ответ «создать всё равно» запоминается: «Сохранить и записать»
-            // зовёт persist() повторно, и спрашивать дважды незачем.
-            if (!dupAcked) {
-                const { data: dups, error: dupErr } = await supabase.rpc('crm_leads_by_phone', { phone });
-                // Проверка не ответила — не повод терять заявку: сохраняем как
-                // раньше, без предупреждения.
-                if (!dupErr && Array.isArray(dups) && dups.length) {
-                    const choice = await askDuplicateLead(dups);
-                    if (!choice) return null;
-                    if (choice.open != null) {
-                        const { data: existing, error: exErr } = await supabase.from('crm_requests')
-                            .select('*, patients(id, full_name, mrn), users(full_name), services(id, name, price)')
-                            .eq('id', choice.open).maybeSingle();
-                        if (exErr || !existing) { toast(exErr ? exErr.message : 'Заявка не найдена.', 'fail'); return null; }
-                        close();
-                        requestModal(existing);
-                        return null;
-                    }
-                    dupAcked = true;
-                }
-            }
+            // сервер (там одно правило сравнения номера) и даём выбрать. Ответ
+            // «создать всё равно» запоминается для ЭТОГО номера: «Сохранить и
+            // записать» зовёт persist() повторно, и спрашивать дважды незачем.
+            if (!(await confirmNoDuplicate(phone, null))) return null;
             const { data, error } = await supabase.from('crm_requests')
                 .insert({ ...payload, status: bookedDate ? stageKey('scheduled') : stageKey('in_process'), ...(uid() != null ? { created_by: uid() } : {}) })
                 .select().single();

@@ -14,7 +14,7 @@ import { readSettingsRow } from '../telephony/settings.js';
 // Never a second one: two implementations of "the same number" is how the
 // de-duplication below would start passing a number the operator considers a
 // duplicate — the failure telegram/documents.js documents for the bot.
-import { phoneKey, phoneLikePattern, MIN_PHONE_DIGITS }
+import { phoneKey, phoneLikePattern, digitsOf, MIN_PHONE_DIGITS }
   from '../../../public/js/admin/views/crm-phone-match.js';
 
 // The source key every call-born lead carries. config.js refuses to delete it
@@ -77,12 +77,14 @@ export function anyLeadForPhone(db, rawPhone) {
 // 0). «Мои Звонки» в журнал звонков не пишут вовсе (их история зовётся только
 // для проверки подключения), поэтому и карточек из них не бывает.
 export const OUTGOING_CALL_TYPE = 1;
+// Короче — добавочный или служебный номер, не телефон пациента.
+export const MIN_LEAD_DIGITS = 7;
 
 /**
  * Files a lead for a call that has just been recorded.
  *
  * @param {Database} db
- * @param {{id:number, disposition?:string, external_number?:string, patient_id?:number|null, call_type?:number}} call
+ * @param {{id:number, disposition?:string, external_number?:string, patient_id?:number|null, call_type?:number, internal?:boolean}} call
  *        the `calls` row as it was just written.
  * @returns {number|null} the new crm_requests id, or null when nothing was created.
  */
@@ -116,6 +118,12 @@ export function leadFromCall(db, call) {
   // No number = nothing to call back and nothing to de-duplicate on. An
   // internal-only call (extension to extension) lands here.
   if (!phone) return null;
+  // CRM_DEDUP_SEARCH_TASKS_V1 (ревью W2-M1) — звонок между добавочными (у
+  // onlinePBX accountcode 'local', normalizePbxCall ставит internal) и номер
+  // короче семи цифр — это не пациент: в базе клиники так родилась карточка
+  // «103». Короткий номер ещё и не сравнивается ни с чем как дубль.
+  if (call.internal) return null;
+  if (digitsOf(phone).length < MIN_LEAD_DIGITS) return null;
 
   // The chatty-patient guard. Somebody who calls four times before lunch is
   // ONE conversation the operator is having, not four cards to work through.

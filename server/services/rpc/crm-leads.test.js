@@ -46,7 +46,7 @@ test('crm_leads_by_phone: nothing for an empty or too-short number, and for a ne
   assert.equal(rpc(db, { phone: '94 284 64 94' }, admin).length, 1);
 });
 
-test('crm_leads_by_phone: another operator\'s card is NAMED but not shown or openable', () => {
+test('crm_leads_by_phone: another operator\'s card is only «есть у другого оператора» — no name, stage, owner, date', () => {
   const { db, op1, op2 } = seed();
   ins(db, { full_name: 'Каримова', phone: '942846494', assigned_to: op2.id });
   ins(db, { full_name: 'Ничья', phone: '942846494', assigned_to: null });
@@ -56,9 +56,12 @@ test('crm_leads_by_phone: another operator\'s card is NAMED but not shown or ope
   assert.equal(rows.length, 3);
   assert.equal(byName['Моя'].can_open, true);
   assert.equal(byName['Ничья'].can_open, true);
-  assert.equal(byName['чужая'].full_name, '');
-  assert.equal(byName['чужая'].phone, '');
-  assert.equal(byName['чужая'].assigned_name, 'Оператор Зарина');
+  assert.equal(byName['Моя'].assigned_name, 'Оператор Лола');
+  // Ревью W2-M3: о чужой карточке — только сам факт.
+  assert.deepEqual(byName['чужая'], { can_open: false, foreign: true });
+  // две чужие карточки — одна строка «есть у другого оператора»
+  ins(db, { full_name: 'Ещё чужая', phone: '942846494', assigned_to: op2.id });
+  assert.equal(getRpc('crm_leads_by_phone')(db, { phone: '942846494' }, op1).filter((r) => r.foreign).length, 1);
 });
 
 test('crm_leads_by_phone: only board readers ask, and it is a pure read', () => {
@@ -112,6 +115,22 @@ test('crm_search: находит заявку старше 800 последни�
   assert.ok('patients' in rows[0] && 'users' in rows[0] && 'services' in rows[0], 'нет вложений доски');
   // и не больше 200 на широкий запрос
   assert.equal(getRpc('crm_search')(db, { q: 'лид' }, admin).length, 200);
+});
+
+test('crm_search: запрос с цифрами идёт через LIKE по номеру, а не перебором всей таблицы (ревью W2-M6)', () => {
+  const { db, admin } = seed();
+  ins(db, { full_name: 'А', phone: '+998 91 566 22 78' });
+  ins(db, { full_name: 'Б', phone: '+7 991 566 22 78' });
+  const seen = [];
+  const orig = db.prepare.bind(db);
+  db.prepare = (sql) => { seen.push(sql); return orig(sql); };
+  assert.deepEqual(search(db, '915662278', admin), ['А']);
+  assert.deepEqual(search(db, '566 22', admin).sort(), ['А', 'Б']);
+  const cand = seen.filter((s) => /FROM crm_requests r LEFT JOIN patients/.test(s));
+  assert.ok(cand.length >= 2 && cand.every((s) => /r\.phone LIKE \?/.test(s)), 'выборка кандидатов без LIKE: ' + cand.join(' | '));
+  seen.length = 0;
+  search(db, 'буронова', admin);
+  assert.ok(!seen.some((s) => /r\.phone LIKE/.test(s)), 'поиск по имени ограничен номером');
 });
 
 test('crm_search: оператор не находит чужие; одна буква — не поиск', () => {

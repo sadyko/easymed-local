@@ -334,3 +334,41 @@ test('one phone key on both sides: the four stored formats are one number', () =
   // A number that merely CONTAINS the digits is not the same number.
   assert.equal(leadsForPhone(db, '566227').length, 0);
 });
+
+// --------------------------------------------------------------------------
+// Ревью W2-M1 / W2-M2 (2026-09-23).
+// --------------------------------------------------------------------------
+
+test('onlinePBX local (extension to extension) is not a lead — dev DB lead 1803 «103»', () => {
+  const db = fresh();
+  const local = pbx({ accountcode: 'local', caller_id_number: '101', destination_number: '103' });
+  assert.equal(local.internal, true, 'normalizePbxCall does not mark a local call');
+  assert.equal(recordCall(db, local, 'poll', { kind: 'onlinepbx' }), true, 'the call itself must still be filed');
+  assert.equal(leads(db).length, 0);
+});
+
+test('a number shorter than 7 digits never becomes a lead, whatever the direction', () => {
+  const db = fresh();
+  recordCall(db, call({ generalCallID: 'GC-S1', externalNumber: '103' }), 'poll');
+  recordCall(db, call({ generalCallID: 'GC-S2', externalNumber: '12345', callType: 1 }), 'poll');
+  assert.equal(leads(db).length, 0);
+});
+
+test('phone key: last nine only for a whole Uzbek number — +7 991… and +998 91… are different people', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Россия','+7 991 234 56 78','call','came')").run();
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Два номера','+998 90 111 22 33, +998 91 234 56 78','call','came')").run();
+  assert.equal(leadsForPhone(db, '+998 91 234 56 78').length, 0, 'a foreign number or two pasted numbers merged');
+  assert.equal(leadsForPhone(db, '+7 991 234 56 78').length, 1);
+  assert.equal(leadsForPhone(db, '79912345678').length, 1);
+  // the Uzbek forms still meet
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('УЗ','0912345678','call','came')").run();
+  for (const q of ['912345678', '+998912345678', '998 91 234-56-78', '0912345678']) {
+    assert.deepEqual(leadsForPhone(db, q).map((r) => r.full_name), ['УЗ'], q);
+  }
+  // an outgoing call to the Uzbek number is not blocked by the Russian one
+  recordCall(db, call({ generalCallID: 'GC-RU', externalNumber: '998931112233', callType: 1 }), 'poll');
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('RU2','+7 993 111 22 33','call','came')").run();
+  recordCall(db, call({ generalCallID: 'GC-UZ2', externalNumber: '998931112233', callType: 1 }), 'poll');
+  assert.equal(leads(db).filter((r) => r.phone === '+998931112233').length, 1);
+});

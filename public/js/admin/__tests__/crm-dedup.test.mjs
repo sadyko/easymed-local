@@ -36,8 +36,8 @@ const inserts = () => CALLS.filter((c) => c.table === 'crm_requests' && c.op ===
 const DUPS = [
   { id: 41, full_name: 'Буронова Феруза', phone: '915662278', status: 'came', stage_label: 'Пришёл', stage_kind: 'won',
     created_at: '2026-08-01T10:00:00Z', assigned_to: null, assigned_name: '', can_open: true },
-  { id: 42, full_name: '', phone: '', status: 'recall', stage_label: 'Перезвонить', stage_kind: 'open',
-    created_at: '2026-09-01T10:00:00Z', assigned_to: 12, assigned_name: 'Оператор Зарина', can_open: false },
+  // Ревью W2-M3: о чужой карточке сервер сообщает только сам факт.
+  { can_open: false, foreign: true },
 ];
 
 test('новый номер — никакого окна, заявка создаётся сразу', async () => {
@@ -61,7 +61,8 @@ test('номер с карточками — окно со списком; св�
   const t = textOf(dlg);
   assert.ok(t.includes('У этого номера уже есть карточка'));
   assert.ok(t.includes('Буронова Феруза') && t.includes('Пришёл'));
-  assert.ok(t.includes('Карточка другого оператора') && t.includes('Ведёт Оператор Зарина'));
+  assert.ok(t.includes('Есть карточка у другого оператора'));
+  assert.ok(!t.includes('Перезвонить') && !t.includes('Зарина'), 'о чужой карточке сказано больше, чем «есть»');
   const opens = byAttr(dlg, 'data-dup-open');
   assert.deepEqual(opens.map((b) => b.attrs['data-dup-open']), ['41'], '«Открыть» только у видимой карточки');
   assert.ok(button(dlg, /Создать всё равно/));
@@ -104,4 +105,72 @@ test('«Отмена» — ничего не вставлено, окно нов
   await tick(60);
   assert.equal(inserts().length, 0);
   assert.ok(document.body.children.includes(modal), 'окно новой заявки закрылось');
+});
+
+// Ревью W2-M5 — «Создать всё равно» относится к ОДНОМУ номеру.
+test('ответ «создать всё равно» не переносится на другой номер', async () => {
+  S.dups = DUPS;
+  S.failInsertOnce = true;   // первая вставка не прошла — окно осталось открытым
+  const modal = await newRequestModal();
+  await saveNew(modal);
+  button(dupDialog(), /Создать всё равно/).click();
+  await tick(60);
+  assert.equal(S.inserted, null);
+  const phone = walk(modal).find((n) => n.tagName === 'INPUT' && n.getAttribute('type') === 'tel');
+  phone.value = '+998 94 284 64 94';
+  await saveNew(modal);
+  assert.ok(dupDialog(), 'другой номер сохранён без проверки — сработало старое «создать всё равно»');
+  assert.equal(RPC.filter((r) => r.name === 'crm_leads_by_phone').length, 2);
+  button(dupDialog(), /^Отмена$/).click();
+  await tick(30);
+});
+
+async function editModal(lead) {
+  CALLS.length = 0; RPC.length = 0;
+  document.body.children.length = 0;
+  S.leads = [lead];
+  const root = mk('div');
+  await renderCrm(root, { onNavigate() {} });
+  await tick();
+  const card = walk(root).find((n) => String(n.className).split(/\s+/).includes('crm-card'));
+  card.dispatchEvent({ type: 'click', target: card, currentTarget: card, preventDefault() {}, stopPropagation() {} });
+  await tick(60);
+  return document.body.children.find((n) => String(n.className).includes('modal'));
+}
+const EDIT_LEAD = { id: 5, full_name: 'Юсупов Бекзод', phone: '+998 90 485 88 55', status: 'in_process', source: 'call', created_at: '2026-09-20T10:00:00Z' };
+const updates = () => CALLS.filter((c) => c.table === 'crm_requests' && c.op === 'update'
+  && c.values && 'full_name' in c.values && (c.filters || []).some((f) => f.col === 'id' && String(f.val) === '5'));
+
+test('правка: номер не менялся — проверки нет', async () => {
+  S.dups = [{ ...DUPS[0], id: 5 }];
+  const modal = await editModal(EDIT_LEAD);
+  button(modal, /Сохранить$/).click();
+  await tick(60);
+  assert.equal(RPC.filter((r) => r.name === 'crm_leads_by_phone').length, 0);
+  assert.equal(updates().length, 1);
+});
+
+test('правка: номер сменили на номер с другой карточкой — окно; сама заявка в нём не значится', async () => {
+  S.dups = [{ ...DUPS[0], id: 5, full_name: 'Юсупов Бекзод' }, DUPS[0]];
+  const modal = await editModal(EDIT_LEAD);
+  walk(modal).find((n) => n.tagName === 'INPUT' && n.getAttribute('type') === 'tel').value = '+998 91 566 22 78';
+  button(modal, /Сохранить$/).click();
+  await tick(60);
+  const dlg = dupDialog();
+  assert.ok(dlg, 'номер с чужой карточкой сохранён без предупреждения');
+  assert.deepEqual(byAttr(dlg, 'data-dup-open').map((b) => b.attrs['data-dup-open']), ['41'], 'в списке дублей — сама заявка');
+  assert.equal(updates().length, 0, 'сохранилось до ответа');
+  button(dlg, /Сохранить всё равно/).click();
+  await tick(60);
+  assert.equal(updates().length, 1);
+});
+
+test('правка: у нового номера карточка только эта же — окна нет', async () => {
+  S.dups = [{ ...DUPS[0], id: 5 }];
+  const modal = await editModal(EDIT_LEAD);
+  walk(modal).find((n) => n.tagName === 'INPUT' && n.getAttribute('type') === 'tel').value = '+998 90 485 88 56';
+  button(modal, /Сохранить$/).click();
+  await tick(60);
+  assert.equal(dupDialog(), undefined);
+  assert.equal(updates().length, 1);
 });
