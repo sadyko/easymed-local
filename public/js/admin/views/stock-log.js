@@ -20,10 +20,19 @@
 // журнал за март не может появиться из последних трёхсот строк, если их все
 // написали в сентябре. Границ у полей даты нет намеренно — DATE_LIMITS_V1
 // (e886ecb) вернул правило «не в будущем» тем полям, которым оно принадлежит.
+//
+// SEARCH_ALIVE_V1 — СТРОКА ФИЛЬТРОВ ПЕРЕРИСОВКУ ПЕРЕЖИВАЕТ. Поиск в программе
+// с задержкой (ui.js SEARCH_DEBOUNCE_V1): запрос уходит через полсекунды после
+// начала набора. Пока экран перерисовывался целиком, ответ на этот запрос
+// пересоздавал поле ввода — и «парацетамол» обрывался на середине, потому что
+// остаток слова летел в узел, снятый с экрана. Поэтому органы управления
+// строятся ОДИН раз (buildShell), а paint() трогает только область
+// результатов. Тот же приём, что у очереди лаборатории (views/laboratory.js:
+// refs.searchInp живёт в шапке окна, paintRows() перерисовывает список).
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { loadingCard, fmtPrice, fmtSignedQty, movementTag } from './inventory-shared.js';
+import { fmtPrice, fmtSignedQty, movementTag } from './inventory-shared.js';
 
 const PAGE = 200;
 const MAX_PAGE = 1000;
@@ -45,7 +54,9 @@ const SCOPE_NOTE = {
 };
 
 const state = { from: '', to: '', kind: 'all', q: '', limit: PAGE };
-const refs = { host: null, body: null, withHead: false };
+// refs.results — ЕДИНСТВЕННОЕ, что перерисовывается (SEARCH_ALIVE_V1); шапка с
+// полем поиска и фильтрами живёт от открытия экрана до его закрытия.
+const refs = { host: null, results: null, withHead: false };
 // STOCK_LOG_V1 — СВОЙ СЧЁТЧИК, а не общий fetchGuard закупок. Оболочка держит
 // до трёх смонтированных панелей, и журнал живёт рядом с «Закупками»: на общем
 // счётчике перерисовка любой их вкладки отменяла отрисовку журнала, и он
@@ -71,7 +82,34 @@ export async function renderStockLog(container, { withHead = false } = {}) {
     clear(container);
     refs.host = h('div', { class: withHead ? 'fade-in' : null });
     container.appendChild(refs.host);
+    buildShell();
     await paint();
+}
+
+/**
+ * Неподвижная часть экрана: заголовок, окно и строка фильтров в его шапке.
+ * Строится ОДИН раз за открытие — см. SEARCH_ALIVE_V1 в шапке файла.
+ */
+function buildShell() {
+    const host = refs.host;
+    clear(host);
+    if (refs.withHead) {
+        host.appendChild(h('div', { class: 'page-head' },
+            h('div', null,
+                h('h1', { class: 'page-title' }, 'Журнал движений'),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
+                    'Приход, выдача и расход товара: кто провёл, кому выдал, из какой партии.'))));
+    }
+    const f = filterBar();
+    refs.results = h('div');
+    host.appendChild(h('div', { class: 'card' },
+        h('div', { class: 'card-header', style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+            h('h3', null, Icon('Activity', { size: 15 }), ' ', tr('Журнал движений')),
+            h('span', { class: 'grow' }),
+            Icon('Calendar', { size: 14 }), f.from, f.to, f.q, f.kind,
+        ),
+        refs.results,
+    ));
 }
 
 const inpStyle = {
@@ -95,36 +133,28 @@ function filterBar() {
     return { from, to, kind, q };
 }
 
+/** Ожидание ВНУТРИ уже нарисованного окна: второе окно тут было бы рамкой в рамке. */
+const loadingLine = () => h('div', { class: 'empty' }, 'Загрузка…');
+
 async function paint() {
-    const host = refs.host;
-    if (!host) return;
-    clear(host);
-    if (refs.withHead) {
-        host.appendChild(h('div', { class: 'page-head' },
-            h('div', null,
-                h('h1', { class: 'page-title' }, 'Журнал движений'),
-                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
-                    'Приход, выдача и расход товара: кто провёл, кому выдал, из какой партии.'))));
-    }
-    const body = h('div');
-    host.appendChild(body);
-    refs.body = body;
-    body.appendChild(loadingCard());
+    const region = refs.results;
+    if (!region) return;
+    clear(region);
+    region.appendChild(loadingLine());
 
     const mine = ++token;
     const { data, error } = await supabase.rpc('stock_movements_list', journalQuery());
-    if (mine !== token || refs.body !== body) return;
-    clear(body);
+    if (mine !== token || refs.results !== region) return;
+    clear(region);
 
     if (error) {
         toast(trf('Не удалось загрузить журнал: {msg}', { msg: error.message || error }), 'fail');
-        body.appendChild(h('div', { class: 'card' }, h('div', { class: 'empty' }, 'Не удалось загрузить движения.')));
+        region.appendChild(h('div', { class: 'empty' }, 'Не удалось загрузить движения.'));
         return;
     }
 
     const res = data || {};
     const rows = res.movements || [];
-    const f = filterBar();
     // STOCK_LOG_V1 — ЗАКУПОЧНАЯ ЦЕНА ТОЛЬКО ТОМУ, КТО ВИДИТ ВСЮ КЛИНИКУ.
     // Журнал был экраном администратора и кладовщика; область видимости
     // («своё / свой отдел / вся клиника») открыла его медсестре и заведующей,
@@ -142,12 +172,7 @@ async function paint() {
     }
 
     const note = SCOPE_NOTE[res.scope];
-    body.appendChild(h('div', { class: 'card' },
-        h('div', { class: 'card-header', style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-            h('h3', null, Icon('Activity', { size: 15 }), ' ', tr('Журнал движений')),
-            h('span', { class: 'grow' }),
-            Icon('Calendar', { size: 14 }), f.from, f.to, f.q, f.kind,
-        ),
+    const parts = [
         note ? h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '0 0 8px' } }, note) : null,
         h('div', { style: { overflowX: 'auto' } },
             h('table', { class: 'tbl' },
@@ -167,7 +192,8 @@ async function paint() {
             ),
         ),
         truncationNote(res),
-    ));
+    ];
+    for (const part of parts) if (part) region.appendChild(part);
 }
 
 /** Список обрезан — скажи это, а не делай вид, что журнал кончился. */

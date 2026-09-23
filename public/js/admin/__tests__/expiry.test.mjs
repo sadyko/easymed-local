@@ -16,6 +16,11 @@
 //      не факт, а место.
 //   5. ДИАЛОГ ВЫДАЧИ ПОКАЗЫВАЕТ ПРЕДУПРЕЖДЕНИЕ И ВСЁ РАВНО ЗАКРЫВАЕТСЯ:
 //      владелец сказал предупреждать, а не запрещать.
+//   6. ПОЛЕ ПОИСКА ПЕРЕЖИВАЕТ СОБСТВЕННЫЙ ПОИСК (SEARCH_ALIVE_V1). Строка
+//      фильтров строится ОДИН раз; перерисовывается только область
+//      результатов. Иначе через полсекунды после первой буквы поле, в котором
+//      печатают, исчезает вместе с текстом и фокусом, и остаток слова
+//      набирается в пустоту.
 
 import { test } from 'node:test';
 import assert from 'node:assert';
@@ -27,9 +32,12 @@ class FakeNode {
         this.style = {}; this.children = []; this.attrs = {};
         this.className = ''; this._text = ''; this._l = {}; this.dataset = {};
         this.value = ''; this.hidden = false; this._parent = null;
+        // SEARCH_ALIVE_V1 — у стенда появились каретка и фокус: без них он не
+        // отличает живое поле ввода от заново созданного пустого.
+        this.selectionStart = 0; this.selectionEnd = 0;
     }
     appendChild(c) { if (c && typeof c === 'object') c._parent = this; this.children.push(c); return c; }
-    removeChild(c) { const i = this.children.indexOf(c); if (i > -1) this.children.splice(i, 1); if (c) c._parent = null; return c; }
+    removeChild(c) { const i = this.children.indexOf(c); if (i > -1) this.children.splice(i, 1); if (c) c._parent = null; blurDetached(c); return c; }
     get firstChild() { return this.children.length ? this.children[0] : null; }
     replaceChildren() { this.children.length = 0; }
     setAttribute(k, v) { this.attrs[k] = String(v); }
@@ -42,11 +50,23 @@ class FakeNode {
     querySelector() { return null; }
     querySelectorAll() { return []; }
     remove() { if (this._parent) this._parent.removeChild(this); }
-    focus() {} blur() {}
+    focus() { globalThis.document.activeElement = this; }
+    blur() { if (globalThis.document.activeElement === this) globalThis.document.activeElement = null; }
+    setSelectionRange(s, e) { this.selectionStart = s; this.selectionEnd = e; }
     get textContent() { return this._text + this.children.map((c) => c.textContent).join(''); }
     set textContent(v) { this._text = String(v); this.children.length = 0; }
     get classList() { const s = this; return { contains: (c) => String(s.className).split(/\s+/).includes(c), add() {}, remove() {}, toggle() {} }; }
     get isConnected() { return true; }
+}
+// SEARCH_ALIVE_V1 — узел, ВЫНУТЫЙ ИЗ ДЕРЕВА, ТЕРЯЕТ ФОКУС: так делает браузер,
+// и ровно в этом состоит вред перерисовки строки фильтров. Не было бы этого —
+// стенд считал бы, что фокус пережил пересоздание поля, и проверка ничего бы
+// не ловила.
+function blurDetached(node) {
+    const doc = globalThis.document;
+    if (!doc || !doc.activeElement || !node || typeof node !== 'object') return;
+    const holds = (e) => e === doc.activeElement || ((e && e.children) || []).some(holds);
+    if (holds(node)) doc.activeElement = null;
 }
 class FakeText extends FakeNode { constructor(t) { super('#text'); this.nodeType = 3; this._text = String(t); } }
 function mkEl(tag) {
@@ -66,6 +86,7 @@ globalThis.document = {
     createElement: mkEl, createElementNS: (_n, t) => mkEl(t), createTextNode: (t) => new FakeText(t),
     head: mkEl('head'), body: BODY, documentElement: mkEl('html'),
     addEventListener() {}, removeEventListener() {},
+    activeElement: null,   // SEARCH_ALIVE_V1
     getElementById(id) { return BODY.children.find((c) => c.attrs && c.attrs.id === id) || null; },
 };
 // I18N_LOCALE_PIN_V1 — экран рисуется по-русски независимо от локали машины.
@@ -83,6 +104,9 @@ const findAll = (root, tag) => walk(root).filter((e) => e.tagName === tag);
 const findBtn = (root, label) => walk(root).find((e) => e.tagName === 'BUTTON' && textOf(e).includes(label));
 const settle = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 const rows = (root) => findAll(findAll(root, 'TABLE')[0], 'TR').filter((tr) => findAll(tr, 'TD').length);
+// SEARCH_ALIVE_V1 — поле поиска ищем КАЖДЫЙ РАЗ ЗАНОВО, по экрану: в этом и
+// смысл проверки — тот ли это узел, в который человек печатал.
+const searchInput = (root) => walk(root).find((e) => e.tagName === 'INPUT' && /Поиск/.test(e.attrs.placeholder || ''));
 const cells = (tr) => findAll(tr, 'TD').map((td) => textOf(td).replace(/\s+/g, ' ').trim());
 
 // ─── «сервер» ───────────────────────────────────────────────────────────────
@@ -242,6 +266,70 @@ test('отбор по товару и поиск ДОЕЗЖАЮТ до серв�
 test('отказ сервера ВИДЕН: молчание тут читается как «просрочки нет»', async () => {
     const root = await open({ lots: [EXPIRED], fail: 'база недоступна' });
     assert.match(flat(root), /Не удалось загрузить сроки годности\./);
+});
+
+// SEARCH_ALIVE_V1 — ПОЛЕ, В КОТОРОМ ПЕЧАТАЮТ, ПЕРЕЖИВАЕТ СВОЙ СОБСТВЕННЫЙ
+// ПОИСК.
+//
+// Задержка набора (SEARCH_DEBOUNCE_V1) и перерисовка всего экрана вместе дают
+// поломку, которой поодиночке нет ни у той, ни у другой: человек набирает
+// название товара, через полсекунды после первых букв уходит запрос, ответ
+// перерисовывает экран целиком — и поле ввода ПЕРЕСОЗДАЁТСЯ. Дальше буквы
+// летят в узел, которого на экране уже нет.
+//
+// Лечится не подкладыванием фокуса обратно, а тем, что узел не умирает:
+// органы управления строятся один раз, перерисовывается только область
+// результатов (тот же приём, что у очереди лаборатории — views/laboratory.js,
+// refs.searchInp живёт в шапке окна, а paintRows() трогает только список).
+test('поиск не убивает поле, в котором печатают: узел тот же, текст и каретка на месте, фокус не потерян', async () => {
+    const root = await open({ lots: [EXPIRED] });
+    const q = searchInput(root);
+    assert.ok(q, 'поля поиска на экране нет — тест смотрит не туда');
+    q.focus();
+
+    rpcCalls.length = 0;
+    ANSWER = answer([NO_DATE]);   // сервер ответит ДРУГОЙ партией — видно, что список обновился
+    for (const typed of ['пара', 'парацет', 'парацетамол']) { q.value = typed; q.dispatchEvent({ type: 'input' }); }
+    q.setSelectionRange(11, 11);
+    await settle(700);   // пауза набора, ответ сервера, перерисовка
+
+    assert.equal(rpcCalls.length, 1, 'запросов ушло: ' + rpcCalls.length);
+    assert.equal(rpcCalls[0].args.q, 'парацетамол');
+    assert.equal(searchInput(root), q,
+        'поле поиска ПЕРЕСОЗДАНО: остаток слова человек допечатывает в узел, которого уже нет на экране');
+    assert.equal(q.value, 'парацетамол', 'набранный текст пропал вместе со старым узлом');
+    assert.equal(document.activeElement, q, 'фокус выбросило из поля поиска на середине слова');
+    assert.equal(q.selectionStart, 11, 'каретка сброшена');
+    assert.match(flat(root), /Бинт/, 'область результатов не обновилась — перерисовали не то');
+});
+
+test('выбранный товар переживает поиск, а смена товара не уводит фокус на другое поле', async () => {
+    const root = await open({ lots: [EXPIRED, NO_DATE] });
+    const sel = findAll(root, 'SELECT')[0];
+    const q = searchInput(root);
+
+    sel.focus();
+    ANSWER = answer([NO_DATE]);
+    sel.value = '8';
+    sel.dispatchEvent({ type: 'change' });
+    await settle();
+    assert.equal(findAll(root, 'SELECT')[0], sel, 'фильтр товара пересоздан — список закрылся бы прямо под рукой');
+    assert.equal(document.activeElement, sel, 'перерисовка увела фокус с фильтра, которым только что пользовались');
+    assert.equal(searchInput(root), q, 'смена товара снесла поле поиска вместе с набранным');
+    assert.match(flat(root), /Бинт/, 'список не обновился');
+
+    // А теперь поиск поверх выбранного товара: отбор обязан уехать в запрос
+    // ВМЕСТЕ с текстом — и остаться выбранным на экране после перерисовки.
+    rpcCalls.length = 0;
+    q.focus();
+    q.value = 'бин';
+    q.dispatchEvent({ type: 'input' });
+    await settle(700);
+    assert.deepEqual(rpcCalls.map((c) => c.args), [{ product_id: 8, q: 'бин' }],
+        'отбор по товару потерялся при поиске');
+    assert.equal(findAll(root, 'SELECT')[0], sel);
+    assert.equal(sel.value, '8', 'выбранный товар сбросился на «Все товары» при перерисовке');
+    assert.equal(document.activeElement, q, 'фокус ушёл из поля поиска');
 });
 
 // ───────────────────────────────────────────────────────────────────────────

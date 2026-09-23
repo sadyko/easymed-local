@@ -18,10 +18,21 @@
 // говорит это словами, приглушённой строкой над таблицей. Показать расчёт как
 // измерение — значит однажды поспорить с полкой и оказаться неправым; а
 // человек, которому один раз соврали числом, больше этому экрану не поверит.
+//
+// SEARCH_ALIVE_V1 — СТРОКА ФИЛЬТРОВ ПЕРЕРИСОВКУ ПЕРЕЖИВАЕТ. Поиск в программе
+// с задержкой (ui.js SEARCH_DEBOUNCE_V1): запрос уходит через полсекунды после
+// начала набора. Пока экран перерисовывался целиком, ответ на этот запрос
+// пересоздавал поле ввода — и название товара обрывалось на середине, потому
+// что остаток слова летел в узел, снятый с экрана. Поэтому органы управления
+// строятся ОДИН раз (buildShell), а paint() трогает только область
+// результатов; список товаров в выпадающем фильтре приходит с ответом, и
+// обновляются ОПЦИИ, а не сам фильтр. Тот же приём, что у очереди лаборатории
+// (views/laboratory.js: refs.searchInp живёт в шапке окна, paintRows()
+// перерисовывает список).
 import { supabase } from '../../supabase.js';
 import { h, Icon, Tag, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { fetchGuard, loadingCard, fmtQty } from './inventory-shared.js';
+import { fetchGuard, fmtQty } from './inventory-shared.js';
 
 // Состояние партии словами и цветом. Палитра — та же, что у остальных меток
 // склада (ui.js Tag): crit — беда, warn — скоро, ok — спокойно, off — нечего
@@ -39,7 +50,11 @@ export function lotStateTag(state) {
 }
 
 const state = { productId: '', q: '' };
-const refs = { host: null, body: null };
+// refs.results — ЕДИНСТВЕННОЕ, что перерисовывается (SEARCH_ALIVE_V1); шапка с
+// полем поиска и фильтром товара живёт от открытия экрана до его закрытия.
+// refs.prodSig — список товаров, которым фильтр заполнен сейчас: пока он не
+// изменился, опции не трогаются вовсе.
+const refs = { host: null, results: null, prod: null, prodSig: null };
 
 /** Параметры запроса из состояния фильтров — ровно то, что понимает RPC. */
 export function expiryQuery() {
@@ -57,6 +72,7 @@ export async function renderExpiryTab(container) {
     clear(container);
     refs.host = h('div');
     container.appendChild(refs.host);
+    buildShell();
     await paint();
 }
 
@@ -65,41 +81,83 @@ const inpStyle = {
     borderRadius: '8px', fontSize: '12.5px', background: 'white', fontFamily: 'inherit',
 };
 
-function filterBar(products) {
+function filterBar() {
+    // Товары приезжают с ответом сервера; фильтр рождается с одной опцией и
+    // дальше только ДОПОЛНЯЕТСЯ (syncProducts) — пересоздавать его нельзя.
     const prod = h('select', { title: 'Товар', 'aria-label': 'Товар', style: { ...inpStyle, maxWidth: '220px' } },
-        h('option', { value: '', selected: state.productId === '' }, 'Все товары'),
-        ...products.map((p) => h('option', { value: String(p.id), selected: String(p.id) === String(state.productId) }, p.name)));
+        h('option', { value: '' }, 'Все товары'));
     prod.addEventListener('change', () => { state.productId = prod.value; paint(); });
 
-    const q = h('input', { type: 'text', placeholder: 'Поиск товара…', value: state.q, style: { ...inpStyle, width: '200px' } });
+    const q = h('input', { type: 'text', placeholder: 'Поиск товара…', style: { ...inpStyle, width: '200px' } });
     q.addEventListener('input', () => { state.q = q.value; paint(); });
     return { prod, q };
 }
 
-async function paint() {
+/**
+ * Неподвижная часть экрана: окно и строка фильтров в его шапке. Строится ОДИН
+ * раз за открытие — см. SEARCH_ALIVE_V1 в шапке файла.
+ */
+function buildShell() {
     const host = refs.host;
-    if (!host) return;
     clear(host);
-    const body = h('div');
-    host.appendChild(body);
-    refs.body = body;
-    body.appendChild(loadingCard());
+    const f = filterBar();
+    refs.prod = f.prod;
+    refs.prodSig = null;
+    refs.results = h('div');
+    host.appendChild(h('div', { class: 'card' },
+        h('div', { class: 'card-header', style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+            h('h3', null, Icon('Clock', { size: 15 }), ' ', tr('Сроки годности')),
+            h('span', { class: 'grow' }),
+            f.q, f.prod,
+        ),
+        refs.results,
+    ));
+}
+
+/**
+ * Список товаров в фильтре — из ответа сервера. Меняются ОПЦИИ, а не сам
+ * фильтр, и только если список действительно стал другим: иначе выпадающий
+ * список закрывался бы прямо под рукой, а выбранный товар слетал бы на «Все».
+ */
+function syncProducts(products) {
+    const sel = refs.prod;
+    if (!sel) return;
+    const sig = JSON.stringify(products.map((p) => [p.id, p.name]));
+    if (sig === refs.prodSig) return;
+    refs.prodSig = sig;
+    const picked = String(state.productId || '');
+    clear(sel);
+    sel.appendChild(h('option', { value: '', selected: picked === '' }, 'Все товары'));
+    for (const p of products) {
+        sel.appendChild(h('option', { value: String(p.id), selected: String(p.id) === picked }, p.name));
+    }
+    sel.value = picked;
+}
+
+/** Ожидание ВНУТРИ уже нарисованного окна: второе окно тут было бы рамкой в рамке. */
+const loadingLine = () => h('div', { class: 'empty' }, 'Загрузка…');
+
+async function paint() {
+    const region = refs.results;
+    if (!region) return;
+    clear(region);
+    region.appendChild(loadingLine());
 
     const token = ++fetchGuard.token;
     const { data, error } = await supabase.rpc('stock_expiry_lots', expiryQuery());
-    if (token !== fetchGuard.token || refs.body !== body) return;
-    clear(body);
+    if (token !== fetchGuard.token || refs.results !== region) return;
+    clear(region);
 
     if (error) {
         toast(trf('Не удалось загрузить сроки годности: {msg}', { msg: error.message || error }), 'fail');
-        body.appendChild(h('div', { class: 'card' }, h('div', { class: 'empty' }, 'Не удалось загрузить сроки годности.')));
+        region.appendChild(h('div', { class: 'empty' }, 'Не удалось загрузить сроки годности.'));
         return;
     }
 
     const res = data || {};
     const rows = res.lots || [];
     const filtered = !!(state.productId || state.q.trim());
-    const f = filterBar(res.products || []);
+    syncProducts(res.products || []);
 
     const tbody = h('tbody');
     if (!rows.length) {
@@ -110,12 +168,7 @@ async function paint() {
         for (const l of rows) tbody.appendChild(lotRow(l));
     }
 
-    body.appendChild(h('div', { class: 'card' },
-        h('div', { class: 'card-header', style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-            h('h3', null, Icon('Clock', { size: 15 }), ' ', tr('Сроки годности')),
-            h('span', { class: 'grow' }),
-            f.q, f.prod,
-        ),
+    const parts = [
         // ПРИЗНАНИЕ — одной строкой и первым делом. См. шапку файла.
         h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '0 0 4px' } },
             'Остаток по партиям — расчёт, а не факт: программа не запоминает, из какой партии товар взяли, и считает, что первым расходуется ближайший срок.'),
@@ -140,7 +193,8 @@ async function paint() {
             ),
         ),
         truncationNote(res),
-    ));
+    ];
+    for (const part of parts) if (part) region.appendChild(part);
 }
 
 /** Пустота говорит словами — и называет место, где срок вводится. */

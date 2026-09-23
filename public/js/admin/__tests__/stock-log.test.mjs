@@ -16,6 +16,11 @@
 //      называет её словами («видны ваши движения»). Молчание на этом месте
 //      читалось бы как «в клинике движений нет».
 //   5. ОБРЕЗАННЫЙ СПИСОК ГОВОРИТ, ЧТО ОН ОБРЕЗАН.
+//   6. ПОЛЕ ПОИСКА ПЕРЕЖИВАЕТ СОБСТВЕННЫЙ ПОИСК (SEARCH_ALIVE_V1). Строка
+//      фильтров строится ОДИН раз; перерисовывается только область
+//      результатов. Иначе через полсекунды после первой буквы поле, в котором
+//      печатают, исчезает вместе с текстом и фокусом, и «парацетамол»
+//      набирается в пустоту.
 
 import { test } from 'node:test';
 import assert from 'node:assert';
@@ -27,9 +32,12 @@ class FakeNode {
         this.style = {}; this.children = []; this.attrs = {};
         this.className = ''; this._text = ''; this._l = {}; this.dataset = {};
         this.value = '';
+        // SEARCH_ALIVE_V1 — у стенда появились каретка и фокус: без них он не
+        // отличает живое поле ввода от заново созданного пустого.
+        this.selectionStart = 0; this.selectionEnd = 0;
     }
     appendChild(c) { this.children.push(c); return c; }
-    removeChild(c) { const i = this.children.indexOf(c); if (i > -1) this.children.splice(i, 1); return c; }
+    removeChild(c) { const i = this.children.indexOf(c); if (i > -1) this.children.splice(i, 1); blurDetached(c); return c; }
     get firstChild() { return this.children.length ? this.children[0] : null; }
     replaceChildren() { this.children.length = 0; }
     setAttribute(k, v) { this.attrs[k] = String(v); }
@@ -42,11 +50,23 @@ class FakeNode {
     querySelector() { return null; }
     querySelectorAll() { return []; }
     remove() {}
-    focus() {} blur() {}
+    focus() { globalThis.document.activeElement = this; }
+    blur() { if (globalThis.document.activeElement === this) globalThis.document.activeElement = null; }
+    setSelectionRange(s, e) { this.selectionStart = s; this.selectionEnd = e; }
     get textContent() { return this._text + this.children.map((c) => c.textContent).join(''); }
     set textContent(v) { this._text = String(v); this.children.length = 0; }
     get classList() { const s = this; return { contains: (c) => String(s.className).split(/\s+/).includes(c), add() {}, remove() {}, toggle() {} }; }
     get isConnected() { return true; }
+}
+// SEARCH_ALIVE_V1 — узел, ВЫНУТЫЙ ИЗ ДЕРЕВА, ТЕРЯЕТ ФОКУС: так делает браузер,
+// и ровно в этом состоит вред перерисовки строки фильтров. Не было бы этого —
+// стенд считал бы, что фокус пережил пересоздание поля, и проверка ничего бы
+// не ловила.
+function blurDetached(node) {
+    const doc = globalThis.document;
+    if (!doc || !doc.activeElement || !node || typeof node !== 'object') return;
+    const holds = (e) => e === doc.activeElement || ((e && e.children) || []).some(holds);
+    if (holds(node)) doc.activeElement = null;
 }
 class FakeText extends FakeNode { constructor(t) { super('#text'); this.nodeType = 3; this._text = String(t); } }
 function mkEl(tag) {
@@ -66,6 +86,7 @@ globalThis.document = {
     createElement: mkEl, createElementNS: (_n, t) => mkEl(t), createTextNode: (t) => new FakeText(t),
     head: mkEl('head'), body: BODY, documentElement: mkEl('html'),
     addEventListener() {}, removeEventListener() {},
+    activeElement: null,   // SEARCH_ALIVE_V1
     getElementById(id) { return BODY.children.find((c) => c.attrs && c.attrs.id === id) || null; },
 };
 // I18N_LOCALE_PIN_V1 — экран рисуется по-русски независимо от локали машины.
@@ -80,6 +101,9 @@ const textOf = (e) => walk(e).map((x) => x._text || '').join(' ');
 const findAll = (root, tag) => walk(root).filter((e) => e.tagName === tag);
 const findBtn = (root, label) => walk(root).find((e) => e.tagName === 'BUTTON' && textOf(e).includes(label));
 const settle = () => new Promise((r) => setTimeout(r, 30));
+// SEARCH_ALIVE_V1 — поле поиска ищем КАЖДЫЙ РАЗ ЗАНОВО, по экрану: в этом и
+// смысл проверки — тот ли это узел, в который человек печатал.
+const searchInput = (root) => walk(root).find((e) => e.tagName === 'INPUT' && /Поиск/.test(e.attrs.placeholder || ''));
 
 // ─── «сервер» ───────────────────────────────────────────────────────────────
 const rpcCalls = [];
@@ -347,4 +371,78 @@ test('поиск ждёт паузы в наборе: три символа по
     await new Promise((r) => setTimeout(r, 700));
     assert.equal(rpcCalls.length, 1, 'на три символа ушло запросов: ' + rpcCalls.length);
     assert.equal(rpcCalls[0].args.q, 'пер', 'ушёл не последний набранный текст');
+});
+
+// SEARCH_ALIVE_V1 — ПОЛЕ, В КОТОРОМ ПЕЧАТАЮТ, ПЕРЕЖИВАЕТ СВОЙ СОБСТВЕННЫЙ
+// ПОИСК.
+//
+// Задержка набора (SEARCH_DEBOUNCE_V1) и перерисовка всего экрана вместе дают
+// поломку, которой поодиночке нет ни у той, ни у другой: человек набирает
+// «парацетамол», через полсекунды после первых букв уходит запрос, ответ
+// перерисовывает экран целиком — и поле ввода ПЕРЕСОЗДАЁТСЯ. Дальше буквы
+// летят в узел, которого на экране уже нет: текст обрывается на середине
+// слова, каретка пропадает, и клиника видит это на первом же поиске.
+//
+// Лечится не подкладыванием фокуса обратно, а тем, что узел не умирает:
+// органы управления строятся один раз, перерисовывается только область
+// результатов (тот же приём, что у очереди лаборатории — views/laboratory.js,
+// refs.searchInp живёт в шапке окна, а paintRows() трогает только список).
+test('поиск не убивает поле, в котором печатают: узел тот же, текст и каретка на месте, фокус не потерян', async () => {
+    const root = await open(answer([RECEIVE]));
+    const q = searchInput(root);
+    assert.ok(q, 'поля поиска на экране нет — тест смотрит не туда');
+    q.focus();
+
+    rpcCalls.length = 0;
+    ANSWER = answer([TO_DEPT]);   // сервер ответит ДРУГИМИ строками — видно, что список обновился
+    for (const typed of ['пара', 'парацет', 'парацетамол']) { q.value = typed; q.dispatchEvent({ type: 'input' }); }
+    q.setSelectionRange(11, 11);
+    await new Promise((r) => setTimeout(r, 700));   // пауза набора, ответ сервера, перерисовка
+
+    assert.equal(rpcCalls.length, 1, 'запросов ушло: ' + rpcCalls.length);
+    assert.equal(rpcCalls[0].args.q, 'парацетамол');
+    assert.equal(searchInput(root), q,
+        'поле поиска ПЕРЕСОЗДАНО: остаток слова человек допечатывает в узел, которого уже нет на экране');
+    assert.equal(q.value, 'парацетамол', 'набранный текст пропал вместе со старым узлом');
+    assert.equal(document.activeElement, q, 'фокус выбросило из поля поиска на середине слова');
+    assert.equal(q.selectionStart, 11, 'каретка сброшена');
+    assert.match(textOf(root), /Кардиология/, 'область результатов не обновилась — перерисовали не то');
+});
+
+test('смена фильтра перерисовывает список и не уводит фокус с органа управления', async () => {
+    const root = await open(answer([RECEIVE]));
+    const kind = findAll(root, 'SELECT')[0];
+    const q = searchInput(root);
+    kind.focus();
+
+    ANSWER = answer([TO_DEPT]);
+    kind.value = 'issue';
+    kind.dispatchEvent({ type: 'change' });
+    await settle();
+
+    assert.equal(findAll(root, 'SELECT')[0], kind, 'фильтр пересоздан — список закрылся бы прямо под рукой');
+    assert.equal(document.activeElement, kind, 'перерисовка увела фокус с фильтра, которым только что пользовались');
+    assert.equal(searchInput(root), q, 'смена фильтра снесла поле поиска вместе с набранным');
+    assert.match(textOf(root), /Кардиология/, 'список не обновился');
+});
+
+test('«Показать ещё» дорисовывает журнал и не отбирает поле поиска у того, кто в нём печатает', async () => {
+    const root = await open(answer([RECEIVE], { truncated: true, count: 1 }));
+    const q = searchInput(root);
+    q.value = 'пар';
+    q.focus();
+
+    const more = findBtn(root, 'Показать ещё');
+    assert.ok(more, 'кнопки «Показать ещё» нет — тест смотрит не туда');
+    ANSWER = answer([RECEIVE, TO_DEPT], { truncated: false, count: 2 });
+    more.click();
+    await settle();
+
+    // Сам щелчок фокуса не двигает (это делает браузер, а не экран): здесь
+    // ловится ровно одно — перерисовка выдернула поле из дерева вместе с
+    // текстом и фокусом.
+    assert.equal(searchInput(root), q, 'кнопка «Показать ещё» пересоздала поле поиска');
+    assert.equal(q.value, 'пар', 'набранное в поиске стёрлось кнопкой «Показать ещё»');
+    assert.equal(document.activeElement, q, 'перерисовка по кнопке выбросила фокус из поля поиска');
+    assert.match(textOf(root), /Кардиология/, 'журнал не дорисовался');
 });
