@@ -115,7 +115,7 @@ async function _injectDataValidations(buf, cfg, XLSX) {
 }
 import { h, Icon, toast, clear } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { TIER_STEP_COLUMNS, tierStepsProblem } from '../service-editor-logic.js';   // DOCTOR_TIER_V2
+import { TIER_STEP_COLUMNS, tierStepsProblem, tierStepRangeProblem } from '../service-editor-logic.js';   // DOCTOR_TIER_V2
 import { SECTIONS, FK_LABEL_COLUMN } from '../sections.js?v=noikpu1';
 
 // EXCEL_SELF_HOST_V1 — served from our own origin (CSP allows 'self'); the
@@ -421,25 +421,44 @@ const IMPORT_CONFIGS = {
             // «ступени нет», и это осознанное решение клиники.
             //
             // DOCTOR_TIER_V2 — то же для каждой из трёх ступеней по отдельности:
-            // ступень, чьих колонок в листе нет, остаётся как была (null ниже —
-            // «неизвестна», и правило порядка её пропускает).
+            // ступень, чьих колонок в листе нет, остаётся как была.
+            //
+            // Правки ревью:
+            //  • границы чисел — те же отказы, что у service_save
+            //    (tierStepRangeProblem): 7.5 или 120 % не округляются молча, а
+            //    ступень из файла не сохраняется, и строка говорит почему;
+            //  • порядок проверяется по СЛИТЫМ ступеням — файл поверх
+            //    СОХРАНЁННЫХ (ctx.lookups.__stored, по названию). Файл,
+            //    выгруженный до ступеней 2–3, поднимал порог 1 выше
+            //    сохранённого порога 2, и отчёт молча переставал платить
+            //    ступени 2–3. Теперь при нарушении не пишется НИ ОДНА колонка
+            //    ступеней этой строки, а строка называет услугу и правило.
             var HALF_MSG = {
                 1: 'Ступень: заполните и порог, и долю — полупара не сохранена',
                 2: 'Ступень 2: заполните и порог, и долю — полупара не сохранена',
                 3: 'Ступень 3: заполните и порог, и долю — полупара не сохранена',
             };
-            var steps = TIER_STEP_COLUMNS.map(function (c) {
+            var who = String(payload.name || '').trim();
+            var storedMap = ctx && ctx.lookups && ctx.lookups.__stored;
+            var stored = storedMap ? (storedMap.get(normKey(who)) || null) : null;
+            var cellOf = function (v) { return v === '' || v == null ? '' : String(v).replace(/[\s,]/g, ''); };
+            var fileSteps = TIER_STEP_COLUMNS.map(function (c) {
                 if (!(c.from in r) && !(c.pct in r)) {
                     delete payload[c.from]; delete payload[c.pct];
                     return null;
                 }
-                // Пара или ничего, и в границах сервера (целый порог ≥ 0, доля
-                // 0–100): полупара из файла застряла бы в редакторе (service_save
-                // отказывает половине настройки), а импорт пишет мимо service_save,
-                // поэтому границы повторяются здесь. Отброшенная полупара
-                // называется вслух — раньше строка молча приезжала без ступени.
-                payload[c.from] = Math.max(0, Math.round(Number(payload[c.from]) || 0));
-                payload[c.pct] = Math.min(100, Math.max(0, Number(payload[c.pct]) || 0));
+                var rawFrom = cellOf(r[c.from]), rawPct = cellOf(r[c.pct]);
+                var range = tierStepRangeProblem(c.n, rawFrom, rawPct);
+                if (range) {
+                    delete payload[c.from]; delete payload[c.pct];
+                    if (ctx) ctx.warn(trf('«{service}»: {problem} Ступень {n} из файла не сохранена.', { service: who, problem: tr(range), n: c.n }));
+                    return null;
+                }
+                payload[c.from] = Number(rawFrom) || 0;
+                payload[c.pct] = Number(rawPct) || 0;
+                // Пара или ничего: полупара из файла застряла бы в редакторе
+                // (service_save отказывает половине настройки). Отброшенная
+                // полупара называется вслух.
                 if (!payload[c.from] || !payload[c.pct]) {
                     var half = payload[c.from] || payload[c.pct];
                     payload[c.from] = 0; payload[c.pct] = 0;
@@ -447,18 +466,20 @@ const IMPORT_CONFIGS = {
                 }
                 return { from: payload[c.from], pct: payload[c.pct] };
             });
-            // Порядок ступеней — то же правило, что у service_save
-            // (tierStepsProblem): со сломанной ступени и дальше ничего не
-            // сохраняется, и строка говорит почему.
-            var problem = tierStepsProblem(steps);
+            if (fileSteps.every(function (st) { return !st; })) return;
+            var merged = TIER_STEP_COLUMNS.map(function (c, k) {
+                if (fileSteps[k]) return fileSteps[k];
+                return stored ? { from: Number(stored[c.from]) || 0, pct: Number(stored[c.pct]) || 0 } : { from: 0, pct: 0 };
+            });
+            var problem = tierStepsProblem(merged);
             if (problem) {
-                for (var k = problem.step - 1; k < TIER_STEP_COLUMNS.length; k++) {
-                    if (!steps[k]) continue;
-                    payload[TIER_STEP_COLUMNS[k].from] = 0; payload[TIER_STEP_COLUMNS[k].pct] = 0;
-                }
-                if (ctx) ctx.warn(trf('{problem} Ступени с {n}-й не сохранены.', { problem: tr(problem.message), n: problem.step }));
+                TIER_STEP_COLUMNS.forEach(function (c) { delete payload[c.from]; delete payload[c.pct]; });
+                if (ctx) ctx.warn(trf('«{service}»: {problem} Ступени из файла не сохранены — остаются прежние.', { service: who, problem: tr(problem.message) }));
             }
         },
+        // DOCTOR_TIER_V2 — сохранённые ступени услуг (по названию) для сверки
+        // порядка при обновлении: loadLookups кладёт их в lookups.__stored.
+        storedColumns: ['doctor_tier_from', 'doctor_tier_percent', 'doctor_tier_from_2', 'doctor_tier_percent_2', 'doctor_tier_from_3', 'doctor_tier_percent_3'],
         columns: [
             { key: 'name',             required: true, hint: 'Название услуги (обязательно)' },
             { key: 'group',            target: 'type', map: SERVICE_GROUP_MAP, required: true,
@@ -502,12 +523,12 @@ const IMPORT_CONFIGS = {
             { key: 'duration_minutes', coerce: 'int',  defaultNum: 30, hint: 'Длительность, мин (по умолчанию 30, если пусто)' },
             { key: 'requires_doctor',  coerce: 'bool', defaultBool: true, hint: 'true / false — нужен врач (по умолчанию true)' },
             { key: 'default_doctor_percent', coerce: 'num', hint: 'Доля исполнителя по умолчанию, % (необязательно)' },
-            { key: 'doctor_tier_from',    coerce: 'int', hint: 'Ступень: порог услуг в месяц — повышенная доля начинается со следующей услуги (0 или пусто — ступени нет)' },
+            { key: 'doctor_tier_from',    coerce: 'num', hint: 'Ступень: порог услуг в месяц — повышенная доля начинается со следующей услуги (0 или пусто — ступени нет)' },
             { key: 'doctor_tier_percent', coerce: 'num', hint: 'Ступень: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
             // DOCTOR_TIER_V2 — ступени 2 и 3: пороги строго растут, заполняются по порядку.
-            { key: 'doctor_tier_from_2',    coerce: 'int', hint: 'Ступень 2: порог услуг в месяц — больше порога ступени 1 (0 или пусто — ступени нет)' },
+            { key: 'doctor_tier_from_2',    coerce: 'num', hint: 'Ступень 2: порог услуг в месяц — больше порога ступени 1 (0 или пусто — ступени нет)' },
             { key: 'doctor_tier_percent_2', coerce: 'num', hint: 'Ступень 2: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
-            { key: 'doctor_tier_from_3',    coerce: 'int', hint: 'Ступень 3: порог услуг в месяц — больше порога ступени 2 (0 или пусто — ступени нет)' },
+            { key: 'doctor_tier_from_3',    coerce: 'num', hint: 'Ступень 3: порог услуг в месяц — больше порога ступени 2 (0 или пусто — ступени нет)' },
             { key: 'doctor_tier_percent_3', coerce: 'num', hint: 'Ступень 3: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
             { key: 'room',             fk: { source: 'rooms', keyField: 'name', target: 'room_id' }, hint: 'Кабинет (очередь диагностики) — по названию из справочника; необязательно' },
             { key: 'specimen',         hint: 'Лаборатория: материал (кровь, моча…) — необязательно' },
@@ -1495,6 +1516,15 @@ async function loadLookups(cfg) {
         }
         out[col.key] = m;
     }));
+    // DOCTOR_TIER_V2 — сохранённые строки по названию (normKey), если раздел
+    // просит их для сверки (services.storedColumns).
+    if (Array.isArray(cfg.storedColumns) && cfg.storedColumns.length) {
+        const { data, error } = await supabase.from(cfg.table).select(['name', ...cfg.storedColumns].join(', ')).limit(20000);
+        if (error) console.warn('[section-import] stored rows:', error.message);
+        const m = new Map();
+        for (const row of (data || [])) { const k = normKey(row.name); if (k && !m.has(k)) m.set(k, row); }
+        out.__stored = m;
+    }
     return out;
 }
 
@@ -1670,7 +1700,7 @@ function buildRow(raw, rowNum, lookups, cfg) {
     // dropping it silently. `r` is the raw row keyed by the sheet's headers —
     // a hook can ask which headers the file actually carried.
     if (typeof cfg.transform === 'function') {
-        const ctx = { notes, warn(msg) { notes.push(msg); if (status !== 'error') status = 'warn'; } };
+        const ctx = { notes, lookups, warn(msg) { notes.push(msg); if (status !== 'error') status = 'warn'; } };
         try { cfg.transform(payload, r, ctx); }
         catch (e) { console.warn('[section-import] transform failed:', e); }
     }

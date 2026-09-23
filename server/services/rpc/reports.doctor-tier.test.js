@@ -342,3 +342,17 @@ test('V2: doctor_tier_positions отдаёт единицы по полосам,
   }, 0);
   assert.equal(money, fee(c.db));
 });
+
+// DOCTOR_TIER_V2 (правка ревью) — страховка SQL проверяет не только порядок,
+// но и пары: порог ступени 2 без доли не должен платить полосу 2 по личной
+// ставке, НИЖЕ ступени 1. Такая ступень — «нет», как и все следующие.
+test('V2: ступень 2 с порогом, но без доли — «нет», полоса идёт по ступени 1', () => {
+  const c = clinic({ from2: 26, pct2: 0, from3: 0, pct3: 0 });
+  c.lines(27);
+  assert.equal(fee(c.db), 25 * 30000 + 2 * 40000);
+  const d = clinic({ from2: 26, pct2: 0, from3: 27, pct3: 50 });
+  d.lines(28);
+  assert.equal(fee(d.db), 25 * 30000 + 3 * 40000, 'ступень 3 за сломанной ступенью 2 тоже не действует');
+  const { rows } = doctorTierPositions(d.db, { doctor_id: 1, month: '2026-09' }, user);
+  assert.ok(rows.every((r) => r.tier_from_2 === 0 && r.tier_from_3 === 0 && r.units_above_2 === 0 && r.units_above_3 === 0));
+});

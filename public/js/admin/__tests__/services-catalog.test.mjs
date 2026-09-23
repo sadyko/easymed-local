@@ -472,6 +472,66 @@ test('DOCTOR_TIER_V2: ступень 3 без ступени 2 и нерасту
   } finally { SVC.requires_doctor = 1; }
 });
 
+// DOCTOR_TIER_V2 (правки ревью) — границы чисел, падающая доля, нарушенные
+// сохранённые ступени.
+const openEditorFor = async (rows, pick) => {
+  const c = await paintRows(rows);
+  tags(c, 'tr').find((r) => r.className.includes('row-click') && textOf(r).includes(pick)).click();
+  await flush();
+  return c;
+};
+const tierInp = (k) => { const all = tags(document.body, 'input').filter((i) => i.attrs['data-tier'] === k); return all[all.length - 1]; };
+const setTier = (k, v) => { const i = tierInp(k); i.value = v; i.dispatchEvent({ type: 'input', target: i }); };
+const warnText = () => walk(document.body).filter((n) => n.attrs && n.attrs['data-tier-warn'] === '1').map(textOf).join(' | ');
+
+test('DOCTOR_TIER_V2: дробный порог и доля > 100 не уходят на сервер — тот же текст, что у отказа сервера', async () => {
+  for (const [k, v, msg] of [
+    ['from-1', '7.5', 'Порог ступени — целое число услуг в месяц (0 — без ступени).'],
+    ['pct-2', '120', 'Доля ступени 2 — от 0 до 100 %.'],
+  ]) {
+    await openEditorFor([{ ...SVC, requires_doctor: 0 }], 'УЗИ печени');
+    setTier('from-1', '25'); setTier('pct-1', '40');
+    if (k === 'pct-2') setTier('from-2', '50');
+    setTier(k, v);
+    rpcCalls.length = 0; toasts.length = 0;
+    const saves = tags(document.body, 'button').filter((b) => textOf(b).includes('Сохранить'));
+    saves[saves.length - 1].click();
+    await flush();
+    assert.ok(!rpcCalls.some((r) => r.name === 'service_save'), v + ' ушло на сервер');
+    assert.ok(toasts.includes(msg), 'нет текста отказа «' + msg + '»: ' + toasts.join(' | '));
+  }
+});
+
+test('DOCTOR_TIER_V2: доля ступени ниже предыдущей — предупреждение под ступенями, сохранение не блокируется', async () => {
+  await openEditorFor([{ ...SVC, requires_doctor: 0 }], 'УЗИ печени');
+  setTier('from-1', '25'); setTier('pct-1', '40');
+  setTier('from-2', '50'); setTier('pct-2', '45');
+  assert.equal(warnText(), '', 'растущие доли — без предупреждений');
+  setTier('pct-2', '35');
+  assert.ok(warnText().includes('Доля ступени 2 ниже предыдущей — после порога врачу будут платить меньше.'), warnText());
+  rpcCalls.length = 0;
+  const saves = tags(document.body, 'button').filter((b) => textOf(b).includes('Сохранить'));
+  saves[saves.length - 1].click();
+  await flush();
+  const save = rpcCalls.find((r) => r.name === 'service_save');
+  assert.ok(save, 'предупреждение заблокировало сохранение');
+  assert.equal(save.args.doctor_tier_percent_2, 35);
+});
+
+test('DOCTOR_TIER_V2: нарушенные сохранённые ступени не молчат — бейдж в списке и строка в редакторе', async () => {
+  const broken = { ...SVC, id: 11, name: 'Приём кардиолога', requires_doctor: 0,
+    doctor_tier_from: 60, doctor_tier_percent: 40, doctor_tier_from_2: 50, doctor_tier_percent_2: 45 };
+  const c = await paintRows([SVC, broken]);
+  const rows = dataRows(c);
+  const tagsOf = (r) => walk(r).filter((n) => n.attrs && n.attrs['data-tier-broken'] === '1');
+  const bad = rows.find((r) => textOf(r).includes('Приём кардиолога'));
+  assert.equal(tagsOf(bad).length, 1, 'нет бейджа «Ступени нарушены»');
+  assert.ok(textOf(bad).includes('Ступени нарушены'));
+  assert.equal(tagsOf(rows.find((r) => textOf(r).includes('УЗИ печени'))).length, 0, 'бейдж у исправной услуги');
+  await openEditorFor([broken], 'Приём кардиолога');
+  assert.ok(warnText().includes('Сохранённые ступени нарушены') && warnText().includes('Порог ступени 2 должен быть больше порога ступени 1.'), warnText());
+});
+
 // EXTERNAL_LAB_V1 — «Внешняя лаборатория»: подпись в списке услуг и галочка в
 // редакторе (только у лаборатории).
 const LAB_SVC = { id: 9, name: 'ПЦР на COVID', code: 'L-09', price: 90000, tax_rate: 12,

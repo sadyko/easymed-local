@@ -102,6 +102,58 @@ export function tierStepsProblem(steps) {
     return null;
 }
 
+/**
+ * Правка ревью: нарушенные СОХРАНЁННЫЕ ступени не должны быть тихими — отчёт
+ * читает сломанную ступень и следующие за ней как «нет». Строка services →
+ * первая проблема (как у tierStepsProblem) или null. Её показывают список
+ * услуг (бейдж «Ступени нарушены») и редактор (строка-предупреждение).
+ */
+export function storedTierProblem(row) {
+    if (!row) return null;
+    return tierStepsProblem(TIER_STEP_COLUMNS.map((c) => ({ from: Number(row[c.from]) || 0, pct: Number(row[c.pct]) || 0 })));
+}
+
+// Границы чисел ОДНОЙ ступени — те же отказы, что у service_save: порог —
+// целое ≥ 0, доля — 0..100. Пусто — «ступени нет», не ошибка. Редактор не
+// пропускает 7.5 до отказа сервера, импорт не округляет молча.
+const TIER_FROM_MSG = {
+    1: 'Порог ступени — целое число услуг в месяц (0 — без ступени).',
+    2: 'Порог ступени 2 — целое число услуг в месяц (0 — без ступени).',
+    3: 'Порог ступени 3 — целое число услуг в месяц (0 — без ступени).',
+};
+const TIER_PCT_MSG = {
+    1: 'Доля выше порога — от 0 до 100 %.',
+    2: 'Доля ступени 2 — от 0 до 100 %.',
+    3: 'Доля ступени 3 — от 0 до 100 %.',
+};
+const tierNum = (v) => (v === undefined || v === null || String(v).trim() === '' ? 0 : Number(v));
+
+/** Отказ по границам чисел ступени n или null. */
+export function tierStepRangeProblem(n, from, pct) {
+    const f = tierNum(from);
+    if (!Number.isInteger(f) || f < 0) return TIER_FROM_MSG[n];
+    const p = tierNum(pct);
+    if (!Number.isFinite(p) || p < 0 || p > 100) return TIER_PCT_MSG[n];
+    return null;
+}
+
+// Доля ступени НИЖЕ предыдущей — разрешено (решение за владельцем), но
+// редактор говорит вслух: после порога врачу будут платить меньше.
+const TIER_DROP_MSG = {
+    2: 'Доля ступени 2 ниже предыдущей — после порога врачу будут платить меньше.',
+    3: 'Доля ступени 3 ниже предыдущей — после порога врачу будут платить меньше.',
+};
+/** Предупреждения о падающей доле (массив строк, пустой — всё в порядке). */
+export function tierPctDropWarnings(steps) {
+    const out = [];
+    for (let i = 1; i < 3; i++) {
+        const st = steps[i], prev = steps[i - 1];
+        if (!st || !prev || !(Number(st.from) > 0) || !(Number(prev.from) > 0)) continue;
+        if (Number(st.pct) < Number(prev.pct)) out.push(TIER_DROP_MSG[i + 1]);
+    }
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // Комбобокс «выбери или впиши новую».
 // ---------------------------------------------------------------------------

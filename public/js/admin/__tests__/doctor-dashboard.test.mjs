@@ -392,6 +392,16 @@ test('DOCTOR_TIER_V2: прогресс — к следующему порогу,
   assert.strictEqual(dash.tierProgressText(10, [{ from: 25, pct: 50 }]), '10 из 25 в этом месяце · с 26-й доля 50%');
 });
 
+// DOCTOR_TIER_V2 (правка ревью) — прогресс называет ставку, по которой РЕАЛЬНО
+// платят: у врача с личными 42 % полоса ступени 1 (40 %) идёт по 42 %.
+test('DOCTOR_TIER_V2: прогресс показывает платимую ставку — не ниже личной', () => {
+  const steps = [{ from: 25, pct: 40 }, { from: 50, pct: 45 }, { from: 100, pct: 50 }];
+  assert.strictEqual(dash.tierProgressText(30, steps, 42), '30 из 50 в этом месяце · действует 42%, с 51-й доля 45%');
+  assert.strictEqual(dash.tierProgressText(10, steps, 42), '10 из 25 в этом месяце · с 26-й доля 42%');
+  assert.strictEqual(dash.tierProgressText(101, steps, 55), '101 из 100 в этом месяце · ступень 55% действует');
+  assert.strictEqual(dash.tierProgressText(30, steps), '30 из 50 в этом месяце · действует 40%, с 51-й доля 45%', 'без личной ставки — как раньше');
+});
+
 test('DOCTOR_TIER_V1: tierShare без позиции = serviceShare; с units_above делит по единицам и не понижает', () => {
   const rateMap = dash.serviceRateMap(DOCTOR_A);
   const s = { serviceId: A_SERVICES[0].serviceId, total: 300000, discount: 0, taxRate: 0 };

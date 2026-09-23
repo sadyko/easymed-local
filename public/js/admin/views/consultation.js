@@ -2030,7 +2030,9 @@ function salaryConfigCard(salary) {
         ...tierProgressRows(doc).map(p => kvRow(
             trf('Ступень: {service}', { service: p.serviceName }),
             // DOCTOR_TIER_V2 — прогресс к СЛЕДУЮЩЕМУ порогу (tierProgressText).
-            tierProgressText(p.count, p.steps && p.steps.length ? p.steps : [{ from: p.from, pct: p.pct }]))),
+            // Правка ревью: ставка — та, что реально платится (не ниже личной).
+            tierProgressText(p.count, p.steps && p.steps.length ? p.steps : [{ from: p.from, pct: p.pct }],
+                (serviceRateMap(doc).get(String(p.serviceId)) || {}).percentage || 0))),
         h('div', { class: 'row', style: { gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--ink-100)' } },
             h('span', { style: { fontSize: '12.5px', color: 'var(--ink-600)' } }, tr('Итого за период:')),
             h('span', { class: 'grow' }),

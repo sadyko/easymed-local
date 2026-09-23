@@ -296,15 +296,18 @@ const INV_STATUS_RU = {
 // (service_save и импорт так и проверяют; здесь то же условие ещё раз, чтобы
 // кривая строка, пришедшая мимо них, не дала отрицательных полос). Иначе её
 // порог читается как 0 — «ступени нет».
+// Правка ревью: страховка проверяет и ПАРЫ — порог без доли платил бы полосу
+// по личной ставке, ниже ступени 1. Ступень действует, только если её пара
+// полна, предыдущая действует и порог выше предыдущего.
+const TIER2_OK = `(s.doctor_tier_percent > 0 AND s.doctor_tier_percent_2 > 0
+               AND s.doctor_tier_from_2 > s.doctor_tier_from)`;
+const TIER3_OK = `(s.doctor_tier_percent_3 > 0 AND s.doctor_tier_from_3 > s.doctor_tier_from_2)`;
 export const TIER_RANK_SQL = `
   SELECT r.id AS visit_service_id, r.doctor_id, r.service_id, r.qty, r.ym,
          s.doctor_tier_from AS tier_from, s.doctor_tier_percent AS tier_percent,
-         CASE WHEN s.doctor_tier_from_2 > s.doctor_tier_from
-              THEN s.doctor_tier_from_2 ELSE 0 END AS tier_from_2,
+         CASE WHEN ${TIER2_OK} THEN s.doctor_tier_from_2 ELSE 0 END AS tier_from_2,
          s.doctor_tier_percent_2 AS tier_percent_2,
-         CASE WHEN s.doctor_tier_from_2 > s.doctor_tier_from
-               AND s.doctor_tier_from_3 > s.doctor_tier_from_2
-              THEN s.doctor_tier_from_3 ELSE 0 END AS tier_from_3,
+         CASE WHEN ${TIER2_OK} AND ${TIER3_OK} THEN s.doctor_tier_from_3 ELSE 0 END AS tier_from_3,
          s.doctor_tier_percent_3 AS tier_percent_3,
          SUM(r.qty) OVER (PARTITION BY r.doctor_id, r.service_id, r.ym
                           ORDER BY r.visit_date, r.id

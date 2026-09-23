@@ -277,3 +277,27 @@ test('DOCTOR_TIER_V2: tierStepsProblem — пары, порядок, расту�
   assert.equal(tierStepsProblem([null, { from: 50, pct: 45 }, { from: 100, pct: 50 }]), null);
   assert.deepEqual(p([null, { from: 50, pct: 45 }, { from: 40, pct: 50 }]), [3, 'from', 'Порог ступени 3 должен быть больше порога ступени 2.']);
 });
+
+// DOCTOR_TIER_V2 (правки ревью) — границы чисел одной ступени и мягкое
+// предупреждение о падающей доле: одно правило на сервер, редактор и импорт.
+import { tierStepRangeProblem, tierPctDropWarnings } from '../service-editor-logic.js';
+
+test('DOCTOR_TIER_V2: tierStepRangeProblem — те же отказы, что у service_save', () => {
+  assert.equal(tierStepRangeProblem(1, 25, 40), null);
+  assert.equal(tierStepRangeProblem(2, '', ''), null, 'пусто — ступени нет, это не ошибка');
+  assert.equal(tierStepRangeProblem(1, 7.5, 40), 'Порог ступени — целое число услуг в месяц (0 — без ступени).');
+  assert.equal(tierStepRangeProblem(2, 7.5, 40), 'Порог ступени 2 — целое число услуг в месяц (0 — без ступени).');
+  assert.equal(tierStepRangeProblem(3, -1, 40), 'Порог ступени 3 — целое число услуг в месяц (0 — без ступени).');
+  assert.equal(tierStepRangeProblem(3, 'abc', 40), 'Порог ступени 3 — целое число услуг в месяц (0 — без ступени).');
+  assert.equal(tierStepRangeProblem(1, 25, 120), 'Доля выше порога — от 0 до 100 %.');
+  assert.equal(tierStepRangeProblem(2, 50, 120), 'Доля ступени 2 — от 0 до 100 %.');
+  assert.equal(tierStepRangeProblem(2, 50, 'abc'), 'Доля ступени 2 — от 0 до 100 %.');
+});
+
+test('DOCTOR_TIER_V2: tierPctDropWarnings — доля ниже предыдущей ступени называется, но не запрещается', () => {
+  const S = (...a) => [{ from: a[0], pct: a[1] }, { from: a[2] || 0, pct: a[3] || 0 }, { from: a[4] || 0, pct: a[5] || 0 }];
+  assert.deepEqual(tierPctDropWarnings(S(25, 40, 50, 45, 100, 50)), []);
+  assert.deepEqual(tierPctDropWarnings(S(25, 50, 50, 35)), ['Доля ступени 2 ниже предыдущей — после порога врачу будут платить меньше.']);
+  assert.deepEqual(tierPctDropWarnings(S(25, 40, 50, 45, 100, 42)), ['Доля ступени 3 ниже предыдущей — после порога врачу будут платить меньше.']);
+  assert.deepEqual(tierPctDropWarnings(S(25, 40, 0, 0, 0, 0)), [], 'пустые ступени не сравниваются');
+});

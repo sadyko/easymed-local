@@ -275,21 +275,24 @@ export function tierShare(s, rateMap, pos) {
  * DOCTOR_TIER_V2 — строка прогресса ступеней за месяц: count — сколько услуг
  * уже в счёте месяца, steps — действующие ступени по порядку [{from, pct}].
  * Прогресс идёт К СЛЕДУЮЩЕМУ порогу; после последнего — «ступень действует».
+ * personalPct — личная ставка врача по услуге: показывается ставка, по
+ * которой РЕАЛЬНО платят, — MAX(личная, ступень), как в ITEM_EFF_PCT_SQL.
  */
-export function tierProgressText(count, steps) {
+export function tierProgressText(count, steps, personalPct = 0) {
+    const paid = (p) => Math.max(Number(personalPct) || 0, Number(p) || 0);
     const list = (steps || []).filter((st) => st && Number(st.from) > 0);
     if (!list.length) return '';
     const nextIdx = list.findIndex((st) => count <= Number(st.from));
     if (nextIdx === -1) {
         const top = list[list.length - 1];
-        return trf('{count} из {from} в этом месяце · ступень {pct}% действует', { count, from: top.from, pct: top.pct });
+        return trf('{count} из {from} в этом месяце · ступень {pct}% действует', { count, from: top.from, pct: paid(top.pct) });
     }
     const next = list[nextIdx];
     if (nextIdx === 0) {
-        return trf('{count} из {from} в этом месяце · с {next}-й доля {pct}%', { count, from: next.from, next: Number(next.from) + 1, pct: next.pct });
+        return trf('{count} из {from} в этом месяце · с {next}-й доля {pct}%', { count, from: next.from, next: Number(next.from) + 1, pct: paid(next.pct) });
     }
     return trf('{count} из {from} в этом месяце · действует {cur}%, с {next}-й доля {pct}%',
-        { count, from: next.from, cur: list[nextIdx - 1].pct, next: Number(next.from) + 1, pct: next.pct });
+        { count, from: next.from, cur: paid(list[nextIdx - 1].pct), next: Number(next.from) + 1, pct: paid(next.pct) });
 }
 
 /**

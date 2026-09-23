@@ -458,3 +458,18 @@ test('EXTERNAL_LAB_V1: у не-лабораторной услуги отмет�
   serviceSave(db, baseArgs({ id: lab.id, name: 'ПЦР' }), admin);   // раздел сменили на приём
   assert.equal(extOf(db, lab.id), 0);
 });
+
+// DOCTOR_TIER_V2 (правка ревью) — старый редактор из кэша браузера не знает
+// ступеней 2 и 3 и не шлёт их ключей: при правке отсутствующий ключ значит
+// «не трогать», а не «обнулить».
+test('DOCTOR_TIER_V2: правка без ключей ступеней 2–3 оставляет их как были', () => {
+  const db = freshDb();
+  const full = { doctor_tier_from: 25, doctor_tier_percent: 40, doctor_tier_from_2: 50, doctor_tier_percent_2: 45, doctor_tier_from_3: 100, doctor_tier_percent_3: 50 };
+  const { id } = serviceSave(db, baseArgs(full), admin);
+  serviceSave(db, baseArgs({ id, doctor_tier_from: 20, doctor_tier_percent: 35 }), admin);   // старый клиент
+  assert.deepEqual(stepsOf(db, id), { ...full, doctor_tier_from: 20, doctor_tier_percent: 35 });
+  // Порядок проверяется по СЛИТЫМ ступеням: порог 1 выше сохранённого порога 2 — отказ.
+  assert.throws(() => serviceSave(db, baseArgs({ id, doctor_tier_from: 60, doctor_tier_percent: 40 }), admin),
+    (e) => e.status === 400 && e.message === 'Порог ступени 2 должен быть больше порога ступени 1.');
+  assert.equal(stepsOf(db, id).doctor_tier_from, 20, 'отказ ничего не записал');
+});

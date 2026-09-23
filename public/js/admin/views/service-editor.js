@@ -21,7 +21,7 @@ import { tr, trf } from '../i18n.js';
 import {
     SERVICE_SECTIONS, labBlockVisible, resolveCombobox, splitPerformers,
     currentPerformerIds, performerGate, rpcErrorTemplate,
-    TIER_STEP_COLUMNS, tierStepsProblem,
+    TIER_STEP_COLUMNS, tierStepsProblem, tierStepRangeProblem, tierPctDropWarnings, storedTierProblem,
 } from '../service-editor-logic.js';
 
 // Тот же перечень пробирок, что вела старая generic-форма (sections.js,
@@ -177,6 +177,23 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
         from: h('input', { type: 'number', step: '1', min: '0', value: row && row[c.from] ? row[c.from] : '', placeholder: '0 — нет', 'data-tier': 'from-' + c.n }),
         pct:  h('input', { type: 'number', step: '0.01', min: '0', max: '100', value: row && row[c.pct] ? row[c.pct] : '', placeholder: TIER_PCT_HINT[c.n], 'data-tier': 'pct-' + c.n }),
     }));
+    // Правки ревью — предупреждения под ступенями, НЕ блокирующие сохранение:
+    //  • сохранённые ступени нарушены (отчёт не платит по сломанной ступени и
+    //    следующим) — видно при открытии, пока их не исправят;
+    //  • доля ступени ниже предыдущей (разрешено, решение за владельцем) —
+    //    после порога врачу будут платить меньше.
+    const storedBroken = storedTierProblem(row);
+    const tierWarnBox = h('div', { class: 'svc-ed-tierwarn', 'data-tier-warn': '1' });
+    const tierValues = () => tierInputs.map((t) => ({ from: Number(t.from.value) || 0, pct: Number(t.pct.value) || 0 }));
+    const paintTierWarn = () => {
+        tierWarnBox.replaceChildren();
+        const lines = [];
+        if (storedBroken) lines.push(trf('Сохранённые ступени нарушены: {problem} Пока не исправить, отчёты не платят по этой ступени и следующим.', { problem: tr(storedBroken.message) }));
+        for (const w of tierPctDropWarnings(tierValues())) lines.push(tr(w));
+        for (const text of lines) tierWarnBox.appendChild(h('div', { class: 'svc-ed-warn' }, Icon('Warning', { size: 14 }), h('span', null, text)));
+    };
+    for (const t of tierInputs) { t.from.addEventListener('input', paintTierWarn); t.pct.addEventListener('input', paintTierWarn); }
+    paintTierWarn();
 
     // VISIT_TIER_PRICING_V1 — цена по счёту визита (владелец: «for the primary
     // visit, secondary, repeat visit and set dates between the first and
@@ -263,7 +280,16 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
         }
         // DOCTOR_TIER_V1/V2 — ступени парами, по порядку, с растущими порогами;
         // сервер откажет 400, а здесь курсор сразу встаёт в нужное поле.
-        const tierProblem = tierStepsProblem(tierInputs.map((t) => ({ from: Number(t.from.value) || 0, pct: Number(t.pct.value) || 0 })));
+        // Правка ревью: границы чисел — тем же текстом, что откажет сервер
+        // (7.5 шт. или 120 % не уходят до отказа).
+        for (const t of tierInputs) {
+            const range = tierStepRangeProblem(t.n, t.from.value, t.pct.value);
+            if (range) {
+                toast(range, 'warn');
+                goTo('price', tierStepRangeProblem(t.n, t.from.value, 0) ? t.from : t.pct); return;
+            }
+        }
+        const tierProblem = tierStepsProblem(tierValues());
         if (tierProblem) {
             toast(tierProblem.message, 'warn');
             goTo('price', tierInputs[tierProblem.step - 1][tierProblem.field]); return;
@@ -411,7 +437,8 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
                     h('span', { class: 'svc-ed-steplbl' }, TIER_STEP_LABEL[t.n]),
                     grid(2,
                         unitField('Порог, услуг в месяц', t.from, 'шт.'),
-                        unitField('Доля выше порога', t.pct, '%'))))),
+                        unitField('Доля выше порога', t.pct, '%')))),
+                tierWarnBox),
             grp('Цена по счёту визита',
                 h('div', { class: 'svc-ed-note' }, 'Необязательно. Окно дней считается от предыдущего визита по этой же услуге; пришёл позже окна — снова первый визит. «Не раньше чем через 0» — второй визит в тот же день тоже считается.'),
                 grid(2,

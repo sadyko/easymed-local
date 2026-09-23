@@ -22,7 +22,7 @@
 import { hasAnyRole } from '../roles.js';
 import {
   SERVICE_SECTIONS, labBlockVisible, normName, mergeServiceRates,
-  performerGate, ratesArray, tierStepsProblem,
+  performerGate, ratesArray, tierStepsProblem, tierStepRangeProblem,
 } from '../../../public/js/admin/service-editor-logic.js';
 
 export class RpcError extends Error {
@@ -150,31 +150,40 @@ export function serviceSave(db, args, user) {
   // доля выше порога (0–100). Одно без другого — ошибка ввода, а не «половина
   // настройки»: экран не должен притворяться, что ступень есть.
   const optNum = (v) => (v === undefined || v === null || v === '' ? 0 : Number(v));
-  const tierFrom = optNum(a.doctor_tier_from);
-  if (!Number.isInteger(tierFrom) || tierFrom < 0) throw new RpcError('Порог ступени — целое число услуг в месяц (0 — без ступени).', 400);
-  const tierPct = optNum(a.doctor_tier_percent);
-  if (!Number.isFinite(tierPct) || tierPct < 0 || tierPct > 100) throw new RpcError('Доля выше порога — от 0 до 100 %.', 400);
-
-  // DOCTOR_TIER_V2 — ступени 2 и 3 (миграция 147): те же границы чисел, что у
-  // ступени 1. Пары, порядок и растущие пороги проверяет ОДНО правило —
-  // tierStepsProblem (service-editor-logic.js), его же зовут редактор и импорт.
-  // Проценты расти не обязаны — клиника решает сама, здесь о них ни слова.
+  // DOCTOR_TIER_V2 — границы чисел каждой ступени (tierStepRangeProblem) и
+  // пары, порядок, растущие пороги (tierStepsProblem): одно правило на сервер,
+  // редактор и импорт (service-editor-logic.js). Проценты расти не обязаны.
+  //
+  // Правка ревью: при ПРАВКЕ отсутствующие ключи ступеней 2–3 значат «не
+  // трогать» (старый редактор из кэша их не знает и обнулил бы настройку), а
+  // порядок проверяется по СЛИТЫМ ступеням — присланным поверх сохранённых.
+  const storedTier = a.id !== undefined && a.id !== null
+    ? db.prepare('SELECT doctor_tier_from_2, doctor_tier_percent_2, doctor_tier_from_3, doctor_tier_percent_3 FROM services WHERE id = ?').get(Number(a.id)) || null
+    : null;
   const stepN = (n) => {
-    const from = optNum(a['doctor_tier_from_' + n]);
-    if (!Number.isInteger(from) || from < 0) throw new RpcError(`Порог ступени ${n} — целое число услуг в месяц (0 — без ступени).`, 400);
-    const pct = optNum(a['doctor_tier_percent_' + n]);
-    if (!Number.isFinite(pct) || pct < 0 || pct > 100) throw new RpcError(`Доля ступени ${n} — от 0 до 100 %.`, 400);
-    return { from, pct };
+    const fk = n === 1 ? 'doctor_tier_from' : 'doctor_tier_from_' + n;
+    const pk = n === 1 ? 'doctor_tier_percent' : 'doctor_tier_percent_' + n;
+    if (n > 1 && storedTier && a[fk] === undefined && a[pk] === undefined) {
+      return { from: storedTier[fk], pct: storedTier[pk], kept: true };
+    }
+    const range = tierStepRangeProblem(n, a[fk], a[pk]);
+    if (range) throw new RpcError(range, 400);
+    return { from: optNum(a[fk]), pct: optNum(a[pk]) };
   };
+  const step1 = stepN(1);
   const step2 = stepN(2);
   const step3 = stepN(3);
-  const tierProblem = tierStepsProblem([{ from: tierFrom, pct: tierPct }, step2, step3]);
+  const tierFrom = step1.from, tierPct = step1.pct;
+  const tierProblem = tierStepsProblem([step1, step2, step3]);
   if (tierProblem) throw new RpcError(tierProblem.message, 400);
   const tierCols = {
     doctor_tier_from: tierFrom, doctor_tier_percent: tierPct,   // DOCTOR_TIER_V1
     doctor_tier_from_2: step2.from, doctor_tier_percent_2: step2.pct,   // DOCTOR_TIER_V2
     doctor_tier_from_3: step3.from, doctor_tier_percent_3: step3.pct,
   };
+  // Не присланная ступень при правке не пишется вовсе — ровно «не трогать».
+  if (step2.kept) { delete tierCols.doctor_tier_from_2; delete tierCols.doctor_tier_percent_2; }
+  if (step3.kept) { delete tierCols.doctor_tier_from_3; delete tierCols.doctor_tier_percent_3; }
 
   // VISIT_TIER_PRICING_V1 — цены по счёту визита. Все четыре поля могут быть
   // пустыми (услуга с одной ценой); заданная цена — неотрицательное число,
