@@ -113,7 +113,7 @@ test('заблокированная клиника читает все три �
   const { app, password } = harness({ validUntil: '2020-01-01T00:00:00Z' });
   const server = await listen(app); t.after(() => server.close());
   const cookie = await login(server, password);
-  for (const rpc of ['stock_movements_list', 'stock_expiry_lots', 'holdings_list', 'stock_minimums_list']) {
+  for (const rpc of ['stock_movements_list', 'stock_expiry_lots', 'holdings_list', 'stock_minimums_list', 'stock_requests_mine']) {
     const res = await post(server, cookie, `/api/rpc/${rpc}`, {});
     assert.notEqual(res.status, 402, `${rpc} закрылся вместе с соседями по экрану`);
   }

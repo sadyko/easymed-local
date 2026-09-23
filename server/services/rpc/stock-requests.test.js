@@ -14,7 +14,7 @@ import { migrate } from '../../db/migrate.js';
 import { issueStockLines, approveRequisitionAndIssue, createRequisition } from './procurement.js';
 import { dispenseFromHolding } from './holdings.js';
 import { dispenseItem } from './inventory.js';
-import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCreate } from './stock-requests.js';
+import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCreate, stockRequestsMine } from './stock-requests.js';
 import { getRpc } from './index.js';
 
 const ADMIN = { id: 1, role: 'admin' };
@@ -365,10 +365,43 @@ test('возврат на руки (отмена списания) автоза�
   } finally { db.close(); }
 });
 
+// --- «Мои заявки» (R2) ---------------------------------------------------------
+
+test('мои заявки: открытые — мне и поданные мной для отдела; строки в единицах расхода; чужие и закрытые не видны', () => {
+  const { db, gloves, para } = seed();
+  try {
+    const mine = stockRequestCreate(db, { for: 'me', notes: 'на смену', lines: [{ product_id: para, qty: 20, unit: 'consumption' }] }, NURSE);
+    const forDept = stockRequestCreate(db, { for: 'department', lines: [{ product_id: gloves, qty: 3 }] }, NURSE);
+    const done = stockRequestCreate(db, { for: 'me', lines: [{ product_id: gloves, qty: 1 }] }, NURSE);
+    approveRequisitionAndIssue(db, { req_id: done.req_id }, INV);
+    stockRequestCreate(db, { for: 'me', lines: [{ product_id: gloves, qty: 2 }] }, NURSE2);
+    // Автозаявка мне: минимум выше остатка.
+    const set = stockMinimumSet(db, { holder_type: 'staff', holder_id: 5, product_id: gloves, min_qty: 2, target_qty: 4 }, NURSE);   // на руках 1 — ниже
+    assert.ok(set.request);
+
+    const res = stockRequestsMine(db, {}, NURSE);
+    assert.deepEqual(res.rows.map((r) => r.req_id), [set.request.req_id, forDept.req_id, mine.req_id], 'новые сверху; выданная и чужая — нет');
+    const auto = res.rows[0];
+    assert.equal(auto.auto, true);
+    assert.deepEqual([auto.holder_type, auto.holder_id, auto.holder_name], ['staff', 5, 'Медсестра Ирина']);
+    const dept = res.rows[1];
+    assert.deepEqual([dept.holder_type, dept.holder_id, dept.holder_name, dept.auto], ['department', 9, 'Терапия', false]);
+    const own = res.rows[2];
+    assert.equal(own.status, 'submitted');
+    assert.equal(own.notes, 'на смену');
+    assert.equal(own.req_number, mine.req_number);
+    assert.deepEqual(own.lines, [{ product_id: para, product_name: 'Парацетамол', qty: 2, units: 20, unit: 'таб' }],
+      'человек видит таблетки, а не упаковки');
+
+    assert.deepEqual(stockRequestsMine(db, {}, NURSE2).rows.map((r) => r.holder_id), [6]);
+    assert.deepEqual(stockRequestsMine(db, {}, REG).rows, []);
+  } finally { db.close(); }
+});
+
 // --- Регистрация -------------------------------------------------------------
 
 test('вызовы зарегистрированы под своими именами', () => {
-  for (const name of ['stock_minimum_set', 'stock_minimum_clear', 'stock_minimums_list', 'stock_request_create']) {
+  for (const name of ['stock_minimum_set', 'stock_minimum_clear', 'stock_minimums_list', 'stock_request_create', 'stock_requests_mine']) {
     assert.equal(typeof getRpc(name), 'function', `${name} не зарегистрирован`);
   }
 });

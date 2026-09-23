@@ -437,3 +437,38 @@ export function stockRequestCreate(db, args, user) {
   });
   return run();
 }
+
+/**
+ * stock_requests_mine — «Мои заявки» на экране «Мои запасы» (R2): открытые
+ * заявки, поданные МНЕ (держатель — я) и поданные МНОЙ для отдела. Только
+ * чтение. Строки — в единицах расхода, как человек и просил.
+ * args: {} → { rows: [{ req_id, req_number, status, auto, created_at, notes,
+ *   holder_type, holder_id, holder_name,
+ *   lines: [{ product_id, product_name, qty, units, unit }] }] }   — qty базовые, units — расхода
+ */
+export function stockRequestsMine(db, _args, user) {
+  const uid = Number(user && user.id);
+  if (!isPosInt(uid)) throw new RpcError('Вошедший не опознан.', 401);
+  const reqRows = db.prepare(`
+    SELECT r.id, r.req_number, r.status, r.auto, r.created_at, r.notes, r.holder_type, r.holder_id,
+           CASE r.holder_type WHEN 'staff' THEN (SELECT full_name FROM users WHERE id = r.holder_id)
+                              ELSE (SELECT name FROM departments WHERE id = r.holder_id) END AS holder_name
+      FROM purchase_requisitions r
+     WHERE r.status IN (${OPEN_IN})
+       AND ((r.holder_type = 'staff' AND r.holder_id = ?) OR (r.holder_type = 'department' AND r.requested_by = ?))
+     ORDER BY r.id DESC LIMIT 100`).all(uid, uid);
+  const items = db.prepare(`
+    SELECT i.product_id, i.qty, p.name AS product_name, p.base_unit, p.unit, p.consumption_unit, p.consumption_factor
+      FROM purchase_requisition_items i LEFT JOIN products p ON p.id = i.product_id
+     WHERE i.req_id = ? ORDER BY i.id`);
+  return {
+    rows: reqRows.map((r) => ({
+      req_id: r.id, req_number: r.req_number, status: r.status, auto: !!r.auto, created_at: r.created_at,
+      notes: r.notes || '', holder_type: r.holder_type, holder_id: r.holder_id, holder_name: r.holder_name || '',
+      lines: items.all(r.id).map((i) => ({
+        product_id: i.product_id, product_name: i.product_name || '',
+        qty: round2(i.qty), units: round2(Number(i.qty) * factorOf(i)), unit: unitLabel(i),
+      })),
+    })),
+  };
+}

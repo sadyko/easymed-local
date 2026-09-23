@@ -142,7 +142,7 @@ const READ_ONLY_RPCS = new Set([
   // Чистое чтение, и та же причина, что у соседей строкой выше: экран один, и
   // отказ одной его половине читается как «программа сломалась». Поставить или
   // снять минимум и подать заявку — записи, сюда не входят.
-  'stock_minimums_list',
+  'stock_minimums_list', 'stock_requests_mine',
 ]);
 
 // The way back in. These must work while locked or a clinic that wants to pay

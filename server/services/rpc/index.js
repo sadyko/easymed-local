@@ -7,7 +7,7 @@ import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOAR
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel, createRequisition } from './procurement.js';
 import { departmentList, departmentCard, departmentForm, departmentHeadSet, departmentMemberSet, departmentPlaceSet, departmentStaffOptions, departmentPlaceOptions } from './departments.js';   // DEPARTMENTS_V1
 import { stockMovementsList } from './stock-log.js';   // STOCK_LOG_V1
-import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCreate } from './stock-requests.js';   // STOCK_REQUEST_V1
+import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCreate, stockRequestsMine } from './stock-requests.js';   // STOCK_REQUEST_V1
 import { expiryLots } from './expiry.js';   // EXPIRY_BALANCE_V1 — остатки партиями, ближайший срок первым
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
@@ -131,6 +131,7 @@ export const RPC = {
   stock_minimum_set:             (db, args, user) => stockMinimumSet(db, args, user),
   stock_minimum_clear:           (db, args, user) => stockMinimumClear(db, args, user),
   stock_minimums_list:           (db, args, user) => stockMinimumsList(db, args, user),
+  stock_requests_mine:           (db, args, user) => stockRequestsMine(db, args, user),   // R2 — «Мои заявки», чтение
   // STOCK_LOG_V1 — журнал движений: кто, кому, партия, срок, период. Область
   // видимости («своё / свой отдел / вся клиника») считает обработчик, а не
   // экран: чужие строки до браузера не доезжают.
