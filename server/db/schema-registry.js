@@ -445,14 +445,24 @@ export const REGISTRY = {
     embed:   { suppliers: { table:'suppliers', fk:'supplier_id', columns:['id','name'] } },
   },
   stock_movements: {
-    read:  { roles: ALL_STAFF, columns: ['id','product_id','kind','qty','unit_cost','reference_type','reference_id','note','created_by','created_at','supplier_id','batch_no','expiry_date','branch_id'] },   // RECEIVE_EASYMED_V1 (mig 037); branch_id — в каком здании движение
+    // STOCK_LOG_V1 (mig 128) — holder_type/holder_id это КОМУ выдано: сотруднику,
+    // в кабинет или в отдел. До этой строки получатель существовал в базе и не
+    // читался ниоткуда, и журналу приходилось вылавливать его имя из начала
+    // основания (rpc/departments.js stripRecipient). Круг читающих не меняется:
+    // сам факт выдачи и так виден в этом же списке, а «кому именно можно
+    // показать» решает rpc/stock-log.js — не реестр.
+    read:  { roles: ALL_STAFF, columns: ['id','product_id','kind','qty','unit_cost','reference_type','reference_id','note','created_by','created_at','supplier_id','batch_no','expiry_date','branch_id','holder_type','holder_id'] },   // RECEIVE_EASYMED_V1 (mig 037); branch_id — в каком здании движение
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
     // Карточка товара и «Движения» — это ЖУРНАЛ ЗА ПЕРИОД: отбор по дате, виду
     // документа и ненулевому количеству/цене считает SQL, иначе выборка
     // обрезается limit'ом раньше, чем доходит до нужного месяца. unit_cost
     // читается тем же ALL_STAFF и здесь не расширяет круг: закупочная цена и так
     // видна в этом же списке (см. read), фильтр лишь позволяет её не грузить.
-    filters: ['id','product_id','kind','created_at','qty','unit_cost','reference_type','branch_id'],
+    // STOCK_LOG_V1 — получатель, партия, срок и поставщик стали фильтрами по той
+    // же причине: «что лежит у этого отдела», «что из этой партии» и «что
+    // просрочено» — это ОТБОР, и считать его должен SQL, а не браузер поверх
+    // обрезанной limit'ом выборки (S5, «Сроки годности», читает те же колонки).
+    filters: ['id','product_id','kind','created_at','qty','unit_cost','reference_type','branch_id','holder_type','holder_id','batch_no','expiry_date','supplier_id'],
     embed:   { products: { table:'products', fk:'product_id', columns:['id','name','unit','base_unit'] },
                created_by: { table:'users', fk:'created_by', columns:['id','full_name'] } },   // users:created_by(full_name) — кто провёл движение
   },

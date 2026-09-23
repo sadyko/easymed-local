@@ -127,6 +127,11 @@ const READ_ONLY_RPCS = new Set([
   // видит, кто где работает и что у отдела на руках. Формирование, правки и
   // выдача — записи, сюда не входят.
   'department_list', 'department_card', 'department_staff_options', 'department_place_options',
+  // STOCK_LOG_V1 — журнал движений склада. Чистое чтение, и та же причина, что
+  // у карточки отдела строкой выше: «кто кому что выдал» — это уже случившееся
+  // прошлое клиники, и закрывать его вместе с записью незачем. Приход, выдача
+  // и списание — записи, сюда не входят.
+  'stock_movements_list',
 ]);
 
 // The way back in. These must work while locked or a clinic that wants to pay

@@ -6,6 +6,7 @@ import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDi
 import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOARD_TREND_V1
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel, createRequisition } from './procurement.js';
 import { departmentList, departmentCard, departmentForm, departmentHeadSet, departmentMemberSet, departmentPlaceSet, departmentStaffOptions, departmentPlaceOptions } from './departments.js';   // DEPARTMENTS_V1
+import { stockMovementsList } from './stock-log.js';   // STOCK_LOG_V1
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit,
@@ -120,6 +121,10 @@ export const RPC = {
   post_stock_count:              (db, args, user) => postStockCount(db, args, user),                // PROC_P2 — reconcile a physical count
   issue_stock_lines:             (db, args, user) => issueStockLines(db, args, user),               // PROCUREMENT_REDESIGN_V1 — Выдача со склада
   create_requisition:            (db, args, user) => createRequisition(db, args, user),             // DEPARTMENTS_V1 — заявка отдела на склад
+  // STOCK_LOG_V1 — журнал движений: кто, кому, партия, срок, период. Область
+  // видимости («своё / свой отдел / вся клиника») считает обработчик, а не
+  // экран: чужие строки до браузера не доезжают.
+  stock_movements_list:          (db, args, user) => stockMovementsList(db, args, user),
   // DEPARTMENTS_V1 — отделы: список, карточка, формирование, мелкие правки, справочники для шагов.
   department_list:               (db, args, user) => departmentList(db, args, user),
   department_card:               (db, args, user) => departmentCard(db, args, user),
