@@ -608,6 +608,8 @@ const STAFF_HISTORY_REFS = [
   { table: 'recommended_services',    columns: ['recommended_by'],            label: 'рекомендации услуг' },
   { table: 'consultation_templates',  columns: ['author_id'],                 label: 'шаблоны консультаций' },
   { table: 'crm_requests',            columns: ['assigned_to', 'created_by'], label: 'заявки CRM' },
+  // CRM_DEDUP_SEARCH_TASKS_V1 (mig 148) — без этой строки удаление упиралось во внешний ключ и отвечало 500.
+  { table: 'crm_tasks',               columns: ['assignee_id', 'done_by', 'created_by'], label: 'задачи CRM' },
 ];
 
 // Rows that only DESCRIBE the employee — their rates, branches, specialties.

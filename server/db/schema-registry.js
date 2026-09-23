@@ -93,11 +93,18 @@ export const REGISTRY = {
   // — ровно по индексу idx_crm_tasks_assignee.
   crm_tasks: {
     read:  { roles: ['admin','registrar','callcenter'], columns: ['id','request_id','text','due_at','assignee_id','done_at','done_by','created_by','created_at'] },
-    write: { insert: { roles: ['admin','registrar','callcenter'], columns: ['request_id','text','due_at','assignee_id','created_by'] },
-             update: { roles: ['admin','registrar','callcenter'], columns: ['text','due_at','assignee_id','done_at','done_by'] },
+    write: { insert: { roles: ['admin','registrar','callcenter'], columns: ['request_id','text','due_at','assignee_id'] },
+             update: { roles: ['admin','registrar','callcenter'], columns: ['text','due_at','assignee_id','done_at'] },
              delete: { roles: ['admin'] } },
     filters: ['id','request_id','assignee_id','done_at','due_at'],
     embed:   { users: { table:'users', fk:'assignee_id', columns:['id','full_name'] } },
+    // Ревью I1: задача — часть заявки и видна ровно тогда, когда видна её
+    // заявка (CRM_OWNERSHIP_V1 родителя: своя или ничья, администратору всё).
+    // Задача, назначенная оператору Б на заявке оператора А, Б НЕ видна: чужая
+    // заявка «do not show» целиком. Вставка — только на видимую заявку.
+    scope: { via: { fk: 'request_id', table: 'crm_requests' } },
+    // «Кто создал» и «кто отметил» — из сессии, не с экрана.
+    stamps: { created_by: { on: 'insert' }, done_by: { with: 'done_at' } },
   },
 
   patients: {
@@ -1420,6 +1427,8 @@ export const REGISTRY = {
 export function tableEntry(t) { return Object.prototype.hasOwnProperty.call(REGISTRY, t) ? { table: t, ...REGISTRY[t] } : null; }
 // CRM_OWNERSHIP_V1 — правило «чьи это строки», если у таблицы оно есть.
 export function rowScope(t) { const e = REGISTRY[t]; return (e && e.scope) || null; }
+// CRM_DEDUP_SEARCH_TASKS_V1 — колонки «кто», которые пишет сервер из сессии (query-compiler stampValues).
+export function actorStamps(t) { const e = REGISTRY[t]; return (e && e.stamps) || null; }
 // MULTI_ROLE_SERVER_V1 — `role` is a single role name OR the caller's full
 // effective set (primary + extra_roles). A grant to ANY role in the set allows
 // the op: that is what «Дополнительные роли» means. An empty set allows nothing.

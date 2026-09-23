@@ -120,3 +120,37 @@ test('правило не задевает таблицы без владель�
     assert.equal(/assigned_to/.test(q.sql), false, 'ограничение по владельцу утекло в чужую таблицу');
   } finally { db.close(); }
 });
+
+// CRM_DEDUP_SEARCH_TASKS_V1 — ограничение ЧЕРЕЗ РОДИТЕЛЯ (scope.via) и колонки
+// «кто», которые ставит сервер (stamps). Проверяется сам компилятор; поведение
+// через /api/db — routes/crm-tasks-ownership.test.js.
+test('scope.via: задача видна по правилу своей заявки; администратору ограничения нет', () => {
+  const db = seed();
+  try {
+    const t = db.prepare('INSERT INTO crm_tasks (request_id, text) VALUES (?, ?)');
+    t.run(1, 'Насибина'); t.run(2, 'Зухрина'); t.run(3, 'Ничья');
+    const sel = { op: 'select', table: 'crm_tasks', columns: 'id, text', filters: [] };
+    assert.deepEqual(run(db, sel, NASIBA).map((r) => r.text).sort(), ['Насибина', 'Ничья']);
+    assert.equal(run(db, sel, BOSS).length, 3);
+    assert.equal(/IN \(SELECT/.test(compile(sel, BOSS).sql), false, 'администратору навязан подзапрос');
+    // вставка на чужую заявку компилируется в INSERT … WHERE EXISTS и не пишет ничего
+    const q = compile({ op: 'insert', table: 'crm_tasks', values: { request_id: 2, text: 'x' } }, NASIBA);
+    assert.equal(q.meta.guarded, true);
+    assert.equal(db.prepare(q.sql).run(...q.params).changes, 0);
+    const ok = compile({ op: 'insert', table: 'crm_tasks', values: { request_id: 1, text: 'x' } }, NASIBA);
+    assert.equal(db.prepare(ok.sql).run(...ok.params).changes, 1);
+    assert.equal(compile({ op: 'insert', table: 'crm_tasks', values: { request_id: 2, text: 'x' } }, BOSS).meta.guarded, false);
+  } finally { db.close(); }
+});
+
+test('stamps: created_by и done_by — из сессии, что бы ни прислал экран', () => {
+  const q = compile({ op: 'insert', table: 'crm_tasks', values: { request_id: 1, text: 'x', created_by: 999, done_by: 999 } }, NASIBA);
+  assert.ok(q.params.includes(NASIBA.id) && !q.params.includes(999));
+  const u = compile({ op: 'update', table: 'crm_tasks', values: { done_at: '2026-09-23T10:00:00Z', done_by: 999 },
+    filters: [{ col: 'id', op: 'eq', val: 1 }] }, NASIBA);
+  assert.match(u.sql, /"done_by" = \?/);
+  assert.ok(!u.params.includes(999));
+  const txt = compile({ op: 'update', table: 'crm_tasks', values: { text: 'y', done_by: 999 },
+    filters: [{ col: 'id', op: 'eq', val: 1 }] }, NASIBA);
+  assert.doesNotMatch(txt.sql, /done_by/, 'правка текста тронула done_by');
+});

@@ -1,4 +1,4 @@
-import { tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns, rowScope } from './schema-registry.js';
+import { tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns, rowScope, actorStamps } from './schema-registry.js';
 import { effectiveRoles } from '../services/roles.js';
 
 export class CompileError extends Error {
@@ -120,7 +120,22 @@ function starColumns(table) {
 // ни исправить, ни закрыть.
 function scopeFor(table, user) {
   const sc = rowScope(table);
-  if (!sc || !sc.column) return null;
+  if (!sc) return null;
+  // CRM_DEDUP_SEARCH_TASKS_V1 — ОГРАНИЧЕНИЕ ЧЕРЕЗ РОДИТЕЛЯ. Строка-потомок
+  // (задача заявки) своего владельца не имеет: она видна ровно тогда, когда
+  // видна строка, на которую указывает её fk. Правило родителя берётся тем же
+  // scopeFor — второго описания «кто что видит» не появляется.
+  //   via: { fk: 'request_id', table: 'crm_requests' }
+  if (sc.via) {
+    const parent = scopeFor(sc.via.table, user);
+    if (!parent) return null;
+    return {
+      clause: `"${table}"."${sc.via.fk}" IN (SELECT "${sc.via.table}"."id" FROM "${sc.via.table}" WHERE ${parent.clause})`,
+      params: parent.params,
+      via: { ...sc.via, parent },
+    };
+  }
+  if (!sc.column) return null;
   const roles = effectiveRoles(user);
   if ((sc.allRoles || []).some((r) => roles.includes(r))) return null;
   // Сессии без номера пользователя (их не бывает у живого входа) остаются с
@@ -153,10 +168,14 @@ export function compile(desc, user) {
     if (!canWrite(table, 'insert', role) || !canWrite(table, 'update', role)) {
       throw new CompileError('not allowed', 403);
     }
+    // CRM_DEDUP_SEARCH_TASKS_V1 — ON CONFLICT DO UPDATE правит строку, минуя
+    // WHERE, то есть минуя ограничение по владельцу. Тем, на кого ограничение
+    // действует, upsert по таблице с ним закрыт.
+    if (scopeFor(table, user)) throw new CompileError('not allowed', 403);
     return compileUpsert(desc, table);
   }
   if (!canWrite(table, op, role)) throw new CompileError('not allowed', 403);
-  if (op === 'insert') return compileInsert(desc, table);
+  if (op === 'insert') return compileInsert(desc, table, user);
   if (op === 'update') return compileUpdate(desc, table, user);
   return compileDelete(desc, table, user);
 }
@@ -511,8 +530,54 @@ function insertStatement(table, values, allowed) {
   };
 }
 
-function compileInsert(desc, table) {
-  const allowed = writableColumns(table, 'insert');
+// CRM_DEDUP_SEARCH_TASKS_V1 — КОЛОНКИ «КТО», КОТОРЫЕ ПИШЕТ СЕРВЕР.
+//
+// Реестр (stamps) называет колонки, где стоит номер сотрудника из СЕССИИ, а не
+// из запроса: экран, умеющий их написать, мог бы подписать работу чужим именем.
+// Такие колонки не входят в writable-списки — компилятор добавляет их сам:
+//   { on: 'insert' }        — при вставке всегда = я;
+//   { with: 'done_at' }     — пишется вместе с этой колонкой: она не пустая —
+//                             я, пустая — NULL; нет её в правке — не трогается.
+function stampValues(table, op, values, user) {
+  const stamps = actorStamps(table);
+  if (!stamps) return { values, extra: [] };
+  const me = user && Number.isFinite(Number(user.id)) ? Number(user.id) : null;
+  const out = { ...(values || {}) };
+  const extra = [];
+  for (const [col, rule] of Object.entries(stamps)) {
+    delete out[col];
+    if (rule.on === op) { out[col] = me; extra.push(col); continue; }
+    if (rule.with && Object.prototype.hasOwnProperty.call(out, rule.with)
+        && writableColumns(table, op).includes(rule.with)) {
+      out[col] = out[rule.with] == null ? null : me;
+      extra.push(col);
+    }
+  }
+  return { values: out, extra };
+}
+
+// CRM_DEDUP_SEARCH_TASKS_V1 — вставка в таблицу, ограниченную через родителя,
+// проходит только на ВИДИМОГО родителя: INSERT … SELECT … WHERE EXISTS. Ноль
+// вставленных строк маршрут (routes/db.js) превращает в 403 (meta.guarded).
+function guardInsert(stmt, table, values, scope) {
+  if (!scope || !scope.via) return stmt;
+  const cols = stmt.sql.slice(stmt.sql.indexOf('('), stmt.sql.indexOf(')') + 1);
+  const holes = stmt.params.map(() => '?').join(', ');
+  const p = scope.via.table;
+  return {
+    sql: `INSERT INTO "${table}" ${cols} SELECT ${holes} WHERE EXISTS (SELECT 1 FROM "${p}" WHERE "${p}"."id" = ? AND ${scope.via.parent.clause})`,
+    params: [...stmt.params, values[scope.via.fk] ?? null, ...scope.via.parent.params],
+  };
+}
+
+function compileInsert(desc, table, user) {
+  const scope = scopeFor(table, user);
+  const guarded = !!(scope && scope.via);
+  const one = (row) => {
+    const { values, extra } = stampValues(table, 'insert', row, user);
+    const stmt = insertStatement(table, values, [...writableColumns(table, 'insert'), ...extra]);
+    return guardInsert(stmt, table, values, scope);
+  };
   // values may be a single object or an array of rows — the section importer
   // (Excel) inserts batches of up to 100 with RAGGED keys: it deliberately
   // leaves empty cells out of the payload "so the DB default fires"
@@ -521,20 +586,20 @@ function compileInsert(desc, table) {
   // (each with exactly its own keys); the route runs them in one transaction.
   if (Array.isArray(desc.values)) {
     if (desc.values.length === 0) throw new CompileError('no rows to insert', 400);
-    const statements = desc.values.map((row) => insertStatement(table, row, allowed));
+    const statements = desc.values.map((row) => one(row));
     return {
       sql: statements[0].sql,
       params: statements[0].params,
       statements,
-      meta: { op: 'insert', returning: !!desc.returning, single: desc.single || null, table, multi: true },
+      meta: { op: 'insert', returning: !!desc.returning, single: desc.single || null, table, multi: true, guarded },
     };
   }
 
-  const { sql, params } = insertStatement(table, desc.values || {}, allowed);
+  const { sql, params } = one(desc.values || {});
   return {
     sql,
     params,
-    meta: { op: 'insert', returning: !!desc.returning, single: desc.single || null, table, multi: false },
+    meta: { op: 'insert', returning: !!desc.returning, single: desc.single || null, table, multi: false, guarded },
   };
 }
 
@@ -598,8 +663,9 @@ function compileUpsert(desc, table) {
 }
 
 function compileUpdate(desc, table, user) {
-  const values = desc.values || {};
-  const allowed = writableColumns(table, 'update');
+  const stamped = stampValues(table, 'update', desc.values || {}, user);
+  const values = stamped.values;
+  const allowed = [...writableColumns(table, 'update'), ...stamped.extra];
   // Compat layer: silently drop payload keys outside the writable allow-list
   // (see compileInsert) rather than hard-failing the whole write.
   const keys = Object.keys(values).filter((k) => allowed.includes(k));

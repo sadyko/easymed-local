@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { S, CALLS, mk, walk, textOf, byClass, byAttr, tick, TOASTS } from './crm-harness.mjs';
-import { isOverdue, nearestOpenTasks, localDueIso, nowIso, overdueTaskCount } from '../views/crm-tasks.js';
+import { isOverdue, nearestOpenTasks, localDueIso, nowIso, overdueTaskCount, DEFAULT_DUE_TIME } from '../views/crm-tasks.js';
 
 const { renderCrm } = await import('../views/crm.js');
 
@@ -60,6 +60,8 @@ test('чистые правила: просрочено, ближайшая за
   assert.match(iso, /^\d{4}-\d\d-\d\dT\d\d:\d\d:00Z$/);
   assert.equal(new Date(iso).getHours(), 14, 'местное время не сохранилось');
   assert.equal(localDueIso('', '10:00'), '');
+  // Ревью W2-M7: время по умолчанию одно — в поле и в запасном значении.
+  assert.equal(new Date(localDueIso('2026-10-05', '')).getHours(), Number(DEFAULT_DUE_TIME.slice(0, 2)));
   assert.match(nowIso(), /Z$/);
 });
 
@@ -93,6 +95,7 @@ test('создать: текст, дата без ограничения све�
   assert.equal(date.getAttribute('type'), 'date');
   assert.equal(date.getAttribute('max'), null, 'у даты задачи есть max — будущую дату не выбрать');
   assert.equal(one(modal, 'data-task-who').value, '12', 'ответственный по умолчанию — не оператор заявки');
+  assert.equal(one(modal, 'data-task-time').getAttribute('value'), DEFAULT_DUE_TIME);
 
   one(modal, 'data-task-text').value = 'Перезвонить после обеда';
   date.value = '2099-01-01';
@@ -104,7 +107,7 @@ test('создать: текст, дата без ограничения све�
   assert.equal(ins.values.request_id, 1);
   assert.equal(ins.values.text, 'Перезвонить после обеда');
   assert.equal(ins.values.assignee_id, 12);
-  assert.equal(ins.values.created_by, 7);
+  assert.ok(!('created_by' in ins.values), 'экран шлёт created_by — его ставит сервер');
   assert.equal(new Date(ins.values.due_at).getHours(), 14);
   assert.ok(!('done_at' in ins.values));
   assert.equal(taskRows(modal).length, 1);
@@ -160,7 +163,7 @@ test('отметить сделанной и снять отметку', async (
   await tick(60);
   const upd = CALLS.find((c) => c.table === 'crm_tasks' && c.op === 'update');
   assert.ok(upd, 'отметка не ушла на сервер');
-  assert.equal(upd.values.done_by, 12);
+  assert.ok(!('done_by' in upd.values), 'экран шлёт done_by — его ставит сервер');
   assert.match(upd.values.done_at, /Z$/);
   assert.ok(String(taskRows(modal)[0].className).includes('crm-task-done'));
   assert.ok(!String(taskRows(modal)[0].className).includes('crm-task-overdue'), 'сделанная всё ещё просрочена');

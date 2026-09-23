@@ -21,10 +21,14 @@ export function nowIso(d = new Date()) {
     return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
+// Время задачи по умолчанию — ОДНО: его показывает поле «время» и его же берёт
+// localDueIso, когда время стёрто (ревью W2-M7: было 10:00 в поле и 09:00 здесь).
+export const DEFAULT_DUE_TIME = '10:00';
+
 /** Местные дата 'YYYY-MM-DD' + время 'HH:MM' → срок в UTC, или '' без даты. */
 export function localDueIso(ymd, hhmm) {
     if (!ymd) return '';
-    const d = new Date(ymd + 'T' + (hhmm || '09:00') + ':00');   // без 'Z' — местное время
+    const d = new Date(ymd + 'T' + (hhmm || DEFAULT_DUE_TIME) + ':00');   // без 'Z' — местное время
     return isNaN(d) ? '' : nowIso(d);
 }
 
@@ -147,7 +151,8 @@ export function crmTasksBlock({ request, me, isAdmin, staff = null, onChange } =
     }
 
     async function toggleDone(t, on) {
-        const values = on ? { done_at: nowIso(), done_by: me ? me.id : null } : { done_at: null, done_by: null };
+        // done_by ставит сервер по сессии (реестр stamps) — экран его не шлёт.
+        const values = { done_at: on ? nowIso() : null };
         const { error } = await supabase.from('crm_tasks').update(values).eq('id', t.id);
         if (error) { toast(error.message, 'fail'); paintList(); return; }
         Object.assign(t, values);
@@ -166,7 +171,7 @@ export function crmTasksBlock({ request, me, isAdmin, staff = null, onChange } =
     const textInp = h('input', { type: 'text', maxlength: String(TEXT_MAX), placeholder: 'Что сделать — например, перезвонить после обеда', 'data-task-text': '' });
     // DATE_LIMITS_V1 — у поля даты НЕТ max: срок задачи всегда в будущем.
     const dateInp = h('input', { type: 'date', 'aria-label': 'Дата', 'data-task-date': '' });
-    const timeInp = h('input', { type: 'time', 'aria-label': 'Время', value: '10:00', 'data-task-time': '' });
+    const timeInp = h('input', { type: 'time', 'aria-label': 'Время', value: DEFAULT_DUE_TIME, 'data-task-time': '' });
     const whoSel = h('select', { 'aria-label': 'Ответственный', 'data-task-who': '' });
     const defaultWho = () => String((request && request.assigned_to) || (me && me.id) || '');
     let whoTouched = false;
@@ -200,7 +205,7 @@ export function crmTasksBlock({ request, me, isAdmin, staff = null, onChange } =
             const { error } = await supabase.from('crm_tasks').insert({
                 request_id: request.id, text: text.slice(0, TEXT_MAX), due_at: due,
                 assignee_id: whoSel.value ? Number(whoSel.value) : null,
-                created_by: me ? me.id : null,
+                // created_by ставит сервер по сессии (реестр stamps).
             });
             if (error) { toast(error.message, 'fail'); return; }
             textInp.value = '';
