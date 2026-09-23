@@ -167,6 +167,9 @@ export function recordCall(db, d, source, provider = null) {
         disposition: row.disposition,
         external_number: externalNumber,
         patient_id: matches.length ? matches[0].id : null,
+        // CRM_DEDUP_SEARCH_TASKS_V1 — исходящий звонок заводит карточку только
+        // номеру, у которого карточки нет вообще; входящий — как раньше.
+        call_type: row.call_type,
       });
     } catch (e) {
       console.warn('[telephony] lead not created for call:', e && e.message);

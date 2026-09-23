@@ -53,6 +53,9 @@ const READ_ONLY_RPCS = new Set([
   // licence-lapsed clinic may read but not write, and "read" must not mean
   // "a CRM board with no column headings".
   'crm_config_get',
+  // CRM_DEDUP_SEARCH_TASKS_V1 — проверка дубля по номеру. Чистое чтение: окно
+  // новой заявки спрашивает его перед вставкой, а вставку и так остановит 402.
+  'crm_leads_by_phone',
   // CUSTDEV_V1 — доска и отчёт по обзвону. Чистое чтение. Клиника с
   // просроченной лицензией читает, но не пишет, и «читает» не должно означать
   // «пустой экран вместо доски». Оценка (custdev_rate/custdev_mark) и

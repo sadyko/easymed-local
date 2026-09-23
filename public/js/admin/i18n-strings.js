@@ -8736,4 +8736,8 @@ export const STRINGS = {
   "Ступени нарушены": {"en":"Tiers broken","ru":"Ступени нарушены","uz":"Pog‘onalar buzilgan"},
   "«{service}»: {problem} Ступень {n} из файла не сохранена.": {"en":"«{service}»: {problem} Tier {n} from the file was not saved.","ru":"«{service}»: {problem} Ступень {n} из файла не сохранена.","uz":"«{service}»: {problem} Fayldagi {n}-pog‘ona saqlanmadi."},
   "«{service}»: {problem} Ступени из файла не сохранены — остаются прежние.": {"en":"«{service}»: {problem} The tiers from the file were not saved — the previous ones stay.","ru":"«{service}»: {problem} Ступени из файла не сохранены — остаются прежние.","uz":"«{service}»: {problem} Fayldagi pog‘onalar saqlanmadi — avvalgilari qoladi."},
+  "Создать всё равно": {"en":"Create anyway","ru":"Создать всё равно","uz":"Baribir yaratish"},
+  "У этого номера уже есть карточка": {"en":"This number already has a card","ru":"У этого номера уже есть карточка","uz":"Bu raqamda allaqachon kartochka bor"},
+  "Карточка другого оператора": {"en":"Another operator's card","ru":"Карточка другого оператора","uz":"Boshqa operatorning kartochkasi"},
+  "Откройте существующую карточку, чтобы не заводить второй. Если это другой человек с тем же номером — создайте новую.": {"en":"Open the existing card so as not to create a second one. If this is a different person with the same number, create a new one.","ru":"Откройте существующую карточку, чтобы не заводить второй. Если это другой человек с тем же номером — создайте новую.","uz":"Ikkinchisini ochmaslik uchun mavjud kartochkani oching. Agar bu xuddi shu raqamli boshqa odam bo'lsa, yangisini yarating."},
 };

@@ -343,6 +343,59 @@ function uid() {
     return (window.easymed && window.easymed.state && window.easymed.state.user && window.easymed.state.user.id) || null;
 }
 
+// CRM_DEDUP_SEARCH_TASKS_V1 (2026-09-23) — «У ЭТОГО НОМЕРА УЖЕ ЕСТЬ КАРТОЧКА».
+//
+// Владелец: «fix the duplicates in the crm». Ручная заявка заводилась без
+// всякой проверки: оператор, не нашедший карточку поиском (а поиск не находил
+// «+998 91 566 22 78» по «915662278»), заводил вторую. Теперь перед вставкой
+// сервер отвечает, есть ли у номера карточки — ЛЮБЫЕ, открытые и закрытые
+// (crm_leads_by_phone, номер сравнивается по последним девяти цифрам), — и
+// окно предлагает открыть существующую или всё-таки создать новую.
+//
+// Отвечает промисом: { open: id } — открыть эту; 'create' — создать всё равно;
+// null — передумал (окно новой заявки остаётся открытым, введённое цело).
+export function askDuplicateLead(rows) {
+    return new Promise((resolve) => {
+        const ov = h('div', { class: 'modal', 'data-crm-dup': '' });
+        let done = false;
+        const finish = (v) => { if (done) return; done = true; ov.remove(); resolve(v); };
+        const fmtD = (iso) => (iso || '').slice(0, 10).split('-').reverse().join('.');
+        const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
+        for (const r of rows) {
+            const kind = r.stage_kind === 'won' ? 'ok' : (r.stage_kind === 'lost' ? '' : 'info');
+            list.appendChild(h('div', { 'data-dup-row': String(r.id), class: 'row', style: {
+                gap: '10px', alignItems: 'center', flexWrap: 'wrap',
+                border: '1px solid var(--ink-100)', borderRadius: '10px', padding: '9px 11px',
+            } },
+                h('div', { style: { flex: '1 1 200px', minWidth: 0 } },
+                    h('div', { style: { fontSize: '13.5px', fontWeight: 600 } },
+                        r.can_open ? (r.full_name || formatPhone(r.phone) || r.phone || 'Без имени') : 'Карточка другого оператора'),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                        trf('Заявка от {d}', { d: fmtD(r.created_at) }),
+                        r.assigned_name ? ' · ' : null,
+                        r.assigned_name ? trf('Ведёт {name}', { name: r.assigned_name }) : null)),
+                Tag(tr(r.stage_label || r.status || ''), { kind, dot: true }),
+                r.can_open ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-dup-open': String(r.id),
+                    onclick: () => finish({ open: r.id }) }, Icon('ArrowRight', { size: 13 }), ' ', 'Открыть') : null));
+        }
+        ov.appendChild(h('div', { class: 'modal-backdrop', onclick: () => finish(null) }));
+        ov.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '560px', maxWidth: 'calc(100vw - 32px)' } },
+            h('header', { class: 'modal-head' },
+                h('h2', { style: { margin: 0, fontSize: '15px' } }, Icon('Warning', { size: 16 }), ' ', 'У этого номера уже есть карточка'),
+                h('button', { class: 'modal-close', onclick: () => finish(null) }, '×')),
+            h('div', { class: 'modal-body', style: { display: 'block' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } },
+                    'Откройте существующую карточку, чтобы не заводить второй. Если это другой человек с тем же номером — создайте новую.'),
+                list),
+            h('footer', { class: 'modal-foot' },
+                h('button', { class: 'btn', type: 'button', onclick: () => finish(null) }, 'Отмена'),
+                h('span', { class: 'grow' }),
+                h('button', { class: 'btn btn-primary', type: 'button', 'data-dup-create': '', onclick: () => finish('create') },
+                    Icon('Plus', { size: 14 }), ' ', 'Создать всё равно'))));
+        document.body.appendChild(ov);
+    });
+}
+
 async function setStatus(r, status) {
     const { error } = await supabase.from('crm_requests').update({ status }).eq('id', r.id);
     if (error) { toast(error.message, 'fail'); return false; }
@@ -1597,6 +1650,7 @@ async function paint() {
         // «Оформить услугу», которой нужна уже существующая строка заявки
         // (у новой заявки нет id, а конверсия работает по нему).
         // Возвращает сохранённую строку либо null, если форма не прошла проверку.
+        let dupAcked = false;   // CRM_DEDUP_SEARCH_TASKS_V1 — «Создать всё равно» уже нажато
         async function persist() {
             const name = linkedPatient ? linkedPatient.full_name : nameInp.value.trim();
             if (!name) { toast('Укажите имя.', 'fail'); return null; }
@@ -1637,6 +1691,29 @@ async function paint() {
                 // не видела ничего, потому что писать было нечего.
                 await saveLines(r.id);
                 return r;
+            }
+            // CRM_DEDUP_SEARCH_TASKS_V1 — у номера уже есть карточка? Спрашиваем
+            // сервер (там одно правило сравнения номера) и даём выбрать.
+            // Ответ «создать всё равно» запоминается: «Сохранить и записать»
+            // зовёт persist() повторно, и спрашивать дважды незачем.
+            if (!dupAcked) {
+                const { data: dups, error: dupErr } = await supabase.rpc('crm_leads_by_phone', { phone });
+                // Проверка не ответила — не повод терять заявку: сохраняем как
+                // раньше, без предупреждения.
+                if (!dupErr && Array.isArray(dups) && dups.length) {
+                    const choice = await askDuplicateLead(dups);
+                    if (!choice) return null;
+                    if (choice.open != null) {
+                        const { data: existing, error: exErr } = await supabase.from('crm_requests')
+                            .select('*, patients(id, full_name, mrn), users(full_name), services(id, name, price)')
+                            .eq('id', choice.open).maybeSingle();
+                        if (exErr || !existing) { toast(exErr ? exErr.message : 'Заявка не найдена.', 'fail'); return null; }
+                        close();
+                        requestModal(existing);
+                        return null;
+                    }
+                    dupAcked = true;
+                }
             }
             const { data, error } = await supabase.from('crm_requests')
                 .insert({ ...payload, status: bookedDate ? stageKey('scheduled') : stageKey('in_process'), ...(uid() != null ? { created_by: uid() } : {}) })
