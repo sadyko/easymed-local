@@ -4945,6 +4945,10 @@ table.list.svc-tbl .list-act .icon-btn.sm { width: 26px; height: 26px; }
 .svc-ed-tier { border: 1px solid var(--ink-100); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; background: var(--ink-25); }
 .svc-ed-tier h4 { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
 .svc-ed-tier .field input { background: var(--white); }
+/* DOCTOR_TIER_V2 — три ряда ступеней: подпись слева, пара полей справа. */
+.svc-ed-steprow { display: grid; grid-template-columns: minmax(72px, auto) 1fr; gap: 12px; align-items: end; }
+.svc-ed-steplbl { font-size: 13.5px; font-weight: 600; color: var(--ink-900); padding-bottom: 10px; white-space: nowrap; }
+@media (max-width: 520px) { .svc-ed-steprow { grid-template-columns: 1fr; gap: 6px; } .svc-ed-steplbl { padding-bottom: 0; } }
 .svc-ed-staff-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .svc-ed-staff-search { flex: 1 1 220px; min-width: 160px; max-width: 360px; height: 34px; padding: 0 12px; border: 1px solid var(--ink-200); border-radius: 9px; font: inherit; font-size: 13.5px; }
 .svc-ed-staff { display: flex; flex-wrap: wrap; gap: 6px; }

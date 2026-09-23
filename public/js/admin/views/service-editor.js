@@ -21,6 +21,7 @@ import { tr, trf } from '../i18n.js';
 import {
     SERVICE_SECTIONS, labBlockVisible, resolveCombobox, splitPerformers,
     currentPerformerIds, performerGate, rpcErrorTemplate,
+    TIER_STEP_COLUMNS, tierStepsProblem,
 } from '../service-editor-logic.js';
 
 // Тот же перечень пробирок, что вела старая generic-форма (sections.js,
@@ -162,8 +163,15 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
     // DOCTOR_TIER_V1 — ступень доли по объёму (владелец: «more than 25 → 40 %»).
     // Пара полей; пустые — ступени нет. Правило и нумерацию считает сервер
     // (rpc/reports.js TIER_RANK_SQL); здесь только ввод.
-    const tierFromInp = h('input', { type: 'number', step: '1', min: '0', value: row && row.doctor_tier_from ? row.doctor_tier_from : '', placeholder: '0 — нет' });
-    const tierPctInp  = h('input', { type: 'number', step: '0.01', min: '0', max: '100', value: row && row.doctor_tier_percent ? row.doctor_tier_percent : '', placeholder: 'напр. 40' });
+    // DOCTOR_TIER_V2 — ступеней три (владелец: «another 2 (overall 3) steps»):
+    // та же пара полей в три ряда. Порядок, пары и растущие пороги проверяет
+    // tierStepsProblem — то же правило, что у сервера и импорта.
+    const TIER_PCT_HINT = { 1: 'напр. 40', 2: 'напр. 45', 3: 'напр. 50' };
+    const tierInputs = TIER_STEP_COLUMNS.map((c) => ({
+        n: c.n,
+        from: h('input', { type: 'number', step: '1', min: '0', value: row && row[c.from] ? row[c.from] : '', placeholder: '0 — нет', 'data-tier': 'from-' + c.n }),
+        pct:  h('input', { type: 'number', step: '0.01', min: '0', max: '100', value: row && row[c.pct] ? row[c.pct] : '', placeholder: TIER_PCT_HINT[c.n], 'data-tier': 'pct-' + c.n }),
+    }));
 
     // VISIT_TIER_PRICING_V1 — цена по счёту визита (владелец: «for the primary
     // visit, secondary, repeat visit and set dates between the first and
@@ -227,7 +235,7 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
             specimenInp, tubeSel,   // LAB_REFS_IN_PANELS_V1 — единицы и нормы живут в панели
             priceInp, vatInp, durInp, reqDoc, pctInp, codeInp, activeChk, nameUzInp, nameEnInp, onlineChk,
             secPriceInp, daysFromInp, daysToInp, repPriceInp, repFromInp, repToInp,
-            tierFromInp, tierPctInp]) el.disabled = true;   // DOCTOR_TIER_V1
+            ...tierInputs.flatMap((t) => [t.from, t.pct])]) el.disabled = true;   // DOCTOR_TIER_V1/V2
     }
 
     const overlay = h('div', { class: 'modal' });
@@ -248,12 +256,12 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
         if (priceInp.value === '' || !Number.isFinite(price) || price < 0) {
             toast('Укажите цену услуги.', 'warn'); goTo('price', priceInp); return;
         }
-        // DOCTOR_TIER_V1 — ступень задаётся парой; сервер откажет 400, а здесь
-        // курсор сразу встаёт в незаполненное поле (rpc/service-save.js).
-        const tFrom = Number(tierFromInp.value) > 0, tPct = Number(tierPctInp.value) > 0;
-        if (tFrom !== tPct) {
-            toast('Ступень задаётся парой: порог услуг в месяц И доля выше порога.', 'warn');
-            goTo('price', tFrom ? tierPctInp : tierFromInp); return;
+        // DOCTOR_TIER_V1/V2 — ступени парами, по порядку, с растущими порогами;
+        // сервер откажет 400, а здесь курсор сразу встаёт в нужное поле.
+        const tierProblem = tierStepsProblem(tierInputs.map((t) => ({ from: Number(t.from.value) || 0, pct: Number(t.pct.value) || 0 })));
+        if (tierProblem) {
+            toast(tierProblem.message, 'warn');
+            goTo('price', tierInputs[tierProblem.step - 1][tierProblem.field]); return;
         }
         // performers — авторитетный СПИСОК ЧЛЕНСТВА: сервер добавит недостающих
         // и снимет неотмеченных. Отправляется и при выключенном «оказывает
@@ -271,8 +279,11 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
             duration_minutes: numOrNull(durInp.value),
             requires_doctor: reqDoc.checked,
             default_doctor_percent: numOrNull(pctInp.value) ?? 0,
-            doctor_tier_from: numOrNull(tierFromInp.value) ?? 0,      // DOCTOR_TIER_V1
-            doctor_tier_percent: numOrNull(tierPctInp.value) ?? 0,
+            // DOCTOR_TIER_V1/V2 — шесть полей трёх ступеней; пустое = 0 (ступени нет).
+            ...Object.fromEntries(TIER_STEP_COLUMNS.flatMap((c, i) => [
+                [c.from, numOrNull(tierInputs[i].from.value) ?? 0],
+                [c.pct, numOrNull(tierInputs[i].pct.value) ?? 0],
+            ])),
             room_id: roomSel.value ? Number(roomSel.value) : null,
             // VISIT_TIER_PRICING_V1 — пустое поле уходит как null (не 0): сервер
             // отличает «не задано» от «бесплатно».
@@ -335,6 +346,7 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
 
     const grp = (title, ...kids) => h('section', { class: 'svc-ed-grp' }, h('h3', null, title), ...kids);
     const grid = (cols, ...kids) => h('div', { class: 'svc-ed-grid cols-' + cols }, ...kids);
+    const TIER_STEP_LABEL = { 1: 'Ступень 1', 2: 'Ступень 2', 3: 'Ступень 3' };   // DOCTOR_TIER_V2
     const unitField = (label, inp, unit) => field(label, h('div', { class: 'svc-ed-unit' }, inp, h('span', null, unit)));
 
     const labGroup = grp('Забор материала',
@@ -385,10 +397,12 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
                 grid(2,
                     checkField('Услугу оказывает специалист (врач / медсестра)', reqDoc),
                     unitField('Доля исполнителя по умолчанию', pctInp, '%')),
-                h('div', { class: 'svc-ed-note' }, 'Ступень по объёму: начиная со следующей после порога услуги в календарном месяце доля исполнителя — не ниже указанной. Пусто — ступени нет.'),
-                grid(2,
-                    unitField('Порог, услуг в месяц', tierFromInp, 'шт.'),
-                    unitField('Доля выше порога', tierPctInp, '%'))),
+                h('div', { class: 'svc-ed-note' }, 'Ступени по объёму: услуги сверх порога в календарном месяце идут по доле ступени самого высокого пройденного порога — не ниже доли исполнителя. Ступени заполняются по порядку, пороги растут. Пусто — ступени нет.'),
+                ...tierInputs.map((t) => h('div', { class: 'svc-ed-steprow' },
+                    h('span', { class: 'svc-ed-steplbl' }, TIER_STEP_LABEL[t.n]),
+                    grid(2,
+                        unitField('Порог, услуг в месяц', t.from, 'шт.'),
+                        unitField('Доля выше порога', t.pct, '%'))))),
             grp('Цена по счёту визита',
                 h('div', { class: 'svc-ed-note' }, 'Необязательно. Окно дней считается от предыдущего визита по этой же услуге; пришёл позже окна — снова первый визит. «Не раньше чем через 0» — второй визит в тот же день тоже считается.'),
                 grid(2,

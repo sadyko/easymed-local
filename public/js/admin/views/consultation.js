@@ -29,7 +29,7 @@ import { renderDoctorProfile } from './doctor-profile.js?v=btnright1';
 // специфике делает ОТДЕЛЬНЫЙ экземпляр модуля, а у дашборда есть состояние.
 import {
     renderDoctorDashboard, resetDoctorDashboard,
-    serviceRateMap, serviceShare, tierShare, perServicePayApplies,
+    serviceRateMap, serviceShare, tierShare, tierProgressText, perServicePayApplies,
 } from './doctor-dashboard.js';
 // HEAD_DOCTOR_WARD_VIEW_V1 — главный врач делает свою работу ПРЯМО ИЗ КАБИНЕТА:
 // оба окна те же самые, что в разделе «Стационар», а не их копии.
@@ -1619,8 +1619,11 @@ async function loadDashboardData() {
                 const key = String(p.service_id);
                 const cur = byService.get(key);
                 if (!cur || Number(p.count_so_far) > cur.count) {
+                    // DOCTOR_TIER_V2 — все действующие ступени услуги по порядку.
+                    const steps = [[p.tier_from, p.tier_percent], [p.tier_from_2, p.tier_percent_2], [p.tier_from_3, p.tier_percent_3]]
+                        .map(([f, pc]) => ({ from: Number(f) || 0, pct: Number(pc) || 0 })).filter((st) => st.from > 0);
                     byService.set(key, { serviceId: key, serviceName: p.service_name || '', count: Number(p.count_so_far) || 0,
-                                         from: Number(p.tier_from) || 0, pct: Number(p.tier_percent) || 0 });
+                                         from: Number(p.tier_from) || 0, pct: Number(p.tier_percent) || 0, steps });
                 }
             }
             state.dash.tierProgress = [...byService.values()];
@@ -2026,9 +2029,8 @@ function salaryConfigCard(salary) {
         // будет.
         ...tierProgressRows(doc).map(p => kvRow(
             trf('Ступень: {service}', { service: p.serviceName }),
-            p.count > p.from
-                ? trf('{count} из {from} в этом месяце · ступень {pct}% действует', { count: p.count, from: p.from, pct: p.pct })
-                : trf('{count} из {from} в этом месяце · с {next}-й доля {pct}%', { count: p.count, from: p.from, next: p.from + 1, pct: p.pct }))),
+            // DOCTOR_TIER_V2 — прогресс к СЛЕДУЮЩЕМУ порогу (tierProgressText).
+            tierProgressText(p.count, p.steps && p.steps.length ? p.steps : [{ from: p.from, pct: p.pct }]))),
         h('div', { class: 'row', style: { gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--ink-100)' } },
             h('span', { style: { fontSize: '12.5px', color: 'var(--ink-600)' } }, tr('Итого за период:')),
             h('span', { class: 'grow' }),

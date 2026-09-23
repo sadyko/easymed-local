@@ -425,6 +425,53 @@ test('DOCTOR_TIER_V1: половина ступени не уходит на с�
   } finally { SVC.requires_doctor = 1; }
 });
 
+// DOCTOR_TIER_V2 — владелец: «another 2 (overall 3) steps of the percentage».
+// Три ряда той же пары полей с подписями «Ступень 1/2/3»; уходят шесть полей.
+test('DOCTOR_TIER_V2: в редакторе три ряда ступеней, и все шесть полей уходят в service_save', async () => {
+  SVC.requires_doctor = 0;
+  try {
+    const c = await paint();
+    tags(c, 'tr').find((r) => r.className.includes('row-click')).click();
+    await flush();
+    const body = textOf(document.body);
+    for (const lbl of ['Ступень 1', 'Ступень 2', 'Ступень 3']) assert.ok(body.includes(lbl), 'нет подписи «' + lbl + '»');
+    const inputs = tags(document.body, 'input');
+    const tier = (k) => inputs.find((i) => i.attrs['data-tier'] === k);
+    for (const k of ['from-1', 'pct-1', 'from-2', 'pct-2', 'from-3', 'pct-3']) assert.ok(tier(k), 'нет поля ' + k);
+    Object.entries({ 'from-1': '25', 'pct-1': '40', 'from-2': '50', 'pct-2': '45', 'from-3': '100', 'pct-3': '50' })
+      .forEach(([k, v]) => { tier(k).value = v; });
+    rpcCalls.length = 0;
+    buttonWith(document.body, 'Сохранить').click();
+    await flush();
+    const save = rpcCalls.find((r) => r.name === 'service_save');
+    assert.ok(save, 'service_save не вызван');
+    assert.deepEqual(
+      ['doctor_tier_from', 'doctor_tier_percent', 'doctor_tier_from_2', 'doctor_tier_percent_2', 'doctor_tier_from_3', 'doctor_tier_percent_3'].map((k) => save.args[k]),
+      [25, 40, 50, 45, 100, 50]);
+  } finally { SVC.requires_doctor = 1; }
+});
+
+test('DOCTOR_TIER_V2: ступень 3 без ступени 2 и нерастущий порог не уходят на сервер', async () => {
+  SVC.requires_doctor = 0;
+  try {
+    for (const [vals, msg] of [
+      [{ 'from-1': '25', 'pct-1': '40', 'from-3': '100', 'pct-3': '50' }, 'ступень 3 без ступени 2'],
+      [{ 'from-1': '25', 'pct-1': '40', 'from-2': '20', 'pct-2': '45' }, 'Порог ступени 2 должен быть больше'],
+    ]) {
+      const c = await paint();
+      tags(c, 'tr').find((r) => r.className.includes('row-click')).click();
+      await flush();
+      const inputs = tags(document.body, 'input');
+      for (const [k, v] of Object.entries(vals)) inputs.find((i) => i.attrs['data-tier'] === k).value = v;
+      rpcCalls.length = 0; toasts.length = 0;
+      buttonWith(document.body, 'Сохранить').click();
+      await flush();
+      assert.ok(!rpcCalls.some((r) => r.name === 'service_save'), 'неверные ступени ушли на сервер: ' + JSON.stringify(vals));
+      assert.ok(toasts.some((t) => t.includes(msg)), 'нет подсказки «' + msg + '»: ' + toasts.join(' | '));
+    }
+  } finally { SVC.requires_doctor = 1; }
+});
+
 // SAVE_BTN_TARGET_V1 — внутри «Сохранить» лежит значок, и палец попадает
 // обычно в него: у такого события target — значок, а не кнопка. Гасить надо
 // кнопку (currentTarget), иначе она остаётся живой и второй клик создаёт

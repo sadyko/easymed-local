@@ -351,6 +351,47 @@ test('доля врача считается по формуле отчёта: �
   assert.strictEqual(disc.get('ii-2'), 0);
 });
 
+// DOCTOR_TIER_V2 — три ступени. Зеркало кабинета обязано дать ту же сумму, что
+// отчёт (server/services/rpc/reports.doctor-tier.test.js, тесты «V2:»): там на
+// тех же данных doctor_salaries даёт ровно эти числа.
+test('DOCTOR_TIER_V2: tierShare по трём полосам = отчёт на тех же данных', () => {
+  const rateMap = new Map([['s-t', { percentage: 30, fixPay: 0, price: 0 }]]);
+  const steps = { tier_from: 25, tier_percent: 40, tier_from_2: 50, tier_percent_2: 45, tier_from_3: 100, tier_percent_3: 50 };
+  // Пример владельца: 102 строки по 100 000 — 1–25 по 30 %, 26–50 по 40 %, 51–100 по 45 %, 101+ по 50 %.
+  let sum = 0;
+  for (let n = 1; n <= 102; n++) {
+    const pos = { units: 1, ...steps,
+      units_above: n > 25 ? 1 : 0, units_above_2: n > 50 ? 1 : 0, units_above_3: n > 100 ? 1 : 0 };
+    sum += dash.tierShare({ serviceId: 's-t', total: 100000, discount: 0, taxRate: 0 }, rateMap, pos);
+  }
+  assert.strictEqual(Math.round(sum), 25 * 30000 + 25 * 40000 + 50 * 45000 + 2 * 50000);
+  // Строка из 4 единиц через три порога (26/27 → running 24 → 28): отчёт даёт 165 000.
+  const big = { units: 4, units_above: 3, units_above_2: 2, units_above_3: 1,
+    tier_from: 25, tier_percent: 40, tier_from_2: 26, tier_percent_2: 45, tier_from_3: 27, tier_percent_3: 50 };
+  assert.strictEqual(Math.round(dash.tierShare({ serviceId: 's-t', total: 400000, discount: 0, taxRate: 0 }, rateMap, big)), 165000);
+  // Личный процент выше ступени побеждает на своей полосе: 42 % на полосе ступени 1 (40 %).
+  const r42 = new Map([['s-t', { percentage: 42, fixPay: 0, price: 0 }]]);
+  assert.strictEqual(Math.round(dash.tierShare({ serviceId: 's-t', total: 400000, discount: 0, taxRate: 0 }, r42, big)),
+    Math.round(400000 * (42 + 42 + 45 + 50) / 4 / 100));
+  // Фикс — ни одна ступень не трогает.
+  const fix = new Map([['s-t', { percentage: 30, fixPay: 15000, price: 0 }]]);
+  assert.strictEqual(dash.tierShare({ serviceId: 's-t', total: 400000, discount: 0, taxRate: 0, quantity: 4 }, fix, big), 60000);
+  // Ответ старого сервера без полей _2/_3 — прежняя арифметика одной ступени.
+  const old = { units: 3, units_above: 2, tier_percent: 40 };
+  assert.strictEqual(Math.round(dash.tierShare({ serviceId: 's-t', total: 300000, discount: 0, taxRate: 0 }, rateMap, old)), 110000);
+});
+
+test('DOCTOR_TIER_V2: прогресс — к следующему порогу, после последнего — «действует»', () => {
+  const steps = [{ from: 25, pct: 40 }, { from: 50, pct: 45 }, { from: 100, pct: 50 }];
+  assert.strictEqual(dash.tierProgressText(18, steps), '18 из 25 в этом месяце · с 26-й доля 40%');
+  assert.strictEqual(dash.tierProgressText(30, steps), '30 из 50 в этом месяце · действует 40%, с 51-й доля 45%');
+  assert.strictEqual(dash.tierProgressText(60, steps), '60 из 100 в этом месяце · действует 45%, с 101-й доля 50%');
+  assert.strictEqual(dash.tierProgressText(101, steps), '101 из 100 в этом месяце · ступень 50% действует');
+  // Одна ступень — прежние фразы.
+  assert.strictEqual(dash.tierProgressText(26, [{ from: 25, pct: 50 }]), '26 из 25 в этом месяце · ступень 50% действует');
+  assert.strictEqual(dash.tierProgressText(10, [{ from: 25, pct: 50 }]), '10 из 25 в этом месяце · с 26-й доля 50%');
+});
+
 test('DOCTOR_TIER_V1: tierShare без позиции = serviceShare; с units_above делит по единицам и не понижает', () => {
   const rateMap = dash.serviceRateMap(DOCTOR_A);
   const s = { serviceId: A_SERVICES[0].serviceId, total: 300000, discount: 0, taxRate: 0 };

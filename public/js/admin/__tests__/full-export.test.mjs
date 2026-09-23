@@ -39,6 +39,8 @@ const SERVICE_EDITOR_FIELDS = [
     'name', 'code', 'price', 'tax_rate', 'duration_minutes', 'requires_doctor', 'default_doctor_percent', 'active',
     'price_secondary', 'secondary_days_from', 'secondary_days_to', 'price_repeat', 'repeat_days_from', 'repeat_days_to', 'specimen', 'tube_color',
     'name_uz', 'name_en', 'online_booking', 'doctor_tier_from', 'doctor_tier_percent',
+    // DOCTOR_TIER_V2 — ступени 2 и 3.
+    'doctor_tier_from_2', 'doctor_tier_percent_2', 'doctor_tier_from_3', 'doctor_tier_percent_3',
 ];
 
 test('экспорт пациентов несёт каждое поле окна пациента (категория — по названию)', () => {
@@ -134,4 +136,49 @@ test('импорт услуг: полупара обнуляется И назы
     assert.strictEqual(ok.payload.doctor_tier_from, 26);
     assert.strictEqual(ok.payload.doctor_tier_percent, 100);
     assert.strictEqual(ok.status, 'ok');
+});
+
+// ---------------------------------------------------------------------------
+// DOCTOR_TIER_V2 — шесть колонок трёх ступеней: то же поведение половин и
+// отсутствующих заголовков, что у ступени 1, плюс порядок ступеней.
+// ---------------------------------------------------------------------------
+const SVC_BASE = { name: 'Приём терапевта', group: 'Консультация', price: 100000 };
+const SIX = ['doctor_tier_from', 'doctor_tier_percent', 'doctor_tier_from_2', 'doctor_tier_percent_2', 'doctor_tier_from_3', 'doctor_tier_percent_3'];
+
+test('DOCTOR_TIER_V2: экспорт → импорт — три ступени возвращаются как были', () => {
+    const keys = exportColumnKeys('services');
+    for (const k of SIX) assert.ok(keys.includes(k), 'нет колонки ' + k);
+    const row = { ...SVC_BASE, doctor_tier_from: 25, doctor_tier_percent: 40, doctor_tier_from_2: 50, doctor_tier_percent_2: 45, doctor_tier_from_3: 100, doctor_tier_percent_3: 50 };
+    const { payload, status } = buildImportRow('services', row);
+    assert.deepEqual(SIX.map((k) => payload[k]), [25, 40, 50, 45, 100, 50]);
+    assert.strictEqual(status, 'ok');
+});
+
+test('DOCTOR_TIER_V2: в файле нет колонок ступеней 2–3 — они не трогаются', () => {
+    const { payload } = buildImportRow('services', { ...SVC_BASE, doctor_tier_from: 25, doctor_tier_percent: 40 });
+    assert.strictEqual(payload.doctor_tier_from, 25);
+    for (const k of SIX.slice(2)) assert.ok(!(k in payload), k + ' попал в запись из файла без такой колонки');
+});
+
+test('DOCTOR_TIER_V2: полупара ступени 2 обнуляется и называется вслух', () => {
+    const row = buildImportRow('services', { ...SVC_BASE, doctor_tier_from: 25, doctor_tier_percent: 40,
+        doctor_tier_from_2: 50, doctor_tier_percent_2: '', doctor_tier_from_3: '', doctor_tier_percent_3: '' });
+    assert.strictEqual(row.payload.doctor_tier_from_2, 0);
+    assert.strictEqual(row.payload.doctor_tier_percent_2, 0);
+    assert.strictEqual(row.payload.doctor_tier_from, 25, 'ступень 1 цела');
+    assert.strictEqual(row.status, 'warn');
+    assert.ok(row.notes.some((n) => /Ступень 2/.test(String(n)) && /полупара/.test(String(n))), JSON.stringify(row.notes));
+});
+
+test('DOCTOR_TIER_V2: ступень 3 без ступени 2 и нерастущие пороги — не сохраняются, с предупреждением', () => {
+    const skip = buildImportRow('services', { ...SVC_BASE, doctor_tier_from: 25, doctor_tier_percent: 40,
+        doctor_tier_from_2: '', doctor_tier_percent_2: '', doctor_tier_from_3: 100, doctor_tier_percent_3: 50 });
+    assert.deepEqual(SIX.map((k) => skip.payload[k]), [25, 40, 0, 0, 0, 0]);
+    assert.strictEqual(skip.status, 'warn');
+    assert.ok(skip.notes.some((n) => /ступень 3 без ступени 2/.test(String(n))), JSON.stringify(skip.notes));
+
+    const desc = buildImportRow('services', { ...SVC_BASE, doctor_tier_from: 25, doctor_tier_percent: 40,
+        doctor_tier_from_2: 20, doctor_tier_percent_2: 45, doctor_tier_from_3: 100, doctor_tier_percent_3: 50 });
+    assert.deepEqual(SIX.map((k) => desc.payload[k]), [25, 40, 0, 0, 0, 0], 'со сломанной ступени и дальше — не сохраняется');
+    assert.ok(desc.notes.some((n) => /Порог ступени 2 должен быть больше/.test(String(n))), JSON.stringify(desc.notes));
 });

@@ -22,7 +22,7 @@
 import { hasAnyRole } from '../roles.js';
 import {
   SERVICE_SECTIONS, labBlockVisible, normName, mergeServiceRates,
-  performerGate, ratesArray,
+  performerGate, ratesArray, tierStepsProblem,
 } from '../../../public/js/admin/service-editor-logic.js';
 
 export class RpcError extends Error {
@@ -97,6 +97,8 @@ function resolveRefTx(db, table, ref) {
  * args: { id?, name, type, price, tax_rate?, duration_minutes?, requires_doctor?,
  *         default_doctor_percent?, room_id?, code?, active?,
  *         doctor_tier_from?, doctor_tier_percent?  (DOCTOR_TIER_V1 — pair: both or neither)
+ *         doctor_tier_from_2?, doctor_tier_percent_2?, doctor_tier_from_3?, doctor_tier_percent_3?
+ *           (DOCTOR_TIER_V2 — each a pair, filled in order, thresholds strictly ascending)
  *         price_secondary?, secondary_days_from?, secondary_days_to?, price_repeat?  (VISIT_TIER_PRICING_V1, all nullable)
  *         repeat_days_from?, repeat_days_to?  (REPEAT_WINDOW_V1, nullable — empty = the second-visit window)
  *         name_uz?, name_en?, online_booking?  (SERVICE_NAMES_ONLINE_V1 — online needs name AND name_uz)
@@ -151,7 +153,27 @@ export function serviceSave(db, args, user) {
   if (!Number.isInteger(tierFrom) || tierFrom < 0) throw new RpcError('Порог ступени — целое число услуг в месяц (0 — без ступени).', 400);
   const tierPct = optNum(a.doctor_tier_percent);
   if (!Number.isFinite(tierPct) || tierPct < 0 || tierPct > 100) throw new RpcError('Доля выше порога — от 0 до 100 %.', 400);
-  if ((tierFrom > 0) !== (tierPct > 0)) throw new RpcError('Ступень задаётся парой: порог услуг в месяц И доля выше порога.', 400);
+
+  // DOCTOR_TIER_V2 — ступени 2 и 3 (миграция 147): те же границы чисел, что у
+  // ступени 1. Пары, порядок и растущие пороги проверяет ОДНО правило —
+  // tierStepsProblem (service-editor-logic.js), его же зовут редактор и импорт.
+  // Проценты расти не обязаны — клиника решает сама, здесь о них ни слова.
+  const stepN = (n) => {
+    const from = optNum(a['doctor_tier_from_' + n]);
+    if (!Number.isInteger(from) || from < 0) throw new RpcError(`Порог ступени ${n} — целое число услуг в месяц (0 — без ступени).`, 400);
+    const pct = optNum(a['doctor_tier_percent_' + n]);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) throw new RpcError(`Доля ступени ${n} — от 0 до 100 %.`, 400);
+    return { from, pct };
+  };
+  const step2 = stepN(2);
+  const step3 = stepN(3);
+  const tierProblem = tierStepsProblem([{ from: tierFrom, pct: tierPct }, step2, step3]);
+  if (tierProblem) throw new RpcError(tierProblem.message, 400);
+  const tierCols = {
+    doctor_tier_from: tierFrom, doctor_tier_percent: tierPct,   // DOCTOR_TIER_V1
+    doctor_tier_from_2: step2.from, doctor_tier_percent_2: step2.pct,   // DOCTOR_TIER_V2
+    doctor_tier_from_3: step3.from, doctor_tier_percent_3: step3.pct,
+  };
 
   // VISIT_TIER_PRICING_V1 — цены по счёту визита. Все четыре поля могут быть
   // пустыми (услуга с одной ценой); заданная цена — неотрицательное число,
@@ -254,7 +276,7 @@ export function serviceSave(db, args, user) {
         requires_doctor: requiresDoctor, active, type, is_lab: isLab,
         type_id: refs.type_id, category_id: refs.category_id, department_id: refs.department_id,
         default_doctor_percent: defaultPct, room_id: roomId,
-        doctor_tier_from: tierFrom, doctor_tier_percent: tierPct,   // DOCTOR_TIER_V1
+        ...tierCols,   // DOCTOR_TIER_V1/V2 — три ступени
         price_secondary: priceSecondary, secondary_days_from: daysFrom, secondary_days_to: daysTo, price_repeat: priceRepeat,
         repeat_days_from: repDaysFrom, repeat_days_to: repDaysTo,
         name_uz: nameUz, name_en: nameEn, online_booking: onlineBooking,
@@ -277,7 +299,7 @@ export function serviceSave(db, args, user) {
         requires_doctor: requiresDoctor, active, type, is_lab: isLab,
         type_id: refs.type_id, category_id: refs.category_id, department_id: refs.department_id,
         default_doctor_percent: defaultPct, room_id: roomId,
-        doctor_tier_from: tierFrom, doctor_tier_percent: tierPct,   // DOCTOR_TIER_V1
+        ...tierCols,   // DOCTOR_TIER_V1/V2 — три ступени
         price_secondary: priceSecondary, secondary_days_from: daysFrom, secondary_days_to: daysTo, price_repeat: priceRepeat,
         repeat_days_from: repDaysFrom, repeat_days_to: repDaysTo,
         name_uz: nameUz, name_en: nameEn, online_booking: onlineBooking,

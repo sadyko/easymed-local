@@ -801,3 +801,14 @@ test('DOCTOR_TIER_V1: порог и доля ступени едут с прай
   const svc = dst.prepare("SELECT doctor_tier_from, doctor_tier_percent FROM services WHERE code='S-CARD'").get();
   assert.deepEqual(svc, { doctor_tier_from: 25, doctor_tier_percent: 40 });
 });
+
+test('DOCTOR_TIER_V2: ступени 2 и 3 едут с прайсом и приземляются', () => {
+  const main = seedMain(fresh());
+  main.prepare(`UPDATE services SET doctor_tier_from = 25, doctor_tier_percent = 40,
+                  doctor_tier_from_2 = 50, doctor_tier_percent_2 = 45, doctor_tier_from_3 = 100, doctor_tier_percent_3 = 50
+                WHERE code='S-CARD'`).run();
+  const dst = receiver();
+  apply(dst, exportCatalogue(main));
+  const svc = dst.prepare("SELECT doctor_tier_from_2, doctor_tier_percent_2, doctor_tier_from_3, doctor_tier_percent_3 FROM services WHERE code='S-CARD'").get();
+  assert.deepEqual(svc, { doctor_tier_from_2: 50, doctor_tier_percent_2: 45, doctor_tier_from_3: 100, doctor_tier_percent_3: 50 });
+});

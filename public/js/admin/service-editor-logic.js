@@ -51,6 +51,58 @@ export function labBlockVisible(type) {
 }
 
 // ---------------------------------------------------------------------------
+// DOCTOR_TIER_V2 — три ступени доли исполнителя по объёму (миграции 140 + 147).
+// Владелец: «another 2 (overall 3) steps of the percentage for the service».
+// Правило ПОРЯДКА — одно на три потребителя: rpc/service-save.js (отказ 400),
+// редактор (курсор в нужное поле) и импорт Excel (ступень не сохраняется):
+//   • каждая ступень — парой: порог И доля, или ничего;
+//   • ступени заполняются по порядку: 3 без 2 и 2 без 1 не действуют;
+//   • пороги строго растут. Проценты — как решит клиника, о них ни слова.
+// ---------------------------------------------------------------------------
+export const TIER_STEP_COLUMNS = [
+    { n: 1, from: 'doctor_tier_from',   pct: 'doctor_tier_percent' },
+    { n: 2, from: 'doctor_tier_from_2', pct: 'doctor_tier_percent_2' },
+    { n: 3, from: 'doctor_tier_from_3', pct: 'doctor_tier_percent_3' },
+];
+
+const TIER_PAIR_MSG = {
+    1: 'Ступень задаётся парой: порог услуг в месяц И доля выше порога.',
+    2: 'Ступень 2 задаётся парой: порог услуг в месяц И доля выше порога.',
+    3: 'Ступень 3 задаётся парой: порог услуг в месяц И доля выше порога.',
+};
+const TIER_ORDER_MSG = {
+    2: 'Ступени заполняются по порядку: ступень 2 без ступени 1 не действует.',
+    3: 'Ступени заполняются по порядку: ступень 3 без ступени 2 не действует.',
+};
+const TIER_ASC_MSG = {
+    2: 'Порог ступени 2 должен быть больше порога ступени 1.',
+    3: 'Порог ступени 3 должен быть больше порога ступени 2.',
+};
+
+/**
+ * Первая проблема в ступенях или null. steps — три элемента {from, pct}
+ * (числа, 0 = пусто) по порядку ступеней; null на месте ступени — «неизвестно»
+ * (у импорта нет её колонок в файле): проверки с ней пропускаются.
+ * -> { step, field: 'from'|'pct', message } | null
+ */
+export function tierStepsProblem(steps) {
+    const on = (st) => !!st && Number(st.from) > 0;
+    for (let i = 0; i < 3; i++) {
+        const st = steps[i];
+        if (!st) continue;
+        const hasFrom = Number(st.from) > 0, hasPct = Number(st.pct) > 0;
+        if (hasFrom !== hasPct) return { step: i + 1, field: hasFrom ? 'pct' : 'from', message: TIER_PAIR_MSG[i + 1] };
+    }
+    for (let i = 1; i < 3; i++) {
+        const st = steps[i], prev = steps[i - 1];
+        if (!on(st) || !prev) continue;
+        if (!on(prev)) return { step: i + 1, field: 'from', message: TIER_ORDER_MSG[i + 1] };
+        if (Number(st.from) <= Number(prev.from)) return { step: i + 1, field: 'from', message: TIER_ASC_MSG[i + 1] };
+    }
+    return null;
+}
+
+// ---------------------------------------------------------------------------
 // Комбобокс «выбери или впиши новую».
 // ---------------------------------------------------------------------------
 

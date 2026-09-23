@@ -115,6 +115,7 @@ async function _injectDataValidations(buf, cfg, XLSX) {
 }
 import { h, Icon, toast, clear } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { TIER_STEP_COLUMNS, tierStepsProblem } from '../service-editor-logic.js';   // DOCTOR_TIER_V2
 import { SECTIONS, FK_LABEL_COLUMN } from '../sections.js?v=noikpu1';
 
 // EXCEL_SELF_HOST_V1 — served from our own origin (CSP allows 'self'); the
@@ -413,22 +414,44 @@ const IMPORT_CONFIGS = {
             // ключ на каждый ЗАГОЛОВОК, даже с пустой ячейкой), а не «ячейка
             // заполнена»: пустая ячейка под своим заголовком по-прежнему значит
             // «ступени нет», и это осознанное решение клиники.
-            var hasFrom = 'doctor_tier_from' in r, hasPct = 'doctor_tier_percent' in r;
-            if (!hasFrom && !hasPct) {
-                delete payload.doctor_tier_from; delete payload.doctor_tier_percent;
-                return;
-            }
-            // Пара или ничего, и в границах сервера (целый порог ≥ 0, доля
-            // 0–100): полупара из файла застряла бы в редакторе (service_save
-            // отказывает половине настройки), а импорт пишет мимо service_save,
-            // поэтому границы повторяются здесь. Отброшенная полупара теперь
-            // называется вслух — раньше строка молча приезжала без ступени.
-            payload.doctor_tier_from = Math.max(0, Math.round(Number(payload.doctor_tier_from) || 0));
-            payload.doctor_tier_percent = Math.min(100, Math.max(0, Number(payload.doctor_tier_percent) || 0));
-            if (!payload.doctor_tier_from || !payload.doctor_tier_percent) {
-                var half = payload.doctor_tier_from || payload.doctor_tier_percent;
-                payload.doctor_tier_from = 0; payload.doctor_tier_percent = 0;
-                if (half && ctx) ctx.warn(tr('Ступень: заполните и порог, и долю — полупара не сохранена'));
+            //
+            // DOCTOR_TIER_V2 — то же для каждой из трёх ступеней по отдельности:
+            // ступень, чьих колонок в листе нет, остаётся как была (null ниже —
+            // «неизвестна», и правило порядка её пропускает).
+            var HALF_MSG = {
+                1: 'Ступень: заполните и порог, и долю — полупара не сохранена',
+                2: 'Ступень 2: заполните и порог, и долю — полупара не сохранена',
+                3: 'Ступень 3: заполните и порог, и долю — полупара не сохранена',
+            };
+            var steps = TIER_STEP_COLUMNS.map(function (c) {
+                if (!(c.from in r) && !(c.pct in r)) {
+                    delete payload[c.from]; delete payload[c.pct];
+                    return null;
+                }
+                // Пара или ничего, и в границах сервера (целый порог ≥ 0, доля
+                // 0–100): полупара из файла застряла бы в редакторе (service_save
+                // отказывает половине настройки), а импорт пишет мимо service_save,
+                // поэтому границы повторяются здесь. Отброшенная полупара
+                // называется вслух — раньше строка молча приезжала без ступени.
+                payload[c.from] = Math.max(0, Math.round(Number(payload[c.from]) || 0));
+                payload[c.pct] = Math.min(100, Math.max(0, Number(payload[c.pct]) || 0));
+                if (!payload[c.from] || !payload[c.pct]) {
+                    var half = payload[c.from] || payload[c.pct];
+                    payload[c.from] = 0; payload[c.pct] = 0;
+                    if (half && ctx) ctx.warn(tr(HALF_MSG[c.n]));
+                }
+                return { from: payload[c.from], pct: payload[c.pct] };
+            });
+            // Порядок ступеней — то же правило, что у service_save
+            // (tierStepsProblem): со сломанной ступени и дальше ничего не
+            // сохраняется, и строка говорит почему.
+            var problem = tierStepsProblem(steps);
+            if (problem) {
+                for (var k = problem.step - 1; k < TIER_STEP_COLUMNS.length; k++) {
+                    if (!steps[k]) continue;
+                    payload[TIER_STEP_COLUMNS[k].from] = 0; payload[TIER_STEP_COLUMNS[k].pct] = 0;
+                }
+                if (ctx) ctx.warn(trf('{problem} Ступени с {n}-й не сохранены.', { problem: tr(problem.message), n: problem.step }));
             }
         },
         columns: [
@@ -476,6 +499,11 @@ const IMPORT_CONFIGS = {
             { key: 'default_doctor_percent', coerce: 'num', hint: 'Доля исполнителя по умолчанию, % (необязательно)' },
             { key: 'doctor_tier_from',    coerce: 'int', hint: 'Ступень: порог услуг в месяц — повышенная доля начинается со следующей услуги (0 или пусто — ступени нет)' },
             { key: 'doctor_tier_percent', coerce: 'num', hint: 'Ступень: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
+            // DOCTOR_TIER_V2 — ступени 2 и 3: пороги строго растут, заполняются по порядку.
+            { key: 'doctor_tier_from_2',    coerce: 'int', hint: 'Ступень 2: порог услуг в месяц — больше порога ступени 1 (0 или пусто — ступени нет)' },
+            { key: 'doctor_tier_percent_2', coerce: 'num', hint: 'Ступень 2: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
+            { key: 'doctor_tier_from_3',    coerce: 'int', hint: 'Ступень 3: порог услуг в месяц — больше порога ступени 2 (0 или пусто — ступени нет)' },
+            { key: 'doctor_tier_percent_3', coerce: 'num', hint: 'Ступень 3: доля исполнителя выше порога, % (задаётся вместе с порогом)' },
             { key: 'room',             fk: { source: 'rooms', keyField: 'name', target: 'room_id' }, hint: 'Кабинет (очередь диагностики) — по названию из справочника; необязательно' },
             { key: 'specimen',         hint: 'Лаборатория: материал (кровь, моча…) — необязательно' },
             { key: 'tube_color',       hint: 'Лаборатория: пробирка — light_blue, red, gold, green, lavender, pink, grey, royal_blue, yellow_acd, black, none' },

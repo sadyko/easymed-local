@@ -14,7 +14,7 @@ const user = { id: 1, role: 'admin' };
 const SEP = { from: '2026-09-01', to: '2026-09-30' };
 
 // Один врач, одна услуга 100 000, налог 0 (чтобы цифры читались глазами).
-function clinic({ pct = 30, tierFrom = 25, tierPct = 40, fix = null, taxRate = 0 } = {}) {
+function clinic({ pct = 30, tierFrom = 25, tierPct = 40, fix = null, taxRate = 0, from2 = 0, pct2 = 0, from3 = 0, pct3 = 0 } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   const rates = JSON.stringify([{ service_id: 1, pct, ...(fix == null ? {} : { fix }) }]);
@@ -23,6 +23,9 @@ function clinic({ pct = 30, tierFrom = 25, tierPct = 40, fix = null, taxRate = 0
   db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (1,'P-1','Пациент')").run();
   db.prepare('INSERT INTO services (id, name, price, tax_rate, doctor_tier_from, doctor_tier_percent) VALUES (1,?,?,?,?,?)')
     .run('Приём', 100000, taxRate, tierFrom, tierPct);
+  // DOCTOR_TIER_V2 — ступени 2 и 3 (миграция 147).
+  db.prepare('UPDATE services SET doctor_tier_from_2 = ?, doctor_tier_percent_2 = ?, doctor_tier_from_3 = ?, doctor_tier_percent_3 = ? WHERE id = 1')
+    .run(from2, pct2, from3, pct3);
   let seq = 0;
   // Одна строка = один визит с одной услугой; paid → счёт с датой дня и статусом invoiceStatus.
   // `at` — полная отметка времени визита вместо дня: месяц ступени считается по
@@ -269,4 +272,73 @@ test('doctor_tier_positions: перевёрнутый и кривой диапа
   assert.throws(() => doctorTierPositions(c.db, { doctor_id: 1, from: '2026-13', to: '2026-13' }, user), (e) => e.status === 400);
   assert.throws(() => doctorTierPositions(c.db, { doctor_id: 1, from: '2026-09' }, user), (e) => e.status === 400);
   assert.throws(() => doctorTierPositions(c.db, { doctor_id: 1 }, user), (e) => e.status === 400);
+});
+
+// ---------------------------------------------------------------------------
+// DOCTOR_TIER_V2 — три ступени. Пример владельца: ступень 1 — 25 → 40 %,
+// ступень 2 — 50 → 45 %, ступень 3 — 100 → 50 %. Строки 1–25 — личные 30 %,
+// 26–50 — 40 %, 51–100 — 45 %, 101+ — 50 %.
+const THREE = { from2: 50, pct2: 45, from3: 100, pct3: 50 };
+
+test('V2: три ступени — строки по всем четырём полосам', () => {
+  const c = clinic(THREE); c.lines(102);
+  assert.equal(fee(c.db), 25 * 30000 + 25 * 40000 + 50 * 45000 + 2 * 50000);
+});
+
+test('V2: ровно на пороге ступени 2 — ещё ступень 1', () => {
+  const c = clinic(THREE); c.lines(50);
+  assert.equal(fee(c.db), 25 * 30000 + 25 * 40000);
+  c.line();
+  assert.equal(fee(c.db), 25 * 30000 + 25 * 40000 + 45000);
+});
+
+test('V2: строка с количеством 4 через два порога делится по единицам', () => {
+  const c = clinic({ from2: 26, pct2: 45, from3: 27, pct3: 50 });
+  c.lines(24);
+  c.line({ qty: 4 });   // running 24 → 28: №25 30 %, №26 40 %, №27 45 %, №28 50 %
+  assert.equal(fee(c.db), 24 * 30000 + 30000 + 40000 + 45000 + 50000);
+});
+
+test('V2: фиксированная ставка — ни одна ступень не трогает', () => {
+  const c = clinic({ ...THREE, fix: 15000 }); c.lines(102);
+  assert.equal(fee(c.db), 102 * 15000);
+});
+
+test('V2: личный процент выше ступени побеждает на своей полосе', () => {
+  // Личные 42 %: выше ступени 1 (40 %), ниже ступеней 2 и 3.
+  const c = clinic({ ...THREE, pct: 42 }); c.lines(102);
+  assert.equal(fee(c.db), 50 * 42000 + 50 * 45000 + 2 * 50000);
+});
+
+test('V2: проценты ступеней не обязаны расти — платится доля своей полосы', () => {
+  const c = clinic({ tierPct: 50, from2: 50, pct2: 35, from3: 0, pct3: 0 }); c.lines(52);
+  assert.equal(fee(c.db), 25 * 30000 + 25 * 50000 + 2 * 35000);
+});
+
+test('V2: одна ступень — прежние цифры (регресс)', () => {
+  const c = clinic(); c.lines(102);
+  assert.equal(fee(c.db), 25 * 30000 + 77 * 40000);
+});
+
+test('V2: doctor_tier_positions отдаёт единицы по полосам, деньги сходятся с отчётом', () => {
+  const c = clinic({ from2: 26, pct2: 45, from3: 27, pct3: 50 });
+  c.lines(24); c.line({ qty: 4 }); c.lines(2);
+  const { rows } = doctorTierPositions(c.db, { doctor_id: 1, month: '2026-09' }, user);
+  const big = rows[24];
+  assert.equal(big.units, 4);
+  assert.equal(big.units_above, 3);     // за порогом 1
+  assert.equal(big.units_above_2, 2);   // за порогом 2
+  assert.equal(big.units_above_3, 1);   // за порогом 3
+  assert.equal(big.tier_from_2, 26);
+  assert.equal(big.tier_percent_2, 45);
+  assert.equal(big.tier_from_3, 27);
+  assert.equal(big.tier_percent_3, 50);
+  const P = 30;
+  const money = rows.reduce((s, r) => {
+    const a1 = r.units_above, a2 = r.units_above_2, a3 = r.units_above_3;
+    const pct = (P * (r.units - a1) + Math.max(P, r.tier_percent) * (a1 - a2)
+      + Math.max(P, r.tier_percent_2) * (a2 - a3) + Math.max(P, r.tier_percent_3) * a3) / r.units;
+    return s + 100000 * r.units * pct / 100;
+  }, 0);
+  assert.equal(money, fee(c.db));
 });
