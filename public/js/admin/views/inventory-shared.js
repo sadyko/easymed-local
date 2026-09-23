@@ -99,12 +99,20 @@ export function movementTag(m) {
     return Tag(t.label, { kind: t.kind, dot: true });
 }
 
-// stock_movements with products + users embeds — shared by Дашборд and Журнал.
+// stock_movements with the products embed — «Последние приходы» на Дашборде.
 // Falls back to narrower selects if an embed is rejected, and finally to no
 // embed at all so callers can still show product_id.
+//
+// STOCK_LOG_V1 — первым запросом стоял `users(full_name,username)`, и он
+// ОТВЕРГАЛСЯ ЦЕЛИКОМ: реестр регистрирует связь с сотрудником под именем
+// `created_by`, а не `users` (server/db/schema-registry.js), и компилятор
+// отвечал 403 «unknown embed». Каждая загрузка тратила лишний круг к серверу,
+// а журнал (он тоже звал отсюда) молча рисовал «—» в колонке «Кто». Журнал
+// теперь ходит своим RPC (rpc/stock-log.js), а имя встраивается правильно —
+// `users:created_by(full_name)`: слева имя ключа в ответе, справа имя связи.
 export async function fetchMovements({ kind, limit } = {}) {
     const selects = [
-        '*, products(name,base_unit), users(full_name,username)',
+        '*, products(name,base_unit), users:created_by(full_name)',
         '*, products(name,unit)',
         '*',
     ];

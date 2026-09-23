@@ -3,6 +3,14 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // STOCK_LOG_V1 (2026-09-23) — журнал движений: кто, кому, партия, срок, период
+  "Дата с": {"en":"Date from","ru":"Дата с","uz":"Sana dan"},
+  "Дата по": {"en":"Date to","ru":"Дата по","uz":"Sana gacha"},
+  "Показать ещё": {"en":"Show more","ru":"Показать ещё","uz":"Yana ko‘rsatish"},
+  "Показаны последние {n} — журнал длиннее. Уточните период, тип или поиск.": {"en":"Showing the latest {n} — the journal is longer. Narrow the period, the type or the search.","ru":"Показаны последние {n} — журнал длиннее. Уточните период, тип или поиск.","uz":"Oxirgi {n} ta ko‘rsatilyapti — jurnal undan uzunroq. Davrni, turni yoki qidiruvni aniqlashtiring."},
+  "Видны движения вашего отдела и ваши собственные.": {"en":"You see your department's movements and your own.","ru":"Видны движения вашего отдела и ваши собственные.","uz":"Siz o‘z bo‘limingizning va o‘zingizning harakatlaringizni ko‘rasiz."},
+  "Видны ваши движения: что выдали вам и что провели вы.": {"en":"You see your own movements: what was issued to you and what you recorded.","ru":"Видны ваши движения: что выдали вам и что провели вы.","uz":"Siz o‘z harakatlaringizni ko‘rasiz: sizga nima berilgani va nimani o‘zingiz qayd etganingiz."},
+  "Приход, выдача и расход товара: кто провёл, кому выдал, из какой партии.": {"en":"Receipts, issues and dispenses: who recorded it, to whom and from which batch.","ru":"Приход, выдача и расход товара: кто провёл, кому выдал, из какой партии.","uz":"Kirim, berish va sarflash: kim qayd etgan, kimga bergan, qaysi partiyadan."},
   // CRM_REAL_BOOKING_V1 (2026-09-21, разбор ревью) — ответ сервера о дне и перенос
   "В этот день у пациента уже есть приём в {t}{doc} — время не занято, откройте календарь": {"en":"The patient already has an appointment that day at {t}{doc} — the time you picked is NOT taken, open the calendar","ru":"В этот день у пациента уже есть приём в {t}{doc} — время не занято, откройте календарь","uz":"Bemorning o‘sha kuni allaqachon {t} da qabuli bor{doc} — siz tanlagan vaqt band qilinmadi, kalendarni oching"},
   "у {doc}": {"en":"with {doc}","ru":"у {doc}","uz":"{doc} qabulida"},
