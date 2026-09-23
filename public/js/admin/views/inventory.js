@@ -6,9 +6,10 @@
 // Live panes: Склад (inventory-sklad.js), Товары (inventory-products.js),
 // Поставщики (inventory-suppliers.js), Дашборд (this file), Журнал
 // (stock-log.js — STOCK_LOG_V1: у него свой маршрут #stock-log, потому что
-// журнал видит не только склад).
-// Заявки / Заказы / Отделения / Сроки годности / Инвентаризация are visible
-// «Во 2-й фазе» placeholders (spec 2026-08-05-procurement-redesign-design.md).
+// журнал видит не только склад), Сроки годности (inventory-expiry.js —
+// EXPIRY_BALANCE_V1).
+// Заявки / Заказы / Инвентаризация — живые вкладки (PROCUREMENT_DOCS_V1);
+// «Отделения» ведут на #departments (DEPARTMENTS_V1).
 //
 // on_hand / avg_cost change ONLY through RPCs (receive_stock_lines,
 // adjust_stock, issue_stock_lines, dispense_item/void_dispense) — the
@@ -28,6 +29,10 @@ import { renderSkladTab } from './inventory-sklad.js';
 import { renderSuppliersTab } from './inventory-suppliers.js';
 // PROCUREMENT_DOCS_V1 — живые вкладки Заявки / Заказы + Инвентаризация (Phase 2)
 import { renderRequisitionsTab, renderPurchaseOrdersTab, renderStockCountsTab } from './inventory-docs.js';
+// EXPIRY_BALANCE_V1 — «Сроки годности» больше не заглушка: остатки партиями,
+// ближайший срок первым. Расклад считает сервер (rpc/expiry.js), экран его
+// показывает и честно называет расчётом.
+import { renderExpiryTab } from './inventory-expiry.js';
 
 const refs = { container: null, onNavigate: null, chipsEl: null, tabBarEl: null, contentEl: null };
 const state = { pane: 'sklad' };
@@ -132,9 +137,7 @@ async function repaint() {
         case 'departments':   // DEPARTMENTS_V1 — сюда попадают только без onNavigate; иначе чип ведёт на #departments
             return void container.appendChild(comingSoon('Отделения',
                 'Товары и остатки по отделениям смотрите в «Настройки → Отделы».', 'Building'));
-        case 'expiry':
-            return void container.appendChild(comingSoon('Сроки годности',
-                'Партии и сроки годности (FEFO). Появится следующим шагом.', 'Clock'));
+        case 'expiry':      return renderExpiryTab(container);   // EXPIRY_BALANCE_V1
         default:
             return;
     }

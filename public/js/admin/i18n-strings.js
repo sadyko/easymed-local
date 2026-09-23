@@ -3,6 +3,20 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // EXPIRY_BALANCE_V1 (2026-09-23) — экран «Сроки годности»: остатки партиями, ближайший срок первым
+  "Истекает": {"en":"Expiring","ru":"Истекает","uz":"Muddati tugayapti"},
+  "В порядке": {"en":"OK","ru":"В порядке","uz":"Yaroqli"},
+  "Срок не указан": {"en":"No expiry date","ru":"Срок не указан","uz":"Muddat ko'rsatilmagan"},
+  "Все товары": {"en":"All products","ru":"Все товары","uz":"Barcha tovarlar"},
+  "Не удалось загрузить сроки годности: {msg}": {"en":"Could not load the expiry dates: {msg}","ru":"Не удалось загрузить сроки годности: {msg}","uz":"Yaroqlilik muddatlarini yuklab bo'lmadi: {msg}"},
+  "Не удалось загрузить сроки годности.": {"en":"Could not load the expiry dates.","ru":"Не удалось загрузить сроки годности.","uz":"Yaroqlilik muddatlarini yuklab bo'lmadi."},
+  "Нет подходящих партий.": {"en":"No matching batches.","ru":"Нет подходящих партий.","uz":"Mos partiyalar yo'q."},
+  "Остаток по партиям — расчёт, а не факт: программа не запоминает, из какой партии товар взяли, и считает, что первым расходуется ближайший срок.": {"en":"The per-batch balance is calculated, not measured: the program does not remember which batch an item was taken from, and assumes the earliest expiry is used first.","ru":"Остаток по партиям — расчёт, а не факт: программа не запоминает, из какой партии товар взяли, и считает, что первым расходуется ближайший срок.","uz":"Partiyalar bo'yicha qoldiq — hisob-kitob, dalil emas: dastur tovar qaysi partiyadan olinganini eslab qolmaydi va birinchi bo'lib eng yaqin muddat sarflanadi deb hisoblaydi."},
+  "«Истекает» — до конца срока осталось {n} дней или меньше.": {"en":"«Expiring» means {n} days or fewer are left before the expiry date.","ru":"«Истекает» — до конца срока осталось {n} дней или меньше.","uz":"«Muddati tugayapti» — muddat tugashiga {n} kun yoki undan kam qoldi."},
+  "Сроки годности ещё не заполняли: срок и номер партии указываются при приёме товара на склад, в приходе.": {"en":"No expiry dates have been entered yet: the date and the batch number are filled in when the goods are received into the warehouse.","ru":"Сроки годности ещё не заполняли: срок и номер партии указываются при приёме товара на склад, в приходе.","uz":"Yaroqlilik muddatlari hali to'ldirilmagan: muddat va partiya raqami tovarni omborga qabul qilishda, kirimda ko'rsatiladi."},
+  "Остатки склада по партиям видят администратор и кладовщик.": {"en":"Warehouse balances by batch are visible to the administrator and the storekeeper.","ru":"Остатки склада по партиям видят администратор и кладовщик.","uz":"Ombor qoldiqlarini partiyalar bo'yicha administrator va omborchi ko'radi."},
+  "Показаны первые {n} партий — уточните товар или поиск.": {"en":"Showing the first {n} batches — narrow the product or the search.","ru":"Показаны первые {n} партий — уточните товар или поиск.","uz":"Birinchi {n} ta partiya ko'rsatilyapti — tovarni yoki qidiruvni aniqlashtiring."},
+  "просрочено на {n} дн.": {"en":"{n} days overdue","ru":"просрочено на {n} дн.","uz":"{n} kun muddati o'tgan"},
   // MY_STOCK_V1 (2026-09-23) — экран «Мои запасы»: свой подотчёт, свои выдачи, свои списания
   "Мой отдел": {"en":"My department","ru":"Мой отдел","uz":"Mening bo'limim"},
   "Карточка отдела: команда, помещения, снабжение и журнал.": {"en":"The department card: team, rooms, supplies and the log.","ru":"Карточка отдела: команда, помещения, снабжение и журнал.","uz":"Bo'lim kartasi: jamoa, xonalar, ta'minot va jurnal."},

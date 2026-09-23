@@ -20,6 +20,10 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, field } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { fmtQty, numStyle } from './inventory-shared.js';
+// EXPIRY_BALANCE_V1 — «выдача просроченного предупреждает» (владелец 23.09).
+// Слова пишет сервер, диалог их только показывает — и ПОСЛЕ «Выдано»: выдача
+// прошла, окно закрывается, а предупреждение остаётся на виду.
+import { toastStockWarnings } from './stock-warnings.js';
 
 const HOLDER_LABEL = { staff: 'Сотруднику', room: 'В кабинет', department: 'В отделение' };
 
@@ -237,6 +241,9 @@ export function openStockIssueModal({ holder = null, onDone = null } = {}) {
             const { data: res, error } = await supabase.rpc('issue_stock_lines', payload);
             if (error) throw error;
             toast(res && res.repeated ? 'Эта выдача уже проведена — повторно не списано.' : 'Выдано со склада', 'ok');
+            // EXPIRY_BALANCE_V1 — предупреждение о просроченной партии идёт
+            // ПОСЛЕ успеха и НЕ мешает закрытию: это предупреждение, а не отказ.
+            toastStockWarnings(res);
             close();
             if (typeof onDone === 'function') onDone(res);
         } catch (e) {

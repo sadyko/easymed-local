@@ -58,6 +58,9 @@ import { pastelFor } from '../pastel.js';   // ADMISSIONS_REGISTER_V1 — ава
 import { dateNumeric } from '../../shared/date-words.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — tr() matches WHOLE strings, so assembled sentences go through trf(): translate first, substitute second
 import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE_SELECT_V1
+// EXPIRY_BALANCE_V1 — «списание просроченного предупреждает» (владелец 23.09).
+// Слова пишет сервер (rpc/expiry.js), консоль койки их только показывает.
+import { toastStockWarnings } from './stock-warnings.js';
 
 const STATUS = {
     free:        { label: 'Свободна',  bg: 'var(--ok-50, #e9f7ef)',      fg: 'var(--ok-700, #1a7a44)',      bd: 'var(--ok-200, #bde5cd)',      dot: 'var(--ok-500, #2e8b52)' },
@@ -954,16 +957,21 @@ function bedDetailModal(bed, ward, adm, root) {
                 const lines = picked.filter(x => Number(x.qty) > 0);
                 if (!lines.length) { toast('Добавьте хотя бы один товар.', 'fail'); return false; }
                 let ok = 0; const fails = [];
+                const warned = [];   // EXPIRY_BALANCE_V1 — просроченные партии всех строк
                 for (const x of lines) {
-                    const { error } = await supabase.rpc('dispense_admission_item', {
+                    const { data, error } = await supabase.rpc('dispense_admission_item', {
                         p_admission_id: adm.id, p_item_id: x.p.id, p_qty: Number(x.qty),
                         p_doctor_id: adm.attending_doctor_id || adm.doctor_id || null,   // лечащий, а не направивший — см. «Услуги» выше
                         p_billable: billChk.checked, p_note: noteInp.value.trim() || null,
                     });
-                    if (error) fails.push(x.p.name + ': ' + error.message); else ok++;
+                    if (error) fails.push(x.p.name + ': ' + error.message);
+                    else { ok++; if (data && Array.isArray(data.warnings)) warned.push(...data.warnings); }
                 }
                 if (fails.length) toast(trf('Выдано: {n}. Ошибки — {fails}', { n: ok, fails: fails.join('; ') }), 'fail');
                 else toast(billChk.checked ? trf('Выдано позиций: {n} — в счёт пациента.', { n: ok }) : trf('Выдано позиций: {n} — в учёт расходов.', { n: ok }), 'ok');
+                // EXPIRY_BALANCE_V1 — предупреждение ПОСЛЕ итога и не вместо него:
+                // выдача прошла, но партию нужно проверить.
+                toastStockWarnings({ warnings: warned });
                 await reloadAll();
                 return fails.length === 0;
             });

@@ -20,6 +20,9 @@ import { h, Icon, Tag, clear, toast, field, checkField, initials } from '../ui.j
 import { pastelFor } from '../pastel.js';
 import { tr, trf } from '../i18n.js';
 import { fmtPrice, fmtQty } from './inventory-shared.js';
+// EXPIRY_BALANCE_V1 — «списание просроченного предупреждает» (владелец 23.09).
+// Слова пишет сервер (rpc/expiry.js), вкладка их только показывает.
+import { toastStockWarnings } from './stock-warnings.js';
 
 const HOLDER_WORD = { staff: 'Мои запасы', room: 'Кабинет', department: 'Отделение' };
 const WAREHOUSE_KEY = 'warehouse';
@@ -264,6 +267,7 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
                 });
                 if (error) throw error;
                 toast(trf('Выдано: {name} — {qty} {unit}', { name: data && data.item_name ? data.item_name : it.product_name, qty: fmtQty(qty), unit: it.consumption_unit || '' }), 'success');
+                toastStockWarnings(data);   // EXPIRY_BALANCE_V1 — просроченная партия: после успеха, не вместо него
                 v.item_count = (v.item_count || 0) + 1;
                 await Promise.all([loadItems(), reloadHoldings()]);
                 paint();
