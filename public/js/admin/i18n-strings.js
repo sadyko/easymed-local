@@ -8782,4 +8782,5 @@ export const STRINGS = {
   "По пациентам": {"en":"By patient","ru":"По пациентам","uz":"Bemorlar bo'yicha"},
   "Есть карточка у другого оператора": {"en":"Another operator has a card for this number","ru":"Есть карточка у другого оператора","uz":"Bu raqam uchun boshqa operatorda kartochka bor"},
   "Сохранить всё равно": {"en":"Save anyway","ru":"Сохранить всё равно","uz":"Baribir saqlash"},
+  "Пациентов": {"en":"Patients","ru":"Пациентов","uz":"Bemorlar"},
 };

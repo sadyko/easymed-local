@@ -60,10 +60,12 @@ test('«Рефералы»: сводка и детализация, фильтр
 });
 
 test('конструктор зовёт run_report ВЫБРАННЫМ видом и с выбранными фильтрами, и так же называет файл', () => {
-  assert.match(hub, /supabase\.rpc\('run_report', \{ kind: st\.kind, \.\.\.args, \.\.\.reportArgs\(rep, st\.kind, st\.opts\) \}\)/);
+  // Ревью M1 — вид и фильтры берутся ДО ожидания ответа.
+  assert.match(hub, /const reqKind = st\.kind;\s*const reqArgs = reportArgs\(rep, reqKind, st\.opts\);/);
+  assert.match(hub, /supabase\.rpc\('run_report', \{ kind: reqKind, \.\.\.args, \.\.\.reqArgs \}\)/);
   assert.match(hub, /XLSX\.writeFile\(wb, `\$\{st\.kind\}_/);
   // Смена вида или фильтра сбрасывает результат — старая таблица не уйдёт в Excel под новым именем.
-  assert.match(hub, /function resetResult\(\) \{\s*st\.result = null;\s*downloadBtn\.disabled = true;/);
+  assert.match(hub, /function resetResult\(\) \{\s*st\.reqSeq\+\+;[^\n]*\s*st\.result = null;\s*downloadBtn\.disabled = true;/);
 });
 
 test('«По услугам»: табличная карточка с фильтрами «Счета» и «Группа» (пять групп)', () => {
@@ -95,4 +97,19 @@ test('«Закупки и склад»: четыре вида, «Разрез» 
   assert.deepEqual(reportArgs(d, 'stock_statement', { by: 'holder' }), {});
   assert.deepEqual(reportArgs(d, 'stock_consumption', { by: 'holder' }), { by: 'holder' });
   assert.deepEqual(optionsFor(d, 'stock_consumption')[0].choices.map((c) => c[0]), ['lines', 'holder', 'patient']);
+});
+
+test('M1: устаревший ответ выбрасывается, переключатели выключены на время запроса', () => {
+  const i = hub.indexOf('async function generate()');
+  const gen = hub.slice(i, hub.indexOf('overlay.appendChild', i));
+  // Номер запроса берётся до await, ответ сверяется с ним и с видом после.
+  assert.ok(gen.indexOf('const token = ++st.reqSeq;') > -1 && gen.indexOf('const token = ++st.reqSeq;') < gen.indexOf('await supabase.rpc'));
+  assert.match(gen, /if \(token !== st\.reqSeq \|\| st\.kind !== reqKind\) return;/);
+  // Сброс результата делает любой ответ в пути устаревшим.
+  assert.match(hub, /function resetResult\(\) \{\s*st\.reqSeq\+\+;/);
+  // Переключатели: выключены и не срабатывают, пока идёт запрос.
+  assert.match(hub, /disabled: st\.generating \|\| null/);
+  assert.equal((hub.match(/if \(st\.generating \|\| st\.(kind === v\.kind|opts\[o\.arg\] === value)\) return;/g) || []).length, 2);
+  // Выгрузка называет файл выбранным видом, а берёт результат, который пришёл для него.
+  assert.match(hub, /XLSX\.writeFile\(wb, `\$\{st\.kind\}_/);
 });

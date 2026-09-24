@@ -11,7 +11,6 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { formatMethods } from '../../shared/payment-methods.js?v=pm1';   // INVOICE_METHOD_COLUMN_V1 — общий словарь с сервером
 // REFERRAL_CATEGORY_RATES_V1 — правило «какая ставка применяется» общее с
 // сервером: этот же отчёт считается и там (rpc/reports.js).
-import { resolveReferralRate, rewardForLine } from '../../shared/referral-reward.js?v=rr1';
 import { reportTotals } from './report-totals.js?v=rt1';   // REPORT_TOTALS_V1
 // BUILDING_REPORTS_V1 — «Здание» в выгрузках. Это НЕ «Branch»: Branch — филиал
 // внутри этой базы (invoices.branch_id), а здание — отдельная установка со
@@ -434,105 +433,39 @@ async function downloadRevenueXlsx(rows, filenameBase = 'total-revenue') {
 
 
 // ---------------------------------------------------------------------------
-// REFERRAL_CATEGORY_RATES_V1 (мигр. 120) — «Рефералы»: вознаграждение по
-// источникам. Ставка берётся из КАРТОЧКИ источника и его категории; правило
-// решает один общий с сервером модуль (shared/referral-reward.js), потому что
-// этот же отчёт считается ещё и там — две копии правила означали бы две разные
-// суммы к выплате.
+// REPORTS_V2, ревью M2 — «Рефералы» в этой выгрузке — ТОТ ЖЕ отчёт сервера,
+// что карточка «Рефералы» в «Отчётах» (run_report kind 'referrals').
 //
-// Прежняя версия читала колонки commission_mode / commission_rates, которых в
-// этой базе никогда не было (наследство облачной версии), и падала с советом
-// «примените миграцию 103». То есть выгрузка была сломана.
-//
-// Основа: строки visit_services с направлением (пер-услуговый
-// referral_source_id из мастера записи, иначе визитный), кроме отменённых;
-// сумма — visit_services.total.
+// Здесь стоял третий расчёт вознаграждения: по строкам visit_services, от их
+// суммы без скидки, по дате визита и по неоплаченным тоже. Сервер считает от
+// строки счёта после скидки и только по оплаченным счетам, по дате счёта (и
+// ровно так же считает кабинет врача). Три числа на одну выплату — это три
+// ответа бухгалтеру; выгрузку не убрали (к ней привыкли), а подключили к
+// одному определению.
 // ---------------------------------------------------------------------------
-export const REFERRAL_COLUMNS = [
-    { key: 'source_code',     label: 'Номер' },
-    { key: 'source_name',     label: 'Источник' },
-    { key: 'source_category', label: 'Категория' },
-    { key: 'mode',            label: 'Режим ставок' },
-    { key: 'services_count',  label: 'Услуг' },
-    { key: 'amount_sum',      label: 'Сумма услуг' },
-    { key: 'eff_percent',     label: 'Эфф. %' },
-    { key: 'reward_sum',      label: 'Вознаграждение' },
-];
+const REFERRAL_SERVER_COLUMNS = ['Здание', 'Номер', 'Источник', 'Вид', 'Категория', 'Режим ставок',
+    'Пациентов', 'Услуг', 'Сумма услуг', 'Оплачено', 'Эфф. %', 'Вознаграждение'];
+export const REFERRAL_COLUMNS = REFERRAL_SERVER_COLUMNS.map((c) => ({ key: c, label: c }));
 
-export async function buildReferralReport({ period, branchId, branchIds, clinicId, fromIso, toIso }) {
+// Местная дата ГГГГ-ММ-ДД: сервер сравнивает местные дни клиники.
+function localYmd(iso) {
+    const d = new Date(iso);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+export async function buildReferralReport({ period, branchId, branchIds, fromIso, toIso }) {
     if (!fromIso || !toIso) {
         [fromIso, toIso] = periodWindow(period);
     }
-    let q = supabase.from('visit_services')
-        .select(`
-            id, total, quantity, status, referral_source_id, service_id,
-            services ( id, name, type_id ),
-            visits!inner ( id, visit_date, branch_id, status, referral_source_id )
-        `)
-        .gte('visits.visit_date', fromIso)
-        .lte('visits.visit_date', toIso)
-        .limit(10000);
-    // OFFLINE_REPORTS_V1 — одна клиника на установку, колонки company_id нет.
-    if (Array.isArray(branchIds) && branchIds.length > 0) {
-        q = q.in('visits.branch_id', branchIds);
-    } else if (branchId && branchId !== 'all') {
-        q = q.eq('visits.branch_id', branchId);
-    }
-    const { data: raw, error } = await q;
-    if (error) throw new Error('visit_services load: ' + error.message);
-
-    const rows = (raw || []).filter(r => r.visits
-        && r.status !== 'cancelled' && r.visits.status !== 'cancelled'
-        && (r.referral_source_id || r.visits.referral_source_id));
-    if (rows.length === 0) return [];
-
-    const srcIds = [...new Set(rows.map(r => r.referral_source_id || r.visits.referral_source_id))];
-    const [srcRes, catRes] = await Promise.all([
-        supabase.from('referral_sources')
-            .select('id, name, code, category_id, reward_mode, own_percent, own_rates').in('id', srcIds),
-        supabase.from('referral_source_categories').select('id, name, standard_percent, rates'),
-    ]);
-    if (srcRes.error) throw new Error('referral_sources load: ' + srcRes.error.message);
-    const srcById = new Map((srcRes.data || []).map(s => [s.id, s]));
-    const catById = new Map((catRes.data || []).map(c => [c.id, c]));
-
-    // Аггрегация ПО ПОЗИЦИЯМ: у источника может быть своя ставка на каждую
-    // группу услуг, и умножить итог корзины на один процент больше нельзя.
-    const agg = new Map();
-    for (const r of rows) {
-        const sid = r.referral_source_id || r.visits.referral_source_id;
-        const src = srcById.get(sid) || null;
-        const cat = src && src.category_id != null ? (catById.get(src.category_id) || null) : null;
-        const amount = Number(r.total || 0);
-        const typeId = r.services ? r.services.type_id : null;
-        let a = agg.get(sid);
-        if (!a) {
-            a = {
-                source_code: (src && src.code) || '—',
-                source_name: src ? src.name : '(источник удалён)',
-                source_category: cat ? cat.name : '—',
-                mode: src && src.reward_mode === 'own' ? 'Своя' : 'По категории',
-                services_count: 0, amount_sum: 0, reward_sum: 0,
-            };
-            agg.set(sid, a);
-        }
-        a.services_count += 1;
-        a.amount_sum += amount;
-        a.reward_sum += rewardForLine(
-            resolveReferralRate({ source: src, category: cat, serviceTypeId: typeId }),
-            { amount, discount: 0, qty: Number(r.quantity || 1) });
-    }
-    return [...agg.values()]
-        .map(a => ({
-            ...a,
-            amount_sum: Math.round(a.amount_sum),
-            reward_sum: Math.round(a.reward_sum),
-            // Одного процента у корзины больше нет — в ней могут смешаться
-            // разные ставки и фиксированные суммы. Доля от суммы услуг верна
-            // всегда и остаётся тем числом, которое в отчёте ищут глазами.
-            eff_percent: a.amount_sum ? Math.round(a.reward_sum / a.amount_sum * 10000) / 100 : 0,
-        }))
-        .sort((x, y) => y.reward_sum - x.reward_sum);
+    const ids = Array.isArray(branchIds) && branchIds.length ? branchIds
+        : (branchId && branchId !== 'all' ? [branchId] : []);
+    const { data, error } = await supabase.rpc('run_report', {
+        kind: 'referrals', from: localYmd(fromIso), to: localYmd(toIso),
+        branch_ids: ids.map(Number).filter(Number.isInteger),
+    });
+    if (error) throw new Error(error.message || String(error));
+    const cols = (data && data.columns) || [];
+    return ((data && data.rows) || []).map((row) => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
 }
 
 async function downloadReferralsXlsx(rows, filenameBase = 'referrals') {

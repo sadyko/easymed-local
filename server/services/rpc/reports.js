@@ -582,7 +582,10 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
            ${LINE_DOCTOR_ID_SQL}              AS doctor_id,
            -- INPATIENT_SHARE_V1, ревью I1: стационарная ставка исполнителя
            -- (NULL — ставки нет, доля не начисляется).
-           idr.inpatient_pct                  AS inpatient_pct
+           idr.inpatient_pct                  AS inpatient_pct,
+           -- REPORTS_V2, ревью M7 — оплата счёта, разносимая на строки.
+           i.paid_amount                      AS inv_paid,
+           i.total_amount                     AS inv_total
       FROM invoice_items ii
       JOIN invoices i  ON i.id = ii.invoice_id
       JOIN patients pt ON pt.id = i.patient_id
@@ -1043,7 +1046,13 @@ function invoicesFullReport(db, args, ctx) {
 // ('stock_consumption'), ведомость остатков ('stock_statement') и просроченное
 // / истекающее ('stock_expiry'). Склад между зданиями не ездит — все четыре
 // считают только своё здание (STOCK_LOCAL_NOTE).
-const STOCK_UNIT_SQL = `COALESCE(NULLIF(pr.base_unit, ''), pr.unit, '')`;
+// Ревью M8 — единица товара. base_unit — колонка NOT NULL со значением по
+// умолчанию 'pcs' (мигр. 010): у товара, заведённого только с unit, в ней
+// стоит это умолчание, а не его единица. Поэтому 'pcs' (или пусто) при
+// заполненном unit читается как «base_unit не задавали», и показывается unit;
+// в остальных случаях — base_unit, как на экранах склада.
+const STOCK_UNIT_SQL = `CASE WHEN COALESCE(pr.base_unit, '') IN ('', 'pcs') AND COALESCE(pr.unit, '') <> ''
+                             THEN pr.unit ELSE COALESCE(pr.base_unit, '') END`;
 
 // (а) ПРИХОД ПО ПОСТАВЩИКАМ. Поставщик — stock_movements.supplier_id (приход
 // через «Принять товар»), у прихода по заказу — поставщик заказа
@@ -1109,6 +1118,10 @@ const HOLDER_TYPE_RU = { staff: 'Сотрудник', room: 'Кабинет', de
 const CONSUMPTION_KIND_RU = { issue: 'Выдача', patient: 'Расход на пациента', void: 'Отмена расхода' };
 const CONSUMPTION_BY = ['lines', 'holder', 'patient'];
 const CONSUMPTION_NOTE = 'Себестоимость — цена движения, а у движения без цены — средняя цена товара. «Выдача» — со склада получателю; «Расход на пациента» — из подотчёта, кабинета, отдела или со склада; отмена расхода вычитается.';
+// Ревью M4 — выданное на руки потом расходуется на пациентов ИЗ РУК: сложить
+// «выдано» и «израсходовано» — значит посчитать один и тот же товар дважды.
+// Поэтому это две колонки с двумя итогами, и общей «суммы расхода» нет.
+const CONSUMPTION_SPLIT_NOTE = '«Выдано на руки» и «Израсходовано на пациентов» — два разных итога, их нельзя складывать: выданное на руки затем расходуется на пациентов из рук, и в сумме оно посчиталось бы дважды. Расход склада за период — «Израсходовано на пациентов» плюс то, что ещё лежит на руках.';
 
 function consumptionMovements(db, args, ctx) {
   const { from, to } = resolveRange(db, args);
@@ -1147,7 +1160,7 @@ function consumptionBy(args) {
 function stockConsumptionReport(db, args, ctx) {
   const by = consumptionBy(args);
   const mv = consumptionMovements(db, args, ctx);
-  const notes = [STOCK_LOCAL_NOTE, CONSUMPTION_NOTE];
+  const notes = [STOCK_LOCAL_NOTE, CONSUMPTION_NOTE, CONSUMPTION_SPLIT_NOTE];
   if (by === 'holder') {
     // По получателю: сколько ему выдали со склада и сколько из его рук (или со
     // склада, если держателя нет) ушло на пациентов.
@@ -1161,10 +1174,12 @@ function stockConsumptionReport(db, args, ctx) {
     }
     const list = [...buckets.values()].sort((a, b) => (b.issued + b.used) - (a.issued + a.used));
     return {
-      columns: [BUILDING_COL, 'Получатель / откуда', 'Движений', 'Выдано со склада (себестоимость)', 'Списано на пациентов (себестоимость)'],
+      columns: [BUILDING_COL, 'Получатель / откуда', 'Движений', 'Выдано на руки (себестоимость)', 'Израсходовано на пациентов (себестоимость)'],
       rows: list.map((b) => [ctx.label(b.origin), b.holder, b.lines, round2(b.issued), round2(b.used)]),
-      by_building: summariseByBuilding(ctx, list, { total: (b) => b.issued + b.used }),
-      total_label: 'Себестоимость',
+      // Итог здания — израсходованное на пациентов; выданное на руки — не
+      // расход, а перемещение (M4).
+      by_building: summariseByBuilding(ctx, list, { total: (b) => b.used }),
+      total_label: 'Израсходовано на пациентов',
       notes,
     };
   }
@@ -1179,7 +1194,7 @@ function stockConsumptionReport(db, args, ctx) {
     }
     const list = [...buckets.values()].sort((a, b) => b.sum - a.sum);
     return {
-      columns: [BUILDING_COL, 'Пациент', 'Движений', 'Списано (себестоимость)'],
+      columns: [BUILDING_COL, 'Пациент', 'Движений', 'Израсходовано на пациентов (себестоимость)'],
       rows: list.map((b) => [ctx.label(b.origin), b.patient, b.lines, round2(b.sum)]),
       by_building: summariseByBuilding(ctx, list, { total: (b) => b.sum }),
       total_label: 'Себестоимость',
@@ -1187,12 +1202,14 @@ function stockConsumptionReport(db, args, ctx) {
     };
   }
   return {
-    columns: [BUILDING_COL, 'Дата', 'Вид', 'Товар', 'Кол-во', 'Ед.', 'Себестоимость ед.', 'Сумма',
+    columns: [BUILDING_COL, 'Дата', 'Вид', 'Товар', 'Кол-во', 'Ед.', 'Себестоимость ед.',
+              'Выдано на руки (себестоимость)', 'Израсходовано на пациентов (себестоимость)',
               'Получатель / откуда', 'Пациент', 'Кто провёл'],
     rows: mv.map((r) => [ctx.label(r.origin), r.date, CONSUMPTION_KIND_RU[r.kind], r.product, round2(r.qty), r.unit || '',
-      round2(r.cost), round2(r.sum), r.holder, r.patient || '', r.actor || '']),
-    by_building: summariseByBuilding(ctx, mv, { total: (r) => r.sum }),
-    total_label: 'Себестоимость',
+      round2(r.cost), r.kind === 'issue' ? round2(r.sum) : null, r.kind === 'issue' ? null : round2(r.sum),
+      r.holder, r.patient || '', r.actor || '']),
+    by_building: summariseByBuilding(ctx, mv, { total: (r) => (r.kind === 'issue' ? 0 : r.sum) }),
+    total_label: 'Израсходовано на пациентов',
     notes,
   };
 }
@@ -1602,6 +1619,20 @@ const lineGroup = (r) => (r.service_id == null && !r.service_group
 const isInpatientLine = (r) => r.inpatient_line_id != null || r.admission_id != null;
 const WHERE_RU = { out: 'Амбулатория', in: 'Стационар' };
 
+// Ревью M7 — «Оплачено» строки: оплата СЧЁТА, разнесённая на строки
+// пропорционально сумме строки после скидки (paid_amount × строка / итог
+// счёта, не больше самой строки). У частично оплаченного счёта прежде стоял 0 —
+// как будто денег не было. Доли врача по-прежнему начисляются только по
+// ПОЛНОСТЬЮ оплаченным счетам — это правило выплаты, а не колонки.
+function linePaid(r) {
+  const after = (r.amount || 0) - (r.discount || 0);
+  const total = Number(r.inv_total) || 0;
+  if (total <= 0) return r.status === 'paid' ? after : 0;
+  const share = Math.max(0, Math.min(1, (Number(r.inv_paid) || 0) / total));
+  return after * share;
+}
+const LINE_PAID_NOTE = '«Оплачено (доля оплаты счёта)» — оплата счёта, разнесённая по его строкам пропорционально сумме строки; у частично оплаченного счёта это часть строки. Доли врача начисляются только по полностью оплаченным счетам.';
+
 const SHARE_ACCRUAL_NOTE = 'Доля врача начисляется после оплаты счёта. В режиме «Все счета» показано, сколько причитается по всем строкам, включая ещё не оплаченные; «Только оплаченные» сходится с «Зарплатами врачей».';
 
 function byServicesReport(db, args, ctx) {
@@ -1625,18 +1656,18 @@ function byServicesReport(db, args, ctx) {
     b.tax += r.tax || 0;
     b.net += r.net || 0;
     b.fee += r.doctor_fee || 0;
-    if (r.status === 'paid') b.paid += (r.amount || 0) - (r.discount || 0);
+    b.paid += linePaid(r);   // ревью M7
     buckets.set(key, b);
   }
   const order = (g) => { const i = CAT_ORDER.indexOf(g); return i < 0 ? CAT_ORDER.length : i; };
   const list = [...buckets.values()].sort((a, b) =>
     (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
     || order(a.group) - order(b.group) || b.gross - a.gross);
-  const notes = [SHARE_ACCRUAL_NOTE];
+  const notes = [SHARE_ACCRUAL_NOTE, LINE_PAID_NOTE];
   if (hasUnattributed(ctx, src)) notes.push(UNATTRIBUTED_NOTE);
   return {
     columns: [BUILDING_COL, 'Группа', 'Услуга', 'Где', 'Кол-во', 'Сумма', 'Скидка', 'Налог',
-              'После скидки и налога', 'Доля врача', 'Остаток клинике', 'Оплачено'],
+              'После скидки и налога', 'Доля врача', 'Остаток клинике', 'Оплачено (доля оплаты счёта)'],
     rows: list.map((b) => [ctx.label(b.origin), b.group, b.service, WHERE_RU[b.where], round2(b.qty),
       round2(b.gross), round2(b.discount), round2(b.tax), round2(b.net), round2(b.fee),
       round2(b.net - b.fee), round2(b.paid)]),
@@ -1678,7 +1709,7 @@ function doctorLines(db, args, ctx) {
 function doctorNotes(db, args, ctx, lines) {
   const { from, to } = resolveRange(db, args);
   const noRate = inpatientNoRateNote(db, { from, to, bf: branchFilter(args, 'i.branch_id'), gf: buildingWhere(db, ctx, args, 'invoices', 'i') });
-  const notes = [DOCTOR_PAY_NOTE];
+  const notes = [DOCTOR_PAY_NOTE, LINE_PAID_NOTE];
   if (hasUnattributed(ctx, lines)) notes.push(UNATTRIBUTED_NOTE);
   if (noRate) notes.push(noRate);
   return notes;
@@ -1709,8 +1740,8 @@ function byDoctorsReport(db, args, ctx) {
     else if (r.visit_id != null) b.visits.add(r.visit_id);
     b.count += 1;
     b.billed += after;
+    b.paid += linePaid(r);   // ревью M7
     if (r.status === 'paid') {
-      b.paid += after;
       if (r.inpatient_line_id != null) b.fee_in += r.doctor_fee || 0;
       else b.fee_out += r.doctor_fee || 0;
     }
@@ -1728,7 +1759,7 @@ function byDoctorsReport(db, args, ctx) {
   const notes = doctorNotes(db, args, ctx, lines);
   return {
     columns: [BUILDING_COL, 'Врач', 'Пациентов', 'Визитов', 'Госпитализаций', 'Услуг', 'Выставлено',
-              'Оплачено', 'Доля за услуги', 'Стационарная доля', 'Вознаграждение за направления', 'Итого к выплате'],
+'Оплачено (доля оплаты счёта)', 'Доля за услуги', 'Стационарная доля', 'Вознаграждение за направления', 'Итого к выплате'],
     rows: list.map((b) => [ctx.label(b.origin), doctorCell(ctx, b) || '—', b.patients.size, b.visits.size,
       b.admissions.size, b.count, round2(b.billed), round2(b.paid), round2(b.fee_out), round2(b.fee_in),
       round2(b.referral), round2(b.fee_out + b.fee_in + b.referral)]),
@@ -1758,7 +1789,8 @@ function doctorServicesReport(db, args, ctx) {
     b.patients.add(r.patient_id);
     b.qty += Number(r.qty) || 1;
     b.billed += after;
-    if (r.status === 'paid') { b.paid += after; b.fee += r.doctor_fee || 0; }
+    b.paid += linePaid(r);   // ревью M7
+    if (r.status === 'paid') b.fee += r.doctor_fee || 0;
     buckets.set(key, b);
   }
   const list = [...buckets.values()].sort((a, b) =>
@@ -1766,7 +1798,7 @@ function doctorServicesReport(db, args, ctx) {
     || String(a.doctor || '').localeCompare(String(b.doctor || ''), 'ru') || b.billed - a.billed);
   const notes = doctorNotes(db, args, ctx, lines);
   return {
-    columns: [BUILDING_COL, 'Врач', 'Услуга', 'Где', 'Пациентов', 'Кол-во', 'Выставлено', 'Оплачено', 'Доля врача'],
+    columns: [BUILDING_COL, 'Врач', 'Услуга', 'Где', 'Пациентов', 'Кол-во', 'Выставлено', 'Оплачено (доля оплаты счёта)', 'Доля врача'],
     rows: list.map((b) => [ctx.label(b.origin), doctorCell(ctx, b) || '—', b.service, WHERE_RU[b.where],
       b.patients.size, round2(b.qty), round2(b.billed), round2(b.paid), round2(b.fee)]),
     by_building: summariseByBuilding(ctx, list, { total: (b) => b.billed, fee: (b) => b.fee }),

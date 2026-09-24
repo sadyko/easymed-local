@@ -104,8 +104,13 @@ export function referralRewardEditor({ doctorId, holder, onChange, readOnly = fa
                     h('th', { style: { textAlign: 'right', width: '240px' } }, tr('Ставка')))),
                 tbody));
 
+        // Ревью M6 — ставки групп, которых в таблице нет (группа выключена или
+        // удалена из справочника), переносятся как были: редактор правит только
+        // то, что показывает, и не стирает чужое молча.
+        const shownTypes = new Set(types.map(t => Number(t.id)));
+        const hiddenRates = rates.filter(e => e && !shownTypes.has(Number(e.type_id)));
         function collect() {
-            const out = [];
+            const out = hiddenRates.slice();
             for (const inp of tbody.querySelectorAll('input[data-rate-type]')) {
                 const raw = inp.value.trim();
                 if (raw === '') continue;

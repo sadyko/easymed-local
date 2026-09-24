@@ -185,7 +185,7 @@ test('по услугам: строка на услугу и место, ден�
   assert.equal(cons['После скидки и налога'], 190000);
   assert.equal(cons['Доля врача'], 57000);            // 30 % от 90 000 + 30 % от 100 000
   assert.equal(cons['Остаток клинике'], 133000);
-  assert.equal(cons['Оплачено'], 90000);               // INV-3 не оплачен
+  assert.equal(cons['Оплачено (доля оплаты счёта)'], 90000);               // INV-3 не оплачен
   const usi = rows.find((o) => o['Услуга'] === 'УЗИ');
   assert.equal(usi['Кол-во'], 1, 'аннулированный INV-4 посчитан');
   assert.equal(usi['Налог'], 12000);
@@ -207,7 +207,7 @@ test('по услугам: «Доля врача» сходится с «Общ�
   const salaries = objects(run(db, 'doctor_salaries'));
   assert.equal(sum(paid, 'Доля врача'), sum(salaries, 'Итого к выплате'));
   assert.equal(sum(paid, 'Доля врача'), 302200);
-  assert.ok(!paid.some((o) => o['Оплачено'] === 0), 'неоплаченная строка в режиме «Только оплаченные»');
+  assert.ok(!paid.some((o) => o['Оплачено (доля оплаты счёта)'] === 0), 'неоплаченная строка в режиме «Только оплаченные»');
   assert.throws(() => run(db, 'by_services', { paid: 'maybe' }), /paid/);
 });
 
@@ -240,7 +240,7 @@ test('по врачам: работа по всем счетам, выплата
   assert.equal(s['Госпитализаций'], 1);
   assert.equal(s['Услуг'], 3);
   assert.equal(s['Выставлено'], 1190000);          // 90 000 + 100 000 (не оплачен) + 1 000 000
-  assert.equal(s['Оплачено'], 1090000);
+  assert.equal(s['Оплачено (доля оплаты счёта)'], 1090000);
   assert.equal(s['Доля за услуги'], 27000);         // неоплаченная консультация доли не даёт
   assert.equal(s['Стационарная доля'], 200000);
   assert.equal(s['Итого к выплате'], 227000);
@@ -271,7 +271,7 @@ test('врач × услуга: разбивка складывается в д�
   assert.equal(cons['Кол-во'], 2);
   assert.equal(cons['Пациентов'], 2);
   assert.equal(cons['Выставлено'], 190000);
-  assert.equal(cons['Оплачено'], 90000);
+  assert.equal(cons['Оплачено (доля оплаты счёта)'], 90000);
   assert.equal(cons['Доля врача'], 27000);
   const op = rows.find((o) => o['Врач'] === 'Хирургов Х.Х.' && o['Услуга'] === 'Операция');
   assert.equal(op['Где'], 'Стационар');
@@ -352,17 +352,29 @@ test('расход: выдача в отдел, расход на пациент
   assert.equal(fromDept['Пациент'], 'Азизов А.');
   assert.equal(fromDept['Кол-во'], 5);
   assert.ok(lines.some((o) => o['Получатель / откуда'] === 'Склад' && o['Кол-во'] === 2));
-  for (const o of lines) assert.equal(o['Сумма'], Math.round(o['Кол-во'] * o['Себестоимость ед.'] * 100) / 100);
+  // Ревью M4: выдача на руки и расход на пациентов — РАЗНЫЕ колонки, у строки
+  // заполнена ровно одна.
+  const money = (o) => (o['Вид'] === 'Выдача' ? o['Выдано на руки (себестоимость)'] : o['Израсходовано на пациентов (себестоимость)']);
+  for (const o of lines) {
+    assert.equal(money(o), Math.round(o['Кол-во'] * o['Себестоимость ед.'] * 100) / 100);
+    const other = o['Вид'] === 'Выдача' ? o['Израсходовано на пациентов (себестоимость)'] : o['Выдано на руки (себестоимость)'];
+    assert.equal(other, null, 'у строки заполнены обе колонки — итог посчитал бы товар дважды');
+  }
 
   const holders = objects(run(db, 'stock_consumption', { by: 'holder' }));
   const dept = holders.find((o) => o['Получатель / откуда'] === 'Отдел: Хирургия Р');
-  assert.equal(dept['Выдано со склада (себестоимость)'], issue['Сумма']);
-  assert.equal(dept['Списано на пациентов (себестоимость)'], fromDept['Сумма']);
+  assert.equal(dept['Выдано на руки (себестоимость)'], money(issue));
+  assert.equal(dept['Израсходовано на пациентов (себестоимость)'], money(fromDept));
+  const r = run(db, 'stock_consumption', { by: 'holder' });
+  assert.ok(r.notes.some((n) => n.includes('их нельзя складывать')), 'нет слов о том, что итоги не складываются');
+  assert.equal(r.total_label, 'Израсходовано на пациентов');
+  // Итог здания — только израсходованное (5 + 2 шт.), без выданного на руки (30 шт.).
+  assert.equal(r.by_building[0].total, sum(lines.filter((o) => o['Вид'] !== 'Выдача'), 'Израсходовано на пациентов (себестоимость)'));
   const patients = objects(run(db, 'stock_consumption', { by: 'patient' }));
   assert.equal(patients.length, 1);
   assert.equal(patients[0]['Пациент'], 'Азизов А.');
   assert.equal(patients[0]['Движений'], 2);
-  assert.equal(sum(patients, 'Списано (себестоимость)'), sum(lines.filter((o) => o['Вид'] !== 'Выдача'), 'Сумма'));
+  assert.equal(sum(patients, 'Израсходовано на пациентов (себестоимость)'), sum(lines, 'Израсходовано на пациентов (себестоимость)'));
   assert.throws(() => run(db, 'stock_consumption', { by: 'bogus' }), /by must be/);
 });
 
@@ -462,4 +474,33 @@ test('I7: кабинет отбирает строки своего источн
   const q = seen.find((x) => x.includes('FROM invoice_items ii') && x.includes('referral_sources rs'));
   assert.ok(q, 'запрос строк не найден');
   assert.match(q, /AND rs\.doctor_id = \?/);
+});
+
+test('M7: частично оплаченный счёт — «Оплачено» = доля оплаты, разнесённая по строкам; доли врача — нет', () => {
+  const { db } = seed();
+  // INV-3 (консультация 100 000, врач 2) оплачен на 40 %.
+  db.prepare("UPDATE invoices SET paid_amount = 40000, status = 'partial' WHERE invoice_number = 'INV-3'").run();
+  const P = 'Оплачено (доля оплаты счёта)';
+  const cons = objects(run(db, 'by_services')).find((o) => o['Услуга'] === 'Консультация');
+  assert.equal(cons[P], 90000 + 40000);
+  assert.equal(cons['Доля врача'], 57000);   // доля (как в «Общей выручке») не зависит от оплаты
+  const s = objects(run(db, 'by_doctors')).find((o) => o['Врач'] === 'Хирургов Х.Х.');
+  assert.equal(s[P], 1090000 + 40000);
+  assert.equal(s['Доля за услуги'], 27000, 'доля с частично оплаченного счёта начислена');
+  const ds = objects(run(db, 'doctor_services')).find((o) => o['Врач'] === 'Хирургов Х.Х.' && o['Услуга'] === 'Консультация');
+  assert.equal(ds[P], 130000);
+  assert.ok(run(db, 'by_doctors').notes.some((n) => n.includes('пропорционально сумме строки')));
+});
+
+test('M8: единица товара — base_unit, а умолчание «pcs» при заданной unit не подменяет её', () => {
+  const { db, day } = seedStock();
+  // Шприц заведён только с unit: base_unit остался умолчанием мигр. 010.
+  db.prepare("UPDATE products SET unit = 'уп', base_unit = 'pcs' WHERE id = 3").run();
+  const unitOf = (kind, extra = {}) => objects(runReport(db, { kind, from: '2026-01-01', to: day, ...extra }, admin))
+    .find((o) => o['Товар'] === 'Шприц')['Ед.'];
+  assert.equal(unitOf('procurement'), 'уп');
+  assert.equal(unitOf('stock_statement'), 'уп');
+  // Своя base_unit — она и показывается.
+  assert.equal(objects(runReport(db, { kind: 'stock_statement', from: '2026-01-01', to: day }, admin))
+    .find((o) => o['Товар'] === 'Перчатки')['Ед.'], 'шт');
 });

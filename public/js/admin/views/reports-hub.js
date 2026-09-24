@@ -422,6 +422,7 @@ async function openReportBuilder(rep) {
         generating: false,
         kind: reportKinds(rep)[0],          // REPORTS_V2 — выбранный вид
         opts: defaultReportOptions(rep),    // REPORTS_V2 — выбранные фильтры
+        reqSeq: 0,                          // REPORTS_V2 ревью M1 — номер последнего запроса
     };
     [st.from, st.to] = presetRange('month');
 
@@ -652,6 +653,15 @@ async function openReportBuilder(rep) {
     async function generate() {
         if (st.generating) return;
         st.generating = true;
+        // REPORTS_V2, ревью M1 — вид и фильтры берутся ДО ожидания ответа, а
+        // ответ, пришедший после смены вида (или после сброса результата),
+        // выбрасывается: иначе в предпросмотр и в Excel попала бы таблица
+        // одного вида под именем другого. Переключатели на время запроса
+        // выключены.
+        const token = ++st.reqSeq;
+        const reqKind = st.kind;
+        const reqArgs = reportArgs(rep, reqKind, st.opts);
+        paintChoices();
         generateBtn.disabled = true;
         generateBtn.querySelector('.gen-lbl').textContent = tr(' Формируем…');
         paintPreviewLoading();
@@ -671,7 +681,8 @@ async function openReportBuilder(rep) {
             // владельца: определение отчёта само называет свой RPC и рисовалку.
             const { data, error } = rep.mode === 'charts'
                 ? await supabase.rpc(rep.rpc || 'owner_report', args)
-                : await supabase.rpc('run_report', { kind: st.kind, ...args, ...reportArgs(rep, st.kind, st.opts) });
+                : await supabase.rpc('run_report', { kind: reqKind, ...args, ...reqArgs });
+            if (token !== st.reqSeq || st.kind !== reqKind) return;   // устаревший ответ
             if (error) throw new Error(error.message || String(error));
             st.result = data;
             // Отчёт с графиками МОЖЕТ отдавать и плоские строки (колл-центр отдаёт
@@ -679,6 +690,7 @@ async function openReportBuilder(rep) {
             downloadBtn.disabled = !data || !Array.isArray(data.rows) || data.rows.length === 0;
             paintPreview();
         } catch (e) {
+            if (token !== st.reqSeq) return;
             console.error('[reports-hub] generate:', e);
             toast(trf('Не удалось сформировать отчёт: {msg}', { msg: e.message || e }), 'fail');
             paintPreviewEmpty(trf('Ошибка: {msg}', { msg: e.message || e }));
@@ -686,6 +698,7 @@ async function openReportBuilder(rep) {
             st.generating = false;
             generateBtn.disabled = false;
             generateBtn.querySelector('.gen-lbl').textContent = tr(' Сформировать отчёт');
+            paintChoices();
         }
     }
 
@@ -718,6 +731,7 @@ async function openReportBuilder(rep) {
     // таблица прежнего вида под именем нового.
     const pill = (active, text, onclick) => h('button', {
         type: 'button',
+        disabled: st.generating || null,   // ревью M1 — пока идёт запрос, вид не меняется
         style: {
             height: '30px', padding: '0 13px', borderRadius: '999px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: '12.5px', fontWeight: 600,
@@ -735,6 +749,7 @@ async function openReportBuilder(rep) {
         },
     });
     function resetResult() {
+        st.reqSeq++;   // ревью M1 — ответ, который ещё в пути, уже не наш
         st.result = null;
         downloadBtn.disabled = true;
         paintPreviewEmpty();
@@ -745,7 +760,7 @@ async function openReportBuilder(rep) {
             choiceRow.appendChild(label('Вид'));
             choiceRow.appendChild(h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
                 ...rep.views.map(v => pill(st.kind === v.kind, v.label, () => {
-                    if (st.kind === v.kind) return;
+                    if (st.generating || st.kind === v.kind) return;
                     st.kind = v.kind; paintChoices(); resetResult();
                 }))));
         }
@@ -753,7 +768,7 @@ async function openReportBuilder(rep) {
             choiceRow.appendChild(label(o.label));
             choiceRow.appendChild(h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
                 ...o.choices.map(([value, text]) => pill(st.opts[o.arg] === value, text, () => {
-                    if (st.opts[o.arg] === value) return;
+                    if (st.generating || st.opts[o.arg] === value) return;
                     st.opts[o.arg] = value; paintChoices(); resetResult();
                 }))));
         }

@@ -68,6 +68,9 @@ const DOC = {
 
 const patches = [];
 const dbCalls = [];
+// Ревью M6 — ставка группы, которой нет среди показанных (выключенная группа).
+let SOURCE_RATES = '';
+let SERVICE_TYPES = [];
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   if (u === '/api/users') return { ok: true, json: async () => ({ users: [DOC] }) };
@@ -77,10 +80,11 @@ globalThis.fetch = async (url, opts) => {
     dbCalls.push(desc);
     let rows = [];
     if (desc.table === 'referral_sources' && desc.op === 'select') {
-      rows = [{ id: 55, reward_mode: 'category', own_percent: 0, own_rates: '', category_id: 3 }];
+      rows = [{ id: 55, reward_mode: 'category', own_percent: 0, own_rates: SOURCE_RATES, category_id: 3 }];
     } else if (desc.table === 'referral_source_categories') {
       rows = [{ id: 3, name: 'Внутренние врачи', standard_percent: 0 }];
     } else if (desc.table === 'branches') rows = [{ id: 1, name: 'Чиланзар' }];
+    else if (desc.table === 'service_types') rows = SERVICE_TYPES;
     return { ok: true, json: async () => ({ data: rows }) };
   }
   return { ok: true, json: async () => ({ data: [] }) };
@@ -162,4 +166,21 @@ test('обе карточки сотрудника правят ставку О�
     assert.match(src, /from '\.\/referral-reward-editor\.js'/, f + ' не берёт общий редактор');
     assert.doesNotMatch(src, /from\('referral_sources'\)\.update/, f + ' пишет источник сам, мимо общего модуля');
   }
+});
+
+test('M6: ставки групп, которых нет в таблице, сохраняются как были', async () => {
+  SOURCE_RATES = JSON.stringify([{ type_id: 99, unit: 'fix', value: 15000 }]);
+  SERVICE_TYPES = [];   // группа 99 выключена — в таблице её нет
+  try {
+    const card = await openReferralTab();
+    const chkBox = byClass(card, 'checkbox').find((n) => textOf(n).includes('Вознаграждение по категории'));
+    const modeChk = tags(chkBox, 'input')[0];
+    modeChk.checked = false; modeChk.dispatchEvent({ type: 'change' });
+    buttonWith(card, 'Сохранить сотрудника').click();
+    await flush();
+    const upd = dbCalls.find((d) => d.table === 'referral_sources' && d.op === 'update');
+    assert.ok(upd, 'ставка не записана');
+    const rates = typeof upd.values.own_rates === 'string' ? JSON.parse(upd.values.own_rates) : upd.values.own_rates;
+    assert.deepStrictEqual(rates, [{ type_id: 99, unit: 'fix', value: 15000 }], 'ставка выключенной группы стёрта');
+  } finally { SOURCE_RATES = ''; SERVICE_TYPES = []; }
 });

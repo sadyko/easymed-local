@@ -509,7 +509,7 @@ test('by_doctors: соседнее здание под своей подпись
   assert.equal(foreign[col(mine, 'Врач')], 'Чиланзар, врач не указан');
   const total = (r, c) => Math.round(r.rows.reduce((n, x) => n + (Number(x[col(r, c)]) || 0), 0) * 100) / 100;
   assert.equal(total(mine, 'Доля за услуги'), total(sal, 'Доля врача (гонорар)'));
-  assert.equal(total(mine, 'Оплачено'), total(sal, 'Сумма после скидки') + total(sal, 'Стационар: сумма после скидки'));
+  assert.equal(total(mine, 'Оплачено (доля оплаты счёта)'), total(sal, 'Сумма после скидки') + total(sal, 'Стационар: сумма после скидки'));
 });
 
 test('procurement: склад не ездит — цифры только по своему зданию, и это сказано', () => {
