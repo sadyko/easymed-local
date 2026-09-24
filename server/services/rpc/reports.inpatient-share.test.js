@@ -91,6 +91,7 @@ function outpatientVisit(db, { qty = 1 } = {}) {
   db.prepare('UPDATE visit_services SET invoice_item_id = 100 WHERE id = 1').run();
 }
 
+const objectsOf = (r) => r.rows.map((row) => Object.fromEntries(r.columns.map((c, i) => [c, row[i]])));
 const report = (db, kind = 'inpatient_share') => runReport(db, { kind, from: FROM, to: TO }, admin);
 const col = (r, name) => {
   const i = r.columns.indexOf(name);
@@ -130,9 +131,16 @@ test('врач без «Стационар, %» на услугу получае
   const db = seed();
   // И ставка по умолчанию из карточки тоже не подставляется.
   db.prepare('UPDATE users SET service_rate_default = 35 WHERE id = 3').run();
-  const { out } = salaries(db);
-  assert.equal(out['Безставкин Б.Б.']['Стационар: гонорар'], 0);
-  assert.equal(out['Безставкин Б.Б.']['Итого к выплате'], 0);
+  const { r, out } = salaries(db);
+  // Ревью I1 (владелец): доля остаётся нулём, но нулевой строкой человек не
+  // показывается — он назван в примечании с числом таких услуг.
+  assert.ok(!out['Безставкин Б.Б.'], 'нулевая строка исполнителя без стационарной ставки');
+  assert.ok(r.notes.includes('1 услуга: исполнитель без стационарной ставки — доля не начислена (Безставкин Б.Б. — 1).'),
+    r.notes.join(' | '));
+  // А по строке стационара ему по-прежнему начислен 0, а не амбулаторные 35 %.
+  const line = objectsOf(report(db)).find((o) => o['Врач'] === 'Безставкин Б.Б.');
+  assert.equal(line['Начислено врачу'], 0);
+  assert.equal(line['Ставка, %'], '—');
 });
 
 test('койко-дни и расходники не платят никому', () => {
@@ -267,7 +275,8 @@ test('период отчёта — по дате счёта, как у «Зар
   assert.equal(inJan.rows.length, 3);
   assert.equal(inFeb.rows.length, 0);
   const sal = runReport(db, { kind: 'doctor_salaries', from: '2026-01-01', to: '2026-01-31' }, admin);
-  assert.equal(sal.rows.length, 3);
+  // Безставкин (только строка стационара без ставки) — примечанием, не строкой (ревью I1).
+  assert.equal(sal.rows.length, 2);
 });
 
 // ─── 5. КАБИНЕТ ВРАЧА ───────────────────────────────────────────────────────
@@ -318,4 +327,52 @@ test('амбулаторные числа те же — есть рядом оп
   for (const c of ['Врач', 'Ставка врача', 'Доля врача', 'После скидки', 'Налог']) {
     assert.equal(b[col(r, c)], a[col(r, c)], c);
   }
+});
+
+// ─── РЕВЬЮ: I1, I2, M5 ──────────────────────────────────────────────────────
+
+test('I1: исполнитель без стационарной ставки назван во всех трёх отчётах; в «По врачам» — не нулевой строкой', () => {
+  const db = seed();
+  const NOTE = '1 услуга: исполнитель без стационарной ставки — доля не начислена (Безставкин Б.Б. — 1).';
+  for (const kind of ['inpatient_share', 'doctor_salaries', 'by_doctors', 'doctor_services']) {
+    const r = report(db, kind);
+    assert.ok(r.notes.includes(NOTE), kind + ': ' + r.notes.join(' | '));
+  }
+  const byDoc = objectsOf(report(db, 'by_doctors'));
+  assert.ok(!byDoc.some((o) => o['Врач'] === 'Безставкин Б.Б.'), 'нулевая строка в «По врачам»');
+  assert.ok(!objectsOf(report(db, 'doctor_services')).some((o) => o['Врач'] === 'Безставкин Б.Б.'));
+  // Со ставкой (даже нулевой — это решение клиники) примечания нет.
+  db.prepare("UPDATE users SET service_rates = ? WHERE id = 3").run(JSON.stringify([{ service_id: 1, pct: 25, inpatient_pct: 0 }]));
+  assert.ok(!report(db).notes.some((n) => n.includes('без стационарной ставки')));
+});
+
+test('I1: врач с амбулаторной работой остаётся строкой, даже если его стационар без ставки', () => {
+  const db = seed();
+  outpatientVisit(db);   // перевязка врача 1 — амбулаторная работа
+  db.prepare('UPDATE admission_services SET performer_id = 1 WHERE id = 5').run();   // операция: ставки у 1 есть (20 %)
+  db.prepare("UPDATE users SET service_rates = ? WHERE id = 1").run(JSON.stringify([{ service_id: 2, pct: 40, inpatient_pct: 10 }]));
+  const { out, r } = salaries(db);
+  assert.ok(out['Хирургов Х.Х.'], 'врач с амбулаторной работой пропал');
+  assert.ok(r.notes.some((n) => n.includes('Хирургов Х.Х. — 1')), r.notes.join(' | '));
+});
+
+test('I2: «Стационар: доля врачей» говорит, что доля идёт по текущему исполнителю', () => {
+  const db = seed();
+  const note = 'Доля считается по текущему исполнителю строки: если исполнителя поменять после выставления счёта, доля перейдёт к новому.';
+  assert.ok(report(db).notes.includes(note));
+  // И это правда: смена исполнителя переносит долю.
+  db.prepare('UPDATE admission_services SET performer_id = 1 WHERE id = 1').run();
+  const { out } = salaries(db);
+  assert.equal(out['Хирургов Х.Х.']['Стационар: гонорар'], 20000 + 188000);   // 20 % от 940 000
+});
+
+test('M5: строка стационара, связанная со строкой счёта ДРУГОЙ услуги, доли не даёт', () => {
+  const db = seed();
+  // Строка стационара «операция» ошибочно указывает на строку счёта перевязки.
+  const bandage = db.prepare("SELECT invoice_item_id FROM admission_services WHERE id = 2").get().invoice_item_id;
+  db.prepare('UPDATE admission_services SET invoice_item_id = ? WHERE id = 5').run(bandage);
+  db.prepare('UPDATE admission_services SET invoice_item_id = NULL WHERE id = 2').run();
+  const lines = objectsOf(report(db));
+  const onBandage = lines.filter((o) => o['Услуга'] === 'Перевязка');
+  assert.equal(onBandage.length, 0, 'перевязка получила долю по строке операции: ' + JSON.stringify(onBandage));
 });

@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { runReport, doctorReferralReward } from './reports.js';
+import { runReport, doctorReferralReward, doctorInpatientShare } from './reports.js';
 import { createInvoiceForAdmission } from './billing.js';
 import { receiveStockLines, issueStockLines, adjustStock } from './procurement.js';
 import { dispenseFromHolding } from './holdings.js';
@@ -430,4 +430,36 @@ test('склад не ездит: «только соседнее здание»
     assert.equal(r.rows.length, 0, kind);
     assert.ok(r.notes.some((n) => n.includes('Складские движения')), kind + ': нет примечания про склад');
   }
+});
+
+// ─── РЕВЬЮ: I6, I7 ──────────────────────────────────────────────────────────
+
+test('I6: начисления врача — ему самому, «Отчётам» и администратору; прочим 403', () => {
+  const { db } = seed();
+  const args = (id) => ({ doctor_id: id, from: FROM, to: TO });
+  const doc1 = { id: 1, role: 'doctor' };
+  for (const fn of [doctorReferralReward, doctorInpatientShare]) {
+    assert.doesNotThrow(() => fn(db, args(1), doc1), fn.name + ': свои');
+    assert.throws(() => fn(db, args(2), doc1), (e) => e.status === 403, fn.name + ': чужие врачу');
+    assert.throws(() => fn(db, args(1), { id: 50, role: 'nurse' }), (e) => e.status === 403, fn.name + ': медсестре');
+    assert.doesNotThrow(() => fn(db, args(1), admin), fn.name + ': администратору');
+    // Кассиру раздел «Отчёты» открыт штатно (мигр. 013) — он видит всех.
+    assert.doesNotThrow(() => fn(db, args(1), { id: 51, role: 'cashier' }), fn.name + ': «Отчётам»');
+    // Врач, которому клиника открыла «Отчёты», — тоже.
+    db.prepare("UPDATE role_permissions SET permissions = json_set(permissions, '$.sections', json('[\"patients\",\"reports-hub\"]')) WHERE role = 'doctor'").run();
+    assert.doesNotThrow(() => fn(db, args(2), doc1), fn.name + ': врачу с «Отчётами»');
+    db.prepare("UPDATE role_permissions SET permissions = json_set(permissions, '$.sections', json('[\"patients\"]')) WHERE role = 'doctor'").run();
+  }
+});
+
+test('I7: кабинет отбирает строки своего источника в SQL, а не всей клиникой в JS', () => {
+  const { db } = seed();
+  const seen = [];
+  const prepare = db.prepare.bind(db);
+  db.prepare = (sql) => { seen.push(sql); return prepare(sql); };
+  doctorReferralReward(db, { doctor_id: 1, from: FROM, to: TO }, admin);
+  db.prepare = prepare;
+  const q = seen.find((x) => x.includes('FROM invoice_items ii') && x.includes('referral_sources rs'));
+  assert.ok(q, 'запрос строк не найден');
+  assert.match(q, /AND rs\.doctor_id = \?/);
 });
