@@ -503,7 +503,11 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Мастер визита на пациента 3 с врачебной услугой 21, врач выбран, слот подобран. */
 async function openWizardReady(opts = {}) {
+  return openWizardReadyWith(null, opts);
+}
+async function openWizardReadyWith(prep, opts = {}) {
   const s = seed({ shape: 'card', from: '10:00', to: '16:00' });
+  if (prep) prep(DB);
   DB.prepare('UPDATE services SET requires_doctor = 1 WHERE id = 21').run();
   document.body.children.length = 0;
   TOASTS.length = 0; RPC.length = 0;
@@ -607,6 +611,21 @@ test('МАСТЕР из кабинета: направившим стоит са
   assert.equal(w.saved(), 1);
 });
 
+// Ревью I3 (владелец: внешний партнёр сохраняет своё) — у пациента уже есть
+// направивший: врач из кабинета не подставляется, визит уходит без
+// направившего, и отчёты засчитывают пациента партнёру (COALESCE визит → пациент).
+test('МАСТЕР из кабинета: пациент партнёра остаётся пациентом партнёра', async () => {
+  const w = await openWizardReadyWith((db) => {
+    const pid = db.prepare("INSERT INTO referral_sources (name) VALUES ('Клиника Х')").run().lastInsertRowid;
+    db.prepare('UPDATE patients SET referral_source_id = ? WHERE id = 3').run(pid);
+  }, { referrerDoctorId: 7 });
+  await pressUntilCreate();
+  const ev = RPC.find((c) => c.name === 'ensure_visit');
+  assert.ok(ev, 'мастер не дошёл до записи');
+  assert.equal(ev.body.referral_source_id, null, 'врач подставлен поверх партнёра пациента');
+  assert.equal(w.saved(), 1);
+});
+
 test('МАСТЕР у стойки (без врача-направителя) направившего не подставляет', async () => {
   await openWizardReady();
   await pressUntilCreate();
@@ -620,6 +639,10 @@ test('presetReferrer: источник врача ставится, чужого
   const wiz = { sources: [{ id: 5, doctor_id: 7, category_id: 2 }, { id: 6, doctor_id: null, category_id: 3 }], hasReferral: false, sourceId: '', sourceCat: '' };
   assert.equal(presetReferrer(wiz, 7), true);
   assert.deepEqual([wiz.hasReferral, wiz.sourceId, wiz.sourceCat], [true, '5', '2']);
+  // У пациента свой направивший (партнёр) — врач не подставляется.
+  const partner = { sources: wiz.sources, hasReferral: false, sourceId: '', sourceCat: '' };
+  assert.equal(presetReferrer(partner, 7, 6), false);
+  assert.deepEqual([partner.hasReferral, partner.sourceId], [false, '']);
   const none = { sources: wiz.sources, hasReferral: false, sourceId: '', sourceCat: '' };
   assert.equal(presetReferrer(none, 8), false);
   assert.equal(presetReferrer(none, null), false);

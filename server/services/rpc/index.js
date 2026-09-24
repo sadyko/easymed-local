@@ -33,6 +33,7 @@ import {
   admissionMealMark, admissionMealsList, kitchenSheet,
 } from './diet.js';   // DIET_TABLES_V1
 import { ensureVisit } from './visits.js';
+import { visitSetDoctorReferrer } from './referral-autofill.js';   // REPORTS_V2 — направивший врач на визите по рекомендации
 import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';   // CALENDAR_BOOKING_V1
 import { issueQueueNumbers, queueBoard } from './queue.js';
 import { createDeposit, acceptDeposit, cancelDeposit, refundDeposit, listDeposits, depositBalance } from './deposits.js';   // DEPOSIT_V1
@@ -164,6 +165,7 @@ export const RPC = {
   doctor_tier_positions:    (db, args, user) => doctorTierPositions(db, args, user),   // DOCTOR_TIER_V1 — позиции строк для кабинета врача
   doctor_inpatient_share:   (db, args, user) => doctorInpatientShare(db, args, user),  // INPATIENT_SHARE_V1 — стационарная доля для кабинета врача
   doctor_referral_reward:   (db, args, user) => doctorReferralReward(db, args, user),  // REPORTS_V2 — вознаграждение за направления для кабинета врача (то же, что отчёт «Рефералы»)
+  visit_set_doctor_referrer: (db, args, user) => visitSetDoctorReferrer(db, args, user),  // REPORTS_V2 ревью I3/I5 — свой источник врача, если направившего нет
   owner_report:             (db, args, user) => ownerReport(db, args, user),   // REPORTS_HUB_RU_V1 — «Отчёт владельца» charts
   // BUILDING_REPORTS_V1 — перечень ЗДАНИЙ клиники для выборки в «Отчётах».
   // Через /api/db его собрать нельзя: реестр не отдаёт браузеру branches.letter,

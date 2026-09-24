@@ -4278,6 +4278,11 @@ async function printRouteSheet(ctx, res) {
 }
 
 async function sendReferral(ctx, target, service, doctor) {
+    // REPORTS_V2, ревью I5 — визита рекомендации здесь ещё нет: направившего
+    // врача ставит на визит добавление рекомендации в визит (visit-modal.js
+    // attachRecommendation, правило — на сервере), и только если у визита
+    // и пациента направившего нет. Текущий визит (приём самого врача) не
+    // помечается: его собственный приём стал бы «направлением».
     // Referrals live in `recommended_services` only — they do NOT get pushed
     // into the visit's notes-history payload. The patient card's Recommended
     // tab and the visit modal's Services tab are the single source of truth.
