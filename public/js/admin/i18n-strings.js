@@ -8783,4 +8783,5 @@ export const STRINGS = {
   "Есть карточка у другого оператора": {"en":"Another operator has a card for this number","ru":"Есть карточка у другого оператора","uz":"Bu raqam uchun boshqa operatorda kartochka bor"},
   "Сохранить всё равно": {"en":"Save anyway","ru":"Сохранить всё равно","uz":"Baribir saqlash"},
   "Пациентов": {"en":"Patients","ru":"Пациентов","uz":"Bemorlar"},
+  "Не сохранено у врачей: {n}": {"en":"Not saved for doctors: {n}","ru":"Не сохранено у врачей: {n}","uz":"Shifokorlarda saqlanmadi: {n}"},
 };
