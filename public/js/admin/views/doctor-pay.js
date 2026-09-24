@@ -10,6 +10,33 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { supabase } from '../../supabase.js';
 
 const cid = () => { try { return window.easymed?.state?.user?.company_id || null; } catch (e) { return null; } };
+
+// INPATIENT_SHARE_V1, ревью (PLUS) — ставки врача пишутся через маршрут
+// сотрудников (PATCH /api/users/:id), а не через /api/db: реестр запись в
+// users не принимает вовсе (write у users пуст), и прежние сохранения этого
+// экрана молча не делали ничего — экран говорил «обновлено», а ставки не
+// менялись. Маршрут проверяет ставки тем же parseRates, что карточка
+// сотрудника, и хранит все их ключи (pct, fix, price, inpatient_pct, branches).
+async function saveServiceRates(doctorId, rates) {
+    const res = await fetch('/api/users/' + encodeURIComponent(doctorId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ service_rates: rates }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((body && body.error && body.error.message) || ('HTTP ' + res.status));
+    return body;
+}
+
+// Доля в ставке: канонический ключ — pct (его читают отчёты); прежний
+// «percentage» маршрут понимает только как синоним, поэтому пишется pct, а
+// остальные ключи строки (стационарная доля, фикс, своя цена) остаются.
+function setPct(rate, pct) {
+    rate.pct = pct;
+    delete rate.percentage;
+    return rate;
+}
 const fmtPct = (v) => (v == null || v === '' ? '—' : (Number(v) || 0) + '%');
 
 export async function renderDoctorPay(container) {
@@ -107,35 +134,37 @@ export async function renderDoctorPay(container) {
             if (mode === 'all') {
                 const { error } = await supabase.from('services').update({ default_doctor_percent: pct }).in('id', svcIds);
                 if (error) throw error;
-                let touched = 0;
+                let touched = 0, failed = 0;
                 for (const doc of doctors) {
                     const rates = Array.isArray(doc.service_rates) ? doc.service_rates.map(r => ({ ...r })) : [];
                     let changed = false;
-                    for (const r of rates) if (svcIds.includes(String(r.service_id))) { r.percentage = pct; changed = true; }
+                    for (const r of rates) if (svcIds.includes(String(r.service_id))) { setPct(r, pct); changed = true; }
                     if (changed) {
-                        const { error: e2 } = await supabase.from('users').update({ service_rates: rates }).eq('id', doc.id);
-                        if (!e2) { touched++; doc.service_rates = rates; }
+                        try { await saveServiceRates(doc.id, rates); touched++; doc.service_rates = rates; }
+                        catch (e2) { failed++; console.warn('[doctor-pay] save', doc.id, e2 && e2.message); }
                     }
                 }
                 for (const s of services) if (svcIds.includes(String(s.id))) s.default_doctor_percent = pct;
                 paintSvc();
                 toast(trf('Доля {pct}% задана для {n} услуг(и): по умолчанию + {touched} врач(ей) обновлено.', { pct, n: svcIds.length, touched }));
+                if (failed) toast(trf('Не сохранено у врачей: {n}', { n: failed }), 'fail');
             } else {
-                let touched = 0;
+                let touched = 0, failed = 0;
                 for (const doc of doctors.filter(d => selDoc.has(d.id))) {
                     const rates = Array.isArray(doc.service_rates) ? doc.service_rates.map(r => ({ ...r })) : [];
                     for (const sid of svcIds) {
                         const ex = rates.find(r => String(r.service_id) === String(sid));
-                        if (ex) ex.percentage = pct;
+                        if (ex) setPct(ex, pct);
                         // DOCTOR_OWN_PRICE_V1 — no `price` key: this screen sets the
                         // doctor's SHARE, not their price. Seeding price:0 here would
                         // now read as a real own price of zero and bill the service free.
-                        else rates.push({ service_id: sid, percentage: pct, branches: [] });
+                        else rates.push({ service_id: Number(sid), pct, branches: [] });
                     }
-                    const { error } = await supabase.from('users').update({ service_rates: rates }).eq('id', doc.id);
-                    if (!error) { touched++; doc.service_rates = rates; }
+                    try { await saveServiceRates(doc.id, rates); touched++; doc.service_rates = rates; }
+                    catch (e2) { failed++; console.warn('[doctor-pay] save', doc.id, e2 && e2.message); }
                 }
                 toast(trf('Доля {pct}% задана для {n} услуг(и) у {touched} врач(ей).', { pct, n: svcIds.length, touched }));
+                if (failed) toast(trf('Не сохранено у врачей: {n}', { n: failed }), 'fail');
             }
         } catch (e) {
             toast(trf('Не удалось применить: {msg}', { msg: e.message || e }), 'fail');

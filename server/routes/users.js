@@ -228,6 +228,23 @@ function parseRates(val, key, moneyKey = 'price') {
       }
     }
 
+    // INPATIENT_SHARE_V1 — отдельная доля врача за услугу, оказанную в
+    // СТАЦИОНАРЕ («Стационар, %» в таблице ставок; считает reports.js,
+    // INPATIENT_RATE_SQL). Только у оказанных услуг: у направлений стационарной
+    // доли нет, ключ там не хранится. Отсутствие осмысленно — «стационарной
+    // доли нет», и отчёт тогда платит 0, а НЕ амбулаторный процент; поэтому
+    // пустое поле не превращается в 0. В отличие от pct значение вне 0..100
+    // не прижимается молча, а отклоняется: процент стационара вводится руками
+    // рядом с амбулаторным, и 150 — это опечатка, которую надо показать.
+    let inpatientPct = null;
+    if (key === 'service_rates' && entry.inpatient_pct !== undefined
+        && entry.inpatient_pct !== null && entry.inpatient_pct !== '') {
+      inpatientPct = typeof entry.inpatient_pct === 'boolean' ? NaN : Number(entry.inpatient_pct);
+      if (!Number.isFinite(inpatientPct) || inpatientPct < 0 || inpatientPct > 100) {
+        return { ok: false, message: 'Стационарная доля врача — число от 0 до 100 %.' };
+      }
+    }
+
     let branches = [];
     if (entry.branches !== undefined) {
       if (!Array.isArray(entry.branches)) return { ok: false, message: 'Invalid rate entry.' };
@@ -240,6 +257,7 @@ function parseRates(val, key, moneyKey = 'price') {
     const clean = { service_id: serviceId, pct, branches };
     if (money !== null) clean[moneyKey] = money;
     if (fix !== null) clean.fix = fix;
+    if (inpatientPct !== null) clean.inpatient_pct = inpatientPct;
     byId.set(serviceId, clean);
   }
 
@@ -590,6 +608,8 @@ const STAFF_HISTORY_REFS = [
   { table: 'recommended_services',    columns: ['recommended_by'],            label: 'рекомендации услуг' },
   { table: 'consultation_templates',  columns: ['author_id'],                 label: 'шаблоны консультаций' },
   { table: 'crm_requests',            columns: ['assigned_to', 'created_by'], label: 'заявки CRM' },
+  // CRM_DEDUP_SEARCH_TASKS_V1 (mig 148) — без этой строки удаление упиралось во внешний ключ и отвечало 500.
+  { table: 'crm_tasks',               columns: ['assignee_id', 'done_by', 'created_by'], label: 'задачи CRM' },
 ];
 
 // Rows that only DESCRIBE the employee — their rates, branches, specialties.

@@ -208,12 +208,26 @@ export function dbRoutes(db) {
         // per row (ragged keys keep their DB defaults); all-or-nothing in a
         // transaction, and the importer never asks for returning on batches.
         if (meta.multi) {
-          db.transaction(() => {
-            for (const st of compiled.statements) db.prepare(st.sql).run(...st.params);
-          })();
+          // CRM_DEDUP_SEARCH_TASKS_V1 — строка, не прошедшая ограничение по
+          // родителю (meta.guarded), откатывает весь пакет: половина пакета
+          // хуже, чем ничего.
+          let refused = false;
+          try {
+            db.transaction(() => {
+              for (const st of compiled.statements) {
+                const inf = db.prepare(st.sql).run(...st.params);
+                if (meta.guarded && inf.changes === 0) { refused = true; throw new Error('guarded insert refused'); }
+              }
+            })();
+          } catch (e) { if (!refused) throw e; }
+          if (refused) return res.status(403).json({ error: { code: 'forbidden', message: 'not allowed' } });
           return res.json({ data: null });
         }
         const info = db.prepare(sql).run(...params);
+        // CRM_DEDUP_SEARCH_TASKS_V1 — вставка на чужого родителя не записала ничего.
+        if (meta.guarded && info.changes === 0) {
+          return res.status(403).json({ error: { code: 'forbidden', message: 'not allowed' } });
+        }
         // CRM_REAL_BOOKING_V1 — строку услуги заводят и СРАЗУ в рабочем
         // статусе: кабинет врача добавляет услугу «с ходу» уже начатой. Такая
         // вставка — то же доказательство прихода, что и перевод статуса

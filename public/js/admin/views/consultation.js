@@ -14,7 +14,6 @@
 
 import { supabase } from '../../supabase.js';
 // INTERNAL_REFERRAL_V1 — правило «какая ставка применяется» общее с отчётом.
-import { resolveReferralRate, rewardForLine } from '../../shared/referral-reward.js?v=rr1';
 import { h, Icon, Tag, PageHead, toast, clear, avColor, initials, fmtDateTime, field } from '../ui.js';
 // CABINET_REDESIGN_V1 — плитка и график те же, что на сводке клиники.
 import { kpiTile, fitViewport } from './dash-kpi.js';
@@ -87,13 +86,18 @@ const state = {
         doctor:    null,      // full users row for the picked doctor
         services:  [],        // visit_services this doctor performed in the period
         referrals: [],        // recommended_services where recommended_by = doctor
-        rewardSource:null,    // INTERNAL_REFERRAL_V1 — карточка источника этого врача
-        rewardCategory:null,  // и её категория: стандартная ставка
+        // REPORTS_V2 — вознаграждение за направления ГОТОВЫМ с сервера
+        // (doctor_referral_reward): строки счетов, пришедшие по источнику
+        // этого врача, — те же, что в отчёте «Рефералы».
+        referralPay: { rows: [], count: 0, reward: 0, paid_amount: 0 },
         // DOCTOR_TIER_V1 — позиции строк по ступеням от сервера
         // (doctor_tier_positions): visit_service_id → строка ответа; и прогресс
         // текущего месяца по услугам — «N из M».
         tierPos:   new Map(),
         tierProgress: [],
+        // INPATIENT_SHARE_V1 — стационарная доля за период ГОТОВОЙ с сервера
+        // (doctor_inpatient_share): { rows:[{date, fee, …}], count, fee }.
+        inpatient: { rows: [], count: 0, fee: 0 },
         recent:    'services',   // PAY_ONE_SCREEN_V1 — какой из трёх списков открыт в «Последних»
         rootEl:    null,         // корень вкладки — ему подгоняется высота окна
     },
@@ -1630,6 +1634,20 @@ async function loadDashboardData() {
         }
     } catch (e) { console.warn('[dash] tier positions:', e && e.message); }
 
+    // INPATIENT_SHARE_V1 — стационарная доля за период. Считает СЕРВЕР тем же
+    // запросом, что отчёт «Стационар: доля врачей» (оплаченные счета, по дате
+    // счёта, исполнитель — иначе назначивший); кабинет её только показывает и
+    // прибавляет. Вторая копия этого SQL в браузере разошлась бы с ведомостью.
+    state.dash.inpatient = { rows: [], count: 0, fee: 0 };
+    try {
+        const { data, error } = await supabase.rpc('doctor_inpatient_share',
+            { doctor_id: docId, from: dayKey(startIso), to: dayKey(endIso) });
+        if (error) console.warn('[dash] inpatient share:', error.message);
+        else if (data && Array.isArray(data.rows)) {
+            state.dash.inpatient = { rows: data.rows, count: Number(data.count) || 0, fee: Number(data.fee) || 0 };
+        }
+    } catch (e) { console.warn('[dash] inpatient share:', e && e.message); }
+
     // 3. Referrals THIS doctor made (recommended_services where recommended_by = me).
     const { data: refs, error: refErr } = await supabase
         .from('recommended_services')
@@ -1665,45 +1683,37 @@ async function loadDashboardData() {
         patientMrn:   r.patients?.mrn || '',
     }));
 
-    // 4. Ставка вознаграждения за направление — INTERNAL_REFERRAL_V1 (мигр. 122).
-    //
-    // Читается ОТТУДА ЖЕ, откуда её берёт отчёт «Рефералы»: из карточки
-    // источника этого врача и его категории. Раньше здесь лежал свой механизм
-    // (users.referral_rates, ставка на КАЖДУЮ услугу), и он расходился с
-    // отчётом дважды: другой формой ставки и — молча — сломанным ключом.
-    // Редактор сохраняет процент как `pct` (routes/users.js, parseRates
-    // объявляет его каноническим), а этот экран читал `rule.percentage`,
-    // которого в сохранённой строке нет. То есть врачу показывался только
-    // фиксированный рубль за направление, а процент от цены — всегда ноль.
-    // Проверить это глазами было нельзя: ноль выглядит как «ещё не заработал».
-    const { data: _refSrc } = await supabase.from('referral_sources')
-        .select('id, reward_mode, own_percent, own_rates, category_id')
-        .eq('doctor_id', docId).limit(1);
-    state.dash.rewardSource = (_refSrc && _refSrc[0]) || null;
-    state.dash.rewardCategory = null;
-    if (state.dash.rewardSource && state.dash.rewardSource.category_id != null) {
-        const { data: _cat } = await supabase.from('referral_source_categories')
-            .select('id, standard_percent, rates').eq('id', state.dash.rewardSource.category_id).limit(1);
-        state.dash.rewardCategory = (_cat && _cat[0]) || null;
-    }
+    // 4. Вознаграждение за направления — REPORTS_V2. Считает СЕРВЕР тем же
+    // запросом, что отчёт «Рефералы» (строки счетов по источнику этого врача,
+    // от суммы строки после скидки, только оплаченные счета, по дате счёта).
+    // Прежде кабинет считал сам — от ЦЕНЫ КАТАЛОГА каждой рекомендации, и
+    // отправленной, и отменённой, — и его сумма не сходилась с ведомостью ни
+    // на одних данных. Ставку по-прежнему решает общий модуль
+    // shared/referral-reward.js, но теперь только на сервере.
+    state.dash.referralPay = { rows: [], count: 0, reward: 0, paid_amount: 0 };
+    try {
+        const { data, error } = await supabase.rpc('doctor_referral_reward',
+            { doctor_id: docId, from: dayKey(startIso), to: dayKey(endIso) });
+        if (error) console.warn('[dash] referral reward:', error.message);
+        else if (data && Array.isArray(data.rows)) {
+            state.dash.referralPay = { rows: data.rows, count: Number(data.count) || 0,
+                reward: Number(data.reward) || 0, paid_amount: Number(data.paid_amount) || 0 };
+        }
+    } catch (e) { console.warn('[dash] referral reward:', e && e.message); }
 
     state.dash.loaded = true;
 }
 
-// Вознаграждение за одно направление — INTERNAL_REFERRAL_V1.
-//
-// Считает ОБЩИЙ модуль, тот же, что и отчёт «Рефералы» (shared/referral-reward.js):
-// две реализации «какая ставка применяется» на одном вознаграждении разошлись бы
-// молча — врач видел бы в кабинете одну сумму, ведомость показывала бы другую, и
-// обе выглядели бы рабочими.
-function commissionFor(referral) {
-    if (!referral || !referral.serviceId) return 0;
-    const rate = resolveReferralRate({
-        source: state.dash.rewardSource,
-        category: state.dash.rewardCategory,
-        serviceTypeId: referral.serviceTypeId,
-    });
-    return Math.round(rewardForLine(rate, { amount: Number(referral.servicePrice || 0), discount: 0, qty: 1 }));
+// REPORTS_V2 — строки вознаграждения с сервера (doctor_referral_reward) и их
+// раздел. Раздел называется так же, как у рекомендаций: категория услуги, иначе
+// вид; typeFirst — порядок «Разбора направлений» (вид, иначе категория).
+function referralPayRows() {
+    return (state.dash.referralPay && state.dash.referralPay.rows) || [];
+}
+function payRowSector(r, typeFirst) {
+    const a = typeFirst ? r.service_type : r.service_category;
+    const b = typeFirst ? r.service_category : r.service_type;
+    return a || b || NO_SECTOR;
 }
 
 // DOCTOR_DASHBOARD_V1 — serviceRateMap()/serviceShare() ЖИВУТ В
@@ -1739,25 +1749,40 @@ function computeSalary() {
     // дашборд по нему решает, рисовать ли дневной заработок вообще.
     const _varOut = perServicePayApplies(doc) || doc.salary_type !== 'fix_plus_kpi'
         ? variableComponent : 0;
+    // INPATIENT_SHARE_V1 — стационарная доля идёт в зарплату по ТОМУ ЖЕ правилу,
+    // что доля за услуги: при окладе её нет, при «оклад + KPI» — только если
+    // отмечен показатель по услугам.
+    const inpatient = inpatientPayApplies(doc) ? Number(state.dash.inpatient.fee) || 0 : 0;
     let total = 0;
     if (doc.salary_type === 'fixed')                 total = fixedComponent;
-    else if (doc.salary_type === 'fix_plus_kpi')     total = fixedComponent + _varOut;
-    else                                              total = variableComponent;   // 'percentage' or unset → per-service shares
-    return { fixed: fixedComponent, variable: _varOut, total, kind: doc.salary_type || 'none', revenue };
+    else if (doc.salary_type === 'fix_plus_kpi')     total = fixedComponent + _varOut + inpatient;
+    else                                              total = variableComponent + inpatient;   // 'percentage' or unset → per-service shares
+    return { fixed: fixedComponent, variable: _varOut, inpatient, total, kind: doc.salary_type || 'none', revenue };
 }
 
+// INPATIENT_SHARE_V1 — платится ли врачу поуслужно вообще (то же условие, что у
+// графика ниже): одно место на плитку, график и карточку «Как считается».
+function inpatientPayApplies(doc) {
+    return !!doc && doc.salary_type !== 'fixed'
+        && (doc.salary_type !== 'fix_plus_kpi' || perServicePayApplies(doc));
+}
+
+// REPORTS_V2 — сколько направлений отправлено, считается по рекомендациям
+// врача (как раньше); СКОЛЬКО ЗАРАБОТАНО — по строкам сервера: деньги
+// начисляются с оплаченной строки счёта, а не с рекомендации.
 function computeReferralRewards() {
     let total = 0;
     const bySector = {};      // sector → { count, commission }
-    for (const ref of state.dash.referrals) {
-        const c = commissionFor(ref);
-        const sector = ref.serviceCat || ref.serviceType || '(uncategorised)';
-        const slot = bySector[sector] || (bySector[sector] = { count: 0, commission: 0 });
-        slot.count++;
-        slot.commission += c;
+    const slot = (k) => bySector[k] || (bySector[k] = { count: 0, commission: 0 });
+    for (const ref of state.dash.referrals) slot(ref.serviceCat || ref.serviceType || NO_SECTOR).count++;
+    for (const r of referralPayRows()) {
+        const c = Number(r.reward) || 0;
+        if (!c) continue;
+        slot(payRowSector(r, false)).commission += c;
         total += c;
     }
-    return { total, bySector, count: state.dash.referrals.length };
+    for (const v of Object.values(bySector)) v.commission = Math.round(v.commission);
+    return { total: Math.round(total), bySector, count: state.dash.referrals.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -1903,7 +1928,7 @@ function payAction(label, icon, onclick) {
 // период одним числом, и врач не видел, из каких дней она сложилась. Теперь —
 // площадь стопкой: доля за услуги снизу, вознаграждения за направления
 // сверху, итог — верхняя кривая. Числа считаются ТЕМИ ЖЕ функциями, что и
-// плитки (serviceShare, commissionFor): график — это разложенная по дням
+// плитки (serviceShare; вознаграждение — строки сервера, REPORTS_V2): график — это разложенная по дням
 // плитка, а не вторая арифметика.
 //
 // День — местный (ключ строится из местных часов): начисление в 23:30 лежит
@@ -1928,7 +1953,7 @@ function earningsSeries() {
     for (let i = days - 1; i >= 0; i--) {
         const d = new Date(end);
         d.setDate(end.getDate() - i);
-        const row = { date: dayKey(d), services: 0, referrals: 0 };
+        const row = { date: dayKey(d), services: 0, inpatient: 0, referrals: 0 };
         list.push(row);
         byKey.set(row.date, row);
     }
@@ -1947,19 +1972,35 @@ function earningsSeries() {
             if (row) row.services += tierShare(s, rateMap, state.dash.tierPos.get(String(s.id)) || null);
         }
     }
-    for (const r of state.dash.referrals) {
-        const row = byKey.get(dayKey(r.createdAt));
-        if (row) row.referrals += commissionFor(r);
+    // INPATIENT_SHARE_V1 — стационарная доля ложится в день СЧЁТА (date строки
+    // сервера — местная дата счёта), тем же правилом, что в computeSalary.
+    let inpatientAny = false;
+    if (inpatientPayApplies(doc)) {
+        for (const r of state.dash.inpatient.rows || []) {
+            const row = byKey.get(String(r.date || ''));
+            if (row) { row.inpatient += Number(r.fee) || 0; if (Number(r.fee) > 0) inpatientAny = true; }
+        }
     }
-    for (const row of list) { row.services = Math.round(row.services); row.referrals = Math.round(row.referrals); }
-    return { list, capped: span > CHART_DAYS_MAX };
+    // REPORTS_V2 — вознаграждение ложится в день СЧЁТА (date строки сервера —
+    // местная дата счёта), как в отчёте «Рефералы».
+    for (const r of referralPayRows()) {
+        const row = byKey.get(String(r.date || ''));
+        if (row) row.referrals += Number(r.reward) || 0;
+    }
+    for (const row of list) {
+        row.services = Math.round(row.services); row.inpatient = Math.round(row.inpatient); row.referrals = Math.round(row.referrals);
+    }
+    return { list, capped: span > CHART_DAYS_MAX, inpatientAny };
 }
 function earningsChartCard() {
+    const { list, capped, inpatientAny } = earningsSeries();
+    // Третий ряд — только когда за период есть стационарная доля: у врача без
+    // стационара легенда и график остаются прежними, из двух рядов.
     const keys = [
         { key: 'services',  label: tr('Услуги'),      color: 'var(--ok-700)' },
+        ...(inpatientAny ? [{ key: 'inpatient', label: tr('Стационар'), color: 'var(--purple-700, #6d28d9)' }] : []),
         { key: 'referrals', label: tr('Направления'), color: 'var(--info-700)' },
     ];
-    const { list, capped } = earningsSeries();
     return h('div', { class: 'card dash-card' },
         h('div', { class: 'card-header' },
             h('h3', null, Icon('Chart', { size: 16 }), ' ', tr('Начисления по дням')),
@@ -2018,6 +2059,13 @@ function salaryConfigCard(salary) {
         kvRow(tr('Ставки по услугам'), trf('услуг задано: {n}', { n: (Array.isArray(doc.service_rates) ? doc.service_rates.filter(r => Number(r.value != null ? r.value : r.percentage) > 0).length : 0) })),
         kvRow(tr('Выручка за период'), Math.round(salary.revenue).toLocaleString('ru-RU') + ' UZS'),
         kvRow(tr('Начислено (после налога)'), Math.round(salary.variable).toLocaleString('ru-RU') + ' UZS'),
+        // INPATIENT_SHARE_V1 — стационарная часть отдельной строкой: по
+        // оплаченным счетам стационара, исполнителю (иначе назначившему).
+        inpatientPayApplies(doc)
+            ? kvRow(tr('Стационар (оплаченные счета)'), trf('{sum} UZS · услуг: {n}', {
+                sum: Math.round(salary.inpatient || 0).toLocaleString('ru-RU'),
+                n: state.dash.inpatient.count || 0 }))
+            : null,
         kvRow(tr('Показатели KPI'), (doc.kpi_links || []).length
             ? (doc.kpi_links || []).join(', ')
             : '—'),
@@ -2060,34 +2108,28 @@ function referralAnalyticsCard() {
     // Group referrals by their service TYPE (falls back to category, then to
     // a single bucket).
     const buckets = {};
+    const bucket = (key) => buckets[key] || (buckets[key] = {
+        label:       key,
+        referred:    0,
+        arrived:     0,
+        revenueAfter:0,
+        reward:      0,
+    });
     for (const r of state.dash.referrals) {
-        const key = r.serviceType || r.serviceCat || NO_SECTOR;
-        const slot = buckets[key] || (buckets[key] = {
-            label:       key,
-            referred:    0,
-            arrived:     0,
-            revenue:     0,
-            revenueAfter:0,
-            reward:      0,
-        });
+        const slot = bucket(r.serviceType || r.serviceCat || NO_SECTOR);
         slot.referred++;
-        if (r.status === 'done') {
-            slot.arrived++;
-            const gross = Number(r.servicePrice || 0);
-            // DOCTOR_SHARE_AFTER_TAX_V1 — ставка налога берётся у самой услуги.
-            // Прежние «assume 12 % VAT default» брались с потолка: у клиники
-            // налог 6%, и «выручка после налога» по направлениям занижалась вдвое
-            // против отчётов. Нет ставки в данных — налог не выдумываем.
-            const taxPct = Number(r.taxRate ?? 0);
-            const net = gross * (1 - taxPct / 100);
-            slot.revenue      += gross;
-            slot.revenueAfter += net;
-            // `rules` здесь не существовало никогда — след старого механизма
-            // users.referral_rates; при первом же дошедшем направлении разбор
-            // падал с ReferenceError, и вкладка не рисовалась вовсе.
-            slot.reward       += commissionFor(r);
-        }
+        if (r.status === 'done') slot.arrived++;
     }
+    // REPORTS_V2 — деньги — строки счетов с сервера (как отчёт «Рефералы»):
+    // оплаченная сумма после скидки и начисленное с неё вознаграждение. Прежде
+    // здесь стояла цена каталога дошедшей рекомендации — не то, что клиника
+    // взяла с пациента.
+    for (const r of referralPayRows()) {
+        const slot = bucket(payRowSector(r, true));
+        if (r.paid) slot.revenueAfter += Number(r.amount) || 0;
+        slot.reward += Number(r.reward) || 0;
+    }
+    for (const v of Object.values(buckets)) v.reward = Math.round(v.reward);
     const rows = Object.values(buckets).sort((a, b) => b.reward - a.reward);
 
     // Totals row.
@@ -2117,7 +2159,7 @@ function referralAnalyticsCard() {
                     h('th', null, tr('Вид услуги')),
                     h('th', { style: { textAlign: 'right' } }, tr('Направлено')),
                     h('th', { style: { textAlign: 'right' } }, tr('Дошли')),
-                    h('th', { style: { textAlign: 'right' } }, tr('Выручка (после налога)')),
+                    h('th', { style: { textAlign: 'right' } }, tr('Оплачено (после скидки)')),
                     h('th', { style: { textAlign: 'right' } }, tr('Вознаграждение врача')),
                 )),
                 h('tbody', null,
@@ -2208,7 +2250,9 @@ function recentReferralsBody() {
         whenShort(r.createdAt), r.serviceName,
         [r.patientName, r.serviceCat].filter(Boolean).join(' · '),
         tagEl(referralStatusLabel(r.status), r.status === 'done' ? 'ok' : r.status === 'cancelled' ? 'crit' : 'warn', null),
-        commissionFor(r).toLocaleString('ru-RU'))));
+        // REPORTS_V2 — у рекомендации своей суммы нет: вознаграждение
+        // начисляется с оплаченной строки счёта («Разбор направлений»).
+        '')));
 }
 
 // Состояние направления словами. Три значения — закрытый набор, поэтому
@@ -2361,9 +2405,11 @@ function openReferralDetails() {
 
     const body = h('div', { class: 'modal-body', style: { display: 'flex', flexDirection: 'column', gap: '12px' } });
 
+    // REPORTS_V2 — список — строки счетов с сервера, по которым начисляется
+    // вознаграждение (те же, что в детализации отчёта «Рефералы»).
     function sectors() {
         const set = new Set(['all']);
-        for (const r of state.dash.referrals) set.add(r.serviceCat || r.serviceType || NO_SECTOR);
+        for (const r of referralPayRows()) set.add(payRowSector(r, false));
         return [...set];
     }
 
@@ -2405,10 +2451,10 @@ function openReferralDetails() {
         const list = body.querySelector('#ref-list');
         if (!list) return;
         const t = serviceFilter.trim().toLowerCase();
-        const rows = state.dash.referrals.filter(r => {
-            const sec = r.serviceCat || r.serviceType || NO_SECTOR;
+        const rows = referralPayRows().filter(r => {
+            const sec = payRowSector(r, false);
             if (sectorFilter !== 'all' && sec !== sectorFilter) return false;
-            if (t && !(r.serviceName.toLowerCase().includes(t) || r.patientName.toLowerCase().includes(t))) return false;
+            if (t && !(String(r.service || '').toLowerCase().includes(t) || String(r.patient || '').toLowerCase().includes(t))) return false;
             return true;
         });
         clear(list);
@@ -2426,15 +2472,14 @@ function openReferralDetails() {
                 h('th', { style: { textAlign: 'right' } }, tr('Вознаграждение')),
             )),
             h('tbody', null, ...rows.map(r => {
-                const c = commissionFor(r);
-                const sec = r.serviceCat || r.serviceType || NO_SECTOR;
+                const c = Math.round(Number(r.reward) || 0);
+                const sec = payRowSector(r, false);
                 return h('tr', null,
-                    h('td', { class: 'num muted', style: { fontSize: '12.5px' } }, formatDateTime(r.createdAt)),
-                    h('td', { class: 'cell-strong' }, r.serviceName),
+                    h('td', { class: 'num muted', style: { fontSize: '12.5px' } }, r.date || ''),
+                    h('td', { class: 'cell-strong' }, r.service || ''),
                     h('td', { class: 'muted' }, sectorLabel(sec)),
-                    h('td', null, r.patientName),
-                    h('td', null, tagEl(referralStatusLabel(r.status),
-                                        r.status === 'done' ? 'ok' : r.status === 'cancelled' ? 'crit' : 'warn', null)),
+                    h('td', null, r.patient || ''),
+                    h('td', null, tagEl(r.paid ? tr('Оплачен') : tr('Не оплачен'), r.paid ? 'ok' : 'warn', null)),
                     h('td', { class: 'num cell-strong', style: { textAlign: 'right', color: 'var(--ok-700)' } }, c.toLocaleString('ru-RU')),
                 );
             })),

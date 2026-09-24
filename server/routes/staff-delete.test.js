@@ -126,6 +126,27 @@ test('a cashier who took money cannot be deleted', async (t) => {
   assert.match(del.json.error.message, /платежи: 1/);
 });
 
+// CRM_DEDUP_SEARCH_TASKS_V1 (ревью W2-M4) — задача CRM ссылается на сотрудника
+// тремя колонками (ответственный, кто отметил, кто создал). Без неё в списке
+// удаление упиралось во внешний ключ и отвечало 500.
+test('an employee named on a CRM task cannot be deleted — 409 «задачи CRM», not a 500', async (t) => {
+  const { db, server, base } = await startServer();
+  t.after(() => { server.close(); db.close(); });
+  const cookie = await loginAdmin(base);
+  const lead = db.prepare("INSERT INTO crm_requests (full_name, phone, status) VALUES ('Лид','942846494','in_process')").run().lastInsertRowid;
+  for (const col of ['assignee_id', 'done_by', 'created_by']) {
+    const emp = await addStaff(base, cookie, 'cc.' + col.replace('_', ''), 'callcenter');
+    db.prepare(`INSERT INTO crm_tasks (request_id, text, ${col}) VALUES (?, 'Перезвонить', ?)`).run(lead, emp.id);
+    const chk = await call(base, cookie, `/${emp.id}/delete-check`);
+    assert.equal(chk.json.deletable, false, col);
+    assert.deepEqual(chk.json.blocking.map((b) => b.table), ['crm_tasks'], col);
+    const del = await call(base, cookie, `/${emp.id}`, 'DELETE');
+    assert.equal(del.status, 409, col + ': ' + JSON.stringify(del.json));
+    assert.match(del.json.error.message, /задачи CRM: 1/);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM users WHERE id = ?').get(emp.id).n, 1);
+  }
+});
+
 test('the refusal names every kind of record, not just the first', async (t) => {
   const { db, server, base } = await startServer();
   t.after(() => { server.close(); db.close(); });

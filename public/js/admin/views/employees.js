@@ -10,10 +10,13 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, field, checkField, Ring, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { openEmployeePasswordModal, openChangeOwnPasswordModal } from '../password-change.js';   // PASSWORD_CHANGE_V2
+import { selfUserId } from '../permissions.js';   // PASSWORD_CHANGE_V2 — своя карточка меняет пароль через текущий
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { importExportButtons } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1
 import { soleBranchId } from '../branch-context.js?v=bc3';                  // SOLE_BRANCH_V1
 import { specialtyOptions, canonicalSpecialty, SPECIALTY_ROWS } from '../specialties.js?v=spec2';   // SPECIALTY_LIST_V1 + SPECIALTIES_CLONED_V1 + MULTI_SPECIALTY_V1
+import { referralRewardEditor, saveReferralReward } from './referral-reward-editor.js';   // REPORTS_V2 — рабочая ставка за направления (источник врача)
 
 const ROLES = [
     ['registrar', 'Регистратор'], ['doctor', 'Врач'], ['nurse', 'Медсестра'],
@@ -329,7 +332,8 @@ const asArr = (v) => (Array.isArray(v) ? v : []);
 // later with nothing to show what happened. One shared mapping means the two
 // tables cannot disagree; users.test.js pins the key set against the server so
 // a new key added there cannot go unnoticed here.
-const OPTIONAL_RATE_KEYS = ['price', 'fix', 'fixed'];
+// INPATIENT_SHARE_V1 — inpatient_pct: «Стационар, %» (only service_rates carries it).
+const OPTIONAL_RATE_KEYS = ['price', 'fix', 'fixed', 'inpatient_pct'];
 const loadRates = (list) => asArr(list).map((r) => {
     const out = { service_id: r.service_id, pct: Number(r.pct) || 0, branches: asArr(r.branches) };
     for (const k of OPTIONAL_RATE_KEYS) if (r[k] != null) out[k] = Number(r[k]);
@@ -568,13 +572,15 @@ function openEditor(user, root) {
         } else if (active === 'schedule') {
             body.append(head('Рабочее время', 'Дни и часы работы сотрудника.'), buildHours(emp, markDirty));
         } else if (active === 'services') {
-            body.append(ratesSection(emp, 'service_rates', { icon: sec.icon, title: 'Услуги и ставки', sub: 'Сколько врач получает за оказанную услугу: процент от суммы после скидки либо фиксированная сумма за единицу. Своя цена — если этот врач берёт за услугу не как в каталоге; пусто = цена каталога.', rateLabel: 'Ставка врача', allowFix: true, ownPrice: true }, touch));
+            body.append(ratesSection(emp, 'service_rates', { icon: sec.icon, title: 'Услуги и ставки', sub: 'Сколько врач получает за оказанную услугу: процент от суммы после скидки либо фиксированная сумма за единицу. Своя цена — если этот врач берёт за услугу не как в каталоге; пусто = цена каталога.', rateLabel: 'Ставка врача', allowFix: true, ownPrice: true, inpatient: true }, touch));
         } else if (active === 'referral') {
-            // No fixed-sum mode here: referral payouts are computed from the
-            // «Реферальное вознаграждение» table by source name (see
-            // referralsReport in server/services/rpc/reports.js) and never read
-            // users.referral_rates, so a fixed field would pay nobody.
-            body.append(ratesSection(emp, 'referral_rates', { icon: sec.icon, title: 'Вознаграждение за направления', sub: '% от стоимости услуг, на которые врач направил пациента.', pctLabel: '% направления' }, touch));
+            // REPORTS_V2 — вкладка была МЁРТВОЙ: таблица писала users.referral_rates,
+            // а вознаграждение за направления (отчёт «Рефералы», кабинет врача)
+            // читает ставку источника этого врача (referral_sources, мигр. 122).
+            // Процент вводился, сохранялся и не платился. Теперь здесь та же
+            // рабочая правка, что в старой карточке, — общим модулем.
+            body.append(head('Вознаграждение за направления', 'Что врач получает, когда пациент пришёл по его направлению.'),
+                referralRewardEditor({ doctorId: isEdit ? user.id : null, holder: emp, onChange: () => markDirty({}), readOnly }));
         } else if (active === 'access') {
             // CUSTOM_ROLES_V1 — в одном списке штатные роли и роли клиники. У своей
             // роли значение 'custom:<код>': выбрали её — в role ложится ОСНОВА
@@ -636,6 +642,23 @@ function openEditor(user, root) {
     const deleteBtn = isEdit
         ? h('button', { class: 'btn btn-danger', type: 'button', onclick: confirmDelete },
             Icon('Trash', { size: 14 }), ' Удалить')
+        : null;
+
+    // PASSWORD_CHANGE_V2 — пароль существующего сотрудника меняется ОТДЕЛЬНО от
+    // карточки: окно шлёт PATCH только с { password }, и потому не упирается в
+    // проверку ФИО, телефона и категории в save() ниже. Без этого учётная
+    // запись первого запуска `admin` (в ней не заполнено ничего) и сотрудники
+    // без телефона не могли получить новый пароль вовсе.
+    //
+    // Ревью W1-M1: СВОЯ карточка — то же окно, что в меню аватара, с текущим
+    // паролем (/api/auth/change-password). PATCH без текущего — право
+    // администратора на чужую учётную запись; на своей он обходил бы проверку
+    // «докажи, что это ты».
+    const isSelf = isEdit && selfUserId() != null && String(selfUserId()) === String(user.id);
+    const passwordBtn = isEdit
+        ? h('button', { class: 'btn btn-outline', type: 'button',
+            onclick: () => (isSelf ? openChangeOwnPasswordModal() : openEmployeePasswordModal(user)) },
+            Icon('Lock', { size: 14 }), ' Сменить пароль')
         : null;
 
     async function confirmDelete() {
@@ -707,6 +730,13 @@ function openEditor(user, root) {
         try {
             if (isEdit) await api('/' + user.id, { method: 'PATCH', body: JSON.stringify(payload) });
             else await api('', { method: 'POST', body: JSON.stringify({ ...payload, username: emp.username.trim() }) });
+            // REPORTS_V2 — ставка за направления лежит на источнике врача, а не в
+            // карточке: пишется своей попыткой, и её отказ не выдаётся за неудачу
+            // сохранения самого сотрудника. Вкладку не открывали — не пишется вовсе.
+            if (isEdit && emp.referralReward) {
+                const err = await saveReferralReward(user.id, emp.referralReward);
+                if (err) toast(trf('Сотрудник сохранён, но ставка за направления — нет: {msg}', { msg: err }), 'fail');
+            }
             toast('Сотрудник сохранён', 'ok'); close(); await paint(root);
         } catch (e) { toast(e.message || 'Не удалось сохранить.', 'fail'); saveBtn.disabled = false; saveBtn.textContent = prev; }
     }
@@ -718,7 +748,7 @@ function openEditor(user, root) {
         // не отключённых, а отсутствующих: отключённая кнопка предлагает
         // действие и молчит о том, почему оно недоступно, а причина уже сказана
         // строкой над полями.
-        h('footer', { class: 'modal-foot' }, readOnly ? null : deleteBtn, dirtyEl, h('span', { class: 'grow' }), h('button', { class: 'btn', type: 'button', onclick: close }, readOnly ? 'Закрыть' : 'Отмена'), readOnly ? null : saveBtn),
+        h('footer', { class: 'modal-foot' }, readOnly ? null : deleteBtn, readOnly ? null : passwordBtn, dirtyEl, h('span', { class: 'grow' }), h('button', { class: 'btn', type: 'button', onclick: close }, readOnly ? 'Закрыть' : 'Отмена'), readOnly ? null : saveBtn),
     ));
     document.body.appendChild(overlay);
     renderHead(); renderRail(); renderBody();
@@ -763,11 +793,13 @@ function ratesSection(emp, arrayKey, opts, touch) {
     // RATES_UI_V2 — header and rows share one .rt-row grid (defined once in CSS,
     // so the two cannot drift apart) and the header lives INSIDE the scroller,
     // sticky, so column labels stay visible down a long catalogue.
-    const rowCls = 'rt-row' + (opts.ownPrice ? '' : ' rt-row--noprice');
+    // INPATIENT_SHARE_V1 — «Стационар, %» is one more column of the same grid.
+    const rowCls = 'rt-row' + (opts.ownPrice ? '' : ' rt-row--noprice') + (opts.inpatient ? ' rt-row--inpatient' : '');
     const headRow = () => h('div', { class: rowCls + ' rt-head' },
         h('span'), h('span', null, 'Услуга'), h('span', null, 'Филиалы'),
         h('span', { class: 'r' }, opts.ownPrice ? 'Своя цена' : 'Цена'),
-        h('span', { class: 'r' }, opts.rateLabel || opts.pctLabel));
+        h('span', { class: 'r' }, opts.rateLabel || opts.pctLabel),
+        opts.inpatient ? h('span', { class: 'r' }, 'Стационар, %') : null);
 
     // SOLE_BRANCH_V1 — филиал в клинике один: «Все филиалы» и он же — одно и то
     // же, поэтому новая строка ставки сразу привязана к нему, а не к пустому
@@ -805,6 +837,30 @@ function ratesSection(emp, arrayKey, opts, touch) {
         else arr()[i].price = n;
         touch();
     };
+    // INPATIENT_SHARE_V1 — the doctor's share of this service when it is done
+    // IN THE WARD (paid to the line's performer, else to whoever ordered it,
+    // once the invoice is paid). EMPTY means "no inpatient share": the key is
+    // removed, and the report then pays 0 — it never falls back to the
+    // outpatient percentage. A typed 0 is kept as a real decision.
+    const setInpatient = (sid, raw) => {
+        const i = idxOf(sid); if (i < 0) return;
+        const t = String(raw).trim();
+        const n = Number(t);
+        if (t === '' || !Number.isFinite(n)) delete arr()[i].inpatient_pct;
+        else arr()[i].inpatient_pct = Math.min(100, Math.max(0, n));
+        touch();
+    };
+    function inpatientCell(s, r, on) {
+        const has = on && r && r.inpatient_pct != null;
+        const inp = h('input', {
+            type: 'number', min: '0', max: '100', step: '1', disabled: !on, class: 'rt-num rt-num--inp',
+            value: has ? String(r.inpatient_pct) : '', placeholder: '—',
+            title: !on ? tr('Отметьте услугу, чтобы задать долю')
+                : tr('Доля врача за услугу в стационаре: исполнителю, иначе назначившему, после оплаты счёта. Пусто — не платится.'),
+        });
+        inp.addEventListener('input', () => setInpatient(s.id, inp.value));
+        return h('div', { class: 'rt-field' }, inp, h('span', { class: 'rt-unit' }, '%'));
+    }
 
     const searchInp = h('input', { type: 'text', placeholder: 'Поиск услуг…' });
     searchInp.addEventListener('input', () => { q = searchInp.value; renderRows(); });
@@ -938,6 +994,7 @@ function ratesSection(emp, arrayKey, opts, touch) {
                 h('div', { class: 'rt-rate' },
                     modeSeg,
                     h('div', { class: 'rt-field' }, rateInp, h('span', { class: 'rt-unit' }, fixed ? 'сум' : '%'))),
+                opts.inpatient ? inpatientCell(s, r, on) : null,
             ));
         }
         scroll.scrollTop = keep;

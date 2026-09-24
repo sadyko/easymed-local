@@ -708,7 +708,10 @@ async function openScheduleSheet(modal) {
   return sheet;
 }
 
-const dateInputs = (root) => walk(root).filter((n) => n.tagName === 'INPUT' && n.getAttribute('type') === 'date');
+// CRM_DEDUP_SEARCH_TASKS_V1 — дата НОВОЙ ЗАДАЧИ (блок «Задачи», ниже строк услуг)
+// к датам строк не относится.
+const dateInputs = (root) => walk(root).filter((n) => n.tagName === 'INPUT' && n.getAttribute('type') === 'date'
+  && !n.hasAttribute('data-task-date'));
 
 test('«Записать на дату»: дата из окна дат доезжает до заявки, а заявка — в «Записан»', async () => {
   const modal = await openBookable();

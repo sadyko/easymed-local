@@ -47,11 +47,21 @@ export const REPORT_DEFS = [
         title: 'Общая выручка',
         desc:  'Каждая строка счёта: пациент, услуга, цена, скидка и налог, доля врача, филиал, регистратор, реферал и выплата.',
     },
+    // REPORTS_V2 — «Рефералы» по тому, кто направил: внутренние врачи и внешние
+    // партнёры, сводка или детализация по строкам. Вид и фильтр — общими
+    // переключателями конструктора (views / options ниже).
     {
         kind:  'referrals',
         icon:  'Coins',
         title: 'Рефералы',
-        desc:  'Вознаграждение по источникам направлений: услуги, суммы и расчёт % по группам (режим «Общий» или «Вручную»).',
+        desc:  'Кто направил пациентов — свои врачи и внешние партнёры: пациенты, услуги, суммы и вознаграждение (только по оплаченным счетам). Сводка по направившим или детализация по каждой услуге.',
+        views: [
+            { kind: 'referrals',        label: 'Сводка' },
+            { kind: 'referrals_detail', label: 'Детализация' },
+        ],
+        options: [
+            { arg: 'referrer', label: 'Направившие', choices: [['all', 'Все'], ['internal', 'Внутренние'], ['external', 'Внешние']] },
+        ],
     },
     {
         kind:  'invoices_full',
@@ -59,11 +69,24 @@ export const REPORT_DEFS = [
         title: 'Счета',
         desc:  'Все счета за период: суммы, скидки, оплачено, остаток/долг, статус, плательщик и регистратор.',
     },
+    // REPORTS_V2 — «Закупки и склад»: четыре вида (владелец выбрал все четыре).
+    // Прежняя карточка «Закупки» — это первый вид; в колонке поставщика у неё
+    // стояло примечание движения, теперь — поставщик.
     {
         kind:  'procurement',
         icon:  'Layers',
-        title: 'Закупки',
-        desc:  'Позиции поступлений от поставщиков: товар, поставщик, количество и сумма.',
+        title: 'Закупки и склад',
+        desc:  'Приход по поставщикам; расход по отделам, сотрудникам и пациентам по себестоимости; ведомость остатков (начало + приход − расход = конец, количество и сумма); просроченное и истекающее со стоимостью.',
+        views: [
+            { kind: 'procurement',       label: 'Приход по поставщикам' },
+            { kind: 'stock_consumption', label: 'Расход' },
+            { kind: 'stock_statement',   label: 'Остатки' },
+            { kind: 'stock_expiry',      label: 'Сроки годности' },
+        ],
+        options: [
+            { arg: 'by', label: 'Разрез', kinds: ['stock_consumption'],
+              choices: [['lines', 'По движениям'], ['holder', 'По получателям'], ['patient', 'По пациентам']] },
+        ],
     },
     {
         kind:  'surgery_profit',
@@ -75,7 +98,38 @@ export const REPORT_DEFS = [
         kind:  'doctor_salaries',
         icon:  'Stethoscope',
         title: 'Зарплаты врачей',
-        desc:  'По каждому врачу: оплаченные услуги, связанные с ним, сумма после скидки, средний % и доля врача (гонорар). Только полностью оплаченные счета.',
+        desc:  'По каждому врачу: оплаченные услуги, связанные с ним, сумма после скидки, средний % и доля врача (гонорар), стационарная доля отдельными колонками и итог к выплате. Только полностью оплаченные счета.',
+    },
+    // INPATIENT_SHARE_V1 — стационарная доля врачей: строка на каждую оплаченную
+    // медицинскую строку стационара (койко-дни и медикаменты не входят).
+    {
+        kind:  'inpatient_share',
+        icon:  'Bed',
+        title: 'Стационар: доля врачей',
+        desc:  'Оплаченные услуги стационара: пациент, госпитализация, услуга, сумма после скидки и налога, врач (исполнитель или назначивший), его стационарный % и начисленная доля. Итоги по врачам. Койко-дни и медикаменты не входят.',
+    },
+    // REPORTS_V2 — «По услугам»: строка на услугу и место оказания, деньги теми
+    // же выражениями, что «Общая выручка» и «Зарплаты врачей».
+    {
+        kind:  'by_services',
+        icon:  'ListBullet',
+        title: 'По услугам',
+        desc:  'По каждой услуге (амбулатория и стационар отдельно): количество, сумма, скидка, налог, доля врача и остаток клинике. Аннулированные счета не входят; можно смотреть только оплаченные и одну группу услуг.',
+        options: [
+            { arg: 'paid',  label: 'Счета',  choices: [['all', 'Все счета'], ['paid', 'Только оплаченные']] },
+            { arg: 'group', label: 'Группа', choices: [['all', 'Все группы'], ['consultation', 'Консультации'], ['lab', 'Лаборатория'], ['imaging', 'Диагностика'], ['procedure', 'Процедуры'], ['other', 'Хирургия']] },
+        ],
+    },
+    // REPORTS_V2 — «По врачам»: выплата и работа; второй вид — врач × услуга.
+    {
+        kind:  'by_doctors',
+        icon:  'Patients',
+        title: 'По врачам',
+        desc:  'По каждому врачу: пациенты, визиты, госпитализации, услуги, выставлено и оплачено, доля за услуги и стационарная доля (как в «Зарплатах врачей»), вознаграждение за направления и итог к выплате. Второй вид — разбивка врача по услугам.',
+        views: [
+            { kind: 'by_doctors',      label: 'Врачи' },
+            { kind: 'doctor_services', label: 'Врачи и услуги' },
+        ],
     },
     {
         kind:  'owner',
@@ -124,6 +178,32 @@ export const REPORT_DEFS = [
         open:  () => import('./telegram-report.js?v=tgr5').then(m => m.openTelegramReport()),
     },
 ];
+
+// REPORTS_V2 — отчёт может иметь несколько ВИДОВ (сводка / детализация — это
+// разные kind на сервере) и ФИЛЬТРЫ (аргументы run_report). Оба — строками в
+// определении, без своего кода у каждой карточки: конструктор рисует их
+// одинаковыми переключателями, а выгрузка в Excel берёт ровно то, что показано.
+// Экспортируется ради теста: каждый kind каждой карточки обязан быть известен
+// серверу, иначе вид открывается и молча показывает «unknown report kind».
+export function reportKinds(rep) {
+    return Array.isArray(rep.views) && rep.views.length ? rep.views.map(v => v.kind) : [rep.kind];
+}
+// Значения фильтров по умолчанию — первый вариант каждого.
+export function defaultReportOptions(rep) {
+    const out = {};
+    for (const o of rep.options || []) out[o.arg] = o.choices[0][0];
+    return out;
+}
+// Фильтр может относиться только к некоторым видам (kinds): «Разрез» есть у
+// расхода, но не у ведомости. Чужой фильтр не показывается и не уезжает.
+export function optionsFor(rep, kind) {
+    return (rep.options || []).filter(o => !Array.isArray(o.kinds) || o.kinds.includes(kind));
+}
+export function reportArgs(rep, kind, opts) {
+    const out = {};
+    for (const o of optionsFor(rep, kind)) out[o.arg] = opts[o.arg];
+    return out;
+}
 
 // ---------------------------------------------------------------------------
 // Entry point — the hub page is only the cards.
@@ -340,6 +420,9 @@ async function openReportBuilder(rep) {
         buildings: [], buildingKeys: new Set(),
         result: null,        // {columns, rows} — or the owner charts object
         generating: false,
+        kind: reportKinds(rep)[0],          // REPORTS_V2 — выбранный вид
+        opts: defaultReportOptions(rep),    // REPORTS_V2 — выбранные фильтры
+        reqSeq: 0,                          // REPORTS_V2 ревью M1 — номер последнего запроса
     };
     [st.from, st.to] = presetRange('month');
 
@@ -551,7 +634,7 @@ async function openReportBuilder(rep) {
                 ws['!cols'] = r.columns.map(c => ({ wch: c.length > 10 ? 20 : 13 }));
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, 'Report');
-                XLSX.writeFile(wb, `${rep.kind}_${st.from}_${st.to}.xlsx`);
+                XLSX.writeFile(wb, `${st.kind}_${st.from}_${st.to}.xlsx`);
                 toast('Файл скачан', 'ok');
             } catch (e) {
                 console.error('[reports-hub] download:', e);
@@ -570,6 +653,15 @@ async function openReportBuilder(rep) {
     async function generate() {
         if (st.generating) return;
         st.generating = true;
+        // REPORTS_V2, ревью M1 — вид и фильтры берутся ДО ожидания ответа, а
+        // ответ, пришедший после смены вида (или после сброса результата),
+        // выбрасывается: иначе в предпросмотр и в Excel попала бы таблица
+        // одного вида под именем другого. Переключатели на время запроса
+        // выключены.
+        const token = ++st.reqSeq;
+        const reqKind = st.kind;
+        const reqArgs = reportArgs(rep, reqKind, st.opts);
+        paintChoices();
         generateBtn.disabled = true;
         generateBtn.querySelector('.gen-lbl').textContent = tr(' Формируем…');
         paintPreviewLoading();
@@ -589,7 +681,8 @@ async function openReportBuilder(rep) {
             // владельца: определение отчёта само называет свой RPC и рисовалку.
             const { data, error } = rep.mode === 'charts'
                 ? await supabase.rpc(rep.rpc || 'owner_report', args)
-                : await supabase.rpc('run_report', { kind: rep.kind, ...args });
+                : await supabase.rpc('run_report', { kind: reqKind, ...args, ...reqArgs });
+            if (token !== st.reqSeq || st.kind !== reqKind) return;   // устаревший ответ
             if (error) throw new Error(error.message || String(error));
             st.result = data;
             // Отчёт с графиками МОЖЕТ отдавать и плоские строки (колл-центр отдаёт
@@ -597,6 +690,7 @@ async function openReportBuilder(rep) {
             downloadBtn.disabled = !data || !Array.isArray(data.rows) || data.rows.length === 0;
             paintPreview();
         } catch (e) {
+            if (token !== st.reqSeq) return;
             console.error('[reports-hub] generate:', e);
             toast(trf('Не удалось сформировать отчёт: {msg}', { msg: e.message || e }), 'fail');
             paintPreviewEmpty(trf('Ошибка: {msg}', { msg: e.message || e }));
@@ -604,6 +698,7 @@ async function openReportBuilder(rep) {
             st.generating = false;
             generateBtn.disabled = false;
             generateBtn.querySelector('.gen-lbl').textContent = tr(' Сформировать отчёт');
+            paintChoices();
         }
     }
 
@@ -630,6 +725,58 @@ async function openReportBuilder(rep) {
             downloadBtn,
         ),
     ));
+
+    // ---- REPORTS_V2: вид и фильтры ----
+    // Смена вида или фильтра сбрасывает предпросмотр: иначе в Excel ушла бы
+    // таблица прежнего вида под именем нового.
+    const pill = (active, text, onclick) => h('button', {
+        type: 'button',
+        disabled: st.generating || null,   // ревью M1 — пока идёт запрос, вид не меняется
+        style: {
+            height: '30px', padding: '0 13px', borderRadius: '999px', cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: '12.5px', fontWeight: 600,
+            border: '1px solid ' + (active ? 'var(--primary-600)' : 'var(--ink-200)'),
+            background: active ? 'var(--primary-600)' : 'var(--white, #fff)',
+            color: active ? '#fff' : 'var(--ink-700)',
+        },
+        onclick,
+    }, text);
+    const choiceRow = h('div', {
+        style: {
+            padding: '8px 22px', background: 'var(--white, #fff)',
+            borderBottom: '1px solid var(--ink-100)', flex: '0 0 auto',
+            display: 'flex', flexWrap: 'wrap', gap: '8px 16px', alignItems: 'center',
+        },
+    });
+    function resetResult() {
+        st.reqSeq++;   // ревью M1 — ответ, который ещё в пути, уже не наш
+        st.result = null;
+        downloadBtn.disabled = true;
+        paintPreviewEmpty();
+    }
+    function paintChoices() {
+        clear(choiceRow);
+        if (Array.isArray(rep.views) && rep.views.length > 1) {
+            choiceRow.appendChild(label('Вид'));
+            choiceRow.appendChild(h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
+                ...rep.views.map(v => pill(st.kind === v.kind, v.label, () => {
+                    if (st.generating || st.kind === v.kind) return;
+                    st.kind = v.kind; paintChoices(); resetResult();
+                }))));
+        }
+        for (const o of optionsFor(rep, st.kind)) {
+            choiceRow.appendChild(label(o.label));
+            choiceRow.appendChild(h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
+                ...o.choices.map(([value, text]) => pill(st.opts[o.arg] === value, text, () => {
+                    if (st.generating || st.opts[o.arg] === value) return;
+                    st.opts[o.arg] = value; paintChoices(); resetResult();
+                }))));
+        }
+    }
+    if ((Array.isArray(rep.views) && rep.views.length > 1) || (rep.options && rep.options.length)) {
+        paintChoices();
+        overlay.appendChild(choiceRow);
+    }
 
     // ---- preview ("mirror") ----
     const previewEl = h('div', { style: { flex: '1 1 auto', overflow: 'auto', padding: '16px 22px' } });

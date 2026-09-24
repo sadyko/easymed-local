@@ -9,7 +9,7 @@ import { departmentList, departmentCard, departmentForm, departmentHeadSet, depa
 import { stockMovementsList } from './stock-log.js';   // STOCK_LOG_V1
 import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCreate, stockRequestsMine } from './stock-requests.js';   // STOCK_REQUEST_V1
 import { expiryLots } from './expiry.js';   // EXPIRY_BALANCE_V1 — остатки партиями, ближайший срок первым
-import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
+import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions, doctorInpatientShare, doctorReferralReward } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit,
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
@@ -33,6 +33,7 @@ import {
   admissionMealMark, admissionMealsList, kitchenSheet,
 } from './diet.js';   // DIET_TABLES_V1
 import { ensureVisit } from './visits.js';
+import { visitSetDoctorReferrer } from './referral-autofill.js';   // REPORTS_V2 — направивший врач на визите по рекомендации
 import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';   // CALENDAR_BOOKING_V1
 import { issueQueueNumbers, queueBoard } from './queue.js';
 import { createDeposit, acceptDeposit, cancelDeposit, refundDeposit, listDeposits, depositBalance } from './deposits.js';   // DEPOSIT_V1
@@ -58,6 +59,7 @@ import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRe
          telephonyForgetBinotel } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1 / TELEPHONY_PROVIDERS_V1
 import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss } from './lis.js';   // LIS_INGEST_V1
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
+import { crmLeadsByPhone, crmSearch } from './crm-leads.js';   // CRM_DEDUP_SEARCH_TASKS_V1
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
 import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
 import { custdevList, custdevSync, custdevRate, custdevMark, custdevReport } from './custdev.js';   // CUSTDEV_V1
@@ -161,6 +163,9 @@ export const RPC = {
   reports_overview:         (db, args, user) => reportsOverview(db, args, user),
   run_report:               (db, args, user) => runReport(db, args, user),
   doctor_tier_positions:    (db, args, user) => doctorTierPositions(db, args, user),   // DOCTOR_TIER_V1 — позиции строк для кабинета врача
+  doctor_inpatient_share:   (db, args, user) => doctorInpatientShare(db, args, user),  // INPATIENT_SHARE_V1 — стационарная доля для кабинета врача
+  doctor_referral_reward:   (db, args, user) => doctorReferralReward(db, args, user),  // REPORTS_V2 — вознаграждение за направления для кабинета врача (то же, что отчёт «Рефералы»)
+  visit_set_doctor_referrer: (db, args, user) => visitSetDoctorReferrer(db, args, user),  // REPORTS_V2 ревью I3/I5 — свой источник врача, если направившего нет
   owner_report:             (db, args, user) => ownerReport(db, args, user),   // REPORTS_HUB_RU_V1 — «Отчёт владельца» charts
   // BUILDING_REPORTS_V1 — перечень ЗДАНИЙ клиники для выборки в «Отчётах».
   // Через /api/db его собрать нельзя: реестр не отдаёт браузеру branches.letter,
@@ -521,6 +526,13 @@ export const RPC = {
   // обычное 402-ограничение, ничего always-allowed.
   crm_config_get:           (db, args, user) => crmConfigGet(db, args, user),
   crm_config_save:          (db, args, user) => crmConfigSave(db, args, user),
+  // CRM_DEDUP_SEARCH_TASKS_V1 — «у этого номера уже есть карточка?» перед
+  // созданием новой заявки. Номер сравнивается по одному ключу (последние девять
+  // цифр) на сервере; чистое чтение (READ_ONLY_RPCS в control/gate.js).
+  crm_leads_by_phone:       (db, args, user) => crmLeadsByPhone(db, args, user),
+  // CRM_DEDUP_SEARCH_TASKS_V1 — поиск доски по ВСЕМ заявкам (доска грузит 800):
+  // номер по цифрам, имя без пробелов, имя привязанного пациента. Чтение.
+  crm_search:               (db, args, user) => crmSearch(db, args, user),
 
   // LICENCE_CORE_V1 — the three that stay reachable while locked (see
   // control/gate.js ALWAYS_ALLOWED_RPCS). Without them a clinic that wants to

@@ -933,6 +933,15 @@ async function attachRecommendation(state, rec, chosenDoctorId, onReload) {
         total:      price,
     });
     if (insErr) { toast('Could not attach: ' + insErr.message, 'fail'); return; }
+    // REPORTS_V2, ревью I3/I5 — рекомендация врача пришла в визит: его
+    // внутренний источник становится направившим, если направившего нет ни у
+    // визита, ни у пациента (внешний партнёр сохраняет своё). Правило — на
+    // сервере (visit_set_doctor_referrer); отказ не мешает добавлению услуги.
+    if (rec.recommended_by) {
+        const { error: refErr } = await supabase.rpc('visit_set_doctor_referrer', {
+            visit_id: state.visit.id, doctor_id: rec.recommended_by, source_visit_id: rec.source_visit_id ?? null });
+        if (refErr) console.warn('[recommendation referrer]', refErr.message);
+    }
     await activateVisitIfPending(state);
 
     const { error: upErr } = await supabase.from('recommended_services')

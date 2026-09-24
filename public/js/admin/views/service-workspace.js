@@ -4187,13 +4187,22 @@ function referralPatient(ctx) {
     };
 }
 
+// REPORTS_V2 — кто направляет: врач строки, которую открыт кабинет, иначе сам
+// вошедший, если он врач. Мастер ставит его внутренний источник направившим.
+function referringDoctorId(ctx) {
+    const fromLine = ctx && ctx.patient && ctx.patient.__service && ctx.patient.__service.doctorId;
+    if (fromLine) return fromLine;
+    const u = currentUser();
+    return u && u.is_doctor ? u.id : null;
+}
+
 function openReferralWizard(ctx) {
     if (!ctx.patient || !ctx.patient.id) { toast('Нет контекста пациента.', 'fail'); return; }
     import('./visit-wizard.js?v=tier2')
         .then((mod) => mod.openVisitWizard(async (res) => {
             try { await loadPatientEmr(ctx.patient); paintEmr(); } catch (e) {}
             if (res && res.rows && res.rows.length) printRouteSheet(ctx, res);
-        }, referralPatient(ctx), { title: 'Направить на услуги' }))
+        }, referralPatient(ctx), { title: 'Направить на услуги', referrerDoctorId: referringDoctorId(ctx) }))
         .catch((e) => toast(trf('Не удалось открыть мастер услуг: {msg}', { msg: (e && e.message) || e }), 'fail'));
 }
 
@@ -4269,6 +4278,11 @@ async function printRouteSheet(ctx, res) {
 }
 
 async function sendReferral(ctx, target, service, doctor) {
+    // REPORTS_V2, ревью I5 — визита рекомендации здесь ещё нет: направившего
+    // врача ставит на визит добавление рекомендации в визит (visit-modal.js
+    // attachRecommendation, правило — на сервере), и только если у визита
+    // и пациента направившего нет. Текущий визит (приём самого врача) не
+    // помечается: его собственный приём стал бы «направлением».
     // Referrals live in `recommended_services` only — they do NOT get pushed
     // into the visit's notes-history payload. The patient card's Recommended
     // tab and the visit modal's Services tab are the single source of truth.

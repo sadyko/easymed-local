@@ -22,6 +22,30 @@ import { INFLOW_SQL } from '../../../public/js/shared/payment-methods.js';   // 
 // существует дважды — здесь и выгрузкой в reports-export.js, — и две копии
 // правила «какая ставка применяется» означали бы две разные суммы к выплате.
 import { resolveReferralRate, rewardForLine } from '../../../public/js/shared/referral-reward.js';
+// REPORTS_V2 — группа услуги (одна из пяти) подписью раздела каталога: тот же
+// модуль, что раскладывает каталог в мастере записи.
+import { categoryOf, CAT_ORDER } from '../../../public/js/shared/service-categories.js';
+// REPORTS_V2 — отчёты склада: КОМУ и НА КОГО тем же SQL, что журнал движений,
+// а партии и их остатки — тем же расчётом, что экран «Сроки годности».
+import { holderNameSql, movementPatientSql } from './stock-log.js';
+import { lotBalances, EXPIRING_SOON_DAYS } from './expiry.js';
+// REPORTS_V2, ревью I6 — кто видит начисления врача: сам врач или тот, кому
+// открыт раздел «Отчёты» (ключ справочника прав 'reports', прежний раздел
+// 'reports-hub'), и администратор.
+import { grantAllowsOr } from '../grants.js';
+import { hasAnyRole, canViewSection } from '../roles.js';
+
+/**
+ * Начисления врача (кабинет): свои — всегда; чужие — только администратору и
+ * тем, кому открыты «Отчёты» (им и так видны все врачи в «Зарплатах врачей»).
+ * Прежде любой вошедший мог спросить чужие деньги по номеру врача.
+ */
+function assertCanSeeDoctorPay(db, user, doctorId) {
+  if (user && Number(user.id) === Number(doctorId)) return;
+  if (user && grantAllowsOr(db, user, 'reports', 'view',
+    () => hasAnyRole(user, ['admin']) || canViewSection(db, user, 'reports-hub'))) return;
+  throw new RpcError('Можно смотреть только свои начисления.', 403);
+}
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -329,6 +353,56 @@ export const TIER_RANK_SQL = `
     JOIN services s ON s.id = r.service_id AND s.doctor_tier_from > 0
 `;
 
+// INPATIENT_SHARE_V1 — стационарная доля врача (владелец, 23.09): отдельный
+// «Стационар, %» на каждую услугу в карточке сотрудника (users.service_rates,
+// ключ inpatient_pct). Правило:
+//
+//   КОМУ     — исполнителю строки стационара (admission_services.performer_id,
+//              миграция 102); нет исполнителя — назначившему (doctor_id).
+//              Исполнитель без своей стационарной доли получает 0, и доля
+//              при этом НЕ переходит к назначившему: платится тому, кто
+//              сделал, ровно как решил владелец;
+//   ЧТО      — только медицинские услуги: service_id задан, это не расходник
+//              (clinic_item_id) и не койко-дни (service_id NULL и/или
+//              примечание «ACCOMMODATION…», shared/accommodation-line.js);
+//   СКОЛЬКО  — (строка − доля скидки счёта − налог) × inpatient_pct, тем же
+//              ITEM_NET_SQL, что и амбулаторная доля. Фиксированной ставки
+//              у стационара нет. Ключа inpatient_pct нет — доля 0: амбулаторный
+//              процент и service_rate_default НЕ подставляются (стационарная
+//              доля — отдельное решение клиники, а не копия амбулаторной);
+//   КОГДА    — только оплаченные счета (это условие ставят отчёты, как и для
+//              амбулаторной доли);
+//   СТУПЕНИ  — DOCTOR_TIER_V1/V2 к стационару НЕ применяются, и строки
+//              стационара НЕ идут в счёт ступени: пороги владелец задавал по
+//              амбулаторным приёмам (TIER_RANK_SQL читает только visit_services).
+//
+// Одна строка стационара на строку счёта: buildAdmissionInvoice пишет каждой
+// admission_service свою invoice_item; MIN(id) — страховка от дублей, чтобы
+// JOIN не размножил строку счёта.
+const INPATIENT_LINE_PICK_SQL = `(
+    SELECT MIN(x.id) FROM admission_services x
+     WHERE x.invoice_item_id = ii.id
+       AND x.service_id IS NOT NULL
+       -- Ревью M5: строка стационара — ТА ЖЕ услуга, что строка счёта. Иначе
+       -- чужая строка, ошибочно связанная с этой строкой счёта, дала бы долю
+       -- по ставке другой услуги.
+       AND x.service_id = ii.service_id
+       AND x.clinic_item_id IS NULL
+       AND COALESCE(x.notes, '') NOT LIKE 'ACCOMMODATION%'
+       AND COALESCE(x.performer_id, x.doctor_id) IS NOT NULL)`;
+const INPATIENT_DOCTOR_SQL = `COALESCE(ias.performer_id, ias.doctor_id)`;
+// Стационарная доля из карточки: только если ключ задан ЧИСЛОМ.
+const INPATIENT_RATE_SQL = `
+  SELECT u.id AS doctor_id,
+         CAST(json_extract(j.value, '$.service_id') AS INTEGER) AS service_id,
+         MAX(CAST(json_extract(j.value, '$.inpatient_pct') AS REAL)) AS inpatient_pct
+    FROM users u, json_each(u.service_rates) j
+   WHERE u.service_rates IS NOT NULL AND u.service_rates != ''
+     AND json_valid(u.service_rates)
+     AND json_type(j.value, '$.inpatient_pct') IN ('integer', 'real')
+   GROUP BY u.id, CAST(json_extract(j.value, '$.service_id') AS INTEGER)`;
+const INPATIENT_PCT_SQL = `COALESCE(idr.inpatient_pct, 0)`;
+
 // One de-duplicated doctor/rate per invoice item: a single visit_service per
 // item, and the best active rate per (doctor, service) — plain LEFT JOINs on
 // doctor_rates could multiply rows when duplicates exist.
@@ -360,6 +434,14 @@ const ITEM_DOCTOR_JOIN = `
   -- читаем только у строки того же врача, чей процент к строке и применяется.
   LEFT JOIN (${TIER_RANK_SQL}) tr ON tr.visit_service_id = vs.visit_service_id
                                  AND tr.doctor_id = vs.doctor_id
+  -- INPATIENT_SHARE_V1 — вторая дорога к врачу: строка стационара. Берётся
+  -- ТОЛЬКО когда у строки счёта нет амбулаторного врача (vs пуст), поэтому
+  -- амбулаторные строки проходят все выражения ниже бит в бит как раньше.
+  LEFT JOIN admission_services ias ON ias.id = ${INPATIENT_LINE_PICK_SQL}
+                                  AND vs.doctor_id IS NULL
+  LEFT JOIN users idoc ON idoc.id = ${INPATIENT_DOCTOR_SQL}
+  LEFT JOIN (${INPATIENT_RATE_SQL}) idr ON idr.doctor_id = ${INPATIENT_DOCTOR_SQL}
+                                       AND idr.service_id = ii.service_id
 `;
 
 // DOC_RATE_JSON_V1 — процент строки: персональная ставка за услугу (таблица или
@@ -430,7 +512,19 @@ const ITEM_FEE_SQL = `CASE
   ELSE ${ITEM_NET_SQL} * ${ITEM_EFF_PCT_SQL} / 100.0
 END`;
 
-function itemRowsQuery(db, args, ctx) {
+// INPATIENT_SHARE_V1 — доля строки стационара и «одна доля на строку» для
+// отчётов, которые показывают обе дороги сразу. Строка без стационарной связи
+// (ias пуст) идёт по ITEM_FEE_SQL / ITEM_EFF_PCT_SQL как прежде; ITEM_FIX_SQL
+// у строки стационара и так NULL (dr джойнится по амбулаторному врачу).
+const INPATIENT_FEE_SQL = `(${ITEM_NET_SQL} * ${INPATIENT_PCT_SQL} / 100.0)`;
+const LINE_FEE_SQL = `CASE WHEN ias.id IS NOT NULL THEN ${INPATIENT_FEE_SQL} ELSE ${ITEM_FEE_SQL} END`;
+const LINE_PCT_SQL = `CASE WHEN ias.id IS NOT NULL THEN ${INPATIENT_PCT_SQL} ELSE ${ITEM_EFF_PCT_SQL} END`;
+const LINE_DOCTOR_ID_SQL = `COALESCE(vs.doctor_id, ${INPATIENT_DOCTOR_SQL})`;
+
+// extra — дополнительное условие отбора (REPORTS_V2, ревью I7: кабинет врача
+// сужает выборку до своего источника в SQL, а не отбрасывает в JS строки всей
+// клиники).
+function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
   const { from, to } = resolveRange(db, args);
   const bf = branchFilter(args, 'i.branch_id');
   // BUILDING_REPORTS_V1 — здание берётся у СЧЁТА, а не у строки счёта: деньги
@@ -450,12 +544,15 @@ function itemRowsQuery(db, args, ctx) {
            ii.total                           AS amount,
            ${ITEM_DISCOUNT_SQL}               AS discount,
            COALESCE(s.tax_rate, 0)            AS tax_rate,
-           doc.full_name                      AS doctor,
+           -- INPATIENT_SHARE_V1 — у строки стационара врач свой: исполнитель,
+           -- иначе назначивший (idoc); у амбулаторной — прежний doc.
+           COALESCE(doc.full_name, idoc.full_name) AS doctor,
            -- DOCTOR_TIER_V1 — «Ставка врача» показывает то, по чему строка
            -- реально оплачена: выше порога это ступень, а не личный процент.
-           ${ITEM_EFF_PCT_SQL}                AS doctor_pct,
+           ${LINE_PCT_SQL}                    AS doctor_pct,
            ${ITEM_FIX_SQL}                    AS doctor_fix,
-           ${ITEM_FEE_SQL}                    AS doctor_fee,
+           ${LINE_FEE_SQL}                    AS doctor_fee,
+           ias.id                             AS inpatient_line_id,
            b.name                             AS branch,
            reg.full_name                      AS registrar,
            rs.name                            AS referral,
@@ -467,7 +564,28 @@ function itemRowsQuery(db, args, ctx) {
            rs.code                            AS referral_code,
            rc.name                            AS referral_category,
            s.type_id                          AS service_type_id,
-           i.visit_id                         AS visit_id
+           i.visit_id                         AS visit_id,
+           -- REPORTS_V2 — для отчётов «Рефералы», «По услугам» и «По врачам»:
+           -- кто пациент (считаются РАЗНЫЕ пациенты), внутренний ли источник
+           -- (категория с флагом is_internal или источник, связанный с
+           -- сотрудником, мигр. 122), группа услуги (одна из пяти, services.type)
+           -- и стационар ли это (счёт госпитализации).
+           i.patient_id                       AS patient_id,
+           rc.is_internal                     AS referral_internal,
+           rs.doctor_id                       AS referral_doctor_id,
+           ii.service_id                      AS service_id,
+           s.type                             AS service_group,
+           s.is_lab                           AS service_is_lab,
+           i.admission_id                     AS admission_id,
+           ${ITEM_TAX_SQL}                    AS tax,
+           ${ITEM_NET_SQL}                    AS net,
+           ${LINE_DOCTOR_ID_SQL}              AS doctor_id,
+           -- INPATIENT_SHARE_V1, ревью I1: стационарная ставка исполнителя
+           -- (NULL — ставки нет, доля не начисляется).
+           idr.inpatient_pct                  AS inpatient_pct,
+           -- REPORTS_V2, ревью M7 — оплата счёта, разносимая на строки.
+           i.paid_amount                      AS inv_paid,
+           i.total_amount                     AS inv_total
       FROM invoice_items ii
       JOIN invoices i  ON i.id = ii.invoice_id
       JOIN patients pt ON pt.id = i.patient_id
@@ -479,9 +597,9 @@ function itemRowsQuery(db, args, ctx) {
     LEFT JOIN referral_source_categories rc ON rc.id = rs.category_id
       ${ITEM_DOCTOR_JOIN}
      WHERE ${inLocalRange('i.created_at')}
-       AND i.status <> 'void'${bf.clause}${gf.clause}
+       AND i.status <> 'void'${bf.clause}${gf.clause}${extra.clause}
      ORDER BY origin, i.created_at, ii.id
-  `).all(from, to, ...bf.params, ...gf.params);
+  `).all(from, to, ...bf.params, ...gf.params, ...extra.params);
   return rows;
 }
 
@@ -670,7 +788,7 @@ function totalRevenueReport(db, args, ctx) {
   };
 }
 
-// REFERRAL_CATEGORY_RATES_V1 (мигр. 120) — ставка берётся из КАРТОЧКИ источника
+/// REFERRAL_CATEGORY_RATES_V1 (мигр. 120) — ставка берётся из КАРТОЧКИ источника
 // и его категории, а не из правила вознаграждения, названного так же, как они.
 // Прежний способ искал ставку сравнением строк, и опечатка в названии молча
 // означала 0%: ошибки никто не показывал, партнёру просто не платили.
@@ -678,14 +796,109 @@ function totalRevenueReport(db, args, ctx) {
 // Считается ПО ПОЗИЦИЯМ, а не по итогу корзины: у одного источника теперь может
 // быть своя ставка на каждую группу услуг, и умножить общую сумму на один
 // процент больше нельзя.
-function referralsReport(db, args, ctx) {
+//
+// REPORTS_V2 (владелец, 23.09) — «рефералы: внутренние и внешние, по тому, кто
+// направил». Одна выборка строк (referralLines) на три потребителя: сводку по
+// направившим (kind 'referrals'), детализацию по строкам (kind
+// 'referrals_detail') и кабинет врача (doctor_referral_reward). Три копии
+// правила разошлись бы молча — врач видел бы одну сумму, ведомость другую.
+//
+// БАЗА ВОЗНАГРАЖДЕНИЯ (решение REPORTS_V2): сумма СТРОКИ СЧЁТА после доли скидки
+// счёта — то, что клиника действительно взяла за эту услугу, а не цена
+// каталога, — и только у ОПЛАЧЕННОГО счёта (status 'paid'), ровно как доля
+// врача в «Зарплатах врачей». Неоплаченная строка показывается в суммах, но
+// вознаграждения не приносит: платить партнёру с денег, которых клиника не
+// получила, значит платить дважды при отмене счёта. Период — по дате счёта.
+const REFERRER_SCOPES = ['all', 'internal', 'external'];
+const REFERRER_KIND_RU = { internal: 'Внутренний', external: 'Внешний' };
+
+function referrerScope(args) {
+  const v = args && args.referrer;
+  if (v === undefined || v === null || v === '') return 'all';
+  if (!REFERRER_SCOPES.includes(v)) throw new RpcError('referrer must be one of: all, internal, external.', 400);
+  return v;
+}
+
+// Внутренний — категория с флагом «внутренние врачи» (мигр. 122) ЛИБО источник,
+// связанный с сотрудником: у такого источника внешней стороны нет по смыслу.
+function isInternalReferral(r) {
+  return Number(r.referral_internal) === 1 || r.referral_doctor_id != null;
+}
+
+// Ставка словами для детализации: «10 %» или «фикс 30 000».
+function rateText(rate) {
+  if (!rate) return '0 %';
+  return rate.unit === 'fix' ? 'фикс ' + moneyRu(rate.value) : round2(rate.value) + ' %';
+}
+
+// Есть ли в клинике хоть одна ненулевая ставка вознаграждения. Нет — отчёт
+// говорит об этом словами: иначе столбец нулей читается как «никто никого не
+// направлял» или как поломка (на разработческой базе все 37 источников — 0 %).
+function anyReferralRate(db) {
+  const hasPositive = (raw) => {
+    let list = [];
+    try { list = typeof raw === 'string' && raw.trim() ? JSON.parse(raw) : (Array.isArray(raw) ? raw : []); } catch { list = []; }
+    return Array.isArray(list) && list.some((e) => e && Number(e.value) > 0);
+  };
+  for (const s of db.prepare("SELECT own_percent, own_rates FROM referral_sources WHERE reward_mode = 'own'").all()) {
+    if (Number(s.own_percent) > 0 || hasPositive(s.own_rates)) return true;
+  }
+  for (const c of db.prepare('SELECT standard_percent, rates FROM referral_source_categories').all()) {
+    if (Number(c.standard_percent) > 0 || hasPositive(c.rates)) return true;
+  }
+  return false;
+}
+
+const REFERRAL_ZERO_NOTE = 'У всех источников направлений ставка вознаграждения 0 % — поэтому вознаграждение в этом отчёте 0. Ставки вводятся в «Настройки → Направления» (на категории и на источнике) и в карточке врача, вкладка «Вознаграждение за направления».';
+const REFERRAL_BASE_NOTE = 'Вознаграждение считается от суммы строки счёта после скидки и только по оплаченным счетам; неоплаченные строки входят в «Сумму услуг», но вознаграждения не приносят. Период — по дате счёта.';
+
+/**
+ * Строки счетов, пришедшие по направлению, с посчитанным вознаграждением.
+ * @param {{doctorId?: number}} [opts] — только направления этого сотрудника
+ *   (его источник, referral_sources.doctor_id) — для кабинета врача.
+ */
+function referralLines(db, args, ctx, { doctorId = null } = {}) {
+  const scope = referrerScope(args);
   const sources = new Map(db.prepare(
-    'SELECT id, name, category_id, reward_mode, own_percent, own_rates FROM referral_sources').all()
+    'SELECT id, name, category_id, reward_mode, own_percent, own_rates, doctor_id FROM referral_sources').all()
     .map((r) => [r.id, r]));
   const categories = new Map(db.prepare(
     'SELECT id, name, standard_percent, rates FROM referral_source_categories').all()
     .map((r) => [r.id, r]));
+  const out = [];
+  // Кабинет врача — только строки его источника, отбором в SQL.
+  const extra = doctorId != null ? { clause: ' AND rs.doctor_id = ?', params: [Number(doctorId)] } : undefined;
+  for (const r of itemRowsQuery(db, args, ctx, extra)) {
+    if (!r.referral) continue;
+    const internal = isInternalReferral(r);
+    if (scope === 'internal' && !internal) continue;
+    if (scope === 'external' && internal) continue;
+    if (doctorId != null && Number(r.referral_doctor_id) !== Number(doctorId)) continue;
+    const src = r.referral_source_id != null ? sources.get(r.referral_source_id) : null;
+    const cat = src && src.category_id != null ? categories.get(src.category_id) : null;
+    const rate = resolveReferralRate({ source: src, category: cat, serviceTypeId: r.service_type_id });
+    const paid = r.status === 'paid';
+    out.push({
+      ...r,
+      internal,
+      category_name: (cat && cat.name) || r.referral_category || '',
+      mode: src && src.reward_mode === 'own' ? 'Своя' : 'По категории',
+      rate,
+      paid,
+      after_discount: r.amount - r.discount,
+      reward: paid ? rewardForLine(rate, { amount: r.amount, discount: r.discount, qty: r.qty }) : 0,
+    });
+  }
+  return out;
+}
 
+function referralNotes(db, lines) {
+  const notes = [REFERRAL_BASE_NOTE];
+  if (lines.length && !anyReferralRate(db)) notes.push(REFERRAL_ZERO_NOTE);
+  return notes;
+}
+
+function referralsReport(db, args, ctx) {
   // Ключ корзины — ЗДАНИЕ и источник. Один и тот же партнёр может приводить
   // пациентов в оба здания, и складывать их в одну строку значило бы стереть
   // ровно то, что этот отчёт теперь обязан показывать.
@@ -693,43 +906,90 @@ function referralsReport(db, args, ctx) {
   // Источник в ключе — ПО ID, а не по имени: ставка принадлежит карточке, и два
   // однофамильца с разными ставками больше не имеют права сложиться в одну
   // строку. Для позиций, чей источник удалён из базы, ключом остаётся имя.
+  const lines = referralLines(db, args, ctx);
   const buckets = new Map();
-  for (const r of itemRowsQuery(db, args, ctx)) {
-    if (!r.referral) continue;
-    const src = r.referral_source_id != null ? sources.get(r.referral_source_id) : null;
-    const cat = src && src.category_id != null ? categories.get(src.category_id) : null;
+  for (const r of lines) {
     const who = r.referral_source_id != null ? 'id:' + r.referral_source_id : 'nm:' + r.referral;
     const key = ctx.keyOf(r.origin) + '\u0000' + who;
     const b = buckets.get(key) || {
       origin: r.origin, source: r.referral, code: r.referral_code || '',
-      category: (cat && cat.name) || r.referral_category || '',
-      mode: src && src.reward_mode === 'own' ? 'Своя' : 'По категории',
-      count: 0, amount: 0, reward: 0,
+      kind: r.internal ? 'internal' : 'external',
+      category: r.category_name, mode: r.mode,
+      patients: new Set(), count: 0, amount: 0, paid: 0, reward: 0,
     };
+    b.patients.add(r.patient_id);
     b.count += 1;
-    b.amount += r.amount - r.discount;
-    b.reward += rewardForLine(
-      resolveReferralRate({ source: src, category: cat, serviceTypeId: r.service_type_id }),
-      { amount: r.amount, discount: r.discount, qty: r.qty });
+    b.amount += r.after_discount;
+    if (r.paid) b.paid += r.after_discount;
+    b.reward += r.reward;
     buckets.set(key, b);
   }
   const list = [...buckets.values()].sort((a, b) => b.amount - a.amount);
   const rows = list.map((b) => {
-    // «Эфф. %» вместо прежнего «% вознаграждения»: одного процента у корзины
-    // больше нет — в ней могут смешаться шесть разных ставок и фиксированные
-    // суммы за услугу. Доля от суммы услуг верна всегда и остаётся тем числом,
-    // которое в этом отчёте ищут глазами.
-    const eff = b.amount ? b.reward / b.amount * 100 : 0;
-    return [ctx.label(b.origin), b.code, b.source, b.category, b.mode, b.count, round2(b.amount),
-            round2(eff), round2(b.reward)];
+    // «Эфф. %» — доля вознаграждения от ОПЛАЧЕННОЙ суммы: одного процента у
+    // корзины нет (в ней смешиваются ставки групп и фиксированные суммы), а
+    // вознаграждение начисляется только с оплаченного.
+    const eff = b.paid ? b.reward / b.paid * 100 : 0;
+    return [ctx.label(b.origin), b.code, b.source, REFERRER_KIND_RU[b.kind], b.category, b.mode,
+            b.patients.size, b.count, round2(b.amount), round2(b.paid), round2(eff), round2(b.reward)];
   });
   return {
-    columns: [BUILDING_COL, 'Номер', 'Источник', 'Категория', 'Режим ставок', 'Услуг', 'Сумма услуг',
-              'Эфф. %', 'Вознаграждение'],
+    columns: [BUILDING_COL, 'Номер', 'Источник', 'Вид', 'Категория', 'Режим ставок', 'Пациентов', 'Услуг',
+              'Сумма услуг', 'Оплачено', 'Эфф. %', 'Вознаграждение'],
     rows,
-    by_building: summariseByBuilding(ctx, list, { total: (b) => b.amount }),
+    by_building: summariseByBuilding(ctx, list, { total: (b) => b.amount, reward: (b) => b.reward }),
     total_label: 'Сумма услуг',
-    notes: [],
+    notes: referralNotes(db, lines),
+  };
+}
+
+// REPORTS_V2 — детализация «Рефералов»: строка на каждую услугу счёта, пришедшую
+// по направлению. Отдельный kind, а не раскрытие строки: конструктор отчётов
+// показывает плоскую таблицу и выгружает её в Excel как есть, и детализация
+// должна выгружаться так же.
+function referralsDetailReport(db, args, ctx) {
+  const lines = referralLines(db, args, ctx);
+  return {
+    columns: [BUILDING_COL, 'Дата', '№ счёта', 'Статус', 'Номер', 'Источник', 'Вид', 'Пациент', 'МРН',
+              'Услуга', 'Кол-во', 'Сумма после скидки', 'Ставка', 'Вознаграждение'],
+    rows: lines.map((r) => [ctx.label(r.origin), r.date, r.invoice || '', INV_STATUS_RU[r.status] || r.status,
+      r.referral_code || '', r.referral, REFERRER_KIND_RU[r.internal ? 'internal' : 'external'],
+      r.patient, r.mrn || '', r.service || '', r.qty, round2(r.after_discount), rateText(r.rate), round2(r.reward)]),
+    by_building: summariseByBuilding(ctx, lines, { total: (r) => r.after_discount, reward: (r) => r.reward }),
+    total_label: 'Сумма после скидки',
+    notes: referralNotes(db, lines),
+  };
+}
+
+// REPORTS_V2 — вознаграждение врача за направления для кабинета: ТЕ ЖЕ строки,
+// что в отчёте (referralLines), отобранные по источнику этого врача. Раньше
+// кабинет считал сам — от ЦЕНЫ КАТАЛОГА рекомендаций, включая ещё не дошедших
+// и отменённых, — и его сумма не сходилась с отчётом ни на одних данных.
+export function doctorReferralReward(db, args, user) {
+  const doctorId = Number(args && args.doctor_id);
+  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
+  assertCanSeeDoctorPay(db, user, doctorId);   // ревью I6
+  const { from, to } = resolveRange(db, args);
+  const ctx = buildingContext(db);
+  const lines = referralLines(db, { from, to }, ctx, { doctorId });
+  // Разделы кабинета («Вид услуги» / категория) — названиями справочников, как
+  // кабинет называет их у рекомендаций: суммы раскладываются по тем же словам.
+  const typeName = new Map(db.prepare('SELECT id, name FROM service_types').all().map((t) => [t.id, t.name]));
+  const catName = new Map(db.prepare(`SELECT s.id, c.name FROM services s
+                                        JOIN service_categories c ON c.id = s.category_id`).all().map((c) => [c.id, c.name]));
+  const rows = lines.map((r) => ({
+    date: r.date, invoice: r.invoice, status: r.status, paid: r.paid,
+    patient: r.patient, mrn: r.mrn || '', service: r.service || '',
+    service_type_id: r.service_type_id ?? null,
+    service_type: typeName.get(r.service_type_id) || '',
+    service_category: catName.get(r.service_id) || '',
+    qty: r.qty, amount: round2(r.after_discount), rate: rateText(r.rate), reward: round2(r.reward),
+  }));
+  return {
+    from, to, rows,
+    count: rows.length,
+    paid_amount: round2(lines.reduce((n, r) => n + (r.paid ? r.after_discount : 0), 0)),
+    reward: round2(lines.reduce((n, r) => n + r.reward, 0)),
   };
 }
 
@@ -781,6 +1041,24 @@ function invoicesFullReport(db, args, ctx) {
   };
 }
 
+// REPORTS_V2 — «Закупки и склад», четыре вида (владелец выбрал все четыре):
+// приход по поставщикам ('procurement'), расход по получателям и пациентам
+// ('stock_consumption'), ведомость остатков ('stock_statement') и просроченное
+// / истекающее ('stock_expiry'). Склад между зданиями не ездит — все четыре
+// считают только своё здание (STOCK_LOCAL_NOTE).
+// Ревью M8 — единица товара. base_unit — колонка NOT NULL со значением по
+// умолчанию 'pcs' (мигр. 010): у товара, заведённого только с unit, в ней
+// стоит это умолчание, а не его единица. Поэтому 'pcs' (или пусто) при
+// заполненном unit читается как «base_unit не задавали», и показывается unit;
+// в остальных случаях — base_unit, как на экранах склада.
+const STOCK_UNIT_SQL = `CASE WHEN COALESCE(pr.base_unit, '') IN ('', 'pcs') AND COALESCE(pr.unit, '') <> ''
+                             THEN pr.unit ELSE COALESCE(pr.base_unit, '') END`;
+
+// (а) ПРИХОД ПО ПОСТАВЩИКАМ. Поставщик — stock_movements.supplier_id (приход
+// через «Принять товар»), у прихода по заказу — поставщик заказа
+// (reference_type 'purchase_order', reference_id = заказ). Прежде в колонке
+// «Поставщик / примечание» стояло свободное примечание движения, и поставщика
+// там не было почти никогда.
 function procurementReport(db, args, ctx) {
   const { from, to } = resolveRange(db, args);
   const bf = branchFilter(args, 'sm.branch_id');
@@ -791,22 +1069,267 @@ function procurementReport(db, args, ctx) {
   const rows = db.prepare(`
     SELECT ${originExpr(db, 'stock_movements', 'sm')} AS origin,
            ${localDate('sm.created_at')} AS date, pr.name AS product, sm.note AS note,
-           sm.qty AS qty, sm.unit_cost AS unit_cost
+           sm.qty AS qty, sm.unit_cost AS unit_cost, ${STOCK_UNIT_SQL} AS unit,
+           sm.batch_no AS batch_no, sm.expiry_date AS expiry_date,
+           sup.name AS supplier
       FROM stock_movements sm
       JOIN products pr ON pr.id = sm.product_id
+      LEFT JOIN purchase_orders po ON sm.reference_type = 'purchase_order' AND po.id = sm.reference_id
+      LEFT JOIN suppliers sup ON sup.id = COALESCE(sm.supplier_id, po.supplier_id)
      WHERE sm.kind = 'receive'
        AND ${inLocalRange('sm.created_at')}${bf.clause}${gf.clause}
-     ORDER BY sm.created_at DESC
+     ORDER BY sup.name IS NULL, sup.name, sm.created_at DESC, sm.id DESC
   `).all(from, to, ...bf.params, ...gf.params);
+  const NO_SUPPLIER = 'Поставщик не указан';
+  const perSupplier = new Map();
+  for (const r of rows) {
+    const k = r.supplier || NO_SUPPLIER;
+    const t = perSupplier.get(k) || { lines: 0, sum: 0 };
+    t.lines += 1; t.sum += r.qty * (r.unit_cost || 0);
+    perSupplier.set(k, t);
+  }
+  // Итоги по поставщикам — примечаниями над таблицей, по убыванию суммы:
+  // строка-подытог внутри таблицы попала бы и в общее «Итого» под ней.
+  const totals = [...perSupplier.entries()].sort((a, b) => b[1].sum - a[1].sum)
+    .map(([name, t]) => 'Итого — ' + name + ': ' + t.lines + ' '
+      + pluralRu(t.lines, 'позиция', 'позиции', 'позиций') + ', ' + moneyRu(t.sum) + ' сум.');
   return {
-    columns: [BUILDING_COL, 'Дата', 'Товар', 'Поставщик / примечание', 'Количество', 'Цена за ед.', 'Сумма'],
-    rows: rows.map((r) => [ctx.label(r.origin), r.date, r.product, r.note || '', r.qty,
-      r.unit_cost == null ? null : round2(r.unit_cost),
-      round2(r.qty * (r.unit_cost || 0))]),
+    columns: [BUILDING_COL, 'Дата', 'Поставщик', 'Товар', 'Партия', 'Срок годности', 'Количество', 'Ед.',
+              'Цена за ед.', 'Сумма', 'Примечание'],
+    rows: rows.map((r) => [ctx.label(r.origin), r.date, r.supplier || NO_SUPPLIER, r.product, r.batch_no || '',
+      r.expiry_date || '', r.qty, r.unit || '', r.unit_cost == null ? null : round2(r.unit_cost),
+      round2(r.qty * (r.unit_cost || 0)), r.note || '']),
     by_building: summariseByBuilding(ctx, rows, { total: (r) => r.qty * (r.unit_cost || 0) }),
     total_label: 'Сумма закупок',
-    notes: [STOCK_LOCAL_NOTE],
+    notes: [STOCK_LOCAL_NOTE, ...totals],
   };
+}
+
+// (б) РАСХОД ПО ОТДЕЛАМ, СОТРУДНИКАМ И ПАЦИЕНТАМ — по себестоимости.
+// Журнал STOCK_FLOW_V1: выдача со склада получателю — kind 'dispense' с
+// reference_type 'issue'/'requisition' и держателем holder_type/holder_id;
+// расход на пациента — 'dispense' с reference_type 'visit'/'admission'
+// (держатель — откуда взяли: подотчёт, кабинет, отдел; пусто — склад);
+// отмена расхода — 'void' с тем же основанием, количество с плюсом.
+// Себестоимость — цена движения, у движения без цены — средняя цена товара.
+const ISSUE_REFS = ['issue', 'requisition'];
+const PATIENT_REFS = ['visit', 'admission'];
+const HOLDER_TYPE_RU = { staff: 'Сотрудник', room: 'Кабинет', department: 'Отдел' };
+const CONSUMPTION_KIND_RU = { issue: 'Выдача', patient: 'Расход на пациента', void: 'Отмена расхода' };
+const CONSUMPTION_BY = ['lines', 'holder', 'patient'];
+const CONSUMPTION_NOTE = 'Себестоимость — цена движения, а у движения без цены — средняя цена товара. «Выдача» — со склада получателю; «Расход на пациента» — из подотчёта, кабинета, отдела или со склада; отмена расхода вычитается.';
+// Ревью M4 — выданное на руки потом расходуется на пациентов ИЗ РУК: сложить
+// «выдано» и «израсходовано» — значит посчитать один и тот же товар дважды.
+// Поэтому это две колонки с двумя итогами, и общей «суммы расхода» нет.
+const CONSUMPTION_SPLIT_NOTE = '«Выдано на руки» и «Израсходовано на пациентов» — два разных итога, их нельзя складывать: выданное на руки затем расходуется на пациентов из рук, и в сумме оно посчиталось бы дважды. Расход склада за период — «Израсходовано на пациентов» плюс то, что ещё лежит на руках.';
+
+function consumptionMovements(db, args, ctx) {
+  const { from, to } = resolveRange(db, args);
+  const gf = buildingWhere(db, ctx, args, 'stock_movements', 'm');
+  const refs = [...ISSUE_REFS, ...PATIENT_REFS];
+  return db.prepare(`
+    SELECT ${originExpr(db, 'stock_movements', 'm')} AS origin,
+           ${localDate('m.created_at')} AS date, m.kind, m.reference_type, m.qty,
+           COALESCE(m.unit_cost, pr.avg_cost, 0) AS cost,
+           pr.name AS product, ${STOCK_UNIT_SQL} AS unit,
+           m.holder_type, m.holder_id, ${holderNameSql('m')} AS holder_name,
+           ${movementPatientSql('m')} AS patient, ${movementPatientSql('m', 'id')} AS patient_id,
+           COALESCE(u.full_name, u.username) AS actor
+      FROM stock_movements m
+      JOIN products pr ON pr.id = m.product_id
+      LEFT JOIN users u ON u.id = m.created_by
+     WHERE m.kind IN ('dispense', 'void')
+       AND m.reference_type IN (${refs.map(() => '?').join(', ')})
+       AND ${inLocalRange('m.created_at')}${gf.clause}
+     ORDER BY m.created_at, m.id
+  `).all(...refs, from, to, ...gf.params).map((r) => {
+    const kind = r.kind === 'void' ? 'void' : ISSUE_REFS.includes(r.reference_type) ? 'issue' : 'patient';
+    const qty = -Number(r.qty || 0);   // расход с плюсом, отмена — с минусом
+    const holder = r.holder_type ? (HOLDER_TYPE_RU[r.holder_type] || r.holder_type) + ': ' + (r.holder_name || '#' + r.holder_id) : 'Склад';
+    return { ...r, kind, qty, sum: qty * Number(r.cost || 0), holder };
+  });
+}
+
+function consumptionBy(args) {
+  const v = args && args.by;
+  if (v === undefined || v === null || v === '') return 'lines';
+  if (!CONSUMPTION_BY.includes(v)) throw new RpcError('by must be one of: ' + CONSUMPTION_BY.join(', ') + '.', 400);
+  return v;
+}
+
+function stockConsumptionReport(db, args, ctx) {
+  const by = consumptionBy(args);
+  const mv = consumptionMovements(db, args, ctx);
+  const notes = [STOCK_LOCAL_NOTE, CONSUMPTION_NOTE, CONSUMPTION_SPLIT_NOTE];
+  if (by === 'holder') {
+    // По получателю: сколько ему выдали со склада и сколько из его рук (или со
+    // склада, если держателя нет) ушло на пациентов.
+    const buckets = new Map();
+    for (const r of mv) {
+      const key = ctx.keyOf(r.origin) + '\u0000' + r.holder;
+      const b = buckets.get(key) || { origin: r.origin, holder: r.holder, issued: 0, used: 0, lines: 0 };
+      if (r.kind === 'issue') b.issued += r.sum; else b.used += r.sum;
+      b.lines += 1;
+      buckets.set(key, b);
+    }
+    const list = [...buckets.values()].sort((a, b) => (b.issued + b.used) - (a.issued + a.used));
+    return {
+      columns: [BUILDING_COL, 'Получатель / откуда', 'Движений', 'Выдано на руки (себестоимость)', 'Израсходовано на пациентов (себестоимость)'],
+      rows: list.map((b) => [ctx.label(b.origin), b.holder, b.lines, round2(b.issued), round2(b.used)]),
+      // Итог здания — израсходованное на пациентов; выданное на руки — не
+      // расход, а перемещение (M4).
+      by_building: summariseByBuilding(ctx, list, { total: (b) => b.used }),
+      total_label: 'Израсходовано на пациентов',
+      notes,
+    };
+  }
+  if (by === 'patient') {
+    const buckets = new Map();
+    for (const r of mv) {
+      if (r.kind === 'issue') continue;
+      const key = ctx.keyOf(r.origin) + '\u0000' + (r.patient_id == null ? '' : r.patient_id);
+      const b = buckets.get(key) || { origin: r.origin, patient: r.patient || 'Пациент не определён', lines: 0, sum: 0 };
+      b.lines += 1; b.sum += r.sum;
+      buckets.set(key, b);
+    }
+    const list = [...buckets.values()].sort((a, b) => b.sum - a.sum);
+    return {
+      columns: [BUILDING_COL, 'Пациент', 'Движений', 'Израсходовано на пациентов (себестоимость)'],
+      rows: list.map((b) => [ctx.label(b.origin), b.patient, b.lines, round2(b.sum)]),
+      by_building: summariseByBuilding(ctx, list, { total: (b) => b.sum }),
+      total_label: 'Себестоимость',
+      notes: [...notes, 'Строка визита, удалённая вместе с отменой расхода, пациента уже не называет: такие движения собраны под «Пациент не определён» и в сумме гасят друг друга.'],
+    };
+  }
+  return {
+    columns: [BUILDING_COL, 'Дата', 'Вид', 'Товар', 'Кол-во', 'Ед.', 'Себестоимость ед.',
+              'Выдано на руки (себестоимость)', 'Израсходовано на пациентов (себестоимость)',
+              'Получатель / откуда', 'Пациент', 'Кто провёл'],
+    rows: mv.map((r) => [ctx.label(r.origin), r.date, CONSUMPTION_KIND_RU[r.kind], r.product, round2(r.qty), r.unit || '',
+      round2(r.cost), r.kind === 'issue' ? round2(r.sum) : null, r.kind === 'issue' ? null : round2(r.sum),
+      r.holder, r.patient || '', r.actor || '']),
+    by_building: summariseByBuilding(ctx, mv, { total: (r) => (r.kind === 'issue' ? 0 : r.sum) }),
+    total_label: 'Израсходовано на пациентов',
+    notes,
+  };
+}
+
+// (в) ВЕДОМОСТЬ ОСТАТКОВ СКЛАДА за период, по товару:
+//   начало + приход − выдано − списано на пациентов ± корректировки = конец,
+// количеством и деньгами. Остаток склада (products.on_hand) двигают ровно эти
+// движения журнала: всё, у чего нет держателя (приход, корректировка,
+// инвентаризация, списание и отмена со склада), плюс выдача со склада
+// получателю (issue / requisition — держатель это КОМУ, а не откуда). Расход
+// из подотчёта, кабинета и отдела остаток склада НЕ трогает (HOLDINGS_V1) и
+// сюда не входит.
+//
+// ДЕНЬГИ — ПО СРЕДНЕЙ ЦЕНЕ ТОВАРА НА СЕГОДНЯ (products.avg_cost) для всех
+// колонок сразу: только так «начало + приход − расход = конец» держится и в
+// деньгах. Фактическая цена прихода — в виде «Приход по поставщикам».
+//
+// СВЕРКА: период, который кончается сегодня (или позже), обязан кончаться
+// остатком из карточки товара. Не сошлось — значит остаток правили мимо
+// журнала, и ведомость это называет, а не прячет.
+const WAREHOUSE_LEDGER_SQL = `(m.holder_type IS NULL OR m.reference_type IN ('issue', 'requisition'))`;
+const STATEMENT_NOTE = 'Деньги — по средней себестоимости товара на сегодня (одна цена на все колонки, чтобы начало + приход − расход = конец сходилось и в сумах). Фактические цены прихода — в виде «Приход по поставщикам». Расход из подотчёта, кабинетов и отделов остаток склада не меняет — он уже ушёл со склада выдачей.';
+
+function stockStatementReport(db, args, ctx) {
+  const { from, to } = resolveRange(db, args);
+  const gf = buildingWhere(db, ctx, args, 'stock_movements', 'm');
+  if (gf.clause.includes('1 = 0')) {
+    return { columns: statementColumns(false), rows: [], by_building: summariseByBuilding(ctx, [], {}), total_label: 'Конец: сумма', notes: [STOCK_LOCAL_NOTE] };
+  }
+  const day = `${localDate('m.created_at')}`;
+  const rows = db.prepare(`
+    SELECT pr.id, pr.name, COALESCE(pr.code, '') AS code, ${STOCK_UNIT_SQL} AS unit,
+           COALESCE(pr.avg_cost, 0) AS avg_cost, COALESCE(pr.on_hand, 0) AS on_hand,
+           COALESCE(SUM(CASE WHEN ${day} < date(?) THEN m.qty END), 0) AS opening,
+           COALESCE(SUM(CASE WHEN ${day} BETWEEN date(?) AND date(?) AND m.kind = 'receive' THEN m.qty END), 0) AS received,
+           COALESCE(SUM(CASE WHEN ${day} BETWEEN date(?) AND date(?) AND m.kind = 'dispense'
+                              AND m.reference_type IN ('issue', 'requisition') THEN -m.qty END), 0) AS issued,
+           COALESCE(SUM(CASE WHEN ${day} BETWEEN date(?) AND date(?) AND m.kind IN ('dispense', 'void')
+                              AND COALESCE(m.reference_type, '') NOT IN ('issue', 'requisition') THEN -m.qty END), 0) AS used,
+           COALESCE(SUM(CASE WHEN ${day} BETWEEN date(?) AND date(?)
+                              AND m.kind NOT IN ('receive', 'dispense', 'void') THEN m.qty END), 0) AS adjusted,
+           COUNT(m.id) AS movements
+      FROM products pr
+      LEFT JOIN stock_movements m ON m.product_id = pr.id AND ${WAREHOUSE_LEDGER_SQL}
+                                 AND ${day} <= date(?)
+     GROUP BY pr.id
+     HAVING movements > 0 OR pr.on_hand <> 0
+     ORDER BY pr.name, pr.id
+  `).all(from, from, to, from, to, from, to, from, to, to);
+  const checkNow = String(to).slice(0, 10) >= today(db);
+  const list = rows.map((r) => {
+    const closing = round2(r.opening + r.received - r.issued - r.used + r.adjusted);
+    return { ...r, closing, diff: round2(closing - r.on_hand) };
+  }).filter((r) => r.opening || r.received || r.issued || r.used || r.adjusted || r.closing || (checkNow && r.on_hand));
+  const notes = [STOCK_LOCAL_NOTE, STATEMENT_NOTE];
+  if (checkNow) {
+    const bad = list.filter((r) => Math.abs(r.diff) > 1e-6);
+    notes.push(bad.length
+      ? 'Сверка с карточкой товара: у ' + bad.length + ' ' + pluralRu(bad.length, 'товара', 'товаров', 'товаров')
+        + ' конечный остаток не совпадает с остатком в карточке — остаток меняли мимо журнала движений (колонка «Расхождение»).'
+      : 'Сверка с карточкой товара: конечный остаток совпадает с остатком в карточке у всех товаров.');
+  }
+  const money = (q, r) => round2(q * r.avg_cost);
+  return {
+    columns: statementColumns(checkNow),
+    rows: list.map((r) => {
+      const row = [ctx.label(''), r.name, r.code, r.unit || '',
+        round2(r.opening), round2(r.received), round2(r.issued), round2(r.used), round2(r.adjusted), r.closing,
+        round2(r.avg_cost),
+        money(r.opening, r), money(r.received, r), money(r.issued, r), money(r.used, r), money(r.adjusted, r), money(r.closing, r)];
+      if (checkNow) row.push(round2(r.on_hand), r.diff);
+      return row;
+    }),
+    by_building: summariseByBuilding(ctx, list.map((r) => ({ origin: '', value: r.closing * r.avg_cost })), { total: (r) => r.value }),
+    total_label: 'Конец: сумма',
+    notes,
+  };
+}
+function statementColumns(checkNow) {
+  const cols = [BUILDING_COL, 'Товар', 'Код', 'Ед.',
+    'Начало: кол-во', 'Приход: кол-во', 'Выдано: кол-во', 'Списано на пациентов: кол-во', 'Корректировки: кол-во', 'Конец: кол-во',
+    'Средняя себестоимость',
+    'Начало: сумма', 'Приход: сумма', 'Выдано: сумма', 'Списано на пациентов: сумма', 'Корректировки: сумма', 'Конец: сумма'];
+  if (checkNow) cols.push('В карточке товара', 'Расхождение');
+  return cols;
+}
+
+// (г) ПРОСРОЧЕННОЕ И ИСТЕКАЮЩЕЕ — с ценой. Партии и их остатки считает тот же
+// расклад, что экран «Сроки годности» (EXPIRY_BALANCE_V1, rpc/expiry.js
+// lotBalances: остаток склада раскладывается по приходам, самый поздний
+// приход первым). Это РАСЧЁТ, а не измерение: расход партию не пишет, — и
+// отчёт говорит это теми же словами, что экран. Снимок на сегодня: период
+// отчёта здесь не участвует.
+const EXPIRY_STATE_RU = { expired: 'Просрочено', soon: 'Истекает' };
+const EXPIRY_NOTE = 'Остаток по партиям — расчёт, а не факт: программа не запоминает, из какой партии товар взяли, и считает, что первым расходуется ближайший срок. Стоимость — по средней себестоимости товара.';
+
+function stockExpiryReport(db, args, ctx) {
+  const gf = buildingWhere(db, ctx, args, 'stock_movements', 'm');
+  const day = today(db);
+  const snapNote = 'Снимок на сегодня (' + day + '): период отчёта здесь не участвует. «Истекает» — срок в ближайшие ' + EXPIRING_SOON_DAYS + ' дней.';
+  if (gf.clause.includes('1 = 0')) {
+    return { columns: expiryColumns(), rows: [], by_building: summariseByBuilding(ctx, [], {}), total_label: 'Стоимость', notes: [STOCK_LOCAL_NOTE, EXPIRY_NOTE, snapNote] };
+  }
+  const cost = new Map(db.prepare('SELECT id, COALESCE(avg_cost, 0) AS avg_cost FROM products').all().map((p) => [p.id, p.avg_cost]));
+  const lots = lotBalances(db, { todayStr: day })
+    .filter((l) => (l.state === 'expired' || l.state === 'soon') && l.remaining > 1e-9)
+    .sort((a, b) => (a.state === b.state ? (a.expiry_date < b.expiry_date ? -1 : a.expiry_date > b.expiry_date ? 1 : 0) : (a.state === 'expired' ? -1 : 1)));
+  const list = lots.map((l) => ({ ...l, origin: '', cost: cost.get(l.product_id) || 0, value: l.remaining * (cost.get(l.product_id) || 0) }));
+  return {
+    columns: expiryColumns(),
+    rows: list.map((l) => [ctx.label(''), EXPIRY_STATE_RU[l.state], l.product_name, l.product_code || '', l.batch_no || '',
+      l.expiry_date, l.days_left, round2(l.remaining), l.unit || '', round2(l.cost), round2(l.value), l.supplier_name || '']),
+    by_building: summariseByBuilding(ctx, list, { total: (l) => l.value }),
+    total_label: 'Стоимость',
+    notes: [STOCK_LOCAL_NOTE, EXPIRY_NOTE, snapNote],
+  };
+}
+function expiryColumns() {
+  return [BUILDING_COL, 'Состояние', 'Товар', 'Код', 'Партия', 'Срок годности', 'Дней до срока',
+          'Остаток (расчёт)', 'Ед.', 'Средняя себестоимость', 'Стоимость', 'Поставщик'];
 }
 
 const SURGERY_RE = /хирург|операц|surg|operat/i;
@@ -876,42 +1399,411 @@ function doctorSalariesReport(db, args, ctx) {
   // отчёта. Теперь они остаются — одной строкой на здание с подписью
   // «<здание>, врач не указан».
   const foreignKeep = hasColumn(db, 'invoices', 'sync_origin') ? ' OR i.sync_origin IS NOT NULL' : '';
+  // INPATIENT_SHARE_V1 — строки стационара идут СВОИМИ колонками. Амбулаторные
+  // колонки считают только амбулаторные строки (ias пуст) — ровно то, что они
+  // считали до стационарной доли, поэтому их числа не сдвинулись ни на сум.
+  // «Итого к выплате» = амбулаторная доля + стационарная.
+  const OUT = 'ias.id IS NULL';
   const rows = db.prepare(`
     SELECT ${originExpr(db, 'invoices', 'i')} AS origin,
-           doc.full_name AS doctor,
-           COUNT(ii.id)  AS services_count,
-           SUM(ii.total - ${ITEM_DISCOUNT_SQL}) AS after_discount,
+           COALESCE(doc.full_name, idoc.full_name) AS doctor,
+           SUM(CASE WHEN ${OUT} THEN 1 ELSE 0 END) AS services_count,
+           COALESCE(SUM(CASE WHEN ${OUT} THEN ii.total - ${ITEM_DISCOUNT_SQL} END), 0) AS after_discount,
            -- DOCTOR_FIX_RATE_V1 — averaged over the PERCENTAGE lines only; a
            -- fixed-rate line has no percentage, and folding it in as 0 would
            -- drag the average down and misreport the doctor's terms.
            -- DOCTOR_TIER_V1 — усредняется ДЕЙСТВУЮЩИЙ процент: иначе средний %
            -- в отчёте не сходился бы с гонораром, посчитанным со ступенью.
-           AVG(CASE WHEN ${ITEM_FIX_SQL} IS NULL THEN ${ITEM_EFF_PCT_SQL} END) AS avg_pct,
-           SUM(CASE WHEN ${ITEM_FIX_SQL} IS NOT NULL THEN 1 ELSE 0 END)    AS fixed_lines,
-           SUM(${ITEM_FEE_SQL})                 AS fee
+           AVG(CASE WHEN ${OUT} AND ${ITEM_FIX_SQL} IS NULL THEN ${ITEM_EFF_PCT_SQL} END) AS avg_pct,
+           SUM(CASE WHEN ${OUT} AND ${ITEM_FIX_SQL} IS NOT NULL THEN 1 ELSE 0 END) AS fixed_lines,
+           COALESCE(SUM(CASE WHEN ${OUT} THEN ${ITEM_FEE_SQL} END), 0) AS fee,
+           SUM(CASE WHEN ias.id IS NOT NULL THEN 1 ELSE 0 END) AS in_count,
+           COALESCE(SUM(CASE WHEN ias.id IS NOT NULL THEN ii.total - ${ITEM_DISCOUNT_SQL} END), 0) AS in_after_discount,
+           COALESCE(SUM(CASE WHEN ias.id IS NOT NULL THEN ${INPATIENT_FEE_SQL} END), 0) AS in_fee,
+           SUM(CASE WHEN ias.id IS NOT NULL AND idr.inpatient_pct IS NULL THEN 1 ELSE 0 END) AS in_norate
       FROM invoice_items ii
       JOIN invoices i ON i.id = ii.invoice_id
       ${ITEM_DOCTOR_JOIN}
      WHERE i.status = 'paid'
-       AND (vs.doctor_id IS NOT NULL${foreignKeep})
+       AND (vs.doctor_id IS NOT NULL OR ias.id IS NOT NULL${foreignKeep})
        AND ${inLocalRange('i.created_at')}${bf.clause}${gf.clause}
-     GROUP BY origin, vs.doctor_id
-     ORDER BY origin, after_discount DESC
-  `).all(from, to, ...bf.params, ...gf.params);
+     GROUP BY origin, ${LINE_DOCTOR_ID_SQL}
+     ORDER BY origin, after_discount + in_after_discount DESC
+  `).all(from, to, ...bf.params, ...gf.params)
+    // Ревью I1 (владелец: доля остаётся нулём, но об этом сказано): человек,
+    // у которого в периоде только строки стационара БЕЗ его стационарной ставки
+    // (медсестра нажала «Выполнить»), не показывается нулевой строкой — он
+    // назван в примечании вместе с числом таких услуг.
+    .filter((r) => !(r.services_count === 0 && r.in_count > 0 && r.in_norate === r.in_count));
+  const noRate = inpatientNoRateNote(db, { from, to, bf, gf });
   return {
     columns: [BUILDING_COL, 'Врач', 'Оплаченных услуг', 'Сумма после скидки', 'Средний % врача',
-              'Услуг по фикс. ставке', 'Доля врача (гонорар)'],
+              'Услуг по фикс. ставке', 'Доля врача (гонорар)',
+              'Стационар: услуг', 'Стационар: сумма после скидки', 'Стационар: гонорар', 'Итого к выплате'],
     // avg_pct is NULL when every line was fixed-rate — print '—' rather than 0,
     // which would claim the doctor works for nothing.
     rows: rows.map((r) => [ctx.label(r.origin), doctorCell(ctx, r) || '—', r.services_count,
       round2(r.after_discount),
-      r.avg_pct == null ? '—' : round2(r.avg_pct), r.fixed_lines || 0, round2(r.fee)]),
+      r.avg_pct == null ? '—' : round2(r.avg_pct), r.fixed_lines || 0, round2(r.fee),
+      r.in_count || 0, round2(r.in_after_discount), round2(r.in_fee), round2(r.fee + r.in_fee)]),
     by_building: summariseByBuilding(ctx, rows, {
-      total: (r) => r.after_discount || 0,
-      fee: (r) => r.fee || 0,
+      total: (r) => (r.after_discount || 0) + (r.in_after_discount || 0),
+      fee: (r) => (r.fee || 0) + (r.in_fee || 0),
     }),
     total_label: 'Сумма после скидки',
-    notes: hasUnattributed(ctx, rows) ? [UNATTRIBUTED_NOTE] : [],
+    notes: [...(hasUnattributed(ctx, rows) ? [UNATTRIBUTED_NOTE] : []), ...(noRate ? [noRate] : [])],
+  };
+}
+
+// INPATIENT_SHARE_V1 — оплаченные медицинские строки стационара с врачом,
+// ставкой и начисленной долей. ОДИН запрос на отчёт «Стационар: доля врачей»
+// и на кабинет врача (doctorInpatientShare): две выборки одной выплаты
+// разошлись бы молча. Период — по дате СЧЁТА (i.created_at), как у «Зарплат
+// врачей»; оплачен ли — по статусу счёта 'paid', как там же. Строки, у которых
+// есть амбулаторный врач (visit_services), сюда не входят — их доля считается
+// амбулаторной (та же развилка, что в ITEM_DOCTOR_JOIN).
+function inpatientShareRows(db, { from, to, doctorId = null, bf = { clause: '', params: [] }, gf = { clause: '', params: [] } }) {
+  const docClause = doctorId != null ? ` AND ${INPATIENT_DOCTOR_SQL} = ?` : '';
+  return db.prepare(`
+    SELECT ${originExpr(db, 'invoices', 'i')}  AS origin,
+           ${localDate('i.created_at')}       AS date,
+           i.invoice_number                   AS invoice,
+           pt.full_name                       AS patient,
+           COALESCE(NULLIF(a.admission_no, ''), CAST(ias.admission_id AS TEXT)) AS admission_no,
+           COALESCE(s.name, ii.description)   AS service,
+           ii.quantity                        AS qty,
+           ii.total                           AS amount,
+           ${ITEM_DISCOUNT_SQL}               AS discount,
+           ${ITEM_TAX_SQL}                    AS tax,
+           ${ITEM_NET_SQL}                    AS net,
+           ${INPATIENT_DOCTOR_SQL}            AS doctor_id,
+           idoc.full_name                     AS doctor,
+           CASE WHEN ias.performer_id IS NOT NULL THEN 'performer' ELSE 'ordering' END AS doctor_role,
+           idr.inpatient_pct                  AS pct,
+           ${INPATIENT_FEE_SQL}               AS fee
+      FROM invoice_items ii
+      JOIN invoices i  ON i.id = ii.invoice_id
+      JOIN admission_services ias ON ias.id = ${INPATIENT_LINE_PICK_SQL}
+      LEFT JOIN admissions a ON a.id = ias.admission_id
+      LEFT JOIN patients pt  ON pt.id = i.patient_id
+      LEFT JOIN services s   ON s.id = ii.service_id
+      LEFT JOIN users idoc   ON idoc.id = ${INPATIENT_DOCTOR_SQL}
+      LEFT JOIN (${INPATIENT_RATE_SQL}) idr ON idr.doctor_id = ${INPATIENT_DOCTOR_SQL}
+                                           AND idr.service_id = ii.service_id
+      -- Ревью C1: «у строки счёта нет амбулаторного врача» — сгруппированным
+      -- LEFT JOIN, как в ITEM_DOCTOR_JOIN, а не коррелированным NOT EXISTS по
+      -- неиндексированной колонке (полный проход visit_services на каждую
+      -- строку счёта: 51 тысяча строк — 39 с, кабинет врача — при каждом
+      -- открытии). Индекс — миграция 149.
+      LEFT JOIN (SELECT invoice_item_id FROM visit_services
+                  WHERE invoice_item_id IS NOT NULL AND doctor_id IS NOT NULL
+                  GROUP BY invoice_item_id) ovs ON ovs.invoice_item_id = ii.id
+     WHERE i.status = 'paid'
+       AND ovs.invoice_item_id IS NULL
+       AND ${inLocalRange('i.created_at')}${docClause}${bf.clause}${gf.clause}
+     ORDER BY origin, i.created_at, ii.id
+  `).all(from, to, ...(doctorId != null ? [doctorId] : []), ...bf.params, ...gf.params);
+}
+
+const INPATIENT_ROLE_RU = { performer: 'Исполнитель', ordering: 'Назначил' };
+
+// Ревью I1 — оплаченные строки стационара, у исполнителя которых (иначе у
+// назначившего) нет стационарной ставки на эту услугу: доля по ним не
+// начислена НИКОМУ (решение владельца — так и оставить, но сказать). Одна
+// строка примечания на три отчёта: «Стационар: доля врачей», «Зарплаты
+// врачей», «По врачам». Считается тем же запросом, что сама доля.
+function inpatientNoRateNote(db, { from, to, bf, gf }) {
+  const lines = inpatientShareRows(db, { from, to, bf, gf }).filter((r) => r.pct == null);
+  if (!lines.length) return null;
+  const who = new Map();
+  for (const r of lines) who.set(r.doctor || '—', (who.get(r.doctor || '—') || 0) + 1);
+  const list = [...who.entries()].sort((a, b) => b[1] - a[1]).map(([n, c]) => n + ' — ' + c).join(', ');
+  return lines.length + ' ' + pluralRu(lines.length, 'услуга', 'услуги', 'услуг')
+    + ': исполнитель без стационарной ставки — доля не начислена (' + list + ').';
+}
+
+// Ревью I2 (владелец: исполнителя можно менять и после счёта) — отчёт идёт по
+// ТЕКУЩЕМУ исполнителю строки.
+const INPATIENT_CURRENT_PERFORMER_NOTE = 'Доля считается по текущему исполнителю строки: если исполнителя поменять после выставления счёта, доля перейдёт к новому.';
+
+function inpatientShareReport(db, args, ctx) {
+  const { from, to } = resolveRange(db, args);
+  const bf = branchFilter(args, 'i.branch_id');
+  const gf = buildingWhere(db, ctx, args, 'invoices', 'i');
+  const src = inpatientShareRows(db, { from, to, bf, gf });
+  const noRate = inpatientNoRateNote(db, { from, to, bf, gf });
+  // Итоги по врачам — примечаниями над таблицей, по убыванию начисленного:
+  // строка-подытог внутри таблицы попала бы и в общее «Итого» под ней.
+  const perDoctor = new Map();
+  for (const r of src) {
+    const key = r.doctor_id;
+    const d = perDoctor.get(key) || { doctor: r.doctor || '—', lines: 0, net: 0, fee: 0 };
+    d.lines += 1; d.net += r.net; d.fee += r.fee;
+    perDoctor.set(key, d);
+  }
+  const totals = [...perDoctor.values()].sort((a, b) => b.fee - a.fee || b.net - a.net)
+    .map((d) => 'Итого — ' + d.doctor + ': ' + d.lines + ' '
+      + pluralRu(d.lines, 'строка', 'строки', 'строк') + ', после скидки и налога '
+      + moneyRu(d.net) + ' сум, начислено ' + moneyRu(d.fee) + ' сум.');
+  return {
+    columns: [BUILDING_COL, 'Дата', '№ счёта', 'Пациент', '№ госпитализации', 'Услуга', 'Кол-во', 'Сумма',
+              'Скидка', 'Налог', 'После скидки и налога', 'Врач', 'Чей врач', 'Ставка, %', 'Начислено врачу'],
+    rows: src.map((r) => [ctx.label(r.origin), r.date, r.invoice || '', r.patient || '', r.admission_no || '',
+      r.service || '', r.qty, round2(r.amount), round2(r.discount), round2(r.tax), round2(r.net),
+      r.doctor || '—', INPATIENT_ROLE_RU[r.doctor_role],
+      // Нет стационарной доли на услугу — прочерк, а не «0 %»: ноль читался бы
+      // как решение клиники, а это отсутствие решения.
+      r.pct == null ? '—' : round2(r.pct), round2(r.fee)]),
+    by_building: summariseByBuilding(ctx, src, {
+      total: (r) => r.net || 0,
+      fee: (r) => r.fee || 0,
+    }),
+    total_label: 'После скидки и налога',
+    notes: [...totals, ...(noRate ? [noRate] : []), INPATIENT_CURRENT_PERFORMER_NOTE],
+  };
+}
+
+// INPATIENT_SHARE_V1 — стационарная часть зарплаты для кабинета врача. Кабинет
+// считает амбулаторную долю сам (serviceShare), а стационарную получает ГОТОВОЙ
+// отсюда — тем же запросом, что и отчёт, без второй копии SQL в браузере.
+// Ревью I6: свои начисления — врачу, чужие — «Отчётам» и администратору.
+export function doctorInpatientShare(db, args, user) {
+  const doctorId = Number(args && args.doctor_id);
+  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
+  assertCanSeeDoctorPay(db, user, doctorId);   // ревью I6
+  const { from, to } = resolveRange(db, args);
+  const rows = inpatientShareRows(db, { from, to, doctorId }).map((r) => ({
+    date: r.date, invoice: r.invoice, patient: r.patient, admission_no: r.admission_no,
+    service: r.service, qty: r.qty, net: round2(r.net), pct: r.pct == null ? null : round2(r.pct),
+    fee: round2(r.fee), doctor_role: r.doctor_role,
+  }));
+  return {
+    from, to, rows,
+    count: rows.length,
+    fee: round2(rows.reduce((n, r) => n + r.fee, 0)),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// REPORTS_V2 — «По услугам» (kind 'by_services').
+//
+// Строка на услугу и место оказания (амбулатория / стационар — одна колонка
+// «Где», а не два набора денежных колонок: так таблица читается слева
+// направо и итог внизу складывает всё сразу). Деньги — ТЕ ЖЕ выражения, что в
+// «Общей выручке» и «Зарплатах врачей» (itemRowsQuery: ITEM_DISCOUNT_SQL,
+// ITEM_TAX_SQL, ITEM_NET_SQL, LINE_FEE_SQL), поэтому:
+//   «Все счета»        — «Доля врача» = «Доля врача» «Общей выручки»;
+//   «Только оплаченные» — «Доля врача» = «Итого к выплате» «Зарплат врачей».
+// Аннулированные счета не входят (прежний отчёт 'services' их считал — он не
+// используется). Период — по дате счёта.
+// ---------------------------------------------------------------------------
+const PAID_SCOPES = ['all', 'paid'];
+function paidScope(args) {
+  const v = args && args.paid;
+  if (v === undefined || v === null || v === '') return 'all';
+  if (!PAID_SCOPES.includes(v)) throw new RpcError('paid must be one of: all, paid.', 400);
+  return v;
+}
+// Группа — одна из пяти (services.type), подписью раздела каталога
+// (shared/service-categories.js): тот же словарь, что у мастера записи.
+const SERVICE_GROUPS = ['consultation', 'lab', 'imaging', 'procedure', 'other'];
+function groupFilter(args) {
+  const v = args && args.group;
+  if (v === undefined || v === null || v === '' || v === 'all') return null;
+  if (!SERVICE_GROUPS.includes(v)) throw new RpcError('group must be one of: all, ' + SERVICE_GROUPS.join(', ') + '.', 400);
+  return categoryOf({ type: v });
+}
+const lineGroup = (r) => (r.service_id == null && !r.service_group
+  ? 'Прочее'
+  : categoryOf({ type: r.service_group, is_lab: r.service_is_lab, name: r.service }));
+const isInpatientLine = (r) => r.inpatient_line_id != null || r.admission_id != null;
+const WHERE_RU = { out: 'Амбулатория', in: 'Стационар' };
+
+// Ревью M7 — «Оплачено» строки: оплата СЧЁТА, разнесённая на строки
+// пропорционально сумме строки после скидки (paid_amount × строка / итог
+// счёта, не больше самой строки). У частично оплаченного счёта прежде стоял 0 —
+// как будто денег не было. Доли врача по-прежнему начисляются только по
+// ПОЛНОСТЬЮ оплаченным счетам — это правило выплаты, а не колонки.
+function linePaid(r) {
+  const after = (r.amount || 0) - (r.discount || 0);
+  const total = Number(r.inv_total) || 0;
+  if (total <= 0) return r.status === 'paid' ? after : 0;
+  const share = Math.max(0, Math.min(1, (Number(r.inv_paid) || 0) / total));
+  return after * share;
+}
+const LINE_PAID_NOTE = '«Оплачено (доля оплаты счёта)» — оплата счёта, разнесённая по его строкам пропорционально сумме строки; у частично оплаченного счёта это часть строки. Доли врача начисляются только по полностью оплаченным счетам.';
+
+const SHARE_ACCRUAL_NOTE = 'Доля врача начисляется после оплаты счёта. В режиме «Все счета» показано, сколько причитается по всем строкам, включая ещё не оплаченные; «Только оплаченные» сходится с «Зарплатами врачей».';
+
+function byServicesReport(db, args, ctx) {
+  const scope = paidScope(args);
+  const group = groupFilter(args);
+  const src = itemRowsQuery(db, args, ctx)
+    .filter((r) => scope === 'all' || r.status === 'paid')
+    .filter((r) => !group || lineGroup(r) === group);
+  const buckets = new Map();
+  for (const r of src) {
+    const where = isInpatientLine(r) ? 'in' : 'out';
+    const who = r.service_id != null ? 'id:' + r.service_id : 'nm:' + (r.service || '');
+    const key = ctx.keyOf(r.origin) + '\u0000' + who + '\u0000' + where;
+    const b = buckets.get(key) || {
+      origin: r.origin, group: lineGroup(r), service: r.service || '—', where,
+      qty: 0, gross: 0, discount: 0, tax: 0, net: 0, fee: 0, paid: 0,
+    };
+    b.qty += Number(r.qty) || 1;
+    b.gross += r.amount || 0;
+    b.discount += r.discount || 0;
+    b.tax += r.tax || 0;
+    b.net += r.net || 0;
+    b.fee += r.doctor_fee || 0;
+    b.paid += linePaid(r);   // ревью M7
+    buckets.set(key, b);
+  }
+  const order = (g) => { const i = CAT_ORDER.indexOf(g); return i < 0 ? CAT_ORDER.length : i; };
+  const list = [...buckets.values()].sort((a, b) =>
+    (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
+    || order(a.group) - order(b.group) || b.gross - a.gross);
+  const notes = [SHARE_ACCRUAL_NOTE, LINE_PAID_NOTE];
+  if (hasUnattributed(ctx, src)) notes.push(UNATTRIBUTED_NOTE);
+  return {
+    columns: [BUILDING_COL, 'Группа', 'Услуга', 'Где', 'Кол-во', 'Сумма', 'Скидка', 'Налог',
+              'После скидки и налога', 'Доля врача', 'Остаток клинике', 'Оплачено (доля оплаты счёта)'],
+    rows: list.map((b) => [ctx.label(b.origin), b.group, b.service, WHERE_RU[b.where], round2(b.qty),
+      round2(b.gross), round2(b.discount), round2(b.tax), round2(b.net), round2(b.fee),
+      round2(b.net - b.fee), round2(b.paid)]),
+    by_building: summariseByBuilding(ctx, list, { total: (b) => b.gross - b.discount, fee: (b) => b.fee }),
+    total_label: 'Сумма после скидки',
+    notes,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// REPORTS_V2 — «По врачам»: и выплата, и работа (kind 'by_doctors') плюс
+// разбивка врача по услугам (kind 'doctor_services').
+//
+// Строки — те же, что у «Зарплат врачей» (itemRowsQuery: врач строки — врач
+// visit_services, у стационара — исполнитель, иначе назначивший; доля —
+// LINE_FEE_SQL). Работа (пациенты, визиты, услуги, выставлено) считается по
+// ВСЕМ неаннулированным счетам периода; выплата (доли) — только по
+// оплаченным, ровно как в «Зарплатах врачей», поэтому колонки долей в сумме
+// равны им бит в бит. К выплате добавляется вознаграждение врача как
+// НАПРАВИВШЕГО (его внутренний источник, referralLines — то же, что отчёт
+// «Рефералы»). Период — по дате счёта.
+// ---------------------------------------------------------------------------
+const DOCTOR_PAY_NOTE = 'Работа (пациенты, визиты, услуги, выставлено) — по всем неаннулированным счетам периода; доли врача — только по оплаченным счетам, как в «Зарплатах врачей». «Вознаграждение за направления» — по внутреннему источнику врача, как в отчёте «Рефералы».';
+
+// Строки врача: своя строка без врача не входит (как в «Зарплатах врачей»),
+// строка соседнего здания без врача — входит под подписью здания.
+function doctorLines(db, args, ctx) {
+  const lines = itemRowsQuery(db, args, ctx)
+    .filter((r) => r.doctor_id != null || ctx.keyOf(r.origin) !== ctx.ownKey);
+  // Ревью I1 — тот, у кого в периоде только оплаченные строки стационара без
+  // его стационарной ставки (медсестра нажала «Выполнить»), нулевой строкой не
+  // показывается: он назван в примечании (inpatientNoRateNote), как в
+  // «Зарплатах врачей».
+  const noRateOnly = (r) => r.inpatient_line_id != null && r.inpatient_pct == null;
+  const keep = new Set();
+  for (const r of lines) if (!noRateOnly(r)) keep.add(doctorKey(ctx, r.origin, r.doctor_id));
+  return lines.filter((r) => keep.has(doctorKey(ctx, r.origin, r.doctor_id)));
+}
+function doctorNotes(db, args, ctx, lines) {
+  const { from, to } = resolveRange(db, args);
+  const noRate = inpatientNoRateNote(db, { from, to, bf: branchFilter(args, 'i.branch_id'), gf: buildingWhere(db, ctx, args, 'invoices', 'i') });
+  const notes = [DOCTOR_PAY_NOTE, LINE_PAID_NOTE];
+  if (hasUnattributed(ctx, lines)) notes.push(UNATTRIBUTED_NOTE);
+  if (noRate) notes.push(noRate);
+  return notes;
+}
+const doctorKey = (ctx, origin, doctorId) => ctx.keyOf(origin) + '\u0000' + (doctorId == null ? '' : doctorId);
+
+function byDoctorsReport(db, args, ctx) {
+  const lines = doctorLines(db, args, ctx);
+  const names = new Map(db.prepare('SELECT id, full_name, username FROM users').all()
+    .map((u) => [u.id, u.full_name || u.username]));
+  const buckets = new Map();
+  const bucket = (origin, doctorId, doctor) => {
+    const key = doctorKey(ctx, origin, doctorId);
+    if (!buckets.has(key)) {
+      buckets.set(key, {
+        origin, doctor_id: doctorId, doctor: doctor || (doctorId != null ? names.get(doctorId) : null) || null,
+        patients: new Set(), visits: new Set(), admissions: new Set(), count: 0,
+        billed: 0, paid: 0, fee_out: 0, fee_in: 0, referral: 0,
+      });
+    }
+    return buckets.get(key);
+  };
+  for (const r of lines) {
+    const b = bucket(r.origin, r.doctor_id, r.doctor);
+    const after = (r.amount || 0) - (r.discount || 0);
+    b.patients.add(r.patient_id);
+    if (r.inpatient_line_id != null) { if (r.admission_id != null) b.admissions.add(r.admission_id); }
+    else if (r.visit_id != null) b.visits.add(r.visit_id);
+    b.count += 1;
+    b.billed += after;
+    b.paid += linePaid(r);   // ревью M7
+    if (r.status === 'paid') {
+      if (r.inpatient_line_id != null) b.fee_in += r.doctor_fee || 0;
+      else b.fee_out += r.doctor_fee || 0;
+    }
+  }
+  // Вознаграждение врача как направившего — только у внутренних источников,
+  // связанных с сотрудником. Врач, который в периоде сам ничего не оказал, но
+  // направлял, тоже получает строку: ему есть что платить.
+  for (const r of referralLines(db, { ...args, referrer: 'all' }, ctx)) {
+    if (r.referral_doctor_id == null || !r.reward) continue;
+    bucket(r.origin, r.referral_doctor_id, null).referral += r.reward;
+  }
+  const list = [...buckets.values()].sort((a, b) =>
+    (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
+    || (b.fee_out + b.fee_in + b.referral) - (a.fee_out + a.fee_in + a.referral) || b.billed - a.billed);
+  const notes = doctorNotes(db, args, ctx, lines);
+  return {
+    columns: [BUILDING_COL, 'Врач', 'Пациентов', 'Визитов', 'Госпитализаций', 'Услуг', 'Выставлено',
+'Оплачено (доля оплаты счёта)', 'Доля за услуги', 'Стационарная доля', 'Вознаграждение за направления', 'Итого к выплате'],
+    rows: list.map((b) => [ctx.label(b.origin), doctorCell(ctx, b) || '—', b.patients.size, b.visits.size,
+      b.admissions.size, b.count, round2(b.billed), round2(b.paid), round2(b.fee_out), round2(b.fee_in),
+      round2(b.referral), round2(b.fee_out + b.fee_in + b.referral)]),
+    by_building: summariseByBuilding(ctx, list, {
+      total: (b) => b.billed,
+      fee: (b) => b.fee_out + b.fee_in + b.referral,
+    }),
+    total_label: 'Выставлено',
+    notes,
+  };
+}
+
+// Разбивка: врач × услуга × место. Сумма «Доля врача» по врачу равна «Доле за
+// услуги» + «Стационарной доле» его строки в 'by_doctors'.
+function doctorServicesReport(db, args, ctx) {
+  const lines = doctorLines(db, args, ctx);
+  const buckets = new Map();
+  for (const r of lines) {
+    const where = r.inpatient_line_id != null ? 'in' : 'out';
+    const who = r.service_id != null ? 'id:' + r.service_id : 'nm:' + (r.service || '');
+    const key = doctorKey(ctx, r.origin, r.doctor_id) + '\u0000' + who + '\u0000' + where;
+    const b = buckets.get(key) || {
+      origin: r.origin, doctor: r.doctor, service: r.service || '—', where,
+      patients: new Set(), qty: 0, billed: 0, paid: 0, fee: 0,
+    };
+    const after = (r.amount || 0) - (r.discount || 0);
+    b.patients.add(r.patient_id);
+    b.qty += Number(r.qty) || 1;
+    b.billed += after;
+    b.paid += linePaid(r);   // ревью M7
+    if (r.status === 'paid') b.fee += r.doctor_fee || 0;
+    buckets.set(key, b);
+  }
+  const list = [...buckets.values()].sort((a, b) =>
+    (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
+    || String(a.doctor || '').localeCompare(String(b.doctor || ''), 'ru') || b.billed - a.billed);
+  const notes = doctorNotes(db, args, ctx, lines);
+  return {
+    columns: [BUILDING_COL, 'Врач', 'Услуга', 'Где', 'Пациентов', 'Кол-во', 'Выставлено', 'Оплачено (доля оплаты счёта)', 'Доля врача'],
+    rows: list.map((b) => [ctx.label(b.origin), doctorCell(ctx, b) || '—', b.service, WHERE_RU[b.where],
+      b.patients.size, round2(b.qty), round2(b.billed), round2(b.paid), round2(b.fee)]),
+    by_building: summariseByBuilding(ctx, list, { total: (b) => b.billed, fee: (b) => b.fee }),
+    total_label: 'Выставлено',
+    notes,
   };
 }
 
@@ -922,6 +1814,16 @@ const REPORTS_RU = {
   procurement:      procurementReport,
   surgery_profit:   surgeryProfitReport,
   doctor_salaries:  doctorSalariesReport,
+  inpatient_share:  inpatientShareReport,   // INPATIENT_SHARE_V1
+  // REPORTS_V2 — детализация рефералов (сводка — 'referrals' выше).
+  referrals_detail: referralsDetailReport,
+  by_services:      byServicesReport,        // REPORTS_V2 — по услугам
+  by_doctors:       byDoctorsReport,         // REPORTS_V2 — по врачам: выплата и работа
+  doctor_services:  doctorServicesReport,    // REPORTS_V2 — врач × услуга
+  // REPORTS_V2 — «Закупки и склад»: приход — 'procurement' выше.
+  stock_consumption: stockConsumptionReport,
+  stock_statement:   stockStatementReport,
+  stock_expiry:      stockExpiryReport,
 };
 
 // OWNER_REPORT_V1 — chart data for «Отчёт владельца»: period KPIs, last-12-months
@@ -1033,6 +1935,9 @@ export function ownerReport(db, args, _user) {
 // «Счета» и «Закупки» считают по шапкам и по складу, у них этой дыры нет.
 const ITEM_BASED_REPORTS = new Set([
   'total_revenue', 'referrals', 'surgery_profit', 'doctor_salaries',
+  'inpatient_share',   // INPATIENT_SHARE_V1 — тоже читает строки счетов
+  'referrals_detail',  // REPORTS_V2 — те же строки счетов, что у сводки
+  'by_services', 'by_doctors', 'doctor_services',   // REPORTS_V2
 ]);
 
 export function runReport(db, args, _user) {

@@ -7,7 +7,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openVisitWizard } from './visit-wizard.js?v=tier2';   // CRM_V4 — конверсия сразу в реальный заказ услуги
-import { digitsOf, phoneLikePattern, filterPhoneMatches, uzLocalDigits, MIN_PHONE_DIGITS } from './crm-phone-match.js';
+import { digitsOf, phoneLikePattern, filterPhoneMatches, uzLocalDigits, MIN_PHONE_DIGITS, leadMatchesQuery, phoneKey } from './crm-phone-match.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
 // CRM_CARD_V2 — номер на карточке группируется ТЕМ ЖЕ правилом, что и во всех
 // полях ввода телефона (PHONE_INPUT_V1). Второй способ печатать номер означал
@@ -53,6 +53,9 @@ import { setVisitStatus } from './visit-booking.js';
 // двери (мастер визита, быстрая регистрация, эта карточка): три исхода, и
 // визит есть во всех трёх, поэтому «есть id — значит записано» это ошибка.
 import { readEnsureVisit } from '../ensure-visit-answer.js';
+// CRM_DEDUP_SEARCH_TASKS_V1 — задачи на карточке заявки (миграция 148): блок в
+// окне заявки, метка «задача: …» на карточке доски.
+import { crmTasksBlock, loadOpenTasks, nearestOpenTasks, isOverdue, nowIso } from './crm-tasks.js';
 
 // CRM_CONFIG_V1 — воронка перестала быть константой.
 //
@@ -131,7 +134,16 @@ const state = { view: 'kanban', filter: 'all', search: '', rows: [], source: '',
                 // CRM_PERIOD_CUSTOM_V1 — границы своего периода, 'YYYY-MM-DD'.
                 // Пустая граница = без ограничения с этой стороны: «с 01.08 и
                 // далее» — нормальный вопрос, и запрещать его незачем.
-                customFrom: '', customTo: '' };
+                customFrom: '', customTo: '',
+                // CRM_DEDUP_SEARCH_TASKS_V1 — ответ сервера на поиск (crm_search):
+                // заявки по ВСЕМ карточкам, а не только по загруженным 800.
+                // searchQ — для какой строки он получен: ответ на «бур» не
+                // должен показываться под «буронова».
+                searchRows: null, searchQ: '',
+                // CRM_DEDUP_SEARCH_TASKS_V1 — ближайшая открытая задача каждой
+                // заявки: Map(String(request_id) → задача).
+                openTasks: new Map() };
+let searchSeq = 0;   // CRM_DEDUP_SEARCH_TASKS_V1 — последний ответ поиска побеждает
 
 // Период считается по created_at — «когда обратились», а не когда записаны:
 // воронку смотрят от момента обращения.
@@ -295,6 +307,9 @@ async function load() {
         .order('id', { ascending: false }).limit(800);
     if (error) { toast(trf('Не удалось загрузить заявки: {msg}', { msg: error.message }), 'fail'); state.rows = []; return; }
     state.rows = data || [];
+    // CRM_DEDUP_SEARCH_TASKS_V1 — метки задач на карточках. Отказ (у роли нет
+    // права на задачи) — доска без меток, а не без заявок.
+    state.openTasks = nearestOpenTasks(await loadOpenTasks());
 }
 
 // CRM_CARD_V2 — КТО это и КАК до него дозвониться, одним ответом на две строки.
@@ -341,6 +356,71 @@ function splitFio(s) {
 
 function uid() {
     return (window.easymed && window.easymed.state && window.easymed.state.user && window.easymed.state.user.id) || null;
+}
+
+// CRM_DEDUP_SEARCH_TASKS_V1 (2026-09-23) — «У ЭТОГО НОМЕРА УЖЕ ЕСТЬ КАРТОЧКА».
+//
+// Владелец: «fix the duplicates in the crm». Ручная заявка заводилась без
+// всякой проверки: оператор, не нашедший карточку поиском (а поиск не находил
+// «+998 91 566 22 78» по «915662278»), заводил вторую. Теперь перед вставкой
+// сервер отвечает, есть ли у номера карточки — ЛЮБЫЕ, открытые и закрытые
+// (crm_leads_by_phone, номер сравнивается по последним девяти цифрам), — и
+// окно предлагает открыть существующую или всё-таки создать новую.
+//
+// Отвечает промисом: { open: id } — открыть эту; 'create' — создать всё равно;
+// null — передумал (окно новой заявки остаётся открытым, введённое цело).
+// Ревью W2-M3: о чужих карточках сервер присылает одну строку { foreign: true }
+// — она называется только фактом, без имени, стадии, хозяина и даты.
+// opts.edit — окно спрашивает при ПРАВКЕ номера: кнопка «Сохранить всё равно».
+export function askDuplicateLead(rows, opts = {}) {
+    return new Promise((resolve) => {
+        const ov = h('div', { class: 'modal', 'data-crm-dup': '' });
+        let done = false;
+        const finish = (v) => { if (done) return; done = true; ov.remove(); resolve(v); };
+        const fmtD = (iso) => (iso || '').slice(0, 10).split('-').reverse().join('.');
+        const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
+        for (const r of rows) {
+            if (!r.can_open) {
+                list.appendChild(h('div', { 'data-dup-foreign': '', class: 'row', style: {
+                    gap: '10px', alignItems: 'center',
+                    border: '1px solid var(--ink-100)', borderRadius: '10px', padding: '9px 11px',
+                } },
+                    Icon('Lock', { size: 14 }),
+                    h('span', { style: { fontSize: '13.5px', fontWeight: 600 } }, 'Есть карточка у другого оператора')));
+                continue;
+            }
+            const kind = r.stage_kind === 'won' ? 'ok' : (r.stage_kind === 'lost' ? '' : 'info');
+            list.appendChild(h('div', { 'data-dup-row': String(r.id), class: 'row', style: {
+                gap: '10px', alignItems: 'center', flexWrap: 'wrap',
+                border: '1px solid var(--ink-100)', borderRadius: '10px', padding: '9px 11px',
+            } },
+                h('div', { style: { flex: '1 1 200px', minWidth: 0 } },
+                    h('div', { style: { fontSize: '13.5px', fontWeight: 600 } },
+                        r.full_name || formatPhone(r.phone) || r.phone || 'Без имени'),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                        trf('Заявка от {d}', { d: fmtD(r.created_at) }),
+                        r.assigned_name ? ' · ' : null,
+                        r.assigned_name ? trf('Ведёт {name}', { name: r.assigned_name }) : null)),
+                Tag(tr(r.stage_label || r.status || ''), { kind, dot: true }),
+                h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-dup-open': String(r.id),
+                    onclick: () => finish({ open: r.id }) }, Icon('ArrowRight', { size: 13 }), ' ', 'Открыть')));
+        }
+        ov.appendChild(h('div', { class: 'modal-backdrop', onclick: () => finish(null) }));
+        ov.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '560px', maxWidth: 'calc(100vw - 32px)' } },
+            h('header', { class: 'modal-head' },
+                h('h2', { style: { margin: 0, fontSize: '15px' } }, Icon('Warning', { size: 16 }), ' ', 'У этого номера уже есть карточка'),
+                h('button', { class: 'modal-close', onclick: () => finish(null) }, '×')),
+            h('div', { class: 'modal-body', style: { display: 'block' } },
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } },
+                    'Откройте существующую карточку, чтобы не заводить второй. Если это другой человек с тем же номером — создайте новую.'),
+                list),
+            h('footer', { class: 'modal-foot' },
+                h('button', { class: 'btn', type: 'button', onclick: () => finish(null) }, 'Отмена'),
+                h('span', { class: 'grow' }),
+                h('button', { class: 'btn btn-primary', type: 'button', 'data-dup-create': '', onclick: () => finish('create') },
+                    Icon(opts.edit ? 'Check' : 'Plus', { size: 14 }), ' ', opts.edit ? 'Сохранить всё равно' : 'Создать всё равно'))));
+        document.body.appendChild(ov);
+    });
 }
 
 async function setStatus(r, status) {
@@ -393,8 +473,11 @@ async function paint() {
         searchInp.style.borderColor = 'var(--ink-200, #d1d5db)';
         searchInp.style.boxShadow = 'var(--shadow-sm)';
     });
-    searchInp.addEventListener('input', () => { state.search = searchInp.value; syncClear(); paintFilters(); paintBody(); });
-    searchClear.addEventListener('click', () => { searchInp.value = ''; state.search = ''; syncClear(); paintFilters(); paintBody(); searchInp.focus(); });
+    // SEARCH_DEBOUNCE_V1 — поле type="search" с плейсхолдером «Поиск…», поэтому
+    // h() сам откладывает этот обработчик до паузы в наборе (ui.js): запрос к
+    // серверу уходит один раз на слово, а не на каждую букву.
+    searchInp.addEventListener('input', () => { state.search = searchInp.value; syncClear(); paintFilters(); paintBody(); serverSearch(); });
+    searchClear.addEventListener('click', () => { searchInp.value = ''; state.search = ''; syncClear(); paintFilters(); paintBody(); serverSearch(); searchInp.focus(); });
     const searchBox = h('div', { style: { position: 'relative', flex: '0 0 300px', minWidth: '200px' } },
         h('span', { style: {
             position: 'absolute', left: '13px', top: '50%', transform: 'translateY(-50%)',
@@ -437,13 +520,42 @@ async function paint() {
     const bodyWrap = h('div', { 'data-crm-body': '' });
     root.appendChild(bodyWrap);
     paintBody();
+    // Доска перерисована (сохранение, перетаскивание) при набранном поиске —
+    // ответ сервера мог устареть, спрашиваем заново.
+    if (state.search.trim()) serverSearch();
 
+    // CRM_DEDUP_SEARCH_TASKS_V1 — одно правило с сервером (crm-phone-match.js):
+    // 4+ цифры — номер, сравниваются только цифры по последним девяти; иначе
+    // имя без единого пробела, в том числе имя привязанного пациента. Раньше
+    // сравнивался сырой текст: «+998 91 566 22 78» не находился по
+    // «915662278», а «Буронова  Феруза» (два пробела) — по «буронова феруза».
     function matchesSearch(r) {
-        const q = state.search.trim().toLowerCase();
-        return !q || (r.full_name || '').toLowerCase().includes(q) || (r.phone || '').includes(q);
+        return leadMatchesQuery(r, state.search);
+    }
+    // Что ищется: загруженные заявки ПЛЮС ответ сервера по всем заявкам (доска
+    // грузит последние 800 — остальные раньше не находились никогда). Строка
+    // сервера свежее загруженной, поэтому при совпадении id берётся она.
+    function searchBase() {
+        const q = state.search.trim();
+        if (!q || state.searchQ !== q || !Array.isArray(state.searchRows)) return state.rows;
+        const byId = new Map(state.rows.map((r) => [String(r.id), r]));
+        for (const r of state.searchRows) byId.set(String(r.id), r);
+        return [...byId.values()].sort((a, b) => Number(b.id) - Number(a.id));
+    }
+    async function serverSearch() {
+        const q = state.search.trim();
+        const my = ++searchSeq;
+        if (!q) { state.searchRows = null; state.searchQ = ''; return; }
+        const { data, error } = await supabase.rpc('crm_search', { q });
+        if (my !== searchSeq) return;   // пока ждали, набрали дальше
+        // Сервер не ответил — доска ищет по загруженным, как раньше.
+        state.searchRows = (!error && Array.isArray(data)) ? data : null;
+        state.searchQ = q;
+        paintFilters();
+        paintBody();
     }
     function filtered() {
-        return state.rows.filter(r => matchesSearch(r) && inSource(r) && inPeriod(r));
+        return searchBase().filter(r => matchesSearch(r) && inSource(r) && inPeriod(r));
     }
 
     // CRM_FILTERS_V1 — «Источник» и «Период» над доской.
@@ -460,7 +572,7 @@ async function paint() {
         } }, t);
         const chip = (on, label, onclick) => h('button', { class: 'wzc-cat' + (on ? ' on' : ''), type: 'button', onclick }, label);
 
-        const byPeriod = state.rows.filter(r => matchesSearch(r) && inPeriod(r));
+        const byPeriod = searchBase().filter(r => matchesSearch(r) && inPeriod(r));
         const counts = {};
         for (const r of byPeriod) { const k = r.source || 'other'; counts[k] = (counts[k] || 0) + 1; }
 
@@ -650,6 +762,7 @@ async function paint() {
             tags.length ? h('div', { class: 'crm-card-tags' }, ...tags) : null,
             r.services ? h('div', { class: 'crm-card-line' }, h('span', { class: 'crm-card-lbl' }, 'Услуга: '), r.services.name) : null,
             r.note ? h('div', { class: 'crm-card-note', title: r.note }, r.note) : null,
+            taskChip(r),
             h('div', { class: 'crm-card-foot' },
                 h('span', { class: 'crm-card-when' }, trf('Заявка от {d}', { d: fmtD(r.created_at) })),
                 ...acts),
@@ -730,6 +843,19 @@ async function paint() {
             document.addEventListener('pointercancel', onCancel);
         });
         return card;
+    }
+
+    // CRM_DEDUP_SEARCH_TASKS_V1 — «задача: …» — ближайшая открытая задача
+    // заявки. Просроченная — в предупреждающем цвете: это то, с чего оператор
+    // начинает смену.
+    function taskChip(r) {
+        const t = state.openTasks.get(String(r.id));
+        if (!t) return null;
+        const late = isOverdue(t, nowIso());
+        const text = String(t.text || '');
+        return h('div', { class: 'crm-card-task' + (late ? ' crm-card-task-late' : ''), title: text },
+            Icon('Clock', { size: 12 }),
+            h('span', null, trf('задача: {text}', { text: text.length > 60 ? text.slice(0, 59) + '…' : text })));
     }
 
     function cardActions(r) {
@@ -1548,6 +1674,11 @@ async function paint() {
         // кто видит их все, — иначе «передал» означало бы «потерял».
         const canReassign = hasActorRole(['admin']);
         let operSel = null;
+        // CRM_DEDUP_SEARCH_TASKS_V1 — тот же список персонала нужен полю
+        // «Ответственный» у задач. Спрашивается ОДИН раз и только у
+        // администратора: оператору список сотрудников не отдаётся (см. ниже),
+        // и задачу он ставит себе или оператору заявки.
+        let staffForTasks = null;
         if (canReassign) {
             operSel = h('select', { 'aria-label': 'Оператор, который ведёт заявку' });
             // Выбор человека НЕ теряется, если список операторов доехал позже:
@@ -1572,7 +1703,7 @@ async function paint() {
             // Нынешний хозяин известен ДО ответа сервера: окно можно сохранить в
             // первую же секунду, и поле обязано к этому моменту говорить правду.
             fillOper(ownerId ? [{ id: ownerId, full_name: ownerName }] : []);
-            supabase.from('users').select('id, full_name, role')
+            staffForTasks = supabase.from('users').select('id, full_name, role')
                 .in('role', BOARD_ROLES).eq('is_active', 1).order('full_name')
                 .then(({ data, error }) => {
                     if (error) {
@@ -1580,7 +1711,7 @@ async function paint() {
                         // молча пустеет: пустой список читался бы как «operSel сбросил
                         // назначение» при ближайшем сохранении.
                         toast(trf('Не удалось загрузить список сотрудников: {msg}', { msg: error.message }), 'fail');
-                        return;
+                        return [];
                     }
                     const pool = (data || []).slice();
                     // Уволенного (is_active = 0) в списке нет, а его заявки есть.
@@ -1590,6 +1721,7 @@ async function paint() {
                         pool.unshift({ id: ownerId, full_name: ownerName });
                     }
                     fillOper(pool);
+                    return pool;
                 });
         }
 
@@ -1597,6 +1729,35 @@ async function paint() {
         // «Оформить услугу», которой нужна уже существующая строка заявки
         // (у новой заявки нет id, а конверсия работает по нему).
         // Возвращает сохранённую строку либо null, если форма не прошла проверку.
+        // CRM_DEDUP_SEARCH_TASKS_V1 — «Создать/Сохранить всё равно» относится к
+        // ОДНОМУ номеру (ревью W2-M5): запоминается его ключ, а не «да вообще».
+        // Номер поменяли — спрашиваем заново.
+        let dupAckKey = null;
+        // true — сохранять; false — человек выбрал «Отмена» или «Открыть».
+        async function confirmNoDuplicate(phone, selfId) {
+            const key = phoneKey(phone);
+            if (!key || key === dupAckKey) return true;
+            const { data: dups, error: dupErr } = await supabase.rpc('crm_leads_by_phone', { phone });
+            // Проверка не ответила — не повод терять заявку: сохраняем как
+            // раньше, без предупреждения.
+            if (dupErr || !Array.isArray(dups)) return true;
+            // Сама редактируемая заявка себе не дубль.
+            const others = dups.filter((d) => !(selfId != null && d.can_open && String(d.id) === String(selfId)));
+            if (!others.length) return true;
+            const choice = await askDuplicateLead(others, { edit: selfId != null });
+            if (!choice) return false;
+            if (choice.open != null) {
+                const { data: existing, error: exErr } = await supabase.from('crm_requests')
+                    .select('*, patients(id, full_name, mrn), users(full_name), services(id, name, price)')
+                    .eq('id', choice.open).maybeSingle();
+                if (exErr || !existing) { toast(exErr ? exErr.message : 'Заявка не найдена.', 'fail'); return false; }
+                close();
+                requestModal(existing);
+                return false;
+            }
+            dupAckKey = key;
+            return true;
+        }
         async function persist() {
             const name = linkedPatient ? linkedPatient.full_name : nameInp.value.trim();
             if (!name) { toast('Укажите имя.', 'fail'); return null; }
@@ -1628,6 +1789,9 @@ async function paint() {
             const notBookedYet = bookedAt > 0 ? STAGE_KEYS.open.slice(0, bookedAt) : [];
             if (isEdit && bookedDate && notBookedYet.includes(r.status) && hasStage('scheduled')) payload.status = bookedStage;
             if (isEdit) {
+                // Ревью W2-M5 — номер заявки сменили на номер, у которого уже
+                // есть другая карточка: то же предупреждение, что при создании.
+                if (phone && phoneKey(phone) !== phoneKey(r.phone || '') && !(await confirmNoDuplicate(phone, r.id))) return null;
                 const { error } = await supabase.from('crm_requests').update(payload).eq('id', r.id);
                 if (error) { toast(error.message, 'fail'); return null; }
                 Object.assign(r, payload);
@@ -1638,6 +1802,11 @@ async function paint() {
                 await saveLines(r.id);
                 return r;
             }
+            // CRM_DEDUP_SEARCH_TASKS_V1 — у номера уже есть карточка? Спрашиваем
+            // сервер (там одно правило сравнения номера) и даём выбрать. Ответ
+            // «создать всё равно» запоминается для ЭТОГО номера: «Сохранить и
+            // записать» зовёт persist() повторно, и спрашивать дважды незачем.
+            if (!(await confirmNoDuplicate(phone, null))) return null;
             const { data, error } = await supabase.from('crm_requests')
                 .insert({ ...payload, status: bookedDate ? stageKey('scheduled') : stageKey('in_process'), ...(uid() != null ? { created_by: uid() } : {}) })
                 .select().single();
@@ -2340,6 +2509,20 @@ async function paint() {
                 field('Интересующие услуги', h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
                     svcChips, svcWrap, pickedList)),
                 field('Комментарий', noteInp),
+                // CRM_DEDUP_SEARCH_TASKS_V1 — «ЗАДАЧИ»: что и когда сделать по этой
+                // заявке и кто отвечает. Только у сохранённой заявки: задаче
+                // нужна заявка, к которой она привязана.
+                (isEdit && r.id != null) ? field('Задачи', crmTasksBlock({
+                    request: r,
+                    me: selfUserId() != null ? { id: selfUserId(), full_name: (window.easymed.state.user || {}).full_name || '' } : null,
+                    isAdmin: canReassign,
+                    staff: staffForTasks,
+                    onChange: () => {
+                        // бейдж меню и метки на доске — сразу, не дожидаясь опроса
+                        try { if (window.easymed && window.easymed.refreshNav) window.easymed.refreshNav(); } catch (e) { /* подсказка */ }
+                        loadOpenTasks().then((t) => { state.openTasks = nearestOpenTasks(t); paintBody(); });
+                    },
+                })) : null,
                 // CALL_RECORDING_V1 — ЗВОНКИ ЭТОГО ЧЕЛОВЕКА, С ЗАПИСЯМИ.
                 // Владелец: «also include into a card the audio record of the
                 // call». Блок появляется только у сохранённой заявки: у новой

@@ -212,6 +212,10 @@ export function normalizePbxCall(c) {
     billsec: talk,
     disposition,
     is_new_call: null,
+    // CRM_DEDUP_SEARCH_TASKS_V1 (ревью W2-M1) — 'local' — звонок между
+    // добавочными. В журнал он ложится (как входящий, call_type 0), но
+    // карточкой CRM не становится: leadFromCall читает этот признак.
+    internal: code === 'local',
     raw: c,
   };
 }

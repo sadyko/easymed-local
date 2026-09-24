@@ -670,7 +670,10 @@ const IMPORT_CONFIGS = {
             for (const k of ['staff_type', 'doctor_category', 'employment_type', 'salary_type', 'scheduling_mode']) {
                 if (payload[k] === '' || payload[k] == null) delete payload[k];
             }
-            if (!payload.password) delete payload.password;   // updates keep the existing one
+            // PASSWORD_CHANGE_V2 — пароль «1» или «0» из Excel приходит ЧИСЛОМ: прежнее
+            // `!payload.password` выбрасывало 0, а сервер число не принимает вовсе.
+            if (payload.password == null || payload.password === '') delete payload.password;   // updates keep the existing one
+            else payload.password = String(payload.password);
             if (payload.role) payload.role = String(payload.role).trim().toLowerCase();
         },
         // Only NEW employees need a password — an existing one keeps theirs, so
@@ -682,7 +685,7 @@ const IMPORT_CONFIGS = {
             if (!VALID_ROLE_KEYS.includes(payload.role)) {
                 return trf('роль «{role}» неизвестна ({list})', { role: payload.role || '', list: VALID_ROLE_KEYS.join(' · ') });
             }
-            if (!payload.password || String(payload.password).length < 8) {
+            if (!String(payload.password ?? '').length) {   // PASSWORD_CHANGE_V2 — любой непустой
                 return 'новому сотруднику нужен пароль';
             }
             return null;
@@ -693,7 +696,7 @@ const IMPORT_CONFIGS = {
         ],
         columns: [
             { key: 'username',   required: true, hint: 'Логин (обязательно) — 3–30 символов: латиница, цифры, . _ -. По нему находится сотрудник при повторном импорте.' },
-            { key: 'password',   hint: 'Пароль для НОВОГО сотрудника — минимум 8 символов. Для существующего оставьте пусто: текущий пароль сохранится.' },
+            { key: 'password',   hint: 'Пароль для НОВОГО сотрудника — любой, хоть из одного символа. Для существующего оставьте пусто: текущий пароль сохранится.' },
             { key: 'role',       required: true, hint: trf('Роль доступа (обязательно): {list}', { list: VALID_ROLE_KEYS.join(' · ') }) },
             { key: 'last_name',  hint: 'Фамилия' },
             { key: 'first_name', hint: 'Имя' },

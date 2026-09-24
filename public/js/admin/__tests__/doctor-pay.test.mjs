@@ -110,6 +110,12 @@ const REFERRALS = [
 // один раз и раскладывает строки по месяцам сам. По умолчанию ступеней нет.
 const monthKeyOf = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
 let TIER_RESPONSE = { from: '', to: '', rows: [] };
+// INPATIENT_SHARE_V1 — ответ doctor_inpatient_share; по умолчанию стационара нет.
+let INPATIENT_RESPONSE = { rows: [], count: 0, fee: 0 };
+let inpatientCalls = [];
+// REPORTS_V2 — ответ doctor_referral_reward; по умолчанию вознаграждения нет.
+let REFERRAL_RESPONSE = { rows: [], count: 0, reward: 0, paid_amount: 0 };
+let referralCalls = [];
 
 function matches(row, f) {
   if (f.or) return true;
@@ -139,6 +145,16 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/rpc/doctor_tier_positions')) {
     tierCalls.push(body);
     return { ok: true, json: async () => ({ data: TIER_RESPONSE }) };
+  }
+  // INPATIENT_SHARE_V1 — стационарная доля приходит готовой с сервера.
+  if (u.startsWith('/api/rpc/doctor_inpatient_share')) {
+    inpatientCalls.push(body);
+    return { ok: true, json: async () => ({ data: INPATIENT_RESPONSE }) };
+  }
+  // REPORTS_V2 — вознаграждение за направления приходит готовым с сервера.
+  if (u.startsWith('/api/rpc/doctor_referral_reward')) {
+    referralCalls.push(body);
+    return { ok: true, json: async () => ({ data: REFERRAL_RESPONSE }) };
   }
   if (u.startsWith('/api/rpc/')) return { ok: true, json: async () => ({ data: null }) };
   if (u.startsWith('/api/db')) {
@@ -314,6 +330,75 @@ test('DOCTOR_TIER_V1: позиции сервера меняют сумму и �
   } finally {
     TIER_RESPONSE = { from: '', to: '', rows: [] };
     // Вернуть вкладку в исходный период — состояние живёт дольше теста.
+    if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
+  }
+});
+
+// INPATIENT_SHARE_V1 — стационарная доля в «Зарплате» кабинета. Сумму считает
+// СЕРВЕР (тот же запрос, что отчёт «Стационар: доля врачей»); кабинет её
+// прибавляет к плитке, раскладывает по дням на графике и называет отдельной
+// строкой в «Как считается зарплата».
+test('INPATIENT_SHARE_V1: стационарная доля с сервера входит в плитку, график и карточку', async () => {
+  const dayKey = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  INPATIENT_RESPONSE = { rows: [{ date: dayKey(now), service: 'Перевязка', fee: 30000, net: 300000, pct: 10, doctor_role: 'performer' }], count: 1, fee: 30000 };
+  let root = null;
+  try {
+    root = await openPay();
+    inpatientCalls = [];
+    buttonByText(root, /7 дней/).click();
+    await tick(80);
+    assert.strictEqual(inpatientCalls.length, 1, 'стационар спрошен одним запросом');
+    assert.match(String(inpatientCalls[0].from), /^\d{4}-\d{2}-\d{2}$/);
+    assert.match(String(inpatientCalls[0].to), /^\d{4}-\d{2}-\d{2}$/);
+    const salary = byClass(root, 'dash-kpi').find((t) => textOf(t).includes('Зарплата'));
+    // 80 000 за услуги + 30 000 стационар.
+    assert.ok(textOf(salary).includes('110 000'), 'плитка не учла стационар: ' + textOf(salary));
+    const cfg = byClass(root, 'card').find((c) => textOf(c).includes('Как считается зарплата'));
+    assert.ok(/Стационар \(оплаченные счета\)/.test(textOf(cfg)), 'нет строки стационара');
+    assert.ok(textOf(cfg).includes('30 000 UZS · услуг: 1'), textOf(cfg));
+    const card = byClass(root, 'card').find((c) => textOf(c).includes('Начисления по дням'));
+    const svg = chartSvgs(card)[0];
+    assert.strictEqual((svg._t.match(/<linearGradient/g) || []).length, 3, 'третий ряд — стационар');
+    const chart = byClass(card, 'dash-chart')[0];
+    chart.getBoundingClientRect = () => ({ left: 0, width: 640, height: 240 });
+    chart.dispatchEvent({ type: 'mousemove', clientX: 700 });
+    const tip = byClass(chart, 'dash-chart-tip')[0];
+    // Сегодня: услуга 40 000 + стационар 30 000 — график сходится с плиткой.
+    assert.ok(textOf(tip).includes('30 000') && textOf(tip).includes('40 000'), 'подсказка дня: ' + textOf(tip));
+  } finally {
+    INPATIENT_RESPONSE = { rows: [], count: 0, fee: 0 };
+    if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
+  }
+});
+
+// REPORTS_V2 — вознаграждение за направления в «Зарплате» кабинета. Сумму
+// считает СЕРВЕР (doctor_referral_reward — те же строки, что отчёт
+// «Рефералы»: строка счёта после скидки, только оплаченные счета); кабинет
+// больше не считает её от цены каталога рекомендаций.
+test('REPORTS_V2: вознаграждение за направления с сервера — в плитке, графике и разборе', async () => {
+  const dayKey = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  REFERRAL_RESPONSE = { rows: [
+    { date: dayKey(now), invoice: 'INV-9', status: 'paid', paid: true, patient: 'Иванов Пётр', service: 'УЗИ',
+      service_type: 'Диагностика', service_category: '', qty: 1, amount: 45000, rate: '10 %', reward: 4500 },
+  ], count: 1, reward: 4500, paid_amount: 45000 };
+  let root = null;
+  try {
+    root = await openPay();
+    referralCalls = [];
+    buttonByText(root, /7 дней/).click();
+    await tick(80);
+    assert.strictEqual(referralCalls.length, 1, 'вознаграждение спрошено одним запросом');
+    assert.strictEqual(String(referralCalls[0].doctor_id), 'u-doc');
+    assert.match(String(referralCalls[0].from), /^\d{4}-\d{2}-\d{2}$/);
+    const tile = byClass(root, 'dash-kpi').find((t) => textOf(t).includes('Вознаграждения за направления'));
+    // 4 500 с сервера, а не 50 000 × ставка от цены каталога рекомендации.
+    assert.ok(textOf(tile).includes('4 500'), 'плитка не взяла сумму сервера: ' + textOf(tile));
+    // Карточка «Разбор направлений» — та, где таблица по видам услуг (кнопка
+    // с тем же названием есть и в шапке графика).
+    const card = byClass(root, 'card').find((c) => textOf(c).includes('Вид услуги'));
+    assert.ok(textOf(card).includes('4 500') && textOf(card).includes('45 000'), 'разбор: ' + textOf(card));
+  } finally {
+    REFERRAL_RESPONSE = { rows: [], count: 0, reward: 0, paid_amount: 0 };
     if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
   }
 });

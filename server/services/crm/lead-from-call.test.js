@@ -13,7 +13,8 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { recordCall } from '../telephony/poller.js';
-import { leadFromCall, openLeadForPhone } from './lead-from-call.js';
+import { leadFromCall, openLeadForPhone, anyLeadForPhone, leadsForPhone } from './lead-from-call.js';
+import { normalizePbxCall } from '../telephony/onlinepbx.js';   // CRM_DEDUP_SEARCH_TASKS_V1
 import { saveRouting, saveStages, listStages } from './config.js';
 
 const fresh = () => { const db = openDb(':memory:'); migrate(db); return db; };
@@ -248,4 +249,126 @@ test('leadFromCall keys the rule by the PBX the clinic actually runs', () => {
   saveRouting(db, [{ provider: 'other_pbx', disposition: 'ANSWER', action: 'create', stage_key: 'in_process' }]);
   recordCall(db, call({ generalCallID: 'GC-3' }), 'poll');
   assert.equal(leads(db).length, 1);
+});
+
+// --------------------------------------------------------------------------
+// CRM_DEDUP_SEARCH_TASKS_V1 (2026-09-23) — the direction of the call decides.
+//
+// Владелец: «Исходящий звонок создаёт карточку CRM только если у номера нет
+// карточки вообще». In the clinic's base 1 126 of 1 855 call-born cards came
+// from the operators' OWN outgoing calls — every call-back of a closed card
+// grew a second card. Incoming calls keep the old rule (open cards only).
+//
+// Direction per provider, as it reaches calls.call_type (0 in, 1 out):
+//   Binotel   — callType from the API/webhook as is (0 incoming, 1 outgoing);
+//   onlinePBX — accountcode 'outbound' → 1, inbound/missed/local → 0
+//               (normalizePbxCall);
+//   Мои Звонки — never writes to `calls` (history is read only by the
+//               connection test), so it never creates a card at all.
+// --------------------------------------------------------------------------
+
+const pbx = (over = {}) => normalizePbxCall({
+  uuid: 'u-' + Math.random().toString(36).slice(2), start_stamp: 1755950400, accountcode: 'outbound',
+  caller_id_number: '101', destination_number: '998909610004', user_talk_time: 40, duration: 50,
+  hangup_cause: 'NORMAL_CLEARING', ...over,
+});
+
+test('Binotel outgoing (callType 1): a number with NO card at all gets one', () => {
+  const db = fresh();
+  recordCall(db, call({ callType: 1 }), 'poll');
+  assert.equal(leads(db).length, 1);
+  assert.equal(db.prepare('SELECT call_type FROM calls').get().call_type, 1);
+});
+
+test('Binotel outgoing: a CLOSED card blocks a new one — the operator is calling back', () => {
+  for (const status of ['came', 'no_show', 'stopped', 'not_qualified']) {
+    const db = fresh();
+    db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Прошлый','+998 90 961 00 04','call',?)").run(status);
+    recordCall(db, call({ callType: 1 }), 'poll');
+    assert.equal(leads(db).length, 1, `outgoing call made a second card next to «${status}»`);
+  }
+});
+
+test('Binotel outgoing: an open card blocks too', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('В работе','909610004','call','recall')").run();
+  recordCall(db, call({ callType: '1' }), 'webhook');
+  assert.equal(leads(db).length, 1);
+});
+
+test('Binotel incoming (callType 0) keeps today\'s rule: a closed card does not block', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Прошлый','998909610004','call','came')").run();
+  recordCall(db, call({ callType: 0 }), 'poll');
+  assert.equal(leads(db).length, 2);
+});
+
+test('onlinePBX outbound → call_type 1: no card next to a closed one, one card for a new number', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Прошлый','998 90 961 00 04','call','stopped')").run();
+  assert.equal(recordCall(db, pbx(), 'poll', { kind: 'onlinepbx' }), true);
+  assert.equal(leads(db).length, 1, 'onlinePBX outbound call created a duplicate card');
+
+  recordCall(db, pbx({ destination_number: '901112233' }), 'poll', { kind: 'onlinepbx' });
+  const rows = leads(db);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1].phone, '+998901112233');
+});
+
+test('onlinePBX inbound → call_type 0: a closed card does not block (the patient is calling again)', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Прошлый','+998909610004','call','came')").run();
+  recordCall(db, pbx({ accountcode: 'inbound', caller_id_number: '998909610004', destination_number: '10' }), 'poll', { kind: 'onlinepbx' });
+  assert.equal(leads(db).length, 2);
+});
+
+test('one phone key on both sides: the four stored formats are one number', () => {
+  const db = fresh();
+  const ins = db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Л', ?, 'call', 'came')");
+  for (const p of ['915662278', '+998915662278', '998915662278', '+998 91 566 22 78']) ins.run(p);
+  ins.run('+998 91 566 22 79');   // a neighbour, not the same person
+  for (const q of ['915662278', '+998915662278', '998 91 566-22-78', '0915662278']) {
+    assert.equal(leadsForPhone(db, q).length, 4, 'query ' + q);
+  }
+  assert.ok(anyLeadForPhone(db, '+998915662278'));
+  // A number that merely CONTAINS the digits is not the same number.
+  assert.equal(leadsForPhone(db, '566227').length, 0);
+});
+
+// --------------------------------------------------------------------------
+// Ревью W2-M1 / W2-M2 (2026-09-23).
+// --------------------------------------------------------------------------
+
+test('onlinePBX local (extension to extension) is not a lead — dev DB lead 1803 «103»', () => {
+  const db = fresh();
+  const local = pbx({ accountcode: 'local', caller_id_number: '101', destination_number: '103' });
+  assert.equal(local.internal, true, 'normalizePbxCall does not mark a local call');
+  assert.equal(recordCall(db, local, 'poll', { kind: 'onlinepbx' }), true, 'the call itself must still be filed');
+  assert.equal(leads(db).length, 0);
+});
+
+test('a number shorter than 7 digits never becomes a lead, whatever the direction', () => {
+  const db = fresh();
+  recordCall(db, call({ generalCallID: 'GC-S1', externalNumber: '103' }), 'poll');
+  recordCall(db, call({ generalCallID: 'GC-S2', externalNumber: '12345', callType: 1 }), 'poll');
+  assert.equal(leads(db).length, 0);
+});
+
+test('phone key: last nine only for a whole Uzbek number — +7 991… and +998 91… are different people', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Россия','+7 991 234 56 78','call','came')").run();
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('Два номера','+998 90 111 22 33, +998 91 234 56 78','call','came')").run();
+  assert.equal(leadsForPhone(db, '+998 91 234 56 78').length, 0, 'a foreign number or two pasted numbers merged');
+  assert.equal(leadsForPhone(db, '+7 991 234 56 78').length, 1);
+  assert.equal(leadsForPhone(db, '79912345678').length, 1);
+  // the Uzbek forms still meet
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('УЗ','0912345678','call','came')").run();
+  for (const q of ['912345678', '+998912345678', '998 91 234-56-78', '0912345678']) {
+    assert.deepEqual(leadsForPhone(db, q).map((r) => r.full_name), ['УЗ'], q);
+  }
+  // an outgoing call to the Uzbek number is not blocked by the Russian one
+  recordCall(db, call({ generalCallID: 'GC-RU', externalNumber: '998931112233', callType: 1 }), 'poll');
+  db.prepare("INSERT INTO crm_requests (full_name, phone, source, status) VALUES ('RU2','+7 993 111 22 33','call','came')").run();
+  recordCall(db, call({ generalCallID: 'GC-UZ2', externalNumber: '998931112233', callType: 1 }), 'poll');
+  assert.equal(leads(db).filter((r) => r.phone === '+998931112233').length, 1);
 });

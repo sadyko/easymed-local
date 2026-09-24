@@ -32,6 +32,10 @@ const READ_ONLY_RPCS = new Set([
   // DOCTOR_TIER_V1 — нумерация строк врача по ступени; чистое чтение, как
   // run_report рядом: кабинет показывает прогресс и при просроченной лицензии.
   'doctor_tier_positions',
+  // INPATIENT_SHARE_V1 — стационарная доля для кабинета; то же чистое чтение.
+  'doctor_inpatient_share',
+  // REPORTS_V2 — вознаграждение врача за направления для кабинета; чтение.
+  'doctor_referral_reward',
   'cashier_invoices', 'cash_shift_summary', 'shift_report', 'cashier_report',
   'callcenter_report', 'queue_board', 'documents_feed', 'accommodation_state',
   'deposit_balance', 'list_deposits', 'service_delete_check', 'get_clinic_by_slug',
@@ -53,6 +57,11 @@ const READ_ONLY_RPCS = new Set([
   // licence-lapsed clinic may read but not write, and "read" must not mean
   // "a CRM board with no column headings".
   'crm_config_get',
+  // CRM_DEDUP_SEARCH_TASKS_V1 — проверка дубля по номеру. Чистое чтение: окно
+  // новой заявки спрашивает его перед вставкой, а вставку и так остановит 402.
+  'crm_leads_by_phone',
+  // …и поиск доски по всем заявкам — тоже чтение.
+  'crm_search',
   // CUSTDEV_V1 — доска и отчёт по обзвону. Чистое чтение. Клиника с
   // просроченной лицензией читает, но не пишет, и «читает» не должно означать
   // «пустой экран вместо доски». Оценка (custdev_rate/custdev_mark) и
