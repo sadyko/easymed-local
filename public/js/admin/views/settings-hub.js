@@ -30,6 +30,8 @@ import { phoneInput } from '../phone-input.js?v=ph1';
 // экран» и чтобы правки прав не задевали этот файл. Хаб только монтирует
 // экран и даёт ему дорогу назад.
 import { renderRolesEditor } from './roles-editor.js?v=roles2';
+// ROLE_REPORTS_SETTINGS_V1 — какие плитки видит роль и можно ли в них менять.
+import { isRouteAllowed, settingsTileLevel, hasRestriction } from '../permissions.js';
 
 // BRANCH_SYNC_V1 — «Филиалы» отвечают теперь на два разных вопроса: какие у
 // клиники адреса (таблица branches, редактор ниже) и как связаны ОТДЕЛЬНЫЕ
@@ -39,14 +41,14 @@ import { renderRolesEditor } from './roles-editor.js?v=roles2';
 // которую SETTINGS_ONE_COMPANY_V1 только что убрал.
 import { renderBranchSyncCard } from './branch-sync.js?v=bsync4';   // bsync4: филиалы таблицей, предупреждения — в окна подтверждения (BRANCH_LIST_V2)
 
-let state = { section: null };   // null = hub; else one of LOOKUP_CONFIG's keys
+let state = { section: null, readOnly: false };   // null = hub; else one of LOOKUP_CONFIG's keys
 
 const refs = { container: null, onNavigate: null };
 
 export async function renderSettingsHub(container, { onNavigate } = {}) {
     refs.container  = container;
     refs.onNavigate = onNavigate;
-    state = { section: null };
+    state = { section: null, readOnly: false };
     hubQuery = '';
     await repaint();
 }
@@ -59,8 +61,56 @@ async function repaint() {
     if (!state.section) paintUpdateStatus();   // UPDATE_STATUS_ROW_V1
 }
 
-function openSection(key) { state.section = key; repaint(); }
-function backToHub()      { state.section = null; repaint(); }
+// ROLE_REPORTS_SETTINGS_V1 (2026-09-25) — НАСТРОЙКИ ПО РАЗДЕЛАМ.
+//
+// Справочники этого хаба открывались НЕ маршрутом, а openSection() — то есть
+// мимо isRouteAllowed: любой, кто дошёл до хаба, открывал любой справочник, а
+// сохранить не мог (реестр пускал только администратора), и узнавал об этом
+// ошибкой после заполненной формы. Теперь у каждой плитки есть окно раздела
+// «Настройки» в «Ролях» (SECTION_GRANT), хаб прячет плитки, которых роль не
+// видит, а справочник ниже «Изменения» открывается только для чтения.
+// «Изменение» сохраняет по-настоящему: тот же ключ у таблицы в реестре
+// (server/db/schema-registry.js `write.grant`).
+const SECTION_GRANT = {
+    roles: 'settings.roles',
+    service_types: 'settings.service_types',
+    consultation_types: 'settings.consultation_types',
+    patient_categories: 'settings.patient_categories',
+    chronic_conditions_ref: 'settings.chronic_conditions',
+    patient_discounts: 'settings.patient_discounts',
+    api_tokens: 'settings.api',
+    branches: 'settings.branches',
+    payers: 'settings.payers',
+    payer_policies: 'settings.payer_policies',
+    payment_providers: 'settings.payment_providers',
+    cashback_rules: 'settings.cashback_rules',
+    referral_sources: 'settings.referral_sources',
+    referral_source_categories: 'settings.referral_source_categories',
+    doctor_rates: 'settings.doctor_rates',
+};
+
+/** Уровень плитки-справочника: 'none' | 'view' | 'edit'. Справочник без окна — только полному доступу. */
+export function sectionLevel(key) {
+    const g = SECTION_GRANT[key];
+    if (g) return settingsTileLevel(g);
+    return hasRestriction() ? 'none' : 'edit';
+}
+
+/** Видна ли плитка хаба: экран — по воротам маршрута, справочник — по своему окну. */
+export function tileVisible(item) {
+    if (item.route) return isRouteAllowed(item.route);
+    if (item.section) return sectionLevel(item.section) !== 'none';
+    return true;
+}
+
+function openSection(key) {
+    const lvl = sectionLevel(key);
+    if (lvl === 'none') { toast(tr('Этот раздел настроек недоступен вашей роли.'), 'fail'); return; }
+    state.section = key;
+    state.readOnly = lvl !== 'edit';
+    repaint();
+}
+function backToHub()      { state.section = null; state.readOnly = false; repaint(); }
 
 const nav = (route) => () => { if (refs.onNavigate) refs.onNavigate(route); };
 // SETTINGS_SPLIT_V1 — navSub() lived here for one caller, «Подписка», which
@@ -140,38 +190,38 @@ const goto = (url) => () => { window.location.href = url; };
 // это и есть то самое «одно управление филиалами». Группа осталась пустой и
 // удалена: заголовок над единственной осиротевшей строкой хуже, чем его
 // отсутствие.
-const GROUPS = [
+export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт ради теста плиток по ролям
     {
         title: 'Управление пользователями и сотрудниками', icon: 'ID', color: { bg: '#e4f3f1', fg: '#1f8a80' },
         items: [
-            { label: 'Сотрудники', desc: 'Врачи, медсёстры, регистратура, администрация', icon: 'ID',       live: true, action: nav('employees') },
-            { label: 'Роли',       desc: 'Кто что видит: роли и разделы меню',       icon: 'Settings', live: true, action: () => openSection('roles') },
+            { label: 'Сотрудники', desc: 'Врачи, медсёстры, регистратура, администрация', icon: 'ID',       live: true, action: nav('employees'), route: 'employees' },
+            { label: 'Роли',       desc: 'Кто что видит: роли и разделы меню',       icon: 'Settings', live: true, action: () => openSection('roles'), section: 'roles' },
             // DEPARTMENTS_V1 — свой экран вместо таблицы из трёх колонок.
-            { label: 'Отделы',     desc: 'Руководитель, команда, помещения и снабжение каждого отдела', icon: 'Building', live: true, action: nav('departments') },
+            { label: 'Отделы',     desc: 'Руководитель, команда, помещения и снабжение каждого отдела', icon: 'Building', live: true, action: nav('departments'), route: 'departments' },
         ],
     },
     {
         title: 'Настройки услуг', icon: 'Flask', color: { bg: '#efeafb', fg: '#6b4fb0' },
         items: [
-            { label: 'Список услуг',        desc: 'Все услуги клиники: цены и куда ведёт каждая', icon: 'Receipt', live: true, action: nav('services') },
+            { label: 'Список услуг',        desc: 'Все услуги клиники: цены и куда ведёт каждая', icon: 'Receipt', live: true, action: nav('services'), route: 'services' },
             // LAB_PANELS_BY_SECTION_V1 (2026-08-31) — «Лаборатория и диагностика»
             // is gone from this card on purpose (owner: «remove the laboratory
             // and the panels settings from the settings, leave only in the lab
             // section with switch»). The panel editor's one home is the «Панели»
             // mode of Лаборатория, open to every role that can open the section;
             // the old address redirects there (admin.js LEGACY_ROUTES).
-            { label: 'Товары и препараты',  desc: 'Что на складе, по какой цене и когда пора заказывать', icon: 'Pill',   live: true, action: nav('inventory') },
-            { label: 'Типы услуг',          desc: 'Как услуги сгруппированы в прайсе',           icon: 'Layers', live: true, action: () => openSection('service_types') },
-            { label: 'Консультации врачей', desc: 'Виды консультаций и их стоимость',    icon: 'Stethoscope', live: true, action: () => openSection('consultation_types') },
+            { label: 'Товары и препараты',  desc: 'Что на складе, по какой цене и когда пора заказывать', icon: 'Pill',   live: true, action: nav('inventory'), route: 'inventory' },
+            { label: 'Типы услуг',          desc: 'Как услуги сгруппированы в прайсе',           icon: 'Layers', live: true, action: () => openSection('service_types'), section: 'service_types' },
+            { label: 'Консультации врачей', desc: 'Виды консультаций и их стоимость',    icon: 'Stethoscope', live: true, action: () => openSection('consultation_types'), section: 'consultation_types' },
         ],
     },
     {
         title: 'Основное', icon: 'Folder', color: { bg: '#fdf3e1', fg: '#b07d1f' },
         items: [
-            { label: 'Пациенты',            desc: 'Картотека: данные пациента, контакты, номер карты', icon: 'ID',       live: true, action: nav('settings:patients') },   // PATIENTS_SECTION_V1 — easymed's section-CRUD register (route, NOT openSection: that's the hub's own lookup editor and has no patients config)
-            { label: 'Категории пациентов', desc: 'Группы пациентов и скидка каждой группы',               icon: 'Layers',   live: true, action: () => openSection('patient_categories') },
+            { label: 'Пациенты',            desc: 'Картотека: данные пациента, контакты, номер карты', icon: 'ID',       live: true, action: nav('settings:patients'), route: 'settings:patients' },   // PATIENTS_SECTION_V1 — easymed's section-CRUD register (route, NOT openSection: that's the hub's own lookup editor and has no patients config)
+            { label: 'Категории пациентов', desc: 'Группы пациентов и скидка каждой группы',               icon: 'Layers',   live: true, action: () => openSection('patient_categories'), section: 'patient_categories' },
             // CHRONIC_REF_V1 — список, из которого анкета пациента выбирает хронические заболевания.
-            { label: 'Хронические заболевания', desc: 'Список для анкеты пациента: выбирают, а не печатают', icon: 'Heart',  live: true, action: () => openSection('chronic_conditions_ref') },
+            { label: 'Хронические заболевания', desc: 'Список для анкеты пациента: выбирают, а не печатают', icon: 'Heart',  live: true, action: () => openSection('chronic_conditions_ref'), section: 'chronic_conditions_ref' },
             // COMPANY_SECTION_V1 — «Компания» было НЕКУДА открыть.
             //
             // Печатные формы, шапка приложения и window.CLINIC берут название,
@@ -183,8 +233,8 @@ const GROUPS = [
             // раздела, которого в меню не было. Отсюда и «нельзя изменить
             // название компании»: менять было негде, а правки в дизайнере
             // затирались при следующей загрузке.
-            { label: 'Документы',           desc: 'Как выглядят печатные документы',             icon: 'Doc',      live: true, action: nav('documents') },
-            { label: 'Скидки пациентов',    desc: 'Промокоды и сертификаты: срок, группа пациентов, услуги', icon: 'Coins',    live: true, action: () => openSection('patient_discounts') },
+            { label: 'Документы',           desc: 'Как выглядят печатные документы',             icon: 'Doc',      live: true, action: nav('documents'), route: 'documents' },
+            { label: 'Скидки пациентов',    desc: 'Промокоды и сертификаты: срок, группа пациентов, услуги', icon: 'Coins',    live: true, action: () => openSection('patient_discounts'), section: 'patient_discounts' },
             // TELEGRAM_BOT_V1 — токен бота и режимы выдачи документов пациентам.
             // Раздел админский: isRouteAllowed('telegram-settings') пускает только
             // полный доступ, остальные упрутся в отказ на самом экране.
@@ -211,13 +261,13 @@ const GROUPS = [
         // opens daily.
         title: 'Системные настройки', icon: 'Settings', color: { bg: '#e9ebfb', fg: '#4b52b0' },
         items: [
-            { label: 'CRM-канбан',          desc: 'По каким шагам идёт заявка и откуда приходят люди', icon: 'Grid', live: true, action: nav('crm-settings') },
+            { label: 'CRM-канбан',          desc: 'По каким шагам идёт заявка и откуда приходят люди', icon: 'Grid', live: true, action: nav('crm-settings'), route: 'crm-settings' },
             // TELEPHONY_ROUTING_V1 — обе подписи поехали вслед за карточкой
             // «Звонки → заявки»: CRM-канбан обещал маршрут, которого у него
             // больше нет, а Телефония не упоминала маршрут, который теперь её.
-            { label: 'Телефония',           desc: 'Звонки Binotel: подключение и как звонки становятся заявками', icon: 'Headset', live: true, action: nav('telephony-settings') },
-            { label: 'Telegram-бот',        desc: 'Пациент получает свои документы в Telegram по номеру телефона', icon: 'Bot', live: true, action: nav('telegram-settings') },
-            { label: 'API',                 desc: 'Ключи доступа для партнёрских программ',                     icon: 'Settings', live: true, action: () => openSection('api_tokens') },
+            { label: 'Телефония',           desc: 'Звонки Binotel: подключение и как звонки становятся заявками', icon: 'Headset', live: true, action: nav('telephony-settings'), route: 'telephony-settings' },
+            { label: 'Telegram-бот',        desc: 'Пациент получает свои документы в Telegram по номеру телефона', icon: 'Bot', live: true, action: nav('telegram-settings'), route: 'telegram-settings' },
+            { label: 'API',                 desc: 'Ключи доступа для партнёрских программ',                     icon: 'Settings', live: true, action: () => openSection('api_tokens'), section: 'api_tokens' },
         ],
     },
     {
@@ -232,11 +282,11 @@ const GROUPS = [
         // сведения о клинике.
         title: 'Настройки Easy-Med', icon: 'Shield', color: { bg: '#e4f3f1', fg: '#1f8a80' },
         items: [
-            { label: 'Компания',            desc: 'Название, логотип, фирменный цвет и контакты клиники', icon: 'ID', live: true, action: nav('documents-settings') },
+            { label: 'Компания',            desc: 'Название, логотип, фирменный цвет и контакты клиники', icon: 'ID', live: true, action: nav('documents-settings'), route: 'documents-settings' },
             // Единственное «управление филиалами» в системе: тот же редактор
             // (LOOKUP_CONFIG.branches), просто теперь у него один вход, а не
             // собственная группа из двух строк.
-            { label: 'Филиалы',             desc: 'Адреса зданий клиники', icon: 'Building', live: true, action: () => openSection('branches') },
+            { label: 'Филиалы',             desc: 'Адреса зданий клиники', icon: 'Building', live: true, action: () => openSection('branches'), section: 'branches' },
             // SETTINGS_SPLIT_V1 (2026-08-29, владелец: «в подписке оставить
             // только подписку и статус модулей (с запросом), а в системе —
             // только версию и что нового») — «Система» больше не четыре
@@ -244,17 +294,17 @@ const GROUPS = [
             //   Система        → 'updates'      (версия + «что нового»)
             //   Подписка       → 'subscription' (состояние подписки + модули)
             //   Данные клиники → 'clinic-data'  (копии + опасная зона)
-            { label: 'Система',             desc: 'Версия системы и что нового в последнем обновлении', icon: 'Shield', live: true, action: nav('updates'), statusKey: 'update' },   // UPDATE_STATUS_ROW_V1
+            { label: 'Система',             desc: 'Версия системы и что нового в последнем обновлении', icon: 'Shield', live: true, action: nav('updates'), route: 'updates', statusKey: 'update' },   // UPDATE_STATUS_ROW_V1
             // «Подписка» — теперь собственный экран, но карточка внутри него
             // ТА ЖЕ САМАЯ (views/system-subscription.js): экран её импортирует,
             // а не копирует. Второй копии подписки в системе нет.
-            { label: 'Подписка',            desc: 'Активация, срок действия и подключённые модули', icon: 'Wallet', live: true, action: nav('subscription') },
+            { label: 'Подписка',            desc: 'Активация, срок действия и подключённые модули', icon: 'Wallet', live: true, action: nav('subscription'), route: 'subscription' },
             // «Данные клиники» — единственный вход к резервным копиям и к
             // полному удалению данных. Плитка появилась вместе с разделением:
             // без неё обе функции остались бы в коде, но исчезли бы с экрана,
             // а другого пути к backup_create/backup_restore/factory_reset в
             // системе нет вообще.
-            { label: 'Данные клиники',      desc: 'Резервные копии и полное удаление данных клиники', icon: 'Database', live: true, action: nav('clinic-data') },
+            { label: 'Данные клиники',      desc: 'Резервные копии и полное удаление данных клиники', icon: 'Database', live: true, action: nav('clinic-data'), route: 'clinic-data' },
         ],
     },
     {
@@ -266,7 +316,7 @@ const GROUPS = [
         // под ним, потому что дают поля, которых нет в мастере, и импорт.
         title: 'Помещения', icon: 'Building', color: { bg: '#e8f6ed', fg: '#2e8b52' },
         items: [
-            { label: 'Помещения', desc: 'Этажи, кабинеты и палаты в одном месте: койки, цены, врачи', icon: 'Building', live: true, action: nav('rooms-setup') },
+            { label: 'Помещения', desc: 'Этажи, кабинеты и палаты в одном месте: койки, цены, врачи', icon: 'Building', live: true, action: nav('rooms-setup'), route: 'rooms-setup' },
             // ROOMS_ONE_ENTRANCE_V1 (2026-09-11) — четыре старых редактора (Этажи,
             // Кабинеты, Палаты, Кровати) из меню убраны: «Помещения» делает всё то же
             // в одном окне и на плане, а два входа в одно и то же читались как два
@@ -278,23 +328,23 @@ const GROUPS = [
     {
         title: 'Управление плательщиками', icon: 'Coins', color: { bg: '#e9ebfb', fg: '#4b52b0' },
         items: [
-            { label: 'Компании-плательщики',       desc: 'Кто платит за пациента: страховые и компании', icon: 'Coins', live: true, action: () => openSection('payers') },
-            { label: 'Страховые полисы',           desc: 'Что и на сколько процентов покрывает каждый плательщик',    icon: 'Doc',   live: true, action: () => openSection('payer_policies') },
-            { label: 'Провайдеры онлайн-платежей', desc: 'Payme, Click, Uzum: какую комиссию платит клиника', icon: 'Coins', live: true, action: () => openSection('payment_providers') },
-            { label: 'Кэшбэк',                     desc: 'Сколько возвращать пациенту и за что',         icon: 'Coins', live: true, action: () => openSection('cashback_rules') },
+            { label: 'Компании-плательщики',       desc: 'Кто платит за пациента: страховые и компании', icon: 'Coins', live: true, action: () => openSection('payers'), section: 'payers' },
+            { label: 'Страховые полисы',           desc: 'Что и на сколько процентов покрывает каждый плательщик',    icon: 'Doc',   live: true, action: () => openSection('payer_policies'), section: 'payer_policies' },
+            { label: 'Провайдеры онлайн-платежей', desc: 'Payme, Click, Uzum: какую комиссию платит клиника', icon: 'Coins', live: true, action: () => openSection('payment_providers'), section: 'payment_providers' },
+            { label: 'Кэшбэк',                     desc: 'Сколько возвращать пациенту и за что',         icon: 'Coins', live: true, action: () => openSection('cashback_rules'), section: 'cashback_rules' },
         ],
     },
     {
         title: 'Направления', icon: 'MapPin', color: { bg: '#e3f4f7', fg: '#1f7f95' },
         items: [
-            { label: 'Список источников',          desc: 'Откуда приходят пациенты',              icon: 'MapPin', live: true, action: () => openSection('referral_sources') },
-            { label: 'Категории источников',       desc: 'Как сгруппированы источники',         icon: 'Folder', live: true, action: () => openSection('referral_source_categories') },
+            { label: 'Список источников',          desc: 'Откуда приходят пациенты',              icon: 'MapPin', live: true, action: () => openSection('referral_sources'), section: 'referral_sources' },
+            { label: 'Категории источников',       desc: 'Как сгруппированы источники',         icon: 'Folder', live: true, action: () => openSection('referral_source_categories'), section: 'referral_source_categories' },
         ],
     },
     {
         title: 'Зарплата врача', icon: 'Coins', color: { bg: '#fbeae9', fg: '#b0453b' },
         items: [
-            { label: 'Ставки врачей', desc: 'Процент врача по каждой услуге', icon: 'Coins', live: true, action: () => openSection('doctor_rates') },
+            { label: 'Ставки врачей', desc: 'Процент врача по каждой услуге', icon: 'Coins', live: true, action: () => openSection('doctor_rates'), section: 'doctor_rates' },
         ],
     },
 ];
@@ -343,8 +393,10 @@ function renderGrid(grid) {
     // (desc) to keep each row's cards close in size — otherwise a 1-section card
     // lands beside a 5-section one and grows four empty rows of padding. Sort is
     // stable, so same-sized groups keep their declaration order (easymed's).
+    // ROLE_REPORTS_SETTINGS_V1 — сначала права, потом поиск: плитка, которой
+    // роль не видит, не находится и поиском, а «N разделов» считает видимые.
     const visible = GROUPS
-        .map(group => ({ group, items: q ? group.items.filter(match) : group.items }))
+        .map(group => ({ group, items: group.items.filter(tileVisible).filter(match) }))
         .filter(x => x.items.length)
         .sort((a, b) => b.items.length - a.items.length);
     if (!visible.length) { grid.appendChild(h('div', { class: 'empty set-empty' }, 'Ничего не найдено.')); return; }
@@ -968,13 +1020,20 @@ async function renderEditor(container, key) {
 
     const anyFilterSet = () => [...filterInputs.values()].some(el => (el.value || '') !== '');
 
-    const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openRowModal(null) },
-        Icon('Plus', { size: 14 }), ' Add');
+    // ROLE_REPORTS_SETTINGS_V1 — ниже «Изменения» справочник только читают:
+    // ни «Добавить», ни окна правки (сервер всё равно не сохранит).
+    const readOnly = !!state.readOnly;
+    const addBtn = readOnly
+        ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, Icon('Lock', { size: 14 }), ' ', tr('Только просмотр'))
+        : h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openRowModal(null) },
+            Icon('Plus', { size: 14 }), ' Add');
 
     // BRANCH_SYNC_V1 — слот под карточку связи филиалов. Заполняется после
     // отрисовки (карточка ходит в RPC), поэтому список филиалов появляется
     // сразу и не ждёт сети.
-    const syncSlot = key === 'branches' ? h('div') : null;
+    // ROLE_REPORTS_SETTINGS_V1 — карточка связи зданий зовёт админские RPC,
+    // поэтому показывается только полному доступу — роль с «Филиалы: Изменение» правит адреса, не связь.
+    const syncSlot = key === 'branches' && !hasRestriction() ? h('div') : null;
 
     container.appendChild(h('div', { class: 'fade-in' },
         // APPBAR_BACK_V1 — это возврат ВНУТРИ раздела (из справочника к плиткам),
@@ -1056,9 +1115,9 @@ async function renderEditor(container, key) {
     function rowEl(row) {
         const inactive = !row.active;
         return h('tr', {
-            class: 'row-click',
-            style: { cursor: 'pointer', opacity: inactive ? '0.55' : '' },
-            onclick: () => openRowModal(row),
+            class: readOnly ? null : 'row-click',
+            style: { cursor: readOnly ? 'default' : 'pointer', opacity: inactive ? '0.55' : '' },
+            onclick: readOnly ? null : () => openRowModal(row),
         },
             ...cfg.columns.map(c => h('td', null,
                 c.embed ? fmtCell(row[c.key] ? row[c.key][c.embedLabel || 'name'] : null)

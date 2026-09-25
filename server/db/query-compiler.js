@@ -1,3 +1,4 @@
+import { writeGrantAllows } from './write-grant.js';   // ROLE_REPORTS_SETTINGS_V1
 import { tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns, rowScope, actorStamps } from './schema-registry.js';
 import { effectiveRoles } from '../services/roles.js';
 import { scopeLifted } from './row-scope.js';   // CRM_HEAD_MERGE_TAGS_V1
@@ -174,8 +175,12 @@ export function compile(desc, user, ctx = {}) {
   }
   // upsert = insert + update: it needs BOTH permissions (a role that can only
   // insert must not gain an update path through ON CONFLICT DO UPDATE).
+  // ROLE_REPORTS_SETTINGS_V1 — запись: список ролей реестра ИЛИ право окна
+  // настроек из «Ролей» (write.grant; см. db/write-grant.js — что оно
+  // открывает и чего не открывает никогда).
+  const mayWrite = (o) => canWrite(table, o, role) || writeGrantAllows(table, o, user, db);
   if (op === 'upsert') {
-    if (!canWrite(table, 'insert', role) || !canWrite(table, 'update', role)) {
+    if (!mayWrite('insert') || !mayWrite('update')) {
       throw new CompileError('not allowed', 403);
     }
     // CRM_DEDUP_SEARCH_TASKS_V1 — ON CONFLICT DO UPDATE правит строку, минуя
@@ -184,7 +189,7 @@ export function compile(desc, user, ctx = {}) {
     if (scopeFor(table, user, db)) throw new CompileError('not allowed', 403);
     return compileUpsert(desc, table);
   }
-  if (!canWrite(table, op, role)) throw new CompileError('not allowed', 403);
+  if (!mayWrite(op)) throw new CompileError('not allowed', 403);
   if (op === 'insert') return compileInsert(desc, table, user, db);
   if (op === 'update') return compileUpdate(desc, table, user, db);
   return compileDelete(desc, table, user, db);

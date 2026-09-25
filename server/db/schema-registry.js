@@ -413,12 +413,12 @@ export const REGISTRY = {
   // заведения (порядок создания = порядок в настройках). Колонка есть в таблице
   // с самого начала; её отсутствие здесь роняло ВЕСЬ запрос, а не только сортировку.
   branches: { read:{roles:ALL_STAFF, columns:['id','name','phone','address','is_24_7','working_hours','active','created_at']},
-              write:{ insert:{roles:['admin'],columns:['name','phone','address','license_number','is_24_7','working_hours']},
+              write:{ grant:'settings.branches', insert:{roles:['admin'],columns:['name','phone','address','license_number','is_24_7','working_hours']},
                       update:{roles:['admin'],columns:['name','phone','address','license_number','is_24_7','working_hours','active']},
                       delete:{roles:[]} },
               filters:['id','active'], embed:{} },
   payers:    { read:{roles:ALL_STAFF,columns:['id','name','kind','active']},
-               write:{insert:{roles:['admin'],columns:['name','kind']},update:{roles:['admin'],columns:['name','kind','active']},delete:{roles:[]}},
+               write:{ grant:'settings.payers',insert:{roles:['admin'],columns:['name','kind']},update:{roles:['admin'],columns:['name','kind','active']},delete:{roles:[]}},
                filters:['id','active','kind'], embed:{} },
   // REFERRAL_SOURCE_PERSON_V1 (mig 058) — a source is usually a person the clinic
   // pays a commission to: ФИО in parts, contact, workplace, district, and the
@@ -439,7 +439,7 @@ export const REGISTRY = {
   // source at another doctor.
   referral_sources: { read:{roles:ALL_STAFF,columns:['id','name','code','doctor_id','category','category_id','last_name','first_name','middle_name',
                  'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','active']},
-               write:{insert:{roles:['admin','registrar'],columns:['name','category','category_id','last_name','first_name','middle_name',
+               write:{ grant:'settings.referral_sources',insert:{roles:['admin','registrar'],columns:['name','category','category_id','last_name','first_name','middle_name',
                  'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates']},
                  update:{roles:['admin'],columns:['name','category','category_id','last_name','first_name','middle_name',
                  'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','active']},delete:{roles:[]}},
@@ -539,7 +539,7 @@ export const REGISTRY = {
   // уезжает филиалам со справочником (branch-sync/catalogue.js).
   doc_settings: {
     read:  { roles: ALL_STAFF, columns: ['id','clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note','lab_scope','updated_at'] },
-    write: { insert: { roles: [] },
+    write: { grant:'settings.company', insert: { roles: [] },
              update: { roles: ['admin'], columns: ['clinic_name','address','phone','email','license','logo_data_url','accent_color','paper_size','show_watermark','footer_note','legal_note','lab_scope'] },
              delete: { roles: [] } },
     filters: ['id'],
@@ -551,7 +551,7 @@ export const REGISTRY = {
   // the upsert conflict target (ON CONFLICT (company_id)).
   doc_branding: {
     read:  { roles: ALL_STAFF, columns: ['id','company_id','settings','updated_at'] },
-    write: { insert: { roles: ['admin'], columns: ['company_id','settings','updated_at'] },
+    write: { grant:'settings.documents', insert: { roles: ['admin'], columns: ['company_id','settings','updated_at'] },
              update: { roles: ['admin'], columns: ['company_id','settings','updated_at'] },
              delete: { roles: [] } },
     filters: ['id','company_id'],
@@ -571,19 +571,19 @@ export const REGISTRY = {
     filters:['id','department_id','kind','created_at'], json:['details'],
     embed:{ users: { table:'users', fk:'actor_id', columns:['id','full_name'] } } },
   service_types: { read:{roles:ALL_STAFF,columns:['id','name','code','billing_mode','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','code','billing_mode','active']},update:{roles:['admin'],columns:['name','code','billing_mode','active']},delete:{roles:[]}},
+    write:{ grant:'settings.service_types',insert:{roles:['admin'],columns:['name','code','billing_mode','active']},update:{roles:['admin'],columns:['name','code','billing_mode','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
   consultation_types: { read:{roles:ALL_STAFF,columns:['id','name','name_ru','name_uz','sort_order','price','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','name_ru','name_uz','sort_order','price','active']},update:{roles:['admin'],columns:['name','name_ru','name_uz','sort_order','price','active']},delete:{roles:[]}},
+    write:{ grant:'settings.consultation_types',insert:{roles:['admin'],columns:['name','name_ru','name_uz','sort_order','price','active']},update:{roles:['admin'],columns:['name','name_ru','name_uz','sort_order','price','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
   // CATEGORY_DISCOUNT_V1 (миграция 107) — discount_percent: скидка группы.
   // Читают все (карта пациента показывает её рядом с категорией), пишет только
   // администратор — это деньги клиники, а не оформление.
   patient_categories: { read:{roles:ALL_STAFF,columns:['id','name','tier','discount_percent','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','tier','discount_percent','active']},update:{roles:['admin'],columns:['name','tier','discount_percent','active']},delete:{roles:[]}},
+    write:{ grant:'settings.patient_categories',insert:{roles:['admin'],columns:['name','tier','discount_percent','active']},update:{roles:['admin'],columns:['name','tier','discount_percent','active']},delete:{roles:[]}},
     filters:['id','active','name'], embed:{} },
   floors: { read:{roles:ALL_STAFF,columns:['id','name','level','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','level','active']},update:{roles:['admin'],columns:['name','level','active']},delete:{roles:[]}},
+    write:{ grant:'settings.rooms',insert:{roles:['admin'],columns:['name','level','active']},update:{roles:['admin'],columns:['name','level','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
   // ROOMS_SETUP_V1 — code/room_type/capacity/queue_mode добавлены миграцией 082;
   // без них объединённый раздел «Помещения» мог создать строку, но не описать её.
@@ -596,12 +596,12 @@ export const REGISTRY = {
   // ROOMS_WARDS_DEPT_V1 — `department_id` и `notes`: разметка настроек их уже
   // показывала, а разрешения на них не было, и выбранный отдел молча пропадал.
   rooms: { read:{roles:ALL_STAFF,columns:['id','name','code','room_type','capacity','queue_mode','floor_id','department_id','notes','active','created_at','working_hours','plan_x','plan_y','plan_w','plan_h']},
-    write:{insert:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','department_id','notes','active','working_hours','plan_x','plan_y','plan_w','plan_h']},update:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','department_id','notes','active','working_hours','plan_x','plan_y','plan_w','plan_h']},delete:{roles:[]}},
+    write:{ grant:'settings.rooms',insert:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','department_id','notes','active','working_hours','plan_x','plan_y','plan_w','plan_h']},update:{roles:['admin'],columns:['name','code','room_type','capacity','queue_mode','floor_id','department_id','notes','active','working_hours','plan_x','plan_y','plan_w','plan_h']},delete:{roles:[]}},
     filters:['id','active','floor_id','department_id','room_type','queue_mode'],
     embed:{ floors:{table:'floors',fk:'floor_id',columns:['id','name']},
             departments:{table:'departments',fk:'department_id',columns:['id','name','kind']} } },
   wards: { read:{roles:ALL_STAFF,columns:['id','name','code','floor_id','department_id','active','created_at','type','billing_mode','price_per_day','price_per_hour','color','plan_x','plan_y','plan_w','plan_h']},
-    write:{insert:{roles:['admin'],columns:['name','code','floor_id','department_id','active','type','billing_mode','price_per_day','price_per_hour','color','plan_x','plan_y','plan_w','plan_h']},update:{roles:['admin'],columns:['name','code','floor_id','department_id','active','type','billing_mode','price_per_day','price_per_hour','color','plan_x','plan_y','plan_w','plan_h']},delete:{roles:[]}},
+    write:{ grant:'settings.rooms',insert:{roles:['admin'],columns:['name','code','floor_id','department_id','active','type','billing_mode','price_per_day','price_per_hour','color','plan_x','plan_y','plan_w','plan_h']},update:{roles:['admin'],columns:['name','code','floor_id','department_id','active','type','billing_mode','price_per_day','price_per_hour','color','plan_x','plan_y','plan_w','plan_h']},delete:{roles:[]}},
     filters:['id','active','floor_id','department_id'],
     embed:{ floors:{table:'floors',fk:'floor_id',columns:['id','name']},
             departments:{table:'departments',fk:'department_id',columns:['id','name','kind']} } },
@@ -609,10 +609,10 @@ export const REGISTRY = {
   // Справочник пишет администратор; размещение — тоже он, и удаляет тоже он:
   // строка размещения — связь без истории, снять её безопасно.
   equipment: { read:{roles:ALL_STAFF,columns:['id','name','kind','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','kind','active']},update:{roles:['admin'],columns:['name','kind','active']},delete:{roles:['admin']}},
+    write:{ grant:'settings.rooms',insert:{roles:['admin'],columns:['name','kind','active']},update:{roles:['admin'],columns:['name','kind','active']},delete:{roles:['admin']}},
     filters:['id','active'], embed:{} },
   room_equipment: { read:{roles:ALL_STAFF,columns:['id','room_id','ward_id','equipment_id','quantity','created_at']},
-    write:{insert:{roles:['admin'],columns:['room_id','ward_id','equipment_id','quantity']},update:{roles:['admin'],columns:['quantity']},delete:{roles:['admin']}},
+    write:{ grant:'settings.rooms',insert:{roles:['admin'],columns:['room_id','ward_id','equipment_id','quantity']},update:{roles:['admin'],columns:['quantity']},delete:{roles:['admin']}},
     filters:['id','room_id','ward_id','equipment_id'],
     embed:{ equipment:{table:'equipment',fk:'equipment_id',columns:['id','name','kind']} } },
   // `status` is intentionally NOT writable via /api/db — bed occupancy/housekeeping
@@ -620,7 +620,7 @@ export const REGISTRY = {
   // set_bed_status → free/cleaning/maintenance), so a config edit can never desync a
   // bed from an active admission. Insert defaults status to 'free' at the DB level.
   beds: { read:{roles:ALL_STAFF,columns:['id','code','ward_id','status','active','created_at','type','price_per_day','price_per_hour','notes']},
-    write:{insert:{roles:['admin'],columns:['code','ward_id','active','type','price_per_day','price_per_hour','notes']},update:{roles:['admin'],columns:['code','ward_id','active','type','price_per_day','price_per_hour','notes']},delete:{roles:[]}},
+    write:{ grant:'settings.rooms',insert:{roles:['admin'],columns:['code','ward_id','active','type','price_per_day','price_per_hour','notes']},update:{roles:['admin'],columns:['code','ward_id','active','type','price_per_day','price_per_hour','notes']},delete:{roles:[]}},
     filters:['id','active','ward_id'], embed:{ wards:{table:'wards',fk:'ward_id',columns:['id','name']} } },
   // INPATIENT_FLOW_V1 (миграция 091) — колонки маршрута ЧИТАЮТСЯ, но по-прежнему
   // не пишутся: write остаётся пустым во всех трёх операциях. Это не
@@ -689,13 +689,13 @@ export const REGISTRY = {
     },
   },
   payer_policies: { read:{roles:ALL_STAFF,columns:['id','name','payer_id','coverage_percent','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},update:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},delete:{roles:[]}},
+    write:{ grant:'settings.payer_policies',insert:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},update:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},delete:{roles:[]}},
     filters:['id','active','payer_id'], embed:{ payers:{table:'payers',fk:'payer_id',columns:['id','name']} } },
   payment_providers: { read:{roles:ALL_STAFF,columns:['id','name','fee_percent','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','fee_percent','active']},update:{roles:['admin'],columns:['name','fee_percent','active']},delete:{roles:[]}},
+    write:{ grant:'settings.payment_providers',insert:{roles:['admin'],columns:['name','fee_percent','active']},update:{roles:['admin'],columns:['name','fee_percent','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
   cashback_rules: { read:{roles:ALL_STAFF,columns:['id','name','percent','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','percent','active']},update:{roles:['admin'],columns:['name','percent','active']},delete:{roles:[]}},
+    write:{ grant:'settings.cashback_rules',insert:{roles:['admin'],columns:['name','percent','active']},update:{roles:['admin'],columns:['name','percent','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
   // REFERRAL_CATEGORY_RATES_V1 (mig 115) — the category carries the STANDARD
   // reward: a percent for everything, plus per-service-group rows in `rates`
@@ -706,26 +706,26 @@ export const REGISTRY = {
   // `is_internal` marks the one category whose sources are the clinic's own
   // doctors. A flag, not a name — see mig 117.
   referral_source_categories: { read:{roles:ALL_STAFF,columns:['id','name','standard_percent','rates','is_internal','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','standard_percent','rates','active']},
+    write:{ grant:'settings.referral_source_categories',insert:{roles:['admin'],columns:['name','standard_percent','rates','active']},
       update:{roles:['admin'],columns:['name','standard_percent','rates','active']},delete:{roles:[]}},
     filters:['id','active'], json:['rates'], embed:{} },
   // DISCOUNT_RULES_V1 (mig 129) — valid_from/valid_until, category_id (apply to a
   // patient group), service_ids (JSON list: apply to these services only), note.
   patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note']},
-    write:{insert:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},
+    write:{ grant:'settings.patient_discounts',insert:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},
       update:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},delete:{roles:[]}},
     filters:['id','active','kind','category_id'], json:['service_ids'],
     embed:{ patient_categories:{table:'patient_categories',fk:'category_id',columns:['id','name']} } },
   // CHRONIC_REF_V1 (mig 129) — the clinic's list of chronic conditions the
   // patient form picks from.
   chronic_conditions_ref: { read:{roles:ALL_STAFF,columns:['id','name','code','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','code','active']},update:{roles:['admin'],columns:['name','code','active']},delete:{roles:[]}},
+    write:{ grant:'settings.chronic_conditions',insert:{roles:['admin'],columns:['name','code','active']},update:{roles:['admin'],columns:['name','code','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
   api_tokens: { read:{roles:['admin'],columns:['id','name','token','active','created_at']},
     write:{insert:{roles:['admin'],columns:['name','token','active']},update:{roles:['admin'],columns:['name','token','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
   doctor_rates: { read:{roles:ALL_STAFF,columns:['id','doctor_id','service_id','percent','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},update:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},delete:{roles:[]}},
+    write:{ grant:'settings.doctor_rates',insert:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},update:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},delete:{roles:[]}},
     filters:['id','active','doctor_id','service_id'],
     embed:{ users:{table:'users',fk:'doctor_id',columns:['id','full_name']}, services:{table:'services',fk:'service_id',columns:['id','name']} } },
   // STAFF_SYNC_V1 (migration 086) — GOVERNED BY THE MAIN CLINIC, and the role
@@ -1466,7 +1466,18 @@ export function actorStamps(t) { const e = REGISTRY[t]; return (e && e.stamps) |
 // the op: that is what «Дополнительные роли» means. An empty set allows nothing.
 const asRoles = (role) => (Array.isArray(role) ? role : [role]);
 export function canRead(t, role) { const e = REGISTRY[t]; return !!e && asRoles(role).some((r) => e.read.roles.includes(r)); }
-export function canWrite(t, op, role) { const e = REGISTRY[t]; return !!e && !!e.write[op] && asRoles(role).some((r) => e.write[op].roles.includes(r)); }
+// ROLE_REPORTS_SETTINGS_V1 — `write.grant` — не операция, а ключ справочника
+// прав (строка), поэтому операцией читается только объект.
+export function canWrite(t, op, role) { const e = REGISTRY[t]; return !!e && !!e.write[op] && typeof e.write[op] === 'object' && asRoles(role).some((r) => e.write[op].roles.includes(r)); }
+// ROLE_REPORTS_SETTINGS_V1 — НАСТРОЙКИ ПО РАЗДЕЛАМ: КЛЮЧ ПЛИТКИ, КОТОРОЙ
+// ПРИНАДЛЕЖИТ ТАБЛИЦА. Таблицы справочников настроек пишет администратор
+// (списки ролей выше), а `write.grant` называет окно раздела «Настройки» в
+// справочнике прав (public/js/shared/permission-catalog.js). Кому это окно
+// выдано на «Изменение», тому компилятор запросов разрешает вставку и правку
+// ВМЕСТО администратора — и только их: удаление и операции, которых нет даже у
+// администратора, ключ не открывает (db/write-grant.js). Ключ ставится ТОЛЬКО
+// у таблиц, которые плитка правит сама; чужую таблицу он не открывает.
+export function writeGrantKey(t) { const e = REGISTRY[t]; return e && typeof e.write.grant === 'string' ? e.write.grant : null; }
 export function readableColumns(t) { return REGISTRY[t] ? [...REGISTRY[t].read.columns] : []; }
 export function writableColumns(t, op) { const e = REGISTRY[t]; return e && e.write[op] ? [...e.write[op].columns] : []; }
 export function filterAllowed(t, col) { return !!REGISTRY[t] && REGISTRY[t].filters.includes(col); }

@@ -7276,6 +7276,9 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .rm-pill:has(input:focus-visible) { box-shadow: 0 0 0 3px var(--primary-50); border-color: var(--primary-500); }
 .rm-pill:has(input:disabled) { opacity: .5; cursor: not-allowed; }
 .rm-hint { font-size: 12.5px; padding: 0 0 10px 22px; }
+/* ROLE_REPORTS_SETTINGS_V1 — закрытая строка (только администратор): видна, выбора нет. */
+.rm-row-sub.is-locked .rm-title { color: var(--ink-500); }
+.rm-locked { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; font-size: 12.5px; }
 /* ROLES_ACCORDION_V1 — раздел сворачивается: заголовок — кнопка с шевроном, тело прячется. */
 .rm-toggle { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 2px 0; margin: 0;
   background: none; border: 0; text-align: left; font: inherit; color: inherit; cursor: pointer; border-radius: 6px; }
