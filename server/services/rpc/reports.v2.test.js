@@ -504,3 +504,82 @@ test('M8: единица товара — base_unit, а умолчание «pcs
   assert.equal(objects(runReport(db, { kind: 'stock_statement', from: '2026-01-01', to: day }, admin))
     .find((o) => o['Товар'] === 'Перчатки')['Ед.'], 'шт');
 });
+
+// ─── PROCUREMENT_FILTERS_V1 — категория у всех четырёх видов «Закупок и склада» ─
+//
+// Владелец: итоги и статистика следуют за категорией, которую человек отметил.
+// Отбор идёт в SQL по товару строки; итог здания, итоги по поставщикам и сверка
+// ведомости считаются по той же выборке.
+
+function seedStockCats() {
+  const s = seedStock();
+  // Перчатки и шприц — расходники, бинт — медикаменты.
+  s.db.prepare("UPDATE products SET procurement_category = 'consumables' WHERE id IN (1, 3)").run();
+  s.db.prepare("UPDATE products SET procurement_category = 'medicines' WHERE id = 2").run();
+  return s;
+}
+
+test('категория: приход по поставщикам — строки, итоги по поставщикам и итог здания только своей категории', () => {
+  const { db } = seedStockCats();
+  const all = run(db, 'procurement', { category: 'all' });
+  assert.equal(objects(all).length, 4);
+  assert.ok(!all.notes.some((n) => n.startsWith('Категория:')), 'без отбора примечания о категории нет');
+  const med = run(db, 'procurement', { category: 'medicines' });
+  assert.deepEqual(objects(med).map((o) => o['Товар']), ['Бинт']);
+  assert.equal(med.by_building[0].total, 100000);
+  assert.ok(med.notes.includes('Итого — ООО МедСнаб: 1 позиция, 100 000 сум.'), med.notes.join(' | '));
+  assert.ok(!med.notes.some((n) => n.includes('Поставщик не указан')), 'итог чужой категории остался в примечаниях');
+  assert.ok(med.notes.some((n) => n.startsWith('Категория: «Медикаменты»')), med.notes.join(' | '));
+  const cons = run(db, 'procurement', { category: 'consumables' });
+  assert.equal(objects(cons).length, 3);
+  assert.equal(cons.by_building[0].total + med.by_building[0].total, all.by_building[0].total,
+    'две категории вместе не дают итог всех — отбор что-то потерял или удвоил');
+});
+
+test('категория: расход — строки и итог только своей категории', () => {
+  const { db } = seedStockCats();
+  assert.equal(objects(run(db, 'stock_consumption', { category: 'medicines' })).length, 0);
+  const cons = run(db, 'stock_consumption', { category: 'consumables' });
+  assert.equal(objects(cons).length, 3);
+  const holder = run(db, 'stock_consumption', { category: 'medicines', by: 'holder' });
+  assert.equal(holder.rows.length, 0);
+  assert.equal(holder.by_building.reduce((n, b) => n + (b.total || 0), 0), 0);
+  assert.ok(holder.notes.some((n) => n.startsWith('Категория: «Медикаменты»')));
+});
+
+test('категория: ведомость — товары и сверка только выбранной категории, примечание говорит это', () => {
+  const { db, day } = seedStockCats();
+  // Расхождение у перчаток (расходники) — медикаменты его видеть не должны.
+  db.prepare('UPDATE products SET on_hand = on_hand + 7 WHERE id = 1').run();
+  const med = runReport(db, { kind: 'stock_statement', from: '2026-02-01', to: day, category: 'medicines' }, admin);
+  assert.deepEqual(objects(med).map((o) => o['Товар']), ['Бинт']);
+  assert.equal(med.by_building[0].total, objects(med)[0]['Конец: сумма']);
+  assert.ok(med.notes.includes('Сверка с карточкой товара: конечный остаток совпадает с остатком в карточке у всех товаров выбранной категории.'),
+    med.notes.join(' | '));
+  const cons = runReport(db, { kind: 'stock_statement', from: '2026-02-01', to: day, category: 'consumables' }, admin);
+  assert.deepEqual(objects(cons).map((o) => o['Товар']).sort(), ['Перчатки', 'Шприц']);
+  assert.ok(cons.notes.some((n) => n.startsWith('Сверка с карточкой товара: у 1 товара выбранной категории конечный остаток не совпадает')),
+    cons.notes.join(' | '));
+  const all = runReport(db, { kind: 'stock_statement', from: '2026-02-01', to: day }, admin);
+  assert.equal(Math.round((med.by_building[0].total + cons.by_building[0].total) * 100) / 100, all.by_building[0].total);
+});
+
+test('категория: сроки годности — только партии своей категории, стоимость по ним', () => {
+  const { db } = seedStockCats();
+  const med = run(db, 'stock_expiry', { category: 'medicines' });
+  assert.deepEqual(objects(med).map((o) => o['Товар']), ['Бинт']);
+  assert.equal(med.by_building[0].total, 100000);
+  const cons = run(db, 'stock_expiry', { category: 'consumables' });
+  assert.deepEqual(objects(cons).map((o) => o['Товар']), ['Шприц']);
+  assert.equal(cons.by_building[0].total, 20000);
+  assert.equal(objects(run(db, 'stock_expiry', { category: 'dental' })).length, 0);
+});
+
+test('категория: неизвестная или список вместо одной — 400 во всех четырёх видах', () => {
+  const { db } = seedStockCats();
+  for (const kind of ['procurement', 'stock_consumption', 'stock_statement', 'stock_expiry']) {
+    assert.throws(() => run(db, kind, { category: 'drugs' }), (e) => e.status === 400, kind);
+    assert.throws(() => run(db, kind, { category: ['medicines', 'dental'] }), (e) => e.status === 400, kind);
+    assert.doesNotThrow(() => run(db, kind, { category: '' }), kind);
+  }
+});

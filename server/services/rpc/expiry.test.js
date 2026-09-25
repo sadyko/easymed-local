@@ -411,3 +411,78 @@ test('повторная выдача по той же квитанции воз
     assert.deepEqual(again.warnings, first.warnings);
   } finally { db.close(); }
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// PROCUREMENT_FILTERS_V1 — категории и состояние считает сервер
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Владелец: «just show filters so user ticks his own and manage statistics».
+// Категория — фильтр, который человек отмечает сам; он уезжает на сервер и
+// отбирает товары в SQL (как поиск), а итоги по состояниям считаются по тому,
+// что отобрано. Неизвестная категория — 400: опечатка, прочитанная как «партий
+// нет», — ложь о складе.
+
+function twoCategories(db) {
+  db.prepare("UPDATE products SET procurement_category = 'consumables' WHERE id = 7").run();
+  db.prepare("UPDATE products SET procurement_category = 'medicines' WHERE id = 8").run();
+  receiveStockLines(db, { lines: [
+    { product_id: 7, qty: 5, unit: 'base', unit_cost: 1, batch_no: 'A-1', expiry_date: shift(db, -3) },
+    { product_id: 7, qty: 5, unit: 'base', unit_cost: 1, batch_no: 'C-3', expiry_date: shift(db, 400) },
+    { product_id: 8, qty: 5, unit: 'base', unit_cost: 1, batch_no: 'M-1', expiry_date: shift(db, 5) },
+    { product_id: 8, qty: 5, unit: 'base', unit_cost: 1, batch_no: 'M-2', expiry_date: shift(db, -1) },
+  ] }, ADMIN);
+}
+
+test('categories: партии только отмеченных категорий, отбор — в SQL, список товаров сужен', () => {
+  const db = seed();
+  try {
+    twoCategories(db);
+    const med = expiryLots(db, { categories: ['medicines'] }, ADMIN);
+    assert.deepEqual(med.lots.map((l) => l.batch_no), ['M-2', 'M-1']);
+    assert.deepEqual(med.products.map((p) => p.name), ['Бинт'],
+      'фильтр товаров показывает товары чужой категории — человек листает не своё');
+    const both = expiryLots(db, { categories: ['medicines', 'consumables'] }, ADMIN);
+    assert.equal(both.lots.length, 4);
+    // Пустой список — «все категории», а не «ничего».
+    assert.equal(expiryLots(db, { categories: [] }, ADMIN).lots.length, 4);
+    assert.deepEqual(expiryLots(db, { categories: ['dental'] }, ADMIN).lots, []);
+    // Категория и поиск вместе: пересечение, а не одно из двух.
+    assert.deepEqual(expiryLots(db, { categories: ['medicines'], q: 'перч' }, ADMIN).lots, []);
+  } finally { db.close(); }
+});
+
+test('categories: неизвестная категория — 400, а не пустой список', () => {
+  const db = seed();
+  try {
+    twoCategories(db);
+    for (const bad of [['drugs'], ['medicines', 'нет такой'], [7], 'bogus']) {
+      assert.throws(() => expiryLots(db, { categories: bad }, ADMIN), (e) => e.status === 400 && /categories/.test(e.message), JSON.stringify(bad));
+    }
+    // Одна строка тоже принимается — как список из одной.
+    assert.equal(expiryLots(db, { categories: 'medicines' }, ADMIN).lots.length, 2);
+  } finally { db.close(); }
+});
+
+test('state: «Просрочено / Истекает / В порядке», итоги — по категориям и ДО кнопки состояния', () => {
+  const db = seed();
+  try {
+    twoCategories(db);
+    const all = expiryLots(db, {}, ADMIN);
+    assert.deepEqual(all.summary, { total: 4, expired: 2, soon: 1, ok: 1, none: 0 });
+    const expired = expiryLots(db, { state: 'expired' }, ADMIN);
+    assert.deepEqual(expired.lots.map((l) => l.batch_no), ['A-1', 'M-2']);
+    assert.equal(expired.count, 2);
+    assert.deepEqual(expired.summary, all.summary, 'итоги по состояниям пересчитались под кнопку — у соседних кнопок встал ноль');
+    assert.deepEqual(expiryLots(db, { state: 'soon' }, ADMIN).lots.map((l) => l.batch_no), ['M-1']);
+    assert.deepEqual(expiryLots(db, { state: 'ok' }, ADMIN).lots.map((l) => l.batch_no), ['C-3']);
+    assert.equal(expiryLots(db, { state: 'all' }, ADMIN).lots.length, 4);
+    // Итоги следуют за категорией.
+    const med = expiryLots(db, { categories: ['medicines'], state: 'expired' }, ADMIN);
+    assert.deepEqual(med.summary, { total: 2, expired: 1, soon: 1, ok: 0, none: 0 });
+    assert.deepEqual(med.lots.map((l) => l.batch_no), ['M-2']);
+    assert.throws(() => expiryLots(db, { state: 'none' }, ADMIN), (e) => e.status === 400);
+    assert.throws(() => expiryLots(db, { state: 'bogus' }, ADMIN), (e) => e.status === 400);
+    // Кому склад не виден — пустые итоги той же формы.
+    assert.deepEqual(expiryLots(db, { categories: ['medicines'] }, NURSE).summary, { total: 0, expired: 0, soon: 0, ok: 0, none: 0 });
+  } finally { db.close(); }
+});

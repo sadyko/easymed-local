@@ -72,6 +72,45 @@ const MS_DAY = 86400000;
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
 const isPosInt = (v) => Number.isInteger(v) && v > 0;
 
+// PROCUREMENT_FILTERS_V1 (2026-09-25) — КАТЕГОРИИ ЗАКУПОК, ТОТ ЖЕ СПИСОК, ЧТО В
+// CHECK У products.procurement_category (миграция 010). Владелец: «just show
+// filters so user ticks his own and manage statistics» — фильтр, который каждый
+// отмечает сам; НЕ назначение и НЕ ограничение. Поэтому сервер ничего не решает
+// за человека: он только проверяет, что прислана настоящая категория, и отбирает
+// товары в SQL. Неизвестное слово — 400, а не «пустой список»: опечатка в
+// категории, прочитанная как «товаров нет», — это ложь о складе.
+export const PROCUREMENT_CATEGORIES = ['medicines', 'consumables', 'equipment', 'lab_supplies', 'dental', 'radiology', 'office_it', 'facility'];
+
+/**
+ * Категории из аргумента: массив (или одна строка) → проверенный список без
+ * повторов в порядке каталога. Пусто / не прислано → null («все категории»).
+ */
+export function parseCategories(value, argName = 'categories') {
+  if (value === undefined || value === null || value === '') return null;
+  const list = Array.isArray(value) ? value : [value];
+  const seen = new Set();
+  for (const raw of list) {
+    const v = typeof raw === 'string' ? raw.trim() : raw;
+    if (!PROCUREMENT_CATEGORIES.includes(v)) {
+      throw new RpcError(argName + ': неизвестная категория «' + String(raw) + '». Допустимо: ' + PROCUREMENT_CATEGORIES.join(', ') + '.', 400);
+    }
+    seen.add(v);
+  }
+  if (!seen.size) return null;
+  return PROCUREMENT_CATEGORIES.filter((c) => seen.has(c));
+}
+
+/** SQL-условие «товар из этих категорий» — или null, если отбора нет. */
+export function categoryClause(categories, col) {
+  if (!categories || !categories.length) return null;
+  return { sql: `${col} IN (${categories.map(() => '?').join(', ')})`, params: [...categories] };
+}
+
+// Отбор по состоянию партии на экране «Сроки годности»: «Все / Просрочено /
+// Истекает / В порядке». «Срок не указан» отдельной кнопки не имеет — такие
+// строки видны в «Все».
+export const LOT_STATE_FILTERS = ['all', 'expired', 'soon', 'ok'];
+
 /** Дней от одной календарной даты до другой (обе 'ГГГГ-ММ-ДД'). */
 function daysBetween(fromStr, toStr) {
   const a = Date.parse(fromStr + 'T00:00:00Z');
@@ -142,13 +181,17 @@ function receiptGroups(db, { productIds = null } = {}) {
 }
 
 /** Товары, у которых вообще есть что раскладывать: приход или остаток. */
-function stockedProducts(db, { productIds = null, q = '' } = {}) {
+function stockedProducts(db, { productIds = null, q = '', categories = null } = {}) {
   const where = [`(EXISTS (SELECT 1 FROM stock_movements m WHERE m.product_id = p.id AND m.kind = 'receive' AND m.qty > 0) OR p.on_hand <> 0)`];
   const params = [];
   if (productIds && productIds.length) {
     where.push(`p.id IN (${productIds.map(() => '?').join(', ')})`);
     params.push(...productIds);
   }
+  // PROCUREMENT_FILTERS_V1 — категория решается на товарах, как и поиск: в
+  // журнал уезжают только номера отобранных товаров (см. lotBalances).
+  const c = categoryClause(categories, 'p.procurement_category');
+  if (c) { where.push(c.sql); params.push(...c.params); }
   const s = searchClause(q, 'p.name', 'p.code');
   if (s) { where.push(s.sql); params.push(...s.params); }
   return db.prepare(`
@@ -218,10 +261,10 @@ export function productLots(db, productId, todayStr = null) {
  * индексу idx_stock_movements_product. Когда отбора нет, номера не
  * перечисляются вовсе: перечислять весь каталог дороже, чем не перечислять.
  */
-export function lotBalances(db, { productIds = null, q = '', todayStr = null } = {}) {
+export function lotBalances(db, { productIds = null, q = '', categories = null, todayStr = null } = {}) {
   const day = todayStr || today(db);
-  const products = stockedProducts(db, { productIds, q });
-  const filtered = !!(q || (productIds && productIds.length));
+  const products = stockedProducts(db, { productIds, q, categories });
+  const filtered = !!(q || (productIds && productIds.length) || (categories && categories.length));
   if (filtered && !products.length) return [];
   const groups = new Map();
   for (const g of receiptGroups(db, { productIds: filtered ? products.map((p) => p.id) : null })) {
@@ -308,8 +351,13 @@ function allocate(product, groups, day) {
 /**
  * stock_expiry_lots — остатки партиями, ближайший срок первым.
  *
- * args: { product_id?, q? (название или код товара), limit? }
+ * args: { product_id?, q? (название или код товара), limit?,
+ *         categories? (PROCUREMENT_FILTERS_V1: список категорий закупок),
+ *         state? ('all' | 'expired' | 'soon' | 'ok') }
  * → { scope, today, soon_days, count, truncated, products: [{id, name}],
+ *     summary: { total, expired, soon, ok, none } — партии по состояниям
+ *       ПОСЛЕ отбора по категориям/товару/поиску, но ДО отбора по состоянию:
+ *       кнопки состояния показывают, сколько за каждой из них лежит,
  *     lots: [{ product_id, product_name, unit, batch_no, expiry_date, no_expiry,
  *              received_qty, remaining, days_left, state, supplier_id, supplier_name }] }
  *
@@ -328,7 +376,8 @@ export function expiryLots(db, args, user) {
   const scope = journalScope(db, user);
   const day = today(db);
   if (scope.kind !== 'all') {
-    return { scope: scope.kind, today: day, soon_days: EXPIRING_SOON_DAYS, count: 0, dated_total: 0, truncated: false, products: [], lots: [] };
+    return { scope: scope.kind, today: day, soon_days: EXPIRING_SOON_DAYS, count: 0, dated_total: 0, truncated: false, products: [], lots: [],
+             summary: { total: 0, expired: 0, soon: 0, ok: 0, none: 0 } };
   }
 
   let productId = null;
@@ -338,12 +387,22 @@ export function expiryLots(db, args, user) {
   }
   const q = typeof a.q === 'string' ? a.q.trim() : '';
   const limit = isPosInt(Number(a.limit)) ? Math.min(Number(a.limit), 2000) : 500;
+  const categories = parseCategories(a.categories);
+  let stateFilter = 'all';
+  if (a.state !== undefined && a.state !== null && a.state !== '') {
+    if (!LOT_STATE_FILTERS.includes(a.state)) {
+      throw new RpcError('state: одно из ' + LOT_STATE_FILTERS.join(', ') + '.', 400);
+    }
+    stateFilter = a.state;
+  }
 
-  // Список товаров для отбора считается БЕЗ отбора: иначе фильтр схлопывается в
-  // один пункт сразу после первого выбора, и вернуться к «всем» нечем. Партии
-  // ради этого списка не раскладываются — довольно имён (он стоит один запрос
-  // по products, а не разбор всего журнала прихода).
-  const products = stockedProducts(db, {})
+  // Список товаров для отбора считается БЕЗ отбора по товару и поиску: иначе
+  // фильтр схлопывается в один пункт сразу после первого выбора, и вернуться к
+  // «всем» нечем. Партии ради этого списка не раскладываются — довольно имён
+  // (он стоит один запрос по products, а не разбор всего журнала прихода).
+  // Отмеченные категории (PROCUREMENT_FILTERS_V1) список СУЖАЮТ: человек,
+  // отметивший «Медикаменты», не должен листать перчатки.
+  const products = stockedProducts(db, { categories })
     .map((p) => ({ id: p.id, name: p.name }))
     .sort((x, y) => String(x.name).localeCompare(String(y.name), 'ru'));
 
@@ -355,8 +414,16 @@ export function expiryLots(db, args, user) {
   // Отбор — в SQL (см. receiptGroups/stockedProducts): раскладывать весь
   // каталог, чтобы показать одну строку, значит держать клинику на каждой букве.
   // Ноль в остатке не показываем; МИНУС показываем — он и есть новость.
-  const lots = lotBalances(db, { productIds: productId ? [productId] : null, q, todayStr: day })
+  const all = lotBalances(db, { productIds: productId ? [productId] : null, q, categories, todayStr: day })
     .filter((l) => Math.abs(l.remaining) > 1e-9);
+
+  // Итоги по состояниям — по тому, что человек отобрал (категории, товар,
+  // поиск), и ДО кнопки состояния: иначе на кнопке «Просрочено» стоял бы ноль,
+  // как только выбрана «Истекает».
+  const summary = { total: all.length, expired: 0, soon: 0, ok: 0, none: 0 };
+  for (const l of all) summary[l.state] = (summary[l.state] || 0) + 1;
+
+  const lots = stateFilter === 'all' ? all : all.filter((l) => l.state === stateFilter);
 
   // Ближайший срок первым; «без срока» — в конце: это не «ещё не скоро», это
   // «неизвестно», и смешивать их в одном порядке нельзя.
@@ -371,7 +438,7 @@ export function expiryLots(db, args, user) {
   return {
     scope: scope.kind, today: day, soon_days: EXPIRING_SOON_DAYS,
     truncated, count: Math.min(lots.length, limit), dated_total: datedTotal,
-    products, lots: truncated ? lots.slice(0, limit) : lots,
+    products, summary, lots: truncated ? lots.slice(0, limit) : lots,
   };
 }
 

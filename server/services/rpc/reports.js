@@ -28,7 +28,7 @@ import { categoryOf, CAT_ORDER } from '../../../public/js/shared/service-categor
 // REPORTS_V2 — отчёты склада: КОМУ и НА КОГО тем же SQL, что журнал движений,
 // а партии и их остатки — тем же расчётом, что экран «Сроки годности».
 import { holderNameSql, movementPatientSql } from './stock-log.js';
-import { lotBalances, EXPIRING_SOON_DAYS } from './expiry.js';
+import { lotBalances, EXPIRING_SOON_DAYS, parseCategories, categoryClause } from './expiry.js';
 // REPORTS_V2, ревью I6 — кто видит начисления врача: сам врач или тот, кому
 // открыт раздел «Отчёты» (ключ справочника прав 'reports', прежний раздел
 // 'reports-hub'), и администратор.
@@ -1054,6 +1054,36 @@ function invoicesFullReport(db, args, ctx) {
 const STOCK_UNIT_SQL = `CASE WHEN COALESCE(pr.base_unit, '') IN ('', 'pcs') AND COALESCE(pr.unit, '') <> ''
                              THEN pr.unit ELSE COALESCE(pr.base_unit, '') END`;
 
+// PROCUREMENT_FILTERS_V1 (2026-09-25) — КАТЕГОРИЯ ЗАКУПОК у всех четырёх видов.
+// Аргумент `category`: 'all' (или пусто) — все товары, иначе ОДНА категория
+// из products.procurement_category (список и проверка — rpc/expiry.js, один на
+// экран и отчёт). Отбор идёт в SQL по товару строки, поэтому строки, итоги по
+// поставщикам, итог здания и сверка ведомости считаются по одной и той же
+// выборке. Конструктор отчётов рисует фильтры переключателями с одним выбором —
+// отсюда одна категория, а не список.
+const CATEGORY_RU = {
+  medicines: 'Медикаменты', consumables: 'Расходники', equipment: 'Оборудование',
+  lab_supplies: 'Лаб. материалы', dental: 'Стоматология', radiology: 'Радиология',
+  office_it: 'Офис / IT', facility: 'Хозяйство',
+};
+function reportCategory(args) {
+  const v = args && args.category;
+  if (v === undefined || v === null || v === '' || v === 'all') return null;
+  if (Array.isArray(v)) throw new RpcError('category: одна категория или all.', 400);
+  return parseCategories(v, 'category');
+}
+/** `AND pr.procurement_category IN (?)` — или пусто, если категория не выбрана. */
+function categoryAnd(cats, col = 'pr.procurement_category') {
+  const c = categoryClause(cats, col);
+  return c ? { clause: ' AND ' + c.sql, params: c.params } : { clause: '', params: [] };
+}
+/** Примечание «в отчёте только категория …» — над таблицей, словами. */
+function categoryNote(cats) {
+  if (!cats) return null;
+  return 'Категория: ' + cats.map((c) => '«' + (CATEGORY_RU[c] || c) + '»').join(', ')
+    + ' — товары других категорий в отчёт и итоги не вошли.';
+}
+
 // (а) ПРИХОД ПО ПОСТАВЩИКАМ. Поставщик — stock_movements.supplier_id (приход
 // через «Принять товар»), у прихода по заказу — поставщик заказа
 // (reference_type 'purchase_order', reference_id = заказ). Прежде в колонке
@@ -1066,6 +1096,8 @@ function procurementReport(db, args, ctx) {
   // buildingWhere об этом знает: «только соседнее здание» вернёт пусто, а не
   // молча свои же поступления под чужим именем.
   const gf = buildingWhere(db, ctx, args, 'stock_movements', 'sm');
+  const cats = reportCategory(args);
+  const cf = categoryAnd(cats);
   const rows = db.prepare(`
     SELECT ${originExpr(db, 'stock_movements', 'sm')} AS origin,
            ${localDate('sm.created_at')} AS date, pr.name AS product, sm.note AS note,
@@ -1077,9 +1109,9 @@ function procurementReport(db, args, ctx) {
       LEFT JOIN purchase_orders po ON sm.reference_type = 'purchase_order' AND po.id = sm.reference_id
       LEFT JOIN suppliers sup ON sup.id = COALESCE(sm.supplier_id, po.supplier_id)
      WHERE sm.kind = 'receive'
-       AND ${inLocalRange('sm.created_at')}${bf.clause}${gf.clause}
+       AND ${inLocalRange('sm.created_at')}${bf.clause}${gf.clause}${cf.clause}
      ORDER BY sup.name IS NULL, sup.name, sm.created_at DESC, sm.id DESC
-  `).all(from, to, ...bf.params, ...gf.params);
+  `).all(from, to, ...bf.params, ...gf.params, ...cf.params);
   const NO_SUPPLIER = 'Поставщик не указан';
   const perSupplier = new Map();
   for (const r of rows) {
@@ -1101,7 +1133,7 @@ function procurementReport(db, args, ctx) {
       round2(r.qty * (r.unit_cost || 0)), r.note || '']),
     by_building: summariseByBuilding(ctx, rows, { total: (r) => r.qty * (r.unit_cost || 0) }),
     total_label: 'Сумма закупок',
-    notes: [STOCK_LOCAL_NOTE, ...totals],
+    notes: [STOCK_LOCAL_NOTE, categoryNote(cats), ...totals].filter(Boolean),
   };
 }
 
@@ -1126,6 +1158,7 @@ const CONSUMPTION_SPLIT_NOTE = '«Выдано на руки» и «Израсх
 function consumptionMovements(db, args, ctx) {
   const { from, to } = resolveRange(db, args);
   const gf = buildingWhere(db, ctx, args, 'stock_movements', 'm');
+  const cf = categoryAnd(reportCategory(args));
   const refs = [...ISSUE_REFS, ...PATIENT_REFS];
   return db.prepare(`
     SELECT ${originExpr(db, 'stock_movements', 'm')} AS origin,
@@ -1140,9 +1173,9 @@ function consumptionMovements(db, args, ctx) {
       LEFT JOIN users u ON u.id = m.created_by
      WHERE m.kind IN ('dispense', 'void')
        AND m.reference_type IN (${refs.map(() => '?').join(', ')})
-       AND ${inLocalRange('m.created_at')}${gf.clause}
+       AND ${inLocalRange('m.created_at')}${gf.clause}${cf.clause}
      ORDER BY m.created_at, m.id
-  `).all(...refs, from, to, ...gf.params).map((r) => {
+  `).all(...refs, from, to, ...gf.params, ...cf.params).map((r) => {
     const kind = r.kind === 'void' ? 'void' : ISSUE_REFS.includes(r.reference_type) ? 'issue' : 'patient';
     const qty = -Number(r.qty || 0);   // расход с плюсом, отмена — с минусом
     const holder = r.holder_type ? (HOLDER_TYPE_RU[r.holder_type] || r.holder_type) + ': ' + (r.holder_name || '#' + r.holder_id) : 'Склад';
@@ -1160,7 +1193,7 @@ function consumptionBy(args) {
 function stockConsumptionReport(db, args, ctx) {
   const by = consumptionBy(args);
   const mv = consumptionMovements(db, args, ctx);
-  const notes = [STOCK_LOCAL_NOTE, CONSUMPTION_NOTE, CONSUMPTION_SPLIT_NOTE];
+  const notes = [STOCK_LOCAL_NOTE, categoryNote(reportCategory(args)), CONSUMPTION_NOTE, CONSUMPTION_SPLIT_NOTE].filter(Boolean);
   if (by === 'holder') {
     // По получателю: сколько ему выдали со склада и сколько из его рук (или со
     // склада, если держателя нет) ушло на пациентов.
@@ -1236,9 +1269,15 @@ const STATEMENT_NOTE = 'Деньги — по средней себестоим�
 function stockStatementReport(db, args, ctx) {
   const { from, to } = resolveRange(db, args);
   const gf = buildingWhere(db, ctx, args, 'stock_movements', 'm');
+  const cats = reportCategory(args);
+  const catNote = categoryNote(cats);
   if (gf.clause.includes('1 = 0')) {
-    return { columns: statementColumns(false), rows: [], by_building: summariseByBuilding(ctx, [], {}), total_label: 'Конец: сумма', notes: [STOCK_LOCAL_NOTE] };
+    return { columns: statementColumns(false), rows: [], by_building: summariseByBuilding(ctx, [], {}), total_label: 'Конец: сумма', notes: [STOCK_LOCAL_NOTE, catNote].filter(Boolean) };
   }
+  // Категория отбирает ТОВАРЫ ведомости; сверка ниже сравнивает конец периода
+  // с остатком в карточке тех же отобранных товаров — чужая категория в сверку
+  // не попадает ни числом, ни словом.
+  const cw = categoryClause(cats, 'pr.procurement_category');
   const day = `${localDate('m.created_at')}`;
   const rows = db.prepare(`
     SELECT pr.id, pr.name, COALESCE(pr.code, '') AS code, ${STOCK_UNIT_SQL} AS unit,
@@ -1255,22 +1294,26 @@ function stockStatementReport(db, args, ctx) {
       FROM products pr
       LEFT JOIN stock_movements m ON m.product_id = pr.id AND ${WAREHOUSE_LEDGER_SQL}
                                  AND ${day} <= date(?)
+     ${cw ? 'WHERE ' + cw.sql : ''}
      GROUP BY pr.id
      HAVING movements > 0 OR pr.on_hand <> 0
      ORDER BY pr.name, pr.id
-  `).all(from, from, to, from, to, from, to, from, to, to);
+  `).all(from, from, to, from, to, from, to, from, to, to, ...(cw ? cw.params : []));
   const checkNow = String(to).slice(0, 10) >= today(db);
   const list = rows.map((r) => {
     const closing = round2(r.opening + r.received - r.issued - r.used + r.adjusted);
     return { ...r, closing, diff: round2(closing - r.on_hand) };
   }).filter((r) => r.opening || r.received || r.issued || r.used || r.adjusted || r.closing || (checkNow && r.on_hand));
-  const notes = [STOCK_LOCAL_NOTE, STATEMENT_NOTE];
+  const notes = [STOCK_LOCAL_NOTE, catNote, STATEMENT_NOTE].filter(Boolean);
   if (checkNow) {
     const bad = list.filter((r) => Math.abs(r.diff) > 1e-6);
+    // Под фильтром «у всех товаров» было бы неправдой о складе целиком: сверены
+    // только товары выбранной категории, и примечание так и говорит.
+    const scope = cats ? ' выбранной категории' : '';
     notes.push(bad.length
-      ? 'Сверка с карточкой товара: у ' + bad.length + ' ' + pluralRu(bad.length, 'товара', 'товаров', 'товаров')
+      ? 'Сверка с карточкой товара: у ' + bad.length + ' ' + pluralRu(bad.length, 'товара', 'товаров', 'товаров') + scope
         + ' конечный остаток не совпадает с остатком в карточке — остаток меняли мимо журнала движений (колонка «Расхождение»).'
-      : 'Сверка с карточкой товара: конечный остаток совпадает с остатком в карточке у всех товаров.');
+      : 'Сверка с карточкой товара: конечный остаток совпадает с остатком в карточке у всех товаров' + scope + '.');
   }
   const money = (q, r) => round2(q * r.avg_cost);
   return {
@@ -1308,13 +1351,15 @@ const EXPIRY_NOTE = 'Остаток по партиям — расчёт, а н�
 
 function stockExpiryReport(db, args, ctx) {
   const gf = buildingWhere(db, ctx, args, 'stock_movements', 'm');
+  const cats = reportCategory(args);
+  const catNote = categoryNote(cats);
   const day = today(db);
   const snapNote = 'Снимок на сегодня (' + day + '): период отчёта здесь не участвует. «Истекает» — срок в ближайшие ' + EXPIRING_SOON_DAYS + ' дней.';
   if (gf.clause.includes('1 = 0')) {
-    return { columns: expiryColumns(), rows: [], by_building: summariseByBuilding(ctx, [], {}), total_label: 'Стоимость', notes: [STOCK_LOCAL_NOTE, EXPIRY_NOTE, snapNote] };
+    return { columns: expiryColumns(), rows: [], by_building: summariseByBuilding(ctx, [], {}), total_label: 'Стоимость', notes: [STOCK_LOCAL_NOTE, catNote, EXPIRY_NOTE, snapNote].filter(Boolean) };
   }
   const cost = new Map(db.prepare('SELECT id, COALESCE(avg_cost, 0) AS avg_cost FROM products').all().map((p) => [p.id, p.avg_cost]));
-  const lots = lotBalances(db, { todayStr: day })
+  const lots = lotBalances(db, { categories: cats, todayStr: day })
     .filter((l) => (l.state === 'expired' || l.state === 'soon') && l.remaining > 1e-9)
     .sort((a, b) => (a.state === b.state ? (a.expiry_date < b.expiry_date ? -1 : a.expiry_date > b.expiry_date ? 1 : 0) : (a.state === 'expired' ? -1 : 1)));
   const list = lots.map((l) => ({ ...l, origin: '', cost: cost.get(l.product_id) || 0, value: l.remaining * (cost.get(l.product_id) || 0) }));
@@ -1324,7 +1369,7 @@ function stockExpiryReport(db, args, ctx) {
       l.expiry_date, l.days_left, round2(l.remaining), l.unit || '', round2(l.cost), round2(l.value), l.supplier_name || '']),
     by_building: summariseByBuilding(ctx, list, { total: (l) => l.value }),
     total_label: 'Стоимость',
-    notes: [STOCK_LOCAL_NOTE, EXPIRY_NOTE, snapNote],
+    notes: [STOCK_LOCAL_NOTE, catNote, EXPIRY_NOTE, snapNote].filter(Boolean),
   };
 }
 function expiryColumns() {
