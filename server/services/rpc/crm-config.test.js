@@ -26,7 +26,7 @@ const registrar = { id: 3, role: 'registrar' };
 test('crm_config_get answers stages, sources and routing in one call', () => {
   const db = fresh();
   const out = crmConfigGet(db, {}, registrar);
-  assert.deepEqual(Object.keys(out).sort(), ['routing', 'sources', 'stages']);
+  assert.deepEqual(Object.keys(out).sort(), ['routing', 'sources', 'stages', 'tags']);   // CRM_HEAD_MERGE_TAGS_V1
   assert.equal(out.stages.length, 8);
   assert.equal(out.sources.length, 8);
   assert.equal(out.routing.length, 15);

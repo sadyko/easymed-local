@@ -42,6 +42,7 @@ export function crmConfigGet(db) {
  *
  * args: { stages?: [{key,label,color,kind,is_active}], — WHOLE ordered array
  *         sources?: [{key,label,is_active}],           — WHOLE ordered array
+ *         tags?: [{key,label,color,is_active}],        — WHOLE ordered array (CRM_HEAD_MERGE_TAGS_V1, may be empty)
  *         routing?: [{provider?,disposition,action,stage_key}] } — upsert only
  *
  * Always answers with the full config, never just what was posted: hiding a

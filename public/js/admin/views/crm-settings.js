@@ -46,7 +46,7 @@ import {
     UNDELETABLE_STAGE_KEYS, UNDELETABLE_SOURCE_KEYS,
     UNDELETABLE_STAGE_REASON, UNDELETABLE_SOURCE_REASON,
     deriveKey, moveItem, withPositions,
-    validateStages, validateSources,
+    validateStages, validateSources, validateTags,
     shapeConfig, isNotImplemented,
 } from '../crm-settings-logic.js';
 
@@ -69,10 +69,12 @@ function adoptConfig(raw) {
     state.cfg = shapeConfig(raw);
     state.baseStages = sig(state.cfg.stages, STAGE_SIG_KEYS);
     state.baseSources = sig(state.cfg.sources, SOURCE_SIG_KEYS);
+    state.baseTags = sig(state.cfg.tags, TAG_SIG_KEYS);   // CRM_HEAD_MERGE_TAGS_V1
 }
 const SOURCE_SIG_KEYS = ['key', 'label', 'is_active'];
+const TAG_SIG_KEYS = ['key', 'label', 'color', 'is_active'];   // CRM_HEAD_MERGE_TAGS_V1
 const state = { cfg: null, busy: false };
-let refs = { root: null, body: null, stages: null, sources: null };
+let refs = { root: null, body: null, stages: null, sources: null, tags: null };
 
 async function rpc(name, args = {}) {
     // CRM_LINKS_V1 — воронку правят здесь, а читают её ещё и фоновые действия
@@ -98,13 +100,13 @@ async function rpc(name, args = {}) {
 // something here needs to navigate, it takes the parameter back.
 export async function renderCrmSettings(container) {
     clear(container);
-    refs = { root: null, body: null, stages: null, sources: null };
+    refs = { root: null, body: null, stages: null, sources: null, tags: null };
     refs.root = h('div', { class: 'fade-in' });
     container.appendChild(refs.root);
 
     refs.root.appendChild(PageHead({
         title: 'CRM-канбан',
-        subtitle: 'Колонки воронки и источники заявок — структура доски CRM.',
+        subtitle: 'Колонки воронки, источники и метки заявок — структура доски CRM.',
     }));
 
     const body = h('div');
@@ -134,6 +136,7 @@ function paint() {
     clear(refs.body);
     refs.body.appendChild(stagesCard());
     refs.body.appendChild(sourcesCard());
+    refs.body.appendChild(tagsCard());   // CRM_HEAD_MERGE_TAGS_V1
 }
 
 // Never assume the write landed the way the screen imagined it: the server
@@ -150,7 +153,7 @@ function paint() {
 // answering {ok:true} — falls back to one extra read, so the screen is right
 // under either contract.
 async function reload(fresh) {
-    const cfg = (fresh && typeof fresh === 'object' && (Array.isArray(fresh.stages) || Array.isArray(fresh.sources)))
+    const cfg = (fresh && typeof fresh === 'object' && (Array.isArray(fresh.stages) || Array.isArray(fresh.sources) || Array.isArray(fresh.tags)))
         ? fresh : await rpc('crm_config_get', {});
     adoptConfig(cfg);
     paint();
@@ -401,6 +404,62 @@ function paintSources() {
         toast('Источники сохранены.', 'success');
         await reload(fresh);
     }, sig(state.cfg.sources, SOURCE_SIG_KEYS) !== state.baseSources));
+}
+
+// ---------------------------------------------------------------------------
+// 3. Метки — CRM_HEAD_MERGE_TAGS_V1
+// ---------------------------------------------------------------------------
+// Владелец: «adding tags to the cards of the crm». Список меток с цветом —
+// та же строка, что у источника, плюс цвет из тех же токенов, что у колонок.
+// Метку, которая стоит на карточках, сервер не даст удалить (409) — только
+// скрыть: удаление молча сняло бы её со всех этих карточек.
+function tagsCard() {
+    refs.tags = h('div', { style: { padding: '18px' } });
+    paintTags();
+    return cardShell('Flag', 'Метки', refs.tags);
+}
+
+function paintTags() {
+    const box = refs.tags;
+    clear(box);
+    box.appendChild(hint('Метки на карточках заявок: несколько на карточку, с цветом. Их ставят в окне заявки, по ним фильтруется доска, они есть в отчёте колл-центра и в выгрузке Excel.',
+        { marginBottom: '12px' }));
+
+    const list = state.cfg.tags;
+    const onChange = (next) => { state.cfg.tags = next; paintTags(); };
+
+    if (!list.length) {
+        box.appendChild(h('div', { class: 'muted', 'data-crm-tags-empty': '', style: { marginBottom: '10px' } }, 'Меток пока нет.'));
+    } else {
+        const listBox = h('div', { class: 'crm-set-list', 'data-crm-tags': '' });
+        list.forEach((row, i) => {
+            listBox.appendChild(rowBox({
+                move: moveButtons(list, i, onChange),
+                name: [labelInput(row), keyChip(row.key)],
+                colors: colorPicker(row),
+                visible: activeToggle(row),
+                actions: removeButton(row.label, () => onChange(list.filter((_, j) => j !== i))),
+            }));
+        });
+        box.appendChild(listBox);
+        box.appendChild(hint('Метку, которая уже стоит на заявках, удалить нельзя — её можно скрыть.', { marginTop: '10px' }));
+    }
+
+    box.appendChild(addRow('Добавить метку', 'Название новой метки', (label, taken) => {
+        state.cfg.tags = withPositions([...list, {
+            key: deriveKey(label, taken, 'tag'), label, color: 'info', position: list.length + 1, is_active: 1,
+        }]);
+        paintTags();
+    }, () => list.map((s) => s.key)));
+
+    box.appendChild(saveRow('Сохранить метки', async () => {
+        const tags = withPositions(state.cfg.tags).map((s) => ({ ...s, label: String(s.label || '').trim() }));
+        const v = validateTags(tags, tr);
+        if (!v.ok) { toast(v.error, 'warn'); return; }
+        const fresh = await rpc('crm_config_save', { tags });
+        toast('Метки сохранены.', 'success');
+        await reload(fresh);
+    }, sig(state.cfg.tags, TAG_SIG_KEYS) !== state.baseTags));
 }
 
 // ---------------------------------------------------------------------------

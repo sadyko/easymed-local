@@ -384,3 +384,43 @@ test('свежий экран НЕ кричит «Изменения не сох
   assert.ok(!textOf(root).includes('Изменения не сохранены'),
       'на нетронутом экране маркера быть не должно');
 });
+// ---------------------------------------------------------------------------
+// CRM_HEAD_MERGE_TAGS_V1 (2026-09-25) — карточка «Метки».
+// ---------------------------------------------------------------------------
+test('«Метки»: пустой список, добавить метку — ключ из названия, цвет по умолчанию; сохраняется ТОЛЬКО {tags}', async () => {
+  resetServer();
+  const root = await render();
+  assert.ok(textOf(root).includes('Метки'), 'на экране нет карточки «Метки»');
+  assert.ok(textOf(root).includes('Меток пока нет.'));
+  const inp = findInputByPlaceholder(root, /новой метки/);
+  assert.ok(inp, 'нет поля добавления метки');
+  inp.value = 'Повторный';
+  findButtonByText(root, /Добавить метку/).click();
+  await tick();
+  assert.ok(findTextInputs(root).some((i) => i.value === 'Повторный'), 'метка не появилась в списке');
+  assert.ok(textOf(root).includes('Изменения не сохранены'));
+
+  findButtonByText(root, /Сохранить метки/).click();
+  await tick();
+  assert.strictEqual(saveCalls, 1);
+  assert.deepStrictEqual(Object.keys(lastSaveBody), ['tags'], 'метки сохраняются одни — колонки и источники не трогаются');
+  assert.deepStrictEqual(lastSaveBody.tags.map((t) => [t.key, t.label, t.color, t.position, t.is_active]),
+    [['povtornyy', 'Повторный', 'info', 1, 1]]);
+});
+
+test('«Метки»: пришедшие с сервера — с цветом, «Видна» и удалением; правка названия уходит при сохранении', async () => {
+  resetServer();
+  const cfg = JSON.parse(JSON.stringify(FULL_CONFIG));
+  cfg.tags = [{ key: 'vip', label: 'VIP', color: 'purple', position: 1, is_active: true }];
+  getRespond = () => jsonOk(cfg);
+  saveRespond = () => jsonOk(cfg);
+  const root = await render();
+  const vip = findTextInputs(root).find((i) => i.value === 'VIP');
+  assert.ok(vip, 'метка с сервера не нарисована');
+  assert.strictEqual(findButtonByAria(root, 'Удалить').length, 3, 'у метки нет кнопки удаления');
+  vip.value = 'VIP-клиент';
+  vip.dispatchEvent({ type: 'input' });
+  findButtonByText(root, /Сохранить метки/).click();
+  await tick();
+  assert.deepStrictEqual(lastSaveBody.tags.map((t) => [t.key, t.label, t.color]), [['vip', 'VIP-клиент', 'purple']]);
+});

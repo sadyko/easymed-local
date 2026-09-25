@@ -171,6 +171,23 @@ export function callcenterReport(db, args, user) {
     .map((o) => ({ ...o, came_pct: pct(o.came, o.count) }))
     .sort((a, b) => (b.count - a.count) || (b.created - a.created));
 
+  // CRM_HEAD_MERGE_TAGS_V1 — «ПО МЕТКАМ». Сколько заявок периода несут каждую
+  // метку и сколько из них дошло: метки клиника ставит ради разреза («VIP»,
+  // «повторный», «жалоба»), и отчёт — первое место, где этот разрез нужен.
+  // У заявки меток несколько, поэтому сумма по меткам может быть больше числа
+  // заявок — это не ошибка отчёта. Базы без таблицы меток (не доведённые до
+  // миграции 150) получают пустой блок, а не падение отчёта.
+  let byTag = [];
+  try {
+    byTag = db.prepare(`
+      SELECT t.key AS key, t.label AS name, t.color AS color, COUNT(*) AS count, SUM(r.status = ?) AS came
+        FROM crm_request_tags rt
+        JOIN crm_requests r ON r.id = rt.request_id
+        JOIN crm_tags t ON t.key = rt.tag_key
+       ${where} GROUP BY t.key ORDER BY count DESC, t.position`).all(WON, ...p)
+      .map((x) => ({ ...x, came: x.came || 0, came_pct: pct(x.came || 0, x.count) }));
+  } catch (e) { byTag = []; }
+
   // Что именно спрашивают. Строки заявки (crm_request_services) — источник
   // точнее, чем crm_requests.service_id: он хранит лишь первую услугу.
   const topServices = db.prepare(`
@@ -391,7 +408,7 @@ export function callcenterReport(db, args, user) {
       weekday: peakDay && peakDay.count ? peakDay.label : null,
       weekday_count: peakDay ? peakDay.count : 0,
     },
-    byHour, byWeekday, byDay, byStatus, bySource, byOperator, topServices, byServiceType,
+    byHour, byWeekday, byDay, byStatus, bySource, byOperator, topServices, byServiceType, byTag,
     sourceConv, stale, forwardBook,
     last30, trend,
     columns, rows,

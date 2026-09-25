@@ -1156,6 +1156,11 @@ function renderCallcenterCharts(el, d) {
             (d.byServiceType && d.byServiceType.length)
                 ? ownerBars(d.byServiceType.map((x) => ({ name: x.name, value: x.count })), { tip })
                 : h('div', { class: 'muted' }, 'Услуги в заявках не указаны.')),
+        // CRM_HEAD_MERGE_TAGS_V1 — «По меткам»: разрез, ради которого клиника
+        // метки и ставит. Нет меток в периоде — карточки нет вовсе.
+        (d.byTag && d.byTag.length)
+            ? ownerCard('По меткам', 'сколько заявок с каждой меткой и сколько из них дошло', ccOperators(d.byTag))
+            : null,
         ownerCard('Что спрашивают', 'самые запрашиваемые услуги',
             d.topServices.length ? ownerBars(d.topServices.map((x) => ({ name: x.name, value: x.count })), { tip })
                                  : h('div', { class: 'muted' }, 'Услуги в заявках не указаны.'))));

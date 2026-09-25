@@ -329,6 +329,27 @@ export function validateSources(sources, t = (s) => s) {
 }
 
 /**
+ * CRM_HEAD_MERGE_TAGS_V1 — метки карточек. Пустой список — нормально: клиника
+ * без меток их просто не заводит. Остальные правила — как у источников, плюс
+ * цвет из тех же токенов, что у колонок.
+ */
+export function validateTags(tags, t = (s) => s) {
+    const arr = Array.isArray(tags) ? tags : [];
+    const seen = new Set();
+    for (const s of arr) {
+        const label = typeof (s && s.label) === 'string' ? s.label.trim() : '';
+        if (!label) return { ok: false, error: t('У каждой метки должно быть название.') };
+        if (!isValidKey(s && s.key)) {
+            return { ok: false, error: fill(t('Ключ метки «{label}» задан неверно: разрешены латинские буквы, цифры и подчёркивание, до 32 знаков.'), { label }) };
+        }
+        if (seen.has(s.key)) return { ok: false, error: fill(t('Ключ «{key}» уже занят другой меткой.'), { key: s.key }) };
+        seen.add(s.key);
+        if (!isValidColor(s && s.color)) return { ok: false, error: fill(t('У метки «{label}» выбран неизвестный цвет.'), { label }) };
+    }
+    return { ok: true };
+}
+
+/**
  * Routing rows against the stage list they point at. A «создать заявку» row
  * that names no column — or names a hidden one — would drop a real call on
  * the floor silently, which is the one failure a call-centre never notices.
@@ -454,6 +475,10 @@ export function shapeConfig(data) {
             kind: KIND_VALUES.includes(r.kind) ? r.kind : 'open',
         })))),
         sources: withPositions(sources.map((s) => norm(s, () => ({})))),
+        // CRM_HEAD_MERGE_TAGS_V1 — метки. Запасного набора у них нет: пусто —
+        // значит клиника меток не завела (или сервер старше экрана).
+        tags: withPositions(sortByPosition((Array.isArray(raw.tags) ? raw.tags : []).filter(usableRow))
+            .map((s) => norm(s, (r) => ({ color: isValidColor(r.color) ? normalizeColor(r.color) : '' })))),
         routing: (Array.isArray(raw.routing) ? raw.routing : [])
             .filter((r) => r && typeof r === 'object' && typeof r.disposition === 'string' && r.disposition.trim() !== '')
             .map((r) => ({
@@ -496,5 +521,11 @@ export function boardConfig(data) {
         convertStatus: won ? won.key : FALLBACK_CONVERT_STAGE,
         activeStatuses: cfg.stages.filter((s) => s.is_active && s.kind === 'open').map((s) => s.key),
         lostStatuses: cfg.stages.filter((s) => s.kind === 'lost').map((s) => s.key),
+        // CRM_HEAD_MERGE_TAGS_V1 — метки: tags [[key, label, tagKind]] — ВИДИМЫЕ,
+        // их предлагают окно заявки и фильтр; tagRu {key: [label, tagKind]} —
+        // ВСЕ, потому что скрытая метка на карточке, где уже стоит, остаётся
+        // подписанной (как скрытая колонка в statusRu).
+        tags: cfg.tags.filter((s) => s.is_active).map((s) => [s.key, s.label, tagKind(s.color)]),
+        tagRu: Object.fromEntries(cfg.tags.map((s) => [s.key, [s.label, tagKind(s.color)]])),
     };
 }

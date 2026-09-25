@@ -113,6 +113,32 @@ export const REGISTRY = {
     stamps: { created_by: { on: 'insert' }, done_by: { with: 'done_at' } },
   },
 
+  // CRM_HEAD_MERGE_TAGS_V1 (mig 150) — справочник меток CRM. Читают все, кто
+  // видит доску (ALL_STAFF, как crm_requests): метка — подпись на карточке.
+  // Пишет его только «Настройки → CRM-канбан» через crm_config_save
+  // (services/crm/config.js saveTags: целиком, одной транзакцией, метку на
+  // карточках не удалить — только скрыть), поэтому через /api/db — ни одной
+  // записи.
+  crm_tags: {
+    read:  { roles: ALL_STAFF, columns: ['key','label','color','position','is_active'] },
+    write: {},
+    filters: ['key','is_active'],
+  },
+
+  // CRM_HEAD_MERGE_TAGS_V1 (mig 150) — метки на заявке. Ставят и снимают те
+  // же три роли, что ведут доску (окно заявки: вставка/удаление строки связи,
+  // правки нет — у связи нечего править). Видна и правится ровно тогда, когда
+  // видна её заявка (CRM_OWNERSHIP_V1 через родителя, как у crm_tasks):
+  // оператору — на своих и ничьих, администратору и руководителю колл-центра
+  // (`crm.all`) — на всех. Вставка — только на видимую заявку.
+  crm_request_tags: {
+    read:  { roles: ALL_STAFF, columns: ['request_id','tag_key'] },
+    write: { insert: { roles: ['admin','registrar','callcenter'], columns: ['request_id','tag_key'] },
+             delete: { roles: ['admin','registrar','callcenter'] } },
+    filters: ['request_id','tag_key'],
+    scope: { via: { fk: 'request_id', table: 'crm_requests' } },
+  },
+
   patients: {
     // PATIENTS_SECTION_V1 (mig 034) — marital/emergency-relation/insurance
     // columns + writable mrn/active/registration_date so easymed's Settings →
