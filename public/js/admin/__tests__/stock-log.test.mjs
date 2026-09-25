@@ -467,3 +467,17 @@ test('«Показать ещё» дорисовывает журнал и не 
     assert.equal(document.activeElement, q, 'перерисовка по кнопке выбросила фокус из поля поиска');
     assert.match(textOf(root), /Кардиология/, 'журнал не дорисовался');
 });
+
+// PROCUREMENT_FILTERS_V1 — отступ окна журнала: строка о видимости и таблица
+// стояли вплотную к рамке (у .card своего отступа нет — он в .card-pad-sm).
+test('отступы: результаты журнала — внутри .card-pad-sm, шапка с фильтрами во всю ширину', async () => {
+    const root = await open(answer([RECEIVE], { scope: 'own' }));
+    const card = walk(root).find((e) => e.className === 'card');
+    assert.ok(card, 'окна журнала нет');
+    assert.equal(card.children[0].className, 'card-header');
+    const body = card.children[1];
+    assert.equal(body.className, 'card-pad-sm', 'результаты стоят вплотную к рамке');
+    assert.equal(findAll(body, 'TABLE').length, 1);
+    // Строка о видимости — первой, внутри отступа, а не вплотную к рамке.
+    assert.match(textOf(body.children[0]), /Видны ваши движения/);
+});

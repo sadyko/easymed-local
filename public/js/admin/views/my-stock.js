@@ -107,7 +107,10 @@ async function paint() {
     if (!host) return;
     clear(host);
     host.appendChild(pageHead());
-    const body = h('div');
+    // PROCUREMENT_FILTERS_V1 — владелец: «fix the padding of the window of my
+    // stock content». Окна стояли вплотную друг к другу; зазор 14px — тот же,
+    // что между окнами «Отчётов».
+    const body = h('div', { class: 'my-stock-cards', style: { display: 'flex', flexDirection: 'column', gap: '14px' } });
     host.appendChild(body);
     refs.body = body;
     body.appendChild(loadingCard());
@@ -162,10 +165,13 @@ export function gotQty(m) {
 const emptyRow = (colspan, text) => h('tr', null,
     h('td', { colspan: String(colspan), style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, text));
 
+// PROCUREMENT_FILTERS_V1 — у .card своего отступа нет (admin.css): он живёт в
+// .card-pad-sm. Шапка остаётся во всю ширину окна, а пояснения, таблица и
+// «Показать ещё» — внутри отступа, а не вплотную к рамке.
 function card(icon, title, ...kids) {
     return h('div', { class: 'card' },
         h('div', { class: 'card-header' }, h('h3', null, Icon(icon, { size: 15 }), ' ', tr(title))),
-        ...kids);
+        h('div', { class: 'card-pad-sm' }, ...kids));
 }
 
 function table(columns, tbody) {
