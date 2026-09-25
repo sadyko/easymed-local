@@ -60,6 +60,7 @@ import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRe
 import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss } from './lis.js';   // LIS_INGEST_V1
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
 import { crmLeadsByPhone, crmSearch } from './crm-leads.js';   // CRM_DEDUP_SEARCH_TASKS_V1
+import { crmDuplicateGroups, crmMergeLeads } from './crm-merge.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
 import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
 import { custdevList, custdevSync, custdevRate, custdevMark, custdevReport } from './custdev.js';   // CUSTDEV_V1
@@ -533,6 +534,12 @@ export const RPC = {
   // CRM_DEDUP_SEARCH_TASKS_V1 — поиск доски по ВСЕМ заявкам (доска грузит 800):
   // номер по цифрам, имя без пробелов, имя привязанного пациента. Чтение.
   crm_search:               (db, args, user) => crmSearch(db, args, user),
+  // CRM_HEAD_MERGE_TAGS_V1 — «Дубликаты» на доске: группы карточек с одним
+  // номером (чтение, READ_ONLY_RPCS) и слияние группы в одну карточку (запись:
+  // переезд услуг/задач/меток, удаление влитых, журнал crm_merge_log). Оба —
+  // администратору и руководителю колл-центра (`crm.all`).
+  crm_duplicate_groups:     (db, args, user) => crmDuplicateGroups(db, args, user),
+  crm_merge_leads:          (db, args, user) => crmMergeLeads(db, args, user),
 
   // LICENCE_CORE_V1 — the three that stay reachable while locked (see
   // control/gate.js ALWAYS_ALLOWED_RPCS). Without them a clinic that wants to

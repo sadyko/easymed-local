@@ -16,6 +16,7 @@ import { formatPhone } from '../phone-format.js';
 // CRM_OWNERSHIP_V1 — «кто я»: кому записывается взятая заявка.
 // CRM_REASSIGN_V1 — «я администратор»: кому видна раздача заявок.
 import { selfUserId, hasActorRole, canSeeAllLeads } from '../permissions.js';
+import { openCrmDuplicates } from './crm-duplicates.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { filterServicePool, serviceGroupCounts } from './service-search.js';   // CRM_SERVICE_FILTER_V1
 // CRM_LINKS_V1 — общий путь заведения карты: проверка дубля, штампы клиники и
 // филиала, привязка открытых заявок по телефону. Регистрация из CRM обязана
@@ -522,6 +523,11 @@ async function paint() {
             // регистратура, а оценки о врачах и кассирах читать ей незачем.
             canView('custdev') ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => openCustDev() },
                 Icon('PhoneOut', { size: 13 }), ' Cust Dev') : null,
+            // CRM_HEAD_MERGE_TAGS_V1 — «Дубликаты»: слияние карточек одного номера.
+            // Только тому, кто видит всю доску (администратор, руководитель
+            // колл-центра): оператору чужие карточки не видны, сливать ему нечего.
+            canSeeAllLeads() ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-crm-duplicates-open': '',
+                onclick: () => openCrmDuplicates({ onMerged: () => paint() }) }, Icon('Copy', { size: 13 }), ' ', 'Дубликаты') : null,
             h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => reportModal() }, Icon('Chart', { size: 13 }), ' Отчёт'),
             h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => exportExcel() }, Icon('Download', { size: 13 }), ' Excel'),
             h('button', { class: 'btn btn-primary', type: 'button', onclick: () => requestModal(null) },

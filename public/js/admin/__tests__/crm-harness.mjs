@@ -70,7 +70,9 @@ export const button = (root, re) => walk(root).find((n) => n.tagName === 'BUTTON
 
 // --- поддельный сервер -----------------------------------------------------
 // S — изменяемое состояние стенда; CALLS — журнал /api/db, RPC — журнал RPC.
-export const S = { leads: [], dups: [], search: [], tasks: [], staff: [], nextTaskId: 100, inserted: null, failInsertOnce: false };
+export const S = { leads: [], dups: [], search: [], tasks: [], staff: [], nextTaskId: 100, inserted: null, failInsertOnce: false,
+  // CRM_HEAD_MERGE_TAGS_V1 — «Дубликаты»: ответ crm_duplicate_groups и отказ слияния по требованию.
+  dupGroups: { groups: [], total: 0 }, mergeError: null };
 export const CALLS = [];
 export const RPC = [];
 const jsonOk = (data, count) => ({ ok: true, json: async () => ({ data, count }) });
@@ -99,6 +101,11 @@ globalThis.fetch = async (url, opts) => {
     if (name === 'crm_leads_by_phone') return jsonOk(S.dups);
     if (name === 'crm_search') return jsonOk(typeof S.search === 'function' ? S.search(body) : S.search);
     if (name === 'crm_lead_calls') return jsonOk([]);
+    if (name === 'crm_duplicate_groups') return jsonOk(S.dupGroups);
+    if (name === 'crm_merge_leads') {
+      if (S.mergeError) return { ok: false, json: async () => ({ error: { message: S.mergeError } }) };
+      return jsonOk({ kept_id: body.keep_id, merged_ids: body.merge_ids });
+    }
     return jsonOk({});
   }
   if (u.startsWith('/api/db')) {
