@@ -7,15 +7,32 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { fetchGuard, loadingCard, fmtPrice, fmtMoney2, fmtQty, selStyle, isLowStock } from './inventory-shared.js';
+import { fetchGuard, loadingCard, fmtPrice, fmtMoney2, fmtQty, selStyle, isLowStock, CATEGORY_LABEL } from './inventory-shared.js';
+import { categoryFilter, loadCategories, matchesCategories } from './category-filter.js';   // PROCUREMENT_FILTERS_V1
 import { openReceiveModal, openAdjustModal } from './inventory-products.js';
 import { openStockIssueModal } from './stock-issue-modal.js';   // STOCK_ISSUE_MODAL_V1 — общий диалог выдачи
 
 const sklad = {
     products: [], suppliers: [],
     q: '', unit: 'all', supplier: 'all', avail: 'all', flag: 'all',
-    tbody: null, emptyEl: null,
+    cats: [],   // PROCUREMENT_FILTERS_V1 — отметки вошедшего (category-filter.js)
+    tbody: null, emptyEl: null, summaryEl: null,
 };
+
+/**
+ * PROCUREMENT_FILTERS_V1 — итоги «Склада» по ОТОБРАННЫМ строкам: сколько
+ * позиций, на какую сумму лежит и сколько пора заказать. Владелец: статистика
+ * следует за отмеченными категориями — поэтому считается от того же filtered(),
+ * что рисует таблицу и уходит в Excel, а не от всего склада.
+ */
+export function skladSummary(rows) {
+    let value = 0, reorder = 0;
+    for (const p of rows) {
+        value += (Number(p.on_hand) || 0) * (Number(p.avg_cost) || 0);
+        if (isLowStock(p)) reorder += 1;
+    }
+    return { count: rows.length, value, reorder };
+}
 
 // Единица выдачи: consumption unit если задана, иначе базовая (factor 1).
 function issueUnitOf(p) {
@@ -62,6 +79,8 @@ export async function renderSkladTab(container) {
     sklad.suppliers = suppliers;
     sklad.tbody = h('tbody');
     sklad.emptyEl = h('div', { class: 'empty', style: { display: 'none' } }, 'Ничего не найдено.');
+    sklad.cats = loadCategories();
+    sklad.summaryEl = h('span', { class: 'muted sklad-summary', style: { fontSize: '12.5px' } });
 
     const reload = () => renderSkladTab(container);
 
@@ -114,11 +133,18 @@ export async function renderSkladTab(container) {
             h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openReceiveModal(reload) },
                 Icon('Plus', { size: 14 }), ' Принять'),
         ),
+        // PROCUREMENT_FILTERS_V1 — отметки категорий и итоги по отобранному.
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px 16px', flexWrap: 'wrap', padding: '10px 16px', borderBottom: '1px solid var(--ink-100)' } },
+            categoryFilter({ selected: sklad.cats, onChange: (c) => { sklad.cats = c; paintRows(); } }),
+            h('span', { class: 'grow' }),
+            sklad.summaryEl,
+        ),
         h('div', { style: { overflowX: 'auto' } },
             h('table', { class: 'tbl' },
                 h('thead', null,
                     h('tr', null,
                         h('th', null, 'Товар'),
+                        h('th', null, 'Категория'),
                         h('th', null, 'Единица'),
                         h('th', null, 'Поставщик'),
                         h('th', null, 'В наличии'),
@@ -129,6 +155,7 @@ export async function renderSkladTab(container) {
                     ),
                     h('tr', null,
                         h('td', { style: { padding: '6px 10px' } }, searchInp),
+                        h('td', null, ''),
                         h('td', { style: { padding: '6px 10px', minWidth: '90px' } }, unitSel),
                         h('td', { style: { padding: '6px 10px', minWidth: '140px' } }, supplierSel),
                         h('td', { style: { padding: '6px 10px', minWidth: '110px' } }, availSel),
@@ -154,6 +181,7 @@ export async function renderSkladTab(container) {
             const onHand = Number(p.on_hand) || 0;
             const low = isLowStock(p);
             if (q && !(p.name || '').toLowerCase().includes(q)) return false;
+            if (!matchesCategories(p, sklad.cats)) return false;
             if (sklad.unit !== 'all' && p.base_unit !== sklad.unit) return false;
             if (sklad.supplier === 'none' && p.supplier_id) return false;
             if (sklad.supplier !== 'all' && sklad.supplier !== 'none' && p.supplier_id !== Number(sklad.supplier)) return false;
@@ -169,6 +197,9 @@ export async function renderSkladTab(container) {
     function paintRows() {
         clear(sklad.tbody);
         const rows = filtered();
+        const sum = skladSummary(rows);
+        sklad.summaryEl.textContent = trf('Позиций: {n} · на сумму {sum} · пора заказать: {reorder}',
+            { n: sum.count, sum: fmtPrice(sum.value), reorder: sum.reorder });
         if (!rows.length) { sklad.emptyEl.style.display = ''; return; }
         sklad.emptyEl.style.display = 'none';
         for (const p of rows) sklad.tbody.appendChild(productRow(p));
@@ -191,6 +222,7 @@ export async function renderSkladTab(container) {
             : '';
         return h('tr', null,
             h('td', { class: 'cell-strong' }, p.name || '—'),
+            h('td', null, CATEGORY_LABEL[p.procurement_category] || p.procurement_category || '—'),
             h('td', null, p.base_unit || '—'),
             h('td', null, (p.suppliers && p.suppliers.name) || '—'),
             h('td', { class: 'num' },
@@ -213,13 +245,14 @@ export async function renderSkladTab(container) {
         try {
             const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
             const matrix = [
-                ['Товар', 'Единица', 'Поставщик', 'В наличии', 'В ед. выдачи', 'Себестоимость', 'Стоимость', 'Флаг'],
+                ['Товар', 'Категория', 'Единица', 'Поставщик', 'В наличии', 'В ед. выдачи', 'Себестоимость', 'Стоимость', 'Флаг'],
                 ...filtered().map(p => {
                     const iu = issueUnitOf(p);
                     const su = stockUnitOf(p);
                     const onHand = Number(p.on_hand) || 0;
                     return [
-                        p.name || '', p.base_unit || '', (p.suppliers && p.suppliers.name) || '',
+                        p.name || '', CATEGORY_LABEL[p.procurement_category] || p.procurement_category || '',
+                        p.base_unit || '', (p.suppliers && p.suppliers.name) || '',
                         `${fmtQty(onHand / su.factor)} ${su.unit}`.trim(), `${fmtQty(onHand * iu.factor)} ${iu.unit}`.trim(),
                         Number(p.avg_cost) || 0, Math.round(onHand * (Number(p.avg_cost) || 0)),
                         isLowStock(p) ? 'Пора заказать' : 'Хватает',

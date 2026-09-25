@@ -37,6 +37,8 @@ import { reportTotals } from './report-totals.js?v=rt1';   // REPORT_TOTALS_V1
 // чистом модуле рядом с buildingOptions: экран без DOM не поднимается, а
 // проверять это правило надо. Слова к состоянию подбираются здесь, через i18n.
 import { freshnessState, freshnessWorthShowing } from './report-buildings.js?v=fresh1';
+// PROCUREMENT_FILTERS_V1 — подписи категорий закупок те же, что на экранах склада.
+import { CATEGORY_LABEL } from './inventory-shared.js';
 
 // Экспортируется, чтобы определения (в т.ч. рисовалку графиков) можно было
 // проверить тестом — страница целиком без DOM не поднимается.
@@ -86,6 +88,11 @@ export const REPORT_DEFS = [
         options: [
             { arg: 'by', label: 'Разрез', kinds: ['stock_consumption'],
               choices: [['lines', 'По движениям'], ['holder', 'По получателям'], ['patient', 'По пациентам']] },
+            // PROCUREMENT_FILTERS_V1 — категория закупок у всех четырёх видов;
+            // отбор и итоги считает сервер (rpc/reports.js reportCategory).
+            // Переключатели конструктора — с одним выбором, отсюда одна категория.
+            { arg: 'category', label: 'Категория',
+              choices: [['all', 'Все категории'], ...Object.entries(CATEGORY_LABEL)] },
         ],
     },
     {

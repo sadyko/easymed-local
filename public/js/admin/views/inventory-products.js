@@ -9,16 +9,40 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, checkField } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { fetchGuard, fmtPrice, fmtQty, CATEGORY_LABEL, selStyle, numStyle, isLowStock } from './inventory-shared.js';
+import { categoryFilter, loadCategories, matchesCategories } from './category-filter.js';   // PROCUREMENT_FILTERS_V1
 import { openSupplierModal } from './inventory-suppliers.js';   // ADD_PRODUCT_EASYMED_V1 — «+ Новый поставщик» из карточки товара
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 
-const productRefs = { tbody: null, emptyEl: null, totalEl: null };
+const productRefs = { tbody: null, emptyEl: null, totalEl: null, all: [], q: '', cats: [] };
+
+// PROCUREMENT_FILTERS_V1 — «Товары» получили поиск (его не было вовсе) и
+// отметки категорий (общие с «Складом» и «Сроками годности», запоминаются за
+// вошедшим — category-filter.js). Отбор — в браузере по уже загруженному
+// каталогу, как на «Складе»; итог «Товаров: N» считается по ОТОБРАННЫМ строкам.
+export function filterProducts(rows, { q = '', cats = [] } = {}) {
+    const needle = String(q || '').trim().toLowerCase();
+    return (rows || []).filter((p) => {
+        if (!matchesCategories(p, cats)) return false;
+        if (needle && !((p.name || '').toLowerCase().includes(needle)
+            || (p.code || '').toLowerCase().includes(needle))) return false;
+        return true;
+    });
+}
 
 export function renderProductsTab(container) {
     productRefs.tbody = h('tbody');
     productRefs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
         'Пока нет товаров — добавьте первый.');
     productRefs.totalEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
+    productRefs.all = [];
+    productRefs.q = '';
+    productRefs.cats = loadCategories();
+
+    const searchInp = h('input', {
+        type: 'text', placeholder: 'Поиск по названию или коду…', 'aria-label': 'Поиск товара',
+        style: { width: '240px', maxWidth: '100%', height: '30px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '12.5px', fontFamily: 'inherit' },
+    });
+    searchInp.addEventListener('input', () => { productRefs.q = searchInp.value; paintRows(); });
 
     const addBtn = h('button', {
         class: 'btn btn-primary btn-sm', type: 'button',
@@ -36,6 +60,10 @@ export function renderProductsTab(container) {
             h('div', { class: 'page-head-actions' }, addBtn, receiveBtn),
         ),
         h('div', { class: 'card' },
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px 16px', flexWrap: 'wrap', padding: '10px 16px', borderBottom: '1px solid var(--ink-100)' } },
+                searchInp,
+                categoryFilter({ selected: productRefs.cats, onChange: (c) => { productRefs.cats = c; paintRows(); } }),
+            ),
             h('table', { class: 'tbl' },
                 h('thead', null, h('tr', null,
                     h('th', null, 'Название'),
@@ -66,15 +94,17 @@ async function fetchProductsAndPaint() {
         if (token !== fetchGuard.token) return;   // a newer fetch already landed
         if (error) {
             toast(trf('Не удалось загрузить товары: {msg}', { msg: error.message || error }), 'fail');
-            paintRows([]);
+            productRefs.all = [];
+            paintRows();
             return;
         }
-        paintRows(data || []);
-        if (productRefs.totalEl) productRefs.totalEl.textContent = trf('Товаров: {n}', { n: (data || []).length });
+        productRefs.all = data || [];
+        paintRows();
     } catch (e) {
         if (token !== fetchGuard.token) return;
         toast(trf('Не удалось загрузить товары: {msg}', { msg: (e && e.message) || e }), 'fail');
-        paintRows([]);
+        productRefs.all = [];
+        paintRows();
     }
 }
 
@@ -87,9 +117,15 @@ function setLoadingRow() {
     productRefs.emptyEl.style.display = 'none';
 }
 
-function paintRows(rows) {
+function paintRows() {
+    if (!productRefs.tbody) return;
     clear(productRefs.tbody);
+    const rows = filterProducts(productRefs.all, { q: productRefs.q, cats: productRefs.cats });
+    // Итог — по отобранному: владелец просил, чтобы статистика следовала за
+    // отмеченными категориями.
+    if (productRefs.totalEl) productRefs.totalEl.textContent = trf('Товаров: {n}', { n: rows.length });
     if (!rows || rows.length === 0) {
+        productRefs.emptyEl.textContent = tr(productRefs.all.length ? 'Ничего не найдено.' : 'Пока нет товаров — добавьте первый.');
         productRefs.emptyEl.style.display = '';
         return;
     }

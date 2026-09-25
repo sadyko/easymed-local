@@ -8784,4 +8784,8 @@ export const STRINGS = {
   "Сохранить всё равно": {"en":"Save anyway","ru":"Сохранить всё равно","uz":"Baribir saqlash"},
   "Пациентов": {"en":"Patients","ru":"Пациентов","uz":"Bemorlar"},
   "Не сохранено у врачей: {n}": {"en":"Not saved for doctors: {n}","ru":"Не сохранено у врачей: {n}","uz":"Shifokorlarda saqlanmadi: {n}"},
+  // PROCUREMENT_FILTERS_V1 (2026-09-25) — фильтр категорий закупок («Склад», «Товары», «Сроки годности»)
+  "Поиск по названию или коду…": {"en":"Search by name or code…","ru":"Поиск по названию или коду…","uz":"Nomi yoki kodi bo'yicha qidirish…"},
+  "Поиск товара": {"en":"Product search","ru":"Поиск товара","uz":"Tovarni qidirish"},
+  "Позиций: {n} · на сумму {sum} · пора заказать: {reorder}": {"en":"Items: {n} · worth {sum} · time to reorder: {reorder}","ru":"Позиций: {n} · на сумму {sum} · пора заказать: {reorder}","uz":"Pozitsiyalar: {n} · summasi {sum} · buyurtma berish vaqti: {reorder}"},
 };
