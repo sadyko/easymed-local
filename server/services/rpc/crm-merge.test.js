@@ -10,7 +10,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { crmMergeLeads, crmDuplicateGroups, stageRanker, suggestSurvivor } from './crm-merge.js';
+import { crmMergeLeads, crmDuplicateGroups, stageRanker } from './crm-merge.js';
+import { suggestSurvivor, allowedSurvivors, namesDiffer, personName } from '../../../public/js/admin/views/crm-merge-logic.js';
+import { compile } from '../../db/query-compiler.js';
 import { listStages } from '../crm/config.js';
 import { getRpc } from './index.js';
 import { isReadOnlyRpc } from '../control/gate.js';
@@ -108,7 +110,7 @@ test('слияние трёх: услуги и задачи ПЕРЕЕЗЖАЮТ
     assert.equal(kept.scheduled_date, '2026-10-02');
     const lines = String(kept.note).split('\n');
     assert.equal(lines[0], 'Первая');
-    assert.match(lines[1], new RegExp('^Просила перезвонить — из заявки №' + b + ' от \\d\\d\\.\\d\\d$'));
+    assert.match(lines[1], new RegExp('^Просила перезвонить — из заявки №' + b + ' от \\d\\d\\.\\d\\d, «Лид»$'));
     assert.equal(lines.length, 2, 'пустая заметка дала пустую строку');
 
     const log = db.prepare('SELECT * FROM crm_merge_log').all();
@@ -118,25 +120,39 @@ test('слияние трёх: услуги и задачи ПЕРЕЕЗЖАЮТ
     assert.equal(log[0].actor_id, 1);
     assert.equal(log[0].actor_name, 'Админ');
     const snap = JSON.parse(log[0].snapshot);
-    assert.equal(snap.merged.find((x) => x.id === b).note, 'Просила перезвонить');
-    assert.deepEqual(snap.merged.find((x) => x.id === b).line_ids, [lb]);
-    assert.deepEqual(snap.merged.find((x) => x.id === b).task_ids, [tb]);
+    // M2 — в журнале номера, ступени, пациенты и счётчики; ни имён, ни
+    // телефонов, ни заметок.
+    const mb = snap.merged.find((x) => x.id === b);
+    assert.deepEqual(Object.keys(mb).sort(), ['assigned_to', 'id', 'line_ids', 'lines', 'patient_id', 'status', 'tags', 'task_ids', 'tasks']);
+    assert.deepEqual(Object.keys(snap.kept).sort(), ['assigned_to', 'id', 'patient_id', 'status']);
+    assert.equal(mb.status, 'no_show');
+    assert.deepEqual(mb.line_ids, [lb]);
+    assert.deepEqual(mb.task_ids, [tb]);
+    assert.equal(mb.tasks, 1);
+    const text = log[0].snapshot;
+    for (const secret of ['Просила перезвонить', '322 22 88', '333222288', 'Лид', 'Первая']) {
+      assert.ok(!text.includes(secret), 'в журнале слияния осталось: ' + secret);
+    }
   } finally { db.close(); }
 });
 
-test('самая ранняя даёт created_at/source/call_id; имя оставшейся, а пустое — первое непустое', () => {
+// Ревью I2/M5 — оставшаяся карточка СОХРАНЯЕТ свою дату обращения, автора,
+// источник и ступень: слияние не переписывает историю, по которой строятся
+// отчёты. Доказательство звонка, которого у неё нет, берётся у влитой.
+test('оставшаяся в работе сохраняет свои дату, автора, источник и ступень; звонок и пустое имя — от влитой', () => {
   const db = seed();
   try {
     db.prepare("INSERT INTO calls (id, general_call_id, started_at, external_number) VALUES (9, 'g9', '2026-09-10T08:00:00Z', '998901234567')").run();
-    const early = lead(db, { phone: '901234567', full_name: 'Ранняя', created_at: '2026-09-10T08:01:00Z', source: 'telephony', status: 'recall' });
+    const early = lead(db, { phone: '901234567', full_name: 'Ранняя', created_at: '2026-09-10T08:01:00Z', source: 'telephony', status: 'recall', created_by: 2 });
     db.prepare('UPDATE crm_requests SET call_id = 9 WHERE id = ?').run(early);
-    const keep = lead(db, { phone: '+998 90 123 45 67', full_name: '', created_at: '2026-09-12T08:00:00Z', source: 'instagram', status: 'in_process' });
+    const keep = lead(db, { phone: '+998 90 123 45 67', full_name: '', created_at: '2026-09-12T08:00:00Z', source: 'instagram', status: 'in_process', created_by: 1 });
     const res = crmMergeLeads(db, { keep_id: keep, merge_ids: [early] }, BOSS);
-    assert.equal(res.lead.created_at, '2026-09-10T08:01:00Z');
-    assert.equal(res.lead.source, 'telephony');
+    assert.equal(res.lead.created_at, '2026-09-12T08:00:00Z', 'дата обращения переписана задним числом');
+    assert.equal(res.lead.created_by, 1);
+    assert.equal(res.lead.source, 'instagram');
     assert.equal(res.lead.call_id, 9);
     assert.equal(res.lead.full_name, 'Ранняя');
-    assert.equal(res.lead.status, 'recall', '«Перезвонить» стоит в воронке дальше «В обработке»');
+    assert.equal(res.lead.status, 'in_process', 'оставшаяся в работе потеряла свою ступень');
   } finally { db.close(); }
 });
 
@@ -202,10 +218,25 @@ test('ранжирование ступеней: дошедшая > живые �
     assert.ok(rank('approved') > rank('recall'));
     assert.ok(rank('recall') > rank('no_show'));
     assert.ok(rank('no_show') > rank('нет_такой'));
-    // С пациентом — раньше, чем без, при равной ступени.
+    // Все закрыты: дошедшая; при равной — с пациентом.
     assert.equal(suggestSurvivor([
-      { id: 1, status: 'recall', patient_id: null, created_at: '1' },
-      { id: 2, status: 'in_process', patient_id: 500, created_at: '2' },
-    ], rank), 2);
+      { id: 1, stage_kind: 'lost', stage_pos: 6, patient_id: null, created_at: '1' },
+      { id: 2, stage_kind: 'lost', stage_pos: 6, patient_id: 500, created_at: '2' },
+    ]), 2);
+    assert.equal(suggestSurvivor([
+      { id: 1, stage_kind: 'lost', stage_pos: 6, patient_id: 500, created_at: '1' },
+      { id: 2, stage_kind: 'won', stage_pos: 5, patient_id: null, created_at: '2' },
+    ]), 2);
+    // Есть живые — самая НОВАЯ живая, даже без пациента.
+    const mix = [
+      { id: 1, stage_kind: 'won', stage_pos: 5, patient_id: 500, created_at: '2026-01-01' },
+      { id: 2, stage_kind: 'open', stage_pos: 1, patient_id: null, created_at: '2026-09-01' },
+      { id: 3, stage_kind: 'open', stage_pos: 2, patient_id: null, created_at: '2026-09-20' },
+    ];
+    assert.equal(suggestSurvivor(mix), 3);
+    assert.deepEqual(allowedSurvivors(mix).map((c) => c.id), [2, 3]);
+    assert.equal(personName({ full_name: '+998 90 111 22 33' }), '', 'номер вместо имени считается именем');
+    assert.equal(namesDiffer([{ full_name: 'Буронова  Феруза' }, { full_name: 'буронова феруза' }, { full_name: '901112233' }]), false);
+    assert.equal(namesDiffer([{ full_name: 'Буронова Феруза' }, { full_name: 'Буронов Азиз' }]), true);
   } finally { db.close(); }
 });

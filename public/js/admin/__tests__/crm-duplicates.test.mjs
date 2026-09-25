@@ -23,7 +23,7 @@ const GROUP = { key: '333222288', phone: '+998 33 322 22 88', conflict: false, s
     card({ id: 1051, status: 'no_show', stage_label: 'Не пришёл', stage_kind: 'lost', stage_color: 'crit', tasks: 1, assigned_name: 'Оператор Лола' }),
     card({ id: 1385, patient_id: 500, patient_name: 'Каримова Азиза' })] };
 const CONFLICT = { key: '901112233', phone: '901112233', conflict: true, suggested_id: 5, latest: '2026-09-10T10:00:00Z',
-  cards: [card({ id: 5, patient_id: 500 }), card({ id: 6, patient_id: 501 })] };
+  cards: [card({ id: 5, patient_id: 500 }), card({ id: 6, patient_id: 501, full_name: 'Каримов Бахтиёр' }), card({ id: 7 })] };
 
 async function board(user) {
   window.easymed.state.user = user;
@@ -85,16 +85,60 @@ test('группа: предложенная карточка выбрана; «
   window.easymed.state.user = null;
 });
 
-test('разные пациенты: кнопки нет, выбор выключен, причина названа', async () => {
-  S.dupGroups = { groups: [CONFLICT], total: 1 };
+const openModal = async () => {
   const root = await board(ADMIN);
+  RPC.length = 0;
   openBtn(root).click();
   await tick(40);
-  const modal = document.body.children.find((n) => n.attrs && 'data-crm-duplicates' in n.attrs);
-  const g = byAttr(modal, 'data-dup-group')[0];
+  return document.body.children.find((n) => n.attrs && 'data-crm-duplicates' in n.attrs);
+};
+const untick = (g, id) => {
+  const t = byAttr(g, 'data-dup-tick').find((n) => n.getAttribute('data-dup-tick') === String(id));
+  t.checked = false;
+  t.dispatchEvent({ type: 'change', target: t, currentTarget: t });
+};
+const groupIn = (modal) => byAttr(modal, 'data-dup-group')[0];
+
+test('разные пациенты среди отмеченных: кнопки нет, причина названа; сняли галочку с чужой — остальные сливаются (M3)', async () => {
+  S.dupGroups = { groups: [CONFLICT], total: 1 };
+  const modal = await openModal();
+  let g = groupIn(modal);
   assert.equal(byAttr(g, 'data-dup-merge').length, 0, 'группу разных пациентов предлагают слить');
-  assert.ok(byAttr(g, 'data-dup-keep').every((r) => r.disabled));
   assert.ok(byAttr(g, 'data-dup-conflict').length === 1 && textOf(g).includes('разным пациентам'));
+  assert.ok(byAttr(g, 'data-dup-names').length === 1, 'разные имена не названы');
+  untick(g, 6);
+  g = groupIn(modal);
+  assert.equal(byAttr(g, 'data-dup-conflict').length, 0);
+  assert.equal(byAttr(g, 'data-dup-names').length, 0);
+  const r6 = byAttr(g, 'data-dup-keep').find((n) => n.getAttribute('data-dup-keep') === '6');
+  assert.equal(r6.disabled, true, 'снятую карточку можно выбрать оставшейся');
+  button(g, /Объединить/).click();
+  await tick();
+  byAttr(g, 'data-dup-merge-yes')[0].click();
+  await tick(60);
+  const call = RPC.find((r) => r.name === 'crm_merge_leads');
+  assert.equal(call.body.keep_id, 5);
+  assert.deepEqual(call.body.merge_ids, [7], 'в слияние ушла снятая карточка');
+  window.easymed.state.user = null;
+});
+
+test('I2: есть заявка в работе — оставить можно только её, закрытые выбрать нельзя; одна отмеченная — нечего сливать', async () => {
+  const OLD = card({ id: 19, status: 'came', stage_label: 'Пришёл', stage_kind: 'won', patient_id: 500, created_at: '2026-01-10T09:00:00Z', tasks: 1, assigned_to: 12, assigned_name: 'Оператор Лола' });
+  const LIVE = card({ id: 337, status: 'recall', stage_label: 'Перезвонить', stage_kind: 'open', stage_color: 'warn', created_at: '2026-09-20T08:00:00Z', assigned_to: 9, assigned_name: 'Оператор Зара' });
+  S.dupGroups = { groups: [{ key: '901112233', phone: '901112233', conflict: false, names_differ: false, suggested_id: 337, cards: [OLD, LIVE] }], total: 1 };
+  const modal = await openModal();
+  let g = groupIn(modal);
+  const radio = (id) => byAttr(g, 'data-dup-keep').find((n) => n.getAttribute('data-dup-keep') === String(id));
+  assert.equal(radio(337).checked, true);
+  assert.equal(radio(19).disabled, true, 'закрытую карточку можно оставить вместо заявки в работе');
+  assert.ok(byAttr(g, 'data-dup-open').length === 1);
+  // M1 — задача №19 (Лолы) уедет на карточку, которую ведёт Зара.
+  const note = byAttr(g, 'data-dup-tasks')[0];
+  assert.ok(note && /Оператор Зара/.test(textOf(note)), 'не сказано, что задачи уедут к другому оператору');
+  untick(g, 337);
+  g = groupIn(modal);
+  assert.equal(byAttr(g, 'data-dup-merge').length, 0);
+  assert.ok(byAttr(g, 'data-dup-few').length === 1);
   window.easymed.state.user = null;
 });
 

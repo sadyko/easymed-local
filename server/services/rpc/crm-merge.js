@@ -7,15 +7,30 @@
 //     ключ из девяти цифр, что у поиска и проверки дубля, crm-phone-match.js);
 //   • остаётся карточка, которую выбирает человек; заранее выбрана самая
 //     продвинутая (дошедшая первой) или та, у которой есть пациент;
-//   • услуги, задачи, заметки (с припиской «— из заявки №N от dd.mm») и метки
-//     переезжают в оставшуюся; ступень — самая продвинутая из всех;
-//     created_at/source/call_id — самой ранней карточки; пациент, оператор и
-//     имя — оставшейся, а если там пусто — первой непустой;
+//   • услуги, задачи, заметки (с припиской «— из заявки №N от dd.mm, «Имя»») и
+//     метки переезжают в оставшуюся;
 //   • проигравшие карточки удаляются в ОДНОЙ транзакции с записью в журнале
 //     (crm_merge_log, миграция 151);
 //   • карточки РАЗНЫХ пациентов не сливаются никогда: один номер на семью —
 //     обычное дело, и слияние стёрло бы одного из них;
 //   • сливают администратор и руководитель колл-центра (`crm.all`).
+//
+// РЕВЬЮ (2026-09-25) — ПРАВИЛА УТОЧНЕНЫ:
+//   I1 — сливаются ТОЛЬКО карточки одного номера (phoneKey из 7+ цифр). Иначе
+//        «слияние» было бы удалением любой карточки в обход того, что удалять
+//        заявки может только администратор.
+//   I2 — живая заявка не хоронится в закрытой: есть среди сливаемых карточка в
+//        работе — остаться может только карточка в работе (правило в
+//        public/js/admin/views/crm-merge-logic.js, общее с экраном), и она
+//        сохраняет СВОЮ ступень, дату обращения и автора. Отчёты за прошлые
+//        периоды от слияния не меняются (дата не переписывается никогда).
+//   I3 — разные имена на одном номере — предупреждение (names_differ), а имя
+//        влитой карточки дописывается в приписку заметки.
+//   M2 — журнал хранит номера, ступени, пациентов и счётчики, но не имена,
+//        телефоны и заметки: он живёт вечно, и копия персональных данных в нём
+//        пережила бы удаление самих заявок.
+//   M3 — запрет разных пациентов действует на ВЫБРАННЫЕ карточки: остальные
+//        карточки группы можно слить, сняв галочку с чужой.
 //
 // ПОЧЕМУ RPC, А НЕ /api/db. Переезд строк, пересчёт зеркала услуги и даты,
 // удаление и журнал — одно действие. Сделай его экран серией запросов —
@@ -23,6 +38,8 @@
 // две карточки с одной задачей.
 
 import { phoneKey } from '../../../public/js/admin/views/crm-phone-match.js';
+import { allowedSurvivors, isOpenCard, suggestSurvivor, patientConflict, namesDiffer, personName }
+  from '../../../public/js/admin/views/crm-merge-logic.js';
 import { canWrite } from '../../db/schema-registry.js';
 import { effectiveRoles } from '../roles.js';
 import { canSeeAllLeads, leadVisible } from '../crm/visibility.js';
@@ -34,7 +51,7 @@ export class RpcError extends Error {
 
 const MAX_MERGE = 20;          // за один раз — больше дублей у одного номера не бывает
 const MAX_GROUPS = 300;
-const MIN_KEY_DIGITS = 7;      // короче — это не номер, а обрывок: «группа» из случайных карточек
+export const MIN_KEY_DIGITS = 7;   // короче — это не номер, а обрывок: «группа» из случайных карточек
 
 function requireMerger(db, user) {
   // Сливать может тот, кто видит всю доску И ведёт её (пишет в заявки):
@@ -50,12 +67,10 @@ function tableExists(db, name) {
 }
 
 // --------------------------------------------------------------------------
-// Какая ступень «продвинутее»
+// Какая ступень «продвинутее» (для слияния одних закрытых карточек)
 // --------------------------------------------------------------------------
-// Дошедшая (won) — дальше всех; живые — по порядку колонок (дальше по доске —
-// дальше по пути пациента); проигранные — ниже живых: у слитой заявки, где одна
-// карточка ещё в работе, работа продолжается. Ступень, которой в справочнике
-// нет, — в самом низу.
+// Дошедшая (won) — дальше всех; живые — по порядку колонок; проигранные — ниже
+// живых. Ступень, которой в справочнике нет, — в самом низу.
 export function stageRanker(stages) {
   const by = new Map((stages || []).map((s) => [s.key, s]));
   return (key) => {
@@ -68,25 +83,12 @@ export function stageRanker(stages) {
   };
 }
 
-/**
- * Какую карточку предложить оставить: дошедшую; затем с пациентом; затем с
- * самой продвинутой ступенью; затем самую раннюю. Экран только предлагает —
- * выбирает человек.
- */
-export function suggestSurvivor(cards, rank) {
-  const sorted = (cards || []).slice().sort((a, b) => {
-    const wa = rank(a.status) >= 3000 ? 1 : 0;
-    const wb = rank(b.status) >= 3000 ? 1 : 0;
-    if (wa !== wb) return wb - wa;
-    const pa = a.patient_id != null ? 1 : 0;
-    const pb = b.patient_id != null ? 1 : 0;
-    if (pa !== pb) return pb - pa;
-    const ra = rank(a.status);
-    const rb = rank(b.status);
-    if (ra !== rb) return rb - ra;
-    return String(a.created_at || '').localeCompare(String(b.created_at || '')) || (a.id - b.id);
-  });
-  return sorted.length ? sorted[0].id : null;
+/** Карточка → то, что знают правила слияния: вид ступени и её место в воронке. */
+function withStage(stageBy) {
+  return (c) => {
+    const st = stageBy.get(c.status);
+    return { ...c, stage_kind: st ? st.kind : 'open', stage_pos: st ? Number(st.position) || 0 : 0 };
+  };
 }
 
 const firstNonEmpty = (list, pick) => {
@@ -102,15 +104,16 @@ const firstNonEmpty = (list, pick) => {
 // --------------------------------------------------------------------------
 /**
  * Группы карточек с одним номером (ключ phoneKey), от самой свежей группы.
- * У каждой карточки — то, по чему человек выбирает оставшуюся: ступень,
- * пациент, оператор, дата, сколько услуг и задач. `conflict: true` — в группе
- * разные пациенты: слить нельзя, экран показывает причину вместо кнопки.
+ * У каждой карточки — то, по чему человек выбирает оставшуюся: ступень (и её
+ * вид), пациент, оператор, дата, сколько услуг и задач. `conflict: true` — в
+ * группе разные пациенты (сливать можно только часть, сняв галочки);
+ * `names_differ: true` — разные имена, возможно, разные люди.
  */
 export function crmDuplicateGroups(db, _args, user) {
   requireMerger(db, user);
   const stages = listStages(db);
   const stageBy = new Map(stages.map((s) => [s.key, s]));
-  const rank = stageRanker(stages);
+  const staged = withStage(stageBy);
   const rows = db.prepare(`
     SELECT r.id, r.full_name, r.phone, r.status, r.source, r.patient_id, r.assigned_to, r.created_at,
            p.full_name AS patient_name, p.mrn AS patient_mrn, u.full_name AS assigned_name,
@@ -120,9 +123,9 @@ export function crmDuplicateGroups(db, _args, user) {
       LEFT JOIN patients p ON p.id = r.patient_id
       LEFT JOIN users u ON u.id = r.assigned_to
      ORDER BY r.id`).all();
-  const groups = new Map();
   // requireMerger уже проверил, что доска видна целиком: поштучной проверки
   // видимости здесь не нужно.
+  const groups = new Map();
   for (const r of rows) {
     const key = phoneKey(r.phone || '');
     if (!key || key.length < MIN_KEY_DIGITS) continue;
@@ -130,20 +133,21 @@ export function crmDuplicateGroups(db, _args, user) {
     groups.get(key).push(r);
   }
   const out = [];
-  for (const [key, cards] of groups) {
-    if (cards.length < 2) continue;
-    const patients = new Set(cards.map((c) => c.patient_id).filter((x) => x != null));
+  for (const [key, raw] of groups) {
+    if (raw.length < 2) continue;
+    const cards = raw.map(staged);
     out.push({
       key,
       phone: cards[cards.length - 1].phone || '',
-      conflict: patients.size > 1,
-      suggested_id: suggestSurvivor(cards, rank),
+      conflict: patientConflict(cards),
+      names_differ: namesDiffer(cards),
+      suggested_id: suggestSurvivor(cards),
       latest: cards.reduce((m, c) => (String(c.created_at || '') > m ? String(c.created_at || '') : m), ''),
       cards: cards.map((c) => {
         const st = stageBy.get(c.status);
         return {
           id: c.id, full_name: c.full_name || '', phone: c.phone || '', status: c.status,
-          stage_label: st ? st.label : c.status, stage_kind: st ? st.kind : 'open', stage_color: st ? st.color : '',
+          stage_label: st ? st.label : c.status, stage_kind: c.stage_kind, stage_pos: c.stage_pos, stage_color: st ? st.color : '',
           source: c.source, patient_id: c.patient_id ?? null,
           patient_name: c.patient_name || '', patient_mrn: c.patient_mrn || '',
           assigned_to: c.assigned_to ?? null, assigned_name: c.assigned_name || '',
@@ -170,47 +174,70 @@ export function crmMergeLeads(db, args, user) {
 
   const all = [keepId, ...mergeIds];
   const holes = all.map(() => '?').join(',');
-  const cards = db.prepare(`SELECT * FROM crm_requests WHERE id IN (${holes})`).all(...all);
+  const stages = listStages(db);
+  const stageBy = new Map(stages.map((s) => [s.key, s]));
+  const cards = db.prepare(`SELECT * FROM crm_requests WHERE id IN (${holes})`).all(...all).map(withStage(stageBy));
   const byId = new Map(cards.map((c) => [c.id, c]));
   for (const id of all) {
     // Чужая невидимая карточка отвечает тем же «не найдена», что и
     // несуществующая: сам факт её существования — тоже сведения о чужой заявке.
     const c = byId.get(id);
-    if (!c || !leadVisible(db, user, c.assigned_to)) throw new RpcError(`Заявка №${id} не найдена.`, 404);
+    if (!c || !leadVisible(db, user, c.assigned_to, { lifted: true })) throw new RpcError(`Заявка №${id} не найдена.`, 404);
   }
   const keep = byId.get(keepId);
   const losers = mergeIds.map((id) => byId.get(id));
-  const patients = new Set(cards.map((c) => c.patient_id).filter((x) => x != null));
-  if (patients.size > 1) {
+
+  // I1 — один номер. Иначе это не слияние дублей, а удаление чужой карточки.
+  const keys = new Set(cards.map((c) => phoneKey(c.phone || '')));
+  const key = [...keys][0] || '';
+  if (keys.size !== 1 || key.length < MIN_KEY_DIGITS) {
+    throw new RpcError('Объединять можно только карточки с одним и тем же номером телефона.', 409);
+  }
+  if (patientConflict(cards)) {
     throw new RpcError('Карточки привязаны к разным пациентам — объединить их нельзя. Один номер бывает у нескольких членов семьи.', 409);
   }
+  // I2 — живую заявку нельзя влить в закрытую.
+  if (!allowedSurvivors(cards).some((c) => c.id === keepId)) {
+    throw new RpcError('Среди карточек есть заявка в работе — остаться должна она (или другая карточка в работе), а не закрытая.', 409);
+  }
 
-  const rank = stageRanker(listStages(db));
+  const rank = stageRanker(stages);
   // Порядок «первой непустой»: сначала оставшаяся, потом остальные по дате.
   const byAge = cards.slice().sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')) || (a.id - b.id));
   const order = [keep, ...byAge.filter((c) => c.id !== keepId)];
-  const earliest = byAge[0];
-  const status = cards.reduce((best, c) => (rank(c.status) > rank(best) ? c.status : best), keep.status);
+  // Ступень: оставшаяся в работе сохраняет СВОЮ (I2); сливаются одни закрытые
+  // — самая продвинутая из них.
+  const status = isOpenCard(keep) ? keep.status
+    : cards.reduce((best, c) => (rank(c.status) > rank(best) ? c.status : best), keep.status);
 
   const dd = db.prepare("SELECT strftime('%d.%m', ?, 'localtime') AS d");
   const notes = [];
   if (keep.note && String(keep.note).trim()) notes.push(String(keep.note).trim());
   for (const c of losers.slice().sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))) {
     const n = String(c.note || '').trim();
-    if (!n) continue;
+    const who = personName(c);
+    // Заметки нет, но имя другое — его всё равно стоит сохранить (I3): иначе
+    // от второго человека на этом номере не остаётся и следа.
+    const whoDiffers = who && personName(keep) !== who;
+    if (!n && !whoDiffers) continue;
     const d = c.created_at ? (dd.get(c.created_at).d || '') : '';
-    notes.push(`${n} — из заявки №${c.id}${d ? ' от ' + d : ''}`);
+    const tail = `из заявки №${c.id}${d ? ' от ' + d : ''}${who ? ', «' + who + '»' : ''}`;
+    notes.push(n ? `${n} — ${tail}` : `— ${tail}`);
   }
 
   const hasTags = tableExists(db, 'crm_request_tags');
+  const idsOf = (sql, id) => db.prepare(sql).all(id).map((x) => Object.values(x)[0]);
+  // M2 — только номера, ступени, пациенты и счётчики: ни имён, ни телефонов,
+  // ни заметок.
+  const brief = (c) => ({ id: c.id, status: c.status, patient_id: c.patient_id ?? null, assigned_to: c.assigned_to ?? null });
   const snapshot = {
-    kept: keep,
-    merged: losers.map((c) => ({
-      ...c,
-      line_ids: db.prepare('SELECT id FROM crm_request_services WHERE request_id = ? ORDER BY id').all(c.id).map((x) => x.id),
-      task_ids: db.prepare('SELECT id FROM crm_tasks WHERE request_id = ? ORDER BY id').all(c.id).map((x) => x.id),
-      tags: hasTags ? db.prepare('SELECT tag_key FROM crm_request_tags WHERE request_id = ? ORDER BY tag_key').all(c.id).map((x) => x.tag_key) : [],
-    })),
+    kept: brief(keep),
+    merged: losers.map((c) => {
+      const lineIds = idsOf('SELECT id FROM crm_request_services WHERE request_id = ? ORDER BY id', c.id);
+      const taskIds = idsOf('SELECT id FROM crm_tasks WHERE request_id = ? ORDER BY id', c.id);
+      const tags = hasTags ? idsOf('SELECT tag_key FROM crm_request_tags WHERE request_id = ? ORDER BY tag_key', c.id) : [];
+      return { ...brief(c), line_ids: lineIds, task_ids: taskIds, tags, lines: lineIds.length, tasks: taskIds.length };
+    }),
   };
   const actorName = user && user.id != null
     ? ((db.prepare('SELECT full_name FROM users WHERE id = ?').get(user.id) || {}).full_name || null) : null;
@@ -220,6 +247,8 @@ export function crmMergeLeads(db, args, user) {
     // 1. Строки услуг и задачи — ПЕРЕЕЗЖАЮТ. Удаление заявки ниже уносит
     //    свои строки каскадом (ON DELETE CASCADE), поэтому переезд обязан
     //    случиться раньше — иначе услуги и задачи пропали бы вместе с карточкой.
+    //    Исполнитель задачи не меняется: даже на чужой карточке он свою задачу
+    //    видит (crm_tasks.scope.orOwn).
     db.prepare(`UPDATE crm_request_services SET request_id = ? WHERE request_id IN (${lh})`).run(keepId, ...mergeIds);
     db.prepare(`UPDATE crm_tasks SET request_id = ? WHERE request_id IN (${lh})`).run(keepId, ...mergeIds);
     // 2. Метки — объединение: у карточки метка либо есть, либо нет.
@@ -227,7 +256,8 @@ export function crmMergeLeads(db, args, user) {
       db.prepare(`INSERT OR IGNORE INTO crm_request_tags (request_id, tag_key)
                   SELECT ?, tag_key FROM crm_request_tags WHERE request_id IN (${lh})`).run(keepId, ...mergeIds);
     }
-    // 3. Сама карточка.
+    // 3. Сама карточка. Дата обращения, автор и источник — СВОИ (I2/M5):
+    //    слияние не переписывает историю, по которой считаются отчёты.
     const lineFirst = db.prepare(`
       SELECT service_id, scheduled_date FROM crm_request_services
        WHERE request_id = ? AND status NOT IN ('cancelled', 'done')
@@ -239,10 +269,8 @@ export function crmMergeLeads(db, args, user) {
       assigned_to: firstNonEmpty(order, (c) => c.assigned_to),
       status,
       note: notes.join('\n'),
-      source: earliest.source ?? keep.source,
-      created_at: earliest.created_at ?? keep.created_at,
-      call_id: earliest.call_id ?? firstNonEmpty(byAge, (c) => c.call_id),
-      created_by: earliest.created_by ?? firstNonEmpty(byAge, (c) => c.created_by),
+      // Доказательство звонка у оставшейся — своё; нет своего — самое раннее.
+      call_id: keep.call_id ?? firstNonEmpty(byAge, (c) => c.call_id),
       // Зеркало первой строки (CRM_MULTI_SERVICE_V1): карточка доски и выгрузка
       // читают услугу и дату из родителя. Первая ЖИВАЯ строка после переезда —
       // то же правило, что у окна заявки (ближайшая назначенная дата).
@@ -251,8 +279,7 @@ export function crmMergeLeads(db, args, user) {
     };
     db.prepare(`UPDATE crm_requests
                    SET full_name = @full_name, phone = @phone, patient_id = @patient_id, assigned_to = @assigned_to,
-                       status = @status, note = @note, source = @source, created_at = @created_at,
-                       call_id = @call_id, created_by = @created_by, service_id = @service_id,
+                       status = @status, note = @note, call_id = @call_id, service_id = @service_id,
                        scheduled_date = @scheduled_date,
                        updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
                  WHERE id = @id`).run({ ...patch, id: keepId });
@@ -270,4 +297,3 @@ export function crmMergeLeads(db, args, user) {
     lead: db.prepare('SELECT * FROM crm_requests WHERE id = ?').get(keepId),
   };
 }
-
