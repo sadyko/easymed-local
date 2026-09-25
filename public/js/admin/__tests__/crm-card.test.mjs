@@ -212,8 +212,11 @@ globalThis.fetch = async (url, opts) => {
     // Список операторов отдаётся только на запрос с отбором ПО РОЛЯМ — тот
     // самый, которым карточка спрашивает «кому можно передать». Выборка врачей
     // (.eq('role','doctor')) сюда не попадает.
+    // CRM_HEAD_MERGE_TAGS_V1 — карточка спрашивает всех активных вместе с
+    // extra_roles и отбирает операторов сама (boardStaff): дополнительная роль
+    // колл-центра тоже делает человека оператором. Это и есть «запрос персонала».
     if (body && body.table === 'users' && body.op === 'select'
-        && (body.filters || []).some((f) => f.col === 'role' && f.op === 'in')) {
+        && ((body.filters || []).some((f) => f.col === 'role' && f.op === 'in') || /extra_roles/.test(String(body.columns || '')))) {
       if (failStaffOnce) { failStaffOnce = false; return { ok: false, json: async () => ({ error: { message: 'boom' } }) }; }
       return jsonOk(STAFF);
     }
@@ -622,7 +625,7 @@ test('оператор колл-центра поля «Оператор» не 
   // 'doctor'), CRM_LINE_DOCTOR_V1), это законно для любой роли. Здесь важно
   // именно отсутствие СПИСКА ОПЕРАТОРОВ — тот же самый запрос (.in('role', …)),
   // которым карточка ниже спрашивает «кому можно передать».
-  assert.ok(!CALLS.some((c) => c.table === 'users' && (c.filters || []).some((f) => f.col === 'role' && f.op === 'in')),
+  assert.ok(!CALLS.some((c) => c.table === 'users' && ((c.filters || []).some((f) => f.col === 'role' && f.op === 'in') || /extra_roles/.test(String(c.columns || '')))),
     'список операторов запрошен для роли, которой раздавать заявки нельзя — лишний запрос на сервер');
 
   await saveRequest(modal);
@@ -1863,4 +1866,63 @@ test('отказались — старый приём остаётся, и об
   assert.ok(someToast(/остаётся в календаре/),
     'старый приём оставили висеть молча — регистратура найдёт его только глазами: ' + JSON.stringify(TOASTS));
   window.easymed.state.user = null;
+});
+
+// ---------------------------------------------------------------------------
+// CRM_HEAD_MERGE_TAGS_V1 (2026-09-25) — «РУКОВОДИТЕЛЬ КОЛЛ-ЦЕНТРА».
+//
+// Право `crm.all` («Видит все заявки и передаёт их») на роли колл-центра даёт
+// поле «Оператор» — передать заявку можно тем же окном, что и у администратора.
+// Удалять задачи — по-прежнему только администратору. В списке операторов —
+// и тот, у кого колл-центр стоит ДОПОЛНИТЕЛЬНОЙ ролью (extra_roles из базы
+// приходит JSON-строкой).
+// Стоит в КОНЦЕ файла: матрица прав оболочки — общее состояние модуля.
+// ---------------------------------------------------------------------------
+const perms = await import('../permissions.js');
+const { boardStaff } = await import('../views/crm.js');
+
+test('boardStaff: основная ИЛИ дополнительная роль доски, extra_roles строкой или массивом', () => {
+  const got = boardStaff([
+    { id: 1, full_name: 'Админ', role: 'admin' },
+    { id: 2, full_name: 'Врач', role: 'doctor', extra_roles: '[]' },
+    { id: 3, full_name: 'Врач-оператор', role: 'doctor', extra_roles: '["callcenter"]' },
+    { id: 4, full_name: 'Кассир-регистратор', role: 'cashier', extra_roles: ['registrar'] },
+    { id: 5, full_name: 'Битая строка', role: 'lab', extra_roles: 'не json' },
+  ]).map((u) => u.id);
+  assert.deepStrictEqual(got, [1, 3, 4]);
+});
+
+test('руководитель колл-центра (crm.all) видит «Оператор», в списке — оператор с дополнительной ролью; удалять задачи не может', async () => {
+  perms.setEffectiveFromRole({ name: 'callcenter', permissions: { sections: ['crm'], grants: { 'crm.all': 'edit' } } });
+  try {
+    assert.strictEqual(perms.canSeeAllLeads(), true);
+    const modal = await openRequest(LEAD, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+    const sel = operatorSelect(modal);
+    assert.ok(sel, 'руководителю колл-центра не дали передать заявку');
+    // openRequest ставит STAFF = OPERATORS — поэтому добавляем в сам список.
+    OPERATORS.push({ id: 30, full_name: 'Врач-оператор', role: 'doctor', extra_roles: '["callcenter"]' },
+      { id: 31, full_name: 'Просто врач', role: 'doctor', extra_roles: '[]' });
+    const modal2 = await openRequest(LEAD, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+    await tick(60);
+    OPERATORS.splice(2);
+    const opts = operatorSelect(modal2).children.filter((n) => n.tagName === 'OPTION').map((o) => o.value);
+    assert.ok(opts.includes('12'), 'нет оператора с основной ролью');
+    assert.ok(opts.includes('30'), 'нет оператора, у которого колл-центр — дополнительная роль');
+    assert.ok(!opts.includes('31'), 'в операторах оказался врач без роли колл-центра');
+    assert.ok(!walk(modal2).some((n) => n.getAttribute && n.getAttribute('data-task-delete')),
+      'руководителю показали удаление задач — это право администратора');
+
+    // Ревью M6 — закрытый раздел CRM закрывает и «видит все заявки», как на сервере.
+    perms.setEffectiveFromRole({ name: 'callcenter', permissions: { sections: ['crm'], grants: { crm: 'none', 'crm.all': 'edit' } } });
+    assert.strictEqual(perms.canSeeAllLeads(), false, 'закрытый раздел CRM не закрыл «видит все заявки»');
+
+    // Без права — как было: поля нет.
+    perms.setEffectiveFromRole({ name: 'callcenter', permissions: { sections: ['crm'], grants: { 'crm.all': 'none' } } });
+    assert.strictEqual(perms.canSeeAllLeads(), false);
+    const modal3 = await openRequest(LEAD, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+    assert.strictEqual(operatorSelect(modal3), null);
+  } finally {
+    perms.setEffectiveFromRole({ name: '', permissions: { sections: ['crm'] } });
+    window.easymed.state.user = null;
+  }
 });

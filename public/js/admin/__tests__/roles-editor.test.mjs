@@ -247,11 +247,20 @@ test('матрица рисует ровно справочник: у строк
   // галочкой-обманкой.
   for (const row of catalogRows()) {
     const offered = radiosFor(root, row.key).map((n) => n.attrs.value);
+    // ROLE_REPORTS_SETTINGS_V1 — закрытая строка (только администратор)
+    // переключателя не получает вовсе: выдать её нельзя.
+    if (row.locked) { assert.deepStrictEqual(offered, [], 'закрытая строка получила переключатель: ' + row.key); continue; }
     assert.deepStrictEqual(offered, row.levels || ['none', 'view'], 'уровни у ' + row.key);
   }
   // И ничего сверх справочника: лишняя строка — это право, которого код не проверяет.
   const onScreen = new Set(radios(root).map((n) => n.attrs.name.slice('grant:'.length)));
-  assert.deepStrictEqual([...onScreen].sort(), catalogRows().map((r) => r.key).sort());
+  assert.deepStrictEqual([...onScreen].sort(), catalogRows().filter((r) => !r.locked).map((r) => r.key).sort());
+  // Закрытые строки при этом ВИДНЫ и говорят, почему выбора нет.
+  const lockedRows = catalogRows().filter((r) => r.locked);
+  assert.ok(lockedRows.length >= 6, 'закрытых строк меньше, чем решил владелец');
+  const t = textOf(root);
+  for (const r of lockedRows) assert.ok(t.includes(r.desc), 'закрытая строка не нарисована: ' + r.key);
+  assert.ok(t.includes('Только администратор'), 'у закрытой строки нет пометки «Только администратор»');
 
   // Закрытый раздел гасит свои окна и действия и говорит почему.
   const inpatient = CATALOG.find((x) => x.key === 'inpatient');

@@ -29,6 +29,7 @@ import { renderDoctorProfile } from './doctor-profile.js?v=btnright1';
 import {
     renderDoctorDashboard, resetDoctorDashboard,
     serviceRateMap, serviceShare, tierShare, tierProgressText, perServicePayApplies,
+    tierRefused, TIER_DENIED_NOTE,   // ROLE_REPORTS_SETTINGS_V1 (ревью M2)
 } from './doctor-dashboard.js';
 // HEAD_DOCTOR_WARD_VIEW_V1 — главный врач делает свою работу ПРЯМО ИЗ КАБИНЕТА:
 // оба окна те же самые, что в разделе «Стационар», а не их копии.
@@ -1605,6 +1606,7 @@ async function loadDashboardData() {
     // только в консоли, а не в цифрах.
     state.dash.tierPos = new Map();
     state.dash.tierProgress = [];
+    state.dash.tierDenied = false;   // ревью M2
     try {
         const nowKey = localMonthKey(new Date());
         const months = new Set(state.dash.services.map(s => localMonthKey(s.visitDate)).filter(Boolean));
@@ -1615,6 +1617,8 @@ async function loadDashboardData() {
         const { data, error } = await supabase.rpc('doctor_tier_positions', { doctor_id: docId, from, to });
         if (error) {
             console.warn('[dash] tier positions:', error.message);
+            // Ревью M2 — отказ по правам: сумма без ступеней была бы неправдой.
+            if (tierRefused(error)) state.dash.tierDenied = true;
         } else if (data && Array.isArray(data.rows)) {
             for (const p of data.rows) state.dash.tierPos.set(String(p.visit_service_id), p);
             const byService = new Map();
@@ -1815,6 +1819,8 @@ function dashboardView() {
 
     const salary  = computeSalary();
     const rewards = computeReferralRewards();
+    // Ревью M2 — при окладе ступени ни на что не влияют; иначе сумма без них неверна.
+    const tierHidden = !!state.dash.tierDenied && salary.kind !== 'fixed';
     const completedCount = state.dash.services.filter(s => s.status === 'completed').length;
     const inProgressCount = state.dash.services.filter(s => s.status === 'in_progress').length;
     const uniquePatients = new Set(state.dash.services.map(s => s.patientName + '|' + s.patientMrn)).size;
@@ -1835,17 +1841,22 @@ function dashboardView() {
         }),
         // Плитки — те же, что на сводке клиники (dash-kpi.js): одна плитка на
         // весь продукт, и врач в своём кабинете видит ту же программу.
+        // Ревью M2 — ступени не пришли: говорим почему и не показываем
+        // сумму, посчитанную без них (оклад без доли за услуги от этого не
+        // зависит и остаётся).
+        tierHidden ? h('div', { class: 'card card-pad-sm muted', role: 'status', style: { fontSize: '12.5px' } },
+            Icon('Info', { size: 14 }), ' ', tr(TIER_DENIED_NOTE)) : null,
         h('div', { class: 'dash-kpi-row' },
             kpiTile({
                 icon: 'Wallet', accent: 'ok', label: 'Зарплата',
-                value: uzs(salary.total),
+                value: tierHidden ? '—' : uzs(salary.total),
                 meta: salaryKindLabel(salary.kind) + (salary.kind === 'fix_plus_kpi'
                     ? ' · ' + trf('оклад {fix} + переменная {variable}', {
                         fix:      Math.round(salary.fixed).toLocaleString('ru-RU'),
                         variable: Math.round(salary.variable).toLocaleString('ru-RU'),
                     })
-                    : ''),
-                onClick: () => openSalaryDetails(),
+                    : '') + (tierHidden ? ' · ' + tr(TIER_DENIED_NOTE) : ''),
+                onClick: tierHidden ? null : () => openSalaryDetails(),
             }),
             kpiTile({
                 icon: 'ArrowRight', accent: 'info', label: 'Вознаграждения за направления',
@@ -1866,7 +1877,11 @@ function dashboardView() {
         ),
         // Начисления по дням слева, как они считаются — справа.
         h('div', { class: 'pay-grid' },
-            earningsChartCard(),
+            tierHidden
+                ? h('div', { class: 'card pay-card' },
+                    h('div', { class: 'card-header' }, h('h3', null, Icon('Chart', { size: 16 }), ' ', tr('Начисления по дням'))),
+                    h('div', { class: 'card-pad-sm muted', style: { fontSize: '12.5px' } }, tr(TIER_DENIED_NOTE)))
+                : earningsChartCard(),
             salaryConfigCard(salary),
         ),
         // Разбор направлений слева; справа — одна карточка на три списка
@@ -2058,7 +2073,7 @@ function salaryConfigCard(salary) {
         kvRow(tr('Оклад'),         trf('{sum} UZS в месяц', { sum: Number(doc.salary_fixed || 0).toLocaleString('ru-RU') })),
         kvRow(tr('Ставки по услугам'), trf('услуг задано: {n}', { n: (Array.isArray(doc.service_rates) ? doc.service_rates.filter(r => Number(r.value != null ? r.value : r.percentage) > 0).length : 0) })),
         kvRow(tr('Выручка за период'), Math.round(salary.revenue).toLocaleString('ru-RU') + ' UZS'),
-        kvRow(tr('Начислено (после налога)'), Math.round(salary.variable).toLocaleString('ru-RU') + ' UZS'),
+        kvRow(tr('Начислено (после налога)'), state.dash.tierDenied ? '—' : Math.round(salary.variable).toLocaleString('ru-RU') + ' UZS'),   // ревью M2
         // INPATIENT_SHARE_V1 — стационарная часть отдельной строкой: по
         // оплаченным счетам стационара, исполнителю (иначе назначившему).
         inpatientPayApplies(doc)

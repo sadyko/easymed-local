@@ -1,5 +1,7 @@
+import { writeGrantAllows, writeGrantViolation, writeGrantNarrows } from './write-grant.js';   // ROLE_REPORTS_SETTINGS_V1
 import { tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns, rowScope, actorStamps } from './schema-registry.js';
 import { effectiveRoles } from '../services/roles.js';
+import { scopeLifted } from './row-scope.js';   // CRM_HEAD_MERGE_TAGS_V1
 
 export class CompileError extends Error {
   constructor(message, status = 400) {
@@ -112,13 +114,19 @@ function starColumns(table) {
 // Правило описано у таблицы в реестре (scope), а не зашито тут по имени:
 //   column     — колонка-владелец («чей это»);
 //   allRoles   — кто видит всё (заведующая, администратор);
+//   allGrant   — ключ справочника прав, выдача которого тоже снимает
+//                ограничение (CRM_HEAD_MERGE_TAGS_V1, «crm.all»);
 //   nullVisible — видна ли ничья строка. Для заявок — да: это общая стопка,
 //                 из которой оператор берёт себе следующую.
 //
 // Ограничение накладывается и на ЧТЕНИЕ, и на правку, и на удаление: право
 // видеть и право менять здесь одно и то же — чужую заявку нельзя ни открыть,
 // ни исправить, ни закрыть.
-function scopeFor(table, user) {
+// `qual` — чем квалифицировать колонки строки: имя таблицы у базовой таблицы
+// запроса и ПСЕВДОНИМ соединения у embed'а (CRM_HEAD_MERGE_TAGS_V1, ревью I5:
+// присоединённая таблица с владельцем подчиняется тому же правилу, что и
+// запрошенная напрямую).
+function scopeFor(table, user, db, qual = table) {
   const sc = rowScope(table);
   if (!sc) return null;
   // CRM_DEDUP_SEARCH_TASKS_V1 — ОГРАНИЧЕНИЕ ЧЕРЕЗ РОДИТЕЛЯ. Строка-потомок
@@ -127,27 +135,44 @@ function scopeFor(table, user) {
   // scopeFor — второго описания «кто что видит» не появляется.
   //   via: { fk: 'request_id', table: 'crm_requests' }
   if (sc.via) {
-    const parent = scopeFor(sc.via.table, user);
+    const parent = scopeFor(sc.via.table, user, db);
     if (!parent) return null;
-    return {
-      clause: `"${table}"."${sc.via.fk}" IN (SELECT "${sc.via.table}"."id" FROM "${sc.via.table}" WHERE ${parent.clause})`,
-      params: parent.params,
-      via: { ...sc.via, parent },
-    };
+    const viaClause = `"${qual}"."${sc.via.fk}" IN (SELECT "${sc.via.table}"."id" FROM "${sc.via.table}" WHERE ${parent.clause})`;
+    // CRM_HEAD_MERGE_TAGS_V1 (ревью M1) — `orOwn`: строка-потомок видна ещё и
+    // тому, кто в ней назван (задача — своему исполнителю), даже если заявку
+    // ведёт другой оператор: иначе задача, переехавшая при слиянии на чужую
+    // карточку, пропадала бы у того, кому её поручили. Вставка по-прежнему —
+    // только на ВИДИМУЮ заявку (guardInsert смотрит на via.parent).
+    if (sc.orOwn) {
+      const me = user && Number.isFinite(Number(user.id)) ? Number(user.id) : 0;
+      return {
+        clause: `(${viaClause} OR "${qual}"."${sc.orOwn}" = ?)`,
+        params: [...parent.params, me],
+        via: { ...sc.via, parent },
+      };
+    }
+    return { clause: viaClause, params: parent.params, via: { ...sc.via, parent } };
   }
   if (!sc.column) return null;
-  const roles = effectiveRoles(user);
-  if ((sc.allRoles || []).some((r) => roles.includes(r))) return null;
+  // CRM_HEAD_MERGE_TAGS_V1 — «кто видит всё» решают роли из кода (allRoles) И
+  // право справочника (allGrant: руководитель колл-центра, «crm.all»). Один
+  // предикат на все двери — row-scope.js scopeLifted; без базы право не
+  // читается и остаётся узкое правило.
+  if (scopeLifted(sc, user, db)) return null;
   // Сессии без номера пользователя (их не бывает у живого входа) остаются с
   // самым узким доступом: ничьи строки да ничего больше.
   const me = user && Number.isFinite(Number(user.id)) ? Number(user.id) : 0;
-  const parts = [`"${table}"."${sc.column}" = ?`];
+  const parts = [`"${qual}"."${sc.column}" = ?`];
   const params = [me];
-  if (sc.nullVisible) parts.push(`"${table}"."${sc.column}" IS NULL`);
+  if (sc.nullVisible) parts.push(`"${qual}"."${sc.column}" IS NULL`);
   return { clause: '(' + parts.join(' OR ') + ')', params };
 }
 
-export function compile(desc, user) {
+// CRM_HEAD_MERGE_TAGS_V1 — ctx.db: база, из которой читается право снять
+// ограничение по владельцу (allGrant). routes/db.js передаёт её всегда; вызов
+// без неё — самый узкий доступ.
+export function compile(desc, user, ctx = {}) {
+  const db = (ctx && ctx.db) || null;
   const table = validateTable(desc.table);
   const op = desc.op;
   if (!['select', 'insert', 'update', 'delete', 'upsert'].includes(op)) {
@@ -160,24 +185,43 @@ export function compile(desc, user) {
   const role = effectiveRoles(user);
   if (op === 'select') {
     if (!canRead(table, role)) throw new CompileError('not allowed', 403);
-    return compileSelect(desc, table, user);
+    return compileSelect(desc, table, user, db);
   }
   // upsert = insert + update: it needs BOTH permissions (a role that can only
   // insert must not gain an update path through ON CONFLICT DO UPDATE).
+  // ROLE_REPORTS_SETTINGS_V1 — запись: список ролей реестра ИЛИ право окна
+  // настроек из «Ролей» (write.grant; см. db/write-grant.js — что оно
+  // открывает и чего не открывает никогда).
+  // Ревью I1/I2: своя роль на основе администратора с закрытой плиткой —
+  // «нет», хотя основа `admin` в списке ролей; пишущий по праву окна — только
+  // колонки без денег (см. db/write-grant.js).
+  let viaGrant = false;
+  const mayWrite = (o) => {
+    if (canWrite(table, o, role)) return !writeGrantNarrows(table, user, db);
+    if (writeGrantAllows(table, o, user, db)) { viaGrant = true; return true; }
+    return false;
+  };
+  const moneyGuard = () => {
+    if (!viaGrant) return;
+    const col = writeGrantViolation(table, op, desc.values);
+    if (col) throw new CompileError('not allowed: column ' + col + ' is administrator-only', 403);
+  };
   if (op === 'upsert') {
-    if (!canWrite(table, 'insert', role) || !canWrite(table, 'update', role)) {
+    if (!mayWrite('insert') || !mayWrite('update')) {
       throw new CompileError('not allowed', 403);
     }
+    moneyGuard();
     // CRM_DEDUP_SEARCH_TASKS_V1 — ON CONFLICT DO UPDATE правит строку, минуя
     // WHERE, то есть минуя ограничение по владельцу. Тем, на кого ограничение
     // действует, upsert по таблице с ним закрыт.
-    if (scopeFor(table, user)) throw new CompileError('not allowed', 403);
+    if (scopeFor(table, user, db)) throw new CompileError('not allowed', 403);
     return compileUpsert(desc, table);
   }
-  if (!canWrite(table, op, role)) throw new CompileError('not allowed', 403);
-  if (op === 'insert') return compileInsert(desc, table, user);
-  if (op === 'update') return compileUpdate(desc, table, user);
-  return compileDelete(desc, table, user);
+  if (!mayWrite(op)) throw new CompileError('not allowed', 403);
+  moneyGuard();
+  if (op === 'insert') return compileInsert(desc, table, user, db);
+  if (op === 'update') return compileUpdate(desc, table, user, db);
+  return compileDelete(desc, table, user, db);
 }
 
 function validateTable(name) {
@@ -186,24 +230,33 @@ function validateTable(name) {
   return name;
 }
 
-function compileSelect(desc, table, user) {
-  const { projection, joins, embeds, joined } = parseColumns(desc.columns, table);
+function compileSelect(desc, table, user, db) {
+  // CRM_HEAD_MERGE_TAGS_V1 (ревью I5) — СОЕДИНЕНИЕ ПОДЧИНЯЕТСЯ ПРАВИЛУ
+  // ПРИСОЕДИНЯЕМОЙ ТАБЛИЦЫ. Embed `crm_requests(full_name, phone)` из строки
+  // услуги отдавал имя и номер чужой заявки: ограничение по владельцу стояло
+  // только на запрошенной таблице. Теперь условие видимости встаёт в ON
+  // соединения — невидимый родитель приходит как null (у `!inner` строка
+  // выпадает). Параметры соединений идут в SQL раньше WHERE, поэтому копятся
+  // отдельно и ставятся первыми.
+  const jctx = { scope: (t, alias) => scopeFor(t, user, db, alias), params: [] };
+  const { projection, joins, embeds, joined } = parseColumns(desc.columns, table, jctx);
   // EMBED_FILTER_V1 — фильтр по колонке присоединённой таблицы может ПОТРЕБОВАТЬ
   // соединения, которого нет в проекции (см. compileTerm). Поэтому WHERE
   // собирается ДО того, как строка SQL склеена: compileFilters дописывает
   // недостающие JOIN'ы в `joins`, и только потом они попадают в текст запроса —
   // между FROM и WHERE, как того требует синтаксис.
-  const { clause, params } = compileFilters(desc.filters, table, { qualify: true, joins, joined });
+  const { clause, params } = compileFilters(desc.filters, table, { qualify: true, joins, joined, jctx });
 
   // CRM_OWNERSHIP_V1 — ограничение по владельцу дописывается к WHERE ПОСЛЕ
   // фильтров экрана и снять его запросом нельзя: оно не из descriptor'а.
-  const scope = scopeFor(table, user);
+  const scope = scopeFor(table, user, db);
   const where = scope ? (clause ? `(${clause}) AND ${scope.clause}` : scope.clause) : clause;
   if (scope) params.push(...scope.params);
 
   let sql = `SELECT ${projection.join(', ')} FROM "${table}"`;
   for (const j of joins) sql += ` ${j}`;
   if (where) sql += ` WHERE ${where}`;
+  if (jctx.params.length) params.unshift(...jctx.params);
 
   if (desc.order !== undefined) {
     if (!Array.isArray(desc.order)) throw new CompileError('order must be an array', 400);
@@ -313,7 +366,7 @@ function compileEmbed(parentTable, parentQual, parentPath, token, out) {
     // менять смысл запроса задним числом.
     out.joined.set(path, { table: embed.table, inner: bang === '!inner' });
     out.joins.push(`${bang === '!inner' ? 'INNER' : 'LEFT'} JOIN "${embed.table}" AS "${path}"`
-      + ` ON "${parentQual}"."${embed.fk}" = "${path}"."id"`);
+      + ` ON "${parentQual}"."${embed.fk}" = "${path}"."id"` + joinScope(out.jctx, embed.table, path));
   }
   for (const sub of splitTopLevel(subcolsRaw)) {
     if (EMBED_TOKEN.test(sub)) { compileEmbed(embed.table, path, path, sub, out); continue; }
@@ -334,7 +387,17 @@ function compileEmbed(parentTable, parentQual, parentPath, token, out) {
 // is ALWAYS aliased ("beds" AS "from"), which lets two embeds of the same
 // table coexist without a duplicate-join SQL error and keeps every embed's
 // qualifier equal to its output name.
-function parseColumns(columns, table) {
+// CRM_HEAD_MERGE_TAGS_V1 — « AND <правило видимости>» для ON соединения с
+// таблицей, у которой есть владелец; пусто, если правила нет или оно снято.
+function joinScope(jctx, embedTable, alias) {
+  if (!jctx || !jctx.scope) return '';
+  const sc = jctx.scope(embedTable, alias);
+  if (!sc) return '';
+  jctx.params.push(...sc.params);
+  return ` AND ${sc.clause}`;
+}
+
+function parseColumns(columns, table, jctx = null) {
   // easymed's views pass multi-line template-string selects; supabase-js strips
   // whitespace from the select string before parsing, and so do we (column and
   // relation identifiers can never contain whitespace).
@@ -356,7 +419,7 @@ function parseColumns(columns, table) {
 
   for (const token of tokens) {
     if (EMBED_TOKEN.test(token)) {
-      compileEmbed(table, table, '', token, { joins, projection, embedsMap, joined });
+      compileEmbed(table, table, '', token, { joins, projection, embedsMap, joined, jctx });
       continue;
     }
 
@@ -427,7 +490,7 @@ function resolveEmbedFilter(f, table, env) {
     // базовой таблице и смотрит в первичный ключ родителя), поэтому строк
     // после соединения не прибавляется.
     env.joined.set(rel, { table: embed.table, inner: true });
-    env.joins.push(`INNER JOIN "${embed.table}" AS "${rel}" ON "${table}"."${embed.fk}" = "${rel}"."id"`);
+    env.joins.push(`INNER JOIN "${embed.table}" AS "${rel}" ON "${table}"."${embed.fk}" = "${rel}"."id"` + joinScope(env.jctx, embed.table, rel));
   }
   return `"${rel}"."${leaf}"`;
   function reject() { throw new CompileError('unknown filter column', 400); }
@@ -488,14 +551,14 @@ function compileTerm(f, table, qualify, env = null) {
 // OR groups are wrapped in parens and AND'd with the rest. A group whose every
 // term is tenancy-dropped contributes nothing (e.g. the local
 // `company_id.is.null,company_id.eq.<cid>` collapses to "no constraint").
-function compileFilters(filters, table, { qualify = false, joins = null, joined = null } = {}) {
+function compileFilters(filters, table, { qualify = false, joins = null, joined = null, jctx = null } = {}) {
   if (filters !== undefined && !Array.isArray(filters)) {
     throw new CompileError('filters must be an array', 400);
   }
   // env существует только у SELECT: только он строит соединения (см.
   // resolveEmbedFilter). У UPDATE/DELETE его нет, и точечный фильтр там не
   // компилируется — форма их SQL не меняется.
-  const env = (joins && joined) ? { joins, joined } : null;
+  const env = (joins && joined) ? { joins, joined, jctx } : null;
   const params = [];
   const clauses = [];
   for (const f of filters || []) {
@@ -570,8 +633,8 @@ function guardInsert(stmt, table, values, scope) {
   };
 }
 
-function compileInsert(desc, table, user) {
-  const scope = scopeFor(table, user);
+function compileInsert(desc, table, user, db) {
+  const scope = scopeFor(table, user, db);
   const guarded = !!(scope && scope.via);
   const one = (row) => {
     const { values, extra } = stampValues(table, 'insert', row, user);
@@ -662,7 +725,7 @@ function compileUpsert(desc, table) {
   };
 }
 
-function compileUpdate(desc, table, user) {
+function compileUpdate(desc, table, user, db) {
   const stamped = stampValues(table, 'update', desc.values || {}, user);
   const values = stamped.values;
   const allowed = [...writableColumns(table, 'update'), ...stamped.extra];
@@ -681,7 +744,7 @@ function compileUpdate(desc, table, user) {
   }
 
   const { clause, params: filterParams } = compileFilters(desc.filters, table);
-  const scope = scopeFor(table, user);
+  const scope = scopeFor(table, user, db);
   const where = scope ? `(${clause}) AND ${scope.clause}` : clause;
   const sql = `UPDATE "${table}" SET ${setParts.join(', ')} WHERE ${where}`;
   params.push(...filterParams);
@@ -694,12 +757,12 @@ function compileUpdate(desc, table, user) {
   };
 }
 
-function compileDelete(desc, table, user) {
+function compileDelete(desc, table, user, db) {
   if (!desc.filters || desc.filters.length === 0) {
     throw new CompileError('delete requires a filter', 400);
   }
   const { clause, params } = compileFilters(desc.filters, table);
-  const scope = scopeFor(table, user);
+  const scope = scopeFor(table, user, db);
   const where = scope ? `(${clause}) AND ${scope.clause}` : clause;
   if (scope) params.push(...scope.params);
   const sql = `DELETE FROM "${table}" WHERE ${where}`;

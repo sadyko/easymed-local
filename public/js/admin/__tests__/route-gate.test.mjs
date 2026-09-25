@@ -94,6 +94,10 @@ const FULL_ACCESS_ONLY = {
     // Весь /api/users стоит за requireRole(\'admin\') (server/routes/users.js):
     // настроенной роли сервер откажет на первом же запросе списка.
     'employees':          'EMPLOYEE_EDITOR — REST /api/users только для admin',
+    // ROLE_REPORTS_SETTINGS_V1 — ключи API только администратору (решение
+    // владельца 25.09): api_tokens читает и пишет только admin, а экран
+    // открывался голым `settings` и показывал пустой список.
+    'api-settings':       'ROLE_REPORTS_SETTINGS_V1 — ключи API только администратору',
     // Страница владельца — активация Symptex; кнопку в сайдбаре прячет тот же
     // ключ (admin.js: isModuleAllowed(\'public-site\')).
     'public-site':        'PUBLIC_SITE — страница владельца, всё через gw() от имени клиники',
@@ -124,7 +128,11 @@ function openersOf(parent) {
 /** Открывается ли подэкран роли, которой открыт родитель, — хоть под одним из
  *  кодов ролей (экраны стационара спрашивают ещё и роль, INPATIENT_ROLE_GATE_V1). */
 function reachableViaParent(child, openers) {
-    return [...perms.ROLE_CODES, 'Своя роль'].some((code) => {
+    // ROLE_REPORTS_SETTINGS_V1 (ревью C1) — роль `admin` среди ролей в силе
+    // открывает экраны администратора (администратор-врач живёт по объединению
+    // ролей, а не полным доступом), поэтому «только полный доступ» здесь значит
+    // «только администратор»: код `admin` в переборе не участвует.
+    return [...perms.ROLE_CODES.filter((c) => c !== 'admin'), 'Своя роль'].some((code) => {
         perms.setEffectiveFromRole(role(code, openers));
         return perms.isRouteAllowed(child);
     });

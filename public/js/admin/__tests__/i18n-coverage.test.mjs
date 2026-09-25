@@ -413,6 +413,24 @@ test('строки справочника прав про работу опер�
   assert.deepEqual(bad, [], 'roles-matrix.js рисует их через tr() — добавьте ru/uz/en в i18n-strings.js:\n' + bad.join('\n'));
 });
 
+// ROLE_REPORTS_SETTINGS_V1 — разделы «Отчёты» и «Настройки» переведены целиком:
+// их окна (группы отчётов, плитки настроек) и подзаголовки групп.
+test('строки справочника прав «Отчёты» и «Настройки» переведены на все три языка', () => {
+  const bad = [];
+  let checked = 0;
+  for (const r of catalogRows()) {
+    const mine = r.key === 'reports' || r.key === 'settings' || r.parent === 'reports' || r.parent === 'settings';
+    if (!mine) continue;
+    for (const s of [r.label, r.desc, r.group, ...Object.values(r.levelDesc || {})]) {
+      if (!s) continue;
+      checked++;
+      if (!dictComplete(s)) bad.push(`  ${r.key}  ${JSON.stringify(String(s).slice(0, 100))}`);
+    }
+  }
+  assert.ok(checked >= 80, `expected 80+ catalogue strings on reports/settings rows, saw ${checked}`);
+  assert.deepEqual(bad, [], 'roles-matrix.js рисует их через tr() — добавьте ru/uz/en в i18n-strings.js:\n' + bad.join('\n'));
+});
+
 test('every i18n-exempt pragma states its reason (an exclusion is a decision, not a skip)', () => {
   const bad = [];
   for (const f of walk(ROOT)) {

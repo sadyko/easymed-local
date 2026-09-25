@@ -16,6 +16,9 @@ import { localDate, localHour, localWeekday, inLocalRange } from '../domain/day.
 // CRM_LINKS_V1 — воронка настраивается (миграция 077): «дошёл», «не пришёл» и
 // «потеряно» спрашиваются у справочника, а не берутся из зашитого списка.
 import { wonStageKey, lostStageKeys, noShowStageKey, openStageKeys, listStages, listSources } from '../crm/config.js';
+import { canSeeAllLeads } from '../crm/visibility.js';   // CRM_HEAD_MERGE_TAGS_V1
+// ROLE_REPORTS_SETTINGS_V1 — отчёт колл-центра — группа «Колл-центр» раздела «Отчёты».
+import { requireReportKind } from '../report-access.js';
 
 // Сидовая колонка «Записан» (миграция 077) — граница между «заявку ещё ведёт
 // оператор» и «пациента уже ждут в конкретный день». Имя здесь не поведение, а
@@ -42,11 +45,22 @@ const WEEKDAY_RU = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
 const pct = (part, total) => (total > 0 ? Math.round((part / total) * 1000) / 10 : 0);
 
-export function callcenterReport(db, args, _user) {
+export function callcenterReport(db, args, user) {
+  requireReportKind(db, user, 'callcenter');   // ROLE_REPORTS_SETTINGS_V1
   const from = String((args && args.from) || '').slice(0, 10);
   const to = String((args && args.to) || '').slice(0, 10);
   const where = `WHERE ${inLocalRange('r.created_at')}`;
   const p = [from, to];
+  // CRM_HEAD_MERGE_TAGS_V1 — КТО ЧЬИ ЦИФРЫ ВИДИТ. Администратор и руководитель
+  // колл-центра (`crm.all`) — всех операторов; остальные — только свою строку
+  // в «Операторах», а в списках с именами и номерами (зависшие заявки, строки
+  // Excel) — только заявки, которые им видны на доске: свои и ничьи
+  // (CRM_OWNERSHIP_V1). Итоги воронки остаются общими: это числа клиники, а не
+  // чужие карточки.
+  const seeAll = canSeeAllLeads(db, user);
+  const me = user && Number.isFinite(Number(user.id)) ? Number(user.id) : 0;
+  const visibleSql = seeAll ? '' : ' AND (r.assigned_to = ? OR r.assigned_to IS NULL)';
+  const visibleArgs = seeAll ? [] : [me];
 
   // CRM_LINKS_V1 — ступени воронки. Клиника вправе завести свою проигрышную
   // колонку («Дорого»), и заявки в ней выпадали из «потеряно»: сумма по воронке
@@ -126,11 +140,56 @@ export function callcenterReport(db, args, _user) {
 
   // По оператору — не только объём, но и доля дошедших: сто заявок, из которых
   // никто не пришёл, это не работа.
-  const byOperator = db.prepare(`
-    SELECT COALESCE(u.full_name, '—') AS name, COUNT(*) AS count, SUM(r.status = ?) AS came
-      FROM crm_requests r LEFT JOIN users u ON u.id = r.created_by
-     ${where} GROUP BY r.created_by ORDER BY count DESC`).all(WON, ...p)
-    .map((x) => ({ ...x, came: x.came || 0, came_pct: pct(x.came || 0, x.count) }));
+  //
+  // CRM_HEAD_MERGE_TAGS_V1 — СЧИТАЕТСЯ ПО ТОМУ, КТО ВЕДЁТ (assigned_to), а не по
+  // тому, кто завёл. Владелец: заявку заводит один (часто регистратура или сама
+  // АТС), а работает с ней и доводит до визита другой — оператор, который взял
+  // её в работу или которому её передали. «Создал» — отдельная колонка: сколько
+  // заявок за период человек завёл сам, где бы они потом ни оказались.
+  // Строка «Не назначен» — общая стопка: без неё сумма по операторам не сходилась
+  // бы с числом заявок.
+  const opRaw = db.prepare(`
+    SELECT r.assigned_to AS uid, COUNT(*) AS count, SUM(r.status = ?) AS came
+      FROM crm_requests r ${where} GROUP BY r.assigned_to`).all(WON, ...p);
+  const createdRaw = db.prepare(`
+    SELECT r.created_by AS uid, COUNT(*) AS n
+      FROM crm_requests r ${where} AND r.created_by IS NOT NULL GROUP BY r.created_by`).all(...p);
+  const opNames = new Map(db.prepare('SELECT id, full_name FROM users').all().map((u) => [u.id, u.full_name]));
+  const opMap = new Map();
+  const opRow = (uid) => {
+    const key = uid == null ? 'none' : String(uid);
+    if (!opMap.has(key)) {
+      opMap.set(key, {
+        user_id: uid ?? null,
+        name: uid == null ? 'Не назначен' : (opNames.get(uid) || '—'),
+        count: 0, came: 0, created: 0,
+      });
+    }
+    return opMap.get(key);
+  };
+  for (const x of opRaw) { const o = opRow(x.uid); o.count = x.count; o.came = x.came || 0; }
+  for (const x of createdRaw) opRow(x.uid).created = x.n;
+  const byOperator = [...opMap.values()]
+    .filter((o) => seeAll || o.user_id === me)
+    .map((o) => ({ ...o, came_pct: pct(o.came, o.count) }))
+    .sort((a, b) => (b.count - a.count) || (b.created - a.created));
+
+  // CRM_HEAD_MERGE_TAGS_V1 — «ПО МЕТКАМ». Сколько заявок периода несут каждую
+  // метку и сколько из них дошло: метки клиника ставит ради разреза («VIP»,
+  // «повторный», «жалоба»), и отчёт — первое место, где этот разрез нужен.
+  // У заявки меток несколько, поэтому сумма по меткам может быть больше числа
+  // заявок — это не ошибка отчёта. Базы без таблицы меток (не доведённые до
+  // миграции 150) получают пустой блок, а не падение отчёта.
+  let byTag = [];
+  try {
+    byTag = db.prepare(`
+      SELECT t.key AS key, t.label AS name, t.color AS color, COUNT(*) AS count, SUM(r.status = ?) AS came
+        FROM crm_request_tags rt
+        JOIN crm_requests r ON r.id = rt.request_id
+        JOIN crm_tags t ON t.key = rt.tag_key
+       ${where} GROUP BY t.key ORDER BY count DESC, t.position`).all(WON, ...p)
+      .map((x) => ({ ...x, came: x.came || 0, came_pct: pct(x.came || 0, x.count) }));
+  } catch (e) { byTag = []; }
 
   // Что именно спрашивают. Строки заявки (crm_request_services) — источник
   // точнее, чем crm_requests.service_id: он хранит лишь первую услугу.
@@ -260,9 +319,9 @@ export function callcenterReport(db, args, _user) {
     SELECT r.id, r.full_name, r.phone, r.status,
            CAST(julianday('now','localtime') - julianday(COALESCE(r.updated_at, r.created_at), 'localtime') AS INTEGER) AS days,
            COALESCE(u.full_name, '—') AS operator
-      FROM crm_requests r LEFT JOIN users u ON u.id = r.created_by
-     WHERE r.status IN (${workedKeys.map(() => '?').join(',')})
-     ORDER BY days DESC LIMIT 200`).all(...workedKeys)
+      FROM crm_requests r LEFT JOIN users u ON u.id = r.assigned_to
+     WHERE r.status IN (${workedKeys.map(() => '?').join(',')})${visibleSql}
+     ORDER BY days DESC LIMIT 200`).all(...workedKeys, ...visibleArgs)
     .filter((x) => (x.days || 0) >= 3);
 
   const stale = {
@@ -317,19 +376,23 @@ export function callcenterReport(db, args, _user) {
 
   // Плоские строки для Excel: одна заявка — одна строка, чтобы стойка могла
   // свести их по-своему, не дожидаясь нового графика.
-  const columns = ['Дата', 'Час', 'Имя', 'Телефон', 'Источник', 'Статус', 'Оператор', 'Услуга', 'Дата записи', 'Стал пациентом'];
+  // CRM_HEAD_MERGE_TAGS_V1 — «Оператор» — кто ведёт заявку, «Создал» — кто её
+  // завёл; строки — только видимые этому человеку заявки (см. seeAll выше).
+  const columns = ['Дата', 'Час', 'Имя', 'Телефон', 'Источник', 'Статус', 'Оператор', 'Создал', 'Услуга', 'Дата записи', 'Стал пациентом'];
   const rows = db.prepare(`
     SELECT ${localDate('r.created_at')} AS day, ${localHour('r.created_at')} AS hour,
            r.full_name AS name, r.phone AS phone, r.source AS source, r.status AS status,
-           COALESCE(u.full_name, '—') AS operator, COALESCE(s.name, '') AS service,
+           COALESCE(u.full_name, '—') AS operator, COALESCE(c.full_name, '—') AS creator,
+           COALESCE(s.name, '') AS service,
            COALESCE(r.scheduled_date, '') AS sched, (r.patient_id IS NOT NULL) AS converted
       FROM crm_requests r
-      LEFT JOIN users u ON u.id = r.created_by
+      LEFT JOIN users u ON u.id = r.assigned_to
+      LEFT JOIN users c ON c.id = r.created_by
       LEFT JOIN services s ON s.id = r.service_id
-     ${where} ORDER BY r.created_at DESC`).all(...p)
+     ${where}${visibleSql} ORDER BY r.created_at DESC`).all(...p, ...visibleArgs)
     .map((x) => [x.day, x.hour, x.name || '', x.phone || '',
       sourceLabel(x.source), stageLabel(x.status),
-      x.operator, x.service, x.sched, x.converted ? 'да' : 'нет']);
+      x.operator, x.creator, x.service, x.sched, x.converted ? 'да' : 'нет']);
 
   return {
     kpi: {
@@ -348,7 +411,7 @@ export function callcenterReport(db, args, _user) {
       weekday: peakDay && peakDay.count ? peakDay.label : null,
       weekday_count: peakDay ? peakDay.count : 0,
     },
-    byHour, byWeekday, byDay, byStatus, bySource, byOperator, topServices, byServiceType,
+    byHour, byWeekday, byDay, byStatus, bySource, byOperator, topServices, byServiceType, byTag,
     sourceConv, stale, forwardBook,
     last30, trend,
     columns, rows,

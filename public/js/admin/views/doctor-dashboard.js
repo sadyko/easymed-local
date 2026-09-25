@@ -251,6 +251,16 @@ export function serviceShare(s, rateMap) {
 // единица идёт по ступени САМОГО ВЫСОКОГО порога, который она перешагнула:
 // полосы above−above_2, above_2−above_3, above_3 — ровно ITEM_EFF_PCT_SQL.
 // Ответ без этих полей (старый сервер) — одна ступень, как раньше.
+// ROLE_REPORTS_SETTINGS_V1 (ревью M2) — ОТКАЗ В СТУПЕНЯХ НЕ ДОЛЖЕН ТИХО
+// МЕНЯТЬ ЗАРПЛАТУ. doctor_tier_positions отдаёт ступени чужого врача только
+// тому, у кого есть «Оплата врачей»; без них tierShare считает долю БЕЗ
+// ступени, и кабинет показывал бы меньшую сумму как настоящую. Отказ сервера
+// (403) узнаётся здесь, а кабинет вместо суммы показывает эту фразу.
+export const TIER_DENIED_NOTE = 'Ступени доли не загружены — нет права на отчёт «Оплата врачей»';
+export function tierRefused(error) {
+    return !!error && (error.code === 'forbidden' || error.status === 403);
+}
+
 export function tierShare(s, rateMap, pos) {
     const rate = rateMap.get(String(s.serviceId));
     if (!rate) return 0;

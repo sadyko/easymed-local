@@ -33,6 +33,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, Tag, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { fmtQty } from './inventory-shared.js';
+import { categoryFilter, loadCategories } from './category-filter.js';   // PROCUREMENT_FILTERS_V1
 
 // Состояние партии словами и цветом. Палитра — та же, что у остальных меток
 // склада (ui.js Tag): crit — беда, warn — скоро, ok — спокойно, off — нечего
@@ -49,12 +50,26 @@ export function lotStateTag(state) {
     return Tag(tr(s.label), { kind: s.kind, dot: true });
 }
 
-const state = { productId: '', q: '' };
+// PROCUREMENT_FILTERS_V1 — cats: отметки категорий вошедшего (общие с
+// «Складом» и «Товарами», запоминаются за человеком — category-filter.js);
+// lotState: кнопка состояния «Все / Просрочено / Истекает / В порядке». Оба
+// отбора считает СЕРВЕР (stock_expiry_lots: categories, state), как и отбор по
+// товару: экран здесь по-прежнему ничего не складывает сам.
+const state = { productId: '', q: '', cats: [], lotState: 'all' };
+
+// Кнопки состояния. Число на кнопке — из ответа сервера (summary): партии по
+// состояниям ПОСЛЕ отбора по категориям, товару и поиску, но ДО самой кнопки.
+export const STATE_FILTERS = [
+    ['all', 'Все'],
+    ['expired', 'Просрочено'],
+    ['soon', 'Истекает'],
+    ['ok', 'В порядке'],
+];
 // refs.results — ЕДИНСТВЕННОЕ, что перерисовывается (SEARCH_ALIVE_V1); шапка с
 // полем поиска и фильтром товара живёт от открытия экрана до его закрытия.
 // refs.prodSig — список товаров, которым фильтр заполнен сейчас: пока он не
 // изменился, опции не трогаются вовсе.
-const refs = { host: null, results: null, prod: null, prodSig: null };
+const refs = { host: null, results: null, prod: null, prodSig: null, statePills: [] };
 // EXPIRY_BALANCE_V1 — СВОЙ СЧЁТЧИК, а не общий fetchGuard закупок. Экран живёт
 // в оболочке «Закупок» рядом с её вкладками, и на общем счётчике перерисовка
 // ЛЮБОЙ соседней вкладки отменяла отрисовку этого экрана: он оставался пустым,
@@ -69,6 +84,8 @@ export function expiryQuery() {
     const args = {};
     if (state.productId) args.product_id = Number(state.productId);
     if (state.q.trim()) args.q = state.q.trim();
+    if (state.cats.length) args.categories = state.cats.slice();
+    if (state.lotState && state.lotState !== 'all') args.state = state.lotState;
     return args;
 }
 
@@ -76,7 +93,10 @@ export async function renderExpiryTab(container) {
     // Экран открывается чистым: уцелевший с прошлого раза отбор читается как
     // «партий нет», и человек ищет поломку, а не фильтр (тот же довод, что у
     // журнала движений).
-    state.productId = ''; state.q = '';
+    // Отметки категорий — не «уцелевший отбор», а выбор человека: они
+    // запоминаются за ним намеренно и видны на экране кнопками.
+    state.productId = ''; state.q = ''; state.lotState = 'all';
+    state.cats = loadCategories();
     clear(container);
     refs.host = h('div');
     container.appendChild(refs.host);
@@ -111,15 +131,59 @@ function buildShell() {
     const f = filterBar();
     refs.prod = f.prod;
     refs.prodSig = null;
-    refs.results = h('div');
+    // Отступы окна (PROCUREMENT_FILTERS_V1): у .card своего отступа нет, он
+    // живёт в .card-pad-sm — без него пояснения и таблица стояли вплотную к рамке.
+    refs.results = h('div', { class: 'card-pad-sm' });
+    refs.statePills = STATE_FILTERS.map(([value, label]) => {
+        const count = h('span', { class: 'state-count', style: { fontWeight: 400, opacity: '0.8' } });
+        const b = h('button', { type: 'button', class: 'state-pill', 'data-state': value, style: pillStyle }, label, ' ', count);
+        b._value = value;
+        b._count = count;
+        b.addEventListener('click', () => {
+            if (state.lotState === value) return;
+            state.lotState = value;
+            paintStatePills(null);
+            paint();
+        });
+        return b;
+    });
+    paintStatePills(null);
     host.appendChild(h('div', { class: 'card' },
         h('div', { class: 'card-header', style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
             h('h3', null, Icon('Clock', { size: 15 }), ' ', tr('Сроки годности')),
             h('span', { class: 'grow' }),
             f.q, f.prod,
         ),
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px 16px', borderBottom: '1px solid var(--ink-100)' } },
+            categoryFilter({ selected: state.cats, onChange: (c) => { state.cats = c; paint(); } }),
+            h('div', { class: 'row', role: 'group', 'aria-label': 'Состояние', style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px' } },
+                h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 600, marginRight: '4px' } }, 'Состояние'),
+                ...refs.statePills),
+        ),
         refs.results,
     ));
+}
+
+const pillStyle = {
+    height: '30px', padding: '0 12px', borderRadius: '999px', cursor: 'pointer',
+    fontFamily: 'inherit', fontSize: '12.5px', fontWeight: 600,
+};
+
+/** Вид кнопок состояния и числа на них; summary === null — числа не трогать. */
+function paintStatePills(summary) {
+    for (const b of refs.statePills) {
+        const on = state.lotState === b._value;
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        Object.assign(b.style, {
+            border: '1px solid ' + (on ? 'var(--primary-600)' : 'var(--ink-200)'),
+            background: on ? 'var(--primary-600)' : 'var(--white, #fff)',
+            color: on ? '#fff' : 'var(--ink-700)',
+        });
+        if (summary) {
+            const n = b._value === 'all' ? summary.total : summary[b._value];
+            b._count.textContent = n === undefined || n === null ? '' : String(n);
+        }
+    }
 }
 
 /**
@@ -163,9 +227,18 @@ async function paint() {
     }
 
     const res = data || {};
+    // PROCUREMENT_FILTERS_V1 (ревью M4) — выбранный товар, которого нет среди
+    // товаров отмеченных категорий, сбрасывается и запрос уходит заново: иначе
+    // отбор «товар И категория» молча отдавал пустоту, а в списке товаров
+    // выбранного уже не было — снять его было нечем.
+    if (state.productId && !(res.products || []).some((p) => String(p.id) === String(state.productId))) {
+        state.productId = '';
+        return paint();
+    }
     const rows = res.lots || [];
-    const filtered = !!(state.productId || state.q.trim());
+    const filtered = !!(state.productId || state.q.trim() || state.cats.length || state.lotState !== 'all');
     syncProducts(res.products || []);
+    paintStatePills(res.summary || { total: rows.length });
 
     const tbody = h('tbody');
     if (!rows.length) {

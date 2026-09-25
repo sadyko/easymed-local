@@ -69,6 +69,36 @@ export function listSources(db) {
     .all().map(sourceRow);
 }
 
+// CRM_HEAD_MERGE_TAGS_V1 — метки карточек (миграция 150). Справочника может не
+// быть у базы, которую ещё не довели до 150 (сервер новее базы на один запуск
+// не бывает, но экран не должен падать и тогда): пустой список, не ошибка.
+const tagRow = (r) => ({
+  key: r.key, label: r.label, color: r.color, position: r.position, is_active: !!r.is_active,
+});
+export function listTags(db) {
+  try {
+    return db.prepare('SELECT key, label, color, position, is_active FROM crm_tags ORDER BY position, key').all().map(tagRow);
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * CRM_HEAD_MERGE_TAGS_V1 (ревью M4) — можно ли ставить эти метки на заявку.
+ * Скрытую метку экран не предлагает, а несуществующую отверг бы внешний ключ
+ * голой ошибкой SQLite — /api/db отвечает на это фразой (400), а не 500.
+ * Возвращает текст отказа или null.
+ */
+export function tagInsertRefusal(db, rows) {
+  const keys = [...new Set((Array.isArray(rows) ? rows : [rows]).map((r) => String((r && r.tag_key) ?? '')))];
+  const active = new Map(listTags(db).map((t) => [t.key, t.is_active]));
+  for (const k of keys) {
+    if (!active.has(k)) return `Метки «${k}» нет в справочнике — поставить её нельзя.`;
+    if (!active.get(k)) return `Метка «${k}» скрыта в настройках CRM — поставить её нельзя.`;
+  }
+  return null;
+}
+
 export function listRouting(db, provider = DEFAULT_PROVIDER) {
   return db.prepare('SELECT provider, disposition, action, stage_key FROM crm_call_routing WHERE provider = ? ORDER BY disposition')
     .all(String(provider || DEFAULT_PROVIDER));
@@ -76,7 +106,7 @@ export function listRouting(db, provider = DEFAULT_PROVIDER) {
 
 /** Everything the board and the settings screen both need, in one read. */
 export function crmConfig(db) {
-  return { stages: listStages(db), sources: listSources(db), routing: listRouting(db) };
+  return { stages: listStages(db), sources: listSources(db), routing: listRouting(db), tags: listTags(db) };
 }
 
 // --------------------------------------------------------------------------
@@ -348,6 +378,58 @@ export function saveSources(db, sources) {
 }
 
 // --------------------------------------------------------------------------
+// saveTags — CRM_HEAD_MERGE_TAGS_V1
+// --------------------------------------------------------------------------
+
+/**
+ * Ordered array of `{ key, label, color, is_active }`; position is the index —
+ * the same whole-list save as sources, so reorder + rename + recolour are one
+ * transaction. Unlike sources, an EMPTY list is fine: a clinic that uses no
+ * tags has none. A tag that sits on cards may be hidden but not deleted —
+ * deleting it would silently strip those cards, and nobody could say which.
+ */
+export function saveTags(db, tags) {
+  const wanted = requireArray(tags, 'меток').map((s, i) => {
+    const key = normKey(s && s.key);
+    checkKey(key, 'метки');
+    return {
+      key,
+      label: normLabel(s && s.label, 'метки'),
+      color: normColor(s && s.color),
+      is_active: (s && s.is_active) === undefined ? 1 : (s.is_active ? 1 : 0),
+      position: i + 1,
+    };
+  });
+
+  const seen = new Set();
+  for (const s of wanted) {
+    if (seen.has(s.key)) throw new CrmConfigError(`Код метки «${s.key}» повторяется.`);
+    seen.add(s.key);
+  }
+
+  const existing = db.prepare('SELECT key FROM crm_tags').all().map((r) => r.key);
+  const removed = existing.filter((k) => !seen.has(k));
+  const used = db.prepare('SELECT COUNT(*) AS n FROM crm_request_tags WHERE tag_key = ?');
+  for (const key of removed) {
+    const n = used.get(key).n;
+    if (n) throw new CrmConfigError(`Метка «${key}» стоит на ${n} заявках — её можно только скрыть, но не удалить.`, 409);
+  }
+
+  const upsert = db.prepare(`INSERT INTO crm_tags (key, label, color, position, is_active)
+    VALUES (@key, @label, @color, @position, @is_active)
+    ON CONFLICT(key) DO UPDATE SET label = excluded.label, color = excluded.color,
+      position = excluded.position, is_active = excluded.is_active`);
+  const drop = db.prepare('DELETE FROM crm_tags WHERE key = ?');
+
+  db.transaction(() => {
+    for (const key of removed) drop.run(key);
+    for (const s of wanted) upsert.run(s);
+  })();
+
+  return listTags(db);
+}
+
+// --------------------------------------------------------------------------
 // saveRouting
 // --------------------------------------------------------------------------
 
@@ -424,6 +506,7 @@ export function saveConfig(db, args = {}) {
     if (args.stages !== undefined) out.stages = saveStages(db, args.stages);
     if (args.sources !== undefined) out.sources = saveSources(db, args.sources);
     if (args.routing !== undefined) out.routing = saveRouting(db, args.routing);
+    if (args.tags !== undefined) out.tags = saveTags(db, args.tags);   // CRM_HEAD_MERGE_TAGS_V1
   })();
   // Always the full picture back, not just what was sent: saving columns can
   // change routing (a hidden column switches its rules off), and a screen that

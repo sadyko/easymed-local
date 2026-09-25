@@ -101,7 +101,9 @@ function buildShell() {
                     'Приход, выдача и расход товара: кто провёл, кому выдал, из какой партии.'))));
     }
     const f = filterBar();
-    refs.results = h('div');
+    // PROCUREMENT_FILTERS_V1 — отступ окна: у .card его нет, он в .card-pad-sm;
+    // без него строка о видимости журнала и таблица стояли вплотную к рамке.
+    refs.results = h('div', { class: 'card-pad-sm' });
     host.appendChild(h('div', { class: 'card' },
         h('div', { class: 'card-header', style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
             h('h3', null, Icon('Activity', { size: 15 }), ' ', tr('Журнал движений')),

@@ -16,6 +16,9 @@
 import { localDate, inLocalRange } from '../domain/day.js';
 // BUILDING_REPORTS_V1 — здание как измерение; см. шапку domain/buildings.js.
 import { buildingContext, buildingWhere, originExpr, summariseByBuilding } from '../domain/buildings.js';
+// ROLE_REPORTS_SETTINGS_V1 — «Отчёт кассира» — группа «Касса» раздела «Отчёты».
+// Проверки не было вовсе: деньги кассы за любой период отдавались любому вошедшему.
+import { requireReportKind } from '../report-access.js';
 
 const METHOD_RU = {
   cash: 'Наличные', card: 'Карта', acquiring: 'Эквайринг',
@@ -66,7 +69,8 @@ function cashierCell(ctx, r) {
   return ctx.keyOf(r.origin) === ctx.ownKey ? '—' : ctx.label(r.origin);
 }
 
-export function cashierReport(db, args, _user) {
+export function cashierReport(db, args, user) {
+  requireReportKind(db, user, 'cashier');   // ROLE_REPORTS_SETTINGS_V1
   const a = args || {};
   const from = String(a.from || '').slice(0, 10);
   const to = String(a.to || '').slice(0, 10);

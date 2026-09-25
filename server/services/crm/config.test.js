@@ -37,7 +37,9 @@ function refused(fn) {
 test('crmConfig answers the board and the settings screen in one call', () => {
   const db = fresh();
   const cfg = crmConfig(db);
-  assert.deepEqual(Object.keys(cfg).sort(), ['routing', 'sources', 'stages']);
+  // CRM_HEAD_MERGE_TAGS_V1 — и метки карточек (миграция 150); у свежей базы их нет.
+  assert.deepEqual(Object.keys(cfg).sort(), ['routing', 'sources', 'stages', 'tags']);
+  assert.deepEqual(cfg.tags, []);
   assert.equal(cfg.stages.length, 8);
   assert.equal(cfg.sources.length, 8);
   assert.equal(cfg.routing.length, 15);

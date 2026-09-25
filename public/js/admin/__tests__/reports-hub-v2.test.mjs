@@ -87,15 +87,23 @@ test('«По врачам»: два вида — врачи и врачи × у�
   assert.ok(ICON_MAP[d.icon]);
 });
 
-test('«Закупки и склад»: четыре вида, «Разрез» — только у расхода', () => {
+test('«Закупки и склад»: четыре вида, «Разрез» — только у расхода, «Категория» — у всех', () => {
   const d = def('procurement');
   assert.equal(d.title, 'Закупки и склад');
   assert.deepEqual(reportKinds(d), ['procurement', 'stock_consumption', 'stock_statement', 'stock_expiry']);
-  assert.deepEqual(optionsFor(d, 'stock_consumption').map((o) => o.arg), ['by']);
-  assert.deepEqual(optionsFor(d, 'stock_statement'), []);
+  assert.deepEqual(optionsFor(d, 'stock_consumption').map((o) => o.arg), ['by', 'category']);
+  // PROCUREMENT_FILTERS_V1 — категория у всех четырёх видов.
+  for (const kind of reportKinds(d)) {
+    assert.ok(optionsFor(d, kind).some((o) => o.arg === 'category'), kind + ': нет фильтра категории');
+  }
+  assert.deepEqual(optionsFor(d, 'stock_statement').map((o) => o.arg), ['category']);
+  const cat = optionsFor(d, 'stock_expiry').find((o) => o.arg === 'category');
+  assert.deepEqual(cat.choices.map((c) => c[0]),
+    ['all', 'medicines', 'consumables', 'equipment', 'lab_supplies', 'dental', 'radiology', 'office_it', 'facility']);
+  assert.equal(defaultReportOptions(d).category, 'all');
   // Чужой фильтр не уезжает на сервер.
-  assert.deepEqual(reportArgs(d, 'stock_statement', { by: 'holder' }), {});
-  assert.deepEqual(reportArgs(d, 'stock_consumption', { by: 'holder' }), { by: 'holder' });
+  assert.deepEqual(reportArgs(d, 'stock_statement', { by: 'holder', category: 'dental' }), { category: 'dental' });
+  assert.deepEqual(reportArgs(d, 'stock_consumption', { by: 'holder', category: 'all' }), { by: 'holder', category: 'all' });
   assert.deepEqual(optionsFor(d, 'stock_consumption')[0].choices.map((c) => c[0]), ['lines', 'holder', 'patient']);
 });
 

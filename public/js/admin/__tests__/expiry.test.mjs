@@ -416,3 +416,110 @@ test('выдача без просрочки ничего лишнего не г
     assert.equal(stockWarningText({ warnings: [] }), '');
     assert.equal(stockWarningText(null), '');
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// PROCUREMENT_FILTERS_V1 — категории, состояние и отступы
+// ───────────────────────────────────────────────────────────────────────────
+
+const catPill = (root, key) => walk(root).find((e) => e.tagName === 'BUTTON' && e.attrs['data-category'] === key);
+const statePill = (root, value) => walk(root).find((e) => e.tagName === 'BUTTON' && e.attrs['data-state'] === value);
+
+/** Хранилище браузера на время теста: память отметок живёт в нём. */
+function withStore(fn) {
+    const ls = globalThis.window.localStorage;
+    const orig = { getItem: ls.getItem, setItem: ls.setItem, removeItem: ls.removeItem };
+    const store = new Map();
+    ls.getItem = (k) => (k === 'admin.lang' ? 'ru' : (store.has(k) ? store.get(k) : null));
+    ls.setItem = (k, v) => { store.set(k, String(v)); };
+    ls.removeItem = (k) => { store.delete(k); };
+    return Promise.resolve(fn(store)).finally(() => Object.assign(ls, orig));
+}
+
+test('категории: восемь отметок; нажатая уезжает на сервер списком categories, «Все» снимает', async () => {
+    await withStore(async () => {
+        const root = await open({ lots: [EXPIRED, NO_DATE] });
+        for (const k of ['medicines', 'consumables', 'equipment', 'lab_supplies', 'dental', 'radiology', 'office_it', 'facility']) {
+            assert.ok(catPill(root, k), 'нет отметки категории ' + k);
+        }
+        rpcCalls.length = 0;
+        catPill(root, 'medicines').click();
+        await settle();
+        catPill(root, 'dental').click();
+        await settle();
+        assert.deepEqual(rpcCalls.map((c) => c.args), [{ categories: ['medicines'] }, { categories: ['medicines', 'dental'] }],
+            'категория отобрана в браузере поверх присланного, а не сервером');
+        assert.equal(catPill(root, 'medicines').attrs['aria-pressed'], 'true');
+        rpcCalls.length = 0;
+        walk(root).find((e) => e.tagName === 'BUTTON' && e.className === 'cat-pill' && !e.attrs['data-category']).click();
+        await settle();
+        assert.deepEqual(rpcCalls.map((c) => c.args), [{}], '«Все» не сняло отметки');
+    });
+});
+
+test('категории: отметки запоминаются за человеком и приезжают с первым же запросом', async () => {
+    await withStore(async (store) => {
+        globalThis.window.easymed.state.user.id = 2;
+        const first = await open({ lots: [EXPIRED] });
+        catPill(first, 'lab_supplies').click();
+        await settle();
+        assert.ok([...store.keys()].some((k) => k.endsWith('.u2')), 'выбор не запомнен за вошедшим: ' + [...store.keys()]);
+        const again = await open({ lots: [EXPIRED] });
+        assert.deepEqual(rpcCalls[0].args, { categories: ['lab_supplies'] }, 'отметки не пережили повторное открытие');
+        assert.equal(catPill(again, 'lab_supplies').attrs['aria-pressed'], 'true');
+        // Другой человек за тем же компьютером — своих отметок нет.
+        globalThis.window.easymed.state.user.id = 3;
+        await open({ lots: [EXPIRED] });
+        assert.deepEqual(rpcCalls[0].args, {}, 'отметки кладовщика встретили другого человека за тем же ПК');
+        globalThis.window.easymed.state.user.id = 2;
+    });
+});
+
+test('состояние: «Все / Просрочено / Истекает / В порядке» уезжает на сервер, числа на кнопках — из ответа', async () => {
+    const summary = { total: 4, expired: 1, soon: 1, ok: 1, none: 1 };
+    const root = await open({ res: answer([EXPIRED, SOON, OK, NO_DATE], { summary }) });
+    assert.deepEqual(['all', 'expired', 'soon', 'ok'].map((v) => flat(statePill(root, v))),
+        ['Все 4', 'Просрочено 1', 'Истекает 1', 'В порядке 1']);
+    assert.equal(statePill(root, 'all').attrs['aria-pressed'], 'true');
+    rpcCalls.length = 0;
+    ANSWER = answer([EXPIRED], { summary });
+    statePill(root, 'expired').click();
+    await settle();
+    assert.deepEqual(rpcCalls.map((c) => c.args), [{ state: 'expired' }]);
+    assert.equal(statePill(root, 'expired').attrs['aria-pressed'], 'true');
+    assert.equal(statePill(root, 'all').attrs['aria-pressed'], 'false');
+    assert.equal(rows(root).length, 1);
+    // Экран открывается снова — кнопка состояния сброшена (это отбор, а не выбор человека).
+    await open({ lots: [EXPIRED] });
+    assert.deepEqual(rpcCalls[0].args, {});
+});
+
+test('отступы: пояснения и таблица — внутри .card-pad-sm, а не вплотную к рамке', async () => {
+    const root = await open({ lots: [EXPIRED] });
+    const card = walk(root).find((e) => e.className === 'card');
+    const body = card.children[card.children.length - 1];
+    assert.equal(card.children[0].className, 'card-header');
+    assert.equal(body.className, 'card-pad-sm');
+    assert.match(textOf(body), /Остаток по партиям — расчёт/);
+    assert.equal(findAll(body, 'TABLE').length, 1);
+});
+
+// PROCUREMENT_FILTERS_V1 (ревью M4) — выбранный товар вне отмеченных категорий
+// сбрасывается: иначе отбор «товар И категория» молча отдавал пустоту, а в
+// списке товаров выбранного уже не было — и снять его было нечем.
+test('категории: выбранный товар не из отмеченных категорий сбрасывается на «Все товары»', async () => {
+    await withStore(async () => {
+        const root = await open({ lots: [EXPIRED, NO_DATE] });
+        const sel = findAll(root, 'SELECT')[0];
+        sel.value = '7';
+        sel.dispatchEvent({ type: 'change' });
+        await settle();
+        rpcCalls.length = 0;
+        ANSWER = answer([NO_DATE], { products: [{ id: 8, name: 'Бинт' }] });
+        catPill(root, 'dental').click();
+        await settle(60);
+        const last = rpcCalls[rpcCalls.length - 1];
+        assert.deepEqual(last.args, { categories: ['dental'] }, 'товар вне категории остался в отборе');
+        assert.equal(expiryQuery().product_id, undefined);
+        assert.equal(findAll(root, 'SELECT')[0].value, '', 'в списке товаров остался невидимый выбор');
+    });
+});

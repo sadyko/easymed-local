@@ -501,3 +501,23 @@ test('«Мои заявки»: номер, что, для кого, статус
     const broken = await open({ fail: 'stock_requests_mine' });
     assert.match(textOf(broken), /Не удалось загрузить ваши заявки/);
 });
+
+// PROCUREMENT_FILTERS_V1 — владелец: «fix the padding of the window of my stock
+// content». У .card своего отступа нет (admin.css), он живёт в .card-pad-sm;
+// окна стояли вплотную к рамке и друг к другу.
+test('отступы: тело каждого окна — в .card-pad-sm, шапка во всю ширину, между окнами зазор 14px', async () => {
+    const root = await open({ held: [HOLDING], issued: [TO_ME], spent: [BY_ME] });
+    const cards = walk(root).filter((e) => String(e.className).split(/\s+/).includes('card'));
+    assert.equal(cards.length, 4, 'окон на экране: ' + cards.length);
+    for (const c of cards) {
+        assert.equal(c.children.length, 2, 'у окна должно быть ровно два ребёнка: шапка и тело в отступе');
+        assert.equal(c.children[0].className, 'card-header');
+        assert.equal(c.children[1].className, 'card-pad-sm', 'тело окна стоит вплотную к рамке');
+        assert.ok(findAll(c.children[1], 'TABLE').length === 1, 'таблица окна — внутри отступа');
+    }
+    const box = walk(root).find((e) => (e.children || []).includes(cards[0]));
+    assert.ok(cards.every((c) => box.children.includes(c)), 'окна лежат в разных контейнерах');
+    assert.equal(box.style.display, 'flex');
+    assert.equal(box.style.flexDirection, 'column');
+    assert.equal(box.style.gap, '14px');
+});

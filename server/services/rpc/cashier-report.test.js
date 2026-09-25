@@ -11,6 +11,10 @@ import { migrate } from '../../db/migrate.js';
 import { cashierReport } from './cashier-report.js';
 
 const RANGE = { from: '2000-01-01', to: '2100-01-01' };
+// ROLE_REPORTS_SETTINGS_V1 — отчёт кассира проверяет, кто зовёт: без роли
+// (прежний `{}`) он теперь отказывает. Эти проверки — про деньги, а не про
+// права, поэтому зовёт администратор; права — в report-access.test.js.
+const ADMIN = { id: 1, role: 'admin' };
 
 function seed() {
   const db = openDb(':memory:');
@@ -45,7 +49,7 @@ test('доход — это принятые платежи, а не выста�
   const v = db.prepare("INSERT INTO visits (patient_id, visit_date) VALUES (10, date('now'))").run().lastInsertRowid;
   db.prepare("INSERT INTO invoices (invoice_number, visit_id, patient_id, branch_id, total_amount, status) VALUES ('INV-X',?,10,1,500000,'unpaid')").run(v);
 
-  const r = cashierReport(db, RANGE, {});
+  const r = cashierReport(db, RANGE, ADMIN);
   assert.equal(r.kpi.income, 100000, 'неоплаченный счёт деньгами не считается');
   assert.equal(r.income.rows.length, 1);
   db.close();
@@ -58,7 +62,7 @@ test('возврат уменьшает доход, а не прячется', (
   db.prepare(`INSERT INTO payments (invoice_id, amount, method, cashier_id, paid_at)
               VALUES (?, -100000, 'cash', 1, strftime('%Y-%m-%dT%H:%M:%SZ','now'))`).run(inv);
 
-  const r = cashierReport(db, RANGE, {});
+  const r = cashierReport(db, RANGE, ADMIN);
   assert.equal(r.kpi.income, 200000, 'касса за период = 300 000 − 100 000');
   assert.equal(r.income.rows.length, 2, 'возврат виден строкой, а не молча вычитается');
   db.close();
@@ -74,7 +78,7 @@ test('расход берётся из движений кассы наружу'
   db.prepare(`INSERT INTO cash_movements (shift_id, kind, amount, article, note, created_by)
               VALUES (?, 'in', 999999, 'Размен', 'Разменный фонд', 1)`).run(sh);
 
-  const r = cashierReport(db, RANGE, {});
+  const r = cashierReport(db, RANGE, ADMIN);
   assert.equal(r.kpi.expense, 120000);
   assert.equal(r.kpi.net, 380000, 'итог = доход − расход');
   assert.equal(r.expense.rows.length, 1, 'внесение в кассу не расход');
@@ -90,13 +94,13 @@ test('фильтр по филиалу отбирает и приход, и ра
   db.prepare("INSERT INTO cash_movements (shift_id, kind, amount, article, created_by) VALUES (?, 'out', 10000, 'Прочее', 1)").run(sh1);
   db.prepare("INSERT INTO cash_movements (shift_id, kind, amount, article, created_by) VALUES (?, 'out', 50000, 'Прочее', 1)").run(sh2);
 
-  const only1 = cashierReport(db, { ...RANGE, branch_ids: [1] }, {});
+  const only1 = cashierReport(db, { ...RANGE, branch_ids: [1] }, ADMIN);
   assert.equal(only1.kpi.income, 100000);
   assert.equal(only1.kpi.expense, 10000, 'расход берёт филиал у смены — своего у движения нет');
 
   // Пустой список = все филиалы: «ничего не выбрано» не должно означать
   // «ничего не показывать».
-  const all = cashierReport(db, { ...RANGE, branch_ids: [] }, {});
+  const all = cashierReport(db, { ...RANGE, branch_ids: [] }, ADMIN);
   assert.equal(all.kpi.income, 800000);
   assert.equal(all.kpi.expense, 60000);
   db.close();
@@ -107,7 +111,7 @@ test('период отсекает по МЕСТНОЙ дате', () => {
   invoiceWith(db, { amount: 100000, paidAt: '2026-08-10T09:00:00Z' });
   invoiceWith(db, { amount: 200000, paidAt: '2026-08-20T09:00:00Z' });
 
-  const r = cashierReport(db, { from: '2026-08-01', to: '2026-08-15' }, {});
+  const r = cashierReport(db, { from: '2026-08-01', to: '2026-08-15' }, ADMIN);
   assert.equal(r.kpi.income, 100000);
   assert.equal(r.income.rows.length, 1);
   db.close();
@@ -119,7 +123,7 @@ test('плоская выгрузка сходится с итогом: расх
   const sh = db.prepare("INSERT INTO cash_shifts (cashier_id, branch_id, status) VALUES (1,1,'open')").run().lastInsertRowid;
   db.prepare("INSERT INTO cash_movements (shift_id, kind, amount, article, created_by) VALUES (?, 'out', 150000, 'Инкассация', 1)").run(sh);
 
-  const r = cashierReport(db, RANGE, {});
+  const r = cashierReport(db, RANGE, ADMIN);
   const AMOUNT = r.columns.indexOf('Сумма');
   const sum = r.rows.reduce((n, row) => n + (Number(row[AMOUNT]) || 0), 0);
   // Один лист для владельца: приход и расход в одном столбце обязаны
@@ -133,7 +137,7 @@ test('строка поступления несёт услугу, врача, �
   const db = seed();
   invoiceWith(db, { amount: 100000, method: 'card' });
 
-  const r = cashierReport(db, RANGE, {});
+  const r = cashierReport(db, RANGE, ADMIN);
   const [row] = r.income.rows;
   const col = (name) => row[r.income.columns.indexOf(name)];
   assert.equal(col('Услуга'), 'Консультация');
@@ -179,7 +183,7 @@ function seedTwoBuildings() {
 
 test('касса: поступления соседнего здания ВИДНЫ, с разрезом и итогом по клинике', () => {
   const db = seedTwoBuildings();
-  const r = cashierReport(db, RANGE, {});
+  const r = cashierReport(db, RANGE, ADMIN);
   assert.equal(r.income.columns[0], 'Здание');
   assert.equal(r.kpi.income, 350000, 'итог по клинике = 100 000 + 250 000');
   const b = r.by_building.find((x) => x.key === 'B');
@@ -197,10 +201,10 @@ test('касса: поступления соседнего здания ВИД�
 
 test('касса: выбор одного здания исключает второе', () => {
   const db = seedTwoBuildings();
-  const onlyB = cashierReport(db, { ...RANGE, buildings: ['B'] }, {});
+  const onlyB = cashierReport(db, { ...RANGE, buildings: ['B'] }, ADMIN);
   assert.equal(onlyB.kpi.income, 250000);
   assert.equal(onlyB.income.rows.length, 1);
-  const onlyOwn = cashierReport(db, { ...RANGE, buildings: ['A'] }, {});
+  const onlyOwn = cashierReport(db, { ...RANGE, buildings: ['A'] }, ADMIN);
   assert.equal(onlyOwn.kpi.income, 100000);
   db.close();
 });
@@ -219,7 +223,7 @@ test('касса: итог считается по ЭТОМУ зданию, а �
   const sh = db.prepare("INSERT INTO cash_shifts (cashier_id, branch_id, status) VALUES (1,1,'open')").run().lastInsertRowid;
   db.prepare("INSERT INTO cash_movements (shift_id, kind, amount, article, created_by) VALUES (?, 'out', 40000, 'Инкассация', 1)").run(sh);
 
-  const r = cashierReport(db, RANGE, {});
+  const r = cashierReport(db, RANGE, ADMIN);
   assert.equal(r.kpi.income, 350000, 'приход по клинике: 100 000 своих + 250 000 приехавших');
   assert.equal(r.kpi.income_own, 100000, 'приход этого здания — половина итога с тем же охватом');
   assert.equal(r.kpi.expense, 40000, 'расход только свой: движения кассы не ездят');
@@ -245,7 +249,7 @@ test('касса: клинике в одном здании итог и подп
   const sh = db.prepare("INSERT INTO cash_shifts (cashier_id, branch_id, status) VALUES (1,1,'open')").run().lastInsertRowid;
   db.prepare("INSERT INTO cash_movements (shift_id, kind, amount, article, created_by) VALUES (?, 'out', 120000, 'Закупка', 1)").run(sh);
 
-  const r = cashierReport(db, RANGE, {});
+  const r = cashierReport(db, RANGE, ADMIN);
   assert.equal(r.kpi.multi_building, false, 'две плитки про один и тот же приход читались бы как поломка');
   assert.equal(r.kpi.income_own, r.kpi.income, 'у неё оба охвата — одно и то же число');
   assert.equal(r.kpi.net, r.kpi.income - r.kpi.expense, 'итог тот же, что и был');

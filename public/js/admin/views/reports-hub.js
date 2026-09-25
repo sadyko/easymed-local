@@ -37,6 +37,10 @@ import { reportTotals } from './report-totals.js?v=rt1';   // REPORT_TOTALS_V1
 // чистом модуле рядом с buildingOptions: экран без DOM не поднимается, а
 // проверять это правило надо. Слова к состоянию подбираются здесь, через i18n.
 import { freshnessState, freshnessWorthShowing } from './report-buildings.js?v=fresh1';
+// PROCUREMENT_FILTERS_V1 — подписи категорий закупок те же, что на экранах склада.
+import { CATEGORY_LABEL } from './inventory-shared.js';
+// ROLE_REPORTS_SETTINGS_V1 — плитка видна, если её группа отчётов выдана роли.
+import { reportKindAllowed } from '../permissions.js';
 
 // Экспортируется, чтобы определения (в т.ч. рисовалку графиков) можно было
 // проверить тестом — страница целиком без DOM не поднимается.
@@ -86,6 +90,11 @@ export const REPORT_DEFS = [
         options: [
             { arg: 'by', label: 'Разрез', kinds: ['stock_consumption'],
               choices: [['lines', 'По движениям'], ['holder', 'По получателям'], ['patient', 'По пациентам']] },
+            // PROCUREMENT_FILTERS_V1 — категория закупок у всех четырёх видов;
+            // отбор и итоги считает сервер (rpc/reports.js reportCategory).
+            // Переключатели конструктора — с одним выбором, отсюда одна категория.
+            { arg: 'category', label: 'Категория',
+              choices: [['all', 'Все категории'], ...Object.entries(CATEGORY_LABEL)] },
         ],
     },
     {
@@ -199,6 +208,14 @@ export function defaultReportOptions(rep) {
 export function optionsFor(rep, kind) {
     return (rep.options || []).filter(o => !Array.isArray(o.kinds) || o.kinds.includes(kind));
 }
+// ROLE_REPORTS_SETTINGS_V1 — видна ли плитка: группа её вида (REPORT_GROUP
+// справочника прав) выдана роли. Все виды одной плитки — одна группа (тест
+// reports-hub-v2 это сверяет), поэтому спрашивается основной вид. «Telegram-бот»
+// группы не имеет — только администратор, как и его RPC (telegram_stats).
+// Сервер отвечает второй раз тем же ключом (services/report-access.js).
+export function reportVisible(rep) {
+    return reportKindAllowed(rep.kind);
+}
 export function reportArgs(rep, kind, opts) {
     const out = {};
     for (const o of optionsFor(rep, kind)) out[o.arg] = opts[o.arg];
@@ -235,7 +252,7 @@ export async function renderReportsHub(container) {
                 // высоту самого длинного описания на всей сетке.
                 gridAutoRows: '1fr',
             },
-        }, ...REPORT_DEFS.map(rep => reportCard(rep))),
+        }, ...REPORT_DEFS.filter(reportVisible).map(rep => reportCard(rep))),
     ));
 }
 
@@ -1126,7 +1143,7 @@ function renderCallcenterCharts(el, d) {
                            : h('div', { class: 'muted' }, 'Нет данных.')),
         ownerCard('Воронка заявок', 'чем заканчиваются обращения',
             ownerBars(d.byStatus.map((x) => ({ name: x.label, value: x.count })), { tip, total: k.total })),
-        ownerCard('Операторы', 'сколько завёл и сколько из них дошло до визита', ccOperators(d.byOperator)),
+        ownerCard('Операторы', 'сколько заявок ведёт, сколько завёл сам и сколько дошло до визита', ccOperatorTable(d.byOperator)),
         // CC_OPS_V1 — три карточки про «что делать сейчас».
         //
         // Конверсия по источникам стоит РЯДОМ с «Источниками» намеренно: одна
@@ -1149,6 +1166,11 @@ function renderCallcenterCharts(el, d) {
             (d.byServiceType && d.byServiceType.length)
                 ? ownerBars(d.byServiceType.map((x) => ({ name: x.name, value: x.count })), { tip })
                 : h('div', { class: 'muted' }, 'Услуги в заявках не указаны.')),
+        // CRM_HEAD_MERGE_TAGS_V1 — «По меткам»: разрез, ради которого клиника
+        // метки и ставит. Нет меток в периоде — карточки нет вовсе.
+        (d.byTag && d.byTag.length)
+            ? ownerCard('По меткам', 'сколько заявок с каждой меткой и сколько из них дошло', ccOperators(d.byTag))
+            : null,
         ownerCard('Что спрашивают', 'самые запрашиваемые услуги',
             d.topServices.length ? ownerBars(d.topServices.map((x) => ({ name: x.name, value: x.count })), { tip })
                                  : h('div', { class: 'muted' }, 'Услуги в заявках не указаны.'))));
@@ -1496,6 +1518,30 @@ function ccForward(days, tip) {
         } }, i === 0 ? 'сег.' : d.day.slice(8)));
     });
     return h('div', null, wrap, labels);
+}
+
+// CRM_HEAD_MERGE_TAGS_V1 — «ОПЕРАТОРЫ» ТАБЛИЦЕЙ: кто ведёт, сколько завёл сам.
+//
+// Отчёт считает заявки по тому, кто их ВЕДЁТ (assigned_to), и рядом —
+// колонка «Создал»: сколько заявок человек завёл за период, где бы они потом
+// ни оказались. Два числа в одной полоске не читаются, поэтому таблица.
+// Оператору сервер отдаёт только его собственную строку; администратору и
+// руководителю колл-центра — всех.
+function ccOperatorTable(rows) {
+    if (!rows || !rows.length) return h('div', { class: 'muted' }, 'Нет данных.');
+    const num = (n) => h('td', { class: 'num' }, String(n || 0));
+    const tb = h('tbody');
+    for (const r of rows) {
+        tb.appendChild(h('tr', { 'data-cc-operator': String(r.user_id ?? '') },
+            h('td', { class: 'cell-strong' }, r.name),
+            num(r.count), num(r.created), num(r.came),
+            h('td', { class: 'num' }, (r.came_pct || 0) + '%')));
+    }
+    return h('div', { style: { overflowX: 'auto' } }, h('table', { class: 'tbl' },
+        h('thead', null, h('tr', null,
+            h('th', null, 'Оператор'), h('th', { class: 'num' }, 'Ведёт'), h('th', { class: 'num' }, 'Создал'),
+            h('th', { class: 'num' }, 'Дошли'), h('th', { class: 'num' }, 'Конверсия'))),
+        tb));
 }
 
 function ccOperators(rows) {

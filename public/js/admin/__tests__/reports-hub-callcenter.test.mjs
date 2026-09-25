@@ -55,3 +55,21 @@ test('отчёт владельца остался без своего RPC и р
 test('Excel скрывается только у отчётов без строк', () => {
   assert.match(hub, /rep\.mode === 'charts' && !rep\.exports\) downloadBtn\.style\.display = 'none'/);
 });
+
+// CRM_HEAD_MERGE_TAGS_V1 — «Операторы» считаются по тому, кто ВЕДЁТ заявку, и
+// рядом стоит колонка «Создал»: таблица, а не полоска, — два числа в одной
+// полоске не читаются.
+test('«Операторы» — таблица с колонками «Ведёт» и «Создал»', () => {
+  const i = hub.indexOf('function ccOperatorTable(');
+  assert.ok(i > -1, 'ccOperatorTable должна быть определена');
+  const body = hub.slice(i, i + 1600);
+  for (const col of ["'Оператор'", "'Ведёт'", "'Создал'", "'Дошли'"]) assert.ok(body.includes(col), 'нет колонки ' + col);
+  assert.match(hub, /ownerCard\('Операторы', [^\n]*ccOperatorTable\(d\.byOperator\)\)/, 'карточка «Операторы» рисует не таблицу');
+});
+
+// CRM_HEAD_MERGE_TAGS_V1 — «По меткам»: карточка появляется, когда в периоде
+// есть заявки с метками, и рисует те же полоски «сколько · дошли», что
+// конверсия по источникам.
+test('«По меткам» рисуется из d.byTag и только когда он не пуст', () => {
+  assert.match(hub, /\(d\.byTag && d\.byTag\.length\)\s*\?\s*ownerCard\('По меткам', [^\n]*ccOperators\(d\.byTag\)\)\s*:\s*null/);
+});

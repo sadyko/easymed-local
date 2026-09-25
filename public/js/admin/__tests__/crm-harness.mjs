@@ -70,7 +70,15 @@ export const button = (root, re) => walk(root).find((n) => n.tagName === 'BUTTON
 
 // --- поддельный сервер -----------------------------------------------------
 // S — изменяемое состояние стенда; CALLS — журнал /api/db, RPC — журнал RPC.
-export const S = { leads: [], dups: [], search: [], tasks: [], staff: [], nextTaskId: 100, inserted: null, failInsertOnce: false };
+export const S = { leads: [], dups: [], search: [], tasks: [], staff: [], nextTaskId: 100, inserted: null, failInsertOnce: false,
+  // CRM_HEAD_MERGE_TAGS_V1 — «Дубликаты»: ответ crm_duplicate_groups и отказ слияния по требованию.
+  dupGroups: { groups: [], total: 0 }, mergeError: null,
+  // CRM_HEAD_MERGE_TAGS_V1 — ответ crm_config_get (null — запасная воронка без
+  // меток) и строки связи «заявка — метка» (crm_request_tags).
+  config: null, leadTags: [],
+  // Ревью M4 — вставка метки отвечает UNIQUE (409), хотя строка на месте:
+  // её в ту же секунду поставил коллега.
+  tagInsertConflict: false };
 export const CALLS = [];
 export const RPC = [];
 const jsonOk = (data, count) => ({ ok: true, json: async () => ({ data, count }) });
@@ -95,10 +103,15 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/rpc/')) {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     RPC.push({ name, body });
-    if (name === 'crm_config_get') return jsonOk(null);
+    if (name === 'crm_config_get') return jsonOk(S.config);
     if (name === 'crm_leads_by_phone') return jsonOk(S.dups);
     if (name === 'crm_search') return jsonOk(typeof S.search === 'function' ? S.search(body) : S.search);
     if (name === 'crm_lead_calls') return jsonOk([]);
+    if (name === 'crm_duplicate_groups') return jsonOk(S.dupGroups);
+    if (name === 'crm_merge_leads') {
+      if (S.mergeError) return { ok: false, json: async () => ({ error: { message: S.mergeError } }) };
+      return jsonOk({ kept_id: body.keep_id, merged_ids: body.merge_ids });
+    }
     return jsonOk({});
   }
   if (u.startsWith('/api/db')) {
@@ -134,6 +147,19 @@ globalThis.fetch = async (url, opts) => {
       }
     }
     if (body.table === 'users' && body.op === 'select') return jsonOk(S.staff);
+    if (body.table === 'crm_request_tags') {
+      if (body.op === 'select') return jsonOk(applyFilters(S.leadTags, body.filters));
+      if (body.op === 'insert') {
+        for (const v of [].concat(body.values)) S.leadTags.push({ request_id: v.request_id, tag_key: v.tag_key });
+        if (S.tagInsertConflict) return { ok: false, status: 409, json: async () => ({ error: { code: 'conflict', message: 'UNIQUE constraint failed: crm_request_tags.request_id, crm_request_tags.tag_key' } }) };
+        return jsonOk(null);
+      }
+      if (body.op === 'delete') {
+        const kill = new Set(applyFilters(S.leadTags, body.filters));
+        S.leadTags = S.leadTags.filter((t) => !kill.has(t));
+        return jsonOk(null);
+      }
+    }
     return jsonOk([]);
   }
   return jsonOk([]);

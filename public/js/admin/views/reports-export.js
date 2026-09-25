@@ -19,6 +19,7 @@ import { reportTotals } from './report-totals.js?v=rt1';   // REPORT_TOTALS_V1
 // branch_id пустой, поэтому колонка Branch про него не говорит ничего —
 // именно поэтому нужна вторая.
 import { originTag } from '../record-origin.js';
+import { reportGroupAllowed } from '../permissions.js';   // ROLE_REPORTS_SETTINGS_V1 — плитки выгрузок по группам отчётов
 
 // The exact column order the owner spec'd. Keys map to fields we produce
 // in buildRevenueRow(); labels are the header row in the .xlsx.
@@ -987,6 +988,7 @@ async function downloadProcurementXlsx(rows, filenameBase = 'procurement') {
 const REPORTS = [
     {
         key:   'total-revenue',
+        grant: 'reports.revenue',   // ROLE_REPORTS_SETTINGS_V1
         icon:  'Chart',
         title: 'Общая выручка',
         desc:  'Каждая строка счёта: пациент, услуга, цена, скидка и налог, доля врача, филиал, регистратор, реферал и выплата.',
@@ -996,6 +998,7 @@ const REPORTS = [
     },
     {   // REFERRAL_CATEGORY_RATES_V1
         key:   'referrals',
+        grant: 'reports.referrals',   // ROLE_REPORTS_SETTINGS_V1
         icon:  'Coins',
         title: 'Рефералы',
         desc:  'Вознаграждение по источникам направлений: услуги, суммы и ставки по группам (по категории или свои).',
@@ -1005,6 +1008,7 @@ const REPORTS = [
     },
     {   // INVOICES_REPORT_V1
         key:   'invoices',
+        grant: 'reports.revenue',   // ROLE_REPORTS_SETTINGS_V1
         icon:  'Receipt',
         title: 'Счета',
         desc:  'Все счета за период: суммы, скидки, оплачено, остаток/долг, статус, плательщик и регистратор.',
@@ -1014,6 +1018,7 @@ const REPORTS = [
     },
     {   // PROCUREMENT_REPORT_V1
         key:   'procurement',
+        grant: 'reports.stock',   // ROLE_REPORTS_SETTINGS_V1
         icon:  'Layers',
         title: 'Закупки',
         desc:  'Позиции заказов поставщикам: PO, товар, поставщик, количество и сумма.',
@@ -1023,6 +1028,7 @@ const REPORTS = [
     },
     {   // SURGERY_RENTAB_V1
         key:   'surgery-rentability',
+        grant: 'reports.services',   // ROLE_REPORTS_SETTINGS_V1
         icon:  'Activity',
         title: 'Рентабельность операций',
         desc:  'По каждой операции: сумма счёта, налог, гонорар хирурга, израсходованные товары (в счёте и вне его), прибыль клиники и маржа %.',
@@ -1032,6 +1038,7 @@ const REPORTS = [
     },
     {   // OWNER_REPORT_V1 — charts, no xlsx
         key:   'owner',
+        grant: 'reports.revenue',   // ROLE_REPORTS_SETTINGS_V1
         icon:  'Trend',   // имя из icon-map.js; 'TrendingUp' — файл набора, а не имя иконки
         title: 'Отчёт владельца',
         desc:  'Графики: общая выручка, выручка по группам услуг, динамика по месяцам и поступления по плательщикам (пациент / ДМС / B2B / госпрограмма).',
@@ -1050,7 +1057,11 @@ export function renderDownloadsPanel(ctx) {
             gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
         },
     },
-        ...REPORTS.map(rep => reportCard(rep, ctx)),
+        // ROLE_REPORTS_SETTINGS_V1 — те же группы, что у хаба отчётов. Эти
+        // выгрузки собираются в браузере из /api/db (кроме «Рефералов» —
+        // run_report), поэтому сервер здесь отвечает только чтением таблиц по
+        // реестру, а не группой: плитка закрывает экран, не данные.
+        ...REPORTS.filter(rep => reportGroupAllowed(rep.grant)).map(rep => reportCard(rep, ctx)),
     );
 }
 

@@ -23,7 +23,7 @@
 // пустую матрицу, которая читалась бы как «у роли нет ничего».
 import { h, Icon } from './ui.js';
 import { tr, trf } from './i18n.js';
-import { CATALOG, LEVELS, LEVEL_LABELS, levelAllows } from '../shared/permission-catalog.js';
+import { CATALOG, LEVELS, LEVEL_LABELS, levelAllows, settingsLegacyView } from '../shared/permission-catalog.js';
 
 // Старый уровень ↔ новый.
 const LEGACY_TO_GRANT = { viewer: 'view', editor: 'edit', admin: 'delete' };
@@ -60,7 +60,17 @@ export function grantsFromLegacy(perms) {
         const on = legacy && sections.has(legacy);
         const lvl = on ? (LEGACY_TO_GRANT[levels[legacy]] || 'delete') : 'none';
         grants[s.key] = clampTo(s, lvl);
-        for (const w of s.windows || []) grants[w.key] = on ? clampTo(w, lvl) : 'none';
+        for (const w of s.windows || []) {
+            // ROLE_REPORTS_SETTINGS_V1 — закрытую строку (только администратор)
+            // экран не выводит и не пишет: выдать её нельзя.
+            if (w.locked) continue;
+            // Плитка настроек выводится из СВОИХ прежних ключей и не выше
+            // «Просмотра»: писать в её таблицы до сих пор мог только
+            // администратор, и вывести «Изменение» из галочки «Настройки»
+            // значило бы раздать запись в справочники при первом сохранении роли.
+            if (w.legacyKeys) { grants[w.key] = settingsLegacyView(w, sections) || 'none'; continue; }
+            grants[w.key] = on ? clampTo(w, lvl) : 'none';
+        }
         for (const a of s.actions || []) grants[a.key] = on ? clampTo(a, lvl) : 'none';
     }
     return grants;
@@ -216,7 +226,8 @@ function paintNote(box, row, lvl) {
 // раздела раскрывает его: строки внутри должны быть перед глазами, а не за
 // шевроном.
 //
-// РАЗДЕЛ БЕЗ ОКОН И ДЕЙСТВИЙ (касса, отчёты, настройки…) не раскрывается
+// РАЗДЕЛ БЕЗ ОКОН И ДЕЙСТВИЙ (касса, дашборд…; у «Отчётов» и «Настроек» окна
+// появились в ROLE_REPORTS_SETTINGS_V1) не раскрывается
 // вовсе: у него нет шеврона и нет тела. Владелец раскрыл «Настройки», увидел
 // пустоту и написал «nothing is found» — шеврон, за которым ничего нет, это
 // обещание, которое экран не держит. Всё, что про такой раздел можно сказать,
@@ -226,8 +237,9 @@ function paintNote(box, row, lvl) {
 function paintCount(box, s, controls) {
     while (box.firstChild) box.removeChild(box.firstChild);
     const parts = [];
-    const tally = (rows, template) => {
-        if (!rows || !rows.length) return;
+    const tally = (all, template) => {
+        const rows = (all || []).filter((r) => !r.locked);   // ROLE_REPORTS_SETTINGS_V1 — закрытые не выдаются и не считаются
+        if (!rows.length) return;
         const on = rows.filter((r) => controls[r.key] && controls[r.key].value() !== 'none').length;
         parts.push(trf(template, { on, all: rows.length }));
     };
@@ -320,8 +332,29 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
 
         const sub = (title, rows) => {
             if (!rows || !rows.length) return;
-            body.appendChild(h('div', { class: 'rm-subhead' }, title));
+            // ROLE_REPORTS_SETTINGS_V1 — «ГРУППА С РАЗДЕЛАМИ ВНУТРИ». У окон
+            // «Настроек» есть `group` — заголовок карточки хаба настроек, — и
+            // они рисуются под этими заголовками вместо общего «Окна раздела»:
+            // человек видит те же группы, что открывает в самих настройках.
+            const grouped = rows.some((r) => r.group);
+            if (!grouped) body.appendChild(h('div', { class: 'rm-subhead' }, title));
+            let lastGroup = null;
             for (const r of rows) {
+                if (grouped && r.group !== lastGroup) {
+                    lastGroup = r.group;
+                    body.appendChild(h('div', { class: 'rm-subhead' }, tr(r.group || title)));
+                }
+                // Закрытая строка — только администратор: видна, чтобы было
+                // понятно, почему её нет у роли, но переключателя у неё нет, в
+                // controls она не попадает и в базу не пишется.
+                if (r.locked) {
+                    body.appendChild(h('div', { class: 'rm-row rm-row-sub is-locked' },
+                        h('div', { class: 'rm-name' },
+                            h('div', { class: 'rm-title' }, tr(r.label)),
+                            h('div', { class: 'rm-desc' }, h('span', null, tr(r.desc || '')))),
+                        h('span', { class: 'rm-locked muted' }, Icon('Lock', { size: 13 }), ' ', tr('Только администратор'))));
+                    continue;
+                }
                 const lvl = grants[r.key] || 'none';
                 const rnote = h('div', { class: 'rm-desc' });
                 paintNote(rnote, r, lvl);

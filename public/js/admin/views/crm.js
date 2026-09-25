@@ -15,7 +15,8 @@ import { phoneInput } from '../phone-input.js?v=ph1';
 import { formatPhone } from '../phone-format.js';
 // CRM_OWNERSHIP_V1 — «кто я»: кому записывается взятая заявка.
 // CRM_REASSIGN_V1 — «я администратор»: кому видна раздача заявок.
-import { selfUserId, hasActorRole } from '../permissions.js';
+import { selfUserId, hasActorRole, canSeeAllLeads } from '../permissions.js';
+import { openCrmDuplicates } from './crm-duplicates.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { filterServicePool, serviceGroupCounts } from './service-search.js';   // CRM_SERVICE_FILTER_V1
 // CRM_LINKS_V1 — общий путь заведения карты: проверка дубля, штампы клиники и
 // филиала, привязка открытых заявок по телефону. Регистрация из CRM обязана
@@ -75,6 +76,9 @@ import { crmTasksBlock, loadOpenTasks, nearestOpenTasks, isOverdue, nowIso } fro
 // (цвета, значения по умолчанию, разбор ответа) лежит в crm-settings-logic.js,
 // чтобы доска и экран настроек не разъехались.
 let SOURCES, SOURCE_RU, STATUSES, STATUS_RU, CONVERT_STATUS, ACTIVE_STATUSES, LOST_STATUSES;
+// CRM_HEAD_MERGE_TAGS_V1 — метки карточек из того же ответа crm_config_get:
+// TAGS — видимые [[key, label, tagKind]], TAG_RU — все {key: [label, tagKind]}.
+let TAGS = [], TAG_RU = {};
 // CRM_LINKS_V1 — ключи ступеней ПО ВИДУ (open/won/lost), включая скрытые
 // колонки: доска скрытую не предлагает, но лежащие в ней заявки живые, и
 // автоматика обязана их видеть. Считаются из ТОГО ЖЕ ответа, что и доска, —
@@ -87,6 +91,7 @@ function applyBoardConfig(data) {
     CONVERT_STATUS = c.convertStatus;
     ACTIVE_STATUSES = c.activeStatuses; LOST_STATUSES = c.lostStatuses;
     STAGE_KEYS = stageKeysFrom(data);
+    TAGS = c.tags || []; TAG_RU = c.tagRu || {};   // CRM_HEAD_MERGE_TAGS_V1
 }
 applyBoardConfig(null);   // запасная воронка — до первого ответа сервера доска уже рабочая
 async function loadBoardConfig() {
@@ -128,6 +133,26 @@ const KANBAN_PAGE = 20;
 // потерять заявку — она уехала бы к тому, кто её не увидит.
 const BOARD_ROLES = ['admin', 'registrar', 'callcenter'];
 
+// CRM_HEAD_MERGE_TAGS_V1 — КТО ИЗ СОТРУДНИКОВ ВЕДЁТ ДОСКУ, С ДОПОЛНИТЕЛЬНЫМИ
+// РОЛЯМИ. Список операторов спрашивался `.in('role', BOARD_ROLES)` — по ОСНОВНОЙ
+// роли, и врач, которому колл-центр дали дополнительной ролью, в поле
+// «Оператор» не появлялся, хотя сервер (effectiveRoles) пускает его на доску.
+// extra_roles приходит из базы JSON-строкой ('["callcenter"]'), а из сессии —
+// массивом; понимаются оба. Своя роль клиники пишет в `role` свою ОСНОВУ
+// (CUSTOM_ROLES_V1), так что её люди попадают сюда по основе.
+function extraRolesOf(u) {
+    const x = u && u.extra_roles;
+    if (Array.isArray(x)) return x;
+    if (typeof x === 'string' && x.trim().startsWith('[')) {
+        try { const a = JSON.parse(x); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+    }
+    return [];
+}
+export function boardStaff(users) {
+    return (Array.isArray(users) ? users : []).filter((u) => u && (BOARD_ROLES.includes(u.role)
+        || extraRolesOf(u).some((r) => BOARD_ROLES.includes(r))));
+}
+
 // CRM_FILTERS_V1 — источник и период сужают доску. Живут в state, потому что
 // paintBody() перерисовывает только тело, без повторного запроса к базе.
 const state = { view: 'kanban', filter: 'all', search: '', rows: [], source: '', period: 'all',
@@ -142,7 +167,10 @@ const state = { view: 'kanban', filter: 'all', search: '', rows: [], source: '',
                 searchRows: null, searchQ: '',
                 // CRM_DEDUP_SEARCH_TASKS_V1 — ближайшая открытая задача каждой
                 // заявки: Map(String(request_id) → задача).
-                openTasks: new Map() };
+                openTasks: new Map(),
+                // CRM_HEAD_MERGE_TAGS_V1 — фильтр «Метки» ('' = все) и метки
+                // каждой заявки: Map(String(request_id) → [tag_key]).
+                tag: '', leadTags: new Map() };
 let searchSeq = 0;   // CRM_DEDUP_SEARCH_TASKS_V1 — последний ответ поиска побеждает
 
 // Период считается по created_at — «когда обратились», а не когда записаны:
@@ -212,6 +240,33 @@ function inPeriod(r) {
 }
 function inSource(r) {
     return !state.source || (r.source || 'other') === state.source;
+}
+// CRM_HEAD_MERGE_TAGS_V1 — метки заявки и фильтр доски по метке.
+function tagsOf(r) {
+    return (r && state.leadTags.get(String(r.id))) || [];
+}
+function inTag(r) {
+    return !state.tag || tagsOf(r).includes(state.tag);
+}
+/**
+ * Строки связи «заявка — метка» → Map(String(request_id) → [ключи]). Сервер
+ * отдаёт только метки видимых заявок (ограничение через родителя, как у
+ * задач), поэтому одним запросом на всю доску.
+ */
+export function groupLeadTags(rows) {
+    const m = new Map();
+    for (const x of (Array.isArray(rows) ? rows : [])) {
+        if (!x || x.request_id == null || !x.tag_key) continue;
+        const k = String(x.request_id);
+        if (!m.has(k)) m.set(k, []);
+        m.get(k).push(x.tag_key);
+    }
+    return m;
+}
+async function loadLeadTags() {
+    const { data, error } = await supabase.from('crm_request_tags').select('request_id, tag_key').limit(50000);
+    // Сервер старше экрана (таблицы ещё нет) или сбой — доска без меток, а не без заявок.
+    return error ? new Map() : groupLeadTags(data);
 }
 const refs = { root: null, onNavigate: null };
 
@@ -310,6 +365,7 @@ async function load() {
     // CRM_DEDUP_SEARCH_TASKS_V1 — метки задач на карточках. Отказ (у роли нет
     // права на задачи) — доска без меток, а не без заявок.
     state.openTasks = nearestOpenTasks(await loadOpenTasks());
+    state.leadTags = await loadLeadTags();   // CRM_HEAD_MERGE_TAGS_V1
 }
 
 // CRM_CARD_V2 — КТО это и КАК до него дозвониться, одним ответом на две строки.
@@ -502,6 +558,11 @@ async function paint() {
             // регистратура, а оценки о врачах и кассирах читать ей незачем.
             canView('custdev') ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => openCustDev() },
                 Icon('PhoneOut', { size: 13 }), ' Cust Dev') : null,
+            // CRM_HEAD_MERGE_TAGS_V1 — «Дубликаты»: слияние карточек одного номера.
+            // Только тому, кто видит всю доску (администратор, руководитель
+            // колл-центра): оператору чужие карточки не видны, сливать ему нечего.
+            canSeeAllLeads() ? h('button', { class: 'btn btn-sm btn-outline', type: 'button', 'data-crm-duplicates-open': '',
+                onclick: () => openCrmDuplicates({ onMerged: () => paint() }) }, Icon('Copy', { size: 13 }), ' ', 'Дубликаты') : null,
             h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => reportModal() }, Icon('Chart', { size: 13 }), ' Отчёт'),
             h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => exportExcel() }, Icon('Download', { size: 13 }), ' Excel'),
             h('button', { class: 'btn btn-primary', type: 'button', onclick: () => requestModal(null) },
@@ -555,7 +616,7 @@ async function paint() {
         paintBody();
     }
     function filtered() {
-        return searchBase().filter(r => matchesSearch(r) && inSource(r) && inPeriod(r));
+        return searchBase().filter(r => matchesSearch(r) && inSource(r) && inPeriod(r) && inTag(r));
     }
 
     // CRM_FILTERS_V1 — «Источник» и «Период» над доской.
@@ -572,7 +633,11 @@ async function paint() {
         } }, t);
         const chip = (on, label, onclick) => h('button', { class: 'wzc-cat' + (on ? ' on' : ''), type: 'button', onclick }, label);
 
-        const byPeriod = searchBase().filter(r => matchesSearch(r) && inPeriod(r));
+        const byPeriodAll = searchBase().filter(r => matchesSearch(r) && inPeriod(r));
+        // CRM_HEAD_MERGE_TAGS_V1 — счётчики источников учитывают выбранную
+        // метку, а счётчики меток — выбранный источник: каждый ряд считается по
+        // ОСТАЛЬНЫМ фильтрам, как и раньше.
+        const byPeriod = byPeriodAll.filter(inTag);
         const counts = {};
         for (const r of byPeriod) { const k = r.source || 'other'; counts[k] = (counts[k] || 0) + 1; }
 
@@ -606,6 +671,26 @@ async function paint() {
 
         filtersEl.appendChild(srcRow);
         filtersEl.appendChild(perRow);
+
+        // CRM_HEAD_MERGE_TAGS_V1 — «Метки»: только те, что стоят на заявках
+        // выборки (как источники), плюс выбранная, даже если в выборке её нет —
+        // иначе фильтр нельзя было бы снять.
+        const bySrc = byPeriodAll.filter(inSource);
+        const tagCounts = {};
+        for (const r of bySrc) for (const k of tagsOf(r)) tagCounts[k] = (tagCounts[k] || 0) + 1;
+        const order = [...TAGS.map(([k]) => k), ...Object.keys(TAG_RU).filter((k) => !TAGS.some(([t]) => t === k))];
+        const shownTags = order.filter((k) => tagCounts[k] || state.tag === k);
+        if (shownTags.length) {
+            const tagRow = h('div', { class: 'row', 'data-crm-tag-filter': '', style: { gap: '6px', flexWrap: 'wrap' } }, lbl('Метки'),
+                chip(!state.tag, 'Все', () => { state.tag = ''; paintFilters(); paintBody(); }));
+            for (const key of shownTags) {
+                const btn = chip(state.tag === key, (TAG_RU[key] || [key])[0] + ' · ' + (tagCounts[key] || 0),
+                    () => { state.tag = state.tag === key ? '' : key; paintFilters(); paintBody(); });
+                btn.setAttribute('data-tag-chip', key);
+                tagRow.appendChild(btn);
+            }
+            filtersEl.appendChild(tagRow);
+        }
     }
 
     // CRM_PERIOD_CUSTOM_V1 — поля «с» и «по» рядом с чипами.
@@ -738,6 +823,13 @@ async function paint() {
         if (r.patients) tags.push(Tag(r.patients.mrn ? trf('Карта {mrn}', { mrn: r.patients.mrn }) : 'Карта заведена', { kind: 'ok' }));
         if (r.users && r.users.full_name) tags.push(Tag(trf('Ведёт {name}', { name: r.users.full_name }), { kind: 'teal' }));
         if (r.scheduled_date) tags.push(Tag(trf('Запись на {d}', { d: fmtD(r.scheduled_date) }), { kind: 'purple' }));
+        // CRM_HEAD_MERGE_TAGS_V1 — метки заявки, цветом из настроек.
+        for (const k of tagsOf(r)) {
+            const [label, kind] = TAG_RU[k] || [k, ''];
+            const t = Tag(label, { kind, dot: true });
+            t.setAttribute('data-lead-tag', k);
+            tags.push(t);
+        }
 
         const card = h('div', {
             class: 'crm-card' + (r.status === CONVERT_STATUS ? ' crm-card-done' : ''),
@@ -943,6 +1035,11 @@ async function paint() {
                 h('td', null, SOURCE_RU[r.source] || r.source || '—'),
                 h('td', null, r.services ? r.services.name : h('span', { class: 'muted' }, '—')),
                 h('td', { class: 'muted', style: { maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, r.note || '—'),
+                // CRM_HEAD_MERGE_TAGS_V1 — метки заявки.
+                h('td', { 'data-list-tags': '' }, tagsOf(r).length
+                    ? h('span', { class: 'row', style: { gap: '4px', flexWrap: 'wrap' } },
+                        ...tagsOf(r).map((k) => Tag((TAG_RU[k] || [k])[0], { kind: (TAG_RU[k] || [k, ''])[1] })))
+                    : h('span', { class: 'muted' }, '—')),
                 h('td', null, Tag(stLabel, { kind: stKind, dot: true })),
                 h('td', { class: 'num', style: { fontSize: '12.5px' } }, fmtDateTime(r.created_at)),
                 h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } }, h('span', { class: 'row', style: { gap: '6px', justifyContent: 'flex-end' } }, ...cardActions(r))),
@@ -951,7 +1048,7 @@ async function paint() {
         return h('div', { class: 'card' }, h('div', { style: { overflowX: 'auto' } }, h('table', { class: 'tbl' },
             h('thead', null, h('tr', null,
                 h('th', null, 'Имя'), h('th', null, 'Телефон'), h('th', null, 'Источник'),
-                h('th', null, 'Услуга'), h('th', null, 'Комментарий'), h('th', null, 'Статус'), h('th', null, 'Дата'), h('th', null, ''))),
+                h('th', null, 'Услуга'), h('th', null, 'Комментарий'), h('th', null, 'Метки'), h('th', null, 'Статус'), h('th', null, 'Дата'), h('th', null, ''))),
             tbody)));
     }
 
@@ -1658,6 +1755,55 @@ async function paint() {
         const noteInp  = h('textarea', { rows: '3', placeholder: 'Что нужно пациенту, когда перезвонить…' });
         if (r) noteInp.value = r.note || '';
 
+        // CRM_HEAD_MERGE_TAGS_V1 — «МЕТКИ» ЗАЯВКИ: несколько, переключателями.
+        //
+        // Предлагаются видимые метки из настроек плюс те скрытые, что уже стоят
+        // на этой карточке (иначе снять скрытую было бы нечем). Сохраняется
+        // РАЗНИЦА с тем, что было: вставка новых строк связи и удаление снятых —
+        // через /api/db, где сервер пускает только на видимую заявку.
+        const tagsHad = r ? tagsOf(r).slice() : [];
+        const tagsPicked = new Set(tagsHad);
+        const tagChoices = [...TAGS.map(([k]) => k), ...tagsHad.filter((k) => !TAGS.some(([t]) => t === k))];
+        const tagsBox = tagChoices.length ? h('div', { class: 'row', 'data-card-tags': '', style: { gap: '6px', flexWrap: 'wrap' } }) : null;
+        function paintTagChoices() {
+            if (!tagsBox) return;
+            clear(tagsBox);
+            for (const k of tagChoices) {
+                const on = tagsPicked.has(k);
+                const [label, kind] = TAG_RU[k] || [k, ''];
+                tagsBox.appendChild(h('button', {
+                    type: 'button', class: 'tag' + (kind ? ' tag-' + kind : ''),
+                    'aria-pressed': on ? 'true' : 'false', 'data-tag-pick': k,
+                    style: { cursor: 'pointer', opacity: on ? '1' : '0.55', borderWidth: '2px', borderStyle: 'solid',
+                        borderColor: on ? 'var(--ink-900, #16232b)' : 'transparent' },
+                    onclick: () => { if (tagsPicked.has(k)) tagsPicked.delete(k); else tagsPicked.add(k); paintTagChoices(); },
+                }, on ? Icon('Check', { size: 12 }) : null, on ? ' ' : null, label));
+            }
+        }
+        paintTagChoices();
+        async function saveTagLinks(requestId) {
+            if (!tagsBox || !requestId) return;
+            const add = [...tagsPicked].filter((k) => !tagsHad.includes(k));
+            const drop = tagsHad.filter((k) => !tagsPicked.has(k));
+            if (add.length) {
+                const { error } = await supabase.from('crm_request_tags').insert(add.map((k) => ({ request_id: requestId, tag_key: k })));
+                // Ревью M4 — ту же метку в ту же секунду поставил коллега: сервер
+                // отвечает «уже есть» (UNIQUE, 409). Это не ошибка, а нужный
+                // итог — проверяем по базе, что все метки на месте, и молчим.
+                if (error) {
+                    const { data: now } = await supabase.from('crm_request_tags').select('tag_key').eq('request_id', requestId);
+                    const have = new Set((now || []).map((x) => x.tag_key));
+                    if (!add.every((k) => have.has(k))) { toast(trf('Метки не сохранены: {msg}', { msg: error.message }), 'fail'); return; }
+                }
+            }
+            if (drop.length) {
+                const { error } = await supabase.from('crm_request_tags').delete().eq('request_id', requestId).in('tag_key', drop);
+                if (error) { toast(trf('Метки не сохранены: {msg}', { msg: error.message }), 'fail'); return; }
+            }
+            tagsHad.splice(0, tagsHad.length, ...tagsPicked);
+            state.leadTags.set(String(requestId), [...tagsPicked]);
+        }
+
         // CRM_REASSIGN_V1 — «ОПЕРАТОР»: ЕДИНСТВЕННОЕ МЕСТО, ГДЕ ЗАЯВКУ ПЕРЕДАЮТ.
         //
         // Владелец: «in the crm we as an administrator change the operator of the
@@ -1672,7 +1818,14 @@ async function paint() {
         // правило, что стоит на сервере: schema-registry сужает доску по
         // assigned_to всем, кроме роли admin. Раздавать заявки может лишь тот,
         // кто видит их все, — иначе «передал» означало бы «потерял».
-        const canReassign = hasActorRole(['admin']);
+        //
+        // CRM_HEAD_MERGE_TAGS_V1 — «всё видит» теперь не только администратор,
+        // но и руководитель колл-центра (право `crm.all`): сервер снимает ему
+        // сужение доски тем же ключом, так что передавать заявки он может с
+        // тем же смыслом. Удалять задачи (как и заявки) — по-прежнему только
+        // администратору: это отдельный флаг ниже.
+        const canReassign = canSeeAllLeads();
+        const canDeleteTasks = hasActorRole(['admin']);
         let operSel = null;
         // CRM_DEDUP_SEARCH_TASKS_V1 — тот же список персонала нужен полю
         // «Ответственный» у задач. Спрашивается ОДИН раз и только у
@@ -1703,8 +1856,10 @@ async function paint() {
             // Нынешний хозяин известен ДО ответа сервера: окно можно сохранить в
             // первую же секунду, и поле обязано к этому моменту говорить правду.
             fillOper(ownerId ? [{ id: ownerId, full_name: ownerName }] : []);
-            staffForTasks = supabase.from('users').select('id, full_name, role')
-                .in('role', BOARD_ROLES).eq('is_active', 1).order('full_name')
+            // CRM_HEAD_MERGE_TAGS_V1 — все активные, а отбор по ролям — boardStaff:
+            // дополнительная роль колл-центра тоже делает человека оператором.
+            staffForTasks = supabase.from('users').select('id, full_name, role, extra_roles')
+                .eq('is_active', 1).order('full_name')
                 .then(({ data, error }) => {
                     if (error) {
                         // Список не загрузился — поле остаётся с текущим хозяином, а не
@@ -1713,7 +1868,7 @@ async function paint() {
                         toast(trf('Не удалось загрузить список сотрудников: {msg}', { msg: error.message }), 'fail');
                         return [];
                     }
-                    const pool = (data || []).slice();
+                    const pool = boardStaff(data || []).map((p) => ({ id: p.id, full_name: p.full_name }));
                     // Уволенного (is_active = 0) в списке нет, а его заявки есть.
                     // Без этой строки открытие такой карточки уже само по себе
                     // означало бы «снять оператора» при ближайшем сохранении.
@@ -1800,6 +1955,7 @@ async function paint() {
                 // существующей заявки не сохраняла ни одной услуги: регистратура
                 // не видела ничего, потому что писать было нечего.
                 await saveLines(r.id);
+                await saveTagLinks(r.id);   // CRM_HEAD_MERGE_TAGS_V1
                 return r;
             }
             // CRM_DEDUP_SEARCH_TASKS_V1 — у номера уже есть карточка? Спрашиваем
@@ -1816,6 +1972,7 @@ async function paint() {
             const row = data || { ...payload, id: null };
             if (!row.services && svcChosen) row.services = svcCatalog.find(x => String(x.id) === String(svcChosen)) || null;
             await saveLines(row.id);
+            await saveTagLinks(row.id);   // CRM_HEAD_MERGE_TAGS_V1
             return row;
         }
 
@@ -2509,13 +2666,15 @@ async function paint() {
                 field('Интересующие услуги', h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
                     svcChips, svcWrap, pickedList)),
                 field('Комментарий', noteInp),
+                // CRM_HEAD_MERGE_TAGS_V1 — метки, если клиника их завела.
+                tagsBox ? field('Метки', tagsBox) : null,
                 // CRM_DEDUP_SEARCH_TASKS_V1 — «ЗАДАЧИ»: что и когда сделать по этой
                 // заявке и кто отвечает. Только у сохранённой заявки: задаче
                 // нужна заявка, к которой она привязана.
                 (isEdit && r.id != null) ? field('Задачи', crmTasksBlock({
                     request: r,
                     me: selfUserId() != null ? { id: selfUserId(), full_name: (window.easymed.state.user || {}).full_name || '' } : null,
-                    isAdmin: canReassign,
+                    isAdmin: canDeleteTasks,   // CRM_HEAD_MERGE_TAGS_V1 — удаляет только администратор
                     staff: staffForTasks,
                     onChange: () => {
                         // бейдж меню и метки на доске — сразу, не дожидаясь опроса
@@ -2677,10 +2836,12 @@ async function paint() {
         try {
             const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
             const aoa = [
-                ['Имя', 'Телефон', 'Источник', 'Услуга', 'Дата записи', 'Комментарий', 'Статус', 'Пациент (MRN)', 'Дата'],
+                // CRM_HEAD_MERGE_TAGS_V1 — «Метки»: подписи через запятую.
+                ['Имя', 'Телефон', 'Источник', 'Услуга', 'Дата записи', 'Комментарий', 'Статус', 'Метки', 'Пациент (MRN)', 'Дата'],
                 ...rows.map(r => [
                     r.full_name || '', r.phone || '', SOURCE_RU[r.source] || r.source || '',
                     r.services ? r.services.name : '', r.scheduled_date || '', r.note || '', (STATUS_RU[r.status] || [r.status])[0],
+                    tagsOf(r).map((k) => (TAG_RU[k] || [k])[0]).join(', '),
                     r.patients ? (r.patients.mrn || r.patients.full_name || '') : '',
                     (r.created_at || '').replace('T', ' ').slice(0, 16),
                 ]),

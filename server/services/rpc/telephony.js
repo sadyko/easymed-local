@@ -10,6 +10,7 @@ import { hasAnyRole } from '../roles.js';
 // а список ролей ниже остаётся правилом перехода для ролей, которых в ней ещё
 // не настраивали (server/services/grants.js).
 import { grantAllows, requireGrant } from '../grants.js';
+import { canSeeAllLeads } from '../crm/visibility.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { publicSettings, saveSettings, getCredentials, listDispositions, SettingsError, forgetBinotel } from '../telephony/settings.js';
 import { binotelCall } from '../telephony/binotel.js';
 import { wakePolling } from '../telephony/poller.js';
@@ -323,7 +324,12 @@ export function crmLeadCalls(db, args, user) {
 // Оператору чужие цифры не нужны, а заведующей нужны все — поэтому здесь тот
 // же admin-only, что и у остальной телефонии.
 export function telephonyOperatorStats(db, args, user) {
-  requireAdmin(user);
+  // CRM_HEAD_MERGE_TAGS_V1 — и руководителю колл-центра (право `crm.all`):
+  // «видит показатели каждого оператора» — это и есть его работа. Предикат тот
+  // же, что снимает сужение доски (services/crm/visibility.js canSeeAllLeads).
+  if (!canSeeAllLeads(db, user)) {
+    throw new RpcError('Показатели операторов видят администратор и руководитель колл-центра.', 403);
+  }
   // Границы периода приходят готовыми ISO-строками: «сегодня» у клиники
   // местное, и считать его на сервере по UTC значило бы показывать смену,
   // сдвинутую на пять часов.
