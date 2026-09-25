@@ -23,6 +23,9 @@ import { h, Icon, clear, toast, Tag, field, PageHead } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 // FACILITY_PLAN_V1 — план этажа: дерево, холст с плитками, карточка помещения.
 import { mountFacilityPlan } from './facility-plan.js';
+// ROLE_REPORTS_SETTINGS_V1 (ревью I2) — не администратору цены палат и коек не
+// показываются и не отправляются: их меняет только администратор.
+import { settingsGrantColumns, stripToGrant } from '../permissions.js';
 
 // ROOM_CATS_V1 — типы сгруппированы в четыре категории по постановке владельца.
 // cat — это ТОЛЬКО раскладка выбора; на запись она не влияет: kind по-прежнему
@@ -511,7 +514,7 @@ function openWizard(row, presets) {
                 { hint: d.type === 'surgery'
                     ? tr('Для операционной оставьте 0 — тогда за пребывание не начисляется ничего, а операция выставляется как услуга.')
                     : tr('Ставка палаты. Отдельная койка может стоить иначе — это задаётся в карточке койки.') });
-            m.bodyEl.appendChild(field(tr('Как считать проживание'), h('select', {
+            if (!settingsGrantColumns('wards')) m.bodyEl.appendChild(field(tr('Как считать проживание'), h('select', {
                 class: 'inp',
                 onchange: (e) => {
                     d.billing_mode = e.target.value;
@@ -521,7 +524,8 @@ function openWizard(row, presets) {
             },
                 h('option', { value: 'daily', selected: d.billing_mode === 'daily' }, tr('За сутки (24 часа)')),
                 h('option', { value: 'hourly', selected: d.billing_mode === 'hourly' }, tr('За час')))));
-            m.bodyEl.appendChild(priceFld);
+            if (!settingsGrantColumns('wards')) m.bodyEl.appendChild(priceFld);
+            else m.bodyEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Цены и проценты меняет только администратор.')));
         } else {
             m.bodyEl.appendChild(field(tr('Очередь'), h('select', { class: 'inp', onchange: (e) => { d.queue_mode = e.target.value; } },
                 ...QUEUE_MODES.map(([v, lb]) => h('option', { value: v, selected: d.queue_mode === v }, tr(lb)))),
@@ -590,8 +594,9 @@ async function save(d, row) {
             name, code: (d.code || '').trim(), room_type: d.type,
             queue_mode: d.queue_mode || 'none', floor_id, active: d.active,
         };
-        const q = row ? supabase.from('rooms').update(payload).eq('id', row.id)
-                      : supabase.from('rooms').insert(payload).select('id').single();
+        const body = stripToGrant('rooms', payload);
+        const q = row ? supabase.from('rooms').update(body).eq('id', row.id)
+                      : supabase.from('rooms').insert(body).select('id').single();
         const { data, error } = await q;
         if (error) throw new Error(error.message);
         const roomId = row ? row.id : (data && data.id);
@@ -608,8 +613,9 @@ async function save(d, row) {
         price_per_hour: d.billing_mode === 'hourly' ? price : 0,
         active: d.active,
     };
+    const wardBody = stripToGrant('wards', payload);
     if (row) {
-        const { error } = await supabase.from('wards').update(payload).eq('id', row.id);
+        const { error } = await supabase.from('wards').update(wardBody).eq('id', row.id);
         if (error) throw new Error(error.message);
         toast(tr('Сохранено.'), 'ok');   // BED_LIST_V1 — койки добавляются из списка выше, не при сохранении
         return;
@@ -617,7 +623,7 @@ async function save(d, row) {
     // Палата, затем койки — двумя запросами и именно в этом порядке: если
     // вставка коек не пройдёт, палата уже создана и видна, койки дозаводятся
     // кнопкой «Койки», а не пересозданием палаты.
-    const { data, error } = await supabase.from('wards').insert(payload).select('id').single();
+    const { data, error } = await supabase.from('wards').insert(wardBody).select('id').single();
     if (error) throw new Error(error.message);
     const n = Math.max(0, Math.min(200, parseInt(d.beds, 10) || 0));
     if (n > 0) await insertBeds(data.id, d.type, 1, n);
@@ -647,7 +653,7 @@ async function insertBeds(wardId, typeKey, from, count) {
     for (let i = 0; i < count; i++) {
         rows.push({ ward_id: wardId, code: String(from + i), type: bedTypeFor(typeKey), active: true });
     }
-    const { error } = await supabase.from('beds').insert(rows);
+    const { error } = await supabase.from('beds').insert(stripToGrant('beds', rows));
     if (error) throw new Error(trf('Палата создана, но койки не добавились: {msg}', { msg: error.message }));
 }
 

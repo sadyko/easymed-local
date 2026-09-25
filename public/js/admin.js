@@ -18,7 +18,7 @@ import { startUiEnhance } from './admin/ui-enhance.js?v=uien1';
 import { pulseFade, revealOn, HIDDEN_CLASS, SHOWN_CLASS } from './admin/motion.js?v=mo1';   // SHELL_REVEAL_V1 — появление для всех экранов
 import {
     isModuleAllowed, isRouteAllowed, actorRoleCodes,   // actorRoleCodes — ROLE_HOME_V1
-    setFullAccess, setEffectiveFromRole, setEffectiveFromRoles, currentRoleLabel,
+    setFullAccess, setEffectiveFromRole, setEffectiveFromRoles, currentRoleLabel, setOwnCustomGrants,
     scopedProviderId, ownDepartmentId, PERSONAL_VIEWS,   // ownDepartmentId / PERSONAL_VIEWS — MY_STOCK_V1
     canSeeAllLeads,   // CRM_HEAD_MERGE_TAGS_V1 — счётчик задач всей команды руководителю колл-центра
 } from './admin/permissions.js';
@@ -2126,7 +2126,23 @@ async function applyActorPermissions(actor) {
     // CLINIC_ADMIN_FULL_ACCESS_V1 — the clinic owner/admin (role 'admin' + a company)
     // always has full access; staff roles apply only to non-admin users. Wins over any
     // role that may have been assigned, so an admin can never be locked out of their clinic.
-    if (actor.is_admin) { setFullAccess('Администратор клиники'); return; }
+    if (actor.is_admin) {
+        setFullAccess('Администратор клиники');
+        // ROLE_REPORTS_SETTINGS_V1 (ревью I1) — своя роль клиники на основе
+        // администратора: полный доступ остаётся, но записи ЕЁ матрицы (закрытые
+        // плитки настроек и группы отчётов) экраны слушают так же, как сервер
+        // (grantAllowsOr: «своё „Нет“»). У штатного администратора своей роли нет.
+        const own = typeof actor.custom_role_code === 'string' ? actor.custom_role_code.trim() : '';
+        if (own) {
+            try {
+                const { data } = await supabase.from('role_permissions').select('permissions').eq('role', own).maybeSingle();
+                let p = data && data.permissions;
+                if (typeof p === 'string') { try { p = JSON.parse(p); } catch (_) { p = null; } }
+                setOwnCustomGrants(p && p.grants);
+            } catch (_) { /* строки нет — работает как администратор */ }
+        }
+        return;
+    }
     // LOCAL_ROLES_V1 — this local app has no dynamic roles table; access for the
     // 7 fixed staff roles is configured in Settings → Roles & permissions and
     // stored one row per role in `role_permissions` (permissions = a JSON string

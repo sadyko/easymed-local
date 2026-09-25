@@ -35,10 +35,10 @@ test('регистратура с «Категории пациентов: Из�
   const db = seed();
   try {
     addGrants(db, 'registrar', { settings: 'view', 'settings.patient_categories': 'edit' });
-    const row = run(db, { table: 'patient_categories', op: 'insert', values: { name: 'VIP', discount_percent: 5 }, returning: true }, REG);
+    const row = run(db, { table: 'patient_categories', op: 'insert', values: { name: 'VIP' }, returning: true }, REG);
     assert.ok(row && row.id, 'вставка не прошла');
-    run(db, { table: 'patient_categories', op: 'update', values: { discount_percent: 7 }, filters: [{ col: 'id', op: 'eq', val: row.id }] }, REG);
-    assert.equal(db.prepare('SELECT discount_percent FROM patient_categories WHERE id = ?').get(row.id).discount_percent, 7);
+    run(db, { table: 'patient_categories', op: 'update', values: { name: 'VIP-клиенты' }, filters: [{ col: 'id', op: 'eq', val: row.id }] }, REG);
+    assert.equal(db.prepare('SELECT name FROM patient_categories WHERE id = ?').get(row.id).name, 'VIP-клиенты');
     // Соседняя таблица той же группы — своя плитка, и она не выдана.
     assert.throws(() => run(db, { table: 'chronic_conditions_ref', op: 'insert', values: { name: 'Астма' } }, REG), refused);
     // Удаления у окон настроек нет вовсе.
@@ -105,7 +105,7 @@ test('каждый `write.grant` реестра — живая, не закры�
     assert.ok(row.levels.includes('edit'), t + ': у ' + key + ' нет «Изменения»');
     assert.ok(REGISTRY[t].write.insert?.roles?.includes('admin') || REGISTRY[t].write.update?.roles?.includes('admin'), t + ': ключ у таблицы, которую не пишет даже администратор');
   }
-  assert.ok(n >= 20, 'таблиц с ключом плитки меньше ожидаемого: ' + n);
+  assert.ok(n >= 15, 'таблиц с ключом плитки меньше ожидаемого: ' + n);
   // Ни одна закрытая строка не названа ни одной таблицей.
   for (const t of Object.keys(REGISTRY)) assert.notEqual(writeGrantKey(t), 'settings.api');
   assert.equal(writeGrantKey('api_tokens'), null);
@@ -117,4 +117,67 @@ test('каждый `write.grant` реестра — живая, не закры�
     if (row.parent !== 'settings' || !row.levels.includes('edit') || String(row.enforced).startsWith('rpc:')) continue;
     assert.ok(named.has(key), key + ': «Изменение» есть, а таблицы, которую оно открывает, нет');
   }
+});
+
+// --- Ревью I2: деньги — только администратору ------------------------------
+
+test('право плитки не пишет денег: переименовать категорию можно, скидку группы — 403', () => {
+  const db = seed();
+  try {
+    addGrants(db, 'registrar', { settings: 'view', 'settings.patient_categories': 'edit', 'settings.rooms': 'edit',
+      'settings.referral_sources': 'edit', 'settings.consultation_types': 'edit', 'settings.company': 'edit' });
+    const id = run(db, { table: 'patient_categories', op: 'insert', values: { name: 'Льготники' } }, REG).id;
+    assert.throws(() => run(db, { table: 'patient_categories', op: 'update', values: { discount_percent: 50 }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG), refused);
+    assert.throws(() => run(db, { table: 'patient_categories', op: 'insert', values: { name: 'X', discount_percent: 10 } }, REG), refused);
+    assert.throws(() => run(db, { table: 'patient_categories', op: 'upsert', values: { name: 'Y', discount_percent: 10 }, onConflict: 'id' }, REG), refused);
+    // Остальные плитки с деньгами — те же правила.
+    assert.throws(() => run(db, { table: 'consultation_types', op: 'insert', values: { name: 'Повторная', price: 100 } }, REG), refused);
+    assert.ok(run(db, { table: 'consultation_types', op: 'insert', values: { name: 'Повторная' } }, REG).id);
+    assert.throws(() => run(db, { table: 'referral_sources', op: 'update', values: { own_percent: 30 }, filters: [{ col: 'id', op: 'eq', val: 1 }] }, REG), refused);
+    const w = run(db, { table: 'wards', op: 'insert', values: { name: 'Палата 1' } }, REG).id;
+    assert.throws(() => run(db, { table: 'wards', op: 'update', values: { price_per_day: 500000 }, filters: [{ col: 'id', op: 'eq', val: w }] }, REG), refused);
+    assert.throws(() => run(db, { table: 'rooms', op: 'insert', values: { name: 'К1', department_id: 1 } }, REG), refused, 'отдел помещения — плитка «Отделы»');
+    assert.throws(() => run(db, { table: 'doc_settings', op: 'update', values: { lab_scope: 'own' }, filters: [{ col: 'id', op: 'eq', val: 1 }] }, REG), refused);
+    // Администратор пишет деньги как и раньше.
+    run(db, { table: 'patient_categories', op: 'update', values: { discount_percent: 50 }, filters: [{ col: 'id', op: 'eq', val: id }] }, ADMIN);
+    assert.equal(db.prepare('SELECT discount_percent FROM patient_categories WHERE id = ?').get(id).discount_percent, 50);
+  } finally { db.close(); }
+});
+
+test('ставки врачей, скидки, полисы, провайдеры и кэшбэк выдать нельзя — закрытые строки', () => {
+  const db = seed();
+  try {
+    const locked = ['settings.doctor_rates', 'settings.patient_discounts', 'settings.payer_policies', 'settings.payment_providers', 'settings.cashback_rules'];
+    const byKey = catalogByKey();
+    for (const k of locked) assert.ok(byKey.get(k).locked, k + ' выдаётся');
+    addGrants(db, 'registrar', Object.fromEntries([['settings', 'edit'], ...locked.map((k) => [k, 'edit'])]));
+    assert.throws(() => run(db, { table: 'doctor_rates', op: 'insert', values: { doctor_id: 1, service_id: 1, percent: 30 } }, REG), refused);
+    assert.throws(() => run(db, { table: 'patient_discounts', op: 'insert', values: { name: 'Акция' } }, REG), refused);
+    assert.throws(() => run(db, { table: 'payer_policies', op: 'insert', values: { name: 'Полис' } }, REG), refused);
+    assert.throws(() => run(db, { table: 'payment_providers', op: 'insert', values: { name: 'Payme' } }, REG), refused);
+    assert.throws(() => run(db, { table: 'cashback_rules', op: 'insert', values: { name: 'Кэшбэк' } }, REG), refused);
+  } finally { db.close(); }
+});
+
+// --- Ревью I1: своя роль на основе администратора слушается своей матрицы ----
+
+test('своя роль на основе администратора: закрытая ею плитка не пишется, хотя основа — admin', () => {
+  const db = seed();
+  try {
+    db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('st_admin', 'Старший администратор', 'admin')").run();
+    const BOSS = { id: 60, role: 'admin', extra_roles: [], custom_role_code: 'st_admin' };
+    const ADMIN_DOCTOR = { id: 61, role: 'doctor', extra_roles: ['admin'] };
+    addGrants(db, 'st_admin', { settings: 'view', 'settings.patient_categories': 'view', 'settings.payers': 'edit' });
+    assert.throws(() => run(db, { table: 'patient_categories', op: 'insert', values: { name: 'X' } }, BOSS), refused, '«Просмотр» своей роли не остановил администратора');
+    assert.ok(run(db, { table: 'payers', op: 'insert', values: { name: 'Страховая' } }, BOSS).id, 'выданная плитка перестала работать');
+    // Ненастроенная этой ролью плитка — как у администратора.
+    assert.ok(run(db, { table: 'branches', op: 'insert', values: { name: 'Филиал 2' } }, BOSS).id);
+    // Закрытый ею раздел закрывает все плитки.
+    addGrants(db, 'st_admin', { settings: 'none' });
+    assert.throws(() => run(db, { table: 'branches', op: 'insert', values: { name: 'Филиал 3' } }, BOSS), refused);
+    // Штатный администратор и администратор-врач — без изменений, даже если врачам плитку закрыли.
+    addGrants(db, 'doctor', { settings: 'none', 'settings.patient_categories': 'none' });
+    assert.ok(run(db, { table: 'patient_categories', op: 'insert', values: { name: 'A', discount_percent: 3 } }, ADMIN_DOCTOR).id);
+    assert.ok(run(db, { table: 'patient_categories', op: 'insert', values: { name: 'B', discount_percent: 3 } }, ADMIN).id);
+  } finally { db.close(); }
 });

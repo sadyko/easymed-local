@@ -110,6 +110,7 @@ const REFERRALS = [
 // один раз и раскладывает строки по месяцам сам. По умолчанию ступеней нет.
 const monthKeyOf = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
 let TIER_RESPONSE = { from: '', to: '', rows: [] };
+let TIER_FORBID = false;   // ROLE_REPORTS_SETTINGS_V1 (ревью M2) — сервер отказал в ступенях
 // INPATIENT_SHARE_V1 — ответ doctor_inpatient_share; по умолчанию стационара нет.
 let INPATIENT_RESPONSE = { rows: [], count: 0, fee: 0 };
 let inpatientCalls = [];
@@ -144,6 +145,7 @@ globalThis.fetch = async (url, opts) => {
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (u.startsWith('/api/rpc/doctor_tier_positions')) {
     tierCalls.push(body);
+    if (TIER_FORBID) return { ok: false, status: 403, json: async () => ({ error: { code: 'forbidden', message: 'Можно смотреть только свои начисления.' } }) };
     return { ok: true, json: async () => ({ data: TIER_RESPONSE }) };
   }
   // INPATIENT_SHARE_V1 — стационарная доля приходит готовой с сервера.
@@ -399,6 +401,29 @@ test('REPORTS_V2: вознаграждение за направления с с
     assert.ok(textOf(card).includes('4 500') && textOf(card).includes('45 000'), 'разбор: ' + textOf(card));
   } finally {
     REFERRAL_RESPONSE = { rows: [], count: 0, reward: 0, paid_amount: 0 };
+    if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
+  }
+});
+
+// ROLE_REPORTS_SETTINGS_V1 (ревью M2) — сервер отказал в ступенях (смотрит не
+// сам врач и без «Оплаты врачей»): кабинет не имеет права показать сумму БЕЗ
+// ступеней как настоящую — он говорит, почему её нет, и прячет её.
+test('ступени не пришли (403): видно объяснение, а доля без ступеней не выдаётся за зарплату', async () => {
+  let root = null;
+  TIER_FORBID = true;
+  try {
+    root = await openPay();
+    buttonByText(root, /7 дней/).click();
+    await tick(80);
+    const txt = textOf(root);
+    assert.ok(txt.includes('Ступени доли не загружены — нет права на отчёт «Оплата врачей»'), 'отказ сервера промолчал');
+    const salary = byClass(root, 'dash-kpi').find((t) => textOf(t).includes('Зарплата'));
+    assert.ok(salary, 'нет плитки «Зарплата»');
+    assert.ok(!/\d0 000/.test(textOf(salary)), 'плитка показала сумму без ступеней: ' + textOf(salary));
+    assert.ok(!byClass(root, 'card').some((c) => textOf(c).includes('Начисления по дням') && byClass(c, 'dash-chart').length),
+      'график начислений нарисован без ступеней');
+  } finally {
+    TIER_FORBID = false;
     if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
   }
 });

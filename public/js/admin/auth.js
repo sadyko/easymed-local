@@ -101,6 +101,11 @@ export function actorFromUser(u) {
         is_super_admin: isSuperAdmin,
         is_admin:       isAdmin,
         is_doctor:      isDoctor,
+        // CUSTOM_ROLES_V1 · ROLE_REPORTS_SETTINGS_V1 (ревью I1) — своя роль
+        // клиники приезжает с сессией (server/services/auth.js), а сюда не
+        // доходила: applyActorPermissions читал actor.custom_role_code и всегда
+        // получал пустоту.
+        custom_role_code: (typeof u.custom_role_code === 'string' && u.custom_role_code.trim()) || null,
     };
 }
 

@@ -460,14 +460,16 @@ test('CRM_HEAD_MERGE_TAGS_V1: операторы считаются по том�
 
 test('CRM_HEAD_MERGE_TAGS_V1: оператор видит только свою строку и свои/ничьи заявки; руководитель — всех', () => {
   const db = seedTeam();
-  // ROLE_REPORTS_SETTINGS_V1 — отчёт колл-центра теперь группа раздела
-  // «Отчёты»: у штатного оператора «Отчётов» нет (миграции их не выдавали, и
-  // хаб ему не открывался), значит и сервер отказывает, пока группу не выдали.
-  assert.throws(() => callcenterReport(db, RANGE, NIGORA), (e) => e.status === 403,
-    'оператор без группы «Колл-центр» получил отчёт');
+  // ROLE_REPORTS_SETTINGS_V1 — отчёт колл-центра — группа «Колл-центр»
+  // раздела «Отчёты»; штатному оператору её выдаёт миграция 152. Клиника,
+  // закрывшая группу, закрывает и отчёт — сервер отказывает.
   const row = db.prepare("SELECT permissions FROM role_permissions WHERE role = 'callcenter'").get();
   const perms = JSON.parse(row.permissions);
-  perms.grants = { ...(perms.grants || {}), 'reports.callcenter': 'view' };
+  assert.equal(perms.grants['reports.callcenter'], 'view', 'миграция 152 не выдала оператору его отчёт');
+  db.prepare("UPDATE role_permissions SET permissions = ? WHERE role = 'callcenter'")
+    .run(JSON.stringify({ ...perms, grants: { ...perms.grants, 'reports.callcenter': 'none' } }));
+  assert.throws(() => callcenterReport(db, RANGE, NIGORA), (e) => e.status === 403,
+    'оператор с закрытой группой «Колл-центр» получил отчёт');
   db.prepare("UPDATE role_permissions SET permissions = ? WHERE role = 'callcenter'").run(JSON.stringify(perms));
   const mine = callcenterReport(db, RANGE, NIGORA);
   assert.deepEqual(mine.byOperator.map((o) => o.name), ['Оператор Нигора'], 'оператору отдали чужие цифры');

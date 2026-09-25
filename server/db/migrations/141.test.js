@@ -27,7 +27,10 @@ const allNone = () => Object.fromEntries(PHONE_KEYS.map((k) => [k, 'none']));
 test('141 выдаёт колл-центру его работу: звонки, набор, записи, заведение пациента', () => {
   const db = freshDb();
   try {
-    assert.deepEqual(grantsOf(db, 'callcenter'), {
+    // ROLE_REPORTS_SETTINGS_V1 — миграция 152 добавила оператору группу
+    // отчётов «Колл-центр»; здесь сверяются только ключи этой миграции.
+    const cc = Object.fromEntries(Object.entries(grantsOf(db, 'callcenter')).filter(([k]) => k !== 'reports.callcenter'));
+    assert.deepEqual(cc, {
       'crm.calls': 'view',
       'crm.dial': 'edit',
       'crm.recording': 'edit',

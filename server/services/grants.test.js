@@ -271,12 +271,15 @@ test('каждая строка справочника называет пров
   // owner_report, cashier_report, callcenter_report и кабинет врача) и плитки
   // настроек, чью запись проверяет компилятор запросов.
   for (const k of ['reports.revenue', 'reports.cashier', 'reports.doctor_pay', 'reports.referrals', 'reports.services', 'reports.stock', 'reports.callcenter',
-    'settings.patient_categories', 'settings.payers', 'settings.referral_sources', 'settings.doctor_rates', 'settings.rooms', 'settings.company', 'settings.documents']) {
+    'settings.patient_categories', 'settings.payers', 'settings.referral_sources', 'settings.rooms', 'settings.company', 'settings.documents']) {
     assert.ok(keys.has(k), 'сервер проверяет ' + k + ', а в справочнике его нет');
   }
   // Закрытые строки владельца: Telegram, телефония, воронка CRM, API-ключи, Роли.
   const byKey = new Map(catalogRows().map((r) => [r.key, r]));
-  for (const k of ['settings.telegram', 'settings.telephony', 'settings.crm', 'settings.api', 'settings.roles', 'reports.telegram']) {
+  // Ревью I2 (деньги — только администратору): ставки врачей, скидки, полисы,
+  // провайдеры и кэшбэк — тоже закрытые строки; «Сотрудники» — /api/users только admin.
+  for (const k of ['settings.telegram', 'settings.telephony', 'settings.crm', 'settings.api', 'settings.roles', 'reports.telegram',
+    'settings.employees', 'settings.doctor_rates', 'settings.patient_discounts', 'settings.payer_policies', 'settings.payment_providers', 'settings.cashback_rules']) {
     assert.ok(byKey.get(k) && byKey.get(k).locked, k + ' обязана быть закрытой строкой (только администратор)');
   }
   assert.equal(levelAllows('edit', 'view'), true);

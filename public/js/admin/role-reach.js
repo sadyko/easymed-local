@@ -22,7 +22,7 @@
 
 import {
     previewRole, isModuleAllowed, accessLevelFor, actorRoleCodes,
-    patientTabLevel, patientTabCaps, canCreatePatient,
+    patientTabLevel, patientTabCaps, canCreatePatient, grantLevel,
     PATIENT_CARD_TAB_IDS, PATIENT_TABS, ROLE_GATED_SCREENS, PERSONAL_VIEWS,
 } from './permissions.js';
 // ПЕРЕВОДЧИК ПРИХОДИТ АРГУМЕНТОМ, А НЕ ИМПОРТОМ. i18n.js трогает document на
@@ -142,6 +142,11 @@ export function roleReach(roleRow, navIds, labelOf, translate) {
             closed,
             tabs,
             canCreatePatient: canCreatePatient(),
+            // ROLE_REPORTS_SETTINGS_V1 (ревью M1) — «Настройки: Нет», записанное
+            // в матрице, закрывает и страницы, живущие ВНУТРИ настроек
+            // (Документы, Компания, Помещения, Список услуг, Консультации врачей),
+            // хотя в меню у них своих пунктов нет — сводка обязана это назвать.
+            settingsClosed: grantLevel('settings') === 'none',
             landing: landing ? { ...landing, label: label(landing.id) } : null,
         };
     });
@@ -210,6 +215,10 @@ export function reachSentences(reach, translate) {
             template: 'Карта пациента, вкладка «{tab}»: {level}.',
             params: { tab: tr(t.label), level: tr(TAB_WORD[t.level] || t.level) },
         });
+    }
+
+    if (reach.settingsClosed) {
+        out.push({ tone: 'warn', template: '«Настройки: Нет» закрывает и страницы внутри настроек: Документы, Компания, Помещения, Список услуг, Консультации врачей.' });
     }
 
     if (!reach.canCreatePatient) {

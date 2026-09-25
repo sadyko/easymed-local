@@ -31,7 +31,7 @@ import { phoneInput } from '../phone-input.js?v=ph1';
 // экран и даёт ему дорогу назад.
 import { renderRolesEditor } from './roles-editor.js?v=roles2';
 // ROLE_REPORTS_SETTINGS_V1 — какие плитки видит роль и можно ли в них менять.
-import { isRouteAllowed, settingsTileLevel, hasRestriction } from '../permissions.js';
+import { isRouteAllowed, settingsTileLevel, hasRestriction, actorIsAdmin, settingsGrantColumns } from '../permissions.js';
 
 // BRANCH_SYNC_V1 — «Филиалы» отвечают теперь на два разных вопроса: какие у
 // клиники адреса (таблица branches, редактор ниже) и как связаны ОТДЕЛЬНЫЕ
@@ -93,7 +93,7 @@ const SECTION_GRANT = {
 export function sectionLevel(key) {
     const g = SECTION_GRANT[key];
     if (g) return settingsTileLevel(g);
-    return hasRestriction() ? 'none' : 'edit';
+    return (!hasRestriction() || actorIsAdmin()) ? 'edit' : 'none';   // ревью C1 — и администратор-врач
 }
 
 /** Видна ли плитка хаба: экран — по воротам маршрута, справочник — по своему окну. */
@@ -1023,6 +1023,7 @@ async function renderEditor(container, key) {
     // ROLE_REPORTS_SETTINGS_V1 — ниже «Изменения» справочник только читают:
     // ни «Добавить», ни окна правки (сервер всё равно не сохранит).
     const readOnly = !!state.readOnly;
+    const grantCols = readOnly ? null : settingsGrantColumns(cfg.table);   // ревью I2 — деньги только администратору
     const addBtn = readOnly
         ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, Icon('Lock', { size: 14 }), ' ', tr('Только просмотр'))
         : h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openRowModal(null) },
@@ -1033,7 +1034,7 @@ async function renderEditor(container, key) {
     // сразу и не ждёт сети.
     // ROLE_REPORTS_SETTINGS_V1 — карточка связи зданий зовёт админские RPC,
     // поэтому показывается только полному доступу — роль с «Филиалы: Изменение» правит адреса, не связь.
-    const syncSlot = key === 'branches' && !hasRestriction() ? h('div') : null;
+    const syncSlot = key === 'branches' && (!hasRestriction() || actorIsAdmin()) ? h('div') : null;   // ревью C1
 
     container.appendChild(h('div', { class: 'fade-in' },
         // APPBAR_BACK_V1 — это возврат ВНУТРИ раздела (из справочника к плиткам),
@@ -1048,6 +1049,7 @@ async function renderEditor(container, key) {
         h('div', { class: 'card' },
             h('div', { class: 'card-header' },
                 h('h3', null, Icon(cfg.icon, { size: 16 }), ' ', cfg.title),
+                grantCols ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Цены и проценты меняет только администратор.')) : null,
                 addBtn,
             ),
             h('table', { class: 'tbl' },
@@ -1130,6 +1132,10 @@ async function renderEditor(container, key) {
     // ADD / EDIT MODAL — shared across all tables, built from cfg.fields.
     // -------------------------------------------------------------------
     function openRowModal(row) {
+        // ROLE_REPORTS_SETTINGS_V1 (ревью I2) — не администратору форма не
+        // показывает цен и процентов: их пишет только администратор, и сервер
+        // отказал бы всей записи (db/write-grant.js).
+        const fields = grantCols ? cfg.fields.filter(f => grantCols.includes(f.key)) : cfg.fields;
         const isEdit = !!row;
         const overlay = h('div', { class: 'modal' });
         const close = () => overlay.remove();
@@ -1140,7 +1146,7 @@ async function renderEditor(container, key) {
         const suggestFields = [];   // SUGGEST_FIELD_V1 — datalists filled after mount
         const rateFields = [];      // REFERRAL_CATEGORY_RATES_V1 — таблицы ставок, тоже после монтирования
         const conditional = [];     // CONDITIONAL_FIELDS_V1 — поля с visibleWhen
-        const fieldEls = cfg.fields.map(f => {
+        const fieldEls = fields.map(f => {
             let control;
             if (f.type === 'select') {
                 // ENUM_LABELS_V1 — options are [storedValue, humanLabel]. The
@@ -1222,7 +1228,7 @@ async function renderEditor(container, key) {
             if (f.type === 'checkbox') return c.checked ? f.checkedValue : f.uncheckedValue;
             return c.value;
         }
-        const formValues = () => Object.fromEntries(cfg.fields.map(f => [f.key, readControl(f)]));
+        const formValues = () => Object.fromEntries(fields.map(f => [f.key, readControl(f)]));
 
         // CONDITIONAL_FIELDS_V1 — поле, которое имеет смысл только при
         // определённом выборе в другом поле (свои ставки — только когда снята
@@ -1231,7 +1237,7 @@ async function renderEditor(container, key) {
             const v = formValues();
             for (const { f, el } of conditional) el.hidden = !f.visibleWhen(v);
         }
-        for (const f of cfg.fields) {
+        for (const f of fields) {
             const c = controls[f.key];
             if (c && c.addEventListener) c.addEventListener('change', syncConditional);
         }
@@ -1277,7 +1283,7 @@ async function renderEditor(container, key) {
 
         async function save() {
             const payload = {};
-            for (const f of cfg.fields) {
+            for (const f of fields) {
                 if (f.type === 'readonly') continue;   // REFERRAL_SOURCE_CODE_V1 — присваивает база, не форма
                 if (f.type === 'checkbox') { payload[f.key] = readControl(f); continue; }
                 // Массив ставок уходит как есть: колонка объявлена JSON в

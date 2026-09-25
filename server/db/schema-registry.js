@@ -701,13 +701,13 @@ export const REGISTRY = {
     },
   },
   payer_policies: { read:{roles:ALL_STAFF,columns:['id','name','payer_id','coverage_percent','active','created_at']},
-    write:{ grant:'settings.payer_policies',insert:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},update:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},delete:{roles:[]}},
+    write:{insert:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},update:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},delete:{roles:[]}},
     filters:['id','active','payer_id'], embed:{ payers:{table:'payers',fk:'payer_id',columns:['id','name']} } },
   payment_providers: { read:{roles:ALL_STAFF,columns:['id','name','fee_percent','active','created_at']},
-    write:{ grant:'settings.payment_providers',insert:{roles:['admin'],columns:['name','fee_percent','active']},update:{roles:['admin'],columns:['name','fee_percent','active']},delete:{roles:[]}},
+    write:{insert:{roles:['admin'],columns:['name','fee_percent','active']},update:{roles:['admin'],columns:['name','fee_percent','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
   cashback_rules: { read:{roles:ALL_STAFF,columns:['id','name','percent','active','created_at']},
-    write:{ grant:'settings.cashback_rules',insert:{roles:['admin'],columns:['name','percent','active']},update:{roles:['admin'],columns:['name','percent','active']},delete:{roles:[]}},
+    write:{insert:{roles:['admin'],columns:['name','percent','active']},update:{roles:['admin'],columns:['name','percent','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
   // REFERRAL_CATEGORY_RATES_V1 (mig 115) — the category carries the STANDARD
   // reward: a percent for everything, plus per-service-group rows in `rates`
@@ -724,7 +724,7 @@ export const REGISTRY = {
   // DISCOUNT_RULES_V1 (mig 129) — valid_from/valid_until, category_id (apply to a
   // patient group), service_ids (JSON list: apply to these services only), note.
   patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note']},
-    write:{ grant:'settings.patient_discounts',insert:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},
+    write:{insert:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},
       update:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},delete:{roles:[]}},
     filters:['id','active','kind','category_id'], json:['service_ids'],
     embed:{ patient_categories:{table:'patient_categories',fk:'category_id',columns:['id','name']} } },
@@ -737,7 +737,7 @@ export const REGISTRY = {
     write:{insert:{roles:['admin'],columns:['name','token','active']},update:{roles:['admin'],columns:['name','token','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
   doctor_rates: { read:{roles:ALL_STAFF,columns:['id','doctor_id','service_id','percent','active','created_at']},
-    write:{ grant:'settings.doctor_rates',insert:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},update:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},delete:{roles:[]}},
+    write:{insert:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},update:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},delete:{roles:[]}},
     filters:['id','active','doctor_id','service_id'],
     embed:{ users:{table:'users',fk:'doctor_id',columns:['id','full_name']}, services:{table:'services',fk:'service_id',columns:['id','name']} } },
   // STAFF_SYNC_V1 (migration 086) — GOVERNED BY THE MAIN CLINIC, and the role

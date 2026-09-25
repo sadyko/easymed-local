@@ -1,4 +1,4 @@
-import { writeGrantAllows } from './write-grant.js';   // ROLE_REPORTS_SETTINGS_V1
+import { writeGrantAllows, writeGrantViolation, writeGrantNarrows } from './write-grant.js';   // ROLE_REPORTS_SETTINGS_V1
 import { tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns, rowScope, actorStamps } from './schema-registry.js';
 import { effectiveRoles } from '../services/roles.js';
 import { scopeLifted } from './row-scope.js';   // CRM_HEAD_MERGE_TAGS_V1
@@ -192,11 +192,25 @@ export function compile(desc, user, ctx = {}) {
   // ROLE_REPORTS_SETTINGS_V1 — запись: список ролей реестра ИЛИ право окна
   // настроек из «Ролей» (write.grant; см. db/write-grant.js — что оно
   // открывает и чего не открывает никогда).
-  const mayWrite = (o) => canWrite(table, o, role) || writeGrantAllows(table, o, user, db);
+  // Ревью I1/I2: своя роль на основе администратора с закрытой плиткой —
+  // «нет», хотя основа `admin` в списке ролей; пишущий по праву окна — только
+  // колонки без денег (см. db/write-grant.js).
+  let viaGrant = false;
+  const mayWrite = (o) => {
+    if (canWrite(table, o, role)) return !writeGrantNarrows(table, user, db);
+    if (writeGrantAllows(table, o, user, db)) { viaGrant = true; return true; }
+    return false;
+  };
+  const moneyGuard = () => {
+    if (!viaGrant) return;
+    const col = writeGrantViolation(table, op, desc.values);
+    if (col) throw new CompileError('not allowed: column ' + col + ' is administrator-only', 403);
+  };
   if (op === 'upsert') {
     if (!mayWrite('insert') || !mayWrite('update')) {
       throw new CompileError('not allowed', 403);
     }
+    moneyGuard();
     // CRM_DEDUP_SEARCH_TASKS_V1 — ON CONFLICT DO UPDATE правит строку, минуя
     // WHERE, то есть минуя ограничение по владельцу. Тем, на кого ограничение
     // действует, upsert по таблице с ним закрыт.
@@ -204,6 +218,7 @@ export function compile(desc, user, ctx = {}) {
     return compileUpsert(desc, table);
   }
   if (!mayWrite(op)) throw new CompileError('not allowed', 403);
+  moneyGuard();
   if (op === 'insert') return compileInsert(desc, table, user, db);
   if (op === 'update') return compileUpdate(desc, table, user, db);
   return compileDelete(desc, table, user, db);

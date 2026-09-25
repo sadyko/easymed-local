@@ -148,7 +148,10 @@ test('ненастроенная роль с голым «Настройки»: 
     }
     // Справочники хаба — видны (их открывал любой, кто дошёл до хаба), но
     // сохранить их не мог никто, кроме администратора, — поэтому только чтение.
-    for (const k of ['patient_categories', 'payers', 'referral_sources', 'doctor_rates', 'branches']) assert.equal(sectionLevel(k), 'view', k);
+    for (const k of ['patient_categories', 'payers', 'referral_sources', 'branches']) assert.equal(sectionLevel(k), 'view', k);
+    // Ревью I2 — справочники-деньги (ставки врачей, скидки, полисы, провайдеры,
+    // кэшбэк) — закрытые строки: только администратор.
+    for (const k of ['doctor_rates', 'patient_discounts', 'payer_policies', 'payment_providers', 'cashback_rules']) assert.equal(sectionLevel(k), 'none', k);
     // Закрытые строки владельца — только администратор.
     assert.ok(!tiles.includes('Роли') && !tiles.includes('API'));
     assert.equal(perms.isRouteAllowed('api-settings'), false);
@@ -169,7 +172,7 @@ test('справочник ниже «Изменения» открываетс�
     await tick();
     const t = textOf(root);
     assert.ok(t.includes('Только просмотр'), 'справочник не сказал, что он только для чтения');
-    assert.ok(!walk(root).some((n) => n.tagName === 'BUTTON' && / Add$/.test(textOf(n))), 'кнопка «Добавить» у роли с «Просмотром»');
+    assert.ok(!walk(root).some((n) => n.tagName === 'BUTTON' && String(n.className).includes('btn-primary')), 'кнопка «Добавить» у роли с «Просмотром»');
     assert.ok(t.includes('VIP'), 'строки справочника не показаны');
   } finally { perms.setFullAccess('Admin'); }
 });
@@ -217,4 +220,110 @@ test('предпросмотр роли возвращает права по с�
     assert.ok(seen.includes('total_revenue'), 'предпросмотр читал права вошедшего, а не роли');
     assert.deepStrictEqual(visibleReports(), ['cashier'], 'после предпросмотра остались права чужой роли');
   } finally { perms.setFullAccess('Admin'); }
+});
+
+// --- Ревью C1: администратор-врач (основная `doctor`, `admin` дополнительной) --
+
+const ADMIN_ROW = { sections: ['dashboard', 'reports-hub', 'patients', 'settings', 'cashier'], levels: { settings: 'admin', 'reports-hub': 'admin' } };
+const DOCTOR_ROW = { sections: ['patients', 'consultation', 'labs', 'dashboard'], levels: {} };
+function asAdminDoctor() {
+  perms.setEffectiveFromRoles([{ name: 'doctor', permissions: DOCTOR_ROW }, { name: 'admin', permissions: ADMIN_ROW }]);
+}
+
+test('администратор-врач: плитки настроек на «Изменение», «Роли», «API», закрытые экраны и связь зданий — как у администратора', async () => {
+  asAdminDoctor();
+  try {
+    assert.equal(perms.hasRestriction(), true, 'стенд не тот: администратор-врач живёт по объединению ролей');
+    assert.equal(perms.actorIsAdmin(), true);
+    for (const k of ['patient_categories', 'payers', 'doctor_rates', 'api_tokens', 'roles', 'branches']) assert.equal(sectionLevel(k), 'edit', k);
+    for (const l of ['Роли', 'API', 'Ставки врачей', 'Сотрудники', 'Телефония', 'Telegram-бот', 'CRM-канбан']) assert.ok(visibleTiles().includes(l), l + ' спрятана от администратора-врача');
+    for (const r of ['api-settings', 'telegram-settings', 'telephony-settings', 'crm-settings', 'employees', 'settings:patients', 'services']) {
+      assert.equal(perms.isRouteAllowed(r), true, r + ' закрыт администратору-врачу');
+    }
+    assert.equal(perms.settingsGrantColumns('patient_categories'), null, 'администратору-врачу урезали колонки');
+    const root = mk('div');
+    await renderSettingsHub(root, {});
+    byClass(root, 'set-row-link').find((n) => textOf(n).includes('Филиалы')).click();
+    await tick();
+    assert.ok(!textOf(root).includes('Только просмотр'), 'филиалы открылись только для чтения');
+  } finally { perms.setFullAccess('Admin'); }
+});
+
+test('администратор-врач видит Telegram-отчёт и все группы отчётов', () => {
+  asAdminDoctor();
+  try {
+    assert.deepStrictEqual(visibleReports(), REPORT_DEFS.map((r) => r.kind));
+  } finally { perms.setFullAccess('Admin'); }
+});
+
+test('предпросмотр чужой роли администратором-врачом не наследует его права администратора', () => {
+  asAdminDoctor();
+  try {
+    const seen = perms.previewRole({ name: 'registrar', permissions: REGISTRAR }, () => ({ adm: perms.actorIsAdmin(), roles: sectionLevel('roles') }));
+    assert.deepStrictEqual(seen, { adm: false, roles: 'none' });
+  } finally { perms.setFullAccess('Admin'); }
+});
+
+// --- Ревью I1: своя роль клиники на основе администратора ---------------------
+
+test('своя роль на основе администратора: её «Нет» и «Просмотр» слушаются и в хабах', () => {
+  perms.setFullAccess('Старший администратор');
+  perms.setOwnCustomGrants({ settings: 'view', 'settings.patient_categories': 'view', 'settings.payers': 'none', 'reports.doctor_pay': 'none' });
+  try {
+    assert.equal(sectionLevel('patient_categories'), 'view', 'закрытое её ролью «Изменение» осталось');
+    assert.equal(sectionLevel('payers'), 'none');
+    assert.equal(sectionLevel('branches'), 'edit', 'не тронутое ею — как у администратора');
+    assert.ok(!visibleTiles().includes('Компании-плательщики'));
+    assert.ok(!visibleReports().includes('doctor_salaries') && !visibleReports().includes('by_doctors'), 'плитка открылась бы в 403');
+    assert.ok(visibleReports().includes('cashier'));
+    perms.setOwnCustomGrants({ settings: 'none', reports: 'none' });
+    assert.equal(sectionLevel('branches'), 'none');
+    assert.equal(perms.isRouteAllowed('documents-settings'), false);
+    assert.deepStrictEqual(visibleReports(), []);
+    assert.equal(perms.isModuleAllowed('reports-hub'), false);
+  } finally { perms.setFullAccess('Admin'); }
+  assert.equal(sectionLevel('payers'), 'edit', 'setFullAccess не сбросил записи своей роли');
+});
+
+// --- Ревью I2: деньги не показываются тому, кто не может их сохранить --------
+
+test('регистратура с «Категории пациентов: Изменение»: в форме нет скидки группы', async () => {
+  const root = mk('div');
+  perms.setEffectiveFromRole(savedRole('Регистратор', REGISTRAR, { settings: 'view', 'settings.patient_categories': 'edit' }));
+  try {
+    assert.deepStrictEqual(perms.settingsGrantColumns('patient_categories'), ['name', 'tier', 'active']);
+    assert.deepStrictEqual(perms.stripToGrant('wards', { name: 'П1', price_per_day: 5, department_id: 1 }), { name: 'П1' });
+    await renderSettingsHub(root, {});
+    byClass(root, 'set-row-link').find((n) => textOf(n).includes('Категории пациентов')).click();
+    await tick();
+    assert.ok(textOf(root).includes('Цены и проценты меняет только администратор.'));
+    walk(root).find((n) => n.tagName === 'BUTTON' && String(n.className).includes('btn-primary')).click();
+    const modal = document.body.children[document.body.children.length - 1];
+    assert.ok(textOf(modal).includes('Название'), 'форма не открылась');
+    assert.ok(!textOf(modal).includes('Скидка группы'), 'в форме поле скидки — сервер отказал бы всей записи');
+  } finally { perms.setFullAccess('Admin'); }
+});
+
+// --- Колл-центр: одна группа открывает хаб с одной плиткой --------------------
+
+test('оператор колл-центра с одной группой «Колл-центр» доходит до хаба и видит только её', () => {
+  const CC = { sections: ['crm', 'dashboard', 'telegram-chat', 'custdev'], levels: { crm: 'admin' },
+    grants: { 'crm.calls': 'view', 'crm.dial': 'edit', 'crm.recording': 'edit', 'crm.convert': 'edit', 'reports.callcenter': 'view' } };
+  perms.setEffectiveFromRole({ name: 'callcenter', permissions: CC });
+  try {
+    assert.equal(perms.isModuleAllowed('reports-hub'), true);
+    assert.equal(perms.isRouteAllowed('reports-hub'), true, 'пункт меню есть, а маршрут отказывает');
+    assert.deepStrictEqual(visibleReports(), ['callcenter']);
+  } finally { perms.setFullAccess('Admin'); }
+});
+
+// --- Ревью M1: сводка роли называет, что закрывает «Настройки: Нет» ------------
+
+test('сводка роли: «Настройки: Нет» называет закрытые страницы внутри настроек', async () => {
+  const { roleReach, reachSentences } = await import('../role-reach.js');
+  const reach = roleReach(savedRole('registrar', REGISTRAR, { settings: 'none' }), ['patients', 'settings'], (id) => id);
+  assert.equal(reach.settingsClosed, true);
+  assert.ok(reachSentences(reach).some((x) => /Документы, Компания, Помещения, Список услуг, Консультации врачей/.test(x.template)));
+  const open = roleReach(savedRole('registrar', REGISTRAR, { settings: 'view' }), ['patients'], (id) => id);
+  assert.ok(!reachSentences(open).some((x) => /закрывает и страницы/.test(x.template)));
 });

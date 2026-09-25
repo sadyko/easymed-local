@@ -126,6 +126,7 @@ let _effective    = null;   // Set<string> | null (null = full access)
 let _levels       = {};     // { key: 'viewer'|'editor'|'admin' }
 let _patientTabs  = {};     // { tabId: 'none'|'view'|'edit' } — absent key = visible (default)
 let _grants       = {};     // GRANTS_V1 — { 'inpatient.vitals': 'edit', … } по справочнику прав
+let _ownCustom    = null;   // ROLE_REPORTS_SETTINGS_V1 (ревью I1) — записи своей роли администратора; см. setOwnCustomGrants
 let _roleLabel    = null;   // human label of the role currently in force
 let _actorRoles   = [];     // INPATIENT_ROLE_GATE_V1 — role CODES currently in force
 
@@ -318,6 +319,7 @@ export function hasRestriction()   { return _effective instanceof Set; }
 // Grant full access (super admin / no role / "view as Super Admin").
 export function setFullAccess(label = null) {
     _grants = {};   // GRANTS_V1 — полному доступу окна не закрывают
+    _ownCustom = null;   // ROLE_REPORTS_SETTINGS_V1 (ревью I1) — задаёт setOwnCustomGrants после
     _effective = null;
     _levels    = {};
     _patientTabs = {};
@@ -467,14 +469,15 @@ export function previewRole(roleRow, fn, opts = {}) {
     // вместе с остальным: setEffectiveFromRole их переписывает, и без этого
     // предпросмотр оставлял вошедшему сотруднику права ЧУЖОЙ роли, а плитки
     // отчётов и настроек отвечали за читателя, а не за роль.
-    const saved = { eff: _effective, levels: _levels, tabs: _patientTabs, grants: _grants, label: _roleLabel, roles: _actorRoles, preview: _preview };
+    const saved = { eff: _effective, levels: _levels, tabs: _patientTabs, grants: _grants, own: _ownCustom, label: _roleLabel, roles: _actorRoles, preview: _preview };
     try {
         setEffectiveFromRole(roleRow);
+        _ownCustom = null;   // ревью I1 — записи своей роли читающего к предпросматриваемой роли не относятся
         const id = Number(opts && opts.departmentId);
         _preview = { departmentId: Number.isInteger(id) && id > 0 ? id : null };
         return fn();
     } finally {
-        _effective = saved.eff; _levels = saved.levels; _patientTabs = saved.tabs; _grants = saved.grants;
+        _effective = saved.eff; _levels = saved.levels; _patientTabs = saved.tabs; _grants = saved.grants; _ownCustom = saved.own;
         _roleLabel = saved.label; _actorRoles = saved.roles; _preview = saved.preview;
     }
 }
@@ -733,7 +736,12 @@ const LEGACY_REPORT_GROUP = {
 
 /** Видна ли группа отчётов ('reports.cashier' …) — плитки хаба и прежнего экрана. */
 export function reportGroupAllowed(key) {
-    if (_effective == null) return true;
+    // Ревью C1/I1 — администратор (и администратор-врач, у которого `admin`
+    // дополнительной ролью) видит всё, кроме закрытого ЕГО СОБСТВЕННОЙ ролью.
+    if (_effective == null || actorIsAdmin()) {
+        const own = ownLevel(key, 'reports');
+        return own === null ? true : own !== 'none';
+    }
     if (grantLevel('reports') === 'none') return false;   // закрытый раздел закрывает все группы
     const lvl = key ? grantLevel(key) : null;
     if (lvl !== null) return lvl !== 'none';
@@ -743,7 +751,38 @@ export function reportGroupAllowed(key) {
 /** Видна ли плитка отчёта по виду (REPORT_GROUP); вид без группы — только полному доступу. */
 export function reportKindAllowed(kind) {
     const key = Object.prototype.hasOwnProperty.call(REPORT_GROUP, kind) ? REPORT_GROUP[kind] : null;
-    return key ? reportGroupAllowed(key) : _effective == null;
+    return key ? reportGroupAllowed(key) : ((_effective == null || actorIsAdmin()) && ownLevel(null, 'reports') !== 'none');
+}
+
+// ---------------------------------------------------------------------------
+// ROLE_REPORTS_SETTINGS_V1, ревью C1 — АДМИНИСТРАТОР ЭТО РОЛЬ, А НЕ ПОЛНЫЙ ДОСТУП.
+//
+// Полный доступ (_effective === null) получает только тот, у кого ОСНОВНАЯ
+// роль `admin` (admin.js applyActorPermissions). Администратор-врач — основная
+// `doctor`, `admin` дополнительной (ADMIN_DOCTOR_V1) — живёт по объединению
+// строк ролей, и у строки `admin` права по справочнику не настроены: плитки
+// настроек падали в «Просмотр», «Роли» и «API» пропадали, Telegram-отчёт тоже,
+// хотя сервер (grantAllowsOr, hasAnyRole) пускает его везде как администратора.
+// Ответ тот же, что у сервера: роль `admin` среди ролей в силе. В предпросмотре
+// роли — роль предпросмотра, а не читающего (actorRoleCodes смотрит _preview).
+// ---------------------------------------------------------------------------
+export function actorIsAdmin() {
+    return actorRoleCodes().includes('admin');
+}
+
+// Ревью I1 — СВОЯ РОЛЬ КЛИНИКИ НА ОСНОВЕ АДМИНИСТРАТОРА. Такой человек входит
+// с полным доступом (его основа — `admin`), а сервер слушается записей его
+// своей роли (grantAllowsOr: «своё „Нет“»). Эти записи и хранятся здесь —
+// admin.js кладёт их после setFullAccess; у штатного администратора их нет.
+export function setOwnCustomGrants(grants) {
+    _ownCustom = grants && typeof grants === 'object' ? { ...grants } : null;
+}
+// Уровень по ключу из СВОЕЙ роли администратора: закрытый ею раздел — «Нет»,
+// записанный ключ — его уровень, иначе null (решает правило администратора).
+function ownLevel(key, section) {
+    if (!_ownCustom) return null;
+    if (section && _ownCustom[section] === 'none') return 'none';
+    return key && Object.prototype.hasOwnProperty.call(_ownCustom, key) ? _ownCustom[key] : null;
 }
 
 const SETTINGS_ROWS = new Map(catalogRows().filter((r) => r.parent === 'settings').map((r) => [r.key, r]));
@@ -774,13 +813,39 @@ function tileConfigured(key) {
     return grantLevel(key);
 }
 
+// Ревью I2 — колонки таблицы, которые право плитки вправе писать (цены и
+// проценты — только администратору; сервер отвечает тем же, db/write-grant.js).
+const GRANT_COLUMNS = new Map();
+for (const r of SETTINGS_ROWS.values()) for (const [t, cols] of Object.entries(r.grantColumns || {})) GRANT_COLUMNS.set(t, cols);
+
+/** Колонки таблицы, доступные НЕ администратору, — или null, если ограничений нет. */
+export function settingsGrantColumns(table) {
+    if (_effective == null || actorIsAdmin()) return null;
+    return GRANT_COLUMNS.get(table) || null;
+}
+
+/** Запись без колонок, которые пишет только администратор (объект или массив строк). */
+export function stripToGrant(table, payload) {
+    const cols = settingsGrantColumns(table);
+    if (!cols) return payload;
+    const one = (row) => Object.fromEntries(Object.entries(row || {}).filter(([k]) => cols.includes(k)));
+    return Array.isArray(payload) ? payload.map(one) : one(payload);
+}
+
 /**
  * Уровень плитки настроек для хаба: 'none' | 'view' | 'edit'. Ненастроенная
  * плитка — прежнее правило (`legacyKeys`) и НЕ выше «Просмотра»: писать в эти
  * таблицы до сих пор мог только администратор, а он — полный доступ.
  */
 export function settingsTileLevel(key) {
-    if (_effective == null) return 'edit';
+    // Ревью C1/I1 — администратор: всё на «Изменение», закрытые строки тоже,
+    // кроме того, что закрыла или сузила его собственная роль.
+    if (_effective == null || actorIsAdmin()) {
+        const row0 = SETTINGS_ROWS.get(key);
+        const own = row0 && !row0.locked ? ownLevel(key, 'settings') : (_ownCustom && _ownCustom.settings === 'none' ? 'none' : null);
+        if (own === null) return 'edit';
+        return own === 'delete' ? 'edit' : own;
+    }
     const row = SETTINGS_ROWS.get(key);
     if (!row || row.locked) return 'none';
     const lvl = tileConfigured(key);
@@ -793,6 +858,8 @@ export function settingsTileLevel(key) {
 // Is a top-level sidebar module visible? The Settings module is special: it
 // shows when the role can reach the Settings home OR any single sub-section.
 export function isModuleAllowed(navId) {
+    // Ревью I1 — полный доступ, которому своя роль закрыла отчёты целиком.
+    if (navId === 'reports-hub' && _effective == null && _ownCustom) return REPORT_GROUP_KEYS.some(reportGroupAllowed);
     // MY_STOCK_V1 — оба личных экрана решаются одним местом, см. ниже.
     if (navId === 'my-stock' || navId === 'my-department') return personalStockAllowed(navId);
     if (_effective == null) return true;
@@ -927,13 +994,20 @@ export function isModuleAllowed(navId) {
 // nav item (patient-card → patients, service-workspace → consultation,
 // settings:<key> → that exact key, report:<key> → reports).
 export function isRouteAllowed(view) {
+    // ROLE_REPORTS_SETTINGS_V1 — экран-плитка настроек: настроенное окно
+    // решает само; ненастроенное — прежние строки ниже, как было. Ревью C1/I1:
+    // администратор (в том числе администратор-врач) открывает любую плитку,
+    // кроме закрытой его собственной ролью.
+    const tileKey = view ? SETTINGS_ROUTE_TILE[view] : null;
+    if (tileKey && (_effective == null || actorIsAdmin())) return settingsTileLevel(tileKey) !== 'none';
     if (_effective == null) return true;
     if (!view) return true;
     if (ALWAYS_ALLOWED.has(view)) return true;
-    // ROLE_REPORTS_SETTINGS_V1 — экран-плитка настроек: настроенное окно
-    // решает само; ненастроенное — прежние строки ниже, как было.
-    const tileKey = SETTINGS_ROUTE_TILE[view];
     if (tileKey) { const lvl = tileConfigured(tileKey); if (lvl !== null) return lvl !== 'none'; }
+    // Ревью (колл-центр) — хаб отчётов открывается тем же правилом, что пункт
+    // меню: хоть одна видимая группа. Иначе роль, которой выдан один «Колл-центр»,
+    // видела пункт меню и упиралась в «Нет доступа».
+    if (view === 'reports-hub') return isModuleAllowed('reports-hub');
 
     if (view === 'patient-card')      return isModuleAllowed('patients');
     if (view === 'service-workspace') return isModuleAllowed('consultation');
