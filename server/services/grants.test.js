@@ -248,7 +248,13 @@ test('каждая строка справочника называет пров
     // закрыт: rpc: (ворота серверного вызова), route: (маршрут оболочки),
     // client: (предикат оболочки, сервер ключа не читает). Выдуманная приставка
     // читалась бы как обещание серверной проверки, которой нет.
-    if (r.enforced) assert.match(r.enforced, /^(rpc|route|client):\S/, 'непонятно, где проверяют ' + r.key + ': ' + r.enforced);
+    // ROLE_REPORTS_SETTINGS_V1 — четвёртая приставка, db: — запись в таблицу
+    // через /api/db, где реестр называет ключ (`write.grant`), а компилятор
+    // запросов его проверяет (server/db/write-grant.js).
+    if (r.enforced) assert.match(r.enforced, /^(rpc|route|client|db):\S/, 'непонятно, где проверяют ' + r.key + ': ' + r.enforced);
+    // Закрытая строка (только администратор) не предлагает ни одного уровня,
+    // кроме «Нет»: иначе экран обещал бы право, которого сервер не даст.
+    if (r.locked) assert.deepEqual(r.levels, ['none'], 'закрытая строка предлагает уровень: ' + r.key);
   }
   // Ключи действий стационара, на которые переведены ворота сервера.
   for (const k of ['inpatient.prescriptions', 'inpatient.marks', 'inpatient.vitals', 'inpatient.reviews', 'inpatient.services', 'inpatient.discharge', 'inpatient.requests', 'inpatient.beds', 'inpatient.patients', 'inpatient.history']) {
@@ -261,9 +267,25 @@ test('каждая строка справочника называет пров
   for (const k of ['crm.calls', 'crm.dial', 'crm.recording', 'crm.convert', 'custdev.list', 'custdev.rate']) {
     assert.ok(keys.has(k), 'сервер проверяет ' + k + ', а в справочнике его нет');
   }
+  // ROLE_REPORTS_SETTINGS_V1 — группы отчётов (их проверяют run_report,
+  // owner_report, cashier_report, callcenter_report и кабинет врача) и плитки
+  // настроек, чью запись проверяет компилятор запросов.
+  for (const k of ['reports.revenue', 'reports.cashier', 'reports.doctor_pay', 'reports.referrals', 'reports.services', 'reports.stock', 'reports.callcenter',
+    'settings.patient_categories', 'settings.payers', 'settings.referral_sources', 'settings.doctor_rates', 'settings.rooms', 'settings.company', 'settings.documents']) {
+    assert.ok(keys.has(k), 'сервер проверяет ' + k + ', а в справочнике его нет');
+  }
+  // Закрытые строки владельца: Telegram, телефония, воронка CRM, API-ключи, Роли.
+  const byKey = new Map(catalogRows().map((r) => [r.key, r]));
+  for (const k of ['settings.telegram', 'settings.telephony', 'settings.crm', 'settings.api', 'settings.roles', 'reports.telegram']) {
+    assert.ok(byKey.get(k) && byKey.get(k).locked, k + ' обязана быть закрытой строкой (только администратор)');
+  }
   assert.equal(levelAllows('edit', 'view'), true);
   assert.equal(levelAllows('view', 'edit'), false);
   // Восемнадцатый раздел — Cust Dev. Он выдавался миграцией 078, а на экране
-  // «Роли» его не было вовсе (CALLCENTER_OPERATOR_V1).
+  // «Роли» его не было вовсе (CALLCENTER_OPERATOR_V1). ROLE_REPORTS_SETTINGS_V1
+  // разделов не прибавил: группы отчётов и плитки настроек — окна прежних
+  // разделов «Отчёты» и «Настройки».
   assert.equal(CATALOG.length, 18, 'в справочнике восемнадцать разделов');
+  assert.equal(CATALOG.find((s) => s.key === 'reports').windows.length, 8, 'семь групп отчётов и закрытый Telegram');
+  assert.equal(CATALOG.find((s) => s.key === 'settings').windows.length, 25, 'плитки хаба настроек');
 });

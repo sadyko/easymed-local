@@ -426,7 +426,7 @@ function seedTeam() {
   db.prepare("INSERT INTO users (id,username,password_hash,role,full_name,custom_role_code) VALUES (4,'h','x','callcenter','Руководитель','head_cc')").run();
   db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('head_cc','Руководитель колл-центра','callcenter')").run();
   db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)')
-    .run('head_cc', JSON.stringify({ sections: ['crm'], levels: {}, grants: { 'crm.all': 'edit' } }));
+    .run('head_cc', JSON.stringify({ sections: ['crm'], levels: {}, grants: { 'crm.all': 'edit', 'reports.callcenter': 'view' } }));
   // Регистратура (1) завела три заявки: две ведёт Нигора (3), одну — никто.
   addLead(db, { day: '2026-08-17', localHour: 10, by: 1, assigned: 3, status: 'came' });
   addLead(db, { day: '2026-08-17', localHour: 11, by: 1, assigned: 3, status: 'no_show' });
@@ -460,6 +460,15 @@ test('CRM_HEAD_MERGE_TAGS_V1: операторы считаются по том�
 
 test('CRM_HEAD_MERGE_TAGS_V1: оператор видит только свою строку и свои/ничьи заявки; руководитель — всех', () => {
   const db = seedTeam();
+  // ROLE_REPORTS_SETTINGS_V1 — отчёт колл-центра теперь группа раздела
+  // «Отчёты»: у штатного оператора «Отчётов» нет (миграции их не выдавали, и
+  // хаб ему не открывался), значит и сервер отказывает, пока группу не выдали.
+  assert.throws(() => callcenterReport(db, RANGE, NIGORA), (e) => e.status === 403,
+    'оператор без группы «Колл-центр» получил отчёт');
+  const row = db.prepare("SELECT permissions FROM role_permissions WHERE role = 'callcenter'").get();
+  const perms = JSON.parse(row.permissions);
+  perms.grants = { ...(perms.grants || {}), 'reports.callcenter': 'view' };
+  db.prepare("UPDATE role_permissions SET permissions = ? WHERE role = 'callcenter'").run(JSON.stringify(perms));
   const mine = callcenterReport(db, RANGE, NIGORA);
   assert.deepEqual(mine.byOperator.map((o) => o.name), ['Оператор Нигора'], 'оператору отдали чужие цифры');
   assert.equal(mine.rows.length, 3, 'в строках Excel — чужая заявка (или не хватает своей/ничьей)');

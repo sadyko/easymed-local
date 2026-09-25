@@ -94,6 +94,10 @@ const FULL_ACCESS_ONLY = {
     // Весь /api/users стоит за requireRole(\'admin\') (server/routes/users.js):
     // настроенной роли сервер откажет на первом же запросе списка.
     'employees':          'EMPLOYEE_EDITOR — REST /api/users только для admin',
+    // ROLE_REPORTS_SETTINGS_V1 — ключи API только администратору (решение
+    // владельца 25.09): api_tokens читает и пишет только admin, а экран
+    // открывался голым `settings` и показывал пустой список.
+    'api-settings':       'ROLE_REPORTS_SETTINGS_V1 — ключи API только администратору',
     // Страница владельца — активация Symptex; кнопку в сайдбаре прячет тот же
     // ключ (admin.js: isModuleAllowed(\'public-site\')).
     'public-site':        'PUBLIC_SITE — страница владельца, всё через gw() от имени клиники',
