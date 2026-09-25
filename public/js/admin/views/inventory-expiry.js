@@ -227,6 +227,14 @@ async function paint() {
     }
 
     const res = data || {};
+    // PROCUREMENT_FILTERS_V1 (ревью M4) — выбранный товар, которого нет среди
+    // товаров отмеченных категорий, сбрасывается и запрос уходит заново: иначе
+    // отбор «товар И категория» молча отдавал пустоту, а в списке товаров
+    // выбранного уже не было — снять его было нечем.
+    if (state.productId && !(res.products || []).some((p) => String(p.id) === String(state.productId))) {
+        state.productId = '';
+        return paint();
+    }
     const rows = res.lots || [];
     const filtered = !!(state.productId || state.q.trim() || state.cats.length || state.lotState !== 'all');
     syncProducts(res.products || []);

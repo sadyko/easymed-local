@@ -502,3 +502,24 @@ test('отступы: пояснения и таблица — внутри .car
     assert.match(textOf(body), /Остаток по партиям — расчёт/);
     assert.equal(findAll(body, 'TABLE').length, 1);
 });
+
+// PROCUREMENT_FILTERS_V1 (ревью M4) — выбранный товар вне отмеченных категорий
+// сбрасывается: иначе отбор «товар И категория» молча отдавал пустоту, а в
+// списке товаров выбранного уже не было — и снять его было нечем.
+test('категории: выбранный товар не из отмеченных категорий сбрасывается на «Все товары»', async () => {
+    await withStore(async () => {
+        const root = await open({ lots: [EXPIRED, NO_DATE] });
+        const sel = findAll(root, 'SELECT')[0];
+        sel.value = '7';
+        sel.dispatchEvent({ type: 'change' });
+        await settle();
+        rpcCalls.length = 0;
+        ANSWER = answer([NO_DATE], { products: [{ id: 8, name: 'Бинт' }] });
+        catPill(root, 'dental').click();
+        await settle(60);
+        const last = rpcCalls[rpcCalls.length - 1];
+        assert.deepEqual(last.args, { categories: ['dental'] }, 'товар вне категории остался в отборе');
+        assert.equal(expiryQuery().product_id, undefined);
+        assert.equal(findAll(root, 'SELECT')[0].value, '', 'в списке товаров остался невидимый выбор');
+    });
+});
