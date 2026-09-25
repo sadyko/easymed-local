@@ -1133,7 +1133,7 @@ function renderCallcenterCharts(el, d) {
                            : h('div', { class: 'muted' }, 'Нет данных.')),
         ownerCard('Воронка заявок', 'чем заканчиваются обращения',
             ownerBars(d.byStatus.map((x) => ({ name: x.label, value: x.count })), { tip, total: k.total })),
-        ownerCard('Операторы', 'сколько завёл и сколько из них дошло до визита', ccOperators(d.byOperator)),
+        ownerCard('Операторы', 'сколько заявок ведёт, сколько завёл сам и сколько дошло до визита', ccOperatorTable(d.byOperator)),
         // CC_OPS_V1 — три карточки про «что делать сейчас».
         //
         // Конверсия по источникам стоит РЯДОМ с «Источниками» намеренно: одна
@@ -1503,6 +1503,30 @@ function ccForward(days, tip) {
         } }, i === 0 ? 'сег.' : d.day.slice(8)));
     });
     return h('div', null, wrap, labels);
+}
+
+// CRM_HEAD_MERGE_TAGS_V1 — «ОПЕРАТОРЫ» ТАБЛИЦЕЙ: кто ведёт, сколько завёл сам.
+//
+// Отчёт считает заявки по тому, кто их ВЕДЁТ (assigned_to), и рядом —
+// колонка «Создал»: сколько заявок человек завёл за период, где бы они потом
+// ни оказались. Два числа в одной полоске не читаются, поэтому таблица.
+// Оператору сервер отдаёт только его собственную строку; администратору и
+// руководителю колл-центра — всех.
+function ccOperatorTable(rows) {
+    if (!rows || !rows.length) return h('div', { class: 'muted' }, 'Нет данных.');
+    const num = (n) => h('td', { class: 'num' }, String(n || 0));
+    const tb = h('tbody');
+    for (const r of rows) {
+        tb.appendChild(h('tr', { 'data-cc-operator': String(r.user_id ?? '') },
+            h('td', { class: 'cell-strong' }, r.name),
+            num(r.count), num(r.created), num(r.came),
+            h('td', { class: 'num' }, (r.came_pct || 0) + '%')));
+    }
+    return h('div', { style: { overflowX: 'auto' } }, h('table', { class: 'tbl' },
+        h('thead', null, h('tr', null,
+            h('th', null, 'Оператор'), h('th', { class: 'num' }, 'Ведёт'), h('th', { class: 'num' }, 'Создал'),
+            h('th', { class: 'num' }, 'Дошли'), h('th', { class: 'num' }, 'Конверсия'))),
+        tb));
 }
 
 function ccOperators(rows) {

@@ -18,13 +18,16 @@ function offsetHours(db) {
   return db.prepare("SELECT CAST(strftime('%H','2026-08-17T12:00:00Z','localtime') AS INTEGER) - 12 AS h").get().h;
 }
 // Заявка, созданная в указанный МЕСТНЫЙ час указанного местного дня.
-function addLead(db, { day, localHour, status = 'came', by = 1, patient = null, source = 'call', service = null, scheduled = null }) {
+// CRM_HEAD_MERGE_TAGS_V1 — отчёт считает операторов по тому, кто ВЕДЁТ заявку
+// (assigned_to); по умолчанию ведёт тот, кто завёл — так прежние проверки
+// «кто сколько довёл» читаются как раньше.
+function addLead(db, { day, localHour, status = 'came', by = 1, assigned, patient = null, source = 'call', service = null, scheduled = null }) {
   const off = offsetHours(db);
   const utcH = ((localHour - off) % 24 + 24) % 24;
   const at = `${day}T${String(utcH).padStart(2, '0')}:30:00Z`;
-  return db.prepare(`INSERT INTO crm_requests (full_name, phone, source, status, created_by, created_at, patient_id, service_id, scheduled_date)
-                     VALUES (?,?,?,?,?,?,?,?,?)`)
-    .run('Лид', '998900000000', source, status, by, at, patient, service, scheduled).lastInsertRowid;
+  return db.prepare(`INSERT INTO crm_requests (full_name, phone, source, status, created_by, assigned_to, created_at, patient_id, service_id, scheduled_date)
+                     VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run('Лид', '998900000000', source, status, by, assigned === undefined ? by : assigned, at, patient, service, scheduled).lastInsertRowid;
 }
 
 function seed() {
@@ -411,5 +414,60 @@ test('CRM_LINKS_V1: в «зависших» колонка названа так
   const r = callcenterReport(db, RANGE, USER);
   assert.equal(r.stale.oldest[0].status, 'В обработке',
     'список зависших зовёт колонку по-своему — в клинике у одной колонки два имени');
+  db.close();
+});
+
+// ---------------------------------------------------------------------------
+// CRM_HEAD_MERGE_TAGS_V1 (2026-09-25) — ОПЕРАТОРЫ ПО ТОМУ, КТО ВЕДЁТ, И «СОЗДАЛ».
+// ---------------------------------------------------------------------------
+function seedTeam() {
+  const db = seed();
+  db.prepare("INSERT INTO users (id,username,password_hash,role,full_name) VALUES (3,'o1','x','callcenter','Оператор Нигора')").run();
+  db.prepare("INSERT INTO users (id,username,password_hash,role,full_name,custom_role_code) VALUES (4,'h','x','callcenter','Руководитель','head_cc')").run();
+  db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('head_cc','Руководитель колл-центра','callcenter')").run();
+  db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)')
+    .run('head_cc', JSON.stringify({ sections: ['crm'], levels: {}, grants: { 'crm.all': 'edit' } }));
+  // Регистратура (1) завела три заявки: две ведёт Нигора (3), одну — никто.
+  addLead(db, { day: '2026-08-17', localHour: 10, by: 1, assigned: 3, status: 'came' });
+  addLead(db, { day: '2026-08-17', localHour: 11, by: 1, assigned: 3, status: 'no_show' });
+  addLead(db, { day: '2026-08-17', localHour: 12, by: 1, assigned: null, status: 'in_process' });
+  // Нигора сама завела одну, её ведёт администратор (2).
+  addLead(db, { day: '2026-08-17', localHour: 13, by: 3, assigned: 2, status: 'came' });
+  return db;
+}
+const HEAD = { id: 4, role: 'callcenter', extra_roles: [], custom_role_code: 'head_cc' };
+const NIGORA = { id: 3, role: 'callcenter', extra_roles: [] };
+
+test('CRM_HEAD_MERGE_TAGS_V1: операторы считаются по тому, кто ведёт; «Создал» — отдельно', () => {
+  const db = seedTeam();
+  const r = callcenterReport(db, RANGE, USER);
+  const by = Object.fromEntries(r.byOperator.map((o) => [o.name, o]));
+  assert.equal(by['Оператор Нигора'].count, 2, 'Нигора ведёт две заявки');
+  assert.equal(by['Оператор Нигора'].came, 1);
+  assert.equal(by['Оператор Нигора'].created, 1, 'Нигора сама завела одну');
+  assert.equal(by['Sabirova Visola'].count, 0, 'регистратура ничего не ведёт');
+  assert.equal(by['Sabirova Visola'].created, 3, 'регистратура завела три');
+  assert.equal(by['Administrator'].count, 1);
+  assert.equal(by['Не назначен'].count, 1, 'общая стопка пропала — сумма не сходится');
+  assert.equal(r.byOperator.reduce((s, o) => s + o.count, 0), r.kpi.total);
+  const cols = r.columns;
+  assert.ok(cols.includes('Оператор') && cols.includes('Создал'));
+  const adminLead = r.rows.find((x) => x[cols.indexOf('Оператор')] === 'Administrator');
+  const row = Object.fromEntries(cols.map((c, i) => [c, adminLead[i]]));
+  assert.equal(row['Создал'], 'Оператор Нигора', 'в Excel «Создал» — не тот человек');
+  db.close();
+});
+
+test('CRM_HEAD_MERGE_TAGS_V1: оператор видит только свою строку и свои/ничьи заявки; руководитель — всех', () => {
+  const db = seedTeam();
+  const mine = callcenterReport(db, RANGE, NIGORA);
+  assert.deepEqual(mine.byOperator.map((o) => o.name), ['Оператор Нигора'], 'оператору отдали чужие цифры');
+  assert.equal(mine.rows.length, 3, 'в строках Excel — чужая заявка (или не хватает своей/ничьей)');
+  assert.ok(!mine.rows.some((x) => x[mine.columns.indexOf('Оператор')] === 'Administrator'));
+  assert.equal(mine.kpi.total, 4, 'итоги воронки — числа клиники, они общие');
+
+  const head = callcenterReport(db, RANGE, HEAD);
+  assert.equal(head.byOperator.length, 4, 'руководитель колл-центра видит не всех операторов');
+  assert.equal(head.rows.length, 4);
   db.close();
 });
