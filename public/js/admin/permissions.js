@@ -571,6 +571,23 @@ export function canCreatePatient() {
     return isModuleAllowed('registration');
 }
 
+// CRM_HEAD_MERGE_TAGS_V1 (2026-09-25) — «РУКОВОДИТЕЛЬ КОЛЛ-ЦЕНТРА» В ОБОЛОЧКЕ.
+//
+// Зеркало серверного предиката (server/services/crm/visibility.js
+// canSeeAllLeads): администратор ИЛИ право `crm.all` на «Изменение». Экран по
+// нему решает, рисовать ли поле «Оператор» (передать заявку), весь персонал в
+// «Ответственном» у задач, счётчик просроченных задач всей команды и кнопку
+// «Дубликаты». Опора — сервер: доску ему сужает компилятор запросов по тому же
+// ключу, и нарисованная здесь кнопка без права там ничего не откроет.
+//
+// Правило перехода здесь ОДНОСТОРОННЕЕ, как у crm.convert: ключ, которого роль
+// не настраивала (null), права НЕ даёт — прежде всё видел только
+// администратор, и молчание матрицы должно значить «как было».
+export function canSeeAllLeads() {
+    if (hasActorRole(['admin'])) return true;
+    return grantLevel('crm.all') !== null && grantAllows('crm.all', 'edit');
+}
+
 // PATIENT_TAB_PERMS_V1 — per-patient-card-tab gating. Default is VISIBLE: a role
 // only restricts tabs it explicitly lists (so existing roles see everything).
 //

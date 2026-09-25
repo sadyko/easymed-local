@@ -15,7 +15,7 @@ import { phoneInput } from '../phone-input.js?v=ph1';
 import { formatPhone } from '../phone-format.js';
 // CRM_OWNERSHIP_V1 — «кто я»: кому записывается взятая заявка.
 // CRM_REASSIGN_V1 — «я администратор»: кому видна раздача заявок.
-import { selfUserId, hasActorRole } from '../permissions.js';
+import { selfUserId, hasActorRole, canSeeAllLeads } from '../permissions.js';
 import { filterServicePool, serviceGroupCounts } from './service-search.js';   // CRM_SERVICE_FILTER_V1
 // CRM_LINKS_V1 — общий путь заведения карты: проверка дубля, штампы клиники и
 // филиала, привязка открытых заявок по телефону. Регистрация из CRM обязана
@@ -127,6 +127,26 @@ const KANBAN_PAGE = 20;
 // в поле «Оператор» человека, которому сервер откажет открыть доску, значило бы
 // потерять заявку — она уехала бы к тому, кто её не увидит.
 const BOARD_ROLES = ['admin', 'registrar', 'callcenter'];
+
+// CRM_HEAD_MERGE_TAGS_V1 — КТО ИЗ СОТРУДНИКОВ ВЕДЁТ ДОСКУ, С ДОПОЛНИТЕЛЬНЫМИ
+// РОЛЯМИ. Список операторов спрашивался `.in('role', BOARD_ROLES)` — по ОСНОВНОЙ
+// роли, и врач, которому колл-центр дали дополнительной ролью, в поле
+// «Оператор» не появлялся, хотя сервер (effectiveRoles) пускает его на доску.
+// extra_roles приходит из базы JSON-строкой ('["callcenter"]'), а из сессии —
+// массивом; понимаются оба. Своя роль клиники пишет в `role` свою ОСНОВУ
+// (CUSTOM_ROLES_V1), так что её люди попадают сюда по основе.
+function extraRolesOf(u) {
+    const x = u && u.extra_roles;
+    if (Array.isArray(x)) return x;
+    if (typeof x === 'string' && x.trim().startsWith('[')) {
+        try { const a = JSON.parse(x); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+    }
+    return [];
+}
+export function boardStaff(users) {
+    return (Array.isArray(users) ? users : []).filter((u) => u && (BOARD_ROLES.includes(u.role)
+        || extraRolesOf(u).some((r) => BOARD_ROLES.includes(r))));
+}
 
 // CRM_FILTERS_V1 — источник и период сужают доску. Живут в state, потому что
 // paintBody() перерисовывает только тело, без повторного запроса к базе.
@@ -1672,7 +1692,14 @@ async function paint() {
         // правило, что стоит на сервере: schema-registry сужает доску по
         // assigned_to всем, кроме роли admin. Раздавать заявки может лишь тот,
         // кто видит их все, — иначе «передал» означало бы «потерял».
-        const canReassign = hasActorRole(['admin']);
+        //
+        // CRM_HEAD_MERGE_TAGS_V1 — «всё видит» теперь не только администратор,
+        // но и руководитель колл-центра (право `crm.all`): сервер снимает ему
+        // сужение доски тем же ключом, так что передавать заявки он может с
+        // тем же смыслом. Удалять задачи (как и заявки) — по-прежнему только
+        // администратору: это отдельный флаг ниже.
+        const canReassign = canSeeAllLeads();
+        const canDeleteTasks = hasActorRole(['admin']);
         let operSel = null;
         // CRM_DEDUP_SEARCH_TASKS_V1 — тот же список персонала нужен полю
         // «Ответственный» у задач. Спрашивается ОДИН раз и только у
@@ -1703,8 +1730,10 @@ async function paint() {
             // Нынешний хозяин известен ДО ответа сервера: окно можно сохранить в
             // первую же секунду, и поле обязано к этому моменту говорить правду.
             fillOper(ownerId ? [{ id: ownerId, full_name: ownerName }] : []);
-            staffForTasks = supabase.from('users').select('id, full_name, role')
-                .in('role', BOARD_ROLES).eq('is_active', 1).order('full_name')
+            // CRM_HEAD_MERGE_TAGS_V1 — все активные, а отбор по ролям — boardStaff:
+            // дополнительная роль колл-центра тоже делает человека оператором.
+            staffForTasks = supabase.from('users').select('id, full_name, role, extra_roles')
+                .eq('is_active', 1).order('full_name')
                 .then(({ data, error }) => {
                     if (error) {
                         // Список не загрузился — поле остаётся с текущим хозяином, а не
@@ -1713,7 +1742,7 @@ async function paint() {
                         toast(trf('Не удалось загрузить список сотрудников: {msg}', { msg: error.message }), 'fail');
                         return [];
                     }
-                    const pool = (data || []).slice();
+                    const pool = boardStaff(data || []).map((p) => ({ id: p.id, full_name: p.full_name }));
                     // Уволенного (is_active = 0) в списке нет, а его заявки есть.
                     // Без этой строки открытие такой карточки уже само по себе
                     // означало бы «снять оператора» при ближайшем сохранении.
@@ -2515,7 +2544,7 @@ async function paint() {
                 (isEdit && r.id != null) ? field('Задачи', crmTasksBlock({
                     request: r,
                     me: selfUserId() != null ? { id: selfUserId(), full_name: (window.easymed.state.user || {}).full_name || '' } : null,
-                    isAdmin: canReassign,
+                    isAdmin: canDeleteTasks,   // CRM_HEAD_MERGE_TAGS_V1 — удаляет только администратор
                     staff: staffForTasks,
                     onChange: () => {
                         // бейдж меню и метки на доске — сразу, не дожидаясь опроса

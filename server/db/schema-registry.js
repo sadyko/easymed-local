@@ -50,7 +50,13 @@ export const REGISTRY = {
     // Ограничение накладывает компилятор запросов (query-compiler.js), то есть
     // оно действует на ВСЁ сразу: доску, список, поиск, выгрузку и отчёт. Прятать
     // чужое на экранах поштучно означало бы забыть об этом в седьмом.
-    scope: { column: 'assigned_to', allRoles: ['admin'], nullVisible: true },
+    //
+    // CRM_HEAD_MERGE_TAGS_V1 (2026-09-25) — «руководитель колл-центра»: доску
+    // целиком видит ещё и тот, чьей роли выдано право `crm.all` («Видит все
+    // заявки и передаёт их» в «Настройки → Роли»). Задачи (crm_tasks) и метки
+    // (crm_request_tags) ограничены через родителя и получают это сами.
+    // Удаление заявки от права не зависит: write.delete — только admin.
+    scope: { column: 'assigned_to', allRoles: ['admin'], allGrant: 'crm.all', nullVisible: true },
   },
 
   // CRM_MULTI_SERVICE_V1 (mig 057) — the services a call-centre request covers,

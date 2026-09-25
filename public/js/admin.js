@@ -20,6 +20,7 @@ import {
     isModuleAllowed, isRouteAllowed, actorRoleCodes,   // actorRoleCodes — ROLE_HOME_V1
     setFullAccess, setEffectiveFromRole, setEffectiveFromRoles, currentRoleLabel,
     scopedProviderId, ownDepartmentId, PERSONAL_VIEWS,   // ownDepartmentId / PERSONAL_VIEWS — MY_STOCK_V1
+    canSeeAllLeads,   // CRM_HEAD_MERGE_TAGS_V1 — счётчик задач всей команды руководителю колл-центра
 } from './admin/permissions.js';
 import {
     verifyLogin, actorFromUser,
@@ -1511,7 +1512,9 @@ async function loadNavCounts() {
         if (!roles.length || roles.some((r) => r === 'admin' || r === 'registrar' || r === 'callcenter')) {
             try {
                 const me = (state.user && state.user.id) || null;
-                const n = await overdueTaskCount({ me, isAdmin: roles.includes('admin') });
+                // CRM_HEAD_MERGE_TAGS_V1 — «все просроченные» видит и руководитель
+                // колл-центра (`crm.all`): сервер отдаёт ему задачи всей доски.
+                const n = await overdueTaskCount({ me, isAdmin: roles.includes('admin') || (roles.length > 0 && canSeeAllLeads()) });
                 navCounts.crm = n;
             } catch (e) {
                 console.warn('[nav counts] crm tasks:', e.message);

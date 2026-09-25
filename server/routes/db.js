@@ -122,7 +122,7 @@ function crmEvidenceTargets(db, meta, body, user) {
   if (!meta || meta.table !== 'visit_services' || meta.op !== 'update') return [];
   if (!hasEvidenceStatus(body)) return [];
   try {
-    const sel = compile({ table: body.table, op: 'select', columns: 'id', filters: body.filters }, user);
+    const sel = compile({ table: body.table, op: 'select', columns: 'id', filters: body.filters }, user, { db });
     return db.prepare(sel.sql).all(...sel.params).map((r) => r.id);
   } catch { return []; }   // отбор не сложился — заявке это не повод падать
 }
@@ -141,7 +141,7 @@ export function dbRoutes(db) {
   r.post('/', (req, res) => {
     let compiled;
     try {
-      compiled = compile(req.body || {}, req.user);
+      compiled = compile(req.body || {}, req.user, { db });   // CRM_HEAD_MERGE_TAGS_V1 — база нужна праву «crm.all»
     } catch (e) {
       if (e instanceof CompileError) {
         const status = e.status || 400;
@@ -256,7 +256,7 @@ export function dbRoutes(db) {
         // is unreliable on the DO UPDATE path).
         const vals = req.body.values || {};
         const filters = meta.conflictTarget.map((c) => ({ col: c, op: 'eq', val: vals[c] }));
-        const sel = compile({ table: meta.table, op: 'select', columns: '*', filters }, req.user);
+        const sel = compile({ table: meta.table, op: 'select', columns: '*', filters }, req.user, { db });
         const rows = db.prepare(sel.sql).all(...sel.params);
         return respondRows(res, rows, meta, null);
       }
@@ -272,7 +272,7 @@ export function dbRoutes(db) {
         // Re-select the affected rows using the SAME filters that scoped the
         // update (never the whole table) so `returning` reflects only what
         // was actually touched.
-        const sel = compile({ table: req.body.table, op: 'select', columns: '*', filters: req.body.filters }, req.user);
+        const sel = compile({ table: req.body.table, op: 'select', columns: '*', filters: req.body.filters }, req.user, { db });
         const rows = db.prepare(sel.sql).all(...sel.params);
         return respondRows(res, rows, meta, null);
       }
@@ -403,7 +403,7 @@ export function reshape(rows, meta) {   // exported for tests (NESTED_EMBED_V1)
 // for `count:'exact'` pagination. Reuses the compiler so the count is
 // governed by the exact same allow-list as the page it's counting.
 function countMatching(db, body, user) {
-  const compiled = compile({ table: body.table, op: 'select', columns: 'id', filters: body.filters }, user);
+  const compiled = compile({ table: body.table, op: 'select', columns: 'id', filters: body.filters }, user, { db });
   const row = db.prepare(`SELECT COUNT(*) AS n FROM (${compiled.sql})`).get(...compiled.params);
   return row.n;
 }

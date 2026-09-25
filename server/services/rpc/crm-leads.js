@@ -11,7 +11,8 @@
 // оператора», — без имени, номера, стадии, хозяина и кнопки «Открыть».
 
 import { leadsForPhone } from '../crm/lead-from-call.js';
-import { canRead, rowScope, readableColumns } from '../../db/schema-registry.js';
+import { canRead, readableColumns } from '../../db/schema-registry.js';
+import { leadVisible } from '../crm/visibility.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { digitsOf, nameKey, leadMatchesQuery, phoneKey, isWholeUzPhone, uzLocalDigits, phoneLikePattern, MIN_PHONE_DIGITS }
   from '../../../public/js/admin/views/crm-phone-match.js';
 import { effectiveRoles } from '../roles.js';
@@ -26,14 +27,13 @@ function requireBoardRead(user) {
   }
 }
 
-/** Видна ли заявка этому человеку — то же правило, что у компилятора запросов. */
-export function leadVisibleTo(user, assignedTo) {
-  const sc = rowScope('crm_requests');
-  if (!sc) return true;
-  const roles = effectiveRoles(user);
-  if ((sc.allRoles || []).some((r) => roles.includes(r))) return true;
-  if (assignedTo == null) return !!sc.nullVisible;
-  return Number(assignedTo) === Number(user && user.id);
+/**
+ * Видна ли заявка этому человеку — то же правило, что у компилятора запросов.
+ * CRM_HEAD_MERGE_TAGS_V1: с базой — чтобы право `crm.all` (руководитель
+ * колл-центра) открывало поиск и проверку дубля так же, как доску.
+ */
+export function leadVisibleTo(db, user, assignedTo) {
+  return leadVisible(db, user, assignedTo);
 }
 
 /**
@@ -59,7 +59,7 @@ export function crmLeadsByPhone(db, args, user) {
   const out = [];
   let foreign = false;
   for (const r of rows) {
-    if (!leadVisibleTo(user, r.assigned_to)) { foreign = true; continue; }
+    if (!leadVisibleTo(db, user, r.assigned_to)) { foreign = true; continue; }
     if (out.length >= 20) continue;
     out.push({
       id: r.id,
@@ -114,7 +114,7 @@ export function crmSearch(db, args, user) {
      ORDER BY r.id DESC`).all(...(byPhone ? [pattern] : []));
   const ids = [];
   for (const r of cand) {
-    if (!leadVisibleTo(user, r.assigned_to)) continue;
+    if (!leadVisibleTo(db, user, r.assigned_to)) continue;
     if (!leadMatchesQuery(r, q)) continue;
     ids.push(r.id);
     if (ids.length >= limit) break;
