@@ -19,10 +19,18 @@ export function canSeeAllLeads(db, user) {
   return scopeLifted(rowScope('crm_requests'), user, db);
 }
 
-/** Видна ли заявка с этим хозяином — то же правило, что у компилятора запросов. */
-export function leadVisible(db, user, assignedTo) {
+/**
+ * Видна ли заявка с этим хозяином — то же правило, что у компилятора запросов.
+ *
+ * Ревью I4: `lifted` — ответ canSeeAllLeads, посчитанный ОДИН раз на запрос.
+ * Вызывающий, который перебирает сотни строк (поиск, проверка дубля), обязан
+ * его передать: право читается из role_permissions несколькими запросами, и
+ * на каждую строку поиск оператора становился в десятки раз медленнее.
+ */
+export function leadVisible(db, user, assignedTo, { lifted } = {}) {
   const sc = rowScope('crm_requests');
-  if (!sc || scopeLifted(sc, user, db)) return true;
+  if (!sc) return true;
+  if (lifted === undefined ? scopeLifted(sc, user, db) : lifted) return true;
   if (assignedTo == null) return !!sc.nullVisible;
   return Number(assignedTo) === Number(user && user.id);
 }

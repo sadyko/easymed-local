@@ -122,7 +122,11 @@ function starColumns(table) {
 // Ограничение накладывается и на ЧТЕНИЕ, и на правку, и на удаление: право
 // видеть и право менять здесь одно и то же — чужую заявку нельзя ни открыть,
 // ни исправить, ни закрыть.
-function scopeFor(table, user, db) {
+// `qual` — чем квалифицировать колонки строки: имя таблицы у базовой таблицы
+// запроса и ПСЕВДОНИМ соединения у embed'а (CRM_HEAD_MERGE_TAGS_V1, ревью I5:
+// присоединённая таблица с владельцем подчиняется тому же правилу, что и
+// запрошенная напрямую).
+function scopeFor(table, user, db, qual = table) {
   const sc = rowScope(table);
   if (!sc) return null;
   // CRM_DEDUP_SEARCH_TASKS_V1 — ОГРАНИЧЕНИЕ ЧЕРЕЗ РОДИТЕЛЯ. Строка-потомок
@@ -133,11 +137,21 @@ function scopeFor(table, user, db) {
   if (sc.via) {
     const parent = scopeFor(sc.via.table, user, db);
     if (!parent) return null;
-    return {
-      clause: `"${table}"."${sc.via.fk}" IN (SELECT "${sc.via.table}"."id" FROM "${sc.via.table}" WHERE ${parent.clause})`,
-      params: parent.params,
-      via: { ...sc.via, parent },
-    };
+    const viaClause = `"${qual}"."${sc.via.fk}" IN (SELECT "${sc.via.table}"."id" FROM "${sc.via.table}" WHERE ${parent.clause})`;
+    // CRM_HEAD_MERGE_TAGS_V1 (ревью M1) — `orOwn`: строка-потомок видна ещё и
+    // тому, кто в ней назван (задача — своему исполнителю), даже если заявку
+    // ведёт другой оператор: иначе задача, переехавшая при слиянии на чужую
+    // карточку, пропадала бы у того, кому её поручили. Вставка по-прежнему —
+    // только на ВИДИМУЮ заявку (guardInsert смотрит на via.parent).
+    if (sc.orOwn) {
+      const me = user && Number.isFinite(Number(user.id)) ? Number(user.id) : 0;
+      return {
+        clause: `(${viaClause} OR "${qual}"."${sc.orOwn}" = ?)`,
+        params: [...parent.params, me],
+        via: { ...sc.via, parent },
+      };
+    }
+    return { clause: viaClause, params: parent.params, via: { ...sc.via, parent } };
   }
   if (!sc.column) return null;
   // CRM_HEAD_MERGE_TAGS_V1 — «кто видит всё» решают роли из кода (allRoles) И
@@ -148,9 +162,9 @@ function scopeFor(table, user, db) {
   // Сессии без номера пользователя (их не бывает у живого входа) остаются с
   // самым узким доступом: ничьи строки да ничего больше.
   const me = user && Number.isFinite(Number(user.id)) ? Number(user.id) : 0;
-  const parts = [`"${table}"."${sc.column}" = ?`];
+  const parts = [`"${qual}"."${sc.column}" = ?`];
   const params = [me];
-  if (sc.nullVisible) parts.push(`"${table}"."${sc.column}" IS NULL`);
+  if (sc.nullVisible) parts.push(`"${qual}"."${sc.column}" IS NULL`);
   return { clause: '(' + parts.join(' OR ') + ')', params };
 }
 
@@ -202,13 +216,21 @@ function validateTable(name) {
 }
 
 function compileSelect(desc, table, user, db) {
-  const { projection, joins, embeds, joined } = parseColumns(desc.columns, table);
+  // CRM_HEAD_MERGE_TAGS_V1 (ревью I5) — СОЕДИНЕНИЕ ПОДЧИНЯЕТСЯ ПРАВИЛУ
+  // ПРИСОЕДИНЯЕМОЙ ТАБЛИЦЫ. Embed `crm_requests(full_name, phone)` из строки
+  // услуги отдавал имя и номер чужой заявки: ограничение по владельцу стояло
+  // только на запрошенной таблице. Теперь условие видимости встаёт в ON
+  // соединения — невидимый родитель приходит как null (у `!inner` строка
+  // выпадает). Параметры соединений идут в SQL раньше WHERE, поэтому копятся
+  // отдельно и ставятся первыми.
+  const jctx = { scope: (t, alias) => scopeFor(t, user, db, alias), params: [] };
+  const { projection, joins, embeds, joined } = parseColumns(desc.columns, table, jctx);
   // EMBED_FILTER_V1 — фильтр по колонке присоединённой таблицы может ПОТРЕБОВАТЬ
   // соединения, которого нет в проекции (см. compileTerm). Поэтому WHERE
   // собирается ДО того, как строка SQL склеена: compileFilters дописывает
   // недостающие JOIN'ы в `joins`, и только потом они попадают в текст запроса —
   // между FROM и WHERE, как того требует синтаксис.
-  const { clause, params } = compileFilters(desc.filters, table, { qualify: true, joins, joined });
+  const { clause, params } = compileFilters(desc.filters, table, { qualify: true, joins, joined, jctx });
 
   // CRM_OWNERSHIP_V1 — ограничение по владельцу дописывается к WHERE ПОСЛЕ
   // фильтров экрана и снять его запросом нельзя: оно не из descriptor'а.
@@ -219,6 +241,7 @@ function compileSelect(desc, table, user, db) {
   let sql = `SELECT ${projection.join(', ')} FROM "${table}"`;
   for (const j of joins) sql += ` ${j}`;
   if (where) sql += ` WHERE ${where}`;
+  if (jctx.params.length) params.unshift(...jctx.params);
 
   if (desc.order !== undefined) {
     if (!Array.isArray(desc.order)) throw new CompileError('order must be an array', 400);
@@ -328,7 +351,7 @@ function compileEmbed(parentTable, parentQual, parentPath, token, out) {
     // менять смысл запроса задним числом.
     out.joined.set(path, { table: embed.table, inner: bang === '!inner' });
     out.joins.push(`${bang === '!inner' ? 'INNER' : 'LEFT'} JOIN "${embed.table}" AS "${path}"`
-      + ` ON "${parentQual}"."${embed.fk}" = "${path}"."id"`);
+      + ` ON "${parentQual}"."${embed.fk}" = "${path}"."id"` + joinScope(out.jctx, embed.table, path));
   }
   for (const sub of splitTopLevel(subcolsRaw)) {
     if (EMBED_TOKEN.test(sub)) { compileEmbed(embed.table, path, path, sub, out); continue; }
@@ -349,7 +372,17 @@ function compileEmbed(parentTable, parentQual, parentPath, token, out) {
 // is ALWAYS aliased ("beds" AS "from"), which lets two embeds of the same
 // table coexist without a duplicate-join SQL error and keeps every embed's
 // qualifier equal to its output name.
-function parseColumns(columns, table) {
+// CRM_HEAD_MERGE_TAGS_V1 — « AND <правило видимости>» для ON соединения с
+// таблицей, у которой есть владелец; пусто, если правила нет или оно снято.
+function joinScope(jctx, embedTable, alias) {
+  if (!jctx || !jctx.scope) return '';
+  const sc = jctx.scope(embedTable, alias);
+  if (!sc) return '';
+  jctx.params.push(...sc.params);
+  return ` AND ${sc.clause}`;
+}
+
+function parseColumns(columns, table, jctx = null) {
   // easymed's views pass multi-line template-string selects; supabase-js strips
   // whitespace from the select string before parsing, and so do we (column and
   // relation identifiers can never contain whitespace).
@@ -371,7 +404,7 @@ function parseColumns(columns, table) {
 
   for (const token of tokens) {
     if (EMBED_TOKEN.test(token)) {
-      compileEmbed(table, table, '', token, { joins, projection, embedsMap, joined });
+      compileEmbed(table, table, '', token, { joins, projection, embedsMap, joined, jctx });
       continue;
     }
 
@@ -442,7 +475,7 @@ function resolveEmbedFilter(f, table, env) {
     // базовой таблице и смотрит в первичный ключ родителя), поэтому строк
     // после соединения не прибавляется.
     env.joined.set(rel, { table: embed.table, inner: true });
-    env.joins.push(`INNER JOIN "${embed.table}" AS "${rel}" ON "${table}"."${embed.fk}" = "${rel}"."id"`);
+    env.joins.push(`INNER JOIN "${embed.table}" AS "${rel}" ON "${table}"."${embed.fk}" = "${rel}"."id"` + joinScope(env.jctx, embed.table, rel));
   }
   return `"${rel}"."${leaf}"`;
   function reject() { throw new CompileError('unknown filter column', 400); }
@@ -503,14 +536,14 @@ function compileTerm(f, table, qualify, env = null) {
 // OR groups are wrapped in parens and AND'd with the rest. A group whose every
 // term is tenancy-dropped contributes nothing (e.g. the local
 // `company_id.is.null,company_id.eq.<cid>` collapses to "no constraint").
-function compileFilters(filters, table, { qualify = false, joins = null, joined = null } = {}) {
+function compileFilters(filters, table, { qualify = false, joins = null, joined = null, jctx = null } = {}) {
   if (filters !== undefined && !Array.isArray(filters)) {
     throw new CompileError('filters must be an array', 400);
   }
   // env существует только у SELECT: только он строит соединения (см.
   // resolveEmbedFilter). У UPDATE/DELETE его нет, и точечный фильтр там не
   // компилируется — форма их SQL не меняется.
-  const env = (joins && joined) ? { joins, joined } : null;
+  const env = (joins && joined) ? { joins, joined, jctx } : null;
   const params = [];
   const clauses = [];
   for (const f of filters || []) {

@@ -355,8 +355,11 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         const ids = [...new Set((visitIds || []).filter(Boolean))];
         if (!ids.length) return;
         for (let i = 0; i < ids.length; i += CRM_LINK_CHUNK) {
-            const { data, error } = await supabase.from('crm_request_services')
-                .select('visit_id, request_id').in('visit_id', ids.slice(i, i + CRM_LINK_CHUNK));
+            // CRM_HEAD_MERGE_TAGS_V1 (ревью I5) — не /api/db, а RPC: строки
+            // заявок видны только вместе со своей заявкой, а метку смотрят и
+            // регистратура с врачами, которые заявок не ведут. Сервер отдаёт им
+            // ровно факт — номер визита и номер заявки (crm_visit_links).
+            const { data, error } = await supabase.rpc('crm_visit_links', { visit_ids: ids.slice(i, i + CRM_LINK_CHUNK) });
             if (error) { state.failed = [...new Set([...state.failed, tr('заявки')])]; return; }
             for (const l of (data || [])) {
                 // Заявка на три дня — три строки и три визита; на ОДИН визит их

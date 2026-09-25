@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { S, CALLS, mk, walk, textOf, byAttr, byClass, tick, button } from './crm-harness.mjs';
+import { S, CALLS, mk, walk, textOf, byAttr, byClass, tick, button, TOASTS } from './crm-harness.mjs';
 import { boardConfig, shapeConfig, validateTags } from '../crm-settings-logic.js?v=crmcfg1';
 
 const { renderCrm, groupLeadTags } = await import('../views/crm.js');
@@ -117,6 +117,25 @@ test('окно заявки: метки переключаются, при со�
   assert.deepEqual(del[0].filters.find((f) => f.col === 'tag_key').val, ['old']);
   assert.equal(del[0].filters.find((f) => f.col === 'request_id').val, 1);
   assert.deepEqual(S.leadTags.filter((t) => t.request_id === 1).map((t) => t.tag_key).sort(), ['repeat', 'vip']);
+  window.easymed.state.user = null;
+});
+
+test('ревью M4: метку в ту же секунду поставил коллега (UNIQUE) — это успех, а не ошибка', async () => {
+  const root = await board();
+  const card = cardOf(root, 'Юсупов');
+  card.dispatchEvent({ type: 'click', target: card, currentTarget: card, preventDefault() {}, stopPropagation() {} });
+  await tick(60);
+  const modal = document.body.children.find((n) => String(n.className).includes('modal'));
+  const box = byAttr(modal, 'data-card-tags')[0];
+  byAttr(box, 'data-tag-pick').find((n) => n.getAttribute('data-tag-pick') === 'vip').click();
+  S.tagInsertConflict = true;
+  TOASTS.length = 0;
+  walk(modal).find((n) => n.tagName === 'BUTTON' && textOf(n).includes('Сохранить')).click();
+  await tick(150);
+  S.tagInsertConflict = false;
+  assert.ok(!TOASTS.some((t) => /Метки не сохранены/.test(t)), 'гонка двух операторов показана как ошибка: ' + JSON.stringify(TOASTS));
+  assert.ok(CALLS.some((c) => c.table === 'crm_request_tags' && c.op === 'select' && (c.filters || []).some((f) => f.col === 'request_id' && f.val === 2)),
+    'после отказа не сверились с базой');
   window.easymed.state.user = null;
 });
 

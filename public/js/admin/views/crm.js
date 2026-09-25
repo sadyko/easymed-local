@@ -1787,7 +1787,14 @@ async function paint() {
             const drop = tagsHad.filter((k) => !tagsPicked.has(k));
             if (add.length) {
                 const { error } = await supabase.from('crm_request_tags').insert(add.map((k) => ({ request_id: requestId, tag_key: k })));
-                if (error) { toast(trf('Метки не сохранены: {msg}', { msg: error.message }), 'fail'); return; }
+                // Ревью M4 — ту же метку в ту же секунду поставил коллега: сервер
+                // отвечает «уже есть» (UNIQUE, 409). Это не ошибка, а нужный
+                // итог — проверяем по базе, что все метки на месте, и молчим.
+                if (error) {
+                    const { data: now } = await supabase.from('crm_request_tags').select('tag_key').eq('request_id', requestId);
+                    const have = new Set((now || []).map((x) => x.tag_key));
+                    if (!add.every((k) => have.has(k))) { toast(trf('Метки не сохранены: {msg}', { msg: error.message }), 'fail'); return; }
+                }
             }
             if (drop.length) {
                 const { error } = await supabase.from('crm_request_tags').delete().eq('request_id', requestId).in('tag_key', drop);

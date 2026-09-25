@@ -1912,6 +1912,10 @@ test('руководитель колл-центра (crm.all) видит «Оп
     assert.ok(!walk(modal2).some((n) => n.getAttribute && n.getAttribute('data-task-delete')),
       'руководителю показали удаление задач — это право администратора');
 
+    // Ревью M6 — закрытый раздел CRM закрывает и «видит все заявки», как на сервере.
+    perms.setEffectiveFromRole({ name: 'callcenter', permissions: { sections: ['crm'], grants: { crm: 'none', 'crm.all': 'edit' } } });
+    assert.strictEqual(perms.canSeeAllLeads(), false, 'закрытый раздел CRM не закрыл «видит все заявки»');
+
     // Без права — как было: поля нет.
     perms.setEffectiveFromRole({ name: 'callcenter', permissions: { sections: ['crm'], grants: { 'crm.all': 'none' } } });
     assert.strictEqual(perms.canSeeAllLeads(), false);

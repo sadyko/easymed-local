@@ -57,32 +57,37 @@ async function dbCall(base, cookie, desc) {
 }
 const ids = (r) => (r.json.data || []).map((x) => x.id).sort((a, b) => a - b);
 
-test('чтение: Б видит задачи только своих и ничьих заявок; администратор — все', async (t) => {
+// CRM_HEAD_MERGE_TAGS_V1 (ревью M1, 2026-09-25) — ПРАВИЛО УТОЧНЕНО: задача,
+// ПОРУЧЕННАЯ Б, видна Б и на заявке А (orOwn: assignee_id). После слияния
+// дублей задачи переезжают на карточку, которую может вести другой оператор,
+// и поручение не должно пропадать у исполнителя. Чужие задачи на чужой заявке
+// (№10) Б по-прежнему не видны, а вставка — только на видимую заявку.
+test('чтение: Б видит задачи своих и ничьих заявок и порученные ему; администратор — все', async (t) => {
   const { db, server, base } = await start();
   t.after(() => { server.close(); db.close(); });
   const b = await login(base, 'opb');
   const all = { table: 'crm_tasks', op: 'select', columns: 'id, text', filters: [] };
-  assert.deepEqual(ids(await dbCall(base, b, all)), [12, 13], 'Б прочитал задачи заявки А');
+  assert.deepEqual(ids(await dbCall(base, b, all)), [11, 12, 13], 'Б прочитал чужую задачу заявки А или потерял свою');
   // и по номеру задачи тоже не достать
   const byId = await dbCall(base, b, { ...all, filters: [{ col: 'id', op: 'eq', val: 10 }] });
   assert.deepEqual(byId.json.data, []);
   // счётчик (count) идёт тем же путём
   const cnt = await dbCall(base, b, { ...all, count: 'exact', filters: [{ col: 'assignee_id', op: 'eq', val: 22 }] });
-  assert.equal(cnt.json.count, 2, 'в счётчик Б попала задача на заявке А');
+  assert.equal(cnt.json.count, 3, 'в счётчике Б нет задачи, порученной ему на заявке А');
   const boss = await login(base, 'boss');
   assert.deepEqual(ids(await dbCall(base, boss, all)), [10, 11, 12, 13]);
 });
 
-test('правка и удаление: чужие задачи Б не отметить, не переназначить', async (t) => {
+test('правка и удаление: чужие задачи Б не отметить, не переназначить; порученную ему — отметить', async (t) => {
   const { db, server, base } = await start();
   t.after(() => { server.close(); db.close(); });
   const b = await login(base, 'opb');
-  for (const id of [10, 11]) {
-    await dbCall(base, b, { table: 'crm_tasks', op: 'update', values: { done_at: '2026-09-23T10:00:00Z', assignee_id: 22 },
-      filters: [{ col: 'id', op: 'eq', val: id }] });
-    const row = db.prepare('SELECT done_at, assignee_id FROM crm_tasks WHERE id = ?').get(id);
-    assert.equal(row.done_at, null, 'Б отметил задачу заявки А: ' + id);
-  }
+  await dbCall(base, b, { table: 'crm_tasks', op: 'update', values: { done_at: '2026-09-23T10:00:00Z', assignee_id: 22 },
+    filters: [{ col: 'id', op: 'eq', val: 10 }] });
+  assert.equal(db.prepare('SELECT done_at FROM crm_tasks WHERE id = 10').get().done_at, null, 'Б отметил чужую задачу заявки А');
+  await dbCall(base, b, { table: 'crm_tasks', op: 'update', values: { done_at: '2026-09-23T10:00:00Z' },
+    filters: [{ col: 'id', op: 'eq', val: 11 }] });
+  assert.ok(db.prepare('SELECT done_at FROM crm_tasks WHERE id = 11').get().done_at, 'Б не смог закрыть порученную ему задачу');
   assert.equal(db.prepare('SELECT assignee_id FROM crm_tasks WHERE id = 10').get().assignee_id, 21, 'Б переназначил задачу А');
   const own = await dbCall(base, b, { table: 'crm_tasks', op: 'update', values: { done_at: '2026-09-23T10:00:00Z' },
     filters: [{ col: 'id', op: 'eq', val: 13 }] });

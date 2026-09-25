@@ -12,7 +12,7 @@
 
 import { leadsForPhone } from '../crm/lead-from-call.js';
 import { canRead, readableColumns } from '../../db/schema-registry.js';
-import { leadVisible } from '../crm/visibility.js';   // CRM_HEAD_MERGE_TAGS_V1
+import { leadVisible, canSeeAllLeads } from '../crm/visibility.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { digitsOf, nameKey, leadMatchesQuery, phoneKey, isWholeUzPhone, uzLocalDigits, phoneLikePattern, MIN_PHONE_DIGITS }
   from '../../../public/js/admin/views/crm-phone-match.js';
 import { effectiveRoles } from '../roles.js';
@@ -32,8 +32,8 @@ function requireBoardRead(user) {
  * CRM_HEAD_MERGE_TAGS_V1: с базой — чтобы право `crm.all` (руководитель
  * колл-центра) открывало поиск и проверку дубля так же, как доску.
  */
-export function leadVisibleTo(db, user, assignedTo) {
-  return leadVisible(db, user, assignedTo);
+export function leadVisibleTo(db, user, assignedTo, opts) {
+  return leadVisible(db, user, assignedTo, opts);
 }
 
 /**
@@ -58,8 +58,9 @@ export function crmLeadsByPhone(db, args, user) {
   // не завести дубль, и не больше, чем разрешает CRM_OWNERSHIP_V1.
   const out = [];
   let foreign = false;
+  const lifted = canSeeAllLeads(db, user);   // ревью I4 — один раз на запрос, а не на строку
   for (const r of rows) {
-    if (!leadVisibleTo(db, user, r.assigned_to)) { foreign = true; continue; }
+    if (!leadVisibleTo(db, user, r.assigned_to, { lifted })) { foreign = true; continue; }
     if (out.length >= 20) continue;
     out.push({
       id: r.id,
@@ -113,8 +114,9 @@ export function crmSearch(db, args, user) {
      ${byPhone ? 'WHERE r.phone LIKE ?' : ''}
      ORDER BY r.id DESC`).all(...(byPhone ? [pattern] : []));
   const ids = [];
+  const lifted = canSeeAllLeads(db, user);   // ревью I4 — один раз на запрос, а не на строку
   for (const r of cand) {
-    if (!leadVisibleTo(db, user, r.assigned_to)) continue;
+    if (!leadVisibleTo(db, user, r.assigned_to, { lifted })) continue;
     if (!leadMatchesQuery(r, q)) continue;
     ids.push(r.id);
     if (ids.length >= limit) break;
@@ -140,4 +142,34 @@ export function crmSearch(db, args, user) {
     row.services = _s_id != null ? { id: _s_id, name: _s_name, price: _s_price } : null;
     return row;
   });
+}
+
+// ---------------------------------------------------------------------------
+// CRM_HEAD_MERGE_TAGS_V1 (ревью I5) — crm_visit_links { visit_ids } →
+//   [{ visit_id, request_id }]: «из какой заявки эта запись» для сетки
+//   календаря (views/room-calendar.js).
+//
+// Строки услуг CRM теперь видны только вместе со своей заявкой (своя или ничья;
+// всем — администратору и руководителю колл-центра). Но метку «колл-центр» на
+// записи календаря смотрят регистратура и врачи, которые заявок не ведут, и
+// почти всякая запись колл-центра сделана оператором, то есть «чужая». Метка
+// нужна им как ФАКТ, поэтому отдаётся только он: номер визита и номер заявки,
+// без имени, телефона, ступени и заметки. Открыть саму заявку по номеру они
+// по-прежнему не могут — это решает правило доски.
+// ---------------------------------------------------------------------------
+const VISIT_LINKS_MAX = 500;
+
+export function crmVisitLinks(db, args, user) {
+  if (!canRead('crm_request_services', effectiveRoles(user))) {
+    throw new RpcError('Заявки CRM вам недоступны.', 403);
+  }
+  const raw = Array.isArray(args && args.visit_ids) ? args.visit_ids : [];
+  const ids = [...new Set(raw.map(Number).filter((x) => Number.isInteger(x) && x > 0))].slice(0, VISIT_LINKS_MAX);
+  if (!ids.length) return [];
+  return db.prepare(`
+    SELECT visit_id, MIN(request_id) AS request_id
+      FROM crm_request_services
+     WHERE visit_id IN (${ids.map(() => '?').join(',')})
+     GROUP BY visit_id
+     ORDER BY visit_id`).all(...ids);
 }

@@ -88,6 +88,15 @@ export const REGISTRY = {
     embed:   { services: { table:'services', fk:'service_id', columns:['id','name','price','requires_doctor'] },
                users:    { table:'users',    fk:'doctor_id',  columns:['id','full_name','specialty'] },
                crm_requests: { table:'crm_requests', fk:'request_id', columns:['id','patient_id','full_name','phone','status'] } },
+    // CRM_HEAD_MERGE_TAGS_V1 (ревью I5) — строка услуги — часть заявки и видна
+    // (правится, вставляется) ровно тогда, когда видна её заявка, как задачи и
+    // метки. Без этого оператор перечислял чужие заявки через их строки (embed
+    // crm_requests отдавал имя и номер) и дописывал строки в чужую заявку.
+    // Регистратура это не задевает: её подстановка в смету (crm-lines.js
+    // pendingCrmLines) и так берёт родителей из crm_requests под тем же
+    // правилом. Метка «из заявки» на записи календаря, нужная и тем, кто
+    // заявок не ведёт, читается отдельным RPC crm_visit_links — только номер.
+    scope: { via: { fk: 'request_id', table: 'crm_requests' } },
   },
 
   // CRM_DEDUP_SEARCH_TASKS_V1 (mig 148) — задачи на карточке заявки: текст,
@@ -108,7 +117,10 @@ export const REGISTRY = {
     // заявка (CRM_OWNERSHIP_V1 родителя: своя или ничья, администратору всё).
     // Задача, назначенная оператору Б на заявке оператора А, Б НЕ видна: чужая
     // заявка «do not show» целиком. Вставка — только на видимую заявку.
-    scope: { via: { fk: 'request_id', table: 'crm_requests' } },
+    // CRM_HEAD_MERGE_TAGS_V1 (ревью M1) — и своему исполнителю (orOwn), даже на
+    // чужой заявке: после слияния дублей задача может оказаться на карточке
+    // другого оператора, и поручение не должно пропадать у того, кому оно дано.
+    scope: { via: { fk: 'request_id', table: 'crm_requests' }, orOwn: 'assignee_id' },
     // «Кто создал» и «кто отметил» — из сессии, не с экрана.
     stamps: { created_by: { on: 'insert' }, done_by: { with: 'done_at' } },
   },

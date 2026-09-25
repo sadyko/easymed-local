@@ -83,6 +83,22 @@ export function listTags(db) {
   }
 }
 
+/**
+ * CRM_HEAD_MERGE_TAGS_V1 (ревью M4) — можно ли ставить эти метки на заявку.
+ * Скрытую метку экран не предлагает, а несуществующую отверг бы внешний ключ
+ * голой ошибкой SQLite — /api/db отвечает на это фразой (400), а не 500.
+ * Возвращает текст отказа или null.
+ */
+export function tagInsertRefusal(db, rows) {
+  const keys = [...new Set((Array.isArray(rows) ? rows : [rows]).map((r) => String((r && r.tag_key) ?? '')))];
+  const active = new Map(listTags(db).map((t) => [t.key, t.is_active]));
+  for (const k of keys) {
+    if (!active.has(k)) return `Метки «${k}» нет в справочнике — поставить её нельзя.`;
+    if (!active.get(k)) return `Метка «${k}» скрыта в настройках CRM — поставить её нельзя.`;
+  }
+  return null;
+}
+
 export function listRouting(db, provider = DEFAULT_PROVIDER) {
   return db.prepare('SELECT provider, disposition, action, stage_key FROM crm_call_routing WHERE provider = ? ORDER BY disposition')
     .all(String(provider || DEFAULT_PROVIDER));

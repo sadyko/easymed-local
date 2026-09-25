@@ -9,6 +9,7 @@ import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 // CRM_REAL_BOOKING_V1 — статус услуги двигают экраны, и двигают они его через
 // эту дверь: работа над пациентом доказывает, что он пришёл.
 import { crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../services/crm/visit-status.js';
+import { tagInsertRefusal } from '../services/crm/config.js';   // CRM_HEAD_MERGE_TAGS_V1 (ревью M4)
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -189,6 +190,13 @@ export function dbRoutes(db) {
     // врача, счёт визита, окно визита в двух местах). Проверка в одном из них
     // означала бы правило, которое соблюдают три экрана из четырёх, — а
     // необходимость правила как раз денежная.
+    // CRM_HEAD_MERGE_TAGS_V1 (ревью M4) — метку на заявку ставят только
+    // существующую и видимую: скрытую экран не предлагает, а несуществующую
+    // внешний ключ отверг бы голой ошибкой базы.
+    if (compiled.meta.table === 'crm_request_tags' && compiled.meta.op === 'insert') {
+      const tagRefusal = tagInsertRefusal(db, req.body && req.body.values);
+      if (tagRefusal) return res.status(400).json({ error: { code: 'bad_request', message: tagRefusal } });
+    }
     const surgeryRefusal = refuseSurgeryWithoutBed(db, compiled.meta, req.body);
     if (surgeryRefusal) {
       return res.status(409).json({ error: { code: 'conflict', message: surgeryRefusal } });

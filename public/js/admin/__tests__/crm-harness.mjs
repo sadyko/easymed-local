@@ -75,7 +75,10 @@ export const S = { leads: [], dups: [], search: [], tasks: [], staff: [], nextTa
   dupGroups: { groups: [], total: 0 }, mergeError: null,
   // CRM_HEAD_MERGE_TAGS_V1 — ответ crm_config_get (null — запасная воронка без
   // меток) и строки связи «заявка — метка» (crm_request_tags).
-  config: null, leadTags: [] };
+  config: null, leadTags: [],
+  // Ревью M4 — вставка метки отвечает UNIQUE (409), хотя строка на месте:
+  // её в ту же секунду поставил коллега.
+  tagInsertConflict: false };
 export const CALLS = [];
 export const RPC = [];
 const jsonOk = (data, count) => ({ ok: true, json: async () => ({ data, count }) });
@@ -148,6 +151,7 @@ globalThis.fetch = async (url, opts) => {
       if (body.op === 'select') return jsonOk(applyFilters(S.leadTags, body.filters));
       if (body.op === 'insert') {
         for (const v of [].concat(body.values)) S.leadTags.push({ request_id: v.request_id, tag_key: v.tag_key });
+        if (S.tagInsertConflict) return { ok: false, status: 409, json: async () => ({ error: { code: 'conflict', message: 'UNIQUE constraint failed: crm_request_tags.request_id, crm_request_tags.tag_key' } }) };
         return jsonOk(null);
       }
       if (body.op === 'delete') {

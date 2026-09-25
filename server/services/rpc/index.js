@@ -59,7 +59,7 @@ import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRe
          telephonyForgetBinotel } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1 / TELEPHONY_PROVIDERS_V1
 import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss } from './lis.js';   // LIS_INGEST_V1
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
-import { crmLeadsByPhone, crmSearch } from './crm-leads.js';   // CRM_DEDUP_SEARCH_TASKS_V1
+import { crmLeadsByPhone, crmSearch, crmVisitLinks } from './crm-leads.js';   // CRM_DEDUP_SEARCH_TASKS_V1
 import { crmDuplicateGroups, crmMergeLeads } from './crm-merge.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
 import { backupList, backupCreate, backupRestore, factoryReset } from './backup.js';   // SYSTEM_SETTINGS_V1
@@ -539,6 +539,9 @@ export const RPC = {
   // переезд услуг/задач/меток, удаление влитых, журнал crm_merge_log). Оба —
   // администратору и руководителю колл-центра (`crm.all`).
   crm_duplicate_groups:     (db, args, user) => crmDuplicateGroups(db, args, user),
+  // CRM_HEAD_MERGE_TAGS_V1 (ревью I5) — метка «из заявки» на записях календаря:
+  // только номер визита и номер заявки, всем, кто читает строки CRM. Чтение.
+  crm_visit_links:          (db, args, user) => crmVisitLinks(db, args, user),
   crm_merge_leads:          (db, args, user) => crmMergeLeads(db, args, user),
 
   // LICENCE_CORE_V1 — the three that stay reachable while locked (see

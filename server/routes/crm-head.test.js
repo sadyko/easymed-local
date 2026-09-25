@@ -189,3 +189,23 @@ test('показатели звонков по операторам: админ�
     assert.throws(() => telephonyOperatorStats(db, DAY, HEAD), (e) => e.status === 403);
   } finally { db.close(); }
 });
+
+// CRM_HEAD_MERGE_TAGS_V1 (ревью M4) — поставить на заявку можно только
+// существующую и видимую метку; отказ — фразой (400), а не голой ошибкой базы.
+test('метки через /api/db: скрытая и несуществующая — 400 словами; повтор — 409 (экран считает его успехом)', async () => {
+  const { db, server, base } = await start();
+  try {
+    db.prepare("INSERT INTO crm_tags (key, label, color, is_active) VALUES ('vip','VIP','purple',1), ('old','Старая','',0)").run();
+    const boss = await login(base, 'boss');
+    const put = (values) => dbCall(base, boss, { table: 'crm_request_tags', op: 'insert', values });
+    const hidden = await put({ request_id: 1, tag_key: 'old' });
+    assert.equal(hidden.status, 400);
+    assert.match(hidden.json.error.message, /скрыта/);
+    const unknown = await put([{ request_id: 1, tag_key: 'vip' }, { request_id: 1, tag_key: 'nope' }]);
+    assert.equal(unknown.status, 400);
+    assert.match(unknown.json.error.message, /нет в справочнике/);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM crm_request_tags').get().n, 0, 'пакет с плохой меткой записался наполовину');
+    assert.equal((await put({ request_id: 1, tag_key: 'vip' })).status, 200);
+    assert.equal((await put({ request_id: 1, tag_key: 'vip' })).status, 409);
+  } finally { server.close(); db.close(); }
+});

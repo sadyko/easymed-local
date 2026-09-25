@@ -593,6 +593,10 @@ export function canCreatePatient() {
 // администратор, и молчание матрицы должно значить «как было».
 export function canSeeAllLeads() {
     if (hasActorRole(['admin'])) return true;
+    // Ревью M6 — закрытый раздел CRM закрывает и строку внутри него, как на
+    // сервере (grants.js: «ЗАКРЫТЫЙ РАЗДЕЛ ЗАКРЫВАЕТ ВСЁ, ЧТО В НЁМ»): иначе
+    // кнопка «Дубликаты» рисовалась бы роли, которой сервер откажет.
+    if (grantLevel('crm') === 'none') return false;
     return grantLevel('crm.all') !== null && grantAllows('crm.all', 'edit');
 }
 
