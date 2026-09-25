@@ -39,6 +39,8 @@ import { reportTotals } from './report-totals.js?v=rt1';   // REPORT_TOTALS_V1
 import { freshnessState, freshnessWorthShowing } from './report-buildings.js?v=fresh1';
 // PROCUREMENT_FILTERS_V1 — подписи категорий закупок те же, что на экранах склада.
 import { CATEGORY_LABEL } from './inventory-shared.js';
+// ROLE_REPORTS_SETTINGS_V1 — плитка видна, если её группа отчётов выдана роли.
+import { reportKindAllowed } from '../permissions.js';
 
 // Экспортируется, чтобы определения (в т.ч. рисовалку графиков) можно было
 // проверить тестом — страница целиком без DOM не поднимается.
@@ -206,6 +208,14 @@ export function defaultReportOptions(rep) {
 export function optionsFor(rep, kind) {
     return (rep.options || []).filter(o => !Array.isArray(o.kinds) || o.kinds.includes(kind));
 }
+// ROLE_REPORTS_SETTINGS_V1 — видна ли плитка: группа её вида (REPORT_GROUP
+// справочника прав) выдана роли. Все виды одной плитки — одна группа (тест
+// reports-hub-v2 это сверяет), поэтому спрашивается основной вид. «Telegram-бот»
+// группы не имеет — только администратор, как и его RPC (telegram_stats).
+// Сервер отвечает второй раз тем же ключом (services/report-access.js).
+export function reportVisible(rep) {
+    return reportKindAllowed(rep.kind);
+}
 export function reportArgs(rep, kind, opts) {
     const out = {};
     for (const o of optionsFor(rep, kind)) out[o.arg] = opts[o.arg];
@@ -242,7 +252,7 @@ export async function renderReportsHub(container) {
                 // высоту самого длинного описания на всей сетке.
                 gridAutoRows: '1fr',
             },
-        }, ...REPORT_DEFS.map(rep => reportCard(rep))),
+        }, ...REPORT_DEFS.filter(reportVisible).map(rep => reportCard(rep))),
     ));
 }
 

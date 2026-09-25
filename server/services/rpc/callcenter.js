@@ -17,6 +17,8 @@ import { localDate, localHour, localWeekday, inLocalRange } from '../domain/day.
 // «потеряно» спрашиваются у справочника, а не берутся из зашитого списка.
 import { wonStageKey, lostStageKeys, noShowStageKey, openStageKeys, listStages, listSources } from '../crm/config.js';
 import { canSeeAllLeads } from '../crm/visibility.js';   // CRM_HEAD_MERGE_TAGS_V1
+// ROLE_REPORTS_SETTINGS_V1 — отчёт колл-центра — группа «Колл-центр» раздела «Отчёты».
+import { requireReportKind } from '../report-access.js';
 
 // Сидовая колонка «Записан» (миграция 077) — граница между «заявку ещё ведёт
 // оператор» и «пациента уже ждут в конкретный день». Имя здесь не поведение, а
@@ -44,6 +46,7 @@ const WEEKDAY_RU = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 const pct = (part, total) => (total > 0 ? Math.round((part / total) * 1000) / 10 : 0);
 
 export function callcenterReport(db, args, user) {
+  requireReportKind(db, user, 'callcenter');   // ROLE_REPORTS_SETTINGS_V1
   const from = String((args && args.from) || '').slice(0, 10);
   const to = String((args && args.to) || '').slice(0, 10);
   const where = `WHERE ${inLocalRange('r.created_at')}`;

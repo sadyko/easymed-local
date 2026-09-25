@@ -18,6 +18,10 @@
 // permissionGroups() to render the tickable matrix.
 
 import { SECTIONS } from './sections.js?v=noikpu1';
+// ROLE_REPORTS_SETTINGS_V1 — группы отчётов и плитки настроек: карта «вид
+// отчёта → группа», строки справочника и прежнее правило хаба настроек —
+// одни на оболочку и сервер.
+import { REPORT_GROUP, catalogRows, settingsHubLegacy, settingsLegacyView } from '../shared/permission-catalog.js';
 
 // ROLE_KEYS_V2 — THE canonical list of grantable modules for this build.
 //
@@ -459,14 +463,18 @@ export function getEffectiveSet() { return _effective; }
  * @param opts.departmentId  номер отдела предпросматриваемого сотрудника (null — отдела нет)
  */
 export function previewRole(roleRow, fn, opts = {}) {
-    const saved = { eff: _effective, levels: _levels, tabs: _patientTabs, label: _roleLabel, roles: _actorRoles, preview: _preview };
+    // ROLE_REPORTS_SETTINGS_V1 — права по справочнику (_grants) подменяются
+    // вместе с остальным: setEffectiveFromRole их переписывает, и без этого
+    // предпросмотр оставлял вошедшему сотруднику права ЧУЖОЙ роли, а плитки
+    // отчётов и настроек отвечали за читателя, а не за роль.
+    const saved = { eff: _effective, levels: _levels, tabs: _patientTabs, grants: _grants, label: _roleLabel, roles: _actorRoles, preview: _preview };
     try {
         setEffectiveFromRole(roleRow);
         const id = Number(opts && opts.departmentId);
         _preview = { departmentId: Number.isInteger(id) && id > 0 ? id : null };
         return fn();
     } finally {
-        _effective = saved.eff; _levels = saved.levels; _patientTabs = saved.tabs;
+        _effective = saved.eff; _levels = saved.levels; _patientTabs = saved.tabs; _grants = saved.grants;
         _roleLabel = saved.label; _actorRoles = saved.roles; _preview = saved.preview;
     }
 }
@@ -698,6 +706,86 @@ function personalStockAllowed(navId) {
     return hasActorRole(MY_STOCK_ROLES) || ownDepartmentId() != null;
 }
 
+// ---------------------------------------------------------------------------
+// ROLE_REPORTS_SETTINGS_V1 (2026-09-25) — ОТЧЁТЫ ПО ГРУППАМ, НАСТРОЙКИ ПО ПЛИТКАМ.
+//
+// Здесь только «что видно»: отчёты проверяет сервер (services/report-access.js
+// по той же карте REPORT_GROUP), запись в таблицы настроек — компилятор
+// запросов (db/write-grant.js по тем же ключам). Ненастроенный ключ — прежнее
+// правило: у отчётов это `reports-hub`, у плиток — прежние ключи плитки
+// (`legacyKeys` справочника), и после обновления никто ничего не теряет.
+// ---------------------------------------------------------------------------
+const REPORT_GROUP_KEYS = [...new Set(Object.values(REPORT_GROUP))].filter((k) => k !== 'reports');
+
+// Отчёты-справочники прежнего экрана (#report:<раздел>, sections.js) по группам.
+const LEGACY_REPORT_GROUP = {
+    workload_by_categories_report: 'reports.services', workload_by_doctors_report: 'reports.services',
+    referred_categories_report: 'reports.referrals', external_referrers_report: 'reports.referrals',
+    internal_referrers_report: 'reports.referrals',
+    orders_salary_report: 'reports.doctor_pay', orders_services_report: 'reports.services',
+    orders_pending_report: 'reports.services', orders_revenue_report: 'reports.revenue',
+    payer_companies_report: 'reports.revenue',
+};
+
+/** Видна ли группа отчётов ('reports.cashier' …) — плитки хаба и прежнего экрана. */
+export function reportGroupAllowed(key) {
+    if (_effective == null) return true;
+    if (grantLevel('reports') === 'none') return false;   // закрытый раздел закрывает все группы
+    const lvl = key ? grantLevel(key) : null;
+    if (lvl !== null) return lvl !== 'none';
+    return _effective.has('reports-hub');
+}
+
+/** Видна ли плитка отчёта по виду (REPORT_GROUP); вид без группы — только полному доступу. */
+export function reportKindAllowed(kind) {
+    const key = Object.prototype.hasOwnProperty.call(REPORT_GROUP, kind) ? REPORT_GROUP[kind] : null;
+    return key ? reportGroupAllowed(key) : _effective == null;
+}
+
+const SETTINGS_ROWS = new Map(catalogRows().filter((r) => r.parent === 'settings').map((r) => [r.key, r]));
+const SETTINGS_TILE_KEYS = [...SETTINGS_ROWS.values()].filter((r) => !r.locked).map((r) => r.key);
+
+// Маршрут экрана → окно-плитка настроек, которой он принадлежит.
+const SETTINGS_ROUTE_TILE = {
+    'employees': 'settings.employees',
+    'services': 'settings.services',
+    'settings:patients': 'settings.patients',
+    'documents': 'settings.documents',
+    'documents-settings': 'settings.company',
+    'rooms-setup': 'settings.rooms',
+    'consultation-types': 'settings.consultation_types',
+    'crm-settings': 'settings.crm',
+    'telephony-settings': 'settings.telephony',
+    'telegram-settings': 'settings.telegram',
+    'api-settings': 'settings.api',
+};
+
+// Настроенный уровень плитки — или null, если роль его не настраивала.
+// Закрытая строка — «Нет» всегда (выдать её нельзя), закрытый раздел
+// «Настройки» — «Нет» у всех плиток.
+function tileConfigured(key) {
+    const row = SETTINGS_ROWS.get(key);
+    if (row && row.locked) return 'none';
+    if (grantLevel('settings') === 'none') return 'none';
+    return grantLevel(key);
+}
+
+/**
+ * Уровень плитки настроек для хаба: 'none' | 'view' | 'edit'. Ненастроенная
+ * плитка — прежнее правило (`legacyKeys`) и НЕ выше «Просмотра»: писать в эти
+ * таблицы до сих пор мог только администратор, а он — полный доступ.
+ */
+export function settingsTileLevel(key) {
+    if (_effective == null) return 'edit';
+    const row = SETTINGS_ROWS.get(key);
+    if (!row || row.locked) return 'none';
+    const lvl = tileConfigured(key);
+    if (lvl !== null) return lvl;
+    // «Отделы» без настройки открыты всем (DEPARTMENTS_V1, строка маршрута ниже).
+    if (!row.legacyKeys) return 'view';
+    return settingsLegacyView(row, _effective) || 'none';
+}
+
 // Is a top-level sidebar module visible? The Settings module is special: it
 // shows when the role can reach the Settings home OR any single sub-section.
 export function isModuleAllowed(navId) {
@@ -705,7 +793,12 @@ export function isModuleAllowed(navId) {
     if (navId === 'my-stock' || navId === 'my-department') return personalStockAllowed(navId);
     if (_effective == null) return true;
     if (ALWAYS_ALLOWED.has(navId)) return true;
+    // ROLE_REPORTS_SETTINGS_V1 — хаб отчётов открыт, если видна хоть одна
+    // группа отчётов; у ненастроенной роли это прежний ключ `reports-hub`.
+    if (navId === 'reports-hub') return REPORT_GROUP_KEYS.some(reportGroupAllowed);
     if (navId === 'settings') {
+        // ROLE_REPORTS_SETTINGS_V1 — хаб открывает и выданная плитка настроек.
+        if (grantLevel('settings') !== 'none' && SETTINGS_TILE_KEYS.some((k) => { const l = grantLevel(k); return l !== null && l !== 'none'; })) return true;
         if (_effective.has('settings')) return true;
         for (const k of _effective) if (k.startsWith('settings:')) return true;
         // ROLE_AUDIT_V2 — Documents (print-forms) and the other special pages
@@ -715,8 +808,10 @@ export function isModuleAllowed(navId) {
         // (Lab/Nurse/Doctor roles carry 'documents' with no settings key).
         // The Settings home index itself filters rows by isRouteAllowed, so
         // they see ONLY the rows they were granted.
-        for (const k of ['documents', 'discounts-settings', 'api-settings', 'doctor-pay', 'consultation-types', 'communications', 'cashier-settings'])
-            if (_effective.has(k)) return true;
+        // ROLE_REPORTS_SETTINGS_V1 — список живёт в справочнике
+        // (SETTINGS_HUB_LEGACY_KEYS): по нему же экран «Роли» выводит уровень
+        // плиток «хаба» у ненастроенной роли.
+        if (settingsHubLegacy(_effective)) return true;
         // LOCAL_ROLES_V1 — the production LAB_ROLE_SETTINGS_V1 implication (any
         // Laboratory-edit role also opens Settings, to manage lab panels) is
         // dropped locally: this app's Settings is the FULL clinic-config hub with
@@ -831,6 +926,10 @@ export function isRouteAllowed(view) {
     if (_effective == null) return true;
     if (!view) return true;
     if (ALWAYS_ALLOWED.has(view)) return true;
+    // ROLE_REPORTS_SETTINGS_V1 — экран-плитка настроек: настроенное окно
+    // решает само; ненастроенное — прежние строки ниже, как было.
+    const tileKey = SETTINGS_ROUTE_TILE[view];
+    if (tileKey) { const lvl = tileConfigured(tileKey); if (lvl !== null) return lvl !== 'none'; }
 
     if (view === 'patient-card')      return isModuleAllowed('patients');
     if (view === 'service-workspace') return isModuleAllowed('consultation');
@@ -850,11 +949,18 @@ export function isRouteAllowed(view) {
     // `reports-hub` (REPORTS_HUB_V1), ключа `reports` нет ни в одной роли: и
     // прежний «Обзор владельца» (#reports), и отчёты-справочники (report:<key>)
     // спрашивали несуществующий ключ и отказывали каждой настроенной роли.
-    if (view === 'reports' || view.startsWith('report:')) return isModuleAllowed('reports-hub');
+    // ROLE_REPORTS_SETTINGS_V1 — и по группе: «Обзор владельца» — это выручка,
+    // отчёт-справочник — своя группа (LEGACY_REPORT_GROUP выше).
+    if (view === 'reports') return reportGroupAllowed('reports.revenue');
+    if (view.startsWith('report:')) return reportGroupAllowed(LEGACY_REPORT_GROUP[view.slice('report:'.length)] || 'reports.revenue');
     if (view === 'consultation-types') return _effective.has('consultation-types') || _effective.has('settings:consultation_types') || _effective.has('settings');
     if (view === 'communications')     return _effective.has('communications') || _effective.has('settings');
     if (view === 'discounts-settings') return _effective.has('discounts-settings') || _effective.has('settings');   // PATIENT_DISCOUNTS_V2
-    if (view === 'api-settings') return _effective.has('api-settings') || _effective.has('settings');   // CLINIC_API_V1
+    // CLINIC_API_V1 · ROLE_REPORTS_SETTINGS_V1 — ключи API только
+    // администратору (решение владельца 25.09): сервер их и так не отдавал
+    // никому другому (api_tokens: чтение и запись — admin), а экран открывался
+    // голым `settings` и показывал пустой список.
+    if (view === 'api-settings') return false;
     // TELEGRAM_BOT_V1 — раздел админский целиком, включая чтение: токен бота
     // это полный доступ к переписке с пациентами, и даже его хвост регистратору
     // видеть незачем. Полный доступ (_effective === null) отсекается выше, так

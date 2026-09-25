@@ -1,8 +1,14 @@
 // Reporting RPCs — read-only. /api/db can't do SUM/GROUP BY/date-range
 // filters on most tables, so both the period-overview KPIs and the tabular
-// date-range reports are computed here from raw rows. Any authenticated
-// user may call these (requireAuth is applied by the route; no extra role
-// gate needed — see server/routes/rpc.js).
+// date-range reports are computed here from raw rows.
+//
+// ROLE_REPORTS_SETTINGS_V1 (2026-09-25) — КТО ЗОВЁТ, ТЕПЕРЬ ВАЖНО. Раньше
+// здесь было «any authenticated user may call these»: раздел «Отчёты»
+// закрывал только пункт меню. run_report и owner_report проверяют группу
+// отчёта (services/report-access.js, карта REPORT_GROUP справочника прав);
+// начисления врача в кабинете — «свои или „Оплата врачей“». Без ворот
+// остаются reports_overview (дашборд), report_buildings и report_freshness —
+// в них нет строк отчётов.
 
 import { today, localDate, localMonth, inLocalRange } from '../domain/day.js';
 import { outstandingWhere } from '../domain/money.js';
@@ -30,20 +36,20 @@ import { categoryOf, CAT_ORDER } from '../../../public/js/shared/service-categor
 import { holderNameSql, movementPatientSql } from './stock-log.js';
 import { lotBalances, EXPIRING_SOON_DAYS, parseCategories, categoryClause } from './expiry.js';
 // REPORTS_V2, ревью I6 — кто видит начисления врача: сам врач или тот, кому
-// открыт раздел «Отчёты» (ключ справочника прав 'reports', прежний раздел
-// 'reports-hub'), и администратор.
-import { grantAllowsOr } from '../grants.js';
-import { hasAnyRole, canViewSection } from '../roles.js';
+// открыта группа «Оплата врачей» (ROLE_REPORTS_SETTINGS_V1; прежде — весь
+// раздел «Отчёты»), и администратор.
+import { canSeeReportKey, requireReportKind } from '../report-access.js';
 
 /**
- * Начисления врача (кабинет): свои — всегда; чужие — только администратору и
- * тем, кому открыты «Отчёты» (им и так видны все врачи в «Зарплатах врачей»).
- * Прежде любой вошедший мог спросить чужие деньги по номеру врача.
+ * Начисления врача (кабинет): свои — ВСЕГДА, и ни одна галочка «Отчётов» этого
+ * не отнимает; чужие — администратору и тем, кому открыта группа отчётов
+ * `keys` (по умолчанию «Оплата врачей»: ей и так видны все врачи в «Зарплатах
+ * врачей»). Прежде любой вошедший мог спросить чужие деньги по номеру врача,
+ * а после ревью I6 — любой, кому открыт хоть один отчёт (кассир ради кассы).
  */
-function assertCanSeeDoctorPay(db, user, doctorId) {
+function assertCanSeeDoctorPay(db, user, doctorId, keys = ['reports.doctor_pay']) {
   if (user && Number(user.id) === Number(doctorId)) return;
-  if (user && grantAllowsOr(db, user, 'reports', 'view',
-    () => hasAnyRole(user, ['admin']) || canViewSection(db, user, 'reports-hub'))) return;
+  if (user && keys.some((k) => canSeeReportKey(db, user, k))) return;
   throw new RpcError('Можно смотреть только свои начисления.', 403);
 }
 
@@ -968,7 +974,9 @@ function referralsDetailReport(db, args, ctx) {
 export function doctorReferralReward(db, args, user) {
   const doctorId = Number(args && args.doctor_id);
   if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
-  assertCanSeeDoctorPay(db, user, doctorId);   // ревью I6
+  // ROLE_REPORTS_SETTINGS_V1 — вознаграждение за направления видит и группа
+  // «Рефералы»: в её отчёте то же вознаграждение каждого врача по строкам.
+  assertCanSeeDoctorPay(db, user, doctorId, ['reports.doctor_pay', 'reports.referrals']);   // ревью I6
   const { from, to } = resolveRange(db, args);
   const ctx = buildingContext(db);
   const lines = referralLines(db, { from, to }, ctx, { doctorId });
@@ -1611,7 +1619,8 @@ function inpatientShareReport(db, args, ctx) {
 // INPATIENT_SHARE_V1 — стационарная часть зарплаты для кабинета врача. Кабинет
 // считает амбулаторную долю сам (serviceShare), а стационарную получает ГОТОВОЙ
 // отсюда — тем же запросом, что и отчёт, без второй копии SQL в браузере.
-// Ревью I6: свои начисления — врачу, чужие — «Отчётам» и администратору.
+// Ревью I6: свои начисления — врачу, чужие — «Оплате врачей» и администратору
+// (ROLE_REPORTS_SETTINGS_V1; прежде — всему разделу «Отчёты»).
 export function doctorInpatientShare(db, args, user) {
   const doctorId = Number(args && args.doctor_id);
   if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
@@ -1876,7 +1885,8 @@ const REPORTS_RU = {
 // service (local schema has no service groups), receipts by payer kind.
 const OWNER_M_RU = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 
-export function ownerReport(db, args, _user) {
+export function ownerReport(db, args, user) {
+  requireReportKind(db, user, 'owner');   // ROLE_REPORTS_SETTINGS_V1 — «Выручка и счета»
   const { from, to } = resolveRange(db, args);
   const bf = branchFilter(args, 'i.branch_id');
   // BUILDING_REPORTS_V1 — отчёт владельца тоже смотрит на клинику целиком:
@@ -1985,9 +1995,12 @@ const ITEM_BASED_REPORTS = new Set([
   'by_services', 'by_doctors', 'doctor_services',   // REPORTS_V2
 ]);
 
-export function runReport(db, args, _user) {
+export function runReport(db, args, user) {
   const kind = args && args.kind;
   const ru = REPORTS_RU[kind];
+  // ROLE_REPORTS_SETTINGS_V1 — группа вида: неизвестный вид остаётся 400
+  // (ниже), известный проверяется ДО того, как что-нибудь посчитано.
+  if (ru || Object.prototype.hasOwnProperty.call(legacyReports(db), kind)) requireReportKind(db, user, kind);
   if (ru) {
     const ctx = buildingContext(db);
     const { columns, rows, by_building, notes, total_label } = ru(db, args, ctx);
@@ -2026,12 +2039,16 @@ export function runReport(db, args, _user) {
 // тот же довод, что у serviceShare/ITEM_FEE_SQL. Диапазон — чтобы кабинет за
 // «12 месяцев» спрашивал ОДИН раз, а не звал RPC в цикле по месяцам; месяц
 // строки едет в ответе (ym), и раскладывает строки по месяцам уже клиент.
-// Читает любой вошедший, как и отчёты (шапка файла). Пусто — у врача в этих
-// месяцах нет строк по услугам со ступенью.
+// ROLE_REPORTS_SETTINGS_V1 — читает сам врач или тот, кому открыта «Оплата
+// врачей» (assertCanSeeDoctorPay). Прежде — любой вошедший по любому номеру
+// врача: нумерация строк за порогом — это те же чужие начисления, что
+// doctor_inpatient_share и doctor_referral_reward, закрытые ревью I6.
+// Пусто — у врача в этих месяцах нет строк по услугам со ступенью.
 const TIER_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
-export function doctorTierPositions(db, args, _user) {
+export function doctorTierPositions(db, args, user) {
   const doctorId = Number(args && args.doctor_id);
   if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
+  assertCanSeeDoctorPay(db, user, doctorId);
   const month = args && args.month != null ? String(args.month) : '';
   const from = month ? month : String((args && args.from) || '');
   const to = month ? month : String((args && args.to) || '');
