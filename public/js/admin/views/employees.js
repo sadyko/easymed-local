@@ -11,7 +11,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, field, checkField, Ring, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openEmployeePasswordModal, openChangeOwnPasswordModal } from '../password-change.js';   // PASSWORD_CHANGE_V2
-import { selfUserId } from '../permissions.js';   // PASSWORD_CHANGE_V2 — своя карточка меняет пароль через текущий
+import { selfUserId, settingsTileLevel, settingsMoneyAllowed, actorIsAdmin, hasRestriction } from '../permissions.js';   // PASSWORD_CHANGE_V2 — своя карточка меняет пароль через текущий · ADMIN_ROWS_GRANTABLE_V1
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { importExportButtons } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1
 import { soleBranchId } from '../branch-context.js?v=bc3';                  // SOLE_BRANCH_V1
@@ -67,6 +67,27 @@ const svcTypeVal = (s) => s.type || (s.is_lab ? 'lab' : 'consultation');
 const svcTypeLabel = (v) => (SERVICE_TYPES.find(t => t[0] === (v === 'radiology' ? 'imaging' : v)) || [v, v])[1];
 function fmtPrice(n) { const v = Math.round(Number(n) || 0); return (v < 0 ? '-' : '') + String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
 
+// ADMIN_ROWS_GRANTABLE_V1 (2026-09-26) — «СОТРУДНИКИ» ИЗ «РОЛЕЙ».
+//
+// Экран открывается не только администратору: «Просмотр» — список и карточки
+// без правки, «Изменение» — завести и править, «Удаление» — кнопка «Удалить».
+// Деньги карточки (зарплата, ставки, вознаграждение за направления) — только с
+// «Цены и проценты»: без них вкладок нет, и в сохранение они не уходят (сервер
+// отказал бы всей записи, routes/users.js). Роль администратора
+// не-администратору не предлагается вовсе. Сервер проверяет всё это второй раз.
+const MONEY_KEYS = ['salary_type', 'salary_fixed', 'salary_percent', 'service_rates', 'referral_rates'];
+const MONEY_SECTIONS = ['salary', 'services', 'referral'];
+function empAccess() {
+    const admin = !hasRestriction() || actorIsAdmin();
+    const lvl = settingsTileLevel('settings.employees');
+    return {
+        admin,
+        canEdit: lvl === 'edit' || lvl === 'delete',
+        canDelete: lvl === 'delete',
+        money: admin || settingsMoneyAllowed('settings.employees'),
+    };
+}
+
 async function api(path, opts = {}) {
     const res = await fetch('/api/users' + path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...opts });
     const json = await res.json().catch(() => ({}));
@@ -94,6 +115,7 @@ export async function renderEmployees(container) {
 
 async function paint(root) {
     clear(root);
+    const acc = empAccess();   // ADMIN_ROWS_GRANTABLE_V1
     // EMP_ARCHIVE_V1 — переключатель «Архив». Живёт в шапке рядом с «Новый
     // сотрудник»: это не фильтр таблицы, а другой список.
     const archiveBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, 'Архив');
@@ -105,15 +127,17 @@ async function paint(root) {
         // DATA_TRANSFER_V1 — Шаблон / Импорт / Экспорт for the staff roster.
         // Export omits passwords (the API never returns them), so re-importing
         // an exported file updates people without resetting their logins.
+        // ADMIN_ROWS_GRANTABLE_V1 — импорт и «Новый сотрудник» пишут: без
+        // «Изменения» их нет.
         h('div', { class: 'page-head-actions' },
-            ...importExportButtons({
+            ...(acc.canEdit ? importExportButtons({
                 sectionKey:   'users',
                 filenameStem: 'employees',
                 fetchRows:    async () => (await api('')).users || [],
                 onImported:   () => paint(root),
-            }),
+            }) : []),
             archiveBtn,
-            h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openEditor(null, root) }, Icon('Plus', { size: 14 }), ' Новый сотрудник')),
+            acc.canEdit ? h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openEditor(null, root) }, Icon('Plus', { size: 14 }), ' Новый сотрудник') : null),
     ));
 
     const tbody = h('tbody');
@@ -242,7 +266,7 @@ async function paint(root) {
             // бы отказом (routes/users.js), а кнопка, которая всегда ругается, —
             // хуже отсутствующей. Вернуть его на работу можно там же, где его
             // отключили.
-            const backBtn = (!showArchive || fromMain(u)) ? null : h('button', {
+            const backBtn = (!showArchive || fromMain(u) || !acc.canEdit) ? null : h('button', {
                 class: 'btn btn-primary btn-sm', type: 'button', style: { marginRight: '6px' },
                 // stopPropagation: строка целиком открывает карточку, а тут
                 // нажали именно «Вернуть».
@@ -386,7 +410,10 @@ function openEditor(user, root) {
     // отвечает на неё 409, см. routes/users.js). Свой сотрудник филиала —
     // is_local = 1 — правится как раньше, и на главной клинике таких строк нет
     // вовсе, поэтому там этот экран не меняется ничем.
-    const readOnly = fromMain(user);
+    const managed = fromMain(user);
+    // ADMIN_ROWS_GRANTABLE_V1 — «Сотрудники: Просмотр» открывает карточку, но не правит её.
+    const acc = empAccess();
+    const readOnly = managed || !acc.canEdit;
 
     const overlay = h('div', { class: 'modal' });
     const close = () => overlay.remove();
@@ -398,7 +425,7 @@ function openEditor(user, root) {
     const headWrap = h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 } });
     const dirtyEl = h('span', { class: 'muted', style: { fontSize: '12.5px' } });
 
-    const railSections = () => ALL_SECTIONS.filter(s => !s.doctorOnly || emp.is_doctor);
+    const railSections = () => ALL_SECTIONS.filter(s => (!s.doctorOnly || emp.is_doctor) && (acc.money || !MONEY_SECTIONS.includes(s.key)));
     function reqFilled(f) { if (f === 'password') return isEdit || !!String(emp.password).trim(); return String(emp[f] != null ? emp[f] : '').trim() !== ''; }
     function sectionComplete(sec) { const req = sec.key === 'access' ? (isEdit ? sec.required : sec.required.concat('password')) : sec.required; return req.every(reqFilled); }
     function completionPct() { const all = railSections().flatMap(s => (s.key === 'access' && !isEdit) ? s.required.concat('password') : s.required); if (!all.length) return 100; return Math.round(all.filter(reqFilled).length / all.length * 100); }
@@ -491,10 +518,19 @@ function openEditor(user, root) {
             background: 'var(--ink-25, #f6f8f9)', border: '1px solid var(--ink-100)', color: 'var(--ink-600)',
         },
     }, Icon('Building', { size: 15 }), h('span', null, 'Этого сотрудника ведёт главная клиника — изменить его данные можно только там.'));
+    // ADMIN_ROWS_GRANTABLE_V1 — та же строка для роли с «Сотрудники: Просмотр».
+    const viewOnlyNote = () => h('div', {
+        style: {
+            display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px',
+            padding: '9px 12px', borderRadius: '9px', fontSize: '12.5px', lineHeight: 1.5,
+            background: 'var(--ink-25, #f6f8f9)', border: '1px solid var(--ink-100)', color: 'var(--ink-600)',
+        },
+    }, Icon('Lock', { size: 15 }), h('span', null, 'Только просмотр: менять сотрудников может роль с «Сотрудники: Изменение».'));
 
     function renderBody() {
         clear(body);
-        if (readOnly) body.appendChild(managedNote());
+        if (managed) body.appendChild(managedNote());
+        else if (readOnly) body.appendChild(viewOnlyNote());
         const sec = ALL_SECTIONS.find(s => s.key === active) || ALL_SECTIONS[0];
         const head = (title, sub, right) => h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' } },
             h('span', { style: { width: '40px', height: '40px', borderRadius: '11px', background: 'var(--primary-50, #e8f3f2)', color: 'var(--primary-700, #1f7a72)', display: 'grid', placeItems: 'center', flex: '0 0 40px' } }, Icon(sec.icon, { size: 19 })),
@@ -585,9 +621,11 @@ function openEditor(user, root) {
             // CUSTOM_ROLES_V1 — в одном списке штатные роли и роли клиники. У своей
             // роли значение 'custom:<код>': выбрали её — в role ложится ОСНОВА
             // (её и проверяет сервер), а код едет отдельным полем.
-            const activeCustom = CUSTOM_ROLES.filter((c) => c.active || c.code === emp.custom_role_code);
+            // ADMIN_ROWS_GRANTABLE_V1 — роль администратора (и своя роль на её
+            // основе) не-администратору не предлагается: сервер её не назначит.
+            const activeCustom = CUSTOM_ROLES.filter((c) => (c.active || c.code === emp.custom_role_code) && (acc.admin || c.base_role !== 'admin' || c.code === emp.custom_role_code));
             const roleOptions = [
-                ...ROLES.map((r) => [r[0], r[1]]),
+                ...ROLES.filter((r) => acc.admin || r[0] !== 'admin' || emp.role === 'admin').map((r) => [r[0], r[1]]),
                 ...activeCustom.map((c) => ['custom:' + c.code, c.name + ' · ' + tr(roleLabel(c.base_role))]),
             ];
             const roleValue = emp.custom_role_code ? 'custom:' + emp.custom_role_code : emp.role;
@@ -604,6 +642,7 @@ function openEditor(user, root) {
             const extraRoles = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px' } });
             for (const [rk, rl] of ALL_ASSIGNABLE_ROLES) {
                 if (rk === emp.role) continue;
+                if (rk === 'admin' && !acc.admin && !(emp.extra_roles || []).includes('admin')) continue;   // ADMIN_ROWS_GRANTABLE_V1
                 const on = (emp.extra_roles || []).includes(rk);
                 const c = h('input', { type: 'checkbox', checked: on });
                 c.addEventListener('change', () => { const set = new Set(emp.extra_roles || []); c.checked ? set.add(rk) : set.delete(rk); markDirty({ extra_roles: [...set].filter(r => r !== emp.role) }); });
@@ -639,7 +678,7 @@ function openEditor(user, root) {
     // on the roster (deactivated), because their name is what those records
     // point at. The server decides; this asks first so the dialog can say which
     // of the two is actually on offer.
-    const deleteBtn = isEdit
+    const deleteBtn = isEdit && acc.canDelete   // ADMIN_ROWS_GRANTABLE_V1 — «Удаление» у роли
         ? h('button', { class: 'btn btn-danger', type: 'button', onclick: confirmDelete },
             Icon('Trash', { size: 14 }), ' Удалить')
         : null;
@@ -725,6 +764,9 @@ function openEditor(user, root) {
             role: emp.role, custom_role_code: emp.custom_role_code || '', extra_roles: (emp.extra_roles || []).filter(r => r !== emp.role), is_active: !!emp.is_active,
         };
         if (String(emp.password).trim()) payload.password = emp.password;
+        // ADMIN_ROWS_GRANTABLE_V1 — без «Цены и проценты» деньги не уходят вовсе:
+        // экран их не показывал, и сервер отказал бы всей записи.
+        if (!acc.money) for (const k of MONEY_KEYS) delete payload[k];
 
         saveBtn.disabled = true; const prev = saveBtn.textContent; saveBtn.textContent = tr('Сохранение…');
         try {
@@ -733,7 +775,7 @@ function openEditor(user, root) {
             // REPORTS_V2 — ставка за направления лежит на источнике врача, а не в
             // карточке: пишется своей попыткой, и её отказ не выдаётся за неудачу
             // сохранения самого сотрудника. Вкладку не открывали — не пишется вовсе.
-            if (isEdit && emp.referralReward) {
+            if (isEdit && emp.referralReward && acc.money) {
                 const err = await saveReferralReward(user.id, emp.referralReward);
                 if (err) toast(trf('Сотрудник сохранён, но ставка за направления — нет: {msg}', { msg: err }), 'fail');
             }

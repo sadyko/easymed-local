@@ -7258,6 +7258,12 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .rm-section.is-off { background: var(--ink-25); }
 .rm-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 48px; padding: 8px 0; }
 .rm-row-sub { padding-left: 22px; border-top: 1px solid var(--ink-100); }
+/* ADMIN_ROWS_GRANTABLE_V1 — «Цены и проценты» стоят под своей плиткой, с отступом. */
+.rm-row-sub.rm-row-child { padding-left: 44px; border-top-style: dashed; }
+/* ADMIN_ROWS_GRANTABLE_V1 — экран настроек на «Просмотре» (admin/view-only.js) и замок у роли, которую менять нельзя. */
+.view-only-note { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; padding: 9px 12px; border-radius: 9px; font-size: 12.5px; line-height: 1.5; background: var(--ink-25, #f6f8f9); border: 1px solid var(--ink-100); color: var(--ink-600); }
+.is-view-only input, .is-view-only select, .is-view-only textarea { pointer-events: none; opacity: .75; }
+.roles-locked-why { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; }
 .rm-name { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
 .rm-title { font-size: 13.5px; font-weight: 600; color: var(--ink-900); }
 .rm-row-section .rm-title { font-size: 15px; }
