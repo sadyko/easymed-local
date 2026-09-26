@@ -37,12 +37,33 @@ function num(v) {
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
-// Ставка конкретной группы услуг внутри массива, либо null.
-function rateForType(rates, serviceTypeId) {
-  if (serviceTypeId === null || serviceTypeId === undefined) return null;
-  const want = Number(serviceTypeId);
+// GROUPS_FIVE_REFERRAL_V1 (мигр. 153) — ставка задаётся на ГРУППУ услуги, то
+// есть на одно из пяти фиксированных значений services.type (словарь
+// владельца: «Группа» — пять, «Тип» и «Категория» клиника пишет сама). До этого
+// ключом был services.type_id — строка справочника service_types, которую
+// клиника ведёт сама, — и в таблице ставок стояло шесть «групп», одна из них
+// («Лучевая диагностика») без единой услуги. Порядок — тот, в котором группы
+// стоят в таблицах ставок.
+export const REFERRAL_GROUPS = ['consultation', 'lab', 'imaging', 'procedure', 'other'];
+
+// Группа услуги для ставки: одно из пяти значений или null. 'radiology' —
+// устаревшее значение, читается как «Диагностика» (SERVICE_TYPES_FIVE_V1).
+// null — у строки счёта нет услуги (свободный текст): групповой ставки у неё
+// нет, действует процент уровнем выше — как было и при ключе type_id.
+export function referralGroupOf(type) {
+  const t = String(type ?? '').trim().toLowerCase();
+  if (t === 'radiology') return 'imaging';
+  return REFERRAL_GROUPS.includes(t) ? t : null;
+}
+
+// Ставка конкретной группы услуг внутри массива, либо null. Записи со старым
+// ключом type_id не читаются: миграция 153 перевела их на группы, а угадывать
+// по числу, какой из пяти групп оно было, — значит платить наугад.
+function rateForGroup(rates, serviceGroup) {
+  const want = referralGroupOf(serviceGroup);
+  if (want === null) return null;
   for (const e of parseRates(rates)) {
-    if (!e || Number(e.type_id) !== want) continue;
+    if (!e || referralGroupOf(e.group) !== want) continue;
     const value = num(e.value);
     if (value === null) continue;                  // запись без числа — как будто её нет
     const unit = e.unit === 'fix' ? 'fix' : 'pct';
@@ -55,15 +76,16 @@ const pct = (v) => ({ unit: 'pct', value: num(v) ?? 0 });
 
 // Ставка для одной позиции счёта. Всегда возвращает объект — «ставки нет»
 // выражается нулём, чтобы у вызывающего не было ветки на null.
-export function resolveReferralRate({ source, category, serviceTypeId }) {
+// serviceGroup — services.type позиции (одно из пяти; см. referralGroupOf).
+export function resolveReferralRate({ source, category, serviceGroup }) {
   if (!source) return pct(0);
   if (source.reward_mode === 'own') {
-    return rateForType(source.own_rates, serviceTypeId) || pct(source.own_percent);
+    return rateForGroup(source.own_rates, serviceGroup) || pct(source.own_percent);
   }
   // Всё, что не 'own', — это 'category': незнакомый режим не должен молча
   // включать чужие ставки (см. отсутствие CHECK в мигр. 120).
   if (!category) return pct(0);
-  return rateForType(category.rates, serviceTypeId) || pct(category.standard_percent);
+  return rateForGroup(category.rates, serviceGroup) || pct(category.standard_percent);
 }
 
 // Вознаграждение за одну позицию счёта.

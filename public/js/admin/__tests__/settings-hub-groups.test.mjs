@@ -295,3 +295,22 @@ test('карточки «Лаборатория и диагностика» в �
     ['Список услуг', 'Товары и препараты', 'Типы услуг', 'Консультации врачей'],
     'остальные плитки группы не пострадали');
 });
+
+// GROUPS_FIVE_REFERRAL_V1 (мигр. 153) — таблица ставок у источника и у категории
+// источников: ровно ПЯТЬ групп услуг (services.type) с их подписями, а не шесть
+// строк справочника «Типы услуг». Запись без группы из пяти не стирается.
+test('ставки направлений — пять групп услуг, ключ записи — группа', async () => {
+  const { groupRatesControl } = await import('../views/settings-hub.js');
+  const legacy = { type_id: 6, unit: 'pct', value: 4 };
+  const ctl = groupRatesControl(JSON.stringify([{ group: 'other', unit: 'fix', value: 90000 }, legacy]), 'подсказка');
+  await ctl.load({ placeholder: 'по стандарту' });
+  const rows = walk(ctl).filter((n) => n.tagName === 'TR').slice(1);   // без шапки
+  assert.deepStrictEqual(rows.map((r) => textOf(r.children[0]).trim()),
+    ['Консультации', 'Лаборатория', 'Диагностика', 'Процедуры', 'Хирургия']);
+  const inputs = walk(ctl).filter((n) => n.tagName === 'INPUT');
+  assert.deepStrictEqual(inputs.map((i) => i.attrs['data-rate-group']), ['consultation', 'lab', 'imaging', 'procedure', 'other']);
+  assert.equal(inputs[4].attrs.value, '90000', 'ставка «Хирургии» не подставилась');
+  assert.ok(textOf(ctl).includes('Группа услуг'));
+  // Запись, которой таблица не показывает, уходит в сохранение как была.
+  assert.ok(ctl.value.some((e) => e.type_id === 6 && e.value === 4), JSON.stringify(ctl.value));
+});

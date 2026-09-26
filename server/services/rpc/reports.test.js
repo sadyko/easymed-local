@@ -150,20 +150,21 @@ function refRow(r, i = 0) {
 
 // REFERRAL_CATEGORY_RATES_V1 — ставка на каждую группу услуг, процентом или
 // фиксированной суммой. Ровно то, чего прежний плоский процент не умел.
+// GROUPS_FIVE_REFERRAL_V1 (мигр. 153) — группа = services.type (одна из пяти);
+// операция — 'other' («Хирургия»). Тип из справочника (type_id) намеренно
+// ставится ПОПЕРЁК группы: ставку выбирает группа, а не тип.
 function seedGroups(db) {
-  const tCons = db.prepare("INSERT INTO service_types (name) VALUES ('Консультации')").run().lastInsertRowid;
-  const tSurg = db.prepare("INSERT INTO service_types (name) VALUES ('Хирургия')").run().lastInsertRowid;
-  db.prepare("UPDATE services SET type_id = ? WHERE name = 'Консультация'").run(tCons);
-  db.prepare("UPDATE services SET type_id = ? WHERE name = 'Операция аппендэктомия'").run(tSurg);
-  return { tCons, tSurg };
+  const tMisc = db.prepare("INSERT INTO service_types (name) VALUES ('Разное')").run().lastInsertRowid;
+  db.prepare("UPDATE services SET type = 'consultation', type_id = ? WHERE name = 'Консультация'").run(tMisc);
+  db.prepare("UPDATE services SET type = 'other', type_id = ? WHERE name = 'Операция аппендэктомия'").run(tMisc);
 }
 
 test('referrals: процент и фиксированная сумма в одной корзине, фикс — за каждую услугу', () => {
   const { db } = seedRu();
-  const { tCons, tSurg } = seedGroups(db);
+  seedGroups(db);
   db.prepare("UPDATE referral_source_categories SET rates = ? WHERE name = 'Партнёры'").run(
-    JSON.stringify([{ type_id: tCons, unit: 'fix', value: 30000 },
-                    { type_id: tSurg, unit: 'pct', value: 20 }]));
+    JSON.stringify([{ group: 'consultation', unit: 'fix', value: 30000 },
+                    { group: 'other', unit: 'pct', value: 20 }]));
 
   // REPORTS_V2 — операцию оплачиваем: проверяется смесь фикса и процента.
   db.prepare("UPDATE invoices SET status = 'paid', paid_amount = total_amount WHERE invoice_number = 'INV-2'").run();
@@ -179,9 +180,9 @@ test('referrals: процент и фиксированная сумма в од
 
 test('referrals: своя ставка источника перекрывает категорию целиком', () => {
   const { db } = seedRu();
-  const { tCons } = seedGroups(db);
+  seedGroups(db);
   db.prepare("UPDATE referral_source_categories SET rates = ? WHERE name = 'Партнёры'").run(
-    JSON.stringify([{ type_id: tCons, unit: 'pct', value: 50 }]));
+    JSON.stringify([{ group: 'consultation', unit: 'pct', value: 50 }]));
   db.prepare("UPDATE referral_sources SET reward_mode = 'own', own_percent = 5 WHERE name = 'Клиника Х'").run();
 
   db.prepare("UPDATE invoices SET status = 'paid', paid_amount = total_amount WHERE invoice_number = 'INV-2'").run();

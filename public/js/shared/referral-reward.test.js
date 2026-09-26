@@ -3,19 +3,20 @@
 // таблицы истинности и каждый откат по отдельности.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveReferralRate, rewardForLine, parseRates } from './referral-reward.js';
+import { resolveReferralRate, rewardForLine, parseRates, referralGroupOf, REFERRAL_GROUPS } from './referral-reward.js';
 
-const LAB = 3, XRAY = 7;
+// GROUPS_FIVE_REFERRAL_V1 (мигр. 153) — ключ ставки — группа (services.type).
+const LAB = 'lab', XRAY = 'imaging';
 const rates = (arr) => JSON.stringify(arr);
 
 const CATEGORY = {
   standard_percent: 10,
-  rates: rates([{ type_id: LAB, unit: 'pct', value: 20 },
-                { type_id: XRAY, unit: 'fix', value: 60000 }]),
+  rates: rates([{ group: LAB, unit: 'pct', value: 20 },
+                { group: XRAY, unit: 'fix', value: 60000 }]),
 };
 
-const rate = (source, category, serviceTypeId) =>
-  resolveReferralRate({ source, category, serviceTypeId });
+const rate = (source, category, serviceGroup) =>
+  resolveReferralRate({ source, category, serviceGroup });
 
 test('по категории: ставка группы перекрывает стандартный процент', () => {
   const src = { reward_mode: 'category' };
@@ -24,7 +25,7 @@ test('по категории: ставка группы перекрывает 
 });
 
 test('по категории: ненастроенная группа откатывается на стандартный процент', () => {
-  assert.deepEqual(rate({ reward_mode: 'category' }, CATEGORY, 99), { unit: 'pct', value: 10 });
+  assert.deepEqual(rate({ reward_mode: 'category' }, CATEGORY, 'procedure'), { unit: 'pct', value: 10 });
 });
 
 test('по категории: без категории — ноль, а не чужая ставка', () => {
@@ -34,13 +35,13 @@ test('по категории: без категории — ноль, а не �
 });
 
 test('своя ставка: группа перекрывает свой процент', () => {
-  const src = { reward_mode: 'own', own_percent: 5, own_rates: rates([{ type_id: LAB, unit: 'pct', value: 15 }]) };
+  const src = { reward_mode: 'own', own_percent: 5, own_rates: rates([{ group: LAB, unit: 'pct', value: 15 }]) };
   assert.deepEqual(rate(src, CATEGORY, LAB), { unit: 'pct', value: 15 });
 });
 
 test('своя ставка: пустая строка группы откатывается на СВОЙ процент, не на категорию', () => {
   // Решение владельца 2026-09-08: карточка источника объясняет выплату целиком.
-  const src = { reward_mode: 'own', own_percent: 5, own_rates: rates([{ type_id: LAB, unit: 'pct', value: 15 }]) };
+  const src = { reward_mode: 'own', own_percent: 5, own_rates: rates([{ group: LAB, unit: 'pct', value: 15 }]) };
   assert.deepEqual(rate(src, CATEGORY, XRAY), { unit: 'pct', value: 5 },
     'взята ставка категории вместо своего процента');
 });
@@ -65,7 +66,7 @@ test('мусор в JSON читается как «ставок нет», а н�
 
 test('запись без числа и с отрицательным числом пропускается', () => {
   for (const value of [null, 'десять', -5, Infinity]) {
-    const src = { reward_mode: 'own', own_percent: 7, own_rates: rates([{ type_id: LAB, unit: 'pct', value }]) };
+    const src = { reward_mode: 'own', own_percent: 7, own_rates: rates([{ group: LAB, unit: 'pct', value }]) };
     assert.deepEqual(rate(src, CATEGORY, LAB), { unit: 'pct', value: 7 }, 'на ' + String(value));
   }
 });
@@ -74,12 +75,12 @@ test('явный ноль в строке группы — это ставка, 
   // Обратная сторона предыдущего теста и причина, по которой пустота
   // отсеивается до Number(): «за эту группу не платим» должно быть выразимо и
   // должно перекрывать стандартный процент.
-  const src = { reward_mode: 'own', own_percent: 7, own_rates: rates([{ type_id: LAB, unit: 'pct', value: 0 }]) };
+  const src = { reward_mode: 'own', own_percent: 7, own_rates: rates([{ group: LAB, unit: 'pct', value: 0 }]) };
   assert.deepEqual(rate(src, CATEGORY, LAB), { unit: 'pct', value: 0 });
 });
 
 test('позиция без группы услуг откатывается на процент', () => {
-  // Свободная позиция счёта (ii.description без service_id) — type_id null.
+  // Свободная позиция счёта (ii.description без service_id) — группы нет.
   assert.deepEqual(rate({ reward_mode: 'category' }, CATEGORY, null), { unit: 'pct', value: 10 });
 });
 
@@ -116,4 +117,21 @@ test('parseRates принимает и строку, и уже разобран�
   assert.deepEqual(parseRates('[{"type_id":1,"unit":"pct","value":5}]'), [{ type_id: 1, unit: 'pct', value: 5 }]);
   assert.deepEqual(parseRates([{ type_id: 1 }]), [{ type_id: 1 }]);
   assert.deepEqual(parseRates(null), []);
+});
+
+test('GROUPS_FIVE_REFERRAL_V1: групп ровно пять, «radiology» — это «Диагностика»', () => {
+  assert.deepEqual(REFERRAL_GROUPS, ['consultation', 'lab', 'imaging', 'procedure', 'other']);
+  assert.equal(referralGroupOf('radiology'), 'imaging');
+  assert.equal(referralGroupOf(' Lab '), 'lab');
+  for (const bad of [null, undefined, '', 'surgery', 6]) assert.equal(referralGroupOf(bad), null, String(bad));
+  // Запись со старым именем группы читается той же группой.
+  const cat = { standard_percent: 10, rates: rates([{ group: 'radiology', unit: 'pct', value: 25 }]) };
+  assert.deepEqual(rate({ reward_mode: 'category' }, cat, 'imaging'), { unit: 'pct', value: 25 });
+});
+
+test('GROUPS_FIVE_REFERRAL_V1: запись со старым ключом type_id не платит наугад', () => {
+  // Миграция 153 переводит type_id в группы; если такая запись всё же
+  // осталась, число не угадывается как группа — действует процент выше.
+  const src = { reward_mode: 'own', own_percent: 7, own_rates: rates([{ type_id: 3, unit: 'pct', value: 50 }]) };
+  assert.deepEqual(rate(src, null, LAB), { unit: 'pct', value: 7 });
 });

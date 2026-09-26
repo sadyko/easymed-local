@@ -27,7 +27,7 @@ import { INFLOW_SQL } from '../../../public/js/shared/payment-methods.js';   // 
 // браузером: тот же приём, что у payment-methods.js выше. Отчёт «Рефералы»
 // существует дважды — здесь и выгрузкой в reports-export.js, — и две копии
 // правила «какая ставка применяется» означали бы две разные суммы к выплате.
-import { resolveReferralRate, rewardForLine } from '../../../public/js/shared/referral-reward.js';
+import { resolveReferralRate, rewardForLine, referralGroupOf } from '../../../public/js/shared/referral-reward.js';
 // REPORTS_V2 — группа услуги (одна из пяти) подписью раздела каталога: тот же
 // модуль, что раскладывает каталог в мастере записи.
 import { categoryOf, CAT_ORDER } from '../../../public/js/shared/service-categories.js';
@@ -642,6 +642,9 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
            -- теперь своя у каждой группы, поэтому отчёт обязан различать
            -- позиции внутри одной корзины. Название категории приходит из
            -- справочника, а не из бывшей текстовой колонки rs.category.
+           -- GROUPS_FIVE_REFERRAL_V1 (мигр. 153): ставку выбирает service_group
+           -- (s.type, одна из пяти) ниже; service_type_id осталась только
+           -- подписью «Вида услуги» в кабинете врача.
            rs.id                              AS referral_source_id,
            rs.code                            AS referral_code,
            rc.name                            AS referral_category,
@@ -1254,7 +1257,10 @@ function referralLines(db, args, ctx, { doctorId = null } = {}) {
     if (doctorId != null && Number(r.referral_doctor_id) !== Number(doctorId)) continue;
     const src = r.referral_source_id != null ? sources.get(r.referral_source_id) : null;
     const cat = src && src.category_id != null ? categories.get(src.category_id) : null;
-    const rate = resolveReferralRate({ source: src, category: cat, serviceTypeId: r.service_type_id });
+    // GROUPS_FIVE_REFERRAL_V1 — ставка по ГРУППЕ услуги (services.type, одна
+    // из пяти), а не по строке справочника типов. Строка без услуги — без группы.
+    const serviceGroup = r.service_id != null ? referralGroupOf(r.service_group) : null;
+    const rate = resolveReferralRate({ source: src, category: cat, serviceGroup });
     const paid = r.status === 'paid';
     out.push({
       ...r,

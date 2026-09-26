@@ -25,6 +25,10 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, checkField } from '../ui.js';
 import { getLang, tr, trf } from '../i18n.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
+// GROUPS_FIVE_REFERRAL_V1 — ставки направлений по пяти группам услуг: ключи из
+// общего правила расчёта, подписи — те же, что у группировки услуг.
+import { REFERRAL_GROUPS, referralGroupOf } from '../../shared/referral-reward.js';
+import { TYPE_TO_GROUP_NAME } from './service-group.js?v=aug17e';
 // ROLES_EDITOR_V2 — «Роли» — свой файл экрана (views/roles-editor.js). Он жил
 // здесь и тянул за собой NAV_MODULES; вынесен по конвенции «один файл на
 // экран» и чтобы правки прав не задевали этот файл. Хаб только монтирует
@@ -890,14 +894,26 @@ function enumLabel(cfg, key, value) {
 //
 // Единица у каждой строки своя: % — доля от стоимости услуги, сум —
 // фиксированная сумма ЗА УСЛУГУ (умножается на количество в отчёте).
-function groupRatesControl(initialRaw, hint) {
+// Экспорт — для теста (__tests__/settings-hub-groups.test.mjs).
+export function groupRatesControl(initialRaw, hint) {
     let initial = [];
     try {
         initial = Array.isArray(initialRaw) ? initialRaw
             : (typeof initialRaw === 'string' && initialRaw.trim() ? JSON.parse(initialRaw) : []);
     } catch { initial = []; }
     if (!Array.isArray(initial)) initial = [];
-    const byType = new Map(initial.map(e => [Number(e && e.type_id), e]).filter(([k]) => Number.isFinite(k)));
+    // GROUPS_FIVE_REFERRAL_V1 (мигр. 153) — строки таблицы — ПЯТЬ групп
+    // (services.type), а не записи справочника «Типы услуг»: там их было шесть,
+    // одна без единой услуги, и они назывались «группами» вопреки словарю
+    // владельца. Список фиксирован — грузить нечего.
+    const byGroup = new Map();
+    for (const e of initial) {
+        const g = e && referralGroupOf(e.group);
+        if (g && !byGroup.has(g)) byGroup.set(g, e);
+    }
+    // Записи, которые таблица не показывает (без группы из пяти), сохраняются
+    // как были — редактор правит только то, что видно (ревью M6).
+    const hidden = initial.filter(e => !(e && referralGroupOf(e.group)));
 
     const tbody = h('tbody');
     const wrap = h('div', { style: { display: 'block' } },
@@ -908,49 +924,37 @@ function groupRatesControl(initialRaw, hint) {
                 h('th', { style: { textAlign: 'right', width: '240px' } }, 'Ставка'))),
             tbody));
 
-    // Группы грузятся ПОСЛЕ монтирования, как fk-поля: модалка открывается
-    // сразу, а не ждёт сети.
+    // load() остаётся: форма передаёт сюда подсказку пустого поля.
     wrap.load = async ({ placeholder } = {}) => {
-        try {
-            const { data, error } = await supabase.from('service_types').select('id, name').eq('active', 1).order('name');
-            if (error) throw error;
-            clear(tbody);
-            for (const t of (data || [])) {
-                const cur = byType.get(Number(t.id));
-                const val = cur && Number.isFinite(Number(cur.value)) ? String(cur.value) : '';
-                const unit = cur && cur.unit === 'fix' ? 'fix' : 'pct';
-                tbody.appendChild(h('tr', null,
-                    h('td', null, t.name),
-                    h('td', null, h('div', { class: 'rate-cell' },
-                        h('input', {
-                            type: 'number', min: '0', step: '0.01', 'data-rate-type': String(t.id),
-                            value: val, placeholder: placeholder || '',
-                        }),
-                        h('select', { 'data-rate-unit': String(t.id) },
-                            h('option', { value: 'pct', selected: unit === 'pct' }, '%'),
-                            h('option', { value: 'fix', selected: unit === 'fix' }, 'сум'))))));
-            }
-            if (!(data || []).length) {
-                tbody.appendChild(h('tr', null, h('td', { colspan: '2', class: 'muted' }, 'Группы услуг не заведены.')));
-            }
-        } catch (e) {
-            clear(tbody);
-            tbody.appendChild(h('tr', null, h('td', { colspan: '2', class: 'muted' },
-                trf('Группы услуг не загрузились: {msg}', { msg: (e && e.message) || e }))));
+        clear(tbody);
+        for (const g of REFERRAL_GROUPS) {
+            const cur = byGroup.get(g);
+            const val = cur && Number.isFinite(Number(cur.value)) ? String(cur.value) : '';
+            const unit = cur && cur.unit === 'fix' ? 'fix' : 'pct';
+            tbody.appendChild(h('tr', null,
+                h('td', null, tr(TYPE_TO_GROUP_NAME[g])),
+                h('td', null, h('div', { class: 'rate-cell' },
+                    h('input', {
+                        type: 'number', min: '0', step: '0.01', 'data-rate-group': g,
+                        value: val, placeholder: placeholder || '',
+                    }),
+                    h('select', { 'data-rate-unit': g },
+                        h('option', { value: 'pct', selected: unit === 'pct' }, '%'),
+                        h('option', { value: 'fix', selected: unit === 'fix' }, 'сум'))))));
         }
     };
 
     // save() читает поле обобщённо через .value — новый тип ему знать не нужно.
     Object.defineProperty(wrap, 'value', {
         get() {
-            const out = [];
-            for (const inp of tbody.querySelectorAll('input[data-rate-type]')) {
+            const out = hidden.slice();
+            for (const inp of tbody.querySelectorAll('input[data-rate-group]')) {
                 const raw = inp.value.trim();
                 if (raw === '') continue;              // пусто — записи нет
                 const value = Number(raw);
                 if (!Number.isFinite(value) || value < 0) continue;
-                const sel = tbody.querySelector('select[data-rate-unit="' + inp.dataset.rateType + '"]');
-                out.push({ type_id: Number(inp.dataset.rateType), unit: sel && sel.value === 'fix' ? 'fix' : 'pct', value });
+                const sel = tbody.querySelector('select[data-rate-unit="' + inp.dataset.rateGroup + '"]');
+                out.push({ group: inp.dataset.rateGroup, unit: sel && sel.value === 'fix' ? 'fix' : 'pct', value });
             }
             return out;
         },
