@@ -13,12 +13,12 @@ import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';
 import { tr } from '../i18n.js';   // I18N_COVERAGE_V1 — sink-обёртки: textContent/confirm не проходят через h()
 import { currentUser } from '../data.js';
 import { h, Icon, Tag, StatusTag, statusLabel, toast, clear } from '../ui.js';
-import { canDelete } from '../permissions.js';
+import { canDelete, actorRoleCodes } from '../permissions.js';
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // DISPENSE_ITEM_V1
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 import { creditCashbackOnPaid } from './cashback.js?v=cb1';
-import { openCancelInvoiceDialog, logInvoiceAction as _logInvoiceAction } from './invoice-actions.js?v=ia3';
+import { openCancelInvoiceDialog, logInvoiceAction as _logInvoiceAction, canMoveInvoiceMoney, invoiceMoneyErrorText } from './invoice-actions.js?v=ia3';
 import { logPatientActivity } from './activity-log.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // must match every other importer (one module instance)
 // VISITS_ONE_DOOR_V1 — окно визита правило двойной записи не знало вовсе:
@@ -1314,7 +1314,10 @@ function invoicePane(state, onReload) {
     const total = Number(inv.total_amount || 0);
     const paid  = Number(inv.paid_amount  || 0);
     const owed  = Math.max(total - paid, 0);
-    const cancellable = !['void', 'refunded'].includes(inv.status);
+    // RPC_PORT_V1 (ревью M3) — оплату, долг, отмену и возврат сервер
+    // принимает только от кассы и администратора; другим ролям этих кнопок нет.
+    const moneyHands = canMoveInvoiceMoney(actorRoleCodes());
+    const cancellable = moneyHands && !['void', 'refunded'].includes(inv.status);
 
     return h('div', null,
         // Summary card
@@ -1336,7 +1339,9 @@ function invoicePane(state, onReload) {
             : inv.status === 'void' || inv.status === 'refunded'
             ? h('div', { class: 'row', style: { padding: '12px 14px', background: 'var(--ink-25)', borderRadius: '10px', color: 'var(--ink-600)' } },
                 'Invoice ', inv.status, '. ', cancelledMetaText(state))
-            : paymentControls(state, inv, onReload),
+            : moneyHands ? paymentControls(state, inv, onReload)
+            : h('div', { class: 'muted', style: { padding: '12px 14px', background: 'var(--ink-25)', borderRadius: '10px', fontSize: '12.5px' } },
+                'Деньги по счёту принимает, возвращает и списывает в долг только касса или администратор.'),
 
         h('div', { class: 'row', style: { gap: '8px', marginTop: '14px', flexWrap: 'wrap' } },
             h('button', {
@@ -1414,7 +1419,7 @@ export async function takePayment(state, inv, amount, finalStatus, onReload, met
     // платёж в смену кассира, пересчитывает счёт и отпускает услуги в очередь.
     // Прямые вставки в payments и правка invoices отвергались реестром у всех.
     const { data: payRes, error: payErr } = await supabase.rpc('record_payment', { invoice_id: inv.id, amount, method });
-    if (payErr) { toast('Payment failed: ' + (payErr.message || payErr), 'fail'); return; }
+    if (payErr) { toast(invoiceMoneyErrorText(payErr), 'fail'); return; }
     const status = (payRes && payRes.invoice && payRes.invoice.status) || finalStatus || 'partial';
     await logInvoiceAction(state, inv, {
         action: status === 'paid' ? 'paid' : 'partial',
@@ -1447,7 +1452,7 @@ export async function markAsDebt(state, inv, onReload) {
     // RPC_PORT_V1 (ревью C1) — долг оформляет сервер (mark_invoice_debt: статус
     // 'debt' и услуги в очередь). Прямая правка invoices отвергалась у всех.
     const { data: debtRes, error } = await supabase.rpc('mark_invoice_debt', { invoice_id: inv.id });
-    if (error) { toast(error.message || String(error), 'fail'); return; }
+    if (error) { toast(invoiceMoneyErrorText(error), 'fail'); return; }
     const status = (debtRes && debtRes.invoice && debtRes.invoice.status) || 'debt';
     await logInvoiceAction(state, inv, {
         action: 'debt',
