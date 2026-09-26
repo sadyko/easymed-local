@@ -21,7 +21,7 @@ const SQL = fs.readFileSync(path.join(DIR, '071_queue_local_day_backfill.sql'), 
 function dbBefore071() {
   const db = openDb(':memory:');
   const tmp = tmpDir('mig071-');
-  for (const f of fs.readdirSync(DIR).filter((x) => x.endsWith('.sql') && !x.startsWith('071'))) {
+  for (const f of fs.readdirSync(DIR).filter((x) => x.endsWith('.sql') && x !== '071_queue_local_day_backfill.sql')) {
     fs.copyFileSync(path.join(DIR, f), path.join(tmp, f));
   }
   migrate(db, tmp);
