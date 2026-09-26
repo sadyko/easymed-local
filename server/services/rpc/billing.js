@@ -24,7 +24,10 @@ import { restoreSources } from './inventory.js';
 // зачисление при возврате «на баланс» — в той же транзакции, что платёж.
 import { spendWallet, creditWallet, isDepositInvoice, walletBalance, WalletError, DEPOSIT_INVOICE_REFUSAL } from '../domain/wallet.js';
 // Ревью I4 — возврат откатывает кэшбэк этого счёта.
-import { reverseCashback } from './cashback.js';
+// CASHBACK_SERVER_V2 — кэшбэк начисляет оплата, возврат его подстраивает.
+import { creditCashbackOnPaid, adjustCashbackAfterRefund } from './cashback.js';
+import { voidInvoice } from './cashier.js';   // ре-ревью п.9 — отмена после полного возврата на баланс
+import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // CARD_BALANCE_V1 — подарочная карта / сертификат платит своим остатком.
 import { spendCard, returnToCard, CardError } from '../domain/cards.js';
 
@@ -557,6 +560,8 @@ export function recordPayment(db, args, user) {
         SET paid_amount = ?, status = ?, paid_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
         WHERE id = ?
       `).run(newPaid, status, invoiceId);
+      // CASHBACK_SERVER_V2 — счёт стал оплаченным: кэшбэк, один раз за жизнь счёта.
+      if (invoice.status !== 'paid') creditCashbackOnPaid(db, db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId), user);
     } else {
       db.prepare(`
         UPDATE invoices
@@ -662,6 +667,8 @@ export function recordPaymentSplit(db, args, user) {
     if (status === 'paid') {
       db.prepare(`UPDATE invoices SET paid_amount = ?, status = ?, paid_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`)
         .run(newPaid, status, invoiceId);
+      // CASHBACK_SERVER_V2 — см. record_payment.
+      if (invoice.status !== 'paid') creditCashbackOnPaid(db, db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId), user);
     } else {
       db.prepare('UPDATE invoices SET paid_amount = ?, status = ? WHERE id = ?').run(newPaid, status, invoiceId);
     }
@@ -1038,12 +1045,28 @@ export function refundPayment(db, args, user) {
       db.prepare('UPDATE invoices SET paid_amount = ?, status = ?, paid_at = NULL WHERE id = ?').run(newPaid, status, invoice.id);
       // CANCEL_MEANS_CANCEL_V1 — полный возврат это отмена: плитка «ОТМЕНЁН» считает его по этому дню.
       if (status === 'refunded') db.prepare("UPDATE invoices SET voided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(invoice.id);
-      // Ревью I4 — счёт больше не оплачен целиком: кэшбэк за него откатывается
-      // (сколько есть на балансе; потраченное — уже услуги).
-      reverseCashback(db, invoice, user);
+    }
+    // CASHBACK_SERVER_V2 — кэшбэк счёта следует за его новыми деньгами:
+    // откат пропорционален возвращённому (сколько есть на балансе).
+    adjustCashbackAfterRefund(db, invoice);
+
+    // Ре-ревью п.9 — «отменить счёт, если денег на нём не осталось» в той же
+    // транзакции, что возврат. Пациент ещё в койке — счёт не отменяется
+    // (отмена его не выписывает, см. void_invoice), кассиру это сказано.
+    let voided = false;
+    let voidNote = null;
+    if (args && (args.void_when_zero === true || args.void_when_zero === 1) && newPaid <= 0) {
+      const adm = invoice.admission_id ? db.prepare('SELECT status FROM admissions WHERE id = ?').get(invoice.admission_id) : null;
+      if (adm && IN_BED_STATUSES.includes(adm.status)) {
+        voidNote = 'Пациент ещё в стационаре — счёт не отменён. Возврат проведён; счёт закроется при выписке или его отменяют в окне отмены с подтверждением.';
+      } else {
+        voidInvoice(db, { invoice_id: invoice.id, keep_services: args.keep_services === true || args.keep_services === 1, reason: reason || null }, user);
+        voided = true;
+      }
     }
 
-    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id), to_balance: toBalance, ...(card ? { to_card: card } : {}) };
+    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id), to_balance: toBalance, voided,
+      ...(voidNote ? { void_note: voidNote } : {}), ...(card ? { to_card: card } : {}) };
   });
 
   return run.immediate();

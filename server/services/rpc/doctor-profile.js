@@ -85,7 +85,9 @@ function cleanValue(key, v) {
   // (корзина doctor-photos, routes/storage.js): внешняя картинка ушла бы
   // партнёрам как фото врача, которое клиника не хранит и не контролирует.
   if (key === 'photo_url') {
-    if (!/^\/api\/storage\/doctor-photos\/[A-Za-z0-9._~%\/-]+$/.test(s) || s.includes('..') || s.length > 500) {
+    // Ре-ревью п.10 — без «%»: закодированный «..» (%2e%2e) или «/» (%2F)
+    // прошёл бы проверку и раскодировался уже в хранилище.
+    if (!/^\/api\/storage\/doctor-photos\/[A-Za-z0-9._~\/-]+$/.test(s) || s.includes('..') || s.length > 500) {
       throw new RpcError('photo_url must be a photo uploaded to the clinic storage.', 400);
     }
     return s;

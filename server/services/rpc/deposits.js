@@ -25,7 +25,7 @@ import { ensureOpenShift } from './cashier.js';
 // уникальности у них обязано быть буквально одно.
 import { branchLetter, assertOwnBuilding } from './billing.js';
 // DEPOSIT_WALLET_V1 — формула баланса одна на весь сервер.
-import { walletBalance } from '../domain/wallet.js';
+import { walletBalance, withLedgerToken } from '../domain/wallet.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -125,12 +125,13 @@ export function acceptDeposit(db, args, user) {
     }
     if (!METHODS.includes(method)) throw new RpcError(`unknown method: ${method}`, 400);
 
-    db.prepare(`
+    // Ре-ревью п.5 — «принят» ставит только касса (триггер мигр. 160).
+    withLedgerToken(db, () => db.prepare(`
       UPDATE patient_deposits
       SET status = 'received', method = ?, received_by = ?, received_by_name = ?,
           received_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
       WHERE id = ?
-    `).run(method, user.id, String(user.full_name || user.username || ''), dep.id);
+    `).run(method, user.id, String(user.full_name || user.username || ''), dep.id));
 
     // DEPOSIT_REVENUE_V1 — деньги взяли, значит это ВЫРУЧКА, и у неё должен быть
     // документ. Приём создаёт настоящий счёт и настоящий платёж — те же таблицы,

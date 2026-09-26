@@ -1588,15 +1588,17 @@ function openRefundConfirm(p, info, root) {
         async () => {
             const v = moneyVal(amtInp);
             if (!Number.isFinite(v) || v <= 0) { toast('Укажите сумму возврата.', 'fail'); return false; }
-            const { data: rRes, error } = await supabase.rpc('refund_payment', { payment_id: p.id, amount: v, reason: reasonInp.value || '', to_balance: toBalance });
+            // Ре-ревью п.9 — отмену счёта при нуле делает сервер в той же
+            // транзакции (void_when_zero); услуги не оставляем — как у «Отменить
+            // счёт» кассы по умолчанию.
+            const { data: rRes, error } = await supabase.rpc('refund_payment', {
+                payment_id: p.id, amount: v, reason: reasonInp.value || '', to_balance: toBalance,
+                ...(toBalance && voidBox.checked ? { void_when_zero: true, keep_services: false } : {}),
+            });
             if (error) { toast(error.message || 'Не удалось оформить возврат.', 'fail'); return false; }
             toast(toBalance ? tr('Сумма зачислена на баланс пациента') : tr('Возврат оформлен'), 'ok');
-            // Ревью M1 — денег на счёте не осталось: гасим его той же дверью, что окно отмены.
-            if (toBalance && voidBox.checked && rRes && rRes.invoice && Number(rRes.invoice.paid_amount) === 0) {
-                const { error: vErr } = await supabase.rpc('void_invoice', { invoice_id: p.invoice_id, reason: reasonInp.value || '' });
-                if (vErr) toast(trf('Счёт не отменён: {msg}', { msg: vErr.message || vErr }), 'fail');
-                else toast(tr('Счёт отменён'), 'ok');
-            }
+            if (rRes && rRes.voided) toast(tr('Счёт отменён'), 'ok');
+            if (rRes && rRes.void_note) toast(rRes.void_note, 'info');
             document.querySelectorAll('.modal').forEach(m => m.remove());   // close the stacked dialogs
             await paint(root);
             return true;

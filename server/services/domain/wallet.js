@@ -18,6 +18,16 @@ export class WalletError extends Error {
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
+// Ре-ревью п.5 — СТРОКИ БАЛАНСА С ДЕНЬГАМИ ВСТАВЛЯЕТ ТОЛЬКО СЕРВЕР. Триггеры
+// миграции 160 пропускают вставку зачисления/списания/кэшбэка и перевод
+// депозита в «принят» только пока в ledger_write_token лежит строка, которую
+// серверная дверь кладёт на время своей записи и тут же убирает (в той же
+// транзакции). Вложенные вызовы безопасны: у каждого своя строка.
+export function withLedgerToken(db, fn) {
+  const id = db.prepare('INSERT INTO ledger_write_token DEFAULT VALUES').run().lastInsertRowid;
+  try { return fn(); } finally { db.prepare('DELETE FROM ledger_write_token WHERE id = ?').run(id); }
+}
+
 export function walletBalance(db, patientId) {
   const r = db.prepare(`
     SELECT COALESCE(SUM(CASE
@@ -63,14 +73,14 @@ export function spendWallet(db, { patientId, invoice, paymentId, amount, user })
   if (amount > balance) {
     throw new WalletError(`На балансе пациента только ${balance} — списать ${amount} нельзя.`);
   }
-  db.prepare(`
+  withLedgerToken(db, () => db.prepare(`
     INSERT INTO patient_deposits
       (patient_id, branch_id, amount, method, status, kind, invoice_id, payment_id, notes,
        created_by, created_by_name, closed_at)
     VALUES (?, ?, ?, 'wallet', 'spent', 'spend', ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
   `).run(patientId, invoice.branch_id || null, amount, invoice.id, paymentId,
     'Оплата счёта ' + (invoice.invoice_number || ('#' + invoice.id)) + ' с баланса',
-    user.id, actorName(user));
+    user.id, actorName(user)));
   return round2(balance - amount);
 }
 
@@ -78,13 +88,13 @@ export function spendWallet(db, { patientId, invoice, paymentId, amount, user })
 // (не строка возврата): по нему видно, откуда пришли деньги.
 export function creditWallet(db, { patientId, invoice, paymentId, amount, reason, user }) {
   if (!patientId) throw new WalletError('У счёта нет пациента — зачислить на баланс некому.');
-  db.prepare(`
+  withLedgerToken(db, () => db.prepare(`
     INSERT INTO patient_deposits
       (patient_id, branch_id, amount, method, status, kind, invoice_id, payment_id, reason, notes,
        created_by, created_by_name, received_by, received_by_name, received_at)
     VALUES (?, ?, ?, 'wallet', 'received', 'credit', ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
   `).run(patientId, invoice.branch_id || null, amount, invoice.id, paymentId, reason || null,
     'Возврат по счёту ' + (invoice.invoice_number || ('#' + invoice.id)) + ' зачислен на баланс',
-    user.id, actorName(user), user.id, actorName(user));
+    user.id, actorName(user), user.id, actorName(user)));
   return walletBalance(db, patientId);
 }

@@ -17,7 +17,6 @@ import { canDelete, actorRoleCodes } from '../permissions.js';
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // DISPENSE_ITEM_V1
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
-import { creditCashbackOnPaid } from './cashback.js?v=cb1';
 import { openCancelInvoiceDialog, logInvoiceAction as _logInvoiceAction, canMoveInvoiceMoney, invoiceMoneyErrorText } from './invoice-actions.js?v=ia3';
 import { logPatientActivity } from './activity-log.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // must match every other importer (one module instance)
@@ -1439,10 +1438,8 @@ export async function takePayment(state, inv, amount, finalStatus, onReload, met
         summary:     `${status === 'paid' ? 'Paid in full' : 'Partial payment'} — ${amount.toLocaleString('ru-RU')} UZS`,
     });
     toast(`Payment recorded: ${amount.toLocaleString('ru-RU')} UZS.`);
-    if (status === 'paid' && inv.status !== 'paid') {
-        const cb = await creditCashbackOnPaid(inv.id);
-        if (cb) toast(`Cashback ${cb.toLocaleString('ru-RU')} UZS credited to the patient.`);
-    }
+    // CASHBACK_SERVER_V2 — кэшбэк начисляет сама оплата (record_payment), здесь
+    // звать нечего: так он одинаков для кассы, оплаты частями и этого окна.
     onReload();
 }
 

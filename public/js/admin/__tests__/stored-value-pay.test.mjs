@@ -53,7 +53,10 @@ function seed() {
   db.prepare("INSERT INTO users (id, username, password_hash, full_name, role) VALUES (7,'r','x','Регистратор','registrar')").run();
   db.prepare("INSERT INTO patients (id, full_name) VALUES (3,'Пациент')").run();
   // Баланс 150 000 — зачисленный возврат (как после «не мой пациент»).
+  // Строки с деньгами пишет только сервер (мигр. 160): посев — под его разрешением.
+  const tok = db.prepare('INSERT INTO ledger_write_token DEFAULT VALUES').run().lastInsertRowid;
   db.prepare("INSERT INTO patient_deposits (patient_id, amount, status, kind) VALUES (3, 150000, 'received', 'credit')").run();
+  db.prepare('DELETE FROM ledger_write_token WHERE id = ?').run(tok);
   for (const id of [1, 2]) {
     db.prepare("INSERT INTO invoices (id, invoice_number, patient_id, subtotal, discount_amount, total_amount, paid_amount, status) VALUES (?, ?, 3, 100000, 0, 100000, 0, 'unpaid')")
       .run(id, 'INV-A-26-0000' + id);
@@ -98,7 +101,9 @@ test('касса списывает баланс на два счёта: пла�
 
 test('баланса меньше, чем просит экран (устаревшая цифра) — сервер отказывает, счёт не тронут', async () => {
   seed();
+  const tok = DB.prepare('INSERT INTO ledger_write_token DEFAULT VALUES').run().lastInsertRowid;
   DB.prepare("INSERT INTO patient_deposits (patient_id, amount, status, kind) VALUES (3, 120000, 'spent', 'spend')").run();
+  DB.prepare('DELETE FROM ledger_write_token WHERE id = ?').run(tok);
   const res = await payFromStoredValue(INVOICES(), { wallet: 150000 });
   assert.equal(res.wallet, 0);
   assert.match(res.errors[0], /На балансе пациента только 30000/);

@@ -3,8 +3,12 @@
 -- Баланс пациента — это сумма строк patient_deposits. Пока реестр пускал
 -- клиента вставлять строки с любым статусом, править статус и сумму и
 -- удалять их, «положить себе миллион» можно было одним запросом из браузера.
--- Клиентская запись закрыта в реестре (schema-registry.js), а здесь — вторая
--- стена в самой базе, на случай кода, который когда-нибудь обойдёт сервер:
+-- Клиентская запись закрыта в реестре (schema-registry.js). Здесь — правила
+-- в самой базе. Честно о границе: триггер не знает, КТО пишет; от кода
+-- сервера он не защищает, он страхует от ошибки в нём и от прямой правки
+-- строк. Вставку строк с деньгами и перевод депозита в «принят» он пускает
+-- только под разрешением ledger_write_token, которое серверная дверь кладёт
+-- на время своей записи в той же транзакции (domain/wallet.js):
 --
 --   • строку зачисления (credit) и списания (spend) нельзя ни править, ни
 --     удалять: это следы движения денег. Разрешено одно — обнуление
@@ -13,7 +17,11 @@
 --   • вид строки не меняется никогда;
 --   • сумма меняется только у депозита, который ещё ждёт кассу (pending);
 --   • удалить можно только депозит, по которому денег не брали (pending /
---     cancelled). Кэшбэк не удаляется — его откатывают статусом.
+--     cancelled). Кэшбэк не удаляется — его откатывают статусом;
+--   • возвращённое (refund_amount) — от 0 до суммы строки;
+--   • строку с деньгами (зачисление, списание, кэшбэк, принятый/возвращённый
+--     депозит) вставляет и депозит в «принят» переводит только сервер.
+-- Плюс процент правила кэшбэка — от 0 до 100.
 --
 -- Штатные пути работают как прежде: приём депозита (pending → received),
 -- отмена (→ cancelled), возврат депозита (→ refunded + refund_amount),
@@ -22,11 +30,64 @@
 -- Кэшбэк, начисленный прежним экраном, — строка вида deposit с меткой
 -- «cashback:<id счёта>» в примечании. Называем его своим видом и привязываем
 -- к счёту: так его видит и откатывает серверное правило (rpc/cashback.js).
+-- Ре-ревью п.7 — кэшбэк, чей счёт уже удалён, тоже становится кэшбэком (без
+-- счёта): иначе он висел бы в кассе «принятым депозитом», который можно
+-- выдать деньгами.
 UPDATE patient_deposits
    SET kind = 'cashback',
-       invoice_id = COALESCE(invoice_id, CAST(substr(notes, instr(notes, 'cashback:') + 9) AS INTEGER))
- WHERE kind = 'deposit' AND created_by_name = 'Cashback' AND instr(COALESCE(notes, ''), 'cashback:') > 0
-   AND EXISTS (SELECT 1 FROM invoices i WHERE i.id = CAST(substr(notes, instr(notes, 'cashback:') + 9) AS INTEGER));
+       invoice_id = COALESCE(invoice_id,
+         (SELECT i.id FROM invoices i WHERE i.id = CAST(substr(notes, instr(notes, 'cashback:') + 9) AS INTEGER)))
+ WHERE kind = 'deposit' AND created_by_name = 'Cashback' AND instr(COALESCE(notes, ''), 'cashback:') > 0;
+
+-- Разрешение серверной двери на запись денег (см. шапку). Строки живут только
+-- внутри транзакции записи.
+CREATE TABLE ledger_write_token (id INTEGER PRIMARY KEY AUTOINCREMENT);
+
+CREATE TRIGGER patient_deposits_money_insert_server_only
+BEFORE INSERT ON patient_deposits
+WHEN (NEW.kind IN ('credit', 'spend', 'cashback') OR NEW.status IN ('received', 'refunded'))
+ AND NOT EXISTS (SELECT 1 FROM ledger_write_token)
+BEGIN
+  SELECT RAISE(ABORT, 'Строку баланса с деньгами записывает только сервер (касса).');
+END;
+
+CREATE TRIGGER patient_deposits_accept_server_only
+BEFORE UPDATE OF status ON patient_deposits
+WHEN OLD.status = 'pending' AND NEW.status IN ('received', 'refunded', 'spent')
+ AND NOT EXISTS (SELECT 1 FROM ledger_write_token)
+BEGIN
+  SELECT RAISE(ABORT, 'Принять депозит может только сервер (касса).');
+END;
+
+CREATE TRIGGER patient_deposits_refund_range_ins
+BEFORE INSERT ON patient_deposits
+WHEN NEW.refund_amount IS NOT NULL AND (NEW.refund_amount < 0 OR NEW.refund_amount > NEW.amount)
+BEGIN
+  SELECT RAISE(ABORT, 'Возвращено (refund_amount) должно быть от 0 до суммы строки.');
+END;
+
+CREATE TRIGGER patient_deposits_refund_range_upd
+BEFORE UPDATE OF refund_amount ON patient_deposits
+WHEN NEW.refund_amount IS NOT NULL AND (NEW.refund_amount < 0 OR NEW.refund_amount > NEW.amount)
+BEGIN
+  SELECT RAISE(ABORT, 'Возвращено (refund_amount) должно быть от 0 до суммы строки.');
+END;
+
+-- Ре-ревью п.4 — процент кэшбэка от 0 до 100: правило «150 %» раздавало бы
+-- больше, чем пациент заплатил.
+CREATE TRIGGER cashback_rules_percent_ins
+BEFORE INSERT ON cashback_rules
+WHEN NEW.percent < 0 OR NEW.percent > 100
+BEGIN
+  SELECT RAISE(ABORT, 'Процент кэшбэка должен быть от 0 до 100.');
+END;
+
+CREATE TRIGGER cashback_rules_percent_upd
+BEFORE UPDATE OF percent ON cashback_rules
+WHEN NEW.percent < 0 OR NEW.percent > 100
+BEGIN
+  SELECT RAISE(ABORT, 'Процент кэшбэка должен быть от 0 до 100.');
+END;
 
 CREATE TRIGGER patient_deposits_ledger_frozen
 BEFORE UPDATE ON patient_deposits

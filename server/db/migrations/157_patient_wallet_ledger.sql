@@ -24,5 +24,9 @@ ALTER TABLE patient_deposits ADD COLUMN kind TEXT NOT NULL DEFAULT 'deposit'
 ALTER TABLE patient_deposits ADD COLUMN payment_id INTEGER
   REFERENCES payments(id) ON DELETE SET NULL;
 ALTER TABLE patient_deposits ADD COLUMN reason TEXT;
+-- CASHBACK_SERVER_V2 — kind = 'cashback': кэшбэк, начисленный оплатой счёта
+-- (rpc/cashback.js); cashback_base — новые деньги счёта, с которых он
+-- посчитан: по ним возврат откатывает кэшбэк пропорционально.
+ALTER TABLE patient_deposits ADD COLUMN cashback_base REAL;
 
 CREATE INDEX idx_patient_deposits_payment ON patient_deposits(payment_id);

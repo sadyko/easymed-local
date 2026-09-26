@@ -68,8 +68,19 @@ function spendableOn(db, card, invoice) {
     // минус возвраты по журналу), из потолка вычитается: иначе три оплаты по
     // 50 закрывали услугу за 100. Две части одной оплаты частями видят друг
     // друга — журнал пишется в той же транзакции.
-    const spent = db.prepare('SELECT COALESCE(SUM(amount), 0) s FROM card_ledger WHERE discount_id = ? AND invoice_id = ?').get(card.id, invoice.id).s;
-    cap = round2(Math.max(0, scoped + Number(spent || 0)));
+    // Ре-ревью п.8 — и то, что по этим же услугам заплатили ДРУГИЕ карты на
+    // услуги: у двух сертификатов «на анализы» один потолок — сами анализы.
+    let spent = 0;
+    const rows = db.prepare(`SELECT l.discount_id, SUM(l.amount) s, d.service_ids
+                               FROM card_ledger l JOIN patient_discounts d ON d.id = l.discount_id
+                              WHERE l.invoice_id = ? GROUP BY l.discount_id`).all(invoice.id);
+    for (const r of rows) {
+      let ids = [];
+      try { ids = JSON.parse(r.service_ids || '[]'); } catch { ids = []; }
+      ids = (Array.isArray(ids) ? ids : []).map(Number);
+      if (r.discount_id === card.id || ids.some((x) => scope.includes(x))) spent += Number(r.s) || 0;
+    }
+    cap = round2(Math.max(0, scoped + spent));
   }
   return { name, remaining, cap };
 }

@@ -1,82 +1,89 @@
-// CASHBACK_SERVER_V1 (ревью I4, 2026-09-26) — кэшбэк начисляет СЕРВЕР.
+// CASHBACK_SERVER_V2 (ре-ревью денег, 2026-09-26) — кэшбэк начисляет ОПЛАТА.
 //
-// Раньше начисление жило в браузере (views/cashback.js): оно читало облачные
-// колонки правил (cashback_percent, min_purchase, …), которых в офлайн-схеме
-// нет, и вставляло строку patient_deposits напрямую. Ревью денег нашло две
-// беды: база кэшбэка исключала только облачный способ 'deposit', то есть
-// оплата балансом и картой приносила кэшбэк, а «вернуть на баланс и оплатить
-// снова» — дважды; и строку баланса мог вставить любой клиент.
+// История. Облачный экран (views/cashback.js) читал колонки правил, которых
+// офлайн нет, и сам вставлял строку баланса — кэшбэк офлайн не начислялся
+// никогда. Первый серверный вариант (дверь credit_cashback, её звало окно
+// визита) ре-ревью отверг: дверь можно было звать снова после отката
+// (накрутка), а касса и оплата частями её не звали вовсе.
 //
-// Правило теперь одно и здесь:
-//   • правило — действующая строка cashback_rules с наибольшим процентом
-//     (офлайн у правила есть только name / percent / active);
-//   • база — ПРИХОД по счёту: платежи способами, которые считаются новыми
-//     деньгами (shared/payment-methods.js), за вычетом их возвратов. Баланс и
-//     карта — не новые деньги, кэшбэка с них нет;
-//   • один кэшбэк на счёт: строка kind = 'cashback', invoice_id = счёт;
-//   • возврат, после которого счёт уже не оплачен целиком, откатывает кэшбэк
-//     (reverseCashback, зовёт refund_payment) — столько, сколько осталось на
-//     балансе: потраченное уже ушло в услуги и назад не вынимается.
-//
-// Кто зовёт: окно визита после полной оплаты (как и раньше). Права — касса и
-// админ, как у оплаты.
+// Теперь правило живёт в оплате:
+//   • начисляется внутри record_payment / record_payment_split, в ту же
+//     транзакцию, в момент, когда счёт СТАНОВИТСЯ оплаченным — с любого
+//     экрана оплаты;
+//   • только свои счета пациента: не приехавшие из филиала (их оплатить здесь
+//     нельзя и так), не счёт депозита (DEP-), не счёт плательщика;
+//   • ОДИН РАЗ ЗА ЖИЗНЬ СЧЁТА: любая строка кэшбэка этого счёта, в каком бы
+//     она ни была статусе, запрещает следующую. Поэтому «вернуть и оплатить
+//     снова» кэшбэк не множит, а потраченный кэшбэк не накрутить;
+//   • база — новые деньги: платежи способами, которые считаются приходом
+//     (shared/payment-methods.js, без баланса и карты), каждый — за вычетом
+//     своих возвратов (REFUND#id, любым способом), не больше суммы счёта;
+//   • правило — действующее с наибольшим процентом (решение владельца,
+//     см. план); процент 0..100 охраняет база (мигр. 160);
+//   • возврат откатывает кэшбэк пропорционально возвращённому, но не больше,
+//     чем осталось на балансе: потраченное уже ушло в услуги;
+//   • задним числом не начисляется: счета, оплаченные до этой версии,
+//     кэшбэка не получают.
 
-import { hasAnyRole } from '../roles.js';
-import { walletBalance } from '../domain/wallet.js';
+import { walletBalance, withLedgerToken } from '../domain/wallet.js';
 import { NON_CASH_INFLOW } from '../../../public/js/shared/payment-methods.js';
 
-export class RpcError extends Error {
-  constructor(msg, status = 400) { super(msg); this.status = status; }
-}
-
-const ROLES = ['admin', 'cashier'];
 const round2 = (n) => Math.round(n * 100) / 100;
 
-function activeCashback(db, invoiceId) {
-  return db.prepare("SELECT * FROM patient_deposits WHERE kind = 'cashback' AND invoice_id = ? AND status = 'received'").get(invoiceId);
+// Новые деньги по счёту: приходные платежи за вычетом их собственных возвратов.
+export function cashbackBase(db, invoice) {
+  const skip = NON_CASH_INFLOW.map(() => '?').join(',');
+  const pays = db.prepare(`SELECT id, amount FROM payments WHERE invoice_id = ? AND amount > 0 AND method NOT IN (${skip})`)
+    .all(invoice.id, ...NON_CASH_INFLOW);
+  const refundedOf = db.prepare("SELECT COALESCE(SUM(-amount), 0) s FROM payments WHERE amount < 0 AND (notes = ? OR notes LIKE ?)");
+  let base = 0;
+  for (const p of pays) {
+    const tag = 'REFUND#' + p.id;
+    base += Math.max(0, Number(p.amount) - Number(refundedOf.get(tag, tag + ' %').s || 0));
+  }
+  return round2(Math.max(0, Math.min(base, Number(invoice.total_amount) || 0)));
 }
 
-export function creditCashback(db, args, user) {
-  if (!hasAnyRole(user, ROLES)) throw new RpcError('Your role is not allowed to perform this action.', 403);
-  const invoiceId = args && args.invoice_id;
-  if (!Number.isInteger(invoiceId) || invoiceId <= 0) throw new RpcError('invoice_id must be a positive integer.', 400);
-
-  return db.transaction(() => {
-    const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
-    if (!inv) throw new RpcError('invoice not found.', 400);
-    if (inv.status !== 'paid' || !inv.patient_id || inv.payer_id) return { credited: 0 };
-    if (String(inv.invoice_number || '').startsWith('DEP-')) return { credited: 0 };   // предоплата — не покупка
-    if (activeCashback(db, inv.id)) return { credited: 0 };
-
-    const rule = db.prepare('SELECT * FROM cashback_rules WHERE active = 1 AND percent > 0 ORDER BY percent DESC, id LIMIT 1').get();
-    if (!rule) return { credited: 0 };
-
-    const skip = NON_CASH_INFLOW.map(() => '?').join(',');
-    const base = round2(Math.max(0, db.prepare(`SELECT COALESCE(SUM(amount), 0) s FROM payments
-                                                WHERE invoice_id = ? AND method NOT IN (${skip})`).get(inv.id, ...NON_CASH_INFLOW).s));
-    const amount = Math.round(base * Math.min(100, Number(rule.percent)) / 100);
-    if (amount <= 0) return { credited: 0 };
-
-    db.prepare(`INSERT INTO patient_deposits
-                  (patient_id, branch_id, amount, method, status, kind, invoice_id, notes,
-                   created_by, created_by_name, received_by, received_by_name, received_at)
-                VALUES (?, ?, ?, 'cashback', 'received', 'cashback', ?, ?, ?, 'Cashback', ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))`)
-      .run(inv.patient_id, inv.branch_id || null, amount, inv.id,
-        `Кэшбэк ${rule.percent}% со счёта ${inv.invoice_number || inv.id} · cashback:${inv.id}`,
-        user.id, user.id, String(user.full_name || user.username || ''));
-    return { credited: amount, percent: Number(rule.percent) };
-  })();
+function anyCashback(db, invoiceId) {
+  return db.prepare("SELECT * FROM patient_deposits WHERE kind = 'cashback' AND invoice_id = ? ORDER BY id LIMIT 1").get(invoiceId);
 }
 
-// Зовёт refund_payment внутри своей транзакции, когда счёт перестал быть
-// оплаченным целиком.
-export function reverseCashback(db, invoice, user) {
-  const cb = activeCashback(db, invoice.id);
-  if (!cb) return 0;
-  const claw = round2(Math.min(Number(cb.amount) || 0, walletBalance(db, cb.patient_id)));
+// Зовут record_payment / record_payment_split, когда счёт стал оплаченным.
+export function creditCashbackOnPaid(db, invoice, user) {
+  if (!invoice || !invoice.patient_id || invoice.payer_id || invoice.sync_origin != null) return 0;
+  if (String(invoice.invoice_number || '').startsWith('DEP-')) return 0;
+  if (anyCashback(db, invoice.id)) return 0;   // один раз за жизнь счёта
+  const rule = db.prepare('SELECT * FROM cashback_rules WHERE active = 1 AND percent > 0 ORDER BY percent DESC, id LIMIT 1').get();
+  if (!rule) return 0;
+  const base = cashbackBase(db, invoice);
+  const amount = Math.round(base * Math.min(100, Number(rule.percent)) / 100);
+  if (amount <= 0) return 0;
+  withLedgerToken(db, () => db.prepare(`INSERT INTO patient_deposits
+      (patient_id, branch_id, amount, method, status, kind, invoice_id, cashback_base, notes,
+       created_by, created_by_name, received_by, received_by_name, received_at)
+    VALUES (?, ?, ?, 'cashback', 'received', 'cashback', ?, ?, ?, ?, 'Cashback', ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))`)
+    .run(invoice.patient_id, invoice.branch_id || null, amount, invoice.id, base,
+      `Кэшбэк ${rule.percent}% со счёта ${invoice.invoice_number || invoice.id} · cashback:${invoice.id}`,
+      user.id, user.id, String(user.full_name || user.username || '')));
+  return amount;
+}
+
+// Зовёт refund_payment после каждого возврата: кэшбэк должен соответствовать
+// тому, что по счёту осталось новых денег.
+export function adjustCashbackAfterRefund(db, invoice) {
+  const cb = anyCashback(db, invoice.id);
+  if (!cb || !(Number(cb.cashback_base) > 0)) return 0;
+  const base0 = Number(cb.cashback_base);
+  const now = cashbackBase(db, invoice);
+  const target = Math.round(Number(cb.amount) * Math.min(now, base0) / base0);
+  const extra = round2((Number(cb.amount) - target) - (Number(cb.refund_amount) || 0));
+  if (extra <= 0) return 0;
+  const claw = round2(Math.min(extra, walletBalance(db, cb.patient_id)));
+  if (claw <= 0) return 0;
+  const total = round2((Number(cb.refund_amount) || 0) + claw);
   db.prepare(`UPDATE patient_deposits SET status = 'refunded', refund_amount = ?, reason = ?,
                 closed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`)
-    .run(claw, 'Возврат по счёту ' + (invoice.invoice_number || invoice.id)
-      + (claw < cb.amount ? ` — снято ${claw} из ${cb.amount}, остальное уже потрачено` : ''), cb.id);
+    .run(total, 'Возврат по счёту ' + (invoice.invoice_number || invoice.id)
+      + (total < round2(Number(cb.amount) - target) ? ' — снято, сколько было на балансе; остальное уже потрачено' : ''), cb.id);
   return claw;
 }

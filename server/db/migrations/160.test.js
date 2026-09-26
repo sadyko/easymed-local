@@ -25,11 +25,14 @@ test('160: старый кэшбэк получает вид cashback и счё�
     const inv = db.prepare("INSERT INTO invoices (invoice_number, patient_id, total_amount, paid_amount, status) VALUES ('INV-A-26-00001', ?, 100, 100, 'paid')").run(pt).lastInsertRowid;
     db.prepare("INSERT INTO patient_deposits (patient_id, amount, method, status, notes, created_by_name) VALUES (?, 5, 'other', 'received', ?, 'Cashback')")
       .run(pt, 'Cashback 5% on INV-A-26-00001 · cashback:' + inv);
+    // Ре-ревью п.7 — кэшбэк удалённого счёта: тоже кэшбэк, без счёта.
+    const orphan = db.prepare("INSERT INTO patient_deposits (patient_id, amount, method, status, notes, created_by_name) VALUES (?, 7, 'other', 'received', 'Cashback 5% on INV-X · cashback:99999', 'Cashback')").run(pt).lastInsertRowid;
     const pend = db.prepare("INSERT INTO patient_deposits (patient_id, amount, status) VALUES (?, 50, 'pending')").run(pt).lastInsertRowid;
     const got = db.prepare("INSERT INTO patient_deposits (patient_id, amount, status) VALUES (?, 70, 'received')").run(pt).lastInsertRowid;
     migrate(db);
-    const cb = db.prepare("SELECT kind, invoice_id FROM patient_deposits WHERE created_by_name = 'Cashback'").get();
+    const cb = db.prepare("SELECT kind, invoice_id FROM patient_deposits WHERE created_by_name = 'Cashback' ORDER BY id").get();
     assert.deepEqual(cb, { kind: 'cashback', invoice_id: inv });
+    assert.deepEqual(db.prepare('SELECT kind, invoice_id FROM patient_deposits WHERE id = ?').get(orphan), { kind: 'cashback', invoice_id: null });
     db.prepare('UPDATE patient_deposits SET amount = 60 WHERE id = ?').run(pend);
     assert.throws(() => db.prepare('UPDATE patient_deposits SET amount = 700 WHERE id = ?').run(got), /журнал[а-я]* баланса/);
     assert.throws(() => db.prepare('DELETE FROM patient_deposits WHERE id = ?').run(got), /журнал[а-я]* баланса/);

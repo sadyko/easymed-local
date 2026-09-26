@@ -11,7 +11,6 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { createDeposit, acceptDeposit, refundDeposit, depositBalance } from './deposits.js';
 import { createInvoiceForVisit, recordPayment, recordPaymentSplit, refundPayment } from './billing.js';
-import { creditCashback } from './cashback.js';
 import { openCashShift } from './cashier.js';
 import { writableColumns } from '../../db/schema-registry.js';
 import { compile } from '../../db/query-compiler.js';
@@ -139,41 +138,7 @@ test('I3: карта на услуги: повторные оплаты и дв�
   db.close();
 });
 
-// ─── I4 — кэшбэк только с новых денег и откатывается возвратом ──────────────
-test('I4: кэшбэк не начисляется с оплаты балансом и картой; начисляется один раз; возврат его откатывает', () => {
-  const { db, pid, svc } = seed();
-  db.prepare("INSERT INTO cashback_rules (name, percent, active) VALUES ('5%', 5, 1)").run();
-  const card = db.prepare("INSERT INTO patient_discounts (name, kind, amount) VALUES ('К', 'gift_card', 50000)").run().lastInsertRowid;
-  acceptedDeposit(db, pid, 100000);
-  const a = billed(db, pid, [[svc, 200000]]);
-  recordPaymentSplit(db, { invoice_id: a.id, tenders: [
-    { method: 'wallet', amount: 100000 }, { method: 'gift_card', amount: 50000, card_id: card }, { method: 'cash', amount: 50000 }] }, CASH);
-  const r1 = creditCashback(db, { invoice_id: a.id }, CASH);
-  assert.equal(r1.credited, 2500, '5 % только с 50 000 наличными');
-  assert.equal(creditCashback(db, { invoice_id: a.id }, CASH).credited, 0, 'второй раз — ничего');
-  assert.equal(depositBalance(db, { patient_id: pid }, CASH).balance, 2500);
-
-  // Возврат наличной части — кэшбэк откатывается (сколько есть на балансе).
-  const cashPay = db.prepare("SELECT id FROM payments WHERE invoice_id = ? AND method = 'cash' AND amount > 0").get(a.id).id;
-  refundPayment(db, { payment_id: cashPay }, CASH);
-  const cb = db.prepare("SELECT * FROM patient_deposits WHERE kind = 'cashback'").get();
-  assert.equal(cb.status, 'refunded');
-  assert.equal(cb.refund_amount, 2500);
-  assert.equal(depositBalance(db, { patient_id: pid }, CASH).balance, 0);
-
-  // Возврат на баланс и оплата тем же балансом нового счёта кэшбэка не даёт.
-  const b = billed(db, pid, [[svc, 200000]]);
-  recordPayment(db, { invoice_id: b.id, amount: 200000, method: 'cash' }, CASH);
-  assert.equal(creditCashback(db, { invoice_id: b.id }, CASH).credited, 10000);
-  refundPayment(db, { payment_id: payOf(db, b.id).id, to_balance: true }, CASH);
-  const c = billed(db, pid, [[svc, 200000]]);
-  recordPayment(db, { invoice_id: c.id, amount: 200000, method: 'wallet' }, CASH);
-  assert.equal(creditCashback(db, { invoice_id: c.id }, CASH).credited, 0);
-  assert.equal(depositBalance(db, { patient_id: pid }, CASH).balance, 0, 'кэшбэк за b откатан, за c не начислен');
-  assert.equal(typeof getRpc('credit_cashback'), 'function');
-  assert.throws(() => creditCashback(db, { invoice_id: c.id }, REG), (e) => e.status === 403);
-  db.close();
-});
+// I4 (кэшбэк) — см. cashback.test.js: начисление перенесено в оплату (ре-ревью).
 
 // ─── M2 — сумма частей «с баланса» проверяется заранее ──────────────────────
 test('M2: две части «с баланса» больше баланса — отказ называет настоящий баланс', () => {
