@@ -53,6 +53,22 @@ export function outstandingCashback(db, patientId) {
   return round2(Number(r.s) || 0);
 }
 
+// Четвёртая проверка, C1 — НАСТОЯЩИЕ ДЕНЬГИ ПАЦИЕНТА на балансе: сырой журнал
+// минус не откаченный кэшбэк (кэшбэк считается потраченным последним). Только
+// их выдают наличными — и возврат оплаты с баланса (refund_payment), и возврат
+// депозита (refund_deposit). plus — сумма, которая вернётся на баланс в той же
+// операции (возвращаемая часть платежа с баланса).
+export function realMoney(db, patientId, plus = 0) {
+  return round2(Math.max(0, walletRaw(db, patientId) + (Number(plus) || 0) - outstandingCashback(db, patientId)));
+}
+
+// Четвёртая проверка, I1 — долг по кэшбэку: откат кэшбэка, который пациент уже
+// потратил, уводит журнал в минус; его закрывают будущие зачисления, а экраны
+// обязаны его показывать, а не прятать за нулём.
+export function walletDebt(db, patientId) {
+  return round2(Math.max(0, -walletRaw(db, patientId)));
+}
+
 export function walletBalance(db, patientId) {
   const r = db.prepare(`
     SELECT COALESCE(SUM(CASE

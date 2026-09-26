@@ -3,6 +3,9 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // Четвёртая проверка денег (2026-09-27) — долг по кэшбэку, объединение карт только админом
+  "Долг по кэшбэку: {sum} сум": {"en":"Cashback debt: {sum} sum","ru":"Долг по кэшбэку: {sum} сум","uz":"Keshbek bo'yicha qarz: {sum} so'm"},
+  "Объединять карты может только администратор.": {"en":"Only an administrator can merge patient cards.","ru":"Объединять карты может только администратор.","uz":"Kartalarni faqat administrator birlashtira oladi."},
   // DEPOSIT_WALLET_V1, ревью M1 — полный возврат на баланс отменяет счёт
   "Если по счёту больше не осталось денег — отменить счёт": {"en":"If no money is left on the invoice — cancel the invoice","ru":"Если по счёту больше не осталось денег — отменить счёт","uz":"Agar hisobda pul qolmasa — hisobni bekor qilish"},
   "Счёт не отменён: {msg}": {"en":"The invoice was not cancelled: {msg}","ru":"Счёт не отменён: {msg}","uz":"Hisob bekor qilinmadi: {msg}"},

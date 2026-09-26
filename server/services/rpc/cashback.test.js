@@ -218,7 +218,7 @@ test('I3: откат кэшбэка всегда полный — долг ба�
   const { deposit } = createDeposit(db, { patient_id: pid, amount: 5000 }, REG);
   acceptDeposit(db, { deposit_id: deposit.id, method: 'cash' }, CASH);
   assert.equal(bal(db, pid), 0);
-  assert.throws(() => refundDeposit(db, { deposit_id: deposit.id }, CASH), /только 0/);
+  assert.throws(() => refundDeposit(db, { deposit_id: deposit.id }, CASH), /долг по кэшбэку 5000.*можно 0/);
   const c = billed(db, pid, [[svc, 200000]]);
   assert.throws(() => recordPayment(db, { invoice_id: c.id, amount: 1, method: 'wallet' }, CASH), /только 0/);
   refundPayment(db, { payment_id: pay(db, b.id, 'wallet') }, CASH);   // B-часть с баланса — на баланс
@@ -262,5 +262,60 @@ test('M3: разрешение на запись баланса — только
   const { db } = seed({ percent: 0 });
   assert.throws(() => withLedgerToken(db, () => 1), /транзакц/);
   assert.equal(db.transaction(() => withLedgerToken(db, () => 2))(), 2);
+  db.close();
+});
+
+// ─── Четвёртая проверка (2026-09-27) ────────────────────────────────────────
+test('C1: кэшбэк не выводится и через «Вернуть депозит» — наличными только настоящие деньги пациента', () => {
+  const { db, pid, svc } = seed({ percent: 10 });
+  const { deposit } = createDeposit(db, { patient_id: pid, amount: 100000 }, REG);
+  acceptDeposit(db, { deposit_id: deposit.id, method: 'cash' }, CASH);
+  const a = billed(db, pid, [[svc, 500000]]);
+  db.prepare('UPDATE invoices SET subtotal = 500000, total_amount = 500000 WHERE id = ?').run(a.id);
+  recordPayment(db, { invoice_id: a.id, amount: 500000, method: 'cash' }, CASH);   // кэшбэк 50 000
+  db.prepare('UPDATE cashback_rules SET active = 0').run();
+  const b = billed(db, pid, [[svc, 100000]]);
+  db.prepare('UPDATE invoices SET subtotal = 100000, total_amount = 100000 WHERE id = ?').run(b.id);
+  recordPayment(db, { invoice_id: b.id, amount: 100000, method: 'wallet' }, CASH);   // депозит потрачен
+  assert.equal(bal(db, pid), 50000, 'на балансе — только кэшбэк');
+  assert.throws(() => refundDeposit(db, { deposit_id: deposit.id, amount: 50000 }, CASH), /кэшбэк/i);
+  db.close();
+});
+
+test('C1: сначала потрачен кэшбэк, потом деньги возвращают двумя дверями — наличными выходит не больше внесённого', () => {
+  const { db, pid, svc } = seed({ percent: 10 });
+  const { deposit } = createDeposit(db, { patient_id: pid, amount: 100000 }, REG);
+  acceptDeposit(db, { deposit_id: deposit.id, method: 'cash' }, CASH);
+  const a = billed(db, pid, [[svc, 500000]]);
+  db.prepare('UPDATE invoices SET subtotal = 500000, total_amount = 500000 WHERE id = ?').run(a.id);
+  recordPayment(db, { invoice_id: a.id, amount: 500000, method: 'cash' }, CASH);   // кэшбэк 50 000
+  db.prepare('UPDATE cashback_rules SET active = 0').run();
+  const b = billed(db, pid, [[svc, 50000]]);
+  db.prepare('UPDATE invoices SET subtotal = 50000, total_amount = 50000 WHERE id = ?').run(b.id);
+  recordPayment(db, { invoice_id: b.id, amount: 50000, method: 'wallet' }, CASH);
+  const cashOutBefore = db.prepare("SELECT COALESCE(SUM(-amount),0) s FROM payments WHERE amount < 0 AND method = 'cash'").get().s;
+  assert.throws(() => refundDeposit(db, { deposit_id: deposit.id, amount: 100000 }, CASH), /50000/);
+  refundDeposit(db, { deposit_id: deposit.id, amount: 50000 }, CASH);
+  try { refundPayment(db, { payment_id: pay(db, b.id, 'wallet'), to_balance: false }, CASH); } catch { /* отказ — тоже честно */ }
+  const cashOut = db.prepare("SELECT COALESCE(SUM(-amount),0) s FROM payments WHERE amount < 0 AND method = 'cash'").get().s - cashOutBefore;
+  assert.ok(cashOut <= 100000, 'наличными вышло ' + cashOut + ' при внесённых 100 000');
+  db.close();
+});
+
+test('I1: долг по кэшбэку виден — deposit_balance отдаёт debt, отказ возврата депозита объясняет долг', () => {
+  const { db, pid, svc } = seed({ percent: 5 });
+  const a = billed(db, pid, [[svc, 200000]]);
+  recordPayment(db, { invoice_id: a.id, amount: 200000, method: 'cash' }, CASH);   // кэшбэк 10 000
+  db.prepare('UPDATE cashback_rules SET active = 0').run();
+  const b = billed(db, pid, [[svc, 200000]]);
+  recordPaymentSplit(db, { invoice_id: b.id, tenders: [{ method: 'wallet', amount: 10000 }, { method: 'cash', amount: 190000 }] }, CASH);
+  refundPayment(db, { payment_id: pay(db, a.id, 'cash') }, CASH);   // долг 10 000
+  const r = depositBalance(db, { patient_id: pid }, CASH);
+  assert.equal(r.balance, 0);
+  assert.equal(r.debt, 10000);
+  const { deposit } = createDeposit(db, { patient_id: pid, amount: 4000 }, REG);
+  acceptDeposit(db, { deposit_id: deposit.id, method: 'cash' }, CASH);
+  assert.equal(depositBalance(db, { patient_id: pid }, CASH).debt, 6000);
+  assert.throws(() => refundDeposit(db, { deposit_id: deposit.id }, CASH), /долг по кэшбэку/i);
   db.close();
 });

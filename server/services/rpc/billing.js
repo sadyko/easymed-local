@@ -22,7 +22,7 @@ import { localDate } from '../domain/day.js';
 import { restoreSources } from './inventory.js';
 // DEPOSIT_WALLET_V1 — баланс пациента: списание при оплате «с баланса» и
 // зачисление при возврате «на баланс» — в той же транзакции, что платёж.
-import { spendWallet, creditWallet, isDepositInvoice, walletBalance, walletRaw, outstandingCashback, WalletError, DEPOSIT_INVOICE_REFUSAL } from '../domain/wallet.js';
+import { spendWallet, creditWallet, isDepositInvoice, walletBalance, realMoney, WalletError, DEPOSIT_INVOICE_REFUSAL } from '../domain/wallet.js';
 // Ревью I4 — возврат откатывает кэшбэк этого счёта.
 // CASHBACK_SERVER_V2 — кэшбэк начисляет оплата, возврат его подстраивает.
 import { creditCashbackOnPaid, adjustCashbackAfterRefund } from './cashback.js';
@@ -1030,7 +1030,7 @@ export function refundPayment(db, args, user) {
     // Считается от всей возвращаемой части, а не от запрошенной суммы: иначе
     // потолок зависел бы от того, как кассир разбил возврат.
     if (p.method === 'wallet' && !toBalance) {
-      const cap = round2(Math.max(0, walletRaw(db, invoice.patient_id) + refundable - outstandingCashback(db, invoice.patient_id)));
+      const cap = realMoney(db, invoice.patient_id, refundable);   // одно правило с refund_deposit
       if (amt > cap) {
         throw new RpcError(`Деньгами можно вернуть не больше ${cap}: остальное на балансе — кэшбэк, его возвращают только на баланс.`, 400);
       }

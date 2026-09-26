@@ -43,7 +43,7 @@ import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // 
 import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
          askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=aug17e';
 import { hasActorRole } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1
-import { canSpendStoredValue, loadPatientBalance, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
+import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
 // строк живут в одном модуле на все окна: копии этого кода уже разъезжались.
 // CRM_REAL_BOOKING_V1 (2026-09-21) — закрытия строк здесь больше нет: приход
@@ -567,7 +567,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         } catch (e) { wiz.discounts = []; }
         // DEPOSIT_WALLET_V1 — баланс пациента (депозит и зачисленные возвраты);
         // сбой не мешает мастеру — просто нечего предложить.
-        wiz.balance = await loadPatientBalance(patient && patient.id);
+        { const w = await loadPatientWallet(patient && patient.id); wiz.balance = w.balance; wiz.walletDebt = w.debt; }
         wiz.services = svcRes.data || [];
         wiz.doctors  = docRes.data || [];
         wiz.sources  = srcRes.data || [];
@@ -1981,6 +1981,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // может касса/админ. Регистратура видит баланс и отправляет в кассу.
     function balanceRow() {
         const bal = Number(wiz.balance) || 0;
+        // Четвёртая проверка денег, I1 — долг по кэшбэку виден при записи.
+        if (!(bal > 0) && Number(wiz.walletDebt) > 0) {
+            return h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--crit-600)' } },
+                trf('Долг по кэшбэку: {sum} сум', { sum: fmtPrice(wiz.walletDebt) }));
+        }
         if (!(bal > 0) || !canInvoice) return null;
         if (!canSpendStoredValue()) {
             return h('div', { class: 'muted', style: { fontSize: '12.5px' } },

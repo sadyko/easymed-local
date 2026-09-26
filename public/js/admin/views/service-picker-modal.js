@@ -44,7 +44,7 @@ import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS
 // эти услуги стоят ЭТОМУ пациенту сегодня, и кладёт ответ на строки.
 import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTierOf } from '../visit-tier-logic.js';
 import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining } from '../discount-rules.js';   // DISCOUNT_RULES_V1 · CARD_BALANCE_V1
-import { canSpendStoredValue, loadPatientBalance, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
+import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
 // строк живут в одном модуле на все окна: копии этого кода уже разъезжались.
 // CRM_REAL_BOOKING_V1 (2026-09-21) — закрытия строк здесь больше нет: приход
@@ -2450,6 +2450,10 @@ export function openServicePickerModal({
                 // способом 'wallet') сразу после выставления счёта. Списывает
                 // касса/админ; регистратура видит баланс и отправляет в кассу.
                 const balNow = Number(wiz.depositBalance) || 0;
+                if (!(balNow > 0) && Number(wiz.walletDebt) > 0) {
+                    box.appendChild(h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--crit-600)', marginTop: '8px' } },
+                        trf('Долг по кэшбэку: {sum} сум', { sum: formatMoney(wiz.walletDebt) })));
+                }
                 if (balNow > 0) {
                     if (canSpendStoredValue()) {
                         const balChk = h('input', { type: 'checkbox', checked: wiz.useBalance ? true : null });
@@ -2631,7 +2635,8 @@ export function openServicePickerModal({
 
     // DEPOSIT_WALLET_V1 — баланс считает сервер (domain/wallet.js): та же цифра,
     // что в карточке пациента и в кассе, с зачисленными возвратами.
-    async function loadWizDeposit(pid) { return loadPatientBalance(pid); }
+    // Четвёртая проверка денег, I1 — и долг по кэшбэку (показывается в смете).
+    async function loadWizDeposit(pid) { const w = await loadPatientWallet(pid); wiz.walletDebt = w.debt; return w.balance; }
 
     async function ensureWizData() {
         if (wiz.payers === null) {

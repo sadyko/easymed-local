@@ -22,6 +22,16 @@ export function canSpendStoredValue() { return hasActorRole(STORED_VALUE_ROLES);
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 // Баланс пациента с сервера (та же цифра, что в карточке и в кассе).
+// Четвёртая проверка денег, I1 — баланс вместе с долгом по кэшбэку.
+export async function loadPatientWallet(patientId) {
+    if (!patientId) return { balance: 0, debt: 0 };
+    try {
+        const { data, error } = await supabase.rpc('deposit_balance', { patient_id: Number(patientId) });
+        if (error) return { balance: 0, debt: 0 };
+        return { balance: Math.max(0, Number(data && data.balance) || 0), debt: Math.max(0, Number(data && data.debt) || 0) };
+    } catch (_) { return { balance: 0, debt: 0 }; }
+}
+
 export async function loadPatientBalance(patientId) {
     if (!patientId) return 0;
     try {

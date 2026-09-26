@@ -1099,6 +1099,7 @@ function payModal(root, inv, balance) {
     // Способ «С баланса» появляется, только когда на балансе что-то есть;
     // списывает сервер (record_payment), и больше баланса он не спишет.
     let walletBal = 0;
+    let walletDebt = 0;   // четвёртая проверка, I1 — долг по кэшбэку
     const walletSum = () => tenders.filter((t) => t.method === 'wallet').reduce((s2, t) => s2 + (Number(t.amount) || 0), 0);
     // CARD_BALANCE_V1 — действующие карты/сертификаты с остатком. Остаток,
     // срок, группу и услуги окончательно проверяет сервер (domain/cards.js).
@@ -1345,6 +1346,8 @@ function payModal(root, inv, balance) {
                 },
             }, '+ Разделить оплату (второй способ)'));
         }
+        if (walletDebt > 0) bodyEl.appendChild(h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--crit-600)', margin: '4px 0' } },
+            trf('Долг по кэшбэку: {sum} сум', { sum: fmtPrice(walletDebt) })));
         bodyEl.appendChild(hintEl);
         refreshHint();
     };
@@ -1366,7 +1369,8 @@ function payModal(root, inv, balance) {
     if (inv.patient_id && !String(inv.invoice_number || '').startsWith('DEP-')) {
         supabase.rpc('deposit_balance', { patient_id: inv.patient_id }).then(({ data }) => {
             walletBal = Math.max(0, Number(data && data.balance) || 0);
-            if (walletBal > 0) render();
+            walletDebt = Math.max(0, Number(data && data.debt) || 0);   // четвёртая проверка, I1
+            if (walletBal > 0 || walletDebt > 0) render();
         }).catch(() => {});
     }
     render();

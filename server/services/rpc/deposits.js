@@ -25,7 +25,7 @@ import { ensureOpenShift } from './cashier.js';
 // уникальности у них обязано быть буквально одно.
 import { branchLetter, assertOwnBuilding } from './billing.js';
 // DEPOSIT_WALLET_V1 — формула баланса одна на весь сервер.
-import { walletBalance, withLedgerToken } from '../domain/wallet.js';
+import { walletBalance, walletDebt, realMoney, withLedgerToken } from '../domain/wallet.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -241,7 +241,19 @@ export function refundDeposit(db, args, user) {
 
     // Остаток по пациенту: принято − потрачено − уже возвращённое.
     const balance = walletBalance(db, dep.patient_id);
-    if (amount > balance) {
+    // Четвёртая проверка, C1 — деньгами выдаются только настоящие деньги
+    // пациента (кэшбэк не выдаётся), I1 — долг по кэшбэку называется прямо.
+    const real = Math.min(balance, realMoney(db, dep.patient_id));
+    const debt = walletDebt(db, dep.patient_id);
+    if (amount > real) {
+      if (debt > 0) {
+        throw new RpcError('У пациента долг по кэшбэку ' + debt + ': кэшбэк за возвращённую оплату уже был потрачен,'
+          + ' и новые деньги сначала закрывают этот долг. Вернуть сейчас можно ' + real + '.', 400);
+      }
+      if (real < balance) {
+        throw new RpcError('Деньгами можно вернуть не больше ' + real + ': остальное на балансе — кэшбэк,'
+          + ' наличными его не выдают.', 400);
+      }
       throw new RpcError('На балансе пациента только ' + balance
         + ' — остальное уже ушло в оплату услуг. Вернуть больше остатка нельзя.', 400);
     }
@@ -332,5 +344,6 @@ export function depositBalance(db, args, user) {
            d.payment_id, d.reason, d.notes, d.created_at, d.created_by_name, i.invoice_number
       FROM patient_deposits d LEFT JOIN invoices i ON i.id = d.invoice_id
      WHERE d.patient_id = ? ORDER BY d.id DESC`).all(a.patient_id);
-  return { balance: walletBalance(db, a.patient_id), rows };
+  // Четвёртая проверка, I1 — debt: долг по кэшбэку (0, если его нет).
+  return { balance: walletBalance(db, a.patient_id), debt: walletDebt(db, a.patient_id), rows };
 }
