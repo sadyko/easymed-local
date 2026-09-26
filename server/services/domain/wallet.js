@@ -24,8 +24,33 @@ const round2 = (n) => Math.round(n * 100) / 100;
 // серверная дверь кладёт на время своей записи и тут же убирает (в той же
 // транзакции). Вложенные вызовы безопасны: у каждого своя строка.
 export function withLedgerToken(db, fn) {
+  // Третья проверка, M3 — только внутри транзакции: иначе разрешение пережило
+  // бы сбой между вставкой и удалением и открыло бы журнал для всех.
+  if (!db.inTransaction) throw new Error('withLedgerToken: запись баланса только внутри транзакции.');
   const id = db.prepare('INSERT INTO ledger_write_token DEFAULT VALUES').run().lastInsertRowid;
   try { return fn(); } finally { db.prepare('DELETE FROM ledger_write_token WHERE id = ?').run(id); }
+}
+
+// Сырая сумма журнала — может быть МЕНЬШЕ нуля: откат кэшбэка, который
+// пациент уже потратил, не прощается (третья проверка, I3), а ждёт будущих
+// зачислений. Экраны и списания видят walletBalance — не меньше нуля.
+export function walletRaw(db, patientId) {
+  const r = db.prepare(`
+    SELECT COALESCE(SUM(CASE
+             WHEN status = 'received' THEN amount
+             WHEN status = 'refunded' THEN amount - COALESCE(refund_amount, 0)
+             WHEN status = 'spent'    THEN -amount
+             ELSE 0 END), 0) AS b
+      FROM patient_deposits WHERE patient_id = ?`).get(patientId);
+  return round2(Number(r.b) || 0);
+}
+
+// Кэшбэк на балансе, ещё не откаченный: это не деньги пациента, наличными он
+// не выдаётся (третья проверка, I2).
+export function outstandingCashback(db, patientId) {
+  const r = db.prepare(`SELECT COALESCE(SUM(amount - COALESCE(refund_amount, 0)), 0) s FROM patient_deposits
+                         WHERE patient_id = ? AND kind = 'cashback' AND status IN ('received', 'refunded')`).get(patientId);
+  return round2(Number(r.s) || 0);
 }
 
 export function walletBalance(db, patientId) {

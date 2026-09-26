@@ -246,11 +246,11 @@ export function refundDeposit(db, args, user) {
         + ' — остальное уже ушло в оплату услуг. Вернуть больше остатка нельзя.', 400);
     }
 
-    db.prepare(`
+    withLedgerToken(db, () => db.prepare(`
       UPDATE patient_deposits
          SET status = 'refunded', refund_amount = ?,
              closed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
-       WHERE id = ?`).run(amount, dep.id);
+       WHERE id = ?`).run(amount, dep.id));   // третья проверка, M2 — только сервер
 
     // DEPOSIT_REVENUE_V1 — возврат зеркалит приём: раз приём был платежом, то и
     // возврат — платёж, только отрицательный. Так он сам вычитается из выручки,

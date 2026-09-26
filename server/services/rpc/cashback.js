@@ -50,13 +50,19 @@ function anyCashback(db, invoiceId) {
 
 // Зовут record_payment / record_payment_split, когда счёт стал оплаченным.
 export function creditCashbackOnPaid(db, invoice, user) {
-  if (!invoice || !invoice.patient_id || invoice.payer_id || invoice.sync_origin != null) return 0;
+  if (!invoice) return 0;
+  // Третья проверка, I1 — счёт оценивается ОДИН раз, при первой полной оплате,
+  // при любом исходе; «вернуть 1, оплатить 1» старый счёт не переоценит.
+  if (invoice.cashback_evaluated_at) return 0;
+  db.prepare("UPDATE invoices SET cashback_evaluated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ? AND cashback_evaluated_at IS NULL").run(invoice.id);
+  if (!invoice.patient_id || invoice.payer_id || invoice.sync_origin != null) return 0;
   if (String(invoice.invoice_number || '').startsWith('DEP-')) return 0;
   if (anyCashback(db, invoice.id)) return 0;   // один раз за жизнь счёта
   const rule = db.prepare('SELECT * FROM cashback_rules WHERE active = 1 AND percent > 0 ORDER BY percent DESC, id LIMIT 1').get();
   if (!rule) return 0;
   const base = cashbackBase(db, invoice);
-  const amount = Math.round(base * Math.min(100, Number(rule.percent)) / 100);
+  // Третья проверка, M1 — начисление вниз, откат вверх: округление не дарит.
+  const amount = Math.floor(base * Math.min(100, Number(rule.percent)) / 100 + 1e-9);
   if (amount <= 0) return 0;
   withLedgerToken(db, () => db.prepare(`INSERT INTO patient_deposits
       (patient_id, branch_id, amount, method, status, kind, invoice_id, cashback_base, notes,
@@ -75,15 +81,17 @@ export function adjustCashbackAfterRefund(db, invoice) {
   if (!cb || !(Number(cb.cashback_base) > 0)) return 0;
   const base0 = Number(cb.cashback_base);
   const now = cashbackBase(db, invoice);
-  const target = Math.round(Number(cb.amount) * Math.min(now, base0) / base0);
-  const extra = round2((Number(cb.amount) - target) - (Number(cb.refund_amount) || 0));
+  // Третья проверка, I3 + M1 — откат ВСЕГДА полный (вверх): если кэшбэк уже
+  // потрачен, журнал баланса уходит в минус, баланс показывается нулём, и долг
+  // закрывают будущие зачисления. Прежде недостача прощалась.
+  const clawTotal = Math.min(Number(cb.amount),
+    Math.ceil(Number(cb.amount) * (base0 - Math.min(now, base0)) / base0 - 1e-9));
+  const extra = round2(clawTotal - (Number(cb.refund_amount) || 0));
   if (extra <= 0) return 0;
-  const claw = round2(Math.min(extra, walletBalance(db, cb.patient_id)));
-  if (claw <= 0) return 0;
-  const total = round2((Number(cb.refund_amount) || 0) + claw);
-  db.prepare(`UPDATE patient_deposits SET status = 'refunded', refund_amount = ?, reason = ?,
+  const owed = round2(Math.max(0, extra - walletBalance(db, cb.patient_id)));
+  withLedgerToken(db, () => db.prepare(`UPDATE patient_deposits SET status = 'refunded', refund_amount = ?, reason = ?,
                 closed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`)
-    .run(total, 'Возврат по счёту ' + (invoice.invoice_number || invoice.id)
-      + (total < round2(Number(cb.amount) - target) ? ' — снято, сколько было на балансе; остальное уже потрачено' : ''), cb.id);
-  return claw;
+    .run(clawTotal, 'Возврат по счёту ' + (invoice.invoice_number || invoice.id)
+      + (owed > 0 ? ` — ${owed} кэшбэка уже потрачено: долг баланса, закроется будущими зачислениями` : ''), cb.id));
+  return extra;
 }

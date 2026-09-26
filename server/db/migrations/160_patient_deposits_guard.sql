@@ -51,12 +51,24 @@ BEGIN
   SELECT RAISE(ABORT, 'Строку баланса с деньгами записывает только сервер (касса).');
 END;
 
-CREATE TRIGGER patient_deposits_accept_server_only
-BEFORE UPDATE OF status ON patient_deposits
-WHEN OLD.status = 'pending' AND NEW.status IN ('received', 'refunded', 'spent')
+-- Третья проверка, M2 — статус и «возвращено» у строки с деньгами меняет
+-- только сервер. Без разрешения можно одно: отменить ждущий депозит
+-- (pending → cancelled), по которому денег не брали.
+CREATE TRIGGER patient_deposits_money_change_server_only
+BEFORE UPDATE OF status, refund_amount ON patient_deposits
+WHEN (NEW.status IS NOT OLD.status OR NEW.refund_amount IS NOT OLD.refund_amount)
+ AND NOT (OLD.kind = 'deposit' AND OLD.status = 'pending' AND NEW.status = 'cancelled' AND NEW.refund_amount IS OLD.refund_amount)
  AND NOT EXISTS (SELECT 1 FROM ledger_write_token)
 BEGIN
-  SELECT RAISE(ABORT, 'Принять депозит может только сервер (касса).');
+  SELECT RAISE(ABORT, 'Статус и возвращённую сумму строки баланса меняет только сервер (касса).');
+END;
+
+-- Кэшбэк принадлежит своему счёту: по нему он оценивается и откатывается.
+CREATE TRIGGER patient_deposits_cashback_invoice_frozen
+BEFORE UPDATE OF invoice_id ON patient_deposits
+WHEN OLD.kind = 'cashback' AND NEW.invoice_id IS NOT OLD.invoice_id
+BEGIN
+  SELECT RAISE(ABORT, 'Кэшбэк привязан к своему счёту — перевесить его на другой счёт нельзя.');
 END;
 
 CREATE TRIGGER patient_deposits_refund_range_ins

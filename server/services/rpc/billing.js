@@ -22,7 +22,7 @@ import { localDate } from '../domain/day.js';
 import { restoreSources } from './inventory.js';
 // DEPOSIT_WALLET_V1 — баланс пациента: списание при оплате «с баланса» и
 // зачисление при возврате «на баланс» — в той же транзакции, что платёж.
-import { spendWallet, creditWallet, isDepositInvoice, walletBalance, WalletError, DEPOSIT_INVOICE_REFUSAL } from '../domain/wallet.js';
+import { spendWallet, creditWallet, isDepositInvoice, walletBalance, walletRaw, outstandingCashback, WalletError, DEPOSIT_INVOICE_REFUSAL } from '../domain/wallet.js';
 // Ревью I4 — возврат откатывает кэшбэк этого счёта.
 // CASHBACK_SERVER_V2 — кэшбэк начисляет оплата, возврат его подстраивает.
 import { creditCashbackOnPaid, adjustCashbackAfterRefund } from './cashback.js';
@@ -1022,6 +1022,19 @@ export function refundPayment(db, args, user) {
       : (toBalanceRaw === true || toBalanceRaw === 1));
     if (toBalance && !invoice.patient_id) throw new RpcError('У счёта нет пациента — зачислить на баланс некому.', 400);
     const refundMethod = toCard ? 'gift_card' : toBalance ? 'wallet' : (p.method === 'wallet' ? 'cash' : p.method);
+
+    // Третья проверка, I2 — КЭШБЭК НАЛИЧНЫМИ НЕ ВЫДАЁТСЯ. Оплату с баланса
+    // вернуть деньгами можно только в пределах настоящих денег пациента на
+    // балансе (баланс вместе со всей ещё возвращаемой частью этого платежа
+    // минус не откаченный кэшбэк); остальное возвращается только на баланс.
+    // Считается от всей возвращаемой части, а не от запрошенной суммы: иначе
+    // потолок зависел бы от того, как кассир разбил возврат.
+    if (p.method === 'wallet' && !toBalance) {
+      const cap = round2(Math.max(0, walletRaw(db, invoice.patient_id) + refundable - outstandingCashback(db, invoice.patient_id)));
+      if (amt > cap) {
+        throw new RpcError(`Деньгами можно вернуть не больше ${cap}: остальное на балансе — кэшбэк, его возвращают только на баланс.`, 400);
+      }
+    }
 
     const refundInfo = db.prepare(`
       INSERT INTO payments (invoice_id, amount, method, cashier_id, shift_id, notes)
