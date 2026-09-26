@@ -1,8 +1,9 @@
 import { Router } from 'express';
-import { requireRole } from '../middleware/auth.js';
 import { hashPassword, validPassword } from '../services/auth.js';
 import { VALID_ROLES, PRIMARY_ROLES } from '../services/roles.js';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
+import { isAdminUser, grantAllowsAdminOr } from '../services/grants.js';   // ADMIN_ROWS_GRANTABLE_V1
+import { roleExceedsActor, isAdminRoleCode } from '../services/role-guard.js';   // ADMIN_ROWS_GRANTABLE_V1
 
 export { VALID_ROLES, PRIMARY_ROLES };
 
@@ -391,18 +392,95 @@ function withSpecialties(db, view) {
   return view;
 }
 
+// ---------------------------------------------------------------------------
+// ADMIN_ROWS_GRANTABLE_V1 (2026-09-26) — «СОТРУДНИКИ» ВЫДАЮТСЯ ИЗ «РОЛЕЙ».
+//
+// Владелец: «there are some roles and functions which are only available to the
+// administrator. can you make read, change, delete options for them too?».
+// Весь роутер стоял за requireRole('admin'). Теперь каждый маршрут спрашивает
+// уровень плитки «Сотрудники» (`settings.employees`): «Просмотр» — список и
+// проверка удаления, «Изменение» — завести и править, «Удаление» — удалить.
+// Роль, которая плитку не настраивала, живёт по прежнему правилу — только
+// администратор (теперь и администратор дополнительной ролью, isAdminUser).
+//
+// Деньги карточки (зарплата, ставки) — отдельное действие «Цены и проценты»
+// (`settings.employees.money`): без него не-администратор их не видит и не
+// пишет.
+//
+// И главное — ЗАЩИТЫ ОТ САМОПОВЫШЕНИЯ, у не-администратора всегда:
+//   • роль администратора (основная, дополнительная, своя роль на её основе)
+//     не назначается;
+//   • назначается только роль, у которой нет ничего сверх прав назначающего
+//     (services/role-guard.js roleExceedsActor — то же сравнение, что у «Ролей»);
+//   • учётную запись администратора не правят и пароль ей не меняют;
+//   • пароль не сбрасывают тому, чья роль выше собственной (иначе войти под
+//     ним — и есть повышение);
+//   • свою роль не меняют; администратора и себя не удаляют.
+// ---------------------------------------------------------------------------
+const EMP_KEY = 'settings.employees';
+const MONEY_KEY = 'settings.employees.money';
+export const MONEY_FIELDS = ['salary_type', 'salary_fixed', 'salary_percent', 'service_rate_default', 'referral_rate_default', 'service_rates', 'referral_rates'];
+
+function forbid(res, message) {
+  return res.status(403).json({ error: { code: 'forbidden', message } });
+}
+
+function requireEmployees(db, level) {
+  return (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Login required.' } });
+    if (grantAllowsAdminOr(db, req.user, EMP_KEY, level)) return next();
+    return forbid(res, 'Раздел «Сотрудники» недоступен вашей роли. Права выдаёт администратор в «Настройки → Роли».');
+  };
+}
+
+/** Видит и пишет ли человек деньги карточки сотрудника. */
+export function employeeMoneyAllowed(db, user) {
+  return isAdminUser(user) || (grantAllowsAdminOr(db, user, EMP_KEY, 'edit') && grantAllowsAdminOr(db, user, MONEY_KEY, 'edit'));
+}
+
+function stripMoney(view) {
+  for (const k of MONEY_FIELDS) delete view[k];
+  return view;
+}
+
+/** Учётная запись администратора: основной, дополнительной ролью или своей ролью на её основе. */
+function isAdminAccount(db, u) {
+  if (!u) return false;
+  if (u.role === 'admin' || parseJsonArray(u.extra_roles).includes('admin')) return true;
+  return !!(u.custom_role_code && isAdminRoleCode(db, u.custom_role_code));
+}
+
+/** Коды ролей, которые носит учётная запись. */
+function accountRoleCodes(u) {
+  const out = [];
+  if (u.custom_role_code) out.push(u.custom_role_code); else out.push(u.role);
+  for (const r of parseJsonArray(u.extra_roles)) if (!out.includes(r)) out.push(r);
+  return out;
+}
+
+/** Отказ назначить эти роли (коды) — текст или null. */
+function assignRefusal(db, actor, codes) {
+  for (const code of codes) {
+    if (!code) continue;
+    if (isAdminRoleCode(db, code)) return 'Роль администратора назначает только администратор.';
+    const excess = roleExceedsActor(db, actor, code);
+    if (excess) return `Нельзя назначить роль «${code}»: у неё больше прав, чем у вас (${excess}). Такую роль назначает администратор.`;
+  }
+  return null;
+}
+
 export function userRoutes(db) {
   const r = Router();
   // Staff roster is sensitive and these pages run on shared clinic PCs.
   r.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
-  r.use(requireRole('admin'));
 
-  r.get('/', (req, res) => {
+  r.get('/', requireEmployees(db, 'view'), (req, res) => {
     const rows = db.prepare('SELECT * FROM users ORDER BY username').all();
-    res.json({ users: rows.map((u) => withSpecialties(db, employeeView(u))) });
+    const money = employeeMoneyAllowed(db, req.user);
+    res.json({ users: rows.map((u) => { const v = withSpecialties(db, employeeView(u)); return money ? v : stripMoney(v); }) });
   });
 
-  r.post('/', (req, res) => {
+  r.post('/', requireEmployees(db, 'edit'), (req, res) => {
     // LICENCE_CORE_V1 — a THIRD write path (see licence-gate.test.js): staff
     // accounts bypass /api/db's registry entirely (it lists 'users' but with
     // every write role set empty, on purpose) and land straight here.
@@ -421,6 +499,16 @@ export function userRoutes(db) {
     if (!cr.ok) return bad(res, cr.message);
     const finalRole = cr.code ? cr.role : role;
     if (!PRIMARY_ROLES.includes(finalRole)) return bad(res, 'Unknown role.');
+    // ADMIN_ROWS_GRANTABLE_V1 — не-администратор: ни роли администратора, ни
+    // роли выше своей, ни денег без «Цен и процентов».
+    if (!isAdminUser(req.user)) {
+      const extras = Array.isArray(req.body && req.body.extra_roles) ? req.body.extra_roles : [];
+      const refusal = assignRefusal(db, req.user, [cr.code || finalRole, ...extras]);
+      if (refusal) return forbid(res, refusal);
+      if (!employeeMoneyAllowed(db, req.user) && MONEY_FIELDS.some((k) => req.body[k] !== undefined)) {
+        return forbid(res, 'Зарплату и ставки сотрудника меняет роль с правом «Сотрудники → Цены и проценты».');
+      }
+    }
     if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(name)) return bad(res, 'Username already exists.');
 
     const parsed = parseEmployeeFields(req.body, db);
@@ -439,10 +527,11 @@ export function userRoutes(db) {
                     ...(cr.code !== undefined ? [cr.code] : []), ...Object.values(ef)];
     const info = db.prepare(`INSERT INTO users (${columns.join(',')}) VALUES (${placeholders})`).run(...values);
     if (specs.list) writeSpecialties(db, Number(info.lastInsertRowid), specs.list);
-    res.status(201).json({ user: withSpecialties(db, employeeView(db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid))) });
+    const created = withSpecialties(db, employeeView(db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid)));
+    res.status(201).json({ user: employeeMoneyAllowed(db, req.user) ? created : stripMoney(created) });
   });
 
-  r.patch('/:id', (req, res) => {
+  r.patch('/:id', requireEmployees(db, 'edit'), (req, res) => {
     // LICENCE_CORE_V1 — same write gate as POST above.
     if (req.control?.locked) return lockedResponse(res, req.control);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
@@ -470,7 +559,35 @@ export function userRoutes(db) {
       return bad(res, 'Password must not be empty (max 72 bytes).');
     }
     if (full_name !== undefined && typeof full_name !== 'string') return bad(res, 'Full name must be text.');
-    if (user.id === req.user.id && (active === false || (roleToWrite !== undefined && roleToWrite !== 'admin'))) {
+    // ADMIN_ROWS_GRANTABLE_V1 — защиты не-администратора (см. шапку роутера).
+    if (!isAdminUser(req.user)) {
+      const self = user.id === req.user.id;
+      if (isAdminAccount(db, user)) return forbid(res, 'Учётную запись администратора меняет только администратор.');
+      if (self && active === false) return bad(res, 'You cannot deactivate or demote your own account.');
+      const extrasIn = req.body && Array.isArray(req.body.extra_roles) ? req.body.extra_roles : null;
+      const curExtras = parseJsonArray(user.extra_roles);
+      const primaryNow = roleToWrite !== undefined ? roleToWrite : user.role;
+      const primaryChanged = primaryNow !== user.role;
+      const customChanged = cr.code !== undefined && (cr.code || null) !== (user.custom_role_code || null);
+      const addedExtras = extrasIn ? extrasIn.filter((x) => x !== primaryNow && !curExtras.includes(x)) : [];
+      const extrasChanged = !!extrasIn && (addedExtras.length > 0 || curExtras.some((x) => x !== primaryNow && !extrasIn.includes(x)));
+      if (self && (primaryChanged || customChanged || extrasChanged)) return forbid(res, 'Свою роль менять нельзя — это делает администратор.');
+      const assigned = [];
+      if (customChanged && cr.code) assigned.push(cr.code);
+      else if (primaryChanged || customChanged) assigned.push(primaryNow);
+      assigned.push(...addedExtras);
+      const refusal = assignRefusal(db, req.user, assigned);
+      if (refusal) return forbid(res, refusal);
+      if (password !== undefined && !self) {
+        for (const code of accountRoleCodes(user)) {
+          const excess = roleExceedsActor(db, req.user, code);
+          if (excess) return forbid(res, `Пароль этого сотрудника меняет администратор: у его роли больше прав, чем у вас (${excess}).`);
+        }
+      }
+      if (!employeeMoneyAllowed(db, req.user) && MONEY_FIELDS.some((k) => req.body[k] !== undefined)) {
+        return forbid(res, 'Зарплату и ставки сотрудника меняет роль с правом «Сотрудники → Цены и проценты».');
+      }
+    } else if (user.id === req.user.id && (active === false || (roleToWrite !== undefined && roleToWrite !== 'admin'))) {
       return bad(res, 'You cannot deactivate or demote your own account.');
     }
     // Belt-and-braces: the clinic must never end up with zero active admins.
@@ -526,17 +643,20 @@ export function userRoutes(db) {
     if (active === false || password !== undefined) {
       db.prepare('DELETE FROM sessions WHERE user_id = ? AND id <> ?').run(user.id, req.sessionId ?? '');
     }
-    res.json({ user: withSpecialties(db, employeeView(db.prepare('SELECT * FROM users WHERE id = ?').get(user.id))) });
+    const outView = withSpecialties(db, employeeView(db.prepare('SELECT * FROM users WHERE id = ?').get(user.id)));
+    res.json({ user: employeeMoneyAllowed(db, req.user) ? outView : stripMoney(outView) });
   });
 
   // STAFF_DELETE_V1 — what removing this employee would do, without doing it.
   // Lets the UI offer «удалить» or «отключить» honestly rather than proposing a
   // delete that was never possible.
-  r.get('/:id/delete-check', (req, res) => {
+  r.get('/:id/delete-check', requireEmployees(db, 'view'), (req, res) => {
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
     if (!user) return res.status(404).json({ error: { code: 'not_found', message: 'User not found.' } });
     const managed = mainClinicRow(user);           // STAFF_SYNC_V1
-    const guard = managed ? { ok: false, reason: managed } : staffDeleteGuard(db, user, req.user);
+    let guard = managed ? { ok: false, reason: managed } : staffDeleteGuard(db, user, req.user);
+    // ADMIN_ROWS_GRANTABLE_V1 — проверка отвечает то же, что ответит удаление.
+    if (guard.ok && !isAdminUser(req.user) && isAdminAccount(db, user)) guard = { ok: false, reason: ADMIN_DELETE_REFUSAL };
     res.json({
       name: user.full_name || user.username,
       deletable: guard.ok,
@@ -545,7 +665,7 @@ export function userRoutes(db) {
     });
   });
 
-  r.delete('/:id', (req, res) => {
+  r.delete('/:id', requireEmployees(db, 'delete'), (req, res) => {
     // LICENCE_CORE_V1 — same write gate as POST above. GET /:id/delete-check
     // stays open: it's a read-only dry run, never a write.
     if (req.control?.locked) return lockedResponse(res, req.control);
@@ -557,6 +677,8 @@ export function userRoutes(db) {
     const managedDelete = mainClinicRow(user);
     if (managedDelete) return res.status(409).json({ error: { code: 'conflict', message: managedDelete } });
 
+    // ADMIN_ROWS_GRANTABLE_V1 — администратора удаляет только администратор.
+    if (!isAdminUser(req.user) && isAdminAccount(db, user)) return forbid(res, ADMIN_DELETE_REFUSAL);
     const guard = staffDeleteGuard(db, user, req.user);
     if (!guard.ok) {
       // 409: the request is well-formed, the clinic's state forbids it.
@@ -577,6 +699,8 @@ export function userRoutes(db) {
 
   return r;
 }
+
+const ADMIN_DELETE_REFUSAL = 'Администратора удаляет только администратор.';
 
 // STAFF_DELETE_V1 — tables recording WHAT AN EMPLOYEE DID. A reference from any
 // of these means the roster row is the only thing that still names the person on

@@ -9,7 +9,7 @@ import { hasAnyRole } from '../roles.js';
 // CALLCENTER_OPERATOR_V1 — звонок, журнал и запись спрашивают МАТРИЦУ ПРАВ,
 // а список ролей ниже остаётся правилом перехода для ролей, которых в ней ещё
 // не настраивали (server/services/grants.js).
-import { grantAllows, requireGrant } from '../grants.js';
+import { grantAllows, requireGrant, grantAllowsAdminOr, isAdminUser } from '../grants.js';
 import { canSeeAllLeads } from '../crm/visibility.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { publicSettings, saveSettings, getCredentials, listDispositions, SettingsError, forgetBinotel } from '../telephony/settings.js';
 import { binotelCall } from '../telephony/binotel.js';
@@ -31,22 +31,40 @@ export class RpcError extends Error {
 // section is admin-only in full, reads included — the telegram-token rule.
 // hasAnyRole, not user.role: an admin whose PRIMARY role is doctor
 // (ADMIN_DOCTOR_V1) must not be locked out of a settings screen.
-function requireAdmin(user) {
-  if (!hasAnyRole(user, ['admin'])) {
-    throw new RpcError('Настройки телефонии доступны только администратору.', 403);
+//
+// ADMIN_ROWS_GRANTABLE_V1 (2026-09-26) — РАЗДЕЛ ВЫДАЁТСЯ ИЗ «РОЛЕЙ» (ключ
+// `settings.telephony`): «Просмотр» — настройки, подключения и журнал,
+// «Изменение» — сохранить и проверить, «Удаление» — удалить подключение и
+// стереть Binotel. Роль, которая ключ не настраивала, — как вчера: только
+// администратор. КЛЮЧИ И СЕКРЕТЫ не-администратор не видит ни на каком уровне
+// (ключ Binotel приходит пустым с api_key_set; секреты провайдеров не уходили
+// никогда), а пустое поле ключа при его сохранении ключ не стирает.
+const TEL_KEY = 'settings.telephony';
+function requireLevel(db, user, need) {
+  if (!grantAllowsAdminOr(db, user, TEL_KEY, need)) {
+    throw new RpcError('Настройки телефонии недоступны вашей роли. Права выдаёт администратор в «Настройки → Роли».', 403);
   }
 }
 
+// Ключ Binotel — тоже учётные данные: не-администратору он не показывается.
+function maskedFor(user, settings) {
+  if (isAdminUser(user)) return settings;
+  return { ...settings, api_key: '', api_key_set: !!(settings && settings.api_key), secrets_hidden: true };
+}
+
 export function telephonySettingsGet(db, _args, user) {
-  requireAdmin(user);
-  return publicSettings(db);
+  requireLevel(db, user, 'view');
+  return maskedFor(user, publicSettings(db));
 }
 
 export function telephonySettingsSave(db, args, user) {
-  requireAdmin(user);
+  requireLevel(db, user, 'edit');
+  const a = { ...(args || {}) };
+  // Не-администратор ключа не видел — пустое поле значит «оставить как есть».
+  if (!isAdminUser(user) && typeof a.api_key === 'string' && a.api_key.trim() === '') delete a.api_key;
   let out;
   try {
-    out = saveSettings(db, args || {}, user && user.id ? user.id : null);
+    out = saveSettings(db, a, user && user.id ? user.id : null);
   } catch (e) {
     if (e instanceof SettingsError) throw new RpcError(e.message, e.status);
     throw e;
@@ -55,7 +73,7 @@ export function telephonySettingsSave(db, args, user) {
   // act in seconds instead of at the end of the previous interval —
   // wakeTelegramBot's reasoning, applied here.
   wakePolling();
-  return out;
+  return maskedFor(user, out);
 }
 
 // binotel.js's fixed reason vocabulary mapped onto the sentences the screen
@@ -79,7 +97,7 @@ const TEST_MESSAGES = {
  * be injected any other way (licenceEnroll's pattern).
  */
 export async function telephonyTest(db, args, user, { binotelCallImpl = binotelCall } = {}) {
-  requireAdmin(user);
+  requireLevel(db, user, 'edit');
   const saved = getCredentials(db);
   const typed = (v) => (typeof v === 'string' && v.trim() ? v.trim() : '');
   const key = typed(args && args.api_key) || saved.key;
@@ -101,7 +119,7 @@ export async function telephonyTest(db, args, user, { binotelCallImpl = binotelC
 // stays server-side on purpose: it is vendor diagnostics, not something to
 // ship to a browser with every refresh.
 export function telephonyRecentCalls(db, _args, user) {
-  requireAdmin(user);
+  requireLevel(db, user, 'view');
   return db.prepare(`
     SELECT c.id, c.general_call_id, c.started_at, c.call_type, c.external_number,
            c.internal_number, c.waitsec, c.billsec, c.disposition, c.is_new_call,
@@ -126,7 +144,7 @@ export function telephonyRecentCalls(db, _args, user) {
 // drawn next to the wrong outcome. The merge is a join — it belongs where the
 // tables are.
 export function telephonyDispositions(db, _args, user) {
-  requireAdmin(user);
+  requireLevel(db, user, 'view');
   return listDispositions(db);
 }
 
@@ -140,7 +158,7 @@ export function telephonyDispositions(db, _args, user) {
 // становится пустой, как в новой клинике. Админское действие, как и все
 // остальные в этом разделе.
 export function telephonyForgetBinotel(db, _args, user) {
-  requireAdmin(user);
+  requireLevel(db, user, 'delete');
   const out = forgetBinotel(db);
   // Опрос просыпается сразу: иначе выключённая линия ещё интервал стучалась бы
   // к вендору со стёртым ключом и писала бы себе ошибку.
@@ -149,7 +167,7 @@ export function telephonyForgetBinotel(db, _args, user) {
 }
 
 export function telephonyProvidersList(db, _args, user) {
-  requireAdmin(user);
+  requireLevel(db, user, 'view');
   return { kinds: Object.entries(KINDS).map(([k, v]) => ({ kind: k, label: v.label })), providers: listProviders(db) };
 }
 
@@ -170,7 +188,7 @@ export function telephonyProvidersList(db, _args, user) {
 // Проверка — только при СМЕНЕ секрета: сохранение названия или добавочного
 // номера не должно ходить к вендору.
 export async function telephonyProviderSave(db, args, user, { pbxAuthImpl = pbxAuth } = {}) {
-  requireAdmin(user);
+  requireLevel(db, user, 'edit');
   const a = args || {};
   const existing = a.id ? getProviderRow(db, a.id) : null;
   const kind = existing ? providerKind(existing) : String(a.kind || '');
@@ -195,13 +213,13 @@ export async function telephonyProviderSave(db, args, user, { pbxAuthImpl = pbxA
 }
 
 export function telephonyProviderDelete(db, args, user) {
-  requireAdmin(user);
+  requireLevel(db, user, 'delete');
   try { return deleteProvider(db, args && args.id); }
   catch (e) { if (e instanceof ProviderError) throw new RpcError(e.message, e.status); throw e; }
 }
 
 export async function telephonyProviderTest(db, args, user, seams = {}) {
-  requireAdmin(user);
+  requireLevel(db, user, 'edit');
   return testProvider(db, args || {}, seams);
 }
 
