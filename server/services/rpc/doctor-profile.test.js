@@ -94,3 +94,69 @@ test('белый список совпадает с тем, что шлёт эк
     assert.ok(PROFILE_KEYS.includes(k), k);
   }
 });
+
+// RPC_PORT_V1 (доводка) — специальности и «болезни, которые я лечу» пишет
+// тот же RPC, одной транзакцией. Раньше экран писал user_specialties и
+// doctor_conditions напрямую: user_specialties в реестре — только admin, а
+// оба insert несли company_id, которого в колонках реестра нет, — отказ был у
+// ВСЕХ, включая администратора.
+test('обычный врач (не админ) сохраняет специальности: до 4, первая — основная, имена из канона', () => {
+  const db = seed();
+  const out = updateMyDoctorProfile(db, { p: {}, specialties: ['nevrolog', 'kardiolog'] }, doc);
+  assert.deepEqual(out.specialties, ['nevrolog', 'kardiolog']);
+  const rows = db.prepare('SELECT specialty_slug, name_ru, name_uz, is_primary FROM user_specialties WHERE user_id = 2 ORDER BY id').all();
+  assert.deepEqual(rows.map((r) => [r.specialty_slug, r.is_primary]), [['nevrolog', 1], ['kardiolog', 0]]);
+  assert.equal(rows[0].name_ru, 'Невролог');
+  assert.equal(rows[0].name_uz, 'Nevrolog');
+  // повторное сохранение заменяет набор, а не дописывает
+  updateMyDoctorProfile(db, { p: {}, specialties: ['kardiolog'] }, doc);
+  assert.deepEqual(db.prepare('SELECT specialty_slug, is_primary FROM user_specialties WHERE user_id = 2').all()
+    .map((r) => [r.specialty_slug, r.is_primary]), [['kardiolog', 1]]);
+});
+
+test('специальности: чужой набор не трогается, неизвестный слаг и больше 4 — отказ без записи', () => {
+  const db = seed();
+  db.prepare("INSERT INTO user_specialties (user_id, specialty_slug, name_ru, is_primary) VALUES (3, 'onkolog', 'Онколог', 1)").run();
+  updateMyDoctorProfile(db, { p: {}, specialties: ['nevrolog'] }, doc);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM user_specialties WHERE user_id = 3').get().n, 1);
+  assert.throws(() => updateMyDoctorProfile(db, { p: {}, specialties: ['not-a-specialty'] }, doc), (e) => e.status === 400);
+  assert.throws(() => updateMyDoctorProfile(db, { p: {}, specialties: ['nevrolog', 'kardiolog', 'onkolog', 'androlog', 'genetik'] }, doc), (e) => e.status === 400);
+  assert.deepEqual(db.prepare('SELECT specialty_slug FROM user_specialties WHERE user_id = 2').all().map((r) => r.specialty_slug), ['nevrolog']);
+});
+
+test('специальность не из канона, уже стоящая у самого врача, сохраняется (старые данные не запирают профиль)', () => {
+  const db = seed();
+  db.prepare("INSERT INTO user_specialties (user_id, specialty_slug, name_ru, name_uz, is_primary) VALUES (2, 'legacy-slug', 'Старая', 'Eski', 1)").run();
+  updateMyDoctorProfile(db, { p: {}, specialties: ['nevrolog', 'legacy-slug'] }, doc);
+  const rows = db.prepare('SELECT specialty_slug, name_ru, is_primary FROM user_specialties WHERE user_id = 2 ORDER BY id').all();
+  assert.deepEqual(rows.map((r) => [r.specialty_slug, r.name_ru, r.is_primary]), [['nevrolog', 'Невролог', 1], ['legacy-slug', 'Старая', 0]]);
+});
+
+test('болезни и симптомы: свой набор заменяется, чужой цел, мусор — отказ', () => {
+  const db = seed();
+  db.prepare("INSERT INTO doctor_conditions (doctor_id, kind, slug, name_ru) VALUES (3, 'disease', 'x', 'X')").run();
+  updateMyDoctorProfile(db, { p: {}, conditions: [
+    { kind: 'disease', slug: 'gipertoniya', name_ru: 'Гипертония', name_uz: 'Gipertoniya' },
+    { kind: 'symptom', slug: 'bol-golovy', name_ru: 'Головная боль' },
+  ] }, doc);
+  assert.deepEqual(db.prepare('SELECT kind, slug, name_ru FROM doctor_conditions WHERE doctor_id = 2 ORDER BY id').all()
+    .map((r) => [r.kind, r.slug, r.name_ru]), [['disease', 'gipertoniya', 'Гипертония'], ['symptom', 'bol-golovy', 'Головная боль']]);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM doctor_conditions WHERE doctor_id = 3').get().n, 1);
+  assert.throws(() => updateMyDoctorProfile(db, { p: {}, conditions: [{ kind: 'drug', slug: 'a' }] }, doc), (e) => e.status === 400);
+  assert.throws(() => updateMyDoctorProfile(db, { p: {}, conditions: [{ kind: 'disease', slug: '' }] }, doc), (e) => e.status === 400);
+});
+
+test('всё в одной транзакции: ошибка в болезнях не оставляет новые специальности', () => {
+  const db = seed();
+  updateMyDoctorProfile(db, { p: {}, specialties: ['kardiolog'] }, doc);
+  assert.throws(() => updateMyDoctorProfile(db, { p: {}, specialties: ['nevrolog'], conditions: 'nope' }, doc), (e) => e.status === 400);
+  assert.deepEqual(db.prepare('SELECT specialty_slug FROM user_specialties WHERE user_id = 2').all().map((r) => r.specialty_slug), ['kardiolog']);
+});
+
+test('без ключей specialties / conditions наборы не трогаются', () => {
+  const db = seed();
+  updateMyDoctorProfile(db, { p: {}, specialties: ['kardiolog'], conditions: [{ kind: 'disease', slug: 'a', name_ru: 'A' }] }, doc);
+  updateMyDoctorProfile(db, { p: { bio_ru: 'x' } }, doc);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM user_specialties WHERE user_id = 2').get().n, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM doctor_conditions WHERE doctor_id = 2').get().n, 1);
+});

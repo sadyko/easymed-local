@@ -18,7 +18,22 @@
 // те колонки белого списка, что в таблице действительно есть, а непустые
 // значения без колонки возвращаются в `not_stored` — ответ не притворяется,
 // что сохранил их. Появятся колонки миграцией — RPC начнёт писать их сам.
+//
+// СПЕЦИАЛЬНОСТИ И БОЛЕЗНИ (доводка RPC_PORT_V1). Экран писал user_specialties и
+// doctor_conditions напрямую через /api/db, и это не работало ни у кого:
+// user_specialties в реестре пишет только admin, а оба insert несли
+// company_id, которого среди колонок реестра нет. Теперь оба набора приходят
+// сюда же (args.specialties — слаги, до 4, [0] = основная; args.conditions —
+// { kind: 'disease'|'symptom', slug, name_ru, name_uz }) и заменяются одной
+// транзакцией вместе с полями профиля — только у самого врача. Ключ не
+// передан — набор не трогается.
+//
+// Слаг специальности проверяется по канону (shared/specialty-list.js — тот же
+// список, что у карточки сотрудника и отчётов), имена берутся оттуда же, а не
+// от клиента. Исключение — слаг, который у ЭТОГО врача уже стоит: старые данные
+// не должны запирать профиль, их имена сохраняются как были.
 import { hasAnyRole } from '../roles.js';
+import { SPECIALTY_ROWS } from '../../../public/js/shared/specialty-list.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -71,6 +86,49 @@ function cleanValue(key, v) {
   return s;
 }
 
+const MAX_SPECIALTIES = 4;
+const MAX_CONDITIONS = 300;
+const CONDITION_KINDS = ['disease', 'symptom'];
+const CANON = new Map(SPECIALTY_ROWS.map((r) => [r.slug, r]));
+
+function cleanSpecialties(db, uid, list) {
+  if (!Array.isArray(list)) throw new RpcError('specialties must be a list of slugs.', 400);
+  if (list.length > MAX_SPECIALTIES) throw new RpcError('At most 4 specialties.', 400);
+  const own = new Map(db.prepare('SELECT specialty_slug, name_ru, name_uz FROM user_specialties WHERE user_id = ?')
+    .all(uid).map((r) => [r.specialty_slug, r]));
+  const seen = new Set();
+  const rows = [];
+  for (const raw of list) {
+    const slug = typeof raw === 'string' ? raw.trim() : '';
+    if (!slug) throw new RpcError('Empty specialty.', 400);
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+    const c = CANON.get(slug);
+    if (c) rows.push({ slug, name_ru: c.ru, name_uz: c.uz });
+    else if (own.has(slug)) rows.push({ slug, name_ru: own.get(slug).name_ru, name_uz: own.get(slug).name_uz });
+    else throw new RpcError('Unknown specialty: ' + slug, 400);
+  }
+  return rows;
+}
+
+function cleanConditions(list) {
+  if (!Array.isArray(list) || list.length > MAX_CONDITIONS) throw new RpcError('conditions must be a list.', 400);
+  const seen = new Set();
+  const rows = [];
+  for (const c of list) {
+    if (!c || typeof c !== 'object') throw new RpcError('Bad condition.', 400);
+    const kind = String(c.kind || '');
+    const slug = typeof c.slug === 'string' ? c.slug.trim() : '';
+    if (!CONDITION_KINDS.includes(kind) || !slug || slug.length > 200) throw new RpcError('Bad condition.', 400);
+    const txt = (v) => (v == null ? null : String(v).trim().slice(0, 500) || null);
+    const key = kind + ':' + slug;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({ kind, slug, name_ru: txt(c.name_ru), name_uz: txt(c.name_uz) });
+  }
+  return rows;
+}
+
 function isEmpty(v) {
   return v == null || v === '' || v === '[]';
 }
@@ -91,6 +149,10 @@ export function updateMyDoctorProfile(db, args, user) {
     values[k] = cleanValue(k, v);
   }
 
+  const a = args || {};
+  const specRows = a.specialties === undefined ? null : cleanSpecialties(db, uid, a.specialties);
+  const condRows = a.conditions === undefined ? null : cleanConditions(a.conditions);
+
   const cols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
   const saved = [];
   const notStored = [];
@@ -98,11 +160,27 @@ export function updateMyDoctorProfile(db, args, user) {
     if (cols.has(k)) saved.push(k);
     else if (!isEmpty(values[k])) notStored.push(k);
   }
-  if (saved.length) {
-    // Имена колонок — только из белого списка PROFILE_KEYS и проверены по
-    // PRAGMA выше: в SQL не попадает ни одного имени от клиента.
-    const sql = 'UPDATE users SET ' + saved.map((k) => k + ' = ?').join(', ') + ' WHERE id = ?';
-    db.prepare(sql).run(...saved.map((k) => values[k]), uid);
-  }
-  return { ok: true, saved, not_stored: notStored };
+  db.transaction(() => {
+    if (saved.length) {
+      // Имена колонок — только из белого списка PROFILE_KEYS и проверены по
+      // PRAGMA выше: в SQL не попадает ни одного имени от клиента.
+      const sql = 'UPDATE users SET ' + saved.map((k) => k + ' = ?').join(', ') + ' WHERE id = ?';
+      db.prepare(sql).run(...saved.map((k) => values[k]), uid);
+    }
+    if (specRows) {
+      db.prepare('DELETE FROM user_specialties WHERE user_id = ?').run(uid);
+      const ins = db.prepare('INSERT INTO user_specialties (user_id, specialty_slug, name_ru, name_uz, is_primary) VALUES (?,?,?,?,?)');
+      specRows.forEach((r, i) => ins.run(uid, r.slug, r.name_ru, r.name_uz, i === 0 ? 1 : 0));
+    }
+    if (condRows) {
+      db.prepare('DELETE FROM doctor_conditions WHERE doctor_id = ?').run(uid);
+      const ins = db.prepare('INSERT INTO doctor_conditions (doctor_id, kind, slug, name_ru, name_uz) VALUES (?,?,?,?,?)');
+      for (const r of condRows) ins.run(uid, r.kind, r.slug, r.name_ru, r.name_uz);
+    }
+  })();
+  return {
+    ok: true, saved, not_stored: notStored,
+    ...(specRows ? { specialties: specRows.map((r) => r.slug) } : {}),
+    ...(condRows ? { conditions: condRows.length } : {}),
+  };
 }

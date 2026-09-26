@@ -4236,6 +4236,7 @@ export const STRINGS = {
   "основная": {"en":"primary","ru":"основная","uz":"asosiy"},
   "Повышения квалификаций": {"en":"Continuing education","ru":"Повышения квалификаций","uz":"Malaka oshirishlar"},
   "Профиль сохранён": {"en":"Profile saved","ru":"Профиль сохранён","uz":"Profil saqlandi"},
+  "Профиль сохранён. Биография, образование, соцсети и фото в офлайн-версии не хранятся.": {"en":"Profile saved. Biography, education, social links and photo are not kept in the offline version.","ru":"Профиль сохранён. Биография, образование, соцсети и фото в офлайн-версии не хранятся.","uz":"Profil saqlandi. Biografiya, ta'lim, ijtimoiy tarmoqlar va rasm oflayn versiyada saqlanmaydi."},
   "Сертификаты": {"en":"Certificates","ru":"Сертификаты","uz":"Sertifikatlar"},
   "Симптом": {"en":"Symptom","ru":"Симптом","uz":"Simptom"},
   "Специальности": {"en":"Specialities","ru":"Специальности","uz":"Mutaxassisliklar"},
