@@ -89,6 +89,14 @@ export function openCancelInvoiceDialog(inv, { onDone } = {}) {
     // voidModal): отмена снимает неначатые услуги с визита, галочка их
     // оставляет, чтобы выставить счёт заново. У счёта стационара своё правило.
     const keepBox = h('input', { type: 'checkbox' });
+    // DEPOSIT_WALLET_V1 — куда вернуть деньги. Владелец: «cashier cancels the
+    // payment and can actually refund or push to the deposit so on the next
+    // service it can be paid». «На баланс» — наличные из кассы не выдаются,
+    // сумма ляжет на баланс пациента. «Деньгами» — как раньше; оплаченное с
+    // баланса при этом всё равно возвращается на баланс (сервер, refund_payment).
+    const destMoney = h('input', { type: 'radio', name: 'cancel-refund-dest', checked: true });
+    const destBalance = h('input', { type: 'radio', name: 'cancel-refund-dest' });
+    const destRow = (radio, label) => h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13.5px', cursor: 'pointer' } }, radio, label);
 
     overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '480px', maxWidth: 'calc(100vw - 32px)' } },   // modal-compact = opt out of MODAL_FULLSCREEN_V1
         h('header', { class: 'modal-head' },
@@ -110,6 +118,13 @@ export function openCancelInvoiceDialog(inv, { onDone } = {}) {
                 amountInp,
                 h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
                     'По умолчанию — вся оплаченная сумма. Уменьшите для частичного возврата.'),
+            ),
+            willRefund && h('div', { class: 'field' },
+                h('label', null, 'Куда вернуть'),
+                destRow(destMoney, 'Вернуть деньгами'),
+                destRow(destBalance, 'Зачислить на баланс пациента'),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
+                    'На баланс — наличные из кассы не выдаются: сумма пойдёт в оплату следующей услуги. Оплаченное с баланса возвращается на баланс.'),
             ),
             h('div', { class: 'field' },
                 h('label', null, 'Заметки'),
@@ -148,6 +163,7 @@ export function openCancelInvoiceDialog(inv, { onDone } = {}) {
                         const res = await cancelInvoice(inv, {
                             reason, refundAmount: refund, notes: (notesInp.value || '').trim() || null,
                             keepServices: !inv.admission_id && !!keepBox.checked,
+                            toBalance: willRefund && !!destBalance.checked,
                         });
                         if (res) {
                             close();
@@ -168,7 +184,7 @@ export function openCancelInvoiceDialog(inv, { onDone } = {}) {
 // Performs the cancellation. Returns 'done' on success, 'partial' when a
 // refund stopped half-way (some money did go back — the caller must reload),
 // or false when nothing changed.
-export async function cancelInvoice(inv0, { reason, refundAmount = 0, notes = null, keepServices = false } = {}) {
+export async function cancelInvoice(inv0, { reason, refundAmount = 0, notes = null, keepServices = false, toBalance = false } = {}) {
     // RPC_PORT_V1 (ревью I1) — ОТМЕНУ И ВОЗВРАТ ПРОВОДИТ СЕРВЕР.
     //
     // Здесь браузер сам правил invoices (статус, paid_amount), вставлял
@@ -220,7 +236,10 @@ export async function cancelInvoice(inv0, { reason, refundAmount = 0, notes = nu
             const refundable = Math.round((Number(pay.amount) - refundedOf(pay.id)) * 100) / 100;
             if (refundable <= 0) continue;
             const amt = Math.min(left, refundable);
-            const { data: rRes, error } = await supabase.rpc('refund_payment', { payment_id: pay.id, amount: amt, reason });
+            // DEPOSIT_WALLET_V1 — «на баланс» просим явно; иначе решает сервер:
+            // платёж с баланса возвращается на баланс, остальные — деньгами.
+            const { data: rRes, error } = await supabase.rpc('refund_payment',
+                { payment_id: pay.id, amount: amt, reason, ...(toBalance ? { to_balance: true } : {}) });
             if (error) { failure = error; break; }
             if (rRes && rRes.invoice) lastInvoice = rRes.invoice;
             left = Math.round((left - amt) * 100) / 100;
@@ -272,7 +291,7 @@ export async function cancelInvoice(inv0, { reason, refundAmount = 0, notes = nu
             action:      refunded > 0 ? 'refunded' : 'cancelled',
             /* i18n-exempt-start: summary пишется В БАЗУ (журнал действий) — хранимая запись, а не текст экрана */
             summary:     refunded > 0
-                ? `Возврат ${refunded.toLocaleString('ru-RU')} сум${voided ? ', счёт отменён' : ''} — ${reason}`
+                ? `${toBalance ? 'Зачислено на баланс' : 'Возврат'} ${refunded.toLocaleString('ru-RU')} сум${voided ? ', счёт отменён' : ''} — ${reason}`
                 : `Отменён — ${reason}`,
             /* i18n-exempt-end */
             detail:      { refund_amount: refunded, from_status: inv.status, to_status: toStatus, notes },
@@ -281,6 +300,7 @@ export async function cancelInvoice(inv0, { reason, refundAmount = 0, notes = nu
 
     if (failure) return 'partial';
     toast(!willRefund ? 'Счёт отменён.'
+        : (voided && toBalance) ? trf('{sum} сум зачислено на баланс пациента — счёт отменён.', { sum: refunded.toLocaleString('ru-RU') })
         : voided ? trf('Возврат {sum} сум — счёт отменён.', { sum: refunded.toLocaleString('ru-RU') })
         : trf('Возврат {sum} сум проведён.', { sum: refunded.toLocaleString('ru-RU') }));
     return 'done';

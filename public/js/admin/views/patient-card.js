@@ -2002,6 +2002,12 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             pending.length
                 ? h('span', { class: 'muted', style: { fontSize: '12.5px' } },
                     '· ', trf('ждёт приёма кассой: {sum} сум', { sum: fmtPrice(pending.reduce((n, d) => n + Number(d.amount || 0), 0)) }))
+                : null,
+            // Четвёртая проверка денег, I1 — долг по кэшбэку: кэшбэк за
+            // возвращённую оплату был потрачен, новые деньги сначала закрывают долг.
+            Number(bal.debt) > 0
+                ? h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--crit-600)' } },
+                    trf('Долг по кэшбэку: {sum} сум', { sum: fmtPrice(bal.debt) }))
                 : null);
 
         const depBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' },

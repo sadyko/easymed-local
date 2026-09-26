@@ -19,6 +19,8 @@ export const METHOD_RU = {
     acquiring: 'Эквайринг',
     // DEPOSIT_REVENUE_V1 — оплата с депозитного баланса пациента.
     wallet:    'Кошелёк',
+    // CARD_BALANCE_V1 — оплата остатком подарочной карты / сертификата.
+    gift_card: 'Подарочная карта',
 };
 
 // DEPOSIT_REVENUE_V1 — «кошелёк» это НЕ новые деньги.
@@ -32,14 +34,18 @@ export const METHOD_RU = {
 // за сегодня» на дашборде и итог смены. В ящик он не попадает и так — там
 // только наличные, — но в общую сумму смены попал бы, и касса на пересчёте
 // увидела бы деньги, которых при ней никто не приносил.
-export const NON_CASH_INFLOW = ['wallet'];
+//
+// CARD_BALANCE_V1 — 'gift_card' тоже не приход: у окна кассир денег не взял,
+// карта погасила счёт своим остатком. Если карты продают за деньги, приход —
+// это продажа карты, а не её погашение (продажу через кассу — решает владелец).
+export const NON_CASH_INFLOW = ['wallet', 'gift_card'];
 
 export function countsAsInflow(method) {
     return !NON_CASH_INFLOW.includes(String(method || ''));
 }
 
 // SQL-фрагмент для тех же запросов на сервере: «это приход».
-export const INFLOW_SQL = "method NOT IN ('wallet')";
+export const INFLOW_SQL = "method NOT IN ('wallet','gift_card')";
 
 // Vocabulary order — fixed, so an invoice always reads the same way no matter
 // what order the payment rows came back in, and so the column sorts sensibly in

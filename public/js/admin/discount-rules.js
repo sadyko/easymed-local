@@ -11,6 +11,18 @@
 // valid_until, category_id, service_ids: number[] }. Empty/absent limits mean
 // «no limit» — exactly how the settings editor labels them.
 
+// CARD_BALANCE_V1 — подарочная карта и сертификат — это ХРАНИМЫЕ ДЕНЬГИ с
+// остатком (patient_discounts.remaining), а не скидка: ими ПЛАТЯТ (способ
+// 'gift_card'), и остаток уменьшается. Скидкой остаётся только промокод.
+export const CARD_KINDS = ['gift_card', 'certificate'];
+export function isStoredValueCard(row) { return !!row && CARD_KINDS.includes(row.kind); }
+/** Остаток карты (у строки до миграции 158 — номинал). */
+export function cardRemaining(row) {
+    if (!isStoredValueCard(row)) return 0;
+    const v = row.remaining != null ? Number(row.remaining) : Number(row.amount);
+    return Math.max(0, Number.isFinite(v) ? v : 0);
+}
+
 /** 'YYYY-MM-DD' of a local Date — the clinic's calendar day. */
 export function localYmd(d = new Date()) {
     const p = (n) => String(n).padStart(2, '0');
@@ -30,6 +42,8 @@ export function serviceScope(row) {
 export function discountBlockReason(row, ctx = {}) {
     if (!row) return 'missing';
     if (row.active === 0 || row.active === false) return 'inactive';
+    // CARD_BALANCE_V1 — карта с нулевым остатком не предлагается.
+    if (isStoredValueCard(row) && row.remaining != null && !(Number(row.remaining) > 0)) return 'exhausted';
     const today = ctx.today || localYmd();
     const from = String(row.valid_from || '').slice(0, 10);
     const until = String(row.valid_until || '').slice(0, 10);
@@ -61,6 +75,7 @@ export function eligibleDiscounts(rows, ctx) {
  */
 export function discountValue(row, lines) {
     if (!row) return 0;
+    if (isStoredValueCard(row)) return 0;   // CARD_BALANCE_V1 — картой платят, а не скидывают
     const scope = serviceScope(row);
     const base = (lines || []).reduce((s, l) => {
         if (scope.length && !scope.includes(Number(l && l.service_id))) return s;
@@ -81,6 +96,11 @@ export function discountValue(row, lines) {
 export function discountOptionParts(row, fmtMoney) {
     const pct = Number(row && row.percent) || 0;
     const amount = Number(row && row.amount) || 0;
+    // CARD_BALANCE_V1 — у карты показываем ОСТАТОК, без минуса: это деньги на карте.
+    if (isStoredValueCard(row)) {
+        const rem = cardRemaining(row);
+        return { name: (row && row.name) || '', value: typeof fmtMoney === 'function' ? fmtMoney(rem) : String(rem), scoped: serviceScope(row).length > 0, card: true };
+    }
     const value = pct > 0 ? `−${pct}%` : (amount > 0 ? '−' + (typeof fmtMoney === 'function' ? fmtMoney(amount) : String(amount)) : '');
     return { name: (row && row.name) || '', value, scoped: serviceScope(row).length > 0 };
 }

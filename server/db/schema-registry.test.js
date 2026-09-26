@@ -209,7 +209,8 @@ test('clinical-spine tables: all doctor-readable + key write roles wired', () =>
   assert.ok(canWrite('recommended_services', 'insert', 'doctor'));   // doctors order referrals
   assert.ok(canWrite('patient_conditions', 'insert', 'doctor'));     // dx sync from the workspace
   assert.ok(canWrite('patient_guardians', 'insert', 'registrar'));   // written at registration
-  assert.ok(canWrite('patient_deposits', 'insert', 'cashier'));      // cashier accepts deposits
+  // DEPOSIT_WALLET_V1, ревью I1 — баланс пишет только сервер (accept_deposit и др.)
+  for (const r of ['admin', 'cashier', 'registrar']) assert.ok(!canWrite('patient_deposits', 'insert', r), r);
   assert.ok(canWrite('consultation_templates', 'insert', 'doctor')); // doctor owns SOAP templates
   assert.ok(canWrite('doctor_consultation_prices', 'insert', 'admin'));
   assert.ok(canWrite('invoice_audit_log', 'insert', 'cashier'));     // cashier logs invoice actions

@@ -503,12 +503,22 @@ export const REGISTRY = {
                 // сам журнал, а без сопоставления «номер → человек» разбор по
                 // операторам показывал бы четырёхзначные числа вместо имён.
                 'pbx_extension',
-                'license_number']},   // SCHED_V1 — the wizard's slot engine; branch_id — CALENDAR_BOOKING_V1
+                'license_number',
+                // DOCTOR_PUBLIC_PROFILE_V1 (миграция 159) — публичный профиль
+                // врача: хранится офлайн и читается экранами (профиль врача,
+                // карточка сотрудника) — основа будущего API для партнёров.
+                // Пишут его update_my_doctor_profile и routes/users.js.
+                'full_name_ru','full_name_uz','full_name_en',
+                'academic_title_ru','academic_title_uz','academic_title_en',
+                'bio_ru','bio_uz','bio_en',
+                'education_entries','experience_entries','certifications_entries','prof_dev_entries',
+                'experience_years','instagram_url','telegram_url','photo_url']},   // SCHED_V1 — the wizard's slot engine; branch_id — CALENDAR_BOOKING_V1
                write:{insert:{roles:[]},update:{roles:[]},delete:{roles:[]}},
                // room_id: настройки кабинетов спрашивают «кто закреплён за этим
                // кабинетом» — колонка уже читается строкой выше.
                filters:['id','role','is_active','active','is_doctor','room_id'],
-               json:['service_rates','referral_rates','kpi_links'],
+               json:['service_rates','referral_rates','kpi_links',
+                     'education_entries','experience_entries','certifications_entries','prof_dev_entries'],   // DOCTOR_PUBLIC_PROFILE_V1
                embed:{ rooms: { table:'rooms', fk:'room_id', columns:['id','name'] } } },
   products: {
     read:  { roles: ALL_STAFF, columns: ['id','name','code','unit','category','sale_price','on_hand','reorder_level','active','created_at','updated_at',
@@ -736,7 +746,9 @@ export const REGISTRY = {
     filters:['id','active'], json:['rates'], embed:{} },
   // DISCOUNT_RULES_V1 (mig 129) — valid_from/valid_until, category_id (apply to a
   // patient group), service_ids (JSON list: apply to these services only), note.
-  patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note']},
+  // CARD_BALANCE_V1 (mig 158) — remaining: остаток карты/сертификата. Только
+  // чтение: пишет его сервер (domain/cards.js) и триггеры миграции 158.
+  patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note','remaining']},
     write:{ grant:'settings.patient_discounts',insert:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},
       update:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},delete:{roles:[]}},
     filters:['id','active','kind','category_id'], json:['service_ids'],
@@ -853,13 +865,16 @@ export const REGISTRY = {
   patient_deposits: {
     read:  { roles: ALL_STAFF, columns: ['id','deposit_number','patient_id','branch_id','amount','method','status',
              'notes','refund_amount','created_by','created_by_name','received_by','received_by_name','received_at',
-             'closed_at','created_at'] },
-    write: { insert: { roles: ['admin','registrar','cashier'], columns: ['deposit_number','patient_id','branch_id','amount',
-               'method','status','notes','refund_amount','created_by','created_by_name','received_by','received_by_name','received_at'] },
-             update: { roles: ['admin','cashier'], columns: ['status','notes','refund_amount','received_by','received_by_name',
-               'received_at','closed_at'] },
-             delete: { roles: ['admin','cashier'] } },   // spend/pay rollback deletes its own ledger row
-    filters: ['id','patient_id','status','notes','created_at'],
+             'closed_at','created_at',
+             // DEPOSIT_WALLET_V1 (мигр. 157) — вид строки баланса и откуда она.
+             // Пишет их только сервер (domain/wallet.js): в insert/update ниже их нет.
+             'kind','invoice_id','payment_id','reason'] },
+    // DEPOSIT_WALLET_V1, ревью I1 — КЛИЕНТ БАЛАНС НЕ ПИШЕТ. Строки создают и
+    // меняют только серверные двери (rpc/deposits.js, domain/wallet.js,
+    // rpc/cashback.js); вставка «received» из браузера была подделкой баланса.
+    // Вторая стена — триггеры миграции 160.
+    write: { insert: { roles: [], columns: [] }, update: { roles: [], columns: [] }, delete: { roles: [] } },
+    filters: ['id','patient_id','status','notes','created_at','kind'],
     embed:   { patients: { table:'patients', fk:'patient_id', columns:['id','full_name','first_name','last_name','mrn','phone'] } },
   },
   // Shared SOAP templates. documents.js, service-workspace.js. (doctor/admin own them)

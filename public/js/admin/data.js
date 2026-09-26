@@ -843,10 +843,14 @@ export async function loadGuardiansForPatient(patientId) {
     return data || [];
 }
 
-// Merge a set of duplicate patients into a chosen "primary" patient. Reassigns
-// every known patient-scoped foreign key (visits, invoices, deposits, …) to
-// the primary, then deletes the duplicate patient rows. Tables that don't
-// exist on this DB (older migration set) are skipped gracefully.
+// Merge a set of duplicate patients into a chosen "primary" patient.
+//
+// PATIENT_MERGE_SERVER_V1 — объединение делает СЕРВЕР (merge_patients,
+// server/services/rpc/patient-merge.js): каждая карта-дубль переносится одной
+// транзакцией — визиты, счета с платежами, баланс, госпитализации, документы,
+// родство, журнал — и удаляется. Прежде браузер переносил таблицу за таблицей,
+// а patient_id визитов и счетов реестр клиенту не отдаёт: дубль с историей не
+// объединялся, и часть строк успевала переехать до ошибки.
 //
 // Returns { tablesUpdated:[…], duplicatesDeleted:N }.
 export async function mergePatients({ primaryId, duplicateIds }) {
@@ -854,77 +858,11 @@ export async function mergePatients({ primaryId, duplicateIds }) {
     const dupes = (duplicateIds || []).filter(id => id && id !== primaryId);
     if (!dupes.length) throw new Error('No duplicate patients to merge.');
 
-    // Every table holding a patient_id we know about. Adding a new one here is
-    // all that's needed when a future migration introduces another link.
-    const TABLES = [
-        'visits',
-        'invoices',
-        'patient_deposits',
-        'admissions',
-        'recommended_services',
-        'patient_activity_log',
-        'patient_vitals',     // PATIENT_FAMILY_V1 — had patient_id; was orphaned on merge
-        'visit_documents',    // PATIENT_FAMILY_V1 — ditto (lab_results/visit_services follow via visits)
-    ];
-
-    const tablesUpdated = [];
-    for (const tbl of TABLES) {
-        try {
-            const { error } = await supabase.from(tbl)
-                .update({ patient_id: primaryId })
-                .in('patient_id', dupes);
-            if (error) {
-                if (!/relation .* does not exist|schema cache|could not find the table/i.test(error.message || '')) {
-                    console.warn(`[mergePatients] ${tbl}:`, error.message);
-                }
-                continue;
-            }
-            tablesUpdated.push(tbl);
-        } catch (e) {
-            console.warn(`[mergePatients] ${tbl} threw:`, e.message);
-        }
-    }
-
-    // PATIENT_FAMILY_V1 — patient_guardians has TWO patient endpoints; reassign both
-    // (its patient_id FK is ON DELETE CASCADE, so links would be lost on delete otherwise).
-    try {
-        await supabase.from('patient_guardians').update({ patient_id: primaryId }).in('patient_id', dupes);
-        await supabase.from('patient_guardians').update({ guardian_patient_id: primaryId }).in('guardian_patient_id', dupes);
-        tablesUpdated.push('patient_guardians');
-    } catch (e) { console.warn('[mergePatients] patient_guardians:', e.message); }
-
-    // PATIENT_FAMILY_V1 — patient_relationships has a canonical (a<b) + unique-pair
-    // constraint, so a blind reassign would violate them. Fetch dup-touching rows,
-    // delete them, and recreate canonical, self-link-free, de-duped links to primary.
-    try {
-        const cid = _tenantClinicId();
-        let rq = supabase.from('patient_relationships').select('id, patient_id_a, patient_id_b, relation_type')
-            .or(`patient_id_a.in.(${dupes.join(',')}),patient_id_b.in.(${dupes.join(',')})`);
-        if (cid) rq = rq.eq('company_id', cid);
-        const { data: relRows } = await rq;
-        const dupSet = new Set(dupes.map(String));
-        const rebuilt = new Map();
-        for (const r of (relRows || [])) {
-            let a = dupSet.has(String(r.patient_id_a)) ? primaryId : r.patient_id_a;
-            let b = dupSet.has(String(r.patient_id_b)) ? primaryId : r.patient_id_b;
-            if (String(a) === String(b)) continue;            // self-link -> drop
-            let rt = r.relation_type;
-            if (String(a).toLowerCase() > String(b).toLowerCase()) { const t = a; a = b; b = t; rt = REL_INVERSE[rt] || rt; }
-            rebuilt.set(`${a}|${b}`, { patient_id_a: a, patient_id_b: b, relation_type: rt, ...(cid ? { company_id: cid } : {}) });
-        }
-        const oldIds = (relRows || []).map(r => r.id);
-        if (oldIds.length) await supabase.from('patient_relationships').delete().in('id', oldIds);
-        if (rebuilt.size) await supabase.from('patient_relationships')
-            .upsert([...rebuilt.values()], { onConflict: 'company_id,patient_id_a,patient_id_b', ignoreDuplicates: true });
-        tablesUpdated.push('patient_relationships');
-    } catch (e) { console.warn('[mergePatients] patient_relationships:', e.message); }
-
-    // FKs are reassigned; the duplicate patient rows are now orphaned and
-    // safe to drop.
-    const { error: delErr } = await supabase.from('patients').delete().in('id', dupes);
-    if (delErr) throw delErr;
-
-    return { tablesUpdated, duplicatesDeleted: dupes.length };
+    // Все дубли — одним вызовом и одной транзакцией: либо все, либо ни один.
+    const { data, error } = await supabase.rpc('merge_patients', { keep_id: Number(primaryId), drop_ids: dupes.map(Number) });
+    if (error) throw error;
+    const tables = Object.entries((data && data.moved) || {}).filter(([, n]) => n > 0).map(([tbl]) => tbl);
+    return { tablesUpdated: tables, duplicatesDeleted: ((data && data.drop_ids) || dupes).length };
 }
 
 // Fetch + shape a single patient by id (used to navigate from the duplicate

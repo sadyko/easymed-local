@@ -6,7 +6,7 @@ import { h, Icon, Avatar, Tag, StatusTag, PageHead, toast, clear, fmtDate } from
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { registrarHeader } from './registrar-header.js?v=roleaud1';
 import { loadPatientsPaged, findAllDuplicatePatientIds, mergePatients } from '../data.js';   // DUP_MERGE_V1
-import { scopedDoctorId, canView } from '../permissions.js';
+import { scopedDoctorId, canView, actorIsAdmin } from '../permissions.js';
 // PATIENT_ROW_V2 — телефон в реестре читается так же, как на карточке CRM.
 import { formatPhone } from '../phone-format.js';
 import { moneyDisplay } from '../../shared/money-input.js?v=mi2';   // DEBT_FLOW_V1 — сумма долга у имени
@@ -642,7 +642,9 @@ function paintMergeBar() {
     // keep only ids still present as duplicates
     for (const id of [...selectedDup]) if (!duplicateIdSet.has(id)) selectedDup.delete(id);
     if (refs.mergeCount) refs.mergeCount.textContent = String(selectedDup.size);
-    if (refs.mergeBar) refs.mergeBar.style.display = selectedDup.size >= 2 ? 'flex' : 'none';
+    // Четвёртая проверка, M4 — объединяет карты только администратор (сервер
+    // merge_patients откажет остальным): кнопки у других ролей нет.
+    if (refs.mergeBar) refs.mergeBar.style.display = selectedDup.size >= 2 && actorIsAdmin() ? 'flex' : 'none';
     if (refs.dupHeadCb) refs.dupHeadCb.style.display = state.filter === 'duplicates' ? '' : 'none';
 }
 function syncHeadCb() {
@@ -704,7 +706,9 @@ function openMergeModal() {
             paintDuplicateCount();
             await fetchAndPaint();
         } catch (e) {
-            toast(trf('Не удалось объединить: {msg}', { msg: (e && e.message) || e }), 'fail');
+            // M4 — отказ по роли словами экрана; остальные отказы сервер пишет по-русски.
+            const msg = e && e.code === 'forbidden' ? tr('Объединять карты может только администратор.') : ((e && e.message) || e);
+            toast(trf('Не удалось объединить: {msg}', { msg }), 'fail');
             mergeBtn.disabled = false; mergeBtn.textContent = '';
             mergeBtn.append(Icon('Check', { size: 14 }), ' Объединить');
         }

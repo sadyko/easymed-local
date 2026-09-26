@@ -198,7 +198,7 @@ function movementTotals(db, shiftId) {
 // которой в кассе никогда не было.
 function paymentTotals(db, shiftId) {
   const rows = db.prepare('SELECT method, COALESCE(SUM(amount),0) s, COUNT(*) n FROM payments WHERE shift_id=? GROUP BY method').all(shiftId);
-  const totals = { cash: 0, card: 0, transfer: 0, acquiring: 0, wallet: 0, total: 0, count: 0 };
+  const totals = { cash: 0, card: 0, transfer: 0, acquiring: 0, wallet: 0, gift_card: 0, total: 0, count: 0 };   // CARD_BALANCE_V1
   for (const row of rows) {
     if (Object.prototype.hasOwnProperty.call(totals, row.method)) {
       totals[row.method] = round2(row.s);
@@ -337,6 +337,8 @@ export function cashierInvoices(db, args, user) {
     SELECT i.id, i.invoice_number, i.status, i.subtotal, i.discount_amount,
            i.total_amount, i.paid_amount, i.created_at, i.paid_at,
            pt.full_name AS patient_name, pt.mrn AS mrn, pt.phone AS phone,
+           -- DEPOSIT_WALLET_V1 — окно оплаты спрашивает баланс пациента.
+           i.patient_id AS patient_id,
            -- DEBT_FLOW_V1 — счёт стационара: окно отмены обязано знать, лежит
            -- ли пациент ещё на койке (тогда отмена его не выписывает).
            i.admission_id AS admission_id,

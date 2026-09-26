@@ -174,6 +174,10 @@ if (isMain) {
   }
 
   migrate(db);
+  // Третья проверка денег, M3 — разрешения серверных дверей баланса живут
+  // только внутри транзакции; после падения их не должно остаться.
+  try { db.exec('DELETE FROM ledger_write_token; DELETE FROM merge_money_moves;'); }
+  catch (e) { console.warn('[ledger-token] cleanup:', e.message); }
 
   // PRUNE_VERSIONS_V1 — старые версии программы убираются ИМЕННО ЗДЕСЬ: после
   // того, как миграции прошли. Это первый момент, когда известно, что

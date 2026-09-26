@@ -329,6 +329,8 @@ const SECTIONS = [
         { key: 'personal', label: 'Личные данные', icon: 'ID',          required: ['last_name', 'first_name', 'phone'] },
         { key: 'job',      label: 'Должность',      icon: 'Stethoscope', required: ['staff_type'] },
         { key: 'license',  label: 'Лицензия',       icon: 'Doc',         required: [], doctorOnly: true },
+        // DOCTOR_PUBLIC_PROFILE_V1 — публичный профиль врача (миграция 159).
+        { key: 'profile',  label: 'Публичный профиль', icon: 'User',     required: [], doctorOnly: true },
     ] },
     { group: 'РАБОТА', items: [
         { key: 'branches', label: 'Филиалы',              icon: 'Building', required: [] },
@@ -421,8 +423,12 @@ function openEditor(user, root) {
             inpatient_referral_fixed: moneyText(user.inpatient_referral_fixed),
             username: user.username || '', role: user.role || 'registrar', custom_role_code: user.custom_role_code || '',
             extra_roles: asArr(user.extra_roles).slice(), is_active: !!user.is_active,
+            // DOCTOR_PUBLIC_PROFILE_V1 — что хранится; правка копится в profilePatch.
+            public_profile: { ...(user.public_profile || {}) },
         } : {}),
     };
+    if (!emp.public_profile) emp.public_profile = {};
+    const profilePatch = {};
     let active = 'personal';
     let dirty = false;
     // STAFF_SYNC_V1 — карточка сотрудника, приехавшего из главной клиники,
@@ -504,6 +510,34 @@ function openEditor(user, root) {
     // списка ролей оно собирается из двух полей (role + код своей роли) и в
     // emp[key] не лежит.
     const sel = (key, opts, onset, curValue) => { const cur = curValue !== undefined ? curValue : emp[key]; const s = h('select', null, ...opts.map(([v, l]) => h('option', { value: v, selected: String(cur) === String(v) }, l))); s.addEventListener('change', () => onset ? onset(s.value) : markDirty({ [key]: s.value })); return s; };
+
+    // DOCTOR_PUBLIC_PROFILE_V1 — поля публичного профиля врача. Тексты
+    // правятся здесь; списки (образование, опыт, сертификаты, курсы) — в
+    // «Моём профиле» врача, здесь они показаны. Уходит только изменённое.
+    function profileSection() {
+        const pp = emp.public_profile;
+        const setP = (k, v) => { pp[k] = v; profilePatch[k] = v; markDirty({}); };
+        const ptxt = (k, ph) => { const i = h('input', { type: 'text', value: pp[k] || '', placeholder: ph || '' }); i.addEventListener('input', () => setP(k, i.value)); return i; };
+        const parea = (k) => { const i = h('textarea', { rows: '3', style: { width: '100%', boxSizing: 'border-box' } }, pp[k] || ''); i.addEventListener('input', () => setP(k, i.value)); return i; };
+        const years = h('input', { type: 'number', min: '0', max: '80', step: '1', value: pp.experience_years != null ? String(pp.experience_years) : '' });
+        years.addEventListener('input', () => setP('experience_years', years.value === '' ? null : Math.max(0, parseInt(years.value, 10) || 0)));
+        const LISTS = [['education_entries', 'Образование'], ['experience_entries', 'Опыт работы'],
+            ['certifications_entries', 'Сертификаты'], ['prof_dev_entries', 'Повышения квалификаций']];
+        const entryLine = (e) => [e && (e.ru || e.title || ''), e && (e.year || [e.year_from, e.year_to].filter(Boolean).join('–'))].filter(Boolean).join(' · ');
+        const grid2 = (...els) => h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px 16px' } }, ...els);
+        return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
+            pp.photo_url ? h('img', { src: pp.photo_url, alt: '', style: { width: '96px', height: '96px', objectFit: 'cover', borderRadius: '12px' } }) : null,
+            grid2(field('ФИО (RU)', ptxt('full_name_ru')), field('ФИО (UZ)', ptxt('full_name_uz')), field('ФИО (EN)', ptxt('full_name_en'))),
+            grid2(field('Учёная степень (RU)', ptxt('academic_title_ru')), field('Учёная степень (UZ)', ptxt('academic_title_uz')), field('Учёная степень (EN)', ptxt('academic_title_en'))),
+            field('Биография (RU)', parea('bio_ru')), field('Биография (UZ)', parea('bio_uz')), field('Биография (EN)', parea('bio_en')),
+            grid2(field('Стаж (лет)', years), field('Instagram', ptxt('instagram_url', 'https://instagram.com/…')), field('Telegram', ptxt('telegram_url', 'https://t.me/…'))),
+            ...LISTS.map(([k, label]) => {
+                const list = Array.isArray(pp[k]) ? pp[k] : [];
+                return field(label, list.length
+                    ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '13.5px' } }, ...list.map((e) => h('div', null, entryLine(e) || '—')))
+                    : h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Пока пусто — врач заполняет в «Моём профиле».')));
+            }));
+    }
 
     function pickCategory(v) {
         const becomingDoctor = v === 'doctor';
@@ -620,6 +654,8 @@ function openEditor(user, root) {
                     emp.is_doctor ? field('Категория врача', sel('doctor_category', DOCTOR_CATEGORIES)) : null)));
         } else if (active === 'license') {
             body.append(head('Лицензия', 'Медицинская лицензия сотрудника.'), grid(field('Номер лицензии', txt('license_number', 'AA-000000')), field('Действует до', datef('license_expiry_date'))));
+        } else if (active === 'profile') {
+            body.append(head('Публичный профиль', 'Как врача видят пациенты и партнёры. Врач правит это же в «Моём профиле».'), profileSection());
         } else if (active === 'branches') {
             body.append(head('Филиалы', 'Филиал, в котором работает сотрудник.'), field('Основной филиал', sel('branch_id', [['', '—']].concat(branches.map(b => [String(b.id), b.name])))),
                 hint(branches.length ? '' : 'Филиалы настраиваются в Настройки → Управление филиалами.'));
@@ -799,6 +835,8 @@ function openEditor(user, root) {
             role: emp.role, custom_role_code: emp.custom_role_code || '', extra_roles: (emp.extra_roles || []).filter(r => r !== emp.role), is_active: !!emp.is_active,
         };
         if (String(emp.password).trim()) payload.password = emp.password;
+        // DOCTOR_PUBLIC_PROFILE_V1 — только изменённые поля профиля.
+        if (Object.keys(profilePatch).length) payload.public_profile = { ...profilePatch };
         // ADMIN_ROWS_GRANTABLE_V1 — без «Цены и проценты» деньги не уходят вовсе:
         // экран их не показывал, и сервер отказал бы всей записи.
         if (!acc.money) for (const k of MONEY_KEYS) delete payload[k];

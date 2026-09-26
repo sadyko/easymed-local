@@ -4,6 +4,9 @@ import { VALID_ROLES, PRIMARY_ROLES } from '../services/roles.js';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { isAdminUser, grantAllowsAdminOr } from '../services/grants.js';   // ADMIN_ROWS_GRANTABLE_V1
 import { roleExceedsActor, isAdminRoleCode } from '../services/role-guard.js';   // ADMIN_ROWS_GRANTABLE_V1
+// DOCTOR_PUBLIC_PROFILE_V1 — публичный профиль врача: те же проверки, что у
+// «Моего профиля» врача (rpc/doctor-profile.js), и тот же вид для экранов.
+import { cleanProfileFields, publicProfileOf } from '../services/rpc/doctor-profile.js';
 
 export { VALID_ROLES, PRIMARY_ROLES };
 
@@ -103,6 +106,14 @@ export function parseEmployeeFields(body, db, currentRole) {
     if (ext === '') fields.pbx_extension = null;
     else if (!EXTENSION_RE.test(ext)) return { ok: false, message: 'Invalid extension.' };
     else fields.pbx_extension = ext;
+  }
+
+  // DOCTOR_PUBLIC_PROFILE_V1 (миграция 159) — карточка сотрудника правит
+  // публичный профиль врача: { public_profile: { bio_ru, …, *_entries: [...] } }.
+  // Ключи и значения — белый список профиля; присланные ключи и только они.
+  if (body.public_profile !== undefined) {
+    try { Object.assign(fields, cleanProfileFields(body.public_profile)); }
+    catch (e) { return { ok: false, message: e.message }; }
   }
 
   if (body.branch_id !== undefined) {
@@ -373,6 +384,7 @@ export function employeeView(u) {
     salary_fixed: u.salary_fixed, salary_percent: u.salary_percent,
     staff_type: u.staff_type, scheduling_mode: u.scheduling_mode, branch_id: u.branch_id,
     pbx_extension: u.pbx_extension || '',   // CALL_FROM_CRM_V1 — внутренний номер на АТС
+    public_profile: publicProfileOf(u),     // DOCTOR_PUBLIC_PROFILE_V1
     working_hours: u.working_hours, service_rate_default: u.service_rate_default,
     referral_rate_default: u.referral_rate_default,
     service_rates: parseJsonArray(u.service_rates), referral_rates: parseJsonArray(u.referral_rates),

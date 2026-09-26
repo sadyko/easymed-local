@@ -24,6 +24,8 @@ import { ensureOpenShift } from './cashier.js';
 // acceptDeposit ниже), то есть попадает в тот же UNIQUE-индекс, и правило
 // уникальности у них обязано быть буквально одно.
 import { branchLetter, assertOwnBuilding } from './billing.js';
+// DEPOSIT_WALLET_V1 — формула баланса одна на весь сервер.
+import { walletBalance, walletDebt, realMoney, withLedgerToken } from '../domain/wallet.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -123,12 +125,13 @@ export function acceptDeposit(db, args, user) {
     }
     if (!METHODS.includes(method)) throw new RpcError(`unknown method: ${method}`, 400);
 
-    db.prepare(`
+    // Ре-ревью п.5 — «принят» ставит только касса (триггер мигр. 160).
+    withLedgerToken(db, () => db.prepare(`
       UPDATE patient_deposits
       SET status = 'received', method = ?, received_by = ?, received_by_name = ?,
           received_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
       WHERE id = ?
-    `).run(method, user.id, String(user.full_name || user.username || ''), dep.id);
+    `).run(method, user.id, String(user.full_name || user.username || ''), dep.id));
 
     // DEPOSIT_REVENUE_V1 — деньги взяли, значит это ВЫРУЧКА, и у неё должен быть
     // документ. Приём создаёт настоящий счёт и настоящий платёж — те же таблицы,
@@ -215,6 +218,12 @@ export function refundDeposit(db, args, user) {
   const run = db.transaction(() => {
     const dep = db.prepare('SELECT * FROM patient_deposits WHERE id = ?').get(a.deposit_id);
     if (!dep) throw new RpcError('deposit not found.', 400);
+    // DEPOSIT_WALLET_V1 — строки зачисления и списания (kind credit/spend) не
+    // депозиты: у зачисления invoice_id — счёт УСЛУГИ, и возврат ниже записал
+    // бы отрицательный платёж в чужой счёт.
+    if ((dep.kind || 'deposit') !== 'deposit') {
+      throw new RpcError('Это не депозит, а строка баланса пациента — вернуть её этой кнопкой нельзя.', 400);
+    }
     if (dep.status === 'refunded') throw new RpcError('Депозит уже возвращён.', 400);
     if (dep.status !== 'received') {
       throw new RpcError('Вернуть можно только принятый депозит — этот в статусе «' + dep.status + '».', 400);
@@ -231,24 +240,29 @@ export function refundDeposit(db, args, user) {
     }
 
     // Остаток по пациенту: принято − потрачено − уже возвращённое.
-    const rows = db.prepare('SELECT amount, refund_amount, status FROM patient_deposits WHERE patient_id = ?').all(dep.patient_id);
-    let balance = 0;
-    for (const d of rows) {
-      if (d.status === 'received') balance += Number(d.amount || 0);
-      else if (d.status === 'refunded') balance += Number(d.amount || 0) - Number(d.refund_amount || 0);
-      else if (d.status === 'spent') balance -= Number(d.amount || 0);
-    }
-    balance = round2(Math.max(0, balance));
-    if (amount > balance) {
+    const balance = walletBalance(db, dep.patient_id);
+    // Четвёртая проверка, C1 — деньгами выдаются только настоящие деньги
+    // пациента (кэшбэк не выдаётся), I1 — долг по кэшбэку называется прямо.
+    const real = Math.min(balance, realMoney(db, dep.patient_id));
+    const debt = walletDebt(db, dep.patient_id);
+    if (amount > real) {
+      if (debt > 0) {
+        throw new RpcError('У пациента долг по кэшбэку ' + debt + ': кэшбэк за возвращённую оплату уже был потрачен,'
+          + ' и новые деньги сначала закрывают этот долг. Вернуть сейчас можно ' + real + '.', 400);
+      }
+      if (real < balance) {
+        throw new RpcError('Деньгами можно вернуть не больше ' + real + ': остальное на балансе — кэшбэк,'
+          + ' наличными его не выдают.', 400);
+      }
       throw new RpcError('На балансе пациента только ' + balance
         + ' — остальное уже ушло в оплату услуг. Вернуть больше остатка нельзя.', 400);
     }
 
-    db.prepare(`
+    withLedgerToken(db, () => db.prepare(`
       UPDATE patient_deposits
          SET status = 'refunded', refund_amount = ?,
              closed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
-       WHERE id = ?`).run(amount, dep.id);
+       WHERE id = ?`).run(amount, dep.id));   // третья проверка, M2 — только сервер
 
     // DEPOSIT_REVENUE_V1 — возврат зеркалит приём: раз приём был платежом, то и
     // возврат — платёж, только отрицательный. Так он сам вычитается из выручки,
@@ -300,29 +314,36 @@ export function listDeposits(db, args, user) {
   requireRole(user, ACCEPT_ROLES.concat(CREATE_ROLES));
   const a = args || {};
   const status = a.status === undefined || a.status === null ? 'pending' : String(a.status);
+  // DEPOSIT_WALLET_V1 — только сами депозиты. Зачисления и оплаты с баланса
+  // живут в той же таблице, но это не предоплаты: в списке кассы у них не было
+  // бы ни номера, ни действия, а 'spent' читался бы как «ждёт оплаты».
   const rows = status === 'all'
     ? db.prepare(`SELECT d.*, p.full_name AS patient_name, p.mrn AS patient_mrn
                     FROM patient_deposits d LEFT JOIN patients p ON p.id = d.patient_id
+                   WHERE d.kind = 'deposit'
                    ORDER BY d.id DESC LIMIT 300`).all()
     : db.prepare(`SELECT d.*, p.full_name AS patient_name, p.mrn AS patient_mrn
                     FROM patient_deposits d LEFT JOIN patients p ON p.id = d.patient_id
-                   WHERE d.status = ? ORDER BY d.id DESC LIMIT 300`).all(status);
+                   WHERE d.kind = 'deposit' AND d.status = ? ORDER BY d.id DESC LIMIT 300`).all(status);
   return { rows };
 }
 
 // Баланс пациента: принято − потрачено − возвращено. Ровно та же арифметика,
 // что читает мастер визита, но посчитанная на сервере — карточка пациента и
 // смета не должны расходиться в цифре.
+//
+// DEPOSIT_WALLET_V1 — формула в domain/wallet.js, и в неё входят зачисления
+// при возврате (kind 'credit') и оплаты с баланса (kind 'spend'). rows — журнал
+// целиком, новые сверху: карточка объясняет им цифру.
 export function depositBalance(db, args, user) {
   requireRole(user, ACCEPT_ROLES.concat(CREATE_ROLES));
   const a = args || {};
   if (!isPositiveInt(a.patient_id)) throw new RpcError('patient_id must be a positive integer.', 400);
-  const rows = db.prepare('SELECT amount, refund_amount, status FROM patient_deposits WHERE patient_id = ?').all(a.patient_id);
-  let balance = 0;
-  for (const d of rows) {
-    if (d.status === 'received') balance += Number(d.amount || 0);
-    else if (d.status === 'refunded') balance += Number(d.amount || 0) - Number(d.refund_amount || 0);
-    else if (d.status === 'spent') balance -= Number(d.amount || 0);
-  }
-  return { balance: round2(Math.max(0, balance)), rows };
+  const rows = db.prepare(`
+    SELECT d.id, d.deposit_number, d.amount, d.refund_amount, d.status, d.kind, d.method, d.invoice_id,
+           d.payment_id, d.reason, d.notes, d.created_at, d.created_by_name, i.invoice_number
+      FROM patient_deposits d LEFT JOIN invoices i ON i.id = d.invoice_id
+     WHERE d.patient_id = ? ORDER BY d.id DESC`).all(a.patient_id);
+  // Четвёртая проверка, I1 — debt: долг по кэшбэку (0, если его нет).
+  return { balance: walletBalance(db, a.patient_id), debt: walletDebt(db, a.patient_id), rows };
 }

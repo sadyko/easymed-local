@@ -12,12 +12,12 @@
 //   • ключи — строго из белого списка: роль, оклад, ставки, пароль этим путём
 //     не меняются никогда; неизвестный ключ — отказ целиком, без частичной записи.
 //
-// ОФЛАЙН-ОСОБЕННОСТЬ. Колонок публичного профиля (биографии на трёх языках,
-// образование, соцсети, фото) в офлайн-схеме users сейчас НЕТ — см.
-// CLOUD_LEFTOVER_COLUMNS_V1 в schema-registry.js. Поэтому запись идёт только в
-// те колонки белого списка, что в таблице действительно есть, а непустые
-// значения без колонки возвращаются в `not_stored` — ответ не притворяется,
-// что сохранил их. Появятся колонки миграцией — RPC начнёт писать их сам.
+// DOCTOR_PUBLIC_PROFILE_V1 (миграция 159) — колонки публичного профиля
+// (ФИО/степень/биография на трёх языках, списки образования и опыта, стаж,
+// соцсети, фото) теперь ЕСТЬ в users. Владелец: «we need to add them for
+// building a proper API for partners». Запись по-прежнему идёт только в
+// существующие колонки, а непустые значения без колонки возвращаются в
+// `not_stored` — на базе до миграции ответ не притворяется, что сохранил их.
 //
 // СПЕЦИАЛЬНОСТИ И БОЛЕЗНИ (доводка RPC_PORT_V1). Экран писал user_specialties и
 // doctor_conditions напрямую через /api/db, и это не работало ни у кого:
@@ -48,6 +48,7 @@ const TEXT_KEYS = [
 const ENTRY_KEYS = ['education_entries', 'experience_entries', 'certifications_entries', 'prof_dev_entries'];
 const URL_KEYS = ['instagram_url', 'telegram_url', 'photo_url'];
 export const PROFILE_KEYS = Object.freeze([...TEXT_KEYS, ...ENTRY_KEYS, 'experience_years', ...URL_KEYS]);
+export const PROFILE_ENTRY_KEYS = Object.freeze([...ENTRY_KEYS]);
 
 const MAX_TEXT = 5000;
 const MAX_ENTRIES = 50;
@@ -80,6 +81,17 @@ function cleanValue(key, v) {
   if (typeof v !== 'string') throw new RpcError(key + ' must be a link.', 400);
   const s = v.trim();
   if (s === '') return '';
+  // DOCTOR_PUBLIC_PROFILE_V1, ревью M4 — фото только из СВОЕГО хранилища
+  // (корзина doctor-photos, routes/storage.js): внешняя картинка ушла бы
+  // партнёрам как фото врача, которое клиника не хранит и не контролирует.
+  if (key === 'photo_url') {
+    // Ре-ревью п.10 — без «%»: закодированный «..» (%2e%2e) или «/» (%2F)
+    // прошёл бы проверку и раскодировался уже в хранилище.
+    if (!/^\/api\/storage\/doctor-photos\/[A-Za-z0-9._~\/-]+$/.test(s) || s.includes('..') || s.length > 500) {
+      throw new RpcError('photo_url must be a photo uploaded to the clinic storage.', 400);
+    }
+    return s;
+  }
   if (s.length > 2000 || !(/^https?:\/\//i.test(s) || /^\/[^/]/.test(s))) {
     throw new RpcError(key + ' must be an http(s) link.', 400);
   }
@@ -146,6 +158,38 @@ function cleanConditions(list) {
   return rows;
 }
 
+// DOCTOR_PUBLIC_PROFILE_V1 — те же правила для карточки сотрудника
+// (routes/users.js): админ правит профиль врача теми же проверками, что и сам
+// врач. Возвращает { ключ: значение для колонки }; неизвестный ключ — отказ.
+export function cleanProfileFields(p) {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) throw new RpcError('public_profile must be an object.', 400);
+  const values = {};
+  for (const [k, v] of Object.entries(p)) {
+    if (!PROFILE_KEYS.includes(k)) throw new RpcError('Field not allowed: ' + k, 400);
+    values[k] = cleanValue(k, v);
+  }
+  return values;
+}
+
+// DOCTOR_PUBLIC_PROFILE_V1 — профиль из строки users в том виде, в каком его
+// отдают экраны (и отдаст API партнёрам): списки — массивами, пустое — пустым.
+export function publicProfileOf(u) {
+  const out = {};
+  for (const k of PROFILE_KEYS) {
+    const v = u ? u[k] : undefined;
+    if (ENTRY_KEYS.includes(k)) {
+      let arr = [];
+      try { arr = JSON.parse(v || '[]'); } catch { arr = []; }
+      out[k] = Array.isArray(arr) ? arr : [];
+    } else if (k === 'experience_years') {
+      out[k] = v == null ? null : Number(v);
+    } else {
+      out[k] = v == null ? '' : String(v);
+    }
+  }
+  return out;
+}
+
 function isEmpty(v) {
   return v == null || v === '' || v === '[]';
 }
@@ -160,11 +204,7 @@ export function updateMyDoctorProfile(db, args, user) {
   const p = (args && args.p) || {};
   if (typeof p !== 'object' || Array.isArray(p)) throw new RpcError('p must be an object.', 400);
 
-  const values = {};
-  for (const [k, v] of Object.entries(p)) {
-    if (!PROFILE_KEYS.includes(k)) throw new RpcError('Field not allowed: ' + k, 400);
-    values[k] = cleanValue(k, v);
-  }
+  const values = cleanProfileFields(p);
 
   const a = args || {};
   const specRows = a.specialties === undefined ? null : cleanSpecialties(db, uid, a.specialties);

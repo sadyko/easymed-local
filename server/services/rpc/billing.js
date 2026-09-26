@@ -20,6 +20,16 @@ import { localDate } from '../domain/day.js';
 // выше, и по той же причине: обе стороны — объявленные функции, ни одна не
 // зовётся при загрузке модуля.
 import { restoreSources } from './inventory.js';
+// DEPOSIT_WALLET_V1 — баланс пациента: списание при оплате «с баланса» и
+// зачисление при возврате «на баланс» — в той же транзакции, что платёж.
+import { spendWallet, creditWallet, isDepositInvoice, walletBalance, realMoney, WalletError, DEPOSIT_INVOICE_REFUSAL } from '../domain/wallet.js';
+// Ревью I4 — возврат откатывает кэшбэк этого счёта.
+// CASHBACK_SERVER_V2 — кэшбэк начисляет оплата, возврат его подстраивает.
+import { creditCashbackOnPaid, adjustCashbackAfterRefund } from './cashback.js';
+import { voidInvoice } from './cashier.js';   // ре-ревью п.9 — отмена после полного возврата на баланс
+import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
+// CARD_BALANCE_V1 — подарочная карта / сертификат платит своим остатком.
+import { spendCard, returnToCard, CardError } from '../domain/cards.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -33,7 +43,9 @@ const PAYMENT_ROLES = ['admin', 'cashier'];
 // DEPOSIT_REVENUE_V1 — 'wallet' — оплата с депозитного баланса пациента. Это
 // НЕ приход денег: они пришли раньше, когда касса приняла депозит. Способ
 // исключён из выручки и из итога смены (см. shared/payment-methods.js).
-const PAYMENT_METHODS = ['cash', 'card', 'transfer', 'acquiring', 'wallet'];   // CASHIER_DESIGN_V2 — эквайринг (Payme/Click terminal)
+// CARD_BALANCE_V1 — 'gift_card' — оплата остатком подарочной карты или
+// сертификата (card_id обязателен); тоже не приход (shared/payment-methods.js).
+const PAYMENT_METHODS = ['cash', 'card', 'transfer', 'acquiring', 'wallet', 'gift_card'];   // CASHIER_DESIGN_V2 — эквайринг (Payme/Click terminal)
 
 function requireRole(user, allowed) {
   // MULTI_ROLE_SERVER_V1 — extras count too, not the primary role alone.
@@ -48,6 +60,15 @@ function round2(n) {
 
 function isPositiveInt(v) {
   return Number.isInteger(v) && v > 0;
+}
+
+// DEPOSIT_WALLET_V1 — отказ журнала баланса звучит как отказ этого модуля
+// (тот же статус, тот же текст), чтобы экраны читали его одинаково.
+function walletGuard(fn) {
+  try { return fn(); } catch (e) {
+    if (e instanceof WalletError || e instanceof CardError) throw new RpcError(e.message, e.status);
+    throw e;
+  }
 }
 
 // BRANCH_MONEY_NUMBER_V1 — буква ЭТОГО здания, та же, что стоит в номере карты
@@ -495,6 +516,7 @@ export function recordPayment(db, args, user) {
       throw new RpcError('invoice not found.', 400);
     }
     assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
+    if (isDepositInvoice(db, invoice)) throw new RpcError(DEPOSIT_INVOICE_REFUSAL, 400);   // ревью C1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
       throw new RpcError(`invoice is ${invoice.status}.`, 400);
     }
@@ -518,10 +540,19 @@ export function recordPayment(db, args, user) {
     // ACQ_PROVIDER_V1 — необязательная пометка (провайдер эквайринга и т.п.);
     // произвольная строка, обрезается до 200 символов, деньги не трогает.
     const payNotes = typeof (args && args.notes) === 'string' ? args.notes.slice(0, 200) : '';
-    db.prepare(`
+    const payInfo = db.prepare(`
       INSERT INTO payments (invoice_id, amount, method, cashier_id, shift_id, notes)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(invoiceId, amt, method, user.id, shiftId, payNotes);
+    // DEPOSIT_WALLET_V1 — «с баланса» СПИСЫВАЕТ баланс. Раньше способ 'wallet'
+    // принимался, а баланс не трогался: счёт закрывался деньгами из воздуха.
+    if (method === 'wallet') {
+      walletGuard(() => spendWallet(db, { patientId: invoice.patient_id, invoice, paymentId: payInfo.lastInsertRowid, amount: amt, user }));
+    }
+    // CARD_BALANCE_V1 — картой: остаток карты уменьшается в той же транзакции.
+    if (method === 'gift_card') {
+      walletGuard(() => spendCard(db, { cardId: args.card_id, invoice, paymentId: payInfo.lastInsertRowid, amount: amt, user }));
+    }
 
     if (status === 'paid') {
       db.prepare(`
@@ -529,6 +560,8 @@ export function recordPayment(db, args, user) {
         SET paid_amount = ?, status = ?, paid_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
         WHERE id = ?
       `).run(newPaid, status, invoiceId);
+      // CASHBACK_SERVER_V2 — счёт стал оплаченным: кэшбэк, один раз за жизнь счёта.
+      if (invoice.status !== 'paid') creditCashbackOnPaid(db, db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId), user);
     } else {
       db.prepare(`
         UPDATE invoices
@@ -547,7 +580,9 @@ export function recordPayment(db, args, user) {
     return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) };
   });
 
-  const out = run();
+  // DEPOSIT_WALLET_V1 — IMMEDIATE: баланс читается и списывается под одной
+  // блокировкой записи, второй кассир ждёт и видит строку первого.
+  const out = run.immediate();
   // CRM_REAL_BOOKING_V1 — заявка колл-центра закрывается приходом, а кнопку
   // «Пришёл» в клинике не нажимает никто (разбор — в crm/visit-status.js).
   // Деньги у окна кассы заочно не появляются, поэтому платёж по счёту визита
@@ -584,7 +619,7 @@ export function recordPaymentSplit(db, args, user) {
       throw new RpcError(`tender ${i + 1}: unknown method: ${method}`, 400);
     }
     const notes = typeof (t && t.notes) === 'string' ? t.notes.slice(0, 200) : '';
-    return { amt, method, notes };
+    return { amt, method, notes, cardId: t && t.card_id };   // CARD_BALANCE_V1
   });
   const totalTendered = round2(tenders.reduce((s2, t) => s2 + t.amt, 0));
 
@@ -592,6 +627,7 @@ export function recordPaymentSplit(db, args, user) {
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
     if (!invoice) throw new RpcError('invoice not found.', 400);
     assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
+    if (isDepositInvoice(db, invoice)) throw new RpcError(DEPOSIT_INVOICE_REFUSAL, 400);   // ревью C1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
       throw new RpcError(`invoice is ${invoice.status}.`, 400);
     }
@@ -600,19 +636,39 @@ export function recordPaymentSplit(db, args, user) {
     if (totalTendered > balance) {
       throw new RpcError(`amount exceeds balance due (${balance})`, 400);
     }
+    // Ревью M2 — все части «с баланса» вместе против НАСТОЯЩЕГО баланса, до
+    // первой записи: отказ называет баланс пациента, а не остаток после
+    // первой части.
+    const walletTotal = round2(tenders.filter((t) => t.method === 'wallet').reduce((s2, t) => s2 + t.amt, 0));
+    if (walletTotal > 0) {
+      if (!invoice.patient_id) throw new RpcError('У счёта нет пациента — оплатить с баланса нельзя.', 400);
+      const have = walletBalance(db, invoice.patient_id);
+      if (walletTotal > have) throw new RpcError(`На балансе пациента только ${have} — списать ${walletTotal} нельзя.`, 400);
+    }
 
     const shiftId = ensureOpenShift(db, user).id;
     const insertPay = db.prepare(`
       INSERT INTO payments (invoice_id, amount, method, cashier_id, shift_id, notes)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
-    for (const t of tenders) insertPay.run(invoiceId, t.amt, t.method, user.id, shiftId, t.notes);
+    for (const t of tenders) {
+      const info = insertPay.run(invoiceId, t.amt, t.method, user.id, shiftId, t.notes);
+      // DEPOSIT_WALLET_V1 — часть «с баланса» списывает баланс, как record_payment.
+      if (t.method === 'wallet') {
+        walletGuard(() => spendWallet(db, { patientId: invoice.patient_id, invoice, paymentId: info.lastInsertRowid, amount: t.amt, user }));
+      }
+      if (t.method === 'gift_card') {   // CARD_BALANCE_V1
+        walletGuard(() => spendCard(db, { cardId: t.cardId, invoice, paymentId: info.lastInsertRowid, amount: t.amt, user }));
+      }
+    }
 
     const newPaid = round2(invoice.paid_amount + totalTendered);
     const status = invoiceStatusFor(invoice.total_amount, newPaid, invoice.status);
     if (status === 'paid') {
       db.prepare(`UPDATE invoices SET paid_amount = ?, status = ?, paid_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`)
         .run(newPaid, status, invoiceId);
+      // CASHBACK_SERVER_V2 — см. record_payment.
+      if (invoice.status !== 'paid') creditCashbackOnPaid(db, db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId), user);
     } else {
       db.prepare('UPDATE invoices SET paid_amount = ?, status = ? WHERE id = ?').run(newPaid, status, invoiceId);
     }
@@ -627,7 +683,7 @@ export function recordPaymentSplit(db, args, user) {
     return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) };
   });
 
-  const out = run();
+  const out = run.immediate();   // DEPOSIT_WALLET_V1 — см. record_payment
   crmInvoiceEvidence(db, invoiceId);   // CRM_REAL_BOOKING_V1 — см. record_payment
   return out;
 }
@@ -907,6 +963,8 @@ export function refundPayment(db, args, user) {
     // соседа, и его выручку.
     assertOwnBuilding(db, p, 'Платёж');
     assertOwnBuilding(db, invoice, 'Счёт');
+    // Ревью C1 — платёж счёта депозита возвращает только refund_deposit.
+    if (isDepositInvoice(db, invoice)) throw new RpcError(DEPOSIT_INVOICE_REFUSAL, 400);
 
     // The tag must match on a BOUNDARY, not a bare prefix: `LIKE 'REFUND#1%'`
     // also matches REFUND#10 / REFUND#123, so refunds of other payments were
@@ -939,11 +997,57 @@ export function refundPayment(db, args, user) {
     // expected-drawer maths, so the till reconciles short with no explanation.
     const shiftId = ensureOpenShift(db, user).id;
 
-    db.prepare(`
+    // DEPOSIT_WALLET_V1 — КУДА ВОЗВРАЩАЕМ: деньгами или на баланс пациента.
+    //
+    // Владелец: «cashier cancels the payment and can actually refund or push
+    // to the deposit so on the next service it can be paid». Невролог после
+    // оплаты говорит «не мой пациент» — деньги пациенту не нужны на руки, они
+    // нужны на следующую услугу.
+    //
+    //   to_balance = true  — отрицательный платёж способом 'wallet' (он не
+    //     приход: выручка и ящик не меняются, наличные из кассы НЕ выходят) и
+    //     строка зачисления в журнал баланса. Выручка остаётся — деньги в
+    //     клинике, это теперь аванс пациента, как принятый депозит.
+    //   to_balance = false — как прежде: тем же способом, каким взяли.
+    //
+    // Платёж «с баланса» по умолчанию возвращается НА БАЛАНС: наличными этих
+    // денег в кассе за этот счёт не брали. Вернуть его деньгами кассир может
+    // только явным выбором (to_balance: false) — и тогда это наличные из ящика.
+    // CARD_BALANCE_V1 — платёж картой возвращается НА ТУ ЖЕ КАРТУ, всегда:
+    // это её остаток, наличными его не выдают и на баланс пациента не переносят.
+    const toCard = p.method === 'gift_card';
+    const toBalanceRaw = args && args.to_balance;
+    const toBalance = toCard ? false : (toBalanceRaw === undefined || toBalanceRaw === null
+      ? p.method === 'wallet'
+      : (toBalanceRaw === true || toBalanceRaw === 1));
+    if (toBalance && !invoice.patient_id) throw new RpcError('У счёта нет пациента — зачислить на баланс некому.', 400);
+    const refundMethod = toCard ? 'gift_card' : toBalance ? 'wallet' : (p.method === 'wallet' ? 'cash' : p.method);
+
+    // Третья проверка, I2 — КЭШБЭК НАЛИЧНЫМИ НЕ ВЫДАЁТСЯ. Оплату с баланса
+    // вернуть деньгами можно только в пределах настоящих денег пациента на
+    // балансе (баланс вместе со всей ещё возвращаемой частью этого платежа
+    // минус не откаченный кэшбэк); остальное возвращается только на баланс.
+    // Считается от всей возвращаемой части, а не от запрошенной суммы: иначе
+    // потолок зависел бы от того, как кассир разбил возврат.
+    if (p.method === 'wallet' && !toBalance) {
+      const cap = realMoney(db, invoice.patient_id, refundable);   // одно правило с refund_deposit
+      if (amt > cap) {
+        throw new RpcError(`Деньгами можно вернуть не больше ${cap}: остальное на балансе — кэшбэк, его возвращают только на баланс.`, 400);
+      }
+    }
+
+    const refundInfo = db.prepare(`
       INSERT INTO payments (invoice_id, amount, method, cashier_id, shift_id, notes)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(invoice.id, -amt, p.method, user.id, shiftId,
+    `).run(invoice.id, -amt, refundMethod, user.id, shiftId,
       tag + (reason ? ' — ' + reason : ''));
+    let card = null;
+    if (toCard) {
+      card = walletGuard(() => returnToCard(db, { paymentId: p.id, refundPaymentId: refundInfo.lastInsertRowid, invoice, amount: amt, user }));
+    }
+    if (toBalance) {
+      walletGuard(() => creditWallet(db, { patientId: invoice.patient_id, invoice, paymentId: p.id, amount: amt, reason, user }));
+    }
 
     const newPaid = round2(invoice.paid_amount - amt);
     const status = invoiceStatusFor(invoice.total_amount, newPaid, invoice.status);
@@ -955,11 +1059,30 @@ export function refundPayment(db, args, user) {
       // CANCEL_MEANS_CANCEL_V1 — полный возврат это отмена: плитка «ОТМЕНЁН» считает его по этому дню.
       if (status === 'refunded') db.prepare("UPDATE invoices SET voided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(invoice.id);
     }
+    // CASHBACK_SERVER_V2 — кэшбэк счёта следует за его новыми деньгами:
+    // откат пропорционален возвращённому (сколько есть на балансе).
+    adjustCashbackAfterRefund(db, invoice);
 
-    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id) };
+    // Ре-ревью п.9 — «отменить счёт, если денег на нём не осталось» в той же
+    // транзакции, что возврат. Пациент ещё в койке — счёт не отменяется
+    // (отмена его не выписывает, см. void_invoice), кассиру это сказано.
+    let voided = false;
+    let voidNote = null;
+    if (args && (args.void_when_zero === true || args.void_when_zero === 1) && newPaid <= 0) {
+      const adm = invoice.admission_id ? db.prepare('SELECT status FROM admissions WHERE id = ?').get(invoice.admission_id) : null;
+      if (adm && IN_BED_STATUSES.includes(adm.status)) {
+        voidNote = 'Пациент ещё в стационаре — счёт не отменён. Возврат проведён; счёт закроется при выписке или его отменяют в окне отмены с подтверждением.';
+      } else {
+        voidInvoice(db, { invoice_id: invoice.id, keep_services: args.keep_services === true || args.keep_services === 1, reason: reason || null }, user);
+        voided = true;
+      }
+    }
+
+    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id), to_balance: toBalance, voided,
+      ...(voidNote ? { void_note: voidNote } : {}), ...(card ? { to_card: card } : {}) };
   });
 
-  return run();
+  return run.immediate();
 }
 
 // BED_CONSOLE_V1 — счёт по госпитализации: выбранные небиллованные строки

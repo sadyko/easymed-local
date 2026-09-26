@@ -19,6 +19,11 @@ import { buildingContext, buildingWhere, originExpr, summariseByBuilding } from 
 // ROLE_REPORTS_SETTINGS_V1 — «Отчёт кассира» — группа «Касса» раздела «Отчёты».
 // Проверки не было вовсе: деньги кассы за любой период отдавались любому вошедшему.
 import { requireReportKind } from '../report-access.js';
+// DEPOSIT_WALLET_V1 — оплата с баланса (и возврат на баланс) денег в кассу не
+// приносит и из неё не уносит: деньги пришли раньше, в день приёма депозита
+// или первой оплаты. Поступления — только приход (тот же словарь, что у
+// выручки, дашборда и итога смены).
+import { INFLOW_SQL } from '../../../public/js/shared/payment-methods.js';
 
 const METHOD_RU = {
   cash: 'Наличные', card: 'Карта', acquiring: 'Эквайринг',
@@ -119,7 +124,7 @@ export function cashierReport(db, args, user) {
       LEFT JOIN invoices i  ON i.id = p.invoice_id
       LEFT JOIN patients pat ON pat.id = i.patient_id
       LEFT JOIN users cash   ON cash.id = p.cashier_id
-     WHERE ${inLocalRange('p.paid_at')}${branchSql}${gf.clause}
+     WHERE ${inLocalRange('p.paid_at')} AND p.${INFLOW_SQL}${branchSql}${gf.clause}
      ORDER BY origin, p.paid_at DESC`).all(from, to, ...branchIds, ...gf.params);
 
   // ---- Расходы -----------------------------------------------------------

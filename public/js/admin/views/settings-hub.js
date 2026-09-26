@@ -566,6 +566,9 @@ const LOOKUP_CONFIG = {
         embed: 'patient_categories(name)',
         columns: [
             { key: 'name', label: 'Название' }, { key: 'kind', label: 'Вид' }, { key: 'percent', label: 'Скидка, %' }, { key: 'amount', label: 'Сумма' },
+            // CARD_BALANCE_V1 — остаток карты/сертификата; уменьшается оплатами
+            // в кассе, пишет его только сервер. У промокода остатка нет.
+            { key: 'remaining', label: 'Остаток', format: (row) => cardRemainingText(row) },
             { key: 'valid_until', label: 'Действует', format: (row) => discountValidityText(row) },
             { key: 'patient_categories', label: 'Группа', embed: true },
             { key: 'service_ids', label: 'Услуги', format: (row) => discountScopeText(row) },
@@ -574,7 +577,9 @@ const LOOKUP_CONFIG = {
             { key: 'name', label: 'Название', type: 'text', required: true },
             { key: 'kind', label: 'Вид', type: 'select', options: [['promo', 'Промокод'], ['gift_card', 'Подарочная карта'], ['certificate', 'Сертификат']] },
             { key: 'percent', label: 'Скидка, %', type: 'number' },
-            { key: 'amount', label: 'Фиксированная сумма, UZS', type: 'number' },
+            // CARD_BALANCE_V1 — у карты и сертификата это НОМИНАЛ: остаток
+            // рождается равным ему и уменьшается оплатами (миграция 158).
+            { key: 'amount', label: 'Сумма скидки (промокод) или номинал карты / сертификата, UZS', type: 'number' },
             { key: 'valid_from', label: 'Действует с (пусто — сразу)', type: 'date' },
             { key: 'valid_until', label: 'Действует по (пусто — бессрочно)', type: 'date' },
             { key: 'category_id', label: 'Только для группы пациентов (пусто — для всех)', type: 'fk', fkTable: 'patient_categories', fkLabel: 'name' },
@@ -870,6 +875,14 @@ function optionPairs(f) {
 function ruDate(iso) {
     const s = String(iso || '').slice(0, 10);
     return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : '';
+}
+// CARD_BALANCE_V1 — «120 000 из 300 000» у карты и сертификата; у промокода —
+// прочерк (остатка у скидки нет); исчерпанная карта называется словом.
+export function cardRemainingText(row) {
+    if (!row || !['gift_card', 'certificate'].includes(row.kind)) return '—';
+    const rem = Math.max(0, Number(row.remaining != null ? row.remaining : row.amount) || 0);
+    if (rem <= 0) return tr('исчерпана');
+    return trf('{rem} из {amount}', { rem: rem.toLocaleString('ru-RU'), amount: (Number(row.amount) || 0).toLocaleString('ru-RU') });
 }
 export function discountValidityText(row) {
     const from = ruDate(row && row.valid_from), to = ruDate(row && row.valid_until);

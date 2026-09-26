@@ -17,7 +17,6 @@ import { canDelete, actorRoleCodes } from '../permissions.js';
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // DISPENSE_ITEM_V1
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
-import { creditCashbackOnPaid } from './cashback.js?v=cb1';
 import { openCancelInvoiceDialog, logInvoiceAction as _logInvoiceAction, canMoveInvoiceMoney, invoiceMoneyErrorText } from './invoice-actions.js?v=ia3';
 import { logPatientActivity } from './activity-log.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // must match every other importer (one module instance)
@@ -1378,7 +1377,9 @@ function cancelledMetaText(state) {
 function paymentMethodSelect(pm) {
     // RPC_PORT_V1 — ровно способы, которые принимает record_payment (billing.js
     // PAYMENT_METHODS): 'online' и 'insurance' сервер отвергал.
-    const METHODS = [['cash', 'Cash'], ['card', 'Card'], ['acquiring', 'Online / acquiring'], ['transfer', 'Bank transfer']];
+    // DEPOSIT_WALLET_V1 — «с баланса пациента»: сервер списывает баланс в той же
+    // транзакции и откажет, если на балансе меньше суммы.
+    const METHODS = [['cash', 'Cash'], ['card', 'Card'], ['acquiring', 'Online / acquiring'], ['transfer', 'Bank transfer'], ['wallet', 'Patient balance']];
     return h('select', {
         class: 'input',
         style: { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', background: '#fff' },
@@ -1437,10 +1438,8 @@ export async function takePayment(state, inv, amount, finalStatus, onReload, met
         summary:     `${status === 'paid' ? 'Paid in full' : 'Partial payment'} — ${amount.toLocaleString('ru-RU')} UZS`,
     });
     toast(`Payment recorded: ${amount.toLocaleString('ru-RU')} UZS.`);
-    if (status === 'paid' && inv.status !== 'paid') {
-        const cb = await creditCashbackOnPaid(inv.id);
-        if (cb) toast(`Cashback ${cb.toLocaleString('ru-RU')} UZS credited to the patient.`);
-    }
+    // CASHBACK_SERVER_V2 — кэшбэк начисляет сама оплата (record_payment), здесь
+    // звать нечего: так он одинаков для кассы, оплаты частями и этого окна.
     onReload();
 }
 
