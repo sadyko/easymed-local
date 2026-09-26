@@ -10,7 +10,7 @@ import { gw } from '../gateway.js';
 import { uploadFile } from '../storage.js';
 // RPC_PORT_V1 — офлайн каталог специальностей из медкора (gw) недоступен:
 // выбор идёт из того же канонического списка, по которому сервер проверяет слаг.
-import { SPECIALTY_ROWS } from '../../shared/specialty-list.js';
+import { SPECIALTY_ROWS, canonicalSpecialty } from '../../shared/specialty-list.js';
 // PATIENT_PHOTO_V1 — те же правила и то же уменьшение, что в окне заведения
 // пациента: один набор на оба виджета фото и на сервер.
 import { photoRefusal, ALLOWED_PHOTO_EXT } from '../../shared/patient-file-limits.js?v=pph1';
@@ -120,9 +120,18 @@ export async function renderDoctorProfile(container, doctorId) {
 
     try {
         const { data } = await supabase.from('user_specialties')
-            .select('specialty_slug, is_primary').eq('user_id', doctorId)
+            .select('specialty_slug, name_ru, is_primary').eq('user_id', doctorId)
             .order('is_primary', { ascending: false });
-        st.specSlugs = (data || []).map((r) => r.specialty_slug);
+        // Ревью M7b — карточка сотрудника пишет специальность без слага, одним
+        // названием. Каноническое название узнаём по списку и показываем как
+        // обычную специальность; неканоническое экран не показывает и не шлёт —
+        // сервер сохраняет такую строку сам (rpc/doctor-profile.js).
+        const slugOfName = (name) => {
+            const ru = canonicalSpecialty(name);
+            const hit = SPECIALTY_ROWS.find((r) => r.ru === ru);
+            return hit ? hit.slug : null;
+        };
+        st.specSlugs = [...new Set((data || []).map((r) => r.specialty_slug || slugOfName(r.name_ru)).filter(Boolean))];
     } catch (e) { st.specSlugs = []; }
 
     try {
@@ -224,7 +233,7 @@ export async function renderDoctorProfile(container, doctorId) {
             // Напрямую в user_specialties / doctor_conditions экран больше не
             // пишет: реестр пускает туда только admin, и insert с company_id
             // отвергался у всех.
-            const specialties = st.specSlugs.slice(0, 4);
+            const specialties = st.specSlugs.filter(Boolean).slice(0, 4);
             const conditions = [...st.selectedConds.values()].map((x) => ({
                 kind: x.kind, slug: x.slug, name_ru: x.name_ru || null, name_uz: x.name_uz || null,
             }));

@@ -35,3 +35,8 @@ test('без медкор-каталога список специальност
     assert.match(src, /SPECIALTY_ROWS/, 'офлайн каталог gw пуст — нужен канонический список');
     assert.match(src, /try \{ photoUrl = await uploadPendingPhoto\(\); \}/, 'сбой загрузки фото не должен останавливать сохранение');
 });
+
+test('M7b: строка специальности без слага узнаётся по каноническому имени, пустые слаги не уходят на сервер', () => {
+    assert.match(src, /r\.specialty_slug \|\| slugOfName\(r\.name_ru\)/);
+    assert.match(src, /st\.specSlugs\.filter\(Boolean\)\.slice\(0, 4\)/);
+});

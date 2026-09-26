@@ -99,14 +99,31 @@ function cleanSpecialties(db, uid, list) {
   const seen = new Set();
   const rows = [];
   for (const raw of list) {
+    // Ревью M7b — пустое место (null) в списке экрана не отказ: экран не
+    // видит специальностей без слага и не должен ими ронять сохранение.
+    if (raw == null || raw === '') continue;
     const slug = typeof raw === 'string' ? raw.trim() : '';
-    if (!slug) throw new RpcError('Empty specialty.', 400);
+    if (!slug) throw new RpcError('Bad specialty.', 400);
     if (seen.has(slug)) continue;
     seen.add(slug);
     const c = CANON.get(slug);
     if (c) rows.push({ slug, name_ru: c.ru, name_uz: c.uz });
     else if (own.has(slug)) rows.push({ slug, name_ru: own.get(slug).name_ru, name_uz: own.get(slug).name_uz });
     else throw new RpcError('Unknown specialty: ' + slug, 400);
+  }
+  // Ревью M7b — СПЕЦИАЛЬНОСТЬ БЕЗ СЛАГА НЕ ТЕРЯЕТСЯ. Карточка сотрудника
+  // (routes/users.js parseSpecialties) пишет специальность одним названием,
+  // без слага. Экран профиля её не показывает (его список — слаги), значит и
+  // убрать её врач отсюда не мог: такая строка остаётся за присланными, не
+  // основной, а если прислано пусто — основной. Имя, совпавшее с присланной
+  // специальностью, не дублируется.
+  const sentNames = new Set(rows.map((r) => String(r.name_ru || '').trim().toLowerCase()));
+  const legacy = db.prepare('SELECT specialty_slug, name_ru, name_uz FROM user_specialties WHERE user_id = ? AND specialty_slug IS NULL ORDER BY is_primary DESC, id').all(uid);
+  for (const r of legacy) {
+    const key = String(r.name_ru || '').trim().toLowerCase();
+    if (!key || sentNames.has(key)) continue;
+    sentNames.add(key);
+    rows.push({ slug: null, name_ru: r.name_ru, name_uz: r.name_uz });
   }
   return rows;
 }
@@ -171,6 +188,9 @@ export function updateMyDoctorProfile(db, args, user) {
       db.prepare('DELETE FROM user_specialties WHERE user_id = ?').run(uid);
       const ins = db.prepare('INSERT INTO user_specialties (user_id, specialty_slug, name_ru, name_uz, is_primary) VALUES (?,?,?,?,?)');
       specRows.forEach((r, i) => ins.run(uid, r.slug, r.name_ru, r.name_uz, i === 0 ? 1 : 0));
+      // Ревью M7a — одна строка специальности у сотрудника (списки врачей,
+      // отчёты, бланки) — имя основной, как держит её routes/users.js.
+      db.prepare('UPDATE users SET specialty = ? WHERE id = ?').run(specRows.length ? String(specRows[0].name_ru || '') : '', uid);
     }
     if (condRows) {
       db.prepare('DELETE FROM doctor_conditions WHERE doctor_id = ?').run(uid);
@@ -180,7 +200,7 @@ export function updateMyDoctorProfile(db, args, user) {
   })();
   return {
     ok: true, saved, not_stored: notStored,
-    ...(specRows ? { specialties: specRows.map((r) => r.slug) } : {}),
+    ...(specRows ? { specialties: specRows.map((r) => r.slug).filter(Boolean) } : {}),
     ...(condRows ? { conditions: condRows.length } : {}),
   };
 }

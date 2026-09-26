@@ -160,3 +160,47 @@ test('без ключей specialties / conditions наборы не трога�
   assert.equal(db.prepare('SELECT COUNT(*) n FROM user_specialties WHERE user_id = 2').get().n, 1);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM doctor_conditions WHERE doctor_id = 2').get().n, 1);
 });
+
+// Ревью M7a — users.specialty (одна строка, которую читают списки врачей,
+// отчёты по специальностям, бланки) обязана совпадать с основной
+// специальностью, как её держит routes/users.js при правке сотрудника.
+test('M7a: users.specialty = имя основной специальности, в той же транзакции', () => {
+  const db = seed();
+  updateMyDoctorProfile(db, { p: {}, specialties: ['nevrolog', 'kardiolog'] }, doc);
+  assert.equal(db.prepare('SELECT specialty FROM users WHERE id = 2').get().specialty, 'Невролог');
+  updateMyDoctorProfile(db, { p: {}, specialties: ['kardiolog'] }, doc);
+  assert.equal(db.prepare('SELECT specialty FROM users WHERE id = 2').get().specialty, 'Кардиолог');
+  updateMyDoctorProfile(db, { p: {}, specialties: [] }, doc);
+  assert.equal(db.prepare('SELECT specialty FROM users WHERE id = 2').get().specialty, '');
+  updateMyDoctorProfile(db, { p: { bio_ru: 'x' } }, doc);   // без ключа specialties — не трогается
+  assert.equal(db.prepare('SELECT specialty FROM users WHERE id = 2').get().specialty, '');
+});
+
+// Ревью M7b — карточка сотрудника (routes/users.js parseSpecialties) пишет
+// специальность без слага, одним названием. Такой врач не мог сохранить
+// профиль вовсе, а его специальность нельзя терять.
+test('M7b: специальность без слага из карточки сотрудника сохраняется, профиль сохраняется', () => {
+  const db = seed();
+  db.prepare("INSERT INTO user_specialties (user_id, specialty_slug, name_ru, is_primary) VALUES (2, NULL, 'Семейный врач', 1)").run();
+  db.prepare("UPDATE users SET specialty = 'Семейный врач' WHERE id = 2").run();
+  // экран не видит её в своём списке и шлёт только то, что видит (null не шлёт,
+  // но и присланный null не валит сохранение)
+  assert.doesNotThrow(() => updateMyDoctorProfile(db, { p: {}, specialties: ['kardiolog', null] }, doc));
+  const rows = db.prepare('SELECT specialty_slug, name_ru, is_primary FROM user_specialties WHERE user_id = 2 ORDER BY id').all();
+  assert.deepEqual(rows.map((r) => [r.specialty_slug, r.name_ru, r.is_primary]),
+    [['kardiolog', 'Кардиолог', 1], [null, 'Семейный врач', 0]]);
+  assert.equal(db.prepare('SELECT specialty FROM users WHERE id = 2').get().specialty, 'Кардиолог');
+  // пустой видимый список — старая специальность остаётся и становится основной
+  updateMyDoctorProfile(db, { p: {}, specialties: [] }, doc);
+  const rows2 = db.prepare('SELECT specialty_slug, name_ru, is_primary FROM user_specialties WHERE user_id = 2 ORDER BY id').all();
+  assert.deepEqual(rows2.map((r) => [r.specialty_slug, r.name_ru, r.is_primary]), [[null, 'Семейный врач', 1]]);
+  assert.equal(db.prepare('SELECT specialty FROM users WHERE id = 2').get().specialty, 'Семейный врач');
+});
+
+test('M7b: старая строка без слага с каноническим именем не дублируется, когда экран прислал её слаг', () => {
+  const db = seed();
+  db.prepare("INSERT INTO user_specialties (user_id, specialty_slug, name_ru, is_primary) VALUES (2, NULL, 'Невролог', 1)").run();
+  updateMyDoctorProfile(db, { p: {}, specialties: ['nevrolog'] }, doc);
+  const rows = db.prepare('SELECT specialty_slug, name_ru FROM user_specialties WHERE user_id = 2').all();
+  assert.deepEqual(rows.map((r) => [r.specialty_slug, r.name_ru]), [['nevrolog', 'Невролог']]);
+});
