@@ -700,14 +700,17 @@ export const REGISTRY = {
       admitting_doctor_id: { table:'users', fk:'admitting_doctor_id', columns:['id','full_name','specialty'] },
     },
   },
+  // ADMIN_ROWS_GRANTABLE_V1 — пять плиток-денег (полисы, провайдеры, кэшбэк,
+  // скидки, ставки врачей) выдаются из «Ролей»: `grant` называет плитку, и её
+  // «Изменение» пишет таблицу целиком — у этих плиток без денег ничего нет.
   payer_policies: { read:{roles:ALL_STAFF,columns:['id','name','payer_id','coverage_percent','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},update:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},delete:{roles:[]}},
+    write:{ grant:'settings.payer_policies',insert:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},update:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},delete:{roles:[]}},
     filters:['id','active','payer_id'], embed:{ payers:{table:'payers',fk:'payer_id',columns:['id','name']} } },
   payment_providers: { read:{roles:ALL_STAFF,columns:['id','name','fee_percent','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','fee_percent','active']},update:{roles:['admin'],columns:['name','fee_percent','active']},delete:{roles:[]}},
+    write:{ grant:'settings.payment_providers',insert:{roles:['admin'],columns:['name','fee_percent','active']},update:{roles:['admin'],columns:['name','fee_percent','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
   cashback_rules: { read:{roles:ALL_STAFF,columns:['id','name','percent','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','percent','active']},update:{roles:['admin'],columns:['name','percent','active']},delete:{roles:[]}},
+    write:{ grant:'settings.cashback_rules',insert:{roles:['admin'],columns:['name','percent','active']},update:{roles:['admin'],columns:['name','percent','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
   // REFERRAL_CATEGORY_RATES_V1 (mig 115) — the category carries the STANDARD
   // reward: a percent for everything, plus per-service-group rows in `rates`
@@ -724,7 +727,7 @@ export const REGISTRY = {
   // DISCOUNT_RULES_V1 (mig 129) — valid_from/valid_until, category_id (apply to a
   // patient group), service_ids (JSON list: apply to these services only), note.
   patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note']},
-    write:{insert:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},
+    write:{ grant:'settings.patient_discounts',insert:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},
       update:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},delete:{roles:[]}},
     filters:['id','active','kind','category_id'], json:['service_ids'],
     embed:{ patient_categories:{table:'patient_categories',fk:'category_id',columns:['id','name']} } },
@@ -733,11 +736,15 @@ export const REGISTRY = {
   chronic_conditions_ref: { read:{roles:ALL_STAFF,columns:['id','name','code','active','created_at']},
     write:{ grant:'settings.chronic_conditions',insert:{roles:['admin'],columns:['name','code','active']},update:{roles:['admin'],columns:['name','code','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
-  api_tokens: { read:{roles:['admin'],columns:['id','name','token','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['name','token','active']},update:{roles:['admin'],columns:['name','token','active']},delete:{roles:[]}},
+  // ADMIN_ROWS_GRANTABLE_V1 — ключи API: плитка «API» на «Просмотр» читает
+  // список (значение ключа — `secret`, приходит замаскированным), на
+  // «Изменение» — переименовывает и отзывает (grantOps/grantColumns строки
+  // справочника). Создаёт ключ по-прежнему только администратор.
+  api_tokens: { read:{roles:['admin'],columns:['id','name','token','active','created_at'],secret:['token']},
+    write:{ grant:'settings.api',insert:{roles:['admin'],columns:['name','token','active']},update:{roles:['admin'],columns:['name','token','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
   doctor_rates: { read:{roles:ALL_STAFF,columns:['id','doctor_id','service_id','percent','active','created_at']},
-    write:{insert:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},update:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},delete:{roles:[]}},
+    write:{ grant:'settings.doctor_rates',insert:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},update:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},delete:{roles:[]}},
     filters:['id','active','doctor_id','service_id'],
     embed:{ users:{table:'users',fk:'doctor_id',columns:['id','full_name']}, services:{table:'services',fk:'service_id',columns:['id','name']} } },
   // STAFF_SYNC_V1 (migration 086) — GOVERNED BY THE MAIN CLINIC, and the role
@@ -753,7 +760,10 @@ export const REGISTRY = {
     // оставить людей с кодом, которого нет, — и без прав. Ненужную роль
     // ОТКЛЮЧАЮТ (active = 0): её не предложат при найме, а те, кто на ней
     // сидит, продолжат работать по основе, пока их не переведут.
-    write: { insert: { roles: ['admin'], columns: ['code','name','base_role','active'] },
+    // ADMIN_ROWS_GRANTABLE_V1 — «Роли: Изменение» заводит и правит свои роли;
+    // от самоповышения эту запись бережёт services/role-guard.js (routes/db.js).
+    write: { grant: 'settings.roles',
+             insert: { roles: ['admin'], columns: ['code','name','base_role','active'] },
              update: { roles: ['admin'], columns: ['name','base_role','active'] },
              delete: { roles: [] } },
     filters: ['id','code','active','base_role'], embed: {},
@@ -761,7 +771,8 @@ export const REGISTRY = {
 
   role_permissions: {
     read:  { roles: ALL_STAFF, columns: ['id','role','permissions','updated_at'] },
-    write: { insert: { roles: ['admin'], columns: ['role','permissions'] },
+    // ADMIN_ROWS_GRANTABLE_V1 — см. custom_roles выше: ключ «Роли» и та же защита.
+    write: { grant: 'settings.roles', insert: { roles: ['admin'], columns: ['role','permissions'] },
              update: { roles: ['admin'], columns: ['permissions'] },
              delete: { roles: [] } },
     filters: ['id','role'], embed: {},

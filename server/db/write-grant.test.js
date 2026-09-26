@@ -59,16 +59,17 @@ test('без права — как было: регистратуре 403, ад�
   } finally { db.close(); }
 });
 
-test('закрытые строки выдать нельзя: ключ, записанный руками, сервер не читает', () => {
+// ADMIN_ROWS_GRANTABLE_V1 — закрытых строк больше нет, но то, что было их
+// смыслом, осталось: без настройки — только администратор, а ключ API создаёт
+// только администратор и при выданном «Изменении».
+test('бывшие закрытые строки: без настройки — только администратор; ключ API не создаётся и по праву', () => {
   const db = seed();
   try {
-    addGrants(db, 'registrar', {
-      settings: 'edit', 'settings.api': 'edit', 'settings.roles': 'edit', 'settings.telegram': 'edit',
-      'settings.telephony': 'edit', 'settings.crm': 'edit',
-    });
+    assert.throws(() => compile({ table: 'api_tokens', op: 'select', columns: '*' }, REG, { db }), refused, 'ключи API читаются ненастроенной ролью');
+    assert.throws(() => run(db, { table: 'role_permissions', op: 'update', values: { permissions: '{}' }, filters: [{ col: 'role', op: 'eq', val: 'lab' }] }, REG), refused);
+    addGrants(db, 'registrar', { settings: 'edit', 'settings.api': 'edit' });
     assert.throws(() => run(db, { table: 'api_tokens', op: 'insert', values: { name: 'k', token: 't' } }, REG), refused);
-    assert.throws(() => compile({ table: 'api_tokens', op: 'select', columns: '*' }, REG, { db }), refused, 'ключи API читаются не администратором');
-    assert.throws(() => run(db, { table: 'role_permissions', op: 'update', values: { permissions: '{}' }, filters: [{ col: 'role', op: 'eq', val: 'registrar' }] }, REG), refused);
+    assert.ok(compile({ table: 'api_tokens', op: 'select', columns: '*' }, REG, { db }), '«Изменение» ключей не читает список');
   } finally { db.close(); }
 });
 
@@ -105,16 +106,23 @@ test('каждый `write.grant` реестра — живая, не закры�
     assert.ok(row.levels.includes('edit'), t + ': у ' + key + ' нет «Изменения»');
     assert.ok(REGISTRY[t].write.insert?.roles?.includes('admin') || REGISTRY[t].write.update?.roles?.includes('admin'), t + ': ключ у таблицы, которую не пишет даже администратор');
   }
-  assert.ok(n >= 15, 'таблиц с ключом плитки меньше ожидаемого: ' + n);
-  // Ни одна закрытая строка не названа ни одной таблицей.
-  for (const t of Object.keys(REGISTRY)) assert.notEqual(writeGrantKey(t), 'settings.api');
-  assert.equal(writeGrantKey('api_tokens'), null);
-  assert.equal(writeGrantKey('role_permissions'), null);
+  assert.ok(n >= 23, 'таблиц с ключом плитки меньше ожидаемого: ' + n);
+  // ADMIN_ROWS_GRANTABLE_V1 — бывшие закрытые строки названы своими таблицами.
+  assert.equal(writeGrantKey('api_tokens'), 'settings.api');
+  assert.equal(writeGrantKey('role_permissions'), 'settings.roles');
+  assert.equal(writeGrantKey('custom_roles'), 'settings.roles');
+  for (const t of ['doctor_rates', 'patient_discounts', 'payer_policies', 'payment_providers', 'cashback_rules']) assert.equal(writeGrantKey(t), 'settings.' + t);
   // Ключ у каждой «изменяемой» плитки называет хотя бы одна таблица — иначе
   // «Изменение» на экране было бы галочкой-обманкой.
   const named = new Set(Object.keys(REGISTRY).map(writeGrantKey).filter(Boolean));
   for (const [key, row] of byKey) {
-    if (row.parent !== 'settings' || !row.levels.includes('edit') || String(row.enforced).startsWith('rpc:')) continue;
+    // ADMIN_ROWS_GRANTABLE_V1 — api: проверяет свой REST-маршрут (routes/users.js),
+    // а «Цены и проценты» (`of`) открывают колонки таблиц своей плитки.
+    if (row.parent !== 'settings' || !row.levels.includes('edit') || /^(rpc|api):/.test(String(row.enforced))) continue;
+    if (row.of) {
+      for (const t of Object.keys(row.moneyColumns || {})) assert.equal(writeGrantKey(t), row.of, key + ': деньги таблицы чужой плитки ' + t);
+      continue;
+    }
     assert.ok(named.has(key), key + ': «Изменение» есть, а таблицы, которую оно открывает, нет');
   }
 });
@@ -144,13 +152,15 @@ test('право плитки не пишет денег: переименова
   } finally { db.close(); }
 });
 
-test('ставки врачей, скидки, полисы, провайдеры и кэшбэк выдать нельзя — закрытые строки', () => {
+// ADMIN_ROWS_GRANTABLE_V1 — плитки-деньги выдаются, но пока роль их не
+// настраивала, пишет только администратор (как было при закрытых строках).
+test('ставки врачей, скидки, полисы, провайдеры и кэшбэк: без настройки — только администратор', () => {
   const db = seed();
   try {
-    const locked = ['settings.doctor_rates', 'settings.patient_discounts', 'settings.payer_policies', 'settings.payment_providers', 'settings.cashback_rules'];
+    const money = ['settings.doctor_rates', 'settings.patient_discounts', 'settings.payer_policies', 'settings.payment_providers', 'settings.cashback_rules'];
     const byKey = catalogByKey();
-    for (const k of locked) assert.ok(byKey.get(k).locked, k + ' выдаётся');
-    addGrants(db, 'registrar', Object.fromEntries([['settings', 'edit'], ...locked.map((k) => [k, 'edit'])]));
+    for (const k of money) assert.ok(byKey.get(k).adminDefault, k + ' открылась бы без настройки');
+    addGrants(db, 'registrar', { settings: 'edit' });
     assert.throws(() => run(db, { table: 'doctor_rates', op: 'insert', values: { doctor_id: 1, service_id: 1, percent: 30 } }, REG), refused);
     assert.throws(() => run(db, { table: 'patient_discounts', op: 'insert', values: { name: 'Акция' } }, REG), refused);
     assert.throws(() => run(db, { table: 'payer_policies', op: 'insert', values: { name: 'Полис' } }, REG), refused);

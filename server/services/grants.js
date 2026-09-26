@@ -37,7 +37,7 @@ export class GrantError extends RpcError {
   constructor(message, status = 403) { super(message, status); }
 }
 
-function rolesForGrants(db, user) {
+export function rolesForGrants(db, user) {   // ADMIN_ROWS_GRANTABLE_V1 — нужен и role-guard.js
   const list = permissionRoles(user);
   const custom = user && typeof user.custom_role_code === 'string' ? user.custom_role_code.trim() : '';
   if (!custom) return list;
@@ -165,4 +165,29 @@ export function requireGrant(db, user, key, need, fallbackRoles, what = '') {
   const w = String(what || 'Это действие').trim();
   const head = w.charAt(0).toUpperCase() + w.slice(1);
   throw new GrantError(`${head} — недоступно вашей роли. Права выдаёт администратор в «Настройки → Роли».`);
+}
+
+/**
+ * ADMIN_ROWS_GRANTABLE_V1 (2026-09-26) — ворота бывшей строки «только
+ * администратор» (у строки справочника `adminDefault`). Правило перехода —
+ * сегодняшнее: пока роль ключ не настраивала, пускается только администратор
+ * (в том числе дополнительной ролью, isAdminUser). Настроенный уровень решает
+ * сам, со всеми поправками grantAllowsOr (закрытый раздел, «своё „Нет“»).
+ */
+export function grantAllowsAdminOr(db, user, key, need) {
+  return grantAllowsOr(db, user, key, need, () => isAdminUser(user));
+}
+
+/**
+ * Действующий уровень человека по ключу — самый высокий, который пускают
+ * ворота: 'delete' | 'edit' | 'view' | 'none'. Нужен там, где сравнивают «не
+ * выше своего» (services/role-guard.js). `legacyLevel` — уровень для
+ * ненастроенного ключа; по умолчанию «нет»: выдать другому можно только то,
+ * что у тебя есть.
+ */
+export function effectiveLevel(db, user, key, legacyLevel = 'none') {
+  for (const lvl of ['delete', 'edit', 'view']) {
+    if (grantAllowsOr(db, user, key, lvl, () => levelAllows(legacyLevel, lvl))) return lvl;
+  }
+  return 'none';
 }

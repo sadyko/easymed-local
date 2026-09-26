@@ -10,6 +10,7 @@ import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 // эту дверь: работа над пациентом доказывает, что он пришёл.
 import { crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../services/crm/visit-status.js';
 import { tagInsertRefusal } from '../services/crm/config.js';   // CRM_HEAD_MERGE_TAGS_V1 (ревью M4)
+import { roleWriteRefusal } from '../services/role-guard.js';   // ADMIN_ROWS_GRANTABLE_V1
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -179,6 +180,13 @@ export function dbRoutes(db) {
       // клиники.
       return res.status(409).json({ error: { code: 'conflict', message: managed } });
     }
+
+    // ADMIN_ROWS_GRANTABLE_V1 — «Роли: Изменение» у не-администратора: ни роли
+    // администратора, ни своих ролей, ни прав выше собственных. Компилятор уже
+    // пустил запись по ключу плитки; содержание записи проверяется здесь, до
+    // выполнения (services/role-guard.js).
+    const roleRefusal = roleWriteRefusal(db, req.user, compiled.meta, req.body);
+    if (roleRefusal) return res.status(403).json({ error: { code: 'forbidden', message: roleRefusal } });
 
     // SURGERY_NEEDS_BED_V1 — операция оформляется НА ГОСПИТАЛИЗАЦИЮ.
     //

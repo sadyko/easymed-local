@@ -1,4 +1,4 @@
-import { writeGrantAllows, writeGrantViolation, writeGrantNarrows } from './write-grant.js';   // ROLE_REPORTS_SETTINGS_V1
+import { writeGrantAllows, writeGrantViolation, writeGrantNarrows, readGrantAllows, secretColumns } from './write-grant.js';   // ROLE_REPORTS_SETTINGS_V1 · ADMIN_ROWS_GRANTABLE_V1
 import { tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns, rowScope, actorStamps } from './schema-registry.js';
 import { effectiveRoles } from '../services/roles.js';
 import { scopeLifted } from './row-scope.js';   // CRM_HEAD_MERGE_TAGS_V1
@@ -184,8 +184,15 @@ export function compile(desc, user, ctx = {}) {
   // someone a second role widened only their sidebar and not their access.
   const role = effectiveRoles(user);
   if (op === 'select') {
-    if (!canRead(table, role)) throw new CompileError('not allowed', 403);
-    return compileSelect(desc, table, user, db);
+    // ADMIN_ROWS_GRANTABLE_V1 — таблицу, которую реестр отдаёт только
+    // администратору (ключи API), читает и тот, кому её плитка выдана на
+    // «Просмотр», — но секретные колонки приходят ему замаскированными.
+    let mask = null;
+    if (!canRead(table, role)) {
+      if (!readGrantAllows(table, user, db)) throw new CompileError('not allowed', 403);
+      mask = secretColumns(table);
+    }
+    return compileSelect(desc, table, user, db, mask);
   }
   // upsert = insert + update: it needs BOTH permissions (a role that can only
   // insert must not gain an update path through ON CONFLICT DO UPDATE).
@@ -197,13 +204,13 @@ export function compile(desc, user, ctx = {}) {
   // колонки без денег (см. db/write-grant.js).
   let viaGrant = false;
   const mayWrite = (o) => {
-    if (canWrite(table, o, role)) return !writeGrantNarrows(table, user, db);
+    if (canWrite(table, o, role)) return !writeGrantNarrows(table, user, db, o);
     if (writeGrantAllows(table, o, user, db)) { viaGrant = true; return true; }
     return false;
   };
   const moneyGuard = () => {
     if (!viaGrant) return;
-    const col = writeGrantViolation(table, op, desc.values);
+    const col = writeGrantViolation(table, op, desc.values, user, db);
     if (col) throw new CompileError('not allowed: column ' + col + ' is administrator-only', 403);
   };
   if (op === 'upsert') {
@@ -230,7 +237,10 @@ function validateTable(name) {
   return name;
 }
 
-function compileSelect(desc, table, user, db) {
+// Замаскированное значение секретной колонки: видно, что ключ ЕСТЬ, но не он сам.
+const SECRET_MASK = '••••••••';
+
+function compileSelect(desc, table, user, db, mask = null) {
   // CRM_HEAD_MERGE_TAGS_V1 (ревью I5) — СОЕДИНЕНИЕ ПОДЧИНЯЕТСЯ ПРАВИЛУ
   // ПРИСОЕДИНЯЕМОЙ ТАБЛИЦЫ. Embed `crm_requests(full_name, phone)` из строки
   // услуги отдавал имя и номер чужой заявки: ограничение по владельцу стояло
@@ -240,6 +250,16 @@ function compileSelect(desc, table, user, db) {
   // отдельно и ставятся первыми.
   const jctx = { scope: (t, alias) => scopeFor(t, user, db, alias), params: [] };
   const { projection, joins, embeds, joined } = parseColumns(desc.columns, table, jctx);
+  // ADMIN_ROWS_GRANTABLE_V1 — секретная колонка читателя по праву плитки.
+  if (mask && mask.length) {
+    for (let i = 0; i < projection.length; i++) {
+      for (const c of mask) {
+        if (projection[i] === `"${table}"."${c}" AS "${c}"`) {
+          projection[i] = `CASE WHEN "${table}"."${c}" IS NULL OR "${table}"."${c}" = '' THEN "${table}"."${c}" ELSE '${SECRET_MASK}' END AS "${c}"`;
+        }
+      }
+    }
+  }
   // EMBED_FILTER_V1 — фильтр по колонке присоединённой таблицы может ПОТРЕБОВАТЬ
   // соединения, которого нет в проекции (см. compileTerm). Поэтому WHERE
   // собирается ДО того, как строка SQL склеена: compileFilters дописывает

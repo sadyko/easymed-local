@@ -251,7 +251,9 @@ test('каждая строка справочника называет пров
     // ROLE_REPORTS_SETTINGS_V1 — четвёртая приставка, db: — запись в таблицу
     // через /api/db, где реестр называет ключ (`write.grant`), а компилятор
     // запросов его проверяет (server/db/write-grant.js).
-    if (r.enforced) assert.match(r.enforced, /^(rpc|route|client|db):\S/, 'непонятно, где проверяют ' + r.key + ': ' + r.enforced);
+    // ADMIN_ROWS_GRANTABLE_V1 — пятая, api: — REST-маршрут сервера, ворота
+    // которого читают ключ («Сотрудники» — /api/users, routes/users.js).
+    if (r.enforced) assert.match(r.enforced, /^(rpc|route|client|db|api):\S/, 'непонятно, где проверяют ' + r.key + ': ' + r.enforced);
     // Закрытая строка (только администратор) не предлагает ни одного уровня,
     // кроме «Нет»: иначе экран обещал бы право, которого сервер не даст.
     if (r.locked) assert.deepEqual(r.levels, ['none'], 'закрытая строка предлагает уровень: ' + r.key);
@@ -274,13 +276,26 @@ test('каждая строка справочника называет пров
     'settings.patient_categories', 'settings.payers', 'settings.referral_sources', 'settings.rooms', 'settings.company', 'settings.documents']) {
     assert.ok(keys.has(k), 'сервер проверяет ' + k + ', а в справочнике его нет');
   }
-  // Закрытые строки владельца: Telegram, телефония, воронка CRM, API-ключи, Роли.
+  // ADMIN_ROWS_GRANTABLE_V1 — бывшие закрытые строки владельца (Telegram,
+  // телефония, воронка CRM, API-ключи, Роли, Сотрудники и пять плиток-денег)
+  // стали выдаваемыми, и у каждой — правило перехода «только администратор»
+  // (`adminDefault`): без него строка открылась бы всем в день обновления.
   const byKey = new Map(catalogRows().map((r) => [r.key, r]));
-  // Ревью I2 (деньги — только администратору): ставки врачей, скидки, полисы,
-  // провайдеры и кэшбэк — тоже закрытые строки; «Сотрудники» — /api/users только admin.
-  for (const k of ['settings.telegram', 'settings.telephony', 'settings.crm', 'settings.api', 'settings.roles', 'reports.telegram',
-    'settings.employees', 'settings.doctor_rates', 'settings.patient_discounts', 'settings.payer_policies', 'settings.payment_providers', 'settings.cashback_rules']) {
-    assert.ok(byKey.get(k) && byKey.get(k).locked, k + ' обязана быть закрытой строкой (только администратор)');
+  const ADMIN_DEFAULT = ['settings.telegram', 'settings.telephony', 'settings.crm', 'settings.api', 'settings.roles', 'reports.telegram',
+    'settings.employees', 'settings.doctor_rates', 'settings.patient_discounts', 'settings.payer_policies', 'settings.payment_providers', 'settings.cashback_rules',
+    'settings.service_types.money', 'settings.consultation_types.money', 'settings.patient_categories.money', 'settings.rooms.money',
+    'settings.referral_sources.money', 'settings.referral_source_categories.money', 'settings.employees.money'];
+  for (const k of ADMIN_DEFAULT) {
+    const r = byKey.get(k);
+    assert.ok(r && !r.locked && r.adminDefault, k + ' обязана быть выдаваемой строкой с правилом «только администратор»');
+    assert.ok(r.levels.length > 1, k + ': кроме «Нет» уровней нет');
+  }
+  assert.deepEqual(catalogRows().filter((r) => r.adminDefault).map((r) => r.key).sort(), [...ADMIN_DEFAULT].sort(), 'список строк «только администратор» разошёлся');
+  assert.deepEqual(catalogRows().filter((r) => r.locked).map((r) => r.key), [], 'закрытых строк не осталось');
+  // «Удаление» — только там, где удалять есть что.
+  for (const k of ['settings.employees', 'settings.crm', 'settings.telephony', 'settings.rooms']) assert.ok(byKey.get(k).levels.includes('delete'), k);
+  for (const k of ['settings.roles', 'settings.telegram', 'settings.api', 'settings.doctor_rates', 'settings.patient_discounts', 'settings.payer_policies', 'settings.payment_providers', 'settings.cashback_rules']) {
+    assert.ok(!byKey.get(k).levels.includes('delete'), k + ': «Удаление», которого нет');
   }
   assert.equal(levelAllows('edit', 'view'), true);
   assert.equal(levelAllows('view', 'edit'), false);
@@ -289,6 +304,7 @@ test('каждая строка справочника называет пров
   // разделов не прибавил: группы отчётов и плитки настроек — окна прежних
   // разделов «Отчёты» и «Настройки».
   assert.equal(CATALOG.length, 18, 'в справочнике восемнадцать разделов');
-  assert.equal(CATALOG.find((s) => s.key === 'reports').windows.length, 8, 'семь групп отчётов и закрытый Telegram');
+  assert.equal(CATALOG.find((s) => s.key === 'reports').windows.length, 8, 'восемь групп отчётов, Telegram-бот — восьмая');
   assert.equal(CATALOG.find((s) => s.key === 'settings').windows.length, 25, 'плитки хаба настроек');
+  assert.equal(CATALOG.find((s) => s.key === 'settings').actions.length, 7, '«Цены и проценты» у семи плиток');
 });
