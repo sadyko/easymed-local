@@ -273,7 +273,9 @@ test('doctor_pay_summary равен «Зарплатам врачей» во в�
   c.line({ doctor: 2, invoice: 'paid', discount: 500 });
   // Стационар: выполненная строка врача 1 без счёта.
   c.db.prepare("INSERT INTO admissions (id, admission_no, patient_id, doctor_id, status) VALUES (1,'A-1',1,1,'active')").run();
-  c.db.prepare('UPDATE users SET service_rates = ? WHERE id = 1').run(JSON.stringify([{ service_id: 1, pct: 30, inpatient_pct: 15 }]));
+  // INPATIENT_BONUS_V1 (мигр. 155) — стационарная ставка живёт в inpatient_rates.
+  c.db.prepare('UPDATE users SET service_rates = ?, inpatient_rates = ? WHERE id = 1')
+    .run(JSON.stringify([{ service_id: 1, pct: 30 }]), JSON.stringify([{ service_id: 1, pct: 15 }]));
   c.db.prepare(`INSERT INTO admission_services (admission_id, service_id, doctor_id, quantity, unit_price, total, status, billable, performed_at)
                 VALUES (1,1,1,1,100000,100000,'added',1,?)`).run(DAY);
   for (const [id, name] of [[1, 'Доктор Д.'], [2, 'Без ставок']]) {

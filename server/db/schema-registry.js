@@ -448,16 +448,19 @@ export const REGISTRY = {
   // REFERRAL_SOURCE_CODE_V1 (mig 116) — `code` is readable everywhere and
   // writable NOWHERE: a trigger assigns it. Letting a form send it back would
   // put two partners on one number in a payout sheet already circulating.
+  // INPATIENT_BONUS_V1 (mig 155) — inpatient_bonus_enabled / inpatient_pct /
+  // inpatient_fixed: the source's reward for sending a patient into the
+  // hospital. Money columns — behind «Цены и проценты» like own_percent.
   // INTERNAL_REFERRAL_V1 (mig 117) — `doctor_id` ties a source to a member of
   // staff: an internal referral. Readable, writable NOWHERE — the link is made
   // by a trigger when the doctor is hired, so a form cannot point one doctor's
   // source at another doctor.
   referral_sources: { read:{roles:ALL_STAFF,columns:['id','name','code','doctor_id','category','category_id','last_name','first_name','middle_name',
-                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','active']},
+                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed','active']},
                write:{ grant:'settings.referral_sources',insert:{roles:['admin','registrar'],columns:['name','category','category_id','last_name','first_name','middle_name',
-                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates']},
+                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed']},
                  update:{roles:['admin'],columns:['name','category','category_id','last_name','first_name','middle_name',
-                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','active']},delete:{roles:[]}},
+                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed','active']},delete:{roles:[]}},
                filters:['id','active','category_id','doctor_id'], json:['own_rates'],
                embed:{ referral_source_categories:{table:'referral_source_categories',fk:'category_id',columns:['id','name']} } },
   // DOCTOR_WORKSPACE_V1 — columns the My-services doctor dashboard and the

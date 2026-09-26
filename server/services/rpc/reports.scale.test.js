@@ -21,8 +21,9 @@ const admin = { id: 9, role: 'admin' };
 function seedLarge() {
   const db = openDb(':memory:');
   migrate(db);
-  db.prepare(`INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, service_rates)
-              VALUES (2,'surg','x','doctor','Хирургов',1,?)`).run(JSON.stringify([{ service_id: 1, pct: 10, inpatient_pct: 20 }]));
+  // INPATIENT_BONUS_V1 (мигр. 155) — стационарная ставка живёт в inpatient_rates.
+  db.prepare(`INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, service_rates, inpatient_rates)
+              VALUES (2,'surg','x','doctor','Хирургов',1,?,?)`).run(JSON.stringify([{ service_id: 1, pct: 10 }]), JSON.stringify([{ service_id: 1, pct: 20 }]));
   db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (1,'P-1','Пациент')").run();
   db.prepare("INSERT INTO services (id, name, price, tax_rate) VALUES (1,'Перевязка',1000,0)").run();
   db.prepare("INSERT INTO admissions (id, admission_no, patient_id, doctor_id, status) VALUES (1,'A-1',1,2,'active')").run();

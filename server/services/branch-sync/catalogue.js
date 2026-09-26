@@ -257,7 +257,9 @@ export const TABLES = [
     //                              ничего подобного;
     //   salary_type, salary_fixed, salary_percent, employment_type,
     //   service_rate_default, referral_rate_default,
-    //   service_rates, referral_rates
+    //   service_rates, referral_rates,
+    //   inpatient_rates, inpatient_referral_pct,
+    //   inpatient_referral_fixed (INPATIENT_BONUS_V1, мигр. 155)
     //                            — деньги и трудовые отношения. Мало того что
     //                              это не нужно филиалу, чтобы показать и
     //                              впустить сотрудника, — в service_rates и

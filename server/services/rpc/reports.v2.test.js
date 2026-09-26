@@ -12,6 +12,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { runReport, doctorReferralReward, doctorInpatientShare } from './reports.js';
 import { createInvoiceForAdmission } from './billing.js';
+import { moveInpatientPct } from '../../test-helpers/inpatient-rates.js';   // INPATIENT_BONUS_V1 — фикстура по-старому
 import { receiveStockLines, issueStockLines, adjustStock } from './procurement.js';
 import { dispenseFromHolding } from './holdings.js';
 import { today as todayOf } from '../domain/day.js';
@@ -44,6 +45,7 @@ function seed({ rates = true } = {}) {
     { service_id: 3, pct: 0, inpatient_pct: 20, branches: [] },
   ]));
   u.run(9, 'adm', 'x', 'admin', 'Администратор', 0, '');
+  moveInpatientPct(db);
 
   const internalCat = db.prepare('SELECT id FROM referral_source_categories WHERE is_internal = 1').get().id;
   const extCat = db.prepare("INSERT INTO referral_source_categories (name, standard_percent) VALUES ('Партнёры', ?)")

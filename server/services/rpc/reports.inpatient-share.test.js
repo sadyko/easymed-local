@@ -18,6 +18,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { runReport, doctorInpatientShare, doctorTierPositions } from './reports.js';
 import { createInvoiceForAdmission } from './billing.js';
+import { moveInpatientPct } from '../../test-helpers/inpatient-rates.js';   // INPATIENT_BONUS_V1 — фикстура по-старому
 
 const admin = { id: 9, role: 'admin' };
 const FROM = '2000-01-01';
@@ -53,6 +54,7 @@ function seed({ paid = true, discount = 0, tier = false, performed = true, perfo
   ]));
   u.run(9, 'adm', 'x', 'admin', 'Администратор', '');
   db.prepare("UPDATE users SET is_doctor = 0 WHERE id = 9").run();
+  moveInpatientPct(db);
 
   db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (1,'P-1','Азизов Бахтиёр')").run();
   db.prepare("INSERT INTO services (id, name, price, tax_rate) VALUES (1,'Операция: аппендэктомия',1000000,6)").run();
@@ -200,6 +202,7 @@ test('строка без счёта платит по цене, которую 
     { service_id: 1, pct: 30, inpatient_pct: 20, price: 1200000 },
     { service_id: 2, pct: 40, inpatient_pct: 10 },
   ]));
+  moveInpatientPct(db);
   assert.equal(doctorInpatientShare(db, { doctor_id: 2, from: FROM, to: TO }, admin).fee, 1200000 * 0.94 * 0.5);
   // Строка «в учёт расходов» пациенту не выставляется — и доли не даёт.
   db.prepare('UPDATE admission_services SET billable = 0 WHERE id = 1').run();
@@ -361,6 +364,7 @@ test('амбулаторные числа те же — есть рядом оп
   bare.prepare(`INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, service_rates)
                 VALUES (1,'surg','x','doctor','Хирургов Х.Х.',1,?)`)
     .run(JSON.stringify([{ service_id: 2, pct: 40, inpatient_pct: 10, branches: [] }]));
+  moveInpatientPct(bare);
   bare.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (1,'P-1','Азизов Бахтиёр')").run();
   bare.prepare("INSERT INTO services (id, name, price, tax_rate) VALUES (2,'Перевязка',100000,0)").run();
   outpatientVisit(bare);
@@ -390,6 +394,7 @@ test('I1: исполнитель без стационарной ставки н
   assert.ok(!objectsOf(report(db, 'doctor_services')).some((o) => o['Врач'] === 'Безставкин Б.Б.'));
   // Со ставкой (даже нулевой — это решение клиники) примечания нет.
   db.prepare("UPDATE users SET service_rates = ? WHERE id = 3").run(JSON.stringify([{ service_id: 1, pct: 25, inpatient_pct: 0 }]));
+  moveInpatientPct(db);
   assert.ok(!report(db).notes.some((n) => n.includes('без стационарной ставки')));
 });
 
@@ -398,6 +403,7 @@ test('I1: врач с амбулаторной работой остаётся �
   outpatientVisit(db);   // перевязка врача 1 — амбулаторная работа
   db.prepare('UPDATE admission_services SET performer_id = 1 WHERE id = 5').run();   // операция: ставки у 1 есть (20 %)
   db.prepare("UPDATE users SET service_rates = ? WHERE id = 1").run(JSON.stringify([{ service_id: 2, pct: 40, inpatient_pct: 10 }]));
+  moveInpatientPct(db);
   const { out, r } = salaries(db);
   assert.ok(out['Хирургов Х.Х.'], 'врач с амбулаторной работой пропал');
   assert.ok(r.notes.some((n) => n.includes('Хирургов Х.Х. — 1')), r.notes.join(' | '));
