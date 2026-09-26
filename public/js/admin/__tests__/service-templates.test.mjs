@@ -156,3 +156,27 @@ test('смета, сохранённая шаблоном, — пакет без
   const ins = supabase.calls.find((c) => c[0] === 'insert')[1];
   assert.deepStrictEqual(Object.keys(ins).sort(), ['active', 'name', 'service_ids']);
 });
+
+// PACKAGES_V1 (ревью I-1) — смета мастера делит строки так же, как сервер:
+// строка пакета со скидкой, действующего в её день, несёт СВОЮ скидку (бо́льшую
+// из пакета и категории), а лояльность/промокод считаются только по остальным.
+import { packageSplit } from '../views/service-templates.js';
+
+test('смета: строки пакета — своя скидка, лояльность — только по остальным (как сервер)', () => {
+  const pkg = { id: 1, pct: 20, valid_from: '2026-09-01', valid_until: '2026-09-30' };
+  const lines = [
+    { total: 200000, package: pkg, day: '2026-09-10' },   // УЗИ по пакету
+    { total: 100000, package: null, day: '2026-09-10' },  // анализ
+  ];
+  // VIP 10 %: на строке пакета max(20, 10) = 40 000; остаток — 100 000.
+  assert.deepStrictEqual(packageSplit(lines, 10), { packageDiscount: 40000, restTotal: 100000 });
+  // Категория больше пакета — на строке пакета категория.
+  assert.deepStrictEqual(packageSplit(lines, 30), { packageDiscount: 60000, restTotal: 100000 });
+});
+
+test('смета: пакет вне дня строки или без скидки — обычная строка', () => {
+  const pkg = { id: 1, pct: 20, valid_from: '2026-09-01', valid_until: '2026-09-30' };
+  assert.deepStrictEqual(packageSplit([{ total: 100, package: pkg, day: '2026-10-01' }], 0), { packageDiscount: 0, restTotal: 100 });
+  assert.deepStrictEqual(packageSplit([{ total: 100, package: { id: 2, pct: 0 }, day: '2026-09-10' }], 0), { packageDiscount: 0, restTotal: 100 });
+  assert.deepStrictEqual(packageSplit([], 10), { packageDiscount: 0, restTotal: 0 });
+});

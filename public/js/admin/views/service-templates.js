@@ -94,6 +94,38 @@ export function packageDiscount(template) {
     return Number.isFinite(n) && n > 0 ? Math.min(n, 100) : 0;
 }
 
+/**
+ * PACKAGES_V1 (ревью I-1) — how the SERVER will split a смета's discount
+ * (billing.js createInvoiceForVisit), so the screen quotes and sends the same:
+ *   • a line whose package has a discount AND is on offer on the line's day
+ *     carries its OWN discount — the larger of the package % and the patient
+ *     category % (never both);
+ *   • loyalty / promo / category apply only to the REST, and are clamped by it.
+ * `lines` — [{ total, package: {pct, valid_from, valid_until} | null, day }].
+ * Returns { packageDiscount, restTotal } (money, rounded to tiyin like the server).
+ */
+export function packageSplit(lines, categoryPct = 0) {
+    const cat = Math.min(Math.max(Number(categoryPct) || 0, 0), 100);
+    const r2 = (n) => Math.round(n * 100) / 100;
+    let packageDiscount = 0;
+    let restTotal = 0;
+    for (const l of Array.isArray(lines) ? lines : []) {
+        const total = Number(l && l.total) || 0;
+        const pkg = l && l.package;
+        const pct = pkg ? packageDiscount_(pkg) : 0;
+        if (pct > 0 && packageValidOn(pkg, l.day || localToday())) {
+            packageDiscount += r2(total * Math.max(pct, cat) / 100);
+        } else {
+            restTotal += total;
+        }
+    }
+    return { packageDiscount: r2(packageDiscount), restTotal: r2(restTotal) };
+}
+// A cart line keeps `pct`; a template row keeps `discount_percent`.
+function packageDiscount_(pkg) {
+    return packageDiscount({ discount_percent: pkg.pct != null ? pkg.pct : pkg.discount_percent });
+}
+
 const ruDate = (s) => (s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : '');
 
 /**

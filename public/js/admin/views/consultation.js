@@ -1589,7 +1589,7 @@ async function loadDashboardData() {
         .select(`
             id, status, notes, created_at, closed_at,
             service_id, service_name, patient_id,
-            services(name, price, tax_rate, type_id, category_id,
+            services(name, price, tax_rate, category_id,
                      service_categories(name), service_types(name)),
             patients(full_name, last_name, first_name, mrn)
         `)
@@ -1605,7 +1605,6 @@ async function loadDashboardData() {
         createdAt:    r.created_at,
         closedAt:     r.closed_at,
         serviceId:    r.service_id,
-        serviceTypeId: r.services?.type_id ?? null,   // INTERNAL_REFERRAL_V1 — ставка задана по ГРУППЕ услуг
         serviceName:  r.services?.name || r.service_name || '(removed)',
         servicePrice: Number(r.services?.price || 0),
         taxRate:      r.services?.tax_rate != null ? Number(r.services.tax_rate) : 0,   // DOCTOR_SHARE_AFTER_TAX_V1

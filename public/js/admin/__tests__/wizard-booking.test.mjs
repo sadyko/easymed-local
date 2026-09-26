@@ -654,3 +654,48 @@ test('кабинет врача открывает мастер с направ�
   assert.match(sw, /title: 'Направить на услуги', referrerDoctorId: referringDoctorId\(ctx\)/,
     '«Направить на услуги» не передаёт мастеру врача-направителя');
 });
+
+// PACKAGES_V1 (ревью I-1) — ДЕНЬГИ ПАКЕТА В МАСТЕРЕ. VIP 10 % + УЗИ по пакету
+// 200 000 со скидкой 20 % + приём 100 000. Сервер кладёт на строку пакета её
+// скидку (40 000), а присланную скидку — только на приём. Раньше мастер брал
+// 10 % со всей сметы (30 000) и присылал их — скидка счёта выходила 70 000
+// вместо 50 000.
+test('МАСТЕР: VIP + пакет — в счёт уходит скидка только на строки без пакета', async () => {
+  await openWizardReadyWith((db) => {
+    const cat = db.prepare("INSERT INTO patient_categories (name, discount_percent) VALUES ('VIP', 10)").run().lastInsertRowid;
+    db.prepare('UPDATE patients SET category_id = ? WHERE id = 3').run(cat);
+    db.prepare("INSERT INTO services (id, name, price, type) VALUES (31, 'УЗИ брюшной полости', 200000, 'imaging')").run();
+    db.prepare("INSERT INTO service_templates (name, service_ids, discount_percent, valid_from, valid_until) VALUES ('Осень', '[31]', 20, '2000-01-01', '2999-12-31')").run();
+  });
+  const ov = document.body.children.find(isWizard);
+  const tplBtn = walk(ov).find((n) => n.tagName === 'BUTTON' && /Выбрать шаблон/.test(textOf(n)));
+  assert.ok(tplBtn, 'нет кнопки «Выбрать шаблон»');
+  tplBtn.click();
+  await wait(40); await flush(20);
+  const modal = document.body.children.find((n) => n !== ov && /Шаблоны/.test(textOf(n)));
+  assert.ok(modal, 'окно шаблонов не открылось');
+  const row = walk(modal).find((n) => n.tagName === 'BUTTON' && /Осень/.test(textOf(n)));
+  assert.ok(row, 'пакет «Осень» не предложен: ' + textOf(modal));
+  row.click();
+  await wait(40); await flush(20);
+  assert.ok(textOf(document.body.children.find(isWizard)).includes('Скидка пакета'), 'смета не показывает скидку пакета');
+  // Лояльность 10 % — руками, как регистратор (скидка группы VIP подставилась бы сама).
+  const disc = walk(document.body.children.find(isWizard)).find((n) => n.tagName === 'INPUT' && n.max === '100');
+  assert.ok(disc, 'нет поля скидки лояльности');
+  disc.value = '10';
+  disc.dispatchEvent({ type: 'input', target: disc, currentTarget: disc });
+  await flush(5);
+
+  await pressUntilCreate();
+  // Строки легли на два дня (приём — со слотом, УЗИ — на дату записи): два
+  // счёта. Счёт УЗИ скидку лояльности не применил (строк без пакета в нём нет,
+  // rest_discount = 0) — она целиком переносится на счёт приёма. Раньше мастер
+  // вычитал invoice.discount_amount (40 000 пакета) и терял её.
+  const calls = RPC.filter((c) => c.name === 'create_invoice_for_visit').map((c) => c.body);
+  assert.equal(calls.length, 2, JSON.stringify(calls));
+  assert.equal(calls[0].discount_amount, 10000, 'в счёт ушла скидка со всей сметы, а не с приёма: ' + JSON.stringify(calls));
+  assert.equal(calls[1].discount_amount, 10000, 'скидка не перенесена на второй день: ' + JSON.stringify(calls));
+  const tot = DB.prepare('SELECT SUM(subtotal) subtotal, SUM(discount_amount) discount_amount, SUM(total_amount) total_amount FROM invoices').get();
+  assert.deepEqual({ ...tot }, { subtotal: 300000, discount_amount: 50000, total_amount: 250000 });
+  assert.equal(DB.prepare('SELECT package_id FROM visit_services WHERE service_id = 31').get().package_id, 1);
+});

@@ -598,6 +598,9 @@ function servicesPane(state, onReload) {
                         // день к двум врачам, вторая строка ждёт своей сметы.
                         visitId:        state.visit.id || null,
                         initialDateIso: (state.visit?.visit_date || state.visit?.date || '').slice(0, 10) || null,
+                        // PACKAGES_V1 (ревью I-3) — «+Пакеты» по дню ЭТОГО визита (местному:
+                        // окно переводит время визита в день клиники), а не по сегодня.
+                        packageDay:     state.visit?.visit_date || state.visit?.date || null,
                         // Already-attached services render disabled in the picker
                         // so the same service can't be added to this visit twice.
                         excludeServiceIds: (state.services || []).map(s => s.service_id).filter(Boolean),

@@ -258,3 +258,19 @@ test('окно закрыли, пока грузились пакеты: отв�
   assert.equal(bodyRemovals - removalsBefore, 1,
     'окно сняли дважды: ' + (bodyRemovals - removalsBefore));
 });
+
+// PACKAGES_V1 (ревью I-3) — окно, открытое на визите ДРУГОГО дня, отбирает
+// пакеты по дню визита (`on`), а не по сегодня: сервер сверяет срок с ним.
+test('on: пакеты отбираются по дню визита, а не по сегодня', async () => {
+  templateError = null;
+  templateRows = [
+    { id: 1, name: 'Сентябрь', service_ids: [1], discount_percent: 20, valid_from: '2030-09-01', valid_until: '2030-09-30' },
+    { id: 2, name: 'Октябрь', service_ids: [1], discount_percent: 20, valid_from: '2030-10-01', valid_until: '2030-10-31' },
+  ];
+  const dlg = openTemplatePickerModal({ onPick: () => {}, on: '2030-09-15' });
+  await tick();
+  const text = textOf(dlg.overlay);
+  assert.match(text, /Сентябрь/);
+  assert.doesNotMatch(text, /Октябрь/);
+  dlg.close();
+});

@@ -20,7 +20,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { listTemplates, templateSize, packageDiscount } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1
 
 // PACKAGES_V1 — «−20 % · до 30.09» под названием пакета: скидку и срок видно
-// ДО выбора. Список уже отобран по сегодняшнему дню (listTemplates).
+// ДО выбора. Список уже отобран по дню визита (listTemplates, опция on).
 export function packageTermsText(t) {
     const pct = packageDiscount(t);
     const until = String((t && t.valid_until) || '').slice(0, 10);
@@ -36,7 +36,10 @@ export function packageTermsText(t) {
  * её в услуги — забота вызывающего (resolveTemplate из service-templates.js).
  * Только выбор: сохранить/убрать шаблон остаются в мастере визита.
  */
-export function openTemplatePickerModal({ onPick, title = 'Пакеты услуг' } = {}) {
+// PACKAGES_V1 (ревью I-3) — `on`: местный день визита, на который пойдут
+// услуги ('YYYY-MM-DD'). Пакеты отбираются по НЕМУ — сервер сверяет срок пакета
+// с днём визита. Не передан — сегодня (быстрая регистрация: приём сейчас).
+export function openTemplatePickerModal({ onPick, title = 'Пакеты услуг', on } = {}) {
     const pick = typeof onPick === 'function' ? onPick : () => {};
 
     const overlay = h('div', { class: 'modal', 'data-dialog': 'template-picker', style: { zIndex: '180' } });
@@ -65,7 +68,7 @@ export function openTemplatePickerModal({ onPick, title = 'Пакеты услу
     document.body.appendChild(overlay);
 
     (async () => {
-        const { data, error } = await listTemplates(supabase);
+        const { data, error } = await listTemplates(supabase, { on: on || undefined });
         if (closed) return;
         clear(listEl);
         if (error) {
