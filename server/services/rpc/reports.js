@@ -548,9 +548,24 @@ function tierMixSql(qtyExpr) {
 const ITEM_TIER = tierMixSql('ii.quantity');
 const ITEM_EFF_PCT_SQL = ITEM_TIER.effPct;
 
-// Invoice-level discount prorated onto this item (items carry no own discount).
-const ITEM_DISCOUNT_SQL = `CASE WHEN i.subtotal > 0
-  THEN i.discount_amount * ii.total / i.subtotal ELSE 0 END`;
+// Invoice-level discount prorated onto this item.
+//
+// PACKAGES_V1 (мигр. 154) — у строки может быть СВОЯ скидка (скидка пакета,
+// invoice_items.discount_amount > 0): тогда она и есть скидка строки. Скидка
+// счёта включает её, поэтому по остальным строкам разносится только ОСТАТОК —
+// скидка счёта минус свои скидки — пропорционально их доле в сумме строк без
+// своей скидки. Без этого скидка пакета на УЗИ урезала бы долю врача за
+// анализ в том же счёте. Счёт без своих скидок считается бит в бит как прежде:
+// подзапросы дают 0, а x − 0 в плавающей точке — тот же x.
+const OWN_DISCOUNT_SUM_SQL = `COALESCE((SELECT SUM(xo.discount_amount) FROM invoice_items xo
+  WHERE xo.invoice_id = i.id AND xo.discount_amount > 0), 0)`;
+const OWN_DISCOUNT_BASE_SQL = `COALESCE((SELECT SUM(xo.total) FROM invoice_items xo
+  WHERE xo.invoice_id = i.id AND xo.discount_amount > 0), 0)`;
+const ITEM_DISCOUNT_SQL = `CASE
+  WHEN COALESCE(ii.discount_amount, 0) > 0 THEN ii.discount_amount
+  WHEN i.subtotal - ${OWN_DISCOUNT_BASE_SQL} > 0
+  THEN MAX(i.discount_amount - ${OWN_DISCOUNT_SUM_SQL}, 0) * ii.total / (i.subtotal - ${OWN_DISCOUNT_BASE_SQL})
+  ELSE 0 END`;
 
 // DOCTOR_SHARE_AFTER_TAX_V1 — ЕДИНЫЙ порядок расчёта доли врача:
 //
@@ -756,6 +771,8 @@ function outpatientPayRows(db, { from, to, doctorId, bf, gf }) {
            vs.clinic_item_id                  AS clinic_item_id,
            vs.unit_price                      AS line_unit_price,
            vs.price_tier                      AS price_tier,
+           -- PACKAGES_V1 — скидка пакета строки (для строки без счёта).
+           (SELECT pk.discount_percent FROM service_templates pk WHERE pk.id = vs.package_id) AS package_pct,
            vs.doctor_id                       AS price_doctor_id,
            ${PERF_TIER.effPct}                AS pct,
            NULL                               AS inpatient_pct,
@@ -810,6 +827,7 @@ function inpatientPayRows(db, { from, to, doctorId, bf, gf }) {
            NULL                               AS clinic_item_id,
            ias.unit_price                     AS line_unit_price,
            NULL                               AS price_tier,
+           NULL                               AS package_pct,
            -- Счёт стационара берёт свою цену НАЗНАЧИВШЕГО (buildAdmissionInvoice).
            ias.doctor_id                      AS price_doctor_id,
            ${INPATIENT_PCT_SQL}               AS pct,
@@ -872,7 +890,7 @@ function foreignPayRows(db, { from, to, bf, gf }) {
            ii.quantity                        AS qty,
            COALESCE(s.tax_rate, 0)            AS tax_rate,
            ${BILLED_COLUMNS_SQL},
-           NULL AS clinic_item_id, NULL AS line_unit_price, NULL AS price_tier, NULL AS price_doctor_id,
+           NULL AS clinic_item_id, NULL AS line_unit_price, NULL AS price_tier, NULL AS package_pct, NULL AS price_doctor_id,
            0 AS pct, NULL AS inpatient_pct, NULL AS fix, 0 AS tier_units_above
       FROM invoice_items ii
       JOIN invoices i       ON i.id = ii.invoice_id
@@ -931,7 +949,11 @@ function payLineMoney(r, pricer) {
     const qty = Number(r.qty) || 0;
     amount = round2(pricer.unit(r) * qty);
     const catPct = r.kind === 'out' ? pricer.categoryPct(r.patient_id) : 0;
-    discount = catPct > 0 ? round2(amount * catPct / 100) : 0;
+    // PACKAGES_V1 — строка пакета со скидкой: бо́льшая из скидки пакета и
+    // категории, не обе (ровно как create_invoice_for_visit).
+    const pkgPct = r.kind === 'out' && Number(r.package_pct) > 0 ? Math.min(Number(r.package_pct), 100) : 0;
+    const pct = Math.max(catPct, pkgPct);
+    discount = pct > 0 ? round2(amount * pct / 100) : 0;
     const after = amount - discount;
     tax = after * (Number(r.tax_rate) || 0) / 100;
     net = after - tax;
@@ -1080,12 +1102,17 @@ function pendingItemsMoney(db, args, ctx) {
     SELECT origin, COUNT(*) AS invoices, COALESCE(SUM(gap), 0) AS amount FROM (
       SELECT ${originExpr(db, 'invoices', 'i')} AS origin,
              COALESCE(i.total_amount, 0)
-               - COALESCE((SELECT SUM(ii.total) FROM invoice_items ii WHERE ii.invoice_id = i.id), 0)
+               - (CASE WHEN EXISTS (SELECT 1 FROM invoice_items xo WHERE xo.invoice_id = i.id AND xo.discount_amount > 0)
+                  -- PACKAGES_V1 — у счёта есть строки со своей скидкой: строки
+                  -- после скидки считаются тем же ITEM_DISCOUNT_SQL, что и
+                  -- отчёт, а не общей долей скидки счёта.
+                  THEN COALESCE((SELECT SUM(ii.total - (${ITEM_DISCOUNT_SQL})) FROM invoice_items ii WHERE ii.invoice_id = i.id), 0)
+                  ELSE COALESCE((SELECT SUM(ii.total) FROM invoice_items ii WHERE ii.invoice_id = i.id), 0)
                  -- * 1.0 обязательно: subtotal и discount_amount целые, и без
                  -- него SQLite поделил бы нацело — доля скидки стала бы 0 или 1.
                  * (CASE WHEN COALESCE(i.subtotal, 0) > 0
                          THEN (i.subtotal - COALESCE(i.discount_amount, 0)) * 1.0 / i.subtotal
-                         ELSE 1.0 END) AS gap
+                         ELSE 1.0 END) END) AS gap
         FROM invoices i
        WHERE i.sync_origin IS NOT NULL
          AND i.status <> 'void'

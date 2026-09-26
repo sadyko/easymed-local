@@ -13,6 +13,7 @@ import { invoiceStatusFor } from '../domain/money.js';
 // keeps that price at the till (the catalog price is the FIRST visit's price).
 import { lineUnitPrice } from '../domain/pricing.js';
 import { hasAnyRole } from '../roles.js';
+import { localDate } from '../domain/day.js';
 // HOLDINGS_FIRST_V1 — «вернуть КАЖДУЮ часть туда, откуда она пришла» живёт в
 // одном месте на весь сервер (rpc/inventory.js): подотчёт сотрудника, кабинет,
 // отдел, склад. Кольцо импортов здесь такое же, как у billing ↔ cashier строкой
@@ -154,6 +155,52 @@ export function patientCategoryDiscount(db, patientId) {
   return Math.min(pct, 100);
 }
 
+// ДД.ММ.ГГГГ для текста отказа — владелец читает даты так.
+function ruDay(ymd) {
+  const s = String(ymd || '');
+  return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : s;
+}
+
+/**
+ * PACKAGES_V1 — пакет строки визита, проверенный на ЭТОМ визите.
+ *
+ * Срок пакета — окно ПРЕДЛОЖЕНИЯ (решение владельца 26.09): пакет, выбранный
+ * при регистрации, выставляется со своей скидкой только если местный день
+ * визита лежит в [valid_from, valid_until] (границы включительно, пустая —
+ * без ограничения). Окно выбора на экране показывает только действующие
+ * пакеты, но экран — не граница: проверка стоит здесь, где пишутся деньги.
+ *
+ * Услуга строки обязана входить в пакет — иначе пометка пакета дала бы его
+ * скидку любой услуге. Снятый с учёта (active = 0) пакет не отказывает:
+ * строка могла быть заведена, пока он был в списке, и снятие — это «больше не
+ * предлагать», а не «отменить обещанное пациенту».
+ *
+ * Возвращает {id, name, pct} или null (у строки пакета нет / пакет удалён).
+ */
+function linePackage(db, row, visitDay, cache) {
+  if (row.package_id == null) return null;
+  let pkg = cache.get(row.package_id);
+  if (pkg === undefined) {
+    pkg = db.prepare('SELECT id, name, service_ids, discount_percent, valid_from, valid_until FROM service_templates WHERE id = ?')
+      .get(row.package_id) || null;
+    cache.set(row.package_id, pkg);
+  }
+  if (!pkg) return null;
+  if ((pkg.valid_from && visitDay < pkg.valid_from) || (pkg.valid_until && visitDay > pkg.valid_until)) {
+    const window = pkg.valid_from && pkg.valid_until ? `с ${ruDay(pkg.valid_from)} по ${ruDay(pkg.valid_until)}`
+      : pkg.valid_from ? `с ${ruDay(pkg.valid_from)}` : `по ${ruDay(pkg.valid_until)}`;
+    throw new RpcError(`Пакет «${pkg.name}» действует ${window}, а визит — ${ruDay(visitDay)}. `
+      + 'Уберите услуги пакета из визита или выберите действующий пакет.', 400);
+  }
+  let ids = [];
+  try { ids = JSON.parse(pkg.service_ids || '[]'); } catch { ids = []; }
+  if (!Array.isArray(ids) || !ids.some((id) => Number(id) === Number(row.service_id))) {
+    throw new RpcError(`Услуга строки ${row.id} не входит в пакет «${pkg.name}» — скидку пакета на неё дать нельзя.`, 400);
+  }
+  const pct = Number(pkg.discount_percent);
+  return { id: pkg.id, name: pkg.name, pct: Number.isFinite(pct) ? Math.min(Math.max(pct, 0), 100) : 0 };
+}
+
 export function createInvoiceForVisit(db, args, user) {
   requireRole(user, CREATE_INVOICE_ROLES);
 
@@ -201,6 +248,9 @@ export function createInvoiceForVisit(db, args, user) {
     // service nor a product (ad-hoc) keeps its stored price.
     const getService = db.prepare('SELECT price, name, price_secondary, secondary_days_from, secondary_days_to, price_repeat, repeat_days_from, repeat_days_to FROM services WHERE id = ?');
     const getProduct = db.prepare('SELECT sale_price, name FROM products WHERE id = ?');
+    // PACKAGES_V1 — местный день визита: по нему проверяется срок пакета.
+    const visitDay = db.prepare(`SELECT ${localDate('?')} AS d`).get(visit.visit_date).d;
+    const packages = new Map();
     const priced = rows.map((row) => {
       let svcName = null;
       let svc = null, prod = null;
@@ -230,7 +280,8 @@ export function createInvoiceForVisit(db, args, user) {
         throw new RpcError(`invalid quantity on visit_service ${row.id}`, 400);
       }
       const line = round2(unit * qty);
-      return { row, unit, qty, line, svcName };
+      const pkg = linePackage(db, row, visitDay, packages);
+      return { row, unit, qty, line, svcName, pkg };
     });
 
     const subtotal = round2(priced.reduce((sum, p) => sum + p.line, 0));
@@ -256,8 +307,23 @@ export function createInvoiceForVisit(db, args, user) {
     // скидка группы. Взять меньшую значило бы молча отнять у VIP его условия,
     // а сложить — дать скидку дважды за одно и то же.
     const categoryPercent = patientCategoryDiscount(db, visit.patient_id);
-    const categoryDiscount = round2(subtotal * categoryPercent / 100);
-    const discount = round2(Math.min(Math.max(discountRaw, categoryDiscount), subtotal));
+    // PACKAGES_V1 (2026-09-26) — СКИДКА ПАКЕТА ПОСТРОЧНО. Строка пакета со
+    // скидкой получает СВОЮ скидку (invoice_items.discount_amount): бо́льшую из
+    // скидки пакета и скидки категории пациента — не обе (решение владельца).
+    // Ручная скидка кассира и пол категории действуют, как прежде, но только на
+    // строки без своей скидки и зажаты их суммой. Скидка счёта — сумма обеих
+    // частей, поэтому итог счёта и сумма строк после скидки сходятся. Пакет без
+    // скидки (прежний шаблон) — обычная строка, всё как было.
+    for (const p of priced) {
+      p.ownDiscount = p.pkg && p.pkg.pct > 0
+        ? round2(p.line * Math.max(p.pkg.pct, categoryPercent) / 100)
+        : 0;
+    }
+    const lineDiscounts = round2(priced.reduce((sum, p) => sum + p.ownDiscount, 0));
+    const restSubtotal = round2(priced.reduce((sum, p) => sum + (p.ownDiscount > 0 ? 0 : p.line), 0));
+    const categoryDiscount = round2(restSubtotal * categoryPercent / 100);
+    const restDiscount = round2(Math.min(Math.max(discountRaw, categoryDiscount), restSubtotal));
+    const discount = round2(lineDiscounts + restDiscount);
     const total = round2(subtotal - discount);
     const invoiceNumber = nextInvoiceNumber(db);
     // A zero-balance invoice (all-free services or 100% discount) has nothing
@@ -305,15 +371,15 @@ export function createInvoiceForVisit(db, args, user) {
     const invoiceId = info.lastInsertRowid;
 
     const insertItem = db.prepare(`
-      INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total, discount_amount)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     const linkVisitService = db.prepare('UPDATE visit_services SET invoice_item_id = ? WHERE id = ?');
     const syncVisitService = db.prepare('UPDATE visit_services SET unit_price = ?, total = ? WHERE id = ?');
 
-    for (const { row, unit, qty, line, svcName } of priced) {
+    for (const { row, unit, qty, line, svcName, ownDiscount } of priced) {
       const description = svcName || '';
-      const itemInfo = insertItem.run(invoiceId, row.service_id, description, qty, unit, line);
+      const itemInfo = insertItem.run(invoiceId, row.service_id, description, qty, unit, line, ownDiscount);
       linkVisitService.run(itemInfo.lastInsertRowid, row.id);
       // Keep the visit line consistent with what was actually billed.
       syncVisitService.run(unit, line, row.id);
@@ -649,7 +715,8 @@ export function removeUnpaidService(db, args, user) {
         invoiceDeleted = true;
       } else {
         const subtotal = round2(left.s);
-        const discount = Math.min(round2(inv.discount_amount), subtotal);
+        // PACKAGES_V1 — своя скидка убранной строки уходит вместе с ней.
+        const discount = Math.min(Math.max(round2(inv.discount_amount - (Number(item.discount_amount) || 0)), 0), subtotal);
         db.prepare('UPDATE invoices SET subtotal = ?, discount_amount = ?, total_amount = ? WHERE id = ?')
           .run(subtotal, discount, round2(subtotal - discount), inv.id);
         invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
@@ -714,16 +781,18 @@ export function changeUnpaidService(db, args, user) {
 
     const qty = vs.quantity || 1;
     const lineTotal = round2(svc.price * qty);
-    db.prepare('UPDATE visit_services SET service_id = ?, unit_price = ?, total = ? WHERE id = ?')
+    // PACKAGES_V1 — другая услуга уже не услуга пакета: строка теряет пакет и
+    // его скидку (скидка счёта уменьшается на неё же ниже).
+    db.prepare('UPDATE visit_services SET service_id = ?, unit_price = ?, total = ?, package_id = NULL WHERE id = ?')
       .run(newServiceId, svc.price, lineTotal, vsId);
 
     let invoice = null;
     if (item) {
-      db.prepare('UPDATE invoice_items SET service_id = ?, description = ?, unit_price = ?, total = ? WHERE id = ?')
+      db.prepare('UPDATE invoice_items SET service_id = ?, description = ?, unit_price = ?, total = ?, discount_amount = 0 WHERE id = ?')
         .run(newServiceId, svc.name || '', svc.price, lineTotal, item.id);
       const sub = db.prepare('SELECT COALESCE(SUM(total), 0) s FROM invoice_items WHERE invoice_id = ?').get(inv.id).s;
       const subtotal = round2(sub);
-      const discount = Math.min(round2(inv.discount_amount), subtotal);
+      const discount = Math.min(Math.max(round2(inv.discount_amount - (Number(item.discount_amount) || 0)), 0), subtotal);
       db.prepare('UPDATE invoices SET subtotal = ?, discount_amount = ?, total_amount = ? WHERE id = ?')
         .run(subtotal, discount, round2(subtotal - discount), inv.id);
       invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
