@@ -10,6 +10,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { openDb } from '../connection.js';
 import { migrate } from '../migrate.js';
 import { runReport } from '../../services/rpc/reports.js';
@@ -70,7 +71,7 @@ test('153: тип → группа по большинству услуг; ти�
       { group: 'procedure', unit: 'pct', value: 12 },
       { group: 'other', unit: 'pct', value: 30 },
     ]);
-    const log = logRows(db);
+    const log = logRows(db).filter((r) => r.reason !== 'split');   // split — отдельный тест ниже
     assert.equal(log.length, 1, JSON.stringify(log));
     assert.equal(log[0].reason, 'unmapped');
     assert.equal(log[0].type_id, tEmpty);
@@ -165,5 +166,73 @@ test('153: деньги не меняются — ставка на «Консу
     assert.equal(byService.get('Приём терапевта'), 60000);
     assert.equal(byService.get('ОАК'), 8000);
     assert.deepEqual(logRows(db), []);
+  } finally { db.close(); }
+});
+
+// Ревью I-4 — то, что миграция меняет молча, обязано остаться в журнале.
+
+test('153: услуги типа в другой группе — строка split с их числом и прежней ставкой типа', () => {
+  const db = freshDb();
+  try {
+    const tMixed = typeId(db, 'Смешанный');          // 3 процедуры + 2 лаборатории + 1 диагностика
+    services(db, tMixed, 'procedure', 3);
+    services(db, tMixed, 'lab', 2);
+    services(db, tMixed, 'radiology', 1);
+    const cat = db.prepare("INSERT INTO referral_source_categories (name, rates) VALUES ('К', ?)").run(JSON.stringify([
+      { type_id: tMixed, unit: 'pct', value: 12 },
+    ])).lastInsertRowid;
+    rerun153(db);
+    assert.deepEqual(catRates(db, cat), [{ group: 'procedure', unit: 'pct', value: 12 }]);
+    const split = logRows(db).filter((r) => r.reason === 'split');
+    assert.equal(split.length, 2, JSON.stringify(split));
+    const lab = split.find((r) => r.service_group === 'lab');
+    assert.ok(lab, 'нет строки для лаборатории');
+    assert.equal(lab.type_id, tMixed);
+    assert.equal(lab.service_count, 2);
+    assert.equal(lab.value, 12);
+    assert.equal(lab.unit, 'pct');
+    assert.equal(lab.table_name, 'referral_source_categories');
+    assert.equal(lab.row_id, cat);
+    const img = split.find((r) => r.service_group === 'imaging');
+    assert.ok(img, "radiology читается как imaging и тоже меняет ставку");
+    assert.equal(img.service_count, 1);
+    assert.ok(!split.some((r) => r.service_group === 'procedure'), 'группа большинства — не split');
+  } finally { db.close(); }
+});
+
+// services.type сегодня NOT NULL с CHECK на пять значений (+radiology), так
+// что услугу без группы в тест не завести; фильтр в m153_counts — защита на
+// случай, если колонка когда-нибудь станет необязательной: группа большинства
+// не может оказаться «никакой».
+test('153: группу типа выбирают только услуги с группой (type IS NOT NULL)', () => {
+  const sql = fs.readFileSync(new URL('./153_referral_rates_by_group.sql', import.meta.url), 'utf8');
+  const counts = sql.slice(sql.indexOf('CREATE TEMP TABLE m153_counts'), sql.indexOf('DROP TABLE IF EXISTS temp.m153_map'));
+  assert.match(counts, /WHERE type_id IS NOT NULL AND type IS NOT NULL/);
+});
+
+test('153: услуги без типа в группе, получившей ставку, — строка untyped с их числом и новой ставкой', () => {
+  const db = freshDb();
+  try {
+    const tLab = typeId(db, 'Анализы');
+    services(db, tLab, 'lab', 2);
+    for (let i = 0; i < 3; i += 1) {
+      db.prepare("INSERT INTO services (name, price, type, type_id) VALUES (?, 1000, 'lab', NULL)").run('без типа ' + i);
+    }
+    // Без типа в группе, где ставки нет, — ничего не меняется и не пишется.
+    db.prepare("INSERT INTO services (name, price, type, type_id) VALUES ('приём без типа', 1000, 'consultation', NULL)").run();
+    const src = db.prepare("INSERT INTO referral_sources (name, reward_mode, own_rates) VALUES ('И', 'own', ?)").run(JSON.stringify([
+      { type_id: tLab, unit: 'fix', value: 5000 },
+    ])).lastInsertRowid;
+    rerun153(db);
+    const untyped = logRows(db).filter((r) => r.reason === 'untyped');
+    assert.equal(untyped.length, 1, JSON.stringify(untyped));
+    assert.equal(untyped[0].table_name, 'referral_sources');
+    assert.equal(untyped[0].row_id, src);
+    assert.equal(untyped[0].service_group, 'lab');
+    assert.equal(untyped[0].service_count, 3);
+    assert.equal(untyped[0].unit, 'fix');
+    assert.equal(untyped[0].value, 5000);
+    assert.equal(untyped[0].kept_type_id, tLab);
+    assert.equal(untyped[0].type_id, null);
   } finally { db.close(); }
 });
