@@ -494,7 +494,7 @@ async function ownerFetchVS(fromIso, toIso, clinicId, branchIds, branchId) {
         // OFFLINE_REPORTS_V1 — покрытие считается по ПЛАТЕЛЬЩИКУ СЧЁТА строки
         // (visit_services → invoice_items → invoices.payer_id): колонок
         // payer_covered и coverage_type в офлайн-схеме нет.
-        .select('id, total, status, invoice_item_id, services ( type_id ), visits!inner ( visit_date, branch_id, status )')
+        .select('id, total, status, invoice_item_id, services ( type ), visits!inner ( visit_date, branch_id, status )')
         .gte('visits.visit_date', fromIso)
         .lte('visits.visit_date', toIso)
         .limit(10000);
@@ -512,19 +512,20 @@ export async function buildOwnerReport({ period, branchId, branchIds, clinicId, 
     if (!fromIso || !toIso) [fromIso, toIso] = periodWindow(period);
     const now = new Date();
     const mFromIso = new Date(now.getFullYear(), now.getMonth() - 11, 1).toISOString();
-    const [rows, mRows, typesRes] = await Promise.all([
+    const [rows, mRows] = await Promise.all([
         ownerFetchVS(fromIso, toIso, clinicId, branchIds, branchId),
         ownerFetchVS(mFromIso, now.toISOString(), clinicId, branchIds, branchId),
-        supabase.from('service_types').select('id, name'),
     ]);
-    const typeName = new Map((typesRes.data || []).map(t => [t.id, t.name]));
 
     const revenue = rows.reduce((s, r) => s + Number(r.total || 0), 0);
     const count = rows.length;
 
     const g = new Map();
+    // GROUPS_FIVE_REFERRAL_V1 — «Выручка по группам услуг» — по ПЯТИ группам
+    // (services.type), а не по справочнику типов, который клиника пишет сама.
     for (const r of rows) {
-        const nm = typeName.get(r.services && r.services.type_id) || 'Прочее';
+        const t = r.services && r.services.type;
+        const nm = SERVICE_GROUP_RU[t === 'radiology' ? 'imaging' : t] || 'Прочее';
         g.set(nm, (g.get(nm) || 0) + Number(r.total || 0));
     }
     const byGroup = [...g.entries()].map(([name, value]) => ({ name, value: Math.round(value) }))

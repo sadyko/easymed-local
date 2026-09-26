@@ -494,7 +494,7 @@ const IMPORT_CONFIGS = {
             // rail lists service_types (CUSTOM_CLINIC_V1), so an import must not
             // invent new groups. Unknown type values warn and fall back to the
             // «Раздел» mirror type via transform; category/department still auto-create.
-            { key: 'type',             fk: { source: 'service_types',      keyField: 'name', target: 'type_id' }, hint: 'Тип услуги — только из существующих групп клиники; необязательно. Пусто или неизвестное значение → группа берётся из «Раздела».' },
+            { key: 'type',             fk: { source: 'service_types',      keyField: 'name', target: 'type_id' }, hint: 'Тип услуги — только из существующих типов клиники; необязательно. Пусто или неизвестное значение → тип подставляется по «Разделу».' },
             { key: 'category',         fk: { source: 'service_categories', keyField: 'name', target: 'category_id',   autoCreate: true }, hint: 'Категория/направление (напр. МРТ головного мозга) — необязательно; создаётся автоматически.' },
             { key: 'department',       fk: { source: 'departments',        keyField: 'name', target: 'department_id', autoCreate: true }, hint: 'Отделение — необязательно; создаётся автоматически.' },
             // IMPORT_PRICE_OPTIONAL_V1 — price used to be required, which blocked
