@@ -50,21 +50,29 @@ ALTER TABLE users ADD COLUMN inpatient_referral_fixed REAL NOT NULL DEFAULT 0
 --
 -- Было: ключ inpatient_pct внутри записи service_rates. Чтобы задать его,
 -- услугу приходилось отмечать в «Услугах и ставках», и отметка писала
--- амбулаторную запись {pct: 0}.
+-- амбулаторную запись {pct: 0} — а записанный 0 перекрывает ставку по
+-- умолчанию (service_rate_default): врач с 30 % по умолчанию за эту услугу
+-- амбулаторно получал 0. Это и есть сцепка, которую переносом снимаем.
 --
 -- Перенос: каждая запись, где inpatient_pct — ЧИСЛО, даёт в inpatient_rates
 -- {service_id, pct: inpatient_pct}; при двух записях на одну услугу берётся
 -- бо́льшая (так её и читал отчёт — MAX в INPATIENT_RATE_SQL). Ключ
 -- inpatient_pct из service_rates убирается у всех записей.
 --
--- ЗАПИСИ service_rates ОСТАЮТСЯ ВСЕ, даже жившие только ради стационара
--- ({pct: 0} без фикса и своей цены). Ревью I5 (26.09): прежний вариант такую
--- запись удалял, но запись «Услуг и ставок» — это ещё и «врач оказывает эту
--- услугу»: по ней врача ставят в списки исполнителей (выбор врача на
--- услугу, пулы по категориям, назначения в стационаре). Удаление молча
--- убирало врача из этих списков. Записанный {pct: 0} по-прежнему перекрывает
--- ставку по умолчанию — ровно как было до переноса; снять его — решение
--- клиники в карточке сотрудника, а не миграции.
+-- ЗАПИСИ service_rates ОСТАЮТСЯ ВСЕ (ревью I5, 26.09): запись «Услуг и
+-- ставок» — это ещё и «врач оказывает эту услугу», по ней врача ставят в
+-- списки исполнителей (выбор врача на услугу, пулы по категориям, назначения
+-- в стационаре); прежний вариант миграции запись, жившую только ради
+-- стационара, удалял — и молча убирал врача из этих списков.
+--
+-- У ЗАПИСИ, ЖИВШЕЙ ТОЛЬКО РАДИ СТАЦИОНАРА, снимается и её pct. Узнаётся так:
+-- стоит inpatient_pct, амбулаторный процент 0 (или его нет), нет фикса (fix)
+-- и нет своей цены (price). Её {pct: 0} — след сцепки, а не решение клиники;
+-- без ключа pct запись значит «оказывает, ставка по умолчанию» (так её уже
+-- пишет окно услуги, service-editor-logic.js mergeServiceRates, и так её
+-- читает отчёт: dr.percent NULL → service_rate_default). Отличить её от
+-- сознательного «амбулаторно 0 %» по данным нельзя; такой 0 клиника снова
+-- ставит в карточке сотрудника.
 --
 -- Повторный прогон ничего не делает: переносятся только строки, где ключ
 -- inpatient_pct ещё есть, а после переноса его нет нигде.
@@ -76,7 +84,12 @@ SELECT u.id                                                   AS user_id,
        j.value                                                AS value,
        CAST(json_extract(j.value, '$.service_id') AS INTEGER) AS service_id,
        CASE WHEN json_type(j.value, '$.inpatient_pct') IN ('integer', 'real')
-            THEN CAST(json_extract(j.value, '$.inpatient_pct') AS REAL) END AS inpatient_pct
+            THEN CAST(json_extract(j.value, '$.inpatient_pct') AS REAL) END AS inpatient_pct,
+       CASE WHEN json_type(j.value, '$.inpatient_pct') IN ('integer', 'real')
+             AND COALESCE(CAST(json_extract(j.value, '$.pct') AS REAL), 0) = 0
+             AND json_type(j.value, '$.fix') IS NULL
+             AND json_type(j.value, '$.price') IS NULL
+            THEN 1 ELSE 0 END                                 AS inpatient_only
   FROM users u, json_each(CASE WHEN json_valid(u.service_rates) THEN u.service_rates ELSE '[]' END) j
  WHERE u.service_rates IS NOT NULL AND u.service_rates <> ''
    AND json_valid(u.service_rates)
@@ -103,10 +116,13 @@ UPDATE users
        ) x)
  WHERE id IN (SELECT user_id FROM m155_entries WHERE inpatient_pct IS NOT NULL);
 
--- 4b. service_rates — те же записи в том же порядке, без ключа inpatient_pct.
+-- 4b. service_rates — те же записи в том же порядке, без ключа inpatient_pct;
+--     у записей «только ради стационара» — ещё и без pct.
 UPDATE users
    SET service_rates = COALESCE((
-     SELECT json_group_array(json(json_remove(e.value, '$.inpatient_pct')) ORDER BY e.pos)
+     SELECT json_group_array(json(CASE WHEN e.inpatient_only = 1
+                                       THEN json_remove(e.value, '$.inpatient_pct', '$.pct')
+                                       ELSE json_remove(e.value, '$.inpatient_pct') END) ORDER BY e.pos)
        FROM m155_entries e
       WHERE e.user_id = users.id), '[]')
  WHERE id IN (SELECT user_id FROM m155_entries);

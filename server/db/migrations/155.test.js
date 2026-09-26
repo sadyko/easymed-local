@@ -6,9 +6,10 @@
 // Проверяется: колонки и их ограничения · перенос значений (включая 0 и
 // дубли услуги) · ключ inpatient_pct исчезает из service_rates · ВСЕ записи
 // service_rates остаются (ревью I5: запись «жившая только ради стационара»
-// ещё и держит врача в списках исполнителей услуги) · повторный прогон ничего
-// не меняет · и деньги: амбулаторная доля та же, что до переноса, и
-// стационарная доля та же.
+// ещё и держит врача в списках исполнителей услуги), но у такой записи
+// снимается и её {pct: 0} — след старой сцепки · повторный прогон ничего не
+// меняет · и деньги: после переноса амбулаторная ставка по умолчанию больше не
+// обнуляется, а стационарная доля та же, что до переноса.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,6 +19,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { doctorPaySummary } from '../../services/rpc/reports.js';
+// Ревью I5 — списки исполнителей услуги читают членство отсюда.
+import { doctorPerformsService } from '../../../public/js/shared/service-categories.js';
+import { assignedTo } from '../../../public/js/admin/views/doctor-pool.js';
 
 function freshDb() {
   const db = openDb(':memory:');
@@ -75,13 +79,13 @@ test('155: колонки — у госпитализации, у источни
   } finally { db.close(); }
 });
 
-test('155: «Стационар, %» переезжает в inpatient_rates; записи service_rates остаются все, без ключа', () => {
+test('155: «Стационар, %» переезжает в inpatient_rates; записи service_rates остаются все; у записи ради стационара снят и pct', () => {
   const db = freshDb();
   try {
     rollback155(db);
     const ins = db.prepare("INSERT INTO users (id, username, password_hash, role, service_rates, service_rate_default) VALUES (?, ?, 'x', 'doctor', ?, ?)");
     ins.run(1, 'mixed', JSON.stringify([
-      { service_id: 1, pct: 0, inpatient_pct: 20, branches: [] },        // только ради стационара → остаётся без ключа
+      { service_id: 1, pct: 0, inpatient_pct: 20, branches: [] },        // только ради стационара → остаётся без pct и ключа
       { service_id: 2, pct: 40, inpatient_pct: 10, branches: [1] },      // амбулаторная остаётся без ключа
       { service_id: 3, pct: 0, branches: [] },                           // сознательный 0 без стационара — цел
       { service_id: 4, pct: 0, price: 5000, inpatient_pct: 5 },          // своя цена — запись осталась
@@ -101,7 +105,7 @@ test('155: «Стационар, %» переезжает в inpatient_rates; з
       { service_id: 1, pct: 20 }, { service_id: 2, pct: 10 }, { service_id: 4, pct: 5 }, { service_id: 5, pct: 0 },
     ]);
     assert.deepEqual(JSON.parse(one.service_rates), [
-      { service_id: 1, pct: 0, branches: [] },
+      { service_id: 1, branches: [] },
       { service_id: 2, pct: 40, branches: [1] },
       { service_id: 3, pct: 0, branches: [] },
       { service_id: 4, pct: 0, price: 5000 },
@@ -126,7 +130,7 @@ test('155: «Стационар, %» переезжает в inpatient_rates; з
   } finally { db.close(); }
 });
 
-test('155: деньги — амбулаторная доля как до переноса, стационарная та же; врач остаётся исполнителем услуги', () => {
+test('155: деньги — ставка по умолчанию больше не обнуляется, стационарная доля та же; врач остаётся исполнителем', () => {
   const db = freshDb();
   try {
     rollback155(db);
@@ -145,12 +149,14 @@ test('155: деньги — амбулаторная доля как до пер
     db.prepare(`INSERT INTO admission_services (admission_id, service_id, doctor_id, quantity, unit_price, total, status, billable, performed_at)
                 VALUES (1, 1, 1, 1, 100000, 100000, 'added', 1, '2026-08-05T10:00:00Z')`).run();
     const s = doctorPaySummary(db, { doctor_id: 1, from: '2026-08-01', to: '2026-08-31' }, { id: 9, role: 'admin' });
-    // Запись {pct: 0} осталась и, как до переноса, перекрывает 30 % по
-    // умолчанию: амбулаторные деньги миграция не меняет.
-    assert.equal(s.outpatient.fee, 0);
+    // До переноса запись {pct: 0} перекрывала 30 % по умолчанию и амбулатория давала 0.
+    assert.equal(s.outpatient.fee, 30000);
     assert.equal(s.inpatient.fee, 20000);
-    // Ревью I5 — врач по-прежнему в «Услугах и ставках» этой услуги.
+    // Ревью I5 — врач по-прежнему в «Услугах и ставках» этой услуги (списки
+    // исполнителей читают членство по service_id), только без pct.
     const rates = JSON.parse(db.prepare('SELECT service_rates FROM users WHERE id = 1').get().service_rates);
-    assert.deepEqual(rates, [{ service_id: 1, pct: 0, branches: [] }]);
+    assert.deepEqual(rates, [{ service_id: 1, branches: [] }]);
+    assert.equal(doctorPerformsService({ service_rates: rates }, 1), true, 'врач выпал из списка исполнителей');
+    assert.deepEqual(assignedTo([{ id: 1, service_rates: rates }], 1).map((d) => d.id), [1]);
   } finally { db.close(); }
 });

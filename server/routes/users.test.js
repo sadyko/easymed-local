@@ -332,6 +332,37 @@ test('POST /api/users stores service_rates as an array with branches defaulted',
   } finally { server.close(); }
 });
 
+// Ревью I5 (мигр. 155) — запись без pct значит «оказывает, ставка по
+// умолчанию» (так её пишут окно услуги и перенос 155): отчёт берёт
+// service_rate_default. Прежде маршрут дописывал ей pct: 0 при первом же
+// сохранении карточки — и 0 перекрывал ставку по умолчанию.
+test('service_rates: запись без pct (или с пустым) сохраняется без pct; число — как было', async () => {
+  const { server, base } = await startServer();
+  try {
+    const admin = await loginAdmin(base);
+    const res = await post(base, '/api/users', {
+      username: 'rate.dflt', password: 'password2', role: 'doctor',
+      service_rates: [
+        { service_id: 1, branches: [1] },
+        { service_id: 2, pct: '', branches: [] },
+        { service_id: 3, pct: null },
+        { service_id: 4, pct: 0 },
+        { service_id: 5, percentage: 25 },
+        { service_id: 6, fix: 5000 },
+      ],
+    }, admin);
+    assert.equal(res.status, 201);
+    const u = (await res.json()).user;
+    const by = Object.fromEntries(u.service_rates.map((r) => [r.service_id, r]));
+    assert.deepEqual(by[1], { service_id: 1, branches: [1] });
+    assert.deepEqual(by[2], { service_id: 2, branches: [] });
+    assert.deepEqual(by[3], { service_id: 3, branches: [] });
+    assert.deepEqual(by[4], { service_id: 4, pct: 0, branches: [] }, 'записанный 0 — решение клиники, остаётся');
+    assert.equal(by[5].pct, 25);
+    assert.deepEqual(by[6], { service_id: 6, branches: [], fix: 5000 });
+  } finally { server.close(); }
+});
+
 test('service_rates pct is clamped to 0-100', async () => {
   const { server, base } = await startServer();
   try {

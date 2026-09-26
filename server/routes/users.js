@@ -214,6 +214,13 @@ function parseRates(val, key, moneyKey = 'price') {
     // 'percentage'; accepting it as an alias stops the rate being silently
     // zeroed on every save.
     const rawPct = entry.pct !== undefined ? entry.pct : entry.percentage;
+    // Ревью I5 (мигр. 155) — у ОКАЗЫВАЕМОЙ услуги (service_rates) отсутствие
+    // процента значимо: запись без pct — «оказывает, ставка по умолчанию»
+    // (отчёт: dr.percent NULL → service_rate_default; так её пишут окно
+    // услуги и перенос 155). Дописанный сюда pct: 0 перекрыл бы ставку по
+    // умолчанию нулём при первом же сохранении карточки. Записанный 0 —
+    // решение клиники — остаётся нулём.
+    const noPct = key === 'service_rates' && (rawPct === undefined || rawPct === null || rawPct === '');
     let pct = Number(rawPct);
     if (!Number.isFinite(pct)) pct = 0;
     pct = Math.min(100, Math.max(0, pct));
@@ -262,7 +269,7 @@ function parseRates(val, key, moneyKey = 'price') {
       }
     }
 
-    const clean = { service_id: serviceId, pct, branches };
+    const clean = noPct ? { service_id: serviceId, branches } : { service_id: serviceId, pct, branches };
     if (money !== null) clean[moneyKey] = money;
     if (fix !== null) clean.fix = fix;
     byId.set(serviceId, clean);

@@ -363,8 +363,14 @@ const asArr = (v) => (Array.isArray(v) ? v : []);
 // INPATIENT_BONUS_V1 (мигр. 155) — inpatient_pct здесь больше нет: ставки
 // стационара живут в своём списке (inpatient_rates, вкладка «Стационар»).
 const OPTIONAL_RATE_KEYS = ['price', 'fix', 'fixed'];
+// Ревью I5 (мигр. 155) — запись БЕЗ pct значит «оказывает, ставка по
+// умолчанию» (так её пишут окно услуги и перенос 155; отчёт берёт
+// service_rate_default). Читать её как 0 нельзя: 0 ушёл бы на сервер при
+// сохранении и перекрыл ставку по умолчанию. Поэтому pct копируется, только
+// если он есть.
 const loadRates = (list) => asArr(list).map((r) => {
-    const out = { service_id: r.service_id, pct: Number(r.pct) || 0, branches: asArr(r.branches) };
+    const out = { service_id: r.service_id, branches: asArr(r.branches) };
+    if (r.pct != null && r.pct !== '') out.pct = Number(r.pct) || 0;
     for (const k of OPTIONAL_RATE_KEYS) if (r[k] != null) out[k] = Number(r[k]);
     return out;
 });
@@ -1020,12 +1026,16 @@ function ratesSection(emp, arrayKey, opts, touch) {
                 type: 'number', min: '0', class: 'rt-num', disabled: !on,
                 max: fixed ? null : '100',
                 step: fixed ? '1000' : '1',
-                value: on ? String(fixed ? r.fix : r.pct) : '0',
+                // Ревью I5 — процента нет: пустое поле с подсказкой, а не «0».
+                value: on ? String(fixed ? r.fix : (r.pct == null ? '' : r.pct)) : '0',
+                placeholder: on && !fixed ? tr('По умолчанию') : null,
                 title: fixed ? 'Врач получает эту сумму за каждую единицу услуги' : 'Процент от суммы строки после скидки',
             });
             rateInp.addEventListener('input', () => {
                 const n = Number(rateInp.value) || 0;
                 if (fixed) setFix(s.id, Math.max(0, n));
+                // Стёртый процент — снова «по умолчанию» (ключа pct нет).
+                else if (String(rateInp.value).trim() === '') { const i = idxOf(s.id); if (i >= 0) { delete arr()[i].pct; touch(); } }
                 else setPct(s.id, Math.min(100, Math.max(0, n)));
             });
 
