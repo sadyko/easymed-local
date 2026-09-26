@@ -337,6 +337,8 @@ export function cashierInvoices(db, args, user) {
     SELECT i.id, i.invoice_number, i.status, i.subtotal, i.discount_amount,
            i.total_amount, i.paid_amount, i.created_at, i.paid_at,
            pt.full_name AS patient_name, pt.mrn AS mrn, pt.phone AS phone,
+           -- DEPOSIT_WALLET_V1 — окно оплаты спрашивает баланс пациента.
+           i.patient_id AS patient_id,
            -- DEBT_FLOW_V1 — счёт стационара: окно отмены обязано знать, лежит
            -- ли пациент ещё на койке (тогда отмена его не выписывает).
            i.admission_id AS admission_id,

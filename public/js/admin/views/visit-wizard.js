@@ -43,6 +43,7 @@ import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // 
 import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
          askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=aug17e';
 import { hasActorRole } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1
+import { canSpendStoredValue, loadPatientBalance, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
 // строк живут в одном модуле на все окна: копии этого кода уже разъезжались.
 // CRM_REAL_BOOKING_V1 (2026-09-21) — закрытия строк здесь больше нет: приход
@@ -201,6 +202,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         categoryName: '',    // CATEGORY_DISCOUNT_V1 — скидка группы подставляется в «лояльность» сама
         categoryPct: 0,
         promoOpen: false,    // PROMO_TICK_V1 — поле промокода раскрыто галочкой (редкий случай)
+        // DEPOSIT_WALLET_V1 — баланс пациента и «Баланс: использовать».
+        balance: 0,
+        useBalance: false,
         // step 4
         raiseInvoice: canInvoice,   // INVOICE_ROLE_HONEST_V1
         creating: false,
@@ -558,6 +562,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 if (!Number(wiz.discountPct) && !Number(wiz.discountAbs)) { wiz.discountMode = 'pct'; wiz.discountPct = wiz.categoryPct; }
             }
         } catch (e) { wiz.discounts = []; }
+        // DEPOSIT_WALLET_V1 — баланс пациента (депозит и зачисленные возвраты);
+        // сбой не мешает мастеру — просто нечего предложить.
+        wiz.balance = await loadPatientBalance(patient && patient.id);
         wiz.services = svcRes.data || [];
         wiz.doctors  = docRes.data || [];
         wiz.sources  = srcRes.data || [];
@@ -1966,6 +1973,25 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     }
     function grandTotal() { return Math.max(0, cartTotal() - discountAmount()); }
 
+    // DEPOSIT_WALLET_V1 — «Баланс: использовать». Списывает сервер сразу после
+    // выставления счёта пациента (record_payment способом 'wallet'); списать
+    // может касса/админ. Регистратура видит баланс и отправляет в кассу.
+    function balanceRow() {
+        const bal = Number(wiz.balance) || 0;
+        if (!(bal > 0) || !canInvoice) return null;
+        if (!canSpendStoredValue()) {
+            return h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                trf('На балансе пациента {sum} — списать его можно в кассе.', { sum: fmtPrice(bal) }));
+        }
+        const chk = h('input', {
+            type: 'checkbox', checked: wiz.useBalance ? true : null,
+            style: { width: '15px', height: '15px', accentColor: 'var(--primary-600)', cursor: 'pointer' },
+        });
+        chk.addEventListener('change', () => { wiz.useBalance = !!chk.checked; });
+        return h('label', { style: { display: 'flex', alignItems: 'center', gap: '7px', cursor: 'pointer', fontSize: '12.5px', color: 'var(--ink-600)' } },
+            chk, trf('Баланс: использовать (доступно {sum})', { sum: fmtPrice(bal) }));
+    }
+
     function repaintRail() {
         if (!railEl) return;
         refreshTiers();   // VISIT_TIER_PRICING_V1 — no-op unless services or days changed
@@ -2339,6 +2365,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 trf('Скидка группы «{name}» — {pct}% подставлена; можно изменить.', { name: wiz.categoryName, pct: wiz.categoryPct })) : null,
             promoTick,
             promoRow,
+            balanceRow(),
         ));
 
         railEl.appendChild(h('div', { style: { borderTop: '2px solid var(--ink-100)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '4px' } },
@@ -2478,6 +2505,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             let invoicesOk = 0, invoiceFail = '';
             const aktJobs = [];                            // AKT_DOC_V1 — акты по счетам контрагентов
             let firstInvoice = null;                       // WIZ_INVOICE_PRINT_V1 — печатаем первый счёт
+            const patientInvoices = [];                    // DEPOSIT_WALLET_V1 — счета пациента для «с баланса»
             const lineByVsId = new Map();                  // QUEUE_TICKET_V1 — vsId -> cart line
             // DOCTOR_REFER_WIZARD_V1 (2026-09-16) — мастер ОТЧИТЫВАЕТСЯ, что
             // именно он записал. Кабинет врача печатает по этому списку
@@ -2669,6 +2697,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         }
                         // Печатаем счёт ПАЦИЕНТА: контрагенту чек на руки не нужен.
                         if (job.payer === null && !firstInvoice && iRes && iRes.invoice) firstInvoice = iRes.invoice;
+                        if (job.payer === null && iRes && iRes.invoice) patientInvoices.push(iRes.invoice);
                         // AKT_DOC_V1 — счёт контрагента в кассу не попадает: по нему
                         // не берут наличные, расчёт идёт по АКТУ выполненных работ.
                         // Собираем его данные здесь, пока состав дня под рукой.
@@ -2702,6 +2731,15 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     }
                 }
             } catch (e) { console.warn('[wizard] queue numbers:', e && e.message); }
+
+            // DEPOSIT_WALLET_V1 — «Баланс: использовать»: счета пациента по
+            // порядку дней, каждому — не больше его суммы и остатка баланса.
+            let balanceMsg = '';
+            if (wiz.useBalance && canSpendStoredValue() && patientInvoices.length && Number(wiz.balance) > 0) {
+                const paidRes = await payFromStoredValue(patientInvoices, { wallet: Number(wiz.balance) });
+                if (paidRes.wallet > 0) balanceMsg = ' ' + trf('С баланса списано {sum} сум.', { sum: fmtPrice(paidRes.wallet) });
+                for (const m of paidRes.errors) toast(trf('Баланс не списан: {msg}', { msg: m }), 'fail');
+            }
 
             // WIZ_INVOICE_PRINT_V1 — сразу открываем печатную форму счёта
             // (бланк «Счёт» из Настройки → Документы; с блоком номеров очереди).
@@ -2788,7 +2826,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 cashInvoices > 0 ? ' ' + tr('Счёт пациента выставлен — виден в кассе.') : '',
                 aktJobs.length ? ' ' + tr('Услуги плательщика — по акту, в кассу не идут.') : '',
             ].join('');
-            toast(tr('Услуги добавлены') + dayWord + '.' + invMsg, invoiceFail ? 'info' : 'ok');
+            toast(tr('Услуги добавлены') + dayWord + '.' + invMsg + balanceMsg, invoiceFail ? 'info' : 'ok');
             close();
             if (typeof onSaved === 'function') {
                 await onSaved({

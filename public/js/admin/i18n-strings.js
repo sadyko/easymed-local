@@ -3,6 +3,22 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // DEPOSIT_WALLET_V1 (2026-09-26) — возврат на баланс пациента и оплата с баланса (касса, окно визита, мастер, калькулятор)
+  "С баланса": {"en":"From balance","ru":"С баланса","uz":"Balansdan"},
+  "На балансе пациента: {sum} сум": {"en":"Patient balance: {sum} sum","ru":"На балансе пациента: {sum} сум","uz":"Bemor balansida: {sum} so'm"},
+  "С баланса можно списать не больше {sum} сум.": {"en":"No more than {sum} sum can be taken from the balance.","ru":"С баланса можно списать не больше {sum} сум.","uz":"Balansdan {sum} so'mdan ko'p yechib bo'lmaydi."},
+  "Вернуть деньгами": {"en":"Refund in money","ru":"Вернуть деньгами","uz":"Pul bilan qaytarish"},
+  "Зачислить на баланс пациента": {"en":"Credit to the patient's balance","ru":"Зачислить на баланс пациента","uz":"Bemor balansiga o'tkazish"},
+  "Наличные из кассы не выдаются: сумма ляжет на баланс пациента и пойдёт в оплату следующей услуги.": {"en":"No cash leaves the till: the amount goes to the patient's balance and will pay for the next service.","ru":"Наличные из кассы не выдаются: сумма ляжет на баланс пациента и пойдёт в оплату следующей услуги.","uz":"Kassadan naqd pul berilmaydi: summa bemor balansiga tushadi va keyingi xizmat to'loviga ketadi."},
+  "Куда вернуть": {"en":"Refund to","ru":"Куда вернуть","uz":"Qayerga qaytarish"},
+  "Сумма зачислена на баланс пациента": {"en":"The amount has been credited to the patient's balance","ru":"Сумма зачислена на баланс пациента","uz":"Summa bemor balansiga o'tkazildi"},
+  "На баланс — наличные из кассы не выдаются: сумма пойдёт в оплату следующей услуги. Оплаченное с баланса возвращается на баланс.": {"en":"To the balance — no cash leaves the till: the amount will pay for the next service. Whatever was paid from the balance goes back to the balance.","ru":"На баланс — наличные из кассы не выдаются: сумма пойдёт в оплату следующей услуги. Оплаченное с баланса возвращается на баланс.","uz":"Balansga — kassadan naqd pul berilmaydi: summa keyingi xizmat to'loviga ketadi. Balansdan to'langani balansga qaytadi."},
+  "{sum} сум зачислено на баланс пациента — счёт отменён.": {"en":"{sum} sum credited to the patient's balance — the invoice is cancelled.","ru":"{sum} сум зачислено на баланс пациента — счёт отменён.","uz":"{sum} so'm bemor balansiga o'tkazildi — hisob bekor qilindi."},
+  "Баланс: использовать (доступно {sum})": {"en":"Balance: use it ({sum} available)","ru":"Баланс: использовать (доступно {sum})","uz":"Balans: ishlatish (mavjud {sum})"},
+  "На балансе пациента {sum} — списать его можно в кассе.": {"en":"The patient has {sum} on the balance — it can be used at the cashier.","ru":"На балансе пациента {sum} — списать его можно в кассе.","uz":"Bemor balansida {sum} — uni kassada yechish mumkin."},
+  "с баланса −{sum}": {"en":"from balance −{sum}","ru":"с баланса −{sum}","uz":"balansdan −{sum}"},
+  "Баланс не списан: {msg}": {"en":"Balance not charged: {msg}","ru":"Баланс не списан: {msg}","uz":"Balansdan yechilmadi: {msg}"},
+  "С баланса списано {sum} сум.": {"en":"{sum} sum taken from the balance.","ru":"С баланса списано {sum} сум.","uz":"Balansdan {sum} so'm yechildi."},
   // PASSWORD_CHANGE_V2 (2026-09-23) — окно смены пароля (admin/password-change.js): пароль от одного символа
   "Введите текущий пароль.": {"en":"Enter your current password.","ru":"Введите текущий пароль.","uz":"Joriy parolni kiriting."},
   "Пароль не совпадает.": {"en":"The passwords do not match.","ru":"Пароль не совпадает.","uz":"Parollar mos kelmadi."},

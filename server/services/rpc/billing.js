@@ -20,6 +20,9 @@ import { localDate } from '../domain/day.js';
 // выше, и по той же причине: обе стороны — объявленные функции, ни одна не
 // зовётся при загрузке модуля.
 import { restoreSources } from './inventory.js';
+// DEPOSIT_WALLET_V1 — баланс пациента: списание при оплате «с баланса» и
+// зачисление при возврате «на баланс» — в той же транзакции, что платёж.
+import { spendWallet, creditWallet, isDepositInvoice, WalletError } from '../domain/wallet.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -48,6 +51,15 @@ function round2(n) {
 
 function isPositiveInt(v) {
   return Number.isInteger(v) && v > 0;
+}
+
+// DEPOSIT_WALLET_V1 — отказ журнала баланса звучит как отказ этого модуля
+// (тот же статус, тот же текст), чтобы экраны читали его одинаково.
+function walletGuard(fn) {
+  try { return fn(); } catch (e) {
+    if (e instanceof WalletError) throw new RpcError(e.message, e.status);
+    throw e;
+  }
 }
 
 // BRANCH_MONEY_NUMBER_V1 — буква ЭТОГО здания, та же, что стоит в номере карты
@@ -518,10 +530,15 @@ export function recordPayment(db, args, user) {
     // ACQ_PROVIDER_V1 — необязательная пометка (провайдер эквайринга и т.п.);
     // произвольная строка, обрезается до 200 символов, деньги не трогает.
     const payNotes = typeof (args && args.notes) === 'string' ? args.notes.slice(0, 200) : '';
-    db.prepare(`
+    const payInfo = db.prepare(`
       INSERT INTO payments (invoice_id, amount, method, cashier_id, shift_id, notes)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(invoiceId, amt, method, user.id, shiftId, payNotes);
+    // DEPOSIT_WALLET_V1 — «с баланса» СПИСЫВАЕТ баланс. Раньше способ 'wallet'
+    // принимался, а баланс не трогался: счёт закрывался деньгами из воздуха.
+    if (method === 'wallet') {
+      walletGuard(() => spendWallet(db, { patientId: invoice.patient_id, invoice, paymentId: payInfo.lastInsertRowid, amount: amt, user }));
+    }
 
     if (status === 'paid') {
       db.prepare(`
@@ -547,7 +564,9 @@ export function recordPayment(db, args, user) {
     return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) };
   });
 
-  const out = run();
+  // DEPOSIT_WALLET_V1 — IMMEDIATE: баланс читается и списывается под одной
+  // блокировкой записи, второй кассир ждёт и видит строку первого.
+  const out = run.immediate();
   // CRM_REAL_BOOKING_V1 — заявка колл-центра закрывается приходом, а кнопку
   // «Пришёл» в клинике не нажимает никто (разбор — в crm/visit-status.js).
   // Деньги у окна кассы заочно не появляются, поэтому платёж по счёту визита
@@ -606,7 +625,13 @@ export function recordPaymentSplit(db, args, user) {
       INSERT INTO payments (invoice_id, amount, method, cashier_id, shift_id, notes)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
-    for (const t of tenders) insertPay.run(invoiceId, t.amt, t.method, user.id, shiftId, t.notes);
+    for (const t of tenders) {
+      const info = insertPay.run(invoiceId, t.amt, t.method, user.id, shiftId, t.notes);
+      // DEPOSIT_WALLET_V1 — часть «с баланса» списывает баланс, как record_payment.
+      if (t.method === 'wallet') {
+        walletGuard(() => spendWallet(db, { patientId: invoice.patient_id, invoice, paymentId: info.lastInsertRowid, amount: t.amt, user }));
+      }
+    }
 
     const newPaid = round2(invoice.paid_amount + totalTendered);
     const status = invoiceStatusFor(invoice.total_amount, newPaid, invoice.status);
@@ -627,7 +652,7 @@ export function recordPaymentSplit(db, args, user) {
     return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) };
   });
 
-  const out = run();
+  const out = run.immediate();   // DEPOSIT_WALLET_V1 — см. record_payment
   crmInvoiceEvidence(db, invoiceId);   // CRM_REAL_BOOKING_V1 — см. record_payment
   return out;
 }
@@ -939,11 +964,42 @@ export function refundPayment(db, args, user) {
     // expected-drawer maths, so the till reconciles short with no explanation.
     const shiftId = ensureOpenShift(db, user).id;
 
+    // DEPOSIT_WALLET_V1 — КУДА ВОЗВРАЩАЕМ: деньгами или на баланс пациента.
+    //
+    // Владелец: «cashier cancels the payment and can actually refund or push
+    // to the deposit so on the next service it can be paid». Невролог после
+    // оплаты говорит «не мой пациент» — деньги пациенту не нужны на руки, они
+    // нужны на следующую услугу.
+    //
+    //   to_balance = true  — отрицательный платёж способом 'wallet' (он не
+    //     приход: выручка и ящик не меняются, наличные из кассы НЕ выходят) и
+    //     строка зачисления в журнал баланса. Выручка остаётся — деньги в
+    //     клинике, это теперь аванс пациента, как принятый депозит.
+    //   to_balance = false — как прежде: тем же способом, каким взяли.
+    //
+    // Платёж «с баланса» по умолчанию возвращается НА БАЛАНС: наличными этих
+    // денег в кассе за этот счёт не брали. Вернуть его деньгами кассир может
+    // только явным выбором (to_balance: false) — и тогда это наличные из ящика.
+    const toBalanceRaw = args && args.to_balance;
+    const toBalance = toBalanceRaw === undefined || toBalanceRaw === null
+      ? p.method === 'wallet'
+      : (toBalanceRaw === true || toBalanceRaw === 1);
+    if (toBalance) {
+      if (!invoice.patient_id) throw new RpcError('У счёта нет пациента — зачислить на баланс некому.', 400);
+      if (isDepositInvoice(db, invoice.id)) {
+        throw new RpcError('Это счёт депозита — его возвращают кнопкой «Вернуть депозит», а не на баланс.', 400);
+      }
+    }
+    const refundMethod = toBalance ? 'wallet' : (p.method === 'wallet' ? 'cash' : p.method);
+
     db.prepare(`
       INSERT INTO payments (invoice_id, amount, method, cashier_id, shift_id, notes)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(invoice.id, -amt, p.method, user.id, shiftId,
+    `).run(invoice.id, -amt, refundMethod, user.id, shiftId,
       tag + (reason ? ' — ' + reason : ''));
+    if (toBalance) {
+      walletGuard(() => creditWallet(db, { patientId: invoice.patient_id, invoice, paymentId: p.id, amount: amt, reason, user }));
+    }
 
     const newPaid = round2(invoice.paid_amount - amt);
     const status = invoiceStatusFor(invoice.total_amount, newPaid, invoice.status);
@@ -956,10 +1012,10 @@ export function refundPayment(db, args, user) {
       if (status === 'refunded') db.prepare("UPDATE invoices SET voided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(invoice.id);
     }
 
-    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id) };
+    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id), to_balance: toBalance };
   });
 
-  return run();
+  return run.immediate();
 }
 
 // BED_CONSOLE_V1 — счёт по госпитализации: выбранные небиллованные строки

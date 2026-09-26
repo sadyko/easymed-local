@@ -1378,7 +1378,9 @@ function cancelledMetaText(state) {
 function paymentMethodSelect(pm) {
     // RPC_PORT_V1 — ровно способы, которые принимает record_payment (billing.js
     // PAYMENT_METHODS): 'online' и 'insurance' сервер отвергал.
-    const METHODS = [['cash', 'Cash'], ['card', 'Card'], ['acquiring', 'Online / acquiring'], ['transfer', 'Bank transfer']];
+    // DEPOSIT_WALLET_V1 — «с баланса пациента»: сервер списывает баланс в той же
+    // транзакции и откажет, если на балансе меньше суммы.
+    const METHODS = [['cash', 'Cash'], ['card', 'Card'], ['acquiring', 'Online / acquiring'], ['transfer', 'Bank transfer'], ['wallet', 'Patient balance']];
     return h('select', {
         class: 'input',
         style: { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', background: '#fff' },

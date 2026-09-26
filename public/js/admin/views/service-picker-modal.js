@@ -44,6 +44,7 @@ import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS
 // эти услуги стоят ЭТОМУ пациенту сегодня, и кладёт ответ на строки.
 import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTierOf } from '../visit-tier-logic.js';
 import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionParts, localYmd } from '../discount-rules.js';   // DISCOUNT_RULES_V1
+import { canSpendStoredValue, loadPatientBalance, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
 // строк живут в одном модуле на все окна: копии этого кода уже разъезжались.
 // CRM_REAL_BOOKING_V1 (2026-09-21) — закрытия строк здесь больше нет: приход
@@ -276,6 +277,7 @@ export function openServicePickerModal({
         step: 1,
         payment: { mode: 'patient', discountPct: null, coverage: 'insurance', payerId: null, policyId: null, policyNumber: '', useBal: true },   // WIZ_POLICY_MANUAL_V1
         payers: null, policies: null, depositBalance: null, categoryPct: null, _prefilled: false,
+        useBalance: false,   // DEPOSIT_WALLET_V1 — «Оплатить с баланса» (касса/админ)
         applied: [],   // CATALOG_WIZARD_V3 — applied promo/gift/cert rows
         coverage: {},  // COVER_SPLIT_V1 — per service-index: 'payer' | 'patient'
         _covMode: null,
@@ -2442,11 +2444,23 @@ export function openServicePickerModal({
                 box.appendChild(h('div', { class: 'row', style: { gap: '6px', marginTop: '8px' } }, codeIn, applyBtn));
                 box.appendChild(appliedBox);
                 paintRailApplied();
-                // RPC_PORT_V1 — кнопки «Баланс: Использовать» больше нет. Списание
-                // писало patient_deposits и payments прямо из браузера, а платежи
-                // пишет только сервер — списание не проходило никогда, и счёт
-                // оставался без него. Серверной двери «оплатить счёт депозитом»
-                // пока нет ни у мастера, ни у кассы.
+                // DEPOSIT_WALLET_V1 — «Баланс: Использовать» вернулся. Прежде
+                // списание писало patient_deposits и payments прямо из браузера и
+                // не проходило никогда; теперь его проводит сервер (record_payment
+                // способом 'wallet') сразу после выставления счёта. Списывает
+                // касса/админ; регистратура видит баланс и отправляет в кассу.
+                const balNow = Number(wiz.depositBalance) || 0;
+                if (balNow > 0) {
+                    if (canSpendStoredValue()) {
+                        const balChk = h('input', { type: 'checkbox', checked: wiz.useBalance ? true : null });
+                        balChk.addEventListener('change', () => { wiz.useBalance = !!balChk.checked; refresh(); });
+                        box.appendChild(h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px', fontSize: '12.5px', cursor: 'pointer' } },
+                            balChk, trf('Баланс: использовать (доступно {sum})', { sum: formatMoney(balNow) })));
+                    } else {
+                        box.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '8px' } },
+                            trf('На балансе пациента {sum} — списать его можно в кассе.', { sum: formatMoney(balNow) })));
+                    }
+                }
             }
         }
         fill();
@@ -2549,10 +2563,13 @@ export function openServicePickerModal({
             return { full, afterDisc: full, promoOff: 0, packageOff: 0, payable: full, cards: 0, bal: 0, due: full };
         }
         const d = pickerDiscount(previewBillLines(), { pct: wizDiscountPct(), promo: wizPromo(), categoryPct: wiz.categoryPct || 0 });
-        // RPC_PORT_V1 — списания баланса при записи больше нет: у сервера нет
-        // двери, которая тратит депозит пациента на счёт (см. wizSave).
+        // DEPOSIT_WALLET_V1 — баланс пациента снова тратится при записи: у
+        // сервера теперь есть дверь (record_payment способом 'wallet' списывает
+        // баланс в той же транзакции). Тратит только касса/админ.
+        const bal = (wiz.useBalance && canSpendStoredValue())
+            ? Math.max(0, Math.min(Number(wiz.depositBalance) || 0, d.payable)) : 0;
         return { full, afterDisc: full - d.loyalty, promoOff: d.promoOff, packageOff: d.packageOff, categoryOff: d.categoryOff,
-            payable: d.payable, cards: 0, bal: 0, due: d.payable };
+            payable: d.payable, cards: 0, bal, due: Math.max(0, d.payable - bal) };
     }
 
     // CATALOG_WIZARD_V3 — promo / gift-card / certificate redemption.
@@ -2602,18 +2619,9 @@ export function openServicePickerModal({
         toast(trf('{kind} применён: {code}', { kind: tr(KIND_RU3[row.kind] || 'Код'), code: row.code || row.name }));
     }
 
-    async function loadWizDeposit(pid) {
-        try {
-            const { data } = await supabase.from('patient_deposits')
-                .select('amount, refund_amount, status').eq('patient_id', pid);
-            return Math.max(0, (data || []).reduce((s, d) => {
-                if (d.status === 'received') return s + Number(d.amount || 0);
-                if (d.status === 'refunded') return s + Number(d.amount || 0) - Number(d.refund_amount || 0);
-                if (d.status === 'spent')    return s - Number(d.amount || 0);   // CATALOG_WIZARD_V1
-                return s;
-            }, 0));
-        } catch (_) { return 0; }
-    }
+    // DEPOSIT_WALLET_V1 — баланс считает сервер (domain/wallet.js): та же цифра,
+    // что в карточке пациента и в кассе, с зачисленными возвратами.
+    async function loadWizDeposit(pid) { return loadPatientBalance(pid); }
 
     async function ensureWizData() {
         if (wiz.payers === null) {
@@ -3059,8 +3067,18 @@ export function openServicePickerModal({
                     const inv = bill.data.invoice;
                     note = inv.invoice_number ? ', ' + trf('счёт №{no}', { no: inv.invoice_number }) : ', ' + tr('счёт выставлен');
                     if (bill.promoOff > 0) note += ' · ' + trf('промокод −{sum}', { sum: formatMoney(bill.promoOff) });
-                    const invTotal = Number(inv.total_amount || 0);
+                    let invTotal = Number(inv.total_amount || 0);
                     if (invTotal === 0) note += ' · полностью покрыт промокодом';
+                    // DEPOSIT_WALLET_V1 — «Баланс: использовать»: сервер списывает
+                    // баланс и проводит платёж 'wallet' в одной транзакции.
+                    const tNow = wizTotals();
+                    if (tNow.bal > 0 && invTotal > 0) {
+                        const paidRes = await payFromStoredValue([inv], { wallet: Math.min(tNow.bal, invTotal) });
+                        if (paidRes.invoices[inv.id]) Object.assign(inv, paidRes.invoices[inv.id]);
+                        if (paidRes.wallet > 0) note += ' · ' + trf('с баланса −{sum}', { sum: formatMoney(paidRes.wallet) });
+                        for (const m of paidRes.errors) toast(trf('Баланс не списан: {msg}', { msg: m }), 'fail');
+                    }
+                    invTotal = Number(inv.total_amount || 0);
                     // WIZ_INVOICE_PRINT_V1 — сразу открываем печатную форму счёта для
                     // пациента (тот же printableSheet/бланк, которым печатается акт).
                     // RPC_PORT_V1 — строки бланка — ответ сервера, то есть ровно то,

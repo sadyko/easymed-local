@@ -24,7 +24,8 @@ import { IN_BED_STATUSES } from '../../shared/admission-status.js';   // DEBT_FL
 import { loadInvoiceLines, performersByItem, packagesByItem, packageItemName } from './receipt-print.js?v=rp1';   // INVOICE_QUEUE_V1 — тот же сбор талонов, что у чека   // CASH_CHECK_PRINT_V1 — бланк «Кассовый чек» из Настройки → Документы
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 
-const METHOD_RU = { cash: 'Наличные', card: 'Карта', transfer: 'Перевод', acquiring: 'Эквайринг' };
+// DEPOSIT_WALLET_V1 — «С баланса»: оплата и возврат через баланс пациента.
+const METHOD_RU = { cash: 'Наличные', card: 'Карта', transfer: 'Перевод', acquiring: 'Эквайринг', wallet: 'С баланса' };
 // DEPOSIT_METHOD_BY_CASHIER_V1 — у ДЕПОЗИТА три способа, а не четыре: их берут
 // у окошка. METHOD_RU выше шире, потому что описывает ещё и старые платежи, где
 // «Перевод» встречается. Живёт на уровне модуля — окно приёма (ниже) вне
@@ -1088,6 +1089,11 @@ function payModal(root, inv, balance) {
     // каждая часть попадает в смену отдельной строкой по своему способу.
     let providers = [];
     const tenders = [{ method: 'cash', amount: balance, providerId: '' }];
+    // DEPOSIT_WALLET_V1 — баланс пациента (депозит + зачисленные возвраты).
+    // Способ «С баланса» появляется, только когда на балансе что-то есть;
+    // списывает сервер (record_payment), и больше баланса он не спишет.
+    let walletBal = 0;
+    const walletSum = () => tenders.filter((t) => t.method === 'wallet').reduce((s2, t) => s2 + (Number(t.amount) || 0), 0);
 
     // PAY_DETAILS_V1 — кассир (и пациент у окна) должны видеть, ЗА ЧТО платят:
     // в списке счетов есть только первая позиция и «+N ещё». Тянем строки счёта
@@ -1237,13 +1243,24 @@ function payModal(root, inv, balance) {
         clear(bodyEl);
         tenders.forEach((t, i) => {
             const row = h('div', { style: { border: '1px solid var(--ink-100)', borderRadius: '12px', padding: '10px', marginBottom: '8px' } });
-            const btnRow = h('div', { style: { display: 'flex', gap: '6px' } },
-                ...[['cash', 'Наличные'], ['card', 'Карта'], ['acquiring', 'Эквайринг']].map(([v, l]) => {
+            const methodList = [['cash', 'Наличные'], ['card', 'Карта'], ['acquiring', 'Эквайринг']]
+                .concat(walletBal > 0 || t.method === 'wallet' ? [['wallet', 'С баланса']] : []);
+            const btnRow = h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
+                ...methodList.map(([v, l]) => {
                     const b = h('button', {
                         type: 'button',
                         style: { flex: '1', cursor: 'pointer', fontFamily: 'inherit', fontWeight: '700', fontSize: '12.5px', padding: '9px 4px', borderRadius: '9px' },
-                        onclick: () => { t.method = v; if (v === 'acquiring' && !t.providerId && providers.length === 1) t.providerId = String(providers[0].id); render(); },
-                    }, l);
+                        onclick: () => {
+                            t.method = v;
+                            if (v === 'acquiring' && !t.providerId && providers.length === 1) t.providerId = String(providers[0].id);
+                            // DEPOSIT_WALLET_V1 — с баланса не больше, чем на нём осталось.
+                            if (v === 'wallet') {
+                                const others = walletSum() - (Number(t.amount) || 0);
+                                t.amount = Math.max(0, Math.min(Number(t.amount) || balance, walletBal - others));
+                            }
+                            render();
+                        },
+                    }, tr(l));
                     styleBtn(b, t.method === v);
                     return b;
                 }));
@@ -1272,6 +1289,10 @@ function payModal(root, inv, balance) {
                     onclick: () => { tenders.splice(i, 1); render(); } }, '×')
                 : null;
             row.appendChild(h('div', { style: { display: 'flex', gap: '6px', marginTop: '7px' } }, amtInp, rmBtn));
+            if (t.method === 'wallet') {
+                row.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
+                    trf('На балансе пациента: {sum} сум', { sum: fmtPrice(walletBal) })));
+            }
 
             if (t.method === 'acquiring') {
                 const provSel = h('select', { style: { width: '100%', marginTop: '7px', padding: '8px 10px', border: '1px solid var(--ink-200)', borderRadius: '9px', fontFamily: 'inherit', fontSize: '12.5px' },
@@ -1302,6 +1323,12 @@ function payModal(root, inv, balance) {
         providers = data || [];
         render();
     });
+    if (inv.patient_id && !String(inv.invoice_number || '').startsWith('DEP-')) {
+        supabase.rpc('deposit_balance', { patient_id: inv.patient_id }).then(({ data }) => {
+            walletBal = Math.max(0, Number(data && data.balance) || 0);
+            if (walletBal > 0) render();
+        }).catch(() => {});
+    }
     render();
 
     modal(trf('Оплата · {no}', { no: inv.invoice_number || ('#' + inv.id) }), 'Receipt',
@@ -1327,6 +1354,7 @@ function payModal(root, inv, balance) {
                 parts.push({ method: t.method, amount: a, notes });
             }
             if (!parts.length) { toast('Укажите сумму.', 'fail'); return false; }
+            if (walletSum() > walletBal + 0.001) { toast(trf('С баланса можно списать не больше {sum} сум.', { sum: fmtPrice(walletBal) }), 'fail'); return false; }
             const sum = parts.reduce((s2, x) => s2 + x.amount, 0);
             if (sum > balance + 0.001) { toast(trf('Сумма частей больше остатка ({sum} сум).', { sum: fmtPrice(balance) }), 'fail'); return false; }
 
@@ -1460,6 +1488,26 @@ async function openInvoiceRefund(inv, root) {
 function openRefundConfirm(p, info, root) {
     const amtInp = moneyfy(h('input', { type: 'number', min: '1', max: String(p.amount), step: '1', value: String(p.amount) }));
     const reasonInp = h('input', { type: 'text', placeholder: 'Причина (необязательно)' });
+    // DEPOSIT_WALLET_V1 — куда вернуть: деньгами (как раньше) или на баланс
+    // пациента — деньги остаются в клинике и пойдут в оплату следующей услуги.
+    // Платёж «с баланса» по умолчанию возвращается на баланс.
+    const isDepositInv = String((info && info.invoice_number) || '').startsWith('DEP-');
+    let toBalance = p.method === 'wallet' && !isDepositInv;
+    const destBox = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
+    const paintDest = () => {
+        clear(destBox);
+        const opts = [[false, 'Вернуть деньгами'], [true, 'Зачислить на баланс пациента']];
+        for (const [v, l] of opts) {
+            if (v && isDepositInv) continue;
+            const radio = h('input', { type: 'radio', name: 'refund-dest', checked: toBalance === v ? true : null });
+            radio.addEventListener('change', () => { toBalance = v; paintDest(); });
+            destBox.appendChild(h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13.5px', cursor: 'pointer' } }, radio, tr(l)));
+        }
+        destBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, toBalance
+            ? tr('Наличные из кассы не выдаются: сумма ляжет на баланс пациента и пойдёт в оплату следующей услуги.')
+            : tr('Возврат уменьшит «Оплачено» по счёту; наличный возврат выдаётся из кассы текущей смены.')));
+    };
+    paintDest();
     modal(tr('Возврат оплаты') + (info && info.invoice_number ? ' · ' + info.invoice_number : ''), 'Repeat',
         [
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.5 } },
@@ -1468,16 +1516,15 @@ function openRefundConfirm(p, info, root) {
                 + ' — ' + fmtPrice(p.amount) + ' ' + tr('сум')),
             field('Сумма возврата', amtInp, { required: true }),
             field('Причина', reasonInp),
-            h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                'Возврат уменьшит «Оплачено» по счёту; наличный возврат выдаётся из кассы текущей смены.'),
+            field('Куда вернуть', destBox),
         ],
         'Оформить возврат',
         async () => {
             const v = moneyVal(amtInp);
             if (!Number.isFinite(v) || v <= 0) { toast('Укажите сумму возврата.', 'fail'); return false; }
-            const { error } = await supabase.rpc('refund_payment', { payment_id: p.id, amount: v, reason: reasonInp.value || '' });
+            const { error } = await supabase.rpc('refund_payment', { payment_id: p.id, amount: v, reason: reasonInp.value || '', to_balance: toBalance });
             if (error) { toast(error.message || 'Не удалось оформить возврат.', 'fail'); return false; }
-            toast('Возврат оформлен', 'ok');
+            toast(toBalance ? tr('Сумма зачислена на баланс пациента') : tr('Возврат оформлен'), 'ok');
             document.querySelectorAll('.modal').forEach(m => m.remove());   // close the stacked dialogs
             await paint(root);
             return true;

@@ -658,6 +658,17 @@ const LINE_PERFORMED_SQL = `CASE
 // extra — дополнительное условие отбора (REPORTS_V2, ревью I7: кабинет врача
 // сужает выборку до своего источника в SQL, а не отбрасывает в JS строки всей
 // клиники).
+// DEPOSIT_WALLET_V1 — СЧЁТ ДЕПОЗИТА НЕ УСЛУГА.
+//
+// Приём депозита создаёт счёт DEP-… с одной строкой «Депозит (предоплата)»
+// (DEPOSIT_REVENUE_V1): так деньги видны в кассе и в ПРИХОДЕ дня. Но отчёты
+// по строкам счетов считают ОКАЗАННОЕ и выставленное — и когда баланс уходит
+// в оплату услуги, та же сумма стоит там второй раз, строкой услуги. Приход
+// (payments) депозит по-прежнему считает; здесь — только услуги. Номер
+// депозита становится номером счёта и ездит между зданиями вместе с ним,
+// поэтому признак — префикс номера, а не patient_deposits (та не ездит).
+export const NOT_DEPOSIT_INVOICE_SQL = "COALESCE(i.invoice_number, '') NOT LIKE 'DEP-%'";
+
 function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
   const { from, to } = resolveRange(db, args);
   const bf = branchFilter(args, 'i.branch_id');
@@ -737,7 +748,7 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
     LEFT JOIN referral_source_categories rc ON rc.id = rs.category_id
       ${ITEM_DOCTOR_JOIN}
      WHERE ${inLocalRange('i.created_at')}
-       AND i.status <> 'void'${bf.clause}${gf.clause}${extra.clause}
+       AND i.status <> 'void' AND ${NOT_DEPOSIT_INVOICE_SQL}${bf.clause}${gf.clause}${extra.clause}
      ORDER BY origin, i.created_at, ii.id
   `).all(from, to, ...bf.params, ...gf.params, ...extra.params);
   return rows;
@@ -2870,7 +2881,7 @@ export function ownerReport(db, args, user) {
     JOIN patients pt ON pt.id = i.patient_id
     LEFT JOIN payers py ON py.id = pt.payer_id
     LEFT JOIN services s ON s.id = ii.service_id
-   WHERE i.status <> 'void'${bf.clause}${gf.clause}`;
+   WHERE i.status <> 'void' AND ${NOT_DEPOSIT_INVOICE_SQL}${bf.clause}${gf.clause}`;   // DEPOSIT_WALLET_V1
 
   const k = db.prepare(`
     SELECT COALESCE(SUM(ii.total - ${ITEM_DISCOUNT_SQL}), 0) AS revenue, COUNT(ii.id) AS count
