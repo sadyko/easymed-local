@@ -856,10 +856,18 @@ export async function mergePatients({ primaryId, duplicateIds }) {
 
     // Every table holding a patient_id we know about. Adding a new one here is
     // all that's needed when a future migration introduces another link.
+    // PATIENT_MERGE_MONEY_V1 — деньги пациента (баланс: депозиты, зачисления,
+    // списания, кэшбэк — и счета депозитов) переносит СЕРВЕР, одной
+    // транзакцией: patient_deposits клиенту не пишется (мигр. 160). Первым
+    // шагом — если он откажет, карты не трогаются вовсе.
+    for (const dropId of dupes) {
+        const { error: mErr } = await supabase.rpc('patient_merge_money', { keep_id: Number(primaryId), drop_id: Number(dropId) });
+        if (mErr) throw mErr;
+    }
+
     const TABLES = [
         'visits',
         'invoices',
-        'patient_deposits',
         'admissions',
         'recommended_services',
         'patient_activity_log',

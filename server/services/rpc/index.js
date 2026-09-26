@@ -38,6 +38,7 @@ import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';   
 import { issueQueueNumbers, queueBoard } from './queue.js';
 import { createDeposit, acceptDeposit, cancelDeposit, refundDeposit, listDeposits, depositBalance } from './deposits.js';   // DEPOSIT_V1
 import { creditCashback } from './cashback.js';   // CASHBACK_SERVER_V1 (ревью I4)
+import { patientMergeMoney } from './patient-merge-money.js';   // PATIENT_MERGE_MONEY_V1
 import { documentsFeed } from './documents.js';   // DOCS_FEED_V1
 import { getClinicBySlug } from './clinic.js';
 import { callcenterReport } from './callcenter.js';
@@ -231,6 +232,7 @@ export const RPC = {
   list_deposits:             (db, args, user) => listDeposits(db, args, user),
   deposit_balance:           (db, args, user) => depositBalance(db, args, user),
   credit_cashback:           (db, args, user) => creditCashback(db, args, user),   // CASHBACK_SERVER_V1
+  patient_merge_money:       (db, args, user) => patientMergeMoney(db, args, user),   // PATIENT_MERGE_MONEY_V1
   // QUEUE_BOARD_V1 — читающая сторона тех же номеров: доска «кто у кого
   // стоит» по назначениям за день. Доступ по выданному разделу 'queue'
   // (canViewSection), а не по списку ролей: раздел раздаётся в «Настройки →

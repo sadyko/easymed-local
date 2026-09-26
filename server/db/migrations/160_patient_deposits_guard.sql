@@ -32,10 +32,29 @@ CREATE TRIGGER patient_deposits_ledger_frozen
 BEFORE UPDATE ON patient_deposits
 WHEN OLD.kind IN ('credit', 'spend')
  AND (NEW.amount IS NOT OLD.amount OR NEW.status IS NOT OLD.status OR NEW.kind IS NOT OLD.kind
-      OR NEW.patient_id IS NOT OLD.patient_id OR NEW.invoice_id IS NOT OLD.invoice_id
+      OR NEW.invoice_id IS NOT OLD.invoice_id
       OR NEW.refund_amount IS NOT OLD.refund_amount)
 BEGIN
   SELECT RAISE(ABORT, 'Строки журнала баланса (зачисление, списание) не меняются — это следы движения денег.');
+END;
+
+-- PATIENT_MERGE_MONEY_V1 — ЕДИНСТВЕННАЯ смена владельца строки баланса —
+-- объединение дублей (rpc/patient-merge-money.js). Сервер кладёт сюда пару
+-- «дубль → оставленная карта» на время своей транзакции и убирает её в той же
+-- транзакции; строка баланса переезжает только по такой паре. Любая другая
+-- смена patient_id — отказ.
+CREATE TABLE merge_money_moves (
+  drop_id  INTEGER NOT NULL,
+  keep_id  INTEGER NOT NULL,
+  PRIMARY KEY (drop_id, keep_id)
+);
+
+CREATE TRIGGER patient_deposits_owner_frozen
+BEFORE UPDATE OF patient_id ON patient_deposits
+WHEN NEW.patient_id IS NOT OLD.patient_id
+ AND NOT EXISTS (SELECT 1 FROM merge_money_moves WHERE drop_id = OLD.patient_id AND keep_id = NEW.patient_id)
+BEGIN
+  SELECT RAISE(ABORT, 'Строка журнала баланса переходит к другому пациенту только при объединении дублей.');
 END;
 
 CREATE TRIGGER patient_deposits_kind_frozen
