@@ -13,7 +13,7 @@ import { hashPassword } from './auth.js';
 import { createApp } from '../app.js';
 import { licensedDataDir } from './control/licensed-fixture.js';
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
-import { telephonySettingsGet, telephonySettingsSave, telephonyProvidersList, telephonyProviderDelete, telephonyForgetBinotel } from './rpc/telephony.js';
+import { telephonySettingsGet, telephonySettingsSave, telephonyProvidersList, telephonyProviderDelete, telephonyForgetBinotel, telephonyProviderSave, telephonyProviderTest } from './rpc/telephony.js';
 import { telegramSettingsGet, telegramSettingsSave, telegramStats, telegramLinksList, telegramLinkRevoke, telegramBroadcastSend } from './rpc/telegram.js';
 import { crmConfigGet, crmConfigSave } from './rpc/crm-config.js';
 import { requireReportKind } from './report-access.js';
@@ -427,5 +427,134 @@ test('администратор-врач (admin дополнительной р
     assert.equal(list.status, 200);
     assert.ok(list.json.users.some((u) => 'salary_fixed' in u), 'администратору-врачу урезали зарплаты');
     assert.equal((await call(base, 'POST', '/api/users', { username: 'x.admin', password: 'pw', role: 'admin' }, ad)).status, 201);
+  } finally { server.close(); }
+});
+
+// =============================================================================
+// ADMIN_ROWS_GRANTABLE_V1 — проход безопасности (ревью): каждая находка —
+// попытка повышения, которая обязана кончиться отказом.
+// =============================================================================
+
+function ins(db, id, username, role, extra = '[]') {
+  db.prepare('INSERT INTO users (id, username, password_hash, full_name, role, extra_roles) VALUES (?,?,?,?,?,?)').run(id, username, hashPassword('password1'), username, role, extra);
+}
+
+test('C1: «Сотрудники: Изменение» не сажает человека на ЧУЖУЮ основу (данные сервер отдаёт по основе)', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    ins(db, 70, 'drhr', 'doctor');
+    ins(db, 71, 'labguy', 'lab');
+    addGrants(db, 'doctor', { settings: 'view', 'settings.employees': 'edit' });
+    const hr = await login(base, 'drhr');
+    // Основа «лаборант», которой врач не носит, — даже если матрица лаборанта «меньше».
+    assert.equal((await call(base, 'POST', '/api/users', { username: 'xx1', password: 'pw', role: 'lab' }, hr)).status, 403, 'врач завёл лаборанта');
+    db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('lab_lite', 'Лаборант-лайт', 'lab')").run();
+    db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run('lab_lite', JSON.stringify({ sections: [], levels: {}, patient_tabs: {}, grants: {} }));
+    assert.equal((await call(base, 'POST', '/api/users', { username: 'xx2', password: 'pw', role: 'doctor', custom_role_code: 'lab_lite' }, hr)).status, 403, 'своя роль на чужой основе');
+    assert.equal((await call(base, 'POST', '/api/users', { username: 'xx3', password: 'pw', role: 'doctor', extra_roles: ['lab'] }, hr)).status, 403, 'чужая основа дополнительной ролью');
+    assert.equal((await call(base, 'PATCH', '/api/users/71', { password: 'hijack1' }, hr)).status, 403, 'пароль сотруднику чужой основы');
+    // Своя основа — можно.
+    assert.equal((await call(base, 'POST', '/api/users', { username: 'xx4', password: 'pw', role: 'doctor' }, hr)).status, 201);
+  } finally { server.close(); }
+});
+
+test('I1: вкладка «Услуги» не поднимается через старое правило «визиты → услуги»', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const nurse = perms(db, 'nurse');
+    db.prepare('UPDATE role_permissions SET permissions = ? WHERE role = ?').run(JSON.stringify({ ...nurse, patient_tabs: { services: 'view' }, grants: { ...nurse.grants, settings: 'view', 'settings.roles': 'edit' } }), 'nurse');
+    const lab = perms(db, 'lab');
+    db.prepare('UPDATE role_permissions SET permissions = ? WHERE role = ?').run(JSON.stringify({ ...lab, patient_tabs: { visits: 'none' } }), 'lab');
+    const head = await login(base, 'head');
+    // visits: none → view; «Услуги» без записи переставали наследовать «Нет» и открывались целиком.
+    const r = await saveRole(base, head, 'lab', { ...perms(db, 'lab'), patient_tabs: { visits: 'view' } });
+    assert.equal(r.status, 403, 'вкладка «Услуги» поднялась выше, чем у правящей');
+  } finally { server.close(); }
+});
+
+test('I2: «Телефония: Изменение» не уводит сохранённый ключ «Моих Звонков» на чужой адрес', async () => {
+  const db = seed();
+  try {
+    const saved = await telephonyProviderSave(db, { kind: 'moizvonki', name: 'МЗ', config: { domain: 'clinic.moizvonki.ru', user_name: 'a@b.uz' }, secret: { api_key: 'MZ-SECRET' } }, ADMIN);
+    addGrants(db, 'registrar', { settings: 'view', 'settings.telephony': 'edit' });
+    const seen = [];
+    const mzHistoryImpl = async (domain, _t, o) => { seen.push([domain, o.apiKey]); return { ok: true, data: { calls: [] } }; };
+    await assert.rejects(() => telephonyProviderTest(db, { id: saved.id, config: { domain: 'evil.example.com' } }, REG, { mzHistoryImpl }), refused, 'проверка на чужом адресе с сохранённым ключом');
+    await assert.rejects(() => telephonyProviderSave(db, { id: saved.id, config: { domain: 'other.moizvonki.ru' } }, REG), refused, 'смена адреса без ключа');
+    assert.deepEqual(seen, [], 'ключ ушёл по чужому адресу');
+    // Адрес «Моих Звонков» — только *.moizvonki.ru, у всех, администратора тоже.
+    await assert.rejects(() => telephonyProviderSave(db, { id: saved.id, config: { domain: 'evil.example.com' }, secret: { api_key: 'NEW' } }, ADMIN), (e) => e.status === 400);
+    const t = await telephonyProviderTest(db, { id: saved.id, config: { domain: 'evil.example.com' } }, ADMIN, { mzHistoryImpl });
+    assert.equal(t.ok, false);
+    assert.deepEqual(seen, [], 'ключ ушёл по чужому адресу у администратора');
+    // Смена адреса с ключом, введённым заново, — можно.
+    await telephonyProviderSave(db, { id: saved.id, config: { domain: 'other.moizvonki.ru' }, secret: { api_key: 'MINE' } }, REG);
+  } finally { db.close(); }
+});
+
+test('I3: свой уровень — не выше, чем пускают настоящие ворота (регистратуре «Измерения» код не даёт)', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    ins(db, 72, 'reghr', 'registrar');
+    addGrants(db, 'registrar', { settings: 'view', 'settings.roles': 'edit' });
+    const hr = await login(base, 'reghr');
+    const lab = perms(db, 'lab');
+    // Регистратура выводит «Стационар» из галочки «Койки», но ворота измерений её не пускают.
+    const r = await saveRole(base, hr, 'lab', { ...lab, grants: { ...lab.grants, 'inpatient.vitals': 'edit' } });
+    assert.equal(r.status, 403, 'выдала право, которого ворота ей не дают');
+  } finally { server.close(); }
+});
+
+test('I4: деньги своей карточки не правит никто, кроме администратора', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    addGrants(db, 'nurse', { settings: 'view', 'settings.employees': 'edit', 'settings.employees.money': 'edit' });
+    const head = await login(base, 'head');
+    assert.equal((await call(base, 'PATCH', '/api/users/60', { salary_fixed: 99000000 }, head)).status, 403, 'сама себе подняла оклад');
+    assert.equal((await call(base, 'PATCH', '/api/users/61', { salary_fixed: 1000 }, head)).status, 200, 'чужой оклад с правом — можно');
+  } finally { server.close(); }
+});
+
+test('(a) администратор-врач не снимает себе администратора; последний администратор считается и по дополнительной роли', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const ad = await login(base, 'docadm');
+    assert.notEqual((await call(base, 'PATCH', '/api/users/2', { extra_roles: [] }, ad)).status, 200, 'снял себе администратора');
+    assert.ok(JSON.parse(db.prepare('SELECT extra_roles FROM users WHERE id = 2').get().extra_roles).includes('admin'));
+    // Администраторов двое (boss и администратор-врач) — отключить boss можно.
+    assert.equal((await call(base, 'PATCH', '/api/users/1', { is_active: false }, ad)).status, 200, 'администратор-врач не посчитан администратором');
+    // Теперь последний активный администратор — администратор-врач: удалить его нельзя.
+    const boss2 = db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)').run('x.boss', hashPassword('password1'), 'X', 'admin');
+    db.prepare('UPDATE users SET is_active = 0 WHERE id = ?').run(Number(boss2.lastInsertRowid));
+    const { staffDeleteGuard } = await import('../routes/users.js');
+    const g = staffDeleteGuard(db, db.prepare('SELECT * FROM users WHERE id = 2').get(), { id: 999 });
+    assert.equal(g.ok, false, 'последнего администратора (дополнительной ролью) можно удалить');
+  } finally { server.close(); }
+});
+
+test('(b) не-администратор не правит и не отключает учётную запись сильнее своей', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    addGrants(db, 'nurse', { settings: 'view', 'settings.employees': 'delete' });
+    const head = await login(base, 'head');
+    assert.equal((await call(base, 'PATCH', '/api/users/62', { is_active: false }, head)).status, 403, 'отключила кассира');
+    assert.equal((await call(base, 'PATCH', '/api/users/62', { phone: '+998903333333' }, head)).status, 403, 'правит кассира');
+    assert.equal((await call(base, 'DELETE', '/api/users/62', undefined, head)).status, 403, 'удаляет кассира');
+    assert.equal((await call(base, 'PATCH', '/api/users/61', { phone: '+998903333333' }, head)).status, 200);
+  } finally { server.close(); }
+});
+
+test('(c) коды ролей — только строчными: «Admin» и «LAB» не заводятся ни в custom_roles, ни в role_permissions', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const boss = await login(base, 'boss');
+    let r = await call(base, 'POST', '/api/db', { table: 'custom_roles', op: 'insert', values: { code: 'Admin', name: 'X', base_role: 'nurse', active: 1 } }, boss);
+    assert.notEqual(r.status, 200, 'код с заглавной буквой');
+    r = await call(base, 'POST', '/api/db', { table: 'role_permissions', op: 'insert', values: { role: 'LAB', permissions: '{}' } }, boss);
+    assert.notEqual(r.status, 200);
+    addGrants(db, 'nurse', { settings: 'view', 'settings.roles': 'edit' });
+    const head = await login(base, 'head');
+    r = await call(base, 'POST', '/api/db', { table: 'custom_roles', op: 'insert', values: { code: 'Nurse', name: 'X', base_role: 'nurse', active: 1 } }, head);
+    assert.notEqual(r.status, 200);
   } finally { server.close(); }
 });

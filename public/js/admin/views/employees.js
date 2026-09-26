@@ -11,7 +11,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, field, checkField, Ring, initials } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openEmployeePasswordModal, openChangeOwnPasswordModal } from '../password-change.js';   // PASSWORD_CHANGE_V2
-import { selfUserId, settingsTileLevel, settingsMoneyAllowed, actorIsAdmin, hasRestriction } from '../permissions.js';   // PASSWORD_CHANGE_V2 — своя карточка меняет пароль через текущий · ADMIN_ROWS_GRANTABLE_V1
+import { selfUserId, settingsTileLevel, settingsMoneyAllowed, actorIsAdmin, hasRestriction, actorRoleCodes } from '../permissions.js';   // PASSWORD_CHANGE_V2 — своя карточка меняет пароль через текущий · ADMIN_ROWS_GRANTABLE_V1
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { importExportButtons } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1
 import { soleBranchId } from '../branch-context.js?v=bc3';                  // SOLE_BRANCH_V1
@@ -623,9 +623,13 @@ function openEditor(user, root) {
             // (её и проверяет сервер), а код едет отдельным полем.
             // ADMIN_ROWS_GRANTABLE_V1 — роль администратора (и своя роль на её
             // основе) не-администратору не предлагается: сервер её не назначит.
-            const activeCustom = CUSTOM_ROLES.filter((c) => (c.active || c.code === emp.custom_role_code) && (acc.admin || c.base_role !== 'admin' || c.code === emp.custom_role_code));
+            // Ревью безопасности C1 — и основа только та, что носит сам назначающий:
+            // данные сервер отдаёт по основе (routes/users.js откажет второй раз).
+            const own = new Set(actorRoleCodes());
+            const baseOk = (b) => acc.admin || (b !== 'admin' && own.has(b));
+            const activeCustom = CUSTOM_ROLES.filter((c) => (c.active || c.code === emp.custom_role_code) && (baseOk(c.base_role) || c.code === emp.custom_role_code));
             const roleOptions = [
-                ...ROLES.filter((r) => acc.admin || r[0] !== 'admin' || emp.role === 'admin').map((r) => [r[0], r[1]]),
+                ...ROLES.filter((r) => baseOk(r[0]) || emp.role === r[0]).map((r) => [r[0], r[1]]),
                 ...activeCustom.map((c) => ['custom:' + c.code, c.name + ' · ' + tr(roleLabel(c.base_role))]),
             ];
             const roleValue = emp.custom_role_code ? 'custom:' + emp.custom_role_code : emp.role;
@@ -642,7 +646,7 @@ function openEditor(user, root) {
             const extraRoles = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px' } });
             for (const [rk, rl] of ALL_ASSIGNABLE_ROLES) {
                 if (rk === emp.role) continue;
-                if (rk === 'admin' && !acc.admin && !(emp.extra_roles || []).includes('admin')) continue;   // ADMIN_ROWS_GRANTABLE_V1
+                if (!acc.admin && !own.has(rk) && !(emp.extra_roles || []).includes(rk)) continue;   // ADMIN_ROWS_GRANTABLE_V1 — ревью C1: только свои основы
                 const on = (emp.extra_roles || []).includes(rk);
                 const c = h('input', { type: 'checkbox', checked: on });
                 c.addEventListener('change', () => { const set = new Set(emp.extra_roles || []); c.checked ? set.add(rk) : set.delete(rk); markDirty({ extra_roles: [...set].filter(r => r !== emp.role) }); });

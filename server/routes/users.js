@@ -450,6 +450,11 @@ function isAdminAccount(db, u) {
   return !!(u.custom_role_code && isAdminRoleCode(db, u.custom_role_code));
 }
 
+/** Сколько активных учётных записей администратора (ревью a — и по дополнительной роли). */
+function activeAdminCount(db) {
+  return db.prepare('SELECT * FROM users WHERE is_active = 1').all().filter((u) => isAdminAccount(db, u)).length;
+}
+
 /** Коды ролей, которые носит учётная запись. */
 function accountRoleCodes(u) {
   const out = [];
@@ -560,10 +565,27 @@ export function userRoutes(db) {
     }
     if (full_name !== undefined && typeof full_name !== 'string') return bad(res, 'Full name must be text.');
     // ADMIN_ROWS_GRANTABLE_V1 — защиты не-администратора (см. шапку роутера).
+    const extrasAfter = req.body && Array.isArray(req.body.extra_roles) ? req.body.extra_roles : parseJsonArray(user.extra_roles);
+    const after = { ...user, role: roleToWrite !== undefined ? roleToWrite : user.role, extra_roles: JSON.stringify(extrasAfter),
+      custom_role_code: cr.code !== undefined ? cr.code : user.custom_role_code };
     if (!isAdminUser(req.user)) {
       const self = user.id === req.user.id;
       if (isAdminAccount(db, user)) return forbid(res, 'Учётную запись администратора меняет только администратор.');
       if (self && active === false) return bad(res, 'You cannot deactivate or demote your own account.');
+      // Ревью (b) и C1 — учётную запись, чья роль (основа или права) сильнее
+      // своей, не-администратор не трогает вовсе: ни пароля (войти под ней —
+      // и есть повышение), ни отключения, ни полей.
+      if (!self) {
+        for (const code of accountRoleCodes(user)) {
+          const excess = roleExceedsActor(db, req.user, code);
+          if (excess) return forbid(res, `Этого сотрудника меняет администратор: у его роли больше прав, чем у вас (${excess}).`);
+        }
+      }
+      // Ревью I4 — свою зарплату и ставки не правит никто, кроме
+      // администратора, какое бы право ни было выдано.
+      if (self && MONEY_FIELDS.some((k) => req.body[k] !== undefined)) {
+        return forbid(res, 'Свою зарплату и ставки меняет администратор.');
+      }
       const extrasIn = req.body && Array.isArray(req.body.extra_roles) ? req.body.extra_roles : null;
       const curExtras = parseJsonArray(user.extra_roles);
       const primaryNow = roleToWrite !== undefined ? roleToWrite : user.role;
@@ -578,22 +600,19 @@ export function userRoutes(db) {
       assigned.push(...addedExtras);
       const refusal = assignRefusal(db, req.user, assigned);
       if (refusal) return forbid(res, refusal);
-      if (password !== undefined && !self) {
-        for (const code of accountRoleCodes(user)) {
-          const excess = roleExceedsActor(db, req.user, code);
-          if (excess) return forbid(res, `Пароль этого сотрудника меняет администратор: у его роли больше прав, чем у вас (${excess}).`);
-        }
-      }
       if (!employeeMoneyAllowed(db, req.user) && MONEY_FIELDS.some((k) => req.body[k] !== undefined)) {
         return forbid(res, 'Зарплату и ставки сотрудника меняет роль с правом «Сотрудники → Цены и проценты».');
       }
-    } else if (user.id === req.user.id && (active === false || (roleToWrite !== undefined && roleToWrite !== 'admin'))) {
+    } else if (user.id === req.user.id && (active === false || (isAdminAccount(db, user) && !isAdminAccount(db, after)))) {
+      // Ревью (a) — себя не разжаловать никаким путём: ни основной ролью, ни
+      // снятой дополнительной «admin» (администратор-врач), ни своей ролью.
       return bad(res, 'You cannot deactivate or demote your own account.');
     }
     // Belt-and-braces: the clinic must never end up with zero active admins.
-    const losesAdmin = active === false || (role !== undefined && role !== 'admin');
-    if (losesAdmin && user.role === 'admin' && user.is_active &&
-        db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin' AND is_active=1").get().n <= 1) {
+    // Ревью (a) — администратор считается по isAdminAccount: основной ролью,
+    // дополнительной и своей ролью на основе администратора.
+    const losesAdmin = active === false || !isAdminAccount(db, after);
+    if (losesAdmin && isAdminAccount(db, user) && user.is_active && activeAdminCount(db) <= 1) {
       return bad(res, 'At least one active admin must remain.');
     }
 
@@ -677,8 +696,15 @@ export function userRoutes(db) {
     const managedDelete = mainClinicRow(user);
     if (managedDelete) return res.status(409).json({ error: { code: 'conflict', message: managedDelete } });
 
-    // ADMIN_ROWS_GRANTABLE_V1 — администратора удаляет только администратор.
+    // ADMIN_ROWS_GRANTABLE_V1 — администратора удаляет только администратор;
+    // сотрудника с ролью сильнее своей — тоже (ревью b).
     if (!isAdminUser(req.user) && isAdminAccount(db, user)) return forbid(res, ADMIN_DELETE_REFUSAL);
+    if (!isAdminUser(req.user) && user.id !== req.user.id) {
+      for (const code of accountRoleCodes(user)) {
+        const excess = roleExceedsActor(db, req.user, code);
+        if (excess) return forbid(res, `Этого сотрудника удаляет администратор: у его роли больше прав, чем у вас (${excess}).`);
+      }
+    }
     const guard = staffDeleteGuard(db, user, req.user);
     if (!guard.ok) {
       // 409: the request is well-formed, the clinic's state forbids it.
@@ -753,8 +779,7 @@ export function staffDeleteGuard(db, user, actor) {
   if (actor && user.id === actor.id) {
     return { ok: false, status: 409, reason: 'Нельзя удалить собственную учётную запись.' };
   }
-  if (user.role === 'admin' && user.is_active &&
-      db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin' AND is_active=1").get().n <= 1) {
+  if (isAdminAccount(db, user) && user.is_active && activeAdminCount(db) <= 1) {
     return { ok: false, status: 409, reason: 'В клинике должен остаться хотя бы один активный администратор.' };
   }
 

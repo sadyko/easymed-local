@@ -21,7 +21,8 @@ import { listProviders, saveProvider, deleteProvider, testProvider, ProviderErro
 import { dialCall } from '../telephony/dial.js';
 // CALL_RECORDING_V1 — разбор ссылки на запись и история станции.
 import { recordingUrlOf } from '../telephony/recording.js';
-import { pbxHistory, pbxRecordingUrl, pbxAuth } from '../telephony/onlinepbx.js';
+import { pbxHistory, pbxRecordingUrl, pbxAuth, normalizeDomain } from '../telephony/onlinepbx.js';
+import { normalizeMzDomain } from '../telephony/moizvonki.js';   // ADMIN_ROWS_GRANTABLE_V1 (ревью I2)
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -187,10 +188,33 @@ export function telephonyProvidersList(db, _args, user) {
 //
 // Проверка — только при СМЕНЕ секрета: сохранение названия или добавочного
 // номера не должно ходить к вендору.
+// ADMIN_ROWS_GRANTABLE_V1 (ревью безопасности I2) — АДРЕС МЕНЯЕТСЯ ТОЛЬКО
+// ВМЕСТЕ С КЛЮЧОМ. Проверка связи и опрос шлют СОХРАНЁННЫЙ ключ на СОХРАНЁННЫЙ
+// (или только что введённый) адрес. Роль с «Телефония: Изменение» ключа не
+// видит — и не должна получить его, подставив свой адрес. Поэтому
+// не-администратор меняет адрес подключения (при сохранении и при проверке)
+// только введя ключ заново в том же запросе. Хост onlinePBX зашит
+// (api2.onlinepbx.ru, домен — лишь часть пути), Binotel — тоже
+// (api.binotel.com); у «Моих Звонков» адрес — сам хост, и он ещё и прибит к
+// *.moizvonki.ru (moizvonki.js normalizeMzDomain).
+function domainChangeRefusal(existing, a, user) {
+  if (!existing || isAdminUser(user)) return null;
+  const typed = a && a.config && typeof a.config.domain === 'string' ? a.config.domain.trim() : '';
+  if (!typed) return null;
+  const kind = providerKind(existing);
+  const norm = kind === 'moizvonki' ? normalizeMzDomain(typed) : normalizeDomain(typed);
+  if (norm && norm === String(providerConfig(existing).domain || '')) return null;
+  const secretFields = (KINDS[kind] && KINDS[kind].secretFields) || [];
+  const reentered = secretFields.some((f) => a.secret && typeof a.secret[f] === 'string' && a.secret[f].trim());
+  return reentered ? null : 'Адрес подключения меняется только вместе с ключом API: введите ключ заново.';
+}
+
 export async function telephonyProviderSave(db, args, user, { pbxAuthImpl = pbxAuth } = {}) {
   requireLevel(db, user, 'edit');
   const a = args || {};
   const existing = a.id ? getProviderRow(db, a.id) : null;
+  const moved = domainChangeRefusal(existing, a, user);
+  if (moved) throw new RpcError(moved, 403);
   const kind = existing ? providerKind(existing) : String(a.kind || '');
   const typedKey = String((a.secret && a.secret.auth_key) || '').trim();
   const oldSecret = existing ? providerSecrets(existing) : {};
@@ -220,7 +244,10 @@ export function telephonyProviderDelete(db, args, user) {
 
 export async function telephonyProviderTest(db, args, user, seams = {}) {
   requireLevel(db, user, 'edit');
-  return testProvider(db, args || {}, seams);
+  const a = args || {};
+  const moved = domainChangeRefusal(a.id ? getProviderRow(db, a.id) : null, a, user);
+  if (moved) throw new RpcError(moved, 403);
+  return testProvider(db, a, seams);
 }
 
 // ---------------------------------------------------------------------------

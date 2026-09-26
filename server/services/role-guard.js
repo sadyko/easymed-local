@@ -31,8 +31,9 @@
 // Тот же ответ «не выше своего» читает и routes/users.js: назначить сотруднику
 // роль можно, только если у этой роли нет ничего сверх прав назначающего.
 import { isAdminUser, effectiveLevel, rolesForGrants } from './grants.js';
-import { effectiveRoles, sectionLevel, patientTabLevel, VALID_ROLES, PATIENT_CARD_TABS, PATIENT_TAB_CAPS } from './roles.js';
-import { grantsFromLegacy } from '../../public/js/shared/permission-catalog.js';
+import { effectiveRoles, sectionLevel, patientTabLevel, VALID_ROLES, PATIENT_CARD_TABS, tabRankOfPerms } from './roles.js';
+import { grantsFromLegacy, catalogRows } from '../../public/js/shared/permission-catalog.js';
+import { fallbackLevel } from './gate-fallbacks.js';   // ревью I3/C1 — что дают настоящие ворота
 import { compile } from '../db/query-compiler.js';
 
 const RANK = { none: 0, view: 1, edit: 2, delete: 3 };
@@ -84,8 +85,25 @@ function derivedLevel(db, user, key) {
   return best;
 }
 
+const minLevel = (a, b) => ((RANK[a] || 0) <= (RANK[b] || 0) ? a : b);
+
+// Ревью I3 — свой уровень по НЕНАСТРОЕННОМУ ключу: то, что рисует экран, но не
+// выше того, что дают настоящие ворота ключа (все его ворота этого уровня).
+function actorLegacy(db, actor, key) {
+  const derived = derivedLevel(db, actor, key);
+  const real = fallbackLevel(db, actor, key, 'all');
+  return real === null ? derived : minLevel(derived, real);
+}
 function actorGrantRank(db, actor, key) {
-  return RANK[effectiveLevel(db, actor, key, derivedLevel(db, actor, key))] || 0;
+  return RANK[effectiveLevel(db, actor, key, actorLegacy(db, actor, key))] || 0;
+}
+// Ревью C1 — уровень того, КОМУ выдают (роль как «человек» с этой ролью),
+// считается ТЕМ ЖЕ правилом, что и у правящего: одна и та же роль по обе
+// стороны обязана дать один и тот же ответ. Ворота по основе при этом не
+// недосчитаны: основу правящий носит сам (проверено в roleExceedsActor), и
+// всякие ворота, пускающие роль, пускают и его.
+function targetGrantRank(db, pseudo, key) {
+  return actorGrantRank(db, pseudo, key);
 }
 function actorSectionRank(db, actor, key) {
   const l = sectionLevel(db, actor, key);
@@ -114,17 +132,14 @@ export function permissionExcess(db, actor, prev, next) {
     if (nr > pr && nr > actorSectionRank(db, actor, s)) return `раздел «${s}»`;
   }
 
-  // Вкладки карты пациента; вкладка без записи — полный доступ.
-  const pT = (p.patient_tabs && typeof p.patient_tabs === 'object') ? p.patient_tabs : {};
-  const nT = (n.patient_tabs && typeof n.patient_tabs === 'object') ? n.patient_tabs : {};
-  // У новой роли (prev = null) сравниваются ВСЕ вкладки: незаписанная открыта.
-  const tabs = prev ? new Set([...Object.keys(pT), ...Object.keys(nT)]) : new Set([...PATIENT_CARD_TABS, ...Object.keys(nT)]);
-  for (const t of tabs) {
-    // Выше потолка вкладки права не бывает (у «Анализов» — только просмотр).
-    const caps = PATIENT_TAB_CAPS[t];
-    const ceil = caps ? (caps.del ? 3 : caps.edit ? 2 : 1) : TOP;
-    const nr = Math.min(ceil, t in nT ? (RANK[nT[t]] ?? TOP) : TOP);
-    const pr = Math.min(ceil, prev ? (t in pT ? (RANK[pT[t]] ?? TOP) : TOP) : 0);
+  // Вкладки карты пациента — ВСЕ и тем же разбором, что у сервера
+  // (roles.js tabRankOfPerms: псевдонимы, «Услуги» наследуют «Нет» у «Визитов»,
+  // пустое — полный доступ, потолок вкладки). Ревью I1: сравнение по одним
+  // записанным ключам пропускало «визиты: Нет → Просмотр», которое молча
+  // открывало «Услуги» целиком.
+  for (const t of PATIENT_CARD_TABS) {
+    const nr = tabRankOfPerms(n, t);
+    const pr = prev ? tabRankOfPerms(p, t) : 0;
     if (nr > pr && nr > actorTabRank(db, actor, t)) return `вкладка карты «${t}»`;
   }
 
@@ -155,13 +170,26 @@ export function permissionExcess(db, actor, prev, next) {
 export function roleExceedsActor(db, actor, code) {
   if (!code) return null;
   if (isAdminRoleCode(db, code)) return 'роль администратора';
-  let perms = permsOfRole(db, code);
-  if (!perms) {
-    const c = customRole(db, code);
-    if (c) perms = permsOfRole(db, c.base_role);
+  // Ревью C1 — ОСНОВА. Данные (реестр таблиц) и прежние списки ворот сервер
+  // выдаёт по основе, и по матрице её не сравнить: лаборант с «пустой»
+  // матрицей всё равно пишет результаты анализов. Поэтому назначить можно
+  // только основу, которую носишь сам.
+  const custom = customRole(db, code);
+  const baseRole = custom ? custom.base_role : code;
+  if (!effectiveRoles(actor).includes(baseRole)) return `основа «${baseRole}», которой у вас нет`;
+  const perms = permsOfRole(db, code) || (custom ? permsOfRole(db, baseRole) : null) || {};
+  const shape = { sections: perms.sections, levels: perms.levels, patient_tabs: perms.patient_tabs };
+  const excess = permissionExcess(db, actor, null, shape);
+  if (excess) return excess;
+  // И КАЖДЫЙ ключ справочника — действующий уровень, не только записанный:
+  // у незаписанного ключа роль получает то, что ей дают ворота по основе.
+  const pseudo = custom
+    ? { id: 0, role: baseRole, extra_roles: [], custom_role_code: code }
+    : { id: 0, role: code, extra_roles: [] };
+  for (const r of catalogRows()) {
+    if (targetGrantRank(db, pseudo, r.key) > actorGrantRank(db, actor, r.key)) return `право «${r.key}»`;
   }
-  if (!perms) return `роль «${code}» без настроенных прав`;
-  return permissionExcess(db, actor, null, perms);
+  return null;
 }
 
 // Строки, которых коснётся правка: тем же компилятором и с теми же правами.
@@ -178,9 +206,22 @@ const asRows = (values) => (Array.isArray(values) ? values : [values || {}]);
  * Отказ для записи в role_permissions / custom_roles — текст или null.
  * Зовётся из routes/db.js ДО выполнения; администратор сюда не попадает.
  */
+const CODE_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
 export function roleWriteRefusal(db, user, meta, body) {
   if (!meta || (meta.table !== 'role_permissions' && meta.table !== 'custom_roles')) return null;
-  if (meta.op === 'select' || isAdminUser(user)) return null;
+  if (meta.op === 'select') return null;
+  // Ревью (c) — код роли только строчными латиницей: «Admin» рядом с «admin»
+  // выглядел бы одной ролью, а сервер читал бы их как две. Для всех, и для
+  // администратора тоже.
+  if (meta.op === 'insert' || meta.op === 'upsert') {
+    const col = meta.table === 'custom_roles' ? 'code' : 'role';
+    for (const v of asRows(body && body.values)) {
+      const code = v && v[col];
+      if (typeof code !== 'string' || !CODE_RE.test(code)) return 'Роли: код роли — строчные латинские буквы, цифры, «-» и «_».';
+    }
+  }
+  if (isAdminUser(user)) return null;
   const own = ownRoleCodes(user);
   const values = body && body.values;
   const filters = body && body.filters;

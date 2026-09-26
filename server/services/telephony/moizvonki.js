@@ -35,9 +35,18 @@ import { readBounded } from '../control/checkin.js';
 const TIMEOUT_MS = 15_000;
 const MAX_BYTES = 8_000_000;
 
-/** Домен без схемы, пути и пробелов: «clinic.moizvonki.ru». */
+/**
+ * Домен без схемы, пути и пробелов: «clinic.moizvonki.ru».
+ *
+ * ADMIN_ROWS_GRANTABLE_V1 (ревью безопасности I2) — ТОЛЬКО *.moizvonki.ru.
+ * Ключ API уходит в теле каждого запроса на этот адрес: подставь «адрес» своего
+ * сервера — и сохранённый ключ клиники уедет туда при первой же проверке
+ * связи. Чужой адрес читается как пустой: запроса не будет вовсе.
+ */
+const MZ_HOST_RE = /^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+moizvonki\.ru$/;
 export function normalizeMzDomain(v) {
-  return String(v || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  const d = String(v || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/[/?#].*$/, '');
+  return MZ_HOST_RE.test(d) ? d : '';
 }
 
 /**
