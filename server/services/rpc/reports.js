@@ -2010,8 +2010,12 @@ export function doctorPaySummary(db, args, user) {
   const outpatient = part('out');
   const inpatient = part('in');
   const referral = doctorReferralRows(db, { from, to, doctorId });
+  // Ставка по умолчанию из карточки: кабинету — чтобы прогресс ступени видел и
+  // врача без личной ставки на услугу (браузеру эта колонка не выдаётся).
+  const doc = db.prepare('SELECT service_rate_default FROM users WHERE id = ?').get(doctorId);
   return {
     from, to,
+    rate_default: doc ? Number(doc.service_rate_default) || 0 : 0,
     outpatient, inpatient,
     referral,
     total: round2(outpatient.fee + inpatient.fee + referral.reward),

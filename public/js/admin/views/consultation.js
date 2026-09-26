@@ -22,14 +22,15 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { scopedDoctorId, selfDoctorId, scopedProviderId, grantAllows } from '../permissions.js';   // ADMIN_DOCTOR_V2 / SERVICE_SCOPE_V1
 import { renderDoctorProfile } from './doctor-profile.js?v=btnright1';
 // DOCTOR_DASHBOARD_V1 — кабинет открывается дашбордом, и ДЕНЬГИ ЖИВУТ ТАМ.
-// serviceRateMap/serviceShare переехали в doctor-dashboard.js целиком: две
-// копии одной формулы доли врача — это две формулы, которые однажды разойдутся,
-// и разойдутся молча, потому что обе «работают». Импорт без ?v=: версия в
-// специфике делает ОТДЕЛЬНЫЙ экземпляр модуля, а у дашборда есть состояние.
+// PAY_BASIS_PERFORMED_V1 — долю врача браузер больше не считает вовсе: обе
+// стороны кабинета берут строки с долей с сервера (loadDoctorPay →
+// doctor_pay_summary, те же строки, что «Зарплаты врачей»). Импорт без ?v=:
+// версия в специфике делает ОТДЕЛЬНЫЙ экземпляр модуля, а у дашборда есть
+// состояние.
 import {
     renderDoctorDashboard, resetDoctorDashboard,
-    serviceRateMap, serviceShare, tierShare, tierProgressText, perServicePayApplies,
-    tierRefused, TIER_DENIED_NOTE,   // ROLE_REPORTS_SETTINGS_V1 (ревью M2)
+    serviceRateMap, tierProgressText, perServicePayApplies,
+    loadDoctorPay, PAY_DENIED_NOTE,   // PAY_BASIS_PERFORMED_V1 / ROLE_REPORTS_SETTINGS_V1 (ревью M2)
 } from './doctor-dashboard.js';
 // HEAD_DOCTOR_WARD_VIEW_V1 — главный врач делает свою работу ПРЯМО ИЗ КАБИНЕТА:
 // оба окна те же самые, что в разделе «Стационар», а не их копии.
@@ -85,19 +86,22 @@ const state = {
         loaded:    false,
         loading:   false,
         doctor:    null,      // full users row for the picked doctor
-        services:  [],        // visit_services this doctor performed in the period
+        // PAY_BASIS_PERFORMED_V1 — строки выплаты с сервера (doctor_pay_summary):
+        // services — амбулаторные, inpatient.rows — стационарные, у каждой
+        // готовая доля (fee). pay — весь ответ, итоги берутся из него.
+        services:  [],
+        pay:       null,
+        payDenied: false,
         referrals: [],        // recommended_services where recommended_by = doctor
         // REPORTS_V2 — вознаграждение за направления ГОТОВЫМ с сервера
-        // (doctor_referral_reward): строки счетов, пришедшие по источнику
+        // (doctor_pay_summary.referral): строки счетов, пришедшие по источнику
         // этого врача, — те же, что в отчёте «Рефералы».
         referralPay: { rows: [], count: 0, reward: 0, paid_amount: 0 },
-        // DOCTOR_TIER_V1 — позиции строк по ступеням от сервера
-        // (doctor_tier_positions): visit_service_id → строка ответа; и прогресс
-        // текущего месяца по услугам — «N из M».
-        tierPos:   new Map(),
+        // DOCTOR_TIER_V1 — прогресс ступени текущего месяца по услугам —
+        // «N из M» (doctor_tier_positions). Доли со ступенью уже в строках.
         tierProgress: [],
-        // INPATIENT_SHARE_V1 — стационарная доля за период ГОТОВОЙ с сервера
-        // (doctor_inpatient_share): { rows:[{date, fee, …}], count, fee }.
+        // INPATIENT_SHARE_V1 — стационарная доля за период ГОТОВОЙ с сервера:
+        // { rows:[{date, fee, …}], count, fee }.
         inpatient: { rows: [], count: 0, fee: 0 },
         recent:    'services',   // PAY_ONE_SCREEN_V1 — какой из трёх списков открыт в «Последних»
         rootEl:    null,         // корень вкладки — ему подгоняется высота окна
@@ -1525,102 +1529,37 @@ async function loadDashboardData() {
     const docRow = state.dash.doctors.find(d => d.id === docId) || null;
     state.dash.doctor = docRow;
 
-    // 2. Services this doctor has worked on in the period (visit_services).
-    const { data: svcs, error: svcErr } = await supabase
-        .from('visit_services')
-        .select(`
-            id, status, quantity, unit_price, total, created_at, invoice_item_id,
-            visit_id, service_id,
-            services(name, tax_rate, type_id, category_id, service_categories(name), service_types(name)),
-            visits(visit_date, patient_id,
-                   patients(full_name, last_name, first_name, mrn))
-        `)
-        .eq('doctor_id', docId)
-        .gte('created_at', startIso)
-        .lte('created_at', endIso)
-        .order('created_at', { ascending: false })
-        .limit(500);
-    if (svcErr) console.warn('[dash] services:', svcErr.message);
-    state.dash.services = (svcs || []).map(r => ({
-        id:           r.id,
-        status:       r.status,
-        total:        Number(r.total || (r.unit_price || 0) * (r.quantity || 1)),
-        // CABINET_FEE_PARITY_V1 — количество нужно доле: фиксированная оплата
-        // врача считается ЗА ЕДИНИЦУ, как COALESCE(ii.quantity, 1) в ITEM_FEE_SQL.
-        quantity:     Number(r.quantity) || 1,
-        serviceId:    r.service_id,
-        // DOCTOR_SHARE_AFTER_TAX_V1 — фолбэк 0, а не 12: ставка налога есть в
-        // карточке услуги, и придумывать её за данные нельзя — у клиники 6%.
-        taxRate:      r.services?.tax_rate != null ? Number(r.services.tax_rate) : 0,
-        createdAt:    r.created_at,
-        // DOCTOR_TIER_V1 — месяц ступени считается по дате ПРИЁМА, как на
-        // сервере; created_at — только запасной вариант.
-        visitDate:    r.visits?.visit_date || r.created_at,
-        serviceName:  r.services?.name || '(removed)',
-        serviceCat:   r.services?.service_categories?.name || '',
-        serviceType:  r.services?.service_types?.name || '',
-        patientName:  (() => {
-            const p = r.visits?.patients || {};
-            return [p.last_name, p.first_name].filter(Boolean).join(' ').trim() || p.full_name || '(unknown)';
-        })(),
-        patientMrn:   r.visits?.patients?.mrn || '',
-        invoiceItemId: r.invoice_item_id || null,
-    }));
+    // 2. PAY_BASIS_PERFORMED_V1 — ВСЯ выплата за период одним вызовом сервера
+    // (doctor_pay_summary): выполненные услуги (оплачены они или нет) с готовой
+    // долей — те же строки и те же числа, что в «Зарплатах врачей», —
+    // стационарная доля и вознаграждение за направления (как отчёт
+    // «Рефералы»: только оплаченные счета). Прежде кабинет сам читал до 500
+    // строк визита по дате создания и считал долю в браузере, без ставки по
+    // умолчанию, — и сумма расходилась с ведомостью. Теперь здесь нет ни
+    // одной формулы доли; предел в 500 строк ушёл вместе с ними.
+    const pay = await loadDoctorPay(docId, dayKey(startIso), dayKey(endIso));
+    state.dash.pay = pay;
+    state.dash.payDenied = !!pay.denied;
+    const lines = (pay.lines || []).map(payLineRow);
+    // Последние — сверху: строки сервера идут по дню выполнения от старых.
+    const newestFirst = (a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : Number(b.id) - Number(a.id));
+    state.dash.services = lines.filter((l) => l.kind === 'out').sort(newestFirst);
+    state.dash.inpatient = {
+        rows: lines.filter((l) => l.kind === 'in').sort(newestFirst),
+        count: Number(pay.inpatient && pay.inpatient.count) || 0,
+        fee: Number(pay.inpatient && pay.inpatient.fee) || 0,
+    };
+    state.dash.referralPay = pay.referral || { rows: [], count: 0, reward: 0, paid_amount: 0 };
 
-    // DOCTOR_SHARE_AFTER_TAX_V1 — доля счётной строки в скидке счёта. Скидка
-    // живёт на СЧЁТЕ, а не на услуге, поэтому её долю разносим так же, как
-    // reports.js (ITEM_DISCOUNT_SQL): пропорционально сумме строки. Без этого
-    // кабинет считал долю врача от суммы БЕЗ учёта скидки и показывал больше,
-    // чем начислит отчёт по зарплате.
-    try {
-        const itemIds = [...new Set(state.dash.services.map(s => s.invoiceItemId).filter(Boolean))];
-        if (itemIds.length) {
-            const { data: items } = await supabase.from('invoice_items')
-                .select('id, total, invoice_id').in('id', itemIds).limit(1000);
-            const invIds = [...new Set((items || []).map(i => i.invoice_id).filter(Boolean))];
-            const { data: invs } = invIds.length
-                ? await supabase.from('invoices').select('id, subtotal, discount_amount').in('id', invIds).limit(1000)
-                : { data: [] };
-            const invById = new Map((invs || []).map(i => [i.id, i]));
-            const discByItem = new Map();
-            for (const it of (items || [])) {
-                const inv = invById.get(it.invoice_id);
-                const sub = Number(inv && inv.subtotal) || 0;
-                const disc = Number(inv && inv.discount_amount) || 0;
-                discByItem.set(it.id, sub > 0 ? disc * (Number(it.total) || 0) / sub : 0);
-            }
-            for (const s of state.dash.services) {
-                s.discount = s.invoiceItemId ? (discByItem.get(s.invoiceItemId) || 0) : 0;
-            }
-        }
-    } catch (e) { console.warn('[dash] discounts:', e && e.message); }
-
-    // DOCTOR_TIER_V1 — позиции строк по ступеням за ВЕСЬ затронутый диапазон
-    // месяцев. ПРАВИЛО: один запрос за диапазон месяцев, а не по одному на
-    // месяц — цикл по месяцам на «за 12 месяцев» это дюжина запросов подряд
-    // ради одного числа на плитке. Нумерацию считает сервер
-    // (doctor_tier_positions); кабинет только применяет её тем же правилом, что
-    // отчёт (tierShare). Текущий месяц входит в диапазон всегда — прогресс
-    // «18 из 25» нужен и когда за выбранный период строк нет. Отказ сервера
-    // больше не молчит: без позиций доли считаются БЕЗ ступени, и это видно
-    // только в консоли, а не в цифрах.
-    state.dash.tierPos = new Map();
+    // DOCTOR_TIER_V1 — прогресс ступени ТЕКУЩЕГО месяца («18 из 25»): один
+    // запрос за месяц. Доли со ступенью уже посчитаны сервером в строках выше;
+    // отсюда — только счётчик для карточки «Как считается зарплата».
     state.dash.tierProgress = [];
-    state.dash.tierDenied = false;   // ревью M2
     try {
         const nowKey = localMonthKey(new Date());
-        const months = new Set(state.dash.services.map(s => localMonthKey(s.visitDate)).filter(Boolean));
-        months.add(nowKey);
-        const sorted = [...months].sort();
-        const from = sorted[0];
-        const to = sorted[sorted.length - 1];
-        const { data, error } = await supabase.rpc('doctor_tier_positions', { doctor_id: docId, from, to });
-        if (error) {
-            console.warn('[dash] tier positions:', error.message);
-            // Ревью M2 — отказ по правам: сумма без ступеней была бы неправдой.
-            if (tierRefused(error)) state.dash.tierDenied = true;
-        } else if (data && Array.isArray(data.rows)) {
-            for (const p of data.rows) state.dash.tierPos.set(String(p.visit_service_id), p);
+        const { data, error } = await supabase.rpc('doctor_tier_positions', { doctor_id: docId, from: nowKey, to: nowKey });
+        if (error) console.warn('[dash] tier positions:', error.message);
+        else if (data && Array.isArray(data.rows)) {
             const byService = new Map();
             for (const p of data.rows) {
                 if (String(p.ym || '') !== nowKey) continue;
@@ -1637,20 +1576,6 @@ async function loadDashboardData() {
             state.dash.tierProgress = [...byService.values()];
         }
     } catch (e) { console.warn('[dash] tier positions:', e && e.message); }
-
-    // INPATIENT_SHARE_V1 — стационарная доля за период. Считает СЕРВЕР тем же
-    // запросом, что отчёт «Стационар: доля врачей» (оплаченные счета, по дате
-    // счёта, исполнитель — иначе назначивший); кабинет её только показывает и
-    // прибавляет. Вторая копия этого SQL в браузере разошлась бы с ведомостью.
-    state.dash.inpatient = { rows: [], count: 0, fee: 0 };
-    try {
-        const { data, error } = await supabase.rpc('doctor_inpatient_share',
-            { doctor_id: docId, from: dayKey(startIso), to: dayKey(endIso) });
-        if (error) console.warn('[dash] inpatient share:', error.message);
-        else if (data && Array.isArray(data.rows)) {
-            state.dash.inpatient = { rows: data.rows, count: Number(data.count) || 0, fee: Number(data.fee) || 0 };
-        }
-    } catch (e) { console.warn('[dash] inpatient share:', e && e.message); }
 
     // 3. Referrals THIS doctor made (recommended_services where recommended_by = me).
     const { data: refs, error: refErr } = await supabase
@@ -1687,25 +1612,38 @@ async function loadDashboardData() {
         patientMrn:   r.patients?.mrn || '',
     }));
 
-    // 4. Вознаграждение за направления — REPORTS_V2. Считает СЕРВЕР тем же
-    // запросом, что отчёт «Рефералы» (строки счетов по источнику этого врача,
-    // от суммы строки после скидки, только оплаченные счета, по дате счёта).
-    // Прежде кабинет считал сам — от ЦЕНЫ КАТАЛОГА каждой рекомендации, и
-    // отправленной, и отменённой, — и его сумма не сходилась с ведомостью ни
-    // на одних данных. Ставку по-прежнему решает общий модуль
-    // shared/referral-reward.js, но теперь только на сервере.
-    state.dash.referralPay = { rows: [], count: 0, reward: 0, paid_amount: 0 };
-    try {
-        const { data, error } = await supabase.rpc('doctor_referral_reward',
-            { doctor_id: docId, from: dayKey(startIso), to: dayKey(endIso) });
-        if (error) console.warn('[dash] referral reward:', error.message);
-        else if (data && Array.isArray(data.rows)) {
-            state.dash.referralPay = { rows: data.rows, count: Number(data.count) || 0,
-                reward: Number(data.reward) || 0, paid_amount: Number(data.paid_amount) || 0 };
-        }
-    } catch (e) { console.warn('[dash] referral reward:', e && e.message); }
+    // 4. Вознаграждение за направления — REPORTS_V2: пришло в той же выплате
+    // (doctor_pay_summary.referral — строки отчёта «Рефералы» по источнику
+    // этого врача, только оплаченные счета, по дате счёта).
 
     state.dash.loaded = true;
+}
+
+// PAY_BASIS_PERFORMED_V1 — строка выплаты сервера в виде, удобном экрану.
+// Доля (fee), налог и скидка — готовые; экран их только показывает и складывает.
+function payLineRow(l) {
+    return {
+        id:          l.id,
+        kind:        l.kind,
+        status:      l.status || '',
+        date:        String(l.date || ''),
+        serviceId:   l.service_id,
+        serviceName: l.service || '(removed)',
+        patientName: l.patient || '',
+        patientMrn:  l.mrn || '',
+        admissionNo: l.admission_no || '',
+        quantity:    Number(l.qty) || 1,
+        amount:      Number(l.amount) || 0,
+        discount:    Number(l.discount) || 0,
+        total:       (Number(l.amount) || 0) - (Number(l.discount) || 0),
+        net:         Number(l.net) || 0,
+        pct:         l.pct == null ? null : Number(l.pct),
+        fix:         l.fix == null ? null : Number(l.fix),
+        fee:         Number(l.fee) || 0,
+        tier:        !!l.tier,
+        invoiced:    !!l.invoiced,
+        paid:        l.invoice_status === 'paid',
+    };
 }
 
 // REPORTS_V2 — строки вознаграждения с сервера (doctor_referral_reward) и их
@@ -1720,23 +1658,17 @@ function payRowSector(r, typeFirst) {
     return a || b || NO_SECTOR;
 }
 
-// DOCTOR_DASHBOARD_V1 — serviceRateMap()/serviceShare() ЖИВУТ В
-// doctor-dashboard.js и импортируются сверху. Здесь были их копии: две
-// реализации доли врача на одном экране разошлись бы молча — дашборд
-// показывал бы одну сумму за день, вкладка «Зарплата» — другую за тот же
-// день, и обе выглядели бы рабочими.
-
-// Salary breakdown for the period. The variable component is the sum of each
-// completed/in-progress service's after-tax revenue times its per-service %.
+// Salary breakdown for the period. PAY_BASIS_PERFORMED_V1 — the variable
+// component is the SERVER's outpatient share (doctor_pay_summary): every
+// performed service of the period, paid or not — the same number as
+// «Зарплаты врачей». Nothing is computed per line here.
 function computeSalary() {
     const doc = state.dash.doctor;
     if (!doc) return { fixed: 0, variable: 0, total: 0, kind: 'none', revenue: 0 };
-    const rateMap = serviceRateMap(doc);
-    const earning = state.dash.services.filter(s => s.status === 'completed' || s.status === 'in_progress');
-    const revenue = earning.reduce((sum, s) => sum + Number(s.total || 0), 0);
-    // DOCTOR_TIER_V1 — доля строки считается со ступенью, если сервер прислал
-    // её позицию; без позиции tierShare равна serviceShare.
-    const variableComponent = earning.reduce((sum, s) => sum + tierShare(s, rateMap, state.dash.tierPos.get(String(s.id)) || null), 0);
+    const pay = state.dash.pay || {};
+    const out = pay.outpatient || {};
+    const revenue = Number(out.amount) || 0;
+    const variableComponent = Number(out.fee) || 0;
     const fixedMonth = Number(doc.salary_fixed || 0);
 
     // Pro-rate the fixed portion for non-month periods (rough estimate).
@@ -1819,10 +1751,13 @@ function dashboardView() {
 
     const salary  = computeSalary();
     const rewards = computeReferralRewards();
-    // Ревью M2 — при окладе ступени ни на что не влияют; иначе сумма без них неверна.
-    const tierHidden = !!state.dash.tierDenied && salary.kind !== 'fixed';
+    // Ревью M2 — сервер отказал в начислениях: при окладе они ни на что не
+    // влияют; иначе показанная сумма была бы неправдой.
+    const tierHidden = !!state.dash.payDenied && salary.kind !== 'fixed';
+    // PAY_BASIS_PERFORMED_V1 — строки сервера — выполненные услуги: «завершено»
+    // и «в работе» (начатые: в работе, взят материал, есть результат).
     const completedCount = state.dash.services.filter(s => s.status === 'completed').length;
-    const inProgressCount = state.dash.services.filter(s => s.status === 'in_progress').length;
+    const inProgressCount = state.dash.services.filter(s => s.status !== 'completed').length;
     const uniquePatients = new Set(state.dash.services.map(s => s.patientName + '|' + s.patientMrn)).size;
 
     const root = h('div', { class: 'pay-page dash-fit' },
@@ -1845,7 +1780,7 @@ function dashboardView() {
         // сумму, посчитанную без них (оклад без доли за услуги от этого не
         // зависит и остаётся).
         tierHidden ? h('div', { class: 'card card-pad-sm muted', role: 'status', style: { fontSize: '12.5px' } },
-            Icon('Info', { size: 14 }), ' ', tr(TIER_DENIED_NOTE)) : null,
+            Icon('Info', { size: 14 }), ' ', tr(PAY_DENIED_NOTE)) : null,
         h('div', { class: 'dash-kpi-row' },
             kpiTile({
                 icon: 'Wallet', accent: 'ok', label: 'Зарплата',
@@ -1855,7 +1790,7 @@ function dashboardView() {
                         fix:      Math.round(salary.fixed).toLocaleString('ru-RU'),
                         variable: Math.round(salary.variable).toLocaleString('ru-RU'),
                     })
-                    : '') + (tierHidden ? ' · ' + tr(TIER_DENIED_NOTE) : ''),
+                    : '') + (tierHidden ? ' · ' + tr(PAY_DENIED_NOTE) : ''),
                 onClick: tierHidden ? null : () => openSalaryDetails(),
             }),
             kpiTile({
@@ -1880,7 +1815,7 @@ function dashboardView() {
             tierHidden
                 ? h('div', { class: 'card pay-card' },
                     h('div', { class: 'card-header' }, h('h3', null, Icon('Chart', { size: 16 }), ' ', tr('Начисления по дням'))),
-                    h('div', { class: 'card-pad-sm muted', style: { fontSize: '12.5px' } }, tr(TIER_DENIED_NOTE)))
+                    h('div', { class: 'card-pad-sm muted', style: { fontSize: '12.5px' } }, tr(PAY_DENIED_NOTE)))
                 : earningsChartCard(),
             salaryConfigCard(salary),
         ),
@@ -1943,7 +1878,7 @@ function payAction(label, icon, onclick) {
 // период одним числом, и врач не видел, из каких дней она сложилась. Теперь —
 // площадь стопкой: доля за услуги снизу, вознаграждения за направления
 // сверху, итог — верхняя кривая. Числа считаются ТЕМИ ЖЕ функциями, что и
-// плитки (serviceShare; вознаграждение — строки сервера, REPORTS_V2): график — это разложенная по дням
+// плитки (строки выплаты сервера, PAY_BASIS_PERFORMED_V1; вознаграждение — REPORTS_V2): график — это разложенная по дням
 // плитка, а не вторая арифметика.
 //
 // День — местный (ключ строится из местных часов): начисление в 23:30 лежит
@@ -1978,17 +1913,15 @@ function earningsSeries() {
     const perSvc = !!doc && doc.salary_type !== 'fixed'
         && (doc.salary_type !== 'fix_plus_kpi' || perServicePayApplies(doc));
     if (perSvc) {
-        const rateMap = serviceRateMap(doc);
         for (const s of state.dash.services) {
-            if (s.status !== 'completed' && s.status !== 'in_progress') continue;
-            const row = byKey.get(dayKey(s.createdAt));
             // CABINET_REDESIGN_V1 правило 1 — график это разложенная по дням
-            // плитка: со ступенью считается и он, иначе суммы разойдутся.
-            if (row) row.services += tierShare(s, rateMap, state.dash.tierPos.get(String(s.id)) || null);
+            // плитка: доля строки — та же, серверная, в день её выполнения.
+            const row = byKey.get(s.date);
+            if (row) row.services += s.fee;
         }
     }
-    // INPATIENT_SHARE_V1 — стационарная доля ложится в день СЧЁТА (date строки
-    // сервера — местная дата счёта), тем же правилом, что в computeSalary.
+    // INPATIENT_SHARE_V1 — стационарная доля ложится в день ВЫПОЛНЕНИЯ (date
+    // строки сервера — местный день отметки «Выполнено»), как в computeSalary.
     let inpatientAny = false;
     if (inpatientPayApplies(doc)) {
         for (const r of state.dash.inpatient.rows || []) {
@@ -2058,7 +1991,19 @@ function salaryKindLabel(kind) {
 function tierProgressRows(doc) {
     if (!perServicePayApplies(doc)) return [];
     const rateMap = serviceRateMap(doc);
-    return (state.dash.tierProgress || []).filter(p => rateMap.has(String(p.serviceId)));
+    // PAY_BASIS_PERFORMED_V1 — ставка по умолчанию из карточки тоже платит
+    // (как в ведомости), значит и ступень ей что-то обещает.
+    return (state.dash.tierProgress || []).filter(p => rateMap.has(String(p.serviceId)) || rateDefault() > 0);
+}
+// Ставка врача по умолчанию (service_rate_default) — из ответа сервера:
+// браузеру эта колонка карточки не выдаётся.
+function rateDefault() {
+    return Number(state.dash.pay && state.dash.pay.rate_default) || 0;
+}
+// Сколько выполненных услуг периода ещё без счёта (амбулатория и стационар).
+function unbilledCount() {
+    const pay = state.dash.pay || {};
+    return (Number(pay.outpatient && pay.outpatient.unbilled) || 0) + (Number(pay.inpatient && pay.inpatient.unbilled) || 0);
 }
 
 function salaryConfigCard(salary) {
@@ -2073,11 +2018,16 @@ function salaryConfigCard(salary) {
         kvRow(tr('Оклад'),         trf('{sum} UZS в месяц', { sum: Number(doc.salary_fixed || 0).toLocaleString('ru-RU') })),
         kvRow(tr('Ставки по услугам'), trf('услуг задано: {n}', { n: (Array.isArray(doc.service_rates) ? doc.service_rates.filter(r => Number(r.value != null ? r.value : r.percentage) > 0).length : 0) })),
         kvRow(tr('Выручка за период'), Math.round(salary.revenue).toLocaleString('ru-RU') + ' UZS'),
-        kvRow(tr('Начислено (после налога)'), state.dash.tierDenied ? '—' : Math.round(salary.variable).toLocaleString('ru-RU') + ' UZS'),   // ревью M2
+        kvRow(tr('Начислено (после налога)'), state.dash.payDenied ? '—' : Math.round(salary.variable).toLocaleString('ru-RU') + ' UZS'),   // ревью M2
+        // PAY_BASIS_PERFORMED_V1 — сколько из этих услуг ещё без счёта: доля по
+        // ним уже начислена, по цене, которую выставит счёт.
+        unbilledCount() > 0
+            ? kvRow(tr('Услуг без счёта'), String(unbilledCount()))
+            : null,
         // INPATIENT_SHARE_V1 — стационарная часть отдельной строкой: по
-        // оплаченным счетам стационара, исполнителю (иначе назначившему).
+        // выполненным услугам стационара, исполнителю (иначе назначившему).
         inpatientPayApplies(doc)
-            ? kvRow(tr('Стационар (оплаченные счета)'), trf('{sum} UZS · услуг: {n}', {
+            ? kvRow(tr('Стационар (выполненные услуги)'), trf('{sum} UZS · услуг: {n}', {
                 sum: Math.round(salary.inpatient || 0).toLocaleString('ru-RU'),
                 n: state.dash.inpatient.count || 0 }))
             : null,
@@ -2093,9 +2043,13 @@ function salaryConfigCard(salary) {
         ...tierProgressRows(doc).map(p => kvRow(
             trf('Ступень: {service}', { service: p.serviceName }),
             // DOCTOR_TIER_V2 — прогресс к СЛЕДУЮЩЕМУ порогу (tierProgressText).
-            // Правка ревью: ставка — та, что реально платится (не ниже личной).
+            // Правка ревью: ставка — та, что реально платится (не ниже личной;
+            // нет личной — ставка по умолчанию, как у ведомости).
             tierProgressText(p.count, p.steps && p.steps.length ? p.steps : [{ from: p.from, pct: p.pct }],
-                (serviceRateMap(doc).get(String(p.serviceId)) || {}).percentage || 0))),
+                (serviceRateMap(doc).get(String(p.serviceId)) || {}).percentage || rateDefault()))),
+        // PAY_BASIS_PERFORMED_V1 — база доли словами, как в каждом отчёте.
+        h('div', { class: 'muted', style: { fontSize: '12.5px', paddingTop: '6px' } },
+            tr('Доля врача — по выполненным услугам, оплачены они или нет.')),
         h('div', { class: 'row', style: { gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--ink-100)' } },
             h('span', { style: { fontSize: '12.5px', color: 'var(--ink-600)' } }, tr('Итого за период:')),
             h('span', { class: 'grow' }),
@@ -2253,9 +2207,14 @@ function recentServicesBody() {
     const rows = state.dash.services.slice(0, 12);
     if (!rows.length) return h('div', { class: 'empty', style: { padding: '30px 20px', fontSize: '12.5px' } }, tr('За этот период услуг нет.'));
     return h('div', null, ...rows.map((s) => payRow(
-        whenShort(s.createdAt), s.serviceName,
+        dayShort(s.date), s.serviceName,
         [s.patientName, s.patientMrn].filter(Boolean).join(' · '),
-        statusBadge(s.status), s.total.toLocaleString('ru-RU'))));
+        statusBadge(s.status), Math.round(s.total).toLocaleString('ru-RU'))));
+}
+/** «18.08» — местный день строки сервера ('YYYY-MM-DD'), без часового пояса. */
+function dayShort(ymd) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(ymd || ''));
+    return m ? m[3] + '.' + m[2] : '';
 }
 
 function recentReferralsBody() {
@@ -2337,10 +2296,14 @@ function openSalaryDetails() {
     function repaintList() {
         const list = body.querySelector('#salary-list');
         if (!list) return;
-        const rateMap = serviceRateMap(state.dash.doctor);
         const t = filterText.trim().toLowerCase();
-        const rows = state.dash.services.filter(s => {
-            if (statusFilter !== 'all' && s.status !== statusFilter) return false;
+        // PAY_BASIS_PERFORMED_V1 — строки сервера с готовой долей: амбулатория
+        // и стационар. «В работе» — начатые, но не завершённые.
+        const all = [...state.dash.services, ...state.dash.inpatient.rows]
+            .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+        const rows = all.filter(s => {
+            if (statusFilter === 'completed' && s.status !== 'completed') return false;
+            if (statusFilter === 'in_progress' && s.status === 'completed') return false;
             if (t && !(s.serviceName.toLowerCase().includes(t) || s.patientName.toLowerCase().includes(t))) return false;
             return true;
         });
@@ -2359,30 +2322,25 @@ function openSalaryDetails() {
                 h('th', { style: { textAlign: 'right' } }, tr('Моя доля')),
             )),
             h('tbody', null, ...rows.map(s => {
-                const rate = rateMap.get(String(s.serviceId));
-                const tax  = s.taxRate != null ? Number(s.taxRate) : 12;
-                const net  = Number(s.total || 0) * (1 - tax / 100);
-                // DOCTOR_TIER_V1 — разбор показывает ту же долю, что и плитка.
-                const pos = state.dash.tierPos.get(String(s.id)) || null;
-                const share = Math.round(tierShare(s, rateMap, pos));
-                const ruleParts = [];
-                if (rate && rate.price) ruleParts.push(rate.price.toLocaleString('ru-RU') + ' UZS');
-                if (rate && rate.percentage) ruleParts.push(rate.percentage + '%');
-                const ruleLabel = ruleParts.length ? ruleParts.join(' + ') : '—';
+                // PAY_BASIS_PERFORMED_V1 — доля, налог и ставка — строки сервера:
+                // ровно то, что начислит ведомость.
+                const share = Math.round(s.fee);
+                const ruleLabel = s.fix != null ? trf('фикс {sum} UZS', { sum: s.fix.toLocaleString('ru-RU') })
+                    : s.pct != null ? (Math.round(s.pct * 100) / 100) + '%' : '—';
+                const note = (label) => h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } }, tr(label));
                 return h('tr', null,
-                    h('td', { class: 'num muted', style: { fontSize: '12.5px' } }, formatDateTime(s.createdAt)),
-                    h('td', { class: 'cell-strong' }, s.serviceName),
+                    h('td', { class: 'num muted', style: { fontSize: '12.5px' } }, dayShort(s.date)),
+                    h('td', { class: 'cell-strong' }, s.serviceName, s.kind === 'in' ? note('Стационар') : null),
                     h('td', null, s.patientName),
-                    h('td', { class: 'num', style: { textAlign: 'right' } }, s.total.toLocaleString('ru-RU')),
-                    h('td', { class: 'num', style: { textAlign: 'right' } }, Math.round(net).toLocaleString('ru-RU')),
+                    h('td', { class: 'num', style: { textAlign: 'right' } }, Math.round(s.total).toLocaleString('ru-RU'),
+                        s.invoiced ? null : note('без счёта')),
+                    h('td', { class: 'num', style: { textAlign: 'right' } }, Math.round(s.net).toLocaleString('ru-RU')),
                     h('td', { class: 'num muted', style: { textAlign: 'right', fontSize: '12.5px' } }, ruleLabel),
                     h('td', { class: 'num cell-strong', style: { textAlign: 'right', color: share ? 'var(--ok-700)' : 'var(--ink-400)' } },
                         share.toLocaleString('ru-RU'),
                         // Пометка стоит только там, где ступень действительно
                         // сработала — единиц выше порога больше нуля.
-                        pos && Number(pos.units_above) > 0
-                            ? h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } }, tr('ступень'))
-                            : null),
+                        s.tier ? note('ступень') : null),
                 );
             })),
         ));

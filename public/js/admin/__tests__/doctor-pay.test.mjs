@@ -104,19 +104,35 @@ const REFERRALS = [
     patients: P1 },
 ];
 
-// DOCTOR_TIER_V1 — ответ doctor_tier_positions: нумерацию строк по ступеням
-// считает СЕРВЕР, кабинет её только применяет. Ответ — за ДИАПАЗОН месяцев
-// ({ from, to, rows }), и у каждой строки есть свой ym: кабинет спрашивает
-// один раз и раскладывает строки по месяцам сам. По умолчанию ступеней нет.
+// DOCTOR_TIER_V1 — ответ doctor_tier_positions: теперь ТОЛЬКО прогресс ступени
+// текущего месяца («26 из 25»); доля со ступенью уже в строках выплаты.
 const monthKeyOf = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+const dayKeyOf = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 let TIER_RESPONSE = { from: '', to: '', rows: [] };
-let TIER_FORBID = false;   // ROLE_REPORTS_SETTINGS_V1 (ревью M2) — сервер отказал в ступенях
-// INPATIENT_SHARE_V1 — ответ doctor_inpatient_share; по умолчанию стационара нет.
-let INPATIENT_RESPONSE = { rows: [], count: 0, fee: 0 };
-let inpatientCalls = [];
-// REPORTS_V2 — ответ doctor_referral_reward; по умолчанию вознаграждения нет.
-let REFERRAL_RESPONSE = { rows: [], count: 0, reward: 0, paid_amount: 0 };
-let referralCalls = [];
+// PAY_BASIS_PERFORMED_V1 — ВСЯ выплата приходит одним ответом doctor_pay_summary:
+// строки с ГОТОВОЙ долей (как в «Зарплатах врачей»), итоги частей и
+// вознаграждение за направления. Кабинет ничего не считает — только
+// складывает и раскладывает по дням. По умолчанию: две выполненные услуги
+// «Приём» по 100 000 (сегодня и вчера), 40 % при нулевом налоге — по 40 000.
+const payLine = (id, d, fee, extra = {}) => ({
+  kind: 'out', id, date: dayKeyOf(d), status: 'completed', visit_id: 'v-' + id, admission_no: null,
+  patient: 'Иванов Пётр', mrn: 'MRN-001', service_id: 's-1', service: 'Приём', qty: 1,
+  amount: 100000, discount: 0, tax: 0, net: 100000, pct: 40, fix: null, fee, tier: false,
+  invoiced: false, invoice: '', invoice_status: null, doctor_role: null, ...extra,
+});
+const part = (lines) => ({
+  count: lines.length, unbilled: lines.filter((l) => !l.invoiced).length,
+  amount: lines.reduce((n, l) => n + l.amount - l.discount, 0),
+  net: lines.reduce((n, l) => n + l.net, 0), fee: lines.reduce((n, l) => n + l.fee, 0),
+});
+const NO_REFERRAL = () => ({ rows: [], count: 0, reward: 0, paid_amount: 0 });
+function payResponse({ out = [payLine(1, now, 40000), payLine(2, yesterday, 40000)], inp = [], referral = NO_REFERRAL() } = {}) {
+  return { from: '', to: '', rate_default: 0, outpatient: part(out), inpatient: part(inp), referral,
+           total: part(out).fee + part(inp).fee + referral.reward, lines: [...out, ...inp] };
+}
+let PAY_RESPONSE = payResponse();
+let PAY_FORBID = false;   // ROLE_REPORTS_SETTINGS_V1 (ревью M2) — сервер отказал в начислениях
+let payCalls = [];
 
 function matches(row, f) {
   if (f.or) return true;
@@ -145,18 +161,17 @@ globalThis.fetch = async (url, opts) => {
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (u.startsWith('/api/rpc/doctor_tier_positions')) {
     tierCalls.push(body);
-    if (TIER_FORBID) return { ok: false, status: 403, json: async () => ({ error: { code: 'forbidden', message: 'Можно смотреть только свои начисления.' } }) };
     return { ok: true, json: async () => ({ data: TIER_RESPONSE }) };
   }
-  // INPATIENT_SHARE_V1 — стационарная доля приходит готовой с сервера.
-  if (u.startsWith('/api/rpc/doctor_inpatient_share')) {
-    inpatientCalls.push(body);
-    return { ok: true, json: async () => ({ data: INPATIENT_RESPONSE }) };
+  // PAY_BASIS_PERFORMED_V1 — выплата приходит готовой с сервера.
+  if (u.startsWith('/api/rpc/doctor_pay_summary')) {
+    payCalls.push(body);
+    if (PAY_FORBID) return { ok: false, status: 403, json: async () => ({ error: { code: 'forbidden', message: 'Можно смотреть только свои начисления.' } }) };
+    return { ok: true, json: async () => ({ data: PAY_RESPONSE }) };
   }
-  // REPORTS_V2 — вознаграждение за направления приходит готовым с сервера.
-  if (u.startsWith('/api/rpc/doctor_referral_reward')) {
-    referralCalls.push(body);
-    return { ok: true, json: async () => ({ data: REFERRAL_RESPONSE }) };
+  // Прежние вызовы кабинет больше не делает: доля — только из doctor_pay_summary.
+  if (u.startsWith('/api/rpc/doctor_inpatient_share') || u.startsWith('/api/rpc/doctor_referral_reward')) {
+    throw new Error('кабинет позвал старый вызов начислений: ' + u);
   }
   if (u.startsWith('/api/rpc/')) return { ok: true, json: async () => ({ data: null }) };
   if (u.startsWith('/api/db')) {
@@ -208,6 +223,10 @@ test('плитка «Зарплата» показывает долю врача
   const tip = byClass(chart, 'dash-chart-tip')[0];
   assert.ok(tip && !tip.hidden, 'подсказка не показалась');
   assert.ok(textOf(tip).includes('40 000'), 'подсказка дня не сходится с долей: ' + textOf(tip));
+  // PAY_BASIS_PERFORMED_V1 — кабинет больше не собирает деньги сам: ни строк
+  // счетов, ни счетов, ни строк визита «для доли» он не читает.
+  assert.ok(!dbCalls.some((c) => ['invoice_items', 'invoices', 'visit_services'].includes(c.table)),
+    'вкладка «Зарплата» читает таблицы денег напрямую: ' + dbCalls.map((c) => c.table).join(','));
 });
 
 test('быстрые действия стоят в шапке графика и открывают разборы', async () => {
@@ -287,31 +306,32 @@ test('«Мои приёмы» помещается в экран: прокруч
   assert.ok(header && walk(header).some((n) => n.tagName === 'INPUT'), 'поиск не в шапке карточки');
 });
 
-test('DOCTOR_TIER_V1: позиции сервера меняют сумму и рисуют прогресс ступени', async () => {
-  // sv-1 — 26-я строка месяца: 1 единица по ступени 50 % вместо личных 40 %.
-  // ym у каждой строки свой, как отдаёт сервер: прогресс месяца собирается
-  // только по строкам ТЕКУЩЕГО месяца.
-  TIER_RESPONSE = { from: monthKeyOf(yesterday), to: monthKeyOf(now), rows: [
-    { visit_service_id: 'sv-1', service_id: 's-1', service_name: 'Приём', ym: monthKeyOf(now), units: 1, units_above: 1, tier_from: 25, tier_percent: 50, count_so_far: 26 },
-    { visit_service_id: 'sv-2', service_id: 's-1', service_name: 'Приём', ym: monthKeyOf(yesterday), units: 1, units_above: 0, tier_from: 25, tier_percent: 50, count_so_far: 25 },
+// PAY_BASIS_PERFORMED_V1 — было: кабинет применял позиции ступени сам
+// (tierShare). Теперь сервер отдаёт долю строки уже со ступенью; позиции
+// спрашиваются одним запросом за ТЕКУЩИЙ месяц — только ради прогресса.
+test('DOCTOR_TIER_V1: доля со ступенью приходит с сервера, прогресс ступени — из позиций', async () => {
+  // Сегодняшняя строка — 26-я строка месяца: сервер уже посчитал её по 50 %.
+  PAY_RESPONSE = payResponse({ out: [payLine(1, now, 50000, { tier: true, pct: 50 }), payLine(2, yesterday, 40000)] });
+  TIER_RESPONSE = { from: monthKeyOf(now), to: monthKeyOf(now), rows: [
+    { visit_service_id: 1, service_id: 's-1', service_name: 'Приём', ym: monthKeyOf(now), units: 1, units_above: 1, tier_from: 25, tier_percent: 50, count_so_far: 26 },
   ] };
   let root = null;
   try {
     root = await openPay();
-    // Вкладка грузит деньги ОДИН раз на процесс, и первый тест файла уже успел
-    // их прочитать без ступеней. Переключение периода — тот же путь, которым
-    // это делает врач: оно перечитывает всё заново, теперь уже с позициями.
+    // Переключение периода — тот же путь, которым это делает врач: оно
+    // перечитывает всё заново.
     tierCalls = [];
+    payCalls = [];
     buttonByText(root, /7 дней/).click();
     await tick(80);
-    // ПРАВИЛО: позиции спрашиваются ОДНИМ запросом за диапазон месяцев, а не по
-    // одному запросу на месяц — цикл по месяцам на «12 месяцев» это двенадцать
-    // запросов подряд.
+    assert.strictEqual(payCalls.length, 1, 'выплата спрошена одним запросом: ' + payCalls.length);
+    assert.strictEqual(String(payCalls[0].doctor_id), 'u-doc');
+    assert.match(String(payCalls[0].from), /^\d{4}-\d{2}-\d{2}$/);
+    assert.match(String(payCalls[0].to), /^\d{4}-\d{2}-\d{2}$/);
     assert.strictEqual(tierCalls.length, 1, 'запросов позиций: ' + tierCalls.length);
-    assert.ok(tierCalls[0].from && tierCalls[0].to, 'позиции запрошены не диапазоном: ' + JSON.stringify(tierCalls[0]));
-    assert.ok(!('month' in tierCalls[0]), 'в запросе остался месяц: ' + JSON.stringify(tierCalls[0]));
+    assert.deepStrictEqual([tierCalls[0].from, tierCalls[0].to], [monthKeyOf(now), monthKeyOf(now)], 'прогресс — за текущий месяц');
     const txt = textOf(root);
-    // 100 000 × 50 % + 100 000 × 40 % = 90 000 (без ступени было бы 80 000).
+    // 50 000 (по ступени) + 40 000 = 90 000 — ровно то, что прислал сервер.
     // Число проверяется НА ПЛИТКЕ, а не где-нибудь на вкладке: «90 000» в общем
     // тексте мог бы нарисовать и соседний список.
     const salary = byClass(root, 'dash-kpi').find((t) => textOf(t).includes('Зарплата'));
@@ -331,6 +351,7 @@ test('DOCTOR_TIER_V1: позиции сервера меняют сумму и �
     assert.ok(textOf(tip).includes('50 000'), 'подсказка дня не учла ступень: ' + textOf(tip));
   } finally {
     TIER_RESPONSE = { from: '', to: '', rows: [] };
+    PAY_RESPONSE = payResponse();
     // Вернуть вкладку в исходный период — состояние живёт дольше теста.
     if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
   }
@@ -341,22 +362,20 @@ test('DOCTOR_TIER_V1: позиции сервера меняют сумму и �
 // прибавляет к плитке, раскладывает по дням на графике и называет отдельной
 // строкой в «Как считается зарплата».
 test('INPATIENT_SHARE_V1: стационарная доля с сервера входит в плитку, график и карточку', async () => {
-  const dayKey = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  INPATIENT_RESPONSE = { rows: [{ date: dayKey(now), service: 'Перевязка', fee: 30000, net: 300000, pct: 10, doctor_role: 'performer' }], count: 1, fee: 30000 };
+  const inLine = payLine(9, now, 30000, { kind: 'in', service: 'Перевязка', amount: 300000, net: 300000, pct: 10, doctor_role: 'performer', admission_no: 'A-1' });
+  PAY_RESPONSE = payResponse({ inp: [inLine] });
   let root = null;
   try {
     root = await openPay();
-    inpatientCalls = [];
+    payCalls = [];
     buttonByText(root, /7 дней/).click();
     await tick(80);
-    assert.strictEqual(inpatientCalls.length, 1, 'стационар спрошен одним запросом');
-    assert.match(String(inpatientCalls[0].from), /^\d{4}-\d{2}-\d{2}$/);
-    assert.match(String(inpatientCalls[0].to), /^\d{4}-\d{2}-\d{2}$/);
+    assert.strictEqual(payCalls.length, 1, 'выплата со стационаром спрошена одним запросом');
     const salary = byClass(root, 'dash-kpi').find((t) => textOf(t).includes('Зарплата'));
     // 80 000 за услуги + 30 000 стационар.
     assert.ok(textOf(salary).includes('110 000'), 'плитка не учла стационар: ' + textOf(salary));
     const cfg = byClass(root, 'card').find((c) => textOf(c).includes('Как считается зарплата'));
-    assert.ok(/Стационар \(оплаченные счета\)/.test(textOf(cfg)), 'нет строки стационара');
+    assert.ok(/Стационар \(выполненные услуги\)/.test(textOf(cfg)), 'нет строки стационара');
     assert.ok(textOf(cfg).includes('30 000 UZS · услуг: 1'), textOf(cfg));
     const card = byClass(root, 'card').find((c) => textOf(c).includes('Начисления по дням'));
     const svg = chartSvgs(card)[0];
@@ -368,7 +387,7 @@ test('INPATIENT_SHARE_V1: стационарная доля с сервера в
     // Сегодня: услуга 40 000 + стационар 30 000 — график сходится с плиткой.
     assert.ok(textOf(tip).includes('30 000') && textOf(tip).includes('40 000'), 'подсказка дня: ' + textOf(tip));
   } finally {
-    INPATIENT_RESPONSE = { rows: [], count: 0, fee: 0 };
+    PAY_RESPONSE = payResponse();
     if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
   }
 });
@@ -378,20 +397,20 @@ test('INPATIENT_SHARE_V1: стационарная доля с сервера в
 // «Рефералы»: строка счёта после скидки, только оплаченные счета); кабинет
 // больше не считает её от цены каталога рекомендаций.
 test('REPORTS_V2: вознаграждение за направления с сервера — в плитке, графике и разборе', async () => {
-  const dayKey = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  REFERRAL_RESPONSE = { rows: [
-    { date: dayKey(now), invoice: 'INV-9', status: 'paid', paid: true, patient: 'Иванов Пётр', service: 'УЗИ',
+  PAY_RESPONSE = payResponse({ referral: { rows: [
+    { date: dayKeyOf(now), invoice: 'INV-9', status: 'paid', paid: true, patient: 'Иванов Пётр', service: 'УЗИ',
       service_type: 'Диагностика', service_category: '', qty: 1, amount: 45000, rate: '10 %', reward: 4500 },
-  ], count: 1, reward: 4500, paid_amount: 45000 };
+  ], count: 1, reward: 4500, paid_amount: 45000 } });
   let root = null;
   try {
     root = await openPay();
-    referralCalls = [];
+    payCalls = [];
     buttonByText(root, /7 дней/).click();
     await tick(80);
-    assert.strictEqual(referralCalls.length, 1, 'вознаграждение спрошено одним запросом');
-    assert.strictEqual(String(referralCalls[0].doctor_id), 'u-doc');
-    assert.match(String(referralCalls[0].from), /^\d{4}-\d{2}-\d{2}$/);
+    // PAY_BASIS_PERFORMED_V1 — вознаграждение едет в той же выплате.
+    assert.strictEqual(payCalls.length, 1, 'вознаграждение спрошено одним запросом');
+    assert.strictEqual(String(payCalls[0].doctor_id), 'u-doc');
+    assert.match(String(payCalls[0].from), /^\d{4}-\d{2}-\d{2}$/);
     const tile = byClass(root, 'dash-kpi').find((t) => textOf(t).includes('Вознаграждения за направления'));
     // 4 500 с сервера, а не 50 000 × ставка от цены каталога рекомендации.
     assert.ok(textOf(tile).includes('4 500'), 'плитка не взяла сумму сервера: ' + textOf(tile));
@@ -400,30 +419,32 @@ test('REPORTS_V2: вознаграждение за направления с с
     const card = byClass(root, 'card').find((c) => textOf(c).includes('Вид услуги'));
     assert.ok(textOf(card).includes('4 500') && textOf(card).includes('45 000'), 'разбор: ' + textOf(card));
   } finally {
-    REFERRAL_RESPONSE = { rows: [], count: 0, reward: 0, paid_amount: 0 };
+    PAY_RESPONSE = payResponse();
     if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
   }
 });
 
-// ROLE_REPORTS_SETTINGS_V1 (ревью M2) — сервер отказал в ступенях (смотрит не
-// сам врач и без «Оплаты врачей»): кабинет не имеет права показать сумму БЕЗ
-// ступеней как настоящую — он говорит, почему её нет, и прячет её.
-test('ступени не пришли (403): видно объяснение, а доля без ступеней не выдаётся за зарплату', async () => {
+// ROLE_REPORTS_SETTINGS_V1 (ревью M2) — сервер отказал в начислениях (смотрит
+// не сам врач и без «Оплаты врачей»): кабинет не имеет права показать ноль как
+// настоящую зарплату — он говорит, почему суммы нет, и прячет её.
+// PAY_BASIS_PERFORMED_V1 — было «ступени не пришли»: отказ теперь один — на
+// всю выплату (doctor_pay_summary).
+test('начисления не пришли (403): видно объяснение, а ноль не выдаётся за зарплату', async () => {
   let root = null;
-  TIER_FORBID = true;
+  PAY_FORBID = true;
   try {
     root = await openPay();
     buttonByText(root, /7 дней/).click();
     await tick(80);
     const txt = textOf(root);
-    assert.ok(txt.includes('Ступени доли не загружены — нет права на отчёт «Оплата врачей»'), 'отказ сервера промолчал');
+    assert.ok(txt.includes('Начисления не загружены — нет права на отчёт «Оплата врачей»'), 'отказ сервера промолчал');
     const salary = byClass(root, 'dash-kpi').find((t) => textOf(t).includes('Зарплата'));
     assert.ok(salary, 'нет плитки «Зарплата»');
     assert.ok(!/\d0 000/.test(textOf(salary)), 'плитка показала сумму без ступеней: ' + textOf(salary));
     assert.ok(!byClass(root, 'card').some((c) => textOf(c).includes('Начисления по дням') && byClass(c, 'dash-chart').length),
       'график начислений нарисован без ступеней');
   } finally {
-    TIER_FORBID = false;
+    PAY_FORBID = false;
     if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
   }
 });
