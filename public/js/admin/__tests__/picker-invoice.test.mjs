@@ -39,7 +39,8 @@ class F {
   contains() { return false; }
   remove() { if (this.parentElement) this.parentElement.removeChild(this); }
   getBoundingClientRect() { return { top: 0, left: 0, right: 200, bottom: 60, width: 200, height: 60 }; }
-  querySelector() { return null; }
+  // бланк печати (doc-settings.js) навешивает кнопки на найденные узлы
+  querySelector() { return new F('div'); }
   querySelectorAll() { return []; }
   get textContent() { return this._t; }
   set textContent(v) { this._t = String(v); this.children.length = 0; }
@@ -193,5 +194,60 @@ test('wizSave выставляет счёт через invoicePickerLines, см�
     const direct = new RegExp("from\\('" + t + "'\\)\\s*\\.(insert|update|delete)");
     assert.ok(direct.test(".from('" + t + "').insert({})"), 'сама проверка сломана');
     assert.ok(!direct.test(src), 'прямая запись в ' + t);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Окно визита (visit-modal.js) — та же болезнь: «Сформировать счёт», «Оплата»
+// и «Оставить как долг» писали invoices / invoice_items / payments напрямую.
+// ═══════════════════════════════════════════════════════════════════════════
+const VM = await import('../views/visit-modal.js');
+
+function vmState() {
+  return {
+    visit: { id: 40, patient_id: 3, visit_date: new Date().toISOString() },
+    patient: { id: 3, full_name: 'Иванов Иван' },
+    services: [
+      { id: 101, service_id: 21, invoice_item_id: null, __service_name: 'МРТ', unit_price: 900000, quantity: 1 },
+      { id: 102, service_id: 22, invoice_item_id: null, __service_name: 'Анализ крови', unit_price: 100000, quantity: 1 },
+    ],
+  };
+}
+
+test('окно визита: «Сформировать счёт» — create_invoice_for_visit, скидку пакета даёт сервер', async () => {
+  seed();
+  await VM.generateInvoiceFromSelection(vmState(), new Set([101, 102]), () => {});
+  const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+  assert.ok(inv, 'счёт не создан: ' + JSON.stringify(RPC));
+  assert.equal(inv.subtotal, 1000000);
+  assert.equal(inv.discount_amount, 20000, 'строка пакета получила свою скидку на сервере');
+  assert.ok(RPC.some((r) => r.name === 'create_invoice_for_visit'));
+  assert.ok(!DBWRITES.some((t) => ['invoices', 'invoice_items', 'payments'].includes(t)), 'клиентская запись в деньги: ' + DBWRITES.join(','));
+  assert.equal(DB.prepare('SELECT COUNT(*) c FROM visit_services WHERE visit_id = 40 AND invoice_item_id IS NOT NULL').get().c, 2);
+});
+
+test('окно визита: оплата — record_payment, долг — mark_invoice_debt', async () => {
+  seed();
+  await VM.generateInvoiceFromSelection(vmState(), new Set([101]), () => {});
+  const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+  USER = { id: 1, role: 'cashier', extra_roles: [] };
+  try {
+    RPC.length = 0; DBWRITES.length = 0;
+    await VM.takePayment(vmState(), inv, 300000, 'partial', () => {}, 'card');
+    let row = DB.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
+    assert.equal(row.paid_amount, 300000, 'оплата не проведена: ' + JSON.stringify(RPC));
+    assert.equal(row.status, 'partial');
+    const pay = DB.prepare('SELECT * FROM payments WHERE invoice_id = ?').get(inv.id);
+    assert.equal(pay.method, 'card');
+    assert.ok(pay.shift_id, 'платёж обязан лечь в смену кассира');
+    assert.equal(DB.prepare("SELECT status FROM visit_services WHERE id = 101").get().status, 'queued', 'услуга не отпущена в очередь');
+
+    await VM.markAsDebt(vmState(), row, () => {});
+    row = DB.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
+    assert.equal(row.status, 'debt');
+    assert.ok(RPC.some((r) => r.name === 'record_payment') && RPC.some((r) => r.name === 'mark_invoice_debt'));
+    assert.ok(!DBWRITES.some((t) => ['invoices', 'invoice_items', 'payments'].includes(t)), 'клиентская запись в деньги: ' + DBWRITES.join(','));
+  } finally {
+    USER = { id: 1, role: 'registrar', extra_roles: [] };
   }
 });

@@ -3135,7 +3135,7 @@ export function openServicePickerModal({
                         name: r.a.service?.name || 'Услуга', qty: 1, price: Number(r.unitPrice || 0), _alt: i % 2 === 1,
                     }));
                     const actTotal = actItems.reduce((sx, it) => sx + it.price, 0);
-                    const actNo = visit.visit_number || visit.id.slice(0, 8);
+                    const actNo = visit.visit_number || String(visit.id);   // RPC_PORT_V1 — id офлайн целый: .slice() ронял печать акта
                     /* i18n-exempt-end */
                     /* i18n-exempt-start: печатный акт оказанных услуг — печатный документ */
                     printableSheet({ type: 'act', idLine: actNo, data: {
