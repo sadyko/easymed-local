@@ -3,6 +3,9 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // DEPOSIT_WALLET_V1, ревью M1 — полный возврат на баланс отменяет счёт
+  "Если по счёту больше не осталось денег — отменить счёт": {"en":"If no money is left on the invoice — cancel the invoice","ru":"Если по счёту больше не осталось денег — отменить счёт","uz":"Agar hisobda pul qolmasa — hisobni bekor qilish"},
+  "Счёт не отменён: {msg}": {"en":"The invoice was not cancelled: {msg}","ru":"Счёт не отменён: {msg}","uz":"Hisob bekor qilinmadi: {msg}"},
   // DOCTOR_PUBLIC_PROFILE_V1 (2026-09-26) — публичный профиль врача в карточке сотрудника
   "Публичный профиль": {"en":"Public profile","ru":"Публичный профиль","uz":"Ommaviy profil"},
   "ФИО (RU)": {"en":"Full name (RU)","ru":"ФИО (RU)","uz":"F.I.Sh. (RU)"},

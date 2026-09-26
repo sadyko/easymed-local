@@ -81,6 +81,15 @@ function cleanValue(key, v) {
   if (typeof v !== 'string') throw new RpcError(key + ' must be a link.', 400);
   const s = v.trim();
   if (s === '') return '';
+  // DOCTOR_PUBLIC_PROFILE_V1, ревью M4 — фото только из СВОЕГО хранилища
+  // (корзина doctor-photos, routes/storage.js): внешняя картинка ушла бы
+  // партнёрам как фото врача, которое клиника не хранит и не контролирует.
+  if (key === 'photo_url') {
+    if (!/^\/api\/storage\/doctor-photos\/[A-Za-z0-9._~%\/-]+$/.test(s) || s.includes('..') || s.length > 500) {
+      throw new RpcError('photo_url must be a photo uploaded to the clinic storage.', 400);
+    }
+    return s;
+  }
   if (s.length > 2000 || !(/^https?:\/\//i.test(s) || /^\/[^/]/.test(s))) {
     throw new RpcError(key + ' must be an http(s) link.', 400);
   }

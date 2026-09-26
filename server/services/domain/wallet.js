@@ -31,9 +31,23 @@ export function walletBalance(db, patientId) {
 
 // Счёт, созданный приёмом депозита (DEP-…). Оплачивать его балансом или
 // возвращать его платёж «на баланс» бессмысленно — это и есть сам баланс.
-export function isDepositInvoice(db, invoiceId) {
-  return !!db.prepare("SELECT 1 FROM patient_deposits WHERE invoice_id = ? AND kind = 'deposit' LIMIT 1").get(invoiceId);
+//
+// Ревью C1 — признаков два: строка депозита в ЭТОМ здании (patient_deposits не
+// ездит) и номер DEP-… (номер депозита становится номером счёта и ездит с ним).
+export function isDepositInvoice(db, invoiceOrId) {
+  const inv = typeof invoiceOrId === 'object' && invoiceOrId
+    ? invoiceOrId : db.prepare('SELECT id, invoice_number FROM invoices WHERE id = ?').get(invoiceOrId);
+  if (!inv) return false;
+  if (String(inv.invoice_number || '').startsWith('DEP-')) return true;
+  return !!db.prepare("SELECT 1 FROM patient_deposits WHERE invoice_id = ? AND kind = 'deposit' LIMIT 1").get(inv.id);
 }
+
+// Ревью C1 — деньги счёта депозита двигают ТОЛЬКО «Принять депозит» и «Вернуть
+// депозит» (rpc/deposits.js): они же ведут строку депозита. Возврат его
+// платежа через refund_payment выдавал деньги, не трогая депозит, — и
+// refund_deposit потом выдавал их второй раз.
+export const DEPOSIT_INVOICE_REFUSAL =
+  'Это счёт депозита — его деньги принимает и возвращает только кнопка «Вернуть депозит» в разделе «Депозиты» кассы.';
 
 function actorName(user) {
   return String((user && (user.full_name || user.username)) || '');
@@ -44,9 +58,7 @@ function actorName(user) {
 // второй увидит строку первого.
 export function spendWallet(db, { patientId, invoice, paymentId, amount, user }) {
   if (!patientId) throw new WalletError('У счёта нет пациента — оплатить с баланса нельзя.');
-  if (isDepositInvoice(db, invoice.id)) {
-    throw new WalletError('Это счёт самого депозита — оплатить его с баланса нельзя.');
-  }
+  if (isDepositInvoice(db, invoice)) throw new WalletError(DEPOSIT_INVOICE_REFUSAL);
   const balance = walletBalance(db, patientId);
   if (amount > balance) {
     throw new WalletError(`На балансе пациента только ${balance} — списать ${amount} нельзя.`);

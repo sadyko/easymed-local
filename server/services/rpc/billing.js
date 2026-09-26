@@ -22,7 +22,9 @@ import { localDate } from '../domain/day.js';
 import { restoreSources } from './inventory.js';
 // DEPOSIT_WALLET_V1 — баланс пациента: списание при оплате «с баланса» и
 // зачисление при возврате «на баланс» — в той же транзакции, что платёж.
-import { spendWallet, creditWallet, isDepositInvoice, WalletError } from '../domain/wallet.js';
+import { spendWallet, creditWallet, isDepositInvoice, walletBalance, WalletError, DEPOSIT_INVOICE_REFUSAL } from '../domain/wallet.js';
+// Ревью I4 — возврат откатывает кэшбэк этого счёта.
+import { reverseCashback } from './cashback.js';
 // CARD_BALANCE_V1 — подарочная карта / сертификат платит своим остатком.
 import { spendCard, returnToCard, CardError } from '../domain/cards.js';
 
@@ -511,6 +513,7 @@ export function recordPayment(db, args, user) {
       throw new RpcError('invoice not found.', 400);
     }
     assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
+    if (isDepositInvoice(db, invoice)) throw new RpcError(DEPOSIT_INVOICE_REFUSAL, 400);   // ревью C1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
       throw new RpcError(`invoice is ${invoice.status}.`, 400);
     }
@@ -619,6 +622,7 @@ export function recordPaymentSplit(db, args, user) {
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
     if (!invoice) throw new RpcError('invoice not found.', 400);
     assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
+    if (isDepositInvoice(db, invoice)) throw new RpcError(DEPOSIT_INVOICE_REFUSAL, 400);   // ревью C1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
       throw new RpcError(`invoice is ${invoice.status}.`, 400);
     }
@@ -626,6 +630,15 @@ export function recordPaymentSplit(db, args, user) {
     if (balance <= 0) throw new RpcError('invoice already paid (balance due is 0).', 400);
     if (totalTendered > balance) {
       throw new RpcError(`amount exceeds balance due (${balance})`, 400);
+    }
+    // Ревью M2 — все части «с баланса» вместе против НАСТОЯЩЕГО баланса, до
+    // первой записи: отказ называет баланс пациента, а не остаток после
+    // первой части.
+    const walletTotal = round2(tenders.filter((t) => t.method === 'wallet').reduce((s2, t) => s2 + t.amt, 0));
+    if (walletTotal > 0) {
+      if (!invoice.patient_id) throw new RpcError('У счёта нет пациента — оплатить с баланса нельзя.', 400);
+      const have = walletBalance(db, invoice.patient_id);
+      if (walletTotal > have) throw new RpcError(`На балансе пациента только ${have} — списать ${walletTotal} нельзя.`, 400);
     }
 
     const shiftId = ensureOpenShift(db, user).id;
@@ -943,6 +956,8 @@ export function refundPayment(db, args, user) {
     // соседа, и его выручку.
     assertOwnBuilding(db, p, 'Платёж');
     assertOwnBuilding(db, invoice, 'Счёт');
+    // Ревью C1 — платёж счёта депозита возвращает только refund_deposit.
+    if (isDepositInvoice(db, invoice)) throw new RpcError(DEPOSIT_INVOICE_REFUSAL, 400);
 
     // The tag must match on a BOUNDARY, not a bare prefix: `LIKE 'REFUND#1%'`
     // also matches REFUND#10 / REFUND#123, so refunds of other payments were
@@ -998,12 +1013,7 @@ export function refundPayment(db, args, user) {
     const toBalance = toCard ? false : (toBalanceRaw === undefined || toBalanceRaw === null
       ? p.method === 'wallet'
       : (toBalanceRaw === true || toBalanceRaw === 1));
-    if (toBalance) {
-      if (!invoice.patient_id) throw new RpcError('У счёта нет пациента — зачислить на баланс некому.', 400);
-      if (isDepositInvoice(db, invoice.id)) {
-        throw new RpcError('Это счёт депозита — его возвращают кнопкой «Вернуть депозит», а не на баланс.', 400);
-      }
-    }
+    if (toBalance && !invoice.patient_id) throw new RpcError('У счёта нет пациента — зачислить на баланс некому.', 400);
     const refundMethod = toCard ? 'gift_card' : toBalance ? 'wallet' : (p.method === 'wallet' ? 'cash' : p.method);
 
     const refundInfo = db.prepare(`
@@ -1028,6 +1038,9 @@ export function refundPayment(db, args, user) {
       db.prepare('UPDATE invoices SET paid_amount = ?, status = ?, paid_at = NULL WHERE id = ?').run(newPaid, status, invoice.id);
       // CANCEL_MEANS_CANCEL_V1 — полный возврат это отмена: плитка «ОТМЕНЁН» считает его по этому дню.
       if (status === 'refunded') db.prepare("UPDATE invoices SET voided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(invoice.id);
+      // Ревью I4 — счёт больше не оплачен целиком: кэшбэк за него откатывается
+      // (сколько есть на балансе; потраченное — уже услуги).
+      reverseCashback(db, invoice, user);
     }
 
     return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id), to_balance: toBalance, ...(card ? { to_card: card } : {}) };

@@ -95,7 +95,19 @@ test('проверка значений: стаж — целое 0..80 или п
   assert.throws(() => updateMyDoctorProfile(db, { p: { experience_years: 500 } }, doc), (e) => e.status === 400);
   assert.throws(() => updateMyDoctorProfile(db, { p: { instagram_url: 'javascript:alert(1)' } }, doc), (e) => e.status === 400);
   assert.throws(() => updateMyDoctorProfile(db, { p: { education_entries: 'nope' } }, doc), (e) => e.status === 400);
-  assert.doesNotThrow(() => updateMyDoctorProfile(db, { p: { experience_years: null, photo_url: '/storage/v1/object/public/doctor-photos/doctors/2/a.jpg', telegram_url: 'https://t.me/x' } }, doc));
+  assert.doesNotThrow(() => updateMyDoctorProfile(db, { p: { experience_years: null, photo_url: '/api/storage/doctor-photos/doctors/2/a.jpg', telegram_url: 'https://t.me/x' } }, doc));
+});
+
+// DOCTOR_PUBLIC_PROFILE_V1, ревью M4 — фото только из своего хранилища: внешняя
+// ссылка ушла бы партнёрам в API как чужая картинка, которую клиника не хранит
+// и не контролирует; путь с «..» — выход из папки врача.
+test('photo_url: только путь хранилища doctor-photos, внешние ссылки и выход из папки — отказ', () => {
+  const db = seed();
+  for (const bad of ['https://example.com/a.jpg', 'http://x/a.jpg', '/api/storage/patient-photos/p/1.jpg',
+    '/api/storage/doctor-photos/../patient-photos/1.jpg', '/storage/v1/object/public/doctor-photos/doctors/2/a.jpg', '//evil/a.jpg']) {
+    assert.throws(() => updateMyDoctorProfile(db, { p: { photo_url: bad } }, doc), (e) => e.status === 400, bad);
+  }
+  assert.doesNotThrow(() => updateMyDoctorProfile(db, { p: { photo_url: '' } }, doc), 'пусто — убрать фото');
 });
 
 test('белый список совпадает с тем, что шлёт экран', () => {

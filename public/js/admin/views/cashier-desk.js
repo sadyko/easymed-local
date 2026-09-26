@@ -973,7 +973,11 @@ function invoiceRow(inv, root) {
             Icon('Wallet', { size: 13 }), ' Оплатить')
         : null;
     // CASHIER_REFUND_V1 — money was taken → offer the refund flow.
-    const refundBtn = (!cancelled && inv.paid_amount > 0)
+    // Ревью C1 — у счёта депозита (DEP-…) возврата здесь нет: его деньги
+    // возвращает только «Вернуть депозит» во вкладке «Депозиты», иначе деньги
+    // выходили из кассы дважды.
+    const isDepositInv = String(inv.invoice_number || '').startsWith('DEP-');
+    const refundBtn = (!cancelled && inv.paid_amount > 0 && !isDepositInv)
         ? h('button', {
             type: 'button', title: 'Возврат оплаты',
             onclick: () => openInvoiceRefund(inv, root),
@@ -1542,6 +1546,11 @@ function openRefundConfirm(p, info, root) {
     // Платёж «с баланса» по умолчанию возвращается на баланс.
     const isDepositInv = String((info && info.invoice_number) || '').startsWith('DEP-');
     let toBalance = p.method === 'wallet' && !isDepositInv;
+    // Ревью M1 — полный возврат на баланс сразу отменяет счёт (как окно отмены
+    // счёта): иначе пустой счёт висел бы «Не оплачен», то есть долгом пациента
+    // за услугу, от которой он отказался. Галочка снимается, если счёт
+    // выставят заново.
+    const voidBox = h('input', { type: 'checkbox', checked: true });
     const destBox = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
     const paintDest = () => {
         clear(destBox);
@@ -1561,6 +1570,8 @@ function openRefundConfirm(p, info, root) {
         destBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, toBalance
             ? tr('Наличные из кассы не выдаются: сумма ляжет на баланс пациента и пойдёт в оплату следующей услуги.')
             : tr('Возврат уменьшит «Оплачено» по счёту; наличный возврат выдаётся из кассы текущей смены.')));
+        if (toBalance) destBox.appendChild(h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12.5px', cursor: 'pointer' } },
+            voidBox, tr('Если по счёту больше не осталось денег — отменить счёт')));
     };
     paintDest();
     modal(tr('Возврат оплаты') + (info && info.invoice_number ? ' · ' + info.invoice_number : ''), 'Repeat',
@@ -1577,9 +1588,15 @@ function openRefundConfirm(p, info, root) {
         async () => {
             const v = moneyVal(amtInp);
             if (!Number.isFinite(v) || v <= 0) { toast('Укажите сумму возврата.', 'fail'); return false; }
-            const { error } = await supabase.rpc('refund_payment', { payment_id: p.id, amount: v, reason: reasonInp.value || '', to_balance: toBalance });
+            const { data: rRes, error } = await supabase.rpc('refund_payment', { payment_id: p.id, amount: v, reason: reasonInp.value || '', to_balance: toBalance });
             if (error) { toast(error.message || 'Не удалось оформить возврат.', 'fail'); return false; }
             toast(toBalance ? tr('Сумма зачислена на баланс пациента') : tr('Возврат оформлен'), 'ok');
+            // Ревью M1 — денег на счёте не осталось: гасим его той же дверью, что окно отмены.
+            if (toBalance && voidBox.checked && rRes && rRes.invoice && Number(rRes.invoice.paid_amount) === 0) {
+                const { error: vErr } = await supabase.rpc('void_invoice', { invoice_id: p.invoice_id, reason: reasonInp.value || '' });
+                if (vErr) toast(trf('Счёт не отменён: {msg}', { msg: vErr.message || vErr }), 'fail');
+                else toast(tr('Счёт отменён'), 'ok');
+            }
             document.querySelectorAll('.modal').forEach(m => m.remove());   // close the stacked dialogs
             await paint(root);
             return true;

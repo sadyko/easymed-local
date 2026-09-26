@@ -120,7 +120,7 @@ test('погашение картой — не приход: смена, «со�
   db.close();
 });
 
-test('правка номинала в настройках сдвигает остаток на разницу; карта стала промокодом — остатка нет; минус запрещён базой', () => {
+test('правка номинала в настройках: остаток = номинал − потраченное; вид карты с оплатами не меняется; минус запрещён базой', () => {
   const { db, pid, svc, card } = seed();
   const a = billed(db, pid, [[svc, 200000]]);
   recordPayment(db, { invoice_id: a.id, amount: 200000, method: 'gift_card', card_id: card }, CASH);
@@ -129,8 +129,11 @@ test('правка номинала в настройках сдвигает о�
   db.prepare('UPDATE patient_discounts SET name = ? WHERE id = ?').run('Новое имя', card);
   assert.equal(remaining(db, card), 200000, 'правка имени остаток не трогает');
   assert.throws(() => db.prepare('UPDATE patient_discounts SET remaining = -1 WHERE id = ?').run(card), /CHECK/);
-  db.prepare("UPDATE patient_discounts SET kind = 'promo' WHERE id = ?").run(card);
-  assert.equal(remaining(db, card), null);
+  // Ревью I2 — у карты с оплатами вид не меняется; у нетронутой — меняется, остатка нет.
+  assert.throws(() => db.prepare("UPDATE patient_discounts SET kind = 'promo' WHERE id = ?").run(card), /вид/);
+  const fresh = db.prepare("INSERT INTO patient_discounts (name, kind, amount) VALUES ('Новая', 'gift_card', 1000)").run().lastInsertRowid;
+  db.prepare("UPDATE patient_discounts SET kind = 'promo' WHERE id = ?").run(fresh);
+  assert.equal(remaining(db, fresh), null);
   db.close();
 });
 

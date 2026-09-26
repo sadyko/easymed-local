@@ -20,7 +20,7 @@
 -- Строки пишет только сервер (rpc/billing.js, domain/wallet.js). Между
 -- зданиями patient_deposits не ездит — как и раньше.
 ALTER TABLE patient_deposits ADD COLUMN kind TEXT NOT NULL DEFAULT 'deposit'
-  CHECK (kind IN ('deposit', 'credit', 'spend'));
+  CHECK (kind IN ('deposit', 'credit', 'spend', 'cashback'));
 ALTER TABLE patient_deposits ADD COLUMN payment_id INTEGER
   REFERENCES payments(id) ON DELETE SET NULL;
 ALTER TABLE patient_deposits ADD COLUMN reason TEXT;

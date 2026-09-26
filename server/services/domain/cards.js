@@ -12,6 +12,7 @@
 // record_payment_split / refund_payment): платёж и остаток меняются вместе.
 
 import { today as localToday } from './day.js';
+import { isDepositInvoice, DEPOSIT_INVOICE_REFUSAL } from './wallet.js';
 
 export class CardError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -61,14 +62,21 @@ function spendableOn(db, card, invoice) {
     // делится по строкам — потолок чуть выше, но не выше суммы счёта.
     const r = db.prepare(`SELECT COALESCE(SUM(total - COALESCE(discount_amount, 0)), 0) s FROM invoice_items
                            WHERE invoice_id = ? AND service_id IN (${scope.map(() => '?').join(',')})`).get(invoice.id, ...scope);
-    cap = round2(Number(r.s) || 0);
-    if (cap <= 0) throw new CardError(name + ' действует на другие услуги — в этом счёте их нет.');
+    const scoped = round2(Number(r.s) || 0);
+    if (scoped <= 0) throw new CardError(name + ' действует на другие услуги — в этом счёте их нет.');
+    // Ревью I3 — то, что ЭТА карта уже заплатила по ЭТОМУ счёту (списания
+    // минус возвраты по журналу), из потолка вычитается: иначе три оплаты по
+    // 50 закрывали услугу за 100. Две части одной оплаты частями видят друг
+    // друга — журнал пишется в той же транзакции.
+    const spent = db.prepare('SELECT COALESCE(SUM(amount), 0) s FROM card_ledger WHERE discount_id = ? AND invoice_id = ?').get(card.id, invoice.id).s;
+    cap = round2(Math.max(0, scoped + Number(spent || 0)));
   }
   return { name, remaining, cap };
 }
 
 // Оплата счёта картой. amount уже округлён вызывающим.
 export function spendCard(db, { cardId, invoice, paymentId, amount, user }) {
+  if (isDepositInvoice(db, invoice)) throw new CardError(DEPOSIT_INVOICE_REFUSAL);   // ревью C1
   const card = loadCard(db, cardId);
   const { name, remaining, cap } = spendableOn(db, card, invoice);
   if (amount > remaining) throw new CardError(`${name}: на карте осталось ${remaining} — списать ${amount} нельзя.`);

@@ -451,9 +451,9 @@ export async function renderDoctorProfile(container, doctorId) {
             h('button', { class: 'cam-act', type: 'button', title: 'Загрузить файл с компьютера', 'aria-label': 'Загрузить с компьютера',
                 onclick: () => fileInp.click() },
                 Icon('Download', { size: 15 })),
-            h('button', { class: 'cam-act', type: 'button', title: 'Добавить фото по ссылке (URL)', 'aria-label': 'По ссылке',
-                onclick: () => { const u = window.prompt('Ссылка на фото (URL)'); if (u && u.trim()) { st.photoFile = null; st.photoUrl = u.trim(); setPhoto(u.trim()); toast('Фото по ссылке добавлено'); } } },
-                Icon('Globe', { size: 15 })),
+            // DOCTOR_PUBLIC_PROFILE_V1, ревью M4 — «Фото по ссылке» убрано: фото
+            // врача хранится только в своём хранилище (сервер внешнюю ссылку
+            // не примет) — оно уходит партнёрам, и клиника за него отвечает.
         );
         if (st.photoUrl) setPhoto(st.photoUrl);   // show current photo on open
         return h('div', { class: 'cam-wrap' }, box, fileInp, acts);

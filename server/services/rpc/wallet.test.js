@@ -133,7 +133,7 @@ test('два списания одного баланса: второе отка
   const c = billed(db, pid, neuro, 300000);
   assert.throws(() => recordPaymentSplit(db, { invoice_id: c.id, tenders: [
     { method: 'wallet', amount: 40000 }, { method: 'wallet', amount: 40000 }, { method: 'cash', amount: 100000 }] }, CASH),
-  /только 10000/, 'вторая часть «с баланса» видит первую');
+  /только 50000 — списать 80000/, 'части «с баланса» проверены вместе, отказ называет настоящий баланс (ревью M2)');
   assert.equal(inv(db, c.id).paid_amount, 0, 'оплата частями откатилась целиком');
   assert.equal(balance(db, pid), 50000);
 

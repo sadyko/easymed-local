@@ -869,11 +869,11 @@ export const REGISTRY = {
              // DEPOSIT_WALLET_V1 (мигр. 157) — вид строки баланса и откуда она.
              // Пишет их только сервер (domain/wallet.js): в insert/update ниже их нет.
              'kind','invoice_id','payment_id','reason'] },
-    write: { insert: { roles: ['admin','registrar','cashier'], columns: ['deposit_number','patient_id','branch_id','amount',
-               'method','status','notes','refund_amount','created_by','created_by_name','received_by','received_by_name','received_at'] },
-             update: { roles: ['admin','cashier'], columns: ['status','notes','refund_amount','received_by','received_by_name',
-               'received_at','closed_at'] },
-             delete: { roles: ['admin','cashier'] } },   // spend/pay rollback deletes its own ledger row
+    // DEPOSIT_WALLET_V1, ревью I1 — КЛИЕНТ БАЛАНС НЕ ПИШЕТ. Строки создают и
+    // меняют только серверные двери (rpc/deposits.js, domain/wallet.js,
+    // rpc/cashback.js); вставка «received» из браузера была подделкой баланса.
+    // Вторая стена — триггеры миграции 160.
+    write: { insert: { roles: [], columns: [] }, update: { roles: [], columns: [] }, delete: { roles: [] } },
     filters: ['id','patient_id','status','notes','created_at','kind'],
     embed:   { patients: { table:'patients', fk:'patient_id', columns:['id','full_name','first_name','last_name','mrn','phone'] } },
   },
