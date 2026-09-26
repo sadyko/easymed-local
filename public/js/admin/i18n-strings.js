@@ -8979,4 +8979,7 @@ export const STRINGS = {
   "Доля врача — по выполненным услугам, оплачены они или нет.": {"en":"The doctor's share is counted on performed services, paid or not.","ru":"Доля врача — по выполненным услугам, оплачены они или нет.","uz":"Shifokor ulushi bajarilgan xizmatlar bo‘yicha hisoblanadi, to‘langan-to‘lanmaganidan qat’i nazar."},
   "фикс {sum} UZS": {"en":"fixed {sum} UZS","ru":"фикс {sum} UZS","uz":"qat’iy {sum} UZS"},
   "без счёта": {"en":"not invoiced","ru":"без счёта","uz":"hisobsiz"},
+  // SVC_VOCAB_V1 — окно выбора услуг: первая колонка — ТИПЫ клиники (service_types).
+  "Нет типов услуг.": {"en":"No service types.","ru":"Нет типов услуг.","uz":"Xizmat turlari yo'q."},
+  "Поиск типов…": {"en":"Search types…","ru":"Поиск типов…","uz":"Turlarni qidirish…"},
 };

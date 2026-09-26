@@ -611,7 +611,7 @@ export function openServicePickerModal({
 
         // LEFT panel — the existing cascade columns, unchanged in class/behaviour.
         const cols = [];
-        if (!state.typeLocked) cols.push(buildCol(0, 'Группы услуг', 'Поиск групп…', 'typeSearch', 1));
+        if (!state.typeLocked) cols.push(buildCol(0, 'Типы услуг', 'Поиск типов…', 'typeSearch', 1));   // SVC_VOCAB_V1 — колонка перечисляет service_types: это ТИПЫ клиники, «группа» — одна из пяти
         cols.push(buildCol(1, 'Услуги', 'Поиск услуг…', 'svcSearch', state.typeLocked ? 1 : 2));
         cols.push(buildCol(2, 'Врачи',  'Поиск врачей…',  'docSearch', state.typeLocked ? 2 : 3));
         // Give Services twice the room so long Cyrillic names + prices fit.
@@ -774,9 +774,9 @@ export function openServicePickerModal({
             const t = state.typeSearch.trim().toLowerCase();
             const filtered = state.types.filter(r => (!state.allowedTypeIds || state.allowedTypeIds.has(typeKey(r.id)))
                 && (!t || (r.name || '').toLowerCase().includes(t)));
-            if (!filtered.length) { listEl.appendChild(emptyHint('Нет групп услуг.', '')); return; }
+            if (!filtered.length) { listEl.appendChild(emptyHint('Нет типов услуг.', '')); return; }
             // "All" pseudo-row lets the user clear the type filter.
-            listEl.appendChild(rowEl('Все группы', '', state.typeId === null, () => selectAt(0, null)));
+            listEl.appendChild(rowEl('Все типы', '', state.typeId === null, () => selectAt(0, null)));
             for (const r of filtered) listEl.appendChild(rowEl(r.name, r.code || '', state.typeId === typeKey(r.id), () => selectAt(0, r.id)));
         } else if (i === 1) {
             const filtered = filterServices();
