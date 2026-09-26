@@ -166,3 +166,48 @@ test('права и проверки: только админ; сама с со�
   assert.ok(!getRpc('patient_merge_money'));
   db.close();
 });
+
+// ─── Четвёртая проверка (2026-09-27) ────────────────────────────────────────
+test('M1: у обеих карт открыта госпитализация — отказ по-русски', () => {
+  const { db, keep, drop } = seed();
+  db.prepare("INSERT INTO admissions (patient_id, status) VALUES (?, 'admitted')").run(keep);
+  db.prepare("INSERT INTO admissions (patient_id, status) VALUES (?, 'ordered')").run(drop);
+  assert.throws(() => mergePatientsRpc(db, { keep_id: keep, drop_id: drop }, ADMIN), /госпитализац/);
+  db.prepare("UPDATE admissions SET status = 'discharged' WHERE patient_id = ?").run(drop);
+  mergePatientsRpc(db, { keep_id: keep, drop_id: drop }, ADMIN);
+  db.close();
+});
+
+test('M3: пустые контакты оставленной карты дополняются из дубля; заполненные — не трогаются', () => {
+  const { db, keep, drop } = seed();
+  db.prepare("UPDATE patients SET phone = '+998901111111', email = 'keep@x.uz' WHERE id = ?").run(keep);
+  db.prepare("UPDATE patients SET phone = '+998902222222', email = 'drop@x.uz', address = 'Юнусабад', emergency_contact_name = 'Мать', emergency_contact_phone = '+998903333333' WHERE id = ?").run(drop);
+  mergePatientsRpc(db, { keep_id: keep, drop_id: drop }, ADMIN);
+  const k = db.prepare('SELECT * FROM patients WHERE id = ?').get(keep);
+  assert.equal(k.phone, '+998901111111');
+  assert.equal(k.phone_secondary, '+998902222222', 'телефон дубля — вторым номером');
+  assert.equal(k.email, 'keep@x.uz', 'заполненное не трогается');
+  assert.equal(k.address, 'Юнусабад');
+  assert.equal(k.emergency_contact_name, 'Мать');
+  assert.equal(k.emergency_contact_phone, '+998903333333');
+  db.close();
+});
+
+test('I2: карта-дубль уже передана в другое здание — отказ; ещё не передана — объединяется', () => {
+  const { db, keep, drop } = seed();
+  const puid = db.prepare('SELECT uid FROM patients WHERE id = ?').get(drop).uid;
+  const seq = db.prepare("SELECT MIN(seq) s FROM sync_journal WHERE tbl = 'patients' AND uid = ?").get(puid).s;
+  assert.ok(seq, 'заведение дубля в журнале');
+  // Сосед есть, до дубля ещё не дошло.
+  db.prepare('INSERT INTO sync_peers (node, pub_seq, sent_seq) VALUES (?, ?, ?)').run('B', seq - 1, seq - 1);
+  const drop2 = db.prepare("INSERT INTO patients (full_name, branch_id) VALUES ('Иванов И.', 1)").run().lastInsertRowid;
+  // Выложено соседу — дубль уже у него.
+  db.prepare('UPDATE sync_peers SET pub_seq = ? WHERE node = ?').run(seq, 'B');
+  assert.throws(() => mergePatientsRpc(db, { keep_id: keep, drop_id: drop }, ADMIN), /передана в другое здание/);
+  mergePatientsRpc(db, { keep_id: keep, drop_id: drop2 }, ADMIN);   // drop2 соседу ещё не выложен
+  // Сосед засеивается — отдаёт всё подряд, значит отказ.
+  const drop3 = db.prepare("INSERT INTO patients (full_name, branch_id) VALUES ('Иванов Ив.', 1)").run().lastInsertRowid;
+  db.prepare("UPDATE sync_peers SET seed_floor = 1, seed_started = '2026-01-01T00:00:00Z' WHERE node = 'B'").run();
+  assert.throws(() => mergePatientsRpc(db, { keep_id: keep, drop_id: drop3 }, ADMIN), /передана в другое здание/);
+  db.close();
+});
