@@ -265,20 +265,24 @@ const asRows = (values) => (Array.isArray(values) ? values : [values || {}]);
 const CODE_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 const KEEP_EDIT = ['settings.roles', 'settings.employees'];
+function lockoutOf(next) {
+  const g = (next && next.grants && typeof next.grants === 'object') ? next.grants : {};
+  return g.settings === 'none' || KEEP_EDIT.some((k) => k in g && (RANK[g[k]] || 0) < RANK.edit);
+}
+// Ревью (последний проход) — КАЖДАЯ строка пакетной записи со своей ролью, а
+// не первая: пакет «[лаборант, роль на основе admin]» иначе проходил по первой.
 function adminLockout(db, user, meta, body) {
   const rows = asRows(body && body.values);
-  let roles;
-  if (meta.op === 'insert' || meta.op === 'upsert') roles = rows.map((v) => v && v.role);
-  else {
-    const t = targetsOf(db, user, 'role_permissions', 'role', body && body.filters);
-    roles = t ? t.map((r) => r.role) : [];
+  const refusal = 'Роли: у роли администратора «Настройки», «Роли» и «Сотрудники» не закрываются — иначе клиника запрёт себя вне этих экранов.';
+  if (meta.op === 'insert' || meta.op === 'upsert') {
+    for (const v of rows) {
+      if (v && v.role && isAdminRoleCode(db, v.role) && lockoutOf(parsePerms(v.permissions))) return refusal;
+    }
+    return null;
   }
+  const t = targetsOf(db, user, 'role_permissions', 'role', body && body.filters);
   const next = parsePerms(rows[0] && rows[0].permissions);
-  if (!next || !roles.some((r) => r && isAdminRoleCode(db, r))) return null;
-  const g = (next.grants && typeof next.grants === 'object') ? next.grants : {};
-  if (g.settings === 'none' || KEEP_EDIT.some((k) => k in g && (RANK[g[k]] || 0) < RANK.edit)) {
-    return 'Роли: у роли администратора «Настройки», «Роли» и «Сотрудники» не закрываются — иначе клиника запрёт себя вне этих экранов.';
-  }
+  if (t && t.some((r) => isAdminRoleCode(db, r.role)) && lockoutOf(next)) return refusal;
   return null;
 }
 
@@ -310,22 +314,16 @@ export function roleWriteRefusal(db, user, meta, body) {
 
   if (meta.table === 'custom_roles') {
     if (meta.op === 'delete') return refuse('удалять роли нельзя');
+    // Ревью (последний проход) — новую свою роль не-администратор заводит
+    // только вызовом custom_role_create: там обе записи — роль и её права —
+    // делаются одной транзакцией. Прямая вставка оставила бы полроли.
+    if (meta.op === 'insert' || meta.op === 'upsert') return refuse('новую роль заводит вызов custom_role_create (кнопка «Новая роль»), а не прямая запись');
     const checkBase = (base) => {
       if (base === undefined) return null;
       if (base === 'admin') return refuse('роль на основе администратора заводит только администратор');
       if (!effectiveRoles(user).includes(base)) return refuse(`основой может быть только роль, которую вы носите сами (не «${base}»)`);
       return null;
     };
-    if (meta.op === 'insert' || meta.op === 'upsert') {
-      for (const v of asRows(values)) {
-        const code = String((v && v.code) || '').trim();
-        if (VALID_ROLES.includes(code)) return refuse(`код «${code}» занят штатной ролью`);
-        if (own.has(code)) return refuse('свою роль править нельзя');
-        const b = checkBase(v && v.base_role);
-        if (b) return b;
-      }
-      if (meta.op === 'insert') return null;
-    }
     const rows = targetsOf(db, user, 'custom_roles', 'code,base_role', filters);
     if (!rows) return refuse('не удалось определить, какие роли меняются');
     for (const r of rows) {

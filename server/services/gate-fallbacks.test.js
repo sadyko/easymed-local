@@ -30,28 +30,31 @@ const norm = (list) => JSON.stringify([...list].sort());
 
 // Вызовы, которые разобрать нельзя, — и почему это не дыра. Ключ записи:
 // «файл|функция|текст аргумента-ключа».
+// n — СКОЛЬКО таких вызовов: новый вызов той же формы (ещё одни ворота
+// в custdev.js, новый ключ в реестре через scope.allGrant) меняет счёт и
+// краснеет, а не проходит под старым объяснением.
 const ALLOW = {
   // Сами ворота: определения переносят ключ дальше.
-  'services/grants.js|grantLevel|section': 'закрытый раздел закрывает свои окна — определение grantAllowsOr',
-  'services/grants.js|grantLevel|key': 'определение grantAllowsOr',
-  'services/grants.js|grantAllowsOr|key': 'определения grantAllows / grantAllowsAdminOr / effectiveLevel',
-  'services/grants.js|grantAllows|key': 'определение requireGrant',
+  'services/grants.js|grantLevel|section': { n: 1, why: 'закрытый раздел закрывает свои окна — определение grantAllowsOr' },
+  'services/grants.js|grantLevel|key': { n: 1, why: 'определение grantAllowsOr' },
+  'services/grants.js|grantAllowsOr|key': { n: 3, why: 'определения grantAllows / grantAllowsAdminOr / effectiveLevel' },
+  'services/grants.js|grantAllows|key': { n: 1, why: 'определение requireGrant' },
   // Запись по праву плитки: ключ называет реестр (write.grant), его сверяет write-grant.test.js.
-  'db/write-grant.js|grantAllowsOr|key': 'ключ плитки из реестра; прежнее правило — «нет» (() => false / true)',
-  'db/write-grant.js|grantAllowsOr|money.key': '«Цены и проценты» плитки; прежнее правило — «нет»',
+  'db/write-grant.js|grantAllowsOr|key': { n: 3, why: 'ключ плитки из реестра; прежнее правило — «нет» (() => false / true)' },
+  'db/write-grant.js|grantAllowsOr|money.key': { n: 1, why: '«Цены и проценты» плитки; прежнее правило — «нет»' },
   // Ограничение по владельцу: ключ и роли из реестра (crm_requests.scope) — строка карты crm.all.
-  'db/row-scope.js|grantAllows|sc.allGrant': 'crm_requests.scope: allGrant crm.all, allRoles [admin] — строка карты crm.all',
+  'db/row-scope.js|grantAllows|sc.allGrant': { n: 1, why: 'crm_requests.scope: allGrant crm.all, allRoles [admin] — строка карты crm.all' },
   // Группы отчётов: ключ из REPORT_GROUP; прежнее правило — reports-hub или администратор (adminDefault).
-  'services/report-access.js|grantAllowsOr|key': 'группы отчётов; fallbackLevel разбирает строки parent=reports',
-  'services/rpc/reports.js|canSeeReportKey|k': 'группы отчётов по REPORT_GROUP',
-  'services/report-access.js|canSeeReportKey|key': 'requireReportKind по REPORT_GROUP',
+  'services/report-access.js|grantAllowsOr|key': { n: 1, why: 'группы отчётов; fallbackLevel разбирает строки parent=reports' },
+  'services/rpc/reports.js|canSeeReportKey|k': { n: 1, why: 'группы отчётов по REPORT_GROUP' },
+  'services/report-access.js|canSeeReportKey|key': { n: 1, why: 'requireReportKind по REPORT_GROUP' },
   // Сама защита сравнивает уровни — она не ворота.
-  'services/role-guard.js|effectiveLevel|key': 'защита «Ролей»: сравнение уровней',
-  'services/role-guard.js|grantAllowsOr|key': 'защита «Ролей»: gatePasses по спискам карты',
+  'services/role-guard.js|effectiveLevel|key': { n: 2, why: 'защита «Ролей»: сравнение уровней' },
+  'services/role-guard.js|grantAllowsOr|key': { n: 1, why: 'защита «Ролей»: gatePasses по спискам карты' },
   // Cust Dev: ключи custdev.list / custdev.rate, прежнее правило — галочка раздела (FALLBACK_FN).
-  'services/rpc/custdev.js|grantAllowsOr|key': 'custdev.list / custdev.rate — FALLBACK_FN',
+  'services/rpc/custdev.js|grantAllowsOr|key': { n: 1, why: 'custdev.list / custdev.rate — FALLBACK_FN', wrapper: 'grantedOr', must: 'fn' },
   // Telegram: settings.telegram / reports.telegram — строки adminDefault.
-  'services/rpc/telegram.js|grantAllowsAdminOr|key': 'settings.telegram / reports.telegram — adminDefault',
+  'services/rpc/telegram.js|grantAllowsAdminOr|key': { n: 1, why: 'settings.telegram / reports.telegram — adminDefault', wrapper: 'requireLevel', must: 'adminDefault' },
 };
 
 function walk(dir, out = []) {
@@ -128,12 +131,12 @@ function scanGates(root) {
 
 function gateProblems(root, { checkAllow = true } = {}) {
   const bad = [];
-  const usedAllow = new Set();
+  const usedAllow = new Map();
   const sites = scanGates(root);
   for (const s of sites) {
     const keyArg = s.args[2] || '';
     const id = `${s.rel}|${s.callee}|${keyArg}`;
-    if (ALLOW[id]) { usedAllow.add(id); continue; }
+    if (ALLOW[id]) { usedAllow.set(id, (usedAllow.get(id) || 0) + 1); continue; }
     const key = literal(keyArg, s.text);
     if (key === null || !BY_KEY.has(key)) { bad.push(`${id}: ключ не разобран`); continue; }
     const row = BY_KEY.get(key);
@@ -151,7 +154,32 @@ function gateProblems(root, { checkAllow = true } = {}) {
       bad.push(`${id}: ${s.callee} с ключом справочника вне списка исключений`);
     }
   }
-  if (checkAllow) for (const id of Object.keys(ALLOW)) if (!usedAllow.has(id)) bad.push(`${id}: исключение больше ни к чему не относится — уберите`);
+  // Ключи, которые идут в ворота через обёртку файла, проверяются у вызовов самой обёртки.
+  for (const [id, a] of Object.entries(ALLOW)) {
+    if (!a.wrapper) continue;
+    const file = path.join(root, id.split('|')[0]);
+    if (!fs.existsSync(file)) continue;
+    const text = fs.readFileSync(file, 'utf8');
+    const re = new RegExp('(^|[^\\w.])' + a.wrapper + '\\(', 'g');
+    let m; let seen = 0;
+    while ((m = re.exec(text))) {
+      const before = text.slice(Math.max(0, m.index - 12), m.index + m[1].length);
+      if (/function\s*$/.test(before)) continue;
+      const k = literal(argsAt(text, m.index + m[0].length - 1)[2] || '', text);
+      seen++;
+      const row = k ? BY_KEY.get(k) : null;
+      const ok = row && (a.must === 'fn' ? FALLBACK_FN_KEYS.includes(k) : !!row.adminDefault);
+      if (!ok) bad.push(`${id}: обёртка ${a.wrapper} зовётся с ключом ${k} — ${a.must === 'fn' ? 'нет в FALLBACK_FN' : 'не «только администратор»'}`);
+    }
+    if (!seen) bad.push(`${id}: обёртка ${a.wrapper} не найдена`);
+  }
+  if (checkAllow) {
+    for (const [id, a] of Object.entries(ALLOW)) {
+      const got = usedAllow.get(id) || 0;
+      if (got === 0) bad.push(`${id}: исключение больше ни к чему не относится — уберите`);
+      else if (got !== a.n) bad.push(`${id}: вызовов ${got}, а в исключении записано ${a.n} — проверьте новый вызов и поправьте счёт`);
+    }
+  }
   return { bad, sites };
 }
 
@@ -186,4 +214,56 @@ test('расхождение в файле вне services/rpc — красны�
     assert.ok(bad.some((b) => b.includes('routes/drift.js|grantAllows|k') && b.includes('не разобран')), 'ключ-переменная не поймана');
     assert.ok(bad.some((b) => b.includes('routes/drift.js|grantAllowsOr') && b.includes('FALLBACK_FN')), 'своё прежнее правило не поймано');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('ограничение по владельцу из реестра (scope.allGrant): каждый ключ — строкой карты с теми же ролями', async () => {
+  const { REGISTRY } = await import('../db/schema-registry.js');
+  let n = 0;
+  for (const [t, e] of Object.entries(REGISTRY)) {
+    const sc = e && e.scope;
+    if (!sc || !sc.allGrant) continue;
+    n++;
+    const lists = (GATE_FALLBACK[sc.allGrant] || {}).edit || [];
+    assert.ok(lists.some((l) => norm(l) === norm(sc.allRoles || [])), `${t}: scope.allGrant ${sc.allGrant} ${JSON.stringify(sc.allRoles)} — нет в gate-fallbacks.js`);
+  }
+  assert.equal(n, ALLOW['db/row-scope.js|grantAllows|sc.allGrant'].n, 'таблиц со scope.allGrant больше, чем проверено');
+});
+
+// FALLBACK_FN — прежнее правило, описанное функцией. Сверяется ПОВЕДЕНИЕМ: для
+// каждой штатной роли карта отвечает то же, что настоящие ворота (ключ не
+// настроен ни у кого — работает именно прежнее правило).
+test('FALLBACK_FN отвечает то же, что настоящие ворота, для каждой штатной роли', async () => {
+  const { openDb } = await import('../db/connection.js');
+  const { migrate } = await import('../db/migrate.js');
+  const { VALID_ROLES } = await import('./roles.js');
+  const { fallbackLevel } = await import('./gate-fallbacks.js');
+  const { custdevList, custdevRate } = await import('./rpc/custdev.js');
+  const { canSeeAll, departmentForm } = await import('./rpc/departments.js');
+  const { canSeeAllMovements } = await import('./rpc/stock-log.js');
+  const { stockMinimumsList } = await import('./rpc/stock-requests.js');
+  const db = openDb(':memory:');
+  migrate(db);
+  const allowed = (fn) => { try { fn(); return true; } catch (e) { if (e && e.status === 403) return false; return true; } };
+  const RANK = { none: 0, view: 1, edit: 2, delete: 3 };
+  const atLeast = (lvl, need) => (RANK[lvl] || 0) >= RANK[need];
+  let id = 100;
+  try {
+    for (const role of VALID_ROLES) {
+      const u = { id: ++id, role, extra_roles: [] };
+      db.prepare('INSERT INTO users (id, username, password_hash, role) VALUES (?,?,?,?)').run(u.id, 'u' + u.id, 'x', role);
+      const real = {
+        'custdev.list/view': allowed(() => custdevList(db, {}, u)),
+        'custdev.rate/edit': allowed(() => custdevRate(db, {}, u)),
+        'settings.departments/view': canSeeAll(db, u),
+        'settings.departments/edit': allowed(() => departmentForm(db, {}, u)),
+        'procurement/view': canSeeAllMovements(db, u),
+        'procurement/edit': !!stockMinimumsList(db, { scope: 'mine' }, u).can_manage_all,
+      };
+      for (const [k, want] of Object.entries(real)) {
+        const [key, need] = k.split('/');
+        assert.equal(atLeast(fallbackLevel(db, u, key, 'all'), need), want, `${role}: ${k} — карта ${fallbackLevel(db, u, key, 'all')}, ворота ${want ? 'пускают' : 'не пускают'}`);
+      }
+    }
+  } finally { db.close(); }
+  assert.deepEqual([...FALLBACK_FN_KEYS].sort(), ['custdev.list', 'custdev.rate', 'procurement', 'settings.departments'], 'в FALLBACK_FN новый ключ — добавьте его в сверку поведением');
 });

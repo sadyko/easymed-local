@@ -349,7 +349,8 @@ test('«Роли»: защита от самоповышения — 403 на к
     // 5. Основа своей роли — только та, что носишь сам.
     r = await call(base, 'POST', '/api/db', { table: 'custom_roles', op: 'insert', values: { code: 'st_cash', name: 'Старший кассир', base_role: 'cashier', active: 1 } }, head);
     assert.equal(r.status, 403, 'роль на основе кассира у медсестры');
-    r = await call(base, 'POST', '/api/db', { table: 'custom_roles', op: 'insert', values: { code: 'palat', name: 'Палатная', base_role: 'nurse', active: 1 } }, head);
+    // Своя основа — через custom_role_create (прямая запись custom_roles не-администратору закрыта).
+    r = await call(base, 'POST', '/api/rpc/custom_role_create', { code: 'palat', name: 'Палатная', base_role: 'nurse' }, head);
     assert.equal(r.status, 200, JSON.stringify(r.json));
     // Администратор правит всё, как и раньше.
     const boss = await login(base, 'boss');
@@ -668,5 +669,36 @@ test('мелочь 3: своя роль заводится одним вызов
     r = await call(base, 'POST', '/api/rpc/custom_role_create', { code: 'st_lab', name: 'Старший лаборант', base_role: 'lab' }, boss);
     assert.equal(r.status, 200);
     assert.deepEqual(JSON.parse(db.prepare("SELECT permissions FROM role_permissions WHERE role = 'st_lab'").get().permissions).sections, perms(db, 'lab').sections);
+  } finally { server.close(); }
+});
+
+// --- Последний малый проход ----------------------------------------------------
+
+test('мелочь 2b: запрет запереть роль администратора проверяет КАЖДУЮ строку пакетной записи', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    customRoleRow(db, 'sa', 'admin', { sections: [], levels: {}, grants: {} });
+    const boss = await login(base, 'boss');
+    const r = await call(base, 'POST', '/api/db', { table: 'role_permissions', op: 'upsert', onConflict: 'role', values: [
+      { role: 'lab', permissions: '{}' },
+      { role: 'sa', permissions: JSON.stringify({ grants: { 'settings.roles': 'none' } }) },
+    ] }, boss);
+    assert.equal(r.status, 403, 'вторая строка пакета заперла роль на основе администратора: ' + JSON.stringify(r.json));
+    assert.ok(!JSON.parse(db.prepare("SELECT permissions FROM role_permissions WHERE role = 'sa'").get().permissions).grants['settings.roles']);
+  } finally { server.close(); }
+});
+
+test('мелочь 3b: свою роль не-администратор заводит только через custom_role_create, не прямой записью', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    addGrants(db, 'nurse', { settings: 'view', 'settings.roles': 'edit' });
+    const head = await login(base, 'head');
+    const r = await call(base, 'POST', '/api/db', { table: 'custom_roles', op: 'insert', values: { code: 'palat2', name: 'Палатная', base_role: 'nurse', active: 1 } }, head);
+    assert.equal(r.status, 403, 'полроли прямой записью');
+    assert.ok(/custom_role_create/.test(r.json.error.message), 'не сказано, чем заводить');
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM custom_roles WHERE code = 'palat2'").get().n, 0);
+    // Администратор — как раньше.
+    const boss = await login(base, 'boss');
+    assert.equal((await call(base, 'POST', '/api/db', { table: 'custom_roles', op: 'insert', values: { code: 'palat3', name: 'П', base_role: 'nurse', active: 1 } }, boss)).status, 200);
   } finally { server.close(); }
 });
