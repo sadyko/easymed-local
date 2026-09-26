@@ -9,7 +9,7 @@ import { departmentList, departmentCard, departmentForm, departmentHeadSet, depa
 import { stockMovementsList } from './stock-log.js';   // STOCK_LOG_V1
 import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCreate, stockRequestsMine } from './stock-requests.js';   // STOCK_REQUEST_V1
 import { expiryLots } from './expiry.js';   // EXPIRY_BALANCE_V1 — остатки партиями, ближайший срок первым
-import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions, doctorInpatientShare, doctorReferralReward, doctorPaySummary } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
+import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions, doctorInpatientShare, doctorReferralReward, doctorPaySummary, reportChoices } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit, admissionReferralDefault,
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
@@ -175,6 +175,9 @@ export const RPC = {
   // а прежняя выборка филиалов грузилась с active = 1 — соседнее здание же
   // заводится как active = 0 и в список не попадало вовсе.
   report_buildings:         (db, args, user) => reportBuildings(db, args, user),
+  // DOCTOR_LINES_SPECIALTY_V1 — варианты выпадающего фильтра конструктора отчёта
+  // (врачи для «Детализации» и «Врачей и услуг»), за воротами самого отчёта.
+  report_choices:           (db, args, user) => reportChoices(db, args, user),
   // BUILDING_FRESHNESS_V1 — свежесть данных по каждому зданию: когда его записи
   // приходили в последний раз, сколько их ждёт родителя и сколько база не
   // приняла. Чистое чтение — ровно та же категория, что report_buildings.

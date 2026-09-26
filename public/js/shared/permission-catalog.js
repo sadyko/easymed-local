@@ -253,7 +253,7 @@ export const CATALOG = [
       { key: 'reports.cashier',    label: 'Касса', desc: 'Отчёт кассира за период: поступления и расходы.', levels: ['none', 'view'], enforced: 'rpc:cashier_report' },
       { key: 'reports.doctor_pay', label: 'Оплата врачей', desc: 'Зарплаты врачей, стационарная доля, отчёты по врачам — начисления каждого врача. Свои начисления врач видит в кабинете всегда.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
       { key: 'reports.referrals',  label: 'Рефералы', desc: 'Кто направил пациентов и вознаграждение за направления.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
-      { key: 'reports.services',   label: 'По услугам и рентабельность', desc: 'Отчёт по услугам и рентабельность операций.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
+      { key: 'reports.services',   label: 'По услугам и рентабельность', desc: 'Отчёт по услугам, по специальностям и рентабельность операций.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
       { key: 'reports.stock',      label: 'Закупки и склад', desc: 'Приход, расход, остатки и сроки годности.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
       { key: 'reports.callcenter', label: 'Колл-центр', desc: 'Загрузка стойки, воронка заявок и работа операторов.', levels: ['none', 'view'], enforced: 'rpc:callcenter_report' },
       // ADMIN_ROWS_GRANTABLE_V1 — охват Telegram-бота выдаётся «Просмотром»
@@ -388,8 +388,10 @@ export const REPORT_GROUP = Object.freeze({
   cashier: 'reports.cashier',
   doctor_salaries: 'reports.doctor_pay', inpatient_share: 'reports.doctor_pay',
   by_doctors: 'reports.doctor_pay', doctor_services: 'reports.doctor_pay',
+  doctor_lines: 'reports.doctor_pay',   // DOCTOR_LINES_SPECIALTY_V1 — детализация «По врачам»
   referrals: 'reports.referrals', referrals_detail: 'reports.referrals',
   by_services: 'reports.services', surgery_profit: 'reports.services',
+  by_specialty: 'reports.services',     // DOCTOR_LINES_SPECIALTY_V1 — «По специальностям»
   procurement: 'reports.stock', stock_consumption: 'reports.stock',
   stock_statement: 'reports.stock', stock_expiry: 'reports.stock',
   callcenter: 'reports.callcenter',

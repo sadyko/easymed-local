@@ -44,6 +44,9 @@ import { canSeeReportKey, requireReportKind } from '../report-access.js';
 // цены и правило скидки — у кассы, здесь только их вызов.
 import { lineUnitPrice } from '../domain/pricing.js';
 import { patientCategoryDiscount } from './billing.js';
+// DOCTOR_LINES_SPECIALTY_V1 — «По специальностям» группирует тем же правилом,
+// которым карточка сотрудника сохраняет специальность (старые имена → одно).
+import { specialtyGroupName } from '../../../public/js/shared/specialty-list.js';
 
 /**
  * Начисления врача (кабинет): свои — ВСЕГДА, и ни одна галочка «Отчётов» этого
@@ -762,8 +765,23 @@ const BILLED_COLUMNS_SQL = `
            CASE WHEN ii.id IS NOT NULL THEN ${ITEM_TAX_SQL} END      AS billed_tax,
            CASE WHEN ii.id IS NOT NULL THEN ${ITEM_NET_SQL} END      AS billed_net`;
 
-function outpatientPayRows(db, { from, to, doctorId, bf, gf }) {
+function outpatientPayRows(db, { from, to, doctorId, bf, gf, withoutDoctor = false }) {
   const docClause = doctorId != null ? ' AND vs.doctor_id = ?' : '';
+  // DOCTOR_LINES_SPECIALTY_V1 — «По специальностям» показывает и выполненные
+  // строки без врача (лаборатория и т. п.): доли у них нет (ставку брать не у
+  // кого), но работа и деньги — есть. Выплате они не нужны.
+  const docRequired = withoutDoctor ? '1 = 1' : 'vs.doctor_id IS NOT NULL';
+  // Строка без врача, связанная со строкой счёта, входит, только если с этой
+  // строкой счёта не связана строка С врачом (та и считается), и только
+  // первая такая — деньги строки счёта не удваиваются.
+  const noDocJoin = withoutDoctor
+    ? `LEFT JOIN (SELECT invoice_item_id, MIN(id) AS first_id FROM visit_services
+                   WHERE invoice_item_id IS NOT NULL AND doctor_id IS NULL GROUP BY invoice_item_id) fn
+             ON fn.invoice_item_id = vs.invoice_item_id`
+    : '';
+  const noDocPick = withoutDoctor
+    ? ' OR (vs.doctor_id IS NULL AND fv.invoice_item_id IS NULL AND fn.first_id = vs.id)'
+    : '';
   return db.prepare(`
     SELECT ${originExpr(db, 'visit_services', 'vs')} AS origin,
            'out'                              AS kind,
@@ -810,9 +828,10 @@ function outpatientPayRows(db, { from, to, doctorId, bf, gf }) {
       -- Одна строка визита на строку счёта (как ITEM_DOCTOR_JOIN): вторая
       -- строка, ошибочно связанная с тем же счётом, не получила бы деньги дважды.
       LEFT JOIN (${VS_BY_ITEM_SQL}) fv ON fv.invoice_item_id = vs.invoice_item_id
-     WHERE vs.doctor_id IS NOT NULL
+      ${noDocJoin}
+     WHERE ${docRequired}
        AND ${OUT_PERFORMED_SQL('vs', 'v', 'i')}
-       AND (vs.invoice_item_id IS NULL OR fv.first_id = vs.id)
+       AND (vs.invoice_item_id IS NULL OR fv.first_id = vs.id${noDocPick})
        AND ${inLocalRange('v.visit_date')}${docClause}${bf.out.clause}${gf.out.clause}
      ORDER BY v.visit_date, vs.id
   `).all(from, to, ...(doctorId != null ? [doctorId] : []), ...bf.out.params, ...gf.out.params);
@@ -993,8 +1012,10 @@ const EMPTY_FILTER = { clause: '', params: [] };
  * @param opts.kinds     — ['out','in'] по умолчанию; кабинет стационара — ['in'].
  * @param opts.args/ctx  — фильтры отчёта: branch_ids, здания; foreign — строки
  *                         соседнего здания (только отчётам).
+ * @param opts.withoutDoctor — и амбулаторные строки без врача (доля 0);
+ *                         только «По специальностям», выплате не нужны.
  */
-export function performedPayLines(db, { from, to, doctorId = null, kinds = ['out', 'in'], args = null, ctx = null, foreign = false } = {}) {
+export function performedPayLines(db, { from, to, doctorId = null, kinds = ['out', 'in'], args = null, ctx = null, foreign = false, withoutDoctor = false } = {}) {
   const bf = {
     out: branchFilter(args, 'v.branch_id'),
     // У строки стационара филиал — у её счёта (у госпитализации его нет), как
@@ -1007,7 +1028,7 @@ export function performedPayLines(db, { from, to, doctorId = null, kinds = ['out
     in: buildingWhere(db, ctx, args, 'admission_services', 'ias'),
     inv: buildingWhere(db, ctx, args, 'invoices', 'i'),
   } : { out: EMPTY_FILTER, in: EMPTY_FILTER, inv: EMPTY_FILTER };
-  const q = { from, to, doctorId: doctorId != null ? Number(doctorId) : null, bf, gf };
+  const q = { from, to, doctorId: doctorId != null ? Number(doctorId) : null, bf, gf, withoutDoctor: withoutDoctor && doctorId == null };
   const raw = [
     ...(kinds.includes('out') ? outpatientPayRows(db, q) : []),
     ...(kinds.includes('in') ? inpatientPayRows(db, q) : []),
@@ -2471,11 +2492,24 @@ function byServicesReport(db, args, ctx) {
 // «Выставлено» и «Оплачено» — сведения по счетам этих услуг.
 const DOCTOR_PAY_NOTE = 'Работа (пациенты, визиты, услуги) и доли врача — по выполненным услугам периода, как в «Зарплатах врачей». «Выставлено» и «Оплачено» — по счетам этих услуг, для сведения. «Вознаграждение за направления» — по внутреннему источнику врача, как в отчёте «Рефералы»; «За направление в стационар» — врачу, направившему пациента на госпитализацию, по вкладке «Стационар» его карточки, тоже как в «Рефералах» (по оплаченным счетам госпитализации).';
 
+// DOCTOR_LINES_SPECIALTY_V1 — фильтр «Врач» (doctor_id) у детализации и у
+// «Врачей и услуг». Пусто или 'all' — все врачи; мусор — 400, а не молча все:
+// «показали всех, хотя спрашивали одного» читалось бы как его цифры.
+function doctorFilterArg(args) {
+  const v = args && args.doctor_id;
+  if (v === undefined || v === null || v === '' || v === 'all') return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
+  return n;
+}
+
 // Строки врача: своя строка без врача не входит (как в «Зарплатах врачей»),
 // строка соседнего здания без врача — входит под подписью здания.
-function doctorLines(db, args, ctx) {
+// DOCTOR_LINES_SPECIALTY_V1 — doctorId сужает выборку в SQL (performedPayLines);
+// строк соседнего здания у выбранного врача нет — у них врача нет вовсе.
+function doctorLines(db, args, ctx, doctorId = null) {
   const { from, to } = resolveRange(db, args);
-  const lines = performedPayLines(db, { from, to, args, ctx, foreign: true })
+  const lines = performedPayLines(db, { from, to, doctorId, args, ctx, foreign: true })
     .filter((r) => r.doctor_id != null || ctx.keyOf(r.origin) !== ctx.ownKey);
   // Ревью I1 — тот, у кого в периоде только оплаченные строки стационара без
   // его стационарной ставки (медсестра нажала «Выполнить»), нулевой строкой не
@@ -2486,11 +2520,11 @@ function doctorLines(db, args, ctx) {
   for (const r of lines) if (!noRateOnly(r)) keep.add(doctorKey(ctx, r.origin, r.doctor_id));
   return lines.filter((r) => keep.has(doctorKey(ctx, r.origin, r.doctor_id)));
 }
-function doctorNotes(db, args, ctx, lines) {
+function doctorNotes(db, args, ctx, lines, doctorId = null) {
   const { from, to } = resolveRange(db, args);
   // Примечание о строках без стационарной ставки — по ВСЕМ строкам периода
   // (doctorLines уже убрал людей, у которых других строк нет).
-  const noRate = inpatientNoRateNote(performedPayLines(db, { from, to, kinds: ['in'], args, ctx }));
+  const noRate = inpatientNoRateNote(performedPayLines(db, { from, to, doctorId, kinds: ['in'], args, ctx }));
   const notes = [PERFORMED_NOTE, PERFORMED_BASIS_NOTE, DOCTOR_PAY_NOTE, REFERRAL_PAID_NOTE, LINE_PAID_NOTE];
   if (hasUnattributed(ctx, lines)) notes.push(UNATTRIBUTED_NOTE);
   if (noRate) notes.push(noRate);
@@ -2566,7 +2600,8 @@ function byDoctorsReport(db, args, ctx) {
 // Разбивка: врач × услуга × место. Сумма «Доля врача» по врачу равна «Доле за
 // услуги» + «Стационарной доле» его строки в 'by_doctors'.
 function doctorServicesReport(db, args, ctx) {
-  const lines = doctorLines(db, args, ctx);
+  const doctorId = doctorFilterArg(args);   // DOCTOR_LINES_SPECIALTY_V1
+  const lines = doctorLines(db, args, ctx, doctorId);
   const buckets = new Map();
   for (const r of lines) {
     const where = r.kind === 'in' ? 'in' : 'out';
@@ -2587,7 +2622,7 @@ function doctorServicesReport(db, args, ctx) {
   const list = [...buckets.values()].sort((a, b) =>
     (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
     || String(a.doctor || '').localeCompare(String(b.doctor || ''), 'ru') || b.billed - a.billed);
-  const notes = doctorNotes(db, args, ctx, lines);
+  const notes = doctorNotes(db, args, ctx, lines, doctorId);
   return {
     columns: [BUILDING_COL, 'Врач', 'Услуга', 'Где', 'Пациентов', 'Кол-во', 'Выставлено', 'Оплачено (доля оплаты счёта)', 'Доля врача'],
     rows: list.map((b) => [ctx.label(b.origin), doctorCell(ctx, b) || '—', b.service, WHERE_RU[b.where],
@@ -2596,6 +2631,158 @@ function doctorServicesReport(db, args, ctx) {
     total_label: 'Выставлено',
     notes,
   };
+}
+
+// ---------------------------------------------------------------------------
+// DOCTOR_LINES_SPECIALTY_V1 (владелец, 26.09) — «in the by-doctor report there
+// should be the list of the services provided by the doctor one by one».
+//
+// «Детализация» — третий вид плитки «По врачам»: строка на КАЖДУЮ строку
+// выплаты. Источник — тот же doctorLines, что у «Врачей» и «Врачей и услуг»
+// (performedPayLines, PAY_BASIS_PERFORMED_V1), поэтому сумма «Доли врача» по
+// врачу равна его доле в «По врачам», «Зарплатах врачей» и в кабинете
+// (doctor_pay_summary) бит в бит (reports.doctor-lines.test.js). Дата — дата
+// базы выплаты: день приёма, у стационара — день выполнения.
+// ---------------------------------------------------------------------------
+// «Ставка» строки словами: «30 %», «фикс 15 000»; у стационара без ставки — «—».
+function payRateCell(r) {
+  if (r.fix != null) return 'фикс ' + moneyRu(r.fix);
+  if (r.kind === 'in') return r.inpatient_pct == null ? '—' : round2(r.inpatient_pct) + ' %';
+  return round2(r.pct || 0) + ' %';
+}
+const DOCTOR_LINES_NOTE = 'Строка — одна выполненная услуга. «Сумма после скидки» — со скидкой счёта, а у строки без счёта — со скидкой категории пациента или пакета (большей из двух), как её выставит счёт. Сумма «Доли врача» по врачу равна его доле в виде «Врачи» и в «Зарплатах врачей».';
+
+function doctorLinesReport(db, args, ctx) {
+  const doctorId = doctorFilterArg(args);
+  const lines = doctorLines(db, args, ctx, doctorId);
+  const list = [...lines].sort((a, b) =>
+    (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
+    || String(a.doctor || '').localeCompare(String(b.doctor || ''), 'ru')
+    || String(a.date || '').localeCompare(String(b.date || ''))
+    || (a.kind === b.kind ? 0 : a.kind === 'out' ? -1 : 1)
+    || (Number(a.line_id) || 0) - (Number(b.line_id) || 0));
+  return {
+    columns: [BUILDING_COL, 'Дата', 'Врач', 'Пациент', 'Карта', 'Услуга', 'Где', 'Кол-во',
+              'Сумма после скидки', '№ счёта', 'Статус счёта', 'Оплачено (доля оплаты счёта)', 'Ставка', 'Доля врача'],
+    rows: list.map((r) => [ctx.label(r.origin), r.date || '', doctorCell(ctx, r) || '—', r.patient || '', r.mrn || '',
+      r.service || '—', WHERE_RU[r.kind === 'in' ? 'in' : 'out'], Number(r.qty) || 1,
+      round2((r.amount || 0) - (r.discount || 0)), r.invoice || '', payStateRu(r), round2(linePaid(r)),
+      payRateCell(r), round2(r.doctor_fee || 0)]),
+    by_building: summariseByBuilding(ctx, list, {
+      total: (r) => (r.amount || 0) - (r.discount || 0),
+      fee: (r) => r.doctor_fee || 0,
+    }),
+    total_label: 'Сумма после скидки',
+    notes: [DOCTOR_LINES_NOTE, ...doctorNotes(db, args, ctx, lines, doctorId)],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// DOCTOR_LINES_SPECIALTY_V1 — «По специальностям» (kind 'by_specialty'):
+// «which services are provided by which specialty and amount».
+//
+// Специальность — ОСНОВНАЯ у исполнителя (users.specialty — первая в карточке,
+// MULTI_SPECIALTY_V1), через общий канонизатор (shared/specialty-list.js):
+// «ЛОР» и «Оториноларинголог (ЛОР)» — одна группа. Строки — выполненная работа
+// периода, та же база, что выплата врачу (performedPayLines), плюс выполненные
+// строки БЕЗ врача — отдельной группой (доли у них нет). Подытоги по
+// специальностям — примечаниями, как «Итоги по врачам» у стационарной доли:
+// строка-подытог в таблице попала бы в «Итого» под ней второй раз.
+// ---------------------------------------------------------------------------
+const NO_DOCTOR_GROUP = 'Без врача (лаборатория и др.)';
+const NO_SPECIALTY_GROUP = 'Специальность не указана';
+const SPECIALTY_BASIS_NOTE = 'Специальность — основная у врача-исполнителя (первая в его карточке); старые названия («ЛОР», «Оториноларинголог (ЛОР)») собраны под одним. У стационара исполнитель — отметивший «Выполнено», иначе назначивший. Доля врача — по его ставкам, как в «Зарплатах врачей»; у строк без врача её нет.';
+
+function bySpecialtyReport(db, args, ctx) {
+  const { from, to } = resolveRange(db, args);
+  const lines = performedPayLines(db, { from, to, args, ctx, foreign: true, withoutDoctor: true });
+  const users = new Map(db.prepare("SELECT id, COALESCE(NULLIF(full_name, ''), username) AS name, specialty FROM users").all()
+    .map((u) => [u.id, u]));
+  const specOf = (r) => {
+    if (r.doctor_id == null) return NO_DOCTOR_GROUP;
+    const u = users.get(r.doctor_id);
+    return specialtyGroupName(u && u.specialty) || NO_SPECIALTY_GROUP;
+  };
+  const buckets = new Map();
+  const perSpec = new Map();
+  const noSpecDoctors = new Map();
+  for (const r of lines) {
+    const spec = specOf(r);
+    if (spec === NO_SPECIALTY_GROUP) {
+      const u = users.get(r.doctor_id);
+      noSpecDoctors.set(r.doctor_id, (u && u.name) || r.doctor || '—');
+    }
+    const where = r.kind === 'in' ? 'in' : 'out';
+    const who = r.service_id != null ? 'id:' + r.service_id : 'nm:' + (r.service || '');
+    const key = ctx.keyOf(r.origin) + '\u0000' + spec + '\u0000' + who + '\u0000' + where;
+    const b = buckets.get(key) || {
+      origin: r.origin, spec, service: r.service || '—', where,
+      patients: new Set(), qty: 0, amount: 0, paid: 0, fee: 0,
+    };
+    const after = (r.amount || 0) - (r.discount || 0);
+    b.patients.add(r.patient_id);
+    b.qty += Number(r.qty) || 1;
+    b.amount += after;
+    b.paid += linePaid(r);
+    b.fee += r.doctor_fee || 0;
+    buckets.set(key, b);
+    const t = perSpec.get(spec) || { spec, lines: 0, patients: new Set(), amount: 0, fee: 0 };
+    t.lines += 1; t.patients.add(r.patient_id); t.amount += after; t.fee += r.doctor_fee || 0;
+    perSpec.set(spec, t);
+  }
+  // Специальности по алфавиту; «не указана» и «без врача» — в конце.
+  const rank = (spec) => (spec === NO_DOCTOR_GROUP ? 2 : spec === NO_SPECIALTY_GROUP ? 1 : 0);
+  const bySpec = (a, b) => rank(a) - rank(b) || a.localeCompare(b, 'ru');
+  const list = [...buckets.values()].sort((a, b) =>
+    (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
+    || bySpec(a.spec, b.spec) || b.amount - a.amount || (a.where === b.where ? 0 : a.where === 'out' ? -1 : 1));
+  const totals = [...perSpec.values()].sort((a, b) => bySpec(a.spec, b.spec))
+    .map((t) => 'Итого — ' + t.spec + ': ' + t.lines + ' ' + pluralRu(t.lines, 'услуга', 'услуги', 'услуг')
+      + ', ' + t.patients.size + ' ' + pluralRu(t.patients.size, 'пациент', 'пациента', 'пациентов')
+      + ', после скидки ' + moneyRu(t.amount) + ' сум, доля врачей ' + moneyRu(t.fee) + ' сум.');
+  const notes = [...totals, SPECIALTY_BASIS_NOTE, PERFORMED_BASIS_NOTE, LINE_PAID_NOTE];
+  if (noSpecDoctors.size) {
+    const n = noSpecDoctors.size;
+    notes.push('У ' + n + ' ' + pluralRu(n, 'врача', 'врачей', 'врачей') + ' не указана специальность ('
+      + [...noSpecDoctors.values()].sort((a, b) => a.localeCompare(b, 'ru')).join(', ')
+      + ') — их услуги в группе «' + NO_SPECIALTY_GROUP + '». Специальность задаётся в карточке сотрудника.');
+  }
+  if (hasUnattributed(ctx, lines)) notes.push(UNATTRIBUTED_NOTE);
+  return {
+    columns: [BUILDING_COL, 'Специальность', 'Услуга', 'Где', 'Кол-во', 'Пациентов',
+              'Сумма после скидки', 'Оплачено (доля оплаты счёта)', 'Доля врача'],
+    rows: list.map((b) => [ctx.label(b.origin), b.spec, b.service, WHERE_RU[b.where], round2(b.qty), b.patients.size,
+      round2(b.amount), round2(b.paid), round2(b.fee)]),
+    by_building: summariseByBuilding(ctx, list, { total: (b) => b.amount, fee: (b) => b.fee }),
+    total_label: 'Сумма после скидки',
+    notes,
+  };
+}
+
+// DOCTOR_LINES_SPECIALTY_V1 — варианты фильтра-выпадающего списка хаба
+// (option type 'select'): report_choices({ kind, arg }) → { choices: [[value,
+// label]] }. За ТЕМИ ЖЕ воротами, что сам отчёт: кому «Оплата врачей» закрыта,
+// тот и списка врачей отсюда не получит. Значение — строкой: так его хранит
+// <select>, а сервер отчёта принимает и строку, и число.
+const REPORT_CHOICES = {
+  // Врачи — по is_doctor (у админа-врача роли 'doctor' нет) и все, у кого есть
+  // строки работы: исполнитель стационара бывает и не врачом.
+  doctor_id: (db) => db.prepare(`
+    SELECT id, COALESCE(NULLIF(full_name, ''), username) AS name FROM users
+     WHERE is_doctor = 1
+        OR id IN (SELECT DISTINCT doctor_id FROM visit_services WHERE doctor_id IS NOT NULL)
+        OR id IN (SELECT DISTINCT COALESCE(performer_id, doctor_id) FROM admission_services
+                   WHERE COALESCE(performer_id, doctor_id) IS NOT NULL)
+  `).all().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ru'))
+    .map((u) => [String(u.id), u.name || '—']),
+};
+export function reportChoices(db, args, user) {
+  const kind = args && args.kind;
+  const arg = args && args.arg;
+  if (!Object.prototype.hasOwnProperty.call(REPORTS_RU, kind)) throw new RpcError('unknown report kind: ' + kind, 400);
+  if (!Object.prototype.hasOwnProperty.call(REPORT_CHOICES, arg)) throw new RpcError('unknown report option: ' + arg, 400);
+  requireReportKind(db, user, kind);
+  return { choices: REPORT_CHOICES[arg](db) };
 }
 
 const REPORTS_RU = {
@@ -2611,6 +2798,8 @@ const REPORTS_RU = {
   by_services:      byServicesReport,        // REPORTS_V2 — по услугам
   by_doctors:       byDoctorsReport,         // REPORTS_V2 — по врачам: выплата и работа
   doctor_services:  doctorServicesReport,    // REPORTS_V2 — врач × услуга
+  doctor_lines:     doctorLinesReport,       // DOCTOR_LINES_SPECIALTY_V1 — строка на услугу врача
+  by_specialty:     bySpecialtyReport,       // DOCTOR_LINES_SPECIALTY_V1 — по специальностям
   // REPORTS_V2 — «Закупки и склад»: приход — 'procurement' выше.
   stock_consumption: stockConsumptionReport,
   stock_statement:   stockStatementReport,
@@ -2730,6 +2919,7 @@ const ITEM_BASED_REPORTS = new Set([
   'inpatient_share',   // INPATIENT_SHARE_V1 — тоже читает строки счетов
   'referrals_detail',  // REPORTS_V2 — те же строки счетов, что у сводки
   'by_services', 'by_doctors', 'doctor_services',   // REPORTS_V2
+  'doctor_lines', 'by_specialty',                   // DOCTOR_LINES_SPECIALTY_V1
 ]);
 
 export function runReport(db, args, user) {
