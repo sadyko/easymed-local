@@ -21,7 +21,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { printableSheet } from './doc-settings.js?v=noqr1';
 import { moneyDisplay, moneyNumber } from '../../shared/money-input.js?v=mi2';   // MONEY_INPUT_V2
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';   // DEBT_FLOW_V1 — «пациент ещё на койке» в окне отмены
-import { loadInvoiceLines, performersByItem } from './receipt-print.js?v=rp1';   // INVOICE_QUEUE_V1 — тот же сбор талонов, что у чека   // CASH_CHECK_PRINT_V1 — бланк «Кассовый чек» из Настройки → Документы
+import { loadInvoiceLines, performersByItem, packagesByItem, packageItemName } from './receipt-print.js?v=rp1';   // INVOICE_QUEUE_V1 — тот же сбор талонов, что у чека   // CASH_CHECK_PRINT_V1 — бланк «Кассовый чек» из Настройки → Документы
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 
 const METHOD_RU = { cash: 'Наличные', card: 'Карта', transfer: 'Перевод', acquiring: 'Эквайринг' };
@@ -58,7 +58,7 @@ function fmtDobAge(iso) {
 async function printInvoiceSheet(inv) {
     try {
         const { data: items } = await supabase.from('invoice_items')
-            .select('id, description, quantity, unit_price, total').eq('invoice_id', inv.id);
+            .select('id, description, quantity, unit_price, total, discount_amount').eq('invoice_id', inv.id);
         const paid = Number(inv.paid_amount) || 0;
         // INVOICE_QUEUE_V1 — талоны и на СЧЁТЕ, не только на чеке. Пациенту всё
         // равно, какую из двух бумаг ему дали: номер очереди нужен на той, что
@@ -66,7 +66,7 @@ async function printInvoiceSheet(inv) {
         // пустой список печати не мешает.
         // RECEIPT_DOB_PERFORMER_V1 — очередь и исполнители одним запросом: раньше
         // счёт брал только очередь, поэтому «Исполнитель» на нём не появлялся.
-        const { queue, byItem: perfByItem } = await loadInvoiceLines(supabase, inv.id);
+        const { queue, byItem: perfByItem, packages: pkgByItem = {} } = await loadInvoiceLines(supabase, inv.id);   // PACKAGES_V1 — и пакет позиции
         /* i18n-exempt-start: данные ПЕЧАТНОГО счёта (бланк) — печатные документы намеренно русские, как METHOD_RU/GENDER_RU в receipt-print.js */
         printableSheet({ type: 'invoice', idLine: inv.invoice_number || String(inv.id), data: {
             title: 'Счёт за медицинские услуги',
@@ -87,7 +87,7 @@ async function printInvoiceSheet(inv) {
                 ...(inv.payer_id ? [['Плательщик', inv.payer_name || '—']] : []),
             ],
             items: (items || []).map((it, i) => ({
-                name: it.description || 'Услуга', qty: it.quantity, price: it.unit_price, _alt: i % 2 === 1,
+                name: packageItemName(it.description || 'Услуга', pkgByItem[it.id], it.discount_amount), qty: it.quantity, price: it.unit_price, _alt: i % 2 === 1,
                 ...(perfByItem[it.id] || {}),   // RECEIPT_DOB_PERFORMER_V1
             })),
             subtotal: inv.subtotal, total: inv.total_amount, paid,
@@ -102,16 +102,18 @@ async function printInvoiceSheet(inv) {
 async function printFiscalCheck(inv, paidAmt, method) {
     try {
         const { data: items } = await supabase.from('invoice_items')
-            .select('id, description, quantity, unit_price, total').eq('invoice_id', inv.id);
+            .select('id, description, quantity, unit_price, total, discount_amount').eq('invoice_id', inv.id);
         const itemIds = (items || []).map(i => i.id);
         let queue = [];
         let perfByItem = {};   // RECEIPT_DOB_PERFORMER_V1
+        let pkgByItem = {};    // PACKAGES_V1
         if (itemIds.length) {
             const { data: vsRows } = await supabase.from('visit_services')
-                .select('id, invoice_item_id, queue_key, queue_no, services(name), doctor_id(full_name, specialty, role)')
+                .select('id, invoice_item_id, queue_key, queue_no, services(name), doctor_id(full_name, specialty, role), service_templates(name)')
                 .in('invoice_item_id', itemIds);
             // RECEIPT_DOB_PERFORMER_V1 — тот же запрос отдаёт и исполнителя.
             perfByItem = performersByItem(vsRows);
+            pkgByItem = packagesByItem(vsRows);
             const ids = (vsRows || []).map(r => r.id);
             if (ids.length) {
                 const { data: tickets, error: qErr } = await supabase.rpc('issue_queue_numbers', { p_ids: ids });
@@ -137,7 +139,7 @@ async function printFiscalCheck(inv, paidAmt, method) {
             sex: GENDER_RU[String(inv.gender || '').toLowerCase()] || '',
             cashier: u.full_name || u.username || '',
             items: (items || []).map(it => ({
-                name: it.description || 'Услуга', qty: it.quantity, price: it.unit_price,
+                name: packageItemName(it.description || 'Услуга', pkgByItem[it.id], it.discount_amount), qty: it.quantity, price: it.unit_price,   // PACKAGES_V1
                 ...(perfByItem[it.id] || {}),   // RECEIPT_DOB_PERFORMER_V1
             })),
             subtotal: inv.subtotal, discount: inv.discount_amount,

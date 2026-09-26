@@ -234,6 +234,8 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
         };
         const doctorId = isPosInt(line.doctorId) ? Number(line.doctorId) : null;
         if (doctorId) row.doctor_id = doctorId;
+        // PACKAGES_V1 — строка из пакета: скидку пакета и его срок считает сервер.
+        if (isPosInt(line.packageId)) row.package_id = Number(line.packageId);
         if (isPosInt(createdBy)) row.created_by = Number(createdBy);
         const res = await supabase.from('visit_services').insert(row).select().single();
         if (res.error) throw failAfterVisit(trf('Услуга «{name}»: {msg}', { name: svc.name || '', msg: msgOf(res.error) }));

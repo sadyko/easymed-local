@@ -416,6 +416,41 @@ test('+Услуги добавляет строку с ценой без НДС 
   dlg.close();
 });
 
+// PACKAGES_V1 — строка из пакета подписана пакетом и его скидкой, а в базу
+// уезжает с package_id: скидку и срок пакета проверяет и считает сервер.
+test('+Пакеты: строка помнит пакет — подпись со скидкой и package_id в строке визита', async () => {
+  reset();
+  const dlg = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg);
+  dlg.state.applyTemplate({ id: 12, name: 'Осень', service_ids: [1], discount_percent: 20, valid_from: null, valid_until: null });
+  const row = dlg.state.rows[0];
+  assert.ok(row && row.package && row.package.id === 12 && row.package.pct === 20, 'строка не помнит пакет');
+  assert.ok(textOf(dlg.table).includes('Пакет «Осень», скидка 20 %'), 'в строке нет подписи пакета');
+  row.sel.value = '7';
+  row.sel.fireChange();
+  calls.length = 0;
+  btnByText(dlg.card, 'Сохранить').click();
+  await tick(80);
+  const line = calls.find((c) => c.kind === 'insert' && c.table === 'visit_services');
+  assert.ok(line, 'строка визита не записана');
+  assert.strictEqual(line.body.package_id, 12, 'package_id не уехал в строку визита');
+  // Обычная строка — без пакета.
+  reset();
+  const dlg2 = openFastRegistrationDialog({});
+  await tick(40);
+  fillMinimum(dlg2);
+  const plain = dlg2.state.addLine(SERVICES[0], null);
+  plain.sel.value = '7';
+  plain.sel.fireChange();
+  calls.length = 0;
+  btnByText(dlg2.card, 'Сохранить').click();
+  await tick(80);
+  const line2 = calls.find((c) => c.kind === 'insert' && c.table === 'visit_services');
+  assert.strictEqual(line2.body.package_id, undefined, 'обычной строке приписан пакет');
+  dlg.close(); dlg2.close();
+});
+
 test('сохранение: пациент → визит → строки с врачом → счёт → очередь, окно переходит в сохранённое состояние', async () => {
   reset();
   let savedWith = 0;

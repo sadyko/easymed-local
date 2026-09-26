@@ -29,7 +29,8 @@ import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE
 import { CAT_ORDER, categoryOf } from '../../shared/service-categories.js';   // SERVICE_CATALOG_FILTER_V1
 import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDateTime } from '../ui.js';
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1
+import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize, packageDiscount } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1
+import { packageTermsText } from './template-picker-modal.js?v=tpl1';   // PACKAGES_V1 — «скидка 20 % · до 30.09.2026»
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1
 import { tierLabel, tierApplies } from '../visit-tier-logic.js';   // VISIT_TIER_PRICING_V1
 // DISCOUNT_RULES_V1 — какие скидки подходят этому пациенту сегодня и на что
@@ -1832,7 +1833,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     onclick: () => { shut(); applyTemplate(t); },
                 },
                     h('div', { style: { fontWeight: 700, fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
-                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, trf('услуг: {n}', { n: templateSize(t) }))),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, trf('услуг: {n}', { n: templateSize(t) })),
+                    packageTermsText(t) ? h('div', { 'data-package-terms': '', style: { fontSize: '12.5px', color: 'var(--ok-700, #15803d)' } }, packageTermsText(t)) : null),
                 h('button', {
                     type: 'button', title: 'Убрать шаблон из списка',
                     style: { border: '0', background: 'none', cursor: 'pointer', color: 'var(--crit-600, #dc2626)', fontSize: '17px', flex: 'none', padding: '2px 6px' },
@@ -1853,7 +1855,14 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     function applyTemplate(t) {
         const { services, missing } = resolveTemplate(t, wiz.services);
         const before = wiz.cart.length;
-        for (const svc of services) addToCart(svc);
+        // PACKAGES_V1 — новая строка сметы помнит пакет: скидку пакета даст счёт.
+        const pkg = t && t.id != null ? { id: Number(t.id), name: t.name || '', pct: packageDiscount(t) } : null;
+        for (const svc of services) {
+            const had = wiz.cart.some(c => c.svc.id === svc.id);
+            addToCart(svc);
+            const line = had ? null : wiz.cart.find(c => c.svc.id === svc.id);
+            if (line && pkg) line.package = pkg;
+        }
         const added = wiz.cart.length - before;
         // paint(), not repaintCatalog(): that one is scoped inside paintStep1 and
         // is unreachable from here. paint() re-renders the step AND the смета,
@@ -2543,6 +2552,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         status: 'added',
                         price_tier: lineTier(c),   // VISIT_TIER_PRICING_V1 — the till re-prices by this word
                     };
+                    if (c.package && c.package.id) row.package_id = c.package.id;   // PACKAGES_V1
                     // SCHED_V1 — врач и время строки из inline-планировщика; фолбэк —
                     // врач шага 2 для врачебных услуг (как раньше).
                     const lineDoc = c.doctorId || (c.svc.requires_doctor ? wiz.doctorId : null);

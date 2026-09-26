@@ -62,6 +62,10 @@ import { pendingCrmLines } from '../crm-lines.js';
 // копии одного правила расходятся молча, и наружу это выходит как «Esc закрыл
 // не то окно».
 import { coveredByHigherModal } from './modal-stack.js?v=ms1';
+// PACKAGES_V1 — «Шаблоны» каталога — это пакеты: только действующие сегодня,
+// со скидкой и сроком в строке; строка сметы помнит свой пакет.
+import { listTemplates, packageDiscount } from './service-templates.js?v=tpl1';
+import { packageTermsText } from './template-picker-modal.js?v=tpl1';
 
 // PROC_PERFORMER_V1 — роли, которым можно поручить процедуру. Врач сюда
 // попадает НЕ отсюда, а по is_doctor (ADMIN_DOCTOR_LIST_V1) — см.
@@ -1812,9 +1816,7 @@ export function openServicePickerModal({
             h('footer', { class: 'modal-foot' }, h('button', { class: 'btn', onclick: shut }, 'Закрыть'))));
         document.body.appendChild(ov);
         document.addEventListener('keydown', onEsc);
-        let q = supabase.from('service_templates').select('id, name, service_ids').eq('active', true).order('name');
-        if (window.CLINIC && window.CLINIC.id) q = q.eq('company_id', window.CLINIC.id);
-        const { data, error } = await q;
+        const { data, error } = await listTemplates(supabase);
         clear(listEl);
         if (error) {
             listEl.appendChild(h('div', { class: 'muted', style: { padding: '10px', textAlign: 'center' } },
@@ -1827,11 +1829,13 @@ export function openServicePickerModal({
         }
         for (const t of data) {
             const ids = Array.isArray(t.service_ids) ? t.service_ids : [];
+            const terms = packageTermsText(t);
             const row = h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', border: '1px solid var(--ink-100, #e8ecef)', borderRadius: '10px', padding: '9px 12px' } },
                 h('button', { type: 'button', style: { flex: '1 1 auto', minWidth: 0, border: '0', background: 'none', cursor: 'pointer', font: 'inherit', textAlign: 'left', padding: '0' },
                     onclick: async () => { shut(); await applyServiceTemplate(t); } },
                     h('div', { style: { fontWeight: 700, fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
-                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('услуг') + ': ' + ids.length)),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('услуг') + ': ' + ids.length),
+                    terms ? h('div', { 'data-package-terms': '', style: { fontSize: '12.5px', color: 'var(--ok-700, #15803d)' } }, terms) : null),
                 h('button', { type: 'button', title: 'Удалить шаблон',
                     style: { border: '0', background: 'none', cursor: 'pointer', color: 'var(--crit-600, #dc2626)', fontSize: '15px', flex: 'none', padding: '2px 4px' },
                     onclick: async (e) => {
@@ -1846,13 +1850,19 @@ export function openServicePickerModal({
 
     async function applyServiceTemplate(t) {
         const ids = Array.isArray(t.service_ids) ? t.service_ids : [];
+        const pkg = t && t.id != null ? { id: Number(t.id), name: t.name || '', pct: packageDiscount(t) } : null;
         let added = 0, missing = 0;
         for (const id of ids) {
             const svc = state.services.find(s => s.id === id);
             if (!svc) { missing++; continue; }
             const before = state.added.length;
             await catAdd(svc);
-            if (state.added.length > before) added++;
+            if (state.added.length > before) {
+                added++;
+                // PACKAGES_V1 — строка сметы из пакета: скидку пакета даст счёт.
+                const item = state.added.find((x) => x.service && x.service.id === svc.id);
+                if (item && pkg) item.package = pkg;
+            }
         }
         paintCatalog();
         toast(tr('Шаблон применён') + ': +' + added + (missing ? ' · ' + tr('не найдено услуг') + ': ' + missing : ''), missing ? 'warn' : 'ok');
@@ -2283,7 +2293,7 @@ export function openServicePickerModal({
         const landed = [];   // CRM_LINKS_V1 — услуги, реально легшие в визит
         for (const a of rows) {
             try {
-                await onPick({ service: a.service, doctor: a.doctor || null, startISO: a.startISO || null, price_tier: priceTierOf(a) });   // VISIT_TIER_PRICING_V1
+                await onPick({ service: a.service, doctor: a.doctor || null, startISO: a.startISO || null, price_tier: priceTierOf(a), package: a.package || null });   // VISIT_TIER_PRICING_V1; PACKAGES_V1
                 added++;
                 landed.push(a.service.id);
             } catch (e) {
@@ -2916,6 +2926,7 @@ export function openServicePickerModal({
                     scheduled_at: a.startISO || scheduledISO || null,
                     referral_source_id: ((wiz.referral || {}).per || {})[state.added.indexOf(a)] && wiz.referral.per[state.added.indexOf(a)].sourceId || null,   // SVC_REFERRAL_V1
                     price_tier:   isConsult ? null : priceTierOf(a),   // VISIT_TIER_PRICING_V1 — the till re-prices by this word
+                    package_id:   (!isConsult && a.package) ? a.package.id : null,   // PACKAGES_V1 — скидку пакета считает счёт
                 });
                 if (vsErr) { console.warn('[wizard] visit_services:', vsErr.message || vsErr); continue; }
                 vsRows.push({ vs, a, unitPrice });
