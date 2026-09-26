@@ -197,24 +197,12 @@ export async function cancelInvoice(inv, { reason, refundAmount = 0, notes = nul
             }
         } catch (e) { console.warn('[cancel] deposit unspend:', e.message); }
     }
-    // CATALOG_WIZARD_V4 — restore gift-card/certificate balances via the atomic RPC.
-    if (giftPaid > 0) {
-        try {
-            for (const gp of giftPays) {
-                const mId = /gift:([0-9a-f-]+)/i.exec(gp.notes || '');
-                if (mId) await supabase.rpc('restore_patient_discount', { p_id: mId[1], p_amount: Math.max(0, Number(gp.amount || 0)) });
-            }
-        } catch (e) { console.warn('[cancel] gift restore:', e.message); }
-    }
-    // CATALOG_WIZARD_V4 — return the promo use (promo:<id> marker payment).
-    try {
-        const { data: promoPays } = await supabase.from('payments')
-            .select('notes').eq('invoice_id', inv.id).ilike('notes', 'promo:%');
-        for (const pp of (promoPays || [])) {
-            const m = /promo:([0-9a-f-]+)/i.exec(pp.notes || '');
-            if (m) await supabase.rpc('release_promo_use', { p_id: m[1] });
-        }
-    } catch (e) { console.warn('[cancel] promo release:', e.message); }
+    // RPC_PORT_V1 — здесь облачная версия возвращала остаток подарочной карты
+    // (restore_patient_discount по меткам 'gift:<id>') и использование
+    // промокода (release_promo_use по меткам 'promo:<id>'). Офлайн у скидок нет
+    // ни остатка, ни счётчика, таких функций на сервере нет, а меток этих
+    // офлайн-калькулятор никогда не писал (платежи пишет только сервер) —
+    // возвращать нечего. Скидка отменённого счёта просто уходит вместе с ним.
 
     // 3. Unlink visit_services so they can be re-billed on a fresh
     //    invoice. invoice_items stays as a permanent record.

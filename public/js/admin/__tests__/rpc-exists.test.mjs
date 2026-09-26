@@ -27,11 +27,8 @@ const RPC_INDEX = path.join(HERE, '..', '..', '..', '..', 'server', 'services', 
 // в офлайн-сборке он либо отключён, либо ведёт в тупик»; чинить их надо вместе
 // с самим экраном, а не подпоркой в этом списке.
 const KNOWN_CLOUD_LEFTOVERS = new Set([
-    'admin_reset_user_password',      // employee-editor.js / section-crud.js — сброс пароля делает /api/users
-    'claim_patient_discount',         // старый мастер услуг: промо-карты облачной версии
-    'claim_promo_use',
-    'release_promo_use',
-    'restore_patient_discount',
+    'admin_reset_user_password',      // employee-editor.js / section-crud.js — сброс пароля делает /api/users; settings:users уводит в #employees (RPC_PORT_V1)
+    // claim_*/release_*/restore_* скидок — RPC_PORT_V1: калькулятор больше их не зовёт.
     // 'create_requisition' — реализован (DEPARTMENTS_V1): заявка отдела на склад.
     'dispose_batch_stock',
     'get_or_create_batch',
@@ -40,7 +37,7 @@ const KNOWN_CLOUD_LEFTOVERS = new Set([
     'current_user_can_manage_staff',
     'mark_support_read_user',         // чат поддержки: кнопка убрана из admin.html
     'send_support_message',
-    'update_my_doctor_profile',       // doctor-profile.js — облачный профиль врача
+    // 'update_my_doctor_profile' — реализован (RPC_PORT_V1, rpc/doctor-profile.js).
 ]);
 
 function walk(dir, out = []) {

@@ -2416,11 +2416,10 @@ export function openServicePickerModal({
                 const paintRailApplied = () => {
                     clear(appliedBox);
                     for (const d of (wiz.applied || [])) {
-                        const lbl = d.kind === 'promo_code'
-                            ? (d.discount_type === 'amount' ? '−' + formatMoney(d.amount) + ' ' + tr('сум') : `−${Number(d.percent || 0)}%`)
-                            : formatMoney(d.remaining ?? d.amount ?? 0) + ' ' + tr('сум');
+                        // RPC_PORT_V1 — подпись той же функцией, что в мастере записи.
+                        const lbl = discountOptionParts(d, (n) => formatMoney(n) + ' ' + tr('сум')).value;
                         appliedBox.appendChild(h('span', { class: 'tag tag-ok', style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12.5px' } },
-                            tr(KIND_RU3[d.kind] || d.kind) + ' ' + d.code + ' · ' + lbl,
+                            tr(KIND_RU3[d.kind] || d.kind) + ' ' + (d.code || d.name) + (lbl ? ' · ' + lbl : ''),
                             h('button', { type: 'button', style: { background: 'none', border: '0', cursor: 'pointer', color: 'inherit', fontWeight: 700 },
                                 onclick: (e) => { e.stopPropagation(); wiz.applied = wiz.applied.filter(x => x !== d); paintRailApplied(); refresh(); } }, '×')));
                     }
@@ -2525,9 +2524,15 @@ export function openServicePickerModal({
     }
 
     // CATALOG_WIZARD_V3 — promo / gift-card / certificate redemption.
-    const KIND_RU3 = { promo_code: 'Промокод', gift_card: 'Карта', certificate: 'Сертификат' };
-    function wizPromo() { return (wiz.applied || []).find(x => x.kind === 'promo_code') || null; }
-    function wizCards() { return (wiz.applied || []).filter(x => x.kind !== 'promo_code'); }
+    // RPC_PORT_V1 — офлайн у скидки нет ни остатка, ни счётчика использований
+    // (patient_discounts, миграции 012/129): любая строка — промокод, карта или
+    // сертификат — это ОДНА скидка по правилу discount-rules.js, как в мастере
+    // записи. Облачное деление на «промокод» и «карты с балансом» отбрасывало
+    // каждую офлайн-скидку в «карты», а их списание звало несуществующие
+    // функции Postgres — скидка в счёт не попадала.
+    const KIND_RU3 = { promo: 'Промокод', promo_code: 'Промокод', gift_card: 'Карта', certificate: 'Сертификат' };
+    function wizPromo() { return (wiz.applied || [])[0] || null; }
+    function wizCards() { return []; }
     function wizCardsAvail() { return wizCards().reduce((s, c) => s + Math.max(0, Number(c.remaining ?? c.amount ?? 0)), 0); }
     function wizPromoOff(base) {
         const pr = wizPromo(); if (!pr) return 0;
@@ -2571,11 +2576,10 @@ export function openServicePickerModal({
         if (row.patient_id && (!refs.attachedPatient || refs.attachedPatient.id !== row.patient_id)) { toast('Код привязан к другому пациенту.', 'fail'); return; }
         if (row.max_uses != null && Number(row.used_count || 0) >= Number(row.max_uses)) { toast('Лимит использований исчерпан.', 'fail'); return; }
         if (Number(row.min_purchase || 0) > wizTotals().afterDisc) { toast(trf('Код действует при счёте от {sum}.', { sum: formatMoney(row.min_purchase) }), 'fail'); return; }
-        if (row.kind !== 'promo_code' && !(Number(row.remaining ?? row.amount ?? 0) > 0)) { toast('На карте нет средств.', 'fail'); return; }
         if ((wiz.applied || []).some(x => x.id === row.id)) { toast('Код уже применён.', 'info'); return; }
-        if (row.kind === 'promo_code' && wizPromo()) { toast('Можно применить только один промокод.', 'fail'); return; }
+        if (wizPromo()) { toast('Можно применить только один промокод.', 'fail'); return; }   // RPC_PORT_V1 — одна скидка на счёт, как в мастере записи
         wiz.applied.push(row);
-        toast(trf('{kind} применён: {code}', { kind: tr(KIND_RU3[row.kind] || 'Код'), code: row.code }));
+        toast(trf('{kind} применён: {code}', { kind: tr(KIND_RU3[row.kind] || 'Код'), code: row.code || row.name }));
     }
 
     async function loadWizDeposit(pid) {
@@ -2985,33 +2989,28 @@ export function openServicePickerModal({
             if (patientRows.length && isPatient) {
                 const subtotal = patientRows.reduce((s, r) => s + wizDiscounted(r.unitPrice), 0);
                 // CATALOG_WIZARD_V4 — revalidate applied codes against FRESH rows + the
-                // final subtotal (cart/loyalty may have changed since apply); atomically
-                // CLAIM the promo before pricing so concurrent sessions can't over-redeem.
-                let promoRow = null; const validCards = [];
+                // final subtotal (cart/loyalty may have changed since apply).
+                // RPC_PORT_V1 — офлайн-скидка не имеет ни счётчика, ни остатка, поэтому
+                // «захвата» (claim_promo_use / claim_patient_discount) больше нет:
+                // проверяем ту же скидку тем же правилом, что смета, и считаем её
+                // по строкам счёта (discountValue), как мастер записи.
+                let promoRow = null;
                 if (wiz.applied.length) {
-                    const today = new Date().toISOString().slice(0, 10);
                     let fresh = [];
                     try { const fr = await supabase.from('patient_discounts').select('*').in('id', wiz.applied.map(x => x.id)); fresh = fr.data || []; } catch (_) {}
                     const byId = {}; for (const r of fresh) byId[r.id] = r;
+                    const ctxNow = { today: localYmd(), categoryId: wizPatientCategoryId(), serviceIds: patientRows.map(r => Number(r.a.service && r.a.service.id)) };
                     for (const ap of wiz.applied) {
                         const r = byId[ap.id];
-                        if (!r || !r.active) { toast(trf('Код {code} больше недоступен — не применён.', { code: ap.code }), 'fail'); continue; }
-                        if (r.valid_from && r.valid_from > today) { toast(trf('Код {code} ещё не действует — не применён.', { code: ap.code }), 'fail'); continue; }
-                        if (r.valid_to && r.valid_to < today) { toast(trf('Код {code} истёк — не применён.', { code: ap.code }), 'fail'); continue; }
-                        if (r.patient_id && r.patient_id !== p.id) { toast(trf('Код {code} привязан к другому пациенту — не применён.', { code: ap.code }), 'fail'); continue; }
-                        if (Number(r.min_purchase || 0) > subtotal) { toast(trf('Код {code} требует счёт от {sum} — не применён.', { code: ap.code, sum: formatMoney(r.min_purchase) }), 'fail'); continue; }
-                        if (r.kind === 'promo_code') { if (!promoRow) promoRow = r; }
-                        else if (Number(r.remaining ?? r.amount ?? 0) > 0) validCards.push(r);
+                        if (!r || discountBlockReason(r, ctxNow)) { toast(trf('Код {code} больше недоступен — не применён.', { code: ap.code || ap.name }), 'fail'); continue; }
+                        if (!promoRow) promoRow = r;
                     }
                 }
                 let promoOff = 0;
                 if (promoRow) {
-                    promoOff = Math.min(subtotal, promoRow.discount_type === 'amount'
-                        ? Math.round(Number(promoRow.amount || 0))
-                        : Math.round(subtotal * Math.min(100, Math.max(0, Number(promoRow.percent || 0))) / 100));
-                    let claimed = false;
-                    try { const cr = await supabase.rpc('claim_promo_use', { p_id: promoRow.id }); claimed = !cr.error && !!cr.data; } catch (_) {}
-                    if (!claimed) { toast(trf('Промокод {code} исчерпан — не применён.', { code: promoRow.code }), 'fail'); promoOff = 0; promoRow = null; }
+                    const promoLinesNow = patientRows.map(r => ({ service_id: r.a.service.__consult ? null : Number(r.a.service.id), total: wizDiscounted(r.unitPrice) }));
+                    promoOff = Math.min(subtotal, discountValue(promoRow, promoLinesNow));
+                    if (!(promoOff > 0)) promoRow = null;
                 }
                 const payable = Math.max(0, subtotal - promoOff);
                 const { data: inv, error: invErr } = await supabase.from('invoices').insert({
@@ -3021,7 +3020,6 @@ export function openServicePickerModal({
                 }).select().single();
                 if (invErr) {
                     console.warn('[wizard] invoice:', invErr.message); note = ' ' + trf('(счёт не создан: {msg})', { msg: invErr.message });
-                    if (promoRow) { try { await supabase.rpc('release_promo_use', { p_id: promoRow.id }); } catch (_) {} }
                 }
                 else {
                     let _billLinkFail = 0;   // ROUTING_BILL_LINK_FIX_V1 — surface a failed invoice-item link
@@ -3044,38 +3042,15 @@ export function openServicePickerModal({
                     }
                     if (_billLinkFail) toast(trf('Внимание: {n} услуг(и) не привязались к счёту — проверьте счёт в кассе перед оплатой.', { n: _billLinkFail }), 'fail');
                     note = inv.invoice_number ? ', ' + trf('счёт №{no}', { no: inv.invoice_number }) : ', ' + tr('счёт выставлен');
-                    // CATALOG_WIZARD_V4 — promo marker (cancel-restore), then non-cash
-                    // payments via ATOMIC claims (gift cards -> balance), relative undo,
-                    // ONE final invoice update; payable===0 (full promo) is paid+released.
+                    // CATALOG_WIZARD_V4 — non-cash payments, relative undo, ONE final
+                    // invoice update; payable===0 (full promo) is paid+released.
+                    // RPC_PORT_V1 — метки 'promo:<id>' и списания карт ('gift:<id>')
+                    // были облачной бухгалтерией счётчиков и остатков; офлайн их нет.
                     if (promoRow) {
                         note += ' · ' + trf('промокод −{sum}', { sum: formatMoney(promoOff) });
-                        await supabase.from('payments').insert({ invoice_id: inv.id, amount: 0, method: 'other', notes: 'promo:' + promoRow.id });
                     }
                     let paidSoFar = 0;
                     const undo = [];
-                    if (payable > 0) for (const card of validCards) {
-                        const avail = Math.max(0, Number(card.remaining ?? card.amount ?? 0));
-                        const alloc = Math.min(avail, payable - paidSoFar);
-                        if (alloc <= 0) continue;
-                        let newRem = null;
-                        try { const cr = await supabase.rpc('claim_patient_discount', { p_id: card.id, p_alloc: alloc }); newRem = cr.error ? null : cr.data; } catch (_) { newRem = null; }
-                        if (newRem == null) { toast(trf('Карта {code} не списана — баланс карты изменился.', { code: card.code }), 'fail'); continue; }
-                        const { data: gp, error: gErr } = await supabase.from('payments').insert({
-                            invoice_id: inv.id, amount: alloc, method: 'gift_card',
-                            cashier_id: currentUser()?.id || null, notes: 'gift:' + card.id,
-                        }).select().single();
-                        if (gErr) {
-                            try { await supabase.rpc('restore_patient_discount', { p_id: card.id, p_amount: alloc }); } catch (_) {}
-                            toast(trf('Карта {code} не списана: {msg}', { code: card.code, msg: gErr.message }), 'fail');
-                            continue;
-                        }
-                        undo.push(async () => {
-                            await supabase.from('payments').delete().eq('id', gp.id);
-                            try { await supabase.rpc('restore_patient_discount', { p_id: card.id, p_amount: alloc }); } catch (_) {}
-                        });
-                        paidSoFar += alloc;
-                        note += ' · ' + tr(KIND_RU3[card.kind] || 'карта') + ' −' + formatMoney(alloc);
-                    }
                     let balToSpend = 0;
                     if (payable > 0 && wiz.payment.useBal && paidSoFar < payable) {
                         const freshBal = await loadWizDeposit(p.id);
