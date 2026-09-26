@@ -17,6 +17,7 @@ import { localDate, localHour, localWeekday, inLocalRange } from '../domain/day.
 // «потеряно» спрашиваются у справочника, а не берутся из зашитого списка.
 import { wonStageKey, lostStageKeys, noShowStageKey, openStageKeys, listStages, listSources } from '../crm/config.js';
 import { canSeeAllLeads } from '../crm/visibility.js';   // CRM_HEAD_MERGE_TAGS_V1
+import { categoryOf } from '../../../public/js/shared/service-categories.js';   // GROUPS_FIVE_REFERRAL_V1
 // ROLE_REPORTS_SETTINGS_V1 — отчёт колл-центра — группа «Колл-центр» раздела «Отчёты».
 import { requireReportKind } from '../report-access.js';
 
@@ -213,28 +214,37 @@ export function callcenterReport(db, args, user) {
   // «Что спрашивают» отвечает на вопрос «какая услуга популярна», но не на
   // вопрос «куда вообще идёт поток»: двенадцать строк консультаций разных
   // врачей читаются как двенадцать разных вещей, хотя это один спрос — приём.
-  // Группируем по services.type_id (service_types: Консультации, Диагностика,
-  // Лаборатория, Процедуры) — это единственная заполненная классификация:
-  // category_id в базе не используется ни одной услугой.
+  // GROUPS_FIVE_REFERRAL_V1 — группа — это ОДНА ИЗ ПЯТИ (services.type:
+  // Консультации, Лаборатория, Диагностика, Процедуры, Хирургия), словами из
+  // shared/service-categories.js, как в серверном отчёте «По услугам». Раньше
+  // карточка «Спрос по группам услуг» группировала по справочнику типов
+  // (services.type_id) — то, что клиника пишет сама, — и называла типы группами.
   //
-  // Услуги без типа собираем в «Без группы», а не прячем: пропавшие из суммы
-  // заявки выглядят как ошибка отчёта.
+  // Строка, у которой услуги нет, собирается в «Без группы», а не прячется:
+  // пропавшие из суммы заявки выглядят как ошибка отчёта.
   const typeSql = (from, extra = '') => `
-    SELECT COALESCE(st.name, 'Без группы') AS name, COUNT(*) AS count
+    SELECT s.type AS type, s.is_lab AS is_lab, COUNT(*) AS count
       FROM ${from}
      ${where} ${extra}
-     GROUP BY COALESCE(st.id, -1) ORDER BY count DESC`;
+     GROUP BY s.type, s.is_lab`;
+  const byGroupName = (rows) => {
+    const m = new Map();
+    for (const x of rows) {
+      const name = x.type == null ? 'Без группы' : categoryOf({ type: x.type, is_lab: x.is_lab });
+      m.set(name, (m.get(name) || 0) + x.count);
+    }
+    return [...m].map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ru'));
+  };
 
-  let byServiceType = db.prepare(typeSql(`crm_request_services cs
+  let byServiceType = byGroupName(db.prepare(typeSql(`crm_request_services cs
       JOIN crm_requests r ON r.id = cs.request_id
-      LEFT JOIN services s      ON s.id = cs.service_id
-      LEFT JOIN service_types st ON st.id = s.type_id`)).all(...p);
+      LEFT JOIN services s      ON s.id = cs.service_id`)).all(...p));
   if (!byServiceType.length) {
     // Та же подстраховка, что и у topServices: клиника без строк услуг всё
     // равно называет услугу в самой заявке.
-    byServiceType = db.prepare(typeSql(`crm_requests r
-      LEFT JOIN services s      ON s.id = r.service_id
-      LEFT JOIN service_types st ON st.id = s.type_id`, 'AND r.service_id IS NOT NULL')).all(...p);
+    byServiceType = byGroupName(db.prepare(typeSql(`crm_requests r
+      LEFT JOIN services s      ON s.id = r.service_id`, 'AND r.service_id IS NOT NULL')).all(...p));
   }
 
     // CC_LAST30_V1 — заявки по дням за последние 30 дней, НЕЗАВИСИМО от выбранного

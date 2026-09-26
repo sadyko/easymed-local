@@ -17,6 +17,10 @@
 import { supabase } from '../../supabase.js';
 import { h, clear } from '../ui.js';
 import { tr, trf } from '../i18n.js';
+// GROUPS_FIVE_REFERRAL_V1 (мигр. 153) — строки таблицы — ПЯТЬ групп услуг
+// (services.type), ключ записи — группа; подписи — те же, что у группировки услуг.
+import { REFERRAL_GROUPS, referralGroupOf } from '../../shared/referral-reward.js';
+import { TYPE_TO_GROUP_NAME } from './service-group.js?v=aug17e';
 
 /**
  * Редактор ставки. Состояние правки кладётся в holder.referralReward
@@ -37,15 +41,11 @@ export function referralRewardEditor({ doctorId, holder, onChange, readOnly = fa
                 tr('Ставка задаётся после того, как сотрудник сохранён.')));
             return;
         }
-        let src = null, cat = null, types = [];
+        let src = null, cat = null;
         try {
-            const [srcRes, typeRes] = await Promise.all([
-                supabase.from('referral_sources')
-                    .select('id, reward_mode, own_percent, own_rates, category_id').eq('doctor_id', doctorId).limit(1),
-                supabase.from('service_types').select('id, name').eq('active', 1).order('name'),
-            ]);
+            const srcRes = await supabase.from('referral_sources')
+                .select('id, reward_mode, own_percent, own_rates, category_id').eq('doctor_id', doctorId).limit(1);
             src = (srcRes.data && srcRes.data[0]) || null;
-            types = typeRes.data || [];
             if (src && src.category_id != null) {
                 const catRes = await supabase.from('referral_source_categories')
                     .select('id, name, standard_percent').eq('id', src.category_id).limit(1);
@@ -66,7 +66,11 @@ export function referralRewardEditor({ doctorId, holder, onChange, readOnly = fa
                 : (typeof src.own_rates === 'string' && src.own_rates.trim() ? JSON.parse(src.own_rates) : []);
         } catch { rates = []; }
         if (!Array.isArray(rates)) rates = [];
-        const byType = new Map(rates.map(e => [Number(e && e.type_id), e]).filter(([k]) => Number.isFinite(k)));
+        const byGroup = new Map();
+        for (const e of rates) {
+            const g = e && referralGroupOf(e.group);
+            if (g && !byGroup.has(g)) byGroup.set(g, e);
+        }
 
         const stdNote = cat
             ? trf('Стандарт категории «{cat}»: {pct}% со всех услуг, кроме заданных в ней по группам.',
@@ -79,19 +83,18 @@ export function referralRewardEditor({ doctorId, holder, onChange, readOnly = fa
             placeholder: '0', style: { width: '140px' } });
 
         const tbody = h('tbody');
-        for (const t of types) {
-            const cur = byType.get(Number(t.id));
+        for (const g of REFERRAL_GROUPS) {
+            const cur = byGroup.get(g);
             tbody.appendChild(h('tr', null,
-                h('td', null, t.name),
+                h('td', null, tr(TYPE_TO_GROUP_NAME[g])),
                 h('td', null, h('div', { class: 'rate-cell' },
-                    h('input', { type: 'number', min: '0', step: '0.01', 'data-rate-type': String(t.id),
+                    h('input', { type: 'number', min: '0', step: '0.01', 'data-rate-group': g,
                         value: cur && Number.isFinite(Number(cur.value)) ? String(cur.value) : '',
                         placeholder: tr('по стандарту') }),
-                    h('select', { 'data-rate-unit': String(t.id) },
+                    h('select', { 'data-rate-unit': g },
                         h('option', { value: 'pct', selected: !cur || cur.unit !== 'fix' }, '%'),
                         h('option', { value: 'fix', selected: !!(cur && cur.unit === 'fix') }, 'сум'))))));
         }
-        if (!types.length) tbody.appendChild(h('tr', null, h('td', { colspan: '2', class: 'muted' }, tr('Группы услуг не заведены.'))));
 
         const ownBox = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
             h('div', { class: 'field' },
@@ -104,20 +107,19 @@ export function referralRewardEditor({ doctorId, holder, onChange, readOnly = fa
                     h('th', { style: { textAlign: 'right', width: '240px' } }, tr('Ставка')))),
                 tbody));
 
-        // Ревью M6 — ставки групп, которых в таблице нет (группа выключена или
-        // удалена из справочника), переносятся как были: редактор правит только
-        // то, что показывает, и не стирает чужое молча.
-        const shownTypes = new Set(types.map(t => Number(t.id)));
-        const hiddenRates = rates.filter(e => e && !shownTypes.has(Number(e.type_id)));
+        // Ревью M6 — записи, которых таблица не показывает (без группы из пяти),
+        // переносятся как были: редактор правит только то, что показывает, и не
+        // стирает чужое молча.
+        const hiddenRates = rates.filter(e => e && !referralGroupOf(e.group));
         function collect() {
             const out = hiddenRates.slice();
-            for (const inp of tbody.querySelectorAll('input[data-rate-type]')) {
+            for (const inp of tbody.querySelectorAll('input[data-rate-group]')) {
                 const raw = inp.value.trim();
                 if (raw === '') continue;
                 const value = Number(raw);
                 if (!Number.isFinite(value) || value < 0) continue;
-                const sel = tbody.querySelector('select[data-rate-unit="' + inp.dataset.rateType + '"]');
-                out.push({ type_id: Number(inp.dataset.rateType), unit: sel && sel.value === 'fix' ? 'fix' : 'pct', value });
+                const sel = tbody.querySelector('select[data-rate-unit="' + inp.dataset.rateGroup + '"]');
+                out.push({ group: inp.dataset.rateGroup, unit: sel && sel.value === 'fix' ? 'fix' : 'pct', value });
             }
             return out;
         }

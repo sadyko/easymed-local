@@ -50,11 +50,12 @@ const realFetch = globalThis.fetch;
 const db = openDb(':memory:');
 migrate(db);
 db.prepare('INSERT INTO users (id, username, password_hash, full_name, role) VALUES (1,?,?,?,?)').run('boss', hashPassword('password1'), 'Boss', 'admin');
-db.prepare(`INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, service_rates)
-            VALUES (7,'doc','x','Хирургов Хасан','doctor',1,?)`).run(JSON.stringify([
-  { service_id: 1, pct: 30, inpatient_pct: 20, branches: [1] },
+// INPATIENT_BONUS_V1 (мигр. 155) — стационарная ставка живёт в inpatient_rates.
+db.prepare(`INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, service_rates, inpatient_rates)
+            VALUES (7,'doc','x','Хирургов Хасан','doctor',1,?,?)`).run(JSON.stringify([
+  { service_id: 1, pct: 30, branches: [1] },
   { service_id: 2, pct: 0, fix: 50000, branches: [] },
-]));
+]), JSON.stringify([{ service_id: 1, pct: 20 }]));
 db.prepare("INSERT INTO services (id, name, price) VALUES (1,'Аппендэктомия',1000000), (2,'Перевязка',100000), (3,'УЗИ',200000)").run();
 const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
 const base = `http://127.0.0.1:${server.address().port}`;
@@ -101,7 +102,8 @@ test('«Выбранные врачи»: доля доходит до service_ra
   const rates = ratesOf(7);
   const of = (id) => rates.find((r) => Number(r.service_id) === id);
   assert.equal(of(1).pct, 45, 'доля не записана');
-  assert.equal(of(1).inpatient_pct, 20, 'стационарная доля потерялась');
+  // INPATIENT_BONUS_V1 — массовая доля не трогает стационарные ставки.
+  assert.equal(db.prepare('SELECT inpatient_rates FROM users WHERE id = 7').get().inpatient_rates, '[{"service_id":1,"pct":20}]', 'стационарная доля потерялась');
   assert.deepEqual(of(1).branches, [1]);
   assert.equal(of(3).pct, 45, 'новая строка не добавлена');
   assert.equal(of(2).fix, 50000, 'чужая строка тронута');

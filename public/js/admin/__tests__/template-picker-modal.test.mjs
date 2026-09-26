@@ -158,7 +158,7 @@ test('пустой список — подсказка, ошибка — пре�
   templateRows = [];
   const dlgEmpty = openTemplatePickerModal({ onPick: () => {} });
   await tick();
-  assert.match(textOf(dlgEmpty.overlay), /Пакетов пока нет/);
+  assert.match(textOf(dlgEmpty.overlay), /Действующих пакетов нет/);
   dlgEmpty.close();
 
   // Ошибка.
@@ -169,6 +169,39 @@ test('пустой список — подсказка, ошибка — пре�
   assert.equal(dialogs('template-picker').length, 0, 'окно закрыто после ошибки');
   assert.ok(toasts.some((t) => t.includes('boom')), 'тост с текстом ошибки: ' + JSON.stringify(toasts));
   templateError = null;
+});
+
+// PACKAGES_V1 — «+Пакеты» предлагает только пакеты, действующие СЕГОДНЯ, и
+// показывает их скидку и срок до выбора: регистратору нельзя показывать
+// скидку, которую сервер откажется дать.
+test('в списке только действующие сегодня пакеты, со скидкой и сроком', async () => {
+  const pad = (n) => String(n).padStart(2, '0');
+  const ymd = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  const shift = (days) => { const d = new Date(); d.setDate(d.getDate() + days); return ymd(d); };
+  templateError = null;
+  templateRows = [
+    { id: 1, name: 'Осень', service_ids: [1, 2], discount_percent: 20, valid_from: shift(-3), valid_until: shift(5) },
+    { id: 2, name: 'Истёкший', service_ids: [1], discount_percent: 30, valid_from: null, valid_until: shift(-1) },
+    { id: 3, name: 'Будущий', service_ids: [1], discount_percent: 10, valid_from: shift(1), valid_until: null },
+    { id: 4, name: 'Шаблон', service_ids: [3], discount_percent: 0, valid_from: null, valid_until: null },
+    { id: 5, name: 'Последний день', service_ids: [3], discount_percent: 5, valid_from: null, valid_until: shift(0) },
+  ];
+  let picked = null;
+  const dlg = openTemplatePickerModal({ onPick: (t) => { picked = t; } });
+  await tick();
+  const text = textOf(dlg.overlay);
+  assert.match(text, /Осень/);
+  assert.match(text, /Шаблон/);
+  assert.match(text, /Последний день/, 'последний день окна — ещё действует');
+  assert.doesNotMatch(text, /Истёкший/);
+  assert.doesNotMatch(text, /Будущий/);
+  const terms = walk(dlg.overlay).filter((n) => n.attrs && 'data-package-terms' in n.attrs).map((n) => n._t || textOf(n));
+  assert.equal(terms.length, 2, 'подпись скидки — только у пакетов со скидкой: ' + JSON.stringify(terms));
+  assert.ok(terms.some((t) => /скидка 20 %/.test(t) && /до \d{2}\.\d{2}\.\d{4}/.test(t)), JSON.stringify(terms));
+  const rows = walk(dlg.overlay).filter((n) => n.tagName === 'BUTTON' && !n.classList.contains('modal-close'));
+  rows[0].click();
+  assert.equal(picked.id, 1);
+  assert.equal(picked.discount_percent, 20, 'выбранная строка несёт скидку дальше');
 });
 
 test('Esc закрывает без выбора', async () => {
@@ -224,4 +257,20 @@ test('окно закрыли, пока грузились пакеты: отв�
   assert.equal(dialogs('template-picker').length, 0, 'окно вернулось на экран');
   assert.equal(bodyRemovals - removalsBefore, 1,
     'окно сняли дважды: ' + (bodyRemovals - removalsBefore));
+});
+
+// PACKAGES_V1 (ревью I-3) — окно, открытое на визите ДРУГОГО дня, отбирает
+// пакеты по дню визита (`on`), а не по сегодня: сервер сверяет срок с ним.
+test('on: пакеты отбираются по дню визита, а не по сегодня', async () => {
+  templateError = null;
+  templateRows = [
+    { id: 1, name: 'Сентябрь', service_ids: [1], discount_percent: 20, valid_from: '2030-09-01', valid_until: '2030-09-30' },
+    { id: 2, name: 'Октябрь', service_ids: [1], discount_percent: 20, valid_from: '2030-10-01', valid_until: '2030-10-31' },
+  ];
+  const dlg = openTemplatePickerModal({ onPick: () => {}, on: '2030-09-15' });
+  await tick();
+  const text = textOf(dlg.overlay);
+  assert.match(text, /Сентябрь/);
+  assert.doesNotMatch(text, /Октябрь/);
+  dlg.close();
 });

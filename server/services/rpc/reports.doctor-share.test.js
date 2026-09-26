@@ -25,8 +25,10 @@ function seed({ price = 100000, taxRate = 6, pct = 30, discount = 0, fix = null,
   db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (1,'P-1','Пациент')").run();
   db.prepare("INSERT INTO visits (id, patient_id, visit_date) VALUES (1,1,strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run();
   db.prepare('INSERT INTO services (id, name, price, tax_rate) VALUES (1,?,?,?)').run('Приём', price, taxRate);
+  // PAY_BASIS_PERFORMED_V1 — доля платится за ВЫПОЛНЕННУЮ услугу: строка
+  // завершена (прежде здесь стояло 'added' — тогда платила оплата счёта).
   db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status)
-              VALUES (1,1,1,1,?,?,?,'added')`).run(qty, price, price * qty);
+              VALUES (1,1,1,1,?,?,?,'completed')`).run(qty, price, price * qty);
   const subtotal = price * qty;
   db.prepare(`INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_at)
               VALUES (1,'INV-1',1,1,?,?,?,?, 'paid', strftime('%Y-%m-%dT%H:%M:%SZ','now'))`)

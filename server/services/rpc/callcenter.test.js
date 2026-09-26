@@ -146,14 +146,15 @@ test('пустой период не роняет отчёт', () => {
 });
 
 // CC_BY_SERVICE_TYPE_V1 — спрос по группам услуг.
-test('заявки группируются по типу услуги, а услуги без типа не теряются', () => {
+// GROUPS_FIVE_REFERRAL_V1 — группа = services.type (одна из пяти), а не тип из
+// справочника: тип «Разное» намеренно стоит поперёк групп и в отчёт не попадает.
+test('заявки группируются по группе услуги, а строки без услуги не теряются', () => {
   const db = seed();
-  const type = db.prepare("INSERT INTO service_types (name) VALUES ('Консультации')").run().lastInsertRowid;
-  const lab  = db.prepare("INSERT INTO service_types (name) VALUES ('Лаборатория')").run().lastInsertRowid;
-  const s1 = db.prepare('INSERT INTO services (name, price, type_id) VALUES (?,?,?)').run('Консультация гинеколога', 100, type).lastInsertRowid;
-  const s2 = db.prepare('INSERT INTO services (name, price, type_id) VALUES (?,?,?)').run('Консультация уролога', 100, type).lastInsertRowid;
-  const s3 = db.prepare('INSERT INTO services (name, price, type_id) VALUES (?,?,?)').run('ОАК', 50, lab).lastInsertRowid;
-  const s4 = db.prepare('INSERT INTO services (name, price) VALUES (?,?)').run('Без типа', 10).lastInsertRowid;
+  const misc = db.prepare("INSERT INTO service_types (name) VALUES ('Разное')").run().lastInsertRowid;
+  const s1 = db.prepare("INSERT INTO services (name, price, type, type_id) VALUES (?,?,'consultation',?)").run('Консультация гинеколога', 100, misc).lastInsertRowid;
+  const s2 = db.prepare("INSERT INTO services (name, price, type, type_id) VALUES (?,?,'consultation',?)").run('Консультация уролога', 100, misc).lastInsertRowid;
+  const s3 = db.prepare("INSERT INTO services (name, price, type, type_id) VALUES (?,?,'lab',?)").run('ОАК', 50, misc).lastInsertRowid;
+  const s4 = null;   // строка заявки без услуги
 
   const req = (id) => db.prepare(
     "INSERT INTO crm_requests (full_name, phone, status, created_at) VALUES (?,?,?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))")
@@ -170,8 +171,9 @@ test('заявки группируются по типу услуги, а ус�
   // Двенадцать строк консультаций разных врачей — это ОДИН спрос: приём.
   assert.equal(by['Консультации'], 2);
   assert.equal(by['Лаборатория'], 1);
-  // Услуга без типа не прячется: пропавшая из суммы заявка читается как ошибка отчёта.
+  // Строка без услуги не прячется: пропавшая из суммы заявка читается как ошибка отчёта.
   assert.equal(by['Без группы'], 1);
+  assert.ok(!('Разное' in by), 'тип из справочника назван группой');
   // Сортировка по убыванию — самое востребованное сверху.
   assert.equal(out.byServiceType[0].name, 'Консультации');
   db.close();

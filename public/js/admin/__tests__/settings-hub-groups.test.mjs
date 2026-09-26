@@ -292,6 +292,49 @@ test('карточки «Лаборатория и диагностика» в �
   const g = groupNamed(root, 'Настройки услуг');
   assert.ok(g, 'сама группа «Настройки услуг» осталась');
   assert.deepStrictEqual(g.rows.map((r) => r.name),
-    ['Список услуг', 'Товары и препараты', 'Типы услуг', 'Консультации врачей'],
+    // PACKAGES_V1 — пятая плитка группы: «Пакеты услуг».
+    ['Список услуг', 'Товары и препараты', 'Типы услуг', 'Консультации врачей', 'Пакеты услуг'],
     'остальные плитки группы не пострадали');
+});
+
+// GROUPS_FIVE_REFERRAL_V1 (мигр. 153) — таблица ставок у источника и у категории
+// источников: ровно ПЯТЬ групп услуг (services.type) с их подписями, а не шесть
+// строк справочника «Типы услуг». Запись без группы из пяти не стирается.
+test('ставки направлений — пять групп услуг, ключ записи — группа', async () => {
+  const { groupRatesControl } = await import('../views/settings-hub.js');
+  const legacy = { type_id: 6, unit: 'pct', value: 4 };
+  const ctl = groupRatesControl(JSON.stringify([{ group: 'other', unit: 'fix', value: 90000 }, legacy]), 'подсказка');
+  await ctl.load({ placeholder: 'по стандарту' });
+  const rows = walk(ctl).filter((n) => n.tagName === 'TR').slice(1);   // без шапки
+  assert.deepStrictEqual(rows.map((r) => textOf(r.children[0]).trim()),
+    ['Консультации', 'Лаборатория', 'Диагностика', 'Процедуры', 'Хирургия']);
+  const inputs = walk(ctl).filter((n) => n.tagName === 'INPUT');
+  assert.deepStrictEqual(inputs.map((i) => i.attrs['data-rate-group']), ['consultation', 'lab', 'imaging', 'procedure', 'other']);
+  assert.equal(inputs[4].attrs.value, '90000', 'ставка «Хирургии» не подставилась');
+  assert.ok(textOf(ctl).includes('Группа услуг'));
+  // Запись, которой таблица не показывает, уходит в сохранение как была.
+  assert.ok(ctl.value.some((e) => e.type_id === 6 && e.value === 4), JSON.stringify(ctl.value));
+});
+
+// PACKAGES_V1 — плитка «Пакеты услуг»: проверка формы и подпись срока.
+test('пакеты: форма отказывает словами — без услуг, скидка вне 0–100, «по» раньше «с»', async () => {
+  const { packageFormProblem, packageValidityText } = await import('../views/settings-hub.js');
+  assert.ok(packageFormProblem({ name: 'X', service_ids: [] }));
+  assert.ok(packageFormProblem({ name: 'X', service_ids: [1], discount_percent: 120 }));
+  assert.ok(packageFormProblem({ name: 'X', service_ids: [1], discount_percent: -1 }));
+  assert.ok(packageFormProblem({ name: 'X', service_ids: [1], valid_from: '2026-09-30', valid_until: '2026-09-01' }));
+  assert.strictEqual(packageFormProblem({ name: 'X', service_ids: [1], discount_percent: 15, valid_from: '2026-09-01', valid_until: '2026-09-30' }), null);
+  // Форма без денежного поля (право без «Цен и процентов») — не отказ.
+  assert.strictEqual(packageFormProblem({ name: 'X', service_ids: [1] }), null);
+  assert.strictEqual(packageValidityText({}), 'бессрочно');
+  assert.match(packageValidityText({ valid_until: '2000-01-01' }), /^истёк 01\.01\.2000$/);
+});
+
+test('пакеты: плитка открывает справочник service_templates с окном «Роли» settings.service_packages', async () => {
+  setFullAccess('Администратор');
+  const root = await mountHub([]);
+  const g = groupNamed(root, 'Настройки услуг');
+  assert.ok(g.rows.some((r) => r.name === 'Пакеты услуг'));
+  const { sectionLevel } = await import('../views/settings-hub.js');
+  assert.strictEqual(sectionLevel('service_packages'), 'edit');
 });

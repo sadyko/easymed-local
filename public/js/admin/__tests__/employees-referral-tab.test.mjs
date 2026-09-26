@@ -184,3 +184,22 @@ test('M6: ставки групп, которых нет в таблице, со
     assert.deepStrictEqual(rates, [{ type_id: 99, unit: 'fix', value: 15000 }], 'ставка выключенной группы стёрта');
   } finally { SOURCE_RATES = ''; SERVICE_TYPES = []; }
 });
+
+// GROUPS_FIVE_REFERRAL_V1 (мигр. 153) — в таблице ставок ровно ПЯТЬ групп
+// (services.type), а не строки справочника «Типы услуг»: там их шесть, и
+// шестая («Лучевая диагностика») стояла здесь под заголовком «Группа услуг».
+test('таблица ставок — пять групп услуг, тип из справочника группой не показан', async () => {
+  SERVICE_TYPES = [{ id: 6, name: 'Лучевая диагностика' }];
+  SOURCE_RATES = JSON.stringify([{ group: 'lab', unit: 'fix', value: 7000 }]);
+  try {
+    const card = await openReferralTab();
+    const t = textOf(card);
+    for (const g of ['Консультации', 'Лаборатория', 'Диагностика', 'Процедуры', 'Хирургия']) {
+      assert.ok(t.includes(g), 'нет группы «' + g + '»');
+    }
+    assert.ok(!t.includes('Лучевая диагностика'), 'тип из справочника показан группой');
+    const labInp = tags(card, 'input').find((n) => n.attrs['data-rate-group'] === 'lab');
+    assert.ok(labInp, 'нет строки группы «Лаборатория»');
+    assert.equal(labInp.attrs.value, '7000', 'ставка группы не подставилась');
+  } finally { SOURCE_RATES = ''; SERVICE_TYPES = []; }
+});

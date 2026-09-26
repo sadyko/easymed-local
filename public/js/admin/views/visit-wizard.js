@@ -29,7 +29,8 @@ import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE
 import { CAT_ORDER, categoryOf } from '../../shared/service-categories.js';   // SERVICE_CATALOG_FILTER_V1
 import { h, Icon, clear, toast, Avatar, initials, avColor, field, fmtDate, fmtDateTime } from '../ui.js';
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1
+import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templateSize, packageDiscount, packageSplit, packageValidOn } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1
+import { packageTermsText } from './template-picker-modal.js?v=tpl1';   // PACKAGES_V1 — «скидка 20 % · до 30.09.2026»
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1
 import { tierLabel, tierApplies } from '../visit-tier-logic.js';   // VISIT_TIER_PRICING_V1
 // DISCOUNT_RULES_V1 — какие скидки подходят этому пациенту сегодня и на что
@@ -1812,7 +1813,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             h('footer', { class: 'modal-foot' }, h('button', { class: 'btn', type: 'button', onclick: shut }, 'Закрыть'))));
         document.body.appendChild(ov);
 
-        const { data, error } = await listTemplates(supabase);
+        // PACKAGES_V1 (ревью I-3) — пакеты, действующие в день ЗАПИСИ, а не
+        // сегодня: сервер сверяет срок пакета с местным днём визита.
+        const { data, error } = await listTemplates(supabase, { on: lineDay(null) || undefined });
         clear(listEl);
         if (error) {
             listEl.appendChild(h('div', { style: { padding: '12px', textAlign: 'center', color: 'var(--crit-700)', fontSize: '12.5px' } },
@@ -1832,7 +1835,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     onclick: () => { shut(); applyTemplate(t); },
                 },
                     h('div', { style: { fontWeight: 700, fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
-                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, trf('услуг: {n}', { n: templateSize(t) }))),
+                    h('div', { class: 'muted', style: { fontSize: '12.5px' } }, trf('услуг: {n}', { n: templateSize(t) })),
+                    packageTermsText(t) ? h('div', { 'data-package-terms': '', style: { fontSize: '12.5px', color: 'var(--ok-700, #15803d)' } }, packageTermsText(t)) : null),
                 h('button', {
                     type: 'button', title: 'Убрать шаблон из списка',
                     style: { border: '0', background: 'none', cursor: 'pointer', color: 'var(--crit-600, #dc2626)', fontSize: '17px', flex: 'none', padding: '2px 6px' },
@@ -1853,7 +1857,19 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     function applyTemplate(t) {
         const { services, missing } = resolveTemplate(t, wiz.services);
         const before = wiz.cart.length;
-        for (const svc of services) addToCart(svc);
+        // PACKAGES_V1 — новая строка сметы помнит пакет: скидку пакета даст счёт.
+        // Ревью I-1/I-3: окно пакета едет вместе со строкой — смета и запись
+        // проверяют его по дню САМОЙ строки (она может уйти на другой день).
+        const pkg = t && t.id != null ? {
+            id: Number(t.id), name: t.name || '', pct: packageDiscount(t),
+            valid_from: t.valid_from || null, valid_until: t.valid_until || null,
+        } : null;
+        for (const svc of services) {
+            const had = wiz.cart.some(c => c.svc.id === svc.id);
+            addToCart(svc);
+            const line = had ? null : wiz.cart.find(c => c.svc.id === svc.id);
+            if (line && pkg) line.package = pkg;
+        }
         const added = wiz.cart.length - before;
         // paint(), not repaintCatalog(): that one is scoped inside paintStep1 and
         // is unreachable from here. paint() re-renders the step AND the смета,
@@ -1893,8 +1909,26 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     //
     // Возвращает СУММУ в сумах в обоих режимах — единственная величина, которая
     // уходит дальше (в счёт, в чек, в печать).
+    //
+    // PACKAGES_V1 (ревью I-1) — СМЕТА ДЕЛИТ СКИДКУ ТАК ЖЕ, КАК СЕРВЕР. Строка
+    // пакета со скидкой, действующего в её день, несёт свою скидку (бо́льшую из
+    // пакета и категории пациента — packageSplit), а лояльность и промокод
+    // считаются только по остальным строкам. Раньше лояльность бралась со всей
+    // сметы и уходила в счёт целиком, а сервер клал её только на строки без
+    // пакета: VIP 10 % + УЗИ по пакету 200 000 + анализ 100 000 давали скидку
+    // счёта 70 000 вместо 50 000.
+    // function, не const: смета рисуется раньше, чем исполнение дойдёт до этой
+    // строки (объявления функций всплывают, const — нет).
+    function linePackageOn(c) { return !!(c && c.package && c.package.pct > 0 && packageValidOn(c.package, lineDay(c) || undefined)); }
+    function restCart() { return visibleCart().filter((c) => !linePackageOn(c)); }
+    function restTotal() { return restCart().reduce((s, c) => s + cartLinePrice(c) * c.qty, 0); }
+    function packageDiscountTotal() {
+        return packageSplit(visibleCart().map((c) => ({
+            total: cartLinePrice(c) * c.qty, package: c.package || null, day: lineDay(c) || undefined,
+        })), wiz.categoryPct || 0).packageDiscount;
+    }
     function loyaltyDiscount() {
-        const sub = cartTotal();
+        const sub = restTotal();
         if (wiz.discountMode === 'abs') {
             // Сумму вводят руками: зажимаем сметой, иначе итог ушёл бы в минус.
             return Math.min(sub, Math.max(0, Number(wiz.discountAbs) || 0));
@@ -1906,16 +1940,22 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // (все — если услуги у скидки не отмечены), с суммы уже после скидки
     // лояльности, чтобы две скидки не накладывались на один и тот же сум.
     function promoLines() {
-        const sub = cartTotal();
+        const sub = restTotal();
         const loyalty = loyaltyDiscount();
         const k = sub > 0 ? Math.max(0, 1 - loyalty / sub) : 1;
-        return visibleCart().map((c) => ({ service_id: c.svc.id, total: cartLinePrice(c) * c.qty * k }));
+        return restCart().map((c) => ({ service_id: c.svc.id, total: cartLinePrice(c) * c.qty * k }));
     }
-    function discountAmount() {
-        const sub = cartTotal();
+    // Скидка на строки без своей — это и только это уходит в счёт
+    // (discount_amount): скидку пакета сервер считает сам.
+    function restDiscount() {
+        const sub = restTotal();
         let d = loyaltyDiscount();
         if (wiz.promo) d += discountValue(wiz.promo, promoLines());
         return Math.min(sub, Math.round(d));
+    }
+    // Вся скидка сметы — для показа и печати: пакет + остальное.
+    function discountAmount() {
+        return Math.min(cartTotal(), Math.round(packageDiscountTotal()) + restDiscount());
     }
     // Which discounts this patient may pick today for THIS cart.
     function discountChoices() {
@@ -2171,9 +2211,19 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const discRow = h('div', { class: 'row', style: { gap: '10px', display: 'none' } },
             h('span', { class: 'muted', style: { flex: 1, fontSize: '13.5px' } }, 'Скидка'),
             discEl);
+        // PACKAGES_V1 (ревью I-1) — скидка пакета отдельной строкой: её даёт
+        // сам пакет, а не поле лояльности ниже, и регистратор должен видеть,
+        // откуда взялась каждая часть итога.
+        const pkgDiscEl = h('span', { class: 'num', style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--crit-600, #dc2626)' } });
+        const pkgDiscRow = h('div', { class: 'row', 'data-package-discount': '', style: { gap: '10px', display: 'none' } },
+            h('span', { class: 'muted', style: { flex: 1, fontSize: '13.5px' } }, tr('Скидка пакета')),
+            pkgDiscEl);
         const totEl = h('span', { class: 'num', style: { fontWeight: 800, fontSize: '20px', color: 'var(--ink-900)' } });
         const refreshTotals = () => {
-            const d = discountAmount();
+            const p = Math.round(packageDiscountTotal());
+            pkgDiscRow.style.display = p > 0 ? '' : 'none';
+            pkgDiscEl.textContent = '−' + fmtPrice(p) + ' ' + tr('сум');
+            const d = restDiscount();
             discRow.style.display = d > 0 ? '' : 'none';
             discEl.textContent = '−' + fmtPrice(d) + ' ' + tr('сум');
             totEl.textContent = fmtPrice(grandTotal()) + ' ' + tr('сум');
@@ -2292,6 +2342,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         ));
 
         railEl.appendChild(h('div', { style: { borderTop: '2px solid var(--ink-100)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '4px' } },
+            pkgDiscRow,
             discRow,
             h('div', { class: 'row', style: { gap: '10px' } },
                 h('span', { style: { flex: 1, fontWeight: 800, fontSize: '17px' } }, 'Итого'),
@@ -2436,7 +2487,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             const booked = [];
             // DISCOUNT_CARRY_V1 — скидка идёт на счета пациента по порядку дней:
             // сколько влезло в первый, остаток — в следующий (см. ниже).
-            let discountLeft = discountAmount();
+            // PACKAGES_V1 (ревью I-1) — переносится только скидка на строки без
+            // своей (restDiscount): скидку пакета сервер считает по строкам сам.
+            let discountLeft = restDiscount();
             for (const [day, lines] of [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
                 // самый ранний слот дня — время визита; врач дня — первый врач строк.
                 // DATE_ONLY_V1 — полуночные услуги без времени не должны перебивать
@@ -2543,6 +2596,15 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         status: 'added',
                         price_tier: lineTier(c),   // VISIT_TIER_PRICING_V1 — the till re-prices by this word
                     };
+                    // PACKAGES_V1 (ревью I-3) — пакет ставится, только если он
+                    // действует в день ЭТОЙ строки: строку могли перенести на
+                    // другой день, и сервер отказал бы (routes/db.js). Вне срока
+                    // строка записывается по обычной цене — и об этом сказано.
+                    if (c.package && c.package.id) {
+                        if (packageValidOn(c.package, lineDay(c))) row.package_id = c.package.id;
+                        else toast(trf('Пакет «{name}» не действует {day} — «{svc}» записана без скидки пакета.',
+                            { name: c.package.name, day, svc: c.svc.name }), 'warn');
+                    }
                     // SCHED_V1 — врач и время строки из inline-планировщика; фолбэк —
                     // врач шага 2 для врачебных услуг (как раньше).
                     const lineDoc = c.doctorId || (c.svc.requires_doctor ? wiz.doctorId : null);
@@ -2593,10 +2655,16 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         // «−200 000», где первый день стоит 50 000, теряла 150 000:
                         // дни 2–3 выставлялись без скидки. Со скидкой суммой это
                         // стало бы нормой, поэтому вычитаем ровно то, что сервер
-                        // реально применил (invoice.discount_amount), и остаток
-                        // несём дальше.
+                        // реально применил, и остаток несём дальше.
+                        //
+                        // PACKAGES_V1 (ревью I-1) — «применил» = rest_discount:
+                        // в invoice.discount_amount лежат ещё и скидки пакета,
+                        // и вычитание их съедало бы ручную скидку следующих дней.
                         if (job.payer === null) {
-                            const applied = Number(iRes && iRes.invoice && iRes.invoice.discount_amount) || 0;
+                            const applied = iRes && Number.isFinite(Number(iRes.rest_discount))
+                                ? Number(iRes.rest_discount)
+                                : Math.max(0, (Number(iRes && iRes.invoice && iRes.invoice.discount_amount) || 0)
+                                    - ((iRes && iRes.items) || []).reduce((s, it) => s + (Number(it.discount_amount) || 0), 0));
                             discountLeft = Math.max(0, Math.round(discountLeft - applied));
                         }
                         // Печатаем счёт ПАЦИЕНТА: контрагенту чек на руки не нужен.

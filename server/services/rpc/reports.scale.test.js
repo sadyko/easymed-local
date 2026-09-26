@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { doctorInpatientShare, runReport } from './reports.js';
+import { doctorInpatientShare, doctorPaySummary, runReport } from './reports.js';
 
 const N = 20000;
 const admin = { id: 9, role: 'admin' };
@@ -21,8 +21,9 @@ const admin = { id: 9, role: 'admin' };
 function seedLarge() {
   const db = openDb(':memory:');
   migrate(db);
-  db.prepare(`INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, service_rates)
-              VALUES (2,'surg','x','doctor','Хирургов',1,?)`).run(JSON.stringify([{ service_id: 1, pct: 10, inpatient_pct: 20 }]));
+  // INPATIENT_BONUS_V1 (мигр. 155) — стационарная ставка живёт в inpatient_rates.
+  db.prepare(`INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, service_rates, inpatient_rates)
+              VALUES (2,'surg','x','doctor','Хирургов',1,?,?)`).run(JSON.stringify([{ service_id: 1, pct: 10 }]), JSON.stringify([{ service_id: 1, pct: 20 }]));
   db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (1,'P-1','Пациент')").run();
   db.prepare("INSERT INTO services (id, name, price, tax_rate) VALUES (1,'Перевязка',1000,0)").run();
   db.prepare("INSERT INTO admissions (id, admission_no, patient_id, doctor_id, status) VALUES (1,'A-1',1,2,'active')").run();
@@ -34,8 +35,10 @@ function seedLarge() {
     INSERT INTO invoice_items (id, invoice_id, service_id, description, quantity, unit_price, total)
     SELECT k, 1, 1, 'Перевязка', 1, 1000, 1000 FROM n;
     WITH RECURSIVE n(k) AS (SELECT 1 UNION ALL SELECT k + 1 FROM n WHERE k < ${N})
-    INSERT INTO admission_services (admission_id, service_id, doctor_id, performer_id, quantity, unit_price, total, status, billable, invoice_item_id)
-    SELECT 1, 1, 2, 2, 1, 1000, 1000, 'added', 1, k FROM n;
+    -- PAY_BASIS_PERFORMED_V1 — строки ВЫПОЛНЕНЫ (performed_at): доля платится
+    -- за выполненное, и нагрузка проверяется на строках, которые считаются.
+    INSERT INTO admission_services (admission_id, service_id, doctor_id, performer_id, quantity, unit_price, total, status, billable, invoice_item_id, performed_at)
+    SELECT 1, 1, 2, 2, 1, 1000, 1000, 'added', 1, k, '2026-08-06T09:00:00Z' FROM n;
     WITH RECURSIVE n(k) AS (SELECT 1 UNION ALL SELECT k + 1 FROM n WHERE k < ${N})
     INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, invoice_item_id)
     SELECT 1, 1, 2, 1, 1000, 1000, 'completed', ${N} + k FROM n;
@@ -59,6 +62,23 @@ for (const withIndex of [true, false]) {
       const t2 = Date.now();
       runReport(db, { kind: 'inpatient_share', from: '2026-08-01', to: '2026-08-31' }, admin);
       assert.ok(Date.now() - t2 < 5000, 'отчёт считался ' + (Date.now() - t2) + ' мс');
+      // PAY_BASIS_PERFORMED_V1 — выплата по выполненному читает строки визитов
+      // и стационара напрямую; ни одна из дорог не должна стать квадратичной.
+      for (const [name, fn] of [
+        ['зарплаты врачей', () => runReport(db, { kind: 'doctor_salaries', from: '2026-08-01', to: '2026-08-31' }, admin)],
+        ['по врачам', () => runReport(db, { kind: 'by_doctors', from: '2026-08-01', to: '2026-08-31' }, admin)],
+        ['кабинет: doctor_pay_summary', () => doctorPaySummary(db, { doctor_id: 2, from: '2026-08-01', to: '2026-08-31' }, admin)],
+      ]) {
+        const t3 = Date.now();
+        const out = fn();
+        const took = Date.now() - t3;
+        assert.ok(took < 5000, name + ' считались ' + took + ' мс');
+        if (out.outpatient) {
+          assert.equal(out.outpatient.count, N);
+          assert.equal(out.inpatient.count, N);
+          assert.equal(out.outpatient.fee, N * 100);   // 10 % от 1 000
+        }
+      }
     } finally { db.close(); }
   });
 }

@@ -69,12 +69,13 @@ import { buildPatientFields, openDuplicatePatientDialog, runPatientSearch, uploa
 // закрыл не то окно». Модуль сам не импортирует ничего (NO_IMPORT_CYCLES_V1).
 import { coveredByHigherModal } from './modal-stack.js?v=ms1';
 import { openTemplatePickerModal } from './template-picker-modal.js?v=tpl1';   // TEMPLATE_PICKER_V1
-import { resolveTemplate } from './service-templates.js?v=tpl1';               // WIZ_TEMPLATES_LOCAL_V1
+import { resolveTemplate, packageDiscount } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1
 import { registerWalkIn, walkInRoleRefusal } from './walk-in-booking.js?v=wib1';   // WALK_IN_BOOKING_V1
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';                        // DOCTOR_POOL_V1
 import { searchableSelect } from './searchable-select.js?v=ss2';               // SEARCHABLE_SELECT_V1
 import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';    // REFERRAL_SOURCE_CODE_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';                    // WIZ_INVOICE_PRINT_V1 — тот же бланк «Счёт»
+import { packageItemName } from './receipt-print.js?v=rp1';                   // PACKAGES_V1 — пакет и скидка позиции на бланке
 
 /** Разряды тысяч пробелом — так цену читают во всех экранах продукта. */
 function fmtPrice(n) {
@@ -498,7 +499,13 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             const price = rowPrice(i);
             tbody.appendChild(h('tr', null,
                 h('td', { class: 'muted' }, String(i + 1)),
-                h('td', { class: 'cell-strong' }, row.service.name || '—'),
+                h('td', { class: 'cell-strong' }, row.service.name || '—',
+                    // PACKAGES_V1 — из какого пакета строка и его скидка (её
+                    // применит сервер в счёте; итог после записи — уже со скидкой).
+                    row.package ? h('div', { 'data-package-line': String(row.package.id), class: 'muted', style: { fontWeight: '400', fontSize: '12.5px' } },
+                        row.package.pct > 0
+                            ? trf('Пакет «{name}», скидка {pct} %', { name: row.package.name, pct: String(row.package.pct).replace('.', ',') })
+                            : trf('Пакет «{name}»', { name: row.package.name })) : null),
                 h('td', null, fmtPrice(netOfVat(price, row.service.tax_rate))),
                 h('td', { class: 'cell-strong' }, fmtPrice(price)),
                 doctorCell(row),
@@ -548,7 +555,16 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
 
     function applyTemplate(template) {
         const { services, missing } = resolveTemplate(template, state.catalog);
-        for (const s of services) addLine(s, null);
+        // PACKAGES_V1 — строка помнит свой пакет: сервер выставит её со скидкой
+        // пакета (и проверит срок), а таблица подпишет, откуда строка.
+        const pkg = template && template.id != null
+            ? { id: Number(template.id), name: template.name || '', pct: packageDiscount(template) }
+            : null;
+        for (const s of services) {
+            const row = addLine(s, null);
+            if (row && pkg) row.package = pkg;
+        }
+        if (pkg) paintTable();
         if (missing) toast(trf('Пакет: {n} услуг(и) не найдено в каталоге', { n: missing }), 'warn');
         return services.length;
     }
@@ -579,7 +595,12 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
                 requireSlot: false,
                 title: 'Добавить услуги',
                 ctaLabel: 'Готово',
-                onPick: (p) => { if (p && p.service) addLine(p.service, p.doctor || null); },
+                onPick: (p) => {
+                    if (!p || !p.service) return;
+                    const row = addLine(p.service, p.doctor || null);
+                    // PACKAGES_V1 — строка из пакета, выбранного в каталоге.
+                    if (row && p.package) { row.package = p.package; paintTable(); }
+                },
             });
         } catch (e) {
             toast(trf('Не удалось открыть каталог услуг: {msg}', { msg: (e && e.message) || e }), 'fail');
@@ -737,7 +758,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         try {
             res = await registerWalkIn({
                 patientId: patient.id,
-                lines: state.rows.map((r) => ({ service: r.service, doctorId: r.doctorId })),
+                lines: state.rows.map((r) => ({ service: r.service, doctorId: r.doctorId, packageId: r.package ? r.package.id : null })),
                 referralSourceId: referralSel.value || null,
                 createdBy: (currentUser() || {}).id || null,
                 // WALK_IN_ROLE_GATE_V1 — тот же человек, что уходит в
@@ -900,8 +921,12 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             ],
             items: state.rows.map((row, i) => {
                 const dn = doctorNameOf(row);
+                // PACKAGES_V1 — позиция счёта в том же порядке, что строки
+                // (registerWalkIn → create_invoice_for_visit); сверка по услуге.
+                const item = (state.result.items || [])[i];
+                const lineOff = item && Number(item.service_id) === Number(row.service.id) ? item.discount_amount : 0;
                 return {
-                    name: (row.service.name || '') + (dn ? ' · ' + dn : ''),
+                    name: packageItemName((row.service.name || '') + (dn ? ' · ' + dn : ''), row.package ? row.package.name : '', lineOff),
                     qty: 1, price: rowPrice(i), _alt: i % 2 === 1,
                 };
             }),

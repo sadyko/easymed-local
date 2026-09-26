@@ -10,6 +10,13 @@
 // Storage is `service_templates` (migration 027): service_ids is a JSON array
 // in a TEXT column, declared json:['service_ids'] in the schema registry so the
 // API serialises it on write and parses it back on read.
+//
+// PACKAGES_V1 (migration 154) — a template is now a PACKAGE: the same row plus
+// discount_percent and an OFFER WINDOW valid_from..valid_until (local dates,
+// both optional, inclusive). «+Пакеты» offers only packages valid today; the
+// discount itself is applied by the server when the invoice is issued
+// (create_invoice_for_visit), per line, and only to the package's own services.
+// A template saved from the смета is a package with 0 % and no dates.
 
 const TABLE = 'service_templates';
 
@@ -58,11 +65,96 @@ export function templateSize(template) {
     return idsOf(template).length;
 }
 
-export async function listTemplates(supabase) {
-    return supabase.from(TABLE)
-        .select('id, name, service_ids')
+// The clinic's local calendar day as 'YYYY-MM-DD' (the browser runs on the
+// clinic's clock — the same assumption every local-day screen makes).
+export function localToday(now = new Date()) {
+    const d = now instanceof Date ? now : new Date(now);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+const ymd = (v) => { const s = String(v == null ? '' : v).slice(0, 10); return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : ''; };
+
+/** 'active' | 'expired' | 'upcoming' — where `day` sits against the offer window. */
+export function packageState(template, day = localToday()) {
+    const from = ymd(template && template.valid_from);
+    const until = ymd(template && template.valid_until);
+    if (from && day < from) return 'upcoming';
+    if (until && day > until) return 'expired';
+    return 'active';
+}
+
+/** Is the package on offer on `day` (window inclusive on both ends)? */
+export function packageValidOn(template, day = localToday()) {
+    return packageState(template, day) === 'active';
+}
+
+/** The package discount, 0..100 (a broken value is 0 — never a made-up discount). */
+export function packageDiscount(template) {
+    const n = Number(template && template.discount_percent);
+    return Number.isFinite(n) && n > 0 ? Math.min(n, 100) : 0;
+}
+
+/**
+ * PACKAGES_V1 (ревью I-1) — how the SERVER will split a смета's discount
+ * (billing.js createInvoiceForVisit), so the screen quotes and sends the same:
+ *   • a line whose package has a discount AND is on offer on the line's day
+ *     carries its OWN discount — the larger of the package % and the patient
+ *     category % (never both);
+ *   • loyalty / promo / category apply only to the REST, and are clamped by it.
+ * `lines` — [{ total, package: {pct, valid_from, valid_until} | null, day }].
+ * Returns { packageDiscount, restTotal } (money, rounded to tiyin like the server).
+ */
+export function packageSplit(lines, categoryPct = 0) {
+    const cat = Math.min(Math.max(Number(categoryPct) || 0, 0), 100);
+    const r2 = (n) => Math.round(n * 100) / 100;
+    let packageDiscount = 0;
+    let restTotal = 0;
+    for (const l of Array.isArray(lines) ? lines : []) {
+        const total = Number(l && l.total) || 0;
+        const pkg = l && l.package;
+        const pct = pkg ? packageDiscount_(pkg) : 0;
+        if (pct > 0 && packageValidOn(pkg, l.day || localToday())) {
+            packageDiscount += r2(total * Math.max(pct, cat) / 100);
+        } else {
+            restTotal += total;
+        }
+    }
+    return { packageDiscount: r2(packageDiscount), restTotal: r2(restTotal) };
+}
+// A cart line keeps `pct`; a template row keeps `discount_percent`.
+function packageDiscount_(pkg) {
+    return packageDiscount({ discount_percent: pkg.pct != null ? pkg.pct : pkg.discount_percent });
+}
+
+const ruDate = (s) => (s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : '');
+
+/**
+ * The validity line for the settings list: «действует до 30.09.2026»,
+ * «истёк 31.08.2026», «ещё не начался — с 01.10.2026», «бессрочно».
+ * Returns [text, params] — the caller translates (I18N: translate first).
+ */
+export function packageValidityParts(template, day = localToday()) {
+    const from = ymd(template && template.valid_from);
+    const until = ymd(template && template.valid_until);
+    const state = packageState(template, day);
+    if (state === 'expired') return ['истёк {date}', { date: ruDate(until) }];
+    if (state === 'upcoming') return ['ещё не начался — с {date}', { date: ruDate(from) }];
+    if (until) return ['действует до {date}', { date: ruDate(until) }];
+    if (from) return ['действует с {date}', { date: ruDate(from) }];
+    return ['бессрочно', {}];
+}
+
+// PACKAGES_V1 — `on` is the day to offer for (default: today). Packages whose
+// window does not cover it are left out: a registrar must never be shown a
+// discount the server will refuse. `on: null` returns every active package.
+export async function listTemplates(supabase, { on } = {}) {
+    const res = await supabase.from(TABLE)
+        .select('id, name, service_ids, discount_percent, valid_from, valid_until')
         .eq('active', true)
         .order('name');
+    if (!res || res.error || !Array.isArray(res.data) || on === null) return res;
+    const day = on || localToday();
+    return { ...res, data: res.data.filter((t) => packageValidOn(t, day)) };
 }
 
 // A template needs a name to be findable and services to be worth anything;

@@ -312,8 +312,10 @@ test('default share 0: the membership entry carries NO pct, and the REAL pay rep
   // …and the actual salary report agrees: 100 000 − 6% налог = 94 000; 40% = 37 600.
   db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (1,'P-1','Пациент')").run();
   db.prepare("INSERT INTO visits (id, patient_id, visit_date) VALUES (1,1,strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run();
+  // PAY_BASIS_PERFORMED_V1 — доля платится за ВЫПОЛНЕННУЮ услугу: строка
+  // завершена (прежде 'added' — тогда платила оплата счёта).
   db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status)
-              VALUES (1,1,?,?,1,100000,100000,'added')`).run(res.id, doc);
+              VALUES (1,1,?,?,1,100000,100000,'completed')`).run(res.id, doc);
   db.prepare(`INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_at)
               VALUES (1,'INV-1',1,1,100000,0,100000,100000,'paid',strftime('%Y-%m-%dT%H:%M:%SZ','now'))`).run();
   db.prepare(`INSERT INTO invoice_items (id, invoice_id, service_id, description, quantity, unit_price, total)

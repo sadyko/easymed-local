@@ -332,6 +332,37 @@ test('POST /api/users stores service_rates as an array with branches defaulted',
   } finally { server.close(); }
 });
 
+// Ревью I5 (мигр. 155) — запись без pct значит «оказывает, ставка по
+// умолчанию» (так её пишут окно услуги и перенос 155): отчёт берёт
+// service_rate_default. Прежде маршрут дописывал ей pct: 0 при первом же
+// сохранении карточки — и 0 перекрывал ставку по умолчанию.
+test('service_rates: запись без pct (или с пустым) сохраняется без pct; число — как было', async () => {
+  const { server, base } = await startServer();
+  try {
+    const admin = await loginAdmin(base);
+    const res = await post(base, '/api/users', {
+      username: 'rate.dflt', password: 'password2', role: 'doctor',
+      service_rates: [
+        { service_id: 1, branches: [1] },
+        { service_id: 2, pct: '', branches: [] },
+        { service_id: 3, pct: null },
+        { service_id: 4, pct: 0 },
+        { service_id: 5, percentage: 25 },
+        { service_id: 6, fix: 5000 },
+      ],
+    }, admin);
+    assert.equal(res.status, 201);
+    const u = (await res.json()).user;
+    const by = Object.fromEntries(u.service_rates.map((r) => [r.service_id, r]));
+    assert.deepEqual(by[1], { service_id: 1, branches: [1] });
+    assert.deepEqual(by[2], { service_id: 2, branches: [] });
+    assert.deepEqual(by[3], { service_id: 3, branches: [] });
+    assert.deepEqual(by[4], { service_id: 4, pct: 0, branches: [] }, 'записанный 0 — решение клиники, остаётся');
+    assert.equal(by[5].pct, 25);
+    assert.deepEqual(by[6], { service_id: 6, branches: [], fix: 5000 });
+  } finally { server.close(); }
+});
+
 test('service_rates pct is clamped to 0-100', async () => {
   const { server, base } = await startServer();
   try {
@@ -461,7 +492,9 @@ test('rate entries expose exactly the keys the editor knows how to carry', () =>
   assert.ok(svc.ok, svc.message);
   assert.deepEqual(
     Object.keys(JSON.parse(svc.fields.service_rates)[0]).sort(),
-    ['branches', 'fix', 'inpatient_pct', 'pct', 'price', 'service_id'],
+    // INPATIENT_BONUS_V1 — inpatient_pct больше не хранится в service_rates
+    // (ставки стационара — отдельная колонка inpatient_rates): ключ отброшен.
+    ['branches', 'fix', 'pct', 'price', 'service_id'],
   );
 
   const ref = parseEmployeeFields({
@@ -475,7 +508,7 @@ test('rate entries expose exactly the keys the editor knows how to carry', () =>
   );
 
   // The union is what the editor must carry through untouched.
-  const CARRIED_BY_EDITOR = ['price', 'fix', 'fixed', 'inpatient_pct'];
+  const CARRIED_BY_EDITOR = ['price', 'fix', 'fixed'];
   const emitted = new Set([
     ...Object.keys(JSON.parse(svc.fields.service_rates)[0]),
     ...Object.keys(JSON.parse(ref.fields.referral_rates)[0]),
@@ -614,40 +647,24 @@ test('несуществующая или отключённая роль кли
   assert.match((await res.json()).error.message, /отключена/i);
 });
 
-// INPATIENT_SHARE_V1 — «Стационар, %» на услугу: хранится как inpatient_pct,
-// пустое = доли нет (ключа нет, а не 0), вне 0..100 и не число — отказ по-русски.
-test('service_rates inpatient_pct: 0..100 хранится, пусто — ключа нет, мусор — отказ словами', async () => {
+// INPATIENT_SHARE_V1 → INPATIENT_BONUS_V1 (мигр. 155) — «Стационар, %» больше
+// не живёт в service_rates: ключ, присланный старым экраном, отбрасывается, и
+// амбулаторная запись от него не меняется. Ставки стационара — inpatient_rates
+// (вкладка «Стационар», users.inpatient.test.js).
+test('service_rates: inpatient_pct от старого экрана отбрасывается, амбулаторная ставка цела', async () => {
   const { db, server, base } = await startServer();
   try {
     const admin = await loginAdmin(base);
-    let res = await post(base, '/api/users', {
+    const res = await post(base, '/api/users', {
       username: 'inp.doc', password: 'p', role: 'doctor',
-      service_rates: [
-        { service_id: 1, pct: 30, inpatient_pct: 20 },
-        { service_id: 2, pct: 30, inpatient_pct: '' },
-        { service_id: 3, pct: 30, inpatient_pct: 0 },
-        { service_id: 4, pct: 30, inpatient_pct: '12.5' },
-        { service_id: 5, pct: 30 },
-      ],
+      service_rates: [{ service_id: 1, pct: 30, inpatient_pct: 20 }],
     }, admin);
     assert.equal(res.status, 201);
     const u = (await res.json()).user;
-    const of = (id) => u.service_rates.find(r => r.service_id === id);
-    assert.equal(of(1).inpatient_pct, 20);
-    assert.ok(!('inpatient_pct' in of(2)), 'пустое поле — доли нет, а не 0');
-    assert.equal(of(3).inpatient_pct, 0, 'введённый 0 — это решение, он хранится');
-    assert.equal(of(4).inpatient_pct, 12.5);
-    assert.ok(!('inpatient_pct' in of(5)));
-
-    for (const bad of [150, -1, 'abc', true]) {
-      res = await patch(base, `/api/users/${u.id}`, {
-        service_rates: [{ service_id: 1, pct: 30, inpatient_pct: bad }],
-      }, admin);
-      assert.equal(res.status, 400, 'значение ' + bad + ' должно быть отклонено');
-      assert.equal((await res.json()).error.message, 'Стационарная доля врача — число от 0 до 100 %.');
-    }
-    // Отказ ничего не записал.
-    const stored = JSON.parse(db.prepare('SELECT service_rates FROM users WHERE id = ?').get(u.id).service_rates);
-    assert.equal(stored.find(r => r.service_id === 1).inpatient_pct, 20);
+    assert.deepEqual(u.service_rates, [{ service_id: 1, pct: 30, branches: [] }]);
+    assert.deepEqual(u.inpatient_rates, [], 'ключ старого экрана не превратился в стационарную ставку');
+    const stored = db.prepare('SELECT service_rates, inpatient_rates FROM users WHERE id = ?').get(u.id);
+    assert.ok(!stored.service_rates.includes('inpatient_pct'));
+    assert.equal(stored.inpatient_rates, '');
   } finally { server.close(); }
 });

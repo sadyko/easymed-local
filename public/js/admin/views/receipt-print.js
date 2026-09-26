@@ -88,7 +88,7 @@ export async function printInvoiceCheck({ supabase, printableSheet, invoiceId, c
     if (error || !inv) return { ok: false, reason: 'Счёт не найден.' };
 
     const { data: items } = await supabase.from('invoice_items')
-        .select('id, description, quantity, unit_price, total').eq('invoice_id', inv.id);
+        .select('id, description, quantity, unit_price, total, discount_amount').eq('invoice_id', inv.id);
     if (!items || !items.length) return { ok: false, reason: 'В счёте нет позиций.' };
 
     const { data: pat } = await supabase.from('patients')
@@ -102,9 +102,10 @@ export async function printInvoiceCheck({ supabase, printableSheet, invoiceId, c
     // очередь: обе подписи живут на visit_services, и второй поход в базу за
     // тем же набором строк был бы лишним.
     const { data: vsRows } = await supabase.from('visit_services')
-        .select('id, invoice_item_id, doctor_id(full_name, specialty, role)')
+        .select('id, invoice_item_id, doctor_id(full_name, specialty, role), service_templates(name)')
         .in('invoice_item_id', items.map((i) => i.id));
     const byItem = performersByItem(vsRows);
+    const pkgByItem = packagesByItem(vsRows);   // PACKAGES_V1
 
     printableSheet({ type: 'fiscal', idLine: inv.invoice_number || String(inv.id), data: {
         docNo: inv.invoice_number || String(inv.id),
@@ -115,7 +116,7 @@ export async function printInvoiceCheck({ supabase, printableSheet, invoiceId, c
         sex: GENDER_RU[String((pat && pat.gender) || '').toLowerCase()] || '',
         cashier: cashierName,
         items: items.map((it) => ({
-            name: it.description || 'Услуга', qty: it.quantity, price: it.unit_price,
+            name: packageItemName(it.description || 'Услуга', pkgByItem[it.id], it.discount_amount), qty: it.quantity, price: it.unit_price,
             ...(byItem[it.id] || {}),   // performer / performerRole, когда исполнитель назначен
         })),
         subtotal: inv.subtotal, discount: inv.discount_amount,
@@ -153,6 +154,31 @@ export function performersByItem(vsRows) {
     return out;
 }
 
+// PACKAGES_V1 — из какого пакета позиция: visit_services -> { [invoice_item_id]: имя пакета }.
+// Нужен embed service_templates(name) в выборке строк визита.
+export function packagesByItem(vsRows) {
+    const out = {};
+    if (!Array.isArray(vsRows)) return out;
+    for (const r of vsRows) {
+        const p = r && r.service_templates;
+        const name = p && p.name ? String(p.name).trim() : '';
+        if (name && r.invoice_item_id != null) out[r.invoice_item_id] = name;
+    }
+    return out;
+}
+
+// PACKAGES_V1 — подпись позиции на бланке: «УЗИ · пакет «Осень», скидка −20 000».
+// Скидка строки — её собственная (invoice_items.discount_amount); строка без
+// пакета и без своей скидки печатается как прежде.
+export function packageItemName(name, packageName, discount) {
+    const base = String(name || 'Услуга');
+    const d = Math.round(Number(discount) || 0);
+    const bits = [];
+    if (packageName) bits.push('пакет «' + packageName + '»');
+    if (d > 0) bits.push('скидка −' + String(d).replace(/\B(?=(\d{3})+(?!\d))/g, ' '));
+    return bits.length ? base + ' · ' + bits.join(', ') : base;
+}
+
 // RECEIPT_DOB_PERFORMER_V1 — очередь И исполнители одним запросом.
 //
 // Обе подписи живут на одних и тех же visit_services, и раньше каждый экран
@@ -166,18 +192,19 @@ export async function loadInvoiceLines(supabase, invoiceId, itemIds = null) {
             const { data: items } = await supabase.from('invoice_items').select('id').eq('invoice_id', invoiceId);
             ids = (items || []).map((i) => i.id);
         }
-        if (!ids.length) return { queue: [], byItem: {} };
+        if (!ids.length) return { queue: [], byItem: {}, packages: {} };
         const { data: vsRows } = await supabase.from('visit_services')
-            .select('id, invoice_item_id, queue_key, queue_no, services(name), doctor_id(full_name, specialty, role)')
+            .select('id, invoice_item_id, queue_key, queue_no, services(name), doctor_id(full_name, specialty, role), service_templates(name)')
             .in('invoice_item_id', ids);
         const byItem = performersByItem(vsRows);
+        const packages = packagesByItem(vsRows);   // PACKAGES_V1
         const vsIds = (vsRows || []).map((r) => r.id);
-        if (!vsIds.length) return { queue: [], byItem };
+        if (!vsIds.length) return { queue: [], byItem, packages };
         const { data: tickets, error } = await supabase.rpc('issue_queue_numbers', { p_ids: vsIds });
-        if (error) { console.warn('[receipt] queue:', error.message || error); return { queue: [], byItem }; }
-        return { queue: ticketsFor(vsRows, tickets), byItem };
+        if (error) { console.warn('[receipt] queue:', error.message || error); return { queue: [], byItem, packages }; }
+        return { queue: ticketsFor(vsRows, tickets), byItem, packages };
     } catch (e) {
         console.warn('[receipt] lines:', e && e.message);
-        return { queue: [], byItem: {} };
+        return { queue: [], byItem: {}, packages: {} };
     }
 }

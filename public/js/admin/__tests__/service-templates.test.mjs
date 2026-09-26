@@ -106,3 +106,77 @@ test('listTemplates asks only for active ones, by name', async () => {
   assert.ok(supabase.calls.some(c => c[0] === 'eq' && c[1] === 'active' && c[2] === true));
   assert.ok(supabase.calls.some(c => c[0] === 'order' && c[1] === 'name'));
 });
+
+// --- PACKAGES_V1 — пакет: скидка и окно предложения -------------------------
+import { packageState, packageValidOn, packageDiscount, packageValidityParts, localToday } from '../views/service-templates.js';
+
+test('окно пакета включительно с обеих сторон; пустая граница — без ограничения', () => {
+  const t = { valid_from: '2026-09-01', valid_until: '2026-09-30' };
+  assert.strictEqual(packageState(t, '2026-08-31'), 'upcoming');
+  assert.strictEqual(packageState(t, '2026-09-01'), 'active');
+  assert.strictEqual(packageState(t, '2026-09-30'), 'active');
+  assert.strictEqual(packageState(t, '2026-10-01'), 'expired');
+  assert.ok(packageValidOn({}, '2030-01-01'), 'прежний шаблон без дат действует всегда');
+  assert.ok(packageValidOn({ valid_until: '2026-09-30' }, '2000-01-01'));
+  assert.ok(!packageValidOn({ valid_from: '2026-09-30' }, '2026-09-29'));
+});
+
+test('скидка пакета: 0..100, испорченное значение — 0', () => {
+  assert.strictEqual(packageDiscount({ discount_percent: 20 }), 20);
+  assert.strictEqual(packageDiscount({ discount_percent: 150 }), 100);
+  for (const v of [null, undefined, 'abc', -5]) assert.strictEqual(packageDiscount({ discount_percent: v }), 0);
+});
+
+test('подпись срока в списке настроек: действует до / истёк / ещё не начался / бессрочно', () => {
+  assert.deepStrictEqual(packageValidityParts({ valid_until: '2026-09-30' }, '2026-09-10'), ['действует до {date}', { date: '30.09.2026' }]);
+  assert.deepStrictEqual(packageValidityParts({ valid_until: '2026-08-31' }, '2026-09-10'), ['истёк {date}', { date: '31.08.2026' }]);
+  assert.deepStrictEqual(packageValidityParts({ valid_from: '2026-10-01' }, '2026-09-10'), ['ещё не начался — с {date}', { date: '01.10.2026' }]);
+  assert.deepStrictEqual(packageValidityParts({ valid_from: '2026-09-01' }, '2026-09-10'), ['действует с {date}', { date: '01.09.2026' }]);
+  assert.deepStrictEqual(packageValidityParts({}, '2026-09-10'), ['бессрочно', {}]);
+});
+
+test('listTemplates отдаёт только пакеты, действующие в названный день; on:null — все', async () => {
+  const rows = [
+    { id: 1, name: 'A', service_ids: [1], valid_until: '2026-09-30' },
+    { id: 2, name: 'B', service_ids: [1], valid_until: '2026-09-01' },
+    { id: 3, name: 'C', service_ids: [1] },
+  ];
+  const supabase = mockSupabase({ data: rows, error: null });
+  const res = await listTemplates(supabase, { on: '2026-09-10' });
+  assert.deepStrictEqual(res.data.map((r) => r.id), [1, 3]);
+  assert.ok(supabase.calls.some((c) => c[0] === 'select' && /discount_percent/.test(c[1]) && /valid_until/.test(c[1])), 'скидку и срок не спросили');
+  const all = await listTemplates(mockSupabase({ data: rows, error: null }), { on: null });
+  assert.strictEqual(all.data.length, 3);
+  assert.match(localToday(new Date(2026, 8, 5)), /^2026-09-05$/);
+});
+
+test('смета, сохранённая шаблоном, — пакет без скидки и без дат (сервер ставит 0 и NULL сам)', async () => {
+  const supabase = mockSupabase();
+  await createTemplate(supabase, { name: 'Смета', serviceIds: [1] });
+  const ins = supabase.calls.find((c) => c[0] === 'insert')[1];
+  assert.deepStrictEqual(Object.keys(ins).sort(), ['active', 'name', 'service_ids']);
+});
+
+// PACKAGES_V1 (ревью I-1) — смета мастера делит строки так же, как сервер:
+// строка пакета со скидкой, действующего в её день, несёт СВОЮ скидку (бо́льшую
+// из пакета и категории), а лояльность/промокод считаются только по остальным.
+import { packageSplit } from '../views/service-templates.js';
+
+test('смета: строки пакета — своя скидка, лояльность — только по остальным (как сервер)', () => {
+  const pkg = { id: 1, pct: 20, valid_from: '2026-09-01', valid_until: '2026-09-30' };
+  const lines = [
+    { total: 200000, package: pkg, day: '2026-09-10' },   // УЗИ по пакету
+    { total: 100000, package: null, day: '2026-09-10' },  // анализ
+  ];
+  // VIP 10 %: на строке пакета max(20, 10) = 40 000; остаток — 100 000.
+  assert.deepStrictEqual(packageSplit(lines, 10), { packageDiscount: 40000, restTotal: 100000 });
+  // Категория больше пакета — на строке пакета категория.
+  assert.deepStrictEqual(packageSplit(lines, 30), { packageDiscount: 60000, restTotal: 100000 });
+});
+
+test('смета: пакет вне дня строки или без скидки — обычная строка', () => {
+  const pkg = { id: 1, pct: 20, valid_from: '2026-09-01', valid_until: '2026-09-30' };
+  assert.deepStrictEqual(packageSplit([{ total: 100, package: pkg, day: '2026-10-01' }], 0), { packageDiscount: 0, restTotal: 100 });
+  assert.deepStrictEqual(packageSplit([{ total: 100, package: { id: 2, pct: 0 }, day: '2026-09-10' }], 0), { packageDiscount: 0, restTotal: 100 });
+  assert.deepStrictEqual(packageSplit([], 10), { packageDiscount: 0, restTotal: 0 });
+});

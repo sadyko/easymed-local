@@ -11,6 +11,7 @@ import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 import { crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../services/crm/visit-status.js';
 import { tagInsertRefusal } from '../services/crm/config.js';   // CRM_HEAD_MERGE_TAGS_V1 (ревью M4)
 import { roleWriteRefusal } from '../services/role-guard.js';   // ADMIN_ROWS_GRANTABLE_V1
+import { packageStampRefusal } from '../services/rpc/billing.js';   // PACKAGES_V1 (ревью I-3)
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -98,6 +99,28 @@ function refuseSurgeryWithoutBed(db, meta, body) {
     if (!admitted) {
       return 'Хирургия оформляется на госпитализацию: сначала положите пациента на койку, '
         + 'иначе счёт за операцию окажется вне истории лечения.';
+    }
+  }
+  return null;
+}
+
+// PACKAGES_V1 (ревью I-3) — текст отказа или null. Вставка: пакет строки
+// проверяется по местному дню её визита (то же правило, что у счёта —
+// billing.js linePackage). Правка: package_id только снимается (реестр,
+// onlyValues), и только со строки вне счёта.
+function refusePackageWrite(db, meta, body, user) {
+  if (!meta || meta.table !== 'visit_services') return null;
+  const rows = Array.isArray(body && body.values) ? body.values
+    : (body && body.values ? [body.values] : []);
+  if (meta.op === 'insert' || meta.op === 'upsert') return packageStampRefusal(db, rows);
+  if (meta.op === 'update' && rows.some((r) => r && Object.prototype.hasOwnProperty.call(r, 'package_id'))) {
+    let invoiced = false;
+    try {
+      const sel = compile({ table: body.table, op: 'select', columns: 'id,invoice_item_id', filters: body.filters }, user, { db });
+      invoiced = db.prepare(sel.sql).all(...sel.params).some((r) => r.invoice_item_id != null);
+    } catch { invoiced = false; }
+    if (invoiced) {
+      return 'Строка уже в счёте: скидку пакета в нём меняют через счёт — замените или уберите услугу в карточке пациента.';
     }
   }
   return null;
@@ -208,6 +231,15 @@ export function dbRoutes(db) {
     const surgeryRefusal = refuseSurgeryWithoutBed(db, compiled.meta, req.body);
     if (surgeryRefusal) {
       return res.status(409).json({ error: { code: 'conflict', message: surgeryRefusal } });
+    }
+    // PACKAGES_V1 (ревью I-3) — пакет вне срока визита отказывается В МИГ, когда
+    // его ставят на строку, а не у кассы, когда счёт уже не выставить.
+    // Снять пакет правкой (package_id = NULL) можно только со строки, ещё не
+    // попавшей в счёт: у выставленной скидка уже записана в позиции счёта, и
+    // правится она через счёт (замена / удаление строки в карточке пациента).
+    const packageRefusal = refusePackageWrite(db, compiled.meta, req.body, req.user);
+    if (packageRefusal) {
+      return res.status(409).json({ error: { code: 'conflict', message: packageRefusal } });
     }
 
     try {

@@ -598,6 +598,9 @@ function servicesPane(state, onReload) {
                         // день к двум врачам, вторая строка ждёт своей сметы.
                         visitId:        state.visit.id || null,
                         initialDateIso: (state.visit?.visit_date || state.visit?.date || '').slice(0, 10) || null,
+                        // PACKAGES_V1 (ревью I-3) — «+Пакеты» по дню ЭТОГО визита (местному:
+                        // окно переводит время визита в день клиники), а не по сегодня.
+                        packageDay:     state.visit?.visit_date || state.visit?.date || null,
                         // Already-attached services render disabled in the picker
                         // so the same service can't be added to this visit twice.
                         excludeServiceIds: (state.services || []).map(s => s.service_id).filter(Boolean),
@@ -1059,7 +1062,7 @@ async function voidDispensedItem(row, state, onReload) {
 }
 
 async function addServiceFromPicker(state, pick, onReload) {
-    const { service, doctor, startISO, price_tier } = pick || {};
+    const { service, doctor, startISO, price_tier, package: pkg } = pick || {};
     // The visit day is over — refuse even if the picker was opened earlier.
     if (isVisitEnded(state.visit)) { toast(VISIT_ENDED_MSG, 'fail'); return; }
     // Reject duplicates — the same service can't be attached to the same
@@ -1079,6 +1082,7 @@ async function addServiceFromPicker(state, pick, onReload) {
         total:        price,
         scheduled_at: startISO || null,
         price_tier:   price_tier || null,   // VISIT_TIER_PRICING_V1 — quoted by the picker for this patient
+        package_id:   pkg && pkg.id ? pkg.id : null,   // PACKAGES_V1 — строка из пакета каталога
     });
     if (error) { toast(error.message, 'fail'); return; }
     await activateVisitIfPending(state);

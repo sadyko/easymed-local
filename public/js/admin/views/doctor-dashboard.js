@@ -19,19 +19,13 @@
 //   «Приёмов сегодня»      visits: doctor_id = я, visit_date внутри местных
 //                          суток. Это записи, а не услуги: пациент приходит на
 //                          приём, а услуг в нём может быть три.
-//   «Заработано сегодня»   ДОЛЯ ВРАЧА по завершённым услугам сегодняшних
-//                          приёмов. Арифметика — та же и в том же порядке, что
-//                          в отчёте «Зарплата врачей» (rpc/reports.js,
-//                          ITEM_FEE_SQL): база = сумма строки − доля скидки
-//                          счёта; налог = база × ставка услуги; доля =
-//                          (база − налог) × процент врача; фикс — за единицу и
-//                          налогом не режется. Второй реализации нет: обе
-//                          стороны кабинета зовут serviceShare() ИЗ ЭТОГО
-//                          ФАЙЛА (consultation.js импортирует его отсюда).
-//                          DOCTOR_TIER_V1 — и ступень по объёму тоже: позиции
-//                          строк считает сервер (doctor_tier_positions), а
-//                          плитки, «за 7 дней» и график зовут tierShare() —
-//                          ту же функцию, что вкладка «Зарплата».
+//   «Заработано сегодня»   ДОЛЯ ВРАЧА по выполненным услугам сегодняшнего дня.
+//                          PAY_BASIS_PERFORMED_V1 — браузер её НЕ СЧИТАЕТ:
+//                          строки с долей приходят с сервера
+//                          (doctor_pay_summary) — те же, что в отчёте
+//                          «Зарплаты врачей»: скидка счёта, налог, процент со
+//                          ступенью, ставка по умолчанию, цена счёта у строки
+//                          без счёта. Здесь они только раскладываются по дням.
 //   «Услуг завершено»      visit_services сегодняшних приёмов со статусом
 //                          completed, и рядом — сколько их всего за день.
 //   «Пациентов сегодня»    разные patient_id среди сегодняшних приёмов.
@@ -215,70 +209,51 @@ export function serviceRateMap(doctorRow) {
     return m;
 }
 
-/**
- * Доля врача с ОДНОЙ услуги. DOCTOR_SHARE_AFTER_TAX_V1 — порядок в точности
- * как в отчётах (rpc/reports.js ITEM_FEE_SQL):
- *   база = сумма строки − доля скидки счёта
- *   налог = база × ставка налога услуги
- *   доля = (база − налог) × процент врача
- * Ставки налога нет — считаем 0 и не выдумываем налог, которого нет в данных.
- */
-export function serviceShare(s, rateMap) {
-    const rate = rateMap.get(String(s.serviceId));
-    if (!rate) return 0;
-    // CABINET_FEE_PARITY_V1 — та же формула, что ITEM_FEE_SQL (rpc/reports.js):
-    // фикс — за единицу и ВМЕСТО процента; своя цена врача (price) — это цена
-    // счёта, а не оплата, и в гонорар не входит. Раньше кабинет прибавлял price
-    // к доле и не видел fix — ведомость и кабинет расходились молча.
-    if (rate.fixPay) return rate.fixPay * (Number(s.quantity) || 1);
-    const base = Math.max(0, Number(s.total || 0) - Number(s.discount || 0));
-    const taxRate = s.taxRate != null ? Number(s.taxRate) : 0;
-    const net = base * (1 - taxRate / 100);
-    return net * (rate.percentage || 0) / 100;
-}
-
-/**
- * DOCTOR_TIER_V1 — доля строки с учётом ступени по объёму. pos — строка ответа
- * doctor_tier_positions для этой visit_service ({units, units_above,
- * tier_percent}) или null. Нумерацию считает СЕРВЕР; здесь только смесь по
- * единицам — та же формула, что ITEM_EFF_PCT_SQL в rpc/reports.js. Без
- * позиции, без единиц за порогом или при фиксированной ОПЛАТЕ за единицу
- * (fix) равна serviceShare(); своя цена врача (price) ступень не отменяет.
- */
+// PAY_BASIS_PERFORMED_V1 — доли врача браузер больше НЕ СЧИТАЕТ. Здесь были
+// serviceShare()/tierShare() — копия ITEM_FEE_SQL, — и кабинет по ним считал
+// амбулаторную долю сам: по строкам визита, без ставки по умолчанию
+// (service_rate_default), не больше 500 строк, — и его сумма расходилась с
+// «Зарплатами врачей». Теперь строки приходят С ДОЛЕЙ с сервера
+// (doctor_pay_summary — те же строки, что ведомость), и обе стороны кабинета
+// их только складывают и раскладывают по дням.
 //
-// DOCTOR_TIER_V2 — ступеней до трёх: сервер отдаёт ещё units_above_2 /
-// units_above_3 (единицы за порогами 2 и 3) и tier_percent_2 / _3. Каждая
-// единица идёт по ступени САМОГО ВЫСОКОГО порога, который она перешагнула:
-// полосы above−above_2, above_2−above_3, above_3 — ровно ITEM_EFF_PCT_SQL.
-// Ответ без этих полей (старый сервер) — одна ступень, как раньше.
-// ROLE_REPORTS_SETTINGS_V1 (ревью M2) — ОТКАЗ В СТУПЕНЯХ НЕ ДОЛЖЕН ТИХО
-// МЕНЯТЬ ЗАРПЛАТУ. doctor_tier_positions отдаёт ступени чужого врача только
-// тому, у кого есть «Оплата врачей»; без них tierShare считает долю БЕЗ
-// ступени, и кабинет показывал бы меньшую сумму как настоящую. Отказ сервера
-// (403) узнаётся здесь, а кабинет вместо суммы показывает эту фразу.
-export const TIER_DENIED_NOTE = 'Ступени доли не загружены — нет права на отчёт «Оплата врачей»';
-export function tierRefused(error) {
+// ROLE_REPORTS_SETTINGS_V1 (ревью M2) — ОТКАЗ НЕ ДОЛЖЕН ТИХО МЕНЯТЬ ЗАРПЛАТУ.
+// Начисления чужого врача сервер отдаёт только тому, у кого есть «Оплата
+// врачей»; отказ (403) узнаётся здесь, и кабинет вместо суммы показывает эту
+// фразу, а не ноль.
+export const PAY_DENIED_NOTE = 'Начисления не загружены — нет права на отчёт «Оплата врачей»';
+export function payRefused(error) {
     return !!error && (error.code === 'forbidden' || error.status === 403);
 }
 
-export function tierShare(s, rateMap, pos) {
-    const rate = rateMap.get(String(s.serviceId));
-    if (!rate) return 0;
-    if (rate.fixPay) return serviceShare(s, rateMap);
-    const units = pos && Number(pos.units) > 0 ? Number(pos.units) : 0;
-    const clampU = (v) => Math.max(0, Math.min(units, Number(v) || 0));
-    const above = units ? clampU(pos.units_above) : 0;
-    if (!above) return serviceShare(s, rateMap);
-    const above2 = Math.min(above, clampU(pos.units_above_2));
-    const above3 = Math.min(above2, clampU(pos.units_above_3));
-    const base = Math.max(0, Number(s.total || 0) - Number(s.discount || 0));
-    const taxRate = s.taxRate != null ? Number(s.taxRate) : 0;
-    const net = base * (1 - taxRate / 100);
-    const pct = rate.percentage || 0;
-    const tierPct  = Math.max(pct, Number(pos.tier_percent) || 0);
-    const tierPct2 = Math.max(pct, Number(pos.tier_percent_2) || 0);
-    const tierPct3 = Math.max(pct, Number(pos.tier_percent_3) || 0);
-    return net * (pct * (units - above) + tierPct * (above - above2) + tierPct2 * (above2 - above3) + tierPct3 * above3) / units / 100;
+/**
+ * Строки выплаты врача за период с сервера (doctor_pay_summary). Ответ
+ * { outpatient, inpatient, referral, inpatient_referral, lines } — или пусто, если сервер
+ * отказал: { denied: true } при 403, чтобы экран сказал почему.
+ */
+export async function loadDoctorPay(doctorId, fromDay, toDay) {
+    const empty = {
+        outpatient: { count: 0, unbilled: 0, amount: 0, net: 0, fee: 0 },
+        inpatient: { count: 0, unbilled: 0, amount: 0, net: 0, fee: 0 },
+        referral: { rows: [], count: 0, reward: 0, paid_amount: 0 },
+        // INPATIENT_BONUS_V1 — «За направление в стационар» (те же строки, что
+        // в «Рефералах» и «По врачам»).
+        inpatient_referral: { rows: [], count: 0, reward: 0, paid_amount: 0, admissions: 0 },
+        lines: [], total: 0, denied: false, failed: false,
+    };
+    try {
+        const { data, error } = await supabase.rpc('doctor_pay_summary', { doctor_id: doctorId, from: fromDay, to: toDay });
+        if (error) {
+            console.warn('[doctor-pay] summary:', error.message);
+            return { ...empty, denied: payRefused(error), failed: !payRefused(error) };
+        }
+        if (!data || !Array.isArray(data.lines)) return { ...empty, failed: true };
+        return { ...empty, ...data, referral: { ...empty.referral, ...(data.referral || {}) },
+            inpatient_referral: { ...empty.inpatient_referral, ...(data.inpatient_referral || {}) }, denied: false, failed: false };
+    } catch (e) {
+        console.warn('[doctor-pay] summary:', e && e.message);
+        return { ...empty, failed: true };
+    }
 }
 
 /**
@@ -320,48 +295,27 @@ export function perServicePayApplies(doctorRow) {
     return ['consultations', 'services', 'revenue', 'lab_tests', 'surgeries'].some((k) => kpis.has(k));
 }
 
-/**
- * Доля скидки СЧЁТА, приходящаяся на строку. Скидка живёт на счёте, а не на
- * услуге; разносится пропорционально сумме строки — ровно как ITEM_DISCOUNT_SQL.
- * Возвращает Map(invoice_item_id → сумма скидки).
- */
-export function prorateInvoiceDiscounts(items, invoices) {
-    const invById = new Map((invoices || []).map((i) => [i.id, i]));
-    const out = new Map();
-    for (const it of (items || [])) {
-        const inv = invById.get(it.invoice_id);
-        const sub = Number(inv && inv.subtotal) || 0;
-        const disc = Number(inv && inv.discount_amount) || 0;
-        out.set(it.id, sub > 0 ? disc * (Number(it.total) || 0) / sub : 0);
-    }
-    return out;
-}
-
 // ---------------------------------------------------------------------------
 // СЧЁТ ПОКАЗАТЕЛЕЙ — чистая функция, отдельно от загрузки и от рисования.
 // ---------------------------------------------------------------------------
 
 /**
  * @param visits   [{ id, at, status, patientId, … }] приёмы врача за окно
- * @param services [{ id, visitId, status, serviceId, serviceName, total,
- *                    discount, taxRate, quantity, invoiceStatus }] услуги этих приёмов
- * @param rateMap  Map из serviceRateMap()
+ * @param services [{ id, visitId, status, serviceId, serviceName }] услуги этих
+ *                 приёмов — РАБОТА (сколько сделано), не деньги
+ * @param payLines PAY_BASIS_PERFORMED_V1 — строки выплаты с сервера
+ *                 (doctor_pay_summary.lines): { date 'YYYY-MM-DD' (местный день
+ *                 выполнения), fee, invoice_status }. Деньги — только отсюда.
  * @param now      «сейчас» (тест подаёт своё)
  * @param perService платят ли поуслужно (perServicePayApplies)
- * @param posById  DOCTOR_TIER_V1 — Map(String(visit_service_id) → строка ответа
- *                 doctor_tier_positions). Пустая карта означает «сервер не
- *                 назвал позиции», а НЕ «ноль процентов»: доля тогда считается
- *                 ровно так же, как до ступеней.
  */
-export function computeDoctorStats({ visits, services, rateMap, now, perService = true, posById = new Map() }) {
+export function computeDoctorStats({ visits, services, payLines = [], now, perService = true }) {
     const today = localDayKey(now);
     const dayOf = new Map((visits || []).map((v) => [String(v.id), localDayKey(v.at)]));
-    // DOCTOR_TIER_V1 — ТА ЖЕ доля, что на вкладке «Зарплата» (tierShare с
-    // позицией сервера). Плитки «сегодня / за 7 дней» и график дня считали по
-    // serviceShare, и два числа про один день на одном экране расходились
-    // ровно на ступень. Без позиции tierShare равна serviceShare, поэтому
-    // клиника без ступеней не видит ни одного изменения.
-    const share = (s) => (perService ? tierShare(s, rateMap, posById.get(String(s.id)) || null) : 0);
+    // Доля строки — готовая, с сервера: та же, что в «Зарплатах врачей» и на
+    // вкладке «Зарплата». При окладе поуслужной доли нет вовсе.
+    const lines = perService ? (payLines || []) : [];
+    const fee = (l) => Number(l.fee) || 0;
 
     const todayVisits = (visits || []).filter((v) => localDayKey(v.at) === today);
     const todaySvc = (services || []).filter((s) => dayOf.get(String(s.visitId)) === today);
@@ -388,10 +342,15 @@ export function computeDoctorStats({ visits, services, rateMap, now, perService 
         const i = idx.get(dayOf.get(String(s.visitId)));
         if (i == null) continue;
         series[i].services += 1;
-        series[i].earned += share(s);
         const name = s.serviceName || tr('Услуга без названия');
         byService.set(name, (byService.get(name) || 0) + 1);
     }
+    // Деньги — по дню ВЫПОЛНЕНИЯ строки (у амбулаторной это день приёма).
+    for (const l of lines) {
+        const i = idx.get(String(l.date || ''));
+        if (i != null) series[i].earned += fee(l);
+    }
+    const todayLines = lines.filter((l) => String(l.date || '') === today);
 
     const sum = (from, to, field) => series.slice(from, to).reduce((n, d) => n + d[field], 0);
     const week = { services: sum(7, 14, 'services'), earned: sum(7, 14, 'earned') };
@@ -420,9 +379,9 @@ export function computeDoctorStats({ visits, services, rateMap, now, perService 
         todayArrived: todayVisits.filter((v) => v.status === 'arrived' && stillWaiting(v)).length,
         todayServices: todaySvc.length,
         todayCompleted: todayDone.length,
-        todayEarned: Math.round(todayDone.reduce((n, s) => n + share(s), 0)),
-        todayPaid: Math.round(todayDone.filter((s) => s.invoiceStatus === 'paid')
-            .reduce((n, s) => n + share(s), 0)),
+        todayEarned: Math.round(todayLines.reduce((n, l) => n + fee(l), 0)),
+        todayPaid: Math.round(todayLines.filter((l) => l.invoice_status === 'paid')
+            .reduce((n, l) => n + fee(l), 0)),
         week: { services: week.services, earned: Math.round(week.earned) },
         prevWeek: { services: prev.services, earned: Math.round(prev.earned) },
         deltaServices: week.services - prev.services,
@@ -501,9 +460,8 @@ const state = {
     doctor: null,
     visits: [],
     services: [],
-    // DOCTOR_TIER_V1 — позиции ступени, как их посчитал СЕРВЕР:
-    // String(visit_service_id) → строка ответа doctor_tier_positions.
-    tierPos: new Map(),
+    // PAY_BASIS_PERFORMED_V1 — строки выплаты с сервера (doctor_pay_summary).
+    payLines: [],
     metric: 'services',   // что рисует график: 'services' | 'earned'
     now: null,
 };
@@ -514,7 +472,7 @@ let openInpatientsRef = null;   // HEAD_DOCTOR_WARD_VIEW_V1
 const money = (n) => Math.round(Number(n) || 0).toLocaleString('ru-RU');
 
 /**
- * Всё, что нужно экрану, пятью запросами (четыре к данным + позиции ступени).
+ * Всё, что нужно экрану, четырьмя запросами (три к данным + выплата с сервера).
  * КАЖДЫЙ сужен на СВОЙ id, и id берётся из dashboardDoctorId(), а не из
  * аргумента.
  */
@@ -522,7 +480,7 @@ export async function loadDoctorDashboard() {
     const me = dashboardDoctorId();
     state.failed = false;
     state.now = new Date();
-    state.tierPos = new Map();
+    state.payLines = [];
     if (!me) { state.doctor = null; state.visits = []; state.services = []; state.loaded = true; return; }
 
     const from = startOfDay(state.now); from.setDate(from.getDate() - (DASH_WINDOW_DAYS - 1));
@@ -569,7 +527,7 @@ export async function loadDoctorDashboard() {
     let svcRows = [];
     if (visitIds.length) {
         const { data, error } = await supabase.from('visit_services')
-            .select('id, visit_id, service_id, status, quantity, unit_price, total, created_at, invoice_item_id, services(id, name, tax_rate)')
+            .select('id, visit_id, service_id, status, created_at, services(id, name)')
             .eq('doctor_id', me)
             .in('visit_id', visitIds)
             .limit(2000);
@@ -577,77 +535,26 @@ export async function loadDoctorDashboard() {
         svcRows = data || [];
     }
 
-    // 4. Скидка счёта и оплачен ли он. Обе величины нужны деньгам: скидка
-    // входит в базу доли врача, статус счёта отвечает на «сколько из этого уже
-    // в кассе».
-    const itemIds = [...new Set(svcRows.map((r) => r.invoice_item_id).filter(Boolean))];
-    let discByItem = new Map();
-    const statusByItem = new Map();
-    if (itemIds.length) {
-        try {
-            const { data: items } = await supabase.from('invoice_items')
-                .select('id, total, invoice_id').in('id', itemIds).limit(2000);
-            const invIds = [...new Set((items || []).map((i) => i.invoice_id).filter(Boolean))];
-            const { data: invs } = invIds.length
-                ? await supabase.from('invoices').select('id, subtotal, discount_amount, status').in('id', invIds).limit(2000)
-                : { data: [] };
-            discByItem = prorateInvoiceDiscounts(items, invs);
-            const invById = new Map((invs || []).map((i) => [i.id, i]));
-            for (const it of (items || [])) {
-                const inv = invById.get(it.invoice_id);
-                statusByItem.set(it.id, (inv && inv.status) || null);
-            }
-        } catch (e) { console.warn('[doctor-dash] invoices:', e && e.message); }
-    }
+    // 4. PAY_BASIS_PERFORMED_V1 — деньги окна: строки выплаты с долей, как их
+    // посчитал сервер (те же, что в «Зарплатах врачей»). Прежде здесь читались
+    // строки счетов и счета, а доля и ступень считались в браузере.
+    const pay = await loadDoctorPay(me, localDayKey(from), localDayKey(state.now));
+    if (pay.failed) state.failed = true;
+    state.payLines = pay.lines || [];
 
     // Полоса главного врача — отдельным шагом и после денег: она не влияет ни
     // на одно число выше и не имеет права задержать «мой день», если стационар
     // ответит медленно.
     await loadWardHead();
 
-    const visitAt = new Map(state.visits.map((v) => [String(v.id), v.at]));
     state.services = svcRows.map((r) => ({
         id: r.id,
         visitId: r.visit_id,
         serviceId: r.service_id,
         serviceName: (r.services && r.services.name) || '',
         status: r.status || '',
-        // CABINET_FEE_PARITY_V1 — количество платит: фиксированная оплата идёт
-        // ЗА ЕДИНИЦУ, и без этого поля строка на три единицы оплачивалась как
-        // одна (COALESCE(ii.quantity, 1) на сервере).
-        quantity: Number(r.quantity) || 1,
-        // DOCTOR_TIER_V1 — месяц ступени сервер считает по ДАТЕ ВИЗИТА
-        // (localMonth('v.visit_date')), поэтому диапазон запроса строится по
-        // ней же; created_at — запасной вариант, если визит не доехал.
-        visitDate: visitAt.get(String(r.visit_id)) || null,
         createdAt: r.created_at || null,
-        total: Number(r.total || (r.unit_price || 0) * (r.quantity || 1)),
-        taxRate: r.services && r.services.tax_rate != null ? Number(r.services.tax_rate) : 0,
-        discount: r.invoice_item_id ? (discByItem.get(r.invoice_item_id) || 0) : 0,
-        invoiceStatus: r.invoice_item_id ? (statusByItem.get(r.invoice_item_id) || null) : null,
     }));
-
-    // 5. DOCTOR_TIER_V1 — позиции ступени за ВЕСЬ затронутый диапазон месяцев,
-    // ОДНИМ запросом (правило: один запрос за диапазон, а не по одному на
-    // месяц). Нумерацию считает СЕРВЕР (doctor_tier_positions), сводка её
-    // только применяет — тем же правилом, что вкладка «Зарплата» и ведомость.
-    // Текущий месяц входит в диапазон всегда: окно в 14 дней может целиком
-    // лежать в прошлом месяце, а плитка всё равно про сегодня. Отказ сервера
-    // не молчит: без позиций доли считаются БЕЗ ступени, и это видно в консоли.
-    try {
-        const nowKey = localDayKey(state.now).slice(0, 7);
-        const months = new Set(state.services
-            .map((s) => localDayKey(s.visitDate || s.createdAt).slice(0, 7))
-            .filter(Boolean));
-        months.add(nowKey);
-        const sorted = [...months].sort();
-        const { data, error } = await supabase.rpc('doctor_tier_positions',
-            { doctor_id: me, from: sorted[0], to: sorted[sorted.length - 1] });
-        if (error) console.warn('[dash] tier positions:', error.message);
-        else if (data && Array.isArray(data.rows)) {
-            state.tierPos = new Map(data.rows.map((p) => [String(p.visit_service_id), p]));
-        }
-    } catch (e) { console.warn('[dash] tier positions:', e && e.message); }
 
     state.loaded = true;
 }
@@ -817,7 +724,7 @@ export async function refreshDoctorDashboard() {
 
 export function resetDoctorDashboard() {
     state.loaded = false; state.loading = false; state.failed = false;
-    state.doctor = null; state.visits = []; state.services = []; state.tierPos = new Map();
+    state.doctor = null; state.visits = []; state.services = []; state.payLines = [];
     state.metric = 'services'; state.now = null;
     ward.wide = false; ward.loaded = false; ward.exam = 0; ward.attending = 0; ward.inBed = 0;
     hostRef = null; openWorkRef = null; openInpatientsRef = null; openPayRef = null;
@@ -843,8 +750,7 @@ function paint() {
     const now = state.now || new Date();
     const doc = state.doctor;
     const perService = perServicePayApplies(doc);
-    const rateMap = serviceRateMap(doc);
-    const stats = computeDoctorStats({ visits: state.visits, services: state.services, rateMap, now, perService, posById: state.tierPos });
+    const stats = computeDoctorStats({ visits: state.visits, services: state.services, payLines: state.payLines, now, perService });
     const day = buildDayColumn({ visits: state.visits, services: state.services, now });
 
     // Работа главного врача идёт ПЕРВОЙ строкой: пациент, которого не осмотрели,

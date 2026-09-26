@@ -4,10 +4,11 @@
 //
 //   1. КАЖДАЯ ЦИФРА СЧИТАЕТСЯ, А НЕ РИСУЕТСЯ. Показатели считаются из
 //      посеянных данных и сверяются с числами, посчитанными РУКОЙ в шапке
-//      фикстуры (доля врача — по формуле отчёта «Зарплата врачей»: база минус
-//      доля скидки счёта, минус налог услуги, умножить на процент). Тест
-//      «нарисовалось какое-то число» пропустил бы ровно тот класс ошибок, ради
-//      которого этот экран и проверяют.
+//      фикстуры. PAY_BASIS_PERFORMED_V1 — долю врача считает СЕРВЕР
+//      (doctor_pay_summary, те же строки, что «Зарплаты врачей»; формула и её
+//      тесты — server/services/rpc/reports.pay-basis.test.js); фальшивый
+//      сервер ниже отдаёт строки с долей, посчитанной рукой, а дашборд обязан
+//      разложить их по дням, ничего не пересчитав.
 //   2. ЧУЖИЕ ДЕНЬГИ НЕДОСТУПНЫ ПОДМЕНОЙ АРГУМЕНТА. У загрузчика аргумента
 //      нет; лишний аргумент игнорируется, и запросы всё равно уходят с id
 //      вошедшего врача. Смена пользователя меняет фильтр — и заработок.
@@ -239,15 +240,27 @@ const INVOICE_ROWS = [
 // чужого врача приезжали бы в любом случае и тест «не видно чужого» проходил бы
 // по причине, не имеющей отношения к делу.
 let dbCalls = [];
-// DOCTOR_TIER_V1 — ответ doctor_tier_positions: нумерацию строк по ступеням
-// считает СЕРВЕР, сводка её только применяет. Ответ — за ДИАПАЗОН месяцев
-// ({ from, to, rows }), у каждой строки свой ym. По умолчанию ступеней НЕТ:
-// иначе остальные тесты файла молча считали бы деньги по ступени.
-const NO_TIER = () => ({ from: '', to: '', rows: [] });
-let TIER_RESPONSE = NO_TIER();
+// DOCTOR_TIER_V1 — сводка позиции ступени больше НЕ спрашивает: доля строки
+// приходит со ступенью с сервера. Вызов считается, чтобы это было видно.
 let tierCalls = [];
-const monthKey = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
 const dayOff = (off) => { const d = new Date(NOW); d.setDate(d.getDate() + off); return d; };
+const dayKeyOf = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+// PAY_BASIS_PERFORMED_V1 — ответ doctor_pay_summary по врачам: строки
+// выполненных услуг с долей, посчитанной РУКОЙ в шапке фикстуры (sv2 и sv4
+// стоят в очереди — не выполнены, строк выплаты у них нет). Отдаётся по
+// doctor_id ЗАПРОСА: попроси сводка чужого врача — получила бы чужие деньги.
+const payLineOf = (id, off, fee, invoiceStatus) => ({
+  kind: 'out', id, date: dayKeyOf(dayOff(off)), status: 'completed', fee, invoice_status: invoiceStatus,
+  invoiced: invoiceStatus != null, service: 'Приём', patient: '', mrn: '', amount: 0, discount: 0, net: 0, pct: 40, fix: null, tier: false,
+});
+const PAY_A = () => [
+  payLineOf('sv1', 0, 67680, 'paid'),
+  payLineOf('sv3', 0, 37600, 'unpaid'),
+  payLineOf('sv5', -1, 150000, null),
+  payLineOf('sv6', -9, 37600, null),
+];
+let PAY_BY_DOCTOR = { 'u-doc-a': PAY_A(), 'u-doc-b': [payLineOf('svb', 0, 37600, null)] };
+let payCalls = [];
 function matches(row, f) {
   if (f.or) return true;
   const v = row[f.col];
@@ -277,7 +290,18 @@ globalThis.fetch = async (url, opts) => {
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (u.startsWith('/api/rpc/doctor_tier_positions')) {
     tierCalls.push(body);
-    return { ok: true, json: async () => ({ data: TIER_RESPONSE }) };
+    return { ok: true, json: async () => ({ data: { from: '', to: '', rows: [] } }) };
+  }
+  if (u.startsWith('/api/rpc/doctor_pay_summary')) {
+    payCalls.push(body);
+    const lines = PAY_BY_DOCTOR[body.doctor_id] || [];
+    const fee = lines.reduce((n, l) => n + l.fee, 0);
+    return { ok: true, json: async () => ({ data: {
+      from: body.from, to: body.to, rate_default: 0, lines,
+      outpatient: { count: lines.length, unbilled: 0, amount: 0, net: 0, fee },
+      inpatient: { count: 0, unbilled: 0, amount: 0, net: 0, fee: 0 },
+      referral: { rows: [], count: 0, reward: 0, paid_amount: 0 }, total: fee,
+    } }) };
   }
   if (u.startsWith('/api/db')) {
     dbCalls.push(body);
@@ -298,7 +322,7 @@ const perms = await import('../permissions.js');
 perms.setFullAccess('test');
 
 function loginAs(user) { window.easymed.state.user = user ? { ...user, is_admin: false, is_super_admin: false } : null; }
-function reset() { dbCalls = []; tierCalls = []; tabSubCalls = []; lastHistoryUrl = null; dash.resetDoctorDashboard(); }
+function reset() { dbCalls = []; tierCalls = []; payCalls = []; tabSubCalls = []; lastHistoryUrl = null; dash.resetDoctorDashboard(); }
 
 // Значения, посчитанные рукой в шапке фикстуры.
 const SV1_SHARE = 67680;
@@ -306,16 +330,15 @@ const SV3_SHARE = 37600;
 const SV5_SHARE = 150000;
 const SV6_SHARE = 37600;
 
-// «Услуги» в том виде, в каком их отдаёт загрузчик (скидка уже разнесена).
-// id — это id строки visit_services: по нему и только по нему сводка находит
-// позицию ступени (DOCTOR_TIER_V1), поэтому он посеян вместе с остальным.
+// «Услуги» в том виде, в каком их отдаёт загрузчик — РАБОТА (что сделано),
+// без денег: деньги — строки выплаты сервера (PAY_A).
 const A_SERVICES = [
-  { id: 'sv1', visitId: 'v-1', serviceId: 's-1', serviceName: 'Приём терапевта', status: 'completed', total: 200000, discount: 20000, taxRate: 6, invoiceStatus: 'paid' },
-  { id: 'sv2', visitId: 'v-1', serviceId: 's-2', serviceName: 'УЗИ брюшной полости', status: 'queued', total: 100000, discount: 0, taxRate: 0, invoiceStatus: null },
-  { id: 'sv3', visitId: 'v-2', serviceId: 's-1', serviceName: 'Приём терапевта', status: 'completed', total: 100000, discount: 0, taxRate: 6, invoiceStatus: 'unpaid' },
-  { id: 'sv4', visitId: 'v-3', serviceId: 's-2', serviceName: 'УЗИ брюшной полости', status: 'queued', total: 50000, discount: 0, taxRate: 0, invoiceStatus: null },
-  { id: 'sv5', visitId: 'v-5', serviceId: 's-2', serviceName: 'УЗИ брюшной полости', status: 'completed', total: 300000, discount: 0, taxRate: 0, invoiceStatus: null },
-  { id: 'sv6', visitId: 'v-6', serviceId: 's-1', serviceName: 'Приём терапевта', status: 'completed', total: 100000, discount: 0, taxRate: 6, invoiceStatus: null },
+  { id: 'sv1', visitId: 'v-1', serviceId: 's-1', serviceName: 'Приём терапевта', status: 'completed' },
+  { id: 'sv2', visitId: 'v-1', serviceId: 's-2', serviceName: 'УЗИ брюшной полости', status: 'queued' },
+  { id: 'sv3', visitId: 'v-2', serviceId: 's-1', serviceName: 'Приём терапевта', status: 'completed' },
+  { id: 'sv4', visitId: 'v-3', serviceId: 's-2', serviceName: 'УЗИ брюшной полости', status: 'queued' },
+  { id: 'sv5', visitId: 'v-5', serviceId: 's-2', serviceName: 'УЗИ брюшной полости', status: 'completed' },
+  { id: 'sv6', visitId: 'v-6', serviceId: 's-1', serviceName: 'Приём терапевта', status: 'completed' },
 ];
 const A_VISITS = VISIT_ROWS.filter((v) => v.doctor_id === 'u-doc-a').map((v) => ({
   id: v.id, at: v.visit_date, status: v.status, patientId: v.patient_id,
@@ -334,51 +357,17 @@ const chartBars = (host) => {
     .reduce((sum, n) => sum + ((n._t.match(/<rect class="dc-bar"/g) || []).length), 0);
 };
 
-test('доля врача считается по формуле отчёта: база − скидка счёта, минус налог, × процент', () => {
-  const rateMap = dash.serviceRateMap(DOCTOR_A);
-  // sv1: (200 000 − 20 000) × 0,94 × 0,40
-  assert.strictEqual(Math.round(dash.serviceShare(A_SERVICES[0], rateMap)), SV1_SHARE);
-  // sv3: 100 000 × 0,94 × 0,40
-  assert.strictEqual(Math.round(dash.serviceShare(A_SERVICES[2], rateMap)), SV3_SHARE);
-  // sv5: услуга без налога → скидки и налога нет вовсе
-  assert.strictEqual(Math.round(dash.serviceShare(A_SERVICES[4], rateMap)), SV5_SHARE);
-  // Услуга, которой нет в ставках врача, доли НЕ приносит — и это не ноль
-  // «по умолчанию», а «ставки нет»: выдумывать процент нельзя.
-  assert.strictEqual(dash.serviceShare({ serviceId: 's-99', total: 500000, discount: 0, taxRate: 6 }, rateMap), 0);
-  // Разнос скидки счёта — та же пропорция, что ITEM_DISCOUNT_SQL.
-  const disc = dash.prorateInvoiceDiscounts(ITEM_ROWS, INVOICE_ROWS);
-  assert.strictEqual(disc.get('ii-1'), 20000);
-  assert.strictEqual(disc.get('ii-2'), 0);
-});
-
-// DOCTOR_TIER_V2 — три ступени. Зеркало кабинета обязано дать ту же сумму, что
-// отчёт (server/services/rpc/reports.doctor-tier.test.js, тесты «V2:»): там на
-// тех же данных doctor_salaries даёт ровно эти числа.
-test('DOCTOR_TIER_V2: tierShare по трём полосам = отчёт на тех же данных', () => {
-  const rateMap = new Map([['s-t', { percentage: 30, fixPay: 0, price: 0 }]]);
-  const steps = { tier_from: 25, tier_percent: 40, tier_from_2: 50, tier_percent_2: 45, tier_from_3: 100, tier_percent_3: 50 };
-  // Пример владельца: 102 строки по 100 000 — 1–25 по 30 %, 26–50 по 40 %, 51–100 по 45 %, 101+ по 50 %.
-  let sum = 0;
-  for (let n = 1; n <= 102; n++) {
-    const pos = { units: 1, ...steps,
-      units_above: n > 25 ? 1 : 0, units_above_2: n > 50 ? 1 : 0, units_above_3: n > 100 ? 1 : 0 };
-    sum += dash.tierShare({ serviceId: 's-t', total: 100000, discount: 0, taxRate: 0 }, rateMap, pos);
-  }
-  assert.strictEqual(Math.round(sum), 25 * 30000 + 25 * 40000 + 50 * 45000 + 2 * 50000);
-  // Строка из 4 единиц через три порога (26/27 → running 24 → 28): отчёт даёт 165 000.
-  const big = { units: 4, units_above: 3, units_above_2: 2, units_above_3: 1,
-    tier_from: 25, tier_percent: 40, tier_from_2: 26, tier_percent_2: 45, tier_from_3: 27, tier_percent_3: 50 };
-  assert.strictEqual(Math.round(dash.tierShare({ serviceId: 's-t', total: 400000, discount: 0, taxRate: 0 }, rateMap, big)), 165000);
-  // Личный процент выше ступени побеждает на своей полосе: 42 % на полосе ступени 1 (40 %).
-  const r42 = new Map([['s-t', { percentage: 42, fixPay: 0, price: 0 }]]);
-  assert.strictEqual(Math.round(dash.tierShare({ serviceId: 's-t', total: 400000, discount: 0, taxRate: 0 }, r42, big)),
-    Math.round(400000 * (42 + 42 + 45 + 50) / 4 / 100));
-  // Фикс — ни одна ступень не трогает.
-  const fix = new Map([['s-t', { percentage: 30, fixPay: 15000, price: 0 }]]);
-  assert.strictEqual(dash.tierShare({ serviceId: 's-t', total: 400000, discount: 0, taxRate: 0, quantity: 4 }, fix, big), 60000);
-  // Ответ старого сервера без полей _2/_3 — прежняя арифметика одной ступени.
-  const old = { units: 3, units_above: 2, tier_percent: 40 };
-  assert.strictEqual(Math.round(dash.tierShare({ serviceId: 's-t', total: 300000, discount: 0, taxRate: 0 }, rateMap, old)), 110000);
+// PAY_BASIS_PERFORMED_V1 — было: «доля врача считается по формуле отчёта»
+// (serviceShare/tierShare/prorateInvoiceDiscounts — копия ITEM_FEE_SQL в
+// браузере) и «tierShare по трём полосам = отчёт». Этих функций больше нет:
+// формулу держит только сервер, и её числа проверяются там
+// (reports.pay-basis.test.js, reports.doctor-tier.test.js «V2:»,
+// reports.doctor-share.test.js). Здесь — что копии не вернулись.
+test('кабинет не считает долю врача сам: формулы в браузере нет', () => {
+  assert.strictEqual(dash.serviceShare, undefined, 'serviceShare вернулась в браузер');
+  assert.strictEqual(dash.tierShare, undefined, 'tierShare вернулась в браузер');
+  assert.strictEqual(dash.prorateInvoiceDiscounts, undefined, 'разнос скидки счёта вернулся в браузер');
+  assert.strictEqual(typeof dash.loadDoctorPay, 'function', 'выплата берётся с сервера');
 });
 
 test('DOCTOR_TIER_V2: прогресс — к следующему порогу, после последнего — «действует»', () => {
@@ -402,29 +391,9 @@ test('DOCTOR_TIER_V2: прогресс показывает платимую с�
   assert.strictEqual(dash.tierProgressText(30, steps), '30 из 50 в этом месяце · действует 40%, с 51-й доля 45%', 'без личной ставки — как раньше');
 });
 
-test('DOCTOR_TIER_V1: tierShare без позиции = serviceShare; с units_above делит по единицам и не понижает', () => {
-  const rateMap = dash.serviceRateMap(DOCTOR_A);
-  const s = { serviceId: A_SERVICES[0].serviceId, total: 300000, discount: 0, taxRate: 0 };
-  const base = dash.serviceShare(s, rateMap);
-  assert.strictEqual(dash.tierShare(s, rateMap, null), base);
-  assert.strictEqual(dash.tierShare(s, rateMap, { units: 3, units_above: 0, tier_percent: 40 }), base);
-  const pct = rateMap.get(String(s.serviceId)).percentage;
-  // DOCTOR_A: личный процент s-1 = 40, т.е. ≥ 40 — ступень 40 % не была бы видна
-  // (MAX(40, 40) = 40, неотличимо от serviceShare), поэтому ступень выше личного.
-  const tierPct = pct >= 40 ? pct + 10 : 40;
-  // 3 единицы, 2 выше порога по tierPct %: 300000 × (pct·1 + tierPct·2) / 3 / 100
-  const expect = 300000 * (pct * 1 + tierPct * 2) / 3 / 100;
-  assert.strictEqual(Math.round(dash.tierShare(s, rateMap, { units: 3, units_above: 2, tier_percent: tierPct })), Math.round(expect));
-  // ступень ниже личного процента ничего не понижает
-  assert.strictEqual(dash.tierShare(s, rateMap, { units: 1, units_above: 1, tier_percent: 1 }), base);
-  // чужая услуга — 0, как у serviceShare
-  assert.strictEqual(dash.tierShare({ serviceId: 's-99', total: 1000, discount: 0, taxRate: 0 }, rateMap, { units: 1, units_above: 1, tier_percent: 90 }), 0);
-});
-
 test('каждая цифра дашборда сходится с ручным счётом по посеянным данным', () => {
   const stats = dash.computeDoctorStats({
-    visits: A_VISITS, services: A_SERVICES,
-    rateMap: dash.serviceRateMap(DOCTOR_A), now: NOW, perService: true,
+    visits: A_VISITS, services: A_SERVICES, payLines: PAY_A(), now: NOW, perService: true,
   });
   assert.strictEqual(stats.todayVisits, 4, 'четыре сегодняшних приёма: 08:15, 09:00, 09:30, 14:00');
   assert.strictEqual(stats.todayPatients, 3, 'пациентов трое — p-1 записан дважды');
@@ -475,41 +444,41 @@ test('каждая цифра дашборда сходится с ручным 
 
 // DOCTOR_TIER_V1 — СВОДКА СЧИТАЕТ ТУ ЖЕ ДОЛЮ, ЧТО ВКЛАДКА «ЗАРПЛАТА».
 //
-// Вкладка «Зарплата» уже применяет ступень (tierShare + позиции сервера), а
-// плитки сводки считали по serviceShare. Два числа про один день на одном
-// экране расходились бы ровно на ступень, и врач не смог бы понять, какому
-// верить. Плитки, «за 7 дней» и график дня обязаны считать по позициям.
-test('плитки «сегодня / 7 дней» и график дня считают по ступени, когда сервер дал позицию', () => {
-  const rateMap = dash.serviceRateMap(DOCTOR_A);
-  const args = { visits: A_VISITS, services: A_SERVICES, rateMap, now: NOW, perService: true };
-  const base = dash.computeDoctorStats(args);
+// PAY_BASIS_PERFORMED_V1 — было: сводка применяла позицию ступени сама
+// (tierShare + posById). Теперь доля строки приходит со ступенью с сервера —
+// та же, что на вкладке «Зарплата» и в ведомости, — и плитки, «за 7 дней» и
+// график дня складывают ровно её.
+test('плитки «сегодня / 7 дней» и график дня складывают долю строк сервера — со ступенью, если она есть', () => {
+  const base = dash.computeDoctorStats({ visits: A_VISITS, services: A_SERVICES, payLines: PAY_A(), now: NOW, perService: true });
+  // sv3 — 26-я «Приём терапевта» месяца: сервер посчитал её по ступени 50 %
+  // вместо личных 40 %: 94 000 × 0,50 = 47 000 вместо 37 600.
+  const tieredLines = PAY_A().map((l) => (l.id === 'sv3' ? { ...l, fee: 47000, tier: true } : l));
+  const tiered = dash.computeDoctorStats({ visits: A_VISITS, services: A_SERVICES, payLines: tieredLines, now: NOW, perService: true });
 
-  // sv3 — 26-я «Приём терапевта» месяца: 1 единица ВЫШЕ порога, по ступени
-  // 50 % вместо личных 40 %. Ручной счёт (та же формула, что у ведомости):
-  //   база 100 000 − 0 = 100 000; налог 6 % → 100 000 × 0,94 = 94 000
-  //   было  94 000 × 0,40 = 37 600   (SV3_SHARE)
-  //   стало 94 000 × 0,50 = 47 000
-  //   разница 94 000 × (50 − 40) / 100 = 9 400
-  const posById = new Map([['sv3', {
-    visit_service_id: 'sv3', service_id: 's-1', service_name: 'Приём терапевта',
-    units: 1, units_above: 1, tier_from: 25, tier_percent: 50, count_so_far: 26, ym: monthKey(NOW),
-  }]]);
-  const tiered = dash.computeDoctorStats({ ...args, posById });
-
-  assert.strictEqual(base.todayEarned, SV1_SHARE + SV3_SHARE, 'исходная плитка — без ступени');
+  assert.strictEqual(base.todayEarned, SV1_SHARE + SV3_SHARE, 'исходная плитка');
   assert.strictEqual(tiered.todayEarned, SV1_SHARE + 47000);
   assert.strictEqual(tiered.todayEarned, 114680);
-  assert.strictEqual(tiered.todayEarned - base.todayEarned, 9400, 'ровно (50 − 40) % от 94 000');
   // Касса не при чём: ступень меняет ДОЛЮ, а оплачен по-прежнему только inv-1.
   assert.strictEqual(tiered.todayPaid, SV1_SHARE);
-  // График дня — та же арифметика, что плитка: разойтись им нельзя.
+  // График дня — те же строки, что плитка: разойтись им нельзя.
   assert.strictEqual(tiered.series[13].earned, 114680);
-  assert.strictEqual(tiered.week.earned, base.week.earned + 9400, '«за 7 дней» считает тем же правилом');
+  assert.strictEqual(tiered.week.earned, base.week.earned + 9400, '«за 7 дней» — те же строки');
 
-  // Без позиций не меняется НИЧЕГО: пустая карта — это «ступени нет», а не 0 %.
-  const none = dash.computeDoctorStats({ ...args, posById: new Map() });
-  assert.strictEqual(none.todayEarned, base.todayEarned);
-  assert.deepStrictEqual(none.series, base.series);
+  // Нет строк выплаты — денег нет, а РАБОТА дня посчитана та же.
+  const none = dash.computeDoctorStats({ visits: A_VISITS, services: A_SERVICES, payLines: [], now: NOW, perService: true });
+  assert.strictEqual(none.todayEarned, 0);
+  assert.strictEqual(none.todayCompleted, base.todayCompleted);
+  assert.strictEqual(none.series[13].services, base.series[13].services);
+});
+
+// PAY_BASIS_PERFORMED_V1 — деньги ложатся в день ВЫПОЛНЕНИЯ строки сервера, а
+// не в день приёма из списка визитов: стационарная строка (приёма у неё нет)
+// тоже попадает в свой день.
+test('строка выплаты без приёма в окне (стационар) ложится в свой день', () => {
+  const inLine = { kind: 'in', id: 'in-1', date: dayKeyOf(dayOff(-2)), fee: 12000, invoice_status: null };
+  const stats = dash.computeDoctorStats({ visits: A_VISITS, services: A_SERVICES, payLines: [...PAY_A(), inLine], now: NOW, perService: true });
+  assert.strictEqual(stats.series[11].earned, 12000, 'позавчера — стационарная доля');
+  assert.strictEqual(stats.week.earned, SV1_SHARE + SV3_SHARE + SV5_SHARE + 12000);
 });
 
 test('фиксированный оклад: дневного заработка НЕТ, и ноль вместо него не рисуется', () => {
@@ -523,8 +492,7 @@ test('фиксированный оклад: дневного заработка
     { salary_type: 'fix_plus_kpi', kpi_links: ['referrals', 'services'] }), true);
 
   const stats = dash.computeDoctorStats({
-    visits: A_VISITS, services: A_SERVICES,
-    rateMap: dash.serviceRateMap(DOCTOR_FIX), now: NOW, perService: false,
+    visits: A_VISITS, services: A_SERVICES, payLines: PAY_A(), now: NOW, perService: false,
   });
   assert.strictEqual(stats.todayEarned, 0, 'считать нечего…');
   assert.strictEqual(stats.todayCompleted, 2, '…но работа за день посчитана та же');
@@ -579,6 +547,8 @@ test('врач не может прочитать чужой заработок:
   }
   const leaked = JSON.stringify(dbCalls).includes('u-doc-b');
   assert.strictEqual(leaked, false, 'ни один запрос не назвал чужого врача');
+  // PAY_BASIS_PERFORMED_V1 — деньги: один вызов сервера и тоже на СВОЕГО врача.
+  assert.deepStrictEqual(payCalls.map((c) => c.doctor_id), ['u-doc-a'], 'выплата спрошена не за своего врача');
 
   const host = mk('div');
   await dash.renderDoctorDashboard(host, {});
@@ -593,6 +563,7 @@ test('врач не может прочитать чужой заработок:
   const hostB = mk('div');
   await dash.renderDoctorDashboard(hostB, {});
   const scopedB = dbCalls.filter((c) => ['users', 'visits', 'visit_services'].includes(c.table));
+  assert.deepStrictEqual(payCalls.map((c) => c.doctor_id), ['u-doc-b'], 'после смены пользователя выплата — его');
   for (const c of scopedB) {
     const own = (c.filters || []).some((f) => (f.col === 'doctor_id' || f.col === 'id')
       && f.op === 'eq' && f.val === 'u-doc-b');
@@ -607,23 +578,24 @@ test('врач не может прочитать чужой заработок:
 test('дашборд рисует день, четыре плитки, график и колонку приёмов из живой загрузки', async (t) => {
   reset();
   loginAs(DOCTOR_A);
-  // DOCTOR_TIER_V1 — сервер отдаёт позицию для sv3 (26-я «Приём терапевта»
-  // месяца): 94 000 × 50 % = 47 000 вместо 37 600, плитка дня — 114 680.
-  TIER_RESPONSE = { from: monthKey(dayOff(-9)), to: monthKey(NOW), rows: [{
-    visit_service_id: 'sv3', service_id: 's-1', service_name: 'Приём терапевта',
-    units: 1, units_above: 1, tier_from: 25, tier_percent: 50, count_so_far: 26, ym: monthKey(NOW),
-  }] };
-  t.after(() => { TIER_RESPONSE = NO_TIER(); });
+  // Сервер посчитал sv3 (26-я «Приём терапевта» месяца) по ступени:
+  // 94 000 × 50 % = 47 000 вместо 37 600, плитка дня — 114 680.
+  PAY_BY_DOCTOR['u-doc-a'] = PAY_A().map((l) => (l.id === 'sv3' ? { ...l, fee: 47000, tier: true } : l));
+  t.after(() => { PAY_BY_DOCTOR['u-doc-a'] = PAY_A(); });
   const host = mk('div');
   await dash.renderDoctorDashboard(host, {});
   const txt = textOf(host);
 
-  // Позиции спрашиваются ОДИН раз за диапазон месяцев, а не по разу на месяц.
-  assert.strictEqual(tierCalls.length, 1, 'запросов позиций: ' + tierCalls.length);
-  assert.strictEqual(tierCalls[0].doctor_id, 'u-doc-a', 'позиции запрошены не за своего врача');
-  assert.strictEqual(tierCalls[0].from, monthKey(dayOff(-9)), 'диапазон не накрыл самый старый месяц окна');
-  assert.strictEqual(tierCalls[0].to, monthKey(NOW), 'текущий месяц обязан входить в диапазон');
-  assert.ok(!('month' in tierCalls[0]), 'в запросе остался месяц: ' + JSON.stringify(tierCalls[0]));
+  // PAY_BASIS_PERFORMED_V1 — выплата окна — ОДИН вызов сервера на 14 дней;
+  // позиции ступени сводке больше не нужны (доля уже со ступенью).
+  assert.strictEqual(payCalls.length, 1, 'запросов выплаты: ' + payCalls.length);
+  assert.strictEqual(payCalls[0].doctor_id, 'u-doc-a', 'выплата запрошена не за своего врача');
+  assert.strictEqual(payCalls[0].from, dayKeyOf(dayOff(-13)), 'окно не накрыло самый старый день');
+  assert.strictEqual(payCalls[0].to, dayKeyOf(NOW), 'сегодняшний день обязан входить в окно');
+  assert.strictEqual(tierCalls.length, 0, 'сводка снова спрашивает позиции ступени');
+  // И денежных таблиц сводка не читает вовсе.
+  assert.ok(!dbCalls.some((c) => ['invoice_items', 'invoices'].includes(c.table)),
+    'сводка читает строки счетов: ' + dbCalls.map((c) => c.table).join(','));
 
   // Плитка «Заработано сегодня» — по ступени, и проверяется НА ПЛИТКЕ:
   // «114 680» в общем тексте мог бы нарисовать и соседний список.
@@ -782,56 +754,17 @@ test('плитки дашборда красятся по СМЫСЛУ числ�
   assert.notStrictEqual(services[0], money[0], 'услуги и деньги слились в один оттенок');
 });
 
-// DOCTOR_TIER_V1 (разбор) — ступень гасится только ФИКСИРОВАННОЙ ОПЛАТОЙ за
-// единицу (service_rates[].fix), как и на сервере. «Своя цена» врача (price) —
-// это ЦЕНА, по которой выставляется счёт, а не его оплата: такой врач ступень
-// получает. Подавление было повешено не на то поле, и вся «своя цена» молча
-// оставалась без ступени.
-test('DOCTOR_TIER_V1: ступень гасит фиксированная оплата (fix), а не своя цена врача (price)', () => {
-  const s = { serviceId: 'x', total: 500000, discount: 0, taxRate: 0 };
-  const pos = { units: 1, units_above: 1, tier_percent: 90 };
-
-  // (а) фиксированная оплата за единицу — ступени нет, доля равна serviceShare.
+// DOCTOR_TIER_V1 (разбор) — фиксированная ОПЛАТА за единицу (service_rates[].fix)
+// и «своя цена» врача (price) — разные поля. PAY_BASIS_PERFORMED_V1 — долю по
+// ним считает только сервер (reports.doctor-tier.test.js «фиксированная
+// ставка: ступень не трогает», reports.doctor-share.test.js); кабинету карта
+// ставок нужна лишь для прогресса ступени, и читать её он обязан верно.
+test('DOCTOR_TIER_V1: карта ставок различает фиксированную оплату (fix) и свою цену врача (price)', () => {
   const fixMap = dash.serviceRateMap({ service_rates: [{ service_id: 'x', pct: 30, fix: 15000 }] });
   assert.strictEqual(fixMap.get('x').fixPay, 15000, 'fix не прочитан как фиксированная оплата');
-  assert.strictEqual(dash.tierShare(s, fixMap, pos), dash.serviceShare(s, fixMap));
-
-  // (б) своя ЦЕНА врача + процент — ступень применяется и поднимает долю.
   const priceMap = dash.serviceRateMap({ service_rates: [{ service_id: 'x', pct: 30, price: 120000 }] });
   assert.strictEqual(priceMap.get('x').fixPay, 0, 'своя цена принята за фиксированную оплату');
-  assert.ok(dash.tierShare(s, priceMap, pos) > dash.serviceShare(s, priceMap),
-    'врач со своей ценой остался без ступени');
-
-  // (в) старая форма {mode:'fixed', value} — та же фиксированная оплата.
+  assert.strictEqual(priceMap.get('x').percentage, 30);
   const legacyMap = dash.serviceRateMap({ service_rates: [{ service_id: 'x', mode: 'fixed', value: 15000 }] });
   assert.strictEqual(legacyMap.get('x').fixPay, 15000, 'старая форма {mode:fixed} не прочитана');
-  assert.strictEqual(dash.tierShare(s, legacyMap, pos), dash.serviceShare(s, legacyMap));
-
-  // (г) ступень считается от ЧИСТОЙ суммы (скидка 20 000 + налог 6 %):
-  // (200 000 − 20 000) × 0,94 = 169 200; 169 200 × (40·1 + 50·3) / 4 / 100 = 80 370.
-  assert.strictEqual(
-    Math.round(dash.tierShare(A_SERVICES[0], dash.serviceRateMap(DOCTOR_A), { units: 4, units_above: 3, tier_percent: 50 })),
-    80370);
-});
-
-// CABINET_FEE_PARITY_V1 — доля кабинета обязана совпасть с гонораром ведомости
-// (ITEM_FEE_SQL в server/services/rpc/reports.js): фиксированная оплата идёт ЗА
-// ЕДИНИЦУ и ВМЕСТО процента, а «своя цена врача» (price) — это цена счёта, а не
-// оплата, и в гонорар не входит. Кабинет прибавлял price к доле и вовсе не видел
-// fix — и расхождение с ведомостью было молчаливым.
-test('CABINET_FEE_PARITY_V1: фикс платится за единицу вместо процента, своя цена не оплачивается', () => {
-  // (а) фикс 15 000 × 2 единицы = 30 000; ни процента, ни налога сверху.
-  const fixMap = dash.serviceRateMap({ service_rates: [{ service_id: 'x', pct: 30, fix: 15000 }] });
-  assert.strictEqual(
-    dash.serviceShare({ serviceId: 'x', quantity: 2, total: 100000, discount: 0, taxRate: 6 }, fixMap),
-    30000);
-
-  // (б) своя цена 120 000 не оплачивается: платится только процент — 30 % от 100 000.
-  const priceMap = dash.serviceRateMap({ service_rates: [{ service_id: 'x', pct: 30, price: 120000 }] });
-  assert.strictEqual(
-    dash.serviceShare({ serviceId: 'x', total: 100000, discount: 0, taxRate: 0 }, priceMap),
-    30000);
-
-  // (в) без количества строка — одна единица (COALESCE(ii.quantity, 1) на сервере).
-  assert.strictEqual(dash.serviceShare({ serviceId: 'x', total: 100000, discount: 0, taxRate: 0 }, fixMap), 15000);
 });

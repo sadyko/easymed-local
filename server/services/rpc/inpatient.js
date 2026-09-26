@@ -211,10 +211,16 @@ export function requestAdmission(db, args, user) {
         : 'patient already has an active admission.', 400);
     }
 
+    // INPATIENT_BONUS_V1 — кто направил: заявка врача из кабинета тоже его
+    // запоминает (по умолчанию — источник последнего визита, иначе карточки).
+    const referralSourceId = referralSourceArg(db, args, patientId);
+    // Ревью I1 — направивший врач ЯВНО: тот, кто оформил заявку в кабинете.
+    // admissions.doctor_id потом заполняет и назначение лечащего, поэтому
+    // бонус «за направление» читает только referring_doctor_id (мигр. 156).
     const info = db.prepare(`
-      INSERT INTO admissions (patient_id, doctor_id, pathway, chief_complaint, admission_diagnosis, status, created_by)
-      VALUES (?, ?, ?, ?, ?, 'ordered', ?)
-    `).run(patientId, doctorId, pathway, chiefComplaint, admissionDiagnosis, user.id);
+      INSERT INTO admissions (patient_id, doctor_id, pathway, chief_complaint, admission_diagnosis, status, created_by, referral_source_id, referring_doctor_id)
+      VALUES (?, ?, ?, ?, ?, 'ordered', ?, ?, ?)
+    `).run(patientId, doctorId, pathway, chiefComplaint, admissionDiagnosis, user.id, referralSourceId, doctorId);
     const admissionId = info.lastInsertRowid;
     db.prepare('UPDATE admissions SET admission_no = ? WHERE id = ?').run(nextAdmissionNo(db, nowIso(db)), admissionId);   // ADMISSION_NUMBER_V2 — «2026/00051»
 
@@ -716,6 +722,50 @@ function textArg(v, max) {
   return (typeof v === 'string' ? v : '').trim().slice(0, max);
 }
 
+// ---------------------------------------------------------------------------
+// INPATIENT_BONUS_V1 (мигр. 155) — КТО НАПРАВИЛ НА ГОСПИТАЛИЗАЦИЮ.
+//
+// Госпитализация запоминает источник направления (admissions.referral_source_id):
+// по нему считается стационарное вознаграждение партнёра (reports.js,
+// inpatientReferralLines). По умолчанию — источник ПОСЛЕДНЕГО визита пациента
+// (отменённые и «не пришёл» не в счёт), а если у последнего визита источника
+// нет или визитов нет вовсе — источник из карточки пациента. В заявке его
+// видно и можно поменять или снять.
+// ---------------------------------------------------------------------------
+export function defaultAdmissionReferralSource(db, patientId) {
+  const v = db.prepare(`SELECT referral_source_id FROM visits
+                         WHERE patient_id = ? AND COALESCE(status, '') NOT IN ('cancelled', 'no_show')
+                         ORDER BY visit_date DESC, id DESC LIMIT 1`).get(patientId);
+  if (v && v.referral_source_id != null) return Number(v.referral_source_id);
+  const p = db.prepare('SELECT referral_source_id FROM patients WHERE id = ?').get(patientId);
+  return p && p.referral_source_id != null ? Number(p.referral_source_id) : null;
+}
+
+// Аргумент referral_source_id: не прислан — по умолчанию; null / '' — «никто
+// не направлял»; число — существующий источник.
+function referralSourceArg(db, args, patientId) {
+  const raw = args ? args.referral_source_id : undefined;
+  if (raw === undefined) return defaultAdmissionReferralSource(db, patientId);
+  if (raw === null || raw === '') return null;
+  const id = Number(raw);
+  if (!isPositiveInt(id)) throw new RpcError('referral_source_id must be a positive integer.', 400);
+  if (!db.prepare('SELECT 1 FROM referral_sources WHERE id = ?').get(id)) throw new RpcError('Источник направления не найден.', 400);
+  return id;
+}
+
+/**
+ * Источник направления, который заявка подставит по умолчанию (для окна
+ * заявки). Те же ворота, что у самой заявки: спрашивает тот, кто её оформляет.
+ */
+export function admissionReferralDefault(db, args, user) {
+  requireGrant(db, user, 'inpatient.requests', 'edit', ORDER_CREATE_ROLES, 'оформить заявку на госпитализацию');
+  const patientId = args && args.patient_id;
+  if (!isPositiveInt(patientId)) throw new RpcError('patient_id must be a positive integer.', 400);
+  const id = defaultAdmissionReferralSource(db, patientId);
+  const src = id != null ? db.prepare('SELECT id, name, code FROM referral_sources WHERE id = ?').get(id) : null;
+  return { referral_source_id: src ? src.id : null, name: src ? src.name : '', code: src ? (src.code || '') : '' };
+}
+
 /**
  * Заявка на госпитализацию: строка в 'ordered', БЕЗ койки и без денег.
  *
@@ -774,14 +824,21 @@ export function admissionOrderCreate(db, args, user) {
         : 'Пациент уже госпитализирован.', 400);
     }
 
+    // INPATIENT_BONUS_V1 — кто направил: из окна заявки, по умолчанию —
+    // источник последнего визита, иначе карточки пациента.
+    const referralSourceId = referralSourceArg(db, args, patientId);
+
     const at = nowIso(db);
     const info = db.prepare(`
       INSERT INTO admissions
         (patient_id, ward_id, doctor_id, department, admission_type, stay_mode,
-         planned_at, chief_complaint, status, ordered_at, ordered_by, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ordered', ?, ?, ?)
+         planned_at, chief_complaint, status, ordered_at, ordered_by, created_by, referral_source_id,
+         referring_doctor_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ordered', ?, ?, ?, ?, ?)
     `).run(patientId, wardId, doctorId, department, admissionType, stayMode,
-           plannedAt, note, at, user.id, user.id);
+           plannedAt, note, at, user.id, user.id, referralSourceId,
+           // Ревью I1 — «Направивший врач», названный в заявке явно (мигр. 156).
+           doctorId);
     const admissionId = info.lastInsertRowid;
     db.prepare('UPDATE admissions SET admission_no = ? WHERE id = ?').run(nextAdmissionNo(db, nowIso(db)), admissionId);   // ADMISSION_NUMBER_V2 — «2026/00051»
     // Журнал движений: заявка — тоже событие с пациентом, и «когда это

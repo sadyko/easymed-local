@@ -273,7 +273,8 @@ test('каждая строка справочника называет пров
   // owner_report, cashier_report, callcenter_report и кабинет врача) и плитки
   // настроек, чью запись проверяет компилятор запросов.
   for (const k of ['reports.revenue', 'reports.cashier', 'reports.doctor_pay', 'reports.referrals', 'reports.services', 'reports.stock', 'reports.callcenter',
-    'settings.patient_categories', 'settings.payers', 'settings.referral_sources', 'settings.rooms', 'settings.company', 'settings.documents']) {
+    'settings.patient_categories', 'settings.payers', 'settings.referral_sources', 'settings.rooms', 'settings.company', 'settings.documents',
+    'settings.service_packages']) {   // PACKAGES_V1
     assert.ok(keys.has(k), 'сервер проверяет ' + k + ', а в справочнике его нет');
   }
   // ADMIN_ROWS_GRANTABLE_V1 — бывшие закрытые строки владельца (Telegram,
@@ -284,7 +285,8 @@ test('каждая строка справочника называет пров
   const ADMIN_DEFAULT = ['settings.telegram', 'settings.telephony', 'settings.crm', 'settings.api', 'settings.roles', 'reports.telegram',
     'settings.employees', 'settings.doctor_rates', 'settings.patient_discounts', 'settings.payer_policies', 'settings.payment_providers', 'settings.cashback_rules',
     'settings.service_types.money', 'settings.consultation_types.money', 'settings.patient_categories.money', 'settings.rooms.money',
-    'settings.referral_sources.money', 'settings.referral_source_categories.money', 'settings.employees.money'];
+    'settings.referral_sources.money', 'settings.referral_source_categories.money', 'settings.employees.money',
+    'settings.service_packages.money'];   // PACKAGES_V1 — скидка пакета
   for (const k of ADMIN_DEFAULT) {
     const r = byKey.get(k);
     assert.ok(r && !r.locked && r.adminDefault, k + ' обязана быть выдаваемой строкой с правилом «только администратор»');
@@ -305,6 +307,7 @@ test('каждая строка справочника называет пров
   // разделов «Отчёты» и «Настройки».
   assert.equal(CATALOG.length, 18, 'в справочнике восемнадцать разделов');
   assert.equal(CATALOG.find((s) => s.key === 'reports').windows.length, 8, 'восемь групп отчётов, Telegram-бот — восьмая');
-  assert.equal(CATALOG.find((s) => s.key === 'settings').windows.length, 25, 'плитки хаба настроек');
-  assert.equal(CATALOG.find((s) => s.key === 'settings').actions.length, 7, '«Цены и проценты» у семи плиток');
+  // PACKAGES_V1 — двадцать шестая плитка «Пакеты услуг» и её «Цены и проценты».
+  assert.equal(CATALOG.find((s) => s.key === 'settings').windows.length, 26, 'плитки хаба настроек');
+  assert.equal(CATALOG.find((s) => s.key === 'settings').actions.length, 8, '«Цены и проценты» у восьми плиток');
 });

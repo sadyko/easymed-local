@@ -74,7 +74,8 @@ test('закрытых строк больше нет: каждая бывшая
   }
   assert.equal(catalogRows().filter((r) => r.locked).length, 0);
   // «Цены и проценты» у каждой плитки, где деньги внутри.
-  for (const t of ['service_types', 'consultation_types', 'patient_categories', 'rooms', 'referral_sources', 'referral_source_categories', 'employees']) {
+  for (const t of ['service_types', 'consultation_types', 'patient_categories', 'rooms', 'referral_sources', 'referral_source_categories', 'employees',
+    'service_packages']) {   // PACKAGES_V1 — скидка пакета
     const m = byKey.get('settings.' + t + '.money');
     assert.ok(m && m.of === 'settings.' + t && m.adminDefault, t + ': нет «Цен и процентов»');
     assert.deepEqual(m.levels, ['none', 'edit']);

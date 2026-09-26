@@ -75,8 +75,9 @@ function fmtPrice(n) { const v = Math.round(Number(n) || 0); return (v < 0 ? '-'
 // «Цены и проценты»: без них вкладок нет, и в сохранение они не уходят (сервер
 // отказал бы всей записи, routes/users.js). Роль администратора
 // не-администратору не предлагается вовсе. Сервер проверяет всё это второй раз.
-const MONEY_KEYS = ['salary_type', 'salary_fixed', 'salary_percent', 'service_rates', 'referral_rates'];
-const MONEY_SECTIONS = ['salary', 'services', 'referral'];
+const MONEY_KEYS = ['salary_type', 'salary_fixed', 'salary_percent', 'service_rates', 'referral_rates',
+    'inpatient_rates', 'inpatient_referral_pct', 'inpatient_referral_fixed'];   // INPATIENT_BONUS_V1
+const MONEY_SECTIONS = ['salary', 'services', 'inpatient', 'referral'];
 function empAccess() {
     const admin = !hasRestriction() || actorIsAdmin();
     const lvl = settingsTileLevel('settings.employees');
@@ -334,6 +335,9 @@ const SECTIONS = [
         { key: 'salary',   label: 'Занятость и зарплата', icon: 'Coins',    required: [] },
         { key: 'schedule', label: 'Рабочее время',        icon: 'Clock',    required: [] },
         { key: 'services', label: 'Услуги и ставки',      icon: 'Layers',   required: [], doctorOnly: true },
+        // INPATIENT_BONUS_V1 — ставки стационара отдельно от амбулаторных и
+        // вознаграждение за направление пациента в стационар.
+        { key: 'inpatient', label: 'Стационар',            icon: 'Bed',      required: [], doctorOnly: true },
         { key: 'referral', label: 'Вознаграждение за направления', icon: 'Coins', required: [], doctorOnly: true },
     ] },
     { group: 'ДОСТУП', items: [ { key: 'access', label: 'Вход и доступ', icon: 'Settings', required: ['username', 'role'] } ] },
@@ -356,13 +360,26 @@ const asArr = (v) => (Array.isArray(v) ? v : []);
 // later with nothing to show what happened. One shared mapping means the two
 // tables cannot disagree; users.test.js pins the key set against the server so
 // a new key added there cannot go unnoticed here.
-// INPATIENT_SHARE_V1 — inpatient_pct: «Стационар, %» (only service_rates carries it).
-const OPTIONAL_RATE_KEYS = ['price', 'fix', 'fixed', 'inpatient_pct'];
+// INPATIENT_BONUS_V1 (мигр. 155) — inpatient_pct здесь больше нет: ставки
+// стационара живут в своём списке (inpatient_rates, вкладка «Стационар»).
+const OPTIONAL_RATE_KEYS = ['price', 'fix', 'fixed'];
+// Ревью I5 (мигр. 155) — запись БЕЗ pct значит «оказывает, ставка по
+// умолчанию» (так её пишут окно услуги и перенос 155; отчёт берёт
+// service_rate_default). Читать её как 0 нельзя: 0 ушёл бы на сервер при
+// сохранении и перекрыл ставку по умолчанию. Поэтому pct копируется, только
+// если он есть.
 const loadRates = (list) => asArr(list).map((r) => {
-    const out = { service_id: r.service_id, pct: Number(r.pct) || 0, branches: asArr(r.branches) };
+    const out = { service_id: r.service_id, branches: asArr(r.branches) };
+    if (r.pct != null && r.pct !== '') out.pct = Number(r.pct) || 0;
     for (const k of OPTIONAL_RATE_KEYS) if (r[k] != null) out[k] = Number(r[k]);
     return out;
 });
+// INPATIENT_BONUS_V1 — запись стационарной ставки: процент ЛИБО фикс за
+// единицу (сервер примет ровно одно из двух, routes/users.js).
+const loadInpatientRates = (list) => asArr(list).map((r) => (r && r.fix != null
+    ? { service_id: Number(r.service_id), fix: Number(r.fix) || 0 }
+    : { service_id: Number(r && r.service_id), pct: Number(r && r.pct) || 0 }));
+const moneyText = (v) => (Number(v) > 0 ? String(Number(v)) : '');
 
 function openEditor(user, root) {
     const isEdit = !!user;
@@ -373,6 +390,7 @@ function openEditor(user, root) {
         specialty: '', specialties: [], doctor_category: '', hire_date: '', license_number: '', license_expiry_date: '',
         branch_id: '', employment_type: '', salary_type: '', salary_fixed: '', salary_percent: '',
         working_hours: {}, service_rates: [], referral_rates: [],
+        inpatient_rates: [], inpatient_referral_pct: '', inpatient_referral_fixed: '',   // INPATIENT_BONUS_V1
         username: '', password: '', role: 'registrar', custom_role_code: '', extra_roles: [], is_active: true,
         // SOLE_BRANCH_V1 — филиал в клинике один: подставляем его сразу, чтобы
         // раздел «Филиалы» не требовал выбора там, где выбирать не из чего.
@@ -397,6 +415,10 @@ function openEditor(user, root) {
             working_hours: parseHours(user.working_hours),
             service_rates: loadRates(user.service_rates),
             referral_rates: loadRates(user.referral_rates),
+            // INPATIENT_BONUS_V1 — вкладка «Стационар».
+            inpatient_rates: loadInpatientRates(user.inpatient_rates),
+            inpatient_referral_pct: moneyText(user.inpatient_referral_pct),
+            inpatient_referral_fixed: moneyText(user.inpatient_referral_fixed),
             username: user.username || '', role: user.role || 'registrar', custom_role_code: user.custom_role_code || '',
             extra_roles: asArr(user.extra_roles).slice(), is_active: !!user.is_active,
         } : {}),
@@ -608,7 +630,12 @@ function openEditor(user, root) {
         } else if (active === 'schedule') {
             body.append(head('Рабочее время', 'Дни и часы работы сотрудника.'), buildHours(emp, markDirty));
         } else if (active === 'services') {
-            body.append(ratesSection(emp, 'service_rates', { icon: sec.icon, title: 'Услуги и ставки', sub: 'Сколько врач получает за оказанную услугу: процент от суммы после скидки либо фиксированная сумма за единицу. Своя цена — если этот врач берёт за услугу не как в каталоге; пусто = цена каталога.', rateLabel: 'Ставка врача', allowFix: true, ownPrice: true, inpatient: true }, touch));
+            body.append(ratesSection(emp, 'service_rates', { icon: sec.icon, title: 'Услуги и ставки', sub: 'Сколько врач получает за оказанную услугу: процент от суммы после скидки либо фиксированная сумма за единицу. Своя цена — если этот врач берёт за услугу не как в каталоге; пусто = цена каталога.', rateLabel: 'Ставка врача', allowFix: true, ownPrice: true }, touch));
+        } else if (active === 'inpatient') {
+            // INPATIENT_BONUS_V1 — стационар отдельно от «Услуг и ставок»:
+            // ставка здесь не заводит амбулаторной записи и не обнуляет
+            // ставку по умолчанию.
+            body.append(inpatientSection(emp, touch));
         } else if (active === 'referral') {
             // REPORTS_V2 — вкладка была МЁРТВОЙ: таблица писала users.referral_rates,
             // а вознаграждение за направления (отчёт «Рефералы», кабинет врача)
@@ -765,6 +792,10 @@ function openEditor(user, root) {
             branch_id: emp.branch_id ? Number(emp.branch_id) : null, employment_type: emp.employment_type || '', salary_type: emp.salary_type || '',
             salary_fixed: Number(emp.salary_fixed) || 0, salary_percent: Number(emp.salary_percent) || 0, working_hours: JSON.stringify(emp.working_hours || {}),
             service_rates: asArr(emp.service_rates), referral_rates: asArr(emp.referral_rates),
+            // INPATIENT_BONUS_V1 — вкладка «Стационар»; пустое поле бонуса — 0.
+            inpatient_rates: asArr(emp.inpatient_rates),
+            inpatient_referral_pct: Number(emp.inpatient_referral_pct) || 0,
+            inpatient_referral_fixed: Number(emp.inpatient_referral_fixed) || 0,
             role: emp.role, custom_role_code: emp.custom_role_code || '', extra_roles: (emp.extra_roles || []).filter(r => r !== emp.role), is_active: !!emp.is_active,
         };
         if (String(emp.password).trim()) payload.password = emp.password;
@@ -839,13 +870,13 @@ function ratesSection(emp, arrayKey, opts, touch) {
     // RATES_UI_V2 — header and rows share one .rt-row grid (defined once in CSS,
     // so the two cannot drift apart) and the header lives INSIDE the scroller,
     // sticky, so column labels stay visible down a long catalogue.
-    // INPATIENT_SHARE_V1 — «Стационар, %» is one more column of the same grid.
-    const rowCls = 'rt-row' + (opts.ownPrice ? '' : ' rt-row--noprice') + (opts.inpatient ? ' rt-row--inpatient' : '');
+    // INPATIENT_BONUS_V1 — колонки «Стационар, %» здесь больше нет: ставки
+    // стационара — во вкладке «Стационар» (inpatientSection ниже).
+    const rowCls = 'rt-row' + (opts.ownPrice ? '' : ' rt-row--noprice');
     const headRow = () => h('div', { class: rowCls + ' rt-head' },
         h('span'), h('span', null, 'Услуга'), h('span', null, 'Филиалы'),
         h('span', { class: 'r' }, opts.ownPrice ? 'Своя цена' : 'Цена'),
-        h('span', { class: 'r' }, opts.rateLabel || opts.pctLabel),
-        opts.inpatient ? h('span', { class: 'r' }, 'Стационар, %') : null);
+        h('span', { class: 'r' }, opts.rateLabel || opts.pctLabel));
 
     // SOLE_BRANCH_V1 — филиал в клинике один: «Все филиалы» и он же — одно и то
     // же, поэтому новая строка ставки сразу привязана к нему, а не к пустому
@@ -883,31 +914,6 @@ function ratesSection(emp, arrayKey, opts, touch) {
         else arr()[i].price = n;
         touch();
     };
-    // INPATIENT_SHARE_V1 — the doctor's share of this service when it is done
-    // IN THE WARD (paid to the line's performer, else to whoever ordered it,
-    // once the invoice is paid). EMPTY means "no inpatient share": the key is
-    // removed, and the report then pays 0 — it never falls back to the
-    // outpatient percentage. A typed 0 is kept as a real decision.
-    const setInpatient = (sid, raw) => {
-        const i = idxOf(sid); if (i < 0) return;
-        const t = String(raw).trim();
-        const n = Number(t);
-        if (t === '' || !Number.isFinite(n)) delete arr()[i].inpatient_pct;
-        else arr()[i].inpatient_pct = Math.min(100, Math.max(0, n));
-        touch();
-    };
-    function inpatientCell(s, r, on) {
-        const has = on && r && r.inpatient_pct != null;
-        const inp = h('input', {
-            type: 'number', min: '0', max: '100', step: '1', disabled: !on, class: 'rt-num rt-num--inp',
-            value: has ? String(r.inpatient_pct) : '', placeholder: '—',
-            title: !on ? tr('Отметьте услугу, чтобы задать долю')
-                : tr('Доля врача за услугу в стационаре: исполнителю, иначе назначившему, после оплаты счёта. Пусто — не платится.'),
-        });
-        inp.addEventListener('input', () => setInpatient(s.id, inp.value));
-        return h('div', { class: 'rt-field' }, inp, h('span', { class: 'rt-unit' }, '%'));
-    }
-
     const searchInp = h('input', { type: 'text', placeholder: 'Поиск услуг…' });
     searchInp.addEventListener('input', () => { q = searchInp.value; renderRows(); });
     const searchBox = h('div', { class: 'rt-search' },
@@ -1020,12 +1026,16 @@ function ratesSection(emp, arrayKey, opts, touch) {
                 type: 'number', min: '0', class: 'rt-num', disabled: !on,
                 max: fixed ? null : '100',
                 step: fixed ? '1000' : '1',
-                value: on ? String(fixed ? r.fix : r.pct) : '0',
+                // Ревью I5 — процента нет: пустое поле с подсказкой, а не «0».
+                value: on ? String(fixed ? r.fix : (r.pct == null ? '' : r.pct)) : '0',
+                placeholder: on && !fixed ? tr('По умолчанию') : null,
                 title: fixed ? 'Врач получает эту сумму за каждую единицу услуги' : 'Процент от суммы строки после скидки',
             });
             rateInp.addEventListener('input', () => {
                 const n = Number(rateInp.value) || 0;
                 if (fixed) setFix(s.id, Math.max(0, n));
+                // Стёртый процент — снова «по умолчанию» (ключа pct нет).
+                else if (String(rateInp.value).trim() === '') { const i = idxOf(s.id); if (i >= 0) { delete arr()[i].pct; touch(); } }
                 else setPct(s.id, Math.min(100, Math.max(0, n)));
             });
 
@@ -1040,7 +1050,6 @@ function ratesSection(emp, arrayKey, opts, touch) {
                 h('div', { class: 'rt-rate' },
                     modeSeg,
                     h('div', { class: 'rt-field' }, rateInp, h('span', { class: 'rt-unit' }, fixed ? 'сум' : '%'))),
-                opts.inpatient ? inpatientCell(s, r, on) : null,
             ));
         }
         scroll.scrollTop = keep;
@@ -1060,6 +1069,175 @@ function ratesSection(emp, arrayKey, opts, touch) {
                 bulkSeg,
                 h('div', { class: 'rt-field', style: { flex: '0 0 auto' } }, bulkInp, bulkUnit))),
         h('div', { class: 'rt-box' }, scroll),
+    );
+    renderRows();
+    return wrap;
+}
+
+// ---------------------------------------------------------------------------
+// INPATIENT_BONUS_V1 — вкладка «Стационар».
+//
+// Две вещи, и обе — деньги (видны и уходят на сервер только с «Цены и
+// проценты», MONEY_SECTIONS / MONEY_KEYS):
+//   1. «За направление в стационар» — что врач получает, когда САМ направил
+//      пациента на госпитализацию (он «Направивший врач» заявки): % от
+//      оплаченного счёта госпитализации (услуги и койко-дни, без медикаментов)
+//      и/или фиксированная сумма за госпитализацию. Так же, как у партнёров.
+//   2. «Ставки за услуги в стационаре» — доля врача за услугу, оказанную в
+//      стационаре: процент либо фиксированная сумма за единицу. Хранится
+//      ОТДЕЛЬНО от «Услуг и ставок» (users.inpatient_rates): прежде отметка
+//      услуги ради стационарного процента заводила амбулаторную запись 0 %, и
+//      та перекрывала ставку по умолчанию.
+// emp.inpatient_rates = [{ service_id, pct } | { service_id, fix }].
+// ---------------------------------------------------------------------------
+function inpatientSection(emp, touch) {
+    if (!Array.isArray(emp.inpatient_rates)) emp.inpatient_rates = [];
+    const arr = () => emp.inpatient_rates;
+    const idxOf = (sid) => arr().findIndex((r) => Number(r.service_id) === Number(sid));
+    let q = '', typeFilter = 'all';
+    const visible = () => services.filter((s) => (typeFilter === 'all' || svcTypeVal(s) === typeFilter)
+        && String(s.name || '').toLowerCase().includes(q.toLowerCase()));
+    const hintEl = (t) => h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '8px', lineHeight: 1.5 } }, t);
+
+    // 1. За направление в стационар.
+    const bonusField = (key, unit, max, title) => {
+        const inp = h('input', { type: 'number', min: '0', max: max || null, step: max ? '1' : '1000',
+            class: 'rt-num rt-num--bonus', value: emp[key] || '', placeholder: '0', title });
+        inp.addEventListener('input', () => { emp[key] = inp.value; touch(); });
+        return h('div', { class: 'rt-field' }, inp, h('span', { class: 'rt-unit' }, unit));
+    };
+    const referralBox = h('div', { class: 'card card-pad-sm', style: { marginBottom: '16px' } },
+        h('h3', { style: { margin: '0 0 10px', fontSize: '15px' } }, 'За направление в стационар'),
+        h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px 16px' } },
+            field('% от оплаченного счёта госпитализации', bonusField('inpatient_referral_pct', '%', '100',
+                tr('Процент от оплаченного счёта госпитализации: услуги и койко-дни, без медикаментов и расходников'))),
+            field('Фиксированная сумма за госпитализацию', bonusField('inpatient_referral_fixed', tr('сум'), null,
+                tr('Один раз за госпитализацию, когда оплачен её счёт')))),
+        hintEl('Платится врачу, указанному в заявке на госпитализацию как направивший, — только с оплаченных счетов госпитализации. Процент — от услуг и койко-дней, без медикаментов и расходников; фиксированная сумма — один раз за госпитализацию. Пусто или 0 — не платится.'));
+
+    // 2. Ставки за услуги в стационаре.
+    const selBadge = h('span', { class: 'rt-sel' });
+    const refreshCount = () => { clear(selBadge); selBadge.append(h('i'), trf('Выбрано: {n}', { n: arr().length })); };
+    const scroll = h('div', { class: 'rt-scroll' });
+    const rowCls = 'rt-row rt-row--inpatient';
+    const headRow = () => h('div', { class: rowCls + ' rt-head' },
+        h('span'), h('span', null, 'Услуга'), h('span', { class: 'r' }, 'Цена'), h('span', { class: 'r' }, 'Ставка в стационаре'));
+    const isFix = (r) => !!r && r.fix != null;
+    const toggle = (sid) => {
+        const i = idxOf(sid);
+        if (i >= 0) arr().splice(i, 1); else arr().push({ service_id: Number(sid), pct: 0 });
+        touch(); refreshCount(); renderRows();
+    };
+    const setMode = (sid, fix) => {
+        const i = idxOf(sid); if (i < 0) return;
+        arr()[i] = fix ? { service_id: Number(sid), fix: 0 } : { service_id: Number(sid), pct: 0 };
+        touch(); renderRows();
+    };
+    const setValue = (sid, raw) => {
+        const i = idxOf(sid); if (i < 0) return;
+        const n = Number(raw) || 0;
+        if (isFix(arr()[i])) arr()[i].fix = Math.max(0, n);
+        else arr()[i].pct = Math.min(100, Math.max(0, n));
+        touch();
+    };
+
+    const searchInp = h('input', { type: 'text', placeholder: 'Поиск услуг…' });
+    searchInp.addEventListener('input', () => { q = searchInp.value; renderRows(); });
+    const typeSel = h('select', { class: 'rt-select', style: { width: 'auto', minWidth: '130px' } },
+        ...[['all', 'Все группы'], ...SERVICE_TYPES].map(([v, l]) => h('option', { value: v }, l)));
+    typeSel.addEventListener('change', () => { typeFilter = typeSel.value; renderRows(); });
+    const selAllChk = h('input', { type: 'checkbox' });
+    const allOn = () => { const v = visible(); return v.length > 0 && v.every((s) => idxOf(s.id) >= 0); };
+    selAllChk.addEventListener('change', () => {
+        const want = selAllChk.checked;
+        for (const s of visible()) {
+            const i = idxOf(s.id);
+            if (want && i < 0) arr().push({ service_id: Number(s.id), pct: 0 });
+            if (!want && i >= 0) arr().splice(i, 1);
+        }
+        touch(); refreshCount(); renderRows();
+    });
+    // Своя «Ставка для всех»: пишет только стационарные ставки отмеченных услуг
+    // из списка; амбулаторных не касается.
+    let bulkFix = false;
+    const bulkUnit = h('span', { class: 'rt-unit' }, '%');
+    const bulkInp = h('input', { type: 'number', min: '0', max: '100', placeholder: '0', class: 'rt-num rt-num--inp-bulk',
+        style: { width: '104px' }, title: 'Введите ставку и нажмите Enter — применится ко всем отмеченным услугам из списка' });
+    const bulkSeg = segmented(true, () => bulkFix, (fix) => {
+        bulkFix = fix;
+        bulkInp.max = fix ? '' : '100';
+        bulkUnit.textContent = fix ? tr('сум') : tr('%');
+    });
+    const applyBulk = () => {
+        const raw = String(bulkInp.value).trim();
+        if (raw === '') return;
+        const n = bulkFix ? Math.max(0, Number(raw) || 0) : Math.min(100, Math.max(0, Number(raw) || 0));
+        const vis = new Set(visible().map((s) => Number(s.id)));
+        for (let i = 0; i < arr().length; i += 1) {
+            const sid = Number(arr()[i].service_id);
+            if (!vis.has(sid)) continue;
+            arr()[i] = bulkFix ? { service_id: sid, fix: n } : { service_id: sid, pct: n };
+        }
+        bulkInp.value = ''; touch(); renderRows();
+    };
+    bulkInp.addEventListener('blur', applyBulk);
+    bulkInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applyBulk(); } });
+
+    function renderRows() {
+        const keep = scroll.scrollTop;
+        clear(scroll);
+        scroll.appendChild(headRow());
+        selAllChk.checked = allOn();
+        const list = visible();
+        if (!list.length) { scroll.appendChild(h('div', { class: 'rt-empty' }, services.length ? 'Услуги не найдены.' : 'Нет услуг — добавьте их в Настройки → Список услуг.')); return; }
+        for (const s of list) {
+            const r = arr()[idxOf(s.id)];
+            const on = !!r;
+            const chk = h('input', { type: 'checkbox', checked: on });
+            chk.addEventListener('change', () => toggle(s.id));
+            const fixed = isFix(r);
+            const modeSeg = segmented(true, () => fixed, (wantFix) => setMode(s.id, wantFix), !on);
+            const rateInp = h('input', {
+                type: 'number', min: '0', class: 'rt-num rt-num--inp', disabled: !on,
+                max: fixed ? null : '100', step: fixed ? '1000' : '1',
+                value: on ? String(fixed ? r.fix : r.pct) : '',
+                placeholder: on ? '0' : '—',
+                title: !on ? tr('Отметьте услугу, чтобы задать ставку')
+                    : tr('Доля врача за услугу в стационаре: исполнителю, иначе назначившему. Процент — от суммы после скидки и налога, сумма — за единицу.'),
+            });
+            rateInp.addEventListener('input', () => setValue(s.id, rateInp.value));
+            scroll.appendChild(h('div', { class: rowCls + ' rt-item' + (on ? ' on' : '') },
+                chk,
+                h('div', { style: { minWidth: 0 } },
+                    h('div', { class: 'rt-name', title: s.name }, s.name),
+                    h('div', { class: 'rt-type' }, tr(svcTypeLabel(svcTypeVal(s))))),
+                h('div', { class: 'rt-catalog' }, fmtPrice(s.price)),
+                h('div', { class: 'rt-rate' }, modeSeg,
+                    h('div', { class: 'rt-field' }, rateInp, h('span', { class: 'rt-unit' }, fixed ? 'сум' : '%'))),
+            ));
+        }
+        scroll.scrollTop = keep;
+    }
+
+    refreshCount();
+    const wrap = h('div', null,
+        h('div', { style: { display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '14px' } },
+            h('span', { style: { width: '40px', height: '40px', borderRadius: '11px', background: 'var(--primary-50, #e8f3f2)', color: 'var(--primary-700, #1f7a72)', display: 'grid', placeItems: 'center', flex: '0 0 40px' } }, Icon('Bed', { size: 19 })),
+            h('div', { style: { flex: 1 } }, h('h2', { style: { margin: 0, fontSize: '17px' } }, 'Стационар'),
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Ставки за услуги в стационаре и вознаграждение за направление пациента в стационар. Хранятся отдельно от «Услуг и ставок».'))),
+        referralBox,
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', margin: '4px 0 10px' } },
+            h('h3', { style: { margin: 0, fontSize: '15px', flex: 1 } }, 'Ставки за услуги в стационаре'), selBadge),
+        h('div', { class: 'rt-toolbar' },
+            h('div', { class: 'rt-search' }, h('span', { class: 'rt-search-ic' }, Icon('Search', { size: 14 })), searchInp),
+            typeSel, h('span', { class: 'grow' }),
+            h('label', { class: 'rt-selall' }, selAllChk, 'Выбрать все'),
+            h('div', { class: 'rt-bulk' },
+                h('span', { class: 'muted' }, 'Ставка для всех'),
+                bulkSeg,
+                h('div', { class: 'rt-field', style: { flex: '0 0 auto' } }, bulkInp, bulkUnit))),
+        h('div', { class: 'rt-box' }, scroll),
+        hintEl('Отмеченная услуга без введённой ставки — 0: это решение, а не «не задано». Неотмеченная — стационарной доли нет. Ставка в стационаре не меняет амбулаторную ставку и ставку по умолчанию.'),
     );
     renderRows();
     return wrap;

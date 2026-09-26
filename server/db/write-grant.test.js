@@ -191,3 +191,85 @@ test('своя роль на основе администратора: закр
     assert.ok(run(db, { table: 'patient_categories', op: 'insert', values: { name: 'B', discount_percent: 3 } }, ADMIN).id);
   } finally { db.close(); }
 });
+
+// --- PACKAGES_V1: пакеты услуг ------------------------------------------------
+//
+// Регистратура по-прежнему сохраняет смету пакетом (0 %, без дат) и снимает
+// пакет из списка — это её рабочий инструмент (реестр, nonAdminColumns). Всё
+// остальное — плитка «Пакеты услуг»: «Изменение» пишет название, услуги и
+// срок, скидку — только вместе с «Ценами и процентами».
+test('пакеты: регистратура сохраняет смету пакетом и снимает его, но скидку и срок — только по праву плитки', () => {
+  const db = seed();
+  try {
+    // Ненастроенная роль: смета → пакет, снять из списка.
+    const id = run(db, { table: 'service_templates', op: 'insert', values: { name: 'Смета', service_ids: [1, 2], active: true, company_id: 1 } }, REG).id;
+    run(db, { table: 'service_templates', op: 'update', values: { active: false }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG);
+    assert.equal(db.prepare('SELECT active FROM service_templates WHERE id = ?').get(id).active, 0);
+    // …но не скидку, не срок и не состав готового пакета.
+    assert.throws(() => run(db, { table: 'service_templates', op: 'insert', values: { name: 'X', service_ids: [1], discount_percent: 10 } }, REG), refused);
+    assert.throws(() => run(db, { table: 'service_templates', op: 'insert', values: { name: 'X', service_ids: [1], valid_until: '2026-12-31' } }, REG), refused);
+    assert.throws(() => run(db, { table: 'service_templates', op: 'update', values: { service_ids: [1, 2, 3] }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG), refused);
+    assert.throws(() => run(db, { table: 'service_templates', op: 'update', values: { discount_percent: 50 }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG), refused);
+
+    // «Пакеты услуг: Изменение» — название, услуги, срок; скидка — нет.
+    addGrants(db, 'registrar', { settings: 'view', 'settings.service_packages': 'edit' });
+    run(db, { table: 'service_templates', op: 'update', values: { service_ids: [1, 2, 3], valid_from: '2026-09-01', valid_until: '2026-09-30' }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG);
+    assert.equal(db.prepare('SELECT valid_until FROM service_templates WHERE id = ?').get(id).valid_until, '2026-09-30');
+    assert.throws(() => run(db, { table: 'service_templates', op: 'update', values: { discount_percent: 50 }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG), refused);
+    assert.throws(() => run(db, { table: 'service_templates', op: 'insert', values: { name: 'Y', service_ids: [1], discount_percent: 5 } }, REG), refused);
+
+    // + «Цены и проценты» — и скидка.
+    addGrants(db, 'registrar', { 'settings.service_packages.money': 'edit' });
+    run(db, { table: 'service_templates', op: 'update', values: { discount_percent: 15 }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG);
+    assert.equal(db.prepare('SELECT discount_percent FROM service_templates WHERE id = ?').get(id).discount_percent, 15);
+    // «Цены и проценты» без «Изменения» плитки — ничего.
+    addGrants(db, 'registrar', { 'settings.service_packages': 'view' });
+    assert.throws(() => run(db, { table: 'service_templates', op: 'update', values: { discount_percent: 20 }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG), refused);
+
+    // Администратор пишет всё; кассир и врач — ничего.
+    assert.ok(run(db, { table: 'service_templates', op: 'insert', values: { name: 'Акция', service_ids: [1], discount_percent: 10, valid_from: '2026-09-01', valid_until: '2026-09-30' } }, ADMIN).id);
+    assert.throws(() => run(db, { table: 'service_templates', op: 'insert', values: { name: 'Z', service_ids: [1] } }, { id: 70, role: 'cashier', extra_roles: [] }), refused);
+    assert.throws(() => run(db, { table: 'service_templates', op: 'insert', values: { name: 'Z', service_ids: [1] } }, { id: 71, role: 'doctor', extra_roles: [] }), refused);
+  } finally { db.close(); }
+});
+
+// PACKAGES_V1 (ревью M-1) — регистратура СНИМАЕТ пакет из списка, но вернуть
+// снятый администратором пакет со скидкой (active = 1) не может: это решение
+// плитки «Пакеты услуг», а не стойки.
+test('пакеты: регистратура снимает пакет, но вернуть снятый — только по праву плитки', () => {
+  const db = seed();
+  try {
+    const id = run(db, { table: 'service_templates', op: 'insert', values: { name: 'Акция', service_ids: [1], discount_percent: 20, active: false } }, ADMIN).id;
+    for (const v of [true, 1]) {
+      assert.throws(() => run(db, { table: 'service_templates', op: 'update', values: { active: v }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG), refused);
+    }
+    assert.equal(db.prepare('SELECT active FROM service_templates WHERE id = ?').get(id).active, 0);
+    // Снять — можно (и false, и 0).
+    run(db, { table: 'service_templates', op: 'update', values: { active: 0 }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG);
+    // С «Пакеты услуг: Изменение» — можно и вернуть; администратору — всегда.
+    addGrants(db, 'registrar', { settings: 'view', 'settings.service_packages': 'edit' });
+    run(db, { table: 'service_templates', op: 'update', values: { active: true }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG);
+    assert.equal(db.prepare('SELECT active FROM service_templates WHERE id = ?').get(id).active, 1);
+    run(db, { table: 'service_templates', op: 'update', values: { active: false }, filters: [{ col: 'id', op: 'eq', val: id }] }, ADMIN);
+    run(db, { table: 'service_templates', op: 'update', values: { active: true }, filters: [{ col: 'id', op: 'eq', val: id }] }, ADMIN);
+  } finally { db.close(); }
+});
+
+// PACKAGES_V1 (ревью I-3) — пометку пакета со строки визита можно СНЯТЬ
+// (package_id = NULL: пакет вне срока визита, счёт иначе не выставить), но
+// поставить правкой — нельзя: пакет ставится только при заведении строки.
+test('строка визита: package_id правкой только снимается', () => {
+  const db = seed();
+  try {
+    db.prepare("INSERT INTO patients (id, full_name) VALUES (1, 'П')").run();
+    db.prepare("INSERT INTO services (id, name, price) VALUES (1, 'УЗИ', 100)").run();
+    db.prepare("INSERT INTO visits (id, patient_id, visit_date) VALUES (1, 1, '2026-09-10T09:00:00Z')").run();
+    const pkg = db.prepare("INSERT INTO service_templates (name, service_ids, discount_percent) VALUES ('П', '[1]', 20)").run().lastInsertRowid;
+    const vs = db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status, package_id) VALUES (1,1,1,100,100,'added',?)").run(pkg).lastInsertRowid;
+    const upd = (val, user) => run(db, { table: 'visit_services', op: 'update', values: { package_id: val }, filters: [{ col: 'id', op: 'eq', val: vs }] }, user);
+    assert.throws(() => upd(pkg, REG), (e) => e && (e.status === 403 || e.status === 400));
+    assert.throws(() => upd(pkg, ADMIN), (e) => e && (e.status === 403 || e.status === 400));
+    upd(null, REG);
+    assert.equal(db.prepare('SELECT package_id FROM visit_services WHERE id = ?').get(vs).package_id, null);
+  } finally { db.close(); }
+});

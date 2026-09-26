@@ -1,5 +1,5 @@
 import { writeGrantAllows, writeGrantViolation, writeGrantNarrows, readGrantAllows, secretColumns } from './write-grant.js';   // ROLE_REPORTS_SETTINGS_V1 · ADMIN_ROWS_GRANTABLE_V1
-import { tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns, rowScope, actorStamps } from './schema-registry.js';
+import { tableEntry, canRead, canWrite, nonAdminColumns, valueLimits, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns, rowScope, actorStamps } from './schema-registry.js';
 import { effectiveRoles } from '../services/roles.js';
 import { scopeLifted } from './row-scope.js';   // CRM_HEAD_MERGE_TAGS_V1
 
@@ -203,16 +203,67 @@ export function compile(desc, user, ctx = {}) {
   // «нет», хотя основа `admin` в списке ролей; пишущий по праву окна — только
   // колонки без денег (см. db/write-grant.js).
   let viaGrant = false;
+  // PACKAGES_V1 — роль из списка, но не администратор, и у операции есть
+  // `nonAdminColumns`: сверх них пишет только право плитки (write.grant).
+  let roleCols = null;
   const mayWrite = (o) => {
-    if (canWrite(table, o, role)) return !writeGrantNarrows(table, user, db, o);
+    if (canWrite(table, o, role)) {
+      if (writeGrantNarrows(table, user, db, o)) return false;
+      const limit = nonAdminColumns(table, o, role);
+      if (limit) roleCols = roleCols ? roleCols.filter((c) => limit.includes(c)) : limit;
+      return true;
+    }
     if (writeGrantAllows(table, o, user, db)) { viaGrant = true; return true; }
     return false;
   };
   const moneyGuard = () => {
+    if (roleCols && !viaGrant) {
+      // Колонки вне реестра не в счёт — компилятор их и так отбрасывает
+      // (company_id, который по старой привычке шлёт каталог).
+      const writable = new Set(writableColumns(table, op === 'upsert' ? 'insert' : op));
+      const rows = Array.isArray(desc.values) ? desc.values : [desc.values || {}];
+      const extra = rows.flatMap((r) => Object.keys(r || {})).filter((k) => writable.has(k) && !roleCols.includes(k));
+      if (extra.length) {
+        // Колонки сверх роли — только по праву плитки, и тогда по его правилам
+        // (деньги — с «Ценами и процентами»).
+        const ops = op === 'upsert' ? ['insert', 'update'] : [op];
+        if (!ops.every((o) => writeGrantAllows(table, o, user, db))) {
+          throw new CompileError('not allowed: column ' + extra[0] + ' is administrator-only', 403);
+        }
+        viaGrant = true;
+      }
+    }
+    valueGuard();
     if (!viaGrant) return;
     const col = writeGrantViolation(table, op, desc.values, user, db);
     if (col) throw new CompileError('not allowed: column ' + col + ' is administrator-only', 403);
   };
+  // PACKAGES_V1 (ревью M-1 / I-3) — значения, которые колонка принимает
+  // (schema-registry.js valueLimits): `onlyValues` — для всех, `nonAdminValues`
+  // — для не-администратора без права плитки (write.grant). Логические — как 0/1.
+  function valueGuard() {
+    const ops = op === 'upsert' ? ['insert', 'update'] : [op];
+    const norm = (v) => (typeof v === 'boolean' ? (v ? 1 : 0)
+      : (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : v));
+    const rows = Array.isArray(desc.values) ? desc.values : [desc.values || {}];
+    for (const o of ops) {
+      const { onlyValues, nonAdminValues } = valueLimits(table, o, role);
+      const limits = [onlyValues];
+      if (nonAdminValues && !writeGrantAllows(table, o, user, db)) limits.push(nonAdminValues);
+      for (const lim of limits) {
+        if (!lim) continue;
+        for (const r of rows) {
+          for (const [col, allowed] of Object.entries(lim)) {
+            if (!r || !Object.prototype.hasOwnProperty.call(r, col)) continue;
+            const v = norm(r[col] === undefined ? null : r[col]);
+            if (!allowed.map(norm).some((a) => a === v)) {
+              throw new CompileError('not allowed: value of column ' + col, 403);
+            }
+          }
+        }
+      }
+    }
+  }
   if (op === 'upsert') {
     if (!mayWrite('insert') || !mayWrite('update')) {
       throw new CompileError('not allowed', 403);

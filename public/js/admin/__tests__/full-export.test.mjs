@@ -263,8 +263,9 @@ test('DOCTOR_TIER_V2: после импорта старого файла зар
             db.prepare(`INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_at)
                         VALUES (?,?,?,1,100000,0,100000,100000,'paid','2026-09-05T10:00:00Z')`).run(id, 'INV-' + id, id);
             db.prepare("INSERT INTO invoice_items (id, invoice_id, service_id, description, quantity, unit_price, total) VALUES (?,?,1,'Приём',1,100000,100000)").run(id, id);
+            // PAY_BASIS_PERFORMED_V1 — доля платится за ВЫПОЛНЕННУЮ строку (прежде 'added').
             db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status, invoice_item_id)
-                        VALUES (?,?,1,1,1,100000,100000,'added',?)`).run(id, id, id);
+                        VALUES (?,?,1,1,1,100000,100000,'completed',?)`).run(id, id, id);
         }
         const fee = () => {
             const r = runReport(db, { kind: 'doctor_salaries', from: '2026-09-01', to: '2026-09-30' }, { id: 1, role: 'admin' });

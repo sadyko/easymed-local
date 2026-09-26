@@ -61,3 +61,33 @@ test('applying a template repaints via a function that is actually in scope', ()
   assert.doesNotMatch(body, /repaintCatalog\s*\(/, 'repaintCatalog is scoped inside paintStep1 — unreachable from here');
   assert.match(body, /\bpaint\s*\(\s*\)/, 'paint() re-renders the step and the смета');
 });
+
+// PACKAGES_V1 (ревью I-1 / I-3) — деньги пакета в мастере.
+const strip = (s) => s.replace(/\/\/[^\n]*/g, '');
+test('в счёт уходит только скидка на строки без пакета, и переносится по rest_discount', () => {
+  const code = strip(wizard);
+  assert.match(code, /let discountLeft = restDiscount\(\)/, 'в счёт — скидка без пакетов (сервер считает пакет сам)');
+  assert.match(code, /iRes\.rest_discount/, 'перенос по тому, что сервер применил БЕЗ скидок пакета');
+  const loyalty = code.slice(code.indexOf('function loyaltyDiscount('), code.indexOf('function promoLines('));
+  assert.match(loyalty, /restTotal\(\)/, 'лояльность — только по строкам без своей скидки');
+  assert.match(code, /packageSplit\(/, 'смета считает скидку пакета тем же правилом, что сервер');
+});
+
+test('пакеты мастера — по дню записи, а не по сегодня; вне срока строка пишется без пакета', () => {
+  const code = strip(wizard);
+  assert.match(code, /listTemplates\(supabase,\s*\{\s*on:/);
+  assert.match(code, /packageValidOn\(c\.package, lineDay\(c\)\)\) row\.package_id/);
+});
+
+// Тот же разбор для каталога (service-picker-modal.js) и окна визита.
+const picker = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin', 'views', 'service-picker-modal.js'), 'utf8');
+const visitModal = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin', 'views', 'visit-modal.js'), 'utf8');
+test('каталог: пакеты по дню визита; пакет вне срока не ставится; помечается только что добавленная строка', () => {
+  const code = strip(picker);
+  assert.match(code, /listTemplates\(supabase,\s*\{\s*on:\s*offerDay\(\)\s*\}\)/);
+  assert.match(code, /packageValidOn\(a\.package, localDayOf\(visitDate\)\)/);
+  const apply = code.slice(code.indexOf('async function applyServiceTemplate('), code.indexOf('async function catAdd('));
+  assert.match(apply, /state\.added\[state\.added\.length - 1\]/, 'ревью M-9: строка, которую catAdd только что добавил');
+  assert.doesNotMatch(apply, /state\.added\.find\(/);
+  assert.match(strip(visitModal), /packageDay:\s*state\.visit\?\.visit_date/, 'окно визита передаёт день визита');
+});

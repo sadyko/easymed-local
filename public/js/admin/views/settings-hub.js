@@ -25,6 +25,10 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, checkField } from '../ui.js';
 import { getLang, tr, trf } from '../i18n.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
+// GROUPS_FIVE_REFERRAL_V1 — ставки направлений по пяти группам услуг: ключи из
+// общего правила расчёта, подписи — те же, что у группировки услуг.
+import { REFERRAL_GROUPS, referralGroupOf } from '../../shared/referral-reward.js';
+import { TYPE_TO_GROUP_NAME } from './service-group.js?v=aug17e';
 // ROLES_EDITOR_V2 — «Роли» — свой файл экрана (views/roles-editor.js). Он жил
 // здесь и тянул за собой NAV_MODULES; вынесен по конвенции «один файл на
 // экран» и чтобы правки прав не задевали этот файл. Хаб только монтирует
@@ -39,6 +43,7 @@ import { isRouteAllowed, settingsTileLevel, hasRestriction, actorIsAdmin, settin
 // той же конвенции, что и «Роли», и монтируется НАД списком — разводить их по
 // двум пунктам меню значило бы вернуть путаницу «две плитки про одно и то же»,
 // которую SETTINGS_ONE_COMPANY_V1 только что убрал.
+import { packageValidityParts, packageDiscount } from './service-templates.js?v=tpl1';   // PACKAGES_V1
 import { renderBranchSyncCard } from './branch-sync.js?v=bsync4';   // bsync4: филиалы таблицей, предупреждения — в окна подтверждения (BRANCH_LIST_V2)
 
 let state = { section: null, readOnly: false };   // null = hub; else one of LOOKUP_CONFIG's keys
@@ -75,6 +80,7 @@ const SECTION_GRANT = {
     roles: 'settings.roles',
     service_types: 'settings.service_types',
     consultation_types: 'settings.consultation_types',
+    service_packages: 'settings.service_packages',   // PACKAGES_V1
     patient_categories: 'settings.patient_categories',
     chronic_conditions_ref: 'settings.chronic_conditions',
     patient_discounts: 'settings.patient_discounts',
@@ -214,6 +220,8 @@ export const GROUPS = [   // ROLE_REPORTS_SETTINGS_V1 — экспорт рад�
             { label: 'Товары и препараты',  desc: 'Что на складе, по какой цене и когда пора заказывать', icon: 'Pill',   live: true, action: nav('inventory'), route: 'inventory' },
             { label: 'Типы услуг',          desc: 'Как услуги сгруппированы в прайсе',           icon: 'Layers', live: true, action: () => openSection('service_types'), section: 'service_types' },
             { label: 'Консультации врачей', desc: 'Виды консультаций и их стоимость',    icon: 'Stethoscope', live: true, action: () => openSection('consultation_types'), section: 'consultation_types' },
+            // PACKAGES_V1 — то, что «+Пакеты» предлагает при регистрации.
+            { label: 'Пакеты услуг',        desc: 'Наборы услуг со скидкой и сроком действия для «+Пакеты»', icon: 'Copy', live: true, action: () => openSection('service_packages'), section: 'service_packages' },
         ],
     },
     {
@@ -589,6 +597,30 @@ const LOOKUP_CONFIG = {
     },
 
     // ---- Настройки услуг / Service settings -------------------------------
+    // PACKAGES_V1 — пакет: услуги, скидка на них, срок предложения. Та же
+    // таблица, что у шаблонов сметы (service_templates, мигр. 154): шаблон —
+    // это пакет без скидки и без дат. Скидку применяет сервер при выставлении
+    // счёта, построчно и только на услуги пакета (с категорией пациента — не
+    // суммируется, действует бо́льшая).
+    service_packages: {
+        table: 'service_templates', title: 'Пакеты услуг', icon: 'Copy',
+        grantHint: 'Скидку пакета меняет роль с правом «Цены и проценты».',
+        modalWidth: '560px',
+        columns: [
+            { key: 'name', label: 'Название' },
+            { key: 'discount_percent', label: 'Скидка, %', format: (row) => (packageDiscount(row) > 0 ? String(packageDiscount(row)) : '—') },
+            { key: 'service_ids', label: 'Услуги', format: (row) => trf('услуг: {n}', { n: Array.isArray(row && row.service_ids) ? row.service_ids.length : 0 }) },
+            { key: 'valid_until', label: 'Срок', format: (row) => packageValidityText(row) },
+        ],
+        fields: [
+            { key: 'name', label: 'Название', type: 'text', required: true, full: true },
+            { key: 'service_ids', label: 'Услуги пакета', type: 'services', full: true, emptyHint: 'Отметьте услуги, которые входят в пакет' },
+            { key: 'discount_percent', label: 'Скидка пакета, % — на услуги пакета, построчно', type: 'number' },
+            { key: 'valid_from', label: 'Действует с (пусто — сразу)', type: 'date' },
+            { key: 'valid_until', label: 'Действует по (пусто — бессрочно)', type: 'date' },
+        ],
+        beforeSave: (p) => packageFormProblem(p),
+    },
     service_types: {
         table: 'service_types', title: 'Типы услуг', icon: 'Layers',
         columns: [{ key: 'name', label: 'Название' }, { key: 'code', label: 'Код' }, { key: 'billing_mode', label: 'Оплата' }],
@@ -759,6 +791,17 @@ const LOOKUP_CONFIG = {
               hint: 'Пусто — действует стандартный процент сверху. Заполненная строка его перекрывает: % — доля от стоимости услуги, сум — фиксированная сумма за услугу.',
               ratePlaceholder: 'по стандарту',
               visibleWhen: (v) => v.reward_mode === 'own' },
+            // INPATIENT_BONUS_V1 (мигр. 155) — стационарное вознаграждение
+            // партнёра. Выключено — за стационар не платится НИЧЕГО: обычные
+            // ставки групп к счёту госпитализации не применяются. Источник,
+            // связанный с сотрудником, по этой карточке за стационар не платит —
+            // сотруднику платит вкладка «Стационар» его карточки (reports.js).
+            { key: 'inpatient_bonus_enabled', label: 'Вознаграждение за стационар', type: 'checkbox',
+              checkedValue: 1, uncheckedValue: 0, default: 0, full: true },
+            { key: 'inpatient_pct', label: 'За стационар: % от оплаченного счёта (услуги и койко-дни, без медикаментов)',
+              type: 'number', visibleWhen: (v) => v.inpatient_bonus_enabled === 1 },
+            { key: 'inpatient_fixed', label: 'За стационар: фиксированная сумма за госпитализацию',
+              type: 'number', visibleWhen: (v) => v.inpatient_bonus_enabled === 1 },
         ],
         // `name` — производная колонка: её не показываем, но она NOT NULL и
         // остаётся тем, что видят все остальные экраны.
@@ -835,6 +878,22 @@ export function discountValidityText(row) {
     if (from) return trf('с {from}', { from });
     return tr('бессрочно');
 }
+// PACKAGES_V1 — «действует до 30.09.2026» / «истёк 31.08.2026» / «ещё не начался — с …».
+export function packageValidityText(row) {
+    const [text, params] = packageValidityParts(row);
+    return trf(text, params);
+}
+// PACKAGES_V1 — пакет без услуг, скидка вне 0–100 и «по» раньше «с» — отказ
+// словами до отправки (база их тоже не примет: CHECK в мигр. 154).
+export function packageFormProblem(p) {
+    if (Array.isArray(p.service_ids) && p.service_ids.length === 0) return tr('Отметьте хотя бы одну услугу пакета.');
+    if (p.discount_percent !== undefined) {
+        const d = Number(p.discount_percent);
+        if (!Number.isFinite(d) || d < 0 || d > 100) return tr('Скидка пакета — от 0 до 100 %.');
+    }
+    if (p.valid_from && p.valid_until && p.valid_until < p.valid_from) return tr('Дата «по» раньше даты «с».');
+    return null;
+}
 export function discountScopeText(row) {
     const ids = Array.isArray(row && row.service_ids) ? row.service_ids : [];
     return ids.length ? trf('услуг: {n}', { n: ids.length }) : tr('на весь счёт');
@@ -842,7 +901,7 @@ export function discountScopeText(row) {
 
 // DISCOUNT_RULES_V1 — список активных услуг с отметками и поиском. Загружается
 // после монтирования (load), как fk-списки; .value — массив отмеченных id.
-function servicesPicker(initialIds) {
+function servicesPicker(initialIds, emptyHint = 'Ничего не отмечено — скидка действует на весь счёт') {
     const picked = new Set((initialIds || []).map(Number).filter(Number.isFinite));
     const q = h('input', { type: 'text', placeholder: 'Поиск услуги…', style: { width: '100%', marginBottom: '6px' } });
     const list = h('div', { style: { maxHeight: '180px', overflowY: 'auto', border: '1px solid var(--ink-100)', borderRadius: '8px', padding: '6px 8px', display: 'grid', gap: '4px' } },
@@ -860,7 +919,7 @@ function servicesPicker(initialIds) {
         }
         sync();
     };
-    const sync = () => { countEl.textContent = picked.size ? trf('Отмечено услуг: {n}', { n: picked.size }) : tr('Ничего не отмечено — скидка действует на весь счёт'); };
+    const sync = () => { countEl.textContent = picked.size ? trf('Отмечено услуг: {n}', { n: picked.size }) : tr(emptyHint); };
     q.addEventListener('input', paint);
     const el = h('div', null, q, list, countEl);
     el.load = async () => {
@@ -890,14 +949,26 @@ function enumLabel(cfg, key, value) {
 //
 // Единица у каждой строки своя: % — доля от стоимости услуги, сум —
 // фиксированная сумма ЗА УСЛУГУ (умножается на количество в отчёте).
-function groupRatesControl(initialRaw, hint) {
+// Экспорт — для теста (__tests__/settings-hub-groups.test.mjs).
+export function groupRatesControl(initialRaw, hint) {
     let initial = [];
     try {
         initial = Array.isArray(initialRaw) ? initialRaw
             : (typeof initialRaw === 'string' && initialRaw.trim() ? JSON.parse(initialRaw) : []);
     } catch { initial = []; }
     if (!Array.isArray(initial)) initial = [];
-    const byType = new Map(initial.map(e => [Number(e && e.type_id), e]).filter(([k]) => Number.isFinite(k)));
+    // GROUPS_FIVE_REFERRAL_V1 (мигр. 153) — строки таблицы — ПЯТЬ групп
+    // (services.type), а не записи справочника «Типы услуг»: там их было шесть,
+    // одна без единой услуги, и они назывались «группами» вопреки словарю
+    // владельца. Список фиксирован — грузить нечего.
+    const byGroup = new Map();
+    for (const e of initial) {
+        const g = e && referralGroupOf(e.group);
+        if (g && !byGroup.has(g)) byGroup.set(g, e);
+    }
+    // Записи, которые таблица не показывает (без группы из пяти), сохраняются
+    // как были — редактор правит только то, что видно (ревью M6).
+    const hidden = initial.filter(e => !(e && referralGroupOf(e.group)));
 
     const tbody = h('tbody');
     const wrap = h('div', { style: { display: 'block' } },
@@ -908,49 +979,37 @@ function groupRatesControl(initialRaw, hint) {
                 h('th', { style: { textAlign: 'right', width: '240px' } }, 'Ставка'))),
             tbody));
 
-    // Группы грузятся ПОСЛЕ монтирования, как fk-поля: модалка открывается
-    // сразу, а не ждёт сети.
+    // load() остаётся: форма передаёт сюда подсказку пустого поля.
     wrap.load = async ({ placeholder } = {}) => {
-        try {
-            const { data, error } = await supabase.from('service_types').select('id, name').eq('active', 1).order('name');
-            if (error) throw error;
-            clear(tbody);
-            for (const t of (data || [])) {
-                const cur = byType.get(Number(t.id));
-                const val = cur && Number.isFinite(Number(cur.value)) ? String(cur.value) : '';
-                const unit = cur && cur.unit === 'fix' ? 'fix' : 'pct';
-                tbody.appendChild(h('tr', null,
-                    h('td', null, t.name),
-                    h('td', null, h('div', { class: 'rate-cell' },
-                        h('input', {
-                            type: 'number', min: '0', step: '0.01', 'data-rate-type': String(t.id),
-                            value: val, placeholder: placeholder || '',
-                        }),
-                        h('select', { 'data-rate-unit': String(t.id) },
-                            h('option', { value: 'pct', selected: unit === 'pct' }, '%'),
-                            h('option', { value: 'fix', selected: unit === 'fix' }, 'сум'))))));
-            }
-            if (!(data || []).length) {
-                tbody.appendChild(h('tr', null, h('td', { colspan: '2', class: 'muted' }, 'Группы услуг не заведены.')));
-            }
-        } catch (e) {
-            clear(tbody);
-            tbody.appendChild(h('tr', null, h('td', { colspan: '2', class: 'muted' },
-                trf('Группы услуг не загрузились: {msg}', { msg: (e && e.message) || e }))));
+        clear(tbody);
+        for (const g of REFERRAL_GROUPS) {
+            const cur = byGroup.get(g);
+            const val = cur && Number.isFinite(Number(cur.value)) ? String(cur.value) : '';
+            const unit = cur && cur.unit === 'fix' ? 'fix' : 'pct';
+            tbody.appendChild(h('tr', null,
+                h('td', null, tr(TYPE_TO_GROUP_NAME[g])),
+                h('td', null, h('div', { class: 'rate-cell' },
+                    h('input', {
+                        type: 'number', min: '0', step: '0.01', 'data-rate-group': g,
+                        value: val, placeholder: placeholder || '',
+                    }),
+                    h('select', { 'data-rate-unit': g },
+                        h('option', { value: 'pct', selected: unit === 'pct' }, '%'),
+                        h('option', { value: 'fix', selected: unit === 'fix' }, 'сум'))))));
         }
     };
 
     // save() читает поле обобщённо через .value — новый тип ему знать не нужно.
     Object.defineProperty(wrap, 'value', {
         get() {
-            const out = [];
-            for (const inp of tbody.querySelectorAll('input[data-rate-type]')) {
+            const out = hidden.slice();
+            for (const inp of tbody.querySelectorAll('input[data-rate-group]')) {
                 const raw = inp.value.trim();
                 if (raw === '') continue;              // пусто — записи нет
                 const value = Number(raw);
                 if (!Number.isFinite(value) || value < 0) continue;
-                const sel = tbody.querySelector('select[data-rate-unit="' + inp.dataset.rateType + '"]');
-                out.push({ type_id: Number(inp.dataset.rateType), unit: sel && sel.value === 'fix' ? 'fix' : 'pct', value });
+                const sel = tbody.querySelector('select[data-rate-unit="' + inp.dataset.rateGroup + '"]');
+                out.push({ group: inp.dataset.rateGroup, unit: sel && sel.value === 'fix' ? 'fix' : 'pct', value });
             }
             return out;
         },
@@ -1132,8 +1191,12 @@ async function renderEditor(container, key) {
             style: { cursor: readOnly ? 'default' : 'pointer', opacity: inactive ? '0.55' : '' },
             onclick: readOnly ? null : () => openRowModal(row),
         },
+            // PACKAGES_V1 — колонка с format показывает то же, по чему её ищет
+            // отбор (cellText): у «Скидок пациентов» срок и услуги до сих пор
+            // печатались сырыми значениями.
             ...cfg.columns.map(c => h('td', null,
-                c.embed ? fmtCell(row[c.key] ? row[c.key][c.embedLabel || 'name'] : null)
+                typeof c.format === 'function' ? fmtCell(c.format(row))
+                : c.embed ? fmtCell(row[c.key] ? row[c.key][c.embedLabel || 'name'] : null)
                         : fmtCell(enumLabel(cfg, c.key, row[c.key])))),
             h('td', null, Tag(row.active ? 'Yes' : 'No', { kind: row.active ? 'ok' : '', dot: true })),
         );
@@ -1177,7 +1240,7 @@ async function renderEditor(container, key) {
             } else if (f.type === 'services') {
                 // DISCOUNT_RULES_V1 — отметки по списку активных услуг с поиском;
                 // .value отдаёт массив id (колонка объявлена json в реестре).
-                control = servicesPicker(Array.isArray(row && row[f.key]) ? row[f.key] : []);
+                control = servicesPicker(Array.isArray(row && row[f.key]) ? row[f.key] : [], f.emptyHint);
                 fkFields.push({ ...f, __services: true });
             } else if (f.type === 'phone') {
                 // PHONE_INPUT_V1 — country picker, Uzbekistan by default. Its

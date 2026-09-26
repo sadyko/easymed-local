@@ -150,20 +150,21 @@ function refRow(r, i = 0) {
 
 // REFERRAL_CATEGORY_RATES_V1 — ставка на каждую группу услуг, процентом или
 // фиксированной суммой. Ровно то, чего прежний плоский процент не умел.
+// GROUPS_FIVE_REFERRAL_V1 (мигр. 153) — группа = services.type (одна из пяти);
+// операция — 'other' («Хирургия»). Тип из справочника (type_id) намеренно
+// ставится ПОПЕРЁК группы: ставку выбирает группа, а не тип.
 function seedGroups(db) {
-  const tCons = db.prepare("INSERT INTO service_types (name) VALUES ('Консультации')").run().lastInsertRowid;
-  const tSurg = db.prepare("INSERT INTO service_types (name) VALUES ('Хирургия')").run().lastInsertRowid;
-  db.prepare("UPDATE services SET type_id = ? WHERE name = 'Консультация'").run(tCons);
-  db.prepare("UPDATE services SET type_id = ? WHERE name = 'Операция аппендэктомия'").run(tSurg);
-  return { tCons, tSurg };
+  const tMisc = db.prepare("INSERT INTO service_types (name) VALUES ('Разное')").run().lastInsertRowid;
+  db.prepare("UPDATE services SET type = 'consultation', type_id = ? WHERE name = 'Консультация'").run(tMisc);
+  db.prepare("UPDATE services SET type = 'other', type_id = ? WHERE name = 'Операция аппендэктомия'").run(tMisc);
 }
 
 test('referrals: процент и фиксированная сумма в одной корзине, фикс — за каждую услугу', () => {
   const { db } = seedRu();
-  const { tCons, tSurg } = seedGroups(db);
+  seedGroups(db);
   db.prepare("UPDATE referral_source_categories SET rates = ? WHERE name = 'Партнёры'").run(
-    JSON.stringify([{ type_id: tCons, unit: 'fix', value: 30000 },
-                    { type_id: tSurg, unit: 'pct', value: 20 }]));
+    JSON.stringify([{ group: 'consultation', unit: 'fix', value: 30000 },
+                    { group: 'other', unit: 'pct', value: 20 }]));
 
   // REPORTS_V2 — операцию оплачиваем: проверяется смесь фикса и процента.
   db.prepare("UPDATE invoices SET status = 'paid', paid_amount = total_amount WHERE invoice_number = 'INV-2'").run();
@@ -179,9 +180,9 @@ test('referrals: процент и фиксированная сумма в од
 
 test('referrals: своя ставка источника перекрывает категорию целиком', () => {
   const { db } = seedRu();
-  const { tCons } = seedGroups(db);
+  seedGroups(db);
   db.prepare("UPDATE referral_source_categories SET rates = ? WHERE name = 'Партнёры'").run(
-    JSON.stringify([{ type_id: tCons, unit: 'pct', value: 50 }]));
+    JSON.stringify([{ group: 'consultation', unit: 'pct', value: 50 }]));
   db.prepare("UPDATE referral_sources SET reward_mode = 'own', own_percent = 5 WHERE name = 'Клиника Х'").run();
 
   db.prepare("UPDATE invoices SET status = 'paid', paid_amount = total_amount WHERE invoice_number = 'INV-2'").run();
@@ -268,19 +269,38 @@ test('surgery_profit: filters surgery lines, subtracts tax + fee + consumables',
   assert.equal(row[cols.indexOf('Маржа (%)')], 70.1);
 });
 
-test('doctor_salaries: fully-paid invoices only', () => {
+// PAY_BASIS_PERFORMED_V1 (владелец, 26.09) — было «fully-paid invoices only»:
+// 1 услуга, 90 000, 30 %, 27 000 (неоплаченная операция INV-2 не входила).
+// Теперь доля — по ВЫПОЛНЕННЫМ услугам: операция завершена, её счёт не
+// оплачен, и она платит (1 000 000 − 12 % налога) × 20 % = 176 000.
+test('doctor_salaries: performed services, paid or not', () => {
   const { db } = seedRu();
   const r = runReport(db, { kind:'doctor_salaries', from:FROM, to:TO }, user);
   assert.equal(r.rows.length, 1);
   const c = r.columns;
   const row = r.rows[0];
   assert.equal(row[c.indexOf('Врач')], 'Доктор Д.');
-  assert.equal(row[c.indexOf('Оплаченных услуг')], 1);        // INV-2 is unpaid → excluded
-  assert.equal(row[c.indexOf('Сумма после скидки')], 90000);
-  assert.equal(row[c.indexOf('Средний % врача')], 30);
+  assert.equal(row[c.indexOf('Выполненных услуг')], 2);        // INV-2 не оплачен, но операция выполнена
+  assert.equal(row[c.indexOf('Сумма после скидки')], 1090000);
+  assert.equal(row[c.indexOf('Средний % врача')], 25);           // (30 + 20) / 2
   assert.equal(row[c.indexOf('Услуг по фикс. ставке')], 0);
-  assert.equal(row[c.indexOf('Доля врача (гонорар)')], 27000);
+  assert.equal(row[c.indexOf('Доля врача (гонорар)')], 27000 + 176000);
+  assert.equal(row[c.indexOf('Из них без счёта')], 0);
+  assert.ok(r.notes.includes('Доля врача — по выполненным услугам, оплачены они или нет.'));
+  // Не начатая операция — не выполнена: остаётся прежняя одна строка.
+  notStarted(db, 'Операция аппендэктомия');
+  const r2 = runReport(db, { kind:'doctor_salaries', from:FROM, to:TO }, user);
+  assert.equal(r2.rows[0][c.indexOf('Выполненных услуг')], 1);
+  assert.equal(r2.rows[0][c.indexOf('Доля врача (гонорар)')], 27000);
 });
+
+// PAY_BASIS_PERFORMED_V1 — строка услуги, которую врач ещё не начал: доли нет.
+// Тесты фиксированной ставки ниже смотрят на КОНСУЛЬТАЦИЮ, и выполненная
+// (неоплаченная) операция того же врача иначе примешалась бы к их числам.
+function notStarted(db, serviceName) {
+  db.prepare(`UPDATE visit_services SET status = 'queued'
+               WHERE service_id = (SELECT id FROM services WHERE name = ?)`).run(serviceName);
+}
 
 // DOCTOR_FIX_RATE_V1 — a doctor paid a flat sum per unit instead of a share of
 // the price. The two must never combine, and the fixed sum must NOT be reduced
@@ -313,6 +333,7 @@ test('doctor fee: a fixed rate pays the flat sum per unit, ignoring the percenta
 
 test('doctor fee: a fixed rate multiplies by quantity', () => {
   const { db } = seedRu();
+  notStarted(db, 'Операция аппендэктомия');
   const { doc, svc } = setFixedRate(db, { pct: 30, fix: 50000 });
   db.prepare("UPDATE invoice_items SET quantity = 3 WHERE service_id = ? AND id IN (SELECT ii.id FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id WHERE i.status = 'paid')").run(svc);
 
@@ -325,6 +346,7 @@ test('doctor fee: a fixed rate multiplies by quantity', () => {
 
 test('doctor fee: removing the fixed rate returns the doctor to their percentage', () => {
   const { db } = seedRu();
+  notStarted(db, 'Операция аппендэктомия');
   setFixedRate(db, { pct: 30, fix: null });   // pct only — the pre-existing shape
 
   const r = runReport(db, { kind:'doctor_salaries', from:FROM, to:TO }, user);
@@ -336,6 +358,7 @@ test('doctor fee: removing the fixed rate returns the doctor to their percentage
 
 test('doctor_salaries: an all-fixed doctor reports no average %, not 0%', () => {
   const { db } = seedRu();
+  notStarted(db, 'Операция аппендэктомия');
   setFixedRate(db, { pct: 30, fix: 50000 });
   const r = runReport(db, { kind:'doctor_salaries', from:FROM, to:TO }, user);
   const c = r.columns;
@@ -509,7 +532,12 @@ test('by_doctors: соседнее здание под своей подпись
   assert.equal(foreign[col(mine, 'Врач')], 'Чиланзар, врач не указан');
   const total = (r, c) => Math.round(r.rows.reduce((n, x) => n + (Number(x[col(r, c)]) || 0), 0) * 100) / 100;
   assert.equal(total(mine, 'Доля за услуги'), total(sal, 'Доля врача (гонорар)'));
-  assert.equal(total(mine, 'Оплачено (доля оплаты счёта)'), total(sal, 'Сумма после скидки') + total(sal, 'Стационар: сумма после скидки'));
+  // PAY_BASIS_PERFORMED_V1 — было: «Оплачено» = «Сумма после скидки» зарплат
+  // (оба считали только оплаченное). Теперь зарплаты считают ВЫПОЛНЕННОЕ, и с
+  // ними сходится «Выставлено» (все выполненные строки здесь со счётом), а
+  // «Оплачено» — сведения: 90 000 своих + 400 000 соседа.
+  assert.equal(total(mine, 'Выставлено'), total(sal, 'Сумма после скидки') + total(sal, 'Стационар: сумма после скидки'));
+  assert.equal(total(mine, 'Оплачено (доля оплаты счёта)'), 490000);
 });
 
 test('procurement: склад не ездит — цифры только по своему зданию, и это сказано', () => {

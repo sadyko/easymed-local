@@ -9,9 +9,9 @@ import { departmentList, departmentCard, departmentForm, departmentHeadSet, depa
 import { stockMovementsList } from './stock-log.js';   // STOCK_LOG_V1
 import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCreate, stockRequestsMine } from './stock-requests.js';   // STOCK_REQUEST_V1
 import { expiryLots } from './expiry.js';   // EXPIRY_BALANCE_V1 — остатки партиями, ближайший срок первым
-import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions, doctorInpatientShare, doctorReferralReward } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
+import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions, doctorInpatientShare, doctorReferralReward, doctorPaySummary, reportChoices } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
-import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit,
+import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit, admissionReferralDefault,
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
 import { admissionFlowState, inpatientCapabilities } from './inpatient-flow.js';   // INPATIENT_FLOW_V1
 import { admissionTitleSheetGet, admissionTitleSheetSave } from './title-sheet.js';   // TITLE_SHEET_V1
@@ -167,6 +167,7 @@ export const RPC = {
   doctor_tier_positions:    (db, args, user) => doctorTierPositions(db, args, user),   // DOCTOR_TIER_V1 — позиции строк для кабинета врача
   doctor_inpatient_share:   (db, args, user) => doctorInpatientShare(db, args, user),  // INPATIENT_SHARE_V1 — стационарная доля для кабинета врача
   doctor_referral_reward:   (db, args, user) => doctorReferralReward(db, args, user),  // REPORTS_V2 — вознаграждение за направления для кабинета врача (то же, что отчёт «Рефералы»)
+  doctor_pay_summary:       (db, args, user) => doctorPaySummary(db, args, user),      // PAY_BASIS_PERFORMED_V1 — вся выплата врача для кабинета, строками отчётов
   visit_set_doctor_referrer: (db, args, user) => visitSetDoctorReferrer(db, args, user),  // REPORTS_V2 ревью I3/I5 — свой источник врача, если направившего нет
   owner_report:             (db, args, user) => ownerReport(db, args, user),   // REPORTS_HUB_RU_V1 — «Отчёт владельца» charts
   // BUILDING_REPORTS_V1 — перечень ЗДАНИЙ клиники для выборки в «Отчётах».
@@ -174,6 +175,9 @@ export const RPC = {
   // а прежняя выборка филиалов грузилась с active = 1 — соседнее здание же
   // заводится как active = 0 и в список не попадало вовсе.
   report_buildings:         (db, args, user) => reportBuildings(db, args, user),
+  // DOCTOR_LINES_SPECIALTY_V1 — варианты выпадающего фильтра конструктора отчёта
+  // (врачи для «Детализации» и «Врачей и услуг»), за воротами самого отчёта.
+  report_choices:           (db, args, user) => reportChoices(db, args, user),
   // BUILDING_FRESHNESS_V1 — свежесть данных по каждому зданию: когда его записи
   // приходили в последний раз, сколько их ждёт родителя и сколько база не
   // приняла. Чистое чтение — ровно та же категория, что report_buildings.
@@ -270,6 +274,8 @@ export const RPC = {
   // вызовов. Новый экран зовёт admission_order_cancel — тот требует причину,
   // спрашивает матрицу прав и отпускает койку в 'cleaning'.
   admission_order_create:         (db, args, user) => admissionOrderCreate(db, args, user),
+  // INPATIENT_BONUS_V1 — кто направил по умолчанию (окно заявки его показывает).
+  admission_referral_default:     (db, args, user) => admissionReferralDefault(db, args, user),
   admission_order_cancel:         (db, args, user) => admissionOrderCancel(db, args, user),
   admission_admit:                (db, args, user) => admissionAdmit(db, args, user),
   admission_title_sheet_get:      (db, args, user) => admissionTitleSheetGet(db, args, user),    // TITLE_SHEET_V1

@@ -17,7 +17,18 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { listTemplates, templateSize } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1
+import { listTemplates, templateSize, packageDiscount } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1
+
+// PACKAGES_V1 — «−20 % · до 30.09» под названием пакета: скидку и срок видно
+// ДО выбора. Список уже отобран по дню визита (listTemplates, опция on).
+export function packageTermsText(t) {
+    const pct = packageDiscount(t);
+    const until = String((t && t.valid_until) || '').slice(0, 10);
+    const bits = [];
+    if (pct > 0) bits.push(trf('скидка {pct} %', { pct: String(pct).replace('.', ',') }));
+    if (/^\d{4}-\d{2}-\d{2}$/.test(until)) bits.push(trf('до {date}', { date: until.slice(8, 10) + '.' + until.slice(5, 7) + '.' + until.slice(0, 4) }));
+    return bits.join(' · ');
+}
 
 /**
  * TEMPLATE_PICKER_V1 — выбор пакета услуг (service_templates) в любом окне.
@@ -25,7 +36,10 @@ import { listTemplates, templateSize } from './service-templates.js?v=tpl1';   /
  * её в услуги — забота вызывающего (resolveTemplate из service-templates.js).
  * Только выбор: сохранить/убрать шаблон остаются в мастере визита.
  */
-export function openTemplatePickerModal({ onPick, title = 'Пакеты услуг' } = {}) {
+// PACKAGES_V1 (ревью I-3) — `on`: местный день визита, на который пойдут
+// услуги ('YYYY-MM-DD'). Пакеты отбираются по НЕМУ — сервер сверяет срок пакета
+// с днём визита. Не передан — сегодня (быстрая регистрация: приём сейчас).
+export function openTemplatePickerModal({ onPick, title = 'Пакеты услуг', on } = {}) {
     const pick = typeof onPick === 'function' ? onPick : () => {};
 
     const overlay = h('div', { class: 'modal', 'data-dialog': 'template-picker', style: { zIndex: '180' } });
@@ -54,7 +68,7 @@ export function openTemplatePickerModal({ onPick, title = 'Пакеты услу
     document.body.appendChild(overlay);
 
     (async () => {
-        const { data, error } = await listTemplates(supabase);
+        const { data, error } = await listTemplates(supabase, { on: on || undefined });
         if (closed) return;
         clear(listEl);
         if (error) {
@@ -64,10 +78,11 @@ export function openTemplatePickerModal({ onPick, title = 'Пакеты услу
         }
         if (!data || !data.length) {
             listEl.appendChild(h('div', { class: 'muted', style: { padding: '16px', textAlign: 'center', fontSize: '12.5px' } },
-                'Пакетов пока нет — соберите первый в мастере визита («Сохранить как шаблон»).'));
+                'Действующих пакетов нет — заведите пакет в «Настройки → Пакеты услуг» или сохраните смету шаблоном в каталоге услуг.'));
             return;
         }
         for (const t of data) {
+            const terms = packageTermsText(t);
             listEl.appendChild(h('button', {
                 type: 'button',
                 class: 'row',
@@ -77,7 +92,9 @@ export function openTemplatePickerModal({ onPick, title = 'Пакеты услу
                 },
                 onclick: () => { close(); pick(t); },
             },
-                h('span', { style: { flex: '1 1 auto', minWidth: 0, fontWeight: 700, fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
+                h('span', { style: { flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column' } },
+                    h('span', { style: { fontWeight: 700, fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
+                    terms ? h('span', { 'data-package-terms': '', style: { fontSize: '12.5px', color: 'var(--ok-700, #15803d)' } }, terms) : null),
                 h('span', { class: 'muted', style: { flex: 'none', fontSize: '12.5px' } }, trf('{n} усл.', { n: templateSize(t) }))));
         }
     })();

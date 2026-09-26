@@ -253,7 +253,7 @@ export const CATALOG = [
       { key: 'reports.cashier',    label: 'Касса', desc: 'Отчёт кассира за период: поступления и расходы.', levels: ['none', 'view'], enforced: 'rpc:cashier_report' },
       { key: 'reports.doctor_pay', label: 'Оплата врачей', desc: 'Зарплаты врачей, стационарная доля, отчёты по врачам — начисления каждого врача. Свои начисления врач видит в кабинете всегда.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
       { key: 'reports.referrals',  label: 'Рефералы', desc: 'Кто направил пациентов и вознаграждение за направления.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
-      { key: 'reports.services',   label: 'По услугам и рентабельность', desc: 'Отчёт по услугам и рентабельность операций.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
+      { key: 'reports.services',   label: 'По услугам и рентабельность', desc: 'Отчёт по услугам, по специальностям и рентабельность операций.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
       { key: 'reports.stock',      label: 'Закупки и склад', desc: 'Приход, расход, остатки и сроки годности.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
       { key: 'reports.callcenter', label: 'Колл-центр', desc: 'Загрузка стойки, воронка заявок и работа операторов.', levels: ['none', 'view'], enforced: 'rpc:callcenter_report' },
       // ADMIN_ROWS_GRANTABLE_V1 — охват Telegram-бота выдаётся «Просмотром»
@@ -313,6 +313,11 @@ export const CATALOG = [
       { key: 'settings.services', group: 'Настройки услуг', label: 'Список услуг', desc: 'Все услуги клиники: цены и куда ведёт каждая.', levels: ['none', 'view'], legacyKeys: ['services', 'settings:services'], enforced: 'route:services' },
       { key: 'settings.service_types', group: 'Настройки услуг', label: 'Типы услуг', desc: 'Как услуги сгруппированы в прайсе.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и переименовывает типы услуг. Способ оплаты типа — с действием «Цены и проценты».' }, legacyKeys: 'hub', grantColumns: { service_types: ['name', 'code', 'active'] }, enforced: 'db:service_types' },
       { key: 'settings.consultation_types', group: 'Настройки услуг', label: 'Консультации врачей', desc: 'Виды консультаций и их стоимость.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и переименовывает виды консультаций. Цены — с действием «Цены и проценты».' }, legacyKeys: 'hub', grantColumns: { consultation_types: ['name', 'name_ru', 'name_uz', 'sort_order', 'active'] }, enforced: 'db:consultation_types' },
+      // PACKAGES_V1 — пакеты услуг: список услуг, срок предложения, скидка.
+      // Скидка — деньги, её открывает «Цены и проценты» (ниже). Регистратура
+      // сохраняет смету пакетом без скидки и снимает пакет из списка и без этой
+      // строки (реестр, `nonAdminColumns`) — это её рабочий инструмент.
+      { key: 'settings.service_packages', group: 'Настройки услуг', label: 'Пакеты услуг', desc: 'Наборы услуг для «+Пакеты» при регистрации: срок действия и скидка.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и правит пакеты: название, услуги, срок действия. Скидку пакета — с действием «Цены и проценты».' }, legacyKeys: 'hub', grantColumns: { service_templates: ['name', 'service_ids', 'valid_from', 'valid_until', 'active'] }, enforced: 'db:service_templates' },
       { key: 'settings.patients', group: 'Основное', label: 'Пациенты', desc: 'Картотека: данные пациента, контакты, номер карты.', levels: ['none', 'view'], legacyKeys: ['settings:patients'], enforced: 'route:settings:patients' },
       { key: 'settings.patient_categories', group: 'Основное', label: 'Категории пациентов', desc: 'Группы пациентов и скидка каждой группы.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и переименовывает категории. Скидку группы — с действием «Цены и проценты».' }, legacyKeys: 'hub', grantColumns: { patient_categories: ['name', 'tier', 'active'] }, enforced: 'db:patient_categories' },
       { key: 'settings.chronic_conditions', group: 'Основное', label: 'Хронические заболевания', desc: 'Список для анкеты пациента.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Пополняет и правит список.' }, legacyKeys: 'hub', enforced: 'db:chronic_conditions_ref' },
@@ -355,9 +360,10 @@ export const CATALOG = [
       // и остаются за администратором.
       { key: 'settings.service_types.money', of: 'settings.service_types', group: 'Настройки услуг', label: 'Цены и проценты', desc: 'Способ оплаты типа услуг.', levels: ['none', 'edit'], levelDesc: { edit: 'Меняет способ оплаты типа услуг (вместе с «Изменением» плитки).' }, adminDefault: true, moneyColumns: { service_types: ['billing_mode'] }, enforced: 'db:service_types' },
       { key: 'settings.consultation_types.money', of: 'settings.consultation_types', group: 'Настройки услуг', label: 'Цены и проценты', desc: 'Цена вида консультации.', levels: ['none', 'edit'], levelDesc: { edit: 'Меняет цены консультаций (вместе с «Изменением» плитки).' }, adminDefault: true, moneyColumns: { consultation_types: ['price'] }, enforced: 'db:consultation_types' },
+      { key: 'settings.service_packages.money', of: 'settings.service_packages', group: 'Настройки услуг', label: 'Цены и проценты', desc: 'Скидка пакета услуг.', levels: ['none', 'edit'], levelDesc: { edit: 'Меняет скидку пакета (вместе с «Изменением» плитки).' }, adminDefault: true, moneyColumns: { service_templates: ['discount_percent'] }, enforced: 'db:service_templates' },
       { key: 'settings.patient_categories.money', of: 'settings.patient_categories', group: 'Основное', label: 'Цены и проценты', desc: 'Скидка группы пациентов.', levels: ['none', 'edit'], levelDesc: { edit: 'Меняет скидку группы (вместе с «Изменением» плитки).' }, adminDefault: true, moneyColumns: { patient_categories: ['discount_percent'] }, enforced: 'db:patient_categories' },
       { key: 'settings.rooms.money', of: 'settings.rooms', group: 'Помещения', label: 'Цены и проценты', desc: 'Цены палат и коек, способ оплаты палаты.', levels: ['none', 'edit'], levelDesc: { edit: 'Меняет цены палат и коек (вместе с «Изменением» плитки).' }, adminDefault: true, moneyColumns: { wards: ['billing_mode', 'price_per_day', 'price_per_hour'], beds: ['price_per_day', 'price_per_hour'] }, enforced: 'db:wards' },
-      { key: 'settings.referral_sources.money', of: 'settings.referral_sources', group: 'Направления', label: 'Цены и проценты', desc: 'Ставки вознаграждения источника и реквизиты выплаты.', levels: ['none', 'edit'], levelDesc: { edit: 'Меняет ставки вознаграждения и реквизиты выплаты (вместе с «Изменением» плитки).' }, adminDefault: true, moneyColumns: { referral_sources: ['payment_type', 'card_number', 'reward_mode', 'own_percent', 'own_rates'] }, enforced: 'db:referral_sources' },
+      { key: 'settings.referral_sources.money', of: 'settings.referral_sources', group: 'Направления', label: 'Цены и проценты', desc: 'Ставки вознаграждения источника и реквизиты выплаты.', levels: ['none', 'edit'], levelDesc: { edit: 'Меняет ставки вознаграждения и реквизиты выплаты (вместе с «Изменением» плитки).' }, adminDefault: true, moneyColumns: { referral_sources: ['payment_type', 'card_number', 'reward_mode', 'own_percent', 'own_rates', 'inpatient_bonus_enabled', 'inpatient_pct', 'inpatient_fixed'] }, enforced: 'db:referral_sources' },
       { key: 'settings.referral_source_categories.money', of: 'settings.referral_source_categories', group: 'Направления', label: 'Цены и проценты', desc: 'Стандартные ставки категории источников.', levels: ['none', 'edit'], levelDesc: { edit: 'Меняет стандартные ставки категорий (вместе с «Изменением» плитки).' }, adminDefault: true, moneyColumns: { referral_source_categories: ['standard_percent', 'rates'] }, enforced: 'db:referral_source_categories' },
       // Зарплата сотрудника живёт в его карточке (/api/users): без этого права
       // не-администратор её не видит и не пишет (routes/users.js MONEY_FIELDS).
@@ -382,8 +388,10 @@ export const REPORT_GROUP = Object.freeze({
   cashier: 'reports.cashier',
   doctor_salaries: 'reports.doctor_pay', inpatient_share: 'reports.doctor_pay',
   by_doctors: 'reports.doctor_pay', doctor_services: 'reports.doctor_pay',
+  doctor_lines: 'reports.doctor_pay',   // DOCTOR_LINES_SPECIALTY_V1 — детализация «По врачам»
   referrals: 'reports.referrals', referrals_detail: 'reports.referrals',
   by_services: 'reports.services', surgery_profit: 'reports.services',
+  by_specialty: 'reports.services',     // DOCTOR_LINES_SPECIALTY_V1 — «По специальностям»
   procurement: 'reports.stock', stock_consumption: 'reports.stock',
   stock_statement: 'reports.stock', stock_expiry: 'reports.stock',
   callcenter: 'reports.callcenter',
