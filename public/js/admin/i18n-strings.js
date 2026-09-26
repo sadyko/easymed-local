@@ -3425,6 +3425,7 @@ export const STRINGS = {
   "Не удалось взять процедуру: {msg}": {"en":"Could not take the procedure: {msg}","ru":"Не удалось взять процедуру: {msg}","uz":"Muolajani olib bo'lmadi: {msg}"},
   "Ошибка: {msg}": {"en":"Error: {msg}","ru":"Ошибка: {msg}","uz":"Xato: {msg}"},
   "Не удалось сохранить: {msg}": {"en":"Could not save: {msg}","ru":"Не удалось сохранить: {msg}","uz":"Saqlab bo'lmadi: {msg}"},
+  "(счёт не создан: {msg})": {"en":"(invoice not created: {msg})","ru":"(счёт не создан: {msg})","uz":"(hisob yaratilmadi: {msg})"},
   "ФИО · {lang}": {"en":"Full name · {lang}","ru":"ФИО · {lang}","uz":"F.I.Sh. · {lang}"},
   "Фото загружено: {name}": {"en":"Photo uploaded: {name}","ru":"Фото загружено: {name}","uz":"Surat yuklandi: {name}"},
   "файл": {"en":"file","ru":"файл","uz":"fayl"},

@@ -75,7 +75,8 @@ test('оба мастера идут через одно правило, а сп
     assert.match(vw, /wiz\.discountPct = wiz\.categoryPct/, 'скидка группы подставляется в лояльность');
     const spm = read('views/service-picker-modal.js');
     assert.match(spm, /discountBlockReason\(row, \{ today: localYmd\(\)/, 'калькулятор проверяет срок/группу/услуги тем же правилом');
-    assert.match(spm, /discountValue\(pr, lines\)/, 'калькулятор считает скидку по строкам');
+    // RPC_PORT_V1 (ревью M2) — смета и счёт калькулятора считают одной pickerDiscount.
+    assert.match(spm, /discountValue\(promo, rest\.map\(/, 'калькулятор считает скидку по строкам');
 });
 
 // RPC_PORT_V1 — калькулятор услуг (service-picker-modal.js) нёс облачную модель
@@ -93,5 +94,5 @@ test('калькулятор: офлайн-скидка любого вида �
         assert.ok(!ia.includes("rpc('" + name), 'invoice-actions.js всё ещё зовёт ' + name);
     }
     assert.ok(!/x\.kind === 'promo_code'/.test(spm), "применённая скидка не должна отбираться по облачному виду 'promo_code'");
-    assert.match(spm, /discountValue\(promoRow, /, 'сумма скидки в счёте — тем же правилом, что в смете');
+    assert.match(spm, /invoicePickerLines\(\{ visitId: visit\.id, lines: patientRows\.map\(billLineOf\), pct: wizDiscountPct\(\), promo: promoRow \}\)/, 'сумма скидки в счёте — тем же правилом, что в смете');
 });
