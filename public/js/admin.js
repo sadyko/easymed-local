@@ -398,6 +398,11 @@ const LEGACY_ROUTES = {
     // ROLE_HOME_V1 — журнал «Визиты» удалён; старая закладка «#visits» ведёт в
     // картотеку, откуда визит и открывают (карта пациента → «Визиты»).
     visits: { view: 'patients' },
+    // RPC_PORT_V1 — табличный раздел сотрудников открывал облачную карточку
+    // employee-editor.js, которая зовёт три так и не перенесённые функции
+    // Postgres (admin_reset_user_password, current_user_is_admin,
+    // current_user_can_manage_staff). Сотрудники живут в #employees.
+    'settings:users': { view: 'employees' },
 };
 
 function navigate(view, payload, opts = {}) {
@@ -1196,15 +1201,6 @@ async function renderViewInner(viewRoot, viewName, ctx) {
         // Settings drilldown:  settings:<section_key>
         if (state.view.startsWith('settings:')) {
             const key = state.view.slice('settings:'.length);
-            // RPC_PORT_V1 — сотрудники живут в #employees (EMPLOYEE_EDITOR_V1).
-            // Табличный раздел settings:users открывал облачную карточку
-            // employee-editor.js, которая зовёт три функции Postgres, так и не
-            // перенесённые в офлайн (admin_reset_user_password,
-            // current_user_is_admin, current_user_can_manage_staff) — «RPC not
-            // implemented» на сохранении. Туда вела только кнопка «Профили
-            // врачей» публичного сайта да набранный руками адрес: уводим на
-            // настоящий экран, как #procurement → #inventory выше.
-            if (key === 'users') return void navigate('employees');
             return void await renderSectionCrud(viewRoot, { sectionKey: key, onNavigate: navigate });
         }
         // Reports drilldown

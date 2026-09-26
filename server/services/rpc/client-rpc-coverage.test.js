@@ -6,7 +6,8 @@
 // чаще всего глотает ошибку — кнопка «ничего не делает».
 //
 // Тест смотрит на исходники public/**/*.js теми же выражениями, что и разовый
-// аудит (supabase.rpc('x'), .rpc("x"), rpc(`x`), callRpc('x'), '/api/rpc/x'), и
+// аудит (supabase.rpc('x'), .rpc("x"), rpc(`x`), callRpc('x'), '/api/rpc/x'),
+// плюс обёртки rpc\w*('x') и описания { rpc: 'x' }, и
 // сверяет с живой картой RPC из index.js — не с текстом файла, а с объектом,
 // поэтому имя, записанное в карте с ошибкой в импорте, тоже будет замечено
 // index.test.js, а здесь — только отсутствие.
@@ -48,6 +49,10 @@ const PATTERNS = [
   /\/api\/rpc\/([a-zA-Z0-9_]+)/g,
   /\brpc\(\s*['"`]([a-zA-Z0-9_]+)['"`]/g,
   /callRpc\(\s*['"`]([a-zA-Z0-9_]+)['"`]/g,
+  // обёртки: rpcSafe('x'), rpcOr('x', …) — любое rpc\w*( с именем первым аргументом
+  /\brpc\w*\(\s*['"`]([a-zA-Z0-9_]+)['"`]/g,
+  // описания вызова объектом: { rpc: 'x', … }
+  /\brpc:\s*['"`]([a-zA-Z0-9_]+)['"`]/g,
 ];
 
 function walk(dir, out = []) {
@@ -98,7 +103,7 @@ test('ALLOWLIST только сокращается: в нём нет реали
 
 test('мёртвые экраны ALLOWLIST действительно закрыты маршрутизатором', () => {
   const admin = fs.readFileSync(path.join(PUBLIC, 'js', 'admin.js'), 'utf8');
-  assert.match(admin, /if \(key === 'users'\) return void navigate\('employees'\)/, '#settings:users должен уводить в #employees');
+  assert.match(admin, /const LEGACY_ROUTES = \{[^]*?'settings:users': \{ view: 'employees' \}[^]*?\n\};/, '#settings:users должен уводить в #employees через LEGACY_ROUTES');
   assert.match(admin, /case 'procurement':\s+return void navigate\('inventory'\)/, '#procurement должен уводить в #inventory');
   const html = fs.readFileSync(path.join(PUBLIC, 'admin.html'), 'utf8');
   const live = html.replace(/<!--[\s\S]*?-->/g, '');
