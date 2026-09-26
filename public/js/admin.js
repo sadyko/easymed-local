@@ -85,6 +85,7 @@ import { renderCallCenter }   from './admin/views/callcenter.js';
 import { renderDocuments }    from './admin/views/documents.js?v=noqr1';
 import { renderDiscountsSettings } from './admin/views/discounts-settings.js?v=btnright1';   // PATIENT_DISCOUNTS_V1
 import { renderApiSettings } from './admin/views/api-settings.js?v=api4';   // CLINIC_API_V1
+import { renderWithViewOnly } from './admin/view-only.js';   // ADMIN_ROWS_GRANTABLE_V1
 import { renderDoctorPay } from './admin/views/doctor-pay.js?v=dp1';   // DOCTOR_PAY_BULK_V1
 import { renderCashierSettings } from './admin/views/cashier-settings.js?v=shiftmode1';   // CASHIER_SHIFT_MODE_V1
 import { renderRoomsSetup } from './admin/views/rooms-setup.js?v=rooms7';   // ROOMS_SETUP_V1 — кабинеты и палаты одним разделом
@@ -1173,9 +1174,10 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'consultation-types': return void await renderConsultationTypes(viewRoot, ctx);   // CONSULTATION_TYPES_RESTORE
             case 'discounts-settings': return void await renderDiscountsSettings(viewRoot, ctx);   // PATIENT_DISCOUNTS_V1
             case 'api-settings': return void await renderApiSettings(viewRoot, ctx);   // CLINIC_API_V1
-            case 'telegram-settings': return void await renderTelegramSettings(viewRoot, ctx);   // TELEGRAM_BOT_V1
-            case 'telephony-settings': return void await renderTelephonySettings(viewRoot, ctx);   // TELEPHONY_V1
-            case 'crm-settings': return void await renderCrmSettings(viewRoot, ctx);   // CRM_CONFIG_V1
+            // ADMIN_ROWS_GRANTABLE_V1 — на «Просмотре» экран монтируется в рамку «только просмотр».
+            case 'telegram-settings': return void await renderWithViewOnly(viewRoot, 'settings.telegram', (root) => renderTelegramSettings(root, ctx));   // TELEGRAM_BOT_V1
+            case 'telephony-settings': return void await renderWithViewOnly(viewRoot, 'settings.telephony', (root) => renderTelephonySettings(root, ctx));   // TELEPHONY_V1
+            case 'crm-settings': return void await renderWithViewOnly(viewRoot, 'settings.crm', (root) => renderCrmSettings(root, ctx));   // CRM_CONFIG_V1
             case 'telegram-chat': return void await renderTelegramChat(viewRoot, ctx);   // TELEGRAM_CHAT_V1
             case 'doctor-pay': return void await renderDoctorPay(viewRoot, ctx);   // DOCTOR_PAY_BULK_V1
             case 'cashier-settings':  return void await renderCashierSettings(viewRoot);    // CASHIER_SHIFT_MODE_V1

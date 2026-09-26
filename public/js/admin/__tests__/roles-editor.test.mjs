@@ -255,12 +255,15 @@ test('матрица рисует ровно справочник: у строк
   // И ничего сверх справочника: лишняя строка — это право, которого код не проверяет.
   const onScreen = new Set(radios(root).map((n) => n.attrs.name.slice('grant:'.length)));
   assert.deepStrictEqual([...onScreen].sort(), catalogRows().filter((r) => !r.locked).map((r) => r.key).sort());
-  // Закрытые строки при этом ВИДНЫ и говорят, почему выбора нет.
-  const lockedRows = catalogRows().filter((r) => r.locked);
-  assert.ok(lockedRows.length >= 6, 'закрытых строк меньше, чем решил владелец');
-  const t = textOf(root);
-  for (const r of lockedRows) assert.ok(t.includes(r.desc), 'закрытая строка не нарисована: ' + r.key);
-  assert.ok(t.includes('Только администратор'), 'у закрытой строки нет пометки «Только администратор»');
+  // ADMIN_ROWS_GRANTABLE_V1 — закрытых строк больше нет: «Сотрудники», «Роли»,
+  // Telegram, телефония, CRM, API и плитки-деньги выдаются своими уровнями, а
+  // «Цены и проценты» стоят прямо под своей плиткой.
+  assert.deepStrictEqual(catalogRows().filter((r) => r.locked).map((r) => r.key), []);
+  for (const k of ['settings.employees', 'settings.roles', 'settings.telegram', 'settings.telephony', 'settings.crm', 'settings.api', 'reports.telegram', 'settings.doctor_rates']) {
+    assert.ok(radiosFor(root, k).length > 1, k + ' не выдаётся с экрана');
+  }
+  assert.deepStrictEqual(radiosFor(root, 'settings.employees').map((n) => n.attrs.value), ['none', 'view', 'edit', 'delete']);
+  assert.deepStrictEqual(radiosFor(root, 'settings.rooms.money').map((n) => n.attrs.value), ['none', 'edit']);
 
   // Закрытый раздел гасит свои окна и действия и говорит почему.
   const inpatient = CATALOG.find((x) => x.key === 'inpatient');
@@ -854,4 +857,70 @@ test('изменение галочки вкладки считается нес
   roleButton(root, 'doctor').click();
   await tick();
   assert.equal(confirmCalls, 1, 'экран не заметил снятую галочку вкладки');
+});
+
+// ADMIN_ROWS_GRANTABLE_V1 — «Роли» у не-администратора. «Просмотр» — экран
+// без записи; «Изменение» — без роли администратора в основах и без правки
+// своей собственной роли (сервер отказывает второй раз, services/role-guard.js).
+test('«Роли: Просмотр» — только чтение: нет «Сохранить», нет новой роли, переключатели погашены', async () => {
+  resetServer();
+  const container = mk('div');
+  await renderRolesEditor(container, { readOnly: true });
+  await tick();
+  assert.ok(!findButtonByText(container, /Сохранить роль/), 'кнопка сохранения на «Просмотре»');
+  assert.ok(!findButtonByText(container, /Новая роль/), 'новую роль заводят на «Просмотре»');
+  assert.ok(textOf(container).includes('Только просмотр'), 'не сказано, почему нельзя');
+  assert.ok(radios(container).length && radios(container).every((n) => n.disabled), 'переключатели матрицы живые');
+  assert.ok(tabBoxes(container).every((n) => n.disabled), 'галочки вкладок живые');
+});
+
+test('«Роли: Изменение» у медсестры: основы — только свои, роль администратора не предлагается, своя роль заперта', async () => {
+  resetServer();
+  const perms = await import('../permissions.js');
+  SAVED.nurse = { sections: ['patients'], levels: { patients: 'editor' }, grants: { settings: 'view', 'settings.roles': 'edit' } };
+  window.easymed.state.user = { id: 60, role: 'nurse', extra_roles: [] };
+  perms.setEffectiveFromRole({ name: 'nurse', permissions: SAVED.nurse });
+  try {
+    const root = await render();
+    const baseSel = selects(root).find((s) => s.attrs['aria-label'] === 'Основа новой роли');
+    assert.ok(baseSel, 'нет выбора основы');
+    const bases = baseSel.children.map((o) => o.attrs.value);
+    assert.deepStrictEqual(bases, ['nurse'], 'основы не сужены до своих ролей');
+    assert.ok(findButtonByText(root, /Сохранить роль/), 'чужую роль (регистратор) сохранить нельзя');
+    roleButton(root, 'nurse').click();
+    await tick();
+    assert.ok(!findButtonByText(root, /Сохранить роль/), 'своя роль сохраняется');
+    assert.ok(textOf(root).includes('Это ваша собственная роль'), 'не сказано, почему своя роль заперта');
+  } finally {
+    delete SAVED.nurse;
+    window.easymed.state.user = null;
+    perms.setFullAccess('Admin');
+  }
+});
+
+// ADMIN_ROWS_GRANTABLE_V1 (ревью безопасности) — новая своя роль заводится ОДНИМ
+// вызовом сервера (custom_role_create), а не двумя записями через /api/db.
+test('«Новая роль» — один вызов custom_role_create, без прямых записей custom_roles / role_permissions', async () => {
+  resetServer();
+  const calls = [];
+  const prev = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    calls.push({ url: String(url), body });
+    if (String(url).startsWith('/api/rpc/custom_role_create')) return jsonOk({ code: body.code, name: body.name, base_role: body.base_role, active: 1 });
+    return prev(url, opts);
+  };
+  try {
+    const root = await render();
+    const nameInp = tagsOf(root, 'INPUT').find((n) => n.attrs['aria-label'] === 'Название новой роли');
+    nameInp.value = 'Старший регистратор';
+    findButtonByText(root, /Новая роль/).click();
+    await tick(40);
+    const rpc = calls.filter((c) => c.url.startsWith('/api/rpc/custom_role_create'));
+    assert.equal(rpc.length, 1, 'сервер не позван');
+    assert.equal(rpc[0].body.base_role, 'registrar');
+    assert.ok(/^[a-z0-9-]+$/.test(rpc[0].body.code), 'код не строчный: ' + rpc[0].body.code);
+    const writes = calls.filter((c) => c.url.startsWith('/api/db') && c.body && c.body.op === 'insert' && ['custom_roles', 'role_permissions'].includes(c.body.table));
+    assert.deepEqual(writes, [], 'полроли можно оставить прямыми записями');
+  } finally { globalThis.fetch = prev; }
 });

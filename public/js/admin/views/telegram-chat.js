@@ -21,7 +21,7 @@ import { attachmentError, isImageName, humanSize } from '../../shared/chat-attac
 import { uploadFile } from '../storage.js';
 import { h, Icon, clear, toast, PageHead, initials, avColor } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { canEdit } from '../permissions.js';
+import { canEdit, settingsTileAllows } from '../permissions.js';
 
 // TELEGRAM_CHAT_FOLDERS_V1 — вкладки над списком, как в Telegram.
 // `tab` — 'all' | 'unread' | номер папки. «Все» и «Непрочитанные» вычисляются
@@ -68,7 +68,10 @@ function canBroadcast() {
     if (!u) return false;
     if (u.is_super_admin === true || u.is_admin === true) return true;
     const extra = Array.isArray(u.extra_roles) ? u.extra_roles : [];
-    return [u.role, ...extra].includes('admin');
+    if ([u.role, ...extra].includes('admin')) return true;
+    // ADMIN_ROWS_GRANTABLE_V1 — рассылку делает и роль с «Telegram-бот: Изменение»
+    // (сервер: rpc/telegram.js, тот же ключ).
+    return settingsTileAllows('settings.telegram', 'edit');
 }
 
 // Модуль рассылки грузим по клику, а не при входе в чат: сюда заходят отвечать

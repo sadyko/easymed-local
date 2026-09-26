@@ -7,6 +7,7 @@
 // хвост из четырёх символов.
 
 import { hasAnyRole, canViewSection, canEditSection } from '../roles.js';
+import { grantAllowsAdminOr, isAdminUser } from '../grants.js';   // ADMIN_ROWS_GRANTABLE_V1
 import { listChats, chatMessages, markRead, unreadTotal, sendChatMessage, sendChatFile, linkChatToPhone,
          listFolders, createFolder, renameFolder, deleteFolder, setChatFolder } from '../telegram/chat.js';
 import { publicSettings, saveSettings, clearToken, getDecryptedToken, recordCheck, SettingsError } from '../telegram/settings.js';
@@ -24,10 +25,29 @@ export class RpcError extends Error {
 // Токен бота — это полный контроль над перепиской с пациентами, поэтому
 // раздел админский целиком, включая чтение. Регистратору незачем видеть даже
 // хвост токена.
-function requireAdmin(user) {
-  if (!hasAnyRole(user, ['admin'])) {
-    throw new RpcError('Настройки Telegram-бота доступны только администратору.', 403);
+//
+// ADMIN_ROWS_GRANTABLE_V1 (2026-09-26) — РАЗДЕЛ ВЫДАЁТСЯ ИЗ «РОЛЕЙ»:
+//   `settings.telegram` — «Просмотр» видит настройки, «Изменение» сохраняет,
+//     задаёт токен, проверяет связь, отвязывает чат и делает рассылку (тот,
+//     кто ставит токен, и так распоряжается ботом целиком);
+//   `reports.telegram`  — «Просмотр» видит охват бота и подключённых
+//     пациентов (отчёт «Telegram-бот»); он же открывает эти списки и тому,
+//     у кого есть «Просмотр» настроек бота.
+// Ненастроенный ключ — как вчера: только администратор. ТОКЕН (даже его
+// хвост) не-администратор не видит ни на каком уровне.
+function requireLevel(db, user, key, need) {
+  if (!grantAllowsAdminOr(db, user, key, need)) {
+    throw new RpcError('Раздел Telegram-бота недоступен вашей роли. Права выдаёт администратор в «Настройки → Роли».', 403);
   }
+}
+// Охват и подключённые пациенты: отчёт «Telegram-бот» или настройки бота.
+function requireReach(db, user) {
+  if (grantAllowsAdminOr(db, user, 'reports.telegram', 'view') || grantAllowsAdminOr(db, user, 'settings.telegram', 'view')) return;
+  throw new RpcError('Отчёт по Telegram-боту недоступен вашей роли. Права выдаёт администратор в «Настройки → Роли».', 403);
+}
+function maskedFor(user, settings) {
+  if (isAdminUser(user) || !settings || typeof settings !== 'object') return settings;
+  return { ...settings, token_hint: '', secrets_hidden: true };
 }
 
 function rethrow(e) {
@@ -36,8 +56,8 @@ function rethrow(e) {
 }
 
 export function telegramSettingsGet(db, _args, user) {
-  requireAdmin(user);
-  return publicSettings(db);
+  requireLevel(db, user, 'settings.telegram', 'view');
+  return maskedFor(user, publicSettings(db));
 }
 
 // Сохранение настроек.
@@ -50,7 +70,7 @@ export function telegramSettingsGet(db, _args, user) {
 //
 // Асинхронная: при вводе токена ходит в Telegram. routes/rpc.js ждёт промис.
 export async function telegramSettingsSave(db, args, user, deps = {}) {
-  requireAdmin(user);
+  requireLevel(db, user, 'settings.telegram', 'edit');
   const uid = user && user.id ? user.id : null;
 
   let settings;
@@ -61,7 +81,7 @@ export async function telegramSettingsSave(db, args, user, deps = {}) {
   const tokenAdded = args && args.bot_token && String(args.bot_token).trim() !== '';
   if (!tokenAdded) {
     wakeTelegramBot();   // могли переключить «включён» — не заставляем ждать
-    return settings;
+    return maskedFor(user, settings);
   }
 
   // Токен только что заменён. Проверяем связь и, если Telegram его принял,
@@ -76,19 +96,19 @@ export async function telegramSettingsSave(db, args, user, deps = {}) {
     // Неудача оформления не отменяет ни сохранения токена, ни включения бота.
     const setup = await setupBot(db, token, deps);
     wakeTelegramBot();
-    return { ...settings, bot: me, auto_enabled: true, setup };
+    return maskedFor(user, { ...settings, bot: me, auto_enabled: true, setup });
   } catch (e) {
     if (e instanceof TelegramError) {
       // Токен сохранён, но Telegram его не принял: бота НЕ включаем, иначе
       // интерфейс показывал бы работающего бота, которого нет.
-      return { ...recordCheck(db, { ok: false, error: e.message }), check_error: e.message };
+      return maskedFor(user, { ...recordCheck(db, { ok: false, error: e.message }), check_error: e.message });
     }
     throw e;
   }
 }
 
 export function telegramTokenClear(db, _args, user) {
-  requireAdmin(user);
+  requireLevel(db, user, 'settings.telegram', 'edit');
   return clearToken(db, user && user.id ? user.id : null);
 }
 
@@ -96,7 +116,7 @@ export function telegramTokenClear(db, _args, user) {
 // доступ по одному номеру телефона принят осознанно, и администратор должен
 // видеть последствия — «этот чат читает документы четырёх человек».
 export function telegramLinksList(db, _args, user) {
-  requireAdmin(user);
+  requireReach(db, user);
   const rows = db.prepare(
     `SELECT * FROM telegram_links ORDER BY revoked_at IS NOT NULL, linked_at DESC LIMIT 200`).all();
   return rows.map((r) => ({
@@ -129,7 +149,7 @@ function lastVisitOf(db, patientId) {
 // другому человеку, а вместе с ним и доступ к чужой медкарте. Строка остаётся
 // в базе отозванной, чтобы журнал выдач не потерял, кому и что уходило.
 export function telegramLinkRevoke(db, args, user) {
-  requireAdmin(user);
+  requireLevel(db, user, 'settings.telegram', 'edit');
   const id = Number(args && args.id);
   if (!Number.isInteger(id) || id <= 0) throw new RpcError('Не указана связка.', 400);
   db.prepare(`UPDATE telegram_links
@@ -140,7 +160,7 @@ export function telegramLinkRevoke(db, args, user) {
 
 // Журнал выдач — то, чем клиника разбирается, если документ ушёл не туда.
 export function telegramDeliveriesList(db, args, user) {
-  requireAdmin(user);
+  requireReach(db, user);
   const limit = Math.min(Math.max(Number(args && args.limit) || 50, 1), 200);
   return db.prepare(
     `SELECT d.*, p.full_name AS patient_name, l.tg_name, l.phone
@@ -290,12 +310,12 @@ export async function telegramChatSendFile(db, args, user, deps = {}) {
 // ---------------------------------------------------------------------------
 
 export function telegramStats(db, _args, user) {
-  requireAdmin(user);
+  requireReach(db, user);
   return botStats(db);
 }
 
 export function telegramBroadcastPreview(db, args, user) {
-  requireAdmin(user);
+  requireReach(db, user);
   return previewAudience(db, (args && args.filters) || {});
 }
 
@@ -303,7 +323,7 @@ export function telegramBroadcastPreview(db, args, user) {
 // браузере: диалог в интерфейсе — это удобство, а защита от «разослал черновик
 // всей базе» должна стоять на сервере, где её нельзя обойти.
 export function telegramBroadcastSend(db, args, user) {
-  requireAdmin(user);
+  requireLevel(db, user, 'settings.telegram', 'edit');
   const a = args || {};
   const textRu = String(a.text_ru || '').trim();
   if (!textRu) throw new RpcError('Сообщение не может быть пустым.', 400);
@@ -347,14 +367,14 @@ export function telegramBroadcastSend(db, args, user) {
 }
 
 export function telegramBroadcastStatus(db, args, user) {
-  requireAdmin(user);
+  requireReach(db, user);
   const st = broadcastStatus(db, args && args.id);
   if (!st) throw new RpcError('Рассылка не найдена.', 404);
   return st;
 }
 
 export function telegramBroadcastHistory(db, args, user) {
-  requireAdmin(user);
+  requireReach(db, user);
   return broadcastHistory(db, args && args.limit);
 }
 
@@ -365,22 +385,22 @@ export function telegramBroadcastHistory(db, args, user) {
 // результат проверки, который надо показать в интерфейсе, а не 400 без
 // подробностей. Поэтому ответ всегда 200 с полем ok.
 export async function telegramTestConnection(db, args, user, deps = {}) {
-  requireAdmin(user);
+  requireLevel(db, user, 'settings.telegram', 'edit');
   let token;
   try {
     token = getDecryptedToken(db);
   } catch (e) {
     // Сюда попадает повреждённый ключ или подменённый шифротекст.
-    return { ok: false, error: 'Сохранённый токен не читается: ' + e.message, settings: publicSettings(db) };
+    return { ok: false, error: 'Сохранённый токен не читается: ' + e.message, settings: maskedFor(user, publicSettings(db)) };
   }
   if (!token) throw new RpcError('Токен бота не задан.', 400);
 
   try {
     const me = await getMe(token, deps);
-    return { ok: true, bot: me, settings: recordCheck(db, { ok: true, username: me.username, id: me.id }) };
+    return { ok: true, bot: me, settings: maskedFor(user, recordCheck(db, { ok: true, username: me.username, id: me.id })) };
   } catch (e) {
     if (e instanceof TelegramError) {
-      return { ok: false, error: e.message, settings: recordCheck(db, { ok: false, error: e.message }) };
+      return { ok: false, error: e.message, settings: maskedFor(user, recordCheck(db, { ok: false, error: e.message })) };
     }
     throw e;
   }

@@ -41,7 +41,10 @@
 //                  ключом, и компилятор запросов пускает того, кому он выдан
 //                  (db/write-grant.js, ROLE_REPORTS_SETTINGS_V1). У закрытой
 //                  строки (`locked`) это та проверка, что оставляет запись
-//                  только администратору.
+//                  только администратору;
+//   api:<путь>   — REST-маршрут сервера (/api/<путь>, routes/<путь>.js),
+//                  ворота которого читают этот ключ (ADMIN_ROWS_GRANTABLE_V1:
+//                  «Сотрудники» живут на /api/users, а не на /api/db).
 // Приставка client: — предупреждение, а не разрешение писать что угодно: такое
 // право закрывает кнопку, но не запрещает действие тому, кто дойдёт до сервера
 // другим путём, поэтому у него обязана быть своя серверная опора, названная в
@@ -68,6 +71,20 @@ export function levelAllows(have, need) {
  * ROLE_REPORTS_SETTINGS_V1 — у окна ещё бывают `group` (подзаголовок, под
  * которым экран «Роли» его рисует), `legacyKeys` (см. раздел «Настройки») и
  * `locked` (только администратор: строка видна, выдать её нельзя).
+ *
+ * ADMIN_ROWS_GRANTABLE_V1 (2026-09-26) — бывшие закрытые строки стали
+ * выдаваемыми, и у них появились ещё три свойства:
+ *   `adminDefault` — ПРАВИЛО ПЕРЕХОДА «только администратор»: пока роль строку
+ *                    не настраивала, сервер и оболочка отвечают как вчера —
+ *                    администратору да, остальным нет. Экран «Роли» такую
+ *                    строку из старых галочек не выводит (иначе первое же
+ *                    сохранение роли раздало бы её);
+ *   `of`           — у действия «Цены и проценты»: ключ плитки, к которой оно
+ *                    относится (матрица рисует его прямо под плиткой);
+ *   `moneyColumns` — какие колонки таблиц плитки открывает это действие сверх
+ *                    `grantColumns` плитки (db/write-grant.js);
+ *   `grantOps`     — у плитки: какие операции над таблицей открывает право,
+ *                    если не все (ключ API создаёт только администратор).
  */
 export const CATALOG = [
   {
@@ -239,10 +256,11 @@ export const CATALOG = [
       { key: 'reports.services',   label: 'По услугам и рентабельность', desc: 'Отчёт по услугам и рентабельность операций.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
       { key: 'reports.stock',      label: 'Закупки и склад', desc: 'Приход, расход, остатки и сроки годности.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
       { key: 'reports.callcenter', label: 'Колл-центр', desc: 'Загрузка стойки, воронка заявок и работа операторов.', levels: ['none', 'view'], enforced: 'rpc:callcenter_report' },
-      // Не выдаётся: охват Telegram-бота — только администратору (сервер
-      // telegram_stats — requireAdmin). Строка показана, чтобы было видно, что
-      // её нет у роли не по недосмотру.
-      { key: 'reports.telegram',   label: 'Telegram-бот', desc: 'Сколько пациентов подключилось к боту. Только администратор.', levels: ['none'], locked: true, enforced: 'rpc:telegram_stats' },
+      // ADMIN_ROWS_GRANTABLE_V1 — охват Telegram-бота выдаётся «Просмотром»
+      // (сервер telegram_stats, telegram_links_list — тот же ключ). Роль,
+      // которая строку не настраивала, живёт по прежнему правилу: только
+      // администратор (`adminDefault`), а не «Отчёты выданы — видно всё».
+      { key: 'reports.telegram',   label: 'Telegram-бот', desc: 'Сколько пациентов подключилось к боту, кто подключён и как рос охват.', levels: ['none', 'view'], levelDesc: { view: 'Видит охват бота и подключённых пациентов. Отвязать чат и разослать сообщение может только роль с «Telegram-бот: Изменение» в настройках.' }, adminDefault: true, enforced: 'rpc:telegram_stats' },
     ], actions: [] },
   // ROLE_REPORTS_SETTINGS_V1 — НАСТРОЙКИ ПО РАЗДЕЛАМ, ГРУППАМИ ХАБА.
   //
@@ -267,43 +285,84 @@ export const CATALOG = [
   // администратором (db/write-grant.js отказывает, если такая колонка есть в
   // записи). Таблицы плитки без записи здесь — без денег, пишутся целиком.
   // Плитка, у которой без денег ничего не остаётся (скидки, полисы,
-  // провайдеры, кэшбэк, ставки врачей), — закрытая строка.
+  // провайдеры, кэшбэк, ставки врачей), была закрытой строкой.
+  //
+  // ADMIN_ROWS_GRANTABLE_V1 (2026-09-26) — владелец: «there are some roles and
+  // functions which are only available to the administrator. can you make
+  // read, change, delete options for them too?». Закрытых строк больше нет:
+  //   • у плитки-денег «Изменение» и есть деньги — вся плитка про них;
+  //   • у плитки с деньгами внутри — действие «Цены и проценты» (`of` —
+  //     плитка, `moneyColumns` — что оно открывает сверх `grantColumns`);
+  //   • «Сотрудники», «Роли», CRM, телефония, Telegram и API — свои уровни и
+  //     свои серверные ворота, а у каждой строки — `adminDefault`: пока роль
+  //     её не настраивала, действует прежнее «только администратор».
+  // Защиты от самоповышения («Роли», «Сотрудники», «API») — в
+  // services/role-guard.js и routes/users.js.
   { key: 'settings',    label: 'Настройки',           legacy: 'settings', desc: 'Вся конфигурация клиники: услуги, сотрудники, роли, телефония.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Открывает настройки. Что в них видно и что можно менять, решают разделы ниже.', edit: 'Открывает настройки. Уровень раздела сам ничего не даёт менять — менять можно разделы, выданные ниже на «Изменение».' }, windows: [
-      // Сотрудники — тоже только администратор, хотя в списке владельца их
-      // нет: весь /api/users стоит за requireRole('admin') (routes/users.js),
-      // и «Просмотр» открыл бы экран, который не загрузит ни одной строки.
-      { key: 'settings.employees', group: 'Управление пользователями и сотрудниками', label: 'Сотрудники', desc: 'Учётные записи персонала. Только администратор.', levels: ['none'], locked: true, enforced: 'route:employees' },
-      { key: 'settings.roles', group: 'Управление пользователями и сотрудниками', label: 'Роли', desc: 'Кто что видит. Только администратор.', levels: ['none'], locked: true, enforced: 'db:role_permissions' },
+      // ADMIN_ROWS_GRANTABLE_V1 — /api/users читает этот ключ (routes/users.js):
+      // «Просмотр» — список, «Изменение» — завести и править, «Удаление» —
+      // удалить сотрудника без истории. Администратора, себя и роль выше своей
+      // не тронуть ни на каком уровне.
+      { key: 'settings.employees', group: 'Управление пользователями и сотрудниками', label: 'Сотрудники', desc: 'Учётные записи персонала: логин, роль, данные сотрудника.', levels: ['none', 'view', 'edit', 'delete'], levelDesc: { view: 'Видит список сотрудников и их карточки.', edit: 'Заводит и правит сотрудников. Роль выдаёт только такую, у которой нет прав больше его собственных; администратора и свою роль не трогает.', delete: 'Удаляет сотрудника, за которым нет записей. Администратора и себя удалить нельзя.' }, adminDefault: true, enforced: 'api:users' },
+      // Роли пишутся через /api/db (role_permissions и custom_roles), и дверь
+      // проверяет самоповышение (services/role-guard.js). Удаления у ролей нет:
+      // их отключают.
+      { key: 'settings.roles', group: 'Управление пользователями и сотрудниками', label: 'Роли', desc: 'Кто что видит и может менять.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит права ролей, ничего не меняет.', edit: 'Меняет права ролей и заводит свои роли — не выше собственных прав. Роль администратора и свои собственные роли не меняет.' }, adminDefault: true, enforced: 'db:role_permissions' },
       // DEPARTMENTS_V1 — экран «Отделы»: список, карточка, формирование.
       { key: 'settings.departments', group: 'Управление пользователями и сотрудниками', label: 'Отделы', desc: 'Отделы клиники: руководитель, команда, помещения, снабжение.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит список отделов и их карточки.', edit: 'Формирует отделы: руководитель, команда, помещения.' }, enforced: 'rpc:department_form' },
       { key: 'settings.services', group: 'Настройки услуг', label: 'Список услуг', desc: 'Все услуги клиники: цены и куда ведёт каждая.', levels: ['none', 'view'], legacyKeys: ['services', 'settings:services'], enforced: 'route:services' },
-      { key: 'settings.service_types', group: 'Настройки услуг', label: 'Типы услуг', desc: 'Как услуги сгруппированы в прайсе.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и переименовывает типы услуг. Способ оплаты типа меняет только администратор.' }, legacyKeys: 'hub', grantColumns: { service_types: ['name', 'code', 'active'] }, enforced: 'db:service_types' },
-      { key: 'settings.consultation_types', group: 'Настройки услуг', label: 'Консультации врачей', desc: 'Виды консультаций и их стоимость.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и переименовывает виды консультаций. Цены и проценты меняет только администратор.' }, legacyKeys: 'hub', grantColumns: { consultation_types: ['name', 'name_ru', 'name_uz', 'sort_order', 'active'] }, enforced: 'db:consultation_types' },
+      { key: 'settings.service_types', group: 'Настройки услуг', label: 'Типы услуг', desc: 'Как услуги сгруппированы в прайсе.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и переименовывает типы услуг. Способ оплаты типа — с действием «Цены и проценты».' }, legacyKeys: 'hub', grantColumns: { service_types: ['name', 'code', 'active'] }, enforced: 'db:service_types' },
+      { key: 'settings.consultation_types', group: 'Настройки услуг', label: 'Консультации врачей', desc: 'Виды консультаций и их стоимость.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и переименовывает виды консультаций. Цены — с действием «Цены и проценты».' }, legacyKeys: 'hub', grantColumns: { consultation_types: ['name', 'name_ru', 'name_uz', 'sort_order', 'active'] }, enforced: 'db:consultation_types' },
       { key: 'settings.patients', group: 'Основное', label: 'Пациенты', desc: 'Картотека: данные пациента, контакты, номер карты.', levels: ['none', 'view'], legacyKeys: ['settings:patients'], enforced: 'route:settings:patients' },
-      { key: 'settings.patient_categories', group: 'Основное', label: 'Категории пациентов', desc: 'Группы пациентов и скидка каждой группы.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и переименовывает категории. Цены и проценты (скидку группы) меняет только администратор.' }, legacyKeys: 'hub', grantColumns: { patient_categories: ['name', 'tier', 'active'] }, enforced: 'db:patient_categories' },
+      { key: 'settings.patient_categories', group: 'Основное', label: 'Категории пациентов', desc: 'Группы пациентов и скидка каждой группы.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и переименовывает категории. Скидку группы — с действием «Цены и проценты».' }, legacyKeys: 'hub', grantColumns: { patient_categories: ['name', 'tier', 'active'] }, enforced: 'db:patient_categories' },
       { key: 'settings.chronic_conditions', group: 'Основное', label: 'Хронические заболевания', desc: 'Список для анкеты пациента.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Пополняет и правит список.' }, legacyKeys: 'hub', enforced: 'db:chronic_conditions_ref' },
       { key: 'settings.documents', group: 'Основное', label: 'Документы', desc: 'Как выглядят печатные документы.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Меняет оформление печатных документов.' }, legacyKeys: ['documents', 'settings'], enforced: 'db:doc_branding' },
       // Скидка — это и есть деньги: срок, группа и услуги решают, кому она
       // достанется, поэтому делить её на «деньги» и «прочее» нечего (ревью I2).
-      { key: 'settings.patient_discounts', group: 'Основное', label: 'Скидки пациентов', desc: 'Промокоды и сертификаты. Только администратор: скидка — это деньги клиники.', levels: ['none'], locked: true, enforced: 'db:patient_discounts' },
-      { key: 'settings.crm', group: 'Системные настройки', label: 'CRM-канбан', desc: 'Воронка заявок. Только администратор.', levels: ['none'], locked: true, enforced: 'rpc:crm_config_save' },
-      { key: 'settings.telephony', group: 'Системные настройки', label: 'Телефония', desc: 'Подключение Binotel и маршрут звонков. Только администратор.', levels: ['none'], locked: true, enforced: 'rpc:telephony_settings_save' },
-      { key: 'settings.telegram', group: 'Системные настройки', label: 'Telegram-бот', desc: 'Токен бота и выдача документов. Только администратор.', levels: ['none'], locked: true, enforced: 'rpc:telegram_settings_save' },
-      { key: 'settings.api', group: 'Системные настройки', label: 'API', desc: 'Ключи доступа для партнёрских программ. Только администратор.', levels: ['none'], locked: true, enforced: 'db:api_tokens' },
+      { key: 'settings.patient_discounts', group: 'Основное', label: 'Скидки пациентов', desc: 'Промокоды и сертификаты: скидка — это деньги клиники.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит скидки, ничего не меняет.', edit: 'Заводит и правит скидки — вместе с их процентами и суммами.' }, adminDefault: true, enforced: 'db:patient_discounts' },
+      // ADMIN_ROWS_GRANTABLE_V1 — воронка, телефония и бот: RPC раздела читают
+      // эти ключи. Ключи, секреты и токены не видит никто, кроме
+      // администратора, — ни на каком уровне; «Изменение» задаёт новые.
+      { key: 'settings.crm', group: 'Системные настройки', label: 'CRM-канбан', desc: 'Воронка заявок: колонки, источники, метки.', levels: ['none', 'view', 'edit', 'delete'], levelDesc: { view: 'Видит настройки воронки, ничего не меняет.', edit: 'Добавляет, переименовывает, скрывает и переставляет колонки, источники и метки.', delete: 'Удаляет колонки, источники и метки. Колонку или источник, в которых есть заявки, удалить нельзя — только скрыть.' }, adminDefault: true, enforced: 'rpc:crm_config_save' },
+      { key: 'settings.telephony', group: 'Системные настройки', label: 'Телефония', desc: 'Подключение телефонии и маршрут звонков.', levels: ['none', 'view', 'edit', 'delete'], levelDesc: { view: 'Видит подключения и журнал звонков. Ключи и секреты скрыты.', edit: 'Меняет подключение и маршрут звонков, может задать новый ключ. Сохранённые ключи и секреты не видит.', delete: 'Удаляет подключение провайдера и стирает подключение Binotel.' }, adminDefault: true, enforced: 'rpc:telephony_settings_save' },
+      { key: 'settings.telegram', group: 'Системные настройки', label: 'Telegram-бот', desc: 'Токен бота и выдача документов.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит настройки бота. Токен скрыт.', edit: 'Меняет настройки бота, задаёт новый токен, отвязывает чаты и делает рассылку. Сохранённый токен не видит.' }, adminDefault: true, enforced: 'rpc:telegram_settings_save' },
+      // У ключа API нет областей доступа: это полный машинный доступ к клинике.
+      // Поэтому создать ключ и задать его значение может только
+      // администратор (`grantOps` — право открывает одну правку), а
+      // «Изменение» переименовывает и отзывает ключ. Удаления ключей нет вовсе.
+      { key: 'settings.api', group: 'Системные настройки', label: 'API', desc: 'Ключи доступа для партнёрских программ.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит список ключей; значение ключа скрыто.', edit: 'Переименовывает и отзывает ключи. Создать ключ может только администратор: ключ — это полный доступ к клинике.' }, adminDefault: true, grantOps: { api_tokens: ['update'] }, grantColumns: { api_tokens: ['name', 'active'] }, enforced: 'db:api_tokens' },
       { key: 'settings.company', group: 'Настройки Easy-Med', label: 'Компания', desc: 'Название, логотип, фирменный цвет и контакты клиники.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Меняет название, логотип и контакты клиники. Охват лаборатории между зданиями меняет только администратор.' }, legacyKeys: ['documents-settings', 'documents', 'settings'], grantColumns: { doc_settings: ['clinic_name', 'address', 'phone', 'email', 'license', 'logo_data_url', 'accent_color', 'paper_size', 'show_watermark', 'footer_note', 'legal_note'] }, enforced: 'db:doc_settings' },
       { key: 'settings.branches', group: 'Настройки Easy-Med', label: 'Филиалы', desc: 'Адреса зданий клиники.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и правит адреса. Связь зданий — только администратор.' }, legacyKeys: 'hub', enforced: 'db:branches' },
-      { key: 'settings.rooms', group: 'Помещения', label: 'Помещения', desc: 'Этажи, кабинеты и палаты: койки, цены, оборудование.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и правит этажи, кабинеты, палаты, койки и оборудование. Цены и проценты, отдел помещения, удаление и врачей кабинета меняет только администратор.' }, legacyKeys: ['rooms-setup', 'settings:rooms', 'settings:wards', 'settings:beds_settings', 'settings:floors', 'settings'], grantColumns: { rooms: ['name', 'code', 'room_type', 'capacity', 'queue_mode', 'floor_id', 'notes', 'active', 'working_hours', 'plan_x', 'plan_y', 'plan_w', 'plan_h'], wards: ['name', 'code', 'floor_id', 'active', 'type', 'color', 'plan_x', 'plan_y', 'plan_w', 'plan_h'], beds: ['code', 'ward_id', 'active', 'type', 'notes'] }, enforced: 'db:rooms' },
+      { key: 'settings.rooms', group: 'Помещения', label: 'Помещения', desc: 'Этажи, кабинеты и палаты: койки, цены, оборудование.', levels: ['none', 'view', 'edit', 'delete'], levelDesc: { edit: 'Заводит и правит этажи, кабинеты, палаты, койки и оборудование. Цены палат и коек — с действием «Цены и проценты»; отдел помещения и врачей кабинета меняет только администратор.', delete: 'Удаляет оборудование и снимает его с помещений.' }, legacyKeys: ['rooms-setup', 'settings:rooms', 'settings:wards', 'settings:beds_settings', 'settings:floors', 'settings'], grantColumns: { rooms: ['name', 'code', 'room_type', 'capacity', 'queue_mode', 'floor_id', 'notes', 'active', 'working_hours', 'plan_x', 'plan_y', 'plan_w', 'plan_h'], wards: ['name', 'code', 'floor_id', 'active', 'type', 'color', 'plan_x', 'plan_y', 'plan_w', 'plan_h'], beds: ['code', 'ward_id', 'active', 'type', 'notes'] }, enforced: 'db:rooms' },
       { key: 'settings.payers', group: 'Управление плательщиками', label: 'Компании-плательщики', desc: 'Кто платит за пациента: страховые и компании.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и правит плательщиков.' }, legacyKeys: 'hub', enforced: 'db:payers' },
       // Полис — это процент покрытия, способ оплаты провайдера — его комиссия,
       // правило кэшбэка — его процент: без денег строки пусты (ревью I2).
-      { key: 'settings.payer_policies', group: 'Управление плательщиками', label: 'Страховые полисы', desc: 'Что и на сколько процентов покрывает каждый плательщик. Только администратор.', levels: ['none'], locked: true, enforced: 'db:payer_policies' },
-      { key: 'settings.payment_providers', group: 'Управление плательщиками', label: 'Провайдеры онлайн-платежей', desc: 'Какую комиссию платит клиника. Только администратор.', levels: ['none'], locked: true, enforced: 'db:payment_providers' },
-      { key: 'settings.cashback_rules', group: 'Управление плательщиками', label: 'Кэшбэк', desc: 'Сколько возвращать пациенту и за что. Только администратор.', levels: ['none'], locked: true, enforced: 'db:cashback_rules' },
-      { key: 'settings.referral_sources', group: 'Направления', label: 'Список источников', desc: 'Откуда приходят пациенты.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и правит источники: имя, категорию, контакты. Цены и проценты (ставки вознаграждения) и реквизиты выплаты меняет только администратор.' }, legacyKeys: 'hub', grantColumns: { referral_sources: ['name', 'category', 'category_id', 'last_name', 'first_name', 'middle_name', 'phone', 'workplace', 'district', 'active'] }, enforced: 'db:referral_sources' },
-      { key: 'settings.referral_source_categories', group: 'Направления', label: 'Категории источников', desc: 'Как сгруппированы источники.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и переименовывает категории. Цены и проценты (стандартные ставки) меняет только администратор.' }, legacyKeys: 'hub', grantColumns: { referral_source_categories: ['name', 'active'] }, enforced: 'db:referral_source_categories' },
-      // Ставка врача — это его зарплата: строка только администратора (ревью I2).
-      { key: 'settings.doctor_rates', group: 'Зарплата врача', label: 'Ставки врачей', desc: 'Процент врача по каждой услуге. Только администратор.', levels: ['none'], locked: true, enforced: 'db:doctor_rates' },
-    ], actions: [] },
+      { key: 'settings.payer_policies', group: 'Управление плательщиками', label: 'Страховые полисы', desc: 'Что и на сколько процентов покрывает каждый плательщик.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит полисы, ничего не меняет.', edit: 'Заводит и правит полисы — вместе с процентом покрытия.' }, adminDefault: true, enforced: 'db:payer_policies' },
+      { key: 'settings.payment_providers', group: 'Управление плательщиками', label: 'Провайдеры онлайн-платежей', desc: 'Какую комиссию платит клиника.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит провайдеров, ничего не меняет.', edit: 'Заводит и правит провайдеров — вместе с комиссией.' }, adminDefault: true, enforced: 'db:payment_providers' },
+      { key: 'settings.cashback_rules', group: 'Управление плательщиками', label: 'Кэшбэк', desc: 'Сколько возвращать пациенту и за что.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит правила кэшбэка, ничего не меняет.', edit: 'Заводит и правит правила — вместе с процентом.' }, adminDefault: true, enforced: 'db:cashback_rules' },
+      { key: 'settings.referral_sources', group: 'Направления', label: 'Список источников', desc: 'Откуда приходят пациенты.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и правит источники: имя, категорию, контакты. Ставки вознаграждения и реквизиты выплаты — с действием «Цены и проценты».' }, legacyKeys: 'hub', grantColumns: { referral_sources: ['name', 'category', 'category_id', 'last_name', 'first_name', 'middle_name', 'phone', 'workplace', 'district', 'active'] }, enforced: 'db:referral_sources' },
+      { key: 'settings.referral_source_categories', group: 'Направления', label: 'Категории источников', desc: 'Как сгруппированы источники.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Заводит и переименовывает категории. Стандартные ставки — с действием «Цены и проценты».' }, legacyKeys: 'hub', grantColumns: { referral_source_categories: ['name', 'active'] }, enforced: 'db:referral_source_categories' },
+      // Ставка врача — это его зарплата: вся плитка — деньги (ревью I2), и её
+      // «Изменение» — это и есть право менять ставки (ADMIN_ROWS_GRANTABLE_V1).
+      { key: 'settings.doctor_rates', group: 'Зарплата врача', label: 'Ставки врачей', desc: 'Процент врача по каждой услуге.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит ставки врачей, ничего не меняет.', edit: 'Заводит и правит ставки врачей.' }, adminDefault: true, enforced: 'db:doctor_rates' },
+    ], actions: [
+      // ADMIN_ROWS_GRANTABLE_V1 — «ЦЕНЫ И ПРОЦЕНТЫ» ОТДЕЛЬНЫМ ПРАВОМ У КАЖДОЙ
+      // ПЛИТКИ, ГДЕ ОНИ ЕСТЬ. Плитка на «Изменение» пишет всё, КРОМЕ денег
+      // (`grantColumns`, ревью I2); это действие открывает её деньги
+      // (`moneyColumns`), и только вместе с «Изменением» самой плитки. Пока роль
+      // строку не настраивала — «Нет» (`adminDefault`): деньги, как и вчера,
+      // меняет администратор. Отдел помещения и охват лаборатории — не деньги
+      // и остаются за администратором.
+      { key: 'settings.service_types.money', of: 'settings.service_types', group: 'Настройки услуг', label: 'Цены и проценты', desc: 'Способ оплаты типа услуг.', levels: ['none', 'edit'], levelDesc: { edit: 'Меняет способ оплаты типа услуг (вместе с «Изменением» плитки).' }, adminDefault: true, moneyColumns: { service_types: ['billing_mode'] }, enforced: 'db:service_types' },
+      { key: 'settings.consultation_types.money', of: 'settings.consultation_types', group: 'Настройки услуг', label: 'Цены и проценты', desc: 'Цена вида консультации.', levels: ['none', 'edit'], levelDesc: { edit: 'Меняет цены консультаций (вместе с «Изменением» плитки).' }, adminDefault: true, moneyColumns: { consultation_types: ['price'] }, enforced: 'db:consultation_types' },
+      { key: 'settings.patient_categories.money', of: 'settings.patient_categories', group: 'Основное', label: 'Цены и проценты', desc: 'Скидка группы пациентов.', levels: ['none', 'edit'], levelDesc: { edit: 'Меняет скидку группы (вместе с «Изменением» плитки).' }, adminDefault: true, moneyColumns: { patient_categories: ['discount_percent'] }, enforced: 'db:patient_categories' },
+      { key: 'settings.rooms.money', of: 'settings.rooms', group: 'Помещения', label: 'Цены и проценты', desc: 'Цены палат и коек, способ оплаты палаты.', levels: ['none', 'edit'], levelDesc: { edit: 'Меняет цены палат и коек (вместе с «Изменением» плитки).' }, adminDefault: true, moneyColumns: { wards: ['billing_mode', 'price_per_day', 'price_per_hour'], beds: ['price_per_day', 'price_per_hour'] }, enforced: 'db:wards' },
+      { key: 'settings.referral_sources.money', of: 'settings.referral_sources', group: 'Направления', label: 'Цены и проценты', desc: 'Ставки вознаграждения источника и реквизиты выплаты.', levels: ['none', 'edit'], levelDesc: { edit: 'Меняет ставки вознаграждения и реквизиты выплаты (вместе с «Изменением» плитки).' }, adminDefault: true, moneyColumns: { referral_sources: ['payment_type', 'card_number', 'reward_mode', 'own_percent', 'own_rates'] }, enforced: 'db:referral_sources' },
+      { key: 'settings.referral_source_categories.money', of: 'settings.referral_source_categories', group: 'Направления', label: 'Цены и проценты', desc: 'Стандартные ставки категории источников.', levels: ['none', 'edit'], levelDesc: { edit: 'Меняет стандартные ставки категорий (вместе с «Изменением» плитки).' }, adminDefault: true, moneyColumns: { referral_source_categories: ['standard_percent', 'rates'] }, enforced: 'db:referral_source_categories' },
+      // Зарплата сотрудника живёт в его карточке (/api/users): без этого права
+      // не-администратор её не видит и не пишет (routes/users.js MONEY_FIELDS).
+      { key: 'settings.employees.money', of: 'settings.employees', group: 'Управление пользователями и сотрудниками', label: 'Цены и проценты', desc: 'Зарплата и ставки в карточке сотрудника.', levels: ['none', 'edit'], levelDesc: { edit: 'Видит и меняет зарплату и ставки сотрудника (вместе с «Изменением» плитки).' }, adminDefault: true, enforced: 'api:users' },
+    ] },
 ];
 
 // ROLE_REPORTS_SETTINGS_V1 — ВИД ОТЧЁТА → ГРУППА (ключ окна раздела «Отчёты»).
@@ -328,6 +387,9 @@ export const REPORT_GROUP = Object.freeze({
   procurement: 'reports.stock', stock_consumption: 'reports.stock',
   stock_statement: 'reports.stock', stock_expiry: 'reports.stock',
   callcenter: 'reports.callcenter',
+  // ADMIN_ROWS_GRANTABLE_V1 — охват бота: своя группа с правилом перехода
+  // «только администратор» (у строки `adminDefault`).
+  telegram: 'reports.telegram',
   // прежние виды run_report
   payments: 'reports.cashier', invoices: 'reports.revenue', services: 'reports.services',
   stock_movements: 'reports.stock', visits: 'reports', patients: 'reports',
@@ -357,6 +419,78 @@ export function settingsLegacyView(row, sectionsList) {
   const s = sectionsList instanceof Set ? sectionsList : new Set(sectionsList || []);
   if (row.legacyKeys === 'hub') return settingsHubLegacy(s) ? 'view' : 'none';
   return row.legacyKeys.some((k) => s.has(k)) ? 'view' : 'none';
+}
+
+/**
+ * ADMIN_ROWS_GRANTABLE_V1 — строка с правилом перехода «только администратор»:
+ * пока роль её не настраивала, её не видит никто, кроме администратора.
+ */
+let adminDefaultMap = null;
+export function isAdminDefault(key) {
+  if (!adminDefaultMap) adminDefaultMap = catalogByKey();
+  const r = adminDefaultMap.get(key);
+  return !!(r && r.adminDefault);
+}
+
+/** Действие «Цены и проценты» плитки настроек — или null. */
+export function moneyRowOf(tileKey) {
+  for (const s of CATALOG) for (const a of s.actions || []) if (a.of === tileKey) return a;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// ВЫВОД МАТРИЦЫ ИЗ СТАРЫХ ПОЛЕЙ (ROLES_MATRIX_V1). Жил в admin/roles-matrix.js;
+// ADMIN_ROWS_GRANTABLE_V1 перенёс его сюда: тем же выводом сервер сравнивает,
+// не выдаёт ли редактор ролей больше, чем держит сам (services/role-guard.js).
+// ---------------------------------------------------------------------------
+const LEGACY_TO_GRANT = { viewer: 'view', editor: 'edit', admin: 'delete' };
+
+function clampTo(row, lvl) {
+  const allowed = row.levels || ['none', 'view'];
+  if (allowed.includes(lvl)) return lvl;
+  // Уровня нет у строки — берём ближайший снизу из существующих.
+  let best = 'none';
+  for (const l of allowed) if ((RANK[l] || 0) <= (RANK[lvl] || 0) && (RANK[l] || 0) >= (RANK[best] || 0)) best = l;
+  return best;
+}
+
+/**
+ * grants из старых полей — для роли, у которой grants ещё нет.
+ * Раздел получает уровень старого ключа; окна и действия внутри —
+ * ТОТ ЖЕ уровень, срезанный до того, что у строки существует. Это ровно то,
+ * что действует сегодня: ворота действий ещё живут по спискам ролей, но для
+ * экрана «раздел выдан» означает «всё внутри доступно, как было».
+ */
+export function grantsFromLegacy(perms) {
+  const sections = new Set((perms && perms.sections) || []);
+  const levels = (perms && perms.levels) || {};
+  const grants = {};
+  for (const s of CATALOG) {
+    const legacy = s.legacy;
+    const on = legacy && sections.has(legacy);
+    const lvl = on ? (LEGACY_TO_GRANT[levels[legacy]] || 'delete') : 'none';
+    grants[s.key] = clampTo(s, lvl);
+    for (const w of s.windows || []) {
+      // ROLE_REPORTS_SETTINGS_V1 — закрытую строку (только администратор)
+      // экран не выводит и не пишет: выдать её нельзя.
+      // ADMIN_ROWS_GRANTABLE_V1 — строку с правилом «только администратор»
+      // тоже НЕ выводим: из галочки «Настройки» или «Отчёты» не следует ни
+      // право на «Роли», ни на ключи API, и выведенное «Изменение» раздало бы
+      // их при первом же сохранении роли.
+      if (w.locked || w.adminDefault) continue;
+      // Плитка настроек выводится из СВОИХ прежних ключей и не выше
+      // «Просмотра»: писать в её таблицы до сих пор мог только
+      // администратор, и вывести «Изменение» из галочки «Настройки»
+      // значило бы раздать запись в справочники при первом сохранении роли.
+      if (w.legacyKeys) { grants[w.key] = settingsLegacyView(w, sections) || 'none'; continue; }
+      grants[w.key] = on ? clampTo(w, lvl) : 'none';
+    }
+    for (const a of s.actions || []) {
+      if (a.adminDefault) continue;   // ADMIN_ROWS_GRANTABLE_V1 — «Цены и проценты» и т. п.
+      grants[a.key] = on ? clampTo(a, lvl) : 'none';
+    }
+  }
+  return grants;
 }
 
 /** Все строки матрицы плоским списком: раздел, его окна и действия. */

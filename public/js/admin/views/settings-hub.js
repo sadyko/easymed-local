@@ -55,7 +55,7 @@ export async function renderSettingsHub(container, { onNavigate } = {}) {
 
 async function repaint() {
     clear(refs.container);
-    if (state.section === 'roles') await renderRolesEditor(refs.container, { onBack: backToHub });
+    if (state.section === 'roles') await renderRolesEditor(refs.container, { onBack: backToHub, readOnly: state.readOnly });   // ADMIN_ROWS_GRANTABLE_V1 — «Роли: Просмотр»
     else if (state.section) await renderEditor(refs.container, state.section);
     else renderHub(refs.container);
     if (!state.section) paintUpdateStatus();   // UPDATE_STATUS_ROW_V1
@@ -89,7 +89,7 @@ const SECTION_GRANT = {
     doctor_rates: 'settings.doctor_rates',
 };
 
-/** Уровень плитки-справочника: 'none' | 'view' | 'edit'. Справочник без окна — только полному доступу. */
+/** Уровень плитки-справочника: 'none' | 'view' | 'edit' | 'delete'. Справочник без окна — только полному доступу. */
 export function sectionLevel(key) {
     const g = SECTION_GRANT[key];
     if (g) return settingsTileLevel(g);
@@ -107,7 +107,8 @@ function openSection(key) {
     const lvl = sectionLevel(key);
     if (lvl === 'none') { toast(tr('Этот раздел настроек недоступен вашей роли.'), 'fail'); return; }
     state.section = key;
-    state.readOnly = lvl !== 'edit';
+    // ADMIN_ROWS_GRANTABLE_V1 — «Удаление» включает «Изменение».
+    state.readOnly = lvl !== 'edit' && lvl !== 'delete';
     repaint();
 }
 function backToHub()      { state.section = null; state.readOnly = false; repaint(); }
@@ -575,6 +576,11 @@ const LOOKUP_CONFIG = {
     },
     api_tokens: {
         table: 'api_tokens', title: 'Ключи API', icon: 'Settings',
+        // ADMIN_ROWS_GRANTABLE_V1 — у ключа нет областей доступа, это полный
+        // машинный доступ: создаёт ключ и задаёт его значение только
+        // администратор; «API: Изменение» переименовывает и отзывает.
+        adminInsertOnly: 'Новый ключ создаёт администратор',
+        grantHint: 'Значение ключа видит и задаёт только администратор.',
         columns: [{ key: 'name', label: 'Название' }, { key: 'token', label: 'Ключ' }],
         fields: [
             { key: 'name', label: 'Название ключа и для чего он', type: 'text', required: true },
@@ -1024,10 +1030,15 @@ async function renderEditor(container, key) {
     // ни «Добавить», ни окна правки (сервер всё равно не сохранит).
     const readOnly = !!state.readOnly;
     const grantCols = readOnly ? null : settingsGrantColumns(cfg.table);   // ревью I2 — деньги только администратору
+    // ADMIN_ROWS_GRANTABLE_V1 — справочник, в который по праву можно только
+    // править, но не заводить (ключи API: создаёт администратор).
+    const noInsert = !readOnly && !!cfg.adminInsertOnly && hasRestriction() && !actorIsAdmin();
     const addBtn = readOnly
         ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, Icon('Lock', { size: 14 }), ' ', tr('Только просмотр'))
-        : h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openRowModal(null) },
-            Icon('Plus', { size: 14 }), ' Add');
+        : noInsert
+            ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, Icon('Lock', { size: 14 }), ' ', tr(cfg.adminInsertOnly))
+            : h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openRowModal(null) },
+                Icon('Plus', { size: 14 }), ' Add');
 
     // BRANCH_SYNC_V1 — слот под карточку связи филиалов. Заполняется после
     // отрисовки (карточка ходит в RPC), поэтому список филиалов появляется
@@ -1049,7 +1060,7 @@ async function renderEditor(container, key) {
         h('div', { class: 'card' },
             h('div', { class: 'card-header' },
                 h('h3', null, Icon(cfg.icon, { size: 16 }), ' ', cfg.title),
-                grantCols ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Цены и проценты меняет только администратор.')) : null,
+                grantCols ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr(cfg.grantHint || 'Цены и проценты меняет роль с правом «Цены и проценты».')) : null,
                 addBtn,
             ),
             h('table', { class: 'tbl' },

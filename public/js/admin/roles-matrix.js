@@ -23,58 +23,18 @@
 // пустую матрицу, которая читалась бы как «у роли нет ничего».
 import { h, Icon } from './ui.js';
 import { tr, trf } from './i18n.js';
-import { CATALOG, LEVELS, LEVEL_LABELS, levelAllows, settingsLegacyView } from '../shared/permission-catalog.js';
+import { CATALOG, LEVEL_LABELS, levelAllows, grantsFromLegacy, catalogRows } from '../shared/permission-catalog.js';
 
 // Старый уровень ↔ новый.
-const LEGACY_TO_GRANT = { viewer: 'view', editor: 'edit', admin: 'delete' };
 const GRANT_TO_LEGACY = { view: 'viewer', edit: 'editor', delete: 'admin' };
 const RANK = { none: 0, view: 1, edit: 2, delete: 3 };
 const maxLevel = (a, b) => ((RANK[a] || 0) >= (RANK[b] || 0) ? a : b);
 
-/** Самый высокий уровень, который у строки вообще есть. */
-function capOf(row) {
-    return (row.levels || ['none', 'view']).slice(-1)[0];
-}
-function clampTo(row, lvl) {
-    const allowed = row.levels || ['none', 'view'];
-    if (allowed.includes(lvl)) return lvl;
-    // Уровня нет у строки — берём ближайший снизу из существующих.
-    let best = 'none';
-    for (const l of allowed) if ((RANK[l] || 0) <= (RANK[lvl] || 0)) best = maxLevel(best, l);
-    return best;
-}
-
-/**
- * grants из старых полей — для роли, у которой grants ещё нет.
- * Раздел получает уровень старого ключа; окна и действия внутри —
- * ТОТ ЖЕ уровень, срезанный до того, что у строки существует. Это ровно то,
- * что действует сегодня: ворота действий ещё живут по спискам ролей, но для
- * экрана «раздел выдан» означает «всё внутри доступно, как было».
- */
-export function grantsFromLegacy(perms) {
-    const sections = new Set((perms && perms.sections) || []);
-    const levels = (perms && perms.levels) || {};
-    const grants = {};
-    for (const s of CATALOG) {
-        const legacy = s.legacy;
-        const on = legacy && sections.has(legacy);
-        const lvl = on ? (LEGACY_TO_GRANT[levels[legacy]] || 'delete') : 'none';
-        grants[s.key] = clampTo(s, lvl);
-        for (const w of s.windows || []) {
-            // ROLE_REPORTS_SETTINGS_V1 — закрытую строку (только администратор)
-            // экран не выводит и не пишет: выдать её нельзя.
-            if (w.locked) continue;
-            // Плитка настроек выводится из СВОИХ прежних ключей и не выше
-            // «Просмотра»: писать в её таблицы до сих пор мог только
-            // администратор, и вывести «Изменение» из галочки «Настройки»
-            // значило бы раздать запись в справочники при первом сохранении роли.
-            if (w.legacyKeys) { grants[w.key] = settingsLegacyView(w, sections) || 'none'; continue; }
-            grants[w.key] = on ? clampTo(w, lvl) : 'none';
-        }
-        for (const a of s.actions || []) grants[a.key] = on ? clampTo(a, lvl) : 'none';
-    }
-    return grants;
-}
+// ADMIN_ROWS_GRANTABLE_V1 — grantsFromLegacy переехал в общий справочник
+// (public/js/shared/permission-catalog.js): тот же вывод матрицы из старых
+// полей нужен и серверу — защита «Ролей» (services/role-guard.js) сравнивает
+// права по тому, что экран показывает, а второй копии вывода быть не должно.
+export { grantsFromLegacy };
 
 /**
  * Старые поля из grants — чтобы прежние ворота продолжали работать.
@@ -145,6 +105,14 @@ export function legacyFromGrants(grants, prev = {}) {
 export function collectGrants(controls, { explicit = {}, closed = null } = {}) {
     const out = {};
     for (const [key, ctl] of Object.entries(controls)) out[key] = ctl.value();
+    // ADMIN_ROWS_GRANTABLE_V1 — строка с правилом «только администратор»,
+    // которую роль не настраивала и которую здесь не открыли, в базу НЕ
+    // пишется: записанное «Нет» у своей роли на основе администратора стало бы
+    // её собственным запретом (grants.js «своё „Нет“») и отняло бы у неё
+    // «Сотрудников» или «Роли» просто потому, что роль пересохранили.
+    for (const r of catalogRows()) {
+        if (r.adminDefault && out[r.key] === 'none' && !(r.key in (explicit || {}))) delete out[r.key];
+    }
     for (const s of CATALOG) {
         if (!(s.key in out) || out[s.key] !== 'none') continue;
         const decided = (s.key in (explicit || {})) || !!(closed && closed.has(s.key));
@@ -355,6 +323,13 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
                         h('span', { class: 'rm-locked muted' }, Icon('Lock', { size: 13 }), ' ', tr('Только администратор'))));
                     continue;
                 }
+                paintOne(r, false);
+                // ADMIN_ROWS_GRANTABLE_V1 — «Цены и проценты» плитки стоят прямо
+                // под ней: это её деньги, а не отдельный раздел где-то ниже.
+                for (const a of (s.actions || []).filter((x) => x.of === r.key)) paintOne(a, true);
+            }
+        };
+        const paintOne = (r, child) => {
                 const lvl = grants[r.key] || 'none';
                 const rnote = h('div', { class: 'rm-desc' });
                 paintNote(rnote, r, lvl);
@@ -384,15 +359,14 @@ export function paintCatalog(host, grants, { onAnyChange = null, openSections = 
                         p.set(was); paintNote(rnote, r, was);
                     },
                 });
-                body.appendChild(h('div', { class: 'rm-row rm-row-sub' },
+                body.appendChild(h('div', { class: 'rm-row rm-row-sub' + (child ? ' rm-row-child' : '') },
                     h('div', { class: 'rm-name' },
                         h('div', { class: 'rm-title' }, tr(r.label)),
                         rnote),
                     p.el));
-            }
         };
         sub(tr('Окна раздела'), s.windows);
-        sub(tr('Действия'), s.actions);
+        sub(tr('Действия'), (s.actions || []).filter((a) => !a.of));
         paintCount(count, s, controls);
 
         if (hasInner) {

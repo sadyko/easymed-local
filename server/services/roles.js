@@ -217,24 +217,35 @@ export function patientTabLevel(db, user, tab) {
 
     let perms = null;
     if (row && row.permissions) { try { perms = JSON.parse(row.permissions); } catch { perms = null; } }
-    const tabs = (perms && perms.patient_tabs && typeof perms.patient_tabs === 'object') ? perms.patient_tabs : {};
-
-    // Явное значение под новым именем, иначе под старым, иначе — не ограничено.
-    let raw = Object.prototype.hasOwnProperty.call(tabs, key) ? tabs[key] : undefined;
-    if (raw === undefined) {
-      for (const [legacy, canon] of Object.entries(PATIENT_TAB_ALIASES)) {
-        if (canon === key && Object.prototype.hasOwnProperty.call(tabs, legacy)) { raw = tabs[legacy]; break; }
-      }
-    }
-    // SERVICES_TAB_V1 — «Услуги» отделились от «Визитов»: настройка, сохранённая
-    // до разделения, наследует ограничение визитов (то же правило на клиенте).
-    if (raw === undefined && key === 'services' && tabs.visits === 'none') raw = 'none';
-
-    const rank = raw === undefined ? 3 : (TAB_RANK[raw] ?? 3);
+    const rank = tabRankOfPerms(perms, key);
     if (rank > best) best = rank;
     if (best >= ceiling) break;
   }
   return RANK_TAB[Math.min(best, ceiling)];
+}
+
+/**
+ * Уровень вкладки (0..3) по ОДНОЙ записи прав роли — тем же разбором, что у
+ * patientTabLevel: псевдонимы, «Услуги» наследуют «Нет» у «Визитов», пустое —
+ * полный доступ, потолок вкладки. ADMIN_ROWS_GRANTABLE_V1 (ревью I1): защита
+ * «Ролей» сравнивает вкладки ЭТИМ разбором, иначе «визиты: Нет → Просмотр»
+ * молча открывало «Услуги» целиком.
+ */
+export function tabRankOfPerms(perms, tab) {
+  const key = normalizePatientTab(tab);
+  const tabs = (perms && perms.patient_tabs && typeof perms.patient_tabs === 'object') ? perms.patient_tabs : {};
+  // Явное значение под новым именем, иначе под старым, иначе — не ограничено.
+  let raw = Object.prototype.hasOwnProperty.call(tabs, key) ? tabs[key] : undefined;
+  if (raw === undefined) {
+    for (const [legacy, canon] of Object.entries(PATIENT_TAB_ALIASES)) {
+      if (canon === key && Object.prototype.hasOwnProperty.call(tabs, legacy)) { raw = tabs[legacy]; break; }
+    }
+  }
+  // SERVICES_TAB_V1 — «Услуги» отделились от «Визитов»: настройка, сохранённая
+  // до разделения, наследует ограничение визитов (то же правило на клиенте).
+  if (raw === undefined && key === 'services' && tabs.visits === 'none') raw = 'none';
+  const rank = raw === undefined ? 3 : (TAB_RANK[raw] ?? 3);
+  return Math.min(rank, tabCeiling(key));
 }
 
 export function canViewPatientTab(db, user, tab)   { return patientTabLevel(db, user, tab) !== 'none'; }

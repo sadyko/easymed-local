@@ -43,7 +43,7 @@ import { h, Icon, PageHead, clear, toast } from '../ui.js';
 // что собирается конкатенацией или ставится после отрисовки, зовёт tr() явно
 // (тот же приём, что в telephony-settings.js и locked-module.js).
 import { tr, trf, t } from '../i18n.js';
-import { NAV_MODULES, PATIENT_TABS } from '../permissions.js';   // ROLE_KEYS_V2 — единый список выдаваемых модулей;
+import { NAV_MODULES, PATIENT_TABS, hasRestriction, actorIsAdmin, actorRoleCodes } from '../permissions.js';   // ROLE_KEYS_V2 — единый список выдаваемых модулей;
                                                                   // PATIENT_TAB_ACCESS_V1 — вкладки карты пациента
 // ROLE_REACH_V1 — «что роль видит, словами». Ответы спрашиваются у настоящих
 // ворот доступа, а не выводятся здесь заново (см. шапку role-reach.js).
@@ -160,7 +160,23 @@ function tabLevelOf(st) {
     return 'view';
 }
 
-export async function renderRolesEditor(container, { onBack } = {}) {
+// ADMIN_ROWS_GRANTABLE_V1 (2026-09-26) — «РОЛИ» ВЫДАЮТСЯ НЕ ТОЛЬКО АДМИНИСТРАТОРУ.
+//
+// «Роли: Просмотр» открывает экран только для чтения. «Роли: Изменение» правит
+// роли — но у не-администратора экран сразу не предлагает того, что сервер всё
+// равно отклонит (services/role-guard.js): роль администратора в списке основ,
+// правку своей собственной роли и роли на основе администратора. Права выше
+// собственных сервер отклоняет при сохранении, и его фраза показывается как есть.
+function actorOwnCodes() {
+    const out = new Set(actorRoleCodes());
+    const u = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || null;
+    if (u && u.custom_role_code) out.add(String(u.custom_role_code));
+    return out;
+}
+
+export async function renderRolesEditor(container, { onBack, readOnly = false } = {}) {
+    const isAdmin = !hasRestriction() || actorIsAdmin();
+    const ownCodes = isAdmin ? new Set() : actorOwnCodes();
     // roles-ed — область действия стилей экрана (см. блок в admin-views.css).
     const root = h('div', { class: 'fade-in roles-ed' });
     const state = {
@@ -288,9 +304,13 @@ export async function renderRolesEditor(container, { onBack } = {}) {
 
     function paintNewRole() {
         clear(newRoleBox);
+        if (readOnly) return;   // ADMIN_ROWS_GRANTABLE_V1 — «Роли: Просмотр» ролей не заводит
+        // Основа — только роль, которую носит сам заводящий, и никогда не администратор.
+        const bases = isAdmin ? BASE_ROLES : BASE_ROLES.filter(([k]) => k !== 'admin' && ownCodes.has(k));
+        if (!bases.length) return;
         const nameInp = h('input', { class: 'roles-new-inp', type: 'text', placeholder: 'Название роли', 'aria-label': 'Название новой роли' });
         const baseSel = h('select', { class: 'roles-new-sel', 'aria-label': 'Основа новой роли' },
-            ...BASE_ROLES.map(([k, l]) => h('option', { value: k }, l)));
+            ...bases.map(([k, l]) => h('option', { value: k }, l)));
         const addBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, Icon('Plus', { size: 13 }), ' ', 'Новая роль');
         addBtn.addEventListener('click', () => createRole(nameInp, baseSel, addBtn));
         newRoleBox.appendChild(h('div', { class: 'roles-new-row' }, nameInp, baseSel, addBtn));
@@ -306,18 +326,13 @@ export async function renderRolesEditor(container, { onBack } = {}) {
         const code = roleCodeFrom(name, taken);
         addBtn.disabled = true;
         try {
-            const ins = await supabase.from('custom_roles').insert({ code, name, base_role: base, active: 1 }).select().single();
+            // ADMIN_ROWS_GRANTABLE_V1 (ревью безопасности) — роль и её права
+            // заводит сервер ОДНИМ действием (rpc/custom-roles.js): обе записи или
+            // ни одной. Права — права основы (у не-администратора — не выше его
+            // собственных): пустая роль, выданная человеку, заперла бы его в
+            // пустом приложении, а сузить готовый набор — работа на минуту.
+            const ins = await supabase.rpc('custom_role_create', { code, name, base_role: base });
             if (ins.error) throw new Error(ins.error.message || String(ins.error));
-            // Новая роль начинает с прав СВОЕЙ ОСНОВЫ: пустая роль, выданная
-            // человеку, заперла бы его в пустом приложении, а сузить готовый
-            // набор — работа на минуту.
-            let permissions = JSON.stringify({ sections: [], levels: {}, patient_tabs: {} });
-            try {
-                const { data: baseRow } = await supabase.from('role_permissions').select('permissions').eq('role', base).maybeSingle();
-                if (baseRow && baseRow.permissions) permissions = typeof baseRow.permissions === 'string' ? baseRow.permissions : JSON.stringify(baseRow.permissions);
-            } catch (e) { /* нет строки основы — начнём с пустой */ }
-            const perm = await supabase.from('role_permissions').insert({ role: code, permissions }).select().single();
-            if (perm.error) throw new Error(perm.error.message || String(perm.error));
             state.custom.push(ins.data || { code, name, base_role: base, active: 1 });
             nameInp.value = '';
             paintRoleTabs();
@@ -420,10 +435,18 @@ export async function renderRolesEditor(container, { onBack } = {}) {
         const saveBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'Сохранить роль');
         saveBtn.addEventListener('click', () => save(saveBtn));
 
+        // ADMIN_ROWS_GRANTABLE_V1 — роль, которую этот человек менять не может.
+        const cur0 = customOf(state.selected);
+        const lockWhy = readOnly ? 'Только просмотр: менять роли может роль с «Роли: Изменение».'
+            : isAdmin ? null
+            : ownCodes.has(state.selected) ? 'Это ваша собственная роль — её меняет администратор.'
+            : (cur0 && cur0.base_role === 'admin') ? 'Роль на основе администратора меняет только администратор.'
+            : null;
+
         const card = h('div', { class: 'card roles-card' },
             h('div', { class: 'card-header' },
                 h('h3', null, Icon('Shield', { size: 16 }), ' ', 'Разделы и уровень доступа', ' · ', labelOf(state.selected)),
-                saveBtn,
+                lockWhy ? h('span', { class: 'muted roles-locked-why' }, Icon('Lock', { size: 13 }), ' ', lockWhy) : saveBtn,
             ),
         );
 
@@ -431,7 +454,7 @@ export async function renderRolesEditor(container, { onBack } = {}) {
         // отключить: удаления нет намеренно (людей с этой ролью нельзя оставить
         // с кодом, которого нет).
         const cur = customOf(state.selected);
-        if (cur) {
+        if (cur && !lockWhy) {
             const offBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' },
                 cur.active ? 'Отключить роль' : 'Включить роль');
             offBtn.addEventListener('click', () => toggleRoleActive(cur, offBtn));
@@ -540,6 +563,16 @@ export async function renderRolesEditor(container, { onBack } = {}) {
         matrixWrap.appendChild(card);
         paintReach();   // ROLE_REACH_V1 — сводка есть сразу, а не после первой галочки
         state.baseline = current();
+        // ADMIN_ROWS_GRANTABLE_V1 — нельзя менять — значит и нечего отмечать:
+        // гасим всё, как на время записи (setBusy), только без записи.
+        if (lockWhy) {
+            for (const ctl of Object.values(state.grantControls || {})) ctl.disable(true);
+            for (const ctl of Object.values(state.tabControls)) {
+                ctl.view.disabled = true;
+                if (ctl.edit) ctl.edit.disabled = true;
+                if (ctl.del) ctl.del.disabled = true;
+            }
+        }
     }
 
     // Строка вкладки: «Видна» · «Редакт.» · «Удаление». Галочка рисуется

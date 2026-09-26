@@ -115,7 +115,8 @@ test('ненастроенная роль: «Отчёты» выданы — в�
 test('каждая плитка хаба — одна группа: все её виды ведут в ту же группу, что и основной', async () => {
   const { REPORT_GROUP } = await import('../../shared/permission-catalog.js');
   for (const rep of REPORT_DEFS) {
-    if (rep.kind === 'telegram') { assert.ok(!(rep.kind in REPORT_GROUP)); continue; }
+    // ADMIN_ROWS_GRANTABLE_V1 — у Telegram-бота своя группа (правило перехода — только администратор).
+    if (rep.kind === 'telegram') { assert.equal(REPORT_GROUP[rep.kind], 'reports.telegram'); continue; }
     const key = REPORT_GROUP[rep.kind];
     assert.ok(key, rep.kind + ': плитки нет в карте «вид → группа»');
     for (const v of rep.views || []) assert.equal(REPORT_GROUP[v.kind], key, rep.kind + ' / ' + v.kind + ': вид другой группы');
@@ -182,7 +183,8 @@ test('справочник ниже «Изменения» открываетс�
 test('роль из старых полей: плитки настроек — не выше «Просмотра», закрытые строки не выводятся', () => {
   const g = grantsFromLegacy({ sections: ['settings', 'documents'], levels: { settings: 'admin' } });
   for (const r of catalogRows().filter((x) => x.parent === 'settings')) {
-    if (r.locked) { assert.ok(!(r.key in g), 'закрытая строка выведена: ' + r.key); continue; }
+    // ADMIN_ROWS_GRANTABLE_V1 — строка «только администратор» из старых галочек не выводится.
+    if (r.locked || r.adminDefault) { assert.ok(!(r.key in g), 'строка «только администратор» выведена: ' + r.key); continue; }
     if (r.key === 'settings.departments') continue;   // прежнее правило DEPARTMENTS_V1
     assert.notEqual(g[r.key], 'edit', r.key + ': «Изменение» выведено из галочки «Настройки» — запись раздана при сохранении');
   }
@@ -192,11 +194,14 @@ test('роль из старых полей: плитки настроек — �
   // Отчёты: «Отчёты» выданы — видны все группы, как и было.
   const r = grantsFromLegacy(CASHIER);
   for (const w of CATALOG.find((s) => s.key === 'reports').windows) {
-    if (w.locked) assert.ok(!(w.key in r)); else assert.equal(r[w.key], 'view', w.key);
+    if (w.locked || w.adminDefault) assert.ok(!(w.key in r)); else assert.equal(r[w.key], 'view', w.key);
   }
 });
 
-test('матрица рисует окна «Настроек» группами хаба, закрытые — без переключателя и в базу не уходят', () => {
+// ADMIN_ROWS_GRANTABLE_V1 — бывшие закрытые строки получили переключатели, но
+// пока их не открыли, в базу они НЕ уезжают: «Нет», записанное своей роли на
+// основе администратора, стало бы её собственным запретом.
+test('матрица рисует окна «Настроек» группами хаба; строки «только администратор» выдаются, а нетронутые в базу не уходят', () => {
   const host = mk('div');
   const grants = grantsFromLegacy({ sections: ['settings'], levels: { settings: 'viewer' } });
   const controls = paintCatalog(host, grants, { openSections: new Set(['settings']) });
@@ -204,13 +209,20 @@ test('матрица рисует окна «Настроек» группами
   for (const g of ['Основное', 'Системные настройки', 'Управление плательщиками', 'Направления', 'Зарплата врача', 'Помещения']) {
     assert.ok(t.includes(g), 'нет подзаголовка группы «' + g + '»');
   }
-  assert.ok(t.includes('Только администратор'));
-  for (const k of ['settings.api', 'settings.roles', 'settings.telegram', 'settings.telephony', 'settings.crm', 'settings.employees', 'reports.telegram']) {
-    assert.ok(!(k in controls), k + ': у закрытой строки есть переключатель');
+  assert.ok(!t.includes('Только администратор'), 'закрытая строка осталась');
+  for (const k of ['settings.api', 'settings.roles', 'settings.telegram', 'settings.telephony', 'settings.crm', 'settings.employees', 'reports.telegram', 'settings.rooms.money']) {
+    assert.ok(k in controls, k + ': у строки нет переключателя');
+    assert.equal(controls[k].value(), 'none', k + ': выведена из старых галочек');
   }
   const out = collectGrants(controls, { explicit: grants });
-  assert.ok(!('settings.api' in out) && !('reports.telegram' in out), 'закрытая строка уехала в базу');
+  assert.ok(!('settings.api' in out) && !('reports.telegram' in out) && !('settings.rooms.money' in out), 'нетронутая строка «только администратор» уехала в базу');
   assert.ok('settings.patient_categories' in out, 'выдаваемая плитка не уехала в базу');
+  // Открытая здесь — уезжает, и закрытая явно раньше — тоже.
+  controls.settings.set('view');
+  controls['settings.api'].set('view');
+  const out2 = collectGrants(controls, { explicit: { ...grants, 'settings.roles': 'none' } });
+  assert.equal(out2['settings.api'], 'view');
+  assert.equal(out2['settings.roles'], 'none', 'явное «Нет» потерялось');
 });
 
 test('предпросмотр роли возвращает права по справочнику на место', () => {
@@ -296,7 +308,7 @@ test('регистратура с «Категории пациентов: Из�
     await renderSettingsHub(root, {});
     byClass(root, 'set-row-link').find((n) => textOf(n).includes('Категории пациентов')).click();
     await tick();
-    assert.ok(textOf(root).includes('Цены и проценты меняет только администратор.'));
+    assert.ok(textOf(root).includes('Цены и проценты меняет роль с правом «Цены и проценты».'));
     walk(root).find((n) => n.tagName === 'BUTTON' && String(n.className).includes('btn-primary')).click();
     const modal = document.body.children[document.body.children.length - 1];
     assert.ok(textOf(modal).includes('Название'), 'форма не открылась');

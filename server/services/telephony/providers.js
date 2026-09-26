@@ -116,6 +116,14 @@ export function saveProvider(db, args = {}, userId = null) {
   const inSec = args.secret && typeof args.secret === 'object' ? args.secret : {};
   for (const f of def.publicFields) {
     if (inCfg[f] === undefined) continue;
+    // ADMIN_ROWS_GRANTABLE_V1 (ревью I2) — адрес «Моих Звонков» только *.moizvonki.ru.
+    if (f === 'domain' && kind === 'moizvonki') {
+      const raw = String(inCfg[f] == null ? '' : inCfg[f]).trim();
+      const d = normalizeMzDomain(raw);
+      if (raw && !d) throw new ProviderError('Адрес «Моих Звонков» — вида clinic.moizvonki.ru.', 400);
+      cfg[f] = d;
+      continue;
+    }
     cfg[f] = f === 'domain' ? normalizeDomain(inCfg[f]) : String(inCfg[f] == null ? '' : inCfg[f]).trim().slice(0, 200);
   }
   for (const f of def.secretFields) {

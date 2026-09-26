@@ -135,6 +135,22 @@ test('карта «вид → группа» указывает только н�
     assert.ok(!row.locked, kind + ' → закрытая строка');
     assert.equal(reportGroupOf(kind), key);
   }
-  assert.equal(reportGroupOf('telegram'), null, 'Telegram-бот — только администратор, группы у него нет');
+  // ADMIN_ROWS_GRANTABLE_V1 — у охвата бота своя группа, выдаваемая «Просмотром»;
+  // ненастроенная роль видит её, только если она администратор.
+  assert.equal(reportGroupOf('telegram'), 'reports.telegram');
+  assert.ok(byKey.get('reports.telegram').adminDefault, 'Telegram-бот открылся бы каждому, кому выданы «Отчёты»');
   assert.equal(canSeeReportKey(null, null, 'reports.cashier'), false);
+});
+
+// ADMIN_ROWS_GRANTABLE_V1 — охват Telegram-бота: ненастроенный кассир с
+// «Отчётами» его не видит (как вчера), выданный «Просмотр» — видит.
+test('Telegram-бот: «Отчёты» у ненастроенной роли его не открывают, выданный «Просмотр» — открывает', () => {
+  const db = seed();
+  try {
+    assert.equal(canSeeReportKey(db, CASHIER, 'reports.cashier'), true, 'стенд не тот: у кассира нет «Отчётов»');
+    assert.equal(canSeeReportKey(db, CASHIER, 'reports.telegram'), false, 'охват бота открылся всем, кому выданы «Отчёты»');
+    addGrants(db, 'cashier', { 'reports.telegram': 'view' });
+    assert.equal(canSeeReportKey(db, CASHIER, 'reports.telegram'), true);
+    assert.equal(canSeeReportKey(db, { id: 1, role: 'doctor', extra_roles: ['admin'] }, 'reports.telegram'), true, 'администратор-врач');
+  } finally { db.close(); }
 });

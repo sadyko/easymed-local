@@ -21,7 +21,7 @@ import { SECTIONS } from './sections.js?v=noikpu1';
 // ROLE_REPORTS_SETTINGS_V1 — группы отчётов и плитки настроек: карта «вид
 // отчёта → группа», строки справочника и прежнее правило хаба настроек —
 // одни на оболочку и сервер.
-import { REPORT_GROUP, catalogRows, settingsHubLegacy, settingsLegacyView } from '../shared/permission-catalog.js';
+import { REPORT_GROUP, catalogRows, settingsHubLegacy, settingsLegacyView, isAdminDefault, moneyRowOf } from '../shared/permission-catalog.js';
 
 // ROLE_KEYS_V2 — THE canonical list of grantable modules for this build.
 //
@@ -745,6 +745,9 @@ export function reportGroupAllowed(key) {
     if (grantLevel('reports') === 'none') return false;   // закрытый раздел закрывает все группы
     const lvl = key ? grantLevel(key) : null;
     if (lvl !== null) return lvl !== 'none';
+    // ADMIN_ROWS_GRANTABLE_V1 — группа с правилом «только администратор»
+    // (охват Telegram-бота) у ненастроенной роли закрыта, как вчера.
+    if (key && isAdminDefault(key)) return false;
     return _effective.has('reports-hub');
 }
 
@@ -785,7 +788,9 @@ function ownLevel(key, section) {
     return key && Object.prototype.hasOwnProperty.call(_ownCustom, key) ? _ownCustom[key] : null;
 }
 
-const SETTINGS_ROWS = new Map(catalogRows().filter((r) => r.parent === 'settings').map((r) => [r.key, r]));
+// ADMIN_ROWS_GRANTABLE_V1 — плитки — это ОКНА раздела «Настройки»; действия
+// («Цены и проценты») плитками не являются и хаб сами не открывают.
+const SETTINGS_ROWS = new Map(catalogRows().filter((r) => r.parent === 'settings' && r.kind === 'window').map((r) => [r.key, r]));
 const SETTINGS_TILE_KEYS = [...SETTINGS_ROWS.values()].filter((r) => !r.locked).map((r) => r.key);
 
 // Маршрут экрана → окно-плитка настроек, которой он принадлежит.
@@ -810,18 +815,48 @@ function tileConfigured(key) {
     const row = SETTINGS_ROWS.get(key);
     if (row && row.locked) return 'none';
     if (grantLevel('settings') === 'none') return 'none';
-    return grantLevel(key);
+    const lvl = grantLevel(key);
+    // ADMIN_ROWS_GRANTABLE_V1 — бывшая строка «только администратор», которую
+    // роль не настраивала, закрыта, как вчера (а не «решайте по старым ключам»:
+    // ключ `employees` у старой роли не открывал экран, который сервер ей не
+    // отдавал).
+    if (lvl === null && row && row.adminDefault) return 'none';
+    return lvl;
 }
 
 // Ревью I2 — колонки таблицы, которые право плитки вправе писать (цены и
 // проценты — только администратору; сервер отвечает тем же, db/write-grant.js).
 const GRANT_COLUMNS = new Map();
-for (const r of SETTINGS_ROWS.values()) for (const [t, cols] of Object.entries(r.grantColumns || {})) GRANT_COLUMNS.set(t, cols);
+const TABLE_TILE = new Map();   // ADMIN_ROWS_GRANTABLE_V1 — таблица → плитка (ради «Цен и процентов»)
+for (const r of SETTINGS_ROWS.values()) for (const [t, cols] of Object.entries(r.grantColumns || {})) { GRANT_COLUMNS.set(t, cols); TABLE_TILE.set(t, r.key); }
+
+/**
+ * ADMIN_ROWS_GRANTABLE_V1 — выдано ли действие «Цены и проценты» плитки: его
+ * «Изменение» вместе с «Изменением» самой плитки. Администратор — всегда,
+ * кроме закрытого его собственной ролью. Сервер отвечает тем же
+ * (db/write-grant.js, routes/users.js).
+ */
+export function settingsMoneyAllowed(tileKey) {
+    const money = moneyRowOf(tileKey);
+    if (!money) return _effective == null || actorIsAdmin();
+    if (_effective == null || actorIsAdmin()) {
+        const own = ownLevel(money.key, 'settings');
+        return own === null ? true : own === 'edit';
+    }
+    const tile = settingsTileLevel(tileKey);
+    if (tile !== 'edit' && tile !== 'delete') return false;
+    return grantLevel(money.key) === 'edit';
+}
 
 /** Колонки таблицы, доступные НЕ администратору, — или null, если ограничений нет. */
 export function settingsGrantColumns(table) {
     if (_effective == null || actorIsAdmin()) return null;
-    return GRANT_COLUMNS.get(table) || null;
+    const cols = GRANT_COLUMNS.get(table) || null;
+    if (!cols) return null;
+    const tile = TABLE_TILE.get(table);
+    const money = tile ? moneyRowOf(tile) : null;
+    if (money && money.moneyColumns && money.moneyColumns[table] && settingsMoneyAllowed(tile)) return [...cols, ...money.moneyColumns[table]];
+    return cols;
 }
 
 /** Запись без колонок, которые пишет только администратор (объект или массив строк). */
@@ -832,8 +867,13 @@ export function stripToGrant(table, payload) {
     return Array.isArray(payload) ? payload.map(one) : one(payload);
 }
 
+/** ADMIN_ROWS_GRANTABLE_V1 — даёт ли плитка настроек уровень `need` ('view'|'edit'|'delete'). */
+export function settingsTileAllows(key, need = 'view') {
+    return (_GRANT_RANK[settingsTileLevel(key)] || 0) >= (_GRANT_RANK[need] || 0);
+}
+
 /**
- * Уровень плитки настроек для хаба: 'none' | 'view' | 'edit'. Ненастроенная
+ * Уровень плитки настроек для хаба: 'none' | 'view' | 'edit' | 'delete'. Ненастроенная
  * плитка — прежнее правило (`legacyKeys`) и НЕ выше «Просмотра»: писать в эти
  * таблицы до сих пор мог только администратор, а он — полный доступ.
  */
@@ -843,13 +883,16 @@ export function settingsTileLevel(key) {
     if (_effective == null || actorIsAdmin()) {
         const row0 = SETTINGS_ROWS.get(key);
         const own = row0 && !row0.locked ? ownLevel(key, 'settings') : (_ownCustom && _ownCustom.settings === 'none' ? 'none' : null);
-        if (own === null) return 'edit';
-        return own === 'delete' ? 'edit' : own;
+        // ADMIN_ROWS_GRANTABLE_V1 — у строки с «Удалением» администратор его и имеет.
+        const top = row0 && Array.isArray(row0.levels) && row0.levels.includes('delete') ? 'delete' : 'edit';
+        if (own === null) return top;
+        return own === 'delete' ? top : own;
     }
     const row = SETTINGS_ROWS.get(key);
     if (!row || row.locked) return 'none';
     const lvl = tileConfigured(key);
     if (lvl !== null) return lvl;
+    if (row.adminDefault) return 'none';   // ADMIN_ROWS_GRANTABLE_V1 — страховка к tileConfigured
     // «Отделы» без настройки открыты всем (DEPARTMENTS_V1, строка маршрута ниже).
     if (!row.legacyKeys) return 'view';
     return settingsLegacyView(row, _effective) || 'none';

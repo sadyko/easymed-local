@@ -7,7 +7,7 @@
 // hidden but not deleted. Через /api/db эти правила пришлось бы проверять в
 // браузере, то есть не проверять вовсе.
 
-import { hasAnyRole } from '../roles.js';
+import { grantAllowsAdminOr } from '../grants.js';   // ADMIN_ROWS_GRANTABLE_V1
 import { crmConfig, saveConfig, CrmConfigError } from '../crm/config.js';
 
 export class RpcError extends Error {
@@ -17,10 +17,27 @@ export class RpcError extends Error {
 // Saving reshapes the board for everyone in the clinic at once, so it is
 // admin-only. hasAnyRole, not user.role: an admin whose PRIMARY role is doctor
 // (ADMIN_DOCTOR_V1) must not be locked out of a settings screen.
-function requireAdmin(user) {
-  if (!hasAnyRole(user, ['admin'])) {
-    throw new RpcError('Настройки CRM-канбана доступны только администратору.', 403);
+//
+// ADMIN_ROWS_GRANTABLE_V1 (2026-09-26) — СОХРАНЕНИЕ ВЫДАЁТСЯ ИЗ «РОЛЕЙ» (ключ
+// `settings.crm`): «Изменение» добавляет, переименовывает, скрывает и
+// переставляет колонки, источники и метки; «Удаление» ещё и убирает их (не
+// прислать существующий ключ в целом списке — это и есть удаление). Колонку
+// или источник с заявками по-прежнему удалить нельзя никому (config.js).
+// Ненастроенный ключ — как вчера: только администратор.
+const CRM_KEY = 'settings.crm';
+function requireLevel(db, user, need) {
+  if (!grantAllowsAdminOr(db, user, CRM_KEY, need)) {
+    throw new RpcError(need === 'delete'
+      ? 'Удалять колонки, источники и метки может роль с «CRM-канбан: Удаление». Скройте их вместо удаления или попросите администратора.'
+      : 'Настройки CRM-канбана недоступны вашей роли. Права выдаёт администратор в «Настройки → Роли».', 403);
   }
+}
+
+// Удаляет ли сохранение хоть одну существующую строку списка.
+function removesAny(current, sent) {
+  if (!Array.isArray(sent)) return false;
+  const keep = new Set(sent.map((x) => x && x.key).filter(Boolean));
+  return (current || []).some((x) => x && x.key && !keep.has(x.key));
 }
 
 /**
@@ -50,7 +67,12 @@ export function crmConfigGet(db) {
  * only its own card would show the owner a stale routing table.
  */
 export function crmConfigSave(db, args, user) {
-  requireAdmin(user);
+  requireLevel(db, user, 'edit');
+  const a = args || {};
+  const cur = crmConfig(db);
+  if (removesAny(cur.stages, a.stages) || removesAny(cur.sources, a.sources) || removesAny(cur.tags, a.tags)) {
+    requireLevel(db, user, 'delete');
+  }
   try {
     return saveConfig(db, args || {});
   } catch (e) {

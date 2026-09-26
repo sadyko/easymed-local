@@ -19,6 +19,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { fileTo16x9Jpeg } from './image-16x9.js';   // TELEGRAM_BROADCAST_IMG_V1
+import { settingsTileAllows } from '../permissions.js';   // ADMIN_ROWS_GRANTABLE_V1
 
 const state = { stats: null, links: null, linksError: null, preview: null, sending: null, busy: false };
 
@@ -271,8 +272,10 @@ function linksTable(rows, bodyEl, onRevoked) {
 
     const tbody = h('tbody');
     for (const { link: l, p } of rows) {
+        // ADMIN_ROWS_GRANTABLE_V1 — отчёт видит и роль с «Отчёты → Telegram-бот:
+        // Просмотр»; отвязать чат может только «Telegram-бот: Изменение» в настройках.
         const revokeBtn = h('button', { class: 'btn btn-sm btn-danger', type: 'button',
-            style: { display: l.revoked ? 'none' : '' },
+            style: { display: (l.revoked || !settingsTileAllows('settings.telegram', 'edit')) ? 'none' : '' },
             title: l.patients.length > 1
                 ? trf('Отвязать Telegram — доступ закроется ко всем {n} картам на этом номере', { n: l.patients.length })
                 : 'Отвязать Telegram',
