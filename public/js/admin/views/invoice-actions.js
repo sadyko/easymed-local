@@ -1,10 +1,8 @@
 // Shared invoice cancel / refund + audit-log helpers. Used by:
 //   * visit-modal.js  → Invoice tab "Cancel & refund" button
-//   * cashier.js      → cancel action on the invoice row
 //
-// Why split out: both surfaces need the exact same modal + DB sequence
-// (insert negative payment, flip status to void/refunded, unlink
-// visit_services, write one audit row). Keeping it here avoids drift.
+// RPC_PORT_V1 — the money moves on the server (void_invoice / refund_payment,
+// the same doors as the cashier desk); this module is the dialog + the logs.
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, toast } from '../ui.js';
@@ -78,7 +76,7 @@ export function openCancelInvoiceDialog(inv, { onDone } = {}) {
         ),
         h('div', { class: 'modal-body' },
             h('div', { style: { fontSize: '12.5px', color: 'var(--ink-600)', marginBottom: '12px' } },
-                'Счёт ', h('b', null, inv.invoice_number || inv.id.slice(0, 8)),
+                'Счёт ', h('b', null, inv.invoice_number || String(inv.id)),
                 ' · сумма ', h('b', null, total.toLocaleString('ru-RU'), ' сум'),
                 ' · оплачено ', h('b', { style: { color: paid > 0 ? 'var(--ok-700)' : 'var(--ink-500)' } }, paid.toLocaleString('ru-RU'), ' сум'),
             ),
@@ -98,7 +96,8 @@ export function openCancelInvoiceDialog(inv, { onDone } = {}) {
             ),
             h('div', { style: { padding: '10px 12px', background: 'var(--warn-50)', borderRadius: '8px', fontSize: '12.5px', color: 'var(--warn-700)', lineHeight: '1.55' } },
                 willRefund
-                    ? 'Счёт будет помечен как возвращённый, услуги разблокированы для повторного выставления, добавлена запись в журнал.'
+                    // RPC_PORT_V1 — возврат идёт по платежам (refund_payment), как у кассы: строки визита остаются за счётом.
+                    ? 'Деньги вернутся по платежам счёта; при полном возврате счёт будет отменён, услуги останутся в визите для повторного выставления. Добавится запись в журнал.'
                     : 'Счёт будет аннулирован, услуги разблокированы для повторного выставления, добавлена запись в журнал.',
             ),
         ),
@@ -140,81 +139,55 @@ export async function cancelInvoice(inv, { reason, refundAmount = 0, notes = nul
     const willRefund = refundAmount > 0;
     const toStatus = willRefund ? 'refunded' : 'void';
 
-    // CATALOG_WIZARD_V2 — wizard bookings may be part-paid from the patient's
-    // BALANCE ('deposit' payments + a 'spent' ledger row). That portion must
-    // never leave the till as cash, and the spent balance must be restored.
-    let depositPaid = 0, giftPays = [];
-    try {
-        const { data: ncPays } = await supabase.from('payments')
-            .select('amount, method, notes').eq('invoice_id', inv.id).in('method', ['deposit', 'gift_card']);
-        for (const r of (ncPays || [])) {
-            const a = Math.max(0, Number(r.amount || 0));
-            if (r.method === 'deposit') depositPaid += a;
-            else giftPays.push(r);
+    // RPC_PORT_V1 (ревью I1) — ОТМЕНУ И ВОЗВРАТ ПРОВОДИТ СЕРВЕР.
+    //
+    // Здесь браузер сам правил invoices (статус, paid_amount), вставлял
+    // отрицательный платёж и отвязывал строки визита. Реестр не даёт invoices и
+    // payments записи с клиента ни одной роли, поэтому «Отменить счёт» всегда
+    // кончался «not allowed». Теперь — те же двери, что у кассы (cashier-desk.js):
+    //   • неоплаченный счёт — void_invoice с keep_services: услуги остаются в
+    //     визите невыставленными, как и обещает окно, запись в журнал пишет
+    //     сервер;
+    //   • оплаченный — refund_payment по платежам счёта, от последнего к
+    //     первому, пока не набрана сумма возврата: деньги уходят из смены того,
+    //     кто возвращает, а статус счёта сервер пересчитывает сам.
+    // Облачные остатки (списание баланса 'deposit', подарочные карты, промокоды)
+    // убраны: офлайн таких платежей не бывает — платежи пишет только сервер.
+    if (!willRefund) {
+        const { error } = await supabase.rpc('void_invoice', { invoice_id: inv.id, keep_services: true, reason });
+        if (error) { toast(trf('Не удалось отменить счёт: {msg}', { msg: error.message || error }), 'fail'); return false; }
+    } else {
+        const { data: pays, error: pErr } = await supabase.from('payments')
+            .select('id, amount, notes').eq('invoice_id', inv.id);
+        if (pErr) { toast(trf('Не удалось отменить счёт: {msg}', { msg: pErr.message || pErr }), 'fail'); return false; }
+        const rows = pays || [];
+        const refundedOf = (pid) => rows
+            .filter((r) => Number(r.amount) < 0 && (r.notes === 'REFUND#' + pid || String(r.notes || '').startsWith('REFUND#' + pid + ' ')))
+            .reduce((s2, r) => s2 - Number(r.amount), 0);
+        let left = Math.round(refundAmount * 100) / 100;
+        const positive = rows.filter((r) => Number(r.amount) > 0).sort((x, y) => Number(y.id) - Number(x.id));
+        for (const pay of positive) {
+            if (left <= 0) break;
+            const refundable = Math.round((Number(pay.amount) - refundedOf(pay.id)) * 100) / 100;
+            if (refundable <= 0) continue;
+            const amt = Math.min(left, refundable);
+            const { error } = await supabase.rpc('refund_payment', { payment_id: pay.id, amount: amt, reason });
+            if (error) { toast(trf('Не удалось отменить счёт: {msg}', { msg: error.message || error }), 'fail'); return false; }
+            left = Math.round((left - amt) * 100) / 100;
         }
-    } catch (_) {}
-    const giftPaid = giftPays.reduce((s, r) => s + Math.max(0, Number(r.amount || 0)), 0);
-    const nonCashPaid = depositPaid + giftPaid;
-    if (willRefund && nonCashPaid > 0) {
-        const cashPaid = Math.max(0, Number(inv.paid_amount || 0) - nonCashPaid);
-        if (refundAmount > cashPaid) {
-            toast(trf('Наличными вернётся {sum} сум — остальное вернётся на баланс и карты пациента.', { sum: cashPaid.toLocaleString('ru-RU') }), 'info');
-            refundAmount = cashPaid;
+        if (left > 0) refundAmount = Math.round((refundAmount - left) * 100) / 100;
+        // Полный возврат — это отмена: refund_payment оставляет счёт «не
+        // оплачен» (для кассы — снова долг пациента), поэтому счёт без денег
+        // гасится тем же void_invoice. Частичный возврат счёт не отменяет.
+        if (Number(inv.paid_amount || 0) - refundAmount <= 0) {
+            const { error } = await supabase.rpc('void_invoice', { invoice_id: inv.id, keep_services: true, reason });
+            if (error) { toast(trf('Не удалось отменить счёт: {msg}', { msg: error.message || error }), 'fail'); return false; }
         }
     }
 
-    // CATALOG_WIZARD_V4 — flip the invoice status FIRST, guarded so a second run
-    // (stale list / two sessions) cannot re-refund or double-restore: only one call
-    // wins the void/refunded transition; everything after it runs exactly once.
-    const newPaid = Math.max(Number(inv.paid_amount || 0) - refundAmount, 0);
-    const { data: flipped, error: updErr } = await supabase.from('invoices').update({
-        status:      toStatus,
-        paid_amount: newPaid,
-    }).eq('id', inv.id).not('status', 'in', '("void","refunded")').select();
-    if (updErr) { toast(trf('Не удалось отменить счёт: {msg}', { msg: updErr.message }), 'fail'); return false; }
-    if (!flipped || !flipped.length) { toast('Счёт уже отменён.', 'info'); return false; }
-
-    // Negative cash payment for the running ledger (after the guarded flip).
-    if (refundAmount > 0) {
-        const { error: payErr } = await supabase.from('payments').insert({
-            // i18n-exempt: примечание пишется В БАЗУ (payments.notes) — хранимая запись, как серверные REASONS, а не текст экрана
-            invoice_id: inv.id, amount: -refundAmount, method: 'cash', notes: `Возврат — ${reason}`,
-            cashier_id: (typeof window !== 'undefined' && window.easymed?.state?.user?.id) || null,   // M3 — so cash refunds land in the shift / Z-report (was NULL → false OVER variance)
-        });
-        if (payErr) console.warn('[payments] refund insert failed (continuing):', payErr.message);
-    }
-
-    // CATALOG_WIZARD_V2 — restore the balance the wizard spent on this invoice.
-    if (depositPaid > 0) {
-        try {
-            const { data: spentRows } = await supabase.from('patient_deposits')
-                .select('id, patient_id, amount').eq('status', 'spent').ilike('notes', `%spend:${inv.id}%`);
-            for (const r of (spentRows || [])) {
-                await supabase.from('patient_deposits').insert({
-                    patient_id: r.patient_id, amount: Number(r.amount || 0), method: 'other',
-                    status: 'received', notes: 'unspend:' + inv.id,
-                });
-            }
-        } catch (e) { console.warn('[cancel] deposit unspend:', e.message); }
-    }
-    // RPC_PORT_V1 — здесь облачная версия возвращала остаток подарочной карты
-    // (restore_patient_discount по меткам 'gift:<id>') и использование
-    // промокода (release_promo_use по меткам 'promo:<id>'). Офлайн у скидок нет
-    // ни остатка, ни счётчика, таких функций на сервере нет, а меток этих
-    // офлайн-калькулятор никогда не писал (платежи пишет только сервер) —
-    // возвращать нечего. Скидка отменённого счёта просто уходит вместе с ним.
-
-    // 3. Unlink visit_services so they can be re-billed on a fresh
-    //    invoice. invoice_items stays as a permanent record.
-    const { data: items } = await supabase
-        .from('invoice_items').select('id').eq('invoice_id', inv.id);
-    const ids = (items || []).map(r => r.id);
-    if (ids.length) {
-        await supabase.from('visit_services').update({ invoice_item_id: null }).in('invoice_item_id', ids);
-    }
-
-    // 4. Audit row.
-    await logInvoiceAction(inv, {
+    // 4. Audit row. RPC_PORT_V1 — отмену журналирует void_invoice сам; возврат
+    // (refund_payment) журнала счёта не пишет — пишем здесь.
+    if (willRefund) await logInvoiceAction(inv, {
         visitId:      inv.visit_id || null,
         action:       toStatus,
         fromStatus:   inv.status,
@@ -235,7 +208,7 @@ export async function cancelInvoice(inv, { reason, refundAmount = 0, notes = nul
             visitId:     inv.visit_id || null,
             entityType:  'invoice',
             entityId:    inv.id,
-            entityLabel: inv.invoice_number || inv.id.slice(0, 8),
+            entityLabel: inv.invoice_number || String(inv.id),
             action:      willRefund ? 'refunded' : 'cancelled',
             /* i18n-exempt-start: summary пишется В БАЗУ (журнал действий) — хранимая запись, а не текст экрана */
             summary:     willRefund
@@ -246,8 +219,10 @@ export async function cancelInvoice(inv, { reason, refundAmount = 0, notes = nul
         });
     }
 
-    toast(willRefund
-        ? trf('Возврат {sum} сум — счёт отменён.', { sum: refundAmount.toLocaleString('ru-RU') })
-        : 'Счёт отменён.');
+    // RPC_PORT_V1 — частичный возврат счёт не отменяет: он остаётся частично оплаченным.
+    const fullRefund = willRefund && Number(inv.paid_amount || 0) - refundAmount <= 0;
+    toast(!willRefund ? 'Счёт отменён.'
+        : fullRefund ? trf('Возврат {sum} сум — счёт отменён.', { sum: refundAmount.toLocaleString('ru-RU') })
+        : trf('Возврат {sum} сум проведён.', { sum: refundAmount.toLocaleString('ru-RU') }));
     return true;
 }

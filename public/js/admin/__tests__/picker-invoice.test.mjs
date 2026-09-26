@@ -251,3 +251,73 @@ test('окно визита: оплата — record_payment, долг — mark_
     USER = { id: 1, role: 'registrar', extra_roles: [] };
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Ревью I1 — «Отменить счёт» окна визита (invoice-actions.js cancelInvoice)
+// правил invoices и вставлял payments из браузера: «not allowed» у всех ролей.
+// ═══════════════════════════════════════════════════════════════════════════
+const IA = await import('../views/invoice-actions.js');
+
+test('отмена неоплаченного счёта — void_invoice: услуги остаются в визите, причина в журнале', async () => {
+  seed();
+  await VM.generateInvoiceFromSelection(vmState(), new Set([101, 102]), () => {});
+  const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+  USER = { id: 1, role: 'cashier', extra_roles: [] };
+  try {
+    RPC.length = 0; DBWRITES.length = 0;
+    const ok = await IA.cancelInvoice(inv, { reason: 'ошиблись услугой', refundAmount: 0 });
+    assert.equal(ok, true, 'отмена не прошла: ' + JSON.stringify(RPC));
+    assert.equal(DB.prepare('SELECT status FROM invoices WHERE id = ?').get(inv.id).status, 'void');
+    assert.equal(DB.prepare('SELECT COUNT(*) c FROM visit_services WHERE visit_id = 40 AND invoice_item_id IS NULL').get().c, 2,
+      'окно обещает «услуги разблокированы для повторного выставления»');
+    assert.equal(DB.prepare("SELECT reason FROM invoice_audit_log WHERE invoice_id = ? AND action = 'void'").get(inv.id).reason, 'ошиблись услугой');
+    assert.ok(!DBWRITES.some((t) => ['invoices', 'invoice_items', 'payments', 'visit_services'].includes(t)), 'клиентская запись: ' + DBWRITES.join(','));
+  } finally {
+    USER = { id: 1, role: 'registrar', extra_roles: [] };
+  }
+});
+
+test('отмена оплаченного счёта — refund_payment по платежам: частичный, потом полный', async () => {
+  seed();
+  await VM.generateInvoiceFromSelection(vmState(), new Set([101]), () => {});
+  let inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+  USER = { id: 1, role: 'cashier', extra_roles: [] };
+  try {
+    await VM.takePayment(vmState(), inv, 500000, 'partial', () => {}, 'cash');
+    await VM.takePayment(vmState(), DB.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id), 400000, 'paid', () => {}, 'card');
+    inv = DB.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
+    assert.equal(inv.status, 'paid');
+    RPC.length = 0; DBWRITES.length = 0;
+
+    // частичный возврат 600 000: 400 000 по последнему платежу (карта) + 200 000 по первому
+    assert.equal(await IA.cancelInvoice(inv, { reason: 'жалоба', refundAmount: 600000 }), true);
+    inv = DB.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
+    assert.equal(inv.paid_amount, 300000);
+    assert.equal(inv.status, 'partial');
+    const refunds = DB.prepare('SELECT amount, method FROM payments WHERE invoice_id = ? AND amount < 0 ORDER BY id').all(inv.id);
+    assert.deepEqual(refunds.map((r) => [r.amount, r.method]), [[-400000, 'card'], [-200000, 'cash']], 'возврат обязан идти тем же способом, каким брали');
+    assert.deepEqual(RPC.map((r) => r.name), ['refund_payment', 'refund_payment']);
+    RPC.length = 0;
+
+    // остаток — полный возврат
+    assert.equal(await IA.cancelInvoice(inv, { reason: 'жалоба', refundAmount: 300000 }), true);
+    inv = DB.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
+    assert.equal(inv.paid_amount, 0);
+    // refund_payment сам оставил бы «не оплачен» — то есть снова долг; полный
+    // возврат из окна отмены гасит счёт void_invoice.
+    assert.equal(inv.status, 'void');
+    assert.ok(!DBWRITES.some((t) => ['invoices', 'invoice_items', 'payments'].includes(t)), 'клиентская запись в деньги: ' + DBWRITES.join(','));
+    assert.ok(DB.prepare("SELECT COUNT(*) c FROM invoice_audit_log WHERE invoice_id = ? AND action = 'refunded'").get(inv.id).c >= 1, 'возврат не попал в журнал счёта');
+  } finally {
+    USER = { id: 1, role: 'registrar', extra_roles: [] };
+  }
+});
+
+test('отмена чужими руками: сервер отказывает, окно говорит об этом и ничего не меняет', async () => {
+  seed();
+  await VM.generateInvoiceFromSelection(vmState(), new Set([101]), () => {});
+  const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+  const ok = await IA.cancelInvoice(inv, { reason: 'x', refundAmount: 0 });   // регистратор: void_invoice — касса/админ
+  assert.equal(ok, false);
+  assert.equal(DB.prepare('SELECT status FROM invoices WHERE id = ?').get(inv.id).status, 'unpaid');
+});

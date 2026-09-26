@@ -609,13 +609,15 @@ export function voidInvoice(db, args, user) {
     // Журнал счёта: кто отменил и что стало с услугами. Раньше строку писал
     // только облачный экран, и «История» кассы об отменах молчала.
     const actor = db.prepare('SELECT full_name, role FROM users WHERE id = ?').get(user.id) || {};
+    // RPC_PORT_V1 (ревью I1) — причина из окна отмены (окно визита требует её).
+    const reason = (typeof args.reason === 'string' && args.reason.trim()) ? args.reason.trim().slice(0, 300) : null;
     const note = (removed.length ? 'Сняты с визита: ' + removed.join(', ') : '')
       + (removed.length && released.length ? '. ' : '')
       + (released.length ? 'Оставлены в визите невыставленными: ' + released.join(', ') : '');
     db.prepare(`
       INSERT INTO invoice_audit_log (invoice_id, invoice_number, visit_id, action, from_status, to_status, amount, refund_amount, actor_user_id, actor_name, actor_role, reason, notes)
-      VALUES (?, ?, ?, 'void', ?, 'void', 0, 0, ?, ?, ?, NULL, ?)`)
-      .run(invoiceId, invoice.invoice_number || null, invoice.visit_id || null, invoice.status, user.id, actor.full_name || null, actor.role || null, note || null);
+      VALUES (?, ?, ?, 'void', ?, 'void', 0, 0, ?, ?, ?, ?, ?)`)
+      .run(invoiceId, invoice.invoice_number || null, invoice.visit_id || null, invoice.status, user.id, actor.full_name || null, actor.role || null, reason, note || null);
 
     // ADM_LINE_RELEASE_V1 — inpatient lines must be released too. Voiding used
     // to touch visit_services only, so an admission's lines kept pointing at the
