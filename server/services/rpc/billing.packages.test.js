@@ -210,3 +210,80 @@ test('счёт без пакетов — отчёты считают ровно 
   assert.equal(payLine(c, 1).discount, 20000);
   assert.equal(payLine(c, 2).discount, 10000);
 });
+
+// ─── 5. Правка неоплаченного счёта: остаток скидки пересчитывается ──────────
+//
+// Разбор ревью I-2 / M-3. Скидка счёта = своя скидка строк пакета + остаток
+// (ручная/категорийная) на строки без своей. Убирая или заменяя строку, прежний
+// код вычитал из скидки счёта только скидку самой строки — остаток оставался
+// прежним и мог лечь на строку, которой уже нет, или превысить оставшиеся.
+
+function bigClinic(opts) {
+  const c = clinic(opts);
+  c.db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (3, 'УЗИ большое', 200000, 0, 'imaging')").run();
+  c.db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (4, 'Анализ 100', 100000, 0, 'lab')").run();
+  c.db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (5, 'Анализ 20', 20000, 0, 'lab')").run();
+  c.db.prepare('UPDATE service_templates SET service_ids = ? WHERE id = ?').run(JSON.stringify([1, 3]), c.packageId);
+  c.add = (serviceId, { pkgId = null } = {}) => {
+    const price = c.db.prepare('SELECT price FROM services WHERE id = ?').get(serviceId).price;
+    return c.db.prepare(`INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, package_id)
+                         VALUES (?,?,1,1,?,?,'added',?)`).run(c.visitId, serviceId, price, price, pkgId).lastInsertRowid;
+  };
+  return c;
+}
+
+test('убрали единственную строку без своей скидки — ручной остаток уходит с ней (ревью I-2, проба 1)', () => {
+  const c = bigClinic();
+  const p = c.add(3, { pkgId: c.packageId });   // 200 000, пакет 20 % = 40 000
+  const lab = c.add(4);                          // 100 000
+  const res = invoiceOf(c, [p, lab], { discount_amount: 30000 });
+  assert.equal(res.invoice.discount_amount, 70000);
+  const out = removeUnpaidService(c.db, { visit_service_id: lab }, admin);
+  assert.equal(out.invoice.subtotal, 200000);
+  assert.equal(out.invoice.discount_amount, 40000, 'ручные 30 000 остались висеть без строки');
+  assert.equal(out.invoice.total_amount, 160000);
+});
+
+test('убрали строку — остаток зажат оставшимися строками без своей скидки (ревью I-2, проба 2)', () => {
+  const c = bigClinic();
+  const p = c.add(3, { pkgId: c.packageId });
+  const lab = c.add(4);
+  const small = c.add(5);                        // 20 000
+  invoiceOf(c, [p, lab, small], { discount_amount: 30000 });
+  const out = removeUnpaidService(c.db, { visit_service_id: lab }, admin);
+  assert.equal(out.invoice.subtotal, 220000);
+  // 40 000 пакета + остаток не больше 20 000 (строка на 20 000 не уходит в минус).
+  assert.equal(out.invoice.discount_amount, 60000);
+  assert.equal(out.invoice.total_amount, 160000);
+});
+
+test('замена услуги тоже пересчитывает остаток: он не больше строк без своей скидки', () => {
+  const c = bigClinic();
+  const p = c.add(3, { pkgId: c.packageId });
+  const lab = c.add(4);
+  invoiceOf(c, [p, lab], { discount_amount: 30000 });
+  const out = changeUnpaidService(c.db, { visit_service_id: lab, new_service_id: 5 }, admin);
+  assert.equal(out.invoice.subtotal, 220000);
+  assert.equal(out.invoice.discount_amount, 60000);   // 40 000 + min(30 000, 20 000)
+  assert.equal(out.invoice.total_amount, 160000);
+});
+
+test('строка пакета заменена у пациента с категорией — на ней действует пол категории (ревью M-3)', () => {
+  const c = bigClinic({ categoryPct: 10 });
+  const p = c.add(1, { pkgId: c.packageId });    // 100 000, max(20, 10) = 20 000
+  const lab = c.add(2);                          // 50 000, категория 5 000
+  const res = invoiceOf(c, [p, lab]);
+  assert.equal(res.invoice.discount_amount, 25000);
+  const out = changeUnpaidService(c.db, { visit_service_id: p, new_service_id: 3 }, admin);
+  // 200 000 + 50 000 без своей скидки; категория 10 % = 25 000.
+  assert.equal(out.invoice.subtotal, 250000);
+  assert.equal(out.invoice.discount_amount, 25000);
+  assert.equal(out.invoice.total_amount, 225000);
+});
+
+test('счёт по визиту отвечает остатком скидки (rest_discount) — мастер переносит только его (ревью I-1)', () => {
+  const c = bigClinic();
+  const res = invoiceOf(c, [c.add(3, { pkgId: c.packageId }), c.add(4)], { discount_amount: 30000 });
+  assert.equal(res.rest_discount, 30000);
+  assert.equal(res.invoice.discount_amount, 70000);
+});

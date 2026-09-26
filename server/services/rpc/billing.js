@@ -403,7 +403,12 @@ export function createInvoiceForVisit(db, args, user) {
 
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
     const items = db.prepare('SELECT * FROM invoice_items WHERE invoice_id = ?').all(invoiceId);
-    return { invoice, items };
+    // PACKAGES_V1 (ревью I-1) — rest_discount: сколько из присланной скидки
+    // (ручная/лояльность/промокод, с полом категории) счёт реально применил —
+    // без скидок пакета. Мастер переносит остаток своей скидки на счёт
+    // следующего дня и вычитает именно это, а не invoice.discount_amount, в
+    // котором теперь лежат и скидки пакета.
+    return { invoice, items, rest_discount: restDiscount };
   });
 
   const out = run();
@@ -664,6 +669,44 @@ export function markInvoiceDebt(db, args, user) {
 // складом, возвращается двумя частями, каждая своему держателю.
 const REMOVE_SERVICE_ROLES = ['admin', 'registrar'];
 
+// PACKAGES_V1 (ревью I-2 / M-3) — сумма СОБСТВЕННЫХ скидок строк счёта
+// (скидки пакета). Читается до правки строки: разница между скидкой счёта и
+// этой суммой — ОСТАТОК (ручная / категорийная скидка на строки без своей).
+function invoiceOwnDiscount(db, invoiceId) {
+  return round2(db.prepare('SELECT COALESCE(SUM(discount_amount), 0) s FROM invoice_items WHERE invoice_id = ?').get(invoiceId).s);
+}
+
+// PACKAGES_V1 (ревью I-2 / M-3) — ИТОГИ НЕОПЛАЧЕННОГО СЧЁТА ПОСЛЕ ПРАВКИ СТРОКИ.
+//
+// Скидка счёта состоит из двух частей (createInvoiceForVisit): своих скидок
+// строк пакета и остатка, который лежит только на строках без своей скидки и
+// зажат их суммой. Прежде правка вычитала из скидки счёта лишь скидку самой
+// строки, и остаток оставался прежним: убрали единственный анализ — ручные
+// 30 000 висели на счёте без строки; убрали большой анализ — остаток ложился на
+// маленький и уводил его в минус. Здесь обе части собираются заново:
+//   своя   = SUM(discount_amount) оставшихся строк;
+//   остаток = прежний остаток (не больше), но не меньше пола категории пациента
+//            (тот же пол, что при выставлении) и не больше суммы строк без своей
+//            скидки.
+// Строка пакета, заменённая другой услугой, теряет скидку пакета и становится
+// строкой «без своей» — пол категории ложится и на неё (ревью M-3).
+function repriceUnpaidInvoice(db, inv, oldOwn) {
+  const left = db.prepare(`SELECT COALESCE(SUM(total), 0) s,
+                                  COALESCE(SUM(discount_amount), 0) own,
+                                  COALESCE(SUM(CASE WHEN COALESCE(discount_amount, 0) > 0 THEN 0 ELSE total END), 0) base
+                             FROM invoice_items WHERE invoice_id = ?`).get(inv.id);
+  const subtotal = round2(left.s);
+  const own = round2(left.own);
+  const base = round2(left.base);
+  const oldRest = Math.max(round2((Number(inv.discount_amount) || 0) - oldOwn), 0);
+  const floor = round2(base * patientCategoryDiscount(db, inv.patient_id) / 100);
+  const rest = round2(Math.min(Math.max(oldRest, floor), base));
+  const discount = Math.min(round2(own + rest), subtotal);
+  db.prepare('UPDATE invoices SET subtotal = ?, discount_amount = ?, total_amount = ? WHERE id = ?')
+    .run(subtotal, discount, round2(subtotal - discount), inv.id);
+  return db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
+}
+
 export function removeUnpaidService(db, args, user) {
   requireRole(user, REMOVE_SERVICE_ROLES);
 
@@ -708,18 +751,14 @@ export function removeUnpaidService(db, args, user) {
     let invoiceDeleted = false;
     let invoice = null;
     if (item) {
+      const oldOwn = invoiceOwnDiscount(db, inv.id);   // PACKAGES_V1 — ДО удаления строки
       db.prepare('DELETE FROM invoice_items WHERE id = ?').run(item.id);
-      const left = db.prepare('SELECT COALESCE(SUM(total), 0) s, COUNT(*) n FROM invoice_items WHERE invoice_id = ?').get(inv.id);
+      const left = db.prepare('SELECT COUNT(*) n FROM invoice_items WHERE invoice_id = ?').get(inv.id);
       if (left.n === 0) {
         db.prepare('DELETE FROM invoices WHERE id = ?').run(inv.id);
         invoiceDeleted = true;
       } else {
-        const subtotal = round2(left.s);
-        // PACKAGES_V1 — своя скидка убранной строки уходит вместе с ней.
-        const discount = Math.min(Math.max(round2(inv.discount_amount - (Number(item.discount_amount) || 0)), 0), subtotal);
-        db.prepare('UPDATE invoices SET subtotal = ?, discount_amount = ?, total_amount = ? WHERE id = ?')
-          .run(subtotal, discount, round2(subtotal - discount), inv.id);
-        invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
+        invoice = repriceUnpaidInvoice(db, inv, oldOwn);
       }
     }
     return { removed: true, invoice_deleted: invoiceDeleted, invoice, sources };
@@ -788,14 +827,10 @@ export function changeUnpaidService(db, args, user) {
 
     let invoice = null;
     if (item) {
+      const oldOwn = invoiceOwnDiscount(db, inv.id);   // PACKAGES_V1 — ДО правки строки
       db.prepare('UPDATE invoice_items SET service_id = ?, description = ?, unit_price = ?, total = ?, discount_amount = 0 WHERE id = ?')
         .run(newServiceId, svc.name || '', svc.price, lineTotal, item.id);
-      const sub = db.prepare('SELECT COALESCE(SUM(total), 0) s FROM invoice_items WHERE invoice_id = ?').get(inv.id).s;
-      const subtotal = round2(sub);
-      const discount = Math.min(Math.max(round2(inv.discount_amount - (Number(item.discount_amount) || 0)), 0), subtotal);
-      db.prepare('UPDATE invoices SET subtotal = ?, discount_amount = ?, total_amount = ? WHERE id = ?')
-        .run(subtotal, discount, round2(subtotal - discount), inv.id);
-      invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
+      invoice = repriceUnpaidInvoice(db, inv, oldOwn);
     }
 
     return { changed: true, line: db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId), invoice };
