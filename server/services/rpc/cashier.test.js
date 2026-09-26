@@ -474,3 +474,17 @@ test('плитка «ОТМЕНЁН»: счёт, выставленный вче
   assert.ok(r.rows.some((x) => x.id === inv.id && x.status === 'void'), 'и стоит в списке');
   assert.equal(r.counts.unpaid.n, 0, 'в «НЕ ОПЛАЧЕН» ничего не вернулось');
 });
+
+// RPC_PORT_V1 (ревью I1) — окно визита «Отменить счёт» теперь идёт через
+// void_invoice; причину, которую человек обязан ввести в окне, сервер кладёт в
+// журнал счёта (раньше reason был NULL всегда).
+test('void_invoice: причина отмены попадает в журнал счёта', () => {
+  const { db, vid, vs1 } = seed();
+  const inv = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar).invoice;
+  voidInvoice(db, { invoice_id: inv.id, keep_services: true, reason: '  ошиблись услугой  ' }, cashier);
+  const log = db.prepare("SELECT reason FROM invoice_audit_log WHERE invoice_id=? AND action='void'").get(inv.id);
+  assert.equal(log.reason, 'ошиблись услугой');
+  const inv2 = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar).invoice;
+  voidInvoice(db, { invoice_id: inv2.id, keep_services: true, reason: 'x'.repeat(1000) }, cashier);
+  assert.equal(db.prepare("SELECT length(reason) n FROM invoice_audit_log WHERE invoice_id=?").get(inv2.id).n, 300);
+});

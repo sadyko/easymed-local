@@ -8,6 +8,9 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { supabase } from '../../supabase.js';
 import { gw } from '../gateway.js';
 import { uploadFile } from '../storage.js';
+// RPC_PORT_V1 — офлайн каталог специальностей из медкора (gw) недоступен:
+// выбор идёт из того же канонического списка, по которому сервер проверяет слаг.
+import { SPECIALTY_ROWS, canonicalSpecialty } from '../../shared/specialty-list.js';
 // PATIENT_PHOTO_V1 — те же правила и то же уменьшение, что в окне заведения
 // пациента: один набор на оба виджета фото и на сервер.
 import { photoRefusal, ALLOWED_PHOTO_EXT } from '../../shared/patient-file-limits.js?v=pph1';
@@ -89,6 +92,7 @@ export async function renderDoctorProfile(container, doctorId) {
     catch (e) { st.catalog = []; /* conditions card shows its own load error */ }
     try { st.specCatalog = (await gw('/catalog/specialties')).data || []; }
     catch (e) { st.specCatalog = []; }
+    if (!st.specCatalog.length) st.specCatalog = SPECIALTY_ROWS.map((r) => ({ slug: r.slug, name_ru: r.ru, name_uz: r.uz }));   // RPC_PORT_V1
     try { window.__specLookup = Object.fromEntries(st.specCatalog.map((s) => [s.slug, s])); } catch (e) {}
 
     try {
@@ -116,9 +120,18 @@ export async function renderDoctorProfile(container, doctorId) {
 
     try {
         const { data } = await supabase.from('user_specialties')
-            .select('specialty_slug, is_primary').eq('user_id', doctorId)
+            .select('specialty_slug, name_ru, is_primary').eq('user_id', doctorId)
             .order('is_primary', { ascending: false });
-        st.specSlugs = (data || []).map((r) => r.specialty_slug);
+        // Ревью M7b — карточка сотрудника пишет специальность без слага, одним
+        // названием. Каноническое название узнаём по списку и показываем как
+        // обычную специальность; неканоническое экран не показывает и не шлёт —
+        // сервер сохраняет такую строку сам (rpc/doctor-profile.js).
+        const slugOfName = (name) => {
+            const ru = canonicalSpecialty(name);
+            const hit = SPECIALTY_ROWS.find((r) => r.ru === ru);
+            return hit ? hit.slug : null;
+        };
+        st.specSlugs = [...new Set((data || []).map((r) => r.specialty_slug || slugOfName(r.name_ru)).filter(Boolean))];
     } catch (e) { st.specSlugs = []; }
 
     try {
@@ -188,7 +201,10 @@ export async function renderDoctorProfile(container, doctorId) {
         saveBtn.textContent = tr('Сохранение…');
         try {
             // (1) Upload pending photo → URL (or external "по ссылке", or '').
-            const photoUrl = await uploadPendingPhoto();
+            // RPC_PORT_V1 — фото офлайн не хранится (колонки нет); сбой загрузки
+            // не должен отнимать у врача сохранение специальностей и болезней.
+            let photoUrl = '';
+            try { photoUrl = await uploadPendingPhoto(); } catch (e) { console.warn('[doctor-profile] photo upload:', e.message || e); }
 
             // (2) Assemble whitelisted RPC payload. '' clears a field.
             const p = {};
@@ -212,32 +228,18 @@ export async function renderDoctorProfile(container, doctorId) {
             if (photoUrl) p.photo_url = photoUrl;   // never blank an existing photo by accident
 
             // (3) RPC — server-side whitelist; only the current doctor's row.
-            const { error: rpcErr } = await supabase.rpc('update_my_doctor_profile', { p });
-            if (rpcErr) throw rpcErr;
-
-            // (4) Specialties: delete-then-insert, max 4, [0] = primary.
-            await supabase.from('user_specialties').delete().eq('user_id', doctorId);
-            const slugs = st.specSlugs.slice(0, 4);
-            if (slugs.length) {
-                const rows = slugs.map((slug, i) => {
-                    const s = (window.__specLookup && window.__specLookup[slug]) || {};
-                    return { company_id: companyId, user_id: doctorId, specialty_slug: slug,
-                        name_ru: s.name_ru || null, name_uz: s.name_uz || null, is_primary: i === 0 };
-                });
-                const { error } = await supabase.from('user_specialties').insert(rows);
-                if (error) throw error;
-            }
-
-            // (5) Conditions: delete-then-insert (ported legacy save logic).
-            await supabase.from('doctor_conditions').delete().eq('doctor_id', doctorId);
-            const condRows = [...st.selectedConds.values()].map((x) => ({
-                company_id: companyId, doctor_id: doctorId, kind: x.kind, slug: x.slug,
-                name_ru: x.name_ru || null, name_uz: x.name_uz || null,
+            // RPC_PORT_V1 — специальности (до 4, [0] = основная) и болезни/симптомы
+            // едут в том же вызове и заменяются на сервере одной транзакцией.
+            // Напрямую в user_specialties / doctor_conditions экран больше не
+            // пишет: реестр пускает туда только admin, и insert с company_id
+            // отвергался у всех.
+            const specialties = st.specSlugs.filter(Boolean).slice(0, 4);
+            const conditions = [...st.selectedConds.values()].map((x) => ({
+                kind: x.kind, slug: x.slug, name_ru: x.name_ru || null, name_uz: x.name_uz || null,
             }));
-            if (condRows.length) {
-                const { error } = await supabase.from('doctor_conditions').insert(condRows);
-                if (error) throw error;
-            }
+            const { data: saveRes, error: rpcErr } = await supabase.rpc('update_my_doctor_profile', { p, specialties, conditions });
+            if (rpcErr) throw rpcErr;
+            const notStored = (saveRes && Array.isArray(saveRes.not_stored)) ? saveRes.not_stored : [];
 
             // (6) Reflect the new photo in state so a re-save doesn't re-upload.
             if (photoUrl) { st.photoUrl = photoUrl; st.photoFile = null; }
@@ -247,7 +249,9 @@ export async function renderDoctorProfile(container, doctorId) {
             try {
                 await gw('/identity/doctor', { method: 'POST', body: { user_id: doctorId, specialty_slugs: st.specSlugs.slice(0, 4) } });
             } catch (e) { console.warn('[doctor-profile] medcore sync:', e.message); }
-            toast('Профиль сохранён', 'info');
+            // RPC_PORT_V1 — не говорим «сохранён» о том, что офлайн не хранится.
+            if (notStored.length) toast('Профиль сохранён. Биография, образование, соцсети и фото в офлайн-версии не хранятся.', 'info');
+            else toast('Профиль сохранён', 'info');
         } catch (e) {
             toast(trf('Не удалось сохранить: {msg}', { msg: e.message || e }), 'fail');
         }

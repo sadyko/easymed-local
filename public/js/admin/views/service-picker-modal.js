@@ -275,7 +275,7 @@ export function openServicePickerModal({
     const wiz = {
         step: 1,
         payment: { mode: 'patient', discountPct: null, coverage: 'insurance', payerId: null, policyId: null, policyNumber: '', useBal: true },   // WIZ_POLICY_MANUAL_V1
-        payers: null, policies: null, depositBalance: null, _prefilled: false,
+        payers: null, policies: null, depositBalance: null, categoryPct: null, _prefilled: false,
         applied: [],   // CATALOG_WIZARD_V3 — applied promo/gift/cert rows
         coverage: {},  // COVER_SPLIT_V1 — per service-index: 'payer' | 'patient'
         _covMode: null,
@@ -669,7 +669,7 @@ export function openServicePickerModal({
             return;
         }
 
-        const total = state.added.reduce((s, a) => s + Number(a.service?.price || 0), 0);
+        const total = state.added.reduce((s, a) => s + itemPrice(a), 0);
         const n = state.added.length;
 
         // Header bar
@@ -749,7 +749,7 @@ export function openServicePickerModal({
             },
                 h('div', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600, color: 'var(--ink-900)' }, title: a.service?.name }, a.service?.name || '—'),
                 doctorLine,
-                h('div', { class: 'num', style: { textAlign: 'right', fontWeight: 700, color: 'var(--ink-900)' } }, Number(a.service?.price || 0).toLocaleString('ru-RU')),
+                h('div', { class: 'num', style: { textAlign: 'right', fontWeight: 700, color: 'var(--ink-900)' } }, itemPrice(a).toLocaleString('ru-RU')),
                 removeBtn,
             ));
         });
@@ -892,7 +892,7 @@ export function openServicePickerModal({
             // No current selection, but the registrar already staged services
             // via "Add". Done is enabled so they can commit and close; Add
             // stays disabled (nothing to add).
-            const _tot = state.added.reduce((s, a) => s + Number(a.service?.price || 0), 0);
+            const _tot = state.added.reduce((s, a) => s + itemPrice(a), 0);
             summary.textContent = trf('В списке: {n} усл. на {sum} — нажмите «{label}»', { n: state.added.length, sum: formatMoney(_tot), label: tr(confirmLabel) });
             confirmBtn.removeAttribute('disabled');
             addAnotherBtn.setAttribute('disabled', '');
@@ -1358,7 +1358,14 @@ export function openServicePickerModal({
 
     // Sum of staged services in the cart.
     function calcCartTotal() {
-        return state.added.reduce((s, a) => s + Number(a.service?.price || 0), 0);
+        return state.added.reduce((s, a) => s + itemPrice(a), 0);
+    }
+    // RPC_PORT_V1 (ревью I2) — цена строки сметы та же, что выставит касса
+    // (pricing.js lineUnitPrice): цена визита по счёту, иначе своя цена врача,
+    // иначе каталог. Раньше смета брала каталог, а касса — цену врача:
+    // назвали 900 000, выставили 1 100 000.
+    function itemPrice(a) {
+        return pickerLinePrice(a, (state.providers || []).concat(state.doctors || []));
     }
 
     // The right-panel action bar under the cart. Two states:
@@ -1641,7 +1648,7 @@ export function openServicePickerModal({
         refs.attachedPatient = p;
         closeAttach();
         renderCalcBar();
-        if (catListEl) { wiz.depositBalance = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); }   // CATALOG_WIZARD_V4
+        if (catListEl) { wiz.depositBalance = null; wiz.categoryPct = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); }   // CATALOG_WIZARD_V4
         refreshTierQuotes();   // VISIT_TIER_PRICING_V1 — the patient decides the tier
         const nm = (p.lastName || p.fullName || '').toString().trim();
         toast(nm ? trf('Пациент привязан: {name}', { name: nm }) : tr('Пациент привязан'));
@@ -1858,7 +1865,7 @@ export function openServicePickerModal({
     function localDayOf(iso) {
         if (!iso) return '';
         const s = String(iso);
-        if (/^d{4}-d{2}-d{2}$/.test(s)) return s;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
         const d = new Date(s);
         return Number.isNaN(d.getTime()) ? s.slice(0, 10) : localYmd(d);
     }
@@ -2069,7 +2076,7 @@ export function openServicePickerModal({
     function catRow(s) {
         const item = state.added.find(x => x.service.id === s.id);
         const perf = lockedDoctor ? [] : svcPerformers(s);
-        const price = item ? Number(item.service.price || 0) : svcPrice(s, lockedDoctor ? lockedDoctor.id : null);
+        const price = item ? itemPrice(item) : svcPrice(s, lockedDoctor ? lockedDoctor.id : null);
         let priceLabel = formatMoney(price);
         if (s.__consult && !s.__consultDoctorId && !lockedDoctor && !item) {   // CONSULT_PRICE_RANGE_V1 — aggregate only; per-doctor rows show the doctor's own price
             const rng = consultPriceRange(s.__ct || s);
@@ -2203,7 +2210,7 @@ export function openServicePickerModal({
                     h('div', { style: { fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, nm),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [p.mrn, p.phone].filter(Boolean).join(' · ') || '—')),
                 patient ? null : h('button', { class: 'x', type: 'button', title: 'Отвязать пациента',
-                    onclick: () => { refs.attachedPatient = null; forgetCrmPrefill(); resetQuotes(state.added); wiz.depositBalance = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); } }, '×')));
+                    onclick: () => { refs.attachedPatient = null; forgetCrmPrefill(); resetQuotes(state.added); wiz.depositBalance = null; wiz.categoryPct = null; wiz._prefilled = false; wiz.applied = []; wiz.payment.discountPct = null; wiz.payment.payerId = null; wiz.payment.policyId = null; wiz.payment.policyNumber = ''; paintCatalog(); } }, '×')));
         } else if (!attachMode) {
             // PICKER_CATALOG_EVERYWHERE_V1 — привязка пациента есть только у
             // мастера записи. В режиме привязки пациент либо уже известен (визит),
@@ -2243,7 +2250,7 @@ export function openServicePickerModal({
                             ? trf('Прошлый визит по этой услуге — {n} дн. назад. Цена первого визита: {price}', { n: a.tier.days_since, price: formatMoney(a.tier.base_price) })
                             : '' }, tierLabel(a.tier.tier)) : null,
                         tierApplies(a.tier) ? h('s', { class: 'num muted', style: { fontSize: '12.5px' } }, formatMoney(Number(a.tier.base_price || 0))) : null,
-                        h('span', { class: 'num', style: { fontWeight: 700 } }, formatMoney(Number(a.service.price || 0))),
+                        h('span', { class: 'num', style: { fontWeight: 700 } }, formatMoney(itemPrice(a))),
                         itemComplete(a) ? h('button', { type: 'button', title: 'Изменить врача и время',
                             style: { border: '0', background: 'none', cursor: 'pointer', font: 'inherit', fontSize: '12.5px', color: 'var(--primary-700, #115d5a)', textDecoration: 'underline', padding: '0', flex: 'none' },
                             onclick: () => { a.__editSlot = true; cat2.q = a.service.name; cat2.group = ''; cat2.win = CAT_PAGE; if (catSearchEl) catSearchEl.value = a.service.name; paintCatalog(); } }, 'изменить') : null,
@@ -2274,6 +2281,8 @@ export function openServicePickerModal({
                 const line = (lbl, v) => h('div', { style: { display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '12.5px', color: 'var(--ink-500, #55636d)' } },
                     h('span', null, lbl), h('span', { class: 'num' }, '−' + formatMoney(v)));
                 if (wt.full - wt.afterDisc > 0) totBox.appendChild(line(trf('Скидка {n}%', { n: wizDiscountPct() }), wt.full - wt.afterDisc));
+                if (wt.packageOff > 0) totBox.appendChild(line('Скидка пакета', wt.packageOff));   // RPC_PORT_V1
+                if (wt.categoryOff > 0) totBox.appendChild(line('Скидка группы пациента', wt.categoryOff));   // RPC_PORT_V1 (ревью M1)
                 if (wt.promoOff > 0) totBox.appendChild(line('Промокод', wt.promoOff));
                 if (wt.cards > 0) totBox.appendChild(line('Карты/сертификаты', wt.cards));
                 if (wt.bal > 0) totBox.appendChild(line('Баланс', wt.bal));
@@ -2416,11 +2425,10 @@ export function openServicePickerModal({
                 const paintRailApplied = () => {
                     clear(appliedBox);
                     for (const d of (wiz.applied || [])) {
-                        const lbl = d.kind === 'promo_code'
-                            ? (d.discount_type === 'amount' ? '−' + formatMoney(d.amount) + ' ' + tr('сум') : `−${Number(d.percent || 0)}%`)
-                            : formatMoney(d.remaining ?? d.amount ?? 0) + ' ' + tr('сум');
+                        // RPC_PORT_V1 — подпись той же функцией, что в мастере записи.
+                        const lbl = discountOptionParts(d, (n) => formatMoney(n) + ' ' + tr('сум')).value;
                         appliedBox.appendChild(h('span', { class: 'tag tag-ok', style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12.5px' } },
-                            tr(KIND_RU3[d.kind] || d.kind) + ' ' + d.code + ' · ' + lbl,
+                            tr(KIND_RU3[d.kind] || d.kind) + ' ' + (d.code || d.name) + (lbl ? ' · ' + lbl : ''),
                             h('button', { type: 'button', style: { background: 'none', border: '0', cursor: 'pointer', color: 'inherit', fontWeight: 700 },
                                 onclick: (e) => { e.stopPropagation(); wiz.applied = wiz.applied.filter(x => x !== d); paintRailApplied(); refresh(); } }, '×')));
                     }
@@ -2434,17 +2442,11 @@ export function openServicePickerModal({
                 box.appendChild(h('div', { class: 'row', style: { gap: '6px', marginTop: '8px' } }, codeIn, applyBtn));
                 box.appendChild(appliedBox);
                 paintRailApplied();
-                const balAvail = Number(wiz.depositBalance || 0);
-                if (balAvail > 0) {
-                    const balBtn = h('button', { class: 'btn btn-sm ' + (pm.useBal ? 'btn-primary' : 'btn-outline'), type: 'button',
-                        onclick: () => { pm.useBal = !pm.useBal;
-                            balBtn.className = 'btn btn-sm ' + (pm.useBal ? 'btn-primary' : 'btn-outline');
-                            balBtn.textContent = pm.useBal ? tr('Используется') : tr('Использовать');
-                            refresh(); } },
-                        pm.useBal ? 'Используется' : 'Использовать');
-                    box.appendChild(h('div', { class: 'row', style: { justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginTop: '8px' } },
-                        h('span', { style: { fontSize: '12.5px' } }, 'Баланс: ', h('b', { class: 'num' }, formatMoney(balAvail))), balBtn));
-                }
+                // RPC_PORT_V1 — кнопки «Баланс: Использовать» больше нет. Списание
+                // писало patient_deposits и payments прямо из браузера, а платежи
+                // пишет только сервер — списание не проходило никогда, и счёт
+                // оставался без него. Серверной двери «оплатить счёт депозитом»
+                // пока нет ни у мастера, ни у кассы.
             }
         }
         fill();
@@ -2512,33 +2514,56 @@ export function openServicePickerModal({
     function wizDiscounted(n) {
         return Math.round(Number(n || 0) * (1 - wizDiscountPct() / 100));
     }
+    // RPC_PORT_V1 (ревью M2) — смета считает ТЕМ ЖЕ pickerDiscount и по ТЕМ ЖЕ
+    // строкам, что уходят в счёт (billLineOf ниже): строки пациента; строка
+    // пакета со скидкой, действующего в её день, несёт свою скидку, а
+    // лояльность и выбранная скидка ложатся только на остальные.
+    // Ревью M2 — день визита, по которому и смета, и запись строки (wizSave)
+    // проверяют срок пакета: самая ранняя строка с врачом и временем, иначе
+    // время окна, иначе сегодня 09:00 — ровно так визит и заводится.
+    function cartVisitDateIso() {
+        const timed = state.added.filter(a => a.doctor && a.startISO)
+            .sort((a, b) => String(a.startISO).localeCompare(String(b.startISO)));
+        const head = timed[0] || state.added[0];
+        const fallback = new Date(); fallback.setHours(9, 0, 0, 0);
+        return (head && head.startISO) || scheduledISO || fallback.toISOString();
+    }
+    function previewBillLines() {
+        const out = [];
+        const day = localDayOf(cartVisitDateIso());
+        state.added.forEach((a, i) => {
+            if (covOf(i) !== 'patient') return;
+            const isConsult = !!(a.service && a.service.__consult);
+            const pkgOn = !isConsult && !!(a.package && Number(a.package.pct) > 0 && packageValidOn(a.package, day));
+            out.push({
+                service_id: isConsult ? null : Number(a.service && a.service.id),
+                price: itemPrice(a),
+                packaged: pkgOn, packagePct: pkgOn ? Number(a.package.pct) : 0,
+            });
+        });
+        return out;
+    }
     function wizTotals() {
         const full = calcCartTotal();
-        const isPatient = wiz.payment.mode === 'patient';
-        const afterDisc = isPatient ? state.added.reduce((s, a) => s + wizDiscounted(a.service?.price), 0) : full;
-        // CATALOG_WIZARD_V3 — application order: loyalty % -> promo -> gift/cert cards -> balance.
-        const promoOff = isPatient ? wizPromoOff(afterDisc) : 0;
-        const payable = Math.max(0, afterDisc - promoOff);
-        const cards = isPatient ? Math.min(wizCardsAvail(), payable) : 0;
-        const bal = (isPatient && wiz.payment.useBal) ? Math.min(Number(wiz.depositBalance || 0), payable - cards) : 0;
-        return { full, afterDisc, promoOff, payable, cards, bal, due: payable - cards - bal };
+        if (wiz.payment.mode !== 'patient') {
+            return { full, afterDisc: full, promoOff: 0, packageOff: 0, payable: full, cards: 0, bal: 0, due: full };
+        }
+        const d = pickerDiscount(previewBillLines(), { pct: wizDiscountPct(), promo: wizPromo(), categoryPct: wiz.categoryPct || 0 });
+        // RPC_PORT_V1 — списания баланса при записи больше нет: у сервера нет
+        // двери, которая тратит депозит пациента на счёт (см. wizSave).
+        return { full, afterDisc: full - d.loyalty, promoOff: d.promoOff, packageOff: d.packageOff, categoryOff: d.categoryOff,
+            payable: d.payable, cards: 0, bal: 0, due: d.payable };
     }
 
     // CATALOG_WIZARD_V3 — promo / gift-card / certificate redemption.
-    const KIND_RU3 = { promo_code: 'Промокод', gift_card: 'Карта', certificate: 'Сертификат' };
-    function wizPromo() { return (wiz.applied || []).find(x => x.kind === 'promo_code') || null; }
-    function wizCards() { return (wiz.applied || []).filter(x => x.kind !== 'promo_code'); }
-    function wizCardsAvail() { return wizCards().reduce((s, c) => s + Math.max(0, Number(c.remaining ?? c.amount ?? 0)), 0); }
-    function wizPromoOff(base) {
-        const pr = wizPromo(); if (!pr) return 0;
-        // DISCOUNT_RULES_V1 — скидка «на выбранные услуги» считается только по
-        // ним; сумма сметы после лояльности раскладывается по строкам
-        // пропорционально, чтобы процент лёг на то же основание, что и итог.
-        const full = calcCartTotal();
-        const k = full > 0 ? base / full : 1;
-        const lines = state.added.map((a) => ({ service_id: Number(a.service && a.service.id), total: Number(a.service && a.service.price || 0) * k }));
-        return Math.min(base, discountValue(pr, lines));
-    }
+    // RPC_PORT_V1 — офлайн у скидки нет ни остатка, ни счётчика использований
+    // (patient_discounts, миграции 012/129): любая строка — промокод, карта или
+    // сертификат — это ОДНА скидка по правилу discount-rules.js, как в мастере
+    // записи. Облачное деление на «промокод» и «карты с балансом» отбрасывало
+    // каждую офлайн-скидку в «карты», а их списание звало несуществующие
+    // функции Postgres — скидка в счёт не попадала.
+    const KIND_RU3 = { promo: 'Промокод', promo_code: 'Промокод', gift_card: 'Карта', certificate: 'Сертификат' };
+    function wizPromo() { return (wiz.applied || [])[0] || null; }
     // Категория привязанного пациента — для скидок «только для группы».
     function wizPatientCategoryId() {
         const p = refs.attachedPatient;
@@ -2565,17 +2590,16 @@ export function openServicePickerModal({
         if (why === 'expired') { toast('Срок действия кода истёк.', 'fail'); return; }
         if (why === 'other_group') { toast('Скидка только для другой группы пациентов.', 'fail'); return; }
         if (why === 'no_matching_service') { toast('Скидка действует на другие услуги — в смете их нет.', 'fail'); return; }
-        const today = new Date().toISOString().slice(0, 10);
-        if (row.valid_from && row.valid_from > today) { toast('Код ещё не действует.', 'fail'); return; }
-        if (row.valid_to && row.valid_to < today) { toast('Срок действия кода истёк.', 'fail'); return; }
-        if (row.patient_id && (!refs.attachedPatient || refs.attachedPatient.id !== row.patient_id)) { toast('Код привязан к другому пациенту.', 'fail'); return; }
-        if (row.max_uses != null && Number(row.used_count || 0) >= Number(row.max_uses)) { toast('Лимит использований исчерпан.', 'fail'); return; }
-        if (Number(row.min_purchase || 0) > wizTotals().afterDisc) { toast(trf('Код действует при счёте от {sum}.', { sum: formatMoney(row.min_purchase) }), 'fail'); return; }
-        if (row.kind !== 'promo_code' && !(Number(row.remaining ?? row.amount ?? 0) > 0)) { toast('На карте нет средств.', 'fail'); return; }
+        // RPC_PORT_V1 (ревью M1) — здесь стояли облачные проверки: valid_to,
+        // patient_id, max_uses/used_count, min_purchase — колонок, которых у
+        // офлайн-скидки нет, — и повторная проверка valid_from по дню UTC,
+        // которая до 05:00 по Ташкенту отказывала скидке, начинающейся
+        // «сегодня». Срок, группу и услуги проверяет discountBlockReason выше —
+        // по местному дню, как мастер записи.
         if ((wiz.applied || []).some(x => x.id === row.id)) { toast('Код уже применён.', 'info'); return; }
-        if (row.kind === 'promo_code' && wizPromo()) { toast('Можно применить только один промокод.', 'fail'); return; }
+        if (wizPromo()) { toast('Можно применить только один промокод.', 'fail'); return; }   // RPC_PORT_V1 — одна скидка на счёт, как в мастере записи
         wiz.applied.push(row);
-        toast(trf('{kind} применён: {code}', { kind: tr(KIND_RU3[row.kind] || 'Код'), code: row.code }));
+        toast(trf('{kind} применён: {code}', { kind: tr(KIND_RU3[row.kind] || 'Код'), code: row.code || row.name }));
     }
 
     async function loadWizDeposit(pid) {
@@ -2602,6 +2626,18 @@ export function openServicePickerModal({
         }
         if (wiz.depositBalance === null && refs.attachedPatient) {
             wiz.depositBalance = await loadWizDeposit(refs.attachedPatient.id);
+        }
+        // RPC_PORT_V1 (ревью M1) — скидка группы пациента: касса ставит её полом
+        // (billing.js patientCategoryDiscount), значит и смета обязана её знать.
+        if (wiz.categoryPct == null && refs.attachedPatient) {
+            wiz.categoryPct = 0;
+            const cid = wizPatientCategoryId();
+            if (cid) {
+                try {
+                    const { data } = await supabase.from('patient_categories').select('id, discount_percent, active').eq('id', cid).maybeSingle();
+                    if (data && (data.active === 1 || data.active === true)) wiz.categoryPct = Math.min(100, Math.max(0, Number(data.discount_percent) || 0));
+                } catch (_) {}
+            }
         }
         if (!wiz._prefilled && refs.attachedPatient) {
             wiz._prefilled = true;
@@ -2722,7 +2758,7 @@ export function openServicePickerModal({
     function covHasPatient() { ensureCoverage(); return state.added.some((a, i) => covOf(i) === 'patient'); }
     function covSums() {
         let payer = 0, patient = 0;
-        state.added.forEach((a, i) => { const pr = Number(a.service?.price || 0); if (covOf(i) === 'patient') patient += pr; else payer += pr; });
+        state.added.forEach((a, i) => { const pr = itemPrice(a); if (covOf(i) === 'patient') patient += pr; else payer += pr; });
         return { payer, patient };
     }
 
@@ -2743,7 +2779,7 @@ export function openServicePickerModal({
             'Самооплата: все услуги оплачивает пациент. Чтобы распределить на плательщика, выберите ДМС / контракт на шаге «Оплата».'));
         const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
         state.added.forEach((a, i) => {
-            const price = Number(a.service?.price || 0);
+            const price = itemPrice(a);
             const mk = (val, label) => {
                 const on = covOf(i) === val;
                 const disabled = selfPay && val === 'payer';
@@ -2808,7 +2844,7 @@ export function openServicePickerModal({
         const tableFor = (idxs, withDisc) => {
             const tb = h('tbody');
             for (const i of idxs) {
-                const a = state.added[i]; const unit = Number(a.service?.price || 0);
+                const a = state.added[i]; const unit = itemPrice(a);
                 tb.appendChild(h('tr', null,
                     h('td', { style: { fontWeight: 500 } }, a.service?.name || '—',
                         refUniform ? null : h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 400, marginTop: '2px' } }, trf('Направление: {ref}', { ref: refLabels[i] }))),   // SVC_REFERRAL_CONFIRM_V1
@@ -2893,8 +2929,7 @@ export function openServicePickerModal({
             const timed = state.added.filter(a => a.doctor && a.startISO)
                 .sort((a, b) => String(a.startISO).localeCompare(String(b.startISO)));
             const head = timed[0] || state.added[0];
-            const fallback = new Date(); fallback.setHours(9, 0, 0, 0);
-            const visitDate = head.startISO || scheduledISO || fallback.toISOString();
+            const visitDate = cartVisitDateIso();
             const totalDur = lockedDoctor
                 ? state.added.reduce((s, a) => s + (a.durationMinutes || 30), 0)
                 : (head.durationMinutes || head.service.duration_minutes || 30);
@@ -2936,7 +2971,7 @@ export function openServicePickerModal({
 
             const vsRows = [];
             for (const a of state.added) {
-                const unitPrice = Number(a.service.price || 0);
+                const unitPrice = itemPrice(a);   // RPC_PORT_V1 (ревью I2)
                 const isConsult = !!a.service.__consult;
                 const { data: vs, error: vsErr } = await insertRow('visit_services', {
                     visit_id:     visit.id,
@@ -2983,157 +3018,60 @@ export function openServicePickerModal({
             let note = '';
             let openServicesFor = null;
             if (patientRows.length && isPatient) {
-                const subtotal = patientRows.reduce((s, r) => s + wizDiscounted(r.unitPrice), 0);
-                // CATALOG_WIZARD_V4 — revalidate applied codes against FRESH rows + the
-                // final subtotal (cart/loyalty may have changed since apply); atomically
-                // CLAIM the promo before pricing so concurrent sessions can't over-redeem.
-                let promoRow = null; const validCards = [];
+                // CATALOG_WIZARD_V4 — revalidate applied codes against FRESH rows
+                // (cart/loyalty may have changed since apply).
+                // RPC_PORT_V1 — офлайн-скидка не имеет ни счётчика, ни остатка, поэтому
+                // «захвата» (claim_promo_use / claim_patient_discount) больше нет:
+                // проверяем ту же скидку тем же правилом, что смета, и считаем её
+                // по строкам счёта (discountValue), как мастер записи.
+                let promoRow = null;
                 if (wiz.applied.length) {
-                    const today = new Date().toISOString().slice(0, 10);
                     let fresh = [];
                     try { const fr = await supabase.from('patient_discounts').select('*').in('id', wiz.applied.map(x => x.id)); fresh = fr.data || []; } catch (_) {}
                     const byId = {}; for (const r of fresh) byId[r.id] = r;
+                    const ctxNow = { today: localYmd(), categoryId: wizPatientCategoryId(), serviceIds: patientRows.map(r => Number(r.a.service && r.a.service.id)) };
                     for (const ap of wiz.applied) {
                         const r = byId[ap.id];
-                        if (!r || !r.active) { toast(trf('Код {code} больше недоступен — не применён.', { code: ap.code }), 'fail'); continue; }
-                        if (r.valid_from && r.valid_from > today) { toast(trf('Код {code} ещё не действует — не применён.', { code: ap.code }), 'fail'); continue; }
-                        if (r.valid_to && r.valid_to < today) { toast(trf('Код {code} истёк — не применён.', { code: ap.code }), 'fail'); continue; }
-                        if (r.patient_id && r.patient_id !== p.id) { toast(trf('Код {code} привязан к другому пациенту — не применён.', { code: ap.code }), 'fail'); continue; }
-                        if (Number(r.min_purchase || 0) > subtotal) { toast(trf('Код {code} требует счёт от {sum} — не применён.', { code: ap.code, sum: formatMoney(r.min_purchase) }), 'fail'); continue; }
-                        if (r.kind === 'promo_code') { if (!promoRow) promoRow = r; }
-                        else if (Number(r.remaining ?? r.amount ?? 0) > 0) validCards.push(r);
+                        if (!r || discountBlockReason(r, ctxNow)) { toast(trf('Код {code} больше недоступен — не применён.', { code: ap.code || ap.name }), 'fail'); continue; }
+                        if (!promoRow) promoRow = r;
                     }
                 }
-                let promoOff = 0;
-                if (promoRow) {
-                    promoOff = Math.min(subtotal, promoRow.discount_type === 'amount'
-                        ? Math.round(Number(promoRow.amount || 0))
-                        : Math.round(subtotal * Math.min(100, Math.max(0, Number(promoRow.percent || 0))) / 100));
-                    let claimed = false;
-                    try { const cr = await supabase.rpc('claim_promo_use', { p_id: promoRow.id }); claimed = !cr.error && !!cr.data; } catch (_) {}
-                    if (!claimed) { toast(trf('Промокод {code} исчерпан — не применён.', { code: promoRow.code }), 'fail'); promoOff = 0; promoRow = null; }
-                }
-                const payable = Math.max(0, subtotal - promoOff);
-                const { data: inv, error: invErr } = await supabase.from('invoices').insert({
-                    visit_id: visit.id, patient_id: p.id, branch_id: visit.branch_id || null, coverage_type: 'patient',   // REVENUE_BRANCH_NULL_FIX
-                    subtotal, total_amount: payable, paid_amount: 0, status: 'unpaid',
-                    created_by: currentUser()?.id || null,
-                }).select().single();
-                if (invErr) {
-                    console.warn('[wizard] invoice:', invErr.message); note = ' ' + trf('(счёт не создан: {msg})', { msg: invErr.message });
-                    if (promoRow) { try { await supabase.rpc('release_promo_use', { p_id: promoRow.id }); } catch (_) {} }
-                }
-                else {
-                    let _billLinkFail = 0;   // ROUTING_BILL_LINK_FIX_V1 — surface a failed invoice-item link
-                    for (const r of patientRows) {
-                        const price = wizDiscounted(r.unitPrice);
-                        const { data: item, error: itErr } = await supabase.from('invoice_items').insert({
-                            invoice_id:  inv.id,
-                            service_id:  r.a.service.__consult ? null : r.a.service.id,
-                            // i18n-exempt: описание строки счёта пишется В БАЗУ — хранимая запись, а не текст экрана
-                            description: (r.a.service.name || 'Услуга') + (tierApplies(r.a.tier) ? (r.a.tier.tier === 'repeat' ? ' (повторный визит)' : ' (второй визит)') : '') + (wizDiscountPct() ? ` (скидка ${wizDiscountPct()}%)` : ''),   // i18n-exempt: хранимая строка счёта
-                            quantity:    1,
-                            unit_price:  price,
-                            total:       price,
-                        }).select().single();
-                        if (itErr) { console.warn('[wizard] invoice_items:', itErr.message); _billLinkFail++; continue; }
-                        if (r.vs && r.vs.id) {
-                            const { error: _linkErr } = await supabase.from('visit_services').update({ invoice_item_id: item.id }).eq('id', r.vs.id);
-                            if (_linkErr) { console.warn('[wizard] invoice_item link:', _linkErr.message); _billLinkFail++; }
-                        }
-                    }
-                    if (_billLinkFail) toast(trf('Внимание: {n} услуг(и) не привязались к счёту — проверьте счёт в кассе перед оплатой.', { n: _billLinkFail }), 'fail');
+                // RPC_PORT_V1 (ревью C1) — СЧЁТ ВЫСТАВЛЯЕТ СЕРВЕР. Прежде здесь
+                // были прямые вставки в invoices / invoice_items / payments, которые
+                // реестр не пускает ни одной роли: «счёт не создан: not allowed»,
+                // а касса потом выставляла счёт БЕЗ скидки.
+                const billLineOf = (r) => {
+                    const isConsult = !!r.a.service.__consult;
+                    const pkgOn = !isConsult && !!(r.vs && r.vs.package_id != null && r.a.package && Number(r.a.package.pct) > 0);
+                    return {
+                        visit_service_id: r.vs && r.vs.id,
+                        service_id: isConsult ? null : Number(r.a.service.id),
+                        price: Number(r.unitPrice || 0),
+                        packaged: pkgOn, packagePct: pkgOn ? Number(r.a.package.pct) : 0,
+                    };
+                };
+                const bill = await invoicePickerLines({ visitId: visit.id, lines: patientRows.map(billLineOf), pct: wizDiscountPct(), promo: promoRow, categoryPct: wiz.categoryPct || 0 });
+                if (bill.error || !bill.data || !bill.data.invoice) {
+                    const msg = (bill.error && (bill.error.message || bill.error)) || '—';
+                    console.warn('[wizard] invoice:', msg);
+                    note = ' ' + trf('(счёт не создан: {msg})', { msg });
+                } else {
+                    const inv = bill.data.invoice;
                     note = inv.invoice_number ? ', ' + trf('счёт №{no}', { no: inv.invoice_number }) : ', ' + tr('счёт выставлен');
-                    // CATALOG_WIZARD_V4 — promo marker (cancel-restore), then non-cash
-                    // payments via ATOMIC claims (gift cards -> balance), relative undo,
-                    // ONE final invoice update; payable===0 (full promo) is paid+released.
-                    if (promoRow) {
-                        note += ' · ' + trf('промокод −{sum}', { sum: formatMoney(promoOff) });
-                        await supabase.from('payments').insert({ invoice_id: inv.id, amount: 0, method: 'other', notes: 'promo:' + promoRow.id });
-                    }
-                    let paidSoFar = 0;
-                    const undo = [];
-                    if (payable > 0) for (const card of validCards) {
-                        const avail = Math.max(0, Number(card.remaining ?? card.amount ?? 0));
-                        const alloc = Math.min(avail, payable - paidSoFar);
-                        if (alloc <= 0) continue;
-                        let newRem = null;
-                        try { const cr = await supabase.rpc('claim_patient_discount', { p_id: card.id, p_alloc: alloc }); newRem = cr.error ? null : cr.data; } catch (_) { newRem = null; }
-                        if (newRem == null) { toast(trf('Карта {code} не списана — баланс карты изменился.', { code: card.code }), 'fail'); continue; }
-                        const { data: gp, error: gErr } = await supabase.from('payments').insert({
-                            invoice_id: inv.id, amount: alloc, method: 'gift_card',
-                            cashier_id: currentUser()?.id || null, notes: 'gift:' + card.id,
-                        }).select().single();
-                        if (gErr) {
-                            try { await supabase.rpc('restore_patient_discount', { p_id: card.id, p_amount: alloc }); } catch (_) {}
-                            toast(trf('Карта {code} не списана: {msg}', { code: card.code, msg: gErr.message }), 'fail');
-                            continue;
-                        }
-                        undo.push(async () => {
-                            await supabase.from('payments').delete().eq('id', gp.id);
-                            try { await supabase.rpc('restore_patient_discount', { p_id: card.id, p_amount: alloc }); } catch (_) {}
-                        });
-                        paidSoFar += alloc;
-                        note += ' · ' + tr(KIND_RU3[card.kind] || 'карта') + ' −' + formatMoney(alloc);
-                    }
-                    let balToSpend = 0;
-                    if (payable > 0 && wiz.payment.useBal && paidSoFar < payable) {
-                        const freshBal = await loadWizDeposit(p.id);
-                        balToSpend = Math.max(0, Math.min(freshBal, payable - paidSoFar));
-                    }
-                    if (balToSpend > 0) {
-                        const { data: spentRow, error: dErr } = await supabase.from('patient_deposits').insert({
-                            patient_id: p.id, amount: balToSpend, method: 'other', status: 'spent',
-                            notes: 'spend:' + inv.id,
-                            created_by: currentUser()?.id || null,
-                            created_by_name: currentUser()?.full_name || null,
-                        }).select().single();
-                        if (dErr) { toast(trf('Баланс НЕ списан: {msg}', { msg: dErr.message }), 'fail'); balToSpend = 0; }
-                        else {
-                            const { data: payRow, error: pyErr } = await supabase.from('payments').insert({
-                                invoice_id: inv.id, amount: balToSpend, method: 'deposit',
-                                cashier_id: currentUser()?.id || null,
-                            }).select().single();
-                            if (pyErr) {
-                                await supabase.from('patient_deposits').delete().eq('id', spentRow.id);
-                                toast(trf('Баланс НЕ списан: {msg}', { msg: pyErr.message }), 'fail');
-                                balToSpend = 0;
-                            } else {
-                                undo.push(async () => {
-                                    await supabase.from('payments').delete().eq('id', payRow.id);
-                                    await supabase.from('patient_deposits').delete().eq('id', spentRow.id);
-                                });
-                                note += ' · ' + trf('баланс −{sum}', { sum: formatMoney(balToSpend) });
-                            }
-                        }
-                    }
-                    const paidTotal = paidSoFar + balToSpend;
-                    if (paidTotal > 0 || payable === 0) {
-                        const fullyPaid = paidTotal >= payable;
-                        const { error: updErr } = await supabase.from('invoices').update({
-                            paid_amount: paidTotal,
-                            status: fullyPaid ? 'paid' : 'partial',
-                            ...(fullyPaid ? { paid_at: new Date().toISOString() } : {}),
-                        }).eq('id', inv.id);
-                        if (updErr) {
-                            for (const u of undo.reverse()) { try { await u(); } catch (_) {} }
-                            toast(trf('Оплаты НЕ применены ({msg}) — оплата полностью в кассе.', { msg: updErr.message }), 'fail');
-                            note = inv.invoice_number ? ', ' + trf('счёт №{no}', { no: inv.invoice_number }) : ', ' + tr('счёт выставлен');
-                        } else if (fullyPaid) {
-                            const ids = patientRows.map(r => r.vs && r.vs.id).filter(Boolean);
-                            if (ids.length) await supabase.from('visit_services').update({ status: 'queued' }).in('id', ids);
-                            if (payable === 0) note += ' · полностью покрыт промокодом';
-                        }
-                    }
+                    if (bill.promoOff > 0) note += ' · ' + trf('промокод −{sum}', { sum: formatMoney(bill.promoOff) });
+                    const invTotal = Number(inv.total_amount || 0);
+                    if (invTotal === 0) note += ' · полностью покрыт промокодом';
                     // WIZ_INVOICE_PRINT_V1 — сразу открываем печатную форму счёта для
                     // пациента (тот же printableSheet/бланк, которым печатается акт).
+                    // RPC_PORT_V1 — строки бланка — ответ сервера, то есть ровно то,
+                    // что выставлено.
                     try {
-                        const invItems = patientRows.map((r, i) => ({
-                            name: r.a.service?.name || 'Услуга', qty: 1, price: wizDiscounted(r.unitPrice), _alt: i % 2 === 1,
+                        const invItems = (bill.data.items || []).map((it, i) => ({
+                            name: it.description || 'Услуга', qty: Number(it.quantity || 1), price: Number(it.unit_price || 0), _alt: i % 2 === 1,
                         }));
                         // QUEUE_TICKET_V1 — allocate the queue number for every service
                         // just registered, ordered by registration time. Numbering happens
-                        // in Postgres (issue_queue_numbers) so two registrars printing at
+                        // on the server (issue_queue_numbers) so two registrars printing at
                         // the same instant cannot be handed the same number. One ticket per
                         // visit_service, so reprinting this invoice reuses the same numbers.
                         // QUEUE_ONE_PER_VISIT_V1 — services heading to the same destination
@@ -3146,15 +3084,10 @@ export function openServicePickerModal({
                             if (qIds.length) {
                                 const { data: tickets, error: qErr } = await supabase.rpc('issue_queue_numbers', { p_ids: qIds });
                                 if (qErr) {
-                                    console.warn('[wizard] queue numbers:', qErr.message || qErr,
-                                        '— apply supabase/migrations/122_service_queue_tickets.sql');
+                                    console.warn('[wizard] queue numbers:', qErr.message || qErr);
                                 } else {
                                     const byVs = new Map((tickets || []).map(t => [t.visit_service_id, t]));
                                     // QUEUE_TICKET_V3 — ONE entry per DESTINATION, not per service.
-                                    // Four analyses share the lab's number because the patient walks
-                                    // to the draw window once; two doctors are two queues, so two
-                                    // numbers. No letter prefix — the destination line above the
-                                    // number already names the queue.
                                     const byQueue = new Map();
                                     for (const r of patientRows) {
                                         const t = byVs.get(r.vs && r.vs.id);
@@ -3174,12 +3107,14 @@ export function openServicePickerModal({
                             }
                         } catch (e) { console.warn('[wizard] queue numbers:', e && e.message); }
                         const patName = (p.fullName || [p.lastName, p.firstName].filter(Boolean).join(' ') || '—').trim();
-                        const paidNow = Math.min(paidSoFar + balToSpend, payable);
-                        const invStatus = payable === 0 || paidNow >= payable ? 'PAID' : (paidNow > 0 ? 'PARTIAL' : 'UNPAID');
+                        const paidNow = Number(inv.paid_amount || 0);
+                        const invStatus = invTotal === 0 || paidNow >= invTotal ? 'PAID' : (paidNow > 0 ? 'PARTIAL' : 'UNPAID');
+                        const invNo = inv.invoice_number || String(inv.id);
+                        const pkgOff = Math.max(0, Number(inv.discount_amount || 0) - Number(bill.data.rest_discount || 0));
                         /* i18n-exempt-start: печатный счёт (бланк) — печатные документы намеренно русские */
-                        printableSheet({ type: 'invoice', idLine: inv.invoice_number || inv.id.slice(0, 8), data: {
+                        printableSheet({ type: 'invoice', idLine: invNo, data: {
                             title: 'Амбулаторные услуги',
-                            docNo: inv.invoice_number || inv.id.slice(0, 8),
+                            docNo: invNo,
                             issueDate: 'Дата ' + new Date().toLocaleDateString('ru-RU'),
                             status: invStatus,
                             patient: [
@@ -3190,12 +3125,13 @@ export function openServicePickerModal({
                             billing: [
                                 ['Дата', new Date().toLocaleDateString('ru-RU')],
                                 ['Оплата', 'Самооплата — касса'],
-                                ...(wizDiscountPct() ? [['Скидка', wizDiscountPct() + '%']] : []),
-                                ...(promoOff > 0 ? [['Промокод', '−' + formatMoney(promoOff)]] : []),
+                                ...(Number(bill.data.rest_discount || 0) > 0 ? [['Скидка', (wizDiscountPct() ? wizDiscountPct() + '% · ' : '') + '−' + formatMoney(Number(bill.data.rest_discount))]] : []),
+                                ...(pkgOff > 0 ? [['Скидка пакета', '−' + formatMoney(pkgOff)]] : []),
+                                ...(promoRow ? [['Промокод', promoRow.name || '']] : []),
                             ],
                             items: invItems,
                             queue: queueBlock,   // QUEUE_TICKET_V1
-                            subtotal, total: payable, paid: paidNow,
+                            subtotal: Number(inv.subtotal || 0), total: invTotal, paid: paidNow,
                         } });
                     } catch (e) { console.warn('[wizard] invoice print:', e); }
                 }
@@ -3228,7 +3164,7 @@ export function openServicePickerModal({
                         name: r.a.service?.name || 'Услуга', qty: 1, price: Number(r.unitPrice || 0), _alt: i % 2 === 1,
                     }));
                     const actTotal = actItems.reduce((sx, it) => sx + it.price, 0);
-                    const actNo = visit.visit_number || visit.id.slice(0, 8);
+                    const actNo = visit.visit_number || String(visit.id);   // RPC_PORT_V1 — id офлайн целый: .slice() ронял печать акта
                     /* i18n-exempt-end */
                     /* i18n-exempt-start: печатный акт оказанных услуг — печатный документ */
                     printableSheet({ type: 'act', idLine: actNo, data: {
@@ -3549,4 +3485,105 @@ async function safeSelect(table, q = b => b) {
         if (error) { console.warn('[service-picker]', table, error.message); return null; }
         return data;
     } catch (e) { console.warn('[service-picker]', table, e.message); return null; }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RPC_PORT_V1 (ревью C1/M2) — СЧЁТ КАЛЬКУЛЯТОРА ВЫСТАВЛЯЕТ СЕРВЕР.
+//
+// Калькулятор писал invoices / invoice_items / payments напрямую через /api/db,
+// а реестр не даёт этим таблицам записи с клиента ни одной роли: после каждой
+// записи — «счёт не создан: not allowed». Касса выставляла счёт уже сама, БЕЗ
+// скидки, и пациенту, которому назвали 900 000, выставляли 1 000 000.
+//
+// Теперь счёт — один вызов create_invoice_for_visit (как в мастере визита,
+// visit-wizard.js), и скидка в нём считается ТЕМ ЖЕ правилом, что смета:
+//   • строка пакета со скидкой несёт свою скидку — её считает сервер (бо́льшую
+//     из пакета и группы пациента), клиент её не присылает;
+//   • лояльность (%) и выбранная скидка (discountValue) — только по строкам без
+//     пакета; скидка — после лояльности, чтобы две не легли на один сум;
+//   • сервер зажимает присланное суммой строк без пакета и поднимает до
+//     скидки группы пациента, если та больше.
+// Смета (wizTotals) и счёт зовут одну pickerDiscount() по одному набору строк —
+// показанное и выставленное не могут разойтись (ревью M2).
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * @param {Array<{service_id:number|null, price:number, packaged?:boolean, packagePct?:number}>} lines
+ *        строки, за которые платит пациент; packaged — строка пакета со скидкой,
+ *        действующего в день визита
+ * @param {{pct?:number, promo?:object|null}} opts  лояльность в % и выбранная скидка
+ */
+export function pickerDiscount(lines, { pct = 0, promo = null, categoryPct = 0 } = {}) {
+    const all = Array.isArray(lines) ? lines : [];
+    const money = (l) => Math.max(0, Number(l && l.price) || 0);
+    const r2 = (n) => Math.round(n * 100) / 100;   // как round2 в billing.js
+    const pc = (n) => Math.min(100, Math.max(0, Number(n) || 0));
+    const cat = pc(categoryPct);
+    const rest = all.filter((l) => !l.packaged);
+    const subtotal = all.reduce((s, l) => s + money(l), 0);
+    const restSubtotal = rest.reduce((s, l) => s + money(l), 0);
+    const loyalty = Math.round(restSubtotal * pc(pct) / 100);
+    const k = restSubtotal > 0 ? Math.max(0, 1 - loyalty / restSubtotal) : 1;
+    const promoOff = promo
+        ? Math.round(discountValue(promo, rest.map((l) => ({ service_id: l.service_id, total: money(l) * k }))))
+        : 0;
+    // `discount` — то, что уходит в счёт (discount_amount); сервер зажимает его
+    // суммой строк без пакета и поднимает до скидки группы пациента.
+    const discount = Math.min(restSubtotal, loyalty + promoOff);
+    const restOff = r2(Math.min(Math.max(discount, r2(restSubtotal * cat / 100)), restSubtotal));
+    // Строка пакета: бо́льшая из скидки пакета и группы — не обе (billing.js).
+    const packageOff = r2(all.filter((l) => l.packaged)
+        .reduce((s, l) => s + r2(money(l) * Math.max(pc(l.packagePct), cat) / 100), 0));
+    return {
+        subtotal, restSubtotal, loyalty, promoOff: Math.max(0, discount - loyalty), discount, packageOff,
+        categoryOff: r2(restOff - discount), restOff,
+        payable: r2(Math.max(0, subtotal - packageOff - restOff)),
+    };
+}
+
+/**
+ * RPC_PORT_V1 (ревью I2) — цена строки сметы, та же, что выставит касса
+ * (server/services/domain/pricing.js lineUnitPrice):
+ *   • консультация — её цена уже врачебная (consultPriceFor), строка счёта —
+ *     без услуги, по сохранённой цене;
+ *   • второй / повторный визит по котировке (service_price_quote) — цена визита
+ *     по счёту, над ценой врача и каталогом (tierUnitPrice);
+ *   • иначе — своя цена исполнителя (users.service_rates[].price; null — своей
+ *     нет, 0 — настоящая бесплатная), иначе каталог (до котировки).
+ * `people` — сотрудники, среди которых ищется исполнитель, если в строке у него
+ * нет списка ставок (врач кабинета).
+ */
+export function pickerLinePrice(a, people = []) {
+    const s = (a && a.service) || {};
+    if (s.__consult) return Number(s.price || 0);
+    const t = a && a.tier;
+    if (t && (t.tier === 'secondary' || t.tier === 'repeat')) return Number(t.price || 0);
+    const cat = s.__base_price != null ? Number(s.__base_price) : Number(s.price || 0);
+    const doc = a && a.doctor;
+    if (!doc || doc.id == null) return cat;
+    const rates = Array.isArray(doc.service_rates) ? doc.service_rates
+        : (((people || []).find((u) => u && String(u.id) === String(doc.id)) || {}).service_rates || []);
+    const rate = (Array.isArray(rates) ? rates : []).find((r) => r && String(r.service_id) === String(s.id));
+    if (!rate || rate.price == null || rate.price === '') return cat;
+    const own = Number(rate.price);
+    return Number.isFinite(own) && own >= 0 ? own : cat;
+}
+
+/**
+ * Шаг счёта калькулятора: create_invoice_for_visit по строкам пациента.
+ * lines — как у pickerDiscount, плюс visit_service_id. Возвращает расчёт
+ * сметы и ответ сервера ({ data: { invoice, items, rest_discount }, error }).
+ */
+export async function invoicePickerLines({ visitId, lines, pct = 0, promo = null, categoryPct = 0 }) {
+    const d = pickerDiscount(lines, { pct, promo, categoryPct });
+    const ids = (lines || []).map((l) => Number(l.visit_service_id)).filter((n) => Number.isInteger(n) && n > 0);
+    let data = null, error = null;
+    try {
+        const res = await supabase.rpc('create_invoice_for_visit',
+            { visit_id: visitId, visit_service_ids: ids, discount_amount: d.discount });
+        data = res.data || null;
+        error = res.error || null;
+    } catch (e) { error = e; }
+    return { ...d, data, error };
 }

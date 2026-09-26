@@ -87,7 +87,7 @@ export async function creditCashbackOnPaid(invoiceId) {
             amount:           cashback,
             method:           'other',
             status:           'received',
-            notes:            `Cashback ${rule.cashback_percent}% on ${inv.invoice_number || inv.id.slice(0, 8)} · ${marker}`,
+            notes:            `Cashback ${rule.cashback_percent}% on ${inv.invoice_number || String(inv.id)} · ${marker}`,
             created_by:       u?.id || null,
             created_by_name:  'Cashback',
             received_by:      u?.id || null,

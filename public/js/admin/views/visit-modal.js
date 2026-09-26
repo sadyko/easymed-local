@@ -13,12 +13,12 @@ import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';
 import { tr } from '../i18n.js';   // I18N_COVERAGE_V1 — sink-обёртки: textContent/confirm не проходят через h()
 import { currentUser } from '../data.js';
 import { h, Icon, Tag, StatusTag, statusLabel, toast, clear } from '../ui.js';
-import { canDelete } from '../permissions.js';
+import { canDelete, actorRoleCodes } from '../permissions.js';
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // DISPENSE_ITEM_V1
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 import { creditCashbackOnPaid } from './cashback.js?v=cb1';
-import { openCancelInvoiceDialog, logInvoiceAction as _logInvoiceAction } from './invoice-actions.js?v=ia3';
+import { openCancelInvoiceDialog, logInvoiceAction as _logInvoiceAction, canMoveInvoiceMoney, invoiceMoneyErrorText } from './invoice-actions.js?v=ia3';
 import { logPatientActivity } from './activity-log.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // must match every other importer (one module instance)
 // VISITS_ONE_DOOR_V1 — окно визита правило двойной записи не знало вовсе:
@@ -1100,7 +1100,9 @@ async function addServiceFromPicker(state, pick, onReload) {
     onReload();
 }
 
-async function generateInvoiceFromSelection(state, selectedIds, onReload) {
+// RPC_PORT_V1 — экспорт ради поведенческого теста (picker-invoice.test.mjs):
+// денежные шаги окна визита гоняются через настоящий реестр RPC.
+export async function generateInvoiceFromSelection(state, selectedIds, onReload) {
     if (selectedIds.size === 0) { toast('Tick at least one service.', 'fail'); return; }
     // PAYER_COVERED_LOCK_V2 — never invoice payer-covered services; they belong to the insurer's Акт,
     // not the patient's cashier invoice. Trust the explicit payer_covered flag (set by the wizard's
@@ -1109,78 +1111,32 @@ async function generateInvoiceFromSelection(state, selectedIds, onReload) {
         && !r.payer_covered);
     if (lineItems.length === 0) { toast('All selected services are already invoiced.', 'fail'); return; }
 
-    // Defensive price calculation — try unit_price first, then catalog price,
-    // then 0. Mirrors how the row total is rendered so the on-screen number
-    // and the persisted subtotal always agree.
-    const priceOf = (r) => Number(r.price ?? r.unit_price ?? r.services?.price ?? 0);
-    const qtyOf   = (r) => Number(r.qty   ?? r.quantity   ?? 1);
-
-    const subtotal = lineItems.reduce((s, r) => s + priceOf(r) * qtyOf(r), 0);
-
     if (!state.visit?.id) {
         toast('No visit attached — cannot create an invoice.', 'fail');
         return;
     }
-    if (!state.visit?.patient_id && !state.patient?.id) {
-        toast('Visit has no patient linked — cannot create an invoice.', 'fail');
-        console.error('[generateInvoice] missing patient_id on visit:', state.visit);
+
+    // RPC_PORT_V1 (ревью C1) — СЧЁТ ВЫСТАВЛЯЕТ СЕРВЕР. Здесь были прямые
+    // вставки в invoices и invoice_items, которые реестр не пускает ни одной
+    // роли («Invoice create failed: not allowed»). create_invoice_for_visit сам
+    // берёт цены из каталога (цена врача, повторный визит), даёт скидку пакета и
+    // группы пациента, привязывает строки визита и нумерует счёт.
+    const { data: res, error: invErr } = await supabase.rpc('create_invoice_for_visit', {
+        visit_id: state.visit.id,
+        visit_service_ids: lineItems.map(r => r.id),
+    });
+    if (invErr || !res || !res.invoice) {
+        console.error('[generateInvoice] create_invoice_for_visit failed:', invErr);
+        toast('Invoice create failed: ' + ((invErr && invErr.message) || '—'), 'fail');
         return;
     }
-
-    const insertPayload = {
-        visit_id:        state.visit.id,
-        patient_id:      state.visit.patient_id || state.patient.id,
-        coverage_type:   state.visit.coverage_type || 'patient',
-        // BOOK_WIZARD_V1 — stamp the visit's payer onto the invoice (was never
-        // written, leaving the insurance tab's per-policy «used» permanently 0).
-        payer_id:        state.visit.payer_id || null,
-        payer_policy_id: state.visit.payer_policy_id || null,
-        subtotal,
-        total_amount:    subtotal,
-        paid_amount:     0,
-        status:          'unpaid',
-        created_by:      currentUser()?.id || null,
-    };
-    console.debug('[generateInvoice] inserting:', insertPayload, 'from', lineItems.length, 'line items');
-
-    // 1. Create the invoice row (status defaults to 'unpaid' per migration 004).
-    const { data: inv, error: invErr } = await supabase.from('invoices').insert(insertPayload).select().single();
-    if (invErr) {
-        console.error('[generateInvoice] insert failed:', invErr);
-        toast('Invoice create failed: ' + invErr.message, 'fail');
-        return;
-    }
-    console.debug('[generateInvoice] created invoice', inv.invoice_number || inv.id, 'subtotal=', subtotal);
-
-    // 2. Insert invoice_items + link them back into visit_services.invoice_item_id.
-    let itemsCreated = 0;
-    for (const r of lineItems) {
-        const unit = priceOf(r);
-        const qty  = qtyOf(r);
-        const total = unit * qty;
-        // DISPENSE_ITEM_V1: an item line (clinic_item_id set, service_id null)
-        // invoices with item_id + the product name, mirroring how service lines
-        // set service_id + the service name. So item charges stay traceable.
-        const isItem = !!r.clinic_item_id;
-        const { data: item, error: itemErr } = await supabase.from('invoice_items').insert({
-            invoice_id:  inv.id,
-            service_id:  isItem ? null : r.service_id,
-            item_id:     isItem ? r.clinic_item_id : null,
-            description: r.__service_name || (isItem ? 'Item' : 'Service'),
-            quantity:    qty,
-            unit_price:  unit,
-            total,
-        }).select().single();
-        if (itemErr) { console.warn('[invoice_items]', itemErr); continue; }
-        await supabase.from('visit_services').update({ invoice_item_id: item.id }).eq('id', r.id);
-        itemsCreated++;
-    }
-    console.debug('[generateInvoice]', itemsCreated, 'of', lineItems.length, 'line items linked');
+    const inv = res.invoice;
+    const subtotal = Number(inv.subtotal || 0);
     await logInvoiceAction(state, inv, {
         action: 'created',
         fromStatus: null,
         toStatus:   'unpaid',
-        amount:     subtotal,
+        amount:     Number(inv.total_amount || subtotal),
         notes:      `${lineItems.length} line item${lineItems.length === 1 ? '' : 's'}`,
     });
     await logPatientActivity({
@@ -1188,11 +1144,11 @@ async function generateInvoiceFromSelection(state, selectedIds, onReload) {
         visitId:     state.visit?.id,
         entityType:  'invoice',
         entityId:    inv.id,
-        entityLabel: inv.invoice_number || inv.id.slice(0, 8),
+        entityLabel: inv.invoice_number || String(inv.id),
         action:      'created',
-        summary:     `Invoice for ${subtotal.toLocaleString('ru-RU')} UZS · ${lineItems.length} service${lineItems.length === 1 ? '' : 's'}`,
+        summary:     `Invoice for ${Number(inv.total_amount || 0).toLocaleString('ru-RU')} UZS · ${lineItems.length} service${lineItems.length === 1 ? '' : 's'}`,
     });
-    toast(`Invoice ${inv.invoice_number || inv.id.slice(0, 8)} created — sent to cashier.`);
+    toast(`Invoice ${inv.invoice_number || String(inv.id)} created — sent to cashier.`);
     state._selectedForInvoice = new Set();
     // Tell the parent (calendar, patient card) to refresh so the visit
     // status / billed indicator updates immediately.
@@ -1200,7 +1156,11 @@ async function generateInvoiceFromSelection(state, selectedIds, onReload) {
     // Pop up a print-ready invoice for the patient. The DB rows above are
     // already saved — this just renders a printable copy in a new window
     // (or an inline preview if pop-ups are blocked).
-    openInvoicePrintWindow(state, inv, lineItems);
+    // RPC_PORT_V1 — бланк из ответа сервера: цены — выставленные, а не экранные.
+    openInvoicePrintWindow(state, inv, (res.items || []).map((it) => ({
+        description: it.description, quantity: it.quantity, unit_price: it.unit_price,
+        __doctor_name: (it.service_id != null && (lineItems.find((r) => r.service_id === it.service_id) || {}).__doctor_name) || '',
+    })));
     // Close the visit modal — the registrar's work here is done. The
     // invoice now lives on the Cashier screen; keeping the modal open
     // forced the user to manually close it every time and obscured the
@@ -1242,7 +1202,7 @@ function openInvoicePrintWindow(state, inv, lineItems) {
     const subtotal = Number(inv.subtotal      || 0) || Number(inv.total_amount || 0);
     const total    = Number(inv.total_amount  || 0);
     const paid     = Number(inv.paid_amount   || 0);
-    const invoiceNo = inv.invoice_number || (inv.id ? inv.id.slice(0, 8) : '');
+    const invoiceNo = inv.invoice_number || (inv.id != null ? String(inv.id) : '');
     const statusLabel = (inv.status || 'unpaid').toUpperCase();
 
     // Hand structured `data` (NOT raw bodyHtml) so the print routes through
@@ -1354,13 +1314,16 @@ function invoicePane(state, onReload) {
     const total = Number(inv.total_amount || 0);
     const paid  = Number(inv.paid_amount  || 0);
     const owed  = Math.max(total - paid, 0);
-    const cancellable = !['void', 'refunded'].includes(inv.status);
+    // RPC_PORT_V1 (ревью M3) — оплату, долг, отмену и возврат сервер
+    // принимает только от кассы и администратора; другим ролям этих кнопок нет.
+    const moneyHands = canMoveInvoiceMoney(actorRoleCodes());
+    const cancellable = moneyHands && !['void', 'refunded'].includes(inv.status);
 
     return h('div', null,
         // Summary card
         h('div', { class: 'card', style: { padding: '16px 18px', marginBottom: '16px' } },
             h('div', { class: 'row', style: { gap: '24px', flexWrap: 'wrap' } },
-                kv('Invoice #', h('span', { class: 'cell-mono cell-strong', style: { fontSize: '13.5px' } }, inv.invoice_number || inv.id.slice(0, 8))),
+                kv('Invoice #', h('span', { class: 'cell-mono cell-strong', style: { fontSize: '13.5px' } }, inv.invoice_number || String(inv.id))),
                 kv('Total', h('span', { class: 'num cell-strong', style: { fontSize: '15px' } }, total.toLocaleString('ru-RU') + ' UZS')),
                 kv('Paid',  h('span', { class: 'num', style: { fontSize: '13.5px', color: 'var(--ok-700)' } }, paid.toLocaleString('ru-RU') + ' UZS')),
                 kv('Debt',  h('span', { class: 'num cell-strong', style: { fontSize: '13.5px', color: owed > 0 ? 'var(--crit-700)' : 'var(--ink-500)' } }, owed.toLocaleString('ru-RU') + ' UZS')),
@@ -1376,7 +1339,9 @@ function invoicePane(state, onReload) {
             : inv.status === 'void' || inv.status === 'refunded'
             ? h('div', { class: 'row', style: { padding: '12px 14px', background: 'var(--ink-25)', borderRadius: '10px', color: 'var(--ink-600)' } },
                 'Invoice ', inv.status, '. ', cancelledMetaText(state))
-            : paymentControls(state, inv, onReload),
+            : moneyHands ? paymentControls(state, inv, onReload)
+            : h('div', { class: 'muted', style: { padding: '12px 14px', background: 'var(--ink-25)', borderRadius: '10px', fontSize: '12.5px' } },
+                'Деньги по счёту принимает, возвращает и списывает в долг только касса или администратор.'),
 
         h('div', { class: 'row', style: { gap: '8px', marginTop: '14px', flexWrap: 'wrap' } },
             h('button', {
@@ -1411,7 +1376,9 @@ function cancelledMetaText(state) {
 // PAYMENT_METHOD_QUICKPAY - method picker shared by the quick-pay panel + partial dialog.
 // Mirrors the Kassa methods; the chosen value is written to payments.method (was hardcoded 'cash').
 function paymentMethodSelect(pm) {
-    const METHODS = [['cash', 'Cash'], ['card', 'Card'], ['online', 'Online / acquiring'], ['insurance', 'Insurance'], ['transfer', 'Bank transfer']];
+    // RPC_PORT_V1 — ровно способы, которые принимает record_payment (billing.js
+    // PAYMENT_METHODS): 'online' и 'insurance' сервер отвергал.
+    const METHODS = [['cash', 'Cash'], ['card', 'Card'], ['acquiring', 'Online / acquiring'], ['transfer', 'Bank transfer']];
     return h('select', {
         class: 'input',
         style: { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', background: '#fff' },
@@ -1446,23 +1413,14 @@ function paymentControls(state, inv, onReload) {
 }
 
 // Full or partial payment: insert payments row, recompute paid_amount + status.
-async function takePayment(state, inv, amount, finalStatus, onReload, method = 'cash') {
+export async function takePayment(state, inv, amount, finalStatus, onReload, method = 'cash') {
     if (!amount || amount <= 0) { toast('Amount must be > 0.', 'fail'); return; }
-    const { error: payErr } = await supabase.from('payments').insert({
-        invoice_id: inv.id,
-        amount,
-        method,
-        cashier_id: (typeof window !== 'undefined' && window.easymed?.state?.user?.id) || null,   // SHIFT_CASHIER_ID_V1 — so the payment lands in the cashier's shift stats
-    });
-    if (payErr) { toast('Payment insert failed: ' + payErr.message, 'fail'); return; }
-    const newPaid = Math.min(Number(inv.paid_amount || 0) + amount, Number(inv.total_amount || 0));
-    const total   = Number(inv.total_amount || 0);
-    const status  = newPaid >= total ? 'paid' : finalStatus || (newPaid > 0 ? 'partial' : 'unpaid');
-    const update  = { paid_amount: newPaid, status };
-    if (status === 'paid') update.paid_at = new Date().toISOString();
-    const { error: updErr } = await supabase.from('invoices').update(update).eq('id', inv.id);
-    if (updErr) { toast('Invoice update failed: ' + updErr.message, 'fail'); return; }
-    await releaseServicesForInvoice(inv.id);
+    // RPC_PORT_V1 (ревью C1) — оплату проводит сервер: record_payment пишет
+    // платёж в смену кассира, пересчитывает счёт и отпускает услуги в очередь.
+    // Прямые вставки в payments и правка invoices отвергались реестром у всех.
+    const { data: payRes, error: payErr } = await supabase.rpc('record_payment', { invoice_id: inv.id, amount, method });
+    if (payErr) { toast(invoiceMoneyErrorText(payErr), 'fail'); return; }
+    const status = (payRes && payRes.invoice && payRes.invoice.status) || finalStatus || 'partial';
     await logInvoiceAction(state, inv, {
         action: status === 'paid' ? 'paid' : 'partial',
         fromStatus: inv.status,
@@ -1474,7 +1432,7 @@ async function takePayment(state, inv, amount, finalStatus, onReload, method = '
         visitId:     state.visit?.id,
         entityType:  'invoice',
         entityId:    inv.id,
-        entityLabel: inv.invoice_number || inv.id.slice(0, 8),
+        entityLabel: inv.invoice_number || String(inv.id),
         action:      status === 'paid' ? 'paid' : 'partial',
         summary:     `${status === 'paid' ? 'Paid in full' : 'Partial payment'} — ${amount.toLocaleString('ru-RU')} UZS`,
     });
@@ -1489,12 +1447,13 @@ async function takePayment(state, inv, amount, finalStatus, onReload, method = '
 // "Mark as debt" — invoice stays open at its current paid_amount; status becomes
 // 'partial' if anything's paid, else 'unpaid'. This makes the outstanding sum a
 // debt against the patient until they come back to pay.
-async function markAsDebt(state, inv, onReload) {
+export async function markAsDebt(state, inv, onReload) {
     const paid = Number(inv.paid_amount || 0);
-    const status = paid > 0 ? 'partial' : 'unpaid';
-    const { error } = await supabase.from('invoices').update({ status }).eq('id', inv.id);
-    if (error) { toast(error.message, 'fail'); return; }
-    await releaseServicesForInvoice(inv.id);
+    // RPC_PORT_V1 (ревью C1) — долг оформляет сервер (mark_invoice_debt: статус
+    // 'debt' и услуги в очередь). Прямая правка invoices отвергалась у всех.
+    const { data: debtRes, error } = await supabase.rpc('mark_invoice_debt', { invoice_id: inv.id });
+    if (error) { toast(invoiceMoneyErrorText(error), 'fail'); return; }
+    const status = (debtRes && debtRes.invoice && debtRes.invoice.status) || 'debt';
     await logInvoiceAction(state, inv, {
         action: 'debt',
         fromStatus: inv.status,
@@ -1505,7 +1464,7 @@ async function markAsDebt(state, inv, onReload) {
         visitId:     state.visit?.id,
         entityType:  'invoice',
         entityId:    inv.id,
-        entityLabel: inv.invoice_number || inv.id.slice(0, 8),
+        entityLabel: inv.invoice_number || String(inv.id),
         action:      'debt',
         summary:     `Outstanding balance left as debt (${(Number(inv.total_amount || 0) - paid).toLocaleString('ru-RU')} UZS owed)`,
     });
@@ -1513,34 +1472,8 @@ async function markAsDebt(state, inv, onReload) {
     onReload();
 }
 
-// Cashier has acknowledged the invoice (paid in full, partial, or debt).
-// Promote any still-pending services to 'queued' so they show up in the
-// service-provider's "My services" queue. Anything already moved past
-// queued is left alone.
-async function releaseServicesForInvoice(invoiceId) {
-    const { data: items, error: itemsErr } = await supabase
-        .from('invoice_items').select('id').eq('invoice_id', invoiceId);
-    if (itemsErr) { console.warn('[visit-modal] invoice_items lookup failed:', itemsErr); return; }
-    const ids = (items || []).map(i => i.id);
-    if (!ids.length) {
-        console.warn('[visit-modal] release: no invoice_items for invoice', invoiceId);
-        return;
-    }
-    // Same rule as the cashier: flip everything to 'queued' EXCEPT rows
-    // a provider has already moved past (in_progress / completed). Covers
-    // status='added', 'awaiting_payment', NULL, and re-billed cycles.
-    const { data: updated, error } = await supabase
-        .from('visit_services')
-        .update({ status: 'queued' })
-        .in('invoice_item_id', ids)
-        .not('status', 'in', '(in_progress,completed)')
-        .select('id, status, invoice_item_id');
-    if (error) {
-        console.warn('[visit-modal] visit_services release failed:', error);
-        return;
-    }
-    console.debug(`[visit-modal] released ${updated?.length || 0} visit_service rows to status=queued (invoice ${invoiceId.slice(0, 8)})`);
-}
+// RPC_PORT_V1 — releaseServicesForInvoice() удалён: услуги в очередь теперь
+// отпускает сам сервер (record_payment / mark_invoice_debt), в той же транзакции.
 
 function openPartialPaymentDialog(state, inv, onReload) {
     const owed = Number(inv.total_amount || 0) - Number(inv.paid_amount || 0);

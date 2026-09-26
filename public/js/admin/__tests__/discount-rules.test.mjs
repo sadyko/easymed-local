@@ -75,5 +75,24 @@ test('оба мастера идут через одно правило, а сп
     assert.match(vw, /wiz\.discountPct = wiz\.categoryPct/, 'скидка группы подставляется в лояльность');
     const spm = read('views/service-picker-modal.js');
     assert.match(spm, /discountBlockReason\(row, \{ today: localYmd\(\)/, 'калькулятор проверяет срок/группу/услуги тем же правилом');
-    assert.match(spm, /discountValue\(pr, lines\)/, 'калькулятор считает скидку по строкам');
+    // RPC_PORT_V1 (ревью M2) — смета и счёт калькулятора считают одной pickerDiscount.
+    assert.match(spm, /discountValue\(promo, rest\.map\(/, 'калькулятор считает скидку по строкам');
+});
+
+// RPC_PORT_V1 — калькулятор услуг (service-picker-modal.js) нёс облачную модель
+// скидок: вид 'promo_code' со счётчиком использований и «карты» с остатком,
+// которые списывались функциями Postgres claim_promo_use / claim_patient_discount
+// / restore_patient_discount / release_promo_use. Офлайн ни вида 'promo_code'
+// (CHECK в миграции 012 его не пускает), ни остатка, ни счётчика нет: скидка —
+// именованное правило, как в мастере записи. Любая офлайн-скидка шла в «карты»,
+// её списание отвечало 501 и скидка молча не применялась к счёту.
+test('калькулятор: офлайн-скидка любого вида — одна скидка по строкам, без облачных списаний', () => {
+    const spm = read('views/service-picker-modal.js');
+    const ia = read('views/invoice-actions.js');
+    for (const name of ['claim_promo_use', 'release_promo_use', 'claim_patient_discount', 'restore_patient_discount']) {
+        assert.ok(!spm.includes("rpc('" + name), 'service-picker-modal.js всё ещё зовёт ' + name);
+        assert.ok(!ia.includes("rpc('" + name), 'invoice-actions.js всё ещё зовёт ' + name);
+    }
+    assert.ok(!/x\.kind === 'promo_code'/.test(spm), "применённая скидка не должна отбираться по облачному виду 'promo_code'");
+    assert.match(spm, /invoicePickerLines\(\{ visitId: visit\.id, lines: patientRows\.map\(billLineOf\), pct: wizDiscountPct\(\), promo: promoRow, categoryPct: wiz\.categoryPct \|\| 0 \}\)/, 'сумма скидки в счёте — тем же правилом, что в смете');
 });

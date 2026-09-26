@@ -226,7 +226,7 @@ function doctorsBlock(dash, onNavigate) {
     const card = h('div', { class: 'card' });
     card.appendChild(h('div', { class: 'card-header' },
         h('h3', null, Icon('Stethoscope', { size: 16 }), ' Врачи филиала ', h('span', { class: 'h-count' }, String(dash.doctors_total))),
-        h('button', { class: 'btn btn-ghost btn-sm', onclick: () => onNavigate('settings:users') }, 'Профили врачей ', Icon('ArrowRight', { size: 14 }))));
+        h('button', { class: 'btn btn-ghost btn-sm', onclick: () => onNavigate('employees') }, 'Профили врачей ', Icon('ArrowRight', { size: 14 }))));
     if (!dash.doctors || !dash.doctors.length) {
         card.appendChild(h('div', { class: 'empty', style: { padding: '32px' } }, 'К этому филиалу не привязаны врачи.'));
         return card;
