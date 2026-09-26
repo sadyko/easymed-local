@@ -17,7 +17,7 @@ globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null)
 globalThis.document = globalThis.document || { documentElement: {}, addEventListener() {}, createElement: () => ({ style: {} }), head: { appendChild() {} }, body: { appendChild() {} }, getElementById: () => null };
 globalThis.window = globalThis.window || { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, addEventListener() {}, dispatchEvent() { return true; } };
 
-const { REPORT_DEFS, reportKinds, defaultReportOptions, optionsFor, reportArgs } = await import('../views/reports-hub.js');
+const { REPORT_DEFS, reportKinds, defaultReportOptions, optionsFor, reportArgs, selectChoices } = await import('../views/reports-hub.js');
 const { ICON_MAP } = await import('../icon-map.js');
 const { openDb } = await import('../../../../server/db/connection.js');
 const { migrate } = await import('../../../../server/db/migrate.js');
@@ -80,10 +80,39 @@ test('«По услугам»: табличная карточка с фильт
   assert.equal(group.label, 'Группа');
 });
 
-test('«По врачам»: два вида — врачи и врачи × услуги', () => {
+test('«По врачам»: три вида — врачи, врачи × услуги и детализация', () => {
   const d = def('by_doctors');
   assert.ok(d, 'нет карточки «По врачам»');
-  assert.deepEqual(reportKinds(d), ['by_doctors', 'doctor_services']);
+  assert.deepEqual(reportKinds(d), ['by_doctors', 'doctor_services', 'doctor_lines']);
+  assert.ok(ICON_MAP[d.icon]);
+});
+
+// DOCTOR_LINES_SPECIALTY_V1 — фильтр «Врач» — выпадающий список (type 'select'):
+// первый вариант «все» (пусто — аргумент не уезжает), остальные — от сервера.
+test('«По врачам»: фильтр врача — выпадающий список у «Врачей и услуг» и детализации, не у сводки', () => {
+  const d = def('by_doctors');
+  assert.deepEqual(optionsFor(d, 'by_doctors').map((o) => o.arg), []);
+  for (const kind of ['doctor_services', 'doctor_lines']) {
+    const o = optionsFor(d, kind).find((x) => x.arg === 'doctor_id');
+    assert.ok(o, kind + ': нет фильтра врача');
+    assert.equal(o.type, 'select');
+    assert.deepEqual(o.choices, [['', 'Все врачи']]);
+  }
+  assert.equal(defaultReportOptions(d).doctor_id, '');
+  assert.deepEqual(reportArgs(d, 'doctor_lines', { doctor_id: '' }), {});
+  assert.deepEqual(reportArgs(d, 'doctor_lines', { doctor_id: '7' }), { doctor_id: '7' });
+  assert.deepEqual(reportArgs(d, 'by_doctors', { doctor_id: '7' }), {});
+  const o = optionsFor(d, 'doctor_lines')[0];
+  assert.deepEqual(selectChoices(o, [['7', 'Иванов'], ['', 'дубль']]), [['', 'Все врачи'], ['7', 'Иванов']]);
+  assert.deepEqual(selectChoices(o, null), [['', 'Все врачи']]);
+  // Варианты грузит конструктор тем же RPC, что закрыт воротами отчёта.
+  assert.match(hub, /supabase\.rpc\('report_choices', \{ kind: st\.kind, arg: o\.arg \}\)/);
+});
+
+test('«По специальностям»: табличная карточка, один вид', () => {
+  const d = def('by_specialty');
+  assert.ok(d, 'нет карточки «По специальностям»');
+  assert.deepEqual(reportKinds(d), ['by_specialty']);
   assert.ok(ICON_MAP[d.icon]);
 });
 

@@ -134,11 +134,28 @@ export const REPORT_DEFS = [
         kind:  'by_doctors',
         icon:  'Patients',
         title: 'По врачам',
-        desc:  'По каждому врачу: пациенты, визиты, госпитализации, услуги, выставлено и оплачено, доля за услуги и стационарная доля (как в «Зарплатах врачей»), вознаграждение за направления и итог к выплате. Второй вид — разбивка врача по услугам.',
+        desc:  'По каждому врачу: пациенты, визиты, госпитализации, услуги, выставлено и оплачено, доля за услуги и стационарная доля (как в «Зарплатах врачей»), вознаграждение за направления и итог к выплате. Другие виды — разбивка врача по услугам и детализация: каждая оказанная услуга с датой, пациентом, суммой, оплатой и долей врача.',
         views: [
             { kind: 'by_doctors',      label: 'Врачи' },
             { kind: 'doctor_services', label: 'Врачи и услуги' },
+            // DOCTOR_LINES_SPECIALTY_V1 — строка на каждую услугу врача.
+            { kind: 'doctor_lines',    label: 'Детализация' },
         ],
+        // DOCTOR_LINES_SPECIALTY_V1 — выбор врача: выпадающий список (type
+        // 'select'). Первый вариант — «все», остальные приходят от сервера
+        // (report_choices) за воротами самого отчёта; отбор делает SQL.
+        options: [
+            { arg: 'doctor_id', label: 'Врач', type: 'select', kinds: ['doctor_services', 'doctor_lines'],
+              choices: [['', 'Все врачи']] },
+        ],
+    },
+    // DOCTOR_LINES_SPECIALTY_V1 — «По специальностям»: основная специальность
+    // исполнителя × услуга, база периода — как у выплаты врачу.
+    {
+        kind:  'by_specialty',
+        icon:  'Grid',
+        title: 'По специальностям',
+        desc:  'Какие услуги оказывает каждая специальность: количество, пациенты, сумма после скидки, оплачено и доля врачей. Специальность — основная у врача-исполнителя; услуги без врача и врачи без специальности — отдельными группами.',
     },
     {
         kind:  'owner',
@@ -218,8 +235,21 @@ export function reportVisible(rep) {
 }
 export function reportArgs(rep, kind, opts) {
     const out = {};
-    for (const o of optionsFor(rep, kind)) out[o.arg] = opts[o.arg];
+    for (const o of optionsFor(rep, kind)) {
+        // DOCTOR_LINES_SPECIALTY_V1 — у выпадающего списка пустое значение —
+        // «все»: аргумент не уезжает вовсе, как будто фильтра нет.
+        if (o.type === 'select' && (opts[o.arg] === '' || opts[o.arg] == null)) continue;
+        out[o.arg] = opts[o.arg];
+    }
     return out;
+}
+// DOCTOR_LINES_SPECIALTY_V1 — варианты выпадающего фильтра: статические
+// (первый — «все») плюс пришедшие от сервера. Пришедшее значение, совпавшее со
+// статическим, не дублируется.
+export function selectChoices(o, loaded) {
+    const head = Array.isArray(o.choices) ? o.choices : [];
+    const seen = new Set(head.map(([v]) => String(v)));
+    return [...head, ...(Array.isArray(loaded) ? loaded : []).filter(([v]) => !seen.has(String(v)))];
 }
 
 // ---------------------------------------------------------------------------
@@ -440,6 +470,8 @@ async function openReportBuilder(rep) {
         kind: reportKinds(rep)[0],          // REPORTS_V2 — выбранный вид
         opts: defaultReportOptions(rep),    // REPORTS_V2 — выбранные фильтры
         reqSeq: 0,                          // REPORTS_V2 ревью M1 — номер последнего запроса
+        loaded: {},                         // DOCTOR_LINES_SPECIALTY_V1 — варианты выпадающих фильтров с сервера
+        loading: new Set(),
     };
     [st.from, st.to] = presetRange('month');
 
@@ -765,6 +797,34 @@ async function openReportBuilder(rep) {
             display: 'flex', flexWrap: 'wrap', gap: '8px 16px', alignItems: 'center',
         },
     });
+    // DOCTOR_LINES_SPECIALTY_V1 — фильтр-выпадающий список (option type
+    // 'select'). Варианты сверх статических грузятся ОДИН раз на конструктор
+    // (report_choices, за воротами отчёта), пока их нет — выбор только «все».
+    // Смена значения сбрасывает результат, как и смена кнопки-переключателя.
+    function selectOption(o) {
+        const sel = h('select', {
+            'aria-label': o.label,
+            disabled: st.generating || null,   // ревью M1 — пока идёт запрос, фильтр не меняется
+            style: { height: '30px', minWidth: '220px', maxWidth: '100%', fontSize: '12.5px', fontFamily: 'inherit' },
+            onchange: () => {
+                if (st.generating) { sel.value = st.opts[o.arg]; return; }
+                st.opts[o.arg] = sel.value; resetResult();
+            },
+        }, ...selectChoices(o, st.loaded[o.arg]).map(([value, text]) => h('option', { value }, text)));
+        sel.value = st.opts[o.arg] == null ? '' : String(st.opts[o.arg]);
+        if (!st.loaded[o.arg] && !st.loading.has(o.arg)) {
+            st.loading.add(o.arg);
+            supabase.rpc('report_choices', { kind: st.kind, arg: o.arg }).then(({ data, error }) => {
+                if (error) throw new Error(error.message || String(error));
+                st.loaded[o.arg] = (data && Array.isArray(data.choices)) ? data.choices : [];
+                paintChoices();
+            }).catch((e) => {
+                console.warn('[reports-hub] report_choices:', e && e.message);
+                st.loading.delete(o.arg);   // следующая перерисовка попробует снова
+            });
+        }
+        return sel;
+    }
     function resetResult() {
         st.reqSeq++;   // ревью M1 — ответ, который ещё в пути, уже не наш
         st.result = null;
@@ -783,6 +843,7 @@ async function openReportBuilder(rep) {
         }
         for (const o of optionsFor(rep, st.kind)) {
             choiceRow.appendChild(label(o.label));
+            if (o.type === 'select') { choiceRow.appendChild(selectOption(o)); continue; }
             choiceRow.appendChild(h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
                 ...o.choices.map(([value, text]) => pill(st.opts[o.arg] === value, text, () => {
                     if (st.generating || st.opts[o.arg] === value) return;
