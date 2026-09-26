@@ -228,7 +228,7 @@ export function payRefused(error) {
 
 /**
  * Строки выплаты врача за период с сервера (doctor_pay_summary). Ответ
- * { outpatient, inpatient, referral, lines } — или пусто, если сервер
+ * { outpatient, inpatient, referral, inpatient_referral, lines } — или пусто, если сервер
  * отказал: { denied: true } при 403, чтобы экран сказал почему.
  */
 export async function loadDoctorPay(doctorId, fromDay, toDay) {
@@ -236,6 +236,9 @@ export async function loadDoctorPay(doctorId, fromDay, toDay) {
         outpatient: { count: 0, unbilled: 0, amount: 0, net: 0, fee: 0 },
         inpatient: { count: 0, unbilled: 0, amount: 0, net: 0, fee: 0 },
         referral: { rows: [], count: 0, reward: 0, paid_amount: 0 },
+        // INPATIENT_BONUS_V1 — «За направление в стационар» (те же строки, что
+        // в «Рефералах» и «По врачам»).
+        inpatient_referral: { rows: [], count: 0, reward: 0, paid_amount: 0, admissions: 0 },
         lines: [], total: 0, denied: false, failed: false,
     };
     try {
@@ -245,7 +248,8 @@ export async function loadDoctorPay(doctorId, fromDay, toDay) {
             return { ...empty, denied: payRefused(error), failed: !payRefused(error) };
         }
         if (!data || !Array.isArray(data.lines)) return { ...empty, failed: true };
-        return { ...empty, ...data, referral: { ...empty.referral, ...(data.referral || {}) }, denied: false, failed: false };
+        return { ...empty, ...data, referral: { ...empty.referral, ...(data.referral || {}) },
+            inpatient_referral: { ...empty.inpatient_referral, ...(data.inpatient_referral || {}) }, denied: false, failed: false };
     } catch (e) {
         console.warn('[doctor-pay] summary:', e && e.message);
         return { ...empty, failed: true };

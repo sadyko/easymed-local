@@ -126,9 +126,10 @@ const part = (lines) => ({
   net: lines.reduce((n, l) => n + l.net, 0), fee: lines.reduce((n, l) => n + l.fee, 0),
 });
 const NO_REFERRAL = () => ({ rows: [], count: 0, reward: 0, paid_amount: 0 });
-function payResponse({ out = [payLine(1, now, 40000), payLine(2, yesterday, 40000)], inp = [], referral = NO_REFERRAL() } = {}) {
+function payResponse({ out = [payLine(1, now, 40000), payLine(2, yesterday, 40000)], inp = [], referral = NO_REFERRAL(), inpatientReferral = { ...NO_REFERRAL(), admissions: 0 } } = {}) {
   return { from: '', to: '', rate_default: 0, outpatient: part(out), inpatient: part(inp), referral,
-           total: part(out).fee + part(inp).fee + referral.reward, lines: [...out, ...inp] };
+           inpatient_referral: inpatientReferral,   // INPATIENT_BONUS_V1
+           total: part(out).fee + part(inp).fee + referral.reward + inpatientReferral.reward, lines: [...out, ...inp] };
 }
 let PAY_RESPONSE = payResponse();
 let PAY_FORBID = false;   // ROLE_REPORTS_SETTINGS_V1 (ревью M2) — сервер отказал в начислениях
@@ -418,6 +419,35 @@ test('REPORTS_V2: вознаграждение за направления с с
     // с тем же названием есть и в шапке графика).
     const card = byClass(root, 'card').find((c) => textOf(c).includes('Вид услуги'));
     assert.ok(textOf(card).includes('4 500') && textOf(card).includes('45 000'), 'разбор: ' + textOf(card));
+  } finally {
+    PAY_RESPONSE = payResponse();
+    if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
+  }
+});
+
+// INPATIENT_BONUS_V1 — «За направление в стационар» приходит в той же выплате
+// (doctor_pay_summary.inpatient_referral) и показывается в плитке
+// вознаграждений и в её разборе: кабинет ничего не пересчитывает.
+test('INPATIENT_BONUS_V1: «За направление в стационар» с сервера — в плитке и разборе', async () => {
+  PAY_RESPONSE = payResponse({
+    referral: { rows: [{ date: dayKeyOf(now), invoice: 'INV-9', status: 'paid', paid: true, patient: 'Иванов Пётр', service: 'УЗИ',
+      service_type: 'Диагностика', service_category: '', qty: 1, amount: 45000, rate: '10 %', reward: 4500 }], count: 1, reward: 4500, paid_amount: 45000 },
+    inpatientReferral: { rows: [
+      { date: dayKeyOf(now), invoice: 'INV-S1', status: 'paid', paid: true, patient: 'Сидоров Сидор', admission_no: '2026/00007',
+        service: 'Операция', kind: 'service', qty: 1, amount: 1000000, rate: '3 %', reward: 30000 },
+      { date: dayKeyOf(now), invoice: 'INV-S1', status: 'paid', paid: true, patient: 'Сидоров Сидор', admission_no: '2026/00007',
+        service: 'Фикс за госпитализацию', kind: 'fixed', qty: 1, amount: 0, rate: 'фикс 50 000', reward: 50000 },
+    ], count: 2, reward: 80000, paid_amount: 1000000, admissions: 1 },
+  });
+  let root = null;
+  try {
+    root = await openPay();
+    buttonByText(root, /7 дней/).click();
+    await tick(80);
+    const tile = byClass(root, 'dash-kpi').find((t) => textOf(t).includes('Вознаграждения за направления'));
+    // 4 500 за амбулаторные направления + 80 000 за стационар.
+    assert.ok(textOf(tile).includes('84 500'), 'плитка: ' + textOf(tile));
+    assert.ok(textOf(tile).includes('за направление в стационар'), 'плитка не назвала стационар: ' + textOf(tile));
   } finally {
     PAY_RESPONSE = payResponse();
     if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }

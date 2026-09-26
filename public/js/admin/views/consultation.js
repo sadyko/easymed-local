@@ -97,6 +97,11 @@ const state = {
         // (doctor_pay_summary.referral): строки счетов, пришедшие по источнику
         // этого врача, — те же, что в отчёте «Рефералы».
         referralPay: { rows: [], count: 0, reward: 0, paid_amount: 0 },
+        // INPATIENT_BONUS_V1 — «За направление в стационар» ГОТОВЫМ с сервера
+        // (doctor_pay_summary.inpatient_referral): строки оплаченных счетов
+        // госпитализаций, куда врач направил пациента, — те же, что в
+        // «Рефералах» и «По врачам».
+        inpatientReferral: { rows: [], count: 0, reward: 0, paid_amount: 0, admissions: 0 },
         // DOCTOR_TIER_V1 — прогресс ступени текущего месяца по услугам —
         // «N из M» (doctor_tier_positions). Доли со ступенью уже в строках.
         tierProgress: [],
@@ -1550,6 +1555,7 @@ async function loadDashboardData() {
         fee: Number(pay.inpatient && pay.inpatient.fee) || 0,
     };
     state.dash.referralPay = pay.referral || { rows: [], count: 0, reward: 0, paid_amount: 0 };
+    state.dash.inpatientReferral = pay.inpatient_referral || { rows: [], count: 0, reward: 0, paid_amount: 0, admissions: 0 };
 
     // DOCTOR_TIER_V1 — прогресс ступени ТЕКУЩЕГО месяца («18 из 25»): один
     // запрос за месяц. Доли со ступенью уже посчитаны сервером в строках выше;
@@ -1651,6 +1657,13 @@ function payLineRow(l) {
 // вид; typeFirst — порядок «Разбора направлений» (вид, иначе категория).
 function referralPayRows() {
     return (state.dash.referralPay && state.dash.referralPay.rows) || [];
+}
+// INPATIENT_BONUS_V1 — строки и сумма «За направление в стационар» с сервера.
+function inpatientReferralRows() {
+    return (state.dash.inpatientReferral && state.dash.inpatientReferral.rows) || [];
+}
+function inpatientReferralReward() {
+    return Math.round(Number(state.dash.inpatientReferral && state.dash.inpatientReferral.reward) || 0);
 }
 function payRowSector(r, typeFirst) {
     const a = typeFirst ? r.service_type : r.service_category;
@@ -1795,8 +1808,13 @@ function dashboardView() {
             }),
             kpiTile({
                 icon: 'ArrowRight', accent: 'info', label: 'Вознаграждения за направления',
-                value: uzs(rewards.total),
-                meta: trf('отправлено направлений: {n}', { n: rewards.count }),
+                // INPATIENT_BONUS_V1 — вместе с «За направление в стационар»:
+                // оба — вознаграждение за то, что врач направил пациента.
+                value: uzs(rewards.total + inpatientReferralReward()),
+                meta: trf('отправлено направлений: {n}', { n: rewards.count })
+                    + (inpatientReferralReward() > 0
+                        ? ' · ' + trf('за направление в стационар: {sum}', { sum: uzs(inpatientReferralReward()) })
+                        : ''),
                 onClick: () => openReferralDetails(),
             }),
             kpiTile({
@@ -2395,6 +2413,8 @@ function openReferralDetails() {
                     kvBlock(tr('Отправлено направлений'), String(rewards.count)),
                     kvBlock(tr('Категорий услуг'),        String(Object.keys(rewards.bySector).length)),
                     kvBlock(tr('Всего вознаграждений'),   rewards.total.toLocaleString('ru-RU') + ' UZS', 'var(--ok-700)'),
+                    // INPATIENT_BONUS_V1 — отдельной цифрой: база другая (счёт госпитализации).
+                    kvBlock(tr('За направление в стационар'), inpatientReferralReward().toLocaleString('ru-RU') + ' UZS', 'var(--ok-700)'),
                 ),
             ),
             // Filters
@@ -2417,8 +2437,38 @@ function openReferralDetails() {
                 })(),
             ),
             h('div', { id: 'ref-list', style: { maxHeight: '50vh', overflow: 'auto' } }),
+            // NULL_IN_APPEND_V1 — родной append: пустой блок не передаём вовсе.
+            ...[inpatientReferralTable()].filter(Boolean),
         );
         repaintList();
+    }
+    // INPATIENT_BONUS_V1 — «За направление в стационар»: строки оплаченных
+    // счетов госпитализаций, куда этот врач направил пациента, и фикс за
+    // госпитализацию одной строкой. Нет строк — блока нет.
+    function inpatientReferralTable() {
+        const rows = inpatientReferralRows();
+        if (!rows.length) return null;
+        return h('div', null,
+            h('h3', { style: { margin: '6px 0 8px', fontSize: '15px' } }, Icon('Bed', { size: 15 }), ' ', tr('За направление в стационар')),
+            h('div', { style: { maxHeight: '30vh', overflow: 'auto' } },
+                h('table', { class: 'tbl' },
+                    h('thead', null, h('tr', null,
+                        h('th', null, tr('Когда')),
+                        h('th', null, tr('Госпитализация')),
+                        h('th', null, tr('Пациент')),
+                        h('th', null, tr('Строка')),
+                        h('th', { style: { textAlign: 'right' } }, tr('Ставка')),
+                        h('th', { style: { textAlign: 'right' } }, tr('Вознаграждение')),
+                    )),
+                    h('tbody', null, ...rows.map((r) => h('tr', null,
+                        h('td', { class: 'num muted', style: { fontSize: '12.5px' } }, r.date || ''),
+                        h('td', { class: 'muted' }, r.admission_no || ''),
+                        h('td', null, r.patient || ''),
+                        h('td', null, r.kind === 'fixed' ? tr('Фикс за госпитализацию') : tr(r.service || '')),
+                        h('td', { class: 'num', style: { textAlign: 'right' } }, r.rate || ''),
+                        h('td', { class: 'num cell-strong', style: { textAlign: 'right', color: 'var(--ok-700)' } },
+                            Math.round(Number(r.reward) || 0).toLocaleString('ru-RU')),
+                    ))))));
     }
     function repaintList() {
         const list = body.querySelector('#ref-list');
