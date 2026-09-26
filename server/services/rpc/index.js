@@ -59,6 +59,7 @@ import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRe
          telephonyForgetBinotel } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1 / TELEPHONY_PROVIDERS_V1
 import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss } from './lis.js';   // LIS_INGEST_V1
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
+import { customRoleCreate } from './custom-roles.js';   // ADMIN_ROWS_GRANTABLE_V1 — своя роль одним действием
 import { crmLeadsByPhone, crmSearch, crmVisitLinks } from './crm-leads.js';   // CRM_DEDUP_SEARCH_TASKS_V1
 import { crmDuplicateGroups, crmMergeLeads } from './crm-merge.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
@@ -527,6 +528,9 @@ export const RPC = {
   // обычное 402-ограничение, ничего always-allowed.
   crm_config_get:           (db, args, user) => crmConfigGet(db, args, user),
   crm_config_save:          (db, args, user) => crmConfigSave(db, args, user),
+  // ADMIN_ROWS_GRANTABLE_V1 — своя роль клиники: обе записи в одной транзакции,
+  // права не выше заводящего. Запись — при просроченной лицензии закрыта (402).
+  custom_role_create:       (db, args, user) => customRoleCreate(db, args, user),
   // CRM_DEDUP_SEARCH_TASKS_V1 — «у этого номера уже есть карточка?» перед
   // созданием новой заявки. Номер сравнивается по одному ключу (последние девять
   // цифр) на сервере; чистое чтение (READ_ONLY_RPCS в control/gate.js).

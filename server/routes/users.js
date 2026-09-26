@@ -450,9 +450,20 @@ function isAdminAccount(db, u) {
   return !!(u.custom_role_code && isAdminRoleCode(db, u.custom_role_code));
 }
 
-/** Сколько активных учётных записей администратора (ревью a — и по дополнительной роли). */
+/**
+ * Администратор ПО СОХРАНЁННОЙ роли — так, как его видит сервер (isAdminUser):
+ * основная `admin` или `admin` среди дополнительных. Ревью (финал, мелочь 1):
+ * своя роль, которую перевели на основу admin, пока users.role у людей прежний,
+ * сервер администратором не считает — и последним администратором она не
+ * засчитывается.
+ */
+function isStoredAdmin(u) {
+  return !!u && isAdminUser({ role: u.role, extra_roles: parseJsonArray(u.extra_roles) });
+}
+
+/** Сколько активных администраторов (ревью a — и по дополнительной роли). */
 function activeAdminCount(db) {
-  return db.prepare('SELECT * FROM users WHERE is_active = 1').all().filter((u) => isAdminAccount(db, u)).length;
+  return db.prepare('SELECT * FROM users WHERE is_active = 1').all().filter(isStoredAdmin).length;
 }
 
 /** Коды ролей, которые носит учётная запись. */
@@ -611,8 +622,8 @@ export function userRoutes(db) {
     // Belt-and-braces: the clinic must never end up with zero active admins.
     // Ревью (a) — администратор считается по isAdminAccount: основной ролью,
     // дополнительной и своей ролью на основе администратора.
-    const losesAdmin = active === false || !isAdminAccount(db, after);
-    if (losesAdmin && isAdminAccount(db, user) && user.is_active && activeAdminCount(db) <= 1) {
+    const losesAdmin = active === false || !isStoredAdmin(after);
+    if (losesAdmin && isStoredAdmin(user) && user.is_active && activeAdminCount(db) <= 1) {
       return bad(res, 'At least one active admin must remain.');
     }
 
@@ -779,7 +790,7 @@ export function staffDeleteGuard(db, user, actor) {
   if (actor && user.id === actor.id) {
     return { ok: false, status: 409, reason: 'Нельзя удалить собственную учётную запись.' };
   }
-  if (isAdminAccount(db, user) && user.is_active && activeAdminCount(db) <= 1) {
+  if (isStoredAdmin(user) && user.is_active && activeAdminCount(db) <= 1) {
     return { ok: false, status: 409, reason: 'В клинике должен остаться хотя бы один активный администратор.' };
   }
 

@@ -30,10 +30,10 @@
 //
 // Тот же ответ «не выше своего» читает и routes/users.js: назначить сотруднику
 // роль можно, только если у этой роли нет ничего сверх прав назначающего.
-import { isAdminUser, effectiveLevel, rolesForGrants } from './grants.js';
-import { effectiveRoles, sectionLevel, patientTabLevel, VALID_ROLES, PATIENT_CARD_TABS, tabRankOfPerms } from './roles.js';
+import { isAdminUser, effectiveLevel, rolesForGrants, grantAllowsOr } from './grants.js';
+import { effectiveRoles, hasAnyRole, sectionLevel, patientTabLevel, VALID_ROLES, PATIENT_CARD_TABS, tabRankOfPerms } from './roles.js';
 import { grantsFromLegacy, catalogRows } from '../../public/js/shared/permission-catalog.js';
-import { fallbackLevel } from './gate-fallbacks.js';   // ревью I3/C1 — что дают настоящие ворота
+import { fallbackLevel, GATE_FALLBACK, isFnGate } from './gate-fallbacks.js';   // ревью I3/C1 — что дают настоящие ворота
 import { compile } from '../db/query-compiler.js';
 
 const RANK = { none: 0, view: 1, edit: 2, delete: 3 };
@@ -97,13 +97,34 @@ function actorLegacy(db, actor, key) {
 function actorGrantRank(db, actor, key) {
   return RANK[effectiveLevel(db, actor, key, actorLegacy(db, actor, key))] || 0;
 }
-// Ревью C1 — уровень того, КОМУ выдают (роль как «человек» с этой ролью),
-// считается ТЕМ ЖЕ правилом, что и у правящего: одна и та же роль по обе
-// стороны обязана дать один и тот же ответ. Ворота по основе при этом не
-// недосчитаны: основу правящий носит сам (проверено в roleExceedsActor), и
-// всякие ворота, пускающие роль, пускают и его.
+// Ревью C1b — того, КОМУ выдают, считаем в его пользу: хватает ОДНИХ ворот
+// ('any'), а не всех, как у правящего. Ключи со списками ролей у ворот
+// сравниваются не уровнями, а ВОРОТАМИ по одним (gateExcess ниже): уровень
+// сводит два разных «Изменения» в одно и теряет то, что пускают только
+// одни ворота (медсестру — «отметить выполнение», но не «добавить услугу»).
+function targetLegacy(db, pseudo, key) {
+  const real = fallbackLevel(db, pseudo, key, 'any');
+  if (real === null) return derivedLevel(db, pseudo, key);
+  // Плитки настроек и группы отчётов: «Просмотр» сервер не запирает вовсе —
+  // по ним решает экран, одинаково для обеих сторон.
+  if (!GATE_FALLBACK[key] && !isFnGate(key)) return minLevel(derivedLevel(db, pseudo, key), real);
+  return real;
+}
 function targetGrantRank(db, pseudo, key) {
-  return actorGrantRank(db, pseudo, key);
+  return RANK[effectiveLevel(db, pseudo, key, targetLegacy(db, pseudo, key))] || 0;
+}
+// Пускают ли ЭТИ ворота человека — ровно так, как решают сами ворота.
+function gatePasses(db, user, key, need, list) {
+  return grantAllowsOr(db, user, key, need, () => hasAnyRole(user, list));
+}
+// Первые ворота ключа, которые пускают роль и не пускают правящего, — или null.
+function gateExcess(db, actor, pseudo, key) {
+  for (const [need, lists] of Object.entries(GATE_FALLBACK[key])) {
+    for (const list of lists) {
+      if (gatePasses(db, pseudo, key, need, list) && !gatePasses(db, actor, key, need, list)) return need;
+    }
+  }
+  return null;
 }
 function actorSectionRank(db, actor, key) {
   const l = sectionLevel(db, actor, key);
@@ -187,9 +208,44 @@ export function roleExceedsActor(db, actor, code) {
     ? { id: 0, role: baseRole, extra_roles: [], custom_role_code: code }
     : { id: 0, role: code, extra_roles: [] };
   for (const r of catalogRows()) {
+    if (GATE_FALLBACK[r.key]) {
+      const need = gateExcess(db, actor, pseudo, r.key);
+      if (need) return `право «${r.key}» (${need})`;
+      continue;
+    }
     if (targetGrantRank(db, pseudo, r.key) > actorGrantRank(db, actor, r.key)) return `право «${r.key}»`;
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Ревью (финал, мелочь 3) — НОВАЯ СВОЯ РОЛЬ ОДНИМ ДЕЙСТВИЕМ (rpc/custom-roles.js).
+// Права новой роли начинаются с прав основы, но у не-администратора — не выше
+// его собственных: разделы, вкладки и ключи срезаются до его уровня.
+// ---------------------------------------------------------------------------
+const SECTION_NAME = { 1: 'viewer', 2: 'editor', 3: 'admin' };
+const LEVEL_NAME = ['none', 'view', 'edit', 'delete'];
+export function levelNameOfRank(rank) { return LEVEL_NAME[Math.max(0, Math.min(3, rank | 0))]; }
+export { actorGrantRank };
+
+export function permissionsCappedFor(db, actor, basePerms) {
+  const b = basePerms || {};
+  const bLv = (b.levels && typeof b.levels === 'object') ? b.levels : {};
+  const sections = [];
+  const levels = {};
+  for (const sec of (Array.isArray(b.sections) ? b.sections : [])) {
+    const r = Math.min(SECTION_RANK[bLv[sec]] || TOP, actorSectionRank(db, actor, sec));
+    if (r <= 0) continue;
+    sections.push(sec);
+    levels[sec] = SECTION_NAME[r];
+  }
+  const patient_tabs = {};
+  for (const t of PATIENT_CARD_TABS) patient_tabs[t] = LEVEL_NAME[Math.min(tabRankOfPerms(b, t), actorTabRank(db, actor, t))];
+  const grants = {};
+  for (const [k, v] of Object.entries((b.grants && typeof b.grants === 'object') ? b.grants : {})) {
+    grants[k] = LEVEL_NAME[Math.min(RANK[v] ?? TOP, actorGrantRank(db, actor, k))];
+  }
+  return { sections, levels, patient_tabs, grants };
 }
 
 // Строки, которых коснётся правка: тем же компилятором и с теми же правами.
@@ -208,6 +264,24 @@ const asRows = (values) => (Array.isArray(values) ? values : [values || {}]);
  */
 const CODE_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
+const KEEP_EDIT = ['settings.roles', 'settings.employees'];
+function adminLockout(db, user, meta, body) {
+  const rows = asRows(body && body.values);
+  let roles;
+  if (meta.op === 'insert' || meta.op === 'upsert') roles = rows.map((v) => v && v.role);
+  else {
+    const t = targetsOf(db, user, 'role_permissions', 'role', body && body.filters);
+    roles = t ? t.map((r) => r.role) : [];
+  }
+  const next = parsePerms(rows[0] && rows[0].permissions);
+  if (!next || !roles.some((r) => r && isAdminRoleCode(db, r))) return null;
+  const g = (next.grants && typeof next.grants === 'object') ? next.grants : {};
+  if (g.settings === 'none' || KEEP_EDIT.some((k) => k in g && (RANK[g[k]] || 0) < RANK.edit)) {
+    return 'Роли: у роли администратора «Настройки», «Роли» и «Сотрудники» не закрываются — иначе клиника запрёт себя вне этих экранов.';
+  }
+  return null;
+}
+
 export function roleWriteRefusal(db, user, meta, body) {
   if (!meta || (meta.table !== 'role_permissions' && meta.table !== 'custom_roles')) return null;
   if (meta.op === 'select') return null;
@@ -220,6 +294,13 @@ export function roleWriteRefusal(db, user, meta, body) {
       const code = v && v[col];
       if (typeof code !== 'string' || !CODE_RE.test(code)) return 'Роли: код роли — строчные латинские буквы, цифры, «-» и «_».';
     }
+  }
+  // Ревью (финал, мелочь 2) — роль администратора (штатная или своя на её
+  // основе) не лишается «Ролей» и «Сотрудников» ни чьей рукой, администратора
+  // тоже: иначе клиника запирает себя вне экрана, на котором это чинится.
+  if (meta.table === 'role_permissions') {
+    const lock = adminLockout(db, user, meta, body);
+    if (lock) return lock;
   }
   if (isAdminUser(user)) return null;
   const own = ownRoleCodes(user);

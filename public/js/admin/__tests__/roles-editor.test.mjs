@@ -897,3 +897,30 @@ test('«Роли: Изменение» у медсестры: основы — �
     perms.setFullAccess('Admin');
   }
 });
+
+// ADMIN_ROWS_GRANTABLE_V1 (ревью безопасности) — новая своя роль заводится ОДНИМ
+// вызовом сервера (custom_role_create), а не двумя записями через /api/db.
+test('«Новая роль» — один вызов custom_role_create, без прямых записей custom_roles / role_permissions', async () => {
+  resetServer();
+  const calls = [];
+  const prev = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    calls.push({ url: String(url), body });
+    if (String(url).startsWith('/api/rpc/custom_role_create')) return jsonOk({ code: body.code, name: body.name, base_role: body.base_role, active: 1 });
+    return prev(url, opts);
+  };
+  try {
+    const root = await render();
+    const nameInp = tagsOf(root, 'INPUT').find((n) => n.attrs['aria-label'] === 'Название новой роли');
+    nameInp.value = 'Старший регистратор';
+    findButtonByText(root, /Новая роль/).click();
+    await tick(40);
+    const rpc = calls.filter((c) => c.url.startsWith('/api/rpc/custom_role_create'));
+    assert.equal(rpc.length, 1, 'сервер не позван');
+    assert.equal(rpc[0].body.base_role, 'registrar');
+    assert.ok(/^[a-z0-9-]+$/.test(rpc[0].body.code), 'код не строчный: ' + rpc[0].body.code);
+    const writes = calls.filter((c) => c.url.startsWith('/api/db') && c.body && c.body.op === 'insert' && ['custom_roles', 'role_permissions'].includes(c.body.table));
+    assert.deepEqual(writes, [], 'полроли можно оставить прямыми записями');
+  } finally { globalThis.fetch = prev; }
+});

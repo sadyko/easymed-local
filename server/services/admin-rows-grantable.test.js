@@ -558,3 +558,115 @@ test('(c) коды ролей — только строчными: «Admin» и 
     assert.notEqual(r.status, 200);
   } finally { server.close(); }
 });
+
+// =============================================================================
+// ADMIN_ROWS_GRANTABLE_V1 — финальный проход безопасности.
+// =============================================================================
+
+// Своя роль клиники прямо в базе: код, основа и права.
+function customRoleRow(db, code, base, permissions) {
+  db.prepare('INSERT INTO custom_roles (code, name, base_role) VALUES (?, ?, ?)').run(code, code, base);
+  db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)').run(code, JSON.stringify(permissions));
+}
+const BELOW = { view: 'none', edit: 'view', delete: 'edit' };
+
+test('C1b: роль, которую пускают ХОТЯ БЫ ОДНИ ворота, не выдаёт тот, кого эти ворота не пускают', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const nurse = perms(db, 'nurse');
+    customRoleRow(db, 'hn', 'nurse', { ...nurse, grants: { ...nurse.grants, 'inpatient.services': 'view', settings: 'view', 'settings.employees': 'edit' } });
+    ins(db, 73, 'hnurse', 'nurse');
+    db.prepare("UPDATE users SET custom_role_code = 'hn' WHERE id = 73").run();
+    const HN = { id: 73, role: 'nurse', extra_roles: [], custom_role_code: 'hn' };
+    const { roleExceedsActor } = await import('./role-guard.js');
+    assert.ok(roleExceedsActor(db, HN, 'nurse'), 'медсестра без «отметить выполнение» выдаёт медсестру, которая его отмечает');
+    const hn = await login(base, 'hnurse');
+    assert.equal((await call(base, 'POST', '/api/users', { username: 'xx2', password: 'pw', role: 'nurse' }, hn)).status, 403);
+  } finally { server.close(); }
+});
+
+test('C1b: по КАЖДЫМ воротам со списком ролей — роль, которую они пускают, не выдаёт тот, кого они не пускают', async () => {
+  const db = seed();
+  try {
+    const { roleExceedsActor } = await import('./role-guard.js');
+    const { GATE_FALLBACK } = await import('./gate-fallbacks.js');
+    const { grantAllowsOr } = await import('./grants.js');
+    const { hasAnyRole, PRIMARY_ROLES } = await import('./roles.js');
+    let n = 0;
+    for (const [key, byNeed] of Object.entries(GATE_FALLBACK)) {
+      for (const [need, lists] of Object.entries(byNeed)) {
+        for (const list of lists) {
+          for (const r of list) {
+            if (!PRIMARY_ROLES.includes(r) || r === 'admin') continue;
+            const target = { id: 0, role: r, extra_roles: [] };
+            if (!grantAllowsOr(db, target, key, need, () => hasAnyRole(target, list))) continue;
+            const code = ('g' + (n++)).toLowerCase();
+            const p = JSON.parse(db.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get(r).permissions);
+            customRoleRow(db, code, r, { ...p, grants: { ...(p.grants || {}), [key]: BELOW[need] } });
+            const actor = { id: 0, role: r, extra_roles: [], custom_role_code: code };
+            assert.ok(roleExceedsActor(db, actor, r), `${key}/${need}: «${code}» (основа ${r}, ${key}=${BELOW[need]}) выдаёт ${r}, которого пускают ворота ${JSON.stringify(list)}`);
+          }
+        }
+      }
+    }
+    assert.ok(n >= 20, 'проверено ворот: ' + n);
+  } finally { db.close(); }
+});
+
+test('мелочь 1: последний администратор считается по сохранённой роли — своя роль, переведённая на основу admin, не в счёт', async () => {
+  const db = seed();
+  try {
+    db.prepare('UPDATE users SET is_active = 0 WHERE id = 2').run();   // администратор-врач выключен
+    db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('cr', 'Роль', 'registrar')").run();
+    db.prepare("UPDATE users SET custom_role_code = 'cr' WHERE id = 51").run();
+    db.prepare("UPDATE custom_roles SET base_role = 'admin' WHERE code = 'cr'").run();   // users.role регистратора — прежний
+    const { staffDeleteGuard } = await import('../routes/users.js');
+    const g = staffDeleteGuard(db, db.prepare('SELECT * FROM users WHERE id = 1').get(), { id: 999 });
+    assert.equal(g.ok, false, 'регистратор с ролью на основе admin засчитан администратором — последнего удалили');
+  } finally { db.close(); }
+});
+
+test('мелочь 2: администратор не запирает свою роль вне «Ролей» и «Сотрудников»', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    customRoleRow(db, 'st_admin', 'admin', { sections: [], levels: {}, grants: {} });
+    const boss = await login(base, 'boss');
+    for (const [role, grants] of [
+      ['st_admin', { 'settings.roles': 'view' }], ['st_admin', { 'settings.employees': 'none' }],
+      ['st_admin', { settings: 'none' }], ['admin', { 'settings.roles': 'none' }],
+    ]) {
+      const r = await saveRole(base, boss, role, { sections: [], levels: {}, grants });
+      assert.equal(r.status, 403, role + ' ' + JSON.stringify(grants) + ' — администратор запер себя');
+    }
+    assert.equal((await saveRole(base, boss, 'st_admin', { sections: [], levels: {}, grants: { 'settings.api': 'none' } })).status, 200);
+  } finally { server.close(); }
+});
+
+test('мелочь 3: своя роль заводится одним вызовом — обе записи или ни одной, права не выше заводящего', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const nurse = perms(db, 'nurse');
+    customRoleRow(db, 'hn', 'nurse', { sections: ['patients'], levels: { patients: 'viewer' }, patient_tabs: { billing: 'none' },
+      grants: { 'inpatient.services': 'view', settings: 'view', 'settings.roles': 'edit', 'settings.employees': 'edit' } });
+    ins(db, 73, 'hnurse', 'nurse');
+    db.prepare("UPDATE users SET custom_role_code = 'hn' WHERE id = 73").run();
+    const hn = await login(base, 'hnurse');
+    const rpc = (name, body) => call(base, 'POST', '/api/rpc/' + name, body, hn);
+    let r = await rpc('custom_role_create', { code: 'lab_x', name: 'Лаб', base_role: 'lab' });
+    assert.equal(r.status, 403, 'основа, которой нет');
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM custom_roles WHERE code = 'lab_x'").get().n, 0, 'полроли осталось');
+    r = await rpc('custom_role_create', { code: 'palat', name: 'Палатная', base_role: 'nurse' });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.ok(db.prepare("SELECT 1 FROM role_permissions WHERE role = 'palat'").get(), 'права не записаны');
+    const { roleExceedsActor } = await import('./role-guard.js');
+    const HN = { id: 73, role: 'nurse', extra_roles: [], custom_role_code: 'hn' };
+    assert.equal(roleExceedsActor(db, HN, 'palat'), null, 'новая роль выше заводящего');
+    assert.ok(nurse.sections.length > 1);
+    assert.equal((await call(base, 'POST', '/api/users', { username: 'palat1', password: 'pw', role: 'nurse', custom_role_code: 'palat' }, hn)).status, 201);
+    // Администратор заводит как раньше — с правами основы.
+    const boss = await login(base, 'boss');
+    r = await call(base, 'POST', '/api/rpc/custom_role_create', { code: 'st_lab', name: 'Старший лаборант', base_role: 'lab' }, boss);
+    assert.equal(r.status, 200);
+    assert.deepEqual(JSON.parse(db.prepare("SELECT permissions FROM role_permissions WHERE role = 'st_lab'").get().permissions).sections, perms(db, 'lab').sections);
+  } finally { server.close(); }
+});

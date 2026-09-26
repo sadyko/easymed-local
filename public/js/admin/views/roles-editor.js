@@ -326,18 +326,13 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         const code = roleCodeFrom(name, taken);
         addBtn.disabled = true;
         try {
-            const ins = await supabase.from('custom_roles').insert({ code, name, base_role: base, active: 1 }).select().single();
+            // ADMIN_ROWS_GRANTABLE_V1 (ревью безопасности) — роль и её права
+            // заводит сервер ОДНИМ действием (rpc/custom-roles.js): обе записи или
+            // ни одной. Права — права основы (у не-администратора — не выше его
+            // собственных): пустая роль, выданная человеку, заперла бы его в
+            // пустом приложении, а сузить готовый набор — работа на минуту.
+            const ins = await supabase.rpc('custom_role_create', { code, name, base_role: base });
             if (ins.error) throw new Error(ins.error.message || String(ins.error));
-            // Новая роль начинает с прав СВОЕЙ ОСНОВЫ: пустая роль, выданная
-            // человеку, заперла бы его в пустом приложении, а сузить готовый
-            // набор — работа на минуту.
-            let permissions = JSON.stringify({ sections: [], levels: {}, patient_tabs: {} });
-            try {
-                const { data: baseRow } = await supabase.from('role_permissions').select('permissions').eq('role', base).maybeSingle();
-                if (baseRow && baseRow.permissions) permissions = typeof baseRow.permissions === 'string' ? baseRow.permissions : JSON.stringify(baseRow.permissions);
-            } catch (e) { /* нет строки основы — начнём с пустой */ }
-            const perm = await supabase.from('role_permissions').insert({ role: code, permissions }).select().single();
-            if (perm.error) throw new Error(perm.error.message || String(perm.error));
             state.custom.push(ins.data || { code, name, base_role: base, active: 1 });
             nameInp.value = '';
             paintRoleTabs();

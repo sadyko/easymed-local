@@ -9,8 +9,8 @@
 // (VITALS_WRITE_ROLES) её не пускают — и выдать другому это право она не должна.
 //
 // Здесь — те же списки, что у ворот, по ключу и уровню. Несколько ворот одного
-// уровня — несколько списков. Тест (gate-fallbacks.test.js) сверяет эту карту с
-// вызовами requireGrant / grantAllows в services/rpc — копия не разойдётся с
+// уровня — несколько списков. Тест (gate-fallbacks.test.js) сверяет эту карту со
+// всеми воротами справочника во всём server/ — копия не разойдётся с
 // оригиналом молча.
 import { hasAnyRole, canViewSection, canEditSection } from './roles.js';
 import { catalogByKey } from '../../public/js/shared/permission-catalog.js';
@@ -53,6 +53,10 @@ const FALLBACK_FN = {
     edit: (db, u) => hasAnyRole(u, ['admin', 'inventory']),
   },
 };
+
+/** Ворота ключа — прежняя галочка раздела (FALLBACK_FN), а не список ролей. */
+export function isFnGate(key) { return Object.prototype.hasOwnProperty.call(FALLBACK_FN, key); }
+export const FALLBACK_FN_KEYS = Object.freeze(Object.keys(FALLBACK_FN));
 
 const ORDER = ['delete', 'edit', 'view'];
 let byKey = null;
