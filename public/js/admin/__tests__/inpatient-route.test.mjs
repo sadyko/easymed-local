@@ -215,6 +215,8 @@ function dbRead(desc) {
     else if (t === 'wards') rows = WORLD.wards.slice();
     else if (t === 'users') rows = WORLD.users.slice();
     else if (t === 'patients') rows = WORLD.patients.slice();
+    // INPATIENT_BONUS_V1 — источники направления для «Кто направил» в заявке.
+    else if (t === 'referral_sources') rows = [{ id: 7, name: 'Клиника Х', code: 'R-7', active: 1 }, { id: 8, name: 'Доктор Y', code: 'R-8', active: 1 }];
     else rows = [];
     for (const f of desc.filters || []) {
         if (f.op === 'eq') rows = rows.filter((r) => String(r[f.col]) === String(f.val));
@@ -238,6 +240,10 @@ function rpcAnswer(name, a) {
             const row = adm();
             return { ok: true, data: { admission_id: row.id, status: row.status, can: flowCan(row.status, roles) } };
         }
+
+        // INPATIENT_BONUS_V1 — по умолчанию направил источник последнего визита.
+        case 'admission_referral_default':
+            return { ok: true, data: { referral_source_id: 7, name: 'Клиника Х', code: 'R-7' } };
 
         case 'admission_order_create': {
             const row = {
@@ -665,6 +671,9 @@ test('маршрут стационара проходится целиком: �
         const call = rpcCalls.find((c) => c.name === 'admission_order_create');
         assert.ok(call, 'заявка не ушла на сервер');
         assert.equal(call.args.patient_id, 101);
+        // INPATIENT_BONUS_V1 — «Кто направил» подставился по умолчанию и ушёл с заявкой.
+        assert.ok(rpcCalls.some((c) => c.name === 'admission_referral_default' && c.args.patient_id === 101));
+        assert.equal(call.args.referral_source_id, 7);
         assert.equal(WORLD.admissions.length, 1);
         assert.equal(adm().status, 'ordered');
     });

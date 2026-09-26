@@ -11,7 +11,7 @@ import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCrea
 import { expiryLots } from './expiry.js';   // EXPIRY_BALANCE_V1 — остатки партиями, ближайший срок первым
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions, doctorInpatientShare, doctorReferralReward, doctorPaySummary } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
-import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit,
+import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit, admissionReferralDefault,
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
 import { admissionFlowState, inpatientCapabilities } from './inpatient-flow.js';   // INPATIENT_FLOW_V1
 import { admissionTitleSheetGet, admissionTitleSheetSave } from './title-sheet.js';   // TITLE_SHEET_V1
@@ -271,6 +271,8 @@ export const RPC = {
   // вызовов. Новый экран зовёт admission_order_cancel — тот требует причину,
   // спрашивает матрицу прав и отпускает койку в 'cleaning'.
   admission_order_create:         (db, args, user) => admissionOrderCreate(db, args, user),
+  // INPATIENT_BONUS_V1 — кто направил по умолчанию (окно заявки его показывает).
+  admission_referral_default:     (db, args, user) => admissionReferralDefault(db, args, user),
   admission_order_cancel:         (db, args, user) => admissionOrderCancel(db, args, user),
   admission_admit:                (db, args, user) => admissionAdmit(db, args, user),
   admission_title_sheet_get:      (db, args, user) => admissionTitleSheetGet(db, args, user),    // TITLE_SHEET_V1

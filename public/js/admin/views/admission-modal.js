@@ -173,6 +173,7 @@ export function openAdmissionOrderModal({ patientId = null, patientName = '', pa
                         searchInp.value = chosenName;
                         results.style.display = 'none';
                         paintAnchor();
+                        loadRefDefault(chosenId);   // INPATIENT_BONUS_V1
                     },
                 }, (p.full_name || '') + (p.mrn ? '  ·  ' + p.mrn : '')));
             }
@@ -190,6 +191,39 @@ export function openAdmissionOrderModal({ patientId = null, patientName = '', pa
     const whenInp = h('input', { type: 'datetime-local' });
     const noteInp = h('input', { type: 'text', placeholder: tr('Повод для госпитализации') });
 
+    // INPATIENT_BONUS_V1 — КТО НАПРАВИЛ. Госпитализация запоминает источник
+    // направления: по нему партнёру считается вознаграждение за стационар. По
+    // умолчанию — источник последнего визита пациента, иначе из его карточки
+    // (сервер, admission_referral_default); регистратор видит его и может
+    // сменить или снять. Пока список не загружен, поле не отправляется вовсе —
+    // тогда сервер подставит то же значение по умолчанию сам.
+    const refSel = h('select', null, h('option', { value: '' }, tr('Никто не направлял')));
+    let refReady = false;
+    let refDefault = null;
+    const pickRefDefault = () => {
+        if (!refReady) return;
+        refSel.value = refDefault != null ? String(refDefault) : '';
+    };
+    const loadRefDefault = async (pid) => {
+        refDefault = null;
+        if (!pid) { pickRefDefault(); return; }
+        const { data, error } = await supabase.rpc('admission_referral_default', { patient_id: pid });
+        if (!error && data && data.referral_source_id != null) {
+            refDefault = Number(data.referral_source_id);
+            // Источник уже отключён — всё равно показываем его: это правда о
+            // том, кто направил, а не выбор из действующих.
+            if (refReady && ![...refSel.children].some((o) => String(o.value) === String(refDefault))) {
+                refSel.appendChild(h('option', { value: String(refDefault) }, (data.code ? data.code + ' · ' : '') + (data.name || '')));
+            }
+        }
+        pickRefDefault();
+    };
+    supabase.from('referral_sources').select('id, name, code').eq('active', true).order('name').then(({ data }) => {
+        for (const s of (data || [])) refSel.appendChild(h('option', { value: String(s.id) }, (s.code ? s.code + ' · ' : '') + s.name));
+        refReady = true;
+        loadRefDefault(chosenId);
+    });
+
     modal(tr('Заявка на госпитализацию'), 'Bed', [
         anchorBox,
         chosenId ? null : field(tr('Пациент'), h('div', null, searchInp, results), { required: true }),
@@ -200,6 +234,7 @@ export function openAdmissionOrderModal({ patientId = null, patientName = '', pa
             h('div', { style: { flex: 1 } }, field(tr('Тип госпитализации'), typeSel)),
             h('div', { style: { flex: 1 } }, field(tr('Режим пребывания'), modeSel))),
         field(tr('Планируемая дата и время'), whenInp),
+        field(tr('Кто направил'), refSel),
         field(tr('Повод / жалобы'), noteInp),
         h('div', { class: 'muted', style: { fontSize: '12.5px' } },
             tr('Заявка попадёт в «Стационар» — медсестра положит пациента на койку.')),
@@ -216,6 +251,9 @@ export function openAdmissionOrderModal({ patientId = null, patientName = '', pa
             // не оставляются на догадку каждому, кто эту строку прочитает.
             planned_at: whenInp.value ? whenInp.value + ':00Z' : null,
             note: noteInp.value.trim(),
+            // INPATIENT_BONUS_V1 — список не загрузился: поле не шлём, сервер
+            // подставит значение по умолчанию сам.
+            ...(refReady ? { referral_source_id: refSel.value ? Number(refSel.value) : null } : {}),
         });
         if (error) { toast((error.message) || tr('Не удалось оформить заявку.'), 'fail'); return false; }
         toast(tr('Заявка на госпитализацию оформлена.'), 'ok');
