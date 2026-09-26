@@ -764,7 +764,7 @@ export async function buildInvoicesReport({ branchId, branchIds, clinicId, fromI
     return rows.map(r => {
         const total = Number(r.total_amount || 0), paid = Number(r.paid_amount || 0);
         return {
-            number:    r.invoice_number || r.id.slice(0, 8),
+            number:    r.invoice_number || String(r.id),
             created:   dt(r.created_at),
             patient:   r.patients?.full_name || '',
             mrn:       r.patients?.mrn || '',

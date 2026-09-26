@@ -1320,7 +1320,7 @@ function invoicePane(state, onReload) {
         // Summary card
         h('div', { class: 'card', style: { padding: '16px 18px', marginBottom: '16px' } },
             h('div', { class: 'row', style: { gap: '24px', flexWrap: 'wrap' } },
-                kv('Invoice #', h('span', { class: 'cell-mono cell-strong', style: { fontSize: '13.5px' } }, inv.invoice_number || inv.id.slice(0, 8))),
+                kv('Invoice #', h('span', { class: 'cell-mono cell-strong', style: { fontSize: '13.5px' } }, inv.invoice_number || String(inv.id))),
                 kv('Total', h('span', { class: 'num cell-strong', style: { fontSize: '15px' } }, total.toLocaleString('ru-RU') + ' UZS')),
                 kv('Paid',  h('span', { class: 'num', style: { fontSize: '13.5px', color: 'var(--ok-700)' } }, paid.toLocaleString('ru-RU') + ' UZS')),
                 kv('Debt',  h('span', { class: 'num cell-strong', style: { fontSize: '13.5px', color: owed > 0 ? 'var(--crit-700)' : 'var(--ink-500)' } }, owed.toLocaleString('ru-RU') + ' UZS')),
