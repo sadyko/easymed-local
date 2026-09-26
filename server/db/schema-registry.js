@@ -319,8 +319,8 @@ export const REGISTRY = {
   visit_services: {
     read:  { roles: ALL_STAFF, columns: ['id','visit_id','service_id','clinic_item_id','doctor_id','quantity','unit_price','total','status','invoice_item_id','created_by','created_at','consultation_type_id','scheduled_at','queue_key','queue_no','notes',
              'sample_collected_at','verified_by','verified_at','sync_origin',
-             'price_tier'] },   // price_tier: VISIT_TIER_PRICING_V1 (mig 127) — primary/secondary/repeat, set by the screen from service_price_quote   // queue_* set ONLY by issue_queue_numbers; notes = WS consult document JSON (mig 039); sample/verify: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083)
-    write: { insert: { roles: ['admin','registrar','doctor'], columns: ['visit_id','service_id','doctor_id','quantity','unit_price','total','status','created_by','consultation_type_id','scheduled_at','price_tier'] },
+             'price_tier','package_id'] },   // package_id: PACKAGES_V1 (mig 154) — the package the line came from; price_tier: VISIT_TIER_PRICING_V1 (mig 127) — primary/secondary/repeat, set by the screen from service_price_quote   // queue_* set ONLY by issue_queue_numbers; notes = WS consult document JSON (mig 039); sample/verify: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083)
+    write: { insert: { roles: ['admin','registrar','doctor'], columns: ['visit_id','service_id','doctor_id','quantity','unit_price','total','status','created_by','consultation_type_id','scheduled_at','price_tier','package_id'] },
              update: { roles: ['admin','registrar','doctor','lab','nurse'], columns: ['status','doctor_id','consultation_type_id','notes',
              'sample_collected_at','verified_by','verified_at'] },   // LAB_HANDLING_V1 (lab) + PROCEDURES_V1 (nurse отмечает выполнение)
              delete: { roles: ['admin','registrar'] } },
@@ -351,6 +351,8 @@ export const REGISTRY = {
                doctor_id: { table:'users', fk:'doctor_id', columns:['id','full_name','specialty','role'] },
                verified_by: { table:'users', fk:'verified_by', columns:['id','full_name'] },   // performer:verified_by(...) в процедурах
                created_by: { table:'users', fk:'created_by', columns:['id','full_name'] },     // creator:created_by(...) — кто добавил строку в смету
+               // PACKAGES_V1 — чек и счёт печатают, из какого пакета строка и его скидку.
+               service_templates: { table:'service_templates', fk:'package_id', columns:['id','name','discount_percent'] },
                // branch_id: отбор по корпусу (branch-filter: visit_services →
                // visits.branch_id); referral_source_id — отчёт по источникам.
                // Обе колонки visits и так отдаёт напрямую тем же ролям.
@@ -382,7 +384,8 @@ export const REGISTRY = {
                branches: { table:'branches', fk:'branch_id',  columns:['id','name'] } },
   },
   invoice_items: {
-    read:  { roles: ALL_STAFF, columns: ['id','invoice_id','service_id','description','quantity','unit_price','total','created_at'] },
+    // discount_amount: PACKAGES_V1 (mig 154) — the line's OWN discount (package), 0 = none.
+    read:  { roles: ALL_STAFF, columns: ['id','invoice_id','service_id','description','quantity','unit_price','total','created_at','discount_amount'] },
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },  // written only by billing RPCs
     filters: ['id','invoice_id','service_id'],
     // INVOICE_PARENT_V1 — строка счёта тянет ШАПКУ счёта: без неё ни экспорт
@@ -1349,13 +1352,23 @@ export const REGISTRY = {
   },
   // Reusable service-order templates (bundle of service ids). service-picker-modal.js.
   service_templates: {
-    read:  { roles: ALL_STAFF, columns: ['id','name','service_ids','active','created_at'] },
+    // PACKAGES_V1 (mig 154) — a template is now a PACKAGE: discount_percent and
+    // the offer window valid_from/valid_until (local dates, both optional).
+    read:  { roles: ALL_STAFF, columns: ['id','name','service_ids','active','created_at','discount_percent','valid_from','valid_until'] },
     // WIZ_TEMPLATES_REGISTRAR_V1 — saving a смета as a template is done by the
     // role that builds the смета. Retiring one is an UPDATE (active = 0), which
     // is what the template list's «×» sends, so the registrar gets that too;
     // hard DELETE stays admin-only.
-    write: { insert: { roles: ['admin','registrar'], columns: ['name','service_ids','active'] },
-             update: { roles: ['admin','registrar'], columns: ['name','service_ids','active'] },
+    // PACKAGES_V1 — the registrar keeps exactly that and no more
+    // (`nonAdminColumns`): a new package from the смета is 0 % and undated, and
+    // a retire is `active`. The discount, the dates and a package's service list
+    // after creation are the tile «Пакеты услуг» in «Роли» (`grant`): «Изменение»
+    // writes name/services/dates, «Цены и проценты» the discount.
+    write: { grant: 'settings.service_packages',
+             insert: { roles: ['admin','registrar'], columns: ['name','service_ids','active','discount_percent','valid_from','valid_until'],
+                       nonAdminColumns: ['name','service_ids','active'] },
+             update: { roles: ['admin','registrar'], columns: ['name','service_ids','active','discount_percent','valid_from','valid_until'],
+                       nonAdminColumns: ['active'] },
              delete: { roles: ['admin'] } },
     filters: ['id','active','name'],
     // service_ids is a JSON array of service ids in a TEXT column (mig 027).
@@ -1492,6 +1505,17 @@ export function canRead(t, role) { const e = REGISTRY[t]; return !!e && asRoles(
 // ROLE_REPORTS_SETTINGS_V1 — `write.grant` — не операция, а ключ справочника
 // прав (строка), поэтому операцией читается только объект.
 export function canWrite(t, op, role) { const e = REGISTRY[t]; return !!e && !!e.write[op] && typeof e.write[op] === 'object' && asRoles(role).some((r) => e.write[op].roles.includes(r)); }
+// PACKAGES_V1 — `nonAdminColumns` операции: колонки, которые пишет роль из
+// списка НЕ-администратор (регистратура сохраняет смету пакетом), — или null,
+// если сужения нет (у операции его нет или среди ролей есть администратор).
+// Остальные колонки такой писатель пишет только по праву плитки из «Ролей»
+// (query-compiler.js — тот же moneyGuard, что у write.grant).
+export function nonAdminColumns(t, op, role) {
+  const e = REGISTRY[t];
+  const w = e && e.write[op];
+  if (!w || typeof w !== 'object' || !Array.isArray(w.nonAdminColumns)) return null;
+  return asRoles(role).includes('admin') ? null : [...w.nonAdminColumns];
+}
 // ROLE_REPORTS_SETTINGS_V1 — НАСТРОЙКИ ПО РАЗДЕЛАМ: КЛЮЧ ПЛИТКИ, КОТОРОЙ
 // ПРИНАДЛЕЖИТ ТАБЛИЦА. Таблицы справочников настроек пишет администратор
 // (списки ролей выше), а `write.grant` называет окно раздела «Настройки» в

@@ -191,3 +191,44 @@ test('своя роль на основе администратора: закр
     assert.ok(run(db, { table: 'patient_categories', op: 'insert', values: { name: 'B', discount_percent: 3 } }, ADMIN).id);
   } finally { db.close(); }
 });
+
+// --- PACKAGES_V1: пакеты услуг ------------------------------------------------
+//
+// Регистратура по-прежнему сохраняет смету пакетом (0 %, без дат) и снимает
+// пакет из списка — это её рабочий инструмент (реестр, nonAdminColumns). Всё
+// остальное — плитка «Пакеты услуг»: «Изменение» пишет название, услуги и
+// срок, скидку — только вместе с «Ценами и процентами».
+test('пакеты: регистратура сохраняет смету пакетом и снимает его, но скидку и срок — только по праву плитки', () => {
+  const db = seed();
+  try {
+    // Ненастроенная роль: смета → пакет, снять из списка.
+    const id = run(db, { table: 'service_templates', op: 'insert', values: { name: 'Смета', service_ids: [1, 2], active: true, company_id: 1 } }, REG).id;
+    run(db, { table: 'service_templates', op: 'update', values: { active: false }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG);
+    assert.equal(db.prepare('SELECT active FROM service_templates WHERE id = ?').get(id).active, 0);
+    // …но не скидку, не срок и не состав готового пакета.
+    assert.throws(() => run(db, { table: 'service_templates', op: 'insert', values: { name: 'X', service_ids: [1], discount_percent: 10 } }, REG), refused);
+    assert.throws(() => run(db, { table: 'service_templates', op: 'insert', values: { name: 'X', service_ids: [1], valid_until: '2026-12-31' } }, REG), refused);
+    assert.throws(() => run(db, { table: 'service_templates', op: 'update', values: { service_ids: [1, 2, 3] }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG), refused);
+    assert.throws(() => run(db, { table: 'service_templates', op: 'update', values: { discount_percent: 50 }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG), refused);
+
+    // «Пакеты услуг: Изменение» — название, услуги, срок; скидка — нет.
+    addGrants(db, 'registrar', { settings: 'view', 'settings.service_packages': 'edit' });
+    run(db, { table: 'service_templates', op: 'update', values: { service_ids: [1, 2, 3], valid_from: '2026-09-01', valid_until: '2026-09-30' }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG);
+    assert.equal(db.prepare('SELECT valid_until FROM service_templates WHERE id = ?').get(id).valid_until, '2026-09-30');
+    assert.throws(() => run(db, { table: 'service_templates', op: 'update', values: { discount_percent: 50 }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG), refused);
+    assert.throws(() => run(db, { table: 'service_templates', op: 'insert', values: { name: 'Y', service_ids: [1], discount_percent: 5 } }, REG), refused);
+
+    // + «Цены и проценты» — и скидка.
+    addGrants(db, 'registrar', { 'settings.service_packages.money': 'edit' });
+    run(db, { table: 'service_templates', op: 'update', values: { discount_percent: 15 }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG);
+    assert.equal(db.prepare('SELECT discount_percent FROM service_templates WHERE id = ?').get(id).discount_percent, 15);
+    // «Цены и проценты» без «Изменения» плитки — ничего.
+    addGrants(db, 'registrar', { 'settings.service_packages': 'view' });
+    assert.throws(() => run(db, { table: 'service_templates', op: 'update', values: { discount_percent: 20 }, filters: [{ col: 'id', op: 'eq', val: id }] }, REG), refused);
+
+    // Администратор пишет всё; кассир и врач — ничего.
+    assert.ok(run(db, { table: 'service_templates', op: 'insert', values: { name: 'Акция', service_ids: [1], discount_percent: 10, valid_from: '2026-09-01', valid_until: '2026-09-30' } }, ADMIN).id);
+    assert.throws(() => run(db, { table: 'service_templates', op: 'insert', values: { name: 'Z', service_ids: [1] } }, { id: 70, role: 'cashier', extra_roles: [] }), refused);
+    assert.throws(() => run(db, { table: 'service_templates', op: 'insert', values: { name: 'Z', service_ids: [1] } }, { id: 71, role: 'doctor', extra_roles: [] }), refused);
+  } finally { db.close(); }
+});

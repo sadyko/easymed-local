@@ -85,7 +85,12 @@ export const SHIPPED = {
     'invoice_number', 'subtotal', 'discount_amount', 'total_amount',
     'status', 'created_at', 'paid_at',
   ],
-  invoice_items: ['description', 'quantity', 'unit_price', 'total', 'created_at'],
+  // PACKAGES_V1 (мигр. 154) — своя скидка строки (скидка пакета) едет вместе с
+  // документом: без неё сосед разнёс бы скидку счёта по всем строкам поровну,
+  // и доли врачей и вознаграждения по этому счёту в двух зданиях разошлись бы.
+  // Старый отправитель колонку не шлёт — приёмник пропускает отсутствующие
+  // поля (records.js), и у строки остаётся 0.
+  invoice_items: ['description', 'quantity', 'unit_price', 'total', 'discount_amount', 'created_at'],
   payments: ['amount', 'method', 'notes', 'paid_at', 'created_at'],
 };
 
