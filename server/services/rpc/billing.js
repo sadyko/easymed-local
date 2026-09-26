@@ -201,6 +201,41 @@ function linePackage(db, row, visitDay, cache) {
   return { id: pkg.id, name: pkg.name, pct: Number.isFinite(pct) ? Math.min(Math.max(pct, 0), 100) : 0 };
 }
 
+/**
+ * PACKAGES_V1 (ревью I-3) — ОТКАЗ В МИГ, КОГДА НА СТРОКУ СТАВЯТ ПАКЕТ.
+ *
+ * Счёт по визиту отказывает целиком, если пакет строки не действует в местный
+ * день визита (linePackage). Узнавать об этом у кассы — поздно: строка уже
+ * записана, пациент ушёл от стойки. Поэтому то же правило проверяется при
+ * заведении строки (routes/db.js, единственная дверь visit_services): визит
+ * известен, день известен. Возвращает текст отказа или null.
+ *
+ * Правило одно — linePackage; здесь только собран его вход.
+ */
+export function packageStampRefusal(db, rows) {
+  const list = (Array.isArray(rows) ? rows : [rows]).filter((r) => r && r.package_id != null && r.package_id !== '');
+  if (!list.length) return null;
+  const cache = new Map();
+  const days = new Map();
+  for (const r of list) {
+    const visitId = Number(r.visit_id);
+    if (!Number.isFinite(visitId)) continue;
+    if (!days.has(visitId)) {
+      const v = db.prepare('SELECT visit_date FROM visits WHERE id = ?').get(visitId);
+      days.set(visitId, v ? db.prepare(`SELECT ${localDate('?')} AS d`).get(v.visit_date).d : null);
+    }
+    const day = days.get(visitId);
+    if (!day) continue;   // визита нет — ответит внешний ключ
+    try {
+      linePackage(db, { id: '—', service_id: r.service_id, package_id: Number(r.package_id) }, day, cache);
+    } catch (e) {
+      if (e instanceof RpcError) return e.message.replace('Услуга строки — не входит', 'Услуга не входит');
+      throw e;
+    }
+  }
+  return null;
+}
+
 export function createInvoiceForVisit(db, args, user) {
   requireRole(user, CREATE_INVOICE_ROLES);
 

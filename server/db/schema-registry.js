@@ -322,7 +322,11 @@ export const REGISTRY = {
              'price_tier','package_id'] },   // package_id: PACKAGES_V1 (mig 154) — the package the line came from; price_tier: VISIT_TIER_PRICING_V1 (mig 127) — primary/secondary/repeat, set by the screen from service_price_quote   // queue_* set ONLY by issue_queue_numbers; notes = WS consult document JSON (mig 039); sample/verify: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083)
     write: { insert: { roles: ['admin','registrar','doctor'], columns: ['visit_id','service_id','doctor_id','quantity','unit_price','total','status','created_by','consultation_type_id','scheduled_at','price_tier','package_id'] },
              update: { roles: ['admin','registrar','doctor','lab','nurse'], columns: ['status','doctor_id','consultation_type_id','notes',
-             'sample_collected_at','verified_by','verified_at'] },   // LAB_HANDLING_V1 (lab) + PROCEDURES_V1 (nurse отмечает выполнение)
+             'sample_collected_at','verified_by','verified_at','package_id'],
+             // PACKAGES_V1 (ревью I-3) — пометку пакета правкой можно только
+             // СНЯТЬ: пакет вне срока визита иначе запирает весь счёт. Ставится
+             // пакет лишь при заведении строки (и там проверяется, routes/db.js).
+             onlyValues: { package_id: [null] } },   // LAB_HANDLING_V1 (lab) + PROCEDURES_V1 (nurse отмечает выполнение)
              delete: { roles: ['admin','registrar'] } },
     // BRANCH_ORIGIN_V1 — правило то же, что у patients выше, и здесь оно и
     // работает: кабинет врача и процедуры спрашивают `.is('sync_origin', null)`
@@ -1371,7 +1375,12 @@ export const REGISTRY = {
              insert: { roles: ['admin','registrar'], columns: ['name','service_ids','active','discount_percent','valid_from','valid_until'],
                        nonAdminColumns: ['name','service_ids','active'] },
              update: { roles: ['admin','registrar'], columns: ['name','service_ids','active','discount_percent','valid_from','valid_until'],
-                       nonAdminColumns: ['active'] },
+                       nonAdminColumns: ['active'],
+                       // Ревью M-1: «×» в списке — это active = 0. Вернуть снятый
+                       // пакет (active = 1) — решение плитки, а не стойки: иначе
+                       // регистратура оживляла бы акцию, которую администратор
+                       // закрыл. Право плитки «Изменение» снимает сужение.
+                       nonAdminValues: { active: [0] } },
              delete: { roles: ['admin'] } },
     filters: ['id','active','name'],
     // service_ids is a JSON array of service ids in a TEXT column (mig 027).
@@ -1508,6 +1517,20 @@ export function canRead(t, role) { const e = REGISTRY[t]; return !!e && asRoles(
 // ROLE_REPORTS_SETTINGS_V1 — `write.grant` — не операция, а ключ справочника
 // прав (строка), поэтому операцией читается только объект.
 export function canWrite(t, op, role) { const e = REGISTRY[t]; return !!e && !!e.write[op] && typeof e.write[op] === 'object' && asRoles(role).some((r) => e.write[op].roles.includes(r)); }
+// PACKAGES_V1 (ревью M-1 / I-3) — ЗНАЧЕНИЯ, которые колонка операции вообще
+// принимает: `onlyValues` — для любого пишущего, `nonAdminValues` — для роли
+// из списка, которая не администратор (право плитки его снимает — это решает
+// query-compiler.js). Логические значения сравниваются как 0/1.
+// Возвращает { onlyValues, nonAdminValues } (каждое — объект или null).
+export function valueLimits(t, op, role) {
+  const e = REGISTRY[t];
+  const w = e && e.write[op];
+  if (!w || typeof w !== 'object') return { onlyValues: null, nonAdminValues: null };
+  return {
+    onlyValues: w.onlyValues || null,
+    nonAdminValues: w.nonAdminValues && !asRoles(role).includes('admin') ? w.nonAdminValues : null,
+  };
+}
 // PACKAGES_V1 — `nonAdminColumns` операции: колонки, которые пишет роль из
 // списка НЕ-администратор (регистратура сохраняет смету пакетом), — или null,
 // если сужения нет (у операции его нет или среди ролей есть администратор).

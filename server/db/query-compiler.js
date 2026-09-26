@@ -1,5 +1,5 @@
 import { writeGrantAllows, writeGrantViolation, writeGrantNarrows, readGrantAllows, secretColumns } from './write-grant.js';   // ROLE_REPORTS_SETTINGS_V1 · ADMIN_ROWS_GRANTABLE_V1
-import { tableEntry, canRead, canWrite, nonAdminColumns, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns, rowScope, actorStamps } from './schema-registry.js';
+import { tableEntry, canRead, canWrite, nonAdminColumns, valueLimits, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns, rowScope, actorStamps } from './schema-registry.js';
 import { effectiveRoles } from '../services/roles.js';
 import { scopeLifted } from './row-scope.js';   // CRM_HEAD_MERGE_TAGS_V1
 
@@ -233,10 +233,37 @@ export function compile(desc, user, ctx = {}) {
         viaGrant = true;
       }
     }
+    valueGuard();
     if (!viaGrant) return;
     const col = writeGrantViolation(table, op, desc.values, user, db);
     if (col) throw new CompileError('not allowed: column ' + col + ' is administrator-only', 403);
   };
+  // PACKAGES_V1 (ревью M-1 / I-3) — значения, которые колонка принимает
+  // (schema-registry.js valueLimits): `onlyValues` — для всех, `nonAdminValues`
+  // — для не-администратора без права плитки (write.grant). Логические — как 0/1.
+  function valueGuard() {
+    const ops = op === 'upsert' ? ['insert', 'update'] : [op];
+    const norm = (v) => (typeof v === 'boolean' ? (v ? 1 : 0)
+      : (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : v));
+    const rows = Array.isArray(desc.values) ? desc.values : [desc.values || {}];
+    for (const o of ops) {
+      const { onlyValues, nonAdminValues } = valueLimits(table, o, role);
+      const limits = [onlyValues];
+      if (nonAdminValues && !writeGrantAllows(table, o, user, db)) limits.push(nonAdminValues);
+      for (const lim of limits) {
+        if (!lim) continue;
+        for (const r of rows) {
+          for (const [col, allowed] of Object.entries(lim)) {
+            if (!r || !Object.prototype.hasOwnProperty.call(r, col)) continue;
+            const v = norm(r[col] === undefined ? null : r[col]);
+            if (!allowed.map(norm).some((a) => a === v)) {
+              throw new CompileError('not allowed: value of column ' + col, 403);
+            }
+          }
+        }
+      }
+    }
+  }
   if (op === 'upsert') {
     if (!mayWrite('insert') || !mayWrite('update')) {
       throw new CompileError('not allowed', 403);
