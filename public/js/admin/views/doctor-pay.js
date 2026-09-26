@@ -16,7 +16,8 @@ const cid = () => { try { return window.easymed?.state?.user?.company_id || null
 // users не принимает вовсе (write у users пуст), и прежние сохранения этого
 // экрана молча не делали ничего — экран говорил «обновлено», а ставки не
 // менялись. Маршрут проверяет ставки тем же parseRates, что карточка
-// сотрудника, и хранит все их ключи (pct, fix, price, inpatient_pct, branches).
+// сотрудника, и хранит все их ключи (pct, fix, price, branches); стационарные
+// ставки с INPATIENT_BONUS_V1 — отдельно (inpatient_rates), этот экран их не пишет.
 async function saveServiceRates(doctorId, rates) {
     const res = await fetch('/api/users/' + encodeURIComponent(doctorId), {
         method: 'PATCH',

@@ -1,13 +1,17 @@
-// INPATIENT_SHARE_V1 — «Стационар, %» в таблице «Услуги и ставки».
+// INPATIENT_SHARE_V1 → INPATIENT_BONUS_V1 (мигр. 155) — вкладка «Стационар»
+// карточки сотрудника.
 //
-// Владелец: «в настройках сотрудника нужна доля не только за оказанные услуги,
-// но и за стационар». Решение — второй процент на каждую услугу рядом с
-// амбулаторным. Проверяется то, из-за чего настройка может тихо не работать:
-//   * колонка есть и показывает сохранённое значение;
-//   * введённое число уходит на сервер ключом inpatient_pct;
-//   * стёртое поле уходит БЕЗ ключа (доли нет), а не нулём;
-//   * значение переживает открытие карточки (RATE_LOAD_V2: ключ, который
-//     редактор не несёт, терялся при следующем сохранении).
+// Владелец (26.09): «Employees: stationary bonuses separately». Ставки за
+// услуги в стационаре (% или фикс за единицу) живут ОТДЕЛЬНО от «Услуг и
+// ставок» (users.inpatient_rates), рядом — вознаграждение за направление в
+// стационар (% и/или фикс). Проверяется то, из-за чего настройка может тихо
+// не работать:
+//   * колонки «Стационар, %» в «Услугах и ставках» больше нет;
+//   * вкладка показывает сохранённое (и %, и сум) и бонус;
+//   * правки уходят своими полями, а амбулаторный список не меняется —
+//     прежде стационарная ставка заводила амбулаторную запись {pct: 0};
+//   * своя «Ставка для всех»;
+//   * значения переживают открытие карточки без правок.
 //
 // Fake-DOM харнесс — тот же, что в employees-managed.test.mjs.
 
@@ -60,19 +64,23 @@ globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.requestAnimationFrame = (fn) => fn();
 
 
+
 const DOC = {
   id: 7, username: 'surgeon', full_name: 'Хирургов Хасан', last_name: 'Хирургов', first_name: 'Хасан',
   role: 'doctor', is_active: true, is_local: true, extra_roles: [], phone: '+998901112255',
   staff_type: 'doctor', is_doctor: true, specialty: 'Хирург',
   service_rates: [
-    { service_id: 1, pct: 30, inpatient_pct: 20, branches: [1] },
     { service_id: 2, pct: 40, branches: [1] },
   ],
   referral_rates: [],
+  // INPATIENT_BONUS_V1 — стационарные ставки отдельным списком.
+  inpatient_rates: [{ service_id: 1, pct: 20 }, { service_id: 3, fix: 70000 }],
+  inpatient_referral_pct: 5, inpatient_referral_fixed: 0,
 };
 const SERVICES = [
   { id: 1, name: 'Аппендэктомия', price: 1000000, type: 'procedure', type_id: null, category_id: null },
   { id: 2, name: 'Перевязка', price: 100000, type: 'procedure', type_id: null, category_id: null },
+  { id: 3, name: 'Холецистэктомия', price: 2000000, type: 'other', type_id: null, category_id: null },
 ];
 
 const patches = [];
@@ -98,7 +106,7 @@ const byClass = (root, c) => walk(root).filter((n) => String(n.className || '').
 const buttonWith = (root, text) => tags(root, 'button').find((b) => textOf(b).includes(text));
 async function flush() { for (let i = 0; i < 12; i += 1) await new Promise((r) => setTimeout(r, 0)); }
 
-async function openRates() {
+async function openTab(label) {
   document.body.children.length = 0;
   patches.length = 0;
   const container = mk('div');
@@ -109,48 +117,80 @@ async function openRates() {
   await flush();
   const card = document.body.children[document.body.children.length - 1];
   // Пункт левой рейки — div с обработчиком клика, внутри которого подпись раздела.
-  const item = walk(card).filter((n) => n._l && n._l.click && textOf(n).includes('Услуги и ставки')).pop();
+  const item = walk(card).filter((n) => n._l && n._l.click && textOf(n).includes(label)).pop();
+  assert.ok(item, 'нет раздела «' + label + '» в рейке');
   item.click();
   await flush();
   return card;
 }
 const rowOf = (card, name) => byClass(card, 'rt-item').find((r) => textOf(r).includes(name));
-const inpatientInput = (row) => byClass(row, 'rt-num--inp')[0];
+const rateInput = (row) => byClass(row, 'rt-num--inp')[0];
+const bonusInputs = (card) => byClass(card, 'rt-num--bonus');
+const type = (el, v) => { el.value = v; el.dispatchEvent({ type: 'input' }); };
 async function save(card) {
   buttonWith(card, 'Сохранить сотрудника').click();
   await flush();
   assert.equal(patches.length, 1, 'карточка ушла на сервер одним PATCH');
-  return patches[0].body.service_rates;
+  return patches[0].body;
 }
 
-test('колонка «Стационар, %» есть в шапке и показывает сохранённую долю', async () => {
-  const card = await openRates();
+test('«Услуги и ставки» больше не несут колонку «Стационар, %»', async () => {
+  const card = await openTab('Услуги и ставки');
   const head = byClass(card, 'rt-head')[0];
-  assert.ok(textOf(head).includes('Стационар, %'), 'нет колонки: ' + textOf(head));
-  assert.ok(String(head.className).includes('rt-row--inpatient'), 'шапка и строки делят одну сетку');
-  assert.equal(inpatientInput(rowOf(card, 'Аппендэктомия')).value, '20');
-  const empty = inpatientInput(rowOf(card, 'Перевязка'));
-  assert.equal(empty.value, '', 'нет доли — пустое поле, а не 0');
-  assert.ok(!empty.disabled, 'у отмеченной услуги поле открыто');
+  assert.ok(!textOf(head).includes('Стационар'), 'колонка осталась: ' + textOf(head));
+  assert.equal(byClass(card, 'rt-num--inp').length, 0);
 });
 
-test('введённая доля сохраняется ключом inpatient_pct, стёртая — уходит без ключа', async () => {
-  const card = await openRates();
-  const a = inpatientInput(rowOf(card, 'Аппендэктомия'));
-  const b = inpatientInput(rowOf(card, 'Перевязка'));
-  a.value = ''; a.dispatchEvent({ type: 'input' });
-  b.value = '35'; b.dispatchEvent({ type: 'input' });
-  const rates = await save(card);
-  const of = (id) => rates.find((r) => Number(r.service_id) === id);
-  assert.ok(!('inpatient_pct' in of(1)), 'стёртое поле — «доли нет», а не 0');
-  assert.equal(of(1).pct, 30, 'амбулаторная ставка не тронута');
-  assert.equal(of(2).inpatient_pct, 35);
-  assert.equal(of(2).pct, 40);
+test('вкладка «Стационар»: сохранённые ставки (% и сум) и бонус за направление', async () => {
+  const card = await openTab('Стационар');
+  assert.equal(rateInput(rowOf(card, 'Аппендэктомия')).value, '20');
+  assert.equal(rateInput(rowOf(card, 'Холецистэктомия')).value, '70000');
+  const off = rateInput(rowOf(card, 'Перевязка'));
+  assert.equal(off.value, '', 'нет стационарной ставки — пустое поле, а не 0');
+  assert.ok(off.disabled === true || 'disabled' in off.attrs, 'у неотмеченной услуги поле закрыто');
+  const [pct, fixed] = bonusInputs(card);
+  assert.equal(pct.value, '5');
+  assert.equal(fixed.value, '', '0 — «не платится», пустое поле');
 });
 
-test('доля переживает открытие и сохранение карточки без правок', async () => {
-  const card = await openRates();
-  const rates = await save(card);
-  assert.equal(rates.find((r) => Number(r.service_id) === 1).inpatient_pct, 20,
-    'ключ, который редактор не несёт, терялся бы при следующем сохранении');
+test('правки вкладки уходят своими полями; амбулаторные ставки не меняются', async () => {
+  const card = await openTab('Стационар');
+  type(rateInput(rowOf(card, 'Аппендэктомия')), '35');
+  // Отметить «Перевязку» и перевести её на фиксированную сумму.
+  tags(rowOf(card, 'Перевязка'), 'input').find((i) => i.attrs.type === 'checkbox' || i.type === 'checkbox')
+    .dispatchEvent({ type: 'change' });
+  await flush();
+  buttonWith(rowOf(card, 'Перевязка'), 'сум').click();
+  await flush();
+  type(rateInput(rowOf(card, 'Перевязка')), '15000');
+  const [pct, fixed] = bonusInputs(card);
+  type(pct, '');
+  type(fixed, '200000');
+  const body = await save(card);
+  assert.deepEqual(body.inpatient_rates, [
+    { service_id: 1, pct: 35 }, { service_id: 3, fix: 70000 }, { service_id: 2, fix: 15000 },
+  ]);
+  assert.equal(body.inpatient_referral_pct, 0);
+  assert.equal(body.inpatient_referral_fixed, 200000);
+  // Сцепки нет: амбулаторный список тот же, без записи {pct: 0} ради стационара.
+  assert.deepEqual(body.service_rates.map((r) => r.service_id), [2]);
+  assert.ok(body.service_rates.every((r) => !('inpatient_pct' in r)));
+});
+
+test('«Ставка для всех» во вкладке пишет только стационарные ставки отмеченных услуг', async () => {
+  const card = await openTab('Стационар');
+  const bulk = byClass(card, 'rt-num--inp-bulk')[0];
+  bulk.value = '12';
+  bulk.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} });
+  await flush();
+  const body = await save(card);
+  assert.deepEqual(body.inpatient_rates, [{ service_id: 1, pct: 12 }, { service_id: 3, pct: 12 }]);
+  assert.deepEqual(body.service_rates, [{ service_id: 2, pct: 40, branches: [1] }]);
+});
+
+test('ставки переживают открытие и сохранение карточки без правок', async () => {
+  const card = await openTab('Стационар');
+  const body = await save(card);
+  assert.deepEqual(body.inpatient_rates, DOC.inpatient_rates);
+  assert.equal(body.inpatient_referral_pct, 5);
 });

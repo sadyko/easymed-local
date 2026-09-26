@@ -141,6 +141,25 @@ export function parseEmployeeFields(body, db, currentRole) {
     fields[key] = parsed.value;
   }
 
+  // INPATIENT_BONUS_V1 — вкладка «Стационар»: ставки за услуги в стационаре и
+  // вознаграждение за направление пациента в стационар (% от оплаченного
+  // счёта госпитализации и/или фикс за госпитализацию; 0 — не платится).
+  if (body.inpatient_rates !== undefined) {
+    const parsed = parseInpatientRates(body.inpatient_rates);
+    if (!parsed.ok) return { ok: false, message: parsed.message };
+    fields.inpatient_rates = parsed.value;
+  }
+  if (body.inpatient_referral_pct !== undefined) {
+    const n = inpatientNumber(body.inpatient_referral_pct) ?? 0;
+    if (!Number.isFinite(n) || n < 0 || n > 100) return { ok: false, message: 'За направление в стационар — процент от 0 до 100.' };
+    fields.inpatient_referral_pct = n;
+  }
+  if (body.inpatient_referral_fixed !== undefined) {
+    const n = inpatientNumber(body.inpatient_referral_fixed) ?? 0;
+    if (!Number.isFinite(n) || n < 0 || n > MAX_RATE_MONEY) return { ok: false, message: 'За направление в стационар — сумма от 0 до 1 000 000 000 000.' };
+    fields.inpatient_referral_fixed = n;
+  }
+
   if (body.extra_roles !== undefined) {
     if (!Array.isArray(body.extra_roles)) return { ok: false, message: 'extra_roles must be an array.' };
     for (const role of body.extra_roles) {
@@ -229,22 +248,10 @@ function parseRates(val, key, moneyKey = 'price') {
       }
     }
 
-    // INPATIENT_SHARE_V1 — отдельная доля врача за услугу, оказанную в
-    // СТАЦИОНАРЕ («Стационар, %» в таблице ставок; считает reports.js,
-    // INPATIENT_RATE_SQL). Только у оказанных услуг: у направлений стационарной
-    // доли нет, ключ там не хранится. Отсутствие осмысленно — «стационарной
-    // доли нет», и отчёт тогда платит 0, а НЕ амбулаторный процент; поэтому
-    // пустое поле не превращается в 0. В отличие от pct значение вне 0..100
-    // не прижимается молча, а отклоняется: процент стационара вводится руками
-    // рядом с амбулаторным, и 150 — это опечатка, которую надо показать.
-    let inpatientPct = null;
-    if (key === 'service_rates' && entry.inpatient_pct !== undefined
-        && entry.inpatient_pct !== null && entry.inpatient_pct !== '') {
-      inpatientPct = typeof entry.inpatient_pct === 'boolean' ? NaN : Number(entry.inpatient_pct);
-      if (!Number.isFinite(inpatientPct) || inpatientPct < 0 || inpatientPct > 100) {
-        return { ok: false, message: 'Стационарная доля врача — число от 0 до 100 %.' };
-      }
-    }
+    // INPATIENT_BONUS_V1 (мигр. 155) — ключа inpatient_pct в записи ставки
+    // больше нет: стационарные ставки живут отдельно, в inpatient_rates
+    // (parseInpatientRates ниже), и задаются во вкладке «Стационар». Ключ,
+    // присланный старым экраном, отбрасывается вместе с прочими лишними.
 
     let branches = [];
     if (entry.branches !== undefined) {
@@ -258,10 +265,51 @@ function parseRates(val, key, moneyKey = 'price') {
     const clean = { service_id: serviceId, pct, branches };
     if (money !== null) clean[moneyKey] = money;
     if (fix !== null) clean.fix = fix;
-    if (inpatientPct !== null) clean.inpatient_pct = inpatientPct;
     byId.set(serviceId, clean);
   }
 
+  return { ok: true, value: JSON.stringify([...byId.values()]) };
+}
+
+// INPATIENT_BONUS_V1 (мигр. 155) — ставки врача за услуги, оказанные в
+// СТАЦИОНАРЕ (вкладка «Стационар»; считает reports.js, INPATIENT_RATE_SQL):
+// [{service_id, pct} | {service_id, fix}]. Хранятся ОТДЕЛЬНО от service_rates,
+// поэтому стационарная ставка больше не заводит амбулаторной записи {pct: 0},
+// перекрывавшей ставку по умолчанию.
+//
+// У записи ровно ОДНА ставка: процент (0..100) ЛИБО фиксированная сумма за
+// единицу. Обе сразу — отказ: какая из них платится, иначе решал бы порядок
+// ключей. Ни одной — тоже отказ: услуга без ставки в этом списке не стоит
+// (пустое поле на экране снимает запись целиком). Значение вне границ не
+// прижимается молча, а отклоняется: вводится руками, и 150 % — опечатка,
+// которую надо показать. Повтор услуги — выигрывает последняя запись.
+const INPATIENT_PCT_MSG = 'Стационарная ставка врача — процент от 0 до 100.';
+const INPATIENT_FIX_MSG = 'Стационарная ставка врача — сумма от 0 до 1 000 000 000 000.';
+function inpatientNumber(v) {
+  if (v === undefined || v === null || v === '') return undefined;
+  if (typeof v === 'boolean') return NaN;
+  return Number(v);
+}
+export function parseInpatientRates(val) {
+  if (!Array.isArray(val)) return { ok: false, message: 'inpatient_rates must be an array.' };
+  if (val.length > MAX_RATE_ENTRIES) return { ok: false, message: 'inpatient_rates has too many entries.' };
+  const byId = new Map();
+  for (const entry of val) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return { ok: false, message: 'Invalid rate entry.' };
+    const serviceId = Number(entry.service_id);
+    if (!Number.isInteger(serviceId) || serviceId <= 0) return { ok: false, message: 'Invalid rate entry.' };
+    const pct = inpatientNumber(entry.pct);
+    const fix = inpatientNumber(entry.fix);
+    if (pct !== undefined && fix !== undefined) return { ok: false, message: 'Стационарная ставка — либо процент, либо сумма, не обе сразу.' };
+    if (pct === undefined && fix === undefined) return { ok: false, message: 'У услуги во вкладке «Стационар» не задана ставка.' };
+    if (pct !== undefined) {
+      if (!Number.isFinite(pct) || pct < 0 || pct > 100) return { ok: false, message: INPATIENT_PCT_MSG };
+      byId.set(serviceId, { service_id: serviceId, pct });
+    } else {
+      if (!Number.isFinite(fix) || fix < 0 || fix > MAX_RATE_MONEY) return { ok: false, message: INPATIENT_FIX_MSG };
+      byId.set(serviceId, { service_id: serviceId, fix });
+    }
+  }
   return { ok: true, value: JSON.stringify([...byId.values()]) };
 }
 
@@ -321,6 +369,10 @@ export function employeeView(u) {
     working_hours: u.working_hours, service_rate_default: u.service_rate_default,
     referral_rate_default: u.referral_rate_default,
     service_rates: parseJsonArray(u.service_rates), referral_rates: parseJsonArray(u.referral_rates),
+    // INPATIENT_BONUS_V1 — вкладка «Стационар».
+    inpatient_rates: parseJsonArray(u.inpatient_rates),
+    inpatient_referral_pct: Number(u.inpatient_referral_pct) || 0,
+    inpatient_referral_fixed: Number(u.inpatient_referral_fixed) || 0,
     created_at: u.created_at, updated_at: u.updated_at,
     // STAFF_SYNC_V1 (migration 086) — did this building create the row, or did
     // it arrive from the main clinic? The employees screen needs it to decide
@@ -419,7 +471,9 @@ function withSpecialties(db, view) {
 // ---------------------------------------------------------------------------
 const EMP_KEY = 'settings.employees';
 const MONEY_KEY = 'settings.employees.money';
-export const MONEY_FIELDS = ['salary_type', 'salary_fixed', 'salary_percent', 'service_rate_default', 'referral_rate_default', 'service_rates', 'referral_rates'];
+export const MONEY_FIELDS = ['salary_type', 'salary_fixed', 'salary_percent', 'service_rate_default', 'referral_rate_default', 'service_rates', 'referral_rates',
+  // INPATIENT_BONUS_V1 — вкладка «Стационар»: те же правила «Цен и процентов».
+  'inpatient_rates', 'inpatient_referral_pct', 'inpatient_referral_fixed'];
 
 function forbid(res, message) {
   return res.status(403).json({ error: { code: 'forbidden', message } });
