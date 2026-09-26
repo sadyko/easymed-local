@@ -7,10 +7,11 @@ import { ensureOpenShift } from './cashier.js';   // SHIFT_AUTO_V2
 // здесь: заочно деньги у окна не появляются. См. шапку crm/visit-status.js.
 import { crmInvoiceEvidence, crmVisitEvidence } from '../crm/visit-status.js';
 import { invoiceStatusFor } from '../domain/money.js';
-import { unitPriceFor } from '../domain/pricing.js';
-// VISIT_TIER_PRICING_V1 — a line quoted as a second/repeat visit keeps that
-// price at the till: the catalog price is the FIRST visit's price.
-import { tierUnitPrice } from '../domain/visit-tier.js';
+// PAY_BASIS_PERFORMED_V1 — «what will the invoice charge for this line» is one
+// function, shared with the doctor's pay (rpc/reports.js): own price over the
+// catalog, and VISIT_TIER_PRICING_V1 — a line quoted as a second/repeat visit
+// keeps that price at the till (the catalog price is the FIRST visit's price).
+import { lineUnitPrice } from '../domain/pricing.js';
 import { hasAnyRole } from '../roles.js';
 // HOLDINGS_FIRST_V1 — «вернуть КАЖДУЮ часть туда, откуда она пришла» живёт в
 // одном месте на весь сервер (rpc/inventory.js): подотчёт сотрудника, кабинет,
@@ -201,31 +202,29 @@ export function createInvoiceForVisit(db, args, user) {
     const getService = db.prepare('SELECT price, name, price_secondary, secondary_days_from, secondary_days_to, price_repeat, repeat_days_from, repeat_days_to FROM services WHERE id = ?');
     const getProduct = db.prepare('SELECT sale_price, name FROM products WHERE id = ?');
     const priced = rows.map((row) => {
-      let unit = row.unit_price;
       let svcName = null;
+      let svc = null, prod = null;
       if (row.service_id != null) {
-        const svc = getService.get(row.service_id);
+        svc = getService.get(row.service_id);
         if (!svc) {
           throw new RpcError(`service ${row.service_id} not found`, 400);
         }
-        unit = unitPriceFor(db, {
-          doctorId: row.doctor_id,
-          serviceId: row.service_id,
-          catalogPrice: svc.price,
-        });
-        // VISIT_TIER_PRICING_V1 — the tier recorded on the line wins over the
-        // catalog and over the doctor's own price: those are first-visit
-        // prices, and this visit was quoted as the second or a repeat.
-        unit = tierUnitPrice(svc, row.price_tier, unit);
         svcName = svc.name;
       } else if (row.clinic_item_id != null) {
-        const prod = getProduct.get(row.clinic_item_id);
+        prod = getProduct.get(row.clinic_item_id);
         if (!prod) {
           throw new RpcError(`product ${row.clinic_item_id} not found`, 400);
         }
-        unit = prod.sale_price;
         svcName = prod.name;
       }
+      // PAY_BASIS_PERFORMED_V1 — the price rule lives in ONE place
+      // (domain/pricing.js lineUnitPrice): the doctor's own price over the
+      // catalog, then VISIT_TIER_PRICING_V1 — the tier recorded on the line
+      // wins over both (those are first-visit prices, and this visit was quoted
+      // as the second or a repeat). The doctor's pay for a performed line that
+      // is not invoiced yet reads the same function, so issuing the invoice
+      // never moves the doctor's share.
+      const unit = lineUnitPrice(db, row, { service: svc, product: prod });
       const qty = row.quantity;
       if (!(Number.isFinite(qty) && qty > 0)) {
         throw new RpcError(`invalid quantity on visit_service ${row.id}`, 400);
@@ -860,22 +859,19 @@ export function buildAdmissionInvoice(db, admissionId, ids, user) {
       if (row.admission_id !== admissionId) throw new RpcError(`admission_service ${id} belongs to another admission.`, 400);
       if (row.invoice_item_id !== null) throw new RpcError(`admission_service ${id} is already invoiced.`, 400);
       if (!row.billable) throw new RpcError('строка в учёте расходов — отметьте «В счёт», чтобы включить её в счёт пациента.', 400);
-      let unit = row.unit_price, name = '';
+      let name = '', svc = null, prod = null;
       if (row.service_id != null) {
-        const svc = getService.get(row.service_id);
+        svc = getService.get(row.service_id);
         if (!svc) throw new RpcError(`service ${row.service_id} not found`, 400);
-        // Same precedence as visit billing: the performing doctor's own price wins.
-        unit = unitPriceFor(db, {
-          doctorId: row.doctor_id,
-          serviceId: row.service_id,
-          catalogPrice: svc.price,
-        });
         name = svc.name;
       } else if (row.clinic_item_id != null) {
-        const prod = getProduct.get(row.clinic_item_id);
+        prod = getProduct.get(row.clinic_item_id);
         if (!prod) throw new RpcError(`product ${row.clinic_item_id} not found`, 400);
-        unit = prod.sale_price; name = prod.name;
+        name = prod.name;
       }
+      // Same precedence as visit billing (the doctor's own price wins), with no
+      // visit tier — PAY_BASIS_PERFORMED_V1: one rule, domain/pricing.js.
+      const unit = lineUnitPrice(db, row, { service: svc, product: prod, tiered: false });
       const qty = row.quantity;
       if (!(Number.isFinite(qty) && qty > 0)) throw new RpcError(`invalid quantity on admission_service ${row.id}`, 400);
       return { row, unit, qty, line: round2(unit * qty), name };

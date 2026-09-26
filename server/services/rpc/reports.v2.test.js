@@ -86,8 +86,10 @@ function seed({ rates = true } = {}) {
 
   db.prepare(`INSERT INTO admissions (id, admission_no, patient_id, doctor_id, attending_doctor_id, status)
               VALUES (1,'A-1',3,2,2,'active')`).run();
-  db.prepare(`INSERT INTO admission_services (id, admission_id, service_id, doctor_id, performer_id, quantity, unit_price, total, status, billable)
-              VALUES (1,1,3,2,2,1,1000000,1000000,'added',1)`).run();
+  // PAY_BASIS_PERFORMED_V1 — операция ВЫПОЛНЕНА (performed_at): доля врача
+  // платится за выполненное.
+  db.prepare(`INSERT INTO admission_services (id, admission_id, service_id, doctor_id, performer_id, quantity, unit_price, total, status, billable, performed_at)
+              VALUES (1,1,3,2,2,1,1000000,1000000,'added',1,'2026-08-06T09:00:00Z')`).run();
   const { invoice } = createInvoiceForAdmission(db, { admission_id: 1, admission_service_ids: [1] }, admin);
   db.prepare("UPDATE invoices SET status = 'paid', paid_amount = total_amount, created_at = '2026-08-06T10:00:00Z' WHERE id = ?").run(invoice.id);
   return { db, ext, doc1Src, internalCat, extCat, admissionInvoice: invoice.id };
@@ -196,16 +198,22 @@ test('по услугам: строка на услугу и место, ден�
   assert.equal(op['Доля врача'], 200000);              // стационарная доля 20 %
 });
 
-test('по услугам: «Доля врача» сходится с «Общей выручкой», а по оплаченным — с «Зарплатами врачей»', () => {
+// PAY_BASIS_PERFORMED_V1 — было: «по оплаченным — с «Зарплатами врачей»»
+// (302 200 = 302 200). Теперь зарплаты платят ВЫПОЛНЕННОЕ, оплачено оно или нет,
+// и с ними сходится режим «Все счета» (здесь каждая выполненная услуга в счёте
+// периода): 57 000 + 75 200 + 200 000 = 332 200. «Только оплаченные» —
+// сведения: неоплаченная консультация INV-3 (30 000) в них не попадает.
+test('по услугам: «Доля врача» сходится с «Общей выручкой» и с «Зарплатами врачей»', () => {
   const { db } = seed();
   const all = objects(run(db, 'by_services'));
   const revenue = objects(run(db, 'total_revenue'));
   assert.equal(sum(all, 'Доля врача'), sum(revenue, 'Доля врача'));
   assert.equal(sum(all, 'Сумма') - sum(all, 'Скидка'), sum(revenue, 'После скидки'));
   assert.equal(sum(all, 'Налог'), sum(revenue, 'Налог'));
-  const paid = objects(run(db, 'by_services', { paid: 'paid' }));
   const salaries = objects(run(db, 'doctor_salaries'));
-  assert.equal(sum(paid, 'Доля врача'), sum(salaries, 'Итого к выплате'));
+  assert.equal(sum(all, 'Доля врача'), sum(salaries, 'Итого к выплате'));
+  assert.equal(sum(all, 'Доля врача'), 332200);
+  const paid = objects(run(db, 'by_services', { paid: 'paid' }));
   assert.equal(sum(paid, 'Доля врача'), 302200);
   assert.ok(!paid.some((o) => o['Оплачено (доля оплаты счёта)'] === 0), 'неоплаченная строка в режиме «Только оплаченные»');
   assert.throws(() => run(db, 'by_services', { paid: 'maybe' }), /paid/);
@@ -223,7 +231,10 @@ test('по услугам: фильтр по группе', () => {
 
 // ─── 3. ПО ВРАЧАМ ────────────────────────────────────────────────────────────
 
-test('по врачам: работа по всем счетам, выплата по оплаченным, вознаграждение как направившему', () => {
+// PAY_BASIS_PERFORMED_V1 — было «работа по всем счетам, выплата по
+// оплаченным»: «Доля за услуги» Хирургова 27 000, «Итого» 227 000. Теперь
+// платит выполненная неоплаченная консультация INV-3 тоже: 27 000 + 30 000.
+test('по врачам: работа и выплата по выполненному, вознаграждение как направившему', () => {
   const { db } = seed();
   const rows = objects(run(db, 'by_doctors'));
   const v = rows.find((o) => o['Врач'] === 'Врачев В.В.');
@@ -241,9 +252,9 @@ test('по врачам: работа по всем счетам, выплата
   assert.equal(s['Услуг'], 3);
   assert.equal(s['Выставлено'], 1190000);          // 90 000 + 100 000 (не оплачен) + 1 000 000
   assert.equal(s['Оплачено (доля оплаты счёта)'], 1090000);
-  assert.equal(s['Доля за услуги'], 27000);         // неоплаченная консультация доли не даёт
+  assert.equal(s['Доля за услуги'], 57000);         // неоплаченная, но выполненная консультация платит
   assert.equal(s['Стационарная доля'], 200000);
-  assert.equal(s['Итого к выплате'], 227000);
+  assert.equal(s['Итого к выплате'], 257000);
 });
 
 test('по врачам: доли в сумме равны «Зарплатам врачей», итог — они же плюс вознаграждение за направления', () => {
@@ -272,7 +283,7 @@ test('врач × услуга: разбивка складывается в д�
   assert.equal(cons['Пациентов'], 2);
   assert.equal(cons['Выставлено'], 190000);
   assert.equal(cons['Оплачено (доля оплаты счёта)'], 90000);
-  assert.equal(cons['Доля врача'], 27000);
+  assert.equal(cons['Доля врача'], 57000);   // PAY_BASIS_PERFORMED_V1 — было 27 000 (только оплаченная)
   const op = rows.find((o) => o['Врач'] === 'Хирургов Х.Х.' && o['Услуга'] === 'Операция');
   assert.equal(op['Где'], 'Стационар');
   const byDoc = objects(run(db, 'by_doctors'));
@@ -476,7 +487,9 @@ test('I7: кабинет отбирает строки своего источн
   assert.match(q, /AND rs\.doctor_id = \?/);
 });
 
-test('M7: частично оплаченный счёт — «Оплачено» = доля оплаты, разнесённая по строкам; доли врача — нет', () => {
+// PAY_BASIS_PERFORMED_V1 — было «доли врача — нет» (27 000 без INV-3). Теперь
+// доля от оплаты не зависит: выполненная консультация INV-3 платит полностью.
+test('M7: частично оплаченный счёт — «Оплачено» = доля оплаты, разнесённая по строкам; доля врача от оплаты не зависит', () => {
   const { db } = seed();
   // INV-3 (консультация 100 000, врач 2) оплачен на 40 %.
   db.prepare("UPDATE invoices SET paid_amount = 40000, status = 'partial' WHERE invoice_number = 'INV-3'").run();
@@ -486,7 +499,7 @@ test('M7: частично оплаченный счёт — «Оплачено�
   assert.equal(cons['Доля врача'], 57000);   // доля (как в «Общей выручке») не зависит от оплаты
   const s = objects(run(db, 'by_doctors')).find((o) => o['Врач'] === 'Хирургов Х.Х.');
   assert.equal(s[P], 1090000 + 40000);
-  assert.equal(s['Доля за услуги'], 27000, 'доля с частично оплаченного счёта начислена');
+  assert.equal(s['Доля за услуги'], 57000, 'доля выполненной услуги не должна зависеть от оплаты');
   const ds = objects(run(db, 'doctor_services')).find((o) => o['Врач'] === 'Хирургов Х.Х.' && o['Услуга'] === 'Консультация');
   assert.equal(ds[P], 130000);
   assert.ok(run(db, 'by_doctors').notes.some((n) => n.includes('пропорционально сумме строки')));

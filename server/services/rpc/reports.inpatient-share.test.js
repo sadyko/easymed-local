@@ -3,8 +3,10 @@
 // Владелец: «в карточке сотрудника нужна доля не только за оказанные услуги,
 // но и за стационар» + отчёт по стационарной доле. Решение (23.09): отдельный
 // «Стационар, %» на каждую услугу в таблице ставок; платится ИСПОЛНИТЕЛЮ
-// строки стационара (нет исполнителя — НАЗНАЧИВШЕМУ), только после оплаты
-// счёта, тем же порядком, что амбулаторная доля (сумма − скидка − налог) × %.
+// строки стационара (нет исполнителя — НАЗНАЧИВШЕМУ), тем же порядком, что
+// амбулаторная доля (сумма − скидка − налог) × %. PAY_BASIS_PERFORMED_V1
+// (владелец, 26.09) — платится ВЫПОЛНЕННАЯ строка (отметка «Выполнено»,
+// performed_at), оплачен её счёт или нет; прежде — только после оплаты счёта.
 // Койко-дни и медикаменты/расходники НЕ входят.
 //
 // Считается ОТЧЁТАМИ (зарплатный, «Общая выручка», «Рентабельность операций»,
@@ -32,7 +34,9 @@ const TO   = '2100-01-01';
 //   3 койко-дни ×3 (service_id NULL, ACCOMMODATION) → никому;
 //   4 расходник ×4 (clinic_item_id)                → никому;
 //   5 операция, назначил 3, исполнителя нет       → 0: у 3 нет стационарной доли.
-function seed({ paid = true, discount = 0, tier = false } = {}) {
+// performed — строки отмечены «Выполнено» (PAY_BASIS_PERFORMED_V1: без этой
+// отметки доли нет); performedAt — когда.
+function seed({ paid = true, discount = 0, tier = false, performed = true, performedAt = null } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   const u = db.prepare(`INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, service_rates)
@@ -76,6 +80,10 @@ function seed({ paid = true, discount = 0, tier = false } = {}) {
   const total = invoice.subtotal - discount;
   db.prepare('UPDATE invoices SET discount_amount = ?, total_amount = ?, paid_amount = ?, status = ? WHERE id = ?')
     .run(discount, total, paid ? total : 0, paid ? 'paid' : 'unpaid', invoice.id);
+  if (performed) {
+    db.prepare("UPDATE admission_services SET performed_at = COALESCE(?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))")
+      .run(performedAt);
+  }
   return db;
 }
 
@@ -155,10 +163,46 @@ test('койко-дни и расходники не платят никому',
   assert.equal(total, 470000 + 20000);
 });
 
-test('неоплаченный счёт не платит стационарную долю', () => {
+// PAY_BASIS_PERFORMED_V1 — было «неоплаченный счёт не платит стационарную
+// долю» (0 строк, 0 сум). Теперь платит выполненная строка, оплачена она или нет.
+test('неоплаченный счёт: выполненная строка стационара всё равно платит', () => {
   const db = seed({ paid: false });
+  assert.equal(report(db).rows.length, 3);
+  assert.equal(doctorInpatientShare(db, { doctor_id: 2, from: FROM, to: TO }, admin).fee, 470000);
+  const { out } = salaries(db);
+  assert.equal(out['Исполнитель И.И.']['Стационар: гонорар'], 470000);
+});
+
+test('невыполненная строка стационара не платит, даже с оплаченным счётом', () => {
+  const db = seed({ performed: false });
   assert.equal(report(db).rows.length, 0);
   assert.equal(report(db, 'doctor_salaries').rows.length, 0);
+  assert.equal(doctorInpatientShare(db, { doctor_id: 2, from: FROM, to: TO }, admin).fee, 0);
+  // Отметка «Выполнено» на одной строке — и платится ровно она.
+  db.prepare("UPDATE admission_services SET performed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = 1").run();
+  assert.equal(doctorInpatientShare(db, { doctor_id: 2, from: FROM, to: TO }, admin).fee, 470000);
+  assert.equal(report(db).rows.length, 1);
+});
+
+test('строка без счёта платит по цене, которую выставит счёт стационара', () => {
+  // Строка ещё не выставлена: цена — каталог (своей цены у назначившего нет),
+  // скидки у счёта стационара нет, налог 6 %: 1 000 000 − 60 000 = 940 000 × 50 %.
+  const db = seed();
+  db.prepare('UPDATE admission_services SET invoice_item_id = NULL WHERE id = 1').run();
+  const mine = doctorInpatientShare(db, { doctor_id: 2, from: FROM, to: TO }, admin);
+  assert.equal(mine.fee, 470000);
+  assert.equal(mine.rows[0].invoiced, false);
+  const row = objectsOf(report(db)).find((o) => o['Врач'] === 'Исполнитель И.И.');
+  assert.equal(row['Оплата'], 'Нет счёта');
+  assert.equal(row['№ счёта'], '');
+  // Своя цена НАЗНАЧИВШЕГО (так цену берёт buildAdmissionInvoice) — 1 200 000.
+  db.prepare('UPDATE users SET service_rates = ? WHERE id = 1').run(JSON.stringify([
+    { service_id: 1, pct: 30, inpatient_pct: 20, price: 1200000 },
+    { service_id: 2, pct: 40, inpatient_pct: 10 },
+  ]));
+  assert.equal(doctorInpatientShare(db, { doctor_id: 2, from: FROM, to: TO }, admin).fee, 1200000 * 0.94 * 0.5);
+  // Строка «в учёт расходов» пациенту не выставляется — и доли не даёт.
+  db.prepare('UPDATE admission_services SET billable = 0 WHERE id = 1').run();
   assert.equal(doctorInpatientShare(db, { doctor_id: 2, from: FROM, to: TO }, admin).fee, 0);
 });
 
@@ -180,7 +224,7 @@ test('«Итого к выплате» = амбулаторная доля + с�
   const { r, out } = salaries(db);
   const surg = out['Хирургов Х.Х.'];
   assert.equal(surg['Доля врача (гонорар)'], 40000, 'амбулаторная часть не изменилась');
-  assert.equal(surg['Оплаченных услуг'], 1, 'амбулаторный счётчик считает только амбулаторные строки');
+  assert.equal(surg['Выполненных услуг'], 1, 'амбулаторный счётчик считает только амбулаторные строки');
   assert.equal(surg['Сумма после скидки'], 100000);
   assert.equal(surg['Средний % врача'], 40);
   assert.equal(surg['Стационар: гонорар'], 20000);
@@ -233,12 +277,13 @@ test('«Рентабельность операций»: у стационарн
 
 // ─── 4. НОВЫЙ ОТЧЁТ ─────────────────────────────────────────────────────────
 
-test('«Стационар: доля врачей» — строка на каждую оплаченную медицинскую строку и итоги по врачам', () => {
+test('«Стационар: доля врачей» — строка на каждую выполненную медицинскую строку и итоги по врачам', () => {
   const r = report(seed({ discount: 312000 }));
   assert.equal(r.columns[0], 'Здание');
   const find = (who) => r.rows.find((x) => x[col(r, 'Врач')] === who);
   const perf = find('Исполнитель И.И.');
   assert.equal(perf[col(r, '№ госпитализации')], 'A-7');
+  assert.equal(perf[col(r, 'Оплата')], 'Оплачен');
   assert.equal(perf[col(r, 'Пациент')], 'Азизов Бахтиёр');
   assert.equal(perf[col(r, 'Кол-во')], 1);
   assert.equal(perf[col(r, 'Сумма')], 1000000);
@@ -267,9 +312,11 @@ test('«Стационар: доля врачей» — строка на каж
   assert.ok(r.pending_items, 'отчёт по строкам счетов говорит о недоехавших позициях');
 });
 
-test('период отчёта — по дате счёта, как у «Зарплат врачей»', () => {
-  const db = seed();
-  db.prepare("UPDATE invoices SET created_at = '2026-01-15T10:00:00Z'").run();
+// PAY_BASIS_PERFORMED_V1 — было «по дате счёта»: теперь по дню ВЫПОЛНЕНИЯ
+// (performed_at), и счёт, выставленный в феврале, январскую работу не двигает.
+test('период отчёта — по дню выполнения, как у «Зарплат врачей»', () => {
+  const db = seed({ performedAt: '2026-01-15T10:00:00Z' });
+  db.prepare("UPDATE invoices SET created_at = '2026-02-10T10:00:00Z'").run();
   const inJan = runReport(db, { kind: 'inpatient_share', from: '2026-01-01', to: '2026-01-31' }, admin);
   const inFeb = runReport(db, { kind: 'inpatient_share', from: '2026-02-01', to: '2026-02-28' }, admin);
   assert.equal(inJan.rows.length, 3);
@@ -299,7 +346,7 @@ test('RPC кабинета: те же строки и та же сумма, чт
 // ─── 6. АМБУЛАТОРИЯ НЕ ДВИГАЕТСЯ ────────────────────────────────────────────
 
 test('амбулаторные числа те же — есть рядом оплаченный стационар или нет', () => {
-  const OUT_COLS = ['Оплаченных услуг', 'Сумма после скидки', 'Средний % врача', 'Услуг по фикс. ставке', 'Доля врача (гонорар)'];
+  const OUT_COLS = ['Выполненных услуг', 'Сумма после скидки', 'Средний % врача', 'Услуг по фикс. ставке', 'Доля врача (гонорар)'];
   const pick = (db) => {
     const { out } = salaries(db);
     return OUT_COLS.map((c) => out['Хирургов Х.Х.'][c]);
@@ -373,6 +420,12 @@ test('M5: строка стационара, связанная со строк�
   db.prepare('UPDATE admission_services SET invoice_item_id = ? WHERE id = 5').run(bandage);
   db.prepare('UPDATE admission_services SET invoice_item_id = NULL WHERE id = 2').run();
   const lines = objectsOf(report(db));
+  // Операция на чужой строке счёта — ни строки, ни доли.
+  assert.ok(!lines.some((o) => o['Врач'] === 'Безставкин Б.Б.'), JSON.stringify(lines));
+  // PAY_BASIS_PERFORMED_V1 — перевязка (строка 2) выполнена и теперь без счёта:
+  // она платит сама за себя, по цене счёта, а не по строке операции.
   const onBandage = lines.filter((o) => o['Услуга'] === 'Перевязка');
-  assert.equal(onBandage.length, 0, 'перевязка получила долю по строке операции: ' + JSON.stringify(onBandage));
+  assert.equal(onBandage.length, 1);
+  assert.equal(onBandage[0]['№ счёта'], '');
+  assert.equal(onBandage[0]['Начислено врачу'], 20000);
 });

@@ -36,6 +36,8 @@ const READ_ONLY_RPCS = new Set([
   'doctor_inpatient_share',
   // REPORTS_V2 — вознаграждение врача за направления для кабинета; чтение.
   'doctor_referral_reward',
+  // PAY_BASIS_PERFORMED_V1 — вся выплата врача для кабинета одним вызовом; чтение.
+  'doctor_pay_summary',
   'cashier_invoices', 'cash_shift_summary', 'shift_report', 'cashier_report',
   'callcenter_report', 'queue_board', 'documents_feed', 'accommodation_state',
   'deposit_balance', 'list_deposits', 'service_delete_check', 'get_clinic_by_slug',
