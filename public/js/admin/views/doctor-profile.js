@@ -109,13 +109,18 @@ export async function renderDoctorProfile(container, doctorId) {
         //
         // Это тот самый класс, из-за которого владелец видит «запрос к базе
         // отклонён»: одна лишняя колонка гасит целый экран.
+        // DOCTOR_PUBLIC_PROFILE_V1 (миграция 159) — поля публичного профиля
+        // теперь хранятся офлайн и читаются обратно: без этого экран каждый
+        // раз открывался пустым, и повторное «Сохранить» стирало введённое.
         const { data } = await supabase.from('users')
-            .select('id, full_name, phone, specialty, license_number, doctor_category, room_id')
+            .select('id, full_name, phone, specialty, license_number, doctor_category, room_id, '
+                + 'full_name_ru, full_name_uz, full_name_en, academic_title_ru, academic_title_uz, academic_title_en, '
+                + 'bio_ru, bio_uz, bio_en, education_entries, experience_entries, certifications_entries, prof_dev_entries, '
+                + 'experience_years, instagram_url, telegram_url, photo_url')
             .eq('id', doctorId).single();
         st.user = data || {};
     } catch (e) { st.user = {}; }
-    // CLOUD_LEFTOVER_COLUMNS_V1 — колонки `photo_url` у сотрудника офлайн нет:
-    // здесь всегда пусто, и фото задаётся ссылкой («по ссылке») ниже.
+    // DOCTOR_PUBLIC_PROFILE_V1 — photo_url хранится (путь в doctor-photos или ссылка).
     st.photoUrl = st.user.photo_url || '';
 
     try {
@@ -201,8 +206,8 @@ export async function renderDoctorProfile(container, doctorId) {
         saveBtn.textContent = tr('Сохранение…');
         try {
             // (1) Upload pending photo → URL (or external "по ссылке", or '').
-            // RPC_PORT_V1 — фото офлайн не хранится (колонки нет); сбой загрузки
-            // не должен отнимать у врача сохранение специальностей и болезней.
+            // Сбой загрузки фото не должен отнимать у врача сохранение
+            // остального профиля, специальностей и болезней.
             let photoUrl = '';
             try { photoUrl = await uploadPendingPhoto(); } catch (e) { console.warn('[doctor-profile] photo upload:', e.message || e); }
 
@@ -250,6 +255,8 @@ export async function renderDoctorProfile(container, doctorId) {
                 await gw('/identity/doctor', { method: 'POST', body: { user_id: doctorId, specialty_slugs: st.specSlugs.slice(0, 4) } });
             } catch (e) { console.warn('[doctor-profile] medcore sync:', e.message); }
             // RPC_PORT_V1 — не говорим «сохранён» о том, что офлайн не хранится.
+            // DOCTOR_PUBLIC_PROFILE_V1 — после миграции 159 not_stored пуст,
+            // и это предупреждение остаётся только для базы до обновления.
             if (notStored.length) toast('Профиль сохранён. Биография, образование, соцсети и фото в офлайн-версии не хранятся.', 'info');
             else toast('Профиль сохранён', 'info');
         } catch (e) {

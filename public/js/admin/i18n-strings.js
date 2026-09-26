@@ -3,6 +3,19 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // DOCTOR_PUBLIC_PROFILE_V1 (2026-09-26) — публичный профиль врача в карточке сотрудника
+  "Публичный профиль": {"en":"Public profile","ru":"Публичный профиль","uz":"Ommaviy profil"},
+  "ФИО (RU)": {"en":"Full name (RU)","ru":"ФИО (RU)","uz":"F.I.Sh. (RU)"},
+  "ФИО (UZ)": {"en":"Full name (UZ)","ru":"ФИО (UZ)","uz":"F.I.Sh. (UZ)"},
+  "ФИО (EN)": {"en":"Full name (EN)","ru":"ФИО (EN)","uz":"F.I.Sh. (EN)"},
+  "Учёная степень (RU)": {"en":"Academic degree (RU)","ru":"Учёная степень (RU)","uz":"Ilmiy daraja (RU)"},
+  "Учёная степень (UZ)": {"en":"Academic degree (UZ)","ru":"Учёная степень (UZ)","uz":"Ilmiy daraja (UZ)"},
+  "Учёная степень (EN)": {"en":"Academic degree (EN)","ru":"Учёная степень (EN)","uz":"Ilmiy daraja (EN)"},
+  "Биография (RU)": {"en":"Biography (RU)","ru":"Биография (RU)","uz":"Tarjimai hol (RU)"},
+  "Биография (UZ)": {"en":"Biography (UZ)","ru":"Биография (UZ)","uz":"Tarjimai hol (UZ)"},
+  "Биография (EN)": {"en":"Biography (EN)","ru":"Биография (EN)","uz":"Tarjimai hol (EN)"},
+  "Пока пусто — врач заполняет в «Моём профиле».": {"en":"Empty for now — the doctor fills it in «My profile».","ru":"Пока пусто — врач заполняет в «Моём профиле».","uz":"Hozircha bo'sh — shifokor uni «Mening profilim»da to'ldiradi."},
+  "Как врача видят пациенты и партнёры. Врач правит это же в «Моём профиле».": {"en":"How patients and partners see the doctor. The doctor edits the same in «My profile».","ru":"Как врача видят пациенты и партнёры. Врач правит это же в «Моём профиле».","uz":"Bemorlar va hamkorlar shifokorni qanday ko'radi. Shifokor buni «Mening profilim»da tahrirlaydi."},
   // CARD_BALANCE_V1 (2026-09-26) — подарочные карты и сертификаты с остатком (касса, мастер, калькулятор, настройки)
   "Выберите карту или сертификат…": {"en":"Choose a card or certificate…","ru":"Выберите карту или сертификат…","uz":"Karta yoki sertifikatni tanlang…"},
   "{name} — остаток {sum} сум": {"en":"{name} — {sum} sum left","ru":"{name} — остаток {sum} сум","uz":"{name} — qoldiq {sum} so'm"},

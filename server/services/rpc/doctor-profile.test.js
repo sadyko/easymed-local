@@ -27,24 +27,36 @@ test('зарегистрирован в карте RPC', () => {
   assert.equal(typeof getRpc('update_my_doctor_profile'), 'function');
 });
 
-test('врач сохраняет свой профиль — ответ перечисляет, что записано и что офлайн не хранится', () => {
+// DOCTOR_PUBLIC_PROFILE_V1 (мигр. 159) — колонки есть: всё из белого списка
+// хранится, `not_stored` пуст, и экран больше не пишет «не хранятся».
+test('врач сохраняет свой профиль — ВСЕ поля белого списка хранятся, not_stored пуст', () => {
   const db = seed();
-  const out = updateMyDoctorProfile(db, { p: { bio_ru: 'Кардиолог', experience_years: 12, instagram_url: '' } }, doc);
-  assert.ok(Array.isArray(out.saved));
-  assert.ok(Array.isArray(out.not_stored));
-  // Колонок публичного профиля в офлайн-схеме нет: непустые значения честно
-  // перечислены как «не хранится», пустые — не шумят.
+  const p = {
+    full_name_ru: 'Иванов Иван', full_name_uz: 'Ivanov Ivan', full_name_en: 'Ivan Ivanov',
+    academic_title_ru: 'Кандидат медицинских наук', academic_title_uz: 'Tibbiyot fanlari nomzodi', academic_title_en: 'Candidate of Medical Sciences',
+    bio_ru: 'Кардиолог', bio_uz: 'Kardiolog', bio_en: 'Cardiologist',
+    education_entries: [{ ru: 'ТашМИ', year_from: '1995', year_to: '2001' }],
+    experience_entries: [{ ru: 'Клиника', title: 'Врач' }],
+    certifications_entries: [{ ru: 'ЭхоКГ', year: '2020' }],
+    prof_dev_entries: [{ ru: 'Курс', year: '2024' }],
+    experience_years: 12, instagram_url: 'https://instagram.com/doc', telegram_url: 'https://t.me/doc',
+    photo_url: '/api/storage/doctor-photos/doctors/2/a.jpg',
+  };
+  const out = updateMyDoctorProfile(db, { p }, doc);
+  assert.deepEqual(out.not_stored, []);
+  assert.deepEqual(out.saved.sort(), Object.keys(p).sort());
+  const row = db.prepare('SELECT * FROM users WHERE id = 2').get();
+  assert.equal(row.bio_uz, 'Kardiolog');
+  assert.equal(row.experience_years, 12);
+  assert.equal(row.photo_url, '/api/storage/doctor-photos/doctors/2/a.jpg');
+  assert.deepEqual(JSON.parse(row.certifications_entries), [{ ru: 'ЭхоКГ', year: '2020' }]);
+  // каждая колонка белого списка есть в схеме
   const cols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
-  for (const k of ['bio_ru', 'experience_years']) {
-    assert.ok(cols.has(k) ? out.saved.includes(k) : out.not_stored.includes(k), k);
-  }
-  assert.ok(!out.not_stored.includes('instagram_url'));
+  for (const k of PROFILE_KEYS) assert.ok(cols.has(k), 'нет колонки users.' + k);
 });
 
-test('пишет в колонку, когда она есть, и только в строку самого врача', () => {
+test('пишет в колонку и только в строку самого врача', () => {
   const db = seed();
-  db.exec('ALTER TABLE users ADD COLUMN bio_ru TEXT');
-  db.exec('ALTER TABLE users ADD COLUMN education_entries TEXT');
   const out = updateMyDoctorProfile(db, { p: { bio_ru: '  Терапевт  ', education_entries: [{ ru: 'ТашМИ', year: '2001' }] } }, doc);
   assert.deepEqual(out.saved.sort(), ['bio_ru', 'education_entries']);
   const me = db.prepare('SELECT bio_ru, education_entries FROM users WHERE id = 2').get();
@@ -56,7 +68,6 @@ test('пишет в колонку, когда она есть, и только 
 
 test('чужой id в аргументах ничего не меняет — строка всегда своя', () => {
   const db = seed();
-  db.exec('ALTER TABLE users ADD COLUMN bio_ru TEXT');
   updateMyDoctorProfile(db, { user_id: 3, id: 3, p: { bio_ru: 'X' } }, doc);
   assert.equal(db.prepare('SELECT bio_ru FROM users WHERE id = 3').get().bio_ru, null);
   assert.equal(db.prepare('SELECT bio_ru FROM users WHERE id = 2').get().bio_ru, 'X');

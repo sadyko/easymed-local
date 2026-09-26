@@ -503,12 +503,22 @@ export const REGISTRY = {
                 // сам журнал, а без сопоставления «номер → человек» разбор по
                 // операторам показывал бы четырёхзначные числа вместо имён.
                 'pbx_extension',
-                'license_number']},   // SCHED_V1 — the wizard's slot engine; branch_id — CALENDAR_BOOKING_V1
+                'license_number',
+                // DOCTOR_PUBLIC_PROFILE_V1 (миграция 159) — публичный профиль
+                // врача: хранится офлайн и читается экранами (профиль врача,
+                // карточка сотрудника) — основа будущего API для партнёров.
+                // Пишут его update_my_doctor_profile и routes/users.js.
+                'full_name_ru','full_name_uz','full_name_en',
+                'academic_title_ru','academic_title_uz','academic_title_en',
+                'bio_ru','bio_uz','bio_en',
+                'education_entries','experience_entries','certifications_entries','prof_dev_entries',
+                'experience_years','instagram_url','telegram_url','photo_url']},   // SCHED_V1 — the wizard's slot engine; branch_id — CALENDAR_BOOKING_V1
                write:{insert:{roles:[]},update:{roles:[]},delete:{roles:[]}},
                // room_id: настройки кабинетов спрашивают «кто закреплён за этим
                // кабинетом» — колонка уже читается строкой выше.
                filters:['id','role','is_active','active','is_doctor','room_id'],
-               json:['service_rates','referral_rates','kpi_links'],
+               json:['service_rates','referral_rates','kpi_links',
+                     'education_entries','experience_entries','certifications_entries','prof_dev_entries'],   // DOCTOR_PUBLIC_PROFILE_V1
                embed:{ rooms: { table:'rooms', fk:'room_id', columns:['id','name'] } } },
   products: {
     read:  { roles: ALL_STAFF, columns: ['id','name','code','unit','category','sale_price','on_hand','reorder_level','active','created_at','updated_at',

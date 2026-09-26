@@ -199,6 +199,16 @@ export const TABLES = [
       // Уволенный/отключённый обязан приехать именно отключённым — иначе филиал
       // продолжал бы пускать в систему человека, которому доступ закрыли.
       'is_active',
+      // DOCTOR_PUBLIC_PROFILE_V1 (миграция 159) — публичный профиль врача едет,
+      // как ФИО и специальность: филиал показывает того же врача теми же
+      // словами. photo_url НЕ едет: это путь файла в хранилище ЭТОЙ установки,
+      // сам файл между зданиями не передаётся, и у соседа ссылка была бы
+      // мёртвой.
+      'full_name_ru', 'full_name_uz', 'full_name_en',
+      'academic_title_ru', 'academic_title_uz', 'academic_title_en',
+      'bio_ru', 'bio_uz', 'bio_en',
+      'education_entries', 'experience_entries', 'certifications_entries', 'prof_dev_entries',
+      'experience_years', 'instagram_url', 'telegram_url',
     ],
     refs: { department_id: 'departments' },
     // ЛОГИН, и выбор здесь вынужденный, а не вкусовой. users.username —
