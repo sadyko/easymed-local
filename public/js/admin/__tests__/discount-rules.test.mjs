@@ -94,5 +94,5 @@ test('калькулятор: офлайн-скидка любого вида �
         assert.ok(!ia.includes("rpc('" + name), 'invoice-actions.js всё ещё зовёт ' + name);
     }
     assert.ok(!/x\.kind === 'promo_code'/.test(spm), "применённая скидка не должна отбираться по облачному виду 'promo_code'");
-    assert.match(spm, /invoicePickerLines\(\{ visitId: visit\.id, lines: patientRows\.map\(billLineOf\), pct: wizDiscountPct\(\), promo: promoRow \}\)/, 'сумма скидки в счёте — тем же правилом, что в смете');
+    assert.match(spm, /invoicePickerLines\(\{ visitId: visit\.id, lines: patientRows\.map\(billLineOf\), pct: wizDiscountPct\(\), promo: promoRow, categoryPct: wiz\.categoryPct \|\| 0 \}\)/, 'сумма скидки в счёте — тем же правилом, что в смете');
 });

@@ -432,3 +432,69 @@ test('M4: живые экраны не режут числовой id как с�
   walk(fileURLToPath(root));
   assert.deepEqual(hits, [], 'id офлайн — число: .slice() падает TypeError');
 });
+
+// ─── ревью I2 / M1 / M2 — смета == счёт ─────────────────────────────────────
+const { pickerLinePrice } = await import('../views/service-picker-modal.js');
+
+test('I2: цена строки сметы — как у кассы (pricing.js lineUnitPrice): цена врача, над ней — цена визита по счёту', () => {
+  const svc = { id: 21, price: 900000 };
+  const doc = { id: 7, service_rates: [{ service_id: 21, price: 1100000, percentage: 30 }] };
+  assert.equal(pickerLinePrice({ service: svc, doctor: null }), 900000, 'без врача — каталог');
+  assert.equal(pickerLinePrice({ service: svc, doctor: doc }), 1100000, 'своя цена врача');
+  assert.equal(pickerLinePrice({ service: svc, doctor: { id: 7 } }, [doc]), 1100000, 'врач без ставок в строке — ищется среди сотрудников по id');
+  assert.equal(pickerLinePrice({ service: svc, doctor: { id: 8, service_rates: [{ service_id: 21, price: null }] } }), 900000, 'price null — у врача своей цены нет');
+  assert.equal(pickerLinePrice({ service: svc, doctor: { id: 8, service_rates: [{ service_id: 21, price: 0 }] } }), 0, '0 — настоящая бесплатная цена');
+  // цена визита по счёту (второй/повторный) бьёт и каталог, и цену врача
+  const quoted = { service: { id: 21, price: 450000, __base_price: 900000 }, doctor: doc, tier: { tier: 'repeat', price: 450000 } };
+  assert.equal(pickerLinePrice(quoted), 450000);
+  // первичный визит по котировке — снова цена врача, а не каталог из котировки
+  const primary = { service: { id: 21, price: 900000, __base_price: 900000 }, doctor: doc, tier: { tier: 'primary', price: 900000 } };
+  assert.equal(pickerLinePrice(primary), 1100000);
+  // консультация: цена уже врачебная (consultPriceFor), строка счёта — ad-hoc
+  assert.equal(pickerLinePrice({ service: { id: 'c1', __consult: true, price: 120000 }, doctor: doc }), 120000);
+});
+
+test('I2: своя цена врача — смета и счёт сходятся (было: назвали 900 000, выставили 1 100 000)', async () => {
+  seed();
+  DB.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, service_rates) VALUES (7,'doc','x','Петров','doctor',1,?)")
+    .run(JSON.stringify([{ service_id: 21, price: 1100000, percentage: 30 }]));
+  DB.prepare('UPDATE visit_services SET doctor_id = 7 WHERE id = 101').run();
+  DB.prepare('UPDATE visit_services SET package_id = NULL WHERE id = 102').run();
+  const docRow = { id: 7, service_rates: [{ service_id: 21, price: 1100000, percentage: 30 }] };
+  const items = [
+    { service: { id: 21, price: 900000 }, doctor: docRow },
+    { service: { id: 22, price: 100000 }, doctor: null },
+  ];
+  const lines = items.map((a, i) => ({ visit_service_id: 101 + i, service_id: a.service.id, price: pickerLinePrice(a), packaged: false }));
+  const out = await invoicePickerLines({ visitId: 40, lines, pct: 10, promo: null });
+  assert.equal(out.error, null);
+  const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+  assert.equal(inv.subtotal, 1200000);
+  assert.equal(inv.total_amount, out.payable, 'смета ' + out.payable + ' ≠ счёт ' + inv.total_amount);
+});
+
+test('M1: скидка группы пациента — пол в смете, как в счёте; на строке пакета — большая из пакета и группы', async () => {
+  seed({ categoryPct: 15 });
+  const d = pickerDiscount(LINES, { pct: 5, promo: null, categoryPct: 15 });
+  assert.equal(d.packageOff, 20000, 'строка пакета: max(20, 15) %');
+  assert.equal(d.categoryOff, 135000 - 45000, 'группа поднимает скидку остальных строк с 45 000 до 135 000');
+  const out = await invoicePickerLines({ visitId: 40, lines: LINES, pct: 5, promo: null, categoryPct: 15 });
+  const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+  assert.equal(inv.total_amount, out.payable, 'смета ' + out.payable + ' ≠ счёт ' + inv.total_amount);
+  assert.equal(out.payable, 845000);
+  // группа выше пакета: пакет 20 %, группа 30 % → строка пакета по группе
+  const hi = pickerDiscount(LINES, { pct: 0, promo: null, categoryPct: 30 });
+  assert.equal(hi.packageOff, 30000);
+  seed({ categoryPct: 30 });
+  const out2 = await invoicePickerLines({ visitId: 40, lines: LINES, pct: 0, promo: null, categoryPct: 30 });
+  assert.equal(DB.prepare('SELECT total_amount FROM invoices WHERE visit_id = 40').get().total_amount, out2.payable);
+});
+
+test('M2: срок пакета в смете и при записи строки проверяется по одному дню — дню визита', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../views/service-picker-modal.js', import.meta.url), 'utf8');
+  assert.match(src, /function cartVisitDateIso\(\)/);
+  assert.match(src, /const visitDate = cartVisitDateIso\(\);/, 'запись визита берёт день из той же функции');
+  assert.match(src, /function previewBillLines\(\) \{[^]*?const day = localDayOf\(cartVisitDateIso\(\)\)/, 'смета — тоже');
+  assert.ok(!/localDayOf\(a\.startISO \|\| scheduledISO\) \|\| offerDay\(\)/.test(src), 'остался собственный день строки');
+});
