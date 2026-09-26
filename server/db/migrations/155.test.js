@@ -4,11 +4,11 @@
 // users.inpatient_rates с развязкой от амбулаторной ставки.
 //
 // Проверяется: колонки и их ограничения · перенос значений (включая 0 и
-// дубли услуги) · ключ inpatient_pct исчезает из service_rates · запись,
-// жившая только ради стационара, удаляется и пишется в журнал · прочие
-// записи целы · повторный прогон ничего не меняет · и деньги: после переноса
-// амбулаторная ставка по умолчанию больше не обнуляется записью {pct: 0}, а
-// стационарная доля та же, что до переноса.
+// дубли услуги) · ключ inpatient_pct исчезает из service_rates · ВСЕ записи
+// service_rates остаются (ревью I5: запись «жившая только ради стационара»
+// ещё и держит врача в списках исполнителей услуги) · повторный прогон ничего
+// не меняет · и деньги: амбулаторная доля та же, что до переноса, и
+// стационарная доля та же.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,17 +35,15 @@ const ADDED = [
 ];
 function rollback155(db) {
   for (const [t, c] of ADDED) db.exec(`ALTER TABLE ${t} DROP COLUMN ${c}`);
-  db.exec('DROP TABLE inpatient_rate_migration_log');
   db.prepare("DELETE FROM schema_migrations WHERE name LIKE '155%'").run();
 }
 // Шаг переноса (раздел 4 файла) ещё раз — миграция целиком второй раз не
 // идёт (schema_migrations), но её перенос обязан быть идемпотентным.
 const SQL155 = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '155_inpatient_bonus.sql'), 'utf8');
 function rerunTransfer(db) {
-  db.exec(SQL155.slice(SQL155.indexOf('CREATE TABLE IF NOT EXISTS inpatient_rate_migration_log')));
+  db.exec(SQL155.slice(SQL155.indexOf('DROP TABLE IF EXISTS temp.m155_entries')));
 }
 const userRow = (db, id) => db.prepare('SELECT service_rates, inpatient_rates FROM users WHERE id = ?').get(id);
-const log = (db) => db.prepare('SELECT user_id, service_id, inpatient_pct, entry FROM inpatient_rate_migration_log ORDER BY id').all();
 
 test('155: колонки — у госпитализации, у источника и у сотрудника, с ограничениями', () => {
   const db = freshDb();
@@ -77,13 +75,13 @@ test('155: колонки — у госпитализации, у источни
   } finally { db.close(); }
 });
 
-test('155: «Стационар, %» переезжает в inpatient_rates; запись только ради стационара — удаляется с журналом', () => {
+test('155: «Стационар, %» переезжает в inpatient_rates; записи service_rates остаются все, без ключа', () => {
   const db = freshDb();
   try {
     rollback155(db);
     const ins = db.prepare("INSERT INTO users (id, username, password_hash, role, service_rates, service_rate_default) VALUES (?, ?, 'x', 'doctor', ?, ?)");
     ins.run(1, 'mixed', JSON.stringify([
-      { service_id: 1, pct: 0, inpatient_pct: 20, branches: [] },        // только ради стационара → удаляется
+      { service_id: 1, pct: 0, inpatient_pct: 20, branches: [] },        // только ради стационара → остаётся без ключа
       { service_id: 2, pct: 40, inpatient_pct: 10, branches: [1] },      // амбулаторная остаётся без ключа
       { service_id: 3, pct: 0, branches: [] },                           // сознательный 0 без стационара — цел
       { service_id: 4, pct: 0, price: 5000, inpatient_pct: 5 },          // своя цена — запись осталась
@@ -103,6 +101,7 @@ test('155: «Стационар, %» переезжает в inpatient_rates; з
       { service_id: 1, pct: 20 }, { service_id: 2, pct: 10 }, { service_id: 4, pct: 5 }, { service_id: 5, pct: 0 },
     ]);
     assert.deepEqual(JSON.parse(one.service_rates), [
+      { service_id: 1, pct: 0, branches: [] },
       { service_id: 2, pct: 40, branches: [1] },
       { service_id: 3, pct: 0, branches: [] },
       { service_id: 4, pct: 0, price: 5000 },
@@ -117,22 +116,17 @@ test('155: «Стационар, %» переезжает в inpatient_rates; з
     assert.deepEqual(userRow(db, 4), { service_rates: '{not json', inpatient_rates: '' });
     assert.deepEqual(userRow(db, 5), { service_rates: '', inpatient_rates: '' });
 
-    const l = log(db);
-    assert.equal(l.length, 1, JSON.stringify(l));
-    assert.equal(l[0].user_id, 1);
-    assert.equal(l[0].service_id, 1);
-    assert.equal(l[0].inpatient_pct, 20);
-    assert.deepEqual(JSON.parse(l[0].entry), { service_id: 1, pct: 0, inpatient_pct: 20, branches: [] });
+    // Журнала удалённых записей нет — удалять нечего.
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name = 'inpatient_rate_migration_log'").get().n, 0);
 
     // Повторный прогон ничего не меняет.
     const before = [userRow(db, 1), userRow(db, 2)];
     rerunTransfer(db);
     assert.deepEqual([userRow(db, 1), userRow(db, 2)], before);
-    assert.equal(log(db).length, 1);
   } finally { db.close(); }
 });
 
-test('155: деньги — ставка по умолчанию больше не обнуляется, стационарная доля та же', () => {
+test('155: деньги — амбулаторная доля как до переноса, стационарная та же; врач остаётся исполнителем услуги', () => {
   const db = freshDb();
   try {
     rollback155(db);
@@ -151,8 +145,12 @@ test('155: деньги — ставка по умолчанию больше н
     db.prepare(`INSERT INTO admission_services (admission_id, service_id, doctor_id, quantity, unit_price, total, status, billable, performed_at)
                 VALUES (1, 1, 1, 1, 100000, 100000, 'added', 1, '2026-08-05T10:00:00Z')`).run();
     const s = doctorPaySummary(db, { doctor_id: 1, from: '2026-08-01', to: '2026-08-31' }, { id: 9, role: 'admin' });
-    // До переноса запись {pct: 0} перекрывала 30 % по умолчанию и амбулатория давала 0.
-    assert.equal(s.outpatient.fee, 30000);
+    // Запись {pct: 0} осталась и, как до переноса, перекрывает 30 % по
+    // умолчанию: амбулаторные деньги миграция не меняет.
+    assert.equal(s.outpatient.fee, 0);
     assert.equal(s.inpatient.fee, 20000);
+    // Ревью I5 — врач по-прежнему в «Услугах и ставках» этой услуги.
+    const rates = JSON.parse(db.prepare('SELECT service_rates FROM users WHERE id = 1').get().service_rates);
+    assert.deepEqual(rates, [{ service_id: 1, pct: 0, branches: [] }]);
   } finally { db.close(); }
 });

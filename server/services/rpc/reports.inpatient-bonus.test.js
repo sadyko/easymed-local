@@ -9,7 +9,7 @@
 //     один раз за госпитализацию, с первого оплаченного счёта; неоплаченный
 //     счёт — ничего;
 //   * кто направил: admissions.referral_source_id, иначе карточка пациента;
-//   * направивший врач госпитализации (admissions.doctor_id) — по своей
+//   * направивший врач госпитализации (admissions.referring_doctor_id) — по своей
 //     вкладке «Стационар»; источник, связанный с сотрудником, по карточке
 //     источника за стационар не платит;
 //   * «Рефералы» (сводка = детализация), «По врачам», «Зарплаты врачей» и
@@ -27,7 +27,7 @@ const FROM = '2000-01-01';
 const TO = '2100-01-01';
 
 // Клиника:
-//   врач 1 «Направляев» — направивший (admissions.doctor_id): 2 % + 100 000 за
+//   врач 1 «Направляев» — направивший (admissions.referring_doctor_id): 2 % + 100 000 за
 //     госпитализацию; врач 2 «Хирургов» — исполнитель операции, стационарная
 //     ставка 10 %; администратор 9;
 //   категория «Партнёры» — обычная ставка 10 % на всё;
@@ -55,8 +55,10 @@ function seed({ discount = 0 } = {}) {
   db.prepare("INSERT INTO patients (id, mrn, full_name, referral_source_id) VALUES (1,'P-1','Азизов А.',?)").run(Q);
   db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (1,'Операция',1000000,6,'other')").run();
   db.prepare("INSERT INTO products (id, name, sale_price) VALUES (1,'Бинт',5000)").run();
-  db.prepare(`INSERT INTO admissions (id, admission_no, patient_id, doctor_id, attending_doctor_id, status, referral_source_id)
-              VALUES (1,'A-1',1,1,2,'active',?)`).run(P);
+  // Ревью I1 — направивший записан ЯВНО (referring_doctor_id, мигр. 156):
+  // admissions.doctor_id бонус больше не читает.
+  db.prepare(`INSERT INTO admissions (id, admission_no, patient_id, doctor_id, attending_doctor_id, status, referral_source_id, referring_doctor_id)
+              VALUES (1,'A-1',1,1,2,'active',?,1)`).run(P);
   const line = db.prepare(`INSERT INTO admission_services
       (id, admission_id, service_id, clinic_item_id, doctor_id, performer_id, quantity, unit_price, total, status, notes, billable, performed_at)
       VALUES (?,1,?,?,?,?,?,?,?,'added',?,1,'2026-08-06T09:00:00Z')`);

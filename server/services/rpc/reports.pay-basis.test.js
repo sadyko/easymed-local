@@ -99,16 +99,27 @@ test('добавленная или стоящая в очереди строк�
   }
 });
 
-test('отменённое не платит: отменённый визит, «не пришёл», отменённый и возвращённый счёт', () => {
+test('отменённое не платит: отменённый визит, «не пришёл», возвращённый счёт', () => {
   const c = clinic();
   c.line({ visitStatus: 'cancelled' });
   c.line({ visitStatus: 'no_show' });
-  c.line({ invoice: 'void' });
   c.line({ invoice: 'refunded' });
   assert.equal(salaries(c.db).count, 0);
   assert.equal(summary(c.db).outpatient.count, 0);
   c.line({});   // живая строка рядом — одна
   assert.equal(salaries(c.db).fee, ONE);
+});
+
+// Ревью C1 — отмена СЧЁТА работу не отменяет: выполненная строка, оставшаяся
+// привязанной к отменённому счёту (старые данные; касса теперь такую строку
+// со счёта отпускает), платит как невыставленная — без скидки отменённого счёта.
+test('выполненная строка отменённого счёта платит как невыставленная', () => {
+  const c = clinic();
+  c.line({ invoice: 'void', discount: 50000 });
+  assert.equal(salaries(c.db).count, 1);
+  assert.equal(salaries(c.db).unbilled, 1);
+  assert.equal(salaries(c.db).fee, ONE);
+  assert.equal(summary(c.db).outpatient.fee, ONE);
 });
 
 // ─── 2. ДЕНЬГИ СТРОКИ СО СЧЁТОМ — КАК ПРЕЖДЕ ─────────────────────────────────

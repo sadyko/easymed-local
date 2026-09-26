@@ -50,34 +50,24 @@ ALTER TABLE users ADD COLUMN inpatient_referral_fixed REAL NOT NULL DEFAULT 0
 --
 -- Было: ключ inpatient_pct внутри записи service_rates. Чтобы задать его,
 -- услугу приходилось отмечать в «Услугах и ставках», и отметка писала
--- амбулаторную запись {pct: 0} — а записанный 0 перекрывает ставку по
--- умолчанию (service_rate_default): врач с 30 % по умолчанию за эту услугу
--- амбулаторно получал 0. Это и есть сцепка, которую переносом снимаем.
+-- амбулаторную запись {pct: 0}.
 --
 -- Перенос: каждая запись, где inpatient_pct — ЧИСЛО, даёт в inpatient_rates
 -- {service_id, pct: inpatient_pct}; при двух записях на одну услугу берётся
 -- бо́льшая (так её и читал отчёт — MAX в INPATIENT_RATE_SQL). Ключ
 -- inpatient_pct из service_rates убирается у всех записей.
 --
--- ЗАПИСЬ, ЖИВШАЯ ТОЛЬКО РАДИ СТАЦИОНАРА, удаляется из service_rates целиком.
--- Узнаётся так: стоит inpatient_pct, амбулаторный процент 0 (или его нет), нет
--- фикса (fix) и нет своей цены (price). Отличить её от сознательной записи
--- «оказывает, амбулаторно 0 %» по данным нельзя — поэтому каждая удалённая
--- запись целиком пишется в inpatient_rate_migration_log, и её можно вернуть.
--- Прочие записи (с процентом > 0, фиксом или своей ценой) остаются, только без
--- ключа inpatient_pct.
+-- ЗАПИСИ service_rates ОСТАЮТСЯ ВСЕ, даже жившие только ради стационара
+-- ({pct: 0} без фикса и своей цены). Ревью I5 (26.09): прежний вариант такую
+-- запись удалял, но запись «Услуг и ставок» — это ещё и «врач оказывает эту
+-- услугу»: по ней врача ставят в списки исполнителей (выбор врача на
+-- услугу, пулы по категориям, назначения в стационаре). Удаление молча
+-- убирало врача из этих списков. Записанный {pct: 0} по-прежнему перекрывает
+-- ставку по умолчанию — ровно как было до переноса; снять его — решение
+-- клиники в карточке сотрудника, а не миграции.
 --
 -- Повторный прогон ничего не делает: переносятся только строки, где ключ
 -- inpatient_pct ещё есть, а после переноса его нет нигде.
-
-CREATE TABLE IF NOT EXISTS inpatient_rate_migration_log (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id       INTEGER NOT NULL,
-  service_id    INTEGER,
-  inpatient_pct REAL,
-  entry         TEXT NOT NULL,          -- удалённая запись service_rates как была
-  at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
-);
 
 DROP TABLE IF EXISTS temp.m155_entries;
 CREATE TEMP TABLE m155_entries AS
@@ -86,12 +76,7 @@ SELECT u.id                                                   AS user_id,
        j.value                                                AS value,
        CAST(json_extract(j.value, '$.service_id') AS INTEGER) AS service_id,
        CASE WHEN json_type(j.value, '$.inpatient_pct') IN ('integer', 'real')
-            THEN CAST(json_extract(j.value, '$.inpatient_pct') AS REAL) END AS inpatient_pct,
-       CASE WHEN json_type(j.value, '$.inpatient_pct') IN ('integer', 'real')
-             AND COALESCE(CAST(json_extract(j.value, '$.pct') AS REAL), 0) = 0
-             AND json_type(j.value, '$.fix') IS NULL
-             AND json_type(j.value, '$.price') IS NULL
-            THEN 1 ELSE 0 END                                 AS inpatient_only
+            THEN CAST(json_extract(j.value, '$.inpatient_pct') AS REAL) END AS inpatient_pct
   FROM users u, json_each(CASE WHEN json_valid(u.service_rates) THEN u.service_rates ELSE '[]' END) j
  WHERE u.service_rates IS NOT NULL AND u.service_rates <> ''
    AND json_valid(u.service_rates)
@@ -118,19 +103,12 @@ UPDATE users
        ) x)
  WHERE id IN (SELECT user_id FROM m155_entries WHERE inpatient_pct IS NOT NULL);
 
--- 4b. Журнал удаляемых записей.
-INSERT INTO inpatient_rate_migration_log (user_id, service_id, inpatient_pct, entry)
-SELECT user_id, service_id, inpatient_pct, value
-  FROM m155_entries
- WHERE inpatient_only = 1
- ORDER BY user_id, pos;
-
--- 4c. service_rates без ключа inpatient_pct и без записей «только ради стационара».
+-- 4b. service_rates — те же записи в том же порядке, без ключа inpatient_pct.
 UPDATE users
    SET service_rates = COALESCE((
      SELECT json_group_array(json(json_remove(e.value, '$.inpatient_pct')) ORDER BY e.pos)
        FROM m155_entries e
-      WHERE e.user_id = users.id AND e.inpatient_only = 0), '[]')
+      WHERE e.user_id = users.id), '[]')
  WHERE id IN (SELECT user_id FROM m155_entries);
 
 DROP TABLE IF EXISTS temp.m155_entries;

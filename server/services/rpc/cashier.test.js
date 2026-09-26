@@ -444,15 +444,23 @@ test('void: галочка keep_services оставляет услугу в ви
   assert.notEqual(again.id, inv.id);
 });
 
-test('void: начатая работа остаётся привязанной к отменённому счёту, а не удаляется', () => {
+// PAY_BASIS_PERFORMED_V1, ревью C1 — начатая работа отпускается со счёта (как
+// строки стационара, ADM_LINE_RELEASE_V1) и сохраняет статус: её можно
+// выставить заново, а доля врача за неё не пропадает вместе со счётом.
+test('void: начатая работа остаётся в визите со своим статусом и отпускается со счёта', () => {
   const { db, vid, vs1, vs2 } = seed();
   const inv = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1, vs2] }, registrar).invoice;
   db.prepare("UPDATE visit_services SET status = 'in_progress' WHERE id = ?").run(vs2);
   const res = voidInvoice(db, { invoice_id: inv.id }, cashier);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE id=?').get(vs1).n, 0, 'неначатая — снята');
   const kept = db.prepare('SELECT invoice_item_id, status FROM visit_services WHERE id=?').get(vs2);
-  assert.ok(kept && kept.invoice_item_id, 'начатая — на месте и со ссылкой на счёт');
+  assert.ok(kept, 'начатая — на месте');
+  assert.equal(kept.invoice_item_id, null, 'начатая — отпущена со счёта');
+  assert.equal(kept.status, 'in_progress', 'статус работы не откатывается');
   assert.equal(res.removed_services.length, 1);
+  assert.equal(res.released_services.length, 1);
+  const again = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs2] }, registrar).invoice;
+  assert.notEqual(again.id, inv.id, 'начатую работу выставили заново');
 });
 
 test('плитка «ОТМЕНЁН»: счёт, выставленный вчера и отменённый сегодня, виден сегодня', () => {

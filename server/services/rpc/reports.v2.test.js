@@ -85,6 +85,9 @@ function seed({ rates = true } = {}) {
   inv.run(4, 'INV-4', 3, 3, 200000, 0, 200000, 0, 'void');
   item.run(4, 4, 2, 'УЗИ', 1, 200000, 200000);
   vs.run(3, 2, 1, 1, 200000, 200000, 4);
+  // Ревью C1 — аннулированный INV-4 выставлен за НЕНАЧАТУЮ работу: выполненная
+  // строка отменённого счёта платила бы как невыставленная.
+  db.prepare("UPDATE visit_services SET status = 'added' WHERE invoice_item_id = 4").run();
 
   db.prepare(`INSERT INTO admissions (id, admission_no, patient_id, doctor_id, attending_doctor_id, status)
               VALUES (1,'A-1',3,2,2,'active')`).run();

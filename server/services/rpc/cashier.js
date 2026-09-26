@@ -556,29 +556,47 @@ export function voidInvoice(db, args, user) {
     // Теперь неначатая услуга уходит вместе со счётом (как её убирает и
     // «Убрать услугу» в карте пациента); строки счёта остаются навсегда — это
     // и есть запись о том, что было выставлено. Начатая или оказанная работа
-    // по-прежнему не трогается. Кассир, который отменяет счёт, чтобы выставить
+    // не удаляется никогда (что с ней происходит — ревью C1 ниже). Кассир, который отменяет счёт, чтобы выставить
     // его заново (скидка, другой плательщик), ставит галочку keep_services —
     // тогда услуги остаются в визите, как раньше. Услуга со следом работы
     // (результат анализа, документ, сообщение прибора) не удаляется никогда:
     // она остаётся в визите невыставленной, и это названо в ответе.
     // Стационар (admission_services) живёт по своему правилу ниже.
+    //
+    // PAY_BASIS_PERFORMED_V1, ревью C1 (2026-09-26) — СДЕЛАННАЯ РАБОТА ОТПУСКАЕТСЯ
+    // СО СЧЁТА, А НЕ ОСТАЁТСЯ ПРИВЯЗАННОЙ К ОТМЕНЁННОМУ. Прежде начатая или
+    // оказанная строка (in_progress / completed) оставалась со ссылкой на
+    // отменённый счёт: выставить её снова было нельзя («already invoiced»), а
+    // доля врача, считаемая по выполненному, выпадала вместе со счётом. Теперь
+    // она, как строки стационара ниже (ADM_LINE_RELEASE_V1), просто теряет
+    // ссылку на счёт и СОХРАНЯЕТ свой статус — работа сделана, её выставят
+    // заново. То же для анализа, у которого взят материал или есть результат
+    // (collected / resulted): его статус больше не откатывается в 'added'.
+    // Строка со следом работы (результат, документ, сообщение прибора) тоже
+    // сохраняет статус. В 'added' возвращается только неначатая строка без
+    // следа, оставленная галочкой keep_services, — как прежде.
     const keepServices = args.keep_services === true || args.keep_services === 1;
+    const PERFORMED = ['collected', 'in_progress', 'resulted', 'completed'];
     const lines = db.prepare(`
       SELECT vs.id, vs.status, COALESCE(s.name, p.name, '') AS name
         FROM visit_services vs
         LEFT JOIN services s ON s.id = vs.service_id
         LEFT JOIN products p ON p.id = vs.clinic_item_id
-       WHERE vs.invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
-         AND vs.status NOT IN ('in_progress', 'completed')`).all(invoiceId);
+       WHERE vs.invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)`).all(invoiceId);
     const hasTrace = db.prepare(`
       SELECT (EXISTS(SELECT 1 FROM lab_results WHERE visit_service_id = ?)
            OR EXISTS(SELECT 1 FROM visit_documents WHERE visit_service_id = ?)
            OR EXISTS(SELECT 1 FROM lab_device_messages WHERE visit_service_id = ?)) AS t`);
     const release = db.prepare("UPDATE visit_services SET invoice_item_id = NULL, status = 'added' WHERE id = ?");
+    const releaseKeepStatus = db.prepare('UPDATE visit_services SET invoice_item_id = NULL WHERE id = ?');
     const removed = [];
     const released = [];
     for (const l of lines) {
-      if (!keepServices && !hasTrace.get(l.id, l.id, l.id).t) {
+      const trace = !!hasTrace.get(l.id, l.id, l.id).t;
+      if (PERFORMED.includes(l.status) || trace) {
+        releaseKeepStatus.run(l.id);
+        released.push(l.name);
+      } else if (!keepServices) {
         // Талон очереди на снятую услугу тоже уходит: номер без услуги — мусор на доске.
         db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(l.id);
         db.prepare('DELETE FROM visit_services WHERE id = ?').run(l.id);

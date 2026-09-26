@@ -71,3 +71,25 @@ export function lineUnitPrice(db, row, { service = null, product = null, tiered 
   if (row.clinic_item_id != null) return product ? product.sale_price : 0;
   return row.unit_price;
 }
+
+// PACKAGES_V1, ревью M3 (2026-09-26) — скидка пакета, которую касса даст
+// строке визита, или 0. Правило то же, что у create_invoice_for_visit
+// (billing.js linePackage): местный день визита лежит в сроке предложения
+// [valid_from, valid_until] (границы включительно, пустая — без ограничения),
+// и услуга строки входит в пакет. Касса на нарушение ОТКАЗЫВАЕТ выставлять
+// счёт; доля врача за выполненную, но ещё не выставленную строку в этом случае
+// считается БЕЗ скидки пакета (скидку дать нельзя — значит, её и нет), а не
+// со скидкой, которую счёт никогда не поставит.
+//
+// `pkg` — строка service_templates (service_ids, discount_percent, valid_from,
+// valid_until) или null; `visitDay` — 'YYYY-MM-DD'. Чистая функция.
+export function packageDiscountPct(pkg, serviceId, visitDay) {
+  if (!pkg) return 0;
+  const day = String(visitDay || '').slice(0, 10);
+  if ((pkg.valid_from && day < pkg.valid_from) || (pkg.valid_until && day > pkg.valid_until)) return 0;
+  let ids = [];
+  try { ids = JSON.parse(pkg.service_ids || '[]'); } catch { ids = []; }
+  if (!Array.isArray(ids) || !ids.some((id) => Number(id) === Number(serviceId))) return 0;
+  const pct = Number(pkg.discount_percent);
+  return Number.isFinite(pct) ? Math.min(Math.max(pct, 0), 100) : 0;
+}

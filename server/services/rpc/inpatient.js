@@ -214,10 +214,13 @@ export function requestAdmission(db, args, user) {
     // INPATIENT_BONUS_V1 — кто направил: заявка врача из кабинета тоже его
     // запоминает (по умолчанию — источник последнего визита, иначе карточки).
     const referralSourceId = referralSourceArg(db, args, patientId);
+    // Ревью I1 — направивший врач ЯВНО: тот, кто оформил заявку в кабинете.
+    // admissions.doctor_id потом заполняет и назначение лечащего, поэтому
+    // бонус «за направление» читает только referring_doctor_id (мигр. 156).
     const info = db.prepare(`
-      INSERT INTO admissions (patient_id, doctor_id, pathway, chief_complaint, admission_diagnosis, status, created_by, referral_source_id)
-      VALUES (?, ?, ?, ?, ?, 'ordered', ?, ?)
-    `).run(patientId, doctorId, pathway, chiefComplaint, admissionDiagnosis, user.id, referralSourceId);
+      INSERT INTO admissions (patient_id, doctor_id, pathway, chief_complaint, admission_diagnosis, status, created_by, referral_source_id, referring_doctor_id)
+      VALUES (?, ?, ?, ?, ?, 'ordered', ?, ?, ?)
+    `).run(patientId, doctorId, pathway, chiefComplaint, admissionDiagnosis, user.id, referralSourceId, doctorId);
     const admissionId = info.lastInsertRowid;
     db.prepare('UPDATE admissions SET admission_no = ? WHERE id = ?').run(nextAdmissionNo(db, nowIso(db)), admissionId);   // ADMISSION_NUMBER_V2 — «2026/00051»
 
@@ -829,10 +832,13 @@ export function admissionOrderCreate(db, args, user) {
     const info = db.prepare(`
       INSERT INTO admissions
         (patient_id, ward_id, doctor_id, department, admission_type, stay_mode,
-         planned_at, chief_complaint, status, ordered_at, ordered_by, created_by, referral_source_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ordered', ?, ?, ?, ?)
+         planned_at, chief_complaint, status, ordered_at, ordered_by, created_by, referral_source_id,
+         referring_doctor_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ordered', ?, ?, ?, ?, ?)
     `).run(patientId, wardId, doctorId, department, admissionType, stayMode,
-           plannedAt, note, at, user.id, user.id, referralSourceId);
+           plannedAt, note, at, user.id, user.id, referralSourceId,
+           // Ревью I1 — «Направивший врач», названный в заявке явно (мигр. 156).
+           doctorId);
     const admissionId = info.lastInsertRowid;
     db.prepare('UPDATE admissions SET admission_no = ? WHERE id = ?').run(nextAdmissionNo(db, nowIso(db)), admissionId);   // ADMISSION_NUMBER_V2 — «2026/00051»
     // Журнал движений: заявка — тоже событие с пациентом, и «когда это
