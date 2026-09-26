@@ -3,6 +3,23 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // CARD_BALANCE_V1 (2026-09-26) — подарочные карты и сертификаты с остатком (касса, мастер, калькулятор, настройки)
+  "Выберите карту или сертификат…": {"en":"Choose a card or certificate…","ru":"Выберите карту или сертификат…","uz":"Karta yoki sertifikatni tanlang…"},
+  "{name} — остаток {sum} сум": {"en":"{name} — {sum} sum left","ru":"{name} — остаток {sum} сум","uz":"{name} — qoldiq {sum} so'm"},
+  "Выберите карту или сертификат.": {"en":"Choose a card or certificate.","ru":"Выберите карту или сертификат.","uz":"Karta yoki sertifikatni tanlang."},
+  "На карте осталось {sum} сум.": {"en":"Only {sum} sum left on the card.","ru":"На карте осталось {sum} сум.","uz":"Kartada {sum} so'm qoldi."},
+  "Сумма вернётся на ту же подарочную карту — наличные не выдаются.": {"en":"The amount goes back to the same gift card — no cash is paid out.","ru":"Сумма вернётся на ту же подарочную карту — наличные не выдаются.","uz":"Summa o'sha sovg'a kartasiga qaytadi — naqd pul berilmaydi."},
+  "На карте не осталось денег.": {"en":"There is no money left on the card.","ru":"На карте не осталось денег.","uz":"Kartada pul qolmadi."},
+  "Можно применить только одну карту.": {"en":"Only one card can be applied.","ru":"Можно применить только одну карту.","uz":"Faqat bitta kartani qo'llash mumkin."},
+  "картой оплатит касса": {"en":"the cashier will charge the card","ru":"картой оплатит касса","uz":"karta bilan kassa to'laydi"},
+  "картой −{sum}": {"en":"by card −{sum}","ru":"картой −{sum}","uz":"karta bilan −{sum}"},
+  "Сумма скидки (промокод) или номинал карты / сертификата, UZS": {"en":"Discount amount (promo code) or face value of the card / certificate, UZS","ru":"Сумма скидки (промокод) или номинал карты / сертификата, UZS","uz":"Chegirma summasi (promokod) yoki karta / sertifikat nominali, UZS"},
+  "исчерпана": {"en":"used up","ru":"исчерпана","uz":"tugagan"},
+  "{rem} из {amount}": {"en":"{rem} of {amount}","ru":"{rem} из {amount}","uz":"{amount} dan {rem}"},
+  "Карта «{name}»: остаток {sum} — оплатит счёт при выставлении.": {"en":"Card «{name}»: {sum} left — it will pay the invoice when it is issued.","ru":"Карта «{name}»: остаток {sum} — оплатит счёт при выставлении.","uz":"«{name}» kartasi: qoldiq {sum} — hisob chiqarilganda uni to'laydi."},
+  "Карта «{name}»: остаток {sum} — оплатить ею можно в кассе.": {"en":"Card «{name}»: {sum} left — it can be used at the cashier.","ru":"Карта «{name}»: остаток {sum} — оплатить ею можно в кассе.","uz":"«{name}» kartasi: qoldiq {sum} — u bilan kassada to'lash mumkin."},
+  "Оплату картой проведёт касса.": {"en":"The cashier will take the card payment.","ru":"Оплату картой проведёт касса.","uz":"Karta bilan to'lovni kassa o'tkazadi."},
+  "Картой оплачено {sum} сум.": {"en":"{sum} sum paid by card.","ru":"Картой оплачено {sum} сум.","uz":"Karta bilan {sum} so'm to'landi."},
   // DEPOSIT_WALLET_V1 (2026-09-26) — возврат на баланс пациента и оплата с баланса (касса, окно визита, мастер, калькулятор)
   "С баланса": {"en":"From balance","ru":"С баланса","uz":"Balansdan"},
   "На балансе пациента: {sum} сум": {"en":"Patient balance: {sum} sum","ru":"На балансе пациента: {sum} сум","uz":"Bemor balansida: {sum} so'm"},

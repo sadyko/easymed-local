@@ -736,7 +736,9 @@ export const REGISTRY = {
     filters:['id','active'], json:['rates'], embed:{} },
   // DISCOUNT_RULES_V1 (mig 129) — valid_from/valid_until, category_id (apply to a
   // patient group), service_ids (JSON list: apply to these services only), note.
-  patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note']},
+  // CARD_BALANCE_V1 (mig 158) — remaining: остаток карты/сертификата. Только
+  // чтение: пишет его сервер (domain/cards.js) и триггеры миграции 158.
+  patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note','remaining']},
     write:{ grant:'settings.patient_discounts',insert:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},
       update:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},delete:{roles:[]}},
     filters:['id','active','kind','category_id'], json:['service_ids'],

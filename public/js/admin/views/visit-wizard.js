@@ -35,7 +35,7 @@ import { doctorPoolFor } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1
 import { tierLabel, tierApplies } from '../visit-tier-logic.js';   // VISIT_TIER_PRICING_V1
 // DISCOUNT_RULES_V1 — какие скидки подходят этому пациенту сегодня и на что
 // они действуют; одно правило на оба мастера.
-import { eligibleDiscounts, discountValue, discountOptionParts, localYmd } from '../discount-rules.js';
+import { eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining } from '../discount-rules.js';
 import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // PAYER_COMPANY_IN_ESTIMATE_V1
 // WIZARD_ONE_ENGINE_V1 — общий клиент слотов и записи. Один вопрос «когда врач
 // свободен» на весь продукт: его задаёт серверу этот клиент, а считает
@@ -205,6 +205,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // DEPOSIT_WALLET_V1 — баланс пациента и «Баланс: использовать».
         balance: 0,
         useBalance: false,
+        // CARD_BALANCE_V1 — выбранная подарочная карта / сертификат: ею ПЛАТЯТ
+        // после выставления счёта (не скидка).
+        card: null,
         // step 4
         raiseInvoice: canInvoice,   // INVOICE_ROLE_HONEST_V1
         creating: false,
@@ -547,7 +550,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // мастер: без списка скидок смета работает, просто выпадающий список пуст.
         try {
             const [dRes, pRes] = await Promise.all([
-                supabase.from('patient_discounts').select('id, name, kind, percent, amount, active, valid_from, valid_until, category_id, service_ids').eq('active', 1).order('name'),
+                supabase.from('patient_discounts').select('id, name, kind, percent, amount, remaining, active, valid_from, valid_until, category_id, service_ids').eq('active', 1).order('name'),
                 supabase.from('patients').select('id, category_id, referral_source_id, patient_categories(id, name, discount_percent, active)').eq('id', patient.id).maybeSingle(),   // referral_source_id: REPORTS_V2 ревью I3
             ]);
             wiz.discounts = (!dRes.error && Array.isArray(dRes.data)) ? dRes.data : [];
@@ -2313,11 +2316,24 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // на ЭТУ смету (срок, группа, услуги — discount-rules.js), и выбирает.
         const choices = discountChoices();
         if (wiz.promo && !choices.some((d) => d.id === wiz.promo.id)) wiz.promo = null;   // состав сметы изменился — скидка больше не подходит
+        if (wiz.card && !choices.some((d) => d.id === wiz.card.id)) wiz.card = null;   // CARD_BALANCE_V1
         const promoSel = h('select', {
             style: { flex: 1, minWidth: 0, padding: '10px 12px', border: '1px solid var(--ink-200)', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13.5px' },
             onchange: () => {
                 const id = Number(promoSel.value) || 0;
-                wiz.promo = choices.find((d) => d.id === id) || null;
+                const picked = choices.find((d) => d.id === id) || null;
+                // CARD_BALANCE_V1 — карта не скидка: её остаток спишется ОПЛАТОЙ
+                // сразу после выставления счёта (касса/админ), итог сметы прежний.
+                if (isStoredValueCard(picked)) {
+                    wiz.card = picked; wiz.promo = null;
+                    refreshTotals();
+                    toast(canSpendStoredValue()
+                        ? trf('Карта «{name}»: остаток {sum} — оплатит счёт при выставлении.', { name: picked.name || '', sum: fmtPrice(cardRemaining(picked)) })
+                        : trf('Карта «{name}»: остаток {sum} — оплатить ею можно в кассе.', { name: picked.name || '', sum: fmtPrice(cardRemaining(picked)) }), 'ok');
+                    return;
+                }
+                wiz.card = null;
+                wiz.promo = picked;
                 refreshTotals();
                 if (wiz.promo) {
                     const parts = discountOptionParts(wiz.promo, fmtPrice);
@@ -2328,16 +2344,17 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             h('option', { value: '' }, choices.length ? tr('— выберите скидку —') : tr('Подходящих скидок нет')),
             ...choices.map((d) => {
                 const parts = discountOptionParts(d, fmtPrice);
-                return h('option', { value: String(d.id), selected: !!(wiz.promo && wiz.promo.id === d.id) },
+                return h('option', { value: String(d.id), selected: !!((wiz.promo && wiz.promo.id === d.id) || (wiz.card && wiz.card.id === d.id)) },
                     parts.name + (parts.value ? ' — ' + parts.value : '') + (parts.scoped ? ' · ' + tr('на выбранные услуги') : ''));
             }));
         if (wiz.promo) promoSel.value = String(wiz.promo.id);
+        if (wiz.card) promoSel.value = String(wiz.card.id);
         if (!choices.length) promoSel.disabled = true;
 
         // PROMO_TICK_V1 — промокод используется редко: по умолчанию поле
         // скрыто, вместо него маленькая галочка. Применённый код держит
         // блок раскрытым.
-        if (wiz.promo) wiz.promoOpen = true;
+        if (wiz.promo || wiz.card) wiz.promoOpen = true;
         const promoRow = h('div', { class: 'row', style: { gap: '8px', display: wiz.promoOpen ? '' : 'none' } }, promoSel);
         const promoChk = h('input', {
             type: 'checkbox', checked: !!wiz.promoOpen,
@@ -2346,7 +2363,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         promoChk.addEventListener('change', () => {
             wiz.promoOpen = promoChk.checked;
             promoRow.style.display = wiz.promoOpen ? '' : 'none';
-            if (!wiz.promoOpen && wiz.promo) { wiz.promo = null; promoSel.value = ''; refreshTotals(); }   // снятие галочки снимает код
+            if (!wiz.promoOpen && (wiz.promo || wiz.card)) { wiz.promo = null; wiz.card = null; promoSel.value = ''; refreshTotals(); }   // снятие галочки снимает код
             if (wiz.promoOpen) promoSel.focus();
         });
         const promoTick = h('label', { style: { display: 'flex', alignItems: 'center', gap: '7px', cursor: 'pointer', fontSize: '12.5px', color: 'var(--ink-500)' } },
@@ -2734,10 +2751,15 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
             // DEPOSIT_WALLET_V1 — «Баланс: использовать»: счета пациента по
             // порядку дней, каждому — не больше его суммы и остатка баланса.
+            // CARD_BALANCE_V1 — выбранная карта платит первой, баланс — следом.
             let balanceMsg = '';
-            if (wiz.useBalance && canSpendStoredValue() && patientInvoices.length && Number(wiz.balance) > 0) {
-                const paidRes = await payFromStoredValue(patientInvoices, { wallet: Number(wiz.balance) });
-                if (paidRes.wallet > 0) balanceMsg = ' ' + trf('С баланса списано {sum} сум.', { sum: fmtPrice(paidRes.wallet) });
+            const wallet = wiz.useBalance ? Number(wiz.balance) || 0 : 0;
+            const card = wiz.card ? { id: wiz.card.id, remaining: cardRemaining(wiz.card) } : null;
+            if (card && !canSpendStoredValue()) balanceMsg += ' ' + tr('Оплату картой проведёт касса.');
+            if (canSpendStoredValue() && patientInvoices.length && (wallet > 0 || card)) {
+                const paidRes = await payFromStoredValue(patientInvoices, { wallet, card });
+                if (paidRes.card > 0) balanceMsg += ' ' + trf('Картой оплачено {sum} сум.', { sum: fmtPrice(paidRes.card) });
+                if (paidRes.wallet > 0) balanceMsg += ' ' + trf('С баланса списано {sum} сум.', { sum: fmtPrice(paidRes.wallet) });
                 for (const m of paidRes.errors) toast(trf('Баланс не списан: {msg}', { msg: m }), 'fail');
             }
 

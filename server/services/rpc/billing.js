@@ -23,6 +23,8 @@ import { restoreSources } from './inventory.js';
 // DEPOSIT_WALLET_V1 — баланс пациента: списание при оплате «с баланса» и
 // зачисление при возврате «на баланс» — в той же транзакции, что платёж.
 import { spendWallet, creditWallet, isDepositInvoice, WalletError } from '../domain/wallet.js';
+// CARD_BALANCE_V1 — подарочная карта / сертификат платит своим остатком.
+import { spendCard, returnToCard, CardError } from '../domain/cards.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -36,7 +38,9 @@ const PAYMENT_ROLES = ['admin', 'cashier'];
 // DEPOSIT_REVENUE_V1 — 'wallet' — оплата с депозитного баланса пациента. Это
 // НЕ приход денег: они пришли раньше, когда касса приняла депозит. Способ
 // исключён из выручки и из итога смены (см. shared/payment-methods.js).
-const PAYMENT_METHODS = ['cash', 'card', 'transfer', 'acquiring', 'wallet'];   // CASHIER_DESIGN_V2 — эквайринг (Payme/Click terminal)
+// CARD_BALANCE_V1 — 'gift_card' — оплата остатком подарочной карты или
+// сертификата (card_id обязателен); тоже не приход (shared/payment-methods.js).
+const PAYMENT_METHODS = ['cash', 'card', 'transfer', 'acquiring', 'wallet', 'gift_card'];   // CASHIER_DESIGN_V2 — эквайринг (Payme/Click terminal)
 
 function requireRole(user, allowed) {
   // MULTI_ROLE_SERVER_V1 — extras count too, not the primary role alone.
@@ -57,7 +61,7 @@ function isPositiveInt(v) {
 // (тот же статус, тот же текст), чтобы экраны читали его одинаково.
 function walletGuard(fn) {
   try { return fn(); } catch (e) {
-    if (e instanceof WalletError) throw new RpcError(e.message, e.status);
+    if (e instanceof WalletError || e instanceof CardError) throw new RpcError(e.message, e.status);
     throw e;
   }
 }
@@ -539,6 +543,10 @@ export function recordPayment(db, args, user) {
     if (method === 'wallet') {
       walletGuard(() => spendWallet(db, { patientId: invoice.patient_id, invoice, paymentId: payInfo.lastInsertRowid, amount: amt, user }));
     }
+    // CARD_BALANCE_V1 — картой: остаток карты уменьшается в той же транзакции.
+    if (method === 'gift_card') {
+      walletGuard(() => spendCard(db, { cardId: args.card_id, invoice, paymentId: payInfo.lastInsertRowid, amount: amt, user }));
+    }
 
     if (status === 'paid') {
       db.prepare(`
@@ -603,7 +611,7 @@ export function recordPaymentSplit(db, args, user) {
       throw new RpcError(`tender ${i + 1}: unknown method: ${method}`, 400);
     }
     const notes = typeof (t && t.notes) === 'string' ? t.notes.slice(0, 200) : '';
-    return { amt, method, notes };
+    return { amt, method, notes, cardId: t && t.card_id };   // CARD_BALANCE_V1
   });
   const totalTendered = round2(tenders.reduce((s2, t) => s2 + t.amt, 0));
 
@@ -630,6 +638,9 @@ export function recordPaymentSplit(db, args, user) {
       // DEPOSIT_WALLET_V1 — часть «с баланса» списывает баланс, как record_payment.
       if (t.method === 'wallet') {
         walletGuard(() => spendWallet(db, { patientId: invoice.patient_id, invoice, paymentId: info.lastInsertRowid, amount: t.amt, user }));
+      }
+      if (t.method === 'gift_card') {   // CARD_BALANCE_V1
+        walletGuard(() => spendCard(db, { cardId: t.cardId, invoice, paymentId: info.lastInsertRowid, amount: t.amt, user }));
       }
     }
 
@@ -980,23 +991,30 @@ export function refundPayment(db, args, user) {
     // Платёж «с баланса» по умолчанию возвращается НА БАЛАНС: наличными этих
     // денег в кассе за этот счёт не брали. Вернуть его деньгами кассир может
     // только явным выбором (to_balance: false) — и тогда это наличные из ящика.
+    // CARD_BALANCE_V1 — платёж картой возвращается НА ТУ ЖЕ КАРТУ, всегда:
+    // это её остаток, наличными его не выдают и на баланс пациента не переносят.
+    const toCard = p.method === 'gift_card';
     const toBalanceRaw = args && args.to_balance;
-    const toBalance = toBalanceRaw === undefined || toBalanceRaw === null
+    const toBalance = toCard ? false : (toBalanceRaw === undefined || toBalanceRaw === null
       ? p.method === 'wallet'
-      : (toBalanceRaw === true || toBalanceRaw === 1);
+      : (toBalanceRaw === true || toBalanceRaw === 1));
     if (toBalance) {
       if (!invoice.patient_id) throw new RpcError('У счёта нет пациента — зачислить на баланс некому.', 400);
       if (isDepositInvoice(db, invoice.id)) {
         throw new RpcError('Это счёт депозита — его возвращают кнопкой «Вернуть депозит», а не на баланс.', 400);
       }
     }
-    const refundMethod = toBalance ? 'wallet' : (p.method === 'wallet' ? 'cash' : p.method);
+    const refundMethod = toCard ? 'gift_card' : toBalance ? 'wallet' : (p.method === 'wallet' ? 'cash' : p.method);
 
-    db.prepare(`
+    const refundInfo = db.prepare(`
       INSERT INTO payments (invoice_id, amount, method, cashier_id, shift_id, notes)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(invoice.id, -amt, refundMethod, user.id, shiftId,
       tag + (reason ? ' — ' + reason : ''));
+    let card = null;
+    if (toCard) {
+      card = walletGuard(() => returnToCard(db, { paymentId: p.id, refundPaymentId: refundInfo.lastInsertRowid, invoice, amount: amt, user }));
+    }
     if (toBalance) {
       walletGuard(() => creditWallet(db, { patientId: invoice.patient_id, invoice, paymentId: p.id, amount: amt, reason, user }));
     }
@@ -1012,7 +1030,7 @@ export function refundPayment(db, args, user) {
       if (status === 'refunded') db.prepare("UPDATE invoices SET voided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(invoice.id);
     }
 
-    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id), to_balance: toBalance };
+    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id), to_balance: toBalance, ...(card ? { to_card: card } : {}) };
   });
 
   return run.immediate();

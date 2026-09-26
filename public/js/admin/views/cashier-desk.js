@@ -23,9 +23,11 @@ import { moneyDisplay, moneyNumber } from '../../shared/money-input.js?v=mi2';  
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';   // DEBT_FLOW_V1 — «пациент ещё на койке» в окне отмены
 import { loadInvoiceLines, performersByItem, packagesByItem, packageItemName } from './receipt-print.js?v=rp1';   // INVOICE_QUEUE_V1 — тот же сбор талонов, что у чека   // CASH_CHECK_PRINT_V1 — бланк «Кассовый чек» из Настройки → Документы
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
+import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANCE_V1
 
 // DEPOSIT_WALLET_V1 — «С баланса»: оплата и возврат через баланс пациента.
-const METHOD_RU = { cash: 'Наличные', card: 'Карта', transfer: 'Перевод', acquiring: 'Эквайринг', wallet: 'С баланса' };
+// CARD_BALANCE_V1 — «Подарочная карта»: оплата остатком карты / сертификата.
+const METHOD_RU = { cash: 'Наличные', card: 'Карта', transfer: 'Перевод', acquiring: 'Эквайринг', wallet: 'С баланса', gift_card: 'Подарочная карта' };
 // DEPOSIT_METHOD_BY_CASHIER_V1 — у ДЕПОЗИТА три способа, а не четыре: их берут
 // у окошка. METHOD_RU выше шире, потому что описывает ещё и старые платежи, где
 // «Перевод» встречается. Живёт на уровне модуля — окно приёма (ниже) вне
@@ -1094,6 +1096,10 @@ function payModal(root, inv, balance) {
     // списывает сервер (record_payment), и больше баланса он не спишет.
     let walletBal = 0;
     const walletSum = () => tenders.filter((t) => t.method === 'wallet').reduce((s2, t) => s2 + (Number(t.amount) || 0), 0);
+    // CARD_BALANCE_V1 — действующие карты/сертификаты с остатком. Остаток,
+    // срок, группу и услуги окончательно проверяет сервер (domain/cards.js).
+    let cards = [];
+    const cardById = (id) => cards.find((c) => String(c.id) === String(id)) || null;
 
     // PAY_DETAILS_V1 — кассир (и пациент у окна) должны видеть, ЗА ЧТО платят:
     // в списке счетов есть только первая позиция и «+N ещё». Тянем строки счёта
@@ -1244,7 +1250,8 @@ function payModal(root, inv, balance) {
         tenders.forEach((t, i) => {
             const row = h('div', { style: { border: '1px solid var(--ink-100)', borderRadius: '12px', padding: '10px', marginBottom: '8px' } });
             const methodList = [['cash', 'Наличные'], ['card', 'Карта'], ['acquiring', 'Эквайринг']]
-                .concat(walletBal > 0 || t.method === 'wallet' ? [['wallet', 'С баланса']] : []);
+                .concat(walletBal > 0 || t.method === 'wallet' ? [['wallet', 'С баланса']] : [])
+                .concat(cards.length || t.method === 'gift_card' ? [['gift_card', 'Подарочная карта']] : []);
             const btnRow = h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
                 ...methodList.map(([v, l]) => {
                     const b = h('button', {
@@ -1257,6 +1264,12 @@ function payModal(root, inv, balance) {
                             if (v === 'wallet') {
                                 const others = walletSum() - (Number(t.amount) || 0);
                                 t.amount = Math.max(0, Math.min(Number(t.amount) || balance, walletBal - others));
+                            }
+                            // CARD_BALANCE_V1 — одна карта сразу выбрана; сумма — не больше остатка.
+                            if (v === 'gift_card') {
+                                if (!t.cardId && cards.length === 1) t.cardId = String(cards[0].id);
+                                const c = cardById(t.cardId);
+                                if (c) t.amount = Math.max(0, Math.min(Number(t.amount) || balance, cardRemaining(c)));
                             }
                             render();
                         },
@@ -1293,6 +1306,19 @@ function payModal(root, inv, balance) {
                 row.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
                     trf('На балансе пациента: {sum} сум', { sum: fmtPrice(walletBal) })));
             }
+            if (t.method === 'gift_card') {
+                const cardSel = h('select', { style: { width: '100%', marginTop: '7px', padding: '8px 10px', border: '1px solid var(--ink-200)', borderRadius: '9px', fontFamily: 'inherit', fontSize: '12.5px' },
+                    onchange: (e) => {
+                        t.cardId = e.target.value;
+                        const c = cardById(t.cardId);
+                        if (c) t.amount = Math.min(Number(t.amount) || balance, cardRemaining(c));
+                        render();
+                    } },
+                    h('option', { value: '' }, tr('Выберите карту или сертификат…')),
+                    ...cards.map((c) => h('option', { value: String(c.id), selected: String(t.cardId) === String(c.id) ? true : null },
+                        trf('{name} — остаток {sum} сум', { name: c.name || ('#' + c.id), sum: fmtPrice(cardRemaining(c)) }))));
+                row.appendChild(cardSel);
+            }
 
             if (t.method === 'acquiring') {
                 const provSel = h('select', { style: { width: '100%', marginTop: '7px', padding: '8px 10px', border: '1px solid var(--ink-200)', borderRadius: '9px', fontFamily: 'inherit', fontSize: '12.5px' },
@@ -1323,6 +1349,16 @@ function payModal(root, inv, balance) {
         providers = data || [];
         render();
     });
+    if (!String(inv.invoice_number || '').startsWith('DEP-')) {
+        supabase.from('patient_discounts').select('id, name, kind, amount, remaining, active, valid_from, valid_until')
+            .in('kind', ['gift_card', 'certificate']).eq('active', 1).order('name').then(({ data }) => {
+                const today = localYmd();
+                cards = (data || []).filter((c) => cardRemaining(c) > 0
+                    && !(c.valid_from && String(c.valid_from).slice(0, 10) > today)
+                    && !(c.valid_until && String(c.valid_until).slice(0, 10) < today));
+                if (cards.length) render();
+            }).catch(() => {});
+    }
     if (inv.patient_id && !String(inv.invoice_number || '').startsWith('DEP-')) {
         supabase.rpc('deposit_balance', { patient_id: inv.patient_id }).then(({ data }) => {
             walletBal = Math.max(0, Number(data && data.balance) || 0);
@@ -1351,6 +1387,13 @@ function payModal(root, inv, balance) {
                     // i18n-exempt: примечание платежа пишется В БАЗУ — хранимая запись, а не текст экрана
                     notes = 'Эквайринг: ' + pr.name;
                 }
+                if (t.method === 'gift_card') {
+                    const c = cardById(t.cardId);
+                    if (!c) { toast('Выберите карту или сертификат.', 'fail'); return false; }
+                    if (a > cardRemaining(c) + 0.001) { toast(trf('На карте осталось {sum} сум.', { sum: fmtPrice(cardRemaining(c)) }), 'fail'); return false; }
+                    parts.push({ method: t.method, amount: a, notes, card_id: c.id });
+                    continue;
+                }
                 parts.push({ method: t.method, amount: a, notes });
             }
             if (!parts.length) { toast('Укажите сумму.', 'fail'); return false; }
@@ -1359,7 +1402,7 @@ function payModal(root, inv, balance) {
             if (sum > balance + 0.001) { toast(trf('Сумма частей больше остатка ({sum} сум).', { sum: fmtPrice(balance) }), 'fail'); return false; }
 
             const { error } = parts.length === 1
-                ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes })
+                ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}) })
                 : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts });
             if (error) { toast((error.message) || 'Не удалось принять оплату.', 'fail'); return false; }
             toast('Оплата принята', 'ok');
@@ -1388,6 +1431,12 @@ function payModal(root, inv, balance) {
                         // i18n-exempt: примечание платежа пишется В БАЗУ — хранимая запись, а не текст экрана
                         notes = 'Эквайринг: ' + pr.name;
                     }
+                    if (t.method === 'gift_card') {
+                        const c = cardById(t.cardId);
+                        if (!c) { toast('Выберите карту или сертификат.', 'fail'); return; }
+                        parts.push({ method: t.method, amount: a, notes, card_id: c.id });
+                        continue;
+                    }
                     parts.push({ method: t.method, amount: a, notes });
                 }
                 const sum = parts.reduce((s2, x) => s2 + x.amount, 0);
@@ -1396,7 +1445,7 @@ function payModal(root, inv, balance) {
                 try {
                     if (parts.length) {
                         const { error } = parts.length === 1
-                            ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes })
+                            ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}) })
                             : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts });
                         if (error) throw new Error(error.message || 'Оплата не записана');
                     }
@@ -1496,6 +1545,12 @@ function openRefundConfirm(p, info, root) {
     const destBox = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
     const paintDest = () => {
         clear(destBox);
+        // CARD_BALANCE_V1 — оплата картой возвращается только на ту же карту.
+        if (p.method === 'gift_card') {
+            destBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                tr('Сумма вернётся на ту же подарочную карту — наличные не выдаются.')));
+            return;
+        }
         const opts = [[false, 'Вернуть деньгами'], [true, 'Зачислить на баланс пациента']];
         for (const [v, l] of opts) {
             if (v && isDepositInv) continue;

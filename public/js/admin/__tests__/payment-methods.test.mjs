@@ -56,13 +56,16 @@ test('an unknown method is shown raw rather than dropped', () => {
 test('the vocabulary matches what the cashier desk records', () => {
   assert.deepStrictEqual(
     Object.keys(METHOD_RU).sort(),
-    ['acquiring', 'card', 'cash', 'transfer', 'wallet'],
+    ['acquiring', 'card', 'cash', 'gift_card', 'transfer', 'wallet'],
     'these are the methods a payment row can carry',
   );
 });
 
-test('only the wallet is excluded from money coming in', () => {
-  assert.deepStrictEqual(NON_CASH_INFLOW, ['wallet']);
+// CARD_BALANCE_V1 — a gift card settles an invoice from its own balance; no
+// money reaches the till at redemption, so it is excluded exactly like wallet.
+test('only the wallet and the gift card are excluded from money coming in', () => {
+  assert.deepStrictEqual(NON_CASH_INFLOW, ['wallet', 'gift_card']);
+  assert.strictEqual(countsAsInflow('gift_card'), false, 'a card redemption is not new money');
   for (const m of ['cash', 'card', 'transfer', 'acquiring']) {
     assert.strictEqual(countsAsInflow(m), true, m + ' is real money arriving');
   }

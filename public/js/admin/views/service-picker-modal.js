@@ -43,7 +43,7 @@ import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS
 // VISIT_TIER_PRICING_V1 — цена по счёту визита: смета спрашивает сервер, что
 // эти услуги стоят ЭТОМУ пациенту сегодня, и кладёт ответ на строки.
 import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTierOf } from '../visit-tier-logic.js';
-import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionParts, localYmd } from '../discount-rules.js';   // DISCOUNT_RULES_V1
+import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining } from '../discount-rules.js';   // DISCOUNT_RULES_V1 · CARD_BALANCE_V1
 import { canSpendStoredValue, loadPatientBalance, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
 // строк живут в одном модуле на все окна: копии этого кода уже разъезжались.
@@ -2566,10 +2566,13 @@ export function openServicePickerModal({
         // DEPOSIT_WALLET_V1 — баланс пациента снова тратится при записи: у
         // сервера теперь есть дверь (record_payment способом 'wallet' списывает
         // баланс в той же транзакции). Тратит только касса/админ.
+        // CARD_BALANCE_V1 — карта платит своим остатком (первой), баланс — следом.
+        const card = wizCard();
+        const cards = (card && canSpendStoredValue()) ? Math.max(0, Math.min(cardRemaining(card), d.payable)) : 0;
         const bal = (wiz.useBalance && canSpendStoredValue())
-            ? Math.max(0, Math.min(Number(wiz.depositBalance) || 0, d.payable)) : 0;
+            ? Math.max(0, Math.min(Number(wiz.depositBalance) || 0, d.payable - cards)) : 0;
         return { full, afterDisc: full - d.loyalty, promoOff: d.promoOff, packageOff: d.packageOff, categoryOff: d.categoryOff,
-            payable: d.payable, cards: 0, bal, due: Math.max(0, d.payable - bal) };
+            payable: d.payable, cards, bal, due: Math.max(0, d.payable - cards - bal) };
     }
 
     // CATALOG_WIZARD_V3 — promo / gift-card / certificate redemption.
@@ -2580,7 +2583,10 @@ export function openServicePickerModal({
     // каждую офлайн-скидку в «карты», а их списание звало несуществующие
     // функции Postgres — скидка в счёт не попадала.
     const KIND_RU3 = { promo: 'Промокод', promo_code: 'Промокод', gift_card: 'Карта', certificate: 'Сертификат' };
-    function wizPromo() { return (wiz.applied || [])[0] || null; }
+    // CARD_BALANCE_V1 — промокод (скидка) и карта (оплата остатком) — разные вещи:
+    // по одному каждого.
+    function wizPromo() { return (wiz.applied || []).find((x) => !isStoredValueCard(x)) || null; }
+    function wizCard() { return (wiz.applied || []).find((x) => isStoredValueCard(x)) || null; }
     // Категория привязанного пациента — для скидок «только для группы».
     function wizPatientCategoryId() {
         const p = refs.attachedPatient;
@@ -2607,6 +2613,7 @@ export function openServicePickerModal({
         if (why === 'expired') { toast('Срок действия кода истёк.', 'fail'); return; }
         if (why === 'other_group') { toast('Скидка только для другой группы пациентов.', 'fail'); return; }
         if (why === 'no_matching_service') { toast('Скидка действует на другие услуги — в смете их нет.', 'fail'); return; }
+        if (why === 'exhausted') { toast('На карте не осталось денег.', 'fail'); return; }   // CARD_BALANCE_V1
         // RPC_PORT_V1 (ревью M1) — здесь стояли облачные проверки: valid_to,
         // patient_id, max_uses/used_count, min_purchase — колонок, которых у
         // офлайн-скидки нет, — и повторная проверка valid_from по дню UTC,
@@ -2614,7 +2621,10 @@ export function openServicePickerModal({
         // «сегодня». Срок, группу и услуги проверяет discountBlockReason выше —
         // по местному дню, как мастер записи.
         if ((wiz.applied || []).some(x => x.id === row.id)) { toast('Код уже применён.', 'info'); return; }
-        if (wizPromo()) { toast('Можно применить только один промокод.', 'fail'); return; }   // RPC_PORT_V1 — одна скидка на счёт, как в мастере записи
+        if (isStoredValueCard(row)) {
+            // CARD_BALANCE_V1 — одна карта на запись; спишет касса/админ.
+            if (wizCard()) { toast('Можно применить только одну карту.', 'fail'); return; }
+        } else if (wizPromo()) { toast('Можно применить только один промокод.', 'fail'); return; }   // RPC_PORT_V1 — одна скидка на счёт, как в мастере записи
         wiz.applied.push(row);
         toast(trf('{kind} применён: {code}', { kind: tr(KIND_RU3[row.kind] || 'Код'), code: row.code || row.name }));
     }
@@ -3033,15 +3043,17 @@ export function openServicePickerModal({
                 // проверяем ту же скидку тем же правилом, что смета, и считаем её
                 // по строкам счёта (discountValue), как мастер записи.
                 let promoRow = null;
+                let cardRow = null;   // CARD_BALANCE_V1
                 if (wiz.applied.length) {
                     let fresh = [];
-                    try { const fr = await supabase.from('patient_discounts').select('*').in('id', wiz.applied.map(x => x.id)); fresh = fr.data || []; } catch (_) {}
+                    try { const fr = await supabase.from('patient_discounts').select('*').in('id', wiz.applied.map(x => x.id)); fresh = fr.data || []; } catch (_) {}   // CARD_BALANCE_V1 — свежий остаток карты
                     const byId = {}; for (const r of fresh) byId[r.id] = r;
                     const ctxNow = { today: localYmd(), categoryId: wizPatientCategoryId(), serviceIds: patientRows.map(r => Number(r.a.service && r.a.service.id)) };
                     for (const ap of wiz.applied) {
                         const r = byId[ap.id];
                         if (!r || discountBlockReason(r, ctxNow)) { toast(trf('Код {code} больше недоступен — не применён.', { code: ap.code || ap.name }), 'fail'); continue; }
-                        if (!promoRow) promoRow = r;
+                        if (isStoredValueCard(r)) { if (!cardRow) cardRow = r; }
+                        else if (!promoRow) promoRow = r;
                     }
                 }
                 // RPC_PORT_V1 (ревью C1) — СЧЁТ ВЫСТАВЛЯЕТ СЕРВЕР. Прежде здесь
@@ -3071,10 +3083,14 @@ export function openServicePickerModal({
                     if (invTotal === 0) note += ' · полностью покрыт промокодом';
                     // DEPOSIT_WALLET_V1 — «Баланс: использовать»: сервер списывает
                     // баланс и проводит платёж 'wallet' в одной транзакции.
+                    // CARD_BALANCE_V1 — и картой (остатком), первой.
                     const tNow = wizTotals();
-                    if (tNow.bal > 0 && invTotal > 0) {
-                        const paidRes = await payFromStoredValue([inv], { wallet: Math.min(tNow.bal, invTotal) });
+                    const cardCap = cardRow && canSpendStoredValue() ? { id: cardRow.id, remaining: cardRemaining(cardRow) } : null;
+                    if (cardRow && !canSpendStoredValue()) note += ' · ' + tr('картой оплатит касса');
+                    if ((tNow.bal > 0 || cardCap) && invTotal > 0) {
+                        const paidRes = await payFromStoredValue([inv], { wallet: Math.min(tNow.bal, invTotal), card: cardCap });
                         if (paidRes.invoices[inv.id]) Object.assign(inv, paidRes.invoices[inv.id]);
+                        if (paidRes.card > 0) note += ' · ' + trf('картой −{sum}', { sum: formatMoney(paidRes.card) });
                         if (paidRes.wallet > 0) note += ' · ' + trf('с баланса −{sum}', { sum: formatMoney(paidRes.wallet) });
                         for (const m of paidRes.errors) toast(trf('Баланс не списан: {msg}', { msg: m }), 'fail');
                     }

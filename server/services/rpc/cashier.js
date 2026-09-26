@@ -198,7 +198,7 @@ function movementTotals(db, shiftId) {
 // которой в кассе никогда не было.
 function paymentTotals(db, shiftId) {
   const rows = db.prepare('SELECT method, COALESCE(SUM(amount),0) s, COUNT(*) n FROM payments WHERE shift_id=? GROUP BY method').all(shiftId);
-  const totals = { cash: 0, card: 0, transfer: 0, acquiring: 0, wallet: 0, total: 0, count: 0 };
+  const totals = { cash: 0, card: 0, transfer: 0, acquiring: 0, wallet: 0, gift_card: 0, total: 0, count: 0 };   // CARD_BALANCE_V1
   for (const row of rows) {
     if (Object.prototype.hasOwnProperty.call(totals, row.method)) {
       totals[row.method] = round2(row.s);

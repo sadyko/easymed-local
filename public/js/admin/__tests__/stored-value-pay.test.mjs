@@ -121,3 +121,40 @@ test('регистратура баланс не списывает: серве�
     delete globalThis.window.easymed;
   }
 });
+
+// ─── CARD_BALANCE_V1 — карта платит своим остатком, первой ──────────────────
+const { discountValue, discountBlockReason, discountOptionParts, cardRemaining } = await import('../discount-rules.js');
+
+test('карта в раскладке идёт первой, баланс — следом; обе не больше остатка счёта', () => {
+  const plan = planStoredValue([
+    { id: 1, total_amount: 100000, paid_amount: 0 },
+    { id: 2, total_amount: 100000, paid_amount: 0 },
+  ], { wallet: 50000, card: { id: 5, remaining: 120000 } });
+  assert.deepEqual(plan, [
+    { invoice_id: 1, tenders: [{ method: 'gift_card', amount: 100000, card_id: 5 }] },
+    { invoice_id: 2, tenders: [{ method: 'gift_card', amount: 20000, card_id: 5 }, { method: 'wallet', amount: 50000 }] },
+  ]);
+});
+
+test('карта — не скидка: discountValue 0, в списке показан остаток, пустая карта не предлагается', () => {
+  const card = { id: 5, name: 'Подарок', kind: 'gift_card', amount: 300000, remaining: 120000, active: 1, service_ids: [] };
+  assert.equal(discountValue(card, [{ service_id: 1, total: 500000 }]), 0, 'раньше карта снимала полный номинал с каждого визита');
+  assert.equal(cardRemaining(card), 120000);
+  assert.equal(discountOptionParts(card, (n) => String(n)).value, '120000');
+  assert.equal(discountBlockReason({ ...card, remaining: 0 }, { today: '2026-09-26' }), 'exhausted');
+  assert.equal(discountBlockReason(card, { today: '2026-09-26' }), '');
+});
+
+test('касса: картой и балансом через сервер — остаток карты и баланс уменьшились, платежи gift_card + wallet', async () => {
+  seed();
+  USER = { id: 9, role: 'cashier', extra_roles: [] };
+  const cardId = DB.prepare("INSERT INTO patient_discounts (name, kind, amount) VALUES ('Подарок', 'gift_card', 120000)").run().lastInsertRowid;
+  const res = await payFromStoredValue(INVOICES(), { wallet: 150000, card: { id: cardId, remaining: 120000 } });
+  assert.deepEqual(res.errors, []);
+  assert.equal(res.card, 120000);
+  assert.equal(res.wallet, 80000);
+  assert.equal(DB.prepare('SELECT remaining FROM patient_discounts WHERE id = ?').get(cardId).remaining, 0);
+  assert.equal(await loadPatientBalance(3), 70000);
+  assert.deepEqual(INVOICES().map((i) => i.status), ['paid', 'paid']);
+  assert.ok(!DBWRITES.some((t) => ['invoices', 'payments', 'patient_discounts', 'card_ledger'].includes(t)));
+});
