@@ -32,6 +32,29 @@ export const PATIENT_TABLES = Object.freeze({
   invoices: { sections: ['cashier', 'cashier-head', 'registration', 'beds'], tab: 'billing' },
   payments: { sections: ['cashier', 'cashier-head'], tab: 'billing' },
   admissions: { sections: ['beds', 'consultation', 'labs', 'procedures', 'cashier', 'cashier-head', 'registration'], tab: 'history' },
+  // V3120_FINAL (I3) — КЛИНИЧЕСКИЕ ТАБЛИЦЫ. Заметки и заключение визита,
+  // заметки строки услуги, отметки о введённых препаратах, депозиты,
+  // рекомендации врача и услуги стационара читались через /api/db любой ролью
+  // (склад, своя роль без клинических разделов). Разделы — по экранам, которые
+  // их читают (обход «зайти отовсюду» всеми 12 ролями + поиск from('<таблица>')):
+  //   visits — записи/календарь и окно визита (регистратура, «Пациенты» →
+  //     вкладка «Визиты»), кабинет врача, лаборатория, процедуры, стационар,
+  //     касса, документы пациентов, очередь, заявки CRM (requests-inbox),
+  //     счётчик визитов тарифа (настройки);
+  //   visit_services — те же экраны, кроме CRM (строки заявке не нужны);
+  //   med_administrations — стационар, процедуры, кабинет врача;
+  //   patient_deposits — ровно как счета (касса, регистратура, стационар,
+  //     «Пациенты» → «Счёт»); баланс RPC deposit_balance — тем же правилом (I1);
+  //   recommended_services — кабинет врача, окно визита регистратуры, процедуры, стационар;
+  //   admission_services — стационар, касса, кабинет врача, процедуры.
+  visits: { sections: ['registration', 'crm', 'consultation', 'labs', 'procedures', 'beds', 'cashier', 'cashier-head',
+    'patient-documents', 'queue', 'settings'], tab: 'visits' },
+  visit_services: { sections: ['registration', 'consultation', 'labs', 'procedures', 'beds', 'cashier', 'cashier-head',
+    'patient-documents', 'queue'], tab: 'services' },
+  med_administrations: { sections: ['beds', 'procedures', 'consultation'], tab: 'history' },
+  patient_deposits: { sections: ['cashier', 'cashier-head', 'registration', 'beds'], tab: 'billing' },
+  recommended_services: { sections: ['consultation', 'registration', 'procedures', 'beds'], tab: 'services' },
+  admission_services: { sections: ['beds', 'cashier', 'cashier-head', 'consultation', 'procedures'], tab: 'history' },
 });
 
 export const PATIENT_DATA_DENIED = 'Эти данные пациентов недоступны вашей роли.'

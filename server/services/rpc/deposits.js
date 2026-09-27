@@ -28,6 +28,7 @@ import { branchLetter, assertOwnBuilding } from './billing.js';
 // DEPOSIT_WALLET_V1 — формула баланса одна на весь сервер.
 import { walletBalance, walletDebt, realMoney, withLedgerToken } from '../domain/wallet.js';
 import { idemReplay, idemRemember } from '../domain/money.js';   // V3120_FIX — ключ повтора
+import { patientDataRefusal } from '../../db/patient-data-gate.js';   // V3120_FINAL (I1)
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -394,8 +395,14 @@ export function listDeposits(db, args, user) {
 // регистратура (ACCEPT_ROLES / CREATE_ROLES).
 const BALANCE_READ_ROLES = ['admin', 'registrar', 'cashier', 'doctor', 'head_doctor', 'nurse', 'senior_nurse', 'lab', 'callcenter'];
 
+// V3120_FINAL (I1) — и КОМУ ИМЕННО: роль из списка ещё не значит право на
+// деньги пациента. То же правило, что у счетов в /api/db
+// (db/patient-data-gate.js, patient_deposits): касса, регистратура,
+// стационар — или «Пациенты» с открытой вкладкой «Счёт». Колл-центр и склад
+// баланс не читают; карта пациента показывает им «нет доступа».
 export function depositBalance(db, args, user) {
   requireRole(user, BALANCE_READ_ROLES);
+  { const refusal = patientDataRefusal('patient_deposits', user, db); if (refusal) throw new RpcError(refusal, 403); }
   const a = args || {};
   if (!isPositiveInt(a.patient_id)) throw new RpcError('Пациент указан неверно.', 400);
   const rows = db.prepare(`

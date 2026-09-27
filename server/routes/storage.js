@@ -4,7 +4,7 @@ import path from 'node:path';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { canViewSection, canEditSection, canViewPatientTab, canEditPatientTab } from '../services/roles.js';   // PATIENT_FILE_ATTACH_V1 + PATIENT_PHOTO_V1
 import { MAX_PATIENT_FILE_BYTES, patientFileRefusal, photoRefusal, refusalText, ALLOWED_PATIENT_FILE_EXT, ALLOWED_PHOTO_EXT } from '../../public/js/shared/patient-file-limits.js';   // PATIENT_FILE_ATTACH_V1 + PATIENT_PHOTO_V1
-import { grantAllowsAdminOr } from '../services/grants.js';   // V3120_FIX (M7) — корзина Telegram по праву бота
+import { grantAllowsAdminOr, isAdminUser } from '../services/grants.js';   // V3120_FIX (M7) — корзина Telegram по праву бота
 
 // Local file storage — the offline stand-in for Supabase Storage. Objects live
 // on disk under <storageDir>/<bucket>/<path>. Buckets are an allow-list; every
@@ -218,6 +218,24 @@ export function storageRoutes(storageDir, db = null) {
     return 'Файлы Telegram-бота недоступны вашей роли. Права выдаёт администратор в «Настройки → Роли».';
   }
 
+  // V3120_FINAL (I2) — ФАЙЛЫ КЛИНИКИ вне папки пациентов (clinic-docs:
+  // лицензия и сертификат, логотипы и прочее из «Настроек»). Удалить или
+  // ПЕРЕПИСАТЬ их (загрузка на тот же путь заменяет файл) мог любой вошедший:
+  // склад стирал лицензию клиники одним DELETE. Теперь — администратор или
+  // тот, кто вправе изменять «Настройки»: все экраны, которые кладут сюда
+  // файлы, — экраны настроек. Читать по-прежнему может всякий вошедший —
+  // логотип печатается на бланках. Без базы (юнит-монтирование маршрута) —
+  // не применяется: приложение базу передаёт всегда.
+  function clinicFilesDenial(req) {
+    if (!db) return null;
+    const user = req.user;
+    if (!user) return 'Требуется вход.';
+    try {
+      if (isAdminUser(user) || canEditSection(db, user, 'settings')) return null;
+    } catch { /* права не прочитались — отказ */ }
+    return 'Файлы клиники (лицензия, сертификаты, логотипы) меняет администратор или тот, кому выдано изменение «Настроек».';
+  }
+
   function patientDocDenial(req, { write }) {
     if (!db) return 'Хранилище документов пациента недоступно.';
     const user = req.user;
@@ -328,6 +346,10 @@ export function storageRoutes(storageDir, db = null) {
       const denial = patientDocDenial(req, { write: true });
       if (denial) return refuse(res, 403, 'forbidden', denial);
     }
+    if (req.params.bucket === 'clinic-docs' && !underPatients(req.params.bucket, req.params.rest)) {   // V3120_FINAL (I2)
+      const denial = clinicFilesDenial(req);
+      if (denial) return refuse(res, 403, 'forbidden', denial);
+    }
     // PATIENT_PHOTO_V1 — фотография: право, формат и предел. Проверяется
     // ЗДЕСЬ ещё раз, хотя браузер уменьшил и отсеял то же самое до отправки:
     // браузер обойти можно, curl проверку не спрашивает.
@@ -352,6 +374,21 @@ export function storageRoutes(storageDir, db = null) {
     // под тем же адресом, на который ссылается карта. Флаг 'wx' — проверка и
     // создание одним действием, без окна между ними.
     const noOverwrite = underPatients(req.params.bucket, req.params.rest) || isPhotoBucket(req.params.bucket);
+    // V3120_FINAL — папка в пути занята ФАЙЛОМ с тем же именем
+    // (misc/a.pdf/b.pdf при существующем misc/a.pdf). mkdir отвечал EEXIST, и
+    // человек читал «файл с таким именем уже есть — программа даст новое имя»,
+    // что неправда: повтор упал бы так же.
+    {
+      const bucketRoot = path.join(storageDir, req.params.bucket);
+      for (let dir = path.dirname(abs); dir.length > bucketRoot.length && dir.startsWith(bucketRoot); dir = path.dirname(dir)) {
+        let st = null;
+        try { st = fs.statSync(dir); } catch { st = null; }
+        if (st && !st.isDirectory()) {
+          return refuse(res, 409, 'parent_is_file', 'В этом пути вместо папки лежит файл с тем же именем. Сохраните файл в другую папку или под другим именем.');
+        }
+        if (st) break;
+      }
+    }
     try {
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, body, noOverwrite ? { flag: 'wx' } : undefined);
@@ -471,6 +508,17 @@ export function storageRoutes(storageDir, db = null) {
     if (isPhotoBucket(req.params.bucket)) {
       return refuse(res, 403, 'forbidden',
         'Фотография не удаляется — новая загрузка заменяет прежнюю.');
+    }
+    // V3120_FINAL (I2) — удаление закрыто тем же замком, что и загрузка:
+    // вложения Telegram — отвечающему в чате или настраивающему бота; файлы
+    // клиники — администратору или «Настройкам» на изменение.
+    if (req.params.bucket === 'telegram-media') {
+      const denial = telegramDenial(req, { write: true });
+      if (denial) return refuse(res, 403, 'forbidden', denial);
+    }
+    if (req.params.bucket === 'clinic-docs') {
+      const denial = clinicFilesDenial(req);
+      if (denial) return refuse(res, 403, 'forbidden', denial);
     }
     try { fs.unlinkSync(abs); } catch { /* already gone */ }
     return res.json({ data: {} });
