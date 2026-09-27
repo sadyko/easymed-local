@@ -70,11 +70,11 @@ test('findMatchingBackup без чтения SQLite: правило по име�
   assert.equal(b.checked, false);
 });
 
-test('recover «д»: база из копии, прежняя сохранена как rollback-*.db, current назад, откат отмечен', () => {
+test('recover «1»: база из копии, прежняя сохранена как rollback-*.db, current назад, откат отмечен', () => {
   const inst = install();
   fs.writeFileSync(path.join(inst.dataDir, PENDING_NAME), JSON.stringify({ version: '3.11.0', from: '3.10.0', backup: inst.backup }));
   const log = [];
-  const code = runRecover({ root: inst.root, to: inst.oldV, ask: answers('д'), log: (s) => log.push(s) });
+  const code = runRecover({ root: inst.root, to: inst.oldV, ask: answers('1'), log: (s) => log.push(s) });
   assert.equal(code, 0, log.join('\n'));
   assert.equal(cur(inst.root), '3.10.0');
   assert.equal(markerOf(path.join(inst.dataDir, 'easymed.db')), 'BEFORE-update');
@@ -92,18 +92,18 @@ test('recover «д»: база из копии, прежняя сохранен�
   assert.equal(readJson(path.join(inst.dataDir, ROLLED_BACK_NAME)).version, '3.11.0');
 });
 
-test('recover «о»: отмена — ничего не меняется', () => {
+test('recover «0»: отмена — ничего не меняется', () => {
   const inst = install();
-  const code = runRecover({ root: inst.root, to: inst.oldV, ask: answers('о'), log: quiet });
+  const code = runRecover({ root: inst.root, to: inst.oldV, ask: answers('0'), log: quiet });
   assert.equal(code, 2);
   assert.equal(cur(inst.root), '3.11.0');
   assert.equal(markerOf(path.join(inst.dataDir, 'easymed.db')), 'LIVE-after-update');
   assert.equal(fs.existsSync(path.join(inst.dataDir, ROLLED_BACK_NAME)), false);
 });
 
-test('recover «н», затем «д»: только программа, база не тронута', () => {
+test('recover «2»: только программа, база не тронута', () => {
   const inst = install();
-  const code = runRecover({ root: inst.root, to: inst.oldV, ask: answers('н', 'д'), log: quiet });
+  const code = runRecover({ root: inst.root, to: inst.oldV, ask: answers('2'), log: quiet });
   assert.equal(code, 0);
   assert.equal(cur(inst.root), '3.10.0');
   assert.equal(markerOf(path.join(inst.dataDir, 'easymed.db')), 'LIVE-after-update');
@@ -112,7 +112,7 @@ test('recover «н», затем «д»: только программа, баз
 test('recover без изменений устройства базы: база не трогается и не спрашивается', () => {
   const inst = install({ newMigrations: OLD });
   let asked = 0;
-  const code = runRecover({ root: inst.root, to: inst.oldV, ask: () => { asked++; return 'д'; }, log: quiet });
+  const code = runRecover({ root: inst.root, to: inst.oldV, ask: () => { asked++; return '1'; }, log: quiet });
   assert.equal(code, 0);
   assert.equal(asked, 0);
   assert.equal(cur(inst.root), '3.10.0');
@@ -132,7 +132,7 @@ test('recover при запущенном сервере (база открыт�
   const db = new Database(path.join(inst.dataDir, 'easymed.db'));
   try {
     assert.equal(dbInUse(inst.dataDir), true);
-    const code = runRecover({ root: inst.root, to: inst.oldV, ask: answers('д'), log: quiet });
+    const code = runRecover({ root: inst.root, to: inst.oldV, ask: answers('1'), log: quiet });
     assert.equal(code, 1);
     assert.equal(cur(inst.root), '3.11.0');
   } finally {
@@ -188,4 +188,12 @@ test('recordRollback: чужой (не про уходящую версию) р�
   fs.writeFileSync(path.join(inst.dataDir, RESULT_NAME), JSON.stringify(other));
   recordRollback({ dataDir: inst.dataDir, from: '3.11.0', to: '3.10.0', by: 'recover.cmd', dbRestored: false });
   assert.deepEqual(readJson(path.join(inst.dataDir, RESULT_NAME)), other);
+});
+
+test('recover: непонятный ответ переспрашивается, а не принимается за «да»', () => {
+  const inst = install();
+  const code = runRecover({ root: inst.root, to: inst.oldV, ask: answers('н', 'x', '?'), log: quiet });
+  assert.equal(code, 2, 'три непонятных ответа — отмена');
+  assert.equal(cur(inst.root), '3.11.0');
+  assert.equal(markerOf(path.join(inst.dataDir, 'easymed.db')), 'LIVE-after-update');
 });

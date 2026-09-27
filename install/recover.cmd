@@ -15,6 +15,19 @@ rem  junction без повышения прав (то же самое дела�
 rem  запуске). rmdir БЕЗ /s снимает только ссылку и никогда не трогает папку,
 rem  на которую она указывает — проверено; ошибка здесь удалила бы саму
 rem  программу клиники, а не ярлык на неё.
+rem
+rem  V3120_FIX — ОТКАТ ВМЕСТЕ С БАЗОЙ. Одной ссылки мало, когда новая версия
+rem  изменила устройство базы: с 3.11 база сама отказывает в записях старого
+rem  кода (защитные триггеры), и старая касса после отката не проводила оплаты.
+rem  Поэтому, если рядом есть Node (runtime\node.exe) и помощник
+rem  versions\<v>\install\rollback.mjs, всю работу делает он: сравнивает
+rem  миграции версий, предлагает (по умолчанию — да, с подтверждением) вернуть
+rem  базу из копии backups\pre-<версия>.db, снятой перед обновлением, текущую
+rem  базу сохраняет как backups\rollback-<время>.db и честно говорит, что
+rem  станет с данными, внесёнными после обновления. Без помощника (очень
+rem  старые версии) остаётся прежний путь — только ссылка, с предупреждением.
+rem  Этот файл обновляется сам: каждая запущенная версия кладёт в корень
+rem  свою копию (boot-confirm.js, syncRecoverCmd).
 rem ===========================================================================
 chcp 65001 >nul
 setlocal EnableDelayedExpansion
@@ -27,6 +40,8 @@ echo.
 echo   Easy-Med — возврат к предыдущей версии
 echo   =========================================================
 echo   Папка: %ROOT%
+echo.
+echo   Сначала закройте чёрное окно Easy-Med (или остановите службу).
 echo.
 
 if not exist "%ROOT%\versions" goto :no_versions
@@ -67,6 +82,32 @@ if not defined ANSWER set "ANSWER=%PREV%"
 if not exist "%ROOT%\versions\%ANSWER%\server\index.js" goto :bad_choice
 if /i "%ANSWER%"=="!CURNAME!" goto :already
 
+rem ── V3120_FIX: помощник, который откатывает и базу ──────────────────────
+set "NODE="
+if exist "%ROOT%\runtime\node.exe" set "NODE=%ROOT%\runtime\node.exe"
+if not defined NODE for %%N in (node.exe) do if not "%%~$PATH:N"=="" set "NODE=%%~$PATH:N"
+set "HELPER="
+if defined CURNAME if exist "%ROOT%\versions\!CURNAME!\install\rollback.mjs" set "HELPER=%ROOT%\versions\!CURNAME!\install\rollback.mjs"
+if not defined HELPER for /f "delims=" %%V in ('dir /b /a:d /o:-d "%ROOT%\versions" 2^>nul') do (
+  if not defined HELPER if exist "%ROOT%\versions\%%V\install\rollback.mjs" set "HELPER=%ROOT%\versions\%%V\install\rollback.mjs"
+)
+if not defined NODE goto :link_only
+if not defined HELPER goto :link_only
+"!NODE!" --no-warnings "!HELPER!" recover --root "%ROOT%" --to "%ANSWER%"
+goto :done
+
+:link_only
+echo.
+echo   ВНИМАНИЕ: помощник отката не найден — будет переключена только
+echo   программа, база останется как есть. Если новая версия меняла
+echo   устройство базы, касса старой версии может отказывать в записи.
+echo   Копия базы перед обновлением: data\backups\pre-^<версия^>.db —
+echo   восстановить её можно в «Настройки - Резервные копии» или через поставщика.
+echo.
+set "GO=0"
+set /p "GO=  Продолжить? 1 - да, 0 - отмена [0]: "
+if not "!GO!"=="1" goto :cancelled
+
 echo.
 echo   Переключаю на версию %ANSWER%...
 
@@ -88,6 +129,11 @@ echo     2. Запустите EasyMed.exe заново.
 echo.
 echo   Данные клиники (папка data) не затронуты. Копия базы, сделанная
 echo   перед обновлением, лежит в data\backups\.
+goto :done
+
+:cancelled
+echo.
+echo   Отменено. Ничего не изменено.
 goto :done
 
 :no_versions
