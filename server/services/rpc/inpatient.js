@@ -287,8 +287,9 @@ export function cancelAdmissionRequest(db, args, user) {
     // says so, and this is the error the ward sees if they try.
     assertTransition('admission', adm.status, 'cancelled');
 
-    db.prepare("UPDATE admissions SET status = 'cancelled', discharged_at = ? WHERE id = ? AND status = 'ordered'")
-      .run(nowIso(db), admissionId);
+    // V3120_CLEANUP — без discharged_at: отмена не выписка (время — в журнале ниже).
+    db.prepare("UPDATE admissions SET status = 'cancelled' WHERE id = ? AND status = 'ordered'")
+      .run(admissionId);
     dropUnbilledLines(db, admissionId, user);   // INPATIENT_MONEY_FIX_V1 (D5)
     db.prepare(`
       INSERT INTO admission_transfers (admission_id, kind, reason, transferred_at, transferred_by)

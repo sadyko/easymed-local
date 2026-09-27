@@ -381,7 +381,7 @@ test('a hospitalisation request can be declined, freeing the patient to be refer
 
   const res = cancelAdmissionRequest(db, { admission_id: req.id, reason: 'состояние улучшилось' }, nurse);
   assert.equal(res.admission.status, 'cancelled');
-  assert.ok(res.admission.discharged_at);
+  assert.equal(res.admission.discharged_at, null, 'V3120_CLEANUP — отмена заявки не выписка');
   const log = db.prepare("SELECT kind, reason FROM admission_transfers WHERE admission_id=?").get(req.id);
   assert.equal(log.kind, 'cancel');
   assert.equal(log.reason, 'состояние улучшилось');

@@ -189,7 +189,10 @@ test('отмена сохраняет причину и время — «отм�
   const row = db.prepare('SELECT * FROM admissions WHERE id=?').get(id);
   assert.equal(row.status, 'cancelled');
   assert.equal(row.cancel_reason, 'состояние улучшилось');
-  assert.ok(row.discharged_at, 'заявка закрыта — у неё есть время закрытия');
+  // V3120_CLEANUP — отмена не выписка: discharged_at пуст (иначе карта пациента,
+  // титульный лист и журнал госпитализаций писали «выписан <дата>»). Время и
+  // причина отмены — в журнале движений (admission_transfers, kind='cancel').
+  assert.equal(row.discharged_at, null, 'отмена не ставит время выписки');
   db.close();
 });
 

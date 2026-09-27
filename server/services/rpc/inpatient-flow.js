@@ -426,8 +426,12 @@ export function admissionTransition(db, args, user, opts = {}) {
   if (to === 'admitted')   { sets.push('admitted_by = ?', 'admitted_at = ?'); vals.push(by, at); }
   if (to === 'examined')   { sets.push('examined_by = ?', 'examined_at = ?'); vals.push(by, at); }
   if (to === 'cancelled')  {
-    sets.push('cancel_reason = ?', 'discharged_at = ?');
-    vals.push(String((args && args.reason) || '').slice(0, 300), at);
+    // V3120_CLEANUP — отмена НЕ выписка: discharged_at не ставим (колонки
+    // cancelled_at нет). Со временем выписки у отменённой заявки карта
+    // пациента, титульный лист и журнал писали «выписан <дата>». Когда и кем
+    // отменили — строка admission_transfers kind='cancel' (admissionOrderCancel).
+    sets.push('cancel_reason = ?');
+    vals.push(String((args && args.reason) || '').slice(0, 300));
   }
   if (to === 'discharged') { sets.push('discharged_at = COALESCE(discharged_at, ?)'); vals.push(at); }
   vals.push(adm.id);
