@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { getRpc } from './index.js';
+import { compile } from '../../db/query-compiler.js';
 
 const REG = { id: 1, role: 'registrar', extra_roles: [] };
 const DOC = { id: 2, role: 'doctor', extra_roles: [] };
@@ -24,9 +25,9 @@ function freshDb() {
 }
 const call = (name, db, args, user) => getRpc(name)(db, args, user);
 const line = (db, id, extra = {}) => {
-  const r = { doctor_id: 2, created_by: 2, status: 'added', ...extra };
-  db.prepare('INSERT INTO visit_services (id, visit_id, service_id, quantity, unit_price, total, status, doctor_id, created_by) VALUES (?,40,21,1,100000,100000,?,?,?)')
-    .run(id, r.status, r.doctor_id, r.created_by);
+  const r = { doctor_id: 2, created_by: 2, status: 'added', sync_origin: null, ...extra };
+  db.prepare('INSERT INTO visit_services (id, visit_id, service_id, quantity, unit_price, total, status, doctor_id, created_by, sync_origin) VALUES (?,40,21,1,100000,100000,?,?,?,?)')
+    .run(id, r.status, r.doctor_id, r.created_by, r.sync_origin);
 };
 const exists = (db, id) => !!db.prepare('SELECT 1 FROM visit_services WHERE id = ?').get(id);
 
@@ -115,4 +116,47 @@ test('LIVE_AUDIT_FIX_V1 (A6): calendar_book ставит источник нап
   const out = await call('calendar_book', db, { patient_id: 1, start: start.toISOString(), referral_source_id: 5 }, REG);
   assert.equal(db.prepare('SELECT referral_source_id r FROM visits WHERE id = ?').get(out.visit.id).r, 5);
   await assert.rejects(() => call('calendar_book', db, { patient_id: 1, start: new Date(start.getTime() + 3600000).toISOString(), referral_source_id: 99 }, REG), /referral source not found/);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FINAL_ROLES_SYNC_FIX_V1 (M3) — «своя» строка — заведённая этим врачом, и
+// только в этом здании.
+// ═══════════════════════════════════════════════════════════════════════════
+test('M3: врач не снимает строку, которую завёл не он, даже назначив себя исполнителем', () => {
+  const db = freshDb();
+  // Регистратура завела строку ЕМУ; врач поставил себя исполнителем (doctor_id он правит сам).
+  line(db, 201, { doctor_id: 2, created_by: 1 });
+  assert.throws(() => call('remove_own_visit_line', db, { visit_service_id: 201 }, DOC),
+    (e) => e.status === 403 && /которую вы добавили/.test(e.message));
+  assert.equal(exists(db, 201), true);
+  // Своя — снимается; старая строка без created_by — по исполнителю, как раньше.
+  line(db, 202, { doctor_id: 3, created_by: 2 });
+  assert.equal(call('remove_own_visit_line', db, { visit_service_id: 202 }, DOC).removed, true);
+  line(db, 203, { doctor_id: 2, created_by: null });
+  assert.equal(call('remove_own_visit_line', db, { visit_service_id: 203 }, DOC).removed, true);
+});
+
+test('M3: created_by строки ставит сервер из сессии — присланное браузером не принимается', () => {
+  const db = freshDb();
+  const q = compile({ op: 'insert', table: 'visit_services', values: { visit_id: 40, service_id: 21, quantity: 1, unit_price: 1, total: 1, doctor_id: 2, created_by: 3 } }, DOC, { db });
+  db.prepare(q.sql).run(...q.params);
+  const row = db.prepare('SELECT created_by FROM visit_services ORDER BY id DESC LIMIT 1').get();
+  assert.equal(row.created_by, 2, 'строка записана на того, кто её завёл, а не на присланного');
+});
+
+test('M3: строку другого здания не снимает никто — ни врач, ни регистратура', () => {
+  const db = freshDb();
+  line(db, 204, { sync_origin: 'B' });
+  for (const u of [DOC, REG]) {
+    assert.throws(() => call('remove_own_visit_line', db, { visit_service_id: 204 }, u), /другом здании/);
+  }
+  assert.equal(exists(db, 204), true);
+});
+
+test('M5: отказы по-русски', () => {
+  const db = freshDb();
+  assert.throws(() => call('remove_own_visit_line', db, { visit_service_id: 'x' }, DOC), (e) => e.status === 400 && /[А-Яа-я]/.test(e.message) && !/must be/.test(e.message));
+  assert.throws(() => call('visit_set_referral_source', db, { visit_id: 0 }, REG), (e) => /[А-Яа-я]/.test(e.message) && !/must be/.test(e.message));
+  assert.throws(() => call('visit_set_referral_source', db, { visit_id: 40 }, REG), (e) => /Не указан источник/.test(e.message) && !/required/.test(e.message));
+  assert.throws(() => call('visit_set_referral_source', db, { visit_id: 40, referral_source_id: -1 }, REG), (e) => /[А-Яа-я]/.test(e.message) && !/must be/.test(e.message));
 });

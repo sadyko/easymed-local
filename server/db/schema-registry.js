@@ -327,7 +327,12 @@ export const REGISTRY = {
     read:  { roles: ALL_STAFF, columns: ['id','visit_id','service_id','clinic_item_id','doctor_id','quantity','unit_price','total','status','invoice_item_id','created_by','created_at','consultation_type_id','scheduled_at','queue_key','queue_no','notes',
              'sample_collected_at','verified_by','verified_at','sync_origin',
              'price_tier','package_id'] },   // package_id: PACKAGES_V1 (mig 154) — the package the line came from; price_tier: VISIT_TIER_PRICING_V1 (mig 127) — primary/secondary/repeat, set by the screen from service_price_quote   // queue_* set ONLY by issue_queue_numbers; notes = WS consult document JSON (mig 039); sample/verify: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083)
-    write: { insert: { roles: ['admin','registrar','doctor'], columns: ['visit_id','service_id','doctor_id','quantity','unit_price','total','status','created_by','consultation_type_id','scheduled_at','price_tier','package_id'] },
+    // FINAL_ROLES_SYNC_FIX_V1 (M3) — created_by ставит СЕРВЕР из сессии
+    // (stamps ниже), а не браузер: по нему remove_own_visit_line решает, чья
+    // это строка, и присланное значение позволяло бы выдать чужую строку за
+    // свою. Поэтому колонки нет в списке записи — ни вставкой, ни upsert.
+    stamps: { created_by: { on: 'insert' } },
+    write: { insert: { roles: ['admin','registrar','doctor'], columns: ['visit_id','service_id','doctor_id','quantity','unit_price','total','status','consultation_type_id','scheduled_at','price_tier','package_id'] },
              update: { roles: ['admin','registrar','doctor','lab','nurse'], columns: ['status','doctor_id','consultation_type_id','notes',
              'sample_collected_at','verified_by','verified_at','package_id'],
              // PACKAGES_V1 (ревью I-3) — пометку пакета правкой можно только
