@@ -412,6 +412,23 @@ class EasyMed
         return _logPath != null ? "Журнал: " + _logPath : "Журнал не ведётся (папка logs недоступна для записи).";
     }
 
+    // V3120_FIX — пароль первого запуска («  password: …» из server/index.js)
+    // виден в окне, но в журнал не попадает: logs\easymed.log копится,
+    // переживает ротацию и может быть отправлен поставщику. Любая строка,
+    // которая после пробелов начинается с «password» и двоеточия, пишется в
+    // журнал без значения.
+    static string RedactForLog(string line)
+    {
+        string t = line.TrimStart();
+        if (t.StartsWith("password", StringComparison.OrdinalIgnoreCase))
+        {
+            int colon = t.IndexOf(':');
+            if (colon > 0 && colon <= "password".Length + 2)
+                return line.Substring(0, line.Length - t.Length) + t.Substring(0, colon + 1) + " [скрыто — показан только в окне]";
+        }
+        return line;
+    }
+
     // Запуск с выводом и в окно, и в журнал.
     static Process StartTee(ProcessStartInfo psi)
     {
@@ -426,7 +443,7 @@ class EasyMed
         {
             if (e.Data == null) return;
             Console.WriteLine(e.Data);
-            AppendLog(e.Data);
+            AppendLog(RedactForLog(e.Data));   // пароль — только в окно, не в журнал
         };
         p.OutputDataReceived += onLine;
         p.ErrorDataReceived += onLine;
