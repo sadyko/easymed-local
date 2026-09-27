@@ -213,7 +213,10 @@ export function buildingWhere(db, ctx, args, table, alias) {
     if (l) keys.add(l);
     else if (k === OWN_KEY) keys.add(OWN_KEY);
   }
-  if (keys.size === 0) return { clause: '', params: [] };
+  // V3120_FIX — выбор задан, но ни одно здание в нём не опознано (мусор,
+  // номер вместо буквы): это «ни одного здания», а не «фильтра нет». Прежде
+  // такой запрос молча отдавал ВСЕ здания.
+  if (keys.size === 0) return { clause: ' AND 1 = 0', params: [] };
   if (coversAll([...keys], ctx.options)) return { clause: '', params: [] };
 
   const wantOwn = keys.has(ctx.ownKey);

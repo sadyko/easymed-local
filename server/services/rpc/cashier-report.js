@@ -23,15 +23,19 @@ import { requireReportKind } from '../report-access.js';
 // приносит и из неё не уносит: деньги пришли раньше, в день приёма депозита
 // или первой оплаты. Поступления — только приход (тот же словарь, что у
 // выручки, дашборда и итога смены).
-import { INFLOW_SQL } from '../../../public/js/shared/payment-methods.js';
+import { INFLOW_SQL, METHOD_RU as SHARED_METHOD_RU } from '../../../public/js/shared/payment-methods.js';
 // REPORTS_AUDIT_FIX_V1 — период проверяется тем же правилом, что у остальных
 // отчётов (мусор и «с» позже «по» — отказ по-русски, а не пустая касса), а
 // пустой филиал счёта — своё здание (счёт госпитализации пишется без него).
 import { resolveRange, OWN_BRANCH_OR } from './reports.js';
 
+// V3120_FIX — способы оплаты называются ОДНИМ словарём с кассой и «Счетами»
+// (shared/payment-methods.js): прежде здесь «Перечисление», там «Перевод», а
+// «Кошелёк» и «Подарочная карта» печатались кодом. Своими остаются только
+// старые коды, которых касса больше не принимает.
 const METHOD_RU = {
-  cash: 'Наличные', card: 'Карта', acquiring: 'Эквайринг',
-  transfer: 'Перечисление', online: 'Онлайн', debt: 'В долг', other: 'Прочее',
+  online: 'Онлайн', debt: 'В долг', other: 'Прочее',
+  ...SHARED_METHOD_RU,
 };
 
 const MOVE_RU = {

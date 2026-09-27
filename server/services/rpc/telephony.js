@@ -368,6 +368,17 @@ export function crmLeadCalls(db, args, user) {
 // АДМИНИСТРАТОРУ. Это отчёт о работе людей: кто сколько отговорил за смену.
 // Оператору чужие цифры не нужны, а заведующей нужны все — поэтому здесь тот
 // же admin-only, что и у остальной телефонии.
+// V3120_FIX — строка → ISO-момент в UTC или null. День без времени должен
+// существовать в календаре (2026-02-30 — не дата).
+function isoMoment(v) {
+  if (!/^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(v)) return null;
+  const t = Date.parse(v.length === 10 ? v + 'T00:00:00Z' : v.replace(' ', 'T'));
+  if (!Number.isFinite(t)) return null;
+  const iso = new Date(t).toISOString().replace(/\.000Z$/, 'Z');   // как пишет журнал (onlinepbx.js, poller.js)
+  if (v.length === 10 && iso.slice(0, 10) !== v) return null;
+  return iso;
+}
+
 export function telephonyOperatorStats(db, args, user) {
   // CRM_HEAD_MERGE_TAGS_V1 — и руководителю колл-центра (право `crm.all`):
   // «видит показатели каждого оператора» — это и есть его работа. Предикат тот
@@ -378,9 +389,17 @@ export function telephonyOperatorStats(db, args, user) {
   // Границы периода приходят готовыми ISO-строками: «сегодня» у клиники
   // местное, и считать его на сервере по UTC значило бы показывать смену,
   // сдвинутую на пять часов.
-  const from = String((args && args.from) || '').slice(0, 30);
-  const to   = String((args && args.to) || '').slice(0, 30);
-  if (!from || !to) throw new RpcError('Не указан период.', 400);
+  const rawFrom = String((args && args.from) || '').slice(0, 30);
+  const rawTo   = String((args && args.to) || '').slice(0, 30);
+  if (!rawFrom || !rawTo) throw new RpcError('Не указан период.', 400);
+  // V3120_FIX — мусор вместо даты прежде сравнивался со started_at как строка и
+  // молча давал пустой (или весь) журнал. Теперь: момент времени ISO, «с»
+  // раньше «по»; обе границы — в одном виде с started_at (UTC, …Z).
+  const from = isoMoment(rawFrom);
+  const to = isoMoment(rawTo);
+  if (!from) throw new RpcError('Начало периода — не дата: нужен формат ГГГГ-ММ-ДДTЧЧ:ММ.', 400);
+  if (!to) throw new RpcError('Конец периода — не дата: нужен формат ГГГГ-ММ-ДДTЧЧ:ММ.', 400);
+  if (from >= to) throw new RpcError('Начало периода позже его конца — выберите период заново.', 400);
   return db.prepare(`
     SELECT COALESCE(u.full_name, '') AS operator_name,
            COALESCE(NULLIF(c.internal_number, ''), '') AS extension,

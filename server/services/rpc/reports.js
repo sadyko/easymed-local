@@ -91,6 +91,15 @@ function isDateish(v) {
   return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v);
 }
 
+// V3120_FIX — такой день есть в календаре? SQLite сам «дотягивает» 2026-02-30
+// до 2026-03-02, а 2026-13-01 превращает в NULL, и отчёт молча выходил пустым
+// или за чужой период. Проверка — круговая: date() возвращает тот же день.
+function isRealDay(db, v) {
+  const day = String(v).slice(0, 10);
+  const r = db.prepare('SELECT date(?) AS d').get(day);
+  return !!r && r.d === day;
+}
+
 // REPORTS_AUDIT_FIX_V1 — отказ читает человек, поэтому по-русски; и «с» позже
 // «по» — тоже отказ, а не молча пустой отчёт («ничего не было» читалось бы
 // как правда). Экспортируется: «Отчёт кассира» и отчёт колл-центра проверяют
@@ -104,6 +113,12 @@ export function resolveRange(db, args) {
   }
   if (!isDateish(to)) {
     throw new RpcError('Дата «по» — не дата: нужен формат ГГГГ-ММ-ДД.', 400);
+  }
+  if (!isRealDay(db, from)) {
+    throw new RpcError('Дата «с» — такого дня нет в календаре (' + String(from).slice(0, 10) + '). Выберите период заново.', 400);
+  }
+  if (!isRealDay(db, to)) {
+    throw new RpcError('Дата «по» — такого дня нет в календаре (' + String(to).slice(0, 10) + '). Выберите период заново.', 400);
   }
   if (from.slice(0, 10) > to.slice(0, 10)) {
     throw new RpcError('Дата «с» позже даты «по» — выберите период заново.', 400);
@@ -128,7 +143,18 @@ export function reportsOverview(db, args, user) {
   const { from, to } = resolveRange(db, args);
   const ctx = buildingContext(db);
   const all = (sql, ...p) => db.prepare(sql).all(...p);
-  const bw = (table, alias) => buildingWhere(db, ctx, args, table, alias);
+  // V3120_FIX — филиалы (branch_ids) сводка прежде молча не читала: к фильтру
+  // зданий добавлен фильтр филиалов, тем же правилом, что у отчётов (счёт
+  // стационара без филиала — свой). У платежа филиала нет — он у его счёта.
+  const withBranch = (f, extra) => ({ clause: f.clause + extra.clause, params: [...f.params, ...extra.params] });
+  const bw = (table, alias) => {
+    const f = buildingWhere(db, ctx, args, table, alias);
+    if (table === 'payments') {
+      const bf = branchFilter(args, OWN_BRANCH_OR('pbi.branch_id'));
+      return bf.clause ? withBranch(f, { clause: ` AND EXISTS (SELECT 1 FROM invoices pbi WHERE pbi.id = ${alias}.invoice_id${bf.clause})`, params: bf.params }) : f;
+    }
+    return withBranch(f, branchFilter(args, table === 'invoices' ? OWN_BRANCH_OR(alias + '.branch_id') : alias + '.branch_id'));
+  };
 
   const pf = bw('payments', 'p');
   const cash = all(
@@ -250,22 +276,27 @@ function legacyReports(db) {
        ORDER BY i.created_at
     `,
     row: (r) => [r.invoice_number, r.date, r.patient, round2(r.total), round2(r.paid), round2(r.balance), r.status],
+    // V3120_FIX — те же строки вне итога, что у «Счетов» (invoicesFullReport):
+    // отменённый, возвращённый, депозит и продажа карты в «Итого» не входят.
+    skip: (r) => r.status === 'void' || r.status === 'refunded' || isDepositNumber(r.invoice_number),
   },
   services: {
     columns: ['Service', 'Qty', 'Revenue'],
     table: 'invoices', alias: 'i',
     sql: (bf) => `
-      SELECT s.name AS service,
+      SELECT COALESCE(s.name, NULLIF(ii.description, ''), '—') AS service,
              SUM(ii.quantity) AS qty,
              SUM(ii.total - (${ITEM_DISCOUNT_SQL})) AS revenue,
              ${originExpr(db, 'invoices', 'i')} AS origin
         FROM invoice_items ii
         JOIN invoices i ON i.id = ii.invoice_id
-        JOIN services s ON s.id = ii.service_id
+        -- V3120_FIX — строка без услуги каталога (консультация, товар, койко-дни)
+        -- прежде выпадала из выручки INNER JOIN'ом: итог был меньше «По услугам».
+        LEFT JOIN services s ON s.id = ii.service_id
        -- REPORTS_AUDIT_FIX_V1 — те же правила, что «По услугам»: без отменённых
        -- и возвращённых счетов, без депозита, выручка — после скидки.
        WHERE ${inLocalRange('i.created_at')} AND ${REVENUE_INVOICE_SQL('i')} AND ${NOT_DEPOSIT_INVOICE_SQL}${bf.clause}
-       GROUP BY origin, s.id, s.name
+       GROUP BY origin, s.id, COALESCE(s.name, NULLIF(ii.description, ''), '—')
        ORDER BY revenue DESC
     `,
     row: (r) => [r.service, r.qty, round2(r.revenue)],
@@ -335,7 +366,15 @@ function legacyReports(db) {
 // Нужен стационару: счёт госпитализации пишется без филиала.
 const OWN_BRANCH_SQL = `(SELECT COALESCE(bi.branch_id, (SELECT b.id FROM branches b WHERE b.letter = bi.letter ORDER BY b.id LIMIT 1))
    FROM branch_identity bi WHERE bi.id = 1)`;
-export const OWN_BRANCH_OR = (col) => `COALESCE(${col}, ${OWN_BRANCH_SQL})`;
+// V3120_FIX — «пустой филиал — свой» верно только для СВОЕЙ строки. Счёт,
+// приехавший из соседнего здания (sync_origin задан) без филиала, своим не
+// становится: прежде фильтр по своему филиалу забирал и его. Метка берётся у
+// той же таблицы, что и колонка филиала (алиас до точки).
+export const OWN_BRANCH_OR = (col) => {
+  const dot = col.indexOf('.');
+  if (dot < 0) return `COALESCE(${col}, ${OWN_BRANCH_SQL})`;
+  return `COALESCE(${col}, CASE WHEN ${col.slice(0, dot)}.sync_origin IS NULL THEN ${OWN_BRANCH_SQL} END)`;
+};
 
 // Validated branch filter → { clause: ' AND col IN (?,?)', params: [...] }.
 function branchFilter(args, col) {
@@ -1348,7 +1387,9 @@ function storedLineFilter(args, ctx) {
       if (l) keys.add(l);
       else if (k === OWN_KEY) keys.add(OWN_KEY);
     }
-    if (keys.size && !coversAll([...keys], ctx.options)) buildingOk = (r) => keys.has(ctx.keyOf(r.origin));
+    // V3120_FIX — пустой набор опознанных зданий — ни одной строки (как buildingWhere).
+    if (!keys.size) buildingOk = () => false;
+    else if (!coversAll([...keys], ctx.options)) buildingOk = (r) => keys.has(ctx.keyOf(r.origin));
   }
   return (r) => branchOk(r) && buildingOk(r);
 }
@@ -1954,17 +1995,22 @@ function totalRevenueReport(db, args, ctx) {
   const src = itemRowsQuery(db, args, ctx);
   return {
     columns: [BUILDING_COL, 'Дата', '№ счёта', 'Пациент', 'МРН', 'Услуга', 'Кол-во', 'Цена', 'Сумма',
-              'Скидка', 'После скидки', 'Налог %', 'Налог', 'Врач', 'Ставка врача', 'Доля врача',
+              'Скидка', 'После скидки', 'Налог %', 'Налог', 'Врач', 'Ставка врача', 'Фикс врача', 'Доля врача',
               'Филиал', 'Регистратор', 'Реферал', 'Статус'],
     rows: src.map((r) => {
       const after = r.amount - r.discount;
       // DOCTOR_FIX_RATE_V1 — the rate column states WHICH rate applied. Printing
       // a percentage for a fixed-rate line would read as "this doctor gets 0%"
       // next to a non-zero fee.
-      const rate = r.doctor_fix != null ? ('фикс ' + round2(r.doctor_fix)) : round2(r.doctor_pct);
+      // V3120_FIX — прежде одна колонка смешивала числа (30) и текст («фикс
+      // 50000»): Excel не мог ни сортировать, ни фильтровать её. Теперь две
+      // числовые: «Ставка врача» (%) — пусто у строки с фиксом; «Фикс врача»
+      // (сумма за единицу) — пусто у строки с процентом.
+      const fixed = r.doctor_fix != null;
       return [ctx.label(r.origin), r.date, r.invoice || '', r.patient, r.mrn || '', r.service || '', r.qty,
               round2(r.price), round2(r.amount), round2(r.discount), round2(after),
-              r.tax_rate, round2(after * r.tax_rate / 100), doctorCell(ctx, r), rate,
+              r.tax_rate, round2(after * r.tax_rate / 100), doctorCell(ctx, r),
+              fixed ? null : round2(r.doctor_pct), fixed ? round2(r.doctor_fix) : null,
               round2(r.doctor_fee), r.branch || '', r.registrar || '',
               r.referral || '', INV_STATUS_RU[r.status] || r.status];
     }),
@@ -3918,7 +3964,7 @@ export function ownerReport(db, args, user) {
 // вычитанием. Поэтому у чужой строки скрыты и они, а разрез по зданиям теряет
 // прибыль. Сумма, налог и расходники остаются — это выручка и склад.
 const PAY_MASK = {
-  total_revenue:    { cols: ['Ставка врача', 'Доля врача'], by: ['doctor_fee'] },
+  total_revenue:    { cols: ['Ставка врача', 'Фикс врача', 'Доля врача'], by: ['doctor_fee'] },
   surgery_profit:   { cols: ['Гонорар хирурга', 'Прибыль клиники', 'Маржа (%)'], by: ['profit'] },
   referrals:        { cols: ['Эфф. %', 'Вознаграждение'], by: ['reward'] },
   referrals_detail: { cols: ['Ставка', 'Вознаграждение'], by: ['reward'] },
@@ -3970,11 +4016,13 @@ function maskDoctorPay(db, user, kind, report, rowDoctorIds) {
 // склада — нет.
 const NOT_SUMMABLE_COLS = new Set([
   'Цена', 'Цена за ед.', 'Себестоимость ед.', 'Средняя себестоимость', 'Дней до срока',
-  'Пациентов', 'Визитов', 'Госпитализаций', 'Средний % врача', 'Ставка врача', 'Ставка',
+  'Пациентов', 'Визитов', 'Госпитализаций', 'Средний % врача', 'Ставка врача', 'Ставка', 'Фикс врача',
   'Unit cost',
 ]);
 const STOCK_KINDS = new Set(['procurement', 'stock_consumption', 'stock_statement', 'stock_expiry', 'stock_movements']);
-const STOCK_QTY_RE = /кол-во|количество|остаток \(расчёт\)|^qty$/i;
+// V3120_FIX — «В карточке товара» и «Расхождение» у «Оборотной ведомости» —
+// тоже КОЛИЧЕСТВА (разных товаров), их сумма в подвале бессмысленна.
+const STOCK_QTY_RE = /кол-во|количество|остаток \(расчёт\)|^qty$|^в карточке товара$|^расхождение$/i;
 export function summableColumns(kind, columns) {
   return (columns || []).filter((c) => {
     const label = String(c == null ? '' : c);
@@ -4031,6 +4079,7 @@ export function runReport(db, args, user) {
   // BUILDING_REPORTS_V1 — «Здание» приписывается ПОСЛЕДНЕЙ колонкой: у этих
   // выгрузок порядок колонок читают по позиции, и вставка в середину сдвинула
   // бы всё, что правее.
+  const skip = report.skip ? raw.map((r, i) => (report.skip(r) ? i : -1)).filter((i) => i >= 0) : [];
   return {
     kind,
     columns: [...report.columns, 'Здание'],
@@ -4038,6 +4087,7 @@ export function runReport(db, args, user) {
     by_building: summariseByBuilding(ctx, raw, {}),
     notes: [],
     summable_columns: summableColumns(kind, report.columns),   // REPORTS_AUDIT_FIX_V1
+    ...(skip.length ? { total_skip_rows: skip } : {}),         // V3120_FIX
   };
 }
 
