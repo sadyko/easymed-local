@@ -115,7 +115,7 @@ test('LIVE_AUDIT_FIX_V1 (A6): calendar_book ставит источник нап
   const start = new Date(Date.now() + 3 * 86400000); start.setUTCHours(6, 0, 0, 0);
   const out = await call('calendar_book', db, { patient_id: 1, start: start.toISOString(), referral_source_id: 5 }, REG);
   assert.equal(db.prepare('SELECT referral_source_id r FROM visits WHERE id = ?').get(out.visit.id).r, 5);
-  await assert.rejects(() => call('calendar_book', db, { patient_id: 1, start: new Date(start.getTime() + 3600000).toISOString(), referral_source_id: 99 }, REG), /referral source not found/);
+  await assert.rejects(() => call('calendar_book', db, { patient_id: 1, start: new Date(start.getTime() + 3600000).toISOString(), referral_source_id: 99 }, REG), /Источник направления не найден/);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -159,4 +159,50 @@ test('M5: отказы по-русски', () => {
   assert.throws(() => call('visit_set_referral_source', db, { visit_id: 0 }, REG), (e) => /[А-Яа-я]/.test(e.message) && !/must be/.test(e.message));
   assert.throws(() => call('visit_set_referral_source', db, { visit_id: 40 }, REG), (e) => /Не указан источник/.test(e.message) && !/required/.test(e.message));
   assert.throws(() => call('visit_set_referral_source', db, { visit_id: 40, referral_source_id: -1 }, REG), (e) => /[А-Яа-я]/.test(e.message) && !/must be/.test(e.message));
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FINAL_ROLES_SYNC_FIX_V1 (M4) — discard_empty_visit: визит, который держат
+// другие строки, — отказ по-русски, а не сырая ошибка внешнего ключа; заявка
+// колл-центра, которую запись передвинула, возвращается как была.
+// ═══════════════════════════════════════════════════════════════════════════
+test('M4: давление, документ, талон очереди держат визит — отказ по-русски, визит на месте', () => {
+  const holders = [
+    ['patient_vitals', (db) => db.prepare('INSERT INTO patient_vitals (patient_id, visit_id, pulse_bpm) VALUES (1, 40, 72)').run(), /показатели/],
+    ['visit_documents', (db) => db.prepare("INSERT INTO visit_documents (patient_id, visit_id, title) VALUES (1, 40, 'Справка')").run(), /документ/],
+    ['recommended_services', (db) => db.prepare('INSERT INTO recommended_services (patient_id, service_id, source_visit_id) VALUES (1, 21, 40)').run(), /рекомендации/],
+  ];
+  for (const [name, add, why] of holders) {
+    const db = freshDb();
+    add(db);
+    assert.throws(() => call('discard_empty_visit', db, { visit_id: 40 }, REG),
+      (e) => e.status === 400 && /Визит не пустой/.test(e.message) && why.test(e.message) && !/FOREIGN KEY/.test(e.message), name);
+    assert.ok(db.prepare('SELECT 1 FROM visits WHERE id = 40').get(), name + ': визит удалён');
+  }
+});
+
+test('M4: убранный пустой визит возвращает заявку колл-центра туда, где она была', async () => {
+  const db = freshDb();
+  db.prepare('DELETE FROM visits').run();
+  const rid = db.prepare("INSERT INTO crm_requests (full_name, phone, status, patient_id, scheduled_date) VALUES ('Лид','998900000000','in_process',1,NULL)").run().lastInsertRowid;
+  const lid = db.prepare("INSERT INTO crm_request_services (request_id, service_id, scheduled_date, status) VALUES (?, NULL, NULL, 'pending')").run(rid).lastInsertRowid;
+  const out = await call('ensure_visit', db, { patient_id: 1, date: new Date().toISOString().slice(0, 10) }, REG);
+  assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(rid).status, 'scheduled', 'запись не передвинула заявку — проверять нечего');
+  assert.deepEqual(call('discard_empty_visit', db, { visit_id: out.visit.id }, REG), { discarded: true });
+  const r = db.prepare('SELECT status, scheduled_date FROM crm_requests WHERE id = ?').get(rid);
+  assert.equal(r.status, 'in_process', 'заявка осталась «Записан» на визит, которого нет');
+  assert.equal(r.scheduled_date, null);
+  assert.equal(db.prepare('SELECT visit_id FROM crm_request_services WHERE id = ?').get(lid).visit_id, null);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM crm_booking_undo').get().n, 0, 'след записи убран');
+});
+
+test('M4: заявку, которую после записи тронул оператор, убранный визит не откатывает', async () => {
+  const db = freshDb();
+  db.prepare('DELETE FROM visits').run();
+  const rid = db.prepare("INSERT INTO crm_requests (full_name, phone, status, patient_id) VALUES ('Лид','998900000000','in_process',1)").run().lastInsertRowid;
+  db.prepare("INSERT INTO crm_request_services (request_id, service_id, status) VALUES (?, NULL, 'pending')").run(rid);
+  const out = await call('ensure_visit', db, { patient_id: 1, date: new Date().toISOString().slice(0, 10) }, REG);
+  db.prepare("UPDATE crm_requests SET status = 'recall' WHERE id = ?").run(rid);   // оператор передвинул сам
+  call('discard_empty_visit', db, { visit_id: out.visit.id }, REG);
+  assert.equal(db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(rid).status, 'recall');
 });

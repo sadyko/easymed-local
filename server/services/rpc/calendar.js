@@ -1015,7 +1015,7 @@ export async function calendarBook(db, args, user, deps = {}) {
   // правит вкладка «Детали» (visit_set_referral_source).
   const referralSourceId = existing ? null : optId(a.referral_source_id, 'referral_source_id');
   if (referralSourceId && !db.prepare('SELECT 1 FROM referral_sources WHERE id = ?').get(referralSourceId)) {
-    throw new RpcError('referral source not found.', 400);
+    throw new RpcError('Источник направления не найден.', 400);   // FINAL_ROLES_SYNC_FIX_V1 (M5) — по-русски
   }
 
   // CROSS_BRANCH_CALENDAR_V1 — куда записываем и, если не к себе, чего ждём.

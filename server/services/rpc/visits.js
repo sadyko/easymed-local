@@ -301,7 +301,16 @@ export async function ensureVisit(db, args, user) {
         const status = (schedAt >= 0 && at >= 0 && at < schedAt) ? scheduled : r.status;
         const was = String(r.scheduled_date || '').trim().slice(0, 10);
         const when = (!was || was > day) ? day : was;
-        if (status !== r.status || when !== r.scheduled_date) moveOn.run(status, when, r.id);
+        if (status !== r.status || when !== r.scheduled_date) {
+          moveOn.run(status, when, r.id);
+          // FINAL_ROLES_SYNC_FIX_V1 (M4) — след для discard_empty_visit: если
+          // визит окажется пустым и его уберут, заявка вернётся как была.
+          try {
+            db.prepare(`INSERT INTO crm_booking_undo (visit_id, request_id, prev_status, prev_scheduled_date, set_status, set_scheduled_date)
+                        VALUES (?, ?, ?, ?, ?, ?)`).run(visitId, r.id, r.status, r.scheduled_date ?? null, status, when);
+            db.prepare("DELETE FROM crm_booking_undo WHERE created_at < strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 day')").run();
+          } catch { /* сборка без 186 — возвращать будет нечего, запись от этого не страдает */ }
+        }
       }
     } catch (e) {
       console.error('[ensure_visit] заявки CRM не пересчитаны:', e && e.message);
@@ -506,11 +515,21 @@ export async function ensureVisit(db, args, user) {
 // заведённый не раньше 30 минут назад. Всё остальное — отказ: чужой или
 // работающий визит этим путём не стирается никогда.
 const DISCARD_WINDOW_MIN = 30;
+// FINAL_ROLES_SYNC_FIX_V1 (M4) — таблицы, чьи строки держат визит (внешний ключ
+// без ON DELETE): визит с ними не пустой.
+const DISCARD_HOLDERS = [
+  ['patient_vitals', 'visit_id', 'в нём уже записаны показатели (давление, пульс)'],
+  ['visit_documents', 'visit_id', 'по нему уже есть документ'],
+  ['service_queue_tickets', 'visit_id', 'по нему уже выдан талон очереди'],
+  ['recommended_services', 'source_visit_id', 'из него уже есть рекомендации врача'],
+  ['custdev_cards', 'visit_id', 'по нему уже есть карточка опроса'],
+  ['invoice_audit_log', 'visit_id', 'по нему уже есть записи журнала счетов'],
+];
 
 export function discardEmptyVisit(db, args, user) {
   requireRole(user, ENSURE_ROLES);
   const visitId = args && args.visit_id;
-  if (!isPositiveInt(visitId)) throw new RpcError('visit_id must be a positive integer.', 400);
+  if (!isPositiveInt(visitId)) throw new RpcError('Не выбран визит.', 400);   // FINAL_ROLES_SYNC_FIX_V1 (M5) — по-русски
   const run = db.transaction(() => {
     const v = db.prepare('SELECT * FROM visits WHERE id = ?').get(visitId);
     if (!v) return { discarded: false, reason: 'not_found' };
@@ -524,6 +543,25 @@ export function discardEmptyVisit(db, args, user) {
         || db.prepare('SELECT 1 FROM invoices WHERE visit_id = ? LIMIT 1').get(visitId)) {
       throw new RpcError('В визите уже есть услуги или счёт — он не пустой.', 400);
     }
+    // FINAL_ROLES_SYNC_FIX_V1 (M4) — ОСТАЛЬНЫЕ СТРОКИ, КОТОРЫЕ ДЕРЖАТ ВИЗИТ.
+    // Внешние ключи этих таблиц на visits без ON DELETE: удаление упало бы
+    // сырой английской ошибкой базы. Визит с ними — уже не пустой.
+    for (const [table, col, why] of DISCARD_HOLDERS) {
+      let has = false;
+      try { has = !!db.prepare(`SELECT 1 FROM ${table} WHERE ${col} = ? LIMIT 1`).get(visitId); }
+      catch { has = false; }   // таблицы нет в этой сборке — держать нечему
+      if (has) throw new RpcError('Визит не пустой: ' + why + ' — удалить его нельзя.', 400);
+    }
+    // FINAL_ROLES_SYNC_FIX_V1 (M4) — заявка колл-центра, которую эта запись
+    // передвинула (settleCrmOnBooking), возвращается как была — если с тех
+    // пор её никто не трогал (статус и день те, что поставила запись).
+    try {
+      const undo = db.prepare('SELECT * FROM crm_booking_undo WHERE visit_id = ? ORDER BY id DESC').all(visitId);
+      const back = db.prepare(`UPDATE crm_requests SET status = ?, scheduled_date = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+                                WHERE id = ? AND status IS ? AND scheduled_date IS ?`);
+      for (const u of undo) back.run(u.prev_status, u.prev_scheduled_date, u.request_id, u.set_status, u.set_scheduled_date);
+      db.prepare('DELETE FROM crm_booking_undo WHERE visit_id = ?').run(visitId);
+    } catch { /* сборка без 186 — возвращать нечего */ }
     // Строки заявок, которые ensure_visit успел привязать, снова свободны.
     db.prepare('UPDATE crm_request_services SET visit_id = NULL WHERE visit_id = ?').run(visitId);
     db.prepare('DELETE FROM visits WHERE id = ?').run(visitId);
