@@ -70,10 +70,29 @@ export async function pendingCrmLines(patientId, dayIso, visitId = null) {
         .eq('scheduled_date', day)
         .eq('status', 'pending');
     if (lineErr) throw fail('lines', lineErr.message || lineErr);
-    const all = lines || [];
+    const all = dedupeCrmLines(lines || [], visitId);
     if (!visitId) return all;
     const mine = all.filter((l) => String(l.visit_id || '') === String(visitId));
     return mine.length ? mine : all;
+}
+
+/**
+ * V3120_FIX — ОДНА УСЛУГА — ОДНА СТРОКА В СМЕТЕ. Две карточки одного человека
+ * (оператор не заметил первую) дают две ждущие строки «консультация у Иванова
+ * на этот день», и мастер подставлял в смету обе — двойной счёт. Ключ — услуга
+ * и врач (как у зеркала записи, booking-mirror.js matchKey). Из одинаковых
+ * остаётся строка ЭТОГО визита, иначе самая ранняя.
+ */
+function dedupeCrmLines(lines, visitId = null) {
+    const byKey = new Map();
+    const mine = (x) => visitId != null && String(x.visit_id || '') === String(visitId);
+    for (const l of lines || []) {
+        if (l.service_id == null) { byKey.set('#' + l.id, l); continue; }   // без услуги сравнивать нечего
+        const k = 's:' + l.service_id + '|d:' + (l.doctor_id || '');
+        const had = byKey.get(k);
+        if (!had || (mine(l) && !mine(had))) byKey.set(k, l);
+    }
+    return [...byKey.values()];
 }
 
 // ЗДЕСЬ БЫЛА closeCrmLinesForPatient(patientId, dayIso) — «закрыть все

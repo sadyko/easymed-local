@@ -323,6 +323,16 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
     const mk = matchKey(db, line);
     const cand = vsOfVisit().find((x) => matchKey(db, x) === mk && !isReferenced(x.id) && x.clinic_item_id == null);
     if (cand) { linkLine.run(cand.id, 0, line.id); out.linked++; touched.add(line.request_id); continue; }
+    // V3120_FIX — ВТОРАЯ КАРТОЧКА НА ТУ ЖЕ УСЛУГУ. Оператор завёл вторую
+    // заявку (не заметил первую) на ту же консультацию у того же врача в тот
+    // же день. Строка визита под эту услугу уже есть и её держит строка первой
+    // заявки — вторая строка заявки ДЕЛИТ её, а не заводит вторую строку
+    // визита: одна консультация — один счёт (было 200 000 вместо 100 000).
+    // Делёж безопасен: снятие одной из строк заявки строку визита не трогает,
+    // пока её держит другая (шаг 1 выше — `others`).
+    const shared = vsOfVisit().find((x) => matchKey(db, x) === mk && x.clinic_item_id == null
+      && referencedBy.all(x.id).some((r) => r.id !== line.id && r.status === 'pending'));
+    if (shared) { linkLine.run(shared.id, 0, line.id); out.linked++; touched.add(line.request_id); continue; }
     if (frozen) continue;
     // C1 — хирургию и снятое с продажи зеркало в запись не ставит: строка
     // заявки остаётся ждать, запись — без неё.

@@ -15,7 +15,7 @@
 import { localDate, localHour, localWeekday, inLocalRange } from '../domain/day.js';
 // CRM_LINKS_V1 — воронка настраивается (миграция 077): «дошёл», «не пришёл» и
 // «потеряно» спрашиваются у справочника, а не берутся из зашитого списка.
-import { wonStageKey, lostStageKeys, noShowStageKey, openStageKeys, listStages, listSources } from '../crm/config.js';
+import { wonStageKey, lostStageKeys, noShowStageKey, openStageKeys, listStages, listSources, scheduledStageKey } from '../crm/config.js';
 import { canSeeAllLeads } from '../crm/visibility.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { categoryOf } from '../../../public/js/shared/service-categories.js';   // GROUPS_FIVE_REFERRAL_V1
 // ROLE_REPORTS_SETTINGS_V1 — отчёт колл-центра — группа «Колл-центр» раздела «Отчёты».
@@ -82,6 +82,10 @@ export function callcenterReport(db, args, user) {
   try { stageLabel = labelLookup(listStages(db)); sourceLabel = labelLookup(listSources(db)); } catch (e) { /* ключи вместо подписей */ }
 
   const WON = wonStageKey(db);
+  // V3120_FIX — «Записан» — ступень из настроек воронки (та же, что двигает
+  // запись: scheduledStageKey), а не зашитый ключ: у клиники, переименовавшей
+  // или заменившей колонку, KPI «Записано» показывал ноль.
+  const SCHEDULED = scheduledStageKey(db) || '';
   const NO_SHOW = noShowStageKey(db) || '';
   const LOST = lostStageKeys(db).filter((k) => k !== NO_SHOW);
   // `IN ()` — синтаксическая ошибка SQLite, поэтому отсутствие проигрышных
@@ -89,19 +93,20 @@ export function callcenterReport(db, args, user) {
   const lostHoles = (LOST.length ? LOST : ['']).map(() => '?').join(',');
   const lostVals = LOST.length ? LOST : [''];
   //
-  // «Записан» остаётся ключом 'scheduled': это НЕ вид ступени. Воронка знает
-  // три вида — живая, выигранная, проигранная, — и «на какой из живых колонок
-  // человек записан» спросить не у чего. Сколько заявок с назначенной датой,
-  // отвечает with_date ниже, и он от переименований не зависит вовсе.
+  // «Записан» — НЕ вид ступени (воронка знает три вида — живая, выигранная,
+  // проигранная). Здесь стоял зашитый ключ 'scheduled'; V3120_FIX — теперь
+  // SCHEDULED выше, то же правило, что двигает заявку при записи
+  // (scheduledStageKey). Сколько заявок с назначенной датой, отвечает with_date
+  // ниже, и он от переименований не зависит вовсе.
   const kpiRow = db.prepare(`
     SELECT COUNT(*) AS total,
            SUM(r.status = ?)                            AS came,
-           SUM(r.status = 'scheduled')                  AS scheduled,
+           SUM(r.status = ?)                            AS scheduled,
            SUM(r.status = ?)                            AS no_show,
            SUM(r.status IN (${lostHoles}))              AS lost,
            SUM(r.patient_id IS NOT NULL)                AS became_patient,
            SUM(r.scheduled_date IS NOT NULL AND r.scheduled_date <> '') AS with_date
-      FROM crm_requests r ${where}`).get(WON, NO_SHOW, ...lostVals, ...p);
+      FROM crm_requests r ${where}`).get(WON, SCHEDULED, NO_SHOW, ...lostVals, ...p);
 
   const total = kpiRow.total || 0;
 
@@ -207,7 +212,8 @@ export function callcenterReport(db, args, user) {
       JOIN crm_requests r ON r.id = cs.request_id
       LEFT JOIN services s ON s.id = cs.service_id
       LEFT JOIN consultation_types ct ON ct.id = cs.consultation_type_id AND cs.service_id IS NULL
-     ${where} GROUP BY cs.service_id, cs.consultation_type_id ORDER BY count DESC LIMIT 12`).all(...p);
+     ${where} AND cs.status <> 'cancelled'   -- V3120_FIX — снятая строка (правка карточки, слияние) — не спрос
+     GROUP BY cs.service_id, cs.consultation_type_id ORDER BY count DESC LIMIT 12`).all(...p);
   if (!topServices.length) {
     // Ни одной строки услуг — падаем на service_id самой заявки, иначе у клиники
     // без crm_request_services блок пустой, хотя услуга в заявке названа.
@@ -253,7 +259,7 @@ export function callcenterReport(db, args, user) {
       FROM crm_request_services cs
       JOIN crm_requests r ON r.id = cs.request_id
       LEFT JOIN services s      ON s.id = cs.service_id
-     ${where}
+     ${where} AND cs.status <> 'cancelled'   -- V3120_FIX — как у topServices
      GROUP BY 1, s.is_lab`).all(...p));
   if (!byServiceType.length) {
     // Та же подстраховка, что и у topServices: клиника без строк услуг всё
