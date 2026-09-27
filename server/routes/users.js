@@ -796,6 +796,9 @@ export function userRoutes(db) {
     }
 
     const name = user.full_name || user.username;
+    // V3120_FIX — последняя стена: если запись о работе сотрудника всё же
+    // нашлась там, куда проверка не заглянула, — внятный отказ, а не 500.
+    try {
     db.transaction(() => {
       for (const ref of STAFF_CONFIG_REFS) {
         for (const col of ref.columns) db.prepare(`DELETE FROM "${ref.table}" WHERE "${col}" = ?`).run(user.id);
@@ -803,6 +806,14 @@ export function userRoutes(db) {
       db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
       db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
     })();
+    } catch (e) {
+      if (e && String(e.code || '').startsWith('SQLITE_CONSTRAINT')) {
+        return res.status(409).json({ error: { code: 'conflict', message:
+          `За сотрудником «${name}» закреплены записи — удалить его нельзя, иначе история потеряет автора. `
+          + 'Отключите учётную запись: сотрудник исчезнет из выбора и не сможет войти, а записи останутся целыми.' } });
+      }
+      throw e;
+    }
 
     res.json({ deleted: true, id: user.id, name });
   });
@@ -844,7 +855,49 @@ const STAFF_HISTORY_REFS = [
   { table: 'crm_requests',            columns: ['assigned_to', 'created_by'], label: 'заявки CRM' },
   // CRM_DEDUP_SEARCH_TASKS_V1 (mig 148) — без этой строки удаление упиралось во внешний ключ и отвечало 500.
   { table: 'crm_tasks',               columns: ['assignee_id', 'done_by', 'created_by'], label: 'задачи CRM' },
+  // V3120_FIX — стационар, листы назначений, закрытие месяца, Telegram: таблицы,
+  // появившиеся после STAFF_DELETE_V1. Без них удаление отвечало 500 (внешний
+  // ключ). Всё, что сюда не вписано, ловит staffHistoryFkRefs() ниже —
+  // по самой схеме базы.
+  { table: 'admission_reviews',       columns: ['author_id'],                 label: 'осмотры в стационаре' },
+  { table: 'admission_vitals',        columns: ['measured_by'],               label: 'показатели в стационаре' },
+  { table: 'treatment_orders',        columns: ['ordered_by', 'created_by'],  label: 'листы назначений' },
+  { table: 'treatment_administrations', columns: ['performed_by', 'voided_by'], label: 'отметки выполнения назначений' },
+  { table: 'pay_periods',             columns: ['closed_by'],                 label: 'закрытые месяцы оплаты врачей' },
+  { table: 'pay_period_log',          columns: ['user_id'],                   label: 'журнал закрытия месяцев' },
 ];
+
+// V3120_FIX — ЛЮБАЯ ССЫЛКА НА СОТРУДНИКА ИЗ СХЕМЫ. Список выше — с понятными
+// подписями; но таблицы с колонкой «кто» появляются в каждом выпуске, и
+// каждая забытая здесь превращала удаление в 500. Поэтому к списку добавляются
+// все внешние ключи на users, которые база сама не обнуляет и не удаляет
+// (ON DELETE SET NULL / CASCADE удалению не мешают), кроме настроек сотрудника
+// (STAFF_CONFIG_REFS) и сессий. Колонки, которых в этой базе нет, в списке
+// выше пропускаются (existingColumns).
+function staffHistoryFkRefs(db) {
+  const named = new Set(STAFF_HISTORY_REFS.flatMap((r) => r.columns.map((c) => r.table + '.' + c)));
+  const skip = new Set(['sessions', ...STAFF_CONFIG_REFS.map((r) => r.table)]);
+  const out = [];
+  let tables = [];
+  try { tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name); }
+  catch { tables = []; }
+  for (const t of tables) {
+    if (skip.has(t) || t === 'users') continue;
+    let fks = [];
+    try { fks = db.prepare(`PRAGMA foreign_key_list("${t.replace(/"/g, '')}")`).all(); } catch { fks = []; }
+    const cols = fks.filter((f) => f.table === 'users'
+      && !['SET NULL', 'CASCADE', 'SET DEFAULT'].includes(String(f.on_delete || '').toUpperCase())
+      && !named.has(t + '.' + f.from)).map((f) => f.from);
+    if (cols.length) out.push({ table: t, columns: [...new Set(cols)], label: 'другие записи (' + t + ')' });
+  }
+  return out;
+}
+
+function existingColumns(db, ref) {
+  let cols = [];
+  try { cols = db.prepare(`PRAGMA table_info("${ref.table.replace(/"/g, '')}")`).all().map((c) => c.name); } catch { cols = []; }
+  return ref.columns.filter((c) => cols.includes(c));
+}
 
 // Rows that only DESCRIBE the employee — their rates, branches, specialties.
 // Meaningless once the person is gone, so they go in the same transaction.
@@ -868,9 +921,11 @@ export function staffDeleteGuard(db, user, actor) {
   }
 
   const blocking = [];
-  for (const ref of STAFF_HISTORY_REFS) {
-    const where = ref.columns.map((c) => `"${c}" = ?`).join(' OR ');
-    const { n } = db.prepare(`SELECT COUNT(*) AS n FROM "${ref.table}" WHERE ${where}`).get(...ref.columns.map(() => user.id));
+  for (const ref of [...STAFF_HISTORY_REFS, ...staffHistoryFkRefs(db)]) {
+    const columns = existingColumns(db, ref);   // V3120_FIX — колонки, которых в базе нет, не роняют проверку
+    if (!columns.length) continue;
+    const where = columns.map((c) => `"${c}" = ?`).join(' OR ');
+    const { n } = db.prepare(`SELECT COUNT(*) AS n FROM "${ref.table}" WHERE ${where}`).get(...columns.map(() => user.id));
     if (n > 0) blocking.push({ table: ref.table, label: ref.label, count: n });
   }
   if (blocking.length) {
