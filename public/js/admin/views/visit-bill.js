@@ -164,7 +164,15 @@ export function openVisitBillModal(visit, onChanged) {
                 .order('id');
             if (error) throw error;
             const rows = data || [];
-            unInvoicedIds = rows.filter(r => r.invoice_item_id == null).map(r => r.id);
+            // FINAL_MONEY_FIX_V1 (I1) — «выставить всё невыставленное» не берёт
+            // строки, за которые пациенту вернули деньги: их выставляют заново
+            // только явным выбором в окне визита (сервер без него откажет).
+            let refunded = new Set();
+            try {
+                const { data: rf } = await supabase.rpc('visit_refunded_lines', { visit_id: visit.id });
+                refunded = new Set(((rf && rf.line_ids) || []).map(Number));
+            } catch (e) { /* без пометки сервер всё равно не выставит их молча */ }
+            unInvoicedIds = rows.filter(r => r.invoice_item_id == null && !refunded.has(Number(r.id))).map(r => r.id);
             clear(linesTbody);
             if (rows.length === 0) {
                 linesEmptyEl.style.display = '';

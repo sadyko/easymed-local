@@ -1775,8 +1775,10 @@ function openLineRefundConfirm(item, info, root) {
             radio.addEventListener('change', () => { toBalance = v; paintDest(); });
             destBox.appendChild(h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13.5px', cursor: 'pointer' } }, radio, tr(l)));
         }
+        // FINAL_MONEY_FIX_V1 (I2) — карта, чей остаток уже вернули покупателю,
+        // закрыта: сумма по ней возвращается выбранным здесь способом.
         destBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-            tr('Оплата картой-сертификатом возвращается на ту же карту.')));
+            tr('Оплата картой-сертификатом возвращается на ту же карту. Если остаток карты уже возвращён покупателю — выбранным здесь способом.')));
     };
     paintDest();
     modal(trf('Вернуть услугу · {name}', { name: item.description || '—' }), 'Repeat',
@@ -1792,6 +1794,7 @@ function openLineRefundConfirm(item, info, root) {
         async () => {
             const { data: r, error } = await supabase.rpc('refund_invoice_line', {
                 invoice_item_id: item.id, reason: reasonInp.value || '', to_balance: toBalance,
+                card_fallback: toBalance ? 'balance' : 'cash',   // FINAL_MONEY_FIX_V1 (I2) — только для закрытой карты
                 void_when_zero: !!voidBox.checked, keep_services: false,
             });
             if (error) { toast(error.message || 'Не удалось вернуть услугу.', 'fail'); return false; }
@@ -1830,6 +1833,15 @@ function openRefundConfirm(p, info, root) {
         if (p.method === 'gift_card') {
             destBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 tr('Сумма вернётся на ту же подарочную карту — наличные не выдаются.')));
+            // FINAL_MONEY_FIX_V1 (I2) — остаток карты уже вернули покупателю:
+            // карта закрыта, и сервер вернёт сумму выбранным здесь способом.
+            destBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
+                tr('Если остаток этой карты уже возвращён покупателю, на неё вернуть нельзя — тогда:')));
+            for (const [v, l] of [[false, 'Вернуть деньгами'], [true, 'Зачислить на баланс пациента']]) {
+                const radio = h('input', { type: 'radio', name: 'refund-dest-card', checked: toBalance === v ? true : null });
+                radio.addEventListener('change', () => { toBalance = v; paintDest(); });
+                destBox.appendChild(h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13.5px', cursor: 'pointer' } }, radio, tr(l)));
+            }
             return;
         }
         const opts = [[false, 'Вернуть деньгами'], [true, 'Зачислить на баланс пациента']];
@@ -1871,13 +1883,14 @@ function openRefundConfirm(p, info, root) {
             // счёт» кассы по умолчанию.
             const { data: rRes, error } = await supabase.rpc('refund_payment', {
                 payment_id: p.id, amount: v, reason: reasonInp.value || '', to_balance: toBalance,
+                ...(p.method === 'gift_card' ? { card_fallback: toBalance ? 'balance' : 'cash' } : {}),   // FINAL_MONEY_FIX_V1 (I2)
                 // BILLING_AUDIT_FIX_V1 (B2) — галочка решает для любого способа;
                 // снятая — счёт остаётся открытым (его оплатят снова).
                 void_when_zero: !!voidBox.checked,
                 keep_services: !!voidBox.checked && !(info && info.admission_id) && !!keepBox.checked,
             });
             if (error) { toast(error.message || 'Не удалось оформить возврат.', 'fail'); return false; }
-            toast(toBalance ? tr('Сумма зачислена на баланс пациента') : tr('Возврат оформлен'), 'ok');
+            toast((rRes ? rRes.to_balance : toBalance) ? tr('Сумма зачислена на баланс пациента') : tr('Возврат оформлен'), 'ok');
             if (rRes && rRes.voided) toast(tr('Счёт отменён'), 'ok');
             if (rRes && rRes.void_note) toast(rRes.void_note, 'info');
             document.querySelectorAll('.modal').forEach(m => m.remove());   // close the stacked dialogs

@@ -39,6 +39,7 @@ const READ_ONLY_RPCS = new Set([
   // PAY_BASIS_PERFORMED_V1 — вся выплата врача для кабинета одним вызовом; чтение.
   'doctor_pay_summary',
   'pay_period_status',   // PAY_PERIOD_CLOSE_V1 — какие месяцы закрыты; чтение
+  'visit_refunded_lines',   // FINAL_MONEY_FIX_V1 (I1) — возвращённые строки визита; чтение
   // DOCTOR_LINES_SPECIALTY_V1 — варианты фильтра «Врач» в «Отчётах»; чтение.
   'report_choices',
   'cashier_invoices', 'cash_shift_summary', 'shift_report', 'cashier_report',

@@ -32,3 +32,28 @@ export function markRefundRelease(db, { invoiceId, kind, lineIds, always = false
   for (const id of lineIds) ins.run(kind, id, invoiceId);
   return lineIds.length;
 }
+
+// FINAL_MONEY_FIX_V1 (I1) — какие из этих строк отпущены со счёта с
+// возвратом и ещё не выставлены заново: пациенту за них вернули, и касса не
+// выставляет их снова по умолчанию (create_invoice_for_visit, окно визита).
+export function refundedLineIds(db, kind, lineIds) {
+  const ids = (lineIds || []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  if (!ids.length) return [];
+  const holes = ids.map(() => '?').join(',');
+  return db.prepare(`SELECT DISTINCT prr.line_id AS id FROM pay_refund_releases prr
+                      WHERE prr.kind = ? AND prr.line_id IN (${holes}) ORDER BY prr.line_id`)
+    .all(kind, ...ids).map((r) => r.id);
+}
+
+// FINAL_MONEY_FIX_V1 (M1) — строку выставили заново: прежняя отметка больше
+// не про неё. Иначе обычная отмена НОВОГО неоплаченного счёта (возвратов по
+// нему не было) читала старую отметку, и сделанная работа не платилась.
+// Если новый счёт тоже вернут и отменят — отметку поставит его отмена.
+export function clearRefundRelease(db, kind, lineIds) {
+  const ids = (lineIds || []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  if (!ids.length) return 0;
+  const del = db.prepare('DELETE FROM pay_refund_releases WHERE kind = ? AND line_id = ?');
+  let n = 0;
+  for (const id of ids) n += del.run(kind, id).changes;
+  return n;
+}

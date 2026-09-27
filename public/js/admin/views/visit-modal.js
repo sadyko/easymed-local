@@ -542,7 +542,11 @@ function servicesPane(state, onReload) {
     // строки __payer_covered по их счёту.
     const isCovered = (r) => !!r.__payer_covered;
     // Default: unbilled services are pre-selected for invoicing.
+    // FINAL_MONEY_FIX_V1 (I1) — кроме ВОЗВРАЩЁННЫХ (__refunded, loadServices):
+    // за них пациенту вернули деньги, и выставить их снова можно только
+    // отметив строку вручную (сервер берёт её лишь с rebill_refunded).
     const unbilled = (state.services || []).filter(r => !r.invoice_item_id);
+    const defaultPick = unbilled.filter(r => !r.__refunded);
     const validIds = new Set(unbilled.map(r => r.id));
 
     // Prune stale ids — if the user deleted a service and re-added it (new
@@ -551,7 +555,7 @@ function servicesPane(state, onReload) {
     // drifted from the current rows.
     let selected = state._selectedForInvoice;
     if (!selected || [...selected].some(id => !validIds.has(id))) {
-        selected = new Set(unbilled.map(r => r.id));
+        selected = defaultInvoiceSelection(state.services);
     }
     state._selectedForInvoice = selected;
 
@@ -662,9 +666,10 @@ function servicesPane(state, onReload) {
             h('thead', null, h('tr', null,
                 h('th', { style: { width: '32px' } },
                     h('input', { type: 'checkbox',
-                        checked: unbilled.length > 0 && unbilled.every(r => selected.has(r.id)),
+                        checked: defaultPick.length > 0 && defaultPick.every(r => selected.has(r.id)),
                         onclick: (e) => {
-                            if (e.target.checked) for (const r of unbilled) selected.add(r.id);
+                            // «Выбрать все» не берёт возвращённые — их отмечают по одной.
+                            if (e.target.checked) for (const r of defaultPick) selected.add(r.id);
                             else for (const r of unbilled) selected.delete(r.id);
                             onReload();  // re-render
                         },
@@ -696,7 +701,11 @@ function servicesPane(state, onReload) {
                             },
                         }),
                 ),
-                h('td', { class: 'cell-strong' }, r.__service_name || '—'),
+                h('td', { class: 'cell-strong' }, r.__service_name || '—',
+                    r.__refunded && !r.invoice_item_id
+                        ? h('span', { class: 'tag tag-warn', style: { fontSize: '12.5px', marginLeft: '6px' },
+                            title: tr('За эту услугу пациенту вернули деньги. Выставить её снова можно, только отметив строку вручную.') }, tr('возвращено'))
+                        : null),
                 h('td', null, r.__doctor_name || '—'),
                 h('td', { class: 'muted', style: { fontSize: '12.5px' } }, r.__created_by_name || '—'),
                 h('td', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, r.created_at ? formatDateTime(r.created_at) : '—'),
@@ -1148,6 +1157,8 @@ export async function generateInvoiceFromSelection(state, selectedIds, onReload)
     const { data: res, error: invErr } = await supabase.rpc('create_invoice_for_visit', {
         visit_id: state.visit.id,
         visit_service_ids: lineItems.map(r => r.id),
+        // FINAL_MONEY_FIX_V1 (I1) — возвращённую строку регистратор отметил сам.
+        ...(lineItems.some(r => r.__refunded) ? { rebill_refunded: true } : {}),
     });
     if (invErr || !res || !res.invoice) {
         console.error('[generateInvoice] create_invoice_for_visit failed:', invErr);
@@ -1758,6 +1769,26 @@ async function insertVisitServiceRow(row) {
     return await supabase.from('visit_services').insert(payload);
 }
 
+// FINAL_MONEY_FIX_V1 (I1) — строки, за которые пациенту вернули деньги (возврат
+// строки или отмена счёта после возврата): сервер знает их по отметке возврата
+// (visit_refunded_lines) — окно помечает их __refunded. Ошибка чтения — не
+// повод ломать окно: без пометки сервер всё равно не выставит такую строку молча.
+export async function loadRefundedFlags(state) {
+    if (!state?.visit?.id || !Array.isArray(state.services)) return;
+    try {
+        const { data: rf, error: rfErr } = await supabase.rpc('visit_refunded_lines', { visit_id: state.visit.id });
+        if (rfErr) console.warn('[visit_refunded_lines]', rfErr.message);
+        const refunded = new Set(((rf && rf.line_ids) || []).map(Number));
+        for (const r of state.services) r.__refunded = !r.invoice_item_id && refunded.has(Number(r.id));
+    } catch (e) { console.warn('[visit_refunded_lines]', e && e.message); }
+}
+
+// FINAL_MONEY_FIX_V1 (I1) — что окно визита отмечает для счёта само:
+// невыставленные строки, кроме возвращённых (их отмечают вручную).
+export function defaultInvoiceSelection(services) {
+    return new Set((services || []).filter(r => !r.invoice_item_id && !r.__refunded).map(r => r.id));
+}
+
 async function loadServices(state) {
     if (!state.visit?.id) return;
     // DISPENSE_ITEM_V1: join clinic_items so dispensed-item lines (clinic_item_id
@@ -1789,6 +1820,7 @@ async function loadServices(state) {
         __doctor_name:     r.users?.full_name || '',
         __created_by_name: formatRegistrar(r.creator?.full_name),
     }));
+    await loadRefundedFlags(state);   // FINAL_MONEY_FIX_V1 (I1)
     // LIVE_AUDIT_FIX_V1 — строки, выставленные КОНТРАГЕНТУ (invoices.payer_id),
     // помечаются «Покрывается плательщиком»: это их счёт, а не счёт пациента.
     const itemIds = state.services.map(r => r.invoice_item_id).filter(Boolean);

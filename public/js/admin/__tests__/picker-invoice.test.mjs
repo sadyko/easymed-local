@@ -686,3 +686,38 @@ test('LIVE_AUDIT_FIX_V1: «Детали» — касса, лаборатория
   const src = fs.readFileSync(new URL('../views/visit-modal.js', import.meta.url), 'utf8');
   assert.match(src, /const saveBtn = canSaveVisitDetails\(\) \? h\('button'/);
 });
+
+// FINAL_MONEY_FIX_V1 (I1) — ВОЗВРАЩЁННАЯ УСЛУГА НЕ ВЫСТАВЛЯЕТСЯ СНОВА ПО УМОЛЧАНИЮ.
+// За МРТ пациенту вернули деньги (отметка возврата — как её пишет касса);
+// работа осталась в визите невыставленной. Окно визита не отмечает её для
+// счёта само, «Сформировать счёт» по умолчанию берёт только анализ, а
+// выставить МРТ заново можно лишь отметив строку вручную.
+test('FINAL_MONEY_FIX_V1 I1: окно визита не отмечает возвращённую строку; вручную — rebill_refunded', async () => {
+  seed();
+  DB.prepare("INSERT INTO pay_refund_releases (kind, line_id, invoice_id) VALUES ('out', 101, 999)").run();
+  const st = await vmStateFromDb();
+  await VM.loadRefundedFlags(st);
+  assert.ok(RPC.some((r) => r.name === 'visit_refunded_lines'));
+  assert.equal(st.services.find((r) => r.id === 101).__refunded, true);
+  assert.equal(st.services.find((r) => r.id === 102).__refunded, false);
+  assert.deepEqual([...VM.defaultInvoiceSelection(st.services)], [102], 'возвращённая МРТ отмечена для счёта по умолчанию');
+
+  await VM.generateInvoiceFromSelection(st, VM.defaultInvoiceSelection(st.services), () => {});
+  const first = DB.prepare('SELECT service_id FROM invoice_items').all().map((r) => r.service_id);
+  assert.deepEqual(first, [22], 'в счёт по умолчанию попала возвращённая услуга');
+
+  // Окно без пометки (старый снимок) — сервер отказывает, второго счёта нет.
+  const stale = await vmStateFromDb();
+  TOASTS.length = 0;
+  await VM.generateInvoiceFromSelection(stale, new Set([101]), () => {});
+  assert.equal(DB.prepare("SELECT COUNT(*) c FROM invoice_items WHERE service_id = 21").get().c, 0);
+  assert.ok(TOASTS.some((t) => /вернули деньги/.test(t)), 'отказ сервера не показан: ' + TOASTS.join(' | '));
+
+  // Регистратор отметил МРТ вручную — окно просит выставить заново явно.
+  const again = await vmStateFromDb();
+  await VM.loadRefundedFlags(again);
+  await VM.generateInvoiceFromSelection(again, new Set([101]), () => {});
+  const call = RPC.filter((r) => r.name === 'create_invoice_for_visit').pop();
+  assert.equal(call.body.rebill_refunded, true);
+  assert.equal(DB.prepare("SELECT COUNT(*) c FROM invoice_items WHERE service_id = 21").get().c, 1);
+});

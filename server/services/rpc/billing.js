@@ -31,8 +31,8 @@ import { creditCashbackOnPaid, adjustCashbackAfterRefund } from './cashback.js';
 import { voidInvoice } from './cashier.js';   // ре-ревью п.9 — отмена после полного возврата на баланс
 import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // CARD_BALANCE_V1 — подарочная карта / сертификат платит своим остатком.
-import { spendCard, returnToCard, CardError } from '../domain/cards.js';
-import { markRefundRelease } from '../domain/pay-releases.js';   // PAY_REFUND_V1
+import { spendCard, returnToCard, CardError, cardClosedByRefund } from '../domain/cards.js';
+import { markRefundRelease, refundedLineIds, clearRefundRelease } from '../domain/pay-releases.js';   // PAY_REFUND_V1, FINAL_MONEY_FIX_V1
 // INPATIENT_MONEY_FIX_V1 — строку проживания счёт узнаёт по той же метке, что
 // акт и проживание (одна копия на сервер и браузер).
 import { ACCOMMODATION_NOTE_PREFIX, ACCOMMODATION_LABEL } from '../../../public/js/shared/accommodation-line.js';
@@ -303,6 +303,20 @@ export function createInvoiceForVisit(db, args, user) {
       rows.push(row);
     }
 
+    // FINAL_MONEY_FIX_V1 (I1) — УСЛУГУ, ЗА КОТОРУЮ ПАЦИЕНТУ ВЕРНУЛИ ДЕНЬГИ, СНОВА
+    // НЕ ВЫСТАВЛЯЮТ МОЛЧА. Возврат строки (refund_invoice_line) и отмена счёта
+    // после возврата оставляют сделанную работу в визите невыставленной — а
+    // окно визита отмечает все невыставленные строки, и регистратор брал за
+    // возвращённое второй раз (150 000 вместо 50 000, и доля врача вернулась).
+    // Такую строку выставляют только явным выбором: rebill_refunded: true
+    // (окно визита — галочкой у строки с пометкой «возвращено»).
+    const refundedIds = refundedLineIds(db, 'out', ids);
+    if (refundedIds.length && !(args.rebill_refunded === true || args.rebill_refunded === 1)) {
+      throw new RpcError(refundedIds.length === 1
+        ? 'За эту услугу пациенту уже вернули деньги — снова её выставляют только явным выбором («выставить заново»).'
+        : 'За ' + refundedIds.length + ' из выбранных услуг пациенту уже вернули деньги — снова их выставляют только явным выбором («выставить заново»).', 409);
+    }
+
     // The CATALOG is authoritative for a real service or a dispensed product —
     // never the client-supplied unit_price — except that a performing doctor
     // with their own price for that service overrides the catalog
@@ -454,6 +468,7 @@ export function createInvoiceForVisit(db, args, user) {
       const description = svcName || '';
       const itemInfo = insertItem.run(invoiceId, row.service_id, description, qty, unit, line, ownDiscount);
       linkVisitService.run(itemInfo.lastInsertRowid, row.id);
+      clearRefundRelease(db, 'out', [row.id]);   // FINAL_MONEY_FIX_V1 (M1) — отметка была про прежний счёт
       // Keep the visit line consistent with what was actually billed.
       syncVisitService.run(unit, line, row.id);
     }
@@ -1009,7 +1024,9 @@ export function changeUnpaidService(db, args, user) {
     const lineTotal = round2(unit * qty);
     // PACKAGES_V1 — другая услуга уже не услуга пакета: строка теряет пакет и
     // его скидку (скидка счёта уменьшается на неё же ниже).
-    db.prepare('UPDATE visit_services SET service_id = ?, unit_price = ?, total = ?, package_id = NULL, price_tier = ? WHERE id = ?')
+    // FINAL_MONEY_FIX_V1 (M5) — строка стала УСЛУГОЙ: вид приёма консультации с
+    // неё снимается, иначе остаётся химера «услуга + вид приёма».
+    db.prepare('UPDATE visit_services SET service_id = ?, unit_price = ?, total = ?, package_id = NULL, price_tier = ?, consultation_type_id = NULL WHERE id = ?')
       .run(newServiceId, unit, lineTotal, tier, vsId);
 
     let invoice = null;
@@ -1054,7 +1071,7 @@ function refundedOfPayment(db, paymentId) {
 // строка платежа в ОТКРЫТОЙ смене возвращающего кассира и запись журнала
 // баланса или карты. `refundable` — сколько ещё можно вернуть по этому платежу
 // (для потолка «настоящих денег»). Итоги счёта двигает вызывающий.
-function issueRefund(db, { invoice, p, amt, refundable, toBalanceRaw, reason, noteTag }, user) {
+function issueRefund(db, { invoice, p, amt, refundable, toBalanceRaw, cardFallbackRaw, reason, noteTag }, user) {
   const shiftId = ensureOpenShift(db, user).id;
 
   // DEPOSIT_WALLET_V1 — КУДА ВОЗВРАЩАЕМ: деньгами или на баланс пациента.
@@ -1075,12 +1092,29 @@ function issueRefund(db, { invoice, p, amt, refundable, toBalanceRaw, reason, no
   // только явным выбором (to_balance: false) — и тогда это наличные из ящика.
   // CARD_BALANCE_V1 — платёж картой возвращается НА ТУ ЖЕ КАРТУ, всегда:
   // это её остаток, наличными его не выдают и на баланс пациента не переносят.
-  const toCard = p.method === 'gift_card';
-  const toBalance = toCard ? false : (toBalanceRaw === undefined || toBalanceRaw === null
+  //
+  // FINAL_MONEY_FIX_V1 (I2) — КРОМЕ КАРТЫ, ЗАКРЫТОЙ ВОЗВРАТОМ ПРОДАЖИ. Её
+  // остаток уже выдан покупателю, карта выключена: сумма на ней пропала бы —
+  // погасить ею нельзя, второй раз вернуть остаток касса не даёт. Такой возврат
+  // идёт деньгами из кассы или на баланс пациента, и только по явному выбору
+  // кассира (card_fallback: 'cash' | 'balance'); без выбора — отказ словами.
+  let toCard = p.method === 'gift_card';
+  let fallback = null;
+  if (toCard) {
+    const dead = cardClosedByRefund(db, p.id);
+    if (dead) {
+      if (cardFallbackRaw !== 'cash' && cardFallbackRaw !== 'balance') {
+        throw new RpcError('Остаток карты «' + (dead.name || 'карта') + '» уже возвращён покупателю, карта закрыта — вернуть на неё нельзя. Выберите, как вернуть: деньгами или на баланс пациента.', 409);
+      }
+      fallback = cardFallbackRaw;
+      toCard = false;
+    }
+  }
+  const toBalance = toCard ? false : fallback ? fallback === 'balance' : (toBalanceRaw === undefined || toBalanceRaw === null
     ? p.method === 'wallet'
     : (toBalanceRaw === true || toBalanceRaw === 1));
   if (toBalance && !invoice.patient_id) throw new RpcError('У счёта нет пациента — зачислить на баланс некому.', 400);
-  const refundMethod = toCard ? 'gift_card' : toBalance ? 'wallet' : (p.method === 'wallet' ? 'cash' : p.method);
+  const refundMethod = toCard ? 'gift_card' : toBalance ? 'wallet' : (p.method === 'wallet' || p.method === 'gift_card' ? 'cash' : p.method);
 
   // Третья проверка, I2 — КЭШБЭК НАЛИЧНЫМИ НЕ ВЫДАЁТСЯ. Оплату с баланса
   // вернуть деньгами можно только в пределах настоящих денег пациента на
@@ -1198,7 +1232,7 @@ export function refundPayment(db, args, user) {
     // NULL — a NULL-shift refund is invisible to the X-report and to the
     // expected-drawer maths, so the till reconciles short with no explanation.
     const { toBalance, card } = issueRefund(db, {
-      invoice, p, amt, refundable, toBalanceRaw: args && args.to_balance, reason, noteTag: 'REFUND#' + p.id,
+      invoice, p, amt, refundable, toBalanceRaw: args && args.to_balance, cardFallbackRaw: args && args.card_fallback, reason, noteTag: 'REFUND#' + p.id,
     }, user);
 
     const newPaid = round2(invoice.paid_amount - amt);
@@ -1338,7 +1372,7 @@ export function refundInvoiceLine(db, args, user) {
         if (refundable <= 0) continue;
         const take = round2(Math.min(left, refundable));
         const r = issueRefund(db, {
-          invoice: inv, p, amt: take, refundable, toBalanceRaw: args && args.to_balance, reason,
+          invoice: inv, p, amt: take, refundable, toBalanceRaw: args && args.to_balance, cardFallbackRaw: args && args.card_fallback, reason,
           noteTag: 'REFUND#' + p.id + ' LINE#' + itemId,
         }, user);
         if (r.toBalance) toBalanceAny = true;
@@ -1359,7 +1393,17 @@ export function refundInvoiceLine(db, args, user) {
     // Статус по новым деньгам.
     let closed = { voided: false };
     const after = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
-    if (newTotal <= 0 && newPaid <= 0 && refundAmt > 0) {
+    if (newTotal <= 0 && newPaid <= 0 && refundAmt > 0 && leftN > 0) {
+      // FINAL_MONEY_FIX_V1 (M2) — В СЧЁТЕ ОСТАЛИСЬ ТОЛЬКО БЕСПЛАТНЫЕ УСЛУГИ.
+      // Сумма ноль, денег ноль — но строки есть, и отменять счёт нельзя: отмена
+      // снимала бы с визита неначатую бесплатную услугу и отпускала сделанную.
+      // Такой счёт — как бесплатный при выставлении: 'paid' на ноль, строки в
+      // очередь (settleZeroTotal). Отменяется счёт, только когда строк не
+      // осталось вовсе.
+      db.prepare("UPDATE invoices SET paid_amount = 0, paid_at = NULL, status = 'unpaid' WHERE id = ?").run(inv.id);
+      adjustCashbackAfterRefund(db, inv);
+      settleZeroTotal(db, inv.id);
+    } else if (newTotal <= 0 && newPaid <= 0 && refundAmt > 0) {
       // Денег и строк не осталось: 'unpaid' — ступень, с которой счёт
       // закрывается отменой (жизненный цикл), как у полного возврата платежа.
       db.prepare("UPDATE invoices SET paid_amount = ?, paid_at = NULL, status = 'unpaid' WHERE id = ?").run(newPaid, inv.id);
@@ -1497,6 +1541,7 @@ export function buildAdmissionInvoice(db, admissionId, ids, user) {
       const it = insertItem.run(invoiceId, row.service_id, name || '', qty, unit, line);
       db.prepare("UPDATE admission_services SET invoice_item_id = ?, status = 'completed' WHERE id = ?")
         .run(it.lastInsertRowid, row.id);
+      clearRefundRelease(db, 'in', [row.id]);   // FINAL_MONEY_FIX_V1 (M1)
     }
 
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
@@ -1546,4 +1591,17 @@ export function removeAdmissionLineFromInvoice(db, args, user) {
     return { removed: true, invoice_deleted: invoiceDeleted };
   });
   return run();
+}
+
+// FINAL_MONEY_FIX_V1 (I1) — visit_refunded_lines: невыставленные строки визита,
+// за которые пациенту вернули деньги (строкой или отменой после возврата).
+// Окно визита не отмечает их для счёта по умолчанию и подписывает
+// «возвращено»; выставить заново можно только явным выбором (rebill_refunded).
+// Чтение: только номера строк этого визита.
+export function visitRefundedLines(db, args, user) {
+  if (!user) throw new RpcError('Not authenticated.', 401);
+  const visitId = args && args.visit_id;
+  if (!isPositiveInt(visitId)) throw new RpcError('visit_id must be a positive integer.', 400);
+  const ids = db.prepare('SELECT id FROM visit_services WHERE visit_id = ? AND invoice_item_id IS NULL').all(visitId).map((r) => r.id);
+  return { line_ids: refundedLineIds(db, 'out', ids) };
 }

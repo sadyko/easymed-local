@@ -64,7 +64,9 @@ function clinic() {
                 VALUES (?,?,?,?,1,?,?,?,?)`).run(id, id, product ? null : service, product, qty, price, price * qty, status);
     return id;
   };
-  const bill = (id) => createInvoiceForVisit(db, { visit_id: id, visit_service_ids: [id] }, admin).invoice;
+  // FINAL_MONEY_FIX_V1 (I1) — строку, за которую вернули деньги, касса снова
+  // выставляет только явным выбором (rebill_refunded).
+  const bill = (id, extra = {}) => createInvoiceForVisit(db, { visit_id: id, visit_service_ids: [id], ...extra }, admin).invoice;
   const pay = (inv, amount = inv.total_amount) => {
     recordPayment(db, { invoice_id: inv.id, amount, method: 'cash' }, admin);
     return db.prepare('SELECT id FROM payments WHERE invoice_id = ? AND amount > 0 ORDER BY id DESC').get(inv.id).id;
@@ -116,7 +118,8 @@ test('D1: возврат и отмена (касса по умолчанию) �
   assert.equal(vs.status, 'completed');
   assert.equal(parity(c.db, range(cur)), 0, 'отмена после возврата — не «работа без счёта»');
   // Выставили новым счётом — выполненная работа снова платит (и неоплаченной).
-  const again = c.bill(id);
+  assert.throws(() => c.bill(id), (e) => e.status === 409, 'возвращённое не выставляется молча (I1)');
+  const again = c.bill(id, { rebill_refunded: true });
   assert.equal(parity(c.db, range(cur)), ONE);
   c.pay(again);
   assert.equal(parity(c.db, range(cur)), ONE);
@@ -400,4 +403,28 @@ test('C1: вознаграждение внутреннему направивш
   assert.equal(parity(c.db, range(cur)), 10000);
   const sal = objects(run(c.db, 'doctor_salaries', range(cur))).find((o) => o['Врач'] === 'Доктор Д.');
   assert.equal(sal['Вознаграждение за направления'], 10000);
+});
+
+// ─── FINAL_MONEY_FIX_V1 (M1). ОТМЕТКА ВОЗВРАТА — ПРО ПРЕЖНИЙ СЧЁТ ─────────────
+// Строку отпустили со счёта с возвратом, потом выставили заново. Обычная
+// отмена НОВОГО неоплаченного счёта (по нему возвратов не было) — это «работа
+// остаётся, её выставят», и доля врача сохраняется. Старая отметка прежде
+// читалась и здесь, и врач за сделанную работу получал 0.
+test('M1: отметка возврата не переживает новый счёт — обычная отмена нового счёта долю не забирает', () => {
+  const c = clinic();
+  const { cur } = months(c.db);
+  const id = c.line({ at: cur + '-05T09:00:00Z' });
+  const p = c.pay(c.bill(id));
+  refundPayment(c.db, { payment_id: p, void_when_zero: true }, admin);
+  assert.equal(parity(c.db, range(cur)), 0);
+  const again = c.bill(id, { rebill_refunded: true });
+  assert.equal(parity(c.db, range(cur)), ONE);
+  voidInvoice(c.db, { invoice_id: again.id }, admin);
+  assert.equal(c.db.prepare('SELECT invoice_item_id FROM visit_services WHERE id = ?').get(id).invoice_item_id, null);
+  assert.equal(parity(c.db, range(cur)), ONE, 'обычная отмена неоплаченного счёта — работа остаётся оплачиваемой');
+  // А вот новый счёт, снова возвращённый и отменённый, — снова 0.
+  const third = c.bill(id);
+  const p3 = c.pay(third);
+  refundPayment(c.db, { payment_id: p3, void_when_zero: true }, admin);
+  assert.equal(parity(c.db, range(cur)), 0);
 });
