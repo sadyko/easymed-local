@@ -15,13 +15,21 @@
 //   • визиты — все строки `visits` пациента, включая отменённые: картотека
 //     отвечает на вопрос «человек у нас бывал?», а не «сколько раз дошёл»;
 //   • последний визит — самая поздняя дата визита (её же показывает карта);
-//   • баланс — ОПЛАЧЕНО МИНУС ВЫСТАВЛЕНО по счетам пациента, минус значит долг.
-//     Отменённые и возвращённые счета не в счёт: денег по ним не ждут (то же
-//     правило, что в журнале госпитализаций, DEBT_FLOW_V1);
+//   • V3120_FIX (MINOR) — баланс — ДЕНЬГИ НА БАЛАНСЕ пациента (депозит,
+//     зачисления, кэшбэк: domain/wallet.js walletBalance — та же цифра, что в
+//     карточке), а долг — отдельным полем debt: невыплаченное по живым счетам
+//     (неоплачен / частично / долг; счёт плательщика — долг плательщика, не
+//     пациента, и сюда не входит). Прежде «баланс» был «оплачено минус
+//     выставлено» по счетам: депозит в нём не виден вовсе, а пациент с
+//     депозитом и неоплаченным счётом выглядел просто должником. net_balance —
+//     прежняя знаковая цифра (баланс минус долг) для экранов, которые ещё
+//     рисуют одно число;
 //   • страховка и её вид — из справочника плательщиков по patients.payer_id;
 //   • регистратор — ФИО того, кто завёл карту (users.full_name по created_by).
 import { RpcError } from './inpatient-flow.js';
 import { hasAnyRole } from '../roles.js';
+import { walletBalance } from '../domain/wallet.js';   // V3120_FIX
+import { outstandingWhere } from '../domain/money.js';
 
 // Кто видит картотеку, тот видит и её числа: отдельного права у них нет.
 const AGGREGATE_ROLES = ['admin', 'registrar', 'doctor', 'head_doctor', 'nurse', 'senior_nurse', 'cashier', 'lab', 'callcenter'];
@@ -42,8 +50,8 @@ export function patientBaseAggregates(db, args, user) {
     SELECT p.id AS patient_id,
            (SELECT COUNT(*) FROM visits v WHERE v.patient_id = p.id) AS visit_count,
            (SELECT MAX(v.visit_date) FROM visits v WHERE v.patient_id = p.id) AS last_visit,
-           (SELECT COALESCE(SUM(i.paid_amount - i.total_amount), 0) FROM invoices i
-             WHERE i.patient_id = p.id AND i.status NOT IN ('void', 'refunded')) AS balance,
+           (SELECT COALESCE(SUM(MAX(i.total_amount - i.paid_amount, 0)), 0) FROM invoices i
+             WHERE i.patient_id = p.id AND i.payer_id IS NULL AND ${outstandingWhere('i.status')}) AS debt,
            py.name AS insurer,
            py.kind AS payer_type,
            u.full_name AS registrar
@@ -53,7 +61,9 @@ export function patientBaseAggregates(db, args, user) {
      WHERE p.id IN (${holes})`).all(...use).map((r) => ({
     ...r,
     visit_count: Number(r.visit_count) || 0,
-    balance: round2(r.balance),
+    balance: walletBalance(db, r.patient_id),
+    debt: round2(r.debt),
+    net_balance: round2(walletBalance(db, r.patient_id) - round2(r.debt)),
     insurer: r.insurer || '',
     payer_type: r.payer_type || '',
     registrar: r.registrar || '',

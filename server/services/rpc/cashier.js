@@ -3,8 +3,8 @@
 // rows — client-supplied amounts are never trusted. Every handler runs its
 // DB work inside db.transaction(...)() for atomicity.
 
-import { isLocalToday } from '../domain/day.js';
-import { outstandingWhere } from '../domain/money.js';
+import { today as localToday, localRangeWhere } from '../domain/day.js';   // V3120_FIX (PERF) — дневные ветки по индексам
+import { outstandingWhere, idemReplay, idemRemember } from '../domain/money.js';   // V3120_FIX — ключ повтора
 import { assertTransition } from '../domain/lifecycle.js';
 import { hasAnyRole } from '../roles.js';
 import { countsAsInflow } from '../../../public/js/shared/payment-methods.js';   // DEPOSIT_REVENUE_V1
@@ -16,6 +16,9 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // которого его можно стереть.
 import { assertOwnBuilding, PERFORMED_LINE_STATUSES } from './billing.js';
 import { markRefundRelease } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом
+// V3120_FIX (MAJOR) — снятая при отмене товарная строка возвращает товар туда,
+// откуда его взяли (одно правило на сервер, rpc/inventory.js).
+import { restoreSources } from './inventory.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -51,9 +54,11 @@ function isPositiveInt(v) {
   return Number.isInteger(v) && v > 0;
 }
 
+const AUTO_CLOSE_NOTE = 'Закрыта автоматически (конец дня 00:00) — не пересчитана';
+
 // SHIFT_AUTOCLOSE_V1 — смена живёт один календарный день (00:00–00:00).
 // Любая смена, открытая до сегодняшней локальной даты, закрывается автоматически:
-// counted = expected (пересчёта не было, недостача не фиксируется), closed_at =
+// БЕЗ пересчёта (V3120_FIX: counted/over_short пустые, auto_closed = 1), closed_at =
 // локальная полночь после дня открытия (в UTC). Вызывается лениво из шифтовых
 // RPC и периодически из server/index.js — работает и если сервер был выключен
 // в полночь: закрытие произойдёт при первом же обращении утром.
@@ -68,16 +73,22 @@ export function autoCloseStaleShifts(db) {
       const cashSum = db.prepare("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE shift_id=? AND method='cash'").get(shift.id).s;
       const moves = movementTotals(db, shift.id);
       const expected = round2(shift.opening_float + cashSum + moves.cash_in - moves.cash_out);
+      // V3120_FIX (MAJOR) — НЕ ПЕРЕСЧИТАНА. Прежде counted = expected и
+      // over_short = 0: история смен показывала «сошлось», хотя ящик никто не
+      // открывал. Теперь пересчёта нет (NULL), отметка auto_closed = 1, а
+      // наличные этой смены становятся остатком следующей (ensureOpenShift) —
+      // их пересчитают на её закрытии.
       db.prepare(`
         UPDATE cash_shifts
         SET status = 'closed',
             closed_at = strftime('%Y-%m-%dT%H:%M:%SZ', datetime(date(opened_at, 'localtime'), '+1 day', 'utc')),
-            counted_amount = ?,
+            counted_amount = NULL,
             expected_amount = ?,
-            over_short = 0,
+            over_short = NULL,
+            auto_closed = 1,
             notes = CASE WHEN notes IS NULL OR notes = '' THEN ? ELSE notes || ' · ' || ? END
         WHERE id = ? AND status = 'open'
-      `).run(expected, expected, 'Закрыта автоматически (конец дня 00:00)', 'Закрыта автоматически (конец дня 00:00)', shift.id);
+      `).run(expected, AUTO_CLOSE_NOTE, AUTO_CLOSE_NOTE, shift.id);
     }
     return stale.length;
   });
@@ -92,13 +103,26 @@ export function ensureOpenShift(db, user) {
   autoCloseStaleShifts(db);
   let shift = db.prepare("SELECT * FROM cash_shifts WHERE cashier_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(user.id);
   if (!shift) {
+    const carry = uncountedCarry(db, user.id);
     const info = db.prepare(`
       INSERT INTO cash_shifts (cashier_id, opening_float, status, notes)
-      VALUES (?, 0, 'open', 'Открыта автоматически (начало дня)')
-    `).run(user.id);
+      VALUES (?, ?, 'open', ?)
+    `).run(user.id, carry, carry > 0
+      ? 'Открыта автоматически (начало дня); остаток — наличные непересчитанной смены'
+      : 'Открыта автоматически (начало дня)');
     shift = db.prepare('SELECT * FROM cash_shifts WHERE id = ?').get(info.lastInsertRowid);
   }
   return shift;
+}
+
+// V3120_FIX (MAJOR) — ОСТАТОК, С КОТОРОГО НАЧИНАЕТСЯ НОВАЯ СМЕНА КАССИРА.
+// Последняя смена этого кассира закрыта автоматически, без пересчёта: её
+// наличные никто не вынимал, они лежат в ящике — новая смена начинается с них
+// (expected_amount той смены), и её пересчёт проверяет и вчерашние деньги.
+// Пересчитанная вручную смена ничего не переносит (кассир сдал ящик).
+function uncountedCarry(db, cashierId) {
+  const last = db.prepare('SELECT auto_closed, expected_amount FROM cash_shifts WHERE cashier_id = ? ORDER BY id DESC LIMIT 1').get(cashierId);
+  return last && last.auto_closed === 1 ? Math.max(0, round2(Number(last.expected_amount) || 0)) : 0;
 }
 
 export function openCashShift(db, args, user) {
@@ -106,7 +130,7 @@ export function openCashShift(db, args, user) {
 
   const rawFloat = args && args.opening_float !== undefined ? args.opening_float : 0;
   if (!isValidMoney(rawFloat)) {
-    throw new RpcError('opening_float must be a finite number between 0 and 1e12.', 400);
+    throw new RpcError('Начальный остаток должен быть неотрицательным числом.', 400);
   }
   const openingFloat = round2(rawFloat);
 
@@ -117,7 +141,7 @@ export function openCashShift(db, args, user) {
   const run = db.transaction(() => {
     const existing = db.prepare("SELECT id FROM cash_shifts WHERE cashier_id=? AND status='open'").get(user.id);
     if (existing) {
-      throw new RpcError('You already have an open shift.', 400);
+      throw new RpcError('У вас уже открыта смена.', 400);
     }
 
     const info = db.prepare(`
@@ -138,12 +162,12 @@ export function closeCashShift(db, args, user) {
 
   const shiftId = args && args.shift_id;
   if (!isPositiveInt(shiftId)) {
-    throw new RpcError('shift_id must be a positive integer.', 400);
+    throw new RpcError('Смена указана неверно.', 400);
   }
 
   const rawCounted = args && args.counted_amount;
   if (!isValidMoney(rawCounted)) {
-    throw new RpcError('counted_amount must be a finite number between 0 and 1e12.', 400);
+    throw new RpcError('Пересчитанная сумма должна быть неотрицательным числом.', 400);
   }
   const countedAmount = round2(rawCounted);
 
@@ -153,13 +177,14 @@ export function closeCashShift(db, args, user) {
   const run = db.transaction(() => {
     const shift = db.prepare('SELECT * FROM cash_shifts WHERE id = ?').get(shiftId);
     if (!shift) {
-      throw new RpcError('shift not found.', 400);
+      throw new RpcError('Смена не найдена.', 400);
     }
     if (shift.status !== 'open') {
-      throw new RpcError('shift is already closed.', 400);
+      throw new RpcError('Смена уже закрыта.', 400);
     }
-    if (user.role !== 'admin' && shift.cashier_id !== user.id) {
-      throw new RpcError('You may only close your own shift.', 403);
+    // V3120_FIX (MAJOR) — админ дополнительной ролью тоже админ (hasAnyRole).
+    if (!hasAnyRole(user, ['admin']) && shift.cashier_id !== user.id) {
+      throw new RpcError('Закрыть можно только свою смену.', 403);
     }
 
     const cashSum = db.prepare("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE shift_id=? AND method='cash'").get(shiftId).s;
@@ -226,15 +251,24 @@ function paymentTotals(db, shiftId) {
 
 export function cashShiftSummary(db, args, user) {
   requireRole(user, SHIFT_ROLES);
-  ensureOpenShift(db, user);   // SHIFT_AUTO_V2 — день открывается сам, «Смена не открыта» не существует
-
-  const shift = db.prepare("SELECT * FROM cash_shifts WHERE cashier_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(user.id);
+  // V3120_FIX (MINOR) — СВОДКА ТОЛЬКО ЧИТАЕТ. Она стоит в READ_ONLY_RPCS
+  // (control/gate.js) и отвечает клинике с просроченной лицензией, а открывала
+  // смену (ensureOpenShift) — то есть писала мимо блокировки. Смену открывает
+  // первый платёж / возврат / движение дня (ensureOpenShift там); до него
+  // сводка показывает ДЕНЬ БЕЗ ЗАПИСАННОЙ СМЕНЫ: shift.id = null, остаток —
+  // наличные непересчитанной вчерашней смены (uncountedCarry), итоги нулевые.
+  // Незакрытая вчерашняя смена показывается как есть (экран помечает её
+  // «вчерашней»); закроет её первая запись дня.
+  let shift = db.prepare("SELECT * FROM cash_shifts WHERE cashier_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(user.id);
   if (!shift) {
-    return { shift: null, totals: null, expected_drawer: null };
+    const now = db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now') n").get().n;
+    shift = { id: null, cashier_id: user.id, branch_id: null, opening_float: uncountedCarry(db, user.id), opened_at: now,
+              closed_at: null, counted_amount: null, expected_amount: null, over_short: null, status: 'open',
+              notes: '', auto_closed: 0, virtual: true };
   }
 
-  const totals = paymentTotals(db, shift.id);
-  const moves = movementTotals(db, shift.id);
+  const totals = shift.id ? paymentTotals(db, shift.id) : paymentTotals(db, -1);
+  const moves = shift.id ? movementTotals(db, shift.id) : { cash_in: 0, cash_out: 0 };
   // Остаток наличных = старт смены + приход наличных (оплаты + внесения) − расход.
   const expectedDrawer = round2(shift.opening_float + totals.cash + moves.cash_in - moves.cash_out);
 
@@ -256,24 +290,24 @@ export function cashShiftSummary(db, args, user) {
 // own open shift. Withdrawals may not overdraw the drawer.
 export function cashMove(db, args, user) {
   requireRole(user, SHIFT_ROLES);
+  { const seen = idemReplay(db, 'cash_move', args); if (seen) return seen; }   // V3120_FIX — повтор той же формы
 
   const kind = args && args.kind;
   if (kind !== 'in' && kind !== 'out') {
-    throw new RpcError("kind must be 'in' or 'out'.", 400);
+    throw new RpcError('Укажите движение: внести или изъять.', 400);
   }
   const rawAmount = args && args.amount;
   if (!isValidMoney(rawAmount) || rawAmount <= 0) {
-    throw new RpcError('amount must be a positive finite number (capped at 1e12).', 400);
+    throw new RpcError('Сумма должна быть положительным числом.', 400);
   }
   const amount = round2(rawAmount);
   const article = String((args && args.article) || '').slice(0, 200);
   const note = String((args && args.note) || '').slice(0, 500);
 
   const run = db.transaction(() => {
-    const shift = db.prepare("SELECT * FROM cash_shifts WHERE cashier_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(user.id);
-    if (!shift) {
-      throw new RpcError('Нет открытой смены — откройте смену, чтобы двигать наличные.', 400);
-    }
+    // V3120_FIX — движение дня, как платёж, открывает смену само (сводка
+    // больше не открывает её, см. cashShiftSummary).
+    const shift = ensureOpenShift(db, user);
     if (kind === 'out') {
       const cashSum = db.prepare("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE shift_id=? AND method='cash'").get(shift.id).s;
       const moves = movementTotals(db, shift.id);
@@ -286,7 +320,7 @@ export function cashMove(db, args, user) {
       INSERT INTO cash_movements (shift_id, kind, amount, article, note, created_by)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(shift.id, kind, amount, article, note, user.id);
-    return { movement: db.prepare('SELECT * FROM cash_movements WHERE id = ?').get(info.lastInsertRowid) };
+    return idemRemember(db, 'cash_move', args, user, { movement: db.prepare('SELECT * FROM cash_movements WHERE id = ?').get(info.lastInsertRowid) });
   });
 
   return run();
@@ -308,13 +342,22 @@ export function shiftReport(db, args, user) {
     if (!shift) {
       throw new RpcError('Смена не найдена.', 400);
     }
-    if (user.role !== 'admin' && shift.cashier_id !== user.id) {
+    if (!hasAnyRole(user, ['admin']) && shift.cashier_id !== user.id) {   // V3120_FIX — и дополнительной ролью
       throw new RpcError('Можно смотреть только свою смену.', 403);
     }
   } else {
     shift = db.prepare("SELECT * FROM cash_shifts WHERE cashier_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(user.id);
     if (!shift) {
-      throw new RpcError('Нет открытой смены.', 400);
+      // V3120_FIX — сводка больше не открывает смену сама (cashShiftSummary),
+      // поэтому X-отчёт до первой записи дня — пустой день, а не отказ.
+      const now = db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now') n").get().n;
+      const opening = uncountedCarry(db, user.id);
+      return {
+        shift: { id: null, cashier_id: user.id, opening_float: opening, opened_at: now, status: 'open', virtual: true },
+        totals: paymentTotals(db, -1), payments: [], movements: [], cash_in: 0, cash_out: 0,
+        expected_drawer: opening,
+        cashier_name: (db.prepare('SELECT full_name FROM users WHERE id = ?').get(user.id) || {}).full_name || null,
+      };
     }
   }
 
@@ -340,12 +383,40 @@ export function shiftReport(db, args, user) {
   };
 }
 
+// V3120_FIX (PERF) — КАКИЕ СЧЕТА В «ПРИЁМЕ ОПЛАТ»: ОБЪЕДИНЕНИЕ ВЕТОК ПО ИНДЕКСАМ.
+//
+// Правило прежнее (DAY_ZERO_V1, CANCEL_MEANS_CANCEL_V1): неоплаченные, частично
+// оплаченные и долги — всегда; оплаченные — за сегодня по дню оплаты;
+// отменённые и возвращённые — за сегодня по дню отмены (без отметки — по дню
+// создания). Прежде оно было одним WHERE с date(col,'localtime') через OR, и
+// SQLite читал все счета клиники: на 354 тыс. счетов — 1,7–2,2 с на каждое
+// открытие кассы, а база однопоточная, и всё это время ждали остальные экраны.
+// Теперь каждая часть — своя ветка со своим индексом (миграция 210:
+// status+created_at, paid_at, voided_at, created_at), а день — диапазон по самой
+// колонке (day.js localRangeWhere: точный для любого формата времени). Ответ
+// — id счетов; список и чипы читают одно и то же множество.
+function cashierInvoiceIds(db) {
+  const d = localToday(db);
+  const paid = localRangeWhere('paid_at', d, d);
+  const voided = localRangeWhere('voided_at', d, d);
+  const created = localRangeWhere('created_at', d, d);
+  return {
+    sql: `SELECT id FROM invoices WHERE ${outstandingWhere('status')}
+          UNION SELECT id FROM invoices WHERE status = 'paid' AND ${paid.sql}
+          UNION SELECT id FROM invoices WHERE status = 'paid' AND paid_at IS NULL AND ${created.sql}
+          UNION SELECT id FROM invoices WHERE status IN ('void', 'refunded') AND ${voided.sql}
+          UNION SELECT id FROM invoices WHERE status IN ('void', 'refunded') AND voided_at IS NULL AND ${created.sql}`,
+    params: [...paid.params, ...created.params, ...voided.params, ...created.params],
+  };
+}
+
 // CASHIER_DESIGN_V2 — the «Приём оплат» invoice list, joined server-side:
 // patient (name/MRN/phone), doctor (via the visit), first service + item
 // count, distinct payment methods, plus per-status aggregates for the chips.
 export function cashierInvoices(db, args, user) {
   requireRole(user, SHIFT_ROLES);
 
+  const ids = cashierInvoiceIds(db);
   const rows = db.prepare(`
     SELECT i.id, i.invoice_number, i.status, i.subtotal, i.discount_amount,
            i.total_amount, i.paid_amount, i.created_at, i.paid_at,
@@ -368,7 +439,8 @@ export function cashierInvoices(db, args, user) {
            (SELECT COUNT(*) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS items_count,
            (SELECT ii.description FROM invoice_items ii WHERE ii.invoice_id = i.id ORDER BY ii.id LIMIT 1) AS first_item,
            (SELECT GROUP_CONCAT(DISTINCT p.method) FROM payments p WHERE p.invoice_id = i.id) AS methods
-      FROM invoices i
+      FROM (${ids.sql}) sel
+      JOIN invoices i  ON i.id = sel.id
       JOIN patients pt ON pt.id = i.patient_id
       LEFT JOIN visits v ON v.id = i.visit_id
       LEFT JOIN users doc ON doc.id = v.doctor_id
@@ -381,25 +453,20 @@ export function cashierInvoices(db, args, user) {
        -- нечего, он закрыт в момент создания. Бесплатные консультации создавали
        -- по счёту на каждую и засоряли «Приём оплат» строками на 0 сум.
        AND i.total_amount > 0
-       AND (${outstandingWhere('i.status')}                                            -- DAY_ZERO_V1: неоплаченные висят, пока не оплачены
-        OR (i.status = 'paid' AND ${isLocalToday('COALESCE(i.paid_at, i.created_at)')})
-        OR (i.status IN ('void', 'refunded') AND ${isLocalToday('COALESCE(i.voided_at, i.created_at)')}))   -- CANCEL_MEANS_CANCEL_V1: по дню отмены
      ORDER BY i.created_at DESC, i.id DESC
      LIMIT 500
-  `).all();
+  `).all(...ids.params);
 
   const counts = { unpaid: { n: 0, sum: 0 }, debt: { n: 0, sum: 0 }, partial: { n: 0, sum: 0 },
                    paid: { n: 0, sum: 0 }, cancelled: { n: 0, sum: 0 }, all: { n: 0, sum: 0 } };
   // DAY_ZERO_V1 — счётчики чипов по тем же правилам: оплаченные/отменённые
   // считаются только за сегодня, неоплаченные — накопительно.
   for (const r of db.prepare(`
-    SELECT status, COUNT(*) n, COALESCE(SUM(total_amount),0) s FROM invoices
-    WHERE payer_id IS NULL                                                             -- COVERAGE_SPLIT_V1: чипы считают только кассовые счета
-      AND (${outstandingWhere()}
-       OR (status = 'paid' AND ${isLocalToday('COALESCE(paid_at, created_at)')})
-       OR (status IN ('void', 'refunded') AND ${isLocalToday('COALESCE(voided_at, created_at)')}))   -- CANCEL_MEANS_CANCEL_V1
-    GROUP BY status
-  `).all()) {
+    SELECT i.status, COUNT(*) n, COALESCE(SUM(i.total_amount),0) s
+      FROM (${ids.sql}) sel JOIN invoices i ON i.id = sel.id
+     WHERE i.payer_id IS NULL                                                          -- COVERAGE_SPLIT_V1: чипы считают только кассовые счета
+     GROUP BY i.status
+  `).all(...ids.params)) {
     const key = (r.status === 'void' || r.status === 'refunded') ? 'cancelled' : r.status;
     if (counts[key]) {
       counts[key].n += r.n;
@@ -439,12 +506,12 @@ export function deleteInvoice(db, args, user) {
 
   const invoiceId = args && args.invoice_id;
   if (!isPositiveInt(invoiceId)) {
-    throw new RpcError('invoice_id must be a positive integer.', 400);
+    throw new RpcError('Счёт указан неверно.', 400);
   }
 
   const run = db.transaction(() => {
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
-    if (!invoice) throw new RpcError('invoice not found.', 400);
+    if (!invoice) throw new RpcError('Счёт не найден.', 400);
     // BRANCH_MONEY_GUARD_V1 — ЧУЖОЙ СЧЁТ ОТСЮДА НЕ УДАЛЯЕТСЯ НИКОГДА, и это
     // проверяется раньше статуса: «не отменён» — не та причина, по которой
     // нельзя.
@@ -498,13 +565,13 @@ export function voidInvoice(db, args, user) {
 
   const invoiceId = args && args.invoice_id;
   if (!isPositiveInt(invoiceId)) {
-    throw new RpcError('invoice_id must be a positive integer.', 400);
+    throw new RpcError('Счёт указан неверно.', 400);
   }
 
   const run = db.transaction(() => {
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
     if (!invoice) {
-      throw new RpcError('invoice not found.', 400);
+      throw new RpcError('Счёт не найден.', 400);
     }
     // BRANCH_MONEY_GUARD_V1 — отменить чужой счёт отсюда нельзя. status — та
     // самая колонка, которая ЕЗДИТ (journal.js, SHIPPED.invoices): отмена ушла
@@ -593,7 +660,7 @@ export function voidInvoice(db, args, user) {
     const keepServices = args.keep_services === true || args.keep_services === 1;
     const PERFORMED = PERFORMED_LINE_STATUSES;   // INPATIENT_MONEY_FIX_V1 — один список с remove/change_unpaid_service
     const lines = db.prepare(`
-      SELECT vs.id, vs.status, COALESCE(s.name, p.name, '') AS name
+      SELECT vs.id, vs.status, vs.clinic_item_id, vs.quantity, COALESCE(s.name, p.name, '') AS name
         FROM visit_services vs
         LEFT JOIN services s ON s.id = vs.service_id
         LEFT JOIN products p ON p.id = vs.clinic_item_id
@@ -614,6 +681,11 @@ export function voidInvoice(db, args, user) {
         released.push(l.name);
         releasedIds.push(l.id);
       } else if (!keepServices) {
+        // V3120_FIX (MAJOR) — товарная строка (списанный бинт) уходила вместе со
+        // счётом, а товар не возвращался никому: склад / подотчёт оставались
+        // пустыми, в журнале висел расход без строки. Возврат — ДО удаления:
+        // источники читаются из движений этой строки (как remove_unpaid_service).
+        if (l.clinic_item_id != null) restoreSources(db, 'visit', l.id, l.clinic_item_id, l.quantity, user);
         // Талон очереди на снятую услугу тоже уходит: номер без услуги — мусор на доске.
         db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(l.id);
         db.prepare('DELETE FROM visit_services WHERE id = ?').run(l.id);

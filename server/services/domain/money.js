@@ -35,3 +35,43 @@ export const OUTSTANDING_STATUSES = ['unpaid', 'partial', 'debt'];
 export function outstandingWhere(col = 'status') {
   return `${col} IN (${OUTSTANDING_STATUSES.map((s) => `'${s}'`).join(',')})`;
 }
+
+// V3120_FIX (MAJOR) — КЛЮЧ ПОВТОРА ДЕНЕЖНОЙ ОПЕРАЦИИ (миграция 193).
+//
+// record_payment, record_payment_split, refund_payment, sell_card,
+// create_deposit, refund_deposit и cash_move принимают необязательный
+// `idempotency_key` — случайную строку, которую экран кладёт в форму (тот же
+// формат, что у выдачи со склада, procurement.js). Первая операция пишет
+// квитанцию В СВОЕЙ ТРАНЗАКЦИИ (idemRemember), повтор с тем же ключом получает
+// сохранённый ответ с repeated: true и ничего не двигает (idemReplay). Ключ,
+// занятый другой операцией, — отказ 409. Ключ не того вида молча не действует
+// (как у склада): старые экраны его не присылают вовсе.
+export const IDEM_KEY_RE = /^[A-Za-z0-9_-]{8,80}$/;
+
+export function idemKeyOf(args) {
+  const k = args && args.idempotency_key;
+  return typeof k === 'string' && IDEM_KEY_RE.test(k) ? k : null;
+}
+
+export class IdempotencyError extends Error {
+  constructor(msg, status = 409) { super(msg); this.status = status; }
+}
+
+export function idemReplay(db, rpc, args) {
+  const key = idemKeyOf(args);
+  if (!key) return null;
+  const row = db.prepare('SELECT rpc, result FROM money_idempotency WHERE key = ?').get(key);
+  if (!row) return null;
+  if (row.rpc !== rpc) {
+    throw new IdempotencyError('Этот ключ повтора уже использован другой операцией — обновите окно и повторите.');
+  }
+  try { return { ...JSON.parse(row.result), repeated: true }; } catch { return { repeated: true }; }
+}
+
+export function idemRemember(db, rpc, args, user, result) {
+  const key = idemKeyOf(args);
+  if (!key) return result;
+  db.prepare('INSERT INTO money_idempotency (key, rpc, user_id, result) VALUES (?, ?, ?, ?)')
+    .run(key, rpc, (user && user.id) || null, JSON.stringify(result));
+  return result;
+}

@@ -430,7 +430,8 @@ export const REGISTRY = {
     // Drawer figures (counted / over-short) are sensitive → cashier + admin only,
     // not ALL_STAFF. The cashier workspace reads its own shift via the
     // cash_shift_summary RPC; this raw read backs the Head-cashier overview.
-    read:  { roles: ['admin','cashier'], columns: ['id','cashier_id','branch_id','opening_float','opened_at','closed_at','counted_amount','expected_amount','over_short','status','notes','created_at'] },
+    // V3120_FIX (мигр. 194) — auto_closed: смена закрыта в полночь без пересчёта.
+    read:  { roles: ['admin','cashier'], columns: ['id','cashier_id','branch_id','opening_float','opened_at','closed_at','counted_amount','expected_amount','over_short','status','notes','created_at','auto_closed'] },
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },  // written only by the cash-shift RPCs (money)
     filters: ['id','cashier_id','status','branch_id'],
     embed:   { users: { table:'users', fk:'cashier_id', columns:['id','full_name'] } },

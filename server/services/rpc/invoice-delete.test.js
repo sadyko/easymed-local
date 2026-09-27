@@ -123,7 +123,7 @@ test('ссылка госпитализации на счёт снимается
 
 test('несуществующий счёт — понятная ошибка, а не падение', () => {
   const { db } = seed();
-  assert.throws(() => deleteInvoice(db, { invoice_id: 999999 }, ADMIN), /not found/);
-  assert.throws(() => deleteInvoice(db, { invoice_id: 0 }, ADMIN), /positive integer/);
+  assert.throws(() => deleteInvoice(db, { invoice_id: 999999 }, ADMIN), /не найден/);
+  assert.throws(() => deleteInvoice(db, { invoice_id: 0 }, ADMIN), /указан неверно/);
   db.close();
 });

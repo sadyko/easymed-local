@@ -121,7 +121,7 @@ test('дважды принять нельзя', () => {
   openCashShift(db, { opening_float: 0 }, CASH);
   const { deposit } = createDeposit(db, { patient_id: pid, amount: 1000 }, REG);
   acceptDeposit(db, { deposit_id: deposit.id, method: 'cash' }, CASH);
-  assert.throws(() => acceptDeposit(db, { deposit_id: deposit.id, method: 'cash' }, CASH), /already received/);
+  assert.throws(() => acceptDeposit(db, { deposit_id: deposit.id, method: 'cash' }, CASH), /уже принят/);
   // DEPOSIT_REVENUE_V1 — деньги учитываются платежом, поэтому и проверяем его:
   // второго счёта и второго платежа быть не должно.
   assert.equal(db.prepare('SELECT COUNT(*) n FROM payments').get().n, 1, 'второго платежа нет');
@@ -135,23 +135,23 @@ test('отменить можно только не принятый', () => {
   assert.equal(cancelDeposit(db, { deposit_id: a.id }, REG).deposit.status, 'cancelled');
   const b = createDeposit(db, { patient_id: pid, amount: 1000 }, REG).deposit;
   acceptDeposit(db, { deposit_id: b.id, method: 'cash' }, CASH);
-  assert.throws(() => cancelDeposit(db, { deposit_id: b.id }, CASH), /only for pending/);
+  assert.throws(() => cancelDeposit(db, { deposit_id: b.id }, CASH), /только депозит, который ждёт кассу/);
 });
 
 test('роли: врач не заводит и не принимает; регистратор не принимает', () => {
   const { db, pid } = seed();
-  assert.throws(() => createDeposit(db, { patient_id: pid, amount: 1000 }, DOC), /not allowed/);
+  assert.throws(() => createDeposit(db, { patient_id: pid, amount: 1000 }, DOC), /недоступно/);
   const { deposit } = createDeposit(db, { patient_id: pid, amount: 1000 }, REG);
-  assert.throws(() => acceptDeposit(db, { deposit_id: deposit.id }, REG), /not allowed/);
-  assert.throws(() => acceptDeposit(db, { deposit_id: deposit.id }, DOC), /not allowed/);
+  assert.throws(() => acceptDeposit(db, { deposit_id: deposit.id }, REG), /недоступно/);
+  assert.throws(() => acceptDeposit(db, { deposit_id: deposit.id }, DOC), /недоступно/);
 });
 
 test('валидация суммы, способа и пациента', () => {
   const { db, pid } = seed();
   for (const bad of [0, -100, 'x', null, NaN]) {
-    assert.throws(() => createDeposit(db, { patient_id: pid, amount: bad }, REG), /amount/);
+    assert.throws(() => createDeposit(db, { patient_id: pid, amount: bad }, REG), /Сумма/);
   }
-  assert.throws(() => createDeposit(db, { patient_id: 999999, amount: 100 }, REG), /patient not found/);
+  assert.throws(() => createDeposit(db, { patient_id: 999999, amount: 100 }, REG), /Пациент не найден/);
 });
 
 test('список для кассы показывает ждущих приёма', () => {
@@ -209,8 +209,8 @@ test('способов ровно три: наличные, карта, эква
   const { db, pid } = seed();
   openCashShift(db, { opening_float: 0 }, CASH);
   const d = createDeposit(db, { patient_id: pid, amount: 3000 }, REG).deposit;
-  assert.throws(() => acceptDeposit(db, { deposit_id: d.id, method: 'transfer' }, CASH), /unknown method/);
-  assert.throws(() => acceptDeposit(db, { deposit_id: d.id, method: 'bitcoin' }, CASH), /unknown method/);
+  assert.throws(() => acceptDeposit(db, { deposit_id: d.id, method: 'transfer' }, CASH), /Неизвестный способ/);
+  assert.throws(() => acceptDeposit(db, { deposit_id: d.id, method: 'bitcoin' }, CASH), /Неизвестный способ/);
 });
 
 // Без способа принять нельзя: иначе «Принять» одним щелчком снова записал бы

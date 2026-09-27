@@ -153,7 +153,7 @@ test('D1: частичный возврат — доля в той же проп
   const id = c.line({ at: cur + '-05T09:00:00Z' });
   const inv = c.bill(id);
   const p = c.pay(inv);
-  refundPayment(c.db, { payment_id: p, amount: 30000 }, admin);   // вернули 30 %
+  refundPayment(c.db, { payment_id: p, amount: 30000, reopen_balance: true }, admin);   // вернули 30 % (V3120_FIX: счёт ждёт доплаты)
   assert.equal(parity(c.db, range(cur)), round2(ONE * 0.7));
   // Вернули остаток — ноль; доплатили снова полностью — снова вся доля.
   refundPayment(c.db, { payment_id: p, void_when_zero: false }, admin);   // B2: счёт оставлен открытым — его оплатят снова

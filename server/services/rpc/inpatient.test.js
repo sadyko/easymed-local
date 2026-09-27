@@ -316,7 +316,7 @@ test('bed console: invoice for admission links lines, catalog prices win', () =>
   const l1 = db.prepare('SELECT invoice_item_id, status FROM admission_services WHERE id = ?').get(svcLine);
   assert.ok(l1.invoice_item_id); assert.equal(l1.status, 'completed');
   // повторная попытка на те же строки — отказ
-  assert.throws(() => createInvoiceForAdmission(db, { admission_id: adm.id, admission_service_ids: [svcLine] }, reg), /already invoiced/);
+  assert.throws(() => createInvoiceForAdmission(db, { admission_id: adm.id, admission_service_ids: [svcLine] }, reg), /уже в счёте/);
 });
 
 test('bed console: transfer moves the patient, beds flip, журнал written', () => {

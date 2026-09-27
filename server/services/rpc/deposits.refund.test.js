@@ -128,8 +128,8 @@ test('роли: возвращает касса и админ, регистра�
   const { db, pid } = seed();
   openCashShift(db, { opening_float: 1000000 }, CASH);
   const dep = accepted(db, pid);
-  assert.throws(() => refundDeposit(db, { deposit_id: dep.id }, REG), /not allowed/);
-  assert.throws(() => refundDeposit(db, { deposit_id: dep.id }, DOC), /not allowed/);
+  assert.throws(() => refundDeposit(db, { deposit_id: dep.id }, REG), /недоступно/);
+  assert.throws(() => refundDeposit(db, { deposit_id: dep.id }, DOC), /недоступно/);
   db.close();
 });
 

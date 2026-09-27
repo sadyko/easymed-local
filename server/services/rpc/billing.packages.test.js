@@ -252,9 +252,11 @@ test('убрали строку — остаток зажат оставшими
   invoiceOf(c, [p, lab, small], { discount_amount: 30000 });
   const out = removeUnpaidService(c.db, { visit_service_id: lab }, admin);
   assert.equal(out.invoice.subtotal, 220000);
-  // 40 000 пакета + остаток не больше 20 000 (строка на 20 000 не уходит в минус).
-  assert.equal(out.invoice.discount_amount, 60000);
-  assert.equal(out.invoice.total_amount, 160000);
+  // V3120_FIX (FATAL-1) — остаток уменьшается пропорционально ушедшей базе
+  // (как при возврате строки): ручные 30 000 были на 120 000 строк без своей
+  // скидки, осталось 20 000 → 5 000. 40 000 пакета + 5 000.
+  assert.equal(out.invoice.discount_amount, 45000);
+  assert.equal(out.invoice.total_amount, 175000);
 });
 
 test('замена услуги тоже пересчитывает остаток: он не больше строк без своей скидки', () => {
@@ -264,8 +266,9 @@ test('замена услуги тоже пересчитывает остато
   invoiceOf(c, [p, lab], { discount_amount: 30000 });
   const out = changeUnpaidService(c.db, { visit_service_id: lab, new_service_id: 5 }, admin);
   assert.equal(out.invoice.subtotal, 220000);
-  assert.equal(out.invoice.discount_amount, 60000);   // 40 000 + min(30 000, 20 000)
-  assert.equal(out.invoice.total_amount, 160000);
+  // V3120_FIX (FATAL-1) — 40 000 пакета + 30 000 × 20 000 / 100 000.
+  assert.equal(out.invoice.discount_amount, 46000);
+  assert.equal(out.invoice.total_amount, 174000);
 });
 
 test('строка пакета заменена у пациента с категорией — на ней действует пол категории (ревью M-3)', () => {

@@ -38,13 +38,17 @@ test('визиты считаются, последний визит — сам�
   } finally { db.close(); }
 });
 
-test('баланс — оплачено минус выставлено; отменённый счёт не считается долгом', () => {
+// V3120_FIX (MINOR) — баланс — деньги на балансе (кошелёк), долг — отдельно;
+// net_balance — прежняя знаковая цифра.
+test('долг — невыплаченное по живым счетам; отменённый счёт не считается долгом', () => {
   const { db, p1 } = seed();
   try {
     db.prepare("INSERT INTO invoices (invoice_number, patient_id, subtotal, total_amount, paid_amount, status) VALUES ('INV-1',?,500000,500000,200000,'partial')").run(p1);
     db.prepare("INSERT INTO invoices (invoice_number, patient_id, subtotal, total_amount, paid_amount, status) VALUES ('INV-2',?,300000,300000,0,'void')").run(p1);
     const [a] = patientBaseAggregates(db, { p_ids: [p1] }, registrar);
-    assert.equal(a.balance, -300000, 'долг 300 000 — и ровно он, отменённый счёт мимо');
+    assert.equal(a.debt, 300000, 'долг 300 000 — и ровно он, отменённый счёт мимо');
+    assert.equal(a.balance, 0, 'на балансе денег нет');
+    assert.equal(a.net_balance, -300000);
   } finally { db.close(); }
 });
 
