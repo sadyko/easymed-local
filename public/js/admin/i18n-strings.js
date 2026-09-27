@@ -3,6 +3,13 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // V3120_FIX (2026-09-27) — выдача пациенту только со своей полки (mar-outpatients, item-picker, койка)
+  "мои запасы": {"en":"my stock","ru":"мои запасы","uz":"mening zaxiram"},
+  "Всего доступно {qty} {unit}: на руках, в кабинете, в отделении и на складе.": {"en":"Only {qty} {unit} available in total: on hand, in the room, in the department and in the warehouse.","ru":"Всего доступно {qty} {unit}: на руках, в кабинете, в отделении и на складе.","uz":"Jami {qty} {unit} mavjud: qo'lda, xonada, bo'limda va omborda."},
+  "Своё: {own} · склад: {n}": {"en":"Own: {own} · warehouse: {n}","ru":"Своё: {own} · склад: {n}","uz":"O'zimniki: {own} · ombor: {n}"},
+  "своё {own} · склад {n} {unit}": {"en":"own {own} · warehouse {n} {unit}","ru":"своё {own} · склад {n} {unit}","uz":"o'zimniki {own} · ombor {n} {unit}"},
+  "взято: {from}": {"en":"taken from: {from}","ru":"взято: {from}","uz":"olindi: {from}"},
+  "Не хватит на выбранной полке — доберётся с других ваших, склад последним. Чужие запасы не берутся.": {"en":"If the chosen shelf runs short, the rest comes from your other shelves, the warehouse last. Other people's stock is never used.","ru":"Не хватит на выбранной полке — доберётся с других ваших, склад последним. Чужие запасы не берутся.","uz":"Tanlangan javonda yetmasa — qolgani boshqa javonlaringizdan, ombordan esa oxirida olinadi. Boshqalarning zaxirasi olinmaydi."},
   // V3120_FIX (2026-09-27) — отказы кассы и денег амбулатории по-русски (сервер)
   "Счёт не найден.": {"en":"Invoice not found.","ru":"Счёт не найден.","uz":"Hisob topilmadi."},
   "Депозит указан неверно.": {"en":"Invalid deposit.","ru":"Депозит указан неверно.","uz":"Depozit noto'g'ri ko'rsatilgan."},

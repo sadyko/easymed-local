@@ -61,6 +61,9 @@ import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE
 // EXPIRY_BALANCE_V1 — «списание просроченного предупреждает» (владелец 23.09).
 // Слова пишет сервер (rpc/expiry.js), консоль койки их только показывает.
 import { toastStockWarnings } from './stock-warnings.js';
+// V3120_FIX — «Товары для пациента»: рядом со складом виден остаток СВОИХ полок
+// (то, что сервер спишет первым: подотчёт → кабинет → отдел палаты → свой отдел).
+import { loadOwnShelves } from './item-picker-modal.js';
 import { canAddAdmissionService } from '../permissions.js';   // FINAL_ROLES_SYNC_FIX_V1 (I2) — кнопка «Добавить услугу» только тому, кому сервер строку заведёт
 
 const STATUS = {
@@ -893,6 +896,7 @@ function bedDetailModal(bed, ward, adm, root) {
     function addItemsDialog() {
         const picked = [];   // [{ p, qty }]
         let productsAll = [];
+        let ownShelves = new Map();   // V3120_FIX — product_id → базовых единиц на своих полках
         const listEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
         const totalEl = h('span', { style: { fontWeight: 800 } }, '0');
         const refreshTotal = () => {
@@ -942,7 +946,9 @@ function bedDetailModal(bed, ward, adm, root) {
                 },
                     h('span', { style: { flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere' } }, p2.name),
                     h('span', { class: 'muted', style: { flex: '0 0 auto', fontSize: '12.5px', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } },
-                        trf('остаток {n} {unit}', { n: p2.on_hand || 0, unit: p2.base_unit || '' }))));
+                        (ownShelves.get(Number(p2.id)) || 0) > 0
+                            ? trf('своё {own} · склад {n} {unit}', { own: Number(ownShelves.get(Number(p2.id))).toLocaleString('ru-RU', { maximumFractionDigits: 3 }), n: p2.on_hand || 0, unit: p2.base_unit || '' })
+                            : trf('остаток {n} {unit}', { n: p2.on_hand || 0, unit: p2.base_unit || '' }))));
             }
         }
         prodSearch.addEventListener('input', paintProdResults);
@@ -950,6 +956,7 @@ function bedDetailModal(bed, ward, adm, root) {
         prodSearch.addEventListener('blur', () => setTimeout(() => { prodResults.style.display = 'none'; }, 150));
         supabase.from('products').select('id, name, base_unit, on_hand, sale_price').eq('active', 1).order('name').limit(1000)
             .then(({ data }) => { productsAll = data || []; });
+        loadOwnShelves({ admission_id: adm.id }).then((m) => { ownShelves = m; });
 
         const noteInp = h('input', { type: 'text', placeholder: 'Необязательно' });
         const billChk = h('input', { type: 'checkbox', checked: true, style: { width: '17px', height: '17px', accentColor: 'var(--primary-600)' } });

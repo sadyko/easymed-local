@@ -222,6 +222,7 @@ function openDone(r, body) {
     const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', disabled: r.visit_id ? null : true,
         onclick: () => openItemPickerModal({
             title: tr('Добавить товары'), confirmLabel: tr('Добавить'),
+            place: { visit_id: r.visit_id },   // V3120_FIX — видно и свою полку, не только склад
             onConfirm: async (lines) => {
                 let ok = 0; const fails = [];
                 const warned = [];   // EXPIRY_BALANCE_V1 — просроченные партии всех строк

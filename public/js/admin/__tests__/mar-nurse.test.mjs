@@ -995,10 +995,13 @@ test('отказ сервера («недостаточно») доходит с
     const root = await renderOutpatients();
     const give = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Выдать пациенту'));
     const qty = walk(give).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'number');
-    qty.value = '25';
+    // V3120_FIX — 20 таб на руках + 12 уп × 10 на складе = 140: выбранная полка
+    // может не покрыть всё (сервер доберёт со своих и склада), экран не
+    // отправляет только то, чего нет НИГДЕ.
+    qty.value = '141';
     findBtn(give, 'Выдать').click();
     await settle();
-    assert.equal(rpcCalls.filter((c) => c.name === 'dispense_from_holding').length, 0, 'больше, чем есть, экран не отправляет');
+    assert.equal(rpcCalls.filter((c) => c.name === 'dispense_from_holding').length, 0, 'больше, чем есть везде, экран не отправляет');
 
     // Второй пациент: две строки — одна с рук (можно отменить), одна со склада в счёте (нельзя).
     const list = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Сегодня в клинике'));
@@ -1011,6 +1014,31 @@ test('отказ сервера («недостаточно») доходит с
     await settle();
     const v = rpcCalls.find((c) => c.name === 'void_holding_dispense');
     assert.deepEqual(v.args, { visit_service_id: 900 });
+});
+
+test('V3120_FIX: полки спрашиваются «только свои» для выбранного визита; больше, чем на руках, уходит на сервер; тост называет, откуда взято', async () => {
+    const root = await renderOutpatients();
+    const first = rpcCalls.filter((c) => c.name === 'holdings_list');
+    assert.ok(first.length && first.every((c) => c.args.reachable === true), 'весь реестр подотчёта больше не спрашивается: ' + JSON.stringify(first.map((c) => c.args)));
+    assert.ok(first.some((c) => c.args.visit_id === 301), 'полки — для выбранного визита');
+    const give = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Выдать пациенту'));
+    assert.ok(textOf(give).includes('Чужие запасы не берутся'), 'правило цепочки названо у «Откуда»');
+    const qty = walk(give).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'number');
+    qty.value = '15';
+    findBtn(give, 'Выдать').click();
+    await settle();
+    assert.equal(rpcCalls.filter((c) => c.name === 'dispense_from_holding').length, 1, 'недостачу на своей полке доберёт сервер — экран не отказывает');
+
+    const list = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Сегодня в клинике'));
+    walk(list).find((e) => e.tagName === 'BUTTON' && textOf(e).includes('Рахимов Бобур')).click();
+    await settle();
+    assert.ok(rpcCalls.some((c) => c.name === 'holdings_list' && c.args.reachable === true && c.args.visit_id === 302), 'другой визит — другой кабинет приёма: полки перечитаны');
+});
+
+test('V3120_FIX: «взято: …» — слова источников из ответа сервера', async () => {
+    const { sourcesWords } = await import('../views/mar-outpatients.js');
+    assert.equal(sourcesWords([{ type: 'staff', id: 5, qty: 1 }, { type: 'room', id: 7, qty: 1 }, { type: 'warehouse', id: null, qty: 2 }], 5), 'мои запасы, кабинет, склад');
+    assert.equal(sourcesWords(undefined, 5), '');
 });
 
 test('ничего не выдано медсестре — выдаёт со склада напрямую, склад в списке источников единственный', async () => {

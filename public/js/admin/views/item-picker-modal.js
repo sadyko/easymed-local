@@ -46,6 +46,25 @@ function unitOptions(current) {
     return set;
 }
 
+/**
+ * V3120_FIX — свои полки для этой выдачи: сервер отдаёт только то, что он же
+ * и спишет первым (holdings_list reachable). Не прочиталось — просто склад.
+ */
+export async function loadOwnShelves(place) {
+    const own = new Map();
+    try {
+        const args = place.visit_id ? { reachable: true, visit_id: place.visit_id } : { reachable: true, admission_id: place.admission_id };
+        const { data, error } = await supabase.rpc('holdings_list', args);
+        if (error || !data || !Array.isArray(data.holdings)) return own;
+        for (const hd of data.holdings) {
+            const id = Number(hd.product_id);
+            own.set(id, Math.round(((own.get(id) || 0) + (Number(hd.qty_base) || 0)) * 1e6) / 1e6);
+        }
+    } catch { /* нет ответа — экран показывает склад, как прежде */ }
+    return own;
+}
+const fmtOwn = (n) => Number(n).toLocaleString('ru-RU', { maximumFractionDigits: 3 });
+
 export function openItemPickerModal({
     onConfirm,                       // async (lines) => void ; lines = [{item, qty, unit}] (throws → toast, dialog stays open)
     title        = 'Выдать товары',
@@ -53,6 +72,11 @@ export function openItemPickerModal({
     confirmIcon  = 'Check',
     branchId     = null,             // optional — scope on-hand to this branch when known
     initialSearch = '',              // RX_DISPENSE_V1 — prefill the search (e.g. from an Rx line)
+    // V3120_FIX — { visit_id } | { admission_id }: где выдаём. Тогда рядом со
+    // складом виден и остаток СВОИХ полок (подотчёт, кабинет, отдел — то, что
+    // сервер спишет первым), а «0 на складе» не красится тревогой, когда
+    // товар лежит у человека на руках. Без place — как прежде, склад.
+    place        = null,
 } = {}) {
     const overlay = h('div', { class: 'modal', style: { zIndex: '135' } });
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: () => close() }));
@@ -63,6 +87,7 @@ export function openItemPickerModal({
         lines:    [],     // DISPENSE_MULTI_V1 — cart: [{ item, qty, unit }]
         loading:  true,
         branchId: branchId || null,
+        own:      null,   // V3120_FIX — Map product_id → базовых единиц на своих полках (при place)
     };
 
     const card = h('div', { class: 'modal-card modal-compact', style: {   // PROD_BILL_OPTIN_V1 — not fullscreen
@@ -137,6 +162,7 @@ export function openItemPickerModal({
                 price:   it.sale_price,
                 _onHand: (it.on_hand == null ? null : Number(it.on_hand)),
             }));
+            if (place && (place.visit_id || place.admission_id)) state.own = await loadOwnShelves(place);
         } catch (err) {
             toast(err?.message || String(err), 'fail');
             state.items = [];
@@ -190,7 +216,11 @@ export function openItemPickerModal({
             const meta = [it.unit, it.form, it.strength].filter(Boolean).join(' · ');
             const on = it._onHand;
             const onLabel = on == null ? '—' : Number(on).toLocaleString('ru-RU');
-            const lowStock = on != null && Number(on) <= 0;
+            const own = state.own ? (state.own.get(Number(it.id)) || 0) : 0;
+            const lowStock = on != null && Number(on) + own <= 0;
+            const stockLabel = own > 0
+                ? trf('Своё: {own} · склад: {n}', { own: fmtOwn(own), n: onLabel })
+                : trf('Остаток: {n}', { n: onLabel });
             const inCart = lineFor(it.id);
             listEl.appendChild(h('button', {
                 type: 'button',
@@ -210,7 +240,7 @@ export function openItemPickerModal({
                 ),
                 h('div', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
                     h('div', { class: 'num', style: { fontSize: '13.5px', fontWeight: 600, color: 'var(--ink-900)' } }, Number(it.price || 0).toLocaleString('ru-RU') + ' UZS'),
-                    h('div', { style: { fontSize: '12.5px', color: lowStock ? 'var(--crit-700)' : 'var(--ink-500)' } }, trf('Остаток: {n}', { n: onLabel })),
+                    h('div', { style: { fontSize: '12.5px', color: lowStock ? 'var(--crit-700)' : 'var(--ink-500)' } }, stockLabel),
                 ),
                 inCart
                     ? h('span', { style: { minWidth: '22px', height: '22px', borderRadius: '999px', background: 'var(--primary-500)', color: 'white', font: '700 11px/22px inherit', textAlign: 'center', flexShrink: 0, padding: '0 6px' } }, '×' + Number(inCart.qty || 0))

@@ -1035,6 +1035,7 @@ async function activateVisitIfPending(state) {
 // human-readable message on any error; we surface it via the picker's toast.
 function openDispenseItem(state, onReload) {
     openItemPickerModal({
+        place:        { visit_id: state.visit.id },   // V3120_FIX — видно и свою полку, не только склад
         title:        'Dispense item to visit',
         confirmLabel: 'Dispense',
         // DISPENSE_MULTI_V1 — dispense each cart line with its own atomic RPC.

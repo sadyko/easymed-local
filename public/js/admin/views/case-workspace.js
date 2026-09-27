@@ -347,11 +347,14 @@ function paintTab(root, onNavigate) {
                 });
             },
             onAddExpense: async (reload) => {
-                // Расход списывается СО СКЛАДА тем же окном, что и везде:
-                // остаток, партия и цена — его забота, а не этого экрана.
+                // Расход списывается тем же окном, что и везде, и той же
+                // цепочкой сервера: свой подотчёт → свой кабинет → отдел палаты
+                // → свой отдел → склад (V3120_FIX: раньше здесь было написано
+                // «со склада», и окно показывало только складской остаток).
                 const { openItemPickerModal } = await import('./item-picker-modal.js?v=billoptin1');
                 openItemPickerModal({
                     title: tr('Добавить расход'), confirmLabel: tr('Списать'),
+                    place: { admission_id: state.admissionId },
                     onConfirm: async (lines) => {
                         let ok = 0; const fails = [];
                         const warned = [];   // EXPIRY_BALANCE_V1 — просроченные партии всех строк

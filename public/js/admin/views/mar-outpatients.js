@@ -15,6 +15,14 @@
 // Что выдано — сразу строка визита: касса увидит её в счёте пациента, как
 // любую выдачу; галочка «в счёт» снятая — строка на нуле (учёт расхода без
 // денег). Отмена — только у неоплаченной строки и только той, что выдана с рук.
+//
+// V3120_FIX — «ТОЛЬКО СВОЯ ПОЛКА» (владелец 27.09). Экран просил весь реестр
+// подотчёта (holdings_list без отбора) и предлагал источником КАЖДЫЙ кабинет и
+// каждое отделение клиники. Теперь он спрашивает `reachable` для выбранного
+// визита: сервер отдаёт только полки ЭТОЙ медсестры для ЭТОГО приёма (свой
+// подотчёт, кабинет приёма, свой кабинет, отдел, свой отдел) в порядке цепочки.
+// «Откуда» — с какой своей полки начать; не хватило — сервер добирает с
+// остальных своих, склад последним (rpc/holdings.js dispense_from_holding).
 import { supabase } from '../../supabase.js';
 import { h, Icon, Tag, clear, toast, field, checkField, initials } from '../ui.js';
 import { pastelFor } from '../pastel.js';
@@ -28,6 +36,30 @@ const HOLDER_WORD = { staff: 'Мои запасы', room: 'Кабинет', depa
 const WAREHOUSE_KEY = 'warehouse';
 
 /** «Кабинет: Процедурный» / «Мои запасы» — подпись источника в списке. */
+/**
+ * V3120_FIX — «Взято: мои запасы, склад» — откуда на самом деле ушло (сервер
+ * называет источники в ответе; выдача бывает частями).
+ */
+export function sourcesWords(sources, myId) {
+    const words = [];
+    for (const s of Array.isArray(sources) ? sources : []) {
+        const w = s.type === WAREHOUSE_KEY ? tr('склад')
+            : s.type === 'staff' ? tr('мои запасы')
+            : s.type === 'room' ? tr('кабинет') : tr('отделение');
+        if (!words.includes(w)) words.push(w);
+    }
+    return words.join(', ');
+}
+
+/** Сколько этого товара можно выдать всего: свои полки + склад. */
+export function reachableUnits(sources, productId) {
+    let n = 0;
+    for (const s of sources || []) {
+        for (const it of s.items || []) if (Number(it.product_id) === Number(productId)) n += Number(it.qty_units) || 0;
+    }
+    return Math.round(n * 1000) / 1000;
+}
+
 export function holderLabel(hd, myId) {
     if (hd.holder_type === WAREHOUSE_KEY) return tr('Склад (общий остаток)');
     if (hd.holder_type === 'staff') return Number(hd.holder_id) === Number(myId) ? tr(HOLDER_WORD.staff) : hd.holder_name || tr('Сотрудник');
@@ -81,17 +113,21 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
         state.products = Array.isArray(data) ? data : [];
     }
     async function load() {
-        const [v, hd] = await Promise.all([
+        const [v] = await Promise.all([
             supabase.rpc('outpatients_today', {}),
-            supabase.rpc('holdings_list', {}),
             loadProducts(),
         ]);
         state.failed = v.error ? (v.error.message || tr('нет данных')) : '';
         state.visits = (!v.error && v.data && Array.isArray(v.data.visits)) ? v.data.visits : [];
-        state.holdings = (!hd.error && hd.data && Array.isArray(hd.data.holdings)) ? hd.data.holdings : [];
         if (!state.visits.some((x) => x.id === state.selected)) state.selected = state.visits.length ? state.visits[0].id : null;
-        await loadItems();
+        await Promise.all([loadItems(), loadHoldings()]);
         paint();
+    }
+    // V3120_FIX — только свои полки для выбранного визита (кабинет приёма у
+    // каждого визита свой), и уже в порядке цепочки.
+    async function loadHoldings() {
+        const hd = await supabase.rpc('holdings_list', state.selected ? { reachable: true, visit_id: state.selected } : { reachable: true });
+        state.holdings = (!hd.error && hd.data && Array.isArray(hd.data.holdings)) ? hd.data.holdings : [];
     }
     async function loadItems() {
         state.items = null;
@@ -100,8 +136,7 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
         state.items = data && Array.isArray(data.items) ? data.items : [];
     }
     async function reloadHoldings() {
-        const [hd] = await Promise.all([supabase.rpc('holdings_list', {}), loadProducts()]);
-        state.holdings = (!hd.error && hd.data && Array.isArray(hd.data.holdings)) ? hd.data.holdings : [];
+        await Promise.all([loadHoldings(), loadProducts()]);
     }
 
     function paint() {
@@ -134,7 +169,7 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
                     background: active ? 'var(--primary-25, #f2faf8)' : 'transparent',
                     cursor: 'pointer', font: 'inherit',
                 },
-                onclick: async () => { state.selected = v.id; state.items = null; paint(); await loadItems(); paint(); },
+                onclick: async () => { state.selected = v.id; state.items = null; paint(); await Promise.all([loadItems(), loadHoldings()]); paint(); },
             },
                 h('span', {
                     class: ('mar-av ' + pastelFor(v.patient_id || v.patient_name)).trim(),
@@ -257,7 +292,11 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
             const qty = Number(qtyInp.value);
             if (!it) return toast(tr('Выберите товар.'), 'warn');
             if (!Number.isFinite(qty) || qty <= 0) return toast(tr('Количество — положительное число.'), 'warn');
-            if (qty > it.qty_units + 1e-9) return toast(trf('На руках только {qty} {unit}.', { qty: fmtQty(it.qty_units), unit: it.consumption_unit || '' }), 'warn');
+            // V3120_FIX — выбранная полка не обязана покрыть всё: недостачу
+            // сервер доберёт с остальных своих полок, склад последним. Экран
+            // останавливает только то, чего нет нигде.
+            const reach = reachableUnits(sources, it.product_id);
+            if (qty > reach + 1e-9) return toast(trf('Всего доступно {qty} {unit}: на руках, в кабинете, в отделении и на складе.', { qty: fmtQty(reach), unit: it.consumption_unit || '' }), 'warn');
             giveBtn.disabled = true;
             try {
                 const src = current();
@@ -266,7 +305,9 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
                     product_id: it.product_id, quantity: qty, visit_id: v.id, billable: billChk.checked,
                 });
                 if (error) throw error;
-                toast(trf('Выдано: {name} — {qty} {unit}', { name: data && data.item_name ? data.item_name : it.product_name, qty: fmtQty(qty), unit: it.consumption_unit || '' }), 'success');
+                const from = sourcesWords(data && data.sources, myId);
+                toast(trf('Выдано: {name} — {qty} {unit}', { name: data && data.item_name ? data.item_name : it.product_name, qty: fmtQty(qty), unit: it.consumption_unit || '' })
+                    + (from ? ' · ' + trf('взято: {from}', { from }) : ''), 'success');
                 toastStockWarnings(data);   // EXPIRY_BALANCE_V1 — просроченная партия: после успеха, не вместо него
                 v.item_count = (v.item_count || 0) + 1;
                 await Promise.all([loadItems(), reloadHoldings()]);
@@ -277,6 +318,8 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
         } }, Icon('Check', { size: 13 }), ' ', tr('Выдать'));
 
         bodyEl.appendChild(field('Откуда', srcSel));
+        bodyEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 0' } },
+            tr('Не хватит на выбранной полке — доберётся с других ваших, склад последним. Чужие запасы не берутся.')));
         if (sources.length === 1 && sources[0].holder_type === WAREHOUSE_KEY) {
             bodyEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 0' } },
                 tr('Пока только общий склад. Когда склад выдаст вам, в кабинет или в отделение, эти запасы появятся здесь первыми.')));

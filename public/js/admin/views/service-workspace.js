@@ -4023,6 +4023,7 @@ function openDispenseConsultItem(ctx) {
         return;
     }
     openItemPickerModal({
+        place:        { visit_id: ctx.visitId },   // V3120_FIX — видно и свою полку, не только склад
         title:        'Выдать препарат',
         confirmLabel: 'Выдать',
         // DISPENSE_MULTI_V1 — the picker returns an array of lines; dispense each
