@@ -214,6 +214,17 @@ export const STRINGS = {
   "Старый приём на {d} отменить не удалось: {msg}": {"en":"The old appointment on {d} could not be cancelled: {msg}","ru":"Старый приём на {d} отменить не удалось: {msg}","uz":"{d} kunidagi eski qabulni bekor qilib bo‘lmadi: {msg}"},
   // CRM_REAL_BOOKING_V1 (2026-09-21) — запись колл-центра держит настоящий слот
   "заявки": {"en":"requests","ru":"заявки","uz":"arizalar"},
+  // V3120_FIX (2026-09-27) — склад: подотчёт отключённых сотрудников (holding_return)
+  "На руках у отключённых сотрудников": {"en":"Held by deactivated staff","ru":"На руках у отключённых сотрудников","uz":"O'chirilgan xodimlar qo'lidagi zaxira"},
+  "Отключённый сотрудник не может выдать это пациенту. Верните товар на склад или передайте другому сотруднику.": {"en":"A deactivated staff member cannot give this to a patient. Return the item to the warehouse or transfer it to another staff member.","ru":"Отключённый сотрудник не может выдать это пациенту. Верните товар на склад или передайте другому сотруднику.","uz":"O'chirilgan xodim buni bemorga bera olmaydi. Mahsulotni omborga qaytaring yoki boshqa xodimga topshiring."},
+  "— кому передать —": {"en":"— transfer to —","ru":"— кому передать —","uz":"— kimga topshirish —"},
+  "Вернуть на склад": {"en":"Return to warehouse","ru":"Вернуть на склад","uz":"Omborga qaytarish"},
+  "Передать": {"en":"Transfer","ru":"Передать","uz":"Topshirish"},
+  "Выберите, кому передать.": {"en":"Choose who to transfer to.","ru":"Выберите, кому передать.","uz":"Kimga topshirishni tanlang."},
+  "Подтвердить возврат": {"en":"Confirm return","ru":"Подтвердить возврат","uz":"Qaytarishni tasdiqlash"},
+  "Подтвердить передачу": {"en":"Confirm transfer","ru":"Подтвердить передачу","uz":"Topshirishni tasdiqlash"},
+  "Передано: {qty} {unit} — {name}": {"en":"Transferred: {qty} {unit} — {name}","ru":"Передано: {qty} {unit} — {name}","uz":"Topshirildi: {qty} {unit} — {name}"},
+  "Возвращено на склад: {qty} {unit}": {"en":"Returned to warehouse: {qty} {unit}","ru":"Возвращено на склад: {qty} {unit}","uz":"Omborga qaytarildi: {qty} {unit}"},
   "сначала дата": {"en":"pick a date first","ru":"сначала дата","uz":"avval sana"},
   "Ищем время…": {"en":"Looking for a time…","ru":"Ищем время…","uz":"Vaqt qidirilmoqda…"},
   "расписание не ответило — впишите время": {"en":"the schedule did not answer — type the time in","ru":"расписание не ответило — впишите время","uz":"jadval javob bermadi — vaqtni o‘zingiz kiriting"},

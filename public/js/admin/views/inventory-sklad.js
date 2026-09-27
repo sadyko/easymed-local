@@ -11,6 +11,7 @@ import { fetchGuard, loadingCard, fmtPrice, fmtMoney2, fmtQty, selStyle, isLowSt
 import { categoryFilter, loadCategories, matchesCategories } from './category-filter.js';   // PROCUREMENT_FILTERS_V1
 import { openReceiveModal, openAdjustModal } from './inventory-products.js';
 import { openStockIssueModal } from './stock-issue-modal.js';   // STOCK_ISSUE_MODAL_V1 — общий диалог выдачи
+import { renderInactiveHoldings } from './inventory-inactive-holdings.js';   // V3120_FIX — подотчёт отключённых
 
 const sklad = {
     products: [], suppliers: [],
@@ -173,6 +174,9 @@ export async function renderSkladTab(container) {
 
     container.appendChild(card);
     paintRows();
+    // V3120_FIX — под складом: что числится за отключёнными сотрудниками
+    // (вернуть на склад / передать). Нет таких строк — блока нет.
+    renderInactiveHoldings(container, reload);
 
     // ---- rows ------------------------------------------------------------
     function filtered() {
