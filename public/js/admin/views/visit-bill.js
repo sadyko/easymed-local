@@ -18,6 +18,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, StatusTag, Tag, fmtDateTime, field } from '../ui.js';
 import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1
+import { linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — исполнитель строки
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 // BRANCH_BILL_GUARD_V1 — тот же предикат, на котором стоят рабочие списки
 // (visits.js:91, procedures.js:50 — там он же, но в SQL: .is('sync_origin', null)).
@@ -203,7 +204,7 @@ export function openVisitBillModal(visit, onChanged) {
     async function loadServiceOptions() {
         try {
             const { data, error } = await supabase.from('services')
-                .select('id,name,price,requires_doctor').eq('active', 1).order('name');
+                .select('id,name,price,requires_doctor,type,is_lab').eq('active', 1).order('name');
             if (error) throw error;
             serviceById.clear();
             for (const s of (data || [])) {
@@ -488,7 +489,7 @@ export function openVisitBillModal(visit, onChanged) {
 //   добавить услугу — visit_services.insert (schema-registry.js);
 //   выдать товар   — dispense_item (inventory.js DISPENSE_ROLES).
 export const BILL_REMOVE_ROLES = ['admin', 'registrar', 'doctor'];
-export const BILL_VOID_ROLES = ['admin', 'inventory', 'doctor'];
+export const BILL_VOID_ROLES = ['admin', 'inventory', 'doctor', 'nurse'];   // INPATIENT_MONEY_FIX_V1 (C4)
 export const BILL_ADD_ROLES = ['admin', 'registrar', 'doctor'];
 export const BILL_DISPENSE_ROLES = ['admin', 'doctor', 'nurse', 'inventory'];
 
@@ -519,7 +520,7 @@ export async function billLineFor(visit, service, qty) {
         total: round2(price * qty),
         status: 'added',
         created_by: currentUserId(),
-        doctor_id: service.requires_doctor && visit.doctor_id ? Number(visit.doctor_id) : null,
+        doctor_id: linePerformer(service, null, visit.doctor_id),
     };
     if (tier) row.price_tier = tier;
     return row;

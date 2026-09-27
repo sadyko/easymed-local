@@ -70,7 +70,8 @@ import { buildPatientFields, openDuplicatePatientDialog, runPatientSearch, uploa
 import { coveredByHigherModal } from './modal-stack.js?v=ms1';
 import { openTemplatePickerModal } from './template-picker-modal.js?v=tpl1';   // TEMPLATE_PICKER_V1
 import { resolveTemplate, packageDiscount } from './service-templates.js?v=tpl1';   // WIZ_TEMPLATES_LOCAL_V1; PACKAGES_V1
-import { registerWalkIn, walkInRoleRefusal } from './walk-in-booking.js?v=wib1';   // WALK_IN_BOOKING_V1
+import { registerWalkIn, walkInRoleRefusal, walkInLinesRefusal } from './walk-in-booking.js?v=wib1';
+import { surgeryBedRefusal, isSurgeryPick, SURGERY_NEEDS_BED_TEXT } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1   // WALK_IN_BOOKING_V1
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';                        // DOCTOR_POOL_V1
 import { searchableSelect } from './searchable-select.js?v=ss2';               // SEARCHABLE_SELECT_V1
 import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';    // REFERRAL_SOURCE_CODE_V1
@@ -688,6 +689,16 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
             if (refusal) { toast(refusal, 'fail'); return null; }
         }
         if (!checkDoctors()) return null;
+        // LIVE_AUDIT_FIX_V1 (A4/A5) — строки проверяются ДО заведения карты:
+        // «Строка без услуги» и хирургия без койки приходили уже после того,
+        // как карта пациента легла в базу.
+        if (state.rows.length) {
+            const lines = state.rows.map((r) => ({ service: r.service, doctorId: r.doctorId }));
+            const bad = walkInLinesRefusal(lines)
+                || (!state.patient && state.rows.some((r) => isSurgeryPick(r.service)) ? tr(SURGERY_NEEDS_BED_TEXT) : null)
+                || (state.patient ? await surgeryBedRefusal(state.patient.id, state.rows.map((r) => r.service)) : null);
+            if (bad) { toast(bad, 'fail'); return null; }
+        }
         state.saving = true;
         saveBtn.disabled = true;
         try {

@@ -212,3 +212,18 @@ test('два врача — две отдельные очереди, нумер
   db.close();
 });
 
+
+// LIVE_AUDIT_FIX_V1 (C7) — отменённый / несостоявшийся визит в очереди не стоит.
+test('LIVE_AUDIT_FIX_V1: номера отменённого и неявившегося визита на доске не показываются', () => {
+  const db = freshDb();
+  const a = addLine(db, { visit: 1, svc: 1, doctor: 2 });
+  const b = addLine(db, { visit: 2, svc: 1, doctor: 2 });
+  issueQueueNumbers(db, { p_ids: [a, b] }, REG);
+  const before = JSON.stringify(board(db));
+  assert.ok(before.includes('Каримов'), 'стенд не довёл второго пациента до доски');
+  db.prepare("UPDATE visits SET status = 'cancelled' WHERE id = 2").run();
+  assert.ok(!JSON.stringify(board(db)).includes('Каримов'), 'отменённый визит на доске');
+  db.prepare("UPDATE visits SET status = 'no_show' WHERE id = 1").run();
+  assert.ok(!JSON.stringify(board(db)).includes('Алиев'), 'неявка на доске');
+  db.close();
+});

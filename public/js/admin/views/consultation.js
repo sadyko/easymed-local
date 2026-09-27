@@ -181,7 +181,7 @@ async function loadServices() {
             services(name, type, duration_minutes, service_types(name), departments(kind)),
             consultation_types(name_ru, name_uz),
             users:doctor_id(full_name, specialty, rooms(name, floors(name))),
-            visits(visit_date, patient_id,
+            visits(visit_date, patient_id, status,
                    patients(full_name, last_name, first_name, mrn, phone))
         `)
         .in('status', ['added', 'queued', 'in_progress', 'completed'])
@@ -249,7 +249,9 @@ async function loadServices() {
         }
     } catch (e) { console.warn('[my-services] inpatient flag:', e && e.message); }
 
-    state.rows = (data || []).filter(r => !_goesElsewhere(r)).map(r => {
+    // LIVE_AUDIT_FIX_V1 (C7) — строки отменённого / несостоявшегося визита в
+    // кабинете не живут: пациента не будет, а очередь врача показывала его.
+    state.rows = (data || []).filter(r => !_goesElsewhere(r) && !['cancelled', 'no_show'].includes(r.visits?.status)).map(r => {
         const p = r.visits?.patients || {};
         const patientName = [p.last_name, p.first_name].filter(Boolean).join(' ').trim()
             || p.full_name || '(unknown)';

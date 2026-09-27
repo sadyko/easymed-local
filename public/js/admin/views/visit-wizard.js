@@ -42,6 +42,7 @@ import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // 
 // server/services/rpc/slot-engine.js. ?v как у остальных импортёров модуля.
 import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
          askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=aug17e';
+import { surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 (A5) — хирургия без койки: отказ до визита
 import { hasActorRole, canWriteServiceTemplates } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1 · LIVE_AUDIT_FIX_V1 — шаблоны сметы
 import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
@@ -2539,6 +2540,10 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             //
             // Проверка идёт ПЕРЕД циклом по дням: отказ не должен оставлять за
             // собой ни визита, ни строки услуги, ни счёта.
+            // LIVE_AUDIT_FIX_V1 (A5) — хирургия без койки отказывает ДО визита:
+            // сервер ловит её только на строке услуги, когда визит уже заведён.
+            const noBed = await surgeryBedRefusal(patient.id, wiz.cart.map(c => c.svc));
+            if (noBed) { toast(noBed, 'fail'); wiz.creating = false; repaintRail(); return; }
             const emergencyByDay = await gateDaySlots(byDay);
             if (!emergencyByDay) {   // отказались от экстренной записи
                 toast(tr('Запись не сохранена — время занято.'), 'info');

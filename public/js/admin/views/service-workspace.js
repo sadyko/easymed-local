@@ -13,7 +13,8 @@ import { setupA4Pagination } from './a4-paginate.js';   // A4_PAGINATE_V1
 import { a4Letterhead } from './a4-letterhead.js';   // A4_LETTERHEAD_V2 — общая шапка документа
 import { shortName } from '../../shared/person-name.js';   // PERSON_NAME_SHORT_V1
 import { h, Icon, Avatar, Tag, StatusTag, clear, toast } from '../ui.js';
-import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf, monthName } from '../i18n.js';
+import { linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — исполнитель строки   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 // WIZARD_ONE_ENGINE_V1 / VISITS_ONE_DOOR_V1 — «Повторный визит» держал ЧЕТВЁРТУЮ
 // реализацию расписания (loadBookedSlots: своя сетка 20 минут, свои 08:00–19:00,
@@ -3631,12 +3632,18 @@ async function addOwnService(ctx, svc, doctor) {
     // гасит уже добавленные (excludeServiceIds), но строки, заведённые до этой
     // правки, id услуги не хранят — поэтому проверка есть и здесь.
     const already = (wsState.payload?.services || []).some(x => x.serviceId && svc.id && String(x.serviceId) === String(svc.id));
-    if (already) { toast(trf('«{name}» уже добавлена к приёму.', { name: svc.name || '' }), 'fail'); return; }
+    // LIVE_AUDIT_FIX_V1 — отказы — исключением: вызывает каталог (attachCartToVisit),
+    // он считает легшее и сам называет причину.
+    if (already) throw new Error(trf('«{name}» уже добавлена к приёму.', { name: svc.name || '' }));
+    // LIVE_AUDIT_FIX_V1 (C2) — без визита строки нет, а без строки нет и услуги:
+    // пункт в списке кабинета без строки визита — это «добавлено», которого не
+    // увидит ни счёт, ни карта пациента.
+    if (!ctx.visitId) throw new Error(tr('Приём не привязан к визиту — услугу добавить некуда.'));
     // AURORA_SVC_SYNC_V1 — create a REAL visit_services line so the service shows on the patient
     // card (Услуги/Визиты) and the invoice. Consultation pseudo-services carry a
     // consultation_type_id; catalog services carry a real service_id. insertRow stamps created_by.
     let vsId = null;
-    if (ctx.visitId) {
+    {
         try {
             let price = svc.price != null ? Number(svc.price) : 0;
             let priceTier = null;
@@ -3654,7 +3661,9 @@ async function addOwnService(ctx, svc, doctor) {
                 visit_id:   ctx.visitId,
                 company_id: currentClinicId() || null,
                 // SVC_ATTACH_V1 — исполнитель: выбранный в смете врач → врач консультации → врач приёма.
-                doctor_id:  doctor?.id || svc.__consultDoctorId || ctx.patient?.__service?.doctorId || null,
+                // LIVE_AUDIT_FIX_V1 (C3) — врач приёма только у врачебной услуги:
+                // процедура, анализ и услуга «без врача» исполнителя от приёма не берут.
+                doctor_id:  linePerformer(svc, doctor?.id, ctx.patient?.__service?.doctorId),
                 quantity:   1, unit_price: price, total: price, status: 'added',
             };
             if (priceTier) row.price_tier = priceTier;
@@ -3663,7 +3672,13 @@ async function addOwnService(ctx, svc, doctor) {
             const { data, error } = await insertRow('visit_services', row);
             if (error) throw error;
             vsId = data?.id || null;
-        } catch (e) { console.warn('[workspace] visit_services sync failed:', e?.message || e); }
+            if (!vsId) throw new Error(tr('сервер не вернул строку'));
+        } catch (e) {
+            // LIVE_AUDIT_FIX_V1 (C2) — провал — это провал: ни пункта в списке,
+            // ни «Услуга добавлена». Каталог по исключению узнаёт, что не легло.
+            console.warn('[workspace] visit_services insert failed:', e?.message || e);
+            throw e;
+        }
     }
     // Keep the workspace's own JSON list (drives the left-column display + print).
     const payload = wsState.payload || await readPayload(ctx);

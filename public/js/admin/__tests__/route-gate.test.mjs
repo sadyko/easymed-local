@@ -342,3 +342,22 @@ test('MY_STOCK_V1: «Мой отдел» — только у того, у ког
         assert.equal(perms.isRouteAllowed('my-department'), perms.isRouteAllowed('departments'));
     } finally { perms.setFullAccess('Admin'); }
 });
+
+// LIVE_AUDIT_FIX_V1 (A7) — «Календарь записи» только ролям, которым сервер
+// отдаёт сетку (calendar.js BOOK_ROLES); медсестра/касса/лаборатория с
+// картотекой больше не видят вкладку, которая у них пустая.
+test('LIVE_AUDIT_FIX_V1: календарь записи — admin/registrar/doctor/callcenter; медсестре, кассе, лаборатории — нет', () => {
+    const calSrc = fs.readFileSync(path.resolve(HERE, '..', '..', '..', '..', 'server', 'services', 'rpc', 'calendar.js'), 'utf8');
+    assert.ok(calSrc.includes("const BOOK_ROLES = [" + perms.CALENDAR_ROLES.map((r) => "'" + r + "'").join(', ') + '];'), 'роли календаря разошлись с сервером');
+    try {
+        for (const [code, want] of [['registrar', true], ['doctor', true], ['callcenter', true], ['nurse', false], ['cashier', false], ['lab', false]]) {
+            perms.setEffectiveFromRole(role(code, ['patients']));
+            perms.setActorRoles([code]);
+            assert.equal(perms.isModuleAllowed('appointments'), want, code + ': вкладка календаря');
+            assert.equal(perms.isRouteAllowed('appointments'), want, code + ': маршрут календаря');
+        }
+    } finally {
+        perms.setActorRoles([]);
+        perms.setFullAccess();
+    }
+});

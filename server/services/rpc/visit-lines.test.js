@@ -98,3 +98,21 @@ test('visit_set_referral_source: стойка ставит и снимает и�
   call('visit_set_referral_source', db, { visit_id: 40, referral_source_id: null }, REG);
   assert.equal(db.prepare('SELECT referral_source_id r FROM visits WHERE id = 40').get().r, null);
 });
+
+test('LIVE_AUDIT_FIX_V1: ensure_visit медсестре закрыт — пустого визита она не заведёт', async () => {
+  const db = freshDb();
+  const before = db.prepare('SELECT COUNT(*) c FROM visits').get().c;
+  await assert.rejects(() => call('ensure_visit', db, { patient_id: 1, date: '2026-10-01' }, NURSE), (e) => e.status === 403);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM visits').get().c, before);
+  const ok = await call('ensure_visit', db, { patient_id: 1, date: '2026-10-01' }, DOC);
+  assert.equal(ok.created, true, 'врачу ensure_visit по-прежнему открыт');
+});
+
+test('LIVE_AUDIT_FIX_V1 (A6): calendar_book ставит источник направления новой записи; несуществующий — отказ', async () => {
+  const db = freshDb();
+  db.prepare("INSERT INTO referral_sources (id, name) VALUES (5, 'Каримов')").run();
+  const start = new Date(Date.now() + 3 * 86400000); start.setUTCHours(6, 0, 0, 0);
+  const out = await call('calendar_book', db, { patient_id: 1, start: start.toISOString(), referral_source_id: 5 }, REG);
+  assert.equal(db.prepare('SELECT referral_source_id r FROM visits WHERE id = ?').get(out.visit.id).r, 5);
+  await assert.rejects(() => call('calendar_book', db, { patient_id: 1, start: new Date(start.getTime() + 3600000).toISOString(), referral_source_id: 99 }, REG), /referral source not found/);
+});

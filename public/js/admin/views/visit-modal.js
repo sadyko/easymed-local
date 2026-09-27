@@ -25,6 +25,7 @@ import { printableSheet } from './doc-settings.js?v=noqr1';   // must match ever
 // Переезд на другой день и возврат отменённой записи в «записан» проходили
 // мимо проверки. Расписание визита меняет теперь только calendar_book.
 import { bookVisit, setVisitStatus as bookStatus } from './visit-booking.js';
+import { lineIdentity, linePerformer, sameLine, isConsultPick } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация из каталога, исполнитель
 
 let active = null;
 
@@ -1060,30 +1061,37 @@ async function voidDispensedItem(row, state, onReload) {
     }
 }
 
-async function addServiceFromPicker(state, pick, onReload) {
+// LIVE_AUDIT_FIX_V1 — onPick каталога: консультация врача ('c|врач|тип')
+// ложится строкой service_id NULL + consultation_type_id (как в кабинете
+// врача), а не 'c|7|3' в service_id (внешний ключ отказывал). Любой отказ —
+// ИСКЛЮЧЕНИЕМ: каталог (attachCartToVisit) считает по нему, что легло, и не
+// говорит «Услуга добавлена к визиту» после провала.
+export async function addServiceFromPicker(state, pick, onReload) {
     const { service, doctor, startISO, price_tier, package: pkg } = pick || {};
+    const fail = (msg) => { throw new Error(msg); };
     // The visit day is over — refuse even if the picker was opened earlier.
-    if (isVisitEnded(state.visit)) { toast(VISIT_ENDED_MSG, 'fail'); return; }
-    // Reject duplicates — the same service can't be attached to the same
-    // visit twice. The picker may close before this check; we surface the
-    // reason with a toast.
-    if ((state.services || []).some(s => s.service_id === service.id)) {
-        toast(`"${service.name}" is already in this visit.`, 'fail');
-        return;
+    if (isVisitEnded(state.visit)) fail(VISIT_ENDED_MSG);
+    const ident = lineIdentity(service);
+    if (!ident) fail(tr('Строка без услуги — выберите услугу из каталога.'));
+    const performer = linePerformer(service, doctor && doctor.id, null);
+    // Reject duplicates — the same service can't be attached to the same visit twice.
+    if ((state.services || []).some(s => sameLine(s, service, performer))) {
+        fail(`"${service.name}" is already in this visit.`);
     }
     const price = Number(service.price || 0);
     const { error } = await insertVisitServiceRow({
         visit_id:     state.visit.id,
-        service_id:   service.id,
-        doctor_id:    doctor?.id || null,
+        service_id:   ident.service_id,
+        consultation_type_id: ident.consultation_type_id,
+        doctor_id:    performer,
         quantity:     1,
         unit_price:   price,
         total:        price,
         scheduled_at: startISO || null,
-        price_tier:   price_tier || null,   // VISIT_TIER_PRICING_V1 — quoted by the picker for this patient
-        package_id:   pkg && pkg.id ? pkg.id : null,   // PACKAGES_V1 — строка из пакета каталога
+        price_tier:   isConsultPick(service) ? null : (price_tier || null),   // VISIT_TIER_PRICING_V1 — quoted by the picker for this patient
+        package_id:   !isConsultPick(service) && pkg && pkg.id ? pkg.id : null,   // PACKAGES_V1 — строка из пакета каталога
     });
-    if (error) { toast(error.message, 'fail'); return; }
+    if (error) fail(error.message || String(error));
     await activateVisitIfPending(state);
     await logPatientActivity({
         patientId:   state.visit?.patient_id || state.patient?.id,
@@ -1095,7 +1103,6 @@ async function addServiceFromPicker(state, pick, onReload) {
         summary:     `Added "${service.name}"${doctor ? ` — ${doctor.full_name || doctor.name}` : ''}${startISO ? ` · ${formatDateTime(startISO)}` : ''}`,
         detail:      { price, doctor_id: doctor?.id || null, scheduled_at: startISO || null },
     });
-    toast(`Added: ${service.name}`);
     onReload();
 }
 

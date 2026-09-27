@@ -30,7 +30,12 @@ export class RpcError extends Error {
 // дверью, что и регистратура (ensure_visit + book). Прежде «Сохранить и
 // записать» писало только услугу и дату, и визита не появлялось вовсе —
 // оператору эта дверь была не нужна, а пациент оставался без слота.
-const ENSURE_ROLES = ['admin', 'registrar', 'doctor', 'nurse', 'callcenter'];
+//
+// LIVE_AUDIT_FIX_V1 — медсестры в списке больше нет. Строку визита она вставить
+// не может (visit_services.insert — admin/registrar/doctor), поэтому ensure_visit
+// давал ей только ПУСТОЙ визит перед отказом на первой строке. Ни одна её дверь
+// визит не заводит (мастер и «Добавить услуги» ей не показываются).
+const ENSURE_ROLES = ['admin', 'registrar', 'doctor', 'callcenter'];
 
 function requireRole(user, allowed) {
   // MULTI_ROLE_SERVER_V1 — extras count too, not the primary role alone.

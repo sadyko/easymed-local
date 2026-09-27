@@ -4,6 +4,13 @@
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
   // LIVE_AUDIT_FIX_V1 (2026-09-27) — строки исправлений живого аудита
+  "Sample collected": {"en":"Sample collected","ru":"Проба взята","uz":"Namuna olindi"},
+  "Results entered": {"en":"Results entered","ru":"Результаты внесены","uz":"Natijalar kiritildi"},
+  "Хирургия оформляется на госпитализацию: сначала положите пациента на койку, иначе счёт за операцию окажется вне истории лечения.": {"en":"Surgery is booked under a hospital stay: admit the patient to a bed first, otherwise the surgery bill ends up outside the case history.","ru":"Хирургия оформляется на госпитализацию: сначала положите пациента на койку, иначе счёт за операцию окажется вне истории лечения.","uz":"Jarrohlik statsionarga yotqizish orqali rasmiylashtiriladi: avval bemorni koykaga yotqizing, aks holda operatsiya hisobi kasallik tarixidan tashqarida qoladi."},
+  "Заменять и убирать услуги может регистратура или администратор.": {"en":"Services can be replaced or removed by the front desk or an administrator.","ru":"Заменять и убирать услуги может регистратура или администратор.","uz":"Xizmatlarni ro'yxatxona yoki administrator almashtirishi va olib tashlashi mumkin."},
+  "Приём не привязан к визиту — услугу добавить некуда.": {"en":"The appointment is not linked to a visit — there is nowhere to add the service.","ru":"Приём не привязан к визиту — услугу добавить некуда.","uz":"Qabul tashrifga bog'lanmagan — xizmatni qo'shadigan joy yo'q."},
+  "сервер не вернул строку": {"en":"the server returned no row","ru":"сервер не вернул строку","uz":"server qatorni qaytarmadi"},
+  "Ни одна услуга не записалась — запись отменена.": {"en":"No service was saved — the booking was cancelled.","ru":"Ни одна услуга не записалась — запись отменена.","uz":"Birorta ham xizmat saqlanmadi — yozuv bekor qilindi."},
   "Единица товара в каталоге": {"en":"Item unit in the catalogue","ru":"Единица товара в каталоге","uz":"Katalogdagi tovar birligi"},
   "Единица товара не сохранена: {msg}": {"en":"The item unit was not saved: {msg}","ru":"Единица товара не сохранена: {msg}","uz":"Tovar birligi saqlanmadi: {msg}"},
   "Услуга не снята: {msg}": {"en":"The service was not removed: {msg}","ru":"Услуга не снята: {msg}","uz":"Xizmat olib tashlanmadi: {msg}"},

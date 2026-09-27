@@ -82,7 +82,9 @@ test('addOwnService пишет строку в ТЕКУЩИЙ приём (visit_
 });
 
 test('исполнитель строки: выбранный в смете врач → врач консультации → врач приёма', () => {
-    assert.match(addOwn(), /doctor_id:\s*doctor\?\.id \|\| svc\.__consultDoctorId \|\| ctx\.patient\?\.__service\?\.doctorId \|\| null/,
+    // LIVE_AUDIT_FIX_V1 (C3) — порядок тот же, но правило одно на все двери
+    // (visit-line-row.js linePerformer): врач приёма — только врачебной услуге.
+    assert.match(addOwn(), /doctor_id:\s*linePerformer\(svc, doctor\?\.id, ctx\.patient\?\.__service\?\.doctorId\)/,
         'врач строки берётся не в этом порядке: выбранный в смете исполнитель должен быть сильнее врача приёма, а приём — сильнее пустоты');
 });
 

@@ -1018,7 +1018,12 @@ export function isModuleAllowed(navId) {
     // и календарь записи. Тот же приём и тот же довод, что у 'admissions' →
     // 'beds' и 'cashier-shifts' → 'cashier' выше. Сервер отвечает второй раз и
     // строже: запись пишется в visits с обычной проверкой прав.
-    if (navId === 'appointments') return _effective.has('appointments') || _effective.has('patients');
+    //
+    // LIVE_AUDIT_FIX_V1 (A7) — и только ролям, которым сервер календарь ОТДАЁТ:
+    // calendar_windows / calendar_slots / calendar_book требуют BOOK_ROLES
+    // (server/services/rpc/calendar.js). Медсестра, касса и лаборатория с
+    // картотекой видели вкладку и пустую сетку с «Не загрузилось».
+    if (navId === 'appointments') return (_effective.has('appointments') || _effective.has('patients')) && hasActorRole(CALENDAR_ROLES);
     // CASHIER_HEAD_KEY_V1 — Старший кассир is its OWN explicit grant (was derived
     // from Cashier: Admin, which made every delete-level cashier a head cashier).
     if (navId === 'cashier-head') return _effective.has('cashier-head');
@@ -1290,3 +1295,7 @@ export function canWriteServiceTemplates() {
     const lvl = grantLevel('settings.service_packages');
     return lvl === 'edit' || lvl === 'delete';
 }
+
+// LIVE_AUDIT_FIX_V1 (A7) — зеркало BOOK_ROLES (server/services/rpc/calendar.js):
+// кому сервер отдаёт сетку календаря записи.
+export const CALENDAR_ROLES = Object.freeze(['admin', 'registrar', 'doctor', 'callcenter']);

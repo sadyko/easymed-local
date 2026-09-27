@@ -295,6 +295,9 @@ export function queueBoard(db, args, user) {
      WHERE vs.queue_no IS NOT NULL
        AND vs.queue_key IS NOT NULL
        AND vs.queue_key LIKE ?
+       -- LIVE_AUDIT_FIX_V1 (C7) — отменённый / несостоявшийся визит в очереди
+       -- не стоит: пациента не будет, а доска показывала его номер.
+       AND v.status NOT IN ('cancelled', 'no_show')
      ORDER BY vs.queue_no, vs.id
   `).all('%:' + day);
 

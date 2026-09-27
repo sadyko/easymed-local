@@ -790,3 +790,11 @@ test('LIVE_AUDIT_FIX_V1: врачу мастер не обещает шабло�
     perms.setActorRoles([]);
   }
 });
+
+test('LIVE_AUDIT_FIX_V1 (A5): мастер визита — хирургия без койки отказывает ДО визита', async () => {
+  await openWizardReadyWith((db) => { db.prepare("UPDATE services SET type = 'other' WHERE id = 21").run(); });
+  await pressUntilCreate();
+  assert.ok(TOASTS.some((t) => /положите пациента на койку/.test(t)), 'отказ не сказан: ' + JSON.stringify(TOASTS));
+  assert.ok(!RPC.some((c) => c.name === 'ensure_visit'), 'визит заведён до отказа');
+  assert.equal(countVisits(), 0);
+});

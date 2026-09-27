@@ -53,6 +53,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 // CRM_REAL_BOOKING_V1 — ответ ensure_visit читается ОДНИМ кодом на три двери:
 // у него три исхода, и визит есть во всех трёх (см. ensure-visit-answer.js).
 import { readEnsureVisit } from '../ensure-visit-answer.js';
+import { lineIdentity, isConsultPick, consultDoctorId, surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация из каталога
 
 const isPosInt = (v) => {
     const n = Number(v);
@@ -121,14 +122,36 @@ export function walkInRoleRefusal(actor) {
  */
 function validate(patientId, items) {
     if (!isPosInt(patientId)) throw new Error(tr('Не выбран пациент — регистрировать некого.'));
-    if (!items.length) throw new Error(tr('Добавьте хотя бы одну услугу.'));
+    const refusal = walkInLinesRefusal(items);
+    if (refusal) throw new Error(refusal);
+}
+
+/**
+ * LIVE_AUDIT_FIX_V1 — ПРОВЕРКА СТРОК БЕЗ ПАЦИЕНТА: текст отказа или null.
+ * Быстрая регистрация зовёт её ДО заведения карты (иначе «Строка без услуги»
+ * приходила уже после того, как карта пациента легла в базу).
+ *
+ * Консультация врача из каталога ('c|<врач>|<тип>', __consult) — законная
+ * строка: service_id у неё нет, есть consultation_type_id и врач (visit-line-row.js).
+ */
+export function walkInLinesRefusal(lines) {
+    const items = (Array.isArray(lines) ? lines : []).filter(Boolean);
+    if (!items.length) return tr('Добавьте хотя бы одну услугу.');
     for (const line of items) {
         const svc = line && line.service;
-        if (!svc || !isPosInt(svc.id)) throw new Error(tr('Строка без услуги — выберите услугу из каталога.'));
-        if (svc.requires_doctor && !isPosInt(line.doctorId)) {
-            throw new Error(trf('Укажите врача для услуги «{name}»', { name: svc.name || '' }));
+        if (!lineIdentity(svc)) return tr('Строка без услуги — выберите услугу из каталога.');
+        const doctorId = lineDoctorOf(line);
+        if ((svc.requires_doctor || isConsultPick(svc)) && !isPosInt(doctorId)) {
+            return trf('Укажите врача для услуги «{name}»', { name: svc.name || '' });
         }
     }
+    return null;
+}
+
+// Врач строки: выбранный в таблице, у консультации — её собственный врач.
+function lineDoctorOf(line) {
+    if (isPosInt(line && line.doctorId)) return Number(line.doctorId);
+    return consultDoctorId(line && line.service);
 }
 
 /**
@@ -165,6 +188,9 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
     const refusal = walkInRoleRefusal(actorRole);
     if (refusal) throw new Error(refusal);
     validate(pid, items);
+    // LIVE_AUDIT_FIX_V1 (A5) — хирургия без койки: отказ ДО визита.
+    const noBed = await surgeryBedRefusal(pid, items.map((l) => l.service));
+    if (noBed) throw new Error(noBed);
 
     // 1. Филиал — тот же первый действующий, что берёт мастер визита.
     const { data: branchRows } = await supabase.from('branches').select('id').eq('active', true).order('id').limit(1);
@@ -179,8 +205,8 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
     //    и только потом идёт приём: взяв врача у items[0], визит уходил бы в
     //    базу без врача, хотя приём в нём есть, — и в дне врача такого пациента
     //    не было бы вовсе, хотя он уже стоит у его двери.
-    const head = items.find((l) => isPosInt(l.doctorId));
-    const headDoctor = head ? Number(head.doctorId) : null;
+    const head = items.find((l) => isPosInt(lineDoctorOf(l)));
+    const headDoctor = head ? lineDoctorOf(head) : null;
     const { data: ev, error: evErr } = await supabase.rpc('ensure_visit', {
         patient_id: pid,
         date: iso,
@@ -204,7 +230,8 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
 
     // 3. Тариф визита — до вставки строк: слово тарифа пишется В САМУЮ СТРОКУ,
     //    и касса потом считает цену по нему.
-    const serviceIds = [...new Set(items.map((l) => Number(l.service.id)))];
+    // Консультация тарифа не спрашивает: её цена — цена врача по типу приёма.
+    const serviceIds = [...new Set(items.filter((l) => !isConsultPick(l.service)).map((l) => Number(l.service.id)))];
     const { quotes, quoteError } = await quoteTiers(pid, serviceIds, visit.id);
 
     // 4. Строки услуг. Провал вставки — наружу: половина визита лучше, чем счёт
@@ -219,28 +246,32 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
     };
     for (const line of items) {
         const svc = line.service;
-        const q = quotes[svc.id] != null ? quotes[svc.id] : quotes[String(svc.id)];
+        const consult = isConsultPick(svc);
+        const ident = lineIdentity(svc);
+        const q = consult ? null : (quotes[svc.id] != null ? quotes[svc.id] : quotes[String(svc.id)]);
         const quoted = q && Number.isFinite(Number(q.price)) ? Number(q.price) : null;
         const unitPrice = quoted === null ? (Number(svc.price) || 0) : quoted;
         const tier = q && (q.tier === 'secondary' || q.tier === 'repeat') ? q.tier : 'primary';
         const row = {
             visit_id: visit.id,
-            service_id: Number(svc.id),
+            // LIVE_AUDIT_FIX_V1 — консультация: service_id NULL + consultation_type_id.
+            service_id: ident.service_id,
             quantity: 1,
             unit_price: unitPrice,
             total: unitPrice,
             status: 'added',
-            price_tier: tier,
         };
-        const doctorId = isPosInt(line.doctorId) ? Number(line.doctorId) : null;
+        if (consult) row.consultation_type_id = ident.consultation_type_id;
+        else row.price_tier = tier;
+        const doctorId = lineDoctorOf(line);
         if (doctorId) row.doctor_id = doctorId;
         // PACKAGES_V1 — строка из пакета: скидку пакета и его срок считает сервер.
-        if (isPosInt(line.packageId)) row.package_id = Number(line.packageId);
+        if (!consult && isPosInt(line.packageId)) row.package_id = Number(line.packageId);
         if (isPosInt(createdBy)) row.created_by = Number(createdBy);
         const res = await supabase.from('visit_services').insert(row).select().single();
         if (res.error) throw failAfterVisit(trf('Услуга «{name}»: {msg}', { name: svc.name || '', msg: msgOf(res.error) }));
         vsIds.push(res.data.id);
-        saved.push({ visitServiceId: res.data.id, serviceId: Number(svc.id), doctorId, unitPrice, tier });
+        saved.push({ visitServiceId: res.data.id, serviceId: ident.service_id, consultationTypeId: ident.consultation_type_id, doctorId, unitPrice, tier: consult ? null : tier });
     }
 
     // 5. Счёт пациенту. discount_amount = 0 — см. шапку: процент категории

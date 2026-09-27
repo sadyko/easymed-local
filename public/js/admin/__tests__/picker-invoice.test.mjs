@@ -636,3 +636,29 @@ test('LIVE_AUDIT_FIX_V1: окно счёта — строка «Add» с цен�
   assert.ok(!/from\('visit_services'\)\.delete\(\)/.test(src), 'снятие строки снова мимо сервера');
   assert.match(src, /r\.unit_price != null \? r\.unit_price/, 'окно снова показывает цену каталога вместо цены строки');
 });
+
+// ─── LIVE_AUDIT_FIX_V1 (A4) — окно визита: консультация из каталога ─────────
+test('LIVE_AUDIT_FIX_V1: окно визита — консультация ложится consultation_type_id, отказ бросается (каталог не скажет «добавлено»)', async () => {
+  seed();
+  DB.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (7,'doc','x','Петров','doctor',1)").run();
+  DB.prepare("INSERT INTO consultation_types (id, name, price) VALUES (4, 'Первичный приём', 120000)").run();
+  DB.prepare('DELETE FROM visit_services').run();
+  const state = { visit: DB.prepare('SELECT * FROM visits WHERE id = 40').get(), patient: { id: 3 }, services: [] };
+  const consult = { id: 'c|7|4', name: 'Первичный приём', price: 120000, __consult: true, consultation_type_id: 4, __consultDoctorId: 7 };
+  await VM.addServiceFromPicker(state, { service: consult, doctor: null }, () => {});
+  const row = DB.prepare('SELECT service_id, consultation_type_id, doctor_id FROM visit_services WHERE visit_id = 40').get();
+  assert.deepEqual({ ...row }, { service_id: null, consultation_type_id: 4, doctor_id: 7 });
+  // отказ — исключением: окно визита, закрытое для записи строк, не «добавляет» молча
+  state.services = DB.prepare('SELECT * FROM visit_services WHERE visit_id = 40').all();
+  await assert.rejects(() => VM.addServiceFromPicker(state, { service: consult, doctor: null }, () => {}), /already in this visit/);
+  USER = { id: 1, role: 'cashier', extra_roles: [] };
+  try {
+    await assert.rejects(() => VM.addServiceFromPicker({ ...state, services: [] }, { service: { id: 21, name: 'МРТ', price: 900000 }, doctor: null }, () => {}));
+  } finally { USER = { id: 1, role: 'registrar', extra_roles: [] }; }
+  // каскад каталога ловит отказ, а итог называет причину
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../views/service-picker-modal.js', import.meta.url), 'utf8');
+  assert.match(src, /const pickSafely = \(payload\) =>/);
+  assert.ok(!/if \(!calculator\) onPick\(payload\)/.test(src), 'каскад снова зовёт onPick без перехвата отказа');
+  assert.match(src, /if \(!firstErr\) firstErr =/);
+});

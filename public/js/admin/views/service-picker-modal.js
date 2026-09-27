@@ -36,6 +36,7 @@ import { h, Icon, clear, toast, Avatar, initials, avColor } from '../ui.js';
 import { loadPatientsPaged, insertRow, currentUser } from '../data.js';
 import { logPatientActivity } from './activity-log.js';   // BOOK_WIZARD_V1
 import { canWriteServiceTemplates } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — шаблоны сметы
+import { surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация, хирургия без койки
 import { gw } from '../gateway.js';
 import { clinicFlags } from '../clinic-flags.js';   // CUSTOM_CLINIC_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';   // insurance/B2B: print statistics act
@@ -332,6 +333,13 @@ export function openServicePickerModal({
         return payload;
     }
 
+    // LIVE_AUDIT_FIX_V1 — onPick окна-хозяина бросает при отказе (строка не
+    // легла). В каскаде ответа не ждут, поэтому отказ говорится тостом, а не
+    // теряется необработанным исключением.
+    const pickSafely = (payload) => Promise.resolve()
+        .then(() => onPick(payload))
+        .catch((e) => toast(trf('Услуга не добавлена: {msg}', { msg: (e && e.message) || e }), 'fail'));
+
     // "Add" — stages the current selection in the running list at the top of
     // the picker. Fires onPick so the caller can mirror the add into its own
     // state (e.g. the Create Visit dialog accumulates them into an array;
@@ -343,7 +351,7 @@ export function openServicePickerModal({
         onclick: () => {
             const payload = buildPayload();
             if (!payload) { toast('Pick a service.', 'fail'); return; }
-            if (!calculator) onPick(payload);
+            if (!calculator) pickSafely(payload);   // LIVE_AUDIT_FIX_V1
             state.added.push(payload);
             state.serviceId     = null;
             state.svcSearch     = '';
@@ -369,7 +377,7 @@ export function openServicePickerModal({
         onclick: () => {
             const payload = buildPayload();
             if (payload) {
-                if (!calculator) onPick(payload);
+                if (!calculator) pickSafely(payload);   // LIVE_AUDIT_FIX_V1
                 state.added.push(payload);
             } else if (state.added.length === 0) {
                 toast('Pick a service first.', 'fail');
@@ -2323,7 +2331,7 @@ export function openServicePickerModal({
         if (!state.added.length || typeof onPick !== 'function') return;
         const rows = state.added.slice();
         if (btn) { btn.disabled = true; btn.textContent = tr('Добавляем…'); }
-        let added = 0, failed = 0;
+        let added = 0, failed = 0, firstErr = '';   // LIVE_AUDIT_FIX_V1 — причина первого отказа
         const landed = [];   // CRM_LINKS_V1 — услуги, реально легшие в визит
         for (const a of rows) {
             try {
@@ -2332,6 +2340,7 @@ export function openServicePickerModal({
                 landed.push(a.service.id);
             } catch (e) {
                 failed++;
+                if (!firstErr) firstErr = ((a.service && a.service.name) ? a.service.name + ': ' : '') + ((e && e.message) || String(e));
                 console.warn('[picker attach]', (a.service && a.service.name) || '?', e && e.message);
             }
         }
@@ -2340,8 +2349,8 @@ export function openServicePickerModal({
         // в список окна-хозяина, и обещать «добавлено к визиту» нельзя.
         if (added && !failed)      toast(!patient ? 'Услуги добавлены в список.'
                                         : added === 1 ? 'Услуга добавлена к визиту.' : trf('Добавлено услуг: {n}.', { n: added }));
-        else if (added && failed)  toast(trf('Добавлено {ok}, не удалось {bad} — проверьте список.', { ok: added, bad: failed }), 'warn');
-        else                       { toast('Не удалось добавить услуги.', 'fail'); return; }
+        else if (added && failed)  toast(trf('Добавлено {ok}, не удалось {bad} — проверьте список.', { ok: added, bad: failed }) + (firstErr ? ' ' + firstErr : ''), 'warn');
+        else                       { toast(tr('Не удалось добавить услуги.') + (firstErr ? ' ' + firstErr : ''), 'fail'); return; }
         // ЗДЕСЬ СТОЯЛО closeCrmRequests(landed) — «услугу привязали, значит
         // пациент дошёл». CRM_REAL_BOOKING_V1 (2026-09-21): не значит. Привязка
         // услуги к визиту это намерение, а приход доказывают деньги по счёту
@@ -2913,6 +2922,21 @@ export function openServicePickerModal({
         return root;
     }
 
+    // LIVE_AUDIT_FIX_V1 (A6) — источник направления ВИЗИТА из шага «Направление».
+    // Строке услуги его не записать (колонки visit_services.referral_source_id
+    // нет — значение молча выбрасывалось), а направивший — признак визита
+    // (так считает и отчёт «Рефералы»). Берётся первый выбранный партнёр: общий
+    // «для всех услуг» или первой услуги, у которой он указан.
+    function visitReferralSourceId() {
+        const R = wiz.referral || {};
+        const per = R.per || {};
+        for (let i = 0; i < state.added.length; i++) {
+            const id = per[i] && per[i].sourceId;
+            if (id) return Number(id) || null;
+        }
+        return R.globalSrc ? (Number(R.globalSrc) || null) : null;
+    }
+
     // ---- save ----
     async function wizSave(btn) {
         const p = refs.attachedPatient;
@@ -2961,6 +2985,10 @@ export function openServicePickerModal({
             // (он называет врача и занятое время) и предлагается экстренная
             // запись с ОБЯЗАТЕЛЬНОЙ причиной — то же действие, что в календаре.
             const _explicit = !!(head.startISO || scheduledISO);
+            // LIVE_AUDIT_FIX_V1 (A5) — хирургия без койки: отказ ДО записи, а не
+            // на строке услуги, когда визит уже заведён.
+            const noBed = await surgeryBedRefusal(p.id, state.added.map(a => a.service));
+            if (noBed) { toast(noBed, 'fail'); if (btn && btn.isConnected) btn.disabled = false; return; }
             const booked = await calendarBookOrAsk({
                 patient_id:       p.id,
                 branch_id:        (p._raw && p._raw.branch_id) || p.branch_id || null,
@@ -2970,6 +2998,7 @@ export function openServicePickerModal({
                 start:            visitDate,
                 duration_minutes: totalDur,
                 status:           'scheduled',
+                referral_source_id: visitReferralSourceId(),   // LIVE_AUDIT_FIX_V1 (A6) — источник направления — на визите
             }, { autoTime: !_explicit });
             if (!booked) {   // отказались от экстренной записи — не создано НИЧЕГО
                 toast(tr('Запись не сохранена — время занято.'), 'info');
@@ -2991,7 +3020,6 @@ export function openServicePickerModal({
                     unit_price:   unitPrice,
                     total:        unitPrice,
                     scheduled_at: a.startISO || scheduledISO || null,
-                    referral_source_id: ((wiz.referral || {}).per || {})[state.added.indexOf(a)] && wiz.referral.per[state.added.indexOf(a)].sourceId || null,   // SVC_REFERRAL_V1
                     price_tier:   isConsult ? null : priceTierOf(a),   // VISIT_TIER_PRICING_V1 — the till re-prices by this word
                     // PACKAGES_V1 — скидку пакета считает счёт. Ревью I-3: пакет,
                     // не действующий в местный день визита, не ставится — сервер
@@ -3014,6 +3042,15 @@ export function openServicePickerModal({
             // CATALOG_WIZARD_V2 — a partially-recorded visit must not proceed to
             // billing: the invoice/balance math would diverge from what landed.
             if (vsRows.length !== state.added.length) {
+                // LIVE_AUDIT_FIX_V1 — не легла НИ ОДНА строка: запись, только что
+                // заведённая calendar_book, пуста — убираем её, а не оставляем
+                // занятый слот без услуг.
+                if (!vsRows.length) {
+                    try { await supabase.rpc('discard_empty_visit', { visit_id: visit.id }); } catch (_) {}
+                    toast(tr('Ни одна услуга не записалась — запись отменена.'), 'fail');
+                    if (btn && btn.isConnected) btn.disabled = false;
+                    return;
+                }
                 toast(trf('Записались не все услуги ({got} из {want}) — счёт НЕ выставлен. Откройте визит и добавьте услуги вручную.', { got: vsRows.length, want: state.added.length }), 'fail');
                 closePicker();
                 if (typeof onBooked === 'function') { try { onBooked(bookedSummary(visit, vsRows)); } catch (_) {} }
