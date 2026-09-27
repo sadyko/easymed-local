@@ -115,7 +115,10 @@ test('«Продать карту»: без покупателя не отпра
     await tick();
     const sell = calls.find((c) => c[0] === 'sell_card');
     assert.ok(sell, 'sell_card вызван');
-    assert.deepStrictEqual(sell[1], { kind: 'certificate', amount: 250000, method: 'acquiring', patient_id: 5 });
+    // V3120_FIX — плюс ключ повтора: двойной щелчок не продаёт карту дважды.
+    const { idempotency_key: key, ...args } = sell[1];
+    assert.match(key, /^[A-Za-z0-9_-]{8,80}$/);
+    assert.deepStrictEqual(args, { kind: 'certificate', amount: 250000, method: 'acquiring', patient_id: 5 });
 });
 
 test('список карт: «без оплаты» без возврата; проданная с остатком — «Вернуть остаток» → refund_card_sale', async () => {

@@ -2082,6 +2082,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                 const num = (res && res.deposit && res.deposit.deposit_number) || '';
                 m.close();
                 toast(trf('Депозит {no} на {sum} сум отправлен в кассу.', { no: num, sum: fmtPrice(amount) }), 'ok');
+                import('./receipt-print.js?v=rp1').then((rp) => rp.printSlip(printableSheet, { kind: 'deposit', deposit: (res && res.deposit) || { deposit_number: num, amount, status: 'pending' }, patient })).catch(() => {});   // V3120_FIX — квитанция: депозит ждёт оплаты в кассе
                 reload();
             } catch (e) {
                 toast(trf('Не удалось создать депозит: {msg}', { msg: (e && e.message) || e }), 'fail');

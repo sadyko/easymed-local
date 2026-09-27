@@ -383,7 +383,21 @@ export function admissionTransition(db, args, user, opts = {}) {
     if (e instanceof TransitionError) throw new RpcError(explainRefusal(from, to), 400);
     throw e;
   }
-  if (from === to) return { admission: adm, from, to };   // идемпотентный повтор
+  // V3120_FIX (M1) — идемпотентный повтор — ТОЖЕ за проверкой роли. Раньше
+  // повтор возвращался раньше неё, и повторную «отмену» проводил кто угодно (а
+  // вызывающий RPC после этого ещё и писал: койка в уборку, строка в журнал).
+  // Право на повтор — право на любой шаг, ведущий в это состояние. Вызывающий
+  // узнаёт повтор по `repeat` и обязан ничего не писать.
+  if (from === to) {
+    const allowed = [...new Set(Object.entries(TRANSITION_ROLES)
+      .filter(([k]) => k.endsWith('→' + to)).flatMap(([, roles]) => roles))];
+    const admittingRepeat = !!(opts && opts.admittingDoctorOk) && isAdmittingDoctor(adm, user)
+      && (to === 'examined' || to === 'active');
+    if (allowed.length && !admittingRepeat && !hasAnyRole(user, allowed)) {
+      throw new RpcError(`Это действие недоступно вашей роли. Это делает: ${allowed.map(roleTitle).join(', ')}.`, 403);
+    }
+    return { admission: adm, from, to, repeat: true };   // идемпотентный повтор
+  }
 
   // 2. Вправе ли этот человек.
   //

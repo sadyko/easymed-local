@@ -16,13 +16,14 @@
 // (rpc/deposits.js), выручкой депозит не становится.
 
 import { supabase } from '../../supabase.js';
-import { h, Icon, clear, toast, Tag, StatusTag, Avatar, field, fmtDateTime, initials, avColor } from '../ui.js';
+import { h, Icon, clear, toast, Tag, StatusTag, Avatar, field, fmtDate, fmtDateTime, initials, avColor } from '../ui.js';   // V3120_FIX — fmtDate: «История» падала на ReferenceError
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { printableSheet } from './doc-settings.js?v=noqr1';
 import { moneyDisplay, moneyNumber } from '../../shared/money-input.js?v=mi2';   // MONEY_INPUT_V2
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';   // DEBT_FLOW_V1 — «пациент ещё на койке» в окне отмены
-import { loadInvoiceLines, performersByItem, packagesByItem, packageItemName } from './receipt-print.js?v=rp1';   // INVOICE_QUEUE_V1 — тот же сбор талонов, что у чека   // CASH_CHECK_PRINT_V1 — бланк «Кассовый чек» из Настройки → Документы
+import { loadInvoiceLines, performersByItem, packagesByItem, packageItemName, dobAge, paymentLines, printInvoiceCheck, invoiceSheetData, printSlip } from './receipt-print.js?v=rp1';   // INVOICE_QUEUE_V1 — тот же сбор талонов, что у чека   // CASH_CHECK_PRINT_V1 — бланк «Кассовый чек» из Настройки → Документы   // V3120_FIX — чек по платежам, счёт и квитанция одной сборкой
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
+import { dateNumeric } from '../../shared/date-words.js';   // V3120_FIX — дата чека не зависит от языка ОС
 import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANCE_V1
 import { searchTokens } from '../patient-search.js';   // CARD_SALE_V1 — поиск покупателя карты
 
@@ -44,16 +45,17 @@ const DEP_METHODS = [['cash', 'Наличные'], ['card', 'Карта'], ['acq
 // RECEIPT_PATIENT_ID_V1 — «14.03.1984 · 42 г.» одной строкой. Возраст берём на
 // момент печати; пустая/битая дата не должна печатать «NaN г.».
 const GENDER_RU = { male: 'Мужской', female: 'Женский', other: '—' };
-function fmtDobAge(iso) {
-    if (!iso) return '';
-    const d = new Date(String(iso).slice(0, 10));
-    if (Number.isNaN(d.getTime())) return '';
-    const t = new Date();
-    let age = t.getFullYear() - d.getFullYear();
-    const m = t.getMonth() - d.getMonth();
-    if (m < 0 || (m === 0 && t.getDate() < d.getDate())) age--;
-    const date = d.toLocaleDateString('ru-RU');
-    return (age >= 0 && age < 130) ? trf('{date} · {age} г.', { date, age }) : date;
+// V3120_FIX — одна функция с перепечаткой (receipt-print.js). Здесь «г.»
+// прогонялось через перевод ИНТЕРФЕЙСА: кассир на узбекском экране получал
+// узбекское слово посреди русского бланка.
+function fmtDobAge(iso) { return dobAge(iso); }
+
+// V3120_FIX — ключ повтора денежной операции: один на открытое окно. Двойной
+// щелчок или повтор после обрыва связи приходит на сервер с тем же ключом, и
+// сервер отвечает прежним результатом, не проводя деньги второй раз.
+function newIdemKey() {
+    try { if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') return globalThis.crypto.randomUUID(); } catch (e) { /* ниже запасной */ }
+    return 'k' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 12);
 }
 
 // REPRINT_DOCS_V1 — A4-счёт по строке кассы (бланк «Счёт» из Настройки →
@@ -63,47 +65,44 @@ async function printInvoiceSheet(inv) {
     try {
         const { data: items } = await supabase.from('invoice_items')
             .select('id, description, quantity, unit_price, total, discount_amount').eq('invoice_id', inv.id);
-        const paid = Number(inv.paid_amount) || 0;
         // INVOICE_QUEUE_V1 — талоны и на СЧЁТЕ, не только на чеке. Пациенту всё
         // равно, какую из двух бумаг ему дали: номер очереди нужен на той, что
         // у него в руках. Сбор общий с чеком (receipt-print.js) и best-effort —
         // пустой список печати не мешает.
         // RECEIPT_DOB_PERFORMER_V1 — очередь и исполнители одним запросом: раньше
         // счёт брал только очередь, поэтому «Исполнитель» на нём не появлялся.
-        const { queue, byItem: perfByItem, packages: pkgByItem = {} } = await loadInvoiceLines(supabase, inv.id);   // PACKAGES_V1 — и пакет позиции
-        /* i18n-exempt-start: данные ПЕЧАТНОГО счёта (бланк) — печатные документы намеренно русские, как METHOD_RU/GENDER_RU в receipt-print.js */
-        printableSheet({ type: 'invoice', idLine: inv.invoice_number || String(inv.id), data: {
-            title: 'Счёт за медицинские услуги',
-            queue,   // INVOICE_QUEUE_V1
-            docNo: inv.invoice_number || String(inv.id),
-            issueDate: 'Дата ' + new Date(inv.created_at || Date.now()).toLocaleDateString('ru-RU'),
-            status: paid >= Number(inv.total_amount) ? 'PAID' : (paid > 0 ? 'PARTIAL' : 'UNPAID'),
-            patient: [
-                ['ФИО', inv.patient_name || '—'],
-                ['Карта №', inv.mrn || '—'],
-                ['Дата рождения', fmtDobAge(inv.date_of_birth) || '—'],
-                ['Телефон', inv.phone || '—'],
-            ],
-            billing: [
-                ['Дата', new Date(inv.created_at || Date.now()).toLocaleDateString('ru-RU')],
-                ['Оплата', inv.methods ? inv.methods.split(',').map(m => METHOD_RU[m] || m).join(', ') : '—'],
-                // COVERAGE_SPLIT_V1 — счёт контрагента: на бланке видно, кому он выставлен.
-                ...(inv.payer_id ? [['Плательщик', inv.payer_name || '—']] : []),
-            ],
-            items: (items || []).map((it, i) => ({
-                name: packageItemName(it.description || 'Услуга', pkgByItem[it.id], it.discount_amount), qty: it.quantity, price: it.unit_price, _alt: i % 2 === 1,
-                ...(perfByItem[it.id] || {}),   // RECEIPT_DOB_PERFORMER_V1
-            })),
-            subtotal: inv.subtotal, total: inv.total_amount, paid,
-        } });
-        /* i18n-exempt-end */
+        const lines = await loadInvoiceLines(supabase, inv.id);
+        // V3120_FIX — та же сборка, что у окна визита и мастера записи: статус
+        // словом (было «PARTIAL»), голая дата (было «Дата Дата …»), «Оплачено» и
+        // «Остаток» ставит сам бланк по paid.
+        const data = invoiceSheetData({
+            inv,
+            items: items || [],
+            patient: { full_name: inv.patient_name, mrn: inv.mrn, date_of_birth: inv.date_of_birth, phone: inv.phone },
+            payerName: inv.payer_id ? (inv.payer_name || '') : '',
+            methods: inv.methods ? String(inv.methods).split(',') : [],
+            lines,
+        });
+        printableSheet({ type: 'invoice', idLine: data.docNo, data });
     } catch (e) {
         console.warn('[cashier] invoice print:', e && e.message);
         toast(trf('Не удалось напечатать счёт: {msg}', { msg: (e && e.message) || e }), 'fail');
     }
 }
 
-async function printFiscalCheck(inv, paidAmt, method) {
+// V3120_FIX (FATAL) — чек называет КАЖДЫЙ платёж этой операции (способ +
+// сумма), «Оплачено» всего по счёту и «Остаток». Раньше сюда приходили сумма и
+// ОДИН способ, а бланк печатал рядом с ним сумму всего счёта: раздельная
+// частичная оплата «100 000 наличными + 50 000 картой» выходила чеком
+// «Наличные 378 001». inv — строка кассы ДО оплаты, поэтому её paid_amount —
+// внесённое раньше. Старый вызов (inv, сумма, способ) понимается как один платёж.
+async function printFiscalCheck(inv, tenders, legacyMethod) {
+    const legacy = !Array.isArray(tenders);
+    const list = legacy ? [{ method: legacyMethod || 'cash', amount: Number(tenders) || 0 }] : tenders;
+    // Старый вызов не знал, снята строка до оплаты или после, — «ранее
+    // оплачено» для него не выводим.
+    const paidBefore = legacy ? 0 : Math.max(0, Number(inv.paid_amount) || 0);
+    const paidNow = list.reduce((a, t) => a + (Number(t.amount) || 0), 0);
     try {
         const { data: items } = await supabase.from('invoice_items')
             .select('id, description, quantity, unit_price, total, discount_amount').eq('invoice_id', inv.id);
@@ -133,7 +132,7 @@ async function printFiscalCheck(inv, paidAmt, method) {
         const u = (window.easymed && window.easymed.state && window.easymed.state.user) || {};
         printableSheet({ type: 'fiscal', idLine: inv.invoice_number || String(inv.id), data: {
             docNo: inv.invoice_number || String(inv.id),
-            date: new Date().toLocaleString('ru-RU').slice(0, 17),
+            date: dateNumeric(new Date(), { withTime: true }),
             patientName: inv.patient_name || '—',
             mrn: inv.mrn || '',
             // RECEIPT_PATIENT_ID_V1 — по чеку сверяют пациента в лаборатории.
@@ -147,8 +146,8 @@ async function printFiscalCheck(inv, paidAmt, method) {
                 ...(perfByItem[it.id] || {}),   // RECEIPT_DOB_PERFORMER_V1
             })),
             subtotal: inv.subtotal, discount: inv.discount_amount,
-            total: inv.total_amount, paid: paidAmt,
-            method: METHOD_RU[method] || method, payMethod: METHOD_RU[method] || method,
+            total: inv.total_amount,
+            payments: paymentLines(list), paidBefore, paid: paidBefore + paidNow,
             queue,   // QUEUE_TICKET_V1 — номера очереди на чеке
         } });
     } catch (e) { console.warn('[cashier] check print:', e && e.message); }
@@ -368,7 +367,7 @@ function kpiTiles(summary) {
         h('div', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' } }, label),
         h('div', { style: { marginTop: '4px', display: 'flex', alignItems: 'baseline', gap: '5px' } },
             h('span', { class: 'num', style: { fontSize: '20px', fontWeight: 800, color: 'var(--ink-900)', fontVariantNumeric: 'tabular-nums' } }, value),
-            h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700 } }, 'UZS'),
+            h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700 } }, 'сум'),   // V3120_FIX — было «UZS»
         ),
         sub ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, sub) : null,
     );
@@ -395,6 +394,7 @@ function moveModal(root, kind) {
     const amtInp = moneyfy(h('input', { type: 'number', min: '0', step: '1', value: '' }));
     const artSel = h('select', null, ...(isIn ? CASH_IN_ARTICLES : CASH_OUT_ARTICLES).map(a => h('option', { value: a }, a)));
     const noteInp = h('input', { type: 'text', placeholder: 'Комментарий (необязательно)' });
+    const idemKey = newIdemKey();   // V3120_FIX
     modal(isIn ? 'Внести наличные' : 'Изъять наличные', isIn ? 'Plus' : 'ArrowUp',
         [
             field('Сумма', amtInp, { required: true }),
@@ -405,7 +405,7 @@ function moveModal(root, kind) {
         async () => {
             const v = moneyVal(amtInp);
             if (!Number.isFinite(v) || v <= 0) { toast('Укажите сумму больше нуля.', 'fail'); return false; }
-            const { error } = await supabase.rpc('cash_move', { kind, amount: v, article: artSel.value, note: noteInp.value || '' });
+            const { error } = await supabase.rpc('cash_move', { kind, amount: v, article: artSel.value, note: noteInp.value || '', idempotency_key: idemKey });
             if (error) { toast((error.message) || 'Не удалось выполнить операцию.', 'fail'); return false; }
             toast(isIn ? 'Наличные внесены' : 'Наличные изъяты', 'ok');
             await paint(root);
@@ -787,9 +787,7 @@ function paintChips(el, onChange) {
                     Icon(chip.icon, { size: 13 }), chip.label),
                 h('div', { class: 'num', style: { fontSize: '20px', fontWeight: 800, color: 'var(--ink-900)', marginTop: '4px' } }, String(agg.n)),
                 h('div', { class: 'muted num', style: { fontSize: '12.5px', marginTop: '1px' } },
-                    chip.key === 'all' || chip.key === 'paid' || chip.key === 'cancelled'
-                        ? fmtPrice(agg.sum) + ' UZS'
-                        : fmtPrice(agg.sum) + ' UZS'),
+                    trf('{sum} сум', { sum: fmtPrice(agg.sum) })),   // V3120_FIX — было «UZS»
             );
         }),
     ));
@@ -840,28 +838,42 @@ function paintDeposits(el, root) {
         // DEPOSIT_REFUND_V1 — принятый депозит возвращается тем же способом,
         // каким его взяли: отрицательный платёж по счёту депозита (сервер), а на
         // экране — одна кнопка рядом со статусом «Оплачен».
+        // V3120_FIX — частичный возврат не запирает остаток: сервер держит
+        // депозит «принятым», пока возвращено меньше суммы, и отдаёт refundable —
+        // сколько ещё можно вернуть деньгами. Окно по умолчанию предлагает именно
+        // это, а не всю сумму депозита (которую сервер всё равно не отдал бы).
+        const refundedSoFar = Math.max(0, Number(d.refund_amount) || 0);
+        const refundable = d.refundable != null
+            ? Math.max(0, Number(d.refundable) || 0)
+            : ((d.status === 'received' || d.status === 'refunded') ? Math.max(0, Number(d.amount || 0) - refundedSoFar) : 0);
+        const partial = refundedSoFar > 0 && refundedSoFar < Number(d.amount || 0);
         const refundBtn = h('button', { class: 'btn btn-sm', type: 'button', style: { color: 'var(--crit-600)' } }, 'Возврат');
+        const refundKey = newIdemKey();   // V3120_FIX
         refundBtn.addEventListener('click', async () => {
-            const max = Number(d.amount || 0);
+            const max = refundable;
             const raw = prompt(trf('Вернуть по депозиту {no}', { no: d.deposit_number || '' }) + '\n'
-                + trf('Принято: {sum} сум. Сколько вернуть?', { sum: fmtPrice(max) }), String(max));
+                + trf('Можно вернуть: {sum} сум. Сколько вернуть?', { sum: fmtPrice(max) }), String(max));
             if (raw === null) return;
             const amount = Math.round(Number(String(raw).replace(/\D+/g, '')) || 0);
             if (!(amount > 0)) { toast('Введите сумму возврата.', 'fail'); return; }
             refundBtn.disabled = true;
-            const { error } = await supabase.rpc('refund_deposit', { deposit_id: d.id, amount });
+            const { error } = await supabase.rpc('refund_deposit', { deposit_id: d.id, amount, idempotency_key: refundKey });
             if (error) { toast(error.message || 'Не удалось вернуть.', 'fail'); refundBtn.disabled = false; return; }
             toast(trf('Возврат оформлен: {sum} сум', { sum: fmtPrice(amount) }), 'ok');
             paint(root);
         });
 
-        const statusTag = d.status === 'received' ? Tag('Оплачен', { kind: 'ok', dot: true })
+        const statusTag = partial ? h('div', null,
+                Tag('Частично возвращён', { kind: 'warn', dot: true }),
+                refundable > 0 ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } },
+                    trf('вернуть ещё {sum} сум', { sum: fmtPrice(refundable) })) : null)
+            : d.status === 'received' ? Tag('Оплачен', { kind: 'ok', dot: true })
             : d.status === 'refunded' ? Tag('Возвращён', { kind: 'crit', dot: true })
             : d.status === 'cancelled' ? Tag('Отменён', { kind: '', dot: true })
             : Tag('Ждёт оплаты', { kind: 'warn', dot: true });
 
         const actions = d.status === 'pending' ? [cancelBtn, acceptBtn]
-            : d.status === 'received' ? [refundBtn]
+            : ((d.status === 'received' || d.status === 'refunded') && refundable > 0) ? [refundBtn]
             : [];
 
         tbody.appendChild(h('tr', null,
@@ -982,6 +994,7 @@ function openSellCardModal(root) {
     let kind = 'gift_card';
     let method = 'cash';
     let buyer = null;
+    const idemKey = newIdemKey();   // V3120_FIX
     const amountInp = moneyfy(h('input', { type: 'number', min: '1', step: '1' }));
     const nameInp = h('input', { type: 'text', maxlength: '120', placeholder: tr('Например: «Подарок на 8 марта»') });
     const untilInp = h('input', { type: 'date' });
@@ -1040,10 +1053,15 @@ function openSellCardModal(root) {
         const args = { kind, amount, method, patient_id: buyer.id };
         if (nameInp.value.trim()) args.name = nameInp.value.trim();
         if (untilInp.value) args.valid_until = untilInp.value;
+        args.idempotency_key = idemKey;   // V3120_FIX
         const { data, error } = await supabase.rpc('sell_card', args);
         if (error) { toast(trf('Карта не продана: {msg}', { msg: error.message || error }), 'fail'); return false; }
         const no = (data && data.invoice && data.invoice.invoice_number) || '';
         toast(trf('Карта продана: {no} · {sum} сум', { no, sum: fmtPrice(amount) }), 'ok');
+        // V3120_FIX (решение владельца) — квитанция покупателю: за карту взяли
+        // деньги, а бумаги об этом не было вовсе.
+        const u = (window.easymed && window.easymed.state && window.easymed.state.user) || {};
+        printSlip(printableSheet, { kind: 'card', card: (data && data.card) || { kind, amount, sale_number: no }, buyer, method, cashier: u.full_name || u.username || '' });
         state.filter = 'cards';
         paint(root);
         return true;
@@ -1156,7 +1174,7 @@ function invoiceRow(inv, root) {
         ? Math.round(inv.discount_amount / inv.subtotal * 10000) / 100 : 0;
 
     const svcText = (inv.first_item || '—')
-        + (inv.items_count > 1 ? ` +${inv.items_count - 1} more` : '')
+        + (inv.items_count > 1 ? ' ' + trf('+{n} ещё', { n: inv.items_count - 1 }) : '')   // V3120_FIX — было «+1 more»
         + (discountPct > 0 ? ' ' + trf('(скидка {n}%)', { n: discountPct }) : '');
     const methods = inv.methods ? inv.methods.split(',').map(m => tr(METHOD_RU[m] || m)).join(', ') : '—';
 
@@ -1213,7 +1231,10 @@ function invoiceRow(inv, root) {
     // счёт был бы документом о несуществующем платеже.
     const checkBtn = (inv.paid_amount > 0)
         ? iconBtn('Печать чека', 'Wallet',
-            () => printFiscalCheck(inv, inv.paid_amount, (inv.methods || '').split(',')[0] || 'cash'),
+            // V3120_FIX — копия: все платежи счёта, дата оплаты, пометка «Копия».
+            () => printInvoiceCheck({ supabase, printableSheet, invoiceId: inv.id, cashierName: '' })
+                .then((r) => { if (r && !r.ok) toast(r.reason || 'Не удалось напечатать чек.', 'fail'); })
+                .catch((e) => toast(trf('Не удалось напечатать чек: {msg}', { msg: (e && e.message) || e }), 'fail')),
             'var(--primary-700)', 'var(--primary-200, #b6e2d6)')
         : null;
     // Счёт печатается всегда: это документ о начислении, а не об оплате.
@@ -1289,6 +1310,7 @@ function payModal(root, inv, balance) {
     // каждая часть попадает в смену отдельной строкой по своему способу.
     let providers = [];
     const tenders = [{ method: 'cash', amount: balance, providerId: '' }];
+    const idemKey = newIdemKey();   // V3120_FIX — один ключ на открытое окно
     // DEPOSIT_WALLET_V1 — баланс пациента (депозит + зачисленные возвраты).
     // Способ «С баланса» появляется, только когда на балансе что-то есть;
     // списывает сервер (record_payment), и больше баланса он не спишет.
@@ -1604,12 +1626,11 @@ function payModal(root, inv, balance) {
             if (sum > balance + 0.001) { toast(trf('Сумма частей больше остатка ({sum} сум).', { sum: fmtPrice(balance) }), 'fail'); return false; }
 
             const { error } = parts.length === 1
-                ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}) })
-                : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts });
+                ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}), idempotency_key: idemKey })
+                : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts, idempotency_key: idemKey });
             if (error) { toast((error.message) || 'Не удалось принять оплату.', 'fail'); return false; }
             toast('Оплата принята', 'ok');
-            const main = parts.slice().sort((a, b) => b.amount - a.amount)[0];
-            printFiscalCheck(inv, sum, main.method);   // CASH_CHECK_PRINT_V1 — чек + номера очереди (не блокирует)
+            printFiscalCheck(inv, parts);   // CASH_CHECK_PRINT_V1 + V3120_FIX — строка на каждый способ (не блокирует)
             await paint(root);
             return true;
         },
@@ -1647,14 +1668,14 @@ function payModal(root, inv, balance) {
                 try {
                     if (parts.length) {
                         const { error } = parts.length === 1
-                            ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}) })
-                            : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts });
+                            ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}), idempotency_key: idemKey })
+                            : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts, idempotency_key: idemKey });
                         if (error) throw new Error(error.message || 'Оплата не записана');
                     }
                     const { error: dErr } = await supabase.rpc('mark_invoice_debt', { invoice_id: inv.id });
                     if (dErr) throw new Error(dErr.message || 'Не удалось оформить долг');
                     toast(parts.length ? tr('Счёт оставлен как долг (частичная оплата записана) — услуги переданы в работу.') : tr('Счёт оставлен как долг — услуги переданы в работу.'), 'ok');
-                    if (sum > 0) printFiscalCheck(inv, sum, parts[0].method);
+                    if (sum > 0) printFiscalCheck(inv, parts);   // V3120_FIX — все способы, «Остаток» — долг
                     close();
                     await paint(root);
                 } catch (err) {
@@ -1815,6 +1836,7 @@ function openLineRefundConfirm(item, info, root) {
 function openRefundConfirm(p, info, root) {
     const amtInp = moneyfy(h('input', { type: 'number', min: '1', max: String(p.amount), step: '1', value: String(p.amount) }));
     const reasonInp = h('input', { type: 'text', placeholder: 'Причина (необязательно)' });
+    const idemKey = newIdemKey();   // V3120_FIX
     // DEPOSIT_WALLET_V1 — куда вернуть: деньгами (как раньше) или на баланс
     // пациента — деньги остаются в клинике и пойдут в оплату следующей услуги.
     // Платёж «с баланса» по умолчанию возвращается на баланс.
@@ -1888,6 +1910,7 @@ function openRefundConfirm(p, info, root) {
                 // снятая — счёт остаётся открытым (его оплатят снова).
                 void_when_zero: !!voidBox.checked,
                 keep_services: !!voidBox.checked && !(info && info.admission_id) && !!keepBox.checked,
+                idempotency_key: idemKey,   // V3120_FIX
             });
             if (error) { toast(error.message || 'Не удалось оформить возврат.', 'fail'); return false; }
             toast((rRes ? rRes.to_balance : toBalance) ? tr('Сумма зачислена на баланс пациента') : tr('Возврат оформлен'), 'ok');
@@ -1911,12 +1934,12 @@ async function exportInvoicesXlsx() {
             r.doctor_name || '', (r.created_at || '').replace('T', ' ').slice(0, 16),
             r.total_amount, r.paid_amount, Math.max(r.total_amount - r.paid_amount, 0),
             r.methods ? r.methods.split(',').map(m => METHOD_RU[m] || m).join(', ') : '',
-            r.status,
+            (INV_STATUS_RU[r.status] || {}).text || r.status,   // V3120_FIX — статус словом
         ])];
         const ws = XLSX.utils.aoa_to_sheet(aoa);
         ws['!cols'] = columns.map(c => ({ wch: c.length > 8 ? 20 : 13 }));
         const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, 'Invoices');
+        XLSX.utils.book_append_sheet(wb, ws, tr('Счета'));
         XLSX.writeFile(wb, `cashier_${ymdLocal(new Date())}.xlsx`);
         toast('Файл скачан', 'ok');
     } catch (e) {
@@ -1935,21 +1958,21 @@ export async function renderCashierHead(container) {
     const root = h('div', { class: 'fade-in' },
         h('div', { class: 'page-head' },
             h('div', null,
-                h('h1', { class: 'page-title' }, 'Head cashier'),
-                h('p', { class: 'page-subtitle' }, 'All cash shifts across cashiers — floats, collections and reconciliation.'),
+                h('h1', { class: 'page-title' }, 'Старший кассир'),   // V3120_FIX — экран был английским
+                h('p', { class: 'page-subtitle' }, 'Все кассовые смены — начальные остатки, инкассации и сверка.'),
             ),
         ),
         unassignedWrap,
         h('div', { class: 'card' },
-            h('div', { class: 'card-header' }, h('h3', null, Icon('Coins', { size: 16 }), ' Cash shifts')),
+            h('div', { class: 'card-header' }, h('h3', null, Icon('Coins', { size: 16 }), ' ', tr('Кассовые смены'))),
             h('table', { class: 'tbl' },
                 h('thead', null, h('tr', null,
-                    h('th', null, 'Cashier'), h('th', null, 'Opened'), h('th', null, 'Closed'),
-                    h('th', { style: { textAlign: 'right' } }, 'Float'),
-                    h('th', { style: { textAlign: 'right' } }, 'Expected'),
-                    h('th', { style: { textAlign: 'right' } }, 'Counted'),
-                    h('th', { style: { textAlign: 'right' } }, 'Over/Short'),
-                    h('th', null, 'Status'),
+                    h('th', null, 'Кассир'), h('th', null, 'Открыта'), h('th', null, 'Закрыта'),
+                    h('th', { style: { textAlign: 'right' } }, 'Начальный остаток'),
+                    h('th', { style: { textAlign: 'right' } }, 'Ожидалось'),
+                    h('th', { style: { textAlign: 'right' } }, 'Пересчитано'),
+                    h('th', { style: { textAlign: 'right' } }, 'Излишек / недостача'),
+                    h('th', null, 'Статус'),
                 )),
                 tbody,
             ),
@@ -1959,7 +1982,7 @@ export async function renderCashierHead(container) {
 
     loadUnassignedCash(unassignedWrap);
 
-    tbody.appendChild(h('tr', null, h('td', { colspan: '8', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, 'Loading…')));
+    tbody.appendChild(h('tr', null, h('td', { colspan: '8', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, 'Загрузка…')));
     let rows = [];
     try {
         const { data, error } = await supabase.from('cash_shifts')
@@ -1968,14 +1991,19 @@ export async function renderCashierHead(container) {
         rows = data || [];
     } catch (e) {
         clear(tbody);
-        tbody.appendChild(h('tr', null, h('td', { colspan: '8', style: { textAlign: 'center', padding: '18px', color: 'var(--crit-600)' } }, 'Failed to load: ' + ((e && e.message) || e))));
+        tbody.appendChild(h('tr', null, h('td', { colspan: '8', style: { textAlign: 'center', padding: '18px', color: 'var(--crit-600)' } }, trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }))));
         return;
     }
     clear(tbody);
-    if (!rows.length) { tbody.appendChild(h('tr', null, h('td', { colspan: '8', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, 'No shifts yet.'))); return; }
+    if (!rows.length) { tbody.appendChild(h('tr', null, h('td', { colspan: '8', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, 'Смен пока нет.'))); return; }
     for (const s of rows) {
         const os = s.over_short;
-        const osCell = s.status === 'closed'
+        // V3120_FIX — смену, закрытую автоматически в полночь, никто не
+        // пересчитывал: counted_amount пуст. «—» и «0» в колонке сверки читались
+        // бы как «сошлось»; пишем словами, что пересчёта не было.
+        const uncounted = s.status === 'closed' && s.counted_amount == null;
+        const osCell = uncounted ? h('span', { class: 'muted' }, '—')
+            : s.status === 'closed'
             ? (os === 0 ? h('span', { class: 'muted' }, '0') : h('span', { style: { color: os > 0 ? 'var(--primary-700)' : 'var(--crit-600)', fontWeight: 600 } }, (os > 0 ? '+' : '') + fmtPrice(os)))
             : h('span', { class: 'muted' }, '—');
         tbody.appendChild(h('tr', null,
@@ -1984,9 +2012,10 @@ export async function renderCashierHead(container) {
             h('td', null, s.closed_at ? fmtDateTime(s.closed_at) : '—'),
             h('td', { style: { textAlign: 'right' } }, fmtPrice(s.opening_float)),
             h('td', { style: { textAlign: 'right' } }, s.expected_amount != null ? fmtPrice(s.expected_amount) : '—'),
-            h('td', { style: { textAlign: 'right' } }, s.counted_amount != null ? fmtPrice(s.counted_amount) : '—'),
+            h('td', { style: { textAlign: 'right' } }, s.counted_amount != null ? fmtPrice(s.counted_amount)
+                : (uncounted ? h('span', { style: { color: 'var(--warn-700, #b45309)', fontWeight: 600 } }, 'не пересчитана') : '—')),
             h('td', { style: { textAlign: 'right' } }, osCell),
-            h('td', null, Tag(s.status === 'open' ? 'Open' : 'Closed', { kind: s.status === 'open' ? 'ok' : '', dot: true })),
+            h('td', null, Tag(s.status === 'open' ? 'Открыта' : 'Закрыта', { kind: s.status === 'open' ? 'ok' : '', dot: true })),
         ));
     }
 }
@@ -2007,9 +2036,9 @@ async function loadUnassignedCash(wrap) {
         wrap.appendChild(h('div', { class: 'card', style: { marginBottom: '14px', padding: '11px 14px', display: 'flex', gap: '10px', alignItems: 'flex-start', borderLeft: '3px solid var(--warn-500, #d99a00)' } },
             h('span', { style: { color: 'var(--warn-600, #b98200)', flex: '0 0 16px', marginTop: '1px' } }, Icon('Warning', { size: 15 })),
             h('div', { style: { fontSize: '12.5px', lineHeight: '1.5' } },
-                h('strong', null, 'Off-drawer cash: ', fmtPrice(total), more, ' сум'),
+                h('strong', null, trf('Наличные вне смены: {sum} сум', { sum: fmtPrice(total) + more })),
                 h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                    data.length + more + ' cash payment(s) were taken without an open shift, so they are not tied to any drawer. Ask cashiers to open a shift before taking cash.'),
+                    trf('Наличных платежей без открытой смены: {n}. Они не привязаны ни к одному ящику — попросите кассиров открывать смену до приёма наличных.', { n: data.length + more })),
             ),
         ));
     } catch (_) { /* non-critical surface — ignore */ }
@@ -2028,9 +2057,9 @@ function modal(title, icon, bodyEls, submitLabel, onSubmit, width = 460, extraFo
     submitBtn.addEventListener('click', async () => {
         submitBtn.disabled = true;
         const prev = submitBtn.textContent;
-        submitBtn.textContent = 'Working…';
+        submitBtn.textContent = tr('Выполняем…');   // V3120_FIX — было «Working…»
         let ok = false;
-        try { ok = await onSubmit(); } catch (e) { toast((e && e.message) || 'Failed.', 'fail'); }
+        try { ok = await onSubmit(); } catch (e) { toast((e && e.message) || 'Не удалось.', 'fail'); }
         if (ok) { close(); return; }
         submitBtn.disabled = false;
         submitBtn.textContent = prev;
@@ -2122,6 +2151,15 @@ function openAcceptDepositModal(d, root) {
             const { data: acc, error } = await supabase.rpc('accept_deposit', { deposit_id: d.id, method });
             if (error) { toast(trf('Не удалось принять: {msg}', { msg: error.message || error }), 'fail'); return false; }
             toast(trf('Депозит принят · {method}', { method: tr(METHOD_RU[method] || method) }), 'ok');
+            // V3120_FIX (решение владельца) — квитанция о принятом депозите.
+            const u = (window.easymed && window.easymed.state && window.easymed.state.user) || {};
+            printSlip(printableSheet, {
+                kind: 'deposit',
+                deposit: (acc && acc.deposit) || { ...d, method, status: 'received' },
+                patient: { full_name: d.patient_name, mrn: d.patient_mrn },
+                balance: acc ? acc.balance : null, debtCovered: acc ? acc.debt_covered : 0,
+                cashier: u.full_name || u.username || '',
+            });
             if (acc && Number(acc.debt_covered) > 0) {
                 toast(trf('Из депозита закрыт долг по кэшбэку: {sum} сум.', { sum: fmtPrice(acc.debt_covered) }), 'info');
             }
@@ -2138,3 +2176,13 @@ export const __test_DEP_METHODS = DEP_METHODS;
 export const __test_openSellCardModal = openSellCardModal;   // CARD_SALE_V1
 export const __test_paintCards = paintCards;
 export const __test_cardState = state;
+// V3120_FIX — касса целиком без DOM не поднимается; печать чека, вкладка
+// депозитов, окна с ключом повтора и «Старший кассир» проверяются по одному.
+export const __test_printFiscalCheck = printFiscalCheck;
+export const __test_printInvoiceSheet = printInvoiceSheet;
+export const __test_paintDeposits = paintDeposits;
+export const __test_moveModal = moveModal;
+export const __test_payModal = payModal;
+export const __test_openRefundConfirm = openRefundConfirm;
+export const __test_historyModal = historyModal;
+export const __test_invoiceRow = invoiceRow;
