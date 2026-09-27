@@ -1503,7 +1503,14 @@ async function paint() {
         // карточке сотрудника). Тот же список, что предлагает мастер записи, —
         // иначе колл-центр записал бы к врачу, у которого этой услуги нет.
         // Никто не отмечен на услугу — предлагаем всех, чтобы запись не встала.
-        function doctorsForService(svcId) {
+        // Разбор ревью (M9) — кто ведёт вид приёма (doctor_consultation_prices).
+        let consultDoctors = new Map();   // consultation_type_id -> Set(doctor_id)
+        function doctorsForService(svcId, p = null) {
+            if (p && p.service_id == null && p.consultation_type_id != null) {
+                const who = consultDoctors.get(String(p.consultation_type_id));
+                const pool = who ? docCatalog.filter((d) => who.has(String(d.id))) : [];
+                return pool.length ? pool : docCatalog;
+            }
             const assigned = docCatalog.filter(d => {
                 let rates = d.service_rates;
                 if (typeof rates === 'string') { try { rates = JSON.parse(rates); } catch (_) { rates = []; } }
@@ -1512,6 +1519,8 @@ async function paint() {
             return assigned.length ? assigned : docCatalog;
         }
         const needsDoctor = (p) => {
+            // M9 — консультации по виду приёма без врача не бывает.
+            if (p && p.service_id == null && p.consultation_type_id != null) return true;
             const sv = svcCatalog.find(x => String(x.id) === String(p.service_id));
             return !!(sv && sv.requires_doctor);
         };
@@ -1733,6 +1742,17 @@ async function paint() {
                 // консультацией (service_id NULL + consultation_type_id, миграция 188).
                 const consultsP = supabase.from('consultation_types').select('id, name, name_ru, price')
                     .then(({ data }) => data || [], () => []);
+                supabase.from('doctor_consultation_prices').select('doctor_id, consultation_type_id, available')
+                    .then(({ data }) => {
+                        const m = new Map();
+                        for (const r of (data || [])) {
+                            if (r.available === false || r.available === 0) continue;
+                            const k = String(r.consultation_type_id);
+                            if (!m.has(k)) m.set(k, new Set());
+                            m.get(k).add(String(r.doctor_id));
+                        }
+                        consultDoctors = m;
+                    }, () => {});
                 supabase.from('crm_request_services')
                     // CRM_REAL_BOOKING_V1 — id и visit_id: строка, которая уже
                     // держит слот, переписыванию набора не подлежит (saveLines).
@@ -2320,7 +2340,7 @@ async function paint() {
                     // дошла бы до регистратуры невидимой строкой.
                     let docCell = null;
                     if (needsDoctor(p)) {
-                        const pool = doctorsForService(p.service_id);
+                        const pool = doctorsForService(p.service_id, p);
                         const sel = h('select', { style: { width: '210px', flex: '0 0 auto', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px', background: 'var(--white,#fff)' } },
                             h('option', { value: '' }, '— выберите врача —'),
                             ...pool.map(d => h('option', { value: String(d.id), selected: String(p.doctor_id || '') === String(d.id) },

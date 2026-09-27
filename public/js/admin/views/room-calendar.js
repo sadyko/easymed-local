@@ -258,7 +258,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             supabase.from('floors').select('id, name, level').eq('active', true),
             supabase.from('rooms').select('id, name, code, room_type, floor_id').eq('active', true).order('code', { ascending: true }),
             supabase.from('users').select('id, full_name, specialty, role, branch_id, is_doctor, scheduling_mode').eq('active', true).order('full_name', { ascending: true }),
-            supabase.from('services').select('id, name, duration_minutes').eq('active', true).order('name', { ascending: true }),
+            supabase.from('services').select('id, name, duration_minutes, requires_doctor').eq('active', true).order('name', { ascending: true }),
         ]);
         const branchName = {}, floorName = {};
         for (const b of take(brs, tr('филиалы'))) branchName[b.id] = b.name || '';
@@ -291,7 +291,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 branchId: u.branch_id || null,
                 liveQueue: (u.scheduling_mode || '') === 'live_queue',
             }));
-        state.servicesList = take(svcs, tr('услуги')).map(s => ({ id: s.id, name: s.name || '—', dur: s.duration_minutes }));
+        state.servicesList = take(svcs, tr('услуги')).map(s => ({ id: s.id, name: s.name || '—', dur: s.duration_minutes, needsDoctor: !!Number(s.requires_doctor) }));
     }
 
     async function loadAppts() {
@@ -373,7 +373,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         const rows = [];
         for (let i = 0; i < ids.length; i += CRM_LINK_CHUNK) {
             const { data, error } = await supabase.from('visit_services')
-                .select('id, visit_id, service_id, consultation_type_id, status, invoice_item_id').in('visit_id', ids.slice(i, i + CRM_LINK_CHUNK));
+                .select('id, visit_id, service_id, consultation_type_id, clinic_item_id, status, invoice_item_id').in('visit_id', ids.slice(i, i + CRM_LINK_CHUNK));
             if (error) return null;
             rows.push(...(data || []));
         }
@@ -929,10 +929,15 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             const rows = (state.linesByVisit && state.linesByVisit[a.id]) || [];
             if (!rows.length) linesBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Услуг в записи нет.')));
             for (const r of rows) {
-                const free = r.status === 'added' && r.invoice_item_id == null;
+                // Разбор ревью (M4) — подпись по правде: «в счёте» только у
+                // выставленной строки, «в работе» у начатой, «товар» у выданного
+                // со склада. Снять здесь можно только свободную УСЛУГУ.
+                const product = r.clinic_item_id != null;
+                const free = !product && r.status === 'added' && r.invoice_item_id == null;
+                const why = product ? tr('товар') : (r.invoice_item_id != null ? tr('в счёте') : (r.status !== 'added' ? tr('в работе') : null));
                 linesBox.appendChild(h('div', { class: 'row', 'data-booking-line': String(r.id), style: { gap: '8px', alignItems: 'center', fontSize: '13.5px' } },
                     h('span', { style: { flex: 1, minWidth: 0, overflowWrap: 'anywhere' } }, r.name),
-                    !free ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('в счёте')) : null,
+                    why ? h('span', { class: 'muted', 'data-line-state': '', style: { fontSize: '12.5px' } }, why) : null,
                     canEditLines && free ? h('button', {
                         type: 'button', class: 'btn btn-sm', title: tr('Снять услугу с записи'), 'aria-label': tr('Снять услугу с записи'),
                         style: { color: 'var(--crit-700, #b91c1c)' },
@@ -960,9 +965,14 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 if (!v) return;
                 ev.currentTarget.disabled = true;
                 const id = Number(v.slice(2));
-                const doctorId = docSel.value ? Number(docSel.value) : (a.doctorId || null);
+                // Разбор ревью (M3) — врач записи ставится только той строке,
+                // которой без врача не бывает (консультация, услуга с
+                // requires_doctor). Анализ крови «к терапевту» не пишем.
+                const svc = (state.servicesList || []).find((x) => String(x.id) === String(id));
+                const needsDoctor = v.startsWith('c:') || !!(svc && svc.needsDoctor);
+                const doctorId = needsDoctor ? (docSel.value ? Number(docSel.value) : (a.doctorId || null)) : null;
                 const line = v.startsWith('c:') ? { consultation_type_id: id, doctor_id: doctorId } : { service_id: id, doctor_id: doctorId };
-                const { error } = await supabase.rpc('booking_lines_add', { visit_id: a.id, lines: [line] });
+                const { error } = await supabase.rpc('booking_lines_add', { visit_id: a.id, patient_id: a.patientId || undefined, lines: [line] });
                 ev.currentTarget.disabled = false;
                 if (error) { toast(error.message || String(error), 'fail'); return; }
                 addSel.value = '';

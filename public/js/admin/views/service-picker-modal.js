@@ -3026,7 +3026,7 @@ export function openServicePickerModal({
                     ? { consultation_type_id: a.service.consultation_type_id || a.service.id, doctor_id: a.doctor?.id || a.service.__consultDoctorId || null, scheduled_at: a.startISO || scheduledISO || null }
                     : { service_id: a.service.id, doctor_id: a.doctor?.id || null, scheduled_at: a.startISO || scheduledISO || null };
                 const res = want.length
-                    ? await supabase.rpc('booking_lines_add', { visit_id: visit.id, lines: want.map(lineOf) })
+                    ? await supabase.rpc('booking_lines_add', { visit_id: visit.id, patient_id: p.id, lines: want.map(lineOf) })
                     : { data: { added: [] } };
                 if (res.error) {
                     // Слот уже стоит — его не отменяем: запись без услуг лучше, чем

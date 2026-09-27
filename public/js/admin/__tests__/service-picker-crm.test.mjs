@@ -399,6 +399,7 @@ test('I1: колл-центр записывает из календаря С У
         assert.ok(RPCS.includes('booking_lines_add'), 'услуги записи не отправлены: ' + RPCS.join(','));
         const sent = RPC_BODIES[RPCS.indexOf('booking_lines_add')];
         assert.equal(sent.visit_id, 'v-1');
+        assert.equal(String(sent.patient_id), '3', 'сервер не узнал, чья это запись (разбор ревью M2)');
         assert.ok(Array.isArray(sent.lines) && sent.lines.length >= 1 && sent.lines.every((l) => l.service_id), 'услуги не ушли строками: ' + JSON.stringify(sent));
         assert.ok(!CALLS.some((c) => c.table === 'visit_services' && c.op === 'insert'),
             'колл-центр пишет строки визита мимо своей двери');

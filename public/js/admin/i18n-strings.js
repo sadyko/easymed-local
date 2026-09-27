@@ -24,6 +24,7 @@ export const STRINGS = {
   "Ни одна услуга не записалась — запись отменена.": {"en":"No service was saved — the booking was cancelled.","ru":"Ни одна услуга не записалась — запись отменена.","uz":"Birorta ham xizmat saqlanmadi — yozuv bekor qilindi."},
   "Записан: {day} в {time}": {"en":"Booked: {day} at {time}","ru":"Записан: {day} в {time}","uz":"Yozilgan: {day} soat {time}"},
   "Записано с услугами.": {"en":"Booked with the services.","ru":"Записано с услугами.","uz":"Xizmatlar bilan yozildi."},
+  "товар": {"en":"product","ru":"товар","uz":"mahsulot"},
   "Услуги записи": {"en":"Booking services","ru":"Услуги записи","uz":"Yozuv xizmatlari"},
   "— добавить услугу —": {"en":"— add a service —","ru":"— добавить услугу —","uz":"— xizmat qo'shish —"},
   "Услуг в записи нет.": {"en":"No services in the booking.","ru":"Услуг в записи нет.","uz":"Yozuvda xizmatlar yo'q."},

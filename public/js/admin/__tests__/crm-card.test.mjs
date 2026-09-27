@@ -176,6 +176,7 @@ let LINK_HOLD = null;
 // нечего, а зелёный тест держался бы на заглушке.
 let DOCTORS = [];
 let CONSULTS = [];   // CRM_CALENDAR_MIRROR_V1
+let CONSULT_PRICES = [];   // разбор ревью M9 — кто ведёт вид приёма
 let SLOT_DAY = { slots: [{ start: '09:00', end: '09:30' }, { start: '09:30', end: '10:00' }, { start: '10:00', end: '10:30' }], busy: [] };
 let SLOT_FAIL = false;         // сервер не ответил про расписание
 let ENSURE_PLAN = [];          // ответы ensure_visit по порядку; дальше — успех
@@ -224,6 +225,7 @@ globalThis.fetch = async (url, opts) => {
     if (body && body.table === 'services' && body.op === 'select') return jsonOk(SERVICES);
     // CRM_CALENDAR_MIRROR_V1 — виды приёма: строка консультации в заявке.
     if (body && body.table === 'consultation_types' && body.op === 'select') return jsonOk(CONSULTS);
+    if (body && body.table === 'doctor_consultation_prices' && body.op === 'select') return jsonOk(CONSULT_PRICES);
     // CRM_LINE_DOCTOR_V1 — список ВРАЧЕЙ строки (.eq('role','doctor')). Он не
     // тот же, что список операторов выше (.in('role', …)), и отдаётся любой роли.
     if (body && body.table === 'users' && body.op === 'select'
@@ -2010,5 +2012,25 @@ test('консультация по виду приёма видна в карт
   assert.ok(cancel, 'убранная консультация не отменена');
   assert.deepStrictEqual(cancel.filters.find((f) => f.col === 'id').val, [903]);
   SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = [];
+  window.easymed.state.user = null;
+});
+
+// Разбор ревью (M9) — консультации без врача не бывает: окно дат предлагает
+// выбрать врача, и только из тех, у кого этот вид приёма есть.
+test('консультация по виду приёма в окне дат требует врача — из тех, кто её ведёт', async () => {
+  VISITS = [];
+  SERVICES = [DOC_SVC];
+  const OTHER = { id: 32, full_name: 'Сидоров Сидор', specialty: 'хирург', service_rates: null };
+  DOCTORS = [DOCTOR, OTHER];
+  CONSULTS = [{ id: 5, name: 'Первичный', name_ru: 'Первичный приём', price: 80000 }];
+  CONSULT_PRICES = [{ doctor_id: 31, consultation_type_id: 5, available: 1 }];
+  const { sheet } = await doctorSheet({ lines: [{ id: 903, service_id: null, consultation_type_id: 5, scheduled_date: '', status: 'pending', doctor_id: null, visit_id: null }] });
+  await tick(60);
+  const sels = doctorSelects(sheet);
+  assert.equal(sels.length, 1, 'у консультации нет выбора врача: ' + textOf(sheet).slice(0, 300));
+  const names = sels[0].children.map(textOf).join(' | ');
+  assert.ok(/Петров Пётр/.test(names), names);
+  assert.ok(!/Сидоров/.test(names), 'предложен врач, который этот вид приёма не ведёт: ' + names);
+  SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = []; CONSULT_PRICES = [];
   window.easymed.state.user = null;
 });
