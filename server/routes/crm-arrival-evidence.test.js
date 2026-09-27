@@ -129,15 +129,18 @@ test('работа по чужому визиту заявку не трогае
 // M1 (разбор ревью): правило ловило только ПРАВКУ статуса. Строку услуги
 // заводят и сразу в рабочем статусе — кабинет врача добавляет услугу «с
 // ходу» уже начатой, — и такая вставка проходила мимо доказательства.
+// V3120_FINAL (G2) — сразу в работе заводится только БЕСПЛАТНАЯ услуга (платная
+// — через смету и кассу, см. visit-lines-v3120-final.test.js).
 test('услуга, заведённая сразу выполненной, тоже закрывает заявку', async () => {
   const { db, server, base, rid, lid } = await startServer();
   try {
+    db.prepare("INSERT INTO services (id, name, price, type) VALUES (31,'Осмотр (бесплатно)',0,'consultation')").run();
     const cookie = await login(base);
     const res = await fetch(base + '/api/db', {
       method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie },
       body: JSON.stringify({
         table: 'visit_services', op: 'insert',
-        values: { visit_id: 500, service_id: 30, quantity: 1, unit_price: 0, total: 0, status: 'completed' },
+        values: { visit_id: 500, service_id: 31, quantity: 1, unit_price: 0, total: 0, status: 'completed' },
       }),
     });
     assert.equal(res.status, 200, await res.text());

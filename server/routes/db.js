@@ -168,6 +168,50 @@ function refuseAdmissionLineWrite(db, meta, body, user) {
   return null;
 }
 
+// V3120_FINAL (S2) — текст отказа или null для строк ВИЗИТА табличным путём.
+//
+// Реестр пускает администратора и регистратуру удалять строки визита, и
+// удаление шло мимо денег и склада: выданный товар (clinic_item_id) исчезал
+// без возврата — движение склада оставалось висеть расходом без строки, — а
+// строка оплаченного счёта уходила, оставляя позицию счёта без услуги. Теперь:
+//   • строку в счёте (invoice_item_id) не удаляют и вид приёма у неё не
+//     меняют — снимают её касса (отмена позиции / возврат строкой);
+//   • выданный товар убирают кнопкой «Убрать» (void_dispensed_visit_item):
+//     товар возвращается туда, откуда взят;
+//   • строку без услуги, без товара и без вида приёма («свободная цена») не
+//     заводят: у неё нет каталожной цены, и сумму задавал бы браузер.
+//     Администратор — исключение (исправление вручную), как и в остальном.
+// Строки выбираются тем же compile(), что и сама правка (те же права и отбор).
+function refuseVisitLineWrite(db, meta, body, user) {
+  if (!meta || meta.table !== 'visit_services') return null;
+  if (meta.op === 'insert' || meta.op === 'upsert') {
+    const roles = [user && user.role, ...((user && user.extra_roles) || [])];
+    if (roles.includes('admin')) return null;
+    const rows = Array.isArray(body && body.values) ? body.values : (body && body.values ? [body.values] : []);
+    const bare = rows.some((r) => r && r.service_id == null && r.consultation_type_id == null && r.clinic_item_id == null);
+    return bare ? 'Строка визита без услуги и без вида приёма не заводится — выберите услугу из каталога.' : null;
+  }
+  if (meta.op !== 'update' && meta.op !== 'delete') return null;
+  const values = body && body.values && !Array.isArray(body.values) ? body.values : {};
+  if (meta.op === 'update' && !Object.prototype.hasOwnProperty.call(values, 'consultation_type_id')) return null;
+  let rows = [];
+  try {
+    const sel = compile({ table: body.table, op: 'select', columns: 'id,invoice_item_id,clinic_item_id', filters: body.filters }, user, { db });
+    rows = db.prepare(sel.sql).all(...sel.params);
+  } catch { return 'Строки визита не выбраны — правка не выполнена.'; }
+  for (const r of rows) {
+    if (meta.op === 'delete' && r.clinic_item_id != null && r.invoice_item_id == null) {
+      return 'Это выданный товар — уберите его кнопкой «Убрать»: товар вернётся туда, откуда его взяли.';
+    }
+    if (r.invoice_item_id != null) {
+      return meta.op === 'delete'
+        ? 'Строка уже в счёте — снимают её в кассе (отмена позиции или возврат), а не удалением.'
+        : 'Строка уже в счёте — вид приёма у неё не меняют: замените услугу через счёт.';
+    }
+  }
+  return null;
+}
+
 /**
  * CRM_REAL_BOOKING_V1 — РАБОТА НАД ПАЦИЕНТОМ ДОКАЗЫВАЕТ, ЧТО ОН ПРИШЁЛ.
  *
@@ -292,6 +336,11 @@ export function dbRoutes(db) {
     const admLineRefusal = refuseAdmissionLineWrite(db, compiled.meta, req.body, req.user);
     if (admLineRefusal) {
       return res.status(409).json({ error: { code: 'conflict', message: admLineRefusal } });
+    }
+    // V3120_FINAL (S2) — строки визита: см. refuseVisitLineWrite.
+    const visitLineRefusal = refuseVisitLineWrite(db, compiled.meta, req.body, req.user);
+    if (visitLineRefusal) {
+      return res.status(409).json({ error: { code: 'conflict', message: visitLineRefusal } });
     }
 
     // CRM_CALENDAR_MIRROR_V1 — что заденет правка (и отказ, если она трогает

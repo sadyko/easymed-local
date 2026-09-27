@@ -113,6 +113,31 @@ export function visitHasWork(db, visitId) {
                                                OR clinic_item_id IS NOT NULL) LIMIT 1`).get(visitId);   // I4 — товар это работа
 }
 
+/**
+ * V3120_FINAL (G3) — МОЖНО ЛИ ПЕРЕНЕСТИ ВИЗИТ ДНЯ ПОД НОВУЮ ЗАПИСЬ К `doctorId`.
+ *
+ * «Без работы» (visitHasWork) — мало: запись колл-центра к Иванову на 10:00
+ * держит строку его консультации в смете ('added', без счёта), и новая запись
+ * к Петрову на 14:00 переносила её целиком — время, врача (mirrorReschedule
+ * переписывал и строки), освобождая слот Иванова. Переносится только
+ *   • по-настоящему пустая запись (ни одной живой строки), или
+ *   • запись, все строки которой — того же врача, к которому записывают (это
+ *     перенос его же приёма); строка без врача (анализ «на дату») допустима,
+ *     только если и у записи врача нет или он тот же.
+ * Иначе — day_visit_busy: «добавьте услугу в этот визит».
+ */
+export function dayVisitMovableFor(db, visitId, doctorId) {
+  const v = db.prepare('SELECT status, doctor_id FROM visits WHERE id = ?').get(visitId);
+  if (!v || !PRE_ARRIVAL.includes(v.status)) return false;
+  if (visitHasWork(db, visitId)) return false;
+  const lines = db.prepare("SELECT doctor_id FROM visit_services WHERE visit_id = ? AND status <> 'cancelled'").all(visitId);
+  if (!lines.length) return true;
+  const doc = Number(doctorId) || null;
+  if (!doc) return false;
+  const visitDocOk = v.doctor_id == null || Number(v.doctor_id) === doc;
+  return lines.every((l) => (l.doctor_id == null ? visitDocOk : Number(l.doctor_id) === doc));
+}
+
 /** Заявка, которой принадлежит запись: по её строкам, иначе по привязке. */
 export function requestOfVisit(db, visitId) {
   const byLine = db.prepare(`SELECT MIN(request_id) AS r FROM crm_request_services

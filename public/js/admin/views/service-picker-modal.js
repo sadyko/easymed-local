@@ -3245,10 +3245,10 @@ export function openServicePickerModal({
                 // его подписывают после приёма и используют для сверки с плательщиком.
                 const ids = payerRows.map(r => r.vs && r.vs.id).filter(Boolean);
                 if (ids.length) {
-                    const { error: relErr } = await supabase.from('visit_services')
-                        .update({ status: 'queued' }).in('id', ids)
-                        .not('status', 'in', '(in_progress,completed)');
-                    if (relErr) console.warn('[wizard] release services:', relErr.message);
+                    // V3120_FINAL (G1) — в очередь их ставит СЕРВЕР, выставляя счёт
+                    // плательщику (create_invoice_for_visit с payer_id). Прежняя запись
+                    // 'queued' отсюда шла ДО счёта — дверь /api/db её теперь отвергает
+                    // (неоплаченная строка в работу не уходит), и она была лишней.
                     // LIVE_AUDIT_FIX_V1 — покрытие фиксирует СЕРВЕР: строки уходят в
                     // счёт контрагента (payer_id) и больше не могут попасть в счёт
                     // пациента. Флага payer_covered в офлайн-базе нет — его запись

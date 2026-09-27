@@ -149,7 +149,7 @@ import { getDataDir } from '../control/config.js';
 // не пришёл, отменили. Правило живёт в crm/visit-status.js, здесь только дверь.
 import { crmVisitStatus } from '../crm/visit-status.js';
 // CRM_CALENDAR_MIRROR_V1 — запись календаря и заявка CRM — одна запись.
-import { attachVisitToCrm, mirrorVisit, mirrorReschedule, visitHasWork, PRE_ARRIVAL } from '../crm/booking-mirror.js';
+import { attachVisitToCrm, mirrorVisit, mirrorReschedule, dayVisitMovableFor } from '../crm/booking-mirror.js';
 // V3120_FIX — визит дня ищется по МЕСТНОМУ дню, тем же правилом, что у ensure_visit.
 import { localDate } from '../domain/day.js';
 
@@ -1003,7 +1003,8 @@ export async function calendarBook(db, args, user, deps = {}) {
       if (a.add_to_day_visit === true || a.add_to_day_visit === 'true') {
         return { visit: dayVisit, created: false, added_to_day_visit: true, emergency: false, day: dayIso };
       }
-      const bare = PRE_ARRIVAL.includes(dayVisit.status) && !visitHasWork(db, dayVisit.id);
+      // V3120_FINAL (G3) — строки чужого врача в смете — это чужая запись, не «пустая».
+      const bare = dayVisitMovableFor(db, dayVisit.id, a.doctor_id);
       if (bare) {
         // Длительность — новой записи (из её услуги), а не прежней: иначе
         // пятиминутный забор, перенесённый под консультацию, так и остался бы

@@ -18,6 +18,15 @@
 // Строки, которые уже 'queued' (оплачены или отпущены плательщиком) и дальше,
 // правило не трогает: порядок шагов ПОСЛЕ кассы ведут сами экраны.
 //
+// V3120_FINAL (G1) — «В РАБОТУ» — ЭТО ЛЮБОЙ СТАТУС, КРОМЕ СМЕТЫ И ОТМЕНЫ.
+// Список WORK_STATUSES не знал 'queued', и неоплаченная строка проходила в
+// работу в два шага: added → queued (правило молчит) → collected (строка уже
+// не 'added'). Теперь из 'added' без кассы можно только остаться в 'added' или
+// отмениться ('cancelled'); исключения те же. Строку в очередь ставит сервер
+// (оплата, счёт плательщику, долг, счёт на ноль) — экранам это делать незачем.
+// Частично оплаченный счёт ('partial') — тоже решение кассы: кабинет врача так
+// и считает (RT2_FIX_V1), и оплата любой суммы ставит строки в очередь.
+//
 // Функция чистая по отношению к базе (только SELECT) и возвращает текст отказа
 // по-русски или null. Зовёт её дверь /api/db (crm/booking-mirror-db.js,
 // mirrorBefore) до записи.
@@ -33,8 +42,11 @@ const holes = (a) => a.map(() => '?').join(',');
  * @param {number[]} ids
  * @param {string} nextStatus
  */
+/** Куда из сметы можно без кассы: остаться в ней или отмениться. */
+export const FREE_MOVES = Object.freeze(['added', 'cancelled']);
+
 export function unpaidWorkRefusal(db, ids, nextStatus) {
-  if (!WORK_STATUSES.includes(String(nextStatus || ''))) return null;
+  if (nextStatus === undefined || nextStatus === null || FREE_MOVES.includes(String(nextStatus))) return null;
   const list = (ids || []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
   if (!list.length) return null;
   const rows = db.prepare(`
@@ -50,7 +62,7 @@ export function unpaidWorkRefusal(db, ids, nextStatus) {
     if (r.status !== 'added') continue;
     if (!(Number(r.total) > 0)) continue;
     if (r.inv_payer != null) continue;
-    if (r.inv_status === 'paid' || r.inv_status === 'debt') continue;   // долг — касса отпустила
+    if (r.inv_status === 'paid' || r.inv_status === 'debt' || r.inv_status === 'partial') continue;   // долг / частично — касса отпустила
     const name = r.svc_name || (r.consultation_type_id != null ? 'Консультация' : 'услуга');
     if (Number(r.is_lab) === 1 || r.svc_type === 'lab') {
       return `Анализ «${name}» ещё не оплачен — пробу берут и результат вносят после кассы.`;

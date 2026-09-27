@@ -17,7 +17,7 @@ import {
 import { calendarBook } from '../rpc/calendar.js';
 import { localDate } from '../domain/day.js';
 // V3120_FIX — работа над неоплаченной услугой и право «CRM: изменение».
-import { unpaidWorkRefusal } from '../visit-status-guard.js';
+import { unpaidWorkRefusal, FREE_MOVES } from '../visit-status-guard.js';
 import { grantAllowsOr } from '../grants.js';
 import { sectionLevel } from '../roles.js';
 
@@ -92,6 +92,28 @@ export function mirrorBefore(db, meta, body, user) {
   if (CRM_TABLES.has(meta.table) && !canEditCrm(db, user)) {
     ctx.refusal = 'Раздел «CRM · Заявки» выдан вам только на просмотр — менять заявки нельзя.';
     return ctx;
+  }
+  // V3120_FINAL (G2) — строку визита заводят В СМЕТЕ. Реестр пускает status во
+  // вставку (мастер пишет 'added'), и строка, заведённая сразу 'completed' /
+  // 'queued', обходила кассу без всякой правки статуса. Сервер кладёт строки в
+  // работу сам (оплата, счёт плательщику); табличный путь — только смета.
+  // Исключение то же, что у правки статуса: БЕСПЛАТНАЯ услуга (ноль и в строке,
+  // и в каталоге — ноль в строке при платной услуге касса переоценила бы).
+  if (meta.table === 'visit_services' && (meta.op === 'insert' || meta.op === 'upsert')) {
+    const rows = Array.isArray(body && body.values) ? body.values : (body && body.values ? [body.values] : []);
+    const freeSvc = (r) => {
+      if (!(Number(r.total) === 0) || r.service_id == null) return false;
+      try {
+        const s = db.prepare('SELECT price FROM services WHERE id = ?').get(r.service_id);
+        return !!s && !(Number(s.price) > 0);
+      } catch { return false; }
+    };
+    const bad = rows.find((r) => r && Object.prototype.hasOwnProperty.call(r, 'status')
+      && r.status != null && !FREE_MOVES.includes(String(r.status)) && !freeSvc(r));
+    if (bad) {
+      ctx.refusal = 'Услугу добавляют в смету визита — в работу её переводят касса и экраны после оплаты.';
+      return ctx;
+    }
   }
   try {
     if (meta.table === 'visit_services' && (meta.op === 'update' || meta.op === 'delete')) {

@@ -19,7 +19,7 @@ import { openStageKeys, scheduledStageKey, noShowStageKey, SEED_NO_SHOW_STAGE } 
 import { localDate } from '../domain/day.js';
 // CRM_CALENDAR_MIRROR_V1 — запись и заявка — одна запись: строки услуг
 // записи сверяются с строками заявки (crm/booking-mirror.js).
-import { mirrorVisit, attachVisitToCrm, visitHasWork, PRE_ARRIVAL } from '../crm/booking-mirror.js';
+import { mirrorVisit, attachVisitToCrm, dayVisitMovableFor } from '../crm/booking-mirror.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400, code = null, params = null) {
@@ -433,11 +433,9 @@ export async function ensureVisit(db, args, user) {
   // перенос её времени ничего не стирает, строки едут вместе с визитом.
   // Работа — это счёт или строка дальше «в смете» (visitHasWork), либо визит
   // уже не в статусе записи.
-  const dayVisitIsBare = (visitId) => {
-    const v = db.prepare('SELECT status FROM visits WHERE id = ?').get(visitId);
-    if (!v || !PRE_ARRIVAL.includes(v.status)) return false;
-    return !visitHasWork(db, visitId);
-  };
+  // V3120_FINAL (G3) — и без строк другого врача: запись к Иванову не
+  // переезжает под запись к Петрову (dayVisitMovableFor, booking-mirror.js).
+  const dayVisitIsBare = (visitId) => dayVisitMovableFor(db, visitId, book && book.doctorId);
 
   if (!out.created && !dayVisitIsBare(out.visit.id)) {
     // Строки заявки с этим визитом всё равно связываются: в этот день
