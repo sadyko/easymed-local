@@ -126,6 +126,44 @@ function refusePackageWrite(db, meta, body, user) {
   return null;
 }
 
+// INPATIENT_MONEY_FIX_V1 (D7) — текст отказа или null для правки и удаления
+// строк стационара табличным путём (admission_services).
+//
+// Реестр уже не даёт писать деньги строки (invoice_item_id, status, цена) и
+// заводить её. Остаются «в счёт / в учёт» (billable), примечание и «Убрать» —
+// и они проверяются ПО СТРОКЕ, до выполнения:
+//   • выставленная строка (invoice_item_id) не трогается вовсе — за ней счёт,
+//     и снимают её со счёта в кассе (remove_admission_line_from_invoice);
+//   • удаление товарной строки — только возвратом (void_dispensed_admission_item):
+//     DELETE мимо него оставлял выданный товар списанным навсегда;
+//   • удалять строки закрытой госпитализации нельзя — её деньги уже итог.
+// Строки выбираются тем же compile(), что и сама правка: те же права, тот же
+// отбор, так что проверяется ровно то, что было бы изменено.
+function refuseAdmissionLineWrite(db, meta, body, user) {
+  if (!meta || meta.table !== 'admission_services') return null;
+  if (meta.op !== 'update' && meta.op !== 'delete') return null;
+  let rows = [];
+  try {
+    const sel = compile({ table: body.table, op: 'select', columns: 'id,invoice_item_id,clinic_item_id,admission_id', filters: body.filters }, user, { db });
+    rows = db.prepare(sel.sql).all(...sel.params);
+  } catch { return 'Строки госпитализации не выбраны — правка не выполнена.'; }
+  const status = db.prepare('SELECT status FROM admissions WHERE id = ?');
+  for (const r of rows) {
+    if (r.invoice_item_id != null) {
+      return 'Строка уже в счёте — сначала уберите её из счёта (кнопка «Из счёта» или касса).';
+    }
+    if (meta.op !== 'delete') continue;
+    if (r.clinic_item_id != null) {
+      return 'Это выданный товар — уберите его кнопкой «Убрать»: товар вернётся туда, откуда его взяли.';
+    }
+    const adm = status.get(r.admission_id);
+    if (adm && (adm.status === 'discharged' || adm.status === 'cancelled')) {
+      return 'Госпитализация закрыта — её строки больше не удаляют.';
+    }
+  }
+  return null;
+}
+
 /**
  * CRM_REAL_BOOKING_V1 — РАБОТА НАД ПАЦИЕНТОМ ДОКАЗЫВАЕТ, ЧТО ОН ПРИШЁЛ.
  *
@@ -240,6 +278,11 @@ export function dbRoutes(db) {
     const packageRefusal = refusePackageWrite(db, compiled.meta, req.body, req.user);
     if (packageRefusal) {
       return res.status(409).json({ error: { code: 'conflict', message: packageRefusal } });
+    }
+    // INPATIENT_MONEY_FIX_V1 (D7) — строки стационара: см. refuseAdmissionLineWrite.
+    const admLineRefusal = refuseAdmissionLineWrite(db, compiled.meta, req.body, req.user);
+    if (admLineRefusal) {
+      return res.status(409).json({ error: { code: 'conflict', message: admLineRefusal } });
     }
 
     try {

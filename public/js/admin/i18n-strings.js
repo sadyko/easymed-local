@@ -6286,6 +6286,7 @@ export const STRINGS = {
   "Перевести": {"en":"Transfer","ru":"Перевести","uz":"Ko'chirish"},
   "Перевести в учёт расходов (не биллуется)": {"en":"Move to expense records (not billed)","ru":"Перевести в учёт расходов (не биллуется)","uz":"Xarajatlar hisobiga o'tkazish (hisob-faktura qilinmaydi)"},
   "Перевести пациента": {"en":"Transfer the patient","ru":"Перевести пациента","uz":"Bemorni ko'chirish"},
+  "По умолчанию товары выставляются в счёт пациенту. Снимите отметку, чтобы отнести их в учёт расходов клиники.": {"en":"By default the items are billed to the patient. Untick to record them as the clinic's own expense.","ru":"По умолчанию товары выставляются в счёт пациенту. Снимите отметку, чтобы отнести их в учёт расходов клиники.","uz":"Odatda tovarlar bemor hisob-fakturasiga chiqariladi. Klinika xarajatlari hisobiga o'tkazish uchun belgini olib tashlang."},
   "По умолчанию товары идут только в учёт расходов. Отметьте, чтобы выставить их в счёт пациенту.": {"en":"By default the items go only to expense records. Tick to bill them to the patient.","ru":"По умолчанию товары идут только в учёт расходов. Отметьте, чтобы выставить их в счёт пациенту.","uz":"Odatda tovarlar faqat xarajatlar hisobiga boradi. Bemor hisob-fakturasiga chiqarish uchun belgilang."},
   "Поиск пациента по имени, MRN, телефону…": {"en":"Patient search by name, MRN, phone…","ru":"Поиск пациента по имени, MRN, телефону…","uz":"Bemorni ism, MRN, telefon bo'yicha qidirish…"},
   "Поиск услуги": {"en":"Service search","ru":"Поиск услуги","uz":"Xizmat qidiruvi"},

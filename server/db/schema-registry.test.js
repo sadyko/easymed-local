@@ -240,7 +240,12 @@ test('inpatient + lab-panel tables (025): staff read, correct write actors', () 
   // nurses run the inpatient screens (bed board / admission modal)
   assert.ok(canWrite('admission_prescriptions', 'insert', 'nurse'));
   assert.ok(canWrite('med_administrations', 'insert', 'nurse'));
-  assert.ok(canWrite('admission_services', 'insert', 'nurse'));
+  // INPATIENT_MONEY_FIX_V1 (D7) — строки стационара заводят только RPC (цена и
+  // склад — дело сервера); табличным путём их не заводит никто.
+  for (const role of ['admin', 'registrar', 'doctor', 'nurse', 'cashier']) {
+    assert.ok(!canWrite('admission_services', 'insert', role), role + ' inserts admission_services directly');
+  }
+  assert.ok(canWrite('admission_services', 'update', 'nurse'), 'billable / notes toggle stays');
   assert.ok(canWrite('admission_transfers', 'insert', 'nurse'));
   assert.ok(!canWrite('admission_prescriptions', 'insert', 'lab'));   // lab has no place in inpatient orders
   // LAB_PANELS_BY_SECTION_V1 — panel writes follow LAB-SECTION access (owner:

@@ -952,9 +952,18 @@ export const REGISTRY = {
   admission_services: {
     read:  { roles: ALL_STAFF, columns: ['id','admission_id','service_id','clinic_item_id','doctor_id','performer_id','bed_id',
              'ward_id','quantity','unit_price','total','status','notes','billable','performed_at','invoice_item_id','created_at'] },
-    write: { insert: { roles: ['admin','registrar','doctor','nurse','cashier'], columns: ['admission_id','service_id',
-               'clinic_item_id','doctor_id','bed_id','ward_id','quantity','unit_price','total','status','notes','billable','performed_at'] },
-             update: { roles: ['admin','registrar','doctor','nurse','cashier'], columns: ['status','billable','notes','invoice_item_id'] },
+    // INPATIENT_MONEY_FIX_V1 (D7) — деньги и склад строки табличным путём не
+    // пишутся. Заводят строку только RPC: услугу — admission_service_add (цена
+    // сервера: личная цена врача, иначе каталог), товар — выдача со склада или
+    // из подотчёта (движение склада), проживание — bill_accommodation. Поэтому
+    // insert закрыт всем. invoice_item_id и status ставят и снимают только
+    // счёт и касса (billing.js, cashier.js): медсестра, стёршая ссылку на счёт
+    // у оплаченной строки, выставляла её второй раз. Правка «в счёт / в учёт»
+    // и удаление дополнительно проверяются по строке в routes/db.js
+    // (refuseAdmissionLineWrite): только невыставленная строка, удаление —
+    // только не-товарной строки незакрытой госпитализации.
+    write: { insert: { roles: [], columns: [] },
+             update: { roles: ['admin','registrar','doctor','nurse','cashier'], columns: ['billable','notes'] },
              delete: { roles: ['admin','registrar','doctor','nurse'] } },   // unbilled lines are removed from the bed detail list
     // clinic_item_id: отчёт «расход препаратов по стационару» отбирает строки
     // С ТОВАРОМ (`.not('clinic_item_id','is',null)`).
