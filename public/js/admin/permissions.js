@@ -1296,6 +1296,14 @@ export function canWriteServiceTemplates() {
     return lvl === 'edit' || lvl === 'delete';
 }
 
+// FINAL_ROLES_SYNC_FIX_V1 (I1) — ЗЕРКАЛО visit_services.insert (реестр):
+// кто вставляет строки услуг визита. Живёт здесь, а не в visit-wizard.js,
+// потому что тот же вопрос задаёт и мастер записи календаря
+// (service-picker-modal.js): колл-центр записывает слот, а услуги добавляет
+// регистратура — строки ему не вставить, и пытаться незачем.
+export const VISIT_LINE_ROLES = Object.freeze(['admin', 'registrar', 'doctor']);
+export function canAddVisitLines() { return hasActorRole(VISIT_LINE_ROLES); }
+
 // LIVE_AUDIT_FIX_V1 (A7) — зеркало BOOK_ROLES (server/services/rpc/calendar.js):
 // кому сервер отдаёт сетку календаря записи.
 export const CALENDAR_ROLES = Object.freeze(['admin', 'registrar', 'doctor', 'callcenter']);

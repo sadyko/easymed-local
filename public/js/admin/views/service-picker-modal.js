@@ -35,7 +35,7 @@ import { h, Icon, clear, toast, Avatar, initials, avColor } from '../ui.js';
 // регистрации (quick-patient-modal.js), и путь сохранения теперь один.
 import { loadPatientsPaged, insertRow, currentUser } from '../data.js';
 import { logPatientActivity } from './activity-log.js';   // BOOK_WIZARD_V1
-import { canWriteServiceTemplates } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — шаблоны сметы
+import { canWriteServiceTemplates, canAddVisitLines } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — шаблоны сметы
 import { surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация, хирургия без койки
 import { gw } from '../gateway.js';
 import { clinicFlags } from '../clinic-flags.js';   // CUSTOM_CLINIC_V1
@@ -3006,6 +3006,22 @@ export function openServicePickerModal({
                 return;
             }
             const visit = booked.visit;
+
+            // FINAL_ROLES_SYNC_FIX_V1 (I1) — КОЛЛ-ЦЕНТР ЗАПИСЫВАЕТ СЛОТ, УСЛУГИ
+            // ДОБАВЛЯЕТ РЕГИСТРАТУРА. Строки visit_services реестр вставляет
+            // только admin/registrar/doctor; оператор календаря получал отказ на
+            // каждой строке, и ветка «ни одна услуга не записалась» ниже
+            // удаляла его запись (discard_empty_visit) — «запись отменена» на
+            // каждой записи колл-центра. Так было не всегда: раньше визит
+            // оставался держать врача и время, а услуги добавляли у стойки.
+            // Теперь тому, кто строк вставить не может, строки и не
+            // предлагаются: запись остаётся, отмена — только настоящему сбою.
+            if (!canAddVisitLines()) {
+                toast(tr('Записано. Услуги добавит регистратура.'), 'ok');
+                closePicker();
+                if (typeof onBooked === 'function') { try { onBooked(bookedSummary(visit, [])); } catch (_) {} }
+                return;
+            }
 
             const vsRows = [];
             for (const a of state.added) {

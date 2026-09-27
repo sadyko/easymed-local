@@ -22,6 +22,7 @@ export const STRINGS = {
   "Приём не привязан к визиту — услугу добавить некуда.": {"en":"The appointment is not linked to a visit — there is nowhere to add the service.","ru":"Приём не привязан к визиту — услугу добавить некуда.","uz":"Qabul tashrifga bog'lanmagan — xizmatni qo'shadigan joy yo'q."},
   "сервер не вернул строку": {"en":"the server returned no row","ru":"сервер не вернул строку","uz":"server qatorni qaytarmadi"},
   "Ни одна услуга не записалась — запись отменена.": {"en":"No service was saved — the booking was cancelled.","ru":"Ни одна услуга не записалась — запись отменена.","uz":"Birorta ham xizmat saqlanmadi — yozuv bekor qilindi."},
+  "Записано. Услуги добавит регистратура.": {"en":"Booked. The front desk will add the services.","ru":"Записано. Услуги добавит регистратура.","uz":"Yozildi. Xizmatlarni registratura qo'shadi."},
   "Единица товара в каталоге": {"en":"Item unit in the catalogue","ru":"Единица товара в каталоге","uz":"Katalogdagi tovar birligi"},
   "Единица товара не сохранена: {msg}": {"en":"The item unit was not saved: {msg}","ru":"Единица товара не сохранена: {msg}","uz":"Tovar birligi saqlanmadi: {msg}"},
   "Услуга не снята: {msg}": {"en":"The service was not removed: {msg}","ru":"Услуга не снята: {msg}","uz":"Xizmat olib tashlanmadi: {msg}"},

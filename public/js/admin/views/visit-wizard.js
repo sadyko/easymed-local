@@ -43,7 +43,7 @@ import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // 
 import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
          askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=aug17e';
 import { surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 (A5) — хирургия без койки: отказ до визита
-import { hasActorRole, canWriteServiceTemplates } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1 · LIVE_AUDIT_FIX_V1 — шаблоны сметы
+import { hasActorRole, canWriteServiceTemplates, VISIT_LINE_ROLES, canAddVisitLines } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1 · LIVE_AUDIT_FIX_V1 — шаблоны сметы
 import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
 // строк живут в одном модуле на все окна: копии этого кода уже разъезжались.
@@ -131,11 +131,11 @@ const INVOICE_ROLES = ['admin', 'registrar', 'cashier'];
 // пустой визит и затем «not allowed» на первой строке; касса и лаборатория
 // упирались уже в ensure_visit. Поэтому «Добавить услуги» видят только эти роли,
 // а мастер, открытый кем-то ещё, отказывает сразу — до первой записи в базу.
-export const VISIT_LINE_ROLES = ['admin', 'registrar', 'doctor'];
+// FINAL_ROLES_SYNC_FIX_V1 — список один на оба мастера: permissions.js.
+export { VISIT_LINE_ROLES, canAddVisitLines };
 // LIVE_AUDIT_FIX_V1 — зеркало patients.update (реестр): плательщик пациента
 // (patients.payer_id, полис) пишется только этими ролями.
 export const PATIENT_PAYER_ROLES = ['admin', 'registrar'];
-export function canAddVisitLines() { return hasActorRole(VISIT_LINE_ROLES); }
 
 function currentUserId() {
     try { return (window.easymed && window.easymed.state && window.easymed.state.user && window.easymed.state.user.id) || null; }

@@ -111,6 +111,8 @@ const PATIENTS = [
 let CRM_REQS = [];
 let CRM_LINES = [];
 let CALLS = [];
+let FAIL_LINES = false;
+const RPCS = [];
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     let body = {}; try { body = JSON.parse(opts.body || '{}'); } catch { /* не наш запрос */ }
@@ -129,9 +131,14 @@ globalThis.fetch = async (url, opts = {}) => {
             return ok(f && String(f.val) !== '3' ? [] : CRM_REQS);
         }
         if (body.table === 'crm_request_services' && body.op === 'select') return ok(CRM_LINES);
+        // FINAL_ROLES_SYNC_FIX_V1 — отказ реестра на строке услуги (как у роли без visit_services.insert).
+        if (body.op === 'insert' && body.table === 'visit_services' && FAIL_LINES) {
+            return { ok: false, status: 403, json: async () => ({ error: { code: 'forbidden', message: 'not allowed' } }), headers: { getSetCookie: () => [] } };
+        }
         if (body.op === 'insert') return ok({ id: 'row-1' });
         return ok([]);
     }
+    if (u.startsWith('/api/rpc/')) RPCS.push(decodeURIComponent(u.slice('/api/rpc/'.length)));
     if (u.startsWith('/api/rpc/calendar_book')) return ok({ visit: { id: 'v-1', visit_number: 'V-1', branch_id: null, visit_date: DAY_ISO } });
     if (u.startsWith('/api/rpc/')) return ok({});
     return gone();
@@ -347,4 +354,49 @@ test('оба мастера читают строки заявки одним к
         assert.match(src, /pendingCrmLines/,
             f + ' не зовёт общее чтение строк заявки (pendingCrmLines)');
     }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FINAL_ROLES_SYNC_FIX_V1 (I1) — ЗАПИСЬ КОЛЛ-ЦЕНТРА ИЗ КАЛЕНДАРЯ НЕ УДАЛЯЕТСЯ.
+//
+// Строки услуг визита вставляют только администратор, регистратура и врач.
+// Оператор колл-центра получал отказ на каждой строке, и мастер убирал «пустую»
+// запись (discard_empty_visit) — каждая его запись из календаря отменялась.
+// Правильно: слот записан, услуги добавит регистратура; строк не пытаемся.
+// А у роли, которая строки вставлять может, настоящий сбой по-прежнему
+// убирает пустую запись.
+// ═══════════════════════════════════════════════════════════════════════════
+async function bookFromCalendarAs(role) {
+    window.easymed = { state: { user: { id: 1, role, extra_roles: [] } } };
+    RPCS.length = 0;
+    const box = await openFromCalendar();
+    addBtnFor(box, 'Приём терапевта').click();
+    await settle();
+    await attachPatientViaUi(box);
+    const create = btnWith(topOverlay(), 'Создать визит') || byClass(topOverlay(), 'wzc-cta')[0];
+    assert.ok(create, 'в мастере нет кнопки создания визита');
+    create.click();
+    await settle(160);
+}
+const toastText = () => { const t = BODY.children.find((c) => c.attrs && c.attrs.id === 'toast'); return t ? t.textContent : ''; };
+
+test('I1: колл-центр записывает из календаря — слот остаётся, строк не пытается, запись не удаляется', async () => {
+    try {
+        await bookFromCalendarAs('callcenter');
+        assert.ok(RPCS.includes('calendar_book'), 'запись не дошла до calendar_book');
+        assert.ok(!CALLS.some((c) => c.table === 'visit_services' && c.op === 'insert'),
+            'колл-центру предложены строки услуг, которые реестр ему не вставит');
+        assert.ok(!RPCS.includes('discard_empty_visit'), 'запись колл-центра удалена: ' + RPCS.join(','));
+        assert.match(toastText(), /Записано\. Услуги добавит регистратура\./);
+    } finally { delete window.easymed; }
+});
+
+test('I1: регистратура — строка услуги не легла по-настоящему, пустая запись убирается, как прежде', async () => {
+    FAIL_LINES = true;
+    try {
+        await bookFromCalendarAs('registrar');
+        assert.ok(CALLS.some((c) => c.table === 'visit_services' && c.op === 'insert'), 'регистратура строк не пыталась');
+        assert.ok(RPCS.includes('discard_empty_visit'), 'пустая запись после сбоя осталась: ' + RPCS.join(','));
+        assert.match(toastText(), /запись отменена/);
+    } finally { FAIL_LINES = false; delete window.easymed; }
 });
