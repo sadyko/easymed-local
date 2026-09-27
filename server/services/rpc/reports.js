@@ -982,6 +982,18 @@ function outpatientPayRows(db, { from, to, doctorId, bf, gf, withoutDoctor = fal
            NULL                               AS inpatient_pct,
            CASE WHEN ${PERF_GOODS_SQL} THEN NULL ELSE dr.fix END AS fix,
            CASE WHEN tr.visit_service_id IS NULL THEN 0 ELSE ${PERF_TIER.above} END AS tier_units_above,
+           -- V3120_FIX (FROZEN_RATES) — составные части ставки строки: личный
+           -- процент, ступени услуги и место строки в месяце (running). Запись
+           -- закрытого месяца хранит их, и корректировка пересчитывает строку по
+           -- СТАВКАМ МЕСЯЦА, а не по сегодняшним (payFeeAtMonthRate).
+           CASE WHEN ${PERF_GOODS_SQL} THEN 0 ELSE COALESCE(dr.percent, doc.service_rate_default, 0) END AS base_pct,
+           tr.running                         AS tier_running,
+           tr.tier_from                       AS tier_from,
+           tr.tier_percent                    AS tier_percent,
+           tr.tier_from_2                     AS tier_from_2,
+           tr.tier_percent_2                  AS tier_percent_2,
+           tr.tier_from_3                     AS tier_from_3,
+           tr.tier_percent_3                  AS tier_percent_3,
            CASE WHEN ${PERF_GOODS_SQL} THEN 1 ELSE 0 END AS goods,
            -- PAY_REFUND_V1 — доля денег, оставшихся у клиники по счёту строки.
            CASE WHEN i.id IS NULL THEN 1 ELSE ${REFUND_KEEP_SQL('rf')} END AS refund_keep,
@@ -1048,6 +1060,7 @@ function inpatientPayRows(db, { from, to, doctorId, bf, gf }) {
            -- INPATIENT_BONUS_V1 — фикс стационарной ставки за единицу (payLineMoney).
            ${INPATIENT_FIX_SQL}               AS fix,
            0                                  AS tier_units_above,
+           ${INPATIENT_PCT_SQL}               AS base_pct,   -- V3120_FIX (FROZEN_RATES)
            0                                  AS goods,
            CASE WHEN i.id IS NULL THEN 1 ELSE ${REFUND_KEEP_SQL('rf')} END AS refund_keep,
            ${OWN_BRANCH_OR('i.branch_id')}    AS branch_id
@@ -1297,7 +1310,7 @@ const currentMonth = (db) => monthOf(today(db));
 /** Закрытые месяцы: Map 'YYYY-MM' → строка pay_periods. */
 function closedMonthMap(db) {
   try {
-    return new Map(db.prepare(`SELECT p.month, p.closed_at, p.closed_by, p.total, p.lines,
+    return new Map(db.prepare(`SELECT p.*,
                                       COALESCE(NULLIF(u.full_name, ''), u.username) AS closed_by_name
                                  FROM pay_periods p LEFT JOIN users u ON u.id = p.closed_by
                                 ORDER BY p.month`).all().map((r) => [r.month, r]));
@@ -1330,15 +1343,21 @@ function storedLineFilter(args, ctx) {
   return (r) => branchOk(r) && buildingOk(r);
 }
 
-/** Записанные строки закрытых месяцев за [from, to]. */
-function storedLines(db, { from, to, kinds, doctorId = null, args = null, ctx = null }) {
+/**
+ * Записанные строки закрытых месяцев за [from, to].
+ * V3120_FIX — doctorsOnly (по умолчанию): только строки сотрудников; строки
+ * партнёров (doctor_id NULL, «Рефералы») читает только referralReportLines.
+ * Строки hidden (получатель с нулевой ставкой, записан ради заморозки ставок)
+ * отчётам не отдаются.
+ */
+function storedLines(db, { from, to, kinds, doctorId = null, args = null, ctx = null, doctorsOnly = true }) {
   const rows = db.prepare(`
     SELECT data FROM pay_period_lines
      WHERE kind IN (${kinds.map(() => '?').join(',')})
-       AND date BETWEEN date(?) AND date(?)${doctorId != null ? ' AND doctor_id = ?' : ''}
+       AND date BETWEEN date(?) AND date(?)${doctorId != null ? ' AND doctor_id = ?' : ''}${doctorsOnly ? ' AND doctor_id IS NOT NULL' : ''}
      ORDER BY id`).all(...kinds, from, to, ...(doctorId != null ? [Number(doctorId)] : []));
   const ok = storedLineFilter(args, ctx);
-  return rows.map((r) => ({ ...JSON.parse(r.data), frozen: true })).filter(ok);
+  return rows.map((r) => ({ ...JSON.parse(r.data), frozen: true })).filter((r) => !r.hidden && ok(r));
 }
 
 /**
@@ -1356,20 +1375,37 @@ export function performedPayLines(db, opts = {}) {
   return [...kept, ...frozen].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }
 
-// Вознаграждение за направления, которое идёт СОТРУДНИКУ, живым расчётом: те же
-// строки, что «Рефералы» (referralLines / inpatientReferralLines), с ключом
-// строки для записи месяца.
-function doctorReferralLive(db, { from, to, doctorId = null, args = null, ctx }) {
+// V3120_FIX — получатель строки вознаграждения, который НЕ сотрудник:
+// источник-партнёр по id (удалённый источник — по имени).
+const partnerBen = (r) => (r.referral_source_id != null ? 's' + r.referral_source_id : 's:' + (r.referral || ''));
+// Ключ получателя строки выплаты/вознаграждения: врач (его id) или партнёр.
+const benOf = (r) => (r.doctor_id != null ? String(r.doctor_id) : (r.ben || null));
+
+// Вознаграждение за направления живым расчётом — ВСЕ получатели: сотрудники
+// (doctor_id) и партнёры (doctor_id NULL, ben/source_id) — те же строки, что
+// «Рефералы» (referralLines / inpatientReferralLines), с ключом строки для
+// записи месяца.
+function referralLiveAll(db, { from, to, doctorId = null, args = null, ctx, allBeneficiaries = false }) {
   const a = { ...(args || {}), from, to, referrer: 'all' };
-  const out = referralLines(db, a, ctx, doctorId != null ? { doctorId } : {})
-    .filter((r) => r.referral_doctor_id != null)
-    .map((r) => ({ ...r, kind: 'ref', doctor_id: Number(r.referral_doctor_id), fee: r.reward,
-                   line_key: 'ref:' + r.invoice_item_id }));
-  const inn = inpatientReferralLines(db, a, ctx)
-    .filter((r) => referralDoctorOf(r) != null && (doctorId == null || referralDoctorOf(r) === Number(doctorId)))
-    .map((r) => ({ ...r, kind: 'ref_in', doctor_id: referralDoctorOf(r), fee: r.reward,
-                   line_key: 'ref_in:' + (r.line_kind === 'fixed' ? 'fix' + r.admission_id : r.item_id) + ':' + r.beneficiary_key }));
+  const out = referralLines(db, a, ctx, doctorId != null ? { doctorId } : {}).map((r) => {
+    const doc = r.referral_doctor_id != null ? Number(r.referral_doctor_id) : null;
+    return { ...r, kind: 'ref', doctor_id: doc, fee: r.reward, line_key: 'ref:' + r.invoice_item_id,
+             ...(doc == null ? { ben: partnerBen(r), source_id: r.referral_source_id ?? null } : {}) };
+  });
+  const inn = inpatientReferralLines(db, a, ctx, { allBeneficiaries })
+    .filter((r) => doctorId == null || referralDoctorOf(r) === Number(doctorId))
+    .map((r) => {
+      const doc = referralDoctorOf(r);
+      return { ...r, kind: 'ref_in', doctor_id: doc, fee: r.reward,
+               line_key: 'ref_in:' + (r.line_kind === 'fixed' ? 'fix' + r.admission_id : r.item_id) + ':' + r.beneficiary_key,
+               ...(doc == null ? { ben: partnerBen(r), source_id: r.referral_source_id ?? null } : {}) };
+    });
   return [...out, ...inn];
+}
+
+// Вознаграждение за направления, которое идёт СОТРУДНИКУ, живым расчётом.
+function doctorReferralLive(db, opts) {
+  return referralLiveAll(db, opts).filter((r) => r.doctor_id != null);
 }
 
 /** То же с учётом закрытых месяцев. kind: 'ref' — амбулатория, 'ref_in' — стационар. */
@@ -1382,28 +1418,154 @@ function doctorReferralEarnings(db, opts) {
   return [...kept, ...storedLines(db, { ...opts, ctx, kinds: ['ref', 'ref_in'] })];
 }
 
-// Живые строки выплаты закрытых месяцев months, по ключу «строка|врач».
-function liveEntries(db, months, ctx) {
+// ===========================================================================
+// V3120_FIX (решение владельца 27.09) — FROZEN_RATES: «СТАВКИ МЕНЯЮТСЯ ТОЛЬКО
+// ВПЕРЁД». Закрытый месяц никогда не переоценивается правкой настроек: ставок
+// врача (карточка «Услуги и ставки», «Стационар», ставка по умолчанию,
+// doctor_rates), ступеней услуги, скидки категории пациента, окна пакета,
+// ставок источников направлений и вкладки «Вознаграждение за направления».
+// Корректировка за закрытый месяц возникает ТОЛЬКО от событий строки:
+// возврат (доля оставшихся денег), отмена счёта, новый счёт, поздняя отметка
+// «выполнено», смена исполнителя или направившего, изменение количества, и
+// сдвиг места строки в ступени из-за таких событий.
+//
+// Как: живая строка закрытого месяца пересчитывается ПО СТАВКАМ ИЗ ЗАПИСИ
+// месяца (payFeeAtMonthRate / referralRewardAtMonthRate), а деньги и факты
+// берутся живые. Ставка — у записанной строки с тем же ключом; у строки,
+// которой в записи нет (поздно отмеченная работа), — у записанной строки того
+// же врача и той же услуги в этом месяце; нет и такой — сегодняшняя ставка.
+// Деньги строки без счёта (цена каталога, скидка категории, пакет) — тоже из
+// записи, пока строку не выставили: цена — тоже настройка.
+//
+// Почему не история ставок с датой действия. Ставок семь разных видов в пяти
+// местах (JSON карточки, doctor_rates, ступени в services, категории
+// пациентов, пакеты, источники и категории направлений), и все они читаются
+// SQL-выражениями, общими с отчётами о выручке. История по каждому — большая
+// переделка всех этих выражений; запись закрытого месяца УЖЕ хранит ставки,
+// по которым месяц был выплачен, — это и есть история на те дни, которые
+// кто-то уже получил деньгами. Открытый (текущий) месяц по-прежнему считается
+// по сегодняшним ставкам: правка ставки в середине месяца действует на весь
+// ещё не закрытый месяц (docs/plans/2026-09-27-owner-answers.md).
+// ===========================================================================
+
+// Действующий процент строки со ступенью — то же, что tierMixSql в SQL.
+function tierEffPct(base, tier, running, qtyRaw) {
+  const qty = Math.max(Number(qtyRaw) || 1, 1);
+  const above = Math.max(0, Math.min(qty, running - tier.from));
+  const aboveK = (f) => (f > 0 ? Math.max(0, Math.min(qty, running - f)) : 0);
+  const a2 = aboveK(tier.from2);
+  const a3 = aboveK(tier.from3);
+  return (base * (qty - above)
+    + Math.max(base, tier.pct) * (above - a2)
+    + Math.max(base, tier.pct2) * (a2 - a3)
+    + Math.max(base, tier.pct3) * a3) / qty;
+}
+
+// Ставка записанной строки выплаты. base_pct нет — запись сделана до V3120_FIX:
+// тогда ставка — записанный действующий процент (со ступенью, как был).
+function recordedRate(rec) {
+  if (!rec) return null;
+  const n = (v) => Number(v) || 0;
+  return {
+    base_pct: rec.base_pct === undefined || rec.base_pct === null ? null : n(rec.base_pct),
+    eff_pct: n(rec.pct),
+    fix: rec.fix == null ? null : Number(rec.fix),
+    tier: n(rec.tier_from) > 0 ? { from: n(rec.tier_from), pct: n(rec.tier_percent), from2: n(rec.tier_from_2),
+                                   pct2: n(rec.tier_percent_2), from3: n(rec.tier_from_3), pct3: n(rec.tier_percent_3) } : null,
+  };
+}
+
+// Ставка месяца для строки, которой в записи нет: у записанной строки того же
+// врача, вида и услуги. Старая запись (без base_pct) годится, только если
+// строка шла не по ступени (tier_units_above = 0) — тогда её процент личный.
+function rateSamples(recs) {
+  const map = new Map();
+  for (const rec of recs) {
+    if (rec.kind !== 'out' && rec.kind !== 'in') continue;
+    const k = rec.doctor_id + '|' + rec.kind + '|' + rec.service_id;
+    if (map.has(k)) continue;
+    const rate = recordedRate(rec);
+    if (rate.base_pct == null) {
+      if (Number(rec.tier_units_above) > 0) continue;
+      rate.base_pct = rate.eff_pct;
+      rate.tier = null;
+    }
+    map.set(k, rate);
+  }
+  return map;
+}
+
+// Доля врача по живой строке L по ставке месяца (rec — записанная строка того
+// же ключа; sample — ставка месяца для строки без записи).
+function payFeeAtMonthRate(L, rec, sample) {
+  const rate = rec ? recordedRate(rec) : sample;
+  if (!rate) return L.doctor_fee;
+  if (Number(L.goods) === 1) return 0;
+  let pct;
+  if (rate.base_pct == null) pct = rate.eff_pct;
+  else if (rate.tier && L.tier_running != null) pct = tierEffPct(rate.base_pct, rate.tier, Number(L.tier_running), L.qty);
+  else if (rate.tier) pct = rate.eff_pct;          // ступень с услуги сняли после закрытия — как записано
+  else pct = rate.base_pct;
+  let net = Number(L.net) || 0;
+  // Строка без счёта и тогда, и теперь: её деньги — цена и скидка месяца.
+  if (L.invoice_item_id == null && rec && rec.invoice_item_id == null) {
+    net = (Number(rec.net) || 0) * (Number(L.qty) || 1) / (Number(rec.qty) || 1);
+  }
+  const base = rate.fix != null ? rate.fix * (L.qty == null ? 1 : L.qty) : net * pct / 100;
+  const keep = L.refund_keep == null ? 1 : Number(L.refund_keep);
+  const fee = keep === 1 ? base : base * keep;
+  return Math.abs(fee - (Number(L.doctor_fee) || 0)) < 0.005 ? L.doctor_fee : fee;
+}
+
+// Вознаграждение по живой строке L по ставке, записанной в месяце (rec.rate).
+function referralRewardAtMonthRate(L, rec) {
+  const rate = rec && rec.rate;
+  if (!rate) return L.fee;
+  const factor = payFactorOf(L);
+  if (!(factor > 0) || L.goods_to_doctor) return 0;
+  if (L.kind === 'ref_in') {
+    const v = Number(rate.value) || 0;
+    return L.line_kind === 'fixed' ? v * factor : (Number(L.after_discount) || 0) * v / 100 * factor;
+  }
+  return rewardForLine(rate, { amount: L.amount, discount: L.discount, qty: L.qty }) * factor;
+}
+
+// Закрытые месяцы, в записи которых есть партнёры и ставки (V3120_FIX).
+const partnerMonthsOf = (closed) => new Set([...closed.values()].filter((p) => Number(p.partners) === 1).map((p) => p.month));
+
+// Живые строки выплаты закрытых месяцев months, по ключу «строка|получатель»,
+// посчитанные по ставкам записи месяца (booked — bookedEntries тех же месяцев).
+function liveEntries(db, months, ctx, booked, partnerMonths) {
   const sorted = [...months].sort();
   const from = monthBounds(sorted[0]).from;
   const to = monthBounds(sorted[sorted.length - 1]).to;
   const set = new Set(months);
   const byMonth = new Map(months.map((m) => [m, new Map()]));
-  const add = (r, key, fee) => {
+  const samples = new Map(months.map((m) => [m, rateSamples([...booked.get(m).values()].map((e) => e.rec).filter(Boolean))]));
+  const add = (r, key, feeOf) => {
     const m = monthOf(r.date);
-    if (!set.has(m) || r.doctor_id == null) return;
-    const k = key + '|' + r.doctor_id;
-    const e = byMonth.get(m).get(k) || { key, doctor_id: Number(r.doctor_id), fee: 0, sample: r };
-    e.fee += Number(fee) || 0;
+    const ben = benOf(r);
+    if (!set.has(m) || ben == null) return;
+    if (r.doctor_id == null && !partnerMonths.has(m)) return;   // партнёров в старой записи нет
+    const k = key + '|' + ben;
+    const b = booked.get(m).get(k);
+    const e = byMonth.get(m).get(k) || { key, doctor_id: r.doctor_id == null ? null : Number(r.doctor_id), ben, fee: 0, sample: r };
+    e.fee += Number(feeOf(b ? b.rec : null, samples.get(m))) || 0;
     byMonth.get(m).set(k, e);
   };
-  for (const r of livePayLines(db, { from, to })) add(r, r.kind + ':' + r.line_id, r.doctor_fee);
-  for (const r of doctorReferralLive(db, { from, to, ctx })) add(r, r.line_key, r.fee);
+  for (const r of livePayLines(db, { from, to })) {
+    if (r.doctor_id == null) continue;
+    add(r, r.kind + ':' + r.line_id, (rec, smp) => payFeeAtMonthRate(r, rec, rec ? null : smp.get(r.doctor_id + '|' + r.kind + '|' + r.service_id)));
+  }
+  for (const r of referralLiveAll(db, { from, to, ctx, allBeneficiaries: true })) {
+    add(r, r.line_key, (rec) => referralRewardAtMonthRate(r, rec));
+  }
   return byMonth;
 }
 
-// Что уже записано за месяцы months: сама запись месяца и корректировки к нему,
-// записанные в других закрытых месяцах.
+// Что уже записано за месяцы months: сама запись месяца (rec — записанная
+// строка, по ней берётся ставка месяца) и корректировки к нему, записанные в
+// других закрытых месяцах.
 function bookedEntries(db, months) {
   const byMonth = new Map(months.map((m) => [m, new Map()]));
   const ph = months.map(() => '?').join(',');
@@ -1412,20 +1574,28 @@ function bookedEntries(db, months) {
     .all(...months, ...months);
   for (const r of rows) {
     const m = r.kind === 'adj' ? r.for_month : r.month;
-    const k = r.line_key + '|' + r.doctor_id;
-    const e = byMonth.get(m).get(k) || { key: r.line_key, doctor_id: r.doctor_id, fee: 0, sample: JSON.parse(r.data) };
+    const data = JSON.parse(r.data);
+    const ben = r.doctor_id != null ? String(r.doctor_id) : (data.ben || null);
+    if (ben == null) continue;
+    const k = r.line_key + '|' + ben;
+    const e = byMonth.get(m).get(k) || { key: r.line_key, doctor_id: r.doctor_id, ben, fee: 0, sample: data, rec: null };
     e.fee += Number(r.fee) || 0;
+    if (r.kind !== 'adj' && !e.rec) { e.rec = data; e.sample = data; }
     byMonth.get(m).set(k, e);
   }
   return byMonth;
 }
 
+// Поля строки вознаграждения, которыми корректировка встаёт в «Рефералы».
+const REFERRAL_ADJ_FIELDS = ['referral', 'referral_code', 'referral_source_id', 'internal', 'category_name', 'mode',
+  'where', 'beneficiary_key', 'beneficiary_doctor_id', 'ben', 'source_id'];
+
 /** Корректировки, которые приходятся на открытый месяц target (день — date). */
 function computeAdjustments(db, closed, target, ctx, date) {
   const sources = [...closed.keys()].filter((m) => m < target && firstOpenAfter(closed, m) === target);
   if (!sources.length) return [];
-  const live = liveEntries(db, sources, ctx);
   const booked = bookedEntries(db, sources);
+  const live = liveEntries(db, sources, ctx, booked, partnerMonthsOf(closed));
   const names = new Map(db.prepare("SELECT id, COALESCE(NULLIF(full_name, ''), username) AS n FROM users").all().map((u) => [u.id, u.n]));
   const out = [];
   for (const m of sources) {
@@ -1438,11 +1608,16 @@ function computeAdjustments(db, closed, target, ctx, date) {
       if (Math.abs(delta) < 0.005) continue;
       const e = l || b;
       const src = e.sample || {};
+      const sk = src.source_kind || src.kind || null;
+      const ref = {};
+      if (sk === 'ref' || sk === 'ref_in') for (const f of REFERRAL_ADJ_FIELDS) if (src[f] !== undefined) ref[f] = src[f];
       out.push({
+        ...ref,
         kind: 'adj', line_key: e.key, for_month: m, date,
-        source_kind: src.source_kind || src.kind || null,
+        source_kind: sk,
         origin: src.origin || '', branch_id: src.branch_id ?? null,
-        doctor_id: e.doctor_id, doctor: names.get(e.doctor_id) || src.doctor || null,
+        doctor_id: e.doctor_id, doctor: e.doctor_id != null ? (names.get(e.doctor_id) || src.doctor || null) : null,
+        ben: e.ben,
         patient_id: src.patient_id ?? null, patient: src.patient || '', mrn: src.mrn || '',
         visit_id: src.visit_id ?? null, admission_id: src.admission_id ?? null, admission_no: src.admission_no || '',
         invoice: src.invoice || '', service: src.service || '',
@@ -1458,13 +1633,15 @@ function computeAdjustments(db, closed, target, ctx, date) {
 
 /**
  * Строки корректировок за период [from, to]: записанные в закрытых месяцах и
- * живые — в открытых месяцах после закрытых.
+ * живые — в открытых месяцах после закрытых. V3120_FIX — partners: и
+ * корректировки вознаграждений партнёров (только «Рефералам»); по умолчанию —
+ * только сотрудников (выплата врачам).
  */
-function payAdjustments(db, { from, to, doctorId = null, args = null, ctx = null }) {
+function payAdjustments(db, { from, to, doctorId = null, args = null, ctx = null, partners = false }) {
   const closed = closedMonthMap(db);
   if (!closed.size) return [];
   const c = ctx || buildingContext(db);
-  const out = storedLines(db, { from, to, kinds: ['adj'], doctorId, args, ctx: c });
+  const out = storedLines(db, { from, to, kinds: ['adj'], doctorId, args, ctx: c, doctorsOnly: !partners });
   const cur = currentMonth(db);
   const t = today(db);
   const lo = String(from).slice(0, 10);
@@ -1477,6 +1654,7 @@ function payAdjustments(db, { from, to, doctorId = null, args = null, ctx = null
     if (date < lo || date > hi) continue;
     for (const a of computeAdjustments(db, closed, m, c, date)) {
       if (doctorId != null && a.doctor_id !== Number(doctorId)) continue;
+      if (a.doctor_id == null && !partners) continue;
       if (ok(a)) out.push(a);
     }
   }
@@ -1511,7 +1689,13 @@ function monthArg(args) {
   return m;
 }
 
-/** Закрыть месяц оплаты врачей: записать строки выплаты каждого врача. */
+/**
+ * Закрыть месяц оплаты врачей: записать строки выплаты каждого врача.
+ * V3120_FIX — и строки вознаграждений ПАРТНЁРОВ (doctor_id NULL, source_id):
+ * «Рефералы» закрытого месяца читаются из записи, как «Зарплаты врачей»
+ * (pay_periods.partners = 1, миграция 202). В сумму месяца (total) входят
+ * только начисления сотрудников — это «оплата врачей».
+ */
 export function payPeriodClose(db, args, user) {
   requirePayPeriodEdit(db, user);
   const month = monthArg(args);
@@ -1527,21 +1711,24 @@ export function payPeriodClose(db, args, user) {
       const key = r.kind + ':' + r.line_id;
       rows.push({ kind: r.kind, doctor_id: r.doctor_id, line_key: key, for_month: null, date: r.date, fee: r.doctor_fee, data: { ...r, line_key: key } });
     }
-    for (const r of doctorReferralLive(db, { from, to, ctx })) {
-      rows.push({ kind: r.kind, doctor_id: r.doctor_id, line_key: r.line_key, for_month: null, date: r.date, fee: r.fee, data: r });
+    for (const r of referralLiveAll(db, { from, to, ctx, allBeneficiaries: true })) {
+      if (r.doctor_id == null && r.ben == null) continue;
+      rows.push({ kind: r.kind, doctor_id: r.doctor_id, source_id: r.source_id ?? null, line_key: r.line_key, for_month: null, date: r.date, fee: r.fee, data: r });
     }
     for (const a of computeAdjustments(db, closed, month, ctx, to)) {
-      rows.push({ kind: 'adj', doctor_id: a.doctor_id, line_key: a.line_key, for_month: a.for_month, date: a.date, fee: a.fee, data: a });
+      rows.push({ kind: 'adj', doctor_id: a.doctor_id, source_id: a.source_id ?? null, line_key: a.line_key, for_month: a.for_month, date: a.date, fee: a.fee, data: a });
     }
-    const total = round2(rows.reduce((n, r) => n + (Number(r.fee) || 0), 0));
-    db.prepare('INSERT INTO pay_periods (month, closed_by, total, lines) VALUES (?, ?, ?, ?)').run(month, user.id, total, rows.length);
-    const ins = db.prepare(`INSERT INTO pay_period_lines (month, doctor_id, kind, line_key, for_month, date, fee, data)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-    for (const r of rows) ins.run(month, r.doctor_id, r.kind, r.line_key, r.for_month, r.date, round2(Number(r.fee) || 0), JSON.stringify(r.data));
+    const doctorRows = rows.filter((r) => r.doctor_id != null && !(r.data && r.data.hidden));
+    const total = round2(doctorRows.reduce((n, r) => n + (Number(r.fee) || 0), 0));
+    db.prepare('INSERT INTO pay_periods (month, closed_by, total, lines, partners) VALUES (?, ?, ?, ?, 1)').run(month, user.id, total, doctorRows.length);
+    const ins = db.prepare(`INSERT INTO pay_period_lines (month, doctor_id, source_id, kind, line_key, for_month, date, fee, data)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const r of rows) ins.run(month, r.doctor_id, r.source_id ?? null, r.kind, r.line_key, r.for_month, r.date, round2(Number(r.fee) || 0), JSON.stringify(r.data));
     db.prepare("INSERT INTO pay_period_log (month, action, user_id, total) VALUES (?, 'close', ?, ?)").run(month, user.id, total);
-    return { month, closed: true, total, lines: rows.length,
-             doctors: new Set(rows.map((r) => r.doctor_id)).size,
-             adjustments: rows.filter((r) => r.kind === 'adj').length };
+    return { month, closed: true, total, lines: doctorRows.length,
+             doctors: new Set(doctorRows.map((r) => r.doctor_id)).size,
+             adjustments: doctorRows.filter((r) => r.kind === 'adj').length,
+             partner_lines: rows.filter((r) => r.doctor_id == null).length };
   });
   return run.immediate();
 }
@@ -1976,7 +2163,11 @@ function referralLines(db, args, ctx, { doctorId = null } = {}) {
 // ---------------------------------------------------------------------------
 const INPATIENT_KIND_RU = { service: 'Услуга', bed: 'Койко-дни', fixed: 'Фикс за госпитализацию' };
 
-function inpatientReferralLines(db, args, ctx) {
+// allBeneficiaries (V3120_FIX, FROZEN_RATES) — и получатели с нулевой ставкой
+// (сотрудник без ставки стационара, фикс 0): их строки помечены hidden и в
+// отчёты не выводятся, но запись месяца их хранит — иначе ставку, поднятую
+// после закрытия, нельзя было бы отличить от нового события.
+function inpatientReferralLines(db, args, ctx, { allBeneficiaries = false } = {}) {
   const scope = referrerScope(args);
   const { from, to } = resolveRange(db, args);
   // Ревью I4 — счёт госпитализации пишется без филиала (buildAdmissionInvoice):
@@ -2037,7 +2228,7 @@ function inpatientReferralLines(db, args, ctx) {
     .map((r) => [r.id, r]));
   const doctors = new Map(db.prepare(`SELECT id, COALESCE(NULLIF(full_name, ''), username) AS name,
                                              inpatient_referral_pct, inpatient_referral_fixed
-                                        FROM users WHERE inpatient_referral_pct > 0 OR inpatient_referral_fixed > 0`).all()
+                                        FROM users${allBeneficiaries ? '' : ' WHERE inpatient_referral_pct > 0 OR inpatient_referral_fixed > 0'}`).all()
     .map((u) => [u.id, u]));
   // Первый оплаченный счёт каждой госпитализации — за ВСЁ время, а не за
   // период: фикс принадлежит ему, в какой бы период ни попал отчёт.
@@ -2064,6 +2255,7 @@ function inpatientReferralLines(db, args, ctx) {
       pct: Number(doc.inpatient_referral_pct) || 0,
       fixed: Number(doc.inpatient_referral_fixed) || 0,
       beneficiary_doctor_id: doc.id,
+      hidden: !(Number(doc.inpatient_referral_pct) > 0 || Number(doc.inpatient_referral_fixed) > 0),
     } : null;
   };
   const beneficiaries = (r) => {
@@ -2112,7 +2304,8 @@ function inpatientReferralLines(db, args, ctx) {
     for (const b of bs) {
       const who = { referral_source_id: b.referral_source_id, referral: b.referral, referral_code: b.referral_code,
                     internal: b.internal, category_name: b.category_name, mode: b.mode,
-                    beneficiary_key: b.key, beneficiary_doctor_id: b.beneficiary_doctor_id };
+                    beneficiary_key: b.key, beneficiary_doctor_id: b.beneficiary_doctor_id,
+                    ...(b.hidden ? { hidden: true } : {}) };
       if (r.line_kind === 'service' || r.line_kind === 'bed') {
         const after = (Number(r.amount) || 0) - (Number(r.discount) || 0);
         out.push({
@@ -2125,7 +2318,7 @@ function inpatientReferralLines(db, args, ctx) {
         });
       }
       const fk = r.admission_id + '|' + b.key;
-      if (isFirstPaid && b.fixed > 0 && !fixedDone.has(fk)) {
+      if (isFirstPaid && (b.fixed > 0 || allBeneficiaries) && !fixedDone.has(fk)) {
         fixedDone.add(fk);
         pendingFixed.push({
           ...base, ...who,
@@ -2133,6 +2326,7 @@ function inpatientReferralLines(db, args, ctx) {
           qty: 1, amount: 0, discount: 0, after_discount: 0,
           rate: { unit: 'fix', value: b.fixed },
           reward: b.fixed * factor,
+          ...(b.fixed > 0 ? {} : { hidden: true }),
         });
       }
     }
@@ -2149,6 +2343,43 @@ const referralDoctorOf = (r) => (r.beneficiary_doctor_id == null ? null : Number
 // групп) и стационарные (INPATIENT_BONUS_V1).
 function allReferralLines(db, args, ctx) {
   return [...referralLines(db, args, ctx), ...inpatientReferralLines(db, args, ctx)];
+}
+
+// V3120_FIX — СТРОКИ «РЕФЕРАЛОВ» С УЧЁТОМ ЗАКРЫТЫХ МЕСЯЦЕВ. Прежде отчёт всегда
+// считался живьём, и у закрытого месяца расходился с «Зарплатами врачей» (те
+// читают запись) и двигался после выплаты партнёру. Теперь:
+//   • открытый месяц — живые строки, как прежде;
+//   • закрытый месяц — строки из записи: сотрудники — всегда (ровно то, что
+//     «Зарплаты врачей» и кабинет), партнёры — если месяц закрыт уже с ними
+//     (pay_periods.partners = 1, миграция 202); месяц, закрытый раньше, у
+//     партнёров остаётся живым, как был;
+//   • изменение после закрытия — строкой «Где: Корректировка» у того же
+//     получателя в первом открытом месяце (у сотрудника в «Зарплатах врачей» —
+//     в колонке «Корректировки»).
+function referralReportLines(db, args, ctx) {
+  const live = allReferralLines(db, args, ctx);
+  const closed = closedMonthMap(db);
+  if (!closed.size) return live;
+  const { from, to } = resolveRange(db, args);
+  const scope = referrerScope(args);
+  const inScope = (r) => scope === 'all' || (scope === 'internal') === !!r.internal;
+  const partners = partnerMonthsOf(closed);
+  const kept = live.filter((r) => {
+    const m = monthOf(r.date);
+    if (!closed.has(m)) return true;
+    return r.beneficiary_doctor_id == null && !partners.has(m);
+  });
+  const stored = storedLines(db, { from, to, kinds: ['ref', 'ref_in'], args, ctx, doctorsOnly: false })
+    .filter((r) => inScope(r) && (r.doctor_id != null || partners.has(monthOf(r.date))));
+  const adj = payAdjustments(db, { from, to, args, ctx, partners: true })
+    .filter((a) => (a.source_kind === 'ref' || a.source_kind === 'ref_in') && inScope(a))
+    .map((a) => ({
+      ...a, where: 'adj', line_kind: 'adj', status: '', paid: false, pay_factor: 0,
+      after_discount: 0, rate: null, reward: a.fee, service: a.label,
+      referral: a.referral || '', beneficiary_doctor_id: a.doctor_id ?? null,
+    }));
+  if (!adj.length && !stored.length && kept.length === live.length) return live;
+  return [...kept, ...stored, ...adj];
 }
 
 // INPATIENT_BONUS_V1 — правило стационара словами, под обоими отчётами.
@@ -2172,7 +2403,7 @@ function referralsReport(db, args, ctx) {
   //
   // INPATIENT_BONUS_V1 — стационар идёт СВОЕЙ строкой того же направившего
   // («Где»), а направивший врач госпитализации — строкой сотрудника.
-  const lines = allReferralLines(db, args, ctx);
+  const lines = referralReportLines(db, args, ctx);   // V3120_FIX — закрытые месяцы из записи
   const buckets = new Map();
   for (const r of lines) {
     const who = r.beneficiary_key || (r.referral_source_id != null ? 'id:' + r.referral_source_id : 'nm:' + r.referral);
@@ -2184,9 +2415,10 @@ function referralsReport(db, args, ctx) {
       category: r.category_name, mode: r.mode,
       patients: new Set(), count: 0, amount: 0, paid: 0, reward: 0,
     };
-    b.patients.add(r.patient_id);
+    // Корректировка (V3120_FIX) — не услуга и не новый пациент.
+    if (r.where !== 'adj') b.patients.add(r.patient_id);
     // Строка фикса за госпитализацию — не услуга: в «Услуг» не считается.
-    if (r.line_kind !== 'fixed') b.count += 1;
+    if (r.line_kind !== 'fixed' && r.where !== 'adj') b.count += 1;
     b.amount += r.after_discount;
     if (r.paid) b.paid += r.after_discount * payFactorOf(r);   // V3120_FIX — частичный возврат
     b.reward += r.reward;
@@ -2217,13 +2449,14 @@ function referralsReport(db, args, ctx) {
 // показывает плоскую таблицу и выгружает её в Excel как есть, и детализация
 // должна выгружаться так же.
 function referralsDetailReport(db, args, ctx) {
-  const lines = allReferralLines(db, args, ctx);   // INPATIENT_BONUS_V1 — и стационар
+  const lines = referralReportLines(db, args, ctx);   // INPATIENT_BONUS_V1 — и стационар; V3120_FIX — закрытые месяцы
   return {
     columns: [BUILDING_COL, 'Дата', '№ счёта', 'Статус', 'Номер', 'Источник', 'Вид', 'Где', 'Пациент', 'МРН',
               '№ госпитализации', 'Услуга', 'Кол-во', 'Сумма после скидки', 'Ставка', 'Вознаграждение'],
     rows: lines.map((r) => [ctx.label(r.origin), r.date, r.invoice || '', INV_STATUS_RU[r.status] || r.status,
       r.referral_code || '', r.referral, REFERRER_KIND_RU[r.internal ? 'internal' : 'external'], WHERE_RU[r.where],
-      r.patient, r.mrn || '', r.admission_no || '', r.service || '', r.qty, round2(r.after_discount), rateText(r.rate), round2(r.reward)]),
+      r.patient, r.mrn || '', r.admission_no || '', r.service || '', r.qty, round2(r.after_discount),
+      r.where === 'adj' ? '' : rateText(r.rate), round2(r.reward)]),
     by_building: summariseByBuilding(ctx, lines, { total: (r) => r.after_discount, reward: (r) => r.reward }),
     total_label: 'Сумма после скидки',
     notes: referralNotes(db, lines),
@@ -3123,7 +3356,7 @@ const lineGroup = (r) => (r.service_id == null && !r.service_group
   ? 'Прочее'
   : categoryOf({ type: r.service_group, is_lab: r.service_is_lab, name: r.service }));
 const isInpatientLine = (r) => r.inpatient_line_id != null || r.admission_id != null;
-const WHERE_RU = { out: 'Амбулатория', in: 'Стационар' };
+const WHERE_RU = { out: 'Амбулатория', in: 'Стационар', adj: 'Корректировка' };   // adj — V3120_FIX, «Рефералы»
 
 // Ревью M7 — «Оплачено» строки: оплата СЧЁТА, разнесённая на строки
 // пропорционально сумме строки после скидки (paid_amount × строка / итог

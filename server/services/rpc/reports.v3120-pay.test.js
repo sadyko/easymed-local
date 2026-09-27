@@ -147,3 +147,147 @@ test('R1: стационар — процент и фикс партнёра п�
   refundPayment(c.db, { payment_id: p, amount: 100000, reason: 'часть' }, admin);
   assert.equal(rewardOf(inRows(), 'Клиника Х'), 90000, '90 % от 50 000 + 90 % от 50 000');
 });
+
+// ─── R2. «РЕФЕРАЛЫ» ЗАКРЫТОГО МЕСЯЦА — ИЗ ЗАПИСИ ─────────────────────────────
+
+test('R2: закрытый месяц «Рефералов» не двигается; поздний возврат — корректировкой по источнику; сотрудник = «Зарплаты врачей»', () => {
+  const c = clinic();
+  const { cur, prev, prev2 } = months(c.db);
+  const at = prev2 + '-10T09:00:00Z';
+  const pPartner = c.pay(c.bill(c.line({ at, patient: 1 }), at));
+  const pDoctor = c.pay(c.bill(c.line({ at, patient: 2 }), at));
+  const closed = payPeriodClose(c.db, { month: prev2 }, admin);
+  assert.ok(closed.partner_lines >= 1, 'строки партнёров записаны');
+  const before = refRows(c.db, range(prev2));
+  assert.equal(rewardOf(before, 'Клиника Х'), 5000);
+  assert.equal(rewardOf(before, 'Направляев Н.'), 10000);
+  assert.equal(rewardOf(before, 'Направляев Н.'), salaryReferral(c.db, range(prev2)));
+
+  // После закрытия: партнёру вернули четверть (счёт оставлен открытым), по счёту
+  // сотрудника — обычный возврат четверти.
+  refundPayment(c.db, { payment_id: pPartner, amount: 25000, reason: 'после закрытия', reopen_balance: true }, admin);
+  refundPayment(c.db, { payment_id: pDoctor, amount: 25000, reason: 'после закрытия' }, admin);
+  const after = refRows(c.db, range(prev2));
+  assert.equal(rewardOf(after, 'Клиника Х'), 5000, 'закрытый месяц партнёра не двигается');
+  assert.equal(rewardOf(after, 'Направляев Н.'), 10000);
+  assert.equal(rewardOf(after, 'Направляев Н.'), salaryReferral(c.db, range(prev2)), 'сотрудник в «Рефералах» = «Зарплаты врачей»');
+  assert.ok(after.every((o) => o['Где'] !== 'Корректировка'));
+
+  // Корректировки — в первом открытом месяце (prev), по получателю.
+  const adj = refRows(c.db, range(prev)).filter((o) => o['Где'] === 'Корректировка');
+  assert.equal(rewardOf(adj, 'Клиника Х'), -1250);
+  assert.equal(rewardOf(adj, 'Направляев Н.'), -2500);
+  const sal = objects(run(c.db, 'doctor_salaries', range(prev))).find((o) => o['Врач'] === 'Направляев Н.');
+  assert.equal(sal['Корректировки'], -2500, 'у сотрудника — та же корректировка в «Зарплатах врачей»');
+  assert.equal(sal['Вознаграждение за направления'], 0);
+  const det = objects(run(c.db, 'referrals_detail', range(prev)));
+  assert.equal(sum(det, 'Вознаграждение'), -3750, 'детализация = сводка');
+  assert.match(det[0]['Услуга'], /^Корректировка за /);
+  // Внешние / внутренние — корректировка идёт со своим получателем.
+  assert.equal(rewardOf(refRows(c.db, range(prev), { referrer: 'external' }), 'Клиника Х'), -1250);
+  assert.equal(refRows(c.db, range(prev), { referrer: 'external' }).filter((o) => o['Источник'] === 'Направляев Н.').length, 0);
+
+  // Закрыли prev — корректировки записаны в него и больше не повторяются.
+  payPeriodClose(c.db, { month: prev }, admin);
+  assert.equal(rewardOf(refRows(c.db, range(prev)), 'Клиника Х'), -1250);
+  assert.equal(refRows(c.db, range(cur)).length, 0);
+  assert.throws(() => payPeriodReopen(c.db, { month: prev2 }, admin), /Сначала откройте/);
+  // Открыли оба — снова живой расчёт.
+  payPeriodReopen(c.db, { month: prev }, admin);
+  payPeriodReopen(c.db, { month: prev2 }, admin);
+  assert.equal(rewardOf(refRows(c.db, range(prev2)), 'Клиника Х'), 3750);
+});
+
+test('R2: месяц, закрытый до миграции 202 (без партнёров), у партнёров остаётся живым и корректировок им не даёт', () => {
+  const c = clinic();
+  const { prev, prev2 } = months(c.db);
+  const at = prev2 + '-10T09:00:00Z';
+  const p = c.pay(c.bill(c.line({ at, patient: 1 }), at));
+  payPeriodClose(c.db, { month: prev2 }, admin);
+  // Имитация старой записи: партнёров в ней нет.
+  c.db.prepare('DELETE FROM pay_period_lines WHERE doctor_id IS NULL').run();
+  c.db.prepare('UPDATE pay_periods SET partners = 0').run();
+  refundPayment(c.db, { payment_id: p, amount: 25000, reason: 'после закрытия', reopen_balance: true }, admin);
+  assert.equal(rewardOf(refRows(c.db, range(prev2)), 'Клиника Х'), 3750, 'живой, как прежде');
+  assert.equal(refRows(c.db, range(prev)).length, 0, 'и без корректировки — иначе вычли бы дважды');
+});
+
+// ─── F. СТАВКИ МЕНЯЮТСЯ ТОЛЬКО ВПЕРЁД ────────────────────────────────────────
+
+const cab = (db, rng, doctorId = 1) => doctorPaySummary(db, { doctor_id: doctorId, ...rng }, admin);
+
+test('F: правка ставки врача и ставок источников после закрытия не даёт корректировок', () => {
+  const c = clinic();
+  const { cur, prev } = months(c.db);
+  const at = prev + '-10T09:00:00Z';
+  c.pay(c.bill(c.line({ at, patient: 1 }), at));
+  c.pay(c.bill(c.line({ at, patient: 2 }), at));
+  payPeriodClose(c.db, { month: prev }, admin);
+  assert.equal(cab(c.db, range(prev)).total, 60000);
+  c.db.prepare('UPDATE users SET service_rates = ?, service_rate_default = 50 WHERE id = 1').run(JSON.stringify([{ service_id: 1, pct: 40 }]));
+  c.db.prepare('UPDATE referral_sources SET own_percent = 30 WHERE doctor_id = 2').run();
+  c.db.prepare('UPDATE referral_sources SET own_percent = 20 WHERE id = ?').run(c.partner);
+  c.db.prepare('INSERT INTO doctor_rates (doctor_id, service_id, percent, active) VALUES (1, 1, 60, 1)').run();
+  assert.equal(cab(c.db, range(cur)).adjustments.count, 0);
+  assert.equal(cab(c.db, range(cur), 2).adjustments.count, 0);
+  assert.equal(refRows(c.db, range(cur)).length, 0);
+  assert.equal(cab(c.db, range(prev)).total, 60000);
+});
+
+test('F: ступень — правка порога и процента не переоценивает; возврат, сдвинувший место в ступени, — переоценивает', () => {
+  const c = clinic();
+  const { cur, prev } = months(c.db);
+  c.db.prepare('UPDATE services SET doctor_tier_from = 3, doctor_tier_percent = 50 WHERE id = 1').run();
+  const pays = [];
+  for (let d = 3; d <= 6; d += 1) {
+    const at = prev + '-0' + d + 'T09:00:00Z';
+    pays.push(c.pay(c.bill(c.line({ at }), at)));
+  }
+  assert.equal(cab(c.db, range(prev)).total, 30000 * 3 + 50000);
+  payPeriodClose(c.db, { month: prev }, admin);
+  // Правка ступени после закрытия — ничего.
+  c.db.prepare('UPDATE services SET doctor_tier_from = 1, doctor_tier_percent = 70 WHERE id = 1').run();
+  assert.equal(cab(c.db, range(cur)).adjustments.count, 0);
+  c.db.prepare('UPDATE services SET doctor_tier_from = 3, doctor_tier_percent = 50 WHERE id = 1').run();
+  // Возврат первой строки: она −30 000, и четвёртая опускается ниже порога: −20 000.
+  refundPayment(c.db, { payment_id: pays[0], reason: 'после закрытия' }, admin);
+  assert.equal(cab(c.db, range(cur)).adjustments.fee, -50000);
+  // Ступень потом сняли с услуги — места строки больше не видно: четвёртая как записана.
+  c.db.prepare('UPDATE services SET doctor_tier_from = 0, doctor_tier_percent = 0 WHERE id = 1').run();
+  assert.equal(cab(c.db, range(cur)).adjustments.fee, -30000);
+  assert.equal(cab(c.db, range(prev)).total, 140000);
+});
+
+test('F: строка без счёта — правка цены и скидки категории после закрытия не переоценивает; новый счёт — событие', () => {
+  const c = clinic();
+  const { cur, prev } = months(c.db);
+  const cat = c.db.prepare("INSERT INTO patient_categories (name, discount_percent, active) VALUES ('Льгота', 10, 1)").run().lastInsertRowid;
+  c.db.prepare('UPDATE patients SET category_id = ? WHERE id = 3').run(cat);
+  const id = c.line({ at: prev + '-10T09:00:00Z' });
+  assert.equal(cab(c.db, range(prev)).total, 27000, '100 000 − 10 % = 90 000 × 30 %');
+  payPeriodClose(c.db, { month: prev }, admin);
+  c.db.prepare('UPDATE patient_categories SET discount_percent = 50 WHERE id = ?').run(cat);
+  c.db.prepare('UPDATE services SET price = 200000 WHERE id = 1').run();
+  assert.equal(cab(c.db, range(cur)).adjustments.count, 0);
+  // Выставили счёт — это событие строки: доля по деньгам счёта, ставка месяца.
+  const inv = c.bill(id);
+  c.db.prepare('UPDATE users SET service_rates = ? WHERE id = 1').run(JSON.stringify([{ service_id: 1, pct: 90 }]));
+  const net = c.db.prepare('SELECT total_amount FROM invoices WHERE id = ?').get(inv.id).total_amount;
+  assert.equal(cab(c.db, range(cur)).adjustments.fee, round2(net * 0.3 - 27000));
+});
+
+test('F: стационар — ставка сотрудника-направившего, поднятая с нуля после закрытия, закрытый месяц не переоценивает', () => {
+  const c = clinic();
+  const { cur, prev } = months(c.db);
+  c.db.prepare(`INSERT INTO admissions (id, admission_no, patient_id, doctor_id, status, referring_doctor_id)
+                VALUES (1, 'A-1', 3, 1, 'discharged', 2)`).run();
+  c.db.prepare(`INSERT INTO admission_services (id, admission_id, service_id, doctor_id, performer_id, quantity, unit_price, total, status, billable, performed_at)
+                VALUES (1, 1, 1, 1, 1, 1, 100000, 100000, 'added', 1, ?)`).run(prev + '-10T09:00:00Z');
+  const { invoice } = createInvoiceForAdmission(c.db, { admission_id: 1, admission_service_ids: [1] }, admin);
+  c.db.prepare('UPDATE invoices SET created_at = ? WHERE id = ?').run(prev + '-10T10:00:00Z', invoice.id);
+  c.pay(invoice);
+  payPeriodClose(c.db, { month: prev }, admin);
+  c.db.prepare('UPDATE users SET inpatient_referral_pct = 5, inpatient_referral_fixed = 70000 WHERE id = 2').run();
+  assert.equal(cab(c.db, range(cur), 2).adjustments.count, 0);
+  assert.equal(refRows(c.db, range(prev)).filter((o) => o['Источник'] === 'Направляев Н.').length, 0, 'строки с нулевой ставкой в отчёт не выходят');
+});
