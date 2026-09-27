@@ -17,7 +17,7 @@ import { catalogByKey } from '../../public/js/shared/permission-catalog.js';
 
 export const GATE_FALLBACK = Object.freeze({
   'inpatient.services':      { view: [['admin', 'head_doctor', 'registrar', 'nurse', 'doctor', 'cashier']],
-                               edit: [['admin', 'head_doctor', 'doctor'], ['admin', 'head_doctor', 'doctor', 'nurse', 'senior_nurse']] },
+                               edit: [['admin', 'head_doctor', 'doctor', 'nurse', 'senior_nurse', 'registrar', 'cashier'], ['admin', 'head_doctor', 'doctor', 'nurse', 'senior_nurse']] },   // FINAL_ROLES_SYNC_FIX_V1 (I2) — услугу у койки снова заводят медсестра, регистратура, касса
   'inpatient.history':       { view: [['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse', 'registrar', 'cashier']] },
   'inpatient.patients':      { view: [['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse']] },
   'inpatient.reviews':       { view: [['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse']], edit: [['doctor', 'head_doctor', 'admin']] },

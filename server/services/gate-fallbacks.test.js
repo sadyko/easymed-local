@@ -48,6 +48,8 @@ const ALLOW = {
   'services/report-access.js|grantAllowsOr|key': { n: 1, why: 'группы отчётов; fallbackLevel разбирает строки parent=reports' },
   'services/rpc/reports.js|canSeeReportKey|k': { n: 1, why: 'группы отчётов по REPORT_GROUP' },
   'services/report-access.js|canSeeReportKey|key': { n: 1, why: 'requireReportKind по REPORT_GROUP' },
+  // FINAL_ROLES_SYNC_FIX_V1 (M1) — ставки врачей видит тот, кто видит группу «Оплата врачей»: то же правило, что у отчётов.
+  "db/pay-visibility.js|canSeeReportKey|'reports.doctor_pay'": { n: 1, why: 'ставки врачей — по группе отчётов reports.doctor_pay (REPORT_GROUP)' },
   // Сама защита сравнивает уровни — она не ворота.
   'services/role-guard.js|effectiveLevel|key': { n: 2, why: 'защита «Ролей»: сравнение уровней' },
   'services/role-guard.js|grantAllowsOr|key': { n: 1, why: 'защита «Ролей»: gatePasses по спискам карты' },
