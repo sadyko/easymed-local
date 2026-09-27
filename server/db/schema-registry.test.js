@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { REGISTRY, tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns } from './schema-registry.js';
+import { REGISTRY, tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns, nonAdminColumns } from './schema-registry.js';
 
 test('users registry read columns include extra_roles', () => {
   assert.ok(readableColumns('users').includes('extra_roles'));
@@ -160,6 +160,15 @@ test('settings-match tables: admin config, FK embeds, api_tokens admin-read-only
   for (const t of ['payer_policies','payment_providers','cashback_rules','referral_source_categories','patient_discounts','doctor_rates']) {
     assert.ok(canRead(t,'registrar'), t+' staff-readable');
     assert.ok(canWrite(t,'insert','admin'), t+' admin-writable');
+    // LIVE_AUDIT_FIX_V1 — полис при записи заводит регистратура (номер,
+    // плательщик, активность); процент покрытия — только администратор.
+    if (t === 'payer_policies') {
+      assert.ok(canWrite(t,'insert','registrar'), t+' registrar inserts a policy at booking');
+      assert.deepEqual(nonAdminColumns(t,'insert','registrar'), ['name','payer_id','active'], t+' registrar: no coverage_percent');
+      assert.equal(nonAdminColumns(t,'insert','admin'), null);
+      assert.ok(!canWrite(t,'update','registrar'), t+' not registrar-updatable');
+      continue;
+    }
     assert.ok(!canWrite(t,'insert','registrar'), t+' not registrar-writable');
   }
   assert.ok(!canRead('api_tokens','registrar'));   // tokens admin-only
