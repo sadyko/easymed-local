@@ -304,3 +304,126 @@ test('цепочка: D слита в K, потом K — в K2; приёмни�
   assert.equal(balance(B.db, idOf(B.db, k2u)), 3000);
   assert.equal(refused(B.db), 0);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FINAL_ROLES_SYNC_FIX_V1 (I3) — ВСТРЕЧНЫЕ ОБЪЕДИНЕНИЯ ОДНОЙ ПАРЫ.
+//
+// A слил X в Y, B между обменами — Y в X. Раньше A оставлял Y, B — X, обе
+// карты числились «слитыми» (mergedAway) в обоих зданиях, и любая правка карты
+// пропускалась навсегда. Теперь спор решается одинаково в каждом здании:
+// побеждает самое раннее событие (merged_at, uid); встречное, замыкающее круг,
+// не исполняется; проигравшая сторона возвращает оставленную карту (её строка
+// становится картой-победителем), здание-победитель дошлёт её поля.
+// ═══════════════════════════════════════════════════════════════════════════
+// Время события задаётся тестом (порядок сторон круга должен быть известен).
+// Правка merged_at — не часть протокола: её журнальная запись снимается, чтобы
+// событие ехало на своём месте, раньше надгробия дубля, как в жизни.
+const setMergedAt = (db, dropUid, at) => {
+  db.prepare('UPDATE patient_merges SET merged_at = ? WHERE drop_uid = ?').run(at, dropUid);
+  db.prepare("DELETE FROM sync_journal WHERE tbl = 'patient_merges' AND cols = 'merged_at'").run();
+};
+const mergeLog = (db, id) => db.prepare("SELECT summary FROM patient_activity_log WHERE patient_id = ? AND action = 'merge_conflict'").all(id);
+
+function oppositePair() {
+  const A = house('A'); const B = house('B');
+  const x = newPatient(A.db, 'Иванов И.', { phone: '+998900000001' });
+  const y = newPatient(A.db, 'Иванов Иван', { phone: '+998900000002' });
+  ship(A, B);
+  const xu = uidOf(A.db, x); const yu = uidOf(A.db, y);
+  // Своя жизнь у обеих карт в B: визит и деньги.
+  const vB = newVisit(B.db, idOf(B.db, xu));
+  deposit(B.db, idOf(B.db, xu), 5000);
+  deposit(B.db, idOf(B.db, yu), 7000);
+  deposit(A.db, x, 1000);
+  // Между обменами: A оставляет Y (раньше), B оставляет X (позже).
+  mergePatientsRpc(A.db, { keep_id: y, drop_id: x }, ADMIN);
+  setMergedAt(A.db, xu, '2026-09-27T10:00:00Z');
+  mergePatientsRpc(B.db, { keep_id: idOf(B.db, xu), drop_id: idOf(B.db, yu) }, ADMIN);
+  setMergedAt(B.db, yu, '2026-09-27T10:00:05Z');
+  return { A, B, xu, yu, vB };
+}
+
+test('I3: встречные объединения пары в двух зданиях — оба оставляют раннюю сторону, правки карты снова ездят', () => {
+  const { A, B, xu, yu, vB } = oppositePair();
+  ship(A, B); ship(B, A); ship(A, B); ship(B, A);
+
+  for (const H of [A, B]) {
+    assert.ok(idOf(H.db, yu), H.letter + ': оставленная карта (ранний победитель) Y есть');
+    assert.equal(idOf(H.db, xu), null, H.letter + ': X слита');
+    assert.equal(refused(H.db), 0, H.letter + ': отказов базы нет');
+    assert.equal(H.db.prepare('SELECT COUNT(*) n FROM sync_pending').get().n, 0);
+  }
+  const yB = idOf(B.db, yu);
+  assert.equal(B.db.prepare('SELECT patient_id FROM visits WHERE id = ?').get(vB).patient_id, yB, 'визит B — на оставленной карте');
+  assert.equal(balance(B.db, yB), 12000, 'баланс B — сумма двух своих');
+  assert.equal(balance(A.db, idOf(A.db, yu)), 1000);
+  assert.equal(patientByUid(B.db, yu).full_name, 'Иванов Иван', 'поля карты B — поля победителя (дослал A)');
+  assert.equal(patientByUid(B.db, yu).phone, '+998900000002');
+  assert.ok(mergeLog(B.db, yB).length >= 1, 'встречное объединение записано в журнал карты B');
+  assert.ok(mergeLog(A.db, idOf(A.db, yu)).length >= 1, 'и в журнал карты A');
+
+  // Правки карты снова ездят — в обе стороны.
+  A.db.prepare("UPDATE patients SET notes = 'из A' WHERE uid = ?").run(yu);
+  ship(A, B);
+  assert.equal(patientByUid(B.db, yu).notes, 'из A');
+  B.db.prepare("UPDATE patients SET address = 'Ташкент' WHERE uid = ?").run(yu);
+  ship(B, A);
+  assert.equal(patientByUid(A.db, yu).address, 'Ташкент');
+  // Повтор ничего не меняет и не пишет второй раз в журнал карты.
+  const n = mergeLog(B.db, yB).length;
+  ship(A, B); ship(B, A);
+  assert.equal(mergeLog(B.db, yB).length, n);
+});
+
+test('I3: третье здание получает встречные события в любом порядке — итог тот же', () => {
+  for (const order of ['BA', 'AB']) {
+    const A = house('A'); const B = house('B'); const C = house('C');
+    const x = newPatient(A.db, 'Сидоров С.');
+    const y = newPatient(A.db, 'Сидоров Сидор');
+    ship(A, B); ship(A, C);
+    const xu = uidOf(A.db, x); const yu = uidOf(A.db, y);
+    deposit(C.db, idOf(C.db, xu), 3000);
+    deposit(C.db, idOf(C.db, yu), 4000);
+    mergePatientsRpc(A.db, { keep_id: y, drop_id: x }, ADMIN);
+    setMergedAt(A.db, xu, '2026-09-27T10:00:00Z');
+    mergePatientsRpc(B.db, { keep_id: idOf(B.db, xu), drop_id: idOf(B.db, yu) }, ADMIN);
+    setMergedAt(B.db, yu, '2026-09-27T10:00:05Z');
+    if (order === 'BA') { ship(B, C); ship(A, C); } else { ship(A, C); ship(B, C); }
+    ship(A, B); ship(B, A); ship(A, C); ship(B, C);
+    for (const H of [A, B, C]) {
+      assert.ok(idOf(H.db, yu), order + ' ' + H.letter + ': Y жива');
+      assert.equal(idOf(H.db, xu), null, order + ' ' + H.letter + ': X слита');
+      assert.equal(refused(H.db), 0);
+    }
+    assert.equal(balance(C.db, idOf(C.db, yu)), 7000, order + ': баланс C — сумма двух своих');
+    assert.equal(patientByUid(C.db, yu).full_name, 'Сидоров Сидор', order + ': поля C — победителя');
+    A.db.prepare("UPDATE patients SET notes = 'VIP' WHERE uid = ?").run(yu);
+    ship(A, C); ship(A, B);
+    assert.equal(patientByUid(C.db, yu).notes, 'VIP', order + ': правка доезжает до C');
+    assert.equal(patientByUid(B.db, yu).notes, 'VIP', order + ': и до B');
+  }
+});
+
+// M7 — событие, чья оставленная карта удалена у себя дома: дубль не замерзает.
+test('M7: оставленная карта удалена (надгробие) — событие не исполняется, дубль остаётся живой картой', () => {
+  const A = house('A'); const B = house('B'); const C = house('C');
+  const k = newPatient(A.db, 'Каримова');
+  const d = newPatient(A.db, 'Каримова Д.');
+  ship(A, B); ship(A, C);
+  const ku = uidOf(A.db, k); const du = uidOf(A.db, d);
+  deposit(C.db, idOf(C.db, du), 9000);
+  // B сливает D в K; A (дом K) тем временем удаляет пустую K.
+  mergePatientsRpc(B.db, { keep_id: idOf(B.db, ku), drop_id: idOf(B.db, du) }, ADMIN);
+  A.db.prepare('DELETE FROM patients WHERE id = ?').run(k);
+  ship(A, C);            // надгробие K
+  assert.equal(idOf(C.db, ku), null);
+  ship(B, C);            // событие D→K и надгробие D
+  const dC = idOf(C.db, du);
+  assert.ok(dC, 'дубль с местными деньгами на месте');
+  assert.equal(balance(C.db, dC), 9000);
+  assert.equal(refused(C.db), 0);
+  // И не заморожен: правка из дома D доезжает.
+  A.db.prepare("UPDATE patients SET notes = 'жива' WHERE id = ?").run(d);
+  ship(A, C);
+  assert.equal(patientByUid(C.db, du).notes, 'жива', 'правка карты, чья пара удалена, пропущена — карта замёрзла');
+});
