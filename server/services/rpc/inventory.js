@@ -17,7 +17,7 @@ import { assertAdmissionAtLeast } from './inpatient-flow.js';
 import { moveHolding, moveWarehouse, WAREHOUSE } from './holdings.js';
 // STOCK_QTY_V1 (V3120_FIX) — шесть знаков вместо round2 на количествах: см.
 // domain/stock-qty.js. Деньги (цена, сумма) округляются до сотых, как прежде.
-import { roundQty, factorOf, toBase, coversQty, qtyTolerance } from '../domain/stock-qty.js';
+import { roundQty, factorOf, toBase, coversQty, qtyTolerance, unitsOf } from '../domain/stock-qty.js';
 // EXPIRY_BALANCE_V1 — «выдача и списание просроченного предупреждают» (владелец
 // 23.09). Предупреждение НЕ отказ: оно едет в ответе рядом с результатом, и
 // считает его сервер — иначе каждая из восьми дверей сказала бы своими словами.
@@ -169,9 +169,12 @@ export function holdingChain(db, user, place) {
 }
 
 /** Отказ, который называет и нехватку, и всё, что цепочка нашла по дороге. */
-function shortfallMessage(product, need, onHand, found) {
-  const unit = product.base_unit || product.unit || '';
-  const num = (v) => String(round2(v));
+// V3120_FIX — `inUnits`: дверь, где человек считает в единице расхода
+// (медсестра — таблетками), слышит отказ в таблетках, а не в долях пачки.
+function shortfallMessage(product, need, onHand, found, inUnits = false) {
+  const cf = inUnits ? factorOf(product) : 1;
+  const unit = (inUnits && cf !== 1 ? product.consumption_unit : '') || product.base_unit || product.unit || '';
+  const num = (v) => String(cf !== 1 ? unitsOf(v, cf) : round2(v));
   const tail = [];
   if (found.staff > 0) tail.push(`у вас на руках ${num(found.staff)}`);
   if (found.room > 0) tail.push(`в кабинете ${num(found.room)}`);
@@ -185,7 +188,7 @@ function shortfallMessage(product, need, onHand, found) {
  * словами, и вызывающая транзакция не тронула ни остатка, ни строки счёта.
  * Количества — базовые единицы товара, как products.on_hand и stock_holdings.qty.
  */
-export function planSources(db, chain, product, quantity) {
+export function planSources(db, chain, product, quantity, opts = {}) {
   const q = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?');
   const picks = [];
   const found = { staff: 0, room: 0, department: 0 };
@@ -218,15 +221,20 @@ export function planSources(db, chain, product, quantity) {
         + `${picks.length ? ', а на руках, в кабинете и в отделе его не хватает' : ''}.`, 400);
     }
     if (!coversQty(onHand, need, cf)) {
-      throw new RpcError(shortfallMessage(product, quantity, onHand, found), 400);
+      throw new RpcError(shortfallMessage(product, quantity, onHand, found, !!opts.inUnits), 400);
     }
     picks.push({ type: WAREHOUSE, id: null, qty: Math.min(need, onHand) });
   }
   return picks;
 }
 
-/** Списать запланированное и записать ПО ДВИЖЕНИЮ НА ИСТОЧНИК. */
-function applySources(db, picks, productId, user, refType, refId) {
+/**
+ * Списать запланированное и записать ПО ДВИЖЕНИЮ НА ИСТОЧНИК.
+ * V3120_FIX — экспорт: амбулаторная дверь медсестры (holdings.js
+ * dispense_from_holding) списывает ЭТОЙ ЖЕ функцией, а не своей копией.
+ * `note` — подпись движения (дверь медсестры её пишет, остальные нет).
+ */
+export function applySources(db, picks, productId, user, refType, refId, note = null) {
   // V3120_FIX — себестоимость на движении расхода: без неё отчёт «Расход»
   // оценивал выданное с койки и из кабинета врача в ноль (у двери медсестры
   // она писалась всегда).
@@ -239,9 +247,9 @@ function applySources(db, picks, productId, user, refType, refId) {
       moveHolding(db, { type: p.type, id: p.id }, productId, -p.qty, user.id);   // STOCK_REQUEST_V1 — кто списал
     }
     db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, created_by, holder_type, holder_id)
-      VALUES (?, 'dispense', ?, ?, ?, ?, ?, ?, ?)
-    `).run(productId, -p.qty, unitCost, refType, refId, user.id, p.type === WAREHOUSE ? null : p.type, p.type === WAREHOUSE ? null : p.id);
+      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, holder_type, holder_id)
+      VALUES (?, 'dispense', ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(productId, -p.qty, unitCost, refType, refId, note || '', user.id, p.type === WAREHOUSE ? null : p.type, p.type === WAREHOUSE ? null : p.id);
   }
   return picks;
 }
@@ -503,7 +511,7 @@ export function dispenseAdmissionItemCore(db, args, user) {
 
     // HOLDINGS_FIRST_V1 — свой подотчёт → свой кабинет → отдел палаты → свой
     // отдел → склад. Не хватило нигде — отказ со словами, до первой записи.
-    const picks = planSources(db, holdingChain(db, user, { admission: adm }), product, baseQty);
+    const picks = planSources(db, holdingChain(db, user, { admission: adm }), product, baseQty, { inUnits });
     // EXPIRY_BALANCE_V1 — та же тревога у койки, что и в амбулатории.
     const warnings = expiryWarnings(db, [productId]);
 

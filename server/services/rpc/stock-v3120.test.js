@@ -63,8 +63,10 @@ test('пачка по 7: семь таблеток по одной — на ру
   assert.equal(held(db, 'staff', 3, 3), 0);
   const mine = rpc(db, 'holdings_list', { mine: true }, U.nurse).holdings;
   assert.equal(mine.filter((h) => h.product_id === 3).length, 0, 'пустой подотчёт не висит строкой');
-  assert.throws(() => rpc(db, 'dispense_from_holding', { holder: { type: 'staff', id: 3 }, product_id: 3, quantity: 1, visit_id: v }, U.nurse),
-    (e) => e.status === 400 && /Недостаточно на руках/.test(e.message));
+  // V3120_FIX — восьмая таблетка не берётся из «пыли» на руках: своя полка
+  // пуста, и цепочка честно идёт на склад (свой подотчёт → … → склад).
+  const eighth = rpc(db, 'dispense_from_holding', { holder: { type: 'staff', id: 3 }, product_id: 3, quantity: 1, visit_id: v }, U.nurse);
+  assert.deepEqual(eighth.sources.map((s) => s.type), ['warehouse']);
 });
 
 test('пачка по 30: тридцать первую таблетку из тридцати не выдать', () => {
@@ -73,10 +75,14 @@ test('пачка по 30: тридцать первую таблетку из т
   issueTo(db, 3, 1, 30);
   for (let i = 0; i < 30; i++) rpc(db, 'dispense_from_holding', { holder: { type: 'staff', id: 3 }, product_id: 1, quantity: 1, visit_id: v }, U.nurse);
   assert.equal(held(db, 'staff', 3, 1), 0);
-  assert.throws(() => rpc(db, 'dispense_from_holding', { holder: { type: 'staff', id: 3 }, product_id: 1, quantity: 1, visit_id: v }, U.nurse),
-    (e) => e.status === 400);
   // Склад отдал ровно одну пачку — и журнал склада это же и говорит.
   assert.equal(onHand(db, 1), 9);
+  // V3120_FIX — тридцать первая не берётся с пустых рук: своя полка пуста,
+  // цепочка идёт на склад, и склад отдаёт ровно 1/30 пачки.
+  const r31 = rpc(db, 'dispense_from_holding', { holder: { type: 'staff', id: 3 }, product_id: 1, quantity: 1, visit_id: v }, U.nurse);
+  assert.deepEqual(r31.sources.map((s) => s.type), ['warehouse']);
+  assert.equal(onHand(db, 1), 8.966667);
+  assert.equal(held(db, 'staff', 3, 1), 0);
 });
 
 test('литр: 4 мл выдаются, 5 мл списывают ровно 0.005 л', () => {
@@ -86,10 +92,14 @@ test('литр: 4 мл выдаются, 5 мл списывают ровно 0.
   assert.equal(r.issued[0].base_qty, 0.004);
   assert.equal(held(db, 'staff', 3, 2), 0.004);
   assert.equal(onHand(db, 2), 9.996);
-  rpc(db, 'dispense_from_holding', { holder: { type: 'warehouse' }, product_id: 2, quantity: 5, visit_id: v }, U.nurse);
-  assert.equal(onHand(db, 2), 9.991);
-  const mv = db.prepare("SELECT qty FROM stock_movements WHERE product_id = 2 AND reference_type = 'visit'").get();
-  assert.equal(mv.qty, -0.005);
+  // V3120_FIX — выбран «Склад», но 4 мл лежат у неё на руках: цепочка берёт
+  // сначала своё (4 мл), со склада — только недостающий 1 мл.
+  const give = rpc(db, 'dispense_from_holding', { holder: { type: 'warehouse' }, product_id: 2, quantity: 5, visit_id: v }, U.nurse);
+  assert.deepEqual(give.sources, [{ type: 'staff', id: 3, qty: 0.004 }, { type: 'warehouse', id: null, qty: 0.001 }]);
+  assert.equal(held(db, 'staff', 3, 2), 0);
+  assert.equal(onHand(db, 2), 9.995);
+  const mv = db.prepare("SELECT SUM(qty) s FROM stock_movements WHERE product_id = 2 AND reference_type = 'visit'").get();
+  assert.equal(Math.round(mv.s * 1e6) / 1e6, -0.005);
 });
 
 test('одобрение заявки на 5 таблеток: движение, склад и подотчёт — одно и то же число', () => {

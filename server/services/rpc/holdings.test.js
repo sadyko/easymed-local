@@ -86,17 +86,21 @@ test('dispense from a holding to an outpatient visit: holder −, warehouse unto
   const free = dispenseFromHolding(db, { holder: { type: 'staff', id: 5 }, product_id: prod, quantity: 1, visit_id: visit, billable: false }, nurse);
   assert.equal(db.prepare('SELECT total FROM visit_services WHERE id = ?').get(free.line_id).total, 0);
 
-  // Overdraw is refused with the human number.
-  assert.throws(() => dispenseFromHolding(db, { holder: { type: 'staff', id: 5 }, product_id: prod, quantity: 100, visit_id: visit }, nurse),
-    (e) => e.status === 400 && /Недостаточно на руках/.test(e.message) && /25 таб/.test(e.message));
-  // The room holds nothing of it.
-  assert.throws(() => dispenseFromHolding(db, { holder: { type: 'room', id: 7 }, product_id: prod, quantity: 1, visit_id: visit }, nurse), /Недостаточно/);
+  // Overdraw is refused with the human number. V3120_FIX — «не хватает» теперь
+  // значит «не хватает НИГДЕ в своей цепочке»: 25 таб на руках + 170 на складе
+  // меньше 300; отказ говорит в таблетках и называет, что лежит на руках.
+  assert.throws(() => dispenseFromHolding(db, { holder: { type: 'staff', id: 5 }, product_id: prod, quantity: 300, visit_id: visit }, nurse),
+    (e) => e.status === 400 && /Недостаточно/.test(e.message) && /у вас на руках 25/.test(e.message) && /таб/.test(e.message));
+  // V3120_FIX — кабинет 7 не её (users.room_id не задан, у визита кабинета нет):
+  // чужую полку назвать нельзя — 403, а не «недостаточно».
+  assert.throws(() => dispenseFromHolding(db, { holder: { type: 'room', id: 7 }, product_id: prod, quantity: 1, visit_id: visit }, nurse), (e) => e.status === 403);
   assert.throws(() => dispenseFromHolding(db, { holder: { type: 'staff', id: 5 }, product_id: prod, quantity: 1, visit_id: visit }, cashier), (e) => e.status === 403);
   assert.throws(() => dispenseFromHolding(db, { holder: { type: 'staff', id: 5 }, product_id: prod, quantity: 1 }, nurse), /визит или госпитализацию/);
 });
 
 test('void returns the quantity to the holder it came from and removes the line; an invoiced line stays', () => {
   const { db, prod, visit } = seed();
+  db.prepare('UPDATE users SET room_id = 7 WHERE id = 5').run();   // V3120_FIX — процедурный — ЕЁ кабинет
   issueStockLines(db, { holder: { type: 'room', id: 7 }, lines: [{ product_id: prod, qty: 10, unit: 'consumption' }] }, inv);
   const r = dispenseFromHolding(db, { holder: { type: 'room', id: 7 }, product_id: prod, quantity: 3, visit_id: visit }, nurse);
   assert.equal(held(db, 'room', 7, prod), 0.7);
@@ -146,7 +150,7 @@ test('the warehouse is a source too: a nurse with nothing issued dispenses from 
   assert.equal(items[0].from_holding, false); assert.equal(items[0].can_void, true);
   voidHoldingDispense(db, { visit_service_id: r.line_id }, nurse);
   assert.equal(onHand(db, prod), 20);
-  assert.throws(() => dispenseFromHolding(db, { holder: { type: 'warehouse' }, product_id: prod, quantity: 500, visit_id: visit }, nurse), /Недостаточно на складе/);
+  assert.throws(() => dispenseFromHolding(db, { holder: { type: 'warehouse' }, product_id: prod, quantity: 500, visit_id: visit }, nurse), /Недостаточно: Парацетамол — на складе 200 из 500 таб/);
 });
 
 // =============================================================================

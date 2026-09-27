@@ -25,6 +25,11 @@ import { afterHoldingDecrease } from './stock-requests.js';
 // STOCK_QTY_V1 (V3120_FIX) — шесть знаков и «пыль округления — ноль» на всех
 // записях остатка: см. domain/stock-qty.js.
 import { roundQty, factorOf, toBase, settleQty, coversQty, unitsOf } from '../domain/stock-qty.js';
+// V3120_FIX — дверь медсестры списывает ОДНОЙ цепочкой со всеми дверями
+// (свой подотчёт → кабинет → отдел → склад). Импорт взаимный (inventory.js
+// берёт отсюда moveHolding/moveWarehouse), и это безопасно: обе стороны
+// зовут друг друга только внутри функций, не при загрузке модуля.
+import { holdingChain, planSources, applySources } from './inventory.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -116,6 +121,37 @@ export function moveHolding(db, holder, productId, baseQty, actorId = null, opts
 }
 
 /**
+ * V3120_FIX — holdings_list { reachable: true, visit_id? | admission_id? }:
+ * ТОЛЬКО те полки, с которых ЭТОТ человек выдаёт ЭТОМУ пациенту, в порядке
+ * цепочки (inventory.js holdingChain): свой подотчёт, кабинет приёма, свой
+ * кабинет, отдел кабинета или палаты, свой отдел. Без места — свой подотчёт,
+ * свой кабинет, свой отдел. Считает сервер из сессии, как и `mine`: экрану
+ * медсестры больше не приезжают чужие карманы и чужие отделения, которые он
+ * раньше предлагал как источник. Роль не спрашивается: свои полки человек
+ * вправе видеть всегда (заведующей и старшей нет в LIST_ROLES).
+ */
+function reachableHoldings(db, a, user) {
+  if (!isPosInt(Number(user && user.id))) throw new RpcError('Вошедший не опознан.', 401);
+  let place = {};
+  if (a.visit_id != null) {
+    const visit = db.prepare('SELECT id, room_id FROM visits WHERE id = ?').get(Number(a.visit_id));
+    if (!visit) throw new RpcError('Визит не найден.', 404);
+    place = { visit };
+  } else if (a.admission_id != null) {
+    const admission = db.prepare('SELECT id, ward_id FROM admissions WHERE id = ?').get(Number(a.admission_id));
+    if (!admission) throw new RpcError('Госпитализация не найдена.', 404);
+    place = { admission };
+  }
+  const chain = holdingChain(db, user, place);
+  const out = [];
+  chain.forEach((c, rank) => {
+    const { holdings } = holdingsListRows(db, ['h.holder_type = ?', 'h.holder_id = ?', 'h.qty > 0'], [c.type, c.id]);
+    for (const row of holdings) out.push({ ...row, chain_rank: rank });
+  });
+  return { holdings: out };
+}
+
+/**
  * holdings_list — what holders have on hand.
  * args: { mine?, holder_type?, holder_id?, include_empty? }  (no holder → every holder)
  * → { holdings: [{ holder_type, holder_id, holder_name, product_id, product_name,
@@ -132,6 +168,7 @@ export function moveHolding(db, holder, productId, baseQty, actorId = null, opts
  */
 export function holdingsList(db, args, user) {
   const a = args || {};
+  if (a.reachable === true) return reachableHoldings(db, a, user);
   const mine = a.mine === true;
   const selfId = Number(user && user.id);
   if (mine) {
@@ -152,6 +189,10 @@ export function holdingsList(db, args, user) {
     if (a.holder_id != null) { where.push('h.holder_id = ?'); params.push(Number(a.holder_id)); }
   }
   if (!a.include_empty) where.push('h.qty > 0');
+  return holdingsListRows(db, where, params);
+}
+
+function holdingsListRows(db, where, params) {
   const rows = db.prepare(`
     SELECT h.holder_type, h.holder_id, h.product_id, h.qty,
            p.name AS product_name, p.base_unit, p.consumption_unit, p.consumption_factor, p.sale_price, p.is_drug, p.active,
@@ -183,13 +224,46 @@ export function holdingsList(db, args, user) {
 
 /**
  * dispense_from_holding — a nurse gives a patient something she (her cabinet,
- * her department) holds. Takes it from the holding; the warehouse is untouched
- * (it was deducted when the item was issued). Bills the visit or the
- * admission like the warehouse dispenses do, at the sale price per
- * consumption unit.
- * args: { holder:{type,id}, product_id, quantity (consumption units), visit_id? | admission_id?,
+ * her department) holds. Bills the visit or the admission like the other
+ * dispense doors, at the sale price per consumption unit.
+ * args: { holder?:{type,id}, product_id, quantity (consumption units), visit_id? | admission_id?,
  *         billable? (default true), note? }
+ *
+ * V3120_FIX — «ВЫДАЁТ СО СВОЕЙ ПОЛКИ» (владелец 27.09: «подтвердите, что
+ * выдача врачом или медсестрой идёт с их собственной полки; если нет —
+ * исправьте»).
+ *
+ * ЧТО БЫЛО. Эта дверь одна из всех жила мимо цепочки HOLDINGS_FIRST_V1:
+ * источник брался из запроса КАК ЕСТЬ. Экран предлагал медсестре каждый
+ * кабинет и каждое отделение клиники (holdings_list без отбора), а сервер
+ * принимал любого держателя, включая личный подотчёт ДРУГОГО сотрудника, —
+ * проверялось только, что такой держатель существует. «Склад» списывал склад,
+ * даже когда то же самое лежало у медсестры на руках, а нехватка на выбранной
+ * полке была отказом, хотя вторая своя полка могла добрать.
+ *
+ * ЧТО СТАЛО. Списание — та же ОДНА цепочка, что у всех дверей
+ * (inventory.js holdingChain → planSources → applySources):
+ *   • названный держатель обязан быть СВОИМ — в цепочке этой выдачи (свой
+ *     подотчёт, кабинет приёма, свой кабинет, отдел кабинета или палаты, свой
+ *     отдел). Чужой — 403 до первой записи. Админ и кладовщик ведут склад
+ *     клиники и вправе назвать любой кабинет или отдел, но чужой карман — никто;
+ *   • названный свой держатель берётся ПЕРВЫМ (медсестра говорит, из какого
+ *     шкафа она достала), недостача добирается остальной цепочкой, склад —
+ *     последним;
+ *   • «Склад» или держатель не назван — просто цепочка: склад только тогда,
+ *     когда своих полок не хватило.
  */
+function assertOwnHolder(db, user, named, chain) {
+  if (named.type === 'staff') {
+    if (Number(named.id) === Number(user && user.id)) return;
+    throw new RpcError('Выдавать можно только из своих запасов: личный подотчёт другого сотрудника не трогается.', 403);
+  }
+  if (chain.some((c) => c.type === named.type && Number(c.id) === Number(named.id))) return;
+  if (hasAnyRole(user, ['admin', 'inventory'])) return;
+  const what = named.type === 'room' ? 'не ваш кабинет и не кабинет приёма' : 'не ваше отделение и не отделение этого приёма';
+  throw new RpcError(`«${named.name}» — ${what}: выдавайте из своих запасов.`, 403);
+}
+
 export function dispenseFromHolding(db, args, user) {
   requireRole(user, DISPENSE_ROLES);
   const a = args || {};
@@ -206,72 +280,68 @@ export function dispenseFromHolding(db, args, user) {
   const note = typeof a.note === 'string' ? a.note.trim().slice(0, 300) : '';
 
   const run = db.transaction(() => {
-    const fromWarehouse = !!(a.holder && a.holder.type === WAREHOUSE);
-    const holder = fromWarehouse ? null : resolveHolder(db, a.holder);
+    // Не назван или назван склад — решает цепочка (склад в ней последний).
+    const named = a.holder && a.holder.type !== WAREHOUSE ? resolveHolder(db, a.holder) : null;
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
     if (!product) throw new RpcError('Товар не найден.', 400);
     const cf = consumptionFactor(product);
     const baseQty = toBase(qtyUnits, cf);
     if (!(baseQty > 0)) throw new RpcError('Количество слишком мало.', 400);
-    // Сколько взято на самом деле: «последняя таблетка» в пределах допуска
-    // забирает ровно остаток, и журнал пишет именно его.
-    let taken = baseQty;
+
+    let visit = null;
+    let adm = null;
+    if (visitId) {
+      visit = db.prepare('SELECT * FROM visits WHERE id = ?').get(visitId);
+      if (!visit) throw new RpcError('Визит не найден.', 400);
+    } else {
+      adm = assertAdmissionAtLeast(db, admissionId, 'active');
+    }
+    const own = holdingChain(db, user, visit ? { visit } : { admission: adm });
+    if (named) assertOwnHolder(db, user, named, own);
+    const chain = named
+      ? [{ type: named.type, id: named.id }, ...own.filter((c) => !(c.type === named.type && Number(c.id) === Number(named.id)))]
+      : own;
+    // Нигде не хватило — отказ со словами ДО первой записи (planSources). Отключённый
+    // товар: со своих полок довыдать можно, со склада — нет (там же).
+    const picks = planSources(db, chain, product, baseQty, { inUnits: true });
     // EXPIRY_BALANCE_V1 — партия смотрится ДО списания. Тревожит ТОВАР, а не
     // источник: у подотчёта партии не записаны, но просроченная коробка в
     // клинике одна, из чьих бы рук её ни взяли.
     const warnings = expiryWarnings(db, [productId]);
-    // V3120_FIX — ОТКЛЮЧЁННЫЙ ТОВАР, одно правило на все двери: уже выданное
-    // (на руках, в кабинете, в отделе) можно довыдать пациенту — оно физически
-    // вне склада и иначе пропало бы; СО СКЛАДА отключённый товар не выдаётся.
-    // Та же развилка — в цепочке списания (inventory.js planSources).
-    if (fromWarehouse) {
-      if (!product.active) throw new RpcError(`Товар «${product.name}» отключён в каталоге: со склада не выдаётся.`, 400);
-      if (!coversQty(product.on_hand, baseQty, cf)) {
-        throw new RpcError(`Недостаточно на складе: ${product.name} — есть ${unitsOf(product.on_hand, cf)} ${product.consumption_unit || product.base_unit || ''}`.trim(), 400);
-      }
-      taken = Math.min(baseQty, Number(product.on_hand));
-      moveWarehouse(db, productId, -taken);
-    } else {
-      const held = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?').get(holder.type, holder.id, productId);
-      if (!held || !coversQty(held.qty, baseQty, cf)) {
-        const have = held ? unitsOf(held.qty, cf) : 0;
-        throw new RpcError(`Недостаточно на руках: ${product.name} — есть ${have} ${product.consumption_unit || product.base_unit || ''}`.trim(), 400);
-      }
-      taken = Math.min(baseQty, Number(held.qty));
-      moveHolding(db, holder, productId, -taken, user.id);
-    }
 
     // Price per consumption unit — the sale price is per base unit.
     const unitPrice = round2(Number(product.sale_price) / cf);
     const total = round2(unitPrice * qtyUnits);
     let lineId = null;
     let refType = 'visit';
-    if (visitId) {
-      const visit = db.prepare('SELECT id FROM visits WHERE id = ?').get(visitId);
-      if (!visit) throw new RpcError('Визит не найден.', 400);
+    if (visit) {
       lineId = db.prepare(`
         INSERT INTO visit_services (visit_id, clinic_item_id, service_id, doctor_id, quantity, unit_price, total, status, created_by)
         VALUES (?, ?, NULL, NULL, ?, ?, ?, 'added', ?)`).run(visitId, productId, qtyUnits, billable ? unitPrice : 0, billable ? total : 0, user.id).lastInsertRowid;
     } else {
-      const adm = assertAdmissionAtLeast(db, admissionId, 'active');
       refType = 'admission';
       lineId = db.prepare(`
         INSERT INTO admission_services (admission_id, clinic_item_id, service_id, doctor_id, bed_id, ward_id, quantity, unit_price, total, status, billable, notes, performed_at)
         VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, 'added', ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))`)
         .run(admissionId, productId, adm.bed_id, adm.ward_id, qtyUnits, unitPrice, total, billable ? 1 : 0, note || null).lastInsertRowid;
     }
-    db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, holder_type, holder_id)
-      VALUES (?, 'dispense', ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(productId, -taken, product.avg_cost, refType, lineId, note, user.id, holder ? holder.type : null, holder ? holder.id : null);
+    // Одно движение на каждый источник, общая ссылка на строку: отмена
+    // (void_holding_dispense) вернёт каждую часть своему держателю.
+    applySources(db, picks, productId, user, refType, lineId, note);
+
+    // «Осталось» — у первого источника: там, откуда медсестра брала.
+    const first = picks[0];
     let leftBase = 0;
-    if (holder) {
-      const left = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?').get(holder.type, holder.id, productId);
+    if (first.type !== WAREHOUSE) {
+      const left = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?').get(first.type, first.id, productId);
       leftBase = left ? left.qty : 0;
     } else {
       leftBase = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(productId).on_hand;
     }
-    return { line_id: lineId, item_name: product.name, unit_price: unitPrice, total, left_units: unitsOf(leftBase, cf), source: holder ? holder.type : WAREHOUSE, warnings };
+    return {
+      line_id: lineId, item_name: product.name, unit_price: unitPrice, total, left_units: unitsOf(leftBase, cf),
+      source: first.type, sources: picks, warnings,
+    };
   });
   return run();
 }
