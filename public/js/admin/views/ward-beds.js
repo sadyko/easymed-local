@@ -64,7 +64,7 @@ import { toastStockWarnings } from './stock-warnings.js';
 // V3120_FIX — «Товары для пациента»: рядом со складом виден остаток СВОИХ полок
 // (то, что сервер спишет первым: подотчёт → кабинет → отдел палаты → свой отдел).
 import { loadOwnShelves } from './item-picker-modal.js';
-import { canAddAdmissionService } from '../permissions.js';   // FINAL_ROLES_SYNC_FIX_V1 (I2) — кнопка «Добавить услугу» только тому, кому сервер строку заведёт
+import { canAddAdmissionService, isRouteAllowed } from '../permissions.js';   // FINAL_ROLES_SYNC_FIX_V1 (I2) — кнопка «Добавить услугу» только тому, кому сервер строку заведёт
 
 const STATUS = {
     free:        { label: 'Свободна',  bg: 'var(--ok-50, #e9f7ef)',      fg: 'var(--ok-700, #1a7a44)',      bd: 'var(--ok-200, #bde5cd)',      dot: 'var(--ok-500, #2e8b52)' },
@@ -380,7 +380,9 @@ function wardCardEl(ward, beds, data, opts = {}) {
                 // WARD_BOARD_V3 — быстрое действие там, где на него смотрят: палата
                 // правится в «Помещениях», и путь туда — один шаг из её шапки.
                 // В окне выбора койки (mode 'pick') действия нет — там выбирают.
-                opts.mode !== 'pick' && navigateTo
+                // V3120_CLEANUP — «Помещения» закрыты роли (регистратура, медсёстры):
+                // кнопки нет — она вела в «Нет доступа».
+                opts.mode !== 'pick' && navigateTo && isRouteAllowed('rooms-setup')
                     ? h('button', { class: 'btn btn-ghost btn-sm dash-act', type: 'button', onclick: () => navigateTo('rooms-setup') },
                         Icon('Building', { size: 13 }), ' ', tr('Помещения'))
                     : null)),
@@ -1221,10 +1223,11 @@ async function admissionsTable() {
 
     function rowEl(r, i) {
         const open = () => openCaseOverview(r.id);
-        return h('tr', {
+        // V3120_CLEANUP — обзор закрыт роли: строка журнала не кликается.
+        return h('tr', isRouteAllowed('case-overview') ? {
             class: 'ar-row', tabindex: '0', onclick: open,
             onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { if (e.preventDefault) e.preventDefault(); open(); } },
-        }, ...REGISTER_COLS.map((c) => {
+        } : { class: 'ar-row ar-row--static' }, ...REGISTER_COLS.map((c) => {
             const v = c.text(r, i);
             const cls = ['no', 'admno', 'born', 'admitted', 'discharged'].includes(c.key) ? 'ar-nowrap' : '';
             return h('td', { class: cls + (c.key === 'name' ? ' ar-strong' : '') }, v || '—');

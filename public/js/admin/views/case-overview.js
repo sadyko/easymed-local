@@ -23,7 +23,7 @@ import { tr, trf } from '../i18n.js';
 import { admissionStatusLabel, IN_BED_STATUSES } from '../../shared/admission-status.js';
 import { moneyDisplay } from '../../shared/money-input.js';
 import { caseDocTitle } from './case-docs.js?v=cw1';
-import { openAdmissionDischargeRequestModal, openAdmissionAttendingModal, openAdmissionDietModal, goToMarSheet, goToCaseOverview, openAdmissionCard } from './admission-modal.js?v=inp2';
+import { openAdmissionDischargeRequestModal, openAdmissionAttendingModal, openAdmissionDietModal, goToMarSheet, goToCaseOverview, openAdmissionCard, canOpenMarSheet } from './admission-modal.js?v=inp2';
 import { outcomeTitle } from './discharge.js';
 import { genderWord } from './title-sheet-print.js';
 import { news2Score, NEWS_BANDS, VITAL_NORMS, VITAL_RANGES, CONSCIOUSNESS, vitalError } from '../../shared/news2.js';   // VITALS_NEWS_V1 / VITALS_STEPPER_V1
@@ -521,7 +521,7 @@ function paint(root, onNavigate) {
             ])),
     // CASE_DASH_QUIET_V1 — одно действие на панель. За именами назначений и
     // услуг — история болезни: обзор их больше не перечисляет.
-    ], actions: [act('Лист назначений', () => goToMarSheet(a.id, onNavigate))] });
+    ], actions: canOpenMarSheet() ? [act('Лист назначений', () => goToMarSheet(a.id, onNavigate))] : [] });   // V3120_CLEANUP
 
     // ── 6. Следующий шаг → ──────────────────────────────────────────────────
     const pct = pr.total ? Math.round(((pr.done || 0) / pr.total) * 100) : 0;

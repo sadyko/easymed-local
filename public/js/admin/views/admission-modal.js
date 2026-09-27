@@ -58,6 +58,7 @@ import { h, Icon, Tag, toast, clear, field, fmtDate, fmtDateTime } from '../ui.j
 import { inpatientModal, patientAnchor } from './inpatient-modal.js';   // TITLE_SHEET_V1 — вынесено, чтобы не было кольца
 import { openAdmissionTitleSheetModal } from './title-sheet.js';   // TITLE_SHEET_V1 — шаг 2 размещения
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { isRouteAllowed } from '../permissions.js';   // V3120_CLEANUP — переходы только в открытые экраны
 import { moneyDisplay } from '../../shared/money-input.js';   // CASE_OVERVIEW_V1 — сумма счёта в подтверждении выписки
 // BED_BOARD_SHARED_V1 — окно выбора койки рисует ДОСКУ КОЕК, а не свой список.
 // Адрес модуля с тем же '?v=', что у admin.js и views/admissions.js: разошедшийся
@@ -97,6 +98,14 @@ const modal = inpatientModal;
 // (window.easymed.navigate), а не через location.hash: голый хеш этот экран не
 // маршрутизирует (слушателя hashchange нет, историю ведёт navigate()), и
 // ссылка молча открывала бы прежнюю вкладку.
+// V3120_CLEANUP — кнопка или строка ведут в экран, только если этот экран
+// откроется: регистратура и своя роль видят раздел «Стационар», но обзор,
+// историю болезни и лист назначений сервер им не отдаёт (permissions.js,
+// canReadCaseFile / INPATIENT_SCREEN_ROLES) — строка вела в «Нет доступа».
+export function canOpenCaseOverview() { return isRouteAllowed('case-overview'); }
+export function canOpenMarSheet() { return isRouteAllowed('mar-sheet'); }
+export function canOpenCaseFile() { return isRouteAllowed('case-file'); }
+
 export function goToMarSheet(admissionId, onNavigate) {
     const nav = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
     if (!nav) return false;
@@ -521,7 +530,7 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
         // CASE_WORKSPACE_V1 — оформление истории болезни это работа на полчаса
         // с десятком бумаг, и делают её на рабочем экране, а не в окне поверх
         // окна. Карточка остаётся местом, откуда туда заходят.
-        body.appendChild(h('button', {
+        if (canOpenCaseFile()) body.appendChild(h('button', {
             class: 'btn btn-outline btn-sm', type: 'button', style: { marginTop: '10px' },
             onclick: () => { close(); goToCaseFile(a.id, onNavigate); },
         }, Icon('Doc', { size: 13 }), ' ', tr('Открыть историю болезни')));
@@ -552,7 +561,7 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
         // это первое, куда идут из карточки. Кнопка появляется ровно с того
         // состояния, с которого сервер вообще принимает назначения ('active';
         // 'discharging' — тот же пациент, лечение ещё идёт).
-        if (a.status === 'active' || a.status === 'discharging') {
+        if ((a.status === 'active' || a.status === 'discharging') && canOpenMarSheet()) {
             actions.appendChild(h('button', {
                 class: 'btn btn-primary btn-sm', type: 'button',
                 onclick: () => { close(); goToMarSheet(a.id, onNavigate); },

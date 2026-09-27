@@ -5946,6 +5946,9 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .ar-row{cursor:pointer;transition:background-color 100ms ease}
 .ar-row:hover td{background:var(--primary-50)}
 .ar-row:focus-visible{outline:2px solid var(--primary-500);outline-offset:-2px}
+/* V3120_CLEANUP — строка, которая никуда не ведёт (обзор закрыт роли): без руки и подсветки */
+.ar-row--static{cursor:default}
+.ar-row--static:hover td{background:transparent}
 .ar-pat{display:flex;align-items:center;gap:8px;min-width:0}
 .ar-av{width:28px;height:28px;border-radius:999px;display:inline-grid;place-items:center;font-size:12.5px;font-weight:700;flex:0 0 28px;background:var(--primary-100);color:var(--primary-800)}
 .ar-id{font-weight:700;color:var(--ink-900);white-space:nowrap;font-variant-numeric:tabular-nums}
