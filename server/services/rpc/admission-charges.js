@@ -49,6 +49,37 @@ function lineKind(row) {
   return 'service';
 }
 
+// BILLING_AUDIT_FIX_V1 — ЕДИНИЦА ТОВАРНОЙ СТРОКИ — ТА, В КОТОРОЙ ЗАПИСАНО
+// КОЛИЧЕСТВО.
+//
+// Акт подписывал каждую товарную строку единицей выдачи («таб»). Но выдача со
+// склада у койки (inventory.js dispenseAdmissionItem) пишет количество в
+// БАЗОВЫХ единицах — коробках, по цене коробки, — и в акте стояло «1 таб ×
+// 40 000» вместо «1 кор ×». Выдача из подотчёта (holdings.js) пишет в
+// единицах выдачи. Строка сама этого не помнит, помнит журнал склада: её
+// движения 'dispense' списали столько-то базовых единиц. Совпало с
+// количеством строки — единица базовая; совпало после умножения на
+// коэффициент — единица выдачи. Движений нет (старые строки) — решает цена:
+// цена коробки → коробка.
+function itemUnit(r) {
+  const consumption = r.product_unit || r.product_base_unit || '';
+  const base = r.product_base_unit || r.product_unit || '';
+  const cf = Number(r.product_cf);
+  if (!(Number.isFinite(cf) && cf > 1) || !r.product_base_unit) return consumption;
+  const qty = Number(r.quantity) || 0;
+  const moved = Number(r.moved_base);
+  if (Number.isFinite(moved) && moved > 0) {
+    if (Math.abs(moved - qty) < 1e-6) return base;
+    if (Math.abs(moved * cf - qty) < 1e-6) return consumption;
+  }
+  const sale = Number(r.product_sale_price);
+  const unit = Number(r.unit_price);
+  if (Number.isFinite(sale) && sale > 0 && Number.isFinite(unit)) {
+    return Math.abs(unit - sale) <= Math.abs(unit - sale / cf) ? base : consumption;
+  }
+  return consumption;
+}
+
 /**
  * АКТ ВЫПОЛНЕННЫХ РАБОТ: строки и итоги.
  *
@@ -73,6 +104,11 @@ export function admissionCharges(db, args, user) {
            p.category     AS product_category,
            r.name         AS room_name,
            p.base_unit    AS product_base_unit,
+           p.consumption_factor AS product_cf,
+           p.sale_price   AS product_sale_price,
+           -- BILLING_AUDIT_FIX_V1 — сколько БАЗОВЫХ единиц списала выдача этой строки.
+           (SELECT -SUM(m.qty) FROM stock_movements m
+             WHERE m.reference_type = 'admission' AND m.reference_id = s.id AND m.kind = 'dispense') AS moved_base,
            u.full_name    AS doctor_name,
            ii.invoice_id  AS invoice_id,
            inv.invoice_number AS invoice_number,
@@ -97,7 +133,7 @@ export function admissionCharges(db, args, user) {
       // Имя берётся у того, чем строка является. Проживание своего имени в
       // справочниках не имеет — оно в метке, и её же видит касса в счёте.
       name: kind === 'stay' ? String(r.notes || '') : (r.service_name || r.product_name || ''),
-      unit: kind === 'item' ? (r.product_unit || r.product_base_unit || '') : '',
+      unit: kind === 'item' ? itemUnit(r) : '',
       // ACT_ADD_SERVICE_V1 — раздел справочника, из которого услуга. По нему
       // вкладки истории болезни отличают анализ от операции; своего признака
       // «это анализ» у строки нет и заводить его значило бы держать вторую

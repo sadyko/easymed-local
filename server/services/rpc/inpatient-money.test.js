@@ -294,3 +294,24 @@ test('D6: дата поступления без зоны — местное в�
     assert.equal(out.admission.admitted_at, d.toISOString().slice(0, 19) + 'Z');
   } finally { db.close(); }
 });
+
+// BILLING_AUDIT_FIX_V1 — единица в акте — та, в которой записано количество:
+// со склада — коробки, из подотчёта — таблетки.
+test('акт: товар со склада подписан коробкой, из подотчёта — таблеткой', () => {
+  const { db, adm, tabs } = seed();
+  try {
+    const box = dispenseAdmissionItem(db, { admission_id: adm.id, product_id: tabs, quantity: 1, billable: true }, NURSE);
+    const pill = dispenseFromHolding(db, { holder: { type: 'staff', id: 2 }, product_id: tabs, quantity: 10, admission_id: adm.id }, NURSE);
+    const act = admissionCharges(db, { admission_id: adm.id }, CASH);
+    const byId = new Map(act.lines.map((l) => [l.id, l]));
+    assert.equal(byId.get(box.line_id).unit, 'box', 'было «таб»: 1 таб × 40 000');
+    assert.equal(byId.get(box.line_id).quantity, 1);
+    assert.equal(byId.get(pill.line_id).unit, 'таб');
+    assert.equal(byId.get(pill.line_id).quantity, 10);
+    // Старая строка без движений склада — по цене: цена коробки → коробка.
+    db.prepare("DELETE FROM stock_movements WHERE reference_type = 'admission'").run();
+    const again = new Map(admissionCharges(db, { admission_id: adm.id }, CASH).lines.map((l) => [l.id, l]));
+    assert.equal(again.get(box.line_id).unit, 'box');
+    assert.equal(again.get(pill.line_id).unit, 'таб');
+  } finally { db.close(); }
+});
