@@ -27,6 +27,7 @@
 // (billing.js create_invoice_for_admission), как и всякую другую услугу
 // госпитализации. Предупреждение из шапки 084_sync_journal.sql соблюдено.
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import {
   RpcError, loadAdmission, assertAdmissionAtLeast, assertCanPrescribe,
 } from './inpatient-flow.js';
@@ -87,7 +88,7 @@ const STATUS_NEEDS_REASON = MARK_STATUSES.filter((s) => s !== 'given');
 
 function requireRole(user, allowed, what) {
   if (!hasAnyRole(user, allowed)) {
-    throw new RpcError(`${what} — недоступно вашей роли.`, 403);
+    throw rpcT(RpcError, '{what} — недоступно вашей роли.', { what }, 403);
   }
 }
 
@@ -125,7 +126,7 @@ function refOrNull(db, table, id, what) {
 
 function loadOrder(db, orderId) {
   const id = posIntOrNull(orderId);
-  if (id === null) throw new RpcError('order_id must be a positive integer.', 400);
+  if (id === null) throw new RpcError('Назначение указано неверно.', 400);
   const row = db.prepare('SELECT * FROM treatment_orders WHERE id = ?').get(id);
   if (!row) throw new RpcError('Назначение не найдено.', 400);
   return row;
@@ -852,7 +853,7 @@ export function treatmentAdminUnmark(db, args, user) {
   requireGrant(db, user, 'inpatient.marks', 'edit', UNMARK_ROLES, 'снимать отметки о введении');
   const a = args || {};
   const id = posIntOrNull(a.administration_id);
-  if (id === null) throw new RpcError('administration_id must be a positive integer.', 400);
+  if (id === null) throw new RpcError('Отметка выполнения указана неверно.', 400);
 
   const reason = str(a.reason, 300);
 
@@ -928,7 +929,7 @@ export function treatmentTasksDue(db, args, user) {
   // domain/mar-schedule.js). Параметр `now` существует ради тестов и разбора
   // прошедшей смены.
   const nowMs = a.now ? Date.parse(a.now) : Date.now();
-  if (Number.isNaN(nowMs)) throw new RpcError('now must be a timestamp.', 400);
+  if (Number.isNaN(nowMs)) throw new RpcError('Время указано неверно.', 400);
 
   const wardId = posIntOrNull(a.ward_id);
 

@@ -68,7 +68,7 @@ test('PATCH по сотруднику главной клиники — отка
     const admin = await loginAs(base, 'boss', 'password1');
     const res = await send(base, '/api/users/' + idOf(db, 'ivanov'), 'PATCH', { phone: '+998900000000' }, admin);
     assert.equal(res.status, 409);
-    assert.match((await res.json()).error.message, /main clinic/i);
+    assert.match((await res.json()).error.message, /главная клиника/i);   // V3120_I18N — сервер отвечает по-русски
     assert.equal(db.prepare("SELECT phone FROM users WHERE username = 'ivanov'").get().phone, '',
       'ни одного поля не должно измениться');
 
@@ -92,7 +92,7 @@ test('DELETE по сотруднику главной клиники — отк�
     // предложил бы удаление, которого не бывает.
     const check = await (await send(base, `/api/users/${id}/delete-check`, 'GET', undefined, admin)).json();
     assert.equal(check.deletable, false);
-    assert.match(check.reason, /main clinic/i);
+    assert.match(check.reason, /главная клиника/i);
     db.close();
   } finally { server.close(); }
 });
@@ -104,7 +104,7 @@ test('свой пароль такой человек меняет в главн
     const res = await send(base, '/api/auth/change-password', 'POST',
       { current_password: 'password2', new_password: 'password3' }, doc);
     assert.equal(res.status, 409, 'иначе новый пароль прожил бы до ближайшей синхронизации');
-    assert.match((await res.json()).error.message, /main clinic/i);
+    assert.match((await res.json()).error.message, /главной клинике/i);   // V3120_I18N — сервер отвечает по-русски
 
     // Пароль не тронут: человек по-прежнему входит своим.
     const again = await send(base, '/api/auth/login', 'POST', { username: 'ivanov', password: 'password2' });

@@ -762,7 +762,7 @@ test('LIVE_AUDIT_FIX_V1: регистратура заводит полис по
   // процент покрытия — не решение стойки
   const { compile } = await import('../../../../server/db/query-compiler.js');
   assert.throws(() => compile({ table: 'payer_policies', op: 'insert', values: { payer_id: 7, name: 'X', coverage_percent: 100 } },
-    { id: 1, role: 'registrar', extra_roles: [] }, { db: DB }), /administrator-only/);
+    { id: 1, role: 'registrar', extra_roles: [] }, { db: DB }), /меняет только администратор/);
 });
 
 test('LIVE_AUDIT_FIX_V1: врачу мастер не обещает шаблон и плательщика, которых сервер не сохранит; регистратору — показывает', async () => {

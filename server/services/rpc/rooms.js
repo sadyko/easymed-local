@@ -12,6 +12,7 @@
 // одной транзакции: половинчатое применение оставило бы врача одновременно
 // «убранным отсюда» и «не добавленным туда».
 import { hasAnyRole } from '../roles.js';
+import { rpcT } from '../server-message.js';   // V3120_I18N
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -21,15 +22,15 @@ const ADMIN_ONLY = ['admin'];
 
 export function roomAssignDoctors(db, args, user) {
   if (!hasAnyRole(user, ADMIN_ONLY)) {
-    throw new RpcError('Your role is not allowed to perform this action.', 403);
+    throw new RpcError('Вашей роли это действие недоступно.', 403);
   }
   const a = args || {};
   const roomId = Number(a.room_id);
   if (!Number.isInteger(roomId) || roomId <= 0) {
-    throw new RpcError('room_id is required.', 400);
+    throw new RpcError('Не указан кабинет.', 400);
   }
   const room = db.prepare('SELECT id FROM rooms WHERE id = ?').get(roomId);
-  if (!room) throw new RpcError('Room not found.', 400);
+  if (!room) throw new RpcError('Кабинет не найден.', 400);
 
   const ids = (x) => (Array.isArray(x) ? x : [])
     .map(Number)
@@ -41,7 +42,7 @@ export function roomAssignDoctors(db, args, user) {
   // очереди, а чужой id в этом поле молча сломал бы доску очереди.
   const isDoctor = db.prepare('SELECT id FROM users WHERE id = ? AND is_doctor = 1');
   for (const id of add) {
-    if (!isDoctor.get(id)) throw new RpcError('User ' + id + ' is not a doctor.', 400);
+    if (!isDoctor.get(id)) throw rpcT(RpcError, 'Сотрудник №{id} — не врач: кабинет назначают только врачам.', { id }, 400);
   }
 
   const setRoom = db.prepare('UPDATE users SET room_id = ? WHERE id = ?');

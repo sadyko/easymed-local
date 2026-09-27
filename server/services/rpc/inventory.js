@@ -4,6 +4,7 @@
 // insufficient stock) leaves on_hand, visit_services, and stock_movements
 // completely untouched.
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { hasAnyRole } from '../roles.js';
 // BRANCH_MONEY_GUARD_V1 — одна проверка «своё ли это здание» на весь сервер
 // (billing.js), а не копия в каждом файле: отказ обязан звучать одинаково.
@@ -63,7 +64,7 @@ const MAX_QTY = 1_000_000;
 
 function requireQuantity(quantity) {
   if (!(typeof quantity === 'number' && Number.isFinite(quantity) && quantity > 0 && quantity <= MAX_QTY)) {
-    throw new RpcError(`Количество — положительное число, не больше ${MAX_QTY}.`, 400);
+    throw rpcT(RpcError, 'Количество — положительное число, не больше {max}.', { max: MAX_QTY }, 400);
   }
 }
 
@@ -72,7 +73,7 @@ function optPosInt(v, name) {
     return null;
   }
   if (!(Number.isInteger(v) && v > 0)) {
-    throw new RpcError(`${name}: нужно положительное целое число.`, 400);
+    throw rpcT(RpcError, '{name}: нужно положительное целое число.', { name }, 400);
   }
   return v;
 }

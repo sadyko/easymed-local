@@ -33,6 +33,7 @@
 // от клиента. Исключение — слаг, который у ЭТОГО врача уже стоит: старые данные
 // не должны запирать профиль, их имена сохраняются как были.
 import { hasAnyRole } from '../roles.js';
+import { rpcT } from '../server-message.js';   // V3120_I18N
 import { SPECIALTY_ROWS } from '../../../public/js/shared/specialty-list.js';
 
 export class RpcError extends Error {
@@ -73,7 +74,7 @@ function cleanValue(key, v) {
   if (key === 'experience_years') {
     if (v == null || v === '') return null;
     const n = Number(v);
-    if (!Number.isInteger(n) || n < 0 || n > 80) throw new RpcError('experience_years must be a whole number 0..80.', 400);
+    if (!Number.isInteger(n) || n < 0 || n > 80) throw new RpcError('Стаж — целое число лет от 0 до 80.', 400);
     return n;
   }
   // URL_KEYS
@@ -88,7 +89,7 @@ function cleanValue(key, v) {
     // Ре-ревью п.10 — без «%»: закодированный «..» (%2e%2e) или «/» (%2F)
     // прошёл бы проверку и раскодировался уже в хранилище.
     if (!/^\/api\/storage\/doctor-photos\/[A-Za-z0-9._~\/-]+$/.test(s) || s.includes('..') || s.length > 500) {
-      throw new RpcError('photo_url must be a photo uploaded to the clinic storage.', 400);
+      throw new RpcError('Фото должно быть загружено в хранилище клиники.', 400);
     }
     return s;
   }
@@ -104,8 +105,8 @@ const CONDITION_KINDS = ['disease', 'symptom'];
 const CANON = new Map(SPECIALTY_ROWS.map((r) => [r.slug, r]));
 
 function cleanSpecialties(db, uid, list) {
-  if (!Array.isArray(list)) throw new RpcError('specialties must be a list of slugs.', 400);
-  if (list.length > MAX_SPECIALTIES) throw new RpcError('At most 4 specialties.', 400);
+  if (!Array.isArray(list)) throw new RpcError('Специальности переданы неверно: нужен список.', 400);
+  if (list.length > MAX_SPECIALTIES) throw new RpcError('Не больше 4 специальностей.', 400);
   const own = new Map(db.prepare('SELECT specialty_slug, name_ru, name_uz FROM user_specialties WHERE user_id = ?')
     .all(uid).map((r) => [r.specialty_slug, r]));
   const seen = new Set();
@@ -115,13 +116,13 @@ function cleanSpecialties(db, uid, list) {
     // видит специальностей без слага и не должен ими ронять сохранение.
     if (raw == null || raw === '') continue;
     const slug = typeof raw === 'string' ? raw.trim() : '';
-    if (!slug) throw new RpcError('Bad specialty.', 400);
+    if (!slug) throw new RpcError('Специальность указана неверно.', 400);
     if (seen.has(slug)) continue;
     seen.add(slug);
     const c = CANON.get(slug);
     if (c) rows.push({ slug, name_ru: c.ru, name_uz: c.uz });
     else if (own.has(slug)) rows.push({ slug, name_ru: own.get(slug).name_ru, name_uz: own.get(slug).name_uz });
-    else throw new RpcError('Unknown specialty: ' + slug, 400);
+    else throw rpcT(RpcError, 'Неизвестная специальность: {slug}.', { slug }, 400);
   }
   // Ревью M7b — СПЕЦИАЛЬНОСТЬ БЕЗ СЛАГА НЕ ТЕРЯЕТСЯ. Карточка сотрудника
   // (routes/users.js parseSpecialties) пишет специальность одним названием,
@@ -141,14 +142,14 @@ function cleanSpecialties(db, uid, list) {
 }
 
 function cleanConditions(list) {
-  if (!Array.isArray(list) || list.length > MAX_CONDITIONS) throw new RpcError('conditions must be a list.', 400);
+  if (!Array.isArray(list) || list.length > MAX_CONDITIONS) throw new RpcError('Список заболеваний передан неверно.', 400);
   const seen = new Set();
   const rows = [];
   for (const c of list) {
-    if (!c || typeof c !== 'object') throw new RpcError('Bad condition.', 400);
+    if (!c || typeof c !== 'object') throw new RpcError('Заболевание указано неверно.', 400);
     const kind = String(c.kind || '');
     const slug = typeof c.slug === 'string' ? c.slug.trim() : '';
-    if (!CONDITION_KINDS.includes(kind) || !slug || slug.length > 200) throw new RpcError('Bad condition.', 400);
+    if (!CONDITION_KINDS.includes(kind) || !slug || slug.length > 200) throw new RpcError('Заболевание указано неверно.', 400);
     const txt = (v) => (v == null ? null : String(v).trim().slice(0, 500) || null);
     const key = kind + ':' + slug;
     if (seen.has(key)) continue;
@@ -162,10 +163,10 @@ function cleanConditions(list) {
 // (routes/users.js): админ правит профиль врача теми же проверками, что и сам
 // врач. Возвращает { ключ: значение для колонки }; неизвестный ключ — отказ.
 export function cleanProfileFields(p) {
-  if (!p || typeof p !== 'object' || Array.isArray(p)) throw new RpcError('public_profile must be an object.', 400);
+  if (!p || typeof p !== 'object' || Array.isArray(p)) throw new RpcError('Публичный профиль передан неверно.', 400);
   const values = {};
   for (const [k, v] of Object.entries(p)) {
-    if (!PROFILE_KEYS.includes(k)) throw new RpcError('Field not allowed: ' + k, 400);
+    if (!PROFILE_KEYS.includes(k)) throw rpcT(RpcError, 'Поле {field} в профиле менять нельзя.', { field: k }, 400);
     values[k] = cleanValue(k, v);
   }
   return values;
@@ -196,13 +197,13 @@ function isEmpty(v) {
 
 export function updateMyDoctorProfile(db, args, user) {
   const uid = Number(user && user.id);
-  if (!Number.isInteger(uid) || uid <= 0) throw new RpcError('Not signed in.', 401);
+  if (!Number.isInteger(uid) || uid <= 0) throw new RpcError('Нужно войти в систему.', 401);
   const me = db.prepare('SELECT id, is_doctor FROM users WHERE id = ?').get(uid);
   if (!me || !(me.is_doctor === 1 || hasAnyRole(user, ['doctor']))) {
-    throw new RpcError('Only a doctor can edit a doctor profile.', 403);
+    throw new RpcError('Профиль врача редактирует только врач.', 403);
   }
   const p = (args && args.p) || {};
-  if (typeof p !== 'object' || Array.isArray(p)) throw new RpcError('p must be an object.', 400);
+  if (typeof p !== 'object' || Array.isArray(p)) throw new RpcError('Данные профиля переданы неверно.', 400);
 
   const values = cleanProfileFields(p);
 

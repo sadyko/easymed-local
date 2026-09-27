@@ -58,7 +58,7 @@ test('диапазоны и полнота: опечатка отвергает�
   assert.throws(() => admissionVitalsAdd(db, { admission_id: 10, bp_sys: 80, bp_dia: 120 }, nurse), /меньше систолического/);
   assert.throws(() => admissionVitalsAdd(db, { admission_id: 10, consciousness: 'sleepy', temp_c: 37 }, nurse), /Сознание/);
   assert.throws(() => admissionVitalsAdd(db, { admission_id: 10, note: 'только слова' }, nurse), /Пустое измерение/);
-  assert.throws(() => admissionVitalsAdd(db, { admission_id: 10, temp_c: 37, measured_at: 'вчера' }, nurse), /ISO/);
+  assert.throws(() => admissionVitalsAdd(db, { admission_id: 10, temp_c: 37, measured_at: 'вчера' }, nurse), /Время измерения указано неверно/);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM admission_vitals').get().n, 0, 'ни одна ошибка не оставила строки');
   // Частичное измерение — нормально: пульс и температура у поста.
   const res = admissionVitalsAdd(db, { admission_id: 10, temp_c: 36.6, pulse_bpm: 72 }, doctor);

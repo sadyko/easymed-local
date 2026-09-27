@@ -5,6 +5,7 @@ import { currentChallenge, redeem } from '../control/unlock.js';
 import { enrollWithCode } from '../control/enroll.js';
 import { getDataDir } from '../control/config.js';
 import { hasAnyRole } from '../roles.js';
+import { rpcT } from '../server-message.js';   // V3120_I18N
 
 // LICENCE_CORE_V1 — the three RPCs that must work while locked.
 //
@@ -124,7 +125,7 @@ export function moduleRequest(db, args, user) {
   // is a contract violation, not something a clinic user can trigger by
   // clicking around.
   const key = String(args.module_key || '');
-  if (!SELLABLE_MODULES.has(key)) throw new RpcError('Unknown module: ' + (key || '(missing)'), 400);
+  if (!SELLABLE_MODULES.has(key)) throw rpcT(RpcError, 'Неизвестный модуль: {module}.', { module: key || '—' }, 400);
 
   // SELECT-then-INSERT looks racy, but better-sqlite3 is synchronous and this
   // process holds the only connection that writes module_requests: there is no

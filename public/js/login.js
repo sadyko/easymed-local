@@ -13,9 +13,10 @@ const npErr = document.getElementById('newpass-error');
 // people there after login left them on a dead end with no route into the app.
 const APP_HOME = '/admin.html';
 
-// V3120_FIX — страница входа по-русски. Сервер отвечает на вход английскими
-// фразами (server/routes/auth.js); переводим известные здесь, а незнакомую
-// показываем как есть — лучше английская причина, чем никакой.
+// V3120_FIX — страница входа по-русски. Сервер отвечал на вход английскими
+// фразами; переводим известные здесь, а незнакомую показываем как есть.
+// V3120_I18N — теперь server/routes/auth.js отвечает этими же русскими
+// фразами сам; английские ключи остаются на случай старого сервера.
 const SERVER_MSG_RU = {
   'Wrong username or password.': 'Неверный логин или пароль.',
   'Too many attempts. Try again in a few minutes.': 'Слишком много попыток. Попробуйте через несколько минут.',

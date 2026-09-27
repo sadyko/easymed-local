@@ -3,6 +3,7 @@
 // client-supplied amounts are never trusted. Every handler that touches
 // money or bed/admission state runs inside db.transaction(...)() for atomicity.
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { nextInvoiceNumber, buildAdmissionInvoice } from './billing.js';   // DEBT_FLOW_V1 — долг при выписке собирается в счёт
 import { nextAdmissionNo } from '../domain/admission-number.js';   // ADMISSION_NUMBER_V2
 import { generateAdmissionBill } from './admission-bill.js';   // CASE_OVERVIEW_V1 — выписка со счётом
@@ -364,7 +365,7 @@ export function admitPatient(db, args, user) {
       throw new RpcError('Койка выведена из работы.', 400);
     }
     if (bed.status !== 'free') {
-      throw new RpcError(`Койка не свободна (сейчас: ${BED_STATUS_RU[bed.status] || bed.status}).`, 400);
+      throw rpcT(RpcError, 'Койка не свободна (сейчас: {status}).', { status: BED_STATUS_RU[bed.status] || bed.status }, 400);
     }
     if (doctorId !== null && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(doctorId)) {
       throw new RpcError('Врач не найден.', 400);   // clean 400 instead of an FK 500 (review finding #4)

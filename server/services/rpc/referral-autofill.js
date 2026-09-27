@@ -49,9 +49,9 @@ export function visitSetDoctorReferrer(db, args, user) {
   const recId = args && args.recommendation_id != null ? Number(args.recommendation_id) : null;
   let doctorId = Number(args && args.doctor_id);
   let sourceVisitId = args && args.source_visit_id != null ? Number(args.source_visit_id) : null;
-  if (!isPosInt(visitId)) throw new RpcError('visit_id must be a positive integer.', 400);
-  if (recId !== null && !isPosInt(recId)) throw new RpcError('recommendation_id must be a positive integer.', 400);
-  if (recId === null && !isPosInt(doctorId)) throw new RpcError('doctor_id must be a positive integer.', 400);
+  if (!isPosInt(visitId)) throw new RpcError('Визит указан неверно.', 400);
+  if (recId !== null && !isPosInt(recId)) throw new RpcError('Рекомендация указана неверно.', 400);
+  if (recId === null && !isPosInt(doctorId)) throw new RpcError('Врач указан неверно.', 400);
   const run = db.transaction(() => {
     const visit = db.prepare('SELECT id, patient_id, referral_source_id FROM visits WHERE id = ?').get(visitId);
     if (!visit) throw new RpcError('Визит не найден.', 404);

@@ -1348,7 +1348,7 @@ export async function saveEmployee(emp, row) {
                    || /could not find the '?([a-z_]+)'? column/i.exec(res.error.message || '');
             if (m && m[1] && m[1] in body) { dropped.push(m[1]); delete body[m[1]]; continue; }
             // TENANT_USERNAME_V1 — friendly message for the per-clinic username uniqueness index.
-            if (/duplicate key|unique constraint/i.test(res.error.message || '') && /username/i.test(res.error.message || '')) {
+            if ((/duplicate key|unique constraint/i.test(res.error.message || '') || res.error.sqlite_code === 'SQLITE_CONSTRAINT_UNIQUE') && /username/i.test(res.error.message || '')) {   // V3120_I18N — сервер теперь отвечает по-русски, код SQLite едет в sqlite_code
                 throw new Error('Этот логин уже занят в этой клинике — выберите другой.');
             }
             // STAFF_PERM_MSG_V1 — friendly message when RLS blocks the write (the role lacks

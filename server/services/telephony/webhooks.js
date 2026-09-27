@@ -50,7 +50,7 @@ export const BINOTEL_SOURCE_IPS = Object.freeze([
 
 // Byte-identical to app.js's unknown-endpoint answer ON PURPOSE — see the
 // header: a refusal must be indistinguishable from the endpoint not existing.
-const NOT_FOUND = { error: { code: 'not_found', message: 'Unknown API endpoint.' } };
+const NOT_FOUND = { error: { code: 'not_found', message: 'Неизвестный адрес API.' } };
 
 // Node reports IPv4 peers on a dual-stack socket as '::ffff:a.b.c.d'; the
 // allowlist speaks plain IPv4, so the mapped prefix is stripped before
@@ -80,7 +80,7 @@ export function telephonyWebhooks(db, { allowedIps = BINOTEL_SOURCE_IPS } = {}) 
       // non-success apiCallCompleted (7 times over 38 hours per the docs),
       // which is exactly right for a transient bug here.
       console.warn('[telephony] webhook failed:', e && e.message);
-      res.status(500).json({ error: { code: 'internal', message: 'Server error.' } });
+      res.status(500).json({ error: { code: 'internal', message: 'Ошибка сервера. Повторите позже.' } });
     }
   });
 

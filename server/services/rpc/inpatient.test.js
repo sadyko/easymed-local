@@ -393,7 +393,7 @@ test('a hospitalisation request can be declined, freeing the patient to be refer
 test('cancel refuses an ACTIVE stay (that is what discharge is for) and a bad role', () => {
   const { db, patientId, bed1 } = seed();
   const adm = legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse).admission;
-  assert.throws(() => cancelAdmissionRequest(db, { admission_id: adm.id }, nurse), /cannot go from 'active'/);
+  assert.throws(() => cancelAdmissionRequest(db, { admission_id: adm.id }, nurse), /из состояния «active»/);
   assert.throws(() => cancelAdmissionRequest(db, { admission_id: adm.id }, lab), /недоступно/);
   // the stay is untouched
   assert.equal(db.prepare('SELECT status FROM admissions WHERE id=?').get(adm.id).status, 'active');

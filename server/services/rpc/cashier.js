@@ -3,6 +3,7 @@
 // rows — client-supplied amounts are never trusted. Every handler runs its
 // DB work inside db.transaction(...)() for atomicity.
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { today as localToday, localRangeWhere } from '../domain/day.js';   // V3120_FIX (PERF) — дневные ветки по индексам
 import { outstandingWhere, idemReplay, idemRemember } from '../domain/money.js';   // V3120_FIX — ключ повтора
 import { assertTransition } from '../domain/lifecycle.js';
@@ -313,7 +314,7 @@ export function cashMove(db, args, user) {
       const moves = movementTotals(db, shift.id);
       const drawer = round2(shift.opening_float + cashSum + moves.cash_in - moves.cash_out);
       if (amount > drawer) {
-        throw new RpcError(`В кассе только ${drawer} — изъять ${amount} нельзя.`, 400);
+        throw rpcT(RpcError, 'В кассе только {drawer} — изъять {amount} нельзя.', { drawer, amount }, 400);
       }
     }
     const info = db.prepare(`

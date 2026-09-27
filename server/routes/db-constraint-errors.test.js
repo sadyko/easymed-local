@@ -67,6 +67,11 @@ test('linking a service another panel already owns answers 409, naming the const
   assert.match(res.json.error.message, /lab_panels\.service_id/,
     'the message must name what conflicted so the UI can explain it: ' + res.json.error.message);
   assert.doesNotMatch(res.json.error.message, /Query failed/);
+  // V3120_I18N — английский текст SQLite человеку не показывается, код не прячется.
+  assert.doesNotMatch(res.json.error.message, /constraint failed/i);
+  assert.equal(res.json.error.sqlite_code, 'SQLITE_CONSTRAINT_UNIQUE');
+  assert.equal(res.json.error.template, 'Такая запись уже есть: значение {column} должно быть уникальным.');
+  assert.deepEqual(res.json.error.params, { column: 'lab_panels.service_id' });
 });
 
 // The panel that legitimately owns the service must still be saveable — the new

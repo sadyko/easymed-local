@@ -28,7 +28,7 @@ const postForm = (base, fields) => fetch(base, { method: 'POST', body: new URLSe
 const enableHooks = (db, extra = '') =>
   db.prepare(`UPDATE telephony_settings SET webhooks_enabled = 1 ${extra} WHERE id = 1`).run();
 
-const NOT_FOUND_BODY = { error: { code: 'not_found', message: 'Unknown API endpoint.' } };
+const NOT_FOUND_BODY = { error: { code: 'not_found', message: 'Неизвестный адрес API.' } };
 
 test('webhooks disabled: 404 with the app-standard body, even from an allowlisted address', async () => {
   const db = fresh();

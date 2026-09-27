@@ -18,6 +18,7 @@
 // ними сегодня не стоит ничего: оперблок как источник не заведён, скидка живёт
 // на счёте, а не на строке. Колонка, которая всегда пуста, — это обещание, а
 // не сведения, поэтому её здесь нет.
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { RpcError, inpatientScope, IN_BED_STATUSES } from './inpatient-flow.js';
 import { hasAnyRole } from '../roles.js';
 // INPATIENT_MONEY_FIX_V1 — строку услуги оценивают ОДИН раз, при заведении, тем
@@ -33,7 +34,7 @@ export const CHARGES_READ_ROLES = ['admin', 'head_doctor', 'registrar', 'nurse',
 export const CHARGES_WRITE_ROLES = ['admin', 'head_doctor', 'cashier', 'registrar'];
 
 function requireRole(user, allowed, what) {
-  if (!hasAnyRole(user, allowed)) throw new RpcError(`${what} закрыт для вашей роли.`, 403);
+  if (!hasAnyRole(user, allowed)) throw rpcT(RpcError, '{what} закрыт для вашей роли.', { what }, 403);
 }
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;

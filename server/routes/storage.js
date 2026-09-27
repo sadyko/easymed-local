@@ -413,7 +413,7 @@ export function storageRoutes(storageDir, db = null) {
       }
     }
     if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
-      return res.status(404).json({ error: { code: 'not_found', message: 'File not found.' } });
+      return res.status(404).json({ error: { code: 'not_found', message: 'Файл не найден.' } });
     }
     res.setHeader('Content-Type', contentType(abs));
     res.setHeader('Cache-Control', 'private, max-age=3600');

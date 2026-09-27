@@ -18,6 +18,7 @@ import { STRINGS } from './i18n-strings.js?v=svceditor1';
 // MONTH_WORDS_V1 — сам формат даты живёт в общем ЧИСТОМ модуле: им пользуются
 // и печатные бланки, которые собирает сервер (там нет ни DOM, ни localStorage).
 import { monthWord, MONTH_KEYS_FORMAT, MONTH_KEYS_STANDALONE } from '../shared/date-words.js';
+import { lookupServerMessage } from '../shared/server-messages.js';   // V3120_I18N
 
 const I18N = {
     en: {
@@ -349,7 +350,22 @@ export function tr(str) {
         e = STRINGS[key];
         if (e) return (str.startsWith(' ') ? ' ' : '') + (e[currentLang] || e.en || key) + (str.endsWith(' ') ? ' ' : '');
     }
+    // V3120_I18N — собранное сообщение сервера: слой запросов запомнил его
+    // шаблон и значения (shared/server-messages.js). Переводим шаблон,
+    // подставляем значения (слово из словаря — тоже переводом).
+    const sm = lookupServerMessage(str);
+    if (sm) return fillServerMessage(sm);
     return str;
+}
+
+function fillServerMessage({ template, params }) {
+    const e = STRINGS[template];
+    let out = e ? (e[currentLang] || e.en || template) : template;
+    for (const [k, v] of Object.entries(params || {})) {
+        const w = typeof v === 'string' && STRINGS[v] ? (STRINGS[v][currentLang] || v) : String(v);
+        out = out.split('{' + k + '}').join(w);
+    }
+    return out;
 }
 
 // MONTH_WORDS_V1 (2026-09-05) — месяц словом на языке интерфейса.

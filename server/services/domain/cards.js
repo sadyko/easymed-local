@@ -11,6 +11,7 @@
 // возврат вызываются ТОЛЬКО внутри транзакции вызывающего (record_payment /
 // record_payment_split / refund_payment): платёж и остаток меняются вместе.
 
+import { withTemplate } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { today as localToday } from './day.js';
 import { moneyDocRefusal } from './wallet.js';
 
@@ -91,14 +92,14 @@ export function spendCard(db, { cardId, invoice, paymentId, amount, user }) {
   if (refusal) throw new CardError(refusal);
   const card = loadCard(db, cardId);
   const { name, remaining, cap } = spendableOn(db, card, invoice);
-  if (amount > remaining) throw new CardError(`${name}: на карте осталось ${remaining} — списать ${amount} нельзя.`);
-  if (amount > cap) throw new CardError(`${name} оплачивает только свои услуги: не больше ${cap} по этому счёту.`);
+  if (amount > remaining) throw withTemplate(new CardError(''), '{name}: на карте осталось {remaining} — списать {amount} нельзя.', { name, remaining, amount });
+  if (amount > cap) throw withTemplate(new CardError(''), '{name} оплачивает только свои услуги: не больше {cap} по этому счёту.', { name, cap });
   // Условие в самом UPDATE — второй кассир с той же картой не уведёт остаток в
   // минус, даже если прочитал его раньше (CHECK remaining >= 0 — последняя
   // стена, миграция 158).
   const r = db.prepare('UPDATE patient_discounts SET remaining = ROUND(remaining - ?, 2) WHERE id = ? AND remaining >= ?')
     .run(amount, card.id, amount);
-  if (r.changes !== 1) throw new CardError(`${name}: остаток изменился — откройте оплату заново.`);
+  if (r.changes !== 1) throw withTemplate(new CardError(''), '{name}: остаток изменился — откройте оплату заново.', { name });
   const after = db.prepare('SELECT remaining FROM patient_discounts WHERE id = ?').get(card.id).remaining;
   db.prepare(`INSERT INTO card_ledger (discount_id, invoice_id, payment_id, amount, remaining_after, note, created_by)
               VALUES (?, ?, ?, ?, ?, ?, ?)`)

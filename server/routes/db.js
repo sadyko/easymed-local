@@ -7,6 +7,7 @@ import { scopeLifted } from '../db/row-scope.js';   // V3120_FIX — кто на
 import { readIdentity } from '../services/branch-sync/identity.js';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
+import { constraintRefusal, errorBody } from '../services/server-message.js';   // V3120_I18N
 // CRM_REAL_BOOKING_V1 — статус услуги двигают экраны, и двигают они его через
 // эту дверь: работа над пациентом доказывает, что он пришёл.
 import { crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../services/crm/visit-status.js';
@@ -211,7 +212,7 @@ export function dbRoutes(db) {
     } catch (e) {
       if (e instanceof CompileError) {
         const status = e.status || 400;
-        return res.status(status).json({ error: { code: status === 403 ? 'forbidden' : 'bad_request', message: e.message } });
+        return res.status(status).json({ error: errorBody(status === 403 ? 'forbidden' : 'bad_request', e) });   // V3120_I18N — с шаблоном, если он есть
       }
       throw e;
     }
@@ -402,21 +403,18 @@ export function dbRoutes(db) {
       // registry, so echoing it leaks nothing and lets the UI say what happened.
       // Anything that is NOT a constraint stays an opaque 500 — an unexpected
       // failure must not describe the server's internals.
-      const code = e && e.code;
-      if (code === 'SQLITE_CONSTRAINT_UNIQUE' || code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
-        return res.status(409).json({ error: { code: 'conflict', message: e.message } });
-      }
-      if (code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
-        return res.status(409).json({ error: { code: 'conflict', message: e.message } });
-      }
-      if (code === 'SQLITE_CONSTRAINT_NOTNULL' || code === 'SQLITE_CONSTRAINT_CHECK') {
-        return res.status(400).json({ error: { code: 'bad_request', message: e.message } });
-      }
-      // V3120_FIX — отказ ТРИГГЕРА (RAISE(ABORT, '…')) — это правило клиники,
-      // написанное её словами («Процент кэшбэка должен быть от 0 до 100.»).
-      // Раньше оно тонуло в «Query failed.».
-      if (code === 'SQLITE_CONSTRAINT_TRIGGER' || code === 'SQLITE_CONSTRAINT') {
-        return res.status(409).json({ error: { code: 'conflict', message: e.message } });
+      //
+      // V3120_I18N — английский текст SQLite («UNIQUE constraint failed: …»)
+      // человеку больше не показывается: constraintRefusal даёт русскую фразу
+      // (с шаблоном для перевода), а код SQLite и исходный текст едут рядом —
+      // `sqlite_code` и `detail` — для логов и поддержки. Отказ ТРИГГЕРА
+      // (RAISE(ABORT, '…')) — правило клиники её словами («Процент кэшбэка
+      // должен быть от 0 до 100.»), он идёт как есть (V3120_FIX).
+      const refusal = constraintRefusal(e);
+      if (refusal) {
+        return res.status(refusal.status).json({ error: {
+          ...errorBody(refusal.code, refusal), sqlite_code: refusal.sqlite_code, detail: refusal.detail,
+        } });
       }
       // V3120_FIX — upsert по колонке без уникального ключа: ошибка запроса.
       if (/ON CONFLICT clause does not match/i.test(String(e && e.message))) {
@@ -429,7 +427,7 @@ export function dbRoutes(db) {
       // (fixed vocabulary, not a patient value), the same kind of identifier
       // rpc.js's RPC name already is.
       recordEvent(db, 'server_error', '/api/db/' + compiled.meta.table);
-      return res.status(500).json({ error: { code: 'internal', message: 'Query failed.' } });
+      return res.status(500).json({ error: { code: 'internal', message: 'Запрос к базе не выполнен. Повторите позже.' } });
     }
   });
 
@@ -471,7 +469,7 @@ function respondRows(res, rows, meta, count) {
   const shaped = parseJsonColumns(reshape(rows, meta), meta);
   if (meta.single === 'single') {
     if (shaped.length !== 1) {
-      return res.status(406).json({ error: { code: 'not_single', message: 'Expected exactly one row.' } });
+      return res.status(406).json({ error: { code: 'not_single', message: 'Ожидалась ровно одна запись.' } });
     }
     return res.json({ data: shaped[0] });
   }

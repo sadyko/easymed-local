@@ -101,7 +101,7 @@ test('an invalid own price is refused rather than silently coerced', () => {
   for (const bad of [-1, 1e13, 'abc', NaN, Infinity]) {
     const p = parseEmployeeFields({ service_rates: [{ service_id: svc, price: bad }] }, db);
     assert.equal(p.ok, false, `price ${bad} must be rejected`);
-    assert.match(p.message, /price/i);
+    assert.match(p.message, /Цена врача/i);   // V3120_I18N — сервер отвечает по-русски
   }
 });
 

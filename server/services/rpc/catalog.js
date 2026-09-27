@@ -62,7 +62,7 @@ export function deleteService(db, args, user) {
   // «услуга используется в визитах — отключите её». Запрещены только 0 и не-число.
   const id = Number(args && (args.p_service_id ?? args.service_id));
   if (!Number.isInteger(id) || id === 0) {
-    throw new RpcError('p_service_id must be a non-zero integer.', 400);
+    throw new RpcError('Услуга указана неверно.', 400);
   }
 
   const svc = db.prepare('SELECT id, name FROM services WHERE id = ?').get(id);
@@ -114,7 +114,7 @@ export function serviceDeleteCheck(db, args, user) {
   // «услуга используется в визитах — отключите её». Запрещены только 0 и не-число.
   const id = Number(args && (args.p_service_id ?? args.service_id));
   if (!Number.isInteger(id) || id === 0) {
-    throw new RpcError('p_service_id must be a non-zero integer.', 400);
+    throw new RpcError('Услуга указана неверно.', 400);
   }
   const svc = db.prepare('SELECT id, name FROM services WHERE id = ?').get(id);
   if (!svc) throw new RpcError('Услуга не найдена.', 404);

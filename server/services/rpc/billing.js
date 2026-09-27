@@ -2,6 +2,7 @@
 // is computed here from DB rows — client-supplied amounts are never trusted.
 // Both handlers run their DB work inside db.transaction(...)() for atomicity.
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { ensureOpenShift } from './cashier.js';   // SHIFT_AUTO_V2
 // CRM_REAL_BOOKING_V1 — платёж на кассе это доказательство, что пациент
 // здесь: заочно деньги у окна не появляются. См. шапку crm/visit-status.js.
@@ -74,7 +75,11 @@ function isPositiveInt(v) {
 // (тот же статус, тот же текст), чтобы экраны читали его одинаково.
 function walletGuard(fn) {
   try { return fn(); } catch (e) {
-    if (e instanceof WalletError || e instanceof CardError) throw new RpcError(e.message, e.status);
+    if (e instanceof WalletError || e instanceof CardError) {
+      const r = new RpcError(e.message, e.status);
+      if (e.template) { r.template = e.template; r.params = e.params; }   // V3120_I18N
+      throw r;
+    }
     throw e;
   }
 }
@@ -153,8 +158,7 @@ function branchName(db, letter) {
 // visits, visit_services). what — о чём речь, в родительном падеже.
 export function assertOwnBuilding(db, row, what) {
   if (!row || row.sync_origin == null) return;
-  throw new RpcError(
-    `${what} из филиала ${branchName(db, row.sync_origin)} — изменить его можно только там.`, 403);
+  throw rpcT(RpcError, '{what} из филиала {branch} — изменить его можно только там.', { what, branch: branchName(db, row.sync_origin) }, 403);
 }
 
 /**
@@ -297,13 +301,13 @@ export function createInvoiceForVisit(db, args, user) {
     for (const id of ids) {
       const row = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(id);
       if (!row) {
-        throw new RpcError(`Строка услуги №${id} не найдена.`, 400);
+        throw rpcT(RpcError, 'Строка услуги №{id} не найдена.', { id }, 400);
       }
       if (row.visit_id !== visitId) {
-        throw new RpcError(`Строка услуги №${id} относится к другому визиту.`, 400);
+        throw rpcT(RpcError, 'Строка услуги №{id} относится к другому визиту.', { id }, 400);
       }
       if (row.invoice_item_id !== null) {
-        throw new RpcError(`Услуга №${id} уже в счёте.`, 400);
+        throw rpcT(RpcError, 'Услуга №{id} уже в счёте.', { id }, 400);
       }
       rows.push(row);
     }
@@ -338,13 +342,13 @@ export function createInvoiceForVisit(db, args, user) {
       if (row.service_id != null) {
         svc = getService.get(row.service_id);
         if (!svc) {
-          throw new RpcError(`Услуга №${row.service_id} не найдена.`, 400);
+          throw rpcT(RpcError, 'Услуга №{id} не найдена.', { id: row.service_id }, 400);
         }
         svcName = svc.name;
       } else if (row.clinic_item_id != null) {
         prod = getProduct.get(row.clinic_item_id);
         if (!prod) {
-          throw new RpcError(`Товар №${row.clinic_item_id} не найден.`, 400);
+          throw rpcT(RpcError, 'Товар №{id} не найден.', { id: row.clinic_item_id }, 400);
         }
         svcName = prod.name;
       } else if (row.consultation_type_id != null) {
@@ -362,7 +366,7 @@ export function createInvoiceForVisit(db, args, user) {
       const unit = lineUnitPrice(db, row, { service: svc, product: prod });
       const qty = row.quantity;
       if (!(Number.isFinite(qty) && qty > 0)) {
-        throw new RpcError(`Неверное количество в строке услуги №${row.id}.`, 400);
+        throw rpcT(RpcError, 'Неверное количество в строке услуги №{id}.', { id: row.id }, 400);
       }
       const line = round2(unit * qty);
       const pkg = linePackage(db, row, visitDay, packages);
@@ -435,10 +439,10 @@ export function createInvoiceForVisit(db, args, user) {
       }
       const payer = db.prepare('SELECT id, active FROM payers WHERE id = ?').get(payerRaw);
       if (!payer) {
-        throw new RpcError(`Плательщик №${payerRaw} не найден.`, 400);
+        throw rpcT(RpcError, 'Плательщик №{id} не найден.', { id: payerRaw }, 400);
       }
       if (!payer.active) {
-        throw new RpcError(`Плательщик №${payerRaw} выключен.`, 400);
+        throw rpcT(RpcError, 'Плательщик №{id} выключен.', { id: payerRaw }, 400);
       }
     }
 
@@ -548,7 +552,7 @@ export function recordPayment(db, args, user) {
   }
   const method = args && args.method !== undefined ? args.method : 'cash';
   if (!PAYMENT_METHODS.includes(method)) {
-    throw new RpcError(`Неизвестный способ оплаты: ${method}.`, 400);
+    throw rpcT(RpcError, 'Неизвестный способ оплаты: {method}.', { method }, 400);
   }
 
   const invoiceId = args && args.invoice_id;
@@ -564,7 +568,7 @@ export function recordPayment(db, args, user) {
     assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
     { const refusal = moneyDocRefusal(db, invoice); if (refusal) throw new RpcError(refusal, 400); }   // ревью C1 + CARD_SALE_V1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
-      throw new RpcError(`Счёт ${statusRu(invoice.status)} — операция по нему недоступна.`, 400);
+      throw rpcT(RpcError, 'Счёт {status} — операция по нему недоступна.', { status: statusRu(invoice.status) }, 400);
     }
 
     const balance = round2(invoice.total_amount - invoice.paid_amount);
@@ -572,7 +576,7 @@ export function recordPayment(db, args, user) {
       throw new RpcError('Счёт уже оплачен — к оплате 0.', 400);
     }
     if (amt > balance) {
-      throw new RpcError(`Сумма больше остатка к оплате (${balance}).`, 400);
+      throw rpcT(RpcError, 'Сумма больше остатка к оплате ({balance}).', { balance }, 400);
     }
 
     const newPaid = round2(invoice.paid_amount + amt);
@@ -658,12 +662,12 @@ export function recordPaymentSplit(db, args, user) {
   const tenders = raw.map((t, i) => {
     const amount = t && t.amount;
     if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
-      throw new RpcError(`Часть ${i + 1}: сумма должна быть положительным числом.`, 400);
+      throw rpcT(RpcError, 'Часть {n}: сумма должна быть положительным числом.', { n: i + 1 }, 400);
     }
     const amt = round2(amount);
     const method = t && t.method !== undefined ? t.method : 'cash';
     if (!PAYMENT_METHODS.includes(method)) {
-      throw new RpcError(`Часть ${i + 1}: неизвестный способ оплаты ${method}.`, 400);
+      throw rpcT(RpcError, 'Часть {n}: неизвестный способ оплаты {method}.', { n: i + 1, method }, 400);
     }
     const notes = typeof (t && t.notes) === 'string' ? t.notes.slice(0, 200) : '';
     return { amt, method, notes, cardId: t && t.card_id };   // CARD_BALANCE_V1
@@ -676,12 +680,12 @@ export function recordPaymentSplit(db, args, user) {
     assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
     { const refusal = moneyDocRefusal(db, invoice); if (refusal) throw new RpcError(refusal, 400); }   // ревью C1 + CARD_SALE_V1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
-      throw new RpcError(`Счёт ${statusRu(invoice.status)} — операция по нему недоступна.`, 400);
+      throw rpcT(RpcError, 'Счёт {status} — операция по нему недоступна.', { status: statusRu(invoice.status) }, 400);
     }
     const balance = round2(invoice.total_amount - invoice.paid_amount);
     if (balance <= 0) throw new RpcError('Счёт уже оплачен — к оплате 0.', 400);
     if (totalTendered > balance) {
-      throw new RpcError(`Сумма больше остатка к оплате (${balance}).`, 400);
+      throw rpcT(RpcError, 'Сумма больше остатка к оплате ({balance}).', { balance }, 400);
     }
     // Ревью M2 — все части «с баланса» вместе против НАСТОЯЩЕГО баланса, до
     // первой записи: отказ называет баланс пациента, а не остаток после
@@ -690,7 +694,7 @@ export function recordPaymentSplit(db, args, user) {
     if (walletTotal > 0) {
       if (!invoice.patient_id) throw new RpcError('У счёта нет пациента — оплатить с баланса нельзя.', 400);
       const have = walletBalance(db, invoice.patient_id);
-      if (walletTotal > have) throw new RpcError(`На балансе пациента только ${have} — списать ${walletTotal} нельзя.`, 400);
+      if (walletTotal > have) throw rpcT(RpcError, 'На балансе пациента только {have} — списать {amount} нельзя.', { have, amount: walletTotal }, 400);
     }
 
     const shiftId = ensureOpenShift(db, user).id;
@@ -752,7 +756,7 @@ export function markInvoiceDebt(db, args, user) {
     if (!invoice) throw new RpcError('Счёт не найден.', 400);
     assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
-      throw new RpcError(`Счёт ${statusRu(invoice.status)} — операция по нему недоступна.`, 400);
+      throw rpcT(RpcError, 'Счёт {status} — операция по нему недоступна.', { status: statusRu(invoice.status) }, 400);
     }
     const balance = round2(invoice.total_amount - invoice.paid_amount);
     if (balance <= 0) throw new RpcError('Счёт уже оплачен — к оплате 0.', 400);
@@ -1160,7 +1164,7 @@ function issueRefund(db, { invoice, p, amt, refundable, toBalanceRaw, cardFallba
   if (p.method === 'wallet' && !toBalance) {
     const cap = realMoney(db, invoice.patient_id, refundable);   // одно правило с refund_deposit
     if (amt > cap) {
-      throw new RpcError(`Деньгами можно вернуть не больше ${cap}: остальное на балансе — кэшбэк, его возвращают только на баланс.`, 400);
+      throw rpcT(RpcError, 'Деньгами можно вернуть не больше {cap}: остальное на балансе — кэшбэк, его возвращают только на баланс.', { cap }, 400);
     }
   }
 
@@ -1258,7 +1262,7 @@ export function refundPayment(db, args, user) {
     }
     const amt = round2(rawAmt);
     if (amt > refundable) {
-      throw new RpcError(`Максимум к возврату по этому платежу: ${refundable}.`, 400);
+      throw rpcT(RpcError, 'Максимум к возврату по этому платежу: {amount}.', { amount: refundable }, 400);
     }
 
     // The refund lands in the REFUNDER's own open shift (a cash refund must
@@ -1553,24 +1557,24 @@ export function buildAdmissionInvoice(db, admissionId, ids, user) {
     const getProduct = db.prepare('SELECT sale_price, name FROM products WHERE id = ?');
     const priced = ids.map((id) => {
       const row = db.prepare('SELECT * FROM admission_services WHERE id = ?').get(id);
-      if (!row) throw new RpcError(`Строка стационара №${id} не найдена.`, 400);
-      if (row.admission_id !== admissionId) throw new RpcError(`Строка стационара №${id} относится к другой госпитализации.`, 400);
-      if (row.invoice_item_id !== null) throw new RpcError(`Строка стационара №${id} уже в счёте.`, 400);
+      if (!row) throw rpcT(RpcError, 'Строка стационара №{id} не найдена.', { id }, 400);
+      if (row.admission_id !== admissionId) throw rpcT(RpcError, 'Строка стационара №{id} относится к другой госпитализации.', { id }, 400);
+      if (row.invoice_item_id !== null) throw rpcT(RpcError, 'Строка стационара №{id} уже в счёте.', { id }, 400);
       if (!row.billable) throw new RpcError('строка в учёте расходов — отметьте «В счёт», чтобы включить её в счёт пациента.', 400);
       let name = '', svc = null, prod = null;
       if (row.service_id != null) {
         svc = getService.get(row.service_id);
-        if (!svc) throw new RpcError(`Услуга №${row.service_id} не найдена.`, 400);
+        if (!svc) throw rpcT(RpcError, 'Услуга №{id} не найдена.', { id: row.service_id }, 400);
         name = svc.name;
       } else if (row.clinic_item_id != null) {
         prod = getProduct.get(row.clinic_item_id);
-        if (!prod) throw new RpcError(`Товар №${row.clinic_item_id} не найден.`, 400);
+        if (!prod) throw rpcT(RpcError, 'Товар №{id} не найден.', { id: row.clinic_item_id }, 400);
         name = prod.name;
       }
       // Same precedence as visit billing (the doctor's own price wins), with no
       // visit tier — PAY_BASIS_PERFORMED_V1: one rule, domain/pricing.js.
       const qty = row.quantity;
-      if (!(Number.isFinite(qty) && qty > 0)) throw new RpcError(`Неверное количество в строке стационара №${row.id}.`, 400);
+      if (!(Number.isFinite(qty) && qty > 0)) throw rpcT(RpcError, 'Неверное количество в строке стационара №{id}.', { id: row.id }, 400);
       // INPATIENT_MONEY_FIX_V1 — ПРОЖИВАНИЕ идёт в счёт своей СОХРАНЁННОЙ суммой:
       // в ней уже скидка на койку и ставки всех коек, на которых лежал пациент
       // (accommodation.js). «Ставка × сутки» здесь теряла скидку (акт 270 000,

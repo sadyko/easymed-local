@@ -40,9 +40,14 @@ test('login.js — свои сообщения русские, известны�
   assert.equal(loginMessageRu('Wrong username or password.'), 'Неверный логин или пароль.');
   assert.equal(loginMessageRu('Too many attempts. Try again in a few minutes.'), 'Слишком много попыток. Попробуйте через несколько минут.');
   assert.equal(loginMessageRu('Something new'), 'Something new', 'незнакомая причина должна показываться как есть');
-  // Переводимые фразы — те самые, что шлёт сервер (иначе перевод молча отвалится).
+  // V3120_I18N — сервер теперь сам отвечает по-русски, и ровно теми фразами,
+  // что стоят в SERVER_MSG_RU (английские ключи остаются для старого сервера).
+  // Русская фраза проходит loginMessageRu без изменений.
   const auth = fs.readFileSync(path.resolve(PUB, '..', 'server', 'routes', 'auth.js'), 'utf8');
-  for (const msg of ['Wrong username or password.', 'Too many attempts. Try again in a few minutes.', 'Current password is wrong.']) {
-    assert.ok(auth.includes("'" + msg + "'"), 'сервер больше не шлёт «' + msg + '» — обнови SERVER_MSG_RU в login.js');
+  for (const en of ['Wrong username or password.', 'Too many attempts. Try again in a few minutes.', 'Current password is wrong.']) {
+    const ru = loginMessageRu(en);
+    assert.ok(auth.includes("'" + ru + "'"), 'сервер не шлёт «' + ru + '» — фраза сервера и SERVER_MSG_RU в login.js разошлись');
+    assert.equal(auth.includes("'" + en + "'"), false, 'сервер всё ещё шлёт английское «' + en + '»');
+    assert.equal(loginMessageRu(ru), ru);
   }
 });

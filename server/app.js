@@ -77,7 +77,7 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
     try {
       db.prepare('SELECT 1 AS ok').get();
     } catch (e) {
-      return res.status(503).json({ ok: false, error: { code: 'db_unavailable', message: 'Database is not available: ' + (e && e.message) } });
+      return res.status(503).json({ ok: false, error: { code: 'db_unavailable', message: 'База данных недоступна: ' + (e && e.message) } });
     }
     res.json({ ok: true });
   });
@@ -115,7 +115,7 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   app.use('/api/storage', requireAuth, storageRoutes(path.join(dataDir, 'storage'), db));
 
   // Unknown /api paths answer JSON, not an HTML 404 page.
-  app.use('/api', (req, res) => res.status(404).json({ error: { code: 'not_found', message: 'Unknown API endpoint.' } }));
+  app.use('/api', (req, res) => res.status(404).json({ error: { code: 'not_found', message: 'Неизвестный адрес API.' } }));
 
   // extensions:['html'] gives clean URLs: /users serves public/users.html.
   // NO_STALE_CODE_V1 — код всегда сверяется с сервером.
@@ -171,8 +171,8 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
     if (res.headersSent) return next(err);
     res.status(status).json({
       error: status >= 500
-        ? { code: 'internal', message: 'Server error.' }
-        : { code: 'bad_request', message: 'Malformed request.' },
+        ? { code: 'internal', message: 'Ошибка сервера. Повторите позже.' }
+        : { code: 'bad_request', message: 'Некорректный запрос.' },
     });
   });
 

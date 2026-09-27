@@ -53,6 +53,7 @@
 // Выписки: 'discharge'-запись здесь можно написать и опубликовать, но маршрут
 // она НЕ двигает — двухшаговую выписку строит Задача 8.
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import {
   RpcError, loadAdmission, assertAdmissionAtLeast, assertCanPrescribe,
   assertMayTransition, admissionTransition, CLOSED_STATUSES,
@@ -286,7 +287,7 @@ function nowUtc(db) {
 
 function requireRole(user, allowed, what) {
   if (!hasAnyRole(user, allowed)) {
-    throw new RpcError(`${what} — недоступно вашей роли.`, 403);
+    throw rpcT(RpcError, '{what} — недоступно вашей роли.', { what }, 403);
   }
 }
 
@@ -338,7 +339,7 @@ const BUILTIN_KINDS = Object.freeze([...CASE_DOC_SET.map((d) => d.kind), ...LEGA
 
 function loadReview(db, reviewId) {
   const id = posIntOrNull(reviewId);
-  if (id === null) throw new RpcError('review_id must be a positive integer.', 400);
+  if (id === null) throw new RpcError('Осмотр указан неверно.', 400);
   const row = db.prepare('SELECT * FROM admission_reviews WHERE id = ?').get(id);
   if (!row) throw new RpcError('Запись осмотра не найдена.', 400);
   return withKind(row);
@@ -639,7 +640,7 @@ function primaryStateRefusal(db, adm) {
 export function admissionSetAttending(db, args, user) {
   const a = args || {};
   const doctorId = posIntOrNull(a.doctor_id);
-  if (doctorId === null) throw new RpcError('doctor_id must be a positive integer.', 400);
+  if (doctorId === null) throw new RpcError('Врач указан неверно.', 400);
 
   const run = db.transaction(() => {
     const adm = loadAdmission(db, a.admission_id);
@@ -753,7 +754,7 @@ export function admissionSetAttending(db, args, user) {
 export function admissionChangeAttending(db, args, user) {
   const a = args || {};
   const doctorId = posIntOrNull(a.doctor_id);
-  if (doctorId === null) throw new RpcError('doctor_id must be a positive integer.', 400);
+  if (doctorId === null) throw new RpcError('Врач указан неверно.', 400);
   const reason = str(a.reason, 300);
 
   const run = db.transaction(() => {

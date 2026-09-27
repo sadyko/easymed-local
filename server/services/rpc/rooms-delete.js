@@ -45,17 +45,17 @@ const TABLE = { floor: 'floors', room: 'rooms', ward: 'wards', bed: 'beds' };
 
 export function roomsSetupDelete(db, args, user) {
   if (!hasAnyRole(user, ADMIN_ONLY)) {
-    throw new RpcError('Your role is not allowed to perform this action.', 403);
+    throw new RpcError('Вашей роли это действие недоступно.', 403);
   }
   const a = args || {};
   const kind = String(a.kind || '');
   const table = TABLE[kind];
-  if (!table) throw new RpcError('kind must be one of: floor, room, ward, bed.', 400);
+  if (!table) throw new RpcError('Неизвестный вид помещения.', 400);
   const id = Number(a.id);
-  if (!Number.isInteger(id) || id <= 0) throw new RpcError('id is required.', 400);
+  if (!Number.isInteger(id) || id <= 0) throw new RpcError('Не указано, что удалить.', 400);
 
   const row = db.prepare(`SELECT id FROM ${table} WHERE id = ?`).get(id);
-  if (!row) throw new RpcError('Not found.', 400);
+  if (!row) throw new RpcError('Не найдено — возможно, уже удалено.', 400);
 
   // Койки палаты не считаются "чужой" ссылкой: их удаляют вместе с палатой,
   // если сами они ничем не заняты. Иначе палату с пустыми койками нельзя было

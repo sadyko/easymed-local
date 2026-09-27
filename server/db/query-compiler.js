@@ -6,6 +6,7 @@ import { restrictedRead } from './schema-registry.js';   // FINAL_ROLES_SYNC_FIX
 import { readWhere, ownRowsRule, bulkWriteKeys } from './schema-registry.js';   // V3120_FIX (F2, M9)
 import { patientDataRefusal } from './patient-data-gate.js';   // V3120_FIX (M4)
 import { liftAllows } from './pay-visibility.js';
+import { withTemplate } from '../services/server-message.js';   // V3120_I18N
 
 export class CompileError extends Error {
   constructor(message, status = 400) {
@@ -232,7 +233,7 @@ export function compile(desc, user, ctx = {}) {
         // (деньги — с «Ценами и процентами»).
         const ops = op === 'upsert' ? ['insert', 'update'] : [op];
         if (!ops.every((o) => writeGrantAllows(table, o, user, db))) {
-          throw new CompileError('not allowed: column ' + extra[0] + ' is administrator-only', 403);
+          throw withTemplate(new CompileError('', 403), 'Поле {column} меняет только администратор.', { column: extra[0] });
         }
         viaGrant = true;
       }
@@ -240,7 +241,7 @@ export function compile(desc, user, ctx = {}) {
     valueGuard();
     if (!viaGrant) return;
     const col = writeGrantViolation(table, op, desc.values, user, db);
-    if (col) throw new CompileError('not allowed: column ' + col + ' is administrator-only', 403);
+    if (col) throw withTemplate(new CompileError('', 403), 'Поле {column} меняет только администратор.', { column: col });
   };
   // PACKAGES_V1 (ревью M-1 / I-3) — значения, которые колонка принимает
   // (schema-registry.js valueLimits): `onlyValues` — для всех, `nonAdminValues`
@@ -261,7 +262,7 @@ export function compile(desc, user, ctx = {}) {
             if (!r || !Object.prototype.hasOwnProperty.call(r, col)) continue;
             const v = norm(r[col] === undefined ? null : r[col]);
             if (!allowed.map(norm).some((a) => a === v)) {
-              throw new CompileError('not allowed: value of column ' + col, 403);
+              throw withTemplate(new CompileError('', 403), 'Такое значение поля {column} вашей роли недоступно.', { column: col });
             }
           }
         }

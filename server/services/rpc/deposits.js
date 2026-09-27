@@ -17,6 +17,7 @@
 //   received — деньги приняты; с этого момента баланс можно тратить
 //   spent / refunded — списание в счёт и возврат (существующие потоки)
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { hasAnyRole } from '../roles.js';
 import { ensureOpenShift } from './cashier.js';
 // BRANCH_MONEY_NUMBER_V1 — буква здания для номера депозита. Импорт из
@@ -121,7 +122,7 @@ export function acceptDeposit(db, args, user) {
     // долг в окне приёма, а ответ называет, сколько долга закрыто.
     const debtBefore = walletDebt(db, dep.patient_id);
     if (dep.status !== 'pending') {
-      throw new RpcError(`Депозит уже ${DEP_STATUS_RU[dep.status] || dep.status} — принять его нельзя.`, 400);
+      throw rpcT(RpcError, 'Депозит уже {status} — принять его нельзя.', { status: DEP_STATUS_RU[dep.status] || dep.status }, 400);
     }
     // DEPOSIT_METHOD_BY_CASHIER_V1 — способ называет ТОТ, КТО ВЗЯЛ ДЕНЬГИ.
     // Молчаливой подстановки 'cash' здесь больше нет: она означала, что «Принять»
@@ -131,7 +132,7 @@ export function acceptDeposit(db, args, user) {
     if (method === undefined || method === null || method === '') {
       throw new RpcError('Укажите способ оплаты: наличные, карта или эквайринг.', 400);
     }
-    if (!METHODS.includes(method)) throw new RpcError(`Неизвестный способ оплаты: ${method}.`, 400);
+    if (!METHODS.includes(method)) throw rpcT(RpcError, 'Неизвестный способ оплаты: {method}.', { method }, 400);
 
     // Ре-ревью п.5 — «принят» ставит только касса (триггер мигр. 160).
     withLedgerToken(db, () => db.prepare(`
@@ -201,7 +202,7 @@ export function cancelDeposit(db, args, user) {
   const run = db.transaction(() => {
     const dep = db.prepare('SELECT * FROM patient_deposits WHERE id = ?').get(a.deposit_id);
     if (!dep) throw new RpcError('Депозит не найден.', 400);
-    if (dep.status !== 'pending') throw new RpcError(`Отменить можно только депозит, который ждёт кассу, — этот уже ${DEP_STATUS_RU[dep.status] || dep.status}.`, 400);
+    if (dep.status !== 'pending') throw rpcT(RpcError, 'Отменить можно только депозит, который ждёт кассу, — этот уже {status}.', { status: DEP_STATUS_RU[dep.status] || dep.status }, 400);
     db.prepare("UPDATE patient_deposits SET status = 'cancelled', closed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(dep.id);
     return { deposit: db.prepare('SELECT * FROM patient_deposits WHERE id = ?').get(dep.id) };
   });

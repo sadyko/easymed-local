@@ -53,7 +53,7 @@ test('an unknown module key is refused', () => {
 
 test('a missing module key is refused', () => {
   const db = fresh();
-  assert.throws(() => moduleRequest(db, {}, USER), /module/i);
+  assert.throws(() => moduleRequest(db, {}, USER), /модуль/i);
 });
 
 // --- attack-testing added beyond the spec's own list ------------------------

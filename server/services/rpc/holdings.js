@@ -13,6 +13,7 @@
 // Quantities on the ledger are BASE units (like products.on_hand). The nurse
 // types the CONSUMPTION unit («2 таб.»); the conversion is the product's own
 // consumption_factor, exactly as «Выдать со склада» converts on the way in.
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { hasAnyRole } from '../roles.js';
 import { assertAdmissionAtLeast } from './inpatient-flow.js';
 import { today, localDate } from '../domain/day.js';
@@ -478,13 +479,13 @@ export function holdingReturn(db, args, user) {
     const unit = product.base_unit || product.unit || '';
     const row = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?').get(from.type, from.id, productId);
     const have = row ? Number(row.qty) : 0;
-    if (!(have > 0)) throw new RpcError(`У «${from.name}» нет на руках: ${product.name}.`, 400);
+    if (!(have > 0)) throw rpcT(RpcError, 'У «{holder}» нет на руках: {name}.', { holder: from.name, name: product.name }, 400);
 
     let qty = have;
     if (a.quantity !== undefined && a.quantity !== null && a.quantity !== '') {
       const q = roundQty(a.quantity);
       if (!(Number.isFinite(q) && q > 0 && q <= MAX_QTY)) throw new RpcError('Количество — положительное число.', 400);
-      if (!coversQty(have, q, cf)) throw new RpcError(`Больше, чем числится: у «${from.name}» ${roundQty(have)} ${unit} — ${product.name}.`.replace(/\s+/g, ' '), 400);
+      if (!coversQty(have, q, cf)) throw rpcT(RpcError, 'Больше, чем числится: у «{holder}» {have} — {name}.', { holder: from.name, have: `${roundQty(have)} ${unit || ''}`.trim(), name: product.name }, 400);
       qty = Math.min(q, have);
     }
 
@@ -494,7 +495,7 @@ export function holdingReturn(db, args, user) {
       if (to.type === from.type && to.id === from.id) throw new RpcError('Передать можно только другому держателю.', 400);
       if (to.type === 'staff') {
         const u = db.prepare('SELECT is_active FROM users WHERE id = ?').get(to.id);
-        if (u && Number(u.is_active) === 0) throw new RpcError(`${to.name || 'Сотрудник'} отключён — передать ему на руки нельзя.`, 400);
+        if (u && Number(u.is_active) === 0) throw rpcT(RpcError, '{name} отключён — передать ему на руки нельзя.', { name: to.name || 'Сотрудник' }, 400);
       }
     }
 

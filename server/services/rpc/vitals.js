@@ -76,7 +76,7 @@ export function admissionVitalsAdd(db, args, user) {
     }
     let at = typeof a.measured_at === 'string' && a.measured_at ? a.measured_at : nowUtc(db);
     const t = new Date(at);
-    if (Number.isNaN(t.getTime())) throw new RpcError('measured_at must be an ISO date.', 400);
+    if (Number.isNaN(t.getTime())) throw new RpcError('Время измерения указано неверно.', 400);
     at = t.toISOString().replace(/\.\d{3}Z$/, 'Z');
 
     const id = db.prepare(`
@@ -107,7 +107,7 @@ export function admissionVitalsAdd(db, args, user) {
 export function admissionVitalsDelete(db, args, user) {
   requireGrant(db, user, 'inpatient.vitals', 'delete', ['admin'], 'удалять измерения');
   const id = Number(args && args.vital_id);
-  if (!Number.isInteger(id) || id <= 0) throw new RpcError('vital_id must be a positive integer.', 400);
+  if (!Number.isInteger(id) || id <= 0) throw new RpcError('Запись показателей указана неверно.', 400);
   const row = db.prepare('SELECT id, admission_id FROM admission_vitals WHERE id = ?').get(id);
   if (!row) throw new RpcError('Измерение не найдено.', 404);
   const adm = loadAdmission(db, row.admission_id);

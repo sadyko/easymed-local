@@ -28,7 +28,7 @@ export function attachUser(db) {
 }
 
 export function requireAuth(req, res, next) {
-  if (!req.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Login required.' } });
+  if (!req.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Нужно войти в систему.' } });
   next();
 }
 
@@ -43,7 +43,7 @@ export function requirePasswordChanged(req, res, next) {
   if (req.user && req.user.must_change_password) {
     return res.status(403).json({ error: {
       code: 'password_change_required',
-      message: 'Set a new password before continuing.',
+      message: 'Сначала задайте новый пароль.',
     } });
   }
   next();
@@ -51,9 +51,9 @@ export function requirePasswordChanged(req, res, next) {
 
 export function requireRole(...roles) {
   return (req, res, next) => {
-    if (!req.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Login required.' } });
+    if (!req.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Нужно войти в систему.' } });
     if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ error: { code: 'forbidden', message: 'Not allowed for your role.' } });
+      return res.status(403).json({ error: { code: 'forbidden', message: 'Вашей роли это недоступно.' } });
     }
     next();
   };

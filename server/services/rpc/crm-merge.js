@@ -37,6 +37,7 @@
 // обрыв посередине оставил бы строки услуг без заявки (каскад их унёс бы) или
 // две карточки с одной задачей.
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { phoneKey } from '../../../public/js/admin/views/crm-phone-match.js';
 import { allowedSurvivors, isOpenCard, suggestSurvivor, patientConflict, namesDiffer, personName }
   from '../../../public/js/admin/views/crm-merge-logic.js';
@@ -216,7 +217,7 @@ export function crmMergeLeads(db, args, user) {
     // Чужая невидимая карточка отвечает тем же «не найдена», что и
     // несуществующая: сам факт её существования — тоже сведения о чужой заявке.
     const c = byId.get(id);
-    if (!c || !leadVisible(db, user, c.assigned_to, { lifted: true })) throw new RpcError(`Заявка №${id} не найдена.`, 404);
+    if (!c || !leadVisible(db, user, c.assigned_to, { lifted: true })) throw rpcT(RpcError, 'Заявка №{id} не найдена.', { id }, 404);
   }
   const keep = byId.get(keepId);
   const losers = mergeIds.map((id) => byId.get(id));

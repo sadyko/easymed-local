@@ -5,6 +5,7 @@
 // when awaited.
 //
 // export function makeDbClient({ fetch, base }) -> { from(table) }
+import { rememberServerMessage } from './shared/server-messages.js';   // V3120_I18N
 
 const FILTER_OPS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'is', 'ilike', 'contains', 'in'];
 
@@ -338,6 +339,7 @@ export function makeDbClient({ fetch, base, banner = true }) {
       try { descriptor = JSON.parse(JSON.stringify(desc)); } catch (e) { /* не сериализуется — переживём */ }
       reportFailure({ status, kind, table: desc.table, op: desc.op, message, descriptor }, banner);
       const error = { ...(rawError || {}), message, kind, status };
+      rememberServerMessage(error);   // V3120_I18N — собранную фразу с шаблоном переведёт tr()
       if (wantsThrow) {
         const e = new Error('[db] ' + desc.table + ' ' + desc.op + ': ' + message);
         e.dbError = error;

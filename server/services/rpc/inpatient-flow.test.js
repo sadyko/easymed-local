@@ -234,7 +234,7 @@ test('assertAdmissionAtLeast: несуществующая госпитализ�
   const db = seed();
   assert.throws(() => assertAdmissionAtLeast(db, 999, 'active'), /не найдена/);
   for (const bad of [0, -1, 1.5, null, undefined, 'x']) {
-    assert.throws(() => assertAdmissionAtLeast(db, bad, 'active'), /positive integer/);
+    assert.throws(() => assertAdmissionAtLeast(db, bad, 'active'), /Госпитализация указана неверно/);
   }
   db.close();
 });

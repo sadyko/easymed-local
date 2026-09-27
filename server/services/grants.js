@@ -24,6 +24,7 @@
 // НЕСКОЛЬКО РОЛЕЙ — САМАЯ ЩЕДРАЯ, как и у разделов (roles.js sectionLevel):
 // дополнительная роль — прибавка, а не урезание. Своя роль клиники ЗАМЕНЯЕТ
 // основу (CUSTOM_ROLES_V1), и если строки для неё ещё нет — считаем по основе.
+import { withTemplate } from './server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { permissionRoles, effectiveRoles, hasAnyRole } from './roles.js';
 import { CATALOG, levelAllows, LEVELS } from '../../public/js/shared/permission-catalog.js';
 import { RpcError } from './rpc/inpatient-flow.js';
@@ -164,7 +165,7 @@ export function requireGrant(db, user, key, need, fallbackRoles, what = '') {
   // право выдают.
   const w = String(what || 'Это действие').trim();
   const head = w.charAt(0).toUpperCase() + w.slice(1);
-  throw new GrantError(`${head} — недоступно вашей роли. Права выдаёт администратор в «Настройки → Роли».`);
+  throw withTemplate(new GrantError(''), '{what} — недоступно вашей роли. Права выдаёт администратор в «Настройки → Роли».', { what: head });
 }
 
 /**

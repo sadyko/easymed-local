@@ -14,6 +14,8 @@
 // (record_payment / record_payment_split / refund_payment): платёж и строка
 // журнала либо появляются обе, либо ни одной.
 
+import { withTemplate } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
+
 export class WalletError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
 }
@@ -140,7 +142,7 @@ export function spendWallet(db, { patientId, invoice, paymentId, amount, user })
   if (refusal) throw new WalletError(refusal);
   const balance = walletBalance(db, patientId);
   if (amount > balance) {
-    throw new WalletError(`На балансе пациента только ${balance} — списать ${amount} нельзя.`);
+    throw withTemplate(new WalletError(''), 'На балансе пациента только {have} — списать {amount} нельзя.', { have: balance, amount });
   }
   // V3120_FIX (владелец) — сколько из этой траты — «новые деньги» (миграция 195).
   const newMoney = round2(Math.max(0, Math.min(amount, newMoneyPool(db, patientId), realMoney(db, patientId))));

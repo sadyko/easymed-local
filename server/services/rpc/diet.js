@@ -26,6 +26,7 @@
 // Здесь: старый период закрывается (ended_at), новый открывается, и автором
 // пишется id ТОГО, КТО НАЖАЛ.
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { RpcError, loadAdmission, assertAdmissionAtLeast, IN_BED_STATUSES } from './inpatient-flow.js';
 import { hasAnyRole } from '../roles.js';
 import { today, localDate } from '../domain/day.js';
@@ -81,7 +82,7 @@ export function mealsForFrequency(n) {
 
 function requireRole(user, allowed, what) {
   if (!hasAnyRole(user, allowed)) {
-    throw new RpcError(`${what} — недоступно вашей роли.`, 403);
+    throw rpcT(RpcError, '{what} — недоступно вашей роли.', { what }, 403);
   }
 }
 

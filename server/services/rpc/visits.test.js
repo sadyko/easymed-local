@@ -55,9 +55,9 @@ test('ensure_visit: cancelled day does not swallow a new booking', async () => {
 
 test('ensure_visit: validation + roles', async () => {
   const db = freshDb();
-  await assert.rejects(() => ensureVisit(db, { patient_id: 999, date: '2026-08-07' }, REG), /patient not found/);
-  await assert.rejects(() => ensureVisit(db, { patient_id: 1, date: 'nope' }, REG), /date must be ISO/);
-  await assert.rejects(() => ensureVisit(db, { patient_id: 1, date: '2026-08-07' }, { id: 9, role: 'cashier' }), /not allowed/);
+  await assert.rejects(() => ensureVisit(db, { patient_id: 999, date: '2026-08-07' }, REG), /Пациент не найден/);
+  await assert.rejects(() => ensureVisit(db, { patient_id: 1, date: 'nope' }, REG), /Дата визита указана неверно/);
+  await assert.rejects(() => ensureVisit(db, { patient_id: 1, date: '2026-08-07' }, { id: 9, role: 'cashier' }), /действие недоступно/);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -364,7 +364,7 @@ test('CRM_REAL_BOOKING_V1: колл-центр заводит визит, кас
   db.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_active) VALUES (5,'op','x','Оператор','callcenter',1)").run();
   const out = await ensureVisit(db, { patient_id: 1, date: '2026-08-09' }, { id: 5, role: 'callcenter' });
   assert.equal(out.created, true, 'оператор колл-центра не может записать пациента, которого сам же принял');
-  await assert.rejects(() => ensureVisit(db, { patient_id: 1, date: '2026-08-10' }, { id: 9, role: 'cashier' }), /not allowed/);
+  await assert.rejects(() => ensureVisit(db, { patient_id: 1, date: '2026-08-10' }, { id: 9, role: 'cashier' }), /действие недоступно/);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

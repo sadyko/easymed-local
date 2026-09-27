@@ -8,6 +8,7 @@
 // purchase unit). All stock quantities and the running average cost are
 // always expressed in base units.
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { hasAnyRole } from '../roles.js';
 import { resolveHolder, moveHolding } from './holdings.js';   // HOLDINGS_V1
 import { requireGrant } from '../grants.js';                  // GRANTS_V1 — выдача со склада по матрице прав
@@ -64,7 +65,7 @@ function validateLine(line) {
   }
   const qty = line.qty;
   if (!(typeof qty === 'number' && Number.isFinite(qty) && qty > 0 && qty <= MAX_QTY)) {
-    throw new RpcError(`Количество — положительное число, не больше ${MAX_QTY}.`, 400);
+    throw rpcT(RpcError, 'Количество — положительное число, не больше {max}.', { max: MAX_QTY }, 400);
   }
   const unit = line.unit === undefined ? 'base' : line.unit;
   if (!RECEIVE_UNITS.includes(unit)) {
@@ -217,7 +218,7 @@ export function receivePurchaseOrder(db, args, user) {
         if (!it) throw new RpcError('Строка не из этого заказа.', 400);
         const qty = l.qty;
         if (!(typeof qty === 'number' && Number.isFinite(qty) && qty > 0 && qty <= MAX_QTY)) {
-          throw new RpcError(`Количество — положительное число, не больше ${MAX_QTY}.`, 400);
+          throw rpcT(RpcError, 'Количество — положительное число, не больше {max}.', { max: MAX_QTY }, 400);
         }
         if (qty > outstanding(it) + 1e-9) {
           throw new RpcError('Количество больше, чем осталось принять по строке.', 400);
@@ -331,7 +332,7 @@ export function approveRequisitionAndIssue(db, args, user) {
         throw new RpcError('В заявке строка с неверным количеством.', 400);
       }
       if (!coversQty(product.on_hand, qty, cf)) {
-        throw new RpcError(`Недостаточно на складе, чтобы выдать «${product.name}»: есть ${roundQty(product.on_hand)}, нужно ${qty} ${product.base_unit || ''}`.trim() + '.', 400);
+        throw rpcT(RpcError, 'Недостаточно на складе, чтобы выдать «{name}»: есть {have}, нужно {qty}.', { name: product.name, have: roundQty(product.on_hand), qty: `${qty} ${product.base_unit || ''}`.trim() }, 400);
       }
       qty = Math.min(qty, roundQty(product.on_hand));   // «последняя таблетка» в пределах допуска
       const newOnHand = settleQty(product.on_hand - qty, cf);
@@ -527,7 +528,7 @@ export function issueStockLines(db, args, user) {
     }
     const qty = line.qty;
     if (!(typeof qty === 'number' && Number.isFinite(qty) && qty > 0 && qty <= MAX_QTY)) {
-      throw new RpcError(`Количество — положительное число, не больше ${MAX_QTY}.`, 400);
+      throw rpcT(RpcError, 'Количество — положительное число, не больше {max}.', { max: MAX_QTY }, 400);
     }
     const unit = line.unit === undefined ? 'consumption' : line.unit;
     if (!ISSUE_UNITS.includes(unit)) {
@@ -573,8 +574,7 @@ export function issueStockLines(db, args, user) {
         throw new RpcError('Количество слишком мало для выдачи.', 400);
       }
       if (!coversQty(product.on_hand, baseQty, cf)) {
-        throw new RpcError(
-          `Недостаточно остатка: ${product.name} (в наличии ${roundQty(product.on_hand)} ${product.base_unit || ''})`.trim(), 400);
+        throw rpcT(RpcError, 'Недостаточно остатка: {name} (в наличии {have})', { name: product.name, have: `${roundQty(product.on_hand)} ${product.base_unit || ''}`.trim() }, 400);
       }
       baseQty = Math.min(baseQty, roundQty(product.on_hand));
 

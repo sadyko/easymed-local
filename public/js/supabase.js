@@ -3,6 +3,7 @@
 // any external host). The ~52 files importing { supabase } keep working.
 import { makeDbClient } from './db-client.js';
 import { makeAuthBridge } from './db-auth.js';
+import { rememberServerMessage } from './shared/server-messages.js';   // V3120_I18N
 
 const httpFetch = (...a) => fetch(...a);   // browser global; bound at call time
 
@@ -18,7 +19,8 @@ async function rpc(name, args = {}) {
             body: JSON.stringify(args || {}),
         });
         const json = await res.json().catch(() => ({}));
-        if (!res.ok) return { data: null, error: json.error || { message: 'RPC failed (' + res.status + ')' } };
+        // V3120_I18N — собранная фраза с шаблоном запоминается, и tr() переведёт её.
+        if (!res.ok) { rememberServerMessage(json.error); return { data: null, error: json.error || { message: 'RPC failed (' + res.status + ')' } }; }
         return { data: json.data ?? null, error: null };
     } catch (e) {
         return { data: null, error: { message: String(e) } };

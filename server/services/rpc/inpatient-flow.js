@@ -37,6 +37,7 @@
 
 import { assertTransition, TransitionError } from '../domain/lifecycle.js';
 import { effectiveRoles, hasAnyRole } from '../roles.js';
+import { rpcT } from '../server-message.js';   // V3120_I18N
 // Набор состояний — ОДНА копия на сервер и браузер (тот же приём, что у
 // accommodation-line.js): доска коек и кабинет врача спрашивают ровно тот же
 // список, каким сервер решает, занята ли койка.
@@ -230,7 +231,7 @@ const CLOSED_MESSAGE = {
 export function loadAdmission(db, admissionId) {
   const id = Number(admissionId);
   if (!Number.isInteger(id) || id <= 0) {
-    throw new RpcError('admission_id must be a positive integer.', 400);
+    throw new RpcError('Госпитализация указана неверно.', 400);
   }
   const adm = db.prepare('SELECT * FROM admissions WHERE id = ?').get(id);
   if (!adm) throw new RpcError('Госпитализация не найдена.', 400);
@@ -252,7 +253,7 @@ export function loadAdmission(db, admissionId) {
  * @throws {RpcError} 400 с русским текстом, называющим недостающий шаг
  */
 export function assertAdmissionAtLeast(db, admissionId, state) {
-  if (!RANK.has(state)) throw new RpcError(`unknown admission state: ${state}`, 400);
+  if (!RANK.has(state)) throw rpcT(RpcError, 'Неизвестное состояние госпитализации: {state}.', { state }, 400);
   const adm = loadAdmission(db, admissionId);
 
   if (CLOSED_STATUSES.includes(adm.status)) {
@@ -371,7 +372,7 @@ export function assertMayTransition(from, to, user) {
  */
 export function admissionTransition(db, args, user, opts = {}) {
   const to = args && args.to;
-  if (typeof to !== 'string' || !to) throw new RpcError('to must be a state name.', 400);
+  if (typeof to !== 'string' || !to) throw new RpcError('Не указано, в какое состояние перевести госпитализацию.', 400);
 
   const adm = loadAdmission(db, args && args.admission_id);
   const from = adm.status;
