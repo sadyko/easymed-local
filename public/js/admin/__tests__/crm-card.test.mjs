@@ -1926,3 +1926,54 @@ test('руководитель колл-центра (crm.all) видит «Оп
     window.easymed.state.user = null;
   }
 });
+
+// ═══ CRM_CALENDAR_MIRROR_V1 (2026-09-27) — КАРТОЧКА И КАЛЕНДАРЬ — ОДНА ЗАПИСЬ ═══
+//
+// Владелец: «they mirror each other, also the calendar. and the services».
+// Карточка называет запись (день, час, врач из календаря), а записанная
+// услуга, убранная из карточки, отменяется ЯВНО по номеру строки: «замена
+// набора» отменяет только строки без записи, и снятая услуга молча оставалась
+// бы в календаре. Строку записи снимает сервер (booking-mirror.js).
+
+test('карточка называет запись строки — день, час и врача из календаря', async () => {
+  VISITS = [Object.assign(bookedVisit('09:30'), { doctor_id: 31, status: 'scheduled' })];
+  SERVICES = [DOC_SVC];
+  DOCTORS = [DOCTOR];
+  REQ_LINES = [BOOKED_LINE];
+  const modal = await openRequest({
+    id: 1, status: 'scheduled', service_id: DOC_SVC.id, scheduled_date: BOOK_DAY,
+    full_name: 'Каримова Азиза', phone: UZ_RAW,
+    patient_id: 7, patients: { id: 7, full_name: 'Каримова Азиза', mrn: 'A-000123' },
+  }, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+  await tick(80);
+  const label = walk(modal).filter((n) => n.attrs && 'data-booked' in n.attrs).map(textOf).join(' | ');
+  assert.ok(/Записан: .* в 09:30/.test(label), 'карточка не называет записанный час: ' + label);
+  assert.ok(/Петров Пётр/.test(label), 'карточка не называет врача записи: ' + label);
+  VISITS = []; SERVICES = []; REQ_LINES = []; DOCTORS = [];
+  window.easymed.state.user = null;
+});
+
+test('записанную услугу убрали из карточки — её строка отменяется по номеру', async () => {
+  VISITS = [];
+  SERVICES = [DOC_SVC, LAB_SVC];
+  DOCTORS = [DOCTOR];
+  REQ_LINES = [BOOKED_LINE, { id: 902, service_id: LAB_SVC.id, scheduled_date: BOOK_DAY, status: 'pending', doctor_id: null, visit_id: 555 }];
+  const modal = await openRequest({
+    id: 1, status: 'scheduled', service_id: DOC_SVC.id, scheduled_date: BOOK_DAY,
+    full_name: 'Каримова Азиза', phone: UZ_RAW,
+    patient_id: 7, patients: { id: 7, full_name: 'Каримова Азиза', mrn: 'A-000123' },
+  }, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+  await tick(80);
+  const removeBtns = walk(modal).filter((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs.title === 'Убрать услугу');
+  assert.equal(removeBtns.length, 2, 'в карточке не две услуги');
+  removeBtns[1].click();   // анализ крови
+  await tick(20);
+  CALLS.length = 0;
+  await saveRequest(modal);
+  const cancel = CALLS.find((c) => c.table === 'crm_request_services' && c.op === 'update'
+    && c.values && c.values.status === 'cancelled' && (c.filters || []).some((f) => f.col === 'id' && f.op === 'in'));
+  assert.ok(cancel, 'убранная записанная услуга не отменена — она осталась бы в календаре');
+  assert.deepStrictEqual(cancel.filters.find((f) => f.col === 'id').val, [902]);
+  SERVICES = []; REQ_LINES = []; DOCTORS = [];
+  window.easymed.state.user = null;
+});

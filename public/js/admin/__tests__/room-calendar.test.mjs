@@ -182,7 +182,7 @@ const EXTRA_DOCTORS = [
   [75, 'jurayev', 'Жураев Бекзод', 'офтальмолог'],
 ];
 
-function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, crm = false } = {}) {
+function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, crm = false, lines = false } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   const day = nextWeekday();
@@ -227,6 +227,13 @@ function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, 
     db.prepare("INSERT INTO crm_requests (id, full_name, phone, source, note, status, patient_id) VALUES (77,'Иванов Иван','+998901112233','call','','scheduled',3)").run();
     db.prepare("INSERT INTO crm_request_services (id, request_id, service_id, scheduled_date, status, visit_id) VALUES (301, 77, 21, ?, 'pending', 55)")
       .run(isoOf(day));
+  }
+
+  // CRM_CALENDAR_MIRROR_V1 — у записи несколько услуг (строки visit_services):
+  // запись из CRM и запись колл-центра несут их все, а не одну головную.
+  if (lines) {
+    db.prepare("INSERT INTO services (id, name, price) VALUES (22,'Анализ крови',40000)").run();
+    db.prepare("INSERT INTO visit_services (visit_id, service_id, status) VALUES (55, 21, 'added'), (55, 22, 'added')").run();
   }
 
   // PASTEL_IDENTITY_V1 — отменённый приём ТОГО ЖЕ врача, что и действующий:
@@ -308,8 +315,8 @@ const WORKING_SET_KEY = 'rcal.workingset.v1';
 function putWorkingSet(ws) { LS.set(WORKING_SET_KEY, JSON.stringify(ws)); }
 
 /** Отрисовать экран на нужный день. */
-async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, workingSet = null, crm = false } = {}) {
-  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue, manyDoctors, crm });
+async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, workingSet = null, crm = false, lines = false } = {}) {
+  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue, manyDoctors, crm, lines });
   if (DB) DB.close();
   DB = s.db;
   FAIL_TABLE = failTable;
@@ -1047,4 +1054,18 @@ test('записей в окне нет — про заявки никто не 
   assert.deepEqual(asked, [],
     'экран спросил «из каких заявок эти записи», когда записей нет вовсе — лишний запрос на каждое перелистывание: '
     + JSON.stringify(asked));
+});
+
+// CRM_CALENDAR_MIRROR_V1 (2026-09-27) — владелец: «if in the CRM we create a
+// booking it will show in the calendar» — С УСЛУГАМИ. Карточка приёма называет
+// все услуги записи, а не одну головную (visits.service_id).
+test('ЗАПИСЬ С НЕСКОЛЬКИМИ УСЛУГАМИ: карточка в сетке называет их все', async () => {
+  document.body.children.length = 0;
+  const { box } = await render({ crm: true, lines: true });
+  const card = byClass(box, 'rcal-appt').find((c) => /10:00–10:30/.test(textOf(c)));
+  assert.ok(card, 'запись пропала из сетки');
+  const svc = byClass(card, 'rcal-appt-s')[0];
+  assert.ok(svc, 'на карточке нет строки услуг');
+  assert.ok(/Консультация терапевта/.test(textOf(svc)) && /Анализ крови/.test(textOf(svc)),
+    'на карточке не все услуги записи: ' + textOf(svc));
 });

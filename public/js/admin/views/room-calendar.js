@@ -317,19 +317,51 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         }
         const sm = {};
         for (const s of state.servicesList) sm[s.id] = s.name;
+        const lines = await loadVisitLines(visits.map((v) => v.id), sm);
 
         state.appts = visits.map(v => {
             const dt = new Date(v.visit_date);
+            const names = lines[v.id] || [];
             return {
                 id: v.id, patientId: v.patient_id, doctorId: v.doctor_id, roomId: v.room_id,
                 branchId: v.branch_id || null, origin: v.sync_origin || null,
                 date: dateToIso(dt), start: minutesOfLocal(dt), dur: Number(v.duration_minutes) || 15,
                 patient: pm[v.patient_id] || '—', phone: ph[v.patient_id] || '',
-                serviceId: v.service_id, service: sm[v.service_id] || '',
+                // CRM_CALENDAR_MIRROR_V1 — ВСЕ услуги записи, а не одна головная:
+                // запись из CRM и запись колл-центра несут свои строки, и сетка
+                // обязана показать то же, что видит заявка.
+                serviceId: v.service_id, service: names.length ? names.join(', ') : (sm[v.service_id] || ''),
+                services: names,
                 status: normStatus(v.status),
             };
         });
         await loadCrmLinks(visits.map((v) => v.id));
+    }
+
+    // CRM_CALENDAR_MIRROR_V1 (2026-09-27) — УСЛУГИ ЗАПИСИ.
+    //
+    // Сетка показывала только visits.service_id — «головную» услугу, по которой
+    // считается длительность. Запись из CRM и запись колл-центра теперь несут
+    // строки своих услуг (visit_services), и владелец хочет видеть их в
+    // календаре: запись, созданная в заявке, выглядит здесь той же записью.
+    // Один запрос пачками по 200 — как у меток заявок ниже. Отказ — не «услуг
+    // нет»: карточка остаётся с головной услугой, а полоса «Не загрузилось»
+    // называет, чего не хватает.
+    async function loadVisitLines(visitIds, names) {
+        const out = {};
+        const ids = [...new Set((visitIds || []).filter(Boolean))];
+        for (let i = 0; i < ids.length; i += CRM_LINK_CHUNK) {
+            const { data, error } = await supabase.from('visit_services')
+                .select('visit_id, service_id').in('visit_id', ids.slice(i, i + CRM_LINK_CHUNK));
+            if (error) { state.failed = [...new Set([...(state.failed || []), tr('услуги')])]; return out; }
+            for (const r of (data || [])) {
+                const n = r.service_id != null ? names[r.service_id] : null;
+                if (!n) continue;
+                if (!out[r.visit_id]) out[r.visit_id] = [];
+                if (!out[r.visit_id].includes(n)) out[r.visit_id].push(n);
+            }
+        }
+        return out;
     }
 
     // CRM_REAL_BOOKING_V1 (2026-09-21) — ИЗ КАКОЙ ЗАЯВКИ ЭТА ЗАПИСЬ.
@@ -1356,7 +1388,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                         : null,
                     a.doctorId ? h('span', { class: 'rcal-appt-d', title: doctorName(a.doctorId) }, doctorName(a.doctorId)) : null),
                 h('div', { class: 'rcal-appt-p' }, a.patient),
-                a.service ? h('div', { class: 'rcal-appt-s' }, a.service) : null,
+                a.service ? h('div', { class: 'rcal-appt-s', title: a.service }, a.service) : null,
                 // ВОЗРАСТ КАРТИНКИ — на самой карточке, а не в углу экрана: её
                 // читают по одной, и «час назад так было» должно стоять рядом с
                 // тем, о чём это сказано.

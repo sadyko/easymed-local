@@ -1485,6 +1485,11 @@ async function paint() {
         // оператор меняет у строки время или врача — то есть делает то, ради
         // чего отказ и показан.
         const busyDays = new Set();
+        // CRM_CALENDAR_MIRROR_V1 — строки, которые в базе ДЕРЖАТ ЗАПИСЬ (visit_id).
+        // Убрали такую из карточки — её надо отменить явно: «замена набора»
+        // отменяет только строки без записи, и снятая услуга молча оставалась
+        // бы в календаре. Сервер, увидев отмену, снимает её и со строк записи.
+        const bookedLineIds = new Set();
         // CRM_LINKS_V1 — доехали ли строки услуг заявки из базы (см. primaryDate).
         let linesLoaded = !r;
         let svcChosen = r ? (r.service_id || null) : null;
@@ -1638,7 +1643,8 @@ async function paint() {
                 pickedList.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 10px', background: 'var(--teal-25, #f0faf9)', border: '1px solid var(--teal-200, #b2dfdb)', borderRadius: '10px' } },
                     h('div', { style: { flex: 1, minWidth: 0 } },
                         h('div', { style: { fontSize: '13.5px', fontWeight: 600, overflowWrap: 'anywhere' } }, p.name),
-                        h('div', { class: 'muted', style: { fontSize: '12.5px' } }, String(p.price || 0), ' сум')),
+                        h('div', { class: 'muted', style: { fontSize: '12.5px' } }, String(p.price || 0), ' сум'),
+                        bookedLabel(p) ? h('div', { 'data-booked': '', style: { fontSize: '12.5px', color: 'var(--ok-700, #15803d)', fontWeight: 600 } }, bookedLabel(p)) : null),
                     dateInp,
                     h('button', { type: 'button', title: 'Убрать услугу',
                         style: { border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--crit-500, #ef4444)', fontSize: '17px', lineHeight: 1, padding: '0 2px' },
@@ -1747,6 +1753,7 @@ async function paint() {
                             if (sv) picked.push({ service_id: sv.id, name: sv.name, price: sv.price, date: ln.scheduled_date || '', doctor_id: ln.doctor_id || null, status: ln.status || 'pending',
                                 line_id: ln.id || null, visit_id: ln.visit_id || null,
                                 booked_date: ln.scheduled_date || '', booked_doctor_id: ln.doctor_id || null });
+                            if (sv && ln.id && ln.visit_id && ln.status === 'pending') bookedLineIds.add(String(ln.id));
                         }
                         // Заявка до миграции 057 — единственная услуга в родителе.
                         if (!picked.length && svcChosen) {
@@ -2017,7 +2024,16 @@ async function paint() {
             // редактор заявки.
             const linked = writable.filter((p) => p.line_id && p.visit_id);
             const plain = writable.filter((p) => !(p.line_id && p.visit_id));
+            // CRM_CALENDAR_MIRROR_V1 — записанные строки, которых в карточке больше нет.
+            const kept = new Set(picked.filter((p) => p.line_id).map((p) => String(p.line_id)));
+            const dropped = [...bookedLineIds].filter((id) => !kept.has(id));
             try {
+                if (dropped.length) {
+                    const { error } = await supabase.from('crm_request_services')
+                        .update({ status: 'cancelled' }).in('id', dropped.map(Number)).eq('status', 'pending');
+                    if (error) throw new Error(error.message || error);
+                    for (const id of dropped) bookedLineIds.delete(id);
+                }
                 await supabase.from('crm_request_services')
                     .update({ status: 'cancelled' })
                     .eq('request_id', requestId).eq('status', 'pending')
@@ -2095,6 +2111,7 @@ async function paint() {
                 p.booked_date = ln.scheduled_date || '';
                 p.booked_doctor_id = ln.doctor_id || null;
                 p.time_touched = false;   // строка и база снова сходятся
+                if (ln.id && ln.visit_id && ln.status === 'pending') bookedLineIds.add(String(ln.id));   // CRM_CALENDAR_MIRROR_V1
             }
         }
 
@@ -2116,16 +2133,27 @@ async function paint() {
             const ids = [...new Set(picked.filter((p) => p.visit_id).map((p) => p.visit_id))];
             if (!ids.length) return;
             const { data, error } = await supabase.from('visits')
-                .select('id, visit_date, duration_minutes').in('id', ids);
+                .select('id, visit_date, duration_minutes, doctor_id, status').in('id', ids);
             if (error || !data) return;
             const byId = new Map(data.map((v) => [String(v.id), v]));
             for (const p of picked) {
-                if (!p.visit_id || p.time) continue;
-                const v = byId.get(String(p.visit_id));
+                const v = p.visit_id ? byId.get(String(p.visit_id)) : null;
                 const d = v && v.visit_date ? new Date(v.visit_date) : null;
                 if (!d || Number.isNaN(d.getTime())) continue;
-                setLineTime(p, pad2(d.getHours()) + ':' + pad2(d.getMinutes()));
+                // CRM_CALENDAR_MIRROR_V1 — карточка показывает ЗАПИСЬ: день, час и
+                // врача приёма — те, что стоят в календаре сейчас (перенос там
+                // виден здесь без пересохранения заявки).
+                p.booked_at = { day: p.date || '', time: pad2(d.getHours()) + ':' + pad2(d.getMinutes()), doctor_id: v.doctor_id || null };
+                if (!p.time) setLineTime(p, p.booked_at.time);
             }
+            paintPicked();
+        }
+        /** CRM_CALENDAR_MIRROR_V1 — «записан 12.10 в 10:00 · Иванов» у записанной строки. */
+        function bookedLabel(p) {
+            if (!p || !p.visit_id || !p.booked_at) return null;
+            const doc = p.booked_at.doctor_id ? docCatalog.find((d) => String(d.id) === String(p.booked_at.doctor_id)) : null;
+            const day = String(p.booked_at.day || '').split('-').reverse().join('.');
+            return trf('Записан: {day} в {time}', { day, time: p.booked_at.time }) + (doc ? ' · ' + doc.full_name : '');
         }
 
         // CRM_SCHEDULE_V1 — «Записать на дату» заменила «Оформить услугу».

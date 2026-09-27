@@ -113,6 +113,7 @@ let CRM_LINES = [];
 let CALLS = [];
 let FAIL_LINES = false;
 const RPCS = [];
+const RPC_BODIES = [];
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     let body = {}; try { body = JSON.parse(opts.body || '{}'); } catch { /* не наш запрос */ }
@@ -138,7 +139,9 @@ globalThis.fetch = async (url, opts = {}) => {
         if (body.op === 'insert') return ok({ id: 'row-1' });
         return ok([]);
     }
-    if (u.startsWith('/api/rpc/')) RPCS.push(decodeURIComponent(u.slice('/api/rpc/'.length)));
+    if (u.startsWith('/api/rpc/')) { RPCS.push(decodeURIComponent(u.slice('/api/rpc/'.length))); RPC_BODIES.push(body); }
+    // CRM_CALENDAR_MIRROR_V1 — узкая дверь сервера для строк записи колл-центра.
+    if (u.startsWith('/api/rpc/booking_lines_add')) return ok({ visit_id: 'v-1', added: (body.lines || []).map((l, i) => ({ id: 'vs-' + i, service_id: l.service_id, unit_price: 1 })), skipped: [] });
     if (u.startsWith('/api/rpc/calendar_book')) return ok({ visit: { id: 'v-1', visit_number: 'V-1', branch_id: null, visit_date: DAY_ISO } });
     if (u.startsWith('/api/rpc/')) return ok({});
     return gone();
@@ -380,14 +383,24 @@ async function bookFromCalendarAs(role) {
 }
 const toastText = () => { const t = BODY.children.find((c) => c.attrs && c.attrs.id === 'toast'); return t ? t.textContent : ''; };
 
-test('I1: колл-центр записывает из календаря — слот остаётся, строк не пытается, запись не удаляется', async () => {
+// CRM_CALENDAR_MIRROR_V1 (2026-09-27) — владелец: заявка и календарь — одна
+// запись, «and the services». Оператор записывает С УСЛУГАМИ — через узкую
+// дверь сервера booking_lines_add (не /api/db: visit_services ему закрыты), без
+// счёта и оплаты. Слот-без-услуг («Услуги добавит регистратура») убран.
+test('I1: колл-центр записывает из календаря С УСЛУГАМИ — строки через booking_lines_add, не /api/db, без счёта', async () => {
     try {
+        RPC_BODIES.length = 0;
         await bookFromCalendarAs('callcenter');
         assert.ok(RPCS.includes('calendar_book'), 'запись не дошла до calendar_book');
+        assert.ok(RPCS.includes('booking_lines_add'), 'услуги записи не отправлены: ' + RPCS.join(','));
+        const sent = RPC_BODIES[RPCS.indexOf('booking_lines_add')];
+        assert.equal(sent.visit_id, 'v-1');
+        assert.ok(Array.isArray(sent.lines) && sent.lines.length >= 1 && sent.lines.every((l) => l.service_id), 'услуги не ушли строками: ' + JSON.stringify(sent));
         assert.ok(!CALLS.some((c) => c.table === 'visit_services' && c.op === 'insert'),
-            'колл-центру предложены строки услуг, которые реестр ему не вставит');
+            'колл-центр пишет строки визита мимо своей двери');
         assert.ok(!RPCS.includes('discard_empty_visit'), 'запись колл-центра удалена: ' + RPCS.join(','));
-        assert.match(toastText(), /Записано\. Услуги добавит регистратура\./);
+        assert.ok(!RPCS.some((n) => /invoice|payment/.test(n)), 'колл-центр выставил счёт или провёл оплату: ' + RPCS.join(','));
+        assert.match(toastText(), /Записано с услугами\./);
     } finally { delete window.easymed; }
 });
 
