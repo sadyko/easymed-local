@@ -853,7 +853,13 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
            -- PAY_PERIOD_CLOSE_V1 — ключ строки вознаграждения в снимке месяца
            -- и её филиал (фильтр отчёта по снимку).
            ii.id                              AS invoice_item_id,
-           i.branch_id                        AS branch_id
+           i.branch_id                        AS branch_id,
+           -- V3120_FIX (REFERRAL_REFUND_KEEP) — возвраты по счёту строки: вознаграждение
+           -- за направление после частичного возврата уменьшается в той же доле.
+           irf.refunded                       AS rf_refunded,
+           irf.gross                          AS rf_gross,
+           irf.total                          AS rf_total,
+           ${REFUND_KEEP_SQL('irf')}          AS refund_keep
       FROM invoice_items ii
       JOIN invoices i  ON i.id = ii.invoice_id
       JOIN patients pt ON pt.id = i.patient_id
@@ -1837,7 +1843,32 @@ function anyReferralRate(db) {
 }
 
 const REFERRAL_ZERO_NOTE = 'У всех источников направлений ставка вознаграждения 0 % — поэтому вознаграждение в этом отчёте 0. Ставки вводятся в «Настройки → Направления» (на категории и на источнике) и в карточке врача, вкладка «Вознаграждение за направления».';
-const REFERRAL_BASE_NOTE = 'Вознаграждение считается от суммы строки счёта после скидки и только по оплаченным счетам; неоплаченные строки входят в «Сумму услуг», но вознаграждения не приносят. Период — по дате счёта.';
+const REFERRAL_BASE_NOTE = 'Вознаграждение считается от суммы строки счёта после скидки и только по оплаченным счетам; неоплаченные строки входят в «Сумму услуг», но вознаграждения не приносят. После частичного возврата по оплаченному счёту вознаграждение уменьшается в той же доле, в какой вернули деньги (как доля врача). Период — по дате счёта.';
+
+// V3120_FIX (решение владельца 27.09) — ВОЗНАГРАЖДЕНИЕ ЗА НАПРАВЛЕНИЕ ПОСЛЕ
+// ЧАСТИЧНОГО ВОЗВРАТА уменьшается ПРОПОРЦИОНАЛЬНО — той же долей оставшихся
+// денег, что и доля врача (PAY_REFUND_V1, REFUND_KEEP_SQL). Прежде условие
+// «status === 'paid'» обнуляло его целиком: частичный возврат переводит счёт в
+// «Частично оплачен», и 5 % возврата отнимали 100 % вознаграждения.
+//   • возвратов не было — как прежде: оплачен = 1, иначе 0;
+//   • возвраты были, и до них счёт был оплачен полностью (получено ≥ сумма
+//     счёта) — доля оставшихся денег, от 0 до 1;
+//   • возвраты по счёту, который полностью так и не оплатили, — 0, как у
+//     неоплаченного.
+// r — строка с rf_refunded / rf_gross / rf_total / refund_keep (REFUND_JOIN).
+// Доля оплаты строки вознаграждения; у строк снимков, записанных до V3120_FIX, её нет.
+const payFactorOf = (r) => (r.pay_factor == null ? (r.paid ? 1 : 0) : Number(r.pay_factor));
+function referralPayFactor(r) {
+  const refunded = Number(r.rf_refunded) || 0;
+  if (refunded > 0) {
+    const gross = Number(r.rf_gross) || 0;
+    const total = Number(r.rf_total) || 0;
+    if (gross + 0.005 < total) return 0;
+    const keep = Number(r.refund_keep);
+    return Number.isFinite(keep) ? Math.max(0, Math.min(1, keep)) : 0;
+  }
+  return r.status === 'paid' ? 1 : 0;
+}
 
 /**
  * Строки счетов, пришедшие по направлению, с посчитанным вознаграждением.
@@ -1871,7 +1902,9 @@ function referralLines(db, args, ctx, { doctorId = null } = {}) {
     // из пяти), а не по строке справочника типов. Строка без услуги — без группы.
     const serviceGroup = r.service_id != null ? referralGroupOf(r.service_group) : null;
     const rate = resolveReferralRate({ source: src, category: cat, serviceGroup });
-    const paid = r.status === 'paid';
+    // V3120_FIX — частичный возврат уменьшает вознаграждение пропорционально.
+    const factor = referralPayFactor(r);
+    const paid = factor > 0;
     // PAY_GOODS_NONE_V1 (владелец, 27.09) — «на товары процента нет»: строка
     // счёта без услуги (медикамент, расходник) вознаграждения ВРАЧУ-направившему
     // не даёт. Внешнему партнёру — по его ставкам, как прежде.
@@ -1885,8 +1918,10 @@ function referralLines(db, args, ctx, { doctorId = null } = {}) {
       mode: src && src.reward_mode === 'own' ? 'Своя' : 'По категории',
       rate,
       paid,
+      pay_factor: factor,
+      goods_to_doctor: goodsToDoctor,
       after_discount: r.amount - r.discount,
-      reward: paid && !goodsToDoctor ? rewardForLine(rate, { amount: r.amount, discount: r.discount, qty: r.qty }) : 0,
+      reward: paid && !goodsToDoctor ? rewardForLine(rate, { amount: r.amount, discount: r.discount, qty: r.qty }) * factor : 0,
       where: 'out',
       beneficiary_doctor_id: r.referral_doctor_id ?? null,
     });
@@ -1970,12 +2005,17 @@ function inpatientReferralLines(db, args, ctx) {
                 ELSE 'other' END              AS line_kind,
            COALESCE(a.referral_source_id, pt.referral_source_id) AS source_id,
            a.referring_doctor_id              AS referring_doctor_id,
-           ${OWN_BRANCH_OR('i.branch_id')}    AS branch_id
+           ${OWN_BRANCH_OR('i.branch_id')}    AS branch_id,
+           irf.refunded                       AS rf_refunded,   -- V3120_FIX — частичный возврат
+           irf.gross                          AS rf_gross,
+           irf.total                          AS rf_total,
+           ${REFUND_KEEP_SQL('irf')}          AS refund_keep
       FROM invoice_items ii
       JOIN invoices i   ON i.id = ii.invoice_id
       JOIN admissions a ON a.id = i.admission_id
       JOIN patients pt  ON pt.id = i.patient_id
       LEFT JOIN services s ON s.id = ii.service_id
+      ${REFUND_JOIN('irf', 'i.id')}
       LEFT JOIN (SELECT x.invoice_item_id,
                         MAX(CASE WHEN x.clinic_item_id IS NOT NULL THEN 1 ELSE 0 END) AS goods,
                         MAX(CASE WHEN x.service_id IS NULL AND x.clinic_item_id IS NULL
@@ -2001,9 +2041,15 @@ function inpatientReferralLines(db, args, ctx) {
     .map((u) => [u.id, u]));
   // Первый оплаченный счёт каждой госпитализации — за ВСЁ время, а не за
   // период: фикс принадлежит ему, в какой бы период ни попал отчёт.
-  const firstPaid = new Map(db.prepare(`SELECT admission_id, MIN(id) AS id FROM invoices
-                                          WHERE admission_id IS NOT NULL AND status = 'paid'
-                                          GROUP BY admission_id`).all().map((r) => [r.admission_id, r.id]));
+  // V3120_FIX — «оплаченный» здесь — тот, что приносит вознаграждение: оплачен,
+  // или был оплачен полностью и вернули лишь часть (referralPayFactor > 0).
+  const firstPaid = new Map(db.prepare(`SELECT fi.admission_id, MIN(fi.id) AS id FROM invoices fi
+                                          ${REFUND_JOIN('frf', 'fi.id')}
+                                          WHERE fi.admission_id IS NOT NULL
+                                            AND (CASE WHEN COALESCE(frf.refunded, 0) > 0
+                                                      THEN frf.gross + 0.005 >= frf.total AND (${REFUND_KEEP_SQL('frf')}) > 0
+                                                      ELSE fi.status = 'paid' END)
+                                          GROUP BY fi.admission_id`).all().map((r) => [r.admission_id, r.id]));
 
   // Получатели строки: партнёр (источник без связи с сотрудником) и
   // сотрудники — источника «Кто направил», связанного с сотрудником, и явно
@@ -2054,9 +2100,10 @@ function inpatientReferralLines(db, args, ctx) {
     };
     const bs = beneficiaries(r);
     if (!bs.length) { flush(); continue; }
-    const paid = r.status === 'paid';
+    const factor = referralPayFactor(r);   // V3120_FIX — частичный возврат пропорционально
+    const paid = factor > 0;
     const base = {
-      origin: r.origin, date: r.date, invoice: r.invoice, status: r.status, paid,
+      origin: r.origin, date: r.date, invoice: r.invoice, status: r.status, paid, pay_factor: factor,
       invoice_id: r.invoice_id, item_id: r.item_id, branch_id: r.branch_id,   // PAY_PERIOD_CLOSE_V1
       patient_id: r.patient_id, patient: r.patient, mrn: r.mrn,
       admission_id: r.admission_id, admission_no: r.admission_no, where: 'in',
@@ -2074,7 +2121,7 @@ function inpatientReferralLines(db, args, ctx) {
           service: r.service || (r.line_kind === 'bed' ? 'Проживание в палате' : ''),
           qty: r.qty, amount: r.amount, discount: r.discount, after_discount: after,
           rate: { unit: 'pct', value: b.pct },
-          reward: paid && b.pct > 0 ? after * b.pct / 100 : 0,
+          reward: paid && b.pct > 0 ? after * b.pct / 100 * factor : 0,
         });
       }
       const fk = r.admission_id + '|' + b.key;
@@ -2085,7 +2132,7 @@ function inpatientReferralLines(db, args, ctx) {
           line_kind: 'fixed', service: INPATIENT_KIND_RU.fixed,
           qty: 1, amount: 0, discount: 0, after_discount: 0,
           rate: { unit: 'fix', value: b.fixed },
-          reward: b.fixed,
+          reward: b.fixed * factor,
         });
       }
     }
@@ -2105,7 +2152,7 @@ function allReferralLines(db, args, ctx) {
 }
 
 // INPATIENT_BONUS_V1 — правило стационара словами, под обоими отчётами.
-const REFERRAL_INPATIENT_NOTE = 'Стационар (строки «Где: Стационар») — отдельное вознаграждение: партнёру — только при включённом «Вознаграждении за стационар» в его карточке, сотруднику — по вкладке «Стационар» его карточки, если он выбран в «Кто направил» (источник сотрудника) или записан направившим врачом заявки (лечащий врач за свою госпитализацию не получает, если его не записали направившим); один сотрудник — один раз. Процент — от оплаченных строк счёта госпитализации после скидки: услуги и койко-дни, без медикаментов и расходников; фиксированная сумма — один раз за госпитализацию, с первого оплаченного счёта. Счёт, по которому оформлен хотя бы частичный возврат, перестаёт быть «оплаченным»: процент с него не платится целиком, а фикс переходит к следующему оплаченному счёту госпитализации (и может попасть в другой месяц). Обычные ставки групп к строкам стационара не применяются. Кто направил — из заявки на госпитализацию, иначе из карточки пациента.';
+const REFERRAL_INPATIENT_NOTE = 'Стационар (строки «Где: Стационар») — отдельное вознаграждение: партнёру — только при включённом «Вознаграждении за стационар» в его карточке, сотруднику — по вкладке «Стационар» его карточки, если он выбран в «Кто направил» (источник сотрудника) или записан направившим врачом заявки (лечащий врач за свою госпитализацию не получает, если его не записали направившим); один сотрудник — один раз. Процент — от оплаченных строк счёта госпитализации после скидки: услуги и койко-дни, без медикаментов и расходников; фиксированная сумма — один раз за госпитализацию, с первого оплаченного счёта. После частичного возврата по оплаченному счёту и процент, и фикс уменьшаются в той же доле, в какой вернули деньги; счёт, деньги по которому вернули целиком, не приносит ничего, и фикс переходит к следующему оплаченному счёту госпитализации (и может попасть в другой месяц). Обычные ставки групп к строкам стационара не применяются. Кто направил — из заявки на госпитализацию, иначе из карточки пациента.';
 
 function referralNotes(db, lines) {
   const notes = [REFERRAL_BASE_NOTE];
@@ -2141,7 +2188,7 @@ function referralsReport(db, args, ctx) {
     // Строка фикса за госпитализацию — не услуга: в «Услуг» не считается.
     if (r.line_kind !== 'fixed') b.count += 1;
     b.amount += r.after_discount;
-    if (r.paid) b.paid += r.after_discount;
+    if (r.paid) b.paid += r.after_discount * payFactorOf(r);   // V3120_FIX — частичный возврат
     b.reward += r.reward;
     buckets.set(key, b);
   }
@@ -2223,7 +2270,7 @@ function doctorReferralRows(db, { from, to, doctorId }) {
   return {
     from, to, rows,
     count: rows.length,
-    paid_amount: round2(lines.reduce((n, r) => n + (r.paid ? r.after_discount : 0), 0)),
+    paid_amount: round2(lines.reduce((n, r) => n + (r.paid ? r.after_discount * payFactorOf(r) : 0), 0)),
     reward: round2(lines.reduce((n, r) => n + r.reward, 0)),
   };
 }
@@ -2247,7 +2294,7 @@ function doctorInpatientReferralRows(db, { from, to, doctorId }) {
     from, to, rows,
     count: rows.length,
     admissions: new Set(lines.map((r) => r.admission_id)).size,
-    paid_amount: round2(lines.reduce((n, r) => n + (r.paid ? r.after_discount : 0), 0)),
+    paid_amount: round2(lines.reduce((n, r) => n + (r.paid ? r.after_discount * payFactorOf(r) : 0), 0)),
     reward: round2(lines.reduce((n, r) => n + r.reward, 0)),
   };
 }
