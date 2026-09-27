@@ -112,6 +112,10 @@ export function acceptDeposit(db, args, user) {
   const run = db.transaction(() => {
     const dep = db.prepare('SELECT * FROM patient_deposits WHERE id = ?').get(a.deposit_id);
     if (!dep) throw new RpcError('deposit not found.', 400);
+    // CASHBACK_DEBT_V1 (владелец, 2026-09-27, B3) — долг по кэшбэку закрывают
+    // новые деньги пациента: принятый депозит сначала гасит его. Касса видит
+    // долг в окне приёма, а ответ называет, сколько долга закрыто.
+    const debtBefore = walletDebt(db, dep.patient_id);
     if (dep.status !== 'pending') {
       throw new RpcError(`deposit is already ${dep.status}.`, 400);
     }
@@ -173,6 +177,9 @@ export function acceptDeposit(db, args, user) {
     return {
       deposit: db.prepare('SELECT * FROM patient_deposits WHERE id = ?').get(dep.id),
       invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId),
+      debt_before: debtBefore,
+      debt_covered: round2(Math.min(debtBefore, amount)),
+      balance: walletBalance(db, dep.patient_id),
     };
   });
 

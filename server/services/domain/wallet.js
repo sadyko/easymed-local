@@ -100,6 +100,31 @@ export function isDepositInvoice(db, invoiceOrId) {
 export const DEPOSIT_INVOICE_REFUSAL =
   'Это счёт депозита — его деньги принимает и возвращает только кнопка «Вернуть депозит» в разделе «Депозиты» кассы.';
 
+// CARD_SALE_V1 (владелец, 2026-09-27) — счёт продажи подарочной карты /
+// сертификата (CARD-…). Как и счёт депозита, это не услуга, а документ денег:
+// его деньги принимает только «Продать карту» (одной транзакцией с выпуском
+// карты), а возвращает только «Вернуть остаток карты» (rpc/card-sales.js) —
+// в пределах неизрасходованного остатка. Обычная оплата/возврат, оплата с
+// баланса или другой картой ломали бы связь «деньги ↔ остаток карты».
+export const CARD_SALE_INVOICE_REFUSAL =
+  'Это счёт продажи карты — его деньги принимает только «Продать карту», а возвращает только «Вернуть остаток» в разделе «Карты» кассы.';
+
+export function isCardSaleInvoice(db, invoiceOrId) {
+  const inv = typeof invoiceOrId === 'object' && invoiceOrId
+    ? invoiceOrId : db.prepare('SELECT id, invoice_number FROM invoices WHERE id = ?').get(invoiceOrId);
+  if (!inv) return false;
+  if (String(inv.invoice_number || '').startsWith('CARD-')) return true;
+  return !!db.prepare('SELECT 1 FROM patient_discounts WHERE sale_invoice_id = ? LIMIT 1').get(inv.id);
+}
+
+// Отказ для счёта-документа денег (депозит или продажа карты) или null — одна
+// проверка для оплаты, возврата, списания баланса и карты.
+export function moneyDocRefusal(db, invoice) {
+  if (isDepositInvoice(db, invoice)) return DEPOSIT_INVOICE_REFUSAL;
+  if (isCardSaleInvoice(db, invoice)) return CARD_SALE_INVOICE_REFUSAL;
+  return null;
+}
+
 function actorName(user) {
   return String((user && (user.full_name || user.username)) || '');
 }
@@ -109,7 +134,8 @@ function actorName(user) {
 // второй увидит строку первого.
 export function spendWallet(db, { patientId, invoice, paymentId, amount, user }) {
   if (!patientId) throw new WalletError('У счёта нет пациента — оплатить с баланса нельзя.');
-  if (isDepositInvoice(db, invoice)) throw new WalletError(DEPOSIT_INVOICE_REFUSAL);
+  const refusal = moneyDocRefusal(db, invoice);   // ревью C1 + CARD_SALE_V1
+  if (refusal) throw new WalletError(refusal);
   const balance = walletBalance(db, patientId);
   if (amount > balance) {
     throw new WalletError(`На балансе пациента только ${balance} — списать ${amount} нельзя.`);

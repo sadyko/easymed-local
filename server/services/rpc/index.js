@@ -37,6 +37,7 @@ import { visitSetDoctorReferrer } from './referral-autofill.js';   // REPORTS_V2
 import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';   // CALENDAR_BOOKING_V1
 import { issueQueueNumbers, queueBoard } from './queue.js';
 import { createDeposit, acceptDeposit, cancelDeposit, refundDeposit, listDeposits, depositBalance } from './deposits.js';   // DEPOSIT_V1
+import { sellCard, refundCardSale, listCardSales } from './card-sales.js';   // CARD_SALE_V1
 import { mergePatientsRpc } from './patient-merge.js';   // PATIENT_MERGE_SERVER_V1
 import { documentsFeed } from './documents.js';   // DOCS_FEED_V1
 import { getClinicBySlug } from './clinic.js';
@@ -235,6 +236,11 @@ export const RPC = {
   // стоит» по назначениям за день. Доступ по выданному разделу 'queue'
   // (canViewSection), а не по списку ролей: раздел раздаётся в «Настройки →
   // Роли», как «Чат с пациентами».
+  // CARD_SALE_V1 — продажа подарочной карты / сертификата в кассе (приход дня),
+  // возврат неизрасходованного остатка, список карт для кассы.
+  sell_card:                 (db, args, user) => sellCard(db, args, user),
+  refund_card_sale:          (db, args, user) => refundCardSale(db, args, user),
+  list_card_sales:           (db, args, user) => listCardSales(db, args, user),
   queue_board:               (db, args, user) => queueBoard(db, args, user),
   // DOCS_FEED_V1 - лента готовых документов по всей клинике: анализы,
   // диагностика и подписанные заключения одним списком с фильтрами.

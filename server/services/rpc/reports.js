@@ -667,7 +667,10 @@ const LINE_PERFORMED_SQL = `CASE
 // (payments) депозит по-прежнему считает; здесь — только услуги. Номер
 // депозита становится номером счёта и ездит между зданиями вместе с ним,
 // поэтому признак — префикс номера, а не patient_deposits (та не ездит).
-export const NOT_DEPOSIT_INVOICE_SQL = "COALESCE(i.invoice_number, '') NOT LIKE 'DEP-%'";
+// CARD_SALE_V1 (2026-09-27) — счёт продажи подарочной карты (CARD-…) тоже не
+// услуга: приход он даёт (платёж), а услуга, оплаченная картой, попадёт сюда
+// своей строкой при погашении. Иначе одна услуга считалась бы дважды.
+export const NOT_DEPOSIT_INVOICE_SQL = "COALESCE(i.invoice_number, '') NOT LIKE 'DEP-%' AND COALESCE(i.invoice_number, '') NOT LIKE 'CARD-%'";
 
 function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
   const { from, to } = resolveRange(db, args);

@@ -22,7 +22,7 @@ import { localDate } from '../domain/day.js';
 import { restoreSources } from './inventory.js';
 // DEPOSIT_WALLET_V1 — баланс пациента: списание при оплате «с баланса» и
 // зачисление при возврате «на баланс» — в той же транзакции, что платёж.
-import { spendWallet, creditWallet, isDepositInvoice, walletBalance, realMoney, WalletError, DEPOSIT_INVOICE_REFUSAL } from '../domain/wallet.js';
+import { spendWallet, creditWallet, moneyDocRefusal, walletBalance, realMoney, WalletError } from '../domain/wallet.js';
 // Ревью I4 — возврат откатывает кэшбэк этого счёта.
 // CASHBACK_SERVER_V2 — кэшбэк начисляет оплата, возврат его подстраивает.
 import { creditCashbackOnPaid, adjustCashbackAfterRefund } from './cashback.js';
@@ -516,7 +516,7 @@ export function recordPayment(db, args, user) {
       throw new RpcError('invoice not found.', 400);
     }
     assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
-    if (isDepositInvoice(db, invoice)) throw new RpcError(DEPOSIT_INVOICE_REFUSAL, 400);   // ревью C1
+    { const refusal = moneyDocRefusal(db, invoice); if (refusal) throw new RpcError(refusal, 400); }   // ревью C1 + CARD_SALE_V1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
       throw new RpcError(`invoice is ${invoice.status}.`, 400);
     }
@@ -627,7 +627,7 @@ export function recordPaymentSplit(db, args, user) {
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
     if (!invoice) throw new RpcError('invoice not found.', 400);
     assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
-    if (isDepositInvoice(db, invoice)) throw new RpcError(DEPOSIT_INVOICE_REFUSAL, 400);   // ревью C1
+    { const refusal = moneyDocRefusal(db, invoice); if (refusal) throw new RpcError(refusal, 400); }   // ревью C1 + CARD_SALE_V1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
       throw new RpcError(`invoice is ${invoice.status}.`, 400);
     }
@@ -964,7 +964,7 @@ export function refundPayment(db, args, user) {
     assertOwnBuilding(db, p, 'Платёж');
     assertOwnBuilding(db, invoice, 'Счёт');
     // Ревью C1 — платёж счёта депозита возвращает только refund_deposit.
-    if (isDepositInvoice(db, invoice)) throw new RpcError(DEPOSIT_INVOICE_REFUSAL, 400);
+    { const refusal = moneyDocRefusal(db, invoice); if (refusal) throw new RpcError(refusal, 400); }   // ревью C1 + CARD_SALE_V1
 
     // The tag must match on a BOUNDARY, not a bare prefix: `LIKE 'REFUND#1%'`
     // also matches REFUND#10 / REFUND#123, so refunds of other payments were

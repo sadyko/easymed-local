@@ -24,6 +24,7 @@ import { IN_BED_STATUSES } from '../../shared/admission-status.js';   // DEBT_FL
 import { loadInvoiceLines, performersByItem, packagesByItem, packageItemName } from './receipt-print.js?v=rp1';   // INVOICE_QUEUE_V1 — тот же сбор талонов, что у чека   // CASH_CHECK_PRINT_V1 — бланк «Кассовый чек» из Настройки → Документы
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
 import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANCE_V1
+import { searchTokens } from '../patient-search.js';   // CARD_SALE_V1 — поиск покупателя карты
 
 // DEPOSIT_WALLET_V1 — «С баланса»: оплата и возврат через баланс пациента.
 // CARD_BALANCE_V1 — «Подарочная карта»: оплата остатком карты / сертификата.
@@ -225,6 +226,7 @@ const state = {
     rows:   [],
     counts: null,
     deposits: [],   // DEPOSIT_V1 — ждущие приёма предоплаты
+    cards: [],      // CARD_SALE_V1 — подарочные карты и сертификаты (проданные и выданные без оплаты)
 };
 
 export async function renderCashier(container) {
@@ -711,6 +713,11 @@ async function loadInvoices() {
         const dep = await supabase.rpc('list_deposits', { status: 'all' });
         state.deposits = (dep && dep.data && dep.data.rows) || [];
     } catch (e) { state.deposits = []; }
+    // CARD_SALE_V1 — карты тоже отдельным запросом: сбой списка карт не прячет счета.
+    try {
+        const cr = await supabase.rpc('list_card_sales', {});
+        state.cards = (cr && cr.data && cr.data.rows) || [];
+    } catch (e) { state.cards = []; }
 }
 
 // CASHIER_ROW_FIT_V1 — invoice statuses in this screen's own language.
@@ -743,6 +750,9 @@ const CHIPS = [
     // DEPOSIT_V1 — предоплаты стоят рядом со счетами: касса принимает и то и
     // другое, и разводить их по разным экранам значит прятать половину работы.
     { key: 'deposits',  label: 'ДЕПОЗИТЫ',   icon: 'Wallet',   color: 'var(--primary-700, #167873)' },
+    // CARD_SALE_V1 — продажа подарочных карт и сертификатов: касса продаёт их
+    // за деньги (приход дня) и возвращает неизрасходованный остаток.
+    { key: 'cards',     label: 'КАРТЫ',      icon: 'Coins',    color: 'var(--primary-700, #167873)' },
 ];
 
 function paintChips(el, onChange) {
@@ -756,9 +766,12 @@ function paintChips(el, onChange) {
     },
         ...CHIPS.map((chip) => {
             const pendingDeps = (state.deposits || []).filter((d) => d.status === 'pending');
+            const liveCards = (state.cards || []).filter((x) => x.active && Number(x.remaining) > 0);
             const agg = chip.key === 'deposits'
                 ? { n: pendingDeps.length, sum: pendingDeps.reduce((n, d) => n + Number(d.amount || 0), 0) }
-                : (c[chip.key] || { n: 0, sum: 0 });
+                : chip.key === 'cards'
+                    ? { n: liveCards.length, sum: liveCards.reduce((n, x) => n + Number(x.remaining || 0), 0) }
+                    : (c[chip.key] || { n: 0, sum: 0 });
             const active = state.filter === chip.key;
             return h('button', {
                 type: 'button',
@@ -879,6 +892,184 @@ function paintDeposits(el, root) {
             tbody)));
 }
 
+// CARD_SALE_V1 (владелец, 2026-09-27, B2) — вкладка «Карты»: продажа подарочной
+// карты / сертификата и возврат неизрасходованного остатка.
+//
+// Продажа — настоящая продажа: сервер (rpc/card-sales.js) одной транзакцией
+// заводит счёт CARD-…, платёж в смену кассира и саму карту с остатком = номинал.
+// Это приход дня; погашение картой потом приходом не считается. Карты,
+// заведённые в настройках, помечены «без оплаты» — денег за них не брали, и
+// возвращать через кассу нечего.
+const CARD_KIND_RU = { gift_card: 'Подарочная карта', certificate: 'Сертификат' };
+const CARD_SALE_METHODS = [['cash', 'Наличные'], ['card', 'Карта'], ['transfer', 'Перевод'], ['acquiring', 'Эквайринг']];
+
+function paintCards(el, root) {
+    const sellBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openSellCardModal(root) },
+        Icon('Plus', { size: 13 }), ' ', tr('Продать карту'));
+    el.appendChild(h('div', { class: 'row', style: { alignItems: 'center', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' } },
+        h('span', { class: 'muted', style: { fontSize: '12.5px' } },
+            'Продажа карты — приход дня. Оплата картой потом приходом не считается. Вернуть можно только неизрасходованный остаток.'),
+        h('span', { class: 'grow' }), sellBtn));
+    const all = state.cards || [];
+    if (!all.length) {
+        el.appendChild(h('div', { class: 'empty' }, 'Карт и сертификатов пока нет.'));
+        return;
+    }
+    const tbody = h('tbody');
+    for (const c of all) {
+        const rest = Math.max(0, Number(c.remaining) || 0);
+        const refunded = Number(c.refunded) || 0;
+        const canRefund = !!c.sale_number && rest > 0 && refunded <= 0;
+        const refundBtn = canRefund
+            ? h('button', { class: 'btn btn-sm', type: 'button', style: { color: 'var(--crit-600)' }, onclick: () => openCardRefundModal(c, root) },
+                'Вернуть остаток')
+            : null;
+        const statusTag = refunded > 0 ? Tag('Остаток возвращён', { kind: 'crit', dot: true })
+            : rest <= 0 ? Tag('Потрачена', { kind: '', dot: true })
+            : !c.active ? Tag('Выключена', { kind: 'warn', dot: true })
+            : Tag('Действует', { kind: 'ok', dot: true });
+        tbody.appendChild(h('tr', null,
+            h('td', { class: 'cell-strong' }, c.sale_number || tr('без оплаты')),
+            h('td', null, c.name || '—', h('div', { class: 'muted', style: { fontSize: '12px' } }, tr(CARD_KIND_RU[c.kind] || c.kind))),
+            h('td', { class: 'num', style: { textAlign: 'right' } }, fmtPrice(c.amount)),
+            h('td', { class: 'num', style: { textAlign: 'right', fontWeight: 700 } }, fmtPrice(rest)),
+            h('td', null, c.buyer_name || '—'),
+            h('td', { class: 'muted' }, c.sale_method ? tr(METHOD_RU[c.sale_method] || c.sale_method) : '—'),
+            h('td', { class: 'muted' }, fmtDateTime(c.sold_at || c.created_at)),
+            h('td', null, statusTag),
+            h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } }, refundBtn),
+        ));
+    }
+    el.appendChild(h('div', { style: { overflowX: 'auto' } },
+        h('table', { class: 'tbl' },
+            h('thead', null, h('tr', null,
+                h('th', null, '№ продажи'), h('th', null, 'Карта'),
+                h('th', { style: { textAlign: 'right' } }, 'Номинал'), h('th', { style: { textAlign: 'right' } }, 'Остаток'),
+                h('th', null, 'Покупатель'), h('th', null, 'Способ'), h('th', null, 'Продана'), h('th', null, 'Статус'), h('th', null, ''),
+            )),
+            tbody)));
+}
+
+// Сегментные кнопки выбора — как у окна приёма депозита.
+function segmented(options, initial, onPick) {
+    let value = initial;
+    const row = h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } });
+    const paintBtn = (b, active) => {
+        b.style.border = active ? '2px solid var(--primary-500)' : '1px solid var(--ink-200)';
+        b.style.background = active ? 'var(--primary-50, #f2faf8)' : 'var(--white, #fff)';
+        b.style.color = active ? 'var(--primary-700)' : 'var(--ink-700)';
+    };
+    const btns = options.map(([v, l]) => {
+        const b = h('button', {
+            type: 'button', 'aria-pressed': String(v === value),
+            style: { flex: '1 1 110px', cursor: 'pointer', fontFamily: 'inherit', fontWeight: '700', fontSize: '12.5px', padding: '9px 4px', borderRadius: '9px' },
+            onclick: () => {
+                value = v;
+                btns.forEach(([bb, vv]) => { paintBtn(bb, vv === value); bb.setAttribute('aria-pressed', String(vv === value)); });
+                onPick(v);
+            },
+        }, l);
+        row.appendChild(b);
+        return [b, v];
+    });
+    btns.forEach(([b, v]) => paintBtn(b, v === value));
+    return row;
+}
+
+const CARD_KIND_PAIRS = [['gift_card', 'Подарочная карта'], ['certificate', 'Сертификат']];
+
+function openSellCardModal(root) {
+    let kind = 'gift_card';
+    let method = 'cash';
+    let buyer = null;
+    const amountInp = moneyfy(h('input', { type: 'number', min: '1', step: '1' }));
+    const nameInp = h('input', { type: 'text', maxlength: '120', placeholder: tr('Например: «Подарок на 8 марта»') });
+    const untilInp = h('input', { type: 'date' });
+
+    // Покупатель — пациент клиники (счёт продажи без пациента не выставить);
+    // сама карта — на предъявителя: платить ею может любой пациент.
+    const searchInp = h('input', { type: 'text', placeholder: tr('Поиск покупателя: ФИО, карта, телефон…'), autocomplete: 'off' });
+    const results = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px' } });
+    const chosen = h('div', { style: { fontSize: '13px', marginTop: '6px' } });
+    const paintChosen = () => {
+        clear(chosen);
+        if (buyer) chosen.appendChild(h('div', { style: { fontWeight: 700 } }, trf('Покупатель: {name}', { name: buyer.full_name || ('#' + buyer.id) })));
+    };
+    const pick = (p) => { buyer = p; clear(results); searchInp.value = ''; paintChosen(); };
+    // Поле с «Поиск…» в подсказке h() сам ставит на дебаунс (SEARCH_DEBOUNCE_V1);
+    // seq отбрасывает ответ на уже устаревший запрос.
+    let seq = 0;
+    searchInp.addEventListener('input', async () => {
+        const my = ++seq;
+        const tokens = searchTokens(searchInp.value);
+        if (!tokens.length) { clear(results); return; }
+        let q = supabase.from('patients').select('id, full_name, mrn, phone');
+        for (const t of tokens) q = q.or(['full_name', 'mrn', 'phone'].map((col) => col + '.ilike.%' + t + '%').join(','));
+        const { data } = await q.limit(8);
+        if (my !== seq) return;
+        clear(results);
+        for (const p of data || []) {
+            results.appendChild(h('button', {
+                type: 'button', class: 'btn btn-outline btn-sm', style: { justifyContent: 'flex-start', textAlign: 'left' },
+                onclick: () => pick(p),
+            }, p.full_name || ('#' + p.id), h('span', { class: 'muted' }, ' · ' + [p.mrn, p.phone].filter(Boolean).join(' · '))));
+        }
+        if (!(data || []).length) results.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Никого не нашли.'));
+    });
+    const newPatientBtn = h('button', {
+        type: 'button', class: 'btn btn-outline btn-sm',
+        onclick: async () => {
+            const { openQuickPatientModal } = await import('./quick-patient-modal.js');
+            openQuickPatientModal({ onCreated: (p) => pick({ id: p.id, full_name: p.full_name || p.name || '' }) });
+        },
+    }, Icon('Plus', { size: 13 }), ' ', tr('Новый пациент'));
+
+    modal(tr('Продать карту'), 'Coins', [
+        field(tr('Вид'), segmented(CARD_KIND_PAIRS, kind, (v) => { kind = v; }), { required: true }),
+        field(tr('Номинал, сум'), amountInp, { required: true }),
+        field(tr('Покупатель'), h('div', null, h('div', { class: 'row', style: { gap: '6px' } }, searchInp, newPatientBtn), results, chosen), { required: true }),
+        field(tr('Название (необязательно)'), nameInp),
+        field(tr('Действует по (пусто — бессрочно)'), untilInp),
+        field(tr('Чем платит покупатель'), segmented(CARD_SALE_METHODS, method, (v) => { method = v; }), { required: true }),
+        h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+            'Продажа — приход дня; наличные попадут в ящик смены. Карта станет действующей сразу после оплаты.'),
+    ], tr('Продать и принять оплату'), async () => {
+        const amount = moneyVal(amountInp);
+        if (!(amount > 0)) { toast('Укажите номинал карты.', 'fail'); return false; }
+        if (!buyer) { toast('Выберите покупателя.', 'fail'); return false; }
+        const args = { kind, amount, method, patient_id: buyer.id };
+        if (nameInp.value.trim()) args.name = nameInp.value.trim();
+        if (untilInp.value) args.valid_until = untilInp.value;
+        const { data, error } = await supabase.rpc('sell_card', args);
+        if (error) { toast(trf('Карта не продана: {msg}', { msg: error.message || error }), 'fail'); return false; }
+        const no = (data && data.invoice && data.invoice.invoice_number) || '';
+        toast(trf('Карта продана: {no} · {sum} сум', { no, sum: fmtPrice(amount) }), 'ok');
+        state.filter = 'cards';
+        paint(root);
+        return true;
+    }, 520);
+}
+
+function openCardRefundModal(c, root) {
+    const rest = Math.max(0, Number(c.remaining) || 0);
+    const reasonInp = h('input', { type: 'text', maxlength: '300', placeholder: tr('Причина (необязательно)') });
+    modal(trf('Возврат остатка · {no}', { no: c.sale_number || ('#' + c.id) }), 'Repeat', [
+        h('div', { style: { fontSize: '13.5px', fontWeight: 700 } },
+            trf('Вернуть покупателю {sum} сум — {method}', { sum: fmtPrice(rest), method: tr(METHOD_RU[c.sale_method] || c.sale_method || '') })),
+        h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+            'Возвращается только неизрасходованный остаток, тем же способом, каким карту продали. Карта будет выключена — платить ею больше нельзя.'),
+        field(tr('Причина'), reasonInp),
+    ], tr('Вернуть остаток'), async () => {
+        const args = { card_id: c.id };
+        if (reasonInp.value.trim()) args.reason = reasonInp.value.trim();
+        const { data, error } = await supabase.rpc('refund_card_sale', args);
+        if (error) { toast(trf('Не удалось вернуть: {msg}', { msg: error.message || error }), 'fail'); return false; }
+        toast(trf('Возвращено {sum} сум, карта выключена.', { sum: fmtPrice((data && data.refunded) || rest) }), 'ok');
+        paint(root);
+        return true;
+    }, 460);
+}
+
 function filteredRows() {
     let rows = state.rows;
     if (state.filter === 'cancelled') rows = rows.filter(r => r.status === 'void' || r.status === 'refunded');
@@ -924,6 +1115,7 @@ function paintSearch(el, onChange) {
 function paintTable(el, root) {
     clear(el);
     if (state.filter === 'deposits') { paintDeposits(el, root); return; }
+    if (state.filter === 'cards') { paintCards(el, root); return; }
     const rows = filteredRows();
     if (!rows.length) {
         el.appendChild(h('div', { class: 'empty' }, 'Нет счетов по выбранному фильтру.'));
@@ -976,7 +1168,9 @@ function invoiceRow(inv, root) {
     // Ревью C1 — у счёта депозита (DEP-…) возврата здесь нет: его деньги
     // возвращает только «Вернуть депозит» во вкладке «Депозиты», иначе деньги
     // выходили из кассы дважды.
-    const isDepositInv = String(inv.invoice_number || '').startsWith('DEP-');
+    // CARD_SALE_V1 — и у счёта продажи карты (CARD-…): его остаток возвращает
+    // только «Вернуть остаток» во вкладке «Карты».
+    const isDepositInv = String(inv.invoice_number || '').startsWith('DEP-') || String(inv.invoice_number || '').startsWith('CARD-');
     const refundBtn = (!cancelled && inv.paid_amount > 0 && !isDepositInv)
         ? h('button', {
             type: 'button', title: 'Возврат оплаты',
@@ -1548,7 +1742,7 @@ function openRefundConfirm(p, info, root) {
     // DEPOSIT_WALLET_V1 — куда вернуть: деньгами (как раньше) или на баланс
     // пациента — деньги остаются в клинике и пойдут в оплату следующей услуги.
     // Платёж «с баланса» по умолчанию возвращается на баланс.
-    const isDepositInv = String((info && info.invoice_number) || '').startsWith('DEP-');
+    const isDepositInv = String((info && info.invoice_number) || '').startsWith('DEP-') || String((info && info.invoice_number) || '').startsWith('CARD-');
     let toBalance = p.method === 'wallet' && !isDepositInv;
     // Ревью M1 — полный возврат на баланс сразу отменяет счёт (как окно отмены
     // счёта): иначе пустой счёт висел бы «Не оплачен», то есть долгом пациента
@@ -1806,13 +2000,35 @@ function openAcceptDepositModal(d, root) {
     const hint = h('div', { class: 'muted', style: { fontSize: '12.5px' } },
         'Наличные попадут в ящик смены, карта и эквайринг — нет.');
 
+    // CASHBACK_DEBT_V1 (владелец, 2026-09-27, B3) — долг по кэшбэку кассир
+    // видит ДО приёма: принятые деньги сначала закрывают его, и на баланс
+    // ляжет меньше, чем пациент внёс. Узнать это после — значит спорить у окна.
+    const debtBox = h('div');
+    if (d.patient_id) {
+        supabase.rpc('deposit_balance', { patient_id: d.patient_id }).then(({ data }) => {
+            const debt = Math.max(0, Number(data && data.debt) || 0);
+            if (!(debt > 0)) return;
+            const lands = Math.max(0, Number(d.amount || 0) - debt);
+            debtBox.appendChild(h('div', {
+                role: 'alert',
+                style: { border: '1px solid var(--warn-200, #fde68a)', background: 'var(--warn-50, #fffbeb)', color: 'var(--warn-700, #b45309)',
+                    borderRadius: '10px', padding: '9px 12px', fontSize: '12.5px' },
+            },
+                h('div', { style: { fontWeight: 700 } }, trf('Долг по кэшбэку: {sum} сум', { sum: fmtPrice(debt) })),
+                h('div', null, trf('Принятые деньги сначала закроют этот долг: на баланс пациента ляжет {sum} сум.', { sum: fmtPrice(lands) }))));
+        }).catch(() => {});
+    }
+
     modal(trf('Приём депозита · {no}', { no: d.deposit_number || ('#' + d.id) }), 'Wallet',
-        [head, h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-700)' } }, 'Чем платит пациент'), btnRow, hint],
+        [head, debtBox, h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-700)' } }, 'Чем платит пациент'), btnRow, hint],
         'Принять оплату',
         async () => {
-            const { error } = await supabase.rpc('accept_deposit', { deposit_id: d.id, method });
+            const { data: acc, error } = await supabase.rpc('accept_deposit', { deposit_id: d.id, method });
             if (error) { toast(trf('Не удалось принять: {msg}', { msg: error.message || error }), 'fail'); return false; }
             toast(trf('Депозит принят · {method}', { method: tr(METHOD_RU[method] || method) }), 'ok');
+            if (acc && Number(acc.debt_covered) > 0) {
+                toast(trf('Из депозита закрыт долг по кэшбэку: {sum} сум.', { sum: fmtPrice(acc.debt_covered) }), 'info');
+            }
             paint(root);   // ящик и итоги смены изменились — перерисовываем экран целиком
             return true;
         }, 430);
@@ -1823,3 +2039,6 @@ function openAcceptDepositModal(d, root) {
 // деньги в ящик смены или нет.
 export const __test_openAcceptDepositModal = openAcceptDepositModal;
 export const __test_DEP_METHODS = DEP_METHODS;
+export const __test_openSellCardModal = openSellCardModal;   // CARD_SALE_V1
+export const __test_paintCards = paintCards;
+export const __test_cardState = state;

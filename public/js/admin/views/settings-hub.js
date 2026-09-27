@@ -563,12 +563,16 @@ const LOOKUP_CONFIG = {
     // подходят ему сегодня (visit-wizard.js eligibleDiscounts).
     patient_discounts: {
         table: 'patient_discounts', title: 'Скидки и сертификаты', icon: 'Coins',
+        intro: 'Карта или сертификат, заведённые здесь, выдаются без оплаты (промо, подарок клиники) — в выручку они не попадают. Продажа карты за деньги — в кассе: «Продать карту».',
         embed: 'patient_categories(name)',
         columns: [
             { key: 'name', label: 'Название' }, { key: 'kind', label: 'Вид' }, { key: 'percent', label: 'Скидка, %' }, { key: 'amount', label: 'Сумма' },
             // CARD_BALANCE_V1 — остаток карты/сертификата; уменьшается оплатами
             // в кассе, пишет его только сервер. У промокода остатка нет.
             { key: 'remaining', label: 'Остаток', format: (row) => cardRemainingText(row) },
+            // CARD_SALE_V1 — продана в кассе (номер счёта CARD-…) или выдана
+            // здесь без оплаты (промо / подарок клиники).
+            { key: 'sale_number', label: 'Продажа', format: (row) => cardSaleText(row) },
             { key: 'valid_until', label: 'Действует', format: (row) => discountValidityText(row) },
             { key: 'patient_categories', label: 'Группа', embed: true },
             { key: 'service_ids', label: 'Услуги', format: (row) => discountScopeText(row) },
@@ -692,12 +696,22 @@ const LOOKUP_CONFIG = {
             { key: 'fee_percent', label: 'Комиссия с клиники, %', type: 'number' },
         ],
     },
+    // CASHBACK_BY_GROUP_V1 — у правила есть группа пациентов (пусто — «для
+    // всех»). Пациент группы со своим правилом получает только правила группы;
+    // группа без правила и пациент без группы — правила «для всех» (сервер,
+    // rpc/cashback.js cashbackRuleFor).
     cashback_rules: {
         table: 'cashback_rules', title: 'Кэшбэк', icon: 'Coins',
-        columns: [{ key: 'name', label: 'Правило' }, { key: 'percent', label: 'Кэшбэк, %' }],
+        embed: 'patient_categories(name)',
+        intro: 'Пациент группы, у которой есть своё правило, получает только правила своей группы (наибольший процент). Пациенты без группы и группы без своего правила получают правила «для всех». Правило группы с 0 % — этой группе кэшбэка нет.',
+        columns: [
+            { key: 'name', label: 'Правило' }, { key: 'percent', label: 'Кэшбэк, %' },
+            { key: 'patient_categories', label: 'Группа', embed: true, format: (row) => cashbackGroupText(row) },
+        ],
         fields: [
             { key: 'name', label: 'Название правила (например, «Самоплательщик 3%»)', type: 'text', required: true },
             { key: 'percent', label: 'Кэшбэк, % (возвращается пациенту)', type: 'number' },
+            { key: 'category_id', label: 'Группа пациентов (пусто — для всех)', type: 'fk', fkTable: 'patient_categories', fkLabel: 'name' },
         ],
     },
 
@@ -875,6 +889,17 @@ function optionPairs(f) {
 function ruDate(iso) {
     const s = String(iso || '').slice(0, 10);
     return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : '';
+}
+// CASHBACK_BY_GROUP_V1 — группа правила кэшбэка; пусто — «для всех».
+export function cashbackGroupText(row) {
+    const g = row && row.patient_categories && row.patient_categories.name;
+    return g ? String(g) : tr('для всех');
+}
+// CARD_SALE_V1 — «CARD-A-26-00001» у проданной в кассе карты, «без оплаты» —
+// у заведённой в настройках; у промокода — прочерк.
+export function cardSaleText(row) {
+    if (!row || !['gift_card', 'certificate'].includes(row.kind)) return '—';
+    return row.sale_number ? String(row.sale_number) : tr('без оплаты');
 }
 // CARD_BALANCE_V1 — «120 000 из 300 000» у карты и сертификата; у промокода —
 // прочерк (остатка у скидки нет); исчерпанная карта называется словом.
@@ -1128,6 +1153,9 @@ async function renderEditor(container, key) {
         h('div', { class: 'page-head' },
             h('div', null, h('h1', { class: 'page-title' }, cfg.title)),
         ),
+        // CASHBACK_BY_GROUP_V1 / CARD_SALE_V1 — пояснение справочника одной
+        // строкой над таблицей (как работает правило), если оно задано.
+        cfg.intro ? h('p', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 12px' } }, tr(cfg.intro)) : null,
         syncSlot,
         h('div', { class: 'card' },
             h('div', { class: 'card-header' },

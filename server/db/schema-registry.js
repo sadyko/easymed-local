@@ -729,9 +729,11 @@ export const REGISTRY = {
   payment_providers: { read:{roles:ALL_STAFF,columns:['id','name','fee_percent','active','created_at']},
     write:{ grant:'settings.payment_providers',insert:{roles:['admin'],columns:['name','fee_percent','active']},update:{roles:['admin'],columns:['name','fee_percent','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
-  cashback_rules: { read:{roles:ALL_STAFF,columns:['id','name','percent','active','created_at']},
-    write:{ grant:'settings.cashback_rules',insert:{roles:['admin'],columns:['name','percent','active']},update:{roles:['admin'],columns:['name','percent','active']},delete:{roles:[]}},
-    filters:['id','active'], embed:{} },
+  // CASHBACK_BY_GROUP_V1 (mig 165) — category_id: группа пациентов правила
+  // (NULL — «для всех»). Какое правило действует — rpc/cashback.js cashbackRuleFor.
+  cashback_rules: { read:{roles:ALL_STAFF,columns:['id','name','percent','active','created_at','category_id']},
+    write:{ grant:'settings.cashback_rules',insert:{roles:['admin'],columns:['name','percent','active','category_id']},update:{roles:['admin'],columns:['name','percent','active','category_id']},delete:{roles:[]}},
+    filters:['id','active','category_id'], embed:{ patient_categories:{table:'patient_categories',fk:'category_id',columns:['id','name']} } },
   // REFERRAL_CATEGORY_RATES_V1 (mig 115) — the category carries the STANDARD
   // reward: a percent for everything, plus per-service-group rows in `rates`
   // (JSON) that override it. This is what `referral_rewards` used to do by
@@ -748,7 +750,9 @@ export const REGISTRY = {
   // patient group), service_ids (JSON list: apply to these services only), note.
   // CARD_BALANCE_V1 (mig 158) — remaining: остаток карты/сертификата. Только
   // чтение: пишет его сервер (domain/cards.js) и триггеры миграции 158.
-  patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note','remaining']},
+  // CARD_SALE_V1 (mig 166) — sale_invoice_id / sale_number: счёт продажи карты
+  // в кассе (NULL — выдана без оплаты). Только чтение: пишет rpc/card-sales.js.
+  patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note','remaining','sale_invoice_id','sale_number']},
     write:{ grant:'settings.patient_discounts',insert:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},
       update:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},delete:{roles:[]}},
     filters:['id','active','kind','category_id'], json:['service_ids'],
