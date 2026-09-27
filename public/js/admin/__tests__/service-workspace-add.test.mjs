@@ -82,7 +82,9 @@ test('addOwnService пишет строку в ТЕКУЩИЙ приём (visit_
 });
 
 test('исполнитель строки: выбранный в смете врач → врач консультации → врач приёма', () => {
-    assert.match(addOwn(), /doctor_id:\s*doctor\?\.id \|\| svc\.__consultDoctorId \|\| ctx\.patient\?\.__service\?\.doctorId \|\| null/,
+    // LIVE_AUDIT_FIX_V1 (C3) — порядок тот же, но правило одно на все двери
+    // (visit-line-row.js linePerformer): врач приёма — только врачебной услуге.
+    assert.match(addOwn(), /doctor_id:\s*linePerformer\(svc, doctor\?\.id, ctx\.patient\?\.__service\?\.doctorId\)/,
         'врач строки берётся не в этом порядке: выбранный в смете исполнитель должен быть сильнее врача приёма, а приём — сильнее пустоты');
 });
 
@@ -104,4 +106,20 @@ test('подписи каталога переведены на три язык�
         assert.ok(e, 'строки нет в словаре: ' + key);
         for (const lang of ['ru', 'uz', 'en']) assert.ok(e[lang], key + ': нет перевода ' + lang);
     }
+});
+
+// LIVE_AUDIT_FIX_V1 — крестик у своей услуги снимает НАСТОЯЩУЮ строку визита
+// через сервер (remove_own_visit_line; правило и отказы проверяет
+// server/services/rpc/visit-lines.test.js). Прежде удаление шло через /api/db,
+// врачу оно запрещено, отказ глотался — строка оставалась в визите и в счёте.
+test('removeOwnService: строку снимает remove_own_visit_line, отказ — тостом, список правится только после успеха', () => {
+    const fn = code((SRC.match(/async function removeOwnService\([\s\S]*?\n\}/) || [''])[0]);
+    assert.ok(fn, 'removeOwnService не найден');
+    assert.match(fn, /supabase\.rpc\('remove_own_visit_line',\s*\{\s*visit_service_id:/);
+    assert.ok(!/from\('visit_services'\)\s*\.delete\(\)/.test(fn), 'удаление снова идёт мимо сервера');
+    assert.ok(!/catch\s*\(e\)\s*\{\s*\}/.test(fn), 'отказ снова глотается');
+    assert.match(fn, /if \(error\) \{ toast\(/);
+    assert.ok(fn.indexOf("rpc('remove_own_visit_line'") < fn.indexOf('payload.services.splice'),
+        'пункт списка убирается раньше, чем сервер снял строку — при отказе врач видит «снято», а счёт нет');
+    assert.ok(STRINGS['Услугу не снять: {msg}'], 'строки нет в словаре');
 });

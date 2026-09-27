@@ -14,8 +14,9 @@
 //      вошедшего врача. Смена пользователя меняет фильтр — и заработок.
 //   3. КОЛОНКА ДНЯ — это день ВРАЧА: сегодняшние приёмы по времени, с
 //      возрастом, услугой и состоянием «пришёл».
-//   4. ОКЛАД НЕ ВЫДУМЫВАЕТСЯ. У врача на фиксированном окладе дневного
-//      заработка нет — прочерк и подпись, а не аккуратный ноль.
+//   4. PAY_ALL_EARNINGS_V1 (владелец, 27.09) — тип зарплаты заработок не
+//      гасит: у врача на окладе дневной заработок — те же начисления; без
+//      начислений (perService: false) — прочерк и подпись, а не ноль.
 //   5. РАБОЧИЙ СПИСОК НЕ ПОТЕРЯН: он в один щелчок, работает и живёт по
 //      своему адресу '#consultation/work', который переживает перезагрузку.
 
@@ -481,15 +482,15 @@ test('строка выплаты без приёма в окне (стацио�
   assert.strictEqual(stats.week.earned, SV1_SHARE + SV3_SHARE + SV5_SHARE + 12000);
 });
 
-test('фиксированный оклад: дневного заработка НЕТ, и ноль вместо него не рисуется', () => {
-  assert.strictEqual(dash.perServicePayApplies(DOCTOR_FIX), false);
+// PAY_ALL_EARNINGS_V1 (владелец, 27.09) — тип зарплаты заработок не гасит:
+// у врача на окладе и у «фикс + KPI» без сервисного показателя дневной
+// заработок тот же, что у врача на проценте (итог — все начисления).
+test('тип зарплаты заработок не гасит; без врача — считать нечего', () => {
+  assert.strictEqual(dash.perServicePayApplies(DOCTOR_FIX), true);
   assert.strictEqual(dash.perServicePayApplies(DOCTOR_A), true);
-  // «фикс + KPI» без сервисного KPI переменной с услуг не даёт…
   assert.strictEqual(dash.perServicePayApplies(
-    { salary_type: 'fix_plus_kpi', kpi_links: ['referrals'] }), false);
-  // …а с отмеченным «Услуги» — даёт.
-  assert.strictEqual(dash.perServicePayApplies(
-    { salary_type: 'fix_plus_kpi', kpi_links: ['referrals', 'services'] }), true);
+    { salary_type: 'fix_plus_kpi', kpi_links: ['referrals'] }), true);
+  assert.strictEqual(dash.perServicePayApplies(null), false);
 
   const stats = dash.computeDoctorStats({
     visits: A_VISITS, services: A_SERVICES, payLines: PAY_A(), now: NOW, perService: false,

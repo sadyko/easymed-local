@@ -92,7 +92,7 @@ test('каждое имя иконки, которое зовёт приложе
     // ICON_GUARD_V2 — три формы записи, и каждая обязана хоть что-то находить:
     // если одна перестанет ловить, тест продолжит зеленеть на двух остальных, и
     // целый способ назвать иконку снова окажется непроверенным.
-    const sample = ['admin/views/reports-export.js', 'admin/notifications.js', 'admin/setup-checklist.js']
+    const sample = ['admin/views/reports-hub.js', 'admin/notifications.js', 'admin/setup-checklist.js']   // REPORTS_AUDIT_FIX_V1 — reports-export.js удалён
         .map((f) => fs.readFileSync(path.join(PUBLIC_JS, ...f.split('/')), 'utf8')).join('\n');
     for (const [why, re] of [['Icon(…)', CALL_RE], ["icon: '…'", PROP_RE], ['Icon(x || …)', FALLBACK_RE]]) {
         assert.ok([...sample.matchAll(re)].length > 0, `форма записи ${why} больше не ловится`);

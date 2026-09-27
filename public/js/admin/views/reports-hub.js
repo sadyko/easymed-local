@@ -87,6 +87,11 @@ export const REPORT_DEFS = [
             { kind: 'stock_statement',   label: 'Остатки' },
             { kind: 'stock_expiry',      label: 'Сроки годности' },
         ],
+        // REPORTS_AUDIT_FIX_V1 — расход, остатки и сроки считаются по складу
+        // здания, филиал внутри базы (branch_ids) они не читают: выбор
+        // филиалов у этих видов скрыт, а не молча ничего не делает. Выбор
+        // ЗДАНИЙ (клиника из нескольких зданий) они читают — он остаётся.
+        noBranchKinds: ['stock_consumption', 'stock_statement', 'stock_expiry'],
         options: [
             { arg: 'by', label: 'Разрез', kinds: ['stock_consumption'],
               choices: [['lines', 'По движениям'], ['holder', 'По получателям'], ['patient', 'По пациентам']] },
@@ -107,7 +112,7 @@ export const REPORT_DEFS = [
         kind:  'doctor_salaries',
         icon:  'Stethoscope',
         title: 'Зарплаты врачей',
-        desc:  'По каждому врачу: оплаченные услуги, связанные с ним, сумма после скидки, средний % и доля врача (гонорар), стационарная доля отдельными колонками и итог к выплате. Только полностью оплаченные счета.',
+        desc:  'По каждому врачу: выполненные услуги, сумма после скидки, средний % и доля врача (гонорар), стационарная доля, вознаграждения за направления, корректировки и итог к выплате — все начисления. Здесь же закрывается месяц оплаты врачей.',
     },
     // INPATIENT_SHARE_V1 — стационарная доля врачей: строка на каждую оплаченную
     // медицинскую строку стационара (койко-дни и медикаменты не входят).
@@ -232,6 +237,13 @@ export function optionsFor(rep, kind) {
 // Сервер отвечает второй раз тем же ключом (services/report-access.js).
 export function reportVisible(rep) {
     return reportKindAllowed(rep.kind);
+}
+// REPORTS_AUDIT_FIX_V1 — показывать ли выбор филиалов/зданий у вида kind.
+// byBuildings — клиника из нескольких зданий (выбор зданий вместо филиалов).
+export function branchPickerShown(rep, kind, byBuildings) {
+    if (rep.noBranch) return false;
+    if (!byBuildings && Array.isArray(rep.noBranchKinds) && rep.noBranchKinds.includes(kind)) return false;
+    return true;
 }
 export function reportArgs(rep, kind, opts) {
     const out = {};
@@ -435,7 +447,10 @@ function reportCard(rep) {
 // ---------------------------------------------------------------------------
 const PRESETS = [
     { id: 'today',  label: 'Сегодня' },
-    { id: 'week',   label: 'Эта неделя' },
+    // REPORTS_AUDIT_FIX_V1 — «Эта неделя» считалась от сегодня минус 7 дней,
+    // то есть восемь дней. Теперь это ровно 7 дней, включая сегодня, и
+    // подпись говорит это прямо: неделя с понедельника читалась бы иначе.
+    { id: 'week',   label: '7 дней' },
     { id: 'month',  label: 'Этот месяц' },
     { id: 'custom', label: 'Произвольный' },
 ];
@@ -447,11 +462,10 @@ function ymd(date) {
     return `${y}-${m}-${d}`;
 }
 
-function presetRange(preset) {
-    const now = new Date();
+export function presetRange(preset, now = new Date()) {
     const to = ymd(now);
     if (preset === 'today') return [to, to];
-    if (preset === 'week') { const d = new Date(now); d.setDate(d.getDate() - 7); return [ymd(d), to]; }
+    if (preset === 'week') { const d = new Date(now); d.setDate(d.getDate() - 6); return [ymd(d), to]; }
     // month (also the seed for «Произвольный»)
     return [ymd(new Date(now.getFullYear(), now.getMonth(), 1)), to];
 }
@@ -617,7 +631,11 @@ async function openReportBuilder(rep) {
         refreshBranchUI();
     });
 
+    function syncPicker() {
+        pickerWrap.style.display = branchPickerShown(rep, st.kind, byBuildings()) ? 'contents' : 'none';
+    }
     function paintPicker() {
+        syncPicker();
         clear(branchListEl);
         pickerLabel.textContent = byBuildings() ? tr('Здания') : tr('Филиалы');
         if (byBuildings()) {
@@ -669,6 +687,14 @@ async function openReportBuilder(rep) {
         st.branchIds = new Set(list.map(b => b.id));
         paintPicker();
     })();
+
+    const pickerWrap = h('div', { style: { display: 'contents' } },
+        pickerLabel,
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', color: 'var(--ink-700)', cursor: 'pointer', whiteSpace: 'nowrap' } },
+            masterCb, h('span', null, 'Выбрать все')),
+        branchListEl,
+        summaryEl);
+    syncPicker();
 
     // ---- generate + download ----
     const downloadBtn = h('button', {
@@ -763,11 +789,9 @@ async function openReportBuilder(rep) {
         dateWrap,
         // CALLCENTER_REPORT_V1 — у отчётов с noBranch выбор филиала СКРЫТ:
         // у crm_requests нет branch_id, и селектор молча ничего бы не делал.
-        rep.noBranch ? null : pickerLabel,
-        rep.noBranch ? null : h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', color: 'var(--ink-700)', cursor: 'pointer', whiteSpace: 'nowrap' } },
-            masterCb, h('span', null, 'Выбрать все')),
-        rep.noBranch ? null : branchListEl,
-        rep.noBranch ? null : summaryEl,
+        // REPORTS_AUDIT_FIX_V1 — выбор филиалов живёт в одной обёртке: у видов,
+        // которые его не читают (noBranchKinds), она скрыта (syncPicker).
+        rep.noBranch ? null : pickerWrap,
         h('span', { style: { flex: '1 1 auto' } }),
         h('div', { class: 'row', style: { gap: '8px', flex: '0 0 auto' } },
             generateBtn,
@@ -838,7 +862,7 @@ async function openReportBuilder(rep) {
             choiceRow.appendChild(h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
                 ...rep.views.map(v => pill(st.kind === v.kind, v.label, () => {
                     if (st.generating || st.kind === v.kind) return;
-                    st.kind = v.kind; paintChoices(); resetResult();
+                    st.kind = v.kind; paintChoices(); resetResult(); syncPicker();
                 }))));
         }
         for (const o of optionsFor(rep, st.kind)) {
@@ -933,8 +957,67 @@ async function openReportBuilder(rep) {
         }
     }
 
+    // PAY_PERIOD_CLOSE_V1 (владелец, 27.09) — «Закрыть месяц» у «Зарплат врачей»
+    // и «По врачам». Закрывается месяц выбранного периода (период — в пределах
+    // одного месяца), только прошедший; закрытый месяц в отчётах и кабинете
+    // показан по записи, поздние изменения — корректировками. Открыть обратно —
+    // только администратор. Подтверждение — вторым нажатием на той же кнопке.
+    function payPeriodBar() {
+        const bar = h('div', { class: 'pay-period-bar row', role: 'status',
+            style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap', padding: '8px 12px', marginBottom: '10px',
+                     border: '1px solid var(--ink-100)', borderRadius: '10px', background: 'var(--ink-25)', fontSize: '12.5px' } },
+            h('span', { class: 'muted' }, tr('Проверяем, закрыт ли месяц…')));
+        const month = st.from && st.to && String(st.from).slice(0, 7) === String(st.to).slice(0, 7) ? String(st.from).slice(0, 7) : null;
+        const monthLabel = (m) => m.slice(5, 7) + '.' + m.slice(0, 4);
+        const act = (label, icon, confirmLabel, rpc, done) => {
+            let armed = false;
+            const btn = h('button', { class: 'btn btn-sm', type: 'button' }, Icon(icon, { size: 13 }), ' ', label);
+            btn.addEventListener('click', async () => {
+                if (!armed) { armed = true; btn.textContent = confirmLabel; return; }
+                btn.disabled = true;
+                const { error } = await supabase.rpc(rpc, { month });
+                if (error) { toast(trf('Не удалось: {msg}', { msg: error.message || error }), 'fail'); btn.disabled = false; return; }
+                toast(done, 'ok');
+                generate();
+            });
+            return btn;
+        };
+        (async () => {
+            const { data, error } = await supabase.rpc('pay_period_status', {});
+            clear(bar);
+            if (error || !data) { bar.appendChild(h('span', { class: 'muted' }, tr('Состояние месяца не загрузилось.'))); return; }
+            if (!month) {
+                bar.appendChild(h('span', { class: 'muted' }, tr('Закрыть месяц можно, выбрав период в пределах одного месяца.')));
+                return;
+            }
+            const closed = (data.months || []).find((m) => m.month === month);
+            if (closed) {
+                bar.appendChild(h('span', null, Icon('Lock', { size: 13 }), ' ',
+                    trf('Месяц закрыт {date}{who} — суммы заморожены, изменения после закрытия идут корректировками.', {
+                        date: String(closed.closed_at || '').slice(0, 10),
+                        who: closed.closed_by_name ? ' (' + closed.closed_by_name + ')' : '' })));
+                if (data.can_reopen) {
+                    bar.appendChild(act(tr('Открыть месяц'), 'Refresh', trf('Подтвердить: открыть {m}', { m: monthLabel(month) }),
+                        'pay_period_reopen', tr('Месяц открыт')));
+                }
+                return;
+            }
+            if (month >= String(data.current || '')) {
+                bar.appendChild(h('span', { class: 'muted' }, tr('Месяц не закрыт. Текущий месяц закрыть нельзя — он ещё идёт.')));
+                return;
+            }
+            bar.appendChild(h('span', null, tr('Месяц не закрыт: суммы ещё могут меняться (поздние результаты, возвраты, скидки).')));
+            if (data.can_close) {
+                bar.appendChild(act(tr('Закрыть месяц'), 'Lock', trf('Подтвердить: закрыть {m}', { m: monthLabel(month) }),
+                    'pay_period_close', tr('Месяц закрыт')));
+            }
+        })();
+        return bar;
+    }
+
     function paintPreview() {
         clear(previewEl);
+        if (rep.kind === 'doctor_salaries' || rep.kind === 'by_doctors') previewEl.appendChild(payPeriodBar());   // PAY_PERIOD_CLOSE_V1
         paintBuildingSummary(previewEl, st.result);
         if (rep.mode === 'charts') {
             const body = h('div', null);
@@ -945,7 +1028,12 @@ async function openReportBuilder(rep) {
         const columns = (st.result && st.result.columns) || [];
         const rows = (st.result && st.result.rows) || [];
         if (rows.length === 0) {
-            paintPreviewEmpty('Нет данных за выбранный период. Попробуйте расширить диапазон дат или изменить филиалы.');
+            // PAY_PERIOD_CLOSE_V1 — без clear: полоса «Закрыть месяц» над пустым
+            // отчётом остаётся (месяц без начислений тоже закрывают).
+            previewEl.appendChild(h('div', {
+                class: 'muted',
+                style: { padding: '60px 20px', textAlign: 'center', fontSize: '13.5px' },
+            }, 'Нет данных за выбранный период. Попробуйте расширить диапазон дат или изменить филиалы.'));
             return;
         }
         const CAP = 300;
@@ -968,10 +1056,13 @@ async function openReportBuilder(rep) {
         };
         // REPORT_TOTALS_V1 — итог по ВСЕМ строкам отчёта, а не по видимым 300:
         // иначе «Итого» под усечённым списком тихо соврало бы.
+        // REPORTS_AUDIT_FIX_V1 — какие колонки складывать, называет сервер
+        // (summable_columns), и он же — строки вне итога (total_skip_rows).
         const totals = reportTotals(
             columns.map(c => ({ label: c })), rows,
             (r, _c, ci) => r[ci],
-            (_c, ci) => isNumCol[ci]);
+            (_c, ci) => isNumCol[ci],
+            { summable: st.result && st.result.summable_columns, skipRows: st.result && st.result.total_skip_rows });
         const hasTotals = totals.some(v => v != null);
 
                 // REPORT_TOTALS_V1 — «Итого» прилипает к низу таблицы: при 300
@@ -1466,6 +1557,9 @@ function renderCashierReport(el, d, period) {
         ccrTile(multi ? tr('Доход по всем зданиям') : tr('Общий доход'), d.kpi.income, 'in'),
         multi ? ccrTile(tr('Доход этого здания'), d.kpi.income_own, 'in') : null,
         ccrTile(multi ? tr('Расход этого здания') : tr('Общий расход'), d.kpi.expense, 'out'),
+        // REPORTS_AUDIT_FIX_V1 — возвраты пациентам отдельной плиткой: в доходе
+        // они уже вычтены, а в списке поступлений стоят строками «Возврат».
+        d.kpi.refunds > 0 ? ccrTile(tr('Возвраты'), d.kpi.refunds, 'out') : null,
         ccrTile(multi ? tr('Итого по этому зданию (доход − расход)') : tr('Итого (доход − расход)'), d.kpi.net, 'net')));
 
     el.appendChild(ccrTable({ title: 'Поступления', tone: 'in', kind: 'income', period: period || '',

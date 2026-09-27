@@ -23,7 +23,7 @@ import { labFlagCell, labPosCell, fmtDMY, labSexRu, labRefLines, labRefText, mat
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
 import { originTag } from '../record-origin.js';   // BRANCH_ORIGIN_V1 — откуда запись
 import { externalLabTag } from '../external-lab.js';   // EXTERNAL_LAB_V1 — подпись у результата
-import { openVisitWizard } from './visit-wizard.js?v=tier2';
+import { openVisitWizard, canAddVisitLines } from './visit-wizard.js?v=tier2';   // LIVE_AUDIT_FIX_V1 — canAddVisitLines
 import { printInvoiceCheck } from './receipt-print.js?v=rp1';   // REPRINT_SERVICE_CHECK_V1
 import { printableSheet as _printSheet } from './doc-settings.js?v=noqr1';   // VISIT_WIZARD_LOCAL_V1 — full-screen «Добавить услугу к визиту»
 import { openVisitBillModal } from './visit-bill.js';
@@ -51,7 +51,20 @@ import { radioChips, phoneInput, mailInput } from './registration.js?v=aug17f';
 // изменение / удаление). ЗДЕСЬ ТОЛЬКО ОФОРМЛЕНИЕ отказа: настоящий отказ выдаёт
 // сервер (server/services/rpc/patient-card.js), и `tabAccess` ниже — это его
 // ответ, а не мнение браузера. Спрятанная вкладка защитой не является.
-import { currentRoleLabel } from '../permissions.js';
+import { currentRoleLabel, hasActorRole } from '../permissions.js';
+
+// LIVE_AUDIT_FIX_V1 (C6) — зеркало REMOVE_SERVICE_ROLES (server/services/rpc/
+// billing.js): «Заменить услугу» и «Убрать» исполняет сервер только
+// регистратуре и администратору. Врач, медсестра и лаборатория с вкладкой
+// «Услуги» на изменение видели кнопки и получали английский отказ.
+export const UNPAID_SERVICE_ROLES = ['admin', 'registrar'];
+const UNPAID_SERVICE_REFUSAL = 'Заменять и убирать услуги может регистратура или администратор.';
+// Отказ сервера по роли — русскими словами (billing.js отвечает по-английски).
+export function unpaidServiceErrorText(error) {
+    const msg = (error && error.message) || String(error || '');
+    if ((error && (error.status === 403 || error.code === 'forbidden')) || /not allowed/i.test(msg)) return tr(UNPAID_SERVICE_REFUSAL);
+    return msg;
+}
 
 // Compatibility stubs. Older modules still import these names FROM patient-card
 // (registration.js -> openCreateVisitModal, service-workspace.js -> openVitalsDialog).
@@ -468,7 +481,9 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             }, Icon('Bed', { size: 14 }), 'Госпитализация'),
             // PATIENT_TAB_ACCESS_V1 — заведение услуг пациенту = «Изменение»
             // вкладки «Услуги» (мастер пишет visit_services и счёт).
-            tabEdit('services') ? h('button', {
+            // LIVE_AUDIT_FIX_V1 — и только роли, которым сервер даёт вставку строк
+            // визита (canAddVisitLines): иначе пустой визит и «not allowed».
+            tabEdit('services') && canAddVisitLines() ? h('button', {
                 type: 'button',
                 onclick: () => openVisitWizard(reload, patientStub()),
                 style: {
@@ -765,7 +780,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
         // только у того, кому «Услуги» выданы на изменение: кнопка заводит
         // услуги пациенту, а сервер откажет всё равно.
         bar.appendChild(h('span', { style: { flex: 1 } }));
-        if (tabEdit('services')) bar.appendChild(h('button', {
+        if (tabEdit('services') && canAddVisitLines()) bar.appendChild(h('button', {   // LIVE_AUDIT_FIX_V1
             class: 'btn btn-primary btn-sm', type: 'button',
             style: { alignSelf: 'center', margin: '8px 0' },
             onclick: () => openVisitWizard(reload, patientStub()),
@@ -1071,7 +1086,8 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             // Сервер такую подмену теперь отвергает (billing.js
             // changeUnpaidService), но отказ, до которого человек дошёл, хуже
             // кнопки, которой нет: товар убирают корзиной и списывают заново.
-            const swapBtn = editable && !s.clinicItemId && tabEdit('services') ? h('button', {
+            const canUnpaid = hasActorRole(UNPAID_SERVICE_ROLES);   // LIVE_AUDIT_FIX_V1 (C6)
+            const swapBtn = editable && !s.clinicItemId && tabEdit('services') && canUnpaid ? h('button', {
                 class: 'btn btn-outline btn-sm', type: 'button', title: 'Заменить услугу (цена и счёт пересчитаются)',
                 onclick: async (ev) => {
                     const btn = ev.currentTarget;
@@ -1088,7 +1104,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                         if (String(sel.value) === String(s.serviceId)) { toast('Услуга не изменилась.', 'info'); return; }
                         const { data, error } = await supabase.rpc('change_unpaid_service',
                             { visit_service_id: s.id, new_service_id: Number(sel.value) });
-                        if (error) { toast(trf('Не удалось заменить: {msg}', { msg: error.message }), 'fail'); return; }
+                        if (error) { toast(trf('Не удалось заменить: {msg}', { msg: unpaidServiceErrorText(error) }), 'fail'); return; }
                         toast(data && data.invoice ? 'Услуга заменена, счёт пересчитан.' : 'Услуга заменена.');
                         await reload();
                     });
@@ -1097,7 +1113,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                 },
             }, Icon('Repeat', { size: 13 })) : null;
 
-            const delBtn = removable && tabDelete('services') ? h('button', {
+            const delBtn = removable && tabDelete('services') && canUnpaid ? h('button', {
                 class: 'btn btn-outline btn-sm', type: 'button',
                 title: s.clinicItemId ? 'Убрать (вернуть туда, откуда взят)'
                     : s.invoiceItemId ? 'Убрать услугу вместе с неоплаченным счётом' : 'Убрать услугу',
@@ -1117,7 +1133,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     // SVC_UNPAID_REMOVE_V1 — атомарно: строка + ремонт счёта; сервер
                     // откажет, если счёт уже оплачен/частично оплачен.
                     const { data, error } = await supabase.rpc('remove_unpaid_service', { visit_service_id: s.id });
-                    if (error) { toast(trf('Не удалось убрать: {msg}', { msg: error.message }), 'fail'); return; }
+                    if (error) { toast(trf('Не удалось убрать: {msg}', { msg: unpaidServiceErrorText(error) }), 'fail'); return; }
                     // Куда именно вернулся товар — из ответа сервера, а не из
                     // догадки экрана: возврат идёт ПО ИСТОЧНИКАМ движений.
                     const back = restoredWhere(data && data.sources);

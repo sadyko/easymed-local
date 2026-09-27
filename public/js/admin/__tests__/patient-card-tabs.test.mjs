@@ -388,3 +388,29 @@ test('EXTERNAL_LAB_V1: результат внешнего анализа под
   await tick();
   assert.strictEqual(extTags(plain).length, 0, 'подпись у анализа своей лаборатории');
 });
+
+// LIVE_AUDIT_FIX_V1 (C6) — «Заменить услугу» / «Убрать» сервер исполняет только
+// регистратуре и администратору (billing.js REMOVE_SERVICE_ROLES): врачу и
+// медсестре с «Удалением» во вкладке кнопок нет; отказ сервера — по-русски.
+test('LIVE_AUDIT_FIX_V1: «Заменить» и «Убрать» — только регистратуре и администратору', async () => {
+  const perms = await import('../permissions.js');
+  const PC = await import('../views/patient-card.js');
+  const fs = await import('node:fs');
+  const billing = fs.readFileSync(new URL('../../../../server/services/rpc/billing.js', import.meta.url), 'utf8');
+  assert.ok(billing.includes("const REMOVE_SERVICE_ROLES = [" + PC.UNPAID_SERVICE_ROLES.map((r) => "'" + r + "'").join(', ') + '];'), 'роли разошлись с сервером');
+  const saved = globalThis.window.easymed;
+  const row = { name: 'Врач', permissions: { sections: ['patients'], levels: { patients: 'admin' }, patient_tabs: { services: 'delete' } } };
+  try {
+    for (const [code, want] of [['doctor', false], ['nurse', false], ['registrar', true]]) {
+      globalThis.window.easymed = { state: { user: { id: 1, role: code, extra_roles: [] } } };
+      const box = await render(fullPayload(), row);
+      openTab(box, 'Услуги');
+      const ttl = titles(box);
+      assert.equal(ttl.some((x) => x.startsWith('Заменить услугу')), want, code + ': «Заменить услугу»');
+      assert.equal(ttl.some((x) => x.startsWith('Убрать услугу')), want, code + ': «Убрать услугу»');
+    }
+  } finally { perms.setActorRoles([]); globalThis.window.easymed = saved; }
+  assert.equal(PC.unpaidServiceErrorText({ code: 'forbidden', message: 'Your role is not allowed to perform this action.' }),
+    'Заменять и убирать услуги может регистратура или администратор.');
+  assert.equal(PC.unpaidServiceErrorText({ message: 'счёт оплачен' }), 'счёт оплачен');
+});

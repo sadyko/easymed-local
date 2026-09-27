@@ -48,6 +48,8 @@ const ALLOW = {
   'services/report-access.js|grantAllowsOr|key': { n: 1, why: 'группы отчётов; fallbackLevel разбирает строки parent=reports' },
   'services/rpc/reports.js|canSeeReportKey|k': { n: 1, why: 'группы отчётов по REPORT_GROUP' },
   'services/report-access.js|canSeeReportKey|key': { n: 1, why: 'requireReportKind по REPORT_GROUP' },
+  // FINAL_ROLES_SYNC_FIX_V1 (M1) — ставки врачей видит тот, кто видит группу «Оплата врачей»: то же правило, что у отчётов.
+  "db/pay-visibility.js|canSeeReportKey|'reports.doctor_pay'": { n: 1, why: 'ставки врачей — по группе отчётов reports.doctor_pay (REPORT_GROUP)' },
   // Сама защита сравнивает уровни — она не ворота.
   'services/role-guard.js|effectiveLevel|key': { n: 2, why: 'защита «Ролей»: сравнение уровней' },
   'services/role-guard.js|grantAllowsOr|key': { n: 1, why: 'защита «Ролей»: gatePasses по спискам карты' },
@@ -241,6 +243,8 @@ test('FALLBACK_FN отвечает то же, что настоящие воро
   const { canSeeAll, departmentForm } = await import('./rpc/departments.js');
   const { canSeeAllMovements } = await import('./rpc/stock-log.js');
   const { stockMinimumsList } = await import('./rpc/stock-requests.js');
+  const { runReport, payPeriodStatus } = await import('./rpc/reports.js');   // PAY_PERIOD_CLOSE_V1
+  const { grantLevel } = await import('./grants.js');   // REPORTS_AUDIT_FIX_V1
   const db = openDb(':memory:');
   migrate(db);
   const allowed = (fn) => { try { fn(); return true; } catch (e) { if (e && e.status === 403) return false; return true; } };
@@ -258,12 +262,18 @@ test('FALLBACK_FN отвечает то же, что настоящие воро
         'settings.departments/edit': allowed(() => departmentForm(db, {}, u)),
         'procurement/view': canSeeAllMovements(db, u),
         'procurement/edit': !!stockMinimumsList(db, { scope: 'mine' }, u).can_manage_all,
+        'reports.doctor_pay/view': allowed(() => runReport(db, { kind: 'doctor_salaries' }, u)),
+        'reports.doctor_pay/edit': payPeriodStatus(db, {}, u).can_close,
       };
       for (const [k, want] of Object.entries(real)) {
         const [key, need] = k.split('/');
+        // REPORTS_AUDIT_FIX_V1 — ключ, записанный роли явно (мигр. 179: кассиру
+        // и складу — группы отчётов), решает сам; карта прежних правил — только
+        // для ненастроенных ключей.
+        if (grantLevel(db, u, key) !== null) continue;
         assert.equal(atLeast(fallbackLevel(db, u, key, 'all'), need), want, `${role}: ${k} — карта ${fallbackLevel(db, u, key, 'all')}, ворота ${want ? 'пускают' : 'не пускают'}`);
       }
     }
   } finally { db.close(); }
-  assert.deepEqual([...FALLBACK_FN_KEYS].sort(), ['custdev.list', 'custdev.rate', 'procurement', 'settings.departments'], 'в FALLBACK_FN новый ключ — добавьте его в сверку поведением');
+  assert.deepEqual([...FALLBACK_FN_KEYS].sort(), ['custdev.list', 'custdev.rate', 'procurement', 'reports.doctor_pay', 'settings.departments'], 'в FALLBACK_FN новый ключ — добавьте его в сверку поведением');
 });

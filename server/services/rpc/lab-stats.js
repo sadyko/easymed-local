@@ -79,7 +79,7 @@ export function labUsageStats(db, args, user) {
 
   const raw = args && args.period != null && args.period !== '' ? args.period : '30d';
   if (typeof raw !== 'string' || !Object.prototype.hasOwnProperty.call(PERIODS, raw)) {
-    throw new RpcError('period must be one of: today, 7d, 30d, all.', 400);
+    throw new RpcError('Период — «сегодня», «7 дней», «30 дней» или «всё время».', 400);   // REPORTS_AUDIT_FIX_V1
   }
   const period = raw;
   const days = PERIODS[period];

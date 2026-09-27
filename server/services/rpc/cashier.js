@@ -14,7 +14,8 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // правило одно, и звучать оно обязано одинаково, с какого бы экрана в счёт ни
 // пришли. Касса — последний экран, у которого счёт открыт целиком, и первый, с
 // которого его можно стереть.
-import { assertOwnBuilding } from './billing.js';
+import { assertOwnBuilding, PERFORMED_LINE_STATUSES } from './billing.js';
+import { markRefundRelease } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -32,7 +33,8 @@ const MAX_MONEY = 1e12;
 function requireRole(user, allowed) {
   // MULTI_ROLE_SERVER_V1 — extras count too, not the primary role alone.
   if (!hasAnyRole(user, allowed)) {
-    throw new RpcError('Your role is not allowed to perform this action.', 403);
+    // REPORTS_AUDIT_FIX_V1 — отказ читает человек: по-русски.
+    throw new RpcError('Касса доступна кассиру и администратору — вашей роли это действие недоступно.', 403);
   }
 }
 
@@ -196,16 +198,27 @@ function movementTotals(db, shiftId) {
 // не кладём: этих денег кассир при себе не видел, они пришли раньше — когда
 // принимали депозит. Иначе на пересчёте смена требовала бы объяснить сумму,
 // которой в кассе никогда не было.
+// REPORTS_AUDIT_FIX_V1 — «платежей: N» считало и возвраты (отрицательные
+// платежи): смена с одной оплатой и её возвратом показывала «2 платежа».
+// Теперь count — только оплаты, возвраты — отдельно (refund_count, refunds —
+// сумма возвращённого, положительным числом). Итог total по-прежнему чистый:
+// оплаты минус возвраты — ровно то, что осталось в кассе.
 function paymentTotals(db, shiftId) {
-  const rows = db.prepare('SELECT method, COALESCE(SUM(amount),0) s, COUNT(*) n FROM payments WHERE shift_id=? GROUP BY method').all(shiftId);
-  const totals = { cash: 0, card: 0, transfer: 0, acquiring: 0, wallet: 0, gift_card: 0, total: 0, count: 0 };   // CARD_BALANCE_V1
+  const rows = db.prepare(`SELECT method, COALESCE(SUM(amount),0) s,
+                                  SUM(CASE WHEN amount >= 0 THEN 1 ELSE 0 END) n,
+                                  SUM(CASE WHEN amount < 0 THEN 1 ELSE 0 END) rn,
+                                  COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END),0) rs
+                             FROM payments WHERE shift_id=? GROUP BY method`).all(shiftId);
+  const totals = { cash: 0, card: 0, transfer: 0, acquiring: 0, wallet: 0, gift_card: 0, total: 0, count: 0, refund_count: 0, refunds: 0 };   // CARD_BALANCE_V1
   for (const row of rows) {
     if (Object.prototype.hasOwnProperty.call(totals, row.method)) {
       totals[row.method] = round2(row.s);
     }
     if (countsAsInflow(row.method)) {
       totals.total = round2(totals.total + row.s);
-      totals.count += row.n;
+      totals.count += row.n || 0;
+      totals.refund_count += row.rn || 0;
+      totals.refunds = round2(totals.refunds + (row.rs || 0));
     }
   }
   return totals;
@@ -289,14 +302,14 @@ export function shiftReport(db, args, user) {
   const shiftId = args && args.shift_id;
   if (shiftId !== undefined && shiftId !== null) {
     if (!isPositiveInt(shiftId)) {
-      throw new RpcError('shift_id must be a positive integer.', 400);
+      throw new RpcError('Смена указана неверно.', 400);   // REPORTS_AUDIT_FIX_V1 — по-русски
     }
     shift = db.prepare('SELECT * FROM cash_shifts WHERE id = ?').get(shiftId);
     if (!shift) {
-      throw new RpcError('shift not found.', 400);
+      throw new RpcError('Смена не найдена.', 400);
     }
     if (user.role !== 'admin' && shift.cashier_id !== user.id) {
-      throw new RpcError('You may only view your own shift.', 403);
+      throw new RpcError('Можно смотреть только свою смену.', 403);
     }
   } else {
     shift = db.prepare("SELECT * FROM cash_shifts WHERE cashier_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(user.id);
@@ -578,7 +591,7 @@ export function voidInvoice(db, args, user) {
     // сохраняет статус. В 'added' возвращается только неначатая строка без
     // следа, оставленная галочкой keep_services, — как прежде.
     const keepServices = args.keep_services === true || args.keep_services === 1;
-    const PERFORMED = ['collected', 'in_progress', 'resulted', 'completed'];
+    const PERFORMED = PERFORMED_LINE_STATUSES;   // INPATIENT_MONEY_FIX_V1 — один список с remove/change_unpaid_service
     const lines = db.prepare(`
       SELECT vs.id, vs.status, COALESCE(s.name, p.name, '') AS name
         FROM visit_services vs
@@ -593,11 +606,13 @@ export function voidInvoice(db, args, user) {
     const releaseKeepStatus = db.prepare('UPDATE visit_services SET invoice_item_id = NULL WHERE id = ?');
     const removed = [];
     const released = [];
+    const releasedIds = [];
     for (const l of lines) {
       const trace = !!hasTrace.get(l.id, l.id, l.id).t;
       if (PERFORMED.includes(l.status) || trace) {
         releaseKeepStatus.run(l.id);
         released.push(l.name);
+        releasedIds.push(l.id);
       } else if (!keepServices) {
         // Талон очереди на снятую услугу тоже уходит: номер без услуги — мусор на доске.
         db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(l.id);
@@ -606,8 +621,13 @@ export function voidInvoice(db, args, user) {
       } else {
         release.run(l.id);
         released.push(l.name);
+        releasedIds.push(l.id);
       }
     }
+    // PAY_REFUND_V1 (владелец, 27.09) — отмена ПОСЛЕ ВОЗВРАТА: отпущенная
+    // работа врачу не платится, пока её не выставят и не оплатят снова.
+    // Отмена неоплаченного счёта без возвратов ничего не пишет.
+    markRefundRelease(db, { invoiceId, kind: 'out', lineIds: releasedIds });
     // Журнал счёта: кто отменил и что стало с услугами. Раньше строку писал
     // только облачный экран, и «История» кассы об отменах молчала.
     const actor = db.prepare('SELECT full_name, role FROM users WHERE id = ?').get(user.id) || {};
@@ -626,6 +646,9 @@ export function voidInvoice(db, args, user) {
     // voided invoice: create_invoice_for_admission then refused them as "already
     // invoiced" and remove_admission_line_from_invoice refused them because the
     // invoice was no longer 'unpaid'. The treatment became permanently unbillable.
+    const admLineIds = db.prepare(`SELECT id FROM admission_services
+       WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)`).all(invoiceId).map((r) => r.id);
+    markRefundRelease(db, { invoiceId, kind: 'in', lineIds: admLineIds });   // PAY_REFUND_V1
     db.prepare(`
       UPDATE admission_services
          SET invoice_item_id = NULL, status = 'added'

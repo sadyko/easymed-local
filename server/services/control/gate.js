@@ -38,11 +38,14 @@ const READ_ONLY_RPCS = new Set([
   'doctor_referral_reward',
   // PAY_BASIS_PERFORMED_V1 — вся выплата врача для кабинета одним вызовом; чтение.
   'doctor_pay_summary',
+  'pay_period_status',   // PAY_PERIOD_CLOSE_V1 — какие месяцы закрыты; чтение
+  'visit_refunded_lines',   // FINAL_MONEY_FIX_V1 (I1) — возвращённые строки визита; чтение
   // DOCTOR_LINES_SPECIALTY_V1 — варианты фильтра «Врач» в «Отчётах»; чтение.
   'report_choices',
   'cashier_invoices', 'cash_shift_summary', 'shift_report', 'cashier_report',
   'callcenter_report', 'queue_board', 'documents_feed', 'accommodation_state',
   'deposit_balance', 'list_deposits', 'service_delete_check', 'get_clinic_by_slug',
+  'list_card_sales',   // CARD_SALE_V1 — список карт кассы; чтение
   // PATIENT_AGGREGATES_V1 — числа рядом с фамилиями в картотеке. Чистое чтение,
   // и клиника с просроченной лицензией обязана видеть свою картотеку целиком:
   // список без «визитов» и «баланса» выглядел бы сломанным, а не запертым.

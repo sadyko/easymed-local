@@ -343,7 +343,7 @@ test('RPC кабинета: те же строки и та же сумма, чт
   const surg = doctorInpatientShare(db, { doctor_id: 1, from: FROM, to: TO }, admin);
   assert.equal(surg.count, 1);
   assert.equal(surg.fee, 18000);
-  assert.throws(() => doctorInpatientShare(db, { doctor_id: 'x', from: FROM, to: TO }, admin), /doctor_id/);
+  assert.throws(() => doctorInpatientShare(db, { doctor_id: 'x', from: FROM, to: TO }, admin), /doctor_id|Врач/);
 });
 
 // ─── 6. АМБУЛАТОРИЯ НЕ ДВИГАЕТСЯ ────────────────────────────────────────────

@@ -112,6 +112,10 @@ export function acceptDeposit(db, args, user) {
   const run = db.transaction(() => {
     const dep = db.prepare('SELECT * FROM patient_deposits WHERE id = ?').get(a.deposit_id);
     if (!dep) throw new RpcError('deposit not found.', 400);
+    // CASHBACK_DEBT_V1 (владелец, 2026-09-27, B3) — долг по кэшбэку закрывают
+    // новые деньги пациента: принятый депозит сначала гасит его. Касса видит
+    // долг в окне приёма, а ответ называет, сколько долга закрыто.
+    const debtBefore = walletDebt(db, dep.patient_id);
     if (dep.status !== 'pending') {
       throw new RpcError(`deposit is already ${dep.status}.`, 400);
     }
@@ -173,6 +177,9 @@ export function acceptDeposit(db, args, user) {
     return {
       deposit: db.prepare('SELECT * FROM patient_deposits WHERE id = ?').get(dep.id),
       invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId),
+      debt_before: debtBefore,
+      debt_covered: round2(Math.min(debtBefore, amount)),
+      balance: walletBalance(db, dep.patient_id),
     };
   });
 
@@ -288,8 +295,21 @@ export function refundDeposit(db, args, user) {
       if (inv) assertOwnBuilding(db, inv, 'Счёт депозита');
       if (inv) {
         const paid = round2(Number(inv.paid_amount || 0) - amount);
-        db.prepare('UPDATE invoices SET paid_amount = ?, status = ? WHERE id = ?')
-          .run(paid, paid <= 0 ? 'refunded' : 'partial', inv.id);
+        if (paid <= 0) {
+          db.prepare("UPDATE invoices SET paid_amount = ?, status = 'refunded' WHERE id = ?").run(paid, inv.id);
+        } else {
+          // LIVE_AUDIT_FIX_V1 — ЧАСТИЧНЫЙ ВОЗВРАТ НЕ ДЕЛАЕТ СЧЁТ ДОЛГОМ. Прежде
+          // счёт депозита уходил в 'partial', и касса показывала его в списке
+          // «к оплате»: пациенту, забравшему часть предоплаты, выставлялся
+          // «долг» ровно на возвращённую сумму. Счёт депозита — не требование
+          // денег, а запись о принятых; после возврата он стоит на том, что
+          // осталось, — total уменьшается вместе с paid (так же, как возврат
+          // продажи карты, card-sales.js). Платежи (+принято, −возвращено) не
+          // трогаются: выручка и смена по-прежнему считаются по ним.
+          db.prepare("UPDATE invoices SET paid_amount = ?, total_amount = ?, subtotal = ?, status = 'paid' WHERE id = ?")
+            .run(paid, paid, paid, inv.id);
+          db.prepare('UPDATE invoice_items SET unit_price = ?, total = ? WHERE invoice_id = ?').run(paid, paid, inv.id);
+        }
       }
     } else if ((dep.method || 'cash') === 'cash') {
       // DEPOSIT_REVENUE_V1 — депозит, принятый ДО перехода на счета: у него нет

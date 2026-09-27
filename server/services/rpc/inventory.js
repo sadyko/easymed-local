@@ -32,7 +32,10 @@ const DISPENSE_ROLES = ['admin', 'doctor', 'nurse', 'inventory'];
 // DOCTOR_WORKSPACE_V1 — a doctor can void their own not-yet-invoiced dispense
 // from the workspace (easymed's void_dispensed_visit_item allows it; the
 // invoiced-line guard in voidDispense still blocks anything billed).
-const VOID_ROLES = ['admin', 'inventory', 'doctor'];
+// INPATIENT_MONEY_FIX_V1 (C4) — и медсестра: она выдаёт (DISPENSE_ROLES), а
+// отменить свою ошибочную выдачу не могла — оставалось звать врача или
+// оставлять лишнее в счёте. Выставленную строку отмена по-прежнему не трогает.
+const VOID_ROLES = ['admin', 'inventory', 'doctor', 'nurse'];
 
 function requireRole(user, allowed) {
   // MULTI_ROLE_SERVER_V1 — extras count too, not the primary role alone.

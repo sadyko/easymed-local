@@ -10,6 +10,7 @@ import { relayIdFor, sealPayload, openPayload } from './relay-crypto.js';
 // BRANCH_RECORDS_V1 (Задача 7) — журнал изменений ездит тем же каналом, что и справочник.
 import { buildBatch, markPublished, markConfirmed, SHIPPED } from './journal.js';
 import { applyBatch, sliceAlreadyApplied } from './records.js';
+import { SYNC_CAPS, buildVersion, notePeerCaps } from './sync-caps.js';   // FINAL_ROLES_SYNC_FIX_V1 (I4)
 // Резервная копия перед применением чужих записей — то же правило, что у справочника.
 import { createBackup, pruneBackupsByKind } from '../backup.js';
 
@@ -1015,8 +1016,13 @@ export async function publishJournal(db, dataDir, {
         : { records: batch.records, upto: batch.upto };
     }
     // generated_at — как у справочника: возраст копии виден получателю.
+    // FINAL_ROLES_SYNC_FIX_V1 (I4) — caps и app_version: что умеет эта сборка
+    // (sync-caps.js). Сосед старой сборки лишние поля не читает; сосед новой
+    // записывает их в sync_peers — по ним объединение карт решает, не потеряет
+    // ли событие здание, которое его не понимает.
     sealed = sealPayload(ctx.pairing.group_key, {
       v: 1, from: ctx.self, generated_at: now().toISOString(), acks, batches,
+      caps: SYNC_CAPS, app_version: buildVersion(),
     });
     if (!sealed) return { ok: false, reason: 'relay_no_key' };
     if (sealed.length <= maxBlobBytes) break;
@@ -1157,6 +1163,8 @@ function journalSlice(payload, peer, self) {
     // чужого здания обязана нести «данные на HH:MM», иначе картинку часовой
     // давности принимают за живую и продают занятый слот.
     generated_at: typeof payload.generated_at === 'string' ? payload.generated_at : null,
+    // FINAL_ROLES_SYNC_FIX_V1 (I4) — что сосед сказал о себе (sync-caps.js).
+    about: { caps: payload.caps, app_version: payload.app_version },
     upto: 0, seed: false, seedPage: 0, seedPages: 0,
     ack: Number.isFinite(ackUpto) && ackUpto > 0 ? Math.floor(ackUpto) : 0,
     ackPage: Number.isFinite(ackPage) && ackPage > 0 ? Math.floor(ackPage) : 0,
@@ -1297,6 +1305,9 @@ export async function fetchJournals(db, dataDir, {
     // двигает — именно поэтому «данные на 09:40» на карточке в 15:00 честно
     // кричит, что связи не было пять часов.
     notePeerSnapshot(db, peer, got.generated_at, now());
+    // FINAL_ROLES_SYNC_FIX_V1 (I4) — и что он умеет: на КАЖДЫЙ прочитанный
+    // блоб, как и возраст копии. Блоб без caps — сборка до этого правила.
+    notePeerCaps(db, peer, got.about, now());
 
     // КВИТАНЦИЯ — ПЕРВЫМ ДЕЛОМ (Задача 7b), до всякого применения и независимо
     // от того, есть ли для нас срез. Она про НАШ журнал, а не про его: сосед

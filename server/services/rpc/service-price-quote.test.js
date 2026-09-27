@@ -158,3 +158,38 @@ test('service_save: названия на uz/en хранятся; онлайн-�
   assert.deepEqual(db.prepare('SELECT name_uz, online_booking FROM services WHERE id = ?').get(id2), { name_uz: null, online_booking: 0 });
   db.close();
 });
+
+// BILLING_AUDIT_FIX_V1 (A2) — котировка знает врача строки: личная цена врача,
+// как у кассы (lineUnitPrice), а не каталог.
+test('A2: котировка с врачом отдаёт его личную цену — ту же, что потом возьмёт счёт', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO users (id, username, password_hash, role, service_rates) VALUES (7,'doc','x','doctor',?)")
+    .run(JSON.stringify([{ service_id: 50, pct: 30, price: 150000 }]));
+  db.prepare("INSERT INTO services (id, name, price) VALUES (50, 'Консультация', 100000)").run();
+  const noDoc = servicePriceQuote(db, { patient_id: 1, service_ids: [50] }, registrar).quotes[50];
+  assert.equal(noDoc.price, 100000, 'без врача — каталог');
+  const q = servicePriceQuote(db, { patient_id: 1, service_ids: [50], doctor_ids: { 50: 7 } }, registrar).quotes[50];
+  assert.equal(q.price, 150000);
+  assert.equal(q.base_price, 150000);
+  assert.equal(q.own_price, 150000);
+  const q2 = servicePriceQuote(db, { patient_id: 1, service_ids: [50], doctor_id: 7 }, registrar).quotes[50];
+  assert.equal(q2.price, 150000);
+  // Та же строка в счёте — те же 150 000.
+  const vid = db.prepare("INSERT INTO visits (patient_id, visit_date) VALUES (1, '2026-09-27T05:00:00Z')").run().lastInsertRowid;
+  const vs = db.prepare('INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total) VALUES (?,50,7,1,?,?)')
+    .run(vid, q.price, q.price).lastInsertRowid;
+  const inv = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs] }, registrar).invoice;
+  assert.equal(inv.total_amount, 150000);
+});
+
+test('A2: тариф второго визита у врача с личной ценой — цена тарифа, как в счёте', () => {
+  const db = fresh();
+  const sid = tiered(db);
+  db.prepare("INSERT INTO users (id, username, password_hash, role, service_rates) VALUES (7,'doc','x','doctor',?)")
+    .run(JSON.stringify([{ service_id: sid, price: 250000 }]));
+  pastVisit(db, { daysAgo: 3, serviceId: sid });
+  const q = servicePriceQuote(db, { patient_id: 1, service_ids: [sid], doctor_ids: { [sid]: 7 } }, registrar).quotes[sid];
+  assert.equal(q.tier, 'secondary');
+  assert.equal(q.price, 60000);
+  assert.equal(q.base_price, 250000);
+});

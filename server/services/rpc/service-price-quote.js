@@ -13,6 +13,8 @@
 import { hasAnyRole } from '../roles.js';
 import { tierFor, hasTiers } from '../domain/visit-tier.js';
 import { today, localDate } from '../domain/day.js';
+// BILLING_AUDIT_FIX_V1 (A2) — личная цена врача: то же правило, что у кассы.
+import { doctorPriceFor } from '../domain/pricing.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -21,11 +23,21 @@ export class RpcError extends Error {
 const QUOTE_ROLES = ['admin', 'registrar', 'doctor', 'nurse', 'cashier', 'callcenter'];
 
 /**
- * args: { patient_id, service_ids: [id…], visit_id?, date?: 'YYYY-MM-DD' }
+ * args: { patient_id, service_ids: [id…], visit_id?, date?: 'YYYY-MM-DD',
+ *         doctor_id?, doctor_ids?: { [service_id]: doctor_id } }
  * `date` — the day the visit is PLANNED for (the wizard books tomorrow as
  * readily as today); the window is counted to that day, and only visits up
  * to that day are «earlier». Absent → the clinic's today.
- * → { quotes: { [service_id]: { tier, price, base_price, days_since, reason, prev_day } } }
+ * → { quotes: { [service_id]: { tier, price, base_price, days_since, reason, prev_day, own_price? } } }
+ *
+ * BILLING_AUDIT_FIX_V1 (A2) — ВРАЧ СТРОКИ ВХОДИТ В ЦЕНУ. Касса считает строку
+ * через lineUnitPrice (domain/pricing.js): личная цена врача поверх каталога,
+ * а тариф второго/повторного визита — поверх обеих. Котировка без врача
+ * отдавала каталог, и быстрая регистрация показывала и печатала 100 000, пока
+ * счёт брал личные 150 000 врача (а разницу рисовала «Скидкой»). Теперь врач
+ * строки — doctor_ids[service_id], иначе doctor_id — даёт ту же цену: при
+ * первичном тарифе это его личная цена (base_price тоже), при втором и
+ * повторном — цена тарифа, как и в счёте.
  */
 export function servicePriceQuote(db, args, user) {
   if (!hasAnyRole(user, QUOTE_ROLES)) throw new RpcError('Нет доступа к ценам услуг.', 403);
@@ -53,17 +65,28 @@ export function servicePriceQuote(db, args, user) {
      ORDER BY v.visit_date DESC, vs.id DESC
      LIMIT 1`);
 
+  const byService = a.doctor_ids && typeof a.doctor_ids === 'object' ? a.doctor_ids : {};
+  const anyDoctor = Number(a.doctor_id);
+  const doctorOf = (sid) => {
+    const d = Number(byService[sid] != null ? byService[sid] : byService[String(sid)]);
+    if (Number.isInteger(d) && d > 0) return d;
+    return Number.isInteger(anyDoctor) && anyDoctor > 0 ? anyDoctor : null;
+  };
+
   const quotes = {};
   for (const id of ids) {
     const svc = getService.get(id);
     if (!svc) continue;
+    const own = doctorPriceFor(db, doctorOf(id), id);
+    const withOwn = (q) => (own === null ? q
+      : { ...q, own_price: own, base_price: own, price: q.tier === 'primary' ? own : q.price });
     if (!hasTiers(svc)) {
-      quotes[id] = { tier: 'primary', price: Number(svc.price) || 0, base_price: Number(svc.price) || 0, days_since: null, reason: 'no_tiers', prev_day: null };
+      quotes[id] = withOwn({ tier: 'primary', price: Number(svc.price) || 0, base_price: Number(svc.price) || 0, days_since: null, reason: 'no_tiers', prev_day: null });
       continue;
     }
     const prev = prevStmt.get(patientId, id, visitId, visitId, todayYmd) || null;
     const q = tierFor(svc, prev, todayYmd);
-    quotes[id] = { ...q, prev_day: prev ? prev.day : null };
+    quotes[id] = withOwn({ ...q, prev_day: prev ? prev.day : null });
   }
   return { quotes };
 }

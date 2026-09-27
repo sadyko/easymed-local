@@ -163,7 +163,9 @@ test('ставки врачей, скидки, полисы, провайдер�
     addGrants(db, 'registrar', { settings: 'edit' });
     assert.throws(() => run(db, { table: 'doctor_rates', op: 'insert', values: { doctor_id: 1, service_id: 1, percent: 30 } }, REG), refused);
     assert.throws(() => run(db, { table: 'patient_discounts', op: 'insert', values: { name: 'Акция' } }, REG), refused);
-    assert.throws(() => run(db, { table: 'payer_policies', op: 'insert', values: { name: 'Полис' } }, REG), refused);
+    // LIVE_AUDIT_FIX_V1 — регистратор заводит номер полиса при записи (имя,
+    // плательщик), но процент покрытия — только администратор.
+    assert.throws(() => run(db, { table: 'payer_policies', op: 'insert', values: { name: 'Полис', coverage_percent: 80 } }, REG), refused);
     assert.throws(() => run(db, { table: 'payment_providers', op: 'insert', values: { name: 'Payme' } }, REG), refused);
     assert.throws(() => run(db, { table: 'cashback_rules', op: 'insert', values: { name: 'Кэшбэк' } }, REG), refused);
   } finally { db.close(); }

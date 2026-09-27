@@ -20,6 +20,8 @@
 //     своих возвратов (REFUND#id, любым способом), не больше суммы счёта;
 //   • правило — действующее с наибольшим процентом (решение владельца,
 //     см. план); процент 0..100 охраняет база (мигр. 160);
+//   • CASHBACK_BY_GROUP_V1 (владелец, 2026-09-27) — правило выбирается по
+//     ГРУППЕ пациента (cashbackRuleFor ниже, мигр. 165);
 //   • возврат откатывает кэшбэк пропорционально возвращённому, но не больше,
 //     чем осталось на балансе: потраченное уже ушло в услуги;
 //   • задним числом не начисляется: счета, оплаченные до этой версии,
@@ -44,6 +46,22 @@ export function cashbackBase(db, invoice) {
   return round2(Math.max(0, Math.min(base, Number(invoice.total_amount) || 0)));
 }
 
+// CASHBACK_BY_GROUP_V1 — какое правило действует для пациента.
+//   • у пациента есть группа, и у группы есть ДЕЙСТВУЮЩЕЕ правило — только
+//     правила группы (наибольший процент). Правило группы с 0 % — явное «этой
+//     группе кэшбэка нет»: общее правило его не перебивает;
+//   • иначе (группы нет или у неё нет правил) — правила «для всех»
+//     (category_id IS NULL), наибольший процент. Старые правила — «для всех».
+export function cashbackRuleFor(db, patientId) {
+  const p = patientId ? db.prepare('SELECT category_id FROM patients WHERE id = ?').get(patientId) : null;
+  const cat = p && p.category_id != null ? p.category_id : null;
+  if (cat != null) {
+    const own = db.prepare('SELECT * FROM cashback_rules WHERE active = 1 AND category_id = ? ORDER BY percent DESC, id LIMIT 1').get(cat);
+    if (own) return own;
+  }
+  return db.prepare('SELECT * FROM cashback_rules WHERE active = 1 AND category_id IS NULL ORDER BY percent DESC, id LIMIT 1').get() || null;
+}
+
 function anyCashback(db, invoiceId) {
   return db.prepare("SELECT * FROM patient_deposits WHERE kind = 'cashback' AND invoice_id = ? ORDER BY id LIMIT 1").get(invoiceId);
 }
@@ -57,9 +75,10 @@ export function creditCashbackOnPaid(db, invoice, user) {
   db.prepare("UPDATE invoices SET cashback_evaluated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ? AND cashback_evaluated_at IS NULL").run(invoice.id);
   if (!invoice.patient_id || invoice.payer_id || invoice.sync_origin != null) return 0;
   if (String(invoice.invoice_number || '').startsWith('DEP-')) return 0;
+  if (String(invoice.invoice_number || '').startsWith('CARD-')) return 0;   // CARD_SALE_V1 — продажа карты не услуга
   if (anyCashback(db, invoice.id)) return 0;   // один раз за жизнь счёта
-  const rule = db.prepare('SELECT * FROM cashback_rules WHERE active = 1 AND percent > 0 ORDER BY percent DESC, id LIMIT 1').get();
-  if (!rule) return 0;
+  const rule = cashbackRuleFor(db, invoice.patient_id);   // CASHBACK_BY_GROUP_V1
+  if (!rule || !(Number(rule.percent) > 0)) return 0;
   const base = cashbackBase(db, invoice);
   // Третья проверка, M1 — начисление вниз, откат вверх: округление не дарит.
   const amount = Math.floor(base * Math.min(100, Number(rule.percent)) / 100 + 1e-9);
@@ -69,7 +88,7 @@ export function creditCashbackOnPaid(db, invoice, user) {
        created_by, created_by_name, received_by, received_by_name, received_at)
     VALUES (?, ?, ?, 'cashback', 'received', 'cashback', ?, ?, ?, ?, 'Cashback', ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))`)
     .run(invoice.patient_id, invoice.branch_id || null, amount, invoice.id, base,
-      `Кэшбэк ${rule.percent}% со счёта ${invoice.invoice_number || invoice.id} · cashback:${invoice.id}`,
+      `Кэшбэк ${rule.percent}% («${rule.name || ''}») со счёта ${invoice.invoice_number || invoice.id} · cashback:${invoice.id}`,
       user.id, user.id, String(user.full_name || user.username || '')));
   return amount;
 }

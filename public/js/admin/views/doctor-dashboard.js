@@ -281,18 +281,16 @@ export function tierProgressText(count, steps, personalPct = 0) {
 }
 
 /**
- * Платят ли этому врачу ПОУСЛУЖНО. DOCTOR_PAY_KPI_WIRE_V1 — у «фикс + KPI»
- * переменная часть начисляется, только если отмечен хоть один сервисный KPI;
- * один лишь «направления пациентов» переменной с услуг не даёт (вознаграждение
- * за направления — отдельная строка на вкладке «Зарплата»).
+ * Платят ли этому врачу ПОУСЛУЖНО.
+ *
+ * PAY_ALL_EARNINGS_V1 (владелец, 27.09: «fixed — just all earnings») — ВСЕГДА.
+ * Прежде оклад («fixed») и «фикс + KPI» без сервисного показателя гасили долю
+ * за услуги в кабинете (DOCTOR_PAY_KPI_WIRE_V1), и кабинет расходился с
+ * «Зарплатами врачей» и «По врачам», которые тип зарплаты не читают. Теперь
+ * итог везде один — все начисления; оклад карточки показывается сведением.
  */
 export function perServicePayApplies(doctorRow) {
-    if (!doctorRow) return false;
-    const kind = doctorRow.salary_type || '';
-    if (kind === 'fixed') return false;
-    if (kind !== 'fix_plus_kpi') return true;
-    const kpis = new Set(Array.isArray(doctorRow.kpi_links) ? doctorRow.kpi_links : []);
-    return ['consultations', 'services', 'revenue', 'lab_tests', 'surgeries'].some((k) => kpis.has(k));
+    return !!doctorRow;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { REGISTRY, tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns } from './schema-registry.js';
+import { REGISTRY, tableEntry, canRead, canWrite, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns, nonAdminColumns } from './schema-registry.js';
 
 test('users registry read columns include extra_roles', () => {
   assert.ok(readableColumns('users').includes('extra_roles'));
@@ -160,6 +160,15 @@ test('settings-match tables: admin config, FK embeds, api_tokens admin-read-only
   for (const t of ['payer_policies','payment_providers','cashback_rules','referral_source_categories','patient_discounts','doctor_rates']) {
     assert.ok(canRead(t,'registrar'), t+' staff-readable');
     assert.ok(canWrite(t,'insert','admin'), t+' admin-writable');
+    // LIVE_AUDIT_FIX_V1 — полис при записи заводит регистратура (номер,
+    // плательщик, активность); процент покрытия — только администратор.
+    if (t === 'payer_policies') {
+      assert.ok(canWrite(t,'insert','registrar'), t+' registrar inserts a policy at booking');
+      assert.deepEqual(nonAdminColumns(t,'insert','registrar'), ['name','payer_id','active'], t+' registrar: no coverage_percent');
+      assert.equal(nonAdminColumns(t,'insert','admin'), null);
+      assert.ok(!canWrite(t,'update','registrar'), t+' not registrar-updatable');
+      continue;
+    }
     assert.ok(!canWrite(t,'insert','registrar'), t+' not registrar-writable');
   }
   assert.ok(!canRead('api_tokens','registrar'));   // tokens admin-only
@@ -240,7 +249,12 @@ test('inpatient + lab-panel tables (025): staff read, correct write actors', () 
   // nurses run the inpatient screens (bed board / admission modal)
   assert.ok(canWrite('admission_prescriptions', 'insert', 'nurse'));
   assert.ok(canWrite('med_administrations', 'insert', 'nurse'));
-  assert.ok(canWrite('admission_services', 'insert', 'nurse'));
+  // INPATIENT_MONEY_FIX_V1 (D7) — строки стационара заводят только RPC (цена и
+  // склад — дело сервера); табличным путём их не заводит никто.
+  for (const role of ['admin', 'registrar', 'doctor', 'nurse', 'cashier']) {
+    assert.ok(!canWrite('admission_services', 'insert', role), role + ' inserts admission_services directly');
+  }
+  assert.ok(canWrite('admission_services', 'update', 'nurse'), 'billable / notes toggle stays');
   assert.ok(canWrite('admission_transfers', 'insert', 'nurse'));
   assert.ok(!canWrite('admission_prescriptions', 'insert', 'lab'));   // lab has no place in inpatient orders
   // LAB_PANELS_BY_SECTION_V1 — panel writes follow LAB-SECTION access (owner:

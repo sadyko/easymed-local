@@ -680,6 +680,8 @@ test('оценка страниц засева знает ровно те таб
   const { db } = clinic('seed-pages-list');
   const { pid } = seedRecords(db);
   seedMoney(db, pid);
+  // PATIENT_MERGE_BRANCHES_V1 (мигр. 168) — событие объединения карт тоже едет засевом.
+  db.prepare("INSERT INTO patient_merges (keep_uid, drop_uid) VALUES ('k', 'd')").run();
   // По одной строке в каждой таблице SHIPPED — значит страниц по одной строке
   // ровно столько, сколько таблиц. Появится новая таблица, о которой оценка не
   // знает, — равенство сломается здесь, а не на экране у владельца.
@@ -699,4 +701,35 @@ test('размер страницы 0 — оценки нет, а не деле�
   const { db } = clinic('seed-pages-zero');
   seedRecords(db);
   assert.equal(seedPagesEstimate(db, 0), 0);
+});
+
+// FINAL_ROLES_SYNC_FIX_V1 (I4) — выгрузка журнала говорит, что умеет сборка, и
+// приёмник это записывает: объединение карт по зданиям спрашивает именно здесь,
+// поймёт ли сосед событие. Блоб без caps (сборка до правила) — «не умеет».
+test('I4: выгрузка несёт caps и номер сборки; приёмник пишет их в sync_peers, блоб без caps — сброс', async () => {
+  const { notePeerCaps, SYNC_CAPS, buildVersion } = await import('./sync-caps.js');
+  const { fetchJournals } = await import('./relay.js');
+  const A = clinic('caps-a');
+  addBranchRow(A.db, 'B');
+  A.db.prepare("INSERT INTO patients (full_name) VALUES ('Иванов')").run();
+  const vendor = fakeVendor();
+  const pub = await publishJournal(A.db, A.dir, { self: 'A', fetchImpl: vendor.fetchImpl, env: {} });
+  assert.equal(pub.ok, true, JSON.stringify(pub));
+  const blob = [...vendor.store.values()][0];
+  const opened = openPayload(KEY, blob);
+  assert.deepEqual(opened.payload.caps, [...SYNC_CAPS]);
+  assert.equal(opened.payload.app_version, buildVersion());
+
+  const B = clinic('caps-b');
+  B.db.prepare("UPDATE branches SET letter = 'B' WHERE id = (SELECT MIN(id) FROM branches)").run();
+  B.db.prepare("UPDATE branch_identity SET letter = 'B' WHERE id = 1").run();
+  addBranchRow(B.db, 'A');
+  const got = await fetchJournals(B.db, B.dir, { self: 'B', fetchImpl: vendor.fetchImpl, env: {}, backupImpl: async () => {} });
+  assert.equal(got.ok, true, JSON.stringify(got));
+  const row = B.db.prepare("SELECT caps, app_version FROM sync_peers WHERE node = 'A'").get();
+  assert.deepEqual(JSON.parse(row.caps), [...SYNC_CAPS]);
+  assert.equal(row.app_version, buildVersion());
+
+  notePeerCaps(B.db, 'A', { v: 1, from: 'A' });
+  assert.equal(B.db.prepare("SELECT caps FROM sync_peers WHERE node = 'A'").get().caps, null, 'старая сборка без caps — умения неизвестны');
 });

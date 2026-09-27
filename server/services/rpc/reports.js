@@ -7,8 +7,9 @@
 // закрывал только пункт меню. run_report и owner_report проверяют группу
 // отчёта (services/report-access.js, карта REPORT_GROUP справочника прав);
 // начисления врача в кабинете — «свои или „Оплата врачей“». Без ворот
-// остаются reports_overview (дашборд), report_buildings и report_freshness —
-// в них нет строк отчётов.
+// остаются report_buildings и report_freshness — в них нет денег.
+// REPORTS_AUDIT_FIX_V1 — reports_overview (деньги за любой период) теперь за
+// группой «Выручка и счета».
 
 import { today, localDate, localMonth, inLocalRange } from '../domain/day.js';
 import { outstandingWhere } from '../domain/money.js';
@@ -16,8 +17,10 @@ import { outstandingWhere } from '../domain/money.js';
 // branch_id: см. шапку domain/buildings.js.
 import {
   buildingContext, buildingWhere, originExpr, summariseByBuilding, hasColumn,
-  normalizeLetter, stampLetter,
+  normalizeLetter, stampLetter, OWN_KEY,
 } from '../domain/buildings.js';
+import { coversAll } from '../../../public/js/admin/views/report-buildings.js';   // PAY_PERIOD_CLOSE_V1
+import { grantAllowsOr, isAdminUser } from '../grants.js';   // PAY_PERIOD_CLOSE_V1 — кто закрывает месяц
 // INVOICE_METHOD_COLUMN_V1 — словарь способов оплаты общий с браузером. Тот же
 // приём, что в services/telegram/render.js, который берёт оттуда doc-render.js:
 // модуль чистый (без DOM и без node-встроенных), поэтому грузится в обоих.
@@ -55,9 +58,12 @@ import { specialtyGroupName } from '../../../public/js/shared/specialty-list.js'
  * врачей»). Прежде любой вошедший мог спросить чужие деньги по номеру врача,
  * а после ревью I6 — любой, кому открыт хоть один отчёт (кассир ради кассы).
  */
-function assertCanSeeDoctorPay(db, user, doctorId, keys = ['reports.doctor_pay']) {
-  if (user && Number(user.id) === Number(doctorId)) return;
-  if (user && keys.some((k) => canSeeReportKey(db, user, k))) return;
+function canSeeDoctorPay(db, user, doctorId, keys = ['reports.doctor_pay']) {
+  if (user && doctorId != null && Number(user.id) === Number(doctorId)) return true;
+  return !!user && keys.some((k) => canSeeReportKey(db, user, k));
+}
+function assertCanSeeDoctorPay(db, user, doctorId, keys) {
+  if (canSeeDoctorPay(db, user, doctorId, keys)) return;
   throw new RpcError('Можно смотреть только свои начисления.', 403);
 }
 
@@ -72,6 +78,12 @@ function round2(n) {
   return Math.round(n * 100) / 100;
 }
 
+// REPORTS_AUDIT_FIX_V1 — сравнение по-русски ОДНИМ Collator на модуль:
+// localeCompare(…, 'ru') на каждой паре строк заново разбирал локаль, и
+// сортировка детализации на тысячи строк стоила секунды.
+const RU_COLLATOR = new Intl.Collator('ru');
+const ruCompare = (a, b) => RU_COLLATOR.compare(String(a || ''), String(b || ''));
+
 // Accepts a 'YYYY-MM-DD'-ish string (also tolerates a full timestamp, since
 // only the date portion is ever used in a date(col) BETWEEN comparison).
 // Anything else is rejected so a bad range never silently matches nothing
@@ -80,15 +92,22 @@ function isDateish(v) {
   return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v);
 }
 
-function resolveRange(db, args) {
+// REPORTS_AUDIT_FIX_V1 — отказ читает человек, поэтому по-русски; и «с» позже
+// «по» — тоже отказ, а не молча пустой отчёт («ничего не было» читалось бы
+// как правда). Экспортируется: «Отчёт кассира» и отчёт колл-центра проверяют
+// период тем же правилом (прежде принимали любой мусор и отдавали пустоту).
+export function resolveRange(db, args) {
   const t = today(db);
   const from = args && args.from !== undefined && args.from !== null && args.from !== '' ? args.from : t;
   const to = args && args.to !== undefined && args.to !== null && args.to !== '' ? args.to : t;
   if (!isDateish(from)) {
-    throw new RpcError('from must be a YYYY-MM-DD date.', 400);
+    throw new RpcError('Дата «с» — не дата: нужен формат ГГГГ-ММ-ДД.', 400);
   }
   if (!isDateish(to)) {
-    throw new RpcError('to must be a YYYY-MM-DD date.', 400);
+    throw new RpcError('Дата «по» — не дата: нужен формат ГГГГ-ММ-ДД.', 400);
+  }
+  if (from.slice(0, 10) > to.slice(0, 10)) {
+    throw new RpcError('Дата «с» позже даты «по» — выберите период заново.', 400);
   }
   return { from, to };
 }
@@ -101,7 +120,12 @@ function resolveRange(db, args) {
 // приехать не могли вовсе — значит, выручка соседнего здания в сводке просто
 // отсутствовала. Теперь каждая цифра считается ПО ЗДАНИЯМ, наверх отдаётся
 // итог по клинике, а рядом — разрез, где видно, чей это вклад.
-export function reportsOverview(db, args, _user) {
+export function reportsOverview(db, args, user) {
+  // REPORTS_AUDIT_FIX_V1 — сводка за ЛЮБОЙ период — это деньги клиники
+  // («Собрано», «Долг»): прежде без ворот, любому вошедшему. Экрана, который
+  // её зовёт, в браузере нет (дашборд — dashboard_summary); ворота — группа
+  // «Выручка и счета», как у отчёта владельца.
+  requireReportKind(db, user, 'owner');
   const { from, to } = resolveRange(db, args);
   const ctx = buildingContext(db);
   const all = (sql, ...p) => db.prepare(sql).all(...p);
@@ -202,7 +226,9 @@ function legacyReports(db) {
         JOIN invoices i ON i.id = p.invoice_id
         JOIN patients pt ON pt.id = i.patient_id
         LEFT JOIN users u ON u.id = p.cashier_id
-       WHERE ${inLocalRange('p.paid_at')}${bf.clause}
+       -- REPORTS_AUDIT_FIX_V1 — оплата кошельком / картой — не поступление
+       -- (DEPOSIT_REVENUE_V1): деньги пришли раньше, в день депозита.
+       WHERE ${inLocalRange('p.paid_at')} AND p.${INFLOW_SQL}${bf.clause}
        ORDER BY p.paid_at
     `,
     row: (r) => [r.date, r.patient, r.invoice, round2(r.amount), r.method, r.cashier || ''],
@@ -232,12 +258,14 @@ function legacyReports(db) {
     sql: (bf) => `
       SELECT s.name AS service,
              SUM(ii.quantity) AS qty,
-             SUM(ii.total) AS revenue,
+             SUM(ii.total - (${ITEM_DISCOUNT_SQL})) AS revenue,
              ${originExpr(db, 'invoices', 'i')} AS origin
         FROM invoice_items ii
         JOIN invoices i ON i.id = ii.invoice_id
         JOIN services s ON s.id = ii.service_id
-       WHERE ${inLocalRange('i.created_at')}${bf.clause}
+       -- REPORTS_AUDIT_FIX_V1 — те же правила, что «По услугам»: без отменённых
+       -- и возвращённых счетов, без депозита, выручка — после скидки.
+       WHERE ${inLocalRange('i.created_at')} AND ${REVENUE_INVOICE_SQL('i')} AND ${NOT_DEPOSIT_INVOICE_SQL}${bf.clause}
        GROUP BY origin, s.id, s.name
        ORDER BY revenue DESC
     `,
@@ -308,7 +336,7 @@ function legacyReports(db) {
 // Нужен стационару: счёт госпитализации пишется без филиала.
 const OWN_BRANCH_SQL = `(SELECT COALESCE(bi.branch_id, (SELECT b.id FROM branches b WHERE b.letter = bi.letter ORDER BY b.id LIMIT 1))
    FROM branch_identity bi WHERE bi.id = 1)`;
-const OWN_BRANCH_OR = (col) => `COALESCE(${col}, ${OWN_BRANCH_SQL})`;
+export const OWN_BRANCH_OR = (col) => `COALESCE(${col}, ${OWN_BRANCH_SQL})`;
 
 // Validated branch filter → { clause: ' AND col IN (?,?)', params: [...] }.
 function branchFilter(args, col) {
@@ -360,6 +388,43 @@ const LIVE_INVOICE_SQL = (i) => `(${i}.id IS NULL OR ${i}.status NOT IN ('void',
 // Условие JOIN строки счёта у выплаты: строка отменённого счёта — как её нет.
 const LIVE_ITEM_SQL = (ii) => `NOT EXISTS (SELECT 1 FROM invoices xv WHERE xv.id = ${ii}.invoice_id AND xv.status = 'void')`;
 const LIVE_VISIT_SQL = (v) => `COALESCE(${v}.status, '') NOT IN ('cancelled', 'no_show')`;
+
+// PAY_REFUND_V1 (владелец, 27.09) — «ВОЗВРАТ ЗАБИРАЕТ И ДОЛЮ ВРАЧА».
+//
+//   ПОЛНЫЙ ВОЗВРАТ — по счёту были возвраты, и денег на нём не осталось
+//     (сумма платежей ≤ 0). Выполненная строка такого счёта врачу НЕ платит
+//     ничего и не занимает номер в ступени — оставлен ли счёт неоплаченным,
+//     отменён ли он (отмена после возврата — НЕ «обычная отмена», строка не
+//     читается невыставленной), или строку отпустили со счёта
+//     (pay_refund_releases, domain/pay-releases.js). Выставят её новым
+//     счётом — платит по нему, как обычно.
+//   ЧАСТИЧНЫЙ ВОЗВРАТ — доля каждой строки счёта умножается на долю денег,
+//     оставшихся у клиники: (получено − возвращено) / MIN(получено, сумма
+//     счёта), от 0 до 1. Возврат делится на все строки счёта пропорционально:
+//     какую именно услугу возвращали, касса не записывает. Счёт, по которому
+//     вернули, а потом снова оплатили полностью, — снова 1.
+//   Счёт без возвратов — 1, как прежде: неоплаченная выполненная работа
+//     по-прежнему платит (PAY_BASIS_PERFORMED_V1).
+//   Обычная отмена неоплаченного счёта (возвратов не было) — как прежде:
+//     строка платит как невыставленная (ревью C1).
+//
+// Агрегат считается только по счетам, у которых есть хоть один возврат, —
+// остальным он не нужен, и выборка остаётся маленькой.
+const REFUND_AGG_SQL = `SELECT p.invoice_id AS invoice_id,
+         SUM(CASE WHEN p.amount > 0 THEN p.amount ELSE 0 END)  AS gross,
+         SUM(CASE WHEN p.amount < 0 THEN -p.amount ELSE 0 END) AS refunded,
+         SUM(p.amount)                                         AS net,
+         MAX(iv.total_amount)                                  AS total
+    FROM payments p JOIN invoices iv ON iv.id = p.invoice_id
+   WHERE p.invoice_id IN (SELECT invoice_id FROM payments WHERE amount < 0)
+   GROUP BY p.invoice_id`;
+const REFUND_JOIN = (alias, invoiceIdExpr) => `LEFT JOIN (${REFUND_AGG_SQL}) ${alias} ON ${alias}.invoice_id = ${invoiceIdExpr}`;
+const NOT_FULLY_REFUNDED_SQL = (rf) => `(COALESCE(${rf}.refunded, 0) <= 0 OR ${rf}.net > 0.005)`;
+const REFUND_KEEP_SQL = (rf) => `CASE WHEN COALESCE(${rf}.refunded, 0) > 0 AND MIN(${rf}.gross, ${rf}.total) > 0
+  THEN MAX(0, MIN(1, ${rf}.net * 1.0 / MIN(${rf}.gross, ${rf}.total))) ELSE 1 END`;
+// Строка, отпущенная со счёта с возвратом и ещё не выставленная заново.
+const NOT_RELEASED_SQL = (kind, line) => `NOT (${line}.invoice_item_id IS NULL AND EXISTS (
+  SELECT 1 FROM pay_refund_releases prr WHERE prr.kind = '${kind}' AND prr.line_id = ${line}.id))`;
 const OUT_PERFORMED_SQL = (vs, v, i) => `(${VS_PERFORMED_SQL(vs)} AND ${LIVE_VISIT_SQL(v)} AND ${LIVE_INVOICE_SQL(i)})`;
 const IN_DONE_SQL = (as, a) => `(${as}.performed_at IS NOT NULL AND COALESCE(${as}.billable, 1) = 1
   AND COALESCE(${a}.status, '') <> 'cancelled')`;
@@ -414,11 +479,17 @@ export const TIER_RANK_SQL = `
         JOIN visits v ON v.id = vs.visit_id
         LEFT JOIN invoice_items ti ON ti.id = vs.invoice_item_id AND ${LIVE_ITEM_SQL('ti')}
         LEFT JOIN invoices tinv ON tinv.id = ti.invoice_id
+        -- PAY_REFUND_V1 — возврат смотрится по счёту строки, отменён он или нет.
+        LEFT JOIN invoice_items rti ON rti.id = vs.invoice_item_id
+        ${REFUND_JOIN('trf', 'rti.invoice_id')}
        WHERE vs.doctor_id IS NOT NULL AND vs.service_id IS NOT NULL
+         AND vs.clinic_item_id IS NULL
          -- PAY_BASIS_PERFORMED_V1 — номер получает ВЫПОЛНЕННАЯ строка, ровно
          -- та, что платится (прежде — «оплачена ИЛИ начата»: оплаченная, но не
          -- начатая строка занимала номер, за который ещё никто не платил).
          AND ${OUT_PERFORMED_SQL('vs', 'v', 'tinv')}
+         -- PAY_REFUND_V1 — строка полностью возвращённого счёта номера не занимает.
+         AND ${NOT_FULLY_REFUNDED_SQL('trf')} AND ${NOT_RELEASED_SQL('out', 'vs')}
     ) r
     JOIN services s ON s.id = r.service_id AND s.doctor_tier_from > 0
 `;
@@ -535,21 +606,38 @@ const ITEM_DOCTOR_JOIN = `
   LEFT JOIN visit_services pvs ON pvs.id = vs.visit_service_id
   LEFT JOIN visits pv ON pv.id = pvs.visit_id
   LEFT JOIN admissions ia ON ia.id = ias.admission_id
+  -- PAY_REFUND_V1 — возвраты по счёту строки (доля врача за возвращённое).
+  ${REFUND_JOIN('irf', 'ii.invoice_id')}
 `;
 
 // DOC_RATE_JSON_V1 — процент строки: персональная ставка за услугу (таблица или
 // JSON карточки), иначе ставка по умолчанию из карточки (service_rate_default).
-const ITEM_PCT_SQL = `COALESCE(dr.percent, doc.service_rate_default, 0)`;
+//
+// PAY_GOODS_NONE_V1 (владелец, 27.09) — «на товары процента нет»: строка
+// ТОВАРА (медикамент, расходник — у строки визита clinic_item_id, у строки
+// счёта нет услуги) доли врача не даёт вовсе — ни личной ставкой, ни ставкой
+// по умолчанию, которая прежде подставлялась к любой строке с врачом. Только
+// услуги. goodsSql — признак товара там, где строка читается.
+const pctSqlFor = (goodsSql) => `CASE WHEN ${goodsSql} THEN 0 ELSE COALESCE(dr.percent, doc.service_rate_default, 0) END`;
+// FINAL_MONEY_FIX_V1 (C1) — консультация НЕ товар. Строка консультации —
+// service_id NULL + consultation_type_id у строки визита (visit-line-row.js,
+// walk-in-booking.js); у строки счёта вида приёма нет, поэтому признак берётся
+// у связанной строки визита. Прежнее «ii.service_id IS NULL» читало приём как
+// товар, и врач за консультацию не получал ничего (было 10 %, стало 0).
+// Товар — строка счёта без услуги, за которой не стоит консультация.
+const ITEM_GOODS_SQL = `(ii.service_id IS NULL AND NOT EXISTS (SELECT 1 FROM visit_services gx
+  WHERE gx.invoice_item_id = ii.id AND gx.consultation_type_id IS NOT NULL AND gx.clinic_item_id IS NULL))`;
+const ITEM_PCT_SQL = pctSqlFor(ITEM_GOODS_SQL);
 
 // DOCTOR_FIX_RATE_V1 — фиксированная ставка врача за единицу услуги (NULL, если
 // врач получает процент). Только из карточки: в таблице doctor_rates фикса нет.
-const ITEM_FIX_SQL = `dr.fix`;
+const ITEM_FIX_SQL = `CASE WHEN ${ITEM_GOODS_SQL} THEN NULL ELSE dr.fix END`;
 
 // DOCTOR_TIER_V1 — кусочки строки. Единицы строки — не меньше 1, чтобы деление
 // ниже никогда не было на ноль. PAY_BASIS_PERFORMED_V1 — смесь собирается от
 // выражения КОЛИЧЕСТВА: у строки счёта это ii.quantity, у выполненной строки
 // без счёта — количество строки визита (performedPayLines). Формула одна.
-function tierMixSql(qtyExpr) {
+function tierMixSql(qtyExpr, ITEM_PCT_SQL) {
   const qty = `MAX(COALESCE(${qtyExpr}, 1), 1)`;
   // Единицы, ушедшие за порог: 0..qty. Без ступени (tr пуст) MIN даёт NULL → 0.
   const above = `COALESCE(MAX(0, MIN(${qty}, tr.running - tr.tier_from)), 0)`;
@@ -575,7 +663,7 @@ function tierMixSql(qtyExpr) {
        + ${tierPct3} * ${above3}) / (${qty} * 1.0)) END`;
   return { qty, above, effPct };
 }
-const ITEM_TIER = tierMixSql('ii.quantity');
+const ITEM_TIER = tierMixSql('ii.quantity', ITEM_PCT_SQL);
 const ITEM_EFF_PCT_SQL = ITEM_TIER.effPct;
 
 // Invoice-level discount prorated onto this item.
@@ -626,6 +714,7 @@ const ITEM_NET_SQL = `(${ITEM_AFTER_DISCOUNT_SQL} - ${ITEM_TAX_SQL})`;
 // это оговорённая сумма за услугу, а не доля от выручки. Процент и фикс
 // взаимоисключающи: услуга с фиксом процент не платит.
 const ITEM_FEE_SQL = `CASE
+  WHEN ${ITEM_GOODS_SQL} THEN 0
   WHEN ${ITEM_FIX_SQL} IS NOT NULL THEN ${ITEM_FIX_SQL} * COALESCE(ii.quantity, 1)
   -- DOCTOR_TIER_V1 — процент строки берётся действующий (со ступенью выше порога),
   -- а не голый личный; фиксированную ставку ступень не трогает.
@@ -651,6 +740,7 @@ const LINE_DOCTOR_ID_SQL = `COALESCE(vs.doctor_id, ${INPATIENT_DOCTOR_SQL})`;
 // вовсе, и так даёт 0.
 const LINE_PERFORMED_SQL = `CASE
   WHEN i.status IN ('void', 'refunded') THEN 0
+  WHEN NOT ${NOT_FULLY_REFUNDED_SQL('irf')} THEN 0
   WHEN ias.id IS NOT NULL THEN ${IN_DONE_SQL('ias', 'ia')}
   WHEN pvs.id IS NOT NULL THEN (${VS_PERFORMED_SQL('pvs')} AND ${LIVE_VISIT_SQL('pv')})
   ELSE 0 END`;
@@ -667,11 +757,31 @@ const LINE_PERFORMED_SQL = `CASE
 // (payments) депозит по-прежнему считает; здесь — только услуги. Номер
 // депозита становится номером счёта и ездит между зданиями вместе с ним,
 // поэтому признак — префикс номера, а не patient_deposits (та не ездит).
-export const NOT_DEPOSIT_INVOICE_SQL = "COALESCE(i.invoice_number, '') NOT LIKE 'DEP-%'";
+// CARD_SALE_V1 (2026-09-27) — счёт продажи подарочной карты (CARD-…) тоже не
+// услуга: приход он даёт (платёж), а услуга, оплаченная картой, попадёт сюда
+// своей строкой при погашении. Иначе одна услуга считалась бы дважды.
+export const NOT_DEPOSIT_INVOICE_SQL = "COALESCE(i.invoice_number, '') NOT LIKE 'DEP-%' AND COALESCE(i.invoice_number, '') NOT LIKE 'CARD-%'";
+
+// REPORTS_AUDIT_FIX_V1 (27.09) — ОТМЕНЁННЫЙ И ВОЗВРАЩЁННЫЙ СЧЁТ — НЕ ВЫРУЧКА.
+//
+// Отчёты по выручке расходились между собой: «Общая выручка», «По услугам» и
+// отчёт владельца выбрасывали только отменённый счёт ('void'), а счёт с полным
+// возвратом ('refunded' — деньги отданы пациенту) оставался выручкой; «Счета»
+// складывали в итог вообще всё. Теперь правило одно на все отчёты по выручке:
+// счета 'void' и 'refunded' в сумму не входят. Частичный возврат статус счёта
+// не меняет — строки остаются выручкой, а возвращённые деньги видны в «Отчёте
+// кассира» строкой «Возврат» (правило выплаты врачу у возврата своё —
+// PAY_REFUND_V1).
+const REVENUE_INVOICE_SQL = (i) => `${i}.status NOT IN ('void', 'refunded')`;
+const REVENUE_EXCLUDED_NOTE = 'Отменённые счета и счета с полным возвратом (статус «Возврат») в выручку не входят. Частичный возврат выручку строк не уменьшает — возвращённые деньги видны в «Отчёте кассира» строками «Возврат».';
+const isDepositNumber = (n) => /^(DEP|CARD)-/.test(String(n || ''));
 
 function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
   const { from, to } = resolveRange(db, args);
-  const bf = branchFilter(args, 'i.branch_id');
+  // REPORTS_AUDIT_FIX_V1 — счёт госпитализации пишется без филиала: пустой
+  // филиал — своё здание (как у выплаты, ревью I4), иначе частичный фильтр по
+  // филиалу выбрасывал всю выручку стационара.
+  const bf = branchFilter(args, OWN_BRANCH_OR('i.branch_id'));
   // BUILDING_REPORTS_V1 — здание берётся у СЧЁТА, а не у строки счёта: деньги
   // принадлежат тому зданию, которое счёт выставило, и разносить позиции одного
   // счёта по разным зданиям было бы выдумкой.
@@ -697,7 +807,8 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
            ${LINE_PCT_SQL}                    AS doctor_pct,
            ${LINE_FIX_SQL}                    AS doctor_fix,
            -- PAY_BASIS_PERFORMED_V1 — доля только у выполненной работы.
-           CASE WHEN ${LINE_PERFORMED_SQL} THEN ${LINE_FEE_SQL} ELSE 0 END AS doctor_fee,
+           -- PAY_REFUND_V1 — частичный возврат уменьшает долю пропорционально.
+           CASE WHEN ${LINE_PERFORMED_SQL} THEN (${LINE_FEE_SQL}) * (${REFUND_KEEP_SQL('irf')}) ELSE 0 END AS doctor_fee,
            (${LINE_PERFORMED_SQL})           AS performed,
            ias.id                             AS inpatient_line_id,
            b.name                             AS branch,
@@ -724,6 +835,8 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
            rc.is_internal                     AS referral_internal,
            rs.doctor_id                       AS referral_doctor_id,
            ii.service_id                      AS service_id,
+           -- FINAL_MONEY_FIX_V1 (C1) — товар ли строка (консультация — нет).
+           CASE WHEN ${ITEM_GOODS_SQL} THEN 1 ELSE 0 END AS is_goods,
            s.type                             AS service_group,
            s.is_lab                           AS service_is_lab,
            i.admission_id                     AS admission_id,
@@ -736,7 +849,11 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
            idr.inpatient_fix                  AS inpatient_fix,   -- INPATIENT_BONUS_V1
            -- REPORTS_V2, ревью M7 — оплата счёта, разносимая на строки.
            i.paid_amount                      AS inv_paid,
-           i.total_amount                     AS inv_total
+           i.total_amount                     AS inv_total,
+           -- PAY_PERIOD_CLOSE_V1 — ключ строки вознаграждения в снимке месяца
+           -- и её филиал (фильтр отчёта по снимку).
+           ii.id                              AS invoice_item_id,
+           i.branch_id                        AS branch_id
       FROM invoice_items ii
       JOIN invoices i  ON i.id = ii.invoice_id
       JOIN patients pt ON pt.id = i.patient_id
@@ -748,7 +865,7 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
     LEFT JOIN referral_source_categories rc ON rc.id = rs.category_id
       ${ITEM_DOCTOR_JOIN}
      WHERE ${inLocalRange('i.created_at')}
-       AND i.status <> 'void' AND ${NOT_DEPOSIT_INVOICE_SQL}${bf.clause}${gf.clause}${extra.clause}
+       AND ${REVENUE_INVOICE_SQL('i')} AND ${NOT_DEPOSIT_INVOICE_SQL}${bf.clause}${gf.clause}${extra.clause}
      ORDER BY origin, i.created_at, ii.id
   `).all(from, to, ...bf.params, ...gf.params, ...extra.params);
   return rows;
@@ -781,7 +898,12 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
 // идут в отчётах отдельной строкой «<здание>, врач не указан» — по дате счёта,
 // без доли: выполнена ли там работа, отсюда не видно.
 // ---------------------------------------------------------------------------
-const PERF_TIER = tierMixSql('CASE WHEN ii.id IS NOT NULL THEN ii.quantity ELSE vs.quantity END');
+// PAY_GOODS_NONE_V1 — товар у выполненной строки: строка визита с
+// clinic_item_id или вовсе без услуги.
+// FINAL_MONEY_FIX_V1 (C1) — строка консультации (вид приёма без услуги) — не товар.
+const PERF_GOODS_SQL = `(vs.clinic_item_id IS NOT NULL
+  OR (COALESCE(ii.service_id, vs.service_id) IS NULL AND vs.consultation_type_id IS NULL))`;
+const PERF_TIER = tierMixSql('CASE WHEN ii.id IS NOT NULL THEN ii.quantity ELSE vs.quantity END', pctSqlFor(PERF_GOODS_SQL));
 
 // Общий хвост денег строки со счётом (NULL, когда счёта нет).
 const BILLED_COLUMNS_SQL = `
@@ -800,7 +922,13 @@ function outpatientPayRows(db, { from, to, doctorId, bf, gf, withoutDoctor = fal
   // DOCTOR_LINES_SPECIALTY_V1 — «По специальностям» показывает и выполненные
   // строки без врача (лаборатория и т. п.): доли у них нет (ставку брать не у
   // кого), но работа и деньги — есть. Выплате они не нужны.
-  const docRequired = withoutDoctor ? '1 = 1' : 'vs.doctor_id IS NOT NULL';
+  // REPORTS_AUDIT_FIX_V1 — строка без врача — только СВОЯ (sync_origin пуст).
+  // Строка визита соседнего здания приезжает без врача и без связи со строкой
+  // счёта (ни id сотрудников, ни id строк между зданиями не путешествуют), а
+  // деньги той же работы приезжают строкой счёта (foreignPayRows): без этого
+  // отбора «По специальностям» считал её дважды.
+  const docRequired = !withoutDoctor ? 'vs.doctor_id IS NOT NULL'
+    : hasColumn(db, 'visit_services', 'sync_origin') ? '(vs.doctor_id IS NOT NULL OR vs.sync_origin IS NULL)' : '1 = 1';
   // Строка без врача, связанная со строкой счёта, входит, только если с этой
   // строкой счёта не связана строка С врачом (та и считается), и только
   // первая такая — деньги строки счёта не удваиваются.
@@ -836,6 +964,9 @@ function outpatientPayRows(db, { from, to, doctorId, bf, gf, withoutDoctor = fal
            ${BILLED_COLUMNS_SQL},
            vs.clinic_item_id                  AS clinic_item_id,
            vs.unit_price                      AS line_unit_price,
+           -- FINAL_MONEY_FIX_V1 (C1) — вид приёма: цену строки без счёта считает
+           -- сервер (цена врача по виду приёма), как create_invoice_for_visit.
+           vs.consultation_type_id            AS consultation_type_id,
            vs.price_tier                      AS price_tier,
            -- PACKAGES_V1 — пакет строки (скидка — для строки без счёта; срок и
            -- состав проверяет payLineMoney, ревью M3).
@@ -843,13 +974,20 @@ function outpatientPayRows(db, { from, to, doctorId, bf, gf, withoutDoctor = fal
            vs.doctor_id                       AS price_doctor_id,
            ${PERF_TIER.effPct}                AS pct,
            NULL                               AS inpatient_pct,
-           ${ITEM_FIX_SQL}                    AS fix,
-           CASE WHEN tr.visit_service_id IS NULL THEN 0 ELSE ${PERF_TIER.above} END AS tier_units_above
+           CASE WHEN ${PERF_GOODS_SQL} THEN NULL ELSE dr.fix END AS fix,
+           CASE WHEN tr.visit_service_id IS NULL THEN 0 ELSE ${PERF_TIER.above} END AS tier_units_above,
+           CASE WHEN ${PERF_GOODS_SQL} THEN 1 ELSE 0 END AS goods,
+           -- PAY_REFUND_V1 — доля денег, оставшихся у клиники по счёту строки.
+           CASE WHEN i.id IS NULL THEN 1 ELSE ${REFUND_KEEP_SQL('rf')} END AS refund_keep,
+           v.branch_id                        AS branch_id
       FROM visit_services vs
       JOIN visits v ON v.id = vs.visit_id
       LEFT JOIN patients pt      ON pt.id = v.patient_id
       LEFT JOIN invoice_items ii ON ii.id = vs.invoice_item_id AND ${LIVE_ITEM_SQL('ii')}
       LEFT JOIN invoices i       ON i.id = ii.invoice_id
+      -- PAY_REFUND_V1 — возвраты по счёту строки, в том числе отменённому.
+      LEFT JOIN invoice_items rii ON rii.id = vs.invoice_item_id
+      ${REFUND_JOIN('rf', 'rii.invoice_id')}
       LEFT JOIN services s       ON s.id = COALESCE(ii.service_id, vs.service_id)
       LEFT JOIN products pr      ON pr.id = vs.clinic_item_id
       LEFT JOIN users doc        ON doc.id = vs.doctor_id
@@ -862,6 +1000,7 @@ function outpatientPayRows(db, { from, to, doctorId, bf, gf, withoutDoctor = fal
       ${noDocJoin}
      WHERE ${docRequired}
        AND ${OUT_PERFORMED_SQL('vs', 'v', 'i')}
+       AND ${NOT_FULLY_REFUNDED_SQL('rf')} AND ${NOT_RELEASED_SQL('out', 'vs')}
        AND (ii.id IS NULL OR fv.first_id = vs.id${noDocPick})
        AND ${inLocalRange('v.visit_date')}${docClause}${bf.out.clause}${gf.out.clause}
      ORDER BY v.visit_date, vs.id
@@ -902,12 +1041,17 @@ function inpatientPayRows(db, { from, to, doctorId, bf, gf }) {
            idr.inpatient_pct                  AS inpatient_pct,
            -- INPATIENT_BONUS_V1 — фикс стационарной ставки за единицу (payLineMoney).
            ${INPATIENT_FIX_SQL}               AS fix,
-           0                                  AS tier_units_above
+           0                                  AS tier_units_above,
+           0                                  AS goods,
+           CASE WHEN i.id IS NULL THEN 1 ELSE ${REFUND_KEEP_SQL('rf')} END AS refund_keep,
+           ${OWN_BRANCH_OR('i.branch_id')}    AS branch_id
       FROM admission_services ias
       JOIN admissions a          ON a.id = ias.admission_id
       LEFT JOIN patients pt      ON pt.id = a.patient_id
       LEFT JOIN invoice_items ii ON ii.id = ias.invoice_item_id AND ${LIVE_ITEM_SQL('ii')}
       LEFT JOIN invoices i       ON i.id = ii.invoice_id
+      LEFT JOIN invoice_items rii ON rii.id = ias.invoice_item_id
+      ${REFUND_JOIN('rf', 'rii.invoice_id')}
       LEFT JOIN services s       ON s.id = ias.service_id
       LEFT JOIN users idoc       ON idoc.id = ${INPATIENT_DOCTOR_SQL}
       LEFT JOIN (${INPATIENT_RATE_SQL}) idr ON idr.doctor_id = ${INPATIENT_DOCTOR_SQL}
@@ -923,6 +1067,7 @@ function inpatientPayRows(db, { from, to, doctorId, bf, gf }) {
      WHERE ${IN_MEDICAL_SQL('ias')}
        AND ${IN_DONE_SQL('ias', 'a')}
        AND ${LIVE_INVOICE_SQL('i')}
+       AND ${NOT_FULLY_REFUNDED_SQL('rf')} AND ${NOT_RELEASED_SQL('in', 'ias')}
        -- Ревью M5: строка стационара, связанная со строкой счёта ДРУГОЙ
        -- услуги, доли не даёт.
        AND (ii.id IS NULL
@@ -960,7 +1105,8 @@ function foreignPayRows(db, { from, to, bf, gf }) {
            COALESCE(s.tax_rate, 0)            AS tax_rate,
            ${BILLED_COLUMNS_SQL},
            NULL AS clinic_item_id, NULL AS line_unit_price, NULL AS price_tier, NULL AS package_id, NULL AS price_doctor_id,
-           0 AS pct, NULL AS inpatient_pct, NULL AS fix, 0 AS tier_units_above
+           0 AS pct, NULL AS inpatient_pct, NULL AS fix, 0 AS tier_units_above,
+           CASE WHEN ii.service_id IS NULL THEN 1 ELSE 0 END AS goods, 1 AS refund_keep, i.branch_id AS branch_id
       FROM invoice_items ii
       JOIN invoices i       ON i.id = ii.invoice_id
       LEFT JOIN patients pt ON pt.id = i.patient_id
@@ -988,10 +1134,12 @@ function makePayPricer(db) {
     unit(r) {
       const tiered = r.kind === 'out';
       const key = [r.kind, r.service_id, r.clinic_item_id, r.price_doctor_id, r.price_tier,
+        r.consultation_type_id ?? '',
         r.service_id == null && r.clinic_item_id == null ? r.line_unit_price : ''].join('|');
       if (!units.has(key)) {
         const row = { service_id: r.service_id, clinic_item_id: r.clinic_item_id, doctor_id: r.price_doctor_id,
-                      price_tier: r.price_tier, unit_price: r.line_unit_price };
+                      price_tier: r.price_tier, unit_price: r.line_unit_price,
+                      consultation_type_id: r.consultation_type_id ?? null };
         const service = r.service_id != null ? svcStmt.get(r.service_id) || null : null;
         const product = r.clinic_item_id != null ? prodStmt.get(r.clinic_item_id) || null : null;
         units.set(key, Number(lineUnitPrice(db, row, { service, product, tiered })) || 0);
@@ -1039,9 +1187,14 @@ function payLineMoney(r, pricer) {
   // DOCTOR_FIX_RATE_V1 — фикс за единицу и налогом не режется; иначе процент
   // от суммы после налога (DOCTOR_SHARE_AFTER_TAX_V1) — тот же порядок
   // действий, что у ITEM_FEE_SQL, поэтому у строки со счётом число прежнее.
-  const fee = r.fix != null
+  // PAY_GOODS_NONE_V1 — товар доли не даёт (SQL уже обнулил процент и фикс;
+  // здесь — последняя страховка на ту же строку).
+  // PAY_REFUND_V1 — частичный возврат: доля × доля оставшихся денег счёта.
+  const keep = r.refund_keep == null ? 1 : Number(r.refund_keep);
+  const base = Number(r.goods) === 1 ? 0 : (r.fix != null
     ? r.fix * (r.qty == null ? 1 : r.qty)
-    : net * (r.pct || 0) / 100;
+    : net * (r.pct || 0) / 100);
+  const fee = keep === 1 ? base : base * keep;
   return { amount, discount, tax, net, fee };
 }
 
@@ -1055,7 +1208,7 @@ const EMPTY_FILTER = { clause: '', params: [] };
  * @param opts.withoutDoctor — и амбулаторные строки без врача (доля 0);
  *                         только «По специальностям», выплате не нужны.
  */
-export function performedPayLines(db, { from, to, doctorId = null, kinds = ['out', 'in'], args = null, ctx = null, foreign = false, withoutDoctor = false } = {}) {
+function livePayLines(db, { from, to, doctorId = null, kinds = ['out', 'in'], args = null, ctx = null, foreign = false, withoutDoctor = false } = {}) {
   const bf = {
     out: branchFilter(args, 'v.branch_id'),
     // У строки стационара филиал — у её счёта (у госпитализации его нет).
@@ -1087,6 +1240,349 @@ export function performedPayLines(db, { from, to, doctorId = null, kinds = ['out
       doctor_fee: m.fee,
     };
   });
+}
+
+// ===========================================================================
+// PAY_PERIOD_CLOSE_V1 (владелец, 27.09) — «ПРОШЛЫЙ МЕСЯЦ ЗАМОРОЖЕН».
+//
+// Выплата врачу считается на лету по выполненной работе, и без закрытия
+// прошлый месяц жил: поздно отмеченный анализ, возврат, скидка, отмена счёта,
+// пересчёт ступени меняли сумму, которую врачу уже выплатили. Теперь:
+//
+//   ЗАКРЫТЬ МЕСЯЦ (pay_period_close) — все строки выплаты каждого врача за
+//     месяц записываются как есть (миграция 163): работа (out), стационар
+//     (in), вознаграждение за направления (ref, ref_in) и корректировки
+//     прошлых закрытых месяцев, попавшие в этот (adj). Ступени — тоже: доля
+//     каждой строки записана уже со ступенью.
+//   ЗАКРЫТЫЙ МЕСЯЦ — отчёты и кабинет берут его строки из записи, а не из
+//     живого расчёта (performedPayLines, doctorReferralEarnings). Строки без
+//     врача (лаборатория без исполнителя, строки соседнего здания) доли не
+//     несут и остаются живыми.
+//   ИЗМЕНЕНИЕ ЗАДНИМ ЧИСЛОМ — живой расчёт закрытого месяца сравнивается с
+//     записью (плюс уже выплаченные корректировки), и разница по каждой строке
+//     и каждому врачу встаёт строкой «Корректировка за <месяц>» в ПЕРВЫЙ
+//     ОТКРЫТЫЙ месяц после закрытого (при закрытии по порядку — текущий).
+//     День корректировки — сегодня, если это текущий месяц, иначе последний
+//     день того месяца; закроют и его — корректировка запишется в его запись
+//     и больше не двигается. Итог закрытого месяца не меняется никогда.
+//   ТЕКУЩИЙ МЕСЯЦ закрыть нельзя (и будущий); прошлые — в любом порядке.
+//   ОТКРЫТЬ ОБРАТНО (pay_period_reopen) — только администратор, с записью в
+//     журнале; нельзя, пока корректировки этого месяца записаны в другом
+//     закрытом месяце (сначала открывают тот) — иначе разницу заплатили бы
+//     дважды.
+// ===========================================================================
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const MONTHS_RU = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август',
+  'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+const monthOf = (day) => String(day || '').slice(0, 7);
+const monthRu = (m) => MONTHS_RU[Number(m.slice(5, 7)) - 1] + ' ' + m.slice(0, 4);
+function nextMonth(m) {
+  let y = Number(m.slice(0, 4));
+  let mm = Number(m.slice(5, 7)) + 1;
+  if (mm > 12) { mm = 1; y += 1; }
+  return y + '-' + String(mm).padStart(2, '0');
+}
+function monthBounds(m) {
+  const last = new Date(Date.UTC(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0)).getUTCDate();
+  return { from: m + '-01', to: m + '-' + String(last).padStart(2, '0') };
+}
+const currentMonth = (db) => monthOf(today(db));
+
+/** Закрытые месяцы: Map 'YYYY-MM' → строка pay_periods. */
+function closedMonthMap(db) {
+  try {
+    return new Map(db.prepare(`SELECT p.month, p.closed_at, p.closed_by, p.total, p.lines,
+                                      COALESCE(NULLIF(u.full_name, ''), u.username) AS closed_by_name
+                                 FROM pay_periods p LEFT JOIN users u ON u.id = p.closed_by
+                                ORDER BY p.month`).all().map((r) => [r.month, r]));
+  } catch (_) {
+    return new Map();   // база без миграции 163 (тесты старых миграций)
+  }
+}
+function firstOpenAfter(closed, m) {
+  let n = nextMonth(m);
+  while (closed.has(n)) n = nextMonth(n);
+  return n;
+}
+
+// Фильтры отчёта (филиалы, здания) к записанной строке — те же правила, что
+// branchFilter и buildingWhere у живого расчёта, по полям самой строки.
+function storedLineFilter(args, ctx) {
+  const ids = args && Array.isArray(args.branch_ids) ? args.branch_ids.map(Number).filter(Number.isInteger) : [];
+  const branchOk = ids.length ? (r) => r.branch_id != null && ids.includes(Number(r.branch_id)) : () => true;
+  let buildingOk = () => true;
+  const req = args && Array.isArray(args.buildings) ? args.buildings : null;
+  if (req && req.length && ctx) {
+    const keys = new Set();
+    for (const k of req) {
+      const l = normalizeLetter(k);
+      if (l) keys.add(l);
+      else if (k === OWN_KEY) keys.add(OWN_KEY);
+    }
+    if (keys.size && !coversAll([...keys], ctx.options)) buildingOk = (r) => keys.has(ctx.keyOf(r.origin));
+  }
+  return (r) => branchOk(r) && buildingOk(r);
+}
+
+/** Записанные строки закрытых месяцев за [from, to]. */
+function storedLines(db, { from, to, kinds, doctorId = null, args = null, ctx = null }) {
+  const rows = db.prepare(`
+    SELECT data FROM pay_period_lines
+     WHERE kind IN (${kinds.map(() => '?').join(',')})
+       AND date BETWEEN date(?) AND date(?)${doctorId != null ? ' AND doctor_id = ?' : ''}
+     ORDER BY id`).all(...kinds, from, to, ...(doctorId != null ? [Number(doctorId)] : []));
+  const ok = storedLineFilter(args, ctx);
+  return rows.map((r) => ({ ...JSON.parse(r.data), frozen: true })).filter(ok);
+}
+
+/**
+ * Строки выплаты за период — с учётом закрытых месяцев: у врача в закрытом
+ * месяце строки из записи, в открытом — живые (livePayLines). Параметры — те же.
+ */
+export function performedPayLines(db, opts = {}) {
+  const live = livePayLines(db, opts);
+  const closed = closedMonthMap(db);
+  if (!closed.size) return live;
+  const kinds = opts.kinds || ['out', 'in'];
+  const kept = live.filter((r) => r.doctor_id == null || !closed.has(monthOf(r.date)));
+  const frozen = storedLines(db, { from: opts.from, to: opts.to, kinds, doctorId: opts.doctorId ?? null, args: opts.args, ctx: opts.ctx });
+  if (!frozen.length && kept.length === live.length) return live;
+  return [...kept, ...frozen].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+// Вознаграждение за направления, которое идёт СОТРУДНИКУ, живым расчётом: те же
+// строки, что «Рефералы» (referralLines / inpatientReferralLines), с ключом
+// строки для записи месяца.
+function doctorReferralLive(db, { from, to, doctorId = null, args = null, ctx }) {
+  const a = { ...(args || {}), from, to, referrer: 'all' };
+  const out = referralLines(db, a, ctx, doctorId != null ? { doctorId } : {})
+    .filter((r) => r.referral_doctor_id != null)
+    .map((r) => ({ ...r, kind: 'ref', doctor_id: Number(r.referral_doctor_id), fee: r.reward,
+                   line_key: 'ref:' + r.invoice_item_id }));
+  const inn = inpatientReferralLines(db, a, ctx)
+    .filter((r) => referralDoctorOf(r) != null && (doctorId == null || referralDoctorOf(r) === Number(doctorId)))
+    .map((r) => ({ ...r, kind: 'ref_in', doctor_id: referralDoctorOf(r), fee: r.reward,
+                   line_key: 'ref_in:' + (r.line_kind === 'fixed' ? 'fix' + r.admission_id : r.item_id) + ':' + r.beneficiary_key }));
+  return [...out, ...inn];
+}
+
+/** То же с учётом закрытых месяцев. kind: 'ref' — амбулатория, 'ref_in' — стационар. */
+function doctorReferralEarnings(db, opts) {
+  const ctx = opts.ctx || buildingContext(db);
+  const live = doctorReferralLive(db, { ...opts, ctx });
+  const closed = closedMonthMap(db);
+  if (!closed.size) return live;
+  const kept = live.filter((r) => !closed.has(monthOf(r.date)));
+  return [...kept, ...storedLines(db, { ...opts, ctx, kinds: ['ref', 'ref_in'] })];
+}
+
+// Живые строки выплаты закрытых месяцев months, по ключу «строка|врач».
+function liveEntries(db, months, ctx) {
+  const sorted = [...months].sort();
+  const from = monthBounds(sorted[0]).from;
+  const to = monthBounds(sorted[sorted.length - 1]).to;
+  const set = new Set(months);
+  const byMonth = new Map(months.map((m) => [m, new Map()]));
+  const add = (r, key, fee) => {
+    const m = monthOf(r.date);
+    if (!set.has(m) || r.doctor_id == null) return;
+    const k = key + '|' + r.doctor_id;
+    const e = byMonth.get(m).get(k) || { key, doctor_id: Number(r.doctor_id), fee: 0, sample: r };
+    e.fee += Number(fee) || 0;
+    byMonth.get(m).set(k, e);
+  };
+  for (const r of livePayLines(db, { from, to })) add(r, r.kind + ':' + r.line_id, r.doctor_fee);
+  for (const r of doctorReferralLive(db, { from, to, ctx })) add(r, r.line_key, r.fee);
+  return byMonth;
+}
+
+// Что уже записано за месяцы months: сама запись месяца и корректировки к нему,
+// записанные в других закрытых месяцах.
+function bookedEntries(db, months) {
+  const byMonth = new Map(months.map((m) => [m, new Map()]));
+  const ph = months.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT month, doctor_id, kind, line_key, for_month, fee, data FROM pay_period_lines
+                            WHERE (kind <> 'adj' AND month IN (${ph})) OR (kind = 'adj' AND for_month IN (${ph}))`)
+    .all(...months, ...months);
+  for (const r of rows) {
+    const m = r.kind === 'adj' ? r.for_month : r.month;
+    const k = r.line_key + '|' + r.doctor_id;
+    const e = byMonth.get(m).get(k) || { key: r.line_key, doctor_id: r.doctor_id, fee: 0, sample: JSON.parse(r.data) };
+    e.fee += Number(r.fee) || 0;
+    byMonth.get(m).set(k, e);
+  }
+  return byMonth;
+}
+
+/** Корректировки, которые приходятся на открытый месяц target (день — date). */
+function computeAdjustments(db, closed, target, ctx, date) {
+  const sources = [...closed.keys()].filter((m) => m < target && firstOpenAfter(closed, m) === target);
+  if (!sources.length) return [];
+  const live = liveEntries(db, sources, ctx);
+  const booked = bookedEntries(db, sources);
+  const names = new Map(db.prepare("SELECT id, COALESCE(NULLIF(full_name, ''), username) AS n FROM users").all().map((u) => [u.id, u.n]));
+  const out = [];
+  for (const m of sources) {
+    const L = live.get(m);
+    const B = booked.get(m);
+    for (const k of new Set([...L.keys(), ...B.keys()])) {
+      const l = L.get(k);
+      const b = B.get(k);
+      const delta = round2((l ? l.fee : 0) - (b ? b.fee : 0));
+      if (Math.abs(delta) < 0.005) continue;
+      const e = l || b;
+      const src = e.sample || {};
+      out.push({
+        kind: 'adj', line_key: e.key, for_month: m, date,
+        source_kind: src.source_kind || src.kind || null,
+        origin: src.origin || '', branch_id: src.branch_id ?? null,
+        doctor_id: e.doctor_id, doctor: names.get(e.doctor_id) || src.doctor || null,
+        patient_id: src.patient_id ?? null, patient: src.patient || '', mrn: src.mrn || '',
+        visit_id: src.visit_id ?? null, admission_id: src.admission_id ?? null, admission_no: src.admission_no || '',
+        invoice: src.invoice || '', service: src.service || '',
+        label: 'Корректировка за ' + monthRu(m),
+        was: round2(b ? b.fee : 0), now: round2(l ? l.fee : 0),
+        qty: 0, amount: 0, discount: 0, tax: 0, net: 0, invoiced: false,
+        fee: delta, doctor_fee: delta,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Строки корректировок за период [from, to]: записанные в закрытых месяцах и
+ * живые — в открытых месяцах после закрытых.
+ */
+function payAdjustments(db, { from, to, doctorId = null, args = null, ctx = null }) {
+  const closed = closedMonthMap(db);
+  if (!closed.size) return [];
+  const c = ctx || buildingContext(db);
+  const out = storedLines(db, { from, to, kinds: ['adj'], doctorId, args, ctx: c });
+  const cur = currentMonth(db);
+  const t = today(db);
+  const lo = String(from).slice(0, 10);
+  const hi = String(to).slice(0, 10);
+  const first = [...closed.keys()][0];
+  const ok = storedLineFilter(args, c);
+  for (let m = monthOf(lo) < first ? first : monthOf(lo); m <= monthOf(hi) && m <= cur; m = nextMonth(m)) {
+    if (closed.has(m)) continue;
+    const date = m === cur ? t : monthBounds(m).to;
+    if (date < lo || date > hi) continue;
+    for (const a of computeAdjustments(db, closed, m, c, date)) {
+      if (doctorId != null && a.doctor_id !== Number(doctorId)) continue;
+      if (ok(a)) out.push(a);
+    }
+  }
+  return out;
+}
+
+// Примечание отчёта: какие месяцы периода закрыты.
+function closedMonthsNote(db, from, to) {
+  const closed = closedMonthMap(db);
+  const lo = monthOf(String(from).slice(0, 10));
+  const hi = monthOf(String(to).slice(0, 10));
+  const inRange = [...closed.values()].filter((p) => p.month >= lo && p.month <= hi);
+  if (!inRange.length) return null;
+  return 'Закрыт' + (inRange.length > 1 ? 'ы месяцы: ' : ' месяц: ')
+    + inRange.map((p) => monthRu(p.month) + ' (' + String(p.closed_at || '').slice(0, 10) + ')').join(', ')
+    + ' — их суммы показаны по записи на момент закрытия и не меняются. Изменения после закрытия — строками «Корректировка за …» в первом открытом месяце.';
+}
+
+// «Оплата врачей: Правка» (справочник прав). Ключ не настроен — как было
+// с этой кнопкой: только администратор (gate-fallbacks.js, FALLBACK_FN).
+const DOCTOR_PAY_KEY = 'reports.doctor_pay';
+function canClosePayPeriod(db, user) {
+  return !!user && grantAllowsOr(db, user, DOCTOR_PAY_KEY, 'edit', () => isAdminUser(user));
+}
+function requirePayPeriodEdit(db, user) {
+  if (canClosePayPeriod(db, user)) return;
+  throw new RpcError('Закрывать месяц оплаты врачей может администратор или тот, кому «Оплата врачей» выдана с правом правки.', 403);
+}
+function monthArg(args) {
+  const m = args && typeof args.month === 'string' ? args.month.trim() : '';
+  if (!MONTH_RE.test(m)) throw new RpcError('Месяц — в формате ГГГГ-ММ.', 400);
+  return m;
+}
+
+/** Закрыть месяц оплаты врачей: записать строки выплаты каждого врача. */
+export function payPeriodClose(db, args, user) {
+  requirePayPeriodEdit(db, user);
+  const month = monthArg(args);
+  if (month >= currentMonth(db)) throw new RpcError('Текущий месяц закрыть нельзя — он ещё идёт. Закрываются только прошедшие месяцы.', 400);
+  const run = db.transaction(() => {
+    const closed = closedMonthMap(db);
+    if (closed.has(month)) throw new RpcError('Месяц ' + monthRu(month) + ' уже закрыт.', 400);
+    const ctx = buildingContext(db);
+    const { from, to } = monthBounds(month);
+    const rows = [];
+    for (const r of livePayLines(db, { from, to })) {
+      if (r.doctor_id == null) continue;
+      const key = r.kind + ':' + r.line_id;
+      rows.push({ kind: r.kind, doctor_id: r.doctor_id, line_key: key, for_month: null, date: r.date, fee: r.doctor_fee, data: { ...r, line_key: key } });
+    }
+    for (const r of doctorReferralLive(db, { from, to, ctx })) {
+      rows.push({ kind: r.kind, doctor_id: r.doctor_id, line_key: r.line_key, for_month: null, date: r.date, fee: r.fee, data: r });
+    }
+    for (const a of computeAdjustments(db, closed, month, ctx, to)) {
+      rows.push({ kind: 'adj', doctor_id: a.doctor_id, line_key: a.line_key, for_month: a.for_month, date: a.date, fee: a.fee, data: a });
+    }
+    const total = round2(rows.reduce((n, r) => n + (Number(r.fee) || 0), 0));
+    db.prepare('INSERT INTO pay_periods (month, closed_by, total, lines) VALUES (?, ?, ?, ?)').run(month, user.id, total, rows.length);
+    const ins = db.prepare(`INSERT INTO pay_period_lines (month, doctor_id, kind, line_key, for_month, date, fee, data)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const r of rows) ins.run(month, r.doctor_id, r.kind, r.line_key, r.for_month, r.date, round2(Number(r.fee) || 0), JSON.stringify(r.data));
+    db.prepare("INSERT INTO pay_period_log (month, action, user_id, total) VALUES (?, 'close', ?, ?)").run(month, user.id, total);
+    return { month, closed: true, total, lines: rows.length,
+             doctors: new Set(rows.map((r) => r.doctor_id)).size,
+             adjustments: rows.filter((r) => r.kind === 'adj').length };
+  });
+  return run.immediate();
+}
+
+/** Открыть закрытый месяц обратно — только администратор. */
+export function payPeriodReopen(db, args, user) {
+  if (!isAdminUser(user)) throw new RpcError('Открыть закрытый месяц может только администратор.', 403);
+  const month = monthArg(args);
+  const reason = String((args && args.reason) || '').trim().slice(0, 300) || null;
+  const run = db.transaction(() => {
+    const p = db.prepare('SELECT month, total FROM pay_periods WHERE month = ?').get(month);
+    if (!p) throw new RpcError('Месяц ' + monthRu(month) + ' не закрыт.', 400);
+    const holders = db.prepare(`SELECT DISTINCT month FROM pay_period_lines WHERE kind = 'adj' AND for_month = ? ORDER BY month`)
+      .all(month).map((r) => r.month);
+    if (holders.length) {
+      throw new RpcError('Корректировки за ' + monthRu(month) + ' уже записаны в закрытом месяце: '
+        + holders.map(monthRu).join(', ') + '. Сначала откройте его.', 400);
+    }
+    db.prepare('DELETE FROM pay_period_lines WHERE month = ?').run(month);
+    db.prepare('DELETE FROM pay_periods WHERE month = ?').run(month);
+    db.prepare("INSERT INTO pay_period_log (month, action, user_id, total, note) VALUES (?, 'reopen', ?, ?, ?)").run(month, user.id, p.total, reason);
+    return { month, closed: false };
+  });
+  return run.immediate();
+}
+
+/** Какие месяцы закрыты (для «Зарплат врачей», «По врачам» и кабинета). */
+export function payPeriodStatus(db, args, user) {
+  const seeTotals = canSeeDoctorPay(db, user, null);
+  const months = [...closedMonthMap(db).values()].map((p) => ({
+    month: p.month, label: monthRu(p.month), closed_at: p.closed_at, closed_by_name: p.closed_by_name || null,
+    ...(seeTotals ? { total: round2(p.total), lines: p.lines } : {}),
+  }));
+  let log = [];
+  if (seeTotals) {
+    log = db.prepare(`SELECT l.month, l.action, l.total, l.note, l.created_at,
+                             COALESCE(NULLIF(u.full_name, ''), u.username) AS user_name
+                        FROM pay_period_log l LEFT JOIN users u ON u.id = l.user_id
+                       ORDER BY l.id DESC LIMIT 50`).all();
+  }
+  return {
+    current: currentMonth(db),
+    months,
+    log,
+    can_close: canClosePayPeriod(db, user),
+    can_reopen: !!user && isAdminUser(user),
+  };
 }
 // ---------------------------------------------------------------------------
 // PENDING_ITEMS_V1 — деньги, у которых приехала ШАПКА, но не приехали ПОЗИЦИИ.
@@ -1178,7 +1674,7 @@ function pendingItemsMoney(db, args, ctx) {
   if (!hasColumn(db, 'invoices', 'sync_origin')) return empty;
 
   const { from, to } = resolveRange(db, args);
-  const bf = branchFilter(args, 'i.branch_id');
+  const bf = branchFilter(args, OWN_BRANCH_OR('i.branch_id'));   // REPORTS_AUDIT_FIX_V1 — тот же отбор, что у отчёта
   const gf = buildingWhere(db, ctx, args, 'invoices', 'i');
   const rows = db.prepare(`
     SELECT origin, COUNT(*) AS invoices, COALESCE(SUM(gap), 0) AS amount FROM (
@@ -1197,7 +1693,7 @@ function pendingItemsMoney(db, args, ctx) {
                          ELSE 1.0 END) END) AS gap
         FROM invoices i
        WHERE i.sync_origin IS NOT NULL
-         AND i.status <> 'void'
+         AND ${REVENUE_INVOICE_SQL('i')} AND ${NOT_DEPOSIT_INVOICE_SQL}
          AND ${inLocalRange('i.created_at')}${bf.clause}${gf.clause}
     )
      -- Порог, а не «> 0»: суммы целые в сумах, а деление на subtotal — плавающее,
@@ -1274,7 +1770,8 @@ function totalRevenueReport(db, args, ctx) {
       doctor_fee: (r) => r.doctor_fee || 0,
     }),
     total_label: 'После скидки',
-    notes: [PERFORMED_NOTE, REVENUE_SHARE_NOTE, ...(hasUnattributed(ctx, src) ? [UNATTRIBUTED_NOTE] : [])],
+    notes: [PERFORMED_NOTE, REVENUE_SHARE_NOTE, REVENUE_EXCLUDED_NOTE, ...(hasUnattributed(ctx, src) ? [UNATTRIBUTED_NOTE] : [])],
+    row_doctor_ids: src.map((r) => r.doctor_id ?? null),   // REPORTS_AUDIT_FIX_V1 — маска долей
   };
 }
 
@@ -1305,7 +1802,7 @@ const REFERRER_KIND_RU = { internal: 'Внутренний', external: 'Внеш
 function referrerScope(args) {
   const v = args && args.referrer;
   if (v === undefined || v === null || v === '') return 'all';
-  if (!REFERRER_SCOPES.includes(v)) throw new RpcError('referrer must be one of: all, internal, external.', 400);
+  if (!REFERRER_SCOPES.includes(v)) throw new RpcError('Фильтр «Направившие» — «все», «внутренние» или «внешние».', 400);
   return v;
 }
 
@@ -1375,6 +1872,12 @@ function referralLines(db, args, ctx, { doctorId = null } = {}) {
     const serviceGroup = r.service_id != null ? referralGroupOf(r.service_group) : null;
     const rate = resolveReferralRate({ source: src, category: cat, serviceGroup });
     const paid = r.status === 'paid';
+    // PAY_GOODS_NONE_V1 (владелец, 27.09) — «на товары процента нет»: строка
+    // счёта без услуги (медикамент, расходник) вознаграждения ВРАЧУ-направившему
+    // не даёт. Внешнему партнёру — по его ставкам, как прежде.
+    // FINAL_MONEY_FIX_V1 (C1) — консультация (строка без услуги с видом
+    // приёма) — не товар: её вознаграждение врачу-направившему возвращено.
+    const goodsToDoctor = r.referral_doctor_id != null && Number(r.is_goods) === 1;
     out.push({
       ...r,
       internal,
@@ -1383,7 +1886,7 @@ function referralLines(db, args, ctx, { doctorId = null } = {}) {
       rate,
       paid,
       after_discount: r.amount - r.discount,
-      reward: paid ? rewardForLine(rate, { amount: r.amount, discount: r.discount, qty: r.qty }) : 0,
+      reward: paid && !goodsToDoctor ? rewardForLine(rate, { amount: r.amount, discount: r.discount, qty: r.qty }) : 0,
       where: 'out',
       beneficiary_doctor_id: r.referral_doctor_id ?? null,
     });
@@ -1466,7 +1969,8 @@ function inpatientReferralLines(db, args, ctx) {
                 WHEN ak.bed = 1 THEN 'bed'
                 ELSE 'other' END              AS line_kind,
            COALESCE(a.referral_source_id, pt.referral_source_id) AS source_id,
-           a.referring_doctor_id              AS referring_doctor_id
+           a.referring_doctor_id              AS referring_doctor_id,
+           ${OWN_BRANCH_OR('i.branch_id')}    AS branch_id
       FROM invoice_items ii
       JOIN invoices i   ON i.id = ii.invoice_id
       JOIN admissions a ON a.id = i.admission_id
@@ -1553,6 +2057,7 @@ function inpatientReferralLines(db, args, ctx) {
     const paid = r.status === 'paid';
     const base = {
       origin: r.origin, date: r.date, invoice: r.invoice, status: r.status, paid,
+      invoice_id: r.invoice_id, item_id: r.item_id, branch_id: r.branch_id,   // PAY_PERIOD_CLOSE_V1
       patient_id: r.patient_id, patient: r.patient, mrn: r.mrn,
       admission_id: r.admission_id, admission_no: r.admission_no, where: 'in',
     };
@@ -1628,6 +2133,7 @@ function referralsReport(db, args, ctx) {
     const b = buckets.get(key) || {
       origin: r.origin, source: r.referral, code: r.referral_code || '',
       kind: r.internal ? 'internal' : 'external', where: r.where,
+      doctor_id: r.beneficiary_doctor_id ?? null,   // REPORTS_AUDIT_FIX_V1 — сотрудник-получатель
       category: r.category_name, mode: r.mode,
       patients: new Set(), count: 0, amount: 0, paid: 0, reward: 0,
     };
@@ -1655,6 +2161,7 @@ function referralsReport(db, args, ctx) {
     by_building: summariseByBuilding(ctx, list, { total: (b) => b.amount, reward: (b) => b.reward }),
     total_label: 'Сумма услуг',
     notes: referralNotes(db, lines),
+    row_doctor_ids: list.map((b) => b.doctor_id),   // REPORTS_AUDIT_FIX_V1
   };
 }
 
@@ -1673,6 +2180,7 @@ function referralsDetailReport(db, args, ctx) {
     by_building: summariseByBuilding(ctx, lines, { total: (r) => r.after_discount, reward: (r) => r.reward }),
     total_label: 'Сумма после скидки',
     notes: referralNotes(db, lines),
+    row_doctor_ids: lines.map((r) => r.beneficiary_doctor_id ?? null),   // REPORTS_AUDIT_FIX_V1
   };
 }
 
@@ -1682,10 +2190,12 @@ function referralsDetailReport(db, args, ctx) {
 // и отменённых, — и его сумма не сходилась с отчётом ни на одних данных.
 export function doctorReferralReward(db, args, user) {
   const doctorId = Number(args && args.doctor_id);
-  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
-  // ROLE_REPORTS_SETTINGS_V1 — вознаграждение за направления видит и группа
-  // «Рефералы»: в её отчёте то же вознаграждение каждого врача по строкам.
-  assertCanSeeDoctorPay(db, user, doctorId, ['reports.doctor_pay', 'reports.referrals']);   // ревью I6
+  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('Врач не выбран или указан неверно.', 400);
+  // REPORTS_AUDIT_FIX_V1 — вознаграждение СОТРУДНИКА за направления — его
+  // начисление: только сам врач и «Оплата врачей». Прежде его видела и группа
+  // «Рефералы», но в её отчёте эти суммы теперь скрыты (maskDoctorPay), и
+  // кабинетный вызов открывал бы то же самое в обход.
+  assertCanSeeDoctorPay(db, user, doctorId);   // ревью I6
   const { from, to } = resolveRange(db, args);
   return doctorReferralRows(db, { from, to, doctorId });
 }
@@ -1695,7 +2205,8 @@ export function doctorReferralReward(db, args, user) {
 // оплаченные счета, по дате счёта (referralLines).
 function doctorReferralRows(db, { from, to, doctorId }) {
   const ctx = buildingContext(db);
-  const lines = referralLines(db, { from, to }, ctx, { doctorId });
+  // PAY_PERIOD_CLOSE_V1 — у закрытого месяца строки из записи месяца.
+  const lines = doctorReferralEarnings(db, { from, to, doctorId, ctx }).filter((r) => r.kind === 'ref');
   // Разделы кабинета («Вид услуги» / категория) — названиями справочников, как
   // кабинет называет их у рекомендаций: суммы раскладываются по тем же словам.
   const typeName = new Map(db.prepare('SELECT id, name FROM service_types').all().map((t) => [t.id, t.name]));
@@ -1725,7 +2236,7 @@ function doctorReferralRows(db, { from, to, doctorId }) {
 // которые клиника уже получила.
 function doctorInpatientReferralRows(db, { from, to, doctorId }) {
   const ctx = buildingContext(db);
-  const lines = inpatientReferralLines(db, { from, to }, ctx).filter((r) => referralDoctorOf(r) === Number(doctorId));
+  const lines = doctorReferralEarnings(db, { from, to, doctorId, ctx }).filter((r) => r.kind === 'ref_in');   // PAY_PERIOD_CLOSE_V1
   const rows = lines.map((r) => ({
     date: r.date, invoice: r.invoice, status: r.status, paid: r.paid,
     patient: r.patient, mrn: r.mrn || '', admission_no: r.admission_no || '',
@@ -1741,9 +2252,25 @@ function doctorInpatientReferralRows(db, { from, to, doctorId }) {
   };
 }
 
+// REPORTS_AUDIT_FIX_V1 — «Счета» ПОКАЗЫВАЮТ ВСЕ СЧЕТА, А СКЛАДЫВАЮТ ТОЛЬКО ВЫРУЧКУ.
+//
+// Итог по зданиям складывал всё подряд: отменённые счета, счета депозита
+// (DEP-…) и продажи подарочной карты (CARD-…), — и «Итого по счетам»
+// получался больше «Общей выручки» за тот же период (5 294 000 против
+// 4 794 000 на данных клиники). Отменённый счёт при этом показывал «Остаток /
+// долг» — долг, которого нет. Теперь:
+//   • отменённый и возвращённый счёт — долг 0;
+//   • строки отменённых, возвращённых счетов и счетов DEP-/CARD- остаются в
+//     списке (это история кассы), но в итог по зданиям и в строку «Итого» под
+//     таблицей НЕ входят: сервер называет их номерами строк (total_skip_rows),
+//     и таблица хаба их не складывает;
+//   • «Кто платит» — плательщик СЧЁТА (invoices.payer_id, миграция 054), а не
+//     тот, кто числится у пациента сегодня: сменил пациент страховую — старый
+//     счёт остаётся счётом прежней.
+const INVOICES_TOTAL_NOTE = 'Отменённые счета, счета с полным возвратом и счета депозита (DEP-…) и подарочных карт (CARD-…) показаны в списке, но в «Итого» и в разрез по зданиям не входят: отменённый счёт денег не принёс, а депозит и карта — предоплата, которая станет выручкой строкой услуги, когда ею заплатят.';
 function invoicesFullReport(db, args, ctx) {
   const { from, to } = resolveRange(db, args);
-  const bf = branchFilter(args, 'i.branch_id');
+  const bf = branchFilter(args, OWN_BRANCH_OR('i.branch_id'));   // REPORTS_AUDIT_FIX_V1 — стационар без филиала — свой
   const gf = buildingWhere(db, ctx, args, 'invoices', 'i');
   const rows = db.prepare(`
     SELECT ${originExpr(db, 'invoices', 'i')} AS origin,
@@ -1762,30 +2289,36 @@ function invoicesFullReport(db, args, ctx) {
       FROM invoices i
       JOIN patients pt ON pt.id = i.patient_id
       LEFT JOIN branches b ON b.id = i.branch_id
-      LEFT JOIN payers py  ON py.id = pt.payer_id
+      LEFT JOIN payers py  ON py.id = i.payer_id
       LEFT JOIN users reg  ON reg.id = i.created_by
      WHERE ${inLocalRange('i.created_at')}${bf.clause}${gf.clause}
      ORDER BY origin, i.created_at DESC
   `).all(from, to, ...bf.params, ...gf.params);
+  const outside = (r) => r.status === 'void' || r.status === 'refunded' || isDepositNumber(r.number);
+  const counted = rows.filter((r) => !outside(r));
+  const skip = [];
+  rows.forEach((r, i) => { if (outside(r)) skip.push(i); });
+  const debtOf = (r) => (r.status === 'void' || r.status === 'refunded' ? 0 : Math.max(r.total - r.paid, 0));
   return {
     columns: [BUILDING_COL, '№ счёта', 'Дата', 'Пациент', 'МРН', 'Телефон', 'Филиал', 'Кто платит',
               'Сумма без скидки', 'Скидка', 'Итого', 'Оплачено', 'Остаток / долг',
               'Статус', 'Способ оплаты', 'Дата оплаты', 'Регистратор'],
     rows: rows.map((r) => [ctx.label(r.origin), r.number || '', r.created, r.patient, r.mrn || '', r.phone || '',
       r.branch || '', r.payer || 'Пациент', round2(r.subtotal), round2(r.discount),
-      round2(r.total), round2(r.paid), round2(Math.max(r.total - r.paid, 0)),
+      round2(r.total), round2(r.paid), round2(debtOf(r)),
       INV_STATUS_RU[r.status] || r.status,
       // GROUP_CONCAT возвращает "cash,card" одной строкой — режем и отдаём в
       // общий с браузером словарь, чтобы оба отчёта «Счета» называли один и тот
       // же платёж одинаково.
       formatMethods(String(r.methods || '').split(',')),
       r.paid_at || '', r.registrar || '']),
-    by_building: summariseByBuilding(ctx, rows, {
+    by_building: summariseByBuilding(ctx, counted, {
       total: (r) => r.total || 0,
       paid: (r) => r.paid || 0,
     }),
     total_label: 'Итого по счетам',
-    notes: [],
+    total_skip_rows: skip,
+    notes: skip.length ? [INVOICES_TOTAL_NOTE] : [],
   };
 }
 
@@ -1817,7 +2350,7 @@ const CATEGORY_RU = {
 function reportCategory(args) {
   const v = args && args.category;
   if (v === undefined || v === null || v === '' || v === 'all') return null;
-  if (Array.isArray(v)) throw new RpcError('category: одна категория или all.', 400);
+  if (Array.isArray(v)) throw new RpcError('Категория — одна категория закупок или «все».', 400);
   return parseCategories(v, 'category');
 }
 /** `AND pr.procurement_category IN (?)` — или пусто, если категория не выбрана. */
@@ -1934,7 +2467,7 @@ function consumptionMovements(db, args, ctx) {
 function consumptionBy(args) {
   const v = args && args.by;
   if (v === undefined || v === null || v === '') return 'lines';
-  if (!CONSUMPTION_BY.includes(v)) throw new RpcError('by must be one of: ' + CONSUMPTION_BY.join(', ') + '.', 400);
+  if (!CONSUMPTION_BY.includes(v)) throw new RpcError('Разрез — «по движениям», «по получателям» или «по пациентам».', 400);
   return v;
 }
 
@@ -2127,24 +2660,51 @@ function expiryColumns() {
 
 const SURGERY_RE = /хирург|операц|surg|operat/i;
 
+// REPORTS_AUDIT_FIX_V1 (27.09) — ЧТО ТАКОЕ ОПЕРАЦИЯ И ЧЬИ У НЕЁ РАСХОДНИКИ.
+//
+//   ОПЕРАЦИЯ — услуга группы «Хирургия» (services.type = 'other', одна из
+//     пяти — GROUPS_FIVE) ЛИБО, как прежде, услуга со словом «операция» /
+//     «хирург» в названии. Прежде — только по названию: «Аппендэктомия» в
+//     группе «Хирургия» в отчёт не попадала.
+//   РАСХОДНИКИ — всё, израсходованное на визит (у стационара — на
+//     госпитализацию) по себестоимости: расход 'dispense' минус его отмены
+//     'void'. Прежде — только амбулатория, без отмен, и ВСЯ сумма визита
+//     ставилась КАЖДОЙ операции визита: две операции — расходники дважды.
+//     Теперь сумма визита (госпитализации) делится между его операциями
+//     отчёта пропорционально их сумме по счёту (поровну, если суммы нулевые).
+const SURGERY_NOTE = 'Операция — услуга группы «Хирургия» или услуга со словом «операция» / «хирург» в названии. Расходники — всё израсходованное на визит, у стационара — на госпитализацию (по себестоимости, за вычетом отмен); если в визите или госпитализации несколько операций, расходники делятся между ними пропорционально сумме по счёту, а не повторяются у каждой.';
+const isSurgeryLine = (r) => r.service_group === 'other' || SURGERY_RE.test(r.service || '');
+
 function surgeryProfitReport(db, args, ctx) {
-  // Consumables per visit: dispense movements reference visit_services
-  // (reference_type 'visit', reference_id = visit_service id). qty is negative
-  // on dispense; cost falls back to the product's rolling average.
-  const consumablesByVisit = new Map();
+  // Consumables per visit / admission: dispense movements reference the line
+  // (reference_type 'visit' → visit_services.id, 'admission' →
+  // admission_services.id). qty is negative on dispense and positive on its
+  // void; cost falls back to the product's rolling average.
+  const consumables = new Map();
   for (const c of db.prepare(`
-    SELECT vs2.visit_id AS visit_id,
+    SELECT CASE sm.reference_type WHEN 'visit' THEN 'v' || vs2.visit_id ELSE 'a' || as2.admission_id END AS k,
            SUM(-sm.qty * COALESCE(sm.unit_cost, pr.avg_cost, 0)) AS cost
       FROM stock_movements sm
-      JOIN visit_services vs2 ON vs2.id = sm.reference_id
       JOIN products pr ON pr.id = sm.product_id
-     WHERE sm.kind = 'dispense' AND sm.reference_type = 'visit'
-     GROUP BY vs2.visit_id
-  `).all()) consumablesByVisit.set(c.visit_id, Math.max(c.cost, 0));
+      LEFT JOIN visit_services vs2     ON sm.reference_type = 'visit'     AND vs2.id = sm.reference_id
+      LEFT JOIN admission_services as2 ON sm.reference_type = 'admission' AND as2.id = sm.reference_id
+     WHERE sm.kind IN ('dispense', 'void') AND sm.reference_type IN ('visit', 'admission')
+       AND COALESCE(vs2.visit_id, as2.admission_id) IS NOT NULL
+     GROUP BY k
+  `).all()) consumables.set(c.k, Math.max(c.cost || 0, 0));
 
   // SQLite lower() doesn't fold Cyrillic, so the «хирургия» match runs in JS.
-  const src = itemRowsQuery(db, args, ctx)
-    .filter((r) => SURGERY_RE.test(r.service || ''));
+  const src = itemRowsQuery(db, args, ctx).filter(isSurgeryLine);
+  // Ключ расходников строки: госпитализация счёта, иначе его визит.
+  const keyOf = (r) => (r.admission_id != null ? 'a' + r.admission_id : r.visit_id != null ? 'v' + r.visit_id : null);
+  const groupSum = new Map();
+  const groupN = new Map();
+  for (const r of src) {
+    const k = keyOf(r);
+    if (k == null) continue;
+    groupSum.set(k, (groupSum.get(k) || 0) + Math.max(r.amount - r.discount, 0));
+    groupN.set(k, (groupN.get(k) || 0) + 1);
+  }
   const computed = src.map((r) => {
     const invoiced = r.amount - r.discount;
     const tax = invoiced * r.tax_rate / 100;
@@ -2158,14 +2718,19 @@ function surgeryProfitReport(db, args, ctx) {
     // ноль, пока операция не выполнена: одна формула, а не вторая копия здесь.
     const surgeonFee = r.doctor_fee || 0;
     // Расходники есть только у своего здания: движения склада не ездят.
-    const products = r.visit_id != null ? (consumablesByVisit.get(r.visit_id) || 0) : 0;
+    const k = keyOf(r);
+    const pool = k != null ? (consumables.get(k) || 0) : 0;
+    const base = k != null ? groupSum.get(k) : 0;
+    const products = pool === 0 ? 0
+      : base > 0 ? pool * Math.max(invoiced, 0) / base
+      : pool / (groupN.get(k) || 1);
     const profit = invoiced - tax - surgeonFee - products;
     return { origin: r.origin, doctor: r.doctor, invoiced, profit, row: [
       ctx.label(r.origin), r.patient, r.service, round2(invoiced), r.tax_rate, round2(tax),
       round2(surgeonFee), round2(products), round2(profit),
       invoiced > 0 ? round2(profit / invoiced * 100) : 0] };
   });
-  const notes = [PERFORMED_NOTE, REVENUE_SHARE_NOTE, STOCK_LOCAL_NOTE];
+  const notes = [PERFORMED_NOTE, REVENUE_SHARE_NOTE, SURGERY_NOTE, STOCK_LOCAL_NOTE, REVENUE_EXCLUDED_NOTE];
   if (hasUnattributed(ctx, src)) notes.push(UNATTRIBUTED_NOTE);
   return {
     columns: [BUILDING_COL, 'Пациент', 'Операция', 'Сумма по счёту', 'Ставка налога (%)', 'Налог',
@@ -2177,6 +2742,7 @@ function surgeryProfitReport(db, args, ctx) {
     }),
     total_label: 'Сумма по счетам',
     notes,
+    row_doctor_ids: src.map((r) => r.doctor_id ?? null),   // REPORTS_AUDIT_FIX_V1
   };
 }
 
@@ -2234,50 +2800,73 @@ function doctorSalariesReport(db, args, ctx) {
   // (вознаграждение за амбулаторные направления в нём тоже не считается);
   // вся выплата со всеми вознаграждениями — в «По врачам» и в кабинете врача.
   // Врач, у которого в периоде только это вознаграждение, получает строку.
+  //
+  // PAY_ALL_EARNINGS_V1 (владелец, 27.09: «fixed — just all earnings») —
+  // «Итого к выплате» теперь ВСЁ, что врач заработал: доля за услуги,
+  // стационар, вознаграждение за направления (амбулаторное и в стационар) и
+  // корректировки закрытых месяцев. Тот же итог — в «По врачам», в
+  // «Детализации» и в кабинете врача; тип зарплаты (оклад / процент) на итог
+  // не влияет.
   const names = new Map(db.prepare('SELECT id, COALESCE(NULLIF(full_name, \'\'), username) AS n FROM users').all().map((u) => [u.id, u.n]));
-  for (const r of inpatientReferralLines(db, { ...args, from, to, referrer: 'all' }, ctx)) {
-    const docId = referralDoctorOf(r);
-    if (docId == null || !r.reward) continue;
-    const key = r.origin + '\u0000' + docId;
+  const groupOf = (origin, docId) => {
+    const key = origin + '\u0000' + docId;
     let g = groups.get(key);
     if (!g) {
-      g = { origin: r.origin, doctor: names.get(docId) || null, services_count: 0, after_discount: 0, pct_sum: 0, pct_n: 0,
+      g = { origin, doctor: names.get(docId) || null, services_count: 0, after_discount: 0, pct_sum: 0, pct_n: 0,
             fixed_lines: 0, fee: 0, in_count: 0, in_after_discount: 0, in_fee: 0, in_norate: 0, unbilled: 0 };
       groups.set(key, g);
     }
-    g.referral_in = (g.referral_in || 0) + r.reward;
+    return g;
+  };
+  for (const r of doctorReferralEarnings(db, { from, to, args, ctx })) {
+    if (!r.fee) continue;
+    const g = groupOf(r.origin, r.doctor_id);
+    if (r.kind === 'ref_in') g.referral_in = (g.referral_in || 0) + r.fee;
+    else g.referral = (g.referral || 0) + r.fee;
   }
+  const adjustments = payAdjustments(db, { from, to, args, ctx });
+  for (const a of adjustments) {
+    const g = groupOf(a.origin, a.doctor_id);
+    g.adj = (g.adj || 0) + a.fee;
+  }
+  const payOf = (g) => g.fee + g.in_fee + (g.referral || 0) + (g.referral_in || 0) + (g.adj || 0);
   const rows = [...groups.values()]
     // Ревью I1 (владелец: доля остаётся нулём, но об этом сказано): человек,
     // у которого в периоде только строки стационара БЕЗ его стационарной ставки
     // (медсестра нажала «Выполнить»), не показывается нулевой строкой — он
     // назван в примечании вместе с числом таких услуг.
-    .filter((g) => g.referral_in || !(g.services_count === 0 && g.in_count > 0 && g.in_norate === g.in_count))
+    .filter((g) => g.referral || g.referral_in || g.adj || !(g.services_count === 0 && g.in_count > 0 && g.in_norate === g.in_count))
     .sort((a, b) => (a.origin < b.origin ? -1 : a.origin > b.origin ? 1 : 0)
       || (b.after_discount + b.in_after_discount) - (a.after_discount + a.in_after_discount));
   const noRate = inpatientNoRateNote(lines);
+  const closedNote = closedMonthsNote(db, from, to);
   return {
     columns: [BUILDING_COL, 'Врач', 'Выполненных услуг', 'Сумма после скидки', 'Средний % врача',
               'Услуг по фикс. ставке', 'Доля врача (гонорар)',
-              'Стационар: услуг', 'Стационар: сумма после скидки', 'Стационар: гонорар', 'Итого к выплате',
-              'Из них без счёта', 'За направление в стационар'],
+              'Стационар: услуг', 'Стационар: сумма после скидки', 'Стационар: гонорар',
+              'Вознаграждение за направления', 'За направление в стационар', 'Корректировки', 'Итого к выплате',
+              'Из них без счёта'],
     // Средний % пуст, когда все строки по фиксу: '—', а не 0 («работает даром»).
     rows: rows.map((r) => [ctx.label(r.origin), doctorCell(ctx, r) || '—', r.services_count,
       round2(r.after_discount),
       r.pct_n ? round2(r.pct_sum / r.pct_n) : '—', r.fixed_lines, round2(r.fee),
-      r.in_count, round2(r.in_after_discount), round2(r.in_fee), round2(r.fee + r.in_fee), r.unbilled,
-      round2(r.referral_in || 0)]),
+      r.in_count, round2(r.in_after_discount), round2(r.in_fee),
+      round2(r.referral || 0), round2(r.referral_in || 0), round2(r.adj || 0), round2(payOf(r)), r.unbilled]),
     by_building: summariseByBuilding(ctx, rows, {
       total: (r) => (r.after_discount || 0) + (r.in_after_discount || 0),
-      fee: (r) => (r.fee || 0) + (r.in_fee || 0),
+      fee: payOf,
     }),
     total_label: 'Сумма после скидки',
-    notes: [PERFORMED_NOTE, PERFORMED_BASIS_NOTE,
+    notes: [PERFORMED_NOTE, PERFORMED_BASIS_NOTE, PAY_REFUND_NOTE, PAY_ALL_EARNINGS_NOTE,
+      ...(closedNote ? [closedNote] : []),
       ...(hasUnattributed(ctx, rows) ? [UNATTRIBUTED_NOTE] : []), ...(noRate ? [noRate] : []),
       ...(rows.some((r) => r.referral_in) ? [INPATIENT_REFERRAL_PAY_NOTE] : [])],
   };
 }
-const INPATIENT_REFERRAL_PAY_NOTE = '«За направление в стационар» — вознаграждение направившему врачу госпитализации по вкладке «Стационар» его карточки: по оплаченным счетам госпитализации, по дате счёта, как в «Рефералах». В «Итого к выплате» этого отчёта не входит — полная выплата со всеми вознаграждениями в «По врачам».';
+const INPATIENT_REFERRAL_PAY_NOTE = '«За направление в стационар» — вознаграждение направившему врачу госпитализации по вкладке «Стационар» его карточки: по оплаченным счетам госпитализации, по дате счёта, как в «Рефералах».';
+// PAY_ALL_EARNINGS_V1 / PAY_REFUND_V1 / PAY_GOODS_NONE_V1 — правила словами.
+const PAY_ALL_EARNINGS_NOTE = '«Итого к выплате» — все начисления врача: доля за услуги, стационар, вознаграждения за направления и корректировки. Тип зарплаты в карточке (оклад, процент) на итог не влияет — тот же итог в «По врачам» и в кабинете врача. Товары (медикаменты, расходники) доли врача не дают.';
+const PAY_REFUND_NOTE = 'Возврат забирает и долю врача: по счёту, деньги по которому вернули целиком, доля не начисляется (и после его отмены — тоже, пока услугу не выставят и не оплатят снова); при частичном возврате доля уменьшается в той же пропорции, в какой вернули деньги по счёту.';
 
 const INPATIENT_ROLE_RU = { performer: 'Исполнитель', ordering: 'Назначил' };
 
@@ -2356,7 +2945,7 @@ function inpatientShareReport(db, args, ctx) {
 // Ревью I6: свои начисления — врачу, чужие — «Оплате врачей» и администратору.
 export function doctorInpatientShare(db, args, user) {
   const doctorId = Number(args && args.doctor_id);
-  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
+  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('Врач не выбран или указан неверно.', 400);
   assertCanSeeDoctorPay(db, user, doctorId);   // ревью I6
   const { from, to } = resolveRange(db, args);
   const rows = performedPayLines(db, { from, to, doctorId, kinds: ['in'] }).map((r) => ({
@@ -2388,7 +2977,7 @@ export function doctorInpatientShare(db, args, user) {
 // ---------------------------------------------------------------------------
 export function doctorPaySummary(db, args, user) {
   const doctorId = Number(args && args.doctor_id);
-  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
+  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('Врач не выбран или указан неверно.', 400);
   assertCanSeeDoctorPay(db, user, doctorId);
   const { from, to } = resolveRange(db, args);
   const lines = performedPayLines(db, { from, to, doctorId });
@@ -2410,14 +2999,33 @@ export function doctorPaySummary(db, args, user) {
   const inpatientReferral = doctorInpatientReferralRows(db, { from, to, doctorId });
   // Ставка по умолчанию из карточки: кабинету — чтобы прогресс ступени видел и
   // врача без личной ставки на услугу (браузеру эта колонка не выдаётся).
-  const doc = db.prepare('SELECT service_rate_default FROM users WHERE id = ?').get(doctorId);
+  const doc = db.prepare('SELECT service_rate_default, salary_type, salary_fixed FROM users WHERE id = ?').get(doctorId);
+  // PAY_PERIOD_CLOSE_V1 — корректировки закрытых месяцев и какие месяцы
+  // периода закрыты (кабинет показывает «Месяц закрыт»).
+  const adj = payAdjustments(db, { from, to, doctorId });
+  const adjFee = round2(adj.reduce((n, a) => n + a.fee, 0));
+  const lo = monthOf(String(from).slice(0, 10));
+  const hi = monthOf(String(to).slice(0, 10));
+  const closedMonths = [...closedMonthMap(db).values()].filter((p) => p.month >= lo && p.month <= hi)
+    .map((p) => ({ month: p.month, label: monthRu(p.month), closed_at: p.closed_at }));
   return {
     from, to,
     rate_default: doc ? Number(doc.service_rate_default) || 0 : 0,
     outpatient, inpatient,
     referral,
     inpatient_referral: inpatientReferral,
-    total: round2(outpatient.fee + inpatient.fee + referral.reward + inpatientReferral.reward),
+    adjustments: {
+      count: adj.length, fee: adjFee,
+      rows: adj.map((a) => ({ date: a.date, for_month: a.for_month, label: a.label, service: a.service || '',
+                              patient: a.patient || '', invoice: a.invoice || '', was: a.was, now: a.now, fee: round2(a.fee) })),
+    },
+    closed_months: closedMonths,
+    // PAY_ALL_EARNINGS_V1 (владелец, 27.09) — итог — ВСЕ начисления, тип
+    // зарплаты на него не влияет. Оклад из карточки — только сведением
+    // (salary_fixed), в итог он не входит.
+    salary_type: doc ? doc.salary_type || null : null,
+    salary_fixed: doc ? Number(doc.salary_fixed) || 0 : 0,
+    total: round2(outpatient.fee + inpatient.fee + referral.reward + inpatientReferral.reward + adjFee),
     lines: lines.map((r) => ({
       kind: r.kind, id: r.line_id, date: r.date, status: r.line_status,
       visit_id: r.visit_id, admission_no: r.admission_no,
@@ -2430,6 +3038,7 @@ export function doctorPaySummary(db, args, user) {
       tier: Number(r.tier_units_above) > 0,
       invoiced: r.invoiced, invoice: r.invoice || '', invoice_status: r.status || null,
       doctor_role: r.doctor_role || null,
+      frozen: !!r.frozen,   // PAY_PERIOD_CLOSE_V1 — строка закрытого месяца
     })),
   };
 }
@@ -2451,7 +3060,7 @@ const PAID_SCOPES = ['all', 'paid'];
 function paidScope(args) {
   const v = args && args.paid;
   if (v === undefined || v === null || v === '') return 'all';
-  if (!PAID_SCOPES.includes(v)) throw new RpcError('paid must be one of: all, paid.', 400);
+  if (!PAID_SCOPES.includes(v)) throw new RpcError('Фильтр «Счета» — «все счета» или «только оплаченные».', 400);
   return v;
 }
 // Группа — одна из пяти (services.type), подписью раздела каталога
@@ -2460,7 +3069,7 @@ const SERVICE_GROUPS = ['consultation', 'lab', 'imaging', 'procedure', 'other'];
 function groupFilter(args) {
   const v = args && args.group;
   if (v === undefined || v === null || v === '' || v === 'all') return null;
-  if (!SERVICE_GROUPS.includes(v)) throw new RpcError('group must be one of: all, ' + SERVICE_GROUPS.join(', ') + '.', 400);
+  if (!SERVICE_GROUPS.includes(v)) throw new RpcError('Группа услуг — одна из пяти групп каталога или «все».', 400);
   return categoryOf({ type: v });
 }
 const lineGroup = (r) => (r.service_id == null && !r.service_group
@@ -2513,7 +3122,7 @@ function byServicesReport(db, args, ctx) {
   const list = [...buckets.values()].sort((a, b) =>
     (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
     || order(a.group) - order(b.group) || b.gross - a.gross);
-  const notes = [PERFORMED_NOTE, REVENUE_SHARE_NOTE, LINE_PAID_NOTE];
+  const notes = [PERFORMED_NOTE, REVENUE_SHARE_NOTE, LINE_PAID_NOTE, REVENUE_EXCLUDED_NOTE];
   if (hasUnattributed(ctx, src)) notes.push(UNATTRIBUTED_NOTE);
   return {
     columns: [BUILDING_COL, 'Группа', 'Услуга', 'Где', 'Кол-во', 'Сумма', 'Скидка', 'Налог',
@@ -2552,7 +3161,7 @@ function doctorFilterArg(args) {
   const v = args && args.doctor_id;
   if (v === undefined || v === null || v === '' || v === 'all') return null;
   const n = Number(v);
-  if (!Number.isInteger(n) || n <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
+  if (!Number.isInteger(n) || n <= 0) throw new RpcError('Врач не выбран или указан неверно.', 400);
   return n;
 }
 
@@ -2571,14 +3180,24 @@ function doctorLines(db, args, ctx, doctorId = null) {
   const noRateOnly = inpatientRateMissing;
   const keep = new Set();
   for (const r of lines) if (!noRateOnly(r)) keep.add(doctorKey(ctx, r.origin, r.doctor_id));
-  return lines.filter((r) => keep.has(doctorKey(ctx, r.origin, r.doctor_id)));
+  const out = lines.filter((r) => keep.has(doctorKey(ctx, r.origin, r.doctor_id)));
+  // REPORTS_AUDIT_FIX_V1 — все строки периода едут рядом: примечанию о строках
+  // без стационарной ставки (doctorNotes) они нужны, и второй расчёт
+  // performedPayLines ради него удваивал время отчёта.
+  Object.defineProperty(out, 'allLines', { value: lines, enumerable: false });
+  return out;
 }
 function doctorNotes(db, args, ctx, lines, doctorId = null) {
   const { from, to } = resolveRange(db, args);
   // Примечание о строках без стационарной ставки — по ВСЕМ строкам периода
-  // (doctorLines уже убрал людей, у которых других строк нет).
-  const noRate = inpatientNoRateNote(performedPayLines(db, { from, to, doctorId, kinds: ['in'], args, ctx }));
-  const notes = [PERFORMED_NOTE, PERFORMED_BASIS_NOTE, DOCTOR_PAY_NOTE, REFERRAL_PAID_NOTE, LINE_PAID_NOTE];
+  // (doctorLines уже убрал людей, у которых других строк нет). Строки — те же,
+  // что у отчёта (lines.allLines), а не второй расчёт.
+  const all = lines && lines.allLines ? lines.allLines
+    : performedPayLines(db, { from, to, doctorId, kinds: ['in'], args, ctx });
+  const noRate = inpatientNoRateNote(all.filter((r) => r.kind === 'in'));
+  const notes = [PERFORMED_NOTE, PERFORMED_BASIS_NOTE, DOCTOR_PAY_NOTE, REFERRAL_PAID_NOTE, LINE_PAID_NOTE, PAY_REFUND_NOTE, PAY_ALL_EARNINGS_NOTE];
+  const closedNote = closedMonthsNote(db, from, to);   // PAY_PERIOD_CLOSE_V1
+  if (closedNote) notes.push(closedNote);
   if (hasUnattributed(ctx, lines)) notes.push(UNATTRIBUTED_NOTE);
   if (noRate) notes.push(noRate);
   return notes;
@@ -2596,7 +3215,7 @@ function byDoctorsReport(db, args, ctx) {
       buckets.set(key, {
         origin, doctor_id: doctorId, doctor: doctor || (doctorId != null ? names.get(doctorId) : null) || null,
         patients: new Set(), visits: new Set(), admissions: new Set(), count: 0,
-        billed: 0, paid: 0, fee_out: 0, fee_in: 0, referral: 0, referral_in: 0,
+        billed: 0, paid: 0, fee_out: 0, fee_in: 0, referral: 0, referral_in: 0, adj: 0,
       });
     }
     return buckets.get(key);
@@ -2618,18 +3237,18 @@ function byDoctorsReport(db, args, ctx) {
   // Вознаграждение врача как направившего — только у внутренних источников,
   // связанных с сотрудником. Врач, который в периоде сам ничего не оказал, но
   // направлял, тоже получает строку: ему есть что платить.
-  for (const r of referralLines(db, { ...args, referrer: 'all' }, ctx)) {
-    if (r.referral_doctor_id == null || !r.reward) continue;
-    bucket(r.origin, r.referral_doctor_id, null).referral += r.reward;
-  }
   // INPATIENT_BONUS_V1 — «За направление в стационар»: строки «Рефералов» со
   // стационара, которые идут сотруднику (направивший врач госпитализации).
-  for (const r of inpatientReferralLines(db, { ...args, referrer: 'all' }, ctx)) {
-    const docId = referralDoctorOf(r);
-    if (docId == null || !r.reward) continue;
-    bucket(r.origin, docId, null).referral_in += r.reward;
+  // PAY_PERIOD_CLOSE_V1 — у закрытого месяца — из записи месяца.
+  const { from, to } = resolveRange(db, args);
+  for (const r of doctorReferralEarnings(db, { from, to, args, ctx })) {
+    if (!r.fee) continue;
+    if (r.kind === 'ref_in') bucket(r.origin, r.doctor_id, null).referral_in += r.fee;
+    else bucket(r.origin, r.doctor_id, null).referral += r.fee;
   }
-  const payOf = (b) => b.fee_out + b.fee_in + b.referral + b.referral_in;
+  // PAY_PERIOD_CLOSE_V1 — корректировки закрытых месяцев.
+  for (const a of payAdjustments(db, { from, to, args, ctx })) bucket(a.origin, a.doctor_id, null).adj += a.fee;
+  const payOf = (b) => b.fee_out + b.fee_in + b.referral + b.referral_in + b.adj;
   const list = [...buckets.values()].sort((a, b) =>
     (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
     || payOf(b) - payOf(a) || b.billed - a.billed);
@@ -2637,10 +3256,10 @@ function byDoctorsReport(db, args, ctx) {
   return {
     columns: [BUILDING_COL, 'Врач', 'Пациентов', 'Визитов', 'Госпитализаций', 'Услуг', 'Выставлено',
 'Оплачено (доля оплаты счёта)', 'Доля за услуги', 'Стационарная доля', 'Вознаграждение за направления',
-      'За направление в стационар', 'Итого к выплате'],
+      'За направление в стационар', 'Корректировки', 'Итого к выплате'],
     rows: list.map((b) => [ctx.label(b.origin), doctorCell(ctx, b) || '—', b.patients.size, b.visits.size,
       b.admissions.size, b.count, round2(b.billed), round2(b.paid), round2(b.fee_out), round2(b.fee_in),
-      round2(b.referral), round2(b.referral_in), round2(payOf(b))]),
+      round2(b.referral), round2(b.referral_in), round2(b.adj), round2(payOf(b))]),
     by_building: summariseByBuilding(ctx, list, {
       total: (b) => b.billed,
       fee: payOf,
@@ -2674,7 +3293,7 @@ function doctorServicesReport(db, args, ctx) {
   }
   const list = [...buckets.values()].sort((a, b) =>
     (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
-    || String(a.doctor || '').localeCompare(String(b.doctor || ''), 'ru') || b.billed - a.billed);
+    || ruCompare(a.doctor, b.doctor) || b.billed - a.billed);
   const notes = doctorNotes(db, args, ctx, lines, doctorId);
   return {
     columns: [BUILDING_COL, 'Врач', 'Услуга', 'Где', 'Пациентов', 'Кол-во', 'Выставлено', 'Оплачено (доля оплаты счёта)', 'Доля врача'],
@@ -2705,22 +3324,44 @@ function payRateCell(r) {
 }
 const DOCTOR_LINES_NOTE = 'Строка — одна выполненная услуга. «Сумма после скидки» — со скидкой счёта, а у строки без счёта — со скидкой категории пациента или пакета (большей из двух), как её выставит счёт. Сумма «Доли врача» по врачу равна его доле в виде «Врачи» и в «Зарплатах врачей».';
 
+// PAY_ALL_EARNINGS_V1 — «Детализация» показывает ВСЕ начисления врача, как
+// «Итого к выплате»: кроме строк работы — строки вознаграждения за
+// направления и строки корректировок закрытых месяцев. Сумма «Доли врача» по
+// врачу = «Итого к выплате» в «По врачам», в «Зарплатах врачей» и в кабинете.
+const EXTRA_WHERE_RU = { ref: 'Направление', ref_in: 'Направление в стационар', adj: 'Корректировка' };
+function doctorExtraLines(db, args, ctx, doctorId) {
+  const { from, to } = resolveRange(db, args);
+  const names = new Map(db.prepare("SELECT id, COALESCE(NULLIF(full_name, ''), username) AS n FROM users").all().map((u) => [u.id, u.n]));
+  const refs = doctorReferralEarnings(db, { from, to, doctorId, args, ctx })
+    .filter((r) => r.fee)
+    .map((r) => ({ ...r, doctor: names.get(r.doctor_id) || null, extra: r.kind, doctor_fee: r.fee, amount: 0, discount: 0 }));
+  const adjs = payAdjustments(db, { from, to, doctorId, args, ctx })
+    .map((a) => ({ ...a, extra: 'adj', service: a.label + (a.service ? ': ' + a.service : '') }));
+  return [...refs, ...adjs];
+}
+
 function doctorLinesReport(db, args, ctx) {
   const doctorId = doctorFilterArg(args);
   const lines = doctorLines(db, args, ctx, doctorId);
-  const list = [...lines].sort((a, b) =>
+  const extra = doctorExtraLines(db, args, ctx, doctorId);
+  const list = [...lines, ...extra].sort((a, b) =>
     (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
-    || String(a.doctor || '').localeCompare(String(b.doctor || ''), 'ru')
-    || String(a.date || '').localeCompare(String(b.date || ''))
+    || ruCompare(a.doctor, b.doctor)
+    || (String(a.date || '') < String(b.date || '') ? -1 : String(a.date || '') > String(b.date || '') ? 1 : 0)
     || (a.kind === b.kind ? 0 : a.kind === 'out' ? -1 : 1)
     || (Number(a.line_id) || 0) - (Number(b.line_id) || 0));
   return {
     columns: [BUILDING_COL, 'Дата', 'Врач', 'Пациент', 'Карта', 'Услуга', 'Где', 'Кол-во',
               'Сумма после скидки', '№ счёта', 'Статус счёта', 'Оплачено (доля оплаты счёта)', 'Ставка', 'Доля врача'],
-    rows: list.map((r) => [ctx.label(r.origin), r.date || '', doctorCell(ctx, r) || '—', r.patient || '', r.mrn || '',
-      r.service || '—', WHERE_RU[r.kind === 'in' ? 'in' : 'out'], Number(r.qty) || 1,
-      round2((r.amount || 0) - (r.discount || 0)), r.invoice || '', payStateRu(r), round2(linePaid(r)),
-      payRateCell(r), round2(r.doctor_fee || 0)]),
+    rows: list.map((r) => (r.extra
+      ? [ctx.label(r.origin), r.date || '', doctorCell(ctx, r) || '—', r.patient || '', r.mrn || '',
+        r.service || '—', EXTRA_WHERE_RU[r.extra], r.extra === 'adj' ? 0 : Number(r.qty) || 1,
+        0, r.invoice || '', r.extra === 'adj' ? '' : (INV_STATUS_RU[r.status] || r.status || ''), 0,
+        r.extra === 'adj' ? '—' : rateText(r.rate), round2(r.doctor_fee || 0)]
+      : [ctx.label(r.origin), r.date || '', doctorCell(ctx, r) || '—', r.patient || '', r.mrn || '',
+        r.service || '—', WHERE_RU[r.kind === 'in' ? 'in' : 'out'], Number(r.qty) || 1,
+        round2((r.amount || 0) - (r.discount || 0)), r.invoice || '', payStateRu(r), round2(linePaid(r)),
+        payRateCell(r), round2(r.doctor_fee || 0)])),
     by_building: summariseByBuilding(ctx, list, {
       total: (r) => (r.amount || 0) - (r.discount || 0),
       fee: (r) => r.doctor_fee || 0,
@@ -2785,7 +3426,7 @@ function bySpecialtyReport(db, args, ctx) {
   }
   // Специальности по алфавиту; «не указана» и «без врача» — в конце.
   const rank = (spec) => (spec === NO_DOCTOR_GROUP ? 2 : spec === NO_SPECIALTY_GROUP ? 1 : 0);
-  const bySpec = (a, b) => rank(a) - rank(b) || a.localeCompare(b, 'ru');
+  const bySpec = (a, b) => rank(a) - rank(b) || ruCompare(a, b);
   const list = [...buckets.values()].sort((a, b) =>
     (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
     || bySpec(a.spec, b.spec) || b.amount - a.amount || (a.where === b.where ? 0 : a.where === 'out' ? -1 : 1));
@@ -2797,7 +3438,7 @@ function bySpecialtyReport(db, args, ctx) {
   if (noSpecDoctors.size) {
     const n = noSpecDoctors.size;
     notes.push('У ' + n + ' ' + pluralRu(n, 'врача', 'врачей', 'врачей') + ' не указана специальность ('
-      + [...noSpecDoctors.values()].sort((a, b) => a.localeCompare(b, 'ru')).join(', ')
+      + [...noSpecDoctors.values()].sort(ruCompare).join(', ')
       + ') — их услуги в группе «' + NO_SPECIALTY_GROUP + '». Специальность задаётся в карточке сотрудника.');
   }
   if (hasUnattributed(ctx, lines)) notes.push(UNATTRIBUTED_NOTE);
@@ -2826,14 +3467,14 @@ const REPORT_CHOICES = {
         OR id IN (SELECT DISTINCT doctor_id FROM visit_services WHERE doctor_id IS NOT NULL)
         OR id IN (SELECT DISTINCT COALESCE(performer_id, doctor_id) FROM admission_services
                    WHERE COALESCE(performer_id, doctor_id) IS NOT NULL)
-  `).all().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ru'))
+  `).all().sort((a, b) => ruCompare(a.name, b.name))
     .map((u) => [String(u.id), u.name || '—']),
 };
 export function reportChoices(db, args, user) {
   const kind = args && args.kind;
   const arg = args && args.arg;
-  if (!Object.prototype.hasOwnProperty.call(REPORTS_RU, kind)) throw new RpcError('unknown report kind: ' + kind, 400);
-  if (!Object.prototype.hasOwnProperty.call(REPORT_CHOICES, arg)) throw new RpcError('unknown report option: ' + arg, 400);
+  if (!Object.prototype.hasOwnProperty.call(REPORTS_RU, kind)) throw new RpcError('Неизвестный отчёт: ' + kind + '. Обновите страницу.', 400);
+  if (!Object.prototype.hasOwnProperty.call(REPORT_CHOICES, arg)) throw new RpcError('Неизвестный фильтр отчёта: ' + arg + '.', 400);
   requireReportKind(db, user, kind);
   return { choices: REPORT_CHOICES[arg](db) };
 }
@@ -2867,7 +3508,7 @@ const OWNER_M_RU = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 
 export function ownerReport(db, args, user) {
   requireReportKind(db, user, 'owner');   // ROLE_REPORTS_SETTINGS_V1 — «Выручка и счета»
   const { from, to } = resolveRange(db, args);
-  const bf = branchFilter(args, 'i.branch_id');
+  const bf = branchFilter(args, OWN_BRANCH_OR('i.branch_id'));   // REPORTS_AUDIT_FIX_V1 — стационар без филиала — свой
   // BUILDING_REPORTS_V1 — отчёт владельца тоже смотрит на клинику целиком:
   // фильтр по зданиям и разрез рядом с KPI. Без этого «Общая выручка» на
   // главном экране владельца показывала выручку одного здания и называла её
@@ -2879,9 +3520,10 @@ export function ownerReport(db, args, user) {
     FROM invoice_items ii
     JOIN invoices i  ON i.id = ii.invoice_id
     JOIN patients pt ON pt.id = i.patient_id
-    LEFT JOIN payers py ON py.id = pt.payer_id
+    -- REPORTS_AUDIT_FIX_V1 — плательщик СЧЁТА (мигр. 054), а не нынешний у пациента.
+    LEFT JOIN payers py ON py.id = i.payer_id
     LEFT JOIN services s ON s.id = ii.service_id
-   WHERE i.status <> 'void' AND ${NOT_DEPOSIT_INVOICE_SQL}${bf.clause}${gf.clause}`;   // DEPOSIT_WALLET_V1
+   WHERE ${REVENUE_INVOICE_SQL('i')} AND ${NOT_DEPOSIT_INVOICE_SQL}${bf.clause}${gf.clause}`;   // DEPOSIT_WALLET_V1
 
   const k = db.prepare(`
     SELECT COALESCE(SUM(ii.total - ${ITEM_DISCOUNT_SQL}), 0) AS revenue, COUNT(ii.id) AS count
@@ -2964,6 +3606,94 @@ export function ownerReport(db, args, user) {
   };
 }
 
+// REPORTS_AUDIT_FIX_V1 (27.09) — ДОЛИ ВРАЧЕЙ — ЭТО «ОПЛАТА ВРАЧЕЙ».
+//
+// Группа «Оплата врачей» закрывала «Зарплаты врачей», но те же деньги стояли
+// колонками в отчётах других групп: «Доля врача» и «Ставка врача» в «Общей
+// выручке», «Гонорар хирурга» в «Рентабельности операций», доля врача по
+// услуге и специальности, вознаграждение СОТРУДНИКА за направления в
+// «Рефералах». Кассир, которому выдали «Выручку и счета», читал зарплату
+// каждого врача построчно.
+//
+// Теперь роль БЕЗ «Оплаты врачей» получает эти колонки пустыми («—»):
+//   • построчные отчёты (выручка, операции, рефералы) — у строки чужого врача;
+//     свою строку врач видит всегда, строку без врача-получателя (внешний
+//     партнёр) — все, как прежде;
+//   • сводные (по услугам, по специальностям) — целиком: в сумме по услуге
+//     смешаны доли разных врачей. «Остаток клинике» скрыт вместе с долей —
+//     иначе доля читалась бы вычитанием.
+// Разрез по зданиям теряет те же суммы, примечание говорит, почему пусто.
+// FINAL_MONEY_FIX_V1 (I5) — у операции гонорар = сумма − налог − расходники −
+// прибыль: при открытых «Прибыли клиники» и «Марже» скрытый гонорар читался
+// вычитанием. Поэтому у чужой строки скрыты и они, а разрез по зданиям теряет
+// прибыль. Сумма, налог и расходники остаются — это выручка и склад.
+const PAY_MASK = {
+  total_revenue:    { cols: ['Ставка врача', 'Доля врача'], by: ['doctor_fee'] },
+  surgery_profit:   { cols: ['Гонорар хирурга', 'Прибыль клиники', 'Маржа (%)'], by: ['profit'] },
+  referrals:        { cols: ['Эфф. %', 'Вознаграждение'], by: ['reward'] },
+  referrals_detail: { cols: ['Ставка', 'Вознаграждение'], by: ['reward'] },
+  by_services:      { cols: ['Доля врача', 'Остаток клинике'], by: ['fee'] },
+  by_specialty:     { cols: ['Доля врача'], by: ['fee'], specialtyNotes: true },
+};
+const PAY_MASK_NOTE = 'Доли и вознаграждения врачей скрыты («—»): их видит роль с группой «Оплата врачей» («Настройки → Роли»). Свои начисления врач видит всегда.';
+
+function maskDoctorPay(db, user, kind, report, rowDoctorIds) {
+  const spec = PAY_MASK[kind];
+  if (!spec || canSeeDoctorPay(db, user, null)) return report;   // «Оплата врачей» (или администратор)
+  const me = user && user.id != null ? Number(user.id) : null;
+  const idx = spec.cols.map((c) => report.columns.indexOf(c)).filter((i) => i >= 0);
+  const perRow = Array.isArray(rowDoctorIds);
+  let masked = 0;
+  const rows = report.rows.map((row, i) => {
+    if (perRow) {
+      const doc = rowDoctorIds[i];
+      if (doc == null || Number(doc) === me) return row;
+    }
+    masked += 1;
+    const copy = row.slice();
+    for (const j of idx) copy[j] = null;
+    return copy;
+  });
+  if (!masked) return report;
+  const by_building = (report.by_building || []).map((b) => {
+    const copy = { ...b };
+    for (const k of spec.by) delete copy[k];
+    return copy;
+  });
+  let notes = report.notes || [];
+  // FINAL_MONEY_FIX_V1 (M2) — и отрицательная доля («-5 000»), и любые пробелы
+  // между разрядами (обычный, неразрывный, узкий).
+  if (spec.specialtyNotes) notes = notes.map((n) => n.replace(/, доля врачей [-−]?[\d\s\u00a0\u202f]+ сум\./, '.'));
+  return { ...report, rows, by_building, notes: [...notes, PAY_MASK_NOTE] };
+}
+
+// REPORTS_AUDIT_FIX_V1 — КАКИЕ КОЛОНКИ СКЛАДЫВАЕТ «ИТОГО» ПОД ТАБЛИЦЕЙ.
+//
+// Хаб угадывал это по заголовку (report-totals.js) и складывал всё числовое,
+// кроме процентов и дат: «Цена», «Цена за ед.», «Себестоимость ед.», «Дней до
+// срока», «Пациентов» (один пациент — в нескольких строках), количества
+// товара в разных единицах (шт + мл + упак) — и печатал под ними «итог»,
+// который выглядит настоящим. Теперь список СКЛАДЫВАЕМЫХ колонок называет
+// сервер — тот, кто знает, что в колонке: summable_columns в ответе
+// run_report. Деньги (в том числе «доли») складываются; цены за единицу,
+// ставки, счётчики РАЗНЫХ пациентов/визитов/госпитализаций и количества
+// склада — нет.
+const NOT_SUMMABLE_COLS = new Set([
+  'Цена', 'Цена за ед.', 'Себестоимость ед.', 'Средняя себестоимость', 'Дней до срока',
+  'Пациентов', 'Визитов', 'Госпитализаций', 'Средний % врача', 'Ставка врача', 'Ставка',
+  'Unit cost',
+]);
+const STOCK_KINDS = new Set(['procurement', 'stock_consumption', 'stock_statement', 'stock_expiry', 'stock_movements']);
+const STOCK_QTY_RE = /кол-во|количество|остаток \(расчёт\)|^qty$/i;
+export function summableColumns(kind, columns) {
+  return (columns || []).filter((c) => {
+    const label = String(c == null ? '' : c);
+    if (NOT_SUMMABLE_COLS.has(label) || label.includes('%')) return false;
+    if (STOCK_KINDS.has(kind) && STOCK_QTY_RE.test(label)) return false;
+    return true;
+  });
+}
+
 // PENDING_ITEMS_V1 — отчёты, которые читают СТРОКИ счетов (itemRowsQuery либо
 // прямой запрос по invoice_items). Ровно им и не хватает недоехавших позиций;
 // «Счета» и «Закупки» считают по шапкам и по складу, у них этой дыры нет.
@@ -2983,10 +3713,17 @@ export function runReport(db, args, user) {
   if (ru || Object.prototype.hasOwnProperty.call(legacyReports(db), kind)) requireReportKind(db, user, kind);
   if (ru) {
     const ctx = buildingContext(db);
-    const { columns, rows, by_building, notes, total_label } = ru(db, args, ctx);
+    // REPORTS_AUDIT_FIX_V1 — доли врачей без «Оплаты врачей» скрыты; номера
+    // врачей строк (row_doctor_ids) нужны только маске и браузеру не уходят.
+    const { row_doctor_ids: rowDoctorIds, ...raw } = ru(db, args, ctx);
+    const { columns, rows, by_building, notes, total_label, total_skip_rows } = maskDoctorPay(db, user, kind, raw, rowDoctorIds);
     return {
       kind, columns, rows,
       by_building: by_building || [], notes: notes || [], total_label: total_label || '',
+      // REPORTS_AUDIT_FIX_V1 — строки, которые «Итого» под таблицей не складывает
+      // (отменённые счета и DEP-/CARD- в «Счетах»): номера строк в rows.
+      total_skip_rows: Array.isArray(total_skip_rows) ? total_skip_rows : [],
+      summable_columns: summableColumns(kind, columns),   // REPORTS_AUDIT_FIX_V1
       // Считается ОДИН раз на отчёт и тем же контекстом зданий, что и сам отчёт:
       // разъехавшийся ctx дал бы недостачу под другими подписями.
       pending_items: ITEM_BASED_REPORTS.has(kind) ? pendingItemsMoney(db, args, ctx) : null,
@@ -2994,7 +3731,7 @@ export function runReport(db, args, user) {
   }
   const report = legacyReports(db)[kind];
   if (!report) {
-    throw new RpcError('unknown report kind: ' + kind, 400);
+    throw new RpcError('Неизвестный отчёт: ' + kind + '. Обновите страницу.', 400);
   }
   const { from, to } = resolveRange(db, args);
   const ctx = buildingContext(db);
@@ -3010,6 +3747,7 @@ export function runReport(db, args, user) {
     rows: raw.map((r) => [...report.row(r), ctx.label(r.origin)]),
     by_building: summariseByBuilding(ctx, raw, {}),
     notes: [],
+    summable_columns: summableColumns(kind, report.columns),   // REPORTS_AUDIT_FIX_V1
   };
 }
 
@@ -3027,15 +3765,15 @@ export function runReport(db, args, user) {
 const TIER_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 export function doctorTierPositions(db, args, user) {
   const doctorId = Number(args && args.doctor_id);
-  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
+  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('Врач не выбран или указан неверно.', 400);
   assertCanSeeDoctorPay(db, user, doctorId);
   const month = args && args.month != null ? String(args.month) : '';
   const from = month ? month : String((args && args.from) || '');
   const to = month ? month : String((args && args.to) || '');
   if (!TIER_MONTH_RE.test(from) || !TIER_MONTH_RE.test(to)) {
-    throw new RpcError('month must be YYYY-MM (or from/to as YYYY-MM).', 400);
+    throw new RpcError('Месяц — в формате ГГГГ-ММ (или период «с»–«по» месяцами ГГГГ-ММ).', 400);
   }
-  if (from > to) throw new RpcError('from must not be after to.', 400);
+  if (from > to) throw new RpcError('Месяц «с» позже месяца «по» — выберите период заново.', 400);
   const rows = db.prepare(`
     SELECT t.visit_service_id, t.service_id, s.name AS service_name,
            t.ym,

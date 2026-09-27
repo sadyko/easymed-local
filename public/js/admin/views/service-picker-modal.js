@@ -35,6 +35,8 @@ import { h, Icon, clear, toast, Avatar, initials, avColor } from '../ui.js';
 // регистрации (quick-patient-modal.js), и путь сохранения теперь один.
 import { loadPatientsPaged, insertRow, currentUser } from '../data.js';
 import { logPatientActivity } from './activity-log.js';   // BOOK_WIZARD_V1
+import { canWriteServiceTemplates, canAddVisitLines } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — шаблоны сметы
+import { surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация, хирургия без койки
 import { gw } from '../gateway.js';
 import { clinicFlags } from '../clinic-flags.js';   // CUSTOM_CLINIC_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';   // insurance/B2B: print statistics act
@@ -331,6 +333,13 @@ export function openServicePickerModal({
         return payload;
     }
 
+    // LIVE_AUDIT_FIX_V1 — onPick окна-хозяина бросает при отказе (строка не
+    // легла). В каскаде ответа не ждут, поэтому отказ говорится тостом, а не
+    // теряется необработанным исключением.
+    const pickSafely = (payload) => Promise.resolve()
+        .then(() => onPick(payload))
+        .catch((e) => toast(trf('Услуга не добавлена: {msg}', { msg: (e && e.message) || e }), 'fail'));
+
     // "Add" — stages the current selection in the running list at the top of
     // the picker. Fires onPick so the caller can mirror the add into its own
     // state (e.g. the Create Visit dialog accumulates them into an array;
@@ -342,7 +351,7 @@ export function openServicePickerModal({
         onclick: () => {
             const payload = buildPayload();
             if (!payload) { toast('Pick a service.', 'fail'); return; }
-            if (!calculator) onPick(payload);
+            if (!calculator) pickSafely(payload);   // LIVE_AUDIT_FIX_V1
             state.added.push(payload);
             state.serviceId     = null;
             state.svcSearch     = '';
@@ -368,7 +377,7 @@ export function openServicePickerModal({
         onclick: () => {
             const payload = buildPayload();
             if (payload) {
-                if (!calculator) onPick(payload);
+                if (!calculator) pickSafely(payload);   // LIVE_AUDIT_FIX_V1
                 state.added.push(payload);
             } else if (state.added.length === 0) {
                 toast('Pick a service first.', 'fail');
@@ -1788,7 +1797,6 @@ export function openServicePickerModal({
             btn.disabled = true;
             const ids = state.added.map(a => a.service && a.service.id).filter(Boolean);
             const ins = { name, service_ids: ids, active: true };
-            if (window.CLINIC && window.CLINIC.id) ins.company_id = window.CLINIC.id;
             const { error } = await supabase.from('service_templates').insert(ins);
             if (error) {
                 // Only schema errors mean "apply the migration" — anything else
@@ -1851,7 +1859,7 @@ export function openServicePickerModal({
                     h('div', { style: { fontWeight: 700, fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('услуг') + ': ' + ids.length),
                     terms ? h('div', { 'data-package-terms': '', style: { fontSize: '12.5px', color: 'var(--ok-700, #15803d)' } }, terms) : null),
-                h('button', { type: 'button', title: 'Удалить шаблон',
+                canWriteServiceTemplates() && h('button', { type: 'button', title: 'Удалить шаблон',   // LIVE_AUDIT_FIX_V1
                     style: { border: '0', background: 'none', cursor: 'pointer', color: 'var(--crit-600, #dc2626)', fontSize: '15px', flex: 'none', padding: '2px 4px' },
                     onclick: async (e) => {
                         e.stopPropagation();
@@ -2200,7 +2208,7 @@ export function openServicePickerModal({
         // WIZ_TEMPLATES_V1 — заголовок сметы + «Сохранить как шаблон» (когда есть услуги).
         catRailEl.appendChild(h('div', { class: 'wzc-rail-h', style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' } },
             h('span', null, 'Смета'),
-            state.added.length ? h('button', { class: 'btn btn-sm btn-amber', type: 'button',
+            state.added.length && canWriteServiceTemplates() ? h('button', { class: 'btn btn-sm btn-amber', type: 'button',   // LIVE_AUDIT_FIX_V1
                 style: { flex: 'none', whiteSpace: 'nowrap', textTransform: 'none', letterSpacing: 'normal' },
                 onclick: () => saveCartTemplate() }, 'Сохранить как шаблон') : null));
         const p = refs.attachedPatient;
@@ -2323,7 +2331,7 @@ export function openServicePickerModal({
         if (!state.added.length || typeof onPick !== 'function') return;
         const rows = state.added.slice();
         if (btn) { btn.disabled = true; btn.textContent = tr('Добавляем…'); }
-        let added = 0, failed = 0;
+        let added = 0, failed = 0, firstErr = '';   // LIVE_AUDIT_FIX_V1 — причина первого отказа
         const landed = [];   // CRM_LINKS_V1 — услуги, реально легшие в визит
         for (const a of rows) {
             try {
@@ -2332,6 +2340,7 @@ export function openServicePickerModal({
                 landed.push(a.service.id);
             } catch (e) {
                 failed++;
+                if (!firstErr) firstErr = ((a.service && a.service.name) ? a.service.name + ': ' : '') + ((e && e.message) || String(e));
                 console.warn('[picker attach]', (a.service && a.service.name) || '?', e && e.message);
             }
         }
@@ -2340,8 +2349,8 @@ export function openServicePickerModal({
         // в список окна-хозяина, и обещать «добавлено к визиту» нельзя.
         if (added && !failed)      toast(!patient ? 'Услуги добавлены в список.'
                                         : added === 1 ? 'Услуга добавлена к визиту.' : trf('Добавлено услуг: {n}.', { n: added }));
-        else if (added && failed)  toast(trf('Добавлено {ok}, не удалось {bad} — проверьте список.', { ok: added, bad: failed }), 'warn');
-        else                       { toast('Не удалось добавить услуги.', 'fail'); return; }
+        else if (added && failed)  toast(trf('Добавлено {ok}, не удалось {bad} — проверьте список.', { ok: added, bad: failed }) + (firstErr ? ' ' + firstErr : ''), 'warn');
+        else                       { toast(tr('Не удалось добавить услуги.') + (firstErr ? ' ' + firstErr : ''), 'fail'); return; }
         // ЗДЕСЬ СТОЯЛО closeCrmRequests(landed) — «услугу привязали, значит
         // пациент дошёл». CRM_REAL_BOOKING_V1 (2026-09-21): не значит. Привязка
         // услуги к визиту это намерение, а приход доказывают деньги по счёту
@@ -2913,6 +2922,21 @@ export function openServicePickerModal({
         return root;
     }
 
+    // LIVE_AUDIT_FIX_V1 (A6) — источник направления ВИЗИТА из шага «Направление».
+    // Строке услуги его не записать (колонки visit_services.referral_source_id
+    // нет — значение молча выбрасывалось), а направивший — признак визита
+    // (так считает и отчёт «Рефералы»). Берётся первый выбранный партнёр: общий
+    // «для всех услуг» или первой услуги, у которой он указан.
+    function visitReferralSourceId() {
+        const R = wiz.referral || {};
+        const per = R.per || {};
+        for (let i = 0; i < state.added.length; i++) {
+            const id = per[i] && per[i].sourceId;
+            if (id) return Number(id) || null;
+        }
+        return R.globalSrc ? (Number(R.globalSrc) || null) : null;
+    }
+
     // ---- save ----
     async function wizSave(btn) {
         const p = refs.attachedPatient;
@@ -2926,24 +2950,10 @@ export function openServicePickerModal({
             // или создать строку payer_policies с этим номером (policy_code) у
             // выбранного плательщика и использовать её id как payer_policy_id.
             if (!isPatient && pm.payerId && (pm.policyNumber || '').trim()) {
-                const num = pm.policyNumber.trim();
-                try {
-                    // CLOUD_LEFTOVER_COLUMNS_V1 — офлайн у полиса нет отдельной
-                    // колонки `policy_code`: номер и есть его название (`name`).
-                    // Отбор по ней отвергался, а при вставке молча выбрасывался,
-                    // поэтому на каждый ввод полиса заводилась НОВАЯ строка.
-                    const { data: ex } = await supabase.from('payer_policies')
-                        .select('id').eq('payer_id', pm.payerId).eq('active', true);
-                    const hit = (ex || []).find(r => String(r.name || '').trim() === num);
-                    if (hit) pm.policyId = hit.id;
-                    else {
-                        const ins = { payer_id: pm.payerId, name: num, active: true };
-                        if (window.CLINIC && window.CLINIC.id) ins.company_id = window.CLINIC.id;
-                        const { data: crt, error: cErr } = await supabase.from('payer_policies').insert(ins).select('id').single();
-                        if (cErr) console.warn('[wizard] policy create:', cErr.message);
-                        else pm.policyId = crt.id;
-                    }
-                } catch (e) { console.warn('[wizard] policy resolve:', e.message); }
+                // LIVE_AUDIT_FIX_V1 — resolvePolicyId (ниже, экспортирована ради теста).
+                const pol = await resolvePolicyId({ payerId: pm.payerId, number: pm.policyNumber });
+                if (pol.id) pm.policyId = pol.id;
+                else if (pol.error) toast(trf('Полис не сохранён: {msg}', { msg: pol.error.message || pol.error }), 'fail');
             }
             // CATALOG_WIZARD_V2 — the visits row anchors on the EARLIEST item that has
             // a doctor+slot (a no-doctor lab item first in the cart must not produce a
@@ -2975,6 +2985,10 @@ export function openServicePickerModal({
             // (он называет врача и занятое время) и предлагается экстренная
             // запись с ОБЯЗАТЕЛЬНОЙ причиной — то же действие, что в календаре.
             const _explicit = !!(head.startISO || scheduledISO);
+            // LIVE_AUDIT_FIX_V1 (A5) — хирургия без койки: отказ ДО записи, а не
+            // на строке услуги, когда визит уже заведён.
+            const noBed = await surgeryBedRefusal(p.id, state.added.map(a => a.service));
+            if (noBed) { toast(noBed, 'fail'); if (btn && btn.isConnected) btn.disabled = false; return; }
             const booked = await calendarBookOrAsk({
                 patient_id:       p.id,
                 branch_id:        (p._raw && p._raw.branch_id) || p.branch_id || null,
@@ -2984,6 +2998,7 @@ export function openServicePickerModal({
                 start:            visitDate,
                 duration_minutes: totalDur,
                 status:           'scheduled',
+                referral_source_id: visitReferralSourceId(),   // LIVE_AUDIT_FIX_V1 (A6) — источник направления — на визите
             }, { autoTime: !_explicit });
             if (!booked) {   // отказались от экстренной записи — не создано НИЧЕГО
                 toast(tr('Запись не сохранена — время занято.'), 'info');
@@ -2991,6 +3006,22 @@ export function openServicePickerModal({
                 return;
             }
             const visit = booked.visit;
+
+            // FINAL_ROLES_SYNC_FIX_V1 (I1) — КОЛЛ-ЦЕНТР ЗАПИСЫВАЕТ СЛОТ, УСЛУГИ
+            // ДОБАВЛЯЕТ РЕГИСТРАТУРА. Строки visit_services реестр вставляет
+            // только admin/registrar/doctor; оператор календаря получал отказ на
+            // каждой строке, и ветка «ни одна услуга не записалась» ниже
+            // удаляла его запись (discard_empty_visit) — «запись отменена» на
+            // каждой записи колл-центра. Так было не всегда: раньше визит
+            // оставался держать врача и время, а услуги добавляли у стойки.
+            // Теперь тому, кто строк вставить не может, строки и не
+            // предлагаются: запись остаётся, отмена — только настоящему сбою.
+            if (!canAddVisitLines()) {
+                toast(tr('Записано. Услуги добавит регистратура.'), 'ok');
+                closePicker();
+                if (typeof onBooked === 'function') { try { onBooked(bookedSummary(visit, [])); } catch (_) {} }
+                return;
+            }
 
             const vsRows = [];
             for (const a of state.added) {
@@ -3005,7 +3036,6 @@ export function openServicePickerModal({
                     unit_price:   unitPrice,
                     total:        unitPrice,
                     scheduled_at: a.startISO || scheduledISO || null,
-                    referral_source_id: ((wiz.referral || {}).per || {})[state.added.indexOf(a)] && wiz.referral.per[state.added.indexOf(a)].sourceId || null,   // SVC_REFERRAL_V1
                     price_tier:   isConsult ? null : priceTierOf(a),   // VISIT_TIER_PRICING_V1 — the till re-prices by this word
                     // PACKAGES_V1 — скидку пакета считает счёт. Ревью I-3: пакет,
                     // не действующий в местный день визита, не ставится — сервер
@@ -3028,6 +3058,15 @@ export function openServicePickerModal({
             // CATALOG_WIZARD_V2 — a partially-recorded visit must not proceed to
             // billing: the invoice/balance math would diverge from what landed.
             if (vsRows.length !== state.added.length) {
+                // LIVE_AUDIT_FIX_V1 — не легла НИ ОДНА строка: запись, только что
+                // заведённая calendar_book, пуста — убираем её, а не оставляем
+                // занятый слот без услуг.
+                if (!vsRows.length) {
+                    try { await supabase.rpc('discard_empty_visit', { visit_id: visit.id }); } catch (_) {}
+                    toast(tr('Ни одна услуга не записалась — запись отменена.'), 'fail');
+                    if (btn && btn.isConnected) btn.disabled = false;
+                    return;
+                }
                 toast(trf('Записались не все услуги ({got} из {want}) — счёт НЕ выставлен. Откройте визит и добавьте услуги вручную.', { got: vsRows.length, want: state.added.length }), 'fail');
                 closePicker();
                 if (typeof onBooked === 'function') { try { onBooked(bookedSummary(visit, vsRows)); } catch (_) {} }
@@ -3185,12 +3224,14 @@ export function openServicePickerModal({
                         .update({ status: 'queued' }).in('id', ids)
                         .not('status', 'in', '(in_progress,completed)');
                     if (relErr) console.warn('[wizard] release services:', relErr.message);
-                    // PAYER_COVERED_FLAG_V1 — mark these so they're locked from patient
-                    // invoicing everywhere. Best-effort: column added by migration 058;
-                    // a pre-migration error is non-fatal (the visit-modal heuristic still covers it).
-                    const { error: pcErr } = await supabase.from('visit_services')
-                        .update({ payer_covered: true }).in('id', ids);
-                    if (pcErr) console.warn('[wizard] payer_covered (apply migration 058):', pcErr.message);
+                    // LIVE_AUDIT_FIX_V1 — покрытие фиксирует СЕРВЕР: строки уходят в
+                    // счёт контрагента (payer_id) и больше не могут попасть в счёт
+                    // пациента. Флага payer_covered в офлайн-базе нет — его запись
+                    // молча выбрасывалась.
+                    const pay = await invoicePayerLines({ visitId: visit.id, ids, payerId: pm.payerId });
+                    if (pay.error) {
+                        toast(trf('Счёт плательщику не выставлен: {msg}', { msg: pay.error.message || pay.error }), 'fail');
+                    }
                 }
                 try {
                     const payer = (wiz.payers || []).find(x => x.id === pm.payerId);
@@ -3625,4 +3666,54 @@ export async function invoicePickerLines({ visitId, lines, pct = 0, promo = null
         error = res.error || null;
     } catch (e) { error = e; }
     return { ...d, data, error };
+}
+
+/**
+ * LIVE_AUDIT_FIX_V1 — строки «за счёт плательщика» (шаг «Кто платит»)
+ * выставляются КОНТРАГЕНТУ: create_invoice_for_visit с payer_id, как в мастере
+ * визита (COVERAGE_SPLIT_V1). Прежде калькулятор писал на строку флаг
+ * `payer_covered`, которого в офлайн-базе нет: запись молча выбрасывалась, и
+ * «Сформировать счёт» окна визита выставлял застрахованные услуги ПАЦИЕНТУ.
+ * Теперь покрытие — это привязка строки к счёту контрагента на сервере:
+ * строка с invoice_item_id в счёт пациента не попадает (сервер отказывает
+ * «already invoiced»), а касса такой счёт не показывает.
+ */
+export async function invoicePayerLines({ visitId, ids, payerId }) {
+    const list = (ids || []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+    const payer = Number(payerId);
+    if (!list.length) return { data: null, error: null };
+    if (!Number.isInteger(payer) || payer <= 0) return { data: null, error: { message: tr('Плательщик не выбран.') } };
+    try {
+        const res = await supabase.rpc('create_invoice_for_visit',
+            { visit_id: visitId, visit_service_ids: list, discount_amount: 0, payer_id: payer });
+        return { data: res.data || null, error: res.error || null };
+    } catch (e) { return { data: null, error: e }; }
+}
+
+/**
+ * WIZ_POLICY_MANUAL_V1 / LIVE_AUDIT_FIX_V1 — полис по номеру: найти у
+ * плательщика действующий полис с этим номером или завести новый.
+ *
+ * CLOUD_LEFTOVER_COLUMNS_V1 — офлайн у полиса нет отдельной колонки
+ * `policy_code`: номер и есть его название (`name`). Два прежних сбоя:
+ * поиск спрашивал только `id` и сравнивал `name`, которого в ответе не было,
+ * — совпадения не находилось никогда, и каждый ввод заводил НОВЫЙ полис; а
+ * вставка была только у администратора — у регистратуры отказ глотался.
+ * Реестр теперь даёт регистратуре вставку (номер, плательщик, активность).
+ */
+export async function resolvePolicyId({ payerId, number }) {
+    const num = String(number || '').trim();
+    const payer = Number(payerId);
+    if (!num || !Number.isInteger(payer) || payer <= 0) return { id: null, error: null };
+    try {
+        const { data: ex, error: exErr } = await supabase.from('payer_policies')
+            .select('id, name').eq('payer_id', payer).eq('active', true);
+        if (exErr) return { id: null, error: exErr };
+        const hit = (ex || []).find(r => String(r.name || '').trim() === num);
+        if (hit) return { id: hit.id, error: null };
+        const { data: crt, error: cErr } = await supabase.from('payer_policies')
+            .insert({ payer_id: payer, name: num, active: true }).select('id').single();
+        if (cErr) return { id: null, error: cErr };
+        return { id: crt && crt.id, error: null };
+    } catch (e) { return { id: null, error: e }; }
 }

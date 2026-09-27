@@ -34,7 +34,7 @@ import { h, Icon, clear, toast, Tag, fmtDate, fmtDateTime, field, avColor, initi
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { printBarcodeLabel } from './lab-barcode.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // same URL as patient-card/service-workspace (one instance)
-import { canDelete, canEditLabPanels } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
+import { canDelete, canEditLabPanels, hasActorRole } from '../permissions.js';   // LAB_PANELS_BY_SECTION_V1 — the gate IS lab-section access (same predicate as the sidebar)
 import { mountLabPanels, LAB_BUILD } from './lab-panels.js?v=panelsv3';   // LAB_PANELS_BY_SECTION_V1 — the editor itself; this screen is its only home now
 import { mountLabDevices, stopLabDevicesLive } from './lab-devices.js?v=lisfields2';   // LIS_INGEST_V1 — «Анализаторы»: приборы клиники, живая лента и лоток непринятых сообщений
 // ?v= is required here, not decorative: this module gained selectOptionsFor, and a
@@ -45,6 +45,14 @@ import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';
 // LAB_ONE_CLINIC_V1 — «лаборатория обслуживает всю клинику / только своё здание».
 import { scopeQuery, normalizeLabScope, LAB_SCOPE_CLINIC, LAB_SCOPE_BUILDING, LAB_SCOPE_DEFAULT } from './lab-scope.js';
 import { isAdminActor } from '../admin-actor.js';   // настройку клиники меняет администратор (сервер требует того же)
+
+// LIVE_AUDIT_FIX_V1 — ЗЕРКАЛО СЕРВЕРА. Результаты пишет и подтверждает только
+// лаборатория или администратор (rpc/lab.js WRITE_ROLES, реестр lab_results).
+// Врач и медсестра с выданным разделом «Лаборатория» видели «Внести
+// результаты» / «Подтвердить» и получали отказ на сохранении — теперь они
+// видят очередь и бланки, но не кнопки, которые сервер им не исполнит.
+export const LAB_RESULT_ROLES = ['admin', 'lab'];
+export function canWriteLabResults() { return hasActorRole(LAB_RESULT_ROLES); }
 // LAB_PATIENT_ORIGIN_V1 — «откуда пациент» берётся оттуда же, откуда его берут
 // кабинет врача и процедурная: из госпитализаций в койке.
 import { IN_BED_STATUSES } from '../../shared/admission-status.js';
@@ -450,6 +458,7 @@ function paintScopeSwitch() {
 // оставляет всё как было.
 async function setLabScope(scope) {
     if (state.labScope === scope) return;
+    if (!isAdminActor()) return;   // LIVE_AUDIT_FIX_V1 — переключатель рисуется только администратору (scopeBox)
     const { error } = await supabase.from('doc_settings').update({ lab_scope: scope }).eq('id', 1);
     if (error) {
         toast(trf('Не удалось сохранить настройку: {msg}', { msg: (error && error.message) || error }), 'fail');
@@ -1004,9 +1013,9 @@ function labGroupCard(g) {
         type: 'button', title, onclick,
     }, Icon(icon, { size: 13 }), ' ' + label);
     const defs = [
-        anyActive ? ['worksheet', 'Внести результаты', 'Flask',
+        anyActive && canWriteLabResults() ? ['worksheet', 'Внести результаты', 'Flask',
             'Внести результаты всех анализов одним документом', () => openPatientWorksheet(g, patient)] : null,
-        anyToVerify ? ['verify', 'Подтвердить', 'Check',
+        anyToVerify && canWriteLabResults() ? ['verify', 'Подтвердить', 'Check',
             'Подтвердить и выдать результаты', () => verifyGroup(g)] : null,
         // LAB_BLANK_ALL_PANELS_V1 — печатаем ВЕСЬ образец, а не одну строку.
         anyResulted ? ['report', 'Бланк', 'Print',
@@ -1115,10 +1124,12 @@ function actionButtons(r, patient, results) {
     } else if (r.status === 'collected') {
         btns.push(step('В работу', 'Activity', () => advance(r, { status: 'in_progress' }, 'Проба в работе')));
     } else if (r.status === 'in_progress') {
-        btns.push(step('Результаты…', 'Edit', () => openResultsModal(r, patient)));
+        if (canWriteLabResults()) btns.push(step('Результаты…', 'Edit', () => openResultsModal(r, patient)));   // LIVE_AUDIT_FIX_V1
     } else if (r.status === 'resulted') {
-        btns.push(step('Проверить и выдать', 'Check', () => verifyDialog(r, patient, results)));
-        btns.push(iconBtn('Edit', 'Изменить результаты', () => openResultsModal(r, patient)));
+        if (canWriteLabResults()) {   // LIVE_AUDIT_FIX_V1
+            btns.push(step('Проверить и выдать', 'Check', () => verifyDialog(r, patient, results)));
+            btns.push(iconBtn('Edit', 'Изменить результаты', () => openResultsModal(r, patient)));
+        }
     } else if (r.status === 'completed') {
         btns.push(step('Отчёт', 'Print', () => printReport(r, patient, results)));
     }

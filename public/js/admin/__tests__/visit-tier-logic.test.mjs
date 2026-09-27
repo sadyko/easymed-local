@@ -74,7 +74,8 @@ test('the editor sends the four tier fields; the wizard, attach path and doctor 
     assert.match(wizard, /price_tier:\s*isConsult \? null : priceTierOf\(a\)/, 'строка визита несёт ступень');
     assert.match(wizard, /onPick\(\{[^}]*price_tier: priceTierOf\(a\)/, 'режим «добавить к визиту» отдаёт ступень вызывающему');
     const vm = read('views/visit-modal.js');
-    assert.match(vm, /price_tier:\s*price_tier \|\| null/, 'visit-modal кладёт ступень в строку');
+    // LIVE_AUDIT_FIX_V1 — у консультации ступени нет (её цена — цена врача по виду приёма).
+    assert.match(vm, /price_tier:\s*isConsultPick\(service\) \? null : \(price_tier \|\| null\)/, 'visit-modal кладёт ступень в строку');
     const ws = read('views/service-workspace.js');
     assert.match(ws, /rpc\('service_price_quote'/, 'кабинет врача идёт через ту же котировку');
     // The registration wizard (visit-wizard.js — «Записать на визит» from the

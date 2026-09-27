@@ -17,7 +17,7 @@ import { catalogByKey } from '../../public/js/shared/permission-catalog.js';
 
 export const GATE_FALLBACK = Object.freeze({
   'inpatient.services':      { view: [['admin', 'head_doctor', 'registrar', 'nurse', 'doctor', 'cashier']],
-                               edit: [['admin', 'head_doctor', 'doctor'], ['admin', 'head_doctor', 'doctor', 'nurse', 'senior_nurse']] },
+                               edit: [['admin', 'head_doctor', 'doctor', 'nurse', 'senior_nurse', 'registrar', 'cashier'], ['admin', 'head_doctor', 'doctor', 'nurse', 'senior_nurse']] },   // FINAL_ROLES_SYNC_FIX_V1 (I2) — услугу у койки снова заводят медсестра, регистратура, касса
   'inpatient.history':       { view: [['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse', 'registrar', 'cashier']] },
   'inpatient.patients':      { view: [['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse']] },
   'inpatient.reviews':       { view: [['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse']], edit: [['doctor', 'head_doctor', 'admin']] },
@@ -51,6 +51,12 @@ const FALLBACK_FN = {
   procurement: {
     view: (db, u) => hasAnyRole(u, ['admin', 'inventory']) || canViewSection(db, u, 'inventory'),
     edit: (db, u) => hasAnyRole(u, ['admin', 'inventory']),
+  },
+  // PAY_PERIOD_CLOSE_V1 — «Оплата врачей»: смотреть — как у всех групп отчётов
+  // (администратор или раздел «Отчёты»), закрывать месяц — администратор.
+  'reports.doctor_pay': {
+    view: (db, u) => hasAnyRole(u, ['admin']) || canViewSection(db, u, 'reports-hub'),
+    edit: (db, u) => hasAnyRole(u, ['admin']),
   },
 };
 

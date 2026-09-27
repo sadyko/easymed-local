@@ -181,7 +181,7 @@ async function loadServices() {
             services(name, type, duration_minutes, service_types(name), departments(kind)),
             consultation_types(name_ru, name_uz),
             users:doctor_id(full_name, specialty, rooms(name, floors(name))),
-            visits(visit_date, patient_id,
+            visits(visit_date, patient_id, status,
                    patients(full_name, last_name, first_name, mrn, phone))
         `)
         .in('status', ['added', 'queued', 'in_progress', 'completed'])
@@ -249,7 +249,9 @@ async function loadServices() {
         }
     } catch (e) { console.warn('[my-services] inpatient flag:', e && e.message); }
 
-    state.rows = (data || []).filter(r => !_goesElsewhere(r)).map(r => {
+    // LIVE_AUDIT_FIX_V1 (C7) — строки отменённого / несостоявшегося визита в
+    // кабинете не живут: пациента не будет, а очередь врача показывала его.
+    state.rows = (data || []).filter(r => !_goesElsewhere(r) && !['cancelled', 'no_show'].includes(r.visits?.status)).map(r => {
         const p = r.visits?.patients || {};
         const patientName = [p.last_name, p.first_name].filter(Boolean).join(' ').trim()
             || p.full_name || '(unknown)';
@@ -1651,6 +1653,11 @@ function payLineRow(l) {
     };
 }
 
+// PAY_PERIOD_CLOSE_V1 — строки корректировок с сервера (doctor_pay_summary.adjustments).
+function adjustmentRows() {
+    return (state.dash.pay && state.dash.pay.adjustments && state.dash.pay.adjustments.rows) || [];
+}
+
 // REPORTS_V2 — строки вознаграждения с сервера (doctor_referral_reward) и их
 // раздел. Раздел называется так же, как у рекомендаций: категория услуги, иначе
 // вид; typeFirst — порядок «Разбора направлений» (вид, иначе категория).
@@ -1674,45 +1681,46 @@ function payRowSector(r, typeFirst) {
 // component is the SERVER's outpatient share (doctor_pay_summary): every
 // performed service of the period, paid or not — the same number as
 // «Зарплаты врачей». Nothing is computed per line here.
+//
+// PAY_ALL_EARNINGS_V1 (владелец, 27.09: «fixed — just all earnings») — ИТОГ —
+// ВСЕ НАЧИСЛЕНИЯ, ровно число сервера (doctor_pay_summary.total): доля за
+// услуги, стационар, вознаграждения за направления и корректировки закрытых
+// месяцев. Тип зарплаты из карточки (оклад / процент / оклад + KPI) итог
+// больше НЕ меняет: прежде «оклад» заменял начисления окладом, и кабинет
+// расходился с «Зарплатами врачей» и «По врачам». Оклад из карточки
+// показывается только сведением («в итог не входит»).
 function computeSalary() {
     const doc = state.dash.doctor;
-    if (!doc) return { fixed: 0, variable: 0, total: 0, kind: 'none', revenue: 0 };
+    if (!doc) return { fixed: 0, variable: 0, inpatient: 0, referral: 0, adjustments: 0, total: 0, kind: 'none', revenue: 0 };
     const pay = state.dash.pay || {};
     const out = pay.outpatient || {};
-    const revenue = Number(out.amount) || 0;
-    const variableComponent = Number(out.fee) || 0;
-    const fixedMonth = Number(doc.salary_fixed || 0);
-
-    // Pro-rate the fixed portion for non-month periods (rough estimate).
-    const periodMonths = state.dash.period === 'week' ? 0.25
-                       : state.dash.period === 'year' ? 12
-                       : state.dash.period === 'all'  ? 12
-                       : 1;
-    const fixedComponent = fixedMonth * periodMonths;
-
-    // DOCTOR_PAY_KPI_WIRE_V1 — for Fix+KPI the per-service variable only counts when a
-    // service-revenue KPI is ticked (Consultations/Services/Revenue/Lab/Surgeries);
-    // ticking only 'Patient referrals' → no service variable (referral reward is its own line).
-    // Правило одно на кабинет (perServicePayApplies, doctor-dashboard.js):
-    // дашборд по нему решает, рисовать ли дневной заработок вообще.
-    const _varOut = perServicePayApplies(doc) || doc.salary_type !== 'fix_plus_kpi'
-        ? variableComponent : 0;
-    // INPATIENT_SHARE_V1 — стационарная доля идёт в зарплату по ТОМУ ЖЕ правилу,
-    // что доля за услуги: при окладе её нет, при «оклад + KPI» — только если
-    // отмечен показатель по услугам.
-    const inpatient = inpatientPayApplies(doc) ? Number(state.dash.inpatient.fee) || 0 : 0;
-    let total = 0;
-    if (doc.salary_type === 'fixed')                 total = fixedComponent;
-    else if (doc.salary_type === 'fix_plus_kpi')     total = fixedComponent + _varOut + inpatient;
-    else                                              total = variableComponent + inpatient;   // 'percentage' or unset → per-service shares
-    return { fixed: fixedComponent, variable: _varOut, inpatient, total, kind: doc.salary_type || 'none', revenue };
+    const referral = (Number(pay.referral && pay.referral.reward) || 0)
+        + (Number(pay.inpatient_referral && pay.inpatient_referral.reward) || 0);
+    return {
+        // сведения: оклад в месяц из карточки — у сервера свежий, иначе из списка врачей
+        fixed: Number(pay.salary_fixed != null ? pay.salary_fixed : doc.salary_fixed) || 0,
+        variable: Number(out.fee) || 0,
+        inpatient: Number(state.dash.inpatient.fee) || 0,
+        referral,
+        adjustments: Number(pay.adjustments && pay.adjustments.fee) || 0,
+        total: Number(pay.total) || 0,
+        kind: (pay.salary_type !== undefined ? pay.salary_type : doc.salary_type) || 'none',
+        revenue: Number(out.amount) || 0,
+    };
 }
 
-// INPATIENT_SHARE_V1 — платится ли врачу поуслужно вообще (то же условие, что у
-// графика ниже): одно место на плитку, график и карточку «Как считается».
+// INPATIENT_SHARE_V1 — стационарная доля. PAY_ALL_EARNINGS_V1 — входит в итог
+// всегда, при любом типе зарплаты.
 function inpatientPayApplies(doc) {
-    return !!doc && doc.salary_type !== 'fixed'
-        && (doc.salary_type !== 'fix_plus_kpi' || perServicePayApplies(doc));
+    return !!doc;
+}
+
+// PAY_PERIOD_CLOSE_V1 — закрытые месяцы периода: их суммы заморожены.
+function closedMonthsText() {
+    const list = (state.dash.pay && state.dash.pay.closed_months) || [];
+    if (!list.length) return '';
+    return trf('Месяц закрыт: {months} — суммы заморожены, изменения после закрытия идут корректировками.',
+        { months: list.map((m) => m.label).join(', ') });
 }
 
 // REPORTS_V2 — сколько направлений отправлено, считается по рекомендациям
@@ -1765,7 +1773,7 @@ function dashboardView() {
     const rewards = computeReferralRewards();
     // Ревью M2 — сервер отказал в начислениях: при окладе они ни на что не
     // влияют; иначе показанная сумма была бы неправдой.
-    const tierHidden = !!state.dash.payDenied && salary.kind !== 'fixed';
+    const tierHidden = !!state.dash.payDenied;   // PAY_ALL_EARNINGS_V1 — итог всегда из начислений
     // PAY_BASIS_PERFORMED_V1 — строки сервера — выполненные услуги: «завершено»
     // и «в работе» (начатые: в работе, взят материал, есть результат).
     const completedCount = state.dash.services.filter(s => s.status === 'completed').length;
@@ -1793,15 +1801,17 @@ function dashboardView() {
         // зависит и остаётся).
         tierHidden ? h('div', { class: 'card card-pad-sm muted', role: 'status', style: { fontSize: '12.5px' } },
             Icon('Info', { size: 14 }), ' ', tr(PAY_DENIED_NOTE)) : null,
+        // PAY_PERIOD_CLOSE_V1 — в периоде есть закрытый месяц.
+        closedMonthsText() ? h('div', { class: 'card card-pad-sm muted pay-closed', role: 'status', style: { fontSize: '12.5px' } },
+            Icon('Lock', { size: 14 }), ' ', closedMonthsText()) : null,
         h('div', { class: 'dash-kpi-row' },
             kpiTile({
                 icon: 'Wallet', accent: 'ok', label: 'Зарплата',
                 value: tierHidden ? '—' : uzs(salary.total),
-                meta: salaryKindLabel(salary.kind) + (salary.kind === 'fix_plus_kpi'
-                    ? ' · ' + trf('оклад {fix} + переменная {variable}', {
-                        fix:      Math.round(salary.fixed).toLocaleString('ru-RU'),
-                        variable: Math.round(salary.variable).toLocaleString('ru-RU'),
-                    })
+                // PAY_ALL_EARNINGS_V1 — итог = все начисления; оклад карточки —
+                // только сведением.
+                meta: tr('все начисления за период') + (salary.fixed > 0
+                    ? ' · ' + trf('оклад по карточке {fix} — в итог не входит', { fix: Math.round(salary.fixed).toLocaleString('ru-RU') })
                     : '') + (tierHidden ? ' · ' + tr(PAY_DENIED_NOTE) : ''),
                 onClick: tierHidden ? null : () => openSalaryDetails(),
             }),
@@ -1927,8 +1937,8 @@ function earningsSeries() {
     // Доля за услуги идёт в зарплату по тому же правилу, что в computeSalary:
     // при окладе её нет вовсе, при «оклад + KPI» — только если отмечен
     // показатель по услугам.
-    const perSvc = !!doc && doc.salary_type !== 'fixed'
-        && (doc.salary_type !== 'fix_plus_kpi' || perServicePayApplies(doc));
+    // PAY_ALL_EARNINGS_V1 — входит всегда, при любом типе зарплаты.
+    const perSvc = !!doc;
     if (perSvc) {
         for (const s of state.dash.services) {
             // CABINET_REDESIGN_V1 правило 1 — график это разложенная по дням
@@ -1951,6 +1961,12 @@ function earningsSeries() {
     for (const r of referralPayRows()) {
         const row = byKey.get(String(r.date || ''));
         if (row) row.referrals += Number(r.reward) || 0;
+    }
+    // PAY_PERIOD_CLOSE_V1 — корректировка закрытого месяца ложится в свой день
+    // (сегодня или последний день месяца, в который она пришла).
+    for (const a of (state.dash.pay && state.dash.pay.adjustments && state.dash.pay.adjustments.rows) || []) {
+        const row = byKey.get(String(a.date || ''));
+        if (row) row.services += Number(a.fee) || 0;
     }
     for (const row of list) {
         row.services = Math.round(row.services); row.inpatient = Math.round(row.inpatient); row.referrals = Math.round(row.referrals);
@@ -2032,7 +2048,8 @@ function salaryConfigCard(salary) {
             h('span', { class: 'muted', style: { fontSize: '12.5px' } }, periodLabel())),
         h('div', { class: 'pay-kv pay-scroll' },
         kvRow(tr('Схема'),         salaryKindLabel(salary.kind)),
-        kvRow(tr('Оклад'),         trf('{sum} UZS в месяц', { sum: Number(doc.salary_fixed || 0).toLocaleString('ru-RU') })),
+        // PAY_ALL_EARNINGS_V1 — оклад карточки — сведения, в итог не входит.
+        kvRow(tr('Оклад'),         trf('{sum} UZS в месяц — в итог не входит', { sum: Math.round(salary.fixed).toLocaleString('ru-RU') })),
         kvRow(tr('Ставки по услугам'), trf('услуг задано: {n}', { n: (Array.isArray(doc.service_rates) ? doc.service_rates.filter(r => Number(r.value != null ? r.value : r.percentage) > 0).length : 0) })),
         kvRow(tr('Выручка за период'), Math.round(salary.revenue).toLocaleString('ru-RU') + ' UZS'),
         kvRow(tr('Начислено (после налога)'), state.dash.payDenied ? '—' : Math.round(salary.variable).toLocaleString('ru-RU') + ' UZS'),   // ревью M2
@@ -2048,6 +2065,14 @@ function salaryConfigCard(salary) {
                 sum: Math.round(salary.inpatient || 0).toLocaleString('ru-RU'),
                 n: state.dash.inpatient.count || 0 }))
             : null,
+        salary.referral
+            ? kvRow(tr('Вознаграждения за направления'), Math.round(salary.referral).toLocaleString('ru-RU') + ' UZS')
+            : null,
+        // PAY_PERIOD_CLOSE_V1 — корректировки закрытых месяцев.
+        salary.adjustments
+            ? kvRow(tr('Корректировки'), Math.round(salary.adjustments).toLocaleString('ru-RU') + ' UZS')
+            : null,
+        closedMonthsText() ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, Icon('Lock', { size: 13 }), ' ', closedMonthsText()) : null,
         kvRow(tr('Показатели KPI'), (doc.kpi_links || []).length
             ? (doc.kpi_links || []).join(', ')
             : '—'),
@@ -2067,6 +2092,8 @@ function salaryConfigCard(salary) {
         // PAY_BASIS_PERFORMED_V1 — база доли словами, как в каждом отчёте.
         h('div', { class: 'muted', style: { fontSize: '12.5px', paddingTop: '6px' } },
             tr('Доля врача — по выполненным услугам, оплачены они или нет.')),
+        h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+            tr('Итог — все начисления: услуги, стационар, направления и корректировки; тип зарплаты его не меняет.')),
         h('div', { class: 'row', style: { gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--ink-100)' } },
             h('span', { style: { fontSize: '12.5px', color: 'var(--ink-600)' } }, tr('Итого за период:')),
             h('span', { class: 'grow' }),
@@ -2284,11 +2311,23 @@ function openSalaryDetails() {
             h('div', { style: { padding: '12px 14px', background: 'var(--ink-25)', borderRadius: '10px', border: '1px solid var(--ink-100)' } },
                 h('div', { class: 'row', style: { gap: '12px' } },
                     kvBlock(tr('Схема'), salaryKindLabel(salary.kind)),
-                    kvBlock(tr('Оклад'), Math.round(salary.fixed).toLocaleString('ru-RU') + ' UZS'),
                     kvBlock(tr('Переменная часть (после налога × процент по услуге)'),
                             Math.round(salary.variable).toLocaleString('ru-RU') + ' UZS'),
+                    salary.inpatient ? kvBlock(tr('Стационар'), Math.round(salary.inpatient).toLocaleString('ru-RU') + ' UZS') : null,
+                    salary.referral ? kvBlock(tr('Направления'), Math.round(salary.referral).toLocaleString('ru-RU') + ' UZS') : null,
+                    salary.adjustments ? kvBlock(tr('Корректировки'), Math.round(salary.adjustments).toLocaleString('ru-RU') + ' UZS') : null,
                     kvBlock(tr('Итого'), Math.round(salary.total).toLocaleString('ru-RU') + ' UZS', 'var(--ok-700)'),
                 ),
+                // PAY_ALL_EARNINGS_V1 — оклад карточки только сведением.
+                salary.fixed > 0 ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
+                    trf('оклад по карточке {fix} — в итог не входит', { fix: Math.round(salary.fixed).toLocaleString('ru-RU') })) : null,
+                closedMonthsText() ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
+                    Icon('Lock', { size: 13 }), ' ', closedMonthsText()) : null,
+                // PAY_PERIOD_CLOSE_V1 — строки корректировок: за какой месяц и что изменилось.
+                ...adjustmentRows().map((a) => h('div', { class: 'row pay-adj', style: { gap: '8px', fontSize: '12.5px', marginTop: '4px' } },
+                    h('span', null, a.label + (a.service ? ': ' + a.service : '') + (a.patient ? ' — ' + a.patient : '')),
+                    h('span', { class: 'grow' }),
+                    h('span', { class: 'num' }, Math.round(a.fee).toLocaleString('ru-RU') + ' UZS'))),
             ),
             h('div', { class: 'row', style: { gap: '8px' } },
                 h('input', {

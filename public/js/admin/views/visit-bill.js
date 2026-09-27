@@ -17,6 +17,8 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, StatusTag, Tag, fmtDateTime, field } from '../ui.js';
 import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1
+import { linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — исполнитель строки
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 // BRANCH_BILL_GUARD_V1 — тот же предикат, на котором стоят рабочие списки
 // (visits.js:91, procedures.js:50 — там он же, но в SQL: .is('sync_origin', null)).
@@ -135,14 +137,17 @@ export function openVisitBillModal(visit, onChanged) {
         const isDispensed = r.clinic_item_id != null;
         const itemName = svc ? svc.name : (prod ? prod.name : '—');
         const billed = r.invoice_item_id != null;
-        const price = svc ? svc.price : r.unit_price;
+        // LIVE_AUDIT_FIX_V1 (B8) — цена строки, а не каталога: у строки своя
+        // (цена врача, второй/повторный визит), и счёт выставляется по ней.
+        const price = r.unit_price != null ? r.unit_price : (svc ? svc.price : 0);
+        const canRemove = hasActorRole(isDispensed ? BILL_VOID_ROLES : BILL_REMOVE_ROLES);
         return h('tr', null,
             h('td', null, itemName || '—',
                 isDispensed ? h('span', { style: { marginLeft: '8px' } }, Tag('Dispensed', { kind: 'info' })) : null),
             h('td', { class: 'num' }, String(r.quantity)),
             h('td', { class: 'num' }, fmtPrice(price)),
             h('td', { style: { textAlign: 'center' } }, billed ? '✓' : '—'),
-            h('td', null, billed ? null : h('button', {
+            h('td', null, billed || !canRemove ? null : h('button', {
                 class: 'btn btn-sm', type: 'button',
                 onclick: () => removeLine(r),
             }, 'Remove')),
@@ -159,7 +164,15 @@ export function openVisitBillModal(visit, onChanged) {
                 .order('id');
             if (error) throw error;
             const rows = data || [];
-            unInvoicedIds = rows.filter(r => r.invoice_item_id == null).map(r => r.id);
+            // FINAL_MONEY_FIX_V1 (I1) — «выставить всё невыставленное» не берёт
+            // строки, за которые пациенту вернули деньги: их выставляют заново
+            // только явным выбором в окне визита (сервер без него откажет).
+            let refunded = new Set();
+            try {
+                const { data: rf } = await supabase.rpc('visit_refunded_lines', { visit_id: visit.id });
+                refunded = new Set(((rf && rf.line_ids) || []).map(Number));
+            } catch (e) { /* без пометки сервер всё равно не выставит их молча */ }
+            unInvoicedIds = rows.filter(r => r.invoice_item_id == null && !refunded.has(Number(r.id))).map(r => r.id);
             clear(linesTbody);
             if (rows.length === 0) {
                 linesEmptyEl.style.display = '';
@@ -176,15 +189,16 @@ export function openVisitBillModal(visit, onChanged) {
 
     async function removeLine(line) {
         try {
+            // LIVE_AUDIT_FIX_V1 — строку услуги снимает сервер (remove_own_visit_line).
             const { error } = (line && line.clinic_item_id != null)
                 ? await supabase.rpc('void_dispense', { visit_service_id: line.id })
-                : await supabase.from('visit_services').delete().eq('id', line.id);
+                : await supabase.rpc('remove_own_visit_line', { visit_service_id: line.id });
             if (error) throw error;
             toast('Removed', 'ok');
             await reloadAll();
             if (typeof onChanged === 'function') await onChanged();
         } catch (e) {
-            toast((e && e.message) || 'Failed to remove service.', 'fail');
+            toast(trf('Услуга не снята: {msg}', { msg: (e && e.message) || '—' }), 'fail');
         }
     }
 
@@ -194,12 +208,15 @@ export function openVisitBillModal(visit, onChanged) {
     const addQty = h('input', { type: 'number', min: '1', step: '1', value: '1' });
     const addBtn = h('button', { class: 'btn btn-sm', type: 'button' }, Icon('Plus', { size: 13 }), ' Add');
 
+    const serviceById = new Map();   // LIVE_AUDIT_FIX_V1 — requires_doctor для строки
     async function loadServiceOptions() {
         try {
             const { data, error } = await supabase.from('services')
-                .select('id,name,price').eq('active', 1).order('name');
+                .select('id,name,price,requires_doctor,type,is_lab').eq('active', 1).order('name');
             if (error) throw error;
+            serviceById.clear();
             for (const s of (data || [])) {
+                serviceById.set(String(s.id), s);
                 addSelect.appendChild(h('option', { value: s.id, dataset: { price: String(s.price) } },
                     `${s.name} — ${fmtPrice(s.price)}`));
             }
@@ -211,20 +228,15 @@ export function openVisitBillModal(visit, onChanged) {
     addBtn.addEventListener('click', async () => {
         if (!addSelect.value) { toast('Choose a service first.', 'fail'); return; }
         const opt = addSelect.selectedOptions[0];
-        const price = Number(opt && opt.dataset.price) || 0;
         const qty = Number(addQty.value) || 1;
+        const svc = serviceById.get(String(addSelect.value))
+            || { id: Number(addSelect.value), price: Number(opt && opt.dataset.price) || 0, requires_doctor: 0 };
 
         addBtn.disabled = true;
         try {
-            const { error } = await supabase.from('visit_services').insert({
-                visit_id: visit.id,
-                service_id: Number(addSelect.value),
-                quantity: qty,
-                unit_price: price,
-                total: round2(price * qty),
-                status: 'added',
-                created_by: currentUserId(),
-            }).select().single();
+            // LIVE_AUDIT_FIX_V1 (B8) — цена/уровень по котировке, врач — по правилу.
+            const row = await billLineFor(visit, svc, qty);
+            const { error } = await supabase.from('visit_services').insert(row).select().single();
             if (error) throw error;
             toast('Service added', 'ok');
             addSelect.value = '';
@@ -232,7 +244,7 @@ export function openVisitBillModal(visit, onChanged) {
             await reloadAll();
             if (typeof onChanged === 'function') await onChanged();
         } catch (e) {
-            toast((e && e.message) || 'Failed to add service.', 'fail');
+            toast(trf('Услуга не добавлена: {msg}', { msg: (e && e.message) || '—' }), 'fail');
         } finally {
             addBtn.disabled = false;
         }
@@ -446,14 +458,15 @@ export function openVisitBillModal(visit, onChanged) {
                     ),
                     linesEmptyEl,
                 ),
-                h('div', { class: 'row', style: { alignItems: 'flex-end', marginTop: '10px' } },
+                // LIVE_AUDIT_FIX_V1 — только ролям, которым сервер это даст.
+                hasActorRole(BILL_ADD_ROLES) ? h('div', { class: 'row', style: { alignItems: 'flex-end', marginTop: '10px' } },
                     h('div', { class: 'grow' }, field('Service', addSelect)),
                     h('div', { style: { width: '90px' } }, field('Qty', addQty)),
-                    addBtn),
-                h('div', { class: 'row', style: { alignItems: 'flex-end', marginTop: '8px' } },
+                    addBtn) : null,
+                hasActorRole(BILL_DISPENSE_ROLES) ? h('div', { class: 'row', style: { alignItems: 'flex-end', marginTop: '8px' } },
                     h('div', { class: 'grow' }, field('Product', dispenseSelect)),
                     h('div', { style: { width: '90px' } }, field('Qty', dispenseQty)),
-                    dispenseBtn),
+                    dispenseBtn) : null,
             ),
             h('div', null,
                 sectionTitle('Generate invoice'),
@@ -473,4 +486,50 @@ export function openVisitBillModal(visit, onChanged) {
     loadServiceOptions();
     loadProductOptions();
     reloadAll();
+}
+
+// LIVE_AUDIT_FIX_V1 — КНОПКИ ПО РОЛЯМ СЕРВЕРА. Окно открывает и касса, а
+// «Remove» / «Add» / «Dispense» показывались всем: касса и лаборатория получали
+// отказ сервера на каждое нажатие. Здесь — зеркала серверных правил:
+//   снять услугу   — remove_own_visit_line (server/services/rpc/visit-lines.js;
+//                    врач — только свою, это решает сервер);
+//   вернуть товар  — void_dispense (inventory.js VOID_ROLES);
+//   добавить услугу — visit_services.insert (schema-registry.js);
+//   выдать товар   — dispense_item (inventory.js DISPENSE_ROLES).
+export const BILL_REMOVE_ROLES = ['admin', 'registrar', 'doctor'];
+export const BILL_VOID_ROLES = ['admin', 'inventory', 'doctor', 'nurse'];   // INPATIENT_MONEY_FIX_V1 (C4)
+export const BILL_ADD_ROLES = ['admin', 'registrar', 'doctor'];
+export const BILL_DISPENSE_ROLES = ['admin', 'doctor', 'nurse', 'inventory'];
+
+/**
+ * LIVE_AUDIT_FIX_V1 (B8) — строка «Add» окна счёта: цена и уровень цены — по
+ * котировке сервера (service_price_quote: второй/повторный визит), врач строки
+ * — врач визита только у врачебной услуги (requires_doctor); процедура, анализ
+ * и услуга без врача исполнителя от визита не получают.
+ */
+export async function billLineFor(visit, service, qty) {
+    let price = Number(service.price) || 0;
+    let tier = null;
+    try {
+        if (visit.patient_id) {
+            const q = await supabase.rpc('service_price_quote', { patient_id: visit.patient_id, service_ids: [service.id], visit_id: visit.id });
+            const quote = q && !q.error && q.data && q.data.quotes ? q.data.quotes[service.id] : null;
+            if (quote && Number.isFinite(Number(quote.price))) {
+                price = Number(quote.price);
+                tier = quote.tier === 'secondary' || quote.tier === 'repeat' ? quote.tier : 'primary';
+            }
+        }
+    } catch (_) { /* старый сервер — цена каталога */ }
+    const row = {
+        visit_id: visit.id,
+        service_id: Number(service.id),
+        quantity: qty,
+        unit_price: price,
+        total: round2(price * qty),
+        status: 'added',
+        created_by: currentUserId(),
+        doctor_id: linePerformer(service, null, visit.doctor_id),
+    };
+    if (tier) row.price_tier = tier;
+    return row;
 }

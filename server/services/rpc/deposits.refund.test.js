@@ -182,3 +182,38 @@ test('старый депозит без счёта возвращается ч�
   assert.equal(depositBalance(db, { patient_id: pid }, CASH).balance, 0);
   db.close();
 });
+
+// LIVE_AUDIT_FIX_V1 — частичный возврат оставлял счёт депозита «частично» —
+// и касса показывала пациенту долг ровно на возвращённую сумму.
+test('частичный возврат: счёт депозита не становится долгом — итог уменьшается вместе с оплаченным', async () => {
+  const { db, pid } = seed();
+  openCashShift(db, { opening_float: 1000000 }, CASH);
+  const dep = accepted(db, pid);
+  refundDeposit(db, { deposit_id: dep.id, amount: 250000 }, CASH);
+  const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(dep.invoice_id);
+  assert.equal(inv.status, 'paid', 'счёт депозита ушёл в «частично» — касса покажет долг');
+  assert.equal(inv.paid_amount, 500000);
+  assert.equal(inv.total_amount, 500000, 'итог не уменьшен — остаток к оплате 250 000, которого нет');
+  const item = db.prepare('SELECT SUM(total) t FROM invoice_items WHERE invoice_id = ?').get(inv.id).t;
+  assert.equal(item, 500000, 'строка счёта разошлась с итогом');
+  // платежи (выручка) не тронуты: +750 000 и −250 000
+  const pays = db.prepare('SELECT amount FROM payments WHERE invoice_id = ? ORDER BY id').all(inv.id).map((r) => r.amount);
+  assert.deepEqual(pays, [750000, -250000]);
+  assert.equal(pays.reduce((a, b) => a + b, 0), inv.paid_amount, 'сумма платежей = оплачено по счёту');
+  // касса: в списке к оплате этого счёта нет
+  const { cashierInvoices } = await import('./cashier.js');
+  const out = cashierInvoices(db, { status: 'unpaid' }, CASH);
+  assert.ok(Array.isArray(out.rows));
+  assert.ok(!out.rows.some((r) => r.id === inv.id && r.status !== 'paid'), 'счёт депозита виден кассе как долг');
+  assert.equal(out.counts.partial.n, 0, 'чип «Частично» считает возвращённый депозит');
+  db.close();
+});
+
+test('полный возврат по-прежнему — счёт депозита «возвращён»', () => {
+  const { db, pid } = seed();
+  openCashShift(db, { opening_float: 1000000 }, CASH);
+  const dep = accepted(db, pid);
+  refundDeposit(db, { deposit_id: dep.id }, CASH);
+  assert.equal(db.prepare('SELECT status FROM invoices WHERE id = ?').get(dep.invoice_id).status, 'refunded');
+  db.close();
+});

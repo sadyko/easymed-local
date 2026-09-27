@@ -6,7 +6,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { openVisitWizard } from './visit-wizard.js?v=tier2';   // CRM_V4 — конверсия сразу в реальный заказ услуги
+import { openVisitWizard, canAddVisitLines } from './visit-wizard.js?v=tier2';   // CRM_V4 — конверсия сразу в реальный заказ услуги · LIVE_AUDIT_FIX_V1 — canAddVisitLines
 import { digitsOf, phoneLikePattern, filterPhoneMatches, uzLocalDigits, MIN_PHONE_DIGITS, leadMatchesQuery, phoneKey } from './crm-phone-match.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
 // CRM_CARD_V2 — номер на карточке группируется ТЕМ ЖЕ правилом, что и во всех
@@ -28,7 +28,7 @@ import { linkCrmRequestsToPatient } from '../data.js';
 // другой модуль, то есть вторая копия окна со своим состоянием.
 import { openQuickPatientModal } from './quick-patient-modal.js?v=qp1';
 import { openCustDev } from './custdev.js';           // CUSTDEV_V1 — обзвон после визита
-import { canView } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev»
+import { canView, isRouteAllowed } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev» · LIVE_AUDIT_FIX_V1 — isRouteAllowed
 import { boardConfig } from '../crm-settings-logic.js?v=crmcfg1';   // CRM_CONFIG_V1
 import { stageKeysFrom } from '../crm-stages.js';   // CRM_LINKS_V1 — ступени по виду, а не по имени
 // PASTEL_IDENTITY_V1 — оттенок ступени воронки. Словарь один на три доски
@@ -1083,7 +1083,20 @@ async function paint() {
         }
         r.patient_id = p.id;
         r.patients = { id: p.id, full_name: p.full_name, mrn: p.mrn };
-        if (refs.onNavigate) refs.onNavigate('patient-card', p);
+        afterConvert(r, p);
+    }
+
+    // LIVE_AUDIT_FIX_V1 — ПОСЛЕ КОНВЕРСИИ: карта и мастер — только тем, кому
+    // они открыты. Колл-центр попадал в карту пациента («Нет доступа») и в
+    // мастер, который заводил пустой визит и падал на первой строке услуги
+    // («not allowed»). Оператору — честные слова: пациент привязан, услуги
+    // оформит регистратура (или «Сохранить и записать» в самой заявке).
+    function afterConvert(r, p) {
+        if (refs.onNavigate && isRouteAllowed('patient-card')) refs.onNavigate('patient-card', p);
+        if (!canAddVisitLines()) {
+            toast(tr('Пациент привязан к заявке. Услуги оформит регистратура.'), 'ok');
+            return;
+        }
         // CRM_CONVERT_V1 — мастер открывается всегда: с услугой заявки в смете,
         // либо пустым, чтобы регистратор выбрал её сам.
         openVisitWizard(null, p, { presetServiceIds: r.service_id ? [r.service_id] : [] });
@@ -1103,11 +1116,8 @@ async function paint() {
         }
         patientRegistrationModal({
             requestRow: r,
-            onCreated: (p) => {
-                if (refs.onNavigate) refs.onNavigate('patient-card', p);
-                // Мастер сам подберёт врача, дату и очередь — как при обычном заказе.
-                openVisitWizard(null, p, { presetServiceIds: r.service_id ? [r.service_id] : [] });
-            },
+            // Мастер сам подберёт врача, дату и очередь — как при обычном заказе.
+            onCreated: (p) => afterConvert(r, p),   // LIVE_AUDIT_FIX_V1
         });
     }
 
@@ -2696,7 +2706,7 @@ async function paint() {
                 // на лету (конверсия работает по id), поэтому «пациент пришёл
                 // сразу с ресепшена» — это одна кнопка, а не создать-открыть-нажать.
                 (!isEdit || r.status !== CONVERT_STATUS) ? scheduleBtn : null,
-                (isEdit && r.status === CONVERT_STATUS && r.patients) ? h('button', {
+                (isEdit && r.status === CONVERT_STATUS && r.patients && isRouteAllowed('patient-card')) ? h('button', {   // LIVE_AUDIT_FIX_V1 — колл-центру карта закрыта
                     class: 'btn btn-outline', type: 'button',
                     onclick: () => { close(); refs.onNavigate && refs.onNavigate('patient-card', r.patients); },
                 }, 'Карта пациента →') : null,

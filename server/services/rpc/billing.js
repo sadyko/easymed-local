@@ -11,9 +11,11 @@ import { invoiceStatusFor } from '../domain/money.js';
 // function, shared with the doctor's pay (rpc/reports.js): own price over the
 // catalog, and VISIT_TIER_PRICING_V1 — a line quoted as a second/repeat visit
 // keeps that price at the till (the catalog price is the FIRST visit's price).
-import { lineUnitPrice } from '../domain/pricing.js';
+import { lineUnitPrice, consultationFor } from '../domain/pricing.js';
 import { hasAnyRole } from '../roles.js';
 import { localDate } from '../domain/day.js';
+// BILLING_AUDIT_FIX_V1 (B3) — тариф заменённой услуги спрашивается заново.
+import { servicePriceQuote } from './service-price-quote.js';
 // HOLDINGS_FIRST_V1 — «вернуть КАЖДУЮ часть туда, откуда она пришла» живёт в
 // одном месте на весь сервер (rpc/inventory.js): подотчёт сотрудника, кабинет,
 // отдел, склад. Кольцо импортов здесь такое же, как у billing ↔ cashier строкой
@@ -22,14 +24,18 @@ import { localDate } from '../domain/day.js';
 import { restoreSources } from './inventory.js';
 // DEPOSIT_WALLET_V1 — баланс пациента: списание при оплате «с баланса» и
 // зачисление при возврате «на баланс» — в той же транзакции, что платёж.
-import { spendWallet, creditWallet, isDepositInvoice, walletBalance, realMoney, WalletError, DEPOSIT_INVOICE_REFUSAL } from '../domain/wallet.js';
+import { spendWallet, creditWallet, moneyDocRefusal, walletBalance, realMoney, WalletError } from '../domain/wallet.js';
 // Ревью I4 — возврат откатывает кэшбэк этого счёта.
 // CASHBACK_SERVER_V2 — кэшбэк начисляет оплата, возврат его подстраивает.
 import { creditCashbackOnPaid, adjustCashbackAfterRefund } from './cashback.js';
 import { voidInvoice } from './cashier.js';   // ре-ревью п.9 — отмена после полного возврата на баланс
 import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // CARD_BALANCE_V1 — подарочная карта / сертификат платит своим остатком.
-import { spendCard, returnToCard, CardError } from '../domain/cards.js';
+import { spendCard, returnToCard, CardError, cardClosedByRefund } from '../domain/cards.js';
+import { markRefundRelease, refundedLineIds, clearRefundRelease } from '../domain/pay-releases.js';   // PAY_REFUND_V1, FINAL_MONEY_FIX_V1
+// INPATIENT_MONEY_FIX_V1 — строку проживания счёт узнаёт по той же метке, что
+// акт и проживание (одна копия на сервер и браузер).
+import { ACCOMMODATION_NOTE_PREFIX, ACCOMMODATION_LABEL } from '../../../public/js/shared/accommodation-line.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -297,6 +303,20 @@ export function createInvoiceForVisit(db, args, user) {
       rows.push(row);
     }
 
+    // FINAL_MONEY_FIX_V1 (I1) — УСЛУГУ, ЗА КОТОРУЮ ПАЦИЕНТУ ВЕРНУЛИ ДЕНЬГИ, СНОВА
+    // НЕ ВЫСТАВЛЯЮТ МОЛЧА. Возврат строки (refund_invoice_line) и отмена счёта
+    // после возврата оставляют сделанную работу в визите невыставленной — а
+    // окно визита отмечает все невыставленные строки, и регистратор брал за
+    // возвращённое второй раз (150 000 вместо 50 000, и доля врача вернулась).
+    // Такую строку выставляют только явным выбором: rebill_refunded: true
+    // (окно визита — галочкой у строки с пометкой «возвращено»).
+    const refundedIds = refundedLineIds(db, 'out', ids);
+    if (refundedIds.length && !(args.rebill_refunded === true || args.rebill_refunded === 1)) {
+      throw new RpcError(refundedIds.length === 1
+        ? 'За эту услугу пациенту уже вернули деньги — снова её выставляют только явным выбором («выставить заново»).'
+        : 'За ' + refundedIds.length + ' из выбранных услуг пациенту уже вернули деньги — снова их выставляют только явным выбором («выставить заново»).', 409);
+    }
+
     // The CATALOG is authoritative for a real service or a dispensed product —
     // never the client-supplied unit_price — except that a performing doctor
     // with their own price for that service overrides the catalog
@@ -322,6 +342,10 @@ export function createInvoiceForVisit(db, args, user) {
           throw new RpcError(`product ${row.clinic_item_id} not found`, 400);
         }
         svcName = prod.name;
+      } else if (row.consultation_type_id != null) {
+        // BILLING_AUDIT_FIX_V1 (B7) — консультация: имя с сервера, не пустое.
+        const c = consultationFor(db, row.consultation_type_id, row.doctor_id);
+        if (c) svcName = c.name;
       }
       // PAY_BASIS_PERFORMED_V1 — the price rule lives in ONE place
       // (domain/pricing.js lineUnitPrice): the doctor's own price over the
@@ -362,7 +386,14 @@ export function createInvoiceForVisit(db, args, user) {
     // дал больше — действует большая скидка, если не дал ничего — действует
     // скидка группы. Взять меньшую значило бы молча отнять у VIP его условия,
     // а сложить — дать скидку дважды за одно и то же.
-    const categoryPercent = patientCategoryDiscount(db, visit.patient_id);
+    //
+    // BILLING_AUDIT_FIX_V1 (B5) — СЧЁТ ПЛАТЕЛЬЩИКУ СКИДКИ ГРУППЫ ПАЦИЕНТА НЕ
+    // ПОЛУЧАЕТ. Группа — договорённость клиники с ПАЦИЕНТОМ (VIP, льготник);
+    // страховая или организация платит по своему договору, и скидка пациента
+    // на её счёт молча уменьшала сумму, которую клиника выставляет
+    // контрагенту. Ручная скидка кассира и скидка пакета остаются.
+    const payerSet = args && args.payer_id !== undefined && args.payer_id !== null;
+    const categoryPercent = payerSet ? 0 : patientCategoryDiscount(db, visit.patient_id);
     // PACKAGES_V1 (2026-09-26) — СКИДКА ПАКЕТА ПОСТРОЧНО. Строка пакета со
     // скидкой получает СВОЮ скидку (invoice_items.discount_amount): бо́льшую из
     // скидки пакета и скидки категории пациента — не обе (решение владельца).
@@ -437,6 +468,7 @@ export function createInvoiceForVisit(db, args, user) {
       const description = svcName || '';
       const itemInfo = insertItem.run(invoiceId, row.service_id, description, qty, unit, line, ownDiscount);
       linkVisitService.run(itemInfo.lastInsertRowid, row.id);
+      clearRefundRelease(db, 'out', [row.id]);   // FINAL_MONEY_FIX_V1 (M1) — отметка была про прежний счёт
       // Keep the visit line consistent with what was actually billed.
       syncVisitService.run(unit, line, row.id);
     }
@@ -458,7 +490,7 @@ export function createInvoiceForVisit(db, args, user) {
     }
 
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
-    const items = db.prepare('SELECT * FROM invoice_items WHERE invoice_id = ?').all(invoiceId);
+    const items = db.prepare('SELECT * FROM invoice_items WHERE invoice_id = ? ORDER BY id').all(invoiceId);   // BILLING_AUDIT_FIX_V1 (A2) — порядок присланных строк
     // PACKAGES_V1 (ревью I-1) — rest_discount: сколько из присланной скидки
     // (ручная/лояльность/промокод, с полом категории) счёт реально применил —
     // без скидок пакета. Мастер переносит остаток своей скидки на счёт
@@ -516,7 +548,7 @@ export function recordPayment(db, args, user) {
       throw new RpcError('invoice not found.', 400);
     }
     assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
-    if (isDepositInvoice(db, invoice)) throw new RpcError(DEPOSIT_INVOICE_REFUSAL, 400);   // ревью C1
+    { const refusal = moneyDocRefusal(db, invoice); if (refusal) throw new RpcError(refusal, 400); }   // ревью C1 + CARD_SALE_V1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
       throw new RpcError(`invoice is ${invoice.status}.`, 400);
     }
@@ -627,7 +659,7 @@ export function recordPaymentSplit(db, args, user) {
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
     if (!invoice) throw new RpcError('invoice not found.', 400);
     assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
-    if (isDepositInvoice(db, invoice)) throw new RpcError(DEPOSIT_INVOICE_REFUSAL, 400);   // ревью C1
+    { const refusal = moneyDocRefusal(db, invoice); if (refusal) throw new RpcError(refusal, 400); }   // ревью C1 + CARD_SALE_V1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
       throw new RpcError(`invoice is ${invoice.status}.`, 400);
     }
@@ -781,7 +813,15 @@ function invoiceOwnDiscount(db, invoiceId) {
 //            скидки.
 // Строка пакета, заменённая другой услугой, теряет скидку пакета и становится
 // строкой «без своей» — пол категории ложится и на неё (ревью M-3).
-function repriceUnpaidInvoice(db, inv, oldOwn) {
+//
+// BILLING_AUDIT_FIX_V1 (B4) — ПОСЛЕ ПЕРЕСЧЁТА ДЕЙСТВУЕТ ТО ЖЕ ПРАВИЛО НУЛЯ, ЧТО
+// ПРИ ВЫСТАВЛЕНИИ (settleZeroTotal ниже).
+// (B5) — пол скидки группы пациента не ложится на счёт плательщика.
+// (B1) — `oldBase`: возврат строки. Остаток скидки (ручная / категорийная на
+// строки без своей) уменьшается пропорционально ушедшей базе, а не держится
+// прежней суммой — иначе вся ручная скидка счёта легла бы на оставшиеся
+// строки, и возврат одной услуги удешевлял бы другие.
+function repriceUnpaidInvoice(db, inv, oldOwn, { oldBase = null } = {}) {
   const left = db.prepare(`SELECT COALESCE(SUM(total), 0) s,
                                   COALESCE(SUM(discount_amount), 0) own,
                                   COALESCE(SUM(CASE WHEN COALESCE(discount_amount, 0) > 0 THEN 0 ELSE total END), 0) base
@@ -789,13 +829,77 @@ function repriceUnpaidInvoice(db, inv, oldOwn) {
   const subtotal = round2(left.s);
   const own = round2(left.own);
   const base = round2(left.base);
-  const oldRest = Math.max(round2((Number(inv.discount_amount) || 0) - oldOwn), 0);
-  const floor = round2(base * patientCategoryDiscount(db, inv.patient_id) / 100);
+  let oldRest = Math.max(round2((Number(inv.discount_amount) || 0) - oldOwn), 0);
+  if (oldBase !== null) oldRest = oldBase > 0 ? round2(oldRest * Math.min(base, oldBase) / oldBase) : 0;
+  const catPct = inv.payer_id ? 0 : patientCategoryDiscount(db, inv.patient_id);
+  const floor = round2(base * catPct / 100);
   const rest = round2(Math.min(Math.max(oldRest, floor), base));
   const discount = Math.min(round2(own + rest), subtotal);
+  const total = round2(subtotal - discount);
   db.prepare('UPDATE invoices SET subtotal = ?, discount_amount = ?, total_amount = ? WHERE id = ?')
-    .run(subtotal, discount, round2(subtotal - discount), inv.id);
+    .run(subtotal, discount, total, inv.id);
+  settleZeroTotal(db, inv.id);
   return db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
+}
+
+// BILLING_AUDIT_FIX_V1 (B4) — СТАТУС СЧЁТА БЕЗ ДЕНЕГ ПОСЛЕ ПЕРЕСЧЁТА СУММЫ.
+//
+// Счёт, ставший нулевым (убрали платную услугу, заменили на бесплатную),
+// оставался «Не оплачен» навсегда: record_payment отказывает при остатке 0, а
+// строки висели «ожидает оплату». Теперь — как в createInvoiceForVisit
+// (FREE_SERVICE_V1): ноль — это 'paid' с отметкой времени и строки в
+// очередь. И обратно: бесплатный счёт, получивший платную строку, снова
+// 'unpaid'. Касается только счёта, по которому денег нет (paid_amount 0).
+function settleZeroTotal(db, invoiceId) {
+  const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
+  if (!inv || (Number(inv.paid_amount) || 0) !== 0) return;
+  if (inv.status === 'void' || inv.status === 'refunded') return;
+  const total = round2(Number(inv.total_amount) || 0);
+  if (total <= 0 && inv.status !== 'paid') {
+    db.prepare("UPDATE invoices SET status = 'paid', paid_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(invoiceId);
+    db.prepare(`
+      UPDATE visit_services SET status = 'queued'
+       WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
+         AND status NOT IN ('in_progress', 'completed', 'collected', 'resulted')
+    `).run(invoiceId);
+  } else if (total > 0 && inv.status === 'paid') {
+    db.prepare("UPDATE invoices SET status = 'unpaid', paid_at = NULL WHERE id = ?").run(invoiceId);
+  }
+}
+
+// BILLING_AUDIT_FIX_V1 (B-minor) — статус счёта словами кассы, а не кодом
+// («счёт уже paid»).
+const STATUS_RU = { paid: 'оплачен', partial: 'оплачен частично', debt: 'переведён в долг', void: 'отменён', refunded: 'возвращён', unpaid: 'не оплачен' };
+function statusRu(st) { return STATUS_RU[st] || st; }
+
+// Счёт, который ещё можно править строками: денег по нему нет, и он либо
+// «Не оплачен», либо бесплатный (итог 0), закрытый при выставлении. Бесплатный
+// раньше отказывал «счёт уже paid», и убрать из него строку было нечем.
+function editableInvoiceRefusal(inv) {
+  if (!inv) return null;
+  const free = inv.status === 'paid' && !(Number(inv.paid_amount) > 0) && !(Number(inv.total_amount) > 0);
+  if (!(inv.paid_amount > 0) && (inv.status === 'unpaid' || free)) return null;
+  return 'счёт уже ' + (inv.paid_amount > 0 ? 'оплачен (частично)' : statusRu(inv.status))
+    + ' — сначала оформите возврат или отмените его в кассе.';
+}
+
+// INPATIENT_MONEY_FIX_V1 — ВЫПОЛНЕННАЯ РАБОТА НЕ СНИМАЕТСЯ И НЕ ПОДМЕНЯЕТСЯ.
+//
+// Один список «работа начата или сделана» на сервер — его же спрашивает отмена
+// счёта (cashier.js voidInvoice). Прежде здесь стояли только in_progress и
+// completed: взятый анализ ('collected') снимался вместе с пробой, а на
+// готовом ('resulted') удаление падало 500 на внешнем ключе lab_results.
+// Замена услуги перенесла бы результаты анализа на другую услугу. След работы
+// (результат, документ, сообщение прибора) держит строку так же, как статус.
+export const PERFORMED_LINE_STATUSES = ['collected', 'in_progress', 'resulted', 'completed'];
+function assertNotPerformed(db, vs, verb) {
+  const trace = db.prepare(`
+    SELECT (EXISTS(SELECT 1 FROM lab_results WHERE visit_service_id = ?)
+         OR EXISTS(SELECT 1 FROM visit_documents WHERE visit_service_id = ?)
+         OR EXISTS(SELECT 1 FROM lab_device_messages WHERE visit_service_id = ?)) AS t`).get(vs.id, vs.id, vs.id);
+  if (PERFORMED_LINE_STATUSES.includes(vs.status) || (trace && trace.t)) {
+    throw new RpcError('услуга уже оказывается/оказана (взята проба, есть результат или документ) — ' + verb + ' нельзя.', 400);
+  }
 }
 
 export function removeUnpaidService(db, args, user) {
@@ -812,9 +916,7 @@ export function removeUnpaidService(db, args, user) {
     // BRANCH_MONEY_GUARD_V1 — удаление здесь означает надгробие в журнале (084),
     // то есть строка исчезнет и в том здании, где её сделали.
     assertOwnBuilding(db, vs, 'Услуга');
-    if (vs.status === 'in_progress' || vs.status === 'completed') {
-      throw new RpcError('услуга уже оказывается/оказана — удалить нельзя.', 400);
-    }
+    assertNotPerformed(db, vs, 'удалить');   // INPATIENT_MONEY_FIX_V1
 
     // FK order: visit_services.invoice_item_id references invoice_items, so
     // the service LINE is deleted first, then its invoice item, then (if
@@ -825,9 +927,7 @@ export function removeUnpaidService(db, args, user) {
     const inv = item ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id) : null;
     if (item && !inv) throw new RpcError('invoice not found.', 500);
     if (inv) assertOwnBuilding(db, inv, 'Счёт');   // BRANCH_MONEY_GUARD_V1
-    if (inv && (inv.paid_amount > 0 || inv.status !== 'unpaid')) {
-      throw new RpcError('счёт уже ' + (inv.paid_amount > 0 ? 'оплачен (частично)' : inv.status) + ' — сначала отмените его в кассе.', 400);
-    }
+    { const refusal = editableInvoiceRefusal(inv); if (refusal) throw new RpcError(refusal, 400); }   // BILLING_AUDIT_FIX_V1 (B-minor)
 
     // HOLDINGS_FIRST_V1 — товар возвращается ДО удаления строки: источники
     // читаются из движений ЭТОЙ строки (reference_id = vsId), а после DELETE
@@ -875,9 +975,7 @@ export function changeUnpaidService(db, args, user) {
     const vs = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
     if (!vs) throw new RpcError('service line not found.', 400);
     assertOwnBuilding(db, vs, 'Услуга');   // BRANCH_MONEY_GUARD_V1
-    if (vs.status === 'in_progress' || vs.status === 'completed') {
-      throw new RpcError('услуга уже оказывается/оказана — заменить нельзя.', 400);
-    }
+    assertNotPerformed(db, vs, 'заменить');   // INPATIENT_MONEY_FIX_V1
     // HOLDINGS_FIRST_V1 — ТОВАРНУЮ СТРОКУ ЗАМЕНИТЬ НЕЛЬЗЯ.
     //
     // Вкладка «Услуги» карточки пациента показывает ВСЕ строки визита, товарные
@@ -905,22 +1003,37 @@ export function changeUnpaidService(db, args, user) {
     const inv = item ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id) : null;
     if (item && !inv) throw new RpcError('invoice not found.', 500);
     if (inv) assertOwnBuilding(db, inv, 'Счёт');   // BRANCH_MONEY_GUARD_V1
-    if (inv && (inv.paid_amount > 0 || inv.status !== 'unpaid')) {
-      throw new RpcError('счёт уже ' + (inv.paid_amount > 0 ? 'оплачен (частично)' : inv.status) + ' — сначала отмените его в кассе.', 400);
-    }
+    { const refusal = editableInvoiceRefusal(inv); if (refusal) throw new RpcError(refusal, 400); }   // BILLING_AUDIT_FIX_V1 (B-minor)
 
     const qty = vs.quantity || 1;
-    const lineTotal = round2(svc.price * qty);
+    // BILLING_AUDIT_FIX_V1 (B3) — НОВАЯ УСЛУГА ОЦЕНИВАЕТСЯ ТАК ЖЕ, КАК ПРИ
+    // ВЫСТАВЛЕНИИ. Здесь стояла цена каталога и прежнее слово тарифа строки:
+    // врач с личной ценой терял её, а тариф старой услуги («второй визит»)
+    // оставался на строке новой. Теперь тариф спрашивается заново
+    // (service_price_quote по дню ЭТОГО визита, сам визит исключён), а цена —
+    // lineUnitPrice: личная цена врача строки, поверх — тариф. Одно правило с
+    // кассой и выплатой врачу.
+    const visitRow = db.prepare('SELECT patient_id, visit_date FROM visits WHERE id = ?').get(vs.visit_id);
+    let tier = 'primary';
+    if (visitRow && visitRow.patient_id) {
+      const visitDay = db.prepare(`SELECT ${localDate('?')} AS d`).get(visitRow.visit_date).d;
+      const q = servicePriceQuote(db, { patient_id: visitRow.patient_id, service_ids: [newServiceId], visit_id: vs.visit_id, date: visitDay }, user).quotes[newServiceId];
+      if (q && (q.tier === 'secondary' || q.tier === 'repeat')) tier = q.tier;
+    }
+    const unit = round2(lineUnitPrice(db, { ...vs, service_id: newServiceId, clinic_item_id: null, consultation_type_id: null, price_tier: tier }, { service: svc }));
+    const lineTotal = round2(unit * qty);
     // PACKAGES_V1 — другая услуга уже не услуга пакета: строка теряет пакет и
     // его скидку (скидка счёта уменьшается на неё же ниже).
-    db.prepare('UPDATE visit_services SET service_id = ?, unit_price = ?, total = ?, package_id = NULL WHERE id = ?')
-      .run(newServiceId, svc.price, lineTotal, vsId);
+    // FINAL_MONEY_FIX_V1 (M5) — строка стала УСЛУГОЙ: вид приёма консультации с
+    // неё снимается, иначе остаётся химера «услуга + вид приёма».
+    db.prepare('UPDATE visit_services SET service_id = ?, unit_price = ?, total = ?, package_id = NULL, price_tier = ?, consultation_type_id = NULL WHERE id = ?')
+      .run(newServiceId, unit, lineTotal, tier, vsId);
 
     let invoice = null;
     if (item) {
       const oldOwn = invoiceOwnDiscount(db, inv.id);   // PACKAGES_V1 — ДО правки строки
       db.prepare('UPDATE invoice_items SET service_id = ?, description = ?, unit_price = ?, total = ?, discount_amount = 0 WHERE id = ?')
-        .run(newServiceId, svc.name || '', svc.price, lineTotal, item.id);
+        .run(newServiceId, svc.name || '', unit, lineTotal, item.id);
       invoice = repriceUnpaidInvoice(db, inv, oldOwn);
     }
 
@@ -937,6 +1050,137 @@ export function changeUnpaidService(db, args, user) {
 // amount is capped by BOTH the original payment (minus refunds already made
 // against it, tagged REFUND#<id> in notes) and the invoice's current
 // paid_amount, so repeated refunds can never drive anything below zero.
+
+// The tag must match on a BOUNDARY, not a bare prefix: `LIKE 'REFUND#1%'`
+// also matches REFUND#10 / REFUND#123, so refunds of other payments were
+// counted against this one and legitimate refunds got refused. A refund
+// note is either exactly the tag or the tag followed by ' <something>'
+// (' — <reason>', BILLING_AUDIT_FIX_V1: ' LINE#<item> — <reason>'), so those
+// are the only two shapes to match.
+function refundedOfPayment(db, paymentId) {
+  const tag = 'REFUND#' + paymentId;
+  return round2(db.prepare(
+    "SELECT COALESCE(SUM(-amount),0) s FROM payments WHERE amount < 0 AND (notes = ? OR notes LIKE ?)"
+  ).get(tag, tag + ' %').s);
+}
+
+// BILLING_AUDIT_FIX_V1 (B1) — ОДИН ВОЗВРАТ ПО ОДНОМУ ПЛАТЕЖУ, внутри
+// транзакции вызывающего. Общая часть refund_payment и refund_invoice_line:
+// куда (деньгами тем же способом / на баланс / на ту же карту), потолок
+// наличных по оплате с баланса (кэшбэк наличными не выдаётся), отрицательная
+// строка платежа в ОТКРЫТОЙ смене возвращающего кассира и запись журнала
+// баланса или карты. `refundable` — сколько ещё можно вернуть по этому платежу
+// (для потолка «настоящих денег»). Итоги счёта двигает вызывающий.
+function issueRefund(db, { invoice, p, amt, refundable, toBalanceRaw, cardFallbackRaw, reason, noteTag }, user) {
+  const shiftId = ensureOpenShift(db, user).id;
+
+  // DEPOSIT_WALLET_V1 — КУДА ВОЗВРАЩАЕМ: деньгами или на баланс пациента.
+  //
+  // Владелец: «cashier cancels the payment and can actually refund or push
+  // to the deposit so on the next service it can be paid». Невролог после
+  // оплаты говорит «не мой пациент» — деньги пациенту не нужны на руки, они
+  // нужны на следующую услугу.
+  //
+  //   to_balance = true  — отрицательный платёж способом 'wallet' (он не
+  //     приход: выручка и ящик не меняются, наличные из кассы НЕ выходят) и
+  //     строка зачисления в журнал баланса. Выручка остаётся — деньги в
+  //     клинике, это теперь аванс пациента, как принятый депозит.
+  //   to_balance = false — как прежде: тем же способом, каким взяли.
+  //
+  // Платёж «с баланса» по умолчанию возвращается НА БАЛАНС: наличными этих
+  // денег в кассе за этот счёт не брали. Вернуть его деньгами кассир может
+  // только явным выбором (to_balance: false) — и тогда это наличные из ящика.
+  // CARD_BALANCE_V1 — платёж картой возвращается НА ТУ ЖЕ КАРТУ, всегда:
+  // это её остаток, наличными его не выдают и на баланс пациента не переносят.
+  //
+  // FINAL_MONEY_FIX_V1 (I2) — КРОМЕ КАРТЫ, ЗАКРЫТОЙ ВОЗВРАТОМ ПРОДАЖИ. Её
+  // остаток уже выдан покупателю, карта выключена: сумма на ней пропала бы —
+  // погасить ею нельзя, второй раз вернуть остаток касса не даёт. Такой возврат
+  // идёт деньгами из кассы или на баланс пациента, и только по явному выбору
+  // кассира (card_fallback: 'cash' | 'balance'); без выбора — отказ словами.
+  let toCard = p.method === 'gift_card';
+  let fallback = null;
+  if (toCard) {
+    const dead = cardClosedByRefund(db, p.id);
+    if (dead) {
+      if (cardFallbackRaw !== 'cash' && cardFallbackRaw !== 'balance') {
+        throw new RpcError('Остаток карты «' + (dead.name || 'карта') + '» уже возвращён покупателю, карта закрыта — вернуть на неё нельзя. Выберите, как вернуть: деньгами или на баланс пациента.', 409);
+      }
+      fallback = cardFallbackRaw;
+      toCard = false;
+    }
+  }
+  const toBalance = toCard ? false : fallback ? fallback === 'balance' : (toBalanceRaw === undefined || toBalanceRaw === null
+    ? p.method === 'wallet'
+    : (toBalanceRaw === true || toBalanceRaw === 1));
+  if (toBalance && !invoice.patient_id) throw new RpcError('У счёта нет пациента — зачислить на баланс некому.', 400);
+  const refundMethod = toCard ? 'gift_card' : toBalance ? 'wallet' : (p.method === 'wallet' || p.method === 'gift_card' ? 'cash' : p.method);
+
+  // Третья проверка, I2 — КЭШБЭК НАЛИЧНЫМИ НЕ ВЫДАЁТСЯ. Оплату с баланса
+  // вернуть деньгами можно только в пределах настоящих денег пациента на
+  // балансе (баланс вместе со всей ещё возвращаемой частью этого платежа
+  // минус не откаченный кэшбэк); остальное возвращается только на баланс.
+  // Считается от всей возвращаемой части, а не от запрошенной суммы: иначе
+  // потолок зависел бы от того, как кассир разбил возврат.
+  if (p.method === 'wallet' && !toBalance) {
+    const cap = realMoney(db, invoice.patient_id, refundable);   // одно правило с refund_deposit
+    if (amt > cap) {
+      throw new RpcError(`Деньгами можно вернуть не больше ${cap}: остальное на балансе — кэшбэк, его возвращают только на баланс.`, 400);
+    }
+  }
+
+  const refundInfo = db.prepare(`
+    INSERT INTO payments (invoice_id, amount, method, cashier_id, shift_id, notes)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(invoice.id, -amt, refundMethod, user.id, shiftId,
+    noteTag + (reason ? ' — ' + reason : ''));
+  let card = null;
+  if (toCard) {
+    card = walletGuard(() => returnToCard(db, { paymentId: p.id, refundPaymentId: refundInfo.lastInsertRowid, invoice, amount: amt, user }));
+  }
+  if (toBalance) {
+    walletGuard(() => creditWallet(db, { patientId: invoice.patient_id, invoice, paymentId: p.id, amount: amt, reason, user }));
+  }
+  return { toBalance, card, method: refundMethod };
+}
+
+// BILLING_AUDIT_FIX_V1 (B2) — ПОЛНЫЙ ВОЗВРАТ ЗАКРЫВАЕТ СЧЁТ.
+//
+// invoiceStatusFor никогда не отдаёт 'refunded': после возврата всех денег
+// счёт возвращался в «Не оплачен» — пациент, которому вернули деньги за
+// услугу, от которой он отказался, выглядел должником на всю сумму, в кассе,
+// в долгах и в отчётах. Отмену при нуле касса предлагала только возврату «на
+// баланс».
+//
+// Правило теперь одно на все способы возврата — денег на счёте не осталось:
+//   • по умолчанию (void_when_zero не передан или true) счёт ОТМЕНЯЕТСЯ той
+//     же дверью, что «Отменить счёт» (cashier.js voidInvoice): неначатые
+//     услуги уходят с визита, если не отмечено keep_services; начатая и
+//     сделанная работа остаётся в визите невыставленной, и раз по счёту был
+//     возврат — врачу она не платится, пока её не выставят и не оплатят снова
+//     (PAY_REFUND_V1, pay_refund_releases). Статус 'void', день отмены —
+//     voided_at: отчёты (reports.js LIVE_INVOICE_SQL / REVENUE_INVOICE_SQL) и
+//     касса (чипы «Отменён») считают его так же, как 'refunded';
+//   • void_when_zero: false — ЯВНЫЙ выбор кассира «оставить счёт открытым»
+//     (пациент переоформит оплату другим способом, счёт оплатят снова): счёт
+//     остаётся «Не оплачен». Это единственный путь к открытому счёту после
+//     полного возврата, и он назван словами, а не получается сам;
+//   • пациент ещё на койке — счёт не отменяется (отмена его не выписывает):
+//     он остаётся «Не оплачен», кассиру это сказано в void_note.
+function closeFullyRefunded(db, invoiceId, args, reason, user) {
+  const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
+  if (!inv || inv.paid_amount > 0 || inv.status === 'void' || inv.status === 'refunded') return { voided: false };
+  const adm = inv.admission_id ? db.prepare('SELECT status FROM admissions WHERE id = ?').get(inv.admission_id) : null;
+  if (adm && IN_BED_STATUSES.includes(adm.status)) {
+    return { voided: false, void_note: 'Пациент ещё в стационаре — счёт не отменён. Возврат проведён; счёт закроется при выписке или его отменяют в окне отмены с подтверждением.' };
+  }
+  const raw = args && args.void_when_zero;
+  const voidWhenZero = raw === undefined || raw === null ? true : (raw === true || raw === 1);
+  if (!voidWhenZero) return { voided: false };
+  voidInvoice(db, { invoice_id: invoiceId, keep_services: args && (args.keep_services === true || args.keep_services === 1), reason: reason || null }, user);
+  return { voided: true };
+}
+
 export function refundPayment(db, args, user) {
   requireRole(user, PAYMENT_ROLES);
 
@@ -964,17 +1208,9 @@ export function refundPayment(db, args, user) {
     assertOwnBuilding(db, p, 'Платёж');
     assertOwnBuilding(db, invoice, 'Счёт');
     // Ревью C1 — платёж счёта депозита возвращает только refund_deposit.
-    if (isDepositInvoice(db, invoice)) throw new RpcError(DEPOSIT_INVOICE_REFUSAL, 400);
+    { const refusal = moneyDocRefusal(db, invoice); if (refusal) throw new RpcError(refusal, 400); }   // ревью C1 + CARD_SALE_V1
 
-    // The tag must match on a BOUNDARY, not a bare prefix: `LIKE 'REFUND#1%'`
-    // also matches REFUND#10 / REFUND#123, so refunds of other payments were
-    // counted against this one and legitimate refunds got refused. A refund
-    // note is either exactly the tag or the tag followed by ' — <reason>', so
-    // those are the only two shapes to match.
-    const tag = 'REFUND#' + p.id;
-    const refunded = db.prepare(
-      "SELECT COALESCE(SUM(-amount),0) s FROM payments WHERE amount < 0 AND (notes = ? OR notes LIKE ?)"
-    ).get(tag, tag + ' %').s;
+    const refunded = refundedOfPayment(db, p.id);
     const refundable = round2(Math.min(p.amount - refunded, invoice.paid_amount));
     if (refundable <= 0) {
       throw new RpcError('По этому платежу уже всё возвращено.', 400);
@@ -995,59 +1231,9 @@ export function refundPayment(db, args, user) {
     // of the day OPENS the day's shift rather than falling back to shift_id
     // NULL — a NULL-shift refund is invisible to the X-report and to the
     // expected-drawer maths, so the till reconciles short with no explanation.
-    const shiftId = ensureOpenShift(db, user).id;
-
-    // DEPOSIT_WALLET_V1 — КУДА ВОЗВРАЩАЕМ: деньгами или на баланс пациента.
-    //
-    // Владелец: «cashier cancels the payment and can actually refund or push
-    // to the deposit so on the next service it can be paid». Невролог после
-    // оплаты говорит «не мой пациент» — деньги пациенту не нужны на руки, они
-    // нужны на следующую услугу.
-    //
-    //   to_balance = true  — отрицательный платёж способом 'wallet' (он не
-    //     приход: выручка и ящик не меняются, наличные из кассы НЕ выходят) и
-    //     строка зачисления в журнал баланса. Выручка остаётся — деньги в
-    //     клинике, это теперь аванс пациента, как принятый депозит.
-    //   to_balance = false — как прежде: тем же способом, каким взяли.
-    //
-    // Платёж «с баланса» по умолчанию возвращается НА БАЛАНС: наличными этих
-    // денег в кассе за этот счёт не брали. Вернуть его деньгами кассир может
-    // только явным выбором (to_balance: false) — и тогда это наличные из ящика.
-    // CARD_BALANCE_V1 — платёж картой возвращается НА ТУ ЖЕ КАРТУ, всегда:
-    // это её остаток, наличными его не выдают и на баланс пациента не переносят.
-    const toCard = p.method === 'gift_card';
-    const toBalanceRaw = args && args.to_balance;
-    const toBalance = toCard ? false : (toBalanceRaw === undefined || toBalanceRaw === null
-      ? p.method === 'wallet'
-      : (toBalanceRaw === true || toBalanceRaw === 1));
-    if (toBalance && !invoice.patient_id) throw new RpcError('У счёта нет пациента — зачислить на баланс некому.', 400);
-    const refundMethod = toCard ? 'gift_card' : toBalance ? 'wallet' : (p.method === 'wallet' ? 'cash' : p.method);
-
-    // Третья проверка, I2 — КЭШБЭК НАЛИЧНЫМИ НЕ ВЫДАЁТСЯ. Оплату с баланса
-    // вернуть деньгами можно только в пределах настоящих денег пациента на
-    // балансе (баланс вместе со всей ещё возвращаемой частью этого платежа
-    // минус не откаченный кэшбэк); остальное возвращается только на баланс.
-    // Считается от всей возвращаемой части, а не от запрошенной суммы: иначе
-    // потолок зависел бы от того, как кассир разбил возврат.
-    if (p.method === 'wallet' && !toBalance) {
-      const cap = realMoney(db, invoice.patient_id, refundable);   // одно правило с refund_deposit
-      if (amt > cap) {
-        throw new RpcError(`Деньгами можно вернуть не больше ${cap}: остальное на балансе — кэшбэк, его возвращают только на баланс.`, 400);
-      }
-    }
-
-    const refundInfo = db.prepare(`
-      INSERT INTO payments (invoice_id, amount, method, cashier_id, shift_id, notes)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(invoice.id, -amt, refundMethod, user.id, shiftId,
-      tag + (reason ? ' — ' + reason : ''));
-    let card = null;
-    if (toCard) {
-      card = walletGuard(() => returnToCard(db, { paymentId: p.id, refundPaymentId: refundInfo.lastInsertRowid, invoice, amount: amt, user }));
-    }
-    if (toBalance) {
-      walletGuard(() => creditWallet(db, { patientId: invoice.patient_id, invoice, paymentId: p.id, amount: amt, reason, user }));
-    }
+    const { toBalance, card } = issueRefund(db, {
+      invoice, p, amt, refundable, toBalanceRaw: args && args.to_balance, cardFallbackRaw: args && args.card_fallback, reason, noteTag: 'REFUND#' + p.id,
+    }, user);
 
     const newPaid = round2(invoice.paid_amount - amt);
     const status = invoiceStatusFor(invoice.total_amount, newPaid, invoice.status);
@@ -1056,33 +1242,216 @@ export function refundPayment(db, args, user) {
     } else {
       // No longer fully paid — clear paid_at so reports don't count it as settled.
       db.prepare('UPDATE invoices SET paid_amount = ?, status = ?, paid_at = NULL WHERE id = ?').run(newPaid, status, invoice.id);
-      // CANCEL_MEANS_CANCEL_V1 — полный возврат это отмена: плитка «ОТМЕНЁН» считает его по этому дню.
-      if (status === 'refunded') db.prepare("UPDATE invoices SET voided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(invoice.id);
     }
     // CASHBACK_SERVER_V2 — кэшбэк счёта следует за его новыми деньгами:
     // откат пропорционален возвращённому (сколько есть на балансе).
     adjustCashbackAfterRefund(db, invoice);
 
-    // Ре-ревью п.9 — «отменить счёт, если денег на нём не осталось» в той же
-    // транзакции, что возврат. Пациент ещё в койке — счёт не отменяется
-    // (отмена его не выписывает, см. void_invoice), кассиру это сказано.
-    let voided = false;
-    let voidNote = null;
-    if (args && (args.void_when_zero === true || args.void_when_zero === 1) && newPaid <= 0) {
-      const adm = invoice.admission_id ? db.prepare('SELECT status FROM admissions WHERE id = ?').get(invoice.admission_id) : null;
-      if (adm && IN_BED_STATUSES.includes(adm.status)) {
-        voidNote = 'Пациент ещё в стационаре — счёт не отменён. Возврат проведён; счёт закроется при выписке или его отменяют в окне отмены с подтверждением.';
-      } else {
-        voidInvoice(db, { invoice_id: invoice.id, keep_services: args.keep_services === true || args.keep_services === 1, reason: reason || null }, user);
-        voided = true;
-      }
-    }
+    // BILLING_AUDIT_FIX_V1 (B2) — денег на счёте не осталось: счёт закрыт
+    // (отменён по умолчанию, см. closeFullyRefunded). Ре-ревью п.9 — в той же
+    // транзакции, что возврат.
+    const closed = newPaid <= 0 ? closeFullyRefunded(db, invoice.id, args, reason, user) : { voided: false };
 
-    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id), to_balance: toBalance, voided,
-      ...(voidNote ? { void_note: voidNote } : {}), ...(card ? { to_card: card } : {}) };
+    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id), to_balance: toBalance, voided: !!closed.voided,
+      ...(closed.void_note ? { void_note: closed.void_note } : {}), ...(card ? { to_card: card } : {}) };
   });
 
   return run.immediate();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BILLING_AUDIT_FIX_V1 (B1) — refund_invoice_line: ВЕРНУТЬ ОДНУ УСЛУГУ СЧЁТА
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Возврат был только «по платежу»: счёт на 900 000, оплачено 500 000, вернули
+// 90 000 за услугу, от которой пациент отказался, — счёт оставался на
+// 900 000 с оплатой 410 000, и пациент выглядел должником на 490 000 за
+// услугу, которую ему не оказали и деньги за которую вернули.
+//
+// Теперь услугу возвращают строкой, одной транзакцией:
+//   1. строка уходит со счёта (позиция удаляется), счёт пересчитывается по
+//      тем же правилам, что при правке строк (repriceUnpaidInvoice: скидки
+//      пакета оставшихся строк, остаток ручной скидки — пропорционально
+//      оставшейся базе, пол группы пациента);
+//   2. ВОЗВРАЩАЕТСЯ ПЕРЕПЛАТА: сколько пациент заплатил сверх НОВОЙ суммы
+//      счёта — MAX(0, оплачено − новая сумма), не больше стоимости строки.
+//      Оплата счёта не делится по строкам (её принимают на счёт целиком),
+//      поэтому деньги ложатся сперва на оставшиеся услуги. Оплачен целиком —
+//      возвращается вся стоимость строки; оплачен частично — ровно та часть,
+//      которой больше нечего покрывать (в примере выше: счёт 810 000,
+//      оплачено 500 000, возвращать нечего, долг 310 000 — а не 490 000).
+//      Возвращается по платежам, начиная с последнего, каждый — своим
+//      способом (или на баланс при to_balance, карта — на ту же карту), с
+//      пометкой REFUND#<платёж> LINE#<позиция>: потолки возврата по платежу,
+//      кэшбэк и смена считают его как любой возврат;
+//   3. строка визита: неначатая уходит с визита (товар — обратно по
+//      источникам, талон очереди снимается); начатая или сделанная работа
+//      остаётся в визите НЕВЫСТАВЛЕННОЙ со своим статусом, и врачу она не
+//      платится (pay_refund_releases, PAY_REFUND_V1), пока её не выставят и
+//      не оплатят снова;
+//   4. кэшбэк следует за новыми деньгами счёта (adjustCashbackAfterRefund,
+//      откат пропорциональный); счёт, ставший этим оплаченным, получает
+//      кэшбэк по обычному правилу (один раз за жизнь счёта);
+//   5. последняя строка счёта и денег не осталось — счёт закрывается, как при
+//      полном возврате (B2, closeFullyRefunded).
+// Строка стационара так не возвращается: её счёт собирается при выписке —
+// отказ называет путь.
+export function refundInvoiceLine(db, args, user) {
+  requireRole(user, PAYMENT_ROLES);
+  const itemId = args && args.invoice_item_id;
+  if (!isPositiveInt(itemId)) throw new RpcError('invoice_item_id must be a positive integer.', 400);
+  const reason = String((args && args.reason) || '').slice(0, 300);
+
+  const run = db.transaction(() => {
+    const item = db.prepare('SELECT * FROM invoice_items WHERE id = ?').get(itemId);
+    if (!item) throw new RpcError('Строка счёта не найдена.', 400);
+    const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id);
+    if (!inv) throw new RpcError('invoice not found.', 500);
+    assertOwnBuilding(db, inv, 'Счёт');
+    assertOwnBuilding(db, item, 'Строка счёта');
+    { const refusal = moneyDocRefusal(db, inv); if (refusal) throw new RpcError(refusal, 400); }
+    if (inv.status === 'void' || inv.status === 'refunded') throw new RpcError('Счёт уже отменён — возвращать по нему нечего.', 400);
+    // Денег по счёту нет — это не возврат, а правка счёта: строку убирают из
+    // визита (корзина в карте пациента, remove_unpaid_service).
+    if (!(Number(inv.paid_amount) > 0)) throw new RpcError('По счёту ещё не принято денег — уберите услугу из визита, возвращать нечего.', 400);
+    if (db.prepare('SELECT 1 FROM admission_services WHERE invoice_item_id = ? LIMIT 1').get(itemId)) {
+      throw new RpcError('Это строка стационара — её убирают из счёта госпитализации (до оплаты) или возвращают оплатой по платежу.', 400);
+    }
+    const vs = db.prepare('SELECT * FROM visit_services WHERE invoice_item_id = ?').get(itemId) || null;
+    if (vs) assertOwnBuilding(db, vs, 'Услуга');
+
+    const oldTotal = round2(Number(inv.total_amount) || 0);
+    const oldPaid = round2(Number(inv.paid_amount) || 0);
+    const oldOwn = invoiceOwnDiscount(db, inv.id);
+    const oldBase = round2(db.prepare(`SELECT COALESCE(SUM(CASE WHEN COALESCE(discount_amount, 0) > 0 THEN 0 ELSE total END), 0) b
+                                         FROM invoice_items WHERE invoice_id = ?`).get(inv.id).b);
+
+    // 3. Строка визита — до удаления позиции (внешний ключ).
+    let performed = false;
+    let lineName = item.description || '';
+    let sources = [];
+    if (vs) {
+      const trace = db.prepare(`
+        SELECT (EXISTS(SELECT 1 FROM lab_results WHERE visit_service_id = ?)
+             OR EXISTS(SELECT 1 FROM visit_documents WHERE visit_service_id = ?)
+             OR EXISTS(SELECT 1 FROM lab_device_messages WHERE visit_service_id = ?)) AS t`).get(vs.id, vs.id, vs.id);
+      performed = PERFORMED_LINE_STATUSES.includes(vs.status) || !!(trace && trace.t);
+      if (performed) {
+        db.prepare('UPDATE visit_services SET invoice_item_id = NULL WHERE id = ?').run(vs.id);
+      } else {
+        sources = vs.clinic_item_id != null ? restoreSources(db, 'visit', vs.id, vs.clinic_item_id, vs.quantity, user) : [];
+        db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(vs.id);
+        db.prepare('DELETE FROM visit_services WHERE id = ?').run(vs.id);
+      }
+    }
+    db.prepare('DELETE FROM invoice_items WHERE id = ?').run(itemId);
+
+    // 1. Пересчёт суммы счёта.
+    const leftN = db.prepare('SELECT COUNT(*) n FROM invoice_items WHERE invoice_id = ?').get(inv.id).n;
+    if (leftN === 0) {
+      db.prepare('UPDATE invoices SET subtotal = 0, discount_amount = 0, total_amount = 0 WHERE id = ?').run(inv.id);
+    } else {
+      // paid_amount пока прежний — settleZeroTotal внутри не тронет счёт с деньгами.
+      repriceUnpaidInvoice(db, { ...inv, paid_amount: oldPaid }, oldOwn, { oldBase });
+    }
+    const newTotal = round2(db.prepare('SELECT total_amount t FROM invoices WHERE id = ?').get(inv.id).t);
+    const lineValue = round2(oldTotal - newTotal);
+
+    // 2. Переплата — по платежам с последнего.
+    const refundAmt = round2(Math.min(Math.max(0, oldPaid - newTotal), oldPaid));
+    let left = refundAmt;
+    let paidNow = oldPaid;
+    let toBalanceAny = false;
+    const cards = [];
+    if (left > 0) {
+      const pays = db.prepare('SELECT * FROM payments WHERE invoice_id = ? AND amount > 0 ORDER BY id DESC').all(inv.id);
+      for (const p of pays) {
+        if (left <= 0) break;
+        assertOwnBuilding(db, p, 'Платёж');
+        const refundable = round2(Math.min(p.amount - refundedOfPayment(db, p.id), paidNow));
+        if (refundable <= 0) continue;
+        const take = round2(Math.min(left, refundable));
+        const r = issueRefund(db, {
+          invoice: inv, p, amt: take, refundable, toBalanceRaw: args && args.to_balance, cardFallbackRaw: args && args.card_fallback, reason,
+          noteTag: 'REFUND#' + p.id + ' LINE#' + itemId,
+        }, user);
+        if (r.toBalance) toBalanceAny = true;
+        if (r.card) cards.push(r.card);
+        left = round2(left - take);
+        paidNow = round2(paidNow - take);
+      }
+      if (left > 0.005) throw new RpcError('Платежей счёта не хватает на возврат строки — проверьте платежи счёта.', 400);
+    }
+    const newPaid = round2(oldPaid - refundAmt);
+
+    // PAY_REFUND_V1 — сделанная работа, возвращённая пациенту, врачу не
+    // платится, пока её не выставят и не оплатят снова. Отметка ставится ВСЕГДА
+    // (не только когда пациенту вернули деньги): строка ушла со счёта как
+    // возвращённая, а не как «убрать до оплаты».
+    if (vs && performed) markRefundRelease(db, { invoiceId: inv.id, kind: 'out', lineIds: [vs.id], always: true });
+
+    // Статус по новым деньгам.
+    let closed = { voided: false };
+    const after = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
+    if (newTotal <= 0 && newPaid <= 0 && refundAmt > 0 && leftN > 0) {
+      // FINAL_MONEY_FIX_V1 (M2) — В СЧЁТЕ ОСТАЛИСЬ ТОЛЬКО БЕСПЛАТНЫЕ УСЛУГИ.
+      // Сумма ноль, денег ноль — но строки есть, и отменять счёт нельзя: отмена
+      // снимала бы с визита неначатую бесплатную услугу и отпускала сделанную.
+      // Такой счёт — как бесплатный при выставлении: 'paid' на ноль, строки в
+      // очередь (settleZeroTotal). Отменяется счёт, только когда строк не
+      // осталось вовсе.
+      db.prepare("UPDATE invoices SET paid_amount = 0, paid_at = NULL, status = 'unpaid' WHERE id = ?").run(inv.id);
+      adjustCashbackAfterRefund(db, inv);
+      settleZeroTotal(db, inv.id);
+    } else if (newTotal <= 0 && newPaid <= 0 && refundAmt > 0) {
+      // Денег и строк не осталось: 'unpaid' — ступень, с которой счёт
+      // закрывается отменой (жизненный цикл), как у полного возврата платежа.
+      db.prepare("UPDATE invoices SET paid_amount = ?, paid_at = NULL, status = 'unpaid' WHERE id = ?").run(newPaid, inv.id);
+      adjustCashbackAfterRefund(db, inv);
+      closed = closeFullyRefunded(db, inv.id, args, reason, user);
+    } else {
+      const status = invoiceStatusFor(newTotal, newPaid, inv.status);
+      if (status === 'paid') {
+        db.prepare("UPDATE invoices SET paid_amount = ?, status = 'paid', paid_at = COALESCE(paid_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE id = ?").run(newPaid, inv.id);
+        db.prepare(`
+          UPDATE visit_services SET status = 'queued'
+           WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
+             AND status NOT IN ('in_progress', 'completed', 'collected', 'resulted')
+        `).run(inv.id);
+      } else {
+        db.prepare('UPDATE invoices SET paid_amount = ?, status = ?, paid_at = NULL WHERE id = ?').run(newPaid, status, inv.id);
+      }
+      if (refundAmt > 0) adjustCashbackAfterRefund(db, inv);
+      if (status === 'paid' && after.status !== 'paid' && newPaid > 0) {
+        creditCashbackOnPaid(db, db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id), user);
+      }
+    }
+
+    // Журнал счёта: что вернули и сколько денег вышло.
+    const actor = db.prepare('SELECT full_name, role FROM users WHERE id = ?').get(user.id) || {};
+    const final = db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
+    db.prepare(`
+      INSERT INTO invoice_audit_log (invoice_id, invoice_number, visit_id, action, from_status, to_status, amount, refund_amount, actor_user_id, actor_name, actor_role, reason, notes)
+      VALUES (?, ?, ?, 'refund_line', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(inv.id, inv.invoice_number || null, inv.visit_id || null, inv.status, final.status, lineValue, refundAmt,
+        user.id, actor.full_name || null, actor.role || null, reason || null,
+        'Возвращена услуга: ' + (lineName || '—') + (vs ? (performed ? ' (работа сделана — осталась в визите невыставленной)' : ' (снята с визита)') : ''));
+
+    return {
+      invoice: final,
+      refunded: refundAmt,
+      line_value: lineValue,
+      to_balance: toBalanceAny,
+      line_kept: !!(vs && performed),
+      voided: !!closed.voided,
+      sources,
+      ...(closed.void_note ? { void_note: closed.void_note } : {}),
+      ...(cards.length ? { to_card: cards[cards.length - 1] } : {}),
+    };
+  });
+
+  const out = run.immediate();
+  return out;
 }
 
 // BED_CONSOLE_V1 — счёт по госпитализации: выбранные небиллованные строки
@@ -1133,9 +1502,24 @@ export function buildAdmissionInvoice(db, admissionId, ids, user) {
       }
       // Same precedence as visit billing (the doctor's own price wins), with no
       // visit tier — PAY_BASIS_PERFORMED_V1: one rule, domain/pricing.js.
-      const unit = lineUnitPrice(db, row, { service: svc, product: prod, tiered: false });
       const qty = row.quantity;
       if (!(Number.isFinite(qty) && qty > 0)) throw new RpcError(`invalid quantity on admission_service ${row.id}`, 400);
+      // INPATIENT_MONEY_FIX_V1 — ПРОЖИВАНИЕ идёт в счёт своей СОХРАНЁННОЙ суммой:
+      // в ней уже скидка на койку и ставки всех коек, на которых лежал пациент
+      // (accommodation.js). «Ставка × сутки» здесь теряла скидку (акт 270 000,
+      // счёт 300 000), а пустое имя оставляло в счёте строку без описания —
+      // теперь это «Проживание в палате» (ACCOMMODATION_LABEL): то же имя, что
+      // у строки на экране и в отчётах, и одно на все счета — отчёты
+      // группируют по описанию.
+      if (row.service_id == null && row.clinic_item_id == null
+          && String(row.notes || '').startsWith(ACCOMMODATION_NOTE_PREFIX)) {
+        const line = round2(row.total);
+        return { row, unit: round2(line / qty), qty, line, name: ACCOMMODATION_LABEL };
+      }
+      // Товар — сохранённой ценой строки (productLineUnitPrice), услуга — по
+      // тому же правилу, по которому её оценили при заведении (личная цена
+      // врача, иначе каталог).
+      const unit = lineUnitPrice(db, row, { service: svc, product: prod, tiered: false });
       return { row, unit, qty, line: round2(unit * qty), name };
     });
 
@@ -1157,6 +1541,7 @@ export function buildAdmissionInvoice(db, admissionId, ids, user) {
       const it = insertItem.run(invoiceId, row.service_id, name || '', qty, unit, line);
       db.prepare("UPDATE admission_services SET invoice_item_id = ?, status = 'completed' WHERE id = ?")
         .run(it.lastInsertRowid, row.id);
+      clearRefundRelease(db, 'in', [row.id]);   // FINAL_MONEY_FIX_V1 (M1)
     }
 
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
@@ -1187,6 +1572,9 @@ export function removeAdmissionLineFromInvoice(db, args, user) {
       throw new RpcError('счёт уже ' + (inv.paid_amount > 0 ? 'оплачен (частично)' : inv.status) + ' — сначала отмените его в кассе.', 400);
     }
 
+    // PAY_REFUND_V1 — строка уходит со счёта, по которому были возвраты: без
+    // нового оплаченного счёта врачу она не платится (domain/pay-releases.js).
+    markRefundRelease(db, { invoiceId: inv.id, kind: 'in', lineIds: [lineId] });
     db.prepare("UPDATE admission_services SET invoice_item_id = NULL, status = 'added' WHERE id = ?").run(lineId);
     db.prepare('DELETE FROM invoice_items WHERE id = ?').run(item.id);
     const left = db.prepare('SELECT COALESCE(SUM(total), 0) s, COUNT(*) n FROM invoice_items WHERE invoice_id = ?').get(inv.id);
@@ -1203,4 +1591,17 @@ export function removeAdmissionLineFromInvoice(db, args, user) {
     return { removed: true, invoice_deleted: invoiceDeleted };
   });
   return run();
+}
+
+// FINAL_MONEY_FIX_V1 (I1) — visit_refunded_lines: невыставленные строки визита,
+// за которые пациенту вернули деньги (строкой или отменой после возврата).
+// Окно визита не отмечает их для счёта по умолчанию и подписывает
+// «возвращено»; выставить заново можно только явным выбором (rebill_refunded).
+// Чтение: только номера строк этого визита.
+export function visitRefundedLines(db, args, user) {
+  if (!user) throw new RpcError('Not authenticated.', 401);
+  const visitId = args && args.visit_id;
+  if (!isPositiveInt(visitId)) throw new RpcError('visit_id must be a positive integer.', 400);
+  const ids = db.prepare('SELECT id FROM visit_services WHERE visit_id = ? AND invoice_item_id IS NULL').all(visitId).map((r) => r.id);
+  return { line_ids: refundedLineIds(db, 'out', ids) };
 }

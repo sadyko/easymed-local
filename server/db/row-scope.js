@@ -18,12 +18,16 @@
 // право не читается, и правило остаётся самым узким: по ролям из кода.
 import { effectiveRoles } from '../services/roles.js';
 import { grantAllows } from '../services/grants.js';
+import { liftAllows } from './pay-visibility.js';   // FINAL_ROLES_SYNC_FIX_V1 (M1) — именованное правило `lift`
 
 /** Снято ли ограничение по владельцу для этого человека. */
 export function scopeLifted(sc, user, db) {
   if (!sc) return true;
   const roles = effectiveRoles(user);
   if ((sc.allRoles || []).some((r) => roles.includes(r))) return true;
+  // FINAL_ROLES_SYNC_FIX_V1 (M1) — `lift`: именованное правило «кто видит всё»
+  // (pay-visibility.js) — например, ставки врачей видят держатели «Оплаты врачей».
+  if (sc.lift && liftAllows(sc.lift, db, user)) return true;
   if (!sc.allGrant || !db) return false;
   try {
     return grantAllows(db, user, sc.allGrant, 'edit', sc.allRoles || []);

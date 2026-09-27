@@ -124,6 +124,10 @@ const STATUS_MAP = {
     pending:       { kind: 'warn', text: 'Pending' },
     added:            { kind: '',     text: 'Added' },
     queued:           { kind: 'info', text: 'Queued' },
+    // LIVE_AUDIT_FIX_V1 — ступени лаборатории: без них строка показывала сырое
+    // «Collected» / «Resulted» на любом языке.
+    collected:        { kind: 'info', text: 'Sample collected' },
+    resulted:         { kind: 'info', text: 'Results entered' },
     awaiting_payment: { kind: 'warn', text: 'Awaiting payment' },
     billed:        { kind: 'info', text: 'Billed' },
     paid:          { kind: 'ok',   text: 'Paid' },

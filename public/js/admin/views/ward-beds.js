@@ -61,6 +61,7 @@ import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE
 // EXPIRY_BALANCE_V1 — «списание просроченного предупреждает» (владелец 23.09).
 // Слова пишет сервер (rpc/expiry.js), консоль койки их только показывает.
 import { toastStockWarnings } from './stock-warnings.js';
+import { canAddAdmissionService } from '../permissions.js';   // FINAL_ROLES_SYNC_FIX_V1 (I2) — кнопка «Добавить услугу» только тому, кому сервер строку заведёт
 
 const STATUS = {
     free:        { label: 'Свободна',  bg: 'var(--ok-50, #e9f7ef)',      fg: 'var(--ok-700, #1a7a44)',      bd: 'var(--ok-200, #bde5cd)',      dot: 'var(--ok-500, #2e8b52)' },
@@ -595,7 +596,7 @@ function bedDetailModal(bed, ward, adm, root) {
         // показывалось НИГДЕ — при этом продолжало попадать в счёт. Строка,
         // которую нельзя увидеть, но можно выставить, — худший вариант.
         const svcLines = st.lines.filter(isServiceLine);
-        rightEl.appendChild(sectionCard('Услуги (services performed)', 'Добавить услугу', () => addServiceDialog(), svcLines, false));
+        rightEl.appendChild(sectionCard('Услуги (services performed)', 'Добавить услугу', canAddAdmissionService() ? () => addServiceDialog() : null, svcLines, false));
         // -- товары --
         const itemLines = st.lines.filter(isGoodsLine);
         rightEl.appendChild(sectionCard('Товары (расходные материалы)', 'Добавить товары', () => addItemsDialog(), itemLines, true));
@@ -632,10 +633,12 @@ function bedDetailModal(bed, ward, adm, root) {
         const card = h('div', { class: 'card', style: { padding: '14px 16px' } });
         card.appendChild(h('div', { class: 'row', style: { gap: '8px', marginBottom: '10px' } },
             secTitle(title), h('span', { class: 'grow' }),
-            h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: onAdd }, Icon('Plus', { size: 13 }), ' ' + addLabel)));
+            // FINAL_ROLES_SYNC_FIX_V1 (I2) — нет действия — нет и кнопки: роль,
+            // которой сервер откажет, не видит обещания.
+            onAdd ? h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: onAdd }, Icon('Plus', { size: 13 }), ' ' + addLabel) : null));
         if (!lines.length) {
             card.appendChild(h('div', { class: 'muted', style: { border: '1px dashed var(--ink-200)', borderRadius: '10px', padding: '14px', textAlign: 'center', fontSize: '12.5px' } },
-                withChecks ? 'Товаров пока нет — выдайте препараты кнопкой «Добавить товары».' : 'Услуг пока нет — добавьте выполненную услугу.'));
+                withChecks ? 'Товаров пока нет — выдайте препараты кнопкой «Добавить товары».' : (onAdd ? 'Услуг пока нет — добавьте выполненную услугу.' : 'Услуг пока нет.')));
             return card;
         }
         const tbody = h('tbody');
@@ -849,8 +852,12 @@ function bedDetailModal(bed, ward, adm, root) {
                 let ok = 0; const fails = [];
                 for (const x of lines) {
                     const qty = Math.max(1, Math.round(Number(x.qty)));
-                    const price = Number(x.s.price) || 0;
-                    const { error } = await supabase.from('admission_services').insert({
+                    // INPATIENT_MONEY_FIX_V1 (D1/D7) — строку заводит СЕРВЕР
+                    // (admission_service_add): цену ставит он — личную цену врача,
+                    // иначе каталог, — ту же, что потом возьмёт счёт. Прямая
+                    // вставка в таблицу писала цену каталога из браузера, и акт
+                    // расходился со счётом; табличный путь теперь закрыт.
+                    const { error } = await supabase.rpc('admission_service_add', {
                         // ЛЕЧАЩИЙ, А НЕ НАПРАВИВШИЙ. `adm.doctor_id` — врач, который
                         // ПРИСЛАЛ пациента в стационар; работу в отделении ведёт
                         // лечащий (attending_doctor_id, миграция 091), и выработка
@@ -859,8 +866,7 @@ function bedDetailModal(bed, ward, adm, root) {
                         // направившего — вместе с деньгами за чужую работу.
                         admission_id: adm.id, service_id: x.s.id,
                         doctor_id: adm.attending_doctor_id || adm.doctor_id || null,
-                        bed_id: adm.bed_id, ward_id: adm.ward_id,
-                        quantity: qty, unit_price: price, total: price * qty, status: 'added', billable: 1,
+                        quantity: qty,
                     });
                     if (error) fails.push(x.s.name + ': ' + error.message); else ok++;
                 }
@@ -874,7 +880,12 @@ function bedDetailModal(bed, ward, adm, root) {
     // -- добавить товары (выдача) --
     // ITEMS_EASYMED_V1 — «Товары для пациента» как в easymed: поиск сверху,
     // несколько строк, Итого, Примечание и чекбокс «Выставить в счёт пациенту»
-    // (по умолчанию — только в учёт расходов, billable=0).
+    // INPATIENT_MONEY_FIX_V1 (D-minor) — по умолчанию В СЧЁТ пациенту
+    // (billable=1). Две двери расхода говорили по-разному: здесь галочка была
+    // снята (учёт расходов), в истории болезни («Добавить расход») — строка
+    // шла в счёт. Акт выполненных работ и выписка считают выданное пациенту
+    // его расходом, поэтому одно правило на обе двери — «в счёт»; расход
+    // клиники отмечают, сняв галочку.
     function addItemsDialog() {
         const picked = [];   // [{ p, qty }]
         let productsAll = [];
@@ -937,7 +948,7 @@ function bedDetailModal(bed, ward, adm, root) {
             .then(({ data }) => { productsAll = data || []; });
 
         const noteInp = h('input', { type: 'text', placeholder: 'Необязательно' });
-        const billChk = h('input', { type: 'checkbox', style: { width: '17px', height: '17px', accentColor: 'var(--primary-600)' } });
+        const billChk = h('input', { type: 'checkbox', checked: true, style: { width: '17px', height: '17px', accentColor: 'var(--primary-600)' } });
 
         modalWide('Товары для пациента', 'Pill',
             [
@@ -950,7 +961,7 @@ function bedDetailModal(bed, ward, adm, root) {
                     h('span', { style: { minWidth: 0 } },
                         h('span', { style: { display: 'block', fontSize: '13.5px', fontWeight: 700 } }, 'Выставить в счёт пациенту'),
                         h('span', { class: 'muted', style: { display: 'block', fontSize: '12.5px', marginTop: '1px' } },
-                            'По умолчанию товары идут только в учёт расходов. Отметьте, чтобы выставить их в счёт пациенту.'))),
+                            'По умолчанию товары выставляются в счёт пациенту. Снимите отметку, чтобы отнести их в учёт расходов клиники.'))),
             ],
             '+ Добавить',
             async () => {
@@ -1426,9 +1437,16 @@ export const __test_accommodationBox = accommodationBox;
 // ввода на видном месте только приглашает задеть его случайно. По щелчку
 // появляется datetime-local и «ОК».
 //
-// Сервер принимает время БЕЗ зоны как местное (см. rpc/admission-date.js), а
-// datetime-local именно такое и отдаёт — поэтому значение уходит как есть, без
-// toISOString(), который сдвинул бы дату на часовой пояс.
+// INPATIENT_MONEY_FIX_V1 (D6) — datetime-local отдаёт МЕСТНОЕ время без зоны,
+// а сервер дописывал к нему 'Z' и читал как UTC: дата сдвигалась на пояс, с
+// ней — койко-дни. Теперь значение уходит полным временем с зоной
+// (new Date(местное).toISOString() — браузер знает свой пояс), а сервер и сам
+// читает строку без зоны местным временем (rpc/admission-date.js).
+// Пустое или неразборчивое значение уходит как есть — отказ скажет сервер.
+export function localInputToIso(value) {
+    const d = new Date(value);
+    return value && !Number.isNaN(d.getTime()) ? d.toISOString() : value;
+}
 function admittedRow(adm, onChanged) {
     const wrap = h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '3px 0', fontSize: '12.5px', alignItems: 'center' } });
     const paint = () => {
@@ -1450,7 +1468,7 @@ function admittedRow(adm, onChanged) {
         const ok = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'ОК');
         ok.addEventListener('click', async () => {
             ok.disabled = true;
-            const { data, error } = await supabase.rpc('set_admission_date', { admission_id: adm.id, admitted_at: inp.value });
+            const { data, error } = await supabase.rpc('set_admission_date', { admission_id: adm.id, admitted_at: localInputToIso(inp.value) });
             if (error) { toast(error.message || 'Не удалось изменить дату.', 'fail'); ok.disabled = false; return; }
             adm.admitted_at = data.admission.admitted_at;
             toast('Дата поступления изменена.', 'ok');

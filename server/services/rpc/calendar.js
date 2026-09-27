@@ -1008,6 +1008,15 @@ export async function calendarBook(db, args, user, deps = {}) {
 
   const visitDate = new Date(startMs).toISOString();
   const branchId = a.branch_id === undefined && existing ? existing.branch_id : optId(a.branch_id, 'branch_id');
+  // LIVE_AUDIT_FIX_V1 (A6) — источник направления НОВОЙ записи. Каталог записи
+  // спрашивает «кто направил», а calendar_book его не принимал: выбор молча
+  // терялся (строке услуги его тоже не написать — колонки там нет). Ставится
+  // только при создании, как у ensure_visit; у существующей записи источник
+  // правит вкладка «Детали» (visit_set_referral_source).
+  const referralSourceId = existing ? null : optId(a.referral_source_id, 'referral_source_id');
+  if (referralSourceId && !db.prepare('SELECT 1 FROM referral_sources WHERE id = ?').get(referralSourceId)) {
+    throw new RpcError('Источник направления не найден.', 400);   // FINAL_ROLES_SYNC_FIX_V1 (M5) — по-русски
+  }
 
   // CROSS_BRANCH_CALENDAR_V1 — куда записываем и, если не к себе, чего ждём.
   const mine = selfLetter(db);
@@ -1050,10 +1059,11 @@ export async function calendarBook(db, args, user, deps = {}) {
     } else {
       const info = db.prepare(`
         INSERT INTO visits (patient_id, doctor_id, room_id, service_id, branch_id, visit_date,
-                            duration_minutes, visit_kind, visit_type, status, notes, created_by, booked_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'first', 'outpatient', ?, ?, ?, ?)
+                            duration_minutes, visit_kind, visit_type, status, notes, created_by, booked_at,
+                            referral_source_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'first', 'outpatient', ?, ?, ?, ?, ?)
       `).run(patientId, doctorId, roomId, serviceId, branchId, visitDate, durationMin, status, notes,
-        user && user.id, bookedAt);
+        user && user.id, bookedAt, referralSourceId);
       id = Number(info.lastInsertRowid);
     }
 

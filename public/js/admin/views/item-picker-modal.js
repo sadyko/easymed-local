@@ -25,6 +25,15 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { currentClinicId } from '../tenant-tables.js';
+import { hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1
+
+// LIVE_AUDIT_FIX_V1 — ЕДИНИЦА ТОВАРА — СВОЙСТВО КАТАЛОГА, А НЕ СТРОКИ ВЫДАЧИ.
+// Выпадающий список у строки молча переписывал products.unit для всего
+// каталога (а врачу, медсестре, регистратуре сервер это запрещает — отказ
+// глотался), и количество при этом единицу не учитывало: «2 уп.» уходило как
+// «2 шт.». Теперь единица показывается как есть; поправить её в каталоге
+// отсюда могут только те, кому реестр даёт правку товара (products.update).
+export const PRODUCT_UNIT_ROLES = ['admin', 'inventory'];
 
 // ITEM_UNIT_V1 — dispensing counts in the item's unit and price is per unit, so
 // the unit must be explicit to avoid miscounts. Standard units; the item's own
@@ -223,21 +232,28 @@ export function openItemPickerModal({
             qtyInp.addEventListener('input', () => { l.qty = qtyInp.value; updateSummary(); });
             // ITEM_UNIT_V1 — per-line unit; changing it corrects the item's
             // catalog unit (gateway) so the per-unit price basis is unambiguous.
-            const unitSel = h('select', { style: { height: '32px', padding: '0 4px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', background: 'white', fontFamily: 'inherit', width: '72px' } },
-                ...unitOptions(l.unit).map(u => h('option', { value: u }, u)));
-            unitSel.value = l.unit || '';
-            unitSel.addEventListener('change', () => {
-                l.unit = unitSel.value;
-                if (l.unit && l.unit !== (l.item.unit || '')) {
-                    l.item.unit = l.unit;
-                    // WAREHOUSE_NAMES_V1 — правка единицы шла на облачный шлюз
-                    // (/api/v1/crud/...), которого офлайн нет вовсе: исправление
-                    // никогда не сохранялось. Пишем в свою базу.
-                    supabase.from('products').update({ unit: l.unit }).eq('id', l.item.id)
-                        .then(({ error }) => { if (error) console.warn('[item-picker] unit save:', error.message); });
-                }
-                updateSummary();
-            });
+            const canEditUnit = hasActorRole(PRODUCT_UNIT_ROLES);   // LIVE_AUDIT_FIX_V1
+            const unitSel = canEditUnit
+                ? h('select', { title: tr('Единица товара в каталоге'), style: { height: '32px', padding: '0 4px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', background: 'white', fontFamily: 'inherit', width: '72px' } },
+                    ...unitOptions(l.unit).map(u => h('option', { value: u }, u)))
+                : h('span', { class: 'muted', 'data-unit': '', style: { fontSize: '12.5px', minWidth: '36px' } }, l.unit || l.item.unit || '');
+            if (canEditUnit) {
+                unitSel.value = l.unit || '';
+                unitSel.addEventListener('change', async () => {
+                    const next = unitSel.value;
+                    if (!next || next === (l.item.unit || '')) { l.unit = next; updateSummary(); return; }
+                    // WAREHOUSE_NAMES_V1 — пишем в свою базу; LIVE_AUDIT_FIX_V1 —
+                    // отказ не глотается, и строка остаётся на прежней единице.
+                    const { error } = await supabase.from('products').update({ unit: next }).eq('id', l.item.id);
+                    if (error) {
+                        toast(trf('Единица товара не сохранена: {msg}', { msg: error.message || error }), 'fail');
+                        unitSel.value = l.unit || '';
+                        return;
+                    }
+                    l.unit = next; l.item.unit = next;
+                    updateSummary();
+                });
+            }
             cartEl.appendChild(h('div', {
                 style: { display: 'flex', alignItems: 'center', gap: '7px', padding: '6px 10px', marginBottom: '6px', background: 'var(--ink-25, #fafafa)', border: '1px solid var(--ink-100)', borderRadius: '8px' },
             },

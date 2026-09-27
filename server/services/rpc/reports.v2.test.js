@@ -136,7 +136,7 @@ test('рефералы: фильтр «внутренние / внешние» �
   const external = objects(run(db, 'referrals', { referrer: 'external' }));
   assert.deepEqual(external.map((o) => o['Источник']), ['Клиника Х']);
   assert.equal(objects(run(db, 'referrals', { referrer: 'all' })).length, 2);
-  assert.throws(() => run(db, 'referrals', { referrer: 'bogus' }), /referrer/);
+  assert.throws(() => run(db, 'referrals', { referrer: 'bogus' }), /referrer|Направившие/);
   // Детализация: три строки (INV-1, INV-2, INV-3); аннулированный INV-4 — нет.
   const detail = objects(run(db, 'referrals_detail'));
   assert.deepEqual(detail.map((o) => o['№ счёта']).sort(), ['INV-1', 'INV-2', 'INV-3']);
@@ -175,7 +175,7 @@ test('кабинет врача: вознаграждение за направ�
   assert.equal(mine.reward, own['Вознаграждение']);
   // Врач 2 никого не направлял.
   assert.equal(doctorReferralReward(db, { doctor_id: 2, from: FROM, to: TO }, admin).count, 0);
-  assert.throws(() => doctorReferralReward(db, { doctor_id: 'x' }, admin), /doctor_id/);
+  assert.throws(() => doctorReferralReward(db, { doctor_id: 'x' }, admin), /doctor_id|Врач/);
 });
 
 // ─── 2. ПО УСЛУГАМ ───────────────────────────────────────────────────────────
@@ -216,12 +216,14 @@ test('по услугам: «Доля врача» сходится с «Общ�
   assert.equal(sum(all, 'Сумма') - sum(all, 'Скидка'), sum(revenue, 'После скидки'));
   assert.equal(sum(all, 'Налог'), sum(revenue, 'Налог'));
   const salaries = objects(run(db, 'doctor_salaries'));
-  assert.equal(sum(all, 'Доля врача'), sum(salaries, 'Итого к выплате'));
+  // PAY_ALL_EARNINGS_V1 — «Итого к выплате» теперь с вознаграждениями; доля за
+  // работу — гонорар плюс стационар.
+  assert.equal(sum(all, 'Доля врача'), sum(salaries, 'Доля врача (гонорар)') + sum(salaries, 'Стационар: гонорар'));
   assert.equal(sum(all, 'Доля врача'), 332200);
   const paid = objects(run(db, 'by_services', { paid: 'paid' }));
   assert.equal(sum(paid, 'Доля врача'), 302200);
   assert.ok(!paid.some((o) => o['Оплачено (доля оплаты счёта)'] === 0), 'неоплаченная строка в режиме «Только оплаченные»');
-  assert.throws(() => run(db, 'by_services', { paid: 'maybe' }), /paid/);
+  assert.throws(() => run(db, 'by_services', { paid: 'maybe' }), /paid|Счета/);
 });
 
 test('по услугам: фильтр по группе', () => {
@@ -231,7 +233,7 @@ test('по услугам: фильтр по группе', () => {
   const surg = objects(run(db, 'by_services', { group: 'other' }));
   assert.deepEqual(surg.map((o) => o['Услуга']), ['Операция']);
   assert.equal(objects(run(db, 'by_services', { group: 'all' })).length, 3);
-  assert.throws(() => run(db, 'by_services', { group: 'bogus' }), /group/);
+  assert.throws(() => run(db, 'by_services', { group: 'bogus' }), /group|Группа/);
 });
 
 // ─── 3. ПО ВРАЧАМ ────────────────────────────────────────────────────────────
@@ -270,12 +272,15 @@ test('по врачам: доли в сумме равны «Зарплатам 
   assert.equal(sum(mine, 'Стационарная доля'), sum(sal, 'Стационар: гонорар'));
   const referral = sum(objects(run(db, 'referrals')).filter((o) => o['Вид'] === 'Внутренний'), 'Вознаграждение');
   assert.equal(sum(mine, 'Вознаграждение за направления'), referral);
-  assert.equal(sum(mine, 'Итого к выплате'), sum(sal, 'Итого к выплате') + referral);
+  // PAY_ALL_EARNINGS_V1 (владелец, 27.09) — один итог на оба отчёта: все начисления.
+  assert.equal(sum(sal, 'Вознаграждение за направления'), referral);
+  assert.equal(sum(mine, 'Итого к выплате'), sum(sal, 'Итого к выплате'));
   // По каждому врачу — тоже, а не только в сумме.
   for (const o of sal) {
     const m = mine.find((x) => x['Врач'] === o['Врач']);
     assert.equal(m['Доля за услуги'], o['Доля врача (гонорар)'], o['Врач']);
     assert.equal(m['Стационарная доля'], o['Стационар: гонорар'], o['Врач']);
+    assert.equal(m['Итого к выплате'], o['Итого к выплате'], o['Врач']);
   }
 });
 
@@ -391,7 +396,7 @@ test('расход: выдача в отдел, расход на пациент
   assert.equal(patients[0]['Пациент'], 'Азизов А.');
   assert.equal(patients[0]['Движений'], 2);
   assert.equal(sum(patients, 'Израсходовано на пациентов (себестоимость)'), sum(lines, 'Израсходовано на пациентов (себестоимость)'));
-  assert.throws(() => run(db, 'stock_consumption', { by: 'bogus' }), /by must be/);
+  assert.throws(() => run(db, 'stock_consumption', { by: 'bogus' }), /by must be|Разрез/);   // REPORTS_AUDIT_FIX_V1 — по-русски
 });
 
 test('ведомость: начало + приход − выдано − списано ± корректировки = конец; по сегодня сходится с остатком товара', () => {
@@ -466,13 +471,21 @@ test('I6: начисления врача — ему самому, «Отчёт�
   const { db } = seed();
   const args = (id) => ({ doctor_id: id, from: FROM, to: TO });
   const doc1 = { id: 1, role: 'doctor' };
+  // REPORTS_AUDIT_FIX_V1 — роль клиники с «Отчётами», группы не настраивала:
+  // по прежнему правилу видит начисления всех.
+  db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('rep_all', 'Отчёты целиком', 'registrar')").run();
+  db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)')
+    .run('rep_all', JSON.stringify({ sections: ['reports-hub'], levels: {} }));
+  const repAll = { id: 52, role: 'registrar', custom_role_code: 'rep_all' };
   for (const fn of [doctorReferralReward, doctorInpatientShare]) {
     assert.doesNotThrow(() => fn(db, args(1), doc1), fn.name + ': свои');
     assert.throws(() => fn(db, args(2), doc1), (e) => e.status === 403, fn.name + ': чужие врачу');
     assert.throws(() => fn(db, args(1), { id: 50, role: 'nurse' }), (e) => e.status === 403, fn.name + ': медсестре');
     assert.doesNotThrow(() => fn(db, args(1), admin), fn.name + ': администратору');
-    // Кассиру раздел «Отчёты» открыт штатно (мигр. 013) — он видит всех.
-    assert.doesNotThrow(() => fn(db, args(1), { id: 51, role: 'cashier' }), fn.name + ': «Отчётам»');
+    // REPORTS_AUDIT_FIX_V1 — штатному кассиру миграция 179 записала группы
+    // отчётов явно: «Оплата врачей» — «Нет», чужих начислений он не видит.
+    assert.throws(() => fn(db, args(1), { id: 51, role: 'cashier' }), (e) => e.status === 403, fn.name + ': штатному кассиру');
+    assert.doesNotThrow(() => fn(db, args(1), repAll), fn.name + ': «Отчётам» (роль без настроек групп)');
     // Врач, которому клиника открыла «Отчёты», — тоже.
     db.prepare("UPDATE role_permissions SET permissions = json_set(permissions, '$.sections', json('[\"patients\",\"reports-hub\"]')) WHERE role = 'doctor'").run();
     assert.doesNotThrow(() => fn(db, args(2), doc1), fn.name + ': врачу с «Отчётами»');

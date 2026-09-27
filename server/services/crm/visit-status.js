@@ -147,7 +147,10 @@ export function crmVisitStatus(db, { visitId, from, to } = {}) {
     if (!ARRIVED_STATUSES.includes(now) && now !== 'no_show' && now !== 'cancelled') return;
 
     const visit = db.prepare(`
-      SELECT id, patient_id, substr(visit_date, 1, 10) AS day,
+      -- FINAL_MONEY_FIX_V1 (M6) — день визита МЕСТНЫЙ (как ensure_visit и
+      -- отчёты): substr(visit_date, 1, 10) давал день по UTC, и приход после
+      -- полуночи по местному закрывал вчерашние заявки вместо сегодняшних.
+      SELECT id, patient_id, ${localDate('visit_date')} AS day,
              (${localDate('visit_date')} > date('now','localtime')) AS future
         FROM visits WHERE id = ?
     `).get(id);

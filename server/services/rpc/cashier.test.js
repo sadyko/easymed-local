@@ -50,7 +50,7 @@ test('open_cash_shift creates an open shift; a second open is rejected (400)', (
 test('open_cash_shift rejects negative opening_float (400) and non-allowed role (403)', () => {
   const { db } = seed();
   assert.throws(() => openCashShift(db, { opening_float: -100 }, cashier), /400|opening_float|negative|finite/i);
-  assert.throws(() => openCashShift(db, { opening_float: 0 }, lab), /(allow|forbid|role)/i);
+  assert.throws(() => openCashShift(db, { opening_float: 0 }, lab), /(allow|forbid|role|роли)/i);
 });
 
 test('open_cash_shift defaults opening_float to 0 and accepts admin role', () => {
@@ -165,9 +165,9 @@ test('cash_shift_summary returns caller\'s open shift, totals by method, and exp
 
 test('open/close/summary reject roles outside admin/cashier', () => {
   const { db } = seed();
-  assert.throws(() => openCashShift(db, {}, lab), /403|allow|forbid|role/i);
-  assert.throws(() => cashShiftSummary(db, {}, lab), /403|allow|forbid|role/i);
-  assert.throws(() => closeCashShift(db, { shift_id: 1, counted_amount: 0 }, lab), /403|allow|forbid|role/i);
+  assert.throws(() => openCashShift(db, {}, lab), /403|allow|forbid|role|роли/i);   // REPORTS_AUDIT_FIX_V1 — отказ по-русски
+  assert.throws(() => cashShiftSummary(db, {}, lab), /403|allow|forbid|role|роли/i);
+  assert.throws(() => closeCashShift(db, { shift_id: 1, counted_amount: 0 }, lab), /403|allow|forbid|role|роли/i);
 });
 
 // ---------------------------------------------------------------------------
@@ -220,7 +220,7 @@ test('shift_report returns totals, payments and movements; own-shift gate', () =
   assert.ok(r.payments[0].patient);
 
   // another cashier may not read this shift by id; admin may
-  assert.throws(() => shiftReport(db, { shift_id: shift.id }, cashier2), /403|own/i);
+  assert.throws(() => shiftReport(db, { shift_id: shift.id }, cashier2), /403|own|свою смену/i);
   assert.equal(shiftReport(db, { shift_id: shift.id }, admin).shift.id, shift.id);
 });
 

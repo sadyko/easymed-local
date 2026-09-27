@@ -18,8 +18,11 @@
 // ними сегодня не стоит ничего: оперблок как источник не заведён, скидка живёт
 // на счёте, а не на строке. Колонка, которая всегда пуста, — это обещание, а
 // не сведения, поэтому её здесь нет.
-import { RpcError } from './inpatient-flow.js';
+import { RpcError, inpatientScope, IN_BED_STATUSES } from './inpatient-flow.js';
 import { hasAnyRole } from '../roles.js';
+// INPATIENT_MONEY_FIX_V1 — строку услуги оценивают ОДИН раз, при заведении, тем
+// же правилом, что и счёт: личная цена врача, иначе каталог.
+import { lineUnitPrice } from '../domain/pricing.js';
 // GRANTS_V1 — права по справочнику (Настройки → Роли); прежние списки ролей — значение по умолчанию.
 import { requireGrant } from '../grants.js';
 import { ACCOMMODATION_NOTE_PREFIX } from '../../../public/js/shared/accommodation-line.js';
@@ -46,6 +49,37 @@ function lineKind(row) {
   return 'service';
 }
 
+// BILLING_AUDIT_FIX_V1 — ЕДИНИЦА ТОВАРНОЙ СТРОКИ — ТА, В КОТОРОЙ ЗАПИСАНО
+// КОЛИЧЕСТВО.
+//
+// Акт подписывал каждую товарную строку единицей выдачи («таб»). Но выдача со
+// склада у койки (inventory.js dispenseAdmissionItem) пишет количество в
+// БАЗОВЫХ единицах — коробках, по цене коробки, — и в акте стояло «1 таб ×
+// 40 000» вместо «1 кор ×». Выдача из подотчёта (holdings.js) пишет в
+// единицах выдачи. Строка сама этого не помнит, помнит журнал склада: её
+// движения 'dispense' списали столько-то базовых единиц. Совпало с
+// количеством строки — единица базовая; совпало после умножения на
+// коэффициент — единица выдачи. Движений нет (старые строки) — решает цена:
+// цена коробки → коробка.
+function itemUnit(r) {
+  const consumption = r.product_unit || r.product_base_unit || '';
+  const base = r.product_base_unit || r.product_unit || '';
+  const cf = Number(r.product_cf);
+  if (!(Number.isFinite(cf) && cf > 1) || !r.product_base_unit) return consumption;
+  const qty = Number(r.quantity) || 0;
+  const moved = Number(r.moved_base);
+  if (Number.isFinite(moved) && moved > 0) {
+    if (Math.abs(moved - qty) < 1e-6) return base;
+    if (Math.abs(moved * cf - qty) < 1e-6) return consumption;
+  }
+  const sale = Number(r.product_sale_price);
+  const unit = Number(r.unit_price);
+  if (Number.isFinite(sale) && sale > 0 && Number.isFinite(unit)) {
+    return Math.abs(unit - sale) <= Math.abs(unit - sale / cf) ? base : consumption;
+  }
+  return consumption;
+}
+
 /**
  * АКТ ВЫПОЛНЕННЫХ РАБОТ: строки и итоги.
  *
@@ -70,6 +104,11 @@ export function admissionCharges(db, args, user) {
            p.category     AS product_category,
            r.name         AS room_name,
            p.base_unit    AS product_base_unit,
+           p.consumption_factor AS product_cf,
+           p.sale_price   AS product_sale_price,
+           -- BILLING_AUDIT_FIX_V1 — сколько БАЗОВЫХ единиц списала выдача этой строки.
+           (SELECT -SUM(m.qty) FROM stock_movements m
+             WHERE m.reference_type = 'admission' AND m.reference_id = s.id AND m.kind = 'dispense') AS moved_base,
            u.full_name    AS doctor_name,
            ii.invoice_id  AS invoice_id,
            inv.invoice_number AS invoice_number,
@@ -94,7 +133,7 @@ export function admissionCharges(db, args, user) {
       // Имя берётся у того, чем строка является. Проживание своего имени в
       // справочниках не имеет — оно в метке, и её же видит касса в счёте.
       name: kind === 'stay' ? String(r.notes || '') : (r.service_name || r.product_name || ''),
-      unit: kind === 'item' ? (r.product_unit || r.product_base_unit || '') : '',
+      unit: kind === 'item' ? itemUnit(r) : '',
       // ACT_ADD_SERVICE_V1 — раздел справочника, из которого услуга. По нему
       // вкладки истории болезни отличают анализ от операции; своего признака
       // «это анализ» у строки нет и заводить его значило бы держать вторую
@@ -147,8 +186,20 @@ export function admissionCharges(db, args, user) {
   };
 }
 
-/** Кто назначает услуги: это клиническое решение, а не кассовое. */
-export const SERVICE_ADD_ROLES = ['admin', 'head_doctor', 'doctor'];
+/**
+ * Кто заводит услугу у койки.
+ *
+ * FINAL_ROLES_SYNC_FIX_V1 (I2) — ПРЕЖНИЙ КРУГ. Пока строки писались через
+ * /api/db, обычную услугу у койки заводили администратор, регистратура, врач,
+ * медсестра и касса; медсестра, отмечающая процедуру у постели, — ежедневная
+ * работа. Перевод на серверный путь (INPATIENT_MONEY_FIX_V1, D7) сузил круг до
+ * врачей, и кнопка «Добавить услугу» молча отказывала медсестре. Круг
+ * возвращён; сужения остались, где они по делу: ОПЕРАЦИЮ ставит лечащий врач,
+ * главный врач или администратор (ниже), строку заводит только сервер, только
+ * лежащему пациенту открытой госпитализации. Экран спрашивает то же правило
+ * (permissions.js canAddAdmissionService).
+ */
+export const SERVICE_ADD_ROLES = ['admin', 'head_doctor', 'doctor', 'nurse', 'senior_nurse', 'registrar', 'cashier'];
 
 /**
  * НАЧИСЛИТЬ ГОСПИТАЛИЗАЦИИ УСЛУГУ — анализ, диагностику, операцию.
@@ -182,19 +233,39 @@ export function admissionServiceAdd(db, args, user) {
   if (!admissionId) throw new RpcError('Госпитализация не выбрана.', 400);
   if (!serviceId) throw new RpcError('Услуга не выбрана.', 400);
 
-  const adm = db.prepare('SELECT id, status FROM admissions WHERE id = ?').get(admissionId);
+  const adm = db.prepare('SELECT id, status, attending_doctor_id, bed_id, ward_id FROM admissions WHERE id = ?').get(admissionId);
   if (!adm) throw new RpcError('Госпитализация не найдена.', 404);
   if (['discharged', 'cancelled'].includes(adm.status)) {
     throw new RpcError('Госпитализация закрыта — услуги в неё больше не начисляют.', 400);
   }
-  const svc = db.prepare('SELECT id, name, price FROM services WHERE id = ?').get(serviceId);
+  // INPATIENT_MONEY_FIX_V1 (D5) — услуги начисляют ЛЕЖАЩЕМУ пациенту. Заявка
+  // ('ordered') — это человек дома: начисленная ей строка висела бы долгом
+  // без койки и без лечения, а при отмене заявки оставалась бы в деньгах.
+  if (!IN_BED_STATUSES.includes(adm.status)) {
+    throw new RpcError('Пациент ещё не размещён на койке — услуги начисляют после размещения.', 400);
+  }
+  const svc = db.prepare('SELECT id, name, price, type FROM services WHERE id = ?').get(serviceId);
   if (!svc) throw new RpcError('Такой услуги в справочнике нет.', 404);
+
+  // INPATIENT_MONEY_FIX_V1 (D5) — ОПЕРАЦИЮ ставит тот, кто ведёт пациента:
+  // лечащий врач, главный врач или администратор. Правило то же, что у
+  // назначений (assertCanPrescribe, inpatient-flow.js): хирургия — это
+  // решение о лечении, и чужой врач отделения его за лечащего не принимает.
+  // 'other' в services.type — это и есть хирургия (миграция 109).
+  if (svc.type === 'other' && inpatientScope(user) !== 'all') {
+    const uid = user && user.id;
+    if (!(hasAnyRole(user, ['doctor']) && uid && adm.attending_doctor_id === uid)) {
+      throw new RpcError('Операцию назначает лечащий врач этого пациента или главный врач.', 403);
+    }
+  }
 
   const qty = Number(a.quantity);
   const quantity = Number.isFinite(qty) && qty > 0 ? qty : 1;
-  const price = Number(svc.price) || 0;
-  const total = round2(price * quantity);
   const doctorId = Number(a.doctor_id) || (user && user.id) || null;
+  // INPATIENT_MONEY_FIX_V1 (D1) — цена исполнителя, а не каталога: раньше акт
+  // показывал 500 000 по каталогу, а счёт брал 700 000 — личную цену врача.
+  const price = Number(lineUnitPrice(db, { service_id: serviceId, doctor_id: doctorId }, { service: svc, tiered: false })) || 0;
+  const total = round2(price * quantity);
   const note = a.note === null || a.note === undefined ? null : String(a.note).trim().slice(0, 300) || null;
   // Время принимается только разбираемое: строка, которую не прочесть, в
   // расписании кабинета хуже пустого поля — её никто не заметит.
@@ -203,11 +274,11 @@ export function admissionServiceAdd(db, args, user) {
   const plannedAt = planned ? planned.toISOString().slice(0, 19) + 'Z' : null;
 
   const info = db.prepare(`
-    INSERT INTO admission_services (admission_id, service_id, doctor_id, quantity, unit_price, total,
+    INSERT INTO admission_services (admission_id, service_id, doctor_id, bed_id, ward_id, quantity, unit_price, total,
                                     status, billable, notes, planned_at, performed_at)
-    VALUES (?,?,?,?,?,?,'added',1,?,?,
+    VALUES (?,?,?,?,?,?,?,?,'added',1,?,?,
             CASE WHEN ? IS NULL THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') ELSE NULL END)
-  `).run(admissionId, serviceId, doctorId, quantity, price, total, note, plannedAt, plannedAt);
+  `).run(admissionId, serviceId, doctorId, adm.bed_id, adm.ward_id, quantity, price, total, note, plannedAt, plannedAt);
 
   return { line: db.prepare('SELECT * FROM admission_services WHERE id = ?').get(info.lastInsertRowid) };
 }

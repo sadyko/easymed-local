@@ -17,7 +17,7 @@ import { admitPatient } from './inpatient.js';
 import { billAccommodation } from './accommodation.js';
 import { dispenseAdmissionItem } from './inventory.js';
 import { createInvoiceForAdmission } from './billing.js';
-import { admissionCharges, admissionChargeSetBillable, admissionServiceAdd, admissionServiceDone } from './admission-charges.js';
+import { admissionCharges, admissionChargeSetBillable, admissionServiceAdd, admissionServiceDone, SERVICE_ADD_ROLES } from './admission-charges.js';
 
 const NURSE = { id: 2, role: 'nurse', full_name: 'Медсестра' };
 const CASH  = { id: 9, role: 'cashier', full_name: 'Касса' };
@@ -165,12 +165,13 @@ test('услуга начисляется госпитализации по це
   } finally { db.close(); }
 });
 
-test('услугу назначает врач, а не касса, и не в закрытую госпитализацию', () => {
+test('услугу у койки не заводит роль вне круга, и не в закрытую госпитализацию', () => {
   const { db, adm, svc } = seed();
   const DOC = { id: 3, role: 'doctor', full_name: 'Др. Азиза' };
   try {
-    // Назначение услуги — решение клиническое: касса его не принимает.
-    assert.throws(() => admissionServiceAdd(db, { admission_id: adm.id, service_id: svc }, CASH), /роли/i);
+    // FINAL_ROLES_SYNC_FIX_V1 (I2) — касса снова в круге (как до перевода на
+    // сервер); лаборатория — нет.
+    assert.throws(() => admissionServiceAdd(db, { admission_id: adm.id, service_id: svc }, LAB), /роли/i);
     assert.throws(() => admissionServiceAdd(db, { admission_id: adm.id, service_id: 9999 }, DOC), /справочник/i);
     assert.throws(() => admissionServiceAdd(db, { admission_id: adm.id }, DOC), /Услуга не выбрана/i);
 
@@ -270,4 +271,64 @@ test('SERVICE_TASKS_V1: отметка выполнения ставится, п
     // Касса отметок выполнения не ставит: это работа отделения.
     assert.throws(() => admissionServiceDone(db, { line_id: id }, CASH), /роли/i);
   } finally { db.close(); }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FINAL_ROLES_SYNC_FIX_V1 (I2) — КТО ЗАВОДИТ УСЛУГУ У КОЙКИ, ПО РОЛЯМ.
+//
+// До перевода на серверный путь обычную услугу у койки заводили администратор,
+// регистратура, врач, медсестра и касса (прямой вставкой). Серверный путь
+// сузил круг до врачей — медсестра, отмечающая процедуру у постели, получала
+// отказ. Круг возвращён; операция — по-прежнему лечащему, главному врачу и
+// администратору.
+// ═══════════════════════════════════════════════════════════════════════════
+test('I2: обычную услугу у койки заводят admin, главный врач, врач, медсестра, регистратура, касса', () => {
+  const { db, adm, svc } = seed();
+  try {
+    const actors = {
+      admin:       { id: 11, role: 'admin' },
+      head_doctor: { id: 12, role: 'doctor', extra_roles: ['head_doctor'] },
+      doctor:      { id: 3,  role: 'doctor' },
+      nurse:       { id: 2,  role: 'nurse' },
+      registrar:   { id: 13, role: 'registrar' },
+      cashier:     { id: 9,  role: 'cashier' },
+    };
+    for (const [name, u] of Object.entries(actors)) {
+      const { line } = admissionServiceAdd(db, { admission_id: adm.id, service_id: svc, doctor_id: DOC_ID }, u);
+      assert.ok(line && line.id, name + ': строка не заведена');
+      assert.equal(line.unit_price, 50000, name + ': цену ставит сервер');
+    }
+    for (const role of ['lab', 'inventory', 'callcenter']) {
+      assert.throws(() => admissionServiceAdd(db, { admission_id: adm.id, service_id: svc }, { id: 20, role }),
+        (e) => e.status === 403, role + ': услуга у койки заведена ролью вне круга');
+    }
+    assert.equal(admissionCharges(db, { admission_id: adm.id }, CASH).lines.length, 6);
+  } finally { db.close(); }
+});
+
+test('I2: операцию медсестра, регистратура, касса и чужой врач не ставят; лечащий и администратор — ставят', () => {
+  const { db, adm } = seed();
+  try {
+    const surgery = db.prepare("INSERT INTO services (name, price, type) VALUES ('Аппендэктомия', 3000000, 'other')").run().lastInsertRowid;
+    db.prepare('UPDATE admissions SET attending_doctor_id = ? WHERE id = ?').run(DOC_ID, adm.id);
+    for (const u of [{ id: 2, role: 'nurse' }, { id: 13, role: 'registrar' }, { id: 9, role: 'cashier' }, { id: 14, role: 'doctor' }]) {
+      assert.throws(() => admissionServiceAdd(db, { admission_id: adm.id, service_id: surgery, doctor_id: DOC_ID }, u),
+        (e) => e.status === 403 && /лечащий врач/.test(e.message), u.role + ' поставил операцию');
+    }
+    assert.ok(admissionServiceAdd(db, { admission_id: adm.id, service_id: surgery }, { id: DOC_ID, role: 'doctor' }).line);
+    assert.ok(admissionServiceAdd(db, { admission_id: adm.id, service_id: surgery, doctor_id: DOC_ID }, { id: 11, role: 'admin' }).line);
+  } finally { db.close(); }
+});
+
+test('I2: заявке без койки услугу не заводит никто из круга — даже медсестра', () => {
+  const { db, adm, svc } = seed();
+  try {
+    db.prepare("UPDATE admissions SET status = 'ordered' WHERE id = ?").run(adm.id);
+    assert.throws(() => admissionServiceAdd(db, { admission_id: adm.id, service_id: svc }, NURSE), /койк/);
+  } finally { db.close(); }
+});
+
+test('I2: экран спрашивает тот же круг ролей, что сервер', async () => {
+  const { ADMISSION_SERVICE_ADD_ROLES } = await import('../../../public/js/admin/permissions.js');
+  assert.deepEqual([...ADMISSION_SERVICE_ADD_ROLES].sort(), [...SERVICE_ADD_ROLES].sort());
 });

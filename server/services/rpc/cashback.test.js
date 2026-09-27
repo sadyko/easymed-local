@@ -77,7 +77,7 @@ test('один раз за жизнь счёта: полный возврат о
   const a = billed(db, pid, [[svc, 200000]]);
   recordPayment(db, { invoice_id: a.id, amount: 200000, method: 'cash' }, CASH);
   assert.equal(bal(db, pid), 10000);
-  refundPayment(db, { payment_id: pay(db, a.id, 'cash') }, CASH);
+  refundPayment(db, { payment_id: pay(db, a.id, 'cash'), void_when_zero: false }, CASH);   // BILLING_AUDIT_FIX_V1 (B2): счёт оставлен открытым явно
   assert.equal(bal(db, pid), 0, 'откат');
   recordPayment(db, { invoice_id: a.id, amount: 200000, method: 'cash' }, CASH);
   assert.equal(cashbackRows(db).length, 1, 'второго кэшбэка нет');

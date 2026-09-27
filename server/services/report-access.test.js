@@ -73,13 +73,22 @@ test('роль только с «Кассой»: отчёт кассира ес�
 test('ненастроенная роль — как было: «Отчёты» выданы — видно всё, не выданы — ничего', () => {
   const db = seed();
   try {
-    // Штатный кассир: миграции дали ему «Отчёты» (reports-hub), групп он не настраивал.
+    // Своя роль клиники с разделом «Отчёты» (reports-hub), групп она не
+    // настраивала. REPORTS_AUDIT_FIX_V1 — штатному кассиру миграция 179
+    // записала его группы явно, поэтому правило перехода проверяется здесь.
+    db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('kassa_free', 'Касса без настроек', 'cashier')").run();
+    setPerms(db, 'kassa_free', { sections: ['cashier', 'reports-hub'], levels: { 'reports-hub': 'viewer' } });
+    const FREE = { id: 46, role: 'cashier', extra_roles: [], custom_role_code: 'kassa_free' };
     for (const kind of ['total_revenue', 'doctor_salaries', 'procurement', 'by_services', 'referrals']) {
-      assert.ok(runReport(db, { kind, ...RANGE }, CASHIER), 'ненастроенный кассир потерял «' + kind + '»');
+      assert.ok(runReport(db, { kind, ...RANGE }, FREE), 'ненастроенная роль потеряла «' + kind + '»');
     }
-    assert.ok(ownerReport(db, RANGE, CASHIER));
+    assert.ok(ownerReport(db, RANGE, FREE));
+    assert.ok(cashierReport(db, RANGE, FREE));
+    assert.ok(callcenterReport(db, RANGE, FREE));
+    // Штатный кассир (179): выручка и касса — да, зарплаты врачей — нет.
+    assert.ok(runReport(db, { kind: 'total_revenue', ...RANGE }, CASHIER));
     assert.ok(cashierReport(db, RANGE, CASHIER));
-    assert.ok(callcenterReport(db, RANGE, CASHIER));
+    assert.throws(() => runReport(db, { kind: 'doctor_salaries', ...RANGE }, CASHIER), is403, 'штатному кассиру открыты зарплаты врачей');
     // Лаборант: «Отчётов» у него не было — хаб ему не открывался, теперь и сервер отказывает.
     assert.throws(() => runReport(db, { kind: 'total_revenue', ...RANGE }, LAB), is403);
     assert.throws(() => cashierReport(db, RANGE, LAB), is403);
@@ -116,13 +125,15 @@ test('врач видит СВОИ начисления без единого к
   } finally { db.close(); }
 });
 
-test('другие группы чужих начислений не открывают; «Рефералы» — только вознаграждение за направления', () => {
+test('другие группы чужих начислений не открывают — и «Рефералы» тоже (REPORTS_AUDIT_FIX_V1)', () => {
   const db = seed();
   try {
     setPerms(db, 'kassa_only', { sections: ['reports-hub'], levels: {}, grants: { ...ONLY_CASHIER, 'reports.referrals': 'view' } });
     assert.throws(() => doctorInpatientShare(db, { doctor_id: 45, ...RANGE }, KASSA), is403, 'касса увидела стационарную долю врача');
     assert.throws(() => doctorTierPositions(db, { doctor_id: 45, ...TIER }, KASSA), is403);
-    assert.ok(doctorReferralReward(db, { doctor_id: 45, ...RANGE }, KASSA), 'группа «Рефералы» и так видит вознаграждение каждого врача');
+    // Вознаграждение сотрудника за направления — его начисление: в отчёте
+    // «Рефералы» оно скрыто без «Оплаты врачей», и кабинетный вызов — тоже.
+    assert.throws(() => doctorReferralReward(db, { doctor_id: 45, ...RANGE }, KASSA), is403, 'группа «Рефералы» увидела начисление врача');
   } finally { db.close(); }
 });
 

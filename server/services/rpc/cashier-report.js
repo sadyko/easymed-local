@@ -24,6 +24,10 @@ import { requireReportKind } from '../report-access.js';
 // или первой оплаты. Поступления — только приход (тот же словарь, что у
 // выручки, дашборда и итога смены).
 import { INFLOW_SQL } from '../../../public/js/shared/payment-methods.js';
+// REPORTS_AUDIT_FIX_V1 — период проверяется тем же правилом, что у остальных
+// отчётов (мусор и «с» позже «по» — отказ по-русски, а не пустая касса), а
+// пустой филиал счёта — своё здание (счёт госпитализации пишется без него).
+import { resolveRange, OWN_BRANCH_OR } from './reports.js';
 
 const METHOD_RU = {
   cash: 'Наличные', card: 'Карта', acquiring: 'Эквайринг',
@@ -64,6 +68,8 @@ const CASH_MOVE_LOCAL_NOTE = 'Расходы кассы между здания�
 // Второй вариант («итог по клинике из того, что ездит») отвергнут: он потребовал
 // бы объявить расходы нулём у всех соседей, то есть напечатать выдуманную цифру
 // вместо отсутствующей.
+const REFUND_NOTE = 'Строки «Возврат» — деньги, отданные пациенту (со знаком минус, способом, которым их вернули). Приход в итоге — за вычетом возвратов.';
+
 const NET_SCOPE_NOTE = 'Итог считается ПО ЭТОМУ ЗДАНИЮ: приход этого здания минус его расход. Доход по всей клинике показан отдельной плиткой — вычитать из него местный расход нельзя, движения кассы между зданиями не передаются.';
 
 // Кассир приехавшего платежа неизвестен: карточки сотрудников между зданиями
@@ -77,14 +83,15 @@ function cashierCell(ctx, r) {
 export function cashierReport(db, args, user) {
   requireReportKind(db, user, 'cashier');   // ROLE_REPORTS_SETTINGS_V1
   const a = args || {};
-  const from = String(a.from || '').slice(0, 10);
-  const to = String(a.to || '').slice(0, 10);
+  const range = resolveRange(db, a);
+  const from = String(range.from).slice(0, 10);
+  const to = String(range.to).slice(0, 10);
 
   // Филиал живёт на СЧЁТЕ, а не на платеже. Пустой список = все филиалы:
   // так же ведут себя остальные отчёты (см. reports.js), и «ничего не выбрано»
   // не должно означать «ничего не показывать».
   const branchIds = Array.isArray(a.branch_ids) ? a.branch_ids.map(Number).filter(Boolean) : [];
-  const branchSql = branchIds.length ? ` AND i.branch_id IN (${branchIds.map(() => '?').join(',')})` : '';
+  const branchSql = branchIds.length ? ` AND ${OWN_BRANCH_OR('i.branch_id')} IN (${branchIds.map(() => '?').join(',')})` : '';
 
   // BUILDING_REPORTS_V1 — ЗДАНИЕ, а не филиал внутри базы. Фильтр по
   // `i.branch_id` у приехавшего платежа не совпадал ни с чем (branch_id не
@@ -154,10 +161,20 @@ export function cashierReport(db, args, user) {
   const multiBuilding = ctx.options.length > 1;
 
   const incomeColumns = ['Здание', 'Дата', 'Услуга', 'Врач', 'Пациент', 'Способ оплаты', 'Сумма', 'Счёт', 'Кассир'];
+  // REPORTS_AUDIT_FIX_V1 — ВОЗВРАТ — НЕ ПОСТУПЛЕНИЕ. Возврат хранится
+  // отрицательным платежом (CASHIER_REFUND_V1) и стоял в списке строкой
+  // «Поступление · Наличные» с минусом — кассир читал его как приход. Теперь
+  // строка названа «Возврат», со способом, которым деньги отдали; итог прихода
+  // по-прежнему за вычетом возвратов (это деньги, оставшиеся в кассе), а сумма
+  // возвращённого — отдельной величиной kpi.refunds.
+  const isRefund = (r) => Number(r.amount) < 0;
+  const methodRu = (r) => METHOD_RU[r.method] || r.method || '—';
   const incomeRows = income.map((r) => [
     ctx.label(r.origin), r.day + ' ' + (r.at || ''), r.services || '—', r.doctors || '—', r.patient,
-    METHOD_RU[r.method] || r.method || '—', num(r.amount), r.invoice_no || '—', cashierCell(ctx, r),
+    isRefund(r) ? 'Возврат · ' + methodRu(r) : methodRu(r), num(r.amount), r.invoice_no || '—', cashierCell(ctx, r),
   ]);
+  const refundTotal = income.reduce((n, r) => n + (isRefund(r) ? -num(r.amount) : 0), 0);
+  const refundCount = income.filter(isRefund).length;
 
   // Колонки «Комментарий» здесь нет намеренно: у движения кассы всего два
   // текстовых поля — article (статья) и note (на что именно). Они уже заняты
@@ -178,8 +195,8 @@ export function cashierReport(db, args, user) {
   // приход и расход обязаны складываться в итог, а не спорить друг с другом.
   const columns = ['Здание', 'Тип', 'Дата', 'Назначение', 'Врач / тип', 'Пациент', 'Способ оплаты', 'Сумма', 'Счёт', 'Провёл'];
   const rows = [
-    ...income.map((r) => [ctx.label(r.origin), 'Поступление', r.day + ' ' + (r.at || ''), r.services || '—',
-      r.doctors || '—', r.patient, METHOD_RU[r.method] || r.method || '—', num(r.amount),
+    ...income.map((r) => [ctx.label(r.origin), isRefund(r) ? 'Возврат' : 'Поступление', r.day + ' ' + (r.at || ''), r.services || '—',
+      r.doctors || '—', r.patient, methodRu(r), num(r.amount),
       r.invoice_no || '—', cashierCell(ctx, r)]),
     ...expense.map((r) => [ctx.label(r.origin), 'Расход', r.day + ' ' + (r.at || ''), r.note || r.article || '—',
       MOVE_RU[r.article] || r.article || '—', '', '', -num(r.amount), '', r.author]),
@@ -206,11 +223,16 @@ export function cashierReport(db, args, user) {
       net: ownIncomeTotal - expenseTotal,
       net_scope: 'own_building',
       multi_building: multiBuilding,
+      // REPORTS_AUDIT_FIX_V1 — сколько отдали возвратами (положительным числом)
+      // и сколько было возвратов; в income они уже вычтены.
+      refunds: refundTotal,
+      refund_count: refundCount,
     },
     income: { columns: incomeColumns, rows: incomeRows, total: incomeTotal },
     expense: { columns: expenseColumns, rows: expenseRows, total: expenseTotal },
     by_building,
-    notes: multiBuilding ? [CASH_MOVE_LOCAL_NOTE, NET_SCOPE_NOTE] : [CASH_MOVE_LOCAL_NOTE],
+    notes: [...(multiBuilding ? [CASH_MOVE_LOCAL_NOTE, NET_SCOPE_NOTE] : [CASH_MOVE_LOCAL_NOTE]),
+            ...(refundCount ? [REFUND_NOTE] : [])],
     columns, rows,
   };
 }

@@ -425,3 +425,51 @@ test('ЗАНЯТЫЙ ДЕНЬ: отказ ДО первой строки — н�
     assert.equal(countOf('invoices'), 0, 'счёт выставлен на отказанный день');
   } finally { ENSURE_OVERRIDE = null; }
 });
+
+// ─── LIVE_AUDIT_FIX_V1 (A4/A5) ──────────────────────────────────────────────
+// Консультация врача из каталога ('c|<врач>|<тип>') — законная строка:
+// service_id NULL + consultation_type_id. Прежде «Строка без услуги» —
+// причём уже после заведения карты пациента.
+test('LIVE_AUDIT_FIX_V1: консультация из каталога записывается строкой consultation_type_id, врач — из выбора', async () => {
+  seed();
+  DB.prepare("INSERT INTO consultation_types (id, name, price) VALUES (4, 'Первичный приём', 120000)").run();
+  const { walkInLinesRefusal } = await import('../views/walk-in-booking.js');
+  const consult = { id: 'c|' + DOCTOR + '|4', name: 'Первичный приём', price: 120000, __consult: true, consultation_type_id: 4, __consultDoctorId: DOCTOR };
+  assert.equal(walkInLinesRefusal([{ service: consult }]), null, 'консультация каталога отвергнута как «строка без услуги»');
+  const out = await registerWalkIn({ patientId: PATIENT, lines: [{ service: consult }, { service: svc(LAB) }], actorRole: USER });
+  const rows = all('SELECT service_id, consultation_type_id, doctor_id, unit_price FROM visit_services WHERE visit_id = ? ORDER BY id', out.visit.id);
+  assert.deepEqual(rows[0], { service_id: null, consultation_type_id: 4, doctor_id: DOCTOR, unit_price: 120000 });
+  assert.equal(rows[1].service_id, LAB);
+  assert.equal(rows[1].doctor_id, null, 'анализу подставили врача');
+  assert.equal(one('SELECT doctor_id FROM visits WHERE id = ?', out.visit.id).doctor_id, DOCTOR, 'врач визита — врач консультации');
+  assert.ok(out.invoice, 'счёт не выставлен');
+});
+
+test('LIVE_AUDIT_FIX_V1: хирургия без койки — отказ ДО визита, ни визита, ни строк', async () => {
+  seed();
+  DB.prepare("INSERT INTO services (id, name, price, requires_doctor, type) VALUES (31, 'Аппендэктомия', 3000000, 0, 'other')").run();
+  const surg = DB.prepare('SELECT id, name, price, requires_doctor, type FROM services WHERE id = 31').get();
+  await assert.rejects(() => registerWalkIn({ patientId: PATIENT, lines: [{ service: surg }], actorRole: USER }), /койку/);
+  assert.equal(countOf('visits'), 0, 'за отказом остался визит');
+  assert.equal(countOf('visit_services'), 0);
+});
+
+// BILLING_AUDIT_FIX_V1 (A2) — врач с ЛИЧНОЙ ценой: строка, экран и счёт
+// называют одну сумму. Прежде котировка отдавала каталог (100 000), счёт брал
+// личные 150 000, а быстрая регистрация показывала 100 000 и печатала
+// несуществующую «Скидку».
+test('ЛИЧНАЯ ЦЕНА ВРАЧА: строка и экран — та же сумма, что в счёте', async () => {
+  seed();
+  DB.prepare('UPDATE users SET service_rates = ? WHERE id = ?')
+    .run(JSON.stringify([{ service_id: CONSULT, pct: 40, price: 150000 }]), DOCTOR);
+  const out = await registerWalkIn({
+    patientId: PATIENT,
+    lines: [{ service: svc(CONSULT), doctorId: DOCTOR }, { service: svc(LAB), doctorId: null }],
+    createdBy: USER.id,
+  });
+  assert.equal(out.invoice.total_amount, 190000);
+  assert.equal(out.invoice.discount_amount, 0);
+  assert.deepEqual(out.lines.map((l) => l.unitPrice), [150000, 40000]);
+  const rows = all('SELECT unit_price FROM visit_services WHERE visit_id = ? ORDER BY id', out.visit.id);
+  assert.deepEqual(rows.map((r) => r.unit_price), [150000, 40000]);
+});

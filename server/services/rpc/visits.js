@@ -15,6 +15,8 @@ import { DEFAULT_DURATION_MIN, serviceDurationMinutes, formatHhmm } from './slot
 // CRM_LINKS_V1 — воронка настраивается (миграция 077), поэтому ступени
 // спрашиваются у справочника, а не берутся из зашитого списка.
 import { openStageKeys, scheduledStageKey, noShowStageKey, SEED_NO_SHOW_STAGE } from '../crm/config.js';
+// BILLING_AUDIT_FIX_V1 (A1) — день визита считается в МЕСТНОМ времени клиники.
+import { localDate } from '../domain/day.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400, code = null, params = null) {
@@ -30,7 +32,12 @@ export class RpcError extends Error {
 // дверью, что и регистратура (ensure_visit + book). Прежде «Сохранить и
 // записать» писало только услугу и дату, и визита не появлялось вовсе —
 // оператору эта дверь была не нужна, а пациент оставался без слота.
-const ENSURE_ROLES = ['admin', 'registrar', 'doctor', 'nurse', 'callcenter'];
+//
+// LIVE_AUDIT_FIX_V1 — медсестры в списке больше нет. Строку визита она вставить
+// не может (visit_services.insert — admin/registrar/doctor), поэтому ensure_visit
+// давал ей только ПУСТОЙ визит перед отказом на первой строке. Ни одна её дверь
+// визит не заводит (мастер и «Добавить услуги» ей не показываются).
+const ENSURE_ROLES = ['admin', 'registrar', 'doctor', 'callcenter'];
 
 function requireRole(user, allowed) {
   // MULTI_ROLE_SERVER_V1 — extras count too, not the primary role alone.
@@ -153,7 +160,20 @@ export async function ensureVisit(db, args, user) {
   if (!/^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
     throw new RpcError('date must be ISO (YYYY-MM-DD or full datetime).', 400);
   }
-  const day = rawDate.slice(0, 10);
+  // BILLING_AUDIT_FIX_V1 (A1) — ДЕНЬ ВИЗИТА — МЕСТНЫЙ ДЕНЬ КЛИНИКИ.
+  //
+  // Здесь стояло rawDate.slice(0, 10) — UTC-дата присланного мгновения. Мастер
+  // визита шлёт местную полночь через toISOString(): в UTC+5 это ВЧЕРА 19:00Z,
+  // и сегодняшняя услуга ложилась во вчерашний визит пациента (или заводила
+  // второй визит «сегодня»). То же с записью колл-центра на время до 05:00.
+  // Полное мгновение переводится в местный день той же функцией, что и отчёты
+  // (domain/day.js); голая дата 'YYYY-MM-DD' уже местная и берётся как есть.
+  let day = rawDate.slice(0, 10);
+  if (rawDate.length > 10) {
+    const local = db.prepare(`SELECT ${localDate('?')} AS d`).get(rawDate);
+    if (!local || !local.d) throw new RpcError('date must be ISO (YYYY-MM-DD or full datetime).', 400);
+    day = local.d;
+  }
   const whenIso = rawDate.length > 10 ? rawDate : day + 'T09:00:00Z';
 
   const optInt = (v, name) => {
@@ -281,7 +301,16 @@ export async function ensureVisit(db, args, user) {
         const status = (schedAt >= 0 && at >= 0 && at < schedAt) ? scheduled : r.status;
         const was = String(r.scheduled_date || '').trim().slice(0, 10);
         const when = (!was || was > day) ? day : was;
-        if (status !== r.status || when !== r.scheduled_date) moveOn.run(status, when, r.id);
+        if (status !== r.status || when !== r.scheduled_date) {
+          moveOn.run(status, when, r.id);
+          // FINAL_ROLES_SYNC_FIX_V1 (M4) — след для discard_empty_visit: если
+          // визит окажется пустым и его уберут, заявка вернётся как была.
+          try {
+            db.prepare(`INSERT INTO crm_booking_undo (visit_id, request_id, prev_status, prev_scheduled_date, set_status, set_scheduled_date)
+                        VALUES (?, ?, ?, ?, ?, ?)`).run(visitId, r.id, r.status, r.scheduled_date ?? null, status, when);
+            db.prepare("DELETE FROM crm_booking_undo WHERE created_at < strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 day')").run();
+          } catch { /* сборка без 186 — возвращать будет нечего, запись от этого не страдает */ }
+        }
       }
     } catch (e) {
       console.error('[ensure_visit] заявки CRM не пересчитаны:', e && e.message);
@@ -302,12 +331,18 @@ export async function ensureVisit(db, args, user) {
   //     проверять нечего. Решает это экран (headTimedLine в visit-wizard.js),
   //     и это единственная честная причина сюда не прийти.
   const book = parseBook(args && args.book);
-  const dayVisit = () => db.prepare(`
+  // BILLING_AUDIT_FIX_V1 (A1, A8) — визит дня ищется по МЕСТНОМУ дню и только
+  // среди СВОИХ визитов: визит, приехавший из соседнего здания (sync_origin),
+  // здесь не правится (BRANCH_MONEY_GUARD_V1 — ни счёт, ни услугу в нём не
+  // выставить), и пациент, побывавший утром в филиале, получал в этом здании
+  // чужой визит, в который ничего нельзя было записать.
+  const DAY_VISIT_SQL = `
     SELECT * FROM visits
-     WHERE patient_id = ? AND substr(visit_date, 1, 10) = ?
+     WHERE patient_id = ? AND ${localDate('visit_date')} = ?
        AND status NOT IN ('cancelled', 'no_show')
-     ORDER BY id LIMIT 1
-  `).get(patientId, day);
+       AND sync_origin IS NULL
+     ORDER BY id LIMIT 1`;
+  const dayVisit = () => db.prepare(DAY_VISIT_SQL).get(patientId, day);
 
   if (book) {
     const durationMin = book.durationMin || bookDuration(db, book.serviceId);
@@ -335,12 +370,7 @@ export async function ensureVisit(db, args, user) {
     // One visit per patient per day: match on the DATE part of visit_date.
     // Cancelled/no-show days don't swallow new bookings — a fresh visit row
     // is opened for the same day instead.
-    const existing = db.prepare(`
-      SELECT * FROM visits
-       WHERE patient_id = ? AND substr(visit_date, 1, 10) = ?
-         AND status NOT IN ('cancelled', 'no_show')
-       ORDER BY id LIMIT 1
-    `).get(patientId, day);
+    const existing = db.prepare(DAY_VISIT_SQL).get(patientId, day);
     if (existing) {
       // Backfill a doctor onto a doctor-less day visit (first assigned wins).
       if (doctorId && existing.doctor_id == null) {
@@ -468,4 +498,74 @@ export async function ensureVisit(db, args, user) {
   }
   settleCrmOnBooking(out.visit);
   return { ...out, booked: true };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LIVE_AUDIT_FIX_V1 — discard_empty_visit: НЕ ОСТАВЛЯТЬ ПУСТОЙ ВИЗИТ ЗА ОТКАЗОМ
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Мастер визита заводит визит дня (ensure_visit) и ПОТОМ пишет в него строки
+// услуг. Если строки не легли (сбой сети, отказ сервера по строке), за мастером
+// оставался визит без единой услуги: в журнале «визит», в календаре занятый
+// слот, а работы нет. Удалить его экрану нечем — visits через /api/db удаляет
+// только администратор.
+//
+// Удаляется ТОЛЬКО то, что этот же человек только что завёл и что осталось
+// пустым: свой (created_by), в статусе scheduled, без строк услуг и без счёта,
+// заведённый не раньше 30 минут назад. Всё остальное — отказ: чужой или
+// работающий визит этим путём не стирается никогда.
+const DISCARD_WINDOW_MIN = 30;
+// FINAL_ROLES_SYNC_FIX_V1 (M4) — таблицы, чьи строки держат визит (внешний ключ
+// без ON DELETE): визит с ними не пустой.
+const DISCARD_HOLDERS = [
+  ['patient_vitals', 'visit_id', 'в нём уже записаны показатели (давление, пульс)'],
+  ['visit_documents', 'visit_id', 'по нему уже есть документ'],
+  ['service_queue_tickets', 'visit_id', 'по нему уже выдан талон очереди'],
+  ['recommended_services', 'source_visit_id', 'из него уже есть рекомендации врача'],
+  ['custdev_cards', 'visit_id', 'по нему уже есть карточка опроса'],
+  ['invoice_audit_log', 'visit_id', 'по нему уже есть записи журнала счетов'],
+];
+
+export function discardEmptyVisit(db, args, user) {
+  requireRole(user, ENSURE_ROLES);
+  const visitId = args && args.visit_id;
+  if (!isPositiveInt(visitId)) throw new RpcError('Не выбран визит.', 400);   // FINAL_ROLES_SYNC_FIX_V1 (M5) — по-русски
+  const run = db.transaction(() => {
+    const v = db.prepare('SELECT * FROM visits WHERE id = ?').get(visitId);
+    if (!v) return { discarded: false, reason: 'not_found' };
+    if (v.created_by == null || Number(v.created_by) !== Number(user.id)) {
+      throw new RpcError('Удалить можно только свой только что созданный визит.', 403);
+    }
+    if (v.status !== 'scheduled') throw new RpcError('Визит уже в работе — удалить его нельзя.', 400);
+    const fresh = db.prepare(`SELECT (julianday('now') - julianday(?)) * 1440 <= ? AS ok`).get(v.created_at, DISCARD_WINDOW_MIN).ok;
+    if (!fresh) throw new RpcError('Визит заведён давно — удалить его этим путём нельзя.', 400);
+    if (db.prepare('SELECT 1 FROM visit_services WHERE visit_id = ? LIMIT 1').get(visitId)
+        || db.prepare('SELECT 1 FROM invoices WHERE visit_id = ? LIMIT 1').get(visitId)) {
+      throw new RpcError('В визите уже есть услуги или счёт — он не пустой.', 400);
+    }
+    // FINAL_ROLES_SYNC_FIX_V1 (M4) — ОСТАЛЬНЫЕ СТРОКИ, КОТОРЫЕ ДЕРЖАТ ВИЗИТ.
+    // Внешние ключи этих таблиц на visits без ON DELETE: удаление упало бы
+    // сырой английской ошибкой базы. Визит с ними — уже не пустой.
+    for (const [table, col, why] of DISCARD_HOLDERS) {
+      let has = false;
+      try { has = !!db.prepare(`SELECT 1 FROM ${table} WHERE ${col} = ? LIMIT 1`).get(visitId); }
+      catch { has = false; }   // таблицы нет в этой сборке — держать нечему
+      if (has) throw new RpcError('Визит не пустой: ' + why + ' — удалить его нельзя.', 400);
+    }
+    // FINAL_ROLES_SYNC_FIX_V1 (M4) — заявка колл-центра, которую эта запись
+    // передвинула (settleCrmOnBooking), возвращается как была — если с тех
+    // пор её никто не трогал (статус и день те, что поставила запись).
+    try {
+      const undo = db.prepare('SELECT * FROM crm_booking_undo WHERE visit_id = ? ORDER BY id DESC').all(visitId);
+      const back = db.prepare(`UPDATE crm_requests SET status = ?, scheduled_date = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+                                WHERE id = ? AND status IS ? AND scheduled_date IS ?`);
+      for (const u of undo) back.run(u.prev_status, u.prev_scheduled_date, u.request_id, u.set_status, u.set_scheduled_date);
+      db.prepare('DELETE FROM crm_booking_undo WHERE visit_id = ?').run(visitId);
+    } catch { /* сборка без 186 — возвращать нечего */ }
+    // Строки заявок, которые ensure_visit успел привязать, снова свободны.
+    db.prepare('UPDATE crm_request_services SET visit_id = NULL WHERE visit_id = ?').run(visitId);
+    db.prepare('DELETE FROM visits WHERE id = ?').run(visitId);
+    return { discarded: true };
+  });
+  return run();
 }

@@ -28,6 +28,9 @@ import { SHIPPED, REFS, CODE_REFS, SOFT_REFS, readClock, writeClock, authoredAt 
 // (invoices/payments) и работа над услугой (visit_services.status) — все три
 // таблицы перечислены в SHIPPED.
 import { crmVisitStatus, crmInvoiceEvidence, crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../crm/visit-status.js';
+// PATIENT_MERGE_BRANCHES_V1 — объединение карт, сделанное в другом здании,
+// исполняется здесь тем же кодом, что и объединение на месте.
+import { applyMergeHere, applyContactPatch } from '../rpc/patient-merge.js';
 
 // sync_seen (миграция 084): метка последнего ПРИНЯТОГО изменения каждой
 // колонки. Местная правка метки не имеет — до отправки её защищает журнал.
@@ -181,7 +184,7 @@ export function applyBatch(db, records, {
   }
   const stats = {
     applied: 0, released: 0, skipped: 0, deferred: 0, deleted: 0, refused: 0,
-    skewed: 0, skew_ms: 0, reminted: 0,
+    skewed: 0, skew_ms: 0, reminted: 0, merged: 0,
   };
   const ctx = newCtx(db);
   // Буква нужна не только часам: ею чеканится метка МЕСТНОЙ правки, когда
@@ -206,6 +209,17 @@ export function applyBatch(db, records, {
   // доказательство прихода. Счета считаются по ctx.money — тому же списку,
   // что и деньги.
   ctx.crmWork = new Set();
+  // PATIENT_MERGE_BRANCHES_V1 — контакты своих карт, дополняемые после
+  // объединения, пришедшего от соседа: пишутся ПОСЛЕ чистки журнала приёма,
+  // чтобы уехать обычной правкой (settleMerges, fillMergedContacts).
+  ctx.contactFills = [];
+  // FINAL_ROLES_SYNC_FIX_V1 (I3) — граф действующих объединений (mergeGraph,
+  // сбрасывается при каждой записи карты или события), события, заведённые
+  // этой порцией, и карты, чьи поля здание-победитель дошлёт после чистки
+  // журнала (queueWinnerRePuts).
+  ctx.mg = null;
+  ctx.newMerges = new Set();
+  ctx.rePuts = new Set();
   // Допуск вынесен в параметр ради теста: подождать пять минут он не может.
   ctx.skewMax = Number.isFinite(Number(skewMaxMs)) && Number(skewMaxMs) >= 0 ? Number(skewMaxMs) : SKEW_MAX_MS;
 
@@ -250,6 +264,10 @@ export function applyBatch(db, records, {
     }
 
     releasePending(db, stats, ctx);
+    // PATIENT_MERGE_BRANCHES_V1 — СТРОГО ПОСЛЕ освобождения: оставленная карта
+    // могла ждать в очереди вместе со строками, а объединять есть смысл, только
+    // когда здесь уже есть обе карты.
+    settleMerges(db, stats, ctx);
     // СТРОГО ПОСЛЕ освобождения: платёж, приехавший раньше своего счёта, лежит
     // в ожидании и применяется именно там — пересчитай мы раньше, счёт остался
     // бы с нулём оплаты до следующей порции.
@@ -293,6 +311,12 @@ export function applyBatch(db, records, {
     // Приём не порождает исходящих изменений — см. заголовок.
     db.prepare('DELETE FROM sync_journal WHERE seq > ?').run(journalFrom);
     restoreAuthorship(db, ctx);
+    // ПОСЛЕ чистки журнала и возврата авторства — это НАША правка своей карты,
+    // и она обязана уехать соседям (см. fillMergedContacts).
+    fillMergedContacts(db, ctx);
+    // FINAL_ROLES_SYNC_FIX_V1 (I3) — и так же после чистки: поля карты-
+    // победителя встречного круга уезжают проигравшим.
+    queueWinnerRePuts(db, ctx);
 
     stats.skewed = ctx.skewed;
     stats.skew_ms = ctx.skewMs;
@@ -409,10 +433,17 @@ function applyGuarded(db, rec, stats, ctx) {
   // последовательно, а не изнутри applyOne. Появись вложенность — внутренний
   // ROLLBACK TO rec откатил бы и ВНЕШНЮЮ запись вместе со своей, молча;
   // тогда имя придётся сделать счётчиком глубины, а не константой.
+  // FINAL_ROLES_SYNC_FIX_V1 (I3) — какие события объединения ЗАВЕДЕНЫ этой
+  // порцией (а не повторены): встречный круг отмечается в журнале карты и
+  // дозаказывает поля победителя один раз, а не на каждом повторе.
+  const mergeNew = rec && rec.tbl === 'patient_merges' && typeof rec.uid === 'string'
+    && localId(db, ctx, 'patient_merges', rec.uid) == null;
   ctx.q('SAVEPOINT rec').run();
   try {
     applyOne(db, rec, stats, ctx);
     ctx.q('RELEASE rec').run();
+    if (mergeNew && localId(db, ctx, 'patient_merges', rec.uid) != null) ctx.newMerges.add(rec.uid);
+    if (rec && (rec.tbl === 'patients' || rec.tbl === 'patient_merges')) ctx.mg = null;
   } catch (e) {
     ctx.q('ROLLBACK TO rec').run();
     ctx.q('RELEASE rec').run();
@@ -544,6 +575,27 @@ function applyOne(db, rec, stats, ctx) {
   // получивший детей раньше родителей, ничему не учится и продолжает проигрывать.
   rec = { ...rec, stamp: clampSkew(ctx, rec.stamp) };
   if (rec.stamp > ctx.maxReceived) ctx.maxReceived = rec.stamp;
+
+  // PATIENT_MERGE_BRANCHES_V1 — КАРТА, СЛИТАЯ В ДРУГУЮ, НЕ ВОСКРЕСАЕТ И НЕ
+  // УДАЛЯЕТСЯ ПО НАДГРОБИЮ. Объединение окончательно, поэтому:
+  //   • put слитой карты (правка дубля, сделанная где-то до того, как там
+  //     узнали о слиянии, или засев старого соседа) её не заводит заново —
+  //     иначе в сети снова появился бы дубль, к которому уже никто ничего не
+  //     пришлёт;
+  //   • del слитой карты здесь ничего не удаляет: у нас могут лежать её
+  //     строки, которые между зданиями не ездят (баланс, госпитализации,
+  //     документы), и голое удаление упало бы на внешнем ключе или стёрло их.
+  //     Перенос и удаление делает settleMerges, как только здесь есть и
+  //     оставленная карта.
+  //
+  // FINAL_ROLES_SYNC_FIX_V1 (I3, M7) — «слита» значит «слита ДЕЙСТВУЮЩИМ
+  // событием» (mergeGraph): событие, замкнувшее встречный круг, и событие,
+  // чья оставленная карта удалена, карту не замораживают — её правки едут.
+  // Надгробие же не исполняется у карты, названной дублем в ЛЮБОМ событии:
+  // её строки переносит (или держит) объединение, а не голое удаление.
+  if (rec.tbl === 'patients' && (rec.op === 'del' ? droppedByAny(db, ctx, rec.uid) : mergedAway(db, ctx, rec.uid))) {
+    stats.skipped++; return;
+  }
 
   const id = localId(db, ctx, rec.tbl, rec.uid);
   // АВТОРСТВО ПРИ ПРИЁМЕ НЕ ПИШЕТСЯ — по той же причине, по которой не пишется
@@ -749,7 +801,9 @@ function applyOne(db, rec, stats, ctx) {
       if (id == null && !soft) { stats.skipped++; return; }
       continue;
     }
-    const pid = localId(db, ctx, parent, parentUid);
+    // PATIENT_MERGE_BRANCHES_V1 — ссылка на слитую карту садится на
+    // оставленную (patientId идёт по цепочке patient_merges).
+    const pid = parent === 'patients' ? patientId(db, ctx, parentUid) : localId(db, ctx, parent, parentUid);
     if (pid == null) {
       // Мягкая ссылка на строку, которой здесь нет: заводим БЕЗ неё. Сумма,
       // дата и статус счёта важнее связи с визитом, а пустая связь честно
@@ -1487,5 +1541,288 @@ function parentPresent(db, ctx, tbl, key) {
     }
   }
   if (!SHIPPED[tbl]) return false;   // неизвестная таблица: ждать её нечем
+  // Ждущий слитую карту дождался: она теперь — оставленная (PATIENT_MERGE_BRANCHES_V1).
+  if (tbl === 'patients') return patientId(db, ctx, key) != null;
   return localId(db, ctx, tbl, key) != null;
+}
+
+// ─── PATIENT_MERGE_BRANCHES_V1 — объединение карт, пришедшее от соседа ──────
+//
+// ПРОТОКОЛ. Объединение в любом здании пишет строку patient_merges (мигр. 168):
+// «drop_uid слита в keep_uid». Она едет журналом как любая запись (SHIPPED в
+// journal.js) и заводится здесь обычным путём applyOne. Дальше три правила:
+//
+//   1. ИСПОЛНЕНИЕ — settleMerges в конце порции: для каждого события, у
+//      которого здесь ещё есть карта drop, а keep (по цепочке) уже есть, —
+//      тот же перенос, что у объединения на месте (applyMergeHere:
+//      MERGE_TABLES, баланс по разрешению merge_money_moves мигр. 160, родство,
+//      опекуны), и удаление drop. Нет keep — ждём: событие лежит в таблице, и
+//      первая порция, которая привезёт keep, его исполнит.
+//   2. ПЕРЕАДРЕСАЦИЯ — строка, приехавшая со ссылкой на drop, которой здесь
+//      уже (или ещё) нет, садится на keep (patientId). Так закрываются и
+//      «событие пришло раньше строк дубля», и «третье здание завело визит на
+//      дубль, не зная о слиянии».
+//   3. ОКОНЧАТЕЛЬНОСТЬ — put и del самой карты drop здесь не исполняются
+//      (applyOne, mergedAway).
+//
+// ЭХА НЕТ. Перенос, сделанный здесь, — часть приёма: его журнальные записи
+// снимает общая чистка в конце applyBatch, авторство переехавших строк
+// возвращается (rememberAuthorship). Каждое здание исполняет событие само,
+// поэтому возить результат переноса незачем, а разойтись с переносом
+// отправителя (он свои переезды возит журналом) он не может: оба ставят ту же
+// оставленную карту. Единственная правка, которая уезжает, — дополненные
+// контакты оставленной карты, и только из её дома (fillMergedContacts).
+//
+// ИДЕМПОТЕНТНОСТЬ. Повтор события — та же строка patient_merges (uid), второй
+// раз она не заводится; исполнять повторно нечего — drop здесь уже нет.
+
+const MAX_MERGE_CHAIN = 32;
+
+// ─── FINAL_ROLES_SYNC_FIX_V1 (I3, M7) — ДЕЙСТВУЮЩИЕ ОБЪЕДИНЕНИЯ ─────────────
+//
+// ВСТРЕЧНЫЙ КРУГ. A слил X в Y, B между обменами — Y в X. Раньше каждое здание
+// оставляло своё: в A жила Y, в B — X, обе карты числились слитыми в обоих
+// зданиях (у каждой было событие-«дубль»), и любая правка карты пропускалась
+// навсегда. Теперь события читаются в одном порядке — (merged_at, uid), тот же
+// в каждом здании, — и событие, чья оставленная карта по уже действующим
+// событиям сама сводится к его дублю, НЕ ДЕЙСТВУЕТ: побеждает самое раннее.
+// Одинаковый набор событий даёт одинаковый граф — значит, одну и ту же
+// выжившую карту в каждом здании.
+//
+// ПРОИГРАВШАЯ СТОРОНА (здание, успевшее исполнить проигравшее событие: дубль
+// у него уже удалён, строки на другой карте) возвращает выжившую карту:
+// местная строка, которая по действующим событиям сводится к ней, получает
+// её uid (reKeySurvivor) — перенос строк не нужен, они уже на одной карте.
+// Поля карты у неё пока свои; ЗДАНИЕ-ПОБЕДИТЕЛЬ (то, где сделано выигравшее
+// событие), узнав о встречном, досылает выжившую карту целиком с меткой
+// эпохи: взять её может только тот, кто о её колонках ничего не знает, то
+// есть именно проигравший, а у всех остальных своё новее. Каждый такой круг
+// записывается в журнал карты (action 'merge_conflict').
+//
+// M7 — ОСТАВЛЕННАЯ КАРТА УДАЛЕНА. Событие, чья оставленная карта (в конце
+// цепочки) здесь удалена надгробием или удалением на месте и при этом сама не
+// слита никуда, НЕ ДЕЙСТВУЕТ: исполнять его не во что, и дубль иначе
+// замёрз бы навсегда (правки пропускаются, строки не переносятся). Дубль
+// остаётся обычной живой картой со своими строками; удалить его по надгробию
+// нельзя (droppedByAny) — у него здесь могут быть деньги и госпитализации.
+
+function mergeGraph(db, ctx) {
+  if (ctx.mg) return ctx.mg;
+  const rows = ctx.q('SELECT uid, keep_uid, drop_uid, merged_at, sync_origin FROM patient_merges ORDER BY merged_at, uid').all();
+  const eff = new Map();          // drop_uid → действующее событие
+  const anyDrop = new Set(rows.map((r) => r.drop_uid));
+  const losers = [];              // события, замкнувшие встречный круг
+  const terminal = (u) => {
+    const seen = new Set();
+    let cur = u;
+    while (eff.has(cur) && !seen.has(cur) && seen.size < MAX_MERGE_CHAIN) { seen.add(cur); cur = eff.get(cur).keep_uid; }
+    return cur;
+  };
+  const gone = (u) => localId(db, ctx, 'patients', u) == null && !!(
+    ctx.q("SELECT 1 FROM sync_seen WHERE tbl = 'patients' AND uid = ? AND col = '*'").get(u)
+    || ctx.q("SELECT 1 FROM sync_tombstones WHERE tbl = 'patients' AND uid = ?").get(u));
+  for (const r of rows) {
+    // Одна карта, слитая в две разные: действует раннее (как и раньше).
+    if (eff.has(r.drop_uid)) continue;
+    const t = terminal(r.keep_uid);
+    if (t === r.drop_uid) { losers.push(r); continue; }
+    if (!anyDrop.has(t) && gone(t)) continue;   // M7
+    eff.set(r.drop_uid, r);
+  }
+  ctx.mg = { eff, anyDrop, losers, terminal, list: rows.filter((r) => eff.get(r.drop_uid) === r) };
+  return ctx.mg;
+}
+
+/** Слита ДЕЙСТВУЮЩИМ событием: правка такой карты не заводит её заново. */
+function mergedAway(db, ctx, uid) {
+  return mergeGraph(db, ctx).eff.has(uid);
+}
+
+/** Названа дублем хоть в одном событии: надгробие такой карты не исполняется. */
+function droppedByAny(db, ctx, uid) {
+  return mergeGraph(db, ctx).anyDrop.has(uid);
+}
+
+/**
+ * Местный id карты по uid — а если её здесь нет, то оставленной карты, в
+ * которую её слили (по цепочке ДЕЙСТВУЮЩИХ событий: слитую могли потом слить
+ * ещё раз). Два события про одну и ту же карту — берётся самое раннее,
+ * одинаково в каждом здании; событие встречного круга не действует.
+ */
+function patientId(db, ctx, uid) {
+  const g = mergeGraph(db, ctx);
+  const seen = new Set();
+  let cur = uid;
+  for (let i = 0; i < MAX_MERGE_CHAIN && cur && !seen.has(cur); i++) {
+    seen.add(cur);
+    const id = localId(db, ctx, 'patients', cur);
+    if (id != null) return id;
+    const m = g.eff.get(cur);
+    cur = m ? m.keep_uid : null;
+  }
+  return null;
+}
+
+function labelOfPatient(db, id) {
+  const r = db.prepare('SELECT full_name, mrn FROM patients WHERE id = ?').get(id);
+  return r ? [r.full_name || '—', r.mrn ? '(' + r.mrn + ')' : ''].filter(Boolean).join(' ') : '—';
+}
+const whereOf = (letter) => (letter ? 'в здании ' + letter : 'здесь');
+
+function logMergeConflict(db, patientLocalId, loser, winner) {
+  const summary = 'Встречное объединение: ' + whereOf(loser.sync_origin) + ' карты объединили в обратную сторону, '
+    + 'но раньше ' + whereOf(winner && winner.sync_origin) + ' — в эту карту. Оставлена карта, объединённая раньше; '
+    + 'встречное объединение не исполнено.';
+  const ev = (e) => (e ? { uid: e.uid, keep_uid: e.keep_uid, drop_uid: e.drop_uid, merged_at: e.merged_at, from: e.sync_origin || null } : null);
+  db.prepare(`INSERT INTO patient_activity_log (patient_id, entity_type, entity_id, entity_label, action, summary, detail,
+                                                 actor_user_id, actor_name, actor_role)
+              VALUES (?, 'patient', ?, ?, 'merge_conflict', ?, ?, NULL, 'Синхронизация', 'sync')`)
+    .run(patientLocalId, patientLocalId, labelOfPatient(db, patientLocalId), summary,
+      JSON.stringify({ loser: ev(loser), winner: ev(winner) }));
+}
+
+/** Действующие события цепочки от uid до выжившей карты. */
+function chainOf(g, uid) {
+  const out = [];
+  const seen = new Set();
+  let cur = uid;
+  while (g.eff.has(cur) && !seen.has(cur) && out.length < MAX_MERGE_CHAIN) {
+    seen.add(cur);
+    const e = g.eff.get(cur);
+    out.push(e);
+    cur = e.keep_uid;
+  }
+  return out;
+}
+
+/**
+ * Проигравшая сторона встречного круга: выжившей карты здесь нет (её удалило
+ * исполненное здесь проигравшее событие), зато есть строка, которая по
+ * действующим событиям сводится к ней, — она и становится выжившей картой.
+ * Всё это — часть приёма: журнал снимет общая чистка, авторство выжившей
+ * вернётся пустым, метки обоих имён снимаются — поля победителя, досланные
+ * его зданием, лягут на эту строку целиком.
+ */
+function reKeySurvivor(db, ctx, T, holderUid, winner) {
+  const holderId = localId(db, ctx, 'patients', holderUid);
+  if (holderId == null) return null;
+  rememberAuthorship(db, ctx, 'patients', T);
+  ctx.authored.delete('patients|' + holderUid);
+  ctx.q("DELETE FROM sync_authored WHERE tbl = 'patients' AND uid = ?").run(holderUid);
+  // Дом выжившей карты — здание победителя: номер карты (mrn) придёт от него,
+  // а не останется номером нашей прежней строки.
+  const origin = winner && winner.sync_origin ? String(winner.sync_origin).toUpperCase() : null;
+  ctx.q('UPDATE patients SET uid = ?, sync_origin = COALESCE(?, sync_origin) WHERE id = ?')
+    .run(T, origin && origin !== ctx.self ? origin : null, holderId);
+  ctx.q(`DELETE FROM ${SEEN} WHERE tbl = 'patients' AND uid IN (?, ?)`).run(T, holderUid);
+  ctx.q("DELETE FROM sync_tombstones WHERE tbl = 'patients' AND uid = ?").run(T);
+  ctx.q("DELETE FROM sync_minted WHERE tbl = 'patients' AND uid IN (?, ?)").run(T, holderUid);
+  ctx.mg = null;
+  return holderId;
+}
+
+function settleCycles(db, stats, ctx) {
+  const g = mergeGraph(db, ctx);
+  if (!g.losers.length) return;
+  const reKeyed = new Set();
+  for (const L of g.losers) {
+    const T = g.terminal(L.drop_uid);
+    // Выигравшая цепочка: оставленная проигравшим → … → его дубль.
+    const chain = chainOf(g, L.keep_uid);
+    const winner = chain.length ? chain[chain.length - 1] : null;
+    const fresh = ctx.newMerges.has(L.uid) || chain.some((e) => ctx.newMerges.has(e.uid));
+    let tId = localId(db, ctx, 'patients', T);
+    if (tId == null) {
+      // Кто здесь держит человека: строка, сводящаяся к T. Сначала — карта, в
+      // которую проигравшее событие всё перенесло.
+      const cands = [L.keep_uid, ...[...g.eff.keys()].sort()];
+      const holder = cands.find((u) => u !== T && g.terminal(u) === T && localId(db, ctx, 'patients', u) != null);
+      if (!holder) continue;   // здесь нет ни одной — возвращать нечего
+      tId = reKeySurvivor(db, ctx, T, holder, winner);
+      if (tId == null) continue;
+      reKeyed.add(T);
+      logMergeConflict(db, tId, L, winner);
+      stats.merged++;
+      continue;
+    }
+    if (!fresh || reKeyed.has(T)) continue;
+    logMergeConflict(db, tId, L, winner);
+    // Здание-победитель досылает выжившую карту: проигравший вернул её из
+    // своей строки, и поля у неё пока его.
+    if (chain.some((e) => !e.sync_origin)) ctx.rePuts.add(T);
+  }
+}
+
+// Строки, которые ездят и которые перенос перевешивает на keep: их авторство
+// снимается ДО переноса и возвращается в конце порции — иначе триггер 084
+// объявил бы здешней правкой переезд, который сделал не человек, а событие.
+const MOVED_SHIPPED = ['visits', 'invoices'];
+
+function settleMerges(db, stats, ctx) {
+  ctx.mg = null;
+  settleCycles(db, stats, ctx);
+  for (let round = 0; round < MAX_MERGE_CHAIN; round++) {
+    let progress = false;
+    for (const m of mergeGraph(db, ctx).list) {
+      const dropId = localId(db, ctx, 'patients', m.drop_uid);
+      if (dropId == null) continue;   // уже исполнено (или дубля здесь не было)
+      const keepId = patientId(db, ctx, m.keep_uid);
+      if (keepId == null || keepId === dropId) continue;
+      for (const tbl of MOVED_SHIPPED) {
+        for (const r of ctx.q(`SELECT uid FROM ${tbl} WHERE patient_id = ? AND uid IS NOT NULL`).all(dropId)) {
+          rememberAuthorship(db, ctx, tbl, r.uid);
+        }
+      }
+      // Своя точка отката: отказ базы на одном событии не отменяет всю
+      // порцию. Событие остаётся в таблице, и следующая порция попробует снова;
+      // причина — в sync_refused, как у отказа записи.
+      ctx.q('SAVEPOINT mrg').run();
+      try {
+        const res = applyMergeHere(db, { keepId, dropId, fromLetter: m.sync_origin || null });
+        ctx.q('RELEASE mrg').run();
+        if (!res) continue;
+        ctx.authored.delete('patients|' + m.drop_uid);
+        ctx.q(`DELETE FROM ${SEEN} WHERE tbl = 'patients' AND uid = ?`).run(m.drop_uid);
+        if (res.patch && Object.keys(res.patch).length) ctx.contactFills.push({ keepId, patch: res.patch });
+        stats.merged++;
+        progress = true;
+      } catch (e) {
+        ctx.q('ROLLBACK TO mrg').run();
+        ctx.q('RELEASE mrg').run();
+        if (!(e instanceof SqliteError)) throw e;
+        try {
+          ctx.q(`INSERT INTO sync_refused (tbl, uid, peer, err) VALUES ('patient_merges', ?, ?, ?)
+                 ON CONFLICT(tbl, uid, peer) DO UPDATE SET err = excluded.err, at = strftime('%Y-%m-%dT%H:%M:%SZ','now')`)
+            .run(String(m.uid || '?'), ctx.peer || String(m.sync_origin || '?'), e.message);
+        } catch { /* записать отказ не вышло — не повод ронять порцию */ }
+        console.warn('[sync] merge not applied', m.keep_uid, m.drop_uid, e.message);
+      }
+    }
+    ctx.mg = null;
+    if (!progress) return;
+  }
+}
+
+/**
+ * Здание-победитель встречного круга досылает выжившую карту целиком — с
+ * журнальным временем эпохи (1970): такую запись возьмёт только здание,
+ * которое о колонках этой карты ничего не знает (проигравший, вернувший её из
+ * своей строки, — у него метки сняты), а у всех остальных своё значение
+ * новее. Собственные правки победителя едут своими метками (sync_authored).
+ */
+function queueWinnerRePuts(db, ctx) {
+  for (const T of ctx.rePuts || []) {
+    if (localId(db, ctx, 'patients', T) == null) continue;
+    ctx.q("INSERT INTO sync_journal (tbl, uid, op, cols, at) VALUES ('patients', ?, 'put', '*', '1970-01-01T00:00:00.000Z')").run(T);
+  }
+}
+
+/**
+ * Пустые контакты СВОЕЙ оставленной карты — из дубля, как у объединения на
+ * месте (M3). Только у карты, заведённой здесь: чужую карту отсюда не правят,
+ * её дополнит её дом, получив то же событие. Правка идёт мимо чистки журнала
+ * приёма — это наша работа, и соседи получат её обычной записью.
+ */
+function fillMergedContacts(db, ctx) {
+  for (const f of ctx.contactFills || []) applyContactPatch(db, f.keepId, f.patch);
 }

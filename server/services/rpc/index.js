@@ -1,7 +1,7 @@
 // Registry of server-side RPC handlers. Each is (db, args, user) => result.
 // The 25 legacy Postgres functions are ported per-module in later Phase-2
 // slices (dispensing, discounts, queue numbers, …).
-import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDebt, changeUnpaidService, removeUnpaidService, refundPayment, createInvoiceForAdmission, removeAdmissionLineFromInvoice } from './billing.js';
+import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDebt, changeUnpaidService, removeUnpaidService, refundPayment, refundInvoiceLine, createInvoiceForAdmission, removeAdmissionLineFromInvoice, visitRefundedLines } from './billing.js';
 import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDispensedAdmissionItem } from './inventory.js';
 import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOARD_TREND_V1
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel, createRequisition } from './procurement.js';
@@ -9,7 +9,7 @@ import { departmentList, departmentCard, departmentForm, departmentHeadSet, depa
 import { stockMovementsList } from './stock-log.js';   // STOCK_LOG_V1
 import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCreate, stockRequestsMine } from './stock-requests.js';   // STOCK_REQUEST_V1
 import { expiryLots } from './expiry.js';   // EXPIRY_BALANCE_V1 — остатки партиями, ближайший срок первым
-import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions, doctorInpatientShare, doctorReferralReward, doctorPaySummary, reportChoices } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
+import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions, doctorInpatientShare, doctorReferralReward, doctorPaySummary, reportChoices, payPeriodClose, payPeriodReopen, payPeriodStatus } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit, admissionReferralDefault,
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
@@ -32,11 +32,13 @@ import {
   dietTablesList, admissionDietSet, admissionDietHistory,
   admissionMealMark, admissionMealsList, kitchenSheet,
 } from './diet.js';   // DIET_TABLES_V1
-import { ensureVisit } from './visits.js';
+import { ensureVisit, discardEmptyVisit } from './visits.js';
+import { removeOwnVisitLine, visitSetReferralSource } from './visit-lines.js';   // LIVE_AUDIT_FIX_V1 — врач снимает свою невыставленную услугу
 import { visitSetDoctorReferrer } from './referral-autofill.js';   // REPORTS_V2 — направивший врач на визите по рекомендации
 import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';   // CALENDAR_BOOKING_V1
 import { issueQueueNumbers, queueBoard } from './queue.js';
 import { createDeposit, acceptDeposit, cancelDeposit, refundDeposit, listDeposits, depositBalance } from './deposits.js';   // DEPOSIT_V1
+import { sellCard, refundCardSale, listCardSales } from './card-sales.js';   // CARD_SALE_V1
 import { mergePatientsRpc } from './patient-merge.js';   // PATIENT_MERGE_SERVER_V1
 import { documentsFeed } from './documents.js';   // DOCS_FEED_V1
 import { getClinicBySlug } from './clinic.js';
@@ -118,6 +120,8 @@ export const RPC = {
   // роли, и его тесты (billing.test.js) не трогаются.
   change_unpaid_service:    (db, args, user) => { requireServicesEdit(db, user); return changeUnpaidService(db, args, user); },   // SPLIT_PAY_V1 — оплата двумя+ способами
   refund_payment:           (db, args, user) => refundPayment(db, args, user),   // CASHIER_REFUND_V1 — возврат оплаты (отрицательный платёж)
+  refund_invoice_line:      (db, args, user) => refundInvoiceLine(db, args, user),   // BILLING_AUDIT_FIX_V1 (B1) — вернуть одну услугу счёта
+  visit_refunded_lines:     (db, args, user) => visitRefundedLines(db, args, user),   // FINAL_MONEY_FIX_V1 (I1) — возвращённые строки визита; чтение
   receive_stock:            (db, args, user) => receiveStock(db, args, user),
   dispense_item:            (db, args, user) => dispenseItem(db, args, user),
   void_dispense:            (db, args, user) => voidDispense(db, args, user),
@@ -170,6 +174,11 @@ export const RPC = {
   doctor_inpatient_share:   (db, args, user) => doctorInpatientShare(db, args, user),  // INPATIENT_SHARE_V1 — стационарная доля для кабинета врача
   doctor_referral_reward:   (db, args, user) => doctorReferralReward(db, args, user),  // REPORTS_V2 — вознаграждение за направления для кабинета врача (то же, что отчёт «Рефералы»)
   doctor_pay_summary:       (db, args, user) => doctorPaySummary(db, args, user),      // PAY_BASIS_PERFORMED_V1 — вся выплата врача для кабинета, строками отчётов
+  // PAY_PERIOD_CLOSE_V1 — закрытие месяца оплаты врачей (запись строк выплаты),
+  // открытие обратно (только администратор) и какие месяцы закрыты.
+  pay_period_close:         (db, args, user) => payPeriodClose(db, args, user),
+  pay_period_reopen:        (db, args, user) => payPeriodReopen(db, args, user),
+  pay_period_status:        (db, args, user) => payPeriodStatus(db, args, user),
   visit_set_doctor_referrer: (db, args, user) => visitSetDoctorReferrer(db, args, user),  // REPORTS_V2 ревью I3/I5 — свой источник врача, если направившего нет
   owner_report:             (db, args, user) => ownerReport(db, args, user),   // REPORTS_HUB_RU_V1 — «Отчёт владельца» charts
   // BUILDING_REPORTS_V1 — перечень ЗДАНИЙ клиники для выборки в «Отчётах».
@@ -200,6 +209,12 @@ export const RPC = {
   // their date's visit. Find-or-create lives server-side so visit counts are
   // computed, never hand-managed.
   ensure_visit:              (db, args, user) => ensureVisit(db, args, user),
+  // LIVE_AUDIT_FIX_V1 — мастер убирает за собой визит, в который не легла ни
+  // одна строка (свой, пустой, только что заведённый); врач снимает свою
+  // невыставленную услугу (visit-lines.js — правило там).
+  discard_empty_visit:       (db, args, user) => discardEmptyVisit(db, args, user),
+  remove_own_visit_line:     (db, args, user) => removeOwnVisitLine(db, args, user),
+  visit_set_referral_source: (db, args, user) => visitSetReferralSource(db, args, user),   // вкладка «Детали» окна визита
   // CALENDAR_BOOKING_V1 — «Календарь записи».
   //
   // calendar_slots ЧИТАЕТ (стоит в READ_ONLY_RPCS, control/gate.js): свободные
@@ -230,6 +245,11 @@ export const RPC = {
   refund_deposit:            (db, args, user) => refundDeposit(db, args, user),   // DEPOSIT_REFUND_V1
   list_deposits:             (db, args, user) => listDeposits(db, args, user),
   deposit_balance:           (db, args, user) => depositBalance(db, args, user),
+  // CARD_SALE_V1 — продажа подарочной карты / сертификата в кассе (приход дня),
+  // возврат неизрасходованного остатка, список карт для кассы.
+  sell_card:                 (db, args, user) => sellCard(db, args, user),
+  refund_card_sale:          (db, args, user) => refundCardSale(db, args, user),
+  list_card_sales:           (db, args, user) => listCardSales(db, args, user),
   merge_patients:            (db, args, user) => mergePatientsRpc(db, args, user),   // PATIENT_MERGE_SERVER_V1
   // QUEUE_BOARD_V1 — читающая сторона тех же номеров: доска «кто у кого
   // стоит» по назначениям за день. Доступ по выданному разделу 'queue'

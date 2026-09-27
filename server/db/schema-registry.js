@@ -293,7 +293,14 @@ export const REGISTRY = {
              'is_lab','specimen','result_unit','ref_low','ref_high','ref_text','type','type_id','category_id','department_id','tube_color',
              'default_doctor_percent','doctor_tier_from','doctor_tier_percent','doctor_tier_from_2','doctor_tier_percent_2','doctor_tier_from_3','doctor_tier_percent_3','external_lab','room_id',
              'price_secondary','secondary_days_from','secondary_days_to','price_repeat','repeat_days_from','repeat_days_to',
-             'name_uz','name_en','online_booking'] },   // tube_color: LAB_HANDLING_V1 (mig 041); default_doctor_percent/room_id: SERVICE_EDITOR_V1 (mig 081) — read-only here, written ONLY by the service_save RPC (rates merge must be transactional); price_secondary…price_repeat: VISIT_TIER_PRICING_V1 (mig 127) — written by service_save too; doctor_tier_from/doctor_tier_percent: DOCTOR_TIER_V1 (mig 140) — пишут service_save (пара или 400) и Excel-импортёр; doctor_tier_*_2/_3 (DOCTOR_TIER_V2) и external_lab (EXTERNAL_LAB_V1): mig 147, те же писатели
+             'name_uz','name_en','online_booking'],
+             // FINAL_ROLES_SYNC_FIX_V1 (M1) — доля врача и её ступени — это
+             // начисления врачей: остальным ролям колонки приходят пустыми
+             // (NULL). Видят их администратор и держатели «Оплаты врачей» /
+             // «Ставок врачей» (db/pay-visibility.js). Пишет их только
+             // администратор (service_save), так что пустое значение на экране
+             // не-администратора никуда не сохраняется.
+             restricted: { lift: 'doctor_pay', columns: ['default_doctor_percent','doctor_tier_from','doctor_tier_percent','doctor_tier_from_2','doctor_tier_percent_2','doctor_tier_from_3','doctor_tier_percent_3'] } },   // tube_color: LAB_HANDLING_V1 (mig 041); default_doctor_percent/room_id: SERVICE_EDITOR_V1 (mig 081) — read-only here, written ONLY by the service_save RPC (rates merge must be transactional); price_secondary…price_repeat: VISIT_TIER_PRICING_V1 (mig 127) — written by service_save too; doctor_tier_from/doctor_tier_percent: DOCTOR_TIER_V1 (mig 140) — пишут service_save (пара или 400) и Excel-импортёр; doctor_tier_*_2/_3 (DOCTOR_TIER_V2) и external_lab (EXTERNAL_LAB_V1): mig 147, те же писатели
     // FULL_EXPORT_V1 — the Excel importer writes these directly (admin only);
     // the dialog still goes through service_save, which merges performer rates.
     write: { insert: { roles: ['admin'], columns: ['name','code','price','tax_rate','duration_minutes','requires_doctor','active',
@@ -320,7 +327,12 @@ export const REGISTRY = {
     read:  { roles: ALL_STAFF, columns: ['id','visit_id','service_id','clinic_item_id','doctor_id','quantity','unit_price','total','status','invoice_item_id','created_by','created_at','consultation_type_id','scheduled_at','queue_key','queue_no','notes',
              'sample_collected_at','verified_by','verified_at','sync_origin',
              'price_tier','package_id'] },   // package_id: PACKAGES_V1 (mig 154) — the package the line came from; price_tier: VISIT_TIER_PRICING_V1 (mig 127) — primary/secondary/repeat, set by the screen from service_price_quote   // queue_* set ONLY by issue_queue_numbers; notes = WS consult document JSON (mig 039); sample/verify: LAB_HANDLING_V1 (mig 041); sync_origin: BRANCH_ORIGIN_V1 (mig 083)
-    write: { insert: { roles: ['admin','registrar','doctor'], columns: ['visit_id','service_id','doctor_id','quantity','unit_price','total','status','created_by','consultation_type_id','scheduled_at','price_tier','package_id'] },
+    // FINAL_ROLES_SYNC_FIX_V1 (M3) — created_by ставит СЕРВЕР из сессии
+    // (stamps ниже), а не браузер: по нему remove_own_visit_line решает, чья
+    // это строка, и присланное значение позволяло бы выдать чужую строку за
+    // свою. Поэтому колонки нет в списке записи — ни вставкой, ни upsert.
+    stamps: { created_by: { on: 'insert' } },
+    write: { insert: { roles: ['admin','registrar','doctor'], columns: ['visit_id','service_id','doctor_id','quantity','unit_price','total','status','consultation_type_id','scheduled_at','price_tier','package_id'] },
              update: { roles: ['admin','registrar','doctor','lab','nurse'], columns: ['status','doctor_id','consultation_type_id','notes',
              'sample_collected_at','verified_by','verified_at','package_id'],
              // PACKAGES_V1 (ревью I-3) — пометку пакета правкой можно только
@@ -397,7 +409,7 @@ export const REGISTRY = {
     // (branch-filter: invoice_items → invoices.branch_id) не собираются. Ролей
     // это не расширяет: та же колонка тем же ALL_STAFF уже отдаётся напрямую из
     // invoices — здесь она лишь становится доступна одним запросом вместо двух.
-    embed:   { services: { table:'services', fk:'service_id', columns:['id','name','type','tax_rate','default_doctor_percent','type_id','category_id'] },
+    embed:   { services: { table:'services', fk:'service_id', columns:['id','name','type','tax_rate','type_id','category_id'] },   // FINAL_ROLES_SYNC_FIX_V1 (M1) — default_doctor_percent отсюда убран: доля врача не для всех, кто читает счета
                invoices: { table:'invoices', fk:'invoice_id', columns:['id','invoice_number','visit_id','admission_id','patient_id','branch_id','payer_id',
                             'subtotal','discount_amount','total_amount','paid_amount','status','created_by','created_at','paid_at','sync_origin'] } },
   },
@@ -723,15 +735,22 @@ export const REGISTRY = {
   // ADMIN_ROWS_GRANTABLE_V1 — пять плиток-денег (полисы, провайдеры, кэшбэк,
   // скидки, ставки врачей) выдаются из «Ролей»: `grant` называет плитку, и её
   // «Изменение» пишет таблицу целиком — у этих плиток без денег ничего нет.
+  // LIVE_AUDIT_FIX_V1 — регистратура заводит полис пациента при записи (номер
+  // полиса = name, service-picker-modal.js wizSave): прежде вставка была только
+  // у администратора, отказ глотался, и номер полиса не сохранялся. Процент
+  // покрытия — не её решение (`nonAdminColumns`): новый полис регистратуры — 0 %,
+  // остальное — плитка «Полисы» в «Ролях» (`grant`).
   payer_policies: { read:{roles:ALL_STAFF,columns:['id','name','payer_id','coverage_percent','active','created_at']},
-    write:{ grant:'settings.payer_policies',insert:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},update:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},delete:{roles:[]}},
+    write:{ grant:'settings.payer_policies',insert:{roles:['admin','registrar'],columns:['name','payer_id','coverage_percent','active'],nonAdminColumns:['name','payer_id','active']},update:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},delete:{roles:[]}},
     filters:['id','active','payer_id'], embed:{ payers:{table:'payers',fk:'payer_id',columns:['id','name']} } },
   payment_providers: { read:{roles:ALL_STAFF,columns:['id','name','fee_percent','active','created_at']},
     write:{ grant:'settings.payment_providers',insert:{roles:['admin'],columns:['name','fee_percent','active']},update:{roles:['admin'],columns:['name','fee_percent','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
-  cashback_rules: { read:{roles:ALL_STAFF,columns:['id','name','percent','active','created_at']},
-    write:{ grant:'settings.cashback_rules',insert:{roles:['admin'],columns:['name','percent','active']},update:{roles:['admin'],columns:['name','percent','active']},delete:{roles:[]}},
-    filters:['id','active'], embed:{} },
+  // CASHBACK_BY_GROUP_V1 (mig 165) — category_id: группа пациентов правила
+  // (NULL — «для всех»). Какое правило действует — rpc/cashback.js cashbackRuleFor.
+  cashback_rules: { read:{roles:ALL_STAFF,columns:['id','name','percent','active','created_at','category_id']},
+    write:{ grant:'settings.cashback_rules',insert:{roles:['admin'],columns:['name','percent','active','category_id']},update:{roles:['admin'],columns:['name','percent','active','category_id']},delete:{roles:[]}},
+    filters:['id','active','category_id'], embed:{ patient_categories:{table:'patient_categories',fk:'category_id',columns:['id','name']} } },
   // REFERRAL_CATEGORY_RATES_V1 (mig 115) — the category carries the STANDARD
   // reward: a percent for everything, plus per-service-group rows in `rates`
   // (JSON) that override it. This is what `referral_rewards` used to do by
@@ -748,7 +767,9 @@ export const REGISTRY = {
   // patient group), service_ids (JSON list: apply to these services only), note.
   // CARD_BALANCE_V1 (mig 158) — remaining: остаток карты/сертификата. Только
   // чтение: пишет его сервер (domain/cards.js) и триггеры миграции 158.
-  patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note','remaining']},
+  // CARD_SALE_V1 (mig 166) — sale_invoice_id / sale_number: счёт продажи карты
+  // в кассе (NULL — выдана без оплаты). Только чтение: пишет rpc/card-sales.js.
+  patient_discounts: { read:{roles:ALL_STAFF,columns:['id','name','kind','percent','amount','active','created_at','valid_from','valid_until','category_id','service_ids','note','remaining','sale_invoice_id','sale_number']},
     write:{ grant:'settings.patient_discounts',insert:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},
       update:{roles:['admin'],columns:['name','kind','percent','amount','active','valid_from','valid_until','category_id','service_ids','note']},delete:{roles:[]}},
     filters:['id','active','kind','category_id'], json:['service_ids'],
@@ -765,7 +786,12 @@ export const REGISTRY = {
   api_tokens: { read:{roles:['admin'],columns:['id','name','token','active','created_at'],secret:['token']},
     write:{ grant:'settings.api',insert:{roles:['admin'],columns:['name','token','active']},update:{roles:['admin'],columns:['name','token','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
+  // FINAL_ROLES_SYNC_FIX_V1 (M1) — СТАВКИ ВРАЧЕЙ ВИДЯТ НЕ ВСЕ. Раньше их
+  // читал весь персонал; теперь все строки — администратор, держатели
+  // «Оплаты врачей» (reports.doctor_pay) и плитки «Ставки врачей»
+  // (db/pay-visibility.js), а врач — только свои (doctor_id = он сам).
   doctor_rates: { read:{roles:ALL_STAFF,columns:['id','doctor_id','service_id','percent','active','created_at']},
+    scope: { column: 'doctor_id', allRoles: ['admin'], lift: 'doctor_pay' },
     write:{ grant:'settings.doctor_rates',insert:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},update:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},delete:{roles:[]}},
     filters:['id','active','doctor_id','service_id'],
     embed:{ users:{table:'users',fk:'doctor_id',columns:['id','full_name']}, services:{table:'services',fk:'service_id',columns:['id','name']} } },
@@ -943,9 +969,18 @@ export const REGISTRY = {
   admission_services: {
     read:  { roles: ALL_STAFF, columns: ['id','admission_id','service_id','clinic_item_id','doctor_id','performer_id','bed_id',
              'ward_id','quantity','unit_price','total','status','notes','billable','performed_at','invoice_item_id','created_at'] },
-    write: { insert: { roles: ['admin','registrar','doctor','nurse','cashier'], columns: ['admission_id','service_id',
-               'clinic_item_id','doctor_id','bed_id','ward_id','quantity','unit_price','total','status','notes','billable','performed_at'] },
-             update: { roles: ['admin','registrar','doctor','nurse','cashier'], columns: ['status','billable','notes','invoice_item_id'] },
+    // INPATIENT_MONEY_FIX_V1 (D7) — деньги и склад строки табличным путём не
+    // пишутся. Заводят строку только RPC: услугу — admission_service_add (цена
+    // сервера: личная цена врача, иначе каталог), товар — выдача со склада или
+    // из подотчёта (движение склада), проживание — bill_accommodation. Поэтому
+    // insert закрыт всем. invoice_item_id и status ставят и снимают только
+    // счёт и касса (billing.js, cashier.js): медсестра, стёршая ссылку на счёт
+    // у оплаченной строки, выставляла её второй раз. Правка «в счёт / в учёт»
+    // и удаление дополнительно проверяются по строке в routes/db.js
+    // (refuseAdmissionLineWrite): только невыставленная строка, удаление —
+    // только не-товарной строки незакрытой госпитализации.
+    write: { insert: { roles: [], columns: [] },
+             update: { roles: ['admin','registrar','doctor','nurse','cashier'], columns: ['billable','notes'] },
              delete: { roles: ['admin','registrar','doctor','nurse'] } },   // unbilled lines are removed from the bed detail list
     // clinic_item_id: отчёт «расход препаратов по стационару» отбирает строки
     // С ТОВАРОМ (`.not('clinic_item_id','is',null)`).
@@ -1522,6 +1557,8 @@ export const REGISTRY = {
 export function tableEntry(t) { return Object.prototype.hasOwnProperty.call(REGISTRY, t) ? { table: t, ...REGISTRY[t] } : null; }
 // CRM_OWNERSHIP_V1 — правило «чьи это строки», если у таблицы оно есть.
 export function rowScope(t) { const e = REGISTRY[t]; return (e && e.scope) || null; }
+// FINAL_ROLES_SYNC_FIX_V1 (M1) — колонки, которые читает только тот, кого пускает правило `lift`.
+export function restrictedRead(t) { const e = REGISTRY[t]; return (e && e.read && e.read.restricted) || null; }
 // CRM_DEDUP_SEARCH_TASKS_V1 — колонки «кто», которые пишет сервер из сессии (query-compiler stampValues).
 export function actorStamps(t) { const e = REGISTRY[t]; return (e && e.stamps) || null; }
 // MULTI_ROLE_SERVER_V1 — `role` is a single role name OR the caller's full

@@ -1018,7 +1018,12 @@ export function isModuleAllowed(navId) {
     // и календарь записи. Тот же приём и тот же довод, что у 'admissions' →
     // 'beds' и 'cashier-shifts' → 'cashier' выше. Сервер отвечает второй раз и
     // строже: запись пишется в visits с обычной проверкой прав.
-    if (navId === 'appointments') return _effective.has('appointments') || _effective.has('patients');
+    //
+    // LIVE_AUDIT_FIX_V1 (A7) — и только ролям, которым сервер календарь ОТДАЁТ:
+    // calendar_windows / calendar_slots / calendar_book требуют BOOK_ROLES
+    // (server/services/rpc/calendar.js). Медсестра, касса и лаборатория с
+    // картотекой видели вкладку и пустую сетку с «Не загрузилось».
+    if (navId === 'appointments') return (_effective.has('appointments') || _effective.has('patients')) && hasActorRole(CALENDAR_ROLES);
     // CASHIER_HEAD_KEY_V1 — Старший кассир is its OWN explicit grant (was derived
     // from Cashier: Admin, which made every delete-level cashier a head cashier).
     if (navId === 'cashier-head') return _effective.has('cashier-head');
@@ -1277,3 +1282,40 @@ export function scopedProviderId() {
     if (!u || u.is_super_admin || u.is_admin) return null;
     return u.id || null;
 }
+
+// LIVE_AUDIT_FIX_V1 — «Сохранить как шаблон» / «×» у шаблона сметы. Зеркало
+// service_templates.write (server/db/schema-registry.js): роли admin и
+// registrar ИЛИ плитка «Пакеты услуг» (settings.service_packages) на
+// «Изменение». Врачу кнопка обещала сохранение, а сервер отказывал.
+export const SERVICE_TEMPLATE_ROLES = Object.freeze(['admin', 'registrar']);
+export function canWriteServiceTemplates() {
+    if (hasActorRole(SERVICE_TEMPLATE_ROLES)) return true;
+    // Право плитки — только ВЫДАННОЕ явно: ненастроенная роль сервером
+    // (db/write-grant.js) к таблице не пускается, как бы ни открывался экран.
+    const lvl = grantLevel('settings.service_packages');
+    return lvl === 'edit' || lvl === 'delete';
+}
+
+// FINAL_ROLES_SYNC_FIX_V1 (I1) — ЗЕРКАЛО visit_services.insert (реестр):
+// кто вставляет строки услуг визита. Живёт здесь, а не в visit-wizard.js,
+// потому что тот же вопрос задаёт и мастер записи календаря
+// (service-picker-modal.js): колл-центр записывает слот, а услуги добавляет
+// регистратура — строки ему не вставить, и пытаться незачем.
+export const VISIT_LINE_ROLES = Object.freeze(['admin', 'registrar', 'doctor']);
+export function canAddVisitLines() { return hasActorRole(VISIT_LINE_ROLES); }
+
+// FINAL_ROLES_SYNC_FIX_V1 (I2) — ЗЕРКАЛО SERVICE_ADD_ROLES
+// (server/services/rpc/admission-charges.js): кто заводит услугу у койки.
+// Настроенный в «Ролях» уровень «Услуги в стационаре» решает сам, как у
+// сервера (requireGrant); ненастроенный — этот круг ролей. Кнопку «Добавить
+// услугу» видит только тот, кому сервер строку заведёт.
+export const ADMISSION_SERVICE_ADD_ROLES = Object.freeze(['admin', 'head_doctor', 'doctor', 'nurse', 'senior_nurse', 'registrar', 'cashier']);
+export function canAddAdmissionService() {
+    const lvl = grantLevel('inpatient.services');
+    if (lvl !== null) return lvl === 'edit' || lvl === 'delete';
+    return hasActorRole(ADMISSION_SERVICE_ADD_ROLES);
+}
+
+// LIVE_AUDIT_FIX_V1 (A7) — зеркало BOOK_ROLES (server/services/rpc/calendar.js):
+// кому сервер отдаёт сетку календаря записи.
+export const CALENDAR_ROLES = Object.freeze(['admin', 'registrar', 'doctor', 'callcenter']);

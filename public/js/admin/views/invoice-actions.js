@@ -238,10 +238,14 @@ export async function cancelInvoice(inv0, { reason, refundAmount = 0, notes = nu
             const amt = Math.min(left, refundable);
             // DEPOSIT_WALLET_V1 — «на баланс» просим явно; иначе решает сервер:
             // платёж с баланса возвращается на баланс, остальные — деньгами.
+            // BILLING_AUDIT_FIX_V1 (B2) — полный возврат сервер сам гасит
+            // отменой в той же транзакции (void_when_zero, keep_services — та
+            // же галочка окна); повторно звать void_invoice не нужно.
             const { data: rRes, error } = await supabase.rpc('refund_payment',
-                { payment_id: pay.id, amount: amt, reason, ...(toBalance ? { to_balance: true } : {}) });
+                { payment_id: pay.id, amount: amt, reason, void_when_zero: true, keep_services: keep, ...(toBalance ? { to_balance: true } : {}) });
             if (error) { failure = error; break; }
             if (rRes && rRes.invoice) lastInvoice = rRes.invoice;
+            if (rRes && rRes.voided) voided = true;
             left = Math.round((left - amt) * 100) / 100;
             refunded = Math.round((refunded + amt) * 100) / 100;
         }
@@ -254,7 +258,7 @@ export async function cancelInvoice(inv0, { reason, refundAmount = 0, notes = nu
                 toast(trf('Не удалось отменить счёт: {msg}', { msg: invoiceMoneyErrorText(failure) }), 'fail');
                 return false;
             }
-        } else if (lastInvoice && Number(lastInvoice.paid_amount) === 0) {
+        } else if (!voided && lastInvoice && Number(lastInvoice.paid_amount) === 0 && lastInvoice.status !== 'void') {
             // Полный возврат — это отмена. Решает ответ ПОСЛЕДНЕГО возврата, а
             // не снимок окна.
             const { error } = await voidIt();

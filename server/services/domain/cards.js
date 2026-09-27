@@ -12,7 +12,7 @@
 // record_payment_split / refund_payment): платёж и остаток меняются вместе.
 
 import { today as localToday } from './day.js';
-import { isDepositInvoice, DEPOSIT_INVOICE_REFUSAL } from './wallet.js';
+import { moneyDocRefusal } from './wallet.js';
 
 export class CardError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -87,7 +87,8 @@ function spendableOn(db, card, invoice) {
 
 // Оплата счёта картой. amount уже округлён вызывающим.
 export function spendCard(db, { cardId, invoice, paymentId, amount, user }) {
-  if (isDepositInvoice(db, invoice)) throw new CardError(DEPOSIT_INVOICE_REFUSAL);   // ревью C1
+  const refusal = moneyDocRefusal(db, invoice);   // ревью C1 + CARD_SALE_V1
+  if (refusal) throw new CardError(refusal);
   const card = loadCard(db, cardId);
   const { name, remaining, cap } = spendableOn(db, card, invoice);
   if (amount > remaining) throw new CardError(`${name}: на карте осталось ${remaining} — списать ${amount} нельзя.`);
@@ -124,4 +125,20 @@ export function returnToCard(db, { paymentId, refundPaymentId, invoice, amount, 
     .run(cardId, invoice.id, refundPaymentId, amount, after,
       'Возврат по счёту ' + (invoice.invoice_number || ('#' + invoice.id)), user.id);
   return { card_id: cardId, remaining: after };
+}
+
+// FINAL_MONEY_FIX_V1 (I2) — карта, которой заплачен платёж, закрыта ВОЗВРАТОМ
+// ПРОДАЖИ: её неизрасходованный остаток уже выдан покупателю (refund_card_sale
+// обнуляет и выключает карту). Возврат услуги на неё — деньги, которые никто
+// никогда не получит: погасить ими нельзя, а второй раз вернуть остаток касса
+// не даёт. Такая сумма возвращается деньгами или на баланс пациента.
+// Карта, выключенная в настройках (без возврата продажи), — не то же самое:
+// её остаток по-прежнему её, и возврат идёт на неё, как прежде.
+export function cardClosedByRefund(db, paymentId) {
+  const cardId = cardOfPayment(db, paymentId);
+  if (!cardId) return null;
+  const card = db.prepare('SELECT id, name, sale_invoice_id FROM patient_discounts WHERE id = ?').get(cardId);
+  if (!card || !card.sale_invoice_id) return null;
+  const refunded = db.prepare('SELECT 1 FROM payments WHERE invoice_id = ? AND amount < 0 LIMIT 1').get(card.sale_invoice_id);
+  return refunded ? card : null;
 }

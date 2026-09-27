@@ -124,34 +124,48 @@ test('филиалы: переезд визитов и счетов и удал�
   db.close();
 });
 
-test('дубль из другого здания или с чужими строками — отказ по-русски, ничего не тронуто', () => {
+// PATIENT_MERGE_BRANCHES_V1 — прежний отказ «дубль из другого здания» снят
+// (решение владельца 2026-09-27): чужие строки переносятся здесь, а в их доме
+// объединение исполнит событие patient_merges.
+test('дубль из другого здания и с чужими строками — объединяется, событие о слиянии уходит в журнал', () => {
   const ctx = seed();
   const { db, keep, drop } = ctx;
   const d = fillDrop(db, ctx);
   db.prepare("UPDATE visits SET sync_origin = 'B' WHERE id = ?").run(d.vid);
-  assert.throws(() => mergePatientsRpc(db, { keep_id: keep, drop_id: drop }, ADMIN), (e) => e.status === 400 && /другого здания|филиал/.test(e.message));
-  db.prepare('UPDATE visits SET sync_origin = NULL WHERE id = ?').run(d.vid);
   db.prepare("UPDATE patients SET sync_origin = 'B' WHERE id = ?").run(drop);
-  assert.throws(() => mergePatientsRpc(db, { keep_id: keep, drop_id: drop }, ADMIN), /другого здания|филиал/);
-  assert.equal(db.prepare('SELECT patient_id FROM visits WHERE id = ?').get(d.vid).patient_id, drop);
+  const keepUid = db.prepare('SELECT uid FROM patients WHERE id = ?').get(keep).uid;
+  const dropUid = db.prepare('SELECT uid FROM patients WHERE id = ?').get(drop).uid;
+  mergePatientsRpc(db, { keep_id: keep, drop_id: drop }, ADMIN);
+  assert.equal(db.prepare('SELECT patient_id FROM visits WHERE id = ?').get(d.vid).patient_id, keep, 'чужой визит перенесён');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM patients WHERE id = ?').get(drop).n, 0);
+  const ev = db.prepare('SELECT * FROM patient_merges WHERE drop_uid = ?').get(dropUid);
+  assert.ok(ev, 'событие о слиянии записано');
+  assert.equal(ev.keep_uid, keepUid);
+  const evSeq = db.prepare("SELECT MIN(seq) s FROM sync_journal WHERE tbl = 'patient_merges' AND uid = ?").get(ev.uid).s;
+  const delSeq = db.prepare("SELECT MIN(seq) s FROM sync_journal WHERE tbl = 'patients' AND uid = ? AND op = 'del'").get(dropUid).s;
+  assert.ok(evSeq && delSeq && evSeq < delSeq, 'событие в журнале РАНЬШЕ надгробия дубля — сосед узнает о слиянии до удаления');
   db.close();
 });
 
-test('несколько дублей — одним вызовом и одной транзакцией: один чужой — не объединён никто', () => {
+test('несколько дублей — одним вызовом и одной транзакцией: один нельзя — не объединён никто', () => {
   const ctx = seed();
   const { db, keep, drop } = ctx;
   fillDrop(db, ctx);
   const drop2 = db.prepare("INSERT INTO patients (full_name, branch_id) VALUES ('Иванов И.', 1)").run().lastInsertRowid;
-  const v2 = db.prepare("INSERT INTO visits (patient_id, branch_id, visit_date) VALUES (?,1,strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run(drop2).lastInsertRowid;
-  db.prepare("UPDATE visits SET sync_origin = 'B' WHERE id = ?").run(v2);
-  assert.throws(() => mergePatientsRpc(db, { keep_id: keep, drop_ids: [drop, drop2] }, ADMIN), /другого здания/);
+  db.prepare("INSERT INTO visits (patient_id, branch_id, visit_date) VALUES (?,1,strftime('%Y-%m-%dT%H:%M:%SZ','now'))").run(drop2);
+  // Второй дубль лежит в больнице, как и оставленная карта, — нельзя.
+  db.prepare("INSERT INTO admissions (patient_id, status) VALUES (?, 'admitted')").run(keep);
+  const adm2 = db.prepare("INSERT INTO admissions (patient_id, status) VALUES (?, 'admitted')").run(drop2).lastInsertRowid;
+  assert.throws(() => mergePatientsRpc(db, { keep_id: keep, drop_ids: [drop, drop2] }, ADMIN), /госпитализац/);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM patients WHERE id IN (?, ?)').get(drop, drop2).n, 2, 'ни один дубль не тронут');
   assert.ok(db.prepare('SELECT COUNT(*) n FROM visits WHERE patient_id = ?').get(drop).n > 0);
-  db.prepare('UPDATE visits SET sync_origin = NULL WHERE id = ?').run(v2);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM patient_merges').get().n, 0, 'и событие не записано');
+  db.prepare("UPDATE admissions SET status = 'discharged' WHERE id = ?").run(adm2);
   const out = mergePatientsRpc(db, { keep_id: keep, drop_ids: [drop, drop2] }, ADMIN);
   assert.deepEqual(out.drop_ids, [drop, drop2]);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM patients WHERE id IN (?, ?)').get(drop, drop2).n, 0);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM visits WHERE patient_id = ?').get(keep).n, 2);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM patient_merges').get().n, 2, 'по событию на каждый дубль');
   assert.throws(() => mergePatientsRpc(db, { keep_id: keep, drop_ids: [keep] }, ADMIN), (e) => e.status === 400);
   db.close();
 });
@@ -193,21 +207,16 @@ test('M3: пустые контакты оставленной карты доп
   db.close();
 });
 
-test('I2: карта-дубль уже передана в другое здание — отказ; ещё не передана — объединяется', () => {
+test('I2 снят: карта, уже переданная в другое здание (и при засеве соседа), объединяется', () => {
   const { db, keep, drop } = seed();
   const puid = db.prepare('SELECT uid FROM patients WHERE id = ?').get(drop).uid;
   const seq = db.prepare("SELECT MIN(seq) s FROM sync_journal WHERE tbl = 'patients' AND uid = ?").get(puid).s;
-  assert.ok(seq, 'заведение дубля в журнале');
-  // Сосед есть, до дубля ещё не дошло.
-  db.prepare('INSERT INTO sync_peers (node, pub_seq, sent_seq) VALUES (?, ?, ?)').run('B', seq - 1, seq - 1);
-  const drop2 = db.prepare("INSERT INTO patients (full_name, branch_id) VALUES ('Иванов И.', 1)").run().lastInsertRowid;
-  // Выложено соседу — дубль уже у него.
-  db.prepare('UPDATE sync_peers SET pub_seq = ? WHERE node = ?').run(seq, 'B');
-  assert.throws(() => mergePatientsRpc(db, { keep_id: keep, drop_id: drop }, ADMIN), /передана в другое здание/);
-  mergePatientsRpc(db, { keep_id: keep, drop_id: drop2 }, ADMIN);   // drop2 соседу ещё не выложен
-  // Сосед засеивается — отдаёт всё подряд, значит отказ.
+  db.prepare('INSERT INTO sync_peers (node, pub_seq, sent_seq) VALUES (?, ?, ?)').run('B', seq, seq);
+  mergePatientsRpc(db, { keep_id: keep, drop_id: drop }, ADMIN);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM patients WHERE id = ?').get(drop).n, 0);
   const drop3 = db.prepare("INSERT INTO patients (full_name, branch_id) VALUES ('Иванов Ив.', 1)").run().lastInsertRowid;
   db.prepare("UPDATE sync_peers SET seed_floor = 1, seed_started = '2026-01-01T00:00:00Z' WHERE node = 'B'").run();
-  assert.throws(() => mergePatientsRpc(db, { keep_id: keep, drop_id: drop3 }, ADMIN), /передана в другое здание/);
+  mergePatientsRpc(db, { keep_id: keep, drop_id: drop3 }, ADMIN);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM patient_merges').get().n, 2);
   db.close();
 });

@@ -156,6 +156,8 @@ test('084: таблицы ожидания и соседей существую�
     'node', 'pub_seq', 'sent_seq', 'recv_upto', 'recv_seed_page', 'last_ok', 'last_ack', 'clock_skew_ms',
     'seed_floor', 'seed_started', 'seed_tbl', 'seed_at', 'seed_id', 'seed_page',
     'seed_next_tbl', 'seed_next_at', 'seed_next_id', 'seed_next_done',
+    // FINAL_ROLES_SYNC_FIX_V1 (I4, мигр. 185) — что сосед умеет (caps) и его сборка.
+    'caps', 'app_version', 'caps_at',
   ]);
   // Один и тот же (tbl, uid) в ожидании — одна строка: более поздняя замещает.
   db.prepare("INSERT INTO sync_pending (tbl, uid, stamp, record, waits_tbl, waits_uid) VALUES ('visits','v1','s1','{}','patients','p1')").run();

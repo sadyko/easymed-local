@@ -498,3 +498,226 @@ test('M2: срок пакета в смете и при записи строк�
   assert.match(src, /function previewBillLines\(\) \{[^]*?const day = localDayOf\(cartVisitDateIso\(\)\)/, 'смета — тоже');
   assert.ok(!/localDayOf\(a\.startISO \|\| scheduledISO\) \|\| offerDay\(\)/.test(src), 'остался собственный день строки');
 });
+
+// ─── LIVE_AUDIT_FIX_V1 — покрытие плательщиком решает сервер ────────────────
+// Калькулятор писал на строку `payer_covered: true` — колонки нет, запись
+// молча выбрасывалась, и «Сформировать счёт» окна визита выставлял услугу,
+// которую покрывает страховая, ПАЦИЕНТУ. Теперь строка плательщика уходит в
+// счёт контрагента (payer_id) и в счёт пациента не попадает никаким путём.
+const { invoicePayerLines } = await import('../views/service-picker-modal.js');
+
+async function vmStateFromDb() {
+  const st = vmState();
+  st.services = DB.prepare('SELECT * FROM visit_services WHERE visit_id = 40 ORDER BY id').all()
+    .map((r) => ({ ...r, __service_name: String(r.service_id) }));
+  return st;
+}
+
+test('LIVE_AUDIT_FIX_V1: строка страховой — в счёт контрагента; «Сформировать счёт» не выставляет её пациенту', async () => {
+  seed();
+  DB.prepare("INSERT INTO payers (id, name, kind) VALUES (7, 'Страховая', 'insurance')").run();
+  const pay = await invoicePayerLines({ visitId: 40, ids: [101], payerId: 7 });
+  assert.equal(pay.error, null, 'сервер отказал: ' + (pay.error && pay.error.message));
+  const payerInv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40 AND payer_id = 7').get();
+  assert.ok(payerInv, 'счёт контрагента не создан');
+  assert.equal(payerInv.discount_amount, 0, 'скидки пациента к контрагенту не относятся');
+  assert.ok(!DBWRITES.includes('visit_services'), 'покрытие не пишется браузером в строку визита');
+
+  // окно визита, свежий снимок: регистратор отмечает ВСЁ и жмёт «Сформировать счёт»
+  await VM.generateInvoiceFromSelection(await vmStateFromDb(), new Set([101, 102]), () => {});
+  const patientInv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40 AND payer_id IS NULL').get();
+  assert.ok(patientInv, 'счёт пациента на непокрытую строку не создан');
+  const billed = DB.prepare('SELECT service_id FROM invoice_items WHERE invoice_id = ?').all(patientInv.id).map((r) => r.service_id);
+  assert.deepEqual(billed, [22], 'застрахованная услуга (МРТ) попала в счёт пациента');
+
+  // и окно, открытое ДО выставления контрагенту (устаревший снимок): сервер отказывает
+  seed();
+  DB.prepare("INSERT INTO payers (id, name, kind) VALUES (7, 'Страховая', 'insurance')").run();
+  const stale = vmState();
+  await invoicePayerLines({ visitId: 40, ids: [101], payerId: 7 });
+  await VM.generateInvoiceFromSelection(stale, new Set([101, 102]), () => {});
+  const leaked = DB.prepare(`SELECT COUNT(*) c FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
+                             WHERE i.visit_id = 40 AND i.payer_id IS NULL AND ii.service_id = 21`).get().c;
+  assert.equal(leaked, 0, 'устаревшее окно выставило пациенту застрахованную услугу');
+});
+
+test('LIVE_AUDIT_FIX_V1: калькулятор больше не пишет payer_covered', async () => {
+  const fs = await import('node:fs');
+  for (const f of ['../views/service-picker-modal.js', '../views/visit-modal.js']) {
+    const src = fs.readFileSync(new URL(f, import.meta.url), 'utf8');
+    assert.ok(!/payer_covered\s*:/.test(src) && !/r\.payer_covered/.test(src), f + ' всё ещё опирается на несуществующую колонку payer_covered');
+  }
+  const src = fs.readFileSync(new URL('../views/service-picker-modal.js', import.meta.url), 'utf8');
+  assert.match(src, /await invoicePayerLines\(\{ visitId: visit\.id, ids, payerId: pm\.payerId \}\)/);
+});
+
+// ─── LIVE_AUDIT_FIX_V1 — вкладка «Детали» окна визита ───────────────────────
+// Источник направления, «Coverage type» и «Discount (%)» молча выбрасывались
+// (колонки не пишутся / их нет), а окно говорило «Visit saved».
+function detailsCard(values) {
+  const inputs = Object.entries(values).map(([name, value]) => ({
+    type: 'text', value: value == null ? '' : String(value), checked: false,
+    getAttribute: (k) => (k === 'name' ? name : null),
+  }));
+  const form = { querySelectorAll: (sel) => (sel.startsWith('.segmented') ? [] : inputs) };
+  return { querySelector: (sel) => (sel === '.vd-form' ? form : null) };
+}
+
+test('LIVE_AUDIT_FIX_V1: «Детали» — источник направления сохраняется сервером, комментарий — строкой визита, тост честный', async () => {
+  seed();
+  DB.prepare("INSERT INTO referral_sources (id, name) VALUES (5, 'Доктор Каримов')").run();
+  const state = { visit: DB.prepare('SELECT * FROM visits WHERE id = 40').get(), patient: { id: 3 } };
+  window.easymed = { state: { user: { id: 1, role: 'registrar', extra_roles: [] } } };
+  TOASTS.length = 0;
+  try {
+    const ok = await VM.saveDetails(detailsCard({ referral_source_id: 5, notes: 'после обеда', coverage_type: 'insurance' }), state);
+    assert.equal(ok, true);
+    const v = DB.prepare('SELECT referral_source_id, notes FROM visits WHERE id = 40').get();
+    assert.equal(v.referral_source_id, 5, 'источник направления не сохранён');
+    assert.equal(v.notes, 'после обеда');
+    assert.ok(RPC.some((r) => r.name === 'visit_set_referral_source'));
+    assert.ok(TOASTS.includes('Визит сохранён.'), TOASTS.join(' | '));
+
+    // врач: источник ему не правится — не шлётся вовсе, остальное сохраняется
+    USER = { id: 2, role: 'doctor', extra_roles: [] };
+    window.easymed.state.user = { id: 2, role: 'doctor', extra_roles: [] };
+    RPC.length = 0; TOASTS.length = 0;
+    const st2 = { visit: DB.prepare('SELECT * FROM visits WHERE id = 40').get(), patient: { id: 3 } };
+    assert.equal(await VM.saveDetails(detailsCard({ referral_source_id: '', notes: 'осмотр' }), st2), true);
+    const v2 = DB.prepare('SELECT referral_source_id, notes FROM visits WHERE id = 40').get();
+    assert.equal(v2.referral_source_id, 5, 'врач снял источник направления мимо правила');
+    assert.equal(v2.notes, 'осмотр');
+    assert.ok(!RPC.some((r) => r.name === 'visit_set_referral_source'));
+
+    // сервер отказал — окно говорит об этом, а не «сохранено»
+    USER = { id: 1, role: 'registrar', extra_roles: [] };
+    window.easymed.state.user = { id: 1, role: 'registrar', extra_roles: [] };
+    TOASTS.length = 0;
+    const st3 = { visit: DB.prepare('SELECT * FROM visits WHERE id = 40').get(), patient: { id: 3 } };
+    assert.equal(await VM.saveDetails(detailsCard({ referral_source_id: 999 }), st3), false);
+    assert.ok(TOASTS.some((t) => t.startsWith('Источник направления не сохранён')), TOASTS.join(' | '));
+    assert.ok(!TOASTS.includes('Визит сохранён.'));
+  } finally {
+    delete window.easymed;
+    USER = { id: 1, role: 'registrar', extra_roles: [] };
+  }
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../views/visit-modal.js', import.meta.url), 'utf8');
+  assert.ok(!/name: 'discount_percentage'|'coverage_type', \[/.test(src), 'поля без колонок вернулись в форму');
+});
+
+// ─── LIVE_AUDIT_FIX_V1 — окно счёта визита (visit-bill.js) ─────────────────
+test('LIVE_AUDIT_FIX_V1: окно счёта — строка «Add» с ценой котировки и врачом только у врачебной услуги; кнопки по ролям сервера', async () => {
+  seed();
+  DB.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (7,'doc','x','Петров','doctor',1)").run();
+  DB.prepare('UPDATE visits SET doctor_id = 7 WHERE id = 40').run();
+  DB.prepare('UPDATE services SET requires_doctor = 1 WHERE id = 21').run();
+  const VB = await import('../views/visit-bill.js');
+  const visit = DB.prepare('SELECT * FROM visits WHERE id = 40').get();
+  const cons = await VB.billLineFor(visit, { id: 21, price: 900000, requires_doctor: 1 }, 1);
+  assert.equal(cons.doctor_id, 7, 'врачебная услуга без врача визита');
+  assert.equal(cons.unit_price, 900000);
+  assert.ok(['primary', 'secondary', 'repeat'].includes(cons.price_tier), 'уровень цены не записан: ' + cons.price_tier);
+  const lab = await VB.billLineFor(visit, { id: 22, price: 100000, requires_doctor: 0 }, 2);
+  assert.equal(lab.doctor_id, null, 'анализ получил исполнителем врача визита');
+  assert.equal(lab.total, 200000);
+  // строка проходит реестр как есть
+  compile({ table: 'visit_services', op: 'insert', values: lab }, { id: 1, role: 'registrar', extra_roles: [] });
+  // роли кнопок — зеркала сервера
+  const { REGISTRY } = await import('../../../../server/db/schema-registry.js');
+  assert.deepEqual([...VB.BILL_ADD_ROLES].sort(), [...REGISTRY.visit_services.write.insert.roles].sort());
+  const fs = await import('node:fs');
+  const inv = fs.readFileSync(new URL('../../../../server/services/rpc/inventory.js', import.meta.url), 'utf8');
+  assert.ok(inv.includes("const VOID_ROLES = [" + VB.BILL_VOID_ROLES.map((r) => "'" + r + "'").join(', ') + "];"), 'VOID_ROLES разошлись с сервером');
+  assert.ok(inv.includes("const DISPENSE_ROLES = [" + VB.BILL_DISPENSE_ROLES.map((r) => "'" + r + "'").join(', ') + "];"), 'DISPENSE_ROLES разошлись с сервером');
+  const lines = fs.readFileSync(new URL('../../../../server/services/rpc/visit-lines.js', import.meta.url), 'utf8');
+  assert.ok(lines.includes("const ROLES = [" + VB.BILL_REMOVE_ROLES.map((r) => "'" + r + "'").join(', ') + "];"), 'ROLES разошлись с сервером');
+  const src = fs.readFileSync(new URL('../views/visit-bill.js', import.meta.url), 'utf8');
+  assert.ok(!/from\('visit_services'\)\.delete\(\)/.test(src), 'снятие строки снова мимо сервера');
+  assert.match(src, /r\.unit_price != null \? r\.unit_price/, 'окно снова показывает цену каталога вместо цены строки');
+});
+
+// ─── LIVE_AUDIT_FIX_V1 (A4) — окно визита: консультация из каталога ─────────
+test('LIVE_AUDIT_FIX_V1: окно визита — консультация ложится consultation_type_id, отказ бросается (каталог не скажет «добавлено»)', async () => {
+  seed();
+  DB.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor) VALUES (7,'doc','x','Петров','doctor',1)").run();
+  DB.prepare("INSERT INTO consultation_types (id, name, price) VALUES (4, 'Первичный приём', 120000)").run();
+  DB.prepare('DELETE FROM visit_services').run();
+  const state = { visit: DB.prepare('SELECT * FROM visits WHERE id = 40').get(), patient: { id: 3 }, services: [] };
+  const consult = { id: 'c|7|4', name: 'Первичный приём', price: 120000, __consult: true, consultation_type_id: 4, __consultDoctorId: 7 };
+  await VM.addServiceFromPicker(state, { service: consult, doctor: null }, () => {});
+  const row = DB.prepare('SELECT service_id, consultation_type_id, doctor_id FROM visit_services WHERE visit_id = 40').get();
+  assert.deepEqual({ ...row }, { service_id: null, consultation_type_id: 4, doctor_id: 7 });
+  // отказ — исключением: окно визита, закрытое для записи строк, не «добавляет» молча
+  state.services = DB.prepare('SELECT * FROM visit_services WHERE visit_id = 40').all();
+  await assert.rejects(() => VM.addServiceFromPicker(state, { service: consult, doctor: null }, () => {}), /already in this visit/);
+  USER = { id: 1, role: 'cashier', extra_roles: [] };
+  try {
+    await assert.rejects(() => VM.addServiceFromPicker({ ...state, services: [] }, { service: { id: 21, name: 'МРТ', price: 900000 }, doctor: null }, () => {}));
+  } finally { USER = { id: 1, role: 'registrar', extra_roles: [] }; }
+  // каскад каталога ловит отказ, а итог называет причину
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../views/service-picker-modal.js', import.meta.url), 'utf8');
+  assert.match(src, /const pickSafely = \(payload\) =>/);
+  assert.ok(!/if \(!calculator\) onPick\(payload\)/.test(src), 'каскад снова зовёт onPick без перехвата отказа');
+  assert.match(src, /if \(!firstErr\) firstErr =/);
+});
+
+test('LIVE_AUDIT_FIX_V1: «Детали» — касса, лаборатория, медсестра не сохраняют визит (кнопки нет, сервер не спрашивается)', async () => {
+  const { REGISTRY } = await import('../../../../server/db/schema-registry.js');
+  assert.deepEqual([...VM.VISIT_DETAILS_ROLES].sort(), [...REGISTRY.visits.write.update.roles].sort());
+  seed();
+  try {
+    for (const role of ['cashier', 'lab', 'nurse']) {
+      window.easymed = { state: { user: { id: 1, role, extra_roles: [] } } };
+      assert.equal(VM.canSaveVisitDetails(), false, role + ': кнопка сохранения показана');
+      RPC.length = 0; DBWRITES.length = 0; TOASTS.length = 0;
+      const st = { visit: DB.prepare('SELECT * FROM visits WHERE id = 40').get(), patient: { id: 3 } };
+      assert.equal(await VM.saveDetails(detailsCard({ notes: 'x' }), st), false);
+      assert.equal(DBWRITES.length + RPC.length, 0, role + ': запрос ушёл на сервер');
+      assert.ok(TOASTS.some((t) => t.startsWith('Визит меняют')), TOASTS.join(' | '));
+    }
+    for (const role of ['registrar', 'doctor', 'admin']) {
+      window.easymed = { state: { user: { id: 1, role, extra_roles: [] } } };
+      assert.equal(VM.canSaveVisitDetails(), true, role);
+    }
+  } finally { delete window.easymed; }
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../views/visit-modal.js', import.meta.url), 'utf8');
+  assert.match(src, /const saveBtn = canSaveVisitDetails\(\) \? h\('button'/);
+});
+
+// FINAL_MONEY_FIX_V1 (I1) — ВОЗВРАЩЁННАЯ УСЛУГА НЕ ВЫСТАВЛЯЕТСЯ СНОВА ПО УМОЛЧАНИЮ.
+// За МРТ пациенту вернули деньги (отметка возврата — как её пишет касса);
+// работа осталась в визите невыставленной. Окно визита не отмечает её для
+// счёта само, «Сформировать счёт» по умолчанию берёт только анализ, а
+// выставить МРТ заново можно лишь отметив строку вручную.
+test('FINAL_MONEY_FIX_V1 I1: окно визита не отмечает возвращённую строку; вручную — rebill_refunded', async () => {
+  seed();
+  DB.prepare("INSERT INTO pay_refund_releases (kind, line_id, invoice_id) VALUES ('out', 101, 999)").run();
+  const st = await vmStateFromDb();
+  await VM.loadRefundedFlags(st);
+  assert.ok(RPC.some((r) => r.name === 'visit_refunded_lines'));
+  assert.equal(st.services.find((r) => r.id === 101).__refunded, true);
+  assert.equal(st.services.find((r) => r.id === 102).__refunded, false);
+  assert.deepEqual([...VM.defaultInvoiceSelection(st.services)], [102], 'возвращённая МРТ отмечена для счёта по умолчанию');
+
+  await VM.generateInvoiceFromSelection(st, VM.defaultInvoiceSelection(st.services), () => {});
+  const first = DB.prepare('SELECT service_id FROM invoice_items').all().map((r) => r.service_id);
+  assert.deepEqual(first, [22], 'в счёт по умолчанию попала возвращённая услуга');
+
+  // Окно без пометки (старый снимок) — сервер отказывает, второго счёта нет.
+  const stale = await vmStateFromDb();
+  TOASTS.length = 0;
+  await VM.generateInvoiceFromSelection(stale, new Set([101]), () => {});
+  assert.equal(DB.prepare("SELECT COUNT(*) c FROM invoice_items WHERE service_id = 21").get().c, 0);
+  assert.ok(TOASTS.some((t) => /вернули деньги/.test(t)), 'отказ сервера не показан: ' + TOASTS.join(' | '));
+
+  // Регистратор отметил МРТ вручную — окно просит выставить заново явно.
+  const again = await vmStateFromDb();
+  await VM.loadRefundedFlags(again);
+  await VM.generateInvoiceFromSelection(again, new Set([101]), () => {});
+  const call = RPC.filter((r) => r.name === 'create_invoice_for_visit').pop();
+  assert.equal(call.body.rebill_refunded, true);
+  assert.equal(DB.prepare("SELECT COUNT(*) c FROM invoice_items WHERE service_id = 21").get().c, 1);
+});

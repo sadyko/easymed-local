@@ -53,7 +53,7 @@ test('run_report returns {columns, rows} for each kind, date-filtered', () => {
   const none = runReport(db, { kind:'payments', from:'2026-01-01', to:'2026-01-31' }, user);
   assert.equal(none.rows.length, 0);
   // unknown kind rejected
-  assert.throws(() => runReport(db, { kind:'bogus', from:FROM, to:TO }, user), /unknown report|kind/i);
+  assert.throws(() => runReport(db, { kind:'bogus', from:FROM, to:TO }, user), /unknown report|kind|Неизвестный отчёт/i);
 });
 
 // ---------------------------------------------------------------------------
@@ -85,9 +85,10 @@ function seedRu() {
   const it1 = db.prepare("INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total) VALUES (?,?,'Консультация',2,50000,100000)").run(inv1, sCons).lastInsertRowid;
   const vs1 = db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, invoice_item_id) VALUES (?,?,2,2,50000,100000,'completed',?)").run(vid, sCons, it1).lastInsertRowid;
 
-  // Invoice 2 (Bob, unpaid): операция 1 000 000, no discount.
-  const inv2 = db.prepare(`INSERT INTO invoices (invoice_number, visit_id, patient_id, branch_id, subtotal, discount_amount, total_amount, paid_amount, status, created_by, created_at)
-    VALUES ('INV-2',?,?,1,1000000,0,1000000,0,'unpaid',1,'2026-08-06T09:30:00Z')`).run(vid, p2).lastInsertRowid;
+  // Invoice 2 (Bob, unpaid): операция 1 000 000, no discount. Выставлен на его
+  // плательщика: REPORTS_AUDIT_FIX_V1 — «Кто платит» читается со СЧЁТА (мигр. 054).
+  const inv2 = db.prepare(`INSERT INTO invoices (invoice_number, visit_id, patient_id, branch_id, subtotal, discount_amount, total_amount, paid_amount, status, created_by, created_at, payer_id)
+    VALUES ('INV-2',?,?,1,1000000,0,1000000,0,'unpaid',1,'2026-08-06T09:30:00Z',?)`).run(vid, p2, payer).lastInsertRowid;
   const it2 = db.prepare("INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total) VALUES (?,?,'Операция аппендэктомия',1,1000000,1000000)").run(inv2, sSurg).lastInsertRowid;
   const vs2 = db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, invoice_item_id) VALUES (?,?,2,1,1000000,1000000,'completed',?)").run(vid, sSurg, it2).lastInsertRowid;
 
