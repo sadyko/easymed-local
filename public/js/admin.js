@@ -1520,7 +1520,11 @@ async function loadNavCounts() {
     // telegram-chat (TELEGRAM_CHAT_BADGE_V1) and invoices
     // (CASHIER_UNPAID_BADGE_V1) below. visits/visit_services counts are still
     // gone along with their NAV entries.
-    try {
+    // V3120_CLEANUP — счётчик пациентов только тому, у кого есть пункт
+    // «Пациенты». После закрытия данных пациентов по разделам (сервер,
+    // db/patient-data-gate.js) склад получал 403 на каждом экране: бейдж
+    // спрашивался при каждой перерисовке меню, а пункта у него нет.
+    if (isModuleAllowed('patients')) try {
         const navCid = (window.CLINIC && window.CLINIC.id) || null;
         const scopeCid = (q) => navCid ? q.eq('company_id', navCid) : q;   // M1 — badge counts must match their clinic-scoped lists (RLS-bypass roles)
         const pRes = await scopeCid(supabase.from('patients').select('id', { count: 'exact', head: true }).eq('active', true));
