@@ -1304,6 +1304,18 @@ export function canWriteServiceTemplates() {
 export const VISIT_LINE_ROLES = Object.freeze(['admin', 'registrar', 'doctor']);
 export function canAddVisitLines() { return hasActorRole(VISIT_LINE_ROLES); }
 
+// FINAL_ROLES_SYNC_FIX_V1 (I2) — ЗЕРКАЛО SERVICE_ADD_ROLES
+// (server/services/rpc/admission-charges.js): кто заводит услугу у койки.
+// Настроенный в «Ролях» уровень «Услуги в стационаре» решает сам, как у
+// сервера (requireGrant); ненастроенный — этот круг ролей. Кнопку «Добавить
+// услугу» видит только тот, кому сервер строку заведёт.
+export const ADMISSION_SERVICE_ADD_ROLES = Object.freeze(['admin', 'head_doctor', 'doctor', 'nurse', 'senior_nurse', 'registrar', 'cashier']);
+export function canAddAdmissionService() {
+    const lvl = grantLevel('inpatient.services');
+    if (lvl !== null) return lvl === 'edit' || lvl === 'delete';
+    return hasActorRole(ADMISSION_SERVICE_ADD_ROLES);
+}
+
 // LIVE_AUDIT_FIX_V1 (A7) — зеркало BOOK_ROLES (server/services/rpc/calendar.js):
 // кому сервер отдаёт сетку календаря записи.
 export const CALENDAR_ROLES = Object.freeze(['admin', 'registrar', 'doctor', 'callcenter']);

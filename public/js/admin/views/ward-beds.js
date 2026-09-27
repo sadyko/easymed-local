@@ -61,6 +61,7 @@ import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE
 // EXPIRY_BALANCE_V1 — «списание просроченного предупреждает» (владелец 23.09).
 // Слова пишет сервер (rpc/expiry.js), консоль койки их только показывает.
 import { toastStockWarnings } from './stock-warnings.js';
+import { canAddAdmissionService } from '../permissions.js';   // FINAL_ROLES_SYNC_FIX_V1 (I2) — кнопка «Добавить услугу» только тому, кому сервер строку заведёт
 
 const STATUS = {
     free:        { label: 'Свободна',  bg: 'var(--ok-50, #e9f7ef)',      fg: 'var(--ok-700, #1a7a44)',      bd: 'var(--ok-200, #bde5cd)',      dot: 'var(--ok-500, #2e8b52)' },
@@ -595,7 +596,7 @@ function bedDetailModal(bed, ward, adm, root) {
         // показывалось НИГДЕ — при этом продолжало попадать в счёт. Строка,
         // которую нельзя увидеть, но можно выставить, — худший вариант.
         const svcLines = st.lines.filter(isServiceLine);
-        rightEl.appendChild(sectionCard('Услуги (services performed)', 'Добавить услугу', () => addServiceDialog(), svcLines, false));
+        rightEl.appendChild(sectionCard('Услуги (services performed)', 'Добавить услугу', canAddAdmissionService() ? () => addServiceDialog() : null, svcLines, false));
         // -- товары --
         const itemLines = st.lines.filter(isGoodsLine);
         rightEl.appendChild(sectionCard('Товары (расходные материалы)', 'Добавить товары', () => addItemsDialog(), itemLines, true));
@@ -632,10 +633,12 @@ function bedDetailModal(bed, ward, adm, root) {
         const card = h('div', { class: 'card', style: { padding: '14px 16px' } });
         card.appendChild(h('div', { class: 'row', style: { gap: '8px', marginBottom: '10px' } },
             secTitle(title), h('span', { class: 'grow' }),
-            h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: onAdd }, Icon('Plus', { size: 13 }), ' ' + addLabel)));
+            // FINAL_ROLES_SYNC_FIX_V1 (I2) — нет действия — нет и кнопки: роль,
+            // которой сервер откажет, не видит обещания.
+            onAdd ? h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: onAdd }, Icon('Plus', { size: 13 }), ' ' + addLabel) : null));
         if (!lines.length) {
             card.appendChild(h('div', { class: 'muted', style: { border: '1px dashed var(--ink-200)', borderRadius: '10px', padding: '14px', textAlign: 'center', fontSize: '12.5px' } },
-                withChecks ? 'Товаров пока нет — выдайте препараты кнопкой «Добавить товары».' : 'Услуг пока нет — добавьте выполненную услугу.'));
+                withChecks ? 'Товаров пока нет — выдайте препараты кнопкой «Добавить товары».' : (onAdd ? 'Услуг пока нет — добавьте выполненную услугу.' : 'Услуг пока нет.')));
             return card;
         }
         const tbody = h('tbody');

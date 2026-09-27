@@ -80,3 +80,38 @@ test('D7: услуги у койки заводит сервер, прямой �
 test('D-minor: «Товары для пациента» по умолчанию — в счёт пациенту', () => {
     assert.match(SRC, /const billChk = h\('input', \{ type: 'checkbox', checked: true,/);
 });
+
+// FINAL_ROLES_SYNC_FIX_V1 (I2) — кнопку «Добавить услугу» у койки видит тот, кому
+// сервер строку заведёт (admission_service_add): медсестра, регистратура, касса,
+// врачи и администратор; лаборатория, склад и колл-центр — нет. Настроенный в
+// «Ролях» уровень «Услуги в стационаре» решает сам, как на сервере.
+test('I2: кнопка «Добавить услугу» у койки — по кругу ролей сервера', async () => {
+    const P = await import('../permissions.js');
+    const { SERVICE_ADD_ROLES } = await import('../../../../server/services/rpc/admission-charges.js');
+    assert.deepStrictEqual([...P.ADMISSION_SERVICE_ADD_ROLES].sort(), [...SERVICE_ADD_ROLES].sort());
+    const as = (role, extra = []) => { window.easymed = { state: { user: { id: 1, role, extra_roles: extra } } }; P.setActorRoles([]); };
+    try {
+        for (const role of ['admin', 'doctor', 'nurse', 'registrar', 'cashier']) {
+            as(role);
+            assert.strictEqual(P.canAddAdmissionService(), true, role + ': кнопки нет, а сервер строку заведёт');
+        }
+        for (const role of ['lab', 'inventory', 'callcenter']) {
+            as(role);
+            assert.strictEqual(P.canAddAdmissionService(), false, role + ': кнопка обещает, сервер откажет');
+        }
+        // Настроенный уровень: медсестре выдан только «Просмотр» — кнопки нет;
+        // лаборатории выдано «Изменение» — кнопка есть (сервер пускает по праву).
+        as('nurse');
+        P.setEffectiveFromRole({ name: 'nurse', permissions: { sections: ['beds'], grants: { 'inpatient.services': 'view' } } });
+        assert.strictEqual(P.canAddAdmissionService(), false);
+        as('lab');
+        P.setEffectiveFromRole({ name: 'lab', permissions: { sections: ['beds'], grants: { 'inpatient.services': 'edit' } } });
+        assert.strictEqual(P.canAddAdmissionService(), true);
+    } finally {
+        delete window.easymed;
+        P.setEffectiveFromRole({ name: 'x', permissions: { sections: ['beds'] } });
+    }
+    // Консоль койки спрашивает именно это правило и без действия кнопку не рисует.
+    assert.match(SRC, /sectionCard\('Услуги \(services performed\)', 'Добавить услугу', canAddAdmissionService\(\) \? \(\) => addServiceDialog\(\) : null/);
+    assert.match(SRC, /onAdd \? h\('button'/);
+});
