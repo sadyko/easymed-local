@@ -57,8 +57,8 @@ test('услуга визита остаётся и снова доступна 
 test('никто, кроме админа: касса и регистратура получают отказ', () => {
   const { db, invoice } = seed();
   voidInvoice(db, { invoice_id: invoice.id }, CASH);
-  assert.throws(() => deleteInvoice(db, { invoice_id: invoice.id }, CASH), /not allowed/);
-  assert.throws(() => deleteInvoice(db, { invoice_id: invoice.id }, REG), /not allowed/);
+  assert.throws(() => deleteInvoice(db, { invoice_id: invoice.id }, CASH), /not allowed|недоступно/);
+  assert.throws(() => deleteInvoice(db, { invoice_id: invoice.id }, REG), /not allowed|недоступно/);
   assert.equal(count(db, 'SELECT COUNT(*) n FROM invoices WHERE id = ?', invoice.id), 1, 'счёт на месте');
   db.close();
 });
