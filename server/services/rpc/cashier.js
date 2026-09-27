@@ -20,6 +20,7 @@ import { markRefundRelease } from '../domain/pay-releases.js';   // PAY_REFUND_V
 // V3120_FIX (MAJOR) — снятая при отмене товарная строка возвращает товар туда,
 // откуда его взяли (одно правило на сервер, rpc/inventory.js).
 import { restoreSources } from './inventory.js';
+import { voidReleasedDoseLines } from './treatment-orders.js';   // V3120_FINAL (S1) — снятая доза не остаётся к оплате
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -727,6 +728,7 @@ export function voidInvoice(db, args, user) {
          SET invoice_item_id = NULL, status = 'added'
        WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
     `).run(invoiceId);
+    voidReleasedDoseLines(db, admLineIds, user);   // V3120_FINAL (S1)
 
     return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId), removed_services: removed, released_services: released };
   });

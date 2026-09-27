@@ -25,6 +25,7 @@ import { servicePriceQuote } from './service-price-quote.js';
 // выше, и по той же причине: обе стороны — объявленные функции, ни одна не
 // зовётся при загрузке модуля.
 import { restoreSources } from './inventory.js';
+import { voidReleasedDoseLines } from './treatment-orders.js';   // V3120_FINAL (S1)
 // DEPOSIT_WALLET_V1 — баланс пациента: списание при оплате «с баланса» и
 // зачисление при возврате «на баланс» — в той же транзакции, что платёж.
 import { spendWallet, creditWallet, moneyDocRefusal, walletBalance, realMoney, WalletError } from '../domain/wallet.js';
@@ -1668,6 +1669,7 @@ export function removeAdmissionLineFromInvoice(db, args, user) {
     markRefundRelease(db, { invoiceId: inv.id, kind: 'in', lineIds: [lineId] });
     db.prepare("UPDATE admission_services SET invoice_item_id = NULL, status = 'added' WHERE id = ?").run(lineId);
     db.prepare('DELETE FROM invoice_items WHERE id = ?').run(item.id);
+    voidReleasedDoseLines(db, [lineId], user);   // V3120_FINAL (S1) — снятая доза не остаётся к оплате
     const left = db.prepare('SELECT COALESCE(SUM(total), 0) s, COUNT(*) n FROM invoice_items WHERE invoice_id = ?').get(inv.id);
     let invoiceDeleted = false;
     if (left.n === 0) {

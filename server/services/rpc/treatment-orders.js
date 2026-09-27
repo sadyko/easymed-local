@@ -51,7 +51,7 @@ import {
   dispenseAdmissionItemCore, voidDispensedAdmissionItemCore, RpcError as StockError,
 } from './inventory.js';
 import {
-  doseNotePrefix, extraNotePrefix, administrationNotePrefix,
+  doseNotePrefix, extraNotePrefix, administrationNotePrefix, medAdminIdOf,
 } from '../../../public/js/shared/med-admin-line.js';
 
 export { RpcError };
@@ -649,6 +649,36 @@ function reverseAdministration(db, administration, user) {
   }
 
   return { reversal: { reversed, kept, lines: lines.length }, warnings };
+}
+
+/**
+ * V3120_FINAL (S1) — СТРОКА СНЯТОЙ ДОЗЫ, ОТПУЩЕННАЯ СО СЧЁТА, СТОРНИРУЕТСЯ.
+ *
+ * reverseAdministration оставляет строку, уже попавшую в счёт, и просит
+ * «уберите через кассу». Касса убирала — отменой счёта или «Из счёта», — но
+ * строка лишь теряла ссылку на счёт: снова «к оплате», препарат списан, и при
+ * выписке пациент платил за неведённую дозу. Кассовые пути (cashier.js
+ * voidInvoice, billing.js removeAdmissionLineFromInvoice) зовут это после
+ * того, как отпустили строки: строка отметки, которая уже СНЯТА (voided_at),
+ * возвращается тем же кодом, что у консоли койки (товар — туда, откуда взят),
+ * строка действующей отметки остаётся к выставлению, как прежде.
+ */
+export function voidReleasedDoseLines(db, lineIds, user) {
+  const ids = (lineIds || []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  let voided = 0;
+  for (const id of ids) {
+    const line = db.prepare('SELECT id, notes, clinic_item_id, invoice_item_id FROM admission_services WHERE id = ?').get(id);
+    if (!line || line.invoice_item_id != null) continue;
+    const adminId = medAdminIdOf(line);
+    if (!adminId) continue;
+    const a = db.prepare('SELECT voided_at FROM treatment_administrations WHERE id = ?').get(adminId);
+    if (!a || !a.voided_at) continue;
+    if (line.clinic_item_id != null) voidDispensedAdmissionItemCore(db, { line_id: id }, user);
+    else db.prepare('DELETE FROM admission_services WHERE id = ?').run(id);
+    db.prepare("DELETE FROM pay_refund_releases WHERE kind = 'in' AND line_id = ?").run(id);
+    voided += 1;
+  }
+  return voided;
 }
 
 // ─── 4. Отметка медсестры ───────────────────────────────────────────────────
