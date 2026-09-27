@@ -893,7 +893,6 @@ export function admissionOrderCancel(db, args, user) {
     const before = loadAdmission(db, admissionId);
     const res = admissionTransition(db, { admission_id: admissionId, to: 'cancelled', reason }, user);
     if (res.repeat) return { admission: res.admission };   // V3120_FIX (M1) — повтор уже отменённой: ничего не пишем
-    if (res.repeat) return { admission: res.admission };   // V3120_FIX (M1) — повтор уже отменённой: ничего не пишем
     dropUnbilledLines(db, admissionId, user);   // INPATIENT_MONEY_FIX_V1 (D5)
     if (before.bed_id) {
       db.prepare("UPDATE beds SET status='cleaning' WHERE id=?").run(before.bed_id);
