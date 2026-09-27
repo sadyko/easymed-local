@@ -32,7 +32,10 @@ export const REGISTRY = {
     // CALLCENTER_ROLE_V1 — running this board IS the call centre's job. Deleting
     // a request stays admin-only: the operator closes a lead by status, and the
     // journal is what the clinic audits calls with.
-    write: { insert: { roles: ['admin','registrar','callcenter'], columns: ['full_name','phone','source','note','status','assigned_to','created_by','service_id','patient_id','scheduled_date'] },   // patient_id: CRM_V5; scheduled_date: CRM_V7
+    // V3120_FIX — created_by ставит СЕРВЕР (stamps ниже): присланное значение
+    // выдавало заявку за чужую. assigned_to «на другого» — только тем, кто видит
+    // всю доску (routes/db.js crmAssignRefusal).
+    write: { insert: { roles: ['admin','registrar','callcenter'], columns: ['full_name','phone','source','note','status','assigned_to','service_id','patient_id','scheduled_date'] },   // patient_id: CRM_V5; scheduled_date: CRM_V7
              update: { roles: ['admin','registrar','callcenter'], columns: ['full_name','phone','source','note','status','patient_id','assigned_to','service_id','scheduled_date'] },
              delete: { roles: ['admin'] } },
     filters: ['id','status','source','phone','full_name','created_at','patient_id','scheduled_date','assigned_to'],
@@ -57,6 +60,7 @@ export const REGISTRY = {
     // (crm_request_tags) ограничены через родителя и получают это сами.
     // Удаление заявки от права не зависит: write.delete — только admin.
     scope: { column: 'assigned_to', allRoles: ['admin'], allGrant: 'crm.all', nullVisible: true },
+    stamps: { created_by: { on: 'insert' } },   // V3120_FIX
   },
 
   // CRM_MULTI_SERVICE_V1 (mig 057) — the services a call-centre request covers,
@@ -85,7 +89,7 @@ export const REGISTRY = {
     // ОДНИМ действием оператора, и разведи их права — получилась бы строка, у
     // которой слот есть, а ссылки на него нет.
     write: { insert: { roles: ['admin','registrar','callcenter'], columns: ['request_id','service_id','scheduled_date','status','note','doctor_id','visit_id','consultation_type_id'] },
-             update: { roles: ['admin','registrar','callcenter'], columns: ['service_id','scheduled_date','status','note','doctor_id','visit_id','consultation_type_id'] },
+             update: { roles: ['admin','registrar','callcenter'], columns: ['service_id','scheduled_date','status','note','doctor_id','visit_id','consultation_type_id'], bulkBy: ['request_id'] },   // V3120_FIX (M9) — crm.js отменяет/привязывает строки заявки пачкой
              delete: { roles: ['admin','registrar'] } },
     filters: ['id','request_id','service_id','scheduled_date','status','doctor_id','visit_id','consultation_type_id'],
     embed:   { services: { table:'services', fk:'service_id', columns:['id','name','price','requires_doctor'] },
@@ -149,7 +153,7 @@ export const REGISTRY = {
   crm_request_tags: {
     read:  { roles: ALL_STAFF, columns: ['request_id','tag_key'] },
     write: { insert: { roles: ['admin','registrar','callcenter'], columns: ['request_id','tag_key'] },
-             delete: { roles: ['admin','registrar','callcenter'] } },
+             delete: { roles: ['admin','registrar','callcenter'], bulkBy: ['request_id'] } },   // V3120_FIX (M9) — снятие меток заявки
     filters: ['request_id','tag_key'],
     scope: { via: { fk: 'request_id', table: 'crm_requests' } },
   },
@@ -204,7 +208,9 @@ export const REGISTRY = {
     // Левенштейна на экране). Этих двух колонок в списке не было, сервер отвечал
     // «unknown filter column», и предупреждение о дубле не показывалось НИ РАЗУ —
     // хотя окно заведения пациента им прямо обещает защиту от повторной карты.
-    filters: ['id','mrn','phone','national_id','full_name','last_name','first_name','email','gender','date_of_birth','branch_id','primary_doctor_id','payer_id','payer_policy_id','active','created_at','registration_date','sync_origin'],
+    // V3120_FIX — middle_name: окно заведения пациента ищет дубль и по отчеству
+    // (patient-create-modal.js), и без него каждое нажатие клавиши отвечало 400.
+    filters: ['id','mrn','phone','national_id','full_name','last_name','first_name','middle_name','email','gender','date_of_birth','branch_id','primary_doctor_id','payer_id','payer_policy_id','active','created_at','registration_date','sync_origin'],
     embed:   { branches: { table:'branches', fk:'branch_id', columns:['id','name'] },
                payers:   { table:'payers',   fk:'payer_id',  columns:['id','name'] },
                // creator:created_by(full_name) — кто завёл карту. Имя сотрудника
@@ -336,13 +342,16 @@ export const REGISTRY = {
     // свою. Поэтому колонки нет в списке записи — ни вставкой, ни upsert.
     stamps: { created_by: { on: 'insert' } },
     write: { insert: { roles: ['admin','registrar','doctor'], columns: ['visit_id','service_id','doctor_id','quantity','unit_price','total','status','consultation_type_id','scheduled_at','price_tier','package_id'] },
-             update: { roles: ['admin','registrar','doctor','lab','nurse'], columns: ['status','doctor_id','consultation_type_id','notes',
+             // V3120_FIX (M2) — doctor_id отсюда убран: врача строки меняет только
+             // patient_card_set_doctor (проверяет счёт, закрытый период и что это
+             // живой исполнитель). Экранов, писавших его табличным путём, нет.
+             update: { roles: ['admin','registrar','doctor','lab','nurse'], columns: ['status','consultation_type_id','notes',
              'sample_collected_at','verified_by','verified_at','package_id'],
              // PACKAGES_V1 (ревью I-3) — пометку пакета правкой можно только
              // СНЯТЬ: пакет вне срока визита иначе запирает весь счёт. Ставится
              // пакет лишь при заведении строки (и там проверяется, routes/db.js).
              onlyValues: { package_id: [null] } },   // LAB_HANDLING_V1 (lab) + PROCEDURES_V1 (nurse отмечает выполнение)
-             delete: { roles: ['admin','registrar'] } },
+             delete: { roles: ['admin','registrar'], bulkBy: ['visit_id'] } },   // V3120_FIX (M9) — окно визита снимает услугу парой visit_id+service_id
     // BRANCH_ORIGIN_V1 — правило то же, что у patients выше, и здесь оно и
     // работает: кабинет врача и процедуры спрашивают `.is('sync_origin', null)`
     // — «работа этого здания» (решение владельца 2026-09-02). Фильтр серверный:
@@ -480,7 +489,7 @@ export const REGISTRY = {
                write:{ grant:'settings.referral_sources',insert:{roles:['admin','registrar'],columns:['name','category','category_id','last_name','first_name','middle_name',
                  'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed']},
                  update:{roles:['admin'],columns:['name','category','category_id','last_name','first_name','middle_name',
-                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed','active']},delete:{roles:[]}},
+                 'phone','workplace','district','payment_type','card_number','reward_mode','own_percent','own_rates','inpatient_bonus_enabled','inpatient_pct','inpatient_fixed','active'],bulkBy:['doctor_id']},delete:{roles:[]}},   // bulkBy: V3120_FIX (M9) — referral-reward-editor.js правит свой источник врача по doctor_id
                filters:['id','active','category_id','doctor_id'], json:['own_rates'],
                embed:{ referral_source_categories:{table:'referral_source_categories',fk:'category_id',columns:['id','name']} } },
   // DOCTOR_WORKSPACE_V1 — columns the My-services doctor dashboard and the
@@ -528,7 +537,20 @@ export const REGISTRY = {
                 'academic_title_ru','academic_title_uz','academic_title_en',
                 'bio_ru','bio_uz','bio_en',
                 'education_entries','experience_entries','certifications_entries','prof_dev_entries',
-                'experience_years','instagram_url','telegram_url','photo_url']},   // SCHED_V1 — the wizard's slot engine; branch_id — CALENDAR_BOOKING_V1
+                'experience_years','instagram_url','telegram_url','photo_url'],
+                // V3120_FIX (F1) — ДЕНЬГИ СОТРУДНИКА ВИДЯТ НЕ ВСЕ. Раньше любой
+                // вошедший одним запросом к users забирал оклад, процент и
+                // ставки каждого сотрудника. Теперь их видят администратор,
+                // держатели «Оплаты врачей» / «Ставок врачей» и «Сотрудники →
+                // Цены и проценты» (pay-visibility.js, правило employee_pay) —
+                // то же правило, что у routes/users.js. Свою строку (own: id)
+                // человек видит всегда. service_rates остаётся «кто какую
+                // услугу оказывает» и своей ценой врача (мастер записи и CRM
+                // по ним выбирают исполнителя и цену), но без процента и
+                // фиксированной оплаты (partial).
+                restricted: { lift: 'employee_pay', own: 'id',
+                  columns: ['salary_type','salary_fixed','salary_percent','service_rates','referral_rates','kpi_links'],
+                  partial: { service_rates: 'rates_public' } } },   // SCHED_V1 — the wizard's slot engine; branch_id — CALENDAR_BOOKING_V1
                write:{insert:{roles:[]},update:{roles:[]},delete:{roles:[]}},
                // room_id: настройки кабинетов спрашивают «кто закреплён за этим
                // кабинетом» — колонка уже читается строкой выше.
@@ -816,7 +838,7 @@ export const REGISTRY = {
     // от самоповышения эту запись бережёт services/role-guard.js (routes/db.js).
     write: { grant: 'settings.roles',
              insert: { roles: ['admin'], columns: ['code','name','base_role','active'] },
-             update: { roles: ['admin'], columns: ['name','base_role','active'] },
+             update: { roles: ['admin'], columns: ['name','base_role','active'], bulkBy: ['code'] },   // V3120_FIX (M9) — code уникален
              delete: { roles: [] } },
     filters: ['id','code','active','base_role'], embed: {},
   },
@@ -825,7 +847,7 @@ export const REGISTRY = {
     read:  { roles: ALL_STAFF, columns: ['id','role','permissions','updated_at'] },
     // ADMIN_ROWS_GRANTABLE_V1 — см. custom_roles выше: ключ «Роли» и та же защита.
     write: { grant: 'settings.roles', insert: { roles: ['admin'], columns: ['role','permissions'] },
-             update: { roles: ['admin'], columns: ['permissions'] },
+             update: { roles: ['admin'], columns: ['permissions'], bulkBy: ['role'] },   // V3120_FIX (M9) — role уникальна
              delete: { roles: [] } },
     filters: ['id','role'], embed: {},
   },
@@ -847,13 +869,28 @@ export const REGISTRY = {
                recommended_by: { table:'users', fk:'recommended_by', columns:['id','full_name','specialty'] } },
   },
   // Signed encounter snapshots + document archive. service-workspace.js, docs-archive.js.
+  // V3120_FIX (F2) — ДОКУМЕНТ ВИЗИТА НЕ СТИРАЕТСЯ И НЕ ПЕРЕПИСЫВАЕТСЯ ЧУЖОЙ РУКОЙ.
+  // Раньше любой врач через /api/db удалял и переписывал любой документ — в
+  // том числе подписанный протокол коллеги. Теперь:
+  //   • удаления через /api/db нет вовсе: документ ОТЗЫВАЮТ (patient_card_doc_void,
+  //     миграция 105), а повторная подпись в кабинете идёт через RPC
+  //     visit_document_archive, который отзывает прежний протокол;
+  //   • правка — только своего черновика: автор = я, без файла, не отозван и
+  //     не подписанный снимок (protocol / diag / case_file);
+  //   • автор (created_by) ставится из сессии;
+  //   • отозванные строки через /api/db не видны (read.where) — архив
+  //     документов не двоится после повторной подписи; карта пациента видит их
+  //     серыми через свой RPC.
   visit_documents: {
     read:  { roles: ALL_STAFF, columns: ['id','title','file_name','file_path','file_size','content_type','doc_type',
-             'visit_id','visit_service_id','patient_id','body','created_by','created_at'] },
+             'visit_id','visit_service_id','patient_id','body','created_by','created_at'],
+             where: '"visit_documents"."voided_at" IS NULL' },
     write: { insert: { roles: ['admin','registrar','doctor','nurse'], columns: ['title','file_name','file_path','file_size',
-               'content_type','doc_type','visit_id','visit_service_id','patient_id','body','created_by'] },
-             update: { roles: ['admin','doctor'], columns: ['title','doc_type','body'] },
-             delete: { roles: ['admin','doctor'] } },   // workspace deletes the prior protocol/diag before re-signing
+               'content_type','doc_type','visit_id','visit_service_id','patient_id','body'] },
+             update: { roles: ['admin','doctor'], columns: ['title','doc_type','body'],
+                       own: { column: 'created_by', where: `"voided_at" IS NULL AND "file_path" IS NULL AND COALESCE("doc_type",'') NOT IN ('protocol','diag','case_file')` } },
+             delete: { roles: [] } },
+    stamps: { created_by: { on: 'insert' } },
     filters: ['id','patient_id','visit_id','visit_service_id','doc_type','created_at'],
     json:    ['body'],   // WS sign-archive stores the document snapshot as an object (AURORA_PATIENT_DOCS_V1)
     embed:   {},
@@ -878,7 +915,7 @@ export const REGISTRY = {
                'resolved_date','status','severity','note'] },
              update: { roles: ['admin','registrar','doctor','nurse'], columns: ['code','label','since_date','resolved_date',
                'status','severity','note'] },
-             delete: { roles: ['admin','doctor'] } },   // workspace drops the matching active dx when removed
+             delete: { roles: ['admin','doctor'], bulkBy: ['patient_id'] } },   // workspace drops the matching active dx when removed (V3120_FIX M9: by patient_id+code)
     filters: ['id','patient_id','code','status','since_date','created_at'],
     embed:   {},
   },
@@ -930,7 +967,7 @@ export const REGISTRY = {
     write: { insert: { roles: ['admin'], columns: ['doctor_id','consultation_type_id','price','available','is_free',
                'name_ru','name_uz','name_en'] },
              update: { roles: ['admin'], columns: ['price','available','is_free','name_ru','name_uz','name_en'] },
-             delete: { roles: ['admin'] } },   // save = reconcile (delete this doctor's rows, re-insert)
+             delete: { roles: ['admin'], bulkBy: ['doctor_id'] } },   // save = reconcile (delete this doctor's rows, re-insert)
     filters: ['id','doctor_id','consultation_type_id'],
     embed:   {},
   },
@@ -1266,7 +1303,7 @@ export const REGISTRY = {
     read:  { roles: ALL_STAFF, columns: ['id','user_id','branch_id','created_at'] },
     write: { insert: { roles: ['admin'], columns: ['user_id','branch_id'] },
              update: { roles: ['admin'], columns: ['user_id','branch_id'] },
-             delete: { roles: ['admin'] } },   // save = delete this user's rows, re-insert the ticked set
+             delete: { roles: ['admin'], bulkBy: ['user_id'] } },   // save = delete this user's rows, re-insert the ticked set
     filters: ['id','user_id','branch_id'],
     embed:   { branches: { table:'branches', fk:'branch_id', columns:['id','name','active'] } },
   },
@@ -1275,7 +1312,7 @@ export const REGISTRY = {
     read:  { roles: ALL_STAFF, columns: ['id','user_id','specialty_slug','name_ru','name_uz','is_primary','created_at'] },
     write: { insert: { roles: ['admin'], columns: ['user_id','specialty_slug','name_ru','name_uz','is_primary'] },
              update: { roles: ['admin'], columns: ['specialty_slug','name_ru','name_uz','is_primary'] },
-             delete: { roles: ['admin'] } },   // save = delete-then-insert reconcile
+             delete: { roles: ['admin'], bulkBy: ['user_id'] } },   // save = delete-then-insert reconcile
     filters: ['id','user_id','is_primary'],
     embed:   {},
   },
@@ -1464,8 +1501,8 @@ export const REGISTRY = {
   item_suppliers: {
     read:  { roles: ALL_STAFF, columns: ['id','product_id','supplier_id','last_price','pack_factor','purchase_unit','created_at'] },
     write: { insert: { roles: ['admin','inventory'], columns: ['product_id','supplier_id','last_price','pack_factor','purchase_unit'] },
-             update: { roles: ['admin','inventory'], columns: ['last_price','pack_factor','purchase_unit'] },
-             delete: { roles: ['admin','inventory'] } },
+             update: { roles: ['admin','inventory'], columns: ['last_price','pack_factor','purchase_unit'], bulkBy: ['item_id'] },   // V3120_FIX (M9) — procurement.js: по товару
+             delete: { roles: ['admin','inventory'], bulkBy: ['item_id'] } },
     filters: ['id','product_id','supplier_id'],
     embed:   { products:  { table:'products',  fk:'product_id',  columns:['id','name','base_unit'] },
                suppliers: { table:'suppliers', fk:'supplier_id', columns:['id','name'] } },
@@ -1565,6 +1602,14 @@ export function rowScope(t) { const e = REGISTRY[t]; return (e && e.scope) || nu
 export function restrictedRead(t) { const e = REGISTRY[t]; return (e && e.read && e.read.restricted) || null; }
 // CRM_DEDUP_SEARCH_TASKS_V1 — колонки «кто», которые пишет сервер из сессии (query-compiler stampValues).
 export function actorStamps(t) { const e = REGISTRY[t]; return (e && e.stamps) || null; }
+// V3120_FIX (F2) — постоянное условие чтения (`read.where`): строки, которых
+// через /api/db не видно вовсе (отозванный документ визита).
+export function readWhere(t) { const e = REGISTRY[t]; return (e && e.read && typeof e.read.where === 'string') ? e.read.where : null; }
+// V3120_FIX (F2) — `write.<op>.own`: правится только своя строка ({ column, where }).
+export function ownRowsRule(t, op) { const e = REGISTRY[t]; const w = e && e.write && e.write[op]; return (w && typeof w === 'object' && w.own) || null; }
+// V3120_FIX (M9) — `write.<op>.bulkBy`: колонки, по которым экран законно
+// правит/удаляет пачку строк (кроме id). Пусто — только по id.
+export function bulkWriteKeys(t, op) { const e = REGISTRY[t]; const w = e && e.write && e.write[op]; return (w && typeof w === 'object' && Array.isArray(w.bulkBy)) ? [...w.bulkBy] : []; }
 // MULTI_ROLE_SERVER_V1 — `role` is a single role name OR the caller's full
 // effective set (primary + extra_roles). A grant to ANY role in the set allows
 // the op: that is what «Дополнительные роли» means. An empty set allows nothing.
@@ -1613,7 +1658,7 @@ export function filterAllowed(t, col) { return !!REGISTRY[t] && REGISTRY[t].filt
 export function jsonColumns(t) { return (REGISTRY[t] && REGISTRY[t].json) ? [...REGISTRY[t].json] : []; }
 export function embedEntry(t, name) {
   const e = REGISTRY[t];
-  return e && Object.prototype.hasOwnProperty.call(e.embed, name) ? e.embed[name] : null;
+  return e && e.embed && Object.prototype.hasOwnProperty.call(e.embed, name) ? e.embed[name] : null;   // V3120_FIX — у crm_tags связей нет вовсе
 }
 
 // ---------------------------------------------------------------------------

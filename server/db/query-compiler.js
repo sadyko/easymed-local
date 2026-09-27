@@ -3,6 +3,8 @@ import { tableEntry, canRead, canWrite, nonAdminColumns, valueLimits, readableCo
 import { effectiveRoles } from '../services/roles.js';
 import { scopeLifted } from './row-scope.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { restrictedRead } from './schema-registry.js';   // FINAL_ROLES_SYNC_FIX_V1 (M1)
+import { readWhere, ownRowsRule, bulkWriteKeys } from './schema-registry.js';   // V3120_FIX (F2, M9)
+import { patientDataRefusal } from './patient-data-gate.js';   // V3120_FIX (M4)
 import { liftAllows } from './pay-visibility.js';
 
 export class CompileError extends Error {
@@ -293,6 +295,30 @@ function validateTable(name) {
 // Замаскированное значение секретной колонки: видно, что ключ ЕСТЬ, но не он сам.
 const SECRET_MASK = '••••••••';
 
+// V3120_FIX (F1) — обезличенные формы колонок `read.restricted.partial`.
+// rates_public: users.service_rates без денег врача — остаются «кто оказывает
+// услугу» (service_id), здания (branches) и своя цена врача для пациента
+// (price, если задана), уходят процент (pct) и фиксированная оплата (fix).
+// Битый JSON — NULL, а не ошибка всего запроса.
+const PARTIAL_MASKS = Object.freeze({
+  rates_public: (col) => `CASE WHEN json_valid(${col}) AND json_type(${col}) = 'array' THEN (`
+    + `SELECT json_group_array(json_remove(json_object('service_id', json_extract(e.value, '$.service_id'),`
+    + ` 'branches', json(COALESCE(json_extract(e.value, '$.branches'), '[]')),`
+    + ` 'price', json_extract(e.value, '$.price')),`
+    + ` CASE WHEN json_type(e.value, '$.price') IS NULL OR json_type(e.value, '$.price') = 'null' THEN '$.price' ELSE '$.__keep' END))`
+    + ` FROM json_each(${col}) e) ELSE NULL END`,
+});
+
+// Все простые условия дескриптора, включая вложенные в OR-группы.
+function flatFilters(filters) {
+  const out = [];
+  for (const f of Array.isArray(filters) ? filters : []) {
+    if (f && Array.isArray(f.or)) out.push(...f.or);
+    else out.push(f);
+  }
+  return out;
+}
+
 function compileSelect(desc, table, user, db, mask = null) {
   // CRM_HEAD_MERGE_TAGS_V1 (ревью I5) — СОЕДИНЕНИЕ ПОДЧИНЯЕТСЯ ПРАВИЛУ
   // ПРИСОЕДИНЯЕМОЙ ТАБЛИЦЫ. Embed `crm_requests(full_name, phone)` из строки
@@ -317,11 +343,34 @@ function compileSelect(desc, table, user, db, mask = null) {
   // тому, кого правило не пускает, они приходят пустыми, а не отказом всего
   // запроса — экран услуг у регистратуры работает, доли врача в нём просто нет.
   const restricted = restrictedRead(table);
+  const hidden = new Set();
   if (restricted && !liftAllows(restricted.lift, db, user)) {
+    // V3120_FIX (F1) — `own`: свою строку человек видит целиком (врач — свой
+    // оклад и ставки); `partial`: вместо NULL — обезличенная форма колонки
+    // (service_rates без денег врача). Номер сессии — целое число, и в текст
+    // запроса он попадает только таким.
+    const me = user && Number.isInteger(Number(user.id)) ? Number(user.id) : null;
+    for (const c of restricted.columns) hidden.add(c);
     for (let i = 0; i < projection.length; i++) {
       for (const c of restricted.columns) {
-        if (projection[i] === `"${table}"."${c}" AS "${c}"`) projection[i] = `NULL AS "${c}"`;
+        if (projection[i] !== `"${table}"."${c}" AS "${c}"`) continue;
+        const partial = restricted.partial && restricted.partial[c];
+        const masked = partial ? PARTIAL_MASKS[partial](`"${table}"."${c}"`) : 'NULL';
+        projection[i] = (restricted.own && me !== null)
+          ? `CASE WHEN "${table}"."${restricted.own}" = ${me} THEN "${table}"."${c}" ELSE ${masked} END AS "${c}"`
+          : `${masked} AS "${c}"`;
       }
+    }
+  }
+  // V3120_FIX (F1) — по скрытой колонке нельзя ни сортировать, ни отбирать:
+  // порядок строк или «нашлось/не нашлось» выдают значение, которое пришло
+  // пустым.
+  if (hidden.size) {
+    for (const o of Array.isArray(desc.order) ? desc.order : []) {
+      if (o && hidden.has(o.col)) throw new CompileError('Сортировка по этой колонке вашей роли недоступна.', 400);
+    }
+    for (const f of flatFilters(desc.filters)) {
+      if (f && hidden.has(f.col)) throw new CompileError('Отбор по этой колонке вашей роли недоступен.', 400);
     }
   }
   // EMBED_FILTER_V1 — фильтр по колонке присоединённой таблицы может ПОТРЕБОВАТЬ
@@ -331,11 +380,24 @@ function compileSelect(desc, table, user, db, mask = null) {
   // между FROM и WHERE, как того требует синтаксис.
   const { clause, params } = compileFilters(desc.filters, table, { qualify: true, joins, joined, jctx });
 
+  // V3120_FIX (M4) — ДАННЫЕ ПАЦИЕНТА ПО РАЗДЕЛАМ. И сама таблица, и каждая
+  // присоединённая (embed, фильтр по родителю) проверяются одним правилом
+  // (db/patient-data-gate.js): иначе имя пациента, закрытое на patients,
+  // приезжало бы через visits(patients(full_name)).
+  for (const t of new Set([table, ...[...joined.values()].map((j) => j.table)])) {
+    const refusal = patientDataRefusal(t, user, db);
+    if (refusal) throw new CompileError(refusal, 403);
+  }
+
   // CRM_OWNERSHIP_V1 — ограничение по владельцу дописывается к WHERE ПОСЛЕ
   // фильтров экрана и снять его запросом нельзя: оно не из descriptor'а.
   const scope = scopeFor(table, user, db);
-  const where = scope ? (clause ? `(${clause}) AND ${scope.clause}` : scope.clause) : clause;
+  let where = scope ? (clause ? `(${clause}) AND ${scope.clause}` : scope.clause) : clause;
   if (scope) params.push(...scope.params);
+  // V3120_FIX (F2) — `read.where`: строки, которых через /api/db не видно
+  // вовсе (отозванный документ визита). Постоянный текст реестра, без значений.
+  const fixedWhere = readWhere(table);
+  if (fixedWhere) where = where ? `(${where}) AND ${fixedWhere}` : fixedWhere;
 
   let sql = `SELECT ${projection.join(', ')} FROM "${table}"`;
   for (const j of joins) sql += ` ${j}`;
@@ -345,8 +407,12 @@ function compileSelect(desc, table, user, db, mask = null) {
   if (desc.order !== undefined) {
     if (!Array.isArray(desc.order)) throw new CompileError('order must be an array', 400);
     const parts = desc.order.map((o) => {
+      if (!o || typeof o !== 'object') throw new CompileError('Неверный порядок сортировки.', 400);
       if (!readableColumns(table).includes(o.col)) throw new CompileError('unknown column', 400);
-      return `"${o.col}" ${o.asc === false ? 'DESC' : 'ASC'}`;
+      // V3120_FIX — колонка квалифицирована базовой таблицей: у embed'а бывают
+      // колонки с тем же именем (created_at), и голое "created_at" SQLite
+      // называл двусмысленным — 500 на весь запрос.
+      return `"${table}"."${o.col}" ${o.asc === false ? 'DESC' : 'ASC'}`;
     });
     if (parts.length) sql += ` ORDER BY ${parts.join(', ')}`;
   }
@@ -434,6 +500,8 @@ const EMBED_TOKEN = /^(?:([A-Za-z_]\w*):)?([A-Za-z_]\w*)(!inner|!left)?\((.+)\)$
 function compileEmbed(parentTable, parentQual, parentPath, token, out) {
   const [, alias, relation, bang, subcolsRaw] = token.match(EMBED_TOKEN);
   const embed = embedEntry(parentTable, relation);
+  // V3120_FIX — у таблиц без связей (crm_tags) здесь был TypeError → 500;
+  // теперь тот же ответ, что у любой неизвестной связи.
   if (!embed) throw new CompileError('unknown embed', 403);
   const outName = alias || relation;
   const path = parentPath ? `${parentPath}.${outName}` : outName;
@@ -580,7 +648,26 @@ function resolveEmbedFilter(f, table, env) {
   function reject() { throw new CompileError('unknown filter column', 400); }
 }
 
+// V3120_FIX — предел длины строки поиска: 50 000 символов с запасом покрывают
+// любое честное значение, а мегабайтная строка в LIKE по всей таблице — это
+// способ занять единственный поток сервера.
+const MAX_FILTER_TEXT = 50000;
+// Колонки-ссылки: id и *_id. `true` для них — не номер строки, а ошибка экрана,
+// которую SQLite молча читал бы как 1.
+const isIdColumn = (col) => col === 'id' || /_id$/.test(String(col));
+
 function compileTerm(f, table, qualify, env = null) {
+  // V3120_FIX — [null] и прочий мусор вместо условия: раньше TypeError → 500.
+  if (!f || typeof f !== 'object' || typeof f.col !== 'string') {
+    throw new CompileError('Неверное условие отбора.', 400);
+  }
+  if (isIdColumn(f.col.slice(f.col.lastIndexOf('.') + 1))) {
+    const vals = Array.isArray(f.val) ? f.val : [f.val];
+    if (vals.some((v) => typeof v === 'boolean')) throw new CompileError('Неверный номер записи в условии отбора.', 400);
+  }
+  if (typeof f.val === 'string' && f.val.length > MAX_FILTER_TEXT) {
+    throw new CompileError('Слишком длинная строка поиска.', 400);
+  }
   const embedded = resolveEmbedFilter(f, table, env);
   if (embedded === null) return null;               // отброшено (tenancy / нет колонки локально)
   if (embedded === undefined && !filterAllowed(table, f.col)) {
@@ -817,9 +904,7 @@ function compileUpdate(desc, table, user, db) {
   // (see compileInsert) rather than hard-failing the whole write.
   const keys = Object.keys(values).filter((k) => allowed.includes(k));
   if (keys.length === 0) throw new CompileError('no writable columns provided', 400);
-  if (!desc.filters || desc.filters.length === 0) {
-    throw new CompileError('update requires a filter', 400);
-  }
+  if (!Array.isArray(desc.filters) || desc.filters.length === 0) throw new CompileError(NO_TARGET_MSG, 400);
 
   const setParts = keys.map((k) => `"${k}" = ?`);
   const params = keys.map((k) => bindWrite(table, k, values[k]));
@@ -828,11 +913,22 @@ function compileUpdate(desc, table, user, db) {
   }
 
   const { clause, params: filterParams } = compileFilters(desc.filters, table);
+  requireRowTarget(desc, table, 'update');   // после разбора: неверное условие называется своим именем
+  if (!clause) throw new CompileError(NO_TARGET_MSG, 400);
   const scope = scopeFor(table, user, db);
-  const where = scope ? `(${clause}) AND ${scope.clause}` : clause;
-  const sql = `UPDATE "${table}" SET ${setParts.join(', ')} WHERE ${where}`;
+  let where = scope ? `(${clause}) AND ${scope.clause}` : clause;
   params.push(...filterParams);
   if (scope) params.push(...scope.params);
+  // V3120_FIX (F2) — `write.update.own`: правится только СВОЯ строка (колонка
+  // автора = я) и только та, что подходит под постоянное условие реестра
+  // (документ визита — черновик, не подписанный и не отозванный).
+  const own = ownRowsRule(table, 'update');
+  if (own) {
+    const me = user && Number.isInteger(Number(user.id)) ? Number(user.id) : 0;
+    where = `(${where}) AND "${own.column}" = ?` + (own.where ? ` AND (${own.where})` : '');
+    params.push(me);
+  }
+  const sql = `UPDATE "${table}" SET ${setParts.join(', ')} WHERE ${where}`;
 
   return {
     sql,
@@ -841,11 +937,32 @@ function compileUpdate(desc, table, user, db) {
   };
 }
 
+// V3120_FIX (M9) — ПРАВКА И УДАЛЕНИЕ ЧЕРЕЗ /api/db — ТОЛЬКО ПО СТРОКАМ.
+//
+// Любой пишущий одним запросом с условием «active = 1» переписывал или стирал
+// ВСЮ таблицу. Экраны так не делают: они правят строку по id. Исключения —
+// связки, которые экран честно правит пачкой по родителю («все здания этого
+// сотрудника», «метки этой заявки»); они перечислены у таблицы в реестре
+// (`write.<op>.bulkBy`) и найдены по коду экранов. Условие должно быть на
+// верхнем уровне (не внутри OR) и с настоящим значением.
+const NO_TARGET_MSG = 'Изменение без выбора конкретных строк не выполняется: укажите, какие записи менять.';
+function requireRowTarget(desc, table, op) {
+  if (!Array.isArray(desc.filters) || desc.filters.length === 0) throw new CompileError(NO_TARGET_MSG, 400);
+  const keys = ['id', ...bulkWriteKeys(table, op)];
+  const ok = desc.filters.some((f) => {
+    if (!f || typeof f !== 'object' || !keys.includes(f.col)) return false;
+    if (f.op === 'eq') return f.val !== null && f.val !== undefined && f.val !== '' && typeof f.val !== 'boolean';
+    if (f.op === 'in' && f.col === 'id') return Array.isArray(f.val) && f.val.length > 0;
+    return false;
+  });
+  if (!ok) throw new CompileError(NO_TARGET_MSG, 400);
+}
+
 function compileDelete(desc, table, user, db) {
-  if (!desc.filters || desc.filters.length === 0) {
-    throw new CompileError('delete requires a filter', 400);
-  }
+  if (!Array.isArray(desc.filters) || desc.filters.length === 0) throw new CompileError(NO_TARGET_MSG, 400);
   const { clause, params } = compileFilters(desc.filters, table);
+  requireRowTarget(desc, table, 'delete');
+  if (!clause) throw new CompileError(NO_TARGET_MSG, 400);
   const scope = scopeFor(table, user, db);
   const where = scope ? `(${clause}) AND ${scope.clause}` : clause;
   if (scope) params.push(...scope.params);

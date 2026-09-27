@@ -296,8 +296,9 @@ test('attaching the service closes the request, so the no-show sweep cannot clai
   assert.equal(upd.status, 200, JSON.stringify(upd.json));
 
   // The overnight sweep in crm.js: an OPEN stage with a past date -> no_show.
+  // V3120_FIX (M9) — по списку id, как делает crm.js.
   await db(base, cookie, { table: 'crm_requests', op: 'update', values: { status: 'no_show' },
-    filters: [{ col: 'status', op: 'in', val: OPEN_STATUSES },
+    filters: [{ col: 'id', op: 'in', val: [request.id] }, { col: 'status', op: 'in', val: OPEN_STATUSES },
               { col: 'scheduled_date', op: 'lt', val: '2026-08-25' }] });
 
   const after = await db(base, cookie, { table: 'crm_requests', op: 'select', columns: 'id, status',
@@ -339,7 +340,9 @@ test('a request the patient never came for IS swept — the sweep still works', 
   const { request } = await bookRequest(base, cookie, { patientId: pat.id, lines: [{ serviceId: svc.id, date: '2026-08-20' }] });
 
   await db(base, cookie, { table: 'crm_requests', op: 'update', values: { status: 'no_show' },
-    filters: [{ col: 'status', op: 'in', val: OPEN_STATUSES },
+    // V3120_FIX (M9) — сметание идёт по списку id, как в crm.js: правку без
+    // отбора по строкам /api/db больше не принимает.
+    filters: [{ col: 'id', op: 'in', val: [request.id] }, { col: 'status', op: 'in', val: OPEN_STATUSES },
               { col: 'scheduled_date', op: 'lt', val: '2026-08-25' }] });
 
   const after = await db(base, cookie, { table: 'crm_requests', op: 'select', columns: 'id, status',

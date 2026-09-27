@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { setLiveColumns, setForeignKeyColumns, compile, CompileError } from '../db/query-compiler.js';
-import { readableColumns, MAIN_CLINIC_TABLES } from '../db/schema-registry.js';
+import { readableColumns, MAIN_CLINIC_TABLES, rowScope } from '../db/schema-registry.js';
+import { scopeLifted } from '../db/row-scope.js';   // V3120_FIX — кто назначает заявку CRM другому
 // STAFF_SYNC_V1 — «филиал я или сама по себе клиника» решается по базе, а не по
 // сборке: одна и та же установка сегодня одиночная, завтра филиал.
 import { readIdentity } from '../services/branch-sync/identity.js';
@@ -264,6 +265,11 @@ export function dbRoutes(db) {
     // CRM_HEAD_MERGE_TAGS_V1 (ревью M4) — метку на заявку ставят только
     // существующую и видимую: скрытую экран не предлагает, а несуществующую
     // внешний ключ отверг бы голой ошибкой базы.
+    // V3120_FIX — заявку CRM «на другого» назначают только те, кто видит всю
+    // доску (администратор, руководитель колл-центра — crm.all). Оператор
+    // берёт заявку себе или отпускает её в общую стопку (NULL).
+    const assignRefusal = crmAssignRefusal(db, compiled.meta, req.body, req.user);
+    if (assignRefusal) return res.status(403).json({ error: { code: 'forbidden', message: assignRefusal } });
     if (compiled.meta.table === 'crm_request_tags' && compiled.meta.op === 'insert') {
       const tagRefusal = tagInsertRefusal(db, req.body && req.body.values);
       if (tagRefusal) return res.status(400).json({ error: { code: 'bad_request', message: tagRefusal } });
@@ -406,6 +412,16 @@ export function dbRoutes(db) {
       if (code === 'SQLITE_CONSTRAINT_NOTNULL' || code === 'SQLITE_CONSTRAINT_CHECK') {
         return res.status(400).json({ error: { code: 'bad_request', message: e.message } });
       }
+      // V3120_FIX — отказ ТРИГГЕРА (RAISE(ABORT, '…')) — это правило клиники,
+      // написанное её словами («Процент кэшбэка должен быть от 0 до 100.»).
+      // Раньше оно тонуло в «Query failed.».
+      if (code === 'SQLITE_CONSTRAINT_TRIGGER' || code === 'SQLITE_CONSTRAINT') {
+        return res.status(409).json({ error: { code: 'conflict', message: e.message } });
+      }
+      // V3120_FIX — upsert по колонке без уникального ключа: ошибка запроса.
+      if (/ON CONFLICT clause does not match/i.test(String(e && e.message))) {
+        return res.status(400).json({ error: { code: 'bad_request', message: 'Сохранение «добавить или обновить» возможно только по уникальному полю.' } });
+      }
       console.error('[db query failed]', e.message);
       // OPS_EVENTS_V1 — same reasoning as rpc.js's 500 branch: this catch
       // answers directly (never next(e)), so app.js's global handler never
@@ -418,6 +434,23 @@ export function dbRoutes(db) {
   });
 
   return r;
+}
+
+// V3120_FIX — текст отказа или null: назначение заявки CRM на ДРУГОГО
+// сотрудника. Оператор колл-центра инспекцией вставлял заявку с assigned_to
+// коллеги — и она исчезала у него с доски, появляясь у другого без следа.
+// Кто видит всё (scopeLifted — то же правило, что у доски), назначает кого
+// угодно; остальные — себя или никого.
+function crmAssignRefusal(db, meta, body, user) {
+  if (!meta || meta.table !== 'crm_requests') return null;
+  if (meta.op !== 'insert' && meta.op !== 'update' && meta.op !== 'upsert') return null;
+  const rows = Array.isArray(body && body.values) ? body.values : [body && body.values];
+  const me = user && Number(user.id);
+  const foreign = rows.some((r) => r && Object.prototype.hasOwnProperty.call(r, 'assigned_to')
+    && r.assigned_to !== null && r.assigned_to !== '' && Number(r.assigned_to) !== me);
+  if (!foreign) return null;
+  if (scopeLifted(rowScope('crm_requests'), user, db)) return null;
+  return 'Передать заявку другому сотруднику может руководитель колл-центра или администратор. Возьмите её себе или оставьте в общей стопке.';
 }
 
 // STAFF_SYNC_V1 — эта установка является филиалом? Испорченная или отсутствующая

@@ -30,8 +30,23 @@ export function seesDoctorPay(db, user) {
   }
 }
 
+// V3120_FIX (F1) — ДЕНЬГИ КАРТОЧКИ СОТРУДНИКА (users: оклад, процент, ставки,
+// KPI). Видят те, кто видит начисления врачей (seesDoctorPay выше), и те, кому
+// выдано «Сотрудники → Цены и проценты» — ровно правило routes/users.js
+// employeeMoneyAllowed: окно сотрудников на «Изменение» И действие денег.
+export function seesEmployeePay(db, user) {
+  if (seesDoctorPay(db, user)) return true;
+  if (!user || !db) return false;
+  try {
+    return grantAllowsAdminOr(db, user, 'settings.employees', 'edit')
+      && grantAllowsAdminOr(db, user, 'settings.employees.money', 'edit');
+  } catch {
+    return false;
+  }
+}
+
 /** Именованные правила «кто видит всё», на которые ссылается реестр (`lift`). */
-export const LIFTS = Object.freeze({ doctor_pay: seesDoctorPay });
+export const LIFTS = Object.freeze({ doctor_pay: seesDoctorPay, employee_pay: seesEmployeePay });
 
 export function liftAllows(name, db, user) {
   const fn = name ? LIFTS[name] : null;

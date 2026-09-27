@@ -22,6 +22,9 @@ function seed() {
   db.prepare("INSERT INTO visits (id, patient_id, visit_date) VALUES (11,1,'2026-08-06T09:00:00Z')").run();   // визит по рекомендации
   const own = db.prepare('SELECT id FROM referral_sources WHERE doctor_id = 1').get().id;
   const partner = db.prepare("INSERT INTO referral_sources (name) VALUES ('Клиника Х')").run().lastInsertRowid;
+  // V3120_FIX (M3) — направившего ставит только ОТКРЫТАЯ рекомендация врача
+  // этому пациенту (окно визита зовёт обработчик до того, как закроет её).
+  db.prepare("INSERT INTO recommended_services (patient_id, recommended_by, source_visit_id, status) VALUES (1,1,10,'pending')").run();
   return { db, own, partner };
 }
 const refOf = (db, id) => db.prepare('SELECT referral_source_id AS r FROM visits WHERE id = ?').get(id).r;
@@ -57,6 +60,7 @@ test('визит, на котором врач сам рекомендовал, 
 test('без своего источника — ничего; чужая роль — 403; зарегистрирован как RPC', () => {
   const { db } = seed();
   db.prepare("INSERT INTO users (id, username, password_hash, role, full_name) VALUES (2,'lab','x','lab','Лаборант')").run();
+  db.prepare("INSERT INTO recommended_services (patient_id, recommended_by, status) VALUES (1,2,'pending')").run();
   assert.equal(visitSetDoctorReferrer(db, { visit_id: 11, doctor_id: 2 }, reg).reason, 'no_source');
   assert.throws(() => visitSetDoctorReferrer(db, { visit_id: 11, doctor_id: 1 }, { id: 2, role: 'lab' }), (e) => e.status === 403);
   assert.equal(typeof getRpc('visit_set_doctor_referrer'), 'function');
@@ -65,10 +69,10 @@ test('без своего источника — ничего; чужая рол
 test('после пометки «Рефералы» засчитывают строку визита врачу', () => {
   const { db } = seed();
   db.prepare("INSERT INTO services (id, name, price, tax_rate) VALUES (1,'УЗИ',100000,0)").run();
+  visitSetDoctorReferrer(db, { visit_id: 11, doctor_id: 1 }, reg);   // V3120_FIX (M3) — до оплаты: оплаченный визит не трогается
   db.prepare(`INSERT INTO invoices (id, invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_at)
               VALUES (1,'INV-1',11,1,100000,0,100000,100000,'paid','2026-08-06T10:00:00Z')`).run();
   db.prepare("INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total) VALUES (1,1,'УЗИ',1,100000,100000)").run();
-  visitSetDoctorReferrer(db, { visit_id: 11, doctor_id: 1 }, reg);
   const r = runReport(db, { kind: 'referrals', from: '2026-08-01', to: '2026-08-31', referrer: 'internal' }, { id: 9, role: 'admin' });
   assert.equal(r.rows.length, 1);
   assert.equal(r.rows[0][r.columns.indexOf('Источник')], 'Врачев В.В.');

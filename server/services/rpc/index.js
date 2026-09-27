@@ -82,6 +82,7 @@ import {
   patientCard, patientCardSavePatient, patientCardAddDocument, patientCardDeleteDocument,
   patientCardSetServiceDoctor, requireServicesEdit, requireServicesDelete,
 } from './patient-card.js';   // PATIENT_TAB_ACCESS_V1
+import { visitDocumentArchive } from './patient-card.js';   // V3120_FIX (F2) — подпись протокола отзывает прежний, а не стирает
 
 export const RPC = {
   // PATIENT_TAB_ACCESS_V1 — карта пациента по вкладкам: одна дверь на чтение,
@@ -97,6 +98,7 @@ export const RPC = {
   // установленные у клиник сборки, а переименование сделало бы им 501.
   patient_card_doc_void:    (db, args, user) => patientCardDeleteDocument(db, args, user),
   patient_card_set_doctor:  (db, args, user) => patientCardSetServiceDoctor(db, args, user),
+  visit_document_archive:   (db, args, user) => visitDocumentArchive(db, args, user),   // V3120_FIX (F2)
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
   callcenter_report:        (db, args, user) => callcenterReport(db, args, user),
   // CUSTDEV_V1 — обзвон пациентов после визита

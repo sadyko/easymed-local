@@ -12,7 +12,7 @@ test('select expands * to declared columns and binds filters', () => {
   assert.match(sql, /^SELECT /);
   assert.doesNotMatch(sql, /\*/);
   assert.match(sql, /WHERE "patients"\."branch_id" = \?/);
-  assert.match(sql, /ORDER BY "created_at" DESC/);
+  assert.match(sql, /ORDER BY "patients"\."created_at" DESC/);   // V3120_FIX — квалифицировано: у embed бывает тот же created_at
   assert.match(sql, /LIMIT 20/);
   assert.deepEqual(params, [1]);
 });
@@ -47,14 +47,14 @@ test('update drops non-writable keys and still requires a filter', () => {
 });
 
 test('update and delete REQUIRE a filter (no mass mutation)', () => {
-  assert.throws(() => compile({table:'patients',op:'update',values:{phone:'9'}}, asRegistrar), /filter/);
+  assert.throws(() => compile({table:'patients',op:'update',values:{phone:'9'}}, asRegistrar), /без выбора конкретных строк/);   // V3120_FIX — по-русски
   const ok = compile({table:'patients',op:'update',values:{phone:'9'},filters:[{col:'id',op:'eq',val:3}]}, asRegistrar);
   assert.match(ok.sql, /UPDATE "patients" SET/);
   assert.match(ok.sql, /WHERE "id" = \?/);
   // PATIENTS_SECTION_V1 — admin delete is now allowed (Settings → Пациенты row
   // delete); a registrar still can't, and a delete still REQUIRES a filter.
   assert.throws(() => compile({table:'patients',op:'delete',filters:[{col:'id',op:'eq',val:3}]}, asRegistrar), /not allowed/);
-  assert.throws(() => compile({table:'patients',op:'delete'}, {role:'admin'}), /filter/);
+  assert.throws(() => compile({table:'patients',op:'delete'}, {role:'admin'}), /без выбора конкретных строк/);   // V3120_FIX
   assert.match(compile({table:'patients',op:'delete',filters:[{col:'id',op:'eq',val:3}]}, {role:'admin'}).sql, /DELETE FROM "patients"/);
 });
 
