@@ -98,7 +98,7 @@ test('D1: полный возврат, счёт остался неоплаче�
   const inv = c.bill(id);
   const p = c.pay(inv);
   assert.equal(parity(c.db, range(cur)), ONE);
-  refundPayment(c.db, { payment_id: p }, admin);
+  refundPayment(c.db, { payment_id: p, void_when_zero: false }, admin);   // BILLING_AUDIT_FIX_V1 (B2): открыт явно
   assert.equal(c.db.prepare('SELECT status FROM invoices WHERE id = ?').get(inv.id).status, 'unpaid');
   assert.equal(parity(c.db, range(cur)), 0);
 });
@@ -153,7 +153,7 @@ test('D1: частичный возврат — доля в той же проп
   refundPayment(c.db, { payment_id: p, amount: 30000 }, admin);   // вернули 30 %
   assert.equal(parity(c.db, range(cur)), round2(ONE * 0.7));
   // Вернули остаток — ноль; доплатили снова полностью — снова вся доля.
-  refundPayment(c.db, { payment_id: p }, admin);
+  refundPayment(c.db, { payment_id: p, void_when_zero: false }, admin);   // B2: счёт оставлен открытым — его оплатят снова
   assert.equal(parity(c.db, range(cur)), 0);
   c.pay(c.db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id), 100000);
   assert.equal(parity(c.db, range(cur)), ONE);

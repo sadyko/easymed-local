@@ -95,7 +95,7 @@ test('возврат и отмена счёта, оплаченного карт
   recordPayment(db, { invoice_id: a.id, amount: 200000, method: 'gift_card', card_id: card }, CASH);
   const pay = db.prepare('SELECT * FROM payments WHERE amount > 0').get();
   const drawer = cashShiftSummary(db, {}, CASH).expected_drawer;
-  const r = refundPayment(db, { payment_id: pay.id, to_balance: false }, CASH);
+  const r = refundPayment(db, { payment_id: pay.id, to_balance: false, void_when_zero: false }, CASH);   // B2: отмена ниже — отдельным шагом
   assert.equal(r.to_card.card_id, card);
   assert.equal(remaining(db, card), 300000);
   assert.equal(cashShiftSummary(db, {}, CASH).expected_drawer, drawer, 'наличные из ящика не вышли');

@@ -3,6 +3,16 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // BILLING_AUDIT_FIX_V1 (2026-09-27) — возврат услуги строкой, отмена при полном возврате
+  "Услуги счёта": {"en":"Invoice services","ru":"Услуги счёта","uz":"Hisob xizmatlari"},
+  "Вернуть услугу": {"en":"Refund service","ru":"Вернуть услугу","uz":"Xizmatni qaytarish"},
+  "Вернуть услугу · {name}": {"en":"Refund service · {name}","ru":"Вернуть услугу · {name}","uz":"Xizmatni qaytarish · {name}"},
+  "Оплата картой-сертификатом возвращается на ту же карту.": {"en":"A gift-card payment is returned to the same card.","ru":"Оплата картой-сертификатом возвращается на ту же карту.","uz":"Sovg'a kartasi bilan to'lov o'sha kartaga qaytariladi."},
+  "Услуга уйдёт из счёта, и счёт пересчитается. Пациенту вернётся то, что он заплатил сверх новой суммы счёта. Сделанная работа останется в визите без счёта и врачу не оплачивается.": {"en":"The service leaves the invoice and the invoice is recalculated. The patient gets back what they paid above the new invoice total. Work already done stays in the visit without an invoice and is not paid to the doctor.","ru":"Услуга уйдёт из счёта, и счёт пересчитается. Пациенту вернётся то, что он заплатил сверх новой суммы счёта. Сделанная работа останется в визите без счёта и врачу не оплачивается.","uz":"Xizmat hisobdan chiqadi va hisob qayta hisoblanadi. Bemorga hisobning yangi summasidan ortiqcha to'lagani qaytariladi. Bajarilgan ish tashrifda hisobsiz qoladi va shifokorga to'lanmaydi."},
+  "Не удалось вернуть услугу.": {"en":"Could not refund the service.","ru":"Не удалось вернуть услугу.","uz":"Xizmatni qaytarib bo'lmadi."},
+  "Возвращено {sum} сум": {"en":"Refunded {sum} sum","ru":"Возвращено {sum} сум","uz":"{sum} so'm qaytarildi"},
+  "Счёт уменьшен — переплаты нет, деньги не выдаются.": {"en":"Invoice reduced — no overpayment, no money is paid out.","ru":"Счёт уменьшен — переплаты нет, деньги не выдаются.","uz":"Hisob kamaytirildi — ortiqcha to'lov yo'q, pul berilmaydi."},
+  "Оставить услуги в визите": {"en":"Keep the services in the visit","ru":"Оставить услуги в визите","uz":"Xizmatlarni tashrifda qoldirish"},
   // LIVE_AUDIT_FIX_V1 (2026-09-27) — строки исправлений живого аудита
   "Визит меняют регистратура, врач или администратор.": {"en":"A visit is changed by the front desk, a doctor or an administrator.","ru":"Визит меняют регистратура, врач или администратор.","uz":"Tashrifni ro'yxatxona, shifokor yoki administrator o'zgartiradi."},
   "Sample collected": {"en":"Sample collected","ru":"Проба взята","uz":"Namuna olindi"},

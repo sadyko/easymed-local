@@ -1,7 +1,7 @@
 // Registry of server-side RPC handlers. Each is (db, args, user) => result.
 // The 25 legacy Postgres functions are ported per-module in later Phase-2
 // slices (dispensing, discounts, queue numbers, …).
-import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDebt, changeUnpaidService, removeUnpaidService, refundPayment, createInvoiceForAdmission, removeAdmissionLineFromInvoice } from './billing.js';
+import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDebt, changeUnpaidService, removeUnpaidService, refundPayment, refundInvoiceLine, createInvoiceForAdmission, removeAdmissionLineFromInvoice } from './billing.js';
 import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDispensedAdmissionItem } from './inventory.js';
 import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOARD_TREND_V1
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel, createRequisition } from './procurement.js';
@@ -120,6 +120,7 @@ export const RPC = {
   // роли, и его тесты (billing.test.js) не трогаются.
   change_unpaid_service:    (db, args, user) => { requireServicesEdit(db, user); return changeUnpaidService(db, args, user); },   // SPLIT_PAY_V1 — оплата двумя+ способами
   refund_payment:           (db, args, user) => refundPayment(db, args, user),   // CASHIER_REFUND_V1 — возврат оплаты (отрицательный платёж)
+  refund_invoice_line:      (db, args, user) => refundInvoiceLine(db, args, user),   // BILLING_AUDIT_FIX_V1 (B1) — вернуть одну услугу счёта
   receive_stock:            (db, args, user) => receiveStock(db, args, user),
   dispense_item:            (db, args, user) => dispenseItem(db, args, user),
   void_dispense:            (db, args, user) => voidDispense(db, args, user),

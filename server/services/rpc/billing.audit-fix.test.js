@@ -6,8 +6,10 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import {
   createInvoiceForVisit, recordPayment, removeUnpaidService, changeUnpaidService,
+  refundPayment, refundInvoiceLine,
 } from './billing.js';
-import { voidInvoice } from './cashier.js';
+import { voidInvoice, cashierInvoices } from './cashier.js';
+import { walletBalance } from '../domain/wallet.js';
 
 const registrar = { id: 7, role: 'registrar' };
 const cashier = { id: 9, role: 'cashier', full_name: 'Кассир' };
@@ -177,4 +179,164 @@ test('B-minor: бесплатный автооплаченный счёт мож
   const v = voidInvoice(db, { invoice_id: out.invoice.id }, cashier);
   assert.equal(v.invoice.status, 'void');
   assert.equal(inv(db, out.invoice.id).status, 'void');
+});
+
+// ─── B1 / B2 ────────────────────────────────────────────────────────────────
+// Счёт на 900 000: консультация 500 000, УЗИ 310 000, анализ 90 000.
+function bill900(db, vid, { statusC = 'added' } = {}) {
+  const a = addService(db, 'Консультация', 500000);
+  const b = addService(db, 'УЗИ', 310000);
+  const c = addService(db, 'Анализ', 90000);
+  const vsA = addLine(db, vid, { service_id: a, doctor_id: DOC });
+  const vsB = addLine(db, vid, { service_id: b });
+  const vsC = addLine(db, vid, { service_id: c, doctor_id: DOC, status: statusC });
+  const out = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vsA, vsB, vsC] }, registrar);
+  const itemOf = (vs) => db.prepare('SELECT invoice_item_id i FROM visit_services WHERE id = ?').get(vs).i;
+  return { invoice: out.invoice, vsA, vsB, vsC, itemC: itemOf(vsC), itemB: itemOf(vsB) };
+}
+
+test('B1: частично оплаченный счёт — возврат услуги уменьшает счёт, пациент не «должник» на лишние 90 000', () => {
+  const { db, vid } = seed();
+  const f = bill900(db, vid);
+  assert.equal(f.invoice.total_amount, 900000);
+  recordPayment(db, { invoice_id: f.invoice.id, amount: 500000, method: 'cash' }, cashier);
+  const r = refundInvoiceLine(db, { invoice_item_id: f.itemC, reason: 'отказался от анализа' }, cashier);
+  assert.equal(r.invoice.total_amount, 810000);
+  assert.equal(r.invoice.paid_amount, 500000);
+  assert.equal(r.refunded, 0, 'переплаты нет — деньги покрывают оставшиеся услуги');
+  assert.equal(r.invoice.total_amount - r.invoice.paid_amount, 310000, 'долг 310 000, а не 490 000');
+  assert.equal(r.invoice.status, 'partial');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE id = ?').get(f.vsC).n, 0, 'неначатая услуга снята с визита');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM payments WHERE amount < 0').get().n, 0);
+  const log = db.prepare("SELECT * FROM invoice_audit_log WHERE action = 'refund_line'").get();
+  assert.equal(log.amount, 90000);
+  assert.equal(log.refund_amount, 0);
+});
+
+test('B1: оплаченный счёт — возвращается стоимость строки последним платежом его способом, счёт остаётся оплаченным', () => {
+  const { db, vid } = seed();
+  const f = bill900(db, vid);
+  recordPayment(db, { invoice_id: f.invoice.id, amount: 600000, method: 'cash' }, cashier);
+  recordPayment(db, { invoice_id: f.invoice.id, amount: 300000, method: 'card' }, cashier);
+  const cardPay = db.prepare("SELECT id FROM payments WHERE method = 'card'").get().id;
+  const r = refundInvoiceLine(db, { invoice_item_id: f.itemC }, cashier);
+  assert.equal(r.refunded, 90000);
+  assert.equal(r.invoice.total_amount, 810000);
+  assert.equal(r.invoice.paid_amount, 810000);
+  assert.equal(r.invoice.status, 'paid');
+  const back = db.prepare('SELECT * FROM payments WHERE amount < 0').get();
+  assert.equal(back.amount, -90000);
+  assert.equal(back.method, 'card');
+  assert.match(back.notes, new RegExp('^REFUND#' + cardPay + ' LINE#' + f.itemC));
+  assert.equal(db.prepare('SELECT SUM(amount) s FROM payments WHERE invoice_id = ?').get(f.invoice.id).s, 810000, 'сумма платежей = оплачено');
+  // Остаток по платежу учитывает и возврат строки: по карте осталось 210 000.
+  assert.throws(() => refundPayment(db, { payment_id: cardPay, amount: 210001 }, cashier), /Максимум/);
+});
+
+test('B1: сделанная работа остаётся в визите невыставленной, и врачу не платится (pay_refund_releases)', () => {
+  const { db, vid } = seed();
+  const f = bill900(db, vid, { statusC: 'completed' });
+  recordPayment(db, { invoice_id: f.invoice.id, amount: 900000, method: 'cash' }, cashier);
+  const r = refundInvoiceLine(db, { invoice_item_id: f.itemC }, cashier);
+  assert.equal(r.line_kept, true);
+  const vs = db.prepare('SELECT status, invoice_item_id FROM visit_services WHERE id = ?').get(f.vsC);
+  assert.equal(vs.status, 'completed');
+  assert.equal(vs.invoice_item_id, null);
+  const rel = db.prepare("SELECT * FROM pay_refund_releases WHERE kind = 'out' AND line_id = ?").get(f.vsC);
+  assert.ok(rel, 'отметка «возврат забирает долю»');
+  assert.equal(rel.invoice_id, f.invoice.id);
+});
+
+test('B1: частично оплаченный счёт с переплатой после возврата — возвращается ровно переплата', () => {
+  const { db, vid } = seed();
+  const f = bill900(db, vid);
+  recordPayment(db, { invoice_id: f.invoice.id, amount: 850000, method: 'cash' }, cashier);
+  const r = refundInvoiceLine(db, { invoice_item_id: f.itemC }, cashier);
+  assert.equal(r.refunded, 40000);
+  assert.equal(r.invoice.paid_amount, 810000);
+  assert.equal(r.invoice.status, 'paid');
+  assert.ok(r.invoice.paid_at);
+});
+
+test('B1: на баланс пациента; ручная скидка делится пропорционально — оставшиеся услуги не дешевеют', () => {
+  const { db, pid, vid } = seed();
+  const a = addService(db, 'A', 600000);
+  const b = addService(db, 'B', 300000);
+  const vsA = addLine(db, vid, { service_id: a });
+  const vsB = addLine(db, vid, { service_id: b });
+  const out = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vsA, vsB], discount_amount: 90000 }, registrar);
+  assert.equal(out.invoice.total_amount, 810000);
+  recordPayment(db, { invoice_id: out.invoice.id, amount: 810000, method: 'cash' }, cashier);
+  const itemB = db.prepare('SELECT invoice_item_id i FROM visit_services WHERE id = ?').get(vsB).i;
+  const r = refundInvoiceLine(db, { invoice_item_id: itemB, to_balance: true }, cashier);
+  assert.equal(r.invoice.discount_amount, 60000, '10 % остаются на оставшейся услуге');
+  assert.equal(r.invoice.total_amount, 540000);
+  assert.equal(r.refunded, 270000, 'возвращена строка за вычетом её доли скидки');
+  assert.equal(r.to_balance, true);
+  assert.equal(walletBalance(db, pid), 270000);
+  assert.equal(db.prepare('SELECT method FROM payments WHERE amount < 0').get().method, 'wallet');
+});
+
+test('B1: кэшбэк откатывается пропорционально возвращённому', () => {
+  const { db, pid, vid } = seed();
+  db.prepare("INSERT INTO cashback_rules (name, percent, active) VALUES ('Всем', 10, 1)").run();
+  const f = bill900(db, vid);
+  recordPayment(db, { invoice_id: f.invoice.id, amount: 900000, method: 'cash' }, cashier);
+  assert.equal(walletBalance(db, pid), 90000, 'кэшбэк 10 %');
+  refundInvoiceLine(db, { invoice_item_id: f.itemC }, cashier);
+  const cb = db.prepare("SELECT * FROM patient_deposits WHERE kind = 'cashback'").get();
+  assert.equal(cb.refund_amount, 9000, 'откат 10 % от 90 000');
+  assert.equal(walletBalance(db, pid), 81000);
+});
+
+test('B1 + B2: последняя строка оплаченного счёта — деньги назад, счёт отменён', () => {
+  const { db, vid } = seed();
+  const s = addService(db, 'Приём', 100000);
+  const vs = addLine(db, vid, { service_id: s });
+  const out = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs] }, registrar);
+  recordPayment(db, { invoice_id: out.invoice.id, amount: 100000, method: 'cash' }, cashier);
+  const item = db.prepare('SELECT invoice_item_id i FROM visit_services WHERE id = ?').get(vs).i;
+  const r = refundInvoiceLine(db, { invoice_item_id: item }, cashier);
+  assert.equal(r.refunded, 100000);
+  assert.equal(r.voided, true);
+  assert.equal(r.invoice.status, 'void');
+  assert.equal(r.invoice.paid_amount, 0);
+});
+
+test('B1: отказы — нет денег, чужая роль, нет строки', () => {
+  const { db, vid } = seed();
+  const f = bill900(db, vid);
+  assert.throws(() => refundInvoiceLine(db, { invoice_item_id: f.itemC }, cashier), /не принято денег/);
+  assert.throws(() => refundInvoiceLine(db, { invoice_item_id: f.itemC }, registrar), (e) => e.status === 403);
+  assert.throws(() => refundInvoiceLine(db, { invoice_item_id: 99999 }, cashier), /не найдена/);
+});
+
+test('B2: полный возврат наличными — счёт отменён, не «Не оплачен», в чипах «Отменён», услуги сняты', () => {
+  const { db, vid } = seed();
+  const s = addService(db, 'Приём', 100000);
+  const vs = addLine(db, vid, { service_id: s });
+  const out = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs] }, registrar);
+  recordPayment(db, { invoice_id: out.invoice.id, amount: 100000, method: 'cash' }, cashier);
+  const payId = db.prepare('SELECT id FROM payments WHERE invoice_id = ?').get(out.invoice.id).id;
+  const r = refundPayment(db, { payment_id: payId, reason: 'передумал' }, cashier);
+  assert.equal(r.voided, true);
+  assert.equal(r.invoice.status, 'void');
+  const chips = cashierInvoices(db, {}, cashier).counts;
+  assert.equal(chips.unpaid.n, 0, 'не висит неоплаченным');
+  assert.equal(chips.cancelled.n, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE id = ?').get(vs).n, 0);
+});
+
+test('B2: полный возврат с «оставить услуги» — счёт отменён, услуга в визите невыставленной', () => {
+  const { db, vid } = seed();
+  const s = addService(db, 'Приём', 100000);
+  const vs = addLine(db, vid, { service_id: s });
+  const out = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs] }, registrar);
+  recordPayment(db, { invoice_id: out.invoice.id, amount: 100000, method: 'card' }, cashier);
+  const payId = db.prepare('SELECT id FROM payments WHERE invoice_id = ?').get(out.invoice.id).id;
+  const r = refundPayment(db, { payment_id: payId, void_when_zero: true, keep_services: true }, cashier);
+  assert.equal(r.invoice.status, 'void');
+  const line = db.prepare('SELECT status, invoice_item_id FROM visit_services WHERE id = ?').get(vs);
+  assert.equal(line.invoice_item_id, null);
+  assert.equal(line.status, 'added');
 });

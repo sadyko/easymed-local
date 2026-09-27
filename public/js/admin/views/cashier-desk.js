@@ -1711,7 +1711,31 @@ async function openInvoiceRefund(inv, root) {
             .eq('invoice_id', inv.id).order('id', { ascending: false }).limit(100);
         pays = data || [];
     } catch (e) { /* empty list explains below */ }
-    const info = { id: inv.id, invoice_number: inv.invoice_number || ('#' + inv.id), patient_name: inv.patient_name || '' };
+    const info = { id: inv.id, invoice_number: inv.invoice_number || ('#' + inv.id), patient_name: inv.patient_name || '', admission_id: inv.admission_id || null };
+
+    // BILLING_AUDIT_FIX_V1 (B1) — ВЕРНУТЬ ОДНУ УСЛУГУ. Возврат «по платежу»
+    // уменьшал оплату, но не счёт: частичный возврат делал пациента должником за
+    // услугу, от которой он отказался. Строка счёта возвращается целиком
+    // (refund_invoice_line): счёт пересчитывается, пациенту уходит переплата.
+    // Счёт стационара так не возвращается — его строки живут в счёте выписки.
+    let items = [];
+    if (!inv.admission_id) {
+        try {
+            const { data } = await supabase.from('invoice_items')
+                .select('id, invoice_id, description, quantity, unit_price, total, discount_amount')
+                .eq('invoice_id', inv.id).order('id', { ascending: true }).limit(200);
+            items = data || [];
+        } catch (e) { /* без строк остаётся возврат по платежу */ }
+    }
+    const itemRows = items.map(it => h('div', { class: 'row', style: { padding: '8px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px', fontSize: '12.5px', alignItems: 'center' } },
+        h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: it.description || '' }, it.description || '—'),
+        h('span', { class: 'num', style: { fontWeight: 700 } }, fmtPrice(Math.max(0, Number(it.total || 0) - Number(it.discount_amount || 0)))),
+        h('button', {
+            class: 'btn btn-outline btn-sm', type: 'button',
+            style: { color: 'var(--crit-600, #dc2626)', borderColor: 'var(--crit-200, #fecaca)' },
+            onclick: () => openLineRefundConfirm(it, info, root),
+        }, 'Вернуть услугу'),
+    ));
 
     const rows = pays.map(p => h('div', { class: 'row', style: { padding: '8px 0', borderBottom: '1px solid var(--ink-50)', gap: '10px', fontSize: '12.5px', alignItems: 'center' } },
         h('span', { class: 'muted num', style: { flex: '0 0 110px' } }, fmtRuShort(p.paid_at)),
@@ -1730,8 +1754,57 @@ async function openInvoiceRefund(inv, root) {
     modal(trf('Платежи · {label}', { label: info.invoice_number + (info.patient_name ? ' · ' + info.patient_name : '') }), 'Receipt',
         [rows.length
             ? h('div', { style: { maxHeight: '50vh', overflow: 'auto' } }, ...rows)
-            : h('div', { class: 'empty' }, 'По счёту нет платежей.')],
+            : h('div', { class: 'empty' }, 'По счёту нет платежей.'),
+         itemRows.length ? h('div', { style: { padding: '14px 0 4px', fontSize: '12.5px', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--ink-500)' } }, 'Услуги счёта') : null,
+         itemRows.length ? h('div', { style: { maxHeight: '40vh', overflow: 'auto' } }, ...itemRows) : null],
         'Закрыть', async () => true, 560);
+}
+
+// BILLING_AUDIT_FIX_V1 (B1) — подтверждение возврата одной услуги. Сумму
+// возврата считает сервер (переплата сверх новой суммы счёта); окно говорит,
+// куда вернуть и что будет со счётом.
+function openLineRefundConfirm(item, info, root) {
+    const reasonInp = h('input', { type: 'text', placeholder: 'Причина (необязательно)' });
+    let toBalance = false;
+    const voidBox = h('input', { type: 'checkbox', checked: true });
+    const destBox = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
+    const paintDest = () => {
+        clear(destBox);
+        for (const [v, l] of [[false, 'Вернуть деньгами'], [true, 'Зачислить на баланс пациента']]) {
+            const radio = h('input', { type: 'radio', name: 'line-refund-dest', checked: toBalance === v ? true : null });
+            radio.addEventListener('change', () => { toBalance = v; paintDest(); });
+            destBox.appendChild(h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '13.5px', cursor: 'pointer' } }, radio, tr(l)));
+        }
+        destBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+            tr('Оплата картой-сертификатом возвращается на ту же карту.')));
+    };
+    paintDest();
+    modal(trf('Вернуть услугу · {name}', { name: item.description || '—' }), 'Repeat',
+        [
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.5 } },
+                tr('Услуга уйдёт из счёта, и счёт пересчитается. Пациенту вернётся то, что он заплатил сверх новой суммы счёта. Сделанная работа останется в визите без счёта и врачу не оплачивается.')),
+            field('Причина', reasonInp),
+            field('Куда вернуть', destBox),
+            h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12.5px', cursor: 'pointer' } },
+                voidBox, tr('Если по счёту больше не осталось денег — отменить счёт')),
+        ],
+        'Вернуть услугу',
+        async () => {
+            const { data: r, error } = await supabase.rpc('refund_invoice_line', {
+                invoice_item_id: item.id, reason: reasonInp.value || '', to_balance: toBalance,
+                void_when_zero: !!voidBox.checked, keep_services: false,
+            });
+            if (error) { toast(error.message || 'Не удалось вернуть услугу.', 'fail'); return false; }
+            const sum = Number((r && r.refunded) || 0);
+            toast(sum > 0
+                ? trf('Возвращено {sum} сум', { sum: fmtPrice(sum) })
+                : tr('Счёт уменьшен — переплаты нет, деньги не выдаются.'), 'ok');
+            if (r && r.voided) toast(tr('Счёт отменён'), 'ok');
+            if (r && r.void_note) toast(r.void_note, 'info');
+            document.querySelectorAll('.modal').forEach(m => m.remove());
+            await paint(root);
+            return true;
+        });
 }
 
 // CASHIER_REFUND_V1 — confirm dialog; the server caps the amount by what is
@@ -1749,6 +1822,7 @@ function openRefundConfirm(p, info, root) {
     // за услугу, от которой он отказался. Галочка снимается, если счёт
     // выставят заново.
     const voidBox = h('input', { type: 'checkbox', checked: true });
+    const keepBox = h('input', { type: 'checkbox' });   // BILLING_AUDIT_FIX_V1 (B2)
     const destBox = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
     const paintDest = () => {
         clear(destBox);
@@ -1768,9 +1842,15 @@ function openRefundConfirm(p, info, root) {
         destBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, toBalance
             ? tr('Наличные из кассы не выдаются: сумма ляжет на баланс пациента и пойдёт в оплату следующей услуги.')
             : tr('Возврат уменьшит «Оплачено» по счёту; наличный возврат выдаётся из кассы текущей смены.')));
-        if (toBalance) destBox.appendChild(h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12.5px', cursor: 'pointer' } },
+        // BILLING_AUDIT_FIX_V1 (B2) — отмена при нуле для ЛЮБОГО способа
+        // возврата: полный возврат наличными возвращал счёт в «Не оплачен», и
+        // пациент числился должником за услугу, от которой отказался.
+        destBox.appendChild(h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12.5px', cursor: 'pointer' } },
             voidBox, tr('Если по счёту больше не осталось денег — отменить счёт')));
+        if (voidBox.checked && !(info && info.admission_id)) destBox.appendChild(h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12.5px', cursor: 'pointer', marginLeft: '22px' } },
+            keepBox, tr('Оставить услуги в визите')));
     };
+    voidBox.addEventListener('change', () => paintDest());
     paintDest();
     modal(tr('Возврат оплаты') + (info && info.invoice_number ? ' · ' + info.invoice_number : ''), 'Repeat',
         [
@@ -1791,7 +1871,10 @@ function openRefundConfirm(p, info, root) {
             // счёт» кассы по умолчанию.
             const { data: rRes, error } = await supabase.rpc('refund_payment', {
                 payment_id: p.id, amount: v, reason: reasonInp.value || '', to_balance: toBalance,
-                ...(toBalance && voidBox.checked ? { void_when_zero: true, keep_services: false } : {}),
+                // BILLING_AUDIT_FIX_V1 (B2) — галочка решает для любого способа;
+                // снятая — счёт остаётся открытым (его оплатят снова).
+                void_when_zero: !!voidBox.checked,
+                keep_services: !!voidBox.checked && !(info && info.admission_id) && !!keepBox.checked,
             });
             if (error) { toast(error.message || 'Не удалось оформить возврат.', 'fail'); return false; }
             toast(toBalance ? tr('Сумма зачислена на баланс пациента') : tr('Возврат оформлен'), 'ok');

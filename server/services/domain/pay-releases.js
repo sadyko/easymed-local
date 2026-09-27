@@ -21,9 +21,13 @@ export function invoiceHadRefund(db, invoiceId) {
  * @param {'out'|'in'} kind  out — visit_services, in — admission_services
  * @param {number[]} lineIds строки, отпущенные со счёта
  */
-export function markRefundRelease(db, { invoiceId, kind, lineIds }) {
+// BILLING_AUDIT_FIX_V1 (B1) — `always`: строку вернули пациенту строкой
+// (refund_invoice_line). Отметка ставится и без отрицательного платежа —
+// частично оплаченный счёт мог просто уменьшиться на неё, денег возвращать
+// было нечего, а работа всё равно ушла со счёта как возвращённая.
+export function markRefundRelease(db, { invoiceId, kind, lineIds, always = false }) {
   if (!lineIds || !lineIds.length) return 0;
-  if (!invoiceHadRefund(db, invoiceId)) return 0;
+  if (!always && !invoiceHadRefund(db, invoiceId)) return 0;
   const ins = db.prepare('INSERT INTO pay_refund_releases (kind, line_id, invoice_id) VALUES (?, ?, ?)');
   for (const id of lineIds) ins.run(kind, id, invoiceId);
   return lineIds.length;

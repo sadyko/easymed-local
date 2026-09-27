@@ -353,12 +353,25 @@ test('refund_payment: partial then full, invoice rolls back, ledger invariant ho
 
   const rest = refundPayment(db, { payment_id: payId }, cashier);   // amount omitted -> the remainder
   assert.equal(rest.invoice.paid_amount, 0);
-  assert.equal(rest.invoice.status, 'unpaid');
+  // BILLING_AUDIT_FIX_V1 (B2) — полный возврат закрывает счёт отменой, а не
+  // возвращает его в «Не оплачен» (долг за услугу, от которой отказались).
+  assert.equal(rest.invoice.status, 'void');
+  assert.equal(rest.voided, true);
 
   // sum(payments) still equals paid_amount — refunds are negative rows, so every
   // drawer and report SUM built on payments stays honest without special-casing.
   assert.equal(db.prepare('SELECT COALESCE(SUM(amount),0) s FROM payments WHERE invoice_id=?').get(invoice.id).s, 0);
   assert.throws(() => refundPayment(db, { payment_id: payId }, cashier), /всё возвращено/);
+});
+
+test('BILLING_AUDIT_FIX_V1 (B2): void_when_zero:false — явный выбор «оставить счёт открытым»', () => {
+  const { db, vid, vs1 } = seed();
+  const { invoice } = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar);
+  recordPayment(db, { invoice_id: invoice.id, amount: 50000, method: 'cash' }, cashier);
+  const payId = db.prepare('SELECT id FROM payments WHERE invoice_id=?').get(invoice.id).id;
+  const r = refundPayment(db, { payment_id: payId, void_when_zero: false }, cashier);
+  assert.equal(r.invoice.status, 'unpaid');
+  assert.equal(r.voided, false);
 });
 
 test('refund_payment: the refund tag matches on a boundary, not a bare prefix', () => {

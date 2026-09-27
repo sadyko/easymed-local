@@ -55,7 +55,8 @@ test('невролог «не мой пациент»: возврат на ба�
   const totalBefore = cashShiftSummary(db, {}, CASH).totals.total;
   const collectedBefore = dashboardSummary(db, {}, CASH).collected_today;
 
-  const out = refundPayment(db, { payment_id: payOf(db, i1.id).id, to_balance: true, reason: 'Невролог: не его пациент' }, CASH);
+  // BILLING_AUDIT_FIX_V1 (B2) — счёт оставлен открытым ЯВНО (void_when_zero: false).
+  const out = refundPayment(db, { payment_id: payOf(db, i1.id).id, to_balance: true, void_when_zero: false, reason: 'Невролог: не его пациент' }, CASH);
   assert.equal(out.to_balance, true);
   assert.equal(out.invoice.paid_amount, 0);
   assert.equal(out.invoice.status, 'unpaid', 'счёт снова должен — его отменяют или оплачивают');
@@ -83,7 +84,7 @@ test('следующая услуга оплачивается с баланса
   const { db, pid, neuro, cardio } = seed();
   const i1 = billed(db, pid, neuro, 300000);
   recordPayment(db, { invoice_id: i1.id, amount: 300000, method: 'cash' }, CASH);
-  refundPayment(db, { payment_id: payOf(db, i1.id).id, to_balance: true }, CASH);
+  refundPayment(db, { payment_id: payOf(db, i1.id).id, to_balance: true, void_when_zero: false }, CASH);
   voidInvoice(db, { invoice_id: i1.id }, CASH);
 
   const i2 = billed(db, pid, cardio, 200000);
@@ -172,7 +173,7 @@ test('отмена счёта, оплаченного с баланса: сна�
   const a = billed(db, pid, cardio, 200000);
   recordPayment(db, { invoice_id: a.id, amount: 200000, method: 'wallet' }, CASH);
   assert.throws(() => voidInvoice(db, { invoice_id: a.id }, CASH), /сначала оформите возврат/);
-  refundPayment(db, { payment_id: payOf(db, a.id).id }, CASH);
+  refundPayment(db, { payment_id: payOf(db, a.id).id, void_when_zero: false }, CASH);
   voidInvoice(db, { invoice_id: a.id }, CASH);
   assert.equal(inv(db, a.id).status, 'void');
   assert.equal(balance(db, pid), 200000);
