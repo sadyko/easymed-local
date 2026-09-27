@@ -347,3 +347,69 @@ test('«Документы»: без контактов поставщика и 
     assert.equal(own.address, 'Ташкент, ул. Навои 1', 'своё клиника сохраняет');
     assert.equal(own.footerNote, 'Берегите здоровье');
 });
+
+// ---------------------------------------------------------------------------
+// Вторая волна (сервер c80da42): «пациент заплатит заново», скидка после
+// продажи, виртуальная смена, авто-закрытая смена.
+// ---------------------------------------------------------------------------
+const toasts = () => walk(document.body).filter((e) => e.attrs && e.attrs.id === 'toast').map((e) => e._text);
+
+test('возврат оплаты: по умолчанию скидка после продажи (reopen_balance: false), и кассир её видит', async () => {
+    calls.length = 0;
+    rpcAnswers = { refund_payment: { invoice: { id: 1 }, to_balance: false, post_sale_discount: 40000 }, cash_shift_summary: null };
+    desk.__test_openRefundConfirm({ id: 5, invoice_id: 1, amount: 140000, method: 'cash', paid_at: '2026-09-26T09:05:00Z' },
+        { id: 1, invoice_number: 'INV-1', patient_name: 'Рахимов' }, mkEl('div'));
+    const ov = lastOverlay();
+    assert.match(textOf(ov), /Пациент заплатит заново/);
+    walk(ov).find((e) => e.tagName === 'INPUT').value = '40 000';
+    buttonByText(ov, 'Оформить возврат').click();
+    await tick();
+    const r = calls.find((c) => c[0] === 'refund_payment');
+    assert.ok(r);
+    assert.strictEqual(r[1].reopen_balance, false);
+    assert.ok(toasts().some((t) => /скидка после продажи/.test(t) && /40 000/.test(t)), toasts().join(' | '));
+});
+
+test('возврат оплаты: «Пациент заплатит заново» отправляет reopen_balance: true', async () => {
+    calls.length = 0;
+    rpcAnswers = { refund_payment: { invoice: { id: 1 }, to_balance: false }, cash_shift_summary: null };
+    desk.__test_openRefundConfirm({ id: 6, invoice_id: 1, amount: 140000, method: 'card', paid_at: '2026-09-26T09:05:00Z' },
+        { id: 1, invoice_number: 'INV-1' }, mkEl('div'));
+    const ov = lastOverlay();
+    const label = walk(ov).find((e) => e.tagName === 'LABEL' && /Пациент заплатит заново/.test(textOf(e)));
+    const box = walk(label).find((e) => e.tagName === 'INPUT');
+    box.checked = true;
+    walk(ov).find((e) => e.tagName === 'INPUT').value = '40 000';
+    buttonByText(ov, 'Оформить возврат').click();
+    await tick();
+    const r = calls.find((c) => c[0] === 'refund_payment');
+    assert.strictEqual(r[1].reopen_balance, true);
+});
+
+test('виртуальная смена (id: null): без «CASHIER/0null», окно закрытия не отправляет close_cash_shift', async () => {
+    const summary = { shift: { id: null, virtual: true, opening_float: 0, opened_at: new Date().toISOString(), status: 'open' }, totals: { count: 0, total: 0, cash: 0, card: 0 }, cash_in: 0, cash_out: 0, expected_drawer: 0, cashier_name: 'Кассирова Д.' };
+    const banner = desk.__test_shiftBanner(mkEl('div'), summary);
+    assert.doesNotMatch(textOf(banner), /null/);
+    assert.ok(!buttonByText(banner, 'Закрыть смену'), 'кнопки закрытия нет');
+    calls.length = 0;
+    const before = document.body.children.length;
+    desk.__test_closeShiftModal(mkEl('div'), summary.shift, 0);
+    assert.ok(!walk(document.body).slice(before).some((e) => e.tagName === 'BUTTON' && textOf(e).trim() === 'Закрыть смену'), 'окно закрытия не открылось');
+    assert.ok(!calls.some((c) => c[0] === 'close_cash_shift'));
+});
+
+test('авто-закрытая смена (auto_closed = 1, over_short = NULL) — «не пересчитана», без красного числа', async () => {
+    tables = {
+        cash_shifts: [
+            { id: 3, cashier_id: 1, users: { full_name: 'Кассирова Д.' }, status: 'closed', auto_closed: 1, opened_at: '2026-09-25T04:00:00Z', closed_at: '2026-09-25T19:00:00Z', opening_float: 0, expected_amount: 500000, counted_amount: 500000, over_short: null },
+        ],
+        payments: [],
+    };
+    const c = mkEl('div');
+    await desk.renderCashierHead(c);
+    await tick();
+    const row = walk(c).filter((e) => e.tagName === 'TR')[1];
+    assert.match(textOf(row), /не пересчитана/);
+    const red = walk(row).filter((e) => e.style && e.style.color === 'var(--crit-600)');
+    assert.equal(red.length, 0, 'NULL не рисуется красным');
+});

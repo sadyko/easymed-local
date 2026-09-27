@@ -214,7 +214,10 @@ function fmtRuNumeric(iso) {
     return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${hhmm(d)}`;
 }
 const ymdLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-const shiftNo = (shift) => 'CASHIER/' + String(shift.id).padStart(5, '0');
+// V3120_FIX — сводка до первой записи дня отдаёт ВИРТУАЛЬНУЮ смену (id: null,
+// смена ещё не заведена). Номера у неё нет: «CASHIER/0null» на экране и в
+// X-отчёте было бы мусором.
+const shiftNo = (shift) => (shift && shift.id != null) ? 'CASHIER/' + String(shift.id).padStart(5, '0') : 'CASHIER/—';
 
 // =============================================================================
 // CASHIER WORKSPACE (Касса) — nav id 'cashier-shifts'
@@ -630,6 +633,10 @@ function printReportDoc(r, withPayments) {
 
 // ---- Close shift ---------------------------------------------------------------
 function closeShiftModal(root, shift, expectedDrawer) {
+    // V3120_FIX — виртуальную смену (id: null) закрывать нечего: её ещё нет в
+    // базе. Кнопки «Закрыть смену» в шапке нет (SHIFT_AUTO_V2), но окно не
+    // должно отправить close_cash_shift с shift_id: null, откуда бы его ни открыли.
+    if (!shift || shift.id == null || shift.virtual) { toast('Смена ещё не открыта — закрывать нечего.', 'info'); return; }
     const countedInp = moneyfy(h('input', { type: 'number', min: '0', step: '1', value: '' }));
     const notesInp = h('input', { type: 'text', placeholder: 'Комментарий (необязательно)' });
     const diffEl = h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } });
@@ -1886,6 +1893,15 @@ function openRefundConfirm(p, info, root) {
     };
     voidBox.addEventListener('change', () => paintDest());
     paintDest();
+    // V3120_FIX — частичный возврат по оплаченному счёту по умолчанию —
+    // скидка после продажи: счёт уменьшается до оплаченного и остаётся
+    // «Оплачен». Если пациент вернёт деньги и заплатит заново (другим
+    // способом), кассир явно выбирает это: счёт сохраняет сумму и ждёт оплаты.
+    const reopenBox = h('input', { type: 'checkbox' });
+    const reopenLabel = h('label', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '12.5px', cursor: 'pointer' } },
+        reopenBox, h('span', null,
+            h('span', { style: { fontWeight: 600 } }, tr('Пациент заплатит заново')),
+            h('div', { class: 'muted' }, tr('Счёт сохранит сумму и будет ждать оплаты. Без галочки частичный возврат — скидка после продажи: счёт уменьшится и останется оплаченным.'))));
     modal(tr('Возврат оплаты') + (info && info.invoice_number ? ' · ' + info.invoice_number : ''), 'Repeat',
         [
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px', lineHeight: 1.5 } },
@@ -1895,6 +1911,7 @@ function openRefundConfirm(p, info, root) {
             field('Сумма возврата', amtInp, { required: true }),
             field('Причина', reasonInp),
             field('Куда вернуть', destBox),
+            reopenLabel,   // V3120_FIX
         ],
         'Оформить возврат',
         async () => {
@@ -1911,9 +1928,16 @@ function openRefundConfirm(p, info, root) {
                 void_when_zero: !!voidBox.checked,
                 keep_services: !!voidBox.checked && !(info && info.admission_id) && !!keepBox.checked,
                 idempotency_key: idemKey,   // V3120_FIX
+                reopen_balance: !!reopenBox.checked,   // V3120_FIX — «пациент заплатит заново»
             });
             if (error) { toast(error.message || 'Не удалось оформить возврат.', 'fail'); return false; }
             toast((rRes ? rRes.to_balance : toBalance) ? tr('Сумма зачислена на баланс пациента') : tr('Возврат оформлен'), 'ok');
+            // V3120_FIX — частичный возврат по оплаченному счёту сервер теперь
+            // проводит как скидку после продажи: счёт остаётся оплаченным, а не
+            // превращается в долг на возвращённую сумму. Кассир должен это видеть.
+            if (rRes && Number(rRes.post_sale_discount) > 0) {
+                toast(trf('Счёт уменьшен на {sum} сум — скидка после продажи, счёт остаётся оплаченным.', { sum: fmtPrice(rRes.post_sale_discount) }), 'info');
+            }
             if (rRes && rRes.voided) toast(tr('Счёт отменён'), 'ok');
             if (rRes && rRes.void_note) toast(rRes.void_note, 'info');
             document.querySelectorAll('.modal').forEach(m => m.remove());   // close the stacked dialogs
@@ -2000,8 +2024,9 @@ export async function renderCashierHead(container) {
         const os = s.over_short;
         // V3120_FIX — смену, закрытую автоматически в полночь, никто не
         // пересчитывал: counted_amount пуст. «—» и «0» в колонке сверки читались
-        // бы как «сошлось»; пишем словами, что пересчёта не было.
-        const uncounted = s.status === 'closed' && s.counted_amount == null;
+        // бы как «сошлось», а over_short = NULL рисовался красным «0»; пишем
+        // словами, что пересчёта не было (auto_closed = 1 ставит сервер).
+        const uncounted = s.status === 'closed' && (Number(s.auto_closed) === 1 || s.counted_amount == null || s.over_short == null);
         const osCell = uncounted ? h('span', { class: 'muted' }, '—')
             : s.status === 'closed'
             ? (os === 0 ? h('span', { class: 'muted' }, '0') : h('span', { style: { color: os > 0 ? 'var(--primary-700)' : 'var(--crit-600)', fontWeight: 600 } }, (os > 0 ? '+' : '') + fmtPrice(os)))
@@ -2012,8 +2037,9 @@ export async function renderCashierHead(container) {
             h('td', null, s.closed_at ? fmtDateTime(s.closed_at) : '—'),
             h('td', { style: { textAlign: 'right' } }, fmtPrice(s.opening_float)),
             h('td', { style: { textAlign: 'right' } }, s.expected_amount != null ? fmtPrice(s.expected_amount) : '—'),
-            h('td', { style: { textAlign: 'right' } }, s.counted_amount != null ? fmtPrice(s.counted_amount)
-                : (uncounted ? h('span', { style: { color: 'var(--warn-700, #b45309)', fontWeight: 600 } }, 'не пересчитана') : '—')),
+            h('td', { style: { textAlign: 'right' } }, uncounted
+                ? h('span', { style: { color: 'var(--warn-700, #b45309)', fontWeight: 600 } }, 'не пересчитана')
+                : (s.counted_amount != null ? fmtPrice(s.counted_amount) : '—')),
             h('td', { style: { textAlign: 'right' } }, osCell),
             h('td', null, Tag(s.status === 'open' ? 'Открыта' : 'Закрыта', { kind: s.status === 'open' ? 'ok' : '', dot: true })),
         ));
@@ -2186,3 +2212,5 @@ export const __test_payModal = payModal;
 export const __test_openRefundConfirm = openRefundConfirm;
 export const __test_historyModal = historyModal;
 export const __test_invoiceRow = invoiceRow;
+export const __test_shiftBanner = shiftBanner;
+export const __test_closeShiftModal = closeShiftModal;
