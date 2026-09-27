@@ -7,6 +7,7 @@ import path from 'node:path';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { applyUpdate } from './updater.js';
+import { confirmBoot, readPending } from './boot-confirm.js';   // V3120_FIX
 import { readJsonFile } from './checkin.js';
 import { tmpDir as makeTmpDir, closeOnExit, closeRegistered } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
@@ -115,11 +116,21 @@ test('a real apply: the junction moves, the database is snapshotted, and the out
   const restored = closeOnExit(openDb(path.join(inst.dataDir, 'backups', 'pre-0.1.4.db')));
   assert.equal(restored.prepare("SELECT COUNT(*) n FROM users WHERE username='marker'").get().n, 1);
 
-  // 3. The outcome file, through the app's OWN reader — not a bare
-  //    JSON.parse. This is the contract checkin.js and the updates screen both
-  //    depend on, and the one that silently broke for the whole life of the
-  //    PowerShell apply.
+  // 3. V3120_FIX — the OLD process no longer claims success: it leaves a
+  //    pending record, and the outcome is written only once the NEW version
+  //    has booted and answered /api/health (boot-confirm.js).
   const resultPath = path.join(inst.dataDir, 'update-result.json');
+  assert.equal(fs.existsSync(resultPath), false, 'no ok:true before the new version has proven it starts');
+  const pending = readPending(inst.dataDir);
+  assert.equal(pending.version, '0.1.4');
+  assert.equal(pending.from, '0.1.3');
+  assert.match(pending.backup, /pre-0\.1\.4\.db$/);
+
+  // The new version's boot: /api/health answers 200 → ok:true, pending gone.
+  // Read through the app's OWN reader — not a bare JSON.parse. This is the
+  // contract checkin.js and the updates screen both depend on.
+  assert.equal(await confirmBoot(inst.dataDir, { runningVersion: '0.1.4', healthUrl: 'http://x/api/health', fetchImpl: async () => ({ status: 200 }) }), true);
+  assert.equal(readPending(inst.dataDir), null);
   const outcome = readJsonFile(resultPath);
   assert.ok(outcome, 'the clinic must be able to read the outcome its own updater just wrote');
   assert.equal(outcome.version, '0.1.4');
@@ -138,6 +149,7 @@ test('a real apply: the junction moves, the database is snapshotted, and the out
 test('the outcome file is written WITHOUT a BOM — the bug that made auto-halt impossible', async () => {
   const inst = install();
   await applyUpdate(inst.db, inst.dataDir, { root: inst.root, version: inst.newVersion, exitImpl: () => {} });
+  await confirmBoot(inst.dataDir, { runningVersion: inst.newVersion, healthUrl: 'http://x/api/health', fetchImpl: async () => ({ status: 200 }) });
 
   const raw = fs.readFileSync(path.join(inst.dataDir, 'update-result.json'));
   assert.notDeepEqual([raw[0], raw[1], raw[2]], [0xEF, 0xBB, 0xBF], 'PowerShell wrote EF BB BF here; Node must not');

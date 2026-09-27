@@ -17,13 +17,14 @@ import {
   ALLOWLIST,
   BUNDLE_EXCLUDES,
 } from './build-bundle.mjs';
+import { tmpDir } from '../server/test-helpers/tmpdir.js';   // V3120_FIX — папки убираются даже там, где тест их забыл
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
 const SCRIPT = path.join(HERE, 'build-bundle.mjs');
 
 function mkTmp(prefix) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  return tmpDir(prefix);
 }
 function rm(p) {
   fs.rmSync(p, { recursive: true, force: true });

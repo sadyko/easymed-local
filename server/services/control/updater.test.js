@@ -18,6 +18,7 @@ import {
   staleAfterSwitch,
   scheduleUpdater,
 } from './updater.js';
+import { confirmBoot } from './boot-confirm.js';   // V3120_FIX
 import { readProgress, writeProgress } from './update-progress.js';
 import { runCheckin, readJsonFile } from './checkin.js';
 import { setAppVersion } from './config.js';
@@ -448,7 +449,13 @@ test('versioned layout: stages under <root>\\versions\\<version>, repoints `curr
     'the previous version is still on disk — that IS the rollback (recover.cmd points back at it)');
   assert.deepEqual(exit.calls, [75], 'the launcher is asked to relaunch on the new version');
 
-  // Written by Node now, so the app can finally read its own outcome.
+  // V3120_FIX — the old process records «switched, not yet proven»; ok:true
+  // is written only after the NEW version answers /api/health.
+  assert.equal(fs.existsSync(path.join(dataDir, 'update-result.json')), false, 'no ok:true from the old process');
+  const pending = readJsonFile(path.join(dataDir, 'update-pending.json'));
+  assert.equal(pending.version, '2.4.0');
+  assert.equal(pending.from, '2.3.0');
+  assert.equal(await confirmBoot(dataDir, { runningVersion: '2.4.0', healthUrl: 'http://x/api/health', fetchImpl: async () => ({ status: 200 }) }), true);
   const outcome = readJsonFile(path.join(dataDir, 'update-result.json'));
   assert.equal(outcome.version, '2.4.0');
   assert.equal(outcome.from, '2.3.0');
@@ -613,6 +620,11 @@ test('acceptance: offered, approved, installed, and reported — end to end', as
       path.resolve(path.join(root, 'versions', '2.4.0')),
       '`current` really points at the new version',
     );
+
+    // 3b. V3120_FIX — the new version boots and answers /api/health; only now
+    //     does the outcome say ok:true (before, the old process claimed it).
+    assert.equal(fs.existsSync(path.join(dataDir, 'update-result.json')), false);
+    assert.equal(await confirmBoot(dataDir, { runningVersion: '2.4.0', healthUrl: 'http://x/api/health', fetchImpl: async () => ({ status: 200 }) }), true);
 
     // 4. The NEXT check-in carries update_result — asserted at the fake
     //    vendor's own side (receivedUpdateResults), not just on disk. This is

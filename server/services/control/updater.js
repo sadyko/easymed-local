@@ -17,6 +17,9 @@ import { nextRunAt, isInWindow, consentAppliesTo } from './update-schedule.js';
 // UPDATE_PROGRESS_V1 — the "what is it doing right now" record. Its writes are
 // all best-effort by construction; see that file's header.
 import { makeProgressReporter, reconcileProgressAtBoot } from './update-progress.js';
+// V3120_FIX — «ok:true» only after the NEW version answers /api/health; see
+// boot-confirm.js. writeOutcome moved there unchanged (both files write it).
+import { writeOutcome, writePending, armBootConfirmation, syncRecoverCmd, PENDING_NAME } from './boot-confirm.js';
 
 // UPDATE_DELIVERY_V1 (docs/plans/2026-08-20-update-delivery.md, Task 4) — the
 // clinic's own machine: check the stored offer, confirm it is still
@@ -501,34 +504,9 @@ async function performTick(db, dataDir, {
 // exercised on a Windows desktop, so nothing caught that it never ran.
 const CURRENT_LINK_TYPE = process.platform === 'win32' ? 'junction' : 'dir';
 
-/**
- * The outcome file — the clinic's only record of what its own update did, and
- * the only thing the vendor's two-failure auto-halt can ever count.
- *
- * Written as plain JSON from Node, which is the whole fix for defect 4 above.
- * checkin.js still STRIPS a BOM on read, deliberately: files written by the
- * retired PowerShell script already sit on clinic disks and must become
- * readable the moment the clinic updates. Nothing writes one any more.
- *
- * Shape unchanged from Write-UpdateOutcome — {version, from, ok, db, at,
- * detail} — because checkin.js, rpc/updates.js and the updates screen all
- * already read exactly this.
- */
-function writeOutcome(dataDir, outcome) {
-  // Printed FIRST, one grep-able line: apply-update.ps1's rule, kept. If the
-  // file write below fails (a disk that has just absorbed a multi-MB unpack is
-  // a plausible place to run out), the outcome must still exist SOMEWHERE.
-  console.log('UPDATE_RESULT ' + JSON.stringify(outcome));
-  try {
-    // writeAtomic, not writeFileSync: a power cut mid-write must leave either
-    // the old file or the new one, never a half-written outcome that reads as
-    // "no result" — the same tmp-then-rename checkin.js uses for licence.dat.
-    // Pretty-printed because a clinic manager may well open it in Notepad.
-    writeAtomic(path.join(dataDir, 'update-result.json'), JSON.stringify(outcome, null, 2) + '\n');
-  } catch (e) {
-    console.warn('[updater] could not write update-result.json (the UPDATE_RESULT line above is the record):', e && e.message);
-  }
-}
+// writeOutcome() — the outcome file writer — lives in boot-confirm.js now
+// (V3120_FIX), because the NEW version's boot confirmation writes the
+// success line and the updater writes the failures; one writer, two callers.
 
 /**
  * Apply a version that is ALREADY staged at <root>/versions/<version>:
@@ -596,6 +574,9 @@ async function performApply(db, dataDir, {
   const from = fromDir ? path.basename(fromDir) : null;
 
   const fail = (dbState, detail) => {
+    // V3120_FIX — a pending record written below must not outlive a switch
+    // that did not happen: the launcher would read it as «new version crashed».
+    try { fs.unlinkSync(path.join(dataDir, PENDING_NAME)); } catch { /* none written */ }
     writeOutcome(dataDir, { version, from, ok: false, db: dbState, at: now().toISOString(), detail });
     console.warn('[updater] ' + version + ' was NOT applied: ' + detail);
     return { ok: false, from, detail, restart: false };
@@ -641,6 +622,18 @@ async function performApply(db, dataDir, {
     return fail('untouched', `Could not take the pre-update database snapshot (${e && e.message}) — the update was cancelled and the clinic is still running ${from || 'the version it was already on'}.`);
   }
 
+  // ── 1b. «Switched, not yet proven» (V3120_FIX) ───────────────────────────
+  // Written BEFORE the switch: if it cannot be written, nothing could ever
+  // confirm (or roll back) this install, so the update is cancelled like a
+  // failed snapshot. The success outcome is written by the NEW version, after
+  // it booted and answered /api/health — boot-confirm.js.
+  const detailOk = `Repointed 'current' from ${from || '(nothing)'} to ${version}. Database snapshot taken first: ${backupPath}.`;
+  try {
+    writePending(dataDir, { version, from, backup: backupPath, at: now().toISOString(), detail: detailOk });
+  } catch (e) {
+    return fail('untouched', `Could not record the pending update (${e && e.message}) — the update was cancelled; the snapshot at ${backupPath} is intact.`);
+  }
+
   // ── 2. The switch ────────────────────────────────────────────────────────
   // fs.rmSync on a junction removes the LINK, never the directory it points
   // at (verified directly, and asserted in apply-update.test.js — the previous
@@ -677,18 +670,12 @@ async function performApply(db, dataDir, {
     return fail('untouched', `'current' was repointed but now resolves to '${landed || 'nothing'}' instead of '${targetDir}'. The database was not modified.`);
   }
 
-  // 'current' is apply-update.ps1's own success vocabulary for "no rollback
-  // question applies" — kept because updates-logic.js reads this field and
-  // only ever singles out 'restored'.
-  writeOutcome(dataDir, {
-    version,
-    from,
-    ok: true,
-    db: 'current',
-    at: now().toISOString(),
-    detail: `Repointed 'current' from ${from || '(nothing)'} to ${version}. Database snapshot taken first: ${backupPath}. Restarting to run the new version.`,
-  });
-  console.log(`[updater] version ${version} installed — restarting to run it`);
+  // V3120_FIX — NO ok:true here any more. This is still the OLD process; it
+  // has proven nothing about whether the new version starts. The pending
+  // record written above is turned into ok:true by the new version itself
+  // (boot-confirm.js), or into ok:false by the rollback (EasyMed.exe /
+  // recover.cmd / the previous version's own boot).
+  console.log(`[updater] version ${version} switched — restarting to run it (confirmed only once it answers /api/health)`);
   return { ok: true, from, detail: 'applied', restart: true };
 }
 async function runPipeline(db, dataDir, offer, {
@@ -960,6 +947,20 @@ export function scheduleUpdater(db, dataDir, opts = {}) {
   } catch (e) {
     // Bookkeeping may never be the reason a clinic fails to start.
     console.warn('[updater] could not reconcile the update progress record (continuing):', e && e.message);
+  }
+
+  // V3120_FIX — settle the previous update: confirm THIS version (the
+  // /api/health check runs a few seconds from now, after listen()), or record
+  // that the version we switched to was rolled back. Then refresh the root
+  // recover.cmd from this version's copy (updates never touch the root).
+  try {
+    armBootConfirmation(db, dataDir, {
+      runningVersion: rest.runningVersion || readAppVersion(),
+      ...(rest.bootConfirm || {}),
+    });
+    syncRecoverCmd(rest.appRoot || DEFAULT_APP_ROOT);
+  } catch (e) {
+    console.warn('[updater] boot confirmation could not be armed (continuing):', e && e.message);
   }
 
   // exitImpl is destructured out AND put back: this scheduler uses it for the
