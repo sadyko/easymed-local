@@ -48,3 +48,15 @@ test('«Тип» и «Категория» услуг читаются из св
     assert.ok(!/gw\(/.test(prime), 'справочники услуг снова грузятся через /api/v1/lookups/catalog');
     assert.ok(!/fk cache gw/.test(src), 'осталась ветка чтения каталога через шлюз');
 });
+
+test('дополнительные колонки справочников — только те, что есть в офлайн-схеме', async () => {
+    const { FK_EXTRA_COLUMNS } = await import('../sections.js');
+    const reg = fs.readFileSync(path.join(HERE, '..', '..', '..', '..', 'server', 'db', 'schema-registry.js'), 'utf8');
+    for (const [table, cols] of Object.entries(FK_EXTRA_COLUMNS)) {
+        const at = reg.indexOf('\n  ' + table + ':');
+        assert.ok(at > 0, table + ' нет в реестре схемы');
+        const readCols = reg.slice(at, reg.indexOf('\n', at + 1) + 400).match(/read:\s*\{[^}]*columns:\s*\[([^\]]*)\]/);
+        assert.ok(readCols, table + ': не нашёл колонки чтения');
+        for (const c of cols) assert.ok(readCols[1].includes("'" + c + "'"), table + '.' + c + ' нет в офлайн-схеме — запрос справочника отвергнут целиком');
+    }
+});
