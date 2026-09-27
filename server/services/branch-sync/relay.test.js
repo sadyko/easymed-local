@@ -680,6 +680,8 @@ test('оценка страниц засева знает ровно те таб
   const { db } = clinic('seed-pages-list');
   const { pid } = seedRecords(db);
   seedMoney(db, pid);
+  // PATIENT_MERGE_BRANCHES_V1 (мигр. 168) — событие объединения карт тоже едет засевом.
+  db.prepare("INSERT INTO patient_merges (keep_uid, drop_uid) VALUES ('k', 'd')").run();
   // По одной строке в каждой таблице SHIPPED — значит страниц по одной строке
   // ровно столько, сколько таблиц. Появится новая таблица, о которой оценка не
   // знает, — равенство сломается здесь, а не на экране у владельца.

@@ -92,6 +92,12 @@ export const SHIPPED = {
   // поля (records.js), и у строки остаётся 0.
   invoice_items: ['description', 'quantity', 'unit_price', 'total', 'discount_amount', 'created_at'],
   payments: ['amount', 'method', 'notes', 'paid_at', 'created_at'],
+  // PATIENT_MERGE_BRANCHES_V1 (мигр. 168) — СОБЫТИЕ «карта drop слита в keep».
+  // Карты названы uid — единственным именем, одинаковым во всех зданиях, —
+  // поэтому это ОБЫЧНЫЕ колонки, а не ссылки REFS: ждать тут нечего, drop к
+  // этому времени у отправителя уже удалена. Что с событием делает приёмник —
+  // records.js (settleMerges).
+  patient_merges: ['keep_uid', 'drop_uid', 'merged_at'],
 };
 
 // Ссылки: колонка → таблица, на которую она смотрит. Уезжает uid родителя, а не
@@ -647,6 +653,9 @@ function unionCols(changedAt) {
 const TABLE_RANK = {
   patients: 0, visits: 1, visit_services: 2, lab_results: 3,
   invoices: 4, invoice_items: 5, payments: 6,
+  // PATIENT_MERGE_BRANCHES_V1 — события объединения последними: засеваемый
+  // сосед сперва получает карты и их строки, потом узнаёт, какие слиты.
+  patient_merges: 7,
 };
 
 // Курсор засева одалживает поле seed_tbl как имя фазы, пока идут надгробия —
@@ -675,6 +684,8 @@ const SEED_PRESENCE_SQL = `
     SELECT 'invoice_items' AS tbl, 5 AS rank, uid, created_at AS at, id FROM invoice_items WHERE uid IS NOT NULL
     UNION ALL
     SELECT 'payments' AS tbl, 6 AS rank, uid, created_at AS at, id FROM payments WHERE uid IS NOT NULL
+    UNION ALL
+    SELECT 'patient_merges' AS tbl, 7 AS rank, uid, created_at AS at, id FROM patient_merges WHERE uid IS NOT NULL
   )
   WHERE at <= @started
     AND (at > @at OR (at = @at AND (rank > @rank OR (rank = @rank AND id > @id))))

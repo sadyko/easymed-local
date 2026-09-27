@@ -28,6 +28,9 @@ import { SHIPPED, REFS, CODE_REFS, SOFT_REFS, readClock, writeClock, authoredAt 
 // (invoices/payments) и работа над услугой (visit_services.status) — все три
 // таблицы перечислены в SHIPPED.
 import { crmVisitStatus, crmInvoiceEvidence, crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../crm/visit-status.js';
+// PATIENT_MERGE_BRANCHES_V1 — объединение карт, сделанное в другом здании,
+// исполняется здесь тем же кодом, что и объединение на месте.
+import { applyMergeHere, applyContactPatch } from '../rpc/patient-merge.js';
 
 // sync_seen (миграция 084): метка последнего ПРИНЯТОГО изменения каждой
 // колонки. Местная правка метки не имеет — до отправки её защищает журнал.
@@ -181,7 +184,7 @@ export function applyBatch(db, records, {
   }
   const stats = {
     applied: 0, released: 0, skipped: 0, deferred: 0, deleted: 0, refused: 0,
-    skewed: 0, skew_ms: 0, reminted: 0,
+    skewed: 0, skew_ms: 0, reminted: 0, merged: 0,
   };
   const ctx = newCtx(db);
   // Буква нужна не только часам: ею чеканится метка МЕСТНОЙ правки, когда
@@ -206,6 +209,10 @@ export function applyBatch(db, records, {
   // доказательство прихода. Счета считаются по ctx.money — тому же списку,
   // что и деньги.
   ctx.crmWork = new Set();
+  // PATIENT_MERGE_BRANCHES_V1 — контакты своих карт, дополняемые после
+  // объединения, пришедшего от соседа: пишутся ПОСЛЕ чистки журнала приёма,
+  // чтобы уехать обычной правкой (settleMerges, fillMergedContacts).
+  ctx.contactFills = [];
   // Допуск вынесен в параметр ради теста: подождать пять минут он не может.
   ctx.skewMax = Number.isFinite(Number(skewMaxMs)) && Number(skewMaxMs) >= 0 ? Number(skewMaxMs) : SKEW_MAX_MS;
 
@@ -250,6 +257,10 @@ export function applyBatch(db, records, {
     }
 
     releasePending(db, stats, ctx);
+    // PATIENT_MERGE_BRANCHES_V1 — СТРОГО ПОСЛЕ освобождения: оставленная карта
+    // могла ждать в очереди вместе со строками, а объединять есть смысл, только
+    // когда здесь уже есть обе карты.
+    settleMerges(db, stats, ctx);
     // СТРОГО ПОСЛЕ освобождения: платёж, приехавший раньше своего счёта, лежит
     // в ожидании и применяется именно там — пересчитай мы раньше, счёт остался
     // бы с нулём оплаты до следующей порции.
@@ -293,6 +304,9 @@ export function applyBatch(db, records, {
     // Приём не порождает исходящих изменений — см. заголовок.
     db.prepare('DELETE FROM sync_journal WHERE seq > ?').run(journalFrom);
     restoreAuthorship(db, ctx);
+    // ПОСЛЕ чистки журнала и возврата авторства — это НАША правка своей карты,
+    // и она обязана уехать соседям (см. fillMergedContacts).
+    fillMergedContacts(db, ctx);
 
     stats.skewed = ctx.skewed;
     stats.skew_ms = ctx.skewMs;
@@ -545,6 +559,19 @@ function applyOne(db, rec, stats, ctx) {
   rec = { ...rec, stamp: clampSkew(ctx, rec.stamp) };
   if (rec.stamp > ctx.maxReceived) ctx.maxReceived = rec.stamp;
 
+  // PATIENT_MERGE_BRANCHES_V1 — КАРТА, СЛИТАЯ В ДРУГУЮ, НЕ ВОСКРЕСАЕТ И НЕ
+  // УДАЛЯЕТСЯ ПО НАДГРОБИЮ. Объединение окончательно, поэтому:
+  //   • put слитой карты (правка дубля, сделанная где-то до того, как там
+  //     узнали о слиянии, или засев старого соседа) её не заводит заново —
+  //     иначе в сети снова появился бы дубль, к которому уже никто ничего не
+  //     пришлёт;
+  //   • del слитой карты здесь ничего не удаляет: у нас могут лежать её
+  //     строки, которые между зданиями не ездят (баланс, госпитализации,
+  //     документы), и голое удаление упало бы на внешнем ключе или стёрло их.
+  //     Перенос и удаление делает settleMerges, как только здесь есть и
+  //     оставленная карта.
+  if (rec.tbl === 'patients' && mergedAway(ctx, rec.uid)) { stats.skipped++; return; }
+
   const id = localId(db, ctx, rec.tbl, rec.uid);
   // АВТОРСТВО ПРИ ПРИЁМЕ НЕ ПИШЕТСЯ — по той же причине, по которой не пишется
   // журнал (см. заголовок файла): триггеры висят на самих таблицах, снять их на
@@ -749,7 +776,9 @@ function applyOne(db, rec, stats, ctx) {
       if (id == null && !soft) { stats.skipped++; return; }
       continue;
     }
-    const pid = localId(db, ctx, parent, parentUid);
+    // PATIENT_MERGE_BRANCHES_V1 — ссылка на слитую карту садится на
+    // оставленную (patientId идёт по цепочке patient_merges).
+    const pid = parent === 'patients' ? patientId(db, ctx, parentUid) : localId(db, ctx, parent, parentUid);
     if (pid == null) {
       // Мягкая ссылка на строку, которой здесь нет: заводим БЕЗ неё. Сумма,
       // дата и статус счёта важнее связи с визитом, а пустая связь честно
@@ -1487,5 +1516,121 @@ function parentPresent(db, ctx, tbl, key) {
     }
   }
   if (!SHIPPED[tbl]) return false;   // неизвестная таблица: ждать её нечем
+  // Ждущий слитую карту дождался: она теперь — оставленная (PATIENT_MERGE_BRANCHES_V1).
+  if (tbl === 'patients') return patientId(db, ctx, key) != null;
   return localId(db, ctx, tbl, key) != null;
+}
+
+// ─── PATIENT_MERGE_BRANCHES_V1 — объединение карт, пришедшее от соседа ──────
+//
+// ПРОТОКОЛ. Объединение в любом здании пишет строку patient_merges (мигр. 168):
+// «drop_uid слита в keep_uid». Она едет журналом как любая запись (SHIPPED в
+// journal.js) и заводится здесь обычным путём applyOne. Дальше три правила:
+//
+//   1. ИСПОЛНЕНИЕ — settleMerges в конце порции: для каждого события, у
+//      которого здесь ещё есть карта drop, а keep (по цепочке) уже есть, —
+//      тот же перенос, что у объединения на месте (applyMergeHere:
+//      MERGE_TABLES, баланс по разрешению merge_money_moves мигр. 160, родство,
+//      опекуны), и удаление drop. Нет keep — ждём: событие лежит в таблице, и
+//      первая порция, которая привезёт keep, его исполнит.
+//   2. ПЕРЕАДРЕСАЦИЯ — строка, приехавшая со ссылкой на drop, которой здесь
+//      уже (или ещё) нет, садится на keep (patientId). Так закрываются и
+//      «событие пришло раньше строк дубля», и «третье здание завело визит на
+//      дубль, не зная о слиянии».
+//   3. ОКОНЧАТЕЛЬНОСТЬ — put и del самой карты drop здесь не исполняются
+//      (applyOne, mergedAway).
+//
+// ЭХА НЕТ. Перенос, сделанный здесь, — часть приёма: его журнальные записи
+// снимает общая чистка в конце applyBatch, авторство переехавших строк
+// возвращается (rememberAuthorship). Каждое здание исполняет событие само,
+// поэтому возить результат переноса незачем, а разойтись с переносом
+// отправителя (он свои переезды возит журналом) он не может: оба ставят ту же
+// оставленную карту. Единственная правка, которая уезжает, — дополненные
+// контакты оставленной карты, и только из её дома (fillMergedContacts).
+//
+// ИДЕМПОТЕНТНОСТЬ. Повтор события — та же строка patient_merges (uid), второй
+// раз она не заводится; исполнять повторно нечего — drop здесь уже нет.
+
+const MAX_MERGE_CHAIN = 32;
+
+function mergedAway(ctx, uid) {
+  return !!ctx.q('SELECT 1 FROM patient_merges WHERE drop_uid = ? LIMIT 1').get(uid);
+}
+
+/**
+ * Местный id карты по uid — а если её здесь нет, то оставленной карты, в
+ * которую её слили (по цепочке: слитую могли потом слить ещё раз). Два события
+ * про одну и ту же карту (одновременные объединения в разных зданиях) —
+ * берётся самое раннее, одинаково в каждом здании.
+ */
+function patientId(db, ctx, uid) {
+  const seen = new Set();
+  let cur = uid;
+  for (let i = 0; i < MAX_MERGE_CHAIN && cur && !seen.has(cur); i++) {
+    seen.add(cur);
+    const id = localId(db, ctx, 'patients', cur);
+    if (id != null) return id;
+    const m = ctx.q('SELECT keep_uid FROM patient_merges WHERE drop_uid = ? ORDER BY merged_at, uid LIMIT 1').get(cur);
+    cur = m ? m.keep_uid : null;
+  }
+  return null;
+}
+
+// Строки, которые ездят и которые перенос перевешивает на keep: их авторство
+// снимается ДО переноса и возвращается в конце порции — иначе триггер 084
+// объявил бы здешней правкой переезд, который сделал не человек, а событие.
+const MOVED_SHIPPED = ['visits', 'invoices'];
+
+function settleMerges(db, stats, ctx) {
+  const pending = ctx.q(`SELECT m.uid, m.keep_uid, m.drop_uid, m.sync_origin, p.id AS drop_id
+                           FROM patient_merges m JOIN patients p ON p.uid = m.drop_uid
+                          ORDER BY m.merged_at, m.uid`);
+  for (let round = 0; round < MAX_MERGE_CHAIN; round++) {
+    let progress = false;
+    for (const m of pending.all()) {
+      if (!ctx.q('SELECT 1 FROM patients WHERE id = ?').get(m.drop_id)) continue;   // уже исполнено этим кругом
+      const keepId = patientId(db, ctx, m.keep_uid);
+      if (keepId == null || keepId === m.drop_id) continue;
+      for (const tbl of MOVED_SHIPPED) {
+        for (const r of ctx.q(`SELECT uid FROM ${tbl} WHERE patient_id = ? AND uid IS NOT NULL`).all(m.drop_id)) {
+          rememberAuthorship(db, ctx, tbl, r.uid);
+        }
+      }
+      // Своя точка отката: отказ базы на одном событии не отменяет всю
+      // порцию. Событие остаётся в таблице, и следующая порция попробует снова;
+      // причина — в sync_refused, как у отказа записи.
+      ctx.q('SAVEPOINT mrg').run();
+      try {
+        const res = applyMergeHere(db, { keepId, dropId: m.drop_id, fromLetter: m.sync_origin || null });
+        ctx.q('RELEASE mrg').run();
+        if (!res) continue;
+        ctx.authored.delete('patients|' + m.drop_uid);
+        ctx.q(`DELETE FROM ${SEEN} WHERE tbl = 'patients' AND uid = ?`).run(m.drop_uid);
+        if (res.patch && Object.keys(res.patch).length) ctx.contactFills.push({ keepId, patch: res.patch });
+        stats.merged++;
+        progress = true;
+      } catch (e) {
+        ctx.q('ROLLBACK TO mrg').run();
+        ctx.q('RELEASE mrg').run();
+        if (!(e instanceof SqliteError)) throw e;
+        try {
+          ctx.q(`INSERT INTO sync_refused (tbl, uid, peer, err) VALUES ('patient_merges', ?, ?, ?)
+                 ON CONFLICT(tbl, uid, peer) DO UPDATE SET err = excluded.err, at = strftime('%Y-%m-%dT%H:%M:%SZ','now')`)
+            .run(String(m.uid || '?'), ctx.peer || String(m.sync_origin || '?'), e.message);
+        } catch { /* записать отказ не вышло — не повод ронять порцию */ }
+        console.warn('[sync] merge not applied', m.keep_uid, m.drop_uid, e.message);
+      }
+    }
+    if (!progress) return;
+  }
+}
+
+/**
+ * Пустые контакты СВОЕЙ оставленной карты — из дубля, как у объединения на
+ * месте (M3). Только у карты, заведённой здесь: чужую карту отсюда не правят,
+ * её дополнит её дом, получив то же событие. Правка идёт мимо чистки журнала
+ * приёма — это наша работа, и соседи получат её обычной записью.
+ */
+function fillMergedContacts(db, ctx) {
+  for (const f of ctx.contactFills || []) applyContactPatch(db, f.keepId, f.patch);
 }

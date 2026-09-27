@@ -24,15 +24,25 @@
 //     заново на оставленную карту, связь с самим собой и повторы снимаются;
 //   • patient_guardians — опекун «оставленная карта сама себе» снимается.
 //
-// ПОЛЯ КАРТЫ не сливаются: прежнее объединение их не трогало, и оставленная
-// карта остаётся как есть (что оставить — выбирает человек на экране).
+// ПОЛЯ КАРТЫ не сливаются, кроме пустых КОНТАКТОВ (M3, contactPatch ниже).
 //
-// ФИЛИАЛЫ. patient_id визитов и счетов ездит (журнальные триггеры 084/087
-// пишут его как ссылку по uid), удаление карты — надгробием; поэтому переезд
-// и удаление доходят до соседа сами. Но строки, ПРИЕХАВШИЕ от соседа, здесь
-// не правятся (BRANCH_MONEY_GUARD_V1), а карта, заведённая в другом здании,
-// удалённая здесь, исчезла бы и там. Такое объединение — отказ: его делают в
-// здании, где заведены строки.
+// ФИЛИАЛЫ — PATIENT_MERGE_BRANCHES_V1 («объединять и по зданиям тоже»,
+// решение владельца 2026-09-27). Объединение — СОБЫТИЕ сети: строка
+// patient_merges (мигр. 168) «drop_uid слита в keep_uid» едет журналом, и
+// каждое здание, получив её, делает у себя то же самое (applyMergeHere —
+// records.js зовёт её в конце приёма порции): переносит на keep всё, что у
+// него лежит на drop, включая то, что между зданиями не ездит (баланс,
+// госпитализации, давление, документы, журнал карты), и удаляет drop.
+// Поэтому прежний отказ «карта уже передана в другое здание» снят, как и
+// отказ «у дубля есть записи другого здания»: чужие строки здесь
+// переносятся ЗДЕСЬ, а у их дома — событием. Кто и что правит:
+//   • объединить может администратор ЛЮБОГО здания, где есть обе карты, —
+//     в том числе карты, заведённые в другом здании (удаление дубля — часть
+//     события, а не правка чужой строки в обход её дома);
+//   • деньги каждое здание переносит СВОИ (patient_deposits не ездят): баланс
+//     после объединения — сумма обоих в каждом здании отдельно;
+//   • пустые контакты оставленной карты дополняет только ЕЁ ДОМ (там, где она
+//     заведена) — чужую карту отсюда не правят, как и раньше.
 //
 // Права — как у прежнего объединения, которое заканчивалось удалением карты:
 // только администратор.
@@ -77,129 +87,167 @@ const REL_INVERSE = { parent: 'child', child: 'parent', spouse: 'spouse', siblin
 
 const isPositiveInt = (v) => Number.isInteger(v) && v > 0;
 
-// Четвёртая проверка, I2 — КАРТА, УЖЕ ПЕРЕДАННАЯ В ДРУГОЕ ЗДАНИЕ, ЗДЕСЬ НЕ
-// ОБЪЕДИНЯЕТСЯ. У соседа могут быть строки дубля, которые между зданиями не
-// ездят (баланс, госпитализации, давление, диагнозы, документы, опекуны,
-// журнал): надгробие удалённой здесь карты там либо упало бы на внешнем
-// ключе, либо стёрло бы их каскадом. Переданной карта считается, если хоть
-// один сосед засеивается (засев отдаёт все строки подряд) или журнал с её
-// заведением уже выложен соседу (или вычищен — значит, подтверждён). Пока
-// карта не ушла ни одному соседу, объединять можно: её удаление просто не
-// уедет, а переезд строк уедет обычным журналом.
-function assertNotShipped(db, dropRow) {
-  const peers = db.prepare('SELECT node, pub_seq, seed_floor FROM sync_peers').all();
-  if (!peers.length) return;
-  const refuse = () => {
-    throw new RpcError('Карта-дубль уже передана в другое здание (филиал): объединение, сделанное здесь,'
-      + ' не дошло бы туда целиком — там остались бы записи дубля. Такие карты пока объединять нельзя.', 400);
-  };
-  if (peers.some((p) => p.seed_floor != null)) refuse();
-  const first = dropRow.uid
-    ? db.prepare("SELECT MIN(seq) s FROM sync_journal WHERE tbl = 'patients' AND uid = ?").get(dropRow.uid).s
-    : null;
-  if (first == null) refuse();
-  if (peers.some((p) => Number(p.pub_seq) >= Number(first))) refuse();
+/**
+ * Перенести на keep всё, что указывает на drop (MERGE_TABLES). Карту drop не
+ * трогает и не удаляет — это делает вызывающий. Внутри транзакции вызывающего.
+ * @returns {Record<string, number>} сколько строк переехало по таблицам
+ */
+export function mergeRows(db, keep, drop) {
+  const moved = {};
+  for (const t of MERGE_TABLES) {
+    if (t.how === 'move') {
+      moved[t.table] = db.prepare(`UPDATE "${t.table}" SET patient_id = ? WHERE patient_id = ?`).run(keep, drop).changes;
+    } else if (t.how === 'money') {
+      db.prepare('INSERT OR IGNORE INTO merge_money_moves (drop_id, keep_id) VALUES (?, ?)').run(drop, keep);
+      try {
+        moved[t.table] = db.prepare('UPDATE patient_deposits SET patient_id = ? WHERE patient_id = ?').run(keep, drop).changes;
+      } finally {
+        db.prepare('DELETE FROM merge_money_moves WHERE drop_id = ? AND keep_id = ?').run(drop, keep);
+      }
+    } else if (t.how === 'guardians') {
+      let n = db.prepare('UPDATE patient_guardians SET patient_id = ? WHERE patient_id = ?').run(keep, drop).changes;
+      n += db.prepare('UPDATE patient_guardians SET guardian_patient_id = ? WHERE guardian_patient_id = ?').run(keep, drop).changes;
+      db.prepare('DELETE FROM patient_guardians WHERE patient_id = ? AND guardian_patient_id = ?').run(keep, keep);
+      moved[t.table] = n;
+    } else if (t.how === 'relationships') {
+      const rows = db.prepare('SELECT * FROM patient_relationships WHERE patient_id_a = ? OR patient_id_b = ?').all(drop, drop);
+      db.prepare('DELETE FROM patient_relationships WHERE patient_id_a = ? OR patient_id_b = ?').run(drop, drop);
+      const ins = db.prepare('INSERT OR IGNORE INTO patient_relationships (patient_id_a, patient_id_b, relation_type) VALUES (?, ?, ?)');
+      let n = 0;
+      for (const r of rows) {
+        let x = r.patient_id_a === drop ? keep : r.patient_id_a;
+        let y = r.patient_id_b === drop ? keep : r.patient_id_b;
+        let rt = r.relation_type;
+        if (x === y) continue;   // связь с самим собой
+        if (String(x) > String(y)) { [x, y] = [y, x]; rt = REL_INVERSE[rt] || rt; }
+        n += ins.run(x, y, rt).changes;
+      }
+      moved[t.table] = n;
+    }
+  }
+  return moved;
 }
 
-function assertNothingForeign(db, dropId) {
-  const refuse = () => {
-    throw new RpcError('У карты-дубля есть записи другого здания (филиала). Объединение карт делают в том здании, где заведены эти записи.', 400);
-  };
-  const p = db.prepare('SELECT sync_origin FROM patients WHERE id = ?').get(dropId);
-  if (p && p.sync_origin != null) refuse();
-  const checks = [
-    'SELECT 1 FROM visits WHERE patient_id = ? AND sync_origin IS NOT NULL',
-    `SELECT 1 FROM visit_services vs JOIN visits v ON v.id = vs.visit_id WHERE v.patient_id = ? AND vs.sync_origin IS NOT NULL`,
-    `SELECT 1 FROM lab_results lr JOIN visit_services vs ON vs.id = lr.visit_service_id JOIN visits v ON v.id = vs.visit_id
-      WHERE v.patient_id = ? AND lr.sync_origin IS NOT NULL`,
-    'SELECT 1 FROM invoices WHERE patient_id = ? AND sync_origin IS NOT NULL',
-    `SELECT 1 FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id WHERE i.patient_id = ? AND ii.sync_origin IS NOT NULL`,
-    `SELECT 1 FROM payments p JOIN invoices i ON i.id = p.invoice_id WHERE i.patient_id = ? AND p.sync_origin IS NOT NULL`,
-  ];
-  for (const sql of checks) if (db.prepare(sql + ' LIMIT 1').get(dropId)) refuse();
+/**
+ * M3 — какие ПУСТЫЕ контакты оставленной карты дополнить из дубля.
+ * @returns {Record<string, string>} колонка → значение (пусто — дополнять нечего)
+ */
+export function contactPatch(keepRow, dropRow) {
+  const empty = (v) => v == null || String(v).trim() === '';
+  const patch = {};
+  const phone2 = !empty(dropRow.phone) && dropRow.phone !== keepRow.phone ? dropRow.phone
+    : (!empty(dropRow.phone_secondary) && dropRow.phone_secondary !== keepRow.phone ? dropRow.phone_secondary : null);
+  if (empty(keepRow.phone_secondary) && phone2) patch.phone_secondary = phone2;
+  for (const c of CONTACT_FILL) if (empty(keepRow[c]) && !empty(dropRow[c])) patch[c] = dropRow[c];
+  return patch;
+}
+
+/**
+ * Записать дополненные контакты на карту — только в ПУСТЫЕ поля (между
+ * расчётом патча и записью карту могли заполнить). @returns {number} сколько колонок
+ */
+export function applyContactPatch(db, keepId, patch) {
+  let n = 0;
+  for (const [c, v] of Object.entries(patch || {})) {
+    n += db.prepare(`UPDATE patients SET ${c} = ? WHERE id = ? AND (${c} IS NULL OR trim(${c}) = '')`).run(v, keepId).changes;
+  }
+  return n;
+}
+
+function openAdmissions(db, patientId) {
+  return db.prepare(`SELECT COUNT(*) n FROM admissions WHERE patient_id = ? AND status IN (${OPEN_STATUSES.map(() => '?').join(',')})`)
+    .get(patientId, ...OPEN_STATUSES).n;
+}
+
+const labelOf = (row) => [row.full_name || '—', row.mrn ? '(' + row.mrn + ')' : ''].filter(Boolean).join(' ');
+
+function logMerged(db, keep, dropRow, detail, summary, actor) {
+  db.prepare(`INSERT INTO patient_activity_log (patient_id, entity_type, entity_id, entity_label, action, summary, detail,
+                                                 actor_user_id, actor_name, actor_role)
+              VALUES (?, 'patient', ?, ?, 'merged', ?, ?, ?, ?, ?)`)
+    .run(keep, dropRow.id, labelOf(dropRow), summary, JSON.stringify(detail),
+      actor.id == null ? null : actor.id, String(actor.name || ''), String(actor.role || ''));
+}
+
+/**
+ * PATIENT_MERGE_BRANCHES_V1 — ОБЪЕДИНЕНИЕ, ПРИШЕДШЕЕ ИЗ ДРУГОГО ЗДАНИЯ.
+ *
+ * Событие уже случилось, и оно окончательно: здесь ничего не отказывается.
+ * Даже две открытые госпитализации (у каждой карты своя, обе ЗДЕСЬ — отправитель
+ * их видеть не мог, госпитализации между зданиями не ездят) не останавливают
+ * перенос: остановить значило бы оставить карту-призрак, на которую сосед
+ * больше ничего не пришлёт. Вместо отказа — отметка в журнале карты, чтобы
+ * администратор выписал или отменил одну.
+ *
+ * Контакты НЕ дополняются здесь: вызывающий (records.js) делает это после
+ * чистки журнала приёма и только если keep заведена здесь — правка своей
+ * карты обязана уехать соседям обычным журналом. Патч возвращается.
+ *
+ * @returns {{moved: object, patch: object, twoOpenAdmissions: boolean}|null}
+ */
+export function applyMergeHere(db, { keepId, dropId, fromLetter = null }) {
+  const getP = db.prepare('SELECT * FROM patients WHERE id = ?');
+  const keepRow = getP.get(keepId);
+  const dropRow = getP.get(dropId);
+  if (!keepRow || !dropRow || keepId === dropId) return null;
+  const twoOpen = openAdmissions(db, keepId) > 0 && openAdmissions(db, dropId) > 0;
+  const moved = mergeRows(db, keepId, dropId);
+  const where = fromLetter ? 'в здании ' + fromLetter : 'в другом здании';
+  let summary = 'Объединено с дублем ' + labelOf(dropRow) + ' (' + where + ')';
+  if (twoOpen) summary += '. Внимание: у карты две открытые госпитализации — выпишите или отмените одну.';
+  logMerged(db, keepId, dropRow,
+    { drop_id: dropId, drop_uid: dropRow.uid || null, keep_uid: keepRow.uid || null, from: fromLetter, moved, two_open_admissions: twoOpen },
+    summary, { id: null, name: 'Синхронизация' + (fromLetter ? ' (' + fromLetter + ')' : ''), role: 'sync' });
+  db.prepare('DELETE FROM patients WHERE id = ?').run(dropId);
+  const patch = keepRow.sync_origin == null ? contactPatch(keepRow, dropRow) : {};
+  return { moved, patch, twoOpenAdmissions: twoOpen };
 }
 
 // Один дубль: всё внутри транзакции вызывающего.
 function mergeOne(db, keep, drop, user) {
-  {
-    const getP = db.prepare('SELECT * FROM patients WHERE id = ?');
-    const keepRow = getP.get(keep);
-    const dropRow = getP.get(drop);
-    if (!keepRow || !dropRow) throw new RpcError('Пациент не найден.', 400);
-    assertNothingForeign(db, drop);
-    assertNotShipped(db, dropRow);
-    // Четвёртая проверка, M1 — у двух карт не бывает двух открытых
-    // госпитализаций одного человека: сначала выписка или отмена одной.
-    const openAdm = db.prepare(`SELECT COUNT(*) n FROM admissions WHERE patient_id = ? AND status IN (${OPEN_STATUSES.map(() => '?').join(',')})`);
-    if (openAdm.get(keep, ...OPEN_STATUSES).n > 0 && openAdm.get(drop, ...OPEN_STATUSES).n > 0) {
-      throw new RpcError('У обеих карт открыта госпитализация. Сначала выпишите пациента или отмените одну из них, потом объединяйте.', 400);
-    }
-
-    const moved = {};
-    for (const t of MERGE_TABLES) {
-      if (t.how === 'move') {
-        moved[t.table] = db.prepare(`UPDATE "${t.table}" SET patient_id = ? WHERE patient_id = ?`).run(keep, drop).changes;
-      } else if (t.how === 'money') {
-        db.prepare('INSERT OR IGNORE INTO merge_money_moves (drop_id, keep_id) VALUES (?, ?)').run(drop, keep);
-        try {
-          moved[t.table] = db.prepare('UPDATE patient_deposits SET patient_id = ? WHERE patient_id = ?').run(keep, drop).changes;
-        } finally {
-          db.prepare('DELETE FROM merge_money_moves WHERE drop_id = ? AND keep_id = ?').run(drop, keep);
-        }
-      } else if (t.how === 'guardians') {
-        let n = db.prepare('UPDATE patient_guardians SET patient_id = ? WHERE patient_id = ?').run(keep, drop).changes;
-        n += db.prepare('UPDATE patient_guardians SET guardian_patient_id = ? WHERE guardian_patient_id = ?').run(keep, drop).changes;
-        db.prepare('DELETE FROM patient_guardians WHERE patient_id = ? AND guardian_patient_id = ?').run(keep, keep);
-        moved[t.table] = n;
-      } else if (t.how === 'relationships') {
-        const rows = db.prepare('SELECT * FROM patient_relationships WHERE patient_id_a = ? OR patient_id_b = ?').all(drop, drop);
-        db.prepare('DELETE FROM patient_relationships WHERE patient_id_a = ? OR patient_id_b = ?').run(drop, drop);
-        const ins = db.prepare('INSERT OR IGNORE INTO patient_relationships (patient_id_a, patient_id_b, relation_type) VALUES (?, ?, ?)');
-        let n = 0;
-        for (const r of rows) {
-          let x = r.patient_id_a === drop ? keep : r.patient_id_a;
-          let y = r.patient_id_b === drop ? keep : r.patient_id_b;
-          let rt = r.relation_type;
-          if (x === y) continue;   // связь с самим собой
-          if (String(x) > String(y)) { [x, y] = [y, x]; rt = REL_INVERSE[rt] || rt; }
-          n += ins.run(x, y, rt).changes;
-        }
-        moved[t.table] = n;
-      }
-    }
-
-    // M3 — пустые контакты своей карты (карту соседа отсюда не правят).
-    if (keepRow.sync_origin == null) {
-      const empty = (v) => v == null || String(v).trim() === '';
-      const patch = {};
-      const phone2 = !empty(dropRow.phone) && dropRow.phone !== keepRow.phone ? dropRow.phone
-        : (!empty(dropRow.phone_secondary) && dropRow.phone_secondary !== keepRow.phone ? dropRow.phone_secondary : null);
-      if (empty(keepRow.phone_secondary) && phone2) patch.phone_secondary = phone2;
-      for (const c of CONTACT_FILL) if (empty(keepRow[c]) && !empty(dropRow[c])) patch[c] = dropRow[c];
-      const cols = Object.keys(patch);
-      if (cols.length) {
-        db.prepare(`UPDATE patients SET ${cols.map((c) => c + ' = ?').join(', ')} WHERE id = ?`).run(...cols.map((c) => patch[c]), keep);
-        moved.patients_contacts = cols.length;
-      }
-    }
-
-    const label = [dropRow.full_name || '—', dropRow.mrn ? '(' + dropRow.mrn + ')' : ''].filter(Boolean).join(' ');
-    db.prepare(`INSERT INTO patient_activity_log (patient_id, entity_type, entity_id, entity_label, action, summary, detail,
-                                                   actor_user_id, actor_name, actor_role)
-                VALUES (?, 'patient', ?, ?, 'merged', ?, ?, ?, ?, ?)`)
-      .run(keep, drop, label, 'Объединено с дублем ' + label, JSON.stringify({ drop_id: drop, drop_uid: dropRow.uid || null, moved }),
-        user.id, String(user.full_name || user.username || ''), String(user.role || ''));
-
-    // Карта дубля пуста — удаляем её так же, как прежнее объединение
-    // (удаление уезжает к соседям надгробием, мигр. 084).
-    db.prepare('DELETE FROM patients WHERE id = ?').run(drop);
-    return moved;
+  const getP = db.prepare('SELECT * FROM patients WHERE id = ?');
+  const keepRow = getP.get(keep);
+  const dropRow = getP.get(drop);
+  if (!keepRow || !dropRow) throw new RpcError('Пациент не найден.', 400);
+  // Четвёртая проверка, M1 — у двух карт не бывает двух открытых
+  // госпитализаций одного человека: сначала выписка или отмена одной. Видно
+  // только своё здание; госпитализации соседа он разберёт у себя (applyMergeHere).
+  if (openAdmissions(db, keep) > 0 && openAdmissions(db, drop) > 0) {
+    throw new RpcError('У обеих карт открыта госпитализация. Сначала выпишите пациента или отмените одну из них, потом объединяйте.', 400);
   }
+
+  // PATIENT_MERGE_BRANCHES_V1 — СОБЫТИЕ ПЕРВЫМ: его номер в журнале ниже, чем
+  // у переезда строк и надгробия дубля, значит сосед узнает о слиянии раньше,
+  // чем увидит удаление (records.js не станет удалять карту, о слиянии которой
+  // знает, — перенесёт её строки сам). Без uid (старая база до 083) карта не
+  // в сети — событие не нужно.
+  if (keepRow.uid && dropRow.uid) {
+    db.prepare('INSERT INTO patient_merges (keep_uid, drop_uid) VALUES (?, ?)').run(keepRow.uid, dropRow.uid);
+  }
+
+  const moved = mergeRows(db, keep, drop);
+
+  // M3 — пустые контакты СВОЕЙ карты (карту соседа дополнит её дом, получив
+  // событие).
+  if (keepRow.sync_origin == null) {
+    const n = applyContactPatch(db, keep, contactPatch(keepRow, dropRow));
+    if (n) moved.patients_contacts = n;
+  }
+
+  logMerged(db, keep, dropRow, { drop_id: drop, drop_uid: dropRow.uid || null, keep_uid: keepRow.uid || null, moved },
+    'Объединено с дублем ' + labelOf(dropRow),
+    { id: user.id, name: user.full_name || user.username || '', role: user.role || '' });
+
+  // Карта дубля пуста — удаляем её так же, как прежнее объединение
+  // (удаление уезжает к соседям надгробием, мигр. 084; при известном событии
+  // сосед его не исполняет, а объединяет у себя).
+  db.prepare('DELETE FROM patients WHERE id = ?').run(drop);
+  return moved;
 }
 
 // merge_patients { keep_id, drop_id } или { keep_id, drop_ids: [...] }. Все
-// дубли — ОДНОЙ транзакцией: если хоть один нельзя (чужое здание, нет
-// карты), не объединяется ни один.
+// дубли — ОДНОЙ транзакцией: если хоть один нельзя (нет карты, две открытые
+// госпитализации), не объединяется ни один.
 export function mergePatientsRpc(db, args, user) {
   if (!hasAnyRole(user, ['admin'])) throw new RpcError('Объединять карты может только администратор.', 403);
   const a = args || {};
