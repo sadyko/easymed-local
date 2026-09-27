@@ -284,6 +284,7 @@ export function renderDesignedVariant(type, variant, s, d) {
     if (type === 'invoice') { const vd = (d && d.items && d.items.length) ? d : sampleInvoice(); return (variant === 'thermal') ? invoiceThermal(s, vd) : (variant === 'compact') ? invoiceCompact(s, vd) : invoiceClassic(s, vd); }
     if (type === 'fiscal') return fiscalClassic(s, (d && d.items && d.items.length) ? d : sampleFiscal());
     if (type === 'check') return receiptClassic(s, (d && d.items && d.items.length) ? d : sampleReceipt());
+    if (type === 'slip') return slipThermal(s, d);   // V3120_FIX — квитанция: продажа карты, депозит
     return null;
 }
 
@@ -302,6 +303,72 @@ function sampleReceipt() {
 
 function money(n) { const v = Number(n); if (isNaN(v)) return esc(n); return String(Math.round(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
 function kvRows(arr) { return (arr || []).map(([k, v]) => `<div class="fl">${esc(k)}</div><div class="fv">${esc(v)}</div>`).join(''); }
+
+// V3120_FIX — общие куски денежных бланков.
+//
+// Сумма со знаком: возврат на чеке печатается «−30 000», а не «-30 000».
+function signedMoney(n) { const v = Number(n) || 0; return (v < 0 ? '−' : '') + money(Math.abs(v)); }
+
+// Статус счёта словом. Вызывающие присылали то код базы ('debt'), то
+// английское слово в верхнем регистре ('PARTIAL') — и бланк печатал его как
+// есть: «PARTIAL · подпись» на русском счёте. Неизвестное значение остаётся
+// как пришло: выдумывать статус нельзя.
+const STATUS_RU = {
+    paid: 'Оплачен', partial: 'Частично', unpaid: 'Не оплачен', debt: 'Долг',
+    void: 'Отменён', refunded: 'Возврат', cancelled: 'Отменён',
+};
+export function statusWordRu(status) {
+    const k = String(status == null ? '' : status).trim();
+    return STATUS_RU[k.toLowerCase()] || k;
+}
+
+// «Дата Дата 26.09.2026»: подпись «Дата» стоит в самом бланке, а экраны клали
+// то же слово ещё и в значение. Экраны исправлены, но бланк страхуется сам —
+// старый вызов не должен снова напечатать слово дважды.
+function bareDate(v) { return String(v == null ? '' : v).replace(/^\s*Дата[:\s]+/u, '').trim(); }
+
+// Оплачено / остаток по счёту. `paid` — сколько внесено ВСЕГО по счёту.
+function invoiceMoney(d, t) {
+    const paid = Math.max(0, Number(d.paid) || 0);
+    const due = Math.max(0, Math.round((t.total - paid) * 100) / 100);
+    return { paid, due };
+}
+
+// Строки оплаты на чеке: одна на каждый платёж (способ + сумма), затем
+// «Оплачено» (всего по счёту) и «Остаток», если он есть.
+//
+// FATAL из инспекции 3.12.0: при раздельной / частичной оплате чек печатал ВСЮ
+// сумму счёта одной строкой главного способа — «Наличные 378 001», — хотя
+// наличными взяли 100 000, картой 50 000, а 228 001 остались долгом. Бумага
+// утверждала, что пациент заплатил всё и наличными.
+//
+// d.payments  [{ label, amount }] — платежи, которые подтверждает этот чек;
+// d.paidBefore — внесённое по счёту раньше (печатается отдельной строкой);
+// d.paid       — всего оплачено по счёту. Без него — счёт оплачен целиком
+//                (образец настроек и старые вызовы).
+function paymentRowsHtml(d, t) {
+    const paid = d.paid != null && d.paid !== '' ? Number(d.paid) || 0 : t.total;
+    const before = Math.max(0, Number(d.paidBefore) || 0);
+    const list = Array.isArray(d.payments) && d.payments.length
+        ? d.payments.filter((p) => p && Number(p.amount))
+        : [{ label: d.payMethod || d.method || 'Оплачено', amount: Math.max(0, paid - before) }];
+    const due = Math.max(0, Math.round((t.total - paid) * 100) / 100);
+    return (before > 0 ? `<div class="f-kv"><span>Ранее оплачено</span><b>${money(before)}</b></div>` : '')
+        + list.map((p) => `<div class="f-kv"><span>${esc(p.label || 'Оплата')}</span><b>${signedMoney(p.amount)}</b></div>`).join('')
+        + `<div class="f-kv"><span>Оплачено</span><b>${money(paid)}</b></div>`
+        + (due > 0 ? `<div class="f-kv"><span>Остаток</span><b>${money(due)}</b></div>` : '');
+}
+
+// Шапка даты чека. Перепечатка (d.copy) называет дату ОПЛАТЫ и помечена
+// «Копия»: раньше копия несла время перепечатки, и чек, выданный через неделю
+// после оплаты, утверждал, что деньги взяли сегодня.
+function receiptDateRows(d) {
+    const copy = d.copy ? '<div class="f-title" style="font-size:11px;letter-spacing:.2em;">Копия</div>' : '';
+    const when = d.copy && d.paidAt
+        ? `<div class="f-kv"><span>Дата оплаты</span><b>${esc(d.paidAt)}</b></div>`
+        : `<div class="f-kv"><span>Дата</span><b>${esc(d.date || dateNumeric(new Date(), { withTime: true }))}</b></div>`;
+    return { copy, when };
+}
 function sampleInvoice() {
     return {
         docNo: 'INV-2026-018342', issueDate: '01.10.2026', dueDate: '08.10.2026', status: 'UNPAID',
@@ -877,6 +944,7 @@ function queueBlockA4(d) {
 
 function invoiceClassic(s, d) {
     const t = invoiceTotals(d);
+    const m = invoiceMoney(d, t);   // V3120_FIX — оплачено / остаток
     const rows = (d.items || []).map((it, i) => `<tr><td class="num">${i + 1}</td><td class="svc">${esc(it.name || '—')}</td><td class="c">${esc(it.qty || 1)}</td><td class="r money">${money(it.price)}</td><td class="r money sum">${money(Number(it.qty || 1) * Number(it.price || 0))}</td></tr>`).join('');
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Счёт · ${esc(d.docNo || '')}</title><style>
 ${PRINT_FONT_FACE_CSS}
@@ -899,14 +967,14 @@ table.items{ width:100%; border-collapse:collapse; font-size:14px; } table.items
 </style></head><body><section class="sheet ${toggleCls(s)}">
   ${clinicHeadHtml(s, 46)}<div class="rule"></div>
   <div class="title"><h1>Счёт на оплату медицинских услуг</h1><div class="uz">Tibbiy xizmatlar uchun to‘lov hisobi</div>
-    <div class="meta">${d.docNo ? `<span class="chip">Счёт <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Дата <b>${esc(d.issueDate || dateNumeric(new Date()))}</b></span>${d.dueDate ? `<span class="chip">Оплатить до <b>${esc(d.dueDate)}</b></span>` : ''}</div></div>
+    <div class="meta">${d.docNo ? `<span class="chip">Счёт <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Дата <b>${esc(bareDate(d.issueDate) || dateNumeric(new Date()))}</b></span>${d.dueDate ? `<span class="chip">Оплатить до <b>${esc(d.dueDate)}</b></span>` : ''}</div></div>
   <div class="cards"><div class="card"><div class="ct">Пациент <span class="uz">· Bemor</span></div><div class="fgrid">${kvRows(d.patient)}</div></div>
     <div class="card"><div class="ct">Плательщик <span class="uz">· To‘lovchi</span></div><div class="fgrid">${kvRows(d.billing)}</div></div></div>
   <div class="sec-h"><span class="ru">Позиции</span><span class="uz">· Xizmatlar ro‘yxati</span></div>
   <table class="items"><thead><tr><th class="num"></th><th>Услуга<span class="uz" style="display:block;color:var(--faint);font-weight:600;font-style:italic">Xizmat</span></th><th class="c">Кол-во</th><th class="r">Цена, сум</th><th class="r">Сумма, сум</th></tr></thead><tbody>${rows}</tbody></table>
-  <div class="below"><div class="totals"><div class="tr"><span class="tl">Подытог</span><span class="tv">${money(t.subtotal)}</span></div>${t.discount > 0 ? `<div class="tr disc"><span class="tl">Скидка</span><span class="tv">−${money(t.discount)}</span></div>` : ''}<div class="due"><span class="dl">К оплате</span><span class="dv">${money(t.total)}<span>сум</span></span></div></div></div>
+  <div class="below"><div class="totals"><div class="tr"><span class="tl">Подытог</span><span class="tv">${money(t.subtotal)}</span></div>${t.discount > 0 ? `<div class="tr disc"><span class="tl">Скидка</span><span class="tv">−${money(t.discount)}</span></div>` : ''}${m.paid > 0 ? `<div class="tr"><span class="tl">Итого</span><span class="tv">${money(t.total)}</span></div><div class="tr"><span class="tl">Оплачено</span><span class="tv">${money(m.paid)}</span></div>` : ''}<div class="due"><span class="dl">${m.paid > 0 ? 'Остаток к оплате' : 'К оплате'}</span><span class="dv">${money(m.paid > 0 ? m.due : t.total)}<span>сум</span></span></div></div></div>
   ${queueBlockA4(d)}
-  <div class="signoff"><div class="sig"><div class="role">Кассир · бухгалтер <i>· Kassir</i></div><div class="mark">${SIG_SVG}</div><div class="name">${esc(d.cashierName || '—')}</div><div class="spec">${esc(d.status || '')} · подпись</div></div>
+  <div class="signoff"><div class="sig"><div class="role">Кассир · бухгалтер <i>· Kassir</i></div><div class="mark">${SIG_SVG}</div><div class="name">${esc(d.cashierName || '—')}</div><div class="spec">${esc(statusWordRu(d.status))} · подпись</div></div>
     <div class="sign-right"></div></div>
   <div class="note">Счёт действителен к оплате до указанной даты. НДС включён в стоимость услуг. Документ сформирован в ИС клиники.</div>
   <div class="foot"><div class="fl">${s.web ? `<b>${esc(s.web)}</b> · ` : ''}${esc(s.clinicName || '')}</div><div class="fr">${esc(s.phone || '')}</div></div>
@@ -918,6 +986,7 @@ table.items{ width:100%; border-collapse:collapse; font-size:14px; } table.items
 // ---------------------------------------------------------------------------
 function invoiceCompact(s, d) {
     const t = invoiceTotals(d);
+    const m = invoiceMoney(d, t);   // V3120_FIX — оплачено / остаток
     const kvFld = (arr) => (arr || []).map(([k, v]) => `<div class="fld"><span class="l">${esc(k)}</span><span class="dd"></span><span class="v">${esc(v)}</span></div>`).join('');
     const rows = (d.items || []).map((it, i) => `<tr><td class="num">${i + 1}</td><td class="svc">${esc(it.name || '—')}</td><td class="c">${esc(it.qty || 1)}</td><td class="r">${money(it.price)}</td><td class="r sum">${money(Number(it.qty || 1) * Number(it.price || 0))}</td></tr>`).join('');
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Счёт · ${esc(d.docNo || '')}</title><style>
@@ -942,13 +1011,13 @@ ${ECONOMY_BW_CSS}
     <div class="clinic">${s.address ? `<div class="cl">${esc(s.address)}</div>` : ''}<div class="cl">${esc(s.phone || '')}${s.web ? ` · ${esc(s.web)}` : ''}</div></div></div>
   <div class="hr"></div>
   <div class="title"><h1>Счёт на оплату медицинских услуг</h1><div class="uz">To‘lov hisobi</div>
-    <div class="meta">${d.docNo ? `<span class="chip">№ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Дата <b>${esc(d.issueDate || dateNumeric(new Date()))}</b></span></div></div>
+    <div class="meta">${d.docNo ? `<span class="chip">№ <b>${esc(d.docNo)}</b></span>` : ''}<span class="chip">Дата <b>${esc(bareDate(d.issueDate) || dateNumeric(new Date()))}</b></span></div></div>
   <div class="entwo"><div class="ent"><div class="cap">Пациент · Bemor</div>${kvFld(d.patient)}</div><div class="ent"><div class="cap">Плательщик · To‘lovchi</div>${kvFld(d.billing)}</div></div>
   <div class="secbar"><span class="ru">Позиции</span><span class="uz">· Xizmatlar</span></div>
   <table class="items"><thead><tr><th class="num"></th><th>Услуга</th><th class="c">Кол-во</th><th class="r">Цена</th><th class="r">Сумма</th></tr></thead><tbody>${rows}</tbody></table>
-  <div class="tot">${t.discount > 0 ? `<span class="sub">Подытог ${money(t.subtotal)} · Скидка −${money(t.discount)}</span>` : ''}<span class="due">К оплате: ${money(t.total)}<span>сум</span></span></div>
+  <div class="tot">${t.discount > 0 ? `<span class="sub">Подытог ${money(t.subtotal)} · Скидка −${money(t.discount)}</span>` : ''}${m.paid > 0 ? `<span class="sub">Итого ${money(t.total)} · Оплачено ${money(m.paid)}</span>` : ''}<span class="due">${m.paid > 0 ? 'Остаток к оплате' : 'К оплате'}: ${money(m.paid > 0 ? m.due : t.total)}<span>сум</span></span></div>
   ${queueBlockA4(d)}
-  <div class="signoff"><div class="sig"><div class="role">Кассир · бухгалтер</div><div class="name">${esc(d.cashierName || '—')}</div><div class="spec">${esc(d.status || '')} · подпись</div></div>
+  <div class="signoff"><div class="sig"><div class="role">Кассир · бухгалтер</div><div class="name">${esc(d.cashierName || '—')}</div><div class="spec">${esc(statusWordRu(d.status))} · подпись</div></div>
     <div class="sign-right"></div></div>
   <div class="note">НДС включён в стоимость услуг. Документ сформирован в ИС клиники.</div>
   ${s.footerNote ? `<div class="thanks-eco">${esc(s.footerNote)}</div>` : ''}
@@ -1042,7 +1111,7 @@ ${s.address ? `<div class="f-sub">${esc(s.address)}</div>` : ''}${s.taxId ? `<di
 <div class="f-hr2"></div>
 <div class="f-title">Счёт на оплату</div>
 <div class="f-kv"><span>Счёт №</span><b>${esc(d.docNo || '—')}</b></div>
-<div class="f-kv"><span>Дата</span><b>${esc(d.issueDate || d.date || dateNumeric(new Date()))}</b></div>
+<div class="f-kv"><span>Дата</span><b>${esc(bareDate(d.issueDate) || d.date || dateNumeric(new Date()))}</b></div>
 ${pName ? `<div class="f-item-n" style="margin:1px 0">Пациент: ${esc(pName)}</div>` : ''}
 ${pMrn ? `<div class="f-kv"><span>ID</span><b>${esc(pMrn)}</b></div>` : ''}
 ${dobRow(d)}
@@ -1103,8 +1172,9 @@ ${s.address ? `<div class="f-sub">${esc(s.address)}</div>` : ''}${s.taxId ? `<di
 <div class="f-hr2"></div>
 ${d.patientName ? `<div class="f-pat">${esc(d.patientName)}</div><div class="f-hr2"></div>` : ''}
 <div class="f-title">Кассовый чек</div>
+${receiptDateRows(d).copy}
 <div class="f-kv"><span>Чек №</span><b>${esc(d.docNo || '—')}</b></div>
-<div class="f-kv"><span>Дата</span><b>${esc(d.date || dateNumeric(new Date(), { withTime: true }))}</b></div>
+${receiptDateRows(d).when}
 ${d.cashier ? `<div class="f-kv"><span>Кассир</span><b>${esc(d.cashier)}</b></div>` : ''}
 ${d.mrn ? `<div class="f-kv"><span>Пациент ID</span><b>${esc(d.mrn)}</b></div>` : ''}
 ${dobRow(d)}
@@ -1113,7 +1183,7 @@ ${items}
 <div class="f-hr"></div>
 ${t.discount > 0 ? `<div class="f-kv"><span>Подытог</span><b>${money(t.subtotal)}</b></div><div class="f-kv"><span>Скидка</span><b>−${money(t.discount)}</b></div>` : ''}
 <div class="f-tot"><span>ИТОГО</span><b>${money(t.total)} сум</b></div>
-<div class="f-kv"><span>${esc(d.payMethod || d.method || 'Оплачено')}</span><b>${money(t.total)}</b></div>
+${paymentRowsHtml(d, t)}
 <div class="f-hr"></div>
 <div class="f-thanks">Спасибо за обращение! · Tashrifingiz uchun rahmat!</div>
 ${queueBlockHtml(d)}
@@ -1159,8 +1229,9 @@ ${logo}<div class="f-name">${esc(s.clinicName || 'Клиника')}</div>
 ${s.address ? `<div class="f-sub">${esc(s.address)}</div>` : ''}${s.taxId ? `<div class="f-sub">ИНН: ${esc(s.taxId)}</div>` : ''}${s.phone ? `<div class="f-sub">${esc(s.phone)}</div>` : ''}
 <div class="f-hr2"></div>
 <div class="f-title">Чек об оплате</div>
+${receiptDateRows(d).copy}
 <div class="f-kv"><span>Чек №</span><b>${esc(d.docNo || '—')}</b></div>
-<div class="f-kv"><span>Дата</span><b>${esc(d.date || dateNumeric(new Date(), { withTime: true }))}</b></div>
+${receiptDateRows(d).when}
 ${d.cashier ? `<div class="f-kv"><span>Кассир</span><b>${esc(d.cashier)}</b></div>` : ''}
 ${d.patientName ? `<div class="f-item-n" style="margin:1px 0">Пациент: ${esc(d.patientName)}</div>` : ''}
 ${d.mrn ? `<div class="f-kv"><span>ID</span><b>${esc(d.mrn)}</b></div>` : ''}
@@ -1170,8 +1241,59 @@ ${items}
 <div class="f-hr"></div>
 ${t.discount > 0 ? `<div class="f-kv"><span>Подытог</span><b>${money(t.subtotal)}</b></div><div class="f-kv"><span>Скидка</span><b>−${money(t.discount)}</b></div>` : ''}
 <div class="f-tot"><span>ИТОГО</span><b>${money(t.total)} сум</b></div>
-${d.payMethod ? `<div class="f-kv"><span>${esc(d.payMethod)}</span><b>${money(t.total)}</b></div>` : ''}
+${(d.payMethod || d.payments || d.paid != null) ? paymentRowsHtml(d, t) : ''}
 ${d.received ? `<div class="f-kv"><span>Получено</span><b>${esc(d.received)}</b></div>` : ''}
+<div class="f-hr"></div>
+<div class="f-thanks">Спасибо за обращение! · Tashrifingiz uchun rahmat!</div>
+</body></html>`;
+}
+
+// ---------------------------------------------------------------------------
+// КВИТАНЦИЯ · термолента — V3120_FIX (решение владельца, 2026-09-27)
+// ---------------------------------------------------------------------------
+// Продажа подарочной карты и депозит — деньги, которые касса берёт НЕ по счёту
+// за услуги. Бумаги на руки за них не было вовсе: покупатель уходил с картой и
+// без документа о том, сколько он за неё отдал. Та же геометрия, что у чека.
+//
+// d = { title, subtitle, docNo, date, cashier, rows:[[k,v]], amountLabel,
+//       amount, method, afterRows:[[k,v]], note }. Пустые строки не печатаются.
+function slipThermal(s, d) {
+    d = d || {};
+    const TW = thermal(s);
+    const logo = (s.logoUrl || s.logoDataUrl) ? `<div class="f-logo"><img src="${esc(s.logoUrl || s.logoDataUrl)}" alt="" style="max-width:14mm;height:auto;filter:grayscale(1) contrast(1.5);"></div>` : '';
+    const kv = (arr) => (arr || []).filter((r) => r && r[1] != null && String(r[1]).trim() !== '')
+        .map(([k, v]) => `<div class="f-kv"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
+    return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Квитанция · ${esc(d.docNo || '')}</title><style>
+${PRINT_FONT_FACE_CSS}
+@page{ size:${TW.paper}mm auto; margin:0; }
+*{ margin:0; padding:0; box-sizing:border-box; }
+html,body{ background:#fff; }
+body{ width:${TW.body}mm; margin:0; padding-top:6mm; font-family:'Onest',"Helvetica Neue",Arial,sans-serif; color:#000; font-size:${TW.font}px; line-height:1.3; overflow-wrap:anywhere; }
+.f-logo{ display:flex; justify-content:center; margin-bottom:2px; }
+.f-name{ text-align:center; font-size:${TW.name}px; font-weight:800; line-height:1.14; letter-spacing:-.01em; }
+.f-sub{ text-align:center; font-size:9px; font-weight:700; margin-top:1px; }
+.f-hr{ border-top:1px dashed #000; margin:4px 0; }
+.f-hr2{ border-top:2px solid #000; margin:4px 0; }
+.f-title{ text-align:center; font-size:${TW.title}px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; margin:3px 0 2px; }
+.f-kv{ display:flex; justify-content:space-between; gap:6px; font-size:11px; font-weight:700; margin:1px 0; }
+.f-kv b{ font-weight:800; text-align:right; }
+.f-tot{ display:flex; justify-content:space-between; align-items:baseline; gap:6px; font-size:${TW.total}px; font-weight:800; margin:5px 0; border-top:2px solid #000; border-bottom:2px solid #000; padding:4px 0; }
+.f-tot b{ white-space:nowrap; }
+.f-thanks{ text-align:center; font-size:10px; font-weight:700; margin-top:5px; }
+@media print{ body{ width:${TW.body}mm; margin:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; color:#000 !important; } }
+</style></head><body>
+${logo}<div class="f-name">${esc(s.clinicName || 'Клиника')}</div>
+${s.address ? `<div class="f-sub">${esc(s.address)}</div>` : ''}${s.taxId ? `<div class="f-sub">ИНН: ${esc(s.taxId)}</div>` : ''}${s.phone ? `<div class="f-sub">${esc(s.phone)}</div>` : ''}
+<div class="f-hr2"></div>
+<div class="f-title">${esc(d.title || 'Квитанция')}</div>
+${d.subtitle ? `<div class="f-sub" style="font-size:10.5px;">${esc(d.subtitle)}</div>` : ''}
+${kv([['№', d.docNo], ['Дата', d.date || dateNumeric(new Date(), { withTime: true })], ['Кассир', d.cashier]])}
+<div class="f-hr"></div>
+${kv(d.rows)}
+<div class="f-tot"><span>${esc(d.amountLabel || 'Сумма')}</span><b>${money(d.amount)} сум</b></div>
+${kv([['Способ', d.method]])}
+${kv(d.afterRows)}
+${d.note ? `<div class="f-sub" style="margin-top:4px;">${esc(d.note)}</div>` : ''}
 <div class="f-hr"></div>
 <div class="f-thanks">Спасибо за обращение! · Tashrifingiz uchun rahmat!</div>
 </body></html>`;

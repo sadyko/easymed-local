@@ -14,7 +14,7 @@
 import { supabase } from '../../supabase.js';
 import { currentClinicId } from '../tenant-tables.js';
 import { toast } from '../ui.js';
-import { trf } from '../i18n.js';   // I18N_COVERAGE_V1
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1
 // TELEGRAM_BOT_V1 — сам рендерер переехал в ../../shared/doc-render.js,
 // чтобы его мог импортировать и сервер (Node) для сборки PDF боту.
 // Здесь остаётся то, что без браузера не живёт: загрузка/сохранение настроек
@@ -24,12 +24,32 @@ import { buildSheetHtml, esc, INPATIENT_DOC_DEFAULT_TEXT } from '../../shared/do
 const KEY = 'easymed:doc-settings:v1';
 let _cache = null;   // DB/localStorage-hydrated branding (clinic-global)
 
-export const DEFAULT_DOC_SETTINGS = {
+// V3120_FIX — у клиники без адреса, телефона или почты в «Компании» бланк
+// печатал КОНТАКТЫ ПОСТАВЩИКА: «Tashkent, 12 Amir Temur Ave.», «+998 71 200 12
+// 00», «hello@easy-med.uz». Пациент звонил бы по чужому номеру. Заготовки
+// пустые, а пустое поле бланк не печатает вовсе.
+//
+// Заготовки подвала были английскими и печатались на каждом русском бланке.
+// Теперь подвал — только текст, который клиника вписала сама.
+//
+// saveDocSettings() хранит объект ЦЕЛИКОМ, заготовки тоже, поэтому у клиник,
+// сохранявших «Документы», старые значения лежат в настройках. LEGACY_DEFAULTS
+// ниже вычищает именно их (и только их) при чтении.
+const LEGACY_DEFAULTS = {
     clinicName: 'Easy-Med Clinic',
-    tagline:    '',
     address:    'Tashkent, 12 Amir Temur Ave., 100000',
     phone:      '+998 71 200 12 00',
     email:      'hello@easy-med.uz',
+    footerNote: 'Thank you for choosing our clinic. Please keep this document for your records.',
+    legalNote:  'This document is generated electronically and is valid without a manual signature when sealed with a digital signature.',
+};
+
+export const DEFAULT_DOC_SETTINGS = {
+    clinicName: '',
+    tagline:    '',
+    address:    '',
+    phone:      '',
+    email:      '',
     web:        '',
     taxId:      '',   // DOC_REQUISITES_V1 — blank unless the clinic sets tax_id
     license:    '',   // DOC_REQUISITES_V1 — blank unless the clinic sets license_number
@@ -53,7 +73,7 @@ export const DEFAULT_DOC_SETTINGS = {
     // печати, ни росчерка, ни QR на бумаге не рисуется. Настройка, которой
     // нечем управлять, — обещание.
 
-    language:    'en',
+    language:    'ru',   // V3120_FIX — печатные бланки русские
     paperSize:   'A4',          // A4 / A5 / Letter
     // THERMAL_WIDTH_V1 — ролик термопринтера: 40 / 58 / 80 мм. Влияет только на
     // чековые макеты (счёт-термочек, фискальный чек, кассовый чек); A4-бланки
@@ -62,8 +82,8 @@ export const DEFAULT_DOC_SETTINGS = {
     density:     'comfortable', // compact / comfortable / airy
     fontPair:    'modern',      // modern / serif / clinical
     cornerStyle: 'rounded',
-    footerNote:  'Thank you for choosing our clinic. Please keep this document for your records.',
-    legalNote:   'This document is generated electronically and is valid without a manual signature when sealed with a digital signature.',
+    footerNote:  '',
+    legalNote:   '',
 
 
     // INPATIENT_DOCS_V1 — тексты трёх бумаг при поступлении; по умолчанию —
@@ -98,6 +118,8 @@ export function loadDocSettings() {
         } catch { s = { ...DEFAULT_DOC_SETTINGS }; }
     }
     if (!s.variant || typeof s.variant !== 'object') s.variant = {};
+    for (const [k, v] of Object.entries(LEGACY_DEFAULTS)) if (s[k] === v) s[k] = '';   // V3120_FIX
+    if (s.language === 'en') s.language = 'ru';
     const _out = applyCompanyBranding(s);
     if (_out && _out.tagline === 'Care, clarity, precision') _out.tagline = '';   // legacy default — treat as unset
     return _out;
@@ -180,12 +202,12 @@ function openInlinePrintPreview(html) {
     overlay.innerHTML = `
         <div class="modal-backdrop"></div>
         <div class="modal-card" style="width:900px;max-width:calc(100vw - 32px);height:85vh;display:flex;flex-direction:column;">
-            <header class="modal-head"><h2>Print preview</h2><button class="modal-close">×</button></header>
+            <header class="modal-head"><h2>${tr('Предпросмотр печати')}</h2><button class="modal-close">×</button></header>
             <div class="modal-body" style="flex:1;overflow:hidden;padding:8px;"><iframe style="width:100%;height:100%;border:1px solid var(--ink-100);border-radius:8px;background:white;"></iframe></div>
             <footer class="modal-foot">
-                <button class="btn">Close</button>
+                <button class="btn">${tr('Закрыть')}</button>
                 <span class="grow"></span>
-                <button class="btn btn-primary">Print</button>
+                <button class="btn btn-primary">${tr('Печать')}</button>
             </footer>
         </div>`;
     const close = () => overlay.remove();

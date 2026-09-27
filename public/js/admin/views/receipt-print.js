@@ -63,16 +63,26 @@ export async function loadInvoiceQueue(supabase, invoiceId, itemIds = null) {
     }
 }
 
-const METHOD_RU = { cash: 'Наличные', card: 'Карта', transfer: 'Перевод', acquiring: 'Эквайринг' };
+// V3120_FIX — «С баланса» и «Подарочная карта» тоже: без них чек печатал код
+// способа («wallet», «gift_card») рядом с суммой.
+export const METHOD_RU = { cash: 'Наличные', card: 'Карта', transfer: 'Перевод', acquiring: 'Эквайринг', wallet: 'С баланса', gift_card: 'Подарочная карта' };
 const GENDER_RU = { male: 'Мужской', female: 'Женский', other: '—' };
 
-function dobAge(iso) {
+// V3120_FIX — одна функция на все бланки (касса собирала свою и прогоняла
+// «г.» через перевод интерфейса: на узбекском экране чек печатал узбекское
+// слово посреди русского бланка). Дата «ГГГГ-ММ-ДД» читается как МЕСТНАЯ:
+// new Date() взял бы полночь по UTC, и западнее Гринвича день рождения
+// съезжал бы на вчера.
+export function dobAge(iso) {
     if (!iso) return '';
-    const d = new Date(iso);
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso));
+    const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(iso);
     if (isNaN(d)) return '';
     // Возраст СЧИТАЕТСЯ при печати, а не хранится: иначе перепечатанный через
     // год чек называл бы неверный возраст.
-    const age = Math.floor((Date.now() - d.getTime()) / 31557600000);
+    const t = new Date();
+    let age = t.getFullYear() - d.getFullYear();
+    if (t.getMonth() < d.getMonth() || (t.getMonth() === d.getMonth() && t.getDate() < d.getDate())) age--;
     const date = dateNumeric(d);
     return (age >= 0 && age < 130) ? `${date} · ${age} г.` : date;
 }
@@ -93,8 +103,14 @@ export async function printInvoiceCheck({ supabase, printableSheet, invoiceId, c
 
     const { data: pat } = await supabase.from('patients')
         .select('full_name, mrn, date_of_birth, gender').eq('id', inv.patient_id).single();
-    const { data: pays } = await supabase.from('payments').select('method').eq('invoice_id', inv.id);
-    const method = (pays && pays.length) ? pays[0].method : 'cash';
+    // V3120_FIX — ВСЕ платежи счёта, каждый своей строкой. Раньше брался способ
+    // первого платежа и печатался рядом с суммой ВСЕГО счёта: раздельная оплата
+    // «100 000 наличными + 50 000 картой» становилась «Наличные 378 001».
+    const { data: pays } = await supabase.from('payments')
+        .select('id, amount, method, paid_at').eq('invoice_id', inv.id).order('id', { ascending: true });
+    const payList = Array.isArray(pays) ? pays : [];
+    // Дата копии — дата ОПЛАТЫ (последнего платежа), а не момент перепечатки.
+    const lastPaid = payList.filter((p) => Number(p.amount) > 0 && p.paid_at).map((p) => p.paid_at).sort().pop();
 
     const queue = await loadInvoiceQueue(supabase, inv.id, items.map((i) => i.id));
 
@@ -110,6 +126,8 @@ export async function printInvoiceCheck({ supabase, printableSheet, invoiceId, c
     printableSheet({ type: 'fiscal', idLine: inv.invoice_number || String(inv.id), data: {
         docNo: inv.invoice_number || String(inv.id),
         date: dateNumeric(new Date(), { withTime: true }),
+        copy: true,
+        paidAt: lastPaid ? dateNumeric(new Date(lastPaid), { withTime: true }) : '',
         patientName: (pat && pat.full_name) || '—',
         mrn: (pat && pat.mrn) || '',
         dob: dobAge(pat && pat.date_of_birth),
@@ -120,11 +138,185 @@ export async function printInvoiceCheck({ supabase, printableSheet, invoiceId, c
             ...(byItem[it.id] || {}),   // performer / performerRole, когда исполнитель назначен
         })),
         subtotal: inv.subtotal, discount: inv.discount_amount,
-        total: inv.total_amount, paid: inv.paid_amount,
-        method: METHOD_RU[method] || method, payMethod: METHOD_RU[method] || method,
+        total: inv.total_amount, paid: Number(inv.paid_amount) || 0,
+        payments: paymentLines(payList),
         queue,
     } });
     return { ok: true };
+}
+
+// V3120_FIX — платежи счёта -> строки чека { label, amount }. Возврат (минус)
+// подписан «Возврат · <способ>», нулевые строки не печатаются.
+export function paymentLines(pays) {
+    if (!Array.isArray(pays)) return [];
+    return pays
+        .filter((p) => p && Number(p.amount))
+        .map((p) => {
+            const amount = Number(p.amount);
+            const name = METHOD_RU[p.method] || String(p.method || 'Оплата');
+            return { label: amount < 0 ? 'Возврат · ' + name : name, amount };
+        });
+}
+
+// ---------------------------------------------------------------------------
+// V3120_FIX — A4-счёт из СЕРВЕРНЫХ строк. Одна сборка для кассы, окна визита и
+// мастера записи.
+// ---------------------------------------------------------------------------
+// Раньше у каждого экрана была своя: окно визита печатало «Full name / MRN /
+// Issued 26 Sept 2026 / Self-pay» (и дату по UTC), мастер многодневной записи —
+// счёт №1 со строками ВСЕХ дней и суммой, посчитанной на экране. Здесь
+// подписи русские, дата местная, плательщик назван по справочнику, суммы —
+// ровно те, что записал сервер, статус — код базы (слово ставит бланк).
+// withPerformer — «Услуга · Врач» в самой строке: так печатали окно визита и
+// мастер записи (INVOICE_DOCTOR_V1); A4-бланк отдельной графы исполнителя не имеет.
+export function invoiceSheetData({ inv, items, patient, payerName = '', methods = [], lines = null, title = '', extraPatient = [], extraBilling = [], withPerformer = false } = {}) {
+    inv = inv || {};
+    const p = patient || {};
+    const lns = lines || {};
+    const byItem = lns.byItem || {};
+    const pkg = lns.packages || {};
+    const created = inv.created_at ? new Date(inv.created_at) : new Date();
+    const date = dateNumeric(isNaN(created) ? new Date() : created);
+    const total = Number(inv.total_amount) || 0;
+    const paid = Number(inv.paid_amount) || 0;
+    const methodWords = [...new Set((methods || []).filter(Boolean))].map((m) => METHOD_RU[m] || m);
+    const status = inv.status || (paid >= total && total > 0 ? 'paid' : (paid > 0 ? 'partial' : 'unpaid'));
+    return {
+        title: title || 'Счёт за медицинские услуги',
+        docNo: inv.invoice_number || String(inv.id == null ? '' : inv.id),
+        issueDate: date,
+        status,
+        patient: [
+            ['ФИО', p.full_name || '—'],
+            ['Карта №', p.mrn || '—'],
+            ['Дата рождения', dobAge(p.date_of_birth) || '—'],
+            ['Телефон', p.phone || '—'],
+            ...(extraPatient || []),
+        ],
+        billing: [
+            ['Дата', date],
+            ['Плательщик', payerName || 'Пациент'],
+            ...(methodWords.length ? [['Оплата', methodWords.join(', ')]] : []),
+            ...(extraBilling || []),
+        ],
+        items: (items || []).map((it, i) => ({
+            name: packageItemName(it.description || 'Услуга', pkg[it.id], it.discount_amount)
+                + (withPerformer && byItem[it.id] && byItem[it.id].performer ? ' · ' + byItem[it.id].performer : ''),
+            qty: it.quantity, price: it.unit_price, _alt: i % 2 === 1,
+            ...(byItem[it.id] || {}),
+        })),
+        queue: lns.queue || [],
+        subtotal: inv.subtotal != null ? Number(inv.subtotal) : undefined,
+        total, paid,
+    };
+}
+
+// Печать A4-счёта по id: всё подгружается само. Несуществующий счёт или счёт
+// без строк НЕ печатается — бланк без позиций подменился бы образцом.
+export async function printInvoiceSheetById({ supabase, printableSheet, invoiceId, title = '', extraPatient = [], extraBilling = [], withPerformer = false }) {
+    const { data: inv, error } = await supabase.from('invoices')
+        .select('id, invoice_number, subtotal, discount_amount, total_amount, paid_amount, status, patient_id, payer_id, created_at')
+        .eq('id', invoiceId).single();
+    if (error || !inv) return { ok: false, reason: 'Счёт не найден.' };
+    const { data: items } = await supabase.from('invoice_items')
+        .select('id, description, quantity, unit_price, total, discount_amount').eq('invoice_id', inv.id);
+    if (!items || !items.length) return { ok: false, reason: 'В счёте нет позиций.' };
+    let patient = null;
+    if (inv.patient_id != null) {
+        const { data } = await supabase.from('patients')
+            .select('full_name, mrn, date_of_birth, phone').eq('id', inv.patient_id).maybeSingle();
+        patient = data || null;
+    }
+    let payerName = '';
+    if (inv.payer_id != null) {
+        try {
+            const { data } = await supabase.from('payers').select('id, name').eq('id', inv.payer_id).maybeSingle();
+            payerName = (data && data.name) || '';
+        } catch (e) { /* справочник недоступен — без имени плательщика */ }
+    }
+    let methods = [];
+    try {
+        const { data: pays } = await supabase.from('payments').select('method, amount').eq('invoice_id', inv.id);
+        methods = (pays || []).filter((x) => Number(x.amount) > 0).map((x) => x.method);
+    } catch (e) { /* способ оплаты — не повод не печатать счёт */ }
+    const lines = await loadInvoiceLines(supabase, inv.id, items.map((i) => i.id));
+    const data = invoiceSheetData({ inv, items, patient, payerName, methods, lines, title, extraPatient, extraBilling, withPerformer });
+    printableSheet({ type: 'invoice', idLine: data.docNo, data });
+    return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// V3120_FIX — квитанция: продажа подарочной карты / сертификата и депозит.
+// ---------------------------------------------------------------------------
+const CARD_KIND_RU = { gift_card: 'Подарочная карта', certificate: 'Сертификат' };
+function ymdToRu(v) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || ''));
+    return m ? m[3] + '.' + m[2] + '.' + m[1] : '';
+}
+function fmtSum(n) { return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
+
+// kind 'card'    — { card, buyer, method, cashier, invoiceNumber }
+// kind 'deposit' — { deposit, patient, balance, debtCovered, cashier }
+export function slipData(o = {}) {
+    const now = dateNumeric(new Date(), { withTime: true });
+    if (o.kind === 'card') {
+        const c = o.card || {};
+        const b = o.buyer || {};
+        const kindWord = CARD_KIND_RU[c.kind] || 'Подарочная карта';
+        const rest = c.remaining != null ? Number(c.remaining) : Number(c.amount);
+        return {
+            title: 'Квитанция',
+            subtitle: 'Продажа · ' + kindWord,
+            docNo: c.sale_number || o.invoiceNumber || '',
+            date: now, cashier: o.cashier || '',
+            rows: [
+                ['Покупатель', b.full_name || ''],
+                ['Карта пациента №', b.mrn || ''],
+                [kindWord, c.name || ''],
+                ['Номер карты', c.sale_number || ''],
+                ['Действует по', c.valid_until ? ymdToRu(c.valid_until) : 'бессрочно'],
+            ],
+            amountLabel: 'Номинал',
+            amount: Number(c.amount) || 0,
+            method: METHOD_RU[o.method] || o.method || '',
+            afterRows: [['Остаток на карте', fmtSum(rest)]],
+            note: 'Карта на предъявителя: ею может платить любой пациент клиники.',
+        };
+    }
+    const d = o.deposit || {};
+    const p = o.patient || {};
+    const pending = d.status === 'pending' || !d.method;
+    return {
+        title: 'Квитанция',
+        subtitle: 'Депозит (предоплата)',
+        docNo: d.deposit_number || '',
+        date: now, cashier: o.cashier || '',
+        rows: [
+            ['Пациент', p.full_name || ''],
+            ['Карта пациента №', p.mrn || ''],
+            ['Номер депозита', d.deposit_number || ''],
+        ],
+        amountLabel: 'Сумма',
+        amount: Number(d.amount) || 0,
+        method: pending ? '' : (METHOD_RU[d.method] || d.method || ''),
+        afterRows: [
+            ...(Number(o.debtCovered) > 0 ? [['Закрыт долг по кэшбэку', fmtSum(o.debtCovered)]] : []),
+            ...(o.balance != null && !pending ? [['Баланс пациента', fmtSum(o.balance)]] : []),
+        ],
+        note: pending ? 'Ждёт оплаты в кассе: баланс пополнится после приёма денег.' : '',
+    };
+}
+
+// Печать квитанции. Best-effort: сбой печати не отменяет проведённую операцию.
+export function printSlip(printableSheet, o) {
+    try {
+        const data = slipData(o);
+        printableSheet({ type: 'slip', idLine: data.docNo, data });
+        return true;
+    } catch (e) {
+        console.warn('[receipt] slip:', e && e.message);
+        return false;
+    }
 }
 
 // RECEIPT_DOB_PERFORMER_V1 — кто оказал услугу.

@@ -54,6 +54,7 @@ import { pendingCrmLines } from '../crm-lines.js';
 // у него три исхода, и визит есть во всех трёх (см. ensure-visit-answer.js).
 import { readEnsureVisit } from '../ensure-visit-answer.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // WIZ_INVOICE_PRINT_V1 — тот же брендированный бланк «Счёт» (Настройки → Документы); ?v как у всех импортёров
+import { printInvoiceSheetById } from './receipt-print.js?v=rp1';   // V3120_FIX — лист на каждый счёт, из серверных строк
 
 
 function fmtPrice(n) {
@@ -2799,9 +2800,16 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
             // WIZ_INVOICE_PRINT_V1 — сразу открываем печатную форму счёта
             // (бланк «Счёт» из Настройки → Документы; с блоком номеров очереди).
-            if (firstInvoice) {
+            //
+            // V3120_FIX — ЛИСТ НА КАЖДЫЙ СЧЁТ ПАЦИЕНТА, из того, что записал сервер.
+            // Многодневная запись выставляет по счёту на день, а печатался один:
+            // номер счёта первого дня, строки ВСЕХ дней и сумма, посчитанная на
+            // экране (с общей скидкой, которую сервер разложил по дням иначе).
+            // Кассе приходили счета, ни один из которых не совпадал с бумагой.
+            // Теперь как в service-picker-modal: номер, строки, скидка и сумма —
+            // ровно выставленные; очередь и исполнитель — по строкам ЭТОГО счёта.
+            if (firstInvoice && patientInvoices.length) {
                 try {
-                    const invNo = firstInvoice.invoice_number || String(firstInvoice.id);
                     // PAYER_FROM_SETTINGS_V1 — на печатном счёте плательщик назван
                     // так же, как в настройках и в подтверждении мастера.
                     const _p = wiz.payers.find(p => String(p.id) === String(wiz.payerId));
@@ -2809,49 +2817,26 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     const payLabel = _p
                         ? _p.name + ' · ' + payerKindRu(_p.kind)
                             + (wiz.payMethod === 'dms' && wiz.policyNo.trim() ? ' · полис ' + wiz.policyNo.trim() : '')
-                        : 'Пациент — оплата в кассе';
-                    // INVOICE_DOCTOR_V1 — врач в счёте: в каждой строке услуги
-                    // (как в visit-modal: «Услуга · Врач»), а при одном враче на
-                    // весь заказ — ещё и отдельной строкой в шапке.
+                        : '';
+                    // INVOICE_DOCTOR_V1 — врач в каждой строке услуги («Услуга ·
+                    // Врач», withPerformer), а при одном враче на весь заказ — ещё
+                    // и отдельной строкой в шапке.
                     const docName = (c) => {
                         const id = c.doctorId || (c.svc.requires_doctor ? wiz.doctorId : null);
                         const d = id ? wiz.doctors.find(x => String(x.id) === String(id)) : null;
                         return d ? (d.full_name || d.username || '') : '';
                     };
                     const orderDocs = [...new Set(wiz.cart.map(docName).filter(Boolean))];
-                    printableSheet({ type: 'invoice', idLine: invNo, data: {
-                        title: 'Амбулаторные услуги',
-                        docNo: invNo,
-                        issueDate: 'Дата ' + new Date().toLocaleDateString('ru-RU'),
-                        status: 'UNPAID',
-                        patient: [
-                            ['ФИО', patient.full_name || '—'],
-                            ['Карта №', patient.mrn || '—'],
-                            ['Телефон', patient.phone || '—'],
-                            ...(orderDocs.length === 1 ? [['Врач', orderDocs[0]]] : []),
-                        ],
-                        billing: [
-                            ['Дата', new Date().toLocaleDateString('ru-RU')],
-                            ['Оплата', payLabel],
-                            // DISCOUNT_ABS_V1 — печатаем СУММУ скидки в обоих
-                            // режимах (её пациент и сверяет с итогом), а процент
-                            // добавляем как пояснение, когда скидка задана им.
-                            ...(discountAmount() > 0 ? [['Скидка',
-                                (wiz.discountMode === 'pct' && Number(wiz.discountPct) > 0 ? wiz.discountPct + '% · ' : '')
-                                + '−' + fmtPrice(discountAmount()) + ' сум']] : []),
-                            ...(wiz.promo ? [['Промокод', wiz.promo.name]] : []),
-                        ],
-                        // COVERAGE_SPLIT_V1 — в счёте ПАЦИЕНТА только его услуги.
-                        // Раньше печатался весь заказ: пациент видел бы в своём
-                        // счёте позиции, которые оплачивает страховая.
-                        items: wiz.cart.filter(c => !isCovered(c)).map((c, i) => {
-                            const dn = docName(c);
-                            return { name: c.svc.name + (dn ? ' · ' + dn : ''), qty: c.qty, price: cartLinePrice(c), _alt: i % 2 === 1 };
-                        }),
-                        queue: queueRows,   // QUEUE_TICKET_V1
-                        subtotal: patientTotal(), total: Math.max(0, patientTotal() - discountAmount()), paid: 0,
-                    } });
+                    const extraPatient = orderDocs.length === 1 ? [['Врач', orderDocs[0]]] : [];
+                    const extraBilling = [
+                        ...(payLabel ? [['Программа', payLabel]] : []),
+                        ...(wiz.promo ? [['Промокод', wiz.promo.name]] : []),
+                    ];
                     /* i18n-exempt-end */
+                    for (const pInv of patientInvoices) {
+                        const r = await printInvoiceSheetById({ supabase, printableSheet, invoiceId: pInv.id, withPerformer: true, extraPatient, extraBilling });
+                        if (r && !r.ok) console.warn('[wizard] invoice print:', pInv.id, r.reason);
+                    }
                 } catch (e) { console.warn('[wizard] invoice print:', e); }
             }
 

@@ -917,8 +917,8 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
         printableSheet({ type: 'invoice', idLine: inv.invoice_number || String(inv.id), data: {
             title: 'Амбулаторные услуги',
             docNo: inv.invoice_number || String(inv.id),
-            issueDate: 'Дата ' + new Date().toLocaleDateString('ru-RU'),
-            status: 'UNPAID',
+            issueDate: new Date().toLocaleDateString('ru-RU'),   // V3120_FIX — «Дата» ставит бланк; было «Дата Дата …»
+            status: 'unpaid',   // V3120_FIX — код, слово ставит бланк (было «UNPAID»)
             patient: [
                 ['ФИО', nameOf(p) || '—'],
                 ['Карта №', p.mrn || '—'],

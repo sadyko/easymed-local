@@ -120,7 +120,7 @@ export function buildSheetHtml({ type = 'invoice', s = null, data = null, idLine
     const radius = cfg.cornerStyle === 'sharp' ? '0' : '10px';
 
     return `<!doctype html>
-<html lang="${esc(cfg.language || 'en')}"><head>
+<html lang="${esc(cfg.language === 'en' || !cfg.language ? 'ru' : cfg.language)}"><head>
 <meta charset="utf-8">
 <title>${esc(title || titleFor(type))} · ${esc(idLine || '')}</title>
 <style>
@@ -346,7 +346,7 @@ function renderCustomBody({ s, type, bodyHtml, idLine, title, head = null }) {
             <div style="flex:1">
                 <span class="pill-solid">${esc(title || titleFor(type))}</span>
                 <div class="h1" style="margin-top:8px;">${esc(title || titleFor(type))}</div>
-                ${idLine ? `<div style="font-size:12px;color:#55636d;margin-top:4px;">Document <span class="mono" style="color:${s.ink};font-weight:600;">${esc(idLine)}</span> · ${esc(dateNumeric(new Date()))}</div>` : ''}
+                ${idLine ? `<div style="font-size:12px;color:#55636d;margin-top:4px;">Документ <span class="mono" style="color:${s.ink};font-weight:600;">${esc(idLine)}</span> · ${esc(dateNumeric(new Date()))}</div>` : ''}
             </div>
         </div>
         ${bodyHtml}
@@ -446,17 +446,17 @@ function fontFor(pair) {
 }
 function titleFor(type) {
     return ({
-        conclusion: 'Medical conclusion',
-        lab:        'Laboratory report',
-        diag:       'Imaging & diagnostics',
-        invoice:    'Invoice',
+        conclusion: 'Медицинское заключение',
+        lab:        'Результаты анализов',
+        diag:       'Заключение исследования',
+        invoice:    'Счёт',
         act:        'Акт оказанных услуг',
-        check:      'Service receipt',
-        fiscal:     'Fiscal receipt',
+        check:      'Чек об оплате',
+        fiscal:     'Кассовый чек',
         inpatient_contract: 'Договор на госпитализацию',   // INPATIENT_DOCS_V1
         inpatient_consent:  'Информированное согласие',
         inpatient_memo:     'Памятка стационара',
-    })[type] || 'Document';
+    })[type] || 'Документ';
 }
 function logoSVG(accent) {
     return `<div style="width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg, ${accent}, ${darken(accent, 0.3)});display:grid;place-items:center;flex:0 0 44px;">
@@ -535,12 +535,12 @@ function headerHTML(s) {
         ${logoMark(s)}
         <div style="flex:1;">
             ${hasLogo(s) ? '' : `<div style="font-size:17px;font-weight:700;letter-spacing:-0.01em;color:${s.ink};">${esc(s.clinicName)}</div>`}
-            <div style="font-size:11px;color:#55636d;margin-top:1px;font-weight:500;">${esc(s.tagline)}</div>
+            ${s.tagline ? `<div style="font-size:11px;color:#55636d;margin-top:1px;font-weight:500;">${esc(s.tagline)}</div>` : ''}
         </div>
         <div style="text-align:right;font-size:10.5px;color:#55636d;line-height:1.55;">
-            <div>${esc(s.address)}</div>
-            <div>${esc(s.phone)} · ${esc(s.email)}</div>
-            <div style="color:${s.accent};font-weight:600;">${esc(s.web)}</div>
+            ${s.address ? `<div>${esc(s.address)}</div>` : ''}
+            ${(s.phone || s.email) ? `<div>${[s.phone, s.email].filter(Boolean).map(esc).join(' · ')}</div>` : ''}
+            ${s.web ? `<div style="color:${s.accent};font-weight:600;">${esc(s.web)}</div>` : ''}
         </div>
     </div>`;
 }
@@ -608,17 +608,21 @@ function signoffHTML(s, { signerName, signerSpec, signerLicense }) {
         </div>
     </div>`;
 }
+// V3120_FIX — подвал печатает ТОЛЬКО то, что задала клиника. Заводские
+// английские заготовки («Thank you for choosing our clinic…», «This document
+// is generated electronically…») и «Page 1 of 1» стояли на каждом русском
+// бланке; последняя к тому же лгала на многостраничных. Шапка так же не
+// печатает пустые контакты (раньше выходило одинокое « · »).
 function footerHTML(s) {
     return `<div class="footer">
         <div style="flex:1;">
-            <div class="copy">${esc(s.footerNote)}</div>
-            <div class="legal">${esc(s.legalNote)}</div>
+            ${s.footerNote ? `<div class="copy">${esc(s.footerNote)}</div>` : ''}
+            ${s.legalNote ? `<div class="legal">${esc(s.legalNote)}</div>` : ''}
             ${s.legalName ? `<div style="margin-top:4px;color:#8a949c;font-weight:600;">${esc(s.legalName)}</div>` : ''}
             ${(s.taxId || s.license) ? `<div style="margin-top:4px;color:#aab4bc;">${[s.taxId, s.license].filter(Boolean).map(esc).join(' · ')}</div>` : ''}
         </div>
         <div class="right">
-            <div class="web">${esc(s.web)}</div>
-            <div>Page 1 of 1</div>
+            ${s.web ? `<div class="web">${esc(s.web)}</div>` : ''}
         </div>
     </div>`;
 }
@@ -627,7 +631,7 @@ function titleBlock(s, { pillText, title, idLabel, idValue, dateStr, rightLabel,
         <div style="flex:1;">
             <span class="pill-solid">${esc(pillText)}</span>
             <div class="h1" style="margin-top:8px;">${esc(title)}</div>
-            <div style="font-size:12px;color:#55636d;margin-top:4px;">${esc(idLabel || 'Document')} <span class="mono" style="color:${s.ink};font-weight:600;">${esc(idValue)}</span>${dateStr ? ` · ${esc(dateStr)}` : ''}</div>
+            <div style="font-size:12px;color:#55636d;margin-top:4px;">${esc(idLabel || 'Документ')} <span class="mono" style="color:${s.ink};font-weight:600;">${esc(idValue)}</span>${dateStr ? ` · ${esc(dateStr)}` : ''}</div>
         </div>
         ${rightLabel ? `<div style="text-align:right;">
             <div class="lbl">${esc(rightLabel)}</div>
@@ -749,8 +753,8 @@ function invoiceBody(s, d) {
         return `<div class="row ${it._alt ? 'alt' : ''}" style="grid-template-columns: 2fr 1fr 1.4fr 1.4fr;">
             <span class="name">${esc(it.name)}</span>
             <span class="val" style="font-weight:500;color:#55636d;">${esc(String(it.qty || 1))}</span>
-            <span class="val">${Number(it.price || 0).toLocaleString('ru-RU')} <span class="u">UZS</span></span>
-            <span class="val">${subtotal.toLocaleString('ru-RU')} <span class="u">UZS</span></span>
+            <span class="val">${Number(it.price || 0).toLocaleString('ru-RU')} <span class="u">сум</span></span>
+            <span class="val">${subtotal.toLocaleString('ru-RU')} <span class="u">сум</span></span>
         </div>`;
     }).join('');
     const subtotal = Number(d.subtotal || 0);
@@ -790,11 +794,11 @@ function invoiceBody(s, d) {
             ${items || '<div class="row"><span style="color:#999;">No items.</span></div>'}
         </div>
         <div class="totals">
-            <div class="line"><span>Subtotal</span><span>${subtotal.toLocaleString('ru-RU')} UZS</span></div>
-            ${tax > 0 ? `<div class="line"><span>VAT (12 %)</span><span>${tax.toLocaleString('ru-RU')} UZS</span></div>` : ''}
-            <div class="line grand"><span>Total</span><span>${total.toLocaleString('ru-RU')} UZS</span></div>
-            ${paid > 0 ? `<div class="line"><span>Paid</span><span>${paid.toLocaleString('ru-RU')} UZS</span></div>` : ''}
-            ${owed > 0 ? `<div class="line owe"><span>Outstanding</span><span>${owed.toLocaleString('ru-RU')} UZS</span></div>` : ''}
+            <div class="line"><span>Subtotal</span><span>${subtotal.toLocaleString('ru-RU')} сум</span></div>
+            ${tax > 0 ? `<div class="line"><span>VAT (12 %)</span><span>${tax.toLocaleString('ru-RU')} сум</span></div>` : ''}
+            <div class="line grand"><span>Total</span><span>${total.toLocaleString('ru-RU')} сум</span></div>
+            ${paid > 0 ? `<div class="line"><span>Paid</span><span>${paid.toLocaleString('ru-RU')} сум</span></div>` : ''}
+            ${owed > 0 ? `<div class="line owe"><span>Outstanding</span><span>${owed.toLocaleString('ru-RU')} сум</span></div>` : ''}
         </div>
         ${signoffHTML(s, {
             signerName:    d.cashierName  || 'Cashier · Desk #1',
@@ -855,9 +859,9 @@ function actBody(s, d) {
         return `<div class="row ${it._alt ? 'alt' : ''}" style="grid-template-columns: 2fr 0.6fr 1fr 0.7fr 1fr 1.3fr;">
             <span class="name">${esc(it.name)}</span>
             <span class="val" style="font-weight:500;color:#55636d;">${esc(String(it.qty || 1))}</span>
-            <span class="val">${Number(it.price || 0).toLocaleString('ru-RU')} <span class="u">UZS</span></span>
+            <span class="val">${Number(it.price || 0).toLocaleString('ru-RU')} <span class="u">сум</span></span>
             <span class="val">${disc ? disc + ' %' : '—'}</span>
-            <span class="val">${net.toLocaleString('ru-RU')} <span class="u">UZS</span></span>
+            <span class="val">${net.toLocaleString('ru-RU')} <span class="u">сум</span></span>
             <span class="val" style="border-bottom:1px solid #c8d2d8;min-height:14px;"></span>
         </div>`;
     }).join('');
@@ -891,9 +895,9 @@ function actBody(s, d) {
             ${items || '<div class="row"><span style="color:#999;">Нет услуг.</span></div>'}
         </div>
         <div class="totals">
-            <div class="line"><span>Подытог</span><span>${subtotal.toLocaleString('ru-RU')} UZS</span></div>
-            <div class="line"><span>Скидка</span><span>−${discountTotal.toLocaleString('ru-RU')} UZS</span></div>
-            <div class="line grand"><span>Итого:</span><span>${total.toLocaleString('ru-RU')} UZS</span></div>
+            <div class="line"><span>Подытог</span><span>${subtotal.toLocaleString('ru-RU')} сум</span></div>
+            ${discountTotal > 0 ? `<div class="line"><span>Скидка</span><span>−${discountTotal.toLocaleString('ru-RU')} сум</span></div>` : ''}
+            <div class="line grand"><span>Итого:</span><span>${total.toLocaleString('ru-RU')} сум</span></div>
         </div>
         <div style="margin-top:40px;font-size:11.5px;color:#55636d;"><!-- ACT_PROTOCOL_SIGN_V1 -->
             <div style="display:flex;gap:28px;">
@@ -916,7 +920,7 @@ function checkBody(s, d) {
         <div class="row" style="grid-template-columns: 2fr 1fr 1.4fr;">
             <span class="name">${esc(it.name)}</span>
             <span class="val" style="font-weight:500;color:#55636d;">${esc(String(it.qty || 1))}</span>
-            <span class="val">${Number(it.price || 0).toLocaleString('ru-RU')} <span class="u">UZS</span></span>
+            <span class="val">${Number(it.price || 0).toLocaleString('ru-RU')} <span class="u">сум</span></span>
         </div>`).join('');
     return `
         ${headerHTML(s)}
@@ -937,7 +941,7 @@ function checkBody(s, d) {
             ${lines}
         </div>
         <div class="totals">
-            <div class="line grand"><span>Paid</span><span>${(Number(d.total) || 0).toLocaleString('ru-RU')} UZS</span></div>
+            <div class="line grand"><span>Paid</span><span>${(Number(d.total) || 0).toLocaleString('ru-RU')} сум</span></div>
         </div>
         ${signoffHTML(s, {
             signerName:    d.cashierName  || 'Cashier · Desk #1',
@@ -984,7 +988,7 @@ function fiscalBody(s, d) {
         + `<div class="f-hr"></div>`
         + `<div class="f-kv"><span>Подытог</span><b>${money(d.subtotal)}</b></div>`
         + (tax > 0 ? `<div class="f-kv"><span>НДС</span><b>${money(tax)}</b></div>` : '')
-        + `<div class="f-tot"><span>ИТОГО</span><b>${money(d.total)} UZS</b></div>`
+        + `<div class="f-tot"><span>ИТОГО</span><b>${money(d.total)} сум</b></div>`
         + `<div class="f-kv"><span>Оплата</span><b>${esc(d.method || 'наличные')}</b></div>`
         + ofd
         + `<div class="f-hr"></div>`

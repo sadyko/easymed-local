@@ -3211,14 +3211,14 @@ export function openServicePickerModal({
                         } catch (e) { console.warn('[wizard] queue numbers:', e && e.message); }
                         const patName = (p.fullName || [p.lastName, p.firstName].filter(Boolean).join(' ') || '—').trim();
                         const paidNow = Number(inv.paid_amount || 0);
-                        const invStatus = invTotal === 0 || paidNow >= invTotal ? 'PAID' : (paidNow > 0 ? 'PARTIAL' : 'UNPAID');
+                        const invStatus = invTotal === 0 || paidNow >= invTotal ? 'paid' : (paidNow > 0 ? 'partial' : 'unpaid');   // V3120_FIX — код, слово ставит бланк
                         const invNo = inv.invoice_number || String(inv.id);
                         const pkgOff = Math.max(0, Number(inv.discount_amount || 0) - Number(bill.data.rest_discount || 0));
                         /* i18n-exempt-start: печатный счёт (бланк) — печатные документы намеренно русские */
                         printableSheet({ type: 'invoice', idLine: invNo, data: {
                             title: 'Амбулаторные услуги',
                             docNo: invNo,
-                            issueDate: 'Дата ' + new Date().toLocaleDateString('ru-RU'),
+                            issueDate: new Date().toLocaleDateString('ru-RU'),   // V3120_FIX — «Дата» ставит бланк
                             status: invStatus,
                             patient: [
                                 ['ФИО', patName],

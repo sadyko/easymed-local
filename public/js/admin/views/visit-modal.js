@@ -20,6 +20,7 @@ import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1
 import { openCancelInvoiceDialog, logInvoiceAction as _logInvoiceAction, canMoveInvoiceMoney, invoiceMoneyErrorText } from './invoice-actions.js?v=ia3';
 import { logPatientActivity } from './activity-log.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // must match every other importer (one module instance)
+import { printInvoiceSheetById } from './receipt-print.js?v=rp1';   // V3120_FIX — счёт визита той же сборкой, что у кассы
 // VISITS_ONE_DOOR_V1 — окно визита правило двойной записи не знало вовсе:
 // «Сохранить» писало visit_date прямым UPDATE, а кнопки статуса — status.
 // Переезд на другой день и возврат отменённой записи в «записан» проходили
@@ -1208,62 +1209,32 @@ export async function generateInvoiceFromSelection(state, selectedIds, onReload)
 // auto-triggers the browser print dialog. Used right after invoice creation
 // and from the "Print receipt" button in the Invoice pane.
 // ---------------------------------------------------------------------------
-function openInvoicePrintWindow(state, inv, lineItems) {
-    if (!inv) { toast('No invoice to print yet.', 'fail'); return; }
+// V3120_FIX — бланк собирается ОБЩЕЙ сборкой по id счёта (receipt-print.js),
+// той же, что у кассы и мастера записи. Своя сборка здесь печатала половину
+// бланка по-английски («Full name / MRN / Issued / Self-pay / On receipt»),
+// дату визита по UTC (String(d).slice(0, 10) у вечернего визита давал
+// вчерашний день), плательщика всегда «Self-pay» — даже у счёта страховой — и
+// не говорила, сколько уже оплачено. Теперь: русские подписи, местная дата,
+// плательщик по справочнику, «Оплачено» / «Остаток», суммы — как на сервере.
+// Врач по-прежнему стоит в строке услуги («Услуга · Врач»). lineItems больше
+// не нужны: строки берутся из выставленного счёта.
+function openInvoicePrintWindow(state, inv, lineItems) {   // eslint-disable-line no-unused-vars
+    if (!inv || inv.id == null) { toast('Счёта для печати ещё нет.', 'fail'); return; }
     const v = state.visit || {};
-    const p = state.patient || v.patients || {};
-    const patientName = displayPatientName(v.patients || p);
-    const patientMRN = p.mrn || v.patients?.mrn || '';
-    const patientPhone = p.phone || v.patients?.phone || '';
-
-    // Prefer the explicit line items handed in by the caller (right after
-    // generation we have them in memory). Otherwise fall back to the billed
-    // visit_services rows already loaded into state.
-    const items = (lineItems && lineItems.length)
-        ? lineItems
-        : (state.services || []).filter(r => r.invoice_item_id);
-
-    // Build the structured line items the documented invoice template
-    // (doc-settings.js → invoiceBody) expects. Doctor name is folded into the
-    // service label so we keep that info without breaking the branded grid.
-    const lineRows = items.map((r, i) => {
-        const qty    = Number(r.qty   || r.quantity   || 1);
-        const price  = Number(r.price || r.unit_price || 0);
-        const svc    = r.__service_name || r.description || '—';
-        const doctor = r.__doctor_name ? ` · ${r.__doctor_name}` : '';
-        return { name: svc + doctor, qty, price, _alt: i % 2 === 1 };
-    });
-
-    const subtotal = Number(inv.subtotal      || 0) || Number(inv.total_amount || 0);
-    const total    = Number(inv.total_amount  || 0);
-    const paid     = Number(inv.paid_amount   || 0);
-    const invoiceNo = inv.invoice_number || (inv.id != null ? String(inv.id) : '');
-    const statusLabel = (inv.status || 'unpaid').toUpperCase();
-
-    // Hand structured `data` (NOT raw bodyHtml) so the print routes through
-    // the branded, fully-styled invoice template configured in Documents —
-    // single source of truth for everything we hand the patient.
-    const data = {
-        title:     'Outpatient services',
-        docNo:     invoiceNo,
-        issueDate: `Issued ${formatDate(v.visit_date || v.date) || new Date().toLocaleDateString()}`,
-        status:    statusLabel,
-        patient: [
-            ['Full name', patientName || '—'],
-            ['MRN',       patientMRN  || '—'],
-            ['Phone',     patientPhone || '—'],
-            ['Visit date', formatDate(v.visit_date || v.date) || '—'],
-        ],
-        billing: [
-            ['Issue date', new Date().toLocaleDateString()],
-            ['Due',        paid >= total && total > 0 ? 'Paid' : 'On receipt'],
-            ['Payer',      'Self-pay'],
-        ],
-        items:    lineRows,
-        subtotal, total, paid,
-    };
-
-    return printableSheet({ type: 'invoice', idLine: invoiceNo, data });
+    // Дата визита — МЕСТНЫЙ день: visit_date бывает и «ГГГГ-ММ-ДД», и отметкой
+    // времени по UTC (визит в 00:20 по Ташкенту — это 19:20Z накануне).
+    const vRaw = String(v.visit_date || v.date || '').trim();
+    const vYmd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(vRaw);
+    const vDt = vYmd ? new Date(Number(vYmd[1]), Number(vYmd[2]) - 1, Number(vYmd[3])) : (vRaw ? new Date(vRaw) : null);
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const visitDay = vDt && !Number.isNaN(vDt.getTime()) ? pad2(vDt.getDate()) + '.' + pad2(vDt.getMonth() + 1) + '.' + vDt.getFullYear() : '';
+    return printInvoiceSheetById({
+        supabase, printableSheet, invoiceId: inv.id, withPerformer: true,
+        extraPatient: visitDay ? [['Дата визита', visitDay]] : [],   // i18n-exempt: подпись ПЕЧАТНОГО бланка — печатные документы намеренно русские
+    }).then((r) => {
+        if (r && !r.ok) toast(r.reason || 'Не удалось напечатать счёт.', 'fail');
+        return r;
+    }).catch((e) => { toast((e && e.message) || 'Не удалось напечатать счёт.', 'fail'); });
 }
 
 // In-page iframe with a print button — used when the browser blocks
@@ -1615,11 +1586,16 @@ function fkSelect(name, table, currentId, allowBlank) {
     })();
     return sel;
 }
+// V3120_FIX — местный календарный день. String(d).slice(0, 10) у отметки
+// времени брал ДЕНЬ ПО UTC: счёт, выставленный в Ташкенте в 02:00, показывал
+// вчерашнюю дату. Отметка времени читается целиком (по часовому поясу
+// компьютера), голая дата «ГГГГ-ММ-ДД» — как местная полночь.
 function formatDate(d) {
     if (!d) return '—';
-    const s = String(d).slice(0, 10);
-    const dt = new Date(s);
-    return Number.isNaN(dt.getTime()) ? s : dt.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+    const str = String(d);
+    const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str.trim());
+    const dt = ymd ? new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3])) : new Date(str);
+    return Number.isNaN(dt.getTime()) ? str.slice(0, 10) : dt.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 // ---------------------------------------------------------------------------
