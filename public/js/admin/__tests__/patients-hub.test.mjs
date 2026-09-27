@@ -144,6 +144,7 @@ const BOARD = {
   }],
 };
 let rpcCalls = [];
+let AGGS = null;   // V3120_FIX — ответ patient_base_aggregates
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
@@ -153,6 +154,8 @@ globalThis.fetch = async (url, opts = {}) => {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     rpcCalls.push(name);
     if (name === 'queue_board') return ok({ data: JSON.parse(JSON.stringify(BOARD)) });
+    // V3120_FIX — сводка реестра: депозит и долг раздельно (rpc/patient-aggregates.js).
+    if (name === 'patient_base_aggregates') return ok({ data: AGGS });
     // V3120_FIX — настоящая форма ответа сервера (rpc/telegram.js telegramChatsList).
     if (name === 'telegram_chats_list') return ok({ data: { chats: [{ chat_id: '1', phone: '+998901112233', patients: [{ id: 'p-1', name: 'Эргашев Жахонгир' }] }], unread: 0, folders: [] } });
     return ok({ data: null });
@@ -720,5 +723,28 @@ test('V3120_FIX: отметка Telegram появляется — ответ с�
     assert.ok(!t.includes('Sort: Recent'), 'кнопка сортировки осталась английской');
   } finally {
     console.warn = origWarn;
+  }
+});
+
+test('V3120_FIX: «Баланс» в реестре показывает и депозит, и долг — долг не растворяется', async () => {
+  reset();
+  setFullAccess('Admin');
+  AGGS = [{ patient_id: 'p-1', visit_count: 2, balance: 120000, debt: 375000, net_balance: -255000 }];
+  try {
+    const { renderPatients } = await import('../views/patients.js?v=v3120bal');
+    const box = mk('div');
+    await renderPatients(box, { onNavigate() {}, embedded: true });
+    await tick(60);
+    const t = textOf(box);
+    assert.match(t, /\+120\s000/, 'депозит пациента не виден: ' + t.slice(0, 300));
+    assert.match(t, /долг 375\s000/, 'долг пациента пропал из реестра');
+    // без долга — только депозит, без красной строки
+    AGGS = [{ patient_id: 'p-1', visit_count: 2, balance: 0, debt: 0, net_balance: 0 }];
+    const box2 = mk('div');
+    await renderPatients(box2, { onNavigate() {}, embedded: true });
+    await tick(60);
+    assert.equal(walk(box2).filter((n) => hasClass(n, 'pt-bal-debt')).length, 0, 'строка долга у пациента без долга');
+  } finally {
+    AGGS = null;
   }
 });

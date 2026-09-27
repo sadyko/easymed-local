@@ -302,7 +302,12 @@ export async function loadPatientsPaged({
             for (const r of rows) {
                 const a = m[r.id]; if (!a) continue;
                 r.visitCount = Number(a.visit_count || 0);
+                // V3120_FIX — сервер отдаёт ДВА числа: balance — депозит (кошелёк),
+                // debt — неоплаченные счета пациента без страховой. Прежде balance
+                // был знаковой разностью «оплачено − выставлено», и долг в реестре
+                // растворялся в депозите.
                 r.balance    = Number(a.balance || 0);
+                r.debt       = Number(a.debt || 0);
                 r.insurance  = a.insurer || '';
                 r.payerType  = a.payer_type || '';
                 r.registrar  = a.registrar || '';

@@ -874,8 +874,8 @@ function patientRow(p) {
             last ? h('div', { class: 'pt-when-main' }, last) : noneCell('—'),
             h('div', { class: 'pt-when-sub' }, visits > 0 ? trf('визитов: {n}', { n: visits }) : 'визитов не было'),
         ),
-        // 5 — Баланс  (real balance not joined → zero-state «0 сум», never a fake ±)
-        h('td', { style: { textAlign: 'right' } }, balanceCell(p.balance)),
+        // 5 — Баланс: депозит пациента, под ним — долг (V3120_FIX).
+        h('td', { style: { textAlign: 'right' } }, balanceCell(p)),
         // 6 — Регистратор: настоящее имя того, кто завёл карту, а если его в
         // карте нет — так и сказано словом, а не прочерком, который на каждой
         // строке читается как «экран сломан».
@@ -892,14 +892,23 @@ function patientRow(p) {
 }
 
 // Balance cell — Aurora BalanceCell port. v>0 green +, v<0 red −, v===0 «0 сум».
-// In B1 the paged list never joins invoices, so balance is always 0 (zero-state).
-// We keep the ± branches so the cell lights up correctly once invoices land.
-function balanceCell(v) {
-    const n = Number(v) || 0;
+//
+// V3120_FIX — ДВА ЧИСЛА, А НЕ ОДНО. patient_base_aggregates отдаёт `balance`
+// (депозит — деньги пациента на счету клиники) и `debt` (неоплаченные счета
+// без страховой). Одно знаковое число прятало долг: пациент с депозитом
+// 500 000 и долгом 375 000 выглядел «+125 000», и регистратура не знала, что
+// за ним долг. Сверху — депозит, под ним красным — долг, если он есть.
+export function balanceCell(p) {
+    const wallet = Number(p && p.balance) || 0;
+    const debt = Number(p && p.debt) || 0;
     const rfmt = (x) => Math.abs(x).toLocaleString('ru-RU');
-    if (n > 0) return h('span', { class: 'bal pos num' }, `+${rfmt(n)}`);
-    if (n < 0) return h('span', { class: 'bal neg num' }, `−${rfmt(n)}`);
-    return h('span', { class: 'bal zero num' }, '0 ', h('small', null, 'сум'));
+    const main = wallet > 0 ? h('span', { class: 'bal pos num', title: tr('Депозит пациента') }, `+${rfmt(wallet)}`)
+        : wallet < 0 ? h('span', { class: 'bal neg num' }, `−${rfmt(wallet)}`)
+        : h('span', { class: 'bal zero num' }, '0 ', h('small', null, 'сум'));
+    if (!(debt > 0)) return main;
+    return h('div', null, main,
+        h('div', { class: 'bal neg num pt-bal-debt', title: tr('Неоплаченные счета пациента (без страховой)') },
+            trf('долг {sum}', { sum: rfmt(debt) })));
 }
 
 function displayStatus(p) {

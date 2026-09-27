@@ -121,6 +121,7 @@ let payload = fullPayload();
 let rpcAnswers = {};
 // V3120_FIX — отказ сервера по имени RPC: { status, error: { code, message } }.
 let rpcErrors = {};
+const rpcBodies = [];
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
@@ -128,6 +129,7 @@ globalThis.fetch = async (url, opts = {}) => {
   if (u.startsWith('/api/rpc/')) {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     rpcCalls.push(name);
+    rpcBodies.push([name, body]);   // V3120_FIX — аргументы вызова
     if (name === 'patient_card') return ok({ data: JSON.parse(JSON.stringify(payload)) });
     if (Object.prototype.hasOwnProperty.call(rpcErrors, name)) { const e = rpcErrors[name]; return { ok: false, status: e.status, json: async () => ({ error: e.error }) }; }
     if (Object.prototype.hasOwnProperty.call(rpcAnswers, name)) return ok({ data: rpcAnswers[name] });
@@ -258,4 +260,31 @@ test('V3120_FIX: история болезни (обзор и документы
     globalThis.window.easymed.state.user = { id: 7, full_name: 'Регистратор', role: 'registrar' };
     perms.setFullAccess('Администратор');
   }
+});
+
+test('V3120_FIX: окно депозита шлёт idempotency_key — один на окно, тот же при повторе', async () => {
+  document.body.children.length = 0;
+  rpcErrors = {};
+  rpcAnswers = { deposit_balance: { balance: 0, rows: [] } };
+  const box = await render(fullPayload());
+  findBtnByText(box, 'Баланс счёта').click();
+  await tick();
+  findBtnByText(document.body, 'Внести депозит').click();
+  await tick();
+  const amount = walk(document.body).find((n) => n.tagName === 'INPUT' && n.attrs.type === 'number');
+  assert.ok(amount, 'в окне депозита нет поля суммы');
+  amount.value = '50000';
+  // первый раз сервер отказывает (обрыв), второй — принимает: ключ обязан совпасть
+  rpcErrors = { create_deposit: { status: 500, error: { code: 'internal', message: 'обрыв' } } };
+  const send = findBtnByText(document.body, 'Отправить в кассу');
+  send.click(); await tick();
+  rpcErrors = {};
+  rpcAnswers = { ...rpcAnswers, create_deposit: { deposit: { deposit_number: 'DEP-1', amount: 50000, status: 'pending' } } };
+  send.click(); await tick();
+  const calls = rpcBodies.filter(([n]) => n === 'create_deposit').map(([, b]) => b);
+  assert.equal(calls.length, 2, 'create_deposit вызван не дважды');
+  const k = calls[0].idempotency_key;
+  assert.match(String(k), /^[A-Za-z0-9_-]{8,80}$/, 'ключ не по формату сервера: ' + k);
+  assert.equal(calls[1].idempotency_key, k, 'повтор из того же окна пришёл с другим ключом — сервер заведёт второй депозит');
+  rpcAnswers = {};
 });

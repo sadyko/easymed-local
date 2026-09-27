@@ -2059,6 +2059,11 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
     // передумывают. Регистратура, называя способ заранее, лишь угадывала — а
     // касса потом сверяла ящик с этой догадкой.
     function openDepositModal() {
+        // V3120_FIX — ОДНО ОКНО = ОДИН ДЕПОЗИТ. Ключ рождается при открытии окна
+        // и едет с каждым нажатием «Отправить в кассу»: двойной щелчок или
+        // повтор после обрыва связи сервер узнаёт по ключу и второй депозит не
+        // заводит (idempotency_key, create_deposit).
+        const idempotencyKey = newIdempotencyKey();
         const amountInp = h('input', { type: 'number', min: '0', step: '1000', placeholder: '0' });
         const noteInp = h('input', { type: 'text', placeholder: 'Комментарий (необязательно)' });
         const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Отправить в кассу');
@@ -2078,6 +2083,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             try {
                 const res = await rpcDeposits('create_deposit', {
                     patient_id: patient.id, amount, notes: noteInp.value.trim(),
+                    idempotency_key: idempotencyKey,   // V3120_FIX
                 });
                 const num = (res && res.deposit && res.deposit.deposit_number) || '';
                 m.close();
@@ -2091,6 +2097,17 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             }
         });
         amountInp.focus();
+    }
+
+    // V3120_FIX — ключ идемпотентности: 8–80 символов [A-Za-z0-9_-].
+    // crypto.randomUUID есть только в «безопасном контексте» (https или
+    // localhost), а клиника открывает программу по http://<IP в сети> —
+    // поэтому запасной путь через getRandomValues, который есть везде.
+    function newIdempotencyKey() {
+        try { if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') return globalThis.crypto.randomUUID(); } catch (_) { /* ниже запасной путь */ }
+        const b = new Uint8Array(16);
+        try { globalThis.crypto.getRandomValues(b); } catch (_) { for (let i = 0; i < b.length; i++) b[i] = Math.floor(Math.random() * 256); }
+        return 'dep-' + Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
     }
 
     async function rpcDeposits(name, args) {
@@ -2189,7 +2206,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
         let genderVal   = ['male', 'female', 'other'].includes(p.gender) ? p.gender : 'other';
         const genderChips = radioChips('__edit_gender',
             [['male', 'Мужской'], ['female', 'Женский'], ['other', 'Другое']],
-            () => genderVal, (v) => { genderVal = v; }, { nowrap: true });
+            () => genderVal, (v) => { genderVal = v; }, { nowrap: true, label: 'Пол' });   // V3120_FIX — подпись группы (было «__edit_gender» в aria-label)
         const bloodInp  = h('input', { type: 'text', value: p.blood_type || '', placeholder: 'напр. O(I) Rh+' });
         // Телефоны — тот же контрол с флагом/группировкой, что в регистрации.
         // PHONE_INPUT_V1 — контрол сам держит своё состояние: значение заводим
