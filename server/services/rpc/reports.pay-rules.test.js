@@ -341,3 +341,63 @@ test('D2: RPC зарегистрированы; статус — чтение, �
   assert.equal(isReadOnlyRpc('pay_period_close'), false);
   assert.equal(isReadOnlyRpc('pay_period_reopen'), false);
 });
+
+// ─── FINAL_MONEY_FIX_V1 (C1). КОНСУЛЬТАЦИЯ — УСЛУГА, А НЕ ТОВАР ──────────────
+// Строка консультации — service_id NULL + consultation_type_id (visit-line-row.js,
+// walk-in-booking.js). Правило «на товары процента нет» читало её как товар
+// (строка без услуги) и не платило врачу за приём ничего. Товар — только
+// строка продукта (clinic_item_id) или строка вовсе без услуги и без вида приёма.
+
+function consultClinic() {
+  const c = clinic();
+  c.db.prepare("INSERT INTO consultation_types (id, name, price) VALUES (1, 'Первичный приём', 100000)").run();
+  // Строка консультации; в браузере сохранена устаревшая цена 70 000 — выплата
+  // обязана считать ту же цену, что поставит касса (цена вида приёма, 100 000).
+  c.consult = ({ at, doctor = 1 } = {}) => {
+    const id = 1000 + c.db.prepare('SELECT COUNT(*) n FROM visits').get().n;
+    c.db.prepare('INSERT INTO visits (id, patient_id, visit_date, status) VALUES (?,1,?,?)').run(id, at, 'scheduled');
+    c.db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, consultation_type_id, doctor_id, quantity, unit_price, total, status)
+                  VALUES (?,?,NULL,1,?,1,70000,70000,'completed')`).run(id, id, doctor);
+    return id;
+  };
+  return c;
+}
+
+test('C1: консультация со ставкой по умолчанию 10 % платит 10 000 — без счёта, со счётом, оплаченная', () => {
+  const c = consultClinic();
+  const { cur } = months(c.db);
+  const id = c.consult({ at: cur + '-05T09:00:00Z' });
+  assert.equal(parity(c.db, range(cur)), 10000, 'без счёта — цена вида приёма, не браузерная');
+  const inv = c.bill(id);
+  assert.equal(inv.total_amount, 100000);
+  assert.equal(c.db.prepare('SELECT service_id FROM invoice_items WHERE invoice_id = ?').get(inv.id).service_id, null);
+  assert.equal(parity(c.db, range(cur)), 10000, 'со счётом');
+  c.pay(inv);
+  assert.equal(parity(c.db, range(cur)), 10000, 'оплаченная');
+  // «Общая выручка» (доля по строкам счёта) — те же 10 000.
+  const rev = objects(run(c.db, 'total_revenue', range(cur)));
+  assert.equal(round2(rev.reduce((n, o) => n + (o['Доля врача'] || 0), 0)), 10000);
+});
+
+test('C1: товар без услуги и без вида приёма по-прежнему доли не даёт', () => {
+  const c = consultClinic();
+  const { cur } = months(c.db);
+  const id = c.consult({ at: cur + '-05T09:00:00Z' });
+  c.db.prepare('UPDATE visit_services SET consultation_type_id = NULL WHERE id = ?').run(id);
+  assert.equal(parity(c.db, range(cur)), 0);
+});
+
+test('C1: вознаграждение внутреннему направившему за консультацию возвращено', () => {
+  const c = consultClinic();
+  const { cur } = months(c.db);
+  let src = c.db.prepare('SELECT id FROM referral_sources WHERE doctor_id = 1').get();
+  if (!src) src = { id: c.db.prepare("INSERT INTO referral_sources (name, doctor_id) VALUES ('Доктор Д.', 1)").run().lastInsertRowid };
+  c.db.prepare("UPDATE referral_sources SET reward_mode = 'own', own_percent = 10, own_rates = '[]' WHERE id = ?").run(src.id);
+  c.db.prepare('UPDATE patients SET referral_source_id = ? WHERE id = 1').run(src.id);
+  c.db.prepare(`INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, service_rate_default) VALUES (2, 'd2', 'x', 'doctor', 'Второй', 1, 0)`).run();
+  const id = c.consult({ at: cur + '-05T09:00:00Z', doctor: 2 });
+  c.pay(c.bill(id));
+  assert.equal(parity(c.db, range(cur)), 10000);
+  const sal = objects(run(c.db, 'doctor_salaries', range(cur))).find((o) => o['Врач'] === 'Доктор Д.');
+  assert.equal(sal['Вознаграждение за направления'], 10000);
+});

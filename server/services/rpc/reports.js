@@ -619,7 +619,14 @@ const ITEM_DOCTOR_JOIN = `
 // по умолчанию, которая прежде подставлялась к любой строке с врачом. Только
 // услуги. goodsSql — признак товара там, где строка читается.
 const pctSqlFor = (goodsSql) => `CASE WHEN ${goodsSql} THEN 0 ELSE COALESCE(dr.percent, doc.service_rate_default, 0) END`;
-const ITEM_GOODS_SQL = `ii.service_id IS NULL`;
+// FINAL_MONEY_FIX_V1 (C1) — консультация НЕ товар. Строка консультации —
+// service_id NULL + consultation_type_id у строки визита (visit-line-row.js,
+// walk-in-booking.js); у строки счёта вида приёма нет, поэтому признак берётся
+// у связанной строки визита. Прежнее «ii.service_id IS NULL» читало приём как
+// товар, и врач за консультацию не получал ничего (было 10 %, стало 0).
+// Товар — строка счёта без услуги, за которой не стоит консультация.
+const ITEM_GOODS_SQL = `(ii.service_id IS NULL AND NOT EXISTS (SELECT 1 FROM visit_services gx
+  WHERE gx.invoice_item_id = ii.id AND gx.consultation_type_id IS NOT NULL AND gx.clinic_item_id IS NULL))`;
 const ITEM_PCT_SQL = pctSqlFor(ITEM_GOODS_SQL);
 
 // DOCTOR_FIX_RATE_V1 — фиксированная ставка врача за единицу услуги (NULL, если
@@ -828,6 +835,8 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
            rc.is_internal                     AS referral_internal,
            rs.doctor_id                       AS referral_doctor_id,
            ii.service_id                      AS service_id,
+           -- FINAL_MONEY_FIX_V1 (C1) — товар ли строка (консультация — нет).
+           CASE WHEN ${ITEM_GOODS_SQL} THEN 1 ELSE 0 END AS is_goods,
            s.type                             AS service_group,
            s.is_lab                           AS service_is_lab,
            i.admission_id                     AS admission_id,
@@ -891,7 +900,9 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
 // ---------------------------------------------------------------------------
 // PAY_GOODS_NONE_V1 — товар у выполненной строки: строка визита с
 // clinic_item_id или вовсе без услуги.
-const PERF_GOODS_SQL = `(vs.clinic_item_id IS NOT NULL OR COALESCE(ii.service_id, vs.service_id) IS NULL)`;
+// FINAL_MONEY_FIX_V1 (C1) — строка консультации (вид приёма без услуги) — не товар.
+const PERF_GOODS_SQL = `(vs.clinic_item_id IS NOT NULL
+  OR (COALESCE(ii.service_id, vs.service_id) IS NULL AND vs.consultation_type_id IS NULL))`;
 const PERF_TIER = tierMixSql('CASE WHEN ii.id IS NOT NULL THEN ii.quantity ELSE vs.quantity END', pctSqlFor(PERF_GOODS_SQL));
 
 // Общий хвост денег строки со счётом (NULL, когда счёта нет).
@@ -953,6 +964,9 @@ function outpatientPayRows(db, { from, to, doctorId, bf, gf, withoutDoctor = fal
            ${BILLED_COLUMNS_SQL},
            vs.clinic_item_id                  AS clinic_item_id,
            vs.unit_price                      AS line_unit_price,
+           -- FINAL_MONEY_FIX_V1 (C1) — вид приёма: цену строки без счёта считает
+           -- сервер (цена врача по виду приёма), как create_invoice_for_visit.
+           vs.consultation_type_id            AS consultation_type_id,
            vs.price_tier                      AS price_tier,
            -- PACKAGES_V1 — пакет строки (скидка — для строки без счёта; срок и
            -- состав проверяет payLineMoney, ревью M3).
@@ -1120,10 +1134,12 @@ function makePayPricer(db) {
     unit(r) {
       const tiered = r.kind === 'out';
       const key = [r.kind, r.service_id, r.clinic_item_id, r.price_doctor_id, r.price_tier,
+        r.consultation_type_id ?? '',
         r.service_id == null && r.clinic_item_id == null ? r.line_unit_price : ''].join('|');
       if (!units.has(key)) {
         const row = { service_id: r.service_id, clinic_item_id: r.clinic_item_id, doctor_id: r.price_doctor_id,
-                      price_tier: r.price_tier, unit_price: r.line_unit_price };
+                      price_tier: r.price_tier, unit_price: r.line_unit_price,
+                      consultation_type_id: r.consultation_type_id ?? null };
         const service = r.service_id != null ? svcStmt.get(r.service_id) || null : null;
         const product = r.clinic_item_id != null ? prodStmt.get(r.clinic_item_id) || null : null;
         units.set(key, Number(lineUnitPrice(db, row, { service, product, tiered })) || 0);
@@ -1859,7 +1875,9 @@ function referralLines(db, args, ctx, { doctorId = null } = {}) {
     // PAY_GOODS_NONE_V1 (владелец, 27.09) — «на товары процента нет»: строка
     // счёта без услуги (медикамент, расходник) вознаграждения ВРАЧУ-направившему
     // не даёт. Внешнему партнёру — по его ставкам, как прежде.
-    const goodsToDoctor = r.referral_doctor_id != null && r.service_id == null;
+    // FINAL_MONEY_FIX_V1 (C1) — консультация (строка без услуги с видом
+    // приёма) — не товар: её вознаграждение врачу-направившему возвращено.
+    const goodsToDoctor = r.referral_doctor_id != null && Number(r.is_goods) === 1;
     out.push({
       ...r,
       internal,
