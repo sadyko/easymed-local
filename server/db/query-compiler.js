@@ -4,6 +4,7 @@ import { effectiveRoles } from '../services/roles.js';
 import { scopeLifted } from './row-scope.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { restrictedRead } from './schema-registry.js';   // FINAL_ROLES_SYNC_FIX_V1 (M1)
 import { readWhere, ownRowsRule, bulkWriteKeys } from './schema-registry.js';   // V3120_FIX (F2, M9)
+import { insertRequiresAny } from './schema-registry.js';   // V3120_FINAL
 import { patientDataRefusal } from './patient-data-gate.js';   // V3120_FIX (M4)
 import { liftAllows } from './pay-visibility.js';
 import { withTemplate } from '../services/server-message.js';   // V3120_I18N
@@ -808,7 +809,19 @@ function guardInsert(stmt, table, values, scope) {
 function compileInsert(desc, table, user, db) {
   const scope = scopeFor(table, user, db);
   const guarded = !!(scope && scope.via);
+  const need = insertRequiresAny(table);
   const one = (row) => {
+    // V3120_FINAL — ПУСТАЯ ВСТАВКА. Колонки «кто» (stamps) дописывает сервер,
+    // и строка без единого поля экрана становилась «непустой» — пустой
+    // документ визита сохранялся с ответом 200. Считаем только то, что прислал
+    // экран; stamps — не содержимое.
+    const allowedIn = writableColumns(table, 'insert');
+    if (!row || typeof row !== 'object' || !Object.keys(row).some((k) => allowedIn.includes(k))) {
+      throw new CompileError('no writable columns provided', 400);
+    }
+    if (need && !need.columns.some((c) => row[c] !== undefined && row[c] !== null && String(row[c]).trim() !== '')) {
+      throw new CompileError(need.message, 400);
+    }
     const { values, extra } = stampValues(table, 'insert', row, user);
     const stmt = insertStatement(table, values, [...writableColumns(table, 'insert'), ...extra]);
     return guardInsert(stmt, table, values, scope);

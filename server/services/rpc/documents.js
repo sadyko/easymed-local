@@ -20,6 +20,7 @@
 // было в понедельник», а не «когда лаборант нажал сохранить».
 
 import { canViewSection } from '../roles.js';
+import { pageInt, searchArg } from './page-args.js';   // V3120_FINAL — числа и поиск из аргументов
 import { localDate, localRangeWhere } from '../domain/day.js';
 // LAB_ONE_CLINIC_V1 / BUILDING_REPORTS_V1 — граница «чьи это документы».
 //
@@ -90,10 +91,10 @@ export function documentsFeed(db, args, user) {
   const a = args || {};
   let from = ymd(a.from);
   const to = ymd(a.to);
-  const q = String(a.q || '').trim();
+  const q = searchArg(a.q);   // V3120_FINAL — не текст или длиннее 200 → 400, не 500
   const types = Array.isArray(a.types) ? a.types.filter((t) => typeof t === 'string' && t) : [];
-  const limit = Math.min(PAGE_MAX, Math.max(1, Number(a.limit) || PAGE_DEFAULT));
-  const offset = Math.max(0, Number(a.offset) || 0);
+  const limit = pageInt(a.limit, { def: PAGE_DEFAULT, min: 1, max: PAGE_MAX });   // V3120_FINAL
+  const offset = pageInt(a.offset, { def: 0, min: 0, max: Number.MAX_SAFE_INTEGER });
 
   // Нижняя граница есть всегда: без неё запрос — вся история. И период не
   // длиннее MAX_SPAN_DAYS: каждый день периода — это строки, которые база

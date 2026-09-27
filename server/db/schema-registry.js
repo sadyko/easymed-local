@@ -886,7 +886,10 @@ export const REGISTRY = {
              'visit_id','visit_service_id','patient_id','body','created_by','created_at'],
              where: '"visit_documents"."voided_at" IS NULL' },
     write: { insert: { roles: ['admin','registrar','doctor','nurse'], columns: ['title','file_name','file_path','file_size',
-               'content_type','doc_type','visit_id','visit_service_id','patient_id','body'] },
+               'content_type','doc_type','visit_id','visit_service_id','patient_id','body'],
+               // V3120_FINAL — пустой документ не сохраняется: хотя бы вид, название, текст или файл.
+               requireAny: { columns: ['doc_type', 'title', 'body', 'file_path'],
+                 message: 'Пустой документ не сохраняется: нужен вид документа, название, текст или файл.' } },
              update: { roles: ['admin','doctor'], columns: ['title','doc_type','body'],
                        own: { column: 'created_by', where: `"voided_at" IS NULL AND "file_path" IS NULL AND COALESCE("doc_type",'') NOT IN ('protocol','diag','case_file')` } },
              delete: { roles: [] } },
@@ -1501,8 +1504,13 @@ export const REGISTRY = {
   item_suppliers: {
     read:  { roles: ALL_STAFF, columns: ['id','product_id','supplier_id','last_price','pack_factor','purchase_unit','created_at'] },
     write: { insert: { roles: ['admin','inventory'], columns: ['product_id','supplier_id','last_price','pack_factor','purchase_unit'] },
-             update: { roles: ['admin','inventory'], columns: ['last_price','pack_factor','purchase_unit'], bulkBy: ['item_id'] },   // V3120_FIX (M9) — procurement.js: по товару
-             delete: { roles: ['admin','inventory'], bulkBy: ['item_id'] } },
+             // V3120_FINAL — пачкой — по ТОВАРУ, а товар здесь — product_id: колонки
+             // item_id в офлайн-таблице нет (миграция 028), и прежнее bulkBy
+             // называло несуществующую колонку. item_id шлёт только облачный
+             // procurement.js, а #procurement ведёт на #inventory; живой экран
+             // (inventory-products.js) правит и удаляет связи по id.
+             update: { roles: ['admin','inventory'], columns: ['last_price','pack_factor','purchase_unit'], bulkBy: ['product_id'] },
+             delete: { roles: ['admin','inventory'], bulkBy: ['product_id'] } },
     filters: ['id','product_id','supplier_id'],
     embed:   { products:  { table:'products',  fk:'product_id',  columns:['id','name','base_unit'] },
                suppliers: { table:'suppliers', fk:'supplier_id', columns:['id','name'] } },
@@ -1609,6 +1617,9 @@ export function readWhere(t) { const e = REGISTRY[t]; return (e && e.read && typ
 export function ownRowsRule(t, op) { const e = REGISTRY[t]; const w = e && e.write && e.write[op]; return (w && typeof w === 'object' && w.own) || null; }
 // V3120_FIX (M9) — `write.<op>.bulkBy`: колонки, по которым экран законно
 // правит/удаляет пачку строк (кроме id). Пусто — только по id.
+// V3120_FINAL — `write.insert.requireAny`: вставка без хотя бы одной из этих
+// колонок (непустой) отвергается 400 { columns, message }.
+export function insertRequiresAny(t) { const e = REGISTRY[t]; const w = e && e.write && e.write.insert; return (w && typeof w === 'object' && w.requireAny) || null; }
 export function bulkWriteKeys(t, op) { const e = REGISTRY[t]; const w = e && e.write && e.write[op]; return (w && typeof w === 'object' && Array.isArray(w.bulkBy)) ? [...w.bulkBy] : []; }
 // MULTI_ROLE_SERVER_V1 — `role` is a single role name OR the caller's full
 // effective set (primary + extra_roles). A grant to ANY role in the set allows

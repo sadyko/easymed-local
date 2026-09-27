@@ -5,6 +5,7 @@
 // живёт только то, чего таблицей не выразить: перечень профилей, перезапуск
 // слушателей и разбор лотка.
 import { listProfiles } from '../../lis/profiles/index.js';
+import { pageInt } from './page-args.js';   // V3120_FINAL — числа и поиск из аргументов
 import { startLisListeners } from '../../lis/index.js';
 import { ingestMessage } from '../../lis/ingest.js';
 import { resolveMessage } from '../../lis/inbox.js';
@@ -64,7 +65,7 @@ export function lisProfiles(db, args, user) {
  */
 export function lisRecent(db, args, user) {
   guard(user);
-  const limit = Math.min(Math.max(Number((args && args.limit) || 30), 1), 200);
+  const limit = pageInt(args && args.limit, { def: 30, min: 1, max: 200 });   // V3120_FINAL — не число → 400, не 500
 
   const rows = db.prepare(`
     SELECT m.id, m.received_at, m.sample_id, m.status, m.detail, m.peer,
