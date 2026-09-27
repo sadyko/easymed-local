@@ -80,8 +80,8 @@ const book = (db, args, user = registrar) => calendarBook(db, args, user);
 
 test('роль решает: кассир не записывает и не читает слоты', async () => {
   const db = freshDb();
-  assert.throws(() => calendarSlots(db, { doctor_id: 7, date: DAY }, cashier), /role is not allowed/);
-  await assert.rejects(() => book(db, { patient_id: 3, doctor_id: 7, start: at(10) }, cashier), /role is not allowed/);
+  assert.throws(() => calendarSlots(db, { doctor_id: 7, date: DAY }, cashier), /роли это действие не разрешено/);
+  await assert.rejects(() => book(db, { patient_id: 3, doctor_id: 7, start: at(10) }, cashier), /роли это действие не разрешено/);
   db.close();
 });
 
@@ -114,11 +114,11 @@ test('запись создаётся, длительность берётся �
 
 test('запись без пациента и без времени не создаётся', async () => {
   const db = freshDb();
-  await assert.rejects(() => book(db, { doctor_id: 7, start: at(10) }), /patient_id is required/);
-  await assert.rejects(() => book(db, { patient_id: 3, doctor_id: 7 }), /start is required/);
-  await assert.rejects(() => book(db, { patient_id: 3, doctor_id: 7, start: 'завтра' }), /ISO datetime/);
-  await assert.rejects(() => book(db, { patient_id: 3, doctor_id: 999, start: at(10) }), /doctor not found/);
-  await assert.rejects(() => book(db, { patient_id: 999, doctor_id: 7, start: at(10) }), /patient not found/);
+  await assert.rejects(() => book(db, { doctor_id: 7, start: at(10) }), /Не выбран пациент/);
+  await assert.rejects(() => book(db, { patient_id: 3, doctor_id: 7 }), /Не указано время начала/);
+  await assert.rejects(() => book(db, { patient_id: 3, doctor_id: 7, start: 'завтра' }), /Время начала записи указано неверно/);
+  await assert.rejects(() => book(db, { patient_id: 3, doctor_id: 999, start: at(10) }), /Врач не найден/);
+  await assert.rejects(() => book(db, { patient_id: 999, doctor_id: 7, start: at(10) }), /Пациент не найден/);
   db.close();
 });
 
@@ -369,9 +369,9 @@ test('calendar_slots: кабинет — своя ось и свои часы', 
 
 test('calendar_slots: без ресурса и с двумя сразу — отказ, а не догадка', async () => {
   const db = freshDb();
-  assert.throws(() => calendarSlots(db, { date: DAY }, registrar), /doctor_id or room_id is required/);
-  assert.throws(() => calendarSlots(db, { doctor_id: 7, room_id: 11, date: DAY }, registrar), /not both/);
-  assert.throws(() => calendarSlots(db, { doctor_id: 7, date: '07.09.2026' }, registrar), /YYYY-MM-DD/);
+  assert.throws(() => calendarSlots(db, { date: DAY }, registrar), /Выберите врача или кабинет/);
+  assert.throws(() => calendarSlots(db, { doctor_id: 7, room_id: 11, date: DAY }, registrar), /что-то одно/);
+  assert.throws(() => calendarSlots(db, { doctor_id: 7, date: '07.09.2026' }, registrar), /ГГГГ-ММ-ДД/);
   db.close();
 });
 

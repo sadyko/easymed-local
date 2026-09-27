@@ -132,6 +132,8 @@ function normStatus(s) {
 const RPC_ERROR_TEMPLATES = {
     slot_taken: 'Это время занято: у врача {doctor} уже есть приём {from}–{to}. Выберите другое время.',
     emergency_reason_required: 'Экстренная запись поверх занятого времени требует причины — укажите её.',
+    // V3120_FIX — второй визит пациенту на день не заводится (DAY_VISIT_V1).
+    day_visit_busy: 'У пациента на этот день уже есть визит ({start}, врач {doctor}), и по нему уже идёт работа. Второй визит на день не заводится — добавьте услугу в этот визит.',
 };
 function rpcErrorText(error) {
     const tpl = error && error.code ? RPC_ERROR_TEMPLATES[error.code] : null;

@@ -149,7 +149,9 @@ import { getDataDir } from '../control/config.js';
 // не пришёл, отменили. Правило живёт в crm/visit-status.js, здесь только дверь.
 import { crmVisitStatus } from '../crm/visit-status.js';
 // CRM_CALENDAR_MIRROR_V1 — запись календаря и заявка CRM — одна запись.
-import { attachVisitToCrm, mirrorVisit, mirrorReschedule } from '../crm/booking-mirror.js';
+import { attachVisitToCrm, mirrorVisit, mirrorReschedule, visitHasWork, PRE_ARRIVAL } from '../crm/booking-mirror.js';
+// V3120_FIX — визит дня ищется по МЕСТНОМУ дню, тем же правилом, что у ensure_visit.
+import { localDate } from '../domain/day.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400, code = null, params = null) {
@@ -178,7 +180,7 @@ const BOOK_ROLES = ['admin', 'registrar', 'doctor', 'callcenter'];
 
 function requireRole(user, allowed) {
   if (!hasAnyRole(user, allowed)) {
-    throw new RpcError('Your role is not allowed to perform this action.', 403);
+    throw new RpcError('Вашей роли это действие не разрешено.', 403);   // V3120_FIX — по-русски
   }
 }
 
@@ -187,7 +189,7 @@ const isPosInt = (v) => Number.isInteger(v) && v > 0;
 function optId(v, name) {
   if (v === undefined || v === null || v === '') return null;
   const n = Number(v);
-  if (!isPosInt(n)) throw new RpcError(name + ' must be a positive integer.', 400);
+  if (!isPosInt(n)) throw new RpcError('Неверный номер (' + name + ').', 400);
   return n;
 }
 
@@ -203,9 +205,9 @@ function optId(v, name) {
 /** 'YYYY-MM-DD' → Date локальной полуночи этого дня. Бросает на мусоре. */
 function localMidnight(dayIso) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dayIso || '').trim());
-  if (!m) throw new RpcError('date must be YYYY-MM-DD.', 400);
+  if (!m) throw new RpcError('Дата указана неверно (нужно ГГГГ-ММ-ДД).', 400);
   const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
-  if (Number.isNaN(d.getTime())) throw new RpcError('date must be YYYY-MM-DD.', 400);
+  if (Number.isNaN(d.getTime())) throw new RpcError('Дата указана неверно (нужно ГГГГ-ММ-ДД).', 400);
   return d;
 }
 
@@ -227,9 +229,9 @@ function localDayIso(ms) {
  */
 function parseStart(value) {
   const s = String(value == null ? '' : value).trim();
-  if (!s) throw new RpcError('start is required (ISO datetime).', 400);
+  if (!s) throw new RpcError('Не указано время начала записи.', 400);
   const ms = Date.parse(s);
-  if (Number.isNaN(ms)) throw new RpcError('start must be an ISO datetime.', 400);
+  if (Number.isNaN(ms)) throw new RpcError('Время начала записи указано неверно.', 400);
   return ms;
 }
 
@@ -342,8 +344,8 @@ function unassignedForeign(db, { letter, fromMs, toMs }) {
 function resolveDuration(db, { serviceId, explicit }) {
   if (explicit !== undefined && explicit !== null && explicit !== '') {
     const n = Math.round(Number(explicit));
-    if (!Number.isFinite(n) || n < 5) throw new RpcError('duration_minutes must be at least 5.', 400);
-    if (n > 24 * 60) throw new RpcError('duration_minutes must be under 24 hours.', 400);
+    if (!Number.isFinite(n) || n < 5) throw new RpcError('Длительность приёма — не меньше 5 минут.', 400);
+    if (n > 24 * 60) throw new RpcError('Длительность приёма должна быть меньше суток.', 400);
     return n;
   }
   if (serviceId) {
@@ -730,8 +732,8 @@ export function calendarSlots(db, args, user) {
   const a = args || {};
   const doctorId = optId(a.doctor_id, 'doctor_id');
   const roomId = optId(a.room_id, 'room_id');
-  if (!doctorId && !roomId) throw new RpcError('doctor_id or room_id is required.', 400);
-  if (doctorId && roomId) throw new RpcError('pass doctor_id or room_id, not both.', 400);
+  if (!doctorId && !roomId) throw new RpcError('Выберите врача или кабинет.', 400);
+  if (doctorId && roomId) throw new RpcError('Выберите что-то одно: врача или кабинет.', 400);
 
   const dayIso = String(a.date || '').slice(0, 10);
   const midnight = localMidnight(dayIso);
@@ -741,11 +743,11 @@ export function calendarSlots(db, args, user) {
   const doctor = doctorId
     ? db.prepare('SELECT id, full_name, working_hours, branch_id, scheduling_mode FROM users WHERE id = ?').get(doctorId)
     : null;
-  if (doctorId && !doctor) throw new RpcError('doctor not found.', 400);
+  if (doctorId && !doctor) throw new RpcError('Врач не найден.', 400);
   const room = roomId
     ? db.prepare('SELECT id, name, code, working_hours FROM rooms WHERE id = ?').get(roomId)
     : null;
-  if (roomId && !room) throw new RpcError('room not found.', 400);
+  if (roomId && !room) throw new RpcError('Кабинет не найден.', 400);
 
   const serviceId = optId(a.service_id, 'service_id');
   const durationMin = resolveDuration(db, { serviceId, explicit: a.duration_minutes });
@@ -849,7 +851,7 @@ export function calendarWindows(db, args, user) {
       },
     };
   }
-  if (doctorIds.length + roomIds.length > 200) throw new RpcError('too many resources.', 400);
+  if (doctorIds.length + roomIds.length > 200) throw new RpcError('Слишком много врачей и кабинетов за один запрос.', 400);
 
   const days = Math.min(14, Math.max(1, Math.round(Number(a.days) || 1)));
   const first = localMidnight(String(a.date || '').slice(0, 10));
@@ -929,7 +931,7 @@ export async function calendarBook(db, args, user, deps = {}) {
 
   const visitId = optId(a.visit_id, 'visit_id');
   const existing = visitId ? db.prepare('SELECT * FROM visits WHERE id = ?').get(visitId) : null;
-  if (visitId && !existing) throw new RpcError('visit not found.', 400);
+  if (visitId && !existing) throw new RpcError('Запись не найдена.', 400);
 
   const startMs = parseStart(a.start);
   const dayIso = localDayIso(startMs);
@@ -941,13 +943,13 @@ export async function calendarBook(db, args, user, deps = {}) {
   const serviceId = a.service_id === undefined && existing ? existing.service_id : optId(a.service_id, 'service_id');
 
   if (doctorId && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(doctorId)) {
-    throw new RpcError('doctor not found.', 400);
+    throw new RpcError('Врач не найден.', 400);
   }
   if (roomId && !db.prepare('SELECT 1 FROM rooms WHERE id = ?').get(roomId)) {
-    throw new RpcError('room not found.', 400);
+    throw new RpcError('Кабинет не найден.', 400);
   }
   if (serviceId && !db.prepare('SELECT 1 FROM services WHERE id = ?').get(serviceId)) {
-    throw new RpcError('service not found.', 400);
+    throw new RpcError('Услуга не найдена.', 400);
   }
 
   const durationMin = a.duration_minutes === undefined && existing
@@ -956,15 +958,78 @@ export async function calendarBook(db, args, user, deps = {}) {
 
   const patientId = existing ? existing.patient_id : optId(a.patient_id, 'patient_id');
   if (!existing) {
-    if (!patientId) throw new RpcError('patient_id is required.', 400);
+    if (!patientId) throw new RpcError('Не выбран пациент.', 400);
     if (!db.prepare('SELECT 1 FROM patients WHERE id = ?').get(patientId)) {
-      throw new RpcError('patient not found.', 400);
+      throw new RpcError('Пациент не найден.', 400);
     }
   }
 
   const status = typeof a.status === 'string' && a.status
     ? a.status
     : (existing ? existing.status : 'scheduled');
+
+  // (V3120_FIX: проверка поднята выше правила визита дня — отказ по
+  // источнику не должен теряться за переносом.)
+  // LIVE_AUDIT_FIX_V1 (A6) — источник направления НОВОЙ записи. Каталог записи
+  // спрашивает «кто направил», а calendar_book его не принимал: выбор молча
+  // терялся (строке услуги его тоже не написать — колонки там нет). Ставится
+  // только при создании, как у ensure_visit; у существующей записи источник
+  // правит вкладка «Детали» (visit_set_referral_source).
+  const referralSourceId = existing ? null : optId(a.referral_source_id, 'referral_source_id');
+  if (referralSourceId && !db.prepare('SELECT 1 FROM referral_sources WHERE id = ?').get(referralSourceId)) {
+    throw new RpcError('Источник направления не найден.', 400);   // FINAL_ROLES_SYNC_FIX_V1 (M5) — по-русски
+  }
+
+  // ─── V3120_FIX — ОДИН ПАЦИЕНТ, ОДИН ДЕНЬ, ОДИН ВИЗИТ (DAY_VISIT_V1) ─────────
+  //
+  // Новая запись без visit_id заводила ВТОРОЙ живой визит пациенту, у которого
+  // в этот день визит уже есть (мастер каталога услуг, календарь): два визита,
+  // два счёта, два талона. ensure_visit это правило держал, calendar_book — нет.
+  // Теперь то же правило и те же два случая, что у ensure_visit:
+  //   • визит дня ПУСТОЙ (запись до прихода, без счёта и работы) — это перенос:
+  //     его время, врач и кабинет становятся новыми, строки едут с ним;
+  //   • визит дня С РАБОТОЙ — отказ day_visit_busy словами: второй визит на день
+  //     не заводится, услугу добавляют в этот. Экран может повторить запрос с
+  //     add_to_day_visit: true — тогда ответом будет сам визит дня, без правок.
+  // Отменяемые и неявочные записи (status не из BUSY_STATUSES) правило не
+  // касается — они слот не держат.
+  if (!existing && BUSY_STATUSES.includes(status)) {
+    const dayVisit = db.prepare(`
+      SELECT * FROM visits
+       WHERE patient_id = ? AND ${localDate('visit_date')} = ?
+         AND status NOT IN ('cancelled', 'no_show') AND sync_origin IS NULL
+       ORDER BY id LIMIT 1`).get(patientId, dayIso);
+    if (dayVisit) {
+      if (a.add_to_day_visit === true || a.add_to_day_visit === 'true') {
+        return { visit: dayVisit, created: false, added_to_day_visit: true, emergency: false, day: dayIso };
+      }
+      const bare = PRE_ARRIVAL.includes(dayVisit.status) && !visitHasWork(db, dayVisit.id);
+      if (bare) {
+        // Длительность — новой записи (из её услуги), а не прежней: иначе
+        // пятиминутный забор, перенесённый под консультацию, так и остался бы
+        // пятиминутным.
+        const moved = await calendarBook(db, {
+          ...a, visit_id: dayVisit.id, patient_id: undefined, duration_minutes: durationMin,
+        }, user, deps);
+        // Как у ensure_visit после записи: запись без заявки привязывается к
+        // заявке пациента (колл-центру — к своей или новой), затем сверка.
+        attachVisitToCrm(db, moved.visit.id, user);
+        mirrorVisit(db, moved.visit.id, { actorId: user && user.id });
+        return { ...moved, moved: true };
+      }
+      const doc = dayVisit.doctor_id ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(dayVisit.doctor_id) : null;
+      const params = {
+        visit_id: dayVisit.id,
+        start: formatHhmm(minutesOfLocal(Date.parse(dayVisit.visit_date))),
+        doctor: (doc && doc.full_name) || '—',
+      };
+      // i18n-exempt: сообщение сервера; экран переводит его по коду day_visit_busy.
+      throw new RpcError(
+        `У пациента на этот день уже есть визит (${params.start}, врач ${params.doctor}), и по нему уже идёт работа. Второй визит на день не заводится — добавьте услугу в этот визит.`,
+        409, 'day_visit_busy', params,
+      );
+    }
+  }
 
   // ─── ПРОВЕРКА ───────────────────────────────────────────────────────────
   // Только для врача (см. шапку) и только для времязанимающих статусов:
@@ -1010,15 +1075,6 @@ export async function calendarBook(db, args, user, deps = {}) {
 
   const visitDate = new Date(startMs).toISOString();
   const branchId = a.branch_id === undefined && existing ? existing.branch_id : optId(a.branch_id, 'branch_id');
-  // LIVE_AUDIT_FIX_V1 (A6) — источник направления НОВОЙ записи. Каталог записи
-  // спрашивает «кто направил», а calendar_book его не принимал: выбор молча
-  // терялся (строке услуги его тоже не написать — колонки там нет). Ставится
-  // только при создании, как у ensure_visit; у существующей записи источник
-  // правит вкладка «Детали» (visit_set_referral_source).
-  const referralSourceId = existing ? null : optId(a.referral_source_id, 'referral_source_id');
-  if (referralSourceId && !db.prepare('SELECT 1 FROM referral_sources WHERE id = ?').get(referralSourceId)) {
-    throw new RpcError('Источник направления не найден.', 400);   // FINAL_ROLES_SYNC_FIX_V1 (M5) — по-русски
-  }
 
   // CROSS_BRANCH_CALENDAR_V1 — куда записываем и, если не к себе, чего ждём.
   const mine = selfLetter(db);

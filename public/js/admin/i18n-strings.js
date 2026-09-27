@@ -9247,6 +9247,11 @@ export const STRINGS = {
   "Подтвердить: закрыть {m}": {"en":"Confirm: close {m}","ru":"Подтвердить: закрыть {m}","uz":"Tasdiqlash: {m} ni yopish"},
   "Месяц закрыт": {"en":"Month closed","ru":"Месяц закрыт","uz":"Oy yopildi"},
   "Закрывает месяц оплаты врачей.": {"en":"Closes the doctors' pay month.","ru":"Закрывает месяц оплаты врачей.","uz":"Shifokorlar maoshi oyini yopadi."},
+  // V3120_FIX (CRM, календарь, очередь) — added 2026-09-27
+  "Раздел «CRM · Заявки» выдан вам только на просмотр — менять заявки нельзя.": {"en":"You have view-only access to «CRM · Requests» — you cannot change requests.","ru":"Раздел «CRM · Заявки» выдан вам только на просмотр — менять заявки нельзя.","uz":"«CRM · Arizalar» bo'limi sizga faqat ko'rish uchun berilgan — arizalarni o'zgartirib bo'lmaydi."},
+  "У пациента на этот день уже есть визит ({start}, врач {doctor}), и по нему уже идёт работа. Второй визит на день не заводится — добавьте услугу в этот визит.": {"en":"The patient already has a visit on this day ({start}, doctor {doctor}) and work on it has started. A second visit per day is not created — add the service to that visit.","ru":"У пациента на этот день уже есть визит ({start}, врач {doctor}), и по нему уже идёт работа. Второй визит на день не заводится — добавьте услугу в этот визит.","uz":"Bemorning bu kunga tashrifi allaqachon bor ({start}, shifokor {doctor}) va unda ish boshlangan. Kuniga ikkinchi tashrif ochilmaydi — xizmatni shu tashrifga qo'shing."},
+  "Визит на этот день уже есть": {"en":"There is already a visit on this day","ru":"Визит на этот день уже есть","uz":"Bu kunga tashrif allaqachon bor"},
+  "Добавить в этот визит": {"en":"Add to this visit","ru":"Добавить в этот визит","uz":"Shu tashrifga qo'shish"},
   // V3120_FIX (экраны и навигация) — BEGIN
   "нет доступа": {"en":"no access","ru":"нет доступа","uz":"ruxsat yo'q"},
   "не удалось загрузить": {"en":"failed to load","ru":"не удалось загрузить","uz":"yuklab bo'lmadi"},
