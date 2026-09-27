@@ -286,6 +286,55 @@ test('«Оплатить» отправляет record_payment с ключом �
     assert.match(pay[1].idempotency_key, /^[A-Za-z0-9_-]{8,80}$/);
 });
 
+// V3120_FINAL (I1) — ключ повтора живёт только до УДАЧНОЙ операции. Частичная
+// оплата записана, «Оставить как долг» упал — окно остаётся открытым, и
+// «Принять оплату» на остаток обязана уйти с НОВЫМ ключом: со старым сервер
+// отвечает отказом (другая форма), а прежде — квитанцией первой части, и
+// остаток не записывался при тосте «Оплата принята».
+test('оплата: частичная записана, долг не оформился — «Принять оплату» на остаток уходит с новым ключом', async () => {
+    calls.length = 0;
+    tables = { invoice_items: ITEMS, visit_services: [], payment_providers: [], patient_discounts: [] };
+    rpcAnswers = {
+        record_payment: { ok: true }, deposit_balance: { balance: 0, debt: 0 },
+        mark_invoice_debt: () => { throw new Error('сеть оборвалась'); },
+    };
+    desk.__test_payModal(mkEl('div'), INV, 378000);
+    await tick();
+    const ov = lastOverlay();
+    const amt = () => walk(ov).find((e) => e.tagName === 'INPUT' && e.getAttribute('placeholder') === 'Сумма');
+    amt().value = '100 000';
+    amt().fire('input');
+    buttonByText(ov, 'Оставить как долг').click();
+    await tick(60);
+    amt().value = '278 000';
+    amt().fire('input');
+    buttonByText(ov, 'Принять оплату').click();
+    await tick(60);
+    const pays = calls.filter((c) => c[0] === 'record_payment');
+    assert.equal(pays.length, 2, 'обе части ушли на сервер');
+    assert.equal(pays[0][1].amount, 100000);
+    assert.equal(pays[1][1].amount, 278000);
+    assert.match(pays[1][1].idempotency_key, /^[A-Za-z0-9_-]{8,80}$/);
+    assert.notEqual(pays[1][1].idempotency_key, pays[0][1].idempotency_key, 'после удачной оплаты — новый ключ');
+});
+
+test('оплата: неудачная попытка повторяется с ТЕМ ЖЕ ключом', async () => {
+    calls.length = 0;
+    tables = { invoice_items: ITEMS, visit_services: [], payment_providers: [], patient_discounts: [] };
+    rpcAnswers = { record_payment: () => { throw new Error('сеть оборвалась'); }, deposit_balance: { balance: 0, debt: 0 } };
+    desk.__test_payModal(mkEl('div'), INV, 378000);
+    await tick();
+    const ov = lastOverlay();
+    const submit = buttonByText(ov, 'Принять оплату');
+    submit.click();
+    await tick(60);
+    submit.click();
+    await tick(60);
+    const pays = calls.filter((c) => c[0] === 'record_payment');
+    assert.equal(pays.length, 2);
+    assert.equal(pays[1][1].idempotency_key, pays[0][1].idempotency_key, 'повтор той же неудачной формы — тот же ключ');
+});
+
 test('продажа карты печатает квитанцию', async () => {
     calls.length = 0;
     printed.length = 0;

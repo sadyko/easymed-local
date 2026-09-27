@@ -2063,7 +2063,9 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
         // и едет с каждым нажатием «Отправить в кассу»: двойной щелчок или
         // повтор после обрыва связи сервер узнаёт по ключу и второй депозит не
         // заводит (idempotency_key, create_deposit).
-        const idempotencyKey = newIdempotencyKey();
+        // V3120_FINAL (I1) — ключ живёт до УДАЧНОЙ отправки: после неё — новый
+        // (сервер отвечает прежней квитанцией, только если форма та же).
+        let idempotencyKey = newIdempotencyKey();
         const amountInp = h('input', { type: 'number', min: '0', step: '1000', placeholder: '0' });
         const noteInp = h('input', { type: 'text', placeholder: 'Комментарий (необязательно)' });
         const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Отправить в кассу');
@@ -2085,6 +2087,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                     patient_id: patient.id, amount, notes: noteInp.value.trim(),
                     idempotency_key: idempotencyKey,   // V3120_FIX
                 });
+                idempotencyKey = newIdempotencyKey();
                 const num = (res && res.deposit && res.deposit.deposit_number) || '';
                 m.close();
                 toast(trf('Депозит {no} на {sum} сум отправлен в кассу.', { no: num, sum: fmtPrice(amount) }), 'ok');

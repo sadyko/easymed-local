@@ -50,9 +50,18 @@ const GENDER_RU = { male: 'Мужской', female: 'Женский', other: '�
 // узбекское слово посреди русского бланка.
 function fmtDobAge(iso) { return dobAge(iso); }
 
-// V3120_FIX — ключ повтора денежной операции: один на открытое окно. Двойной
-// щелчок или повтор после обрыва связи приходит на сервер с тем же ключом, и
-// сервер отвечает прежним результатом, не проводя деньги второй раз.
+// V3120_FIX — ключ повтора денежной операции. Двойной щелчок или повтор после
+// обрыва связи приходит на сервер с тем же ключом, и сервер отвечает прежним
+// результатом, не проводя деньги второй раз.
+// V3120_FINAL (I1) — ключ живёт только до УДАЧНОЙ операции: после неё окно
+// берёт новый (idem.next()). Сервер отвечает прежней квитанцией, только если
+// форма та же (иначе 409), а окно, из которого после удачной первой части
+// отправляют остаток (упал «Оставить как долг», окно открыто), со старым
+// ключом получало квитанцию первой части — остаток не записывался.
+function idemKeeper() {
+    let key = newIdemKey();
+    return { get key() { return key; }, next() { key = newIdemKey(); } };
+}
 function newIdemKey() {
     try { if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') return globalThis.crypto.randomUUID(); } catch (e) { /* ниже запасной */ }
     return 'k' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 12);
@@ -397,7 +406,7 @@ function moveModal(root, kind) {
     const amtInp = moneyfy(h('input', { type: 'number', min: '0', step: '1', value: '' }));
     const artSel = h('select', null, ...(isIn ? CASH_IN_ARTICLES : CASH_OUT_ARTICLES).map(a => h('option', { value: a }, a)));
     const noteInp = h('input', { type: 'text', placeholder: 'Комментарий (необязательно)' });
-    const idemKey = newIdemKey();   // V3120_FIX
+    const idem = idemKeeper();   // V3120_FIX + V3120_FINAL (I1)
     modal(isIn ? 'Внести наличные' : 'Изъять наличные', isIn ? 'Plus' : 'ArrowUp',
         [
             field('Сумма', amtInp, { required: true }),
@@ -408,8 +417,9 @@ function moveModal(root, kind) {
         async () => {
             const v = moneyVal(amtInp);
             if (!Number.isFinite(v) || v <= 0) { toast('Укажите сумму больше нуля.', 'fail'); return false; }
-            const { error } = await supabase.rpc('cash_move', { kind, amount: v, article: artSel.value, note: noteInp.value || '', idempotency_key: idemKey });
+            const { error } = await supabase.rpc('cash_move', { kind, amount: v, article: artSel.value, note: noteInp.value || '', idempotency_key: idem.key });
             if (error) { toast((error.message) || 'Не удалось выполнить операцию.', 'fail'); return false; }
+            idem.next();
             toast(isIn ? 'Наличные внесены' : 'Наличные изъяты', 'ok');
             await paint(root);
             return true;
@@ -855,7 +865,7 @@ function paintDeposits(el, root) {
             : ((d.status === 'received' || d.status === 'refunded') ? Math.max(0, Number(d.amount || 0) - refundedSoFar) : 0);
         const partial = refundedSoFar > 0 && refundedSoFar < Number(d.amount || 0);
         const refundBtn = h('button', { class: 'btn btn-sm', type: 'button', style: { color: 'var(--crit-600)' } }, 'Возврат');
-        const refundKey = newIdemKey();   // V3120_FIX
+        const refundIdem = idemKeeper();   // V3120_FIX + V3120_FINAL (I1)
         refundBtn.addEventListener('click', async () => {
             const max = refundable;
             const raw = prompt(trf('Вернуть по депозиту {no}', { no: d.deposit_number || '' }) + '\n'
@@ -864,8 +874,9 @@ function paintDeposits(el, root) {
             const amount = Math.round(Number(String(raw).replace(/\D+/g, '')) || 0);
             if (!(amount > 0)) { toast('Введите сумму возврата.', 'fail'); return; }
             refundBtn.disabled = true;
-            const { error } = await supabase.rpc('refund_deposit', { deposit_id: d.id, amount, idempotency_key: refundKey });
+            const { error } = await supabase.rpc('refund_deposit', { deposit_id: d.id, amount, idempotency_key: refundIdem.key });
             if (error) { toast(error.message || 'Не удалось вернуть.', 'fail'); refundBtn.disabled = false; return; }
+            refundIdem.next();
             toast(trf('Возврат оформлен: {sum} сум', { sum: fmtPrice(amount) }), 'ok');
             paint(root);
         });
@@ -1001,7 +1012,7 @@ function openSellCardModal(root) {
     let kind = 'gift_card';
     let method = 'cash';
     let buyer = null;
-    const idemKey = newIdemKey();   // V3120_FIX
+    const idem = idemKeeper();   // V3120_FIX + V3120_FINAL (I1)
     const amountInp = moneyfy(h('input', { type: 'number', min: '1', step: '1' }));
     const nameInp = h('input', { type: 'text', maxlength: '120', placeholder: tr('Например: «Подарок на 8 марта»') });
     const untilInp = h('input', { type: 'date' });
@@ -1060,9 +1071,10 @@ function openSellCardModal(root) {
         const args = { kind, amount, method, patient_id: buyer.id };
         if (nameInp.value.trim()) args.name = nameInp.value.trim();
         if (untilInp.value) args.valid_until = untilInp.value;
-        args.idempotency_key = idemKey;   // V3120_FIX
+        args.idempotency_key = idem.key;   // V3120_FIX
         const { data, error } = await supabase.rpc('sell_card', args);
         if (error) { toast(trf('Карта не продана: {msg}', { msg: error.message || error }), 'fail'); return false; }
+        idem.next();
         const no = (data && data.invoice && data.invoice.invoice_number) || '';
         toast(trf('Карта продана: {no} · {sum} сум', { no, sum: fmtPrice(amount) }), 'ok');
         // V3120_FIX (решение владельца) — квитанция покупателю: за карту взяли
@@ -1317,7 +1329,7 @@ function payModal(root, inv, balance) {
     // каждая часть попадает в смену отдельной строкой по своему способу.
     let providers = [];
     const tenders = [{ method: 'cash', amount: balance, providerId: '' }];
-    const idemKey = newIdemKey();   // V3120_FIX — один ключ на открытое окно
+    const idem = idemKeeper();   // V3120_FIX — ключ окна; V3120_FINAL (I1) — новый после каждой удачной оплаты
     // DEPOSIT_WALLET_V1 — баланс пациента (депозит + зачисленные возвраты).
     // Способ «С баланса» появляется, только когда на балансе что-то есть;
     // списывает сервер (record_payment), и больше баланса он не спишет.
@@ -1633,9 +1645,10 @@ function payModal(root, inv, balance) {
             if (sum > balance + 0.001) { toast(trf('Сумма частей больше остатка ({sum} сум).', { sum: fmtPrice(balance) }), 'fail'); return false; }
 
             const { error } = parts.length === 1
-                ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}), idempotency_key: idemKey })
-                : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts, idempotency_key: idemKey });
+                ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}), idempotency_key: idem.key })
+                : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts, idempotency_key: idem.key });
             if (error) { toast((error.message) || 'Не удалось принять оплату.', 'fail'); return false; }
+            idem.next();
             toast('Оплата принята', 'ok');
             printFiscalCheck(inv, parts);   // CASH_CHECK_PRINT_V1 + V3120_FIX — строка на каждый способ (не блокирует)
             await paint(root);
@@ -1675,9 +1688,12 @@ function payModal(root, inv, balance) {
                 try {
                     if (parts.length) {
                         const { error } = parts.length === 1
-                            ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}), idempotency_key: idemKey })
-                            : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts, idempotency_key: idemKey });
+                            ? await supabase.rpc('record_payment', { invoice_id: inv.id, amount: parts[0].amount, method: parts[0].method, notes: parts[0].notes, ...(parts[0].card_id ? { card_id: parts[0].card_id } : {}), idempotency_key: idem.key })
+                            : await supabase.rpc('record_payment_split', { invoice_id: inv.id, tenders: parts, idempotency_key: idem.key });
                         if (error) throw new Error(error.message || 'Оплата не записана');
+                        // V3120_FINAL (I1) — часть записана: следующая операция окна
+                        // (остаток после упавшего долга) — уже другая, с новым ключом.
+                        idem.next();
                     }
                     const { error: dErr } = await supabase.rpc('mark_invoice_debt', { invoice_id: inv.id });
                     if (dErr) throw new Error(dErr.message || 'Не удалось оформить долг');
@@ -1843,7 +1859,7 @@ function openLineRefundConfirm(item, info, root) {
 function openRefundConfirm(p, info, root) {
     const amtInp = moneyfy(h('input', { type: 'number', min: '1', max: String(p.amount), step: '1', value: String(p.amount) }));
     const reasonInp = h('input', { type: 'text', placeholder: 'Причина (необязательно)' });
-    const idemKey = newIdemKey();   // V3120_FIX
+    const idem = idemKeeper();   // V3120_FIX + V3120_FINAL (I1)
     // DEPOSIT_WALLET_V1 — куда вернуть: деньгами (как раньше) или на баланс
     // пациента — деньги остаются в клинике и пойдут в оплату следующей услуги.
     // Платёж «с баланса» по умолчанию возвращается на баланс.
@@ -1927,10 +1943,11 @@ function openRefundConfirm(p, info, root) {
                 // снятая — счёт остаётся открытым (его оплатят снова).
                 void_when_zero: !!voidBox.checked,
                 keep_services: !!voidBox.checked && !(info && info.admission_id) && !!keepBox.checked,
-                idempotency_key: idemKey,   // V3120_FIX
+                idempotency_key: idem.key,   // V3120_FIX
                 reopen_balance: !!reopenBox.checked,   // V3120_FIX — «пациент заплатит заново»
             });
             if (error) { toast(error.message || 'Не удалось оформить возврат.', 'fail'); return false; }
+            idem.next();
             toast((rRes ? rRes.to_balance : toBalance) ? tr('Сумма зачислена на баланс пациента') : tr('Возврат оформлен'), 'ok');
             // V3120_FIX — частичный возврат по оплаченному счёту сервер теперь
             // проводит как скидку после продажи: счёт остаётся оплаченным, а не
