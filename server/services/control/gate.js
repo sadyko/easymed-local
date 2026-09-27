@@ -19,6 +19,9 @@ import { controlState } from './state.js';
 // hole open for as long as nobody looked.
 const READ_ONLY_RPCS = new Set([
   'dashboard_summary', 'reports_overview', 'run_report', 'owner_report',
+  // V3120_FIX — графики сводки и статистика операторов телефонии — чистое
+  // чтение: без них клиника с просроченной лицензией видела пустую сводку.
+  'dashboard_trend', 'telephony_operator_stats',
   // BUILDING_REPORTS_V1 — перечень зданий для выборки в «Отчётах». Чистое
   // чтение справочного порядка, как reports_overview рядом: клиника с
   // просроченной лицензией читает отчёты, и «читает» не должно означать
