@@ -7068,6 +7068,29 @@ export const STRINGS = {
   "Отметить…": {"en":"Mark…","ru":"Отметить…","uz":"Belgilash…"},
   "Не удалось отметить приём пищи.": {"en":"Could not mark the meal.","ru":"Не удалось отметить приём пищи.","uz":"Ovqatlanishni belgilab bo'lmadi."},
 
+  // V3120_FIX (стационар и сводка) — BEGIN
+  "нет доступа к выручке": {"en":"no access to revenue","ru":"нет доступа к выручке","uz":"tushumga ruxsat yo'q"},
+  "Долг пациентов": {"en":"Patient debt","ru":"Долг пациентов","uz":"Bemorlar qarzi"},
+  "счетов: {n} · организации должны {amount}": {"en":"invoices: {n} · organisations owe {amount}","ru":"счетов: {n} · организации должны {amount}","uz":"hisoblar: {n} · tashkilotlar qarzi {amount}"},
+  "не распределено {c}": {"en":"unallocated {c}","ru":"не распределено {c}","uz":"taqsimlanmagan {c}"},
+  "Всего за период (не распределено по депозитам: {c})": {"en":"Total for the period (unallocated deposits: {c})","ru":"Всего за период (не распределено по депозитам: {c})","uz":"Davr bo'yicha jami (depozitlar bo'yicha taqsimlanmagan: {c})"},
+  "Проживание, будет внесено при выписке": {"en":"Accommodation, to be added at discharge","ru":"Проживание, будет внесено при выписке","uz":"Yotish haqi, chiqarishda kiritiladi"},
+  "На балансе пациента: {amount}. Оплатите остаток с баланса до выписки — тогда долга не будет.": {"en":"Patient balance: {amount}. Pay the remainder from the balance before discharge — then there will be no debt.","ru":"На балансе пациента: {amount}. Оплатите остаток с баланса до выписки — тогда долга не будет.","uz":"Bemor balansida: {amount}. Qoldiqni chiqarishdan oldin balansdan to'lang — shunda qarz qolmaydi."},
+  "Оплатить с баланса": {"en":"Pay from balance","ru":"Оплатить с баланса","uz":"Balansdan to'lash"},
+  "Оплатить с баланса может касса.": {"en":"The cashier can pay from the balance.","ru":"Оплатить с баланса может касса.","uz":"Balansdan kassa to'lay oladi."},
+  "При выписке с долгом проживание будет внесено до фактического времени выписки и войдёт в долг.": {"en":"When discharged with a debt, accommodation up to the actual discharge time will be added and included in the debt.","ru":"При выписке с долгом проживание будет внесено до фактического времени выписки и войдёт в долг.","uz":"Qarz bilan chiqarilganda yotish haqi haqiqiy chiqarish vaqtigacha kiritiladi va qarzga qo'shiladi."},
+  "Не удалось подготовить оплату с баланса.": {"en":"Could not prepare the payment from balance.","ru":"Не удалось подготовить оплату с баланса.","uz":"Balansdan to'lovni tayyorlab bo'lmadi."},
+  "Оплачивать с баланса нечего.": {"en":"Nothing to pay from the balance.","ru":"Оплачивать с баланса нечего.","uz":"Balansdan to'lanadigan narsa yo'q."},
+  "Не удалось оплатить с баланса.": {"en":"Could not pay from the balance.","ru":"Не удалось оплатить с баланса.","uz":"Balansdan to'lab bo'lmadi."},
+  "С баланса оплачено: {amount}.": {"en":"Paid from balance: {amount}.","ru":"С баланса оплачено: {amount}.","uz":"Balansdan to'landi: {amount}."},
+  "ПРОЖИВАНИЕ": {"en":"ACCOMMODATION","ru":"ПРОЖИВАНИЕ","uz":"YOTISH"},
+  "Скидка на проживание, %": {"en":"Accommodation discount, %","ru":"Скидка на проживание, %","uz":"Yotish uchun chegirma, %"},
+  "Скидка действует на проживание, внесённое после её сохранения; сутки, уже выставленные в счёт, она не меняет.": {"en":"The discount applies to accommodation added after it is saved; days already invoiced are not changed.","ru":"Скидка действует на проживание, внесённое после её сохранения; сутки, уже выставленные в счёт, она не меняет.","uz":"Chegirma u saqlangandan keyin kiritilgan yotish haqiga qo'llanadi; hisobga allaqachon kiritilgan kunlarni o'zgartirmaydi."},
+  "Статус койки обновлён.": {"en":"Bed status updated.","ru":"Статус койки обновлён.","uz":"Karavot holati yangilandi."},
+  "Уборка закончена · освободить койку": {"en":"Cleaning done · free the bed","ru":"Уборка закончена · освободить койку","uz":"Tozalash tugadi · karavotni bo'shatish"},
+  "Снова в работе · свободна": {"en":"Back in service · free","ru":"Снова в работе · свободна","uz":"Yana ishda · bo'sh"},
+  "Отправить на уборку": {"en":"Send to cleaning","ru":"Отправить на уборку","uz":"Tozalashga yuborish"},
+  // V3120_FIX (стационар и сводка) — END
   // MAR_UNDO_TRACE_V1 / MAR_CANCELLED_MARKS_V1 / ACCOMMODATION_GAP_V1 — след снятой
   // отметки, клетки отменённого назначения и невнесённое проживание — added 2026-09-04
   "Снятые отметки": {"en":"Withdrawn marks","ru":"Снятые отметки","uz":"Olib tashlangan belgilar"},

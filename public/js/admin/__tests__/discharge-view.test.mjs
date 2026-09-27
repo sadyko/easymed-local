@@ -639,3 +639,75 @@ test('DEBT_FLOW_V1: окно оформления с долгом говорит
   assert.ok(text.includes('станут долгом'), 'в окне не сказано, что счета станут долгом: ' + text.slice(0, 600));
   assert.ok(text.includes('списке «Долг»'), 'не названо, где касса увидит долг');
 });
+
+// ─── V3120_FIX — проживание в долге и депозит пациента ─────────────────────
+//
+// Осмотр 2026-09-27: подпись под долгом ставилась под числом без проживания, а
+// депозит пациента окно не знало вовсе — долг 400 000 записывался при
+// 1 000 000 на балансе. Сервер теперь присылает в строке очереди пропажу
+// проживания (accommodation_gap) и баланс (deposit_balance).
+const OWING_DEP = Object.assign({}, OWING, {
+  admission_id: 3,
+  accommodation_gap: { units: 2, amount: 300000, mode: 'daily' },
+  deposit_balance: 1000000,
+});
+
+test('V3120_FIX: сумма под подписью включает проживание, которое внесут при выписке', async () => {
+  const mod = await import('../views/discharge.js');
+  const gap = mod.rowGap(OWING_DEP, null);
+  assert.deepStrictEqual(gap, { units: 2, amount: 300000, mode: 'daily' });
+  assert.equal(mod.owedTotal(OWING_DEP, gap), 750000);
+  assert.equal(mod.owedTotal(CLEAN, gap), 0, 'без долга проживание само в сумму не входит');
+
+  const root = mk('div');
+  const view = await renderDischarge(root, {});
+  view.openFinalize(OWING_DEP);
+  const modal = document.body.children[document.body.children.length - 1];
+  const text = textOf(modal).replace(/\s/g, ' ');   // разряды — неразрывным пробелом
+  assert.ok(text.includes('750 000'), 'в заголовке долга нет суммы с проживанием: ' + text.slice(0, 500));
+  assert.ok(text.includes('Проживание, будет внесено при выписке'));
+  assert.ok(text.includes('войдёт в долг'));
+});
+
+test('V3120_FIX: депозит назван в окне; «Оплатить с баланса» — только кассе, и платит способом wallet', async () => {
+  const mod = await import('../views/discharge.js');
+  assert.equal(mod.canPayFromDeposit({ role: 'nurse', extra_roles: ['senior_nurse'] }), false);
+  assert.equal(mod.canPayFromDeposit({ role: 'cashier' }), true);
+  assert.deepStrictEqual(mod.walletPlan([{ id: 5, balance: 300000 }, { id: 6, balance: 900000 }], 1000000),
+    [{ invoice_id: 5, amount: 300000 }, { invoice_id: 6, amount: 700000 }]);
+
+  // Старшая медсестра: баланс назван, кнопки нет.
+  let root = mk('div');
+  let view = await renderDischarge(root, { user: { role: 'nurse', extra_roles: ['senior_nurse'] } });
+  view.openFinalize(OWING_DEP);
+  let modal = document.body.children[document.body.children.length - 1];
+  assert.ok(textOf(modal).replace(/\s/g, ' ').includes('На балансе пациента: 1 000 000'), textOf(modal).slice(0, 600));
+  assert.ok(!walk(modal).some((n) => n.tagName === 'BUTTON' && /Оплатить с баланса/.test(textOf(n))), 'кнопка у того, кому сервер откажет');
+
+  // Касса: кнопка есть, не главная, и ведёт в record_payment способом wallet.
+  root = mk('div');
+  view = await renderDischarge(root, { user: { role: 'cashier' } });
+  view.openFinalize(OWING_DEP);
+  modal = document.body.children[document.body.children.length - 1];
+  const pay = walk(modal).find((n) => n.tagName === 'BUTTON' && /Оплатить с баланса/.test(textOf(n)));
+  assert.ok(pay, 'кнопки «Оплатить с баланса» нет у кассы');
+  assert.ok(!hasClass(pay, 'btn-primary'), 'главная кнопка окна — одна');
+  const prevFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, opts) => {
+    const name = String(url).slice('/api/rpc/'.length);
+    const args = JSON.parse((opts && opts.body) || '{}');
+    calls.push({ name, args });
+    if (name === 'admission_prepare_wallet_payment') {
+      return { ok: true, json: async () => ({ data: { invoices: [{ id: 41, balance: 450000 }], deposit_balance: 1000000 } }) };
+    }
+    return prevFetch(url, opts);
+  };
+  try {
+    pay.click();
+    await new Promise((r) => setTimeout(r, 10));
+  } finally { globalThis.fetch = prevFetch; }
+  const payment = calls.find((c) => c.name === 'record_payment');
+  assert.ok(payment, 'оплата не ушла: ' + calls.map((c) => c.name).join(','));
+  assert.deepStrictEqual(payment.args, { invoice_id: 41, amount: 450000, method: 'wallet' });
+});

@@ -337,3 +337,45 @@ test('монотонная кривая проходит через точки �
     // Между двумя равными точками кривая — прямая: контрольные точки на той же высоте.
     assert.ok(/C 16\.7 100 33\.3 100 50 100/.test(d), d);
 });
+
+// ─── V3120_FIX — плитки и деньги по праву роли ─────────────────────────────
+//
+// Осмотр 2026-09-27: плитка «Долг» у медсестры вела в «Нет доступа», а деньги
+// сводки отдавались каждой роли. Теперь закрытый раздел — плитка без перехода,
+// а без права на выручку сервер денег не присылает и экран говорит почему.
+test('V3120_FIX: плитка закрытого роли раздела не нажимается; деньги без права — «нет доступа к выручке»', async () => {
+    const perms = await import('../permissions.js');
+    perms.setEffectiveFromRole({ name: 'Медсестра', permissions: { sections: ['dashboard', 'admissions'] } });
+    const prevSummary = summary;
+    summary = Object.assign({}, SUMMARY, { money_visible: false, collected_today: null, outstanding_amount: null,
+        outstanding_patient_amount: null, outstanding_patient_count: 3, outstanding_payer_amount: null });
+    try {
+        const { root, nav } = await screen();
+        const tiles = byClass(root, 'dash-kpi');
+        const tile = (label) => tiles.find((t) => textOf(t).includes(label));
+        const debt = tile('Долг');
+        assert.ok(debt && debt.attrs.role !== 'button', 'плитка долга ведёт в закрытый раздел');
+        debt.click();
+        tile('Анализы в работе').click();
+        tile('В стационаре').click();
+        assert.deepStrictEqual(nav, ['admissions'], 'переходы только в открытые разделы: ' + nav.join(','));
+        assert.ok(textOf(tile('Принято сегодня')).includes('нет доступа к выручке'));
+        assert.ok(!textOf(root).includes('1 450 000'), 'деньги на экране без права');
+    } finally {
+        summary = prevSummary;
+        perms.setFullAccess();
+    }
+});
+
+test('V3120_FIX: долг пациентов отдельно от долга организаций', async () => {
+    const prevSummary = summary;
+    summary = Object.assign({}, SUMMARY, { money_visible: true, outstanding_amount: 1320000,
+        outstanding_patient_amount: 420000, outstanding_patient_count: 3, outstanding_payer_amount: 900000, outstanding_payer_count: 1 });
+    try {
+        const { root } = await screen();
+        const debt = byClass(root, 'dash-kpi').find((t) => textOf(t).includes('Долг пациентов'));
+        assert.ok(debt, 'нет плитки «Долг пациентов»');
+        assert.ok(textOf(debt).includes('420 000'), textOf(debt));
+        assert.ok(textOf(debt).includes('организации должны 900 000'), textOf(debt));
+    } finally { summary = prevSummary; }
+});

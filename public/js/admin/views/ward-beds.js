@@ -516,9 +516,9 @@ function bedDetailModal(bed, ward, adm, root) {
                     h('div', { style: { fontWeight: 700, fontSize: '15px' } }, p.full_name || '—'),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [p.mrn, adm.chief_complaint].filter(Boolean).join(' · ')))),
             h('div', { style: { borderTop: '1px solid var(--ink-100)', margin: '12px 0' } }),
-            kvRow('Admission #', adm.admission_no || ('#' + adm.id)),
+            kvRow(tr('Номер госпитализации'), adm.admission_no || ('#' + adm.id)),
             kvRow('Pathway', adm.pathway === 'surgical' ? 'Surgical' : 'Therapy'),
-            kvRow('Attending', (adm.users && adm.users.full_name) || '—'),
+            kvRow(tr('Лечащий врач'), (adm.users && adm.users.full_name) || '—'),
             // ADMISSION_DATE_EDIT_V1 — дату поступления правят прямо здесь: из неё
             // считаются койко-дни, а значит и счёт за проживание, и опечатка во
             // времени поступления стоит клинике суток.
@@ -528,12 +528,16 @@ function bedDetailModal(bed, ward, adm, root) {
 
         const est = estimateCharge(ward, bed, adm.admitted_at, Number(discInp.value) || 0);
         leftEl.appendChild(h('div', { class: 'card', style: { padding: '16px', background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-100, #d7efe9)' } },
-            h('div', { style: { fontSize: '12.5px', fontWeight: 800, letterSpacing: '.06em', color: 'var(--primary-700)', marginBottom: '8px' } }, 'ACCOMMODATION'),
+            h('div', { style: { fontSize: '12.5px', fontWeight: 800, letterSpacing: '.06em', color: 'var(--primary-700)', marginBottom: '8px' } }, tr('ПРОЖИВАНИЕ')),
             kvRow('Дата поступления', fmtDateTime(adm.admitted_at)),
             kvRow('Длительность', lengthOfStay(adm.admitted_at)),
             kvRow('Ставка', fmtPrice(est.rate) + ' / ' + (est.unitLabel === 'day' ? tr('день') : tr('час'))),
             h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', margin: '8px 0' } },
-                h('span', { class: 'muted', style: { flex: 1, fontSize: '12.5px' } }, 'Discount %'), discInp, saveDiscBtn),
+                h('span', { class: 'muted', style: { flex: 1, fontSize: '12.5px' } }, tr('Скидка на проживание, %')), discInp, saveDiscBtn),
+            // V3120_FIX — скидка не пересчитывает уже выставленное: сутки в
+            // счёте остаются по прежней цене, и об этом сказано у самого поля.
+            h('p', { class: 'muted', style: { fontSize: '12.5px', margin: '0 0 6px' } },
+                tr('Скидка действует на проживание, внесённое после её сохранения; сутки, уже выставленные в счёт, она не меняет.')),
             h('div', { style: { borderTop: '1px dashed var(--primary-100, #d7efe9)', margin: '8px 0' } }),
             // ACCOMMODATION_DAILY_V1 — «к оплате» это ОСТАТОК: сутки, за которые
             // ещё не выставляли счёт. Числа берём у сервера (accommodation_state),
@@ -1064,8 +1068,8 @@ function bedDetailModal(bed, ward, adm, root) {
 function housekeepingModal(bed, ward, root) {
     const setStatus = async (status) => {
         const { error } = await supabase.rpc('set_bed_status', { bed_id: bed.id, status });
-        if (error) { toast((error.message) || 'Failed.', 'fail'); return; }
-        toast('Bed updated', 'ok');
+        if (error) { toast((error.message) || tr('Не удалось.'), 'fail'); return; }
+        toast(tr('Статус койки обновлён.'), 'ok');
         await paint(root);
     };
     const overlay = h('div', { class: 'modal' });
@@ -1073,13 +1077,13 @@ function housekeepingModal(bed, ward, root) {
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
     const actionBtn = (label, status, primary) => h('button', { class: 'btn ' + (primary ? 'btn-primary' : 'btn-outline'), type: 'button', style: { width: '100%', marginBottom: '8px' }, onclick: async () => { await setStatus(status); close(); } }, label);
     const body = [];
-    if (bed.status === 'cleaning') { body.push(actionBtn('Cleaning done · free the bed', 'free', true)); body.push(actionBtn('Mark out of service', 'maintenance')); }
-    else if (bed.status === 'maintenance') { body.push(actionBtn('Back in service · free', 'free', true)); }
-    else { body.push(actionBtn('Mark cleaning', 'cleaning')); body.push(actionBtn('Mark out of service', 'maintenance')); }
+    if (bed.status === 'cleaning') { body.push(actionBtn(tr('Уборка закончена · освободить койку'), 'free', true)); body.push(actionBtn(tr('Mark out of service'), 'maintenance')); }
+    else if (bed.status === 'maintenance') { body.push(actionBtn(tr('Снова в работе · свободна'), 'free', true)); }
+    else { body.push(actionBtn(tr('Отправить на уборку'), 'cleaning')); body.push(actionBtn(tr('Mark out of service'), 'maintenance')); }
     overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '380px', maxWidth: 'calc(100vw - 32px)' } },
-        h('header', { class: 'modal-head' }, h('h2', null, Icon('Bed', { size: 16 }), ' Bed ' + bed.code + ' · ' + (STATUS[bed.status] ? STATUS[bed.status].label : bed.status)), h('button', { class: 'modal-close', onclick: close }, '×')),
+        h('header', { class: 'modal-head' }, h('h2', null, Icon('Bed', { size: 16 }), ' ' + tr('Койка') + ' ' + bed.code + ' · ' + (STATUS[bed.status] ? STATUS[bed.status].label : bed.status)), h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body' }, ...body),
-        h('footer', { class: 'modal-foot' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Close')),
+        h('footer', { class: 'modal-foot' }, h('button', { class: 'btn', type: 'button', onclick: close }, tr('Закрыть'))),
     ));
     document.body.appendChild(overlay);
 }

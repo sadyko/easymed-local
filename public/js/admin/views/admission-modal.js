@@ -68,7 +68,7 @@ import { loadBedFund, bedBoardEl, wardPillsEl } from './ward-beds.js?v=board4';
 // заявку) и показывают ТАМ (очередь оформления). Список и подписи берутся из
 // экрана очереди, а не заводятся вторые: разойдись они, один экран называл бы
 // исход словом, которого другой не знает.
-import { DISCHARGE_OUTCOMES, outcomeTitle } from './discharge.js';
+import { DISCHARGE_OUTCOMES, outcomeTitle, localToUtcIso } from './discharge.js';   // V3120_FIX — местное время поля → UTC
 // DIET_TABLES_V1 — словарь питания берётся у порционника, а не заводится второй
 // раз здесь: «Стол не назначен» в карте и «Стол не назначен» на кухне обязаны
 // быть одной строкой, иначе они разъедутся в переводе, а потом и по смыслу.
@@ -249,7 +249,9 @@ export function openAdmissionOrderModal({ patientId = null, patientName = '', pa
             // <input type="datetime-local"> отдаёт «2026-09-05T08:00» без зоны;
             // сервер хранит строкой, поэтому секунды и Z дописываются здесь, а
             // не оставляются на догадку каждому, кто эту строку прочитает.
-            planned_at: whenInp.value ? whenInp.value + ':00Z' : null,
+            // V3120_FIX — поле отдаёт МЕСТНОЕ время; «+ ':00Z'» выдавало его за
+            // UTC и сдвигало план на часовой пояс (10:00 становились 15:00).
+            planned_at: localToUtcIso(whenInp.value),
             note: noteInp.value.trim(),
             // INPATIENT_BONUS_V1 — список не загрузился: поле не шлём, сервер
             // подставит значение по умолчанию сам.
@@ -1554,9 +1556,10 @@ export function openAdmissionDischargeRequestModal({ admission, onDone, generate
             outcome: outcomeSel.value,
             destination: destInp.value.trim(),
             recommendations: recInp.value.trim(),
-            // <input type="datetime-local"> отдаёт «2026-09-05T14:00» без зоны —
-            // секунды и Z дописываются здесь, как в заявке на госпитализацию.
-            planned_discharge_at: whenInp.value ? whenInp.value + ':00Z' : null,
+            // <input type="datetime-local"> отдаёт МЕСТНОЕ «2026-09-05T14:00».
+            // V3120_FIX — раньше сюда дописывали ':00Z', то есть местное время
+            // выдавалось за UTC; теперь честный перевод в UTC (как у выписки).
+            planned_discharge_at: localToUtcIso(whenInp.value),
         });
         if (error) {
             const msg = (error && error.message) || tr('Не удалось подать заявку на выписку.');

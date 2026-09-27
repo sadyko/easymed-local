@@ -914,11 +914,17 @@ test('маршрут стационара проходится целиком: �
         const again = topOverlay();
         assert.ok(textOf(again).includes('Исход госпитализации'), 'форма заявки закрылась вместе с отказом');
         walk(again).find((e) => e.tagName === 'SELECT').value = 'home';
+        // V3120_FIX — плановое время выписки набирается МЕСТНЫМ и уезжает в UTC
+        // (раньше к нему дописывали ':00Z', и план сдвигался на часовой пояс).
+        const when = walk(again).find((e) => e.tagName === 'INPUT' && (e.type === 'datetime-local' || e.attrs.type === 'datetime-local'));
+        assert.ok(when, 'нет поля планового времени выписки');
+        when.value = '2026-09-05T14:00';
         findBtn(again, 'Подать заявку').click();
         await settle();
 
         const call = rpcCalls.find((c) => c.name === 'admission_discharge_request');
         assert.ok(call, 'заявка не ушла на сервер');
+        assert.equal(call.args.planned_discharge_at, new Date('2026-09-05T14:00').toISOString().slice(0, 19) + 'Z');
         assert.equal(call.args.outcome, 'home');
         assert.equal(call.args.recommendations, 'Амоксициллин 7 дней, явка через неделю');
         assert.equal(adm().status, 'discharging', 'заявка подана');

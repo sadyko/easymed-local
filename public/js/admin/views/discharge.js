@@ -170,6 +170,72 @@ export function accommodationWarning(gap) {
   });
 }
 
+/**
+ * V3120_FIX — пропажа проживания по строке очереди. Сервер присылает её сам
+ * (admission_discharge_queue → accommodation_gap: сутки и сумма с учётом
+ * скидки и переводов); расчёт из accommodation_state — только для сервера
+ * старше этой правки.
+ */
+export function rowGap(row, state) {
+  const g = row && row.accommodation_gap;
+  if (g && typeof g === 'object') {
+    const amount = Math.round(Number(g.amount) || 0);
+    const units = Number(g.units) || 0;
+    if (amount <= 0 || units <= 0) return null;
+    return { units, amount, mode: g.mode === 'hourly' ? 'hourly' : 'daily' };
+  }
+  return accommodationGap(state);
+}
+
+/**
+ * V3120_FIX — сумма под подписью. Выписка с долгом ДОНАЧИСЛЯЕТ проживание до
+ * времени выписки (сервер, admissionDischargeFinalize), поэтому у должника
+ * пропажа входит в число, которое он подписывает. Без долга проживание само не
+ * выставляется, и число — просто остаток.
+ */
+export function owedTotal(row, gap) {
+  const base = Number(row && row.balance && row.balance.balance) || 0;
+  return hasDebt(row && row.balance) && gap ? base + (Number(gap.amount) || 0) : base;
+}
+
+/** Деньги на депозите пациента, которыми можно закрыть остаток. */
+export function depositBalance(row) {
+  const v = Number(row && row.deposit_balance) || 0;
+  return v > 0.005 ? v : 0;
+}
+
+/**
+ * Оплатить с баланса проводит касса (record_payment — admin / cashier), и
+ * кнопку видит только она: старшей медсестре кнопка, которой сервер откажет,
+ * хуже её отсутствия.
+ */
+export function canPayFromDeposit(user) {
+  if (!user) return false;
+  const roles = [user.role, ...(Array.isArray(user.extra_roles) ? user.extra_roles : [])];
+  return roles.some((r) => r === 'admin' || r === 'cashier');
+}
+
+/** Сколько списать с баланса по каждому открытому счёту — по порядку, пока хватает. */
+export function walletPlan(invoices, balance) {
+  let left = Math.max(0, Number(balance) || 0);
+  const out = [];
+  for (const inv of invoices || []) {
+    if (left <= 0.005) break;
+    const due = Math.round((Number(inv.balance) || 0) * 100) / 100;
+    if (due <= 0) continue;
+    const amount = Math.round(Math.min(due, left) * 100) / 100;
+    out.push({ invoice_id: inv.id, amount });
+    left = Math.round((left - amount) * 100) / 100;
+  }
+  return out;
+}
+
+function actor(ctx) {
+  if (ctx && ctx.user) return ctx.user;
+  try { return (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || null; }
+  catch (e) { return null; }
+}
+
 /** Палата и койка одной подписью; пациент без койки из списка не исчезает. */
 export function placeTitle(row) {
   const ward = (row && row.ward_name) || tr('Без палаты');
@@ -259,7 +325,9 @@ export async function renderDischarge(root, ctx = {}) {
   // выписку он не держит, он только называет пропажу.
   async function loadAccommodation() {
     const map = new Map();
-    await Promise.all(state.rows.map(async (r) => {
+    // V3120_FIX — сервер присылает пропажу в строке очереди; спрашивать
+    // accommodation_state по каждому нужно только у сервера старше правки.
+    await Promise.all(state.rows.filter((r) => !(r && r.accommodation_gap)).map(async (r) => {
       try {
         const { data } = await supabase.rpc('accommodation_state', { admission_id: r.admission_id });
         if (data && typeof data === 'object') map.set(r.admission_id, data);
@@ -270,7 +338,7 @@ export async function renderDischarge(root, ctx = {}) {
 
   /** Пропажа проживания по строке очереди — или null, если всё внесено. */
   function gapOf(row) {
-    return accommodationGap(state.accommodation.get(row && row.admission_id));
+    return rowGap(row, state.accommodation.get(row && row.admission_id));
   }
 
   async function loadCapabilities() {
@@ -328,7 +396,7 @@ export async function renderDischarge(root, ctx = {}) {
         : Tag(tr('закрыт'), { kind: 'ok' }));
 
     const moneyLine = debt
-      ? h('div', { class: 'dq-debt' }, Tag(money(r.balance.balance), { kind: 'warn' }))
+      ? h('div', { class: 'dq-debt' }, Tag(money(owedTotal(r, gap)), { kind: 'warn' }))
       : h('div', { class: 'dq-debt is-clear' }, tr('Долга нет'));
 
     return h('article', { class: 'dq-row', 'data-owing': debt ? '1' : '0' },
@@ -406,12 +474,29 @@ export async function renderDischarge(root, ctx = {}) {
     // Это ПАНЕЛЬ, а не вложенная карточка: окно в окне рисовало вторую рамку и
     // вторую тень внутри модального окна. Цвет — семантический --warn-*, а не
     // жёстко вписанная rgba, как было у блока проживания.
+    const gap = gapOf(row);
+    // V3120_FIX — у должника проживание войдёт в долг (сервер доначислит его до
+    // времени выписки), поэтому оно стоит В СУММЕ под подписью отдельной
+    // строкой, а не только предупреждением рядом.
+    const sumLines = balanceLines(row.balance);
+    if (debt && gap) sumLines.push({ label: tr('Проживание, будет внесено при выписке'), value: money(gap.amount) });
+    const deposit = depositBalance(row);
+    const overlayRef = { close: null };
+    const payer = canPayFromDeposit(actor(ctx));
+    const depositBlock = debt && deposit
+      ? h('div', { class: 'dq-block' },
+          h('p', { class: 'dq-panel-p' }, trf('На балансе пациента: {amount}. Оплатите остаток с баланса до выписки — тогда долга не будет.', { amount: money(deposit) })),
+          payer
+            ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => payFromDeposit(row, overlayRef) }, tr('Оплатить с баланса'))
+            : h('p', { class: 'dq-quiet' }, tr('Оплатить с баланса может касса.')))
+      : null;
     const debtBlock = debt
       ? h('section', { class: 'dq-panel is-warn' },
-          h('h3', { class: 'dq-panel-t' }, trf('Остаток по счёту: {amount}', { amount: money(row.balance.balance) })),
+          h('h3', { class: 'dq-panel-t' }, trf('Остаток по счёту: {amount}', { amount: money(owedTotal(row, gap)) })),
           h('dl', { class: 'dq-sums' },
-            ...balanceLines(row.balance).flatMap((l) => [
+            ...sumLines.flatMap((l) => [
               h('dt', null, l.label), h('dd', null, l.value)])),
+          depositBlock,
           h('div', { class: 'dq-quiet dq-excl' }, 'В сумму не входит:'),
           h('ul', { class: 'dq-excl-list' },
             ...excludeNotes(row.balance).map((n) => h('li', null, n))),
@@ -424,16 +509,16 @@ export async function renderDischarge(root, ctx = {}) {
     // ACCOMMODATION_GAP_V1 — пропажа стоит В ОКНЕ ТОЖЕ, и НЕ внутри блока долга:
     // самый опасный случай — «долга нет» при трёх невыставленных койко-днях,
     // и как раз тогда блока долга на экране нет вовсе.
-    const gap = gapOf(row);
     const gapBlock = gap
       ? h('section', { class: 'dq-panel is-crit' },
           h('h3', { class: 'dq-panel-t' }, Icon('Warning', { size: 15 }), ' ', tr('Проживание не внесено в счёт')),
           h('p', { class: 'dq-panel-p' }, accommodationWarning(gap)),
-          h('p', { class: 'dq-quiet' },
-            tr('Внесите проживание в карте госпитализации — иначе за эти сутки клиника не выставит ничего.')))
+          h('p', { class: 'dq-quiet' }, debt
+            ? tr('При выписке с долгом проживание будет внесено до фактического времени выписки и войдёт в долг.')
+            : tr('Внесите проживание в карте госпитализации — иначе за эти сутки клиника не выставит ничего.')))
       : null;
 
-    modal(tr('Оформление выписки') + ' — ' + (row.patient_name || ''), 'Check', [
+    const opened = modal(tr('Оформление выписки') + ' — ' + (row.patient_name || ''), 'Check', [
       field('Фактическое время выписки', atInput),
       h('div', { class: 'dq-quiet' }, outcomeTitle(row.discharge_outcome)
         + (row.discharge_destination ? ' · ' + row.discharge_destination : '')),
@@ -472,7 +557,33 @@ export async function renderDischarge(root, ctx = {}) {
       await load();
       return true;
     });
+    overlayRef.close = opened.close;
     syncSubmit();
+  }
+
+  // V3120_FIX — «Оплатить с баланса»: сервер собирает всё начисленное в счёт
+  // (admission_prepare_wallet_payment), а оплата идёт обычным record_payment
+  // способом 'wallet' — та же касса, та же смена, тот же журнал баланса.
+  async function payFromDeposit(row, overlayRef) {
+    const prep = await supabase.rpc('admission_prepare_wallet_payment', { admission_id: row.admission_id });
+    if (prep.error || !prep.data) {
+      toast((prep.error && prep.error.message) || tr('Не удалось подготовить оплату с баланса.'), 'fail');
+      return;
+    }
+    const plan = walletPlan(prep.data.invoices, prep.data.deposit_balance);
+    if (!plan.length) { toast(tr('Оплачивать с баланса нечего.'), 'info'); return; }
+    let paid = 0;
+    for (const step of plan) {
+      const { error } = await supabase.rpc('record_payment', { invoice_id: step.invoice_id, amount: step.amount, method: 'wallet' });
+      if (error) {
+        toast((error && error.message) || tr('Не удалось оплатить с баланса.'), 'fail');
+        break;
+      }
+      paid += step.amount;
+    }
+    if (paid > 0) toast(trf('С баланса оплачено: {amount}.', { amount: money(paid) }), 'ok');
+    if (overlayRef && overlayRef.close) overlayRef.close();
+    await load();
   }
 
   // Маленькое окно того же вида, что у остальных экранов (ward-beds.js):
