@@ -222,3 +222,16 @@ test('CLINIC_DAY_V1: обзор и лист назначений считают 
   assert.equal(today(ctx.db), ctx.db.prepare("SELECT date('now','localtime') d").get().d);
   ctx.db.close();
 });
+
+// V3120_FIX — «К оплате» на обзоре — весь остаток госпитализации: начисленное,
+// но ещё не выставленное, тоже оплачивается. Раньше обзор считал только счета
+// и показывал «долга нет» при 100 000 невыставленных услуг.
+test('V3120_FIX: «К оплате» на обзоре включает начисленное, но не выставленное', () => {
+    const ctx = seed();
+    const adm = inTreatment(ctx, inBed(ctx, ctx.p1, ctx.bed1));
+    addService(ctx, adm.id, 900, 100000);
+    const ov = admissionOverview(ctx.db, { admission_id: adm.id }, doctor);
+    assert.equal(ov.bill.total, 0, 'счетов ещё нет');
+    assert.ok(ov.bill.unbilled >= 100000, 'невыставленное названо: ' + ov.bill.unbilled);
+    assert.equal(ov.bill.debt, ov.bill.unbilled, 'и входит в «К оплате»');
+});

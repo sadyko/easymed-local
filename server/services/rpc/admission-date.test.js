@@ -93,7 +93,7 @@ test('нельзя поставить дату позже выписки', () =>
 
 test('роли: лаборант дату не правит', () => {
   const { db, adm } = seed();
-  assert.throws(() => setAdmissionDate(db, { admission_id: adm.id, admitted_at: iso(1) }, LAB), /not allowed/);
+  assert.throws(() => setAdmissionDate(db, { admission_id: adm.id, admitted_at: iso(1) }, LAB), /недоступно/);
   db.close();
 });
 

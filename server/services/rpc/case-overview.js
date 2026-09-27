@@ -24,6 +24,7 @@ import { requireGrant } from '../grants.js';
 import { sheetView } from './title-sheet.js';
 import { admissionCaseDocs } from './inpatient-reviews.js';
 import { accommodationState } from './accommodation.js';
+import { admissionBalance } from './inpatient.js';   // V3120_FIX — «к оплате» тем же числом, что у выписки
 import { isSurgery } from './queue.js';
 import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 import { vitalsSummary } from './vitals.js';   // VITALS_NEWS_V1
@@ -205,11 +206,16 @@ export function admissionOverview(db, args, user) {
   // неоплаченный остаток: пока пациент лежит, счёт просто «к оплате».
   const debtMarked = round2(live.filter((i) => i.status === 'debt')
     .reduce((s, i) => s + Math.max(0, (Number(i.total_amount) || 0) - (Number(i.paid_amount) || 0)), 0));
+  // V3120_FIX — «К оплате» на обзоре — это остаток госпитализации ЦЕЛИКОМ:
+  // начисленное, но ещё не выставленное, тоже будет оплачено. Раньше обзор
+  // считал только счета, и пациент с 100 000 невыставленных услуг читался
+  // «долга нет». Число — то же, что у окна выписки (admissionBalance).
+  const owed = admissionBalance(db, adm.id);
   const bill = {
     accommodation: accommodation ? {
       stay_units: accommodation.stay_units, invoiced: accommodation.invoiced, current: accommodation.current,
     } : null,
-    invoices, total, paid, debt: round2(Math.max(0, total - paid)), debt_marked: debtMarked,
+    invoices, total, paid, debt: round2(Math.max(0, owed.balance)), unbilled: owed.unbilled, debt_marked: debtMarked,
   };
 
   // ── выписка ─────────────────────────────────────────────────────────────

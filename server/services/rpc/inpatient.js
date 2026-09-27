@@ -31,6 +31,10 @@ import { saveTitleSheet } from './title-sheet.js';   // TITLE_SHEET_V1 — ли�
 // товар тем же возвратом, что и кнопка «Убрать» у койки (по источникам).
 import { voidDispensedAdmissionItemCore } from './inventory.js';
 import { ACCOMMODATION_NOTE_PREFIX } from '../../../public/js/shared/accommodation-line.js';
+// V3120_FIX — выписка с долгом доначисляет проживание до времени выписки, а
+// окно выписки видит баланс депозита пациента.
+import { billAccommodationCore, accommodationGapOf, computeAccommodation } from './accommodation.js';
+import { walletBalance } from '../domain/wallet.js';
 
 // INPATIENT_MONEY_FIX_V1 (D-minor) — что внесено за проживание: СУММА всех строк
 // проживания (посуточная выставка даёт их несколько), а не первая попавшаяся.
@@ -98,6 +102,8 @@ const DISCOUNT_ROLES = ['admin', 'cashier'];
 // недоступен.
 const BED_STATUS_ROLES = ['admin', 'registrar', 'nurse', 'senior_nurse', 'head_doctor'];
 const BED_STATUS_VALUES = ['free', 'cleaning', 'maintenance'];
+// V3120_FIX — статус койки словами для отказа: сообщение видит человек, не код.
+const BED_STATUS_RU = { free: 'свободна', occupied: 'занята', cleaning: 'уборка', maintenance: 'ремонт', reserved: 'бронь' };
 const PATHWAYS = ['therapy', 'surgical'];
 // Upper bound on the computed accommodation charge. Guards round2() from
 // overflowing a huge-but-finite rate*units to Infinity, which would poison
@@ -114,7 +120,7 @@ const OPEN_SQL = OPEN_STATUSES.map((s) => `'${s}'`).join(',');
 function requireRole(user, allowed) {
   // MULTI_ROLE_SERVER_V1 — extras count too, not the primary role alone.
   if (!hasAnyRole(user, allowed)) {
-    throw new RpcError('Your role is not allowed to perform this action.', 403);
+    throw new RpcError('Вашей роли это действие недоступно.', 403);
   }
 }
 
@@ -210,26 +216,26 @@ export function requestAdmission(db, args, user) {
 
   const patientId = args && args.patient_id;
   if (!isPositiveInt(patientId)) {
-    throw new RpcError('patient_id must be a positive integer.', 400);
+    throw new RpcError('Не указан пациент.', 400);
   }
   const rawDoctorId = args && args.doctor_id;
   const doctorId = rawDoctorId === undefined || rawDoctorId === null ? null : rawDoctorId;
   if (doctorId !== null && !isPositiveInt(doctorId)) {
-    throw new RpcError('doctor_id must be a positive integer.', 400);
+    throw new RpcError('Врач указан неверно.', 400);
   }
   const pathway = args && args.pathway !== undefined && args.pathway !== null ? args.pathway : 'therapy';
   if (!PATHWAYS.includes(pathway)) {
-    throw new RpcError(`pathway must be one of: ${PATHWAYS.join(', ')}`, 400);
+    throw new RpcError('Путь лечения указан неверно: терапия или хирургия.', 400);
   }
   const chiefComplaint = (args && typeof args.chief_complaint === 'string' ? args.chief_complaint : '').slice(0, 500);
   const admissionDiagnosis = (args && typeof args.diagnosis === 'string' ? args.diagnosis : '').slice(0, 500);
 
   const run = db.transaction(() => {
     if (!db.prepare('SELECT 1 FROM patients WHERE id = ?').get(patientId)) {
-      throw new RpcError('patient not found.', 400);
+      throw new RpcError('Пациент не найден.', 400);
     }
     if (doctorId !== null && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(doctorId)) {
-      throw new RpcError('doctor not found.', 400);
+      throw new RpcError('Врач не найден.', 400);
     }
     // INPATIENT_FLOW_V1 — открыта = заявка ИЛИ любое состояние в койке. Раньше
     // список был ('requested','active'); между ними теперь два шага, и пациент,
@@ -269,13 +275,13 @@ export function cancelAdmissionRequest(db, args, user) {
 
   const admissionId = args && args.admission_id;
   if (!isPositiveInt(admissionId)) {
-    throw new RpcError('admission_id must be a positive integer.', 400);
+    throw new RpcError('Не указана госпитализация.', 400);
   }
   const reason = (args && typeof args.reason === 'string' ? args.reason : '').slice(0, 300);
 
   const run = db.transaction(() => {
     const adm = db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId);
-    if (!adm) throw new RpcError('admission not found.', 400);
+    if (!adm) throw new RpcError('Госпитализация не найдена.', 400);
     // An active stay is ended by discharge, never by cancelling — the table
     // says so, and this is the error the ward sees if they try.
     assertTransition('admission', adm.status, 'cancelled');
@@ -327,20 +333,20 @@ export function admitPatient(db, args, user) {
 
   const patientId = args && args.patient_id;
   if (!isPositiveInt(patientId)) {
-    throw new RpcError('patient_id must be a positive integer.', 400);
+    throw new RpcError('Не указан пациент.', 400);
   }
   const bedId = args && args.bed_id;
   if (!isPositiveInt(bedId)) {
-    throw new RpcError('bed_id must be a positive integer.', 400);
+    throw new RpcError('Не указана койка.', 400);
   }
   const rawDoctorId = args && args.doctor_id;
   const doctorId = rawDoctorId === undefined || rawDoctorId === null ? null : rawDoctorId;
   if (doctorId !== null && !isPositiveInt(doctorId)) {
-    throw new RpcError('doctor_id must be a positive integer.', 400);
+    throw new RpcError('Врач указан неверно.', 400);
   }
   const pathway = args && args.pathway !== undefined ? args.pathway : 'therapy';
   if (!PATHWAYS.includes(pathway)) {
-    throw new RpcError(`pathway must be one of: ${PATHWAYS.join(', ')}`, 400);
+    throw new RpcError('Путь лечения указан неверно: терапия или хирургия.', 400);
   }
   const chiefComplaint = (args && typeof args.chief_complaint === 'string' ? args.chief_complaint : '').slice(0, 500);
   const admissionDiagnosis = (args && typeof args.admission_diagnosis === 'string' ? args.admission_diagnosis : '').slice(0, 500);
@@ -348,31 +354,31 @@ export function admitPatient(db, args, user) {
   const run = db.transaction(() => {
     const patient = db.prepare('SELECT * FROM patients WHERE id = ?').get(patientId);
     if (!patient) {
-      throw new RpcError('patient not found.', 400);
+      throw new RpcError('Пациент не найден.', 400);
     }
     const bed = db.prepare('SELECT * FROM beds WHERE id = ?').get(bedId);
     if (!bed) {
-      throw new RpcError('bed not found.', 400);
+      throw new RpcError('Койка не найдена.', 400);
     }
     if (bed.active !== 1) {
-      throw new RpcError('bed is not active.', 400);
+      throw new RpcError('Койка выведена из работы.', 400);
     }
     if (bed.status !== 'free') {
-      throw new RpcError(`bed is not free (status: ${bed.status}).`, 400);
+      throw new RpcError(`Койка не свободна (сейчас: ${BED_STATUS_RU[bed.status] || bed.status}).`, 400);
     }
     if (doctorId !== null && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(doctorId)) {
-      throw new RpcError('doctor not found.', 400);   // clean 400 instead of an FK 500 (review finding #4)
+      throw new RpcError('Врач не найден.', 400);   // clean 400 instead of an FK 500 (review finding #4)
     }
 
     // INPATIENT_FLOW_V1 — один пациент, одна койка: считаем ВСЕ состояния в
     // койке, а не только 'active'.
     const patientActive = db.prepare(`SELECT 1 FROM admissions WHERE patient_id=? AND status IN (${IN_BED_SQL})`).get(patientId);
     if (patientActive) {
-      throw new RpcError('patient already has an active admission.', 400);
+      throw new RpcError('У пациента уже есть открытая госпитализация.', 400);
     }
     const bedActive = db.prepare(`SELECT 1 FROM admissions WHERE bed_id=? AND status IN (${IN_BED_SQL})`).get(bedId);
     if (bedActive) {
-      throw new RpcError('bed already has an active admission.', 400);
+      throw new RpcError('На этой койке уже лежит пациент.', 400);
     }
 
     // ADM_REQUEST_LIFECYCLE_V1 — giving a bed to a patient who already has an
@@ -407,7 +413,7 @@ export function admitPatient(db, args, user) {
     }
     const attending = db.prepare(
       'SELECT id, role, is_doctor, specialty, license_number, active FROM users WHERE id = ?').get(attendingId);
-    if (!attending) throw new RpcError('doctor not found.', 400);
+    if (!attending) throw new RpcError('Врач не найден.', 400);
     if (!isDoctorRow(attending)) {
       throw new RpcError('Лечащим врачом можно назначить только врача: у выбранного сотрудника нет признака врача.', 400);
     }
@@ -465,7 +471,7 @@ export function dischargePatient(db, args, user) {
 
   const admissionId = args && args.admission_id;
   if (!isPositiveInt(admissionId)) {
-    throw new RpcError('admission_id must be a positive integer.', 400);
+    throw new RpcError('Не указана госпитализация.', 400);
   }
   // ADM_DISCOUNT_HONOURED_V1 — a discount agreed DURING the stay is stored on
   // the admission by set_admission_discount; discharge used to ignore it and
@@ -475,19 +481,19 @@ export function dischargePatient(db, args, user) {
   const overridden = args && args.discount_percent !== undefined && args.discount_percent !== null;
   const rawDiscount = overridden ? args.discount_percent : 0;
   if (typeof rawDiscount !== 'number' || !Number.isFinite(rawDiscount) || rawDiscount < 0 || rawDiscount > 100) {
-    throw new RpcError('discount_percent must be a finite number between 0 and 100.', 400);
+    throw new RpcError('Скидка — число от 0 до 100 %.', 400);
   }
   // The role gate bites only when APPLYING a new discount here. A percent
   // already stored on the admission was authorised by an admin/cashier when it
   // was saved, so a nurse or registrar may still discharge the patient at it —
   // they just cannot introduce one at the door.
   if (rawDiscount > 0 && !DISCOUNT_ROLES.includes(user.role)) {
-    throw new RpcError('Only an admin or cashier may apply an accommodation discount.', 403);
+    throw new RpcError('Скидку на проживание даёт только администратор или касса.', 403);
   }
 
   const run = db.transaction(() => {
     const admission = db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId);
-    if (!admission) throw new RpcError('admission not found or not active.', 400);
+    if (!admission) throw new RpcError('Госпитализация не найдена или уже закрыта.', 400);
     // ВЫПИСЫВАЮТ ЛЮБОГО, КТО В КОЙКЕ, — а не только того, кто дошёл до лечения.
     //
     // Здесь стояло `!== 'active'`, и это было верно ровно до Задачи 2. Она
@@ -554,38 +560,20 @@ export function dischargePatient(db, args, user) {
       ? rawDiscount
       : (Number.isFinite(storedPct) ? Math.min(100, Math.max(0, storedPct)) : 0);
 
-    const ward = admission.ward_id ? db.prepare('SELECT * FROM wards WHERE id = ?').get(admission.ward_id) : null;
-    const bed = admission.bed_id ? db.prepare('SELECT * FROM beds WHERE id = ?').get(admission.bed_id) : null;
-
-    const mode = ward && ward.billing_mode === 'hourly' ? 'hourly' : 'daily';
-    const wardDaily = ward ? ward.price_per_day : 0;
-    const wardHourly = ward ? ward.price_per_hour : 0;
-    const bedDaily = bed ? bed.price_per_day : 0;
-    const bedHourly = bed ? bed.price_per_hour : 0;
-    const resolvedRate = mode === 'daily'
-      ? (bedDaily > 0 ? bedDaily : wardDaily)
-      : (bedHourly > 0 ? bedHourly : wardHourly);
-    // Clamp a mis-configured negative rate to 0 (no charge) so it can never
-    // produce a negative gross/charge_amount (adversarial-review finding #2).
-    const rate = Number.isFinite(resolvedRate) && resolvedRate > 0 ? resolvedRate : 0;
-
+    // V3120_FIX — сумма за пребывание считается ТЕМ ЖЕ правилом, что у кнопки
+    // «Внести проживание» и у окна выписки (accommodation.js
+    // computeAccommodation: ставка койки с откатом на палату, переводы —
+    // сутки по койке, где прошла большая их часть). Своя копия арифметики
+    // здесь расходилась с ним на переводах: ответ выписки называл одну сумму,
+    // строка проживания несла другую.
     const nowStr = nowIso(db);
-    let ms = Date.parse(nowStr) - Date.parse(admission.admitted_at);
-    if (!(ms >= 0)) ms = 0;
-
-    let units;
-    if (mode === 'daily') {
-      let days = Math.floor(ms / 86400000) + 1;
-      if (days > 1) days -= 1;
-      days = Math.max(1, days);
-      units = days;
-    } else {
-      units = Math.max(1, Math.ceil(ms / 3600000));
-    }
-
-    const gross = round2(units * rate);
+    const c = computeAccommodation(db, { ...admission, accommodation_discount_percent: discountPct });
+    const mode = c.mode;
+    const units = Math.max(1, c.stayUnits);
+    const rate = c.stayUnits > 0 ? round2(c.stayGross / c.stayUnits) : c.rate;
+    const gross = c.stayUnits > 0 ? c.stayGross : round2(rate);
     if (!Number.isFinite(gross) || gross > MAX_MONEY) {
-      throw new RpcError('computed accommodation charge is too large.', 400);
+      throw new RpcError('Сумма проживания получилась слишком большой — проверьте ставки палаты и дату поступления.', 400);
     }
 
     const net = round2(gross * (1 - discountPct / 100));
@@ -637,23 +625,23 @@ export function setBedStatus(db, args, user) {
 
   const bedId = args && args.bed_id;
   if (!isPositiveInt(bedId)) {
-    throw new RpcError('bed_id must be a positive integer.', 400);
+    throw new RpcError('Не указана койка.', 400);
   }
   const status = args && args.status;
   if (!BED_STATUS_VALUES.includes(status)) {
-    throw new RpcError(`status must be one of: ${BED_STATUS_VALUES.join(', ')}`, 400);
+    throw new RpcError('Статус койки указан неверно: свободна, уборка или ремонт.', 400);
   }
 
   const run = db.transaction(() => {
     const bed = db.prepare('SELECT * FROM beds WHERE id = ?').get(bedId);
     if (!bed) {
-      throw new RpcError('bed not found.', 400);
+      throw new RpcError('Койка не найдена.', 400);
     }
     // INPATIENT_FLOW_V1 — койку нельзя объявить свободной под кем угодно из
     // лежащих, а не только под лечащимся: до 091 запрос смотрел на 'active'.
     const activeAdmission = db.prepare(`SELECT 1 FROM admissions WHERE bed_id=? AND status IN (${IN_BED_SQL})`).get(bedId);
     if (activeAdmission) {
-      throw new RpcError('bed has an active admission; discharge the patient instead of changing bed status.', 400);
+      throw new RpcError('На койке лежит пациент — сначала выпишите или переведите его, статус койки так не меняют.', 400);
     }
 
     db.prepare('UPDATE beds SET status=? WHERE id=?').run(status, bedId);
@@ -669,19 +657,19 @@ export function setBedStatus(db, args, user) {
 export function transferAdmission(db, args, user) {
   requireRole(user, ADMIT_ROLES);
   const admissionId = args && args.admission_id;
-  if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
+  if (!isPositiveInt(admissionId)) throw new RpcError('Не указана госпитализация.', 400);
   const toBedId = args && args.to_bed_id;
-  if (!isPositiveInt(toBedId)) throw new RpcError('to_bed_id must be a positive integer.', 400);
+  if (!isPositiveInt(toBedId)) throw new RpcError('Не указана койка перевода.', 400);
   const reason = (args && typeof args.reason === 'string' ? args.reason : '').slice(0, 300);
 
   const run = db.transaction(() => {
     const adm = db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId);
-    if (!adm) throw new RpcError('admission not found.', 400);
+    if (!adm) throw new RpcError('Госпитализация не найдена.', 400);
     // INPATIENT_FLOW_V1 — перевести можно любого, кто лежит: пациента переводят
     // и до первичного осмотра (палата занята, освободилась другая).
-    if (!IN_BED_STATUSES.includes(adm.status)) throw new RpcError('admission is not active.', 400);
+    if (!IN_BED_STATUSES.includes(adm.status)) throw new RpcError('Госпитализация не активна — пациент не в койке.', 400);
     const toBed = db.prepare('SELECT * FROM beds WHERE id = ?').get(toBedId);
-    if (!toBed || !toBed.active) throw new RpcError('bed not found.', 400);
+    if (!toBed || !toBed.active) throw new RpcError('Койка не найдена.', 400);
     if (toBed.id === adm.bed_id) throw new RpcError('пациент уже на этой койке.', 400);
     if (toBed.status !== 'free' || db.prepare(`SELECT 1 FROM admissions WHERE bed_id=? AND status IN (${IN_BED_SQL})`).get(toBedId)) {
       throw new RpcError('койка занята или недоступна.', 400);
@@ -706,13 +694,13 @@ export function transferAdmission(db, args, user) {
 export function setAdmissionDiscount(db, args, user) {
   requireRole(user, DISCOUNT_ROLES);
   const admissionId = args && args.admission_id;
-  if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
+  if (!isPositiveInt(admissionId)) throw new RpcError('Не указана госпитализация.', 400);
   const pct = args && args.percent;
   if (!(typeof pct === 'number' && Number.isFinite(pct) && pct >= 0 && pct <= 100)) {
-    throw new RpcError('percent must be 0..100.', 400);
+    throw new RpcError('Скидка — число от 0 до 100 %.', 400);
   }
   const adm = db.prepare('SELECT id FROM admissions WHERE id = ?').get(admissionId);
-  if (!adm) throw new RpcError('admission not found.', 400);
+  if (!adm) throw new RpcError('Госпитализация не найдена.', 400);
   db.prepare('UPDATE admissions SET accommodation_discount_percent = ? WHERE id = ?').run(pct, admissionId);
   return { admission_id: admissionId, percent: pct };
 }
@@ -776,7 +764,7 @@ function referralSourceArg(db, args, patientId) {
   if (raw === undefined) return defaultAdmissionReferralSource(db, patientId);
   if (raw === null || raw === '') return null;
   const id = Number(raw);
-  if (!isPositiveInt(id)) throw new RpcError('referral_source_id must be a positive integer.', 400);
+  if (!isPositiveInt(id)) throw new RpcError('Источник направления указан неверно.', 400);
   if (!db.prepare('SELECT 1 FROM referral_sources WHERE id = ?').get(id)) throw new RpcError('Источник направления не найден.', 400);
   return id;
 }
@@ -788,7 +776,7 @@ function referralSourceArg(db, args, patientId) {
 export function admissionReferralDefault(db, args, user) {
   requireGrant(db, user, 'inpatient.requests', 'edit', ORDER_CREATE_ROLES, 'оформить заявку на госпитализацию');
   const patientId = args && args.patient_id;
-  if (!isPositiveInt(patientId)) throw new RpcError('patient_id must be a positive integer.', 400);
+  if (!isPositiveInt(patientId)) throw new RpcError('Не указан пациент.', 400);
   const id = defaultAdmissionReferralSource(db, patientId);
   const src = id != null ? db.prepare('SELECT id, name, code FROM referral_sources WHERE id = ?').get(id) : null;
   return { referral_source_id: src ? src.id : null, name: src ? src.name : '', code: src ? (src.code || '') : '' };
@@ -810,15 +798,15 @@ export function admissionOrderCreate(db, args, user) {
   requireGrant(db, user, 'inpatient.requests', 'edit', ORDER_CREATE_ROLES, 'оформить заявку на госпитализацию');
 
   const patientId = args && args.patient_id;
-  if (!isPositiveInt(patientId)) throw new RpcError('patient_id must be a positive integer.', 400);
+  if (!isPositiveInt(patientId)) throw new RpcError('Не указан пациент.', 400);
 
   const rawWard = args && args.ward_id;
   const wardId = rawWard === undefined || rawWard === null || rawWard === '' ? null : Number(rawWard);
-  if (wardId !== null && !isPositiveInt(wardId)) throw new RpcError('ward_id must be a positive integer.', 400);
+  if (wardId !== null && !isPositiveInt(wardId)) throw new RpcError('Отделение указано неверно.', 400);
 
   const rawDoctor = args && args.doctor_id;
   const doctorId = rawDoctor === undefined || rawDoctor === null || rawDoctor === '' ? null : Number(rawDoctor);
-  if (doctorId !== null && !isPositiveInt(doctorId)) throw new RpcError('doctor_id must be a positive integer.', 400);
+  if (doctorId !== null && !isPositiveInt(doctorId)) throw new RpcError('Врач указан неверно.', 400);
 
   const admissionType = (args && args.admission_type) || 'planned';
   if (!ADMISSION_TYPES.includes(admissionType)) {
@@ -897,13 +885,14 @@ export function admissionOrderCreate(db, args, user) {
  */
 export function admissionOrderCancel(db, args, user) {
   const admissionId = args && args.admission_id;
-  if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
+  if (!isPositiveInt(admissionId)) throw new RpcError('Не указана госпитализация.', 400);
   const reason = textArg(args && args.reason, 300);
   if (!reason) throw new RpcError('Укажите причину отмены заявки.', 400);
 
   const run = db.transaction(() => {
     const before = loadAdmission(db, admissionId);
     const res = admissionTransition(db, { admission_id: admissionId, to: 'cancelled', reason }, user);
+    if (res.repeat) return { admission: res.admission };   // V3120_FIX (M1) — повтор уже отменённой: ничего не пишем
     dropUnbilledLines(db, admissionId, user);   // INPATIENT_MONEY_FIX_V1 (D5)
     if (before.bed_id) {
       db.prepare("UPDATE beds SET status='cleaning' WHERE id=?").run(before.bed_id);
@@ -938,16 +927,16 @@ export function admissionOrderCancel(db, args, user) {
  */
 export function admissionAdmit(db, args, user) {
   const admissionId = args && args.admission_id;
-  if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
+  if (!isPositiveInt(admissionId)) throw new RpcError('Не указана госпитализация.', 400);
   const bedId = args && args.bed_id;
-  if (!isPositiveInt(bedId)) throw new RpcError('bed_id must be a positive integer.', 400);
+  if (!isPositiveInt(bedId)) throw new RpcError('Не указана койка.', 400);
   const at = typeof (args && args.at) === 'string' && args.at ? args.at : null;
   // ADMITTING_DOCTOR_V1 — приёмный врач, которого медсестра называет при
   // размещении (миграция 113). Необязателен для сервера (старые вызовы), но
   // экран без него не кладёт: осмотр при поступлении должен быть кому писать.
   const rawAdmitting = args && args.admitting_doctor_id;
   const admittingId = rawAdmitting === undefined || rawAdmitting === null || rawAdmitting === '' ? null : rawAdmitting;
-  if (admittingId !== null && !isPositiveInt(admittingId)) throw new RpcError('admitting_doctor_id must be a positive integer.', 400);
+  if (admittingId !== null && !isPositiveInt(admittingId)) throw new RpcError('Принимающий врач указан неверно.', 400);
 
   const run = db.transaction(() => {
     const adm = loadAdmission(db, admissionId);
@@ -1152,10 +1141,10 @@ export function admissionBalance(db, admissionId) {
  * никто не помнил, кто сколько остался должен. Теперь при выписке с подписью
  * «Долг согласован»:
  *   1. невыставленные строки (начислено, но не в счёте) собираются в ОДИН счёт
- *      госпитализации — теми же правилами, что «Выписать и выставить счёт»;
- *      проживание здесь НЕ доначисляется: пропажа койко-дней остаётся
- *      предупреждением окна (ACCOMMODATION_GAP_V1), а не молчаливой суммой,
- *      которой не было в числе под подписью;
+ *      госпитализации — теми же правилами, что «Выписать и выставить счёт».
+ *      V3120_FIX: проживание к этому моменту уже доначислено до времени
+ *      выписки (admissionDischargeFinalize) — и было в числе под подписью:
+ *      окно и отказ называли его отдельной строкой;
  *   2. каждый неоплаченный счёт госпитализации получает статус 'debt' — тот же,
  *      что ставит кассир кнопкой «Оставить как долг» (DEBT_BTN_V1), и потому
  *      попадает в тот же список «Долг» и в тот же красный бейдж карты.
@@ -1202,7 +1191,7 @@ function activeOrderCount(db, admissionId) {
  */
 export function admissionDischargeRequest(db, args, user) {
   const admissionId = args && args.admission_id;
-  if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
+  if (!isPositiveInt(admissionId)) throw new RpcError('Не указана госпитализация.', 400);
 
   const outcome = (args && args.outcome) || '';
   if (!DISCHARGE_OUTCOMES.includes(outcome)) {
@@ -1319,7 +1308,7 @@ export function admissionDischargeRequest(db, args, user) {
  */
 export function admissionDischargeCancelRequest(db, args, user) {
   const admissionId = args && args.admission_id;
-  if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
+  if (!isPositiveInt(admissionId)) throw new RpcError('Не указана госпитализация.', 400);
   const reason = textArg(args && args.reason, 300);
   if (!reason) throw new RpcError('Укажите причину отзыва заявки на выписку.', 400);
 
@@ -1394,7 +1383,7 @@ export function admissionDischargeCancelRequest(db, args, user) {
 export function admissionDischargeFinalize(db, args, user) {
   const a = args || {};
   const admissionId = a.admission_id;
-  if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
+  if (!isPositiveInt(admissionId)) throw new RpcError('Не указана госпитализация.', 400);
 
   const at = textArg(a.at, 40) || null;
   const note = textArg(a.note, 1000);
@@ -1422,12 +1411,34 @@ export function admissionDischargeFinalize(db, args, user) {
     assertMayTransition('discharging', 'discharged', user);
 
     // 3. Деньги: предупреждают, но требуют подписи.
-    const balance = admissionBalance(db, admissionId);
+    //
+    // V3120_FIX — долг под подписью включает ПРОЖИВАНИЕ до времени выписки.
+    // Раньше сутки без строки (не нажали «Внести проживание») в число под
+    // подписью не входили и после выписки не выставлялись никогда: долг
+    // подписывали на 25 000 при 450 000 койко-дней. Если пациент уже должен,
+    // проживание доначисляется тем же правилом, что bill_accommodation, но до
+    // ФАКТИЧЕСКОГО времени выписки, и входит в долг. Без долга проживание
+    // по-прежнему не выставляется само (ACCOMMODATION_AS_SERVICE_V1: «не
+    // внесли — не выставили»), окно лишь называет пропажу.
+    let balance = admissionBalance(db, admissionId);
+    const atMs = at ? Date.parse(at) : NaN;
+    const stayOpts = Number.isFinite(atMs) ? { endMs: atMs } : {};
     const owes = balance.balance > 0.005;
+    const gap = owes ? accommodationGapOf(db, adm, stayOpts) : { units: 0, amount: 0 };
+    const owedTotal = round2(balance.balance + (gap.amount || 0));
     if (owes && !debtAck) {
+      // Депозит пациента называется в отказе: долг, который покрывает его
+      // собственный баланс, — не долг, а неоплаченный счёт.
+      const wallet = walletBalance(db, adm.patient_id);
       throw new RpcError(
-        'По госпитализации есть неоплаченный остаток — ' + balance.balance
-        + '. Выписке это не мешает: подтвердите «Долг согласован (гарантия / рассрочка)».', 400);
+        'По госпитализации есть неоплаченный остаток — ' + owedTotal
+        + (gap.amount > 0.005 ? ' (в том числе проживание, ещё не внесённое в счёт, — ' + gap.amount + ')' : '')
+        + '. Выписке это не мешает: подтвердите «Долг согласован (гарантия / рассрочка)».'
+        + (wallet > 0.005 ? ' На балансе пациента ' + wallet + ' — касса может оплатить с баланса до выписки.' : ''), 400);
+    }
+    if (owes && debtAck) {
+      billAccommodationCore(db, admissionId, { ...stayOpts, quiet: true });
+      balance = admissionBalance(db, admissionId);
     }
 
     // 4. Лист назначений.
@@ -1511,7 +1522,7 @@ export function admissionDischargeQueue(db, args, user) {
   const a = args || {};
   const rawWard = a.ward_id;
   const wardId = rawWard === undefined || rawWard === null || rawWard === '' ? null : Number(rawWard);
-  if (wardId !== null && !isPositiveInt(wardId)) throw new RpcError('ward_id must be a positive integer.', 400);
+  if (wardId !== null && !isPositiveInt(wardId)) throw new RpcError('Отделение указано неверно.', 400);
 
   const params = [];
   let where = "a.status = 'discharging'";
@@ -1537,6 +1548,7 @@ export function admissionDischargeQueue(db, args, user) {
      ORDER BY a.discharge_requested_at, a.id
   `).all(...params);
 
+  const getAdm = db.prepare('SELECT * FROM admissions WHERE id = ?');
   return {
     ward_id: wardId,
     outcomes: DISCHARGE_OUTCOMES,
@@ -1544,6 +1556,53 @@ export function admissionDischargeQueue(db, args, user) {
       ...r,
       balance: admissionBalance(db, r.admission_id),
       active_orders: activeOrderCount(db, r.admission_id),
+      // V3120_FIX — проживание, которого ещё нет в остатке (по «сейчас»), и
+      // деньги на балансе пациента: окно называет оба ДО подписи под долгом и
+      // предлагает кассе оплатить с баланса.
+      accommodation_gap: accommodationGapOf(db, getAdm.get(r.admission_id)),
+      deposit_balance: walletBalance(db, r.patient_id),
     })),
   };
+}
+
+/**
+ * V3120_FIX — «ОПЛАТИТЬ С БАЛАНСА» ПЕРЕД ВЫПИСКОЙ.
+ *
+ * Осмотр 2026-09-27 (S11): на депозите пациента 1 000 000, по госпитализации
+ * остаток 400 000 — и выписка записала долг 400 000, потому что окно выписки
+ * баланса не знало, а платить с него можно только по СЧЁТУ. Здесь касса
+ * собирает всё начисленное в счёт: проживание доначисляется до «сейчас», все
+ * невыставленные строки — в один счёт госпитализации (тот же путь, что у
+ * заявки врача со счётом). Ответ — открытые счета госпитализации и баланс;
+ * саму оплату экран проводит обычным record_payment способом 'wallet' — одна
+ * касса, одна смена, один журнал баланса.
+ *
+ * Право — кассы (admin / cashier): только она и проводит оплату.
+ */
+const WALLET_PAY_ROLES = ['admin', 'cashier'];
+export function admissionPrepareWalletPayment(db, args, user) {
+  requireRole(user, WALLET_PAY_ROLES);
+  const admissionId = args && args.admission_id;
+  if (!isPositiveInt(admissionId)) throw new RpcError('Не указана госпитализация.', 400);
+  return db.transaction(() => {
+    const adm = loadAdmission(db, admissionId);
+    if (adm.status === 'cancelled') throw new RpcError('Госпитализация отменена — оплачивать нечего.', 400);
+    billAccommodationCore(db, admissionId, { quiet: true });
+    const ids = db.prepare(`
+      SELECT id FROM admission_services
+       WHERE admission_id = ? AND invoice_item_id IS NULL AND billable = 1
+       ORDER BY id`).all(admissionId).map((r) => r.id);
+    if (ids.length) buildAdmissionInvoice(db, admissionId, ids, user);
+    const invoices = db.prepare(`
+      SELECT id, invoice_number, total_amount, paid_amount, status FROM invoices
+       WHERE admission_id = ? AND ${outstandingWhere('status')} ORDER BY id`).all(admissionId)
+      .map((i) => ({ id: i.id, invoice_number: i.invoice_number, status: i.status,
+        balance: round2(i.total_amount - i.paid_amount) }))
+      .filter((i) => i.balance > 0.005);
+    return {
+      invoices,
+      deposit_balance: walletBalance(db, adm.patient_id),
+      balance: admissionBalance(db, admissionId),
+    };
+  })();
 }

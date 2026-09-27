@@ -62,7 +62,7 @@ test('в заявке направившего меняют или снимаю�
   assert.equal(b.referral_source_id, null, 'снятый направивший подставился обратно');
   db.prepare("UPDATE admissions SET status = 'cancelled' WHERE id = ?").run(b.id);
   assert.throws(() => admissionOrderCreate(db, { patient_id: p, referral_source_id: 99999 }, registrar), /Источник направления не найден/);
-  assert.throws(() => admissionOrderCreate(db, { patient_id: p, referral_source_id: 'x' }, registrar), /referral_source_id/);
+  assert.throws(() => admissionOrderCreate(db, { patient_id: p, referral_source_id: 'x' }, registrar), /Источник направления указан неверно/);
 });
 
 test('admission_referral_default: окно заявки получает источник с именем; ворота — как у заявки', () => {
@@ -73,7 +73,7 @@ test('admission_referral_default: окно заявки получает ист�
   assert.equal(r.name, 'Последний визит');
   assert.ok(r.code, 'номер источника присваивает триггер');
   assert.throws(() => admissionReferralDefault(db, { patient_id: p }, cashier), /недоступно вашей роли/);
-  assert.throws(() => admissionReferralDefault(db, { patient_id: 0 }, registrar), /patient_id/);
+  assert.throws(() => admissionReferralDefault(db, { patient_id: 0 }, registrar), /Не указан пациент/);
   // Удалили источник — госпитализация остаётся без направившего (ON DELETE SET NULL).
   const { admission } = admissionOrderCreate(db, { patient_id: p }, registrar);
   db.prepare('UPDATE visits SET referral_source_id = NULL').run();

@@ -75,7 +75,7 @@ test('медсестра называет приёмного врача при �
     (e) => e.status === 400 && /признака врача/.test(e.message));
   assert.throws(() => admissionAdmit(ctx.db, { admission_id: o2.id, bed_id: ctx.bed2, admitting_doctor_id: 8 }, nurse),
     (e) => e.status === 400 && /уволен/.test(e.message));
-  assert.throws(() => admissionAdmit(ctx.db, { admission_id: o2.id, bed_id: ctx.bed2, admitting_doctor_id: 'x' }, nurse), /positive integer/);
+  assert.throws(() => admissionAdmit(ctx.db, { admission_id: o2.id, bed_id: ctx.bed2, admitting_doctor_id: 'x' }, nurse), /указан неверно/);
   const b = admissionAdmit(ctx.db, { admission_id: o2.id, bed_id: ctx.bed2 }, nurse).admission;
   assert.equal(b.admitting_doctor_id, null, 'без поля приёмный врач не назначен — осмотр за главным врачом');
   ctx.db.close();

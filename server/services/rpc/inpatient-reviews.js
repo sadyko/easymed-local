@@ -432,7 +432,15 @@ export function admissionReviewSave(db, args, user) {
   const kind = str(a.kind, 20, 'primary') || 'primary';
   // CASE_DOC_SET_V2 — род проверяется по НАБОРУ КЛИНИКИ: свой род, заведённый в
   // «Документах», обязан приниматься так же, как встроенный.
-  if (!knownKinds(db).includes(kind)) throw new RpcError(`Неизвестный род записи: ${kind}.`, 400);
+  if (!knownKinds(db).includes(kind)) {
+    // V3120_FIX — род, который клиника выключила в «Документах», — не
+    // «неизвестный»: человек видит запись этого рода и должен узнать, почему её
+    // нельзя сохранить и где это включается.
+    let off = null;
+    try { off = db.prepare('SELECT 1 FROM case_doc_types WHERE kind = ? AND active = 0').get(kind); } catch (e) { off = null; }
+    throw new RpcError(off ? 'Этот вид записи выключен в настройках документов стационара — включите его там, чтобы сохранить.'
+      : `Неизвестный род записи: ${kind}.`, 400);
+  }
 
   requireGrant(db, user, 'inpatient.reviews', 'edit', WRITE_ROLES, 'писать осмотры');
 

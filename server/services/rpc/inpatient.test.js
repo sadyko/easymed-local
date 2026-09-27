@@ -100,14 +100,14 @@ test('admit_patient rejects a non-free bed (400), a patient already admitted (40
 
   // bed3 seeded as 'occupied' -> not free.
   legacyOrder(db, patientId);
-  assert.throws(() => admitPatient(db, { patient_id: patientId, bed_id: bed3, doctor_id: DOCTOR_ID }, nurse), /400|free|occupied/i);
+  assert.throws(() => admitPatient(db, { patient_id: patientId, bed_id: bed3, doctor_id: DOCTOR_ID }, nurse), /не свободна/);
 
   // Admit patient to bed1; patient now has an active admission.
   admitPatient(db, { patient_id: patientId, bed_id: bed1, doctor_id: DOCTOR_ID }, nurse);
-  assert.throws(() => legacyAdmit(db, { patient_id: patientId, bed_id: bed2 }, nurse), /400|already|active/i);
+  assert.throws(() => legacyAdmit(db, { patient_id: patientId, bed_id: bed2 }, nurse), /уже есть открытая госпитализация/);
 
   // Disallowed role (lab) rejected regardless of otherwise-valid args.
-  assert.throws(() => legacyAdmit(db, { patient_id: patientId3, bed_id: bed2 }, lab), /403|allow|forbid|role/i);
+  assert.throws(() => legacyAdmit(db, { patient_id: patientId3, bed_id: bed2 }, lab), /недоступно/);
 });
 
 // 3. discharge (daily): units/charge computed from elapsed time, invoice + item created, bed -> cleaning.
@@ -215,7 +215,7 @@ test('discharge_patient: discount is admin/cashier-only; negative rate clamps to
 
   // nurse discharging WITH a discount -> 403; WITHOUT one -> allowed.
   const a1 = legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse).admission;
-  assert.throws(() => dischargePatient(db, { admission_id: a1.id, discount_percent: 25 }, nurse), /403|admin|cashier|discount/i);
+  assert.throws(() => dischargePatient(db, { admission_id: a1.id, discount_percent: 25 }, nurse), /только администратор или касса/);
   const ok = dischargePatient(db, { admission_id: a1.id }, nurse);
   assert.equal(ok.admission.status, 'discharged');
 
@@ -229,7 +229,7 @@ test('discharge_patient: discount is admin/cashier-only; negative rate clamps to
 
   // admit with a non-existent doctor_id -> clean 400 (not an FK 500).
   legacyOrder(db, patientId3);
-  assert.throws(() => admitPatient(db, { patient_id: patientId3, bed_id: bed4, doctor_id: 999999 }, nurse), /400|doctor/i);
+  assert.throws(() => admitPatient(db, { patient_id: patientId3, bed_id: bed4, doctor_id: 999999 }, nurse), /Врач не найден/);
 });
 
 // 7. discharge rejects a non-active (already-discharged) admission, and an out-of-range discount_percent.
@@ -244,8 +244,8 @@ test('discharge_patient rejects an already-discharged admission (400) and discou
   assert.throws(() => dischargePatient(db, { admission_id: admission.id }, admin), /400|active|not found|discharged|выписан/i);
 
   const { admission: admission2 } = legacyAdmit(db, { patient_id: patientId2, bed_id: bed2 }, nurse);
-  assert.throws(() => dischargePatient(db, { admission_id: admission2.id, discount_percent: 150 }, admin), /400|discount/i);
-  assert.throws(() => dischargePatient(db, { admission_id: admission2.id, discount_percent: -5 }, admin), /400|discount/i);
+  assert.throws(() => dischargePatient(db, { admission_id: admission2.id, discount_percent: 150 }, admin), /от 0 до 100/);
+  assert.throws(() => dischargePatient(db, { admission_id: admission2.id, discount_percent: -5 }, admin), /от 0 до 100/);
 
   // admission2 is still active after the rejected discharge attempts
   const stillActive = db.prepare('SELECT status FROM admissions WHERE id=?').get(admission2.id);
@@ -259,10 +259,10 @@ test('set_bed_status: free->cleaning ok; rejects occupied, a bed with an active 
   const res = setBedStatus(db, { bed_id: bed2, status: 'cleaning' }, nurse);
   assert.equal(res.bed.status, 'cleaning');
 
-  assert.throws(() => setBedStatus(db, { bed_id: bed2, status: 'occupied' }, nurse), /400|occupied|one of/i);
+  assert.throws(() => setBedStatus(db, { bed_id: bed2, status: 'occupied' }, nurse), /Статус койки указан неверно/);
 
   legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse);
-  assert.throws(() => setBedStatus(db, { bed_id: bed1, status: 'free' }, nurse), /400|active|admission/i);
+  assert.throws(() => setBedStatus(db, { bed_id: bed1, status: 'free' }, nurse), /На койке лежит пациент/);
 
   // GRANTS_V1 — отказ теперь словами матрицы прав: «… недоступно вашей роли».
   assert.throws(() => setBedStatus(db, { bed_id: bed2, status: 'free' }, lab), (e) => e.status === 403 && /недоступно вашей роли/.test(e.message));
@@ -336,8 +336,8 @@ test('bed console: discount is admin/cashier-only and clamped', () => {
   const { db, adm } = consoleSeed();
   setAdmissionDiscount(db, { admission_id: adm.id, percent: 15 }, { id: 3, role: 'admin' });
   assert.equal(db.prepare('SELECT accommodation_discount_percent p FROM admissions WHERE id=?').get(adm.id).p, 15);
-  assert.throws(() => setAdmissionDiscount(db, { admission_id: adm.id, percent: 15 }, { id: 2, role: 'nurse' }), /not allowed/);
-  assert.throws(() => setAdmissionDiscount(db, { admission_id: adm.id, percent: 150 }, { id: 3, role: 'admin' }), /0\.\.100/);
+  assert.throws(() => setAdmissionDiscount(db, { admission_id: adm.id, percent: 15 }, { id: 2, role: 'nurse' }), /недоступно/);
+  assert.throws(() => setAdmissionDiscount(db, { admission_id: adm.id, percent: 150 }, { id: 3, role: 'admin' }), /от 0 до 100/);
 });
 
 // ADM_REQUEST_LIFECYCLE_V1 — REGRESSION: an 'ordered' admission (called
@@ -394,7 +394,7 @@ test('cancel refuses an ACTIVE stay (that is what discharge is for) and a bad ro
   const { db, patientId, bed1 } = seed();
   const adm = legacyAdmit(db, { patient_id: patientId, bed_id: bed1 }, nurse).admission;
   assert.throws(() => cancelAdmissionRequest(db, { admission_id: adm.id }, nurse), /cannot go from 'active'/);
-  assert.throws(() => cancelAdmissionRequest(db, { admission_id: adm.id }, lab), /not allowed/);
+  assert.throws(() => cancelAdmissionRequest(db, { admission_id: adm.id }, lab), /недоступно/);
   // the stay is untouched
   assert.equal(db.prepare('SELECT status FROM admissions WHERE id=?').get(adm.id).status, 'active');
 });
@@ -442,7 +442,7 @@ test('discharge: a nurse may discharge at a pre-approved discount but still cann
   // Introducing one at the door is still 403 for a nurse.
   const b = legacyAdmit(db, { patient_id: patientId2, bed_id: bed2 }, nurse).admission;
   assert.throws(() => dischargePatient(db, { admission_id: b.id, discount_percent: 30 }, nurse),
-    /403|admin|cashier|discount/i);
+    /только администратор или касса/);
 });
 
 import { removeAdmissionLineFromInvoice } from './billing.js';
