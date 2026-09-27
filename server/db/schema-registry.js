@@ -293,7 +293,14 @@ export const REGISTRY = {
              'is_lab','specimen','result_unit','ref_low','ref_high','ref_text','type','type_id','category_id','department_id','tube_color',
              'default_doctor_percent','doctor_tier_from','doctor_tier_percent','doctor_tier_from_2','doctor_tier_percent_2','doctor_tier_from_3','doctor_tier_percent_3','external_lab','room_id',
              'price_secondary','secondary_days_from','secondary_days_to','price_repeat','repeat_days_from','repeat_days_to',
-             'name_uz','name_en','online_booking'] },   // tube_color: LAB_HANDLING_V1 (mig 041); default_doctor_percent/room_id: SERVICE_EDITOR_V1 (mig 081) — read-only here, written ONLY by the service_save RPC (rates merge must be transactional); price_secondary…price_repeat: VISIT_TIER_PRICING_V1 (mig 127) — written by service_save too; doctor_tier_from/doctor_tier_percent: DOCTOR_TIER_V1 (mig 140) — пишут service_save (пара или 400) и Excel-импортёр; doctor_tier_*_2/_3 (DOCTOR_TIER_V2) и external_lab (EXTERNAL_LAB_V1): mig 147, те же писатели
+             'name_uz','name_en','online_booking'],
+             // FINAL_ROLES_SYNC_FIX_V1 (M1) — доля врача и её ступени — это
+             // начисления врачей: остальным ролям колонки приходят пустыми
+             // (NULL). Видят их администратор и держатели «Оплаты врачей» /
+             // «Ставок врачей» (db/pay-visibility.js). Пишет их только
+             // администратор (service_save), так что пустое значение на экране
+             // не-администратора никуда не сохраняется.
+             restricted: { lift: 'doctor_pay', columns: ['default_doctor_percent','doctor_tier_from','doctor_tier_percent','doctor_tier_from_2','doctor_tier_percent_2','doctor_tier_from_3','doctor_tier_percent_3'] } },   // tube_color: LAB_HANDLING_V1 (mig 041); default_doctor_percent/room_id: SERVICE_EDITOR_V1 (mig 081) — read-only here, written ONLY by the service_save RPC (rates merge must be transactional); price_secondary…price_repeat: VISIT_TIER_PRICING_V1 (mig 127) — written by service_save too; doctor_tier_from/doctor_tier_percent: DOCTOR_TIER_V1 (mig 140) — пишут service_save (пара или 400) и Excel-импортёр; doctor_tier_*_2/_3 (DOCTOR_TIER_V2) и external_lab (EXTERNAL_LAB_V1): mig 147, те же писатели
     // FULL_EXPORT_V1 — the Excel importer writes these directly (admin only);
     // the dialog still goes through service_save, which merges performer rates.
     write: { insert: { roles: ['admin'], columns: ['name','code','price','tax_rate','duration_minutes','requires_doctor','active',
@@ -397,7 +404,7 @@ export const REGISTRY = {
     // (branch-filter: invoice_items → invoices.branch_id) не собираются. Ролей
     // это не расширяет: та же колонка тем же ALL_STAFF уже отдаётся напрямую из
     // invoices — здесь она лишь становится доступна одним запросом вместо двух.
-    embed:   { services: { table:'services', fk:'service_id', columns:['id','name','type','tax_rate','default_doctor_percent','type_id','category_id'] },
+    embed:   { services: { table:'services', fk:'service_id', columns:['id','name','type','tax_rate','type_id','category_id'] },   // FINAL_ROLES_SYNC_FIX_V1 (M1) — default_doctor_percent отсюда убран: доля врача не для всех, кто читает счета
                invoices: { table:'invoices', fk:'invoice_id', columns:['id','invoice_number','visit_id','admission_id','patient_id','branch_id','payer_id',
                             'subtotal','discount_amount','total_amount','paid_amount','status','created_by','created_at','paid_at','sync_origin'] } },
   },
@@ -774,7 +781,12 @@ export const REGISTRY = {
   api_tokens: { read:{roles:['admin'],columns:['id','name','token','active','created_at'],secret:['token']},
     write:{ grant:'settings.api',insert:{roles:['admin'],columns:['name','token','active']},update:{roles:['admin'],columns:['name','token','active']},delete:{roles:[]}},
     filters:['id','active'], embed:{} },
+  // FINAL_ROLES_SYNC_FIX_V1 (M1) — СТАВКИ ВРАЧЕЙ ВИДЯТ НЕ ВСЕ. Раньше их
+  // читал весь персонал; теперь все строки — администратор, держатели
+  // «Оплаты врачей» (reports.doctor_pay) и плитки «Ставки врачей»
+  // (db/pay-visibility.js), а врач — только свои (doctor_id = он сам).
   doctor_rates: { read:{roles:ALL_STAFF,columns:['id','doctor_id','service_id','percent','active','created_at']},
+    scope: { column: 'doctor_id', allRoles: ['admin'], lift: 'doctor_pay' },
     write:{ grant:'settings.doctor_rates',insert:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},update:{roles:['admin'],columns:['doctor_id','service_id','percent','active']},delete:{roles:[]}},
     filters:['id','active','doctor_id','service_id'],
     embed:{ users:{table:'users',fk:'doctor_id',columns:['id','full_name']}, services:{table:'services',fk:'service_id',columns:['id','name']} } },
@@ -1540,6 +1552,8 @@ export const REGISTRY = {
 export function tableEntry(t) { return Object.prototype.hasOwnProperty.call(REGISTRY, t) ? { table: t, ...REGISTRY[t] } : null; }
 // CRM_OWNERSHIP_V1 — правило «чьи это строки», если у таблицы оно есть.
 export function rowScope(t) { const e = REGISTRY[t]; return (e && e.scope) || null; }
+// FINAL_ROLES_SYNC_FIX_V1 (M1) — колонки, которые читает только тот, кого пускает правило `lift`.
+export function restrictedRead(t) { const e = REGISTRY[t]; return (e && e.read && e.read.restricted) || null; }
 // CRM_DEDUP_SEARCH_TASKS_V1 — колонки «кто», которые пишет сервер из сессии (query-compiler stampValues).
 export function actorStamps(t) { const e = REGISTRY[t]; return (e && e.stamps) || null; }
 // MULTI_ROLE_SERVER_V1 — `role` is a single role name OR the caller's full

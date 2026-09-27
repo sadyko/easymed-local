@@ -2,6 +2,8 @@ import { writeGrantAllows, writeGrantViolation, writeGrantNarrows, readGrantAllo
 import { tableEntry, canRead, canWrite, nonAdminColumns, valueLimits, readableColumns, writableColumns, filterAllowed, embedEntry, jsonColumns, rowScope, actorStamps } from './schema-registry.js';
 import { effectiveRoles } from '../services/roles.js';
 import { scopeLifted } from './row-scope.js';   // CRM_HEAD_MERGE_TAGS_V1
+import { restrictedRead } from './schema-registry.js';   // FINAL_ROLES_SYNC_FIX_V1 (M1)
+import { liftAllows } from './pay-visibility.js';
 
 export class CompileError extends Error {
   constructor(message, status = 400) {
@@ -308,6 +310,17 @@ function compileSelect(desc, table, user, db, mask = null) {
         if (projection[i] === `"${table}"."${c}" AS "${c}"`) {
           projection[i] = `CASE WHEN "${table}"."${c}" IS NULL OR "${table}"."${c}" = '' THEN "${table}"."${c}" ELSE '${SECRET_MASK}' END AS "${c}"`;
         }
+      }
+    }
+  }
+  // FINAL_ROLES_SYNC_FIX_V1 (M1) — колонки «не для всех» (read.restricted):
+  // тому, кого правило не пускает, они приходят пустыми, а не отказом всего
+  // запроса — экран услуг у регистратуры работает, доли врача в нём просто нет.
+  const restricted = restrictedRead(table);
+  if (restricted && !liftAllows(restricted.lift, db, user)) {
+    for (let i = 0; i < projection.length; i++) {
+      for (const c of restricted.columns) {
+        if (projection[i] === `"${table}"."${c}" AS "${c}"`) projection[i] = `NULL AS "${c}"`;
       }
     }
   }
