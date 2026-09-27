@@ -850,11 +850,44 @@ const OWN_DISCOUNT_SUM_SQL = `COALESCE((SELECT SUM(xo.discount_amount) FROM invo
   WHERE xo.invoice_id = i.id AND xo.discount_amount > 0), 0)`;
 const OWN_DISCOUNT_BASE_SQL = `COALESCE((SELECT SUM(xo.total) FROM invoice_items xo
   WHERE xo.invoice_id = i.id AND xo.discount_amount > 0), 0)`;
-const ITEM_DISCOUNT_SQL = `CASE
+//
+// V3120_FINAL (C1, мигр. 212) — СКИДКА ПОСЛЕ ПРОДАЖИ (частичный возврат по
+// оплаченному счёту, invoices.post_sale_discount) — НА ВСЕ СТРОКИ.
+// Она входит в discount_amount счёта, но это не ручная скидка: делится на ВСЕ
+// строки (пакета тоже) пропорционально их сумме после прежней скидки, и сумма
+// строк после скидки = сумма счёта. Прежде она шла как ручная — только на
+// строки без своей скидки: счёт из строк пакета её не видел вовсе, у
+// смешанного обычная строка забирала её до нуля, а хвост терялся.
+// И ОСТАТОК, которому не хватило строк без своей скидки (их база меньше
+// остатка, или их нет вовсе), больше не теряется: он делится на все строки
+// пропорционально их сумме после первой ступени. Счёт без скидки после
+// продажи и без такого хвоста считается бит в бит как прежде: MIN(rest, base)
+// при rest ≤ base — тот же rest, а добавки дают + 0.
+const POST_SALE_SQL = 'COALESCE(i.post_sale_discount, 0)';
+const PRE_SALE_DISCOUNT_SQL = `(i.discount_amount - ${POST_SALE_SQL})`;
+const REST_DISCOUNT_SQL = `MAX(${PRE_SALE_DISCOUNT_SQL} - ${OWN_DISCOUNT_SUM_SQL}, 0)`;
+const REST_BASE_SQL = `(i.subtotal - ${OWN_DISCOUNT_BASE_SQL})`;
+const REST_ON_BASE_SQL = `(CASE WHEN ${REST_BASE_SQL} > 0 THEN MIN(${REST_DISCOUNT_SQL}, ${REST_BASE_SQL}) ELSE 0 END)`;
+const STAGE1_DISCOUNT_SQL = `(CASE
   WHEN COALESCE(ii.discount_amount, 0) > 0 THEN MIN(ii.discount_amount, ii.total)
-  WHEN i.subtotal - ${OWN_DISCOUNT_BASE_SQL} > 0
-  THEN MIN(MAX(i.discount_amount - ${OWN_DISCOUNT_SUM_SQL}, 0) * ii.total / (i.subtotal - ${OWN_DISCOUNT_BASE_SQL}), ii.total)
-  ELSE 0 END`;
+  WHEN ${REST_BASE_SQL} > 0
+  THEN MIN(${REST_DISCOUNT_SQL}, ${REST_BASE_SQL}) * ii.total / ${REST_BASE_SQL}
+  ELSE 0 END)`;
+// Хвост остатка и сумма строк после первой ступени (весь счёт до хвоста).
+const TAIL_SQL = `(${REST_DISCOUNT_SQL} - ${REST_ON_BASE_SQL})`;
+const STAGE1_LEFT_SQL = `(i.subtotal - ${OWN_DISCOUNT_SUM_SQL} - ${REST_ON_BASE_SQL})`;
+const STAGE2_DISCOUNT_SQL = `(${STAGE1_DISCOUNT_SQL} + CASE WHEN ${TAIL_SQL} > 0.005 AND ${STAGE1_LEFT_SQL} > 0
+  THEN MIN(${TAIL_SQL}, ${STAGE1_LEFT_SQL}) / ${STAGE1_LEFT_SQL} * (ii.total - ${STAGE1_DISCOUNT_SQL}) ELSE 0 END)`;
+// Сумма счёта до скидки после продажи: subtotal − прежняя скидка.
+const PRE_SALE_TOTAL_SQL = `(i.subtotal - ${PRE_SALE_DISCOUNT_SQL})`;
+const ITEM_DISCOUNT_SQL = `(${STAGE2_DISCOUNT_SQL} + CASE WHEN ${POST_SALE_SQL} > 0 AND ${PRE_SALE_TOTAL_SQL} > 0
+  THEN MIN(${POST_SALE_SQL}, ${PRE_SALE_TOTAL_SQL}) / ${PRE_SALE_TOTAL_SQL} * (ii.total - ${STAGE2_DISCOUNT_SQL}) ELSE 0 END)`;
+// Доля денег, оставшихся у счёта после скидки после продажи: фикс врача и фикс
+// вознаграждения умножаются на неё (процент уменьшается сам — через сумму
+// строки после скидки). Тот же коэффициент, что дал бы возврат «с доплатой»
+// (REFUND_KEEP_SQL: оплачено / сумма счёта). 1 — скидки после продажи нет.
+const POST_SALE_KEEP_SQL = `(CASE WHEN ${POST_SALE_SQL} > 0 AND i.total_amount + ${POST_SALE_SQL} > 0
+  THEN MAX(0, MIN(1, i.total_amount * 1.0 / (i.total_amount + ${POST_SALE_SQL}))) ELSE 1 END)`;
 
 // DOCTOR_SHARE_AFTER_TAX_V1 — ЕДИНЫЙ порядок расчёта доли врача:
 //
@@ -908,7 +941,8 @@ function moneyJoins(invIdExpr, invScope = null) {
 // взаимоисключающи: услуга с фиксом процент не платит.
 const ITEM_FEE_SQL = `CASE
   WHEN ${ITEM_GOODS_SQL} THEN 0
-  WHEN ${ITEM_FIX_SQL} IS NOT NULL THEN ${ITEM_FIX_SQL} * COALESCE(ii.quantity, 1)
+  -- V3120_FINAL (C1) — фикс уменьшается скидкой после продажи в той же доле.
+  WHEN ${ITEM_FIX_SQL} IS NOT NULL THEN ${ITEM_FIX_SQL} * COALESCE(ii.quantity, 1) * ${POST_SALE_KEEP_SQL}
   -- DOCTOR_TIER_V1 — процент строки берётся действующий (со ступенью выше порога),
   -- а не голый личный; фиксированную ставку ступень не трогает.
   ELSE ${ITEM_NET_SQL} * ${ITEM_EFF_PCT_SQL} / 100.0
@@ -920,7 +954,7 @@ END`;
 // у строки стационара и так NULL (dr джойнится по амбулаторному врачу).
 // INPATIENT_BONUS_V1 — фикс стационарной ставки: сумма × количество строки.
 const INPATIENT_FEE_SQL = `CASE
-  WHEN ${INPATIENT_FIX_SQL} IS NOT NULL THEN ${INPATIENT_FIX_SQL} * COALESCE(ii.quantity, 1)
+  WHEN ${INPATIENT_FIX_SQL} IS NOT NULL THEN ${INPATIENT_FIX_SQL} * COALESCE(ii.quantity, 1) * ${POST_SALE_KEEP_SQL}
   ELSE (${ITEM_NET_SQL} * ${INPATIENT_PCT_SQL} / 100.0) END`;
 const LINE_FEE_SQL = `CASE WHEN ias.id IS NOT NULL THEN ${INPATIENT_FEE_SQL} ELSE ${ITEM_FEE_SQL} END`;
 const LINE_PCT_SQL = `CASE WHEN ias.id IS NOT NULL THEN ${INPATIENT_PCT_SQL} ELSE ${ITEM_EFF_PCT_SQL} END`;
@@ -1064,7 +1098,8 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
            irf.refunded                       AS rf_refunded,
            irf.gross                          AS rf_gross,
            irf.total                          AS rf_total,
-           ${REFUND_KEEP_SQL('irf')}          AS refund_keep
+           ${REFUND_KEEP_SQL('irf')}          AS refund_keep,
+           ${POST_SALE_KEEP_SQL}              AS post_sale_keep   -- V3120_FINAL (C1)
       FROM invoice_items ii
       JOIN invoices i  ON i.id = ii.invoice_id
       JOIN patients pt ON pt.id = i.patient_id
@@ -1125,7 +1160,9 @@ const BILLED_COLUMNS_SQL = `
            ii.total                           AS billed_amount,
            CASE WHEN ii.id IS NOT NULL THEN ${ITEM_DISCOUNT_SQL} END AS billed_discount,
            CASE WHEN ii.id IS NOT NULL THEN ${ITEM_TAX_SQL} END      AS billed_tax,
-           CASE WHEN ii.id IS NOT NULL THEN ${ITEM_NET_SQL} END      AS billed_net`;
+           CASE WHEN ii.id IS NOT NULL THEN ${ITEM_NET_SQL} END      AS billed_net,
+           -- V3120_FINAL (C1) — доля денег после скидки после продажи (фикс × она).
+           CASE WHEN ii.id IS NOT NULL THEN ${POST_SALE_KEEP_SQL} END AS post_sale_keep`;
 
 function outpatientPayRows(db, { from, to, doctorId, bf, gf, withoutDoctor = false }) {
   const docClause = doctorId != null ? ' AND vs.doctor_id = ?' : '';
@@ -1457,12 +1494,17 @@ function payLineMoney(r, pricer) {
   // здесь — последняя страховка на ту же строку).
   // PAY_REFUND_V1 — частичный возврат: доля × доля оставшихся денег счёта.
   const keep = r.refund_keep == null ? 1 : Number(r.refund_keep);
+  // V3120_FINAL (C1) — фикс уменьшается скидкой после продажи в той же доле,
+  // что процент (у процента она уже в сумме строки после скидки).
   const base = Number(r.goods) === 1 ? 0 : (r.fix != null
-    ? r.fix * (r.qty == null ? 1 : r.qty)
+    ? r.fix * (r.qty == null ? 1 : r.qty) * postSaleKeepOf(r)
     : net * (r.pct || 0) / 100);
   const fee = keep === 1 ? base : base * keep;
   return { amount, discount, tax, net, fee };
 }
+
+// V3120_FINAL (C1) — доля денег строки после скидки после продажи (1 — её нет).
+const postSaleKeepOf = (r) => (r && r.post_sale_keep != null ? Number(r.post_sale_keep) : 1);
 
 const EMPTY_FILTER = { clause: '', params: [] };
 /**
@@ -1760,7 +1802,7 @@ function payFeeAtMonthRate(L, rec, sample) {
   if (L.invoice_item_id == null && rec && rec.invoice_item_id == null) {
     net = (Number(rec.net) || 0) * (Number(L.qty) || 1) / (Number(rec.qty) || 1);
   }
-  const base = rate.fix != null ? rate.fix * (L.qty == null ? 1 : L.qty) : net * pct / 100;
+  const base = rate.fix != null ? rate.fix * (L.qty == null ? 1 : L.qty) * postSaleKeepOf(L) : net * pct / 100;
   const keep = L.refund_keep == null ? 1 : Number(L.refund_keep);
   const fee = keep === 1 ? base : base * keep;
   return Math.abs(fee - (Number(L.doctor_fee) || 0)) < 0.005 ? L.doctor_fee : fee;
@@ -1774,9 +1816,9 @@ function referralRewardAtMonthRate(L, rec) {
   if (!(factor > 0) || L.goods_to_doctor) return 0;
   if (L.kind === 'ref_in') {
     const v = Number(rate.value) || 0;
-    return L.line_kind === 'fixed' ? v * factor : (Number(L.after_discount) || 0) * v / 100 * factor;
+    return L.line_kind === 'fixed' ? v * factor * postSaleKeepOf(L) : (Number(L.after_discount) || 0) * v / 100 * factor;
   }
-  return rewardForLine(rate, { amount: L.amount, discount: L.discount, qty: L.qty }) * factor;
+  return rewardForLine(rate, { amount: L.amount, discount: L.discount, qty: L.qty }) * factor * fixKeep(rate, L);
 }
 
 // Закрытые месяцы, в записи которых есть партнёры и ставки (V3120_FIX).
@@ -2341,6 +2383,9 @@ const REFERRAL_BASE_NOTE = 'Вознаграждение считается от
 //     неоплаченного.
 // r — строка с rf_refunded / rf_gross / rf_total / refund_keep (REFUND_JOIN).
 // Доля оплаты строки вознаграждения; у строк снимков, записанных до V3120_FIX, её нет.
+// V3120_FINAL (C1) — множитель фикса вознаграждения: доля денег после скидки
+// после продажи. Процент её не берёт — она уже в сумме строки после скидки.
+const fixKeep = (rate, r) => (rate && rate.unit === 'fix' ? postSaleKeepOf(r) : 1);
 const payFactorOf = (r) => (r.pay_factor == null ? (r.paid ? 1 : 0) : Number(r.pay_factor));
 function referralPayFactor(r) {
   const refunded = Number(r.rf_refunded) || 0;
@@ -2410,7 +2455,8 @@ function referralLines(db, args, ctx, { doctorId = null } = {}) {
       pay_factor: factor,
       goods_to_doctor: goodsToDoctor,
       after_discount: r.amount - r.discount,
-      reward: paid && !goodsToDoctor ? rewardForLine(rate, { amount: r.amount, discount: r.discount, qty: r.qty }) * factor : 0,
+      // V3120_FINAL (C1) — фикс за услугу уменьшается скидкой после продажи (процент — сам).
+      reward: paid && !goodsToDoctor ? rewardForLine(rate, { amount: r.amount, discount: r.discount, qty: r.qty }) * factor * fixKeep(rate, r) : 0,
       where: 'out',
       beneficiary_doctor_id: r.referral_doctor_id ?? null,
     });
@@ -2507,7 +2553,8 @@ function inpatientReferralLines(db, args, ctx, { allBeneficiaries = false } = {}
            irf.refunded                       AS rf_refunded,   -- V3120_FIX — частичный возврат
            irf.gross                          AS rf_gross,
            irf.total                          AS rf_total,
-           ${REFUND_KEEP_SQL('irf')}          AS refund_keep
+           ${REFUND_KEEP_SQL('irf')}          AS refund_keep,
+           ${POST_SALE_KEEP_SQL}              AS post_sale_keep   -- V3120_FINAL (C1)
       FROM invoice_items ii
       JOIN invoices i   ON i.id = ii.invoice_id
       JOIN admissions a ON a.id = i.admission_id
@@ -2611,6 +2658,7 @@ function inpatientReferralLines(db, args, ctx, { allBeneficiaries = false } = {}
       invoice_id: r.invoice_id, item_id: r.item_id, branch_id: r.branch_id,   // PAY_PERIOD_CLOSE_V1
       patient_id: r.patient_id, patient: r.patient, mrn: r.mrn,
       admission_id: r.admission_id, admission_no: r.admission_no, where: 'in',
+      post_sale_keep: r.post_sale_keep,   // V3120_FINAL (C1) — фикс × доля после скидки после продажи
     };
     const isFirstPaid = paid && firstPaid.get(r.admission_id) === r.invoice_id;
     for (const b of bs) {
@@ -2637,7 +2685,7 @@ function inpatientReferralLines(db, args, ctx, { allBeneficiaries = false } = {}
           line_kind: 'fixed', service: INPATIENT_KIND_RU.fixed,
           qty: 1, amount: 0, discount: 0, after_discount: 0,
           rate: { unit: 'fix', value: b.fixed },
-          reward: b.fixed * factor,
+          reward: b.fixed * factor * postSaleKeepOf(r),
           ...(b.fixed > 0 ? {} : { hidden: true }),
         });
       }

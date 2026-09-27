@@ -81,8 +81,11 @@ export const SHIPPED = {
   // шапку и records.js recomputePaid). created_at/paid_at есть, и это не
   // недосмотр, а требование отчётов: деньги обязаны попасть в тот день, когда
   // они произошли, а не в день доставки.
+  // V3120_FINAL (мигр. 212) — post_sale_discount: какая часть скидки счёта дана
+  // ПОСЛЕ продажи (частичный возврат). Без неё сосед разнёс бы её как ручную
+  // скидку, и доли врачей по счёту в двух зданиях разошлись бы.
   invoices: [
-    'invoice_number', 'subtotal', 'discount_amount', 'total_amount',
+    'invoice_number', 'subtotal', 'discount_amount', 'post_sale_discount', 'total_amount',
     'status', 'created_at', 'paid_at',
   ],
   // PACKAGES_V1 (мигр. 154) — своя скидка строки (скидка пакета) едет вместе с

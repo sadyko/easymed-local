@@ -1303,8 +1303,15 @@ export function refundPayment(db, args, user) {
     let postSaleDiscount = 0;
     if (invoice.status === 'paid' && newPaid > 0 && newPaid < invoice.total_amount && !reopen) {
       postSaleDiscount = round2(invoice.total_amount - newPaid);
-      db.prepare('UPDATE invoices SET paid_amount = ?, total_amount = ?, discount_amount = ? WHERE id = ?')
-        .run(newPaid, newPaid, round2(Math.min((Number(invoice.discount_amount) || 0) + postSaleDiscount, Number(invoice.subtotal) || 0)), invoice.id);
+      // V3120_FINAL (C1, мигр. 212) — эта часть скидки записывается ОТДЕЛЬНО
+      // (post_sale_discount): отчёты делят её на все строки пропорционально
+      // (пакета тоже) и умножают фикс врача и вознаграждения на оставшуюся
+      // долю — те же деньги, что при возврате «с доплатой».
+      const oldDiscount = Number(invoice.discount_amount) || 0;
+      const newDiscount = round2(Math.min(oldDiscount + postSaleDiscount, Number(invoice.subtotal) || 0));
+      db.prepare('UPDATE invoices SET paid_amount = ?, total_amount = ?, discount_amount = ?, post_sale_discount = ? WHERE id = ?')
+        .run(newPaid, newPaid, newDiscount,
+          round2((Number(invoice.post_sale_discount) || 0) + Math.max(0, newDiscount - oldDiscount)), invoice.id);
     } else {
       const status = invoiceStatusFor(invoice.total_amount, newPaid, invoice.status);
       if (status === 'paid') {
@@ -1419,11 +1426,24 @@ export function refundInvoiceLine(db, args, user) {
 
     // 1. Пересчёт суммы счёта.
     const leftN = db.prepare('SELECT COUNT(*) n FROM invoice_items WHERE invoice_id = ?').get(inv.id).n;
+    // V3120_FINAL (C1) — скидка после продажи (частичный возврат по счёту,
+    // мигр. 212) лежит на ВСЕХ строках пропорционально. Счёт пересчитывается
+    // без неё, а потом она ложится снова — в той доле, что осталась от счёта:
+    // строка стоит столько, сколько за неё осталось заплачено, а не прежнюю
+    // цену (иначе возврат строки после уступки отдавал бы меньше или больше).
+    const oldPostSale = round2(Number(inv.post_sale_discount) || 0);
     if (leftN === 0) {
-      db.prepare('UPDATE invoices SET subtotal = 0, discount_amount = 0, total_amount = 0 WHERE id = ?').run(inv.id);
+      db.prepare('UPDATE invoices SET subtotal = 0, discount_amount = 0, total_amount = 0, post_sale_discount = 0 WHERE id = ?').run(inv.id);
     } else {
       // paid_amount пока прежний — settleZeroTotal внутри не тронет счёт с деньгами.
-      repriceUnpaidInvoice(db, { ...inv, paid_amount: oldPaid }, oldOwn, { oldBase });
+      repriceUnpaidInvoice(db, { ...inv, discount_amount: round2((Number(inv.discount_amount) || 0) - oldPostSale), paid_amount: oldPaid }, oldOwn, { oldBase });
+      if (oldPostSale > 0) {
+        const r = db.prepare('SELECT discount_amount, total_amount FROM invoices WHERE id = ?').get(inv.id);
+        const preTotal = round2(oldTotal + oldPostSale);
+        const ps = preTotal > 0 ? round2(Math.min(oldPostSale * r.total_amount / preTotal, r.total_amount)) : 0;
+        db.prepare('UPDATE invoices SET discount_amount = ?, total_amount = ?, post_sale_discount = ? WHERE id = ?')
+          .run(round2(r.discount_amount + ps), round2(r.total_amount - ps), ps, inv.id);
+      }
     }
     const newTotal = round2(db.prepare('SELECT total_amount t FROM invoices WHERE id = ?').get(inv.id).t);
     const lineValue = round2(oldTotal - newTotal);
