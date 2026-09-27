@@ -99,6 +99,21 @@ export function localRangeWhere(col, fromYmd, toYmd) {
   return { sql: sql.length ? sql.join(' AND ') : '1=1', params };
 }
 
+// localRangeWhere() with the two dates written INTO the SQL as literals — for
+// sub-selects nested deep inside a statement (V3120_PERF, reports.js), where
+// threading positional parameters through every join would be fragile. Only
+// strict 'YYYY-MM-DD' is accepted, so the literal can never carry anything
+// else; a bad value throws rather than widening the range.
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+export function localRangeSql(col, fromYmd, toYmd) {
+  for (const v of [fromYmd, toYmd]) {
+    if (v != null && !YMD_RE.test(String(v))) throw new Error('localRangeSql: not a YYYY-MM-DD date: ' + v);
+  }
+  const w = localRangeWhere(col, fromYmd, toYmd);
+  let k = 0;
+  return w.sql.replace(/\?/g, () => `'${w.params[k++]}'`);
+}
+
 // SQL fragment: "this column's local date is today".
 export function isLocalToday(col) {
   return `${localDate(col)} = date('now','localtime')`;

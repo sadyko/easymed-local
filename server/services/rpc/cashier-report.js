@@ -13,7 +13,7 @@
 // Время местное (domain/day.js): платёж в 23:40 при UTC+5 иначе попал бы в
 // следующие сутки, и суточная касса не сошлась бы с бумажной.
 
-import { localDate, inLocalRange } from '../domain/day.js';
+import { localDate, localRangeWhere } from '../domain/day.js';
 // BUILDING_REPORTS_V1 — здание как измерение; см. шапку domain/buildings.js.
 import { buildingContext, buildingWhere, originExpr, summariseByBuilding } from '../domain/buildings.js';
 // ROLE_REPORTS_SETTINGS_V1 — «Отчёт кассира» — группа «Касса» раздела «Отчёты».
@@ -117,6 +117,10 @@ export function cashierReport(db, args, user) {
   // Строка = ОДИН платёж. Услуги и врачи склеиваются через « · », как в чеке:
   // один платёж закрывает счёт целиком, и разносить его по услугам значило бы
   // придумывать, какая часть денег за какую услугу — этого в данных нет.
+  // V3120_PERF — период по индексу payments(paid_at) (day.js localRangeWhere:
+  // та же выборка, что inLocalRange). p.id — явный порядок платежей одной
+  // секунды (прежде — порядок чтения таблицы, тот же по возрастанию id).
+  const payRange = localRangeWhere('p.paid_at', from, to);
   const income = db.prepare(`
     SELECT p.id, p.amount, p.method, ${payOrigin} AS origin, ${localDate('p.paid_at')} AS day,
            strftime('%H:%M', p.paid_at, 'localtime') AS at,
@@ -135,14 +139,15 @@ export function cashierReport(db, args, user) {
       LEFT JOIN invoices i  ON i.id = p.invoice_id
       LEFT JOIN patients pat ON pat.id = i.patient_id
       LEFT JOIN users cash   ON cash.id = p.cashier_id
-     WHERE ${inLocalRange('p.paid_at')} AND p.${INFLOW_SQL}${branchSql}${gf.clause}
-     ORDER BY origin, p.paid_at DESC`).all(from, to, ...branchIds, ...gf.params);
+     WHERE ${payRange.sql} AND p.${INFLOW_SQL}${branchSql}${gf.clause}
+     ORDER BY origin, p.paid_at DESC, p.id`).all(...payRange.params, ...branchIds, ...gf.params);
 
   // ---- Расходы -----------------------------------------------------------
   //
   // Филиал берём у СМЕНЫ: у движения кассы своего филиала нет, оно
   // принадлежит смене, а смена — филиалу.
   const moveBranchSql = branchIds.length ? ` AND sh.branch_id IN (${branchIds.map(() => '?').join(',')})` : '';
+  const moveRange = localRangeWhere('m.created_at', from, to);
   const expense = db.prepare(`
     SELECT m.id, m.amount, m.article, m.note, ${moveOrigin} AS origin, ${localDate('m.created_at')} AS day,
            strftime('%H:%M', m.created_at, 'localtime') AS at,
@@ -150,8 +155,8 @@ export function cashierReport(db, args, user) {
       FROM cash_movements m
       LEFT JOIN cash_shifts sh ON sh.id = m.shift_id
       LEFT JOIN users u        ON u.id = m.created_by
-     WHERE m.kind = 'out' AND ${inLocalRange('m.created_at')}${moveBranchSql}${gfm.clause}
-     ORDER BY origin, m.created_at DESC`).all(from, to, ...branchIds, ...gfm.params);
+     WHERE m.kind = 'out' AND ${moveRange.sql}${moveBranchSql}${gfm.clause}
+     ORDER BY origin, m.created_at DESC, m.id`).all(...moveRange.params, ...branchIds, ...gfm.params);
 
   const incomeTotal = income.reduce((n, r) => n + num(r.amount), 0);
   const expenseTotal = expense.reduce((n, r) => n + num(r.amount), 0);
