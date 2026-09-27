@@ -4,6 +4,8 @@
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
   // LIVE_AUDIT_FIX_V1 (2026-09-27) — строки исправлений живого аудита
+  "Единица товара в каталоге": {"en":"Item unit in the catalogue","ru":"Единица товара в каталоге","uz":"Katalogdagi tovar birligi"},
+  "Единица товара не сохранена: {msg}": {"en":"The item unit was not saved: {msg}","ru":"Единица товара не сохранена: {msg}","uz":"Tovar birligi saqlanmadi: {msg}"},
   "Услуга не снята: {msg}": {"en":"The service was not removed: {msg}","ru":"Услуга не снята: {msg}","uz":"Xizmat olib tashlanmadi: {msg}"},
   "Услуга не добавлена: {msg}": {"en":"The service was not added: {msg}","ru":"Услуга не добавлена: {msg}","uz":"Xizmat qo'shilmadi: {msg}"},
   "Плательщика укажет регистратура или касса.": {"en":"The front desk or the cashier will set the payer.","ru":"Плательщика укажет регистратура или касса.","uz":"To'lovchini ro'yxatxona yoki kassa ko'rsatadi."},

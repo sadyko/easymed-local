@@ -75,9 +75,9 @@ function paintRows(rows) {
             onclick: () => openSupplierModal(s, fetchAndPaint),
         },
             h('td', { class: 'cell-strong' }, s.name || '—'),
-            h('td', null, s.contact || '—'),
+            h('td', null, s.contact_name || '—'),   // LIVE_AUDIT_FIX_V1 — колонки реестра
             h('td', null, s.phone || '—'),
-            h('td', { class: 'muted' }, s.note || ''),
+            h('td', { class: 'muted' }, s.notes || ''),
             h('td', null, Tag(s.active ? 'Активен' : 'Неактивен', { kind: s.active ? 'ok' : '', dot: true })),
         ));
     }
@@ -90,9 +90,9 @@ export function openSupplierModal(s, onSaved) {
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
     const nameInp = h('input', { type: 'text', required: true, value: s ? (s.name || '') : '' });
-    const contactInp = h('input', { type: 'text', value: s ? (s.contact || '') : '' });
+    const contactInp = h('input', { type: 'text', value: s ? (s.contact_name || '') : '' });
     const phoneInp = phoneInput('phone', '+998 90 961 00 04', { value: s ? s.phone : '' });
-    const noteInp = h('input', { type: 'text', value: s ? (s.note || '') : '' });
+    const noteInp = h('input', { type: 'text', value: s ? (s.notes || '') : '' });
     const activeChk = h('input', { type: 'checkbox', checked: s ? !!s.active : true });
 
     const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, isEdit ? 'Сохранить' : 'Добавить');
@@ -105,13 +105,13 @@ export function openSupplierModal(s, onSaved) {
         const prev = saveBtn.textContent;
         saveBtn.textContent = tr('Сохраняем…');
         try {
-            const payload = {
+            const payload = supplierPayload({
                 name,
-                contact: contactInp.value.trim(),
-                phone:   phoneInp.value.trim(),
-                note:    noteInp.value.trim(),
-                active:  activeChk.checked ? 1 : 0,
-            };
+                contact: contactInp.value,
+                phone:   phoneInp.value,
+                note:    noteInp.value,
+                active:  activeChk.checked,
+            });
             const { error } = isEdit
                 ? await supabase.from('suppliers').update(payload).eq('id', s.id).select().single()
                 : await supabase.from('suppliers').insert(payload).select().single();
@@ -144,4 +144,18 @@ export function openSupplierModal(s, onSaved) {
     ));
     document.body.appendChild(overlay);
     nameInp.focus();
+}
+
+// LIVE_AUDIT_FIX_V1 — строка поставщика КОЛОНКАМИ РЕЕСТРА (suppliers:
+// contact_name, notes). Экран писал `contact` и `note` — таких колонок нет,
+// компилятор их молча выбрасывал, и контактное лицо с примечанием не
+// сохранялись никогда; список читал те же несуществующие поля.
+export function supplierPayload({ name, contact, phone, note, active }) {
+    return {
+        name: String(name || '').trim(),
+        contact_name: String(contact || '').trim(),
+        phone: String(phone || '').trim(),
+        notes: String(note || '').trim(),
+        active: active ? 1 : 0,
+    };
 }

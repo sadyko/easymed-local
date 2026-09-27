@@ -585,7 +585,6 @@ const BASELINE = new Set([
   "public/js/admin/views/reports-export.js | invoice_items | column \"discount_percentage\"",
   "public/js/admin/views/reports-export.js | purchase_order_items | column \"clinic_items ( name, strength, form )\"",
   "public/js/admin/views/reports-export.js | purchase_order_items | column \"purchase_orders!inner ( po_number, created_at, branch_id, company_id, suppliers ( name ) )\"",
-  "public/js/admin/views/reports-export.js | visit_services | column \"referral_source_id\"",
   "public/js/admin/views/section-crud.js | services | column \"core_service_id\"",
   "public/js/admin/views/section-import-export.js | clinic_items | table",
   "public/js/admin/views/section-import-export.js | item_suppliers | filter \"item_id\"",
