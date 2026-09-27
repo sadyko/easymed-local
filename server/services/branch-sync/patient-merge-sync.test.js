@@ -28,6 +28,7 @@ import { applyBatch } from './records.js';
 import { mergePatientsRpc } from '../rpc/patient-merge.js';
 import { createDeposit, acceptDeposit, depositBalance } from '../rpc/deposits.js';
 import { openCashShift } from '../rpc/cashier.js';
+import { notePeerCaps, SYNC_CAPS, buildVersion } from './sync-caps.js';
 
 const ADMIN = { id: 1, role: 'admin', full_name: 'Админ' };
 const REG = { id: 7, role: 'registrar', full_name: 'Регистратор' };
@@ -426,4 +427,53 @@ test('M7: оставленная карта удалена (надгробие) 
   A.db.prepare("UPDATE patients SET notes = 'жива' WHERE id = ?").run(d);
   ship(A, C);
   assert.equal(patientByUid(C.db, du).notes, 'жива', 'правка карты, чья пара удалена, пропущена — карта замёрзла');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FINAL_ROLES_SYNC_FIX_V1 (I4) — СОСЕД СТАРОЙ СБОРКИ.
+//
+// Здание без миграции 168 событие объединения пропускает (неизвестная таблица)
+// и подтверждает приём — событие потеряно, а надгробие дубля у него падает на
+// внешнем ключе или стирает журнал карты. Поэтому каждая выгрузка журнала
+// несёт умения сборки (caps), приёмник пишет их в sync_peers (мигр. 185), и
+// объединение карты, которая уже есть у соседа без умения merge_events,
+// отказывается по-русски. Карта, ещё никуда не уехавшая, объединяется.
+// ═══════════════════════════════════════════════════════════════════════════
+const addBuilding = (db, letter, name) => db.prepare('INSERT INTO branches (name, letter, active) VALUES (?, ?, 1)').run(name, letter);
+
+test('I4: сосед не заявил merge_events — карту, уехавшую к нему, не объединяем; своя неуехавшая — объединяется', () => {
+  const A = house('A'); const B = house('B');
+  addBuilding(A.db, 'B', 'Филиал Чиланзар');
+  const keep = newPatient(A.db, 'Турсунов');
+  const drop = newPatient(A.db, 'Турсунов Т.');
+  ship(A, B);   // обе карты уехали в B (старой сборки: caps не присылал)
+  const before = A.db.prepare('SELECT COUNT(*) n FROM patients').get().n;
+  assert.throws(() => mergePatientsRpc(A.db, { keep_id: keep, drop_id: drop }, ADMIN), (e) =>
+    e.status === 409 && e.message.includes('Обновите все здания до версии ' + buildVersion())
+    && /которая уже есть в другом здании/.test(e.message) && /Филиал Чиланзар \(B\)/.test(e.message));
+  assert.equal(A.db.prepare('SELECT COUNT(*) n FROM patients').get().n, before, 'отказ ничего не тронул');
+  assert.equal(A.db.prepare('SELECT COUNT(*) n FROM patient_merges').get().n, 0, 'событие не заведено');
+
+  // Своя карта, ещё не выложенная соседу, объединяется: событие о ней некому терять.
+  const k2 = newPatient(A.db, 'Новый'); const d2 = newPatient(A.db, 'Новый');
+  assert.equal(mergePatientsRpc(A.db, { keep_id: k2, drop_id: d2 }, ADMIN).merged, true);
+
+  // Карта, пришедшая из другого здания, — есть в сети: тоже ждёт обновления.
+  const fromB = newPatient(B.db, 'Из B'); const fromB2 = newPatient(B.db, 'Из B');
+  ship(B, A);
+  assert.throws(() => mergePatientsRpc(A.db, { keep_id: idOf(A.db, uidOf(B.db, fromB)), drop_id: idOf(A.db, uidOf(B.db, fromB2)) }, ADMIN),
+    (e) => e.status === 409);
+
+  // Сосед обновился и сказал об этом в выгрузке — объединение проходит и доезжает.
+  notePeerCaps(A.db, 'B', { caps: [...SYNC_CAPS], app_version: buildVersion() });
+  assert.equal(mergePatientsRpc(A.db, { keep_id: keep, drop_id: drop }, ADMIN).merged, true);
+  ship(A, B);
+  assert.equal(idOf(B.db, uidOf(A.db, keep)) != null, true);
+  assert.equal(B.db.prepare('SELECT COUNT(*) n FROM patient_merges').get().n, 2);
+
+  // Откат сборки у соседа (выгрузка без caps) снова закрывает объединение уехавших карт.
+  notePeerCaps(A.db, 'B', { app_version: '3.9.0' });
+  const k3 = newPatient(A.db, 'Ещё'); const d3 = newPatient(A.db, 'Ещё');
+  ship(A, B);
+  assert.throws(() => mergePatientsRpc(A.db, { keep_id: k3, drop_id: d3 }, ADMIN), (e) => e.status === 409);
 });

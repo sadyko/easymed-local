@@ -49,6 +49,8 @@
 
 import { hasAnyRole } from '../roles.js';
 import { OPEN_STATUSES } from '../../../public/js/shared/admission-status.js';
+// FINAL_ROLES_SYNC_FIX_V1 (I4) — событие объединения понимают не все сборки.
+import { CAP_MERGE_EVENTS, peersBlockingCards, buildVersion } from '../branch-sync/sync-caps.js';
 
 // Четвёртая проверка, M3 — пустые КОНТАКТЫ оставленной карты дополняются из
 // дубля (телефон дубля — вторым номером). Имя, дата рождения, документы и
@@ -203,6 +205,13 @@ export function applyMergeHere(db, { keepId, dropId, fromLetter = null }) {
   return { moved, patch, twoOpenAdmissions: twoOpen };
 }
 
+// «Филиал на Чиланзаре (B)» — имя здания, если оно заведено, и его буква.
+const buildingLabel = (db) => (letter) => {
+  let name = null;
+  try { const r = db.prepare('SELECT name FROM branches WHERE upper(letter) = ? LIMIT 1').get(letter); name = r && r.name; } catch { name = null; }
+  return name ? `${name} (${letter})` : `здание ${letter}`;
+};
+
 // Один дубль: всё внутри транзакции вызывающего.
 function mergeOne(db, keep, drop, user) {
   const getP = db.prepare('SELECT * FROM patients WHERE id = ?');
@@ -214,6 +223,19 @@ function mergeOne(db, keep, drop, user) {
   // только своё здание; госпитализации соседа он разберёт у себя (applyMergeHere).
   if (openAdmissions(db, keep) > 0 && openAdmissions(db, drop) > 0) {
     throw new RpcError('У обеих карт открыта госпитализация. Сначала выпишите пациента или отмените одну из них, потом объединяйте.', 400);
+  }
+
+  // FINAL_ROLES_SYNC_FIX_V1 (I4) — СОСЕД СТАРОЙ СБОРКИ. Здание без миграции
+  // 168 событие объединения пропустит как неизвестную запись и подтвердит
+  // приём — событие потеряно навсегда, а надгробие дубля у него упадёт на
+  // внешнем ключе (карта-призрак со своим балансом) или сотрёт журнал карты.
+  // Поэтому карту, которая уже есть у соседа, не заявившего в своей выгрузке
+  // умение merge_events (sync-caps.js, мигр. 185), не объединяем; карты,
+  // никуда ещё не уехавшие, объединяются как раньше.
+  const blockers = peersBlockingCards(db, [keepRow, dropRow], CAP_MERGE_EVENTS);
+  if (blockers.length) {
+    throw new RpcError(`Обновите все здания до версии ${buildVersion()} или новее, прежде чем объединять карту, которая уже есть в другом здании. `
+      + `Ещё не обновлены (или давно не выходили на связь): ${blockers.map(buildingLabel(db)).join(', ')}.`, 409);
   }
 
   // PATIENT_MERGE_BRANCHES_V1 — СОБЫТИЕ ПЕРВЫМ: его номер в журнале ниже, чем
