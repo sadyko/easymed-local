@@ -15,6 +15,7 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // пришли. Касса — последний экран, у которого счёт открыт целиком, и первый, с
 // которого его можно стереть.
 import { assertOwnBuilding } from './billing.js';
+import { markRefundRelease } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -593,11 +594,13 @@ export function voidInvoice(db, args, user) {
     const releaseKeepStatus = db.prepare('UPDATE visit_services SET invoice_item_id = NULL WHERE id = ?');
     const removed = [];
     const released = [];
+    const releasedIds = [];
     for (const l of lines) {
       const trace = !!hasTrace.get(l.id, l.id, l.id).t;
       if (PERFORMED.includes(l.status) || trace) {
         releaseKeepStatus.run(l.id);
         released.push(l.name);
+        releasedIds.push(l.id);
       } else if (!keepServices) {
         // Талон очереди на снятую услугу тоже уходит: номер без услуги — мусор на доске.
         db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(l.id);
@@ -606,8 +609,13 @@ export function voidInvoice(db, args, user) {
       } else {
         release.run(l.id);
         released.push(l.name);
+        releasedIds.push(l.id);
       }
     }
+    // PAY_REFUND_V1 (владелец, 27.09) — отмена ПОСЛЕ ВОЗВРАТА: отпущенная
+    // работа врачу не платится, пока её не выставят и не оплатят снова.
+    // Отмена неоплаченного счёта без возвратов ничего не пишет.
+    markRefundRelease(db, { invoiceId, kind: 'out', lineIds: releasedIds });
     // Журнал счёта: кто отменил и что стало с услугами. Раньше строку писал
     // только облачный экран, и «История» кассы об отменах молчала.
     const actor = db.prepare('SELECT full_name, role FROM users WHERE id = ?').get(user.id) || {};
@@ -626,6 +634,9 @@ export function voidInvoice(db, args, user) {
     // voided invoice: create_invoice_for_admission then refused them as "already
     // invoiced" and remove_admission_line_from_invoice refused them because the
     // invoice was no longer 'unpaid'. The treatment became permanently unbillable.
+    const admLineIds = db.prepare(`SELECT id FROM admission_services
+       WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)`).all(invoiceId).map((r) => r.id);
+    markRefundRelease(db, { invoiceId, kind: 'in', lineIds: admLineIds });   // PAY_REFUND_V1
     db.prepare(`
       UPDATE admission_services
          SET invoice_item_id = NULL, status = 'added'

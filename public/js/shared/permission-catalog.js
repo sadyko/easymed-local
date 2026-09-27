@@ -251,7 +251,9 @@ export const CATALOG = [
   { key: 'reports',     label: 'Отчёты',              legacy: 'reports-hub', desc: 'Отчёты за период и выгрузка в Excel.', levels: ['none', 'view'], levelDesc: { view: 'Открывает отчёты тех групп, что отмечены ниже.' }, windows: [
       { key: 'reports.revenue',    label: 'Выручка и счета', desc: 'Общая выручка, счета и отчёт владельца.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
       { key: 'reports.cashier',    label: 'Касса', desc: 'Отчёт кассира за период: поступления и расходы.', levels: ['none', 'view'], enforced: 'rpc:cashier_report' },
-      { key: 'reports.doctor_pay', label: 'Оплата врачей', desc: 'Зарплаты врачей, стационарная доля, отчёты по врачам — начисления каждого врача. Свои начисления врач видит в кабинете всегда.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
+      // PAY_PERIOD_CLOSE_V1 — «Правка» закрывает месяц оплаты врачей
+      // (pay_period_close); открыть закрытый месяц может только администратор.
+      { key: 'reports.doctor_pay', label: 'Оплата врачей', desc: 'Зарплаты врачей, стационарная доля, отчёты по врачам — начисления каждого врача. Свои начисления врач видит в кабинете всегда.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Закрывает месяц оплаты врачей.' }, enforced: 'rpc:run_report' },
       { key: 'reports.referrals',  label: 'Рефералы', desc: 'Кто направил пациентов и вознаграждение за направления.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
       { key: 'reports.services',   label: 'По услугам и рентабельность', desc: 'Отчёт по услугам, по специальностям и рентабельность операций.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
       { key: 'reports.stock',      label: 'Закупки и склад', desc: 'Приход, расход, остатки и сроки годности.', levels: ['none', 'view'], enforced: 'rpc:run_report' },

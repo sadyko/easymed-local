@@ -52,6 +52,12 @@ const FALLBACK_FN = {
     view: (db, u) => hasAnyRole(u, ['admin', 'inventory']) || canViewSection(db, u, 'inventory'),
     edit: (db, u) => hasAnyRole(u, ['admin', 'inventory']),
   },
+  // PAY_PERIOD_CLOSE_V1 — «Оплата врачей»: смотреть — как у всех групп отчётов
+  // (администратор или раздел «Отчёты»), закрывать месяц — администратор.
+  'reports.doctor_pay': {
+    view: (db, u) => hasAnyRole(u, ['admin']) || canViewSection(db, u, 'reports-hub'),
+    edit: (db, u) => hasAnyRole(u, ['admin']),
+  },
 };
 
 /** Ворота ключа — прежняя галочка раздела (FALLBACK_FN), а не список ролей. */

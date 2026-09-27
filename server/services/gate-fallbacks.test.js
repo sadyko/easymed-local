@@ -241,6 +241,7 @@ test('FALLBACK_FN отвечает то же, что настоящие воро
   const { canSeeAll, departmentForm } = await import('./rpc/departments.js');
   const { canSeeAllMovements } = await import('./rpc/stock-log.js');
   const { stockMinimumsList } = await import('./rpc/stock-requests.js');
+  const { runReport, payPeriodStatus } = await import('./rpc/reports.js');   // PAY_PERIOD_CLOSE_V1
   const db = openDb(':memory:');
   migrate(db);
   const allowed = (fn) => { try { fn(); return true; } catch (e) { if (e && e.status === 403) return false; return true; } };
@@ -258,6 +259,8 @@ test('FALLBACK_FN отвечает то же, что настоящие воро
         'settings.departments/edit': allowed(() => departmentForm(db, {}, u)),
         'procurement/view': canSeeAllMovements(db, u),
         'procurement/edit': !!stockMinimumsList(db, { scope: 'mine' }, u).can_manage_all,
+        'reports.doctor_pay/view': allowed(() => runReport(db, { kind: 'doctor_salaries' }, u)),
+        'reports.doctor_pay/edit': payPeriodStatus(db, {}, u).can_close,
       };
       for (const [k, want] of Object.entries(real)) {
         const [key, need] = k.split('/');
@@ -265,5 +268,5 @@ test('FALLBACK_FN отвечает то же, что настоящие воро
       }
     }
   } finally { db.close(); }
-  assert.deepEqual([...FALLBACK_FN_KEYS].sort(), ['custdev.list', 'custdev.rate', 'procurement', 'settings.departments'], 'в FALLBACK_FN новый ключ — добавьте его в сверку поведением');
+  assert.deepEqual([...FALLBACK_FN_KEYS].sort(), ['custdev.list', 'custdev.rate', 'procurement', 'reports.doctor_pay', 'settings.departments'], 'в FALLBACK_FN новый ключ — добавьте его в сверку поведением');
 });

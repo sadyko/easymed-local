@@ -216,7 +216,9 @@ test('по услугам: «Доля врача» сходится с «Общ�
   assert.equal(sum(all, 'Сумма') - sum(all, 'Скидка'), sum(revenue, 'После скидки'));
   assert.equal(sum(all, 'Налог'), sum(revenue, 'Налог'));
   const salaries = objects(run(db, 'doctor_salaries'));
-  assert.equal(sum(all, 'Доля врача'), sum(salaries, 'Итого к выплате'));
+  // PAY_ALL_EARNINGS_V1 — «Итого к выплате» теперь с вознаграждениями; доля за
+  // работу — гонорар плюс стационар.
+  assert.equal(sum(all, 'Доля врача'), sum(salaries, 'Доля врача (гонорар)') + sum(salaries, 'Стационар: гонорар'));
   assert.equal(sum(all, 'Доля врача'), 332200);
   const paid = objects(run(db, 'by_services', { paid: 'paid' }));
   assert.equal(sum(paid, 'Доля врача'), 302200);
@@ -270,12 +272,15 @@ test('по врачам: доли в сумме равны «Зарплатам 
   assert.equal(sum(mine, 'Стационарная доля'), sum(sal, 'Стационар: гонорар'));
   const referral = sum(objects(run(db, 'referrals')).filter((o) => o['Вид'] === 'Внутренний'), 'Вознаграждение');
   assert.equal(sum(mine, 'Вознаграждение за направления'), referral);
-  assert.equal(sum(mine, 'Итого к выплате'), sum(sal, 'Итого к выплате') + referral);
+  // PAY_ALL_EARNINGS_V1 (владелец, 27.09) — один итог на оба отчёта: все начисления.
+  assert.equal(sum(sal, 'Вознаграждение за направления'), referral);
+  assert.equal(sum(mine, 'Итого к выплате'), sum(sal, 'Итого к выплате'));
   // По каждому врачу — тоже, а не только в сумме.
   for (const o of sal) {
     const m = mine.find((x) => x['Врач'] === o['Врач']);
     assert.equal(m['Доля за услуги'], o['Доля врача (гонорар)'], o['Врач']);
     assert.equal(m['Стационарная доля'], o['Стационар: гонорар'], o['Врач']);
+    assert.equal(m['Итого к выплате'], o['Итого к выплате'], o['Врач']);
   }
 });
 

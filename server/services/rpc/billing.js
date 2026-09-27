@@ -30,6 +30,7 @@ import { voidInvoice } from './cashier.js';   // ре-ревью п.9 — отм
 import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // CARD_BALANCE_V1 — подарочная карта / сертификат платит своим остатком.
 import { spendCard, returnToCard, CardError } from '../domain/cards.js';
+import { markRefundRelease } from '../domain/pay-releases.js';   // PAY_REFUND_V1
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -1187,6 +1188,9 @@ export function removeAdmissionLineFromInvoice(db, args, user) {
       throw new RpcError('счёт уже ' + (inv.paid_amount > 0 ? 'оплачен (частично)' : inv.status) + ' — сначала отмените его в кассе.', 400);
     }
 
+    // PAY_REFUND_V1 — строка уходит со счёта, по которому были возвраты: без
+    // нового оплаченного счёта врачу она не платится (domain/pay-releases.js).
+    markRefundRelease(db, { invoiceId: inv.id, kind: 'in', lineIds: [lineId] });
     db.prepare("UPDATE admission_services SET invoice_item_id = NULL, status = 'added' WHERE id = ?").run(lineId);
     db.prepare('DELETE FROM invoice_items WHERE id = ?').run(item.id);
     const left = db.prepare('SELECT COALESCE(SUM(total), 0) s, COUNT(*) n FROM invoice_items WHERE invoice_id = ?').get(inv.id);
