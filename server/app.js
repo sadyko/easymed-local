@@ -33,10 +33,22 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   // budget while every other endpoint keeps the tight 100 KB limit.
   app.use('/api/rpc', express.json({ limit: '2mb' }));
   app.use('/api', express.json({ limit: '100kb' }));
+  // V3120_FIX — /api/health ТРОГАЕТ БАЗУ. Раньше он отвечал {ok:true}, даже
+  // когда база была недоступна (файл заблокирован, диск отвалился), и проверка
+  // «новая версия поднялась» после обновления (boot-confirm.js) подтверждала
+  // бы сервер, который не может принять ни одного пациента. Один тривиальный
+  // SELECT — микросекунды. Стоит ДО attachUser/attachControl: при мёртвой базе
+  // они сами бросили бы 500 раньше, чем здесь успели бы сказать 503.
+  app.get('/api/health', (req, res) => {
+    try {
+      db.prepare('SELECT 1 AS ok').get();
+    } catch (e) {
+      return res.status(503).json({ ok: false, error: { code: 'db_unavailable', message: 'Database is not available: ' + (e && e.message) } });
+    }
+    res.json({ ok: true });
+  });
   app.use(attachUser(db));
   app.use(attachControl(db, dataDir));   // LICENCE_CORE_V1
-
-  app.get('/api/health', (req, res) => res.json({ ok: true }));
   app.use('/api/auth', authRoutes(db));
   // TELEPHONY_V1 — Binotel's webhook receivers, in /api/auth's slot: BEFORE
   // requirePasswordChanged and carrying no requireAuth, because Binotel sends
