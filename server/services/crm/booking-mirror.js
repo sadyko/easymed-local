@@ -236,6 +236,13 @@ export function insertBookingLine(db, { visit, serviceId = null, consultationTyp
   return Number(info.lastInsertRowid);
 }
 
+// V3120_FINAL — ждущие строки заявок, державшие строку визита `fromId`,
+// переходят на `toId` (строка визита уходит, её место заняла другая).
+function relinkPending(db, fromId, toId) {
+  db.prepare(`UPDATE crm_request_services SET visit_service_id = ?, visit_service_auto = 0
+               WHERE visit_service_id = ? AND status = 'pending'`).run(toId, fromId);
+}
+
 function deleteVs(db, id) {
   try { db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(id); } catch { /* нет таблицы */ }
   db.prepare('DELETE FROM visit_services WHERE id = ?').run(id);
@@ -393,6 +400,11 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
       if (frozen) continue;   // I5 — при счёте строку зеркала не трогаем и вторую строку заявки не заводим
       if (old && old.visit_id === V && vsFree(db, old)) {
         linkLine.run(x.id, 0, auto.id);
+        // V3120_FINAL — строку визита делят несколько заявок (две карточки
+        // одного человека, CRM_ONE_LINE): на новую строку переходят ВСЕ ждущие
+        // строки, а не одна. Оставшаяся со ссылкой на удалённую строку
+        // снималась следующей сверкой («строку визита сняли — снимаем и в заявке»).
+        relinkPending(db, old.id, x.id);
         deleteVs(db, old.id);
         out.linked++; out.removed++;
         continue;
@@ -661,6 +673,7 @@ export function pruneAutoLinesOnInvoice(db, visitId, keepIds = []) {
           && !db.prepare("SELECT 1 FROM crm_request_services WHERE visit_service_id = ? AND status <> 'cancelled'").get(x.id));
       if (!twin) continue;
       db.prepare('UPDATE crm_request_services SET visit_service_id = ?, visit_service_auto = 0 WHERE id = ?').run(twin.id, a.line_id);
+      relinkPending(db, vs.id, twin.id);   // V3120_FINAL — и остальные ждущие строки этой строки визита
       deleteVs(db, vs.id);
     }
   } catch (e) {

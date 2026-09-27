@@ -65,7 +65,7 @@ export async function pendingCrmLines(patientId, dayIso, visitId = null) {
     if (!reqs || !reqs.length) return [];
 
     const { data: lines, error: lineErr } = await supabase.from('crm_request_services')
-        .select('id, request_id, service_id, scheduled_date, status, doctor_id, visit_id')
+        .select('id, request_id, service_id, consultation_type_id, scheduled_date, status, doctor_id, visit_id')
         .in('request_id', reqs.map((r) => r.id))
         .eq('scheduled_date', day)
         .eq('status', 'pending');
@@ -87,8 +87,12 @@ function dedupeCrmLines(lines, visitId = null) {
     const byKey = new Map();
     const mine = (x) => visitId != null && String(x.visit_id || '') === String(visitId);
     for (const l of lines || []) {
-        if (l.service_id == null) { byKey.set('#' + l.id, l); continue; }   // без услуги сравнивать нечего
-        const k = 's:' + l.service_id + '|d:' + (l.doctor_id || '');
+        // V3120_FINAL — консультация по виду приёма (service_id NULL, миграция
+        // 188) — такая же услуга: две карточки «приём у Иванова» давали две строки.
+        const svcKey = l.service_id != null ? 's:' + l.service_id
+            : (l.consultation_type_id != null ? 'c:' + l.consultation_type_id : null);
+        if (svcKey == null) { byKey.set('#' + l.id, l); continue; }   // без услуги сравнивать нечего
+        const k = svcKey + '|d:' + (l.doctor_id || '');
         const had = byKey.get(k);
         if (!had || (mine(l) && !mine(had))) byKey.set(k, l);
     }

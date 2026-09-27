@@ -149,3 +149,17 @@ test('одинаковые строки двух карточек (услуга 
   assert.deepEqual((await pendingCrmLines(7, DAY, 555)).map((l) => l.id), [902, 903],
     'из двух одинаковых должна остаться строка ЭТОГО приёма');
 });
+
+// V3120_FINAL — консультация по виду приёма (service_id NULL) тоже одна в смете.
+test('две карточки «приём у Иванова» по виду приёма — в смете одна строка', async () => {
+    reset();
+    LINES = [
+        lineOf({ id: 911, service_id: null, consultation_type_id: 5, doctor_id: 10 }),
+        lineOf({ id: 912, request_id: 502, service_id: null, consultation_type_id: 5, doctor_id: 10 }),
+        lineOf({ id: 913, service_id: null, consultation_type_id: 6, doctor_id: 10 }),
+    ];
+    const out = await pendingCrmLines(7, DAY);
+    assert.deepEqual(out.map((l) => l.id).sort(), [911, 913]);
+    const q = CALLS.find((c) => c.table === 'crm_request_services');
+    assert.match(String(q.columns || q.select || ''), /consultation_type_id/, 'вид приёма не спрошен');
+});

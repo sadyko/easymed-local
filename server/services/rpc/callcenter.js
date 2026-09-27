@@ -207,7 +207,10 @@ export function callcenterReport(db, args, user) {
   // консультацией по виду приёма (service_id NULL, миграция 188): она
   // называется своим видом приёма и считается отдельно от «—».
   const topServices = db.prepare(`
-    SELECT COALESCE(s.name, ct.name_ru, ct.name, '—') AS name, COUNT(*) AS count
+    SELECT COALESCE(s.name, ct.name_ru, ct.name, '—') AS name,
+           -- V3120_FINAL — строку визита, которую делят две карточки одного
+           -- человека (CRM_ONE_LINE), спрос считает ОДИН раз.
+           COUNT(DISTINCT CASE WHEN cs.visit_service_id IS NOT NULL THEN 'v' || cs.visit_service_id ELSE 'l' || cs.id END) AS count
       FROM crm_request_services cs
       JOIN crm_requests r ON r.id = cs.request_id
       LEFT JOIN services s ON s.id = cs.service_id
