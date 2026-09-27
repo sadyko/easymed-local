@@ -53,7 +53,7 @@ test('run_report returns {columns, rows} for each kind, date-filtered', () => {
   const none = runReport(db, { kind:'payments', from:'2026-01-01', to:'2026-01-31' }, user);
   assert.equal(none.rows.length, 0);
   // unknown kind rejected
-  assert.throws(() => runReport(db, { kind:'bogus', from:FROM, to:TO }, user), /unknown report|kind/i);
+  assert.throws(() => runReport(db, { kind:'bogus', from:FROM, to:TO }, user), /unknown report|kind|Неизвестный отчёт/i);
 });
 
 // ---------------------------------------------------------------------------

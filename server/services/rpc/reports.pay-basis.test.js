@@ -313,7 +313,7 @@ test('doctor_pay_summary: зарегистрирован, чтение, прав
   c.line({});
   assert.doesNotThrow(() => doctorPaySummary(c.db, { doctor_id: 1, from: FROM, to: TO }, { id: 1, role: 'doctor' }));
   assert.throws(() => doctorPaySummary(c.db, { doctor_id: 2, from: FROM, to: TO }, { id: 1, role: 'doctor' }), (e) => e.status === 403);
-  assert.throws(() => doctorPaySummary(c.db, { doctor_id: 'x', from: FROM, to: TO }, admin), /doctor_id/);
+  assert.throws(() => doctorPaySummary(c.db, { doctor_id: 'x', from: FROM, to: TO }, admin), /doctor_id|Врач/);
   // Строк столько, сколько их есть: предела в 500 (как было в кабинете) нет.
   for (let i = 0; i < 520; i++) c.line({});
   assert.equal(summary(c.db).lines.length, 521);

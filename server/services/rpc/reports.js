@@ -91,15 +91,22 @@ function isDateish(v) {
   return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v);
 }
 
-function resolveRange(db, args) {
+// REPORTS_AUDIT_FIX_V1 — отказ читает человек, поэтому по-русски; и «с» позже
+// «по» — тоже отказ, а не молча пустой отчёт («ничего не было» читалось бы
+// как правда). Экспортируется: «Отчёт кассира» и отчёт колл-центра проверяют
+// период тем же правилом (прежде принимали любой мусор и отдавали пустоту).
+export function resolveRange(db, args) {
   const t = today(db);
   const from = args && args.from !== undefined && args.from !== null && args.from !== '' ? args.from : t;
   const to = args && args.to !== undefined && args.to !== null && args.to !== '' ? args.to : t;
   if (!isDateish(from)) {
-    throw new RpcError('from must be a YYYY-MM-DD date.', 400);
+    throw new RpcError('Дата «с» — не дата: нужен формат ГГГГ-ММ-ДД.', 400);
   }
   if (!isDateish(to)) {
-    throw new RpcError('to must be a YYYY-MM-DD date.', 400);
+    throw new RpcError('Дата «по» — не дата: нужен формат ГГГГ-ММ-ДД.', 400);
+  }
+  if (from.slice(0, 10) > to.slice(0, 10)) {
+    throw new RpcError('Дата «с» позже даты «по» — выберите период заново.', 400);
   }
   return { from, to };
 }
@@ -323,7 +330,7 @@ function legacyReports(db) {
 // Нужен стационару: счёт госпитализации пишется без филиала.
 const OWN_BRANCH_SQL = `(SELECT COALESCE(bi.branch_id, (SELECT b.id FROM branches b WHERE b.letter = bi.letter ORDER BY b.id LIMIT 1))
    FROM branch_identity bi WHERE bi.id = 1)`;
-const OWN_BRANCH_OR = (col) => `COALESCE(${col}, ${OWN_BRANCH_SQL})`;
+export const OWN_BRANCH_OR = (col) => `COALESCE(${col}, ${OWN_BRANCH_SQL})`;
 
 // Validated branch filter → { clause: ' AND col IN (?,?)', params: [...] }.
 function branchFilter(args, col) {
@@ -1472,7 +1479,7 @@ function requirePayPeriodEdit(db, user) {
 }
 function monthArg(args) {
   const m = args && typeof args.month === 'string' ? args.month.trim() : '';
-  if (!MONTH_RE.test(m)) throw new RpcError('month must be YYYY-MM.', 400);
+  if (!MONTH_RE.test(m)) throw new RpcError('Месяц — в формате ГГГГ-ММ.', 400);
   return m;
 }
 
@@ -1772,7 +1779,7 @@ const REFERRER_KIND_RU = { internal: 'Внутренний', external: 'Внеш
 function referrerScope(args) {
   const v = args && args.referrer;
   if (v === undefined || v === null || v === '') return 'all';
-  if (!REFERRER_SCOPES.includes(v)) throw new RpcError('referrer must be one of: all, internal, external.', 400);
+  if (!REFERRER_SCOPES.includes(v)) throw new RpcError('Фильтр «Направившие» — «все», «внутренние» или «внешние».', 400);
   return v;
 }
 
@@ -2155,7 +2162,7 @@ function referralsDetailReport(db, args, ctx) {
 // и отменённых, — и его сумма не сходилась с отчётом ни на одних данных.
 export function doctorReferralReward(db, args, user) {
   const doctorId = Number(args && args.doctor_id);
-  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
+  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('Врач не выбран или указан неверно.', 400);
   // ROLE_REPORTS_SETTINGS_V1 — вознаграждение за направления видит и группа
   // «Рефералы»: в её отчёте то же вознаграждение каждого врача по строкам.
   assertCanSeeDoctorPay(db, user, doctorId, ['reports.doctor_pay', 'reports.referrals']);   // ревью I6
@@ -2313,7 +2320,7 @@ const CATEGORY_RU = {
 function reportCategory(args) {
   const v = args && args.category;
   if (v === undefined || v === null || v === '' || v === 'all') return null;
-  if (Array.isArray(v)) throw new RpcError('category: одна категория или all.', 400);
+  if (Array.isArray(v)) throw new RpcError('Категория — одна категория закупок или «все».', 400);
   return parseCategories(v, 'category');
 }
 /** `AND pr.procurement_category IN (?)` — или пусто, если категория не выбрана. */
@@ -2430,7 +2437,7 @@ function consumptionMovements(db, args, ctx) {
 function consumptionBy(args) {
   const v = args && args.by;
   if (v === undefined || v === null || v === '') return 'lines';
-  if (!CONSUMPTION_BY.includes(v)) throw new RpcError('by must be one of: ' + CONSUMPTION_BY.join(', ') + '.', 400);
+  if (!CONSUMPTION_BY.includes(v)) throw new RpcError('Разрез — «по движениям», «по получателям» или «по пациентам».', 400);
   return v;
 }
 
@@ -2907,7 +2914,7 @@ function inpatientShareReport(db, args, ctx) {
 // Ревью I6: свои начисления — врачу, чужие — «Оплате врачей» и администратору.
 export function doctorInpatientShare(db, args, user) {
   const doctorId = Number(args && args.doctor_id);
-  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
+  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('Врач не выбран или указан неверно.', 400);
   assertCanSeeDoctorPay(db, user, doctorId);   // ревью I6
   const { from, to } = resolveRange(db, args);
   const rows = performedPayLines(db, { from, to, doctorId, kinds: ['in'] }).map((r) => ({
@@ -2939,7 +2946,7 @@ export function doctorInpatientShare(db, args, user) {
 // ---------------------------------------------------------------------------
 export function doctorPaySummary(db, args, user) {
   const doctorId = Number(args && args.doctor_id);
-  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
+  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('Врач не выбран или указан неверно.', 400);
   assertCanSeeDoctorPay(db, user, doctorId);
   const { from, to } = resolveRange(db, args);
   const lines = performedPayLines(db, { from, to, doctorId });
@@ -3022,7 +3029,7 @@ const PAID_SCOPES = ['all', 'paid'];
 function paidScope(args) {
   const v = args && args.paid;
   if (v === undefined || v === null || v === '') return 'all';
-  if (!PAID_SCOPES.includes(v)) throw new RpcError('paid must be one of: all, paid.', 400);
+  if (!PAID_SCOPES.includes(v)) throw new RpcError('Фильтр «Счета» — «все счета» или «только оплаченные».', 400);
   return v;
 }
 // Группа — одна из пяти (services.type), подписью раздела каталога
@@ -3031,7 +3038,7 @@ const SERVICE_GROUPS = ['consultation', 'lab', 'imaging', 'procedure', 'other'];
 function groupFilter(args) {
   const v = args && args.group;
   if (v === undefined || v === null || v === '' || v === 'all') return null;
-  if (!SERVICE_GROUPS.includes(v)) throw new RpcError('group must be one of: all, ' + SERVICE_GROUPS.join(', ') + '.', 400);
+  if (!SERVICE_GROUPS.includes(v)) throw new RpcError('Группа услуг — одна из пяти групп каталога или «все».', 400);
   return categoryOf({ type: v });
 }
 const lineGroup = (r) => (r.service_id == null && !r.service_group
@@ -3123,7 +3130,7 @@ function doctorFilterArg(args) {
   const v = args && args.doctor_id;
   if (v === undefined || v === null || v === '' || v === 'all') return null;
   const n = Number(v);
-  if (!Number.isInteger(n) || n <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
+  if (!Number.isInteger(n) || n <= 0) throw new RpcError('Врач не выбран или указан неверно.', 400);
   return n;
 }
 
@@ -3435,8 +3442,8 @@ const REPORT_CHOICES = {
 export function reportChoices(db, args, user) {
   const kind = args && args.kind;
   const arg = args && args.arg;
-  if (!Object.prototype.hasOwnProperty.call(REPORTS_RU, kind)) throw new RpcError('unknown report kind: ' + kind, 400);
-  if (!Object.prototype.hasOwnProperty.call(REPORT_CHOICES, arg)) throw new RpcError('unknown report option: ' + arg, 400);
+  if (!Object.prototype.hasOwnProperty.call(REPORTS_RU, kind)) throw new RpcError('Неизвестный отчёт: ' + kind + '. Обновите страницу.', 400);
+  if (!Object.prototype.hasOwnProperty.call(REPORT_CHOICES, arg)) throw new RpcError('Неизвестный фильтр отчёта: ' + arg + '.', 400);
   requireReportKind(db, user, kind);
   return { choices: REPORT_CHOICES[arg](db) };
 }
@@ -3601,7 +3608,7 @@ export function runReport(db, args, user) {
   }
   const report = legacyReports(db)[kind];
   if (!report) {
-    throw new RpcError('unknown report kind: ' + kind, 400);
+    throw new RpcError('Неизвестный отчёт: ' + kind + '. Обновите страницу.', 400);
   }
   const { from, to } = resolveRange(db, args);
   const ctx = buildingContext(db);
@@ -3634,15 +3641,15 @@ export function runReport(db, args, user) {
 const TIER_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 export function doctorTierPositions(db, args, user) {
   const doctorId = Number(args && args.doctor_id);
-  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('doctor_id must be a positive integer.', 400);
+  if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('Врач не выбран или указан неверно.', 400);
   assertCanSeeDoctorPay(db, user, doctorId);
   const month = args && args.month != null ? String(args.month) : '';
   const from = month ? month : String((args && args.from) || '');
   const to = month ? month : String((args && args.to) || '');
   if (!TIER_MONTH_RE.test(from) || !TIER_MONTH_RE.test(to)) {
-    throw new RpcError('month must be YYYY-MM (or from/to as YYYY-MM).', 400);
+    throw new RpcError('Месяц — в формате ГГГГ-ММ (или период «с»–«по» месяцами ГГГГ-ММ).', 400);
   }
-  if (from > to) throw new RpcError('from must not be after to.', 400);
+  if (from > to) throw new RpcError('Месяц «с» позже месяца «по» — выберите период заново.', 400);
   const rows = db.prepare(`
     SELECT t.visit_service_id, t.service_id, s.name AS service_name,
            t.ym,

@@ -33,7 +33,8 @@ const MAX_MONEY = 1e12;
 function requireRole(user, allowed) {
   // MULTI_ROLE_SERVER_V1 — extras count too, not the primary role alone.
   if (!hasAnyRole(user, allowed)) {
-    throw new RpcError('Your role is not allowed to perform this action.', 403);
+    // REPORTS_AUDIT_FIX_V1 — отказ читает человек: по-русски.
+    throw new RpcError('Касса доступна кассиру и администратору — вашей роли это действие недоступно.', 403);
   }
 }
 
@@ -197,16 +198,27 @@ function movementTotals(db, shiftId) {
 // не кладём: этих денег кассир при себе не видел, они пришли раньше — когда
 // принимали депозит. Иначе на пересчёте смена требовала бы объяснить сумму,
 // которой в кассе никогда не было.
+// REPORTS_AUDIT_FIX_V1 — «платежей: N» считало и возвраты (отрицательные
+// платежи): смена с одной оплатой и её возвратом показывала «2 платежа».
+// Теперь count — только оплаты, возвраты — отдельно (refund_count, refunds —
+// сумма возвращённого, положительным числом). Итог total по-прежнему чистый:
+// оплаты минус возвраты — ровно то, что осталось в кассе.
 function paymentTotals(db, shiftId) {
-  const rows = db.prepare('SELECT method, COALESCE(SUM(amount),0) s, COUNT(*) n FROM payments WHERE shift_id=? GROUP BY method').all(shiftId);
-  const totals = { cash: 0, card: 0, transfer: 0, acquiring: 0, wallet: 0, gift_card: 0, total: 0, count: 0 };   // CARD_BALANCE_V1
+  const rows = db.prepare(`SELECT method, COALESCE(SUM(amount),0) s,
+                                  SUM(CASE WHEN amount >= 0 THEN 1 ELSE 0 END) n,
+                                  SUM(CASE WHEN amount < 0 THEN 1 ELSE 0 END) rn,
+                                  COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END),0) rs
+                             FROM payments WHERE shift_id=? GROUP BY method`).all(shiftId);
+  const totals = { cash: 0, card: 0, transfer: 0, acquiring: 0, wallet: 0, gift_card: 0, total: 0, count: 0, refund_count: 0, refunds: 0 };   // CARD_BALANCE_V1
   for (const row of rows) {
     if (Object.prototype.hasOwnProperty.call(totals, row.method)) {
       totals[row.method] = round2(row.s);
     }
     if (countsAsInflow(row.method)) {
       totals.total = round2(totals.total + row.s);
-      totals.count += row.n;
+      totals.count += row.n || 0;
+      totals.refund_count += row.rn || 0;
+      totals.refunds = round2(totals.refunds + (row.rs || 0));
     }
   }
   return totals;
@@ -290,14 +302,14 @@ export function shiftReport(db, args, user) {
   const shiftId = args && args.shift_id;
   if (shiftId !== undefined && shiftId !== null) {
     if (!isPositiveInt(shiftId)) {
-      throw new RpcError('shift_id must be a positive integer.', 400);
+      throw new RpcError('Смена указана неверно.', 400);   // REPORTS_AUDIT_FIX_V1 — по-русски
     }
     shift = db.prepare('SELECT * FROM cash_shifts WHERE id = ?').get(shiftId);
     if (!shift) {
-      throw new RpcError('shift not found.', 400);
+      throw new RpcError('Смена не найдена.', 400);
     }
     if (user.role !== 'admin' && shift.cashier_id !== user.id) {
-      throw new RpcError('You may only view your own shift.', 403);
+      throw new RpcError('Можно смотреть только свою смену.', 403);
     }
   } else {
     shift = db.prepare("SELECT * FROM cash_shifts WHERE cashier_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(user.id);

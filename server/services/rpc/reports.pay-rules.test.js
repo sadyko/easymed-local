@@ -316,7 +316,7 @@ test('D2: ворота — текущий месяц не закрыть, два
   const c = clinic();
   const { cur, prev } = months(c.db);
   assert.throws(() => payPeriodClose(c.db, { month: cur }, admin), /Текущий месяц/);
-  assert.throws(() => payPeriodClose(c.db, { month: '2026-13' }, admin), /YYYY-MM/);
+  assert.throws(() => payPeriodClose(c.db, { month: '2026-13' }, admin), /YYYY-MM|ГГГГ-ММ/);   // REPORTS_AUDIT_FIX_V1 — по-русски
   assert.throws(() => payPeriodClose(c.db, { month: prev }, doctorUser), (e) => e.status === 403);
   payPeriodClose(c.db, { month: prev }, admin);
   assert.throws(() => payPeriodClose(c.db, { month: prev }, admin), /уже закрыт/);

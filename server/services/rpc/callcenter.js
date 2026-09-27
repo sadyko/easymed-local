@@ -20,6 +20,7 @@ import { canSeeAllLeads } from '../crm/visibility.js';   // CRM_HEAD_MERGE_TAGS_
 import { categoryOf } from '../../../public/js/shared/service-categories.js';   // GROUPS_FIVE_REFERRAL_V1
 // ROLE_REPORTS_SETTINGS_V1 — отчёт колл-центра — группа «Колл-центр» раздела «Отчёты».
 import { requireReportKind } from '../report-access.js';
+import { resolveRange } from './reports.js';   // REPORTS_AUDIT_FIX_V1
 
 // Сидовая колонка «Записан» (миграция 077) — граница между «заявку ещё ведёт
 // оператор» и «пациента уже ждут в конкретный день». Имя здесь не поведение, а
@@ -48,8 +49,11 @@ const pct = (part, total) => (total > 0 ? Math.round((part / total) * 1000) / 10
 
 export function callcenterReport(db, args, user) {
   requireReportKind(db, user, 'callcenter');   // ROLE_REPORTS_SETTINGS_V1
-  const from = String((args && args.from) || '').slice(0, 10);
-  const to = String((args && args.to) || '').slice(0, 10);
+  // REPORTS_AUDIT_FIX_V1 — период тем же правилом, что у остальных отчётов:
+  // мусор и «с» позже «по» — отказ по-русски, а не молча пустой отчёт.
+  const range = resolveRange(db, args || {});
+  const from = String(range.from).slice(0, 10);
+  const to = String(range.to).slice(0, 10);
   const where = `WHERE ${inLocalRange('r.created_at')}`;
   const p = [from, to];
   // CRM_HEAD_MERGE_TAGS_V1 — КТО ЧЬИ ЦИФРЫ ВИДИТ. Администратор и руководитель

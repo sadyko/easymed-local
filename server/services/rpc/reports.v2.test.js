@@ -136,7 +136,7 @@ test('рефералы: фильтр «внутренние / внешние» �
   const external = objects(run(db, 'referrals', { referrer: 'external' }));
   assert.deepEqual(external.map((o) => o['Источник']), ['Клиника Х']);
   assert.equal(objects(run(db, 'referrals', { referrer: 'all' })).length, 2);
-  assert.throws(() => run(db, 'referrals', { referrer: 'bogus' }), /referrer/);
+  assert.throws(() => run(db, 'referrals', { referrer: 'bogus' }), /referrer|Направившие/);
   // Детализация: три строки (INV-1, INV-2, INV-3); аннулированный INV-4 — нет.
   const detail = objects(run(db, 'referrals_detail'));
   assert.deepEqual(detail.map((o) => o['№ счёта']).sort(), ['INV-1', 'INV-2', 'INV-3']);
@@ -175,7 +175,7 @@ test('кабинет врача: вознаграждение за направ�
   assert.equal(mine.reward, own['Вознаграждение']);
   // Врач 2 никого не направлял.
   assert.equal(doctorReferralReward(db, { doctor_id: 2, from: FROM, to: TO }, admin).count, 0);
-  assert.throws(() => doctorReferralReward(db, { doctor_id: 'x' }, admin), /doctor_id/);
+  assert.throws(() => doctorReferralReward(db, { doctor_id: 'x' }, admin), /doctor_id|Врач/);
 });
 
 // ─── 2. ПО УСЛУГАМ ───────────────────────────────────────────────────────────
@@ -223,7 +223,7 @@ test('по услугам: «Доля врача» сходится с «Общ�
   const paid = objects(run(db, 'by_services', { paid: 'paid' }));
   assert.equal(sum(paid, 'Доля врача'), 302200);
   assert.ok(!paid.some((o) => o['Оплачено (доля оплаты счёта)'] === 0), 'неоплаченная строка в режиме «Только оплаченные»');
-  assert.throws(() => run(db, 'by_services', { paid: 'maybe' }), /paid/);
+  assert.throws(() => run(db, 'by_services', { paid: 'maybe' }), /paid|Счета/);
 });
 
 test('по услугам: фильтр по группе', () => {
@@ -233,7 +233,7 @@ test('по услугам: фильтр по группе', () => {
   const surg = objects(run(db, 'by_services', { group: 'other' }));
   assert.deepEqual(surg.map((o) => o['Услуга']), ['Операция']);
   assert.equal(objects(run(db, 'by_services', { group: 'all' })).length, 3);
-  assert.throws(() => run(db, 'by_services', { group: 'bogus' }), /group/);
+  assert.throws(() => run(db, 'by_services', { group: 'bogus' }), /group|Группа/);
 });
 
 // ─── 3. ПО ВРАЧАМ ────────────────────────────────────────────────────────────
@@ -396,7 +396,7 @@ test('расход: выдача в отдел, расход на пациент
   assert.equal(patients[0]['Пациент'], 'Азизов А.');
   assert.equal(patients[0]['Движений'], 2);
   assert.equal(sum(patients, 'Израсходовано на пациентов (себестоимость)'), sum(lines, 'Израсходовано на пациентов (себестоимость)'));
-  assert.throws(() => run(db, 'stock_consumption', { by: 'bogus' }), /by must be/);
+  assert.throws(() => run(db, 'stock_consumption', { by: 'bogus' }), /by must be|Разрез/);   // REPORTS_AUDIT_FIX_V1 — по-русски
 });
 
 test('ведомость: начало + приход − выдано − списано ± корректировки = конец; по сегодня сходится с остатком товара', () => {
