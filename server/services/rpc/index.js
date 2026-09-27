@@ -169,10 +169,10 @@ export const RPC = {
   holdings_list:                 (db, args, user) => holdingsList(db, args, user),
   dispense_from_holding:         (db, args, user) => dispenseFromHolding(db, args, user),
   void_holding_dispense:         (db, args, user) => voidHoldingDispense(db, args, user),
+  holding_return:                (db, args, user) => holdingReturn(db, args, user),                 // V3120_FIX — вернуть подотчёт на склад / передать
   outpatients_today:             (db, args, user) => outpatientsToday(db, args, user),
   visit_items:                   (db, args, user) => visitItems(db, args, user),
   import_products_excel:         (db, args, user) => importProductsExcel(db, args, user),           // PROCUREMENT_REDESIGN_V1 — Импорт из Excel
-  holding_return:                (db, args, user) => holdingReturn(db, args, user),                 // V3120_FIX — вернуть подотчёт на склад / передать
   reports_overview:         (db, args, user) => reportsOverview(db, args, user),
   run_report:               (db, args, user) => runReport(db, args, user),
   doctor_tier_positions:    (db, args, user) => doctorTierPositions(db, args, user),   // DOCTOR_TIER_V1 — позиции строк для кабинета врача
@@ -345,9 +345,9 @@ export const RPC = {
   admission_discharge_cancel_request: (db, args, user) => admissionDischargeCancelRequest(db, args, user),
   admission_discharge_finalize:       (db, args, user) => admissionDischargeFinalize(db, args, user),
   admission_discharge_queue:          (db, args, user) => admissionDischargeQueue(db, args, user),
+  admission_prepare_wallet_payment:   (db, args, user) => admissionPrepareWalletPayment(db, args, user),   // V3120_FIX — «оплатить с баланса» перед выпиской
 
   // INPATIENT_FLOW_V1 — где госпитализация на маршруте и что ЭТОТ человек
-  admission_prepare_wallet_payment:   (db, args, user) => admissionPrepareWalletPayment(db, args, user),   // V3120_FIX — «оплатить с баланса» перед выпиской
   // может с ней сделать. Чистое чтение (см. READ_ONLY_RPCS в control/gate.js):
   // матрица прав живёт на сервере, и экранам Задач 2, 3 и 8 её надо спросить, а
   // не пересчитать у себя — вторая копия матрицы разошлась бы с первой.
