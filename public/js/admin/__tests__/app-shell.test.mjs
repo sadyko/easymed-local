@@ -859,6 +859,69 @@ test('BACK_TO_ALLOWED_V1: у администратора «назад» не и
     assert.equal(shell().state.view, 'settings');
 });
 
+// ===========================================================================
+// 11. V3120_FIX — ПЕРЕСЫЛКА РЕШАЕТСЯ ДО ПАНЕЛИ, А НЕ ИЗНУТРИ НЕЁ.
+//
+// #my-department, #mar-sheet и #procurement — адреса-пересылки: своего экрана
+// у них нет, они ведут на чужой. Пересылка стояла ВНУТРИ отрисовки: navigate()
+// уже смонтировал панель под старым адресом, отрисовка звала navigate() на
+// новый — и пустая панель оставалась в кэше. Второй заход по тому же адресу
+// находил её и показывал: белый экран. Инспекция: медсестра, «Мой отдел».
+// ===========================================================================
+test('V3120_FIX: адрес-пересылка не оставляет пустой панели — второй заход не белый', async () => {
+    await perms_setFull();
+    for (const [route, target] of [['my-department', 'departments'], ['mar-sheet', 'admissions'], ['procurement', 'inventory']]) {
+        await go(route);
+        assert.equal(shell().state.view, target, route + ' не переслал на ' + target);
+        assert.equal(panes().some((p) => p.dataset.viewKey === route), false,
+            'под адресом ' + route + ' смонтирована панель — пустая, её и покажет второй заход');
+        await go('patients');
+        await go(route);   // второй заход — тот, что был белым
+        assert.equal(shell().state.view, target, 'второй заход по ' + route + ' не дошёл до ' + target);
+        const visible = panes().filter((p) => p.style.display !== 'none');
+        assert.equal(visible.length, 1);
+        assert.equal(visible[0].dataset.viewKey, target, 'на экране не ' + target);
+    }
+    // Лист назначений с номером госпитализации — в историю болезни, на вкладку листа.
+    await go('mar-sheet', { sub: '13' });
+    assert.equal(shell().state.view, 'case-file');
+    assert.equal(shell().state.payload && shell().state.payload.sub, '13');
+    assert.equal(panes().some((p) => p.dataset.viewKey === 'mar-sheet'), false);
+});
+
+test('V3120_FIX: пересылка не обходит права — закрытый адрес по-прежнему «Нет доступа»', async () => {
+    const perms = await import('../permissions.js');
+    try {
+        perms.setEffectiveFromRole({ name: 'Кассир', permissions: { sections: ['cashier'], levels: { cashier: 'editor' } } });
+        assert.equal(perms.isRouteAllowed('procurement'), false, 'тест подобран неверно');
+        await go('procurement');
+        assert.notEqual(shell().state.view, 'inventory', 'закрытый адрес переслал в склад в обход права');
+    } finally {
+        perms.setFullAccess('Admin');
+    }
+});
+
+test('V3120_FIX: мёртвые облачные адреса ведут на живые экраны', async () => {
+    await perms_setFull();
+    const DEAD = {
+        'cashier-settings': 'settings', 'api-settings': 'settings', 'public-site': 'settings',
+        'doctor-room': 'consultation',
+        'settings:clinic_items': 'inventory', 'settings:cashiers': 'settings',
+        'settings:doctor_prices': 'doctor-pay', 'settings:doctor_referral_bonuses': 'settings',
+        'settings:floors': 'rooms-setup', 'settings:departments': 'departments',
+    };
+    for (const [dead, live] of Object.entries(DEAD)) {
+        await go(dead);
+        assert.equal(shell().state.view, live, '#' + dead + ' не ведёт на ' + live);
+        assert.equal(panes().some((p) => p.dataset.viewKey === dead), false, 'под мёртвым адресом ' + dead + ' смонтирована панель');
+    }
+    // Плиток, ведущих на мёртвые экраны, в хабе настроек нет.
+    const hub = read('public/js/admin/views/settings-hub.js');
+    for (const dead of Object.keys(DEAD)) {
+        assert.equal(hub.includes("'" + dead + "'"), false, 'хаб настроек ведёт на мёртвый адрес ' + dead);
+    }
+});
+
 test('глушим таймеры экранов, чтобы прогон завершался', () => {
     for (const id of appIntervals) clearInterval(id);
     appIntervals.clear();

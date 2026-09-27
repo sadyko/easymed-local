@@ -407,7 +407,52 @@ const LEGACY_ROUTES = {
     // «Общая выручка» не сходилась с сервером, выгрузки операций и закупок
     // падали на несуществующих колонках. Страница удалена, адрес ведёт в хаб.
     reports: { view: 'reports-hub' },
+    // V3120_FIX — облачные экраны, до которых офлайн можно было дойти только
+    // набрав адрес: каждый встречал отказом базы («unknown table», «unknown
+    // column», 404 шлюза). Адрес ведёт туда, где эта работа живёт сегодня, а
+    // если такого места нет — в хаб настроек. Файлы экранов оставлены: их
+    // перенос в офлайн — решение владельца, а не побочный эффект правки.
+    'cashier-settings': { view: 'settings' },          // companies.cashier_shift_mode офлайн нет
+    'api-settings': { view: 'settings' },              // /api/v1/keys — облачный шлюз
+    'public-site': { view: 'settings' },               // /api/v1/public-site — облачный шлюз
+    'doctor-room': { view: 'consultation' },           // прежний кабинет врача → «Мои услуги»
+    'settings:clinic_items': { view: 'inventory' },    // товары офлайн — таблица products в «Закупках»
+    'settings:cashiers': { view: 'settings' },         // таблицы cashiers офлайн нет
+    'settings:doctor_prices': { view: 'doctor-pay' },  // доля врача задаётся в «Зарплате врачей»
+    'settings:doctor_referral_bonuses': { view: 'settings' },   // ставка живёт на категории источника
+    'settings:floors': { view: 'rooms-setup' },        // этажи — в «Помещениях»
+    'settings:departments': { view: 'departments' },   // отделы — своим экраном DEPARTMENTS_V1
 };
+
+// V3120_FIX — АДРЕСА-ПЕРЕСЫЛКИ РЕШАЮТСЯ ДО ПАНЕЛИ.
+//
+// У #my-department, #mar-sheet и #procurement своего экрана нет: они ведут на
+// чужой, и куда именно — зависит от сессии (свой отдел) или от payload (номер
+// госпитализации), поэтому в неподвижную LEGACY_ROUTES они не помещаются.
+// Пересылка стояла в switch отрисовки, то есть ПОСЛЕ того, как navigate()
+// смонтировал панель под старым адресом: панель оставалась пустой и жила в
+// кэше, и второй заход по тому же адресу показывал её — белый экран.
+//
+// Право спрашивается ЗДЕСЬ ЖЕ и тем же isRouteAllowed, что спросила бы
+// отрисовка: закрытый адрес не пересылается, а получает свою панель «Нет
+// доступа», как любой закрытый маршрут.
+function redirectFor(view, payload) {
+    if (view !== 'my-department' && view !== 'mar-sheet' && view !== 'procurement') return null;
+    if (!isRouteAllowed(view)) return null;
+    // MY_STOCK_V1 — «Мой отдел» это карточка отдела, открытая на СВОЁМ отделе.
+    if (view === 'my-department') {
+        const dep = ownDepartmentId();
+        return { view: 'departments', payload: dep ? { sub: String(dep) } : undefined };
+    }
+    // MAR_IN_CABINET_V1 — лист назначений живёт вкладкой истории болезни; без
+    // номера госпитализации вести некуда, кроме раздела «Стационар».
+    if (view === 'mar-sheet') {
+        const sub = (payload && (payload.sub || payload.admissionId)) || null;
+        return sub ? { view: 'case-file', payload: { sub: String(sub), tab: 'orders' } } : { view: 'admissions', payload: undefined };
+    }
+    // WAREHOUSE_NAMES_V1 — «Закупки» офлайн живут в #inventory.
+    return { view: 'inventory', payload: undefined };
+}
 
 function navigate(view, payload, opts = {}) {
     if (!view) return;
@@ -415,6 +460,8 @@ function navigate(view, payload, opts = {}) {
     // that replaced it, not by a blank unknown view.
     const legacy = LEGACY_ROUTES[view];
     if (legacy) { view = legacy.view; if (legacy.sub) payload = { ...(payload || {}), sub: legacy.sub }; }
+    const redirect = redirectFor(view, payload);   // V3120_FIX — до панели, а не изнутри неё
+    if (redirect) return void navigate(redirect.view, redirect.payload, opts);
     // CASE_ROUTE_SUB_V1 — экраны госпитализации (обзор, документы) носят её
     // номер В АДРЕСЕ: '#case-overview/123'. Две вещи разом: (1) перезагрузка
     // возвращает того же пациента, а не «Госпитализация не выбрана»
@@ -1257,7 +1304,8 @@ function renderSidebar() {
     // hidden for the company-less platform super-admin). It used to be a second
     // CTA styled inline with color-mix(); it is now an ordinary nav item, so it
     // inherits the one active treatment instead of inventing a third look.
-    if (isModuleAllowed('public-site') && window.easymed?.state?.user?.company_id) {
+    // V3120_FIX — пока адрес в LEGACY_ROUTES (облачный экран), пункта нет.
+    if (!LEGACY_ROUTES['public-site'] && isModuleAllowed('public-site') && window.easymed?.state?.user?.company_id) {
         const onPS = state.view === 'public-site';
         const navEl = h('div', { class: 'nav nav-list-top' });
         navEl.appendChild(h('button', {
