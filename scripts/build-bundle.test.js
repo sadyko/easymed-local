@@ -15,6 +15,7 @@ import {
   compareVersions,
   tarCommand,
   ALLOWLIST,
+  BUNDLE_EXCLUDES,
 } from './build-bundle.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -119,9 +120,8 @@ test('round trip: build, verify, unpack — included files match, excluded ones 
     assert.ok(fs.existsSync(path.join(dest, 'package.json')));
     assert.ok(fs.existsSync(path.join(dest, 'package-lock.json')));
     assert.ok(fs.existsSync(path.join(dest, 'node_modules', 'dummy-pkg', 'index.js')));
-    // the migration test file DOES ship (allow-list is directory-granularity —
-    // see the comment in build-bundle.mjs); only the six top-level names are filtered.
-    assert.ok(fs.existsSync(path.join(dest, 'server', 'db', 'migrations', '001.test.js')));
+    // V3120_FIX — test files no longer ship (BUNDLE_EXCLUDES in build-bundle.mjs).
+    assert.ok(!fs.existsSync(path.join(dest, 'server', 'db', 'migrations', '001.test.js')));
 
     assert.ok(!fs.existsSync(path.join(dest, 'data')));
     assert.ok(!fs.existsSync(path.join(dest, '.git')));
@@ -748,4 +748,48 @@ test('релизный архив везёт вендоренный набор �
 test('иконки едут потому, что public/ в ALLOWLIST — если это изменится, тест выше врёт', () => {
   assert.ok(ALLOWLIST.includes('public'));
   assert.ok(fs.existsSync(path.join(REPO_ROOT, 'public', 'assets', 'icons', 'coolicons', 'ATTRIBUTION.md')));
+});
+
+// V3120_FIX — what the release must NOT carry from inside the allow-listed
+// folders: tests, test helpers, better-sqlite3's C sources and the prebuilt
+// binaries for operating systems no clinic runs. What the runtime needs (the
+// win32 prebuilds, lib/, package.json) must still be there.
+test('bundle excludes tests, test-helpers, sqlite sources and non-Windows prebuilds — keeps what runtime loads', () => {
+  const src = mkTmp('em-bundle-src-');
+  const out = mkTmp('em-bundle-out-');
+  const dest = mkTmp('em-bundle-unpack-');
+  try {
+    buildSourceTree(src);
+    const put = (rel, body = 'x') => {
+      fs.mkdirSync(path.dirname(path.join(src, rel)), { recursive: true });
+      fs.writeFileSync(path.join(src, rel), body);
+    };
+    put('server/app.test.js');
+    put('server/test-helpers/tmpdir.js');
+    put('public/js/admin/__tests__/a.test.mjs');
+    put('public/js/admin/__tests__/helper.mjs');
+    put('public/js/admin/views/x.test.mjs');
+    put('public/js/admin/views/x.mjs');
+    const bs = 'node_modules/better-sqlite3';
+    for (const f of ['package.json', 'lib/index.js', 'lib/binding.js', 'deps/sqlite3/sqlite3.c', 'src/better_sqlite3.cpp', 'binding.gyp',
+      'prebuilds/win32-x64.node', 'prebuilds/win32-arm64.node', 'prebuilds/linux-x64.node', 'prebuilds/linuxmusl-x64.node', 'prebuilds/darwin-arm64.node']) {
+      put(`${bs}/${f}`);
+    }
+
+    const { tarPath } = buildBundle({ sourceDir: src, outDir: out, version: '2.4.0', notesRu: '', minFrom: '2.0.0', keyPath: KEY_PATH });
+    tarExtract(tarPath, dest);
+    const has = (rel) => fs.existsSync(path.join(dest, rel));
+
+    for (const gone of ['server/app.test.js', 'server/test-helpers', 'public/js/admin/__tests__', 'public/js/admin/views/x.test.mjs',
+      `${bs}/deps`, `${bs}/src`, `${bs}/binding.gyp`, `${bs}/prebuilds/linux-x64.node`, `${bs}/prebuilds/linuxmusl-x64.node`, `${bs}/prebuilds/darwin-arm64.node`]) {
+      assert.ok(!has(gone), `${gone} must not ship`);
+    }
+    for (const kept of ['server/index.js', 'public/js/admin/views/x.mjs', `${bs}/package.json`, `${bs}/lib/index.js`, `${bs}/lib/binding.js`,
+      `${bs}/prebuilds/win32-x64.node`, `${bs}/prebuilds/win32-arm64.node`, 'node_modules/dummy-pkg/index.js']) {
+      assert.ok(has(kept), `${kept} must ship`);
+    }
+    assert.ok(BUNDLE_EXCLUDES.length > 0);
+  } finally {
+    rm(src); rm(out); rm(dest);
+  }
 });

@@ -184,6 +184,29 @@ jobs:
             --key "$KEY_FILE" \
             --out "$OUT_DIR"
 
+      - name: Check the package carries no tests or foreign binaries
+        # V3120_FIX — build-bundle.mjs cuts these out (BUNDLE_EXCLUDES); this
+        # step proves it on the real artifact, so a change to the exclude list
+        # or to tar's pattern rules cannot silently ship ~570 test files, the
+        # test helpers, better-sqlite3's C sources or the darwin/linux binaries
+        # to every clinic again. The win32 prebuild MUST be there — without it
+        # no clinic PC can open its database.
+        run: |
+          TAR_PATH=$(ls "$OUT_DIR"/easymed-*.tar.gz)
+          LIST="$RUNNER_TEMP/bundle-list.txt"
+          tar -tzf "$TAR_PATH" > "$LIST"
+          BAD=$(grep -E '\.test\.(js|mjs)$|(^|/)__tests__/|^server/test-helpers/|^node_modules/better-sqlite3/(deps|src)/|^node_modules/better-sqlite3/prebuilds/(darwin|linux)' "$LIST" | head -20 || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::The release package carries files a clinic must not get (first 20 below). See BUNDLE_EXCLUDES in scripts/build-bundle.mjs."
+            echo "$BAD"
+            exit 1
+          fi
+          if ! grep -qx 'node_modules/better-sqlite3/prebuilds/win32-x64.node' "$LIST"; then
+            echo "::error::The release package has no better-sqlite3 win32-x64 prebuild — no clinic could open its database."
+            exit 1
+          fi
+          echo "OK: $(wc -l < "$LIST") entries, no tests, Windows-only sqlite binary."
+
       - name: Delete the signing key
         # Runs even if the build step above failed — a key must not be left
         # on the runner's disk either way. `shred -u` (ubuntu-latest ships

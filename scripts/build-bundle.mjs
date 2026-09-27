@@ -71,6 +71,33 @@ export const ALLOWLIST = Object.freeze([
   'node_modules',
 ]);
 
+// V3120_FIX — what must NOT ship from inside the allow-listed entries.
+//
+// The allow-list decides which top-level folders ship; this decides what is
+// cut out of them. Measured on 3.11.0: ~570 test files (server + public
+// __tests__), server/test-helpers, better-sqlite3's C sources (deps/ is ~10 MB
+// of amalgamation, src/ the binding's C++) and the prebuilt binaries for every
+// OS a clinic never runs (darwin/linux/musl). A clinic PC is Windows — only
+// the win32 prebuilds are loaded (better-sqlite3/lib/binding.js picks
+// prebuilds/<platform>-<arch>.node), so only they ship.
+//
+// Patterns are plain tar --exclude globs and were checked against BOTH tars
+// this file can use: bsdtar (Windows System32	ar.exe) and GNU tar (the
+// ubuntu runner). test-helpers is never imported by production code —
+// server/test-helpers/no-test-helpers-in-production.test.js guards that — so
+// cutting it cannot break a boot.
+export const BUNDLE_EXCLUDES = Object.freeze([
+  '*.test.js',
+  '*.test.mjs',
+  '__tests__',
+  'server/test-helpers',
+  'node_modules/better-sqlite3/deps',
+  'node_modules/better-sqlite3/src',
+  'node_modules/better-sqlite3/binding.gyp',
+  'node_modules/better-sqlite3/prebuilds/darwin-*',
+  'node_modules/better-sqlite3/prebuilds/linux*',
+]);
+
 /**
  * Which of the allow-listed top-level entries actually exist under sourceDir.
  *
@@ -349,7 +376,7 @@ export function buildBundle({ sourceDir, outDir, version, notesRu, minFrom, keyP
   // Опасные ссылки (петли и выходы за дерево) по-прежнему отклоняются ДО tar —
   // dereference их не легализует, а сделал бы хуже, поэтому проверка выше
   // остаётся на месте и обязана оставаться.
-    execFileSync(tar.exe, [...tar.extraFlags, '-h', '-czf', tarPath, '-C', resolvedSource, ...entries], { stdio: 'pipe' });
+    execFileSync(tar.exe, [...tar.extraFlags, ...BUNDLE_EXCLUDES.map((p) => '--exclude=' + p), '-h', '-czf', tarPath, '-C', resolvedSource, ...entries], { stdio: 'pipe' });
   } catch (e) {
     throw new Error(`tar failed to build the archive: ${e.message}`);
   }
