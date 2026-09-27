@@ -107,7 +107,7 @@ export const REPORT_DEFS = [
         kind:  'doctor_salaries',
         icon:  'Stethoscope',
         title: 'Зарплаты врачей',
-        desc:  'По каждому врачу: оплаченные услуги, связанные с ним, сумма после скидки, средний % и доля врача (гонорар), стационарная доля отдельными колонками и итог к выплате. Только полностью оплаченные счета.',
+        desc:  'По каждому врачу: выполненные услуги, сумма после скидки, средний % и доля врача (гонорар), стационарная доля, вознаграждения за направления, корректировки и итог к выплате — все начисления. Здесь же закрывается месяц оплаты врачей.',
     },
     // INPATIENT_SHARE_V1 — стационарная доля врачей: строка на каждую оплаченную
     // медицинскую строку стационара (койко-дни и медикаменты не входят).
@@ -933,8 +933,67 @@ async function openReportBuilder(rep) {
         }
     }
 
+    // PAY_PERIOD_CLOSE_V1 (владелец, 27.09) — «Закрыть месяц» у «Зарплат врачей»
+    // и «По врачам». Закрывается месяц выбранного периода (период — в пределах
+    // одного месяца), только прошедший; закрытый месяц в отчётах и кабинете
+    // показан по записи, поздние изменения — корректировками. Открыть обратно —
+    // только администратор. Подтверждение — вторым нажатием на той же кнопке.
+    function payPeriodBar() {
+        const bar = h('div', { class: 'pay-period-bar row', role: 'status',
+            style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap', padding: '8px 12px', marginBottom: '10px',
+                     border: '1px solid var(--ink-100)', borderRadius: '10px', background: 'var(--ink-25)', fontSize: '12.5px' } },
+            h('span', { class: 'muted' }, tr('Проверяем, закрыт ли месяц…')));
+        const month = st.from && st.to && String(st.from).slice(0, 7) === String(st.to).slice(0, 7) ? String(st.from).slice(0, 7) : null;
+        const monthLabel = (m) => m.slice(5, 7) + '.' + m.slice(0, 4);
+        const act = (label, icon, confirmLabel, rpc, done) => {
+            let armed = false;
+            const btn = h('button', { class: 'btn btn-sm', type: 'button' }, Icon(icon, { size: 13 }), ' ', label);
+            btn.addEventListener('click', async () => {
+                if (!armed) { armed = true; btn.textContent = confirmLabel; return; }
+                btn.disabled = true;
+                const { error } = await supabase.rpc(rpc, { month });
+                if (error) { toast(trf('Не удалось: {msg}', { msg: error.message || error }), 'fail'); btn.disabled = false; return; }
+                toast(done, 'ok');
+                generate();
+            });
+            return btn;
+        };
+        (async () => {
+            const { data, error } = await supabase.rpc('pay_period_status', {});
+            clear(bar);
+            if (error || !data) { bar.appendChild(h('span', { class: 'muted' }, tr('Состояние месяца не загрузилось.'))); return; }
+            if (!month) {
+                bar.appendChild(h('span', { class: 'muted' }, tr('Закрыть месяц можно, выбрав период в пределах одного месяца.')));
+                return;
+            }
+            const closed = (data.months || []).find((m) => m.month === month);
+            if (closed) {
+                bar.appendChild(h('span', null, Icon('Lock', { size: 13 }), ' ',
+                    trf('Месяц закрыт {date}{who} — суммы заморожены, изменения после закрытия идут корректировками.', {
+                        date: String(closed.closed_at || '').slice(0, 10),
+                        who: closed.closed_by_name ? ' (' + closed.closed_by_name + ')' : '' })));
+                if (data.can_reopen) {
+                    bar.appendChild(act(tr('Открыть месяц'), 'Refresh', trf('Подтвердить: открыть {m}', { m: monthLabel(month) }),
+                        'pay_period_reopen', tr('Месяц открыт')));
+                }
+                return;
+            }
+            if (month >= String(data.current || '')) {
+                bar.appendChild(h('span', { class: 'muted' }, tr('Месяц не закрыт. Текущий месяц закрыть нельзя — он ещё идёт.')));
+                return;
+            }
+            bar.appendChild(h('span', null, tr('Месяц не закрыт: суммы ещё могут меняться (поздние результаты, возвраты, скидки).')));
+            if (data.can_close) {
+                bar.appendChild(act(tr('Закрыть месяц'), 'Lock', trf('Подтвердить: закрыть {m}', { m: monthLabel(month) }),
+                    'pay_period_close', tr('Месяц закрыт')));
+            }
+        })();
+        return bar;
+    }
+
     function paintPreview() {
         clear(previewEl);
+        if (rep.kind === 'doctor_salaries' || rep.kind === 'by_doctors') previewEl.appendChild(payPeriodBar());   // PAY_PERIOD_CLOSE_V1
         paintBuildingSummary(previewEl, st.result);
         if (rep.mode === 'charts') {
             const body = h('div', null);
@@ -945,7 +1004,12 @@ async function openReportBuilder(rep) {
         const columns = (st.result && st.result.columns) || [];
         const rows = (st.result && st.result.rows) || [];
         if (rows.length === 0) {
-            paintPreviewEmpty('Нет данных за выбранный период. Попробуйте расширить диапазон дат или изменить филиалы.');
+            // PAY_PERIOD_CLOSE_V1 — без clear: полоса «Закрыть месяц» над пустым
+            // отчётом остаётся (месяц без начислений тоже закрывают).
+            previewEl.appendChild(h('div', {
+                class: 'muted',
+                style: { padding: '60px 20px', textAlign: 'center', fontSize: '13.5px' },
+            }, 'Нет данных за выбранный период. Попробуйте расширить диапазон дат или изменить филиалы.'));
             return;
         }
         const CAP = 300;

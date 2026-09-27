@@ -478,3 +478,37 @@ test('начисления не пришли (403): видно объяснен�
     if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
   }
 });
+
+// PAY_ALL_EARNINGS_V1 (владелец, 27.09: «fixed — just all earnings») — врач на
+// окладе: плитка «Зарплата» = все начисления сервера (как «Зарплаты врачей» и
+// «По врачам»), а не оклад; оклад карточки — только сведением.
+// PAY_PERIOD_CLOSE_V1 — закрытый месяц назван, корректировка входит в итог.
+test('PAY_ALL_EARNINGS_V1: оклад не подменяет начисления; закрытый месяц и корректировка видны', async () => {
+  const saved = { salary_type: DOC.salary_type, salary_fixed: DOC.salary_fixed };
+  DOC.salary_type = 'fixed';
+  DOC.salary_fixed = 9000000;
+  const base = payResponse();
+  PAY_RESPONSE = { ...base, salary_type: 'fixed', salary_fixed: 9000000,
+    closed_months: [{ month: '2026-08', label: 'август 2026', closed_at: '2026-09-01T10:00:00Z' }],
+    adjustments: { count: 1, fee: -10000, rows: [{ date: dayKeyOf(now), for_month: '2026-08', label: 'Корректировка за август 2026',
+      service: 'Приём', patient: 'Иванов Пётр', invoice: 'INV-1', was: 40000, now: 30000, fee: -10000 }] },
+    total: base.total - 10000 };
+  let root = null;
+  try {
+    root = await openPay();
+    buttonByText(root, /7 дней/).click();
+    await tick(80);
+    const salary = byClass(root, 'dash-kpi').find((t) => textOf(t).includes('Зарплата'));
+    // 80 000 начислений − 10 000 корректировки; оклад 9 000 000 в итог не входит.
+    assert.ok(textOf(salary).includes('70 000'), 'плитка — не начисления сервера: ' + textOf(salary));
+    assert.ok(!textOf(salary).includes('9 000 000 UZS'), 'оклад подменил начисления: ' + textOf(salary));
+    assert.ok(textOf(salary).includes('в итог не входит'), 'оклад не назван сведением: ' + textOf(salary));
+    assert.ok(textOf(root).includes('Месяц закрыт: август 2026'), 'закрытый месяц не назван');
+    const cfg = byClass(root, 'card').find((c) => textOf(c).includes('Как считается зарплата'));
+    assert.ok(/Корректировки/.test(textOf(cfg)) && textOf(cfg).includes('-10 000'), 'нет корректировки: ' + textOf(cfg));
+  } finally {
+    Object.assign(DOC, saved);
+    PAY_RESPONSE = payResponse();
+    if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
+  }
+});
