@@ -930,7 +930,7 @@ function paintCards(el, root) {
             : Tag('Действует', { kind: 'ok', dot: true });
         tbody.appendChild(h('tr', null,
             h('td', { class: 'cell-strong' }, c.sale_number || tr('без оплаты')),
-            h('td', null, c.name || '—', h('div', { class: 'muted', style: { fontSize: '12px' } }, tr(CARD_KIND_RU[c.kind] || c.kind))),
+            h('td', null, c.name || '—', h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr(CARD_KIND_RU[c.kind] || c.kind))),
             h('td', { class: 'num', style: { textAlign: 'right' } }, fmtPrice(c.amount)),
             h('td', { class: 'num', style: { textAlign: 'right', fontWeight: 700 } }, fmtPrice(rest)),
             h('td', null, c.buyer_name || '—'),
@@ -990,7 +990,7 @@ function openSellCardModal(root) {
     // сама карта — на предъявителя: платить ею может любой пациент.
     const searchInp = h('input', { type: 'text', placeholder: tr('Поиск покупателя: ФИО, карта, телефон…'), autocomplete: 'off' });
     const results = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px' } });
-    const chosen = h('div', { style: { fontSize: '13px', marginTop: '6px' } });
+    const chosen = h('div', { style: { fontSize: '13.5px', marginTop: '6px' } });
     const paintChosen = () => {
         clear(chosen);
         if (buyer) chosen.appendChild(h('div', { style: { fontWeight: 700 } }, trf('Покупатель: {name}', { name: buyer.full_name || ('#' + buyer.id) })));
