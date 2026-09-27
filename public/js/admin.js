@@ -2031,7 +2031,7 @@ function renderReportsIndex(container) {
         h('div', { class: 'page-head' },
             h('div', null,
                 h('h1', { class: 'page-title' }, 'Reports & analytics'),
-                h('p',  { class: 'page-subtitle' }, 'Operational KPIs, financial reports, clinical metrics.'),
+                h('p',  { class: 'page-subtitle' }, 'Операционные показатели, финансовые и клинические отчёты.'),   // V3120_FIX
             ),
         ),
         h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px' } }, ...cardEls),
@@ -2309,7 +2309,7 @@ function showLogin() {
             await onAuthed(res.user, { fresh: true });   // ROLE_HOME_V1 — вход → домашний экран роли
         } catch (e) {
             console.error('[login]', e);
-            errEl.textContent = 'Login failed — ' + (e.message || e);
+            errEl.textContent = trf('Не удалось войти: {msg}', { msg: e.message || e });   // V3120_FIX
         } finally {
             btn.disabled = false;
         }
@@ -2451,7 +2451,7 @@ function showSignup() {
                 // Most likely cause when this fails is that migration 046
                 // hasn't been applied yet. Surface that clearly.
                 if (/relation .* does not exist|signup_requests/i.test(error.message || '')) {
-                    errEl.textContent = 'Sign-up requests table is missing — ask the admin to run migration 046.';
+                    errEl.textContent = tr('Заявки на регистрацию не принимаются: в базе нет их таблицы. Обратитесь к администратору.');   // V3120_FIX
                 } else {
                     errEl.textContent = error.message || 'Could not submit your request.';
                 }
@@ -2464,7 +2464,7 @@ function showSignup() {
             btn.textContent = 'Submitted';
         } catch (e) {
             console.error('[signup-request]', e);
-            errEl.textContent = 'Submission failed — ' + (e.message || e);
+            errEl.textContent = trf('Заявка не отправлена: {msg}', { msg: e.message || e });   // V3120_FIX
         } finally {
             // Re-enable only if we didn't succeed.
             if (!okEl.textContent) btn.disabled = false;
@@ -3019,7 +3019,7 @@ boot().catch(e => {
     console.error('[Easy-Med] boot failed:', e);
     setStatus('bootFailed', false);
     clear(viewRoot);
-    viewRoot.appendChild(h('div', { class: 'error-state' }, 'Failed to boot — ', h('code', null, e.message)));
+    viewRoot.appendChild(h('div', { class: 'error-state' }, 'Программа не запустилась: ', h('code', null, e.message)));   // V3120_FIX
 });
 
 

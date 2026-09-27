@@ -243,11 +243,25 @@ const MODULE_VOCAB = [
  * A malformed `modules` (string, null — seen from hand-edited licences,
  * see licence.js) reads as "nothing enabled", never a throw.
  */
+// V3120_FIX — имена модулей, которые продаются, но в перечне выше не стоят
+// (их не предлагают купить с этой карточки, поэтому строкой «не подключён»
+// они не рисуются). Выданный такой модуль раньше показывался сырым ключом —
+// «marketing», «custdev» — посреди русского экрана. Ключ, которого не знает
+// и этот список, по-прежнему печатается как есть: оплаченное не прячется.
+const GRANTED_ONLY_LABELS = Object.freeze({
+  callcenter: 'Телефония (журнал звонков)',
+  marketing: 'Маркетинг',
+  custdev: 'Опросы пациентов (CustDev)',
+});
+
 export function moduleRows(modules) {
   const enabled = Array.isArray(modules) ? modules.filter((k) => typeof k === 'string') : [];
   const rows = MODULE_VOCAB.map(({ key, label }) => ({ key, label, enabled: enabled.includes(key) }));
   for (const key of enabled) {
-    if (!MODULE_VOCAB.some((m) => m.key === key)) rows.push({ key, label: key, enabled: true });
+    if (!MODULE_VOCAB.some((m) => m.key === key)) {
+      const label = Object.prototype.hasOwnProperty.call(GRANTED_ONLY_LABELS, key) ? GRANTED_ONLY_LABELS[key] : key;
+      rows.push({ key, label, enabled: true });
+    }
   }
   return rows;
 }

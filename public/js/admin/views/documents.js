@@ -52,13 +52,13 @@ export const CASE_DOC_TYPE = 'case_doc';
 
 const BRAND_SWATCHES = [
     ['#167873', '#effaf8', 'Teal'],
-    ['#1d4ed8', '#eef2ff', 'Blue'],
-    ['#7c3aed', '#f5f3ff', 'Violet'],
-    ['#0f766e', '#ecfdf5', 'Forest'],
-    ['#0b1418', '#f3f5f7', 'Ink'],
-    ['#b45309', '#fffbeb', 'Amber'],
-    ['#dc2626', '#fef2f2', 'Crimson'],
-    ['#ec4899', '#fdf2f8', 'Pink'],
+    ['#1d4ed8', '#eef2ff', 'Синий'],   // V3120_FIX — названия цветов по-русски (подсказка кнопки)
+    ['#7c3aed', '#f5f3ff', 'Фиолетовый'],
+    ['#0f766e', '#ecfdf5', 'Зелёный'],
+    ['#0b1418', '#f3f5f7', 'Графит'],
+    ['#b45309', '#fffbeb', 'Янтарный'],
+    ['#dc2626', '#fef2f2', 'Красный'],
+    ['#ec4899', '#fdf2f8', 'Розовый'],
 ];
 
 const state = {
@@ -196,7 +196,7 @@ function settingsPanel() {
                 field('Phone', 'phone', { readonly: fromCompany }),
                 field('Email', 'email', { readonly: fromCompany }),
             ),
-            field('Tax / registration ID', 'taxId', { readonly: fromCompany }),
+            field('ИНН / регистрационный номер', 'taxId', { readonly: fromCompany }),
             field('License',               'license', { readonly: fromCompany }),
         ]),
         editorCard('Visual style', 'Sparkles', [
@@ -219,11 +219,11 @@ function settingsPanel() {
             ),
             customColorRow(),
             mini('Typeface',    { mt: 14 }),
-            segmented('fontPair', [['modern','Modern'], ['serif','Serif'], ['clinical','Clinical']]),
+            segmented('fontPair', [['modern','Современный'], ['serif','С засечками'], ['clinical','Clinical']]),   // V3120_FIX
             mini('Density',     { mt: 14 }),
-            segmented('density', [['compact','Compact'], ['comfortable','Default'], ['airy','Airy']]),
+            segmented('density', [['compact','Плотно'], ['comfortable','Обычно'], ['airy','Свободно']]),
             mini('Paper size',  { mt: 14 }),
-            segmented('paperSize', [['A4','A4'], ['A5','A5'], ['Letter','Letter']]),
+            segmented('paperSize', [['A4','A4'], ['A5','A5'], ['Letter','Letter (США)']]),
             // THERMAL_WIDTH_V1 — ролик термопринтера. Отдельно от paperSize:
             // A4-бланк и чек печатаются на разных устройствах, и одна настройка
             // на оба означала бы, что выбор формата бланка ломает кассовый чек.
@@ -232,9 +232,9 @@ function settingsPanel() {
             mini('Language',    { mt: 14 }),
             segmented('language', [['en','EN'], ['ru','RU'], ['uz','UZ']]),
             mini('Corner style', { mt: 14 }),
-            segmented('cornerStyle', [['rounded','Rounded'], ['sharp','Sharp']]),
+            segmented('cornerStyle', [['rounded','Скруглённые'], ['sharp','Прямые']]),
         ]),
-        editorCard('Elements', 'Filter', [
+        editorCard('Элементы', 'Filter', [
             toggle('Watermark',         'showWatermark'),
             state.s.showWatermark ? watermarkOpacityControl() : null,
         ]),

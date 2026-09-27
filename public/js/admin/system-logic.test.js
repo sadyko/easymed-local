@@ -236,9 +236,21 @@ test('moduleRows: the two-key client vocabulary, marked against the granted list
 });
 
 test('moduleRows: a granted key the vocabulary does not know still shows (paid-for must never be invisible)', () => {
-  const rows = moduleRows(['crm', 'marketing']);
-  const extra = rows.find((r) => r.key === 'marketing');
-  assert.deepEqual(extra, { key: 'marketing', label: 'marketing', enabled: true });
+  const rows = moduleRows(['crm', 'future_module']);
+  const extra = rows.find((r) => r.key === 'future_module');
+  assert.deepEqual(extra, { key: 'future_module', label: 'future_module', enabled: true });
+});
+
+// V3120_FIX — выданный продаваемый модуль называется по-русски, а не сырым
+// ключом («marketing», «custdev» стояли посреди русской карточки подписки).
+test('moduleRows: known granted-only modules get a Russian name, not the raw key', () => {
+  const rows = moduleRows(['crm', 'marketing', 'custdev', 'callcenter']);
+  const label = (k) => rows.find((r) => r.key === k).label;
+  assert.equal(label('marketing'), 'Маркетинг');
+  assert.equal(label('custdev'), 'Опросы пациентов (CustDev)');
+  assert.equal(label('callcenter'), 'Телефония (журнал звонков)');
+  // …и не превращаются в строки «не подключён» у клиник, которым не выданы.
+  assert.deepEqual(moduleRows([]).map((r) => r.key), ['crm', 'telegram']);
 });
 
 test('moduleRows: malformed modules (string, null, mixed junk) reads as nothing enabled, never a throw', () => {

@@ -10,7 +10,7 @@
 import { supabase } from '../../supabase.js';
 // REFERRAL_SOURCE_CODE_V1 — подпись партнёра одна на все экраны регистратора.
 import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';
-import { tr } from '../i18n.js';   // I18N_COVERAGE_V1 — sink-обёртки: textContent/confirm не проходят через h()
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — sink-обёртки: textContent/confirm не проходят через h(); V3120_FIX — trf для сообщений с подстановкой
 import { currentUser } from '../data.js';
 import { h, Icon, Tag, StatusTag, statusLabel, toast, clear } from '../ui.js';
 import { canDelete, actorRoleCodes, hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — hasActorRole
@@ -352,7 +352,7 @@ function statusActionsEl(state, onAfterChange) {
                 // calendar block recolor. We deliberately don't call the
                 // heavier `state.onChange` here — no need to refetch when only
                 // the status changed.
-                toast(`Status: ${statusLabel(newStatus)}`);
+                toast(trf('Статус: {status}', { status: statusLabel(newStatus) }));
             } catch (e) {
                 toast(e.message || String(e), 'fail');
             } finally { ev.currentTarget.disabled = false; }
@@ -401,7 +401,7 @@ async function setVisitStatus(state, newStatus) {
         try { state.onStatusChange(newStatus); }
         catch (e) {
             console.error('[visit-modal] onStatusChange failed:', e);
-            toast('Calendar refresh failed: ' + (e.message || e), 'fail');
+            toast(trf('Не удалось обновить календарь: {msg}', { msg: e.message || e }), 'fail');
         }
     }
 }
@@ -639,7 +639,7 @@ function servicesPane(state, onReload) {
                                 .eq('service_id', pick.service.id);
                             if (error) throw error;
                             await onReload();
-                            toast(`Removed: ${pick.service.name}`);
+                            toast(trf('Убрано: {name}', { name: pick.service.name }));
                         },
                     });
                 },
@@ -964,7 +964,7 @@ async function attachRecommendation(state, rec, chosenDoctorId, onReload) {
         unit_price: price,
         total:      price,
     });
-    if (insErr) { toast('Could not attach: ' + insErr.message, 'fail'); return; }
+    if (insErr) { toast(trf('Не удалось добавить: {msg}', { msg: insErr.message }), 'fail'); return; }
     // REPORTS_V2, ревью I3/I5 — рекомендация врача пришла в визит: его
     // внутренний источник становится направившим, если направившего нет ни у
     // визита, ни у пациента (внешний партнёр сохраняет своё). Правило — на
@@ -1069,7 +1069,7 @@ function openDispenseItem(state, onReload) {
             if (ok === 0) throw new Error(fails[0] || 'Dispense failed');
             await activateVisitIfPending(state);
             await onReload();
-            toast(`Dispensed: ${ok}` + (fails.length ? ` · failed: ${fails.length}` : ''));
+            toast(fails.length ? trf('Выдано: {ok} · не выдано: {n}', { ok, n: fails.length }) : trf('Выдано: {ok}', { ok }));
             if (fails.length) toast(fails.join('; '), 'fail');
             toastStockWarnings({ warnings: warned });   // EXPIRY_BALANCE_V1 — после итога, одной плашкой на все строки
         },
@@ -1163,7 +1163,7 @@ export async function generateInvoiceFromSelection(state, selectedIds, onReload)
     });
     if (invErr || !res || !res.invoice) {
         console.error('[generateInvoice] create_invoice_for_visit failed:', invErr);
-        toast('Invoice create failed: ' + ((invErr && invErr.message) || '—'), 'fail');
+        toast(trf('Счёт не создан: {msg}', { msg: (invErr && invErr.message) || '—' }), 'fail');
         return;
     }
     const inv = res.invoice;
@@ -1184,7 +1184,7 @@ export async function generateInvoiceFromSelection(state, selectedIds, onReload)
         action:      'created',
         summary:     `Invoice for ${Number(inv.total_amount || 0).toLocaleString('ru-RU')} UZS · ${lineItems.length} service${lineItems.length === 1 ? '' : 's'}`,
     });
-    toast(`Invoice ${inv.invoice_number || String(inv.id)} created — sent to cashier.`);
+    toast(trf('Счёт {number} создан — передан в кассу.', { number: inv.invoice_number || String(inv.id) }));
     state._selectedForInvoice = new Set();
     // Tell the parent (calendar, patient card) to refresh so the visit
     // status / billed indicator updates immediately.
@@ -1514,7 +1514,7 @@ function openPartialPaymentDialog(state, inv, onReload) {
                 ev.target.disabled = true;
                 try {
                     const amt = Number(amountInput.value);
-                    if (!amt || amt <= 0 || amt > owed) { toast('Amount must be between 0 and ' + owed.toLocaleString('ru-RU'), 'fail'); return; }
+                    if (!amt || amt <= 0 || amt > owed) { toast(trf('Сумма должна быть больше 0 и не больше {max}', { max: owed.toLocaleString('ru-RU') }), 'fail'); return; }
                     // If it covers the whole debt, mark paid. Otherwise partial.
                     await takePayment(state, inv, amt, amt >= owed ? 'paid' : 'partial', onReload, pmDlg.method);
                     overlay.remove();
@@ -1613,7 +1613,7 @@ async function deleteVisit(state) {
     // Safety: refuse if an invoice exists.
     const { data: inv, error: invErr } = await supabase
         .from('invoices').select('id, invoice_number, status').eq('visit_id', state.visit.id).limit(1);
-    if (invErr) { toast('Could not check invoices: ' + invErr.message, 'fail'); return false; }
+    if (invErr) { toast(trf('Не удалось проверить счета: {msg}', { msg: invErr.message }), 'fail'); return false; }
     if (inv && inv.length > 0) {
         const live = inv.find(i => !['void', 'refunded'].includes(i.status));
         if (live) {
@@ -1634,7 +1634,7 @@ async function deleteVisit(state) {
     if (!ok) return false;
 
     const { error } = await supabase.from('visits').delete().eq('id', state.visit.id);
-    if (error) { toast('Delete failed: ' + error.message, 'fail'); return false; }
+    if (error) { toast(trf('Не удалось удалить: {msg}', { msg: error.message }), 'fail'); return false; }
     toast('Visit deleted.');
     return true;
 }
@@ -1975,7 +1975,7 @@ async function loadRecommendations(state) {
 // service-picker-modal instead of a prompt())
 
 async function removeService(id, state, onReload) {
-    if (!confirm('Remove this service from the visit?')) return;
+    if (!confirm(tr('Remove this service from the visit?'))) return;   // V3120_FIX — confirm мимо h()
     // Snapshot the row before deleting so the log has a real name.
     const svc = (state.services || []).find(s => s.id === id);
     const { error } = await supabase.from('visit_services').delete().eq('id', id);

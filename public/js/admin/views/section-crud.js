@@ -144,7 +144,7 @@ export async function renderSectionCrud(container, { sectionKey, onNavigate }) {
     const def = SECTIONS[sectionKey];
     if (!def) {
         clear(container);
-        container.appendChild(h('div', { class: 'empty' }, 'Section not found.'));
+        container.appendChild(h('div', { class: 'empty' }, 'Раздел не найден.'));
         return;
     }
     if (sectionKey === 'services') { try { await clinicFlags(); } catch (e) {} }   // CUSTOM_CLINIC_V4 — warm for header + form
@@ -404,8 +404,9 @@ async function loadRows(container, onNavigate) {
     if (error) {
         clear(listCard);
         listCard.appendChild(h('div', { class: 'error-state' },
-            'Could not load data from Supabase: ', h('code', null, error.message), '. ',
-            'Check the table ', h('code', null, def.table), ' exists.'));
+            // V3120_FIX — было «Could not load data from Supabase… Check the table … exists.»:
+            // по-английски и про облако, которого у офлайн-версии нет.
+            'Не удалось загрузить данные: ', h('code', null, error.message)));
         return;
     }
     state.rows = data || [];
@@ -1280,7 +1281,7 @@ export function openServiceRequestModal() {
 
     const card = h('div', { class: 'modal-card' },
         h('header', { class: 'modal-head' },
-            h('h2', null, 'Request a service'),
+            h('h2', null, 'Запросить услугу'),
             h('button', { class: 'modal-close', onclick: () => overlay.remove() }, '×'),
         ),
         body,
@@ -1425,7 +1426,7 @@ function searchableSelect({ name, value, options, placeholder = 'Search…', onC
         }
         const matches = showAll ? options : options.filter(o => o.label.toLowerCase().includes(t));
         const MAX = 100;   // keep the DOM light for large lists (IKPU codes etc.)
-        if (!matches.length) menu.appendChild(h('div', { class: 'combo-empty' }, 'No matches'));
+        if (!matches.length) menu.appendChild(h('div', { class: 'combo-empty' }, 'Ничего не найдено'));
         else {
             for (const o of matches.slice(0, MAX)) menu.appendChild(optionRow(o.label, o.id, String(hidden.value) === String(o.id)));
             if (matches.length > MAX) menu.appendChild(h('div', { class: 'combo-empty' }, `+${matches.length - MAX} more — keep typing to narrow…`));
@@ -1717,7 +1718,7 @@ function imageFieldEditor(f, v) {
     fileInput.addEventListener('change', async () => {
         const file = fileInput.files && fileInput.files[0];
         if (!file) return;
-        status.textContent = 'Uploading...';
+        status.textContent = tr('Загрузка…');   // V3120_FIX
         try {
             const meta = await uploadFile(bucket, file, tenantPrefix(bucket, f.prefix));
             const stored = isPublic ? (supabase.storage.from(bucket).getPublicUrl(meta.path).data.publicUrl) : meta.path;
@@ -1758,14 +1759,14 @@ function fileListFieldEditor(f, v) {
     }
     function redraw() {
         listEl.innerHTML = '';
-        if (items.length === 0) listEl.appendChild(h('span', { class: 'muted small' }, 'No files yet.'));
+        if (items.length === 0) listEl.appendChild(h('span', { class: 'muted small' }, 'Файлов пока нет.'));
         else items.forEach((it, idx) => listEl.appendChild(rowFor(it, idx)));
     }
     const fileInput = h('input', { type: 'file' });
     fileInput.addEventListener('change', async () => {
         const file = fileInput.files && fileInput.files[0];
         if (!file) return;
-        status.textContent = 'Uploading...';
+        status.textContent = tr('Загрузка…');   // V3120_FIX
         try {
             const meta = await uploadFile(bucket, file, tenantPrefix(bucket, f.prefix));
             items.push(meta); serialize(); redraw();
@@ -1998,7 +1999,7 @@ function doctorServicesEditor(v) {
         ...types.map(t => h('option', { value: String(t.id) }, t.name)),
     );
     const allCb  = checkbox(false);
-    allCb.title = 'Tick every service shown';
+    allCb.title = tr('Отметить все показанные услуги');   // V3120_FIX
     const bulkPct = pctInput('');
 
     const toolbar = h('div', { style: {

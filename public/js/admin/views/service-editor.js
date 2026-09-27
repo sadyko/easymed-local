@@ -116,7 +116,7 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
     // «доступна для онлайн-записи» (только параметр). Включённая онлайн-запись
     // требует названий на русском и узбекском; английское — по желанию.
     const nameUzInp = h('input', { type: 'text', value: (row && row.name_uz) || '', placeholder: 'masalan, Kardiolog qabuli' });
-    const nameEnInp = h('input', { type: 'text', value: (row && row.name_en) || '', placeholder: 'e.g. Cardiologist visit' });
+    const nameEnInp = h('input', { type: 'text', value: (row && row.name_en) || '', placeholder: 'напр. Cardiologist visit' });
     const onlineChk = h('input', { type: 'checkbox' });
     onlineChk.checked = row ? !!row.online_booking : false;
     const typeSel = h('select', null,

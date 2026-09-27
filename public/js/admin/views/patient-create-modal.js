@@ -321,7 +321,7 @@ export function buildPatientFields(container, {
         [['M', 'Мужской'], ['F', 'Женский']],
         () => state.gender,
         (v) => { state.gender = v; },
-        { nowrap: true });
+        { nowrap: true, label: 'Пол' });   // V3120_FIX — подпись группы, а не служебное имя
 
     // Фото стоит ПЛИТКОЙ слева и держит три ряда полей первого раздела: карта
     // пациента узнаётся в лицо, и прятать снимок за раскрытием было неправильно.
@@ -416,7 +416,7 @@ export function buildPatientFields(container, {
         frRow('Резидентство', radioChips('__residency',
             [['resident', 'Резидент РУз'], ['nonresident', 'Нерезидент']],
             () => state.residency,
-            (v) => { state.residency = v; }));
+            (v) => { state.residency = v; }, { label: 'Резидентство' }));
         frRow('Область', geo.regionSel);
         frRow('Адрес', reg('address', h('input', { name: 'address', placeholder: 'ул. Амира Темура 12, кв. 47', value: pv('address') })), { span: true });
         // Ряды окна (у быстрой регистрации это «Код отправителя») идут ПЕРЕД
@@ -468,7 +468,7 @@ export function buildPatientFields(container, {
             field('Резидентство', radioChips('__residency',
                 [['resident', 'Резидент РУз'], ['nonresident', 'Нерезидент']],
                 () => state.residency,
-                (v) => { state.residency = v; }), 2),
+                (v) => { state.residency = v; }, { label: 'Резидентство' }), 2),
             field('Предпочитаемый язык', reg('language', select('language', ['Узбекский', 'Русский', 'Английский', 'Каракалпакский'], pv('language')))),
         ),
         mgGrid(3,
@@ -1028,8 +1028,10 @@ export function categoryOptionByName(sel, name) {
     return '';
 }
 
-export function radioChips(name, options, getter, setter, { nowrap = false } = {}) {
-    const wrap = h('div', { class: 'radio-chips', role: 'radiogroup', 'aria-label': tr(name),
+// V3120_FIX — `label` — подпись группы для скринридера. Прежде ею служило
+// служебное имя (`name`): в aria-label стояло «__residency», «gender».
+export function radioChips(name, options, getter, setter, { nowrap = false, label = null } = {}) {
+    const wrap = h('div', { class: 'radio-chips', role: 'radiogroup', 'aria-label': tr(label || name),
         style: nowrap ? { flexWrap: 'nowrap' } : {} });
     // KEYBOARD_FLOW_V1 — ГРУППА как ОДНА остановка Tab.
     //

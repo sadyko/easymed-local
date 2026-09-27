@@ -123,7 +123,7 @@ async function paint(root) {
     root.appendChild(h('div', { class: 'page-head' },
         h('div', null,
             h('h1', { class: 'page-title' }, 'Сотрудники'),
-            h('p', { class: 'page-subtitle' }, 'Staff roster — employees, doctors, nurses, reception, admin.'),
+            h('p', { class: 'page-subtitle' }, 'Штат клиники — сотрудники, врачи, медсёстры, регистратура, администрация.'),
         ),
         // DATA_TRANSFER_V1 — Шаблон / Импорт / Экспорт for the staff roster.
         // Export omits passwords (the API never returns them), so re-importing

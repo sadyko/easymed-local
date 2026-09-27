@@ -1,9 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<!-- V3120_FIX — страница входа по-русски (lang="ru", translate="no": браузер не
+     переводит русский интерфейс «с английского» — см. admin.html). -->
+<html lang="ru" translate="no">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Easy-Med — Login</title>
+  <title>Easy-Med — Вход</title>
   <link rel="icon" href="favicon.svg">
   <link rel="stylesheet" href="css/local.css">
 </head>
@@ -11,13 +13,13 @@
   <div class="center-screen">
     <form class="card" id="login-form">
       <h1 class="brand">Easy-<span>Med</span></h1>
-      <p class="sub">Clinic management system</p>
-      <label for="username">Username</label>
+      <p class="sub">Система управления клиникой</p>
+      <label for="username">Логин</label>
       <input id="username" name="username" autocomplete="username" required autofocus>
-      <label for="password">Password</label>
+      <label for="password">Пароль</label>
       <input id="password" name="password" type="password" autocomplete="current-password" required>
       <p class="error" id="login-error"></p>
-      <button class="full" type="submit">Sign in</button>
+      <button class="full" type="submit">Войти</button>
     </form>
     <!-- PASSWORD_CHANGE_V2: no minlength — any non-empty password is the clinic's
          rule (server/services/auth.js validPassword); "required" keeps it non-empty. -->
@@ -27,13 +29,13 @@
          by just navigating away. -->
     <form class="card" id="newpass-form" hidden>
       <h1 class="brand">Easy-<span>Med</span></h1>
-      <p class="sub">Set a new password before continuing</p>
-      <label for="new-password">New password</label>
+      <p class="sub">Перед началом работы задайте новый пароль</p>
+      <label for="new-password">Новый пароль</label>
       <input id="new-password" name="new_password" type="password" autocomplete="new-password" required>
-      <label for="new-password2">Repeat new password</label>
+      <label for="new-password2">Повторите новый пароль</label>
       <input id="new-password2" name="new_password2" type="password" autocomplete="new-password" required>
       <p class="error" id="newpass-error"></p>
-      <button class="full" type="submit">Save and continue</button>
+      <button class="full" type="submit">Сохранить и продолжить</button>
     </form>
   </div>
   <script type="module" src="js/login.js"></script>

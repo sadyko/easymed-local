@@ -70,7 +70,7 @@ function mount() {
         h('div', { class: 'page-head' },
             h('div', null,
                 h('h1', { class: 'page-title' }, 'Documents'),
-                h('p', { class: 'page-subtitle' }, 'Printable lab, diagnostic & consultation documents for patients'),
+                h('p', { class: 'page-subtitle' }, 'Печатные документы пациента: анализы, диагностика, консультации'),
             ),
         ),
         refs.bodyEl,
@@ -437,9 +437,9 @@ async function loadAndPaintDocs() {
         paintDocs();
     } catch (e) {
         if (token !== lastFetchToken) return;
-        toast('Failed to load documents: ' + ((e && e.message) || e), 'fail');
+        toast(trf('Не удалось загрузить документы: {msg}', { msg: (e && e.message) || e }), 'fail');
         clear(refs.docsWrap);
-        refs.docsWrap.appendChild(h('div', { class: 'empty' }, 'Failed to load documents.'));
+        refs.docsWrap.appendChild(h('div', { class: 'empty' }, 'Не удалось загрузить документы.'));
     }
 }
 
@@ -450,7 +450,7 @@ async function getBrand() {
         if (error) throw error;
         brandCache = data || {};
     } catch (e) {
-        toast('Failed to load document branding — printed documents will use defaults.', 'fail');
+        toast('Не удалось загрузить оформление бланков — документы напечатаются в оформлении по умолчанию.', 'fail');
         brandCache = {};
     }
     return brandCache;
@@ -462,7 +462,7 @@ async function fetchPatientDocs(patientId) {
         .eq('patient_id', patientId)
         .order('visit_date', { ascending: false });
     if (visitsErr) {
-        toast('Failed to load visits: ' + (visitsErr.message || visitsErr), 'fail');
+        toast(trf('Не удалось загрузить визиты: {msg}', { msg: visitsErr.message || visitsErr }), 'fail');
         return { visits: [], labByVisit: {}, doctorMap: {} };
     }
     const visits = visitsData || [];
@@ -489,7 +489,7 @@ async function fetchLabByVisit(visitIds) {
             .select('id,visit_id,services(name,result_unit,ref_low,ref_high,ref_text,is_lab)')
             .in('visit_id', visitIds);
         if (vsErr) {
-            toast('Failed to load lab orders: ' + (vsErr.message || vsErr), 'fail');
+            toast(trf('Не удалось загрузить назначения анализов: {msg}', { msg: vsErr.message || vsErr }), 'fail');
         } else {
             const labVs = (vsData || []).filter(r => r.services && r.services.is_lab);
             const labVsIds = labVs.map(r => r.id);
@@ -498,7 +498,7 @@ async function fetchLabByVisit(visitIds) {
                     .select('*')
                     .in('visit_service_id', labVsIds);
                 if (lrErr) {
-                    toast('Failed to load lab results: ' + (lrErr.message || lrErr), 'fail');
+                    toast(trf('Не удалось загрузить результаты анализов: {msg}', { msg: lrErr.message || lrErr }), 'fail');
                 } else {
                     // LAB_DOC_ALL_ANALYTES_V1 — панель пишет ПО СТРОКЕ lab_results
                     // НА КАЖДЫЙ ПОКАЗАТЕЛЬ (см. laboratory.js: «Each analyte writes
@@ -558,7 +558,7 @@ function paintDocs() {
     clear(refs.docsWrap);
     const visits = state.docs.visits;
     if (!visits.length) {
-        refs.docsWrap.appendChild(h('div', { class: 'empty' }, 'This patient has no visits yet.'));
+        refs.docsWrap.appendChild(h('div', { class: 'empty' }, 'У пациента пока нет визитов.'));
         return;
     }
     for (const v of visits) refs.docsWrap.appendChild(visitCard(v));
@@ -621,7 +621,7 @@ function openConclusionModal(v) {
     saveBtn.addEventListener('click', async () => {
         saveBtn.disabled = true;
         const prevLabel = saveBtn.textContent;
-        saveBtn.textContent = 'Saving…';
+        saveBtn.textContent = tr('Saving…');   // V3120_FIX — textContent мимо h(): перевод руками
         try {
             const { error } = await supabase.from('visits').update({
                 conclusion:      conclusionTa.value.trim(),
