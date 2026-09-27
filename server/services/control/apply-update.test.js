@@ -8,7 +8,7 @@ import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { applyUpdate } from './updater.js';
 import { readJsonFile } from './checkin.js';
-import { tmpDir as makeTmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
+import { tmpDir as makeTmpDir, closeOnExit, closeRegistered } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 // NODE_NATIVE_UPDATES_V1 — THE TEST THE OLD DESIGN COULD NOT HAVE.
 //
@@ -38,6 +38,7 @@ function tmpDir(prefix) {
   return dir;
 }
 test.after(() => {
+  closeRegistered();   // V3120_FIX — сначала базы, иначе Windows не отдаст папку
   for (const d of tmpDirs) {
     try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
@@ -69,7 +70,7 @@ function install({ oldVersion = '0.1.3', newVersion = '0.1.4', link = true } = {
   }
 
   const dbPath = path.join(dataDir, 'easymed.db');
-  const db = openDb(dbPath);
+  const db = closeOnExit(openDb(dbPath));   // V3120_FIX — открытая база не даёт Windows удалить папку
   migrate(db);
   db.prepare("INSERT INTO users (username, password_hash, full_name, role) VALUES ('marker','x','Marker','admin')").run();
 
@@ -111,7 +112,7 @@ test('a real apply: the junction moves, the database is snapshotted, and the out
   //    two apart (same assertion db/backup.test.js makes, for the same reason).
   const backups = fs.readdirSync(path.join(inst.dataDir, 'backups'));
   assert.deepEqual(backups, ['pre-0.1.4.db'], 'one snapshot, named for the version being installed');
-  const restored = openDb(path.join(inst.dataDir, 'backups', 'pre-0.1.4.db'));
+  const restored = closeOnExit(openDb(path.join(inst.dataDir, 'backups', 'pre-0.1.4.db')));
   assert.equal(restored.prepare("SELECT COUNT(*) n FROM users WHERE username='marker'").get().n, 1);
 
   // 3. The outcome file, through the app's OWN reader — not a bare
