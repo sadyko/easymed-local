@@ -64,7 +64,10 @@ export function openVisitModal({ visit, patient, doctor, service, onChange, onSt
     card.appendChild(body);
 
     // ---- Footer ----
-    const saveBtn = h('button', { class: 'btn btn-primary', onclick: async (ev) => {
+    // LIVE_AUDIT_FIX_V1 — «Save changes» только тем, кому сервер даёт правку
+    // визита (visits.update — admin/registrar/doctor): касса, лаборатория и
+    // медсестра получали отказ на каждое нажатие.
+    const saveBtn = canSaveVisitDetails() ? h('button', { class: 'btn btn-primary', onclick: async (ev) => {
         ev.currentTarget.disabled = true;
         try {
             const ok = await saveDetails(card, state);
@@ -75,7 +78,7 @@ export function openVisitModal({ visit, patient, doctor, service, onChange, onSt
         } finally {
             if (saveBtn.isConnected) ev.currentTarget.disabled = false;
         }
-    } }, Icon('Check', { size: 14 }), ' Save changes');
+    } }, Icon('Check', { size: 14 }), ' Save changes') : null;
 
     // Editor-level roles cannot delete; the button is hidden entirely.
     const deleteBtn = canDelete('patients') ? h('button', {
@@ -1641,7 +1644,12 @@ export function canSetVisitReferral() { return hasActorRole(VISIT_REFERRAL_ROLES
 // visits.update). Всё прочее из формы сюда не уходит — иначе молча выбросится.
 const DETAILS_COLUMNS = ['visit_type', 'visit_kind', 'notes'];
 
+// LIVE_AUDIT_FIX_V1 — зеркало visits.update (server/db/schema-registry.js).
+export const VISIT_DETAILS_ROLES = ['admin', 'registrar', 'doctor'];
+export function canSaveVisitDetails() { return hasActorRole(VISIT_DETAILS_ROLES); }
+
 export async function saveDetails(card, state) {
+    if (!canSaveVisitDetails()) { toast(tr('Визит меняют регистратура, врач или администратор.'), 'fail'); return false; }
     if (!state.visit?.id) { toast('Demo visit — saving disabled.', 'fail'); return false; }
     const form = card.querySelector('.vd-form');
     if (!form) return false;

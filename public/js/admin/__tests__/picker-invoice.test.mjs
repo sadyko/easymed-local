@@ -662,3 +662,27 @@ test('LIVE_AUDIT_FIX_V1: окно визита — консультация ло
   assert.ok(!/if \(!calculator\) onPick\(payload\)/.test(src), 'каскад снова зовёт onPick без перехвата отказа');
   assert.match(src, /if \(!firstErr\) firstErr =/);
 });
+
+test('LIVE_AUDIT_FIX_V1: «Детали» — касса, лаборатория, медсестра не сохраняют визит (кнопки нет, сервер не спрашивается)', async () => {
+  const { REGISTRY } = await import('../../../../server/db/schema-registry.js');
+  assert.deepEqual([...VM.VISIT_DETAILS_ROLES].sort(), [...REGISTRY.visits.write.update.roles].sort());
+  seed();
+  try {
+    for (const role of ['cashier', 'lab', 'nurse']) {
+      window.easymed = { state: { user: { id: 1, role, extra_roles: [] } } };
+      assert.equal(VM.canSaveVisitDetails(), false, role + ': кнопка сохранения показана');
+      RPC.length = 0; DBWRITES.length = 0; TOASTS.length = 0;
+      const st = { visit: DB.prepare('SELECT * FROM visits WHERE id = 40').get(), patient: { id: 3 } };
+      assert.equal(await VM.saveDetails(detailsCard({ notes: 'x' }), st), false);
+      assert.equal(DBWRITES.length + RPC.length, 0, role + ': запрос ушёл на сервер');
+      assert.ok(TOASTS.some((t) => t.startsWith('Визит меняют')), TOASTS.join(' | '));
+    }
+    for (const role of ['registrar', 'doctor', 'admin']) {
+      window.easymed = { state: { user: { id: 1, role, extra_roles: [] } } };
+      assert.equal(VM.canSaveVisitDetails(), true, role);
+    }
+  } finally { delete window.easymed; }
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../views/visit-modal.js', import.meta.url), 'utf8');
+  assert.match(src, /const saveBtn = canSaveVisitDetails\(\) \? h\('button'/);
+});

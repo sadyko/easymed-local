@@ -4,6 +4,7 @@
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
   // LIVE_AUDIT_FIX_V1 (2026-09-27) — строки исправлений живого аудита
+  "Визит меняют регистратура, врач или администратор.": {"en":"A visit is changed by the front desk, a doctor or an administrator.","ru":"Визит меняют регистратура, врач или администратор.","uz":"Tashrifni ro'yxatxona, shifokor yoki administrator o'zgartiradi."},
   "Sample collected": {"en":"Sample collected","ru":"Проба взята","uz":"Namuna olindi"},
   "Results entered": {"en":"Results entered","ru":"Результаты внесены","uz":"Natijalar kiritildi"},
   "Хирургия оформляется на госпитализацию: сначала положите пациента на койку, иначе счёт за операцию окажется вне истории лечения.": {"en":"Surgery is booked under a hospital stay: admit the patient to a bed first, otherwise the surgery bill ends up outside the case history.","ru":"Хирургия оформляется на госпитализацию: сначала положите пациента на койку, иначе счёт за операцию окажется вне истории лечения.","uz":"Jarrohlik statsionarga yotqizish orqali rasmiylashtiriladi: avval bemorni koykaga yotqizing, aks holda operatsiya hisobi kasallik tarixidan tashqarida qoladi."},
