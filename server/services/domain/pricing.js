@@ -28,6 +28,12 @@ export function doctorPriceFor(db, doctorId, serviceId) {
        AND u.service_rates IS NOT NULL AND u.service_rates != ''
        AND json_valid(u.service_rates)
        AND CAST(json_extract(j.value, '$.service_id') AS INTEGER) = ?
+       -- FINAL_MONEY_FIX_V1 (M4) — при дублях услуги в карточке берётся запись
+       -- С ЦЕНОЙ (ставка без цены и кривая отрицательная цена пропускаются) —
+       -- то же правило, что у миграции 175. Прежде бралась первая запись, и
+       -- акт стационара показывал личную цену, а счёт — каталог.
+       AND json_extract(j.value, '$.price') IS NOT NULL
+       AND CAST(json_extract(j.value, '$.price') AS REAL) >= 0
      LIMIT 1
   `).get(doctorId, serviceId);
 

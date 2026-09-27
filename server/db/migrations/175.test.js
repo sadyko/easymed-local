@@ -37,3 +37,28 @@ test('175: акт получает цену счёта — у выставлен
     assert.deepEqual({ ...row(4) }, { unit_price: 1, total: 1 }, 'выставленная строка не меняется');
   } finally { db.close(); }
 });
+
+// FINAL_MONEY_FIX_V1 (M4) — дубли услуги в service_rates карточки врача: одна
+// запись со ставкой, другая с ценой. Миграция 175 брала запись С ЦЕНОЙ, а
+// счёт (doctorPriceFor) — ПЕРВУЮ запись и, не найдя в ней цены, — каталог:
+// акт показывал 700 000, счёт брал 500 000. Правило одно: запись с ценой.
+test('175 и счёт выбирают одну цену при дублях услуги в карточке врача', async () => {
+  const { doctorPriceFor } = await import('../../services/domain/pricing.js');
+  const db = openDb(':memory:');
+  try {
+    migrate(db);
+    db.prepare(`INSERT INTO users (id, username, password_hash, full_name, role, service_rates)
+                VALUES (1,'doc','x','Хирург','doctor',?)`)
+      .run(JSON.stringify([{ service_id: 1, pct: 10 }, { service_id: 1, price: -5 }, { service_id: 1, price: 700000 }]));
+    db.prepare("INSERT INTO patients (id, full_name) VALUES (1,'П')").run();
+    db.prepare("INSERT INTO services (id, name, price, type) VALUES (1,'Операция',500000,'other')").run();
+    db.prepare("INSERT INTO admissions (id, patient_id, status) VALUES (1,1,'active')").run();
+    db.prepare(`INSERT INTO admission_services (id, admission_id, service_id, doctor_id, quantity, unit_price, total, billable)
+                VALUES (1,1,1,1,1,500000,500000,1)`).run();
+    assert.equal(doctorPriceFor(db, 1, 1), 700000, 'счёт: запись с ценой, а не первая');
+    db.exec(SQL);
+    assert.equal(db.prepare('SELECT unit_price FROM admission_services WHERE id = 1').get().unit_price, 700000);
+    const out = createInvoiceForAdmission(db, { admission_id: 1, admission_service_ids: [1] }, { id: 1, role: 'admin' });
+    assert.equal(out.invoice.total_amount, 700000, 'акт и счёт сходятся');
+  } finally { db.close(); }
+});
