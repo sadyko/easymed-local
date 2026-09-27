@@ -170,6 +170,19 @@ Every time, in this order:
 
    Do not tag on top of a suite you have not personally watched pass.
 
+   Two gates in that suite are about the release itself (V3120_FIX):
+   - `server/db/migration-order.test.js` fails if a migration file that the
+     previous `v*` tag did not have is numbered at or below that tag's highest
+     number — clinics would run it out of order. Renumber it above. (It skips on
+     a shallow clone with no tags; the release workflow fetches full history, so
+     it does run there.) `migrate()` also warns at boot about such a file.
+   - `scripts/build-bundle.test.js` pins what the package leaves out:
+     `*.test.js`/`*.test.mjs`, `__tests__/`, `server/test-helpers/`,
+     better-sqlite3's `deps/`, `src/`, `binding.gyp` and its darwin/linux
+     prebuilds (`BUNDLE_EXCLUDES` in `scripts/build-bundle.mjs`). The release
+     workflow re-checks the built archive and refuses to publish one that
+     carries tests or lacks `prebuilds/win32-x64.node`.
+
 2. **Bump the version, in its own commit** — nothing else in that commit:
 
    ```json
@@ -252,12 +265,56 @@ Nothing to do — but here is what is happening, so you can tell whether it work
   has not installed it yet stops being offered it. You do not have to be
   watching. To resume it after a fix, cut a new version; to release the halt by
   hand, use the panel.
-- **If a release goes wrong at a clinic**, the previous version is still on that
-  PC. `recover.cmd`, in the clinic's Easy-Med folder next to `EasyMed.exe`, is a
-  double-click that points it back — no administrator rights, no reinstall, data
-  untouched. Automatic rollback was removed with the PowerShell installer: it
-  health-checked the OLD process on a launcher install and so vouched for
-  switches it had never verified.
+- **«Installed» means the new version answered, not that the junction moved**
+  (V3120_FIX). The old process takes the snapshot, writes
+  `data\update-pending.json` (`{version, from, backup, …}`), repoints `current`
+  and exits 75. The NEW version, after `migrate()` and `listen()`, asks its own
+  `/api/health` (which runs a `SELECT` — a dead database answers 503) and only
+  then writes `update-result.json` with `ok:true` and deletes the pending file
+  (`server/services/control/boot-confirm.js`). A version that crashes at boot
+  never reports success, so the two-failure halt can count it.
+- **A version that crashes at boot is rolled back by the launcher.**
+  `EasyMed.exe` restarts a crashed server, counts exits that happen within
+  120 s of starting, and after three in a row — if `update-pending.json` is still
+  there — runs `install\rollback.mjs auto` once: `current` goes back to the
+  pending record's `from`, the database is restored from the pre-update snapshot
+  (the live one is moved to `data\backups\rollback-<time>.db`, never deleted),
+  `update-result.json` gets `ok:false`, and the previous version is started.
+  Without a pending update it stops looping and shows a Russian message with the
+  log path (`logs\easymed.log` beside `EasyMed.exe` — the launcher now tees the
+  server's output there) and «Нажмите любую клавишу». When the previous version
+  boots it also drops the admin's consent for the rolled-back version
+  (`data\update-rolled-back.json`), so the same release is not re-installed at
+  the next night's window; the admin must approve it again.
+- **If a release goes wrong at a clinic by hand**, the previous version is still
+  on that PC. `recover.cmd`, in the clinic's Easy-Med folder next to
+  `EasyMed.exe`, is a double-click that points it back — no administrator rights,
+  no reinstall. **Rolling back across migrations restores the database too.**
+  Since 3.11 the database itself refuses writes the old code makes (the guard
+  triggers of `160_patient_deposits_guard.sql` and friends), so moving only the
+  junction leaves a cash desk that rejects every payment. `recover.cmd` therefore
+  hands the job to `install\rollback.mjs recover` (found in any installed
+  version; `runtime\node.exe` or Node on PATH runs it), which:
+  1. refuses while Easy-Med is running (the database file is open) — close the
+     window / stop the service first; nothing is changed;
+  2. compares the two versions' migration lists; if they are the same, only the
+     junction moves and the data is untouched;
+  3. otherwise finds the snapshot that matches the target version — a
+     `data\backups\pre-<version>.db` whose own `schema_migrations` contains
+     nothing the target version does not know (read with `node:sqlite`; by name
+     if that is unavailable) — and prints its date and exactly what happens:
+     **everything entered after that moment disappears from the working
+     database**; the current database is kept whole as
+     `data\backups\rollback-<time>.db` so the vendor can carry that data over;
+  4. asks with digits (Cyrillic typed into a code-page-65001 console can arrive
+     empty, and empty is the default): `1` version + database (the default),
+     `2` program only, `0` cancel. With no matching snapshot the default is `0`;
+  5. repoints `current`, writes `ok:false` for the version it left (also
+     replacing an unsent, now stale `ok:true`) and the consent-dropping marker.
+  `recover.cmd` in the clinic root is refreshed by every version that boots
+  (`syncRecoverCmd`), because updates only ever touch `versions\<v>`.
+  `rollback-*.db` files are not listed in «Резервные копии» (same as
+  `replaced-*`): restoring one is a vendor job.
 
 **The failure the halt cannot see.** A release that fails *silently* reports
 nothing, so the counter never moves and the release looks healthy forever. That
