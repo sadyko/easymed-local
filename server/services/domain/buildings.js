@@ -124,12 +124,29 @@ export function originExpr(db, table, alias) {
 
 // Буквы, реально встреченные в данных. Здание, приславшее записи, обязано быть
 // названо, даже если его строки нет в перечне branches.
+//
+// V3120_PERF — вызывается на КАЖДЫЙ отчёт и дашборд. `SELECT DISTINCT` читал
+// шесть больших таблиц целиком (528 мс на трёхлетней базе). Теперь — прыжки по
+// частичному индексу (миграция 210, `… (sync_origin) WHERE sync_origin IS NOT
+// NULL`): MIN, затем «следующая буква больше этой» — по одному поиску в дереве
+// на букву, сколько бы строк ни приехало от соседа. Результат тот же набор
+// различных непустых значений; без индекса (база до 210) запрос остаётся
+// верным, просто медленнее.
+const SKIP_SCAN = (t) => `
+  WITH RECURSIVE l(s) AS (
+    SELECT MIN(sync_origin) FROM ${t} WHERE sync_origin IS NOT NULL
+    UNION ALL
+    SELECT (SELECT MIN(sync_origin) FROM ${t} WHERE sync_origin IS NOT NULL AND sync_origin > l.s)
+      FROM l WHERE l.s IS NOT NULL
+  )
+  SELECT s FROM l WHERE s IS NOT NULL`;
+
 function seenLetters(db) {
   const out = new Set();
   for (const t of ORIGIN_TABLES) {
     if (!hasColumn(db, t, 'sync_origin')) continue;
     try {
-      for (const r of db.prepare(`SELECT DISTINCT sync_origin AS s FROM ${t} WHERE sync_origin IS NOT NULL`).all()) {
+      for (const r of db.prepare(SKIP_SCAN(t)).all()) {
         const l = normalizeLetter(r.s);
         if (l) out.add(l);
       }
