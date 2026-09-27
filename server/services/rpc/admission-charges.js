@@ -18,8 +18,11 @@
 // ними сегодня не стоит ничего: оперблок как источник не заведён, скидка живёт
 // на счёте, а не на строке. Колонка, которая всегда пуста, — это обещание, а
 // не сведения, поэтому её здесь нет.
-import { RpcError } from './inpatient-flow.js';
+import { RpcError, inpatientScope, IN_BED_STATUSES } from './inpatient-flow.js';
 import { hasAnyRole } from '../roles.js';
+// INPATIENT_MONEY_FIX_V1 — строку услуги оценивают ОДИН раз, при заведении, тем
+// же правилом, что и счёт: личная цена врача, иначе каталог.
+import { lineUnitPrice } from '../domain/pricing.js';
 // GRANTS_V1 — права по справочнику (Настройки → Роли); прежние списки ролей — значение по умолчанию.
 import { requireGrant } from '../grants.js';
 import { ACCOMMODATION_NOTE_PREFIX } from '../../../public/js/shared/accommodation-line.js';
@@ -182,19 +185,39 @@ export function admissionServiceAdd(db, args, user) {
   if (!admissionId) throw new RpcError('Госпитализация не выбрана.', 400);
   if (!serviceId) throw new RpcError('Услуга не выбрана.', 400);
 
-  const adm = db.prepare('SELECT id, status FROM admissions WHERE id = ?').get(admissionId);
+  const adm = db.prepare('SELECT id, status, attending_doctor_id, bed_id, ward_id FROM admissions WHERE id = ?').get(admissionId);
   if (!adm) throw new RpcError('Госпитализация не найдена.', 404);
   if (['discharged', 'cancelled'].includes(adm.status)) {
     throw new RpcError('Госпитализация закрыта — услуги в неё больше не начисляют.', 400);
   }
-  const svc = db.prepare('SELECT id, name, price FROM services WHERE id = ?').get(serviceId);
+  // INPATIENT_MONEY_FIX_V1 (D5) — услуги начисляют ЛЕЖАЩЕМУ пациенту. Заявка
+  // ('ordered') — это человек дома: начисленная ей строка висела бы долгом
+  // без койки и без лечения, а при отмене заявки оставалась бы в деньгах.
+  if (!IN_BED_STATUSES.includes(adm.status)) {
+    throw new RpcError('Пациент ещё не размещён на койке — услуги начисляют после размещения.', 400);
+  }
+  const svc = db.prepare('SELECT id, name, price, type FROM services WHERE id = ?').get(serviceId);
   if (!svc) throw new RpcError('Такой услуги в справочнике нет.', 404);
+
+  // INPATIENT_MONEY_FIX_V1 (D5) — ОПЕРАЦИЮ ставит тот, кто ведёт пациента:
+  // лечащий врач, главный врач или администратор. Правило то же, что у
+  // назначений (assertCanPrescribe, inpatient-flow.js): хирургия — это
+  // решение о лечении, и чужой врач отделения его за лечащего не принимает.
+  // 'other' в services.type — это и есть хирургия (миграция 109).
+  if (svc.type === 'other' && inpatientScope(user) !== 'all') {
+    const uid = user && user.id;
+    if (!(hasAnyRole(user, ['doctor']) && uid && adm.attending_doctor_id === uid)) {
+      throw new RpcError('Операцию назначает лечащий врач этого пациента или главный врач.', 403);
+    }
+  }
 
   const qty = Number(a.quantity);
   const quantity = Number.isFinite(qty) && qty > 0 ? qty : 1;
-  const price = Number(svc.price) || 0;
-  const total = round2(price * quantity);
   const doctorId = Number(a.doctor_id) || (user && user.id) || null;
+  // INPATIENT_MONEY_FIX_V1 (D1) — цена исполнителя, а не каталога: раньше акт
+  // показывал 500 000 по каталогу, а счёт брал 700 000 — личную цену врача.
+  const price = Number(lineUnitPrice(db, { service_id: serviceId, doctor_id: doctorId }, { service: svc, tiered: false })) || 0;
+  const total = round2(price * quantity);
   const note = a.note === null || a.note === undefined ? null : String(a.note).trim().slice(0, 300) || null;
   // Время принимается только разбираемое: строка, которую не прочесть, в
   // расписании кабинета хуже пустого поля — её никто не заметит.
@@ -203,11 +226,11 @@ export function admissionServiceAdd(db, args, user) {
   const plannedAt = planned ? planned.toISOString().slice(0, 19) + 'Z' : null;
 
   const info = db.prepare(`
-    INSERT INTO admission_services (admission_id, service_id, doctor_id, quantity, unit_price, total,
+    INSERT INTO admission_services (admission_id, service_id, doctor_id, bed_id, ward_id, quantity, unit_price, total,
                                     status, billable, notes, planned_at, performed_at)
-    VALUES (?,?,?,?,?,?,'added',1,?,?,
+    VALUES (?,?,?,?,?,?,?,?,'added',1,?,?,
             CASE WHEN ? IS NULL THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') ELSE NULL END)
-  `).run(admissionId, serviceId, doctorId, quantity, price, total, note, plannedAt, plannedAt);
+  `).run(admissionId, serviceId, doctorId, adm.bed_id, adm.ward_id, quantity, price, total, note, plannedAt, plannedAt);
 
   return { line: db.prepare('SELECT * FROM admission_services WHERE id = ?').get(info.lastInsertRowid) };
 }

@@ -58,7 +58,8 @@ export function unitPriceFor(db, { doctorId, serviceId, catalogPrice }) {
 //     (unitPriceFor); on a VISIT line the recorded price tier then wins over
 //     both (VISIT_TIER_PRICING_V1, tierUnitPrice). Inpatient lines carry no
 //     tier: pass tiered = false, as buildAdmissionInvoice does;
-//   • a product line (clinic_item_id) — the product's sale price;
+//   • a product line (clinic_item_id) — the price stored on the line at
+//     dispense, in the line's own quantity unit (productLineUnitPrice);
 //   • an ad-hoc line (neither) — the price stored on the line.
 // `service` / `product` are the rows already looked up by the caller (the
 // till throws on a missing one; the pay report reads NULL as "catalog 0").
@@ -68,8 +69,22 @@ export function lineUnitPrice(db, row, { service = null, product = null, tiered 
     const unit = unitPriceFor(db, { doctorId: row.doctor_id, serviceId: row.service_id, catalogPrice });
     return tiered && service ? tierUnitPrice(service, row.price_tier, unit) : unit;
   }
-  if (row.clinic_item_id != null) return product ? product.sale_price : 0;
+  if (row.clinic_item_id != null) return productLineUnitPrice(row, product);
   return row.unit_price;
+}
+
+// INPATIENT_MONEY_FIX_V1 — товарная строка оценивается ОДИН раз, при выдаче, и
+// её цена стоит в той же единице, что и количество. Выдача со склада пишет
+// количество в базовых единицах (коробки) и цену коробки; выдача из подотчёта
+// (holdings.js) — в единицах выдачи (таблетки) и цену таблетки. Пересчёт
+// «цена коробки × число таблеток» давал счёт 400 000 за выдачу на 20 000
+// (аудит 27.09). Поэтому счёт берёт сохранённую цену строки; каталог — только
+// для строки, у которой цены нет вовсе (NULL из старых баз). Писать товарную
+// строку с ценой умеют только RPC выдачи: /api/db её не заводит (реестр).
+export function productLineUnitPrice(row, product) {
+  const stored = row && row.unit_price;
+  if (stored !== null && stored !== undefined && Number.isFinite(Number(stored)) && Number(stored) >= 0) return Number(stored);
+  return product ? product.sale_price : 0;
 }
 
 // PACKAGES_V1, ревью M3 (2026-09-26) — скидка пакета, которую касса даст

@@ -155,13 +155,24 @@ test('ad-hoc line with null service_id keeps its stored price', () => {
   assert.equal(res.invoice.total_amount, 12345);
 });
 
-test('invoice prices a dispensed item from the products catalog', () => {
+// INPATIENT_MONEY_FIX_V1 — a dispensed line is billed at the price stored on
+// it at dispense time, in the line's own quantity unit: the holdings door
+// dispenses TABLETS (sale price of the box / consumption factor), the
+// warehouse door BOXES. Re-pricing «box price × tablet count» billed 400 000
+// for a 20 000 dispense (audit 27.09). The stored price cannot be forged from
+// the browser: /api/db neither inserts clinic_item_id nor updates unit_price
+// on visit_services (schema-registry.js) — only the dispense RPCs write it.
+test('invoice prices a dispensed item at the price stored on the line (per its unit)', async () => {
   const { db, vid } = seed();
-  const prod = db.prepare("INSERT INTO products (name,sale_price,on_hand) VALUES ('Bandage',5000,100)").run().lastInsertRowid;
-  // a dispensed line (service_id null, clinic_item_id set) with a tampered unit_price 1
-  const vs = db.prepare("INSERT INTO visit_services (visit_id, clinic_item_id, quantity, unit_price, total) VALUES (?,?,2,1,2)").run(vid, prod).lastInsertRowid;
+  const prod = db.prepare("INSERT INTO products (name,sale_price,on_hand,consumption_unit,consumption_factor) VALUES ('Tabs',40000,100,'tab',20)").run().lastInsertRowid;
+  // 10 tablets at 2 000 = 20 000 (as dispense_from_holding writes it)
+  const vs = db.prepare("INSERT INTO visit_services (visit_id, clinic_item_id, quantity, unit_price, total) VALUES (?,?,10,2000,20000)").run(vid, prod).lastInsertRowid;
   const res = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs] }, registrar);
-  assert.equal(res.invoice.total_amount, 10000);   // 2 * 5000 catalog price, not the bogus 1
+  assert.equal(res.invoice.total_amount, 20000);
+  const { tableEntry } = await import('../../db/schema-registry.js');
+  const w = tableEntry('visit_services').write;
+  assert.ok(!w.insert.columns.includes('clinic_item_id'), 'the browser cannot create a dispensed line');
+  assert.ok(!w.update.columns.includes('unit_price'), 'the browser cannot re-price a line');
 });
 
 test('invoice rejects a line with zero or negative quantity', () => {

@@ -31,6 +31,9 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // CARD_BALANCE_V1 — подарочная карта / сертификат платит своим остатком.
 import { spendCard, returnToCard, CardError } from '../domain/cards.js';
 import { markRefundRelease } from '../domain/pay-releases.js';   // PAY_REFUND_V1
+// INPATIENT_MONEY_FIX_V1 — строку проживания счёт узнаёт по той же метке, что
+// акт и проживание (одна копия на сервер и браузер).
+import { ACCOMMODATION_NOTE_PREFIX, ACCOMMODATION_LABEL } from '../../../public/js/shared/accommodation-line.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -1134,9 +1137,24 @@ export function buildAdmissionInvoice(db, admissionId, ids, user) {
       }
       // Same precedence as visit billing (the doctor's own price wins), with no
       // visit tier — PAY_BASIS_PERFORMED_V1: one rule, domain/pricing.js.
-      const unit = lineUnitPrice(db, row, { service: svc, product: prod, tiered: false });
       const qty = row.quantity;
       if (!(Number.isFinite(qty) && qty > 0)) throw new RpcError(`invalid quantity on admission_service ${row.id}`, 400);
+      // INPATIENT_MONEY_FIX_V1 — ПРОЖИВАНИЕ идёт в счёт своей СОХРАНЁННОЙ суммой:
+      // в ней уже скидка на койку и ставки всех коек, на которых лежал пациент
+      // (accommodation.js). «Ставка × сутки» здесь теряла скидку (акт 270 000,
+      // счёт 300 000), а пустое имя оставляло в счёте строку без описания —
+      // теперь это «Проживание в палате» (ACCOMMODATION_LABEL): то же имя, что
+      // у строки на экране и в отчётах, и одно на все счета — отчёты
+      // группируют по описанию.
+      if (row.service_id == null && row.clinic_item_id == null
+          && String(row.notes || '').startsWith(ACCOMMODATION_NOTE_PREFIX)) {
+        const line = round2(row.total);
+        return { row, unit: round2(line / qty), qty, line, name: ACCOMMODATION_LABEL };
+      }
+      // Товар — сохранённой ценой строки (productLineUnitPrice), услуга — по
+      // тому же правилу, по которому её оценили при заведении (личная цена
+      // врача, иначе каталог).
+      const unit = lineUnitPrice(db, row, { service: svc, product: prod, tiered: false });
       return { row, unit, qty, line: round2(unit * qty), name };
     });
 

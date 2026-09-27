@@ -27,6 +27,36 @@ import {
 // иначе «лечащий врач» на карточке и «лечащий врач» в назначениях разъедутся.
 import { isDoctorRow } from './inpatient-reviews.js';
 import { saveTitleSheet } from './title-sheet.js';   // TITLE_SHEET_V1 — лист в той же транзакции, что и койка
+// INPATIENT_MONEY_FIX_V1 (D5) — отмена госпитализации возвращает невыставленный
+// товар тем же возвратом, что и кнопка «Убрать» у койки (по источникам).
+import { voidDispensedAdmissionItemCore } from './inventory.js';
+import { ACCOMMODATION_NOTE_PREFIX } from '../../../public/js/shared/accommodation-line.js';
+
+// INPATIENT_MONEY_FIX_V1 (D-minor) — что внесено за проживание: СУММА всех строк
+// проживания (посуточная выставка даёт их несколько), а не первая попавшаяся.
+function billedStayAmount(db, admissionId) {
+  const r = db.prepare(`SELECT COALESCE(SUM(total), 0) AS s FROM admission_services
+                         WHERE admission_id = ? AND notes LIKE '${ACCOMMODATION_NOTE_PREFIX}%'`).get(admissionId);
+  return round2(r ? r.s : 0);
+}
+
+// INPATIENT_MONEY_FIX_V1 (D5) — отменённая госпитализация не оставляет денег.
+//
+// Отмена размещённого пациента ('admitted' / 'examined') раньше оставляла его
+// невыставленные строки — проживание, услуги — висеть в «к оплате» навсегда:
+// закрытой госпитализации их уже не выставишь, и в долг они не попадут.
+// Невыставленное убирается: товар возвращается туда, откуда взят, остальное
+// удаляется. Выставленное (строка в счёте) не трогаем — за ним деньги, и
+// разбирается оно в кассе (отмена счёта / возврат).
+function dropUnbilledLines(db, admissionId, user) {
+  const rows = db.prepare('SELECT id, clinic_item_id FROM admission_services WHERE admission_id = ? AND invoice_item_id IS NULL')
+    .all(admissionId);
+  for (const r of rows) {
+    if (r.clinic_item_id != null) voidDispensedAdmissionItemCore(db, { line_id: r.id }, user);
+    else db.prepare('DELETE FROM admission_services WHERE id = ?').run(r.id);
+  }
+  return rows.length;
+}
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -252,6 +282,7 @@ export function cancelAdmissionRequest(db, args, user) {
 
     db.prepare("UPDATE admissions SET status = 'cancelled', discharged_at = ? WHERE id = ? AND status = 'ordered'")
       .run(nowIso(db), admissionId);
+    dropUnbilledLines(db, admissionId, user);   // INPATIENT_MONEY_FIX_V1 (D5)
     db.prepare(`
       INSERT INTO admission_transfers (admission_id, kind, reason, transferred_at, transferred_by)
       VALUES (?, 'cancel', ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?)
@@ -574,10 +605,7 @@ export function dischargePatient(db, args, user) {
     // могло бы набежать, — иначе карточка утверждала бы «начислено», когда не
     // начислено ничего.
     const invoiceId = null;
-    const billedRow = db.prepare(
-      "SELECT total FROM admission_services WHERE admission_id = ? AND notes LIKE 'ACCOMMODATION%' LIMIT 1"
-    ).get(admissionId);
-    const billedNet = billedRow ? round2(billedRow.total) : 0;
+    const billedNet = billedStayAmount(db, admissionId);   // INPATIENT_MONEY_FIX_V1 (D-minor)
 
     db.prepare(`
       UPDATE admissions
@@ -876,6 +904,7 @@ export function admissionOrderCancel(db, args, user) {
   const run = db.transaction(() => {
     const before = loadAdmission(db, admissionId);
     const res = admissionTransition(db, { admission_id: admissionId, to: 'cancelled', reason }, user);
+    dropUnbilledLines(db, admissionId, user);   // INPATIENT_MONEY_FIX_V1 (D5)
     if (before.bed_id) {
       db.prepare("UPDATE beds SET status='cleaning' WHERE id=?").run(before.bed_id);
     }
@@ -1065,11 +1094,13 @@ const CLOSE_ORDERS_REASON = 'Выписка';
  *      'skipped'/'short', миграция 096). Программа не знает о них цены и не
  *      имеет права её придумать.
  *
- * Невыставленные строки оценены по СОХРАНЁННОМУ total. В счёте они могут
- * подорожать: create_invoice_for_admission берёт цену из каталога и из ставки
- * исполняющего врача (unitPriceFor). Число поэтому — «не меньше чем», и в
- * ЭТУ сторону ошибаться правильно: пугать долгом, которого нет, хуже, чем
- * назвать чуть меньший.
+ * Невыставленные строки оценены по СОХРАНЁННОМУ total — и счёт выставит
+ * ровно его (INPATIENT_MONEY_FIX_V1): строку оценивают один раз при заведении
+ * (услуга — личная цена врача, иначе каталог; товар — цена в единице его
+ * количества; проживание — нетто со скидкой), и create_invoice_for_admission
+ * берёт у товара и проживания сохранённую цену. Акт, этот остаток и счёт
+ * говорят одно число. Разойтись они могут только у услуги, если врачу
+ * поменяли личную цену между заведением строки и счётом.
  *
  * @returns {{balance:number, unbilled:number, invoiced:number, paid:number}}
  */
@@ -1420,9 +1451,6 @@ export function admissionDischargeFinalize(db, args, user) {
     // charge_amount — то, что ДЕЙСТВИТЕЛЬНО внесено за проживание строкой
     // (ACCOMMODATION_AS_SERVICE_V1, тот же запрос, что у прямой выписки): не
     // внесли — не выставили, и карточка не должна утверждать обратное.
-    const billedRow = db.prepare(
-      "SELECT total FROM admission_services WHERE admission_id = ? AND notes LIKE 'ACCOMMODATION%' LIMIT 1"
-    ).get(admissionId);
 
     db.prepare(`
       UPDATE admissions
@@ -1432,7 +1460,7 @@ export function admissionDischargeFinalize(db, args, user) {
              discharge_debt_ack_by = ?, discharge_debt_ack_at = ?
        WHERE id = ?`).run(
       dischargedAt, (user && user.id) || null,
-      billedRow ? round2(billedRow.total) : 0, note,
+      billedStayAmount(db, admissionId), note,   // INPATIENT_MONEY_FIX_V1 (D-minor)
       remaining === 0 ? 1 : 0, billSettled ? 1 : 0, docsGiven ? 1 : 0,
       balance.balance, owes && debtAck ? 1 : 0,
       owes && debtAck ? ((user && user.id) || null) : null,

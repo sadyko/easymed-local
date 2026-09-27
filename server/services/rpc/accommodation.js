@@ -16,6 +16,7 @@
 // Метка строки — общая с браузером: её пишет сервер, а читает список услуг
 // стационара. Одна копия на оба конца (см. shared/accommodation-line.js).
 import { ACCOMMODATION_NOTE_PREFIX } from '../../../public/js/shared/accommodation-line.js';
+import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';   // INPATIENT_MONEY_FIX_V1
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -55,48 +56,130 @@ function invoicedUnits(db, admissionId) {
   return Math.max(0, Number(r && r.n) || 0);
 }
 
-export function computeAccommodation(db, admission) {
-  const ward = admission.ward_id ? db.prepare('SELECT * FROM wards WHERE id = ?').get(admission.ward_id) : null;
-  const bed = admission.bed_id ? db.prepare('SELECT * FROM beds WHERE id = ?').get(admission.bed_id) : null;
+// INPATIENT_MONEY_FIX_V1 — время из базы. Всё, что пишет сервер, лежит как
+// 'YYYY-MM-DDTHH:MM:SSZ'; строка без зоны (SQLite datetime()) — тоже UTC, и
+// читать её местным временем значило бы сдвинуть срок на часовой пояс.
+function parseDbTime(v) {
+  if (!v) return NaN;
+  let s = String(v).trim().replace(' ', 'T');
+  if (!/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+  return Date.parse(s);
+}
 
+// Режим и ставка одной койки: ставка койки с откатом на палату.
+function rateOf(db, wardId, bedId) {
+  const ward = wardId ? db.prepare('SELECT * FROM wards WHERE id = ?').get(wardId) : null;
+  const bed = bedId ? db.prepare('SELECT * FROM beds WHERE id = ?').get(bedId) : null;
   const mode = ward && ward.billing_mode === 'hourly' ? 'hourly' : 'daily';
   const resolved = mode === 'daily'
     ? ((bed && bed.price_per_day > 0) ? bed.price_per_day : (ward ? ward.price_per_day : 0))
     : ((bed && bed.price_per_hour > 0) ? bed.price_per_hour : (ward ? ward.price_per_hour : 0));
   // Отрицательная ставка из кривой настройки не должна давать отрицательный счёт.
   const rate = Number.isFinite(resolved) && resolved > 0 ? resolved : 0;
+  return { ward, bed, mode, rate };
+}
 
-  const nowStr = db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now') t").get().t;
-  let ms = Date.parse(nowStr) - Date.parse(admission.admitted_at);
-  if (!(ms >= 0)) ms = 0;
+const DAY_MS = 86400000;
+const HOUR_MS = 3600000;
+// Сколько единиц набежало к моменту `offset` от поступления. Суточный режим —
+// целые сутки (floor), почасовой — начатый час (ceil). Правило «сутки = целые
+// 24 часа, но не меньше одних за всё пребывание» — вопрос владельцу, оставлен
+// как есть: max(1, floor(часы / 24)).
+const unitsAt = (mode, offset) => (mode === 'daily' ? Math.floor(offset / DAY_MS) : Math.ceil(offset / HOUR_MS));
 
-  let units;
-  if (mode === 'daily') {
-    let days = Math.floor(ms / 86400000) + 1;
-    if (days > 1) days -= 1;
-    units = Math.max(1, days);
-  } else {
-    units = Math.max(1, Math.ceil(ms / 3600000));
+// INPATIENT_MONEY_FIX_V1 (D3) — пребывание, разрезанное переводами.
+//
+// Перевод на другую койку раньше переоценивал ВЕСЬ срок по ставке новой
+// койки: двое суток в общей палате и сутки в VIP выставлялись как трое суток
+// VIP. Теперь срок режется по журналу движения (admission_transfers, kind
+// 'transfer'), и каждый кусок идёт по ставке своей койки. Ставка койки берётся
+// сегодняшняя: истории цен у коек нет.
+function staySegments(db, adm, startMs, endMs) {
+  const moves = db.prepare(`
+    SELECT from_bed_id, to_bed_id, from_ward_id, to_ward_id, transferred_at
+      FROM admission_transfers
+     WHERE admission_id = ? AND kind = 'transfer'
+     ORDER BY transferred_at, id`).all(adm.id);
+  const segs = [];
+  let bed = moves.length ? (moves[0].from_bed_id ?? adm.bed_id) : adm.bed_id;
+  let ward = moves.length ? (moves[0].from_ward_id ?? adm.ward_id) : adm.ward_id;
+  let from = startMs;
+  for (const m of moves) {
+    const t = parseDbTime(m.transferred_at);
+    if (!Number.isFinite(t)) continue;
+    const at = Math.min(Math.max(t, startMs), endMs);
+    if (at > from) segs.push({ bed, ward, from, to: at });
+    bed = m.to_bed_id ?? bed;
+    ward = m.to_ward_id ?? ward;
+    from = Math.max(from, at);
   }
+  segs.push({ bed, ward, from, to: Math.max(from, endMs) });
+  return segs;
+}
 
+export function computeAccommodation(db, admission) {
+  const current = rateOf(db, admission.ward_id, admission.bed_id);
   const storedPct = Number(admission.accommodation_discount_percent);
   const discountPct = Number.isFinite(storedPct) ? Math.min(100, Math.max(0, storedPct)) : 0;
-
-  // Всего пациент пролежал stayUnits, из них billedUnits уже в счетах.
-  // Считаем и выставляем только разницу.
-  const stayUnits = units;
   const billedUnits = invoicedUnits(db, admission.id);
-  const dueUnits = Math.max(0, stayUnits - billedUnits);
 
-  const gross = round2(dueUnits * rate);
+  // INPATIENT_MONEY_FIX_V1 (D4) — за койку платит тот, кто на ней ЛЕЖАЛ.
+  // Заявка без койки ('ordered') и отменённая госпитализация проживания не
+  // дают вовсе (раньше им выставлялись сутки); выписанному срок кончается
+  // выпиской, а не «сейчас» — иначе каждый день после ухода добавлял сутки.
+  const nowMs = Date.parse(db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now') t").get().t);
+  const startMs = parseDbTime(admission.admitted_at);
+  let endMs = null, blocked = null;
+  if (admission.status === 'cancelled') blocked = 'cancelled';
+  else if (IN_BED_STATUSES.includes(admission.status)) endMs = nowMs;
+  else if (admission.status === 'discharged') {
+    const d = parseDbTime(admission.discharged_at);
+    endMs = Number.isFinite(d) ? Math.min(d, nowMs) : nowMs;
+  } else blocked = 'not_in_bed';
+  if (!Number.isFinite(startMs) && !blocked) blocked = 'not_in_bed';
+
+  if (blocked) {
+    return { ward: current.ward, bed: current.bed, mode: current.mode, rate: current.rate, units: 0, stayUnits: 0,
+      billedUnits, gross: 0, net: 0, discountPct, blocked, segments: [] };
+  }
+
+  const segs = staySegments(db, admission, startMs, Math.max(startMs, endMs)).map((s) => {
+    const r = rateOf(db, s.ward, s.bed);
+    const units = Math.max(0, unitsAt(r.mode, s.to - startMs) - unitsAt(r.mode, s.from - startMs));
+    return { ...s, ...r, units };
+  });
+  // «Не меньше одних суток (часа) за всё пребывание» — они идут первой койке.
+  if (segs.reduce((a, s) => a + s.units, 0) < 1) segs[0].units = 1;
+  const stayUnits = segs.reduce((a, s) => a + s.units, 0);
+
+  // Выставленные единицы — самые ранние: счёт идёт за сутками по порядку.
+  let skip = billedUnits;
+  let dueUnits = 0, gross = 0;
+  const dueParts = [];
+  for (const s of segs) {
+    const take = Math.min(s.units, skip);
+    skip -= take;
+    const due = s.units - take;
+    if (due > 0) {
+      dueUnits += due;
+      gross += due * s.rate;
+      dueParts.push({ ward: s.ward, bed: s.bed, mode: s.mode, rate: s.rate, units: due });
+    }
+  }
+  gross = round2(gross);
   if (!Number.isFinite(gross) || gross > MAX_MONEY) {
     throw new RpcError('computed accommodation charge is too large.', 400);
   }
   const net = round2(gross * (1 - discountPct / 100));
+  // Ставка строки: на одной койке — её ставка; на нескольких — средняя, а
+  // разбивка по койкам идёт в описание строки (NOTE).
+  const rate = dueParts.length === 1 ? dueParts[0].rate
+    : (dueUnits > 0 ? round2(gross / dueUnits) : current.rate);
   // units/gross/net — это ОСТАТОК: именно его вносят кнопкой и показывают на
   // экране. Полный срок отдаётся отдельно (stayUnits), чтобы карточка могла
   // сказать «лежит 3 сут., выставлено 1, к оплате 2».
-  return { ward, bed, mode, rate, units: dueUnits, stayUnits, billedUnits, gross, net, discountPct };
+  return { ward: current.ward, bed: current.bed, mode: current.mode, rate, units: dueUnits, stayUnits, billedUnits,
+    gross, net, discountPct, blocked: null, segments: dueParts };
 }
 
 // Проживание узнаётся по notes-метке: своего типа у admission_services нет, а
@@ -116,9 +199,34 @@ function accommodationLine(db, admissionId) {
   ).get(admissionId);
 }
 
-const NOTE = (c) => `${ACCOMMODATION_NOTE_PREFIX} · ${c.ward ? c.ward.name : ''}`
-  + `${c.bed ? ' · койка ' + c.bed.code : ''} · ${c.units} ${c.mode === 'daily' ? 'сут.' : 'ч.'} × ${c.rate}`
-  + `${c.discountPct ? ' · скидка ' + c.discountPct + '%' : ''}`;
+// INPATIENT_MONEY_FIX_V1 (D2) — ВСЕ открытые строки проживания. Их бывает
+// больше одной: отмена счёта в кассе отпускает выставленную строку обратно в
+// невыставленные (cashier.js, ADM_LINE_RELEASE_V1), а рядом уже лежит новая.
+// Прежде обновлялась только последняя — на ВЕСЬ остаток срока, — и отпущенные
+// сутки оказывались в счёте дважды (1 + 3 = 400 000 за трое суток).
+function openAccommodationLines(db, admissionId) {
+  return db.prepare(
+    `SELECT * FROM admission_services
+       WHERE admission_id = ? AND notes LIKE '${ACCOMMODATION_NOTE_PREFIX}%'
+         AND invoice_item_id IS NULL
+       ORDER BY id`
+  ).all(admissionId);
+}
+
+const unitWord = (mode) => (mode === 'daily' ? 'сут.' : 'ч.');
+const NOTE = (c) => {
+  const parts = c.segments && c.segments.length ? c.segments : [{ ward: c.ward, bed: c.bed, mode: c.mode, rate: c.rate, units: c.units }];
+  return `${ACCOMMODATION_NOTE_PREFIX} · `
+    + parts.map((p) => `${p.ward ? p.ward.name : ''}${p.bed ? ' · койка ' + p.bed.code : ''} · ${p.units} ${unitWord(p.mode)} × ${p.rate}`).join(' + ')
+    + `${c.discountPct ? ' · скидка ' + c.discountPct + '%' : ''}`;
+};
+
+// Почему проживание не начисляется — словами для экрана.
+function blockedMessage(c) {
+  if (c.blocked === 'cancelled') return 'Госпитализация отменена — проживание не начисляется.';
+  if (c.blocked === 'not_in_bed') return 'Пациент ещё не размещён на койке — проживание не начисляется.';
+  return null;
+}
 
 // Внести проживание в счёт госпитализации (или обновить уже внесённое).
 //
@@ -134,6 +242,7 @@ export function billAccommodation(db, args, user) {
     if (!adm) throw new RpcError('admission not found.', 400);
 
     const c = computeAccommodation(db, adm);
+    if (c.blocked) throw new RpcError(blockedMessage(c), 400);
     // ACCOMMODATION_DAILY_V1 — весь срок уже оплачен вперёд: вносить нечего.
     // Это не ошибка настройки, а нормальный конец дня, поэтому и текст другой.
     if (c.units <= 0) {
@@ -145,8 +254,14 @@ export function billAccommodation(db, args, user) {
       throw new RpcError('Ставка проживания нулевая — вносить в счёт нечего.', 400);
     }
 
-    // Только открытая строка: выставленную accommodationLine уже не вернёт.
-    const existing = accommodationLine(db, id);
+    // Только открытые строки: выставленные сюда не попадают. Остаток срока
+    // пишется в ОДНУ из них (последнюю), остальные удаляются — они и так
+    // входят в этот остаток, потому что не выставлены (D2).
+    const open = openAccommodationLines(db, id);
+    const existing = open.length ? open[open.length - 1] : null;
+    for (const extra of open.slice(0, -1)) {
+      db.prepare('DELETE FROM admission_services WHERE id = ?').run(extra.id);
+    }
 
     if (existing) {
       db.prepare(`UPDATE admission_services
@@ -218,6 +333,9 @@ export function accommodationState(db, args, user) {
     stay_units: c.stayUnits,
     invoiced: { units: Number(inv.units) || 0, total: round2(inv.total) },
     current: { units: c.units, rate: c.rate, gross: c.gross, net: c.net, mode: c.mode, discount_pct: c.discountPct },
+    // INPATIENT_MONEY_FIX_V1 — почему начислять нечего (заявка без койки,
+    // отменённая госпитализация); null — начисляется как обычно.
+    blocked: c.blocked ? blockedMessage(c) : null,
     billed: line ? { id: line.id, units: line.quantity, rate: line.unit_price, total: line.total, invoiced: !!line.invoice_item_id } : null,
     // Снимок устарел — сумма выросла с момента внесения. Экран показывает это
     // и предлагает обновить: иначе клиника молча недосчитается денег.
