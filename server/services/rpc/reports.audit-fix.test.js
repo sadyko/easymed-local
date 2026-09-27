@@ -304,3 +304,40 @@ test('10: сервер называет складываемые колонки 
     ['Движений', 'Израсходовано на пациентов (себестоимость)']);
   assert.ok(runReport(db, { kind: 'payments', from: FROM, to: TO }, admin).summable_columns.includes('Amount'));
 });
+
+// ─── FINAL_MONEY_FIX_V1 (I5, M2) ─────────────────────────────────────────────
+//
+// I5 — «Рентабельность операций»: гонорар хирурга = сумма − налог − расходники
+// − прибыль. Скрыть один гонорар мало: остальные колонки строки выдают его
+// вычитанием. Роль без «Оплаты врачей» теряет у чужой строки и «Прибыль
+// клиники» с «Маржой», а разрез по зданиям — прибыль.
+// M2 — подытог «По специальностям» с ОТРИЦАТЕЛЬНОЙ долей («-5 000») не
+// попадал под вырезание и называл долю врачей в примечании.
+
+test('I5: без «Оплаты врачей» операции не выдают гонорар вычитанием — прибыль и маржа скрыты', () => {
+  const db = payClinic();
+  const args = { from: FROM, to: TO };
+  const all = objects(runReport(db, { kind: 'surgery_profit', ...args }, admin));
+  assert.ok(all.length > 0);
+  assert.ok(all.every((o) => o['Прибыль клиники'] != null), 'администратор видит прибыль');
+  const sp = runReport(db, { kind: 'surgery_profit', ...args }, KASSA);
+  assert.ok(col(sp, 'Гонорар хирурга').every((v) => v == null));
+  assert.ok(col(sp, 'Прибыль клиники').every((v) => v == null), 'прибыль выдаёт гонорар вычитанием');
+  assert.ok(col(sp, 'Маржа (%)').every((v) => v == null), 'маржа выдаёт гонорар вычитанием');
+  assert.ok((sp.by_building || []).every((b) => !('profit' in b)), 'прибыль утекла разрезом по зданиям');
+  assert.equal(sumCol(sp, 'Сумма по счёту'), sumCol({ columns: Object.keys(all[0]), rows: all.map((o) => Object.values(o)) }, 'Сумма по счёту'));
+  // Хирург свою строку видит целиком.
+  const own = objects(runReport(db, { kind: 'surgery_profit', ...args }, DOC1));
+  assert.ok(own.every((o) => o['Прибыль клиники'] != null && o['Гонорар хирурга'] != null));
+});
+
+test('M2: подытог специальности с отрицательной долей не называет её роли без «Оплаты врачей»', () => {
+  const db = payClinic();
+  // Кривая ставка из старой базы: фикс −5 000 за приём — доля строки −5 000.
+  db.prepare('UPDATE users SET service_rates = ? WHERE id = 2').run(JSON.stringify([{ service_id: 3, fix: -5000 }]));
+  const args = { from: FROM, to: TO };
+  const adm = runReport(db, { kind: 'by_specialty', ...args }, admin);
+  assert.ok(adm.notes.some((n) => /доля врачей -5 000 сум\./.test(n)), 'сценарий: у администратора доля отрицательная');
+  const spec = runReport(db, { kind: 'by_specialty', ...args }, KASSA);
+  assert.ok(!spec.notes.some((n) => /доля врачей/.test(n)), 'подытог называет долю врачей: ' + spec.notes.join(' | '));
+});

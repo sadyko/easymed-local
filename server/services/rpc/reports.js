@@ -3623,10 +3623,13 @@ export function ownerReport(db, args, user) {
 //     смешаны доли разных врачей. «Остаток клинике» скрыт вместе с долей —
 //     иначе доля читалась бы вычитанием.
 // Разрез по зданиям теряет те же суммы, примечание говорит, почему пусто.
-// «Прибыль клиники» и «Маржа» операций остаются: это деньги клиники.
+// FINAL_MONEY_FIX_V1 (I5) — у операции гонорар = сумма − налог − расходники −
+// прибыль: при открытых «Прибыли клиники» и «Марже» скрытый гонорар читался
+// вычитанием. Поэтому у чужой строки скрыты и они, а разрез по зданиям теряет
+// прибыль. Сумма, налог и расходники остаются — это выручка и склад.
 const PAY_MASK = {
   total_revenue:    { cols: ['Ставка врача', 'Доля врача'], by: ['doctor_fee'] },
-  surgery_profit:   { cols: ['Гонорар хирурга'], by: [] },
+  surgery_profit:   { cols: ['Гонорар хирурга', 'Прибыль клиники', 'Маржа (%)'], by: ['profit'] },
   referrals:        { cols: ['Эфф. %', 'Вознаграждение'], by: ['reward'] },
   referrals_detail: { cols: ['Ставка', 'Вознаграждение'], by: ['reward'] },
   by_services:      { cols: ['Доля врача', 'Остаток клинике'], by: ['fee'] },
@@ -3658,7 +3661,9 @@ function maskDoctorPay(db, user, kind, report, rowDoctorIds) {
     return copy;
   });
   let notes = report.notes || [];
-  if (spec.specialtyNotes) notes = notes.map((n) => n.replace(/, доля врачей [\d ]+ сум\./, '.'));
+  // FINAL_MONEY_FIX_V1 (M2) — и отрицательная доля («-5 000»), и любые пробелы
+  // между разрядами (обычный, неразрывный, узкий).
+  if (spec.specialtyNotes) notes = notes.map((n) => n.replace(/, доля врачей [-−]?[\d\s\u00a0\u202f]+ сум\./, '.'));
   return { ...report, rows, by_building, notes: [...notes, PAY_MASK_NOTE] };
 }
 
