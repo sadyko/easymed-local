@@ -27,6 +27,19 @@ import { printableSheet } from './doc-settings.js?v=noqr1';   // must match ever
 import { bookVisit, setVisitStatus as bookStatus } from './visit-booking.js';
 import { lineIdentity, linePerformer, sameLine, isConsultPick } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — консультация из каталога, исполнитель
 
+// BILLING_AUDIT_FIX_V1 (A1) — 'YYYY-MM-DD' местного дня для visit_date.
+// Полное мгновение (с временем) переводится в день клиники браузера; голая
+// дата — уже местный день и остаётся как есть.
+function visitLocalDay(v) {
+    const s = String(v || '');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const d = new Date(s);
+    if (!s || Number.isNaN(d.getTime())) return s.slice(0, 10);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+
 let active = null;
 
 export function openVisitModal({ visit, patient, doctor, service, onChange, onStatusChange } = {}) {
@@ -600,7 +613,10 @@ function servicesPane(state, onReload) {
                         // именно этого приёма: у пациента, записанного в один
                         // день к двум врачам, вторая строка ждёт своей сметы.
                         visitId:        state.visit.id || null,
-                        initialDateIso: (state.visit?.visit_date || state.visit?.date || '').slice(0, 10) || null,
+                        // BILLING_AUDIT_FIX_V1 (A1) — МЕСТНЫЙ день визита, а не первые
+                        // десять символов UTC: визит в 03:00 по Ташкенту хранится как
+                        // вчерашние 22:00Z, и .slice(0, 10) открывал смету на вчера.
+                        initialDateIso: visitLocalDay(state.visit?.visit_date || state.visit?.date) || null,
                         // PACKAGES_V1 (ревью I-3) — «+Пакеты» по дню ЭТОГО визита (местному:
                         // окно переводит время визита в день клиники), а не по сегодня.
                         packageDay:     state.visit?.visit_date || state.visit?.date || null,

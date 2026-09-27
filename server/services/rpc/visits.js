@@ -15,6 +15,8 @@ import { DEFAULT_DURATION_MIN, serviceDurationMinutes, formatHhmm } from './slot
 // CRM_LINKS_V1 — воронка настраивается (миграция 077), поэтому ступени
 // спрашиваются у справочника, а не берутся из зашитого списка.
 import { openStageKeys, scheduledStageKey, noShowStageKey, SEED_NO_SHOW_STAGE } from '../crm/config.js';
+// BILLING_AUDIT_FIX_V1 (A1) — день визита считается в МЕСТНОМ времени клиники.
+import { localDate } from '../domain/day.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400, code = null, params = null) {
@@ -158,7 +160,20 @@ export async function ensureVisit(db, args, user) {
   if (!/^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
     throw new RpcError('date must be ISO (YYYY-MM-DD or full datetime).', 400);
   }
-  const day = rawDate.slice(0, 10);
+  // BILLING_AUDIT_FIX_V1 (A1) — ДЕНЬ ВИЗИТА — МЕСТНЫЙ ДЕНЬ КЛИНИКИ.
+  //
+  // Здесь стояло rawDate.slice(0, 10) — UTC-дата присланного мгновения. Мастер
+  // визита шлёт местную полночь через toISOString(): в UTC+5 это ВЧЕРА 19:00Z,
+  // и сегодняшняя услуга ложилась во вчерашний визит пациента (или заводила
+  // второй визит «сегодня»). То же с записью колл-центра на время до 05:00.
+  // Полное мгновение переводится в местный день той же функцией, что и отчёты
+  // (domain/day.js); голая дата 'YYYY-MM-DD' уже местная и берётся как есть.
+  let day = rawDate.slice(0, 10);
+  if (rawDate.length > 10) {
+    const local = db.prepare(`SELECT ${localDate('?')} AS d`).get(rawDate);
+    if (!local || !local.d) throw new RpcError('date must be ISO (YYYY-MM-DD or full datetime).', 400);
+    day = local.d;
+  }
   const whenIso = rawDate.length > 10 ? rawDate : day + 'T09:00:00Z';
 
   const optInt = (v, name) => {
@@ -307,12 +322,18 @@ export async function ensureVisit(db, args, user) {
   //     проверять нечего. Решает это экран (headTimedLine в visit-wizard.js),
   //     и это единственная честная причина сюда не прийти.
   const book = parseBook(args && args.book);
-  const dayVisit = () => db.prepare(`
+  // BILLING_AUDIT_FIX_V1 (A1, A8) — визит дня ищется по МЕСТНОМУ дню и только
+  // среди СВОИХ визитов: визит, приехавший из соседнего здания (sync_origin),
+  // здесь не правится (BRANCH_MONEY_GUARD_V1 — ни счёт, ни услугу в нём не
+  // выставить), и пациент, побывавший утром в филиале, получал в этом здании
+  // чужой визит, в который ничего нельзя было записать.
+  const DAY_VISIT_SQL = `
     SELECT * FROM visits
-     WHERE patient_id = ? AND substr(visit_date, 1, 10) = ?
+     WHERE patient_id = ? AND ${localDate('visit_date')} = ?
        AND status NOT IN ('cancelled', 'no_show')
-     ORDER BY id LIMIT 1
-  `).get(patientId, day);
+       AND sync_origin IS NULL
+     ORDER BY id LIMIT 1`;
+  const dayVisit = () => db.prepare(DAY_VISIT_SQL).get(patientId, day);
 
   if (book) {
     const durationMin = book.durationMin || bookDuration(db, book.serviceId);
@@ -340,12 +361,7 @@ export async function ensureVisit(db, args, user) {
     // One visit per patient per day: match on the DATE part of visit_date.
     // Cancelled/no-show days don't swallow new bookings — a fresh visit row
     // is opened for the same day instead.
-    const existing = db.prepare(`
-      SELECT * FROM visits
-       WHERE patient_id = ? AND substr(visit_date, 1, 10) = ?
-         AND status NOT IN ('cancelled', 'no_show')
-       ORDER BY id LIMIT 1
-    `).get(patientId, day);
+    const existing = db.prepare(DAY_VISIT_SQL).get(patientId, day);
     if (existing) {
       // Backfill a doctor onto a doctor-less day visit (first assigned wins).
       if (doctorId && existing.doctor_id == null) {
