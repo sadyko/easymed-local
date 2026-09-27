@@ -16,6 +16,10 @@ import {
 } from './booking-mirror.js';
 import { calendarBook } from '../rpc/calendar.js';
 import { localDate } from '../domain/day.js';
+// V3120_FIX — работа над неоплаченной услугой и право «CRM: изменение».
+import { unpaidWorkRefusal } from '../visit-status-guard.js';
+import { grantAllowsOr } from '../grants.js';
+import { sectionLevel } from '../roles.js';
 
 const LINE_KEYS = ['status', 'scheduled_date', 'doctor_id', 'service_id', 'visit_id', 'consultation_type_id'];
 
@@ -59,13 +63,45 @@ function lockedLineRefusal(db, ids, values) {
   return null;
 }
 
+// V3120_FIX — ТАБЛИЦЫ ДОСКИ ЗАЯВОК. Роль с «CRM: просмотр» видит доску, но не
+// ведёт её: не двигает карточки, не берёт их себе, не заводит и не правит
+// строки, задачи и метки. Реестр (schema-registry) пускает запись по ШТАТНОЙ
+// роли (регистратура, колл-центр), а уровень раздела — свойство роли клиники в
+// базе (role_permissions), поэтому проверяется здесь, в единственной двери
+// записи, как и остальные правила этой двери.
+const CRM_TABLES = new Set(['crm_requests', 'crm_request_services', 'crm_tasks', 'crm_request_tags']);
+
+/**
+ * Может ли человек ВЕСТИ заявки. Настроенный ключ «crm» (матрица прав) — его
+ * уровень; не настроенный — прежний уровень раздела (sections/levels): только
+ * явный «просмотр» закрывает запись. Ненастроенная роль пишет, как и раньше, —
+ * по списку ролей реестра.
+ */
+export function canEditCrm(db, user) {
+  try {
+    return grantAllowsOr(db, user, 'crm', 'edit', () => sectionLevel(db, user, 'crm') !== 'viewer');
+  } catch {
+    return true;   // права не прочитались — решает реестр, как до этой проверки
+  }
+}
+
 /** До записи: что заденет правка. { refusal? } — отказ по-русски. */
 export function mirrorBefore(db, meta, body, user) {
   const ctx = { table: meta && meta.table, op: meta && meta.op, ids: [], visits: new Set(), cancelVisits: new Set(), lost: [] };
   if (!meta || meta.op === 'select') return ctx;
+  if (CRM_TABLES.has(meta.table) && !canEditCrm(db, user)) {
+    ctx.refusal = 'Раздел «CRM · Заявки» выдан вам только на просмотр — менять заявки нельзя.';
+    return ctx;
+  }
   try {
     if (meta.table === 'visit_services' && (meta.op === 'update' || meta.op === 'delete')) {
       ctx.ids = targetIds(db, body, user);
+      // V3120_FIX — неоплаченную услугу в работу не берут (visit-status-guard.js).
+      const next = meta.op === 'update' && body && body.values && !Array.isArray(body.values) ? body.values.status : undefined;
+      if (next !== undefined && ctx.ids.length) {
+        const refusal = unpaidWorkRefusal(db, ctx.ids, next);
+        if (refusal) { ctx.refusal = refusal; return ctx; }
+      }
       if (ctx.ids.length) {
         for (const r of db.prepare(`SELECT DISTINCT visit_id FROM visit_services WHERE id IN (${holes(ctx.ids)})`).all(...ctx.ids)) {
           if (r.visit_id) ctx.visits.add(r.visit_id);
