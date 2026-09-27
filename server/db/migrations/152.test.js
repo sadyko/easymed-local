@@ -29,7 +29,8 @@ test('152 выдаёт колл-центру группу «Колл-центр�
     const other = Object.keys(grantsOf(db, 'callcenter')).filter((k) => k.startsWith('reports'));
     assert.deepEqual(other, ['reports.callcenter'], 'оператору выданы другие группы отчётов');
     for (const role of ['admin', 'registrar', 'doctor', 'nurse', 'cashier', 'lab', 'inventory', 'head_doctor', 'senior_nurse']) {
-      assert.ok(!('reports.callcenter' in grantsOf(db, role)), 'ключ выдан роли ' + role);
+      // REPORTS_AUDIT_FIX_V1 — 179 записала кассиру и складу явное «Нет»; «выдан» — это «view».
+      assert.notEqual(grantsOf(db, role)['reports.callcenter'], 'view', 'ключ выдан роли ' + role);
     }
     // Сервер: свой отчёт — да, чужая группа — по-прежнему нет.
     const op = { id: 70, role: 'callcenter', extra_roles: [] };

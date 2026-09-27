@@ -202,3 +202,85 @@ test('15: счёт с полным возвратом в выручку не в�
   const bs = runReport(db, { kind: 'by_services', from: FROM, to: TO }, admin);
   assert.equal(sumCol(bs, 'Сумма'), 100000);
 });
+
+// ─── 8 ───────────────────────────────────────────────────────────────────────
+//
+// Доли врачей — это «Оплата врачей». Роль, которой эта группа закрыта, видит
+// отчёты по выручке, услугам и рефералам, но не чужие доли и не вознаграждение
+// сотрудников за направления; свои — врач видит всегда.
+
+function payClinic() {
+  const db = clinic();
+  const u = db.prepare('INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, service_rates, specialty, custom_role_code) VALUES (?,?,?,?,?,?,?,?,?)');
+  u.run(2, 'doc2', 'x', 'doctor', 'Терапевт Т.', 1, JSON.stringify([{ service_id: 3, pct: 20 }]), 'Терапевт', null);
+  u.run(20, 'kassa', 'x', 'cashier', 'Кассир К.', 0, '', '', 'kassa_rev');
+  db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('kassa_rev', 'Выручка без зарплат', 'cashier')").run();
+  const grants = { reports: 'view', 'reports.revenue': 'view', 'reports.services': 'view', 'reports.referrals': 'view', 'reports.doctor_pay': 'none' };
+  db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)')
+    .run('kassa_rev', JSON.stringify({ sections: ['reports-hub'], levels: {}, grants }));
+  // Врачам — та же выручка, «Оплата врачей» закрыта.
+  const row = db.prepare("SELECT permissions FROM role_permissions WHERE role = 'doctor'").get();
+  const perms = row ? JSON.parse(row.permissions) : { sections: [], levels: {} };
+  perms.grants = { ...(perms.grants || {}), ...grants };
+  db.prepare("UPDATE role_permissions SET permissions = ? WHERE role = 'doctor'").run(JSON.stringify(perms));
+  // Внутренний источник направлений — врач 2, 10 % от приёма.
+  const cat = db.prepare("INSERT INTO referral_source_categories (name, standard_percent, is_internal) VALUES ('Свои врачи', 10, 1)").run().lastInsertRowid;
+  // Источник сотрудника заводится вместе с врачом (мигр. 122) — ставим ему категорию.
+  let src = (db.prepare('SELECT id FROM referral_sources WHERE doctor_id = 2').get() || {}).id;
+  if (src == null) src = db.prepare("INSERT INTO referral_sources (name, doctor_id) VALUES ('Терапевт Т.', 2)").run().lastInsertRowid;
+  db.prepare('UPDATE referral_sources SET category_id = ? WHERE id = ?').run(cat, src);
+  db.prepare("INSERT INTO visits (id, patient_id, visit_date, status, referral_source_id) VALUES (1,1,?,'arrived',?)").run(DAY, src);
+  const inv = invoice(db, { total: 1100000, paid: 1100000, visit: 1 });
+  const i1 = item(db, inv, { service: 1, total: 1000000 });
+  const i2 = item(db, inv, { service: 3, total: 100000 });
+  const vs = db.prepare(`INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, invoice_item_id)
+                         VALUES (1,?,?,1,?,?,'completed',?)`);
+  vs.run(1, 1, 1000000, 1000000, i1);   // хирург (1): 10 % = 100 000
+  vs.run(3, 2, 100000, 100000, i2);     // терапевт (2): 20 % = 20 000
+  return db;
+}
+const KASSA = { id: 20, role: 'cashier', extra_roles: [], custom_role_code: 'kassa_rev' };
+const DOC1 = { id: 1, role: 'doctor', extra_roles: [] };
+const col = (r, name) => objects(r).map((o) => o[name]);
+
+test('8: без «Оплаты врачей» — доли врачей скрыты в выручке, услугах, операциях и рефералах', () => {
+  const db = payClinic();
+  const args = { from: FROM, to: TO };
+  // Администратор видит всё.
+  assert.deepEqual(col(runReport(db, { kind: 'total_revenue', ...args }, admin), 'Доля врача').sort(), [100000, 20000].sort());
+  const tr = runReport(db, { kind: 'total_revenue', ...args }, KASSA);
+  assert.deepEqual(col(tr, 'Доля врача'), [null, null], 'кассир видит доли врачей');
+  assert.deepEqual(col(tr, 'Ставка врача'), [null, null]);
+  assert.ok(tr.notes.some((n) => /Оплата врачей/.test(n)), 'нет примечания, почему колонка пуста');
+  assert.ok(tr.by_building.every((b) => !('doctor_fee' in b)), 'доля врача утекла разрезом по зданиям');
+  assert.equal(sumCol(tr, 'После скидки'), 1100000, 'выручку маскировать нельзя');
+  // Врач видит свою долю, чужую — нет.
+  const own = objects(runReport(db, { kind: 'total_revenue', ...args }, DOC1));
+  assert.equal(own.find((o) => o['Врач'] === 'Хирург Х.')['Доля врача'], 100000);
+  assert.equal(own.find((o) => o['Врач'] === 'Терапевт Т.')['Доля врача'], null);
+
+  const bs = runReport(db, { kind: 'by_services', ...args }, KASSA);
+  assert.ok(col(bs, 'Доля врача').every((v) => v == null));
+  assert.ok(col(bs, 'Остаток клинике').every((v) => v == null), '«Остаток клинике» выдаёт долю вычитанием');
+  const sp = runReport(db, { kind: 'surgery_profit', ...args }, KASSA);
+  assert.ok(col(sp, 'Гонорар хирурга').every((v) => v == null));
+  const spec = runReport(db, { kind: 'by_specialty', ...args }, KASSA);
+  assert.ok(col(spec, 'Доля врача').every((v) => v == null));
+  assert.ok(!spec.notes.some((n) => /доля врачей \d/.test(n)), 'подытог специальности называет долю врачей');
+  // Рефералы: вознаграждение сотруднику-направившему — это его начисление.
+  const ref = objects(runReport(db, { kind: 'referrals', ...args }, KASSA));
+  assert.equal(ref.length, 1);
+  assert.equal(ref[0]['Вознаграждение'], null);
+  assert.equal(objects(runReport(db, { kind: 'referrals', ...args }, admin))[0]['Вознаграждение'], 110000);
+  const det = runReport(db, { kind: 'referrals_detail', ...args }, KASSA);
+  assert.ok(col(det, 'Вознаграждение').every((v) => v == null));
+});
+
+test('8: сводка отчётов (reports_overview) — только группе «Выручка и счета»', async () => {
+  const { reportsOverview } = await import('./reports.js');
+  const db = payClinic();
+  assert.ok(reportsOverview(db, { from: FROM, to: TO }, admin));
+  assert.ok(reportsOverview(db, { from: FROM, to: TO }, KASSA));
+  db.prepare("UPDATE role_permissions SET permissions = json_set(permissions, '$.grants.\"reports.revenue\"', 'none') WHERE role = 'kassa_rev'").run();
+  assert.throws(() => reportsOverview(db, { from: FROM, to: TO }, KASSA), (e) => e.status === 403);
+});

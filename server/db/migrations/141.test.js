@@ -66,8 +66,11 @@ test('141 не расширяет никого, кроме колл-центра
     // достраивает ненастроенные ключи из СТАРЫХ полей (roles-matrix.js
     // grantsFromLegacy), а старая галочка `crm` у роли значила доску заявок, и
     // никогда — право позвонить и прослушать чужой разговор.
+    // REPORTS_AUDIT_FIX_V1 — миграция 179 записала кассиру и складу их группы
+    // отчётов («reports.…»); эта проверка — про ключи телефонии.
+    const notReports = (g) => Object.fromEntries(Object.entries(g).filter(([k]) => !k.startsWith('reports.')));
     for (const role of ['doctor', 'nurse', 'cashier', 'lab', 'inventory', 'head_doctor', 'senior_nurse']) {
-      assert.deepEqual(grantsOf(db, role), allNone(), 'роль осталась открытой для расширения: ' + role);
+      assert.deepEqual(notReports(grantsOf(db, role)), allNone(), 'роль осталась открытой для расширения: ' + role);
     }
     // АДМИНИСТРАТОР — единственный, кого миграция не трогает: его строки на
     // экране «Роли» нет, матрицу ему не запишут, а ворота пускают его отдельным

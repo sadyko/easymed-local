@@ -7,8 +7,9 @@
 // закрывал только пункт меню. run_report и owner_report проверяют группу
 // отчёта (services/report-access.js, карта REPORT_GROUP справочника прав);
 // начисления врача в кабинете — «свои или „Оплата врачей“». Без ворот
-// остаются reports_overview (дашборд), report_buildings и report_freshness —
-// в них нет строк отчётов.
+// остаются report_buildings и report_freshness — в них нет денег.
+// REPORTS_AUDIT_FIX_V1 — reports_overview (деньги за любой период) теперь за
+// группой «Выручка и счета».
 
 import { today, localDate, localMonth, inLocalRange } from '../domain/day.js';
 import { outstandingWhere } from '../domain/money.js';
@@ -119,7 +120,12 @@ export function resolveRange(db, args) {
 // приехать не могли вовсе — значит, выручка соседнего здания в сводке просто
 // отсутствовала. Теперь каждая цифра считается ПО ЗДАНИЯМ, наверх отдаётся
 // итог по клинике, а рядом — разрез, где видно, чей это вклад.
-export function reportsOverview(db, args, _user) {
+export function reportsOverview(db, args, user) {
+  // REPORTS_AUDIT_FIX_V1 — сводка за ЛЮБОЙ период — это деньги клиники
+  // («Собрано», «Долг»): прежде без ворот, любому вошедшему. Экрана, который
+  // её зовёт, в браузере нет (дашборд — dashboard_summary); ворота — группа
+  // «Выручка и счета», как у отчёта владельца.
+  requireReportKind(db, user, 'owner');
   const { from, to } = resolveRange(db, args);
   const ctx = buildingContext(db);
   const all = (sql, ...p) => db.prepare(sql).all(...p);
@@ -1749,6 +1755,7 @@ function totalRevenueReport(db, args, ctx) {
     }),
     total_label: 'После скидки',
     notes: [PERFORMED_NOTE, REVENUE_SHARE_NOTE, REVENUE_EXCLUDED_NOTE, ...(hasUnattributed(ctx, src) ? [UNATTRIBUTED_NOTE] : [])],
+    row_doctor_ids: src.map((r) => r.doctor_id ?? null),   // REPORTS_AUDIT_FIX_V1 — маска долей
   };
 }
 
@@ -2108,6 +2115,7 @@ function referralsReport(db, args, ctx) {
     const b = buckets.get(key) || {
       origin: r.origin, source: r.referral, code: r.referral_code || '',
       kind: r.internal ? 'internal' : 'external', where: r.where,
+      doctor_id: r.beneficiary_doctor_id ?? null,   // REPORTS_AUDIT_FIX_V1 — сотрудник-получатель
       category: r.category_name, mode: r.mode,
       patients: new Set(), count: 0, amount: 0, paid: 0, reward: 0,
     };
@@ -2135,6 +2143,7 @@ function referralsReport(db, args, ctx) {
     by_building: summariseByBuilding(ctx, list, { total: (b) => b.amount, reward: (b) => b.reward }),
     total_label: 'Сумма услуг',
     notes: referralNotes(db, lines),
+    row_doctor_ids: list.map((b) => b.doctor_id),   // REPORTS_AUDIT_FIX_V1
   };
 }
 
@@ -2153,6 +2162,7 @@ function referralsDetailReport(db, args, ctx) {
     by_building: summariseByBuilding(ctx, lines, { total: (r) => r.after_discount, reward: (r) => r.reward }),
     total_label: 'Сумма после скидки',
     notes: referralNotes(db, lines),
+    row_doctor_ids: lines.map((r) => r.beneficiary_doctor_id ?? null),   // REPORTS_AUDIT_FIX_V1
   };
 }
 
@@ -2163,9 +2173,11 @@ function referralsDetailReport(db, args, ctx) {
 export function doctorReferralReward(db, args, user) {
   const doctorId = Number(args && args.doctor_id);
   if (!Number.isInteger(doctorId) || doctorId <= 0) throw new RpcError('Врач не выбран или указан неверно.', 400);
-  // ROLE_REPORTS_SETTINGS_V1 — вознаграждение за направления видит и группа
-  // «Рефералы»: в её отчёте то же вознаграждение каждого врача по строкам.
-  assertCanSeeDoctorPay(db, user, doctorId, ['reports.doctor_pay', 'reports.referrals']);   // ревью I6
+  // REPORTS_AUDIT_FIX_V1 — вознаграждение СОТРУДНИКА за направления — его
+  // начисление: только сам врач и «Оплата врачей». Прежде его видела и группа
+  // «Рефералы», но в её отчёте эти суммы теперь скрыты (maskDoctorPay), и
+  // кабинетный вызов открывал бы то же самое в обход.
+  assertCanSeeDoctorPay(db, user, doctorId);   // ревью I6
   const { from, to } = resolveRange(db, args);
   return doctorReferralRows(db, { from, to, doctorId });
 }
@@ -2712,6 +2724,7 @@ function surgeryProfitReport(db, args, ctx) {
     }),
     total_label: 'Сумма по счетам',
     notes,
+    row_doctor_ids: src.map((r) => r.doctor_id ?? null),   // REPORTS_AUDIT_FIX_V1
   };
 }
 
@@ -3575,6 +3588,62 @@ export function ownerReport(db, args, user) {
   };
 }
 
+// REPORTS_AUDIT_FIX_V1 (27.09) — ДОЛИ ВРАЧЕЙ — ЭТО «ОПЛАТА ВРАЧЕЙ».
+//
+// Группа «Оплата врачей» закрывала «Зарплаты врачей», но те же деньги стояли
+// колонками в отчётах других групп: «Доля врача» и «Ставка врача» в «Общей
+// выручке», «Гонорар хирурга» в «Рентабельности операций», доля врача по
+// услуге и специальности, вознаграждение СОТРУДНИКА за направления в
+// «Рефералах». Кассир, которому выдали «Выручку и счета», читал зарплату
+// каждого врача построчно.
+//
+// Теперь роль БЕЗ «Оплаты врачей» получает эти колонки пустыми («—»):
+//   • построчные отчёты (выручка, операции, рефералы) — у строки чужого врача;
+//     свою строку врач видит всегда, строку без врача-получателя (внешний
+//     партнёр) — все, как прежде;
+//   • сводные (по услугам, по специальностям) — целиком: в сумме по услуге
+//     смешаны доли разных врачей. «Остаток клинике» скрыт вместе с долей —
+//     иначе доля читалась бы вычитанием.
+// Разрез по зданиям теряет те же суммы, примечание говорит, почему пусто.
+// «Прибыль клиники» и «Маржа» операций остаются: это деньги клиники.
+const PAY_MASK = {
+  total_revenue:    { cols: ['Ставка врача', 'Доля врача'], by: ['doctor_fee'] },
+  surgery_profit:   { cols: ['Гонорар хирурга'], by: [] },
+  referrals:        { cols: ['Эфф. %', 'Вознаграждение'], by: ['reward'] },
+  referrals_detail: { cols: ['Ставка', 'Вознаграждение'], by: ['reward'] },
+  by_services:      { cols: ['Доля врача', 'Остаток клинике'], by: ['fee'] },
+  by_specialty:     { cols: ['Доля врача'], by: ['fee'], specialtyNotes: true },
+};
+const PAY_MASK_NOTE = 'Доли и вознаграждения врачей скрыты («—»): их видит роль с группой «Оплата врачей» («Настройки → Роли»). Свои начисления врач видит всегда.';
+
+function maskDoctorPay(db, user, kind, report, rowDoctorIds) {
+  const spec = PAY_MASK[kind];
+  if (!spec || canSeeDoctorPay(db, user, null)) return report;   // «Оплата врачей» (или администратор)
+  const me = user && user.id != null ? Number(user.id) : null;
+  const idx = spec.cols.map((c) => report.columns.indexOf(c)).filter((i) => i >= 0);
+  const perRow = Array.isArray(rowDoctorIds);
+  let masked = 0;
+  const rows = report.rows.map((row, i) => {
+    if (perRow) {
+      const doc = rowDoctorIds[i];
+      if (doc == null || Number(doc) === me) return row;
+    }
+    masked += 1;
+    const copy = row.slice();
+    for (const j of idx) copy[j] = null;
+    return copy;
+  });
+  if (!masked) return report;
+  const by_building = (report.by_building || []).map((b) => {
+    const copy = { ...b };
+    for (const k of spec.by) delete copy[k];
+    return copy;
+  });
+  let notes = report.notes || [];
+  if (spec.specialtyNotes) notes = notes.map((n) => n.replace(/, доля врачей [\d ]+ сум\./, '.'));
+  return { ...report, rows, by_building, notes: [...notes, PAY_MASK_NOTE] };
+}
+
 // PENDING_ITEMS_V1 — отчёты, которые читают СТРОКИ счетов (itemRowsQuery либо
 // прямой запрос по invoice_items). Ровно им и не хватает недоехавших позиций;
 // «Счета» и «Закупки» считают по шапкам и по складу, у них этой дыры нет.
@@ -3594,7 +3663,10 @@ export function runReport(db, args, user) {
   if (ru || Object.prototype.hasOwnProperty.call(legacyReports(db), kind)) requireReportKind(db, user, kind);
   if (ru) {
     const ctx = buildingContext(db);
-    const { columns, rows, by_building, notes, total_label, total_skip_rows } = ru(db, args, ctx);
+    // REPORTS_AUDIT_FIX_V1 — доли врачей без «Оплаты врачей» скрыты; номера
+    // врачей строк (row_doctor_ids) нужны только маске и браузеру не уходят.
+    const { row_doctor_ids: rowDoctorIds, ...raw } = ru(db, args, ctx);
+    const { columns, rows, by_building, notes, total_label, total_skip_rows } = maskDoctorPay(db, user, kind, raw, rowDoctorIds);
     return {
       kind, columns, rows,
       by_building: by_building || [], notes: notes || [], total_label: total_label || '',

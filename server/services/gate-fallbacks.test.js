@@ -242,6 +242,7 @@ test('FALLBACK_FN отвечает то же, что настоящие воро
   const { canSeeAllMovements } = await import('./rpc/stock-log.js');
   const { stockMinimumsList } = await import('./rpc/stock-requests.js');
   const { runReport, payPeriodStatus } = await import('./rpc/reports.js');   // PAY_PERIOD_CLOSE_V1
+  const { grantLevel } = await import('./grants.js');   // REPORTS_AUDIT_FIX_V1
   const db = openDb(':memory:');
   migrate(db);
   const allowed = (fn) => { try { fn(); return true; } catch (e) { if (e && e.status === 403) return false; return true; } };
@@ -264,6 +265,10 @@ test('FALLBACK_FN отвечает то же, что настоящие воро
       };
       for (const [k, want] of Object.entries(real)) {
         const [key, need] = k.split('/');
+        // REPORTS_AUDIT_FIX_V1 — ключ, записанный роли явно (мигр. 179: кассиру
+        // и складу — группы отчётов), решает сам; карта прежних правил — только
+        // для ненастроенных ключей.
+        if (grantLevel(db, u, key) !== null) continue;
         assert.equal(atLeast(fallbackLevel(db, u, key, 'all'), need), want, `${role}: ${k} — карта ${fallbackLevel(db, u, key, 'all')}, ворота ${want ? 'пускают' : 'не пускают'}`);
       }
     }

@@ -471,13 +471,21 @@ test('I6: начисления врача — ему самому, «Отчёт�
   const { db } = seed();
   const args = (id) => ({ doctor_id: id, from: FROM, to: TO });
   const doc1 = { id: 1, role: 'doctor' };
+  // REPORTS_AUDIT_FIX_V1 — роль клиники с «Отчётами», группы не настраивала:
+  // по прежнему правилу видит начисления всех.
+  db.prepare("INSERT INTO custom_roles (code, name, base_role) VALUES ('rep_all', 'Отчёты целиком', 'registrar')").run();
+  db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?, ?)')
+    .run('rep_all', JSON.stringify({ sections: ['reports-hub'], levels: {} }));
+  const repAll = { id: 52, role: 'registrar', custom_role_code: 'rep_all' };
   for (const fn of [doctorReferralReward, doctorInpatientShare]) {
     assert.doesNotThrow(() => fn(db, args(1), doc1), fn.name + ': свои');
     assert.throws(() => fn(db, args(2), doc1), (e) => e.status === 403, fn.name + ': чужие врачу');
     assert.throws(() => fn(db, args(1), { id: 50, role: 'nurse' }), (e) => e.status === 403, fn.name + ': медсестре');
     assert.doesNotThrow(() => fn(db, args(1), admin), fn.name + ': администратору');
-    // Кассиру раздел «Отчёты» открыт штатно (мигр. 013) — он видит всех.
-    assert.doesNotThrow(() => fn(db, args(1), { id: 51, role: 'cashier' }), fn.name + ': «Отчётам»');
+    // REPORTS_AUDIT_FIX_V1 — штатному кассиру миграция 179 записала группы
+    // отчётов явно: «Оплата врачей» — «Нет», чужих начислений он не видит.
+    assert.throws(() => fn(db, args(1), { id: 51, role: 'cashier' }), (e) => e.status === 403, fn.name + ': штатному кассиру');
+    assert.doesNotThrow(() => fn(db, args(1), repAll), fn.name + ': «Отчётам» (роль без настроек групп)');
     // Врач, которому клиника открыла «Отчёты», — тоже.
     db.prepare("UPDATE role_permissions SET permissions = json_set(permissions, '$.sections', json('[\"patients\",\"reports-hub\"]')) WHERE role = 'doctor'").run();
     assert.doesNotThrow(() => fn(db, args(2), doc1), fn.name + ': врачу с «Отчётами»');
