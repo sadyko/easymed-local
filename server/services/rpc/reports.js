@@ -77,6 +77,12 @@ function round2(n) {
   return Math.round(n * 100) / 100;
 }
 
+// REPORTS_AUDIT_FIX_V1 — сравнение по-русски ОДНИМ Collator на модуль:
+// localeCompare(…, 'ru') на каждой паре строк заново разбирал локаль, и
+// сортировка детализации на тысячи строк стоила секунды.
+const RU_COLLATOR = new Intl.Collator('ru');
+const ruCompare = (a, b) => RU_COLLATOR.compare(String(a || ''), String(b || ''));
+
 // Accepts a 'YYYY-MM-DD'-ish string (also tolerates a full timestamp, since
 // only the date portion is ever used in a date(col) BETWEEN comparison).
 // Anything else is rejected so a bad range never silently matches nothing
@@ -207,7 +213,9 @@ function legacyReports(db) {
         JOIN invoices i ON i.id = p.invoice_id
         JOIN patients pt ON pt.id = i.patient_id
         LEFT JOIN users u ON u.id = p.cashier_id
-       WHERE ${inLocalRange('p.paid_at')}${bf.clause}
+       -- REPORTS_AUDIT_FIX_V1 — оплата кошельком / картой — не поступление
+       -- (DEPOSIT_REVENUE_V1): деньги пришли раньше, в день депозита.
+       WHERE ${inLocalRange('p.paid_at')} AND p.${INFLOW_SQL}${bf.clause}
        ORDER BY p.paid_at
     `,
     row: (r) => [r.date, r.patient, r.invoice, round2(r.amount), r.method, r.cashier || ''],
@@ -237,12 +245,14 @@ function legacyReports(db) {
     sql: (bf) => `
       SELECT s.name AS service,
              SUM(ii.quantity) AS qty,
-             SUM(ii.total) AS revenue,
+             SUM(ii.total - (${ITEM_DISCOUNT_SQL})) AS revenue,
              ${originExpr(db, 'invoices', 'i')} AS origin
         FROM invoice_items ii
         JOIN invoices i ON i.id = ii.invoice_id
         JOIN services s ON s.id = ii.service_id
-       WHERE ${inLocalRange('i.created_at')}${bf.clause}
+       -- REPORTS_AUDIT_FIX_V1 — те же правила, что «По услугам»: без отменённых
+       -- и возвращённых счетов, без депозита, выручка — после скидки.
+       WHERE ${inLocalRange('i.created_at')} AND ${REVENUE_INVOICE_SQL('i')} AND ${NOT_DEPOSIT_INVOICE_SQL}${bf.clause}
        GROUP BY origin, s.id, s.name
        ORDER BY revenue DESC
     `,
@@ -732,9 +742,26 @@ const LINE_PERFORMED_SQL = `CASE
 // своей строкой при погашении. Иначе одна услуга считалась бы дважды.
 export const NOT_DEPOSIT_INVOICE_SQL = "COALESCE(i.invoice_number, '') NOT LIKE 'DEP-%' AND COALESCE(i.invoice_number, '') NOT LIKE 'CARD-%'";
 
+// REPORTS_AUDIT_FIX_V1 (27.09) — ОТМЕНЁННЫЙ И ВОЗВРАЩЁННЫЙ СЧЁТ — НЕ ВЫРУЧКА.
+//
+// Отчёты по выручке расходились между собой: «Общая выручка», «По услугам» и
+// отчёт владельца выбрасывали только отменённый счёт ('void'), а счёт с полным
+// возвратом ('refunded' — деньги отданы пациенту) оставался выручкой; «Счета»
+// складывали в итог вообще всё. Теперь правило одно на все отчёты по выручке:
+// счета 'void' и 'refunded' в сумму не входят. Частичный возврат статус счёта
+// не меняет — строки остаются выручкой, а возвращённые деньги видны в «Отчёте
+// кассира» строкой «Возврат» (правило выплаты врачу у возврата своё —
+// PAY_REFUND_V1).
+const REVENUE_INVOICE_SQL = (i) => `${i}.status NOT IN ('void', 'refunded')`;
+const REVENUE_EXCLUDED_NOTE = 'Отменённые счета и счета с полным возвратом (статус «Возврат») в выручку не входят. Частичный возврат выручку строк не уменьшает — возвращённые деньги видны в «Отчёте кассира» строками «Возврат».';
+const isDepositNumber = (n) => /^(DEP|CARD)-/.test(String(n || ''));
+
 function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
   const { from, to } = resolveRange(db, args);
-  const bf = branchFilter(args, 'i.branch_id');
+  // REPORTS_AUDIT_FIX_V1 — счёт госпитализации пишется без филиала: пустой
+  // филиал — своё здание (как у выплаты, ревью I4), иначе частичный фильтр по
+  // филиалу выбрасывал всю выручку стационара.
+  const bf = branchFilter(args, OWN_BRANCH_OR('i.branch_id'));
   // BUILDING_REPORTS_V1 — здание берётся у СЧЁТА, а не у строки счёта: деньги
   // принадлежат тому зданию, которое счёт выставило, и разносить позиции одного
   // счёта по разным зданиям было бы выдумкой.
@@ -816,7 +843,7 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
     LEFT JOIN referral_source_categories rc ON rc.id = rs.category_id
       ${ITEM_DOCTOR_JOIN}
      WHERE ${inLocalRange('i.created_at')}
-       AND i.status <> 'void' AND ${NOT_DEPOSIT_INVOICE_SQL}${bf.clause}${gf.clause}${extra.clause}
+       AND ${REVENUE_INVOICE_SQL('i')} AND ${NOT_DEPOSIT_INVOICE_SQL}${bf.clause}${gf.clause}${extra.clause}
      ORDER BY origin, i.created_at, ii.id
   `).all(from, to, ...bf.params, ...gf.params, ...extra.params);
   return rows;
@@ -871,7 +898,13 @@ function outpatientPayRows(db, { from, to, doctorId, bf, gf, withoutDoctor = fal
   // DOCTOR_LINES_SPECIALTY_V1 — «По специальностям» показывает и выполненные
   // строки без врача (лаборатория и т. п.): доли у них нет (ставку брать не у
   // кого), но работа и деньги — есть. Выплате они не нужны.
-  const docRequired = withoutDoctor ? '1 = 1' : 'vs.doctor_id IS NOT NULL';
+  // REPORTS_AUDIT_FIX_V1 — строка без врача — только СВОЯ (sync_origin пуст).
+  // Строка визита соседнего здания приезжает без врача и без связи со строкой
+  // счёта (ни id сотрудников, ни id строк между зданиями не путешествуют), а
+  // деньги той же работы приезжают строкой счёта (foreignPayRows): без этого
+  // отбора «По специальностям» считал её дважды.
+  const docRequired = !withoutDoctor ? 'vs.doctor_id IS NOT NULL'
+    : hasColumn(db, 'visit_services', 'sync_origin') ? '(vs.doctor_id IS NOT NULL OR vs.sync_origin IS NULL)' : '1 = 1';
   // Строка без врача, связанная со строкой счёта, входит, только если с этой
   // строкой счёта не связана строка С врачом (та и считается), и только
   // первая такая — деньги строки счёта не удваиваются.
@@ -1612,7 +1645,7 @@ function pendingItemsMoney(db, args, ctx) {
   if (!hasColumn(db, 'invoices', 'sync_origin')) return empty;
 
   const { from, to } = resolveRange(db, args);
-  const bf = branchFilter(args, 'i.branch_id');
+  const bf = branchFilter(args, OWN_BRANCH_OR('i.branch_id'));   // REPORTS_AUDIT_FIX_V1 — тот же отбор, что у отчёта
   const gf = buildingWhere(db, ctx, args, 'invoices', 'i');
   const rows = db.prepare(`
     SELECT origin, COUNT(*) AS invoices, COALESCE(SUM(gap), 0) AS amount FROM (
@@ -1631,7 +1664,7 @@ function pendingItemsMoney(db, args, ctx) {
                          ELSE 1.0 END) END) AS gap
         FROM invoices i
        WHERE i.sync_origin IS NOT NULL
-         AND i.status <> 'void'
+         AND ${REVENUE_INVOICE_SQL('i')} AND ${NOT_DEPOSIT_INVOICE_SQL}
          AND ${inLocalRange('i.created_at')}${bf.clause}${gf.clause}
     )
      -- Порог, а не «> 0»: суммы целые в сумах, а деление на subtotal — плавающее,
@@ -1708,7 +1741,7 @@ function totalRevenueReport(db, args, ctx) {
       doctor_fee: (r) => r.doctor_fee || 0,
     }),
     total_label: 'После скидки',
-    notes: [PERFORMED_NOTE, REVENUE_SHARE_NOTE, ...(hasUnattributed(ctx, src) ? [UNATTRIBUTED_NOTE] : [])],
+    notes: [PERFORMED_NOTE, REVENUE_SHARE_NOTE, REVENUE_EXCLUDED_NOTE, ...(hasUnattributed(ctx, src) ? [UNATTRIBUTED_NOTE] : [])],
   };
 }
 
@@ -2182,9 +2215,25 @@ function doctorInpatientReferralRows(db, { from, to, doctorId }) {
   };
 }
 
+// REPORTS_AUDIT_FIX_V1 — «Счета» ПОКАЗЫВАЮТ ВСЕ СЧЕТА, А СКЛАДЫВАЮТ ТОЛЬКО ВЫРУЧКУ.
+//
+// Итог по зданиям складывал всё подряд: отменённые счета, счета депозита
+// (DEP-…) и продажи подарочной карты (CARD-…), — и «Итого по счетам»
+// получался больше «Общей выручки» за тот же период (5 294 000 против
+// 4 794 000 на данных клиники). Отменённый счёт при этом показывал «Остаток /
+// долг» — долг, которого нет. Теперь:
+//   • отменённый и возвращённый счёт — долг 0;
+//   • строки отменённых, возвращённых счетов и счетов DEP-/CARD- остаются в
+//     списке (это история кассы), но в итог по зданиям и в строку «Итого» под
+//     таблицей НЕ входят: сервер называет их номерами строк (total_skip_rows),
+//     и таблица хаба их не складывает;
+//   • «Кто платит» — плательщик СЧЁТА (invoices.payer_id, миграция 054), а не
+//     тот, кто числится у пациента сегодня: сменил пациент страховую — старый
+//     счёт остаётся счётом прежней.
+const INVOICES_TOTAL_NOTE = 'Отменённые счета, счета с полным возвратом и счета депозита (DEP-…) и подарочных карт (CARD-…) показаны в списке, но в «Итого» и в разрез по зданиям не входят: отменённый счёт денег не принёс, а депозит и карта — предоплата, которая станет выручкой строкой услуги, когда ею заплатят.';
 function invoicesFullReport(db, args, ctx) {
   const { from, to } = resolveRange(db, args);
-  const bf = branchFilter(args, 'i.branch_id');
+  const bf = branchFilter(args, OWN_BRANCH_OR('i.branch_id'));   // REPORTS_AUDIT_FIX_V1 — стационар без филиала — свой
   const gf = buildingWhere(db, ctx, args, 'invoices', 'i');
   const rows = db.prepare(`
     SELECT ${originExpr(db, 'invoices', 'i')} AS origin,
@@ -2203,30 +2252,36 @@ function invoicesFullReport(db, args, ctx) {
       FROM invoices i
       JOIN patients pt ON pt.id = i.patient_id
       LEFT JOIN branches b ON b.id = i.branch_id
-      LEFT JOIN payers py  ON py.id = pt.payer_id
+      LEFT JOIN payers py  ON py.id = i.payer_id
       LEFT JOIN users reg  ON reg.id = i.created_by
      WHERE ${inLocalRange('i.created_at')}${bf.clause}${gf.clause}
      ORDER BY origin, i.created_at DESC
   `).all(from, to, ...bf.params, ...gf.params);
+  const outside = (r) => r.status === 'void' || r.status === 'refunded' || isDepositNumber(r.number);
+  const counted = rows.filter((r) => !outside(r));
+  const skip = [];
+  rows.forEach((r, i) => { if (outside(r)) skip.push(i); });
+  const debtOf = (r) => (r.status === 'void' || r.status === 'refunded' ? 0 : Math.max(r.total - r.paid, 0));
   return {
     columns: [BUILDING_COL, '№ счёта', 'Дата', 'Пациент', 'МРН', 'Телефон', 'Филиал', 'Кто платит',
               'Сумма без скидки', 'Скидка', 'Итого', 'Оплачено', 'Остаток / долг',
               'Статус', 'Способ оплаты', 'Дата оплаты', 'Регистратор'],
     rows: rows.map((r) => [ctx.label(r.origin), r.number || '', r.created, r.patient, r.mrn || '', r.phone || '',
       r.branch || '', r.payer || 'Пациент', round2(r.subtotal), round2(r.discount),
-      round2(r.total), round2(r.paid), round2(Math.max(r.total - r.paid, 0)),
+      round2(r.total), round2(r.paid), round2(debtOf(r)),
       INV_STATUS_RU[r.status] || r.status,
       // GROUP_CONCAT возвращает "cash,card" одной строкой — режем и отдаём в
       // общий с браузером словарь, чтобы оба отчёта «Счета» называли один и тот
       // же платёж одинаково.
       formatMethods(String(r.methods || '').split(',')),
       r.paid_at || '', r.registrar || '']),
-    by_building: summariseByBuilding(ctx, rows, {
+    by_building: summariseByBuilding(ctx, counted, {
       total: (r) => r.total || 0,
       paid: (r) => r.paid || 0,
     }),
     total_label: 'Итого по счетам',
-    notes: [],
+    total_skip_rows: skip,
+    notes: skip.length ? [INVOICES_TOTAL_NOTE] : [],
   };
 }
 
@@ -2568,24 +2623,51 @@ function expiryColumns() {
 
 const SURGERY_RE = /хирург|операц|surg|operat/i;
 
+// REPORTS_AUDIT_FIX_V1 (27.09) — ЧТО ТАКОЕ ОПЕРАЦИЯ И ЧЬИ У НЕЁ РАСХОДНИКИ.
+//
+//   ОПЕРАЦИЯ — услуга группы «Хирургия» (services.type = 'other', одна из
+//     пяти — GROUPS_FIVE) ЛИБО, как прежде, услуга со словом «операция» /
+//     «хирург» в названии. Прежде — только по названию: «Аппендэктомия» в
+//     группе «Хирургия» в отчёт не попадала.
+//   РАСХОДНИКИ — всё, израсходованное на визит (у стационара — на
+//     госпитализацию) по себестоимости: расход 'dispense' минус его отмены
+//     'void'. Прежде — только амбулатория, без отмен, и ВСЯ сумма визита
+//     ставилась КАЖДОЙ операции визита: две операции — расходники дважды.
+//     Теперь сумма визита (госпитализации) делится между его операциями
+//     отчёта пропорционально их сумме по счёту (поровну, если суммы нулевые).
+const SURGERY_NOTE = 'Операция — услуга группы «Хирургия» или услуга со словом «операция» / «хирург» в названии. Расходники — всё израсходованное на визит, у стационара — на госпитализацию (по себестоимости, за вычетом отмен); если в визите или госпитализации несколько операций, расходники делятся между ними пропорционально сумме по счёту, а не повторяются у каждой.';
+const isSurgeryLine = (r) => r.service_group === 'other' || SURGERY_RE.test(r.service || '');
+
 function surgeryProfitReport(db, args, ctx) {
-  // Consumables per visit: dispense movements reference visit_services
-  // (reference_type 'visit', reference_id = visit_service id). qty is negative
-  // on dispense; cost falls back to the product's rolling average.
-  const consumablesByVisit = new Map();
+  // Consumables per visit / admission: dispense movements reference the line
+  // (reference_type 'visit' → visit_services.id, 'admission' →
+  // admission_services.id). qty is negative on dispense and positive on its
+  // void; cost falls back to the product's rolling average.
+  const consumables = new Map();
   for (const c of db.prepare(`
-    SELECT vs2.visit_id AS visit_id,
+    SELECT CASE sm.reference_type WHEN 'visit' THEN 'v' || vs2.visit_id ELSE 'a' || as2.admission_id END AS k,
            SUM(-sm.qty * COALESCE(sm.unit_cost, pr.avg_cost, 0)) AS cost
       FROM stock_movements sm
-      JOIN visit_services vs2 ON vs2.id = sm.reference_id
       JOIN products pr ON pr.id = sm.product_id
-     WHERE sm.kind = 'dispense' AND sm.reference_type = 'visit'
-     GROUP BY vs2.visit_id
-  `).all()) consumablesByVisit.set(c.visit_id, Math.max(c.cost, 0));
+      LEFT JOIN visit_services vs2     ON sm.reference_type = 'visit'     AND vs2.id = sm.reference_id
+      LEFT JOIN admission_services as2 ON sm.reference_type = 'admission' AND as2.id = sm.reference_id
+     WHERE sm.kind IN ('dispense', 'void') AND sm.reference_type IN ('visit', 'admission')
+       AND COALESCE(vs2.visit_id, as2.admission_id) IS NOT NULL
+     GROUP BY k
+  `).all()) consumables.set(c.k, Math.max(c.cost || 0, 0));
 
   // SQLite lower() doesn't fold Cyrillic, so the «хирургия» match runs in JS.
-  const src = itemRowsQuery(db, args, ctx)
-    .filter((r) => SURGERY_RE.test(r.service || ''));
+  const src = itemRowsQuery(db, args, ctx).filter(isSurgeryLine);
+  // Ключ расходников строки: госпитализация счёта, иначе его визит.
+  const keyOf = (r) => (r.admission_id != null ? 'a' + r.admission_id : r.visit_id != null ? 'v' + r.visit_id : null);
+  const groupSum = new Map();
+  const groupN = new Map();
+  for (const r of src) {
+    const k = keyOf(r);
+    if (k == null) continue;
+    groupSum.set(k, (groupSum.get(k) || 0) + Math.max(r.amount - r.discount, 0));
+    groupN.set(k, (groupN.get(k) || 0) + 1);
+  }
   const computed = src.map((r) => {
     const invoiced = r.amount - r.discount;
     const tax = invoiced * r.tax_rate / 100;
@@ -2599,14 +2681,19 @@ function surgeryProfitReport(db, args, ctx) {
     // ноль, пока операция не выполнена: одна формула, а не вторая копия здесь.
     const surgeonFee = r.doctor_fee || 0;
     // Расходники есть только у своего здания: движения склада не ездят.
-    const products = r.visit_id != null ? (consumablesByVisit.get(r.visit_id) || 0) : 0;
+    const k = keyOf(r);
+    const pool = k != null ? (consumables.get(k) || 0) : 0;
+    const base = k != null ? groupSum.get(k) : 0;
+    const products = pool === 0 ? 0
+      : base > 0 ? pool * Math.max(invoiced, 0) / base
+      : pool / (groupN.get(k) || 1);
     const profit = invoiced - tax - surgeonFee - products;
     return { origin: r.origin, doctor: r.doctor, invoiced, profit, row: [
       ctx.label(r.origin), r.patient, r.service, round2(invoiced), r.tax_rate, round2(tax),
       round2(surgeonFee), round2(products), round2(profit),
       invoiced > 0 ? round2(profit / invoiced * 100) : 0] };
   });
-  const notes = [PERFORMED_NOTE, REVENUE_SHARE_NOTE, STOCK_LOCAL_NOTE];
+  const notes = [PERFORMED_NOTE, REVENUE_SHARE_NOTE, SURGERY_NOTE, STOCK_LOCAL_NOTE, REVENUE_EXCLUDED_NOTE];
   if (hasUnattributed(ctx, src)) notes.push(UNATTRIBUTED_NOTE);
   return {
     columns: [BUILDING_COL, 'Пациент', 'Операция', 'Сумма по счёту', 'Ставка налога (%)', 'Налог',
@@ -2997,7 +3084,7 @@ function byServicesReport(db, args, ctx) {
   const list = [...buckets.values()].sort((a, b) =>
     (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
     || order(a.group) - order(b.group) || b.gross - a.gross);
-  const notes = [PERFORMED_NOTE, REVENUE_SHARE_NOTE, LINE_PAID_NOTE];
+  const notes = [PERFORMED_NOTE, REVENUE_SHARE_NOTE, LINE_PAID_NOTE, REVENUE_EXCLUDED_NOTE];
   if (hasUnattributed(ctx, src)) notes.push(UNATTRIBUTED_NOTE);
   return {
     columns: [BUILDING_COL, 'Группа', 'Услуга', 'Где', 'Кол-во', 'Сумма', 'Скидка', 'Налог',
@@ -3055,13 +3142,21 @@ function doctorLines(db, args, ctx, doctorId = null) {
   const noRateOnly = inpatientRateMissing;
   const keep = new Set();
   for (const r of lines) if (!noRateOnly(r)) keep.add(doctorKey(ctx, r.origin, r.doctor_id));
-  return lines.filter((r) => keep.has(doctorKey(ctx, r.origin, r.doctor_id)));
+  const out = lines.filter((r) => keep.has(doctorKey(ctx, r.origin, r.doctor_id)));
+  // REPORTS_AUDIT_FIX_V1 — все строки периода едут рядом: примечанию о строках
+  // без стационарной ставки (doctorNotes) они нужны, и второй расчёт
+  // performedPayLines ради него удваивал время отчёта.
+  Object.defineProperty(out, 'allLines', { value: lines, enumerable: false });
+  return out;
 }
 function doctorNotes(db, args, ctx, lines, doctorId = null) {
   const { from, to } = resolveRange(db, args);
   // Примечание о строках без стационарной ставки — по ВСЕМ строкам периода
-  // (doctorLines уже убрал людей, у которых других строк нет).
-  const noRate = inpatientNoRateNote(performedPayLines(db, { from, to, doctorId, kinds: ['in'], args, ctx }));
+  // (doctorLines уже убрал людей, у которых других строк нет). Строки — те же,
+  // что у отчёта (lines.allLines), а не второй расчёт.
+  const all = lines && lines.allLines ? lines.allLines
+    : performedPayLines(db, { from, to, doctorId, kinds: ['in'], args, ctx });
+  const noRate = inpatientNoRateNote(all.filter((r) => r.kind === 'in'));
   const notes = [PERFORMED_NOTE, PERFORMED_BASIS_NOTE, DOCTOR_PAY_NOTE, REFERRAL_PAID_NOTE, LINE_PAID_NOTE, PAY_REFUND_NOTE, PAY_ALL_EARNINGS_NOTE];
   const closedNote = closedMonthsNote(db, from, to);   // PAY_PERIOD_CLOSE_V1
   if (closedNote) notes.push(closedNote);
@@ -3160,7 +3255,7 @@ function doctorServicesReport(db, args, ctx) {
   }
   const list = [...buckets.values()].sort((a, b) =>
     (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
-    || String(a.doctor || '').localeCompare(String(b.doctor || ''), 'ru') || b.billed - a.billed);
+    || ruCompare(a.doctor, b.doctor) || b.billed - a.billed);
   const notes = doctorNotes(db, args, ctx, lines, doctorId);
   return {
     columns: [BUILDING_COL, 'Врач', 'Услуга', 'Где', 'Пациентов', 'Кол-во', 'Выставлено', 'Оплачено (доля оплаты счёта)', 'Доля врача'],
@@ -3213,8 +3308,8 @@ function doctorLinesReport(db, args, ctx) {
   const extra = doctorExtraLines(db, args, ctx, doctorId);
   const list = [...lines, ...extra].sort((a, b) =>
     (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
-    || String(a.doctor || '').localeCompare(String(b.doctor || ''), 'ru')
-    || String(a.date || '').localeCompare(String(b.date || ''))
+    || ruCompare(a.doctor, b.doctor)
+    || (String(a.date || '') < String(b.date || '') ? -1 : String(a.date || '') > String(b.date || '') ? 1 : 0)
     || (a.kind === b.kind ? 0 : a.kind === 'out' ? -1 : 1)
     || (Number(a.line_id) || 0) - (Number(b.line_id) || 0));
   return {
@@ -3293,7 +3388,7 @@ function bySpecialtyReport(db, args, ctx) {
   }
   // Специальности по алфавиту; «не указана» и «без врача» — в конце.
   const rank = (spec) => (spec === NO_DOCTOR_GROUP ? 2 : spec === NO_SPECIALTY_GROUP ? 1 : 0);
-  const bySpec = (a, b) => rank(a) - rank(b) || a.localeCompare(b, 'ru');
+  const bySpec = (a, b) => rank(a) - rank(b) || ruCompare(a, b);
   const list = [...buckets.values()].sort((a, b) =>
     (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
     || bySpec(a.spec, b.spec) || b.amount - a.amount || (a.where === b.where ? 0 : a.where === 'out' ? -1 : 1));
@@ -3305,7 +3400,7 @@ function bySpecialtyReport(db, args, ctx) {
   if (noSpecDoctors.size) {
     const n = noSpecDoctors.size;
     notes.push('У ' + n + ' ' + pluralRu(n, 'врача', 'врачей', 'врачей') + ' не указана специальность ('
-      + [...noSpecDoctors.values()].sort((a, b) => a.localeCompare(b, 'ru')).join(', ')
+      + [...noSpecDoctors.values()].sort(ruCompare).join(', ')
       + ') — их услуги в группе «' + NO_SPECIALTY_GROUP + '». Специальность задаётся в карточке сотрудника.');
   }
   if (hasUnattributed(ctx, lines)) notes.push(UNATTRIBUTED_NOTE);
@@ -3334,7 +3429,7 @@ const REPORT_CHOICES = {
         OR id IN (SELECT DISTINCT doctor_id FROM visit_services WHERE doctor_id IS NOT NULL)
         OR id IN (SELECT DISTINCT COALESCE(performer_id, doctor_id) FROM admission_services
                    WHERE COALESCE(performer_id, doctor_id) IS NOT NULL)
-  `).all().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ru'))
+  `).all().sort((a, b) => ruCompare(a.name, b.name))
     .map((u) => [String(u.id), u.name || '—']),
 };
 export function reportChoices(db, args, user) {
@@ -3375,7 +3470,7 @@ const OWNER_M_RU = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 
 export function ownerReport(db, args, user) {
   requireReportKind(db, user, 'owner');   // ROLE_REPORTS_SETTINGS_V1 — «Выручка и счета»
   const { from, to } = resolveRange(db, args);
-  const bf = branchFilter(args, 'i.branch_id');
+  const bf = branchFilter(args, OWN_BRANCH_OR('i.branch_id'));   // REPORTS_AUDIT_FIX_V1 — стационар без филиала — свой
   // BUILDING_REPORTS_V1 — отчёт владельца тоже смотрит на клинику целиком:
   // фильтр по зданиям и разрез рядом с KPI. Без этого «Общая выручка» на
   // главном экране владельца показывала выручку одного здания и называла её
@@ -3387,9 +3482,10 @@ export function ownerReport(db, args, user) {
     FROM invoice_items ii
     JOIN invoices i  ON i.id = ii.invoice_id
     JOIN patients pt ON pt.id = i.patient_id
-    LEFT JOIN payers py ON py.id = pt.payer_id
+    -- REPORTS_AUDIT_FIX_V1 — плательщик СЧЁТА (мигр. 054), а не нынешний у пациента.
+    LEFT JOIN payers py ON py.id = i.payer_id
     LEFT JOIN services s ON s.id = ii.service_id
-   WHERE i.status <> 'void' AND ${NOT_DEPOSIT_INVOICE_SQL}${bf.clause}${gf.clause}`;   // DEPOSIT_WALLET_V1
+   WHERE ${REVENUE_INVOICE_SQL('i')} AND ${NOT_DEPOSIT_INVOICE_SQL}${bf.clause}${gf.clause}`;   // DEPOSIT_WALLET_V1
 
   const k = db.prepare(`
     SELECT COALESCE(SUM(ii.total - ${ITEM_DISCOUNT_SQL}), 0) AS revenue, COUNT(ii.id) AS count
@@ -3491,10 +3587,13 @@ export function runReport(db, args, user) {
   if (ru || Object.prototype.hasOwnProperty.call(legacyReports(db), kind)) requireReportKind(db, user, kind);
   if (ru) {
     const ctx = buildingContext(db);
-    const { columns, rows, by_building, notes, total_label } = ru(db, args, ctx);
+    const { columns, rows, by_building, notes, total_label, total_skip_rows } = ru(db, args, ctx);
     return {
       kind, columns, rows,
       by_building: by_building || [], notes: notes || [], total_label: total_label || '',
+      // REPORTS_AUDIT_FIX_V1 — строки, которые «Итого» под таблицей не складывает
+      // (отменённые счета и DEP-/CARD- в «Счетах»): номера строк в rows.
+      total_skip_rows: Array.isArray(total_skip_rows) ? total_skip_rows : [],
       // Считается ОДИН раз на отчёт и тем же контекстом зданий, что и сам отчёт:
       // разъехавшийся ctx дал бы недостачу под другими подписями.
       pending_items: ITEM_BASED_REPORTS.has(kind) ? pendingItemsMoney(db, args, ctx) : null,
