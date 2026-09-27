@@ -55,6 +55,7 @@ function rangeLit(db, col, from, to) {
   return localRangeSql(col, d.a, d.b);
 }
 import { outstandingWhere } from '../domain/money.js';
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы шаблоном
 // BUILDING_REPORTS_V1 — «в каком ЗДАНИИ это произошло». Отдельное измерение от
 // branch_id: см. шапку domain/buildings.js.
 import {
@@ -157,10 +158,10 @@ export function resolveRange(db, args) {
     throw new RpcError('Дата «по» — не дата: нужен формат ГГГГ-ММ-ДД.', 400);
   }
   if (!isRealDay(db, from)) {
-    throw new RpcError('Дата «с» — такого дня нет в календаре (' + String(from).slice(0, 10) + '). Выберите период заново.', 400);
+    throw rpcT(RpcError, 'Дата «с» — такого дня нет в календаре ({day}). Выберите период заново.', { day: String(from).slice(0, 10) }, 400);
   }
   if (!isRealDay(db, to)) {
-    throw new RpcError('Дата «по» — такого дня нет в календаре (' + String(to).slice(0, 10) + '). Выберите период заново.', 400);
+    throw rpcT(RpcError, 'Дата «по» — такого дня нет в календаре ({day}). Выберите период заново.', { day: String(to).slice(0, 10) }, 400);
   }
   if (from.slice(0, 10) > to.slice(0, 10)) {
     throw new RpcError('Дата «с» позже даты «по» — выберите период заново.', 400);
@@ -1992,7 +1993,7 @@ export function payPeriodClose(db, args, user) {
   if (month >= currentMonth(db)) throw new RpcError('Текущий месяц закрыть нельзя — он ещё идёт. Закрываются только прошедшие месяцы.', 400);
   const run = db.transaction(() => {
     const closed = closedMonthMap(db);
-    if (closed.has(month)) throw new RpcError('Месяц ' + monthRu(month) + ' уже закрыт.', 400);
+    if (closed.has(month)) throw rpcT(RpcError, 'Месяц {month} уже закрыт.', { month: monthRu(month) }, 400);
     const ctx = buildingContext(db);
     const { from, to } = monthBounds(month);
     const rows = [];
@@ -2030,12 +2031,12 @@ export function payPeriodReopen(db, args, user) {
   const reason = String((args && args.reason) || '').trim().slice(0, 300) || null;
   const run = db.transaction(() => {
     const p = db.prepare('SELECT month, total FROM pay_periods WHERE month = ?').get(month);
-    if (!p) throw new RpcError('Месяц ' + monthRu(month) + ' не закрыт.', 400);
+    if (!p) throw rpcT(RpcError, 'Месяц {month} не закрыт.', { month: monthRu(month) }, 400);
     const holders = db.prepare(`SELECT DISTINCT month FROM pay_period_lines WHERE kind = 'adj' AND for_month = ? ORDER BY month`)
       .all(month).map((r) => r.month);
     if (holders.length) {
-      throw new RpcError('Корректировки за ' + monthRu(month) + ' уже записаны в закрытом месяце: '
-        + holders.map(monthRu).join(', ') + '. Сначала откройте его.', 400);
+      throw rpcT(RpcError, 'Корректировки за {month} уже записаны в закрытом месяце: {months}. Сначала откройте его.',
+        { month: monthRu(month), months: holders.map(monthRu).join(', ') }, 400);
     }
     db.prepare('DELETE FROM pay_period_lines WHERE month = ?').run(month);
     db.prepare('DELETE FROM pay_periods WHERE month = ?').run(month);
@@ -4084,8 +4085,8 @@ const REPORT_CHOICES = {
 export function reportChoices(db, args, user) {
   const kind = args && args.kind;
   const arg = args && args.arg;
-  if (!Object.prototype.hasOwnProperty.call(REPORTS_RU, kind)) throw new RpcError('Неизвестный отчёт: ' + kind + '. Обновите страницу.', 400);
-  if (!Object.prototype.hasOwnProperty.call(REPORT_CHOICES, arg)) throw new RpcError('Неизвестный фильтр отчёта: ' + arg + '.', 400);
+  if (!Object.prototype.hasOwnProperty.call(REPORTS_RU, kind)) throw rpcT(RpcError, 'Неизвестный отчёт: {kind}. Обновите страницу.', { kind: String(kind) }, 400);
+  if (!Object.prototype.hasOwnProperty.call(REPORT_CHOICES, arg)) throw rpcT(RpcError, 'Неизвестный фильтр отчёта: {arg}.', { arg: String(arg) }, 400);
   requireReportKind(db, user, kind);
   return { choices: REPORT_CHOICES[arg](db) };
 }
@@ -4354,7 +4355,7 @@ export function runReport(db, args, user) {
   }
   const report = legacyReports(db)[kind];
   if (!report) {
-    throw new RpcError('Неизвестный отчёт: ' + kind + '. Обновите страницу.', 400);
+    throw rpcT(RpcError, 'Неизвестный отчёт: {kind}. Обновите страницу.', { kind: String(kind) }, 400);
   }
   const { from, to } = resolveRange(db, args);
   const ctx = buildingContext(db);

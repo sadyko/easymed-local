@@ -36,14 +36,10 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..');
 const { STRINGS } = await import(pathToFileURL(path.join(REPO, 'public', 'js', 'admin', 'i18n-strings.js')).href);
 
-// Файлы, которые сейчас правит исправление производительности (V3120_PERF).
-// Их сообщения переводятся отдельным проходом — ВРЕМЕННОЕ исключение, его
-// снимут вместе с этим проходом. Не расширять.
-const PENDING_FILES = new Set([
-  'server/services/rpc/reports.js',
-  'server/services/domain/day.js',
-  'server/services/rpc/index.js',
-]);
+// Временных исключений больше нет: reports.js, day.js и rpc/index.js сняты
+// вместе с проходом V3120_PERF (собранные фразы отчётов — через rpcT). Набор
+// оставлен пустым как место для такого исключения — не расширять без причины.
+const PENDING_FILES = new Set([]);
 
 // Решения, а не пропуски: каждое — с причиной.
 const EXEMPT = [

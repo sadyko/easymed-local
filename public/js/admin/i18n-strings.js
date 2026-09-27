@@ -10191,5 +10191,15 @@ export const STRINGS = {
   "Сохранённый токен повреждён.": {"en":"The saved token is corrupted.","ru":"Сохранённый токен повреждён.","uz":"Saqlangan token buzilgan."},
   "файл не найден на диске": {"en":"file not found on disk","ru":"файл не найден на диске","uz":"fayl diskda topilmadi"},
   "Цена врача в ставке — от 0 до 1 000 000 000 000.": {"en":"The doctor's price in a rate must be between 0 and 1,000,000,000,000.","ru":"Цена врача в ставке — от 0 до 1 000 000 000 000.","uz":"Stavkadagi shifokor narxi — 0 dan 1 000 000 000 000 gacha."},
+  // V3120_PERF — отчёты: собранные фразы шаблоном и очередь отчётов
+  "Дата «с» — такого дня нет в календаре ({day}). Выберите период заново.": {"en":"The “from” date is not a real calendar day ({day}). Choose the period again.","ru":"Дата «с» — такого дня нет в календаре ({day}). Выберите период заново.","uz":"«Dan» sanasi — kalendarda bunday kun yo'q ({day}). Davrni qaytadan tanlang."},
+  "Дата «по» — такого дня нет в календаре ({day}). Выберите период заново.": {"en":"The “to” date is not a real calendar day ({day}). Choose the period again.","ru":"Дата «по» — такого дня нет в календаре ({day}). Выберите период заново.","uz":"«Gacha» sanasi — kalendarda bunday kun yo'q ({day}). Davrni qaytadan tanlang."},
+  "Месяц {month} уже закрыт.": {"en":"The month {month} is already closed.","ru":"Месяц {month} уже закрыт.","uz":"{month} oyi allaqachon yopilgan."},
+  "Месяц {month} не закрыт.": {"en":"The month {month} is not closed.","ru":"Месяц {month} не закрыт.","uz":"{month} oyi yopilmagan."},
+  "Корректировки за {month} уже записаны в закрытом месяце: {months}. Сначала откройте его.": {"en":"Adjustments for {month} are already recorded in a closed month: {months}. Reopen it first.","ru":"Корректировки за {month} уже записаны в закрытом месяце: {months}. Сначала откройте его.","uz":"{month} uchun tuzatishlar yopilgan oyda allaqachon yozilgan: {months}. Avval uni oching."},
+  "Неизвестный отчёт: {kind}. Обновите страницу.": {"en":"Unknown report: {kind}. Refresh the page.","ru":"Неизвестный отчёт: {kind}. Обновите страницу.","uz":"Noma'lum hisobot: {kind}. Sahifani yangilang."},
+  "Неизвестный фильтр отчёта: {arg}.": {"en":"Unknown report filter: {arg}.","ru":"Неизвестный фильтр отчёта: {arg}.","uz":"Noma'lum hisobot filtri: {arg}."},
+  "Отчёт считается слишком долго — сузьте период.": {"en":"The report is taking too long — narrow the period.","ru":"Отчёт считается слишком долго — сузьте период.","uz":"Hisobot juda uzoq hisoblanmoqda — davrni qisqartiring."},
+  "Ваш прошлый отчёт ещё считается — дождитесь его и повторите.": {"en":"Your previous report is still being calculated — wait for it and try again.","ru":"Ваш прошлый отчёт ещё считается — дождитесь его и повторите.","uz":"Oldingi hisobotingiz hali hisoblanmoqda — uni kuting va qayta urinib ko'ring."},
   // V3120_I18N — сообщения сервера — END
 };
