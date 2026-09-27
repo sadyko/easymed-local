@@ -356,12 +356,152 @@ class EasyMed
         return false;
     }
 
+    // ── V3120_FIX: журнал, тормоз перезапусков, авто-откат ─────────────────────
+    //
+    // ЖУРНАЛ. Раньше всё, что сервер писал, жило только в чёрном окне: окно
+    // закрылось — причина падения потеряна. Теперь вывод сервера идёт и в окно,
+    // и в logs\easymed.log рядом с EasyMed.exe (больше 5 МБ — старый уходит в
+    // easymed.log.1). Путь к нему называется в каждом сообщении об остановке.
+    //
+    // ТОРМОЗ. Раньше код 75 («обновление применено») перезапускал сервер без
+    // счёта, а любой другой код молча закрывал окно. Теперь: сервер, который
+    // завершается раньше QuickSeconds после старта, считается «быстрым
+    // падением»; после MaxQuickExits таких подряд цикл останавливается. Если в
+    // этот момент есть непогашенное обновление (data\update-pending.json — новая
+    // версия так и не ответила на /api/health), EasyMed.exe один раз
+    // возвращает прежнюю версию и базу через install\rollback.mjs auto и
+    // запускает её. Иначе — сообщение по-русски, путь к журналу и
+    // «Нажмите любую клавишу».
+    const int QuickSeconds = 120;
+    const int MaxQuickExits = 3;
+
+    static string _logPath;
+    static readonly object _logLock = new object();
+
+    static void OpenLog(string root)
+    {
+        try
+        {
+            string dir = Path.Combine(root, "logs");
+            Directory.CreateDirectory(dir);
+            _logPath = Path.Combine(dir, "easymed.log");
+            var fi = new FileInfo(_logPath);
+            if (fi.Exists && fi.Length > 5L * 1024 * 1024)
+            {
+                string old = _logPath + ".1";
+                if (File.Exists(old)) File.Delete(old);
+                File.Move(_logPath, old);
+            }
+            AppendLog("===== " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " EasyMed.exe запущен =====");
+        }
+        catch { _logPath = null; }
+    }
+
+    static void AppendLog(string line)
+    {
+        if (_logPath == null) return;
+        lock (_logLock)
+        {
+            try { File.AppendAllText(_logPath, line + Environment.NewLine, new UTF8Encoding(false)); }
+            catch { /* журнал — помощник, не причина останавливать клинику */ }
+        }
+    }
+
+    static string LogHint()
+    {
+        return _logPath != null ? "Журнал: " + _logPath : "Журнал не ведётся (папка logs недоступна для записи).";
+    }
+
+    // Запуск с выводом и в окно, и в журнал.
+    static Process StartTee(ProcessStartInfo psi)
+    {
+        psi.UseShellExecute = false;
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        psi.StandardOutputEncoding = Encoding.UTF8;
+        psi.StandardErrorEncoding = Encoding.UTF8;
+        var p = new Process();
+        p.StartInfo = psi;
+        DataReceivedEventHandler onLine = (s, e) =>
+        {
+            if (e.Data == null) return;
+            Console.WriteLine(e.Data);
+            AppendLog(e.Data);
+        };
+        p.OutputDataReceived += onLine;
+        p.ErrorDataReceived += onLine;
+        p.Start();
+        p.BeginOutputReadLine();
+        p.BeginErrorReadLine();
+        return p;
+    }
+
+    static void Say(params string[] lines)
+    {
+        foreach (string l in lines)
+        {
+            Console.WriteLine("  " + l);
+            AppendLog("[EasyMed.exe] " + l);
+        }
+    }
+
+    // Помощник отката: сначала из версии, на которую указывает current (новая,
+    // в ней он точно есть), иначе из любой версии в versions\.
+    static string FindRollbackHelper(string root)
+    {
+        string cur = Path.Combine(Path.Combine(Path.Combine(root, "current"), "install"), "rollback.mjs");
+        if (File.Exists(cur)) return cur;
+        try
+        {
+            foreach (string d in Directory.GetDirectories(Path.Combine(root, "versions")))
+            {
+                string h = Path.Combine(Path.Combine(d, "install"), "rollback.mjs");
+                if (File.Exists(h)) return h;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    // true — прежняя версия (и база на момент перед обновлением) возвращены.
+    static bool TryAutoRollback(string root, string node)
+    {
+        string pending = Path.Combine(Path.Combine(root, "data"), "update-pending.json");
+        if (!File.Exists(pending)) return false;
+        string helper = FindRollbackHelper(root);
+        if (helper == null) return false;
+
+        Console.WriteLine();
+        Say("Новая версия Easy-Med не смогла запуститься.",
+            "Возвращаю предыдущую версию и базу на момент перед обновлением...");
+        try
+        {
+            var psi = new ProcessStartInfo();
+            psi.FileName = node;
+            psi.Arguments = "--no-warnings \"" + helper + "\" auto --root \"" + root + "\"";
+            psi.WorkingDirectory = root;
+            using (var p = StartTee(psi))
+            {
+                if (!p.WaitForExit(120000)) { try { p.Kill(); } catch { } return false; }
+                p.WaitForExit();
+                return p.ExitCode == 0;
+            }
+        }
+        catch (Exception e)
+        {
+            Say("Не удалось вернуть предыдущую версию: " + e.Message);
+            return false;
+        }
+    }
+
     static void Fail(string title, params string[] lines)
     {
         Console.WriteLine();
         Console.WriteLine("  " + title);
         Console.WriteLine("  " + new string('-', 50));
         foreach (string l in lines) Console.WriteLine("  " + l);
+        AppendLog("[EasyMed.exe] " + title);   // V3120_FIX
+        foreach (string l in lines) AppendLog("[EasyMed.exe] " + l);
         Console.WriteLine();
         Console.WriteLine("  Нажмите любую клавишу, чтобы закрыть окно...");
         try { Console.ReadKey(true); } catch { Thread.Sleep(15000); }
@@ -422,43 +562,29 @@ class EasyMed
         psi.EnvironmentVariables["EASYMED_DATA_DIR"] = Path.Combine(root, "data");
         psi.EnvironmentVariables["PORT"] = port.ToString();
 
+        OpenLog(root);   // V3120_FIX
+
         Process server;
-        try { server = Process.Start(psi); }
+        try { server = StartTee(psi); }
         catch (Exception e)
         {
-            Fail("Не удалось запустить Easy-Med.", e.Message);
+            Fail("Не удалось запустить Easy-Med.", e.Message, LogHint());
             return 1;
         }
+        DateTime started = DateTime.Now;
 
-        bool up = false;
-        for (int i = 0; i < 60 && !server.HasExited; i++)
+        bool up = WaitUp(server, port);
+        bool browserOpened = false;
+        if (up)
         {
-            if (PortAnswering(port)) { up = true; break; }
-            Thread.Sleep(500);
+            OpenBrowser(port);
+            browserOpened = true;
         }
-
-        if (!up)
+        else if (!server.HasExited)
         {
-            if (server.HasExited)
-            {
-                Console.WriteLine();
-                Console.WriteLine("  Easy-Med остановился при запуске — смотрите сообщение выше.");
-                Console.WriteLine();
-                Console.WriteLine("  Нажмите любую клавишу, чтобы закрыть окно...");
-                try { Console.ReadKey(true); } catch { Thread.Sleep(15000); }
-                return server.ExitCode;
-            }
             Console.WriteLine();
             Console.WriteLine("  Система запускается дольше обычного.");
             Console.WriteLine("  Откройте вручную: http://localhost:" + port);
-        }
-        else
-        {
-            try
-            {
-                Process.Start(new ProcessStartInfo("http://localhost:" + port) { UseShellExecute = true });
-            }
-            catch { Console.WriteLine("  Откройте в браузере: http://localhost:" + port); }
         }
 
         WarnIfFirewallWillBlock(port);
@@ -477,21 +603,90 @@ class EasyMed
         AppDomain.CurrentDomain.ProcessExit += (s, e) => Stop(_server);
         Console.CancelKeyPress += (s, e) => Stop(_server);
 
-        server.WaitForExit();
-        int exitCode = server.ExitCode;
-        // Exit code 75 is the restart-after-update convention: the entry path goes
-        // through `current`, so a restart lands on whatever version it now names.
-        while (exitCode == 75)
+        // V3120_FIX — надзор. Код 75 — перезапуск после обновления: вход идёт
+        // через `current`, поэтому перезапуск попадает на ту версию, на которую
+        // ссылка указывает теперь. Любой другой код — падение: перезапускаем
+        // тоже, но считаем быстрые (раньше QuickSeconds) подряд; после
+        // MaxQuickExits — один авто-откат незавершённого обновления, иначе стоп.
+        int quickExits = 0;
+        bool rolledBack = false;
+        for (;;)
         {
-            Console.WriteLine();
-            Console.WriteLine("  Обновление применено, перезапуск...");
-            try { _server = Process.Start(psi); }
-            catch (Exception e) { Fail("Не удалось перезапустить после обновления.", e.Message); return 1; }
-            TieChildToThisProcess(_server);
             _server.WaitForExit();
-            exitCode = _server.ExitCode;
+            int exitCode = _server.ExitCode;
+            bool quick = (DateTime.Now - started).TotalSeconds < QuickSeconds;
+            quickExits = quick ? quickExits + 1 : 0;
+            AppendLog("[EasyMed.exe] сервер завершился, код " + exitCode + (quick ? " (быстро, подряд: " + quickExits + ")" : ""));
+
+            if (exitCode == 0)
+            {
+                // Штатная остановка самим сервером — как и раньше, окно закрывается.
+                return 0;
+            }
+
+            if (quickExits >= MaxQuickExits)
+            {
+                if (!rolledBack && TryAutoRollback(root, node))
+                {
+                    rolledBack = true;
+                    quickExits = 0;
+                    Say("Предыдущая версия возвращена. Запускаю её...");
+                }
+                else
+                {
+                    Fail(exitCode == 75
+                            ? "Easy-Med перезапускается снова и снова — перезапуски остановлены."
+                            : "Easy-Med не может запуститься — он остановился " + quickExits + " раза подряд (код " + exitCode + ").",
+                         "Что произошло перед остановкой, записано в журнал:",
+                         _logPath != null ? "  " + _logPath : "  (журнал не ведётся)",
+                         "",
+                         "Если это началось сразу после обновления — закройте это окно",
+                         "и запустите recover.cmd (лежит рядом с EasyMed.exe): он вернёт",
+                         "предыдущую версию. Затем снова запустите EasyMed.exe.",
+                         "Если не помогло — отправьте файл журнала поставщику.");
+                    return exitCode;
+                }
+            }
+            else if (exitCode == 75)
+            {
+                Console.WriteLine();
+                Console.WriteLine("  Обновление применено, перезапуск...");
+            }
+            else
+            {
+                Console.WriteLine();
+                Say("Easy-Med остановился (код " + exitCode + "). Перезапуск...");
+            }
+
+            try { _server = StartTee(psi); }
+            catch (Exception e) { Fail("Не удалось перезапустить Easy-Med.", e.Message, LogHint()); return 1; }
+            started = DateTime.Now;
+            TieChildToThisProcess(_server);
+            if (!browserOpened && WaitUp(_server, port))
+            {
+                OpenBrowser(port);
+                browserOpened = true;
+            }
         }
-        return exitCode;
+    }
+
+    static bool WaitUp(Process server, int port)
+    {
+        for (int i = 0; i < 60 && !server.HasExited; i++)
+        {
+            if (PortAnswering(port)) return true;
+            Thread.Sleep(500);
+        }
+        return false;
+    }
+
+    static void OpenBrowser(int port)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("http://localhost:" + port) { UseShellExecute = true });
+        }
+        catch { Console.WriteLine("  Откройте в браузере: http://localhost:" + port); }
     }
 
     static void Stop(Process p)
