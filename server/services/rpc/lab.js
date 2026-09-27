@@ -26,6 +26,9 @@ export class RpcError extends Error {
 // должен становиться обходным путём для тех, кому таблица закрыта.
 const WRITE_ROLES = ['admin', 'lab'];
 
+// INPATIENT_MONEY_FIX_V1 — где результат принимается (см. saveLabResults).
+const RESULT_STATUSES = ['queued', 'collected', 'in_progress', 'resulted', 'completed'];
+
 const FLAGS = new Set(['normal', 'high', 'low', 'abnormal', 'critical']);
 
 export function saveLabResults(db, args, user) {
@@ -36,8 +39,20 @@ export function saveLabResults(db, args, user) {
   const vsId = Number(a.visit_service_id);
   if (!Number.isInteger(vsId) || vsId <= 0) throw new RpcError('Не указана услуга.', 400);
 
-  const order = db.prepare('SELECT id FROM visit_services WHERE id = ?').get(vsId);
+  const order = db.prepare('SELECT id, status FROM visit_services WHERE id = ?').get(vsId);
   if (!order) throw new RpcError('Услуга не найдена.', 400);
+  // INPATIENT_MONEY_FIX_V1 — результат принимается только у анализа, который
+  // лаборатория действительно ведёт: оплачен ('queued' — «Забор»), проба взята,
+  // в работе, готов или уже проверен (правка). Неоплаченный ('added') и
+  // отменённый результата не получают: бланк на неоплаченный анализ — это
+  // работа, за которую никто не заплатит, а на отменённый — выдача того, что
+  // не заказано. 'queued' оставлен сознательно: лист лаборатории сохраняет
+  // бланк и там, где отдельного шага «взять пробу» клиника не делает.
+  if (!RESULT_STATUSES.includes(order.status)) {
+    throw new RpcError(order.status === 'added'
+      ? 'Анализ ещё не оплачен — результат вносят после кассы.'
+      : 'Анализ ' + (order.status === 'cancelled' ? 'отменён' : 'не в работе лаборатории') + ' — результат не принимается.', 400);
+  }
 
   const rows = Array.isArray(a.rows) ? a.rows : [];
   if (!rows.length) throw new RpcError('Нет ни одного показателя для сохранения.', 400);
@@ -74,7 +89,12 @@ export function saveLabResults(db, args, user) {
   const ins = db.prepare(`INSERT INTO lab_results
       (visit_service_id, parameter, value, numeric_value, unit, reference_range, ref_low, ref_high, flag, notes, entered_by)
     VALUES (@vs, @parameter, @value, @numeric_value, @unit, @reference_range, @ref_low, @ref_high, @flag, @notes, @entered_by)`);
-  const setStatus = db.prepare("UPDATE visit_services SET status='resulted' WHERE id=?");
+  // INPATIENT_MONEY_FIX_V1 — сохранение КАЖДЫЙ раз возвращает анализ на
+  // проверку: отметка проверки снимается и у услуги, и у показателей. Раньше
+  // правка проверенного анализа оставляла verified_at — и новый, никем не
+  // проверенный результат выдавался как проверенный.
+  const setStatus = db.prepare("UPDATE visit_services SET status='resulted', verified_at=NULL, verified_by=NULL WHERE id=?");
+  const clearVerified = db.prepare('UPDATE lab_results SET verified_at=NULL, verified_by=NULL WHERE visit_service_id=?');
 
   let inserted = 0, updated = 0;
   db.transaction(() => {
@@ -92,6 +112,7 @@ export function saveLabResults(db, args, user) {
       inserted++;
     }
     setStatus.run(vsId);
+    clearVerified.run(vsId);
   })();
 
   // CRM_REAL_BOOKING_V1 — результат анализа заочно не появляется: пробу у

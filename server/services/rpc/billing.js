@@ -802,6 +802,25 @@ function repriceUnpaidInvoice(db, inv, oldOwn) {
   return db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
 }
 
+// INPATIENT_MONEY_FIX_V1 — ВЫПОЛНЕННАЯ РАБОТА НЕ СНИМАЕТСЯ И НЕ ПОДМЕНЯЕТСЯ.
+//
+// Один список «работа начата или сделана» на сервер — его же спрашивает отмена
+// счёта (cashier.js voidInvoice). Прежде здесь стояли только in_progress и
+// completed: взятый анализ ('collected') снимался вместе с пробой, а на
+// готовом ('resulted') удаление падало 500 на внешнем ключе lab_results.
+// Замена услуги перенесла бы результаты анализа на другую услугу. След работы
+// (результат, документ, сообщение прибора) держит строку так же, как статус.
+export const PERFORMED_LINE_STATUSES = ['collected', 'in_progress', 'resulted', 'completed'];
+function assertNotPerformed(db, vs, verb) {
+  const trace = db.prepare(`
+    SELECT (EXISTS(SELECT 1 FROM lab_results WHERE visit_service_id = ?)
+         OR EXISTS(SELECT 1 FROM visit_documents WHERE visit_service_id = ?)
+         OR EXISTS(SELECT 1 FROM lab_device_messages WHERE visit_service_id = ?)) AS t`).get(vs.id, vs.id, vs.id);
+  if (PERFORMED_LINE_STATUSES.includes(vs.status) || (trace && trace.t)) {
+    throw new RpcError('услуга уже оказывается/оказана (взята проба, есть результат или документ) — ' + verb + ' нельзя.', 400);
+  }
+}
+
 export function removeUnpaidService(db, args, user) {
   requireRole(user, REMOVE_SERVICE_ROLES);
 
@@ -816,9 +835,7 @@ export function removeUnpaidService(db, args, user) {
     // BRANCH_MONEY_GUARD_V1 — удаление здесь означает надгробие в журнале (084),
     // то есть строка исчезнет и в том здании, где её сделали.
     assertOwnBuilding(db, vs, 'Услуга');
-    if (vs.status === 'in_progress' || vs.status === 'completed') {
-      throw new RpcError('услуга уже оказывается/оказана — удалить нельзя.', 400);
-    }
+    assertNotPerformed(db, vs, 'удалить');   // INPATIENT_MONEY_FIX_V1
 
     // FK order: visit_services.invoice_item_id references invoice_items, so
     // the service LINE is deleted first, then its invoice item, then (if
@@ -879,9 +896,7 @@ export function changeUnpaidService(db, args, user) {
     const vs = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
     if (!vs) throw new RpcError('service line not found.', 400);
     assertOwnBuilding(db, vs, 'Услуга');   // BRANCH_MONEY_GUARD_V1
-    if (vs.status === 'in_progress' || vs.status === 'completed') {
-      throw new RpcError('услуга уже оказывается/оказана — заменить нельзя.', 400);
-    }
+    assertNotPerformed(db, vs, 'заменить');   // INPATIENT_MONEY_FIX_V1
     // HOLDINGS_FIRST_V1 — ТОВАРНУЮ СТРОКУ ЗАМЕНИТЬ НЕЛЬЗЯ.
     //
     // Вкладка «Услуги» карточки пациента показывает ВСЕ строки визита, товарные

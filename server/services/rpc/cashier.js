@@ -14,7 +14,7 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // правило одно, и звучать оно обязано одинаково, с какого бы экрана в счёт ни
 // пришли. Касса — последний экран, у которого счёт открыт целиком, и первый, с
 // которого его можно стереть.
-import { assertOwnBuilding } from './billing.js';
+import { assertOwnBuilding, PERFORMED_LINE_STATUSES } from './billing.js';
 import { markRefundRelease } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом
 
 export class RpcError extends Error {
@@ -591,7 +591,7 @@ export function voidInvoice(db, args, user) {
     // сохраняет статус. В 'added' возвращается только неначатая строка без
     // следа, оставленная галочкой keep_services, — как прежде.
     const keepServices = args.keep_services === true || args.keep_services === 1;
-    const PERFORMED = ['collected', 'in_progress', 'resulted', 'completed'];
+    const PERFORMED = PERFORMED_LINE_STATUSES;   // INPATIENT_MONEY_FIX_V1 — один список с remove/change_unpaid_service
     const lines = db.prepare(`
       SELECT vs.id, vs.status, COALESCE(s.name, p.name, '') AS name
         FROM visit_services vs
