@@ -585,7 +585,23 @@ export function discardEmptyVisit(db, args, user) {
     // Строки заявок, которые ensure_visit успел привязать, снова свободны.
     db.prepare('UPDATE crm_request_services SET visit_id = NULL WHERE visit_id = ?').run(visitId);
     // CRM_CALENDAR_MIRROR_V1 — и привязка записи к заявке уходит вместе с ней.
-    try { db.prepare('DELETE FROM crm_booking_links WHERE visit_id = ?').run(visitId); } catch { /* сборка без 187 */ }
+    // Разбор ревью (M7): заявку, которую завела САМА эта запись (колл-центр без
+    // открытой заявки), убираем тоже — иначе на доске осталась бы «Записан»
+    // без записи. Только если к ней с тех пор ничего не прибавилось: ни строки
+    // на другой записи, ни другой привязки.
+    try {
+      const own = db.prepare('SELECT request_id FROM crm_booking_links WHERE visit_id = ? AND created_request = 1').get(visitId);
+      db.prepare('DELETE FROM crm_booking_links WHERE visit_id = ?').run(visitId);
+      if (own) {
+        const busy = db.prepare(`SELECT 1 FROM crm_request_services WHERE request_id = ? AND status <> 'cancelled'
+                                    AND (visit_id IS NULL OR visit_id <> ?) LIMIT 1`).get(own.request_id, visitId)
+          || db.prepare('SELECT 1 FROM crm_booking_links WHERE request_id = ? LIMIT 1').get(own.request_id);
+        if (!busy) {
+          db.prepare('DELETE FROM crm_booking_undo WHERE request_id = ?').run(own.request_id);
+          db.prepare('DELETE FROM crm_requests WHERE id = ?').run(own.request_id);
+        }
+      }
+    } catch (e) { console.error('[discard_empty_visit] привязка к заявке не убрана:', e && e.message); }
     db.prepare('DELETE FROM visits WHERE id = ?').run(visitId);
     return { discarded: true };
   });

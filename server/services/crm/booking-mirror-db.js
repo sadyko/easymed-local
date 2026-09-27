@@ -12,7 +12,7 @@
 // молчит при любой ошибке: запись в базу уже состоялась.
 import { compile } from '../../db/query-compiler.js';
 import {
-  mirrorVisit, visitsOfLines, isRefusalStage, cancellableBookingsOf, isEmptyBooking, priceFor, PRE_ARRIVAL,
+  mirrorVisit, visitsOfLines, isRefusalStage, cancellableBookingsOf, isEmptyBooking, PRE_ARRIVAL, repriceOwnLine,
 } from './booking-mirror.js';
 import { calendarBook } from '../rpc/calendar.js';
 import { localDate } from '../domain/day.js';
@@ -144,7 +144,8 @@ export function mirrorAfter(db, ctx, meta, body, user, { insertedId = null } = {
       if (meta.op === 'update') {
         for (const v of visitsOfLines(db, ctx.ids)) ctx.visits.add(v);
         // Врача строки заявки сменили в карточке — свободная строка визита
-        // следует за ним (и переоценивается: личная цена врача).
+        // следует за ним. Цена меняется только у строки, заведённой зеркалом
+        // (M5, booking-mirror.js isOwnLine); чужую пересчитает касса.
         if (Object.prototype.hasOwnProperty.call(values, 'doctor_id') && ctx.ids.length) {
           const linked = db.prepare(`
             SELECT vs.*, v.patient_id, ${localDate('v.visit_date')} AS day, v.status AS visit_status, v.sync_origin AS visit_origin
@@ -158,9 +159,8 @@ export function mirrorAfter(db, ctx, meta, body, user, { insertedId = null } = {
             if (!PRE_ARRIVAL.includes(vs.visit_status) || vs.visit_origin != null) continue;
             if (vs.status !== 'added' || vs.invoice_item_id != null || vs.sync_origin != null) continue;
             if (vs.service_id == null && vs.consultation_type_id == null) continue;
-            const { unit, tier } = priceFor(db, { patientId: vs.patient_id, visitId: vs.visit_id, day: vs.day, serviceId: vs.service_id, doctorId: doc, consultationTypeId: vs.consultation_type_id });
-            db.prepare('UPDATE visit_services SET doctor_id = ?, unit_price = ?, total = ? * quantity, price_tier = ? WHERE id = ?')
-              .run(doc, unit, unit, tier, vs.id);
+            db.prepare('UPDATE visit_services SET doctor_id = ? WHERE id = ?').run(doc, vs.id);
+            repriceOwnLine(db, vs.id);
           }
         }
       }

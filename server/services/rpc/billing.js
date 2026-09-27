@@ -6,6 +6,8 @@ import { ensureOpenShift } from './cashier.js';   // SHIFT_AUTO_V2
 // CRM_REAL_BOOKING_V1 — платёж на кассе это доказательство, что пациент
 // здесь: заочно деньги у окна не появляются. См. шапку crm/visit-status.js.
 import { crmInvoiceEvidence, crmVisitEvidence } from '../crm/visit-status.js';
+// CRM_CALENDAR_MIRROR_V1 (разбор ревью M6, M1) — строки записи из заявки CRM.
+import { pruneAutoLinesOnInvoice, syncLineFromVisit } from '../crm/booking-mirror.js';
 import { invoiceStatusFor } from '../domain/money.js';
 // PAY_BASIS_PERFORMED_V1 — «what will the invoice charge for this line» is one
 // function, shared with the doctor's pay (rpc/reports.js): own price over the
@@ -288,6 +290,9 @@ export function createInvoiceForVisit(db, args, user) {
   }
 
   const run = db.transaction(() => {
+    // CRM_CALENDAR_MIRROR_V1 (M6) — первый счёт записи: строка зеркала, у
+    // которой есть двойник регистратуры, уходит (booking-mirror.js).
+    pruneAutoLinesOnInvoice(db, visitId, ids);
     const rows = [];
     for (const id of ids) {
       const row = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(id);
@@ -1040,7 +1045,11 @@ export function changeUnpaidService(db, args, user) {
     return { changed: true, line: db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId), invoice };
   });
 
-  return run();
+  const out = run();
+  // CRM_CALENDAR_MIRROR_V1 (разбор ревью M1) — заявка CRM узнаёт о замене услуги
+  // в записи; иначе зеркало приняло бы её за правку заявки и вернуло прежнюю.
+  if (out && out.changed) syncLineFromVisit(db, vsId);
+  return out;
 }
 
 // CASHIER_REFUND_V1 — возврат оплаты. Inserts a NEGATIVE payments row (so the

@@ -27,6 +27,7 @@ import { hasAnyRole } from '../roles.js';
 import { today } from '../domain/day.js';
 import {
   isPreArrival, visitHasWork, insertBookingLine, mirrorVisit, attachVisitToCrm, arrivedByEvidence, lineKey,
+  bookingLineRefusal,
 } from '../crm/booking-mirror.js';
 import { localDate } from '../domain/day.js';
 
@@ -41,6 +42,7 @@ const VS_CHILDREN = [
   ['lab_results', 'по услуге уже есть результаты анализа'],
   ['visit_documents', 'по услуге уже есть документ'],
   ['lab_device_messages', 'по услуге уже пришли данные анализатора'],
+  ['service_queue_tickets', 'по услуге уже выдан талон очереди'],   // разбор ревью I2
 ];
 
 /** Запись, к которой можно дописывать и с которой можно снимать услуги. */
@@ -69,8 +71,14 @@ export function bookingLinesAdd(db, args, user) {
   if (!raw.length) throw new RpcError('Не выбраны услуги.', 400);
   if (raw.length > MAX_LINES) throw new RpcError(`За один раз можно добавить не больше ${MAX_LINES} услуг.`, 400);
 
+  // Разбор ревью (M2) — экран называет пациента записи; чужая запись (не тот
+  // пациент, которого оператор держит на линии) — отказ.
+  const patientArg = args && args.patient_id != null && args.patient_id !== '' ? Number(args.patient_id) : null;
   const run = db.transaction(() => {
     const v = bookingOrRefuse(db, visitId);
+    if (patientArg != null && Number(v.patient_id) !== patientArg) {
+      throw new RpcError('Это запись другого пациента — добавить к ней услуги отсюда нельзя.', 400);
+    }
     const added = [];
     const skipped = [];
     const seen = new Set(db.prepare('SELECT service_id, consultation_type_id FROM visit_services WHERE visit_id = ?')
@@ -82,27 +90,24 @@ export function bookingLinesAdd(db, args, user) {
       const hasService = l && l.service_id != null && l.service_id !== '';
       const serviceId = hasService ? Number(l.service_id) : null;
       const consultId = !hasService && l && l.consultation_type_id != null && l.consultation_type_id !== '' ? Number(l.consultation_type_id) : null;
-      if (hasService) {
-        if (!isPosInt(serviceId)) throw new RpcError('Услуга указана неверно.', 400);
-        const svc = db.prepare('SELECT id, name, type, active FROM services WHERE id = ?').get(serviceId);
-        if (!svc || Number(svc.active) === 0) throw new RpcError('Услуга не найдена или снята с продажи.', 400);
-        // 'other' — это и есть хирургия (миграция 109; routes/db.js refuseSurgeryWithoutBed).
-        if (svc.type === 'other') {
-          throw new RpcError(`«${svc.name}» — хирургия: она оформляется на госпитализацию, её записывает регистратура.`, 400);
-        }
-      } else {
-        if (!isPosInt(consultId)) throw new RpcError('Услуга указана неверно.', 400);
-        const ct = db.prepare('SELECT id, active FROM consultation_types WHERE id = ?').get(consultId);
-        if (!ct || Number(ct.active) === 0) throw new RpcError('Вид приёма не найден или выключен.', 400);
-      }
+      if (hasService && !isPosInt(serviceId)) throw new RpcError('Услуга указана неверно.', 400);
+      if (!hasService && !isPosInt(consultId)) throw new RpcError('Услуга указана неверно.', 400);
+      // Одно правило с зеркалом (booking-mirror.js bookingLineRefusal): без
+      // хирургии, без снятого с продажи, без выключенного вида приёма.
+      const refusal = bookingLineRefusal(db, { serviceId, consultationTypeId: consultId });
+      if (refusal) throw new RpcError(refusal, 400);
       const doctorId = l && l.doctor_id != null && l.doctor_id !== '' ? Number(l.doctor_id) : null;
-      if (doctorId != null && (!isPosInt(doctorId) || !db.prepare('SELECT 1 FROM users WHERE id = ?').get(doctorId))) {
-        throw new RpcError('Врач не найден.', 400);
+      // M2 — врач строки должен быть врачом, а не любым сотрудником.
+      if (doctorId != null && (!isPosInt(doctorId)
+          || !db.prepare("SELECT 1 FROM users WHERE id = ? AND (is_doctor = 1 OR role = 'doctor')").get(doctorId))) {
+        throw new RpcError('Врач строки не найден среди врачей клиники.', 400);
       }
+      const rawAt = l && l.scheduled_at != null && l.scheduled_at !== '' ? String(l.scheduled_at) : null;
+      if (rawAt != null && Number.isNaN(Date.parse(rawAt))) throw new RpcError('Время услуги указано неверно.', 400);
       const key = lineKey({ service_id: serviceId, consultation_type_id: consultId });
       if (seen.has(key)) { skipped.push(serviceId || consultId); continue; }
       seen.add(key);
-      const scheduledAt = l && typeof l.scheduled_at === 'string' && l.scheduled_at ? l.scheduled_at : null;
+      const scheduledAt = rawAt ? new Date(Date.parse(rawAt)).toISOString() : null;
       const id = insertBookingLine(db, { visit: v, serviceId, consultationTypeId: consultId, doctorId, createdBy: user && user.id, scheduledAt });
       const row = db.prepare('SELECT id, service_id, consultation_type_id, unit_price FROM visit_services WHERE id = ?').get(id);
       added.push(row);
