@@ -116,8 +116,26 @@ export function requestOfVisit(db, visitId) {
   } catch { return null; }
 }
 
+/**
+ * КЛЮЧ УСЛУГИ СТРОКИ — одинаковый у строки заявки и строки визита: услуга
+ * каталога ('s:12') или консультация по виду приёма ('c:5', service_id NULL,
+ * миграция 188). null — строке нечего зеркалить (товар, пустая строка).
+ */
+export function lineKey(row) {
+  if (!row) return null;
+  if (row.service_id != null) return 's:' + row.service_id;
+  if (row.consultation_type_id != null) return 'c:' + row.consultation_type_id;
+  return null;
+}
+
 /** Цена строки визита — тем же правилом, что у регистратуры и кассы. */
-export function priceFor(db, { patientId, visitId, day, serviceId, doctorId }) {
+export function priceFor(db, { patientId, visitId, day, serviceId, doctorId, consultationTypeId = null }) {
+  // BILLING_AUDIT_FIX_V1 (B7) — консультация: цена врача по виду приёма, а не
+  // присланная браузером (lineUnitPrice → consultationFor).
+  if (!serviceId && consultationTypeId) {
+    const unit = round2(lineUnitPrice(db, { service_id: null, consultation_type_id: consultationTypeId, doctor_id: doctorId || null, unit_price: 0 }));
+    return { unit, tier: null };
+  }
   const svc = db.prepare('SELECT * FROM services WHERE id = ?').get(serviceId);
   let tier = 'primary';
   try {
@@ -131,14 +149,14 @@ export function priceFor(db, { patientId, visitId, day, serviceId, doctorId }) {
 }
 
 /** Строка визита 'added' — одна дверь для зеркала и для RPC колл-центра. */
-export function insertBookingLine(db, { visit, serviceId, doctorId, createdBy, scheduledAt = null }) {
+export function insertBookingLine(db, { visit, serviceId = null, consultationTypeId = null, doctorId, createdBy, scheduledAt = null }) {
   const { unit, tier } = priceFor(db, {
-    patientId: visit.patient_id, visitId: visit.id, day: visit.day, serviceId, doctorId,
+    patientId: visit.patient_id, visitId: visit.id, day: visit.day, serviceId, doctorId, consultationTypeId,
   });
   const info = db.prepare(`
-    INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by, scheduled_at)
-    VALUES (?, ?, ?, 1, ?, ?, 'added', ?, ?, ?)`)
-    .run(visit.id, serviceId, doctorId || null, unit, unit, tier, createdBy || null, scheduledAt);
+    INSERT INTO visit_services (visit_id, service_id, consultation_type_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by, scheduled_at)
+    VALUES (?, ?, ?, ?, 1, ?, ?, 'added', ?, ?, ?)`)
+    .run(visit.id, serviceId || null, serviceId ? null : (consultationTypeId || null), doctorId || null, unit, unit, tier, createdBy || null, scheduledAt);
   return Number(info.lastInsertRowid);
 }
 
@@ -215,7 +233,8 @@ function mirrorVisitTx(db, v, actorId) {
   const vsOfVisit = () => db.prepare('SELECT * FROM visit_services WHERE visit_id = ? ORDER BY id').all(V);
   const isReferenced = (id) => referencedBy.all(id).length > 0;
   for (const line of lines) {
-    if (!line.service_id) continue;
+    const key = lineKey(line);
+    if (!key) continue;
     const vs = line.visit_service_id ? getVs.get(line.visit_service_id) : null;
     if (line.visit_service_id && !vs) {
       // Строку визита сняли в календаре или в окне визита — снимаем и в заявке.
@@ -224,11 +243,11 @@ function mirrorVisitTx(db, v, actorId) {
       continue;
     }
     if (vs && vs.visit_id === V) continue;
-    if (vs && vs.visit_id !== V && vs.service_id === line.service_id && vsFree(db, vs)) {
+    if (vs && vs.visit_id !== V && lineKey(vs) === key && vsFree(db, vs)) {
       // ПЕРЕНОС ИЗ ЗАЯВКИ: строка уехала на другой день — её строка визита едет
       // следом, а не заводится второй. Цена пересчитывается: другой день —
       // другой тариф повторного визита.
-      const { unit, tier } = priceFor(db, { patientId: v.patient_id, visitId: V, day: v.day, serviceId: line.service_id, doctorId: line.doctor_id });
+      const { unit, tier } = priceFor(db, { patientId: v.patient_id, visitId: V, day: v.day, serviceId: line.service_id, doctorId: line.doctor_id, consultationTypeId: line.consultation_type_id });
       db.prepare('UPDATE visit_services SET visit_id = ?, doctor_id = ?, unit_price = ?, total = ? * quantity, price_tier = ? WHERE id = ?')
         .run(V, line.doctor_id || null, unit, unit, tier, vs.id);
       touched.add(line.request_id); out.moved++;
@@ -236,9 +255,9 @@ function mirrorVisitTx(db, v, actorId) {
     }
     // Уже есть такая услуга в визите и ни одна строка заявки её не держит —
     // берём её, а не заводим вторую (её поставила регистратура раньше нас).
-    const cand = vsOfVisit().find((x) => x.service_id === line.service_id && !isReferenced(x.id) && x.clinic_item_id == null);
+    const cand = vsOfVisit().find((x) => lineKey(x) === key && !isReferenced(x.id) && x.clinic_item_id == null);
     if (cand) { linkLine.run(cand.id, 0, line.id); out.linked++; touched.add(line.request_id); continue; }
-    const id = insertBookingLine(db, { visit: v, serviceId: line.service_id, doctorId: line.doctor_id, createdBy: actorId });
+    const id = insertBookingLine(db, { visit: v, serviceId: line.service_id, consultationTypeId: line.consultation_type_id, doctorId: line.doctor_id, createdBy: actorId });
     linkLine.run(id, 1, line.id);
     out.created++; touched.add(line.request_id);
   }
@@ -253,7 +272,7 @@ function mirrorVisitTx(db, v, actorId) {
   }
   for (const x of vsOfVisit()) {
     if (!getVs.get(x.id)) continue;   // уступила место выше в этом же проходе
-    if (x.service_id == null || x.clinic_item_id != null || x.sync_origin != null) continue;
+    if (!lineKey(x) || x.clinic_item_id != null || x.sync_origin != null) continue;
     if (x.status !== 'added' || x.invoice_item_id != null) continue;
     if (isReferenced(x.id)) continue;
     // ЗАМЕНА СТРОКИ ЗЕРКАЛА. Регистратура в день приёма подставляет строки
@@ -261,9 +280,9 @@ function mirrorVisitTx(db, v, actorId) {
     // плательщиком). Строка, заведённая зеркалом под ту же услугу, уступает
     // место: вторая строка той же услуги — это двойной счёт.
     const auto = db.prepare(`SELECT * FROM crm_request_services
-                              WHERE visit_id = ? AND status = 'pending' AND service_id = ?
+                              WHERE visit_id = ? AND status = 'pending'
                                 AND visit_service_auto = 1 AND visit_service_id IS NOT NULL AND visit_service_id <> ?
-                              ORDER BY id LIMIT 1`).get(V, x.service_id, x.id);
+                              ORDER BY id`).all(V, x.id).find((l) => lineKey(l) === lineKey(x));
     if (auto) {
       const old = getVs.get(auto.visit_service_id);
       if (old && old.visit_id === V && vsFree(db, old)) {
@@ -275,9 +294,9 @@ function mirrorVisitTx(db, v, actorId) {
     }
     if (!reqId) continue;   // запись не из заявки — зеркалить некуда
     db.prepare(`INSERT INTO crm_request_services
-                  (request_id, service_id, scheduled_date, status, doctor_id, visit_id, visit_service_id, visit_service_auto)
-                VALUES (?, ?, ?, 'pending', ?, ?, ?, 0)`)
-      .run(reqId, x.service_id, v.day, x.doctor_id || null, V, x.id);
+                  (request_id, service_id, consultation_type_id, scheduled_date, status, doctor_id, visit_id, visit_service_id, visit_service_auto)
+                VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, 0)`)
+      .run(reqId, x.service_id ?? null, x.service_id != null ? null : x.consultation_type_id, v.day, x.doctor_id || null, V, x.id);
     out.lines++; touched.add(reqId);
   }
 
@@ -306,8 +325,8 @@ export function mirrorReschedule(db, visitId, { oldDoctorId = null } = {}) {
           .run(v.doctor_id, v.id, oldDoctorId);
         const moving = db.prepare(`SELECT * FROM visit_services WHERE visit_id = ? AND doctor_id = ?`).all(v.id, oldDoctorId);
         for (const vs of moving) {
-          if (!vsFree(db, vs) || vs.service_id == null) continue;
-          const { unit, tier } = priceFor(db, { patientId: v.patient_id, visitId: v.id, day: v.day, serviceId: vs.service_id, doctorId: v.doctor_id });
+          if (!vsFree(db, vs) || !lineKey(vs)) continue;
+          const { unit, tier } = priceFor(db, { patientId: v.patient_id, visitId: v.id, day: v.day, serviceId: vs.service_id, doctorId: v.doctor_id, consultationTypeId: vs.consultation_type_id });
           db.prepare('UPDATE visit_services SET doctor_id = ?, unit_price = ?, total = ? * quantity, price_tier = ? WHERE id = ?')
             .run(v.doctor_id, unit, unit, tier, vs.id);
         }

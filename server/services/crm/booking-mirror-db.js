@@ -17,7 +17,7 @@ import {
 import { calendarBook } from '../rpc/calendar.js';
 import { localDate } from '../domain/day.js';
 
-const LINE_KEYS = ['status', 'scheduled_date', 'doctor_id', 'service_id', 'visit_id'];
+const LINE_KEYS = ['status', 'scheduled_date', 'doctor_id', 'service_id', 'visit_id', 'consultation_type_id'];
 
 function targetIds(db, body, user) {
   const sel = compile({ table: body.table, op: 'select', columns: 'id', filters: body.filters }, user, { db });
@@ -38,10 +38,12 @@ function lockedLineRefusal(db, ids, values) {
   const keys = LINE_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(values, k));
   if (!keys.length) return null;
   const rows = db.prepare(`
-    SELECT l.*, vs.status AS vs_status, vs.invoice_item_id AS vs_invoice, s.name AS service_name
+    SELECT l.*, vs.status AS vs_status, vs.invoice_item_id AS vs_invoice,
+           COALESCE(s.name, ct.name_ru, ct.name) AS service_name
       FROM crm_request_services l
       LEFT JOIN visit_services vs ON vs.id = l.visit_service_id
       LEFT JOIN services s ON s.id = l.service_id
+      LEFT JOIN consultation_types ct ON ct.id = l.consultation_type_id
      WHERE l.id IN (${holes(ids)})`).all(...ids);
   for (const r of rows) {
     const changes = keys.some((k) => String(values[k] ?? '') !== String(r[k] ?? ''));
@@ -154,8 +156,9 @@ export function mirrorAfter(db, ctx, meta, body, user, { insertedId = null } = {
             const doc = values.doctor_id || null;
             if (Number(vs.doctor_id || 0) === Number(doc || 0)) continue;
             if (!PRE_ARRIVAL.includes(vs.visit_status) || vs.visit_origin != null) continue;
-            if (vs.status !== 'added' || vs.invoice_item_id != null || vs.sync_origin != null || vs.service_id == null) continue;
-            const { unit, tier } = priceFor(db, { patientId: vs.patient_id, visitId: vs.visit_id, day: vs.day, serviceId: vs.service_id, doctorId: doc });
+            if (vs.status !== 'added' || vs.invoice_item_id != null || vs.sync_origin != null) continue;
+            if (vs.service_id == null && vs.consultation_type_id == null) continue;
+            const { unit, tier } = priceFor(db, { patientId: vs.patient_id, visitId: vs.visit_id, day: vs.day, serviceId: vs.service_id, doctorId: doc, consultationTypeId: vs.consultation_type_id });
             db.prepare('UPDATE visit_services SET doctor_id = ?, unit_price = ?, total = ? * quantity, price_tier = ? WHERE id = ?')
               .run(doc, unit, unit, tier, vs.id);
           }

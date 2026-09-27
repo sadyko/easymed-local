@@ -356,3 +356,56 @@ test('12. оплата без отметки «Пришёл» — приход: 
     assert.equal(add.status, 400, 'колл-центр дописал услугу к оплаченному приёму');
   } finally { t.close(); }
 });
+
+// ═══ CRM_CALENDAR_MIRROR_V1 (часть 2) — КОНСУЛЬТАЦИИ ПО ВИДАМ ПРИЁМА ═══════
+//
+// Строка консультации — service_id NULL + consultation_type_id; её цену считает
+// сервер по ценам врача (BILLING_AUDIT_FIX_V1 B7), а не браузер. Колл-центр
+// пишет и её, и она зеркалится в заявку строкой того же вида приёма.
+test('13. колл-центр записывает консультацию по виду приёма — цена сервера, строка заявки того же вида', async () => {
+  const t = await start();
+  try {
+    t.db.prepare("INSERT INTO consultation_types (id, name, name_ru, price, active) VALUES (5,'Первичный','Первичный приём',80000,1)").run();
+    t.db.prepare("INSERT INTO doctor_consultation_prices (doctor_id, consultation_type_id, price, available) VALUES (10, 5, 120000, 1)").run();
+    const b = await t.rpc('calendar_book', 'cc', { patient_id: 77, doctor_id: 10, start: at(D, 11), duration_minutes: 30 });
+    assert.equal(b.status, 200, JSON.stringify(b.json));
+    const visitId = b.json.data.visit.id;
+    const add = await t.rpc('booking_lines_add', 'cc', { visit_id: visitId, lines: [{ consultation_type_id: 5, doctor_id: 10, unit_price: 1 }] });
+    assert.equal(add.status, 200, JSON.stringify(add.json));
+    const vs = t.db.prepare('SELECT * FROM visit_services WHERE visit_id = ?').all(visitId);
+    assert.equal(vs.length, 1);
+    assert.equal(vs[0].service_id, null);
+    assert.equal(vs[0].consultation_type_id, 5);
+    assert.equal(vs[0].unit_price, 120000, 'цена консультации не по цене врача');
+    const req = t.db.prepare('SELECT id FROM crm_requests WHERE patient_id = 77').get();
+    const lines = linesOf(t.db, req.id);
+    assert.deepEqual(lines.map((l) => [l.service_id, l.consultation_type_id, l.visit_service_id, l.doctor_id]), [[null, 5, vs[0].id, 10]]);
+    // Повтор того же вида — не вторая строка.
+    const dup = await t.rpc('booking_lines_add', 'cc', { visit_id: visitId, lines: [{ consultation_type_id: 5, doctor_id: 10 }] });
+    assert.equal(dup.json.data.added.length, 0);
+    // Снятие в заявке снимает и в записи.
+    const c = await t.dbq('cc', { table: 'crm_request_services', op: 'update', values: { status: 'cancelled' }, filters: [{ col: 'id', op: 'eq', val: lines[0].id }] });
+    assert.equal(c.status, 200);
+    assert.equal(t.db.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = ?').get(visitId).n, 0);
+  } finally { t.close(); }
+});
+
+test('14. консультация из заявки CRM становится строкой записи; неизвестный вид приёма — отказ', async () => {
+  const t = await start();
+  try {
+    t.db.prepare("INSERT INTO consultation_types (id, name, price, active) VALUES (5,'Первичный',80000,1)").run();
+    const r = await t.dbq('cc', { table: 'crm_requests', op: 'insert', returning: true, single: 'single',
+      values: { full_name: 'Пациент Тест', phone: '+998900000077', patient_id: 77, status: 'in_process', source: 'call' } });
+    const rid = r.json.data.id;
+    const ins = await t.dbq('cc', { table: 'crm_request_services', op: 'insert', values: { request_id: rid, consultation_type_id: 5, scheduled_date: D, doctor_id: 10, status: 'pending' } });
+    assert.equal(ins.status, 200, JSON.stringify(ins.json));
+    const b = await t.rpc('ensure_visit', 'cc', { patient_id: 77, date: at(D, 10), doctor_id: 10,
+      book: { doctor_id: 10, start: at(D, 10), duration_minutes: 30 } });
+    assert.equal(b.status, 200, JSON.stringify(b.json));
+    const vs = t.db.prepare('SELECT * FROM visit_services WHERE visit_id = ?').all(b.json.data.visit.id);
+    assert.deepEqual(vs.map((x) => [x.service_id, x.consultation_type_id, x.unit_price]), [[null, 5, 80000]]);
+    const bad = await t.rpc('booking_lines_add', 'cc', { visit_id: b.json.data.visit.id, lines: [{ consultation_type_id: 999 }] });
+    assert.equal(bad.status, 400);
+    assert.match(bad.json.error.message, /Вид приёма/);
+  } finally { t.close(); }
+});
