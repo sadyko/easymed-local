@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isSummableHeader, reportTotals } from './report-totals.js';
+import { isSummableHeader, reportTotals, localizeReport, reportSheets } from './report-totals.js';
 
 test('деньги и количества суммируются', () => {
   for (const h of ['Сумма без скидки', 'Оплачено', 'Остаток / долг', 'Total', 'Discount', 'Кол-во', 'Выручка']) {
@@ -77,4 +77,52 @@ test('сервер назвал складываемые колонки — «Ц
 
 test('строки вне итога не складываются', () => {
   assert.deepEqual(reportTotals(COLS, ROWS, get, numeric, { skipRows: [1] }), [null, 130000, null, 130000]);
+});
+
+// V3120_FIX (I18N + EXCEL) — отчёт на языке экрана и выгрузка с «Итого».
+import { STRINGS } from '../i18n-strings.js';
+const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const txFor = (lang) => {
+  const tr = (s) => (STRINGS[s] && STRINGS[s][lang]) || s;
+  return {
+    lang, tr,
+    trf: (tpl, params) => Object.entries(params || {}).reduce((out, [k, v]) => out.split('{' + k + '}').join(String(v)), tr(tpl)),
+    monthName: (m) => MONTHS_EN[m],
+  };
+};
+const REPORT = {
+  columns: ['Где', 'Услуга', 'Вознаграждение', 'Ставка врача'],
+  rows: [['Амбулатория', 'Приём', 1000, 30], ['Корректировка', 'Корректировка за август 2026', -250, null]],
+  cells_t: [[1, 1, 'Корректировка за {month}', { month: '2026-08' }]],
+  notes: ['Закрыт месяц: август 2026 (2026-09-27) — …', 'Вознаграждение за направления — как и прежде, только по оплаченным счетам.'],
+  notes_t: [{ template: 'Закрытые месяцы (в скобках — день закрытия): {months} — их суммы показаны по записи на момент закрытия и не меняются. Изменения после закрытия — строками «Корректировка за …» в первом открытом месяце.', params: { months: '2026-08 (2026-09-27)' } }, null],
+  summable_columns: ['Вознаграждение'],
+  total_skip_rows: [],
+};
+
+test('localizeReport: заголовки, перечисления, шаблоны ячеек и примечаний — на языке экрана', () => {
+  const en = localizeReport(REPORT, txFor('en'));
+  assert.equal(en.columns[0], STRINGS['Где'].en);
+  assert.equal(en.rows[0][0], STRINGS['Амбулатория'].en, 'колонка-перечисление переводится');
+  assert.equal(en.rows[0][1], 'Приём', 'данные клиники (название услуги) не трогаются');
+  assert.equal(en.rows[1][1], 'Adjustment for August 2026');
+  assert.match(en.notes[0], /August 2026 \(2026-09-27\)/);
+  assert.equal(en.notes[1], STRINGS['Вознаграждение за направления — как и прежде, только по оплаченным счетам.'].en);
+  const ru = localizeReport(REPORT, txFor('ru'));
+  assert.equal(ru.rows[1][1], 'Корректировка за август 2026', 'по-русски — текст сервера как есть');
+  assert.equal(ru.notes[0], REPORT.notes[0]);
+});
+
+test('reportSheets: строка «Итого» по тем же правилам, что под таблицей, и лист примечаний', () => {
+  const s = reportSheets(REPORT, txFor('uz'));
+  assert.equal(s.report.length, 1 + 2 + 1);
+  const total = s.report[s.report.length - 1];
+  assert.equal(total[0], STRINGS['Итого'].uz);
+  assert.equal(total[2], 750);
+  assert.equal(total[3], null, 'ставка не складывается');
+  assert.equal(s.notes[0][0], STRINGS['Примечания'].uz);
+  assert.equal(s.notes.length, 3);
+  const skipped = reportSheets({ ...REPORT, total_skip_rows: [1] }, txFor('en'));
+  assert.equal(skipped.report[skipped.report.length - 1][2], 1000, 'строки вне итога не складываются');
+  assert.equal(reportSheets({ ...REPORT, notes: [], notes_t: [] }, txFor('en')).notes, null);
 });

@@ -1712,6 +1712,45 @@ function payAdjustments(db, { from, to, doctorId = null, args = null, ctx = null
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// V3120_FIX (I18N) — ПРИМЕЧАНИЯ И ПОДПИСИ, СОБРАННЫЕ ИЗ ЗНАЧЕНИЙ.
+//
+// Экран переводит строку отчёта словарём целиком (tr), а предложение, в
+// которое вставлены числа, месяцы или имена, целиком в словаре не найти.
+// Поэтому у такого примечания рядом с русским текстом едет ШАБЛОН с дырами и
+// значения (notes_t, pending_items.note_t), а у ячейки «Корректировка за …» —
+// cells_t: [строка, колонка, шаблон, значения]. Месяц в значениях — ГГГГ-ММ:
+// словом на языке экрана его пишет браузер. Русский текст не меняется.
+// ---------------------------------------------------------------------------
+const NOTE_T = new Map();
+function noteT(text, template, params) {
+  if (text) {
+    if (NOTE_T.size > 2000) NOTE_T.clear();
+    NOTE_T.set(text, { template, params });
+  }
+  return text;
+}
+const CLOSED_MONTHS_T = 'Закрытые месяцы (в скобках — день закрытия): {months} — их суммы показаны по записи на момент закрытия и не меняются. Изменения после закрытия — строками «Корректировка за …» в первом открытом месяце.';
+const PENDING_ITEMS_T = 'Позиции ещё не доехали: счетов — {n}, на {amount} сум. Деньги видны в счетах, но строк этих счетов здесь пока нет: какая это услуга и чей врач — неизвестно, поэтому в суммы и в разбивку этого отчёта они НЕ включены. Позиции приедут следующей синхронизацией; если здание молчит, посмотрите «Свежесть данных по зданиям» на странице «Отчёты».';
+const INPATIENT_NO_RATE_T = 'Услуг, у исполнителя которых нет стационарной ставки (доля не начислена): {n} — {list}.';
+const ADJ_LABEL_T = 'Корректировка за {month}';
+const ADJ_LABEL_SERVICE_T = 'Корректировка за {month}: {service}';
+const ADJ_LABEL_RE = /^Корректировка за (\S+) (\d{4})(?:: ([\s\S]*))?$/;
+// Ячейки «Корректировка за <месяц> <год>[: услуга]» → шаблоны (строки
+// снимка закрытого месяца тоже: подпись узнаётся по тексту, а не по объекту).
+function cellTemplates(rows) {
+  const out = [];
+  (rows || []).forEach((row, ri) => (row || []).forEach((v, ci) => {
+    if (typeof v !== 'string' || !v.startsWith('Корректировка за ')) return;
+    const m = ADJ_LABEL_RE.exec(v);
+    const mi = m ? MONTHS_RU.indexOf(m[1]) : -1;
+    if (mi < 0) return;
+    const month = m[2] + '-' + String(mi + 1).padStart(2, '0');
+    out.push(m[3] != null ? [ri, ci, ADJ_LABEL_SERVICE_T, { month, service: m[3] }] : [ri, ci, ADJ_LABEL_T, { month }]);
+  }));
+  return out;
+}
+
 // Примечание отчёта: какие месяцы периода закрыты.
 function closedMonthsNote(db, from, to) {
   const closed = closedMonthMap(db);
@@ -1719,9 +1758,12 @@ function closedMonthsNote(db, from, to) {
   const hi = monthOf(String(to).slice(0, 10));
   const inRange = [...closed.values()].filter((p) => p.month >= lo && p.month <= hi);
   if (!inRange.length) return null;
-  return 'Закрыт' + (inRange.length > 1 ? 'ы месяцы: ' : ' месяц: ')
+  const text = 'Закрыт' + (inRange.length > 1 ? 'ы месяцы: ' : ' месяц: ')
     + inRange.map((p) => monthRu(p.month) + ' (' + String(p.closed_at || '').slice(0, 10) + ')').join(', ')
     + ' — их суммы показаны по записи на момент закрытия и не меняются. Изменения после закрытия — строками «Корректировка за …» в первом открытом месяце.';
+  return noteT(text, CLOSED_MONTHS_T, {
+    months: inRange.map((p) => p.month + ' (' + String(p.closed_at || '').slice(0, 10) + ')').join(', '),
+  });
 }
 
 // «Оплата врачей: Правка» (справочник прав). Ключ не настроен — как было
@@ -1898,8 +1940,9 @@ const PENDING_ITEMS_TAIL = 'Деньги видны в счетах, но стр
 function pendingItemsNote(p) {
   if (!p || !p.invoices) return null;
   const n = p.invoices;
-  return 'Позиции ещё не доехали: ' + n + ' ' + pluralRu(n, 'счёт', 'счета', 'счетов')
-    + ', ' + moneyRu(p.amount) + ' сум. ' + PENDING_ITEMS_TAIL;
+  return noteT('Позиции ещё не доехали: ' + n + ' ' + pluralRu(n, 'счёт', 'счета', 'счетов')
+    + ', ' + moneyRu(p.amount) + ' сум. ' + PENDING_ITEMS_TAIL,
+  PENDING_ITEMS_T, { n: String(n), amount: moneyRu(p.amount) });
 }
 
 /**
@@ -3228,8 +3271,9 @@ function inpatientNoRateNote(lines) {
   const who = new Map();
   for (const r of none) who.set(r.doctor || '—', (who.get(r.doctor || '—') || 0) + 1);
   const list = [...who.entries()].sort((a, b) => b[1] - a[1]).map(([n, c]) => n + ' — ' + c).join(', ');
-  return none.length + ' ' + pluralRu(none.length, 'услуга', 'услуги', 'услуг')
-    + ': исполнитель без стационарной ставки — доля не начислена (' + list + ').';
+  return noteT(none.length + ' ' + pluralRu(none.length, 'услуга', 'услуги', 'услуг')
+    + ': исполнитель без стационарной ставки — доля не начислена (' + list + ').',
+  INPATIENT_NO_RATE_T, { n: String(none.length), list });
 }
 
 // Ревью I2 (владелец: исполнителя можно менять и после счёта) — отчёт идёт по
@@ -4055,16 +4099,21 @@ export function runReport(db, args, user) {
     // врачей строк (row_doctor_ids) нужны только маске и браузеру не уходят.
     const { row_doctor_ids: rowDoctorIds, ...raw } = ru(db, args, ctx);
     const { columns, rows, by_building, notes, total_label, total_skip_rows } = maskDoctorPay(db, user, kind, raw, rowDoctorIds);
+    const pending = ITEM_BASED_REPORTS.has(kind) ? pendingItemsMoney(db, args, ctx) : null;
+    if (pending && pending.note) pending.note_t = NOTE_T.get(pending.note) || null;   // V3120_FIX (I18N)
     return {
       kind, columns, rows,
       by_building: by_building || [], notes: notes || [], total_label: total_label || '',
+      // V3120_FIX (I18N) — шаблоны собранных примечаний и подписей корректировок.
+      notes_t: (notes || []).map((n) => NOTE_T.get(n) || null),
+      cells_t: cellTemplates(rows),
       // REPORTS_AUDIT_FIX_V1 — строки, которые «Итого» под таблицей не складывает
       // (отменённые счета и DEP-/CARD- в «Счетах»): номера строк в rows.
       total_skip_rows: Array.isArray(total_skip_rows) ? total_skip_rows : [],
       summable_columns: summableColumns(kind, columns),   // REPORTS_AUDIT_FIX_V1
       // Считается ОДИН раз на отчёт и тем же контекстом зданий, что и сам отчёт:
       // разъехавшийся ctx дал бы недостачу под другими подписями.
-      pending_items: ITEM_BASED_REPORTS.has(kind) ? pendingItemsMoney(db, args, ctx) : null,
+      pending_items: pending,
     };
   }
   const report = legacyReports(db)[kind];

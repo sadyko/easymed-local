@@ -70,3 +70,68 @@ export function reportTotals(columns, rows, get, isNumeric, opts = {}) {
         return Math.round(sum * 100) / 100;
     });
 }
+
+// ---------------------------------------------------------------------------
+// V3120_FIX (I18N + EXCEL) — ОТЧЁТ НА ЯЗЫКЕ ЭКРАНА И ВЫГРУЗКА С ИТОГОМ.
+//
+// Сервер отдаёт отчёт по-русски. Заголовки колонок, примечания и значения
+// колонок-перечислений («Где», «Вид», «Статус»…) переводятся словарём целиком;
+// собранные из значений примечания и подписи «Корректировка за …» приходят
+// шаблоном (notes_t, cells_t, pending_items.note_t) — перевод сначала,
+// подстановка потом, а месяц ГГГГ-ММ пишется словом языка экрана.
+//
+// Выгрузка в Excel прежде была голой таблицей: без строки «Итого» и без
+// примечаний, заголовки — всегда по-русски. Теперь лист отчёта кончается той
+// же строкой «Итого», что под таблицей на экране (те же складываемые колонки
+// и те же строки вне итога), а примечания — отдельным листом.
+//
+// tx — { tr, trf, lang, monthName } из i18n.js: модуль остаётся чистым (без
+// DOM и без i18n), его проверяют в node.
+// ---------------------------------------------------------------------------
+const YM_RE = /\b(\d{4})-(0[1-9]|1[0-2])\b(?!-\d)/g;
+// Колонки, значения которых — слова словаря, а не данные клиники.
+export const ENUM_COLS = new Set(['Где', 'Вид', 'Статус', 'Статус счёта', 'Режим ставок', 'Оплата', 'Роль']);
+
+export function localizeReport(r, tx) {
+    const res = r || {};
+    const ym = (v) => String(v == null ? '' : v).replace(YM_RE,
+        (_, y, m) => tx.monthName(Number(m) - 1, { standalone: true }) + ' ' + y);
+    const viaT = (text, t) => {
+        if (!t || !t.template || tx.lang === 'ru') return tx.tr(text);
+        const params = {};
+        for (const [k, v] of Object.entries(t.params || {})) params[k] = ym(v);
+        return tx.trf(t.template, params);
+    };
+    const cols = res.columns || [];
+    const cellT = new Map((res.cells_t || []).map(([ri, ci, template, params]) => [ri + ':' + ci, { template, params }]));
+    const enumCol = cols.map((c) => ENUM_COLS.has(c));
+    return {
+        columns: cols.map((c) => tx.tr(c)),
+        rows: (res.rows || []).map((row, ri) => row.map((v, ci) => {
+            const t = cellT.get(ri + ':' + ci);
+            if (t) return viaT(v, t);
+            return enumCol[ci] && typeof v === 'string' ? tx.tr(v) : v;
+        })),
+        notes: (res.notes || []).map((n, i) => viaT(n, res.notes_t && res.notes_t[i])),
+        pendingNote: res.pending_items && res.pending_items.note
+            ? viaT(res.pending_items.note, res.pending_items.note_t) : null,
+    };
+}
+
+// Листы выгрузки: report — таблица (+ строка «Итого»), notes — примечания или null.
+export function reportSheets(r, tx) {
+    const res = r || {};
+    const loc = localizeReport(res, tx);
+    const cols = res.columns || [];
+    const rows = res.rows || [];
+    const isNum = cols.map((_, ci) => {
+        const probe = rows.find((x) => x[ci] != null && x[ci] !== '');
+        return typeof (probe && probe[ci]) === 'number';
+    });
+    const totals = reportTotals(cols.map((c) => ({ label: c })), rows, (row, _c, ci) => row[ci], (_c, ci) => isNum[ci],
+        { summable: res.summable_columns, skipRows: res.total_skip_rows });
+    const report = [loc.columns, ...loc.rows];
+    if (totals.some((v) => v != null)) report.push(totals.map((v, ci) => (ci === 0 ? tx.tr('Итого') : v)));
+    const notes = [...(loc.pendingNote ? [loc.pendingNote] : []), ...loc.notes];
+    return { report, notes: notes.length ? [[tx.tr('Примечания')], ...notes.map((n) => [n])] : null };
+}

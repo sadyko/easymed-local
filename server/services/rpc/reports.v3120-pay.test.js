@@ -314,3 +314,27 @@ test('N+1: скидка категории у строки без счёта —
   c.db.prepare = prepare;
   assert.ok(catQueries <= 1, 'запросов к категориям: ' + catQueries);
 });
+
+// ─── I18N. СОБРАННЫЕ ПОДПИСИ — ШАБЛОНОМ ─────────────────────────────────────
+
+test('I18N: «Корректировка за …» и примечание о закрытом месяце едут шаблоном с месяцем ГГГГ-ММ', () => {
+  const c = clinic();
+  const { prev, prev2 } = months(c.db);
+  const at = prev2 + '-10T09:00:00Z';
+  const p = c.pay(c.bill(c.line({ at, patient: 1 }), at));
+  payPeriodClose(c.db, { month: prev2 }, admin);
+  refundPayment(c.db, { payment_id: p, amount: 25000, reason: 'после закрытия', reopen_balance: true }, admin);
+  const det = run(c.db, 'referrals_detail', range(prev));
+  const ci = det.columns.indexOf('Услуга');
+  const t = det.cells_t.find((x) => x[1] === ci);
+  assert.ok(t, 'у ячейки корректировки есть шаблон');
+  assert.equal(t[2], 'Корректировка за {month}');
+  assert.deepEqual(t[3], { month: prev2 });
+  assert.match(det.rows[t[0]][ci], /^Корректировка за /);
+  const lines = run(c.db, 'doctor_lines', range(prev2));
+  assert.equal(lines.notes.length, lines.notes_t.length);
+  const k = lines.notes.findIndex((n) => /^Закрыт месяц/.test(n));
+  assert.ok(k >= 0);
+  assert.match(lines.notes_t[k].template, /\{months\}/);
+  assert.match(lines.notes_t[k].params.months, new RegExp('^' + prev2 + ' \\('));
+});
