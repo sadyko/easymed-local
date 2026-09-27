@@ -17,7 +17,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { runReport, doctorPaySummary, doctorReferralReward } from './reports.js';
+import { runReport, doctorPaySummary, doctorReferralReward, payPeriodClose } from './reports.js';
 import { createInvoiceForVisit, createInvoiceForAdmission, recordPayment, refundPayment, refundInvoiceLine } from './billing.js';
 import { today } from '../domain/day.js';
 
@@ -219,4 +219,67 @@ test('C1: стационар — возврат после выписки даё
   assert.equal(after.fee, inBed.fee, 'фикс врача — та же доля');
   assert.equal(inBed.referral, 82500, '(60 000 + 50 000) × 0,75');
   assert.equal(after.referral, inBed.referral, 'фикс вознаграждения — та же доля');
+});
+
+// ─── I2. ЗАКРЫТЫЙ МЕСЯЦ: ПРАВКА НАЛОГА УСЛУГИ ЕГО НЕ ПЕРЕОЦЕНИВАЕТ ──────────
+//
+// Запись закрытого месяца хранит налог строки; корректировка пересчитывает
+// строку по ставкам месяца (payFeeAtMonthRate), но сумму после налога брала
+// живую — а налог отчёт читает из services.tax_rate сегодня. Налог 12 % → 0 %
+// давал корректировку +12 % доли по каждой строке месяца. Теперь у записанной
+// строки налог — её записанная доля (tax / (сумма − скидка)), приложенная к
+// сегодняшней сумме после скидки.
+function taxClinic() {
+  const db = openDb(':memory:');
+  migrate(db);
+  const cur = today(db).slice(0, 7);
+  let y = Number(cur.slice(0, 4)); let m = Number(cur.slice(5, 7)) - 1;
+  if (m < 1) { m = 12; y -= 1; }
+  const prev = y + '-' + String(m).padStart(2, '0');
+  const lastDay = (mm) => mm + '-' + String(new Date(Date.UTC(Number(mm.slice(0, 4)), Number(mm.slice(5, 7)), 0)).getUTCDate()).padStart(2, '0');
+  const u = db.prepare(`INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, service_rates, inpatient_rates, service_rate_default)
+                        VALUES (?,?,?,?,?,?,?,?,0)`);
+  u.run(1, 'doc', 'x', 'doctor', 'Доктор Д.', 1, JSON.stringify([{ service_id: 1, pct: 30 }]), JSON.stringify([{ service_id: 1, pct: 10 }]));
+  u.run(9, 'adm', 'x', 'admin', 'Администратор', 0, '', '');
+  db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (1,'Процедура',100000,12,'procedure')").run();
+  db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (1, 'P-1', 'Пациент')").run();
+  const at = prev + '-10T09:00:00Z';
+  // Амбулаторная строка со счётом.
+  db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (1, 1, ?, 'scheduled')").run(at);
+  db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status)
+              VALUES (1, 1, 1, 1, 1, 100000, 100000, 'completed')`).run();
+  const out = createInvoiceForVisit(db, { visit_id: 1, visit_service_ids: [1] }, admin).invoice;
+  db.prepare('UPDATE invoices SET created_at = ? WHERE id = ?').run(at, out.id);
+  recordPayment(db, { invoice_id: out.id, amount: out.total_amount, method: 'cash' }, admin);
+  // Строка стационара со счётом.
+  db.prepare(`INSERT INTO admissions (id, admission_no, patient_id, doctor_id, status) VALUES (1, 'A-1', 1, 1, 'discharged')`).run();
+  db.prepare(`INSERT INTO admission_services (id, admission_id, service_id, doctor_id, performer_id, quantity, unit_price, total, status, billable, performed_at)
+              VALUES (1, 1, 1, 1, 1, 1, 100000, 100000, 'added', 1, ?)`).run(at);
+  const inp = createInvoiceForAdmission(db, { admission_id: 1, admission_service_ids: [1] }, admin).invoice;
+  db.prepare('UPDATE invoices SET created_at = ? WHERE id = ?').run(at, inp.id);
+  recordPayment(db, { invoice_id: inp.id, amount: inp.total_amount, method: 'cash' }, admin);
+  const payId = (inv) => db.prepare('SELECT id FROM payments WHERE invoice_id = ? AND amount > 0').get(inv.id).id;
+  return { db, prev, cur: { from: cur + '-01', to: lastDay(cur) }, prevRange: { from: prev + '-01', to: lastDay(prev) }, out, inp, payId };
+}
+
+test('I2: закрытый месяц с налогом 12 % — налог сняли (0 %), корректировок нет ни по амбулатории, ни по стационару', () => {
+  const t = taxClinic();
+  const cab = (rng) => doctorPaySummary(t.db, { doctor_id: 1, ...rng }, admin);
+  assert.equal(cab(t.prevRange).outpatient.fee, 26400, '30 % от 88 000');
+  assert.equal(cab(t.prevRange).inpatient.fee, 8800, '10 % от 88 000');
+  payPeriodClose(t.db, { month: t.prev }, admin);
+  t.db.prepare('UPDATE services SET tax_rate = 0 WHERE id = 1').run();
+  const adj = cab(t.cur).adjustments;
+  assert.equal(adj.count, 0, JSON.stringify(adj.rows));
+  assert.equal(adj.fee, 0);
+});
+
+test('I2: после смены налога поздний возврат по закрытому месяцу корректирует по налогу месяца', () => {
+  const t = taxClinic();
+  payPeriodClose(t.db, { month: t.prev }, admin);
+  t.db.prepare('UPDATE services SET tax_rate = 0 WHERE id = 1').run();
+  refundPayment(t.db, { payment_id: t.payId(t.out), amount: 25000, reason: 'после закрытия', reopen_balance: true }, admin);
+  const adj = doctorPaySummary(t.db, { doctor_id: 1, ...t.cur }, admin).adjustments;
+  assert.equal(adj.count, 1);
+  assert.equal(adj.fee, -6600, '−25 % от 26 400 (налог месяца 12 %), а не 30 000 × 0,75 − 26 400');
 });

@@ -1801,6 +1801,18 @@ function payFeeAtMonthRate(L, rec, sample) {
   // Строка без счёта и тогда, и теперь: её деньги — цена и скидка месяца.
   if (L.invoice_item_id == null && rec && rec.invoice_item_id == null) {
     net = (Number(rec.net) || 0) * (Number(L.qty) || 1) / (Number(rec.qty) || 1);
+  } else if (rec) {
+    // V3120_FINAL (I2) — НАЛОГ МЕСЯЦА. Живая сумма после налога читает ставку
+    // налога услуги СЕГОДНЯ (ITEM_TAX_RATE_SQL): налог 12 % → 0 % после
+    // закрытия давал корректировку по каждой строке месяца. У записанной
+    // строки налог — её записанная доля (налог / сумма после скидки), к
+    // сегодняшней сумме после скидки (возврат, скидка после продажи и т. п.
+    // по-прежнему двигают строку). Стационар — тем же путём.
+    const after = (Number(L.amount) || 0) - (Number(L.discount) || 0);
+    const recAfter = (Number(rec.amount) || 0) - (Number(rec.discount) || 0);
+    const share = recAfter > 0 ? (Number(rec.tax) || 0) / recAfter
+      : rec.tax_rate != null ? (Number(rec.tax_rate) || 0) / 100 : null;
+    if (share != null) net = after - after * share;
   }
   const base = rate.fix != null ? rate.fix * (L.qty == null ? 1 : L.qty) * postSaleKeepOf(L) : net * pct / 100;
   const keep = L.refund_keep == null ? 1 : Number(L.refund_keep);
