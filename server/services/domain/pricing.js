@@ -70,7 +70,39 @@ export function lineUnitPrice(db, row, { service = null, product = null, tiered 
     return tiered && service ? tierUnitPrice(service, row.price_tier, unit) : unit;
   }
   if (row.clinic_item_id != null) return productLineUnitPrice(row, product);
+  // BILLING_AUDIT_FIX_V1 (B7) — консультация (service_id NULL +
+  // consultation_type_id) — цена врача по виду приёма, а не присланная браузером.
+  if (row.consultation_type_id != null) {
+    const c = consultationFor(db, row.consultation_type_id, row.doctor_id);
+    if (c) return c.price;
+  }
   return row.unit_price;
+}
+
+// BILLING_AUDIT_FIX_V1 (B7) — ЦЕНА И ИМЯ КОНСУЛЬТАЦИИ СЧИТАЕТ СЕРВЕР.
+//
+// Строка консультации (service_id NULL + consultation_type_id, врач строки)
+// шла в счёт как «ad-hoc»: с ценой, которую прислал браузер, и с пустым
+// описанием. Правило то же, что у каталога (service-picker-modal.js
+// consultPriceFor, CONSULT_PER_DOCTOR_V1): у врача есть строка
+// doctor_consultation_prices по этому виду — её цена (is_free → 0, пустая → 0);
+// строки нет — цена вида приёма из consultation_types (цена клиники). Имя —
+// личное название врача, иначе название вида. Вида нет вовсе (удалён) — null:
+// вызывающий оставляет сохранённое.
+export function consultationFor(db, typeId, doctorId) {
+  const tid = Number(typeId);
+  if (!Number.isInteger(tid) || tid <= 0) return null;
+  const ct = db.prepare('SELECT * FROM consultation_types WHERE id = ?').get(tid);
+  if (!ct) return null;
+  const did = Number(doctorId);
+  const dc = Number.isInteger(did) && did > 0
+    ? db.prepare('SELECT * FROM doctor_consultation_prices WHERE doctor_id = ? AND consultation_type_id = ? ORDER BY id DESC LIMIT 1').get(did, tid)
+    : null;
+  let price;
+  if (dc) price = dc.is_free ? 0 : (Number.isFinite(Number(dc.price)) && dc.price !== null ? Math.max(0, Number(dc.price)) : 0);
+  else price = Number.isFinite(Number(ct.price)) ? Math.max(0, Number(ct.price)) : 0;
+  const name = (dc && (dc.name_ru || dc.name_uz || dc.name_en)) || ct.name_ru || ct.name_uz || ct.name || 'Консультация';
+  return { price, name };
 }
 
 // INPATIENT_MONEY_FIX_V1 — товарная строка оценивается ОДИН раз, при выдаче, и

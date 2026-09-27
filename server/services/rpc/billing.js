@@ -11,9 +11,11 @@ import { invoiceStatusFor } from '../domain/money.js';
 // function, shared with the doctor's pay (rpc/reports.js): own price over the
 // catalog, and VISIT_TIER_PRICING_V1 — a line quoted as a second/repeat visit
 // keeps that price at the till (the catalog price is the FIRST visit's price).
-import { lineUnitPrice } from '../domain/pricing.js';
+import { lineUnitPrice, consultationFor } from '../domain/pricing.js';
 import { hasAnyRole } from '../roles.js';
 import { localDate } from '../domain/day.js';
+// BILLING_AUDIT_FIX_V1 (B3) — тариф заменённой услуги спрашивается заново.
+import { servicePriceQuote } from './service-price-quote.js';
 // HOLDINGS_FIRST_V1 — «вернуть КАЖДУЮ часть туда, откуда она пришла» живёт в
 // одном месте на весь сервер (rpc/inventory.js): подотчёт сотрудника, кабинет,
 // отдел, склад. Кольцо импортов здесь такое же, как у billing ↔ cashier строкой
@@ -326,6 +328,10 @@ export function createInvoiceForVisit(db, args, user) {
           throw new RpcError(`product ${row.clinic_item_id} not found`, 400);
         }
         svcName = prod.name;
+      } else if (row.consultation_type_id != null) {
+        // BILLING_AUDIT_FIX_V1 (B7) — консультация: имя с сервера, не пустое.
+        const c = consultationFor(db, row.consultation_type_id, row.doctor_id);
+        if (c) svcName = c.name;
       }
       // PAY_BASIS_PERFORMED_V1 — the price rule lives in ONE place
       // (domain/pricing.js lineUnitPrice): the doctor's own price over the
@@ -366,7 +372,14 @@ export function createInvoiceForVisit(db, args, user) {
     // дал больше — действует большая скидка, если не дал ничего — действует
     // скидка группы. Взять меньшую значило бы молча отнять у VIP его условия,
     // а сложить — дать скидку дважды за одно и то же.
-    const categoryPercent = patientCategoryDiscount(db, visit.patient_id);
+    //
+    // BILLING_AUDIT_FIX_V1 (B5) — СЧЁТ ПЛАТЕЛЬЩИКУ СКИДКИ ГРУППЫ ПАЦИЕНТА НЕ
+    // ПОЛУЧАЕТ. Группа — договорённость клиники с ПАЦИЕНТОМ (VIP, льготник);
+    // страховая или организация платит по своему договору, и скидка пациента
+    // на её счёт молча уменьшала сумму, которую клиника выставляет
+    // контрагенту. Ручная скидка кассира и скидка пакета остаются.
+    const payerSet = args && args.payer_id !== undefined && args.payer_id !== null;
+    const categoryPercent = payerSet ? 0 : patientCategoryDiscount(db, visit.patient_id);
     // PACKAGES_V1 (2026-09-26) — СКИДКА ПАКЕТА ПОСТРОЧНО. Строка пакета со
     // скидкой получает СВОЮ скидку (invoice_items.discount_amount): бо́льшую из
     // скидки пакета и скидки категории пациента — не обе (решение владельца).
@@ -785,7 +798,15 @@ function invoiceOwnDiscount(db, invoiceId) {
 //            скидки.
 // Строка пакета, заменённая другой услугой, теряет скидку пакета и становится
 // строкой «без своей» — пол категории ложится и на неё (ревью M-3).
-function repriceUnpaidInvoice(db, inv, oldOwn) {
+//
+// BILLING_AUDIT_FIX_V1 (B4) — ПОСЛЕ ПЕРЕСЧЁТА ДЕЙСТВУЕТ ТО ЖЕ ПРАВИЛО НУЛЯ, ЧТО
+// ПРИ ВЫСТАВЛЕНИИ (settleZeroTotal ниже).
+// (B5) — пол скидки группы пациента не ложится на счёт плательщика.
+// (B1) — `oldBase`: возврат строки. Остаток скидки (ручная / категорийная на
+// строки без своей) уменьшается пропорционально ушедшей базе, а не держится
+// прежней суммой — иначе вся ручная скидка счёта легла бы на оставшиеся
+// строки, и возврат одной услуги удешевлял бы другие.
+function repriceUnpaidInvoice(db, inv, oldOwn, { oldBase = null } = {}) {
   const left = db.prepare(`SELECT COALESCE(SUM(total), 0) s,
                                   COALESCE(SUM(discount_amount), 0) own,
                                   COALESCE(SUM(CASE WHEN COALESCE(discount_amount, 0) > 0 THEN 0 ELSE total END), 0) base
@@ -793,13 +814,58 @@ function repriceUnpaidInvoice(db, inv, oldOwn) {
   const subtotal = round2(left.s);
   const own = round2(left.own);
   const base = round2(left.base);
-  const oldRest = Math.max(round2((Number(inv.discount_amount) || 0) - oldOwn), 0);
-  const floor = round2(base * patientCategoryDiscount(db, inv.patient_id) / 100);
+  let oldRest = Math.max(round2((Number(inv.discount_amount) || 0) - oldOwn), 0);
+  if (oldBase !== null) oldRest = oldBase > 0 ? round2(oldRest * Math.min(base, oldBase) / oldBase) : 0;
+  const catPct = inv.payer_id ? 0 : patientCategoryDiscount(db, inv.patient_id);
+  const floor = round2(base * catPct / 100);
   const rest = round2(Math.min(Math.max(oldRest, floor), base));
   const discount = Math.min(round2(own + rest), subtotal);
+  const total = round2(subtotal - discount);
   db.prepare('UPDATE invoices SET subtotal = ?, discount_amount = ?, total_amount = ? WHERE id = ?')
-    .run(subtotal, discount, round2(subtotal - discount), inv.id);
+    .run(subtotal, discount, total, inv.id);
+  settleZeroTotal(db, inv.id);
   return db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
+}
+
+// BILLING_AUDIT_FIX_V1 (B4) — СТАТУС СЧЁТА БЕЗ ДЕНЕГ ПОСЛЕ ПЕРЕСЧЁТА СУММЫ.
+//
+// Счёт, ставший нулевым (убрали платную услугу, заменили на бесплатную),
+// оставался «Не оплачен» навсегда: record_payment отказывает при остатке 0, а
+// строки висели «ожидает оплату». Теперь — как в createInvoiceForVisit
+// (FREE_SERVICE_V1): ноль — это 'paid' с отметкой времени и строки в
+// очередь. И обратно: бесплатный счёт, получивший платную строку, снова
+// 'unpaid'. Касается только счёта, по которому денег нет (paid_amount 0).
+function settleZeroTotal(db, invoiceId) {
+  const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
+  if (!inv || (Number(inv.paid_amount) || 0) !== 0) return;
+  if (inv.status === 'void' || inv.status === 'refunded') return;
+  const total = round2(Number(inv.total_amount) || 0);
+  if (total <= 0 && inv.status !== 'paid') {
+    db.prepare("UPDATE invoices SET status = 'paid', paid_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(invoiceId);
+    db.prepare(`
+      UPDATE visit_services SET status = 'queued'
+       WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
+         AND status NOT IN ('in_progress', 'completed', 'collected', 'resulted')
+    `).run(invoiceId);
+  } else if (total > 0 && inv.status === 'paid') {
+    db.prepare("UPDATE invoices SET status = 'unpaid', paid_at = NULL WHERE id = ?").run(invoiceId);
+  }
+}
+
+// BILLING_AUDIT_FIX_V1 (B-minor) — статус счёта словами кассы, а не кодом
+// («счёт уже paid»).
+const STATUS_RU = { paid: 'оплачен', partial: 'оплачен частично', debt: 'переведён в долг', void: 'отменён', refunded: 'возвращён', unpaid: 'не оплачен' };
+function statusRu(st) { return STATUS_RU[st] || st; }
+
+// Счёт, который ещё можно править строками: денег по нему нет, и он либо
+// «Не оплачен», либо бесплатный (итог 0), закрытый при выставлении. Бесплатный
+// раньше отказывал «счёт уже paid», и убрать из него строку было нечем.
+function editableInvoiceRefusal(inv) {
+  if (!inv) return null;
+  const free = inv.status === 'paid' && !(Number(inv.paid_amount) > 0) && !(Number(inv.total_amount) > 0);
+  if (!(inv.paid_amount > 0) && (inv.status === 'unpaid' || free)) return null;
+  return 'счёт уже ' + (inv.paid_amount > 0 ? 'оплачен (частично)' : statusRu(inv.status))
+    + ' — сначала оформите возврат или отмените его в кассе.';
 }
 
 // INPATIENT_MONEY_FIX_V1 — ВЫПОЛНЕННАЯ РАБОТА НЕ СНИМАЕТСЯ И НЕ ПОДМЕНЯЕТСЯ.
@@ -846,9 +912,7 @@ export function removeUnpaidService(db, args, user) {
     const inv = item ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id) : null;
     if (item && !inv) throw new RpcError('invoice not found.', 500);
     if (inv) assertOwnBuilding(db, inv, 'Счёт');   // BRANCH_MONEY_GUARD_V1
-    if (inv && (inv.paid_amount > 0 || inv.status !== 'unpaid')) {
-      throw new RpcError('счёт уже ' + (inv.paid_amount > 0 ? 'оплачен (частично)' : inv.status) + ' — сначала отмените его в кассе.', 400);
-    }
+    { const refusal = editableInvoiceRefusal(inv); if (refusal) throw new RpcError(refusal, 400); }   // BILLING_AUDIT_FIX_V1 (B-minor)
 
     // HOLDINGS_FIRST_V1 — товар возвращается ДО удаления строки: источники
     // читаются из движений ЭТОЙ строки (reference_id = vsId), а после DELETE
@@ -924,22 +988,35 @@ export function changeUnpaidService(db, args, user) {
     const inv = item ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id) : null;
     if (item && !inv) throw new RpcError('invoice not found.', 500);
     if (inv) assertOwnBuilding(db, inv, 'Счёт');   // BRANCH_MONEY_GUARD_V1
-    if (inv && (inv.paid_amount > 0 || inv.status !== 'unpaid')) {
-      throw new RpcError('счёт уже ' + (inv.paid_amount > 0 ? 'оплачен (частично)' : inv.status) + ' — сначала отмените его в кассе.', 400);
-    }
+    { const refusal = editableInvoiceRefusal(inv); if (refusal) throw new RpcError(refusal, 400); }   // BILLING_AUDIT_FIX_V1 (B-minor)
 
     const qty = vs.quantity || 1;
-    const lineTotal = round2(svc.price * qty);
+    // BILLING_AUDIT_FIX_V1 (B3) — НОВАЯ УСЛУГА ОЦЕНИВАЕТСЯ ТАК ЖЕ, КАК ПРИ
+    // ВЫСТАВЛЕНИИ. Здесь стояла цена каталога и прежнее слово тарифа строки:
+    // врач с личной ценой терял её, а тариф старой услуги («второй визит»)
+    // оставался на строке новой. Теперь тариф спрашивается заново
+    // (service_price_quote по дню ЭТОГО визита, сам визит исключён), а цена —
+    // lineUnitPrice: личная цена врача строки, поверх — тариф. Одно правило с
+    // кассой и выплатой врачу.
+    const visitRow = db.prepare('SELECT patient_id, visit_date FROM visits WHERE id = ?').get(vs.visit_id);
+    let tier = 'primary';
+    if (visitRow && visitRow.patient_id) {
+      const visitDay = db.prepare(`SELECT ${localDate('?')} AS d`).get(visitRow.visit_date).d;
+      const q = servicePriceQuote(db, { patient_id: visitRow.patient_id, service_ids: [newServiceId], visit_id: vs.visit_id, date: visitDay }, user).quotes[newServiceId];
+      if (q && (q.tier === 'secondary' || q.tier === 'repeat')) tier = q.tier;
+    }
+    const unit = round2(lineUnitPrice(db, { ...vs, service_id: newServiceId, clinic_item_id: null, consultation_type_id: null, price_tier: tier }, { service: svc }));
+    const lineTotal = round2(unit * qty);
     // PACKAGES_V1 — другая услуга уже не услуга пакета: строка теряет пакет и
     // его скидку (скидка счёта уменьшается на неё же ниже).
-    db.prepare('UPDATE visit_services SET service_id = ?, unit_price = ?, total = ?, package_id = NULL WHERE id = ?')
-      .run(newServiceId, svc.price, lineTotal, vsId);
+    db.prepare('UPDATE visit_services SET service_id = ?, unit_price = ?, total = ?, package_id = NULL, price_tier = ? WHERE id = ?')
+      .run(newServiceId, unit, lineTotal, tier, vsId);
 
     let invoice = null;
     if (item) {
       const oldOwn = invoiceOwnDiscount(db, inv.id);   // PACKAGES_V1 — ДО правки строки
       db.prepare('UPDATE invoice_items SET service_id = ?, description = ?, unit_price = ?, total = ?, discount_amount = 0 WHERE id = ?')
-        .run(newServiceId, svc.name || '', svc.price, lineTotal, item.id);
+        .run(newServiceId, svc.name || '', unit, lineTotal, item.id);
       invoice = repriceUnpaidInvoice(db, inv, oldOwn);
     }
 

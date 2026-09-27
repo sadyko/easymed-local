@@ -95,9 +95,11 @@ export const TRANSITIONS = {
   },
   invoice: {
     unpaid:   ['partial', 'paid', 'debt', 'void'],
-    partial:  ['paid', 'debt', 'unpaid', 'void'],      // unpaid again after a full refund
-    debt:     ['paid', 'unpaid', 'void'],              // stays 'debt' while part-paid — see money.js
-    paid:     ['partial', 'unpaid', 'refunded'],       // refunds walk the ladder back down
+    partial:  ['paid', 'debt', 'unpaid', 'void', 'refunded'],   // BILLING_AUDIT_FIX_V1 (B2): full refund
+    debt:     ['paid', 'unpaid', 'void', 'refunded'],           // stays 'debt' while part-paid — see money.js
+    // BILLING_AUDIT_FIX_V1 (B-minor) — a zero-total invoice is born 'paid' with
+    // no money on it; void_invoice may cancel it (it still refuses money).
+    paid:     ['partial', 'unpaid', 'refunded', 'void'],        // refunds walk the ladder back down
     void:     [],       // terminal: cancelled before any money moved
     refunded: [],       // terminal: settled then fully returned
   },
