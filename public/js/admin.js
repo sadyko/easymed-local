@@ -71,7 +71,6 @@ import { renderQueue }       from './admin/views/queue.js?v=q7';   // QUEUE_BOAR
 import { renderCrm }          from './admin/views/crm.js?v=aug18d';   // CRM_V10 — поиск пациента: телефон (и короткая форма), дата рождения; CRM_SERVICE_FILTER_V1 — рейка категорий (тег поднят, иначе браузер оставит старую копию)
 import { overdueTaskCount } from './admin/views/crm-tasks.js';   // CRM_DEDUP_SEARCH_TASKS_V1 — красный счётчик просроченных задач у пункта CRM
 import { renderDocsArchive }  from './admin/views/docs-archive.js?v=q3one';   // CLINICAL_DOCS_ARCHIVE_V1 — restored after concurrent clobber
-import { renderReports }      from './admin/views/reports.js?v=vatincl1';
 import { renderReportsHub }   from './admin/views/reports-hub.js?v=ru6';   // REPORTS_HUB_RU_V1 — «Отчёты» card grid + full-screen report builder
 import { renderWardBeds }     from './admin/views/ward-beds.js?v=board4';   // INPATIENT_LOCAL_V1 — fresh local ward/bed board (legacy beds.js was cloud-coupled); BED_BOARD_SHARED_V1 — доска коек теперь ещё и окно выбора койки
 import { renderInpatient }    from './admin/views/admissions.js?v=inp3';   // INPATIENT_ONE_SECTION_V1 — «Стационар» одним разделом: заявки · койки · госпитализации
@@ -403,6 +402,11 @@ const LEGACY_ROUTES = {
     // Postgres (admin_reset_user_password, current_user_is_admin,
     // current_user_can_manage_staff). Сотрудники живут в #employees.
     'settings:users': { view: 'employees' },
+    // REPORTS_AUDIT_FIX_V1 — прежняя страница «Отчёты» (#reports, только по
+    // адресу) считала выручку и выгрузки в браузере по облачным полям: её
+    // «Общая выручка» не сходилась с сервером, выгрузки операций и закупок
+    // падали на несуществующих колонках. Страница удалена, адрес ведёт в хаб.
+    reports: { view: 'reports-hub' },
 };
 
 function navigate(view, payload, opts = {}) {
@@ -1173,7 +1177,6 @@ async function renderViewInner(viewRoot, viewName, ctx) {
             case 'procurement':   return void navigate('inventory');
             case 'marketing':     return void await renderComingSoon(viewRoot, ctx, renderMarketing);     // COMING_SOON_V1
             case 'callcenter':    return void await renderComingSoon(viewRoot, ctx, renderCallCenter);    // COMING_SOON_V1
-            case 'reports':       return void await renderReports(viewRoot, ctx);
             case 'reports-hub':   return void await renderReportsHub(viewRoot, ctx);   // REPORTS_HUB_V1
             case 'documents':     return void await renderDocuments(viewRoot, ctx);
             case 'consultation-types': return void await renderConsultationTypes(viewRoot, ctx);   // CONSULTATION_TYPES_RESTORE

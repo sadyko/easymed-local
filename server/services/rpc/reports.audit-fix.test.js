@@ -284,3 +284,23 @@ test('8: сводка отчётов (reports_overview) — только гру�
   db.prepare("UPDATE role_permissions SET permissions = json_set(permissions, '$.grants.\"reports.revenue\"', 'none') WHERE role = 'kassa_rev'").run();
   assert.throws(() => reportsOverview(db, { from: FROM, to: TO }, KASSA), (e) => e.status === 403);
 });
+
+// ─── 10 ──────────────────────────────────────────────────────────────────────
+
+test('10: сервер называет складываемые колонки — цены, ставки, пациенты и количества склада не складываются', async () => {
+  const { summableColumns } = await import('./reports.js');
+  const db = clinic();
+  const inv = invoice(db, { total: 100000, paid: 100000 });
+  item(db, inv, { service: 3, total: 100000 });
+  const tr = runReport(db, { kind: 'total_revenue', from: FROM, to: TO }, admin);
+  for (const c of ['Сумма', 'Скидка', 'После скидки', 'Налог', 'Доля врача', 'Кол-во']) assert.ok(tr.summable_columns.includes(c), c);
+  for (const c of ['Цена', 'Налог %', 'Ставка врача']) assert.ok(!tr.summable_columns.includes(c), c);
+  const bd = summableColumns('by_doctors', ['Пациентов', 'Визитов', 'Госпитализаций', 'Услуг', 'Доля за услуги', 'Итого к выплате']);
+  assert.deepEqual(bd, ['Услуг', 'Доля за услуги', 'Итого к выплате']);
+  assert.deepEqual(summableColumns('procurement', ['Количество', 'Цена за ед.', 'Сумма']), ['Сумма']);
+  assert.deepEqual(summableColumns('stock_statement', ['Начало: кол-во', 'Конец: кол-во', 'Средняя себестоимость', 'Конец: сумма']), ['Конец: сумма']);
+  assert.deepEqual(summableColumns('stock_expiry', ['Дней до срока', 'Остаток (расчёт)', 'Стоимость']), ['Стоимость']);
+  assert.deepEqual(summableColumns('stock_consumption', ['Кол-во', 'Себестоимость ед.', 'Движений', 'Израсходовано на пациентов (себестоимость)']),
+    ['Движений', 'Израсходовано на пациентов (себестоимость)']);
+  assert.ok(runReport(db, { kind: 'payments', from: FROM, to: TO }, admin).summable_columns.includes('Amount'));
+});

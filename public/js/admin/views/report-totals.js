@@ -40,14 +40,27 @@ export function isSummableHeader(label) {
 // isNumeric(col, index) — числовая ли колонка (определяется вызывающим так же,
 //   как он выравнивает ячейки, чтобы итог не появился под текстовой колонкой).
 //
+// opts (REPORTS_AUDIT_FIX_V1) — что знает сервер, а заголовок не знает:
+//   summable — список складываемых колонок (подписи; ответ run_report
+//     summable_columns). Если он есть, решает он, а не угадывание по заголовку:
+//     «Цена», «Пациентов», количество товара в разных единицах — числа, но их
+//     сумма бессмысленна, и заголовок этого не выдаёт.
+//   skipRows — номера строк вне итога (total_skip_rows: отменённые счета и
+//     счета DEP-/CARD- в «Счетах» — в списке, но не в «Итого»).
+//
 // Возвращает массив по числу колонок: число — итог, null — итога нет.
-export function reportTotals(columns, rows, get, isNumeric) {
+export function reportTotals(columns, rows, get, isNumeric, opts = {}) {
+    const list = opts && opts.summable;
+    const summable = list instanceof Set ? list : (Array.isArray(list) ? new Set(list.map(String)) : null);
+    const skip = new Set(Array.isArray(opts && opts.skipRows) ? opts.skipRows : []);
     return (columns || []).map((col, ci) => {
         if (!isNumeric(col, ci)) return null;
-        if (!isSummableHeader(col && col.label)) return null;
+        const label = col && col.label;
+        if (summable ? !summable.has(String(label == null ? '' : label)) : !isSummableHeader(label)) return null;
         let sum = 0;
         let seen = 0;
-        for (const r of rows || []) {
+        for (const [ri, r] of (rows || []).entries()) {
+            if (skip.has(ri)) continue;
             const v = get(r, col, ci);
             if (typeof v === 'number' && Number.isFinite(v)) { sum += v; seen++; }
         }

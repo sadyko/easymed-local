@@ -3644,6 +3644,33 @@ function maskDoctorPay(db, user, kind, report, rowDoctorIds) {
   return { ...report, rows, by_building, notes: [...notes, PAY_MASK_NOTE] };
 }
 
+// REPORTS_AUDIT_FIX_V1 — КАКИЕ КОЛОНКИ СКЛАДЫВАЕТ «ИТОГО» ПОД ТАБЛИЦЕЙ.
+//
+// Хаб угадывал это по заголовку (report-totals.js) и складывал всё числовое,
+// кроме процентов и дат: «Цена», «Цена за ед.», «Себестоимость ед.», «Дней до
+// срока», «Пациентов» (один пациент — в нескольких строках), количества
+// товара в разных единицах (шт + мл + упак) — и печатал под ними «итог»,
+// который выглядит настоящим. Теперь список СКЛАДЫВАЕМЫХ колонок называет
+// сервер — тот, кто знает, что в колонке: summable_columns в ответе
+// run_report. Деньги (в том числе «доли») складываются; цены за единицу,
+// ставки, счётчики РАЗНЫХ пациентов/визитов/госпитализаций и количества
+// склада — нет.
+const NOT_SUMMABLE_COLS = new Set([
+  'Цена', 'Цена за ед.', 'Себестоимость ед.', 'Средняя себестоимость', 'Дней до срока',
+  'Пациентов', 'Визитов', 'Госпитализаций', 'Средний % врача', 'Ставка врача', 'Ставка',
+  'Unit cost',
+]);
+const STOCK_KINDS = new Set(['procurement', 'stock_consumption', 'stock_statement', 'stock_expiry', 'stock_movements']);
+const STOCK_QTY_RE = /кол-во|количество|остаток \(расчёт\)|^qty$/i;
+export function summableColumns(kind, columns) {
+  return (columns || []).filter((c) => {
+    const label = String(c == null ? '' : c);
+    if (NOT_SUMMABLE_COLS.has(label) || label.includes('%')) return false;
+    if (STOCK_KINDS.has(kind) && STOCK_QTY_RE.test(label)) return false;
+    return true;
+  });
+}
+
 // PENDING_ITEMS_V1 — отчёты, которые читают СТРОКИ счетов (itemRowsQuery либо
 // прямой запрос по invoice_items). Ровно им и не хватает недоехавших позиций;
 // «Счета» и «Закупки» считают по шапкам и по складу, у них этой дыры нет.
@@ -3673,6 +3700,7 @@ export function runReport(db, args, user) {
       // REPORTS_AUDIT_FIX_V1 — строки, которые «Итого» под таблицей не складывает
       // (отменённые счета и DEP-/CARD- в «Счетах»): номера строк в rows.
       total_skip_rows: Array.isArray(total_skip_rows) ? total_skip_rows : [],
+      summable_columns: summableColumns(kind, columns),   // REPORTS_AUDIT_FIX_V1
       // Считается ОДИН раз на отчёт и тем же контекстом зданий, что и сам отчёт:
       // разъехавшийся ctx дал бы недостачу под другими подписями.
       pending_items: ITEM_BASED_REPORTS.has(kind) ? pendingItemsMoney(db, args, ctx) : null,
@@ -3696,6 +3724,7 @@ export function runReport(db, args, user) {
     rows: raw.map((r) => [...report.row(r), ctx.label(r.origin)]),
     by_building: summariseByBuilding(ctx, raw, {}),
     notes: [],
+    summable_columns: summableColumns(kind, report.columns),   // REPORTS_AUDIT_FIX_V1
   };
 }
 

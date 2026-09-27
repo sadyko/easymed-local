@@ -64,3 +64,17 @@ test('денежные «доли» суммируются; ставка и «д
     assert.equal(isSummableHeader(h), false, h);
   }
 });
+
+// REPORTS_AUDIT_FIX_V1 — список складываемых колонок называет сервер, а
+// строки вне итога (отменённые счета, DEP-/CARD-) футер пропускает.
+test('сервер назвал складываемые колонки — «Цена» и «Пациентов» не складываются, даже без знака %', () => {
+  const cols = [{ label: 'Услуга' }, { label: 'Цена' }, { label: 'Пациентов' }, { label: 'Сумма' }];
+  const rows = [['A', 50000, 3, 150000], ['B', 20000, 2, 40000]];
+  // Угадывание по заголовку их сложило бы.
+  assert.deepEqual(reportTotals(cols, rows, get, numeric), [null, 70000, 5, 190000]);
+  assert.deepEqual(reportTotals(cols, rows, get, numeric, { summable: ['Сумма'] }), [null, null, null, 190000]);
+});
+
+test('строки вне итога не складываются', () => {
+  assert.deepEqual(reportTotals(COLS, ROWS, get, numeric, { skipRows: [1] }), [null, 130000, null, 130000]);
+});

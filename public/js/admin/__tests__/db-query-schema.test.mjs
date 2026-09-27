@@ -522,9 +522,8 @@ export function scanTree() {
 //     хранения, остатки по зданиям, партии. Офлайн склад ОДИН, и раздел
 //     переписан заново (views/inventory.js). Маршрут #procurement уводит на
 //     него, файл оставлен до переноса многоскладской модели.
-//   • views/reports-export.js (14) — выгрузки по облачным полям (комиссии
-//     партнёров, страховое покрытие, закупки). Каждая выгрузка падает мягко,
-//     сама по себе, и соседние не трогает.
+//   • views/reports-export.js — удалён (REPORTS_AUDIT_FIX_V1): выгрузки по
+//     облачным полям, страница #reports ведёт в хаб отчётов.
 //   • setup-checklist.js (7) — renderSetupChecklist() не вызывается ниоткуда,
 //     его заменил notifications.js (см. шапку views/settings-hub.js).
 //   • section-import-export.js (4) / items-ledger.js (3) — складская часть тех
@@ -582,9 +581,6 @@ const BASELINE = new Set([
   "public/js/admin/views/procurement.js | stock_movements | column \"to_location_id\"",
   "public/js/admin/views/procurement.js | stock_movements | filter \"from_location_id|to_location_id\"",
   "public/js/admin/views/procurement.js | stock_movements | filter \"item_id\"",
-  "public/js/admin/views/reports-export.js | invoice_items | column \"discount_percentage\"",
-  "public/js/admin/views/reports-export.js | purchase_order_items | column \"clinic_items ( name, strength, form )\"",
-  "public/js/admin/views/reports-export.js | purchase_order_items | column \"purchase_orders!inner ( po_number, created_at, branch_id, company_id, suppliers ( name ) )\"",
   "public/js/admin/views/section-crud.js | services | column \"core_service_id\"",
   "public/js/admin/views/section-import-export.js | clinic_items | table",
   "public/js/admin/views/section-import-export.js | item_suppliers | filter \"item_id\"",
