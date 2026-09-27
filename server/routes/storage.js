@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { canViewSection, canEditSection, canViewPatientTab, canEditPatientTab } from '../services/roles.js';   // PATIENT_FILE_ATTACH_V1 + PATIENT_PHOTO_V1
-import { MAX_PATIENT_FILE_BYTES, patientFileRefusal, photoRefusal, refusalText } from '../../public/js/shared/patient-file-limits.js';   // PATIENT_FILE_ATTACH_V1 + PATIENT_PHOTO_V1
+import { MAX_PATIENT_FILE_BYTES, patientFileRefusal, photoRefusal, refusalText, ALLOWED_PATIENT_FILE_EXT, ALLOWED_PHOTO_EXT } from '../../public/js/shared/patient-file-limits.js';   // PATIENT_FILE_ATTACH_V1 + PATIENT_PHOTO_V1
+import { grantAllowsAdminOr } from '../services/grants.js';   // V3120_FIX (M7) — корзина Telegram по праву бота
 
 // Local file storage — the offline stand-in for Supabase Storage. Objects live
 // on disk under <storageDir>/<bucket>/<path>. Buckets are an allow-list; every
@@ -30,13 +31,46 @@ import { MAX_PATIENT_FILE_BYTES, patientFileRefusal, photoRefusal, refusalText }
 // пациента не покидает клинику).
 const BUCKETS = new Set(['clinic-docs', 'telegram-media', 'patient-photos', 'doctor-photos']);
 
+// V3120_FIX (M6) — ЧТО ОТДАЁТСЯ «ВНУТРИ СТРАНИЦЫ». Файл из хранилища открыт
+// тем же адресом, что и само приложение, и SVG или HTML, отданные как есть,
+// исполнились бы с сессией открывшего (загрузил один — сработало у другого).
+// Поэтому внутри страницы показываются только растровые картинки и PDF; всё
+// остальное уходит «скачать» (Content-Disposition: attachment), а SVG/XHTML
+// вовсе не получают своего типа.
 const CONTENT_TYPES = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
-  '.webp': 'image/webp', '.svg': 'image/svg+xml', '.pdf': 'application/pdf',
+  '.webp': 'image/webp', '.bmp': 'image/bmp', '.pdf': 'application/pdf',
   '.txt': 'text/plain; charset=utf-8', '.csv': 'text/csv; charset=utf-8',
 };
+const INLINE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.pdf']);
 function contentType(abs) {
   return CONTENT_TYPES[path.extname(abs).toLowerCase()] || 'application/octet-stream';
+}
+
+// V3120_FIX (M8) — какие файлы вообще кладутся в корзину. Фото — только
+// картинки; документы клиники и пациента — картинки, PDF, офис и текст (тот же
+// список, что у карты пациента); Telegram — то же плюс голос и видео из
+// переписки. SVG/HTML — никуда.
+const DOC_EXT = new Set(ALLOWED_PATIENT_FILE_EXT);
+const BUCKET_EXT = {
+  'clinic-docs': DOC_EXT,
+  'telegram-media': new Set([...ALLOWED_PATIENT_FILE_EXT, '.mp3', '.ogg', '.oga', '.opus', '.m4a', '.wav', '.mp4', '.mov', '.webm']),
+  'patient-photos': new Set(ALLOWED_PHOTO_EXT),
+  'doctor-photos': new Set(ALLOWED_PHOTO_EXT),
+};
+const TYPE_REFUSED = 'Файлы такого типа в хранилище не кладутся. Подойдут картинки (JPG, PNG), PDF, документы Word и Excel, обычный текст.';
+
+// V3120_FIX (M8) — имена, которые Windows не создаст или создаст не тем
+// файлом: зарезервированные устройства (CON, AUX, NUL, COM1…), двоеточие
+// (альтернативный поток NTFS: «a.pdf:evil»), точка или пробел в конце
+// (Windows их молча срезает — «a.pdf.» станет «a.pdf»), и слишком длинные
+// имена, которые раньше роняли запись в 500.
+const RESERVED_WIN = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
+const MAX_SEGMENT = 180;
+const BAD_NAME = 'Такое имя файла недопустимо. Переименуйте файл: без двоеточий, без точки или пробела в конце, не длиннее 180 символов.';
+function badSegment(seg) {
+  return seg.length > MAX_SEGMENT || seg.includes(':') || /[. ]$/.test(seg) || RESERVED_WIN.test(seg)
+    || /[<>"|?*\x00-\x1f]/.test(seg);
 }
 
 // PATIENT_FILE_ATTACH_V1 — исполняемое не кладём НИ В ОДНУ корзину. Это не
@@ -68,7 +102,7 @@ function safeResolve(storageDir, bucket, rest) {
 const segmentsOf = (rest) => (Array.isArray(rest) ? rest : String(rest || '').split('/')).filter(Boolean);
 const relPath = (rest) => segmentsOf(rest).join('/');
 
-const badPath = (res) => res.status(400).json({ error: { code: 'bad_request', message: 'Invalid storage path.' } });
+const badPath = (res) => res.status(400).json({ error: { code: 'bad_request', message: 'Неверный путь к файлу.' } });
 const refuse = (res, status, code, message) => res.status(status).json({ error: { code, message } });
 
 // PATIENT_FILE_ATTACH_V1 — ФАЙЛ ПАЦИЕНТА УЗНАЁТСЯ ПО ПУТИ, и путь придумывает
@@ -87,6 +121,17 @@ function patientDocId(bucket, rest) {
   if (s.length !== 4 || s[0] !== 'patients' || s[2] !== 'docs') return null;
   const id = Number(s[1]);
   return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+// V3120_FIX (M7) — ЛЮБОЙ путь под clinic-docs/patients/ — это файл пациента.
+// Правило вкладки «Документы» стояло только на точной форме из четырёх
+// сегментов, и файл, положенный на сегмент глубже или мельче, читал и писал
+// любой вошедший. Форма документа (patientDocId) по-прежнему решает, что
+// считается ДОКУМЕНТОМ (отзыв, 410); право — на всё дерево.
+function underPatients(bucket, rest) {
+  if (bucket !== 'clinic-docs') return false;
+  const s = segmentsOf(rest);
+  return s.length > 0 && s[0] === 'patients';
 }
 
 // PATIENT_PHOTO_V1 — ФОТОГРАФИЯ УЗНАЁТСЯ ПО ПУТИ, ровно как документ выше, и
@@ -154,6 +199,25 @@ export function storageRoutes(storageDir, db = null) {
   // что закрытая вкладка, которую можно обойти прямой ссылкой на файл, — это
   // не закрытая вкладка: сканы паспорта и заключения лежат по предсказуемому
   // пути `patients/<id>/docs/…`, а id пациента видит любой сотрудник.
+  // V3120_FIX (M7) — корзина Telegram: то, что видит пациент в боте, и
+  // вложения переписки. Читает тот, у кого «Чат с пациентами» или бот
+  // («Настройки → Telegram» / отчёт); кладёт — тот, кто в чате отвечает или
+  // настраивает бота. Раньше — любой вошедший.
+  function telegramDenial(req, { write }) {
+    if (!db) return 'Хранилище Telegram недоступно.';
+    const user = req.user;
+    if (!user) return 'Требуется вход.';
+    try {
+      if (write) {
+        if (canEditSection(db, user, 'telegram-chat') || grantAllowsAdminOr(db, user, 'settings.telegram', 'edit')) return null;
+      } else if (canViewSection(db, user, 'telegram-chat') || grantAllowsAdminOr(db, user, 'settings.telegram', 'view')
+          || grantAllowsAdminOr(db, user, 'reports.telegram', 'view')) {
+        return null;
+      }
+    } catch { /* права не прочитались — отказ */ }
+    return 'Файлы Telegram-бота недоступны вашей роли. Права выдаёт администратор в «Настройки → Роли».';
+  }
+
   function patientDocDenial(req, { write }) {
     if (!db) return 'Хранилище документов пациента недоступно.';
     const user = req.user;
@@ -241,13 +305,28 @@ export function storageRoutes(storageDir, db = null) {
     if (req.control?.locked) return lockedResponse(res, req.control);
     const abs = safeResolve(storageDir, req.params.bucket, req.params.rest);
     if (!abs) return badPath(res);
+    if (segmentsOf(req.params.rest).some(badSegment)) return refuse(res, 400, 'bad_file_name', BAD_NAME);
     const body = req.body;
     if (!Buffer.isBuffer(body) || body.length === 0) {
-      return res.status(400).json({ error: { code: 'bad_request', message: 'Empty upload.' } });
+      return res.status(400).json({ error: { code: 'bad_request', message: 'Файл пустой — загружать нечего.' } });
     }
     if (NEVER_STORE_EXT.has(path.extname(abs).toLowerCase())) {
       return refuse(res, 415, 'file_type_not_allowed',
         'Исполняемые файлы в клинику не загружаются.');
+    }
+    // V3120_FIX (M8) — расширение по корзине. Фото проверяет photoRefusal
+    // ниже своим, более понятным текстом, поэтому здесь — остальные корзины.
+    const allowedExt = BUCKET_EXT[req.params.bucket];
+    if (allowedExt && !isPhotoBucket(req.params.bucket) && !allowedExt.has(path.extname(abs).toLowerCase())) {
+      return refuse(res, 415, 'file_type_not_allowed', TYPE_REFUSED);
+    }
+    if (req.params.bucket === 'telegram-media') {
+      const denial = telegramDenial(req, { write: true });
+      if (denial) return refuse(res, 403, 'forbidden', denial);
+    }
+    if (underPatients(req.params.bucket, req.params.rest) && patientDocId(req.params.bucket, req.params.rest) === null) {
+      const denial = patientDocDenial(req, { write: true });
+      if (denial) return refuse(res, 403, 'forbidden', denial);
     }
     // PATIENT_PHOTO_V1 — фотография: право, формат и предел. Проверяется
     // ЗДЕСЬ ещё раз, хотя браузер уменьшил и отсеял то же самое до отправки:
@@ -267,12 +346,24 @@ export function storageRoutes(storageDir, db = null) {
       const bad = patientFileRefusal({ name: path.basename(abs), size: body.length });
       if (bad) return refuse(res, bad.code === 'file_too_large' ? 413 : 415, bad.code, refusalText(bad));
     }
+    // V3120_FIX (M8) — документ и фото пациента НЕ ПЕРЕЗАПИСЫВАЮТСЯ. Их имена
+    // уникальны (время + случайный хвост), и честной загрузке совпасть не с
+    // чем; совпадение — это попытка подменить уже приложенный скан или лицо
+    // под тем же адресом, на который ссылается карта. Флаг 'wx' — проверка и
+    // создание одним действием, без окна между ними.
+    const noOverwrite = underPatients(req.params.bucket, req.params.rest) || isPhotoBucket(req.params.bucket);
     try {
       fs.mkdirSync(path.dirname(abs), { recursive: true });
-      fs.writeFileSync(abs, body);
+      fs.writeFileSync(abs, body, noOverwrite ? { flag: 'wx' } : undefined);
     } catch (e) {
+      if (e && e.code === 'EEXIST') {
+        return refuse(res, 409, 'file_exists', 'Файл с таким именем уже есть — загрузите его ещё раз, программа даст ему новое имя.');
+      }
+      if (e && (e.code === 'ENAMETOOLONG' || e.code === 'EINVAL' || e.code === 'ENOENT')) {
+        return refuse(res, 400, 'bad_file_name', BAD_NAME);
+      }
       console.error('[storage write]', e.message);
-      return res.status(500).json({ error: { code: 'internal', message: 'Could not store file.' } });
+      return res.status(500).json({ error: { code: 'internal', message: 'Файл не сохранился — попробуйте ещё раз.' } });
     }
     return res.json({ data: { path: relPath(req.params.rest), size: body.length } });
   });
@@ -302,10 +393,16 @@ export function storageRoutes(storageDir, db = null) {
       const stop = photoGate(req, res, { write: false });
       if (stop) return stop;
     }
-    const pid = patientDocId(req.params.bucket, req.params.rest);
-    if (pid !== null) {
+    if (req.params.bucket === 'telegram-media') {
+      const denial = telegramDenial(req, { write: false });
+      if (denial) return refuse(res, 403, 'forbidden', denial);
+    }
+    if (underPatients(req.params.bucket, req.params.rest)) {
       const denial = patientDocDenial(req, { write: false });
       if (denial) return refuse(res, 403, 'forbidden', denial);
+    }
+    const pid = patientDocId(req.params.bucket, req.params.rest);
+    if (pid !== null) {
       // Отозванный документ (миграция 105) перестаёт открываться. Строка и
       // байты остаются — карта клиники ничего не теряет, — но ссылка,
       // разосланная до отзыва, больше не отдаёт файл.
@@ -321,6 +418,14 @@ export function storageRoutes(storageDir, db = null) {
     res.setHeader('Content-Type', contentType(abs));
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    // V3120_FIX (M6) — не картинка и не PDF — только «скачать», под своим
+    // именем, и без права исполняться, даже если браузер откроет его сам.
+    if (!INLINE_EXT.has(path.extname(abs).toLowerCase())) {
+      const name = path.basename(abs);
+      const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+      res.setHeader('Content-Disposition', `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    }
     fs.createReadStream(abs).pipe(res);
   });
 
@@ -337,7 +442,7 @@ export function storageRoutes(storageDir, db = null) {
     // том, что весь остальной продукт клинические записи гасит, а не стирает
     // (отметки медсестры — voided_at, счета — 'void'). Отказ здесь нужен и
     // после того, как карту поправили: маршрут открыт curl'ом.
-    if (patientDocId(req.params.bucket, req.params.rest) !== null) {
+    if (underPatients(req.params.bucket, req.params.rest)) {   // V3120_FIX (M7) — любое место под patients/
       return refuse(res, 403, 'forbidden',
         'Документ пациента не удаляется — его можно только отозвать в карте пациента.');
     }

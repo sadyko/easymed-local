@@ -27,6 +27,40 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   // PERF_GZIP_V1 — до статики и до маршрутов: сжимаем и файлы, и ответы API.
   app.use(compress());
   app.use((req, res, next) => { res.set('X-Content-Type-Options', 'nosniff'); next(); });
+  // V3120_FIX (M6) — ЗАГОЛОВКИ БЕЗОПАСНОСТИ ПРИЛОЖЕНИЯ.
+  //   • X-Frame-Options / frame-ancestors: чужой сайт не вставит программу в
+  //     свою рамку и не «прокликает» её за сотрудника;
+  //   • connect-src 'self': страница ходит только на свой сервер — украденное
+  //     скриптом некуда отправить;
+  //   • скрипты — только свои. 'unsafe-inline' остаётся ради печатных окон:
+  //     они пишутся в about:blank с коротким window.onload=print, а такое окно
+  //     наследует эту политику; внешних скриптов и eval нет;
+  //   • стили инлайн (экраны задают style= повсюду), картинки data:/blob:
+  //     (логотип бланка, фото с камеры), шрифты — свои;
+  //   • рамки — свои и https (предпросмотр страницы клиники на Symptex).
+  // Хранилище файлов (routes/storage.js) для «скачиваемых» файлов ставит свою,
+  // ещё более строгую политику поверх этой.
+  const CSP = [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    "media-src 'self' data: blob: https:",
+    "connect-src 'self'",
+    "frame-src 'self' blob: data: https:",
+    "worker-src 'self' blob:",
+    "object-src 'self'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'self'",
+  ].join('; ');
+  app.use((req, res, next) => {
+    res.set('X-Frame-Options', 'SAMEORIGIN');
+    res.set('Content-Security-Policy', CSP);
+    res.set('Referrer-Policy', 'same-origin');
+    next();
+  });
   // PROCUREMENT_REDESIGN_V1 — Excel import posts up to MAX_IMPORT_ROWS (2000)
   // rows in one RPC call; 2000 Cyrillic rows is ~460 KB. Registered before the
   // global /api parser so body-parser's first-wins rule gives RPCs the larger
