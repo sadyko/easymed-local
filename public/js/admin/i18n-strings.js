@@ -9210,5 +9210,6 @@ export const STRINGS = {
   "не удалось загрузить": {"en":"failed to load","ru":"не удалось загрузить","uz":"yuklab bo'lmadi"},
   "Сначала новые": {"en":"Newest first","ru":"Сначала новые","uz":"Avval yangilari"},
   "Страница {page} из {pages} · пациентов: {n}": {"en":"Page {page} of {pages} · patients: {n}","ru":"Страница {page} из {pages} · пациентов: {n}","uz":"{page}-sahifa, jami {pages} · bemorlar: {n}"},
+  "Каталог болезней в офлайн-версии не подключён — уже отмеченные сохраняются как были.": {"en":"The disease catalogue is not connected in the offline version — already selected items are kept as they were.","ru":"Каталог болезней в офлайн-версии не подключён — уже отмеченные сохраняются как были.","uz":"Kasalliklar katalogi oflayn versiyada ulanmagan — belgilanganlari avvalgidek saqlanadi."},
   // V3120_FIX (экраны и навигация) — END
 };

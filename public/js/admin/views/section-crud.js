@@ -1035,15 +1035,11 @@ async function primeFkCache(table) {
     // used to leave every FK column rendering as "—" until hard-refresh.
     const _branchScoped = !!BRANCH_PATHS[table];   // BRANCH_FK_SCOPE_V1 — floors/departments/etc. options follow the active branch
     if (!_branchScoped && state.fkCache[table]?.length) return;
-    // LOOKUPS_CATALOG_V1 — service_types/service_categories are CORE-managed catalog
-    // tables the browser can't read directly (service_role only); fetch via the gateway.
-    if (table === 'service_types' || table === 'service_categories') {
-        try {
-            if (!state._catalogLk) state._catalogLk = await gw('/lookups/catalog');
-            state.fkCache[table] = state._catalogLk[table] || [];
-        } catch (e) { console.warn('[fk cache gw]', table, e.message); if (!state.fkCache[table]) state.fkCache[table] = []; }
-        return;
-    }
+    // LOOKUPS_CATALOG_V1 — в облаке service_types/service_categories читались
+    // через шлюз (/api/v1/lookups/catalog). V3120_FIX: офлайн это обычные
+    // таблицы клиники, открытые на чтение всему персоналу (schema-registry.js),
+    // а шлюза нет — запрос отвечал 404, и списки «Тип» и «Категория» в
+    // «Услугах» были пусты. Читаем их тем же путём, что любой справочник.
     const labelCol = FK_LABEL_COLUMN[table] || 'name';
     // Only the columns we actually need — asking for `full_name`/`code` on
     // tables that don't have them makes PostgREST reject the whole query
