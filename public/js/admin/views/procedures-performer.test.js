@@ -108,3 +108,25 @@ test('размеры шрифта — только из шкалы', () => {
   }
   assert.deepEqual([...new Set(bad)], [], 'размеры вне шкалы 12.5/13.5/15/17/20/24/30/40');
 });
+
+// V3120_FIX — «Взять» видит только тот, кого сервер примет исполнителем.
+// Администратор без флага врача нажимал и получал «Исполнителем процедуры
+// может быть врач или медсестра» (инспекция v3.12.0, procedures :: click Взять).
+test('V3120_FIX: кнопка «Взять» — по зеркалу canPerformProcedures', () => {
+  assert.match(procSrc, /r\.unassigned && !done && canTakeProcedure\(\)/,
+    '«Взять» рисуется без проверки исполнителя');
+  const body = procSrc.slice(procSrc.indexOf('export function canTakeProcedure('), procSrc.indexOf('function procInitials('));
+  // Вычисляем предикат по-настоящему: текст функции — чистый JS без импортов.
+  const PROC_PERFORMER_ROLES = ['nurse', 'senior_nurse', 'doctor', 'head_doctor'];
+  const src = body.replace('export function canTakeProcedure(u = currentUser())', 'function canTakeProcedure(u)');
+  const canTake = new Function('PROC_PERFORMER_ROLES', src + '; return canTakeProcedure;')(PROC_PERFORMER_ROLES);
+  assert.equal(canTake({ role: 'admin', is_doctor: false }), false, 'администратору без флага врача «Взять» показан');
+  assert.equal(canTake({ role: 'admin', is_doctor: true }), true, 'администратор-врач потерял «Взять»');
+  assert.equal(canTake({ role: 'nurse' }), true);
+  assert.equal(canTake({ role: 'registrar', extra_roles: ['senior_nurse'] }), true, 'дополнительная роль не учтена');
+  assert.equal(canTake({ role: 'cashier' }), false);
+  // Список ролей — тот же, что у сервера.
+  const server = fs.readFileSync(path.join(HERE, '../../../../server/services/rpc/procedures.js'), 'utf8');
+  assert.match(server, /const PERFORMER_ROLES = \['nurse', 'senior_nurse', 'doctor', 'head_doctor'\];/,
+    'список исполнителей на сервере изменился — обнови зеркало в procedures.js');
+});

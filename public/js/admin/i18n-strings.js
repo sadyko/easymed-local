@@ -9194,4 +9194,10 @@ export const STRINGS = {
   "Подтвердить: закрыть {m}": {"en":"Confirm: close {m}","ru":"Подтвердить: закрыть {m}","uz":"Tasdiqlash: {m} ni yopish"},
   "Месяц закрыт": {"en":"Month closed","ru":"Месяц закрыт","uz":"Oy yopildi"},
   "Закрывает месяц оплаты врачей.": {"en":"Closes the doctors' pay month.","ru":"Закрывает месяц оплаты врачей.","uz":"Shifokorlar maoshi oyini yopadi."},
+  // V3120_FIX (экраны и навигация) — BEGIN
+  "нет доступа": {"en":"no access","ru":"нет доступа","uz":"ruxsat yo'q"},
+  "не удалось загрузить": {"en":"failed to load","ru":"не удалось загрузить","uz":"yuklab bo'lmadi"},
+  "Сначала новые": {"en":"Newest first","ru":"Сначала новые","uz":"Avval yangilari"},
+  "Страница {page} из {pages} · пациентов: {n}": {"en":"Page {page} of {pages} · patients: {n}","ru":"Страница {page} из {pages} · пациентов: {n}","uz":"{page}-sahifa, jami {pages} · bemorlar: {n}"},
+  // V3120_FIX (экраны и навигация) — END
 };
