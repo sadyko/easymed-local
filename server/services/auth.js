@@ -4,11 +4,33 @@ import { recordEvent } from './ops-log.js';   // OPS_EVENTS_V1
 
 export const SESSION_TTL_HOURS = 12;
 
-// Anti-brute-force: after 5 wrong passwords for a username, refuse logins
-// for that username for 5 minutes. In-memory on purpose (resets on restart).
+// V3120_FIX (M10) — ПРОСТОЙ СЕССИИ. Без обращений дольше этого сессия
+// заканчивается, даже если 12 часов от входа ещё не прошли: компьютер у
+// стойки, оставленный открытым, не остаётся открытым до вечера. Клиника может
+// поменять предел переменной окружения EASYMED_SESSION_IDLE_HOURS (0 —
+// выключить; дробные часы допустимы).
+function idleHoursFromEnv() {
+  const raw = process.env.EASYMED_SESSION_IDLE_HOURS;
+  if (raw === undefined || raw === '') return 4;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 4;
+}
+export const SESSION_IDLE_HOURS = idleHoursFromEnv();
+// Отметку обращения пишем не чаще раза в минуту: каждый запрос экрана — это
+// запись в базу, а точности до секунды правилу «4 часа» не нужно.
+const TOUCH_EVERY_MS = 60 * 1000;
+
+// Anti-brute-force: after 5 wrong passwords, refuse logins for 5 minutes.
+// In-memory on purpose (resets on restart).
+//
+// V3120_FIX (M10) — ключ — ИМЯ + АДРЕС, а не одно имя. Раньше пять неверных
+// паролей к «admin» с ЛЮБОГО компьютера сети запирали администратора везде:
+// чужой мог держать клинику без администратора сколько угодно. Теперь заперт
+// только тот адрес, с которого подбирали; с других компьютеров человек входит.
+// Перебор с многих адресов сдерживает предел попыток на адрес (routes/auth.js).
 const FAILED_LIMIT = 5;
 const LOCK_MS = 5 * 60 * 1000;
-const failedAttempts = new Map(); // username -> { count, lockedUntil }
+const failedAttempts = new Map(); // username|ip -> { count, lockedUntil }
 
 const BCRYPT_COST = 10;
 
@@ -54,9 +76,10 @@ export function validPassword(pw) {
   return typeof pw === 'string' && pw.length >= 1 && Buffer.byteLength(pw, 'utf8') <= 72;
 }
 
-export function login(db, username, password) {
+export function login(db, username, password, { ip = '' } = {}) {
   const name = String(username || '').trim().toLowerCase();
-  const fail = failedAttempts.get(name);
+  const key = name + '|' + String(ip || '');
+  const fail = failedAttempts.get(key);
   if (fail && fail.lockedUntil > Date.now()) return { error: 'locked' };
 
   const user = db.prepare(
@@ -75,13 +98,14 @@ export function login(db, username, password) {
     // it cannot itself introduce a timing difference between them (see
     // auth.test.js's cost-equalisation timing test).
     recordEvent(db, 'failed_login');
-    return { error: noteFailure(name) };
+    return { error: noteFailure(key) };
   }
-  failedAttempts.delete(name);
+  failedAttempts.delete(key);
 
   const sid = crypto.randomBytes(32).toString('base64url');
   const expiresAt = isoSeconds(Date.now() + SESSION_TTL_HOURS * 3600 * 1000);
-  db.prepare('INSERT INTO sessions (id, user_id, expires_at) VALUES (?,?,?)').run(sid, user.id, expiresAt);
+  db.prepare('INSERT INTO sessions (id, user_id, expires_at, last_seen_at) VALUES (?,?,?,?)')
+    .run(sid, user.id, expiresAt, isoSeconds(Date.now()));
   return { session: sid, user: publicUser(user) };
 }
 
@@ -118,12 +142,19 @@ export function sessionUser(db, sid) {
     // Принадлежность к отделу — ФАКТ о человеке, а не право, и спросить её
     // экрану больше негде: users читается только через /api/db, а роль без
     // прав на справочник сотрудников туда не ходит.
-    'SELECT u.id, u.username, u.full_name, u.role, u.extra_roles, u.custom_role_code, u.department_id, u.is_active, u.must_change_password, s.expires_at AS session_expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?'
+    'SELECT u.id, u.username, u.full_name, u.role, u.extra_roles, u.custom_role_code, u.department_id, u.is_active, u.must_change_password, s.expires_at AS session_expires_at, COALESCE(s.last_seen_at, s.created_at) AS session_seen_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?'
   ).get(sid);
   if (!row) return null;
-  if (row.session_expires_at <= isoSeconds(Date.now()) || !row.is_active) {
+  const now = Date.now();
+  // V3120_FIX (M10) — и 12 часов от входа, и простой дольше SESSION_IDLE_HOURS.
+  const idle = SESSION_IDLE_HOURS > 0 && row.session_seen_at
+    && row.session_seen_at <= isoSeconds(now - SESSION_IDLE_HOURS * 3600 * 1000);
+  if (row.session_expires_at <= isoSeconds(now) || !row.is_active || idle) {
     logout(db, sid);
     return null;
+  }
+  if (!row.session_seen_at || row.session_seen_at <= isoSeconds(now - TOUCH_EVERY_MS)) {
+    try { db.prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ?').run(isoSeconds(now), sid); } catch { /* отметка — не повод отказать */ }
   }
   return publicUser(row);
 }
