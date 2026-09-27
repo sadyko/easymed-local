@@ -116,16 +116,24 @@ export function reconcileUpdateAtBoot(db, dataDir, { runningVersion, now = () =>
  * Один шаг подтверждения: pending на эту версию + /api/health отвечает 200 →
  * пишется ok:true, pending удаляется. true — подтверждено.
  */
-export async function confirmBoot(dataDir, { runningVersion, healthUrl, fetchImpl = globalThis.fetch, now = () => new Date(), timeoutMs = 5000 } = {}) {
+// V3120_FINAL — probe: проверка внутри процесса (см. armBootConfirmation).
+// Передан — fetch не нужен вовсе.
+export async function confirmBoot(dataDir, { runningVersion, healthUrl, fetchImpl = globalThis.fetch, probe = null, now = () => new Date(), timeoutMs = 5000 } = {}) {
   const pending = readPending(dataDir);
   if (!pending || pending.version !== runningVersion) return false;
-  let res;
-  try {
-    res = await fetchImpl(healthUrl, { signal: AbortSignal.timeout(timeoutMs) });
-  } catch {
-    return false;
+  if (probe) {
+    let alive = false;
+    try { alive = !!(await probe()); } catch { alive = false; }
+    if (!alive) return false;
+  } else {
+    let res;
+    try {
+      res = await fetchImpl(healthUrl, { signal: AbortSignal.timeout(timeoutMs) });
+    } catch {
+      return false;
+    }
+    if (!res || res.status !== 200) return false;
   }
-  if (!res || res.status !== 200) return false;
   writeOutcome(dataDir, {
     version: pending.version,
     from: pending.from ?? null,
@@ -153,17 +161,28 @@ export function armBootConfirmation(db, dataDir, {
   delayMs = 3000,
   intervalMs = 10_000,
   maxTries = 60,
+  // V3120_FINAL — server (http.Server после listen): подтверждение ВНУТРИ
+  // процесса — сервер слушает и база отвечает на SELECT 1 (то же, что делает
+  // /api/health). Fetch к собственному порту не годится: порт клиники
+  // закреплён port.txt, и порт из «плохого» списка fetch (6000, 6665–6669,
+  // 10080, 5060…) не подтверждался никогда, а позже первый сбой откатывал
+  // версию вместе с базой. probeDb — только для тестов (мёртвая база).
+  server = null,
+  probeDb = db,
 } = {}) {
   const state = reconcileUpdateAtBoot(db, dataDir, { runningVersion, now });
   if (state !== 'awaiting') return { state, done: Promise.resolve(false) };
   const healthUrl = `http://127.0.0.1:${port}/api/health`;
+  const probe = server
+    ? () => { if (!server.listening) return false; probeDb.prepare('SELECT 1 AS ok').get(); return true; }
+    : null;
   let tries = 0;
   let resolveDone;
   const done = new Promise((r) => { resolveDone = r; });
   const attempt = async () => {
     tries++;
     let ok = false;
-    try { ok = await confirmBoot(dataDir, { runningVersion, healthUrl, fetchImpl, now }); } catch { ok = false; }
+    try { ok = await confirmBoot(dataDir, { runningVersion, healthUrl, fetchImpl, probe, now }); } catch { ok = false; }
     if (ok) return resolveDone(true);
     if (tries >= maxTries) {
       console.warn(`[updater] version ${runningVersion} did not answer /api/health after ${tries} tries — left unconfirmed (update-pending.json)`);

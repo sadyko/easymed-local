@@ -152,3 +152,37 @@ test('syncRecoverCmd: кладёт в корень recover.cmd запущенн�
   // Не версионная раскладка (папка разработчика) — ничего.
   assert.equal(syncRecoverCmd(tmpDir('em-bootconf-dev-')), false);
 });
+
+// V3120_FINAL — подтверждение БЕЗ fetch к собственному порту. Порт клиники
+// закреплён port.txt, и если он в «плохом» списке fetch (6000, 6665–6669,
+// 10080, 5060…), fetch отказывает всегда: версия не подтверждалась, а позже
+// первый же сбой откатывал её вместе с базой. Теперь проверка — внутри
+// процесса: сервер слушает + база отвечает на SELECT 1.
+test('armBootConfirmation с server: подтверждает на «плохом» для fetch порту, fetch не зовётся', async () => {
+  const { dataDir, db } = workspace();
+  writePending(dataDir, { version: '2.4.0', from: '2.3.0' });
+  let fetched = false;
+  const server = { listening: true };
+  const { done } = armBootConfirmation(db, dataDir, {
+    runningVersion: '2.4.0', port: 6666, delayMs: 1, intervalMs: 1, server,
+    fetchImpl: async () => { fetched = true; throw new TypeError('fetch failed: bad port'); },
+  });
+  assert.equal(await done, true);
+  assert.equal(fetched, false);
+  assert.equal(result(dataDir).ok, true);
+});
+
+test('armBootConfirmation с server: не слушает или база мертва — не подтверждено', async () => {
+  const { dataDir, db } = workspace();
+  writePending(dataDir, { version: '2.4.0', from: '2.3.0' });
+  const server = { listening: false };
+  const { done } = armBootConfirmation(db, dataDir, { runningVersion: '2.4.0', delayMs: 1, intervalMs: 1, maxTries: 3, server });
+  assert.equal(await done, false);
+  assert.ok(readPending(dataDir), 'pending остаётся');
+
+  const w2 = workspace();
+  writePending(w2.dataDir, { version: '2.4.0', from: '2.3.0' });
+  const deadDb = { prepare: () => { throw new Error('SQLITE_IOERR'); } };
+  const r2 = armBootConfirmation(w2.db, w2.dataDir, { runningVersion: '2.4.0', delayMs: 1, intervalMs: 1, maxTries: 2, server: { listening: true }, probeDb: deadDb });
+  assert.equal(await r2.done, false);
+});

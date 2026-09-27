@@ -332,7 +332,10 @@ if (isMain) {
   // apply no longer health-checks anything: it repoints the junction in this
   // process and exits 75. Nothing about updating depends on which port this
   // server bound any more.
-  scheduleUpdater(db, DATA_DIR, { appRoot: ROOT });
+  // V3120_FINAL — подтверждение новой версии внутри процесса (server.listening
+  // + SELECT 1), без fetch к своему порту: порт из «плохого» списка fetch
+  // не подтверждался никогда (boot-confirm.js).
+  scheduleUpdater(db, DATA_DIR, { appRoot: ROOT, bootConfirm: { server } });
 
   // SYSTEM_SETTINGS_V1 — the daily database copy, same shape as the two
   // schedulers above: unref'd timers, every tick self-contained. First tick
