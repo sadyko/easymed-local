@@ -167,10 +167,12 @@ function lineDoctorOf(line) {
  * которого не было. Визит дня переиспользуется (ensure_visit), так что это не
  * редкий случай, а обычная вторая услуга у стойки.
  */
-async function quoteTiers(patientId, serviceIds, visitId) {
+async function quoteTiers(patientId, serviceIds, visitId, doctorIds = {}) {
     try {
+        // BILLING_AUDIT_FIX_V1 (A2) — врач строки едет в котировку: у врача с
+        // личной ценой счёт возьмёт её, и экран обязан назвать ту же сумму.
         const res = await supabase.rpc('service_price_quote', {
-            patient_id: patientId, service_ids: serviceIds, visit_id: visitId,
+            patient_id: patientId, service_ids: serviceIds, visit_id: visitId, doctor_ids: doctorIds,
         });
         if (res && res.error) return { quotes: {}, quoteError: msgOf(res.error) };
         const quotes = res && res.data && res.data.quotes;
@@ -232,7 +234,13 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
     //    и касса потом считает цену по нему.
     // Консультация тарифа не спрашивает: её цена — цена врача по типу приёма.
     const serviceIds = [...new Set(items.filter((l) => !isConsultPick(l.service)).map((l) => Number(l.service.id)))];
-    const { quotes, quoteError } = await quoteTiers(pid, serviceIds, visit.id);
+    const doctorIds = {};
+    for (const l of items) {
+        if (isConsultPick(l.service)) continue;
+        const d = lineDoctorOf(l);
+        if (d && doctorIds[l.service.id] == null) doctorIds[l.service.id] = d;
+    }
+    const { quotes, quoteError } = await quoteTiers(pid, serviceIds, visit.id, doctorIds);
 
     // 4. Строки услуг. Провал вставки — наружу: половина визита лучше, чем счёт
     //    на услуги, которых в визите нет.
@@ -283,6 +291,17 @@ export async function registerWalkIn({ patientId, lines, referralSourceId = null
         payer_id: null,
     });
     if (invErr) throw failAfterVisit(trf('Счёт не выставлен: {msg}', { msg: msgOf(invErr) }));
+    // BILLING_AUDIT_FIX_V1 (A2) — ЦЕНА СТРОКИ — ЦЕНА СЧЁТА. Позиции счёта
+    // сервер пишет в том же порядке, в каком получил visit_service_ids, и
+    // цену каждой считает сам (личная цена врача, тариф, консультация по
+    // врачу). Экран и печать показывают её, а не догадку браузера.
+    const invItems = (inv && inv.items) || [];
+    if (invItems.length === saved.length) {
+        invItems.forEach((it, i) => {
+            const unit = Number(it.unit_price);
+            if (Number.isFinite(unit)) saved[i].unitPrice = unit;
+        });
+    }
 
     // 6. Номера очереди. Провал — предупреждение, а не отказ: деньги приняты,
     //    визит заведён, а талон печатается повторно тем же вызовом.

@@ -462,7 +462,7 @@ export function createInvoiceForVisit(db, args, user) {
     }
 
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
-    const items = db.prepare('SELECT * FROM invoice_items WHERE invoice_id = ?').all(invoiceId);
+    const items = db.prepare('SELECT * FROM invoice_items WHERE invoice_id = ? ORDER BY id').all(invoiceId);   // BILLING_AUDIT_FIX_V1 (A2) — порядок присланных строк
     // PACKAGES_V1 (ревью I-1) — rest_discount: сколько из присланной скидки
     // (ручная/лояльность/промокод, с полом категории) счёт реально применил —
     // без скидок пакета. Мастер переносит остаток своей скидки на счёт

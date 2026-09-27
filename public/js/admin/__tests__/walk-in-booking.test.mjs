@@ -453,3 +453,23 @@ test('LIVE_AUDIT_FIX_V1: хирургия без койки — отказ ДО 
   assert.equal(countOf('visits'), 0, 'за отказом остался визит');
   assert.equal(countOf('visit_services'), 0);
 });
+
+// BILLING_AUDIT_FIX_V1 (A2) — врач с ЛИЧНОЙ ценой: строка, экран и счёт
+// называют одну сумму. Прежде котировка отдавала каталог (100 000), счёт брал
+// личные 150 000, а быстрая регистрация показывала 100 000 и печатала
+// несуществующую «Скидку».
+test('ЛИЧНАЯ ЦЕНА ВРАЧА: строка и экран — та же сумма, что в счёте', async () => {
+  seed();
+  DB.prepare('UPDATE users SET service_rates = ? WHERE id = ?')
+    .run(JSON.stringify([{ service_id: CONSULT, pct: 40, price: 150000 }]), DOCTOR);
+  const out = await registerWalkIn({
+    patientId: PATIENT,
+    lines: [{ service: svc(CONSULT), doctorId: DOCTOR }, { service: svc(LAB), doctorId: null }],
+    createdBy: USER.id,
+  });
+  assert.equal(out.invoice.total_amount, 190000);
+  assert.equal(out.invoice.discount_amount, 0);
+  assert.deepEqual(out.lines.map((l) => l.unitPrice), [150000, 40000]);
+  const rows = all('SELECT unit_price FROM visit_services WHERE visit_id = ? ORDER BY id', out.visit.id);
+  assert.deepEqual(rows.map((r) => r.unit_price), [150000, 40000]);
+});
