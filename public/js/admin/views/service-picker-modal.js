@@ -3007,19 +3007,44 @@ export function openServicePickerModal({
             }
             const visit = booked.visit;
 
-            // FINAL_ROLES_SYNC_FIX_V1 (I1) — КОЛЛ-ЦЕНТР ЗАПИСЫВАЕТ СЛОТ, УСЛУГИ
-            // ДОБАВЛЯЕТ РЕГИСТРАТУРА. Строки visit_services реестр вставляет
-            // только admin/registrar/doctor; оператор календаря получал отказ на
-            // каждой строке, и ветка «ни одна услуга не записалась» ниже
-            // удаляла его запись (discard_empty_visit) — «запись отменена» на
-            // каждой записи колл-центра. Так было не всегда: раньше визит
-            // оставался держать врача и время, а услуги добавляли у стойки.
-            // Теперь тому, кто строк вставить не может, строки и не
-            // предлагаются: запись остаётся, отмена — только настоящему сбою.
+            // CRM_CALENDAR_MIRROR_V1 (2026-09-27) — КОЛЛ-ЦЕНТР ЗАПИСЫВАЕТ С УСЛУГАМИ.
+            //
+            // Было (FINAL_ROLES_SYNC_FIX_V1, I1): оператор ставил только слот —
+            // «Записано. Услуги добавит регистратура.», — потому что строки
+            // visit_services реестр ему не вставляет. Владелец: заявка и
+            // календарь — одна запись, «and the services». Теперь строки пишет
+            // узкая дверь сервера booking_lines_add: только «в смете», без
+            // счёта и оплаты, без хирургии, — и те же строки сами появляются в
+            // заявке CRM (server/services/crm/booking-mirror.js). Счёт и оплата
+            // по-прежнему у регистратуры и кассы, поэтому дальше мастера
+            // оператор не идёт.
             if (!canAddVisitLines()) {
-                toast(tr('Записано. Услуги добавит регистратура.'), 'ok');
+                // Консультация по виду приёма едет своей строкой (service_id NULL
+                // + consultation_type_id) — её цену по ценам врача считает сервер.
+                const want = state.added.filter((a) => a.service && (a.service.__consult || a.service.id));
+                const lineOf = (a) => a.service.__consult
+                    ? { consultation_type_id: a.service.consultation_type_id || a.service.id, doctor_id: a.doctor?.id || a.service.__consultDoctorId || null, scheduled_at: a.startISO || scheduledISO || null }
+                    : { service_id: a.service.id, doctor_id: a.doctor?.id || null, scheduled_at: a.startISO || scheduledISO || null };
+                const res = want.length
+                    ? await supabase.rpc('booking_lines_add', { visit_id: visit.id, patient_id: p.id, lines: want.map(lineOf) })
+                    : { data: { added: [] } };
+                if (res.error) {
+                    // Слот уже стоит — его не отменяем: запись без услуг лучше, чем
+                    // потерянное время. Причину говорим словами сервера.
+                    toast(trf('Записано, но услуги не добавлены: {msg}', { msg: res.error.message || res.error }), 'fail');
+                } else {
+                    toast(tr('Записано с услугами.'), 'ok');
+                }
+                const added = (res.data && res.data.added) || [];
+                const rows = want.map((a) => {
+                    const l = lineOf(a);
+                    const vs = added.find((x) => (l.service_id != null
+                        ? String(x.service_id) === String(l.service_id)
+                        : String(x.consultation_type_id) === String(l.consultation_type_id))) || null;
+                    return { vs, a, unitPrice: vs ? vs.unit_price : 0 };
+                }).filter((r) => r.vs);
                 closePicker();
-                if (typeof onBooked === 'function') { try { onBooked(bookedSummary(visit, [])); } catch (_) {} }
+                if (typeof onBooked === 'function') { try { onBooked(bookedSummary(visit, rows)); } catch (_) {} }
                 return;
             }
 

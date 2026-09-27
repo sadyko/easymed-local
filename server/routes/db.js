@@ -12,6 +12,8 @@ import { crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../services/crm/v
 import { tagInsertRefusal } from '../services/crm/config.js';   // CRM_HEAD_MERGE_TAGS_V1 (ревью M4)
 import { roleWriteRefusal } from '../services/role-guard.js';   // ADMIN_ROWS_GRANTABLE_V1
 import { packageStampRefusal } from '../services/rpc/billing.js';   // PACKAGES_V1 (ревью I-3)
+// CRM_CALENDAR_MIRROR_V1 — строки записи и строки заявки — одна запись.
+import { mirrorBefore, mirrorAfter } from '../services/crm/booking-mirror-db.js';
 
 // The one HTTP door onto the database: every request is compiled through
 // the allow-list registry (query-compiler.js) before it touches SQLite.
@@ -285,6 +287,12 @@ export function dbRoutes(db) {
       return res.status(409).json({ error: { code: 'conflict', message: admLineRefusal } });
     }
 
+    // CRM_CALENDAR_MIRROR_V1 — что заденет правка (и отказ, если она трогает
+    // услугу заявки, уже выставленную или начатую). До выполнения: база ещё
+    // не тронута.
+    const mirror = mirrorBefore(db, compiled.meta, req.body, req.user);
+    if (mirror.refusal) return res.status(409).json({ error: { code: 'conflict', message: mirror.refusal } });
+
     try {
       const { sql, params, meta } = compiled;
 
@@ -312,6 +320,7 @@ export function dbRoutes(db) {
             })();
           } catch (e) { if (!refused) throw e; }
           if (refused) return res.status(403).json({ error: { code: 'forbidden', message: 'not allowed' } });
+          mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
           return res.json({ data: null });
         }
         const info = db.prepare(sql).run(...params);
@@ -330,6 +339,7 @@ export function dbRoutes(db) {
         if (meta.table === 'visit_services' && hasEvidenceStatus(req.body)) {
           crmServiceEvidence(db, [Number(info.lastInsertRowid)]);
         }
+        mirrorAfter(db, mirror, meta, req.body, req.user, { insertedId: Number(info.lastInsertRowid) });   // CRM_CALENDAR_MIRROR_V1
         if (!meta.returning) return res.json({ data: null });
         const row = db.prepare(
           `SELECT ${readableColumns(meta.table).map((c) => `"${c}"`).join(', ')} FROM "${meta.table}" WHERE rowid = ?`
@@ -339,6 +349,7 @@ export function dbRoutes(db) {
 
       if (meta.op === 'upsert') {
         db.prepare(sql).run(...params);
+        mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
         // A bulk (array) upsert has no single row to hand back; callers that use
         // it don't request returning. Single-row upsert re-selects below.
         if (!meta.returning || meta.multi) return res.json({ data: null });
@@ -359,6 +370,7 @@ export function dbRoutes(db) {
         const evidence = crmEvidenceTargets(db, meta, req.body, req.user);
         db.prepare(sql).run(...params);
         if (evidence.length) crmServiceEvidence(db, evidence);
+        mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
         if (!meta.returning) return res.json({ data: null });
         // Re-select the affected rows using the SAME filters that scoped the
         // update (never the whole table) so `returning` reflects only what
@@ -370,6 +382,7 @@ export function dbRoutes(db) {
 
       if (meta.op === 'delete') {
         db.prepare(sql).run(...params);
+        mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
         return res.json({ data: null });
       }
     } catch (e) {

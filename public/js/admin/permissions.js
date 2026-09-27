@@ -1299,8 +1299,9 @@ export function canWriteServiceTemplates() {
 // FINAL_ROLES_SYNC_FIX_V1 (I1) — ЗЕРКАЛО visit_services.insert (реестр):
 // кто вставляет строки услуг визита. Живёт здесь, а не в visit-wizard.js,
 // потому что тот же вопрос задаёт и мастер записи календаря
-// (service-picker-modal.js): колл-центр записывает слот, а услуги добавляет
-// регистратура — строки ему не вставить, и пытаться незачем.
+// (service-picker-modal.js). Колл-центра в списке нет и не будет: строки своей
+// записи он пишет узкой дверью сервера booking_lines_add (CRM_CALENDAR_MIRROR_V1),
+// а не /api/db — мастер для него идёт этой дверью.
 export const VISIT_LINE_ROLES = Object.freeze(['admin', 'registrar', 'doctor']);
 export function canAddVisitLines() { return hasActorRole(VISIT_LINE_ROLES); }
 

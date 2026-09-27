@@ -112,7 +112,9 @@ let CRM_REQS = [];
 let CRM_LINES = [];
 let CALLS = [];
 let FAIL_LINES = false;
+let CONSULT_ON = false;
 const RPCS = [];
+const RPC_BODIES = [];
 globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     let body = {}; try { body = JSON.parse(opts.body || '{}'); } catch { /* не наш запрос */ }
@@ -121,6 +123,9 @@ globalThis.fetch = async (url, opts = {}) => {
     if (u.startsWith('/api/db')) {
         CALLS.push(body);
         if (body.table === 'service_types') return ok(TYPES);
+        // CRM_CALENDAR_MIRROR_V1 — вид приёма с ценой врача: строка консультации в смете.
+        if (body.table === 'consultation_types') return ok(CONSULT_ON ? [{ id: 5, name: 'Первичный', name_ru: 'Первичный приём', price: 80000, active: 1 }] : []);
+        if (body.table === 'doctor_consultation_prices') return ok(CONSULT_ON ? [{ doctor_id: 7, consultation_type_id: 5, price: 120000, available: 1, is_free: 0, name_ru: 'Первичный приём Петрова' }] : []);
         if (body.table === 'services') return ok(SERVICES);
         if (body.table === 'users') return ok(USERS);
         if (body.table === 'patients' && body.op === 'select') return ok(PATIENTS);
@@ -138,7 +143,9 @@ globalThis.fetch = async (url, opts = {}) => {
         if (body.op === 'insert') return ok({ id: 'row-1' });
         return ok([]);
     }
-    if (u.startsWith('/api/rpc/')) RPCS.push(decodeURIComponent(u.slice('/api/rpc/'.length)));
+    if (u.startsWith('/api/rpc/')) { RPCS.push(decodeURIComponent(u.slice('/api/rpc/'.length))); RPC_BODIES.push(body); }
+    // CRM_CALENDAR_MIRROR_V1 — узкая дверь сервера для строк записи колл-центра.
+    if (u.startsWith('/api/rpc/booking_lines_add')) return ok({ visit_id: 'v-1', added: (body.lines || []).map((l, i) => ({ id: 'vs-' + i, service_id: l.service_id ?? null, consultation_type_id: l.consultation_type_id ?? null, unit_price: 1 })), skipped: [] });
     if (u.startsWith('/api/rpc/calendar_book')) return ok({ visit: { id: 'v-1', visit_number: 'V-1', branch_id: null, visit_date: DAY_ISO } });
     if (u.startsWith('/api/rpc/')) return ok({});
     return gone();
@@ -366,11 +373,11 @@ test('оба мастера читают строки заявки одним к
 // А у роли, которая строки вставлять может, настоящий сбой по-прежнему
 // убирает пустую запись.
 // ═══════════════════════════════════════════════════════════════════════════
-async function bookFromCalendarAs(role) {
+async function bookFromCalendarAs(role, item = 'Приём терапевта') {
     window.easymed = { state: { user: { id: 1, role, extra_roles: [] } } };
     RPCS.length = 0;
     const box = await openFromCalendar();
-    addBtnFor(box, 'Приём терапевта').click();
+    addBtnFor(box, item).click();
     await settle();
     await attachPatientViaUi(box);
     const create = btnWith(topOverlay(), 'Создать визит') || byClass(topOverlay(), 'wzc-cta')[0];
@@ -380,14 +387,25 @@ async function bookFromCalendarAs(role) {
 }
 const toastText = () => { const t = BODY.children.find((c) => c.attrs && c.attrs.id === 'toast'); return t ? t.textContent : ''; };
 
-test('I1: колл-центр записывает из календаря — слот остаётся, строк не пытается, запись не удаляется', async () => {
+// CRM_CALENDAR_MIRROR_V1 (2026-09-27) — владелец: заявка и календарь — одна
+// запись, «and the services». Оператор записывает С УСЛУГАМИ — через узкую
+// дверь сервера booking_lines_add (не /api/db: visit_services ему закрыты), без
+// счёта и оплаты. Слот-без-услуг («Услуги добавит регистратура») убран.
+test('I1: колл-центр записывает из календаря С УСЛУГАМИ — строки через booking_lines_add, не /api/db, без счёта', async () => {
     try {
+        RPC_BODIES.length = 0;
         await bookFromCalendarAs('callcenter');
         assert.ok(RPCS.includes('calendar_book'), 'запись не дошла до calendar_book');
+        assert.ok(RPCS.includes('booking_lines_add'), 'услуги записи не отправлены: ' + RPCS.join(','));
+        const sent = RPC_BODIES[RPCS.indexOf('booking_lines_add')];
+        assert.equal(sent.visit_id, 'v-1');
+        assert.equal(String(sent.patient_id), '3', 'сервер не узнал, чья это запись (разбор ревью M2)');
+        assert.ok(Array.isArray(sent.lines) && sent.lines.length >= 1 && sent.lines.every((l) => l.service_id), 'услуги не ушли строками: ' + JSON.stringify(sent));
         assert.ok(!CALLS.some((c) => c.table === 'visit_services' && c.op === 'insert'),
-            'колл-центру предложены строки услуг, которые реестр ему не вставит');
+            'колл-центр пишет строки визита мимо своей двери');
         assert.ok(!RPCS.includes('discard_empty_visit'), 'запись колл-центра удалена: ' + RPCS.join(','));
-        assert.match(toastText(), /Записано\. Услуги добавит регистратура\./);
+        assert.ok(!RPCS.some((n) => /invoice|payment/.test(n)), 'колл-центр выставил счёт или провёл оплату: ' + RPCS.join(','));
+        assert.match(toastText(), /Записано с услугами\./);
     } finally { delete window.easymed; }
 });
 
@@ -399,4 +417,24 @@ test('I1: регистратура — строка услуги не легла
         assert.ok(RPCS.includes('discard_empty_visit'), 'пустая запись после сбоя осталась: ' + RPCS.join(','));
         assert.match(toastText(), /запись отменена/);
     } finally { FAIL_LINES = false; delete window.easymed; }
+});
+
+// CRM_CALENDAR_MIRROR_V1 (часть 2) — консультация по виду приёма уходит своей
+// строкой (consultation_type_id, без service_id): цену по ценам врача считает
+// сервер. Прежде она молча пропускалась, и «добавит регистратура».
+test('I1: колл-центр записывает КОНСУЛЬТАЦИЮ по виду приёма — строкой вида приёма, без цены экрана', async () => {
+    CONSULT_ON = true;
+    try {
+        RPC_BODIES.length = 0;
+        await bookFromCalendarAs('callcenter', 'Первичный приём Петрова');
+        const i = RPCS.indexOf('booking_lines_add');
+        assert.ok(i >= 0, 'консультация не отправлена: ' + RPCS.join(','));
+        const consult = (RPC_BODIES[i].lines || []).find((l) => l.consultation_type_id != null);
+        assert.ok(consult, 'строки вида приёма нет: ' + JSON.stringify(RPC_BODIES[i]));
+        assert.equal(consult.consultation_type_id, 5);
+        assert.equal(consult.service_id, undefined, 'консультации приписана услуга каталога');
+        assert.equal(consult.unit_price, undefined, 'экран прислал цену консультации');
+        assert.equal(String(consult.doctor_id), '7', 'консультация ушла без своего врача');
+        assert.match(toastText(), /Записано с услугами\./);
+    } finally { CONSULT_ON = false; delete window.easymed; }
 });

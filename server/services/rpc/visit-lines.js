@@ -18,6 +18,7 @@
 //     void_dispensed_visit_item, иначе остаток разойдётся;
 //   • БЕЗ ДОКУМЕНТОВ И РЕЗУЛЬТАТОВ по строке.
 import { hasAnyRole } from '../roles.js';
+import { mirrorVisit } from '../crm/booking-mirror.js';   // CRM_CALENDAR_MIRROR_V1
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -67,9 +68,12 @@ export function removeOwnVisitLine(db, args, user) {
     }
     try { db.prepare('DELETE FROM service_queue_tickets WHERE visit_service_id = ?').run(id); } catch { /* нет таблицы */ }
     db.prepare('DELETE FROM visit_services WHERE id = ?').run(id);
-    return { removed: true, id };
+    return { visitId: row.visit_id };
   });
-  return run();
+  const { visitId } = run();
+  // CRM_CALENDAR_MIRROR_V1 — снятая до прихода услуга снимается и в заявке.
+  mirrorVisit(db, visitId, { actorId: user && user.id });
+  return { removed: true, id };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -1485,6 +1485,11 @@ async function paint() {
         // оператор меняет у строки время или врача — то есть делает то, ради
         // чего отказ и показан.
         const busyDays = new Set();
+        // CRM_CALENDAR_MIRROR_V1 — строки, которые в базе ДЕРЖАТ ЗАПИСЬ (visit_id).
+        // Убрали такую из карточки — её надо отменить явно: «замена набора»
+        // отменяет только строки без записи, и снятая услуга молча оставалась
+        // бы в календаре. Сервер, увидев отмену, снимает её и со строк записи.
+        const bookedLineIds = new Set();
         // CRM_LINKS_V1 — доехали ли строки услуг заявки из базы (см. primaryDate).
         let linesLoaded = !r;
         let svcChosen = r ? (r.service_id || null) : null;
@@ -1498,7 +1503,14 @@ async function paint() {
         // карточке сотрудника). Тот же список, что предлагает мастер записи, —
         // иначе колл-центр записал бы к врачу, у которого этой услуги нет.
         // Никто не отмечен на услугу — предлагаем всех, чтобы запись не встала.
-        function doctorsForService(svcId) {
+        // Разбор ревью (M9) — кто ведёт вид приёма (doctor_consultation_prices).
+        let consultDoctors = new Map();   // consultation_type_id -> Set(doctor_id)
+        function doctorsForService(svcId, p = null) {
+            if (p && p.service_id == null && p.consultation_type_id != null) {
+                const who = consultDoctors.get(String(p.consultation_type_id));
+                const pool = who ? docCatalog.filter((d) => who.has(String(d.id))) : [];
+                return pool.length ? pool : docCatalog;
+            }
             const assigned = docCatalog.filter(d => {
                 let rates = d.service_rates;
                 if (typeof rates === 'string') { try { rates = JSON.parse(rates); } catch (_) { rates = []; } }
@@ -1507,6 +1519,8 @@ async function paint() {
             return assigned.length ? assigned : docCatalog;
         }
         const needsDoctor = (p) => {
+            // M9 — консультации по виду приёма без врача не бывает.
+            if (p && p.service_id == null && p.consultation_type_id != null) return true;
             const sv = svcCatalog.find(x => String(x.id) === String(p.service_id));
             return !!(sv && sv.requires_doctor);
         };
@@ -1590,7 +1604,12 @@ async function paint() {
             paintPicked();
         }
         function removePicked(id) {
-            picked = picked.filter(p => String(p.service_id) !== String(id));
+            // CRM_CALENDAR_MIRROR_V1 — строка консультации (service_id NULL)
+            // убирается САМА, по ссылке: по service_id она неотличима от другой
+            // консультации и от строки без услуги.
+            picked = (id && typeof id === 'object')
+                ? picked.filter(p => p !== id)
+                : picked.filter(p => String(p.service_id) !== String(id));
             syncPrimary();
             paintPicked();
         }
@@ -1638,11 +1657,12 @@ async function paint() {
                 pickedList.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 10px', background: 'var(--teal-25, #f0faf9)', border: '1px solid var(--teal-200, #b2dfdb)', borderRadius: '10px' } },
                     h('div', { style: { flex: 1, minWidth: 0 } },
                         h('div', { style: { fontSize: '13.5px', fontWeight: 600, overflowWrap: 'anywhere' } }, p.name),
-                        h('div', { class: 'muted', style: { fontSize: '12.5px' } }, String(p.price || 0), ' сум')),
+                        h('div', { class: 'muted', style: { fontSize: '12.5px' } }, String(p.price || 0), ' сум'),
+                        bookedLabel(p) ? h('div', { 'data-booked': '', style: { fontSize: '12.5px', color: 'var(--ok-700, #15803d)', fontWeight: 600 } }, bookedLabel(p)) : null),
                     dateInp,
                     h('button', { type: 'button', title: 'Убрать услугу',
                         style: { border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--crit-500, #ef4444)', fontSize: '17px', lineHeight: 1, padding: '0 2px' },
-                        onclick: () => removePicked(p.service_id) }, '×')));
+                        onclick: () => removePicked(p) }, '×')));
             }
         }
 
@@ -1718,12 +1738,28 @@ async function paint() {
             paintSvcChips();
             // Правка существующей заявки — подтягиваем её строки услуг.
             if (isEdit && r.id) {
+                // CRM_CALENDAR_MIRROR_V1 — виды приёма: строка записи бывает
+                // консультацией (service_id NULL + consultation_type_id, миграция 188).
+                const consultsP = supabase.from('consultation_types').select('id, name, name_ru, price')
+                    .then(({ data }) => data || [], () => []);
+                supabase.from('doctor_consultation_prices').select('doctor_id, consultation_type_id, available')
+                    .then(({ data }) => {
+                        const m = new Map();
+                        for (const r of (data || [])) {
+                            if (r.available === false || r.available === 0) continue;
+                            const k = String(r.consultation_type_id);
+                            if (!m.has(k)) m.set(k, new Set());
+                            m.get(k).add(String(r.doctor_id));
+                        }
+                        consultDoctors = m;
+                    }, () => {});
                 supabase.from('crm_request_services')
                     // CRM_REAL_BOOKING_V1 — id и visit_id: строка, которая уже
                     // держит слот, переписыванию набора не подлежит (saveLines).
-                    .select('id, service_id, scheduled_date, status, doctor_id, visit_id')
+                    .select('id, service_id, scheduled_date, status, doctor_id, visit_id, consultation_type_id')
                     .eq('request_id', r.id).neq('status', 'cancelled')
-                    .then(({ data: lines, error }) => {
+                    .then(async ({ data: lines, error }) => {
+                        const consults = await consultsP;
                         // CRM_LINKS_V1 — ОТКАЗ ЭТО НЕ «УСЛУГ НЕТ». Пустой список
                         // неотличим от несостоявшегося запроса, а saveLines()
                         // переписывает набор строк ЦЕЛИКОМ: приняв отказ за
@@ -1747,6 +1783,17 @@ async function paint() {
                             if (sv) picked.push({ service_id: sv.id, name: sv.name, price: sv.price, date: ln.scheduled_date || '', doctor_id: ln.doctor_id || null, status: ln.status || 'pending',
                                 line_id: ln.id || null, visit_id: ln.visit_id || null,
                                 booked_date: ln.scheduled_date || '', booked_doctor_id: ln.doctor_id || null });
+                            if (sv && ln.id && ln.visit_id && ln.status === 'pending') bookedLineIds.add(String(ln.id));
+                            // CRM_CALENDAR_MIRROR_V1 — консультация по виду приёма.
+                            if (!sv && ln.service_id == null && ln.consultation_type_id != null) {
+                                const ct = consults.find((c) => String(c.id) === String(ln.consultation_type_id));
+                                picked.push({ service_id: null, consultation_type_id: ln.consultation_type_id,
+                                    name: (ct && (ct.name_ru || ct.name)) || 'Консультация', price: (ct && ct.price) || 0,
+                                    date: ln.scheduled_date || '', doctor_id: ln.doctor_id || null, status: ln.status || 'pending',
+                                    line_id: ln.id || null, visit_id: ln.visit_id || null,
+                                    booked_date: ln.scheduled_date || '', booked_doctor_id: ln.doctor_id || null });
+                                if (ln.id && ln.visit_id && ln.status === 'pending') bookedLineIds.add(String(ln.id));
+                            }
                         }
                         // Заявка до миграции 057 — единственная услуга в родителе.
                         if (!picked.length && svcChosen) {
@@ -2017,7 +2064,16 @@ async function paint() {
             // редактор заявки.
             const linked = writable.filter((p) => p.line_id && p.visit_id);
             const plain = writable.filter((p) => !(p.line_id && p.visit_id));
+            // CRM_CALENDAR_MIRROR_V1 — записанные строки, которых в карточке больше нет.
+            const kept = new Set(picked.filter((p) => p.line_id).map((p) => String(p.line_id)));
+            const dropped = [...bookedLineIds].filter((id) => !kept.has(id));
             try {
+                if (dropped.length) {
+                    const { error } = await supabase.from('crm_request_services')
+                        .update({ status: 'cancelled' }).in('id', dropped.map(Number)).eq('status', 'pending');
+                    if (error) throw new Error(error.message || error);
+                    for (const id of dropped) bookedLineIds.delete(id);
+                }
                 await supabase.from('crm_request_services')
                     .update({ status: 'cancelled' })
                     .eq('request_id', requestId).eq('status', 'pending')
@@ -2051,6 +2107,7 @@ async function paint() {
                 await supabase.from('crm_request_services').insert(plain.map(p => ({
                     request_id: requestId,
                     service_id: p.service_id,
+                    ...(p.consultation_type_id ? { consultation_type_id: p.consultation_type_id } : {}),   // CRM_CALENDAR_MIRROR_V1
                     scheduled_date: p.date || null,
                     doctor_id: p.doctor_id || null,   // CRM_LINE_DOCTOR_V1
                     status: 'pending',
@@ -2075,7 +2132,7 @@ async function paint() {
         async function reloadLines(requestId) {
             if (!requestId) return;
             const { data, error } = await supabase.from('crm_request_services')
-                .select('id, service_id, scheduled_date, status, doctor_id, visit_id')
+                .select('id, service_id, scheduled_date, status, doctor_id, visit_id, consultation_type_id')
                 .eq('request_id', requestId).neq('status', 'cancelled');
             if (error || !data) return;
             for (const p of picked) {
@@ -2085,7 +2142,8 @@ async function paint() {
                 // Полностью одинаковые строки (та же услуга, тот же день, тот же
                 // врач) этим ключом всё равно не различить — их и в окне нельзя
                 // завести две: addPicked() не пускает одну услугу дважды.
-                const ln = data.find((x) => String(x.service_id) === String(p.service_id)
+                const ln = data.find((x) => String(x.service_id ?? '') === String(p.service_id ?? '')
+                    && String(x.consultation_type_id ?? '') === String(p.consultation_type_id ?? '')
                     && String(x.scheduled_date || '') === String(p.date || '')
                     && String(x.doctor_id || '') === String(p.doctor_id || ''));
                 if (!ln) continue;
@@ -2095,6 +2153,7 @@ async function paint() {
                 p.booked_date = ln.scheduled_date || '';
                 p.booked_doctor_id = ln.doctor_id || null;
                 p.time_touched = false;   // строка и база снова сходятся
+                if (ln.id && ln.visit_id && ln.status === 'pending') bookedLineIds.add(String(ln.id));   // CRM_CALENDAR_MIRROR_V1
             }
         }
 
@@ -2116,16 +2175,27 @@ async function paint() {
             const ids = [...new Set(picked.filter((p) => p.visit_id).map((p) => p.visit_id))];
             if (!ids.length) return;
             const { data, error } = await supabase.from('visits')
-                .select('id, visit_date, duration_minutes').in('id', ids);
+                .select('id, visit_date, duration_minutes, doctor_id, status').in('id', ids);
             if (error || !data) return;
             const byId = new Map(data.map((v) => [String(v.id), v]));
             for (const p of picked) {
-                if (!p.visit_id || p.time) continue;
-                const v = byId.get(String(p.visit_id));
+                const v = p.visit_id ? byId.get(String(p.visit_id)) : null;
                 const d = v && v.visit_date ? new Date(v.visit_date) : null;
                 if (!d || Number.isNaN(d.getTime())) continue;
-                setLineTime(p, pad2(d.getHours()) + ':' + pad2(d.getMinutes()));
+                // CRM_CALENDAR_MIRROR_V1 — карточка показывает ЗАПИСЬ: день, час и
+                // врача приёма — те, что стоят в календаре сейчас (перенос там
+                // виден здесь без пересохранения заявки).
+                p.booked_at = { day: p.date || '', time: pad2(d.getHours()) + ':' + pad2(d.getMinutes()), doctor_id: v.doctor_id || null };
+                if (!p.time) setLineTime(p, p.booked_at.time);
             }
+            paintPicked();
+        }
+        /** CRM_CALENDAR_MIRROR_V1 — «записан 12.10 в 10:00 · Иванов» у записанной строки. */
+        function bookedLabel(p) {
+            if (!p || !p.visit_id || !p.booked_at) return null;
+            const doc = p.booked_at.doctor_id ? docCatalog.find((d) => String(d.id) === String(p.booked_at.doctor_id)) : null;
+            const day = String(p.booked_at.day || '').split('-').reverse().join('.');
+            return trf('Записан: {day} в {time}', { day, time: p.booked_at.time }) + (doc ? ' · ' + doc.full_name : '');
         }
 
         // CRM_SCHEDULE_V1 — «Записать на дату» заменила «Оформить услугу».
@@ -2270,7 +2340,7 @@ async function paint() {
                     // дошла бы до регистратуры невидимой строкой.
                     let docCell = null;
                     if (needsDoctor(p)) {
-                        const pool = doctorsForService(p.service_id);
+                        const pool = doctorsForService(p.service_id, p);
                         const sel = h('select', { style: { width: '210px', flex: '0 0 auto', padding: '7px 9px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontFamily: 'inherit', fontSize: '12.5px', background: 'var(--white,#fff)' } },
                             h('option', { value: '' }, '— выберите врача —'),
                             ...pool.map(d => h('option', { value: String(d.id), selected: String(p.doctor_id || '') === String(d.id) },

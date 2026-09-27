@@ -175,6 +175,8 @@ let LINK_HOLD = null;
 // свободных начал и отказом с кодом slot_taken — иначе проверять было бы
 // нечего, а зелёный тест держался бы на заглушке.
 let DOCTORS = [];
+let CONSULTS = [];   // CRM_CALENDAR_MIRROR_V1
+let CONSULT_PRICES = [];   // разбор ревью M9 — кто ведёт вид приёма
 let SLOT_DAY = { slots: [{ start: '09:00', end: '09:30' }, { start: '09:30', end: '10:00' }, { start: '10:00', end: '10:30' }], busy: [] };
 let SLOT_FAIL = false;         // сервер не ответил про расписание
 let ENSURE_PLAN = [];          // ответы ensure_visit по порядку; дальше — успех
@@ -221,6 +223,9 @@ globalThis.fetch = async (url, opts) => {
       return jsonOk(STAFF);
     }
     if (body && body.table === 'services' && body.op === 'select') return jsonOk(SERVICES);
+    // CRM_CALENDAR_MIRROR_V1 — виды приёма: строка консультации в заявке.
+    if (body && body.table === 'consultation_types' && body.op === 'select') return jsonOk(CONSULTS);
+    if (body && body.table === 'doctor_consultation_prices' && body.op === 'select') return jsonOk(CONSULT_PRICES);
     // CRM_LINE_DOCTOR_V1 — список ВРАЧЕЙ строки (.eq('role','doctor')). Он не
     // тот же, что список операторов выше (.in('role', …)), и отдаётся любой роли.
     if (body && body.table === 'users' && body.op === 'select'
@@ -1925,4 +1930,107 @@ test('руководитель колл-центра (crm.all) видит «Оп
     perms.setEffectiveFromRole({ name: '', permissions: { sections: ['crm'] } });
     window.easymed.state.user = null;
   }
+});
+
+// ═══ CRM_CALENDAR_MIRROR_V1 (2026-09-27) — КАРТОЧКА И КАЛЕНДАРЬ — ОДНА ЗАПИСЬ ═══
+//
+// Владелец: «they mirror each other, also the calendar. and the services».
+// Карточка называет запись (день, час, врач из календаря), а записанная
+// услуга, убранная из карточки, отменяется ЯВНО по номеру строки: «замена
+// набора» отменяет только строки без записи, и снятая услуга молча оставалась
+// бы в календаре. Строку записи снимает сервер (booking-mirror.js).
+
+test('карточка называет запись строки — день, час и врача из календаря', async () => {
+  VISITS = [Object.assign(bookedVisit('09:30'), { doctor_id: 31, status: 'scheduled' })];
+  SERVICES = [DOC_SVC];
+  DOCTORS = [DOCTOR];
+  REQ_LINES = [BOOKED_LINE];
+  const modal = await openRequest({
+    id: 1, status: 'scheduled', service_id: DOC_SVC.id, scheduled_date: BOOK_DAY,
+    full_name: 'Каримова Азиза', phone: UZ_RAW,
+    patient_id: 7, patients: { id: 7, full_name: 'Каримова Азиза', mrn: 'A-000123' },
+  }, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+  await tick(80);
+  const label = walk(modal).filter((n) => n.attrs && 'data-booked' in n.attrs).map(textOf).join(' | ');
+  assert.ok(/Записан: .* в 09:30/.test(label), 'карточка не называет записанный час: ' + label);
+  assert.ok(/Петров Пётр/.test(label), 'карточка не называет врача записи: ' + label);
+  VISITS = []; SERVICES = []; REQ_LINES = []; DOCTORS = [];
+  window.easymed.state.user = null;
+});
+
+test('записанную услугу убрали из карточки — её строка отменяется по номеру', async () => {
+  VISITS = [];
+  SERVICES = [DOC_SVC, LAB_SVC];
+  DOCTORS = [DOCTOR];
+  REQ_LINES = [BOOKED_LINE, { id: 902, service_id: LAB_SVC.id, scheduled_date: BOOK_DAY, status: 'pending', doctor_id: null, visit_id: 555 }];
+  const modal = await openRequest({
+    id: 1, status: 'scheduled', service_id: DOC_SVC.id, scheduled_date: BOOK_DAY,
+    full_name: 'Каримова Азиза', phone: UZ_RAW,
+    patient_id: 7, patients: { id: 7, full_name: 'Каримова Азиза', mrn: 'A-000123' },
+  }, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+  await tick(80);
+  const removeBtns = walk(modal).filter((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs.title === 'Убрать услугу');
+  assert.equal(removeBtns.length, 2, 'в карточке не две услуги');
+  removeBtns[1].click();   // анализ крови
+  await tick(20);
+  CALLS.length = 0;
+  await saveRequest(modal);
+  const cancel = CALLS.find((c) => c.table === 'crm_request_services' && c.op === 'update'
+    && c.values && c.values.status === 'cancelled' && (c.filters || []).some((f) => f.col === 'id' && f.op === 'in'));
+  assert.ok(cancel, 'убранная записанная услуга не отменена — она осталась бы в календаре');
+  assert.deepStrictEqual(cancel.filters.find((f) => f.col === 'id').val, [902]);
+  SERVICES = []; REQ_LINES = []; DOCTORS = [];
+  window.easymed.state.user = null;
+});
+
+// CRM_CALENDAR_MIRROR_V1 (часть 2) — консультация по виду приёма (service_id
+// NULL + consultation_type_id) — такая же строка записи: карточка её
+// показывает, и убрать её можно так же, как услугу.
+test('консультация по виду приёма видна в карточке и снимается по номеру строки', async () => {
+  VISITS = [];
+  SERVICES = [DOC_SVC];
+  DOCTORS = [DOCTOR];
+  CONSULTS = [{ id: 5, name: 'Первичный', name_ru: 'Первичный приём', price: 80000 }];
+  REQ_LINES = [BOOKED_LINE, { id: 903, service_id: null, consultation_type_id: 5, scheduled_date: BOOK_DAY, status: 'pending', doctor_id: 31, visit_id: 555 }];
+  const modal = await openRequest({
+    id: 1, status: 'scheduled', service_id: DOC_SVC.id, scheduled_date: BOOK_DAY,
+    full_name: 'Каримова Азиза', phone: UZ_RAW,
+    patient_id: 7, patients: { id: 7, full_name: 'Каримова Азиза', mrn: 'A-000123' },
+  }, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+  await tick(80);
+  assert.ok(/Первичный приём/.test(textOf(modal)), 'консультации по виду приёма нет в карточке');
+  const removeBtns = walk(modal).filter((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs.title === 'Убрать услугу');
+  assert.equal(removeBtns.length, 2);
+  removeBtns[1].click();
+  await tick(20);
+  assert.ok(!/Первичный приём/.test(textOf(modal)), 'убранная консультация осталась в карточке');
+  assert.ok(/Приём терапевта/.test(textOf(modal)), 'вместе с консультацией убралась и услуга');
+  CALLS.length = 0;
+  await saveRequest(modal);
+  const cancel = CALLS.find((c) => c.table === 'crm_request_services' && c.op === 'update'
+    && c.values && c.values.status === 'cancelled' && (c.filters || []).some((f) => f.col === 'id' && f.op === 'in'));
+  assert.ok(cancel, 'убранная консультация не отменена');
+  assert.deepStrictEqual(cancel.filters.find((f) => f.col === 'id').val, [903]);
+  SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = [];
+  window.easymed.state.user = null;
+});
+
+// Разбор ревью (M9) — консультации без врача не бывает: окно дат предлагает
+// выбрать врача, и только из тех, у кого этот вид приёма есть.
+test('консультация по виду приёма в окне дат требует врача — из тех, кто её ведёт', async () => {
+  VISITS = [];
+  SERVICES = [DOC_SVC];
+  const OTHER = { id: 32, full_name: 'Сидоров Сидор', specialty: 'хирург', service_rates: null };
+  DOCTORS = [DOCTOR, OTHER];
+  CONSULTS = [{ id: 5, name: 'Первичный', name_ru: 'Первичный приём', price: 80000 }];
+  CONSULT_PRICES = [{ doctor_id: 31, consultation_type_id: 5, available: 1 }];
+  const { sheet } = await doctorSheet({ lines: [{ id: 903, service_id: null, consultation_type_id: 5, scheduled_date: '', status: 'pending', doctor_id: null, visit_id: null }] });
+  await tick(60);
+  const sels = doctorSelects(sheet);
+  assert.equal(sels.length, 1, 'у консультации нет выбора врача: ' + textOf(sheet).slice(0, 300));
+  const names = sels[0].children.map(textOf).join(' | ');
+  assert.ok(/Петров Пётр/.test(names), names);
+  assert.ok(!/Сидоров/.test(names), 'предложен врач, который этот вид приёма не ведёт: ' + names);
+  SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = []; CONSULT_PRICES = [];
+  window.easymed.state.user = null;
 });

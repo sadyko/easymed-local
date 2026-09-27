@@ -148,6 +148,8 @@ import { getDataDir } from '../control/config.js';
 // CRM_REAL_BOOKING_V1 — смена статуса визита это событие ЗАЯВКИ: пришёл,
 // не пришёл, отменили. Правило живёт в crm/visit-status.js, здесь только дверь.
 import { crmVisitStatus } from '../crm/visit-status.js';
+// CRM_CALENDAR_MIRROR_V1 — запись календаря и заявка CRM — одна запись.
+import { attachVisitToCrm, mirrorVisit, mirrorReschedule } from '../crm/booking-mirror.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400, code = null, params = null) {
@@ -1098,6 +1100,21 @@ export async function calendarBook(db, args, user, deps = {}) {
   // при любой ошибке, но даже так его место — после того, как визит уже
   // сохранён.
   crmVisitStatus(db, { visitId: out.visit.id, from: existing ? existing.status : null, to: status });
+
+  // CRM_CALENDAR_MIRROR_V1 (2026-09-27) — ЗАЯВКА ВИДИТ ТО ЖЕ, ЧТО КАЛЕНДАРЬ.
+  //
+  // Новая запись привязывается к заявке пациента (самой поздней открытой; у
+  // колл-центра без заявки — новой), перенос времени, дня или врача доезжает
+  // до строк заявки. Обе вещи — только у записи до прихода и только своего
+  // здания; правило — crm/booking-mirror.js. Тоже ЗА транзакцией и тоже молча:
+  // заявка не вправе отказать в записи.
+  if (!existing) {
+    attachVisitToCrm(db, out.visit.id, user);
+  } else if (BUSY_STATUSES.includes(status)
+      && (existing.visit_date !== out.visit.visit_date || Number(existing.doctor_id || 0) !== Number(out.visit.doctor_id || 0))) {
+    mirrorReschedule(db, out.visit.id, { oldDoctorId: existing.doctor_id });
+  }
+  mirrorVisit(db, out.visit.id, { actorId: user && user.id });
 
   out.emergency = !!(conflict && emergency);
   out.day = dayIso;

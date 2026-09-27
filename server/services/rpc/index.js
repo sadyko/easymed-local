@@ -33,6 +33,7 @@ import {
   admissionMealMark, admissionMealsList, kitchenSheet,
 } from './diet.js';   // DIET_TABLES_V1
 import { ensureVisit, discardEmptyVisit } from './visits.js';
+import { bookingLinesAdd, bookingLineRemove } from './booking-lines.js';   // CRM_CALENDAR_MIRROR_V1 — услуги записи от колл-центра
 import { removeOwnVisitLine, visitSetReferralSource } from './visit-lines.js';   // LIVE_AUDIT_FIX_V1 — врач снимает свою невыставленную услугу
 import { visitSetDoctorReferrer } from './referral-autofill.js';   // REPORTS_V2 — направивший врач на визите по рекомендации
 import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';   // CALENDAR_BOOKING_V1
@@ -234,6 +235,11 @@ export const RPC = {
   // в браузере — четвёртой реализацией того же правила.
   calendar_windows:          (db, args, user) => calendarWindows(db, args, user),
   calendar_book:             (db, args, user) => calendarBook(db, args, user),
+  // CRM_CALENDAR_MIRROR_V1 — услуги записи ДО ПРИХОДА: колл-центр записывает
+  // пациента с услугами, а не голым слотом. Узкая дверь (booking-lines.js):
+  // только 'added', без счёта и оплаты, без хирургии, своё здание.
+  booking_lines_add:         (db, args, user) => bookingLinesAdd(db, args, user),
+  booking_line_remove:       (db, args, user) => bookingLineRemove(db, args, user),
   // QUEUE_TICKET_V1 — easymed's queue-number allocator (Postgres mig 122):
   // per-doctor for consultations, one shared number for a patient's labs,
   // doctor-or-room for procedures, per-apparatus for imaging. Idempotent.

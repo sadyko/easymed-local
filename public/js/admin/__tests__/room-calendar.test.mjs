@@ -182,7 +182,7 @@ const EXTRA_DOCTORS = [
   [75, 'jurayev', 'Жураев Бекзод', 'офтальмолог'],
 ];
 
-function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, crm = false } = {}) {
+function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, crm = false, lines = false } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   const day = nextWeekday();
@@ -227,6 +227,24 @@ function seed({ doctorOff = false, cross = false, stale = false, nodoc = false, 
     db.prepare("INSERT INTO crm_requests (id, full_name, phone, source, note, status, patient_id) VALUES (77,'Иванов Иван','+998901112233','call','','scheduled',3)").run();
     db.prepare("INSERT INTO crm_request_services (id, request_id, service_id, scheduled_date, status, visit_id) VALUES (301, 77, 21, ?, 'pending', 55)")
       .run(isoOf(day));
+  }
+
+  // CRM_CALENDAR_MIRROR_V1 — у записи несколько услуг (строки visit_services):
+  // запись из CRM и запись колл-центра несут их все, а не одну головную.
+  if (lines) {
+    db.prepare("INSERT INTO services (id, name, price) VALUES (22,'Анализ крови',40000)").run();
+    db.prepare("INSERT INTO visit_services (visit_id, service_id, status) VALUES (55, 21, 'added'), (55, 22, 'added')").run();
+  }
+  // Разбор ревью (M4): строки, которые уже не «в смете», — выставленная,
+  // начатая и выданный товар.
+  if (lines === 'mixed') {
+    db.prepare("INSERT INTO services (id, name, price) VALUES (23,'УЗИ',150000)").run();
+    db.prepare("INSERT INTO products (id, name) VALUES (5,'Бинт')").run();
+    db.prepare("INSERT INTO invoices (id, invoice_number, visit_id, patient_id, total_amount, status) VALUES (900,'INV-900',55,3,100000,'unpaid')").run();
+    db.prepare("INSERT INTO invoice_items (id, invoice_id, service_id, description, quantity, unit_price, total) VALUES (901,900,21,'Консультация',1,100000,100000)").run();
+    db.prepare('UPDATE visit_services SET invoice_item_id = 901 WHERE visit_id = 55 AND service_id = 21').run();
+    db.prepare("INSERT INTO visit_services (visit_id, service_id, status) VALUES (55, 23, 'in_progress')").run();
+    db.prepare("INSERT INTO visit_services (visit_id, clinic_item_id, quantity, status) VALUES (55, 5, 1, 'added')").run();
   }
 
   // PASTEL_IDENTITY_V1 — отменённый приём ТОГО ЖЕ врача, что и действующий:
@@ -308,8 +326,8 @@ const WORKING_SET_KEY = 'rcal.workingset.v1';
 function putWorkingSet(ws) { LS.set(WORKING_SET_KEY, JSON.stringify(ws)); }
 
 /** Отрисовать экран на нужный день. */
-async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, workingSet = null, crm = false } = {}) {
-  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue, manyDoctors, crm });
+async function render({ doctorOff = false, failTable = null, cross = false, stale = false, nodoc = false, cancelled = false, liveQueue = false, manyDoctors = false, workingSet = null, crm = false, lines = false } = {}) {
+  const s = seed({ doctorOff, cross, stale, nodoc, cancelled, liveQueue, manyDoctors, crm, lines });
   if (DB) DB.close();
   DB = s.db;
   FAIL_TABLE = failTable;
@@ -1047,4 +1065,85 @@ test('записей в окне нет — про заявки никто не 
   assert.deepEqual(asked, [],
     'экран спросил «из каких заявок эти записи», когда записей нет вовсе — лишний запрос на каждое перелистывание: '
     + JSON.stringify(asked));
+});
+
+// CRM_CALENDAR_MIRROR_V1 (2026-09-27) — владелец: «if in the CRM we create a
+// booking it will show in the calendar» — С УСЛУГАМИ. Карточка приёма называет
+// все услуги записи, а не одну головную (visits.service_id).
+test('ЗАПИСЬ С НЕСКОЛЬКИМИ УСЛУГАМИ: карточка в сетке называет их все', async () => {
+  document.body.children.length = 0;
+  const { box } = await render({ crm: true, lines: true });
+  const card = byClass(box, 'rcal-appt').find((c) => /10:00–10:30/.test(textOf(c)));
+  assert.ok(card, 'запись пропала из сетки');
+  const svc = byClass(card, 'rcal-appt-s')[0];
+  assert.ok(svc, 'на карточке нет строки услуг');
+  assert.ok(/Консультация терапевта/.test(textOf(svc)) && /Анализ крови/.test(textOf(svc)),
+    'на карточке не все услуги записи: ' + textOf(svc));
+});
+
+// CRM_CALENDAR_MIRROR_V1 (часть 2) — ОКНО ПРИЁМА ПРАВИТ УСЛУГИ ЗАПИСИ. Оператор
+// колл-центра снимает и добавляет услугу прямо в окне записи — настоящими RPC
+// booking_line_remove / booking_lines_add, — и та же правка оказывается в
+// заявке CRM (сервер, booking-mirror.js). Проверяется база, а не вид окна.
+test('ОКНО ПРИЁМА: колл-центр снимает и добавляет услугу записи — заявка CRM следует', async () => {
+  document.body.children.length = 0;
+  const prevRole = USER.role;
+  USER.role = 'callcenter';
+  window.easymed = { state: { user: { id: 1, role: 'callcenter', extra_roles: [] } } };
+  try {
+    const { box } = await render({ crm: true, lines: true });
+    const modal = await openAppt(box);
+    const lineRow = (sid) => {
+      const vs = DB.prepare('SELECT id FROM visit_services WHERE visit_id = 55 AND service_id = ?').get(sid);
+      return vs ? walk(modal).find((n) => n.attrs && n.attrs['data-booking-line'] === String(vs.id)) : null;
+    };
+    const row22 = lineRow(22);
+    assert.ok(row22, 'в окне приёма нет строки услуги записи');
+    const rm = walk(row22).find((n) => n.tagName === 'BUTTON');
+    assert.ok(rm, 'у свободной строки нет кнопки «снять»');
+    rm.click();
+    await flush(20);
+    assert.equal(DB.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = 55 AND service_id = 22').get().n, 0, 'услуга не снята с записи');
+    assert.equal(DB.prepare("SELECT COUNT(*) n FROM crm_request_services WHERE request_id = 77 AND service_id = 22 AND status = 'pending'").get().n, 0,
+      'снятая в календаре услуга осталась ждать в заявке');
+
+    const sel = walk(modal).find((n) => n.attrs && 'data-booking-add' in n.attrs);
+    assert.ok(sel, 'в окне приёма нет выбора услуги для записи');
+    sel.value = 's:22';
+    const add = walk(sel.parentNode || modal).find((n) => n.tagName === 'BUTTON' && /Добавить/.test(textOf(n)));
+    assert.ok(add, 'нет кнопки «Добавить»');
+    add.click();
+    await flush(20);
+    assert.equal(DB.prepare("SELECT COUNT(*) n FROM visit_services WHERE visit_id = 55 AND service_id = 22 AND status = 'added'").get().n, 1, 'услуга не добавлена к записи');
+    // Разбор ревью (M3): анализу врач записи не ставится — без врача он и бывает.
+    assert.equal(DB.prepare('SELECT doctor_id FROM visit_services WHERE visit_id = 55 AND service_id = 22').get().doctor_id, null,
+      'анализу приписан врач записи');
+    assert.equal(DB.prepare("SELECT COUNT(*) n FROM crm_request_services WHERE request_id = 77 AND service_id = 22 AND status = 'pending' AND visit_id = 55").get().n, 1,
+      'добавленная в календаре услуга не появилась в заявке');
+  } finally {
+    USER.role = prevRole;
+    delete window.easymed;
+  }
+});
+
+test('ОКНО ПРИЁМА: строки подписаны по правде — «в счёте», «в работе», «товар»; снять можно только свободную услугу', async () => {
+  document.body.children.length = 0;
+  window.easymed = { state: { user: { id: 1, role: 'callcenter', extra_roles: [] } } };
+  try {
+    const { box } = await render({ crm: true, lines: 'mixed' });
+    const modal = await openAppt(box);
+    const rowOf = (where) => {
+      const vs = DB.prepare('SELECT id FROM visit_services WHERE visit_id = 55 AND ' + where).get();
+      return walk(modal).find((n) => n.attrs && n.attrs['data-booking-line'] === String(vs.id));
+    };
+    const state = (row) => walk(row).filter((n) => n.attrs && 'data-line-state' in n.attrs).map(textOf).join('');
+    const hasBtn = (row) => walk(row).some((n) => n.tagName === 'BUTTON');
+    const invoiced = rowOf('service_id = 21'), started = rowOf('service_id = 23'), product = rowOf('clinic_item_id = 5'), free = rowOf('service_id = 22');
+    assert.match(state(invoiced), /в счёте/);
+    assert.match(state(started), /в работе/, 'начатая строка подписана как выставленная: ' + state(started));
+    assert.match(state(product), /товар/);
+    assert.equal(state(free).trim(), '');
+    assert.ok(!hasBtn(invoiced) && !hasBtn(started) && !hasBtn(product), 'снять предлагают строку, которая уже не в смете');
+    assert.ok(hasBtn(free));
+  } finally { delete window.easymed; }
 });

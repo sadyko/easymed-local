@@ -93,7 +93,10 @@ test('143: индексы, ключи и автонумерация пережи
     migrate(db);
 
     const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='crm_request_services' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((r) => r.name);
-    assert.deepEqual(idx, ['idx_crm_req_services_date', 'idx_crm_req_services_request', 'idx_crm_req_services_visit'],
+    // Поздние миграции (187 — связь со строкой визита) добавляют свои индексы;
+    // проверяем, что три индекса, которые пересобирает 143, на месте.
+    assert.deepEqual(idx.filter((n) => ['idx_crm_req_services_date', 'idx_crm_req_services_request', 'idx_crm_req_services_visit'].includes(n)),
+      ['idx_crm_req_services_date', 'idx_crm_req_services_request', 'idx_crm_req_services_visit'],
       'пересборка потеряла индексы: «из какой заявки эта запись» снова станет перебором');
     // Ссылка на заявку осталась каскадной — удаление заявки уносит её строки.
     assert.equal((db.prepare('PRAGMA foreign_key_list(crm_request_services)').all()

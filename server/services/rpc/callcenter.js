@@ -198,12 +198,16 @@ export function callcenterReport(db, args, user) {
 
   // Что именно спрашивают. Строки заявки (crm_request_services) — источник
   // точнее, чем crm_requests.service_id: он хранит лишь первую услугу.
+  // CRM_CALENDAR_MIRROR_V1 (разбор ревью M8) — строка заявки бывает и
+  // консультацией по виду приёма (service_id NULL, миграция 188): она
+  // называется своим видом приёма и считается отдельно от «—».
   const topServices = db.prepare(`
-    SELECT COALESCE(s.name, '—') AS name, COUNT(*) AS count
+    SELECT COALESCE(s.name, ct.name_ru, ct.name, '—') AS name, COUNT(*) AS count
       FROM crm_request_services cs
       JOIN crm_requests r ON r.id = cs.request_id
       LEFT JOIN services s ON s.id = cs.service_id
-     ${where} GROUP BY cs.service_id ORDER BY count DESC LIMIT 12`).all(...p);
+      LEFT JOIN consultation_types ct ON ct.id = cs.consultation_type_id AND cs.service_id IS NULL
+     ${where} GROUP BY cs.service_id, cs.consultation_type_id ORDER BY count DESC LIMIT 12`).all(...p);
   if (!topServices.length) {
     // Ни одной строки услуг — падаем на service_id самой заявки, иначе у клиники
     // без crm_request_services блок пустой, хотя услуга в заявке названа.
@@ -241,9 +245,16 @@ export function callcenterReport(db, args, user) {
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ru'));
   };
 
-  let byServiceType = byGroupName(db.prepare(typeSql(`crm_request_services cs
+  // M8 — консультация по виду приёма — группа «Консультации» (type
+  // 'consultation'), а не «Без группы».
+  let byServiceType = byGroupName(db.prepare(`
+    SELECT CASE WHEN cs.service_id IS NULL AND cs.consultation_type_id IS NOT NULL THEN 'consultation' ELSE s.type END AS type,
+           s.is_lab AS is_lab, COUNT(*) AS count
+      FROM crm_request_services cs
       JOIN crm_requests r ON r.id = cs.request_id
-      LEFT JOIN services s      ON s.id = cs.service_id`)).all(...p));
+      LEFT JOIN services s      ON s.id = cs.service_id
+     ${where}
+     GROUP BY 1, s.is_lab`).all(...p));
   if (!byServiceType.length) {
     // Та же подстраховка, что и у topServices: клиника без строк услуг всё
     // равно называет услугу в самой заявке.
