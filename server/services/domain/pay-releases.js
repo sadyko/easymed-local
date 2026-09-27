@@ -57,3 +57,17 @@ export function clearRefundRelease(db, kind, lineIds) {
   for (const id of ids) n += del.run(kind, id).changes;
   return n;
 }
+
+// V3120_FINAL — строка стационара, отпущенная со счёта С ВОЗВРАТОМ и ещё не
+// выставленная заново, — НЕ «к оплате». Так решает касса (отмена счёта после
+// полного возврата отпускает строки, и выставлять их снова по умолчанию не
+// предлагают), так же читает журнал госпитализаций (он считает только живые
+// счета). Остаток госпитализации, обзор, акт и доначисление проживания
+// исключают её тем же условием. Выставили заново (buildAdmissionInvoice) —
+// отметка снимается (clearRefundRelease), и строка снова обычная.
+export function notRefundReleasedSql(alias) {
+  return `NOT EXISTS (SELECT 1 FROM pay_refund_releases prr_x WHERE prr_x.kind = 'in' AND prr_x.line_id = ${alias}.id)`;
+}
+export function refundReleasedSql(alias) {
+  return `EXISTS (SELECT 1 FROM pay_refund_releases prr_x WHERE prr_x.kind = 'in' AND prr_x.line_id = ${alias}.id)`;
+}

@@ -17,6 +17,7 @@
 // стационара. Одна копия на оба конца (см. shared/accommodation-line.js).
 import { ACCOMMODATION_NOTE_PREFIX } from '../../../public/js/shared/accommodation-line.js';
 import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';   // INPATIENT_MONEY_FIX_V1
+import { notRefundReleasedSql, refundReleasedSql } from '../domain/pay-releases.js';   // V3120_FINAL
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -48,7 +49,20 @@ function requireRole(user, allowed) {
 // Клиника берёт за койку по дням: пациент оплатил первые сутки, назавтра ему
 // выставляют вторые. Значит вносить надо ОСТАТОК, а не весь срок заново —
 // иначе второй счёт повторил бы первый.
+//
+// V3120_FINAL — сутки, отпущенные со счёта С ВОЗВРАТОМ (pay-releases.js), тоже
+// «уже выставлены»: пациенту за них вернули деньги, и кнопка не должна
+// выставлять их снова как новые. Выставить их заново — явный выбор кассы.
 function invoicedUnits(db, admissionId) {
+  const r = db.prepare(
+    `SELECT COALESCE(SUM(quantity), 0) n FROM admission_services s
+       WHERE s.admission_id = ? AND s.notes LIKE '${ACCOMMODATION_NOTE_PREFIX}%'
+         AND (s.invoice_item_id IS NOT NULL OR ${refundReleasedSql('s')})`).get(admissionId);
+  return Math.max(0, Number(r && r.n) || 0);
+}
+// Только то, что лежит в счёте (за этим стоят деньги): по нему правка даты и
+// выписка задним числом отказывают «лишних N».
+function inInvoiceUnits(db, admissionId) {
   const r = db.prepare(
     `SELECT COALESCE(SUM(quantity), 0) n FROM admission_services
        WHERE admission_id = ? AND notes LIKE '${ACCOMMODATION_NOTE_PREFIX}%'
@@ -179,6 +193,7 @@ export function computeAccommodation(db, admission, opts = {}) {
   const storedPct = Number(admission.accommodation_discount_percent);
   const discountPct = Number.isFinite(storedPct) ? Math.min(100, Math.max(0, storedPct)) : 0;
   const billedUnits = invoicedUnits(db, admission.id);
+  const invoicedOnly = inInvoiceUnits(db, admission.id);   // V3120_FINAL
 
   // INPATIENT_MONEY_FIX_V1 (D4) — за койку платит тот, кто на ней ЛЕЖАЛ.
   // Заявка без койки ('ordered') и отменённая госпитализация проживания не
@@ -202,7 +217,7 @@ export function computeAccommodation(db, admission, opts = {}) {
 
   if (blocked) {
     return { ward: current.ward, bed: current.bed, mode: current.mode, rate: current.rate, units: 0, stayUnits: 0,
-      billedUnits, gross: 0, net: 0, stayGross: 0, discountPct, blocked, segments: [] };
+      billedUnits, invoicedUnits: invoicedOnly, gross: 0, net: 0, stayGross: 0, discountPct, blocked, segments: [] };
   }
 
   const blocks = unitBlocks(db, admission, startMs, Math.max(startMs, endMs));
@@ -237,7 +252,7 @@ export function computeAccommodation(db, admission, opts = {}) {
   // экране. Полный срок отдаётся отдельно (stayUnits), чтобы карточка могла
   // сказать «лежит 3 сут., выставлено 1, к оплате 2».
   return { ward: current.ward, bed: current.bed, mode: current.mode, rate, units: dueUnits, stayUnits, billedUnits,
-    gross, net, stayGross, discountPct, blocked: null, segments: dueParts };
+    invoicedUnits: invoicedOnly, gross, net, stayGross, discountPct, blocked: null, segments: dueParts };
 }
 
 // Проживание узнаётся по notes-метке: своего типа у admission_services нет, а
@@ -250,10 +265,10 @@ export function computeAccommodation(db, admission, opts = {}) {
 // ними деньги, — но и мешать новым они не должны.
 function accommodationLine(db, admissionId) {
   return db.prepare(
-    `SELECT * FROM admission_services
-       WHERE admission_id = ? AND notes LIKE '${ACCOMMODATION_NOTE_PREFIX}%'
-         AND invoice_item_id IS NULL
-       ORDER BY id DESC LIMIT 1`
+    `SELECT * FROM admission_services s
+       WHERE s.admission_id = ? AND s.notes LIKE '${ACCOMMODATION_NOTE_PREFIX}%'
+         AND s.invoice_item_id IS NULL AND ${notRefundReleasedSql('s')}
+       ORDER BY s.id DESC LIMIT 1`
   ).get(admissionId);
 }
 
@@ -264,10 +279,10 @@ function accommodationLine(db, admissionId) {
 // сутки оказывались в счёте дважды (1 + 3 = 400 000 за трое суток).
 function openAccommodationLines(db, admissionId) {
   return db.prepare(
-    `SELECT * FROM admission_services
-       WHERE admission_id = ? AND notes LIKE '${ACCOMMODATION_NOTE_PREFIX}%'
-         AND invoice_item_id IS NULL
-       ORDER BY id`
+    `SELECT * FROM admission_services s
+       WHERE s.admission_id = ? AND s.notes LIKE '${ACCOMMODATION_NOTE_PREFIX}%'
+         AND s.invoice_item_id IS NULL AND ${notRefundReleasedSql('s')}
+       ORDER BY s.id`
   ).all(admissionId);
 }
 
@@ -308,6 +323,24 @@ export function billAccommodationCore(db, id, opts = {}) {
 
   const c = computeAccommodation(db, adm, opts);
   if (c.blocked) { if (quiet) return null; throw new RpcError(blockedMessage(c), 400); }
+  // Только открытые строки: выставленные сюда не попадают. Остаток срока
+  // пишется в ОДНУ из них (последнюю), остальные удаляются — они и так
+  // входят в этот остаток, потому что не выставлены (D2).
+  const open = openAccommodationLines(db, id);
+  // V3120_FINAL — opts.refreshOnly: только привести УЖЕ внесённое к сроку
+  // (правка даты поступления, выписка задним числом), но не вносить нового —
+  // «не внесли — не выставили» (ACCOMMODATION_AS_SERVICE_V1).
+  if (opts && opts.refreshOnly && !open.length) return null;
+  // V3120_FINAL (I4) — ВНОСИТЬ НЕЧЕГО, А ОТКРЫТАЯ СТРОКА ЛЕЖИТ. Срок стал
+  // короче (дату поступления сдвинули позже, выписка задним числом), и сутки,
+  // внесённые раньше, по новому сроку не наступали. Прежде строка оставалась
+  // как была — и следующий счёт (выписка со счётом, касса, долг) выставлял
+  // её: 400 000 за одни сутки. Невыставленная строка — ещё не деньги, её
+  // снимают здесь же; бесплатная теперь койка — так же.
+  if (c.units <= 0 || !(c.net > 0)) {
+    for (const l of open) db.prepare('DELETE FROM admission_services WHERE id = ?').run(l.id);
+    if (open.length) return { line: null, removed: open.length, updated: true };
+  }
   // ACCOMMODATION_DAILY_V1 — весь срок уже оплачен вперёд: вносить нечего.
   // Это не ошибка настройки, а нормальный конец дня, поэтому и текст другой.
   if (c.units <= 0) {
@@ -321,10 +354,6 @@ export function billAccommodationCore(db, id, opts = {}) {
     throw new RpcError('Ставка проживания нулевая — вносить в счёт нечего.', 400);
   }
 
-  // Только открытые строки: выставленные сюда не попадают. Остаток срока
-  // пишется в ОДНУ из них (последнюю), остальные удаляются — они и так
-  // входят в этот остаток, потому что не выставлены (D2).
-  const open = openAccommodationLines(db, id);
   const existing = open.length ? open[open.length - 1] : null;
   for (const extra of open.slice(0, -1)) {
     db.prepare('DELETE FROM admission_services WHERE id = ?').run(extra.id);

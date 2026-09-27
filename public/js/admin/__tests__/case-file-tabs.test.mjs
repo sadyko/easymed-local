@@ -91,7 +91,7 @@ globalThis.fetch = async (url, opts = {}) => {
 const rpc = [];
 let SOURCES = { lab: [], imaging: [], functional: [] };
 const { caseExamsPanel, caseSurgeryPanel, caseActPanel,
-    caseInvoicesPanel } = await import('../views/case-file-tabs.js');
+    caseInvoicesPanel, actPrintBody } = await import('../views/case-file-tabs.js');
 
 /** Акт, каким его присылает сервер: у строки есть раздел справочника. */
 const CHARGES = {
@@ -255,4 +255,13 @@ test('счета: номер, суммы и долг — теми же цифр�
 test('счетов нет — сказано, где их выставляют, а не пустая карточка', () => {
     const box = caseInvoicesPanel({ bill: { invoices: [], total: 0, paid: 0, debt: 0 } });
     assert.ok(textOf(box).includes('акте выполненных работ'), 'пустая вкладка не подсказывает, что делать');
+});
+
+// V3120_FINAL — акт = счёт: скидка после продажи и возврат видны на бумаге.
+test('печать акта называет скидку счёта и итог к оплате, равный счёту', () => {
+    const html = actPrintBody({ lines: [], totals: { accrued: 600000, billable: 600000, discount: 150000, refunded: 0, due: 450000 } });
+    assert.ok(html.includes('Скидка по счёту'), 'скидки нет на бумаге');
+    assert.ok(html.replace(/[^0-9А-Яа-яё<>:]/g, '').includes('Итогокоплате:450000'), 'итог не равен счёту: ' + html);
+    const plain = actPrintBody({ lines: [], totals: { accrued: 600000, discount: 0, refunded: 0, due: 600000 } });
+    assert.ok(!plain.includes('Скидка по счёту'), 'без скидки строки нет');
 });

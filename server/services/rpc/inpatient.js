@@ -36,6 +36,7 @@ import { ACCOMMODATION_NOTE_PREFIX } from '../../../public/js/shared/accommodati
 // окно выписки видит баланс депозита пациента.
 import { billAccommodationCore, accommodationGapOf, computeAccommodation } from './accommodation.js';
 import { walletBalance } from '../domain/wallet.js';
+import { notRefundReleasedSql } from '../domain/pay-releases.js';   // V3120_FINAL — возвращённое не «к оплате»
 
 // INPATIENT_MONEY_FIX_V1 (D-minor) — что внесено за проживание: СУММА всех строк
 // проживания (посуточная выставка даёт их несколько), а не первая попавшаяся.
@@ -1099,7 +1100,10 @@ export function admissionBalance(db, admissionId) {
   const lines = db.prepare(`
     SELECT COALESCE(SUM(total), 0) AS sum, COUNT(*) AS n
       FROM admission_services
-     WHERE admission_id = ? AND billable = 1 AND invoice_item_id IS NULL`).get(admissionId);
+     WHERE admission_id = ? AND billable = 1 AND invoice_item_id IS NULL
+       -- V3120_FINAL — отпущенное со счёта С ВОЗВРАТОМ пациенту не «к оплате»
+       -- (как у кассы и журнала), пока касса не выставит его заново.
+       AND ${notRefundReleasedSql('admission_services')}`).get(admissionId);
   const internal = db.prepare(`
     SELECT COALESCE(SUM(total), 0) AS sum, COUNT(*) AS n
       FROM admission_services
@@ -1157,6 +1161,7 @@ function markAdmissionDebt(db, admissionId, user) {
   const ids = db.prepare(`
     SELECT id FROM admission_services
      WHERE admission_id = ? AND invoice_item_id IS NULL AND billable = 1
+       AND ${notRefundReleasedSql('admission_services')}   -- V3120_FINAL
      ORDER BY id`).all(admissionId).map((r) => r.id);
   if (ids.length) buildAdmissionInvoice(db, admissionId, ids, user);
   // Список «ещё должен» — из domain/money.js (no-drift): 'debt' в нём тоже
@@ -1422,9 +1427,25 @@ export function admissionDischargeFinalize(db, args, user) {
     // ФАКТИЧЕСКОГО времени выписки, и входит в долг. Без долга проживание
     // по-прежнему не выставляется само (ACCOMMODATION_AS_SERVICE_V1: «не
     // внесли — не выставили»), окно лишь называет пропажу.
-    let balance = admissionBalance(db, admissionId);
     const atMs = at ? Date.parse(at) : NaN;
     const stayOpts = Number.isFinite(atMs) ? { endMs: atMs } : {};
+    // V3120_FINAL (M2) — ВЫПИСКА ЗАДНИМ ЧИСЛОМ РАНЬШЕ УЖЕ ВЫСТАВЛЕННЫХ СУТОК.
+    // Касса собрала счёт «по сейчас» (49 ч = 2 сут.), пациент оплатил, а
+    // выписку оформляют на 47 ч — это 1 сутки. Выставленные сутки за собой не
+    // тянутся (за ними деньги), поэтому отказ с тем же текстом, что у правки
+    // даты поступления: сначала касса убирает или возвращает лишнее. Открытые
+    // (невыставленные) сутки просто приводятся к времени выписки.
+    {
+      const c = computeAccommodation(db, adm, stayOpts);
+      if (!c.blocked && c.invoicedUnits > c.stayUnits) {
+        const extra = c.invoicedUnits - c.stayUnits;
+        throw new RpcError(
+          `По времени выписки пациент лежит ${c.stayUnits} ${c.mode === 'hourly' ? 'ч.' : 'сут.'}, а в счёт уже выставлено `
+          + `${c.invoicedUnits} — лишних ${extra}. Сначала уберите или верните в кассе лишнее проживание, затем оформите выписку.`, 400);
+      }
+      billAccommodationCore(db, admissionId, { ...stayOpts, quiet: true, refreshOnly: true });
+    }
+    let balance = admissionBalance(db, admissionId);
     const owes = balance.balance > 0.005;
     const gap = owes ? accommodationGapOf(db, adm, stayOpts) : { units: 0, amount: 0 };
     const owedTotal = round2(balance.balance + (gap.amount || 0));
@@ -1593,6 +1614,7 @@ export function admissionPrepareWalletPayment(db, args, user) {
     const ids = db.prepare(`
       SELECT id FROM admission_services
        WHERE admission_id = ? AND invoice_item_id IS NULL AND billable = 1
+         AND ${notRefundReleasedSql('admission_services')}   -- V3120_FINAL
        ORDER BY id`).all(admissionId).map((r) => r.id);
     if (ids.length) buildAdmissionInvoice(db, admissionId, ids, user);
     const invoices = db.prepare(`

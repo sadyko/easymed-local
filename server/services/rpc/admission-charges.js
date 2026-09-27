@@ -27,6 +27,7 @@ import { lineUnitPrice } from '../domain/pricing.js';
 // GRANTS_V1 — права по справочнику (Настройки → Роли); прежние списки ролей — значение по умолчанию.
 import { requireGrant } from '../grants.js';
 import { ACCOMMODATION_NOTE_PREFIX } from '../../../public/js/shared/accommodation-line.js';
+import { refundReleasedSql } from '../domain/pay-releases.js';   // V3120_FINAL
 
 /** Кто видит деньги госпитализации — тот же круг, что и у проживания. */
 export const CHARGES_READ_ROLES = ['admin', 'head_doctor', 'registrar', 'nurse', 'doctor', 'cashier'];
@@ -113,7 +114,9 @@ export function admissionCharges(db, args, user) {
            u.full_name    AS doctor_name,
            ii.invoice_id  AS invoice_id,
            inv.invoice_number AS invoice_number,
-           inv.status     AS invoice_status
+           inv.status     AS invoice_status,
+           -- V3120_FINAL — отпущена со счёта с возвратом и не выставлена заново.
+           CASE WHEN s.invoice_item_id IS NULL AND ${refundReleasedSql('s')} THEN 1 ELSE 0 END AS refund_released
       FROM admission_services s
       LEFT JOIN services  sv  ON sv.id = s.service_id
       LEFT JOIN service_types st ON st.id = sv.type_id
@@ -165,8 +168,20 @@ export function admissionCharges(db, args, user) {
       invoice_status: r.invoice_status || '',
       // Строка, которая уже в счёте, не правится: за ней деньги (billing.js).
       locked: !!r.invoice_item_id,
+      // V3120_FINAL — деньги за строку вернули, счёт отменён: не «к выставлению».
+      refunded: !!r.refund_released,
     };
   });
+
+  // V3120_FINAL — СКИДКА СЧЁТА В АКТЕ. Акт складывает строки, счёт — строки
+  // минус скидку (в том числе «скидку после продажи»: частичный возврат по
+  // оплаченному счёту уменьшает его сумму, billing.js). Без неё акт говорил
+  // 600 000 при счёте 450 000. Скидка читается из живых счетов госпитализации
+  // (отменённые и возвращённые, как везде, не в счёт).
+  const disc = db.prepare(`
+    SELECT COALESCE(SUM(MAX(0, COALESCE(subtotal, 0) - COALESCE(total_amount, 0))), 0) AS d
+      FROM invoices WHERE admission_id = ? AND status NOT IN ('void', 'refunded')`).get(admissionId);
+  const discount = round2(disc ? disc.d : 0);
 
   const sum = (f) => round2(lines.filter(f).reduce((a, l) => a + l.total, 0));
   return {
@@ -180,8 +195,13 @@ export function admissionCharges(db, args, user) {
       billable: sum((l) => l.billable),
       invoiced: sum((l) => !!l.invoice_id),
       // К выставлению: в счёт идёт, а счёта ещё нет.
-      pending: sum((l) => l.billable && !l.invoice_id),
+      pending: sum((l) => l.billable && !l.invoice_id && !l.refunded),
       not_billable: sum((l) => !l.billable),
+      // V3120_FINAL — возвращено пациенту (строки отменённого после возврата
+      // счёта), скидка счетов и итог к оплате: акт = счёт.
+      refunded: sum((l) => l.billable && l.refunded),
+      discount,
+      due: round2(sum((l) => l.billable && !l.refunded) - discount),
       lines: lines.length,
     },
   };

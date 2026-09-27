@@ -352,9 +352,15 @@ export function actPrintBody(data) {
     const head = ACT_COLS.map((x) => '<th>' + htmlEsc(tr(x)) + '</th>').join('');
     const body = lines.map((l) => '<tr>' + actCells(l).map((v) => '<td>' + htmlEsc(v) + '</td>').join('') + '</tr>').join('');
     const foot = htmlEsc(tr('Итого начислено')) + ': ' + htmlEsc(money(t.accrued) + ' ' + tr('сум'));
+    // V3120_FINAL — скидка счёта (в том числе после продажи) и возврат: без них
+    // бумага называла 600 000 при счёте 450 000. Итог «к оплате» — как в счёте.
+    const extra = (label, v) => '<div class="act-print-sum">' + htmlEsc(tr(label)) + ': ' + htmlEsc(money(v) + ' ' + tr('сум')) + '</div>';
+    const tail = (Number(t.refunded) > 0 ? extra('Возвращено пациенту', t.refunded) : '')
+        + (Number(t.discount) > 0 ? extra('Скидка по счёту', t.discount) : '')
+        + ((Number(t.discount) > 0 || Number(t.refunded) > 0) ? '<div class="act-print-sum"><b>' + htmlEsc(tr('Итого к оплате')) + ': ' + htmlEsc(money(t.due) + ' ' + tr('сум')) + '</b></div>' : '');
     return '<div class="act-wrap"><table class="act-print"><thead><tr>' + head + '</tr></thead>'
         + '<tbody>' + body + '</tbody></table>'
-        + '<div class="act-print-sum"><b>' + foot + '</b></div></div>';
+        + '<div class="act-print-sum"><b>' + foot + '</b></div>' + tail + '</div>';
 }
 
 /**
@@ -511,7 +517,11 @@ export function caseActPanel(admissionId, { onInvoice = null, onAddExpense = nul
             sum('Начислено', t.accrued),
             sum('К выставлению', t.pending, 'cf-sum-hot'),
             sum('В счетах', t.invoiced),
-            t.not_billable ? sum('За счёт клиники', t.not_billable) : null));
+            t.not_billable ? sum('За счёт клиники', t.not_billable) : null,
+            // V3120_FINAL — акт = счёт: возврат и скидка счёта (после продажи тоже).
+            Number(t.refunded) > 0 ? sum('Возвращено пациенту', t.refunded) : null,
+            Number(t.discount) > 0 ? sum('Скидка по счёту', t.discount) : null,
+            (Number(t.discount) > 0 || Number(t.refunded) > 0) ? sum('Итого к оплате', t.due) : null));
     };
 
     load();

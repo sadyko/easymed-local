@@ -25,6 +25,7 @@ import { sheetView } from './title-sheet.js';
 import { admissionCaseDocs } from './inpatient-reviews.js';
 import { accommodationState } from './accommodation.js';
 import { admissionBalance } from './inpatient.js';   // V3120_FIX — «к оплате» тем же числом, что у выписки
+import { refundReleasedSql } from '../domain/pay-releases.js';   // V3120_FINAL
 import { isSurgery } from './queue.js';
 import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 import { vitalsSummary } from './vitals.js';   // VITALS_NEWS_V1
@@ -150,13 +151,15 @@ export function admissionOverview(db, args, user) {
   // ── услуги ──────────────────────────────────────────────────────────────
   const svcRows = db.prepare(`
     SELECT s.id, s.quantity, s.unit_price, s.total, s.status, s.billable, s.performed_at, s.invoice_item_id, s.notes, s.service_id,
+           CASE WHEN ${refundReleasedSql('s')} THEN 1 ELSE 0 END AS refund_released,
            sv.name AS service_name, sv.type AS service_type, p.name AS product_name
       FROM admission_services s
       LEFT JOIN services sv ON sv.id = s.service_id
       LEFT JOIN products p ON p.id = s.clinic_item_id
      WHERE s.admission_id = ?
      ORDER BY s.id DESC`).all(adm.id);
-  const unbilledRows = svcRows.filter((r) => r.invoice_item_id === null && r.billable);
+  // V3120_FINAL — отпущенное с возвратом не «не выставлено» (см. admissionBalance).
+  const unbilledRows = svcRows.filter((r) => r.invoice_item_id === null && r.billable && !r.refund_released);
   const services = {
     count: svcRows.length,
     billed: svcRows.filter((r) => r.invoice_item_id !== null).length,

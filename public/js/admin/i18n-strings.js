@@ -8902,6 +8902,9 @@ export const STRINGS = {
   "К выставлению": {"en":"To invoice","ru":"К выставлению","uz":"Hisob chiqarishga"},
   "В счетах": {"en":"In invoices","ru":"В счетах","uz":"Hisoblarda"},
   "За счёт клиники": {"en":"At the clinic’s expense","ru":"За счёт клиники","uz":"Klinika hisobidan"},
+  "Возвращено пациенту": {"en":"Refunded to the patient","ru":"Возвращено пациенту","uz":"Bemorga qaytarildi"},
+  "Скидка по счёту": {"en":"Invoice discount","ru":"Скидка по счёту","uz":"Hisob bo'yicha chegirma"},
+  "Итого к оплате": {"en":"Total to pay","ru":"Итого к оплате","uz":"Jami to'lov uchun"},
   "Выставлять нечего: всё уже в счетах.": {"en":"Nothing to invoice: everything is already in invoices.","ru":"Выставлять нечего: всё уже в счетах.","uz":"Hisob chiqarishga narsa yoʻq: hammasi allaqachon hisoblarda."},
   "Счёт {no} передан в кассу.": {"en":"Invoice {no} has been sent to the cashier.","ru":"Счёт {no} передан в кассу.","uz":"{no} hisobi kassaga yuborildi."},
   "Счёт передан в кассу.": {"en":"The invoice has been sent to the cashier.","ru":"Счёт передан в кассу.","uz":"Hisob kassaga yuborildi."},
@@ -10203,5 +10206,6 @@ export const STRINGS = {
   "Неизвестный фильтр отчёта: {arg}.": {"en":"Unknown report filter: {arg}.","ru":"Неизвестный фильтр отчёта: {arg}.","uz":"Noma'lum hisobot filtri: {arg}."},
   "Отчёт считается слишком долго — сузьте период.": {"en":"The report is taking too long — narrow the period.","ru":"Отчёт считается слишком долго — сузьте период.","uz":"Hisobot juda uzoq hisoblanmoqda — davrni qisqartiring."},
   "Ваш прошлый отчёт ещё считается — дождитесь его и повторите.": {"en":"Your previous report is still being calculated — wait for it and try again.","ru":"Ваш прошлый отчёт ещё считается — дождитесь его и повторите.","uz":"Oldingi hisobotingiz hali hisoblanmoqda — uni kuting va qayta urinib ko'ring."},
+  "Пациент уже выписан — дату поступления исправляет только администратор.": {"en":"The patient has already been discharged — only an administrator can correct the admission date.","ru":"Пациент уже выписан — дату поступления исправляет только администратор.","uz":"Bemor allaqachon chiqarilgan — yotqizilgan sanani faqat administrator tuzatadi."},
   // V3120_I18N — сообщения сервера — END
 };
