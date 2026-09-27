@@ -723,8 +723,13 @@ export const REGISTRY = {
   // ADMIN_ROWS_GRANTABLE_V1 — пять плиток-денег (полисы, провайдеры, кэшбэк,
   // скидки, ставки врачей) выдаются из «Ролей»: `grant` называет плитку, и её
   // «Изменение» пишет таблицу целиком — у этих плиток без денег ничего нет.
+  // LIVE_AUDIT_FIX_V1 — регистратура заводит полис пациента при записи (номер
+  // полиса = name, service-picker-modal.js wizSave): прежде вставка была только
+  // у администратора, отказ глотался, и номер полиса не сохранялся. Процент
+  // покрытия — не её решение (`nonAdminColumns`): новый полис регистратуры — 0 %,
+  // остальное — плитка «Полисы» в «Ролях» (`grant`).
   payer_policies: { read:{roles:ALL_STAFF,columns:['id','name','payer_id','coverage_percent','active','created_at']},
-    write:{ grant:'settings.payer_policies',insert:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},update:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},delete:{roles:[]}},
+    write:{ grant:'settings.payer_policies',insert:{roles:['admin','registrar'],columns:['name','payer_id','coverage_percent','active'],nonAdminColumns:['name','payer_id','active']},update:{roles:['admin'],columns:['name','payer_id','coverage_percent','active']},delete:{roles:[]}},
     filters:['id','active','payer_id'], embed:{ payers:{table:'payers',fk:'payer_id',columns:['id','name']} } },
   payment_providers: { read:{roles:ALL_STAFF,columns:['id','name','fee_percent','active','created_at']},
     write:{ grant:'settings.payment_providers',insert:{roles:['admin'],columns:['name','fee_percent','active']},update:{roles:['admin'],columns:['name','fee_percent','active']},delete:{roles:[]}},

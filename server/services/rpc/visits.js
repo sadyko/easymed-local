@@ -469,3 +469,44 @@ export async function ensureVisit(db, args, user) {
   settleCrmOnBooking(out.visit);
   return { ...out, booked: true };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LIVE_AUDIT_FIX_V1 — discard_empty_visit: НЕ ОСТАВЛЯТЬ ПУСТОЙ ВИЗИТ ЗА ОТКАЗОМ
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Мастер визита заводит визит дня (ensure_visit) и ПОТОМ пишет в него строки
+// услуг. Если строки не легли (сбой сети, отказ сервера по строке), за мастером
+// оставался визит без единой услуги: в журнале «визит», в календаре занятый
+// слот, а работы нет. Удалить его экрану нечем — visits через /api/db удаляет
+// только администратор.
+//
+// Удаляется ТОЛЬКО то, что этот же человек только что завёл и что осталось
+// пустым: свой (created_by), в статусе scheduled, без строк услуг и без счёта,
+// заведённый не раньше 30 минут назад. Всё остальное — отказ: чужой или
+// работающий визит этим путём не стирается никогда.
+const DISCARD_WINDOW_MIN = 30;
+
+export function discardEmptyVisit(db, args, user) {
+  requireRole(user, ENSURE_ROLES);
+  const visitId = args && args.visit_id;
+  if (!isPositiveInt(visitId)) throw new RpcError('visit_id must be a positive integer.', 400);
+  const run = db.transaction(() => {
+    const v = db.prepare('SELECT * FROM visits WHERE id = ?').get(visitId);
+    if (!v) return { discarded: false, reason: 'not_found' };
+    if (v.created_by == null || Number(v.created_by) !== Number(user.id)) {
+      throw new RpcError('Удалить можно только свой только что созданный визит.', 403);
+    }
+    if (v.status !== 'scheduled') throw new RpcError('Визит уже в работе — удалить его нельзя.', 400);
+    const fresh = db.prepare(`SELECT (julianday('now') - julianday(?)) * 1440 <= ? AS ok`).get(v.created_at, DISCARD_WINDOW_MIN).ok;
+    if (!fresh) throw new RpcError('Визит заведён давно — удалить его этим путём нельзя.', 400);
+    if (db.prepare('SELECT 1 FROM visit_services WHERE visit_id = ? LIMIT 1').get(visitId)
+        || db.prepare('SELECT 1 FROM invoices WHERE visit_id = ? LIMIT 1').get(visitId)) {
+      throw new RpcError('В визите уже есть услуги или счёт — он не пустой.', 400);
+    }
+    // Строки заявок, которые ensure_visit успел привязать, снова свободны.
+    db.prepare('UPDATE crm_request_services SET visit_id = NULL WHERE visit_id = ?').run(visitId);
+    db.prepare('DELETE FROM visits WHERE id = ?').run(visitId);
+    return { discarded: true };
+  });
+  return run();
+}

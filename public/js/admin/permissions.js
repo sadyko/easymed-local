@@ -1277,3 +1277,16 @@ export function scopedProviderId() {
     if (!u || u.is_super_admin || u.is_admin) return null;
     return u.id || null;
 }
+
+// LIVE_AUDIT_FIX_V1 — «Сохранить как шаблон» / «×» у шаблона сметы. Зеркало
+// service_templates.write (server/db/schema-registry.js): роли admin и
+// registrar ИЛИ плитка «Пакеты услуг» (settings.service_packages) на
+// «Изменение». Врачу кнопка обещала сохранение, а сервер отказывал.
+export const SERVICE_TEMPLATE_ROLES = Object.freeze(['admin', 'registrar']);
+export function canWriteServiceTemplates() {
+    if (hasActorRole(SERVICE_TEMPLATE_ROLES)) return true;
+    // Право плитки — только ВЫДАННОЕ явно: ненастроенная роль сервером
+    // (db/write-grant.js) к таблице не пускается, как бы ни открывался экран.
+    const lvl = grantLevel('settings.service_packages');
+    return lvl === 'edit' || lvl === 'delete';
+}

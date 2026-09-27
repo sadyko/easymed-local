@@ -42,7 +42,7 @@ import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // 
 // server/services/rpc/slot-engine.js. ?v как у остальных импортёров модуля.
 import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
          askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=aug17e';
-import { hasActorRole } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1
+import { hasActorRole, canWriteServiceTemplates } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1 · LIVE_AUDIT_FIX_V1 — шаблоны сметы
 import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
 // строк живут в одном модуле на все окна: копии этого кода уже разъезжались.
@@ -124,6 +124,18 @@ const refSourcesIn = (sources, cat) => (sources || []).filter(s => (cat === REF_
 // по ним счёт из визита.
 const INVOICE_ROLES = ['admin', 'registrar', 'cashier'];
 
+// LIVE_AUDIT_FIX_V1 — ЗЕРКАЛО visit_services.insert (server/db/schema-registry.js).
+// Мастер пишет строки услуг через /api/db, а их вставку сервер даёт только этим
+// ролям. Медсестра и колл-центр проходили ensure_visit (он им открыт), получали
+// пустой визит и затем «not allowed» на первой строке; касса и лаборатория
+// упирались уже в ensure_visit. Поэтому «Добавить услуги» видят только эти роли,
+// а мастер, открытый кем-то ещё, отказывает сразу — до первой записи в базу.
+export const VISIT_LINE_ROLES = ['admin', 'registrar', 'doctor'];
+// LIVE_AUDIT_FIX_V1 — зеркало patients.update (реестр): плательщик пациента
+// (patients.payer_id, полис) пишется только этими ролями.
+export const PATIENT_PAYER_ROLES = ['admin', 'registrar'];
+export function canAddVisitLines() { return hasActorRole(VISIT_LINE_ROLES); }
+
 function currentUserId() {
     try { return (window.easymed && window.easymed.state && window.easymed.state.user && window.easymed.state.user.id) || null; }
     catch (e) { return null; }
@@ -133,7 +145,14 @@ function currentUserId() {
 // known patient (from the patient card). onSaved runs after a successful create.
 export async function openVisitWizard(onSaved, patient, opts = {}) {
     if (!patient || !patient.id) { toast('Сначала выберите пациента.', 'fail'); return; }
+    if (!canAddVisitLines()) { toast(tr('Услуги в визит добавляют регистратура, врач или администратор.'), 'fail'); return; }
     const canInvoice = hasActorRole(INVOICE_ROLES);   // INVOICE_ROLE_HONEST_V1
+    // LIVE_AUDIT_FIX_V1 — выбор плательщика куда-то должен лечь: в счёт
+    // контрагента (создаёт тот, кто выставляет счета) или в карту пациента
+    // (регистратура, администратор). У врача не ложился никуда — ряд «Кто
+    // платит» ему не показывается, плательщика укажет регистратура или касса.
+    const canPickPayer = canInvoice || hasActorRole(PATIENT_PAYER_ROLES);
+    const canSavePatientPayer = hasActorRole(PATIENT_PAYER_ROLES);
 
     const wiz = {
         step: 1,
@@ -1847,7 +1866,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     h('div', { style: { fontWeight: 700, fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, trf('услуг: {n}', { n: templateSize(t) })),
                     packageTermsText(t) ? h('div', { 'data-package-terms': '', style: { fontSize: '12.5px', color: 'var(--ok-700, #15803d)' } }, packageTermsText(t)) : null),
-                h('button', {
+                canWriteServiceTemplates() && h('button', {   // LIVE_AUDIT_FIX_V1
                     type: 'button', title: 'Убрать шаблон из списка',
                     style: { border: '0', background: 'none', cursor: 'pointer', color: 'var(--crit-600, #dc2626)', fontSize: '17px', flex: 'none', padding: '2px 6px' },
                     onclick: async (e) => {
@@ -2010,7 +2029,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         railEl.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
             h('div', { style: { fontSize: '13.5px', fontWeight: 800, letterSpacing: '0.07em', color: 'var(--ink-500)' } }, 'СМЕТА'),
             h('span', { style: { flex: 1 } }),
-            wiz.cart.length
+            wiz.cart.length && canWriteServiceTemplates()   // LIVE_AUDIT_FIX_V1 — только тем, кому сервер даст сохранить
                 ? h('button', {
                     class: 'btn btn-ghost btn-sm', type: 'button',
                     style: { flex: 'none', whiteSpace: 'nowrap' },
@@ -2376,10 +2395,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
         railEl.appendChild(h('div', { style: { borderTop: '1px solid var(--ink-100)', paddingTop: '12px', display: 'flex', flexDirection: 'column', gap: '10px' } },
             h('div', { style: { fontSize: '13.5px', fontWeight: 800, color: 'var(--ink-900)' } }, 'Кто платит'),
-            payRow,
-            companyRow,
-            noPayersHint,
-            dmsHint,
+            ...(canPickPayer ? [payRow, companyRow, noPayersHint, dmsHint]
+                : [h('div', { class: 'muted', 'data-payer-note': '', style: { fontSize: '12.5px' } }, tr('Плательщика укажет регистратура или касса.'))]),   // LIVE_AUDIT_FIX_V1
             h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
                 discLabelEl, modesEl, discInp),
             // CATEGORY_DISCOUNT_V1 — откуда взялся процент: скидка группы пациента.
@@ -2487,6 +2504,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         }
         wiz.creating = true;
         repaintRail();
+        // LIVE_AUDIT_FIX_V1 — визиты, которые ЭТОТ вызов завёл (ensure_visit
+        // created), и визиты, в которые легла хоть одна строка. Заведённый, но
+        // пустой визит убирается в catch ниже (discard_empty_visit).
+        const freshVisitIds = [];
+        const visitsWithLines = new Set();
         try {
             const uid = currentUserId();
             const { data: branchRows } = await supabase.from('branches').select('id').eq('active', true).order('id').limit(1);
@@ -2598,6 +2620,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     throw new Error(trf('Визит на {day}: {msg}', { day, msg: bookErrorText(evErr) }));
                 }
                 const visit = ev.visit;
+                if (ev.created && visit && visit.id) freshVisitIds.push(visit.id);   // LIVE_AUDIT_FIX_V1
                 // CRM_REAL_BOOKING_V1 — ОТВЕТ ЧИТАЕТСЯ ЦЕЛИКОМ (ensure-visit-answer.js).
                 //
                 // Перенос ПУСТОГО визита дня (moved) — успех, о котором говорят
@@ -2664,6 +2687,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     const res = await supabase.from('visit_services').insert(row).select().single();
                     if (res.error) throw new Error(trf('Услуга «{name}»: {msg}', { name: c.svc.name, msg: res.error.message || 'insert failed' }));
                     vsIds.push(res.data.id);
+                    visitsWithLines.add(visit.id);   // LIVE_AUDIT_FIX_V1
                     lineByVsId.set(res.data.id, c);
                     const bDoc = lineDoc ? wiz.doctors.find(x => String(x.id) === String(lineDoc)) : null;
                     booked.push({
@@ -2828,10 +2852,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
             // Payer choice lives on the patient (no per-invoice payer locally).
             // PAY_DMS_V1 — при ДМС сохраняем и номер полиса (mig 034).
-            if (wiz.payerId !== 'self') {
+            // LIVE_AUDIT_FIX_V1 — только тем, кому реестр даёт правку карты;
+            // отказ не глотается.
+            if (wiz.payerId !== 'self' && canSavePatientPayer) {
                 const patch = { payer_id: Number(wiz.payerId) };
                 if (wiz.payMethod === 'dms' && wiz.policyNo.trim()) patch.insurance_policy_number = wiz.policyNo.trim();
-                await supabase.from('patients').update(patch).eq('id', patient.id).select().single();
+                const { error: pErr } = await supabase.from('patients').update(patch).eq('id', patient.id).select().single();
+                if (pErr) toast(trf('Плательщик в карте пациента не сохранён: {msg}', { msg: pErr.message || pErr }), 'fail');
             }
 
             // AKT_DOC_V1 — по счёту контрагента печатается АКТ выполненных работ:
@@ -2863,6 +2890,14 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                 });
             }
         } catch (e) {
+            // LIVE_AUDIT_FIX_V1 — пустой визит за отказом не остаётся.
+            for (const vid of freshVisitIds) {
+                if (visitsWithLines.has(vid)) continue;
+                try {
+                    const { error: dErr } = await supabase.rpc('discard_empty_visit', { visit_id: vid });
+                    if (dErr) console.warn('[wizard] discard empty visit', vid, dErr.message || dErr);
+                } catch (de) { console.warn('[wizard] discard empty visit', vid, de && de.message); }
+            }
             toast(trf('Не удалось сохранить услуги: {msg}', { msg: (e && e.message) || e }), 'fail');
             wiz.creating = false;
             repaintRail();

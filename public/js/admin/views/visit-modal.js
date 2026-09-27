@@ -13,7 +13,7 @@ import { referralSourceLabel } from '../../shared/referral-label.js?v=rl1';
 import { tr } from '../i18n.js';   // I18N_COVERAGE_V1 — sink-обёртки: textContent/confirm не проходят через h()
 import { currentUser } from '../data.js';
 import { h, Icon, Tag, StatusTag, statusLabel, toast, clear } from '../ui.js';
-import { canDelete, actorRoleCodes } from '../permissions.js';
+import { canDelete, actorRoleCodes, hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — hasActorRole
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // DISPENSE_ITEM_V1
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
@@ -395,6 +395,9 @@ function detailsForm(state) {
     const v = state.visit;
     const p = state.patient;
     const ref = referralPickerPair(v);
+    // LIVE_AUDIT_FIX_V1 — источник меняют регистратура и администратор
+    // (visit_set_referral_source); остальным он виден, но не правится.
+    if (!canSetVisitReferral()) { ref.categorySelect.disabled = true; ref.sourceSelect.disabled = true; }
 
     return h('div', null,
         state.patientBehaviorNote && h('div', {
@@ -432,14 +435,10 @@ function detailsForm(state) {
         labeled('Referral category', ref.categorySelect),
         labeled('Referral source',   ref.sourceSelect),
 
-        labeled('Coverage type', selectRow('coverage_type', [
-            ['patient',    'Patient (self-pay)'],
-            ['insurance',  'Insurance'],
-            ['corporate',  'Corporate'],
-            ['state',      'State program'],
-        ], v.coverage_type || 'patient')),
-
-        labeled('Discount (%)', h('input', { type: 'number', name: 'discount_percentage', step: '0.01', value: v.discount_percentage ?? '0', class: 'num' })),
+        // LIVE_AUDIT_FIX_V1 — «Coverage type» и «Discount (%)» убраны: колонок
+        // visits.coverage_type / discount_percentage в офлайн-базе нет, их
+        // значения молча выбрасывались, а окно говорило «Visit saved». Кто
+        // платит — счёт визита (invoices.payer_id), скидка — счёт тоже.
 
         h('div', { style: { gridColumn: '1 / -1' } },
             h('div', { style: { fontSize: '12.5px', color: 'var(--ink-700)', fontWeight: 500, marginBottom: '4px' } }, 'Visit comment'),
@@ -519,13 +518,14 @@ function servicesPane(state, onReload) {
     // PAYER_COVERED_LOCK_V1 — on a payer/insurance visit, services the booking wizard
     // released for the payer (status released, never invoiced) are covered by the Акт
     // and must NOT be billed to the patient. Lock them out of invoice selection.
-    // PAYER_COVERED_LOCK_V2 — the explicit payer_covered flag (set by the wizard's «Кто платит» split,
-    // now that the column exists + legacy rows are backfilled) is authoritative. The old status heuristic
-    // ("any released service on a payer visit is covered") wrongly stranded patient-allocated rows once a
-    // provider advanced their status (#8/#16) — dropped.
-    const isCovered = (r) => !r.invoice_item_id && !!r.payer_covered;
-    // Default: unbilled (and not payer-covered) services are pre-selected for invoicing.
-    const unbilled = (state.services || []).filter(r => !r.invoice_item_id && !isCovered(r));
+    // LIVE_AUDIT_FIX_V1 — покрытие решает СЕРВЕР: строка «за счёт плательщика»
+    // привязана к счёту контрагента (invoices.payer_id, COVERAGE_SPLIT_V1).
+    // Колонки payer_covered в офлайн-базе нет — прежний флаг молча выбрасывался,
+    // и застрахованные услуги выставлялись пациенту. loadServices помечает такие
+    // строки __payer_covered по их счёту.
+    const isCovered = (r) => !!r.__payer_covered;
+    // Default: unbilled services are pre-selected for invoicing.
+    const unbilled = (state.services || []).filter(r => !r.invoice_item_id);
     const validIds = new Set(unbilled.map(r => r.id));
 
     // Prune stale ids — if the user deleted a service and re-added it (new
@@ -663,10 +663,10 @@ function servicesPane(state, onReload) {
             )),
             h('tbody', null, ...(state.services || []).map(r => h('tr', null,
                 h('td', null,
-                    r.invoice_item_id
+                    isCovered(r)
+                        ? h('span', { title: tr('Покрывается плательщиком — счёт пациенту не выставляется'), style: { color: 'var(--ink-300)' } }, '—')
+                        : r.invoice_item_id
                         ? h('span', { title: 'Already invoiced', style: { color: 'var(--ink-300)' } }, '—')
-                        : isCovered(r)
-                        ? h('span', { title: 'Покрывается плательщиком — счёт пациенту не выставляется', style: { color: 'var(--ink-300)' } }, '—')
                         : h('input', { type: 'checkbox',
                             checked: selected.has(r.id),
                             onclick: (e) => {
@@ -690,10 +690,10 @@ function servicesPane(state, onReload) {
                         : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Not yet')),
                 h('td', null, StatusTag(r.__service_status || 'added')),
                 h('td', null,
-                    r.invoice_item_id
+                    isCovered(r)
+                        ? h('span', { class: 'tag tag-info', style: { fontSize: '12.5px' } }, tr('Покрывается плательщиком'))
+                        : r.invoice_item_id
                         ? StatusTag(state.invoice?.status || 'unpaid')
-                        : isCovered(r)
-                        ? h('span', { class: 'tag tag-info', style: { fontSize: '12.5px' } }, 'Покрывается плательщиком')
                         : h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '—')),
                 h('td', { style: { textAlign: 'right' } },
                     // DISPENSE_ITEM_V1: item lines void via the RPC (writes a
@@ -1103,11 +1103,10 @@ async function addServiceFromPicker(state, pick, onReload) {
 // денежные шаги окна визита гоняются через настоящий реестр RPC.
 export async function generateInvoiceFromSelection(state, selectedIds, onReload) {
     if (selectedIds.size === 0) { toast('Tick at least one service.', 'fail'); return; }
-    // PAYER_COVERED_LOCK_V2 — never invoice payer-covered services; they belong to the insurer's Акт,
-    // not the patient's cashier invoice. Trust the explicit payer_covered flag (set by the wizard's
-    // «Кто платит» split); dropped the old status heuristic that mis-flagged released patient services (#8/#16).
-    const lineItems = (state.services || []).filter(r => selectedIds.has(r.id) && !r.invoice_item_id
-        && !r.payer_covered);
+    // LIVE_AUDIT_FIX_V1 — строка за счёт плательщика уже привязана к счёту
+    // контрагента (invoice_item_id), поэтому сюда не попадает; сервер к тому же
+    // отказывает строке, у которой счёт уже есть («already invoiced»).
+    const lineItems = (state.services || []).filter(r => selectedIds.has(r.id) && !r.invoice_item_id);
     if (lineItems.length === 0) { toast('All selected services are already invoiced.', 'fail'); return; }
 
     if (!state.visit?.id) {
@@ -1533,11 +1532,6 @@ function readOnly(value) {
     return h('div', { style: { padding: '8px 10px', background: 'var(--ink-25)', border: '1px solid var(--ink-100)', borderRadius: '7px', fontSize: '13.5px', color: 'var(--ink-900)', fontWeight: 500 } }, value);
 }
 function dateInput(name, value) { return h('input', { type: 'date', name, value: value || '' }); }
-function selectRow(name, options, current) {
-    const sel = h('select', { name });
-    for (const [val, lbl] of options) sel.appendChild(h('option', { value: val, selected: String(current) === val }, lbl));
-    return sel;
-}
 function radioRow(name, options, current) {
     return h('div', { class: 'pr-radio-group', style: { height: 'auto' } }, ...options.map(([val, lbl]) =>
         h('label', { class: 'pr-radio' },
@@ -1632,7 +1626,15 @@ async function deleteVisit(state) {
     return true;
 }
 
-async function saveDetails(card, state) {
+// LIVE_AUDIT_FIX_V1 — зеркало ролей visit_set_referral_source (server/services/rpc/visit-lines.js).
+export const VISIT_REFERRAL_ROLES = ['admin', 'registrar'];
+export function canSetVisitReferral() { return hasActorRole(VISIT_REFERRAL_ROLES); }
+
+// Колонки визита, которые вкладка «Детали» пишет через /api/db (реестр:
+// visits.update). Всё прочее из формы сюда не уходит — иначе молча выбросится.
+const DETAILS_COLUMNS = ['visit_type', 'visit_kind', 'notes'];
+
+export async function saveDetails(card, state) {
     if (!state.visit?.id) { toast('Demo visit — saving disabled.', 'fail'); return false; }
     const form = card.querySelector('.vd-form');
     if (!form) return false;
@@ -1676,13 +1678,28 @@ async function saveDetails(card, state) {
         Object.assign(state.visit, moved.visit || {});
     }
 
-    if (Object.keys(payload).length === 0) { toast('Visit saved.'); return true; }
+    // LIVE_AUDIT_FIX_V1 — источник направления пишет СЕРВЕР
+    // (visit_set_referral_source): через /api/db колонка не пишется и молча
+    // выбрасывалась. Шлём только изменённый и только тем, кому он открыт.
+    if (Object.prototype.hasOwnProperty.call(payload, 'referral_source_id')) {
+        const next = payload.referral_source_id == null || payload.referral_source_id === '' ? null : Number(payload.referral_source_id);
+        const prev = state.visit.referral_source_id == null ? null : Number(state.visit.referral_source_id);
+        delete payload.referral_source_id;
+        if (next !== prev && canSetVisitReferral()) {
+            const { error: refErr } = await supabase.rpc('visit_set_referral_source', { visit_id: state.visit.id, referral_source_id: next });
+            if (refErr) { toast(tr('Источник направления не сохранён: ') + (refErr.message || refErr), 'fail'); return false; }
+            state.visit.referral_source_id = next;
+        }
+    }
+    for (const k of Object.keys(payload)) if (!DETAILS_COLUMNS.includes(k)) delete payload[k];
+
+    if (Object.keys(payload).length === 0) { toast(tr('Визит сохранён.')); return true; }
     const { error } = await supabase.from('visits').update(payload).eq('id', state.visit.id);
-    if (error) { toast(error.message, 'fail'); return false; }
+    if (error) { toast(tr('Визит не сохранён: ') + (error.message || error), 'fail'); return false; }
     // Mirror what we just saved into local state so subsequent reads (and the
     // banner) reflect it without waiting for the calendar refresh.
     Object.assign(state.visit, payload);
-    toast('Visit saved.');
+    toast(tr('Визит сохранён.'));
     return true;
 }
 
@@ -1741,6 +1758,16 @@ async function loadServices(state) {
         __doctor_name:     r.users?.full_name || '',
         __created_by_name: formatRegistrar(r.creator?.full_name),
     }));
+    // LIVE_AUDIT_FIX_V1 — строки, выставленные КОНТРАГЕНТУ (invoices.payer_id),
+    // помечаются «Покрывается плательщиком»: это их счёт, а не счёт пациента.
+    const itemIds = state.services.map(r => r.invoice_item_id).filter(Boolean);
+    if (itemIds.length) {
+        const { data: its, error: itErr } = await supabase.from('invoice_items')
+            .select('id, invoices ( id, payer_id )').in('id', itemIds);
+        if (itErr) { console.warn('[invoice_items payer]', itErr.message); return; }
+        const payerItem = new Set((its || []).filter(it => it.invoices && it.invoices.payer_id).map(it => it.id));
+        for (const r of state.services) r.__payer_covered = !!(r.invoice_item_id && payerItem.has(r.invoice_item_id));
+    }
 }
 
 async function loadInvoice(state) {

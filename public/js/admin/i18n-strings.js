@@ -3,6 +3,19 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // LIVE_AUDIT_FIX_V1 (2026-09-27) — строки исправлений живого аудита
+  "Услуга не снята: {msg}": {"en":"The service was not removed: {msg}","ru":"Услуга не снята: {msg}","uz":"Xizmat olib tashlanmadi: {msg}"},
+  "Услуга не добавлена: {msg}": {"en":"The service was not added: {msg}","ru":"Услуга не добавлена: {msg}","uz":"Xizmat qo'shilmadi: {msg}"},
+  "Плательщика укажет регистратура или касса.": {"en":"The front desk or the cashier will set the payer.","ru":"Плательщика укажет регистратура или касса.","uz":"To'lovchini ro'yxatxona yoki kassa ko'rsatadi."},
+  "Плательщик в карте пациента не сохранён: {msg}": {"en":"The payer was not saved to the patient card: {msg}","ru":"Плательщик в карте пациента не сохранён: {msg}","uz":"To'lovchi bemor kartasida saqlanmadi: {msg}"},
+  "Полис не сохранён: {msg}": {"en":"Policy not saved: {msg}","ru":"Полис не сохранён: {msg}","uz":"Polis saqlanmadi: {msg}"},
+  "Пациент привязан к заявке. Услуги оформит регистратура.": {"en":"The patient is linked to the request. The front desk will book the services.","ru":"Пациент привязан к заявке. Услуги оформит регистратура.","uz":"Bemor so'rovga bog'landi. Xizmatlarni ro'yxatxona rasmiylashtiradi."},
+  "Плательщик не выбран.": {"en":"No payer selected.","ru":"Плательщик не выбран.","uz":"To'lovchi tanlanmagan."},
+  "Услугу не снять: {msg}": {"en":"Cannot remove the service: {msg}","ru":"Услугу не снять: {msg}","uz":"Xizmatni olib tashlab bo'lmadi: {msg}"},
+  "Источник направления не сохранён: ": {"en":"Referral source not saved: ","ru":"Источник направления не сохранён: ","uz":"Yo'llanma manbai saqlanmadi: "},
+  "Визит сохранён.": {"en":"Visit saved.","ru":"Визит сохранён.","uz":"Tashrif saqlandi."},
+  "Визит не сохранён: ": {"en":"Visit not saved: ","ru":"Визит не сохранён: ","uz":"Tashrif saqlanmadi: "},
+  "Услуги в визит добавляют регистратура, врач или администратор.": {"en":"Services are added to a visit by the front desk, a doctor or an administrator.","ru":"Услуги в визит добавляют регистратура, врач или администратор.","uz":"Tashrifga xizmatlarni ro'yxatxona, shifokor yoki administrator qo'shadi."},
   // CARD_SALE_V1 / CASHBACK_BY_GROUP_V1 / CASHBACK_DEBT_V1 (2026-09-27) — продажа карт в кассе, кэшбэк по группе, долг по кэшбэку при приёме депозита
   "КАРТЫ": {"en":"CARDS","ru":"КАРТЫ","uz":"KARTALAR"},
   "Продать карту": {"en":"Sell a card","ru":"Продать карту","uz":"Karta sotish"},

@@ -35,6 +35,7 @@ import { h, Icon, clear, toast, Avatar, initials, avColor } from '../ui.js';
 // регистрации (quick-patient-modal.js), и путь сохранения теперь один.
 import { loadPatientsPaged, insertRow, currentUser } from '../data.js';
 import { logPatientActivity } from './activity-log.js';   // BOOK_WIZARD_V1
+import { canWriteServiceTemplates } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — шаблоны сметы
 import { gw } from '../gateway.js';
 import { clinicFlags } from '../clinic-flags.js';   // CUSTOM_CLINIC_V1
 import { printableSheet } from './doc-settings.js?v=noqr1';   // insurance/B2B: print statistics act
@@ -1788,7 +1789,6 @@ export function openServicePickerModal({
             btn.disabled = true;
             const ids = state.added.map(a => a.service && a.service.id).filter(Boolean);
             const ins = { name, service_ids: ids, active: true };
-            if (window.CLINIC && window.CLINIC.id) ins.company_id = window.CLINIC.id;
             const { error } = await supabase.from('service_templates').insert(ins);
             if (error) {
                 // Only schema errors mean "apply the migration" — anything else
@@ -1851,7 +1851,7 @@ export function openServicePickerModal({
                     h('div', { style: { fontWeight: 700, fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.name),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('услуг') + ': ' + ids.length),
                     terms ? h('div', { 'data-package-terms': '', style: { fontSize: '12.5px', color: 'var(--ok-700, #15803d)' } }, terms) : null),
-                h('button', { type: 'button', title: 'Удалить шаблон',
+                canWriteServiceTemplates() && h('button', { type: 'button', title: 'Удалить шаблон',   // LIVE_AUDIT_FIX_V1
                     style: { border: '0', background: 'none', cursor: 'pointer', color: 'var(--crit-600, #dc2626)', fontSize: '15px', flex: 'none', padding: '2px 4px' },
                     onclick: async (e) => {
                         e.stopPropagation();
@@ -2200,7 +2200,7 @@ export function openServicePickerModal({
         // WIZ_TEMPLATES_V1 — заголовок сметы + «Сохранить как шаблон» (когда есть услуги).
         catRailEl.appendChild(h('div', { class: 'wzc-rail-h', style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' } },
             h('span', null, 'Смета'),
-            state.added.length ? h('button', { class: 'btn btn-sm btn-amber', type: 'button',
+            state.added.length && canWriteServiceTemplates() ? h('button', { class: 'btn btn-sm btn-amber', type: 'button',   // LIVE_AUDIT_FIX_V1
                 style: { flex: 'none', whiteSpace: 'nowrap', textTransform: 'none', letterSpacing: 'normal' },
                 onclick: () => saveCartTemplate() }, 'Сохранить как шаблон') : null));
         const p = refs.attachedPatient;
@@ -2926,24 +2926,10 @@ export function openServicePickerModal({
             // или создать строку payer_policies с этим номером (policy_code) у
             // выбранного плательщика и использовать её id как payer_policy_id.
             if (!isPatient && pm.payerId && (pm.policyNumber || '').trim()) {
-                const num = pm.policyNumber.trim();
-                try {
-                    // CLOUD_LEFTOVER_COLUMNS_V1 — офлайн у полиса нет отдельной
-                    // колонки `policy_code`: номер и есть его название (`name`).
-                    // Отбор по ней отвергался, а при вставке молча выбрасывался,
-                    // поэтому на каждый ввод полиса заводилась НОВАЯ строка.
-                    const { data: ex } = await supabase.from('payer_policies')
-                        .select('id').eq('payer_id', pm.payerId).eq('active', true);
-                    const hit = (ex || []).find(r => String(r.name || '').trim() === num);
-                    if (hit) pm.policyId = hit.id;
-                    else {
-                        const ins = { payer_id: pm.payerId, name: num, active: true };
-                        if (window.CLINIC && window.CLINIC.id) ins.company_id = window.CLINIC.id;
-                        const { data: crt, error: cErr } = await supabase.from('payer_policies').insert(ins).select('id').single();
-                        if (cErr) console.warn('[wizard] policy create:', cErr.message);
-                        else pm.policyId = crt.id;
-                    }
-                } catch (e) { console.warn('[wizard] policy resolve:', e.message); }
+                // LIVE_AUDIT_FIX_V1 — resolvePolicyId (ниже, экспортирована ради теста).
+                const pol = await resolvePolicyId({ payerId: pm.payerId, number: pm.policyNumber });
+                if (pol.id) pm.policyId = pol.id;
+                else if (pol.error) toast(trf('Полис не сохранён: {msg}', { msg: pol.error.message || pol.error }), 'fail');
             }
             // CATALOG_WIZARD_V2 — the visits row anchors on the EARLIEST item that has
             // a doctor+slot (a no-doctor lab item first in the cart must not produce a
@@ -3185,12 +3171,14 @@ export function openServicePickerModal({
                         .update({ status: 'queued' }).in('id', ids)
                         .not('status', 'in', '(in_progress,completed)');
                     if (relErr) console.warn('[wizard] release services:', relErr.message);
-                    // PAYER_COVERED_FLAG_V1 — mark these so they're locked from patient
-                    // invoicing everywhere. Best-effort: column added by migration 058;
-                    // a pre-migration error is non-fatal (the visit-modal heuristic still covers it).
-                    const { error: pcErr } = await supabase.from('visit_services')
-                        .update({ payer_covered: true }).in('id', ids);
-                    if (pcErr) console.warn('[wizard] payer_covered (apply migration 058):', pcErr.message);
+                    // LIVE_AUDIT_FIX_V1 — покрытие фиксирует СЕРВЕР: строки уходят в
+                    // счёт контрагента (payer_id) и больше не могут попасть в счёт
+                    // пациента. Флага payer_covered в офлайн-базе нет — его запись
+                    // молча выбрасывалась.
+                    const pay = await invoicePayerLines({ visitId: visit.id, ids, payerId: pm.payerId });
+                    if (pay.error) {
+                        toast(trf('Счёт плательщику не выставлен: {msg}', { msg: pay.error.message || pay.error }), 'fail');
+                    }
                 }
                 try {
                     const payer = (wiz.payers || []).find(x => x.id === pm.payerId);
@@ -3625,4 +3613,54 @@ export async function invoicePickerLines({ visitId, lines, pct = 0, promo = null
         error = res.error || null;
     } catch (e) { error = e; }
     return { ...d, data, error };
+}
+
+/**
+ * LIVE_AUDIT_FIX_V1 — строки «за счёт плательщика» (шаг «Кто платит»)
+ * выставляются КОНТРАГЕНТУ: create_invoice_for_visit с payer_id, как в мастере
+ * визита (COVERAGE_SPLIT_V1). Прежде калькулятор писал на строку флаг
+ * `payer_covered`, которого в офлайн-базе нет: запись молча выбрасывалась, и
+ * «Сформировать счёт» окна визита выставлял застрахованные услуги ПАЦИЕНТУ.
+ * Теперь покрытие — это привязка строки к счёту контрагента на сервере:
+ * строка с invoice_item_id в счёт пациента не попадает (сервер отказывает
+ * «already invoiced»), а касса такой счёт не показывает.
+ */
+export async function invoicePayerLines({ visitId, ids, payerId }) {
+    const list = (ids || []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+    const payer = Number(payerId);
+    if (!list.length) return { data: null, error: null };
+    if (!Number.isInteger(payer) || payer <= 0) return { data: null, error: { message: tr('Плательщик не выбран.') } };
+    try {
+        const res = await supabase.rpc('create_invoice_for_visit',
+            { visit_id: visitId, visit_service_ids: list, discount_amount: 0, payer_id: payer });
+        return { data: res.data || null, error: res.error || null };
+    } catch (e) { return { data: null, error: e }; }
+}
+
+/**
+ * WIZ_POLICY_MANUAL_V1 / LIVE_AUDIT_FIX_V1 — полис по номеру: найти у
+ * плательщика действующий полис с этим номером или завести новый.
+ *
+ * CLOUD_LEFTOVER_COLUMNS_V1 — офлайн у полиса нет отдельной колонки
+ * `policy_code`: номер и есть его название (`name`). Два прежних сбоя:
+ * поиск спрашивал только `id` и сравнивал `name`, которого в ответе не было,
+ * — совпадения не находилось никогда, и каждый ввод заводил НОВЫЙ полис; а
+ * вставка была только у администратора — у регистратуры отказ глотался.
+ * Реестр теперь даёт регистратуре вставку (номер, плательщик, активность).
+ */
+export async function resolvePolicyId({ payerId, number }) {
+    const num = String(number || '').trim();
+    const payer = Number(payerId);
+    if (!num || !Number.isInteger(payer) || payer <= 0) return { id: null, error: null };
+    try {
+        const { data: ex, error: exErr } = await supabase.from('payer_policies')
+            .select('id, name').eq('payer_id', payer).eq('active', true);
+        if (exErr) return { id: null, error: exErr };
+        const hit = (ex || []).find(r => String(r.name || '').trim() === num);
+        if (hit) return { id: hit.id, error: null };
+        const { data: crt, error: cErr } = await supabase.from('payer_policies')
+            .insert({ payer_id: payer, name: num, active: true }).select('id').single();
+        if (cErr) return { id: null, error: cErr };
+        return { id: crt && crt.id, error: null };
+    } catch (e) { return { id: null, error: e }; }
 }

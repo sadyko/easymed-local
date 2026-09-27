@@ -3675,17 +3675,22 @@ async function addOwnService(ctx, svc, doctor) {
     toast('Услуга добавлена в приём', 'ok');
 }
 
+// LIVE_AUDIT_FIX_V1 — строку визита снимает СЕРВЕР (remove_own_visit_line):
+// удаление visit_services через /api/db врачу не разрешено, отказ глотался, и
+// услуга, снятая в кабинете, оставалась в визите и в счёте. Теперь сначала
+// снимается настоящая строка, и только при успехе — пункт списка кабинета;
+// отказ сервера показывается его словами.
 async function removeOwnService(ctx, idx) {
     const payload = wsState.payload || await readPayload(ctx);
     if (!Array.isArray(payload.services)) return;
     const removed = payload.services[idx];
+    if (removed && removed.vsId) {
+        const { error } = await supabase.rpc('remove_own_visit_line', { visit_service_id: Number(removed.vsId) });
+        if (error) { toast(trf('Услугу не снять: {msg}', { msg: error.message || error }), 'fail'); return; }
+    }
     payload.services.splice(idx, 1);
     if (!await writePayload(ctx, payload)) return;
     paintOwnServices(ctx);
-    // AURORA_SVC_SYNC_V1 — drop the real visit_services line too (un-bill it).
-    if (removed && removed.vsId) {
-        try { await supabase.from('visit_services').delete().eq('id', removed.vsId); } catch (e) {}
-    }
 }
 
 // --- AURORA_CONSULT_NO_TIMER_V1 — «Пауза» = step away ----------------------

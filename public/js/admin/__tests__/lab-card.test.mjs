@@ -661,3 +661,34 @@ test('EXTERNAL_LAB_V1: подпись видна в бланке ввода ре
   assert.strictEqual(titles.length, 2);
   assert.strictEqual(titles.filter((t) => extTags(t).length).length, 1, 'подпись должна стоять ровно у внешнего анализа');
 });
+
+// LIVE_AUDIT_FIX_V1 — врач и медсестра с разделом «Лаборатория» видят очередь,
+// но не кнопки, которые сервер им не исполнит (rpc/lab.js WRITE_ROLES,
+// lab_results.update — admin, lab).
+test('LIVE_AUDIT_FIX_V1: врачу и медсестре — ни «Внести результаты», ни «Подтвердить»; лаборатории — есть', async () => {
+  const perms = await import('../permissions.js');
+  const { LAB_RESULT_ROLES } = await import('../views/laboratory.js');
+  const { REGISTRY } = await import('../../../../server/db/schema-registry.js');
+  assert.deepStrictEqual([...LAB_RESULT_ROLES].sort(), [...REGISTRY.lab_results.write.update.roles].sort());
+  const labSrc = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../../server/services/rpc/lab.js'), 'utf8');
+  assert.ok(labSrc.includes("const WRITE_ROLES = ['admin', 'lab'];"), 'роли сервера разошлись с экраном');
+  const rows = [vs(805, 'resulted'), vs(806, 'in_progress')];
+  const results = [res('r1', 805, 'normal', '140')];
+  const WRITE = ['Внести результаты', 'Подтвердить', 'Результаты…', 'Проверить и выдать'];
+  const user = window.easymed.state.user;
+  try {
+    for (const role of ['doctor', 'nurse']) {
+      perms.setActorRoles([role]); user.role = role;
+      const c = await card(rows, results);
+      const labels = buttons(c).map((b) => textOf(b).trim());
+      for (const w of WRITE) assert.ok(!labels.some((l) => l.includes(w)), role + ': показана «' + w + '» — сервер откажет');
+    }
+    perms.setActorRoles(['lab']); user.role = 'lab';
+    const c = await card(rows, results);
+    const labels = buttons(c).map((b) => textOf(b).trim());
+    assert.ok(labels.some((l) => l.includes('Подтвердить')), 'лаборатории пропала «Подтвердить»: ' + labels.join(' | '));
+  } finally {
+    delete user.role;
+    perms.setFullAccess(true);
+  }
+});

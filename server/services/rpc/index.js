@@ -32,7 +32,8 @@ import {
   dietTablesList, admissionDietSet, admissionDietHistory,
   admissionMealMark, admissionMealsList, kitchenSheet,
 } from './diet.js';   // DIET_TABLES_V1
-import { ensureVisit } from './visits.js';
+import { ensureVisit, discardEmptyVisit } from './visits.js';
+import { removeOwnVisitLine, visitSetReferralSource } from './visit-lines.js';   // LIVE_AUDIT_FIX_V1 — врач снимает свою невыставленную услугу
 import { visitSetDoctorReferrer } from './referral-autofill.js';   // REPORTS_V2 — направивший врач на визите по рекомендации
 import { calendarSlots, calendarWindows, calendarBook } from './calendar.js';   // CALENDAR_BOOKING_V1
 import { issueQueueNumbers, queueBoard } from './queue.js';
@@ -206,6 +207,12 @@ export const RPC = {
   // their date's visit. Find-or-create lives server-side so visit counts are
   // computed, never hand-managed.
   ensure_visit:              (db, args, user) => ensureVisit(db, args, user),
+  // LIVE_AUDIT_FIX_V1 — мастер убирает за собой визит, в который не легла ни
+  // одна строка (свой, пустой, только что заведённый); врач снимает свою
+  // невыставленную услугу (visit-lines.js — правило там).
+  discard_empty_visit:       (db, args, user) => discardEmptyVisit(db, args, user),
+  remove_own_visit_line:     (db, args, user) => removeOwnVisitLine(db, args, user),
+  visit_set_referral_source: (db, args, user) => visitSetReferralSource(db, args, user),   // вкладка «Детали» окна визита
   // CALENDAR_BOOKING_V1 — «Календарь записи».
   //
   // calendar_slots ЧИТАЕТ (стоит в READ_ONLY_RPCS, control/gate.js): свободные

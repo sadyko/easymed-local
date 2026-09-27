@@ -704,3 +704,89 @@ test('МАСТЕР: VIP + пакет — в счёт уходит скидка �
   assert.deepEqual({ ...tot }, { subtotal: 300000, discount_amount: 50000, total_amount: 250000 });
   assert.equal(DB.prepare('SELECT package_id FROM visit_services WHERE service_id = 31').get().package_id, 1);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LIVE_AUDIT_FIX_V1 — «Добавить услуги» / конверсия CRM: мастер не заводит
+// пустой визит тем, кому строки визита не вставить, и не оставляет пустой
+// визит за отказом строки.
+// ═══════════════════════════════════════════════════════════════════════════
+test('LIVE_AUDIT_FIX_V1: медсестра и колл-центр — мастер отказывает сразу, визит не заводится', async () => {
+  const { openVisitWizard, VISIT_LINE_ROLES } = await import('../views/visit-wizard.js');
+  const { readFileSync } = await import('node:fs');
+  // зеркало реестра: те же роли, что у visit_services.insert
+  const { REGISTRY } = await import('../../../../server/db/schema-registry.js');
+  assert.deepEqual([...VISIT_LINE_ROLES].sort(), [...REGISTRY.visit_services.write.insert.roles].sort());
+  for (const role of ['nurse', 'callcenter', 'cashier', 'lab']) {
+    seed();
+    document.body.children.length = 0; TOASTS.length = 0; RPC.length = 0;
+    window.easymed = { state: { user: { id: 1, role, extra_roles: [] } } };
+    try {
+      await openVisitWizard(() => {}, { id: 3, full_name: 'Иванов Иван' }, { presetServiceIds: [21] });
+      await flush(10);
+      assert.ok(!document.body.children.find(isWizard), role + ': мастер открылся');
+      assert.equal(RPC.filter((c) => c.name === 'ensure_visit').length, 0, role + ': визит заведён');
+      assert.equal(countVisits(), 0);
+      assert.ok(TOASTS.some((t) => /регистратура, врач или администратор/.test(t)), role + ': отказ не сказан: ' + JSON.stringify(TOASTS));
+    } finally { delete window.easymed; }
+  }
+  // кнопки карты и конверсия CRM спрашивают то же правило
+  const card = readFileSync(new URL('../views/patient-card.js', import.meta.url), 'utf8');
+  assert.equal((card.match(/tabEdit\('services'\) && canAddVisitLines\(\)/g) || []).length, 2, 'кнопки «Добавить услуги» карты пациента не спрашивают роль строк визита');
+  const crm = readFileSync(new URL('../views/crm.js', import.meta.url), 'utf8');
+  assert.match(crm, /function afterConvert\(r, p\) \{[^]*?isRouteAllowed\('patient-card'\)[^]*?if \(!canAddVisitLines\(\)\)/);
+  assert.ok(!/onCreated: \(p\) => \{\s*if \(refs\.onNavigate\) refs\.onNavigate\('patient-card'/.test(crm), 'конверсия снова ведёт колл-центр в карту без проверки');
+});
+
+test('LIVE_AUDIT_FIX_V1: строка услуги не легла — заведённый мастером визит удаляется, пустого не остаётся', async () => {
+  await openWizardReadyWith((db) => {
+    db.exec("CREATE TRIGGER t_fail BEFORE INSERT ON visit_services BEGIN SELECT RAISE(ABORT, 'диск занят'); END;");
+  });
+  assert.equal(countVisits(), 0);
+  await pressUntilCreate();
+  assert.ok(RPC.some((c) => c.name === 'ensure_visit'), 'мастер не дошёл до записи');
+  assert.ok(TOASTS.some((t) => /Не удалось сохранить услуги/.test(t)), 'отказ не сказан: ' + JSON.stringify(TOASTS));
+  assert.ok(RPC.some((c) => c.name === 'discard_empty_visit'), 'мастер не убрал за собой пустой визит');
+  assert.equal(countVisits(), 0, 'за отказом строки остался пустой визит');
+});
+
+test('LIVE_AUDIT_FIX_V1: регистратура заводит полис по номеру; второй ввод того же номера — тот же полис; процент покрытия не её', async () => {
+  seed();
+  DB.prepare("INSERT INTO payers (id, name, kind) VALUES (7, 'Страховая', 'insurance')").run();
+  const a = await SPM.resolvePolicyId({ payerId: 7, number: ' AB-123 ' });
+  assert.equal(a.error, null, 'регистратуре отказано: ' + (a.error && a.error.message));
+  assert.ok(a.id, 'полис не заведён');
+  const b = await SPM.resolvePolicyId({ payerId: 7, number: 'AB-123' });
+  assert.equal(b.id, a.id, 'тот же номер завёл второй полис');
+  assert.equal(DB.prepare('SELECT COUNT(*) c FROM payer_policies').get().c, 1);
+  assert.equal(DB.prepare('SELECT coverage_percent p FROM payer_policies').get().p, 0);
+  // процент покрытия — не решение стойки
+  const { compile } = await import('../../../../server/db/query-compiler.js');
+  assert.throws(() => compile({ table: 'payer_policies', op: 'insert', values: { payer_id: 7, name: 'X', coverage_percent: 100 } },
+    { id: 1, role: 'registrar', extra_roles: [] }, { db: DB }), /administrator-only/);
+});
+
+test('LIVE_AUDIT_FIX_V1: врачу мастер не обещает шаблон и плательщика, которых сервер не сохранит; регистратору — показывает', async () => {
+  const perms = await import('../permissions.js');
+  const { REGISTRY } = await import('../../../../server/db/schema-registry.js');
+  assert.deepEqual([...perms.SERVICE_TEMPLATE_ROLES].sort(), [...REGISTRY.service_templates.write.insert.roles].sort());
+  assert.equal(REGISTRY.service_templates.write.grant, 'settings.service_packages');
+  const { PATIENT_PAYER_ROLES } = await import('../views/visit-wizard.js');
+  assert.deepEqual([...PATIENT_PAYER_ROLES].sort(), [...REGISTRY.patients.write.update.roles].sort());
+  const txt = () => textOf(document.body.children.find(isWizard) || { children: [] });
+  const openAs = async (role) => {
+    window.easymed = { state: { user: { id: 1, role, extra_roles: [] } } };
+    perms.setActorRoles([role]);
+    return openWizardReady();
+  };
+  try {
+    await openAs('doctor');
+    assert.ok(!/Сохранить как шаблон/.test(txt()), 'врачу показана кнопка шаблона — сервер откажет');
+    assert.match(txt(), /Плательщика укажет регистратура или касса/);
+    await openAs('registrar');
+    assert.match(txt(), /Сохранить как шаблон/);
+    assert.ok(!/Плательщика укажет регистратура/.test(txt()));
+  } finally {
+    delete window.easymed;
+    perms.setActorRoles([]);
+  }
+});
