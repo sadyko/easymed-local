@@ -46,7 +46,6 @@ import { canSeeReportKey, requireReportKind } from '../report-access.js';
 // врачу с той цены и той скидки категории, которые поставит счёт: правило
 // цены и правило скидки — у кассы, здесь только их вызов.
 import { lineUnitPrice, packageDiscountPct } from '../domain/pricing.js';
-import { patientCategoryDiscount } from './billing.js';
 // DOCTOR_LINES_SPECIALTY_V1 — «По специальностям» группирует тем же правилом,
 // которым карточка сотрудника сохраняет специальность (старые имена → одно).
 import { specialtyGroupName } from '../../../public/js/shared/specialty-list.js';
@@ -1147,7 +1146,7 @@ function makePayPricer(db) {
   const prodStmt = db.prepare('SELECT sale_price FROM products WHERE id = ?');
   const pkgStmt = db.prepare('SELECT service_ids, discount_percent, valid_from, valid_until FROM service_templates WHERE id = ?');
   const units = new Map();
-  const cats = new Map();
+  let cats = null;   // id пациента → скидка категории, %; загружается один раз
   const pkgs = new Map();
   return {
     unit(r) {
@@ -1165,9 +1164,20 @@ function makePayPricer(db) {
       }
       return units.get(key);
     },
+    // V3120_FIX (N+1) — скидки категорий всех пациентов с категорией одним
+    // запросом на выборку, а не запрос на каждого пациента. Правило то же, что
+    // patientCategoryDiscount (billing.js): только действующая категория,
+    // процент 0..100, иначе 0.
     categoryPct(patientId) {
-      if (!cats.has(patientId)) cats.set(patientId, patientCategoryDiscount(db, patientId));
-      return cats.get(patientId);
+      if (cats === null) {
+        cats = new Map();
+        for (const r of db.prepare(`SELECT p.id AS id, c.discount_percent AS pct FROM patients p
+                                      JOIN patient_categories c ON c.id = p.category_id AND c.active = 1`).all()) {
+          const pct = Number(r.pct);
+          if (Number.isFinite(pct) && pct > 0) cats.set(r.id, Math.min(pct, 100));
+        }
+      }
+      return cats.get(Number(patientId)) || 0;
     },
     // Ревью M3 — скидка пакета только в его сроке (день визита) и только для
     // услуги из пакета: то же правило, что у кассы (domain/pricing.js).

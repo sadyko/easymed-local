@@ -291,3 +291,26 @@ test('F: стационар — ставка сотрудника-направи
   assert.equal(cab(c.db, range(cur), 2).adjustments.count, 0);
   assert.equal(refRows(c.db, range(prev)).filter((o) => o['Источник'] === 'Направляев Н.').length, 0, 'строки с нулевой ставкой в отчёт не выходят');
 });
+
+// ─── N+1. СКИДКА КАТЕГОРИИ — ОДНИМ ЗАПРОСОМ, ПРАВИЛО ПРЕЖНЕЕ ─────────────────
+
+test('N+1: скидка категории у строки без счёта — действующая категория, не больше 100 %, одним запросом', () => {
+  const c = clinic();
+  const { cur } = months(c.db);
+  const cat = c.db.prepare("INSERT INTO patient_categories (name, discount_percent, active) VALUES ('Льгота', 20, 1)").run().lastInsertRowid;
+  c.db.prepare('UPDATE patients SET category_id = ?').run(cat);
+  for (const patient of [1, 2, 3]) c.line({ at: cur + '-03T09:00:00Z', patient });
+  // 3 строки × 80 000 × 30 %.
+  assert.equal(cab(c.db, range(cur)).total, 72000);
+  c.db.prepare('UPDATE patient_categories SET active = 0').run();
+  assert.equal(cab(c.db, range(cur)).total, 90000, 'выключенная категория скидки не даёт');
+  c.db.prepare('UPDATE patient_categories SET active = 1, discount_percent = 150').run();
+  assert.equal(cab(c.db, range(cur)).total, 0, 'больше 100 % — это 100 %');
+  // Запросов к категориям — один на выборку, а не по пациенту.
+  let catQueries = 0;
+  const prepare = c.db.prepare.bind(c.db);
+  c.db.prepare = (sql) => { if (/patient_categories/.test(sql)) catQueries += 1; return prepare(sql); };
+  cab(c.db, range(cur));
+  c.db.prepare = prepare;
+  assert.ok(catQueries <= 1, 'запросов к категориям: ' + catQueries);
+});
