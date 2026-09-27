@@ -52,6 +52,12 @@ const ALLOW = {
   "db/pay-visibility.js|canSeeReportKey|'reports.doctor_pay'": { n: 1, why: 'ставки врачей — по группе отчётов reports.doctor_pay (REPORT_GROUP)' },
   // V3120_FIX — деньги сводки видит тот, кто видит группу «Выручка и счета»: то же правило, что у отчётов.
   "services/rpc/dashboard.js|canSeeReportKey|'reports.revenue'": { n: 1, why: 'деньги сводки — по группе отчётов reports.revenue (REPORT_GROUP)' },
+  // V3120_CLEANUP — «CRM: просмотр» закрывает запись заявок. Эти ворота только СУЖАЮТ:
+  // кто пишет в crm_* — решают роли реестра; явный «просмотр» ключа crm или раздел
+  // CRM «viewer» запирают запись. Сами ничего не дают, поэтому в FALLBACK_FN им не
+  // место: там «прежнее правило» (не viewer) засчитало бы право crm и роли без
+  // раздела вовсе — защита «Ролей» решила бы, что она его держит и может выдать.
+  "services/crm/booking-mirror-db.js|grantAllowsOr|'crm'": { n: 1, why: 'canEditCrm: только сужает запись реестра (явный просмотр crm закрывает); ключ crm — раздел, уровень выводит экран' },
   // Сама защита сравнивает уровни — она не ворота.
   'services/role-guard.js|effectiveLevel|key': { n: 2, why: 'защита «Ролей»: сравнение уровней' },
   'services/role-guard.js|grantAllowsOr|key': { n: 1, why: 'защита «Ролей»: gatePasses по спискам карты' },
