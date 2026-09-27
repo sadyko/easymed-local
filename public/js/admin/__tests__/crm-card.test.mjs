@@ -175,6 +175,7 @@ let LINK_HOLD = null;
 // свободных начал и отказом с кодом slot_taken — иначе проверять было бы
 // нечего, а зелёный тест держался бы на заглушке.
 let DOCTORS = [];
+let CONSULTS = [];   // CRM_CALENDAR_MIRROR_V1
 let SLOT_DAY = { slots: [{ start: '09:00', end: '09:30' }, { start: '09:30', end: '10:00' }, { start: '10:00', end: '10:30' }], busy: [] };
 let SLOT_FAIL = false;         // сервер не ответил про расписание
 let ENSURE_PLAN = [];          // ответы ensure_visit по порядку; дальше — успех
@@ -221,6 +222,8 @@ globalThis.fetch = async (url, opts) => {
       return jsonOk(STAFF);
     }
     if (body && body.table === 'services' && body.op === 'select') return jsonOk(SERVICES);
+    // CRM_CALENDAR_MIRROR_V1 — виды приёма: строка консультации в заявке.
+    if (body && body.table === 'consultation_types' && body.op === 'select') return jsonOk(CONSULTS);
     // CRM_LINE_DOCTOR_V1 — список ВРАЧЕЙ строки (.eq('role','doctor')). Он не
     // тот же, что список операторов выше (.in('role', …)), и отдаётся любой роли.
     if (body && body.table === 'users' && body.op === 'select'
@@ -1975,5 +1978,37 @@ test('записанную услугу убрали из карточки — �
   assert.ok(cancel, 'убранная записанная услуга не отменена — она осталась бы в календаре');
   assert.deepStrictEqual(cancel.filters.find((f) => f.col === 'id').val, [902]);
   SERVICES = []; REQ_LINES = []; DOCTORS = [];
+  window.easymed.state.user = null;
+});
+
+// CRM_CALENDAR_MIRROR_V1 (часть 2) — консультация по виду приёма (service_id
+// NULL + consultation_type_id) — такая же строка записи: карточка её
+// показывает, и убрать её можно так же, как услугу.
+test('консультация по виду приёма видна в карточке и снимается по номеру строки', async () => {
+  VISITS = [];
+  SERVICES = [DOC_SVC];
+  DOCTORS = [DOCTOR];
+  CONSULTS = [{ id: 5, name: 'Первичный', name_ru: 'Первичный приём', price: 80000 }];
+  REQ_LINES = [BOOKED_LINE, { id: 903, service_id: null, consultation_type_id: 5, scheduled_date: BOOK_DAY, status: 'pending', doctor_id: 31, visit_id: 555 }];
+  const modal = await openRequest({
+    id: 1, status: 'scheduled', service_id: DOC_SVC.id, scheduled_date: BOOK_DAY,
+    full_name: 'Каримова Азиза', phone: UZ_RAW,
+    patient_id: 7, patients: { id: 7, full_name: 'Каримова Азиза', mrn: 'A-000123' },
+  }, { id: 12, full_name: 'Оператор Ольга', role: 'callcenter' });
+  await tick(80);
+  assert.ok(/Первичный приём/.test(textOf(modal)), 'консультации по виду приёма нет в карточке');
+  const removeBtns = walk(modal).filter((n) => n.tagName === 'BUTTON' && n.attrs && n.attrs.title === 'Убрать услугу');
+  assert.equal(removeBtns.length, 2);
+  removeBtns[1].click();
+  await tick(20);
+  assert.ok(!/Первичный приём/.test(textOf(modal)), 'убранная консультация осталась в карточке');
+  assert.ok(/Приём терапевта/.test(textOf(modal)), 'вместе с консультацией убралась и услуга');
+  CALLS.length = 0;
+  await saveRequest(modal);
+  const cancel = CALLS.find((c) => c.table === 'crm_request_services' && c.op === 'update'
+    && c.values && c.values.status === 'cancelled' && (c.filters || []).some((f) => f.col === 'id' && f.op === 'in'));
+  assert.ok(cancel, 'убранная консультация не отменена');
+  assert.deepStrictEqual(cancel.filters.find((f) => f.col === 'id').val, [903]);
+  SERVICES = []; REQ_LINES = []; DOCTORS = []; CONSULTS = [];
   window.easymed.state.user = null;
 });

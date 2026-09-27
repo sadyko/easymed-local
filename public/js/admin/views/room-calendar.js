@@ -69,6 +69,8 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, initials, avColor, Avatar } from '../ui.js';
 import { tr, trf, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { loadPatientById } from '../data.js';
+// CRM_CALENDAR_MIRROR_V1 — кто правит услуги записи в окне приёма.
+import { hasActorRole } from '../permissions.js';
 // PASTEL_IDENTITY_V1 — оттенок карточки приёма. Выбор оттенка живёт в одном
 // модуле на три доски (календарь, очередь, канбан), чтобы «мятный» везде
 // означал одно и то же.
@@ -347,19 +349,51 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
     // Один запрос пачками по 200 — как у меток заявок ниже. Отказ — не «услуг
     // нет»: карточка остаётся с головной услугой, а полоса «Не загрузилось»
     // называет, чего не хватает.
-    async function loadVisitLines(visitIds, names) {
-        const out = {};
-        const ids = [...new Set((visitIds || []).filter(Boolean))];
+    // Строки записи целиком (state.linesByVisit) — их показывает и правит окно
+    // приёма; консультация по виду приёма (service_id NULL) называется своим
+    // видом приёма.
+    async function consultNames() {
+        if (state.consultTypes) return state.consultTypes;
+        const { data, error } = await supabase.from('consultation_types').select('id, name, name_ru, active');
+        if (error) return {};
+        state.consultTypes = {};
+        state.consultList = [];
+        for (const c of (data || [])) {
+            state.consultTypes[c.id] = c.name_ru || c.name || '—';
+            if (c.active !== false && c.active !== 0) state.consultList.push({ id: c.id, name: c.name_ru || c.name || '—' });
+        }
+        return state.consultTypes;
+    }
+    function lineName(r, names, cnames) {
+        if (r.service_id != null) return names[r.service_id] || null;
+        if (r.consultation_type_id != null) return (cnames || {})[r.consultation_type_id] || null;
+        return null;
+    }
+    async function fetchLines(ids) {
+        const rows = [];
         for (let i = 0; i < ids.length; i += CRM_LINK_CHUNK) {
             const { data, error } = await supabase.from('visit_services')
-                .select('visit_id, service_id').in('visit_id', ids.slice(i, i + CRM_LINK_CHUNK));
-            if (error) { state.failed = [...new Set([...(state.failed || []), tr('услуги')])]; return out; }
-            for (const r of (data || [])) {
-                const n = r.service_id != null ? names[r.service_id] : null;
-                if (!n) continue;
-                if (!out[r.visit_id]) out[r.visit_id] = [];
-                if (!out[r.visit_id].includes(n)) out[r.visit_id].push(n);
-            }
+                .select('id, visit_id, service_id, consultation_type_id, status, invoice_item_id').in('visit_id', ids.slice(i, i + CRM_LINK_CHUNK));
+            if (error) return null;
+            rows.push(...(data || []));
+        }
+        return rows;
+    }
+    async function loadVisitLines(visitIds, names) {
+        const out = {};
+        state.linesByVisit = {};
+        const ids = [...new Set((visitIds || []).filter(Boolean))];
+        if (!ids.length) return out;
+        const rows = await fetchLines(ids);
+        if (!rows) { state.failed = [...new Set([...(state.failed || []), tr('услуги')])]; return out; }
+        const cnames = rows.some((r) => r.service_id == null && r.consultation_type_id != null) ? await consultNames() : {};
+        for (const r of rows) {
+            if (!state.linesByVisit[r.visit_id]) state.linesByVisit[r.visit_id] = [];
+            state.linesByVisit[r.visit_id].push(Object.assign({}, r, { name: lineName(r, names, cnames) || '—' }));
+            const n = lineName(r, names, cnames);
+            if (!n) continue;
+            if (!out[r.visit_id]) out[r.visit_id] = [];
+            if (!out[r.visit_id].includes(n)) out[r.visit_id].push(n);
         }
         return out;
     }
@@ -871,6 +905,76 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             };
         }
 
+        // ═══ CRM_CALENDAR_MIRROR_V1 — УСЛУГИ ЗАПИСИ В ОКНЕ ПРИЁМА ═══════════
+        //
+        // Владелец: заявка и календарь — одна запись, «and the services». До
+        // прихода услуги записи правят колл-центр и регистратура прямо здесь,
+        // узкой дверью сервера (booking_lines_add / booking_line_remove): только
+        // «в смете», без счёта и оплаты, без хирургии, — и те же строки сами
+        // появляются или снимаются в заявке CRM (booking-mirror.js). Строка уже
+        // в счёте или в работе здесь не снимается — это дело кассы.
+        const canEditLines = hasActorRole(['admin', 'registrar', 'callcenter'])
+            && (a.status === 'scheduled' || a.status === 'confirmed');
+        const linesBox = h('div', { 'data-booking-lines': '', style: { display: 'flex', flexDirection: 'column', gap: '4px' } });
+        const svcNameMap = () => { const m = {}; for (const s of (state.servicesList || [])) m[s.id] = s.name; return m; };
+        async function refreshLines() {
+            const rows = await fetchLines([a.id]);
+            if (!rows) return;
+            const cnames = await consultNames();
+            state.linesByVisit[a.id] = rows.map((r) => Object.assign({}, r, { name: lineName(r, svcNameMap(), cnames) || '—' }));
+            paintLines();
+        }
+        function paintLines() {
+            clear(linesBox);
+            const rows = (state.linesByVisit && state.linesByVisit[a.id]) || [];
+            if (!rows.length) linesBox.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Услуг в записи нет.')));
+            for (const r of rows) {
+                const free = r.status === 'added' && r.invoice_item_id == null;
+                linesBox.appendChild(h('div', { class: 'row', 'data-booking-line': String(r.id), style: { gap: '8px', alignItems: 'center', fontSize: '13.5px' } },
+                    h('span', { style: { flex: 1, minWidth: 0, overflowWrap: 'anywhere' } }, r.name),
+                    !free ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('в счёте')) : null,
+                    canEditLines && free ? h('button', {
+                        type: 'button', class: 'btn btn-sm', title: tr('Снять услугу с записи'), 'aria-label': tr('Снять услугу с записи'),
+                        style: { color: 'var(--crit-700, #b91c1c)' },
+                        onclick: async (ev) => {
+                            ev.currentTarget.disabled = true;
+                            const { error } = await supabase.rpc('booking_line_remove', { visit_service_id: r.id });
+                            if (error) { toast(error.message || String(error), 'fail'); ev.currentTarget.disabled = false; return; }
+                            toast(tr('Услуга снята с записи.'), 'ok');
+                            await refreshLines();
+                        },
+                    }, Icon('X', { size: 12 })) : null));
+            }
+        }
+        paintLines();
+        const addSel = h('select', { class: 'rcal-edit', 'data-booking-add': '', style: _ecss },
+            h('option', { value: '' }, tr('— добавить услугу —')),
+            ...(state.servicesList || []).map((s) => h('option', { value: 's:' + s.id }, s.name || '—')));
+        consultNames().then(() => {
+            for (const c of (state.consultList || [])) addSel.appendChild(h('option', { value: 'c:' + c.id }, c.name));
+        });
+        const addBtn = h('button', {
+            type: 'button', class: 'btn btn-sm btn-outline',
+            onclick: async (ev) => {
+                const v = String(addSel.value || '');
+                if (!v) return;
+                ev.currentTarget.disabled = true;
+                const id = Number(v.slice(2));
+                const doctorId = docSel.value ? Number(docSel.value) : (a.doctorId || null);
+                const line = v.startsWith('c:') ? { consultation_type_id: id, doctor_id: doctorId } : { service_id: id, doctor_id: doctorId };
+                const { error } = await supabase.rpc('booking_lines_add', { visit_id: a.id, lines: [line] });
+                ev.currentTarget.disabled = false;
+                if (error) { toast(error.message || String(error), 'fail'); return; }
+                addSel.value = '';
+                toast(tr('Услуга добавлена к записи.'), 'ok');
+                await refreshLines();
+            },
+        }, Icon('Plus', { size: 12 }), ' ', tr('Добавить'));
+        const linesSection = h('div', { style: { padding: '8px 0', borderBottom: '1px solid var(--ink-50)' } },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '4px' } }, tr('Услуги записи')),
+            linesBox,
+            canEditLines ? h('div', { class: 'row', style: { gap: '8px', marginTop: '6px', alignItems: 'center' } }, addSel, addBtn) : null);
+
         const pillsBox = h('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap' } });
         function paintPills() {
             clear(pillsBox);
@@ -915,6 +1019,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 // колл-центре и читают, о чём с человеком договаривались.
                 crmRequestOf(a) ? row(tr('Колл-центр'), trf('Заявка №{n}', { n: crmRequestOf(a) })) : null,
                 editRow(tr('Услуга'), svcSel),
+                linesSection,
                 editRow(tr('Врач'), docSel),
                 a.roomId ? row(tr('Кабинет'), roomName(a.roomId)) : null,
                 editRow(tr('Дата'), dateInp),

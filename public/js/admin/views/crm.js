@@ -1595,7 +1595,12 @@ async function paint() {
             paintPicked();
         }
         function removePicked(id) {
-            picked = picked.filter(p => String(p.service_id) !== String(id));
+            // CRM_CALENDAR_MIRROR_V1 — строка консультации (service_id NULL)
+            // убирается САМА, по ссылке: по service_id она неотличима от другой
+            // консультации и от строки без услуги.
+            picked = (id && typeof id === 'object')
+                ? picked.filter(p => p !== id)
+                : picked.filter(p => String(p.service_id) !== String(id));
             syncPrimary();
             paintPicked();
         }
@@ -1648,7 +1653,7 @@ async function paint() {
                     dateInp,
                     h('button', { type: 'button', title: 'Убрать услугу',
                         style: { border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--crit-500, #ef4444)', fontSize: '17px', lineHeight: 1, padding: '0 2px' },
-                        onclick: () => removePicked(p.service_id) }, '×')));
+                        onclick: () => removePicked(p) }, '×')));
             }
         }
 
@@ -1724,12 +1729,17 @@ async function paint() {
             paintSvcChips();
             // Правка существующей заявки — подтягиваем её строки услуг.
             if (isEdit && r.id) {
+                // CRM_CALENDAR_MIRROR_V1 — виды приёма: строка записи бывает
+                // консультацией (service_id NULL + consultation_type_id, миграция 188).
+                const consultsP = supabase.from('consultation_types').select('id, name, name_ru, price')
+                    .then(({ data }) => data || [], () => []);
                 supabase.from('crm_request_services')
                     // CRM_REAL_BOOKING_V1 — id и visit_id: строка, которая уже
                     // держит слот, переписыванию набора не подлежит (saveLines).
-                    .select('id, service_id, scheduled_date, status, doctor_id, visit_id')
+                    .select('id, service_id, scheduled_date, status, doctor_id, visit_id, consultation_type_id')
                     .eq('request_id', r.id).neq('status', 'cancelled')
-                    .then(({ data: lines, error }) => {
+                    .then(async ({ data: lines, error }) => {
+                        const consults = await consultsP;
                         // CRM_LINKS_V1 — ОТКАЗ ЭТО НЕ «УСЛУГ НЕТ». Пустой список
                         // неотличим от несостоявшегося запроса, а saveLines()
                         // переписывает набор строк ЦЕЛИКОМ: приняв отказ за
@@ -1754,6 +1764,16 @@ async function paint() {
                                 line_id: ln.id || null, visit_id: ln.visit_id || null,
                                 booked_date: ln.scheduled_date || '', booked_doctor_id: ln.doctor_id || null });
                             if (sv && ln.id && ln.visit_id && ln.status === 'pending') bookedLineIds.add(String(ln.id));
+                            // CRM_CALENDAR_MIRROR_V1 — консультация по виду приёма.
+                            if (!sv && ln.service_id == null && ln.consultation_type_id != null) {
+                                const ct = consults.find((c) => String(c.id) === String(ln.consultation_type_id));
+                                picked.push({ service_id: null, consultation_type_id: ln.consultation_type_id,
+                                    name: (ct && (ct.name_ru || ct.name)) || 'Консультация', price: (ct && ct.price) || 0,
+                                    date: ln.scheduled_date || '', doctor_id: ln.doctor_id || null, status: ln.status || 'pending',
+                                    line_id: ln.id || null, visit_id: ln.visit_id || null,
+                                    booked_date: ln.scheduled_date || '', booked_doctor_id: ln.doctor_id || null });
+                                if (ln.id && ln.visit_id && ln.status === 'pending') bookedLineIds.add(String(ln.id));
+                            }
                         }
                         // Заявка до миграции 057 — единственная услуга в родителе.
                         if (!picked.length && svcChosen) {
@@ -2067,6 +2087,7 @@ async function paint() {
                 await supabase.from('crm_request_services').insert(plain.map(p => ({
                     request_id: requestId,
                     service_id: p.service_id,
+                    ...(p.consultation_type_id ? { consultation_type_id: p.consultation_type_id } : {}),   // CRM_CALENDAR_MIRROR_V1
                     scheduled_date: p.date || null,
                     doctor_id: p.doctor_id || null,   // CRM_LINE_DOCTOR_V1
                     status: 'pending',
@@ -2091,7 +2112,7 @@ async function paint() {
         async function reloadLines(requestId) {
             if (!requestId) return;
             const { data, error } = await supabase.from('crm_request_services')
-                .select('id, service_id, scheduled_date, status, doctor_id, visit_id')
+                .select('id, service_id, scheduled_date, status, doctor_id, visit_id, consultation_type_id')
                 .eq('request_id', requestId).neq('status', 'cancelled');
             if (error || !data) return;
             for (const p of picked) {
@@ -2101,7 +2122,8 @@ async function paint() {
                 // Полностью одинаковые строки (та же услуга, тот же день, тот же
                 // врач) этим ключом всё равно не различить — их и в окне нельзя
                 // завести две: addPicked() не пускает одну услугу дважды.
-                const ln = data.find((x) => String(x.service_id) === String(p.service_id)
+                const ln = data.find((x) => String(x.service_id ?? '') === String(p.service_id ?? '')
+                    && String(x.consultation_type_id ?? '') === String(p.consultation_type_id ?? '')
                     && String(x.scheduled_date || '') === String(p.date || '')
                     && String(x.doctor_id || '') === String(p.doctor_id || ''));
                 if (!ln) continue;

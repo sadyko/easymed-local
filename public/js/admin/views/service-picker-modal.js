@@ -3019,25 +3019,28 @@ export function openServicePickerModal({
             // по-прежнему у регистратуры и кассы, поэтому дальше мастера
             // оператор не идёт.
             if (!canAddVisitLines()) {
-                const want = state.added.filter((a) => !a.service.__consult && a.service.id);
+                // Консультация по виду приёма едет своей строкой (service_id NULL
+                // + consultation_type_id) — её цену по ценам врача считает сервер.
+                const want = state.added.filter((a) => a.service && (a.service.__consult || a.service.id));
+                const lineOf = (a) => a.service.__consult
+                    ? { consultation_type_id: a.service.consultation_type_id || a.service.id, doctor_id: a.doctor?.id || a.service.__consultDoctorId || null, scheduled_at: a.startISO || scheduledISO || null }
+                    : { service_id: a.service.id, doctor_id: a.doctor?.id || null, scheduled_at: a.startISO || scheduledISO || null };
                 const res = want.length
-                    ? await supabase.rpc('booking_lines_add', {
-                        visit_id: visit.id,
-                        lines: want.map((a) => ({ service_id: a.service.id, doctor_id: a.doctor?.id || null, scheduled_at: a.startISO || scheduledISO || null })),
-                    })
+                    ? await supabase.rpc('booking_lines_add', { visit_id: visit.id, lines: want.map(lineOf) })
                     : { data: { added: [] } };
                 if (res.error) {
                     // Слот уже стоит — его не отменяем: запись без услуг лучше, чем
                     // потерянное время. Причину говорим словами сервера.
                     toast(trf('Записано, но услуги не добавлены: {msg}', { msg: res.error.message || res.error }), 'fail');
-                } else if (want.length < state.added.length) {
-                    toast(tr('Записано с услугами. Консультации по видам приёма добавит регистратура.'), 'ok');
                 } else {
                     toast(tr('Записано с услугами.'), 'ok');
                 }
                 const added = (res.data && res.data.added) || [];
                 const rows = want.map((a) => {
-                    const vs = added.find((x) => String(x.service_id) === String(a.service.id)) || null;
+                    const l = lineOf(a);
+                    const vs = added.find((x) => (l.service_id != null
+                        ? String(x.service_id) === String(l.service_id)
+                        : String(x.consultation_type_id) === String(l.consultation_type_id))) || null;
                     return { vs, a, unitPrice: vs ? vs.unit_price : 0 };
                 }).filter((r) => r.vs);
                 closePicker();

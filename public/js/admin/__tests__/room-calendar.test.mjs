@@ -1069,3 +1069,45 @@ test('ЗАПИСЬ С НЕСКОЛЬКИМИ УСЛУГАМИ: карточка 
   assert.ok(/Консультация терапевта/.test(textOf(svc)) && /Анализ крови/.test(textOf(svc)),
     'на карточке не все услуги записи: ' + textOf(svc));
 });
+
+// CRM_CALENDAR_MIRROR_V1 (часть 2) — ОКНО ПРИЁМА ПРАВИТ УСЛУГИ ЗАПИСИ. Оператор
+// колл-центра снимает и добавляет услугу прямо в окне записи — настоящими RPC
+// booking_line_remove / booking_lines_add, — и та же правка оказывается в
+// заявке CRM (сервер, booking-mirror.js). Проверяется база, а не вид окна.
+test('ОКНО ПРИЁМА: колл-центр снимает и добавляет услугу записи — заявка CRM следует', async () => {
+  document.body.children.length = 0;
+  const prevRole = USER.role;
+  USER.role = 'callcenter';
+  window.easymed = { state: { user: { id: 1, role: 'callcenter', extra_roles: [] } } };
+  try {
+    const { box } = await render({ crm: true, lines: true });
+    const modal = await openAppt(box);
+    const lineRow = (sid) => {
+      const vs = DB.prepare('SELECT id FROM visit_services WHERE visit_id = 55 AND service_id = ?').get(sid);
+      return vs ? walk(modal).find((n) => n.attrs && n.attrs['data-booking-line'] === String(vs.id)) : null;
+    };
+    const row22 = lineRow(22);
+    assert.ok(row22, 'в окне приёма нет строки услуги записи');
+    const rm = walk(row22).find((n) => n.tagName === 'BUTTON');
+    assert.ok(rm, 'у свободной строки нет кнопки «снять»');
+    rm.click();
+    await flush(20);
+    assert.equal(DB.prepare('SELECT COUNT(*) n FROM visit_services WHERE visit_id = 55 AND service_id = 22').get().n, 0, 'услуга не снята с записи');
+    assert.equal(DB.prepare("SELECT COUNT(*) n FROM crm_request_services WHERE request_id = 77 AND service_id = 22 AND status = 'pending'").get().n, 0,
+      'снятая в календаре услуга осталась ждать в заявке');
+
+    const sel = walk(modal).find((n) => n.attrs && 'data-booking-add' in n.attrs);
+    assert.ok(sel, 'в окне приёма нет выбора услуги для записи');
+    sel.value = 's:22';
+    const add = walk(sel.parentNode || modal).find((n) => n.tagName === 'BUTTON' && /Добавить/.test(textOf(n)));
+    assert.ok(add, 'нет кнопки «Добавить»');
+    add.click();
+    await flush(20);
+    assert.equal(DB.prepare("SELECT COUNT(*) n FROM visit_services WHERE visit_id = 55 AND service_id = 22 AND status = 'added'").get().n, 1, 'услуга не добавлена к записи');
+    assert.equal(DB.prepare("SELECT COUNT(*) n FROM crm_request_services WHERE request_id = 77 AND service_id = 22 AND status = 'pending' AND visit_id = 55").get().n, 1,
+      'добавленная в календаре услуга не появилась в заявке');
+  } finally {
+    USER.role = prevRole;
+    delete window.easymed;
+  }
+});
