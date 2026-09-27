@@ -44,8 +44,8 @@ const READ_ONLY_RPCS = new Set([
   'cashier_invoices', 'cash_shift_summary', 'shift_report', 'cashier_report',
   'callcenter_report', 'queue_board', 'documents_feed', 'accommodation_state',
   'deposit_balance', 'list_deposits', 'service_delete_check', 'get_clinic_by_slug',
-  // PATIENT_AGGREGATES_V1 — числа рядом с фамилиями в картотеке. Чистое чтение,
   'list_card_sales',   // CARD_SALE_V1 — список карт кассы; чтение
+  // PATIENT_AGGREGATES_V1 — числа рядом с фамилиями в картотеке. Чистое чтение,
   // и клиника с просроченной лицензией обязана видеть свою картотеку целиком:
   // список без «визитов» и «баланса» выглядел бы сломанным, а не запертым.
   'patient_base_aggregates',

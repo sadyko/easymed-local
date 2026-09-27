@@ -244,16 +244,16 @@ export const RPC = {
   refund_deposit:            (db, args, user) => refundDeposit(db, args, user),   // DEPOSIT_REFUND_V1
   list_deposits:             (db, args, user) => listDeposits(db, args, user),
   deposit_balance:           (db, args, user) => depositBalance(db, args, user),
-  merge_patients:            (db, args, user) => mergePatientsRpc(db, args, user),   // PATIENT_MERGE_SERVER_V1
-  // QUEUE_BOARD_V1 — читающая сторона тех же номеров: доска «кто у кого
-  // стоит» по назначениям за день. Доступ по выданному разделу 'queue'
-  // (canViewSection), а не по списку ролей: раздел раздаётся в «Настройки →
-  // Роли», как «Чат с пациентами».
   // CARD_SALE_V1 — продажа подарочной карты / сертификата в кассе (приход дня),
   // возврат неизрасходованного остатка, список карт для кассы.
   sell_card:                 (db, args, user) => sellCard(db, args, user),
   refund_card_sale:          (db, args, user) => refundCardSale(db, args, user),
   list_card_sales:           (db, args, user) => listCardSales(db, args, user),
+  merge_patients:            (db, args, user) => mergePatientsRpc(db, args, user),   // PATIENT_MERGE_SERVER_V1
+  // QUEUE_BOARD_V1 — читающая сторона тех же номеров: доска «кто у кого
+  // стоит» по назначениям за день. Доступ по выданному разделу 'queue'
+  // (canViewSection), а не по списку ролей: раздел раздаётся в «Настройки →
+  // Роли», как «Чат с пациентами».
   queue_board:               (db, args, user) => queueBoard(db, args, user),
   // DOCS_FEED_V1 - лента готовых документов по всей клинике: анализы,
   // диагностика и подписанные заключения одним списком с фильтрами.
