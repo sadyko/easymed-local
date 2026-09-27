@@ -18,7 +18,7 @@ import { h, Icon, Tag, PageHead, toast, clear, avColor, initials, fmtDateTime, f
 // CABINET_REDESIGN_V1 — плитка и график те же, что на сводке клиники.
 import { kpiTile, fitViewport } from './dash-kpi.js';
 import { areaChart, legend } from './dash-charts.js';
-import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf, monthName, getLang } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { scopedDoctorId, selfDoctorId, scopedProviderId, grantAllows } from '../permissions.js';   // ADMIN_DOCTOR_V2 / SERVICE_SCOPE_V1
 import { renderDoctorProfile } from './doctor-profile.js?v=btnright1';
 // DOCTOR_DASHBOARD_V1 — кабинет открывается дашбордом, и ДЕНЬГИ ЖИВУТ ТАМ.
@@ -1716,11 +1716,28 @@ function inpatientPayApplies(doc) {
 }
 
 // PAY_PERIOD_CLOSE_V1 — закрытые месяцы периода: их суммы заморожены.
+// V3120_CLEANUP — месяц ГГГГ-ММ словом языка экрана («Avgust 2026» /
+// «August 2026»). По-русски — подпись сервера (label) как есть, как и в
+// отчётах (report-totals.js: русский текст не пересобирается); она же
+// запасная, когда месяца в ответе нет.
+function monthWords(ym, fallback) {
+    if (fallback && getLang() === 'ru') return fallback;
+    const m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(String(ym || ''));
+    return m ? monthName(Number(m[2]) - 1, { standalone: true }) + ' ' + m[1] : (fallback || '');
+}
+// «Корректировка за <месяц>[: услуга]» — тем же шаблоном словаря, что ячейка
+// отчёта «Оплата врачей» (reports.js ADJ_LABEL_T / ADJ_LABEL_SERVICE_T).
+function adjustmentLabel(a) {
+    if (!a.for_month || getLang() === 'ru') return a.label + (a.service ? ': ' + a.service : '');
+    const month = monthWords(a.for_month, a.label);
+    return a.service ? trf('Корректировка за {month}: {service}', { month, service: a.service })
+        : trf('Корректировка за {month}', { month });
+}
 function closedMonthsText() {
     const list = (state.dash.pay && state.dash.pay.closed_months) || [];
     if (!list.length) return '';
     return trf('Месяц закрыт: {months} — суммы заморожены, изменения после закрытия идут корректировками.',
-        { months: list.map((m) => m.label).join(', ') });
+        { months: list.map((m) => monthWords(m.month, m.label)).join(', ') });
 }
 
 // REPORTS_V2 — сколько направлений отправлено, считается по рекомендациям
@@ -2325,7 +2342,7 @@ function openSalaryDetails() {
                     Icon('Lock', { size: 13 }), ' ', closedMonthsText()) : null,
                 // PAY_PERIOD_CLOSE_V1 — строки корректировок: за какой месяц и что изменилось.
                 ...adjustmentRows().map((a) => h('div', { class: 'row pay-adj', style: { gap: '8px', fontSize: '12.5px', marginTop: '4px' } },
-                    h('span', null, a.label + (a.service ? ': ' + a.service : '') + (a.patient ? ' — ' + a.patient : '')),
+                    h('span', null, adjustmentLabel(a) + (a.patient ? ' — ' + a.patient : '')),
                     h('span', { class: 'grow' }),
                     h('span', { class: 'num' }, Math.round(a.fee).toLocaleString('ru-RU') + ' UZS'))),
             ),
