@@ -22,7 +22,8 @@ export function parseCookies(header) {
 export function attachUser(db) {
   return (req, res, next) => {
     req.sessionId = parseCookies(req.headers.cookie)[SESSION_COOKIE] || null;
-    req.user = sessionUser(db, req.sessionId);
+    // V3120_FINAL (I5) — фоновый запрос экрана сессию не продлевает.
+    req.user = sessionUser(db, req.sessionId, { background: req.headers['x-em-background'] === '1' });
     next();
   };
 }

@@ -132,7 +132,13 @@ export function logout(db, sid) {
   if (sid) db.prepare('DELETE FROM sessions WHERE id = ?').run(sid);
 }
 
-export function sessionUser(db, sid) {
+// V3120_FINAL (I5) — { background: true }: запрос, который экран шлёт сам
+// (опрос счётчиков меню, табло очереди, непрочитанные Telegram, телефония,
+// автообновление), — клиент ставит заголовок x-em-background: 1
+// (public/js/shared/user-activity.js). Такой запрос сессию ПРОВЕРЯЕТ, но не
+// ПРОДЛЕВАЕТ: иначе опрос каждые 20 секунд держал её вечно, и правило
+// «SESSION_IDLE_HOURS без работы — выход» не срабатывало никогда.
+export function sessionUser(db, sid, { background = false } = {}) {
   if (!sid) return null;
   const row = db.prepare(
     // CUSTOM_ROLES_V1 — код своей роли едет вместе с ролью: по нему экран
@@ -142,10 +148,18 @@ export function sessionUser(db, sid) {
     // Принадлежность к отделу — ФАКТ о человеке, а не право, и спросить её
     // экрану больше негде: users читается только через /api/db, а роль без
     // прав на справочник сотрудников туда не ходит.
-    'SELECT u.id, u.username, u.full_name, u.role, u.extra_roles, u.custom_role_code, u.department_id, u.is_active, u.must_change_password, s.expires_at AS session_expires_at, COALESCE(s.last_seen_at, s.created_at) AS session_seen_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?'
+    'SELECT u.id, u.username, u.full_name, u.role, u.extra_roles, u.custom_role_code, u.department_id, u.is_active, u.must_change_password, s.expires_at AS session_expires_at, s.last_seen_at AS session_seen_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?'
   ).get(sid);
   if (!row) return null;
   const now = Date.now();
+  // V3120_FINAL (I5) — пустая отметка (сессия открыта до обновления, когда
+  // колонки ещё не было) — это «сейчас», а не «с момента входа»: иначе каждый,
+  // кто вошёл больше SESSION_IDLE_HOURS назад, вылетал на первом же запросе
+  // после обновления. Отметка ставится и фоновым запросом — дальше обычное правило.
+  if (!row.session_seen_at) {
+    try { db.prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ? AND last_seen_at IS NULL').run(isoSeconds(now), sid); } catch { /* не повод отказать */ }
+    row.session_seen_at = isoSeconds(now);
+  }
   // V3120_FIX (M10) — и 12 часов от входа, и простой дольше SESSION_IDLE_HOURS.
   const idle = SESSION_IDLE_HOURS > 0 && row.session_seen_at
     && row.session_seen_at <= isoSeconds(now - SESSION_IDLE_HOURS * 3600 * 1000);
@@ -153,7 +167,7 @@ export function sessionUser(db, sid) {
     logout(db, sid);
     return null;
   }
-  if (!row.session_seen_at || row.session_seen_at <= isoSeconds(now - TOUCH_EVERY_MS)) {
+  if (!background && row.session_seen_at <= isoSeconds(now - TOUCH_EVERY_MS)) {
     try { db.prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ?').run(isoSeconds(now), sid); } catch { /* отметка — не повод отказать */ }
   }
   return publicUser(row);
