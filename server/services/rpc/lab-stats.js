@@ -40,7 +40,7 @@
 
 import { hasAnyRole } from '../roles.js';
 import { LAB_SECTION_ROLES } from '../../db/schema-registry.js';
-import { inLocalRange, today } from '../domain/day.js';
+import { localRangeWhere, today } from '../domain/day.js';
 // Pure browser-shared module (no DOM) — same cross-import precedent as
 // reports.js taking formatMethods from public/js/shared/payment-methods.js.
 import { LAB_NAME_RE } from '../../../public/js/admin/views/lab-service.js';
@@ -90,8 +90,14 @@ export function labUsageStats(db, args, user) {
 
   // Period filter on the ORDER date (visit_services.created_at, local day —
   // CLINIC_DAY_V1). from/to are bound only when the window is bounded.
-  const range = from == null ? '1=1' : inLocalRange('vs.created_at');
-  const rangeParams = from == null ? [] : [from, to];
+  //
+  // V3120_PERF — localRangeWhere, not inLocalRange: the same rows (a coarse
+  // range on the raw column that the created_at index can serve, plus the
+  // exact local-date test), but «сегодня» no longer reads every order the
+  // clinic ever took (1.5 s on a three-year clinic).
+  const r = from == null ? { sql: '1=1', params: [] } : localRangeWhere('vs.created_at', from, to);
+  const range = r.sql;
+  const rangeParams = r.params;
 
   // Граница лаборатории — та же, что у очереди: настройка клиники, а не
   // константа и не «как получилось».
@@ -121,9 +127,14 @@ export function labUsageStats(db, args, user) {
            s.name           AS service_name,
            COUNT(vs.id)     AS ordered,
            SUM(CASE WHEN vs.status = 'completed' THEN 1 ELSE 0 END) AS completed
-      FROM pmap
+      -- V3120_PERF — the orders drive (CROSS JOIN fixes the order): one pass
+      -- over the period's visit_services, each row looked up in the small
+      -- pmap. Driven the other way round, SQLite built a throw-away index
+      -- over ALL visit_services on every call (1.4 s of «всё время»). Inner
+      -- joins, so the row set is the same either way.
+      FROM visit_services vs
+      CROSS JOIN pmap ON pmap.service_id = vs.service_id
       JOIN lab_panels lp ON lp.id = pmap.panel_id
-      JOIN visit_services vs ON vs.service_id = pmap.service_id
       LEFT JOIN services s ON s.id = pmap.service_id
      WHERE ${range}${scopeSql}
      GROUP BY lp.id

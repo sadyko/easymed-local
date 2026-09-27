@@ -4,13 +4,17 @@
 // КАЖДЫЙ раз, а не хранится числом рядом: число рядом с журналом расходится с
 // ним на первой же ошибке, а журнал — это и есть объяснение числа.
 //
-//   received  (+amount)                   — принятый депозит, зачисление, кэшбэк;
+//   received  (+amount − refund_amount)   — принятый депозит, зачисление, кэшбэк
+//                                           (V3120_FIX: депозит, часть которого
+//                                           вернули, остаётся «принят»);
 //   refunded  (+amount − refund_amount)   — депозит, частично выданный назад;
 //   spent     (−amount)                   — оплата счёта с баланса.
 //
 // Списание и зачисление вызываются ТОЛЬКО внутри транзакции вызывающего
 // (record_payment / record_payment_split / refund_payment): платёж и строка
 // журнала либо появляются обе, либо ни одной.
+
+import { withTemplate } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 
 export class WalletError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -37,7 +41,7 @@ export function withLedgerToken(db, fn) {
 export function walletRaw(db, patientId) {
   const r = db.prepare(`
     SELECT COALESCE(SUM(CASE
-             WHEN status = 'received' THEN amount
+             WHEN status = 'received' THEN amount - COALESCE(refund_amount, 0)
              WHEN status = 'refunded' THEN amount - COALESCE(refund_amount, 0)
              WHEN status = 'spent'    THEN -amount
              ELSE 0 END), 0) AS b
@@ -72,7 +76,7 @@ export function walletDebt(db, patientId) {
 export function walletBalance(db, patientId) {
   const r = db.prepare(`
     SELECT COALESCE(SUM(CASE
-             WHEN status = 'received' THEN amount
+             WHEN status = 'received' THEN amount - COALESCE(refund_amount, 0)
              WHEN status = 'refunded' THEN amount - COALESCE(refund_amount, 0)
              WHEN status = 'spent'    THEN -amount
              ELSE 0 END), 0) AS b
@@ -138,30 +142,64 @@ export function spendWallet(db, { patientId, invoice, paymentId, amount, user })
   if (refusal) throw new WalletError(refusal);
   const balance = walletBalance(db, patientId);
   if (amount > balance) {
-    throw new WalletError(`На балансе пациента только ${balance} — списать ${amount} нельзя.`);
+    throw withTemplate(new WalletError(''), 'На балансе пациента только {have} — списать {amount} нельзя.', { have: balance, amount });
   }
+  // V3120_FIX (владелец) — сколько из этой траты — «новые деньги» (миграция 195).
+  const newMoney = round2(Math.max(0, Math.min(amount, newMoneyPool(db, patientId), realMoney(db, patientId))));
   withLedgerToken(db, () => db.prepare(`
     INSERT INTO patient_deposits
       (patient_id, branch_id, amount, method, status, kind, invoice_id, payment_id, notes,
-       created_by, created_by_name, closed_at)
-    VALUES (?, ?, ?, 'wallet', 'spent', 'spend', ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+       created_by, created_by_name, closed_at, new_money)
+    VALUES (?, ?, ?, 'wallet', 'spent', 'spend', ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?)
   `).run(patientId, invoice.branch_id || null, amount, invoice.id, paymentId,
     'Оплата счёта ' + (invoice.invoice_number || ('#' + invoice.id)) + ' с баланса',
-    user.id, actorName(user)));
+    user.id, actorName(user), newMoney));
   return round2(balance - amount);
+}
+
+// V3120_FIX (владелец, 27.09) — «НОВЫЕ ДЕНЬГИ» НА БАЛАНСЕ (миграция 195).
+//
+// Кэшбэк начисляется только с новых денег (rpc/cashback.js). Деньги,
+// возвращённые НА БАЛАНС с настоящей оплаты («не мой пациент»), — это те же
+// новые деньги пациента: кэшбэк за них откатился вместе с возвратом, и
+// потраченные с баланса на другую услугу они снова дают кэшбэк. Запас — сумма
+// new_money зачислений минус сумма new_money трат; траты берут из него первыми,
+// но не больше настоящих денег пациента (кэшбэк и депозит новыми не становятся).
+export function newMoneyPool(db, patientId) {
+  const r = db.prepare(`SELECT COALESCE(SUM(CASE WHEN kind = 'credit' THEN COALESCE(new_money, 0)
+                                                  WHEN kind = 'spend'  THEN -COALESCE(new_money, 0) ELSE 0 END), 0) s
+                          FROM patient_deposits WHERE patient_id = ? AND kind IN ('credit', 'spend')`).get(patientId);
+  return round2(Math.max(0, Number(r.s) || 0));
+}
+
+// Приходные способы (shared/payment-methods.js: всё, кроме баланса и карты).
+const NEW_MONEY_METHODS = ['cash', 'card', 'transfer', 'acquiring'];
+
+// Новые деньги зачисления: возврат настоящей оплаты — вся сумма; возврат
+// оплаты с баланса — не больше новых денег той траты, ещё не вернувшихся.
+function creditNewMoney(db, paymentId, amount) {
+  const p = paymentId ? db.prepare('SELECT id, method FROM payments WHERE id = ?').get(paymentId) : null;
+  if (!p) return 0;
+  if (p.method === 'wallet') {
+    const spent = db.prepare("SELECT COALESCE(SUM(COALESCE(new_money, 0)), 0) s FROM patient_deposits WHERE kind = 'spend' AND payment_id = ?").get(p.id).s;
+    const back = db.prepare("SELECT COALESCE(SUM(COALESCE(new_money, 0)), 0) s FROM patient_deposits WHERE kind = 'credit' AND payment_id = ?").get(p.id).s;
+    return round2(Math.max(0, Math.min(amount, Number(spent) - Number(back))));
+  }
+  return NEW_MONEY_METHODS.includes(p.method) ? round2(amount) : 0;
 }
 
 // Зачисление на баланс при возврате платежа. paymentId — ВОЗВРАЩЁННЫЙ платёж
 // (не строка возврата): по нему видно, откуда пришли деньги.
 export function creditWallet(db, { patientId, invoice, paymentId, amount, reason, user }) {
   if (!patientId) throw new WalletError('У счёта нет пациента — зачислить на баланс некому.');
+  const newMoney = creditNewMoney(db, paymentId, amount);   // V3120_FIX (владелец)
   withLedgerToken(db, () => db.prepare(`
     INSERT INTO patient_deposits
       (patient_id, branch_id, amount, method, status, kind, invoice_id, payment_id, reason, notes,
-       created_by, created_by_name, received_by, received_by_name, received_at)
-    VALUES (?, ?, ?, 'wallet', 'received', 'credit', ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+       created_by, created_by_name, received_by, received_by_name, received_at, new_money)
+    VALUES (?, ?, ?, 'wallet', 'received', 'credit', ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?)
   `).run(patientId, invoice.branch_id || null, amount, invoice.id, paymentId, reason || null,
     'Возврат по счёту ' + (invoice.invoice_number || ('#' + invoice.id)) + ' зачислен на баланс',
-    user.id, actorName(user), user.id, actorName(user)));
+    user.id, actorName(user), user.id, actorName(user), newMoney));
   return walletBalance(db, patientId);
 }

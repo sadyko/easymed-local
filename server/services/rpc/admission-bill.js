@@ -13,19 +13,22 @@
 //
 // Нечего выставлять — счёта нет (null), и это не ошибка: пациент, лежавший
 // бесплатно, выписывается без бумаги о нуле.
-import { computeAccommodation, billAccommodation } from './accommodation.js';
+import { computeAccommodation, billAccommodationCore } from './accommodation.js';
 import { buildAdmissionInvoice } from './billing.js';
+import { notRefundReleasedSql } from '../domain/pay-releases.js';   // V3120_FINAL
 
 export function generateAdmissionBill(db, admissionId, user) {
   const adm = db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId);
   if (!adm) return null;
   let accommodationUnits = 0;
   try {
+    // V3120_FINAL (I4) — проживание приводится к сроку ВСЕГДА, а не только
+    // когда есть новые сутки: открытая строка, внесённая до того, как срок
+    // сократился (дату поступления сдвинули позже), иначе ушла бы в этот счёт
+    // устаревшей. Ядро само снимает её, когда вносить нечего.
     const c = computeAccommodation(db, adm);
-    if (c && c.units > 0) {
-      billAccommodation(db, { admission_id: admissionId }, user);
-      accommodationUnits = c.units;
-    }
+    const r = billAccommodationCore(db, admissionId, { quiet: true });
+    if (r && r.line && c && c.units > 0) accommodationUnits = c.units;
   } catch (e) {
     // Без палаты или тарифа проживание не считается — счёт собирается из услуг.
     accommodationUnits = 0;
@@ -33,6 +36,7 @@ export function generateAdmissionBill(db, admissionId, user) {
   const ids = db.prepare(`
     SELECT id FROM admission_services
      WHERE admission_id = ? AND invoice_item_id IS NULL AND billable = 1
+       AND ${notRefundReleasedSql('admission_services')}   -- V3120_FINAL: возвращённое не выставляется само
      ORDER BY id`).all(admissionId).map((r) => r.id);
   if (!ids.length) return null;
   const { invoice, items } = buildAdmissionInvoice(db, admissionId, ids, user);

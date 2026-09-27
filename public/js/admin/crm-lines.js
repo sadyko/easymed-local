@@ -65,15 +65,38 @@ export async function pendingCrmLines(patientId, dayIso, visitId = null) {
     if (!reqs || !reqs.length) return [];
 
     const { data: lines, error: lineErr } = await supabase.from('crm_request_services')
-        .select('id, request_id, service_id, scheduled_date, status, doctor_id, visit_id')
+        .select('id, request_id, service_id, consultation_type_id, scheduled_date, status, doctor_id, visit_id')
         .in('request_id', reqs.map((r) => r.id))
         .eq('scheduled_date', day)
         .eq('status', 'pending');
     if (lineErr) throw fail('lines', lineErr.message || lineErr);
-    const all = lines || [];
+    const all = dedupeCrmLines(lines || [], visitId);
     if (!visitId) return all;
     const mine = all.filter((l) => String(l.visit_id || '') === String(visitId));
     return mine.length ? mine : all;
+}
+
+/**
+ * V3120_FIX — ОДНА УСЛУГА — ОДНА СТРОКА В СМЕТЕ. Две карточки одного человека
+ * (оператор не заметил первую) дают две ждущие строки «консультация у Иванова
+ * на этот день», и мастер подставлял в смету обе — двойной счёт. Ключ — услуга
+ * и врач (как у зеркала записи, booking-mirror.js matchKey). Из одинаковых
+ * остаётся строка ЭТОГО визита, иначе самая ранняя.
+ */
+function dedupeCrmLines(lines, visitId = null) {
+    const byKey = new Map();
+    const mine = (x) => visitId != null && String(x.visit_id || '') === String(visitId);
+    for (const l of lines || []) {
+        // V3120_FINAL — консультация по виду приёма (service_id NULL, миграция
+        // 188) — такая же услуга: две карточки «приём у Иванова» давали две строки.
+        const svcKey = l.service_id != null ? 's:' + l.service_id
+            : (l.consultation_type_id != null ? 'c:' + l.consultation_type_id : null);
+        if (svcKey == null) { byKey.set('#' + l.id, l); continue; }   // без услуги сравнивать нечего
+        const k = svcKey + '|d:' + (l.doctor_id || '');
+        const had = byKey.get(k);
+        if (!had || (mine(l) && !mine(had))) byKey.set(k, l);
+    }
+    return [...byKey.values()];
 }
 
 // ЗДЕСЬ БЫЛА closeCrmLinesForPatient(patientId, dayIso) — «закрыть все

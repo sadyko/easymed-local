@@ -87,28 +87,34 @@ test('нельзя поставить дату позже выписки', () =>
   // Выписку отодвигаем в прошлое, иначе «позже выписки» окажется ещё и в
   // будущем, и сработает другая проверка — тест перестал бы проверять эту.
   db.prepare("UPDATE admissions SET discharged_at = datetime('now','-2 days') WHERE id=?").run(adm.id);
-  assert.throws(() => setAdmissionDate(db, { admission_id: adm.id, admitted_at: iso(1) }, NURSE), /выписк|discharge/i);
+  // V3120_FINAL — дату выписанного правит только администратор; и ему позже
+  // выписки поставить нельзя.
+  const ADMIN = { id: 1, role: 'admin', full_name: 'Админ' };
+  assert.throws(() => setAdmissionDate(db, { admission_id: adm.id, admitted_at: iso(1) }, NURSE), /только администратор/);
+  assert.throws(() => setAdmissionDate(db, { admission_id: adm.id, admitted_at: iso(1) }, ADMIN), /выписк|discharge/i);
   db.close();
 });
 
 test('роли: лаборант дату не правит', () => {
   const { db, adm } = seed();
-  assert.throws(() => setAdmissionDate(db, { admission_id: adm.id, admitted_at: iso(1) }, LAB), /not allowed/);
+  assert.throws(() => setAdmissionDate(db, { admission_id: adm.id, admitted_at: iso(1) }, LAB), /недоступно/);
   db.close();
 });
 
-// Внесённое проживание считалось от СТАРОЙ даты. После правки карточка обязана
-// показать, что снимок устарел, — иначе клиника молча недосчитается денег.
-test('после правки внесённое проживание помечается устаревшим', () => {
+// Внесённое проживание считалось от СТАРОЙ даты. Прежде карточка показывала,
+// что снимок устарел; V3120_FINAL (I4) — правка даты сама приводит ОТКРЫТУЮ
+// строку к новому сроку (в обе стороны), и устаревшей она не остаётся.
+test('после правки внесённое (невыставленное) проживание следует за новым сроком', () => {
   const { db, adm } = seed();
   db.prepare("UPDATE admissions SET admitted_at = datetime('now','-1 days') WHERE id=?").run(adm.id);
-  billAccommodation(db, { admission_id: adm.id }, NURSE);
+  const before = billAccommodation(db, { admission_id: adm.id }, NURSE).line.total;
   assert.equal(accommodationState(db, { admission_id: adm.id }, NURSE).stale, false);
 
   setAdmissionDate(db, { admission_id: adm.id, admitted_at: iso(5) }, NURSE);
 
   const st = accommodationState(db, { admission_id: adm.id }, NURSE);
-  assert.equal(st.stale, true, 'срок вырос — снимок устарел');
-  assert.ok(st.current.net > st.billed.total);
+  assert.equal(st.stale, false, 'строка пересчитана в той же правке');
+  assert.equal(st.billed.total, st.current.net);
+  assert.ok(st.billed.total > before, 'срок вырос — строка выросла');
   db.close();
 });

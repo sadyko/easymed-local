@@ -13,6 +13,24 @@ const npErr = document.getElementById('newpass-error');
 // people there after login left them on a dead end with no route into the app.
 const APP_HOME = '/admin.html';
 
+// V3120_FIX — страница входа по-русски. Сервер отвечал на вход английскими
+// фразами; переводим известные здесь, а незнакомую показываем как есть.
+// V3120_I18N — теперь server/routes/auth.js отвечает этими же русскими
+// фразами сам; английские ключи остаются на случай старого сервера.
+const SERVER_MSG_RU = {
+  'Wrong username or password.': 'Неверный логин или пароль.',
+  'Too many attempts. Try again in a few minutes.': 'Слишком много попыток. Попробуйте через несколько минут.',
+  'Current password is wrong.': 'Текущий пароль неверен.',
+  'Password must not be empty (max 72 bytes).': 'Пароль не может быть пустым (не длиннее 72 байт).',
+  'This account is managed by the main clinic. Change the password there — it is the same login in every building.':
+    'Эта учётная запись ведётся в главной клинике. Смените пароль там — логин один во всех зданиях.',
+  'Login required.': 'Нужно войти в систему.',
+};
+export function loginMessageRu(msg) {
+  const m = String(msg == null ? '' : msg);
+  return Object.prototype.hasOwnProperty.call(SERVER_MSG_RU, m) ? SERVER_MSG_RU[m] : m;
+}
+
 // The password the user just signed in with, held only until the forced change
 // completes — /auth/change-password re-verifies it (walked-away-PC rule), and
 // asking the user to retype the password they typed ten seconds ago is noise.
@@ -52,7 +70,7 @@ form.addEventListener('submit', async (e) => {
     }
     location.href = APP_HOME;
   } catch (ex) {
-    err.textContent = ex.message;
+    err.textContent = loginMessageRu(ex.message);
   } finally {
     btn.disabled = false;
   }
@@ -64,7 +82,7 @@ npForm.addEventListener('submit', async (e) => {
   const pw1 = npForm.new_password.value;
   const pw2 = npForm.new_password2.value;
   if (pw1 !== pw2) {
-    npErr.textContent = 'Passwords do not match.';
+    npErr.textContent = 'Пароли не совпадают.';   // V3120_FIX — страница входа по-русски
     return;
   }
   if (currentPassword === null) {
@@ -72,7 +90,7 @@ npForm.addEventListener('submit', async (e) => {
     // endpoint needs the current password, so route through the login form.
     npForm.hidden = true;
     form.hidden = false;
-    err.textContent = 'Please sign in first.';
+    err.textContent = 'Сначала войдите в систему.';
     return;
   }
   const btn = npForm.querySelector('button');
@@ -85,7 +103,7 @@ npForm.addEventListener('submit', async (e) => {
     currentPassword = null;
     location.href = APP_HOME;
   } catch (ex) {
-    npErr.textContent = ex.message;
+    npErr.textContent = loginMessageRu(ex.message);
   } finally {
     btn.disabled = false;
   }

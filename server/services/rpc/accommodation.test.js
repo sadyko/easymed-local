@@ -126,7 +126,7 @@ test('строку, попавшую в счёт, убрать отсюда не
 
 test('роли: кто ведёт стационар — вносит; лаборант — нет', () => {
   const { db, adm } = seed();
-  assert.throws(() => billAccommodation(db, { admission_id: adm.id }, LAB), /not allowed/);
+  assert.throws(() => billAccommodation(db, { admission_id: adm.id }, LAB), /недоступно/);
   db.close();
 });
 

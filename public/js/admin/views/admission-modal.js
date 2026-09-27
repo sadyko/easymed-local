@@ -58,6 +58,7 @@ import { h, Icon, Tag, toast, clear, field, fmtDate, fmtDateTime } from '../ui.j
 import { inpatientModal, patientAnchor } from './inpatient-modal.js';   // TITLE_SHEET_V1 — вынесено, чтобы не было кольца
 import { openAdmissionTitleSheetModal } from './title-sheet.js';   // TITLE_SHEET_V1 — шаг 2 размещения
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { isRouteAllowed } from '../permissions.js';   // V3120_CLEANUP — переходы только в открытые экраны
 import { moneyDisplay } from '../../shared/money-input.js';   // CASE_OVERVIEW_V1 — сумма счёта в подтверждении выписки
 // BED_BOARD_SHARED_V1 — окно выбора койки рисует ДОСКУ КОЕК, а не свой список.
 // Адрес модуля с тем же '?v=', что у admin.js и views/admissions.js: разошедшийся
@@ -68,7 +69,7 @@ import { loadBedFund, bedBoardEl, wardPillsEl } from './ward-beds.js?v=board4';
 // заявку) и показывают ТАМ (очередь оформления). Список и подписи берутся из
 // экрана очереди, а не заводятся вторые: разойдись они, один экран называл бы
 // исход словом, которого другой не знает.
-import { DISCHARGE_OUTCOMES, outcomeTitle } from './discharge.js';
+import { DISCHARGE_OUTCOMES, outcomeTitle, localToUtcIso } from './discharge.js';   // V3120_FIX — местное время поля → UTC
 // DIET_TABLES_V1 — словарь питания берётся у порционника, а не заводится второй
 // раз здесь: «Стол не назначен» в карте и «Стол не назначен» на кухне обязаны
 // быть одной строкой, иначе они разъедутся в переводе, а потом и по смыслу.
@@ -97,6 +98,14 @@ const modal = inpatientModal;
 // (window.easymed.navigate), а не через location.hash: голый хеш этот экран не
 // маршрутизирует (слушателя hashchange нет, историю ведёт navigate()), и
 // ссылка молча открывала бы прежнюю вкладку.
+// V3120_CLEANUP — кнопка или строка ведут в экран, только если этот экран
+// откроется: регистратура и своя роль видят раздел «Стационар», но обзор,
+// историю болезни и лист назначений сервер им не отдаёт (permissions.js,
+// canReadCaseFile / INPATIENT_SCREEN_ROLES) — строка вела в «Нет доступа».
+export function canOpenCaseOverview() { return isRouteAllowed('case-overview'); }
+export function canOpenMarSheet() { return isRouteAllowed('mar-sheet'); }
+export function canOpenCaseFile() { return isRouteAllowed('case-file'); }
+
 export function goToMarSheet(admissionId, onNavigate) {
     const nav = onNavigate || (typeof window !== 'undefined' && window.easymed && window.easymed.navigate);
     if (!nav) return false;
@@ -249,7 +258,9 @@ export function openAdmissionOrderModal({ patientId = null, patientName = '', pa
             // <input type="datetime-local"> отдаёт «2026-09-05T08:00» без зоны;
             // сервер хранит строкой, поэтому секунды и Z дописываются здесь, а
             // не оставляются на догадку каждому, кто эту строку прочитает.
-            planned_at: whenInp.value ? whenInp.value + ':00Z' : null,
+            // V3120_FIX — поле отдаёт МЕСТНОЕ время; «+ ':00Z'» выдавало его за
+            // UTC и сдвигало план на часовой пояс (10:00 становились 15:00).
+            planned_at: localToUtcIso(whenInp.value),
             note: noteInp.value.trim(),
             // INPATIENT_BONUS_V1 — список не загрузился: поле не шлём, сервер
             // подставит значение по умолчанию сам.
@@ -519,7 +530,7 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
         // CASE_WORKSPACE_V1 — оформление истории болезни это работа на полчаса
         // с десятком бумаг, и делают её на рабочем экране, а не в окне поверх
         // окна. Карточка остаётся местом, откуда туда заходят.
-        body.appendChild(h('button', {
+        if (canOpenCaseFile()) body.appendChild(h('button', {
             class: 'btn btn-outline btn-sm', type: 'button', style: { marginTop: '10px' },
             onclick: () => { close(); goToCaseFile(a.id, onNavigate); },
         }, Icon('Doc', { size: 13 }), ' ', tr('Открыть историю болезни')));
@@ -550,7 +561,7 @@ export function openAdmissionCard({ admissionId, onChange, onNavigate = null } =
         // это первое, куда идут из карточки. Кнопка появляется ровно с того
         // состояния, с которого сервер вообще принимает назначения ('active';
         // 'discharging' — тот же пациент, лечение ещё идёт).
-        if (a.status === 'active' || a.status === 'discharging') {
+        if ((a.status === 'active' || a.status === 'discharging') && canOpenMarSheet()) {
             actions.appendChild(h('button', {
                 class: 'btn btn-primary btn-sm', type: 'button',
                 onclick: () => { close(); goToMarSheet(a.id, onNavigate); },
@@ -1554,9 +1565,10 @@ export function openAdmissionDischargeRequestModal({ admission, onDone, generate
             outcome: outcomeSel.value,
             destination: destInp.value.trim(),
             recommendations: recInp.value.trim(),
-            // <input type="datetime-local"> отдаёт «2026-09-05T14:00» без зоны —
-            // секунды и Z дописываются здесь, как в заявке на госпитализацию.
-            planned_discharge_at: whenInp.value ? whenInp.value + ':00Z' : null,
+            // <input type="datetime-local"> отдаёт МЕСТНОЕ «2026-09-05T14:00».
+            // V3120_FIX — раньше сюда дописывали ':00Z', то есть местное время
+            // выдавалось за UTC; теперь честный перевод в UTC (как у выписки).
+            planned_discharge_at: localToUtcIso(whenInp.value),
         });
         if (error) {
             const msg = (error && error.message) || tr('Не удалось подать заявку на выписку.');

@@ -35,6 +35,7 @@ import { ensureOpenShift } from './cashier.js';
 import { branchLetter, assertOwnBuilding } from './billing.js';
 import { CARD_KINDS } from '../domain/cards.js';
 import { today as localToday } from '../domain/day.js';
+import { idemReplay, idemRemember } from '../domain/money.js';   // V3120_FIX — ключ повтора
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -51,7 +52,7 @@ const isPositiveInt = (v) => Number.isInteger(v) && v > 0;
 const isYmd = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
 
 function requireRole(user, allowed) {
-  if (!hasAnyRole(user, allowed)) throw new RpcError('Your role is not allowed to perform this action.', 403);
+  if (!hasAnyRole(user, allowed)) throw new RpcError('Вашей роли это действие недоступно.', 403);
 }
 function actorName(user) { return String((user && (user.full_name || user.username)) || ''); }
 
@@ -69,6 +70,7 @@ export function nextCardSaleNumber(db) {
 
 export function sellCard(db, args, user) {
   requireRole(user, SALE_ROLES);
+  { const seen = idemReplay(db, 'sell_card', args); if (seen) return seen; }   // V3120_FIX — повтор той же формы
   const a = args || {};
   const kind = a.kind === undefined || a.kind === null ? 'gift_card' : a.kind;
   if (!CARD_KINDS.includes(kind)) throw new RpcError('Вид карты: подарочная карта или сертификат.', 400);
@@ -115,10 +117,10 @@ export function sellCard(db, args, user) {
       VALUES (?, ?, 0, ?, 1, ?, ?, ?, ?, ?)`)
       .run(name || (KIND_RU[kind] + ' ' + number), kind, face, validFrom, validUntil,
         note || ('Продана в кассе: ' + actorName(user)), invoiceId, number).lastInsertRowid;
-    return {
+    return idemRemember(db, 'sell_card', a, user, {
       card: db.prepare('SELECT * FROM patient_discounts WHERE id = ?').get(cardId),
       invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId),
-    };
+    });
   });
   return run.immediate();
 }

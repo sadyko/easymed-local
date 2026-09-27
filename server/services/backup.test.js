@@ -1,4 +1,4 @@
-import { tmpDir } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
+import { tmpDir, closeOnExit, closeRegistered } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 import { test } from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs';
@@ -14,10 +14,13 @@ import {
 // SYSTEM_SETTINGS_V1 — everything here runs against a throwaway temp dir,
 // mirroring db/backup.test.js: this suite must never look at the real data/
 // folder, where a dev server may be holding easymed.db open right now.
+// V3120_FIX — базы закрываются по окончании файла, чтобы папки удалялись.
+test.after(closeRegistered);
+
 function workspace() {
   const dir = tmpDir('em-sysbk-');
   const dbPath = path.join(dir, 'easymed.db');
-  const db = openDb(dbPath);
+  const db = closeOnExit(openDb(dbPath));   // V3120_FIX — открытая база не даёт Windows удалить папку
   migrate(db);
   db.prepare("INSERT INTO users (username, password_hash, full_name, role) VALUES ('a','x','A','admin')").run();
   return { dir, dbPath, db };
@@ -25,7 +28,10 @@ function workspace() {
 
 const backupsDir = (dir) => path.join(dir, 'backups');
 const marker = (dir) => path.join(dir, 'pending-action.json');
-const userCount = (file) => openDb(file).prepare('SELECT COUNT(*) n FROM users').get().n;
+const userCount = (file) => {
+  const db = openDb(file);
+  try { return db.prepare('SELECT COUNT(*) n FROM users').get().n; } finally { db.close(); }
+};
 
 // --- createBackup -----------------------------------------------------------
 

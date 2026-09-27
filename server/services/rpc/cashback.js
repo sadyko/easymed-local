@@ -18,6 +18,8 @@
 //   • база — новые деньги: платежи способами, которые считаются приходом
 //     (shared/payment-methods.js, без баланса и карты), каждый — за вычетом
 //     своих возвратов (REFUND#id, любым способом), не больше суммы счёта;
+//     V3120_FIX (владелец) — плюс оплата с баланса деньгами, вернувшимися на
+//     баланс с настоящей оплаты (new_money, миграция 195);
 //   • правило — действующее с наибольшим процентом (решение владельца,
 //     см. план); процент 0..100 охраняет база (мигр. 160);
 //   • CASHBACK_BY_GROUP_V1 (владелец, 2026-09-27) — правило выбирается по
@@ -42,6 +44,18 @@ export function cashbackBase(db, invoice) {
   for (const p of pays) {
     const tag = 'REFUND#' + p.id;
     base += Math.max(0, Number(p.amount) - Number(refundedOf.get(tag, tag + ' %').s || 0));
+  }
+  // V3120_FIX (владелец, 27.09) — оплата с баланса в пределах её «новых денег»
+  // (new_money строки списания: деньги, вернувшиеся на баланс с настоящей
+  // оплаты, domain/wallet.js newMoneyPool). Депозит и кэшбэк новыми не считаются.
+  const walletPays = db.prepare(`SELECT p.id, p.amount, COALESCE((SELECT SUM(COALESCE(d.new_money, 0)) FROM patient_deposits d
+                                                                  WHERE d.kind = 'spend' AND d.payment_id = p.id), 0) AS fresh
+                                   FROM payments p WHERE p.invoice_id = ? AND p.amount > 0 AND p.method = 'wallet'`).all(invoice.id);
+  for (const p of walletPays) {
+    if (!(Number(p.fresh) > 0)) continue;
+    const tag = 'REFUND#' + p.id;
+    const left = Math.max(0, Number(p.amount) - Number(refundedOf.get(tag, tag + ' %').s || 0));
+    base += Math.min(left, Number(p.fresh));
   }
   return round2(Math.max(0, Math.min(base, Number(invoice.total_amount) || 0)));
 }

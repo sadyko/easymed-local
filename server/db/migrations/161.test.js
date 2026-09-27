@@ -27,7 +27,10 @@ test('161: оплаченные и частично оплаченные сче�
     const part = mk('INV-A-26-2', 'partial', 50);
     db.prepare("INSERT INTO payments (invoice_id, amount, method) VALUES (?, 50, 'cash')").run(part);
     const unpaid = mk('INV-A-26-3', 'unpaid', 0);
-    migrate(db);
+    // Только 161: миграция 195 (V3120_FIX) снимает отметку с ещё не
+    // оплаченных счетов — её проверяет 195.test.js.
+    fs.copyFileSync(path.join(MIGRATIONS, '161_cashback_evaluated.sql'), path.join(stage, '161_cashback_evaluated.sql'));
+    migrate(db, stage);
     const at = (id) => db.prepare('SELECT cashback_evaluated_at FROM invoices WHERE id = ?').get(id).cashback_evaluated_at;
     assert.ok(at(paid));
     assert.ok(at(part));

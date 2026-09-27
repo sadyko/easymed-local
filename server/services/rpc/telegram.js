@@ -7,6 +7,7 @@
 // хвост из четырёх символов.
 
 import { hasAnyRole, canViewSection, canEditSection } from '../roles.js';
+import { pageInt } from './page-args.js';   // V3120_FINAL — числа и поиск из аргументов
 import { grantAllowsAdminOr, isAdminUser } from '../grants.js';   // ADMIN_ROWS_GRANTABLE_V1
 import { listChats, chatMessages, markRead, unreadTotal, sendChatMessage, sendChatFile, linkChatToPhone,
          listFolders, createFolder, renameFolder, deleteFolder, setChatFolder } from '../telegram/chat.js';
@@ -195,7 +196,8 @@ function requireChatReply(db, user) {
 
 export function telegramChatsList(db, args, user) {
   requireChatView(db, user);
-  return { chats: listChats(db, args || {}), unread: unreadTotal(db), folders: listFolders(db) };
+  const limit = pageInt(args && args.limit, { def: 100, min: 1, max: 300 });   // V3120_FINAL — не число → 400, не 500
+  return { chats: listChats(db, { limit }), unread: unreadTotal(db), folders: listFolders(db) };
 }
 
 // Папки — общие для клиники, поэтому менять их может тот, кто вообще ведёт
@@ -224,9 +226,12 @@ export function telegramFolderSetChat(db, args, user) {
 
 export function telegramChatMessages(db, args, user) {
   requireChatView(db, user);
-  const chatId = String((args && args.chat_id) || '');
+  const raw = args && args.chat_id;
+  // V3120_FINAL — чат — строка или число; limit — целое (не число → 400, не 500).
+  const chatId = (typeof raw === 'string' || typeof raw === 'number') ? String(raw) : '';
   if (!chatId) throw new RpcError('Не указан чат.', 400);
-  const data = chatMessages(db, chatId, args || {});
+  const limit = pageInt(args && args.limit, { def: 200, min: 1, max: 500 });
+  const data = chatMessages(db, chatId, { ...(args || {}), limit });
   // Открыл переписку — входящие считаются прочитанными. Отдельной кнопки
   // «прочитано» в мессенджерах не бывает, и здесь она была бы лишним шагом.
   markRead(db, chatId);

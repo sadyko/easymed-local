@@ -16,7 +16,7 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, StatusTag, Tag, fmtDateTime, field } from '../ui.js';
-import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ; V3120_FIX — tr для textContent
 import { hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1
 import { linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — исполнитель строки
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
@@ -129,7 +129,7 @@ export function openVisitBillModal(visit, onChanged) {
     // 1. SERVICES ON THIS VISIT
     // =========================================================================
     const linesTbody = h('tbody');
-    const linesEmptyEl = h('div', { class: 'empty', style: { display: 'none' } }, 'No services on this visit yet.');
+    const linesEmptyEl = h('div', { class: 'empty', style: { display: 'none' } }, 'Услуг в этом визите пока нет.');
 
     function lineRow(r) {
         const svc = r.services;
@@ -143,14 +143,14 @@ export function openVisitBillModal(visit, onChanged) {
         const canRemove = hasActorRole(isDispensed ? BILL_VOID_ROLES : BILL_REMOVE_ROLES);
         return h('tr', null,
             h('td', null, itemName || '—',
-                isDispensed ? h('span', { style: { marginLeft: '8px' } }, Tag('Dispensed', { kind: 'info' })) : null),
+                isDispensed ? h('span', { style: { marginLeft: '8px' } }, Tag('Выдано', { kind: 'info' })) : null),
             h('td', { class: 'num' }, String(r.quantity)),
             h('td', { class: 'num' }, fmtPrice(price)),
             h('td', { style: { textAlign: 'center' } }, billed ? '✓' : '—'),
             h('td', null, billed || !canRemove ? null : h('button', {
                 class: 'btn btn-sm', type: 'button',
                 onclick: () => removeLine(r),
-            }, 'Remove')),
+            }, 'Снять')),
         );
     }
 
@@ -183,7 +183,7 @@ export function openVisitBillModal(visit, onChanged) {
         } catch (e) {
             clear(linesTbody);
             unInvoicedIds = [];
-            toast('Failed to load services: ' + (e && e.message || e), 'fail');
+            toast(trf('Не удалось загрузить услуги: {msg}', { msg: (e && e.message) || e }), 'fail');
         }
     }
 
@@ -194,7 +194,7 @@ export function openVisitBillModal(visit, onChanged) {
                 ? await supabase.rpc('void_dispense', { visit_service_id: line.id })
                 : await supabase.rpc('remove_own_visit_line', { visit_service_id: line.id });
             if (error) throw error;
-            toast('Removed', 'ok');
+            toast('Снято', 'ok');
             await reloadAll();
             if (typeof onChanged === 'function') await onChanged();
         } catch (e) {
@@ -204,9 +204,9 @@ export function openVisitBillModal(visit, onChanged) {
 
     // ---- Add service control ----
     const addSelect = h('select', null,
-        h('option', { value: '' }, '— Select a service —'));
+        h('option', { value: '' }, '— Выберите услугу —'));
     const addQty = h('input', { type: 'number', min: '1', step: '1', value: '1' });
-    const addBtn = h('button', { class: 'btn btn-sm', type: 'button' }, Icon('Plus', { size: 13 }), ' Add');
+    const addBtn = h('button', { class: 'btn btn-sm', type: 'button' }, Icon('Plus', { size: 13 }), ' Добавить');
 
     const serviceById = new Map();   // LIVE_AUDIT_FIX_V1 — requires_doctor для строки
     async function loadServiceOptions() {
@@ -226,7 +226,7 @@ export function openVisitBillModal(visit, onChanged) {
     }
 
     addBtn.addEventListener('click', async () => {
-        if (!addSelect.value) { toast('Choose a service first.', 'fail'); return; }
+        if (!addSelect.value) { toast('Сначала выберите услугу.', 'fail'); return; }
         const opt = addSelect.selectedOptions[0];
         const qty = Number(addQty.value) || 1;
         const svc = serviceById.get(String(addSelect.value))
@@ -238,7 +238,7 @@ export function openVisitBillModal(visit, onChanged) {
             const row = await billLineFor(visit, svc, qty);
             const { error } = await supabase.from('visit_services').insert(row).select().single();
             if (error) throw error;
-            toast('Service added', 'ok');
+            toast('Услуга добавлена', 'ok');
             addSelect.value = '';
             addQty.value = '1';
             await reloadAll();
@@ -252,9 +252,9 @@ export function openVisitBillModal(visit, onChanged) {
 
     // ---- Dispense product control ----
     const dispenseSelect = h('select', null,
-        h('option', { value: '' }, '— Select a product —'));
+        h('option', { value: '' }, '— Выберите товар —'));
     const dispenseQty = h('input', { type: 'number', min: '1', step: '1', value: '1' });
-    const dispenseBtn = h('button', { class: 'btn btn-sm', type: 'button' }, Icon('Pill', { size: 13 }), ' Dispense');
+    const dispenseBtn = h('button', { class: 'btn btn-sm', type: 'button' }, Icon('Pill', { size: 13 }), ' Выдать');
 
     async function loadProductOptions() {
         try {
@@ -263,7 +263,7 @@ export function openVisitBillModal(visit, onChanged) {
             if (error) throw error;
             for (const p of (data || [])) {
                 dispenseSelect.appendChild(h('option', { value: p.id },
-                    `${p.name} (on hand: ${p.on_hand})`));
+                    trf('{name} (остаток: {n})', { name: p.name, n: p.on_hand })));
             }
         } catch (e) {
             console.warn('[visit-bill] products load failed', e && e.message || e);
@@ -271,7 +271,7 @@ export function openVisitBillModal(visit, onChanged) {
     }
 
     dispenseBtn.addEventListener('click', async () => {
-        if (!dispenseSelect.value) { toast('Choose a product first.', 'fail'); return; }
+        if (!dispenseSelect.value) { toast('Сначала выберите товар.', 'fail'); return; }
         const qty = Number(dispenseQty.value) || 1;
 
         dispenseBtn.disabled = true;
@@ -282,7 +282,7 @@ export function openVisitBillModal(visit, onChanged) {
                 visit_id: visit.id,
             });
             if (error) throw error;
-            toast('Dispensed', 'ok');
+            toast('Выдано', 'ok');
             // EXPIRY_BALANCE_V1 — просроченная партия: ПОСЛЕ успеха, не вместо
             // него. Ответ разбирался до `{ error }`, и предупреждение сервера
             // уезжало в мусор — на соседних экранах оно при этом было.
@@ -292,7 +292,7 @@ export function openVisitBillModal(visit, onChanged) {
             await reloadAll();
             if (typeof onChanged === 'function') await onChanged();
         } catch (e) {
-            toast((e && e.message) || 'Failed to dispense product.', 'fail');
+            toast((e && e.message) || 'Не удалось выдать товар.', 'fail');
         } finally {
             dispenseBtn.disabled = false;
         }
@@ -303,7 +303,7 @@ export function openVisitBillModal(visit, onChanged) {
     // =========================================================================
     const generateInfoEl = h('div', { class: 'muted', style: { fontSize: '12.5px' } }, '');
     const generateBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', disabled: true },
-        Icon('Receipt', { size: 14 }), ' Generate invoice');
+        Icon('Receipt', { size: 14 }), ' Выставить счёт');
 
     generateBtn.addEventListener('click', async () => {
         if (unInvoicedIds.length === 0) return;
@@ -314,11 +314,11 @@ export function openVisitBillModal(visit, onChanged) {
                 visit_service_ids: unInvoicedIds.slice(),
             });
             if (error) throw error;
-            toast('Invoice created', 'ok');
+            toast('Счёт выставлен', 'ok');
             await reloadAll();
             if (typeof onChanged === 'function') await onChanged();
         } catch (e) {
-            toast((e && e.message) || 'Failed to create invoice.', 'fail');
+            toast((e && e.message) || 'Не удалось выставить счёт.', 'fail');
             generateBtn.disabled = unInvoicedIds.length === 0;
         }
     });
@@ -326,7 +326,7 @@ export function openVisitBillModal(visit, onChanged) {
     function updateGenerateState() {
         const n = unInvoicedIds.length;
         generateBtn.disabled = n === 0;
-        generateInfoEl.textContent = n === 0 ? 'All services are billed.' : `${n} un-invoiced line${n === 1 ? '' : 's'}`;
+        generateInfoEl.textContent = n === 0 ? tr('Все услуги уже в счёте.') : trf('Не в счёте строк: {n}', { n });
     }
 
     // =========================================================================
@@ -344,29 +344,29 @@ export function openVisitBillModal(visit, onChanged) {
     function paymentRow(inv, balance) {
         const amtInp = h('input', { type: 'number', min: '0', step: 'any', placeholder: String(balance) });
         const methodSel = h('select', null,
-            h('option', { value: 'cash', selected: true }, 'Cash'),
-            h('option', { value: 'card' }, 'Card'),
-            h('option', { value: 'transfer' }, 'Transfer'),
+            h('option', { value: 'cash', selected: true }, 'Наличные'),
+            h('option', { value: 'card' }, 'Карта'),
+            h('option', { value: 'transfer' }, 'Перевод'),
         );
-        const payBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'Take payment');
+        const payBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'Принять оплату');
 
         payBtn.addEventListener('click', async () => {
             const amt = Number(amtInp.value);
-            if (!Number.isFinite(amt) || amt <= 0) { toast('Enter a valid amount.', 'fail'); return; }
+            if (!Number.isFinite(amt) || amt <= 0) { toast('Введите корректную сумму.', 'fail'); return; }
 
             payBtn.disabled = true;
             const prevLabel = payBtn.textContent;
-            payBtn.textContent = 'Processing…';
+            payBtn.textContent = tr('Проводим…');
             try {
                 const { error } = await supabase.rpc('record_payment', {
                     invoice_id: inv.id, amount: amt, method: methodSel.value,
                 });
                 if (error) throw error;
-                toast('Payment recorded', 'ok');
+                toast('Оплата проведена', 'ok');
                 await reloadAll();
                 if (typeof onChanged === 'function') await onChanged();
             } catch (e) {
-                toast((e && e.message) || 'Failed to record payment.', 'fail');
+                toast((e && e.message) || 'Не удалось провести оплату.', 'fail');
                 payBtn.disabled = false;
                 payBtn.textContent = prevLabel;
             }
@@ -376,8 +376,8 @@ export function openVisitBillModal(visit, onChanged) {
             alignItems: 'flex-end',
             borderTop: '1px solid var(--ink-100)', paddingTop: '10px', marginTop: '2px',
         } },
-            h('div', { style: { width: '140px' } }, field('Amount', amtInp, { required: true })),
-            h('div', { style: { width: '120px' } }, field('Method', methodSel)),
+            h('div', { style: { width: '140px' } }, field('Сумма', amtInp, { required: true })),
+            h('div', { style: { width: '120px' } }, field('Способ', methodSel)),
             payBtn,
         );
     }
@@ -394,14 +394,14 @@ export function openVisitBillModal(visit, onChanged) {
                 StatusTag(inv.status),
             ),
             h('div', { style: { display: 'flex', gap: '24px', fontSize: '12.5px' } },
-                statBlock('Total', fmtPrice(total)),
-                statBlock('Paid', fmtPrice(paid)),
-                statBlock('Balance', fmtPrice(balance)),
+                statBlock('Итого', fmtPrice(total)),
+                statBlock('Оплачено', fmtPrice(paid)),
+                statBlock('Остаток', fmtPrice(balance)),
             ),
         );
 
         if (inv.status === 'paid') {
-            card.appendChild(h('div', { style: { fontSize: '12.5px', fontWeight: '600', color: 'var(--ok-700)' } }, 'Paid ✓'));
+            card.appendChild(h('div', { style: { fontSize: '12.5px', fontWeight: '600', color: 'var(--ok-700)' } }, 'Оплачено ✓'));
         } else if (balance > 0 && inv.status !== 'void' && inv.status !== 'refunded') {
             card.appendChild(paymentRow(inv, balance));
         }
@@ -417,13 +417,13 @@ export function openVisitBillModal(visit, onChanged) {
             const rows = data || [];
             clear(invoicesContainer);
             if (rows.length === 0) {
-                invoicesContainer.appendChild(h('div', { class: 'empty' }, 'No invoices yet — generate one above.'));
+                invoicesContainer.appendChild(h('div', { class: 'empty' }, 'Счетов пока нет — выставьте счёт выше.'));
                 return;
             }
             for (const inv of rows) invoicesContainer.appendChild(invoiceCard(inv));
         } catch (e) {
             clear(invoicesContainer);
-            toast('Failed to load invoices: ' + (e && e.message || e), 'fail');
+            toast(trf('Не удалось загрузить счета: {msg}', { msg: (e && e.message) || e }), 'fail');
         }
     }
 
@@ -438,20 +438,20 @@ export function openVisitBillModal(visit, onChanged) {
     overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '680px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)' } },
         h('header', { class: 'modal-head' },
             h('div', null,
-                h('h2', null, Icon('Receipt', { size: 16 }), ` Bill & Pay — ${patientName} (${mrn})`),
+                h('h2', null, Icon('Receipt', { size: 16 }), ' ', trf('Счёт и оплата — {name} ({mrn})', { name: patientName, mrn })),
                 h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '2px' } }, fmtDateTime(visit.visit_date)),
             ),
             h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body' },
             h('div', null,
-                sectionTitle('Services on this visit'),
+                sectionTitle('Услуги визита'),
                 h('div', { class: 'card' },
                     h('table', { class: 'tbl' },
                         h('thead', null, h('tr', null,
-                            h('th', null, 'Service'),
-                            h('th', null, 'Qty'),
-                            h('th', null, 'Price'),
-                            h('th', null, 'Billed?'),
+                            h('th', null, 'Услуга'),
+                            h('th', null, 'Кол-во'),
+                            h('th', null, 'Цена'),
+                            h('th', null, 'В счёте'),
                             h('th', null, ''),
                         )),
                         linesTbody,
@@ -460,26 +460,26 @@ export function openVisitBillModal(visit, onChanged) {
                 ),
                 // LIVE_AUDIT_FIX_V1 — только ролям, которым сервер это даст.
                 hasActorRole(BILL_ADD_ROLES) ? h('div', { class: 'row', style: { alignItems: 'flex-end', marginTop: '10px' } },
-                    h('div', { class: 'grow' }, field('Service', addSelect)),
-                    h('div', { style: { width: '90px' } }, field('Qty', addQty)),
+                    h('div', { class: 'grow' }, field('Услуга', addSelect)),
+                    h('div', { style: { width: '90px' } }, field('Кол-во', addQty)),
                     addBtn) : null,
                 hasActorRole(BILL_DISPENSE_ROLES) ? h('div', { class: 'row', style: { alignItems: 'flex-end', marginTop: '8px' } },
-                    h('div', { class: 'grow' }, field('Product', dispenseSelect)),
-                    h('div', { style: { width: '90px' } }, field('Qty', dispenseQty)),
+                    h('div', { class: 'grow' }, field('Товар', dispenseSelect)),
+                    h('div', { style: { width: '90px' } }, field('Кол-во', dispenseQty)),
                     dispenseBtn) : null,
             ),
             h('div', null,
-                sectionTitle('Generate invoice'),
+                sectionTitle('Выставить счёт'),
                 h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' } },
                     generateInfoEl, generateBtn),
             ),
             h('div', null,
-                sectionTitle('Invoices & payment'),
+                sectionTitle('Счета и оплата'),
                 invoicesContainer,
             ),
         ),
         h('footer', { class: 'modal-foot' },
-            h('button', { class: 'btn', type: 'button', onclick: close }, 'Close')),
+            h('button', { class: 'btn', type: 'button', onclick: close }, 'Закрыть')),
     ));
     document.body.appendChild(overlay);
 

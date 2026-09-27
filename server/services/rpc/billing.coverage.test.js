@@ -57,19 +57,19 @@ test('a line cannot be billed twice — second invoice for the same service is r
   createInvoiceForVisit(db, { visit_id: 1, visit_service_ids: [vs[0]], payer_id: 7 }, registrar);
   assert.throws(
     () => createInvoiceForVisit(db, { visit_id: 1, visit_service_ids: [vs[0]] }, registrar),
-    /already invoiced/,
+    /уже в счёте/,
     'the same service must not land on both the payer and the patient invoice'
   );
 });
 
 test('unknown payer is rejected', () => {
   const { db, vs } = seed();
-  assert.throws(() => createInvoiceForVisit(db, { visit_id: 1, visit_service_ids: [vs[0]], payer_id: 999 }, registrar), /payer 999 not found/);
+  assert.throws(() => createInvoiceForVisit(db, { visit_id: 1, visit_service_ids: [vs[0]], payer_id: 999 }, registrar), /Плательщик №999 не найден/);
 });
 
 test('inactive payer is rejected', () => {
   const { db, vs } = seed();
-  assert.throws(() => createInvoiceForVisit(db, { visit_id: 1, visit_service_ids: [vs[0]], payer_id: 8 }, registrar), /inactive/);
+  assert.throws(() => createInvoiceForVisit(db, { visit_id: 1, visit_service_ids: [vs[0]], payer_id: 8 }, registrar), /выключен/);
 });
 
 test('malformed payer_id is rejected (no silent coercion)', () => {
@@ -77,7 +77,7 @@ test('malformed payer_id is rejected (no silent coercion)', () => {
   for (const bad of [0, -3, 1.5, 'ten', {}]) {
     assert.throws(
       () => createInvoiceForVisit(db, { visit_id: 1, visit_service_ids: [vs[0]], payer_id: bad }, registrar),
-      /payer_id must be a positive integer/,
+      /Плательщик указан неверно/,
       'payer_id=' + JSON.stringify(bad)
     );
   }

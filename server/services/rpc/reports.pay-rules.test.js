@@ -153,7 +153,7 @@ test('D1: частичный возврат — доля в той же проп
   const id = c.line({ at: cur + '-05T09:00:00Z' });
   const inv = c.bill(id);
   const p = c.pay(inv);
-  refundPayment(c.db, { payment_id: p, amount: 30000 }, admin);   // вернули 30 %
+  refundPayment(c.db, { payment_id: p, amount: 30000, reopen_balance: true }, admin);   // вернули 30 % (V3120_FIX: счёт ждёт доплаты)
   assert.equal(parity(c.db, range(cur)), round2(ONE * 0.7));
   // Вернули остаток — ноль; доплатили снова полностью — снова вся доля.
   refundPayment(c.db, { payment_id: p, void_when_zero: false }, admin);   // B2: счёт оставлен открытым — его оплатят снова
@@ -281,11 +281,13 @@ test('D2: поздно отмеченная работа закрытого ме
   c.db.prepare("UPDATE visit_services SET status = 'resulted' WHERE id = ?").run(late);
   assert.equal(parity(c.db, range(prev)), ONE);
   assert.equal(parity(c.db, range(cur)), ONE);
-  // Ставку поменяли задним числом — закрытый месяц не двигается, разница — корректировкой.
+  // V3120_FIX (решение владельца 27.09) — ставка меняется только ВПЕРЁД: правка
+  // ставки после закрытия закрытый месяц не переоценивает. Поздно отмеченная
+  // строка закрытого месяца платит по ставке месяца (30 %), а не по новой 40 %.
+  // (Прежде: 2 × 37 600 − 28 200 = +47 000 корректировкой.)
   c.db.prepare('UPDATE users SET service_rates = ? WHERE id = 1').run(JSON.stringify([{ service_id: 1, pct: 40 }]));
   assert.equal(parity(c.db, range(prev)), ONE);
-  // Живой расчёт августа: 2 × 37 600 = 75 200; записано 28 200 → +47 000.
-  assert.equal(parity(c.db, range(cur)), 75200 - ONE);
+  assert.equal(parity(c.db, range(cur)), ONE);
 });
 
 test('D2: корректировки записываются при закрытии следующего месяца и больше не повторяются', () => {

@@ -19,7 +19,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { RPC, getRpc } from './index.js';
+import { setDataDir, getDataDir } from '../control/config.js';
+
+// V3120_CLEANUP — обход зовёт КАЖДЫЙ обработчик, и backup_create, сохранение
+// группы филиалов и прочие пишут в getDataDir(). Без своей папки это
+// <cwd>/data: копия базы ложилась в исходники (server/services/rpc/data/backups)
+// или, хуже, в настоящую папку данных, если тест запускали из корня.
+const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'em-rpc-index-'));
+setDataDir(DATA_DIR);
+test.after(() => { setDataDir(null); fs.rmSync(DATA_DIR, { recursive: true, force: true }); });
 
 function seed() {
   const db = openDb(':memory:'); migrate(db);
@@ -58,6 +70,8 @@ test('every registered RPC is reachable — no handler references an unimported 
     }
   }
   assert.deepEqual(broken, [], 'RPCs registered but not wired up:\n' + broken.join('\n'));
+  assert.equal(getDataDir(), DATA_DIR, 'обход ушёл мимо временной папки данных');
+  assert.ok(fs.existsSync(path.join(DATA_DIR, 'backups')), 'backup_create писал не во временную папку');
 });
 
 test('getRpc returns null for an unknown name and ignores inherited properties', () => {

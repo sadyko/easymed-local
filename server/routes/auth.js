@@ -14,10 +14,22 @@ export function authRoutes(db) {
   const r = Router();
   const ipAttempts = new Map(); // ip -> { count, windowStart }
 
-  function ipThrottled(ip) {
-    const now = Date.now();
+  // V3120_FIX (M10) — предел считает НЕУДАЧИ, а не входы. Раньше каждый
+  // удачный вход тоже шёл в счёт: десять человек за одним компьютером стойки
+  // за минуту — и одиннадцатый получал «слишком много попыток». Проверка
+  // (ipBlocked) и учёт неудачи (ipFailed) разведены: вход с верным паролем
+  // предел не расходует.
+  function ipEntry(ip, now) {
     const e = ipAttempts.get(ip) || { count: 0, windowStart: now };
     if (now - e.windowStart > IP_WINDOW_MS) { e.count = 0; e.windowStart = now; }
+    return e;
+  }
+  function ipBlocked(ip) {
+    return ipEntry(ip, Date.now()).count >= IP_LIMIT;
+  }
+  function ipFailed(ip) {
+    const now = Date.now();
+    const e = ipEntry(ip, now);
     e.count += 1;
     ipAttempts.delete(ip); // re-insert keeps Map order oldest-first for eviction
     ipAttempts.set(ip, e);
@@ -27,21 +39,21 @@ export function authRoutes(db) {
         if (now - v.windowStart > IP_WINDOW_MS) ipAttempts.delete(k);
       }
     }
-    return e.count > IP_LIMIT;
   }
 
   r.post('/login', (req, res) => {
     res.set('Cache-Control', 'no-store');
-    if (ipThrottled(req.ip)) {
-      return res.status(429).json({ error: { code: 'locked', message: 'Too many attempts. Try again in a few minutes.' } });
+    if (ipBlocked(req.ip)) {
+      return res.status(429).json({ error: { code: 'locked', message: 'Слишком много попыток. Попробуйте через несколько минут.' } });
     }
     const { username, password } = req.body || {};
-    const result = login(db, username, password);
+    const result = login(db, username, password, { ip: req.ip });   // V3120_FIX (M10) — запирается имя+адрес
+    if (result.error) ipFailed(req.ip);
     if (result.error === 'locked') {
-      return res.status(429).json({ error: { code: 'locked', message: 'Too many attempts. Try again in a few minutes.' } });
+      return res.status(429).json({ error: { code: 'locked', message: 'Слишком много попыток. Попробуйте через несколько минут.' } });
     }
     if (result.error) {
-      return res.status(401).json({ error: { code: 'invalid_credentials', message: 'Wrong username or password.' } });
+      return res.status(401).json({ error: { code: 'invalid_credentials', message: 'Неверный логин или пароль.' } });
     }
     // Login replaces whatever session this browser presented — so on a shared
     // clinic PC, an abandoned session dies when the next person signs in.
@@ -59,9 +71,9 @@ export function authRoutes(db) {
   // so the current-password check cannot be brute-forced any faster than login.
   r.post('/change-password', (req, res) => {
     res.set('Cache-Control', 'no-store');
-    if (!req.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Login required.' } });
-    if (ipThrottled(req.ip)) {
-      return res.status(429).json({ error: { code: 'locked', message: 'Too many attempts. Try again in a few minutes.' } });
+    if (!req.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Нужно войти в систему.' } });
+    if (ipBlocked(req.ip)) {
+      return res.status(429).json({ error: { code: 'locked', message: 'Слишком много попыток. Попробуйте через несколько минут.' } });
     }
     // STAFF_SYNC_V1 (migration 086) — an account that arrived from the main
     // clinic cannot change its password HERE, and this refusal is what keeps the
@@ -74,15 +86,16 @@ export function authRoutes(db) {
     const me = db.prepare('SELECT is_local FROM users WHERE id = ?').get(req.user.id);
     if (me && me.is_local === 0) {
       return res.status(409).json({ error: { code: 'conflict',
-        message: 'This account is managed by the main clinic. Change the password there — it is the same login in every building.' } });
+        message: 'Эта учётная запись ведётся в главной клинике. Смените пароль там — логин один во всех зданиях.' } });
     }
     const { current_password, new_password } = req.body || {};
     const result = changeOwnPassword(db, req.user.id, current_password, new_password, req.sessionId);
     if (result.error === 'weak_password') {
-      return res.status(400).json({ error: { code: 'weak_password', message: 'Password must not be empty (max 72 bytes).' } });
+      return res.status(400).json({ error: { code: 'weak_password', message: 'Пароль не может быть пустым (не длиннее 72 байт).' } });
     }
     if (result.error) {
-      return res.status(401).json({ error: { code: 'invalid_credentials', message: 'Current password is wrong.' } });
+      ipFailed(req.ip);   // V3120_FIX (M10) — неверный текущий пароль — та же неудача, что у входа
+      return res.status(401).json({ error: { code: 'invalid_credentials', message: 'Текущий пароль неверен.' } });
     }
     res.json({ ok: true });
   });
@@ -95,7 +108,7 @@ export function authRoutes(db) {
 
   r.get('/me', (req, res) => {
     res.set('Cache-Control', 'no-store');
-    if (!req.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Login required.' } });
+    if (!req.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Нужно войти в систему.' } });
     res.json({ user: req.user });
   });
 

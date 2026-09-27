@@ -41,7 +41,7 @@ test('open_cash_shift creates an open shift; a second open is rejected (400)', (
   assert.ok(res.shift.id);
   assert.equal(res.shift.closed_at, null);
 
-  assert.throws(() => openCashShift(db, { opening_float: 5000 }, cashier), /open shift|already/i);
+  assert.throws(() => openCashShift(db, { opening_float: 5000 }, cashier), /уже открыта/);
   const rows = db.prepare("SELECT COUNT(*) n FROM cash_shifts WHERE cashier_id=? AND status='open'").get(cashier.id).n;
   assert.equal(rows, 1);
 });
@@ -49,7 +49,7 @@ test('open_cash_shift creates an open shift; a second open is rejected (400)', (
 // 2. openCashShift rejects negative opening_float; rejects non-cashier/non-admin role.
 test('open_cash_shift rejects negative opening_float (400) and non-allowed role (403)', () => {
   const { db } = seed();
-  assert.throws(() => openCashShift(db, { opening_float: -100 }, cashier), /400|opening_float|negative|finite/i);
+  assert.throws(() => openCashShift(db, { opening_float: -100 }, cashier), /Начальный остаток/);
   assert.throws(() => openCashShift(db, { opening_float: 0 }, lab), /(allow|forbid|role|роли)/i);
 });
 
@@ -117,7 +117,7 @@ test('close_cash_shift computes expected drawer from CASH only (card excluded) a
 test('close_cash_shift forbids closing another cashier\'s shift (403) unless admin', () => {
   const { db } = seed();
   const { shift } = openCashShift(db, { opening_float: 0 }, cashier);
-  assert.throws(() => closeCashShift(db, { shift_id: shift.id, counted_amount: 0 }, cashier2), /403|forbid|allow|own/i);
+  assert.throws(() => closeCashShift(db, { shift_id: shift.id, counted_amount: 0 }, cashier2), /свою смену/);
 
   // admin CAN close another cashier's shift
   const res = closeCashShift(db, { shift_id: shift.id, counted_amount: 100 }, admin);
@@ -129,15 +129,15 @@ test('close_cash_shift rejects closing an already-closed shift (400)', () => {
   const { db } = seed();
   const { shift } = openCashShift(db, { opening_float: 0 }, cashier);
   closeCashShift(db, { shift_id: shift.id, counted_amount: 0 }, cashier);
-  assert.throws(() => closeCashShift(db, { shift_id: shift.id, counted_amount: 0 }, cashier), /400|closed|already/i);
+  assert.throws(() => closeCashShift(db, { shift_id: shift.id, counted_amount: 0 }, cashier), /уже закрыта/);
 });
 
 test('close_cash_shift rejects unknown shift_id, bad shift_id, and negative counted_amount', () => {
   const { db } = seed();
   const { shift } = openCashShift(db, { opening_float: 0 }, cashier);
-  assert.throws(() => closeCashShift(db, { shift_id: 999999, counted_amount: 0 }, cashier), /400|not found/i);
-  assert.throws(() => closeCashShift(db, { shift_id: 'abc', counted_amount: 0 }, cashier), /400|integer|shift_id/i);
-  assert.throws(() => closeCashShift(db, { shift_id: shift.id, counted_amount: -5 }, cashier), /400|counted_amount|negative|finite/i);
+  assert.throws(() => closeCashShift(db, { shift_id: 999999, counted_amount: 0 }, cashier), /не найдена/);
+  assert.throws(() => closeCashShift(db, { shift_id: 'abc', counted_amount: 0 }, cashier), /указана неверно/);
+  assert.throws(() => closeCashShift(db, { shift_id: shift.id, counted_amount: -5 }, cashier), /Пересчитанная сумма/);
 });
 
 // 6. cashShiftSummary returns caller's open shift with totals and expected_drawer.
@@ -145,14 +145,17 @@ test('cash_shift_summary returns caller\'s open shift, totals by method, and exp
   const { db, vid, vs1, vs2 } = seed();
   const { invoice } = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1, vs2] }, registrar); // total 110000
 
-  // SHIFT_AUTO_V2 — «нет смены» не существует: summary сам открывает
-  // автоматическую смену с нулевым остатком, платежи идут в неё же.
+  // SHIFT_AUTO_V2 — «нет смены» не существует. V3120_FIX — но сводка только
+  // читает (она в READ_ONLY_RPCS): до первой записи дня это день без записанной
+  // смены (id null), смену открывает первый платёж, и платежи идут в неё.
   const empty = cashShiftSummary(db, {}, cashier);
-  assert.ok(empty.shift, 'summary must auto-open a shift');
+  assert.ok(empty.shift, 'summary always shows the day');
+  assert.equal(empty.shift.id, null, 'summary itself writes nothing');
   assert.equal(empty.shift.opening_float, 0);
-  const shift = empty.shift;
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM cash_shifts').get().n, 0);
   recordPayment(db, { invoice_id: invoice.id, amount: 30000, method: 'cash' }, cashier);
   recordPayment(db, { invoice_id: invoice.id, amount: 20000, method: 'card' }, cashier);
+  const shift = db.prepare("SELECT * FROM cash_shifts WHERE cashier_id = ? AND status = 'open'").get(cashier.id);
 
   const res = cashShiftSummary(db, {}, cashier);
   assert.equal(res.shift.id, shift.id);
@@ -177,9 +180,8 @@ test('cash_move: in/out affect drawer + close math; overdraw and no-shift reject
   const { db, vid, vs1 } = seed();
   const { invoice } = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar); // 50000
 
-  // no open shift -> rejected
-  assert.throws(() => cashMove(db, { kind: 'in', amount: 1000 }, cashier), /смен|shift/i);
-
+  // V3120_FIX — движение, как платёж, открывает смену дня само (сводка больше
+  // не открывает её); здесь смену открывают руками с остатком.
   const { shift } = openCashShift(db, { opening_float: 10000 }, cashier);
   recordPayment(db, { invoice_id: invoice.id, amount: 20000, method: 'cash' }, cashier);
   cashMove(db, { kind: 'in', amount: 5000, article: 'Спонсорская помощь' }, cashier);
@@ -193,8 +195,8 @@ test('cash_move: in/out affect drawer + close math; overdraw and no-shift reject
 
   // withdrawing more than the drawer is rejected
   assert.throws(() => cashMove(db, { kind: 'out', amount: 27001 }, cashier), /кассе|нельзя/i);
-  assert.throws(() => cashMove(db, { kind: 'sideways', amount: 100 }, cashier), /kind/i);
-  assert.throws(() => cashMove(db, { kind: 'in', amount: 0 }, cashier), /amount|positive/i);
+  assert.throws(() => cashMove(db, { kind: 'sideways', amount: 100 }, cashier), /внести или изъять/);
+  assert.throws(() => cashMove(db, { kind: 'in', amount: 0 }, cashier), /Сумма/);
 
   // close: expected includes the movements
   const res = closeCashShift(db, { shift_id: shift.id, counted_amount: 27000 }, cashier);
@@ -271,9 +273,9 @@ test('void_invoice cancels only money-free invoices and re-opens visit services'
 // (which would poison expected/over_short and any SUM across shifts).
 test('open/close reject absurd money inputs (> 1e12) with 400, not Infinity', () => {
   const { db } = seed();
-  assert.throws(() => openCashShift(db, { opening_float: 1e308 }, cashier), /400|1e12|finite|between/i);
+  assert.throws(() => openCashShift(db, { opening_float: 1e308 }, cashier), /неотрицательным числом/);
   const { shift } = openCashShift(db, { opening_float: 0 }, cashier);
-  assert.throws(() => closeCashShift(db, { shift_id: shift.id, counted_amount: 1e308 }, cashier), /400|1e12|finite|between/i);
+  assert.throws(() => closeCashShift(db, { shift_id: shift.id, counted_amount: 1e308 }, cashier), /неотрицательным числом/);
   // the shift stays open and uncorrupted after the rejected close
   const still = db.prepare('SELECT status, expected_amount FROM cash_shifts WHERE id=?').get(shift.id);
   assert.equal(still.status, 'open');

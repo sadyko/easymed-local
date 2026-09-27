@@ -91,6 +91,28 @@ function appliedMigrationNames(db) {
   return new Set(db.prepare('SELECT name FROM schema_migrations').all().map(r => r.name));
 }
 
+const migrationNumber = (file) => Number(file.slice(0, file.indexOf('_')));
+
+/**
+ * V3120_FIX — pending files whose number is lower than the highest APPLIED
+ * number. Pure, exported for the tests. The grandfathered 058/071 twins are
+ * all applied on every real database, so they never show up here.
+ * @param {string[]} files   migration filenames
+ * @param {Set<string>} applied  names already in schema_migrations
+ * @returns {{file:string, maxApplied:number}[]}
+ */
+export function lateMigrations(files, applied) {
+  let maxApplied = -1;
+  for (const f of applied) {
+    if (!MIGRATION_NAME_RE.test(f)) continue;
+    maxApplied = Math.max(maxApplied, migrationNumber(f));
+  }
+  if (maxApplied < 0) return [];
+  return files
+    .filter((f) => !applied.has(f) && migrationNumber(f) < maxApplied)
+    .map((file) => ({ file, maxApplied }));
+}
+
 // Applies every .sql file in migrations/ (sorted by name) that is not yet
 // recorded in schema_migrations. Each file runs inside a transaction, so a
 // failed migration leaves the database untouched.
@@ -102,6 +124,14 @@ export function migrate(db, dir = MIGRATIONS_DIR) {
 
   const files = loadMigrationFiles(dir);
   const applied = appliedMigrationNames(db);
+  // V3120_FIX — a file numbered BELOW the highest one already applied runs
+  // out of its intended order (it was written against an older schema, or two
+  // machines claimed a number and one was renumbered down). It still runs —
+  // refusing here would stop a clinic from booting over a bookkeeping mistake —
+  // but it is said out loud. The build-time gate is migration-order.test.js.
+  for (const late of lateMigrations(files, applied)) {
+    console.warn(`[migrate] WARNING: ${late.file} is numbered below the highest applied migration (${late.maxApplied}) — it runs out of order.`);
+  }
   for (const file of files) {
     if (applied.has(file)) continue;
     const sql = fs.readFileSync(path.join(dir, file), 'utf8');

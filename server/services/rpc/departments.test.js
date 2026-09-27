@@ -167,7 +167,7 @@ test('заявка отдела: создаётся с номером, а при
     assert.match(req.req_number, /^REQ-\d{8}-001$/);
     assert.equal(req.status, 'submitted');
     assert.throws(() => createRequisition(db, { p_department: r.department_id, p_lines: [] }, DOC), /хотя бы одну позицию/);
-    assert.throws(() => createRequisition(db, { p_department: r.department_id, p_lines: [{ item_id: 7, qty: 1 }] }, REG), /not allowed/);
+    assert.throws(() => createRequisition(db, { p_department: r.department_id, p_lines: [{ item_id: 7, qty: 1 }] }, REG), /не может выполнить/);
     approveRequisitionAndIssue(db, { req_id: req.req_id }, INV);
     const held = db.prepare("SELECT qty FROM stock_holdings WHERE holder_type = 'department' AND holder_id = ? AND product_id = 7").get(r.department_id);
     assert.equal(held.qty, 3, 'заявка выдана отделу, а не в пустоту');

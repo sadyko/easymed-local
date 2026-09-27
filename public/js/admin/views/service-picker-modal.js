@@ -3211,14 +3211,14 @@ export function openServicePickerModal({
                         } catch (e) { console.warn('[wizard] queue numbers:', e && e.message); }
                         const patName = (p.fullName || [p.lastName, p.firstName].filter(Boolean).join(' ') || '—').trim();
                         const paidNow = Number(inv.paid_amount || 0);
-                        const invStatus = invTotal === 0 || paidNow >= invTotal ? 'PAID' : (paidNow > 0 ? 'PARTIAL' : 'UNPAID');
+                        const invStatus = invTotal === 0 || paidNow >= invTotal ? 'paid' : (paidNow > 0 ? 'partial' : 'unpaid');   // V3120_FIX — код, слово ставит бланк
                         const invNo = inv.invoice_number || String(inv.id);
                         const pkgOff = Math.max(0, Number(inv.discount_amount || 0) - Number(bill.data.rest_discount || 0));
                         /* i18n-exempt-start: печатный счёт (бланк) — печатные документы намеренно русские */
                         printableSheet({ type: 'invoice', idLine: invNo, data: {
                             title: 'Амбулаторные услуги',
                             docNo: invNo,
-                            issueDate: 'Дата ' + new Date().toLocaleDateString('ru-RU'),
+                            issueDate: new Date().toLocaleDateString('ru-RU'),   // V3120_FIX — «Дата» ставит бланк
                             status: invStatus,
                             patient: [
                                 ['ФИО', patName],
@@ -3245,10 +3245,10 @@ export function openServicePickerModal({
                 // его подписывают после приёма и используют для сверки с плательщиком.
                 const ids = payerRows.map(r => r.vs && r.vs.id).filter(Boolean);
                 if (ids.length) {
-                    const { error: relErr } = await supabase.from('visit_services')
-                        .update({ status: 'queued' }).in('id', ids)
-                        .not('status', 'in', '(in_progress,completed)');
-                    if (relErr) console.warn('[wizard] release services:', relErr.message);
+                    // V3120_FINAL (G1) — в очередь их ставит СЕРВЕР, выставляя счёт
+                    // плательщику (create_invoice_for_visit с payer_id). Прежняя запись
+                    // 'queued' отсюда шла ДО счёта — дверь /api/db её теперь отвергает
+                    // (неоплаченная строка в работу не уходит), и она была лишней.
                     // LIVE_AUDIT_FIX_V1 — покрытие фиксирует СЕРВЕР: строки уходят в
                     // счёт контрагента (payer_id) и больше не могут попасть в счёт
                     // пациента. Флага payer_covered в офлайн-базе нет — его запись
@@ -3487,6 +3487,8 @@ export function forgetSlots() { _slotDays.clear(); }
 const BOOK_ERROR_TEMPLATES = {
     slot_taken: 'Это время занято: у врача {doctor} уже есть приём {from}–{to}. Выберите другое время.',
     emergency_reason_required: 'Экстренная запись поверх занятого времени требует причины — укажите её.',
+    // V3120_FIX — у пациента на этот день уже есть визит с работой (DAY_VISIT_V1).
+    day_visit_busy: 'У пациента на этот день уже есть визит ({start}, врач {doctor}), и по нему уже идёт работа. Второй визит на день не заводится — добавьте услугу в этот визит.',
 };
 export function bookErrorText(error) {
     const tpl = error && error.code ? BOOK_ERROR_TEMPLATES[error.code] : null;
@@ -3557,6 +3559,17 @@ export async function calendarBookOrAsk(args, opts = {}) {
     for (let i = 0; i < 24; i++) {
         const { data, error } = await supabase.rpc('calendar_book', attempt);
         if (!error) { forgetSlots(); return { ...data, emergency: !!data.emergency }; }
+        // V3120_FIX — ВТОРОГО ВИЗИТА НА ДЕНЬ НЕ БЫВАЕТ (DAY_VISIT_V1). Сервер
+        // отказал: у пациента сегодня уже есть визит, и по нему идёт работа.
+        // Предлагаем добавить услуги в него; согласие — тот же запрос с
+        // add_to_day_visit, ответом приходит сам визит дня.
+        if (error.code === 'day_visit_busy') {
+            const ask = opts.askAddToDayVisit || askAddToDayVisit;
+            if (!(await ask(bookErrorText(error)))) throw new Error(bookErrorText(error));
+            const add = await supabase.rpc('calendar_book', { ...attempt, add_to_day_visit: true });
+            if (add.error) throw new Error(bookErrorText(add.error));
+            return { ...add.data, emergency: false };
+        }
         if (error.code !== 'slot_taken') throw new Error(bookErrorText(error));
 
         if (opts.autoTime && error.params && error.params.to) {
@@ -3571,6 +3584,31 @@ export async function calendarBookOrAsk(args, opts = {}) {
         return { ...emg.data, emergency: true };
     }
     throw new Error(tr('У выбранного врача нет свободного времени в этот день — выберите другое время.'));
+}
+
+/**
+ * V3120_FIX — «ВИЗИТ НА ЭТОТ ДЕНЬ УЖЕ ЕСТЬ»: отказ сервера словами и выбор —
+ * добавить услуги в этот визит или отменить. Promise<boolean>.
+ */
+export function askAddToDayVisit(text) {
+    return new Promise((resolve) => {
+        const overlay = h('div', { class: 'modal', style: { zIndex: '190' } });
+        let done = false;
+        const finish = (v) => { if (done) return; done = true; overlay.remove(); document.removeEventListener('keydown', onEsc); resolve(v); };
+        const onEsc = (e) => { if (e.key === 'Escape') finish(false); };
+        overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: () => finish(false) }));
+        overlay.appendChild(h('div', { class: 'modal-card', style: { width: '460px', maxWidth: 'calc(100vw - 32px)' } },
+            h('header', { class: 'modal-head' },
+                h('h2', null, Icon('Warning', { size: 16 }), ' ', tr('Визит на этот день уже есть')),
+                h('button', { class: 'modal-close', onclick: () => finish(false) }, '×')),
+            h('div', { class: 'modal-body' }, h('div', { class: 'rcal-conflict' }, text)),
+            h('footer', { class: 'modal-foot' },
+                h('span', { class: 'grow' }),
+                h('button', { class: 'btn btn-outline', onclick: () => finish(false) }, tr('Отмена')),
+                h('button', { class: 'btn btn-primary', onclick: () => finish(true) }, tr('Добавить в этот визит')))));
+        document.body.appendChild(overlay);
+        document.addEventListener('keydown', onEsc);
+    });
 }
 
 /** ISO начала + 'ЧЧ:ММ' конца занятого приёма → ISO того же дня в это время. */

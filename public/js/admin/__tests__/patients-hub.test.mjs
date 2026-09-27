@@ -144,6 +144,7 @@ const BOARD = {
   }],
 };
 let rpcCalls = [];
+let AGGS = null;   // V3120_FIX — ответ patient_base_aggregates
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
@@ -153,6 +154,10 @@ globalThis.fetch = async (url, opts = {}) => {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     rpcCalls.push(name);
     if (name === 'queue_board') return ok({ data: JSON.parse(JSON.stringify(BOARD)) });
+    // V3120_FIX — сводка реестра: депозит и долг раздельно (rpc/patient-aggregates.js).
+    if (name === 'patient_base_aggregates') return ok({ data: AGGS });
+    // V3120_FIX — настоящая форма ответа сервера (rpc/telegram.js telegramChatsList).
+    if (name === 'telegram_chats_list') return ok({ data: { chats: [{ chat_id: '1', phone: '+998901112233', patients: [{ id: 'p-1', name: 'Эргашев Жахонгир' }] }], unread: 0, folders: [] } });
     return ok({ data: null });
   }
   if (u.startsWith('/api/db')) {
@@ -188,7 +193,9 @@ const boards = (root) => walk(root).filter((n) => 'data-queue-board' in n.attrs)
 // patients + registration + crm; `appointments` is not a grantable key and
 // never was — that is the whole point of the permissions decision under test).
 const REGISTRAR = { name: 'registrar', permissions: {
-  sections: ['patients', 'registration', 'crm', 'cashier', 'dashboard'],
+  // V3120_FIX — `queue` в наборе: доску сервер отдаёт только по этому ключу
+  // (rpc/queue.js), и вкладка «Очередь» теперь видна по тому же правилу.
+  sections: ['patients', 'registration', 'crm', 'cashier', 'dashboard', 'queue'],
   levels: { patients: 'editor', registration: 'editor', crm: 'editor', cashier: 'editor', dashboard: 'viewer' },
 } };
 
@@ -528,6 +535,10 @@ const NURSE = { name: 'nurse', permissions: {
 
 test('без права «Регистрация пациента» окно не открывается ни с одного входа списка', async () => {
   reset();
+  // V3120_FIX — вошедший тоже медсестра: роль сессии входит в набор ролей
+  // (actorRoleCodes), и с регистратором в сессии кнопки были бы законны.
+  const sessionUser = globalThis.window.easymed.state.user;
+  globalThis.window.easymed.state.user = { ...sessionUser, role: 'nurse' };
   setEffectiveFromRole(NURSE);
   // Роль подобрана верно: раздел «Пациенты» ей открыт (иначе мы проверяли бы
   // маршрутный гейт, а не гейт действия), а ключа регистрации нет.
@@ -538,20 +549,17 @@ test('без права «Регистрация пациента» окно н�
   const box = mk('div');
   const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
 
+  // V3120_FIX (2026-09-27) — кнопка, ведущая в отказ, НЕ РИСУЕТСЯ. Прежде
+  // этот тест требовал, чтобы кнопка была и отвечала видимым отказом;
+  // инспекция v3.12.0 показала, что отказ после нажатия читается хуже, чем
+  // отсутствие кнопки: её нажимают снова. Замок на самом окне остаётся —
+  // его проверяет конец теста («сама дверь отвечает отказом»).
   // Вход 1 — кнопка «Создать пациента» в шапке списка (views/patients.js).
-  const createBtn = walk(box).find((n) => n.attrs['data-onb'] === 'create-patient');
-  assert.ok(createBtn, 'на вкладке «Список» нет кнопки создания пациента');
-  createBtn.click();
-  assert.strictEqual(openDialogs('patient-create').length, 0, 'кнопка шапки открыла окно в обход права');
-  assert.strictEqual(openDialogs('access-denied').length, 1, 'кнопка шапки промолчала — это читается как поломка');
-
+  assert.strictEqual(walk(box).find((n) => n.attrs['data-onb'] === 'create-patient'), undefined,
+    'кнопка «Создать пациента» нарисована роли без права');
   // Вход 2 — ссылка «Создать нового пациента?» в пустом состоянии списка.
-  document.body.children.length = 0;
-  const emptyLink = walk(box).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'link-btn'));
-  assert.ok(emptyLink, 'в пустом состоянии списка нет ссылки создания');
-  emptyLink.click();
-  assert.strictEqual(openDialogs('patient-create').length, 0, 'пустое состояние открыло окно в обход права');
-  assert.strictEqual(openDialogs('access-denied').length, 1, 'пустое состояние промолчало');
+  assert.strictEqual(walk(box).find((n) => n.tagName === 'BUTTON' && hasClass(n, 'link-btn')), undefined,
+    'ссылка «Создать нового пациента?» нарисована роли без права');
 
   // Вход 3 — «Калькулятор услуг» отдаёт окну подбора обратный вызов
   // onCreatePatient, и это ТА ЖЕ функция openCreatePatient, что у двух входов
@@ -574,20 +582,18 @@ test('без права «Регистрация пациента» окно н�
   // FAST_REG_ONE_SCREEN_V1 — у неё СВОЁ окно (views/fast-registration.js), и
   // право оно спрашивает само, тем же ключом и тем же видимым отказом. Окно
   // грузится динамическим импортом, поэтому отказ ждут, а не читают сразу.
-  document.body.children.length = 0;
-  const fastRegBtn = walk(box).find((n) => n.attrs['data-onb'] === 'fast-registration');
-  assert.ok(fastRegBtn, 'на вкладке «Список» нет кнопки быстрой регистрации');
-  fastRegBtn.click();
-  await tick(80);
-  assert.strictEqual(openDialogs('fast-registration').length, 0, 'быстрая регистрация открыла своё окно в обход права');
-  assert.strictEqual(openDialogs('patient-create').length, 0, 'быстрая регистрация открыла окно заведения в обход права');
-  assert.strictEqual(openDialogs('access-denied').length, 1, 'быстрая регистрация промолчала — это читается как поломка');
+  assert.strictEqual(walk(box).find((n) => n.attrs['data-onb'] === 'fast-registration'), undefined,
+    'кнопка «Быстрая регистрация» нарисована роли без права');   // V3120_FIX
+  // «Госпитализация» — тот же довод: заявку медсестре сервер не оформит.
+  assert.strictEqual(walk(box).find((n) => n.attrs['data-act'] === 'admission'), undefined,
+    'кнопка «Госпитализация» нарисована роли, которой сервер откажет');
 
   // И сама дверь, куда ведут все четверо, отвечает отказом.
   document.body.children.length = 0;
   assert.strictEqual(openPatientCreateModal({}), null, 'дверь пустила роль без права');
   assert.strictEqual(openDialogs('access-denied').length, 1);
 
+  globalThis.window.easymed.state.user = sessionUser;
   hub.destroy();
   setFullAccess('Admin');
 });
@@ -655,4 +661,90 @@ test('глушим таймеры, чтобы прогон завершался'
   stopQueuePolling();
   for (const id of [...liveIntervals.keys()]) { liveIntervals.delete(id); realClearInterval(id); }
   assert.equal(queuePolls(), 0);
+});
+
+// ===========================================================================
+// V3120_FIX (2026-09-27) — инспекция v3.12.0
+// ===========================================================================
+test('V3120_FIX: вкладки «Записи» и «Очередь» — только тем, кому сервер отдаст их данные', async () => {
+  const sessionUser = globalThis.window.easymed.state.user;
+  const CASES = [
+    // [роль сессии, разделы, ожидаемые вкладки]
+    ['nurse',     ['patients', 'queue'],        ['Список', 'Очередь']],
+    ['cashier',   ['patients', 'queue'],        ['Список', 'Очередь']],
+    ['lab',       ['patients', 'labs'],         ['Список']],
+    ['registrar', ['patients', 'queue'],        ['Список', 'Очередь', 'Записи']],
+    ['doctor',    ['patients'],                 ['Список', 'Записи']],
+  ];
+  try {
+    for (const [role, sections, want] of CASES) {
+      reset();
+      globalThis.window.easymed.state.user = { ...sessionUser, role };
+      setEffectiveFromRole({ name: role, permissions: { sections, levels: {} } });
+      const box = mk('div');
+      const hub = await renderPatientsHub(box, ctxFor(), { calendarLoader: async () => async () => {} });
+      assert.deepEqual(tabButtons(box).map(tabLabel), want, role + ': не те вкладки «Пациентов»');
+      hub.destroy();
+    }
+    // Адрес просит закрытую вкладку — открывается список, а не стена отказов.
+    reset();
+    globalThis.window.easymed.state.user = { ...sessionUser, role: 'nurse' };
+    setEffectiveFromRole({ name: 'nurse', permissions: { sections: ['patients'], levels: {} } });
+    const box = mk('div');
+    const hub = await renderPatientsHub(box, ctxFor({ sub: 'calendar' }), { calendarLoader: async () => async () => {} });
+    assert.equal(hub.activeTab(), 'list');
+    assert.ok(!rpcCalls.includes('calendar_windows'), 'закрытый календарь всё равно спросил сервер');
+    hub.destroy();
+  } finally {
+    globalThis.window.easymed.state.user = sessionUser;
+    setFullAccess('Admin');
+  }
+});
+
+test('V3120_FIX: отметка Telegram появляется — ответ сервера { chats }, а не массив', async () => {
+  reset();
+  setFullAccess('Admin');
+  const warns = [];
+  const origWarn = console.warn; console.warn = (...a) => warns.push(a.join(' '));
+  try {
+    // свежий экземпляр модуля: отметки запоминаются на сессию (telegramLinked)
+    const { renderPatients } = await import('../views/patients.js?v=v3120tg');
+    const box = mk('div');
+    await renderPatients(box, { onNavigate() {}, embedded: true });
+    await tick(60);
+    assert.ok(rpcCalls.includes('telegram_chats_list'), 'реестр не спросил связки Telegram');
+    assert.equal(warns.filter((w) => w.includes('patients/telegram')).length, 0, 'разбор ответа упал: ' + warns.join(' | '));
+    const marks = walk(box).filter((n) => hasClass(n, 'pt-tg'));
+    assert.equal(marks.length, 1, 'у пациента со связкой Telegram нет отметки');
+    // и подпись листания — по-русски
+    const t = textOf(box);
+    assert.ok(!/Page \d+ of/.test(t), 'подпись листания осталась английской');
+    assert.ok(t.includes('Страница 1 из 1'), 'нет русской подписи листания: ' + t.slice(0, 200));
+    assert.ok(!t.includes('Sort: Recent'), 'кнопка сортировки осталась английской');
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('V3120_FIX: «Баланс» в реестре показывает и депозит, и долг — долг не растворяется', async () => {
+  reset();
+  setFullAccess('Admin');
+  AGGS = [{ patient_id: 'p-1', visit_count: 2, balance: 120000, debt: 375000, net_balance: -255000 }];
+  try {
+    const { renderPatients } = await import('../views/patients.js?v=v3120bal');
+    const box = mk('div');
+    await renderPatients(box, { onNavigate() {}, embedded: true });
+    await tick(60);
+    const t = textOf(box);
+    assert.match(t, /\+120\s000/, 'депозит пациента не виден: ' + t.slice(0, 300));
+    assert.match(t, /долг 375\s000/, 'долг пациента пропал из реестра');
+    // без долга — только депозит, без красной строки
+    AGGS = [{ patient_id: 'p-1', visit_count: 2, balance: 0, debt: 0, net_balance: 0 }];
+    const box2 = mk('div');
+    await renderPatients(box2, { onNavigate() {}, embedded: true });
+    await tick(60);
+    assert.equal(walk(box2).filter((n) => hasClass(n, 'pt-bal-debt')).length, 0, 'строка долга у пациента без долга');
+  } finally {
+    AGGS = null;
+  }
 });

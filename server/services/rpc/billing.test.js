@@ -54,21 +54,21 @@ test('create_invoice rejects a visit_service from another visit, atomically', ()
   const { db, vid, vs1 } = seed();
   const otherV = db.prepare("INSERT INTO visits (patient_id, branch_id, visit_date) VALUES (1,1,'2026-08-12T10:00:00Z')").run().lastInsertRowid;
   const alien = db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total) VALUES (?,1,1,999,999)").run(otherV).lastInsertRowid;
-  assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1, alien] }, registrar), /visit/i);
+  assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1, alien] }, registrar), /другому визиту/);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM invoices').get().n, 0);       // nothing created
   assert.equal(db.prepare('SELECT COUNT(*) n FROM invoice_items').get().n, 0);
 });
 
 test('create_invoice rejects empty selection and re-invoicing a linked line', () => {
   const { db, vid, vs1 } = seed();
-  assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [] }, registrar), /no|empty|select/i);
+  assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [] }, registrar), /Не выбрано ни одной услуги/);
   createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar);
-  assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar), /already|invoiced/i);
+  assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar), /уже в счёте/);
 });
 
 test('create_invoice forbids non-billing roles', () => {
   const { db, vid, vs1 } = seed();
-  assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, lab), /(allow|forbid|role)/i);
+  assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, lab), /недоступно/);
 });
 
 test('record_payment: partial then full, status + paid_at server-computed', () => {
@@ -89,18 +89,18 @@ test('record_payment: partial then full, status + paid_at server-computed', () =
 test('record_payment rejects overpay, zero, negative, and non-billing role', () => {
   const { db, vid, vs1 } = seed();
   const { invoice } = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1] }, registrar); // total 50000
-  assert.throws(() => recordPayment(db, { invoice_id: invoice.id, amount: 60000, method:'cash' }, cashier), /balance|exceed|overpay/i);
-  assert.throws(() => recordPayment(db, { invoice_id: invoice.id, amount: 0, method:'cash' }, cashier), /amount/i);
-  assert.throws(() => recordPayment(db, { invoice_id: invoice.id, amount: -10, method:'cash' }, cashier), /amount/i);
-  assert.throws(() => recordPayment(db, { invoice_id: invoice.id, amount: 100, method:'cash' }, lab), /(allow|forbid|role)/i);
+  assert.throws(() => recordPayment(db, { invoice_id: invoice.id, amount: 60000, method:'cash' }, cashier), /больше остатка/);
+  assert.throws(() => recordPayment(db, { invoice_id: invoice.id, amount: 0, method:'cash' }, cashier), /Сумма/);
+  assert.throws(() => recordPayment(db, { invoice_id: invoice.id, amount: -10, method:'cash' }, cashier), /Сумма/);
+  assert.throws(() => recordPayment(db, { invoice_id: invoice.id, amount: 100, method:'cash' }, lab), /недоступно/);
   // pay it off, then a further payment is rejected (balance 0)
   recordPayment(db, { invoice_id: invoice.id, amount: 50000, method:'cash' }, cashier);
-  assert.throws(() => recordPayment(db, { invoice_id: invoice.id, amount: 1, method:'cash' }, cashier), /balance|paid|exceed/i);
+  assert.throws(() => recordPayment(db, { invoice_id: invoice.id, amount: 1, method:'cash' }, cashier), /уже оплачен/);
 });
 
 test('duplicate visit_service_ids are rejected (no double-bill)', () => {
   const { db, vid, vs1 } = seed();
-  assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1, vs1] }, registrar), /duplicate/i);
+  assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs1, vs1] }, registrar), /дважды/);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM invoices').get().n, 0);
 });
 
@@ -179,9 +179,9 @@ test('invoice rejects a line with zero or negative quantity', () => {
   const { db, vid } = seed();
   const s = db.prepare("INSERT INTO services (name, price) VALUES ('X', 5000)").run().lastInsertRowid;
   const vsZero = db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total) VALUES (?,?,0,5000,0)").run(vid, s).lastInsertRowid;
-  assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vsZero] }, registrar), /quantity/);
+  assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vsZero] }, registrar), /количество/);
   const vsNeg = db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total) VALUES (?,?,-2,5000,-10000)").run(vid, s).lastInsertRowid;
-  assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vsNeg] }, registrar), /quantity/);
+  assert.throws(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vsNeg] }, registrar), /количество/);
 });
 
 // ---- SVC_UNPAID_REMOVE_V1 ---------------------------------------------------
@@ -346,7 +346,9 @@ test('refund_payment: partial then full, invoice rolls back, ledger invariant ho
   recordPayment(db, { invoice_id: invoice.id, amount: 50000, method: 'cash' }, cashier);
   const payId = db.prepare('SELECT id FROM payments WHERE invoice_id=? ORDER BY id').get(invoice.id).id;
 
-  const partial = refundPayment(db, { payment_id: payId, amount: 20000, reason: 'услуга не оказана' }, cashier);
+  // V3120_FIX — reopen_balance: явный выбор «оплатят снова»; без него частичный
+  // возврат оплаченного счёта — скидка после продажи (money-desk.v3120.test.js).
+  const partial = refundPayment(db, { payment_id: payId, amount: 20000, reason: 'услуга не оказана', reopen_balance: true }, cashier);
   assert.equal(partial.invoice.paid_amount, 30000);
   assert.equal(partial.invoice.status, 'partial');
   assert.equal(partial.invoice.paid_at, null);            // no longer settled
@@ -424,8 +426,8 @@ test('refund_payment: refuses refunding a refund, an unknown payment, and a non-
   recordPayment(db, { invoice_id: invoice.id, amount: 50000, method: 'cash' }, cashier);
   const payId = db.prepare('SELECT id FROM payments WHERE invoice_id=? ORDER BY id').get(invoice.id).id;
 
-  assert.throws(() => refundPayment(db, { payment_id: payId }, lab), /not allowed/);
-  assert.throws(() => refundPayment(db, { payment_id: 9999 }, cashier), /not found/);
+  assert.throws(() => refundPayment(db, { payment_id: payId }, lab), /недоступно/);
+  assert.throws(() => refundPayment(db, { payment_id: 9999 }, cashier), /не найден/);
   assert.throws(() => refundPayment(db, { payment_id: payId, amount: 60000 }, cashier), /Максимум/);
 
   refundPayment(db, { payment_id: payId }, cashier);
@@ -452,7 +454,7 @@ test('remove_unpaid_service: in-progress/completed lines and foreign roles refus
   db.prepare("UPDATE visit_services SET status='in_progress' WHERE id=?").run(vs1);
   assert.throws(() => removeUnpaidService(db, { visit_service_id: vs1 }, registrar), /уже оказыва/);
   db.prepare("UPDATE visit_services SET status='added' WHERE id=?").run(vs1);
-  assert.throws(() => removeUnpaidService(db, { visit_service_id: vs1 }, lab), /not allowed/);
+  assert.throws(() => removeUnpaidService(db, { visit_service_id: vs1 }, lab), /недоступно/);
 });
 
 // ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@
 // purchase unit). All stock quantities and the running average cost are
 // always expressed in base units.
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { hasAnyRole } from '../roles.js';
 import { resolveHolder, moveHolding } from './holdings.js';   // HOLDINGS_V1
 import { requireGrant } from '../grants.js';                  // GRANTS_V1 — выдача со склада по матрице прав
@@ -19,6 +20,9 @@ import { expiryWarnings } from './expiry.js';
 // STOCK_REQUEST_V1 — ядро заявки (номер, держатель, строки, журнал отдела) одно
 // на ручную заявку отдела, заявку себе/отделу и автозаявку по минимуму.
 import { insertRequisition, parseRequisitionLines, REQUISITION_ROLES } from './stock-requests.js';
+// STOCK_QTY_V1 (V3120_FIX) — количества с шестью знаками, пыль округления —
+// ноль (domain/stock-qty.js). round2 ниже остаётся только у денег.
+import { roundQty, factorOf, toBase, settleQty, coversQty } from '../domain/stock-qty.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -32,7 +36,7 @@ const PROCUREMENT_ROLES = ['admin', 'inventory'];
 function requireRole(user, allowed) {
   // MULTI_ROLE_SERVER_V1 — extras count too, not the primary role alone.
   if (!hasAnyRole(user, allowed)) {
-    throw new RpcError('Your role is not allowed to perform this action.', 403);
+    throw new RpcError('Ваша роль не может выполнить это действие.', 403);
   }
 }
 
@@ -53,25 +57,39 @@ const RECEIVE_UNITS = ['base', 'purchase'];
 
 function validateLine(line) {
   if (!line || typeof line !== 'object') {
-    throw new RpcError('each line must be an object.', 400);
+    throw new RpcError('Строка прихода заполнена неверно.', 400);
   }
   const productId = line.product_id;
   if (!isPositiveInt(productId)) {
-    throw new RpcError('product_id must be a positive integer.', 400);
+    throw new RpcError('Товар не выбран.', 400);
   }
   const qty = line.qty;
   if (!(typeof qty === 'number' && Number.isFinite(qty) && qty > 0 && qty <= MAX_QTY)) {
-    throw new RpcError(`qty must be a positive number up to ${MAX_QTY}.`, 400);
+    throw rpcT(RpcError, 'Количество — положительное число, не больше {max}.', { max: MAX_QTY }, 400);
   }
   const unit = line.unit === undefined ? 'base' : line.unit;
   if (!RECEIVE_UNITS.includes(unit)) {
-    throw new RpcError(`unit must be one of ${RECEIVE_UNITS.join(', ')}.`, 400);
+    throw new RpcError('Единица: базовая или единица закупки.', 400);
   }
   const unitCost = line.unit_cost === undefined ? 0 : line.unit_cost;
   if (!(typeof unitCost === 'number' && Number.isFinite(unitCost) && unitCost >= 0)) {
-    throw new RpcError('unit_cost must be a non-negative number.', 400);
+    throw new RpcError('Цена за единицу — неотрицательное число.', 400);
   }
   return { productId, qty, unit, unitCost };
+}
+
+// V3120_FIX — партия и срок строки прихода: одно правило на приход вручную и
+// приход по заказу. Пусто — нет партии / нет срока.
+function readBatch(l) {
+  return (l && typeof l.batch_no === 'string' ? l.batch_no.trim().slice(0, 80) : '') || null;
+}
+function readExpiry(l) {
+  if (!l || l.expiry_date === undefined || l.expiry_date === null || l.expiry_date === '') return null;
+  const s = String(l.expiry_date);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || !Number.isFinite(Date.parse(s + 'T00:00:00Z'))) {
+    throw new RpcError('Срок годности — дата в формате ГГГГ-ММ-ДД.', 400);
+  }
+  return s;
 }
 
 export function receiveStockLines(db, args, user) {
@@ -79,7 +97,7 @@ export function receiveStockLines(db, args, user) {
 
   const rawLines = args && args.lines;
   if (!Array.isArray(rawLines) || rawLines.length === 0) {
-    throw new RpcError('lines must be a non-empty array.', 400);
+    throw new RpcError('Добавьте хотя бы одну строку.', 400);
   }
   // RECEIVE_EASYMED_V1 — каждая строка может нести поставщика, партию/серию и
   // срок годности (mig 037); всё опционально и валидируется здесь.
@@ -87,16 +105,10 @@ export function receiveStockLines(db, args, user) {
     const base = validateLine(l);
     let supplierId = null;
     if (l.supplier_id !== undefined && l.supplier_id !== null && l.supplier_id !== '') {
-      if (!isPositiveInt(l.supplier_id)) throw new RpcError('supplier_id must be a positive integer.', 400);
+      if (!isPositiveInt(l.supplier_id)) throw new RpcError('Поставщик выбран неверно.', 400);
       supplierId = l.supplier_id;
     }
-    const batchNo = (typeof l.batch_no === 'string' ? l.batch_no.trim().slice(0, 80) : '') || null;
-    let expiry = null;
-    if (l.expiry_date !== undefined && l.expiry_date !== null && l.expiry_date !== '') {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(l.expiry_date))) throw new RpcError('expiry_date must be YYYY-MM-DD.', 400);
-      expiry = String(l.expiry_date);
-    }
-    return { ...base, supplierId, batchNo, expiry };
+    return { ...base, supplierId, batchNo: readBatch(l), expiry: readExpiry(l) };
   });
   const note = (args && args.note) || '';
 
@@ -116,21 +128,21 @@ export function receiveStockLines(db, args, user) {
     for (const { productId, qty, unit, unitCost, supplierId, batchNo, expiry } of lines) {
       const product = getProduct.get(productId);
       if (!product) {
-        throw new RpcError('product not found.', 400);
+        throw new RpcError('Товар не найден.', 400);
       }
       if (supplierId && !db.prepare('SELECT 1 FROM suppliers WHERE id = ?').get(supplierId)) {
-        throw new RpcError('supplier not found.', 400);
+        throw new RpcError('Поставщик не найден.', 400);
       }
 
       const packFactor = product.pack_factor > 0 ? product.pack_factor : 1;
       const factor = unit === 'purchase' ? packFactor : 1;
-      const baseQty = round2(qty * factor);
+      const baseQty = roundQty(qty * factor);
       const costPerBase = round2(factor > 0 ? unitCost / factor : unitCost);
 
       const oldOnHand = product.on_hand;
-      const newOnHand = round2(oldOnHand + baseQty);
+      const newOnHand = settleQty(oldOnHand + baseQty, factorOf(product));
       if (!Number.isFinite(newOnHand)) {
-        throw new RpcError('resulting stock is out of range.', 400);
+        throw new RpcError('Остаток вне допустимого диапазона.', 400);
       }
       const newAvg = newOnHand > 0
         ? round2((product.avg_cost * oldOnHand + baseQty * costPerBase) / newOnHand)
@@ -151,7 +163,7 @@ export function receiveStockLines(db, args, user) {
 
 // Weighted-average cost after adding `addQty` base units at `costPerUnit` each.
 function wac(oldOnHand, oldAvg, addQty, costPerUnit) {
-  const newOnHand = round2(oldOnHand + addQty);
+  const newOnHand = roundQty(oldOnHand + addQty);
   const newAvg = newOnHand > 0
     ? round2((oldAvg * oldOnHand + addQty * costPerUnit) / newOnHand)
     : oldAvg;
@@ -162,7 +174,10 @@ const NOW = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 
 // -----------------------------------------------------------------------------
 // receive_purchase_order — book a delivery against a PO into the warehouse.
-// args: { po_id, lines?: [{ po_item_id, qty }] }
+// args: { po_id, lines?: [{ po_item_id, qty, batch_no?, expiry_date? }] }
+// V3120_FIX — движение прихода несёт поставщика ЗАКАЗА и партию/срок строки:
+// без них приход по заказу выпадал из «Сроков годности» и из отбора по
+// поставщику (приход вручную писал их всегда).
 //   • lines omitted  -> receive every line's full outstanding quantity
 //   • lines provided -> receive exactly those base-unit quantities (partial OK)
 // Each receipt raises on_hand + moving-average cost (WAC) at the line's
@@ -175,63 +190,65 @@ export function receivePurchaseOrder(db, args, user) {
 
   const poId = args && args.po_id;
   if (!isPositiveInt(poId)) {
-    throw new RpcError('po_id must be a positive integer.', 400);
+    throw new RpcError('Заказ не выбран.', 400);
   }
   const rawLines = args && args.lines;
   if (rawLines !== undefined && !Array.isArray(rawLines)) {
-    throw new RpcError('lines must be an array when provided.', 400);
+    throw new RpcError('Строки прихода переданы неверно.', 400);
   }
+  const PO_STATUS_RU = { received: 'уже принят', cancelled: 'отменён' };
 
   const run = db.transaction(() => {
     const po = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(poId);
-    if (!po) throw new RpcError('purchase order not found.', 400);
+    if (!po) throw new RpcError('Заказ не найден.', 400);
     if (po.status === 'received' || po.status === 'cancelled') {
-      throw new RpcError(`purchase order is already ${po.status}.`, 400);
+      throw new RpcError(`Заказ ${PO_STATUS_RU[po.status]}.`, 400);
     }
 
     const items = db.prepare('SELECT * FROM purchase_order_items WHERE po_id = ?').all(poId);
-    if (items.length === 0) throw new RpcError('purchase order has no lines.', 400);
+    if (items.length === 0) throw new RpcError('В заказе нет строк.', 400);
     const byId = new Map(items.map((it) => [it.id, it]));
-    const outstanding = (it) => round2(it.qty_ordered - it.qty_received);
+    const outstanding = (it) => roundQty(it.qty_ordered - it.qty_received);
 
     // Resolve how much to receive per line.
-    const plan = [];   // [{ item, qty }]
+    const plan = [];   // [{ item, qty, batchNo, expiry }]
     if (Array.isArray(rawLines) && rawLines.length > 0) {
       for (const l of rawLines) {
         const it = byId.get(l && l.po_item_id);
-        if (!it) throw new RpcError('po_item_id does not belong to this purchase order.', 400);
+        if (!it) throw new RpcError('Строка не из этого заказа.', 400);
         const qty = l.qty;
         if (!(typeof qty === 'number' && Number.isFinite(qty) && qty > 0 && qty <= MAX_QTY)) {
-          throw new RpcError(`qty must be a positive number up to ${MAX_QTY}.`, 400);
+          throw rpcT(RpcError, 'Количество — положительное число, не больше {max}.', { max: MAX_QTY }, 400);
         }
         if (qty > outstanding(it) + 1e-9) {
-          throw new RpcError('qty exceeds the outstanding amount for this line.', 400);
+          throw new RpcError('Количество больше, чем осталось принять по строке.', 400);
         }
-        plan.push({ item: it, qty: round2(qty) });
+        plan.push({ item: it, qty: roundQty(qty), batchNo: readBatch(l), expiry: readExpiry(l) });
       }
     } else {
       for (const it of items) {
         const out = outstanding(it);
-        if (out > 0) plan.push({ item: it, qty: out });
+        if (out > 0) plan.push({ item: it, qty: out, batchNo: null, expiry: null });
       }
     }
-    if (plan.length === 0) throw new RpcError('nothing to receive on this purchase order.', 400);
+    if (plan.length === 0) throw new RpcError('По заказу нечего принимать.', 400);
 
     const getProduct = db.prepare('SELECT * FROM products WHERE id = ?');
     const updateProduct = db.prepare(`UPDATE products SET on_hand = ?, avg_cost = ?, updated_at = ${NOW} WHERE id = ?`);
     const insertMovement = db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, branch_id)
-      VALUES (?, 'receive', ?, ?, 'purchase_order', ?, ?, ?, 1)`);
-    const bumpReceived = db.prepare('UPDATE purchase_order_items SET qty_received = round(qty_received + ?, 2) WHERE id = ?');
+      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, branch_id, supplier_id, batch_no, expiry_date)
+      VALUES (?, 'receive', ?, ?, 'purchase_order', ?, ?, ?, 1, ?, ?, ?)`);
+    const bumpReceived = db.prepare('UPDATE purchase_order_items SET qty_received = round(qty_received + ?, 6) WHERE id = ?');
 
     const received = [];
-    for (const { item, qty } of plan) {
+    for (const { item, qty, batchNo, expiry } of plan) {
       const product = getProduct.get(item.product_id);
-      if (!product) throw new RpcError('product not found for a purchase-order line.', 400);
+      if (!product) throw new RpcError('Товар строки заказа не найден.', 400);
       const { newOnHand, newAvg } = wac(product.on_hand, product.avg_cost, qty, item.unit_cost || 0);
-      if (!Number.isFinite(newOnHand)) throw new RpcError('resulting stock is out of range.', 400);
+      if (!Number.isFinite(newOnHand)) throw new RpcError('Остаток вне допустимого диапазона.', 400);
       updateProduct.run(newOnHand, newAvg, product.id);
-      insertMovement.run(product.id, qty, round2(item.unit_cost || 0), poId, `PO ${po.po_number}`, user.id);
+      insertMovement.run(product.id, qty, round2(item.unit_cost || 0), poId, `PO ${po.po_number}`, user.id,
+        po.supplier_id || null, batchNo, expiry);
       bumpReceived.run(qty, item.id);
       received.push({ po_item_id: item.id, product_id: product.id, qty, on_hand: newOnHand, avg_cost: newAvg });
     }
@@ -264,18 +281,19 @@ export function approveRequisitionAndIssue(db, args, user) {
 
   const reqId = args && args.req_id;
   if (!isPositiveInt(reqId)) {
-    throw new RpcError('req_id must be a positive integer.', 400);
+    throw new RpcError('Заявка не выбрана.', 400);
   }
+  const REQ_STATUS_RU = { issued: 'уже выдана', rejected: 'отклонена', cancelled: 'отменена', converted: 'переведена в заказ' };
 
   const run = db.transaction(() => {
     const req = db.prepare('SELECT * FROM purchase_requisitions WHERE id = ?').get(reqId);
-    if (!req) throw new RpcError('requisition not found.', 400);
+    if (!req) throw new RpcError('Заявка не найдена.', 400);
     if (!['draft', 'submitted', 'approved'].includes(req.status)) {
-      throw new RpcError(`requisition cannot be issued (status ${req.status}).`, 400);
+      throw new RpcError(`Заявку нельзя выдать: она ${REQ_STATUS_RU[req.status] || `в статусе «${req.status}»`}.`, 400);
     }
 
     const items = db.prepare('SELECT * FROM purchase_requisition_items WHERE req_id = ?').all(reqId);
-    if (items.length === 0) throw new RpcError('requisition has no items.', 400);
+    if (items.length === 0) throw new RpcError('В заявке нет строк.', 400);
 
     const getProduct = db.prepare('SELECT * FROM products WHERE id = ?');
     const updateProduct = db.prepare(`UPDATE products SET on_hand = ?, updated_at = ${NOW} WHERE id = ?`);
@@ -302,16 +320,22 @@ export function approveRequisitionAndIssue(db, args, user) {
 
     const issued = [];
     for (const it of items) {
-      const qty = it.qty;
-      if (!(typeof qty === 'number' && Number.isFinite(qty) && qty > 0 && qty <= MAX_QTY)) {
-        throw new RpcError('a requisition line has an invalid quantity.', 400);
-      }
+      // STOCK_QTY_V1 (V3120_FIX) — ОДНО число на движение, склад и подотчёт.
+      // Было: движение писало строку заявки как есть (-0.16666666666666666),
+      // склад — round2 (0.17 ушло), подотчёт — round2 (0.17 пришло): три
+      // разных «5 таблеток», и журнал не сходился с остатком.
       const product = getProduct.get(it.product_id);
-      if (!product) throw new RpcError('product not found for a requisition line.', 400);
-      const newOnHand = round2(product.on_hand - qty);
-      if (newOnHand < 0) {
-        throw new RpcError(`insufficient stock to issue ${product.name} (have ${product.on_hand}, need ${qty}).`, 400);
+      if (!product) throw new RpcError('Товар строки заявки не найден.', 400);
+      const cf = factorOf(product);
+      let qty = roundQty(it.qty);
+      if (!(Number.isFinite(qty) && qty > 0 && qty <= MAX_QTY)) {
+        throw new RpcError('В заявке строка с неверным количеством.', 400);
       }
+      if (!coversQty(product.on_hand, qty, cf)) {
+        throw rpcT(RpcError, 'Недостаточно на складе, чтобы выдать «{name}»: есть {have}, нужно {qty}.', { name: product.name, have: roundQty(product.on_hand), qty: `${qty} ${product.base_unit || ''}`.trim() }, 400);
+      }
+      qty = Math.min(qty, roundQty(product.on_hand));   // «последняя таблетка» в пределах допуска
+      const newOnHand = settleQty(product.on_hand - qty, cf);
       updateProduct.run(newOnHand, product.id);
       insertMovement.run(product.id, -qty, round2(product.avg_cost || 0), reqId, `REQ ${req.req_number}`, user.id, holder ? holder.type : null, holder ? holder.id : null);
       if (holder) moveHolding(db, holder, product.id, qty);   // HOLDINGS_V1 — склад → отдел
@@ -333,28 +357,37 @@ export function approveRequisitionAndIssue(db, args, user) {
 
 // -----------------------------------------------------------------------------
 // post_stock_count — reconcile physical counts into on_hand. args: { count_id }.
-// For each counted line (counted_qty not null) the physical count is treated as
-// truth: on_hand is set to counted_qty and the signed delta (counted - current)
-// is written as an 'adjust' movement (ref stock_count/count_id). Lines left
-// uncounted are ignored. The count moves to 'posted'.
+// Lines left uncounted are ignored. The count moves to 'posted'.
+//
+// V3120_FIX — ПРОВОДИТСЯ РАСХОЖДЕНИЕ ЛИСТА, А НЕ «ОСТАТОК = ПОСЧИТАНО».
+// Было: delta = counted − on_hand СЕЙЧАС. Лист снимает system_qty в момент
+// создания, считают его часами, а клиника тем временем выдаёт: 2 шт, выданные
+// пациенту между листом и проводкой, «воскресали» — остаток ставился равным
+// посчитанному, будто их не выдавали. Стало: движение = variance строки листа
+// (counted − system_qty, колонка миграции 028), и оно прибавляется к ЖИВОМУ
+// остатку. Журнал равен листу, а выданное после листа остаётся выданным.
+// Если товар двигался после листа, проводка не отказывает (пересчитывать
+// заново весь склад из-за одного укола — хуже), но говорит об этом в ответе
+// (warnings) и в основании движения. Уйти в минус проводка не может: такой
+// лист отказывает целиком, называя товар.
 // -----------------------------------------------------------------------------
 export function postStockCount(db, args, user) {
   requireRole(user, PROCUREMENT_ROLES);
 
   const countId = args && args.count_id;
   if (!isPositiveInt(countId)) {
-    throw new RpcError('count_id must be a positive integer.', 400);
+    throw new RpcError('Инвентаризация не выбрана.', 400);
   }
 
   const run = db.transaction(() => {
     const count = db.prepare('SELECT * FROM stock_counts WHERE id = ?').get(countId);
-    if (!count) throw new RpcError('stock count not found.', 400);
+    if (!count) throw new RpcError('Инвентаризация не найдена.', 400);
     if (count.status === 'posted' || count.status === 'cancelled') {
-      throw new RpcError(`stock count is already ${count.status}.`, 400);
+      throw new RpcError(count.status === 'posted' ? 'Инвентаризация уже проведена.' : 'Инвентаризация отменена.', 400);
     }
 
     const items = db.prepare('SELECT * FROM stock_count_items WHERE count_id = ? AND counted_qty IS NOT NULL').all(countId);
-    if (items.length === 0) throw new RpcError('stock count has no counted lines to post.', 400);
+    if (items.length === 0) throw new RpcError('В инвентаризации нет посчитанных строк.', 400);
 
     const getProduct = db.prepare('SELECT * FROM products WHERE id = ?');
     const updateProduct = db.prepare(`UPDATE products SET on_hand = ?, updated_at = ${NOW} WHERE id = ?`);
@@ -363,23 +396,40 @@ export function postStockCount(db, args, user) {
       VALUES (?, 'adjust', ?, ?, 'stock_count', ?, ?, ?, 1)`);
 
     const adjustments = [];
+    const warnings = [];
     for (const it of items) {
       const counted = it.counted_qty;
       if (!(typeof counted === 'number' && Number.isFinite(counted) && counted >= 0 && counted <= MAX_QTY)) {
-        throw new RpcError('a counted quantity is invalid.', 400);
+        throw new RpcError('Посчитанное количество заполнено неверно.', 400);
       }
       const product = getProduct.get(it.product_id);
-      if (!product) throw new RpcError('product not found for a stock-count line.', 400);
-      const delta = round2(counted - product.on_hand);
-      if (delta !== 0) {
-        updateProduct.run(round2(counted), product.id);
-        insertMovement.run(product.id, delta, round2(product.avg_cost || 0), countId, `Count ${count.count_number}`, user.id);
+      if (!product) throw new RpcError('Товар строки инвентаризации не найден.', 400);
+      const cf = factorOf(product);
+      const unit = product.base_unit || product.unit || '';
+      const systemQty = roundQty(it.system_qty || 0);
+      const delta = roundQty(counted - systemQty);                  // расхождение ЛИСТА
+      const moved = roundQty(product.on_hand - systemQty);          // что ушло/пришло после листа
+      const next = settleQty(product.on_hand + delta, cf);
+      if (next < 0) {
+        throw new RpcError(`«${product.name}»: по листу ${roundQty(counted)} ${unit}, но после пересчёта ушло больше — `
+          + `остаток стал бы ${next}. Пересчитайте этот товар заново.`.replace(/\s+/g, ' '), 400);
       }
-      adjustments.push({ product_id: product.id, delta, on_hand: round2(counted) });
+      let note = `Инвентаризация ${count.count_number}`;
+      if (Math.abs(moved) >= 1e-6) {
+        const msg = `«${product.name}»: после пересчёта товар двигался (${moved > 0 ? '+' : ''}${moved} ${unit}`.replace(/\s+\)/, ')')
+          + `) — проведено расхождение листа ${delta > 0 ? '+' : ''}${delta}, остаток ${next} ${unit}`.trim() + '.';
+        warnings.push({ product_id: product.id, product_name: product.name, moved_since_count: moved, message: msg.replace(/\s+/g, ' ') });
+        note += ` (после пересчёта движение ${moved > 0 ? '+' : ''}${moved})`;
+      }
+      if (delta !== 0) {
+        updateProduct.run(next, product.id);
+        insertMovement.run(product.id, delta, round2(product.avg_cost || 0), countId, note, user.id);
+      }
+      adjustments.push({ product_id: product.id, delta, on_hand: delta !== 0 ? next : roundQty(product.on_hand) });
     }
 
     db.prepare(`UPDATE stock_counts SET status = 'posted', posted_at = ${NOW} WHERE id = ?`).run(countId);
-    return { count_id: countId, status: 'posted', adjustments };
+    return { count_id: countId, status: 'posted', adjustments, warnings };
   });
 
   return run();
@@ -390,26 +440,26 @@ export function adjustStock(db, args, user) {
 
   const productId = args && args.product_id;
   if (!isPositiveInt(productId)) {
-    throw new RpcError('product_id must be a positive integer.', 400);
+    throw new RpcError('Товар не выбран.', 400);
   }
   const qty = args && args.qty;
-  if (!(typeof qty === 'number' && Number.isFinite(qty) && qty !== 0)) {
-    throw new RpcError('qty must be a non-zero finite number.', 400);
+  if (!(typeof qty === 'number' && Number.isFinite(qty) && qty !== 0 && Math.abs(qty) <= MAX_QTY)) {
+    throw new RpcError('Корректировка — ненулевое число.', 400);
   }
   const note = args && args.note;
   if (typeof note !== 'string' || note.trim() === '') {
-    throw new RpcError('a note is required for adjustments.', 400);
+    throw new RpcError('Для корректировки нужна причина.', 400);
   }
 
   const run = db.transaction(() => {
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
     if (!product) {
-      throw new RpcError('product not found.', 400);
+      throw new RpcError('Товар не найден.', 400);
     }
 
-    const newOnHand = round2(product.on_hand + qty);
+    const newOnHand = settleQty(product.on_hand + qty, factorOf(product));
     if (newOnHand < 0) {
-      throw new RpcError('adjustment would make stock negative.', 400);
+      throw new RpcError('Корректировка увела бы остаток в минус.', 400);
     }
 
     db.prepare(`
@@ -421,7 +471,7 @@ export function adjustStock(db, args, user) {
     db.prepare(`
       INSERT INTO stock_movements (product_id, kind, qty, reference_type, note, created_by, branch_id)
       VALUES (?, 'adjust', ?, 'manual', ?, ?, 1)
-    `).run(productId, qty, note, user.id);
+    `).run(productId, roundQty(qty), note, user.id);
 
     return { product_id: productId, on_hand: newOnHand };
   });
@@ -455,34 +505,34 @@ export function issueStockLines(db, args, user) {
   const holder = args && args.holder && typeof args.holder === 'object' ? resolveHolder(db, args.holder) : null;
   const recipient = (args && typeof args.recipient === 'string') ? args.recipient.trim() : (holder ? holder.name : '');
   if (!recipient) {
-    throw new RpcError('recipient is required.', 400);
+    throw new RpcError('Укажите получателя.', 400);
   }
   const extraNote = (args && typeof args.note === 'string') ? args.note.trim() : '';
   if (recipient.length > 200) {
-    throw new RpcError('recipient is too long (max 200 chars).', 400);
+    throw new RpcError('Получатель — не длиннее 200 символов.', 400);
   }
   if (extraNote.length > 500) {
-    throw new RpcError('note is too long (max 500 chars).', 400);
+    throw new RpcError('Примечание — не длиннее 500 символов.', 400);
   }
 
   const rawLines = args && args.lines;
   if (!Array.isArray(rawLines) || rawLines.length === 0) {
-    throw new RpcError('lines must be a non-empty array.', 400);
+    throw new RpcError('Добавьте хотя бы одну строку.', 400);
   }
   const lines = rawLines.map(line => {
     if (!line || typeof line !== 'object') {
-      throw new RpcError('each line must be an object.', 400);
+      throw new RpcError('Строка выдачи заполнена неверно.', 400);
     }
     if (!isPositiveInt(line.product_id)) {
-      throw new RpcError('product_id must be a positive integer.', 400);
+      throw new RpcError('Товар не выбран.', 400);
     }
     const qty = line.qty;
     if (!(typeof qty === 'number' && Number.isFinite(qty) && qty > 0 && qty <= MAX_QTY)) {
-      throw new RpcError(`qty must be a positive number up to ${MAX_QTY}.`, 400);
+      throw rpcT(RpcError, 'Количество — положительное число, не больше {max}.', { max: MAX_QTY }, 400);
     }
     const unit = line.unit === undefined ? 'consumption' : line.unit;
     if (!ISSUE_UNITS.includes(unit)) {
-      throw new RpcError(`unit must be one of ${ISSUE_UNITS.join(', ')}.`, 400);
+      throw new RpcError('Единица: базовая или единица расхода.', 400);
     }
     return { productId: line.product_id, qty, unit };
   });
@@ -513,20 +563,22 @@ export function issueStockLines(db, args, user) {
       // of a discontinued item still leaves the warehouse through «Выдать».
       const product = getProduct.get(productId);
       if (!product) {
-        throw new RpcError('product not found.', 400);
+        throw new RpcError('Товар не найден.', 400);
       }
 
-      const cf = (product.consumption_unit && product.consumption_factor > 0) ? product.consumption_factor : 1;
-      const baseQty = round2(unit === 'consumption' ? qty / cf : qty);
+      // STOCK_QTY_V1 (V3120_FIX) — было round2: 4 мл из литра (0.004 л)
+      // округлялись в ноль и отказывали «qty is too small», 5 мл списывали 0.01 л.
+      const cf = factorOf(product);
+      let baseQty = unit === 'consumption' ? toBase(qty, cf) : roundQty(qty);
       if (!(baseQty > 0)) {
-        throw new RpcError('qty is too small to issue.', 400);
+        throw new RpcError('Количество слишком мало для выдачи.', 400);
       }
-      if (product.on_hand < baseQty) {
-        throw new RpcError(
-          `Недостаточно остатка: ${product.name} (в наличии ${round2(product.on_hand)} ${product.base_unit || ''})`.trim(), 400);
+      if (!coversQty(product.on_hand, baseQty, cf)) {
+        throw rpcT(RpcError, 'Недостаточно остатка: {name} (в наличии {have})', { name: product.name, have: `${roundQty(product.on_hand)} ${product.base_unit || ''}`.trim() }, 400);
       }
+      baseQty = Math.min(baseQty, roundQty(product.on_hand));
 
-      const newOnHand = round2(product.on_hand - baseQty);
+      const newOnHand = settleQty(product.on_hand - baseQty, cf);
       updateProduct.run(newOnHand, productId);
       insertMovement.run(productId, -baseQty, product.avg_cost, note, user.id, holder ? holder.type : null, holder ? holder.id : null);
       if (holder) moveHolding(db, holder, productId, baseQty);   // HOLDINGS_V1 — warehouse → holder
@@ -626,7 +678,7 @@ export function importProductsExcel(db, args, user) {
 
   const rows = args && args.rows;
   if (!Array.isArray(rows) || rows.length === 0) {
-    throw new RpcError('rows must be a non-empty array.', 400);
+    throw new RpcError('В файле нет строк для импорта.', 400);
   }
   if (rows.length > MAX_IMPORT_ROWS) {
     throw new RpcError(`Не больше ${MAX_IMPORT_ROWS} строк за один импорт.`, 400);
@@ -702,7 +754,8 @@ export function importProductsExcel(db, args, user) {
       if (qty !== null && qty > 0) {
         const product = findProduct.get(name);   // fresh row after the catalog write
         const cost = unitCost !== null ? unitCost : 0;
-        const newOnHand = round2(product.on_hand + qty);
+        const newOnHand = roundQty(product.on_hand + qty);
+
         if (!Number.isFinite(newOnHand)) {
           throw new RpcError(`Строка ${rowNo}: остаток вне диапазона.`, 400);
         }

@@ -25,8 +25,21 @@ import {
 // DASHBOARD_TREND_V1 — «кто лежит» решает тот же список статусов, что и все
 // экраны стационара: своя копия здесь разошлась бы с ним при первой правке.
 import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
+// V3120_FIX — деньги на сводке видит тот, кому открыта выручка в «Отчётах»
+// (группа reports.revenue): то же правило, что у самих отчётов. Счётчики —
+// пациенты, визиты, число счетов, койки — остаются всем, кто видит сводку.
+import { canSeeReportKey } from '../report-access.js';
 
-export function dashboardSummary(db, _args, _user) {
+/** Видит ли человек деньги на сводке. Без пользователя (внутренний вызов) — да. */
+function seesMoney(db, user) {
+  if (!user) return true;
+  try { return canSeeReportKey(db, user, 'reports.revenue'); } catch (_) { return false; }
+}
+// Счёт депозита (DEP-…) и продажи подарочной карты (CARD-…): предоплата, а не
+// услуга — та же граница, что у отчётов (reports.js NOT_DEPOSIT_INVOICE_SQL).
+const PREPAID_INVOICE_SQL = "(COALESCE(i.invoice_number, '') LIKE 'DEP-%' OR COALESCE(i.invoice_number, '') LIKE 'CARD-%')";
+
+export function dashboardSummary(db, _args, user) {
   const one = (sql, ...p) => db.prepare(sql).get(...p);
   const all = (sql, ...p) => db.prepare(sql).all(...p);
   const ctx = buildingContext(db);
@@ -40,8 +53,14 @@ export function dashboardSummary(db, _args, _user) {
   // новые деньги в кассе.
   const collected = all(`SELECT ${originExpr(db, 'payments', 'p')} AS origin, COALESCE(SUM(p.amount),0) s
       FROM payments p WHERE ${INFLOW_SQL} AND ${isLocalToday('p.paid_at')} GROUP BY origin`);
+  // V3120_FIX — долг ПАЦИЕНТОВ и долг ОРГАНИЗАЦИЙ (страховые, предприятия —
+  // invoices.payer_id, миграция 054) — разные деньги: с первыми говорит касса,
+  // со вторыми — бухгалтерия по договору. Одной плиткой они читались как
+  // «пациенты должны» суммы, которых касса у пациентов не спросит.
   const outstanding = all(`SELECT ${originExpr(db, 'invoices', 'i')} AS origin, COUNT(*) n,
-             COALESCE(SUM(i.total_amount - i.paid_amount),0) s
+             COALESCE(SUM(i.total_amount - i.paid_amount),0) s,
+             COALESCE(SUM(CASE WHEN i.payer_id IS NULL THEN 1 ELSE 0 END),0) pn,
+             COALESCE(SUM(CASE WHEN i.payer_id IS NULL THEN i.total_amount - i.paid_amount ELSE 0 END),0) ps
       FROM invoices i WHERE ${outstandingWhere('i.status')} GROUP BY origin`);
   // Склад между зданиями не ездит: остаток всегда свой, и разрез по зданиям
   // здесь был бы выдумкой.
@@ -57,10 +76,14 @@ export function dashboardSummary(db, _args, _user) {
   // расхождение, ради которого условие когда-то и появилось.
   const labScope = labScopeOf(db);
   const labBuildingClause = labScopeWhere(db, labScope, 'visit_services', 'vs');
+  // V3120_FIX (мигр. 199) — условие по статусу написано РОВНО как у частичного
+  // индекса idx_visit_services_lab_pending: так SQLite идёт по нему, а не по
+  // всей таблице (было ~1 с на миллионе строк). INDEXED BY не ставим: на базе
+  // до миграции запрос обязан работать и без индекса.
   const labRows = all(`SELECT ${originExpr(db, 'visit_services', 'vs')} AS origin, COUNT(*) n
       FROM visit_services vs
       JOIN services s ON s.id = vs.service_id
-      WHERE s.is_lab=1 AND vs.status IN ('queued','in_progress')${labBuildingClause}
+      WHERE vs.status IN ('queued','in_progress') AND s.is_lab=1${labBuildingClause}
         AND NOT EXISTS (SELECT 1 FROM lab_results lr WHERE lr.visit_service_id=vs.id AND lr.verified_at IS NOT NULL)
       GROUP BY origin`);
 
@@ -68,7 +91,8 @@ export function dashboardSummary(db, _args, _user) {
     ...patients.map((r) => ({ origin: r.origin, patients_today: r.n })),
     ...visits.map((r) => ({ origin: r.origin, visits_today: r.n })),
     ...collected.map((r) => ({ origin: r.origin, collected_today: r.s })),
-    ...outstanding.map((r) => ({ origin: r.origin, outstanding_count: r.n, outstanding_amount: r.s })),
+    ...outstanding.map((r) => ({ origin: r.origin, outstanding_count: r.n, outstanding_amount: r.s,
+      outstanding_patient_count: r.pn, outstanding_patient_amount: r.ps })),
     ...labRows.map((r) => ({ origin: r.origin, lab_pending_count: r.n })),
   ];
   const buildings = summariseByBuilding(ctx, merged, {
@@ -77,16 +101,37 @@ export function dashboardSummary(db, _args, _user) {
     collected_today:    (r) => r.collected_today || 0,
     outstanding_count:  (r) => r.outstanding_count || 0,
     outstanding_amount: (r) => r.outstanding_amount || 0,
+    outstanding_patient_count:  (r) => r.outstanding_patient_count || 0,
+    outstanding_patient_amount: (r) => r.outstanding_patient_amount || 0,
     lab_pending_count:  (r) => r.lab_pending_count || 0,
   }).map((b) => { const { rows: _rows, ...rest } = b; return rest; });
 
   const sum = (k) => buildings.reduce((n, b) => n + b[k], 0);
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const outstandingAmount = r2(sum('outstanding_amount'));
+  const patientAmount = r2(sum('outstanding_patient_amount'));
+  const collectedTotal = r2(sum('collected_today'));
+  const money = seesMoney(db, user);
+  // V3120_FIX — без права на выручку денежные поля уходят из ответа целиком,
+  // в том числе из разреза по зданиям: спрятать их только на экране значило бы
+  // оставить их в ответе сервера.
+  if (!money) {
+    for (const b of buildings) {
+      for (const k of ['collected_today', 'outstanding_amount', 'outstanding_patient_amount']) b[k] = null;
+    }
+  }
   return {
+    money_visible: money,
     patients_today: sum('patients_today'),
     visits_today: sum('visits_today'),
-    collected_today: Math.round(sum('collected_today') * 100) / 100,
+    collected_today: money ? collectedTotal : null,
     outstanding_count: sum('outstanding_count'),
-    outstanding_amount: Math.round(sum('outstanding_amount') * 100) / 100,
+    outstanding_amount: money ? outstandingAmount : null,
+    // Разрез долга: пациенты (касса) и организации (договор / страховая).
+    outstanding_patient_count: sum('outstanding_patient_count'),
+    outstanding_patient_amount: money ? patientAmount : null,
+    outstanding_payer_count: sum('outstanding_count') - sum('outstanding_patient_count'),
+    outstanding_payer_amount: money ? r2(outstandingAmount - patientAmount) : null,
     low_stock_count,
     lab_pending_count: sum('lab_pending_count'),
     // Разрез по зданиям и сколько их. Плитка с одним числом на два дома обязана
@@ -119,6 +164,7 @@ export function dashboardSummary(db, _args, _user) {
 // оплата в 23:30 уехала бы в завтрашний столбик графика.
 // ---------------------------------------------------------------------------
 const TREND_DAYS_DEFAULT = 14;
+const MONEY_FIELDS = ['clinic', 'inpatient', 'unassigned', 'total'];
 const TREND_DAYS_MAX = 90;
 
 /** Календарные дни клиники, кончая сегодняшним, в порядке возрастания. */
@@ -130,7 +176,7 @@ function localDays(db, days) {
   return out;
 }
 
-export function dashboardTrend(db, args, _user) {
+export function dashboardTrend(db, args, user) {
   const all = (sql, ...p) => db.prepare(sql).all(...p);
   const one = (sql, ...p) => db.prepare(sql).get(...p);
   const days = Math.max(1, Math.min(TREND_DAYS_MAX, Math.round(Number(args && args.days) || TREND_DAYS_DEFAULT)));
@@ -140,40 +186,68 @@ export function dashboardTrend(db, args, _user) {
   const inBed = IN_BED_STATUSES.map((s) => `'${s}'`).join(',');
 
   const byDay = new Map(list.map((d) => [d, {
-    date: d, clinic: 0, inpatient: 0, total: 0, visits: 0, admissions: 0, discharges: 0,
+    date: d, clinic: 0, inpatient: 0, unassigned: 0, total: 0, visits: 0, admissions: 0, discharges: 0,
   }]));
   const bump = (d, key, v) => { const row = byDay.get(d); if (row) row[key] += Number(v) || 0; };
 
-  // Деньги: приход кассы (без «кошелька» — это трата уже принятого депозита),
-  // разложенный по счёту: у счёта госпитализации есть admission_id.
+  // Деньги по счёту, к которому пришла оплата: у счёта госпитализации есть
+  // admission_id.
+  //
+  // V3120_FIX — ДЕПОЗИТ ПЕРЕСТАЛ БЫТЬ «АМБУЛАТОРИЕЙ». Раньше считался только
+  // приход кассы: депозит (счёт DEP-…) без admission_id уезжал в
+  // «амбулаторно», а оплата стационара с этого депозита («кошелёк») не
+  // считалась нигде — стационар, живущий на предоплате, выглядел пустым.
+  // Теперь:
+  //   • амбулатория и стационар — ВСЁ, чем оплачены их счета, включая оплату с
+  //     баланса и подарочной картой;
+  //   • «не распределено» — приход на депозиты и карты минус то, что с них в
+  //     этот день потрачено (бывает меньше нуля: потратили внесённое раньше);
+  //   • итог — по-прежнему приход кассы: амбулатория + стационар + не
+  //     распределено = total.
   for (const r of all(`
     SELECT ${localDate('p.paid_at')} AS d,
-           CASE WHEN i.admission_id IS NOT NULL THEN 'inpatient' ELSE 'clinic' END AS kind,
+           CASE WHEN ${PREPAID_INVOICE_SQL} THEN 'prepaid'
+                WHEN i.admission_id IS NOT NULL THEN 'inpatient' ELSE 'clinic' END AS kind,
+           CASE WHEN p.${INFLOW_SQL} THEN 1 ELSE 0 END AS inflow,
            COALESCE(SUM(p.amount), 0) AS s
       FROM payments p
       JOIN invoices i ON i.id = p.invoice_id
-     WHERE p.${INFLOW_SQL} AND ${inLocalRange('p.paid_at')}
-     GROUP BY d, kind`, from, to)) {
+     WHERE ${inLocalRange('p.paid_at')}
+     GROUP BY d, kind, inflow`, from, to)) {
+    if (r.kind === 'prepaid') {
+      if (r.inflow) { bump(r.d, 'unassigned', r.s); bump(r.d, 'total', r.s); }
+      continue;
+    }
     bump(r.d, r.kind, r.s);
-    bump(r.d, 'total', r.s);
+    if (r.inflow) bump(r.d, 'total', r.s);
+    else bump(r.d, 'unassigned', -(Number(r.s) || 0));
   }
   for (const r of all(`SELECT ${localDate('v.visit_date')} AS d, COUNT(*) AS n
       FROM visits v WHERE ${inLocalRange('v.visit_date')} GROUP BY d`, from, to)) bump(r.d, 'visits', r.n);
   for (const r of all(`SELECT ${localDate('a.admitted_at')} AS d, COUNT(*) AS n
       FROM admissions a WHERE a.status <> 'cancelled' AND ${inLocalRange('a.admitted_at')} GROUP BY d`, from, to)) bump(r.d, 'admissions', r.n);
+  // V3120_FIX — выписка — это status 'discharged'. Отмена заявки тоже ставит
+  // discharged_at (inpatient-flow.js), и отменённые заявки считались выписками.
   for (const r of all(`SELECT ${localDate('a.discharged_at')} AS d, COUNT(*) AS n
-      FROM admissions a WHERE a.discharged_at IS NOT NULL AND ${inLocalRange('a.discharged_at')} GROUP BY d`, from, to)) bump(r.d, 'discharges', r.n);
+      FROM admissions a WHERE a.status = 'discharged' AND a.discharged_at IS NOT NULL AND ${inLocalRange('a.discharged_at')} GROUP BY d`, from, to)) bump(r.d, 'discharges', r.n);
 
   const series = list.map((d) => {
     const r = byDay.get(d);
-    for (const k of ['clinic', 'inpatient', 'total']) r[k] = Math.round(r[k] * 100) / 100;
+    for (const k of MONEY_FIELDS) r[k] = Math.round(r[k] * 100) / 100;
     return r;
   });
   const totals = series.reduce((t, r) => {
-    for (const k of ['clinic', 'inpatient', 'total', 'visits', 'admissions', 'discharges']) t[k] = (t[k] || 0) + r[k];
+    for (const k of [...MONEY_FIELDS, 'visits', 'admissions', 'discharges']) t[k] = (t[k] || 0) + r[k];
     return t;
   }, {});
-  for (const k of ['clinic', 'inpatient', 'total']) totals[k] = Math.round((totals[k] || 0) * 100) / 100;
+  for (const k of MONEY_FIELDS) totals[k] = Math.round((totals[k] || 0) * 100) / 100;
+  // V3120_FIX — без права на выручку деньги уходят из ответа (ряды остаются:
+  // визиты, поступления и выписки видны всем, кто видит сводку).
+  const money = seesMoney(db, user);
+  if (!money) {
+    for (const r of series) for (const k of MONEY_FIELDS) r[k] = null;
+    for (const k of MONEY_FIELDS) totals[k] = null;
+  }
 
   // Стационар сейчас. Занятость считается по ГОСПИТАЛИЗАЦИЯМ в койке, а не по
   // beds.status: статус койки уже расходился с реальностью (см. память о
@@ -199,6 +273,7 @@ export function dashboardTrend(db, args, _user) {
   const last = series[series.length - 1] || {};
 
   return {
+    money_visible: money,
     days, from, to, series, totals,
     inpatient: {
       in_bed,
@@ -206,7 +281,7 @@ export function dashboardTrend(db, args, _user) {
       occupancy: beds_total ? Math.round((beds_busy / beds_total) * 100) : 0,
       admitted_today: last.admissions || 0,
       discharged_today: last.discharges || 0,
-      accrued_unbilled: Math.round(accrued * 100) / 100,
+      accrued_unbilled: money ? Math.round(accrued * 100) / 100 : null,
       wards: wards.map((w) => ({ id: w.id, name: w.name, beds: w.beds, busy: w.busy })),
     },
   };

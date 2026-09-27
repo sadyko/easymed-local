@@ -6,7 +6,6 @@
 import { h, clear, toast, Icon } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { supabase } from '../../supabase.js';
-import { gw } from '../gateway.js';
 import { uploadFile } from '../storage.js';
 // RPC_PORT_V1 — офлайн каталог специальностей из медкора (gw) недоступен:
 // выбор идёт из того же канонического списка, по которому сервер проверяет слаг.
@@ -88,11 +87,14 @@ export async function renderDoctorProfile(container, doctorId) {
     root.appendChild(status);
 
     // ----- Load (tolerant; swallow per CLAUDE.md so a missing row never breaks) -----
-    try { st.catalog = (await gw('/catalog/conditions?limit=500')).data || []; }
-    catch (e) { st.catalog = []; /* conditions card shows its own load error */ }
-    try { st.specCatalog = (await gw('/catalog/specialties')).data || []; }
-    catch (e) { st.specCatalog = []; }
-    if (!st.specCatalog.length) st.specCatalog = SPECIALTY_ROWS.map((r) => ({ slug: r.slug, name_ru: r.ru, name_uz: r.uz }));   // RPC_PORT_V1
+    // V3120_FIX — КАТАЛОГИ ВСТРОЕННЫЕ, ШЛЮЗА ОФЛАЙН НЕТ. Здесь стояли два
+    // запроса к облачному шлюзу (/api/v1/catalog/conditions и /specialties):
+    // офлайн оба отвечали 404 на каждое открытие профиля, и специальности всё
+    // равно брались из встроенного списка. Список специальностей — встроенный
+    // (shared/specialty-list.js); каталога болезней в офлайн-версии нет, и
+    // карточка честно это говорит (conditionsCard ниже).
+    st.catalog = [];
+    st.specCatalog = SPECIALTY_ROWS.map((r) => ({ slug: r.slug, name_ru: r.ru, name_uz: r.uz }));   // RPC_PORT_V1
     try { window.__specLookup = Object.fromEntries(st.specCatalog.map((s) => [s.slug, s])); } catch (e) {}
 
     try {
@@ -248,12 +250,8 @@ export async function renderDoctorProfile(container, doctorId) {
 
             // (6) Reflect the new photo in state so a re-save doesn't re-upload.
             if (photoUrl) { st.photoUrl = photoUrl; st.photoFile = null; }
-            // (6b) DOCTOR_SYNC_V1 — publish to medcore so the profile (name in all languages,
-            // photo, bio, department) reaches the Symptex marketplace now, not only on the next
-            // bulk company publish. Best-effort: a sync failure must not fail the local save.
-            try {
-                await gw('/identity/doctor', { method: 'POST', body: { user_id: doctorId, specialty_slugs: st.specSlugs.slice(0, 4) } });
-            } catch (e) { console.warn('[doctor-profile] medcore sync:', e.message); }
+            // (6b) DOCTOR_SYNC_V1 — публикация в облачный medcore убрана (V3120_FIX):
+            // офлайн шлюза нет, и каждое «Сохранить профиль» заканчивалось 404.
             // RPC_PORT_V1 — не говорим «сохранён» о том, что офлайн не хранится.
             // DOCTOR_PUBLIC_PROFILE_V1 — после миграции 159 not_stored пуст,
             // и это предупреждение остаётся только для базы до обновления.
@@ -568,7 +566,10 @@ export async function renderDoctorProfile(container, doctorId) {
         wrap.appendChild(listWrap);
 
         if (!st.catalog.length) {
-            condStatus.textContent = tr('Не удалось загрузить каталог болезней.');
+            // V3120_FIX — не «не удалось загрузить»: грузить неоткуда, каталог
+            // болезней живёт в облачной версии. Уже отмеченные сохраняются как были.
+            condStatus.textContent = tr('Каталог болезней в офлайн-версии не подключён — уже отмеченные сохраняются как были.');
+            searchI.hidden = true;
             return wrap;
         }
 

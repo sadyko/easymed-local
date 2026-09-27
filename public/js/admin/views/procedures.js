@@ -155,7 +155,10 @@ function rowEl(r, body) {
             // Свободную процедуру берёт себе тот, кто её выполняет — отдельного
             // назначающего в смене нет, а ждать администратора у процедурного
             // кабинета некому.
-            r.unassigned && !done
+            // V3120_FIX — и только тому, кого сервер примет исполнителем
+            // (canPerformProcedures): администратор без флага врача получал
+            // «Исполнителем процедуры может быть врач или медсестра».
+            r.unassigned && !done && canTakeProcedure()
                 ? h('button', { class: 'btn btn-outline btn-lg', type: 'button', title: tr('Назначить процедуру на себя'),
                     onclick: () => takeProcedure(r, body) }, Icon('User', { size: 14 }), ' ' + tr('Взять'))
                 : null,
@@ -219,6 +222,7 @@ function openDone(r, body) {
     const addBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button', disabled: r.visit_id ? null : true,
         onclick: () => openItemPickerModal({
             title: tr('Добавить товары'), confirmLabel: tr('Добавить'),
+            place: { visit_id: r.visit_id },   // V3120_FIX — видно и свою полку, не только склад
             onConfirm: async (lines) => {
                 let ok = 0; const fails = [];
                 const warned = [];   // EXPIRY_BALANCE_V1 — просроченные партии всех строк
@@ -311,6 +315,19 @@ async function loadProcItems(visitId) {
         return { id: x.id, invoiced: !!x.invoice_item_id, qty, total: price * qty,
             name: (x.clinic_items?.name || tr('Товар')) + (x.clinic_items?.unit ? ' (' + x.clinic_items.unit + ')' : '') };
     });
+}
+
+// V3120_FIX — ЗЕРКАЛО canPerformProcedures (server/services/rpc/procedures.js):
+// исполнитель — врач по ФЛАГУ is_doctor (администратор-врач тоже) или врач,
+// медсестра, старшая медсестра, главный врач по роли, основной или
+// дополнительной. Неизвестный пользователь — «да»: окончательный ответ за
+// сервером, а спрятать кнопку от своего можно только зная, кто он.
+const PROC_PERFORMER_ROLES = ['nurse', 'senior_nurse', 'doctor', 'head_doctor'];
+export function canTakeProcedure(u = currentUser()) {
+    if (!u) return true;
+    if (u.is_doctor === true) return true;
+    const roles = [u.role, ...(Array.isArray(u.extra_roles) ? u.extra_roles : [])];
+    return roles.some((r) => PROC_PERFORMER_ROLES.includes(String(r == null ? '' : r).trim().toLowerCase()));
 }
 
 function procInitials(name) {

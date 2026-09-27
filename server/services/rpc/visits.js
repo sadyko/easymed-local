@@ -19,7 +19,7 @@ import { openStageKeys, scheduledStageKey, noShowStageKey, SEED_NO_SHOW_STAGE } 
 import { localDate } from '../domain/day.js';
 // CRM_CALENDAR_MIRROR_V1 — запись и заявка — одна запись: строки услуг
 // записи сверяются с строками заявки (crm/booking-mirror.js).
-import { mirrorVisit, attachVisitToCrm, visitHasWork, PRE_ARRIVAL } from '../crm/booking-mirror.js';
+import { mirrorVisit, attachVisitToCrm, dayVisitMovableFor } from '../crm/booking-mirror.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400, code = null, params = null) {
@@ -45,7 +45,7 @@ const ENSURE_ROLES = ['admin', 'registrar', 'doctor', 'callcenter'];
 function requireRole(user, allowed) {
   // MULTI_ROLE_SERVER_V1 — extras count too, not the primary role alone.
   if (!hasAnyRole(user, allowed)) {
-    throw new RpcError('Your role is not allowed to perform this action.', 403);
+    throw new RpcError('Вашей роли это действие недоступно.', 403);
   }
 }
 
@@ -128,13 +128,13 @@ function bookDuration(db, serviceId) {
 function parseBook(book) {
   if (!book || typeof book !== 'object') return null;
   const doctorId = Number(book.doctor_id);
-  if (!isPositiveInt(doctorId)) throw new RpcError('book.doctor_id must be a positive integer.', 400);
+  if (!isPositiveInt(doctorId)) throw new RpcError('Для записи не выбран врач.', 400);
   const startMs = Date.parse(String(book.start || ''));
-  if (Number.isNaN(startMs)) throw new RpcError('book.start must be an ISO datetime.', 400);
+  if (Number.isNaN(startMs)) throw new RpcError('Время записи указано неверно.', 400);
   const dur = book.duration_minutes === undefined || book.duration_minutes === null || book.duration_minutes === ''
     ? null : Math.round(Number(book.duration_minutes));
   if (dur !== null && (!Number.isFinite(dur) || dur < 5)) {
-    throw new RpcError('book.duration_minutes must be at least 5.', 400);
+    throw new RpcError('Приём должен длиться не меньше 5 минут.', 400);
   }
   const reason = typeof book.emergency_reason === 'string' ? book.emergency_reason.trim() : '';
   return {
@@ -157,11 +157,11 @@ export async function ensureVisit(db, args, user) {
 
   const patientId = args && args.patient_id;
   if (!isPositiveInt(patientId)) {
-    throw new RpcError('patient_id must be a positive integer.', 400);
+    throw new RpcError('Пациент указан неверно.', 400);
   }
   const rawDate = args && typeof args.date === 'string' ? args.date.trim() : '';
   if (!/^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
-    throw new RpcError('date must be ISO (YYYY-MM-DD or full datetime).', 400);
+    throw new RpcError('Дата визита указана неверно.', 400);
   }
   // BILLING_AUDIT_FIX_V1 (A1) — ДЕНЬ ВИЗИТА — МЕСТНЫЙ ДЕНЬ КЛИНИКИ.
   //
@@ -174,7 +174,7 @@ export async function ensureVisit(db, args, user) {
   let day = rawDate.slice(0, 10);
   if (rawDate.length > 10) {
     const local = db.prepare(`SELECT ${localDate('?')} AS d`).get(rawDate);
-    if (!local || !local.d) throw new RpcError('date must be ISO (YYYY-MM-DD or full datetime).', 400);
+    if (!local || !local.d) throw new RpcError('Дата визита указана неверно.', 400);
     day = local.d;
   }
   const whenIso = rawDate.length > 10 ? rawDate : day + 'T09:00:00Z';
@@ -368,7 +368,7 @@ export async function ensureVisit(db, args, user) {
 
   const run = db.transaction(() => {
     if (!db.prepare('SELECT 1 FROM patients WHERE id = ?').get(patientId)) {
-      throw new RpcError('patient not found.', 400);
+      throw new RpcError('Пациент не найден.', 400);
     }
     // One visit per patient per day: match on the DATE part of visit_date.
     // Cancelled/no-show days don't swallow new bookings — a fresh visit row
@@ -385,7 +385,7 @@ export async function ensureVisit(db, args, user) {
     }
 
     if (doctorId && !db.prepare('SELECT 1 FROM users WHERE id = ?').get(doctorId)) {
-      throw new RpcError('doctor not found.', 400);
+      throw new RpcError('Врач не найден.', 400);
     }
     const info = db.prepare(`
       INSERT INTO visits (patient_id, doctor_id, branch_id, visit_date, visit_type, status, referral_source_id, notes, created_by)
@@ -433,11 +433,9 @@ export async function ensureVisit(db, args, user) {
   // перенос её времени ничего не стирает, строки едут вместе с визитом.
   // Работа — это счёт или строка дальше «в смете» (visitHasWork), либо визит
   // уже не в статусе записи.
-  const dayVisitIsBare = (visitId) => {
-    const v = db.prepare('SELECT status FROM visits WHERE id = ?').get(visitId);
-    if (!v || !PRE_ARRIVAL.includes(v.status)) return false;
-    return !visitHasWork(db, visitId);
-  };
+  // V3120_FINAL (G3) — и без строк другого врача: запись к Иванову не
+  // переезжает под запись к Петрову (dayVisitMovableFor, booking-mirror.js).
+  const dayVisitIsBare = (visitId) => dayVisitMovableFor(db, visitId, book && book.doctorId);
 
   if (!out.created && !dayVisitIsBare(out.visit.id)) {
     // Строки заявки с этим визитом всё равно связываются: в этот день

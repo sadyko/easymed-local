@@ -707,7 +707,7 @@ export function openAdjustModal(p, onSaved) {
     const infoEl = h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } }, '');
     function refreshInfo() {
         infoEl.textContent = current
-            ? trf('Сейчас в наличии: {n} {unit}', { n: Number(current.on_hand) || 0, unit: current.base_unit || '' }).trim()
+            ? trf('Сейчас в наличии: {n} {unit}', { n: fmtQty(Number(current.on_hand) || 0), unit: current.base_unit || '' }).trim()
             : 'Выберите товар.';
     }
 

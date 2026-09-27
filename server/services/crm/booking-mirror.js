@@ -113,6 +113,31 @@ export function visitHasWork(db, visitId) {
                                                OR clinic_item_id IS NOT NULL) LIMIT 1`).get(visitId);   // I4 — товар это работа
 }
 
+/**
+ * V3120_FINAL (G3) — МОЖНО ЛИ ПЕРЕНЕСТИ ВИЗИТ ДНЯ ПОД НОВУЮ ЗАПИСЬ К `doctorId`.
+ *
+ * «Без работы» (visitHasWork) — мало: запись колл-центра к Иванову на 10:00
+ * держит строку его консультации в смете ('added', без счёта), и новая запись
+ * к Петрову на 14:00 переносила её целиком — время, врача (mirrorReschedule
+ * переписывал и строки), освобождая слот Иванова. Переносится только
+ *   • по-настоящему пустая запись (ни одной живой строки), или
+ *   • запись, все строки которой — того же врача, к которому записывают (это
+ *     перенос его же приёма); строка без врача (анализ «на дату») допустима,
+ *     только если и у записи врача нет или он тот же.
+ * Иначе — day_visit_busy: «добавьте услугу в этот визит».
+ */
+export function dayVisitMovableFor(db, visitId, doctorId) {
+  const v = db.prepare('SELECT status, doctor_id FROM visits WHERE id = ?').get(visitId);
+  if (!v || !PRE_ARRIVAL.includes(v.status)) return false;
+  if (visitHasWork(db, visitId)) return false;
+  const lines = db.prepare("SELECT doctor_id FROM visit_services WHERE visit_id = ? AND status <> 'cancelled'").all(visitId);
+  if (!lines.length) return true;
+  const doc = Number(doctorId) || null;
+  if (!doc) return false;
+  const visitDocOk = v.doctor_id == null || Number(v.doctor_id) === doc;
+  return lines.every((l) => (l.doctor_id == null ? visitDocOk : Number(l.doctor_id) === doc));
+}
+
 /** Заявка, которой принадлежит запись: по её строкам, иначе по привязке. */
 export function requestOfVisit(db, visitId) {
   const byLine = db.prepare(`SELECT MIN(request_id) AS r FROM crm_request_services
@@ -209,6 +234,13 @@ export function insertBookingLine(db, { visit, serviceId = null, consultationTyp
     VALUES (?, ?, ?, ?, 1, ?, ?, 'added', ?, ?, ?)`)
     .run(visit.id, serviceId || null, serviceId ? null : (consultationTypeId || null), doctorId || null, unit, unit, tier, createdBy || null, scheduledAt);
   return Number(info.lastInsertRowid);
+}
+
+// V3120_FINAL — ждущие строки заявок, державшие строку визита `fromId`,
+// переходят на `toId` (строка визита уходит, её место заняла другая).
+function relinkPending(db, fromId, toId) {
+  db.prepare(`UPDATE crm_request_services SET visit_service_id = ?, visit_service_auto = 0
+               WHERE visit_service_id = ? AND status = 'pending'`).run(toId, fromId);
 }
 
 function deleteVs(db, id) {
@@ -323,6 +355,16 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
     const mk = matchKey(db, line);
     const cand = vsOfVisit().find((x) => matchKey(db, x) === mk && !isReferenced(x.id) && x.clinic_item_id == null);
     if (cand) { linkLine.run(cand.id, 0, line.id); out.linked++; touched.add(line.request_id); continue; }
+    // V3120_FIX — ВТОРАЯ КАРТОЧКА НА ТУ ЖЕ УСЛУГУ. Оператор завёл вторую
+    // заявку (не заметил первую) на ту же консультацию у того же врача в тот
+    // же день. Строка визита под эту услугу уже есть и её держит строка первой
+    // заявки — вторая строка заявки ДЕЛИТ её, а не заводит вторую строку
+    // визита: одна консультация — один счёт (было 200 000 вместо 100 000).
+    // Делёж безопасен: снятие одной из строк заявки строку визита не трогает,
+    // пока её держит другая (шаг 1 выше — `others`).
+    const shared = vsOfVisit().find((x) => matchKey(db, x) === mk && x.clinic_item_id == null
+      && referencedBy.all(x.id).some((r) => r.id !== line.id && r.status === 'pending'));
+    if (shared) { linkLine.run(shared.id, 0, line.id); out.linked++; touched.add(line.request_id); continue; }
     if (frozen) continue;
     // C1 — хирургию и снятое с продажи зеркало в запись не ставит: строка
     // заявки остаётся ждать, запись — без неё.
@@ -358,6 +400,11 @@ function mirrorVisitTx(db, v, actorId, frozen = false) {
       if (frozen) continue;   // I5 — при счёте строку зеркала не трогаем и вторую строку заявки не заводим
       if (old && old.visit_id === V && vsFree(db, old)) {
         linkLine.run(x.id, 0, auto.id);
+        // V3120_FINAL — строку визита делят несколько заявок (две карточки
+        // одного человека, CRM_ONE_LINE): на новую строку переходят ВСЕ ждущие
+        // строки, а не одна. Оставшаяся со ссылкой на удалённую строку
+        // снималась следующей сверкой («строку визита сняли — снимаем и в заявке»).
+        relinkPending(db, old.id, x.id);
         deleteVs(db, old.id);
         out.linked++; out.removed++;
         continue;
@@ -626,6 +673,7 @@ export function pruneAutoLinesOnInvoice(db, visitId, keepIds = []) {
           && !db.prepare("SELECT 1 FROM crm_request_services WHERE visit_service_id = ? AND status <> 'cancelled'").get(x.id));
       if (!twin) continue;
       db.prepare('UPDATE crm_request_services SET visit_service_id = ?, visit_service_auto = 0 WHERE id = ?').run(twin.id, a.line_id);
+      relinkPending(db, vs.id, twin.id);   // V3120_FINAL — и остальные ждущие строки этой строки визита
       deleteVs(db, vs.id);
     }
   } catch (e) {

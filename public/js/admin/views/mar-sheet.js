@@ -608,6 +608,13 @@ export function openOrderForm({ admissionId, patientName = '', patientSub = '', 
     stockList.hidden = true;
 
     const stockUnit = (r) => r.consumption_unit || r.base_unit || r.unit || '';
+    // V3120_FIX — остаток склада хранится в УПАКОВКАХ (on_hand), а подпись —
+    // единица расхода: 10 коробок по 10 ампул показывались «10 амп». Теперь
+    // число переводится в ту же единицу, что и подпись (как «Выдать со склада»).
+    const stockLeft = (r) => {
+        const cf = r.consumption_unit && Number(r.consumption_factor) > 0 ? Number(r.consumption_factor) : 1;
+        return Math.round((Number(r.on_hand) || 0) * cf * 100) / 100;
+    };
     const showNote = () => {
         clear(stockNote);
         const r = stock.rows.find((x) => x.id === stock.pickedId);
@@ -619,7 +626,7 @@ export function openOrderForm({ admissionId, patientName = '', patientSub = '', 
             }
             return;
         }
-        const left = Number(r.on_hand) || 0;
+        const left = stockLeft(r);
         stockNote.appendChild(h('span', null,
             trf('Со склада: остаток {n} {unit}', { n: left, unit: stockUnit(r) })));
         if (left <= 0) {
@@ -642,7 +649,7 @@ export function openOrderForm({ admissionId, patientName = '', patientSub = '', 
         for (const r of rows) {
             const btn = h('button', { class: 'cd-icd-row', type: 'button', role: 'option' },
                 h('span', { class: 'cd-icd-name' }, r.name || ''),
-                h('span', { class: 'cd-icd-code' }, String(Number(r.on_hand) || 0) + ' ' + stockUnit(r)));
+                h('span', { class: 'cd-icd-code' }, String(stockLeft(r)) + ' ' + stockUnit(r)));
             // mousedown, а не click: click приходит ПОСЛЕ blur, к этому времени
             // список уже скрыт — тот же приём, что у подсказок МКБ-10.
             btn.addEventListener('mousedown', (e) => {
@@ -666,7 +673,7 @@ export function openOrderForm({ admissionId, patientName = '', patientSub = '', 
         // active = 1, а не true: в этой базе флаги хранятся числом, и так их
         // спрашивают все остальные экраны склада.
         const { data } = await supabase.from('products')
-            .select('id, name, unit, base_unit, consumption_unit, on_hand, category, is_drug')
+            .select('id, name, unit, base_unit, consumption_unit, consumption_factor, on_hand, category, is_drug')
             .eq('active', 1).order('name');
         const all = (data || []).filter(Boolean);
         const drugs = all.filter((r) => r.is_drug || r.category === 'drug');

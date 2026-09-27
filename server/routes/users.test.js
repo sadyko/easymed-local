@@ -113,7 +113,7 @@ test('employee field validation: doctor_category, salary_percent range, unknown 
       username: 'baduser3', password: 'password2', role: 'doctor', department_id: 999999,
     }, admin);
     assert.equal(res.status, 400);
-    assert.equal((await res.json()).error.message, 'Unknown department.');
+    assert.equal((await res.json()).error.message, 'Такого отделения нет.');
 
     // create a valid user, then re-run the same validations via PATCH
     res = await post(base, '/api/users', { username: 'okuser', password: 'password2', role: 'doctor' }, admin);
@@ -125,7 +125,7 @@ test('employee field validation: doctor_category, salary_percent range, unknown 
     assert.equal(res.status, 400);
     res = await patch(base, `/api/users/${ok.id}`, { department_id: 999999 }, admin);
     assert.equal(res.status, 400);
-    assert.equal((await res.json()).error.message, 'Unknown department.');
+    assert.equal((await res.json()).error.message, 'Такого отделения нет.');
 
     // no cookie -> 401
     res = await post(base, '/api/users', { username: 'x', password: 'password2', role: 'doctor' });
@@ -205,7 +205,7 @@ test('staff category validation: staff_type, scheduling_mode, branch_id, service
       username: 'badcat3', password: 'password2', role: 'doctor', branch_id: 999999,
     }, admin);
     assert.equal(res.status, 400);
-    assert.equal((await res.json()).error.message, 'Unknown branch.');
+    assert.equal((await res.json()).error.message, 'Такого филиала нет.');
 
     res = await post(base, '/api/users', {
       username: 'badcat4', password: 'password2', role: 'doctor', service_rate_default: 150,
@@ -222,7 +222,7 @@ test('staff category validation: staff_type, scheduling_mode, branch_id, service
     assert.equal(res.status, 400);
     res = await patch(base, `/api/users/${ok.id}`, { branch_id: 999999 }, admin);
     assert.equal(res.status, 400);
-    assert.equal((await res.json()).error.message, 'Unknown branch.');
+    assert.equal((await res.json()).error.message, 'Такого филиала нет.');
     res = await patch(base, `/api/users/${ok.id}`, { referral_rate_default: -1 }, admin);
     assert.equal(res.status, 400);
   } finally { server.close(); }
@@ -293,13 +293,13 @@ test('extra_roles validation: must be an array of known roles', async () => {
       username: 'badroles1', password: 'password2', role: 'doctor', extra_roles: 'cashier',
     }, admin);
     assert.equal(res.status, 400);
-    assert.equal((await res.json()).error.message, 'extra_roles must be an array.');
+    assert.equal((await res.json()).error.message, 'Дополнительные роли должны быть списком.');
 
     res = await post(base, '/api/users', {
       username: 'badroles2', password: 'password2', role: 'doctor', extra_roles: ['bogus'],
     }, admin);
     assert.equal(res.status, 400);
-    assert.equal((await res.json()).error.message, 'Unknown role in extra_roles.');
+    assert.equal((await res.json()).error.message, 'Неизвестная дополнительная роль.');
 
     // same validations via PATCH
     res = await post(base, '/api/users', { username: 'okroles', password: 'password2', role: 'doctor' }, admin);
@@ -408,20 +408,20 @@ test('service_rates/referral_rates validation: must be array of valid entries', 
       username: 'badrate1', password: 'password2', role: 'doctor', service_rates: 'x',
     }, admin);
     assert.equal(res.status, 400);
-    assert.equal((await res.json()).error.message, 'service_rates must be an array.');
+    assert.equal((await res.json()).error.message, 'Ставки переданы неверно: нужен список.');
 
     res = await post(base, '/api/users', {
       username: 'badrate2', password: 'password2', role: 'doctor', service_rates: [{ pct: 10 }],
     }, admin);
     assert.equal(res.status, 400);
-    assert.equal((await res.json()).error.message, 'Invalid rate entry.');
+    assert.equal((await res.json()).error.message, 'Строка ставки заполнена неверно.');
 
     res = await post(base, '/api/users', {
       username: 'badrate3', password: 'password2', role: 'doctor',
       referral_rates: [{ service_id: 'a', pct: 5 }],
     }, admin);
     assert.equal(res.status, 400);
-    assert.equal((await res.json()).error.message, 'Invalid rate entry.');
+    assert.equal((await res.json()).error.message, 'Строка ставки заполнена неверно.');
   } finally { server.close(); }
 });
 
@@ -563,7 +563,7 @@ test('service_rates round-trip: own price and percentage survive a save', async 
       service_rates: [{ service_id: 11, price: -5 }],
     }, admin);
     assert.equal(bad.status, 400);
-    assert.match((await bad.json()).error.message, /price/i);
+    assert.match((await bad.json()).error.message, /Цена врача/i);
   } finally { server.close(); }
 });
 

@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { cashierReport } from './cashier-report.js';
-import { shiftReport, cashShiftSummary } from './cashier.js';
+import { shiftReport, ensureOpenShift } from './cashier.js';
 import { callcenterReport } from './callcenter.js';
 import { runReport, reportChoices, reportsOverview, doctorTierPositions } from './reports.js';
 import { labUsageStats } from './lab-stats.js';
@@ -78,8 +78,8 @@ test('5: возврат в «Отчёте кассира» — строка «В
 
 test('5: смена — число платежей без возвратов, возвраты отдельно', () => {
   const db = seed();
-  const summary = cashShiftSummary(db, {}, { id: 5, role: 'cashier' });
-  const shift = summary.shift.id;
+  // V3120_FIX — сводка больше не открывает смену: её открывает первая запись дня.
+  const shift = ensureOpenShift(db, { id: 5, role: 'cashier' }).id;
   const inv = paidInvoice(db, { amount: 300000, number: 'INV-1' });
   pay(db, inv, 200000, 'cash', shift);
   pay(db, inv, 100000, 'card', shift);
@@ -126,7 +126,7 @@ test('7: ошибки отчётов по-русски; мусорная дат�
 
 test('7: отказы смены по-русски (чужая смена, не та роль)', () => {
   const db = seed();
-  const shift = cashShiftSummary(db, {}, { id: 5, role: 'cashier' }).shift.id;
+  const shift = ensureOpenShift(db, { id: 5, role: 'cashier' }).id;   // V3120_FIX
   assert.throws(() => shiftReport(db, { shift_id: shift }, { id: 6, role: 'cashier' }),
     (e) => e.status === 403 && CYR.test(e.message));
   assert.throws(() => shiftReport(db, {}, { id: 7, role: 'lab' }),

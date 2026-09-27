@@ -40,7 +40,7 @@ export function parseEmployeeFields(body, db, currentRole) {
   }
 
   if (body.is_doctor !== undefined) {
-    if (typeof body.is_doctor !== 'boolean') return { ok: false, message: 'is_doctor must be true or false.' };
+    if (typeof body.is_doctor !== 'boolean') return { ok: false, message: 'Признак «врач» должен быть «да» или «нет».' };
     fields.is_doctor = body.is_doctor ? 1 : 0;
   }
 
@@ -49,49 +49,49 @@ export function parseEmployeeFields(body, db, currentRole) {
       fields.department_id = null;
     } else {
       const id = Number(body.department_id);
-      if (!Number.isInteger(id) || id <= 0) return { ok: false, message: 'Invalid department.' };
-      if (!db.prepare('SELECT 1 FROM departments WHERE id = ?').get(id)) return { ok: false, message: 'Unknown department.' };
+      if (!Number.isInteger(id) || id <= 0) return { ok: false, message: 'Отделение указано неверно.' };
+      if (!db.prepare('SELECT 1 FROM departments WHERE id = ?').get(id)) return { ok: false, message: 'Такого отделения нет.' };
       fields.department_id = id;
     }
   }
 
   if (body.doctor_category !== undefined) {
-    if (!DOCTOR_CATEGORIES.includes(body.doctor_category)) return { ok: false, message: 'Unknown doctor category.' };
+    if (!DOCTOR_CATEGORIES.includes(body.doctor_category)) return { ok: false, message: 'Неизвестная категория врача.' };
     fields.doctor_category = body.doctor_category;
   }
   if (body.employment_type !== undefined) {
-    if (!EMPLOYMENT_TYPES.includes(body.employment_type)) return { ok: false, message: 'Unknown employment type.' };
+    if (!EMPLOYMENT_TYPES.includes(body.employment_type)) return { ok: false, message: 'Неизвестный вид занятости.' };
     fields.employment_type = body.employment_type;
   }
   if (body.salary_type !== undefined) {
-    if (!SALARY_TYPES.includes(body.salary_type)) return { ok: false, message: 'Unknown salary type.' };
+    if (!SALARY_TYPES.includes(body.salary_type)) return { ok: false, message: 'Неизвестный вид оплаты труда.' };
     fields.salary_type = body.salary_type;
   }
 
   for (const key of DATE_FIELDS) {
     if (body[key] === undefined) continue;
     if (body[key] === '' || body[key] === null) { fields[key] = null; continue; }
-    if (typeof body[key] !== 'string' || !DATE_RE.test(body[key])) return { ok: false, message: 'Invalid date.' };
+    if (typeof body[key] !== 'string' || !DATE_RE.test(body[key])) return { ok: false, message: 'Дата указана неверно.' };
     fields[key] = body[key];
   }
 
   if (body.salary_fixed !== undefined) {
     const n = Number(body.salary_fixed);
-    if (!Number.isFinite(n) || n < 0 || n > 1e12) return { ok: false, message: 'Invalid salary_fixed.' };
+    if (!Number.isFinite(n) || n < 0 || n > 1e12) return { ok: false, message: 'Оклад указан неверно.' };
     fields.salary_fixed = n;
   }
   if (body.salary_percent !== undefined) {
     const n = Number(body.salary_percent);
-    if (!Number.isFinite(n) || n < 0 || n > 100) return { ok: false, message: 'Invalid salary_percent.' };
+    if (!Number.isFinite(n) || n < 0 || n > 100) return { ok: false, message: 'Процент зарплаты должен быть от 0 до 100.' };
     fields.salary_percent = n;
   }
 
   if (body.staff_type !== undefined) {
-    if (!STAFF_TYPES.includes(body.staff_type)) return { ok: false, message: 'Unknown staff category.' };
+    if (!STAFF_TYPES.includes(body.staff_type)) return { ok: false, message: 'Неизвестная категория сотрудника.' };
     fields.staff_type = body.staff_type;
   }
   if (body.scheduling_mode !== undefined) {
-    if (!SCHEDULING_MODES.includes(body.scheduling_mode)) return { ok: false, message: 'Unknown scheduling mode.' };
+    if (!SCHEDULING_MODES.includes(body.scheduling_mode)) return { ok: false, message: 'Неизвестный режим расписания.' };
     fields.scheduling_mode = body.scheduling_mode;
   }
 
@@ -104,7 +104,7 @@ export function parseEmployeeFields(body, db, currentRole) {
   if (body.pbx_extension !== undefined) {
     const ext = String(body.pbx_extension ?? '').trim();
     if (ext === '') fields.pbx_extension = null;
-    else if (!EXTENSION_RE.test(ext)) return { ok: false, message: 'Invalid extension.' };
+    else if (!EXTENSION_RE.test(ext)) return { ok: false, message: 'Внутренний номер указан неверно.' };
     else fields.pbx_extension = ext;
   }
 
@@ -121,25 +121,25 @@ export function parseEmployeeFields(body, db, currentRole) {
       fields.branch_id = null;
     } else {
       const id = Number(body.branch_id);
-      if (!Number.isInteger(id) || id <= 0) return { ok: false, message: 'Invalid branch.' };
-      if (!db.prepare('SELECT 1 FROM branches WHERE id = ?').get(id)) return { ok: false, message: 'Unknown branch.' };
+      if (!Number.isInteger(id) || id <= 0) return { ok: false, message: 'Филиал указан неверно.' };
+      if (!db.prepare('SELECT 1 FROM branches WHERE id = ?').get(id)) return { ok: false, message: 'Такого филиала нет.' };
       fields.branch_id = id;
     }
   }
 
   if (body.working_hours !== undefined) {
-    if (typeof body.working_hours !== 'string') return { ok: false, message: 'Invalid working_hours.' };
+    if (typeof body.working_hours !== 'string') return { ok: false, message: 'Часы работы указаны неверно.' };
     fields.working_hours = body.working_hours.slice(0, 4000);
   }
 
   if (body.service_rate_default !== undefined) {
     const n = Number(body.service_rate_default);
-    if (!Number.isFinite(n) || n < 0 || n > 100) return { ok: false, message: 'Invalid service_rate_default.' };
+    if (!Number.isFinite(n) || n < 0 || n > 100) return { ok: false, message: 'Процент за услуги по умолчанию должен быть от 0 до 100.' };
     fields.service_rate_default = n;
   }
   if (body.referral_rate_default !== undefined) {
     const n = Number(body.referral_rate_default);
-    if (!Number.isFinite(n) || n < 0 || n > 100) return { ok: false, message: 'Invalid referral_rate_default.' };
+    if (!Number.isFinite(n) || n < 0 || n > 100) return { ok: false, message: 'Процент за направления по умолчанию должен быть от 0 до 100.' };
     fields.referral_rate_default = n;
   }
 
@@ -172,9 +172,9 @@ export function parseEmployeeFields(body, db, currentRole) {
   }
 
   if (body.extra_roles !== undefined) {
-    if (!Array.isArray(body.extra_roles)) return { ok: false, message: 'extra_roles must be an array.' };
+    if (!Array.isArray(body.extra_roles)) return { ok: false, message: 'Дополнительные роли должны быть списком.' };
     for (const role of body.extra_roles) {
-      if (typeof role !== 'string' || !VALID_ROLES.includes(role)) return { ok: false, message: 'Unknown role in extra_roles.' };
+      if (typeof role !== 'string' || !VALID_ROLES.includes(role)) return { ok: false, message: 'Неизвестная дополнительная роль.' };
     }
     // The primary role (incoming if this call carries one, else the row's
     // existing one) is never allowed to also appear in the extras list.
@@ -208,17 +208,17 @@ const MAX_RATE_MONEY = 1e12;
 // and 'fixed' for a referral reward. It used to be dropped on the floor for both,
 // so a per-doctor price could be typed in, saved, and silently discarded.
 function parseRates(val, key, moneyKey = 'price') {
-  if (!Array.isArray(val)) return { ok: false, message: `${key} must be an array.` };
-  if (val.length > MAX_RATE_ENTRIES) return { ok: false, message: `${key} has too many entries.` };
+  if (!Array.isArray(val)) return { ok: false, message: 'Ставки переданы неверно: нужен список.' };
+  if (val.length > MAX_RATE_ENTRIES) return { ok: false, message: 'Слишком много строк в ставках.' };
 
   const byId = new Map();
   for (const entry of val) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      return { ok: false, message: 'Invalid rate entry.' };
+      return { ok: false, message: 'Строка ставки заполнена неверно.' };
     }
     const serviceId = Number(entry.service_id);
     if (!Number.isInteger(serviceId) || serviceId <= 0) {
-      return { ok: false, message: 'Invalid rate entry.' };
+      return { ok: false, message: 'Строка ставки заполнена неверно.' };
     }
 
     // 'pct' is canonical (reports read $.pct). The editor has always sent
@@ -245,7 +245,9 @@ function parseRates(val, key, moneyKey = 'price') {
     if (rawMoney !== undefined && rawMoney !== null && rawMoney !== '') {
       money = Number(rawMoney);
       if (!Number.isFinite(money) || money < 0 || money > MAX_RATE_MONEY) {
-        return { ok: false, message: `Invalid ${moneyKey} in ${key}: must be between 0 and ${MAX_RATE_MONEY}.` };
+        return { ok: false, message: moneyKey === 'price'
+          ? 'Цена врача в ставке — от 0 до 1 000 000 000 000.'
+          : 'Сумма в ставке — от 0 до 1 000 000 000 000.' };
       }
     }
 
@@ -262,7 +264,7 @@ function parseRates(val, key, moneyKey = 'price') {
     if (entry.fix !== undefined && entry.fix !== null && entry.fix !== '') {
       fix = Number(entry.fix);
       if (!Number.isFinite(fix) || fix < 0 || fix > MAX_RATE_MONEY) {
-        return { ok: false, message: `Invalid fix in ${key}: must be between 0 and ${MAX_RATE_MONEY}.` };
+        return { ok: false, message: 'Фиксированная сумма в ставке — от 0 до 1 000 000 000 000.' };
       }
     }
 
@@ -273,10 +275,10 @@ function parseRates(val, key, moneyKey = 'price') {
 
     let branches = [];
     if (entry.branches !== undefined) {
-      if (!Array.isArray(entry.branches)) return { ok: false, message: 'Invalid rate entry.' };
+      if (!Array.isArray(entry.branches)) return { ok: false, message: 'Строка ставки заполнена неверно.' };
       branches = entry.branches.map(Number);
       if (!branches.every(b => Number.isInteger(b) && b > 0)) {
-        return { ok: false, message: 'Invalid rate entry.' };
+        return { ok: false, message: 'Строка ставки заполнена неверно.' };
       }
     }
 
@@ -309,13 +311,13 @@ function inpatientNumber(v) {
   return Number(v);
 }
 export function parseInpatientRates(val) {
-  if (!Array.isArray(val)) return { ok: false, message: 'inpatient_rates must be an array.' };
-  if (val.length > MAX_RATE_ENTRIES) return { ok: false, message: 'inpatient_rates has too many entries.' };
+  if (!Array.isArray(val)) return { ok: false, message: 'Стационарные ставки должны быть списком.' };
+  if (val.length > MAX_RATE_ENTRIES) return { ok: false, message: 'Слишком много стационарных ставок.' };
   const byId = new Map();
   for (const entry of val) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return { ok: false, message: 'Invalid rate entry.' };
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return { ok: false, message: 'Строка ставки заполнена неверно.' };
     const serviceId = Number(entry.service_id);
-    if (!Number.isInteger(serviceId) || serviceId <= 0) return { ok: false, message: 'Invalid rate entry.' };
+    if (!Number.isInteger(serviceId) || serviceId <= 0) return { ok: false, message: 'Строка ставки заполнена неверно.' };
     const pct = inpatientNumber(entry.pct);
     const fix = inpatientNumber(entry.fix);
     if (pct !== undefined && fix !== undefined) return { ok: false, message: 'Стационарная ставка — либо процент, либо сумма, не обе сразу.' };
@@ -414,7 +416,7 @@ export function employeeView(u) {
 // the only answer that tells the truth about what would happen.
 function mainClinicRow(user) {
   if (user.is_local !== 0) return null;
-  return 'This employee is managed by the main clinic. Change them there — a change made here would be overwritten by the next synchronisation.';
+  return 'Этим сотрудником управляет главная клиника. Меняйте его там — правка здесь будет перезаписана при следующей синхронизации.';
 }
 
 // Derives "Last First Middle" from whichever name parts were supplied.
@@ -431,7 +433,7 @@ function deriveFullName(fields) {
 export const MAX_SPECIALTIES = 4;
 export function parseSpecialties(raw) {
   if (raw === undefined) return { ok: true, list: undefined };
-  if (!Array.isArray(raw)) return { ok: false, message: 'specialties must be a list.' };
+  if (!Array.isArray(raw)) return { ok: false, message: 'Специальности должны быть списком.' };
   const list = [];
   const seen = new Set();
   for (const it of raw) {
@@ -500,7 +502,7 @@ function forbid(res, message) {
 
 function requireEmployees(db, level) {
   return (req, res, next) => {
-    if (!req.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Login required.' } });
+    if (!req.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Нужно войти в систему.' } });
     if (grantAllowsAdminOr(db, req.user, EMP_KEY, level)) return next();
     return forbid(res, 'Раздел «Сотрудники» недоступен вашей роли. Права выдаёт администратор в «Настройки → Роли».');
   };
@@ -576,9 +578,9 @@ export function userRoutes(db) {
     if (req.control?.locked) return lockedResponse(res, req.control);
     const { username, password, full_name = '', role } = req.body || {};
     const name = String(username || '').trim().toLowerCase();
-    if (!/^[a-z0-9._-]{3,30}$/.test(name)) return bad(res, 'Username must be 3-30 characters: letters, digits, . _ -');
-    if (!validPassword(password)) return bad(res, 'Password must not be empty (max 72 bytes).');
-    if (typeof full_name !== 'string') return bad(res, 'Full name must be text.');
+    if (!/^[a-z0-9._-]{3,30}$/.test(name)) return bad(res, 'Логин — от 3 до 30 символов: латинские буквы, цифры, точка, _ и -.');
+    if (!validPassword(password)) return bad(res, 'Пароль не может быть пустым (не длиннее 72 байт).');
+    if (typeof full_name !== 'string') return bad(res, 'ФИО должно быть текстом.');
     // INPATIENT_FLOW_V1 — ОСНОВНОЙ ролью может быть только профессия.
     // 'head_doctor'/'senior_nurse' — надстройки поверх неё и живут в
     // extra_roles (см. EXTRA_ONLY_ROLES в services/roles.js): человек с такой
@@ -587,7 +589,7 @@ export function userRoutes(db) {
     const cr = resolveCustomRole(db, req.body, role);
     if (!cr.ok) return bad(res, cr.message);
     const finalRole = cr.code ? cr.role : role;
-    if (!PRIMARY_ROLES.includes(finalRole)) return bad(res, 'Unknown role.');
+    if (!PRIMARY_ROLES.includes(finalRole)) return bad(res, 'Неизвестная роль.');
     // ADMIN_ROWS_GRANTABLE_V1 — не-администратор: ни роли администратора, ни
     // роли выше своей, ни денег без «Цен и процентов».
     if (!isAdminUser(req.user)) {
@@ -598,7 +600,7 @@ export function userRoutes(db) {
         return forbid(res, 'Зарплату и ставки сотрудника меняет роль с правом «Сотрудники → Цены и проценты».');
       }
     }
-    if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(name)) return bad(res, 'Username already exists.');
+    if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(name)) return bad(res, 'Такой логин уже занят.');
 
     const parsed = parseEmployeeFields(req.body, db);
     if (!parsed.ok) return bad(res, parsed.message);
@@ -624,7 +626,7 @@ export function userRoutes(db) {
     // LICENCE_CORE_V1 — same write gate as POST above.
     if (req.control?.locked) return lockedResponse(res, req.control);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
-    if (!user) return res.status(404).json({ error: { code: 'not_found', message: 'User not found.' } });
+    if (!user) return res.status(404).json({ error: { code: 'not_found', message: 'Сотрудник не найден.' } });
     // STAFF_SYNC_V1 — 409, not 403: the request is well-formed and the caller is
     // an admin; it is the clinic's own arrangement that forbids it. Same status
     // and shape as the delete guard below.
@@ -636,18 +638,18 @@ export function userRoutes(db) {
     // self-protection check below, and `"false"` would truthy-coerce to 1.
     let active; // undefined = leave unchanged
     if (is_active !== undefined) {
-      if (typeof is_active !== 'boolean') return bad(res, 'is_active must be true or false.');
+      if (typeof is_active !== 'boolean') return bad(res, 'Признак «активен» должен быть «да» или «нет».');
       active = is_active;
     }
-    if (role !== undefined && !PRIMARY_ROLES.includes(role)) return bad(res, 'Unknown role.');   // INPATIENT_FLOW_V1 — см. POST выше
+    if (role !== undefined && !PRIMARY_ROLES.includes(role)) return bad(res, 'Неизвестная роль.');   // INPATIENT_FLOW_V1 — см. POST выше
     // CUSTOM_ROLES_V1 — выбрали свою роль: её основа становится ролью строки.
     const cr = resolveCustomRole(db, req.body, role);
     if (!cr.ok) return bad(res, cr.message);
     const roleToWrite = cr.code ? cr.role : role;
     if (password !== undefined && !validPassword(password)) {
-      return bad(res, 'Password must not be empty (max 72 bytes).');
+      return bad(res, 'Пароль не может быть пустым (не длиннее 72 байт).');
     }
-    if (full_name !== undefined && typeof full_name !== 'string') return bad(res, 'Full name must be text.');
+    if (full_name !== undefined && typeof full_name !== 'string') return bad(res, 'ФИО должно быть текстом.');
     // ADMIN_ROWS_GRANTABLE_V1 — защиты не-администратора (см. шапку роутера).
     const extrasAfter = req.body && Array.isArray(req.body.extra_roles) ? req.body.extra_roles : parseJsonArray(user.extra_roles);
     const after = { ...user, role: roleToWrite !== undefined ? roleToWrite : user.role, extra_roles: JSON.stringify(extrasAfter),
@@ -655,7 +657,7 @@ export function userRoutes(db) {
     if (!isAdminUser(req.user)) {
       const self = user.id === req.user.id;
       if (isAdminAccount(db, user)) return forbid(res, 'Учётную запись администратора меняет только администратор.');
-      if (self && active === false) return bad(res, 'You cannot deactivate or demote your own account.');
+      if (self && active === false) return bad(res, 'Нельзя отключить свою учётную запись или понизить свою роль.');
       // Ревью (b) и C1 — учётную запись, чья роль (основа или права) сильнее
       // своей, не-администратор не трогает вовсе: ни пароля (войти под ней —
       // и есть повышение), ни отключения, ни полей.
@@ -690,14 +692,14 @@ export function userRoutes(db) {
     } else if (user.id === req.user.id && (active === false || (isAdminAccount(db, user) && !isAdminAccount(db, after)))) {
       // Ревью (a) — себя не разжаловать никаким путём: ни основной ролью, ни
       // снятой дополнительной «admin» (администратор-врач), ни своей ролью.
-      return bad(res, 'You cannot deactivate or demote your own account.');
+      return bad(res, 'Нельзя отключить свою учётную запись или понизить свою роль.');
     }
     // Belt-and-braces: the clinic must never end up with zero active admins.
     // Ревью (a) — администратор считается по isAdminAccount: основной ролью,
     // дополнительной и своей ролью на основе администратора.
     const losesAdmin = active === false || !isStoredAdmin(after);
     if (losesAdmin && isStoredAdmin(user) && user.is_active && activeAdminCount(db) <= 1) {
-      return bad(res, 'At least one active admin must remain.');
+      return bad(res, 'В клинике должен остаться хотя бы один активный администратор.');
     }
 
     const parsed = parseEmployeeFields(req.body, db, user.role);
@@ -755,7 +757,7 @@ export function userRoutes(db) {
   // delete that was never possible.
   r.get('/:id/delete-check', requireEmployees(db, 'view'), (req, res) => {
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
-    if (!user) return res.status(404).json({ error: { code: 'not_found', message: 'User not found.' } });
+    if (!user) return res.status(404).json({ error: { code: 'not_found', message: 'Сотрудник не найден.' } });
     const managed = mainClinicRow(user);           // STAFF_SYNC_V1
     let guard = managed ? { ok: false, reason: managed } : staffDeleteGuard(db, user, req.user);
     // ADMIN_ROWS_GRANTABLE_V1 — проверка отвечает то же, что ответит удаление.
@@ -773,7 +775,7 @@ export function userRoutes(db) {
     // stays open: it's a read-only dry run, never a write.
     if (req.control?.locked) return lockedResponse(res, req.control);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
-    if (!user) return res.status(404).json({ error: { code: 'not_found', message: 'User not found.' } });
+    if (!user) return res.status(404).json({ error: { code: 'not_found', message: 'Сотрудник не найден.' } });
     // STAFF_SYNC_V1 — and deleting is worse than editing: the next
     // synchronisation would simply create the person again, under a NEW local
     // id, leaving this building's history pointing at a row nobody works under.
@@ -796,6 +798,9 @@ export function userRoutes(db) {
     }
 
     const name = user.full_name || user.username;
+    // V3120_FIX — последняя стена: если запись о работе сотрудника всё же
+    // нашлась там, куда проверка не заглянула, — внятный отказ, а не 500.
+    try {
     db.transaction(() => {
       for (const ref of STAFF_CONFIG_REFS) {
         for (const col of ref.columns) db.prepare(`DELETE FROM "${ref.table}" WHERE "${col}" = ?`).run(user.id);
@@ -803,6 +808,14 @@ export function userRoutes(db) {
       db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
       db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
     })();
+    } catch (e) {
+      if (e && String(e.code || '').startsWith('SQLITE_CONSTRAINT')) {
+        return res.status(409).json({ error: { code: 'conflict', message:
+          `За сотрудником «${name}» закреплены записи — удалить его нельзя, иначе история потеряет автора. `
+          + 'Отключите учётную запись: сотрудник исчезнет из выбора и не сможет войти, а записи останутся целыми.' } });
+      }
+      throw e;
+    }
 
     res.json({ deleted: true, id: user.id, name });
   });
@@ -844,7 +857,49 @@ const STAFF_HISTORY_REFS = [
   { table: 'crm_requests',            columns: ['assigned_to', 'created_by'], label: 'заявки CRM' },
   // CRM_DEDUP_SEARCH_TASKS_V1 (mig 148) — без этой строки удаление упиралось во внешний ключ и отвечало 500.
   { table: 'crm_tasks',               columns: ['assignee_id', 'done_by', 'created_by'], label: 'задачи CRM' },
+  // V3120_FIX — стационар, листы назначений, закрытие месяца, Telegram: таблицы,
+  // появившиеся после STAFF_DELETE_V1. Без них удаление отвечало 500 (внешний
+  // ключ). Всё, что сюда не вписано, ловит staffHistoryFkRefs() ниже —
+  // по самой схеме базы.
+  { table: 'admission_reviews',       columns: ['author_id'],                 label: 'осмотры в стационаре' },
+  { table: 'admission_vitals',        columns: ['measured_by'],               label: 'показатели в стационаре' },
+  { table: 'treatment_orders',        columns: ['ordered_by', 'created_by'],  label: 'листы назначений' },
+  { table: 'treatment_administrations', columns: ['performed_by', 'voided_by'], label: 'отметки выполнения назначений' },
+  { table: 'pay_periods',             columns: ['closed_by'],                 label: 'закрытые месяцы оплаты врачей' },
+  { table: 'pay_period_log',          columns: ['user_id'],                   label: 'журнал закрытия месяцев' },
 ];
+
+// V3120_FIX — ЛЮБАЯ ССЫЛКА НА СОТРУДНИКА ИЗ СХЕМЫ. Список выше — с понятными
+// подписями; но таблицы с колонкой «кто» появляются в каждом выпуске, и
+// каждая забытая здесь превращала удаление в 500. Поэтому к списку добавляются
+// все внешние ключи на users, которые база сама не обнуляет и не удаляет
+// (ON DELETE SET NULL / CASCADE удалению не мешают), кроме настроек сотрудника
+// (STAFF_CONFIG_REFS) и сессий. Колонки, которых в этой базе нет, в списке
+// выше пропускаются (existingColumns).
+function staffHistoryFkRefs(db) {
+  const named = new Set(STAFF_HISTORY_REFS.flatMap((r) => r.columns.map((c) => r.table + '.' + c)));
+  const skip = new Set(['sessions', ...STAFF_CONFIG_REFS.map((r) => r.table)]);
+  const out = [];
+  let tables = [];
+  try { tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name); }
+  catch { tables = []; }
+  for (const t of tables) {
+    if (skip.has(t) || t === 'users') continue;
+    let fks = [];
+    try { fks = db.prepare(`PRAGMA foreign_key_list("${t.replace(/"/g, '')}")`).all(); } catch { fks = []; }
+    const cols = fks.filter((f) => f.table === 'users'
+      && !['SET NULL', 'CASCADE', 'SET DEFAULT'].includes(String(f.on_delete || '').toUpperCase())
+      && !named.has(t + '.' + f.from)).map((f) => f.from);
+    if (cols.length) out.push({ table: t, columns: [...new Set(cols)], label: 'другие записи (' + t + ')' });
+  }
+  return out;
+}
+
+function existingColumns(db, ref) {
+  let cols = [];
+  try { cols = db.prepare(`PRAGMA table_info("${ref.table.replace(/"/g, '')}")`).all().map((c) => c.name); } catch { cols = []; }
+  return ref.columns.filter((c) => cols.includes(c));
+}
 
 // Rows that only DESCRIBE the employee — their rates, branches, specialties.
 // Meaningless once the person is gone, so they go in the same transaction.
@@ -868,9 +923,11 @@ export function staffDeleteGuard(db, user, actor) {
   }
 
   const blocking = [];
-  for (const ref of STAFF_HISTORY_REFS) {
-    const where = ref.columns.map((c) => `"${c}" = ?`).join(' OR ');
-    const { n } = db.prepare(`SELECT COUNT(*) AS n FROM "${ref.table}" WHERE ${where}`).get(...ref.columns.map(() => user.id));
+  for (const ref of [...STAFF_HISTORY_REFS, ...staffHistoryFkRefs(db)]) {
+    const columns = existingColumns(db, ref);   // V3120_FIX — колонки, которых в базе нет, не роняют проверку
+    if (!columns.length) continue;
+    const where = columns.map((c) => `"${c}" = ?`).join(' OR ');
+    const { n } = db.prepare(`SELECT COUNT(*) AS n FROM "${ref.table}" WHERE ${where}`).get(...columns.map(() => user.id));
     if (n > 0) blocking.push({ table: ref.table, label: ref.label, count: n });
   }
   if (blocking.length) {

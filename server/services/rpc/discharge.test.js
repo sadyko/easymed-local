@@ -362,6 +362,10 @@ test('долг НЕ БЛОКИРУЕТ выписку, но требует по�
   const db = seed();
   const id = requested(db);
   chargeLine(db, id, 450000);
+  // V3120_FIX — выписка с долгом доначисляет проживание; здесь проверяется
+  // подпись под долгом за услуги, поэтому койка бесплатна (проживание в долге —
+  // inpatient-v3120.test.js).
+  db.prepare('UPDATE wards SET price_per_day = 0').run();
 
   // Без подписи — отказ, и он называет СУММУ и говорит, что выписке это не мешает.
   let refusal = null;
@@ -578,6 +582,7 @@ test('DEBT_FLOW_V1: подписанный долг становится дол�
   const db = seed();
   const id = requested(db);
   chargeLine(db, id, 450000);                                  // начислено, не выставлено
+  db.prepare('UPDATE wards SET price_per_day = 0').run();       // V3120_FIX — проживание в долге проверяется отдельно
   db.prepare(`INSERT INTO invoices (id, invoice_number, admission_id, patient_id, subtotal, total_amount, paid_amount, status)
               VALUES (20,'INV-20',?,1,300000,300000,120000,'partial')`).run(id);   // выставлено, оплачено частично
   db.prepare(`INSERT INTO invoices (id, invoice_number, admission_id, patient_id, subtotal, total_amount, paid_amount, status)

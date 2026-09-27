@@ -58,6 +58,9 @@
 // поставлен: молча.
 import { journalScope } from './stock-log.js';   // S2 — одно правило видимости на весь склад
 import { today } from '../domain/day.js';
+// STOCK_QTY_V1 (V3120_FIX) — партии считаются с той же точностью, с какой
+// хранится остаток (шесть знаков): round2 терял таблетку из пачки по 30.
+import { roundQty } from '../domain/stock-qty.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -69,7 +72,6 @@ export class RpcError extends Error {
 export const EXPIRING_SOON_DAYS = 30;
 
 const MS_DAY = 86400000;
-const round2 = (n) => Math.round(Number(n) * 100) / 100;
 const isPosInt = (v) => Number.isInteger(v) && v > 0;
 
 // PROCUREMENT_FILTERS_V1 (2026-09-25) — КАТЕГОРИИ ЗАКУПОК, ТОТ ЖЕ СПИСОК, ЧТО В
@@ -285,21 +287,21 @@ function allocate(product, groups, day) {
   // Корзина «без срока» — ОДНА на товар, и в очередь она встаёт по самому
   // позднему из своих приходов.
   const bucket = {
-    received: round2(undated.reduce((s, g) => s + Number(g.received_qty), 0)),
+    received: roundQty(undated.reduce((s, g) => s + Number(g.received_qty), 0)),
     last_id: undated.reduce((m, g) => Math.max(m, Number(g.last_id) || 0), 0),
     taken: 0,
   };
-  const queue = dated.map((g) => ({ g, received: round2(g.received_qty), last_id: Number(g.last_id) || 0, taken: 0 }));
+  const queue = dated.map((g) => ({ g, received: roundQty(g.received_qty), last_id: Number(g.last_id) || 0, taken: 0 }));
   if (undated.length) queue.push(bucket);
   queue.sort((a, b) => b.last_id - a.last_id);
 
-  let left = round2(product.on_hand);
+  let left = roundQty(product.on_hand);
   for (const q of queue) {
     // Остаток ушёл в минус — брать нечего: ни одна партия не «держит» товар,
     // а сам минус ниже ляжет в корзину и будет НАЗВАН.
-    const take = left > 0 ? round2(Math.min(q.received, left)) : 0;
+    const take = left > 0 ? roundQty(Math.min(q.received, left)) : 0;
     q.taken = take;
-    left = round2(left - take);
+    left = roundQty(left - take);
   }
 
   const lots = dated.map((g) => {
@@ -313,7 +315,7 @@ function allocate(product, groups, day) {
       batch_no: g.batch_no,
       expiry_date: g.expiry_date,
       no_expiry: false,
-      received_qty: round2(g.received_qty),
+      received_qty: roundQty(g.received_qty),
       remaining: q.taken,
       days_left: daysLeft,
       state: lotState(daysLeft),
@@ -327,7 +329,7 @@ function allocate(product, groups, day) {
     ? String(x.batch_no).localeCompare(String(y.batch_no))
     : (x.expiry_date < y.expiry_date ? -1 : 1)));
 
-  const rest = round2(bucket.taken + left);
+  const rest = roundQty(bucket.taken + left);
   if (undated.length || Math.abs(rest) > 1e-9) {
     lots.push({
       product_id: product.id,

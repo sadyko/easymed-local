@@ -38,6 +38,7 @@
 // значит уронить сумму счёта.
 
 import { hasAnyRole } from '../roles.js';
+import { pageInt } from './page-args.js';   // V3120_FINAL — числа и поиск из аргументов
 import { hasColumn } from '../domain/buildings.js';
 // CRM_REAL_BOOKING_V1 — работа над пациентом это доказательство его прихода.
 import { crmServiceEvidence } from '../crm/visit-status.js';
@@ -135,7 +136,7 @@ export function proceduresList(db, args, user) {
   requireRole(user, READ_ROLES, 'Очередь процедур');
   const scope = scopeOf(user);
   const me = (user && user.id) || null;
-  const limit = Math.min(500, Math.max(1, Number((args && args.limit) || 300)));
+  const limit = pageInt(args && args.limit, { def: 300, min: 1, max: 500 });   // V3120_FINAL — не число → 400, не 500
 
   // ── половина 1: АМБУЛАТОРНАЯ. Строка визита; исполнитель = doctor_id
   // (эта колонка на visit_services и есть исполнитель — см. миграцию 102).

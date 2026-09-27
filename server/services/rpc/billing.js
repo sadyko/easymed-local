@@ -2,13 +2,14 @@
 // is computed here from DB rows — client-supplied amounts are never trusted.
 // Both handlers run their DB work inside db.transaction(...)() for atomicity.
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { ensureOpenShift } from './cashier.js';   // SHIFT_AUTO_V2
 // CRM_REAL_BOOKING_V1 — платёж на кассе это доказательство, что пациент
 // здесь: заочно деньги у окна не появляются. См. шапку crm/visit-status.js.
 import { crmInvoiceEvidence, crmVisitEvidence } from '../crm/visit-status.js';
 // CRM_CALENDAR_MIRROR_V1 (разбор ревью M6, M1) — строки записи из заявки CRM.
 import { pruneAutoLinesOnInvoice, syncLineFromVisit } from '../crm/booking-mirror.js';
-import { invoiceStatusFor } from '../domain/money.js';
+import { invoiceStatusFor, idemReplay, idemRemember } from '../domain/money.js';   // V3120_FIX — ключ повтора
 // PAY_BASIS_PERFORMED_V1 — «what will the invoice charge for this line» is one
 // function, shared with the doctor's pay (rpc/reports.js): own price over the
 // catalog, and VISIT_TIER_PRICING_V1 — a line quoted as a second/repeat visit
@@ -24,6 +25,7 @@ import { servicePriceQuote } from './service-price-quote.js';
 // выше, и по той же причине: обе стороны — объявленные функции, ни одна не
 // зовётся при загрузке модуля.
 import { restoreSources } from './inventory.js';
+import { voidReleasedDoseLines } from './treatment-orders.js';   // V3120_FINAL (S1)
 // DEPOSIT_WALLET_V1 — баланс пациента: списание при оплате «с баланса» и
 // зачисление при возврате «на баланс» — в той же транзакции, что платёж.
 import { spendWallet, creditWallet, moneyDocRefusal, walletBalance, realMoney, WalletError } from '../domain/wallet.js';
@@ -58,7 +60,7 @@ const PAYMENT_METHODS = ['cash', 'card', 'transfer', 'acquiring', 'wallet', 'gif
 function requireRole(user, allowed) {
   // MULTI_ROLE_SERVER_V1 — extras count too, not the primary role alone.
   if (!hasAnyRole(user, allowed)) {
-    throw new RpcError('Your role is not allowed to perform this action.', 403);
+    throw new RpcError('Вашей роли это действие недоступно.', 403);
   }
 }
 
@@ -74,7 +76,11 @@ function isPositiveInt(v) {
 // (тот же статус, тот же текст), чтобы экраны читали его одинаково.
 function walletGuard(fn) {
   try { return fn(); } catch (e) {
-    if (e instanceof WalletError || e instanceof CardError) throw new RpcError(e.message, e.status);
+    if (e instanceof WalletError || e instanceof CardError) {
+      const r = new RpcError(e.message, e.status);
+      if (e.template) { r.template = e.template; r.params = e.params; }   // V3120_I18N
+      throw r;
+    }
     throw e;
   }
 }
@@ -153,8 +159,7 @@ function branchName(db, letter) {
 // visits, visit_services). what — о чём речь, в родительном падеже.
 export function assertOwnBuilding(db, row, what) {
   if (!row || row.sync_origin == null) return;
-  throw new RpcError(
-    `${what} из филиала ${branchName(db, row.sync_origin)} — изменить его можно только там.`, 403);
+  throw rpcT(RpcError, '{what} из филиала {branch} — изменить его можно только там.', { what, branch: branchName(db, row.sync_origin) }, 403);
 }
 
 /**
@@ -270,11 +275,11 @@ export function createInvoiceForVisit(db, args, user) {
 
   const visitId = args && args.visit_id;
   if (!isPositiveInt(visitId)) {
-    throw new RpcError('visit_id must be a positive integer.', 400);
+    throw new RpcError('Визит указан неверно.', 400);
   }
   const visit = db.prepare('SELECT * FROM visits WHERE id = ?').get(visitId);
   if (!visit) {
-    throw new RpcError('visit not found.', 400);
+    throw new RpcError('Визит не найден.', 400);
   }
   // BRANCH_MONEY_GUARD_V1 — счёт по визиту выставляют там, где визит сделан.
   // Здесь это тем важнее, что счёт СОСЕДА по этому визиту сюда уже приехал (087)
@@ -283,10 +288,10 @@ export function createInvoiceForVisit(db, args, user) {
 
   const ids = args && args.visit_service_ids;
   if (!Array.isArray(ids) || ids.length === 0 || !ids.every(isPositiveInt)) {
-    throw new RpcError('No services selected: visit_service_ids must be a non-empty array of integers.', 400);
+    throw new RpcError('Не выбрано ни одной услуги.', 400);
   }
   if (new Set(ids).size !== ids.length) {
-    throw new RpcError('visit_service_ids contains duplicates.', 400);
+    throw new RpcError('Одна и та же услуга выбрана дважды.', 400);
   }
 
   const run = db.transaction(() => {
@@ -297,13 +302,13 @@ export function createInvoiceForVisit(db, args, user) {
     for (const id of ids) {
       const row = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(id);
       if (!row) {
-        throw new RpcError(`visit_service ${id} not found.`, 400);
+        throw rpcT(RpcError, 'Строка услуги №{id} не найдена.', { id }, 400);
       }
       if (row.visit_id !== visitId) {
-        throw new RpcError(`visit_service ${id} belongs to another visit (visit mismatch).`, 400);
+        throw rpcT(RpcError, 'Строка услуги №{id} относится к другому визиту.', { id }, 400);
       }
       if (row.invoice_item_id !== null) {
-        throw new RpcError(`visit_service ${id} is already invoiced.`, 400);
+        throw rpcT(RpcError, 'Услуга №{id} уже в счёте.', { id }, 400);
       }
       rows.push(row);
     }
@@ -338,13 +343,13 @@ export function createInvoiceForVisit(db, args, user) {
       if (row.service_id != null) {
         svc = getService.get(row.service_id);
         if (!svc) {
-          throw new RpcError(`service ${row.service_id} not found`, 400);
+          throw rpcT(RpcError, 'Услуга №{id} не найдена.', { id: row.service_id }, 400);
         }
         svcName = svc.name;
       } else if (row.clinic_item_id != null) {
         prod = getProduct.get(row.clinic_item_id);
         if (!prod) {
-          throw new RpcError(`product ${row.clinic_item_id} not found`, 400);
+          throw rpcT(RpcError, 'Товар №{id} не найден.', { id: row.clinic_item_id }, 400);
         }
         svcName = prod.name;
       } else if (row.consultation_type_id != null) {
@@ -362,7 +367,7 @@ export function createInvoiceForVisit(db, args, user) {
       const unit = lineUnitPrice(db, row, { service: svc, product: prod });
       const qty = row.quantity;
       if (!(Number.isFinite(qty) && qty > 0)) {
-        throw new RpcError(`invalid quantity on visit_service ${row.id}`, 400);
+        throw rpcT(RpcError, 'Неверное количество в строке услуги №{id}.', { id: row.id }, 400);
       }
       const line = round2(unit * qty);
       const pkg = linePackage(db, row, visitDay, packages);
@@ -375,7 +380,7 @@ export function createInvoiceForVisit(db, args, user) {
     // client can never produce a negative invoice.
     const discountRaw = (args && args.discount_amount !== undefined) ? args.discount_amount : 0;
     if (!(typeof discountRaw === 'number' && Number.isFinite(discountRaw) && discountRaw >= 0)) {
-      throw new RpcError('discount_amount must be a non-negative number.', 400);
+      throw new RpcError('Скидка должна быть неотрицательным числом.', 400);
     }
     // CATEGORY_DISCOUNT_V1 (2026-09-06) — СКИДКА ГРУППЫ СЧИТАЕТСЯ ЗДЕСЬ, НА
     // СЕРВЕРЕ, А НЕ ПРИСЫЛАЕТСЯ БРАУЗЕРОМ.
@@ -431,14 +436,14 @@ export function createInvoiceForVisit(db, args, user) {
     const payerRaw = (args && args.payer_id !== undefined && args.payer_id !== null) ? args.payer_id : null;
     if (payerRaw !== null) {
       if (!isPositiveInt(payerRaw)) {
-        throw new RpcError('payer_id must be a positive integer.', 400);
+        throw new RpcError('Плательщик указан неверно.', 400);
       }
       const payer = db.prepare('SELECT id, active FROM payers WHERE id = ?').get(payerRaw);
       if (!payer) {
-        throw new RpcError(`payer ${payerRaw} not found.`, 400);
+        throw rpcT(RpcError, 'Плательщик №{id} не найден.', { id: payerRaw }, 400);
       }
       if (!payer.active) {
-        throw new RpcError(`payer ${payerRaw} is inactive.`, 400);
+        throw rpcT(RpcError, 'Плательщик №{id} выключен.', { id: payerRaw }, 400);
       }
     }
 
@@ -485,12 +490,21 @@ export function createInvoiceForVisit(db, args, user) {
     // будет: record_payment отказывает при остатке <= 0. В итоге бесплатная
     // консультация висела в очереди как «ожидает оплату» вечно, и снять её
     // оттуда было нечем. Ноль в счёте = расчёт закрыт, значит и очередь обычная.
-    if (total === 0) {
+    //
+    // V3120_FIX (FATAL-2) — СЧЁТ ПЛАТЕЛЬЩИКУ (страховая / организация) ТОЖЕ
+    // ОТПУСКАЕТ СТРОКИ В ОЧЕРЕДЬ. Денег на кассе по нему не будет никогда: он
+    // исключён из «Приёма оплат» (COVERAGE_SPLIT_V1), а в 'queued' строки
+    // переводила только оплата. Анализ по страховке висел «Не оплачен»:
+    // save_lab_results отказывал «результат вносят после кассы», процедура —
+    // так же, а выплата врачу не видела работы. Расчёт с плательщиком идёт по
+    // акту и договору — для очереди это то же, что оплата или «в долг»
+    // (mark_invoice_debt). Сам счёт остаётся 'unpaid': это долг плательщика.
+    if (total === 0 || payerRaw !== null) {
       db.prepare(`
         UPDATE visit_services
         SET status = 'queued'
         WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
-          AND status NOT IN ('in_progress', 'completed')
+          AND status NOT IN ('in_progress', 'completed', 'collected', 'resulted')
       `).run(invoiceId);
     }
 
@@ -508,9 +522,8 @@ export function createInvoiceForVisit(db, args, user) {
   // CRM_REAL_BOOKING_V1 — СЧЁТ ПО АКТУ ЭТО САМО ПО СЕБЕ ДОКАЗАТЕЛЬСТВО.
   //
   // У консультации, выставленной контрагенту (COVERAGE_SPLIT_V1), денег на
-  // кассе не будет НИКОГДА: такие счета из списка кассы исключены, а строки
-  // их услуг остаются в 'added', потому что в очередь их переводит только
-  // оплата — и врачебное «Начать приём» оказывается заперто тем же счётом.
+  // кассе не будет НИКОГДА: такие счета из списка кассы исключены (строки их
+  // услуг с V3120_FIX уходят в очередь сразу при выставлении, см. выше).
   // Ни одно из трёх доказательств прихода не наступало, и заявка по такому
   // пациенту висела вечно.
   //
@@ -524,10 +537,11 @@ export function createInvoiceForVisit(db, args, user) {
 
 export function recordPayment(db, args, user) {
   requireRole(user, PAYMENT_ROLES);
+  { const seen = idemReplay(db, 'record_payment', args); if (seen) return seen; }   // V3120_FIX — повтор той же формы
 
   const amount = args && args.amount;
   if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
-    throw new RpcError('amount must be a positive number.', 400);
+    throw new RpcError('Сумма должна быть положительным числом.', 400);
   }
   // Round exactly once and use this single value everywhere (the balance
   // check, the credited paid_amount, and the stored payments row) so the
@@ -535,35 +549,35 @@ export function recordPayment(db, args, user) {
   // even for sub-cent input amounts.
   const amt = round2(amount);
   if (!(Number.isFinite(amt) && amt > 0)) {
-    throw new RpcError('amount must be a positive number.', 400);
+    throw new RpcError('Сумма должна быть положительным числом.', 400);
   }
   const method = args && args.method !== undefined ? args.method : 'cash';
   if (!PAYMENT_METHODS.includes(method)) {
-    throw new RpcError(`unknown method: ${method}`, 400);
+    throw rpcT(RpcError, 'Неизвестный способ оплаты: {method}.', { method }, 400);
   }
 
   const invoiceId = args && args.invoice_id;
   if (!isPositiveInt(invoiceId)) {
-    throw new RpcError('invoice_id must be a positive integer.', 400);
+    throw new RpcError('Счёт указан неверно.', 400);
   }
 
   const run = db.transaction(() => {
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
     if (!invoice) {
-      throw new RpcError('invoice not found.', 400);
+      throw new RpcError('Счёт не найден.', 400);
     }
     assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
     { const refusal = moneyDocRefusal(db, invoice); if (refusal) throw new RpcError(refusal, 400); }   // ревью C1 + CARD_SALE_V1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
-      throw new RpcError(`invoice is ${invoice.status}.`, 400);
+      throw rpcT(RpcError, 'Счёт {status} — операция по нему недоступна.', { status: statusRu(invoice.status) }, 400);
     }
 
     const balance = round2(invoice.total_amount - invoice.paid_amount);
     if (balance <= 0) {
-      throw new RpcError('invoice already paid (balance due is 0).', 400);
+      throw new RpcError('Счёт уже оплачен — к оплате 0.', 400);
     }
     if (amt > balance) {
-      throw new RpcError(`amount exceeds balance due (${balance})`, 400);
+      throw rpcT(RpcError, 'Сумма больше остатка к оплате ({balance}).', { balance }, 400);
     }
 
     const newPaid = round2(invoice.paid_amount + amt);
@@ -614,7 +628,7 @@ export function recordPayment(db, args, user) {
         AND status NOT IN ('in_progress', 'completed')
     `).run(invoiceId);
 
-    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) };
+    return idemRemember(db, 'record_payment', args, user, { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) });
   });
 
   // DEPOSIT_WALLET_V1 — IMMEDIATE: баланс читается и списывается под одной
@@ -636,24 +650,25 @@ export function recordPayment(db, args, user) {
 // payments (итоги смены по способам считаются как обычно).
 export function recordPaymentSplit(db, args, user) {
   requireRole(user, PAYMENT_ROLES);
+  { const seen = idemReplay(db, 'record_payment_split', args); if (seen) return seen; }   // V3120_FIX — повтор той же формы
 
   const invoiceId = args && args.invoice_id;
   if (!isPositiveInt(invoiceId)) {
-    throw new RpcError('invoice_id must be a positive integer.', 400);
+    throw new RpcError('Счёт указан неверно.', 400);
   }
   const raw = args && args.tenders;
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > 5) {
-    throw new RpcError('tenders must be a non-empty array (max 5).', 400);
+    throw new RpcError('Укажите от одной до пяти частей оплаты.', 400);
   }
   const tenders = raw.map((t, i) => {
     const amount = t && t.amount;
     if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
-      throw new RpcError(`tender ${i + 1}: amount must be a positive number.`, 400);
+      throw rpcT(RpcError, 'Часть {n}: сумма должна быть положительным числом.', { n: i + 1 }, 400);
     }
     const amt = round2(amount);
     const method = t && t.method !== undefined ? t.method : 'cash';
     if (!PAYMENT_METHODS.includes(method)) {
-      throw new RpcError(`tender ${i + 1}: unknown method: ${method}`, 400);
+      throw rpcT(RpcError, 'Часть {n}: неизвестный способ оплаты {method}.', { n: i + 1, method }, 400);
     }
     const notes = typeof (t && t.notes) === 'string' ? t.notes.slice(0, 200) : '';
     return { amt, method, notes, cardId: t && t.card_id };   // CARD_BALANCE_V1
@@ -662,16 +677,16 @@ export function recordPaymentSplit(db, args, user) {
 
   const run = db.transaction(() => {
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
-    if (!invoice) throw new RpcError('invoice not found.', 400);
+    if (!invoice) throw new RpcError('Счёт не найден.', 400);
     assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
     { const refusal = moneyDocRefusal(db, invoice); if (refusal) throw new RpcError(refusal, 400); }   // ревью C1 + CARD_SALE_V1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
-      throw new RpcError(`invoice is ${invoice.status}.`, 400);
+      throw rpcT(RpcError, 'Счёт {status} — операция по нему недоступна.', { status: statusRu(invoice.status) }, 400);
     }
     const balance = round2(invoice.total_amount - invoice.paid_amount);
-    if (balance <= 0) throw new RpcError('invoice already paid (balance due is 0).', 400);
+    if (balance <= 0) throw new RpcError('Счёт уже оплачен — к оплате 0.', 400);
     if (totalTendered > balance) {
-      throw new RpcError(`amount exceeds balance due (${balance})`, 400);
+      throw rpcT(RpcError, 'Сумма больше остатка к оплате ({balance}).', { balance }, 400);
     }
     // Ревью M2 — все части «с баланса» вместе против НАСТОЯЩЕГО баланса, до
     // первой записи: отказ называет баланс пациента, а не остаток после
@@ -680,7 +695,7 @@ export function recordPaymentSplit(db, args, user) {
     if (walletTotal > 0) {
       if (!invoice.patient_id) throw new RpcError('У счёта нет пациента — оплатить с баланса нельзя.', 400);
       const have = walletBalance(db, invoice.patient_id);
-      if (walletTotal > have) throw new RpcError(`На балансе пациента только ${have} — списать ${walletTotal} нельзя.`, 400);
+      if (walletTotal > have) throw rpcT(RpcError, 'На балансе пациента только {have} — списать {amount} нельзя.', { have, amount: walletTotal }, 400);
     }
 
     const shiftId = ensureOpenShift(db, user).id;
@@ -717,7 +732,7 @@ export function recordPaymentSplit(db, args, user) {
         AND status NOT IN ('in_progress', 'completed')
     `).run(invoiceId);
 
-    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) };
+    return idemRemember(db, 'record_payment_split', args, user, { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId) });
   });
 
   const out = run.immediate();   // DEPOSIT_WALLET_V1 — см. record_payment
@@ -734,18 +749,18 @@ export function markInvoiceDebt(db, args, user) {
 
   const invoiceId = args && args.invoice_id;
   if (!isPositiveInt(invoiceId)) {
-    throw new RpcError('invoice_id must be a positive integer.', 400);
+    throw new RpcError('Счёт указан неверно.', 400);
   }
 
   const run = db.transaction(() => {
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
-    if (!invoice) throw new RpcError('invoice not found.', 400);
+    if (!invoice) throw new RpcError('Счёт не найден.', 400);
     assertOwnBuilding(db, invoice, 'Счёт');   // BRANCH_MONEY_GUARD_V1
     if (invoice.status === 'void' || invoice.status === 'refunded') {
-      throw new RpcError(`invoice is ${invoice.status}.`, 400);
+      throw rpcT(RpcError, 'Счёт {status} — операция по нему недоступна.', { status: statusRu(invoice.status) }, 400);
     }
     const balance = round2(invoice.total_amount - invoice.paid_amount);
-    if (balance <= 0) throw new RpcError('invoice already paid (balance due is 0).', 400);
+    if (balance <= 0) throw new RpcError('Счёт уже оплачен — к оплате 0.', 400);
 
     db.prepare("UPDATE invoices SET status = 'debt' WHERE id = ?").run(invoiceId);
     db.prepare(`
@@ -804,6 +819,16 @@ function invoiceOwnDiscount(db, invoiceId) {
   return round2(db.prepare('SELECT COALESCE(SUM(discount_amount), 0) s FROM invoice_items WHERE invoice_id = ?').get(invoiceId).s);
 }
 
+// V3120_FIX (FATAL-1) — БАЗА ОСТАТКА СКИДКИ: сумма строк счёта без своей
+// скидки. Читается ДО правки строки, как invoiceOwnDiscount, и уходит в
+// repriceUnpaidInvoice как oldBase — остаток скидки (ручная / группа пациента)
+// пересчитывается пропорционально новой базе. Без неё убранная строка VIP
+// оставляла на счёте всю прежнюю скидку группы (38 250 вместо 33 000).
+function invoiceRestBase(db, invoiceId) {
+  return round2(db.prepare(`SELECT COALESCE(SUM(CASE WHEN COALESCE(discount_amount, 0) > 0 THEN 0 ELSE total END), 0) b
+                              FROM invoice_items WHERE invoice_id = ?`).get(invoiceId).b);
+}
+
 // PACKAGES_V1 (ревью I-2 / M-3) — ИТОГИ НЕОПЛАЧЕННОГО СЧЁТА ПОСЛЕ ПРАВКИ СТРОКИ.
 //
 // Скидка счёта состоит из двух частей (createInvoiceForVisit): своих скидок
@@ -826,6 +851,10 @@ function invoiceOwnDiscount(db, invoiceId) {
 // строки без своей) уменьшается пропорционально ушедшей базе, а не держится
 // прежней суммой — иначе вся ручная скидка счёта легла бы на оставшиеся
 // строки, и возврат одной услуги удешевлял бы другие.
+// V3120_FIX (FATAL-1) — `oldBase` передают ВСЕ три двери (удалить, заменить,
+// вернуть строку). Без него удаление ЭКГ у VIP 15 % держало прежние 38 250
+// скидки на 220 000 (17,4 %) вместо 33 000: max(прежний остаток, пол группы)
+// брал прежний остаток.
 function repriceUnpaidInvoice(db, inv, oldOwn, { oldBase = null } = {}) {
   const left = db.prepare(`SELECT COALESCE(SUM(total), 0) s,
                                   COALESCE(SUM(discount_amount), 0) own,
@@ -912,12 +941,12 @@ export function removeUnpaidService(db, args, user) {
 
   const vsId = args && args.visit_service_id;
   if (!isPositiveInt(vsId)) {
-    throw new RpcError('visit_service_id must be a positive integer.', 400);
+    throw new RpcError('Строка услуги указана неверно.', 400);
   }
 
   const run = db.transaction(() => {
     const vs = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
-    if (!vs) throw new RpcError('service line not found.', 400);
+    if (!vs) throw new RpcError('Строка услуги не найдена.', 400);
     // BRANCH_MONEY_GUARD_V1 — удаление здесь означает надгробие в журнале (084),
     // то есть строка исчезнет и в том здании, где её сделали.
     assertOwnBuilding(db, vs, 'Услуга');
@@ -930,7 +959,7 @@ export function removeUnpaidService(db, args, user) {
       ? db.prepare('SELECT * FROM invoice_items WHERE id = ?').get(vs.invoice_item_id)
       : null;
     const inv = item ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id) : null;
-    if (item && !inv) throw new RpcError('invoice not found.', 500);
+    if (item && !inv) throw new RpcError('Счёт не найден.', 500);
     if (inv) assertOwnBuilding(db, inv, 'Счёт');   // BRANCH_MONEY_GUARD_V1
     { const refusal = editableInvoiceRefusal(inv); if (refusal) throw new RpcError(refusal, 400); }   // BILLING_AUDIT_FIX_V1 (B-minor)
 
@@ -948,13 +977,14 @@ export function removeUnpaidService(db, args, user) {
     let invoice = null;
     if (item) {
       const oldOwn = invoiceOwnDiscount(db, inv.id);   // PACKAGES_V1 — ДО удаления строки
+      const oldBase = invoiceRestBase(db, inv.id);      // V3120_FIX (FATAL-1) — тоже ДО
       db.prepare('DELETE FROM invoice_items WHERE id = ?').run(item.id);
       const left = db.prepare('SELECT COUNT(*) n FROM invoice_items WHERE invoice_id = ?').get(inv.id);
       if (left.n === 0) {
         db.prepare('DELETE FROM invoices WHERE id = ?').run(inv.id);
         invoiceDeleted = true;
       } else {
-        invoice = repriceUnpaidInvoice(db, inv, oldOwn);
+        invoice = repriceUnpaidInvoice(db, inv, oldOwn, { oldBase });   // V3120_FIX (FATAL-1)
       }
     }
     return { removed: true, invoice_deleted: invoiceDeleted, invoice, sources };
@@ -973,12 +1003,12 @@ export function changeUnpaidService(db, args, user) {
 
   const vsId = args && args.visit_service_id;
   const newServiceId = args && args.new_service_id;
-  if (!isPositiveInt(vsId)) throw new RpcError('visit_service_id must be a positive integer.', 400);
-  if (!isPositiveInt(newServiceId)) throw new RpcError('new_service_id must be a positive integer.', 400);
+  if (!isPositiveInt(vsId)) throw new RpcError('Строка услуги указана неверно.', 400);
+  if (!isPositiveInt(newServiceId)) throw new RpcError('Новая услуга указана неверно.', 400);
 
   const run = db.transaction(() => {
     const vs = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
-    if (!vs) throw new RpcError('service line not found.', 400);
+    if (!vs) throw new RpcError('Строка услуги не найдена.', 400);
     assertOwnBuilding(db, vs, 'Услуга');   // BRANCH_MONEY_GUARD_V1
     assertNotPerformed(db, vs, 'заменить');   // INPATIENT_MONEY_FIX_V1
     // HOLDINGS_FIRST_V1 — ТОВАРНУЮ СТРОКУ ЗАМЕНИТЬ НЕЛЬЗЯ.
@@ -1006,7 +1036,7 @@ export function changeUnpaidService(db, args, user) {
       ? db.prepare('SELECT * FROM invoice_items WHERE id = ?').get(vs.invoice_item_id)
       : null;
     const inv = item ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id) : null;
-    if (item && !inv) throw new RpcError('invoice not found.', 500);
+    if (item && !inv) throw new RpcError('Счёт не найден.', 500);
     if (inv) assertOwnBuilding(db, inv, 'Счёт');   // BRANCH_MONEY_GUARD_V1
     { const refusal = editableInvoiceRefusal(inv); if (refusal) throw new RpcError(refusal, 400); }   // BILLING_AUDIT_FIX_V1 (B-minor)
 
@@ -1037,9 +1067,10 @@ export function changeUnpaidService(db, args, user) {
     let invoice = null;
     if (item) {
       const oldOwn = invoiceOwnDiscount(db, inv.id);   // PACKAGES_V1 — ДО правки строки
+      const oldBase = invoiceRestBase(db, inv.id);      // V3120_FIX (FATAL-1) — тоже ДО
       db.prepare('UPDATE invoice_items SET service_id = ?, description = ?, unit_price = ?, total = ?, discount_amount = 0 WHERE id = ?')
         .run(newServiceId, svc.name || '', unit, lineTotal, item.id);
-      invoice = repriceUnpaidInvoice(db, inv, oldOwn);
+      invoice = repriceUnpaidInvoice(db, inv, oldOwn, { oldBase });   // V3120_FIX (FATAL-1)
     }
 
     return { changed: true, line: db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId), invoice };
@@ -1134,7 +1165,7 @@ function issueRefund(db, { invoice, p, amt, refundable, toBalanceRaw, cardFallba
   if (p.method === 'wallet' && !toBalance) {
     const cap = realMoney(db, invoice.patient_id, refundable);   // одно правило с refund_deposit
     if (amt > cap) {
-      throw new RpcError(`Деньгами можно вернуть не больше ${cap}: остальное на балансе — кэшбэк, его возвращают только на баланс.`, 400);
+      throw rpcT(RpcError, 'Деньгами можно вернуть не больше {cap}: остальное на балансе — кэшбэк, его возвращают только на баланс.', { cap }, 400);
     }
   }
 
@@ -1192,24 +1223,25 @@ function closeFullyRefunded(db, invoiceId, args, reason, user) {
 
 export function refundPayment(db, args, user) {
   requireRole(user, PAYMENT_ROLES);
+  { const seen = idemReplay(db, 'refund_payment', args); if (seen) return seen; }   // V3120_FIX — повтор той же формы
 
   const paymentId = args && args.payment_id;
   if (!isPositiveInt(paymentId)) {
-    throw new RpcError('payment_id must be a positive integer.', 400);
+    throw new RpcError('Платёж указан неверно.', 400);
   }
   const reason = String((args && args.reason) || '').slice(0, 300);
 
   const run = db.transaction(() => {
     const p = db.prepare('SELECT * FROM payments WHERE id = ?').get(paymentId);
     if (!p) {
-      throw new RpcError('payment not found.', 400);
+      throw new RpcError('Платёж не найден.', 400);
     }
     if (p.amount <= 0) {
       throw new RpcError('Это возврат — вернуть возврат нельзя.', 400);
     }
     const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(p.invoice_id);
     if (!invoice) {
-      throw new RpcError('invoice not found.', 400);
+      throw new RpcError('Счёт не найден.', 400);
     }
     // BRANCH_MONEY_GUARD_V1 — возврат делают там, где взяли деньги: из ЭТОГО
     // ящика они не выходили, и отрицательный платёж отсюда исказил бы и смену
@@ -1227,11 +1259,11 @@ export function refundPayment(db, args, user) {
 
     const rawAmt = args && args.amount !== undefined && args.amount !== null ? args.amount : refundable;
     if (typeof rawAmt !== 'number' || !Number.isFinite(rawAmt) || rawAmt <= 0) {
-      throw new RpcError('amount must be a positive number.', 400);
+      throw new RpcError('Сумма должна быть положительным числом.', 400);
     }
     const amt = round2(rawAmt);
     if (amt > refundable) {
-      throw new RpcError(`Максимум к возврату по этому платежу: ${refundable}.`, 400);
+      throw rpcT(RpcError, 'Максимум к возврату по этому платежу: {amount}.', { amount: refundable }, 400);
     }
 
     // The refund lands in the REFUNDER's own open shift (a cash refund must
@@ -1245,12 +1277,50 @@ export function refundPayment(db, args, user) {
     }, user);
 
     const newPaid = round2(invoice.paid_amount - amt);
-    const status = invoiceStatusFor(invoice.total_amount, newPaid, invoice.status);
-    if (status === 'paid') {
-      db.prepare('UPDATE invoices SET paid_amount = ?, status = ? WHERE id = ?').run(newPaid, status, invoice.id);
+    // V3120_FIX (MAJOR) — ЧАСТИЧНЫЙ ВОЗВРАТ ПО ОПЛАЧЕННОМУ СЧЁТУ — СКИДКА ПОСЛЕ
+    // ПРОДАЖИ, А НЕ ДОЛГ.
+    //
+    // Счёт на 140 000 оплачен, пациенту вернули 40 000 (уступка, «не всё
+    // сделали») — счёт становился «оплачен частично» с долгом 40 000: касса
+    // требовала с человека ровно то, что ему только что отдала, дашборд
+    // считал это долгом, а «Отчёт по долгам» — должником. Теперь такой возврат
+    // уменьшает сумму счёта: discount_amount += возвращённое, total = оплачено,
+    // статус и дата оплаты прежние. Платежи (+140 000, −40 000) не трогаются —
+    // выручка и смена по-прежнему считаются по ним; доля врача: скидка счёта
+    // ложится на строки (ITEM_DISCOUNT_SQL), а коэффициент возврата
+    // (PAY_REFUND_V1: чистые деньги / MIN(получено, сумма счёта)) равен 1 —
+    // вместе ровно та же доля, что прежде (100/140). Кэшбэк откатывается по
+    // новым деньгам, как при любом возврате.
+    //
+    // «Вернуть и взять снова другим способом» — ЯВНЫЙ выбор кассира:
+    // reopen_balance: true оставляет сумму счёта, и он ждёт доплаты (прежнее
+    // поведение). Какую именно услугу возвращают, если это не уступка, — дверь
+    // refund_invoice_line (строкой): она пересчитывает счёт по правилам строк.
+    // Полный возврат (денег не осталось) — как прежде, closeFullyRefunded.
+    // Счёт пациента, который ещё лежит на койке, пересобирается при выписке —
+    // у него прежнее правило (ждёт доплаты), скидку ставят при выписке.
+    const admRow = invoice.admission_id ? db.prepare('SELECT status FROM admissions WHERE id = ?').get(invoice.admission_id) : null;
+    const reopen = (args && (args.reopen_balance === true || args.reopen_balance === 1)) || !!(admRow && IN_BED_STATUSES.includes(admRow.status));
+    let postSaleDiscount = 0;
+    if (invoice.status === 'paid' && newPaid > 0 && newPaid < invoice.total_amount && !reopen) {
+      postSaleDiscount = round2(invoice.total_amount - newPaid);
+      // V3120_FINAL (C1, мигр. 212) — эта часть скидки записывается ОТДЕЛЬНО
+      // (post_sale_discount): отчёты делят её на все строки пропорционально
+      // (пакета тоже) и умножают фикс врача и вознаграждения на оставшуюся
+      // долю — те же деньги, что при возврате «с доплатой».
+      const oldDiscount = Number(invoice.discount_amount) || 0;
+      const newDiscount = round2(Math.min(oldDiscount + postSaleDiscount, Number(invoice.subtotal) || 0));
+      db.prepare('UPDATE invoices SET paid_amount = ?, total_amount = ?, discount_amount = ?, post_sale_discount = ? WHERE id = ?')
+        .run(newPaid, newPaid, newDiscount,
+          round2((Number(invoice.post_sale_discount) || 0) + Math.max(0, newDiscount - oldDiscount)), invoice.id);
     } else {
-      // No longer fully paid — clear paid_at so reports don't count it as settled.
-      db.prepare('UPDATE invoices SET paid_amount = ?, status = ?, paid_at = NULL WHERE id = ?').run(newPaid, status, invoice.id);
+      const status = invoiceStatusFor(invoice.total_amount, newPaid, invoice.status);
+      if (status === 'paid') {
+        db.prepare('UPDATE invoices SET paid_amount = ?, status = ? WHERE id = ?').run(newPaid, status, invoice.id);
+      } else {
+        // No longer fully paid — clear paid_at so reports don't count it as settled.
+        db.prepare('UPDATE invoices SET paid_amount = ?, status = ?, paid_at = NULL WHERE id = ?').run(newPaid, status, invoice.id);
+      }
     }
     // CASHBACK_SERVER_V2 — кэшбэк счёта следует за его новыми деньгами:
     // откат пропорционален возвращённому (сколько есть на балансе).
@@ -1261,8 +1331,9 @@ export function refundPayment(db, args, user) {
     // транзакции, что возврат.
     const closed = newPaid <= 0 ? closeFullyRefunded(db, invoice.id, args, reason, user) : { voided: false };
 
-    return { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id), to_balance: toBalance, voided: !!closed.voided,
-      ...(closed.void_note ? { void_note: closed.void_note } : {}), ...(card ? { to_card: card } : {}) };
+    return idemRemember(db, 'refund_payment', args, user, { invoice: db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoice.id), to_balance: toBalance, voided: !!closed.voided,
+      ...(postSaleDiscount > 0 ? { post_sale_discount: postSaleDiscount } : {}),
+      ...(closed.void_note ? { void_note: closed.void_note } : {}), ...(card ? { to_card: card } : {}) });
   });
 
   return run.immediate();
@@ -1308,14 +1379,14 @@ export function refundPayment(db, args, user) {
 export function refundInvoiceLine(db, args, user) {
   requireRole(user, PAYMENT_ROLES);
   const itemId = args && args.invoice_item_id;
-  if (!isPositiveInt(itemId)) throw new RpcError('invoice_item_id must be a positive integer.', 400);
+  if (!isPositiveInt(itemId)) throw new RpcError('Строка счёта указана неверно.', 400);
   const reason = String((args && args.reason) || '').slice(0, 300);
 
   const run = db.transaction(() => {
     const item = db.prepare('SELECT * FROM invoice_items WHERE id = ?').get(itemId);
     if (!item) throw new RpcError('Строка счёта не найдена.', 400);
     const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id);
-    if (!inv) throw new RpcError('invoice not found.', 500);
+    if (!inv) throw new RpcError('Счёт не найден.', 500);
     assertOwnBuilding(db, inv, 'Счёт');
     assertOwnBuilding(db, item, 'Строка счёта');
     { const refusal = moneyDocRefusal(db, inv); if (refusal) throw new RpcError(refusal, 400); }
@@ -1332,8 +1403,7 @@ export function refundInvoiceLine(db, args, user) {
     const oldTotal = round2(Number(inv.total_amount) || 0);
     const oldPaid = round2(Number(inv.paid_amount) || 0);
     const oldOwn = invoiceOwnDiscount(db, inv.id);
-    const oldBase = round2(db.prepare(`SELECT COALESCE(SUM(CASE WHEN COALESCE(discount_amount, 0) > 0 THEN 0 ELSE total END), 0) b
-                                         FROM invoice_items WHERE invoice_id = ?`).get(inv.id).b);
+    const oldBase = invoiceRestBase(db, inv.id);
 
     // 3. Строка визита — до удаления позиции (внешний ключ).
     let performed = false;
@@ -1357,11 +1427,24 @@ export function refundInvoiceLine(db, args, user) {
 
     // 1. Пересчёт суммы счёта.
     const leftN = db.prepare('SELECT COUNT(*) n FROM invoice_items WHERE invoice_id = ?').get(inv.id).n;
+    // V3120_FINAL (C1) — скидка после продажи (частичный возврат по счёту,
+    // мигр. 212) лежит на ВСЕХ строках пропорционально. Счёт пересчитывается
+    // без неё, а потом она ложится снова — в той доле, что осталась от счёта:
+    // строка стоит столько, сколько за неё осталось заплачено, а не прежнюю
+    // цену (иначе возврат строки после уступки отдавал бы меньше или больше).
+    const oldPostSale = round2(Number(inv.post_sale_discount) || 0);
     if (leftN === 0) {
-      db.prepare('UPDATE invoices SET subtotal = 0, discount_amount = 0, total_amount = 0 WHERE id = ?').run(inv.id);
+      db.prepare('UPDATE invoices SET subtotal = 0, discount_amount = 0, total_amount = 0, post_sale_discount = 0 WHERE id = ?').run(inv.id);
     } else {
       // paid_amount пока прежний — settleZeroTotal внутри не тронет счёт с деньгами.
-      repriceUnpaidInvoice(db, { ...inv, paid_amount: oldPaid }, oldOwn, { oldBase });
+      repriceUnpaidInvoice(db, { ...inv, discount_amount: round2((Number(inv.discount_amount) || 0) - oldPostSale), paid_amount: oldPaid }, oldOwn, { oldBase });
+      if (oldPostSale > 0) {
+        const r = db.prepare('SELECT discount_amount, total_amount FROM invoices WHERE id = ?').get(inv.id);
+        const preTotal = round2(oldTotal + oldPostSale);
+        const ps = preTotal > 0 ? round2(Math.min(oldPostSale * r.total_amount / preTotal, r.total_amount)) : 0;
+        db.prepare('UPDATE invoices SET discount_amount = ?, total_amount = ?, post_sale_discount = ? WHERE id = ?')
+          .run(round2(r.discount_amount + ps), round2(r.total_amount - ps), ps, inv.id);
+      }
     }
     const newTotal = round2(db.prepare('SELECT total_amount t FROM invoices WHERE id = ?').get(inv.id).t);
     const lineValue = round2(oldTotal - newTotal);
@@ -1472,12 +1555,12 @@ export function createInvoiceForAdmission(db, args, user) {
   requireRole(user, CREATE_INVOICE_ROLES);
 
   const admissionId = args && args.admission_id;
-  if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
+  if (!isPositiveInt(admissionId)) throw new RpcError('Госпитализация указана неверно.', 400);
   const ids = args && args.admission_service_ids;
   if (!Array.isArray(ids) || ids.length === 0 || !ids.every(isPositiveInt)) {
-    throw new RpcError('admission_service_ids must be a non-empty array of integers.', 400);
+    throw new RpcError('Не выбрано ни одной строки стационара.', 400);
   }
-  if (new Set(ids).size !== ids.length) throw new RpcError('admission_service_ids contains duplicates.', 400);
+  if (new Set(ids).size !== ids.length) throw new RpcError('Одна и та же строка стационара выбрана дважды.', 400);
 
   return buildAdmissionInvoice(db, admissionId, ids, user);
 }
@@ -1489,30 +1572,30 @@ export function createInvoiceForAdmission(db, args, user) {
 export function buildAdmissionInvoice(db, admissionId, ids, user) {
   const run = db.transaction(() => {
     const adm = db.prepare('SELECT * FROM admissions WHERE id = ?').get(admissionId);
-    if (!adm) throw new RpcError('admission not found.', 400);
+    if (!adm) throw new RpcError('Госпитализация не найдена.', 400);
 
     const getService = db.prepare('SELECT price, name FROM services WHERE id = ?');
     const getProduct = db.prepare('SELECT sale_price, name FROM products WHERE id = ?');
     const priced = ids.map((id) => {
       const row = db.prepare('SELECT * FROM admission_services WHERE id = ?').get(id);
-      if (!row) throw new RpcError(`admission_service ${id} not found.`, 400);
-      if (row.admission_id !== admissionId) throw new RpcError(`admission_service ${id} belongs to another admission.`, 400);
-      if (row.invoice_item_id !== null) throw new RpcError(`admission_service ${id} is already invoiced.`, 400);
+      if (!row) throw rpcT(RpcError, 'Строка стационара №{id} не найдена.', { id }, 400);
+      if (row.admission_id !== admissionId) throw rpcT(RpcError, 'Строка стационара №{id} относится к другой госпитализации.', { id }, 400);
+      if (row.invoice_item_id !== null) throw rpcT(RpcError, 'Строка стационара №{id} уже в счёте.', { id }, 400);
       if (!row.billable) throw new RpcError('строка в учёте расходов — отметьте «В счёт», чтобы включить её в счёт пациента.', 400);
       let name = '', svc = null, prod = null;
       if (row.service_id != null) {
         svc = getService.get(row.service_id);
-        if (!svc) throw new RpcError(`service ${row.service_id} not found`, 400);
+        if (!svc) throw rpcT(RpcError, 'Услуга №{id} не найдена.', { id: row.service_id }, 400);
         name = svc.name;
       } else if (row.clinic_item_id != null) {
         prod = getProduct.get(row.clinic_item_id);
-        if (!prod) throw new RpcError(`product ${row.clinic_item_id} not found`, 400);
+        if (!prod) throw rpcT(RpcError, 'Товар №{id} не найден.', { id: row.clinic_item_id }, 400);
         name = prod.name;
       }
       // Same precedence as visit billing (the doctor's own price wins), with no
       // visit tier — PAY_BASIS_PERFORMED_V1: one rule, domain/pricing.js.
       const qty = row.quantity;
-      if (!(Number.isFinite(qty) && qty > 0)) throw new RpcError(`invalid quantity on admission_service ${row.id}`, 400);
+      if (!(Number.isFinite(qty) && qty > 0)) throw rpcT(RpcError, 'Неверное количество в строке стационара №{id}.', { id: row.id }, 400);
       // INPATIENT_MONEY_FIX_V1 — ПРОЖИВАНИЕ идёт в счёт своей СОХРАНЁННОЙ суммой:
       // в ней уже скидка на койку и ставки всех коек, на которых лежал пациент
       // (accommodation.js). «Ставка × сутки» здесь теряла скидку (акт 270 000,
@@ -1566,16 +1649,16 @@ export function buildAdmissionInvoice(db, admissionId, ids, user) {
 export function removeAdmissionLineFromInvoice(db, args, user) {
   requireRole(user, CREATE_INVOICE_ROLES);
   const lineId = args && args.line_id;
-  if (!isPositiveInt(lineId)) throw new RpcError('line_id must be a positive integer.', 400);
+  if (!isPositiveInt(lineId)) throw new RpcError('Строка указана неверно.', 400);
 
   const run = db.transaction(() => {
     const line = db.prepare('SELECT * FROM admission_services WHERE id = ?').get(lineId);
-    if (!line) throw new RpcError('line not found.', 400);
+    if (!line) throw new RpcError('Строка не найдена.', 400);
     if (line.invoice_item_id == null) throw new RpcError('строка и так не в счёте.', 400);
     const item = db.prepare('SELECT * FROM invoice_items WHERE id = ?').get(line.invoice_item_id);
-    if (!item) throw new RpcError('invoice item not found.', 500);
+    if (!item) throw new RpcError('Строка счёта не найдена.', 500);
     const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id);
-    if (!inv) throw new RpcError('invoice not found.', 500);
+    if (!inv) throw new RpcError('Счёт не найден.', 500);
     assertOwnBuilding(db, inv, 'Счёт');   // BRANCH_MONEY_GUARD_V1
     if (inv.paid_amount > 0 || inv.status !== 'unpaid') {
       throw new RpcError('счёт уже ' + (inv.paid_amount > 0 ? 'оплачен (частично)' : inv.status) + ' — сначала отмените его в кассе.', 400);
@@ -1586,6 +1669,7 @@ export function removeAdmissionLineFromInvoice(db, args, user) {
     markRefundRelease(db, { invoiceId: inv.id, kind: 'in', lineIds: [lineId] });
     db.prepare("UPDATE admission_services SET invoice_item_id = NULL, status = 'added' WHERE id = ?").run(lineId);
     db.prepare('DELETE FROM invoice_items WHERE id = ?').run(item.id);
+    voidReleasedDoseLines(db, [lineId], user);   // V3120_FINAL (S1) — снятая доза не остаётся к оплате
     const left = db.prepare('SELECT COALESCE(SUM(total), 0) s, COUNT(*) n FROM invoice_items WHERE invoice_id = ?').get(inv.id);
     let invoiceDeleted = false;
     if (left.n === 0) {
@@ -1608,9 +1692,9 @@ export function removeAdmissionLineFromInvoice(db, args, user) {
 // «возвращено»; выставить заново можно только явным выбором (rebill_refunded).
 // Чтение: только номера строк этого визита.
 export function visitRefundedLines(db, args, user) {
-  if (!user) throw new RpcError('Not authenticated.', 401);
+  if (!user) throw new RpcError('Нужно войти в систему.', 401);
   const visitId = args && args.visit_id;
-  if (!isPositiveInt(visitId)) throw new RpcError('visit_id must be a positive integer.', 400);
+  if (!isPositiveInt(visitId)) throw new RpcError('Визит указан неверно.', 400);
   const ids = db.prepare('SELECT id FROM visit_services WHERE visit_id = ? AND invoice_item_id IS NULL').all(visitId).map((r) => r.id);
   return { line_ids: refundedLineIds(db, 'out', ids) };
 }

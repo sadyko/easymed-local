@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { setLiveColumns, setForeignKeyColumns, compile, CompileError } from '../db/query-compiler.js';
-import { readableColumns, MAIN_CLINIC_TABLES } from '../db/schema-registry.js';
+import { readableColumns, MAIN_CLINIC_TABLES, rowScope } from '../db/schema-registry.js';
+import { scopeLifted } from '../db/row-scope.js';   // V3120_FIX — кто назначает заявку CRM другому
 // STAFF_SYNC_V1 — «филиал я или сама по себе клиника» решается по базе, а не по
 // сборке: одна и та же установка сегодня одиночная, завтра филиал.
 import { readIdentity } from '../services/branch-sync/identity.js';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
+import { constraintRefusal, errorBody } from '../services/server-message.js';   // V3120_I18N
 // CRM_REAL_BOOKING_V1 — статус услуги двигают экраны, и двигают они его через
 // эту дверь: работа над пациентом доказывает, что он пришёл.
 import { crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../services/crm/visit-status.js';
@@ -166,6 +168,50 @@ function refuseAdmissionLineWrite(db, meta, body, user) {
   return null;
 }
 
+// V3120_FINAL (S2) — текст отказа или null для строк ВИЗИТА табличным путём.
+//
+// Реестр пускает администратора и регистратуру удалять строки визита, и
+// удаление шло мимо денег и склада: выданный товар (clinic_item_id) исчезал
+// без возврата — движение склада оставалось висеть расходом без строки, — а
+// строка оплаченного счёта уходила, оставляя позицию счёта без услуги. Теперь:
+//   • строку в счёте (invoice_item_id) не удаляют и вид приёма у неё не
+//     меняют — снимают её касса (отмена позиции / возврат строкой);
+//   • выданный товар убирают кнопкой «Убрать» (void_dispensed_visit_item):
+//     товар возвращается туда, откуда взят;
+//   • строку без услуги, без товара и без вида приёма («свободная цена») не
+//     заводят: у неё нет каталожной цены, и сумму задавал бы браузер.
+//     Администратор — исключение (исправление вручную), как и в остальном.
+// Строки выбираются тем же compile(), что и сама правка (те же права и отбор).
+function refuseVisitLineWrite(db, meta, body, user) {
+  if (!meta || meta.table !== 'visit_services') return null;
+  if (meta.op === 'insert' || meta.op === 'upsert') {
+    const roles = [user && user.role, ...((user && user.extra_roles) || [])];
+    if (roles.includes('admin')) return null;
+    const rows = Array.isArray(body && body.values) ? body.values : (body && body.values ? [body.values] : []);
+    const bare = rows.some((r) => r && r.service_id == null && r.consultation_type_id == null && r.clinic_item_id == null);
+    return bare ? 'Строка визита без услуги и без вида приёма не заводится — выберите услугу из каталога.' : null;
+  }
+  if (meta.op !== 'update' && meta.op !== 'delete') return null;
+  const values = body && body.values && !Array.isArray(body.values) ? body.values : {};
+  if (meta.op === 'update' && !Object.prototype.hasOwnProperty.call(values, 'consultation_type_id')) return null;
+  let rows = [];
+  try {
+    const sel = compile({ table: body.table, op: 'select', columns: 'id,invoice_item_id,clinic_item_id', filters: body.filters }, user, { db });
+    rows = db.prepare(sel.sql).all(...sel.params);
+  } catch { return 'Строки визита не выбраны — правка не выполнена.'; }
+  for (const r of rows) {
+    if (meta.op === 'delete' && r.clinic_item_id != null && r.invoice_item_id == null) {
+      return 'Это выданный товар — уберите его кнопкой «Убрать»: товар вернётся туда, откуда его взяли.';
+    }
+    if (r.invoice_item_id != null) {
+      return meta.op === 'delete'
+        ? 'Строка уже в счёте — снимают её в кассе (отмена позиции или возврат), а не удалением.'
+        : 'Строка уже в счёте — вид приёма у неё не меняют: замените услугу через счёт.';
+    }
+  }
+  return null;
+}
+
 /**
  * CRM_REAL_BOOKING_V1 — РАБОТА НАД ПАЦИЕНТОМ ДОКАЗЫВАЕТ, ЧТО ОН ПРИШЁЛ.
  *
@@ -210,7 +256,7 @@ export function dbRoutes(db) {
     } catch (e) {
       if (e instanceof CompileError) {
         const status = e.status || 400;
-        return res.status(status).json({ error: { code: status === 403 ? 'forbidden' : 'bad_request', message: e.message } });
+        return res.status(status).json({ error: errorBody(status === 403 ? 'forbidden' : 'bad_request', e) });   // V3120_I18N — с шаблоном, если он есть
       }
       throw e;
     }
@@ -264,6 +310,11 @@ export function dbRoutes(db) {
     // CRM_HEAD_MERGE_TAGS_V1 (ревью M4) — метку на заявку ставят только
     // существующую и видимую: скрытую экран не предлагает, а несуществующую
     // внешний ключ отверг бы голой ошибкой базы.
+    // V3120_FIX — заявку CRM «на другого» назначают только те, кто видит всю
+    // доску (администратор, руководитель колл-центра — crm.all). Оператор
+    // берёт заявку себе или отпускает её в общую стопку (NULL).
+    const assignRefusal = crmAssignRefusal(db, compiled.meta, req.body, req.user);
+    if (assignRefusal) return res.status(403).json({ error: { code: 'forbidden', message: assignRefusal } });
     if (compiled.meta.table === 'crm_request_tags' && compiled.meta.op === 'insert') {
       const tagRefusal = tagInsertRefusal(db, req.body && req.body.values);
       if (tagRefusal) return res.status(400).json({ error: { code: 'bad_request', message: tagRefusal } });
@@ -285,6 +336,11 @@ export function dbRoutes(db) {
     const admLineRefusal = refuseAdmissionLineWrite(db, compiled.meta, req.body, req.user);
     if (admLineRefusal) {
       return res.status(409).json({ error: { code: 'conflict', message: admLineRefusal } });
+    }
+    // V3120_FINAL (S2) — строки визита: см. refuseVisitLineWrite.
+    const visitLineRefusal = refuseVisitLineWrite(db, compiled.meta, req.body, req.user);
+    if (visitLineRefusal) {
+      return res.status(409).json({ error: { code: 'conflict', message: visitLineRefusal } });
     }
 
     // CRM_CALENDAR_MIRROR_V1 — что заденет правка (и отказ, если она трогает
@@ -396,15 +452,22 @@ export function dbRoutes(db) {
       // registry, so echoing it leaks nothing and lets the UI say what happened.
       // Anything that is NOT a constraint stays an opaque 500 — an unexpected
       // failure must not describe the server's internals.
-      const code = e && e.code;
-      if (code === 'SQLITE_CONSTRAINT_UNIQUE' || code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
-        return res.status(409).json({ error: { code: 'conflict', message: e.message } });
+      //
+      // V3120_I18N — английский текст SQLite («UNIQUE constraint failed: …»)
+      // человеку больше не показывается: constraintRefusal даёт русскую фразу
+      // (с шаблоном для перевода), а код SQLite и исходный текст едут рядом —
+      // `sqlite_code` и `detail` — для логов и поддержки. Отказ ТРИГГЕРА
+      // (RAISE(ABORT, '…')) — правило клиники её словами («Процент кэшбэка
+      // должен быть от 0 до 100.»), он идёт как есть (V3120_FIX).
+      const refusal = constraintRefusal(e);
+      if (refusal) {
+        return res.status(refusal.status).json({ error: {
+          ...errorBody(refusal.code, refusal), sqlite_code: refusal.sqlite_code, detail: refusal.detail,
+        } });
       }
-      if (code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
-        return res.status(409).json({ error: { code: 'conflict', message: e.message } });
-      }
-      if (code === 'SQLITE_CONSTRAINT_NOTNULL' || code === 'SQLITE_CONSTRAINT_CHECK') {
-        return res.status(400).json({ error: { code: 'bad_request', message: e.message } });
+      // V3120_FIX — upsert по колонке без уникального ключа: ошибка запроса.
+      if (/ON CONFLICT clause does not match/i.test(String(e && e.message))) {
+        return res.status(400).json({ error: { code: 'bad_request', message: 'Сохранение «добавить или обновить» возможно только по уникальному полю.' } });
       }
       console.error('[db query failed]', e.message);
       // OPS_EVENTS_V1 — same reasoning as rpc.js's 500 branch: this catch
@@ -413,11 +476,28 @@ export function dbRoutes(db) {
       // (fixed vocabulary, not a patient value), the same kind of identifier
       // rpc.js's RPC name already is.
       recordEvent(db, 'server_error', '/api/db/' + compiled.meta.table);
-      return res.status(500).json({ error: { code: 'internal', message: 'Query failed.' } });
+      return res.status(500).json({ error: { code: 'internal', message: 'Запрос к базе не выполнен. Повторите позже.' } });
     }
   });
 
   return r;
+}
+
+// V3120_FIX — текст отказа или null: назначение заявки CRM на ДРУГОГО
+// сотрудника. Оператор колл-центра инспекцией вставлял заявку с assigned_to
+// коллеги — и она исчезала у него с доски, появляясь у другого без следа.
+// Кто видит всё (scopeLifted — то же правило, что у доски), назначает кого
+// угодно; остальные — себя или никого.
+function crmAssignRefusal(db, meta, body, user) {
+  if (!meta || meta.table !== 'crm_requests') return null;
+  if (meta.op !== 'insert' && meta.op !== 'update' && meta.op !== 'upsert') return null;
+  const rows = Array.isArray(body && body.values) ? body.values : [body && body.values];
+  const me = user && Number(user.id);
+  const foreign = rows.some((r) => r && Object.prototype.hasOwnProperty.call(r, 'assigned_to')
+    && r.assigned_to !== null && r.assigned_to !== '' && Number(r.assigned_to) !== me);
+  if (!foreign) return null;
+  if (scopeLifted(rowScope('crm_requests'), user, db)) return null;
+  return 'Передать заявку другому сотруднику может руководитель колл-центра или администратор. Возьмите её себе или оставьте в общей стопке.';
 }
 
 // STAFF_SYNC_V1 — эта установка является филиалом? Испорченная или отсутствующая
@@ -438,7 +518,7 @@ function respondRows(res, rows, meta, count) {
   const shaped = parseJsonColumns(reshape(rows, meta), meta);
   if (meta.single === 'single') {
     if (shaped.length !== 1) {
-      return res.status(406).json({ error: { code: 'not_single', message: 'Expected exactly one row.' } });
+      return res.status(406).json({ error: { code: 'not_single', message: 'Ожидалась ровно одна запись.' } });
     }
     return res.json({ data: shaped[0] });
   }

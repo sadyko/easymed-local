@@ -71,7 +71,7 @@ export function branchSyncRoutes(db, dataDir, { now = () => Date.now() } = {}) {
   r.get('/catalogue', (req, res) => {
     const pairing = readPairing(dataDir);
     if (!pairing || pairing.role !== 'main') {
-      return res.status(404).json({ error: { code: 'not_found', message: 'Unknown API endpoint.' } });
+      return res.status(404).json({ error: { code: 'not_found', message: 'Неизвестный адрес API.' } });
     }
 
     const group = String(req.get('x-em-branch-group') || '');
@@ -90,10 +90,10 @@ export function branchSyncRoutes(db, dataDir, { now = () => Date.now() } = {}) {
       requestPath: CATALOGUE_PATH,
       sig,
     });
-    if (!ok) return res.status(401).json({ error: { code: 'unauthorized', message: 'Not authorised.' } });
+    if (!ok) return res.status(401).json({ error: { code: 'unauthorized', message: 'Запрос филиала не подписан ключом этой клиники.' } });
 
     if (skewMs(ts, now()) > MAX_SKEW_MS) {
-      return res.status(401).json({ error: { code: 'clock_skew', message: 'Request timestamp is out of range.' } });
+      return res.status(401).json({ error: { code: 'clock_skew', message: 'Время запроса расходится с часами сервера — проверьте часы на компьютерах.' } });
     }
 
     // no-store, а не no-cache: между филиалами может стоять прокси, и

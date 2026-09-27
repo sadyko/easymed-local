@@ -40,3 +40,15 @@ test('M7b: строка специальности без слага узнаё�
     assert.match(src, /r\.specialty_slug \|\| slugOfName\(r\.name_ru\)/);
     assert.match(src, /st\.specSlugs\.filter\(Boolean\)\.slice\(0, 4\)/);
 });
+
+// V3120_FIX — «Мой профиль» не ходит в облачный шлюз. Офлайн /api/v1 нет:
+// два каталога и синхронизация с medcore отвечали 404 на каждое открытие и
+// каждое сохранение (инспекция v3.12.0, врач и главный врач).
+test('V3120_FIX: профиль врача не зовёт облачный шлюз — каталоги встроенные', () => {
+    assert.ok(!/\bgw\(/.test(src), 'экран всё ещё зовёт /api/v1 (gw)');
+    assert.ok(!/from '\.\.\/gateway\.js'/.test(src), 'импорт облачного шлюза остался');
+    assert.match(src, /st\.specCatalog = SPECIALTY_ROWS\.map/, 'специальности — из встроенного списка');
+    const msg = 'Каталог болезней в офлайн-версии не подключён — уже отмеченные сохраняются как были.';
+    assert.ok(src.includes("'" + msg + "'"), 'карточка болезней не объясняет, почему списка нет');
+    assert.ok(STRINGS[msg] && STRINGS[msg].uz && STRINGS[msg].en, 'сообщению нужен перевод');
+});

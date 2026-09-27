@@ -512,3 +512,38 @@ test('PAY_ALL_EARNINGS_V1: оклад не подменяет начислени
     if (root) { const b = buttonByText(root, /30 дней/); if (b) b.click(); await tick(80); }
   }
 });
+
+// V3120_CLEANUP — подпись «Корректировка за <месяц>» и закрытый месяц в кабинете
+// идут шаблоном словаря: месяц (for_month / month, ГГГГ-ММ) пишется словом
+// языка экрана, а не русской подписью сервера (label).
+test('V3120_CLEANUP: корректировка и закрытый месяц — на языке экрана', async () => {
+  const i18n = await import('../i18n.js');
+  const base = payResponse();
+  PAY_RESPONSE = { ...base,
+    closed_months: [{ month: '2026-08', label: 'август 2026', closed_at: '2026-09-01T10:00:00Z' }],
+    adjustments: { count: 1, fee: -10000, rows: [{ date: dayKeyOf(now), for_month: '2026-08', label: 'Корректировка за август 2026',
+      service: 'Приём', patient: 'Иванов Пётр', invoice: 'INV-1', was: 40000, now: 30000, fee: -10000 }] },
+    total: base.total - 10000 };
+  const before = document.body.children.length;
+  let root = null;
+  try {
+    i18n.setLang('en');
+    root = await openPay();
+    buttonByText(root, /7 days|7 дней/).click();   // новый период — свежий ответ сервера
+    await tick(80);
+    const card = byClass(root, 'card').find((c) => byClass(c, 'dash-act').length === 2);
+    assert.ok(card, 'нет карточки с разборами');
+    byClass(card, 'dash-act')[0].click();
+    await tick(40);
+    const modal = [...document.body.children].slice(before);
+    const adj = modal.flatMap((m) => byClass(m, 'pay-adj')).map(textOf).join(' | ');
+    assert.ok(adj.includes('Adjustment for August 2026: Приём'), 'подпись корректировки не переведена: ' + adj);
+    assert.ok(!/Корректировка|август/.test(adj), 'русская подпись сервера на английском экране: ' + adj);
+    assert.ok(modal.map(textOf).join(' ').includes('Month closed: August 2026'), 'закрытый месяц не переведён');
+  } finally {
+    for (const m of [...document.body.children].slice(before)) m.remove();
+    i18n.setLang('ru');
+    PAY_RESPONSE = payResponse();
+    if (root) { const b = buttonByText(root, /30 дней|30 days/); if (b) b.click(); await tick(80); }
+  }
+});

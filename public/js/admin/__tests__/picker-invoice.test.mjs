@@ -302,7 +302,13 @@ test('отмена оплаченного счёта — refund_payment по п�
     assert.equal(await IA.cancelInvoice(inv, { reason: 'жалоба', refundAmount: 600000 }), 'done');
     inv = DB.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
     assert.equal(inv.paid_amount, 300000);
-    assert.equal(inv.status, 'partial');
+    // V3120_CLEANUP — окно отмены не просит «пациент заплатит заново»
+    // (reopen_balance): частичный возврат по оплаченному счёту — скидка после
+    // продажи, как у кассы по умолчанию. Счёт уменьшился до оплаченного и
+    // остался «Оплачен», а не превратился в долг на возвращённую сумму.
+    assert.equal(inv.status, 'paid');
+    assert.equal(inv.total_amount, 300000);
+    assert.ok(!RPC.some((r) => r.body && r.body.reopen_balance), 'окно отмены не открывает долг заново');
     const refunds = DB.prepare('SELECT amount, method FROM payments WHERE invoice_id = ? AND amount < 0 ORDER BY id').all(inv.id);
     assert.deepEqual(refunds.map((r) => [r.amount, r.method]), [[-400000, 'card'], [-200000, 'cash']], 'возврат обязан идти тем же способом, каким брали');
     assert.deepEqual(RPC.map((r) => r.name), ['refund_payment', 'refund_payment']);

@@ -22,6 +22,14 @@ const STATE = {
 
 const POLL_MS = 25_000;
 
+// V3120_FIX (2026-09-27) — ЧАТ ПОДДЕРЖКИ ОФЛАЙН НЕ РАБОТАЕТ, И ВИДЖЕТ ЕГО НЕ
+// ИЗОБРАЖАЕТ. support_tickets / support_messages / send_support_message —
+// облачные: офлайн-сервер их не знает, и виджет каждые 25 секунд у КАЖДОГО
+// сотрудника получал «unknown table» (инспекция v3.12.0: 87 отказов за проход).
+// Пока чат не перенесён, пункта «Чат поддержки» нет, опроса нет; кнопка
+// остаётся ради «Режима подсказок», который живёт в браузере.
+export const SUPPORT_CHAT_AVAILABLE = false;
+
 // ---------------------------------------------------------------------
 // Styles — kept inline in JS so the widget works on any page without a
 // matching <link> tag.
@@ -172,11 +180,12 @@ function buildBubble() {
 function buildMenu() {
     const m = document.createElement('div');
     m.className = 'sw-menu';
-    m.innerHTML = `
-        <button type="button" class="sw-menu-item chat"><span class="ic">💬</span>${tr('Чат поддержки')}</button>
+    m.innerHTML = (SUPPORT_CHAT_AVAILABLE ? `
+        <button type="button" class="sw-menu-item chat"><span class="ic">💬</span>${tr('Чат поддержки')}</button>` : '') + `
         <button type="button" class="sw-menu-item help"><span class="ic">?</span><span class="lbl">${tr('Режим подсказок')}</span></button>
     `;
-    m.querySelector('.chat').addEventListener('click', () => { m.classList.remove('open'); open(); });
+    const chatItem = m.querySelector('.chat');
+    if (chatItem) chatItem.addEventListener('click', () => { m.classList.remove('open'); open(); });
     m.querySelector('.help').addEventListener('click', () => {
         const ob = window.easymedOnboarding;
         m.classList.remove('open');
@@ -287,6 +296,7 @@ async function fetchMessages(ticketId) {
 }
 
 async function refresh({ markRead = false } = {}) {
+    if (!SUPPORT_CHAT_AVAILABLE) return;   // V3120_FIX — офлайн спрашивать некого
     if (!isAuthenticated()) return;
     const t = await fetchTicket();
     STATE.ticket = t;
@@ -434,12 +444,15 @@ export function mountSupportWidget() {
             STATE.bubble.style.display = 'grid';
             // Once authenticated, start fetching (handles missing CLINIC
             // gracefully — fetchTicket() will just return null).
-            refresh();
-            // Single owned background poll — tracked so it is never duplicated.
-            if (!STATE.pollTimer) STATE.pollTimer = setInterval(refresh, POLL_MS);
+            // V3120_FIX — ни первого запроса, ни опроса, пока чат офлайн недоступен.
+            if (SUPPORT_CHAT_AVAILABLE) {
+                refresh();
+                // Single owned background poll — tracked so it is never duplicated.
+                if (!STATE.pollTimer) STATE.pollTimer = setInterval(refresh, POLL_MS);
+            }
             // If we're on the apex (no slug), tone the widget down a
             // notch so it doesn't promise something it can't deliver.
-            if (!hasClinicContext()) {
+            if (SUPPORT_CHAT_AVAILABLE && !hasClinicContext()) {
                 console.warn('[support-widget] no clinic context yet — apex page or CLINIC failed to load');
             }
             return;

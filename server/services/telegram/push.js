@@ -50,7 +50,7 @@ export function pendingDocuments(db, kinds) {
     const q = docTypes.map(() => '?').join(',');
     const rows = db.prepare(
       `SELECT id, patient_id, doc_type, title, created_at FROM visit_documents
-        WHERE body IS NOT NULL AND body <> '' AND doc_type IN (${q})
+        WHERE body IS NOT NULL AND body <> '' AND doc_type IN (${q}) AND voided_at IS NULL
           AND patient_id IS NOT NULL
           AND created_at > strftime('%Y-%m-%dT%H:%M:%SZ','now',?)
         ORDER BY created_at ASC`).all(...docTypes, since);

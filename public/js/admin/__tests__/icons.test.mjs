@@ -67,6 +67,11 @@ const CALL_RE = /\b(?:Icon|iconHtml|icon)\(\s*['"`]([A-Za-z0-9_]+)['"`]/g;
 //                            записи нет, — и именно он не рисовался.
 const PROP_RE = /\bicon\s*:\s*['"`]([A-Za-z0-9_]+)['"`]/g;
 const FALLBACK_RE = /\b(?:Icon|iconHtml)\([^)\n]*?\|\|\s*['"`]([A-Za-z0-9_]+)['"`]/g;
+// V3120_FIX — четвёртая форма: помощник карточки card(заголовок, 'Иконка', …)
+// (doctor-profile.js, dashboard.js) отдаёт второе слово в Icon(). Так уехали
+// 'NotePencil' и 'Link' «Моего профиля» врача — сто ошибок в консоли за один
+// проход инспекции, а три формы выше их не видели.
+const CARD_RE = /\bcard\(\s*(?:tr\()?(?:'[^']*'|[A-Za-z_.]+)\)?\s*,\s*'([A-Z][A-Za-z0-9_]+)'/g;
 
 /** [{ name, file, line }] — каждое имя иконки во всём public/js, как бы оно ни было записано. */
 function collectIconCalls() {
@@ -76,7 +81,7 @@ function collectIconCalls() {
         const text = fs.readFileSync(file, 'utf8');
         const lines = text.split(/\r?\n/);
         lines.forEach((line, i) => {
-            for (const re of [CALL_RE, PROP_RE, FALLBACK_RE]) {
+            for (const re of [CALL_RE, PROP_RE, FALLBACK_RE, CARD_RE]) {
                 for (const m of line.matchAll(re)) {
                     calls.push({ name: m[1], file: path.relative(REPO_ROOT, file), line: i + 1 });
                 }

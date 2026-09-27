@@ -16,6 +16,10 @@ import {
 } from './booking-mirror.js';
 import { calendarBook } from '../rpc/calendar.js';
 import { localDate } from '../domain/day.js';
+// V3120_FIX — работа над неоплаченной услугой и право «CRM: изменение».
+import { unpaidWorkRefusal, FREE_MOVES } from '../visit-status-guard.js';
+import { grantAllowsOr } from '../grants.js';
+import { sectionLevel } from '../roles.js';
 
 const LINE_KEYS = ['status', 'scheduled_date', 'doctor_id', 'service_id', 'visit_id', 'consultation_type_id'];
 
@@ -59,13 +63,67 @@ function lockedLineRefusal(db, ids, values) {
   return null;
 }
 
+// V3120_FIX — ТАБЛИЦЫ ДОСКИ ЗАЯВОК. Роль с «CRM: просмотр» видит доску, но не
+// ведёт её: не двигает карточки, не берёт их себе, не заводит и не правит
+// строки, задачи и метки. Реестр (schema-registry) пускает запись по ШТАТНОЙ
+// роли (регистратура, колл-центр), а уровень раздела — свойство роли клиники в
+// базе (role_permissions), поэтому проверяется здесь, в единственной двери
+// записи, как и остальные правила этой двери.
+const CRM_TABLES = new Set(['crm_requests', 'crm_request_services', 'crm_tasks', 'crm_request_tags']);
+
+/**
+ * Может ли человек ВЕСТИ заявки. Настроенный ключ «crm» (матрица прав) — его
+ * уровень; не настроенный — прежний уровень раздела (sections/levels): только
+ * явный «просмотр» закрывает запись. Ненастроенная роль пишет, как и раньше, —
+ * по списку ролей реестра.
+ */
+export function canEditCrm(db, user) {
+  try {
+    return grantAllowsOr(db, user, 'crm', 'edit', () => sectionLevel(db, user, 'crm') !== 'viewer');
+  } catch {
+    return true;   // права не прочитались — решает реестр, как до этой проверки
+  }
+}
+
 /** До записи: что заденет правка. { refusal? } — отказ по-русски. */
 export function mirrorBefore(db, meta, body, user) {
   const ctx = { table: meta && meta.table, op: meta && meta.op, ids: [], visits: new Set(), cancelVisits: new Set(), lost: [] };
   if (!meta || meta.op === 'select') return ctx;
+  if (CRM_TABLES.has(meta.table) && !canEditCrm(db, user)) {
+    ctx.refusal = 'Раздел «CRM · Заявки» выдан вам только на просмотр — менять заявки нельзя.';
+    return ctx;
+  }
+  // V3120_FINAL (G2) — строку визита заводят В СМЕТЕ. Реестр пускает status во
+  // вставку (мастер пишет 'added'), и строка, заведённая сразу 'completed' /
+  // 'queued', обходила кассу без всякой правки статуса. Сервер кладёт строки в
+  // работу сам (оплата, счёт плательщику); табличный путь — только смета.
+  // Исключение то же, что у правки статуса: БЕСПЛАТНАЯ услуга (ноль и в строке,
+  // и в каталоге — ноль в строке при платной услуге касса переоценила бы).
+  if (meta.table === 'visit_services' && (meta.op === 'insert' || meta.op === 'upsert')) {
+    const rows = Array.isArray(body && body.values) ? body.values : (body && body.values ? [body.values] : []);
+    const freeSvc = (r) => {
+      if (!(Number(r.total) === 0) || r.service_id == null) return false;
+      try {
+        const s = db.prepare('SELECT price FROM services WHERE id = ?').get(r.service_id);
+        return !!s && !(Number(s.price) > 0);
+      } catch { return false; }
+    };
+    const bad = rows.find((r) => r && Object.prototype.hasOwnProperty.call(r, 'status')
+      && r.status != null && !FREE_MOVES.includes(String(r.status)) && !freeSvc(r));
+    if (bad) {
+      ctx.refusal = 'Услугу добавляют в смету визита — в работу её переводят касса и экраны после оплаты.';
+      return ctx;
+    }
+  }
   try {
     if (meta.table === 'visit_services' && (meta.op === 'update' || meta.op === 'delete')) {
       ctx.ids = targetIds(db, body, user);
+      // V3120_FIX — неоплаченную услугу в работу не берут (visit-status-guard.js).
+      const next = meta.op === 'update' && body && body.values && !Array.isArray(body.values) ? body.values.status : undefined;
+      if (next !== undefined && ctx.ids.length) {
+        const refusal = unpaidWorkRefusal(db, ctx.ids, next);
+        if (refusal) { ctx.refusal = refusal; return ctx; }
+      }
       if (ctx.ids.length) {
         for (const r of db.prepare(`SELECT DISTINCT visit_id FROM visit_services WHERE id IN (${holes(ctx.ids)})`).all(...ctx.ids)) {
           if (r.visit_id) ctx.visits.add(r.visit_id);

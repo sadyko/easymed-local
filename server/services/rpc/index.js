@@ -12,7 +12,8 @@ import { expiryLots } from './expiry.js';   // EXPIRY_BALANCE_V1 — остат�
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions, doctorInpatientShare, doctorReferralReward, doctorPaySummary, reportChoices, payPeriodClose, payPeriodReopen, payPeriodStatus } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice } from './cashier.js';
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit, admissionReferralDefault,
-  admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
+  admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue,
+  admissionPrepareWalletPayment } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
 import { admissionFlowState, inpatientCapabilities } from './inpatient-flow.js';   // INPATIENT_FLOW_V1
 import { admissionTitleSheetGet, admissionTitleSheetSave } from './title-sheet.js';   // TITLE_SHEET_V1
 import { admissionOverview } from './case-overview.js';   // CASE_OVERVIEW_V1
@@ -49,7 +50,7 @@ import { setAdmissionDate } from './admission-date.js';   // ADMISSION_DATE_EDIT
 import { deleteService, serviceDeleteCheck } from './catalog.js';   // SERVICE_DELETE_V1
 import { serviceSave } from './service-save.js';   // SERVICE_EDITOR_V1
 import { servicePriceQuote } from './service-price-quote.js';   // VISIT_TIER_PRICING_V1
-import { holdingsList, dispenseFromHolding, voidHoldingDispense, outpatientsToday, visitItems } from './holdings.js';   // HOLDINGS_V1
+import { holdingsList, dispenseFromHolding, voidHoldingDispense, outpatientsToday, visitItems, holdingReturn } from './holdings.js';   // HOLDINGS_V1
 import { saveLabResults } from './lab.js';   // LAB_SAVE_BATCH_V1
 import { labUsageStats } from './lab-stats.js';   // LAB_STATS_V1
 import { roomAssignDoctors } from './rooms.js';   // ROOMS_SETUP_V1
@@ -81,6 +82,7 @@ import {
   patientCard, patientCardSavePatient, patientCardAddDocument, patientCardDeleteDocument,
   patientCardSetServiceDoctor, requireServicesEdit, requireServicesDelete,
 } from './patient-card.js';   // PATIENT_TAB_ACCESS_V1
+import { visitDocumentArchive } from './patient-card.js';   // V3120_FIX (F2) — подпись протокола отзывает прежний, а не стирает
 
 export const RPC = {
   // PATIENT_TAB_ACCESS_V1 — карта пациента по вкладкам: одна дверь на чтение,
@@ -96,6 +98,7 @@ export const RPC = {
   // установленные у клиник сборки, а переименование сделало бы им 501.
   patient_card_doc_void:    (db, args, user) => patientCardDeleteDocument(db, args, user),
   patient_card_set_doctor:  (db, args, user) => patientCardSetServiceDoctor(db, args, user),
+  visit_document_archive:   (db, args, user) => visitDocumentArchive(db, args, user),   // V3120_FIX (F2)
   get_clinic_by_slug:       (db, args, user) => getClinicBySlug(db, args, user),
   callcenter_report:        (db, args, user) => callcenterReport(db, args, user),
   // CUSTDEV_V1 — обзвон пациентов после визита
@@ -166,6 +169,7 @@ export const RPC = {
   holdings_list:                 (db, args, user) => holdingsList(db, args, user),
   dispense_from_holding:         (db, args, user) => dispenseFromHolding(db, args, user),
   void_holding_dispense:         (db, args, user) => voidHoldingDispense(db, args, user),
+  holding_return:                (db, args, user) => holdingReturn(db, args, user),                 // V3120_FIX — вернуть подотчёт на склад / передать
   outpatients_today:             (db, args, user) => outpatientsToday(db, args, user),
   visit_items:                   (db, args, user) => visitItems(db, args, user),
   import_products_excel:         (db, args, user) => importProductsExcel(db, args, user),           // PROCUREMENT_REDESIGN_V1 — Импорт из Excel
@@ -341,6 +345,7 @@ export const RPC = {
   admission_discharge_cancel_request: (db, args, user) => admissionDischargeCancelRequest(db, args, user),
   admission_discharge_finalize:       (db, args, user) => admissionDischargeFinalize(db, args, user),
   admission_discharge_queue:          (db, args, user) => admissionDischargeQueue(db, args, user),
+  admission_prepare_wallet_payment:   (db, args, user) => admissionPrepareWalletPayment(db, args, user),   // V3120_FIX — «оплатить с баланса» перед выпиской
 
   // INPATIENT_FLOW_V1 — где госпитализация на маршруте и что ЭТОТ человек
   // может с ней сделать. Чистое чтение (см. READ_ONLY_RPCS в control/gate.js):

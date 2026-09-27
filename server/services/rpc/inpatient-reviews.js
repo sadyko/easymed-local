@@ -53,6 +53,7 @@
 // Выписки: 'discharge'-запись здесь можно написать и опубликовать, но маршрут
 // она НЕ двигает — двухшаговую выписку строит Задача 8.
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import {
   RpcError, loadAdmission, assertAdmissionAtLeast, assertCanPrescribe,
   assertMayTransition, admissionTransition, CLOSED_STATUSES,
@@ -286,7 +287,7 @@ function nowUtc(db) {
 
 function requireRole(user, allowed, what) {
   if (!hasAnyRole(user, allowed)) {
-    throw new RpcError(`${what} — недоступно вашей роли.`, 403);
+    throw rpcT(RpcError, '{what} — недоступно вашей роли.', { what }, 403);
   }
 }
 
@@ -338,7 +339,7 @@ const BUILTIN_KINDS = Object.freeze([...CASE_DOC_SET.map((d) => d.kind), ...LEGA
 
 function loadReview(db, reviewId) {
   const id = posIntOrNull(reviewId);
-  if (id === null) throw new RpcError('review_id must be a positive integer.', 400);
+  if (id === null) throw new RpcError('Осмотр указан неверно.', 400);
   const row = db.prepare('SELECT * FROM admission_reviews WHERE id = ?').get(id);
   if (!row) throw new RpcError('Запись осмотра не найдена.', 400);
   return withKind(row);
@@ -432,7 +433,15 @@ export function admissionReviewSave(db, args, user) {
   const kind = str(a.kind, 20, 'primary') || 'primary';
   // CASE_DOC_SET_V2 — род проверяется по НАБОРУ КЛИНИКИ: свой род, заведённый в
   // «Документах», обязан приниматься так же, как встроенный.
-  if (!knownKinds(db).includes(kind)) throw new RpcError(`Неизвестный род записи: ${kind}.`, 400);
+  if (!knownKinds(db).includes(kind)) {
+    // V3120_FIX — род, который клиника выключила в «Документах», — не
+    // «неизвестный»: человек видит запись этого рода и должен узнать, почему её
+    // нельзя сохранить и где это включается.
+    let off = null;
+    try { off = db.prepare('SELECT 1 FROM case_doc_types WHERE kind = ? AND active = 0').get(kind); } catch (e) { off = null; }
+    throw new RpcError(off ? 'Этот вид записи выключен в настройках документов стационара — включите его там, чтобы сохранить.'
+      : `Неизвестный род записи: ${kind}.`, 400);
+  }
 
   requireGrant(db, user, 'inpatient.reviews', 'edit', WRITE_ROLES, 'писать осмотры');
 
@@ -631,7 +640,7 @@ function primaryStateRefusal(db, adm) {
 export function admissionSetAttending(db, args, user) {
   const a = args || {};
   const doctorId = posIntOrNull(a.doctor_id);
-  if (doctorId === null) throw new RpcError('doctor_id must be a positive integer.', 400);
+  if (doctorId === null) throw new RpcError('Врач указан неверно.', 400);
 
   const run = db.transaction(() => {
     const adm = loadAdmission(db, a.admission_id);
@@ -745,7 +754,7 @@ export function admissionSetAttending(db, args, user) {
 export function admissionChangeAttending(db, args, user) {
   const a = args || {};
   const doctorId = posIntOrNull(a.doctor_id);
-  if (doctorId === null) throw new RpcError('doctor_id must be a positive integer.', 400);
+  if (doctorId === null) throw new RpcError('Врач указан неверно.', 400);
   const reason = str(a.reason, 300);
 
   const run = db.transaction(() => {

@@ -541,7 +541,10 @@ export function patientCardAddDocument(db, args, user) {
 export function patientCardDeleteDocument(db, args, user) {
   const roles = requireCard(db, user);
   requireDelete(db, user, 'docs');
-  assertWrite('visit_documents', 'delete', roles);
+  // V3120_FIX (F2) — табличного удаления документа больше нет вовсе
+  // (schema-registry: visit_documents.delete — никому). Отзыв — это действие
+  // ЭТОГО обработчика, и роли у него свои: те же, что были у удаления.
+  if (!roles.some((r) => DOC_VOID_ROLES.includes(r))) throw new RpcError('Недостаточно прав для этого действия.', 403);
   const docId = Number(args && args.document_id);
   if (!Number.isInteger(docId) || docId <= 0) throw new RpcError('Не указан документ.', 400);
   const row = db.prepare('SELECT id, patient_id, file_path, voided_at FROM visit_documents WHERE id = ?').get(docId);
@@ -557,14 +560,107 @@ export function patientCardDeleteDocument(db, args, user) {
   return { id: docId, voided_at: after.voided_at, file_path: row.file_path || null };
 }
 
-/** Смена врача в строке услуги — вкладка «Услуги». */
+/**
+ * Смена врача в строке услуги — вкладка «Услуги».
+ *
+ * V3120_FIX (M2) — врач строки — это чьи-то деньги: по нему считается оплата
+ * врача (reports.js). Поэтому, кроме права вкладки:
+ *   • строку, уже попавшую в счёт, не трогаем — доля врача по ней посчитана
+ *     от оплаты, и сменить исполнителя значит переписать начисление задним
+ *     числом (снять строку со счёта можно в кассе);
+ *   • строку месяца, начисления которого закрыты («Оплата врачей → Закрыть
+ *     месяц», миграция 163), не трогаем тем более;
+ *   • новый исполнитель — живой сотрудник, который услуги оказывает (врач,
+ *     медсестра, лаборант), а не кассир и не номер, которого нет: раньше
+ *     несуществующий id отвечал голой ошибкой внешнего ключа (500).
+ * Это единственная дверь: /api/db колонку doctor_id больше не пишет.
+ */
 export function patientCardSetServiceDoctor(db, args, user) {
   const roles = requireCard(db, user);
   requireEdit(db, user, 'services');
   assertWrite('visit_services', 'update', roles);
   const vsId = Number(args && args.visit_service_id);
   if (!Number.isInteger(vsId) || vsId <= 0) throw new RpcError('Не указана строка услуги.', 400);
-  const doctorId = args && args.doctor_id != null && args.doctor_id !== '' ? Number(args.doctor_id) : null;
+  const rawDoctor = args && args.doctor_id;
+  const doctorId = rawDoctor != null && rawDoctor !== '' ? Number(rawDoctor) : null;
+  if (doctorId !== null && (typeof rawDoctor === 'boolean' || !Number.isInteger(doctorId) || doctorId <= 0)) {
+    throw new RpcError('Исполнитель указан неверно.', 400);
+  }
+  const line = db.prepare(`SELECT vs.id, vs.invoice_item_id, vs.created_at, v.visit_date
+      FROM visit_services vs LEFT JOIN visits v ON v.id = vs.visit_id WHERE vs.id = ?`).get(vsId);
+  if (!line) throw new RpcError('Строка услуги не найдена.', 404);
+  if (line.invoice_item_id != null) {
+    throw new RpcError('Услуга уже в счёте — исполнителя в ней не меняют: по ней начисляется оплата врача. Сначала уберите строку из счёта в кассе.', 409);
+  }
+  const months = [...new Set([line.visit_date, line.created_at].filter(Boolean).map((d) => String(d).slice(0, 7)))];
+  for (const m of months) {
+    if (db.prepare('SELECT 1 FROM pay_periods WHERE month = ?').get(m)) {
+      throw new RpcError('Начисления врачам за этот месяц закрыты — исполнителя услуги уже не меняют.', 409);
+    }
+  }
+  if (doctorId !== null) {
+    const who = db.prepare('SELECT id, role, is_active, is_doctor, extra_roles FROM users WHERE id = ?').get(doctorId);
+    if (!who) throw new RpcError('Такого сотрудника нет.', 400);
+    if (!who.is_active) throw new RpcError('Этот сотрудник уволен или отключён — выберите работающего исполнителя.', 400);
+    let extra = [];
+    try { const p = JSON.parse(who.extra_roles || '[]'); if (Array.isArray(p)) extra = p; } catch { extra = []; }
+    const theirRoles = effectiveRoles({ role: who.role, extra_roles: extra });
+    if (!who.is_doctor && !theirRoles.some((r) => PERFORMER_ROLES.includes(r))) {
+      throw new RpcError('Исполнителем услуги может быть врач, медсестра или лаборант.', 400);
+    }
+  }
   db.prepare('UPDATE visit_services SET doctor_id = ? WHERE id = ?').run(doctorId, vsId);
   return { id: vsId, doctor_id: doctorId };
+}
+
+// V3120_FIX (M2) — кто оказывает услуги: те роли, чьё имя печатает чек как
+// исполнителя (RECEIPT_DOB_PERFORMER_V1).
+const PERFORMER_ROLES = Object.freeze(['doctor', 'head_doctor', 'nurse', 'senior_nurse', 'lab']);
+
+// V3120_FIX (F2) — кто отзывает документ пациента и подписывает протокол в
+// кабинете: роли, у которых было табличное удаление visit_documents.
+const DOC_VOID_ROLES = Object.freeze(['admin', 'doctor', 'head_doctor']);
+const ARCHIVE_TYPES = Object.freeze(['protocol', 'diag']);
+
+/**
+ * V3120_FIX (F2) — ПОДПИСЬ ПРОТОКОЛА / ЗАКЛЮЧЕНИЯ В КАБИНЕТЕ ВРАЧА.
+ *
+ * Раньше кабинет перед повторной подписью СТИРАЛ прежний протокол строки
+ * табличным DELETE (а заодно тем же DELETE любой врач стирал любой документ).
+ * Теперь прежний протокол/заключение этой строки ОТЗЫВАЕТСЯ (voided_at,
+ * voided_by, void_reason — как отзыв в карте, миграция 105), а новый
+ * записывается рядом. Пациент и визит берутся со строки услуги, автор — из
+ * сессии: браузер их не выбирает.
+ *
+ * Подписывает исполнитель строки (или строка без исполнителя) и администратор.
+ * args: { visit_service_id, doc_type: 'protocol'|'diag', title, body }
+ */
+export function visitDocumentArchive(db, args, user) {
+  const roles = effectiveRoles(user);
+  if (!roles.some((r) => DOC_VOID_ROLES.includes(r))) {
+    throw new RpcError('Подписать документ приёма может врач, который оказывает услугу.', 403);
+  }
+  const vsId = Number(args && args.visit_service_id);
+  if (!Number.isInteger(vsId) || vsId <= 0) throw new RpcError('Не указана строка услуги.', 400);
+  const docType = String((args && args.doc_type) || '');
+  if (!ARCHIVE_TYPES.includes(docType)) throw new RpcError('Неизвестный вид документа.', 400);
+  const title = String((args && args.title) || '').slice(0, 300) || null;
+  const body = args && args.body;
+  if (body == null || typeof body !== 'object') throw new RpcError('Документ пустой — подписывать нечего.', 400);
+  const line = db.prepare(`SELECT vs.id, vs.visit_id, vs.doctor_id, v.patient_id
+      FROM visit_services vs LEFT JOIN visits v ON v.id = vs.visit_id WHERE vs.id = ?`).get(vsId);
+  if (!line) throw new RpcError('Строка услуги не найдена.', 404);
+  const me = user && Number.isInteger(Number(user.id)) ? Number(user.id) : null;
+  if (!roles.includes('admin') && line.doctor_id != null && Number(line.doctor_id) !== me) {
+    throw new RpcError('Эту услугу оказывает другой врач — подписать её документ может только он.', 403);
+  }
+  const run = db.transaction(() => {
+    db.prepare(`UPDATE visit_documents SET voided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'), voided_by = ?,
+        void_reason = 'Заменён новой подписью'
+      WHERE visit_service_id = ? AND doc_type IN ('protocol','diag') AND voided_at IS NULL`).run(me, vsId);
+    const info = db.prepare(`INSERT INTO visit_documents (visit_service_id, visit_id, patient_id, doc_type, title, body, created_by)
+      VALUES (?,?,?,?,?,?,?)`).run(vsId, line.visit_id, line.patient_id, docType, title, JSON.stringify(body), me);
+    return { id: Number(info.lastInsertRowid) };
+  });
+  return run();
 }

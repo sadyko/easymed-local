@@ -681,6 +681,38 @@ test('клик по лежащему в «В отделении» открыва
     assert.equal(BODY.children.length, overlaysBefore, 'клик открыл окно вместо перехода на экран');
 });
 
+// ─── V3120_CLEANUP — регистратуре строки и «Лист назначений» не ведут в «Нет доступа» ───
+//
+// Регистратура видит раздел «Стационар» (заявки, койки), но обзор госпитализации
+// и лист назначений сервер ей не отдаёт (canReadCaseFile / INPATIENT_SCREEN_ROLES).
+// Прогон экранов: 50 кликов по строкам и 6 по «Листу назначений» кончались
+// «Нет доступа». Теперь имя — не кнопка, строка не кликается, кнопки листа нет.
+test('регистратура: строка лежащего не кнопка и «Лист назначений» не показан', async () => {
+    const hasBtn = (root, re) => walk(root).some((e) => String(e.tagName).toUpperCase() === 'BUTTON' && re.test(textOf(e)));
+    const full = await renderScreen({ only: 'patients' });
+    assert.ok(hasBtn(full, /Сидоров Сидор/), 'у полного доступа имя лежащего — кнопка (основа проверки)');
+    const fullMar = hasBtn(full, /Лист назначений/);
+    try {
+        perms.setEffectiveFromRole({ name: 'Регистратура', permissions: { sections: ['patients', 'dashboard', 'appointments', 'beds'], levels: { beds: 'editor' } } });
+        perms.setActorRoles(['registrar']);
+        assert.strictEqual(perms.isRouteAllowed('case-overview'), false, 'основа: обзор регистратуре закрыт');
+        assert.strictEqual(perms.isRouteAllowed('mar-sheet'), false, 'основа: лист назначений регистратуре закрыт');
+        const root = await renderScreen({ only: 'patients' });
+        assert.ok(textOf(root).includes('Сидоров Сидор'), 'лежащий пропал из списка');
+        assert.ok(!hasBtn(root, /Сидоров Сидор/), 'имя лежащего — кнопка, ведущая в «Нет доступа»');
+        assert.ok(!hasBtn(root, /Лист назначений/), '«Лист назначений» показан роли, которой он закрыт');
+        const rows = walk(root).filter((e) => String(e.className || '').split(/\s+/).includes('ar-row'));
+        assert.ok(rows.length > 0 && rows.every((r) => String(r.className).includes('ar-row--static')), 'строка осталась кликабельной');
+        const calls = [];
+        globalThis.window.easymed = { navigate: (...a) => calls.push(a) };
+        try { for (const r of rows) r.click(); await settle(); } finally { delete globalThis.window.easymed; }
+        assert.deepEqual(calls, [], 'клик по строке всё ещё уводит: ' + JSON.stringify(calls));
+    } finally {
+        perms.setFullAccess('Admin');
+    }
+    if (fullMar) assert.ok(hasBtn(await renderScreen({ only: 'patients' }), /Лист назначений/), 'полному доступу кнопка вернулась');
+});
+
 // ─── A4_LETTERHEAD_V1 — документ истории болезни лежит на листе с шапкой ───
 //
 // Владелец: «treat this section as an A4 list with the header of the clinic

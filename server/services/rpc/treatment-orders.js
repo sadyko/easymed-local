@@ -27,6 +27,7 @@
 // (billing.js create_invoice_for_admission), как и всякую другую услугу
 // госпитализации. Предупреждение из шапки 084_sync_journal.sql соблюдено.
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import {
   RpcError, loadAdmission, assertAdmissionAtLeast, assertCanPrescribe,
 } from './inpatient-flow.js';
@@ -39,7 +40,7 @@ import {
   expandCourse, courseEnd, dueState, isDate,
 } from '../domain/mar-schedule.js';
 // MED_ADMIN_CHARGE_V1 — склад и деньги за введённую дозу.
-import { doseQuantity } from '../domain/dose.js';
+import { doseQuantity, parseDose, UNKNOWN_QTY_MESSAGE } from '../domain/dose.js';
 // StockError — это ДРУГОЙ класс, не тот RpcError, что импортирован выше:
 // inventory.js объявляет свой (как и accommodation.js), и они не родственники.
 // Псевдоним стоит здесь не для красоты: отказ склада ловится по классу, и
@@ -50,7 +51,7 @@ import {
   dispenseAdmissionItemCore, voidDispensedAdmissionItemCore, RpcError as StockError,
 } from './inventory.js';
 import {
-  doseNotePrefix, extraNotePrefix, administrationNotePrefix,
+  doseNotePrefix, extraNotePrefix, administrationNotePrefix, medAdminIdOf,
 } from '../../../public/js/shared/med-admin-line.js';
 
 export { RpcError };
@@ -87,7 +88,7 @@ const STATUS_NEEDS_REASON = MARK_STATUSES.filter((s) => s !== 'given');
 
 function requireRole(user, allowed, what) {
   if (!hasAnyRole(user, allowed)) {
-    throw new RpcError(`${what} — недоступно вашей роли.`, 403);
+    throw rpcT(RpcError, '{what} — недоступно вашей роли.', { what }, 403);
   }
 }
 
@@ -125,7 +126,7 @@ function refOrNull(db, table, id, what) {
 
 function loadOrder(db, orderId) {
   const id = posIntOrNull(orderId);
-  if (id === null) throw new RpcError('order_id must be a positive integer.', 400);
+  if (id === null) throw new RpcError('Назначение указано неверно.', 400);
   const row = db.prepare('SELECT * FROM treatment_orders WHERE id = ?').get(id);
   if (!row) throw new RpcError('Назначение не найдено.', 400);
   return row;
@@ -439,6 +440,58 @@ function parseExtraConsumption(raw) {
 }
 
 /**
+ * V3120_FIX — СКОЛЬКО СПИСАТЬ, С УЧЁТОМ ЕДИНИЦЫ РАСХОДА.
+ *
+ * Было: доза сравнивалась с products.unit — единицей УПАКОВКИ. Кеторол
+ * хранится коробками по 10 ампул; доза «1» или «1 амп» (амп и уп для
+ * domain/dose.js — одинаково «штуки») списывала ЦЕЛУЮ КОРОБКУ и ставила в счёт
+ * 50 000 вместо 5 000 за ампулу. А «5 мл» препарата, который хранится
+ * флаконами, но расходуется миллилитрами, не списывались вовсе.
+ *
+ * Стало — у товара с единицей расхода (products.consumption_unit/_factor, та
+ * же, в которой медсестра выдаёт у койки и в амбулатории):
+ *   1. доза, названная единицей УПАКОВКИ буквально («1 уп» при расходе в
+ *      «амп»), — это целые упаковки;
+ *   2. иначе доза читается в единице РАСХОДА: «1», «1 амп» → одна ампула;
+ *      «0,5 л» при расходе в «мл» → 500 мл. treatment_orders.stock_qty у
+ *      такого товара — тоже в единице расхода (ни один экран его сегодня не
+ *      заполняет; решение записано здесь, чтобы не гадать потом);
+ *   3. иначе — доза в единице упаковки другой формы (масса/объём);
+ *   4. не вышло — НЕ УГАДЫВАЕМ: отметка записана, списания нет, и отказ
+ *      называет, в чём препарат считается и сколько его в упаковке.
+ * Товар без единицы расхода читается, как прежде, — по products.unit.
+ *
+ * → результат doseQuantity плюс `unit`: 'consumption' | 'base'.
+ */
+function stockDose(order, product) {
+  const baseLabel = product ? (product.unit || product.base_unit || null) : null;
+  const cf = product && product.consumption_unit && Number(product.consumption_factor) > 0 ? Number(product.consumption_factor) : 0;
+  const consLabel = cf ? product.consumption_unit : null;
+  if (!consLabel) {
+    const q = doseQuantity({ dose: order.dose, stock_qty: order.stock_qty, product_unit: baseLabel });
+    return q.ok ? { ...q, unit: 'base' } : q;
+  }
+  const explicit = order.stock_qty !== null && order.stock_qty !== undefined && order.stock_qty !== '';
+  const norm = (u) => String(u || '').trim().toLowerCase().replace(/\.+$/, '');
+  const parsed = parseDose(order.dose);
+  if (!explicit && parsed && parsed.raw && norm(parsed.raw) === norm(baseLabel) && norm(baseLabel) !== norm(consLabel)) {
+    const qb = doseQuantity({ dose: order.dose, stock_qty: null, product_unit: baseLabel });
+    if (qb.ok) return { ...qb, unit: 'base' };
+  }
+  const q = doseQuantity({ dose: order.dose, stock_qty: order.stock_qty, product_unit: consLabel });
+  if (q.ok) return { ...q, unit: 'consumption' };
+  const qb = doseQuantity({ dose: order.dose, stock_qty: null, product_unit: baseLabel });
+  if (qb.ok && qb.basis === 'unit') return { ...qb, unit: 'base' };
+  const doseText = order.dose === null || order.dose === undefined ? '' : String(order.dose).trim();
+  const perPack = baseLabel ? `, ${cf} в «${baseLabel}»` : '';
+  return {
+    ...q,
+    message: `${UNKNOWN_QTY_MESSAGE} (доза «${doseText || 'не указана'}»: препарат считается в «${consLabel}»${perPack} — `
+      + `укажите дозу в «${consLabel}»)`,
+  };
+}
+
+/**
  * Списать и начислить за одну отметку. Возвращает исход, НЕ бросает: срыв
  * склада — предупреждение, а не отказ от медицинской записи.
  *
@@ -474,12 +527,8 @@ function chargeAdministration(db, order, administration, user) {
   // Назначение без ссылки на склад (уход, режим, процедура) — тоже 'none': не
   // ошибка, а нечего списывать.
   if (order.source === 'clinic' && order.stock_item_id) {
-    const product = db.prepare('SELECT id, name, unit FROM products WHERE id = ?').get(order.stock_item_id);
-    const q = doseQuantity({
-      dose: order.dose,
-      stock_qty: order.stock_qty,
-      product_unit: product ? product.unit : null,
-    });
+    const product = db.prepare('SELECT id, name, unit, base_unit, consumption_unit, consumption_factor FROM products WHERE id = ?').get(order.stock_item_id);
+    const q = stockDose(order, product);   // V3120_FIX — единица расхода (ампула из коробки)
     if (!q.ok) {
       // НЕ УГАДЫВАЕМ. Отметка записана, списание пропущено, и это видно
       // человеку (stock_status='skipped' считается отдельно).
@@ -492,8 +541,12 @@ function chargeAdministration(db, order, administration, user) {
           admission_id: order.admission_id,
           product_id: order.stock_item_id,
           quantity: q.quantity,
+          // V3120_FIX — в ампулах: склад спишет 0.1 коробки, строка счёта —
+          // «1 амп × 5 000» (inventory.js dispenseAdmissionItemCore).
+          unit: q.unit === 'consumption' ? 'consumption' : undefined,
           doctor_id: order.prescribed_by,
           billable: true,
+
           note: `${doseNotePrefix(administration.id)}${order.name}${order.dose ? ` · ${order.dose}` : ''}`,
           // HOLDINGS_FIRST_V1 — флага prefer_holdings больше нет: подотчёт
           // медсестры, её кабинет и отдел палаты идут перед складом ВЕЗДЕ,
@@ -596,6 +649,36 @@ function reverseAdministration(db, administration, user) {
   }
 
   return { reversal: { reversed, kept, lines: lines.length }, warnings };
+}
+
+/**
+ * V3120_FINAL (S1) — СТРОКА СНЯТОЙ ДОЗЫ, ОТПУЩЕННАЯ СО СЧЁТА, СТОРНИРУЕТСЯ.
+ *
+ * reverseAdministration оставляет строку, уже попавшую в счёт, и просит
+ * «уберите через кассу». Касса убирала — отменой счёта или «Из счёта», — но
+ * строка лишь теряла ссылку на счёт: снова «к оплате», препарат списан, и при
+ * выписке пациент платил за неведённую дозу. Кассовые пути (cashier.js
+ * voidInvoice, billing.js removeAdmissionLineFromInvoice) зовут это после
+ * того, как отпустили строки: строка отметки, которая уже СНЯТА (voided_at),
+ * возвращается тем же кодом, что у консоли койки (товар — туда, откуда взят),
+ * строка действующей отметки остаётся к выставлению, как прежде.
+ */
+export function voidReleasedDoseLines(db, lineIds, user) {
+  const ids = (lineIds || []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  let voided = 0;
+  for (const id of ids) {
+    const line = db.prepare('SELECT id, notes, clinic_item_id, invoice_item_id FROM admission_services WHERE id = ?').get(id);
+    if (!line || line.invoice_item_id != null) continue;
+    const adminId = medAdminIdOf(line);
+    if (!adminId) continue;
+    const a = db.prepare('SELECT voided_at FROM treatment_administrations WHERE id = ?').get(adminId);
+    if (!a || !a.voided_at) continue;
+    if (line.clinic_item_id != null) voidDispensedAdmissionItemCore(db, { line_id: id }, user);
+    else db.prepare('DELETE FROM admission_services WHERE id = ?').run(id);
+    db.prepare("DELETE FROM pay_refund_releases WHERE kind = 'in' AND line_id = ?").run(id);
+    voided += 1;
+  }
+  return voided;
 }
 
 // ─── 4. Отметка медсестры ───────────────────────────────────────────────────
@@ -800,7 +883,7 @@ export function treatmentAdminUnmark(db, args, user) {
   requireGrant(db, user, 'inpatient.marks', 'edit', UNMARK_ROLES, 'снимать отметки о введении');
   const a = args || {};
   const id = posIntOrNull(a.administration_id);
-  if (id === null) throw new RpcError('administration_id must be a positive integer.', 400);
+  if (id === null) throw new RpcError('Отметка выполнения указана неверно.', 400);
 
   const reason = str(a.reason, 300);
 
@@ -876,7 +959,7 @@ export function treatmentTasksDue(db, args, user) {
   // domain/mar-schedule.js). Параметр `now` существует ради тестов и разбора
   // прошедшей смены.
   const nowMs = a.now ? Date.parse(a.now) : Date.now();
-  if (Number.isNaN(nowMs)) throw new RpcError('now must be a timestamp.', 400);
+  if (Number.isNaN(nowMs)) throw new RpcError('Время указано неверно.', 400);
 
   const wardId = posIntOrNull(a.ward_id);
 

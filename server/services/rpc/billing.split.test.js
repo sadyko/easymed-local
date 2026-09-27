@@ -56,12 +56,12 @@ test('split: overpay and bad tenders are rejected atomically (no rows written)',
   assert.throws(() => recordPaymentSplit(db, {
     invoice_id: invoice.id,
     tenders: [{ method: 'cash', amount: 90000 }, { method: 'card', amount: 20000 }],
-  }, cashier), /exceeds balance/);
+  }, cashier), /больше остатка/);
   assert.throws(() => recordPaymentSplit(db, {
     invoice_id: invoice.id,
     tenders: [{ method: 'cash', amount: 10000 }, { method: 'bitcoin', amount: 5000 }],
-  }, cashier), /unknown method/);
-  assert.throws(() => recordPaymentSplit(db, { invoice_id: invoice.id, tenders: [] }, cashier), /non-empty/);
+  }, cashier), /неизвестный способ/);
+  assert.throws(() => recordPaymentSplit(db, { invoice_id: invoice.id, tenders: [] }, cashier), /от одной до пяти/);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM payments').get().n, 0, 'nothing recorded after rejections');
   assert.equal(db.prepare('SELECT status FROM invoices WHERE id=?').get(invoice.id).status, 'unpaid');
 });
@@ -94,7 +94,7 @@ test('debt: zero-payment debt releases services and sets status debt', async () 
   assert.equal(res2.invoice.paid_amount, 30000);
 
   // полностью оплаченный счёт в долг не переводится
-  assert.throws(() => markInvoiceDebt(db, { invoice_id: invoice.id, }, { id: 999, role: 'lab' }), /allow|forbid|role/i);
+  assert.throws(() => markInvoiceDebt(db, { invoice_id: invoice.id, }, { id: 999, role: 'lab' }), /недоступно/);
 });
 
 // SVC_CHANGE_V1 — замена услуги с пересчётом неоплаченного счёта

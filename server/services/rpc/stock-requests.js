@@ -32,6 +32,11 @@ import { grantAllowsOr } from '../grants.js';
 import { logDepartmentEvent, canSeeAll as canSeeAllDepartments } from './departments.js';
 import { canSeeAllMovements } from './stock-log.js';
 import { today, localDate } from '../domain/day.js';
+// STOCK_QTY_V1 (V3120_FIX) — строка заявки хранит точную дробь (как минимум), а
+// одобрение округляет её до шести знаков ОДИН раз и пишет это число в
+// движение, остаток склада и подотчёт (rpc/procurement.js). Здесь — только
+// число, присланное экраном: было round2, и 0.005 л становились 0.01.
+import { roundQty } from '../domain/stock-qty.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -72,7 +77,7 @@ export function parseRequisitionLines(rawLines) {
     if (!(Number.isFinite(qty) && qty > 0 && qty <= MAX_QTY)) throw new RpcError('Позиция заявки: количество должно быть больше нуля.', 400);
     const note = l && typeof l.note === 'string' ? l.note.trim().slice(0, 200) : '';
     const unit = l && l.unit !== undefined && l.unit !== null ? l.unit : 'base';
-    return { productId, qty: round2(qty), note, unit };
+    return { productId, qty: roundQty(qty), note, unit };
   });
 }
 

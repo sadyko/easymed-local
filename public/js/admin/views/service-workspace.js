@@ -3795,16 +3795,11 @@ async function handleSignFinalize(ctx) {
         _docData.meta = { signedBy: _actor.full_name || '', signedAt: entry.savedAt, version: _prevSigned.length + 1 };
         const _archiveTitle = (_isDiag ? 'Заключение' : 'Протокол осмотра')
             + (ctx.serviceName && ctx.serviceName !== '—' ? ' · ' + ctx.serviceName : '');
-        await supabase.from('visit_documents').delete()
-            .eq('visit_service_id', ctx.visitServiceId).in('doc_type', ['protocol', 'diag']);
-        await supabase.from('visit_documents').insert({
-            visit_service_id: ctx.visitServiceId || null,
-            visit_id:         ctx.visitId || null,
-            patient_id:       (ctx.patient && ctx.patient.id) || null,
-            doc_type:         _archiveType,
-            title:            _archiveTitle,
-            body:             _docData,
-        });
+        // V3120_FIX (F2) — прежний протокол строки ОТЗЫВАЕТ сервер (не стирает):
+        // пациент, визит и автор берутся на сервере со строки и из сессии.
+        const { error: _archErr } = await supabase.rpc('visit_document_archive', {
+            visit_service_id: ctx.visitServiceId || null, doc_type: _archiveType, title: _archiveTitle, body: _docData });
+        if (_archErr) console.warn('[visit_documents] persist:', _archErr.message);
     } catch (e) { console.warn('[visit_documents] persist:', e.message); }
 
     // WS_CONCLUSION_V1 — ЗАКЛЮЧЕНИЕ УЕЗЖАЕТ В ВИЗИТ.
@@ -4028,6 +4023,7 @@ function openDispenseConsultItem(ctx) {
         return;
     }
     openItemPickerModal({
+        place:        { visit_id: ctx.visitId },   // V3120_FIX — видно и свою полку, не только склад
         title:        'Выдать препарат',
         confirmLabel: 'Выдать',
         // DISPENSE_MULTI_V1 — the picker returns an array of lines; dispense each

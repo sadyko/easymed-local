@@ -244,6 +244,9 @@ test('удаления на «Счёте» не существует — его 
 
 test('строка услуги: смена врача требует «Изменения», снятие — «Удаления»', () => {
   const { db, pid, vsid } = seed();
+  // V3120_FIX (M2) — строку в счёте исполнителя не меняют вовсе; здесь
+  // проверяются права вкладки, поэтому строка — ещё не выставленная.
+  db.prepare('UPDATE visit_services SET invoice_item_id = NULL WHERE id = ?').run(vsid);
 
   setTabs(db, 'registrar', { services: 'view' });
   refuses(() => patientCardSetServiceDoctor(db, { patient_id: pid, visit_service_id: vsid, doctor_id: 3 }, REGISTRAR), { tab: 'Услуги', matches: /Только просмотр/ });

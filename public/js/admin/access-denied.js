@@ -17,6 +17,7 @@
 // как сломанная программа, и человек жмёт её снова и снова.
 
 import { h, Icon } from './ui.js';
+import { trf } from './i18n.js';   // V3120_FIX — имя роли подставляется В ПЕРЕВЕДЁННЫЙ шаблон
 import { currentRoleLabel } from './permissions.js';
 import { fadeOutAndRemove } from './motion.js?v=mo1';
 
@@ -36,7 +37,9 @@ export function accessDeniedPanel({ onHome, homeLabel = 'Go to my home page' } =
             Icon('Warning', { size: 28 })),
         h('div', { style: { fontSize: '17px', fontWeight: 700, color: 'var(--ink-900)' } }, 'No access'),
         h('div', { class: 'muted', style: { marginTop: '4px', fontSize: '13.5px' } },
-            role ? `The “${role}” role doesn’t have access to this section.` : 'You don’t have access to this section.'),
+            // V3120_FIX — было английским шаблоном `The “${role}” role…`: tr()
+            // ищет строку целиком, и склейка не переводилась ни на один язык.
+            role ? trf('У роли «{role}» нет доступа к этому разделу.', { role }) : 'У вас нет доступа к этому разделу.'),
         typeof onHome === 'function'
             ? h('button', { class: 'btn btn-outline', style: { marginTop: '16px' }, onclick: onHome }, homeLabel)
             : null,

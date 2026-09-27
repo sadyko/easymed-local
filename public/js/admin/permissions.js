@@ -1150,13 +1150,13 @@ export function isRouteAllowed(view) {
     // госпитализации ('#mar-sheet/13', payload.sub), и без него: без номера
     // экран показывает лежащих и просит выбрать. Право одно на оба случая.
     if (view === 'mar-sheet' || view === 'mar-nurse' || view === 'kitchen-sheet' || view === 'discharge') return isModuleAllowed(view);   // TWO_STEP_DISCHARGE_V1 добавил #discharge
-    if (view === 'case-file') return isModuleAllowed('case-file');   // CASE_WORKSPACE_V1
+    if (view === 'case-file') return isModuleAllowed('case-file') && canReadCaseFile();   // CASE_WORKSPACE_V1; V3120_FIX — и роль, которой сервер историю отдаёт
     // CASE_OVERVIEW_ROUTE_V1 — обзор и документы это две вкладки ОДНОЙ истории
     // болезни (общий caseHead), ключ у них один; без этой строки маршрут падал
     // на `_effective.has('case-overview')` — ключ, которого нет ни в одной роли,
     // — и «экран врача» отказывал врачу. Сервер отвечает второй раз через грант
     // inpatient.patients (rpc/case-overview.js, OVERVIEW_ROLES).
-    if (view === 'case-overview') return isModuleAllowed('case-file');
+    if (view === 'case-overview') return isModuleAllowed('case-file') && canReadCaseFile();   // V3120_FIX
     if (view === 'appointments') return isModuleAllowed('appointments');   // PATIENTS_HUB_V1 — «Календарь записи» едет с ключом `patients`
     // ROUTE_GATE_COVERS_PARENT_OF_V1 — «Заявки» (#requests, REQUESTS_INBOX) —
     // входящие регистратуры, подэкран CRM (PARENT_OF в admin.js); ключ тот же
@@ -1320,3 +1320,26 @@ export function canAddAdmissionService() {
 // LIVE_AUDIT_FIX_V1 (A7) — зеркало BOOK_ROLES (server/services/rpc/calendar.js):
 // кому сервер отдаёт сетку календаря записи.
 export const CALENDAR_ROLES = Object.freeze(['admin', 'registrar', 'doctor', 'callcenter']);
+
+// V3120_FIX — ЗЕРКАЛО ORDER_CREATE_ROLES (server/services/rpc/inpatient.js):
+// кому сервер оформит заявку на госпитализацию. Настроенный в «Ролях» уровень
+// «Заявки» стационара решает сам, как у сервера (requireGrant); ненастроенный —
+// этот круг ролей. Кнопку «Госпитализация» видит только тот, кому сервер не
+// откажет: у медсестры, лаборанта и кассира она вела в «недоступно вашей роли».
+export const ADMISSION_ORDER_ROLES = Object.freeze(['registrar', 'senior_nurse', 'doctor', 'head_doctor', 'admin']);
+export function canOrderAdmission() {
+    const lvl = grantLevel('inpatient.requests');
+    if (lvl !== null) return lvl === 'edit' || lvl === 'delete';
+    return hasActorRole(ADMISSION_ORDER_ROLES);
+}
+
+// V3120_FIX — ЗЕРКАЛО OVERVIEW_ROLES / READ_ROLES (server/services/rpc/
+// case-overview.js, inpatient-reviews.js): кто открывает обзор и документы
+// истории болезни. Регистратура раздел «Стационар» видит (заявки, койки), а
+// историю болезни сервер ей не отдаёт — строка вела в экран с отказом.
+export const CASE_READ_ROLES = Object.freeze(['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse']);
+export function canReadCaseFile() {
+    const lvl = grantLevel('inpatient.patients');
+    if (lvl !== null) return lvl !== 'none';
+    return hasActorRole(CASE_READ_ROLES);
+}

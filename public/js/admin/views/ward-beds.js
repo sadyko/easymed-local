@@ -61,7 +61,10 @@ import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE
 // EXPIRY_BALANCE_V1 — «списание просроченного предупреждает» (владелец 23.09).
 // Слова пишет сервер (rpc/expiry.js), консоль койки их только показывает.
 import { toastStockWarnings } from './stock-warnings.js';
-import { canAddAdmissionService } from '../permissions.js';   // FINAL_ROLES_SYNC_FIX_V1 (I2) — кнопка «Добавить услугу» только тому, кому сервер строку заведёт
+// V3120_FIX — «Товары для пациента»: рядом со складом виден остаток СВОИХ полок
+// (то, что сервер спишет первым: подотчёт → кабинет → отдел палаты → свой отдел).
+import { loadOwnShelves } from './item-picker-modal.js';
+import { canAddAdmissionService, isRouteAllowed } from '../permissions.js';   // FINAL_ROLES_SYNC_FIX_V1 (I2) — кнопка «Добавить услугу» только тому, кому сервер строку заведёт
 
 const STATUS = {
     free:        { label: 'Свободна',  bg: 'var(--ok-50, #e9f7ef)',      fg: 'var(--ok-700, #1a7a44)',      bd: 'var(--ok-200, #bde5cd)',      dot: 'var(--ok-500, #2e8b52)' },
@@ -377,7 +380,9 @@ function wardCardEl(ward, beds, data, opts = {}) {
                 // WARD_BOARD_V3 — быстрое действие там, где на него смотрят: палата
                 // правится в «Помещениях», и путь туда — один шаг из её шапки.
                 // В окне выбора койки (mode 'pick') действия нет — там выбирают.
-                opts.mode !== 'pick' && navigateTo
+                // V3120_CLEANUP — «Помещения» закрыты роли (регистратура, медсёстры):
+                // кнопки нет — она вела в «Нет доступа».
+                opts.mode !== 'pick' && navigateTo && isRouteAllowed('rooms-setup')
                     ? h('button', { class: 'btn btn-ghost btn-sm dash-act', type: 'button', onclick: () => navigateTo('rooms-setup') },
                         Icon('Building', { size: 13 }), ' ', tr('Помещения'))
                     : null)),
@@ -516,9 +521,9 @@ function bedDetailModal(bed, ward, adm, root) {
                     h('div', { style: { fontWeight: 700, fontSize: '15px' } }, p.full_name || '—'),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, [p.mrn, adm.chief_complaint].filter(Boolean).join(' · ')))),
             h('div', { style: { borderTop: '1px solid var(--ink-100)', margin: '12px 0' } }),
-            kvRow('Admission #', adm.admission_no || ('#' + adm.id)),
+            kvRow(tr('Номер госпитализации'), adm.admission_no || ('#' + adm.id)),
             kvRow('Pathway', adm.pathway === 'surgical' ? 'Surgical' : 'Therapy'),
-            kvRow('Attending', (adm.users && adm.users.full_name) || '—'),
+            kvRow(tr('Лечащий врач'), (adm.users && adm.users.full_name) || '—'),
             // ADMISSION_DATE_EDIT_V1 — дату поступления правят прямо здесь: из неё
             // считаются койко-дни, а значит и счёт за проживание, и опечатка во
             // времени поступления стоит клинике суток.
@@ -528,12 +533,16 @@ function bedDetailModal(bed, ward, adm, root) {
 
         const est = estimateCharge(ward, bed, adm.admitted_at, Number(discInp.value) || 0);
         leftEl.appendChild(h('div', { class: 'card', style: { padding: '16px', background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-100, #d7efe9)' } },
-            h('div', { style: { fontSize: '12.5px', fontWeight: 800, letterSpacing: '.06em', color: 'var(--primary-700)', marginBottom: '8px' } }, 'ACCOMMODATION'),
+            h('div', { style: { fontSize: '12.5px', fontWeight: 800, letterSpacing: '.06em', color: 'var(--primary-700)', marginBottom: '8px' } }, tr('ПРОЖИВАНИЕ')),
             kvRow('Дата поступления', fmtDateTime(adm.admitted_at)),
             kvRow('Длительность', lengthOfStay(adm.admitted_at)),
             kvRow('Ставка', fmtPrice(est.rate) + ' / ' + (est.unitLabel === 'day' ? tr('день') : tr('час'))),
             h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', margin: '8px 0' } },
-                h('span', { class: 'muted', style: { flex: 1, fontSize: '12.5px' } }, 'Discount %'), discInp, saveDiscBtn),
+                h('span', { class: 'muted', style: { flex: 1, fontSize: '12.5px' } }, tr('Скидка на проживание, %')), discInp, saveDiscBtn),
+            // V3120_FIX — скидка не пересчитывает уже выставленное: сутки в
+            // счёте остаются по прежней цене, и об этом сказано у самого поля.
+            h('p', { class: 'muted', style: { fontSize: '12.5px', margin: '0 0 6px' } },
+                tr('Скидка действует на проживание, внесённое после её сохранения; сутки, уже выставленные в счёт, она не меняет.')),
             h('div', { style: { borderTop: '1px dashed var(--primary-100, #d7efe9)', margin: '8px 0' } }),
             // ACCOMMODATION_DAILY_V1 — «к оплате» это ОСТАТОК: сутки, за которые
             // ещё не выставляли счёт. Числа берём у сервера (accommodation_state),
@@ -889,6 +898,7 @@ function bedDetailModal(bed, ward, adm, root) {
     function addItemsDialog() {
         const picked = [];   // [{ p, qty }]
         let productsAll = [];
+        let ownShelves = new Map();   // V3120_FIX — product_id → базовых единиц на своих полках
         const listEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
         const totalEl = h('span', { style: { fontWeight: 800 } }, '0');
         const refreshTotal = () => {
@@ -938,7 +948,9 @@ function bedDetailModal(bed, ward, adm, root) {
                 },
                     h('span', { style: { flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere' } }, p2.name),
                     h('span', { class: 'muted', style: { flex: '0 0 auto', fontSize: '12.5px', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } },
-                        trf('остаток {n} {unit}', { n: p2.on_hand || 0, unit: p2.base_unit || '' }))));
+                        (ownShelves.get(Number(p2.id)) || 0) > 0
+                            ? trf('своё {own} · склад {n} {unit}', { own: Number(ownShelves.get(Number(p2.id))).toLocaleString('ru-RU', { maximumFractionDigits: 3 }), n: p2.on_hand || 0, unit: p2.base_unit || '' })
+                            : trf('остаток {n} {unit}', { n: p2.on_hand || 0, unit: p2.base_unit || '' }))));
             }
         }
         prodSearch.addEventListener('input', paintProdResults);
@@ -946,6 +958,7 @@ function bedDetailModal(bed, ward, adm, root) {
         prodSearch.addEventListener('blur', () => setTimeout(() => { prodResults.style.display = 'none'; }, 150));
         supabase.from('products').select('id, name, base_unit, on_hand, sale_price').eq('active', 1).order('name').limit(1000)
             .then(({ data }) => { productsAll = data || []; });
+        loadOwnShelves({ admission_id: adm.id }).then((m) => { ownShelves = m; });
 
         const noteInp = h('input', { type: 'text', placeholder: 'Необязательно' });
         const billChk = h('input', { type: 'checkbox', checked: true, style: { width: '17px', height: '17px', accentColor: 'var(--primary-600)' } });
@@ -1064,8 +1077,8 @@ function bedDetailModal(bed, ward, adm, root) {
 function housekeepingModal(bed, ward, root) {
     const setStatus = async (status) => {
         const { error } = await supabase.rpc('set_bed_status', { bed_id: bed.id, status });
-        if (error) { toast((error.message) || 'Failed.', 'fail'); return; }
-        toast('Bed updated', 'ok');
+        if (error) { toast((error.message) || tr('Не удалось.'), 'fail'); return; }
+        toast(tr('Статус койки обновлён.'), 'ok');
         await paint(root);
     };
     const overlay = h('div', { class: 'modal' });
@@ -1073,13 +1086,13 @@ function housekeepingModal(bed, ward, root) {
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
     const actionBtn = (label, status, primary) => h('button', { class: 'btn ' + (primary ? 'btn-primary' : 'btn-outline'), type: 'button', style: { width: '100%', marginBottom: '8px' }, onclick: async () => { await setStatus(status); close(); } }, label);
     const body = [];
-    if (bed.status === 'cleaning') { body.push(actionBtn('Cleaning done · free the bed', 'free', true)); body.push(actionBtn('Mark out of service', 'maintenance')); }
-    else if (bed.status === 'maintenance') { body.push(actionBtn('Back in service · free', 'free', true)); }
-    else { body.push(actionBtn('Mark cleaning', 'cleaning')); body.push(actionBtn('Mark out of service', 'maintenance')); }
+    if (bed.status === 'cleaning') { body.push(actionBtn(tr('Уборка закончена · освободить койку'), 'free', true)); body.push(actionBtn(tr('Mark out of service'), 'maintenance')); }
+    else if (bed.status === 'maintenance') { body.push(actionBtn(tr('Снова в работе · свободна'), 'free', true)); }
+    else { body.push(actionBtn(tr('Отправить на уборку'), 'cleaning')); body.push(actionBtn(tr('Mark out of service'), 'maintenance')); }
     overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '380px', maxWidth: 'calc(100vw - 32px)' } },
-        h('header', { class: 'modal-head' }, h('h2', null, Icon('Bed', { size: 16 }), ' Bed ' + bed.code + ' · ' + (STATUS[bed.status] ? STATUS[bed.status].label : bed.status)), h('button', { class: 'modal-close', onclick: close }, '×')),
+        h('header', { class: 'modal-head' }, h('h2', null, Icon('Bed', { size: 16 }), ' ' + tr('Койка') + ' ' + bed.code + ' · ' + (STATUS[bed.status] ? STATUS[bed.status].label : bed.status)), h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body' }, ...body),
-        h('footer', { class: 'modal-foot' }, h('button', { class: 'btn', type: 'button', onclick: close }, 'Close')),
+        h('footer', { class: 'modal-foot' }, h('button', { class: 'btn', type: 'button', onclick: close }, tr('Закрыть'))),
     ));
     document.body.appendChild(overlay);
 }
@@ -1210,10 +1223,11 @@ async function admissionsTable() {
 
     function rowEl(r, i) {
         const open = () => openCaseOverview(r.id);
-        return h('tr', {
+        // V3120_CLEANUP — обзор закрыт роли: строка журнала не кликается.
+        return h('tr', isRouteAllowed('case-overview') ? {
             class: 'ar-row', tabindex: '0', onclick: open,
             onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { if (e.preventDefault) e.preventDefault(); open(); } },
-        }, ...REGISTER_COLS.map((c) => {
+        } : { class: 'ar-row ar-row--static' }, ...REGISTER_COLS.map((c) => {
             const v = c.text(r, i);
             const cls = ['no', 'admno', 'born', 'admitted', 'discharged'].includes(c.key) ? 'ar-nowrap' : '';
             return h('td', { class: cls + (c.key === 'name' ? ' ar-strong' : '') }, v || '—');

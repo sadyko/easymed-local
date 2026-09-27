@@ -1312,5 +1312,8 @@ export const FK_LABEL_COLUMN = {
 // `visibleWhen` predicate can read them. e.g. a service's tube-colour field is
 // shown only when the chosen service type has `requires_tube = true`.
 export const FK_EXTRA_COLUMNS = {
-    service_types: ['requires_tube', 'billing_mode'],
+    // V3120_FIX — requires_tube в офлайн-схеме нет (schema-registry.js): с ним первый
+    // запрос справочника отвергался целиком («unknown column») при каждом открытии
+    // «Услуг», и лишь запасной запрос без дополнительных колонок доходил.
+    service_types: ['billing_mode'],
 };

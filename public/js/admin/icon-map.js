@@ -84,8 +84,10 @@ export const ICON_MAP = Object.freeze({
     // --- файлы ---
     Doc:          'File/File_Document',
     Folder:       'File/Folder',
+    NotePencil:   'File/Note_Edit',   // V3120_FIX — «Мой профиль» врача звал имя, которого в карте не было
 
     // --- интерфейс ---
+    Link:         'Interface/Link',   // V3120_FIX — карточка «Контакты и соцсети»
     Chart:        'Interface/Chart_Bar_Vertical_01',
     Check:        'Interface/Check',
     Download:     'Interface/Download',

@@ -8,6 +8,8 @@
 // Каждая правка попадает в журнал движения пациента: сумма могла вырасти, и
 // должно остаться видно, кто её сдвинул и с какой даты на какую.
 
+import { computeAccommodation, billAccommodationCore } from './accommodation.js';   // V3120_FIX — сверка с выставленными сутками
+
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
 }
@@ -21,7 +23,7 @@ const EDIT_ROLES = ['admin', 'registrar', 'nurse', 'doctor'];
 function requireRole(user, allowed) {
   const roles = [user && user.role, ...((user && user.extra_roles) || [])].filter(Boolean);
   if (!roles.some((r) => allowed.includes(r))) {
-    throw new RpcError('Your role is not allowed to perform this action.', 403);
+    throw new RpcError('Вашей роли это действие недоступно.', 403);
   }
 }
 
@@ -49,12 +51,20 @@ function normalizeIso(value) {
 export function setAdmissionDate(db, args, user) {
   requireRole(user, EDIT_ROLES);
   const id = Number(args && args.admission_id);
-  if (!Number.isInteger(id) || id <= 0) throw new RpcError('admission_id must be a positive integer.', 400);
+  if (!Number.isInteger(id) || id <= 0) throw new RpcError('Не указана госпитализация.', 400);
   const next = normalizeIso(args && args.admitted_at);
 
   return db.transaction(() => {
     const adm = db.prepare('SELECT * FROM admissions WHERE id = ?').get(id);
-    if (!adm) throw new RpcError('admission not found.', 400);
+    if (!adm) throw new RpcError('Госпитализация не найдена.', 400);
+
+    // V3120_FINAL — у ВЫПИСАННОГО пациента срок закрыт, счёт собран. Сдвиг даты
+    // здесь меняет деньги задним числом (раньше — сутки растут, а выставить их
+    // уже некому), поэтому это правка администратора, а не отделения.
+    const roles = [user && user.role, ...((user && user.extra_roles) || [])];
+    if (adm.status === 'discharged' && !roles.includes('admin')) {
+      throw new RpcError('Пациент уже выписан — дату поступления исправляет только администратор.', 403);
+    }
 
     const nowStr = db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now') t").get().t;
     // Поступить завтра нельзя: срок ушёл бы в минус, а счёт — в ноль или в
@@ -69,6 +79,27 @@ export function setAdmissionDate(db, args, user) {
 
     const prev = adm.admitted_at;
     db.prepare('UPDATE admissions SET admitted_at = ? WHERE id = ?').run(next, id);
+
+    // V3120_FIX — дата сдвинута ПОЗЖЕ, а сутки уже в счёте. Срок укоротился, но
+    // выставленные строки проживания за собой не тянутся: за ними деньги, и
+    // снимать их — дело кассы (отмена позиции / возврат). Молча оставить значило
+    // бы брать с пациента за сутки, которых по новой дате не было, — поэтому
+    // отказ (транзакция откатывает и саму правку) и слова, что сделать сначала.
+    const after = db.prepare('SELECT * FROM admissions WHERE id = ?').get(id);
+    const c = computeAccommodation(db, after);
+    if (!c.blocked && c.invoicedUnits > c.stayUnits) {   // V3120_FINAL — только то, что в счёте
+      const extra = c.invoicedUnits - c.stayUnits;
+      throw new RpcError(
+        `По новой дате пациент лежит ${c.stayUnits} ${c.mode === 'hourly' ? 'ч.' : 'сут.'}, а в счёт уже выставлено `
+        + `${c.invoicedUnits} — лишних ${extra}. Сначала уберите или верните в кассе лишнее проживание, затем исправьте дату.`, 400);
+    }
+
+    // V3120_FINAL (I4) — ОТКРЫТАЯ (ещё не выставленная) строка проживания
+    // приводится к новому сроку в этой же транзакции: сдвинули позже — лишние
+    // сутки снимаются, раньше — строка растёт. Новую строку правка даты не
+    // заводит («не внесли — не выставили»). Прежде строка оставалась прежней
+    // и уходила в счёт при выписке: 400 000 за одни сутки.
+    billAccommodationCore(db, id, { quiet: true, refreshOnly: true });
 
     // Журнал движения: сумма могла измениться, и без записи объяснить это будет
     // нечем. kind='admitted_at' — своя строка, чтобы не путать с переводом.

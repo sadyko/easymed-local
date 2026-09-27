@@ -84,8 +84,8 @@ test('ставки стационара: проверка — отказ сло�
       [{ inpatient_rates: [{ service_id: 1, fix: -5 }] }, 'Стационарная ставка врача — сумма от 0 до 1 000 000 000 000.'],
       [{ inpatient_rates: [{ service_id: 1, pct: 10, fix: 5 }] }, 'Стационарная ставка — либо процент, либо сумма, не обе сразу.'],
       [{ inpatient_rates: [{ service_id: 1 }] }, 'У услуги во вкладке «Стационар» не задана ставка.'],
-      [{ inpatient_rates: [{ service_id: 'x', pct: 1 }] }, 'Invalid rate entry.'],
-      [{ inpatient_rates: 'nope' }, 'inpatient_rates must be an array.'],
+      [{ inpatient_rates: [{ service_id: 'x', pct: 1 }] }, 'Строка ставки заполнена неверно.'],
+      [{ inpatient_rates: 'nope' }, 'Стационарные ставки должны быть списком.'],
       [{ inpatient_referral_pct: 101 }, 'За направление в стационар — процент от 0 до 100.'],
       [{ inpatient_referral_fixed: -1 }, 'За направление в стационар — сумма от 0 до 1 000 000 000 000.'],
     ];

@@ -17,6 +17,7 @@
 //   received — деньги приняты; с этого момента баланс можно тратить
 //   spent / refunded — списание в счёт и возврат (существующие потоки)
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { hasAnyRole } from '../roles.js';
 import { ensureOpenShift } from './cashier.js';
 // BRANCH_MONEY_NUMBER_V1 — буква здания для номера депозита. Импорт из
@@ -26,6 +27,8 @@ import { ensureOpenShift } from './cashier.js';
 import { branchLetter, assertOwnBuilding } from './billing.js';
 // DEPOSIT_WALLET_V1 — формула баланса одна на весь сервер.
 import { walletBalance, walletDebt, realMoney, withLedgerToken } from '../domain/wallet.js';
+import { idemReplay, idemRemember } from '../domain/money.js';   // V3120_FIX — ключ повтора
+import { patientDataRefusal } from '../../db/patient-data-gate.js';   // V3120_FINAL (I1)
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -46,10 +49,12 @@ const MAX_MONEY = 1e12;
 
 function requireRole(user, allowed) {
   if (!hasAnyRole(user, allowed)) {
-    throw new RpcError('Your role is not allowed to perform this action.', 403);
+    throw new RpcError('Вашей роли это действие недоступно.', 403);
   }
 }
 const round2 = (n) => Math.round(n * 100) / 100;
+// V3120_FIX — статус депозита словами кассы в отказах.
+const DEP_STATUS_RU = { pending: 'ждёт кассу', received: 'принят', refunded: 'возвращён', cancelled: 'отменён', spent: 'потрачен' };
 const isPositiveInt = (v) => Number.isInteger(v) && v > 0;
 
 // DEP-<буква здания>-<ГГ>-<00001>. Зеркалит nextInvoiceNumber (billing.js) —
@@ -73,12 +78,13 @@ export function nextDepositNumber(db) {
 
 export function createDeposit(db, args, user) {
   requireRole(user, CREATE_ROLES);
+  { const seen = idemReplay(db, 'create_deposit', args); if (seen) return seen; }   // V3120_FIX
   const a = args || {};
 
-  if (!isPositiveInt(a.patient_id)) throw new RpcError('patient_id must be a positive integer.', 400);
+  if (!isPositiveInt(a.patient_id)) throw new RpcError('Пациент указан неверно.', 400);
   const amount = a.amount;
   if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0 || amount > MAX_MONEY) {
-    throw new RpcError('amount must be a positive number.', 400);
+    throw new RpcError('Сумма должна быть положительным числом.', 400);
   }
   // DEPOSIT_METHOD_BY_CASHIER_V1 — способ здесь НЕ выбирается и НЕ принимается,
   // даже если его прислали: регистратура денег не берёт, а чем пациент заплатит,
@@ -88,7 +94,7 @@ export function createDeposit(db, args, user) {
 
   const run = db.transaction(() => {
     const patient = db.prepare('SELECT id, branch_id FROM patients WHERE id = ?').get(a.patient_id);
-    if (!patient) throw new RpcError('patient not found.', 400);
+    if (!patient) throw new RpcError('Пациент не найден.', 400);
 
     const number = nextDepositNumber(db);
     const info = db.prepare(`
@@ -98,7 +104,7 @@ export function createDeposit(db, args, user) {
     `).run(number, patient.id, patient.branch_id || null, round2(amount), method,
            String(a.notes || '').slice(0, 500), user.id, String(user.full_name || user.username || ''));
 
-    return { deposit: db.prepare('SELECT * FROM patient_deposits WHERE id = ?').get(info.lastInsertRowid) };
+    return idemRemember(db, 'create_deposit', a, user, { deposit: db.prepare('SELECT * FROM patient_deposits WHERE id = ?').get(info.lastInsertRowid) });
   });
 
   return run();
@@ -107,17 +113,17 @@ export function createDeposit(db, args, user) {
 export function acceptDeposit(db, args, user) {
   requireRole(user, ACCEPT_ROLES);
   const a = args || {};
-  if (!isPositiveInt(a.deposit_id)) throw new RpcError('deposit_id must be a positive integer.', 400);
+  if (!isPositiveInt(a.deposit_id)) throw new RpcError('Депозит указан неверно.', 400);
 
   const run = db.transaction(() => {
     const dep = db.prepare('SELECT * FROM patient_deposits WHERE id = ?').get(a.deposit_id);
-    if (!dep) throw new RpcError('deposit not found.', 400);
+    if (!dep) throw new RpcError('Депозит не найден.', 400);
     // CASHBACK_DEBT_V1 (владелец, 2026-09-27, B3) — долг по кэшбэку закрывают
     // новые деньги пациента: принятый депозит сначала гасит его. Касса видит
     // долг в окне приёма, а ответ называет, сколько долга закрыто.
     const debtBefore = walletDebt(db, dep.patient_id);
     if (dep.status !== 'pending') {
-      throw new RpcError(`deposit is already ${dep.status}.`, 400);
+      throw rpcT(RpcError, 'Депозит уже {status} — принять его нельзя.', { status: DEP_STATUS_RU[dep.status] || dep.status }, 400);
     }
     // DEPOSIT_METHOD_BY_CASHIER_V1 — способ называет ТОТ, КТО ВЗЯЛ ДЕНЬГИ.
     // Молчаливой подстановки 'cash' здесь больше нет: она означала, что «Принять»
@@ -127,7 +133,7 @@ export function acceptDeposit(db, args, user) {
     if (method === undefined || method === null || method === '') {
       throw new RpcError('Укажите способ оплаты: наличные, карта или эквайринг.', 400);
     }
-    if (!METHODS.includes(method)) throw new RpcError(`unknown method: ${method}`, 400);
+    if (!METHODS.includes(method)) throw rpcT(RpcError, 'Неизвестный способ оплаты: {method}.', { method }, 400);
 
     // Ре-ревью п.5 — «принят» ставит только касса (триггер мигр. 160).
     withLedgerToken(db, () => db.prepare(`
@@ -192,12 +198,12 @@ export function acceptDeposit(db, args, user) {
 export function cancelDeposit(db, args, user) {
   requireRole(user, ACCEPT_ROLES.concat(CREATE_ROLES));
   const a = args || {};
-  if (!isPositiveInt(a.deposit_id)) throw new RpcError('deposit_id must be a positive integer.', 400);
+  if (!isPositiveInt(a.deposit_id)) throw new RpcError('Депозит указан неверно.', 400);
 
   const run = db.transaction(() => {
     const dep = db.prepare('SELECT * FROM patient_deposits WHERE id = ?').get(a.deposit_id);
-    if (!dep) throw new RpcError('deposit not found.', 400);
-    if (dep.status !== 'pending') throw new RpcError(`deposit is ${dep.status} — cancel is only for pending.`, 400);
+    if (!dep) throw new RpcError('Депозит не найден.', 400);
+    if (dep.status !== 'pending') throw rpcT(RpcError, 'Отменить можно только депозит, который ждёт кассу, — этот уже {status}.', { status: DEP_STATUS_RU[dep.status] || dep.status }, 400);
     db.prepare("UPDATE patient_deposits SET status = 'cancelled', closed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(dep.id);
     return { deposit: db.prepare('SELECT * FROM patient_deposits WHERE id = ?').get(dep.id) };
   });
@@ -219,31 +225,44 @@ export function cancelDeposit(db, args, user) {
 // не должна: вернуть их значило бы отдать выручку за оказанную помощь.
 export function refundDeposit(db, args, user) {
   requireRole(user, ACCEPT_ROLES);
+  { const seen = idemReplay(db, 'refund_deposit', args); if (seen) return seen; }   // V3120_FIX
   const a = args || {};
-  if (!isPositiveInt(a.deposit_id)) throw new RpcError('deposit_id must be a positive integer.', 400);
+  if (!isPositiveInt(a.deposit_id)) throw new RpcError('Депозит указан неверно.', 400);
 
   const run = db.transaction(() => {
     const dep = db.prepare('SELECT * FROM patient_deposits WHERE id = ?').get(a.deposit_id);
-    if (!dep) throw new RpcError('deposit not found.', 400);
+    if (!dep) throw new RpcError('Депозит не найден.', 400);
     // DEPOSIT_WALLET_V1 — строки зачисления и списания (kind credit/spend) не
     // депозиты: у зачисления invoice_id — счёт УСЛУГИ, и возврат ниже записал
     // бы отрицательный платёж в чужой счёт.
     if ((dep.kind || 'deposit') !== 'deposit') {
       throw new RpcError('Это не депозит, а строка баланса пациента — вернуть её этой кнопкой нельзя.', 400);
     }
-    if (dep.status === 'refunded') throw new RpcError('Депозит уже возвращён.', 400);
-    if (dep.status !== 'received') {
+    if (dep.status === 'refunded' && !(Number(dep.refund_amount) < Number(dep.amount))) throw new RpcError('Депозит уже возвращён.', 400);
+    if (dep.status !== 'received' && dep.status !== 'refunded') {
       throw new RpcError('Вернуть можно только принятый депозит — этот в статусе «' + dep.status + '».', 400);
     }
 
-    // Сумма: по умолчанию весь депозит. Явную сумму проверяем как деньги.
-    const raw = (a.amount === undefined || a.amount === null) ? Number(dep.amount) : a.amount;
+    // V3120_FIX (MAJOR) — ЧАСТИЧНЫЙ ВОЗВРАТ НЕ ЗАПИРАЕТ ОСТАТОК. Прежде первый
+    // же возврат части ставил 'refunded', и на второй «Вернуть» отвечало
+    // «Депозит уже возвращён»: пациент, забравший 30 000 из 100 000, больше
+    // не мог забрать остальные 70 000 наличными. Теперь депозит остаётся
+    // 'received', пока возвращено меньше суммы; refund_amount копится;
+    // 'refunded' — только когда вернули всё. Баланс пациента считает
+    // received как amount − refund_amount (domain/wallet.js).
+    const already = round2(Number(dep.refund_amount) || 0);
+    const left = round2(Number(dep.amount) - already);
+    if (left <= 0) throw new RpcError('Депозит уже возвращён.', 400);
+    // Сумма: по умолчанию весь невозвращённый остаток. Явную сумму проверяем как деньги.
+    const raw = (a.amount === undefined || a.amount === null) ? left : a.amount;
     if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) {
-      throw new RpcError('amount must be a positive number.', 400);
+      throw new RpcError('Сумма возврата — положительное число.', 400);
     }
     const amount = round2(raw);
-    if (amount > round2(dep.amount)) {
-      throw new RpcError('Возврат больше самого депозита.', 400);
+    if (amount > left) {
+      throw new RpcError(already > 0
+        ? 'Возврат больше невозвращённого остатка депозита (' + left + ').'
+        : 'Возврат больше самого депозита.', 400);
     }
 
     // Остаток по пациенту: принято − потрачено − уже возвращённое.
@@ -265,11 +284,13 @@ export function refundDeposit(db, args, user) {
         + ' — остальное уже ушло в оплату услуг. Вернуть больше остатка нельзя.', 400);
     }
 
+    const refundedNow = round2(already + amount);
+    const full = refundedNow >= round2(Number(dep.amount));
     withLedgerToken(db, () => db.prepare(`
       UPDATE patient_deposits
-         SET status = 'refunded', refund_amount = ?,
-             closed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
-       WHERE id = ?`).run(amount, dep.id));   // третья проверка, M2 — только сервер
+         SET status = ?, refund_amount = ?,
+             closed_at = CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') ELSE closed_at END
+       WHERE id = ?`).run(full ? 'refunded' : 'received', Math.min(refundedNow, Number(dep.amount)), full ? 1 : 0, dep.id));   // третья проверка, M2 — только сервер
 
     // DEPOSIT_REVENUE_V1 — возврат зеркалит приём: раз приём был платежом, то и
     // возврат — платёж, только отрицательный. Так он сам вычитается из выручки,
@@ -323,7 +344,7 @@ export function refundDeposit(db, args, user) {
              'Возврат предоплаты (депозит принят до перехода на счета)', user.id);
     }
 
-    return { deposit: db.prepare('SELECT * FROM patient_deposits WHERE id = ?').get(dep.id) };
+    return idemRemember(db, 'refund_deposit', a, user, { deposit: db.prepare('SELECT * FROM patient_deposits WHERE id = ?').get(dep.id) });
   });
 
   return run();
@@ -345,6 +366,18 @@ export function listDeposits(db, args, user) {
     : db.prepare(`SELECT d.*, p.full_name AS patient_name, p.mrn AS patient_mrn
                     FROM patient_deposits d LEFT JOIN patients p ON p.id = d.patient_id
                    WHERE d.kind = 'deposit' AND d.status = ? ORDER BY d.id DESC LIMIT 300`).all(status);
+  // V3120_FIX (MAJOR) — refundable: сколько по этому депозиту ещё можно
+  // вернуть деньгами сейчас — невозвращённый остаток депозита, но не больше
+  // настоящих денег пациента на балансе (потраченное и кэшбэк не выдаются;
+  // то же правило, что проверяет refund_deposit). Депозит, частично
+  // возвращённый прежней версией ('refunded' с остатком), тоже возвращается.
+  const realOf = new Map();
+  for (const r of rows) {
+    const left = round2(Number(r.amount) - (Number(r.refund_amount) || 0));
+    if ((r.status !== 'received' && r.status !== 'refunded') || left <= 0 || !r.patient_id) { r.refundable = 0; continue; }
+    if (!realOf.has(r.patient_id)) realOf.set(r.patient_id, Math.min(walletBalance(db, r.patient_id), realMoney(db, r.patient_id)));
+    r.refundable = round2(Math.max(0, Math.min(left, realOf.get(r.patient_id))));
+  }
   return { rows };
 }
 
@@ -355,10 +388,23 @@ export function listDeposits(db, args, user) {
 // DEPOSIT_WALLET_V1 — формула в domain/wallet.js, и в неё входят зачисления
 // при возврате (kind 'credit') и оплаты с баланса (kind 'spend'). rows — журнал
 // целиком, новые сверху: карточка объясняет им цифру.
+// V3120_FIX (MAJOR) — БАЛАНС ЧИТАЕТ ВСЯКИЙ, КТО ОТКРЫВАЕТ КАРТОЧКУ ПАЦИЕНТА.
+// Врачу, медсестре, лаборатории отказывало 403, экран глотал отказ, и карточка
+// показывала «Депозит 0 сум» у пациента с деньгами на балансе. Это ЧТЕНИЕ;
+// принять, вернуть, отменить депозит по-прежнему могут только касса и
+// регистратура (ACCEPT_ROLES / CREATE_ROLES).
+const BALANCE_READ_ROLES = ['admin', 'registrar', 'cashier', 'doctor', 'head_doctor', 'nurse', 'senior_nurse', 'lab', 'callcenter'];
+
+// V3120_FINAL (I1) — и КОМУ ИМЕННО: роль из списка ещё не значит право на
+// деньги пациента. То же правило, что у счетов в /api/db
+// (db/patient-data-gate.js, patient_deposits): касса, регистратура,
+// стационар — или «Пациенты» с открытой вкладкой «Счёт». Колл-центр и склад
+// баланс не читают; карта пациента показывает им «нет доступа».
 export function depositBalance(db, args, user) {
-  requireRole(user, ACCEPT_ROLES.concat(CREATE_ROLES));
+  requireRole(user, BALANCE_READ_ROLES);
+  { const refusal = patientDataRefusal('patient_deposits', user, db); if (refusal) throw new RpcError(refusal, 403); }
   const a = args || {};
-  if (!isPositiveInt(a.patient_id)) throw new RpcError('patient_id must be a positive integer.', 400);
+  if (!isPositiveInt(a.patient_id)) throw new RpcError('Пациент указан неверно.', 400);
   const rows = db.prepare(`
     SELECT d.id, d.deposit_number, d.amount, d.refund_amount, d.status, d.kind, d.method, d.invoice_id,
            d.payment_id, d.reason, d.notes, d.created_at, d.created_by_name, i.invoice_number

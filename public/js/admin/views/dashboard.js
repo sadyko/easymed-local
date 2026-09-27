@@ -40,6 +40,9 @@ import { revealOn } from '../motion.js?v=mo1';
 import { areaChart, barChart, ringGauge, legend } from './dash-charts.js';
 // DASH_SHARED_V1 — плитка-число и «в один экран» общие с кабинетом врача.
 import { kpiTile, fitViewport } from './dash-kpi.js';
+// V3120_FIX — плитка ведёт только туда, куда роли можно: иначе щелчок по
+// «Долгу» у медсестры кончался панелью «Нет доступа».
+import { isRouteAllowed } from '../permissions.js';
 
 const PERIODS = [7, 14, 30];
 const PERIOD_KEY = 'dash.days';
@@ -74,6 +77,13 @@ export async function renderDashboard(container, { onNavigate } = {}) {
 }
 
 const go = (view) => () => refs.onNavigate && refs.onNavigate(view);
+/** Переход в раздел — или null, если раздел этой роли закрыт (плитка не нажимается). */
+const goIf = (view) => (routeOpen(view) ? go(view) : null);
+function routeOpen(view) {
+    try { return isRouteAllowed(view); } catch (e) { return true; }
+}
+/** V3120_FIX — деньги пришли? Сервер не присылает их без права на выручку. */
+const moneyShown = (d) => !d || d.money_visible !== false;
 
 // -----------------------------------------------------------------------------
 // MOUNT — шапка с периодом; fetchAndPaint() перерисовывает только тело.
@@ -219,36 +229,48 @@ function paint() {
     const grid = h('div', { class: 'dash-kpi-row' });
     grid.appendChild(kpiTile({ icon: 'Patients', accent: 'primary', label: 'Пациентов сегодня',
         value: num(d.patients_today), split: splitLine(d, 'patients_today', num),
-        onClick: go('patients') }));
+        onClick: goIf('patients') }));
     grid.appendChild(kpiTile({ icon: 'Calendar', accent: 'info', label: 'Визитов сегодня',
         value: num(d.visits_today), split: splitLine(d, 'visits_today', num),
-        onClick: go('queue') }));
+        onClick: goIf('queue') }));
     grid.appendChild(kpiTile({ icon: 'Bed', accent: 'ward', label: 'В стационаре',
         value: num(ip.in_bed),
         meta: t ? trf('поступило {a} · выписано {b}', { a: num(ip.admitted_today), b: num(ip.discharged_today) }) : null,
-        onClick: go('admissions') }));
+        onClick: goIf('admissions') }));
     grid.appendChild(kpiTile({ icon: 'Building', accent: 'ward', label: 'Занято коек',
         value: t ? num(ip.occupancy) + '%' : '—',
         meta: t ? trf('{busy} из {total}', { busy: num(ip.beds_busy), total: num(ip.beds_total) }) : null,
-        onClick: go('beds') }));
+        onClick: goIf('beds') }));
+    // V3120_FIX — деньги только тем, кому открыта выручка: сервер их не
+    // присылает, а плитка говорит почему, а не показывает «0».
+    const money = moneyShown(d);
+    const hidden = tr('нет доступа к выручке');
     grid.appendChild(kpiTile({ icon: 'Coins', accent: 'ok', label: 'Принято сегодня',
-        value: fmtPrice(d.collected_today),
-        meta: last ? trf('амбулаторно {a} · стационар {b}', { a: fmtPrice(last.clinic), b: fmtPrice(last.inpatient) }) : null,
-        split: splitLine(d, 'collected_today', fmtPrice),
-        onClick: go('cashier-shifts') }));
-    grid.appendChild(kpiTile({ icon: 'Receipt', accent: 'crit', label: 'Долг',
-        value: fmtPrice(d.outstanding_amount),
-        meta: trf('счетов: {n}', { n: num(d.outstanding_count) }),
-        split: splitLine(d, 'outstanding_amount', fmtPrice),
-        onClick: go('cashier-head') }));
+        value: money ? fmtPrice(d.collected_today) : '—',
+        meta: !money ? hidden : (last ? collectedMeta(last) : null),
+        split: money ? splitLine(d, 'collected_today', fmtPrice) : null,
+        onClick: money ? goIf('cashier-shifts') : null }));
+    // V3120_FIX — долг ПАЦИЕНТОВ (касса) отдельно от долга организаций
+    // (страховые, договоры): это разные разговоры и разные люди.
+    const patientDebt = d.outstanding_patient_amount != null ? d.outstanding_patient_amount : d.outstanding_amount;
+    const patientCount = d.outstanding_patient_count != null ? d.outstanding_patient_count : d.outstanding_count;
+    const payerDebt = Number(d.outstanding_payer_amount) || 0;
+    grid.appendChild(kpiTile({ icon: 'Receipt', accent: 'crit', label: 'Долг пациентов',
+        value: money ? fmtPrice(patientDebt) : '—',
+        meta: !money ? trf('счетов: {n}', { n: num(patientCount) })
+            : (payerDebt > 0
+                ? trf('счетов: {n} · организации должны {amount}', { n: num(patientCount), amount: fmtPrice(payerDebt) })
+                : trf('счетов: {n}', { n: num(patientCount) })),
+        split: money ? splitLine(d, 'outstanding_patient_amount', fmtPrice) : null,
+        onClick: money ? goIf('cashier-head') : null }));
     grid.appendChild(kpiTile({ icon: 'Wallet', accent: 'ward', label: 'Начислено стационару',
-        value: t ? fmtPrice(ip.accrued_unbilled) : '—',
-        meta: tr('ещё не выставлено в счёт'),
-        onClick: go('admissions') }));
+        value: t && moneyShown(t) ? fmtPrice(ip.accrued_unbilled) : '—',
+        meta: t && !moneyShown(t) ? hidden : tr('ещё не выставлено в счёт'),
+        onClick: goIf('admissions') }));
     grid.appendChild(kpiTile({ icon: 'Flask', accent: 'info', label: 'Анализы в работе',
         value: num(d.lab_pending_count),
         split: splitLine(d, 'lab_pending_count', num),
-        onClick: go('labs') }));
+        onClick: goIf('labs') }));
 
     const top = h('div', { class: 'dash-top' }, grid);
     // Низкий остаток — тревога, а не число: плитка «0» не сообщает ничего, а
@@ -258,8 +280,8 @@ function paint() {
         top.appendChild(h('div', { class: 'dash-alert', role: 'status' },
             Icon('Warning', { size: 16 }),
             h('span', null, trf('Низкий остаток: {n}', { n: low })),
-            h('button', { class: 'btn btn-sm', type: 'button', onclick: go('inventory') },
-                tr('Открыть склад'))));
+            routeOpen('inventory') ? h('button', { class: 'btn btn-sm', type: 'button', onclick: go('inventory') },
+                tr('Открыть склад')) : null));
     }
     refs.body.appendChild(top);
 
@@ -283,8 +305,20 @@ const FLOW_KEYS = () => [
     { key: 'admissions', label: tr('Госпитализации'), color: WARD_COLOR },
 ];
 
-/** Быстрое действие в шапке карточки: значок + слово, ведёт в раздел. */
+/**
+ * «Принято сегодня» по частям. V3120_FIX — оплата с депозита относится к тому,
+ * чем заплатили (стационар / амбулатория), а сам приход на депозит — «не
+ * распределено», пока его не потратили.
+ */
+function collectedMeta(last) {
+    const base = trf('амбулаторно {a} · стационар {b}', { a: fmtPrice(last.clinic), b: fmtPrice(last.inpatient) });
+    const un = Number(last.unassigned) || 0;
+    return un ? base + ' · ' + trf('не распределено {c}', { c: fmtPrice(un) }) : base;
+}
+
+/** Быстрое действие в шапке карточки: значок + слово, ведёт в раздел (если он открыт роли). */
 function action(label, icon, view) {
+    if (!routeOpen(view)) return null;
     return h('button', { class: 'btn btn-ghost btn-sm dash-act', type: 'button', onclick: go(view) },
         Icon(icon, { size: 13 }), ' ', tr(label));
 }
@@ -295,17 +329,25 @@ function card(title, icon, right, actions, body) {
             h('h3', null, Icon(icon, { size: 16 }), ' ', tr(title)),
             h('div', { class: 'dash-card-right' },
                 ...(right || []).filter(Boolean),
-                actions && actions.length ? h('div', { class: 'dash-card-acts' }, ...actions) : null)),
+                actions && actions.filter(Boolean).length ? h('div', { class: 'dash-card-acts' }, ...actions.filter(Boolean)) : null)),
         h('div', { class: 'dash-card-body' }, body));
 }
 
 /** Деньги по дням: площадь стопкой, итог за период в шапке. */
 function moneyCard(t) {
     const keys = MONEY_KEYS();
+    // V3120_FIX — без права на выручку карточка денег говорит, почему пуста.
+    if (t && !moneyShown(t)) {
+        return card('Деньги по дням', 'Coins', [], [],
+            h('div', { class: 'dash-chart-empty' }, tr('нет доступа к выручке')));
+    }
     const total = t && t.totals ? t.totals.total : null;
+    const unassigned = t && t.totals ? Number(t.totals.unassigned) || 0 : 0;
     return card('Деньги по дням', 'Coins', [
         legend(keys),
-        total != null ? h('span', { class: 'dash-card-total', title: tr('Всего за период') }, fmtPrice(total)) : null,
+        total != null ? h('span', { class: 'dash-card-total', title: unassigned
+            ? trf('Всего за период (не распределено по депозитам: {c})', { c: fmtPrice(unassigned) })
+            : tr('Всего за период') }, fmtPrice(total)) : null,
     ], [action('Касса', 'Coins', 'cashier-shifts'), action('Отчёты', 'Chart', 'reports-hub')],
     areaChart({ series: (t && t.series) || [], keys, fmt: fmtPrice, fmtY: fmtCompact }));
 }

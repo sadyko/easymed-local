@@ -151,9 +151,14 @@ test('dashboard_trend: деньги по дням раскладываются �
   assert.equal(t.series.length, 7, 'по строке на каждый день, включая пустые');
   const last = t.series[t.series.length - 1];
   assert.equal(last.date, t.to);
-  assert.equal(last.clinic, 50000, 'амбулаторная оплата');
+  // V3120_FIX — оплата с баланса относится к счёту, которым заплатили
+  // (амбулатория 50 000 + 99 999 с баланса), а в приходе кассы её нет: она
+  // уходит минусом в «не распределено» (депозит потрачен).
+  assert.equal(last.clinic, 149999, 'амбулаторная оплата, включая оплату с баланса');
   assert.equal(last.inpatient, 300000, 'оплата по счёту госпитализации');
+  assert.equal(last.unassigned, -99999, 'с баланса потрачено больше, чем внесено сегодня');
   assert.equal(last.total, 350000, '«кошелёк» — не приход');
+  assert.equal(last.clinic + last.inpatient + last.unassigned, last.total);
   assert.equal(last.visits, 1);
   assert.equal(last.admissions, 1);
   // Вчерашняя оплата — во вчерашнем столбике, а не в сегодняшнем.
@@ -184,4 +189,14 @@ test('dashboard_trend: период зажат в 1..90 дней', () => {
   assert.equal(dashboardTrend(db, { days: 1 }, {}).series.length, 1);
   assert.equal(dashboardTrend(db, { days: 500 }, {}).days, 90);
   db.close();
+});
+
+// V3120_FIX — графики сводки и статистика операторов — чистое чтение: клиника
+// с просроченной лицензией видела плитки без графиков (dashboard_trend
+// отказывал, как запись).
+test('V3120_FIX: dashboard_trend и telephony_operator_stats пропускаются при блокировке лицензии', async () => {
+  const { isReadOnlyRpc } = await import('../control/gate.js');
+  assert.equal(isReadOnlyRpc('dashboard_summary'), true);
+  assert.equal(isReadOnlyRpc('dashboard_trend'), true);
+  assert.equal(isReadOnlyRpc('telephony_operator_stats'), true);
 });

@@ -177,7 +177,7 @@ test('I1: кэшбэк не начисляется задним числом ч�
   recordPayment(db, { invoice_id: a.id, amount: 200000, method: 'cash' }, CASH);   // правила нет
   assert.ok(db.prepare('SELECT cashback_evaluated_at FROM invoices WHERE id = ?').get(a.id).cashback_evaluated_at, 'оценён при первой оплате');
   db.prepare("INSERT INTO cashback_rules (name, percent, active) VALUES ('5%', 5, 1)").run();
-  refundPayment(db, { payment_id: pay(db, a.id, 'cash'), amount: 1 }, CASH);
+  refundPayment(db, { payment_id: pay(db, a.id, 'cash'), amount: 1, reopen_balance: true }, CASH);   // V3120_FIX — счёт снова ждёт денег
   recordPayment(db, { invoice_id: a.id, amount: 1, method: 'cash' }, CASH);
   assert.equal(cashbackRows(db).length, 0, 'старый оплаченный счёт кэшбэк не получает');
   db.close();

@@ -115,7 +115,7 @@ export function listDocuments(db, patientId, kinds = ['lab', 'conclusion', 'diag
     const q = docTypes.map(() => '?').join(',');
     const rows = db.prepare(
       `SELECT id, title, doc_type, created_at FROM visit_documents
-        WHERE patient_id = ? AND body IS NOT NULL AND body <> '' AND doc_type IN (${q})
+        WHERE patient_id = ? AND body IS NOT NULL AND body <> '' AND doc_type IN (${q}) AND voided_at IS NULL
         ORDER BY created_at DESC`).all(patientId, ...docTypes);
     for (const r of rows) {
       out.push({ kind: r.doc_type === 'diag' ? 'diag' : 'conclusion',
@@ -127,7 +127,7 @@ export function listDocuments(db, patientId, kinds = ['lab', 'conclusion', 'diag
   if (allow.has('file')) {
     const rows = db.prepare(
       `SELECT id, title, file_name, created_at FROM visit_documents
-        WHERE patient_id = ? AND file_path IS NOT NULL AND file_path <> ''
+        WHERE patient_id = ? AND file_path IS NOT NULL AND file_path <> '' AND voided_at IS NULL
         ORDER BY created_at DESC`).all(patientId);
     for (const r of rows) {
       out.push({ kind: 'file', ref: `file:${r.id}`,
@@ -252,7 +252,7 @@ function buildLab(db, vsid, patient) {
 
 function buildSigned(db, id, patient) {
   const row = db.prepare(
-    'SELECT * FROM visit_documents WHERE id = ? AND patient_id = ?').get(id, patient.id);
+    'SELECT * FROM visit_documents WHERE id = ? AND patient_id = ? AND voided_at IS NULL').get(id, patient.id);   // V3120_FIX — отозванный документ пациенту не уходит
   if (!row || !row.body) return null;
 
   // body — это JSON-снимок, который положил service-workspace при подписании.
@@ -277,7 +277,7 @@ function buildSigned(db, id, patient) {
 
 function buildFile(db, id, patient) {
   const row = db.prepare(
-    'SELECT * FROM visit_documents WHERE id = ? AND patient_id = ?').get(id, patient.id);
+    'SELECT * FROM visit_documents WHERE id = ? AND patient_id = ? AND voided_at IS NULL').get(id, patient.id);   // V3120_FIX — отозванный документ пациенту не уходит
   if (!row || !row.file_path) return null;
   return {
     mode: 'file',

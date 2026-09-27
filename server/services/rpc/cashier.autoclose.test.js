@@ -12,7 +12,7 @@ function seed(db) {
   return { uid, user: { id: uid, role: 'cashier' } };
 }
 
-test('yesterday\'s open shift auto-closes at its midnight with zero over/short', () => {
+test('yesterday\'s open shift auto-closes at its midnight, NOT counted (V3120_FIX)', () => {
   const db = openDb(':memory:'); migrate(db);
   const { uid } = seed(db);
   db.prepare(`INSERT INTO cash_shifts (cashier_id, opening_float, status, opened_at)
@@ -23,8 +23,10 @@ test('yesterday\'s open shift auto-closes at its midnight with zero over/short',
 
   const s = db.prepare('SELECT * FROM cash_shifts WHERE cashier_id=?').get(uid);
   assert.equal(s.status, 'closed');
-  assert.equal(s.over_short, 0);
-  assert.equal(s.counted_amount, s.expected_amount);
+  // V3120_FIX — пересчёта не было: counted/over_short пустые, отметка auto_closed.
+  assert.equal(s.over_short, null);
+  assert.equal(s.counted_amount, null);
+  assert.equal(s.auto_closed, 1);
   assert.equal(s.expected_amount, 100000);   // float only — no payments/movements
   assert.match(s.notes, /автоматически/);
   // closed_at = локальная полночь после дня открытия (в UTC) — она строго

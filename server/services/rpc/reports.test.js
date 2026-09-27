@@ -329,7 +329,9 @@ test('doctor fee: a fixed rate pays the flat sum per unit, ignoring the percenta
   // deliberately untouched by the invoice's 10 000 discount.
   assert.equal(row[cols.indexOf('Кол-во')], 2);
   assert.equal(row[cols.indexOf('Доля врача')], 100000);
-  assert.equal(row[cols.indexOf('Ставка врача')], 'фикс 50000');
+  // V3120_FIX — фикс — своей числовой колонкой, «Ставка врача» (%) у него пуста.
+  assert.equal(row[cols.indexOf('Ставка врача')], null);
+  assert.equal(row[cols.indexOf('Фикс врача')], 50000);
 });
 
 test('doctor fee: a fixed rate multiplies by quantity', () => {

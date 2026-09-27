@@ -53,11 +53,11 @@ test('receive_stock_lines converts purchase->base and computes WAC', () => {
 
 test('receive rejects empty lines, bad qty, and non-inventory role', () => {
   const { db, prod } = seed();
-  assert.throws(() => receiveStockLines(db, { lines: [] }, inv), /lines/i);
-  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: 0, unit: 'base' }] }, inv), /qty/i);
-  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: -5, unit: 'base' }] }, inv), /qty/i);
-  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: 2_000_000, unit: 'base' }] }, inv), /qty/i);
-  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: 1, unit: 'base' }] }, doc), /(role|allow)/i);
+  assert.throws(() => receiveStockLines(db, { lines: [] }, inv), /хотя бы одну строку/i);
+  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: 0, unit: 'base' }] }, inv), /Количество/i);
+  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: -5, unit: 'base' }] }, inv), /Количество/i);
+  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: 2_000_000, unit: 'base' }] }, inv), /Количество/i);
+  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: 1, unit: 'base' }] }, doc), /(role|allow|роль)/i);
   // nothing persisted from the failed attempts
   assert.equal(db.prepare('SELECT on_hand FROM products WHERE id=?').get(prod).on_hand, 0);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM stock_movements').get().n, 0);
@@ -76,10 +76,10 @@ test('adjust_stock changes on_hand with a signed movement and rejects going nega
   const up = adjustStock(db, { product_id: prod, qty: 3, note: 'recount' }, inv);
   assert.equal(up.on_hand, 18);
 
-  assert.throws(() => adjustStock(db, { product_id: prod, qty: -1000, note: 'oops' }, inv), /negative/i);
-  assert.throws(() => adjustStock(db, { product_id: prod, qty: -1, note: '' }, inv), /note/i);
-  assert.throws(() => adjustStock(db, { product_id: prod, qty: 0, note: 'x' }, inv), /qty|zero/i);
-  assert.throws(() => adjustStock(db, { product_id: prod, qty: 1, note: 'x' }, doc), /(role|allow)/i);
+  assert.throws(() => adjustStock(db, { product_id: prod, qty: -1000, note: 'oops' }, inv), /в минус/i);
+  assert.throws(() => adjustStock(db, { product_id: prod, qty: -1, note: '' }, inv), /причина/i);
+  assert.throws(() => adjustStock(db, { product_id: prod, qty: 0, note: 'x' }, inv), /ненулевое/i);
+  assert.throws(() => adjustStock(db, { product_id: prod, qty: 1, note: 'x' }, doc), /(role|allow|роль)/i);
   // unchanged after the failed attempts
   assert.equal(db.prepare('SELECT on_hand FROM products WHERE id=?').get(prod).on_hand, 18);
 });
@@ -106,8 +106,9 @@ test('issue_stock_lines converts consumption->base, decrements stock, records re
   assert.match(m.note, /капельницы/);
   assert.equal(m.created_by, inv.id);
 
-  // qty below half a hundredth of a base unit rounds to 0 -> must be rejected, never a free movement
-  assert.throws(() => issueStockLines(db, { lines: [{ product_id: prod, qty: 0.1 }], recipient: 'R' }, inv), /too small/);
+  // qty that rounds to 0 at storage precision (6 decimals) -> must be rejected, never a free movement
+  // (V3120_FIX: было round2 — тогда отказывали уже 0.1 мл при 50 мл во флаконе)
+  assert.throws(() => issueStockLines(db, { lines: [{ product_id: prod, qty: 0.00001 }], recipient: 'R' }, inv), /слишком мало/);
 });
 
 test('issue_stock_lines: base-unit issue and consumption default when no consumption unit set', () => {
@@ -136,9 +137,9 @@ test('issue_stock_lines rejects overdraw atomically, missing recipient, bad role
   assert.equal(db.prepare('SELECT on_hand FROM products WHERE id=?').get(prod).on_hand, 5);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM stock_movements WHERE reference_type='issue'").get().n, 0);
 
-  assert.throws(() => issueStockLines(db, { lines: [{ product_id: prod, qty: 1 }], recipient: '' }, inv), /recipient/i);
-  assert.throws(() => issueStockLines(db, { lines: [{ product_id: prod, qty: 1 }] }, inv), /recipient/i);
-  assert.throws(() => issueStockLines(db, { lines: [], recipient: 'X' }, inv), /lines/i);
+  assert.throws(() => issueStockLines(db, { lines: [{ product_id: prod, qty: 1 }], recipient: '' }, inv), /получател/i);
+  assert.throws(() => issueStockLines(db, { lines: [{ product_id: prod, qty: 1 }] }, inv), /получател/i);
+  assert.throws(() => issueStockLines(db, { lines: [], recipient: 'X' }, inv), /хотя бы одну строку/i);
   // GRANTS_V1 — отказ теперь словами матрицы прав.
   assert.throws(() => issueStockLines(db, { lines: [{ product_id: prod, qty: 1 }], recipient: 'X' }, doc), (e) => e.status === 403 && /недоступно вашей роли/.test(e.message));
 });
@@ -189,8 +190,8 @@ test('import_products_excel aborts the whole batch on a bad row, names the Excel
   assert.equal(db.prepare('SELECT COUNT(*) n FROM suppliers').get().n, 0);   // supplier creation rolled back too
 
   assert.throws(() => importProductsExcel(db, { rows: [{ name: 'X', qty: -1 }] }, inv), /Строка 2/);
-  assert.throws(() => importProductsExcel(db, { rows: [] }, inv), /rows/i);
-  assert.throws(() => importProductsExcel(db, { rows: [{ name: 'X' }] }, doc), /(role|allow)/i);
+  assert.throws(() => importProductsExcel(db, { rows: [] }, inv), /нет строк/i);
+  assert.throws(() => importProductsExcel(db, { rows: [{ name: 'X' }] }, doc), /(role|allow|роль)/i);
 
   assert.throws(() => importProductsExcel(db, { rows: [{ name: 'X', qty: [1, 2] }] }, inv), /Кол-во/);
   assert.throws(() => importProductsExcel(db, { rows: [{ name: 'X', qty: '0x10' }] }, inv), /Кол-во/);
@@ -211,6 +212,6 @@ test('receive_stock_lines stores supplier/batch/expiry on the movement (mig 037)
   // без полей — тоже работает (все опциональны)
   receiveStockLines(db, { lines: [{ product_id: prod, unit: 'base', qty: 1, unit_cost: 500 }] }, inv);
   // мусор отклоняется чисто
-  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, unit: 'base', qty: 1, unit_cost: 1, expiry_date: '31.01.2027' }] }, inv), /YYYY-MM-DD/);
-  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, unit: 'base', qty: 1, unit_cost: 1, supplier_id: 999 }] }, inv), /supplier not found/);
+  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, unit: 'base', qty: 1, unit_cost: 1, expiry_date: '31.01.2027' }] }, inv), /ГГГГ-ММ-ДД/);
+  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, unit: 'base', qty: 1, unit_cost: 1, supplier_id: 999 }] }, inv), /Поставщик не найден/);
 });

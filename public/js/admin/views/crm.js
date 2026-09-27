@@ -28,7 +28,7 @@ import { linkCrmRequestsToPatient } from '../data.js';
 // другой модуль, то есть вторая копия окна со своим состоянием.
 import { openQuickPatientModal } from './quick-patient-modal.js?v=qp1';
 import { openCustDev } from './custdev.js';           // CUSTDEV_V1 — обзвон после визита
-import { canView, isRouteAllowed } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev» · LIVE_AUDIT_FIX_V1 — isRouteAllowed
+import { canView, canEdit, isRouteAllowed } from '../permissions.js';          // CUSTDEV_V1 — право на кнопку «Cust Dev» · LIVE_AUDIT_FIX_V1 — isRouteAllowed
 import { boardConfig } from '../crm-settings-logic.js?v=crmcfg1';   // CRM_CONFIG_V1
 import { stageKeysFrom } from '../crm-stages.js';   // CRM_LINKS_V1 — ступени по виду, а не по имени
 // PASTEL_IDENTITY_V1 — оттенок ступени воронки. Словарь один на три доски
@@ -286,6 +286,7 @@ async function load() {
     // автоматически уходит в «Не пришёл». Идемпотентно, ошибки не блокируют
     // загрузку (у ролей без права записи просто ничего не произойдёт).
     try {
+        if (crmReadOnly()) throw new Error('read-only');   // V3120_FIX — автоматика пишет, просмотру нельзя
         const d = new Date(); const pad = (n) => String(n).padStart(2, '0');
         const today = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
         // CRM_CONFIG_V1 — если проигрышной колонки в воронке нет вовсе,
@@ -479,7 +480,17 @@ export function askDuplicateLead(rows, opts = {}) {
     });
 }
 
+// V3120_FIX — «CRM: ПРОСМОТР» ЗНАЧИТ ПРОСМОТР. Роль, которой раздел выдан
+// только на просмотр, видела доску целиком со всеми кнопками: перетаскивала
+// карточки, брала их себе, заводила новые — и сервер это принимал. Теперь
+// сервер отказывает (crm/booking-mirror-db.js, canEditCrm), а доска не
+// предлагает того, что будет отказано: ни перетаскивания, ни «Переместить…»,
+// ни «Взять в работу», ни «Новая заявка», ни ночной автоматики «Не пришёл».
+const crmReadOnly = () => !canEdit('crm');
+const CRM_READ_ONLY_MSG = 'Раздел «CRM · Заявки» выдан вам только на просмотр — менять заявки нельзя.';
+
 async function setStatus(r, status) {
+    if (crmReadOnly()) { toast(CRM_READ_ONLY_MSG, 'fail'); return false; }
     const { error } = await supabase.from('crm_requests').update({ status }).eq('id', r.id);
     if (error) { toast(error.message, 'fail'); return false; }
     return true;
@@ -565,8 +576,8 @@ async function paint() {
                 onclick: () => openCrmDuplicates({ onMerged: () => paint() }) }, Icon('Copy', { size: 13 }), ' ', 'Дубликаты') : null,
             h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => reportModal() }, Icon('Chart', { size: 13 }), ' Отчёт'),
             h('button', { class: 'btn btn-sm btn-outline', type: 'button', onclick: () => exportExcel() }, Icon('Download', { size: 13 }), ' Excel'),
-            h('button', { class: 'btn btn-primary', type: 'button', onclick: () => requestModal(null) },
-                Icon('Plus', { size: 14 }), ' Новая заявка')),
+            crmReadOnly() ? null : h('button', { class: 'btn btn-primary', type: 'button', onclick: () => requestModal(null) },
+                Icon('Plus', { size: 14 }), ' Новая заявка')),   // V3120_FIX — просмотру не предлагаем
     ));
     // CRM_FILTERS_V2 — поиск и фильтры в ОДНОЙ строке.
     //
@@ -780,7 +791,7 @@ async function paint() {
                     // раз нажали «показать ещё», она не должна.
                     h('span', { class: 'crm-col-n' }, String(colRows.length)),
                     h('span', { class: 'grow' }),
-                    key === stageKey('in_process') ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Новая заявка', onclick: () => requestModal(null) }, '+') : null),
+                    key === stageKey('in_process') && !crmReadOnly() ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Новая заявка', onclick: () => requestModal(null) }, '+') : null),
                 list,
                 shown < colRows.length ? more : null);
             board.appendChild(col);
@@ -865,7 +876,7 @@ async function paint() {
         // краёв. Отпустили над колонкой — статус меняется; над «Пришёл» —
         // конверсия через попап. Мышь и сенсорный экран работают одинаково.
         card.addEventListener('pointerdown', (ev) => {
-            if (r.status === CONVERT_STATUS) return;
+            if (r.status === CONVERT_STATUS || crmReadOnly()) return;   // V3120_FIX — просмотр не двигает
             if (ev.button !== 0 && ev.pointerType === 'mouse') return;
             if (ev.target.closest('button, select, input, a, .crm-move')) return;
             // Захват указателя: события идут карточке даже если курсор ушёл
@@ -951,7 +962,7 @@ async function paint() {
     }
 
     function cardActions(r) {
-        if (r.status === CONVERT_STATUS) return [];
+        if (r.status === CONVERT_STATUS || crmReadOnly()) return [];   // V3120_FIX — ни «Переместить…», ни «Взять»
         // CRM_CARD_V2 — ПЕРЕЕЗД, а не «текущий статус».
         //
         // Здесь стоял обычный <select> со всеми ступенями воронки, и выбранной
@@ -1971,6 +1982,7 @@ async function paint() {
             return true;
         }
         async function persist() {
+            if (crmReadOnly()) { toast(CRM_READ_ONLY_MSG, 'fail'); return null; }   // V3120_FIX
             const name = linkedPatient ? linkedPatient.full_name : nameInp.value.trim();
             if (!name) { toast('Укажите имя.', 'fail'); return null; }
             // Привязанный пациент — телефон берём из ввода или из карты; поле
@@ -2574,6 +2586,7 @@ async function paint() {
 
             const saveAll = h('button', { class: 'btn btn-primary', type: 'button' }, Icon('Check', { size: 14 }), ' Сохранить и записать');
             saveAll.addEventListener('click', async () => {
+                if (crmReadOnly()) { toast(CRM_READ_ONLY_MSG, 'fail'); return; }   // V3120_FIX
                 const missing = picked.filter(p => !p.date);
                 if (missing.length) { toast(trf('Без даты: {names}', { names: missing.map(p => p.name).join(', ') }), 'fail'); return; }
                 // CRM_LINE_DOCTOR_V1 — услуга, требующая врача, без врача не

@@ -17,6 +17,8 @@
 // Rule: a status column is written only after assertTransition() has approved
 // the move. Terminal states are declared, not discovered.
 
+import { withTemplate } from '../server-message.js';   // V3120_I18N
+
 export class TransitionError extends Error {
   constructor(msg) {
     super(msg);
@@ -127,13 +129,13 @@ export const INITIAL = {
 
 export function canTransition(entity, from, to) {
   const table = TRANSITIONS[entity];
-  if (!table) throw new TransitionError(`unknown entity: ${entity}`);
+  if (!table) throw withTemplate(new TransitionError(''), 'Неизвестный вид записи: {entity}.', { entity });
   if (from === to) return true;                    // idempotent re-assert
   return (table[from] || []).includes(to);
 }
 
 export function assertTransition(entity, from, to) {
   if (!canTransition(entity, from, to)) {
-    throw new TransitionError(`${entity} cannot go from '${from}' to '${to}'.`);
+    throw withTemplate(new TransitionError(''), 'Запись «{entity}» не может перейти из состояния «{from}» в «{to}».', { entity, from, to });
   }
 }

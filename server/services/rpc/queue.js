@@ -49,7 +49,7 @@ export function isSurgery(row) {
 function requireRole(user, allowed) {
   // MULTI_ROLE_SERVER_V1 — extras count too, not the primary role alone.
   if (!hasAnyRole(user, allowed)) {
-    throw new RpcError('Your role is not allowed to perform this action.', 403);
+    throw new RpcError('Вашей роли это действие не разрешено.', 403);   // V3120_FIX — по-русски
   }
 }
 
@@ -58,7 +58,7 @@ export function issueQueueNumbers(db, args, user) {
 
   const ids = args && args.p_ids;
   if (!Array.isArray(ids) || ids.length === 0 || !ids.every((v) => Number.isInteger(v) && v > 0)) {
-    throw new RpcError('p_ids must be a non-empty array of positive integers.', 400);
+    throw new RpcError('Не выбраны услуги для номеров очереди.', 400);
   }
 
   const run = db.transaction(() => {
@@ -78,7 +78,7 @@ export function issueQueueNumbers(db, args, user) {
           LEFT JOIN rooms r ON r.id = s.room_id
          WHERE vs.id = ?
       `).get(id);
-      if (!row) throw new RpcError('visit_service ' + id + ' not found.', 400);
+      if (!row) throw new RpcError('Услуга визита №' + id + ' не найдена.', 400);
 
       // Reprint: an already-ticketed line returns its existing number.
       if (row.queue_no != null && row.queue_key) {
@@ -241,7 +241,10 @@ const BOARD_KEY = 'queue';
 
 // Порядок групп на доске. Врачи первыми — ради них раздел и заводился;
 // процедурная, лаборатория и аппараты идут следом.
-const KIND_ORDER = { doctor: 0, procedure: 1, lab: 2, imaging: 3, other: 4 };
+// V3120_FIX — 'room' (ROOMS_QUEUE_V1) в порядке не было: сравнение давало NaN,
+// и группы кабинетов вставали на доске куда придётся. Кабинет — дверь, к
+// которой зовут, как и врач, поэтому сразу за врачами.
+const KIND_ORDER = { doctor: 0, room: 1, procedure: 2, lab: 3, imaging: 4, other: 5 };
 
 function kindOf(key) {
   if (key.startsWith('room:')) return 'room';   // ROOMS_QUEUE_V1
@@ -282,13 +285,35 @@ export function queueBoard(db, args, user) {
   const a = args || {};
   const day = /^\d{4}-\d{2}-\d{2}$/.test(String(a.day || '')) ? String(a.day) : today(db);
 
+  // V3120_FIX (PERF) — ДОСКУ ДВИЖЕТ ДЕНЬ ВИЗИТА, А НЕ ПЕРЕБОР ВСЕХ СТРОК.
+  //
+  // Здесь стоял один отбор `queue_key LIKE '%:<день>'` — по всем строкам
+  // visit_services за всю историю клиники (LIKE с процентом впереди индекс не
+  // берёт), и доска, которую экран спрашивает каждые 10 секунд, на трёхлетней
+  // базе читала таблицу целиком (634 мс на запрос). День в ключе — местный день
+  // COALESCE(scheduled_at, visit_date) (issueQueueNumbers выше), поэтому
+  // кандидаты берутся ДВУМЯ прыжками по дереву, с запасом в сутки в обе
+  // стороны (местный день ↔ UTC-строка): визиты по visits.visit_date
+  // (idx_visits_date) и строки со своим временем по scheduled_at (миграция 206).
+  // Точный отбор — прежний LIKE по ключу, уже по горстке кандидатов, поэтому
+  // ответ тот же, что и раньше (тест queue-board.v3120.test.js).
+  const lo = db.prepare("SELECT date(?, '-1 day') AS d").get(day).d;
+  const hi = db.prepare("SELECT date(?, '+2 day') AS d").get(day).d;
   const rows = db.prepare(`
+    WITH cand AS (
+      SELECT vs.id FROM visits v JOIN visit_services vs ON vs.visit_id = v.id
+       WHERE v.visit_date >= ? AND v.visit_date < ? AND vs.queue_no IS NOT NULL
+      UNION
+      SELECT vs.id FROM visit_services vs
+       WHERE vs.scheduled_at >= ? AND vs.scheduled_at < ? AND vs.queue_no IS NOT NULL
+    )
     SELECT vs.id, vs.queue_key, vs.queue_no, vs.status, vs.total, vs.doctor_id, vs.service_id,
            v.patient_id,
            p.full_name AS patient_name,
            s.name      AS svc_name,
            s.requires_doctor
-      FROM visit_services vs
+      FROM cand
+      JOIN visit_services vs ON vs.id = cand.id
       JOIN visits v        ON v.id = vs.visit_id
       LEFT JOIN patients p ON p.id = v.patient_id
       LEFT JOIN services s ON s.id = vs.service_id
@@ -299,7 +324,7 @@ export function queueBoard(db, args, user) {
        -- не стоит: пациента не будет, а доска показывала его номер.
        AND v.status NOT IN ('cancelled', 'no_show')
      ORDER BY vs.queue_no, vs.id
-  `).all('%:' + day);
+  `).all(lo, hi, lo, hi, '%:' + day);
 
   // key -> группа, внутри неё номер -> талон.
   const groups = new Map();
@@ -317,10 +342,16 @@ export function queueBoard(db, args, user) {
       };
       groups.set(r.queue_key, g);
     }
-    let t = g.tickets.get(r.queue_no);
+    // V3120_FIX — ОДИН ЧЕЛОВЕК — ОДИН НОМЕР В ОЧЕРЕДИ. После объединения карт
+    // (merge_patients) у пациента в той же очереди оказываются два талона — его
+    // и дубля. На доске он стоит один раз, под МЕНЬШИМ номером (строки идут по
+    // возрастанию номера, так что первый встреченный и есть меньший).
+    if (!g.byPatient) g.byPatient = new Map();
+    let t = g.tickets.get(r.queue_no) || (r.patient_id != null ? g.byPatient.get(r.patient_id) : null);
     if (!t) {
       t = { number: r.queue_no, patient_id: r.patient_id, patient_name: r.patient_name || '—', services: [], _states: [] };
       g.tickets.set(r.queue_no, t);
+      if (r.patient_id != null) g.byPatient.set(r.patient_id, t);
     }
     if (r.svc_name) t.services.push(r.svc_name);
     t._states.push(lineState(r.status, r.total));

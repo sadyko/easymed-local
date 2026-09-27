@@ -30,12 +30,19 @@
 // пациентов строкой выше, так что и раскрытия тут нет. Отдельные ключи `queue`
 // и `appointments` продолжают жить для тех, кому нужен ТОЛЬКО экран очереди
 // или ТОЛЬКО календарь, без картотеки (permissions.js).
+//
+// V3120_FIX (2026-09-27) — поправка к абзацу выше: «одного ключа хватает»
+// оказалось правдой только для ЭКРАНА. Данные вкладок сервер отдаёт по своим
+// правилам — доску по разделу `queue`, сетку календаря по BOOK_ROLES, — и
+// вкладка, нарисованная роли, которой сервер откажет, открывалась стеной
+// отказов (лаборант — «Очередь», медсестра/кассир/лаборант — «Записи»).
+// Поэтому вкладка видна по тому же правилу, что её отдельный адрес.
 
 import { h, Icon, clear } from '../ui.js';
 // I18N_COVERAGE_V1 — причина сбоя подставляется В ПЕРЕВЕДЁННЫЙ шаблон, а не
 // склеивается из кусков: склейка непереводима целиком ни на один язык.
 import { trf } from '../i18n.js';
-import { grantAllows } from '../permissions.js';   // GRANTS_V1 — окна раздела по матрице прав
+import { grantAllows, isRouteAllowed } from '../permissions.js';   // GRANTS_V1 — окна раздела по матрице прав; V3120_FIX — isRouteAllowed
 // Те же адреса модулей, что у admin.js: одна строка импорта — один экземпляр
 // модуля. Разошедшийся ?v= развёл бы состояние экрана на две копии.
 import { renderPatients } from './patients.js?v=regfit2';
@@ -139,7 +146,15 @@ export async function renderPatientsHub(container, ctx = {}, { calendarLoader = 
     // GRANTS_V1 — «Очередь» и «Записи» можно закрыть роли в «Настройки → Роли».
     // Ненастроенный ключ = вкладка видна, как и была.
     const TAB_GRANT = { queue: 'patients.queue', calendar: 'patients.calendar' };
-    const visibleTabs = TABS.filter((t) => !TAB_GRANT[t.id] || grantAllows(TAB_GRANT[t.id], 'view'));
+    // V3120_FIX — ВКЛАДКА, ЗА КОТОРОЙ СЕРВЕР ОТКАЖЕТ, НЕ РИСУЕТСЯ. «Записи»
+    // показывались медсестре, кассиру и лаборанту, а сетку календаря сервер
+    // отдаёт только BOOK_ROLES (rpc/calendar.js) — вкладка открывалась стеной
+    // отказов. «Очередь» — та же история с разделом `queue` (rpc/queue.js
+    // queueBoard). Правило — то же, что у отдельных адресов #appointments и
+    // #queue (permissions.js): одна дверь, один ответ.
+    const TAB_ROUTE = { queue: 'queue', calendar: 'appointments' };
+    const visibleTabs = TABS.filter((t) => (!TAB_GRANT[t.id] || grantAllows(TAB_GRANT[t.id], 'view'))
+        && (!TAB_ROUTE[t.id] || isRouteAllowed(TAB_ROUTE[t.id])));
     for (const t of visibleTabs) {
         hosts[t.id] = h('div', {
             id: 'phub-panel-' + t.id, role: 'tabpanel',

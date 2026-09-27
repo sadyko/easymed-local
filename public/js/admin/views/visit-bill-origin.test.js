@@ -109,8 +109,10 @@ test('в отказе нет ни одной кнопки, которая тра
   assert.ok(start > 0 && end > start, 'окно отказа определено до точки входа');
   const notice = code.slice(start, end);
 
-  for (const forbidden of ['Remove', 'Generate invoice', 'Take payment', 'Dispense',
-                           "' Add'", 'supabase.', 'create_invoice_for_visit', 'record_payment']) {
+  // V3120_FIX — подписи кассы теперь русские: проверяются в кавычках, потому что
+  // сам текст отказа честно говорит «Выставить счёт отсюда — значит…».
+  for (const forbidden of ["'Снять'", "' Выставить счёт'", "'Принять оплату'", "' Выдать'",
+                           "' Добавить'", 'supabase.', 'create_invoice_for_visit', 'record_payment']) {
     assert.equal(notice.includes(forbidden), false,
       `окно отказа не должно содержать «${forbidden}» — оно только объясняет, где выставляют счёт`);
   }
@@ -122,7 +124,7 @@ test('в отказе нет ни одной кнопки, которая тра
 test('для своего визита экран прежний: касса на месте', () => {
   const entry = code.indexOf('export function openVisitBillModal');
   const body = code.slice(entry);
-  for (const kept of ["'Remove'", "' Generate invoice'", "'Take payment'",
+  for (const kept of ["'Снять'", "' Выставить счёт'", "'Принять оплату'",
                       "supabase.rpc('create_invoice_for_visit'", "supabase.rpc('record_payment'",
                       "supabase.rpc('dispense_item'", "supabase.rpc('void_dispense'"]) {
     assert.ok(body.includes(kept), `«${kept}» осталась в кассе своего визита`);

@@ -37,6 +37,7 @@
 
 import { assertTransition, TransitionError } from '../domain/lifecycle.js';
 import { effectiveRoles, hasAnyRole } from '../roles.js';
+import { rpcT } from '../server-message.js';   // V3120_I18N
 // Набор состояний — ОДНА копия на сервер и браузер (тот же приём, что у
 // accommodation-line.js): доска коек и кабинет врача спрашивают ровно тот же
 // список, каким сервер решает, занята ли койка.
@@ -230,7 +231,7 @@ const CLOSED_MESSAGE = {
 export function loadAdmission(db, admissionId) {
   const id = Number(admissionId);
   if (!Number.isInteger(id) || id <= 0) {
-    throw new RpcError('admission_id must be a positive integer.', 400);
+    throw new RpcError('Госпитализация указана неверно.', 400);
   }
   const adm = db.prepare('SELECT * FROM admissions WHERE id = ?').get(id);
   if (!adm) throw new RpcError('Госпитализация не найдена.', 400);
@@ -252,7 +253,7 @@ export function loadAdmission(db, admissionId) {
  * @throws {RpcError} 400 с русским текстом, называющим недостающий шаг
  */
 export function assertAdmissionAtLeast(db, admissionId, state) {
-  if (!RANK.has(state)) throw new RpcError(`unknown admission state: ${state}`, 400);
+  if (!RANK.has(state)) throw rpcT(RpcError, 'Неизвестное состояние госпитализации: {state}.', { state }, 400);
   const adm = loadAdmission(db, admissionId);
 
   if (CLOSED_STATUSES.includes(adm.status)) {
@@ -371,7 +372,7 @@ export function assertMayTransition(from, to, user) {
  */
 export function admissionTransition(db, args, user, opts = {}) {
   const to = args && args.to;
-  if (typeof to !== 'string' || !to) throw new RpcError('to must be a state name.', 400);
+  if (typeof to !== 'string' || !to) throw new RpcError('Не указано, в какое состояние перевести госпитализацию.', 400);
 
   const adm = loadAdmission(db, args && args.admission_id);
   const from = adm.status;
@@ -383,7 +384,21 @@ export function admissionTransition(db, args, user, opts = {}) {
     if (e instanceof TransitionError) throw new RpcError(explainRefusal(from, to), 400);
     throw e;
   }
-  if (from === to) return { admission: adm, from, to };   // идемпотентный повтор
+  // V3120_FIX (M1) — идемпотентный повтор — ТОЖЕ за проверкой роли. Раньше
+  // повтор возвращался раньше неё, и повторную «отмену» проводил кто угодно (а
+  // вызывающий RPC после этого ещё и писал: койка в уборку, строка в журнал).
+  // Право на повтор — право на любой шаг, ведущий в это состояние. Вызывающий
+  // узнаёт повтор по `repeat` и обязан ничего не писать.
+  if (from === to) {
+    const allowed = [...new Set(Object.entries(TRANSITION_ROLES)
+      .filter(([k]) => k.endsWith('→' + to)).flatMap(([, roles]) => roles))];
+    const admittingRepeat = !!(opts && opts.admittingDoctorOk) && isAdmittingDoctor(adm, user)
+      && (to === 'examined' || to === 'active');
+    if (allowed.length && !admittingRepeat && !hasAnyRole(user, allowed)) {
+      throw new RpcError(`Это действие недоступно вашей роли. Это делает: ${allowed.map(roleTitle).join(', ')}.`, 403);
+    }
+    return { admission: adm, from, to, repeat: true };   // идемпотентный повтор
+  }
 
   // 2. Вправе ли этот человек.
   //
@@ -411,8 +426,12 @@ export function admissionTransition(db, args, user, opts = {}) {
   if (to === 'admitted')   { sets.push('admitted_by = ?', 'admitted_at = ?'); vals.push(by, at); }
   if (to === 'examined')   { sets.push('examined_by = ?', 'examined_at = ?'); vals.push(by, at); }
   if (to === 'cancelled')  {
-    sets.push('cancel_reason = ?', 'discharged_at = ?');
-    vals.push(String((args && args.reason) || '').slice(0, 300), at);
+    // V3120_CLEANUP — отмена НЕ выписка: discharged_at не ставим (колонки
+    // cancelled_at нет). Со временем выписки у отменённой заявки карта
+    // пациента, титульный лист и журнал писали «выписан <дата>». Когда и кем
+    // отменили — строка admission_transfers kind='cancel' (admissionOrderCancel).
+    sets.push('cancel_reason = ?');
+    vals.push(String((args && args.reason) || '').slice(0, 300));
   }
   if (to === 'discharged') { sets.push('discharged_at = COALESCE(discharged_at, ?)'); vals.push(at); }
   vals.push(adm.id);

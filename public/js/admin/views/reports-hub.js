@@ -31,8 +31,10 @@
 
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, PageHead } from '../ui.js';
-import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ (в ccTrendLine параметр tr затеняет импорт — там только trf)
-import { reportTotals } from './report-totals.js?v=rt1';   // REPORT_TOTALS_V1
+import { tr, trf, getLang, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ (в ccTrendLine параметр tr затеняет импорт — там только trf)
+import { reportTotals, localizeReport, reportSheets } from './report-totals.js?v=rt2';   // REPORT_TOTALS_V1; V3120_FIX — перевод и Excel с итогом
+// V3120_FIX (I18N) — словарь языка экрана для чистых функций report-totals.js.
+const reportTx = () => ({ tr, trf, lang: getLang(), monthName });
 // BUILDING_FRESHNESS_V1 — решение «это хорошая новость или плохая» живёт в
 // чистом модуле рядом с buildingOptions: экран без DOM не поднимается, а
 // проверять это правило надо. Слова к состоянию подбираются здесь, через i18n.
@@ -705,10 +707,18 @@ async function openReportBuilder(rep) {
             ev.currentTarget.disabled = true;
             try {
                 const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
-                const ws = XLSX.utils.aoa_to_sheet([r.columns, ...r.rows]);
-                ws['!cols'] = r.columns.map(c => ({ wch: c.length > 10 ? 20 : 13 }));
+                // V3120_FIX — заголовки на языке экрана, строка «Итого» (как под
+                // таблицей) и примечания отдельным листом.
+                const sheets = reportSheets(r, reportTx());
+                const ws = XLSX.utils.aoa_to_sheet(sheets.report);
+                ws['!cols'] = sheets.report[0].map(c => ({ wch: String(c).length > 10 ? 20 : 13 }));
                 const wb = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(wb, ws, 'Report');
+                XLSX.utils.book_append_sheet(wb, ws, tr('Отчёт').slice(0, 31));
+                if (sheets.notes) {
+                    const ns = XLSX.utils.aoa_to_sheet(sheets.notes);
+                    ns['!cols'] = [{ wch: 120 }];
+                    XLSX.utils.book_append_sheet(wb, ns, tr('Примечания').slice(0, 31));
+                }
                 XLSX.writeFile(wb, `${st.kind}_${st.from}_${st.to}.xlsx`);
                 toast('Файл скачан', 'ok');
             } catch (e) {
@@ -905,7 +915,9 @@ async function openReportBuilder(rep) {
     // выглядит как число одного дома, и именно так его и читали.
     function paintBuildingSummary(target, data) {
         const list = (data && data.by_building) || [];
-        const notes = (data && data.notes) || [];
+        // V3120_FIX (I18N) — примечания на языке экрана (собранные — шаблоном).
+        const loc = localizeReport(data, reportTx());
+        const notes = loc.notes;
         // PENDING_ITEMS_V1 — деньги, у которых приехала шапка счёта, но не
         // приехали его позиции. Отдельной величиной, отдельной строкой: в итог
         // отчёта они НЕ входят (какие это услуги — неизвестно), и подмешать их
@@ -947,7 +959,7 @@ async function openReportBuilder(rep) {
                     padding: '9px 12px', borderRadius: '10px',
                     background: '#fff7e6', border: '1px solid #f3ddb0', color: '#8a5a00',
                 },
-            }, pending.note));
+            }, loc.pendingNote || pending.note));
         }
         for (const n of notes) {
             target.appendChild(h('div', {
@@ -1027,6 +1039,9 @@ async function openReportBuilder(rep) {
         }
         const columns = (st.result && st.result.columns) || [];
         const rows = (st.result && st.result.rows) || [];
+        // V3120_FIX (I18N) — заголовки и слова-перечисления на языке экрана;
+        // числа и итог считаются по исходным строкам.
+        const loc = localizeReport(st.result, reportTx());
         if (rows.length === 0) {
             // PAY_PERIOD_CLOSE_V1 — без clear: полоса «Закрыть месяц» над пустым
             // отчётом остаётся (месяц без начислений тоже закрывают).
@@ -1081,13 +1096,13 @@ async function openReportBuilder(rep) {
         },
             h('table', { style: { borderCollapse: 'collapse', fontSize: '12.5px', minWidth: '100%' } },
                 h('thead', null, h('tr', null,
-                    ...columns.map((c, ci) => h('th', { style: { ...thStyle, textAlign: isNumCol[ci] ? 'right' : 'left' } }, c)),
+                    ...columns.map((c, ci) => h('th', { style: { ...thStyle, textAlign: isNumCol[ci] ? 'right' : 'left' } }, loc.columns[ci])),
                 )),
                 h('tbody', null, ...shown.map((r, i) => h('tr', {
                     style: { background: i % 2 ? 'var(--ink-25, #fafafa)' : 'var(--white, #fff)' },
                 },
                     ...columns.map((_, ci) => {
-                        const v = r[ci];
+                        const v = loc.rows[i][ci];
                         const isNum = typeof v === 'number';
                         return h('td', {
                             style: {
@@ -1101,7 +1116,7 @@ async function openReportBuilder(rep) {
                 ))),
                 hasTotals ? h('tfoot', null, h('tr', null,
                     ...columns.map((_, ci) => footTd(
-                        ci === 0 ? 'Итого' : (totals[ci] == null ? '' : Number(totals[ci]).toLocaleString('ru-RU')),
+                        ci === 0 ? tr('Итого') : (totals[ci] == null ? '' : Number(totals[ci]).toLocaleString('ru-RU')),
                         isNumCol[ci]))
                 )) : null,
             ),
@@ -1506,7 +1521,13 @@ function ccrTable({ title, tone, columns, rows, numericCol, kind, period }) {
                 // ещё» — способ читать с экрана, и урезанная по нему выгрузка
                 // была бы тихо неполной. Фильтр при этом уважается: его задал
                 // человек, а страницу — мы.
-                const ws = XLSX.utils.aoa_to_sheet([columns, ...visible()]);
+                // V3120_FIX — заголовки на языке экрана и строка «Итого» по той же
+                // колонке и тем же видимым строкам, что итог над таблицей.
+                const vis = visible();
+                const totalRow = columns.map((_, i) => (i === numericCol
+                    ? Math.round(vis.reduce((n, r) => n + (Number(r[i]) || 0), 0) * 100) / 100
+                    : (i === 0 ? tr('Итого') : '')));
+                const ws = XLSX.utils.aoa_to_sheet([columns.map((c) => tr(c)), ...vis, totalRow]);
                 ws['!cols'] = columns.map((c) => ({ wch: c.length > 10 ? 24 : 14 }));
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, title);
@@ -1531,7 +1552,7 @@ function ccrTable({ title, tone, columns, rows, numericCol, kind, period }) {
                     h('tr', null, ...columns.map((c, i) => h('th', {
                         style: { textAlign: i === numericCol ? 'right' : 'left', padding: '8px 10px', fontSize: '12.5px',
                                  fontWeight: '700', letterSpacing: '.03em', textTransform: 'uppercase',
-                                 color: 'var(--ink-500)', borderBottom: '1px solid var(--ink-100)', whiteSpace: 'nowrap' } }, c))),
+                                 color: 'var(--ink-500)', borderBottom: '1px solid var(--ink-100)', whiteSpace: 'nowrap' } }, tr(c)))),   // V3120_FIX — заголовок на языке экрана
                     filterRow),
                 tbody)),
         moreWrap);

@@ -37,6 +37,7 @@
 // обрыв посередине оставил бы строки услуг без заявки (каскад их унёс бы) или
 // две карточки с одной задачей.
 
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { phoneKey } from '../../../public/js/admin/views/crm-phone-match.js';
 import { allowedSurvivors, isOpenCard, suggestSurvivor, patientConflict, namesDiffer, personName }
   from '../../../public/js/admin/views/crm-merge-logic.js';
@@ -44,6 +45,40 @@ import { canWrite } from '../../db/schema-registry.js';
 import { effectiveRoles } from '../roles.js';
 import { canSeeAllLeads, leadVisible } from '../crm/visibility.js';
 import { listStages } from '../crm/config.js';
+// V3120_FIX — после слияния одна услуга записи — одна строка (booking-mirror.js).
+import { lineKey, mirrorVisit } from '../crm/booking-mirror.js';
+
+/**
+ * V3120_FIX — ДУБЛИ СТРОК ПОСЛЕ СЛИЯНИЯ. Две карточки одного человека почти
+ * всегда просят одно и то же: «консультация у Иванова во вторник» в обеих. После
+ * переезда строк у оставшейся карточки их две — и регистратура подставила бы
+ * в смету обе (двойной счёт). Ждущие строки с одинаковыми визитом, услугой (или
+ * видом приёма), врачом и днём сводятся к одной: остаётся самая ранняя,
+ * остальные отменяются. Записанные визиты возвращаются для сверки зеркала.
+ * @returns {number[]} визиты, чьи строки задеты
+ */
+export function cancelDuplicateLines(db, requestId) {
+  const rows = db.prepare(`SELECT id, service_id, consultation_type_id, doctor_id, visit_id, visit_service_id,
+                                  COALESCE(NULLIF(scheduled_date, ''), '') AS day
+                             FROM crm_request_services
+                            WHERE request_id = ? AND status = 'pending' ORDER BY id`).all(requestId);
+  const seen = new Set();
+  const visits = new Set();
+  const cancel = db.prepare("UPDATE crm_request_services SET status = 'cancelled' WHERE id = ?");
+  for (const r of rows) {
+    const k = lineKey(r);
+    if (!k) continue;
+    const key = [r.visit_id || '', k, r.doctor_id || '', r.day].join('|');
+    if (!seen.has(key)) { seen.add(key); continue; }
+    cancel.run(r.id);
+    if (r.visit_id) visits.add(r.visit_id);
+    if (r.visit_service_id) {
+      const vs = db.prepare('SELECT visit_id FROM visit_services WHERE id = ?').get(r.visit_service_id);
+      if (vs && vs.visit_id) visits.add(vs.visit_id);
+    }
+  }
+  return [...visits];
+}
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -182,7 +217,7 @@ export function crmMergeLeads(db, args, user) {
     // Чужая невидимая карточка отвечает тем же «не найдена», что и
     // несуществующая: сам факт её существования — тоже сведения о чужой заявке.
     const c = byId.get(id);
-    if (!c || !leadVisible(db, user, c.assigned_to, { lifted: true })) throw new RpcError(`Заявка №${id} не найдена.`, 404);
+    if (!c || !leadVisible(db, user, c.assigned_to, { lifted: true })) throw rpcT(RpcError, 'Заявка №{id} не найдена.', { id }, 404);
   }
   const keep = byId.get(keepId);
   const losers = mergeIds.map((id) => byId.get(id));
@@ -243,6 +278,7 @@ export function crmMergeLeads(db, args, user) {
     ? ((db.prepare('SELECT full_name FROM users WHERE id = ?').get(user.id) || {}).full_name || null) : null;
 
   const lh = mergeIds.map(() => '?').join(',');
+  const touchedVisits = new Set();
   db.transaction(() => {
     // 1. Строки услуг и задачи — ПЕРЕЕЗЖАЮТ. Удаление заявки ниже уносит
     //    свои строки каскадом (ON DELETE CASCADE), поэтому переезд обязан
@@ -250,6 +286,8 @@ export function crmMergeLeads(db, args, user) {
     //    Исполнитель задачи не меняется: даже на чужой карточке он свою задачу
     //    видит (crm_tasks.scope.orOwn).
     db.prepare(`UPDATE crm_request_services SET request_id = ? WHERE request_id IN (${lh})`).run(keepId, ...mergeIds);
+    // V3120_FIX — переехавшие строки не удваивают услугу (см. cancelDuplicateLines).
+    for (const v of cancelDuplicateLines(db, keepId)) touchedVisits.add(v);
     db.prepare(`UPDATE crm_tasks SET request_id = ? WHERE request_id IN (${lh})`).run(keepId, ...mergeIds);
     // CRM_CALENDAR_MIRROR_V1 — привязки записей календаря к заявке (миграция 187)
     // переезжают так же: запись без строк иначе держалась бы за удалённую карточку.
@@ -294,6 +332,10 @@ export function crmMergeLeads(db, args, user) {
                 VALUES (?, ?, ?, ?, ?)`)
       .run(keepId, JSON.stringify(mergeIds), JSON.stringify(snapshot), user && user.id != null ? Number(user.id) : null, actorName);
   })();
+  // V3120_FIX — снятая дублем строка уносит свою свободную строку визита (зеркало
+  // записи, шаг 1): двойной счёт не доживает до кассы. За транзакцией и молча —
+  // как у всех хуков зеркала.
+  for (const v of touchedVisits) mirrorVisit(db, v, { actorId: user && user.id });
 
   return {
     kept_id: keepId,

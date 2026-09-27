@@ -34,6 +34,14 @@ export function doctorPriceFor(db, doctorId, serviceId) {
        -- акт стационара показывал личную цену, а счёт — каталог.
        AND json_extract(j.value, '$.price') IS NOT NULL
        AND CAST(json_extract(j.value, '$.price') AS REAL) >= 0
+       -- V3120_FIX (MINOR) — ПУСТАЯ ИЛИ НЕЧИСЛОВАЯ ЦЕНА — «СВОЕЙ ЦЕНЫ НЕТ».
+       -- '' и 'abc' приводились CAST к 0 и выставляли услугу бесплатно. Цена —
+       -- это число JSON или строка из цифр ('80000', '80000.5'); остальное
+       -- пропускается, и счёт берёт каталог.
+       AND (json_type(j.value, '$.price') IN ('integer', 'real')
+            OR (json_type(j.value, '$.price') = 'text'
+                AND trim(json_extract(j.value, '$.price')) GLOB '[0-9]*'
+                AND trim(json_extract(j.value, '$.price')) NOT GLOB '*[^0-9.]*'))
      LIMIT 1
   `).get(doctorId, serviceId);
 

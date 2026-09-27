@@ -6,7 +6,7 @@ import { h, Icon, Avatar, Tag, StatusTag, PageHead, toast, clear, fmtDate } from
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { registrarHeader } from './registrar-header.js?v=roleaud1';
 import { loadPatientsPaged, findAllDuplicatePatientIds, mergePatients } from '../data.js';   // DUP_MERGE_V1
-import { scopedDoctorId, canView, actorIsAdmin } from '../permissions.js';
+import { scopedDoctorId, canView, actorIsAdmin, canCreatePatient, canOrderAdmission } from '../permissions.js';   // V3120_FIX — canCreatePatient, canOrderAdmission
 // PATIENT_ROW_V2 — телефон в реестре читается так же, как на карточке CRM.
 import { formatPhone } from '../phone-format.js';
 import { moneyDisplay } from '../../shared/money-input.js?v=mi2';   // DEBT_FLOW_V1 — сумма долга у имени
@@ -31,12 +31,6 @@ import { revealOn, smoothScrollTo } from '../motion.js?v=mo1';
 // config), and two entry points for a bulk overwrite of the whole register is
 // one more than the registrar's toolbar needs.
 
-const FILTER_LABELS = {
-    all:         { label: 'All patients', color: 'var(--ink-700)',  icon: 'Patients' },
-    active:      { label: 'Active',       color: 'var(--ok-700)',   icon: 'Heart'    },
-    inpatient:   { label: 'Inpatient',    color: 'var(--info-700)', icon: 'Bed'      },
-    duplicates:  { label: 'Duplicates',   color: 'var(--warn-700)', icon: 'Warning'  },
-};
 
 // Set<patient_id> for every patient the PATIENT_DUP_RULE_V2 scan calls the same
 // person as another card (same PINFL, or same phone AND same first name).
@@ -162,9 +156,15 @@ function mount() {
     refs.revealed = false;
 
     refs.tbody = h('tbody');
+    // V3120_FIX — КНОПКА, ВЕДУЩАЯ В ОТКАЗ, НЕ РИСУЕТСЯ. «Создать пациента»,
+    // «Быстрая регистрация» и «Госпитализация» стояли у врача, медсестры,
+    // лаборанта и кассира, а окно (или сервер) отвечало им отказом. Окна по-
+    // прежнему спрашивают право сами (PATIENT_CREATE_GATE_V1) — это второй
+    // замок, а не единственный.
+    const mayCreate = canCreatePatient();
     refs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
         'Пациент не найден. ',
-        h('button', { class: 'link-btn', type: 'button', onclick: () => openCreatePatient() }, 'Создать нового пациента?'),
+        mayCreate ? h('button', { class: 'link-btn', type: 'button', onclick: () => openCreatePatient() }, 'Создать нового пациента?') : null,
     );
     refs.pagerLabel = h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '');
     refs.totalEl = h('span', { class: 'cell-strong' }, '0');
@@ -199,7 +199,7 @@ function mount() {
     // views/fast-registration.js). Пульс — по домашнему правилу
     // (admin-views.css): движение тенью, и ровно одна пульсирующая вещь на
     // экран; других на списке пациентов нет.
-    const fastRegBtn = h('button', {
+    const fastRegBtn = !mayCreate ? null : h('button', {
         class: 'btn btn-primary btn-sm btn-pulse', type: 'button', 'data-onb': 'fast-registration',
         title: 'Быстрая регистрация: пациент → услуги и врач → счёт → печать',
         onclick: () => openFastRegistration(),
@@ -223,7 +223,7 @@ function mount() {
     }, Icon('ChevronRight', { size: 14 }));
 
     const sortSegmented = h('div', { class: 'segmented' },
-        sortBtn('recent', 'Sort: Recent'),
+        sortBtn('recent', 'Сначала новые'),   // V3120_FIX — было «Sort: Recent»
         sortBtn('az',     'A–Z'),
         sortBtn('mrn',    'MRN'),
     );
@@ -244,7 +244,7 @@ function mount() {
     // осталось — и переехало туда, где регистратор и стоит. Окно заявки само
     // ищет пациента: на приёмном покое человека чаще находят по фамилии, чем
     // открывают его карту.
-    const admitBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-act': 'admission',
+    const admitBtn = !canOrderAdmission() ? null : h('button', { class: 'btn btn-outline btn-sm', type: 'button', 'data-act': 'admission',
         title: 'Заявка на госпитализацию — пациент выбирается в окне заявки',
         onclick: () => import('./admission-modal.js?v=inp2').then((m) => m.openAdmissionOrderModal({})) },
         Icon('Bed', { size: 14 }), ' Госпитализация');
@@ -253,7 +253,7 @@ function mount() {
     // кнопку меню, а меню её лишилось (NO_TABS_APPBAR_V1) — подсказка молча
     // перестала показываться. Метка нужна именно как метка: класс у кнопки
     // общий с десятками других, и селектор по нему нашёл бы не ту.
-    const createBtn = h('button', { class: 'btn btn-primary btn-sm', 'data-onb': 'create-patient',
+    const createBtn = !mayCreate ? null : h('button', { class: 'btn btn-primary btn-sm', 'data-onb': 'create-patient',
         onclick: () => openCreatePatient() },
         Icon('Plus', { size: 14 }), ' Создать пациента');
 
@@ -538,9 +538,13 @@ async function ensureTelegramLinked() {
     telegramLinked = new Set();
     if (!canView('telegram-chat')) return telegramLinked;
     try {
-        const { data, error } = await supabase.rpc('telegram_chats_list', {});
+        const { data, error } = await supabase.rpc('telegram_chats_list', { limit: 300 });
         if (error) throw new Error(error.message);
-        for (const chat of (data || [])) {
+        // V3120_FIX — сервер отвечает { chats, unread, folders }, а не массивом:
+        // цикл по самому ответу падал («not iterable»), и отметка Telegram не
+        // появлялась ни у кого.
+        const chats = Array.isArray(data) ? data : ((data && data.chats) || []);
+        for (const chat of chats) {
             for (const pt of (chat && chat.patients) || []) {
                 if (pt && pt.id != null) telegramLinked.add(String(pt.id));
             }
@@ -733,7 +737,8 @@ function openMergeModal() {
 
 function paintPager() {
     const totalPages = Math.max(1, Math.ceil(state.total / PAGE_SIZE));
-    refs.pagerLabel.textContent = `Page ${state.page} of ${totalPages} · ${state.total} patient${state.total === 1 ? '' : 's'}`;
+    // V3120_FIX — было «Page 1 of … · … patients» по-английски посреди русского экрана.
+    refs.pagerLabel.textContent = trf('Страница {page} из {pages} · пациентов: {n}', { page: state.page, pages: totalPages, n: state.total });
     refs.totalEl.textContent = String(state.total);
     setDisabled(refs.prevBtn, state.page <= 1);
     setDisabled(refs.nextBtn, state.page >= totalPages);
@@ -869,8 +874,8 @@ function patientRow(p) {
             last ? h('div', { class: 'pt-when-main' }, last) : noneCell('—'),
             h('div', { class: 'pt-when-sub' }, visits > 0 ? trf('визитов: {n}', { n: visits }) : 'визитов не было'),
         ),
-        // 5 — Баланс  (real balance not joined → zero-state «0 сум», never a fake ±)
-        h('td', { style: { textAlign: 'right' } }, balanceCell(p.balance)),
+        // 5 — Баланс: депозит пациента, под ним — долг (V3120_FIX).
+        h('td', { style: { textAlign: 'right' } }, balanceCell(p)),
         // 6 — Регистратор: настоящее имя того, кто завёл карту, а если его в
         // карте нет — так и сказано словом, а не прочерком, который на каждой
         // строке читается как «экран сломан».
@@ -887,14 +892,23 @@ function patientRow(p) {
 }
 
 // Balance cell — Aurora BalanceCell port. v>0 green +, v<0 red −, v===0 «0 сум».
-// In B1 the paged list never joins invoices, so balance is always 0 (zero-state).
-// We keep the ± branches so the cell lights up correctly once invoices land.
-function balanceCell(v) {
-    const n = Number(v) || 0;
+//
+// V3120_FIX — ДВА ЧИСЛА, А НЕ ОДНО. patient_base_aggregates отдаёт `balance`
+// (депозит — деньги пациента на счету клиники) и `debt` (неоплаченные счета
+// без страховой). Одно знаковое число прятало долг: пациент с депозитом
+// 500 000 и долгом 375 000 выглядел «+125 000», и регистратура не знала, что
+// за ним долг. Сверху — депозит, под ним красным — долг, если он есть.
+export function balanceCell(p) {
+    const wallet = Number(p && p.balance) || 0;
+    const debt = Number(p && p.debt) || 0;
     const rfmt = (x) => Math.abs(x).toLocaleString('ru-RU');
-    if (n > 0) return h('span', { class: 'bal pos num' }, `+${rfmt(n)}`);
-    if (n < 0) return h('span', { class: 'bal neg num' }, `−${rfmt(n)}`);
-    return h('span', { class: 'bal zero num' }, '0 ', h('small', null, 'сум'));
+    const main = wallet > 0 ? h('span', { class: 'bal pos num', title: tr('Депозит пациента') }, `+${rfmt(wallet)}`)
+        : wallet < 0 ? h('span', { class: 'bal neg num' }, `−${rfmt(wallet)}`)
+        : h('span', { class: 'bal zero num' }, '0 ', h('small', null, 'сум'));
+    if (!(debt > 0)) return main;
+    return h('div', null, main,
+        h('div', { class: 'bal neg num pt-bal-debt', title: tr('Неоплаченные счета пациента (без страховой)') },
+            trf('долг {sum}', { sum: rfmt(debt) })));
 }
 
 function displayStatus(p) {

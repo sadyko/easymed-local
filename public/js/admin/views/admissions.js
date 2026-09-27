@@ -52,7 +52,7 @@ import { dateNumeric } from '../../shared/date-words.js';   // WARD_TABLE_V1 —
 import { isModuleAllowed, hasActorRole } from '../permissions.js';
 import { currentUser } from '../data.js';   // ADMITTING_DOCTOR_V1 — «это мой пациент на осмотр?»
 import { openAdmissionOrderModal, openAdmissionBedPicker, openAdmissionCancelModal, openAdmissionCard,
-         openAdmissionReviewModal, openAdmissionAttendingModal, goToMarSheet, goToCaseOverview } from './admission-modal.js?v=inp5';
+         openAdmissionReviewModal, openAdmissionAttendingModal, goToMarSheet, goToCaseOverview, canOpenCaseOverview, canOpenMarSheet } from './admission-modal.js?v=inp5';
 // Те же адреса модулей, что у admin.js: одна строка импорта — один экземпляр
 // модуля (у ward-beds.js есть свой `state`, и второй экземпляр развёл бы
 // фильтры доски на две копии).
@@ -433,6 +433,8 @@ function wardTable({ rows, can, reload, onNavigate }) {
                     Icon('User', { size: 13 }), ' ', tr('Назначить лечащего врача'))
                 : Tag(tr('Ждёт лечащего врача'), { kind: 'warn', dot: true });
         }
+        // V3120_CLEANUP — лист назначений закрыт этой роли: кнопки нет (вела в «Нет доступа»).
+        if (!canOpenMarSheet()) return null;
         return h('button', { class: 'btn btn-sm', type: 'button', onclick: (ev) => { stop(ev); goToMarSheet(a.id, onNavigate); } },
             Icon('Pill', { size: 13 }), ' ', tr('Лист назначений'));
     }
@@ -443,14 +445,20 @@ function wardTable({ rows, can, reload, onNavigate }) {
         const open = () => goToCaseOverview(a.id, onNavigate);
         const tone = a.status === 'active' ? 'ok' : a.status === 'discharging' ? 'info' : 'warn';
         const attending = a.attending && a.attending.full_name;
-        return h('tr', {
+        // V3120_CLEANUP — обзор госпитализации закрыт этой роли (регистратура):
+        // строка не кликается и имя не кнопка — раньше клик вёл в «Нет доступа».
+        const canOpen = canOpenCaseOverview();
+        const who = [
+            h('span', { class: ('ar-av ' + pastelFor(p.id || a.patient_id || name)).trim(), 'aria-hidden': 'true' }, initials(name)),
+            h('span', { class: 'ar-id' }, p.mrn || ''),
+            h('span', { class: 'ar-name' }, name)];
+        return h('tr', canOpen ? {
             class: 'ar-row', tabindex: '0', onclick: open,
             onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { if (e.preventDefault) e.preventDefault(); open(); } },
-        },
-            h('td', null, h('button', { class: 'wt-name', type: 'button', title: tr('Открыть обзор госпитализации'), onclick: (ev) => { stop(ev); open(); } },
-                h('span', { class: ('ar-av ' + pastelFor(p.id || a.patient_id || name)).trim(), 'aria-hidden': 'true' }, initials(name)),
-                h('span', { class: 'ar-id' }, p.mrn || ''),
-                h('span', { class: 'ar-name' }, name))),
+        } : { class: 'ar-row ar-row--static' },
+            h('td', null, canOpen
+                ? h('button', { class: 'wt-name', type: 'button', title: tr('Открыть обзор госпитализации'), onclick: (ev) => { stop(ev); open(); } }, ...who)
+                : h('span', { class: 'wt-name' }, ...who)),
             h('td', { class: 'ar-nowrap' }, stayText(a) || '—'),
             h('td', { class: 'ar-nowrap' }, WARD_COLS[2].text(a) || '—'),
             h('td', null, a.admission_diagnosis || '—'),

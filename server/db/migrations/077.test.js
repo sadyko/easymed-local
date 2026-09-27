@@ -161,7 +161,9 @@ test('077 восстанавливает оба индекса, снесённы
   const db = fresh();
   const names = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='crm_requests' AND sql IS NOT NULL")
     .all().map((r) => r.name).sort();
-  assert.deepEqual(names, ['idx_crm_requests_patient', 'idx_crm_requests_status']);
+  // Проверяются ДВА восстановленных, а не весь список: позже индексы этой
+  // таблице добавляют и другие миграции (210 — created_at, assigned_to).
+  for (const n of ['idx_crm_requests_patient', 'idx_crm_requests_status']) assert.ok(names.includes(n), 'нет ' + n);
 });
 
 // --------------------------------------------------------------------------

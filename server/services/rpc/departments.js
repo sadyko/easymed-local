@@ -23,6 +23,7 @@
 // отдела переходят сюда только если экран прислал подтверждение (reassign):
 // сервер отказывает словами, называя, где он сейчас, и экран показывает вопрос
 // «Переназначить?». Молча ничего не переезжает.
+import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
 import { hasAnyRole, effectiveRoles, canViewSection, canEditSection } from '../roles.js';
 import { grantLevel, grantAllows } from '../grants.js';
 import { levelAllows } from '../../../public/js/shared/permission-catalog.js';
@@ -64,7 +65,7 @@ function canForm(db, user) {
 
 function requireForm(db, user, what) {
   if (canForm(db, user)) return;
-  throw new RpcError(`${what} — недоступно вашей роли. Права выдаёт администратор в «Настройки → Роли».`, 403);
+  throw rpcT(RpcError, '{what} — недоступно вашей роли. Права выдаёт администратор в «Настройки → Роли».', { what }, 403);
 }
 
 /** Своё: состоит в отделе или руководит им. */

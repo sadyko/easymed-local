@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { getRpc } from '../services/rpc/index.js';
 import { isReadOnlyRpc, isAlwaysAllowedRpc, lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
+import { constraintRefusal, errorBody, fillTemplate } from '../services/server-message.js';   // V3120_I18N
+import { dispatchRpc } from '../services/report-pool.js';   // V3120_PERF — тяжёлые отчёты в пуле потоков
 
 export function rpcRoutes(db) {
   const r = Router();
@@ -29,12 +31,27 @@ export function rpcRoutes(db) {
     }
     const handler = getRpc(req.params.name);
     if (!handler) {
-      return res.status(501).json({ error: { code: 'rpc_not_implemented', message: 'RPC not implemented: ' + req.params.name } });
+      // V3120_I18N — по-русски и с шаблоном: код rpc_not_implemented — то, по
+      // чему экраны узнают этот ответ, текст — только для человека.
+      const template = 'Сервер не знает операцию {name} — обновите программу.';
+      const params = { name: req.params.name };
+      return res.status(501).json({ error: { code: 'rpc_not_implemented', message: fillTemplate(template, params), template, params } });
     }
     try {
-      const data = await handler(db, req.body || {}, req.user);
+      // V3120_PERF — отчёт (POOLED_RPCS) считается в потоке отчётов, если пул
+      // включён при запуске; иначе — здесь же, как прежде.
+      const data = await dispatchRpc(db, req.params.name, handler, req.body || {}, req.user);
       return res.json({ data });
     } catch (e) {
+      // V3120_I18N — нарушение ограничения SQLite внутри обработчика — это
+      // отказ по данным (409/400) русскими словами, а не безликое «ошибка
+      // сервера». Код SQLite не прячется: sqlite_code и detail едут рядом.
+      const refusal = !e.status && constraintRefusal(e);
+      if (refusal) {
+        return res.status(refusal.status).json({ error: {
+          ...errorBody(refusal.code, refusal), sqlite_code: refusal.sqlite_code, detail: refusal.detail,
+        } });
+      }
       const status = e.status || 500;
       if (status >= 500) {
         console.error('[rpc]', req.params.name, e.message);
@@ -46,15 +63,18 @@ export function rpcRoutes(db) {
         // registry key), not user data — same reasoning as the RPC name
         // already being safe to console.log above.
         recordEvent(db, 'server_error', '/api/rpc/' + req.params.name);
-        return res.status(500).json({ error: { code: 'internal', message: 'RPC failed.' } });
+        return res.status(500).json({ error: { code: 'internal', message: 'Ошибка сервера. Повторите позже.' } });
       }
       // Код обработчика (например, ref_row_missing из service_save) важнее
       // статусного: по нему диалог переводит ошибку с динамикой через словарь
       // (шаблон + params, подстановка после перевода). До этого маршрут
       // перезаписывал code статусом, и любой назначенный код умирал здесь.
+      // V3120_I18N — template (фраза с {дырками}, ключ словаря) едет вместе с
+      // params, чтобы клиент перевёл собранную фразу, а не показал её по-русски.
       return res.status(status).json({ error: {
         code: e.code || (status === 403 ? 'forbidden' : 'bad_request'),
         message: e.message,
+        ...(e.template ? { template: e.template } : {}),
         ...(e.params ? { params: e.params } : {}),
       } });
     }

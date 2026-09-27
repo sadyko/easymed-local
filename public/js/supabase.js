@@ -3,8 +3,12 @@
 // any external host). The ~52 files importing { supabase } keep working.
 import { makeDbClient } from './db-client.js';
 import { makeAuthBridge } from './db-auth.js';
+import { rememberServerMessage } from './shared/server-messages.js';   // V3120_I18N
+// V3120_FINAL (I5) — запрос, отправленный, пока человек ничего не делает
+// (опросы экранов), помечается фоновым и не продлевает сессию.
+import { withActivityHeaders } from './shared/user-activity.js';
 
-const httpFetch = (...a) => fetch(...a);   // browser global; bound at call time
+const httpFetch = (url, init = {}) => fetch(url, { ...init, headers: withActivityHeaders(init.headers) });   // browser global; bound at call time
 
 const dbClient = makeDbClient({ fetch: httpFetch, base: '/api/db' });
 const auth     = makeAuthBridge({ fetch: httpFetch, base: '/api/auth' });
@@ -13,12 +17,13 @@ async function rpc(name, args = {}) {
     try {
         const res = await fetch('/api/rpc/' + encodeURIComponent(name), {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withActivityHeaders({ 'Content-Type': 'application/json' }),
             credentials: 'same-origin',
             body: JSON.stringify(args || {}),
         });
         const json = await res.json().catch(() => ({}));
-        if (!res.ok) return { data: null, error: json.error || { message: 'RPC failed (' + res.status + ')' } };
+        // V3120_I18N — собранная фраза с шаблоном запоминается, и tr() переведёт её.
+        if (!res.ok) { rememberServerMessage(json.error); return { data: null, error: json.error || { message: 'RPC failed (' + res.status + ')' } }; }
         return { data: json.data ?? null, error: null };
     } catch (e) {
         return { data: null, error: { message: String(e) } };
@@ -49,7 +54,7 @@ const storage = {
                     const res = await fetch(storageObjectUrl(bucket, objectPath), {
                         method: 'POST',
                         credentials: 'same-origin',
-                        headers: { 'Content-Type': (file && file.type) || 'application/octet-stream' },
+                        headers: withActivityHeaders({ 'Content-Type': (file && file.type) || 'application/octet-stream' }),
                         body: file,
                     });
                     if (!res.ok) {
@@ -71,7 +76,7 @@ const storage = {
                 const list = Array.isArray(paths) ? paths : [paths];
                 try {
                     for (const p of list) {
-                        await fetch(storageObjectUrl(bucket, p), { method: 'DELETE', credentials: 'same-origin' });
+                        await fetch(storageObjectUrl(bucket, p), { method: 'DELETE', credentials: 'same-origin', headers: withActivityHeaders({}) });
                     }
                     return { data: {}, error: null };
                 } catch (e) {

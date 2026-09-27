@@ -6,12 +6,15 @@ import path from 'node:path';
 import { openDb } from './connection.js';
 import { migrate } from './migrate.js';
 import { backupBeforeMigrate, pruneBackups } from './backup.js';
-import { tmpDir } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
+import { tmpDir, closeOnExit, closeRegistered } from '../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
+
+// V3120_FIX — базы закрываются по окончании файла, чтобы папки удалялись.
+test.after(closeRegistered);
 
 function workspace() {
   const dir = tmpDir('em-bk-');
   const dbPath = path.join(dir, 'easymed.db');
-  const db = openDb(dbPath);
+  const db = closeOnExit(openDb(dbPath));   // V3120_FIX — открытая база не даёт Windows удалить папку
   migrate(db);
   db.prepare("INSERT INTO users (username, password_hash, full_name, role) VALUES ('a','x','A','admin')").run();
   return { dir, dbPath, db };
@@ -22,7 +25,7 @@ test('a backup is taken and is a usable database', async () => {
   const out = await backupBeforeMigrate(db, dbPath, '2.4.0');
   assert.ok(fs.existsSync(out), 'the file exists');
 
-  const restored = openDb(out);
+  const restored = closeOnExit(openDb(out));
   assert.equal(restored.prepare('SELECT COUNT(*) n FROM users').get().n, 1,
     'the copy opens and holds the same rows — a raw file copy of a WAL database can lose the last writes');
 });
@@ -51,8 +54,8 @@ test('two backups starting at the same instant do not collide', async () => {
     backupBeforeMigrate(db, dbPath, '2.4.0'),
   ]);
   assert.notEqual(a, b, 'racing starts must not both claim the same backup filename');
-  assert.equal(openDb(a).prepare('SELECT COUNT(*) n FROM users').get().n, 1, 'first backup is intact');
-  assert.equal(openDb(b).prepare('SELECT COUNT(*) n FROM users').get().n, 1, 'second backup is intact, not corrupted by the race');
+  assert.equal(closeOnExit(openDb(a)).prepare('SELECT COUNT(*) n FROM users').get().n, 1, 'first backup is intact');
+  assert.equal(closeOnExit(openDb(b)).prepare('SELECT COUNT(*) n FROM users').get().n, 1, 'second backup is intact, not corrupted by the race');
 });
 
 test('old backups are pruned but the newest are kept', async () => {
@@ -90,7 +93,7 @@ test('the backup is a standalone checkpointed file, independent of the original 
   fs.rmSync(dbPath + '-shm', { force: true });
 
   assert.ok(!fs.existsSync(out + '-wal'), 'the backup itself carries no WAL sidecar — it is one file');
-  const restored = openDb(out);
+  const restored = closeOnExit(openDb(out));
   assert.equal(restored.prepare('SELECT COUNT(*) n FROM users').get().n, 2,
     'both rows are in the backup even though the original WAL that held the second one is gone');
 });

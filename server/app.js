@@ -27,16 +27,62 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   // PERF_GZIP_V1 — до статики и до маршрутов: сжимаем и файлы, и ответы API.
   app.use(compress());
   app.use((req, res, next) => { res.set('X-Content-Type-Options', 'nosniff'); next(); });
+  // V3120_FIX (M6) — ЗАГОЛОВКИ БЕЗОПАСНОСТИ ПРИЛОЖЕНИЯ.
+  //   • X-Frame-Options / frame-ancestors: чужой сайт не вставит программу в
+  //     свою рамку и не «прокликает» её за сотрудника;
+  //   • connect-src 'self': страница ходит только на свой сервер — украденное
+  //     скриптом некуда отправить;
+  //   • скрипты — только свои. 'unsafe-inline' остаётся ради печатных окон:
+  //     они пишутся в about:blank с коротким window.onload=print, а такое окно
+  //     наследует эту политику; внешних скриптов и eval нет;
+  //   • стили инлайн (экраны задают style= повсюду), картинки data:/blob:
+  //     (логотип бланка, фото с камеры), шрифты — свои;
+  //   • рамки — свои и https (предпросмотр страницы клиники на Symptex).
+  // Хранилище файлов (routes/storage.js) для «скачиваемых» файлов ставит свою,
+  // ещё более строгую политику поверх этой.
+  const CSP = [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    "media-src 'self' data: blob: https:",
+    "connect-src 'self'",
+    "frame-src 'self' blob: data: https:",
+    "worker-src 'self' blob:",
+    "object-src 'self'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'self'",
+  ].join('; ');
+  app.use((req, res, next) => {
+    res.set('X-Frame-Options', 'SAMEORIGIN');
+    res.set('Content-Security-Policy', CSP);
+    res.set('Referrer-Policy', 'same-origin');
+    next();
+  });
   // PROCUREMENT_REDESIGN_V1 — Excel import posts up to MAX_IMPORT_ROWS (2000)
   // rows in one RPC call; 2000 Cyrillic rows is ~460 KB. Registered before the
   // global /api parser so body-parser's first-wins rule gives RPCs the larger
   // budget while every other endpoint keeps the tight 100 KB limit.
   app.use('/api/rpc', express.json({ limit: '2mb' }));
   app.use('/api', express.json({ limit: '100kb' }));
+  // V3120_FIX — /api/health ТРОГАЕТ БАЗУ. Раньше он отвечал {ok:true}, даже
+  // когда база была недоступна (файл заблокирован, диск отвалился), и проверка
+  // «новая версия поднялась» после обновления (boot-confirm.js) подтверждала
+  // бы сервер, который не может принять ни одного пациента. Один тривиальный
+  // SELECT — микросекунды. Стоит ДО attachUser/attachControl: при мёртвой базе
+  // они сами бросили бы 500 раньше, чем здесь успели бы сказать 503.
+  app.get('/api/health', (req, res) => {
+    try {
+      db.prepare('SELECT 1 AS ok').get();
+    } catch (e) {
+      return res.status(503).json({ ok: false, error: { code: 'db_unavailable', message: 'База данных недоступна: ' + (e && e.message) } });
+    }
+    res.json({ ok: true });
+  });
   app.use(attachUser(db));
   app.use(attachControl(db, dataDir));   // LICENCE_CORE_V1
-
-  app.get('/api/health', (req, res) => res.json({ ok: true }));
   app.use('/api/auth', authRoutes(db));
   // TELEPHONY_V1 — Binotel's webhook receivers, in /api/auth's slot: BEFORE
   // requirePasswordChanged and carrying no requireAuth, because Binotel sends
@@ -69,7 +115,7 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   app.use('/api/storage', requireAuth, storageRoutes(path.join(dataDir, 'storage'), db));
 
   // Unknown /api paths answer JSON, not an HTML 404 page.
-  app.use('/api', (req, res) => res.status(404).json({ error: { code: 'not_found', message: 'Unknown API endpoint.' } }));
+  app.use('/api', (req, res) => res.status(404).json({ error: { code: 'not_found', message: 'Неизвестный адрес API.' } }));
 
   // extensions:['html'] gives clean URLs: /users serves public/users.html.
   // NO_STALE_CODE_V1 — код всегда сверяется с сервером.
@@ -125,8 +171,8 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
     if (res.headersSent) return next(err);
     res.status(status).json({
       error: status >= 500
-        ? { code: 'internal', message: 'Server error.' }
-        : { code: 'bad_request', message: 'Malformed request.' },
+        ? { code: 'internal', message: 'Ошибка сервера. Повторите позже.' }
+        : { code: 'bad_request', message: 'Некорректный запрос.' },
     });
   });
 

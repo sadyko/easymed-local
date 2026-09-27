@@ -51,7 +51,7 @@ import { radioChips, phoneInput, mailInput } from './registration.js?v=aug17f';
 // изменение / удаление). ЗДЕСЬ ТОЛЬКО ОФОРМЛЕНИЕ отказа: настоящий отказ выдаёт
 // сервер (server/services/rpc/patient-card.js), и `tabAccess` ниже — это его
 // ответ, а не мнение браузера. Спрятанная вкладка защитой не является.
-import { currentRoleLabel, hasActorRole } from '../permissions.js';
+import { currentRoleLabel, hasActorRole, canOrderAdmission, isRouteAllowed } from '../permissions.js';   // V3120_FIX — canOrderAdmission, isRouteAllowed
 
 // LIVE_AUDIT_FIX_V1 (C6) — зеркало REMOVE_SERVICE_ROLES (server/services/rpc/
 // billing.js): «Заменить услугу» и «Убрать» исполняет сервер только
@@ -466,7 +466,9 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
             // на карте чаще заводят услуги, чем кладут в стационар, — но она
             // здесь, а не в подменю: искать её через три клика на приёмном
             // покое некогда.
-            h('button', {
+            // V3120_FIX — и только тому, кому сервер оформит заявку: у
+            // медсестры, лаборанта и кассира кнопка вела в «недоступно вашей роли».
+            canOrderAdmission() ? h('button', {
                 type: 'button',
                 onclick: () => openAdmissionOrderModal({
                     patientId: patient?.id, patientName: patient?.full_name, patientMrn: patient?.mrn,
@@ -478,7 +480,7 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                     border: '1px solid rgba(255,255,255,0.35)', background: 'rgba(255,255,255,0.14)',
                     color: '#fff', fontFamily: 'inherit', fontSize: '13.5px', fontWeight: 700,
                 },
-            }, Icon('Bed', { size: 14 }), 'Госпитализация'),
+            }, Icon('Bed', { size: 14 }), 'Госпитализация') : null,
             // PATIENT_TAB_ACCESS_V1 — заведение услуг пациенту = «Изменение»
             // вкладки «Услуги» (мастер пишет visit_services и счёт).
             // LIVE_AUDIT_FIX_V1 — и только роли, которым сервер даёт вставку строк
@@ -1400,11 +1402,12 @@ export function renderPatientCard(container, { onNavigate, payload } = {}) {
                         h('div', { class: 'ph-adm-t' }, h('b', null, a.admission_no || ('#' + a.id)), ' ',
                             Tag(admissionStatusLabel(a.status), { kind: active ? 'ok' : (a.status === 'ordered' ? 'warn' : ''), dot: true })),
                         h('div', { class: 'muted ph-adm-m' }, meta)),
+                    // V3120_FIX — входы в историю болезни только тому, кому её откроют.
                     h('div', { class: 'ph-adm-acts' },
-                        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => onNavigate && onNavigate('case-overview', { admissionId: a.id }) },
-                            Icon('Activity', { size: 13 }), ' ', tr('Обзор')),
-                        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => onNavigate && onNavigate('case-file', { admissionId: a.id }) },
-                            Icon('Doc', { size: 13 }), ' ', tr('Документы')))),
+                        isRouteAllowed('case-overview') ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => onNavigate && onNavigate('case-overview', { admissionId: a.id }) },
+                            Icon('Activity', { size: 13 }), ' ', tr('Обзор')) : null,
+                        isRouteAllowed('case-file') ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => onNavigate && onNavigate('case-file', { admissionId: a.id }) },
+                            Icon('Doc', { size: 13 }), ' ', tr('Документы')) : null)),
                 own.length
                     ? h('div', { class: 'ph-files' }, ...own.map((f) => h('div', { class: 'ph-file' },
                         h('span', { class: 'ph-file-ic' }, Icon('Doc', { size: 14 })),
@@ -2000,9 +2003,14 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
         // идут за вопросом «сколько денег у этого пациента», и предоплата — часть
         // ответа: счета показывают, сколько он ДОЛЖЕН, депозит — сколько уже внёс.
         let bal = { balance: 0, rows: [] };
-        try { bal = await rpcDeposits('deposit_balance', { patient_id: patient.id }); }
-        catch (e) { /* модалка работает и без депозитов */ }
-        const pending = (bal.rows || []).filter(d => d.status === 'pending');
+        // V3120_FIX — ОТКАЗ НЕ РИСУЕТСЯ НУЛЁМ. Здесь стоял пустой catch, и
+        // роль, которой сервер депозиты не показывает, видела «Депозит 0 сум» —
+        // ответ «денег нет», хотя правда «вам не видно». Регистратура повторила
+        // бы этот ноль пациенту. Теперь отказ назван, а взнос не предлагается.
+        let balRefused = null;   // null | 'forbidden' | 'failed'
+        try { bal = (await rpcDeposits('deposit_balance', { patient_id: patient.id })) || bal; }
+        catch (e) { balRefused = (e && (e.code === 'forbidden' || e.status === 403)) ? 'forbidden' : 'failed'; }
+        const pending = balRefused ? [] : (bal.rows || []).filter(d => d.status === 'pending');
 
         const depLine = h('div', {
             style: {
@@ -2012,7 +2020,10 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             },
         },
             h('span', { style: { fontSize: '12.5px', color: 'var(--ink-700)' } }, 'Депозит (предоплата):'),
-            h('b', { class: 'num', style: { fontSize: '15px', color: 'var(--primary-700)' } }, fmtPrice(bal.balance), ' сум'),
+            balRefused
+                ? h('span', { class: 'muted', style: { fontSize: '12.5px' } },
+                    Icon('Lock', { size: 12 }), ' ', balRefused === 'forbidden' ? 'нет доступа' : 'не удалось загрузить')
+                : h('b', { class: 'num', style: { fontSize: '15px', color: 'var(--primary-700)' } }, fmtPrice(bal.balance), ' сум'),
             // Заведённый, но не принятый кассой депозит — не деньги. Показываем
             // отдельно, иначе регистратура ждала бы, что баланс уже вырос.
             pending.length
@@ -2021,12 +2032,12 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
                 : null,
             // Четвёртая проверка денег, I1 — долг по кэшбэку: кэшбэк за
             // возвращённую оплату был потрачен, новые деньги сначала закрывают долг.
-            Number(bal.debt) > 0
+            !balRefused && Number(bal.debt) > 0
                 ? h('span', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--crit-600)' } },
                     trf('Долг по кэшбэку: {sum} сум', { sum: fmtPrice(bal.debt) }))
                 : null);
 
-        const depBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' },
+        const depBtn = balRefused ? null : h('button', { class: 'btn btn-primary btn-sm', type: 'button' },
             Icon('Wallet', { size: 13 }), ' Внести депозит');
 
         const modal = infoModal('Баланс счёта · история расчётов', 'Wallet', [
@@ -2035,8 +2046,8 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             rows.length
                 ? h('div', { style: { maxHeight: '52vh', overflow: 'auto' } }, ...rows)
                 : h('div', { class: 'empty' }, 'Счетов и оплат пока нет.'),
-        ], [depBtn]);
-        depBtn.addEventListener('click', () => { modal.close(); openDepositModal(); });
+        ], depBtn ? [depBtn] : []);
+        if (depBtn) depBtn.addEventListener('click', () => { modal.close(); openDepositModal(); });
     }
 
     // DEPOSIT_V1 — форма взноса. Регистратура вводит только СУММУ: денег она не
@@ -2048,6 +2059,13 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
     // передумывают. Регистратура, называя способ заранее, лишь угадывала — а
     // касса потом сверяла ящик с этой догадкой.
     function openDepositModal() {
+        // V3120_FIX — ОДНО ОКНО = ОДИН ДЕПОЗИТ. Ключ рождается при открытии окна
+        // и едет с каждым нажатием «Отправить в кассу»: двойной щелчок или
+        // повтор после обрыва связи сервер узнаёт по ключу и второй депозит не
+        // заводит (idempotency_key, create_deposit).
+        // V3120_FINAL (I1) — ключ живёт до УДАЧНОЙ отправки: после неё — новый
+        // (сервер отвечает прежней квитанцией, только если форма та же).
+        let idempotencyKey = newIdempotencyKey();
         const amountInp = h('input', { type: 'number', min: '0', step: '1000', placeholder: '0' });
         const noteInp = h('input', { type: 'text', placeholder: 'Комментарий (необязательно)' });
         const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Отправить в кассу');
@@ -2067,10 +2085,13 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
             try {
                 const res = await rpcDeposits('create_deposit', {
                     patient_id: patient.id, amount, notes: noteInp.value.trim(),
+                    idempotency_key: idempotencyKey,   // V3120_FIX
                 });
+                idempotencyKey = newIdempotencyKey();
                 const num = (res && res.deposit && res.deposit.deposit_number) || '';
                 m.close();
                 toast(trf('Депозит {no} на {sum} сум отправлен в кассу.', { no: num, sum: fmtPrice(amount) }), 'ok');
+                import('./receipt-print.js?v=rp1').then((rp) => rp.printSlip(printableSheet, { kind: 'deposit', deposit: (res && res.deposit) || { deposit_number: num, amount, status: 'pending' }, patient })).catch(() => {});   // V3120_FIX — квитанция: депозит ждёт оплаты в кассе
                 reload();
             } catch (e) {
                 toast(trf('Не удалось создать депозит: {msg}', { msg: (e && e.message) || e }), 'fail');
@@ -2081,9 +2102,21 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
         amountInp.focus();
     }
 
+    // V3120_FIX — ключ идемпотентности: 8–80 символов [A-Za-z0-9_-].
+    // crypto.randomUUID есть только в «безопасном контексте» (https или
+    // localhost), а клиника открывает программу по http://<IP в сети> —
+    // поэтому запасной путь через getRandomValues, который есть везде.
+    function newIdempotencyKey() {
+        try { if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') return globalThis.crypto.randomUUID(); } catch (_) { /* ниже запасной путь */ }
+        const b = new Uint8Array(16);
+        try { globalThis.crypto.getRandomValues(b); } catch (_) { for (let i = 0; i < b.length; i++) b[i] = Math.floor(Math.random() * 256); }
+        return 'dep-' + Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+    }
+
     async function rpcDeposits(name, args) {
         const { data, error } = await supabase.rpc(name, args || {});
-        if (error) throw new Error(error.message || 'RPC failed');
+        // V3120_FIX — код отказа едет с ошибкой: «нет доступа» и «сбой» — разные ответы.
+        if (error) { const err = new Error(error.message || 'RPC failed'); err.code = error.code; throw err; }
         return data;
     }
 
@@ -2176,7 +2209,7 @@ ${blocks || '<div style="color:#889;font-size:13px">Документ подпи�
         let genderVal   = ['male', 'female', 'other'].includes(p.gender) ? p.gender : 'other';
         const genderChips = radioChips('__edit_gender',
             [['male', 'Мужской'], ['female', 'Женский'], ['other', 'Другое']],
-            () => genderVal, (v) => { genderVal = v; }, { nowrap: true });
+            () => genderVal, (v) => { genderVal = v; }, { nowrap: true, label: 'Пол' });   // V3120_FIX — подпись группы (было «__edit_gender» в aria-label)
         const bloodInp  = h('input', { type: 'text', value: p.blood_type || '', placeholder: 'напр. O(I) Rh+' });
         // Телефоны — тот же контрол с флагом/группировкой, что в регистрации.
         // PHONE_INPUT_V1 — контрол сам держит своё состояние: значение заводим

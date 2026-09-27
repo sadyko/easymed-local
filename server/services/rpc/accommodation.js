@@ -17,6 +17,7 @@
 // стационара. Одна копия на оба конца (см. shared/accommodation-line.js).
 import { ACCOMMODATION_NOTE_PREFIX } from '../../../public/js/shared/accommodation-line.js';
 import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';   // INPATIENT_MONEY_FIX_V1
+import { notRefundReleasedSql, refundReleasedSql } from '../domain/pay-releases.js';   // V3120_FINAL
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -33,7 +34,7 @@ const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 function requireRole(user, allowed) {
   const roles = [user && user.role, ...((user && user.extra_roles) || [])].filter(Boolean);
   if (!roles.some((r) => allowed.includes(r))) {
-    throw new RpcError('Your role is not allowed to perform this action.', 403);
+    throw new RpcError('Вашей роли это действие недоступно.', 403);
   }
 }
 
@@ -48,7 +49,20 @@ function requireRole(user, allowed) {
 // Клиника берёт за койку по дням: пациент оплатил первые сутки, назавтра ему
 // выставляют вторые. Значит вносить надо ОСТАТОК, а не весь срок заново —
 // иначе второй счёт повторил бы первый.
+//
+// V3120_FINAL — сутки, отпущенные со счёта С ВОЗВРАТОМ (pay-releases.js), тоже
+// «уже выставлены»: пациенту за них вернули деньги, и кнопка не должна
+// выставлять их снова как новые. Выставить их заново — явный выбор кассы.
 function invoicedUnits(db, admissionId) {
+  const r = db.prepare(
+    `SELECT COALESCE(SUM(quantity), 0) n FROM admission_services s
+       WHERE s.admission_id = ? AND s.notes LIKE '${ACCOMMODATION_NOTE_PREFIX}%'
+         AND (s.invoice_item_id IS NOT NULL OR ${refundReleasedSql('s')})`).get(admissionId);
+  return Math.max(0, Number(r && r.n) || 0);
+}
+// Только то, что лежит в счёте (за этим стоят деньги): по нему правка даты и
+// выписка задним числом отказывают «лишних N».
+function inInvoiceUnits(db, admissionId) {
   const r = db.prepare(
     `SELECT COALESCE(SUM(quantity), 0) n FROM admission_services
        WHERE admission_id = ? AND notes LIKE '${ACCOMMODATION_NOTE_PREFIX}%'
@@ -117,11 +131,69 @@ function staySegments(db, adm, startMs, endMs) {
   return segs;
 }
 
-export function computeAccommodation(db, admission) {
+// V3120_FIX — КАЖДЫЕ СУТКИ ПО КОЙКЕ, ГДЕ ПАЦИЕНТ ПРОВЁЛ БОЛЬШУЮ ИХ ЧАСТЬ.
+//
+// Раньше кусок пребывания получал единицы по отметкам «24 часа от
+// поступления»: сутки доставались той койке, на которой пациент оказался в
+// момент отметки. Двадцать минут в VIP через полночь отметки стоили полных VIP-
+// суток, а ночь в VIP между отметками не стоила ничего (осмотр 2026-09-27, S9).
+//
+// Теперь срок режется на единицы от поступления: сутки k — это отрезок
+// [поступление + k·24 ч, поступление + (k+1)·24 ч) (почасовой режим — час). Цена
+// единицы — ставка койки, где пациент пробыл БОЛЬШЕ ВСЕГО внутри этого отрезка
+// (время на одной койке складывается, даже если он на неё возвращался); при
+// равенстве — койка, на которой он был позже. Число единиц не меняется:
+// сутки — max(1, floor(часы / 24)) (правило владельца), часы — max(1, ceil).
+// Хвост короче суток в счёт не идёт, как и раньше; одни-единственные сутки
+// короткого пребывания — это весь его срок.
+//
+// Палаты с разным режимом (суточная и почасовая) в одном пребывании —
+// редкость; у них остаётся прежний счёт по кускам: у суток и часа нет общей
+// единицы, по которой можно было бы выбрать «большую часть».
+function unitBlocks(db, admission, startMs, endMs) {
+  const segs = staySegments(db, admission, startMs, endMs).map((s) => ({ ...s, ...rateOf(db, s.ward, s.bed) }));
+  const one = (s) => ({ ward: s.ward, bed: s.bed, mode: s.mode, rate: s.rate,
+    bedId: s.bed ? s.bed.id : null, wardId: s.ward ? s.ward.id : null });
+  const modes = new Set(segs.map((s) => s.mode));
+  const out = [];
+  if (modes.size > 1) {
+    for (const s of segs) {
+      const n = Math.max(0, unitsAt(s.mode, s.to - startMs) - unitsAt(s.mode, s.from - startMs));
+      for (let i = 0; i < n; i++) out.push(one(s));
+    }
+    if (!out.length) out.push(one(segs[0]));
+    return out;
+  }
+  const mode = segs[0].mode;
+  const unit = mode === 'daily' ? DAY_MS : HOUR_MS;
+  const n = Math.max(1, unitsAt(mode, endMs - startMs));
+  for (let k = 0; k < n; k++) {
+    const from = startMs + k * unit;
+    const to = Math.min(from + unit, endMs);
+    const time = new Map();   // койка → { мс внутри единицы, последний кусок }
+    segs.forEach((s, idx) => {
+      const key = (s.bed ? s.bed.id : '-') + '|' + (s.ward ? s.ward.id : '-');
+      const ms = Math.max(0, Math.min(s.to, to) - Math.max(s.from, from));
+      const cur = time.get(key) || { ms: 0, idx: -1, seg: s };
+      cur.ms += ms;
+      if (ms > 0 || cur.idx < 0) { cur.idx = idx; cur.seg = s; }
+      time.set(key, cur);
+    });
+    let best = null;
+    for (const v of time.values()) {
+      if (!best || v.ms > best.ms || (v.ms === best.ms && v.idx > best.idx)) best = v;
+    }
+    out.push(one(best.seg));
+  }
+  return out;
+}
+
+export function computeAccommodation(db, admission, opts = {}) {
   const current = rateOf(db, admission.ward_id, admission.bed_id);
   const storedPct = Number(admission.accommodation_discount_percent);
   const discountPct = Number.isFinite(storedPct) ? Math.min(100, Math.max(0, storedPct)) : 0;
   const billedUnits = invoicedUnits(db, admission.id);
+  const invoicedOnly = inInvoiceUnits(db, admission.id);   // V3120_FINAL
 
   // INPATIENT_MONEY_FIX_V1 (D4) — за койку платит тот, кто на ней ЛЕЖАЛ.
   // Заявка без койки ('ordered') и отменённая госпитализация проживания не
@@ -131,7 +203,12 @@ export function computeAccommodation(db, admission) {
   const startMs = parseDbTime(admission.admitted_at);
   let endMs = null, blocked = null;
   if (admission.status === 'cancelled') blocked = 'cancelled';
-  else if (IN_BED_STATUSES.includes(admission.status)) endMs = nowMs;
+  else if (IN_BED_STATUSES.includes(admission.status)) {
+    // V3120_FIX — выписка с указанным временем считает срок ДО него, а не до
+    // «сейчас»: медсестра оформляет в 16:00 выписку, случившуюся в 12:00.
+    const until = Number(opts && opts.endMs);
+    endMs = Number.isFinite(until) ? Math.min(until, nowMs) : nowMs;
+  }
   else if (admission.status === 'discharged') {
     const d = parseDbTime(admission.discharged_at);
     endMs = Number.isFinite(d) ? Math.min(d, nowMs) : nowMs;
@@ -140,35 +217,31 @@ export function computeAccommodation(db, admission) {
 
   if (blocked) {
     return { ward: current.ward, bed: current.bed, mode: current.mode, rate: current.rate, units: 0, stayUnits: 0,
-      billedUnits, gross: 0, net: 0, discountPct, blocked, segments: [] };
+      billedUnits, invoicedUnits: invoicedOnly, gross: 0, net: 0, stayGross: 0, discountPct, blocked, segments: [] };
   }
 
-  const segs = staySegments(db, admission, startMs, Math.max(startMs, endMs)).map((s) => {
-    const r = rateOf(db, s.ward, s.bed);
-    const units = Math.max(0, unitsAt(r.mode, s.to - startMs) - unitsAt(r.mode, s.from - startMs));
-    return { ...s, ...r, units };
-  });
-  // «Не меньше одних суток (часа) за всё пребывание» — они идут первой койке.
-  if (segs.reduce((a, s) => a + s.units, 0) < 1) segs[0].units = 1;
-  const stayUnits = segs.reduce((a, s) => a + s.units, 0);
+  const blocks = unitBlocks(db, admission, startMs, Math.max(startMs, endMs));
+  const stayUnits = blocks.length;
+  // Весь срок деньгами (без скидки) — для прямой выписки v0.8.0, которая
+  // называет сумму за всё пребывание тем же правилом (V3120_FIX).
+  const stayGross = round2(blocks.reduce((n, b) => n + b.rate, 0));
 
   // Выставленные единицы — самые ранние: счёт идёт за сутками по порядку.
-  let skip = billedUnits;
+  // Остаток собирается в куски подряд идущих суток одной койки — они и
+  // попадают в описание строки (NOTE).
   let dueUnits = 0, gross = 0;
   const dueParts = [];
-  for (const s of segs) {
-    const take = Math.min(s.units, skip);
-    skip -= take;
-    const due = s.units - take;
-    if (due > 0) {
-      dueUnits += due;
-      gross += due * s.rate;
-      dueParts.push({ ward: s.ward, bed: s.bed, mode: s.mode, rate: s.rate, units: due });
-    }
+  for (const b of blocks.slice(Math.min(billedUnits, blocks.length))) {
+    dueUnits += 1;
+    gross += b.rate;
+    const last = dueParts[dueParts.length - 1];
+    if (last && last.bedId === b.bedId && last.wardId === b.wardId && last.rate === b.rate && last.mode === b.mode) last.units += 1;
+    else dueParts.push({ ward: b.ward, bed: b.bed, mode: b.mode, rate: b.rate, units: 1, bedId: b.bedId, wardId: b.wardId });
   }
+  for (const part of dueParts) { delete part.bedId; delete part.wardId; }
   gross = round2(gross);
   if (!Number.isFinite(gross) || gross > MAX_MONEY) {
-    throw new RpcError('computed accommodation charge is too large.', 400);
+    throw new RpcError('Сумма проживания получилась слишком большой — проверьте ставки палаты и дату поступления.', 400);
   }
   const net = round2(gross * (1 - discountPct / 100));
   // Ставка строки: на одной койке — её ставка; на нескольких — средняя, а
@@ -179,7 +252,7 @@ export function computeAccommodation(db, admission) {
   // экране. Полный срок отдаётся отдельно (stayUnits), чтобы карточка могла
   // сказать «лежит 3 сут., выставлено 1, к оплате 2».
   return { ward: current.ward, bed: current.bed, mode: current.mode, rate, units: dueUnits, stayUnits, billedUnits,
-    gross, net, discountPct, blocked: null, segments: dueParts };
+    invoicedUnits: invoicedOnly, gross, net, stayGross, discountPct, blocked: null, segments: dueParts };
 }
 
 // Проживание узнаётся по notes-метке: своего типа у admission_services нет, а
@@ -192,10 +265,10 @@ export function computeAccommodation(db, admission) {
 // ними деньги, — но и мешать новым они не должны.
 function accommodationLine(db, admissionId) {
   return db.prepare(
-    `SELECT * FROM admission_services
-       WHERE admission_id = ? AND notes LIKE '${ACCOMMODATION_NOTE_PREFIX}%'
-         AND invoice_item_id IS NULL
-       ORDER BY id DESC LIMIT 1`
+    `SELECT * FROM admission_services s
+       WHERE s.admission_id = ? AND s.notes LIKE '${ACCOMMODATION_NOTE_PREFIX}%'
+         AND s.invoice_item_id IS NULL AND ${notRefundReleasedSql('s')}
+       ORDER BY s.id DESC LIMIT 1`
   ).get(admissionId);
 }
 
@@ -206,10 +279,10 @@ function accommodationLine(db, admissionId) {
 // сутки оказывались в счёте дважды (1 + 3 = 400 000 за трое суток).
 function openAccommodationLines(db, admissionId) {
   return db.prepare(
-    `SELECT * FROM admission_services
-       WHERE admission_id = ? AND notes LIKE '${ACCOMMODATION_NOTE_PREFIX}%'
-         AND invoice_item_id IS NULL
-       ORDER BY id`
+    `SELECT * FROM admission_services s
+       WHERE s.admission_id = ? AND s.notes LIKE '${ACCOMMODATION_NOTE_PREFIX}%'
+         AND s.invoice_item_id IS NULL AND ${notRefundReleasedSql('s')}
+       ORDER BY s.id`
   ).all(admissionId);
 }
 
@@ -235,50 +308,85 @@ function blockedMessage(c) {
 export function billAccommodation(db, args, user) {
   requireRole(user, BILL_ROLES);
   const id = Number(args && args.admission_id);
-  if (!Number.isInteger(id) || id <= 0) throw new RpcError('admission_id must be a positive integer.', 400);
+  if (!Number.isInteger(id) || id <= 0) throw new RpcError('Не указана госпитализация.', 400);
+  return db.transaction(() => billAccommodationCore(db, id))();
+}
 
-  return db.transaction(() => {
-    const adm = db.prepare('SELECT * FROM admissions WHERE id = ?').get(id);
-    if (!adm) throw new RpcError('admission not found.', 400);
+// V3120_FIX — то же внесение без проверки роли и с концом срока на выбор:
+// оформление выписки с долгом доначисляет проживание ДО ФАКТИЧЕСКОГО ВРЕМЕНИ
+// выписки (opts.endMs), и право там уже проверено маршрутом выписки. С
+// opts.quiet «вносить нечего» — не ошибка, а null: выписке нечего доначислять.
+export function billAccommodationCore(db, id, opts = {}) {
+  const quiet = !!(opts && opts.quiet);
+  const adm = db.prepare('SELECT * FROM admissions WHERE id = ?').get(id);
+  if (!adm) throw new RpcError('Госпитализация не найдена.', 400);
 
-    const c = computeAccommodation(db, adm);
-    if (c.blocked) throw new RpcError(blockedMessage(c), 400);
-    // ACCOMMODATION_DAILY_V1 — весь срок уже оплачен вперёд: вносить нечего.
-    // Это не ошибка настройки, а нормальный конец дня, поэтому и текст другой.
-    if (c.units <= 0) {
-      throw new RpcError('За этот срок проживание уже выставлено — новых суток пока нет.', 400);
-    }
-    // Бесплатная койка не создаёт строку на ноль: пустая позиция в счёте только
-    // путает кассира, а «не берём денег» и так выражается тем, что строки нет.
-    if (!(c.net > 0)) {
-      throw new RpcError('Ставка проживания нулевая — вносить в счёт нечего.', 400);
-    }
+  const c = computeAccommodation(db, adm, opts);
+  if (c.blocked) { if (quiet) return null; throw new RpcError(blockedMessage(c), 400); }
+  // Только открытые строки: выставленные сюда не попадают. Остаток срока
+  // пишется в ОДНУ из них (последнюю), остальные удаляются — они и так
+  // входят в этот остаток, потому что не выставлены (D2).
+  const open = openAccommodationLines(db, id);
+  // V3120_FINAL — opts.refreshOnly: только привести УЖЕ внесённое к сроку
+  // (правка даты поступления, выписка задним числом), но не вносить нового —
+  // «не внесли — не выставили» (ACCOMMODATION_AS_SERVICE_V1).
+  if (opts && opts.refreshOnly && !open.length) return null;
+  // V3120_FINAL (I4) — ВНОСИТЬ НЕЧЕГО, А ОТКРЫТАЯ СТРОКА ЛЕЖИТ. Срок стал
+  // короче (дату поступления сдвинули позже, выписка задним числом), и сутки,
+  // внесённые раньше, по новому сроку не наступали. Прежде строка оставалась
+  // как была — и следующий счёт (выписка со счётом, касса, долг) выставлял
+  // её: 400 000 за одни сутки. Невыставленная строка — ещё не деньги, её
+  // снимают здесь же; бесплатная теперь койка — так же.
+  if (c.units <= 0 || !(c.net > 0)) {
+    for (const l of open) db.prepare('DELETE FROM admission_services WHERE id = ?').run(l.id);
+    if (open.length) return { line: null, removed: open.length, updated: true };
+  }
+  // ACCOMMODATION_DAILY_V1 — весь срок уже оплачен вперёд: вносить нечего.
+  // Это не ошибка настройки, а нормальный конец дня, поэтому и текст другой.
+  if (c.units <= 0) {
+    if (quiet) return null;
+    throw new RpcError('За этот срок проживание уже выставлено — новых суток пока нет.', 400);
+  }
+  // Бесплатная койка не создаёт строку на ноль: пустая позиция в счёте только
+  // путает кассира, а «не берём денег» и так выражается тем, что строки нет.
+  if (!(c.net > 0)) {
+    if (quiet) return null;
+    throw new RpcError('Ставка проживания нулевая — вносить в счёт нечего.', 400);
+  }
 
-    // Только открытые строки: выставленные сюда не попадают. Остаток срока
-    // пишется в ОДНУ из них (последнюю), остальные удаляются — они и так
-    // входят в этот остаток, потому что не выставлены (D2).
-    const open = openAccommodationLines(db, id);
-    const existing = open.length ? open[open.length - 1] : null;
-    for (const extra of open.slice(0, -1)) {
-      db.prepare('DELETE FROM admission_services WHERE id = ?').run(extra.id);
-    }
+  const existing = open.length ? open[open.length - 1] : null;
+  for (const extra of open.slice(0, -1)) {
+    db.prepare('DELETE FROM admission_services WHERE id = ?').run(extra.id);
+  }
 
-    if (existing) {
-      db.prepare(`UPDATE admission_services
-                     SET ward_id = ?, bed_id = ?, quantity = ?, unit_price = ?, total = ?, notes = ?
-                   WHERE id = ?`)
-        .run(c.ward ? c.ward.id : null, c.bed ? c.bed.id : null, c.units, c.rate, c.net, NOTE(c), existing.id);
-      return { line: db.prepare('SELECT * FROM admission_services WHERE id = ?').get(existing.id), updated: true };
-    }
+  if (existing) {
+    db.prepare(`UPDATE admission_services
+                   SET ward_id = ?, bed_id = ?, quantity = ?, unit_price = ?, total = ?, notes = ?
+                 WHERE id = ?`)
+      .run(c.ward ? c.ward.id : null, c.bed ? c.bed.id : null, c.units, c.rate, c.net, NOTE(c), existing.id);
+    return { line: db.prepare('SELECT * FROM admission_services WHERE id = ?').get(existing.id), updated: true };
+  }
 
-    const info = db.prepare(`
-      INSERT INTO admission_services
-        (admission_id, service_id, ward_id, bed_id, quantity, unit_price, total, status, notes, billable)
-      VALUES (?, NULL, ?, ?, ?, ?, ?, 'added', ?, 1)
-    `).run(id, c.ward ? c.ward.id : null, c.bed ? c.bed.id : null, c.units, c.rate, c.net, NOTE(c));
+  const info = db.prepare(`
+    INSERT INTO admission_services
+      (admission_id, service_id, ward_id, bed_id, quantity, unit_price, total, status, notes, billable)
+    VALUES (?, NULL, ?, ?, ?, ?, ?, 'added', ?, 1)
+  `).run(id, c.ward ? c.ward.id : null, c.bed ? c.bed.id : null, c.units, c.rate, c.net, NOTE(c));
 
-    return { line: db.prepare('SELECT * FROM admission_services WHERE id = ?').get(info.lastInsertRowid), updated: false };
-  })();
+  return { line: db.prepare('SELECT * FROM admission_services WHERE id = ?').get(info.lastInsertRowid), updated: false };
+}
+
+// V3120_FIX — СКОЛЬКО ПРОЖИВАНИЯ ЕЩЁ НЕ ВОШЛО В ОСТАТОК. admissionBalance видит
+// только строки; сутки без строки (или открытая строка, устаревшая с момента
+// внесения) — это разница между расчётом на конец срока и тем, что уже лежит
+// открытыми строками. Её показывает окно выписки и добавляет выписка с долгом.
+export function accommodationGapOf(db, adm, opts = {}) {
+  const c = computeAccommodation(db, adm, opts);
+  if (c.blocked || c.units <= 0 || !(c.net > 0)) return { units: 0, amount: 0, mode: c.mode };
+  const open = openAccommodationLines(db, adm.id);
+  const openUnits = open.reduce((n, l) => n + (Number(l.quantity) || 0), 0);
+  const openSum = open.reduce((n, l) => n + (Number(l.total) || 0), 0);
+  return { units: Math.max(0, c.units - openUnits), amount: round2(c.net - openSum), mode: c.mode };
 }
 
 // Убрать внесённое проживание — пока оно не попало в счёт. За выставленной
@@ -287,7 +395,7 @@ export function billAccommodation(db, args, user) {
 export function unbillAccommodation(db, args, user) {
   requireRole(user, BILL_ROLES);
   const id = Number(args && args.admission_id);
-  if (!Number.isInteger(id) || id <= 0) throw new RpcError('admission_id must be a positive integer.', 400);
+  if (!Number.isInteger(id) || id <= 0) throw new RpcError('Не указана госпитализация.', 400);
 
   return db.transaction(() => {
     // ACCOMMODATION_DAILY_V1 — accommodationLine отдаёт только ОТКРЫТУЮ строку,
@@ -315,9 +423,9 @@ export function unbillAccommodation(db, args, user) {
 export function accommodationState(db, args, user) {
   requireRole(user, [...BILL_ROLES, 'lab']);   // смотреть можно всем, кто видит палату
   const id = Number(args && args.admission_id);
-  if (!Number.isInteger(id) || id <= 0) throw new RpcError('admission_id must be a positive integer.', 400);
+  if (!Number.isInteger(id) || id <= 0) throw new RpcError('Не указана госпитализация.', 400);
   const adm = db.prepare('SELECT * FROM admissions WHERE id = ?').get(id);
-  if (!adm) throw new RpcError('admission not found.', 400);
+  if (!adm) throw new RpcError('Госпитализация не найдена.', 400);
 
   const c = computeAccommodation(db, adm);
   const line = accommodationLine(db, id);
