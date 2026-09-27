@@ -30,7 +30,7 @@ import { roundQty, factorOf, toBase, settleQty, coversQty, unitsOf } from '../do
 // (свой подотчёт → кабинет → отдел → склад). Импорт взаимный (inventory.js
 // берёт отсюда moveHolding/moveWarehouse), и это безопасно: обе стороны
 // зовут друг друга только внутри функций, не при загрузке модуля.
-import { holdingChain, planSources, applySources } from './inventory.js';
+import { holdingChain, planSources, applySources, restoreSources } from './inventory.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -374,16 +374,11 @@ export function voidHoldingDispense(db, args, user) {
     const mvs = db.prepare(`SELECT * FROM stock_movements WHERE reference_type = ? AND reference_id = ? AND kind = 'dispense' ORDER BY id`)
       .all(refType, id);
     if (!mvs.length) throw new RpcError('Движение склада по этой строке не найдено.', 400);
-    for (const mv of mvs) {
-      const holder = mv.holder_type ? { type: mv.holder_type, id: mv.holder_id } : null;
-      // Back to where it came from: the holder the movement names, or the warehouse.
-      if (holder) moveHolding(db, holder, line.clinic_item_id, -mv.qty);   // mv.qty is negative
-      else moveWarehouse(db, line.clinic_item_id, -mv.qty);
-      db.prepare(`
-        INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, created_by, holder_type, holder_id)
-        VALUES (?, 'void', ?, ?, ?, ?, ?, ?, ?)`).run(line.clinic_item_id, -mv.qty, mv.unit_cost, refType, id, user.id, holder ? holder.type : null, holder ? holder.id : null);
-
-    }
+    // Back to where it came from — ОДНОЙ функцией с остальными отменами
+    // (inventory.js restoreSources). V3120_FINAL (M4): там же правило «полка
+    // отключённого возврат не принимает — на склад, с подписью в журнале»;
+    // своя копия цикла здесь его не знала.
+    restoreSources(db, refType, id, line.clinic_item_id, line.quantity, user);
     db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(id);
     return { ok: true };
   });
@@ -487,6 +482,10 @@ export function holdingReturn(db, args, user) {
       if (!(Number.isFinite(q) && q > 0 && q <= MAX_QTY)) throw new RpcError('Количество — положительное число.', 400);
       if (!coversQty(have, q, cf)) throw rpcT(RpcError, 'Больше, чем числится: у «{holder}» {have} — {name}.', { holder: from.name, have: `${roundQty(have)} ${unit || ''}`.trim(), name: product.name }, 400);
       qty = Math.min(q, have);
+      // V3120_FINAL (M1) — остаток после возврата — пыль (у медсестры 1.0005,
+      // сдаёт 1): полка обнулится правилом пыли, и на склад должно прийти
+      // ВСЁ, что с неё ушло, а не запрошенное — иначе 0.0005 пропадают.
+      if (settleQty(have - qty, cf) === 0) qty = have;
     }
 
     let to = null;

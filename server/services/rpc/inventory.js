@@ -68,6 +68,13 @@ function requireQuantity(quantity) {
   }
 }
 
+// V3120_FINAL (M3) — количество, которое хранение (шесть знаков) превращает в
+// ноль, не списывает ничего, но строку заводило: «выдано 0,0000001 шт.» без
+// движения склада. Отказ — тем же словом, что у dispense_from_holding.
+function requireStoredQty(baseQty) {
+  if (!(roundQty(baseQty) > 0)) throw new RpcError('Количество слишком мало.', 400);
+}
+
 function optPosInt(v, name) {
   if (v === undefined || v === null) {
     return null;
@@ -242,11 +249,19 @@ export function applySources(db, picks, productId, user, refType, refId, note = 
   const cost = db.prepare('SELECT avg_cost FROM products WHERE id = ?').get(productId);
   const unitCost = cost ? cost.avg_cost : null;
   for (const p of picks) {
-    if (p.type === WAREHOUSE) {
-      moveWarehouse(db, productId, -p.qty);
-    } else {
-      moveHolding(db, { type: p.type, id: p.id }, productId, -p.qty, user.id);   // STOCK_REQUEST_V1 — кто списал
-    }
+    // V3120_FINAL (M1) — С ПОЛКИ УШЛО СТОЛЬКО, СКОЛЬКО УШЛО. Правило пыли
+    // (settleQty) обнуляет остаток меньше допуска: на полке 1.0005, взяли 1 —
+    // полка 0, а движение писало −1. Отмена (restoreSources) читает движения и
+    // возвращала 1: 0.0005 пропадали при каждой такой выдаче. Теперь движение
+    // (и сама часть — её видит ответ) несёт разницу «было − стало».
+    const before = p.type === WAREHOUSE
+      ? Number((db.prepare('SELECT on_hand FROM products WHERE id = ?').get(productId) || {}).on_hand) || 0
+      : Number((db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?').get(p.type, p.id, productId) || {}).qty) || 0;
+    const after = p.type === WAREHOUSE
+      ? moveWarehouse(db, productId, -p.qty)
+      : moveHolding(db, { type: p.type, id: p.id }, productId, -p.qty, user.id);   // STOCK_REQUEST_V1 — кто списал
+    const taken = roundQty(before - after);
+    if (taken > 0) p.qty = taken;
     db.prepare(`
       INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, holder_type, holder_id)
       VALUES (?, 'dispense', ?, ?, ?, ?, ?, ?, ?, ?)
@@ -260,6 +275,21 @@ export function applySources(db, picks, productId, user, refType, refId, note = 
  * этой строки, а не угадываются. Движений нет вовсе (строка старше журнала) —
  * возвращаем на склад, как делали раньше.
  */
+// V3120_FINAL (M4) — держатель выключен: уволенный сотрудник, выключенный
+// кабинет или отдел. Нет строки — тоже «выключен» (удалён).
+function holderDisabled(db, type, id) {
+  try {
+    if (type === 'staff') {
+      const u = db.prepare('SELECT is_active FROM users WHERE id = ?').get(id);
+      return !u || Number(u.is_active) === 0;
+    }
+    const table = type === 'room' ? 'rooms' : type === 'department' ? 'departments' : null;
+    if (!table) return false;
+    const r = db.prepare(`SELECT active FROM ${table} WHERE id = ?`).get(id);
+    return !r || Number(r.active) === 0;
+  } catch { return false; }
+}
+
 export function restoreSources(db, refType, refId, productId, fallbackQty, user) {
   const rows = db.prepare(`
     SELECT holder_type, holder_id, qty, unit_cost FROM stock_movements
@@ -272,15 +302,25 @@ export function restoreSources(db, refType, refId, productId, fallbackQty, user)
     ? rows.map((r) => ({ type: r.holder_type || WAREHOUSE, id: r.holder_type ? r.holder_id : null, qty: roundQty(-r.qty), unit_cost: r.unit_cost }))
     : (roundQty(fallbackQty) > 0 ? [{ type: WAREHOUSE, id: null, qty: roundQty(fallbackQty), unit_cost: null }] : []);
   for (const p of parts) {
+    // V3120_FINAL (M4) — ПОЛКА ОТКЛЮЧЁННОГО НЕ ПРИНИМАЕТ ВОЗВРАТ. Сотрудник
+    // уволен (или кабинет / отдел выключен) — его подотчёт сдан или передан, и
+    // возврат на его полку повесил бы товар на того, кого в клинике нет: ни
+    // выдать его, ни увидеть «Мои запасы». Такая часть идёт на склад, и
+    // журнал это называет.
+    let note = '';
+    if (p.type !== WAREHOUSE && holderDisabled(db, p.type, p.id)) {
+      note = `возврат на склад: ${p.type === 'staff' ? 'сотрудник' : p.type === 'room' ? 'кабинет' : 'отдел'} отключён`;
+      p.type = WAREHOUSE; p.id = null;
+    }
     if (p.type === WAREHOUSE) {
       moveWarehouse(db, productId, p.qty);
     } else {
       moveHolding(db, { type: p.type, id: p.id }, productId, p.qty);
     }
     db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, created_by, holder_type, holder_id)
-      VALUES (?, 'void', ?, ?, ?, ?, ?, ?, ?)
-    `).run(productId, p.qty, p.unit_cost == null ? null : p.unit_cost, refType, refId, user.id, p.type === WAREHOUSE ? null : p.type, p.type === WAREHOUSE ? null : p.id);
+      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, holder_type, holder_id)
+      VALUES (?, 'void', ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(productId, p.qty, p.unit_cost == null ? null : p.unit_cost, refType, refId, note, user.id, p.type === WAREHOUSE ? null : p.type, p.type === WAREHOUSE ? null : p.id);
     delete p.unit_cost;
   }
   return parts;
@@ -338,6 +378,7 @@ export function dispenseItem(db, args, user) {
   }
   const quantity = args && args.quantity;
   requireQuantity(quantity);
+  requireStoredQty(quantity);   // V3120_FINAL (M3)
   const visitId = optPosInt(args && args.visit_id, 'visit_id');
   const doctorId = optPosInt(args && args.doctor_id, 'doctor_id');
 
@@ -508,7 +549,7 @@ export function dispenseAdmissionItemCore(db, args, user) {
 
     const cf = inUnits ? factorOf(product) : 1;
     const baseQty = inUnits ? toBase(quantity, cf) : quantity;
-    if (!(baseQty > 0)) throw new RpcError('Количество слишком мало.', 400);
+    requireStoredQty(baseQty);   // V3120_FINAL (M3) — было `> 0`: 1e-7 проходило, списания не было
 
     // HOLDINGS_FIRST_V1 — свой подотчёт → свой кабинет → отдел палаты → свой
     // отдел → склад. Не хватило нигде — отказ со словами, до первой записи.
