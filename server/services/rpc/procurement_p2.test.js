@@ -63,14 +63,14 @@ test('receive_purchase_order: rejects over-receipt, re-receipt, bad role — not
   const po = db.prepare("INSERT INTO purchase_orders (po_number) VALUES ('PO-3')").run().lastInsertRowid;
   const li = db.prepare("INSERT INTO purchase_order_items (po_id, product_id, qty_ordered, unit_cost) VALUES (?,?,?,?)").run(po, p, 10, 5).lastInsertRowid;
 
-  assert.throws(() => receivePurchaseOrder(db, { po_id: po, lines: [{ po_item_id: li, qty: 999 }] }, inv), /exceeds/i);
-  assert.throws(() => receivePurchaseOrder(db, { po_id: po }, doc), /(role|allow)/i);
-  assert.throws(() => receivePurchaseOrder(db, { po_id: 9999 }, inv), /not found/i);
+  assert.throws(() => receivePurchaseOrder(db, { po_id: po, lines: [{ po_item_id: li, qty: 999 }] }, inv), /больше, чем осталось/i);
+  assert.throws(() => receivePurchaseOrder(db, { po_id: po }, doc), /(role|allow|роль)/i);
+  assert.throws(() => receivePurchaseOrder(db, { po_id: 9999 }, inv), /не найден/i);
   assert.equal(db.prepare('SELECT on_hand FROM products WHERE id=?').get(p).on_hand, 0);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM stock_movements').get().n, 0);
 
   receivePurchaseOrder(db, { po_id: po }, inv);   // now fully received
-  assert.throws(() => receivePurchaseOrder(db, { po_id: po }, inv), /already/i);
+  assert.throws(() => receivePurchaseOrder(db, { po_id: po }, inv), /уже принят/i);
 });
 
 // ---------------------------------------------------------------------------
@@ -97,14 +97,14 @@ test('approve_requisition_and_issue: rejects insufficient stock, double-issue, b
   const req = db.prepare("INSERT INTO purchase_requisitions (req_number, status) VALUES ('REQ-2','submitted')").run().lastInsertRowid;
   db.prepare("INSERT INTO purchase_requisition_items (req_id, product_id, qty) VALUES (?,?,?)").run(req, p, 40);
 
-  assert.throws(() => approveRequisitionAndIssue(db, { req_id: req }, inv), /insufficient/i);
+  assert.throws(() => approveRequisitionAndIssue(db, { req_id: req }, inv), /Недостаточно на складе/i);
   assert.equal(db.prepare('SELECT on_hand FROM products WHERE id=?').get(p).on_hand, 10);   // untouched
-  assert.throws(() => approveRequisitionAndIssue(db, { req_id: req }, doc), /(role|allow)/i);
+  assert.throws(() => approveRequisitionAndIssue(db, { req_id: req }, doc), /(role|allow|роль)/i);
 
   // enough stock now -> issues, then a second issue is refused
   db.prepare('UPDATE products SET on_hand = 100 WHERE id=?').run(p);
   approveRequisitionAndIssue(db, { req_id: req }, inv);
-  assert.throws(() => approveRequisitionAndIssue(db, { req_id: req }, inv), /cannot be issued/i);
+  assert.throws(() => approveRequisitionAndIssue(db, { req_id: req }, inv), /нельзя выдать/i);
 });
 
 // ---------------------------------------------------------------------------
@@ -140,7 +140,7 @@ test('post_stock_count: ignores uncounted lines, no movement on zero variance, r
   assert.equal(r.adjustments.length, 1);   // only the counted line
   assert.equal(db.prepare('SELECT COUNT(*) n FROM stock_movements').get().n, 0);   // zero variance -> no movement
   assert.equal(db.prepare('SELECT on_hand FROM products WHERE id=?').get(p2).on_hand, 5);   // uncounted untouched
-  assert.throws(() => postStockCount(db, { count_id: cnt }, inv), /already/i);
+  assert.throws(() => postStockCount(db, { count_id: cnt }, inv), /уже проведена/i);
 });
 
 test('post_stock_count: rejects a count with no counted lines, and bad role', () => {
@@ -148,6 +148,6 @@ test('post_stock_count: rejects a count with no counted lines, and bad role', ()
   const p = product(db, 10, 10);
   const cnt = db.prepare("INSERT INTO stock_counts (count_number, status) VALUES ('SC-3','open')").run().lastInsertRowid;
   db.prepare("INSERT INTO stock_count_items (count_id, product_id, system_qty, counted_qty) VALUES (?,?,?,NULL)").run(cnt, p, 10);
-  assert.throws(() => postStockCount(db, { count_id: cnt }, inv), /no counted/i);
-  assert.throws(() => postStockCount(db, { count_id: cnt }, doc), /(role|allow)/i);
+  assert.throws(() => postStockCount(db, { count_id: cnt }, inv), /нет посчитанных/i);
+  assert.throws(() => postStockCount(db, { count_id: cnt }, doc), /(role|allow|роль)/i);
 });

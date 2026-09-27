@@ -14,7 +14,10 @@ import { assertOwnBuilding } from './billing.js';
 import { assertAdmissionAtLeast } from './inpatient-flow.js';
 // HOLDINGS_V1 — what the ward already holds is used before the warehouse.
 // HOLDINGS_FIRST_V1 — и это теперь правило ВСЕХ дверей, а не флаг двух из них.
-import { moveHolding, WAREHOUSE } from './holdings.js';
+import { moveHolding, moveWarehouse, WAREHOUSE } from './holdings.js';
+// STOCK_QTY_V1 (V3120_FIX) — шесть знаков вместо round2 на количествах: см.
+// domain/stock-qty.js. Деньги (цена, сумма) округляются до сотых, как прежде.
+import { roundQty, factorOf, toBase, coversQty, qtyTolerance } from '../domain/stock-qty.js';
 // EXPIRY_BALANCE_V1 — «выдача и списание просроченного предупреждают» (владелец
 // 23.09). Предупреждение НЕ отказ: оно едет в ответе рядом с результатом, и
 // считает его сервер — иначе каждая из восьми дверей сказала бы своими словами.
@@ -40,7 +43,7 @@ const VOID_ROLES = ['admin', 'inventory', 'doctor', 'nurse'];
 function requireRole(user, allowed) {
   // MULTI_ROLE_SERVER_V1 — extras count too, not the primary role alone.
   if (!hasAnyRole(user, allowed)) {
-    throw new RpcError('Your role is not allowed to perform this action.', 403);
+    throw new RpcError('Ваша роль не может выполнить это действие.', 403);
   }
 }
 
@@ -60,7 +63,7 @@ const MAX_QTY = 1_000_000;
 
 function requireQuantity(quantity) {
   if (!(typeof quantity === 'number' && Number.isFinite(quantity) && quantity > 0 && quantity <= MAX_QTY)) {
-    throw new RpcError(`quantity must be a positive number up to ${MAX_QTY}.`, 400);
+    throw new RpcError(`Количество — положительное число, не больше ${MAX_QTY}.`, 400);
   }
 }
 
@@ -69,7 +72,7 @@ function optPosInt(v, name) {
     return null;
   }
   if (!(Number.isInteger(v) && v > 0)) {
-    throw new RpcError(`${name} must be a positive integer.`, 400);
+    throw new RpcError(`${name}: нужно положительное целое число.`, 400);
   }
   return v;
 }
@@ -186,41 +189,59 @@ export function planSources(db, chain, product, quantity) {
   const q = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?');
   const picks = [];
   const found = { staff: 0, room: 0, department: 0 };
-  let need = round2(quantity);
+  // STOCK_QTY_V1 (V3120_FIX) — было round2: таблетка из пачки по 30 (1/30 =
+  // 0.0333…) списывалась как 0.03, и из тридцати выходила тридцать третья.
+  const cf = factorOf(product);
+  const tol = qtyTolerance(cf);
+  let need = roundQty(quantity);
   for (const c of chain) {
     const row = q.get(c.type, c.id, product.id);
-    const have = row && row.qty > 1e-9 ? round2(row.qty) : 0;
+    const have = row && row.qty > 0 ? roundQty(row.qty) : 0;
     if (!have) continue;
-    found[c.type] = round2(found[c.type] + have);
-    if (need <= 1e-9) continue;                 // дальше идём только чтобы отказ знал правду
-    const take = round2(Math.min(have, need));
-    if (take <= 1e-9) continue;
+    found[c.type] = roundQty(found[c.type] + have);
+    if (need <= 0) continue;                    // дальше идём только чтобы отказ знал правду
+    // «Последняя таблетка» в пределах допуска забирает ровно остаток.
+    const take = need <= have + tol ? Math.min(have, need) : have;
+    if (take <= 0) continue;
     picks.push({ type: c.type, id: c.id, qty: take });
-    need = round2(need - take);
+    need = need <= have + tol ? 0 : roundQty(need - take);
   }
-  if (need > 1e-9) {
-    const onHand = round2(product.on_hand);
-    if (onHand + 1e-9 < need) {
+  if (need > 0) {
+    const onHand = roundQty(product.on_hand);
+    // V3120_FIX — ОТКЛЮЧЁННЫЙ ТОВАР, одно правило на все двери: уже выданное
+    // (подотчёт, кабинет, отдел) довыдать можно — выше цепочка его и взяла;
+    // СО СКЛАДА отключённый товар не выдаётся. Раньше dispense_item отказывал
+    // целиком (даже когда доза лежала у медсестры на руках), а
+    // dispense_from_holding разрешал — две двери отвечали по-разному.
+    if (!product.active) {
+      throw new RpcError(`Товар «${product.name}» отключён в каталоге: со склада не выдаётся`
+        + `${picks.length ? ', а на руках, в кабинете и в отделе его не хватает' : ''}.`, 400);
+    }
+    if (!coversQty(onHand, need, cf)) {
       throw new RpcError(shortfallMessage(product, quantity, onHand, found), 400);
     }
-    picks.push({ type: WAREHOUSE, id: null, qty: need });
+    picks.push({ type: WAREHOUSE, id: null, qty: Math.min(need, onHand) });
   }
   return picks;
 }
 
 /** Списать запланированное и записать ПО ДВИЖЕНИЮ НА ИСТОЧНИК. */
 function applySources(db, picks, productId, user, refType, refId) {
+  // V3120_FIX — себестоимость на движении расхода: без неё отчёт «Расход»
+  // оценивал выданное с койки и из кабинета врача в ноль (у двери медсестры
+  // она писалась всегда).
+  const cost = db.prepare('SELECT avg_cost FROM products WHERE id = ?').get(productId);
+  const unitCost = cost ? cost.avg_cost : null;
   for (const p of picks) {
     if (p.type === WAREHOUSE) {
-      db.prepare("UPDATE products SET on_hand = on_hand - ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?")
-        .run(p.qty, productId);
+      moveWarehouse(db, productId, -p.qty);
     } else {
       moveHolding(db, { type: p.type, id: p.id }, productId, -p.qty, user.id);   // STOCK_REQUEST_V1 — кто списал
     }
     db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, reference_type, reference_id, created_by, holder_type, holder_id)
-      VALUES (?, 'dispense', ?, ?, ?, ?, ?, ?)
-    `).run(productId, -p.qty, refType, refId, user.id, p.type === WAREHOUSE ? null : p.type, p.type === WAREHOUSE ? null : p.id);
+      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, created_by, holder_type, holder_id)
+      VALUES (?, 'dispense', ?, ?, ?, ?, ?, ?, ?)
+    `).run(productId, -p.qty, unitCost, refType, refId, user.id, p.type === WAREHOUSE ? null : p.type, p.type === WAREHOUSE ? null : p.id);
   }
   return picks;
 }
@@ -232,24 +253,26 @@ function applySources(db, picks, productId, user, refType, refId) {
  */
 export function restoreSources(db, refType, refId, productId, fallbackQty, user) {
   const rows = db.prepare(`
-    SELECT holder_type, holder_id, qty FROM stock_movements
+    SELECT holder_type, holder_id, qty, unit_cost FROM stock_movements
      WHERE reference_type = ? AND reference_id = ? AND kind = 'dispense'
      ORDER BY id
   `).all(refType, refId);
+  // STOCK_QTY_V1 (V3120_FIX) — возвращается ровно записанное (шесть знаков),
+  // а не round2 от него: иначе отмена таблетки из пачки по 30 возвращала 0.03.
   const parts = rows.length
-    ? rows.map((r) => ({ type: r.holder_type || WAREHOUSE, id: r.holder_type ? r.holder_id : null, qty: round2(-r.qty) }))
-    : (round2(fallbackQty) > 0 ? [{ type: WAREHOUSE, id: null, qty: round2(fallbackQty) }] : []);
+    ? rows.map((r) => ({ type: r.holder_type || WAREHOUSE, id: r.holder_type ? r.holder_id : null, qty: roundQty(-r.qty), unit_cost: r.unit_cost }))
+    : (roundQty(fallbackQty) > 0 ? [{ type: WAREHOUSE, id: null, qty: roundQty(fallbackQty), unit_cost: null }] : []);
   for (const p of parts) {
     if (p.type === WAREHOUSE) {
-      db.prepare("UPDATE products SET on_hand = on_hand + ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?")
-        .run(p.qty, productId);
+      moveWarehouse(db, productId, p.qty);
     } else {
       moveHolding(db, { type: p.type, id: p.id }, productId, p.qty);
     }
     db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, reference_type, reference_id, created_by, holder_type, holder_id)
-      VALUES (?, 'void', ?, ?, ?, ?, ?, ?)
-    `).run(productId, p.qty, refType, refId, user.id, p.type === WAREHOUSE ? null : p.type, p.type === WAREHOUSE ? null : p.id);
+      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, created_by, holder_type, holder_id)
+      VALUES (?, 'void', ?, ?, ?, ?, ?, ?, ?)
+    `).run(productId, p.qty, p.unit_cost == null ? null : p.unit_cost, refType, refId, user.id, p.type === WAREHOUSE ? null : p.type, p.type === WAREHOUSE ? null : p.id);
+    delete p.unit_cost;
   }
   return parts;
 }
@@ -259,7 +282,7 @@ export function receiveStock(db, args, user) {
 
   const productId = args && args.product_id;
   if (!isPositiveInt(productId)) {
-    throw new RpcError('product_id must be a positive integer.', 400);
+    throw new RpcError('Товар не выбран.', 400);
   }
   const quantity = args && args.quantity;
   requireQuantity(quantity);
@@ -270,13 +293,13 @@ export function receiveStock(db, args, user) {
   const run = db.transaction(() => {
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
     if (!product) {
-      throw new RpcError('product not found.', 400);
+      throw new RpcError('Товар не найден.', 400);
     }
 
     // With the MAX_QTY cap this can't overflow, but assert anyway — belt and braces.
-    const next = round2(product.on_hand + quantity);
+    const next = roundQty(product.on_hand + quantity);
     if (!Number.isFinite(next)) {
-      throw new RpcError('resulting stock is out of range.', 400);
+      throw new RpcError('Остаток вне допустимого диапазона.', 400);
     }
 
     db.prepare(`
@@ -288,7 +311,7 @@ export function receiveStock(db, args, user) {
     db.prepare(`
       INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, note, created_by)
       VALUES (?, 'receive', ?, ?, 'manual', ?, ?)
-    `).run(productId, quantity, unitCostValue, note, user.id);
+    `).run(productId, roundQty(quantity), unitCostValue, note, user.id);
 
     const fresh = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(productId);
     return { product_id: productId, on_hand: fresh.on_hand };
@@ -302,7 +325,7 @@ export function dispenseItem(db, args, user) {
 
   const productId = args && args.product_id;
   if (!isPositiveInt(productId)) {
-    throw new RpcError('product_id must be a positive integer.', 400);
+    throw new RpcError('Товар не выбран.', 400);
   }
   const quantity = args && args.quantity;
   requireQuantity(quantity);
@@ -312,16 +335,15 @@ export function dispenseItem(db, args, user) {
   const run = db.transaction(() => {
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
     if (!product) {
-      throw new RpcError('product not found.', 400);
+      throw new RpcError('Товар не найден.', 400);
     }
-    if (!product.active) {
-      throw new RpcError('product is not active.', 400);
-    }
+    // V3120_FIX — отключённый товар больше не отказывается здесь целиком: из
+    // подотчёта его довыдать можно, со склада — нет (planSources).
     let visit = null;
     if (visitId != null) {
       visit = db.prepare('SELECT * FROM visits WHERE id = ?').get(visitId);
       if (!visit) {
-        throw new RpcError('visit not found.', 400);
+        throw new RpcError('Визит не найден.', 400);
       }
     }
 
@@ -361,13 +383,13 @@ export function voidDispense(db, args, user) {
 
   const visitServiceId = args && args.visit_service_id;
   if (!isPositiveInt(visitServiceId)) {
-    throw new RpcError('visit_service_id must be a positive integer.', 400);
+    throw new RpcError('Строка визита не выбрана.', 400);
   }
 
   const run = db.transaction(() => {
     const line = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(visitServiceId);
     if (!line) {
-      throw new RpcError('line not found.', 400);
+      throw new RpcError('Строка не найдена.', 400);
     }
     // BRANCH_MONEY_GUARD_V1 — чужую строку отсюда не отменяют. Сегодня сюда не
     // доедет ни одна ВЫДАННАЯ строка (clinic_item_id — местная ссылка, она не
@@ -378,10 +400,10 @@ export function voidDispense(db, args, user) {
     // (remove_unpaid_service) — второй раз платить незачем.
     assertOwnBuilding(db, line, 'Услуга');
     if (line.clinic_item_id == null) {
-      throw new RpcError('not a dispensed line.', 400);
+      throw new RpcError('Это не выдача товара.', 400);
     }
     if (line.invoice_item_id != null) {
-      throw new RpcError('cannot void an invoiced line.', 400);
+      throw new RpcError('Строка уже в счёте — сначала уберите её из счёта.', 400);
     }
 
     // HOLDINGS_FIRST_V1 — возврат ИДЁТ ПО ИСТОЧНИКАМ, а не на склад скопом.
@@ -395,7 +417,7 @@ export function voidDispense(db, args, user) {
 
     const fresh = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(line.clinic_item_id);
     if (!fresh) {
-      throw new RpcError('product not found.', 400);
+      throw new RpcError('Товар не найден.', 400);
     }
     return { product_id: line.clinic_item_id, on_hand: fresh.on_hand, sources: parts };
   });
@@ -435,13 +457,21 @@ export function dispenseAdmissionItem(db, args, user) {
 // знали — именно поэтому выданное в палату списывалось со склада второй раз.
 // Прежнее «только держатель, который покрывает дозу целиком» тоже ушло:
 // покрытие бывает частичным.
+//
+// V3120_FIX — `unit: 'consumption'`: количество прислано в ЕДИНИЦАХ РАСХОДА
+// (ампулах, таблетках), как у двери медсестры (holdings.js
+// dispenseFromHolding). Склад списывает базовые (1 амп из коробки по 10 =
+// 0.1 коробки), а строка счёта пишется в ампулах по цене ампулы: «1 × 5 000»,
+// а не «0.1 × 50 000». Так зовёт лист назначений; без флага — базовые, как
+// всегда (консоль койки).
 export function dispenseAdmissionItemCore(db, args, user) {
   const admissionId = args && args.admission_id;
-  if (!isPositiveInt(admissionId)) throw new RpcError('admission_id must be a positive integer.', 400);
+  if (!isPositiveInt(admissionId)) throw new RpcError('Госпитализация не выбрана.', 400);
   const productId = args && args.product_id;
-  if (!isPositiveInt(productId)) throw new RpcError('product_id must be a positive integer.', 400);
+  if (!isPositiveInt(productId)) throw new RpcError('Товар не выбран.', 400);
   const quantity = args && args.quantity;
   requireQuantity(quantity);
+  const inUnits = !!(args && args.unit === 'consumption');
   const doctorId = optPosInt(args && args.doctor_id, 'doctor_id');
   // BED_CONSOLE_V2 — «Выставить в счёт пациенту»: по умолчанию true (совместимо
   // со старым admission-modal); консоль передаёт явный выбор из чекбокса.
@@ -464,17 +494,22 @@ export function dispenseAdmissionItemCore(db, args, user) {
     // лечения».
     const adm = assertAdmissionAtLeast(db, admissionId, 'active');
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
-    if (!product) throw new RpcError('product not found.', 400);
-    if (!product.active) throw new RpcError('product is not active.', 400);
+    if (!product) throw new RpcError('Товар не найден.', 400);
+    // V3120_FIX — отключённый товар: из подотчёта можно, со склада нет (planSources).
+
+    const cf = inUnits ? factorOf(product) : 1;
+    const baseQty = inUnits ? toBase(quantity, cf) : quantity;
+    if (!(baseQty > 0)) throw new RpcError('Количество слишком мало.', 400);
 
     // HOLDINGS_FIRST_V1 — свой подотчёт → свой кабинет → отдел палаты → свой
     // отдел → склад. Не хватило нигде — отказ со словами, до первой записи.
-    const picks = planSources(db, holdingChain(db, user, { admission: adm }), product, quantity);
+    const picks = planSources(db, holdingChain(db, user, { admission: adm }), product, baseQty);
     // EXPIRY_BALANCE_V1 — та же тревога у койки, что и в амбулатории.
     const warnings = expiryWarnings(db, [productId]);
 
-    // Строка счёта — БЕЗ ИЗМЕНЕНИЙ: цена из каталога, billable как прислали.
-    const unitPrice = product.sale_price;
+    // Строка счёта: цена из каталога (за единицу расхода — если количество в
+    // ней), billable как прислали.
+    const unitPrice = inUnits ? round2(Number(product.sale_price) / cf) : product.sale_price;
     const total = round2(unitPrice * quantity);
     const info = db.prepare(`
       INSERT INTO admission_services (admission_id, clinic_item_id, service_id, doctor_id, bed_id, ward_id, quantity, unit_price, total, status, billable, notes, performed_at)
@@ -500,13 +535,14 @@ export function voidDispensedAdmissionItem(db, args, user) {
 // и не должно быть: чужую выдачу у койки она не отменяет.
 export function voidDispensedAdmissionItemCore(db, args, user) {
   const lineId = args && args.line_id;
-  if (!isPositiveInt(lineId)) throw new RpcError('line_id must be a positive integer.', 400);
+  if (!isPositiveInt(lineId)) throw new RpcError('Строка не выбрана.', 400);
 
   const run = db.transaction(() => {
     const line = db.prepare('SELECT * FROM admission_services WHERE id = ?').get(lineId);
-    if (!line) throw new RpcError('line not found.', 400);
-    if (line.clinic_item_id == null) throw new RpcError('not a dispensed line.', 400);
-    if (line.invoice_item_id != null) throw new RpcError('cannot void an invoiced line.', 400);
+    if (!line) throw new RpcError('Строка не найдена.', 400);
+    if (line.clinic_item_id == null) throw new RpcError('Это не выдача товара.', 400);
+    if (line.invoice_item_id != null) throw new RpcError('Строка уже в счёте — сначала уберите её из счёта.', 400);
+
 
     // HOLDINGS_FIRST_V1 — каждая часть возвращается СВОЕМУ источнику: движения
     // этой строки называют их все, а не только последний.

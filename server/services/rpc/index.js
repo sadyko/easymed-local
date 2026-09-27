@@ -49,7 +49,7 @@ import { setAdmissionDate } from './admission-date.js';   // ADMISSION_DATE_EDIT
 import { deleteService, serviceDeleteCheck } from './catalog.js';   // SERVICE_DELETE_V1
 import { serviceSave } from './service-save.js';   // SERVICE_EDITOR_V1
 import { servicePriceQuote } from './service-price-quote.js';   // VISIT_TIER_PRICING_V1
-import { holdingsList, dispenseFromHolding, voidHoldingDispense, outpatientsToday, visitItems } from './holdings.js';   // HOLDINGS_V1
+import { holdingsList, dispenseFromHolding, voidHoldingDispense, outpatientsToday, visitItems, holdingReturn } from './holdings.js';   // HOLDINGS_V1
 import { saveLabResults } from './lab.js';   // LAB_SAVE_BATCH_V1
 import { labUsageStats } from './lab-stats.js';   // LAB_STATS_V1
 import { roomAssignDoctors } from './rooms.js';   // ROOMS_SETUP_V1
@@ -169,6 +169,7 @@ export const RPC = {
   outpatients_today:             (db, args, user) => outpatientsToday(db, args, user),
   visit_items:                   (db, args, user) => visitItems(db, args, user),
   import_products_excel:         (db, args, user) => importProductsExcel(db, args, user),           // PROCUREMENT_REDESIGN_V1 — Импорт из Excel
+  holding_return:                (db, args, user) => holdingReturn(db, args, user),                 // V3120_FIX — вернуть подотчёт на склад / передать
   reports_overview:         (db, args, user) => reportsOverview(db, args, user),
   run_report:               (db, args, user) => runReport(db, args, user),
   doctor_tier_positions:    (db, args, user) => doctorTierPositions(db, args, user),   // DOCTOR_TIER_V1 — позиции строк для кабинета врача

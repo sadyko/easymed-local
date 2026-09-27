@@ -22,8 +22,8 @@ test('receive_stock increases on_hand and writes a ledger row', () => {
   assert.equal(r.on_hand, 10);
   const m = db.prepare("SELECT kind,qty FROM stock_movements WHERE product_id=?").get(prod);
   assert.equal(m.kind, 'receive'); assert.equal(m.qty, 10);
-  assert.throws(() => receiveStock(db, { product_id: prod, quantity: 0 }, inv), /quantity/);
-  assert.throws(() => receiveStock(db, { product_id: prod, quantity: 5 }, lab), /(role|allow)/i);
+  assert.throws(() => receiveStock(db, { product_id: prod, quantity: 0 }, inv), /Количество/);
+  assert.throws(() => receiveStock(db, { product_id: prod, quantity: 5 }, lab), /(role|allow|роль)/i);
 });
 
 test('dispense_item decrements stock, prices from catalog, links a visit line', () => {
@@ -56,9 +56,9 @@ test('dispense_item NEVER goes negative (atomic reject on insufficient stock)', 
 test('dispense_item validates qty/product/role; stock-only (no visit) works', () => {
   const { db, prod } = seed();
   receiveStock(db, { product_id: prod, quantity: 10 }, inv);
-  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: -1 }, doc), /quantity/);
-  assert.throws(() => dispenseItem(db, { product_id: 99999, quantity: 1 }, doc), /not found|product/i);
-  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 1 }, lab), /(role|allow)/i);
+  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: -1 }, doc), /Количество/);
+  assert.throws(() => dispenseItem(db, { product_id: 99999, quantity: 1 }, doc), /not found|product|Товар/i);
+  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 1 }, lab), /(role|allow|роль)/i);
   const r = dispenseItem(db, { product_id: prod, quantity: 2 }, inv);  // no visit_id → stock-only
   assert.equal(r.on_hand, 8);
   assert.equal(r.visit_service_id, null);
@@ -77,13 +77,13 @@ test('void_dispense restores stock and deletes the line; blocked once invoiced',
   db.prepare("INSERT INTO invoices (patient_id) VALUES (1)").run();
   db.prepare("INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, total) VALUES (1,'x',1,1,1)").run();
   db.prepare("UPDATE visit_services SET invoice_item_id=1 WHERE id=?").run(d2.visit_service_id);
-  assert.throws(() => voidDispense(db, { visit_service_id: d2.visit_service_id }, inv), /invoiced/i);
+  assert.throws(() => voidDispense(db, { visit_service_id: d2.visit_service_id }, inv), /в счёте/i);
 });
 
 test('receive/dispense reject absurdly large quantities (no overflow)', () => {
   const { db, prod } = seed();
-  assert.throws(() => receiveStock(db, { product_id: prod, quantity: 1e308 }, inv), /quantity/);
-  assert.throws(() => receiveStock(db, { product_id: prod, quantity: 2_000_000 }, inv), /quantity/);
+  assert.throws(() => receiveStock(db, { product_id: prod, quantity: 1e308 }, inv), /Количество/);
+  assert.throws(() => receiveStock(db, { product_id: prod, quantity: 2_000_000 }, inv), /Количество/);
   assert.equal(db.prepare('SELECT on_hand FROM products WHERE id=?').get(prod).on_hand, 0);
 });
 

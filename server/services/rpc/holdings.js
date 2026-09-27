@@ -22,6 +22,9 @@ import { expiryWarnings } from './expiry.js';
 // STOCK_REQUEST_V1 — автозаявка по минимуму: зовётся ЗДЕСЬ, в единственной
 // записи остатка держателя, после каждого уменьшения.
 import { afterHoldingDecrease } from './stock-requests.js';
+// STOCK_QTY_V1 (V3120_FIX) — шесть знаков и «пыль округления — ноль» на всех
+// записях остатка: см. domain/stock-qty.js.
+import { roundQty, factorOf, toBase, settleQty, coversQty, unitsOf } from '../domain/stock-qty.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -58,7 +61,28 @@ export function resolveHolder(db, holder) {
 
 /** Consumption-unit factor of a product (1 when it has none). */
 export function consumptionFactor(product) {
-  return product && product.consumption_unit && Number(product.consumption_factor) > 0 ? Number(product.consumption_factor) : 1;
+  return factorOf(product);
+}
+
+/** Фактор расхода товара по его id (1, если товара или единицы расхода нет). */
+function factorOfId(db, productId) {
+  return factorOf(db.prepare('SELECT consumption_unit, consumption_factor FROM products WHERE id = ?').get(productId));
+}
+
+/**
+ * STOCK_QTY_V1 (V3120_FIX) — ЕДИНСТВЕННАЯ запись products.on_hand при расходе,
+ * возврате и отмене: `delta` со знаком, итог — шесть знаков, пыль округления —
+ * ноль. Прежде каждая дверь писала `on_hand = on_hand ± ?` сама, и остаток
+ * копил хвосты вида 8.833333000000001. Проверку «хватает ли» делает
+ * вызывающий (у каждой двери свои слова отказа); здесь — последний замок.
+ */
+export function moveWarehouse(db, productId, delta) {
+  const row = db.prepare('SELECT on_hand, consumption_unit, consumption_factor FROM products WHERE id = ?').get(productId);
+  if (!row) throw new RpcError('Товар не найден.', 404);
+  const next = settleQty(Number(row.on_hand) + Number(delta), factorOf(row));
+  if (next < 0) throw new RpcError('Недостаточно на складе.', 400);
+  db.prepare("UPDATE products SET on_hand = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(next, productId);
+  return next;
 }
 
 /**
@@ -71,11 +95,13 @@ export function consumptionFactor(product) {
  * Она никогда не бросает в списание и живёт в его транзакции. `actorId` — кто
  * списал: он и значится подавшим автозаявку.
  */
-export function moveHolding(db, holder, productId, baseQty, actorId = null) {
+export function moveHolding(db, holder, productId, baseQty, actorId = null, opts = {}) {
   const row = db.prepare('SELECT id, qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?')
     .get(holder.type, holder.id, productId);
-  const next = round2((row ? row.qty : 0) + baseQty);
-  if (next < -1e-9) {
+  // STOCK_QTY_V1 — было round2: 1/7 пачки записывалась как 0.14, и седьмая
+  // таблетка оставляла на руках 0.02 пачки навсегда.
+  const next = settleQty((row ? row.qty : 0) + baseQty, factorOfId(db, productId));
+  if (next < 0) {
     throw new RpcError('Недостаточно на руках: у получателя меньше, чем выдаётся.', 400);
   }
   if (row) {
@@ -83,7 +109,9 @@ export function moveHolding(db, holder, productId, baseQty, actorId = null) {
   } else {
     db.prepare('INSERT INTO stock_holdings (holder_type, holder_id, product_id, qty) VALUES (?, ?, ?, ?)').run(holder.type, holder.id, productId, next);
   }
-  if (baseQty < 0) afterHoldingDecrease(db, holder, productId, actorId);
+  // V3120_FIX — возврат подотчёта на склад (holding_return) автозаявку не
+  // подаёт: остаток уменьшился не расходом, а решением кладовщика.
+  if (baseQty < 0 && opts.autoRequest !== false) afterHoldingDecrease(db, holder, productId, actorId);
   return next;
 }
 
@@ -127,6 +155,7 @@ export function holdingsList(db, args, user) {
   const rows = db.prepare(`
     SELECT h.holder_type, h.holder_id, h.product_id, h.qty,
            p.name AS product_name, p.base_unit, p.consumption_unit, p.consumption_factor, p.sale_price, p.is_drug, p.active,
+           CASE WHEN h.holder_type = 'staff' THEN (SELECT is_active FROM users WHERE id = h.holder_id) ELSE 1 END AS holder_active,
            CASE h.holder_type
              WHEN 'staff' THEN (SELECT full_name FROM users WHERE id = h.holder_id)
              WHEN 'room' THEN (SELECT name FROM rooms WHERE id = h.holder_id)
@@ -143,7 +172,10 @@ export function holdingsList(db, args, user) {
         product_id: r.product_id, product_name: r.product_name,
         base_unit: r.base_unit || '', consumption_unit: r.consumption_unit || r.base_unit || '', consumption_factor: cf,
         sale_price: Number(r.sale_price) || 0, is_drug: !!r.is_drug, active: !!r.active,
-        qty_base: round2(r.qty), qty_units: round2(r.qty * cf),
+        // V3120_FIX — держатель-сотрудник отключён: экран предлагает вернуть
+        // его подотчёт на склад или передать (holding_return).
+        holder_inactive: r.holder_active != null && Number(r.holder_active) === 0,
+        qty_base: roundQty(r.qty), qty_units: unitsOf(r.qty, cf),
       };
     }),
   };
@@ -162,7 +194,7 @@ export function dispenseFromHolding(db, args, user) {
   requireRole(user, DISPENSE_ROLES);
   const a = args || {};
   const productId = a.product_id;
-  if (!isPosInt(productId)) throw new RpcError('product_id must be a positive integer.', 400);
+  if (!isPosInt(productId)) throw new RpcError('Товар не выбран.', 400);
   const qtyUnits = a.quantity;
   if (!(typeof qtyUnits === 'number' && Number.isFinite(qtyUnits) && qtyUnits > 0 && qtyUnits <= MAX_QTY)) {
     throw new RpcError('Количество — положительное число.', 400);
@@ -179,25 +211,34 @@ export function dispenseFromHolding(db, args, user) {
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
     if (!product) throw new RpcError('Товар не найден.', 400);
     const cf = consumptionFactor(product);
-    const baseQty = round2(qtyUnits / cf);
+    const baseQty = toBase(qtyUnits, cf);
     if (!(baseQty > 0)) throw new RpcError('Количество слишком мало.', 400);
+    // Сколько взято на самом деле: «последняя таблетка» в пределах допуска
+    // забирает ровно остаток, и журнал пишет именно его.
+    let taken = baseQty;
     // EXPIRY_BALANCE_V1 — партия смотрится ДО списания. Тревожит ТОВАР, а не
     // источник: у подотчёта партии не записаны, но просроченная коробка в
     // клинике одна, из чьих бы рук её ни взяли.
     const warnings = expiryWarnings(db, [productId]);
+    // V3120_FIX — ОТКЛЮЧЁННЫЙ ТОВАР, одно правило на все двери: уже выданное
+    // (на руках, в кабинете, в отделе) можно довыдать пациенту — оно физически
+    // вне склада и иначе пропало бы; СО СКЛАДА отключённый товар не выдаётся.
+    // Та же развилка — в цепочке списания (inventory.js planSources).
     if (fromWarehouse) {
-      if (!product.active) throw new RpcError('Товар отключён в каталоге.', 400);
-      if (product.on_hand + 1e-9 < baseQty) {
-        throw new RpcError(`Недостаточно на складе: ${product.name} — есть ${round2(product.on_hand * cf)} ${product.consumption_unit || product.base_unit || ''}`.trim(), 400);
+      if (!product.active) throw new RpcError(`Товар «${product.name}» отключён в каталоге: со склада не выдаётся.`, 400);
+      if (!coversQty(product.on_hand, baseQty, cf)) {
+        throw new RpcError(`Недостаточно на складе: ${product.name} — есть ${unitsOf(product.on_hand, cf)} ${product.consumption_unit || product.base_unit || ''}`.trim(), 400);
       }
-      db.prepare("UPDATE products SET on_hand = on_hand - ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(baseQty, productId);
+      taken = Math.min(baseQty, Number(product.on_hand));
+      moveWarehouse(db, productId, -taken);
     } else {
       const held = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?').get(holder.type, holder.id, productId);
-      if (!held || held.qty + 1e-9 < baseQty) {
-        const have = held ? round2(held.qty * cf) : 0;
+      if (!held || !coversQty(held.qty, baseQty, cf)) {
+        const have = held ? unitsOf(held.qty, cf) : 0;
         throw new RpcError(`Недостаточно на руках: ${product.name} — есть ${have} ${product.consumption_unit || product.base_unit || ''}`.trim(), 400);
       }
-      moveHolding(db, holder, productId, -baseQty, user.id);
+      taken = Math.min(baseQty, Number(held.qty));
+      moveHolding(db, holder, productId, -taken, user.id);
     }
 
     // Price per consumption unit — the sale price is per base unit.
@@ -222,7 +263,7 @@ export function dispenseFromHolding(db, args, user) {
     db.prepare(`
       INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, holder_type, holder_id)
       VALUES (?, 'dispense', ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(productId, -baseQty, product.avg_cost, refType, lineId, note, user.id, holder ? holder.type : null, holder ? holder.id : null);
+      .run(productId, -taken, product.avg_cost, refType, lineId, note, user.id, holder ? holder.type : null, holder ? holder.id : null);
     let leftBase = 0;
     if (holder) {
       const left = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?').get(holder.type, holder.id, productId);
@@ -230,7 +271,7 @@ export function dispenseFromHolding(db, args, user) {
     } else {
       leftBase = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(productId).on_hand;
     }
-    return { line_id: lineId, item_name: product.name, unit_price: unitPrice, total, left_units: round2(leftBase * cf), source: holder ? holder.type : WAREHOUSE, warnings };
+    return { line_id: lineId, item_name: product.name, unit_price: unitPrice, total, left_units: unitsOf(leftBase, cf), source: holder ? holder.type : WAREHOUSE, warnings };
   });
   return run();
 }
@@ -266,10 +307,11 @@ export function voidHoldingDispense(db, args, user) {
       const holder = mv.holder_type ? { type: mv.holder_type, id: mv.holder_id } : null;
       // Back to where it came from: the holder the movement names, or the warehouse.
       if (holder) moveHolding(db, holder, line.clinic_item_id, -mv.qty);   // mv.qty is negative
-      else db.prepare("UPDATE products SET on_hand = on_hand + ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(-mv.qty, line.clinic_item_id);
+      else moveWarehouse(db, line.clinic_item_id, -mv.qty);
       db.prepare(`
-        INSERT INTO stock_movements (product_id, kind, qty, reference_type, reference_id, created_by, holder_type, holder_id)
-        VALUES (?, 'void', ?, ?, ?, ?, ?, ?)`).run(line.clinic_item_id, -mv.qty, refType, id, user.id, holder ? holder.type : null, holder ? holder.id : null);
+        INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, created_by, holder_type, holder_id)
+        VALUES (?, 'void', ?, ?, ?, ?, ?, ?, ?)`).run(line.clinic_item_id, -mv.qty, mv.unit_cost, refType, id, user.id, holder ? holder.type : null, holder ? holder.id : null);
+
     }
     db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(id);
     return { ok: true };
@@ -326,4 +368,85 @@ export function visitItems(db, args, user) {
      WHERE vs.visit_id = ? AND vs.clinic_item_id IS NOT NULL
      ORDER BY vs.id`).all(visitId);
   return { items: rows.map((r) => ({ ...r, unit: r.consumption_unit || r.base_unit || '', from_holding: r.holding_parts > 0, invoiced: r.invoice_item_id != null, can_void: r.invoice_item_id == null })) };
+}
+
+// =============================================================================
+// V3120_FIX — holding_return: «Вернуть на склад / передать».
+//
+// Инспекция: товар, выданный на руки медсестре, после её отключения висел за
+// ней навсегда — выдать его пациенту некому (вход закрыт), а вернуть было
+// нечем: обратной двери у выдачи не было. Отсюда и дверь. Нужна она прежде
+// всего для подотчёта отключённых сотрудников (экран ставит кнопку у них), но
+// сервер не запирает её на это: кладовщик вправе вернуть на склад и
+// подотчёт кабинета, который закрыли.
+//
+// ЗАПИСЬ В ЖУРНАЛ — это ВЫДАЧА С ОБРАТНЫМ ЗНАКОМ: kind 'dispense',
+// reference_type 'issue', qty > 0, держатель — тот, от кого вернули. Так её
+// без новых правил понимают все, кто уже считает выдачи: журнал (вид «Выдача»),
+// отчёты склада (WAREHOUSE_LEDGER_SQL в rpc/reports.js: склад +, держатель −) и
+// карточка отдела. Передача другому держателю — две такие записи: возврат на
+// склад и выдача получателю; склад в итоге не меняется.
+//
+// args: { holder: {type,id}, product_id, quantity? (базовые; нет — всё),
+//         to?: {type,id} (нет — на склад), note? }
+// → { product_id, returned_base, returned_units, unit, to: {type,id,name}|null }
+// =============================================================================
+const RETURN_ROLES = ['admin', 'inventory'];
+
+export function holdingReturn(db, args, user) {
+  requireRole(user, RETURN_ROLES);
+  const a = args || {};
+  const productId = Number(a.product_id);
+  if (!isPosInt(productId)) throw new RpcError('Товар не выбран.', 400);
+  const extra = typeof a.note === 'string' ? a.note.trim().slice(0, 300) : '';
+
+  const run = db.transaction(() => {
+    const from = resolveHolder(db, a.holder);
+    const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
+    if (!product) throw new RpcError('Товар не найден.', 404);
+    const cf = factorOf(product);
+    const unit = product.base_unit || product.unit || '';
+    const row = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?').get(from.type, from.id, productId);
+    const have = row ? Number(row.qty) : 0;
+    if (!(have > 0)) throw new RpcError(`У «${from.name}» нет на руках: ${product.name}.`, 400);
+
+    let qty = have;
+    if (a.quantity !== undefined && a.quantity !== null && a.quantity !== '') {
+      const q = roundQty(a.quantity);
+      if (!(Number.isFinite(q) && q > 0 && q <= MAX_QTY)) throw new RpcError('Количество — положительное число.', 400);
+      if (!coversQty(have, q, cf)) throw new RpcError(`Больше, чем числится: у «${from.name}» ${roundQty(have)} ${unit} — ${product.name}.`.replace(/\s+/g, ' '), 400);
+      qty = Math.min(q, have);
+    }
+
+    let to = null;
+    if (a.to && typeof a.to === 'object' && a.to.type !== WAREHOUSE) {
+      to = resolveHolder(db, a.to);
+      if (to.type === from.type && to.id === from.id) throw new RpcError('Передать можно только другому держателю.', 400);
+      if (to.type === 'staff') {
+        const u = db.prepare('SELECT is_active FROM users WHERE id = ?').get(to.id);
+        if (u && Number(u.is_active) === 0) throw new RpcError(`${to.name || 'Сотрудник'} отключён — передать ему на руки нельзя.`, 400);
+      }
+    }
+
+    const ins = db.prepare(`
+      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, note, created_by, branch_id, holder_type, holder_id)
+      VALUES (?, 'dispense', ?, ?, 'issue', ?, ?, 1, ?, ?)`);
+    const tail = extra ? ` — ${extra}` : '';
+    // 1. От держателя на склад.
+    moveHolding(db, from, productId, -qty, user.id, { autoRequest: false });
+    moveWarehouse(db, productId, qty);
+    ins.run(productId, qty, product.avg_cost, (to ? `Передача: ${from.name} → ${to.name}` : `Возврат на склад от: ${from.name}`) + tail,
+      user.id, from.type, from.id);
+    // 2. Со склада получателю (передача).
+    if (to) {
+      moveWarehouse(db, productId, -qty);
+      moveHolding(db, to, productId, qty);
+      ins.run(productId, -qty, product.avg_cost, `${to.name} — передача от: ${from.name}${tail}`, user.id, to.type, to.id);
+    }
+    return {
+      product_id: productId, returned_base: qty, returned_units: unitsOf(qty, cf),
+      unit: product.consumption_unit || unit, to: to ? { type: to.type, id: to.id, name: to.name } : null,
+    };
+  });
+  return run();
 }

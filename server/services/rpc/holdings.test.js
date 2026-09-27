@@ -264,7 +264,7 @@ test('счёт не изменился: billable=false пишет строку �
   const invId = db.prepare("INSERT INTO invoices (patient_id) VALUES (1)").run().lastInsertRowid;
   const itemId = db.prepare("INSERT INTO invoice_items (invoice_id, description) VALUES (?, 'x')").run(invId).lastInsertRowid;
   db.prepare('UPDATE admission_services SET invoice_item_id = ? WHERE id = ?').run(itemId, billed.line_id);
-  assert.throws(() => voidDispensedAdmissionItemCore(db, { line_id: billed.line_id }, nurse), /invoiced/i);
+  assert.throws(() => voidDispensedAdmissionItemCore(db, { line_id: billed.line_id }, nurse), /в счёте/i);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM admission_services WHERE id=?').get(billed.line_id).n, 1);
 });
 

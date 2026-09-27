@@ -40,7 +40,12 @@
 // области 'all', а всем прочим — null.
 import { hasAnyRole, canViewSection } from '../roles.js';
 import { grantAllowsOr } from '../grants.js';
-import { inLocalRange, localDate } from '../domain/day.js';
+// V3120_FIX — отбор по датам через индекс по created_at (миграция 196):
+// localRangeWhere сначала сужает строку по сырой колонке, потом проверяет
+// местный день точно. Прежнее date(created_at,'localtime') BETWEEN … читало
+// все 500 тысяч движений на каждый запрос журнала (1.4–3.1 с).
+import { localRangeWhere } from '../domain/day.js';
+import { roundQty } from '../domain/stock-qty.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -54,6 +59,12 @@ const SEE_ALL_ROLES = ['admin', 'inventory'];
 // получателю против расхода на пациента. Экран показывает их разными чипами и
 // обязан уметь отобрать каждый.
 export const VIEW_KINDS = ['receive', 'issue', 'dispense', 'adjust', 'void'];
+// V3120_FIX — выдача со склада — это и «Выдать со склада» ('issue'), и выдача
+// по одобренной заявке ('requisition'). Журнал знал только первое и называл
+// выдачу по заявке расходом на пациента. Тот же список — у отчётов склада
+// (rpc/reports.js ISSUE_REFS) и у карточки отдела.
+const ISSUE_REFS = ['issue', 'requisition'];
+const ISSUE_REFS_SQL = ISSUE_REFS.map((r) => `'${r}'`).join(', ');
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 1000;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -144,11 +155,11 @@ function kindClause(view) {
   if (view === 'receive') return { sql: "m.kind = 'receive'", params: [] };
   if (view === 'adjust')  return { sql: "m.kind = 'adjust'", params: [] };
   if (view === 'void')    return { sql: "m.kind = 'void'", params: [] };
-  if (view === 'issue')   return { sql: "(m.kind = 'dispense' AND m.reference_type = 'issue')", params: [] };
-  return { sql: "(m.kind = 'dispense' AND (m.reference_type IS NULL OR m.reference_type <> 'issue'))", params: [] };
+  if (view === 'issue')   return { sql: `(m.kind = 'dispense' AND m.reference_type IN (${ISSUE_REFS_SQL}))`, params: [] };
+  return { sql: `(m.kind = 'dispense' AND (m.reference_type IS NULL OR m.reference_type NOT IN (${ISSUE_REFS_SQL})))`, params: [] };
 }
 
-const viewKindOf = (row) => (row.kind === 'dispense' && row.reference_type === 'issue' ? 'issue' : row.kind);
+const viewKindOf = (row) => (row.kind === 'dispense' && ISSUE_REFS.includes(row.reference_type) ? 'issue' : row.kind);
 
 // REPORTS_V2 — КОМУ и НА КОГО, одним куском SQL на журнал и на отчёты склада
 // (rpc/reports.js, «Расход»): две копии разрешения получателя и пациента
@@ -213,9 +224,10 @@ export function stockMovementsList(db, args, user) {
 
   const from = checkDate(a.from, 'С');
   const to = checkDate(a.to, 'По');
-  if (from && to) { where.push(inLocalRange('m.created_at')); params.push(from, to); }
-  else if (from) { where.push(`${localDate('m.created_at')} >= date(?)`); params.push(from); }
-  else if (to) { where.push(`${localDate('m.created_at')} <= date(?)`); params.push(to); }
+  if (from || to) {
+    const r = localRangeWhere('m.created_at', from, to);
+    where.push(r.sql); params.push(...r.params);
+  }
 
   if (a.kind !== undefined && a.kind !== null && a.kind !== '' && a.kind !== 'all') {
     if (!VIEW_KINDS.includes(a.kind)) throw new RpcError(`Неизвестный вид движения: ${a.kind}.`, 400);
@@ -247,7 +259,10 @@ export function stockMovementsList(db, args, user) {
            ${holderNameSql('m')} AS holder_name,
            ${movementPatientSql('m')} AS patient_name
       FROM stock_movements m
-      JOIN products p ON p.id = m.product_id
+      -- V3120_FIX — CROSS JOIN закрепляет движения внешним циклом: иначе
+      -- планировщик шёл от products и сортировал все 500 тысяч строк ради
+      -- «последних 200», а так — берёт их по индексу created_at с конца.
+      CROSS JOIN products p ON p.id = m.product_id
       LEFT JOIN users u ON u.id = m.created_by
      WHERE ${where.join(' AND ')}
      ORDER BY m.created_at DESC, m.id DESC
@@ -275,7 +290,10 @@ export function stockMovementsList(db, args, user) {
         product_id: r.product_id,
         product_name: r.product_name || '',
         unit: r.base_unit || r.unit || '',
-        qty: round2(r.qty),
+        // V3120_FIX — шесть знаков, как в базе: таблетка из пачки по 30 —
+        // это 0.033333 пачки, а не 0.03. До сотых округляет экран.
+        qty: roundQty(r.qty),
+
         unit_cost: withCost && r.unit_cost != null ? round2(r.unit_cost) : null,
         note: stripHolder(r.note, holderName),
         actor_id: r.created_by || null,

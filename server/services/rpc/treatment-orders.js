@@ -39,7 +39,7 @@ import {
   expandCourse, courseEnd, dueState, isDate,
 } from '../domain/mar-schedule.js';
 // MED_ADMIN_CHARGE_V1 — склад и деньги за введённую дозу.
-import { doseQuantity } from '../domain/dose.js';
+import { doseQuantity, parseDose, UNKNOWN_QTY_MESSAGE } from '../domain/dose.js';
 // StockError — это ДРУГОЙ класс, не тот RpcError, что импортирован выше:
 // inventory.js объявляет свой (как и accommodation.js), и они не родственники.
 // Псевдоним стоит здесь не для красоты: отказ склада ловится по классу, и
@@ -439,6 +439,58 @@ function parseExtraConsumption(raw) {
 }
 
 /**
+ * V3120_FIX — СКОЛЬКО СПИСАТЬ, С УЧЁТОМ ЕДИНИЦЫ РАСХОДА.
+ *
+ * Было: доза сравнивалась с products.unit — единицей УПАКОВКИ. Кеторол
+ * хранится коробками по 10 ампул; доза «1» или «1 амп» (амп и уп для
+ * domain/dose.js — одинаково «штуки») списывала ЦЕЛУЮ КОРОБКУ и ставила в счёт
+ * 50 000 вместо 5 000 за ампулу. А «5 мл» препарата, который хранится
+ * флаконами, но расходуется миллилитрами, не списывались вовсе.
+ *
+ * Стало — у товара с единицей расхода (products.consumption_unit/_factor, та
+ * же, в которой медсестра выдаёт у койки и в амбулатории):
+ *   1. доза, названная единицей УПАКОВКИ буквально («1 уп» при расходе в
+ *      «амп»), — это целые упаковки;
+ *   2. иначе доза читается в единице РАСХОДА: «1», «1 амп» → одна ампула;
+ *      «0,5 л» при расходе в «мл» → 500 мл. treatment_orders.stock_qty у
+ *      такого товара — тоже в единице расхода (ни один экран его сегодня не
+ *      заполняет; решение записано здесь, чтобы не гадать потом);
+ *   3. иначе — доза в единице упаковки другой формы (масса/объём);
+ *   4. не вышло — НЕ УГАДЫВАЕМ: отметка записана, списания нет, и отказ
+ *      называет, в чём препарат считается и сколько его в упаковке.
+ * Товар без единицы расхода читается, как прежде, — по products.unit.
+ *
+ * → результат doseQuantity плюс `unit`: 'consumption' | 'base'.
+ */
+function stockDose(order, product) {
+  const baseLabel = product ? (product.unit || product.base_unit || null) : null;
+  const cf = product && product.consumption_unit && Number(product.consumption_factor) > 0 ? Number(product.consumption_factor) : 0;
+  const consLabel = cf ? product.consumption_unit : null;
+  if (!consLabel) {
+    const q = doseQuantity({ dose: order.dose, stock_qty: order.stock_qty, product_unit: baseLabel });
+    return q.ok ? { ...q, unit: 'base' } : q;
+  }
+  const explicit = order.stock_qty !== null && order.stock_qty !== undefined && order.stock_qty !== '';
+  const norm = (u) => String(u || '').trim().toLowerCase().replace(/\.+$/, '');
+  const parsed = parseDose(order.dose);
+  if (!explicit && parsed && parsed.raw && norm(parsed.raw) === norm(baseLabel) && norm(baseLabel) !== norm(consLabel)) {
+    const qb = doseQuantity({ dose: order.dose, stock_qty: null, product_unit: baseLabel });
+    if (qb.ok) return { ...qb, unit: 'base' };
+  }
+  const q = doseQuantity({ dose: order.dose, stock_qty: order.stock_qty, product_unit: consLabel });
+  if (q.ok) return { ...q, unit: 'consumption' };
+  const qb = doseQuantity({ dose: order.dose, stock_qty: null, product_unit: baseLabel });
+  if (qb.ok && qb.basis === 'unit') return { ...qb, unit: 'base' };
+  const doseText = order.dose === null || order.dose === undefined ? '' : String(order.dose).trim();
+  const perPack = baseLabel ? `, ${cf} в «${baseLabel}»` : '';
+  return {
+    ...q,
+    message: `${UNKNOWN_QTY_MESSAGE} (доза «${doseText || 'не указана'}»: препарат считается в «${consLabel}»${perPack} — `
+      + `укажите дозу в «${consLabel}»)`,
+  };
+}
+
+/**
  * Списать и начислить за одну отметку. Возвращает исход, НЕ бросает: срыв
  * склада — предупреждение, а не отказ от медицинской записи.
  *
@@ -474,12 +526,8 @@ function chargeAdministration(db, order, administration, user) {
   // Назначение без ссылки на склад (уход, режим, процедура) — тоже 'none': не
   // ошибка, а нечего списывать.
   if (order.source === 'clinic' && order.stock_item_id) {
-    const product = db.prepare('SELECT id, name, unit FROM products WHERE id = ?').get(order.stock_item_id);
-    const q = doseQuantity({
-      dose: order.dose,
-      stock_qty: order.stock_qty,
-      product_unit: product ? product.unit : null,
-    });
+    const product = db.prepare('SELECT id, name, unit, base_unit, consumption_unit, consumption_factor FROM products WHERE id = ?').get(order.stock_item_id);
+    const q = stockDose(order, product);   // V3120_FIX — единица расхода (ампула из коробки)
     if (!q.ok) {
       // НЕ УГАДЫВАЕМ. Отметка записана, списание пропущено, и это видно
       // человеку (stock_status='skipped' считается отдельно).
@@ -492,8 +540,12 @@ function chargeAdministration(db, order, administration, user) {
           admission_id: order.admission_id,
           product_id: order.stock_item_id,
           quantity: q.quantity,
+          // V3120_FIX — в ампулах: склад спишет 0.1 коробки, строка счёта —
+          // «1 амп × 5 000» (inventory.js dispenseAdmissionItemCore).
+          unit: q.unit === 'consumption' ? 'consumption' : undefined,
           doctor_id: order.prescribed_by,
           billable: true,
+
           note: `${doseNotePrefix(administration.id)}${order.name}${order.dose ? ` · ${order.dose}` : ''}`,
           // HOLDINGS_FIRST_V1 — флага prefer_holdings больше нет: подотчёт
           // медсестры, её кабинет и отдел палаты идут перед складом ВЕЗДЕ,
