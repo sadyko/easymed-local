@@ -203,17 +203,37 @@ export function planRollback({ root, dataDir = path.join(root, 'data'), to, sqli
  * Проверка «сервер остановлен»: пока Easy-Med работает, его база открыта, и
  * Windows не даёт её переименовать. Пробное переименование туда и обратно.
  */
-export function dbInUse(dataDir, { renameSync = fs.renameSync } = {}) {
+//
+// V3120_FINAL — переименование НАЗАД может не пройти (антивирус или индексатор
+// на мгновение открыл файл). Раньше исключение вылетало, и база оставалась под
+// именем .rollback-probe: следующий запуск Easy-Med не нашёл бы её и завёл
+// пустую. Теперь — повтор с паузой; не вышло — ошибка, называющая файл, а
+// следующий запуск recover.cmd сначала возвращает базу из пробного имени.
+export function dbInUse(dataDir, { renameSync = fs.renameSync, pauseMs = 250, tries = 20 } = {}) {
   const db = path.join(dataDir, 'easymed.db');
-  if (!fs.existsSync(db)) return false;
   const probe = db + '.rollback-probe';
+  if (!fs.existsSync(db) && fs.existsSync(probe)) putBackProbe(probe, db, renameSync, pauseMs, tries);
+  if (!fs.existsSync(db)) return false;
   try {
     renameSync(db, probe);
   } catch {
     return true;
   }
-  renameSync(probe, db);
+  putBackProbe(probe, db, renameSync, pauseMs, tries);
   return false;
+}
+
+function putBackProbe(probe, db, renameSync, pauseMs, tries) {
+  let last = null;
+  for (let i = 0; i < tries; i++) {
+    try { renameSync(probe, db); return; } catch (e) { last = e; }
+    try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, pauseMs); } catch { /* пауза не обязательна */ }
+  }
+  const e = new Error(`База временно переименована в ${path.basename(probe)} и не вернулась на место`
+    + ` (${last && last.code ? last.code : 'ошибка'}). Запустите recover.cmd ещё раз — он вернёт её сам;`
+    + ` или переименуйте файл в data обратно в easymed.db.`);
+  e.code = 'PROBE_STUCK';
+  throw e;
 }
 
 /**
@@ -307,6 +327,10 @@ export function recordRollback({ dataDir, from, to, by, dbRestored, backupName =
 // пустая строка — это ответ по умолчанию. «Нет», превратившееся в «да, стереть
 // данные после обновления», недопустимо. Цифры одинаковы в любой раскладке.
 // Непонятный ответ переспрашивается, три непонятных подряд — отмена.
+// V3120_FINAL (I4) — ПУСТОЙ ОТВЕТ ВСЕГДА ОЗНАЧАЕТ «0 — ОТМЕНА». Здесь пустой
+// ответ при найденной копии означал «1 — восстановить базу»: случайный Enter
+// (или пропавшая кириллица, см. выше) стирал всё, внесённое после обновления.
+// Восстановление теперь только по явно набранной «1».
 function choose(ask, question, dflt, allowed, log) {
   for (let i = 0; i < 3; i++) {
     const a = String(ask(question) ?? '').trim();
@@ -327,7 +351,10 @@ export function runRecover({ root, to, ask, log = console.log, now = new Date(),
     log(`  Версия "${to}" на этом компьютере не установлена. Ничего не изменено.`);
     return 1;
   }
-  if (dbInUse(dataDir)) {
+  let inUse;
+  try { inUse = dbInUse(dataDir); }
+  catch (e) { log(''); log('  ' + e.message); log('  Ничего не изменено.'); return 1; }
+  if (inUse) {
     log('');
     log('  Easy-Med сейчас ЗАПУЩЕН — его база открыта.');
     log('  Закройте чёрное окно Easy-Med (или остановите службу Easy-Med)');
@@ -368,17 +395,17 @@ export function runRecover({ root, to, ask, log = console.log, now = new Date(),
       log('      перенести из неё то, что было внесено после обновления.');
       log('');
       log('  Что сделать?');
-      log(`    1 - вернуть версию ${to} И базу из копии (рекомендуется)`);
+      log(`    1 - вернуть версию ${to} И базу из копии (рекомендуется; наберите 1)`);
       log('    2 - вернуть только программу, базу не трогать (касса может не работать)');
       log('    0 - отмена, ничего не менять');
-      const a = forceDb !== null ? (forceDb ? '1' : '2') : choose(ask, '  Ваш выбор [1]: ', '1', ['1', '2', '0'], log);
+      const a = forceDb !== null ? (forceDb ? '1' : '2') : choose(ask, '  Ваш выбор (наберите цифру; Enter без цифры — отмена): ', '0', ['1', '2', '0'], log);
       if (a === '1') restore = true;
       else if (a !== '2') { log('  Отменено. Ничего не изменено.'); return 2; }
     } else {
       log(`  Копии базы, подходящей для версии ${to}, в data\\backups\\ НЕ найдено.`);
       log('    2 - вернуть только программу, базу не трогать (касса может не работать)');
       log('    0 - отмена, ничего не менять (обратитесь к поставщику)');
-      const a = forceDb === false ? '2' : choose(ask, '  Ваш выбор [0]: ', '0', ['2', '0'], log);
+      const a = forceDb === false ? '2' : choose(ask, '  Ваш выбор (наберите цифру; Enter без цифры — отмена): ', '0', ['2', '0'], log);
       if (a !== '2') { log('  Отменено. Ничего не изменено. Обратитесь к поставщику.'); return 2; }
     }
   }

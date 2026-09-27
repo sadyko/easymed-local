@@ -197,3 +197,45 @@ test('recover: непонятный ответ переспрашивается,
   assert.equal(cur(inst.root), '3.11.0');
   assert.equal(markerOf(path.join(inst.dataDir, 'easymed.db')), 'LIVE-after-update');
 });
+
+// V3120_FINAL (I4) — пустой ответ (Enter, или кириллица, пропавшая по дороге
+// из консоли) — ОТМЕНА. Восстановление базы стирает всё, внесённое после
+// обновления, и случайный Enter не должен его запускать.
+test('recover: пустой ответ при найденной копии — отмена, база и версия не тронуты', () => {
+  const inst = install();
+  const log = [];
+  const code = runRecover({ root: inst.root, to: inst.oldV, ask: answers(''), log: (s) => log.push(s) });
+  assert.equal(code, 2, log.join('\n'));
+  assert.equal(cur(inst.root), '3.11.0');
+  assert.equal(markerOf(path.join(inst.dataDir, 'easymed.db')), 'LIVE-after-update');
+  assert.ok(!log.join('\n').includes('[1]'), 'подсказка не предлагает «1» ответом по умолчанию');
+});
+
+// V3120_FINAL (MINOR) — пробное переименование назад не удалось: база не
+// должна остаться под именем .rollback-probe (сервер её бы не нашёл и завёл
+// пустую).
+test('dbInUse: сбой переименования назад — повтор, база возвращается на место', () => {
+  const inst = install();
+  let fails = 2;
+  const flaky = (a, b) => {
+    if (String(a).endsWith('.rollback-probe') && fails > 0) { fails--; const e = new Error('EBUSY'); e.code = 'EBUSY'; throw e; }
+    return fs.renameSync(a, b);
+  };
+  assert.equal(dbInUse(inst.dataDir, { renameSync: flaky, pauseMs: 1 }), false);
+  assert.ok(fs.existsSync(path.join(inst.dataDir, 'easymed.db')));
+  assert.equal(fs.existsSync(path.join(inst.dataDir, 'easymed.db.rollback-probe')), false);
+});
+
+test('dbInUse: переименование назад не удаётся совсем — ошибка с именем файла, recover ничего не меняет', () => {
+  const inst = install();
+  const stuck = (a, b) => {
+    if (String(a).endsWith('.rollback-probe')) { const e = new Error('EBUSY'); e.code = 'EBUSY'; throw e; }
+    return fs.renameSync(a, b);
+  };
+  assert.throws(() => dbInUse(inst.dataDir, { renameSync: stuck, pauseMs: 1 }), /rollback-probe/);
+  // Следующий запуск (уже без сбоя) сначала возвращает базу из пробного имени.
+  assert.equal(fs.existsSync(path.join(inst.dataDir, 'easymed.db')), false);
+  assert.equal(dbInUse(inst.dataDir), false);
+  assert.equal(markerOf(path.join(inst.dataDir, 'easymed.db')), 'LIVE-after-update');
+  assert.equal(fs.existsSync(path.join(inst.dataDir, 'easymed.db.rollback-probe')), false);
+});
