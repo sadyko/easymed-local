@@ -70,7 +70,10 @@ export const REGISTRY = {
     // эта строка. Читается сеткой календаря («из какой заявки эта запись» —
     // одним `in('visit_id', …)` на все блоки дня) и карточкой заявки, которой
     // после записи надо отличить строку со слотом от строки «на дату».
-    read:  { roles: ALL_STAFF, columns: ['id','request_id','service_id','scheduled_date','status','note','doctor_id','created_at','visit_id'] },
+    // visit_service_id: CRM_CALENDAR_MIRROR_V1 (mig 187) — строка визита, которая
+    // отвечает этой строке заявки. Ставит только сервер (crm/booking-mirror.js),
+    // поэтому в записи колонки нет.
+    read:  { roles: ALL_STAFF, columns: ['id','request_id','service_id','scheduled_date','status','note','doctor_id','created_at','visit_id','visit_service_id'] },
     // CALLCENTER_ROLE_V1 — «Сохранить и записать» writes the dated lines here,
     // and re-booking cancels the superseded ones by UPDATE, so the call centre
     // needs insert+update. It never deletes: saveLines() cancels, so that a line

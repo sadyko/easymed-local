@@ -166,10 +166,20 @@ export function crmVisitLinks(db, args, user) {
   const raw = Array.isArray(args && args.visit_ids) ? args.visit_ids : [];
   const ids = [...new Set(raw.map(Number).filter((x) => Number.isInteger(x) && x > 0))].slice(0, VISIT_LINKS_MAX);
   if (!ids.length) return [];
-  return db.prepare(`
+  const byLines = db.prepare(`
     SELECT visit_id, MIN(request_id) AS request_id
       FROM crm_request_services
      WHERE visit_id IN (${ids.map(() => '?').join(',')})
      GROUP BY visit_id
      ORDER BY visit_id`).all(...ids);
+  // CRM_CALENDAR_MIRROR_V1 — запись из календаря, привязанная к заявке, пока у
+  // неё нет ни одной строки (crm_booking_links, миграция 187), тоже «из заявки».
+  let linked = [];
+  try {
+    linked = db.prepare(`SELECT visit_id, request_id FROM crm_booking_links
+                          WHERE visit_id IN (${ids.map(() => '?').join(',')})`).all(...ids);
+  } catch { linked = []; }   // сборка без 187
+  const have = new Set(byLines.map((r) => r.visit_id));
+  return [...byLines, ...linked.filter((r) => !have.has(r.visit_id))]
+    .sort((a, b) => a.visit_id - b.visit_id);
 }

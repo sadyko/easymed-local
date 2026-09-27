@@ -251,6 +251,10 @@ export function crmMergeLeads(db, args, user) {
     //    видит (crm_tasks.scope.orOwn).
     db.prepare(`UPDATE crm_request_services SET request_id = ? WHERE request_id IN (${lh})`).run(keepId, ...mergeIds);
     db.prepare(`UPDATE crm_tasks SET request_id = ? WHERE request_id IN (${lh})`).run(keepId, ...mergeIds);
+    // CRM_CALENDAR_MIRROR_V1 — привязки записей календаря к заявке (миграция 187)
+    // переезжают так же: запись без строк иначе держалась бы за удалённую карточку.
+    try { db.prepare(`UPDATE crm_booking_links SET request_id = ? WHERE request_id IN (${lh})`).run(keepId, ...mergeIds); }
+    catch { /* сборка без 187 */ }
     // 2. Метки — объединение: у карточки метка либо есть, либо нет.
     if (hasTags) {
       db.prepare(`INSERT OR IGNORE INTO crm_request_tags (request_id, tag_key)

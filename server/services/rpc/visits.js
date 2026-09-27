@@ -17,6 +17,9 @@ import { DEFAULT_DURATION_MIN, serviceDurationMinutes, formatHhmm } from './slot
 import { openStageKeys, scheduledStageKey, noShowStageKey, SEED_NO_SHOW_STAGE } from '../crm/config.js';
 // BILLING_AUDIT_FIX_V1 (A1) — день визита считается в МЕСТНОМ времени клиники.
 import { localDate } from '../domain/day.js';
+// CRM_CALENDAR_MIRROR_V1 — запись и заявка — одна запись: строки услуг
+// записи сверяются с строками заявки (crm/booking-mirror.js).
+import { mirrorVisit, attachVisitToCrm, visitHasWork, PRE_ARRIVAL } from '../crm/booking-mirror.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400, code = null, params = null) {
@@ -394,7 +397,12 @@ export async function ensureVisit(db, args, user) {
   });
 
   const out = run();
-  if (!book) return { ...out, booked: false };
+  if (!book) {
+    // CRM_CALENDAR_MIRROR_V1 — строки заявки, которые визит только что взял,
+    // становятся строками визита (до прихода); без записи новой заявки не ищем.
+    mirrorVisit(db, out.visit.id, { actorId: user && user.id });
+    return { ...out, booked: false };
+  }
 
   // ─── ЗАПИСЬ И ОТКАТ ───────────────────────────────────────────────────────
   //
@@ -418,16 +426,24 @@ export async function ensureVisit(db, args, user) {
   //   время визита это время его прихода. Переписать его записью нельзя,
   //   поэтому ответ честно говорит booked:false, называет причину и отдаёт
   //   ВРЕМЯ И ВРАЧА того визита: оператору надо что-то сказать вслух.
+  //
+  // CRM_CALENDAR_MIRROR_V1 — «ПУСТОЙ» ТЕПЕРЬ ЗНАЧИТ «БЕЗ РАБОТЫ». Запись до
+  // прихода держит строки своих услуг ('added', без счёта): их заводит зеркало
+  // заявки и колл-центр из календаря. Такая запись по-прежнему только запись —
+  // перенос её времени ничего не стирает, строки едут вместе с визитом.
+  // Работа — это счёт или строка дальше «в смете» (visitHasWork), либо визит
+  // уже не в статусе записи.
   const dayVisitIsBare = (visitId) => {
-    const has = (sql) => !!db.prepare(sql).get(visitId);
-    if (has('SELECT 1 FROM visit_services WHERE visit_id = ? LIMIT 1')) return false;
-    return !has('SELECT 1 FROM invoices WHERE visit_id = ? LIMIT 1');
+    const v = db.prepare('SELECT status FROM visits WHERE id = ?').get(visitId);
+    if (!v || !PRE_ARRIVAL.includes(v.status)) return false;
+    return !visitHasWork(db, visitId);
   };
 
   if (!out.created && !dayVisitIsBare(out.visit.id)) {
     // Строки заявки с этим визитом всё равно связываются: в этот день
     // пациента держит именно он, и в смете регистратуры они нужны.
     settleCrmOnBooking(out.visit);
+    mirrorVisit(db, out.visit.id, { actorId: user && user.id });   // CRM_CALENDAR_MIRROR_V1
     const doctor = out.visit.doctor_id
       ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(out.visit.doctor_id)
       : null;
@@ -497,6 +513,10 @@ export async function ensureVisit(db, args, user) {
     }
   }
   settleCrmOnBooking(out.visit);
+  // CRM_CALENDAR_MIRROR_V1 — запись без строк заявки (мастер визита, календарь)
+  // привязывается к заявке пациента; затем строки записи и заявки сверяются.
+  attachVisitToCrm(db, out.visit.id, user);
+  mirrorVisit(db, out.visit.id, { actorId: user && user.id });
   return { ...out, booked: true };
 }
 
@@ -564,6 +584,8 @@ export function discardEmptyVisit(db, args, user) {
     } catch { /* сборка без 186 — возвращать нечего */ }
     // Строки заявок, которые ensure_visit успел привязать, снова свободны.
     db.prepare('UPDATE crm_request_services SET visit_id = NULL WHERE visit_id = ?').run(visitId);
+    // CRM_CALENDAR_MIRROR_V1 — и привязка записи к заявке уходит вместе с ней.
+    try { db.prepare('DELETE FROM crm_booking_links WHERE visit_id = ?').run(visitId); } catch { /* сборка без 187 */ }
     db.prepare('DELETE FROM visits WHERE id = ?').run(visitId);
     return { discarded: true };
   });
