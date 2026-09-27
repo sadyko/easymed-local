@@ -3,6 +3,7 @@ import { getRpc } from '../services/rpc/index.js';
 import { isReadOnlyRpc, isAlwaysAllowedRpc, lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 import { constraintRefusal, errorBody, fillTemplate } from '../services/server-message.js';   // V3120_I18N
+import { dispatchRpc } from '../services/report-pool.js';   // V3120_PERF — тяжёлые отчёты в пуле потоков
 
 export function rpcRoutes(db) {
   const r = Router();
@@ -37,7 +38,9 @@ export function rpcRoutes(db) {
       return res.status(501).json({ error: { code: 'rpc_not_implemented', message: fillTemplate(template, params), template, params } });
     }
     try {
-      const data = await handler(db, req.body || {}, req.user);
+      // V3120_PERF — отчёт (POOLED_RPCS) считается в потоке отчётов, если пул
+      // включён при запуске; иначе — здесь же, как прежде.
+      const data = await dispatchRpc(db, req.params.name, handler, req.body || {}, req.user);
       return res.json({ data });
     } catch (e) {
       // V3120_I18N — нарушение ограничения SQLite внутри обработчика — это

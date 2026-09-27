@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb } from './db/connection.js';
+import { configureReportPool } from './services/report-pool.js';   // V3120_PERF
 import { migrate, pendingMigrations } from './db/migrate.js';
 import { backupBeforeMigrate } from './db/backup.js';   // SUPERVISED_INSTALL_V1
 import { processPendingAction, pruneBackupsByKind, scheduleDailyBackups } from './services/backup.js';   // SYSTEM_SETTINGS_V1
@@ -227,6 +228,10 @@ if (isMain) {
   startLisListeners(db).catch((e) => console.log('LIS: ' + (e && e.message ? e.message : e)));
 
     const PORT = Number(process.env.PORT || 8000);
+  // V3120_PERF — отчёты считаются в пуле потоков (свои read-only соединения к
+  // этому же файлу), чтобы годовой отчёт не останавливал регистратуру и кассу.
+  // База не в WAL или поток не поднялся — отчёты идут по-старому, здесь же.
+  configureReportPool({ db, dbFile: path.join(DATA_DIR, 'easymed.db'), dataDir: DATA_DIR });
   const server = createApp(db, { dataDir: DATA_DIR }).listen(PORT, '0.0.0.0', () => {
     // OPS_EVENTS_V1 — recorded here, not earlier: this callback only fires
     // once the port is actually bound, i.e. the clinic really did start (as
