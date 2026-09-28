@@ -384,6 +384,66 @@ test('ревью I2: модели прибора нет среди профил�
   assert.ok(optionsOf(sel).some((o) => o.value === 'mindray-bc-9999' && textOf(o) === 'mindray-bc-9999 — профиль не найден'));
 });
 
+// ── Ревью M3 — форма, открытая из окна «Добавить прибор», возвращает туда ────
+// «Удалить» у строки окна, и «Изменить → Сохранить / Удалить» у ждущего
+// закрывали всё окно: человек разбирал список и терял его после каждого шага.
+async function openAddWindowRoot(devices) {
+  DEVICES = devices;
+  const root = await mount();
+  findButtonByText(root, /Добавить прибор/).click();
+  await tick();
+  return root;
+}
+const formButton = (root, re) => findButtons(root).find((b) => re.test(textOf(b).replace(/<svg[\s\S]*?<\/svg>/g, '').trim()));
+
+test('ревью M3: «Удалить» у находки — окно «Добавить прибор» остаётся открытым', async () => {
+  const root = await openAddWindowRoot([HEARD, FOUND, WAITING]);
+  findButtonByText(rowNamed(root, 'BC-5300'), /Удалить/).click();
+  await tick(60);
+  assert.strictEqual(toastMsg, 'Прибор удалён');
+  assert.ok(addWindow(root), 'окно на месте');
+});
+
+test('ревью M3: «Изменить → Сохранить» у ждущего — снова окно «Добавить прибор», а не пустое место', async () => {
+  const root = await openAddWindowRoot([HEARD, FOUND, WAITING]);
+  findButtonByText(rowNamed(root, 'jjjj'), /Изменить/).click();
+  await tick();
+  assert.ok(!addWindow(root), 'открыта форма прибора');
+  formButton(root, /^Сохранить$/).click();
+  await tick(60);
+  assert.ok(writes.some((w) => w.table === 'lab_devices' && w.op === 'update'), 'сохранено: ' + JSON.stringify(writes));
+  assert.ok(addWindow(root), 'вернулись в окно');
+});
+
+test('ревью M3: «Изменить → Удалить» и «Изменить → Отмена» у ждущего — тоже обратно в окно', async () => {
+  let root = await openAddWindowRoot([HEARD, WAITING]);
+  findButtonByText(rowNamed(root, 'jjjj'), /Изменить/).click();
+  await tick();
+  formButton(root, /^Удалить$/).click();
+  await tick(60);
+  assert.deepStrictEqual(rpcCalls.filter((c) => c.name === 'lis_device_delete').map((c) => c.args), [{ id: 4 }]);
+  assert.ok(addWindow(root), 'после удаления — окно');
+
+  root = await openAddWindowRoot([HEARD, WAITING]);
+  findButtonByText(rowNamed(root, 'jjjj'), /Изменить/).click();
+  await tick();
+  formButton(root, /^Отмена$/).click();
+  await tick();
+  assert.ok(addWindow(root), 'после отмены — окно');
+});
+
+test('ревью M3: форма из таблицы по-прежнему просто закрывается', async () => {
+  DEVICES = [HEARD];
+  const root = await mount();
+  findButtonByText(rowNamed(root, 'kjkj'), /Изменить/).click();
+  await tick();
+  formButton(root, /^Сохранить$/).click();
+  await tick(60);
+  assert.ok(writes.some((w) => w.table === 'lab_devices' && w.op === 'update'));
+  assert.ok(!addWindow(root), 'окно «Добавить прибор» само не открывается');
+  assert.ok(!findButtons(root).some((b) => /^\s*Сохранить\s*$/.test(textOf(b))), 'форма закрыта');
+});
+
 test('ревью I2: новый прибор по адресу — по-прежнему выбрана первая модель', async () => {
   DEVICES = [HEARD];
   const root = await mount();

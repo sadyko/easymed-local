@@ -60,7 +60,8 @@ export async function mountLabDevices(container) {
     // LIS_ANALYZER_LIST_V1 — listeners: какие порты слушаются (lis_listeners);
     // formMode: что открыто под таблицей ('add' | 'adopt' | 'edit' | null) —
     // живой опрос перерисовывает окно «Добавить прибор», но не форму, в которой печатают.
-    const state = { devices: [], profiles: [], messages: [], recent: [], loadError: null, listeners: null, formMode: null };
+    // backToAdd (ревью M3): форма открыта из окна «Добавить прибор» и вернётся туда.
+    const state = { devices: [], profiles: [], messages: [], recent: [], loadError: null, listeners: null, formMode: null, backToAdd: false };
 
     const devicesCard = h('div', { class: 'card' });
     const formCard = h('div', { class: 'card', style: { display: 'none' } });
@@ -248,8 +249,9 @@ export async function mountLabDevices(container) {
 
     // ---------- форма прибора ----------
 
-    function openForm(device) {
+    function openForm(device, { fromAdd = false } = {}) {
         state.formMode = 'edit';   // LIS_ANALYZER_LIST_V1
+        state.backToAdd = fromAdd;   // ревью M3
         formCard.style.display = '';
         clear(formCard);
 
@@ -309,7 +311,7 @@ export async function mountLabDevices(container) {
 
         formCard.appendChild(h('div', { class: 'row', style: { gap: '8px', marginTop: '6px' } },
             h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: save }, tr('Сохранить')),
-            h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: closeForm }, tr('Отмена')),
+            h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: leaveForm }, tr('Отмена')),
             h('span', { class: 'grow' }),
             device ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => removeDevice(device) }, tr('Удалить')) : null));
 
@@ -337,12 +339,22 @@ export async function mountLabDevices(container) {
             const { error } = await supabase.rpc('lis_restart', {});
             if (error) toast(trf('Прибор сохранён, но слушатель не перезапустился: {msg}', { msg: error.message || error }), 'fail');
             else toast(tr('Прибор сохранён'));
-            closeForm();
-            await reload();
             // LIS_ANALYZER_LIST_V1 — новый прибор по адресу ждёт первого
-            // сообщения: показать его там, где он теперь стоит.
-            if (!device) openAddWindow();
+            // сообщения: показать его там, где он теперь стоит. Ревью M3: и
+            // правка из окна «Добавить прибор» возвращает в окно, а не
+            // закрывает его. Сначала перечитать (форма пока на экране), потом
+            // — туда, откуда открыли.
+            const back = state.backToAdd || !device;
+            await reload();
+            if (back) openAddWindow(); else closeForm();
         }
+    }
+
+    // Ревью M3 — форма, открытая из окна «Добавить прибор», возвращает туда
+    // («Отмена» здесь, «Сохранить» и «Удалить» — так же); открытая из таблицы
+    // — закрывается, как прежде.
+    function leaveForm() {
+        if (state.backToAdd) openAddWindow(); else closeForm();
     }
 
     // LIS_ANALYZER_LIST_V1 — удаление вынесено из openForm: «Удалить» есть и у
@@ -356,6 +368,10 @@ export async function mountLabDevices(container) {
     // просто «Удалить?»: «панели перестанут принимать результаты» больше не
     // случается, сервер такое удаление не делает.
     async function removeDevice(dev) {
+        // Ревью M3: откуда позвали — туда и вернуться. Строка окна «Добавить
+        // прибор» или форма, открытая из него, — снова окно; форма из таблицы
+        // — закрыть.
+        const back = state.formMode === 'add' || state.backToAdd;
         if (!window.confirm(trf('Удалить «{name}»?', { name: dev.name }))) return;
         const { error } = await supabase.rpc('lis_device_delete', { id: dev.id });
         if (error) {
@@ -366,8 +382,8 @@ export async function mountLabDevices(container) {
             return;
         }
         toast(tr('Прибор удалён'));
-        closeForm();
         await reload();
+        if (back) openAddWindow(); else closeForm();
     }
 
     // ---------- окно «Добавить прибор» (LIS_ANALYZER_LIST_V1) ----------
@@ -379,6 +395,7 @@ export async function mountLabDevices(container) {
 
     function openAddWindow() {
         state.formMode = 'add';
+        state.backToAdd = false;   // ревью M3: окно — не форма, возвращаться некуда
         formCard.style.display = '';
         paintAddWindow();
     }
@@ -460,7 +477,7 @@ export async function mountLabDevices(container) {
                             : tr(TRANSPORT_LABEL[d.transport] || d.transport)),
                     h('td', null, lineTag),
                     h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
-                        h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => openForm(d) }, Icon('Edit', { size: 13 }), ' ', tr('Изменить')),
+                        h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => openForm(d, { fromAdd: true }) }, Icon('Edit', { size: 13 }), ' ', tr('Изменить')),
                         ' ',
                         h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => removeDevice(d) }, tr('Удалить')))));
             }
@@ -468,7 +485,7 @@ export async function mountLabDevices(container) {
         }
 
         formCard.appendChild(h('div', { style: { marginTop: '12px' } },
-            h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => openForm(null) },
+            h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => openForm(null, { fromAdd: true }) },
                 tr('Анализатор не появился? Добавить по адресу'))));
     }
 
@@ -517,6 +534,7 @@ export async function mountLabDevices(container) {
 
     function closeForm() {
         state.formMode = null;   // LIS_ANALYZER_LIST_V1
+        state.backToAdd = false;   // ревью M3
         formCard.style.display = 'none';
         clear(formCard);
     }
