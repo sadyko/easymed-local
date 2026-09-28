@@ -66,13 +66,23 @@ export function parseMessage(text) {
       // а при нескольких заказах в одном сообщении верен именно первый.
       if (!sampleId) sampleId = (f[3] || '').trim();
     } else if (seg.startsWith('OBX')) {
+      // LIS_MINDRAY_CODES_V1 — OBX-3 целиком и по частям. Mindray пишет
+      // «6690-2^WBC^LN»: код LOINC, имя, система. Раньше выживал только первый
+      // компонент, и бланк, привязанный к «WBC», оставался пустым при ACK AA.
+      // Сравнивать с кодом бланка — дело match.js; здесь только разбор.
+      const id = comp(f[3]);
       observations.push({
         valueType: (f[2] || '').trim(),
-        code: comp(f[3])[0].trim(),
+        code: (id[0] || '').trim(),
+        name: (id[1] || '').trim(),
+        system: (id[2] || '').trim(),
+        codeRaw: (f[3] || '').trim(),
         value: (f[5] || '').trim(),
         unit: comp(f[6])[0].trim(),
         range: (f[7] || '').trim(),
-        abnormal: (f[8] || '').trim(),
+        // OBX-8 повторяется («H~N»): смысл несёт первое повторение. Целиком
+        // строка уходила в «прочее» и становилась «abnormal» вместо «high».
+        abnormal: String(f[8] == null ? '' : f[8]).split(repSep)[0].trim(),
         status: (f[11] || '').trim(),
       });
     }

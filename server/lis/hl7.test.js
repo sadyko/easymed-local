@@ -20,8 +20,8 @@ test('разбирает ORU: тип, номер сообщения, номер 
   assert.equal(m.sendingApp, 'BC-5300', 'MSH-3: как прибор себя называет — на этом держится самоопределение');
   assert.equal(m.observations.length, 2);
   assert.deepEqual(m.observations[0], {
-    valueType: 'NM', code: 'WBC', value: '6.1',
-    unit: '10*9/L', range: '4.0-9.0', abnormal: 'N', status: 'F',
+    valueType: 'NM', code: 'WBC', name: 'Leukocytes', system: '99MRC', codeRaw: 'WBC^Leukocytes^99MRC',
+    value: '6.1', unit: '10*9/L', range: '4.0-9.0', abnormal: 'N', status: 'F',
   });
 });
 
@@ -66,4 +66,27 @@ test('ACK и NAK имеют правильную форму и несут ном
   assert.match(buildAck('42', 'AA'), /MSA\|AA\|42/);
   assert.match(buildAck('42', 'AE'), /MSA\|AE\|42/);
   assert.match(buildAck('42', 'AA'), /^MSH\|\^~\\&\|/);
+});
+
+// LIS_MINDRAY_CODES_V1 — Mindray пишет OBX-3 как «LOINC^ИМЯ^LN». Раньше выживал
+// только первый компонент, и бланк, привязанный к «WBC», оставался пустым.
+test('«6690-2^WBC^LN» разбирается на код, имя и систему, поле целиком сохраняется', () => {
+  const m = parseMessage([
+    'MSH|^~\\&|BC-5380|Mindray|||20260928120000||ORU^R01|7|P|2.3.1',
+    'OBR|1||LAB-000098|00001^Automated Count^99MRC',
+    'OBX|1|IS|08001^Take Mode^99MRC||O||||||F',
+    'OBX|2|NM|6690-2^WBC^LN||9.81|10*9/L|4.00-10.00|H~N|||F',
+    'OBX|3|NM|WBC^^99MRC||6.1|10*9/L|||||F',
+  ].join('\r'));
+  const [mode, loinc, plain] = m.observations;
+  assert.equal(mode.valueType, 'IS');
+  assert.equal(mode.name, 'Take Mode');
+  assert.equal(loinc.code, '6690-2');
+  assert.equal(loinc.name, 'WBC');
+  assert.equal(loinc.system, 'LN');
+  assert.equal(loinc.codeRaw, '6690-2^WBC^LN', 'человек в журнале видит обе части');
+  assert.equal(loinc.abnormal, 'H', 'OBX-8 «H~N»: смысл несёт первое повторение');
+  assert.equal(plain.code, 'WBC');
+  assert.equal(plain.name, '', 'у «WBC^^99MRC» имени нет — и это не ошибка');
+  assert.equal(plain.codeRaw, 'WBC^^99MRC');
 });
