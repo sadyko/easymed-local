@@ -14,7 +14,7 @@ import { openStockIssueModal } from './stock-issue-modal.js';   // STOCK_ISSUE_M
 import { renderInactiveHoldings } from './inventory-inactive-holdings.js';   // V3120_FIX — подотчёт отключённых
 // SUPPLIERS_VAT_V1 — типы товаров, ставки НДС и формат срока годности импорта —
 // один список с сервером.
-import { GOODS_CATEGORIES, GOODS_CATEGORY_RU, EXPIRY_FORMAT_RU, EXPIRY_EXAMPLE, dmyOfDate } from '../../shared/goods-catalog.js';
+import { GOODS_CATEGORIES, GOODS_CATEGORY_RU, EXPIRY_FORMAT_RU, EXPIRY_EXAMPLE, dmyOfDate, dmyOfParts } from '../../shared/goods-catalog.js';
 
 const sklad = {
     products: [], suppliers: [], linksOf: new Map(),
@@ -374,6 +374,29 @@ export async function downloadImportTemplate() {
     }
 }
 
+/**
+ * Ревью M4 — лист книги → строки ячеек, дата-ячейки — «ДД.ММ.ГГГГ» ровно как
+ * написаны. Книга читается ЧИСЛАМИ (cellDates: false, cellNF: true): у
+ * дата-ячейки — число Excel и формат даты, и день берётся из частей Excel
+ * (SSF.parse_date_code), а не из Date, у которого «+12 часов» переносили
+ * «28.09.2026 18:00» на 29.09. Число без формата даты остаётся числом —
+ * сервер его отклонит («нужен ДД.ММ.ГГГГ»).
+ */
+export function sheetMatrix(XLSX, ws) {
+    for (const addr of Object.keys(ws || {})) {
+        if (addr[0] === '!') continue;
+        const c = ws[addr];
+        if (!c) continue;
+        let dmy = null;
+        if (c.t === 'n' && c.z && XLSX.SSF.is_date(c.z)) dmy = dmyOfParts(XLSX.SSF.parse_date_code(c.v));
+        else if (c.t === 'd' && c.v instanceof Date) dmy = dmyOfDate(c.v);
+        // Формат даты уходит вместе с числом: sheet_to_json иначе прочтёт
+        // текст «28.09.2026» как число даты и отдаст пусто.
+        if (dmy) { c.t = 's'; c.v = dmy; delete c.w; delete c.z; }
+    }
+    return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+}
+
 /** Ячейка срока годности → то, что уходит на сервер: дата-ячейка → «ДД.ММ.ГГГГ». */
 export function expiryCellValue(v) {
     if (v instanceof Date) return dmyOfDate(v) || '';
@@ -441,11 +464,12 @@ function openImportModal(onDone) {
         if (!file) return;
         try {
             const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
-            // cellDates — настоящая дата-ячейка приходит датой, а не числом
-            // (46387): её и превращает в ДД.ММ.ГГГГ importRowsFromMatrix.
-            const wb = XLSX.read(await file.arrayBuffer(), { cellDates: true });
+            // Ревью M4 — книга читается числами с форматами: дата-ячейку
+            // (46387 с форматом даты) превращает в ДД.ММ.ГГГГ sheetMatrix — день,
+            // как написан, со временем или без.
+            const wb = XLSX.read(await file.arrayBuffer(), { cellDates: false, cellNF: true });
             const ws = wb.Sheets[wb.SheetNames[0]];
-            const rows = importRowsFromMatrix(XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }));
+            const rows = importRowsFromMatrix(sheetMatrix(XLSX, ws));
             parsedRows = rows;
             importBtn.disabled = false;
             previewEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },

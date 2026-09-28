@@ -177,14 +177,36 @@ export function parseExpiryDmy(value, todayIso) {
     return { iso };
 }
 
+const pad2 = (n) => String(n).padStart(2, '0');
+
 /**
- * Дата-ячейка Excel (JS Date, прочитанный SheetJS с cellDates) → «ДД.ММ.ГГГГ».
- * +12 часов — чтобы и местная полночь (с секундной поправкой старых поясов), и
- * полночь UTC попадали в свой день при любом поясе компьютера.
+ * Дата-ячейка Excel (JS Date) → «ДД.ММ.ГГГГ» — КАЛЕНДАРНЫЙ ДЕНЬ, КАК ЕГО
+ * НАПИСАЛИ В ЯЧЕЙКЕ.
+ *
+ * Ревью M4 — прежде здесь стояло «+12 часов»: оно ставило в свой день и
+ * местную полночь, и полночь UTC, но переносило на СЛЕДУЮЩИЙ день всё, что
+ * написано с 12:00 и позже («28.09.2026 18:00» → 29.09, «31.12.2027 23:59»
+ * получал лишний день срока). SheetJS 0.20.3 отдаёт дату-ячейку Date'ом, у
+ * которого UTC-часы — ровно написанное в ячейке, поэтому день берётся из UTC.
+ * Одно исключение — Date, собранный как МЕСТНАЯ полночь (так его строят
+ * вызовы и старые версии, иногда с секундной поправкой старых поясов): у него
+ * день — местный. Экран импорта Date'ов вовсе не получает: он читает книгу
+ * числами и берёт день из частей Excel (dmyOfParts ниже).
  */
 export function dmyOfDate(date) {
     if (!(date instanceof Date) || !Number.isFinite(date.getTime())) return null;
-    const t = new Date(date.getTime() + 12 * 3600e3);
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${pad(t.getDate())}.${pad(t.getMonth() + 1)}.${t.getFullYear()}`;
+    const localMidnight = date.getHours() === 0 && date.getMinutes() === 0 && date.getMilliseconds() === 0;
+    if (localMidnight) return `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.${date.getFullYear()}`;
+    return `${pad2(date.getUTCDate())}.${pad2(date.getUTCMonth() + 1)}.${date.getUTCFullYear()}`;
+}
+
+/**
+ * Ревью M4 — дата-ячейка Excel по частям (SheetJS SSF.parse_date_code(число
+ * ячейки) → { y, m, d, H, M, … }) → «ДД.ММ.ГГГГ». Часы не участвуют: срок
+ * годности — день, написанный в ячейке, при любом поясе компьютера.
+ */
+export function dmyOfParts(p) {
+    if (!p || !Number.isInteger(p.y) || !Number.isInteger(p.m) || !Number.isInteger(p.d)) return null;
+    if (p.m < 1 || p.m > 12 || p.d < 1 || p.d > 31 || p.y < 1900) return null;
+    return `${pad2(p.d)}.${pad2(p.m)}.${p.y}`;
 }

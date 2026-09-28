@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   GOODS_CATEGORIES, GOODS_CATEGORY_RU, parseGoodsCategory, parseVatRate, vatLabel, vatOnNet, grossOfNet,
-  parseExpiryDmy, dmyOfDate, packOf, linkPackOf, linkPriceFor, priceInLinkPack,
+  parseExpiryDmy, dmyOfDate, dmyOfParts, packOf, linkPackOf, linkPriceFor, priceInLinkPack,
 } from './goods-catalog.js';
 import { PROCUREMENT_CATEGORIES } from '../../../server/services/rpc/expiry.js';
 import { openDb } from '../../../server/db/connection.js';
@@ -88,4 +88,26 @@ test('ревью F2: цена связи переводится через уп�
   assert.equal(priceInLinkPack(950, 10, 100), 9500);
   assert.equal(priceInLinkPack(1000, 3, 3), 1000, 'та же упаковка — та же цена');
   for (const v of [0, -1, 'x', null, undefined]) assert.equal(packOf(v), null, String(v));
+});
+
+// SUPPLIERS_VAT_V1 (ревью M4) — дата со временем: SheetJS 0.20.3 отдаёт
+// дату-ячейку Excel как Date, у которой UTC-часы — ровно то, что написано в
+// ячейке. Прежние «+12 часов» переносили на следующий день всё, что написано
+// с 12:00 и позже: «28.09.2026 18:00» становилось 29.09, «31.12.2027 23:59»
+// получало лишний день срока. Берётся календарная дата, как её написали.
+test('ревью M4: дата-ячейка со временем — тот же календарный день, что в ячейке', () => {
+  assert.equal(dmyOfDate(new Date(Date.UTC(2026, 8, 28, 18, 0))), '28.09.2026');
+  assert.equal(dmyOfDate(new Date(Date.UTC(2027, 11, 31, 23, 59))), '31.12.2027');
+  assert.equal(dmyOfDate(new Date(Date.UTC(2027, 11, 31, 0, 30))), '31.12.2027');
+  assert.equal(dmyOfDate(new Date(Date.UTC(2027, 11, 31, 12, 0))), '31.12.2027');
+  // Полночь — и местная, и UTC — как прежде.
+  assert.equal(dmyOfDate(new Date(2027, 11, 31)), '31.12.2027');
+  assert.equal(dmyOfDate(new Date(Date.UTC(2027, 11, 31))), '31.12.2027');
+});
+
+test('ревью M4: дата из частей Excel (SSF.parse_date_code) — как написано, при любом поясе', () => {
+  assert.equal(dmyOfParts({ y: 2026, m: 9, d: 28, H: 18, M: 0 }), '28.09.2026');
+  assert.equal(dmyOfParts({ y: 2027, m: 12, d: 31, H: 23, M: 59 }), '31.12.2027');
+  assert.equal(dmyOfParts(null), null);
+  assert.equal(dmyOfParts({ y: 2027, m: 13, d: 1 }), null);
 });

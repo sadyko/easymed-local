@@ -433,3 +433,26 @@ test('чистые правила заказа: цена и ставка по у
   assert.deepEqual(docs.poCreatePayload({ supplierId: null, notes: '  ', lines: [{ product: { id: 5 }, qty: 1, cost: null, vat: null }] }),
     { supplier_id: null, notes: null, lines: [{ product_id: 5, qty: 1, vat_rate: null }] });
 });
+
+// Ревью M4 — дата-ячейка со временем: книга читается числами, день — как написан.
+test('ревью M4: «28.09.2026 18:00» и «31.12.2027 23:59» в ячейке срока — тот же день, а не следующий', async () => {
+  const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
+  const header = sklad.IMPORT_COLUMNS;
+  const exp = header.length - 1;
+  const row = (name, when) => { const r = header.map(() => ''); r[0] = name; r[1] = 'Расходники'; r[3] = 1; r[exp] = when; return r; };
+  const ws0 = XLSX.utils.aoa_to_sheet([header,
+    row('Вата', new Date(2026, 8, 28, 18, 0)),
+    row('Бинт', new Date(2027, 11, 31, 23, 59)),
+    row('Маска', new Date(2027, 11, 31)),
+  ]);
+  ws0[XLSX.utils.encode_cell({ r: 4, c: 0 })] = { t: 's', v: 'Шприц' };
+  ws0[XLSX.utils.encode_cell({ r: 4, c: 1 })] = { t: 's', v: 'Расходники' };
+  ws0[XLSX.utils.encode_cell({ r: 4, c: exp })] = { t: 'n', v: 46387 };   // число без формата даты
+  ws0['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: 4, c: exp } });
+  const wb0 = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb0, ws0, 'Импорт');
+  const buf = XLSX.write(wb0, { type: 'buffer', bookType: 'xlsx' });
+  const wb = XLSX.read(buf, { cellDates: false, cellNF: true });
+  const rows = sklad.importRowsFromMatrix(sklad.sheetMatrix(XLSX, wb.Sheets[wb.SheetNames[0]]));
+  assert.deepEqual(rows.map((r) => [r.name, r.expiry_date]),
+    [['Вата', '28.09.2026'], ['Бинт', '31.12.2027'], ['Маска', '31.12.2027'], ['Шприц', 46387]]);
+});
