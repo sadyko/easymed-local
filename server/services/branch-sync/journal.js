@@ -93,7 +93,12 @@ export const SHIPPED = {
   // и доли врачей и вознаграждения по этому счёту в двух зданиях разошлись бы.
   // Старый отправитель колонку не шлёт — приёмник пропускает отсутствующие
   // поля (records.js), и у строки остаётся 0.
-  invoice_items: ['description', 'quantity', 'unit_price', 'total', 'discount_amount', 'created_at'],
+  // SUPPLIERS_VAT_V1 (ревью M9, мигр. 224) — goods_vat_rate: ставка НДС товара,
+  // записанная у строки при выдаче. У строки счёта соседа нет нашей строки
+  // визита (invoice_item_id не ездит), и без этой колонки НДС товаров соседа
+  // в сводной «Общей выручке» был бы 0. Старый отправитель её не шлёт — NULL,
+  // как у продажи до учёта НДС.
+  invoice_items: ['description', 'quantity', 'unit_price', 'total', 'discount_amount', 'goods_vat_rate', 'created_at'],
   payments: ['amount', 'method', 'notes', 'paid_at', 'created_at'],
   // PATIENT_MERGE_BRANCHES_V1 (мигр. 168) — СОБЫТИЕ «карта drop слита в keep».
   // Карты названы uid — единственным именем, одинаковым во всех зданиях, —

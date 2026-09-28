@@ -794,9 +794,17 @@ export function createRequisition(db, args, user) {
 //   • «Категория» — одно из восьми названий (или ключ, goods-catalog.js). У
 //     НОВОГО товара обязателен: прежде импорт молча заводил всё
 //     «Расходниками», и лекарство уходило не в свою категорию;
-//   • «НДС» — 12%, 0% или «без НДС» (ставка товара; ею же считается НДС
-//     прихода этой строки). Пусто — ставка не указана: новый товар «без НДС»,
-//     у существующего не меняется, приход — без НДС, как прежде;
+//   • «НДС продажи» и «НДС прихода» — 12%, 0% или «без НДС» (ревью F3: была
+//     одна колонка «НДС», и строка ПРИХОДА «без НДС» переписывала ставку
+//     ПРОДАЖИ товара — а с ней, пока отчёты читали ставку карточки, и налог
+//     всех прошлых месяцев). Теперь:
+//       – «НДС продажи» — ставка товара (карточка): у нового товара — она, у
+//         существующего — меняется только этой колонкой, пусто — не меняется;
+//       – «НДС прихода» — ставка ЭТОГО прихода (и связи с поставщиком); ставку
+//         продажи существующего товара она не трогает никогда, а новому
+//         товару без «НДС продажи» даёт свою; пусто — НДС прихода «не
+//         указан», как прежде; без «Кол-во» — отказ (не к чему относиться);
+//       – прежний единый ключ vat_rate — отказ со словами о двух колонках;
 //   • «Цена закупки без НДС» (прежнее «Себестоимость» — та же колонка): с
 //     указанным НДС себестоимость на складе = цена × (1 + НДС), как у прихода;
 //   • «Цена продажи»;
@@ -915,10 +923,21 @@ export function importProductsExcel(db, args, user) {
             { row: rowNo, value: cellText(categoryText), list: GOODS_CATEGORY_LIST_RU }, 400);
         }
       }
-      // НДС — 12%, 0% или «без НДС».
-      const vatCell = parseVatRate(typeof row.vat_rate === 'string' ? row.vat_rate.trim() : row.vat_rate);
-      if (vatCell.error) {
-        throw rpcT(RpcError, 'Строка {row}: НДС «{value}» — допустимо 12%, 0% или «без НДС».', { row: rowNo, value: cellText(row.vat_rate) }, 400);
+      // Ревью F3 — две ставки вместо одной: продажи (товар) и прихода (строка).
+      if (row.vat_rate !== undefined && row.vat_rate !== null && String(row.vat_rate).trim() !== '') {
+        throw rpcT(RpcError, 'Строка {row}: колонка «НДС» теперь разделена — «НДС продажи» (ставка товара) и «НДС прихода» (ставка этого прихода). Скачайте новый «Шаблон».', { row: rowNo }, 400);
+      }
+      const vatOf = (v) => parseVatRate(typeof v === 'string' ? v.trim() : v);
+      const saleVat = vatOf(row.sale_vat_rate);
+      if (saleVat.error) {
+        throw rpcT(RpcError, 'Строка {row}: НДС продажи «{value}» — допустимо 12%, 0% или «без НДС».', { row: rowNo, value: cellText(row.sale_vat_rate) }, 400);
+      }
+      const receiptVat = vatOf(row.receipt_vat_rate);
+      if (receiptVat.error) {
+        throw rpcT(RpcError, 'Строка {row}: НДС прихода «{value}» — допустимо 12%, 0% или «без НДС».', { row: rowNo, value: cellText(row.receipt_vat_rate) }, 400);
+      }
+      if (!receiptVat.empty && !(qty !== null && qty > 0)) {
+        throw rpcT(RpcError, 'Строка {row}: «НДС прихода» относится к приходу — укажите «Кол-во».', { row: rowNo }, 400);
       }
       // Срок годности — ровно ДД.ММ.ГГГГ, настоящая дата, не прошедшая.
       // Число здесь — не дата: дату-ячейку экран уже превратил в ДД.ММ.ГГГГ.
@@ -954,7 +973,7 @@ export function importProductsExcel(db, args, user) {
           reorder !== null ? reorder : existing.reorder_level,
           supplierId !== null ? supplierId : existing.supplier_id,
           category || existing.procurement_category,
-          vatCell.empty ? existing.vat_rate : vatCell.rate,
+          saleVat.empty ? existing.vat_rate : saleVat.rate,   // ставку продажи правит только «НДС продажи»
           salePrice !== null ? salePrice : existing.sale_price,
           existing.id,
         );
@@ -965,16 +984,18 @@ export function importProductsExcel(db, args, user) {
             { row: rowNo, name: name.slice(0, 60), list: GOODS_CATEGORY_LIST_RU }, 400);
         }
         const u = unit || 'pcs';
+        // Новый товар: ставка продажи — «НДС продажи», без неё — ставка прихода.
+        const newVat = !saleVat.empty ? saleVat.rate : (!receiptVat.empty ? receiptVat.rate : null);
         insertProduct.run(name, u, u, reorder !== null ? reorder : 0, supplierId, category,
-          vatCell.empty ? null : vatCell.rate, salePrice !== null ? salePrice : 0);
+          newVat, salePrice !== null ? salePrice : 0);
         created++;
       }
 
       if (qty !== null && qty > 0) {
         const product = findProduct.get(name);   // fresh row after the catalog write
         const cost = unitCost !== null ? unitCost : 0;
-        // НДС прихода — ставка строки (если она указана); без неё — «не указан».
-        const vat = vatCell.empty ? undefined : vatCell.rate;
+        // НДС прихода — «НДС прихода» строки; без неё — «не указан».
+        const vat = receiptVat.empty ? undefined : receiptVat.rate;
         const m = receiptMoney(cost, qty, vat);
         const costPerBase = round2(m.grossUnit);
         const newOnHand = roundQty(product.on_hand + qty);
@@ -995,7 +1016,7 @@ export function importProductsExcel(db, args, user) {
         const product = findProduct.get(name);
         if (qty !== null && qty > 0 && unitCost !== null) {
           // Ревью F2 — цена импорта — за базовую единицу; связь помнит её в своей упаковке.
-          rememberSupplierPrice(db, { productId: product.id, supplierId, vat: vatCell.empty ? undefined : vatCell.rate,
+          rememberSupplierPrice(db, { productId: product.id, supplierId, vat: receiptVat.empty ? undefined : receiptVat.rate,
             price: unitCost, per: 1, packFactor: product.pack_factor, purchaseUnit: product.purchase_unit });
         } else {
           db.prepare(`INSERT OR IGNORE INTO item_suppliers (product_id, supplier_id, pack_factor, purchase_unit)

@@ -911,14 +911,19 @@ const POST_SALE_KEEP_SQL = `(CASE WHEN ${POST_SALE_SQL} > 0 AND i.total_amount +
 // SUPPLIERS_VAT_V1 (2026-09-28) — НАЛОГ СТРОКИ ТОВАРА — СТАВКА НДС ТОВАРА.
 // Владелец: у товара цена продажи и ставка НДС (12 %, 0 %, «без НДС»), и она
 // «used on the patient's bill for goods lines». У строки счёта с товаром нет
-// услуги (service_id NULL), и прежде её налог был 0 при любой ставке. Товар
-// строки — у связанной строки визита (visit_services.clinic_item_id) или
-// стационара (admission_services.clinic_item_id), обе ищутся по индексу
-// invoice_item_id. Одна колонка «Налог» на все строки. Долю врача это не
-// двигает: у товара её нет (PAY_GOODS_NONE_V1), вознаграждение за направление
-// от налога не зависит, записанные закрытые месяцы (D6) пересчитываются по
-// записанной доле налога, а товар и там — 0. Услуга без ставки и строка без
-// товара — как прежде.
+// услуги (service_id NULL), и прежде её налог был 0 при любой ставке. Одна
+// колонка «Налог» на все строки. Долю врача это не двигает: у товара её нет
+// (PAY_GOODS_NONE_V1), вознаграждение за направление от налога не зависит,
+// записанные закрытые месяцы (D6) пересчитываются по записанной доле налога,
+// а товар и там — 0. Услуга без ставки и строка без товара — как прежде.
+//
+// Ревью F3 — СТАВКА ЗАПИСАНА У СТРОКИ, а не читается из карточки товара:
+// invoice_items.goods_vat_rate (мигр. 224) — ставка на момент ВЫДАЧИ,
+// перешедшая в строку счёта при выставлении. Первая версия читала
+// products.vat_rate в момент отчёта, и первая же настройка ставки переписала
+// бы все прошлые месяцы (у товаров до 222 ставки нет). Строка, выданная до
+// обновления, ставки не имеет — налог 0, как в 3.12.1. Ревью M9 — ставку везёт
+// сама строка счёта, поэтому и счёт соседнего здания считается так же.
 //
 // НДС ТОВАРА — ВКЛЮЧЁННЫЙ В ЦЕНУ (решение 28.09): цена продажи товара — с НДС,
 // поэтому налог строки товара — ДОЛЯ её суммы: сумма после скидки × ставка /
@@ -928,11 +933,7 @@ const POST_SALE_KEEP_SQL = `(CASE WHEN ${POST_SALE_SQL} > 0 AND i.total_amount +
 // ITEM_TAX_BASE_SQL: 100 у услуги (100.0 + 0 — то же число, что прежнее 100.0,
 // поэтому налог услуги и доля врача бит в бит прежние) и 100 + ставка у товара.
 const ITEM_SVC_TAX_SQL = `(SELECT sx.tax_rate FROM services sx WHERE sx.id = ii.service_id)`;
-const ITEM_GOODS_VAT_SQL = `(CASE WHEN ii.service_id IS NULL THEN COALESCE(
-  (SELECT gpx.vat_rate FROM visit_services gvx JOIN products gpx ON gpx.id = gvx.clinic_item_id
-    WHERE gvx.invoice_item_id = ii.id ORDER BY gvx.id LIMIT 1),
-  (SELECT gpx.vat_rate FROM admission_services gax JOIN products gpx ON gpx.id = gax.clinic_item_id
-    WHERE gax.invoice_item_id = ii.id ORDER BY gax.id LIMIT 1)) END)`;
+const ITEM_GOODS_VAT_SQL = `(CASE WHEN ii.service_id IS NULL THEN ii.goods_vat_rate END)`;
 const ITEM_TAX_RATE_SQL = `COALESCE(${ITEM_SVC_TAX_SQL}, ${ITEM_GOODS_VAT_SQL}, 0)`;
 const ITEM_TAX_BASE_SQL = `(100.0 + CASE WHEN ${ITEM_SVC_TAX_SQL} IS NULL THEN COALESCE(${ITEM_GOODS_VAT_SQL}, 0) ELSE 0 END)`;
 // 1 — налог строки это НДС товара (ставка товара задана, 12 или 0); у «без
@@ -964,9 +965,8 @@ function lineTaxOf(r, after) {
 // одном знаке — меняется только, откуда берутся два числа.
 function fastMoneySql(sql) {
   if (!PUSH_DOWN) return sql;
-  // SUPPLIERS_VAT_V1 — ставка товара остаётся тем же подзапросом по индексу:
-  // он считается только у строки без услуги (COALESCE не идёт дальше ставки
-  // услуги), а таких строк — товары и приёмы — немного. Ставка услуги в
+  // SUPPLIERS_VAT_V1 — ставка товара — колонка самой строки счёта
+  // (ii.goods_vat_rate, ревью F3), подзапроса у неё нет. Ставка услуги в
   // делителе налога (ITEM_TAX_BASE_SQL) — та же колонка stx: у services.tax_rate
   // NOT NULL, поэтому «stx.tax_rate IS NULL» — ровно «у строки нет услуги».
   return sql.split(OWN_DISCOUNT_SUM_SQL).join('COALESCE(od.s, 0)')
@@ -1274,7 +1274,9 @@ function outpatientPayRows(db, { from, to, doctorId, bf, gf, withoutDoctor = fal
            CASE WHEN ii.id IS NOT NULL THEN ii.quantity ELSE vs.quantity END AS qty,
            -- SUPPLIERS_VAT_V1 — у строки товара ставка — НДС товара (как у
            -- строки счёта, ITEM_TAX_RATE_SQL): налог строки без счёта тот же.
-           COALESCE(s.tax_rate, pr.vat_rate, 0) AS tax_rate,
+           -- Ревью F3 — ставка, записанная у строки при выдаче, а не сегодняшняя
+           -- ставка карточки товара.
+           COALESCE(s.tax_rate, vs.goods_vat_rate, 0) AS tax_rate,
            ${BILLED_COLUMNS_SQL},
            vs.clinic_item_id                  AS clinic_item_id,
            vs.unit_price                      AS line_unit_price,
@@ -1448,7 +1450,9 @@ function foreignPayRows(db, { from, to, bf, gf }) {
            s.type                             AS service_group,
            s.is_lab                           AS service_is_lab,
            ii.quantity                        AS qty,
-           COALESCE(s.tax_rate, 0)            AS tax_rate,
+           -- SUPPLIERS_VAT_V1 (ревью M9) — у строки товара соседа ставка — та, что
+           -- приехала с самой строкой счёта (записана у соседа при выдаче).
+           COALESCE(s.tax_rate, ii.goods_vat_rate, 0) AS tax_rate,
            ${BILLED_COLUMNS_SQL},
            NULL AS clinic_item_id, NULL AS line_unit_price, NULL AS price_tier, NULL AS package_id, NULL AS price_doctor_id,
            0 AS pct, NULL AS inpatient_pct, NULL AS fix, 0 AS tier_units_above,

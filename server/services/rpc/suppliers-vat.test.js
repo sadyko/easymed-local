@@ -225,14 +225,16 @@ test('приход с НДС: цена без НДС, НДС строки, се�
 // ---------------------------------------------------------------------------
 // Импорт Excel
 // ---------------------------------------------------------------------------
-test('импорт: тип, НДС, цена продажи, партия и срок ДД.ММ.ГГГГ; связь с поставщиком; цена больше миллиона', () => {
+// Ревью F3 — «НДС» разделён: receipt_vat_rate («НДС прихода») и sale_vat_rate
+// («НДС продажи»); новый товар без «НДС продажи» берёт ставку прихода.
+test('импорт: тип, НДС прихода и продажи, цена продажи, партия и срок ДД.ММ.ГГГГ; связь с поставщиком; цена больше миллиона', () => {
   const { db } = seed();
   const exp = shift(db, 400);
   const r = call('import_products_excel', db, { rows: [
-    { name: 'Цефтриаксон 1 г', category: 'Медикаменты', unit: 'фл', qty: 30, unit_cost: 10000, vat_rate: '12%', sale_price: 15000,
+    { name: 'Цефтриаксон 1 г', category: 'Медикаменты', unit: 'фл', qty: 30, unit_cost: 10000, receipt_vat_rate: '12%', sale_price: 15000,
       reorder_level: 5, supplier: 'ООО Медснаб', batch_no: 'C-2601', expiry_date: dmy(exp) },
-    { name: 'УЗИ-аппарат', category: 'equipment', qty: 1, unit_cost: '1 500 000', vat_rate: 'без НДС', sale_price: 0 },
-    { name: 'Шприц 5 мл', category: 'расходники', vat_rate: 0.12, supplier: 'ООО Медснаб' },   // «12%» из процентной ячейки Excel
+    { name: 'УЗИ-аппарат', category: 'equipment', qty: 1, unit_cost: '1 500 000', receipt_vat_rate: 'без НДС', sale_price: 0 },
+    { name: 'Шприц 5 мл', category: 'расходники', sale_vat_rate: 0.12, supplier: 'ООО Медснаб' },   // «12%» из процентной ячейки Excel
   ] });
   assert.deepEqual(r, { created: 3, updated: 0, received: 2 });
   const cef = db.prepare("SELECT * FROM products WHERE name = 'Цефтриаксон 1 г'").get();
@@ -273,7 +275,10 @@ test('импорт: тип, НДС и срок годности — только
     (e) => e.status === 400 && new RegExp('^Строка ' + rowNo + ': ').test(e.message) && re.test(e.message), JSON.stringify(row));
   fails({ name: 'А', category: 'Лекарства' }, /категория «Лекарства» — такой категории нет\. Допустимо: Медикаменты, Расходники/);
   fails({ name: 'А' }, /у нового товара «А» укажите «Категорию» — одну из: Медикаменты/);
-  fails({ name: 'А', category: 'Медикаменты', vat_rate: '15%' }, /НДС «15%» — допустимо 12%, 0% или «без НДС»/);
+  fails({ name: 'А', category: 'Медикаменты', sale_vat_rate: '15%' }, /НДС продажи «15%» — допустимо 12%, 0% или «без НДС»/);
+  fails({ name: 'А', category: 'Медикаменты', qty: 1, receipt_vat_rate: '20%' }, /НДС прихода «20%» — допустимо 12%, 0% или «без НДС»/);
+  fails({ name: 'А', category: 'Медикаменты', receipt_vat_rate: '12%' }, /«НДС прихода» относится к приходу — укажите «Кол-во»/);
+  fails({ name: 'А', category: 'Медикаменты', vat_rate: '12%' }, /колонка «НДС» теперь разделена — «НДС продажи» \(ставка товара\) и «НДС прихода»/);
   fails({ name: 'А', category: 'Медикаменты', qty: 1, expiry_date: '31.02.2027' }, /срок годности 31\.02\.2027 — такой даты нет; формат ДД\.ММ\.ГГГГ/);
   fails({ name: 'А', category: 'Медикаменты', qty: 1, expiry_date: '2027-12-31' }, /срок годности «2027-12-31» — неверный формат\. Нужен ДД\.ММ\.ГГГГ, например 31\.12\.2027/);
   fails({ name: 'А', category: 'Медикаменты', qty: 1, expiry_date: '31/12/2027' }, /неверный формат/);
@@ -295,7 +300,7 @@ test('импорт — всё или ничего: ошибка в третье�
   const { db } = seed();
   const before = { s: db.prepare('SELECT COUNT(*) n FROM suppliers').get().n };
   assert.throws(() => call('import_products_excel', db, { rows: [
-    { name: 'Товар 1', category: 'Медикаменты', qty: 5, unit_cost: 100, vat_rate: 12, supplier: 'ООО Новый', expiry_date: dmy(shift(db, 30)) },
+    { name: 'Товар 1', category: 'Медикаменты', qty: 5, unit_cost: 100, receipt_vat_rate: 12, supplier: 'ООО Новый', expiry_date: dmy(shift(db, 30)) },
     { name: 'Товар 2', category: 'Стоматология', qty: 1 },
     { name: 'Товар 3', category: 'Медикаменты', qty: 1, expiry_date: '30.02.2030' },
   ] }), (e) => /^Строка 4: /.test(e.message));
