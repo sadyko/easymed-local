@@ -1,0 +1,105 @@
+// LIS_MINDRAY_CODES_V1 — какая строка прибора ложится в какую строку бланка и
+// когда проба лежит в лотке. Чистое правило: ни базы, ни записи. ingest.js
+// спрашивает его и пишет то, что оно решило, — проверять надо правило, а не SQL.
+//
+// Mindray пишет OBX-3 как «6690-2^WBC^LN», переадресатор с лабораторного ПК —
+// как «WBC^^99MRC». Подтверждённый device_code совпадает с компонентом 1 ИЛИ 2,
+// без учёта регистра. Два прохода: сначала по коду, потом по имени, и только в
+// строки бланка, которые ещё свободны. Поэтому при споре двух строк прибора за
+// одну строку бланка побеждает совпавшая по коду, и исход не зависит от
+// порядка строк в сообщении.
+//
+// D4 не меняется: неподтверждённое сопоставление не применяется никогда. Но
+// значение, пришедшее для неподтверждённой строки, названо отдельно: человек
+// положил этот код в бланк, и посмотреть на него должен человек.
+//
+// Лоток (решение владельца 2026-09-28): проба принята, когда заполнена каждая
+// ПОДТВЕРЖДЁННАЯ строка бланка. Лишние строки прибора (режимы пробы,
+// референсная группа, гистограммы) — справка в журнале, а не повод для клика.
+
+const key = (s) => String(s == null ? '' : s).trim().toUpperCase();
+
+/**
+ * @param {Array<{code:string,name:string,codeRaw:string,value:string,status:string}>} observations  строки прибора
+ * @param {Array<{id:number,name:string,device_code:string,device_code_confirmed:number}>} analytes  строки бланка в порядке бланка
+ * @returns {{
+ *   fills: Array<{obs:object, analyte:object}>,
+ *   missing: Array<{analyte:object, reason:string}>,
+ *   unconfirmed: object[],
+ *   unused: object[],
+ * }}
+ *   fills        — что писать в бланк;
+ *   missing      — подтверждённые строки бланка без значения; reason: '' | 'статус P' | 'пустое значение';
+ *   unconfirmed  — строки прибора, пришедшие для неподтверждённой строки бланка;
+ *   unused       — строки прибора, которые ни к чему не относятся.
+ */
+export function planObservations(observations = [], analytes = []) {
+  const confirmed = new Map();      // код → строка бланка (первая по порядку бланка)
+  const unconfirmed = new Set();
+  for (const a of analytes) {
+    const k = key(a.device_code);
+    if (!k) continue;
+    if (a.device_code_confirmed) { if (!confirmed.has(k)) confirmed.set(k, a); }
+    else unconfirmed.add(k);
+  }
+
+  const filled = new Set();         // строки бланка, получившие значение
+  const used = new Set();           // индексы строк прибора, уже отнесённых к строке бланка
+  const why = new Map();            // строка бланка → почему значение не легло
+  const fills = [];
+
+  for (const part of ['code', 'name']) {
+    observations.forEach((obs, i) => {
+      if (used.has(i)) return;
+      const a = confirmed.get(key(obs[part]));
+      if (!a || filled.has(a)) return;
+      used.add(i);
+      const status = key(obs.status) || 'F';
+      // Предварительный (P) и неполученный (X) в бланк не идут: лаборант
+      // подтвердил бы число, которое прибор ещё сам не считает окончательным.
+      if (status !== 'F') { if (!why.has(a)) why.set(a, 'статус ' + status); return; }
+      // Пустое значение — не значение: оно не стирает набранное руками.
+      if (!String(obs.value == null ? '' : obs.value).trim()) { if (!why.has(a)) why.set(a, 'пустое значение'); return; }
+      filled.add(a);
+      fills.push({ obs, analyte: a });
+    });
+  }
+
+  const unconfirmedHits = [];
+  const unused = [];
+  observations.forEach((obs, i) => {
+    if (used.has(i)) return;
+    if (unconfirmed.has(key(obs.code)) || unconfirmed.has(key(obs.name))) unconfirmedHits.push(obs);
+    else unused.push(obs);
+  });
+
+  const missing = [...confirmed.values()]
+    .filter((a) => !filled.has(a))
+    .map((a) => ({ analyte: a, reason: why.get(a) || '' }));
+
+  return { fills, missing, unconfirmed: unconfirmedHits, unused };
+}
+
+// Журнал читает человек в лотке: полсотни кодов гистограмм и режимов в одной
+// ячейке не читаются. Сырое сообщение хранится целиком (инвариант 2).
+const LIST_CAP = 15;
+const list = (items) => items.length > LIST_CAP
+  ? items.slice(0, LIST_CAP).join(', ') + ' и ещё ' + (items.length - LIST_CAP)
+  : items.join(', ');
+
+/**
+ * Статус сообщения и строка журнала.
+ * @returns {{status:'applied'|'unmapped', detail:string}}
+ */
+export function outcome(plan) {
+  const done = plan.fills.length > 0 && !plan.missing.length && !plan.unconfirmed.length;
+  const parts = [];
+  if (plan.missing.length) {
+    parts.push('не пришли: ' + list(plan.missing.map(({ analyte: a, reason }) =>
+      a.name + ' (' + a.device_code + (reason ? ', ' + reason : '') + ')')));
+  }
+  if (plan.unconfirmed.length) parts.push('не подтверждено: ' + list(plan.unconfirmed.map((o) => o.codeRaw || o.code)));
+  if (plan.unused.length) parts.push('не использованы: ' + list(plan.unused.map((o) => o.codeRaw || o.code)));
+  if (!plan.fills.length && !parts.length) parts.push('в сообщении нет результатов');
+  return { status: done ? 'applied' : 'unmapped', detail: parts.join('; ') };
+}
