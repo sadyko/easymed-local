@@ -244,3 +244,22 @@ test('ревью M6: порт не поднялся — «занят друго�
     assert.ok(!text.includes('вероятно, Easy-Med уже запущен') && !text.includes('EACCES'), 'сырого текста сервера на экране нет');
   } finally { LISTENERS = LISTENING_2575; }
 });
+
+// ── Ревью M5 — строка о порте только у сетевого прибора; выключенный — «выключен»
+const rowNamed = (root, name) => walk(root).find((n) => n.tagName === 'TR' && n.children[0] && textOf(n.children[0]) === name);
+
+test('ревью M5: у ждущего кабельного прибора нет строки о порте; выключенный — «выключен», а не «порт слушается»', async () => {
+  DEVICES = [HEARD,
+    { ...WAITING, id: 8, name: 'Кабельный', transport: 'serial', port: null },
+    { ...WAITING, id: 9, name: 'Выключенный', enabled: 0 },
+    WAITING];
+  const root = await mount();
+  findButtonByText(root, /Добавить прибор/).click();
+  await tick();
+  const serial = textOf(rowNamed(root, 'Кабельный'));
+  assert.ok(!/порт/.test(serial), 'у кабеля COM нет сетевого порта: ' + serial);
+  const off = textOf(rowNamed(root, 'Выключенный'));
+  assert.ok(off.includes('выключен'), off);
+  assert.ok(!off.includes('слушается'), 'порт по умолчанию слушается всегда — выключенному прибору это ничего не обещает: ' + off);
+  assert.ok(textOf(rowNamed(root, 'jjjj')).includes('порт 2575 слушается — ждём первое сообщение'), 'сетевой включённый — как прежде');
+});

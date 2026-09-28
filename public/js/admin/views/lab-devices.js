@@ -414,21 +414,30 @@ export async function mountLabDevices(container) {
             formCard.appendChild(h('div', { style: { fontWeight: 600, margin: '14px 0 8px' } }, tr('Ждут первого сообщения')));
             const tb = h('tbody');
             for (const d of split.waiting) {
-                const ps = portState(d, state.listeners);
-                // Ревью M6: не поднявшийся порт — своими словами по коду, без
-                // сырого текста сервера (он русский и с догадкой о причине).
-                const portText = ps.kind === 'listening' ? trf('порт {port} слушается — ждём первое сообщение', { port: ps.port })
-                    : ps.kind === 'failed'
-                        ? (ps.code === 'busy' ? trf('порт {port} занят другой программой', { port: ps.port }) : trf('порт {port} не слушается', { port: ps.port }))
-                    : ps.kind === 'off' ? trf('порт {port} сейчас не слушается', { port: ps.port })
-                    : '';
+                // Ревью M5: строка о порте — только у СЕТЕВОГО прибора: у кабеля
+                // COM и папки порта нет, и «порт 2575 слушается» у них — неправда.
+                // Выключенный — «выключен», а не порт: порт по умолчанию
+                // слушается всегда, и строка обещала бы приём, которого нет.
+                let lineTag = null;
+                if (!d.enabled) lineTag = Tag(tr('выключен'));
+                else if (d.transport === 'mllp') {
+                    const ps = portState(d, state.listeners);
+                    // Ревью M6: не поднявшийся порт — своими словами по коду, без
+                    // сырого текста сервера (он русский и с догадкой о причине).
+                    const portText = ps.kind === 'listening' ? trf('порт {port} слушается — ждём первое сообщение', { port: ps.port })
+                        : ps.kind === 'failed'
+                            ? (ps.code === 'busy' ? trf('порт {port} занят другой программой', { port: ps.port }) : trf('порт {port} не слушается', { port: ps.port }))
+                        : ps.kind === 'off' ? trf('порт {port} сейчас не слушается', { port: ps.port })
+                        : '';
+                    if (portText) lineTag = Tag(portText, { kind: ps.kind === 'listening' ? '' : 'warn' });
+                }
                 tb.appendChild(h('tr', null,
                     h('td', { style: { fontWeight: 600 } }, d.name),
                     h('td', { class: 'cell-mono', style: { fontSize: '12.5px' } },
                         d.transport === 'mllp'
                             ? trf('{host}:{port}', { host: d.host || tr('любой адрес'), port: d.port || 2575 })
                             : tr(TRANSPORT_LABEL[d.transport] || d.transport)),
-                    h('td', null, portText ? Tag(portText, { kind: ps.kind === 'listening' ? '' : 'warn' }) : null),
+                    h('td', null, lineTag),
                     h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
                         h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => openForm(d) }, Icon('Edit', { size: 13 }), ' ', tr('Изменить')),
                         ' ',
