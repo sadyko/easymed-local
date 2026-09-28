@@ -117,7 +117,11 @@ const analyte = (over = {}) => ({ id: 'a-1', panel_id: 'p-1', code: 'WBC', name:
 // let, а не const: тесты ревью ставят свои строки бланка (fetch читает имя при вызове).
 let ANALYTES = [analyte()];
 const SERVICES = [{ id: 's-1', name: 'ОАК', type: 'lab', is_lab: true, department_id: 'd-1', type_id: null }];
-const DEVICES = [{ id: 1, name: 'Гематология', profile: 'mindray-bc-5300', enabled: 1 }];
+const DEVICES = [
+  { id: 1, name: 'Гематология', profile: 'mindray-bc-5300', enabled: 1, added: 1 },
+  // LIS_ANALYZER_LIST_V1 — находка, которую ещё не добавили (ждёт «Добавить» на экране «Анализаторы»)
+  { id: 2, name: 'Найденный BC-5300', profile: 'mindray-bc-5300', enabled: 1, added: 0 },
+];
 const PROFILES = [{ key: 'mindray-bc-5300', vendor: 'Mindray', model: 'BC-5300', channelsSource: 'screenshot',
   channels: [{ code: 'WBC', name: 'Лейкоциты' }, { code: 'PLT', name: 'Тромбоциты' }] }];
 const SENT_CODES = [
@@ -342,4 +346,33 @@ test('R2: разные поля, пустые поля и строка без и
   assert.ok(ins, 'сохранено: ' + toastMsg);
   assert.deepStrictEqual([].concat(ins.values).map((r) => r.name), ['Лейкоциты', 'Эритроциты', 'Тромбоциты'],
     'строка без имени не сохраняется — и спором не считается');
+});
+
+// LIS_ANALYZER_LIST_V1 — у панели выбирают из ДОБАВЛЕННЫХ приборов: находка,
+// которую ещё не добавили, не выглядит выбранным прибором. Уже привязанный
+// показывается всегда — иначе привязка молча стала бы «— нет —».
+const deviceSelect = (root) => walk(root).find((n) => n.tagName === 'SELECT'
+  && walk(n).some((o) => o.tagName === 'OPTION' && textOf(o) === '— нет —'));
+
+test('«Анализатор» у панели: находка, которую не добавили, не предлагается', async () => {
+  setEffectiveFromRole(LAB_SEEDED);
+  const root = mk('div');
+  await renderLaboratory(root, { payload: { sub: 'panels' } });
+  await tick(80);
+  const labels = walk(deviceSelect(root)).filter((n) => n.tagName === 'OPTION').map((o) => textOf(o));
+  assert.ok(labels.includes('Гематология'), labels.join(' | '));
+  assert.ok(!labels.includes('Найденный BC-5300'), 'ненажатая находка не в списке');
+});
+
+test('«Анализатор» у панели: уже привязанный прибор виден, даже если он не добавлен', async () => {
+  const was = PANELS[0].device_id;
+  PANELS[0].device_id = 2;
+  try {
+    setEffectiveFromRole(LAB_SEEDED);
+    const root = mk('div');
+    await renderLaboratory(root, { payload: { sub: 'panels' } });
+    await tick(80);
+    const labels = walk(deviceSelect(root)).filter((n) => n.tagName === 'OPTION').map((o) => textOf(o));
+    assert.ok(labels.includes('Найденный BC-5300'), 'привязка не превращается молча в «— нет —»: ' + labels.join(' | '));
+  } finally { PANELS[0].device_id = was; }
 });

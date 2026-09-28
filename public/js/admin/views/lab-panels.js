@@ -50,7 +50,7 @@ const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагнос
 //      lab-section role (LAB_PANELS_BY_SECTION_V1).
 // v8 = one shared page head for queue+panels; marker moved off-screen into
 //      the data-attribute above; queue filter chips translate label-then-count.
-export const LAB_BUILD = 'lab-v14';   // LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28
+export const LAB_BUILD = 'lab-v15';   // LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1)
 
 // Mounts the editor into `container` and resolves once the first load has
 // painted — the caller can await it and know the screen is settled.
@@ -134,7 +134,7 @@ export async function mountLabPanels(container) {
             // LIS_INGEST_V1 — приборы клиники и каналы их профилей. Отказ здесь
             // не фатален: колонка «Поле анализатора» просто не появится, а
             // панель по-прежнему заполняется руками.
-            supabase.from('lab_devices').select('id, name, profile, enabled').order('name'),
+            supabase.from('lab_devices').select('id, name, profile, enabled, added').order('name'),
             supabase.rpc('lis_profiles', {}),
         ]);
         if (panelsRes.error)   state.loadError = trf('панели: {msg}', { msg: panelsRes.error.message || panelsRes.error });
@@ -391,7 +391,10 @@ export async function mountLabPanels(container) {
         state.devSelValue = String(p.device_id || '');
         const devSel = h('select', { style: { width: '100%' }, onchange: (e) => { state.devSelValue = e.target.value; paintEditor(); } },
             h('option', { value: '', selected: !p.device_id }, '— нет —'),
-            ...state.devices.map(d => h('option', { value: String(d.id), selected: Number(p.device_id) === d.id },
+            // LIS_ANALYZER_LIST_V1 — только добавленные приборы (находка ждёт
+            // «Добавить» на экране «Анализаторы») плюс уже привязанный.
+            ...state.devices.filter(d => d.added == null || Number(d.added) === 1 || Number(p.device_id) === d.id)
+                .map(d => h('option', { value: String(d.id), selected: Number(p.device_id) === d.id },
                 (d.enabled ? d.name : trf('{name} (выключен)', { name: d.name })))));
         // Смена прибора перерисовывает таблицу: у другого прибора другие каналы,
         // и прежние подсказки к ним не относятся.
