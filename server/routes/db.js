@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { surgeryWithoutBedRefusal } from '../services/domain/surgery-bed.js';   // CASHIER_HEAD_V1 (ревью I4)
 import { setLiveColumns, setForeignKeyColumns, compile, CompileError } from '../db/query-compiler.js';
 import { readableColumns, MAIN_CLINIC_TABLES, rowScope } from '../db/schema-registry.js';
 import { scopeLifted } from '../db/row-scope.js';   // V3120_FIX — кто назначает заявку CRM другому
@@ -71,39 +72,13 @@ function refuseSurgeryWithoutBed(db, meta, body) {
 
   const rows = Array.isArray(body && body.values) ? body.values
     : (body && body.values ? [body.values] : []);
-  if (!rows.length) return null;
-
-  let isSurgeryService, openAdmission;
-  try {
-    // 'other' — это и есть хирургия: отдельного значения в services.type нет
-    // (миграция 109 объясняет почему), а подписан этот тип «Хирургия».
-    isSurgeryService = db.prepare("SELECT 1 FROM services WHERE id = ? AND type = 'other'");
-    // «Лежит» — это НЕ просто «есть незакрытая запись». Из семи состояний
-    // койку занимают четыре: положен, осмотрен, лечится, выписывается.
-    // 'ordered' — заявка в стационар, пациент ещё дома; 'cancelled' —
-    // отменённая заявка; 'discharged' — уже ушёл. Считать их лежащими значило
-    // бы разрешить операцию тому, у кого койки нет.
-    openAdmission = db.prepare(`SELECT 1 FROM admissions a
-       JOIN visits v ON v.patient_id = a.patient_id
-      WHERE v.id = ?
-        AND a.discharged_at IS NULL
-        AND a.status IN ('admitted','examined','active','discharging')
-      LIMIT 1`);
-  } catch { return null; }   // справочника нет — не наше дело отказывать
-
+  // CASHIER_HEAD_V1 (ревью I4) — само правило теперь одно на все двери
+  // (services/domain/surgery-bed.js): им же пользуется касса.
   for (const row of rows) {
     const serviceId = row && (row.service_id ?? row.serviceId);
     const visitId = row && (row.visit_id ?? row.visitId);
-    if (!serviceId || !visitId) continue;
-    let surgery = false;
-    try { surgery = !!isSurgeryService.get(serviceId); } catch { surgery = false; }
-    if (!surgery) continue;
-    let admitted = false;
-    try { admitted = !!openAdmission.get(visitId); } catch { admitted = false; }
-    if (!admitted) {
-      return 'Хирургия оформляется на госпитализацию: сначала положите пациента на койку, '
-        + 'иначе счёт за операцию окажется вне истории лечения.';
-    }
+    const refusal = surgeryWithoutBedRefusal(db, serviceId, visitId);
+    if (refusal) return refusal;
   }
   return null;
 }

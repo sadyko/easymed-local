@@ -286,7 +286,10 @@ test('каждая строка справочника называет пров
     'settings.employees', 'settings.doctor_rates', 'settings.patient_discounts', 'settings.payer_policies', 'settings.payment_providers', 'settings.cashback_rules',
     'settings.service_types.money', 'settings.consultation_types.money', 'settings.patient_categories.money', 'settings.rooms.money',
     'settings.referral_sources.money', 'settings.referral_source_categories.money', 'settings.employees.money',
-    'settings.service_packages.money'];   // PACKAGES_V1 — скидка пакета
+    'settings.service_packages.money',   // PACKAGES_V1 — скидка пакета
+    // CASHIER_HEAD_V1 — «Исправляет услуги в счёте»: у кассы, которая строку не
+    // настраивала, выключено (касса только принимает оплату).
+    'cashier.lines'];
   for (const k of ADMIN_DEFAULT) {
     const r = byKey.get(k);
     assert.ok(r && !r.locked && r.adminDefault, k + ' обязана быть выдаваемой строкой с правилом «только администратор»');

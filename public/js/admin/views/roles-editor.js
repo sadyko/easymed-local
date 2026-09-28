@@ -56,6 +56,8 @@ import { levelsFor, openAction, actionFor, levelFromActions, actionsFromLevel }
 // прав (shared/permission-catalog.js). Старые поля sections/levels выводятся
 // из неё при сохранении, чтобы прежние ворота продолжали работать.
 import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm6';
+// V3121_ROLES — «Проверьте права этой роли»: «Просмотр» от старого экрана «Роли» (мигр. 215).
+import { roleReviewNotice } from './roles-review.js';
 
 // ROLE_KEYS_V2 — матрица строится из permissions.js NAV_MODULES, того же
 // списка, который читают сами ворота бокового меню. Когда-то это была вторая
@@ -85,6 +87,10 @@ const ROLE_LIST = [
     // галочкой, которую можно снять.
     { key: 'head_doctor',  label: 'Главный врач' },
     { key: 'senior_nurse', label: 'Старшая медсестра' },
+    // CASHIER_HEAD_V1 — «Старший кассир»: надстройка над кассиром. Строку прав
+    // заводит миграция 218 (разделы «Касса», «Старший кассир» и право
+    // «Исправляет услуги в счёте»); здесь её можно поправить, как любую роль.
+    { key: 'head_cashier', label: 'Старший кассир' },
 ];
 
 // Уровни названы тем, что человек МОЖЕТ ДЕЛАТЬ, а не системной ролью:
@@ -462,6 +468,13 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
                 h('span', { class: 'muted' }, trf('Своя роль клиники · основа: {base}', { base: tr(roleLabel(cur.base_role)) })),
                 h('span', { class: 'grow' }),
                 offBtn));
+        }
+
+        // V3121_ROLES — решение по «Просмотру» старого экрана принимает только
+        // администратор: «по умолчанию основы» может быть выше собственных прав
+        // того, кому выдано «Роли: Изменение».
+        if (isAdmin && !readOnly) {
+            card.appendChild(roleReviewNotice(state.selected, perms, { onDone: () => { state.baseline = null; selectRole(state.selected); } }));
         }
 
         if (!perms.configured) {

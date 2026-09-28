@@ -154,6 +154,7 @@ export const ACCESS_LEVELS = ['viewer', 'editor', 'admin'];
 export const ROLE_CODES = [
     'admin', 'registrar', 'doctor', 'nurse', 'cashier', 'lab', 'inventory',
     'callcenter', 'head_doctor', 'senior_nurse',
+    'head_cashier',   // CASHIER_HEAD_V1 — «Старший кассир», надстройка над кассиром
 ];
 const _ROLE_CODE_SET = new Set(ROLE_CODES);
 
@@ -580,6 +581,34 @@ export function canCreatePatient() {
     const lvl = grantLevel('crm.convert');
     if (lvl !== null && grantAllows('crm.convert', 'edit')) return true;
     return isModuleAllowed('registration');
+}
+
+// CASHIER_HEAD_V1 (2026-09-28) — «ИСПРАВЛЯЕТ УСЛУГИ В СЧЁТЕ» В ОБОЛОЧКЕ.
+//
+// Зеркало серверного предиката (server/services/rpc/billing.js
+// canFixInvoiceLines): регистратура и администратор — по своей роли; все
+// остальные — по праву `cashier.lines` на «Изменение». Касса по нему решает,
+// рисовать ли у счёта «Исправить услуги» (замена услуги и врача, добавить,
+// убрать). Правило перехода ОДНОСТОРОННЕЕ, как у crm.all: ключ, которого роль
+// не настраивала (null), права НЕ даёт — касса после обновления только
+// принимает оплату. Закрытый раздел «Касса» закрывает и строку внутри.
+export function canFixCashierLines() {
+    if (_effective == null && !_preview) return true;   // полный доступ: администратор клиники
+    const known = actorRoleCodes();
+    if (known.includes('admin') || known.includes('registrar')) return true;
+    if (grantLevel('cashier') === 'none') return false;
+    return grantLevel('cashier.lines') !== null && grantAllows('cashier.lines', 'edit');
+}
+
+// CASHIER_HEAD_V1 (ревью) — «Закрыть смену» у ЧУЖОЙ смены. Зеркало сервера
+// (rpc/cashier.js headCashierLevel → roles.js explicitSectionLevel): раздел
+// «Старший кассир», записанный БЕЗ уровня (старый экран), — только просмотр;
+// закрывать чужие смены даёт лишь явное «Изменение».
+export function canCloseOtherShifts() {
+    if (_effective == null && !_preview) return true;   // полный доступ: администратор клиники
+    if (!canEdit('cashier-head')) return false;
+    const lvl = _levels['cashier-head'];
+    return lvl === 'editor' || lvl === 'admin';
 }
 
 // CRM_HEAD_MERGE_TAGS_V1 (2026-09-25) — «РУКОВОДИТЕЛЬ КОЛЛ-ЦЕНТРА» В ОБОЛОЧКЕ.

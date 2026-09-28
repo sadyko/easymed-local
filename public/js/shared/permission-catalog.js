@@ -228,8 +228,24 @@ export const CATALOG = [
   { key: 'discharges',  label: 'Выписки',             legacy: 'beds', desc: 'Очередь выписки и выписные документы.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит очередь выписки.', edit: 'Готовит и завершает выписку.' }, windows: [], actions: [], enforced: 'route:discharge' },
   { key: 'documents',   label: 'Документы',           legacy: 'patient-documents', desc: 'Печатные документы по пациентам.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Печатает документы.', edit: 'Заполняет и правит документы.' }, windows: [], actions: [] },
   { key: 'chat',        label: 'Чат с пациентами',    legacy: 'telegram-chat', desc: 'Переписка в Telegram-боте.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Читает переписку.', edit: 'Отвечает пациенту от имени клиники.' }, windows: [], actions: [] },
-  { key: 'cashier',     label: 'Касса',               legacy: 'cashier', desc: 'Смена кассира и приём оплат.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит смену и счета.', edit: 'Принимает оплату, открывает и закрывает смену.' }, windows: [], actions: [] },
-  { key: 'cashier_head',label: 'Старший кассир',      legacy: 'cashier-head', desc: 'Все смены и сверка.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит все смены.', edit: 'Проводит сверку и правит смены.' }, windows: [], actions: [] },
+  // CASHIER_HEAD_V1 (2026-09-28) — владелец: «fix in the roles for the cashier,
+  // so it can change service and provider for appointed + add service, and if
+  // created invoice. It should be switchable in the roles so cashier either
+  // only accepts [payments] or accepts and makes small fixes».
+  //
+  // Переключатель — действие «Исправляет услуги в счёте». Правило перехода —
+  // «только администратор» (`adminDefault`): у всех ролей клиники, которые
+  // строку не настраивали, оно ВЫКЛЮЧЕНО, и касса после обновления принимает
+  // только оплату, как вчера. Регистратура и администратор правят неоплаченные
+  // строки по своей роли, как и раньше (rpc/billing.js canFixInvoiceLines).
+  // Старшему кассиру (надстройка head_cashier) право выдано миграцией 218.
+  { key: 'cashier',     label: 'Касса',               legacy: 'cashier', desc: 'Смена кассира и приём оплат.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит смену и счета.', edit: 'Принимает оплату, открывает и закрывает смену.' }, windows: [], actions: [
+      { key: 'cashier.lines', label: 'Исправляет услуги в счёте', desc: 'Мелкие исправления у кассы, пока по счёту не принято денег: заменить услугу, сменить врача, добавить или убрать услугу. Без этого права кассир только принимает оплату.', levels: ['none', 'edit'], levelDesc: { edit: 'Меняет услугу и врача, добавляет и убирает услуги в неоплаченном счёте; цена считается сама, всё пишется в журнал счёта. Оплаченное — только через «Вернуть услугу».' }, adminDefault: true, enforced: 'rpc:cashier_line_add' },
+    ] },
+  // CASHIER_HEAD_V1 — уровень раздела проверяет и сервер (rpc/cashier.js
+  // headCashierLevel): «Просмотр» — X-отчёт любой смены, «Изменение» —
+  // пересчитать и закрыть чужую смену.
+  { key: 'cashier_head',label: 'Старший кассир',      legacy: 'cashier-head', desc: 'Все смены и сверка.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит все смены и отчёт любой смены.', edit: 'Пересчитывает и закрывает смены других кассиров.' }, windows: [], actions: [] },
   { key: 'procurement', label: 'Закупки',             legacy: 'inventory', desc: 'Товары, остатки, поступления, заявки на закупку.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит склад и остатки.', edit: 'Оформляет приход, заявки и списания.' }, windows: [], actions: [
       // DEPARTMENTS_V1 — выдача со склада получателю (отдел, кабинет, сотрудник):
       // ворота issue_stock_lines. По умолчанию — администратор и снабженец.

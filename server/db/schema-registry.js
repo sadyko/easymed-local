@@ -440,10 +440,12 @@ export const REGISTRY = {
     // not ALL_STAFF. The cashier workspace reads its own shift via the
     // cash_shift_summary RPC; this raw read backs the Head-cashier overview.
     // V3120_FIX (мигр. 194) — auto_closed: смена закрыта в полночь без пересчёта.
-    read:  { roles: ['admin','cashier'], columns: ['id','cashier_id','branch_id','opening_float','opened_at','closed_at','counted_amount','expected_amount','over_short','status','notes','created_at','auto_closed'] },
+    // CASHIER_HEAD_V1 (мигр. 219) — closed_by: кто закрыл смену (старший кассир закрывает чужие).
+    read:  { roles: ['admin','cashier'], columns: ['id','cashier_id','branch_id','opening_float','opened_at','closed_at','counted_amount','expected_amount','over_short','status','notes','created_at','auto_closed','closed_by'] },
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },  // written only by the cash-shift RPCs (money)
     filters: ['id','cashier_id','status','branch_id'],
-    embed:   { users: { table:'users', fk:'cashier_id', columns:['id','full_name'] } },
+    embed:   { users: { table:'users', fk:'cashier_id', columns:['id','full_name'] },
+               closed_by: { table:'users', fk:'closed_by', columns:['id','full_name'] } },
   },
   cash_movements: {
     // «Внести»/«Изъять» drawer movements — read backs the cashier «История»
@@ -850,6 +852,18 @@ export const REGISTRY = {
              update: { roles: ['admin'], columns: ['permissions'], bulkBy: ['role'] },   // V3120_FIX (M9) — role уникальна
              delete: { roles: [] } },
     filters: ['id','role'], embed: {},
+  },
+  // V3121_ROLES (мигр. 215) — роли, чей «Просмотр» на стационаре или складе
+  // совпал с отпечатком старого экрана «Роли» (public/js/shared/old-screen-view.js).
+  // Заводит только миграция; администратор в «Ролях» решает: вернуть права по
+  // умолчанию или оставить как есть — отметка решения и есть единственная правка.
+  role_permission_reviews: {
+    read:  { roles: ['admin'], columns: ['id','role','area','found_at','resolution','resolved_at','resolved_by'] },
+    write: { insert: { roles: [] },
+             update: { roles: ['admin'], columns: ['resolution','resolved_at'] },
+             delete: { roles: [] } },
+    stamps: { resolved_by: { with: 'resolved_at' } },
+    filters: ['id','role','area','resolution'], embed: {},
   },
 
   // ─── Clinical spine (migration 024) ──────────────────────────────────────

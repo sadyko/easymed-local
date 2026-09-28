@@ -8,17 +8,21 @@ import { ensureOpenShift } from './cashier.js';   // SHIFT_AUTO_V2
 // здесь: заочно деньги у окна не появляются. См. шапку crm/visit-status.js.
 import { crmInvoiceEvidence, crmVisitEvidence } from '../crm/visit-status.js';
 // CRM_CALENDAR_MIRROR_V1 (разбор ревью M6, M1) — строки записи из заявки CRM.
-import { pruneAutoLinesOnInvoice, syncLineFromVisit } from '../crm/booking-mirror.js';
+import { pruneAutoLinesOnInvoice, syncLineFromVisit, mirrorVisit, mirrorCashierLine } from '../crm/booking-mirror.js';
 import { invoiceStatusFor, idemReplay, idemRemember } from '../domain/money.js';   // V3120_FIX — ключ повтора
 // PAY_BASIS_PERFORMED_V1 — «what will the invoice charge for this line» is one
 // function, shared with the doctor's pay (rpc/reports.js): own price over the
 // catalog, and VISIT_TIER_PRICING_V1 — a line quoted as a second/repeat visit
 // keeps that price at the till (the catalog price is the FIRST visit's price).
 import { lineUnitPrice, consultationFor } from '../domain/pricing.js';
-import { hasAnyRole } from '../roles.js';
-import { localDate } from '../domain/day.js';
+import { hasAnyRole, effectiveRoles } from '../roles.js';
+import { localDate, localMonth } from '../domain/day.js';
+// CASHIER_HEAD_V1 — право кассы «Исправляет услуги в счёте» (cashier.lines).
+import { grantAllowsAdminOr, isAdminUser } from '../grants.js';
+import { requireServicesEdit, requireServicesDelete } from './patient-card.js';   // CASHIER_HEAD_V1 (ревью I2) — вкладка «Услуги» у регистратуры/администратора
+import { surgeryWithoutBedRefusal } from '../domain/surgery-bed.js';   // CASHIER_HEAD_V1 (ревью I4)
 // BILLING_AUDIT_FIX_V1 (B3) — тариф заменённой услуги спрашивается заново.
-import { servicePriceQuote } from './service-price-quote.js';
+import { servicePriceQuote, quoteServicePrices } from './service-price-quote.js';
 // HOLDINGS_FIRST_V1 — «вернуть КАЖДУЮ часть туда, откуда она пришла» живёт в
 // одном месте на весь сервер (rpc/inventory.js): подотчёт сотрудника, кабинет,
 // отдел, склад. Кольцо импортов здесь такое же, как у billing ↔ cashier строкой
@@ -272,6 +276,14 @@ export function packageStampRefusal(db, rows) {
 
 export function createInvoiceForVisit(db, args, user) {
   requireRole(user, CREATE_INVOICE_ROLES);
+  return issueVisitInvoice(db, args, user);
+}
+
+// CASHIER_HEAD_V1 (ревью) — выставление без проверки роли: дверь кассы
+// (addServiceToVisitInvoice) уже проверила СВОЁ право «Исправляет услуги в
+// счёте», и своя роль клиники на другой основе, которой это право выдано,
+// не должна упираться в список ролей выставления.
+function issueVisitInvoice(db, args, user) {
 
   const visitId = args && args.visit_id;
   if (!isPositiveInt(visitId)) {
@@ -449,8 +461,8 @@ export function createInvoiceForVisit(db, args, user) {
 
     const insertInvoice = db.prepare(`
       INSERT INTO invoices
-        (invoice_number, visit_id, patient_id, branch_id, subtotal, discount_amount, total_amount, paid_amount, status, created_by, paid_at, payer_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+        (invoice_number, visit_id, patient_id, branch_id, subtotal, discount_amount, total_amount, paid_amount, status, created_by, paid_at, payer_id, manual_discount, manual_base)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
     `);
     const info = insertInvoice.run(
       invoiceNumber,
@@ -463,7 +475,11 @@ export function createInvoiceForVisit(db, args, user) {
       status,
       user.id,
       status === 'paid' ? db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now') n").get().n : null,
-      payerRaw
+      payerRaw,
+      // CASHIER_HEAD_V1 (ревью I3, мигр. 219) — ручная часть скидки, как её
+      // дали: сумма и база строк без своей скидки (repriceUnpaidInvoice).
+      round2(Math.min(discountRaw, restSubtotal)),
+      restSubtotal,
     );
     const invoiceId = info.lastInsertRowid;
 
@@ -855,7 +871,19 @@ function invoiceRestBase(db, invoiceId) {
 // вернуть строку). Без него удаление ЭКГ у VIP 15 % держало прежние 38 250
 // скидки на 220 000 (17,4 %) вместо 33 000: max(прежний остаток, пол группы)
 // брал прежний остаток.
-function repriceUnpaidInvoice(db, inv, oldOwn, { oldBase = null } = {}) {
+// CASHIER_HEAD_V1 (ревью I3, мигр. 219) — `absolute`: правка строк
+// НЕОПЛАЧЕННОГО счёта (удалить, заменить, сменить врача, добавить). Ручная
+// часть скидки считается от того, как её ДАЛИ (invoices.manual_discount —
+// сумма, manual_base — база строк без своей скидки тогда): сумма ×
+// min(база сейчас, база тогда) / база тогда. Меньше база — меньше скидка в
+// той же доле (FATAL-1 и ревью I-2 пакетов — прежние решения); база
+// вернулась — скидка вернулась; база выросла — не больше данной суммы. Прежде
+// доля бралась от ПРЕДЫДУЩЕЙ правки и не возвращалась: 30 000 на 150 000,
+// врач A→B→A — к оплате 130 000 вместо 120 000. У счёта до 219 (NULL) пара
+// выводится один раз: остаток скидки сверх пола группы и прежняя база.
+// Возврат строки (refund_invoice_line) остаётся при прежней доле — там деньги
+// уже приняты, и это другое правило (B1).
+function repriceUnpaidInvoice(db, inv, oldOwn, { oldBase = null, absolute = false } = {}) {
   const left = db.prepare(`SELECT COALESCE(SUM(total), 0) s,
                                   COALESCE(SUM(discount_amount), 0) own,
                                   COALESCE(SUM(CASE WHEN COALESCE(discount_amount, 0) > 0 THEN 0 ELSE total END), 0) base
@@ -863,15 +891,35 @@ function repriceUnpaidInvoice(db, inv, oldOwn, { oldBase = null } = {}) {
   const subtotal = round2(left.s);
   const own = round2(left.own);
   const base = round2(left.base);
-  let oldRest = Math.max(round2((Number(inv.discount_amount) || 0) - oldOwn), 0);
-  if (oldBase !== null) oldRest = oldBase > 0 ? round2(oldRest * Math.min(base, oldBase) / oldBase) : 0;
   const catPct = inv.payer_id ? 0 : patientCategoryDiscount(db, inv.patient_id);
   const floor = round2(base * catPct / 100);
+  let oldRest = Math.max(round2((Number(inv.discount_amount) || 0) - oldOwn), 0);
+  let given = null; let givenBase = null;
+  if (absolute) {
+    const known = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
+    if (known(inv.manual_discount) && known(inv.manual_base)) {
+      given = Math.max(round2(Number(inv.manual_discount)), 0);
+      givenBase = Math.max(round2(Number(inv.manual_base)), 0);
+    } else {
+      const was = oldBase !== null ? oldBase : base;
+      const oldFloor = round2(was * catPct / 100);
+      given = oldRest > oldFloor + 0.005 ? oldRest : 0;
+      givenBase = was;
+    }
+    oldRest = givenBase > 0 ? round2(given * Math.min(base, givenBase) / givenBase) : 0;
+  } else if (oldBase !== null) {
+    oldRest = oldBase > 0 ? round2(oldRest * Math.min(base, oldBase) / oldBase) : 0;
+  }
   const rest = round2(Math.min(Math.max(oldRest, floor), base));
   const discount = Math.min(round2(own + rest), subtotal);
   const total = round2(subtotal - discount);
-  db.prepare('UPDATE invoices SET subtotal = ?, discount_amount = ?, total_amount = ? WHERE id = ?')
-    .run(subtotal, discount, total, inv.id);
+  if (absolute) {
+    db.prepare('UPDATE invoices SET subtotal = ?, discount_amount = ?, total_amount = ?, manual_discount = ?, manual_base = ? WHERE id = ?')
+      .run(subtotal, discount, total, given, givenBase, inv.id);
+  } else {
+    db.prepare('UPDATE invoices SET subtotal = ?, discount_amount = ?, total_amount = ? WHERE id = ?')
+      .run(subtotal, discount, total, inv.id);
+  }
   settleZeroTotal(db, inv.id);
   return db.prepare('SELECT * FROM invoices WHERE id = ?').get(inv.id);
 }
@@ -898,6 +946,15 @@ function settleZeroTotal(db, invoiceId) {
     `).run(invoiceId);
   } else if (total > 0 && inv.status === 'paid') {
     db.prepare("UPDATE invoices SET status = 'unpaid', paid_at = NULL WHERE id = ?").run(invoiceId);
+    // CASHIER_HEAD_V1 (ревью I1) — счёт снова к оплате, значит и его
+    // неначатые строки снова ждут кассу: из очереди они уходят, номер
+    // очереди снимается (его выдаст оплата). Иначе врач принимал и получал
+    // долю по услуге, которую пациент не оплатил.
+    db.prepare(`
+      UPDATE visit_services SET status = 'added', queue_key = NULL, queue_no = NULL
+       WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)
+         AND status NOT IN ('added', 'cancelled', 'in_progress', 'completed', 'collected', 'resulted')
+    `).run(invoiceId);
   }
 }
 
@@ -909,10 +966,19 @@ function statusRu(st) { return STATUS_RU[st] || st; }
 // Счёт, который ещё можно править строками: денег по нему нет, и он либо
 // «Не оплачен», либо бесплатный (итог 0), закрытый при выставлении. Бесплатный
 // раньше отказывал «счёт уже paid», и убрать из него строку было нечем.
-function editableInvoiceRefusal(inv) {
+function editableInvoiceRefusal(inv, db = null) {
   if (!inv) return null;
   const free = inv.status === 'paid' && !(Number(inv.paid_amount) > 0) && !(Number(inv.total_amount) > 0);
-  if (!(inv.paid_amount > 0) && (inv.status === 'unpaid' || free)) return null;
+  if (!(inv.paid_amount > 0) && (inv.status === 'unpaid' || free)) {
+    // CASHIER_HEAD_V1 (ревью) — счёт, по которому платежи УЖЕ БЫЛИ (оплатили и
+    // вернули), денег не держит, но хранит скидку после продажи
+    // (post_sale_discount) и возвраты по строкам: правка строк разошлась бы с
+    // ними. Такой счёт отменяют и выставляют заново.
+    if (db && db.prepare('SELECT 1 FROM payments WHERE invoice_id = ? LIMIT 1').get(inv.id)) {
+      return 'по счёту уже проводились платежи (оплата или возврат) — строки в нём не правят: отмените счёт в кассе и выставьте заново.';
+    }
+    return null;
+  }
   return 'счёт уже ' + (inv.paid_amount > 0 ? 'оплачен (частично)' : statusRu(inv.status))
     + ' — сначала оформите возврат или отмените его в кассе.';
 }
@@ -936,13 +1002,15 @@ function assertNotPerformed(db, vs, verb) {
   }
 }
 
-export function removeUnpaidService(db, args, user) {
-  requireRole(user, REMOVE_SERVICE_ROLES);
+export function removeUnpaidService(db, args, user, { rpc = 'remove_unpaid_service', cashier = false } = {}) {
+  requireLineFix(db, user, 'delete');   // CASHIER_HEAD_V1 — право кассы или вкладка «Услуги: Удаление»
 
   const vsId = args && args.visit_service_id;
   if (!isPositiveInt(vsId)) {
     throw new RpcError('Строка услуги указана неверно.', 400);
   }
+  { const seen = idemReplay(db, rpc, args); if (seen) return seen; }   // CASHIER_HEAD_V1 — ключ повтора
+  let visitId = null;
 
   const run = db.transaction(() => {
     const vs = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
@@ -951,6 +1019,7 @@ export function removeUnpaidService(db, args, user) {
     // то есть строка исчезнет и в том здании, где её сделали.
     assertOwnBuilding(db, vs, 'Услуга');
     assertNotPerformed(db, vs, 'удалить');   // INPATIENT_MONEY_FIX_V1
+    assertLineMonthOpen(db, vs);             // CASHIER_HEAD_V1 — закрытый месяц оплаты врачей заморожен
 
     // FK order: visit_services.invoice_item_id references invoice_items, so
     // the service LINE is deleted first, then its invoice item, then (if
@@ -961,7 +1030,9 @@ export function removeUnpaidService(db, args, user) {
     const inv = item ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id) : null;
     if (item && !inv) throw new RpcError('Счёт не найден.', 500);
     if (inv) assertOwnBuilding(db, inv, 'Счёт');   // BRANCH_MONEY_GUARD_V1
-    { const refusal = editableInvoiceRefusal(inv); if (refusal) throw new RpcError(refusal, 400); }   // BILLING_AUDIT_FIX_V1 (B-minor)
+    if (cashier) assertNotPayerInvoice(inv);        // CASHIER_HEAD_V1 (ревью)
+    { const refusal = editableInvoiceRefusal(inv, db); if (refusal) throw new RpcError(refusal, 400); }   // BILLING_AUDIT_FIX_V1 (B-minor)
+    visitId = vs.visit_id;
 
     // HOLDINGS_FIRST_V1 — товар возвращается ДО удаления строки: источники
     // читаются из движений ЭТОЙ строки (reference_id = vsId), а после DELETE
@@ -972,6 +1043,11 @@ export function removeUnpaidService(db, args, user) {
       : [];
 
     db.prepare('DELETE FROM visit_services WHERE id = ?').run(vsId);
+    // CASHIER_HEAD_V1 (ревью) — строка заявки CRM, державшая снятую строку,
+    // больше ничего не ждёт.
+    try {
+      db.prepare("UPDATE crm_request_services SET status = 'cancelled' WHERE visit_service_id = ? AND status = 'pending'").run(vsId);
+    } catch { /* таблицы нет в этой сборке */ }
 
     let invoiceDeleted = false;
     let invoice = null;
@@ -981,16 +1057,30 @@ export function removeUnpaidService(db, args, user) {
       db.prepare('DELETE FROM invoice_items WHERE id = ?').run(item.id);
       const left = db.prepare('SELECT COUNT(*) n FROM invoice_items WHERE invoice_id = ?').get(inv.id);
       if (left.n === 0) {
+        // CASHIER_HEAD_V1 — журнал правок этого счёта остаётся (с номером
+        // счёта), но ссылку на удаляемый счёт отпускает: внешний ключ.
+        db.prepare('UPDATE invoice_audit_log SET invoice_id = NULL WHERE invoice_id = ?').run(inv.id);
         db.prepare('DELETE FROM invoices WHERE id = ?').run(inv.id);
         invoiceDeleted = true;
       } else {
-        invoice = repriceUnpaidInvoice(db, inv, oldOwn, { oldBase });   // V3120_FIX (FATAL-1)
+        invoice = repriceUnpaidInvoice(db, inv, oldOwn, { oldBase, absolute: true });   // V3120_FIX (FATAL-1); CASHIER_HEAD_V1 (I3)
       }
+      // CASHIER_HEAD_V1 — журнал счёта: кто и что убрал. Счёт, оставшийся без
+      // строк, удалён — запись остаётся с его номером, но без ссылки на него.
+      lineAudit(db, {
+        inv: invoiceDeleted ? null : invoice, number: inv.invoice_number, visitId: vs.visit_id,
+        action: 'line_remove', fromStatus: inv.status, toStatus: invoiceDeleted ? 'deleted' : invoice.status,
+        amount: invoiceDeleted ? 0 : invoice.total_amount,
+        notes: 'Убрана услуга: ' + lineLabel(db, vs, item) + ' · ' + moneyWords(item.total)
+          + (invoiceDeleted ? ' (счёт остался без услуг и удалён)' : ''),
+      }, user);
     }
-    return { removed: true, invoice_deleted: invoiceDeleted, invoice, sources };
+    return idemRemember(db, rpc, args, user, { removed: true, invoice_deleted: invoiceDeleted, invoice, sources });
   });
 
-  return run();
+  const out = run();
+  if (visitId && !out.repeated) mirrorVisit(db, visitId, { actorId: user && user.id });   // CASHIER_HEAD_V1 (ревью) — заявка CRM узнаёт о снятой строке
+  return out;
 }
 
 // SVC_CHANGE_V1 — замена услуги в строке визита, пока по счёту не было денег.
@@ -998,19 +1088,21 @@ export function removeUnpaidService(db, args, user) {
 // НЕОПЛАЧЕННОМ счёте — позиция счёта и итоги (subtotal/discount/total)
 // пересчитываются в той же транзакции. Оплаченный/частично оплаченный счёт
 // не трогаем — сначала возврат/отмена в кассе.
-export function changeUnpaidService(db, args, user) {
-  requireRole(user, REMOVE_SERVICE_ROLES);
+export function changeUnpaidService(db, args, user, { rpc = 'change_unpaid_service', cashier = false } = {}) {
+  requireLineFix(db, user, 'edit');   // CASHIER_HEAD_V1 — право кассы или вкладка «Услуги: Изменение»
 
   const vsId = args && args.visit_service_id;
   const newServiceId = args && args.new_service_id;
   if (!isPositiveInt(vsId)) throw new RpcError('Строка услуги указана неверно.', 400);
   if (!isPositiveInt(newServiceId)) throw new RpcError('Новая услуга указана неверно.', 400);
+  { const seen = idemReplay(db, rpc, args); if (seen) return seen; }   // CASHIER_HEAD_V1 — ключ повтора
 
   const run = db.transaction(() => {
     const vs = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
     if (!vs) throw new RpcError('Строка услуги не найдена.', 400);
     assertOwnBuilding(db, vs, 'Услуга');   // BRANCH_MONEY_GUARD_V1
     assertNotPerformed(db, vs, 'заменить');   // INPATIENT_MONEY_FIX_V1
+    assertLineMonthOpen(db, vs);              // CASHIER_HEAD_V1
     // HOLDINGS_FIRST_V1 — ТОВАРНУЮ СТРОКУ ЗАМЕНИТЬ НЕЛЬЗЯ.
     //
     // Вкладка «Услуги» карточки пациента показывает ВСЕ строки визита, товарные
@@ -1031,6 +1123,8 @@ export function changeUnpaidService(db, args, user) {
     }
     const svc = db.prepare('SELECT * FROM services WHERE id = ? AND active = 1').get(newServiceId);
     if (!svc) throw new RpcError('новая услуга не найдена или неактивна.', 400);
+    // CASHIER_HEAD_V1 (ревью I4) — хирургию без койки не подставить и заменой.
+    { const r = surgeryWithoutBedRefusal(db, newServiceId, vs.visit_id); if (r) throw new RpcError(r, 400); }
 
     const item = vs.invoice_item_id != null
       ? db.prepare('SELECT * FROM invoice_items WHERE id = ?').get(vs.invoice_item_id)
@@ -1038,7 +1132,8 @@ export function changeUnpaidService(db, args, user) {
     const inv = item ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id) : null;
     if (item && !inv) throw new RpcError('Счёт не найден.', 500);
     if (inv) assertOwnBuilding(db, inv, 'Счёт');   // BRANCH_MONEY_GUARD_V1
-    { const refusal = editableInvoiceRefusal(inv); if (refusal) throw new RpcError(refusal, 400); }   // BILLING_AUDIT_FIX_V1 (B-minor)
+    if (cashier) assertNotPayerInvoice(inv);        // CASHIER_HEAD_V1 (ревью)
+    { const refusal = editableInvoiceRefusal(inv, db); if (refusal) throw new RpcError(refusal, 400); }   // BILLING_AUDIT_FIX_V1 (B-minor)
 
     const qty = vs.quantity || 1;
     // BILLING_AUDIT_FIX_V1 (B3) — НОВАЯ УСЛУГА ОЦЕНИВАЕТСЯ ТАК ЖЕ, КАК ПРИ
@@ -1049,19 +1144,17 @@ export function changeUnpaidService(db, args, user) {
     // lineUnitPrice: личная цена врача строки, поверх — тариф. Одно правило с
     // кассой и выплатой врачу.
     const visitRow = db.prepare('SELECT patient_id, visit_date FROM visits WHERE id = ?').get(vs.visit_id);
-    let tier = 'primary';
-    if (visitRow && visitRow.patient_id) {
-      const visitDay = db.prepare(`SELECT ${localDate('?')} AS d`).get(visitRow.visit_date).d;
-      const q = servicePriceQuote(db, { patient_id: visitRow.patient_id, service_ids: [newServiceId], visit_id: vs.visit_id, date: visitDay }, user).quotes[newServiceId];
-      if (q && (q.tier === 'secondary' || q.tier === 'repeat')) tier = q.tier;
-    }
+    const tier = quoteTier(db, visitRow, vs.visit_id, newServiceId, user);
     const unit = round2(lineUnitPrice(db, { ...vs, service_id: newServiceId, clinic_item_id: null, consultation_type_id: null, price_tier: tier }, { service: svc }));
     const lineTotal = round2(unit * qty);
+    const before = item ? lineLabel(db, vs, item) + ' · ' + moneyWords(item.total) : null;   // CASHIER_HEAD_V1 — для журнала
     // PACKAGES_V1 — другая услуга уже не услуга пакета: строка теряет пакет и
     // его скидку (скидка счёта уменьшается на неё же ниже).
     // FINAL_MONEY_FIX_V1 (M5) — строка стала УСЛУГОЙ: вид приёма консультации с
     // неё снимается, иначе остаётся химера «услуга + вид приёма».
-    db.prepare('UPDATE visit_services SET service_id = ?, unit_price = ?, total = ?, package_id = NULL, price_tier = ?, consultation_type_id = NULL WHERE id = ?')
+    // CASHIER_HEAD_V1 (ревью I5) — номер очереди прежней услуги снимается:
+    // другая услуга — другая очередь; номер выдаст оплата.
+    db.prepare('UPDATE visit_services SET service_id = ?, unit_price = ?, total = ?, package_id = NULL, price_tier = ?, consultation_type_id = NULL, queue_key = NULL, queue_no = NULL WHERE id = ?')
       .run(newServiceId, unit, lineTotal, tier, vsId);
 
     let invoice = null;
@@ -1070,17 +1163,410 @@ export function changeUnpaidService(db, args, user) {
       const oldBase = invoiceRestBase(db, inv.id);      // V3120_FIX (FATAL-1) — тоже ДО
       db.prepare('UPDATE invoice_items SET service_id = ?, description = ?, unit_price = ?, total = ?, discount_amount = 0 WHERE id = ?')
         .run(newServiceId, svc.name || '', unit, lineTotal, item.id);
-      invoice = repriceUnpaidInvoice(db, inv, oldOwn, { oldBase });   // V3120_FIX (FATAL-1)
+      invoice = repriceUnpaidInvoice(db, inv, oldOwn, { oldBase, absolute: true });   // V3120_FIX (FATAL-1); CASHIER_HEAD_V1 (I3)
+      lineAudit(db, {
+        inv: invoice, number: inv.invoice_number, visitId: vs.visit_id, action: 'line_change_service',
+        fromStatus: inv.status, toStatus: invoice.status, amount: invoice.total_amount,
+        notes: 'Замена услуги: ' + before + ' → «' + (svc.name || '—') + '» · ' + moneyWords(lineTotal),
+      }, user);
     }
 
-    return { changed: true, line: db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId), invoice };
+    return idemRemember(db, rpc, args, user, { changed: true, line: db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId), invoice });
   });
 
   const out = run();
+  if (out && out.repeated) return out;
   // CRM_CALENDAR_MIRROR_V1 (разбор ревью M1) — заявка CRM узнаёт о замене услуги
   // в записи; иначе зеркало приняло бы её за правку заявки и вернуло прежнюю.
   if (out && out.changed) syncLineFromVisit(db, vsId);
   return out;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CASHIER_HEAD_V1 (2026-09-28) — КАССА ИСПРАВЛЯЕТ УСЛУГИ В НЕОПЛАЧЕННОМ СЧЁТЕ.
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Владелец: «fix in the roles for the cashier, so it can change service and
+// provider for appointed + add service, and if created invoice. It should be
+// switchable in the roles so cashier either only accepts [payments] or accepts
+// and makes small fixes».
+//
+// КТО. Две дороги, и у каждой своё право:
+//   • касса — право «Исправляет услуги в счёте» (cashier.lines) в «Настройки →
+//     Роли → Касса». Правило перехода у строки — «только администратор»
+//     (permission-catalog.js `adminDefault`): роль, которая право не
+//     настраивала, его НЕ имеет, и касса после обновления только принимает
+//     оплату. Старшему кассиру (надстройка head_cashier) право выдано
+//     миграцией 218;
+//   • регистратура и администратор — по своей роли, но (ревью I2) с ТЕМ ЖЕ
+//     правом вкладки «Услуги» карты пациента, что и прежние двери
+//     change_unpaid_service / remove_unpaid_service: «Изменение» — заменить,
+//     сменить врача, добавить; «Удаление» — убрать. Иначе закрытая вкладка
+//     обходилась бы дверью кассы.
+//
+// ЧТО. Только строки, по которым ДЕНЕГ ЕЩЁ НЕТ и НЕ БЫЛО: счёт «Не оплачен»
+// или бесплатный на ноль, без единого платежа в истории
+// (editableInvoiceRefusal). Частично оплаченный — нет: возвраты, кэшбэк и
+// доля врача от оплаты держатся на том, что строки счёта с деньгами задним
+// числом не меняются; оплаченное снимает «Вернуть услугу». Счёт плательщику
+// (страховой, организации) касса не правит. Всегда отказ: начатая работа,
+// чужое здание, закрытый месяц оплаты врачей, хирургия без койки.
+//
+// ЖУРНАЛ. Каждое исправление по счёту — строка invoice_audit_log: кто, что
+// было, что стало и итог счёта после. Ключ повтора (idempotency_key) — как у
+// денежных дверей кассы: повтор той же формы ничего не двигает.
+
+// Касса по своему праву. isAdminUser исключён намеренно: у администратора
+// grantAllowsAdminOr отвечает «да» и без записи, а его дорога — вторая.
+function cashierGrantPath(db, user) {
+  return !isAdminUser(user) && grantAllowsAdminOr(db, user, 'cashier.lines', 'edit');
+}
+
+export function canFixInvoiceLines(db, user) {
+  return cashierGrantPath(db, user) || hasAnyRole(user, REMOVE_SERVICE_ROLES);
+}
+
+function requireLineFix(db, user, need = 'edit') {
+  if (cashierGrantPath(db, user)) return;
+  if (hasAnyRole(user, REMOVE_SERVICE_ROLES)) {
+    if (need === 'delete') requireServicesDelete(db, user); else requireServicesEdit(db, user);
+    return;
+  }
+  throw new RpcError('Исправлять услуги в счёте — недоступно вашей роли: касса только принимает оплату. Право «Исправляет услуги в счёте» включает администратор в «Настройки → Роли» (раздел «Касса»).', 403);
+}
+
+function assertNotPayerInvoice(inv) {
+  if (inv && inv.payer_id != null) {
+    throw new RpcError('Счёт выставлен плательщику (страховой или организации) — его строки у кассы не правят.', 400);
+  }
+}
+
+// Закрытый месяц оплаты врачей («Оплата врачей → Закрыть месяц», миграция 163)
+// заморожен: строки его визитов не меняются ни услугой, ни врачом, ни
+// составом — иначе закрытое начисление разошлось бы с визитами. Месяц —
+// МЕСТНЫЙ месяц дня ВИЗИТА (ревью): отчёт оплаты врачей делит работу по
+// местному дню визита, и визит 1 октября в 01:00 — октябрьский, хотя в UTC
+// это ещё сентябрь.
+function assertVisitMonthOpen(db, visitId) {
+  const row = db.prepare(`SELECT ${localMonth('visit_date')} AS m FROM visits WHERE id = ?`).get(visitId);
+  if (row && row.m && db.prepare('SELECT 1 FROM pay_periods WHERE month = ?').get(row.m)) {
+    throw new RpcError('Начисления врачам за этот месяц закрыты — услуги визита этого месяца уже не меняют.', 409);
+  }
+}
+function assertLineMonthOpen(db, vs) {
+  assertVisitMonthOpen(db, vs.visit_id);
+}
+
+// Тариф строки («второй» / «повторный» визит) — по дню ЭТОГО визита, сам визит
+// исключён (BILLING_AUDIT_FIX_V1 B3). Одно правило на замену и добавление.
+// Расчёт — без проверки роли (quoteServicePrices): право проверила дверь.
+function quoteTier(db, visitRow, visitId, serviceId) {
+  if (!visitRow || !visitRow.patient_id) return 'primary';
+  const visitDay = db.prepare(`SELECT ${localDate('?')} AS d`).get(visitRow.visit_date).d;
+  const q = quoteServicePrices(db, { patient_id: visitRow.patient_id, service_ids: [serviceId], visit_id: visitId, date: visitDay }).quotes[serviceId];
+  return q && (q.tier === 'secondary' || q.tier === 'repeat') ? q.tier : 'primary';
+}
+
+// «150 000» — сумма словами журнала (обычный пробел, не неразрывный).
+function moneyWords(n) {
+  return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+
+// «Приём терапевта», Врач Первый — строка услуги словами журнала.
+function lineLabel(db, vs, item = null) {
+  let name = item && item.description ? item.description : null;
+  if (!name && vs.service_id != null) {
+    const s = db.prepare('SELECT name FROM services WHERE id = ?').get(vs.service_id);
+    name = s && s.name;
+  }
+  if (!name && vs.consultation_type_id != null) {
+    const c = consultationFor(db, vs.consultation_type_id, vs.doctor_id);
+    name = c && c.name;
+  }
+  const doc = vs.doctor_id != null ? db.prepare('SELECT full_name FROM users WHERE id = ?').get(vs.doctor_id) : null;
+  return '«' + (name || '—') + '»' + (doc && doc.full_name ? ', ' + doc.full_name : '');
+}
+
+function lineAudit(db, { inv, number, visitId, action, fromStatus, toStatus, amount, notes }, user) {
+  // Автор — только настоящий сотрудник: внешний ключ на users.
+  const actor = user && user.id != null ? db.prepare('SELECT id, full_name, role FROM users WHERE id = ?').get(user.id) : null;
+  db.prepare(`
+    INSERT INTO invoice_audit_log (invoice_id, invoice_number, visit_id, action, from_status, to_status, amount, refund_amount, actor_user_id, actor_name, actor_role, reason, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, NULL, ?)`)
+    .run(inv ? inv.id : null, number || (inv && inv.invoice_number) || null, visitId || null, action,
+      fromStatus || null, toStatus || null, round2(Number(amount) || 0),
+      actor ? actor.id : null, actor ? actor.full_name || null : null, actor ? actor.role || null : null, notes || null);
+}
+
+// Кто оказывает услуги: те роли, чьё имя печатает чек как исполнителя
+// (то же, что patient-card.js PERFORMER_ROLES).
+const PERFORMER_ROLES = Object.freeze(['doctor', 'head_doctor', 'nurse', 'senior_nurse', 'lab']);
+const DOCTOR_ROLES = Object.freeze(['doctor', 'head_doctor']);
+
+function rolesOfRow(u) {
+  let extra = [];
+  try { const p = JSON.parse(u.extra_roles || '[]'); if (Array.isArray(p)) extra = p; } catch { extra = []; }
+  return effectiveRoles({ role: u.role, extra_roles: extra });
+}
+function isPerformerRow(u) {
+  return !!u && (Number(u.is_doctor) === 1 || rolesOfRow(u).some((r) => PERFORMER_ROLES.includes(r)));
+}
+function isDoctorRow(u) {
+  return !!u && (Number(u.is_doctor) === 1 || rolesOfRow(u).some((r) => DOCTOR_ROLES.includes(r)));
+}
+
+// Кому услуга назначена в «Сотрудники → Услуги и ставки» (users.service_rates):
+// по этому списку экран предлагает исполнителей ПЕРВЫМИ (views/doctor-pool.js).
+// Ограничением он не служит (ревью): запись в нём — это и ставка, и личная
+// цена, и одна личная цена одного врача не должна делать его единственным,
+// кто может оказать услугу.
+function assignedPerformerIds(db, serviceId) {
+  if (!isPositiveInt(serviceId)) return [];
+  return db.prepare(`
+    SELECT DISTINCT u.id FROM users u, json_each(u.service_rates) j
+     WHERE u.is_active = 1
+       AND u.service_rates IS NOT NULL AND u.service_rates != '' AND json_valid(u.service_rates)
+       AND json_type(u.service_rates) = 'array'
+       AND CAST(json_extract(j.value, '$.service_id') AS INTEGER) = ?`).all(serviceId).map((r) => r.id);
+}
+
+// Консультация — работа врача: строка вида приёма (consultation_type_id) или
+// услуга типа «Консультация».
+function isConsultation(db, serviceId, consultTypeId) {
+  if (consultTypeId != null && serviceId == null) return true;
+  if (!isPositiveInt(serviceId)) return false;
+  const s = db.prepare('SELECT type FROM services WHERE id = ?').get(serviceId);
+  return !!s && s.type === 'consultation';
+}
+
+function assertPerformer(db, doctorId, serviceId, consultTypeId = null) {
+  const who = db.prepare('SELECT id, role, is_active, is_doctor, extra_roles FROM users WHERE id = ?').get(doctorId);
+  if (!who) throw new RpcError('Такого сотрудника нет.', 400);
+  if (!who.is_active) throw new RpcError('Этот сотрудник уволен или отключён — выберите работающего исполнителя.', 400);
+  if (isConsultation(db, serviceId, consultTypeId)) {
+    if (!isDoctorRow(who)) throw new RpcError('Консультацию проводит врач — выберите врача.', 400);
+    return;
+  }
+  if (!isPerformerRow(who)) throw new RpcError('Исполнителем услуги может быть врач, медсестра или лаборант.', 400);
+}
+
+/**
+ * cashier_line_set_doctor({ visit_service_id, doctor_id }) — сменить врача
+ * (исполнителя) строки, пока по счёту нет денег.
+ *
+ * patient_card_set_doctor строку в счёте не трогает (V3120_FIX M2): по врачу
+ * строки считается его доля. Здесь — дверь кассы для НЕОПЛАЧЕННОГО счёта:
+ * строка переоценивается ценой нового врача (lineUnitPrice: его личная цена
+ * поверх каталога, тариф строки сохраняется), своя скидка строки (пакет)
+ * пересчитывается в той же доле, счёт — repriceUnpaidInvoice. Номер очереди
+ * прежнего врача снимается (ревью I5): его выдаст оплата. Доля врача
+ * считается позже, от выполненной и оплаченной строки, — уже новому врачу.
+ */
+export function setUnpaidLineDoctor(db, args, user, { rpc = 'cashier_line_set_doctor', cashier = true } = {}) {
+  requireLineFix(db, user, 'edit');
+  const vsId = args && args.visit_service_id;
+  const doctorId = args && args.doctor_id;
+  if (!isPositiveInt(vsId)) throw new RpcError('Строка услуги указана неверно.', 400);
+  if (!isPositiveInt(doctorId)) throw new RpcError('Выберите исполнителя услуги.', 400);
+  { const seen = idemReplay(db, rpc, args); if (seen) return seen; }
+
+  const run = db.transaction(() => {
+    const vs = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
+    if (!vs) throw new RpcError('Строка услуги не найдена.', 400);
+    assertOwnBuilding(db, vs, 'Услуга');
+    if (vs.clinic_item_id != null) throw new RpcError('Это списанный товар, а не услуга — исполнителя у него не меняют.', 400);
+    assertNotPerformed(db, vs, 'сменить исполнителя');
+    assertLineMonthOpen(db, vs);
+
+    const item = vs.invoice_item_id != null ? db.prepare('SELECT * FROM invoice_items WHERE id = ?').get(vs.invoice_item_id) : null;
+    const inv = item ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(item.invoice_id) : null;
+    if (item && !inv) throw new RpcError('Счёт не найден.', 500);
+    if (inv) assertOwnBuilding(db, inv, 'Счёт');
+    if (cashier) assertNotPayerInvoice(inv);
+    { const refusal = editableInvoiceRefusal(inv, db); if (refusal) throw new RpcError(refusal, 400); }
+
+    assertPerformer(db, doctorId, vs.service_id, vs.consultation_type_id);
+    if (Number(vs.doctor_id) === doctorId) return idemRemember(db, rpc, args, user, { changed: false, line: vs, invoice: inv });
+
+    const svc = vs.service_id != null ? db.prepare('SELECT * FROM services WHERE id = ?').get(vs.service_id) : null;
+    const before = lineLabel(db, vs, item) + ' · ' + moneyWords(item ? item.total : vs.total);
+    const unit = round2(lineUnitPrice(db, { ...vs, doctor_id: doctorId }, { service: svc }));
+    const lineTotal = round2(unit * (vs.quantity || 1));
+    db.prepare('UPDATE visit_services SET doctor_id = ?, unit_price = ?, total = ?, queue_key = NULL, queue_no = NULL WHERE id = ?')
+      .run(doctorId, unit, lineTotal, vsId);
+
+    let invoice = null;
+    if (item) {
+      const oldOwn = invoiceOwnDiscount(db, inv.id);
+      const oldBase = invoiceRestBase(db, inv.id);
+      // Своя скидка строки (пакет) — в той же доле от новой цены.
+      const own = Number(item.discount_amount) > 0 && Number(item.total) > 0
+        ? round2(Number(item.discount_amount) * lineTotal / Number(item.total)) : 0;
+      // У консультации имя — личное название вида приёма у НОВОГО врача.
+      const c = vs.service_id == null && vs.consultation_type_id != null ? consultationFor(db, vs.consultation_type_id, doctorId) : null;
+      const description = (c && c.name) || item.description;
+      db.prepare('UPDATE invoice_items SET unit_price = ?, total = ?, discount_amount = ?, description = ? WHERE id = ?')
+        .run(unit, lineTotal, Math.min(own, lineTotal), description, item.id);
+      invoice = repriceUnpaidInvoice(db, inv, oldOwn, { oldBase, absolute: true });
+      const after = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
+      lineAudit(db, {
+        inv: invoice, number: inv.invoice_number, visitId: vs.visit_id, action: 'line_change_doctor',
+        fromStatus: inv.status, toStatus: invoice.status, amount: invoice.total_amount,
+        notes: 'Смена врача: ' + before + ' → ' + lineLabel(db, after, { description }) + ' · ' + moneyWords(lineTotal),
+      }, user);
+    }
+    return idemRemember(db, rpc, args, user, { changed: true, line: db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId), invoice });
+  });
+  const out = run();
+  if (out && out.changed && !out.repeated) syncLineFromVisit(db, vsId);   // CRM — и врач строки заявки
+  return out;
+}
+
+/**
+ * cashier_line_add({ invoice_id | visit_id, service_id, doctor_id? }) —
+ * добавить услугу к визиту у кассы.
+ *
+ * Строка визита заводится сервером (цена — как при выставлении: личная цена
+ * врача, тариф визита), и в тот же миг ложится в счёт: в указанный счёт, если
+ * по нему нет и не было денег; иначе — в другой такой счёт пациента по этому
+ * визиту; нет такого (всё оплачено) — выставляется НОВЫЙ счёт (там же скидка
+ * группы пациента). Скидка счёта пересчитывается repriceUnpaidInvoice: ручная
+ * скидка остаётся суммой, пол группы ложится и на новую строку. В очередь
+ * строка встаёт, как все, — после оплаты (или сразу, если счёт остаётся на
+ * ноль). Пакетной скидки у строки, добавленной кассой, нет: пакет выбирают
+ * при записи. Строка доходит до живой заявки CRM этой записи.
+ */
+export function addServiceToVisitInvoice(db, args, user, { rpc = 'cashier_line_add' } = {}) {
+  requireLineFix(db, user, 'edit');
+  const serviceId = args && args.service_id;
+  if (!isPositiveInt(serviceId)) throw new RpcError('Услуга указана неверно.', 400);
+  const rawDoc = args ? args.doctor_id : undefined;
+  const doctorId = rawDoc === undefined || rawDoc === null || rawDoc === '' ? null : rawDoc;
+  if (doctorId !== null && !isPositiveInt(doctorId)) throw new RpcError('Исполнитель указан неверно.', 400);
+
+  let visitId = null;
+  const invoiceArg = args && args.invoice_id;
+  if (invoiceArg !== undefined && invoiceArg !== null) {
+    if (!isPositiveInt(invoiceArg)) throw new RpcError('Счёт указан неверно.', 400);
+    const i = db.prepare('SELECT id, visit_id, payer_id FROM invoices WHERE id = ?').get(invoiceArg);
+    if (!i) throw new RpcError('Счёт не найден.', 400);
+    if (!i.visit_id) throw new RpcError('Это счёт не по визиту (стационар, депозит или карта) — услугу к нему здесь не добавляют.', 400);
+    assertNotPayerInvoice(i);
+    visitId = i.visit_id;
+  } else {
+    visitId = args && args.visit_id;
+    if (!isPositiveInt(visitId)) throw new RpcError('Визит указан неверно.', 400);
+  }
+  { const seen = idemReplay(db, rpc, args); if (seen) return seen; }
+
+  const run = db.transaction(() => {
+    const visit = db.prepare('SELECT * FROM visits WHERE id = ?').get(visitId);
+    if (!visit) throw new RpcError('Визит не найден.', 400);
+    assertOwnBuilding(db, visit, 'Визит');
+    assertVisitMonthOpen(db, visitId);
+    const svc = db.prepare('SELECT * FROM services WHERE id = ? AND active = 1').get(serviceId);
+    if (!svc) throw new RpcError('Услуга не найдена или неактивна.', 400);
+    { const r = surgeryWithoutBedRefusal(db, serviceId, visitId); if (r) throw new RpcError(r, 400); }   // ревью I4
+    if (doctorId !== null) assertPerformer(db, doctorId, serviceId);
+    else if (Number(svc.requires_doctor) === 1) throw new RpcError('Для этой услуги нужен врач — выберите исполнителя.', 400);
+
+    const tier = quoteTier(db, visit, visitId, serviceId);
+    const unit = round2(lineUnitPrice(db, { service_id: serviceId, doctor_id: doctorId, price_tier: tier, clinic_item_id: null, consultation_type_id: null }, { service: svc }));
+    const vsId = Number(db.prepare(`
+      INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier, created_by)
+      VALUES (?, ?, ?, 1, ?, ?, 'added', ?, ?)`).run(visitId, serviceId, doctorId, unit, unit, tier, user.id).lastInsertRowid);
+
+    // Куда положить: счёт этого визита, выставленный пациенту (не
+    // плательщику), по которому нет и не было денег.
+    const editable = (i) => !!i && i.visit_id === visitId && i.payer_id == null && !editableInvoiceRefusal(i, db);
+    let target = null;
+    if (isPositiveInt(invoiceArg)) {
+      const i = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceArg);
+      if (editable(i)) target = i;
+    }
+    if (!target) {
+      const i = db.prepare(`SELECT * FROM invoices
+        WHERE visit_id = ? AND payer_id IS NULL AND COALESCE(paid_amount, 0) = 0
+          AND (status = 'unpaid' OR (status = 'paid' AND COALESCE(total_amount, 0) <= 0))
+        ORDER BY id DESC LIMIT 1`).get(visitId);
+      if (editable(i)) target = i;
+    }
+
+    let invoice;
+    let created = false;
+    if (target) {
+      assertOwnBuilding(db, target, 'Счёт');
+      const oldOwn = invoiceOwnDiscount(db, target.id);
+      const oldBase = invoiceRestBase(db, target.id);
+      const itemId = db.prepare(`INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total, discount_amount)
+                                 VALUES (?, ?, ?, 1, ?, ?, 0)`).run(target.id, serviceId, svc.name || '', unit, unit).lastInsertRowid;
+      db.prepare('UPDATE visit_services SET invoice_item_id = ? WHERE id = ?').run(itemId, vsId);
+      invoice = repriceUnpaidInvoice(db, target, oldOwn, { oldBase, absolute: true });
+      // Счёт так и остался на ноль (бесплатная услуга) — платить нечего,
+      // строка встаёт в очередь сразу, как при выставлении (FREE_SERVICE_V1).
+      if (invoice.status === 'paid') db.prepare("UPDATE visit_services SET status = 'queued' WHERE id = ? AND status = 'added'").run(vsId);
+    } else {
+      // Роль выставления не спрашиваем: право проверено выше (ревью).
+      invoice = issueVisitInvoice(db, { visit_id: visitId, visit_service_ids: [vsId] }, user).invoice;
+      created = true;
+    }
+    const line = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
+    lineAudit(db, {
+      inv: invoice, number: invoice.invoice_number, visitId, action: 'line_add',
+      fromStatus: target ? target.status : null, toStatus: invoice.status, amount: invoice.total_amount,
+      notes: 'Добавлена услуга: ' + lineLabel(db, line, { description: svc.name }) + ' · ' + moneyWords(unit) + (created ? ' (новым счётом)' : ''),
+    }, user);
+    return idemRemember(db, rpc, args, user, { line, invoice, invoice_created: created });
+  });
+  const out = run();
+  if (!out.repeated) {
+    mirrorVisit(db, visitId, { actorId: user && user.id });   // CRM_CALENDAR_MIRROR_V1
+    mirrorCashierLine(db, out.line.id);                       // ревью — строка в счёте тоже доходит до заявки
+  }
+  return out;
+}
+
+/**
+ * cashier_line_performers({ visit_service_id } | { service_id, visit_id? }) —
+ * кого касса может поставить исполнителем и во сколько обойдётся строка у
+ * каждого. Правило то же, что проверяет assertPerformer; назначенные услуге
+ * в «Услугах и ставках» идут первыми (`assigned: true`). Только чтение.
+ */
+export function cashierLinePerformers(db, args, user) {
+  requireLineFix(db, user, 'edit');
+  let serviceId = null; let consultTypeId = null; let tier = 'primary'; let qty = 1;
+  const vsId = args && args.visit_service_id;
+  if (vsId !== undefined && vsId !== null) {
+    if (!isPositiveInt(vsId)) throw new RpcError('Строка услуги указана неверно.', 400);
+    const vs = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
+    if (!vs) throw new RpcError('Строка услуги не найдена.', 400);
+    serviceId = vs.service_id; consultTypeId = vs.service_id == null ? vs.consultation_type_id : null;
+    tier = vs.price_tier || 'primary'; qty = vs.quantity || 1;
+  } else {
+    serviceId = args && args.service_id;
+    if (!isPositiveInt(serviceId)) throw new RpcError('Услуга указана неверно.', 400);
+    const visitId = args && args.visit_id;
+    if (isPositiveInt(visitId)) {
+      const visit = db.prepare('SELECT patient_id, visit_date FROM visits WHERE id = ?').get(visitId);
+      tier = quoteTier(db, visit, visitId, serviceId);
+    }
+  }
+  const svc = serviceId != null ? db.prepare('SELECT * FROM services WHERE id = ?').get(serviceId) : null;
+  if (serviceId != null && !svc) throw new RpcError('Услуга не найдена или неактивна.', 400);
+  const consult = isConsultation(db, serviceId, consultTypeId);
+  const assigned = new Set(serviceId != null ? assignedPerformerIds(db, serviceId) : []);
+  const staff = db.prepare('SELECT id, full_name, specialty, role, is_doctor, extra_roles FROM users WHERE is_active = 1 ORDER BY full_name, id').all()
+    .filter((u) => (consult ? isDoctorRow(u) : isPerformerRow(u)));
+  staff.sort((a, b) => (assigned.has(b.id) ? 1 : 0) - (assigned.has(a.id) ? 1 : 0));
+  const price = (doctorId) => round2(lineUnitPrice(db,
+    { service_id: serviceId, consultation_type_id: consultTypeId, doctor_id: doctorId, price_tier: tier, clinic_item_id: null, unit_price: 0 },
+    { service: svc }) * qty);
+  return {
+    performers: staff.map((u) => ({ id: u.id, full_name: u.full_name, specialty: u.specialty || null, role: u.role, assigned: assigned.has(u.id), unit_price: price(u.id) })),
+    requires_doctor: !!(svc && Number(svc.requires_doctor) === 1) || (serviceId == null && consultTypeId != null),
+    tier,
+    catalog_price: price(null),
+  };
 }
 
 // CASHIER_REFUND_V1 — возврат оплаты. Inserts a NEGATIVE payments row (so the

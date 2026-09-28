@@ -834,7 +834,7 @@ const STAFF_HISTORY_REFS = [
   { table: 'visit_services',          columns: ['doctor_id', 'created_by', 'verified_by'], label: 'оказанные услуги' },
   { table: 'invoices',                columns: ['created_by'],                label: 'счета' },
   { table: 'payments',                columns: ['cashier_id'],                label: 'платежи' },
-  { table: 'cash_shifts',             columns: ['cashier_id'],                label: 'кассовые смены' },
+  { table: 'cash_shifts',             columns: ['cashier_id', 'closed_by'],   label: 'кассовые смены' },   // closed_by: CASHIER_HEAD_V1 (мигр. 219)
   { table: 'cash_movements',          columns: ['created_by'],                label: 'кассовые операции' },
   { table: 'invoice_audit_log',       columns: ['actor_user_id'],             label: 'журнал счетов' },
   { table: 'patient_activity_log',    columns: ['actor_user_id'],             label: 'журнал действий' },

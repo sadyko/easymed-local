@@ -26,6 +26,8 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TY
 import { dateNumeric } from '../../shared/date-words.js';   // V3120_FIX — дата чека не зависит от языка ОС
 import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANCE_V1
 import { searchTokens } from '../patient-search.js';   // CARD_SALE_V1 — поиск покупателя карты
+import { canOfferLineFix, openLineFix } from './cashier-line-fix.js';   // CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы
+import { canCloseOtherShifts } from '../permissions.js';   // CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
 
 // DEPOSIT_WALLET_V1 — «С баланса»: оплата и возврат через баланс пациента.
 // CARD_BALANCE_V1 — «Подарочная карта»: оплата остатком карты / сертификата.
@@ -427,14 +429,15 @@ function moveModal(root, kind) {
 }
 
 // ---- X-отчёт / История / печать ------------------------------------------------
-async function loadShiftReport() {
-    const { data, error } = await supabase.rpc('shift_report', {});
+async function loadShiftReport(shiftId = null) {
+    // CASHIER_HEAD_V1 — старший кассир открывает отчёт ЛЮБОЙ смены.
+    const { data, error } = await supabase.rpc('shift_report', shiftId != null ? { shift_id: shiftId } : {});
     if (error) { toast(error.message || 'Не удалось получить отчёт.', 'fail'); return null; }
     return data;
 }
 
-function xReportModal() {
-    loadShiftReport().then((r) => {
+function xReportModal(shiftId = null) {
+    loadShiftReport(shiftId).then((r) => {
         if (!r) return;
         const line = (label, value, strong) => h('div', { class: 'row', style: { padding: '7px 0', borderBottom: '1px solid var(--ink-50)', fontSize: '13.5px' } },
             h('span', { style: { color: 'var(--ink-600)' } }, label),
@@ -642,7 +645,7 @@ function printReportDoc(r, withPayments) {
 /* i18n-exempt-end */
 
 // ---- Close shift ---------------------------------------------------------------
-function closeShiftModal(root, shift, expectedDrawer) {
+function closeShiftModal(root, shift, expectedDrawer, onDone = null) {
     // V3120_FIX — виртуальную смену (id: null) закрывать нечего: её ещё нет в
     // базе. Кнопки «Закрыть смену» в шапке нет (SHIFT_AUTO_V2), но окно не
     // должно отправить close_cash_shift с shift_id: null, откуда бы его ни открыли.
@@ -675,7 +678,7 @@ function closeShiftModal(root, shift, expectedDrawer) {
             if (error) { toast((error.message) || 'Не удалось закрыть смену.', 'fail'); return false; }
             const os = data && data.shift ? data.shift.over_short : 0;
             toast(os === 0 ? 'Смена закрыта — касса сходится' : (os > 0 ? trf('Смена закрыта — излишек +{sum}', { sum: fmtPrice(os) }) : trf('Смена закрыта — недостача {sum}', { sum: fmtPrice(os) })), os === 0 ? 'ok' : 'info');
-            await paint(root);
+            if (onDone) await onDone(); else await paint(root);   // CASHIER_HEAD_V1 — экран старшего кассира перерисовывает себя сам
             return true;
         });
 }
@@ -1275,6 +1278,13 @@ function invoiceRow(inv, root) {
         }, 'var(--crit-600, #dc2626)', 'var(--crit-200, #fecaca)')
         : null;
 
+    // CASHIER_HEAD_V1 — «Исправить услуги»: только у того, кому выдано право
+    // «Исправляет услуги в счёте» (без него кассир только принимает оплату).
+    const fixBtn = canOfferLineFix(inv)
+        ? iconBtn('Исправить услуги', 'Edit', () => openLineFix(inv, { onChanged: () => paint(root) }),
+            'var(--ink-700)', 'var(--ink-200)')
+        : null;
+
     return h('tr', null,
         // CASHIER_ROW_FIT_V1 — the patient cell needs a width floor and its own
         // no-wrap, exactly like the service cell below.
@@ -1318,7 +1328,7 @@ function invoiceRow(inv, root) {
         h('td', null, methods),
         h('td', null, invStatusTag(inv.status)),
         h('td', null, h('div', { class: 'row', style: { gap: '6px', justifyContent: 'flex-end' } },
-            payBtn, checkBtn, invoiceBtn, refundBtn, voidBtn, deleteBtn)),   // REPRINT_DOCS_V1 — чек/счёт доступны и после оплаты
+            payBtn, fixBtn, checkBtn, invoiceBtn, refundBtn, voidBtn, deleteBtn)),   // REPRINT_DOCS_V1 — чек/счёт доступны и после оплаты
     );
 }
 
@@ -2014,6 +2024,7 @@ export async function renderCashierHead(container) {
                     h('th', { style: { textAlign: 'right' } }, 'Пересчитано'),
                     h('th', { style: { textAlign: 'right' } }, 'Излишек / недостача'),
                     h('th', null, 'Статус'),
+                    h('th', null, ''),   // CASHIER_HEAD_V1 — отчёт и закрытие смены
                 )),
                 tbody,
             ),
@@ -2023,20 +2034,29 @@ export async function renderCashierHead(container) {
 
     loadUnassignedCash(unassignedWrap);
 
-    tbody.appendChild(h('tr', null, h('td', { colspan: '8', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, 'Загрузка…')));
+    tbody.appendChild(h('tr', null, h('td', { colspan: '9', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, 'Загрузка…')));
     let rows = [];
     try {
         const { data, error } = await supabase.from('cash_shifts')
-            .select('*, users(full_name)').order('id', { ascending: false }).limit(300);
+            .select('*, users(full_name), closed_by(full_name)').order('id', { ascending: false }).limit(300);   // CASHIER_HEAD_V1 — кто закрыл
         if (error) throw error;
         rows = data || [];
     } catch (e) {
         clear(tbody);
-        tbody.appendChild(h('tr', null, h('td', { colspan: '8', style: { textAlign: 'center', padding: '18px', color: 'var(--crit-600)' } }, trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }))));
+        tbody.appendChild(h('tr', null, h('td', { colspan: '9', style: { textAlign: 'center', padding: '18px', color: 'var(--crit-600)' } }, trf('Не удалось загрузить: {msg}', { msg: (e && e.message) || e }))));
         return;
     }
     clear(tbody);
-    if (!rows.length) { tbody.appendChild(h('tr', null, h('td', { colspan: '8', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, 'Смен пока нет.'))); return; }
+    if (!rows.length) { tbody.appendChild(h('tr', null, h('td', { colspan: '9', style: { textAlign: 'center', padding: '20px', color: 'var(--ink-500)' } }, 'Смен пока нет.'))); return; }
+    // CASHIER_HEAD_V1 — старший кассир открывает отчёт любой смены, а с
+    // «Изменением» раздела — пересчитывает и закрывает чужую открытую смену
+    // (сервер проверяет то же: rpc/cashier.js headCashierLevel).
+    const mayClose = canCloseOtherShifts();
+    const closeOther = async (s) => {
+        const { data: r, error } = await supabase.rpc('shift_report', { shift_id: s.id });
+        if (error || !r) { toast((error && error.message) || 'Не удалось получить отчёт.', 'fail'); return; }
+        closeShiftModal(null, r.shift, r.expected_drawer, () => renderCashierHead(container));
+    };
     for (const s of rows) {
         const os = s.over_short;
         // V3120_FIX — смену, закрытую автоматически в полночь, никто не
@@ -2051,7 +2071,11 @@ export async function renderCashierHead(container) {
         tbody.appendChild(h('tr', null,
             h('td', null, (s.users && s.users.full_name) || ('#' + s.cashier_id)),
             h('td', null, fmtDateTime(s.opened_at)),
-            h('td', null, s.closed_at ? fmtDateTime(s.closed_at) : '—'),
+            h('td', null, s.closed_at ? fmtDateTime(s.closed_at) : '—',
+                // CASHIER_HEAD_V1 (мигр. 219) — кто пересчитал и закрыл смену.
+                s.closed_by && typeof s.closed_by === 'object' && s.closed_by.full_name
+                    ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, trf('закрыл(а): {name}', { name: s.closed_by.full_name }))
+                    : null),
             h('td', { style: { textAlign: 'right' } }, fmtPrice(s.opening_float)),
             h('td', { style: { textAlign: 'right' } }, s.expected_amount != null ? fmtPrice(s.expected_amount) : '—'),
             h('td', { style: { textAlign: 'right' } }, uncounted
@@ -2059,6 +2083,11 @@ export async function renderCashierHead(container) {
                 : (s.counted_amount != null ? fmtPrice(s.counted_amount) : '—')),
             h('td', { style: { textAlign: 'right' } }, osCell),
             h('td', null, Tag(s.status === 'open' ? 'Открыта' : 'Закрыта', { kind: s.status === 'open' ? 'ok' : '', dot: true })),
+            h('td', null, h('div', { class: 'row', style: { gap: '6px', justifyContent: 'flex-end', flexWrap: 'nowrap' } },
+                h('button', { class: 'btn btn-sm', type: 'button', title: 'X-отчёт смены', onclick: () => xReportModal(s.id) }, 'Отчёт'),
+                (mayClose && s.status === 'open')
+                    ? h('button', { class: 'btn btn-sm', type: 'button', title: 'Пересчитать и закрыть смену', onclick: () => closeOther(s) }, 'Закрыть смену')
+                    : null)),
         ));
     }
 }

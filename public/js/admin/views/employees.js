@@ -33,6 +33,9 @@ const ROLES = [
 const EXTRA_ONLY_ROLES = [
     ['head_doctor', 'Главный врач'],
     ['senior_nurse', 'Старшая медсестра'],
+    // CASHIER_HEAD_V1 — старший кассир остаётся кассиром: основная роль
+    // «Кассир», надстройка даёт экран всех смен и «Исправляет услуги в счёте».
+    ['head_cashier', 'Старший кассир'],
 ];
 const ALL_ASSIGNABLE_ROLES = [...ROLES, ...EXTRA_ONLY_ROLES];
 // CUSTOM_ROLES_V1 (2026-09-16) — роли, заведённые самой клиникой («Настройки →

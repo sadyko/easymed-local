@@ -638,9 +638,11 @@ export function syncLineFromVisit(db, vsId) {
   try {
     const vs = db.prepare('SELECT id, service_id, consultation_type_id, doctor_id FROM visit_services WHERE id = ?').get(vsId);
     if (!vs) return;
-    db.prepare(`UPDATE crm_request_services SET service_id = ?, consultation_type_id = ?
+    // CASHIER_HEAD_V1 (ревью) — и врача: касса меняет исполнителя строки
+    // (cashier_line_set_doctor), и заявка не должна звать пациента к прежнему.
+    db.prepare(`UPDATE crm_request_services SET service_id = ?, consultation_type_id = ?, doctor_id = ?
                  WHERE visit_service_id = ? AND status = 'pending'`)
-      .run(vs.service_id ?? null, vs.service_id != null ? null : (vs.consultation_type_id ?? null), vs.id);
+      .run(vs.service_id ?? null, vs.service_id != null ? null : (vs.consultation_type_id ?? null), vs.doctor_id ?? null, vs.id);
   } catch (e) {
     console.error('[crm-mirror] замена услуги', vsId, 'не отражена в заявке:', e && e.message);
   }
@@ -686,4 +688,34 @@ export function repriceOwnLine(db, vsId) {
   const vs = db.prepare('SELECT visit_id FROM visit_services WHERE id = ?').get(vsId);
   const v = vs ? visitRow(db, vs.visit_id) : null;
   if (v && isOwnLine(db, vsId)) repriceOwn(db, v, vsId);
+}
+
+/**
+ * CASHIER_HEAD_V1 (ревью) — УСЛУГА, ДОБАВЛЕННАЯ КАССОЙ, ПОПАДАЕТ В ЗАЯВКУ.
+ *
+ * Сверка mirrorVisit строки С СЧЁТОМ в заявку не переносит (шаг 3: «строки
+ * визита ведёт касса»), а касса кладёт новую строку сразу в счёт. Здесь —
+ * ровно этот случай: живая заявка этой записи получает строку, связанную с
+ * новой строкой визита (не авто — её поставила касса). Закрытую заявку
+ * («Отказ», «Пришёл») история не переписывает — как и в mirrorVisit.
+ */
+export function mirrorCashierLine(db, vsId) {
+  try {
+    const x = db.prepare('SELECT * FROM visit_services WHERE id = ?').get(vsId);
+    if (!x || x.clinic_item_id != null || x.sync_origin != null) return null;
+    if (db.prepare('SELECT 1 FROM crm_request_services WHERE visit_service_id = ?').get(x.id)) return null;
+    const reqId = requestOfVisit(db, x.visit_id);
+    if (!reqId) return null;
+    const st = db.prepare('SELECT status FROM crm_requests WHERE id = ?').get(reqId);
+    if (!st || !openStageKeys(db).includes(st.status)) return null;
+    const v = visitRow(db, x.visit_id);
+    const info = db.prepare(`INSERT INTO crm_request_services
+                  (request_id, service_id, consultation_type_id, scheduled_date, status, doctor_id, visit_id, visit_service_id, visit_service_auto)
+                VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, 0)`)
+      .run(reqId, x.service_id ?? null, x.service_id != null ? null : (x.consultation_type_id ?? null), v ? v.day : null, x.doctor_id || null, x.visit_id, x.id);
+    return Number(info.lastInsertRowid);
+  } catch (e) {
+    console.error('[crm-mirror] строка кассы', vsId, 'не отражена в заявке:', e && e.message);
+    return null;
+  }
 }

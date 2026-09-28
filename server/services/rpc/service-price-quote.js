@@ -41,6 +41,16 @@ const QUOTE_ROLES = ['admin', 'registrar', 'doctor', 'nurse', 'cashier', 'callce
  */
 export function servicePriceQuote(db, args, user) {
   if (!hasAnyRole(user, QUOTE_ROLES)) throw new RpcError('Нет доступа к ценам услуг.', 403);
+  return quoteServicePrices(db, args);
+}
+
+/**
+ * CASHIER_HEAD_V1 (ревью) — тот же расчёт без проверки роли: для серверных
+ * дверей, которые уже проверили СВОЁ право (касса по «Исправляет услуги в
+ * счёте» — у своей роли клиники на основе медсестры или склада роли из
+ * QUOTE_ROLES может не быть, а тариф строки считать всё равно нужно).
+ */
+export function quoteServicePrices(db, args) {
   const a = args || {};
   const patientId = Number(a.patient_id);
   if (!Number.isInteger(patientId) || patientId <= 0) throw new RpcError('patient_id обязателен.', 400);

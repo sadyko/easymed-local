@@ -566,7 +566,10 @@ export function discardEmptyVisit(db, args, user) {
     // сырой английской ошибкой базы. Визит с ними — уже не пустой.
     for (const [table, col, why] of DISCARD_HOLDERS) {
       let has = false;
-      try { has = !!db.prepare(`SELECT 1 FROM ${table} WHERE ${col} = ? LIMIT 1`).get(visitId); }
+      // CASHIER_HEAD_V1 (ревью) — записи журнала о правках строк кассой
+      // (line_*) визит не держат: они о счёте, а не о работе в визите.
+      const extra = table === 'invoice_audit_log' ? " AND COALESCE(action, '') NOT LIKE 'line!_%' ESCAPE '!'" : '';
+      try { has = !!db.prepare(`SELECT 1 FROM ${table} WHERE ${col} = ?${extra} LIMIT 1`).get(visitId); }
       catch { has = false; }   // таблицы нет в этой сборке — держать нечему
       if (has) throw new RpcError('Визит не пустой: ' + why + ' — удалить его нельзя.', 400);
     }
@@ -600,6 +603,9 @@ export function discardEmptyVisit(db, args, user) {
         }
       }
     } catch (e) { console.error('[discard_empty_visit] привязка к заявке не убрана:', e && e.message); }
+    // CASHIER_HEAD_V1 (ревью) — записи журнала о правках строк кассой визит
+    // не держат (см. DISCARD_HOLDERS выше): ссылку отпускают, запись остаётся.
+    db.prepare("UPDATE invoice_audit_log SET visit_id = NULL WHERE visit_id = ? AND action LIKE 'line!_%' ESCAPE '!'").run(visitId);
     db.prepare('DELETE FROM visits WHERE id = ?').run(visitId);
     return { discarded: true };
   });

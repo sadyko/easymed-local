@@ -1,0 +1,24 @@
+-- CASHIER_HEAD_V1 (2026-09-28) — «СТАРШИЙ КАССИР»: СТРОКА ПРАВ НАДСТРОЕЧНОЙ РОЛИ.
+--
+-- Владелец: «we need to add a head cashier and fix in the roles for the
+-- cashier, so it can change service and provider for appointed + add service,
+-- and if created invoice. It should be switchable in the roles so cashier
+-- either only accepts [payments] or accepts and makes small fixes.»
+--
+-- head_cashier — надстройка ПОВЕРХ кассира (services/roles.js
+-- EXTRA_ONLY_ROLES), как «Главный врач» поверх врача: всё кассовое человек
+-- получает от основной роли «Кассир», а эта строка ДОБАВЛЯЕТ:
+--   • раздел «Касса» (на случай основы без него) и «Старший кассир» на
+--     «Изменение» — все смены, X-отчёт любой смены, пересчёт и закрытие чужой
+--     смены (rpc/cashier.js headCashierLevel);
+--   • право «Исправляет услуги в счёте» (cashier.lines) — заменить услугу и
+--     врача, добавить и убрать услугу, пока по счёту нет денег.
+-- У кассира это право по умолчанию выключено (правило перехода «только
+-- администратор», permission-catalog.js `adminDefault`): его включают в
+-- «Настройки → Роли → Кассир → Касса».
+--
+-- INSERT OR IGNORE — против UNIQUE(role) при повторном прогоне и на случай
+-- клиники, которая уже завела роль с таким кодом вручную: её настройку не
+-- переписываем.
+INSERT OR IGNORE INTO role_permissions (role, permissions) VALUES
+ ('head_cashier', '{"sections":["cashier","cashier-head"],"levels":{"cashier":"editor","cashier-head":"editor"},"grants":{"cashier":"edit","cashier_head":"edit","cashier.lines":"edit"}}');
