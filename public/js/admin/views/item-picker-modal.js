@@ -28,7 +28,7 @@ import { currentClinicId } from '../tenant-tables.js';
 import { hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1
 // OWN_SHELF_ONLY_V1 — свои полки и «можно ли со склада» считает сервер; окно
 // у врача и медсестры показывает только своё (см. own-shelf.js).
-import { loadShelves, shelfItems, fmtShelfQty, emptyShelvesNotice, shelfRequestButton, warehouseStock } from './own-shelf.js';
+import { loadShelves, shelfItems, fmtShelfQty, emptyShelvesNotice, shelfRequestButton, warehouseStock, isOwnShelfShort, showOwnShelfRefusal } from './own-shelf.js';
 
 /**
  * Ревью M2 — подпись остатка у товара в окне выдачи: { text, low }.
@@ -80,6 +80,11 @@ function unitOptions(current) {
  * OWN_SHELF_ONLY_V1 — тот же запрос живёт в own-shelf.js (loadShelves: ещё и
  * товары полок и warehouse_allowed); здесь — прежняя форма «товар → количество».
  */
+// Ревью F4 — вызывающим (кабинет врача, окно визита, процедуры, история
+// болезни) — узнать отказ «нет на ваших полках» среди строк пачки и отдать его
+// окну целиком (с кодом и товаром), а не строкой.
+export { isOwnShelfShort };
+
 export async function loadOwnShelves(place) {
     return (await loadShelves(place)).own;
 }
@@ -382,7 +387,10 @@ export function openItemPickerModal({
         } catch (err) {
             // A caller throws only when the whole batch failed — surface it and
             // keep the dialog open so the user can retry.
-            toast(err?.message || String(err), 'fail');
+            // Ревью F4 — «нет на ваших полках»: окно с «Запросить у склада»; окно
+            // выдачи стоит выше диалога заявки, поэтому заявка сначала его закрывает.
+            if (isOwnShelfShort(err)) showOwnShelfRefusal(err, { before: () => close() });
+            else toast(err?.message || String(err), 'fail');
             clear(confirmBtn);
             confirmBtn.append(Icon(confirmIcon, { size: 14 }), ' ' + confirmLabel);
             confirmBtn.removeAttribute('disabled');

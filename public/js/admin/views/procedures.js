@@ -30,7 +30,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, PageHead, toast, clear, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { currentUser } from '../data.js';
-import { openItemPickerModal } from './item-picker-modal.js?v=billoptin2';   // PROC_PRODUCTS_V1 — reuse the dispense picker
+import { openItemPickerModal, isOwnShelfShort } from './item-picker-modal.js?v=billoptin2';   // PROC_PRODUCTS_V1 — reuse the dispense picker; ревью F4
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 
 const STATUS_RU = { added: 'Назначено', queued: 'В очереди', in_progress: 'Выполняется', completed: 'Выполнено' };
@@ -225,6 +225,7 @@ function openDone(r, body) {
             place: { visit_id: r.visit_id },   // V3120_FIX — видно и свою полку, не только склад
             onConfirm: async (lines) => {
                 let ok = 0; const fails = [];
+                let shortErr = null;   // ревью F4 — отказ «нет на ваших полках» уходит окну целиком
                 const warned = [];   // EXPIRY_BALANCE_V1 — просроченные партии всех строк
                 for (const { item, qty } of lines) {
                     try {
@@ -232,10 +233,10 @@ function openDone(r, body) {
                         if (error) throw error; ok++;
                         const res = Array.isArray(data) ? data[0] : data;
                         if (res && Array.isArray(res.warnings)) warned.push(...res.warnings);
-                    } catch (e) { fails.push(`${item.name}: ${e?.message || e}`); }
+                    } catch (e) { fails.push(`${item.name}: ${e?.message || e}`); if (!shortErr && isOwnShelfShort(e)) shortErr = e; }
                 }
                 await refreshItems();
-                if (ok === 0) throw new Error(fails[0] || tr('Не удалось добавить товары'));
+                if (ok === 0) throw shortErr || new Error(fails[0] || tr('Не удалось добавить товары'));
                 toast(trf('Добавлено позиций: {n}', { n: ok }) + (fails.length ? ' · ' + trf('ошибок: {n}', { n: fails.length }) : ''));
                 if (fails.length) toast(fails.join('; '), 'fail');
                 // EXPIRY_BALANCE_V1 — ПОСЛЕ итога и не вместо него: товар добавлен,

@@ -253,3 +253,49 @@ test('ревью M2: счёт визита, консоль койки и вкл�
     assert.equal(mo.reachableUnits(src, 41), Infinity, 'потолок ставит сервер, а не экран');
     assert.equal(mo.reachableUnits(src, 40), 5);
 });
+
+// ─── ревью F4 — отказ «нет на ваших полках» с «Запросить у склада» ────────────
+// Сервер отвечает кодом own_shelf_short и кладёт в params товар и нехватку
+// (inventory.js ownShelfRefusal). Экран показывает окно со словами сервера и
+// кнопкой, которая открывает заявку уже с этим товаром и количеством.
+const SHORT = {
+    code: 'own_shelf_short',
+    message: 'Нет на ваших полках: Бинт — нужно 5 шт, есть 2 шт. Запросите у склада.',
+    template: 'Нет на ваших полках: {name} — нужно {need}, есть {have}. Запросите у склада.',
+    params: { name: 'Бинт', need: '5 шт', have: '2 шт', product_id: 40, request_qty: 3 },
+};
+
+test('ревью F4: окно выдачи — отказ «нет на ваших полках» окном; «Запросить у склада» открывает заявку с товаром и нехваткой', async () => {
+    reset({ holdings: MINE_ROWS, warehouse_allowed: false });
+    openItemPickerModal({ place: { visit_id: 301 }, onConfirm: async () => { throw SHORT; } });
+    await settle();
+    const row = walk(BODY).find((e) => e.tagName === 'BUTTON' && textOf(e).includes('Бинт') && textOf(e).includes('Своё'));
+    assert.ok(row, 'товар в окне');
+    row.click();
+    findBtn(BODY, 'Выдать').click();
+    await settle();
+    const refusal = BODY.children.find((c) => c.attrs && 'data-own-shelf-refusal' in c.attrs);
+    assert.ok(refusal, 'окно отказа, а не красная плашка');
+    assert.ok(textOf(refusal).includes('Нет на ваших полках: Бинт — нужно 5 шт, есть 2 шт. Запросите у склада.'), textOf(refusal));
+    findBtn(refusal, 'Запросить у склада').click();
+    await settle(); await settle();
+    assert.ok(!BODY.children.some((c) => c.attrs && 'data-own-shelf-refusal' in c.attrs), 'окно отказа закрылось');
+    assert.ok(!BODY.children.some((c) => textOf(c).includes('Показаны ваши полки')), 'окно выдачи закрылось — заявка не прячется под ним');
+    const dialog = BODY.children.find((c) => textOf(c).includes('Запросить со склада'));
+    assert.ok(dialog, 'открылась заявка на склад');
+    const inputs = walk(dialog).filter((e) => e.tagName === 'INPUT');
+    assert.ok(inputs.some((i) => i.value === 'Бинт'), 'товар выбран заранее');
+    assert.ok(inputs.some((i) => i.value === '3'), 'нехватка — количество заявки');
+});
+
+test('ревью F4: все двери выдачи и лист назначений показывают отказ окном, а пачки окна выдачи отдают его целиком', () => {
+    const src = (file) => fs.readFileSync(new URL('../views/' + file, import.meta.url), 'utf8');
+    for (const file of ['visit-bill.js', 'ward-beds.js', 'mar-outpatients.js', 'mar-nurse.js', 'item-picker-modal.js']) {
+        const code = src(file);
+        assert.ok(/isOwnShelfShort\(/.test(code) && /showOwnShelfRefusal\(/.test(code), file + ': отказ own_shelf_short не показан окном');
+    }
+    assert.equal((src('mar-nurse.js').match(/showOwnShelfRefusal\(/g) || []).length, 2, 'лист назначений: и «введено», и «не введено» с расходом сверх дозы');
+    for (const file of ['service-workspace.js', 'visit-modal.js', 'procedures.js', 'case-workspace.js']) {
+        assert.match(src(file), /throw shortErr \|\| new Error/, file + ': отказ «нет на полках» теряет код в пачке окна выдачи');
+    }
+});

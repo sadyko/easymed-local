@@ -351,12 +351,13 @@ function paintTab(root, onNavigate) {
                 // цепочкой сервера: свой подотчёт → свой кабинет → отдел палаты
                 // → свой отдел → склад (V3120_FIX: раньше здесь было написано
                 // «со склада», и окно показывало только складской остаток).
-                const { openItemPickerModal } = await import('./item-picker-modal.js?v=billoptin2');
+                const { openItemPickerModal, isOwnShelfShort } = await import('./item-picker-modal.js?v=billoptin2');   // ревью F4 — и отказ «нет на полках»
                 openItemPickerModal({
                     title: tr('Добавить расход'), confirmLabel: tr('Списать'),
                     place: { admission_id: state.admissionId },
                     onConfirm: async (lines) => {
                         let ok = 0; const fails = [];
+                        let shortErr = null;   // ревью F4 — отказ «нет на ваших полках» уходит окну целиком
                         const warned = [];   // EXPIRY_BALANCE_V1 — просроченные партии всех строк
                         for (const { item, qty } of lines) {
                             try {
@@ -366,12 +367,12 @@ function paintTab(root, onNavigate) {
                                 ok += 1;
                                 const res = Array.isArray(data) ? data[0] : data;
                                 if (res && Array.isArray(res.warnings)) warned.push(...res.warnings);
-                            } catch (e) { fails.push((item.name || '') + ': ' + ((e && e.message) || e)); }
+                            } catch (e) { fails.push((item.name || '') + ': ' + ((e && e.message) || e)); if (!shortErr && isOwnShelfShort(e)) shortErr = e; }
                         }
                         await reload();
                         // Окно закрывается только при успехе: ошибка на складе —
                         // это разговор с кладовщиком, а не «нажмите ещё раз».
-                        if (!ok) throw new Error(fails[0] || tr('Не удалось списать расход.'));
+                        if (!ok) throw shortErr || new Error(fails[0] || tr('Не удалось списать расход.'));
                         toast(trf('Списано позиций: {n}', { n: ok }), 'ok');
                         if (fails.length) toast(fails.join('; '), 'fail');
                         // EXPIRY_BALANCE_V1 — ПОСЛЕ итога и не вместо него: расход

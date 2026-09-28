@@ -250,6 +250,11 @@ function ownShelfRefusal(product, need, found, inUnits = false) {
     name: product.name,
     need: `${num(need)} ${unit}`.trim(),
     have: `${num(have)} ${unit}`.trim(),
+    // Ревью F4 — что и сколько запросить у склада: товар и нехватка в единице
+    // заявки (единица расхода — та же, что в диалоге «Запросить у склада»).
+    // В фразу они не подставляются: экран открывает заявку уже заполненной.
+    product_id: product.id,
+    request_qty: unitsOf(roundQty(Math.max(0, Number(need) - have)), factorOf(product)),
   }, 400);
   err.code = OWN_SHELF_SHORT;
   // Ревью M1 — товар ОТКЛЮЧЁН в каталоге. Двери выдачи отвечают так же

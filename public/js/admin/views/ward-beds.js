@@ -64,7 +64,7 @@ import { toastStockWarnings } from './stock-warnings.js';
 // V3120_FIX — «Товары для пациента»: рядом со складом виден остаток СВОИХ полок
 // (то, что сервер спишет первым: подотчёт → кабинет → отдел палаты → свой отдел).
 // OWN_SHELF_ONLY_V1 — врачу и медсестре только свои полки: склад им не источник.
-import { loadShelves, shelfItems, fmtShelfQty, emptyShelvesNotice, warehouseStock } from './own-shelf.js';
+import { loadShelves, shelfItems, fmtShelfQty, emptyShelvesNotice, warehouseStock, isOwnShelfShort, showOwnShelfRefusal } from './own-shelf.js';
 
 /**
  * Ревью M2 — подпись товара в поиске «Товары для пациента»: свои полки и
@@ -1024,6 +1024,7 @@ function bedDetailModal(bed, ward, adm, root) {
                 const lines = picked.filter(x => Number(x.qty) > 0);
                 if (!lines.length) { toast('Добавьте хотя бы один товар.', 'fail'); return false; }
                 let ok = 0; const fails = [];
+                let shortErr = null;   // ревью F4 — первый отказ «нет на ваших полках»
                 const warned = [];   // EXPIRY_BALANCE_V1 — просроченные партии всех строк
                 for (const x of lines) {
                     const { data, error } = await supabase.rpc('dispense_admission_item', {
@@ -1031,10 +1032,11 @@ function bedDetailModal(bed, ward, adm, root) {
                         p_doctor_id: adm.attending_doctor_id || adm.doctor_id || null,   // лечащий, а не направивший — см. «Услуги» выше
                         p_billable: billChk.checked, p_note: noteInp.value.trim() || null,
                     });
-                    if (error) fails.push(x.p.name + ': ' + error.message);
+                    if (error) { fails.push(x.p.name + ': ' + error.message); if (!shortErr && isOwnShelfShort(error)) shortErr = error; }
                     else { ok++; if (data && Array.isArray(data.warnings)) warned.push(...data.warnings); }
                 }
                 if (fails.length) toast(trf('Выдано: {n}. Ошибки — {fails}', { n: ok, fails: fails.join('; ') }), 'fail');
+                if (shortErr) showOwnShelfRefusal(shortErr);   // ревью F4 — и «Запросить у склада»
                 else toast(billChk.checked ? trf('Выдано позиций: {n} — в счёт пациента.', { n: ok }) : trf('Выдано позиций: {n} — в учёт расходов.', { n: ok }), 'ok');
                 // EXPIRY_BALANCE_V1 — предупреждение ПОСЛЕ итога и не вместо него:
                 // выдача прошла, но партию нужно проверить.

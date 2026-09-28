@@ -15,7 +15,7 @@ import { currentUser } from '../data.js';
 import { h, Icon, Tag, StatusTag, statusLabel, toast, clear } from '../ui.js';
 import { canDelete, actorRoleCodes, hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — hasActorRole
 import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
-import { openItemPickerModal } from './item-picker-modal.js?v=billoptin2';   // DISPENSE_ITEM_V1
+import { openItemPickerModal, isOwnShelfShort } from './item-picker-modal.js?v=billoptin2';   // DISPENSE_ITEM_V1; отказ «нет на полках» — ревью F4
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 import { openCancelInvoiceDialog, logInvoiceAction as _logInvoiceAction, canMoveInvoiceMoney, invoiceMoneyErrorText } from './invoice-actions.js?v=ia3';
 import { logPatientActivity } from './activity-log.js';
@@ -1041,6 +1041,7 @@ function openDispenseItem(state, onReload) {
         // DISPENSE_MULTI_V1 — dispense each cart line with its own atomic RPC.
         onConfirm: async (lines) => {
             let ok = 0; const fails = [];
+            let shortErr = null;   // ревью F4 — отказ «нет на ваших полках» уходит окну целиком
             const warned = [];   // EXPIRY_BALANCE_V1 — просроченные партии всех строк
             for (const { item, qty } of lines) {
                 try {
@@ -1065,9 +1066,9 @@ function openDispenseItem(state, onReload) {
                     // склад строкой выше: сервер называет её своими словами, а
                     // окно визита их разбирало (res.sources) и выбрасывало.
                     if (res && Array.isArray(res.warnings)) warned.push(...res.warnings);
-                } catch (err) { fails.push(`${item.name}: ${err?.message || err}`); }
+                } catch (err) { fails.push(`${item.name}: ${err?.message || err}`); if (!shortErr && isOwnShelfShort(err)) shortErr = err; }
             }
-            if (ok === 0) throw new Error(fails[0] || 'Dispense failed');
+            if (ok === 0) throw shortErr || new Error(fails[0] || 'Dispense failed');
             await activateVisitIfPending(state);
             await onReload();
             toast(fails.length ? trf('Выдано: {ok} · не выдано: {n}', { ok, n: fails.length }) : trf('Выдано: {ok}', { ok }));

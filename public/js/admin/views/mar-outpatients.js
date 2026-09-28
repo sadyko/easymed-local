@@ -38,7 +38,7 @@ import { fmtPrice, fmtQty } from './inventory-shared.js';
 // EXPIRY_BALANCE_V1 — «списание просроченного предупреждает» (владелец 23.09).
 // Слова пишет сервер (rpc/expiry.js), вкладка их только показывает.
 import { toastStockWarnings } from './stock-warnings.js';
-import { loadShelves, emptyShelvesNotice, shelfRequestButton } from './own-shelf.js';   // OWN_SHELF_ONLY_V1
+import { loadShelves, emptyShelvesNotice, shelfRequestButton, isOwnShelfShort, showOwnShelfRefusal } from './own-shelf.js';   // OWN_SHELF_ONLY_V1; отказ с заявкой — ревью F4
 
 const HOLDER_WORD = { staff: 'Мои запасы', room: 'Кабинет', department: 'Отделение' };
 const WAREHOUSE_KEY = 'warehouse';
@@ -364,7 +364,9 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
                 await Promise.all([loadItems(), reloadHoldings()]);
                 paint();
             } catch (e) {
-                toast((e && e.message) || tr('Не удалось выдать.'), 'error');
+                // Ревью F4 — «нет на ваших полках»: окно с «Запросить у склада».
+                if (isOwnShelfShort(e)) showOwnShelfRefusal(e, { onDone: onRequested });
+                else toast((e && e.message) || tr('Не удалось выдать.'), 'error');
             } finally { giveBtn.disabled = false; }
         } }, Icon('Check', { size: 13 }), ' ', tr('Выдать'));
 

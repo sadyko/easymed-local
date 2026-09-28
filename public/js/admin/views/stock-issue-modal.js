@@ -77,7 +77,10 @@ export function productSearch({ products, excludeIds = () => new Set(), onChoose
     search.addEventListener('input', () => { if (chosen && search.value !== chosen.name) { chosen = null; onChoose(null); } paintDrop(); });
     search.addEventListener('focus', paintDrop);
     search.addEventListener('blur', () => setTimeout(() => { drop.hidden = true; }, 150));
-    return { el: search, drop, focus: () => search.focus() };
+    // OWN_SHELF_ONLY_V1 (ревью F4) — выбрать товар заранее: заявка на склад из
+    // отказа «нет на ваших полках» открывается уже с этим товаром.
+    const choose = (p) => { chosen = p || null; search.value = p ? p.name : ''; drop.hidden = true; onChoose(p || null); };
+    return { el: search, drop, focus: () => search.focus(), choose };
 }
 
 /**

@@ -21,7 +21,7 @@
 // нет (сервер не ответил) — тем же списком, что у сервера.
 import { supabase } from '../../supabase.js';
 import { h, Icon } from '../ui.js';
-import { tr } from '../i18n.js';
+import { tr, trf } from '../i18n.js';
 import { hasActorRole, ownDepartmentId } from '../permissions.js';
 
 /** Кому склад — источник при выдаче пациенту (зеркало inventory.js WAREHOUSE_DISPENSE_ROLES). */
@@ -113,10 +113,68 @@ export const fmtShelfQty = (n) => Number(n).toLocaleString('ru-RU', { maximumFra
  * (себе или своему отделу). `before` — закрыть окно, которое стоит выше
  * диалога заявки (окно выдачи живёт на этаже 135, заявка — на общем 100).
  */
-export async function openShelfRequest({ before = null, onDone = null } = {}) {
+export async function openShelfRequest({ before = null, onDone = null, lines = null } = {}) {
     if (typeof before === 'function') before();
     const { openStockRequestDialog } = await import('./stock-requests-ui.js');
-    return openStockRequestDialog({ departmentId: ownDepartmentId(), onDone });
+    // Ревью F4 — `lines` [{ product_id, qty }]: заявка открывается уже с тем, чего
+    // не хватило (количество — в единице заявки, единице расхода).
+    return openStockRequestDialog({ departmentId: ownDepartmentId(), onDone, lines: Array.isArray(lines) ? lines : [] });
+}
+
+// ---------------------------------------------------------------------------
+// OWN_SHELF_ONLY_V1 (ревью F4) — ОТКАЗ «НЕТ НА ВАШИХ ПОЛКАХ» — С ДЕЙСТВИЕМ.
+//
+// План обещал: отказ с кодом own_shelf_short предлагает «Запросить у склада».
+// Ни один экран код не читал — человек видел красную плашку и искал заявку
+// сам. Теперь двери выдачи (счёт визита, консоль койки, вкладка медсестры,
+// окно выдачи, лист назначений) показывают отказ окном: слова сервера и
+// кнопка «Запросить у склада», которая открывает заявку уже с этим товаром и
+// нехваткой (сервер кладёт их в params отказа: product_id, request_qty).
+// ---------------------------------------------------------------------------
+/** Код отказа сервера (inventory.js OWN_SHELF_SHORT). */
+export const OWN_SHELF_SHORT = 'own_shelf_short';
+
+/** Это отказ «нет на ваших полках»? */
+export function isOwnShelfShort(err) {
+    return !!(err && err.code === OWN_SHELF_SHORT);
+}
+
+/** Что запросить у склада по отказу: [{ product_id, qty }] или []. */
+export function ownShelfRequestLines(err) {
+    const p = (err && err.params) || {};
+    const id = Number(p.product_id);
+    if (!Number.isInteger(id) || id <= 0) return [];
+    const qty = Number(p.request_qty);
+    return [{ product_id: id, qty: Number.isFinite(qty) && qty > 0 ? qty : null }];
+}
+
+/**
+ * Окно отказа: слова сервера (на языке экрана — шаблон и его подстановки) и
+ * «Запросить у склада». `before` — закрыть окно, из которого выдавали (оно
+ * стоит выше диалога заявки); `onDone` — после поданной заявки.
+ */
+export function showOwnShelfRefusal(err, { before = null, onDone = null } = {}) {
+    const overlay = h('div', { class: 'modal', style: { zIndex: '140' }, 'data-own-shelf-refusal': '' });
+    const close = () => overlay.remove();
+    const params = (err && err.params) || {};
+    const text = err && err.template ? trf(err.template, params) : tr((err && err.message) || '');
+    const requestBtn = h('button', { class: 'btn btn-primary', type: 'button', 'data-shelf-request': '',
+        onclick: () => openShelfRequest({ before: () => { close(); if (typeof before === 'function') before(); }, onDone, lines: ownShelfRequestLines(err) }) },
+        Icon('Send', { size: 13 }), ' ', tr('Запросить у склада'));
+    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
+    overlay.appendChild(h('div', { class: 'modal-card modal-compact', role: 'alertdialog', style: { width: '480px', maxWidth: 'calc(100vw - 32px)' } },
+        h('header', { class: 'modal-head' }, h('h2', null, Icon('Warning', { size: 16 }), ' ', tr('Нет на ваших полках')),
+            h('button', { class: 'modal-close', type: 'button', onclick: close }, '×')),
+        h('div', { class: 'modal-body' },
+            h('p', { style: { margin: 0 } }, text),
+            h('p', { class: 'muted', style: { fontSize: '12.5px', margin: '8px 0 0' } },
+                tr('Выдают пациенту со своих полок: личный подотчёт, кабинет, отдел. Склад выдаёт по заявке.'))),
+        h('footer', { class: 'modal-foot' },
+            h('button', { class: 'btn', type: 'button', onclick: close }, tr('Закрыть')),
+            h('span', { class: 'grow' }),
+            requestBtn)));
+    document.body.appendChild(overlay);
+    return { close };
 }
 
 /** Кнопка «Запросить у склада». */

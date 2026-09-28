@@ -126,3 +126,26 @@ test('ревью M2: holdings_list — берёт ли со склада, вид
     assert.deepEqual([n.warehouse_allowed, n.warehouse_visible, n.warehouse_in_stock], [false, false, undefined]);
   } finally { db.close(); }
 });
+
+// F4. Отказ «нет на ваших полках» несёт экрану, ЧТО и СКОЛЬКО запросить у
+//     склада: товар и нехватку в единице заявки (единица расхода, как в
+//     диалоге «Запросить у склада»). Экран открывает заявку уже заполненной.
+test('ревью F4: отказ own_shelf_short — товар и нехватка в единице заявки', () => {
+  const db = seed();
+  try {
+    db.prepare("INSERT INTO products (id, name, unit, base_unit, consumption_unit, consumption_factor, sale_price, on_hand, is_drug) VALUES (2, 'Кеторол', 'уп', 'уп', 'амп', 10, 50000, 10, 1)").run();
+    const v = visit(db);
+    rpc(db, 'issue_stock_lines', { holder: { type: 'staff', id: 11 }, lines: [{ product_id: P, qty: 2, unit: 'base' }] }, U.inv);
+    let err = null;
+    try { rpc(db, 'dispense_visit_item', { p_visit_id: v, p_item_id: P, p_qty: 5, p_doctor_id: 10 }, U.nurse); } catch (e) { err = e; }
+    assert.ok(err && err.code === OWN_SHELF_SHORT, String(err && err.message));
+    assert.equal(err.params.product_id, P);
+    assert.equal(err.params.request_qty, 3, 'нужно 5, на полках 2 — запросить 3');
+    // Единица расхода: нужно 3 амп, на руках 1 амп — запросить 2 амп.
+    rpc(db, 'issue_stock_lines', { holder: { type: 'staff', id: 11 }, lines: [{ product_id: 2, qty: 1, unit: 'consumption' }] }, U.inv);
+    err = null;
+    try { rpc(db, 'dispense_from_holding', { product_id: 2, quantity: 3, visit_id: v }, U.nurse); } catch (e) { err = e; }
+    assert.ok(err && err.code === OWN_SHELF_SHORT, String(err && err.message));
+    assert.deepEqual([err.params.product_id, err.params.request_qty], [2, 2]);
+  } finally { db.close(); }
+});

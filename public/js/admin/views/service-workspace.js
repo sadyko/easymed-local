@@ -23,7 +23,7 @@ import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 // удалены: свободное время называет calendar_slots, записывает calendar_book.
 import { loadSlotDay, freeStartMinutes, hhmmToMin } from './service-picker-modal.js?v=aug17e';
 import { bookVisit } from './visit-booking.js';
-import { openItemPickerModal } from './item-picker-modal.js?v=billoptin2';   // DISPENSE_ITEM_V1
+import { openItemPickerModal, isOwnShelfShort } from './item-picker-modal.js?v=billoptin2';   // DISPENSE_ITEM_V1; отказ «нет на полках» — ревью F4
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 import { logPatientActivity } from './activity-log.js';
 import { canDelete as canDeleteRole, patientTabCanEdit } from '../permissions.js';
@@ -4031,6 +4031,7 @@ function openDispenseConsultItem(ctx) {
         // batch failed (keeps the dialog open); partial success toasts a summary.
         onConfirm: async (lines) => {
             let ok = 0; const fails = [];
+            let shortErr = null;   // ревью F4 — отказ «нет на ваших полках» уходит окну целиком
             const warned = [];   // EXPIRY_BALANCE_V1 — просроченные партии всех строк
             for (const { item, qty } of lines) {
                 try {
@@ -4073,11 +4074,11 @@ function openDispenseConsultItem(ctx) {
                             detail:      { item_id: item.id, qty: Number(qty), on_hand: res?.on_hand ?? null },
                         });
                     } catch (e) { /* logging never blocks dispensing */ }
-                } catch (err) { fails.push(`${item.name}: ${err?.message || err}`); }
+                } catch (err) { fails.push(`${item.name}: ${err?.message || err}`); if (!shortErr && isOwnShelfShort(err)) shortErr = err; }
             }
             // RX_SEPARATE_V1 — refresh the «Назначения» list with the new lines.
             try { await loadDispensedItems(ctx); paintDispensed(ctx); } catch (e) { /* non-blocking */ }
-            if (ok === 0) throw new Error(fails[0] || 'Не удалось выдать товары');
+            if (ok === 0) throw shortErr || new Error(fails[0] || 'Не удалось выдать товары');
             toast(trf('Выдано позиций: {n}', { n: ok }) + (fails.length ? ' · ' + trf('ошибок: {n}', { n: fails.length }) : ''));
             if (fails.length) toast(fails.join('; '), 'fail');
             toastStockWarnings({ warnings: warned });   // EXPIRY_BALANCE_V1 — после итога, одной плашкой на все строки

@@ -59,14 +59,14 @@ import { renderServices }     from './admin/views/services.js?v=aug31a';   // SE
 import { renderRegistration } from './admin/views/registration.js?v=aug17f';
 import { renderRoomCalendar } from './admin/views/room-calendar.js?v=aug17e';   // RESCAL_WIRE_V1 — «Календарь записи» (legacy Scheduling retired)
 import { renderConsultation }     from './admin/views/consultation.js?v=dashpay1';
-import { renderServiceWorkspace } from './admin/views/service-workspace.js?v=aug17e';
+import { renderServiceWorkspace } from './admin/views/service-workspace.js?v=aug17f';
 import { renderPatientCard }  from './admin/views/patient-card.js?v=labshared1';   // PATIENT_CARD_DESIGN_V2 + SVC_ROW_ACTIONS_V1 (?v must match service-workspace.js)
 import { renderPlaceholder }  from './admin/views/placeholder.js';
 import { renderSectionCrud }  from './admin/views/section-crud.js?v=svceditor1';
 import { renderCashier, renderCashierHead } from './admin/views/cashier-desk.js?v=cash7';   // CASHIER_DESIGN_V2 + CASHIER_ROW_FIT_V1 — patient cell width, RU status, compact date
 import { renderReport }       from './admin/views/report.js';
 import { renderLaboratory }   from './admin/views/laboratory.js?v=labwords2';   // LAB_STATS_V1 — third mode «Статистика» (usage counters, no money) on the shared LAB_HEAD_ONE_V1 head · LIS_MINDRAY_CODES_V1 — штамп
-import { renderProcedures }   from './admin/views/procedures.js?v=unassigned1';
+import { renderProcedures }   from './admin/views/procedures.js?v=unassigned2';
 import { renderQueue }       from './admin/views/queue.js?v=q7';   // QUEUE_BOARD_V1
 import { renderCrm }          from './admin/views/crm.js?v=aug18d';   // CRM_V10 — поиск пациента: телефон (и короткая форма), дата рождения; CRM_SERVICE_FILTER_V1 — рейка категорий (тег поднят, иначе браузер оставит старую копию)
 import { overdueTaskCount } from './admin/views/crm-tasks.js';   // CRM_DEDUP_SEARCH_TASKS_V1 — красный счётчик просроченных задач у пункта CRM
@@ -74,7 +74,7 @@ import { renderDocsArchive }  from './admin/views/docs-archive.js?v=q3one';   //
 import { renderReportsHub }   from './admin/views/reports-hub.js?v=ru6';   // REPORTS_HUB_RU_V1 — «Отчёты» card grid + full-screen report builder
 import { renderWardBeds }     from './admin/views/ward-beds.js?v=board5';   // INPATIENT_LOCAL_V1 — fresh local ward/bed board (legacy beds.js was cloud-coupled); BED_BOARD_SHARED_V1 — доска коек теперь ещё и окно выбора койки
 import { renderInpatient }    from './admin/views/admissions.js?v=inp3';   // INPATIENT_ONE_SECTION_V1 — «Стационар» одним разделом: заявки · койки · госпитализации
-import { renderMarNurse }    from './admin/views/mar-nurse.js?v=inp5';   // MAR_NURSE_V1 — задачи медсестры: пациент — якорь, «5 прав»
+import { renderMarNurse }    from './admin/views/mar-nurse.js?v=inp6';   // MAR_NURSE_V1 — задачи медсестры: пациент — якорь, «5 прав»
 import { renderKitchenSheet } from './admin/views/kitchen-sheet.js?v=diet1';   // KITCHEN_SHEET_V1 — порционник (Задача 7; экран был написан без маршрута)
 import { renderDischarge }   from './admin/views/discharge.js?v=disch1';   // TWO_STEP_DISCHARGE_V1 — «Выписки к оформлению» (Задача 8; экран был написан без маршрута)
 import { renderDoctorRoom }   from './admin/views/doctor-room.js?v=docroom1';   // DOCTOR_ROOM_V1 — Кабинет врача (consultation queue)
@@ -104,7 +104,7 @@ import { renderSettingsHub }  from './admin/views/settings-hub.js?v=updbadge1'; 
 import { renderPatientDocuments } from './admin/views/patient-documents.js?v=docstoolbar1';   // PATIENT_DOCUMENTS_V1 + DOCS_TOOLBAR_V1
 import { renderDocumentsSettings } from './admin/views/documents-settings.js?v=doc2';   // DOCUMENTS_SETTINGS_V1
 // CASE_WORKSPACE_V1 — история болезни как рабочий экран: слева шаги, справа документ.
-import { renderCaseWorkspace } from './admin/views/case-workspace.js?v=cw1';
+import { renderCaseWorkspace } from './admin/views/case-workspace.js?v=cw2';
 import { renderCaseOverview } from './admin/views/case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — обзор госпитализации (экран врача)
 
 // ---------------------------------------------------------------------------

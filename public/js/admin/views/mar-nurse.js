@@ -74,6 +74,8 @@ import { fitViewport } from './dash-kpi.js';   // MAR_ONE_SCREEN_V1 — смен
 // MAR_OUTPATIENTS_V1 — вкладка «Амбулаторные»: сегодняшние визиты и выдача
 // с рук (из того, что склад выдал медсестре, кабинету, отделению).
 import { mountOutpatients } from './mar-outpatients.js';
+// OWN_SHELF_ONLY_V1 (ревью F4) — отказ «нет на ваших полках» — окном с «Запросить у склада».
+import { isOwnShelfShort, showOwnShelfRefusal } from './own-shelf.js';
 import { currentUser } from '../data.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { isModuleAllowed, grantAllows } from '../permissions.js';
@@ -459,7 +461,12 @@ export function openGiveModal({ task, patient, allergy = '', onDone } = {}) {
         const args = markArgs(task, 'given', extra.read());
         args.note = noteInp.value.trim();
         const { data, error } = await supabase.rpc('treatment_admin_mark', args);
-        if (error) { toast((error.message) || tr('Не удалось отметить введение.'), 'fail'); return false; }
+        if (error) {
+            // Ревью F4 — дозы нет на полках медсестры: окно с «Запросить у склада».
+            if (isOwnShelfShort(error)) showOwnShelfRefusal(error);
+            else toast((error.message) || tr('Не удалось отметить введение.'), 'fail');
+            return false;
+        }
         // MED_ADMIN_CHARGE_V1 — отметка «дала» списывает препарат и начисляет
         // за него (Задача 6), и склад отвечает ПРЕДУПРЕЖДЕНИЕМ, а не отказом:
         // медицинская запись не отменяется из-за пустого остатка. Молчать об
@@ -502,7 +509,12 @@ export function openOmitModal({ task, patient, allergy = '', onDone } = {}) {
         args.reason = reason;
         args.note = noteInp.value.trim();
         const { error } = await supabase.rpc('treatment_admin_mark', args);
-        if (error) { toast((error.message) || tr('Не удалось записать.'), 'fail'); return false; }
+        if (error) {
+            // Ревью F4 — расход сверх дозы не на полках: окно с «Запросить у склада».
+            if (isOwnShelfShort(error)) showOwnShelfRefusal(error);
+            else toast((error.message) || tr('Не удалось записать.'), 'fail');
+            return false;
+        }
         toast(tr('Записано: доза не введена.'), 'ok');
         if (onDone) await onDone();
         return true;

@@ -207,9 +207,11 @@ export function openMinimumDialog({ holder, row = null, product = null, onDone =
 /**
  * Диалог «Запросить»: себе или своему отделу (второе — только тому, у кого
  * отдел есть). Количество — в единицах расхода.
- * @param {{ departmentId?: number|null, departmentName?: string, onDone?: Function }} opts
+ * @param {{ departmentId?: number|null, departmentName?: string, onDone?: Function, lines?: Array<{product_id:number, qty:number|null}> }} opts
+ * OWN_SHELF_ONLY_V1 (ревью F4) — `lines`: заявка открывается уже заполненной
+ * (отказ «нет на ваших полках» знает товар и нехватку в единице расхода).
  */
-export function openStockRequestDialog({ departmentId = null, departmentName = '', onDone = null } = {}) {
+export function openStockRequestDialog({ departmentId = null, departmentName = '', onDone = null, lines: preset = [] } = {}) {
     const overlay = h('div', { class: 'modal sim' });
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
     function onKey(e) { if (e.key === 'Escape') close(); }
@@ -229,7 +231,7 @@ export function openStockRequestDialog({ departmentId = null, departmentName = '
     const okBtn = h('button', { class: 'btn btn-primary', type: 'button', disabled: true }, 'Подать заявку');
     let products = [];
 
-    function addLine() {
+    function addLine(pre = null) {
         const line = { product: null, qty: '' };
         lines.push(line);
         const unitEl = h('span', { class: 'muted' }, '—');
@@ -245,6 +247,12 @@ export function openStockRequestDialog({ departmentId = null, departmentName = '
             h('div', { class: 'sim-line-qty' }, qtyInp, unitEl),
             h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Убрать позицию', onclick: () => { const i = lines.indexOf(line); if (i >= 0) lines.splice(i, 1); row.remove(); if (!lines.length) addLine(); } }, '×'));
         linesHost.appendChild(row);
+        // Ревью F4 — строка, заполненная заранее: товар и количество.
+        const p = pre && products.find((x) => Number(x.id) === Number(pre.product_id));
+        if (p) {
+            picker.choose(p);
+            if (pre.qty != null && Number(pre.qty) > 0) { qtyInp.value = String(pre.qty); line.qty = String(pre.qty); }
+        }
     }
 
     function paintForm() {
@@ -256,7 +264,9 @@ export function openStockRequestDialog({ departmentId = null, departmentName = '
         body.appendChild(field('Примечание', noteInp));
         body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
             'Кладовщик увидит заявку в «Заявках»; после одобрения товар появится у вас «на руках» или у отдела.'));
-        addLine();
+        const pre = (preset || []).filter((l) => l && products.some((x) => Number(x.id) === Number(l.product_id)));
+        if (pre.length) for (const l of pre) addLine(l);
+        else addLine();
     }
 
     let busy = false;

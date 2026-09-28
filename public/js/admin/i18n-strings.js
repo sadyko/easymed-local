@@ -76,6 +76,8 @@ export const STRINGS = {
   "Своё: {own} · есть на складе": {"en":"Own: {own} · in stock at the warehouse","ru":"Своё: {own} · есть на складе","uz":"O'zimniki: {own} · omborda bor"},
   "Своё: {own} · нет на складе": {"en":"Own: {own} · not in stock at the warehouse","ru":"Своё: {own} · нет на складе","uz":"O'zimniki: {own} · omborda yo'q"},
   "Есть на складе · цена за единицу {price}": {"en":"In stock at the warehouse · unit price {price}","ru":"Есть на складе · цена за единицу {price}","uz":"Omborda bor · birlik narxi {price}"},
+  // OWN_SHELF_ONLY_V1 (ревью F4) — отказ «нет на ваших полках» окном
+  "Нет на ваших полках": {"en":"Not on your shelves","ru":"Нет на ваших полках","uz":"Javonlaringizda yo'q"},
   // OWN_SHELF_ONLY_V1 — END
   // CASHIER_HEAD_V1 (2026-09-28) — старший кассир и «Исправляет услуги в счёте»
   "Счёт выставлен плательщику (страховой или организации) — его строки у кассы не правят.": {"en":"The invoice is billed to a payer (insurer or company) — its lines are not edited at the cash desk.","ru":"Счёт выставлен плательщику (страховой или организации) — его строки у кассы не правят.","uz":"Hisob to'lovchiga (sug'urta yoki tashkilot) chiqarilgan — uning qatorlari kassada tuzatilmaydi."},

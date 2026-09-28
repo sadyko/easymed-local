@@ -24,7 +24,7 @@ import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1
 // (visits.js:91, procedures.js:50 — там он же, но в SQL: .is('sync_origin', null)).
 import { isOwnBuilding, originTag } from '../record-origin.js';
 // OWN_SHELF_ONLY_V1 — «Выдать» у врача и медсестры: только товары своих полок.
-import { loadShelves, shelfItems, fmtShelfQty, warehouseStock } from './own-shelf.js';
+import { loadShelves, shelfItems, fmtShelfQty, warehouseStock, isOwnShelfShort, showOwnShelfRefusal } from './own-shelf.js';
 
 /**
  * Ревью M2 — строка товара в «Выдать» у того, кто берёт со склада: с числом
@@ -322,7 +322,10 @@ export function openVisitBillModal(visit, onChanged) {
             await reloadAll();
             if (typeof onChanged === 'function') await onChanged();
         } catch (e) {
-            toast((e && e.message) || 'Не удалось выдать товар.', 'fail');
+            // Ревью F4 — «нет на ваших полках»: окно со словами сервера и
+            // «Запросить у склада» (заявка — с этим товаром и нехваткой).
+            if (isOwnShelfShort(e)) showOwnShelfRefusal(e);
+            else toast((e && e.message) || 'Не удалось выдать товар.', 'fail');
         } finally {
             dispenseBtn.disabled = false;
         }
