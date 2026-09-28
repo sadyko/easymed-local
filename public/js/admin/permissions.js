@@ -600,6 +600,17 @@ export function canFixCashierLines() {
     return grantLevel('cashier.lines') !== null && grantAllows('cashier.lines', 'edit');
 }
 
+// CASHIER_HEAD_V1 (ревью) — «Закрыть смену» у ЧУЖОЙ смены. Зеркало сервера
+// (rpc/cashier.js headCashierLevel → roles.js explicitSectionLevel): раздел
+// «Старший кассир», записанный БЕЗ уровня (старый экран), — только просмотр;
+// закрывать чужие смены даёт лишь явное «Изменение».
+export function canCloseOtherShifts() {
+    if (_effective == null && !_preview) return true;   // полный доступ: администратор клиники
+    if (!canEdit('cashier-head')) return false;
+    const lvl = _levels['cashier-head'];
+    return lvl === 'editor' || lvl === 'admin';
+}
+
 // CRM_HEAD_MERGE_TAGS_V1 (2026-09-25) — «РУКОВОДИТЕЛЬ КОЛЛ-ЦЕНТРА» В ОБОЛОЧКЕ.
 //
 // Зеркало серверного предиката (server/services/crm/visibility.js

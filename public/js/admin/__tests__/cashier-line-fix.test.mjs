@@ -328,3 +328,23 @@ test('кассир со старым «просмотром» кассы (до 3
     assert.ok(buttons(row).some((b) => textOf(b).includes('Оплатить')));
     assert.ok(fixButton(row), '«просмотр» кассы от старого экрана не закрывает право исправлений');
 });
+
+test('«Старший кассир» без уровня (старый экран) — отчёт есть, закрыть чужую смену нельзя; «закрыл(а)» видно', async () => {
+    tables = {
+        cash_shifts: [
+            { id: 3, cashier_id: 10, users: { full_name: 'Кассир 2' }, status: 'open', opened_at: '2026-09-28T04:00:00Z', closed_at: null, opening_float: 0 },
+            { id: 2, cashier_id: 10, users: { full_name: 'Кассир 2' }, closed_by: { full_name: 'Старший Кассир' }, status: 'closed', opened_at: '2026-09-27T04:00:00Z', closed_at: '2026-09-27T15:00:00Z', opening_float: 0, expected_amount: 1000, counted_amount: 1000, over_short: 0 },
+        ],
+        payments: [],
+    };
+    perms.setEffectiveFromRoles([
+        { name: 'cashier', permissions: { sections: ['cashier'], levels: { cashier: 'admin' } } },
+        { name: 'head_cashier', permissions: { sections: ['cashier-head'] } },
+    ]);
+    const c = mkEl('div');
+    await desk.renderCashierHead(c);
+    await tick(60);
+    assert.ok(buttons(c).some((b) => textOf(b).trim() === 'Отчёт'));
+    assert.equal(buttons(c).find((b) => textOf(b).trim() === 'Закрыть смену'), undefined);
+    assert.match(textOf(c), /закрыл\(а\): Старший Кассир/);
+});

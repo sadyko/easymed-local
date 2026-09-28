@@ -27,7 +27,7 @@ import { dateNumeric } from '../../shared/date-words.js';   // V3120_FIX — д�
 import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANCE_V1
 import { searchTokens } from '../patient-search.js';   // CARD_SALE_V1 — поиск покупателя карты
 import { canOfferLineFix, openLineFix } from './cashier-line-fix.js';   // CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы
-import { canEdit } from '../permissions.js';   // CASHIER_HEAD_V1 — «Старший кассир: Изменение» закрывает чужую смену
+import { canCloseOtherShifts } from '../permissions.js';   // CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
 
 // DEPOSIT_WALLET_V1 — «С баланса»: оплата и возврат через баланс пациента.
 // CARD_BALANCE_V1 — «Подарочная карта»: оплата остатком карты / сертификата.
@@ -2038,7 +2038,7 @@ export async function renderCashierHead(container) {
     let rows = [];
     try {
         const { data, error } = await supabase.from('cash_shifts')
-            .select('*, users(full_name)').order('id', { ascending: false }).limit(300);
+            .select('*, users(full_name), closed_by(full_name)').order('id', { ascending: false }).limit(300);   // CASHIER_HEAD_V1 — кто закрыл
         if (error) throw error;
         rows = data || [];
     } catch (e) {
@@ -2051,7 +2051,7 @@ export async function renderCashierHead(container) {
     // CASHIER_HEAD_V1 — старший кассир открывает отчёт любой смены, а с
     // «Изменением» раздела — пересчитывает и закрывает чужую открытую смену
     // (сервер проверяет то же: rpc/cashier.js headCashierLevel).
-    const mayClose = canEdit('cashier-head');
+    const mayClose = canCloseOtherShifts();
     const closeOther = async (s) => {
         const { data: r, error } = await supabase.rpc('shift_report', { shift_id: s.id });
         if (error || !r) { toast((error && error.message) || 'Не удалось получить отчёт.', 'fail'); return; }
@@ -2071,7 +2071,11 @@ export async function renderCashierHead(container) {
         tbody.appendChild(h('tr', null,
             h('td', null, (s.users && s.users.full_name) || ('#' + s.cashier_id)),
             h('td', null, fmtDateTime(s.opened_at)),
-            h('td', null, s.closed_at ? fmtDateTime(s.closed_at) : '—'),
+            h('td', null, s.closed_at ? fmtDateTime(s.closed_at) : '—',
+                // CASHIER_HEAD_V1 (мигр. 219) — кто пересчитал и закрыл смену.
+                s.closed_by && typeof s.closed_by === 'object' && s.closed_by.full_name
+                    ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, trf('закрыл(а): {name}', { name: s.closed_by.full_name }))
+                    : null),
             h('td', { style: { textAlign: 'right' } }, fmtPrice(s.opening_float)),
             h('td', { style: { textAlign: 'right' } }, s.expected_amount != null ? fmtPrice(s.expected_amount) : '—'),
             h('td', { style: { textAlign: 'right' } }, uncounted
