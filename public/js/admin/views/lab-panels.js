@@ -874,7 +874,7 @@ export async function mountLabPanels(container) {
             // код…», выглядела подтверждённой: сохранение отказывало
             // «Подтвердите поля анализатора…», а на экране не было ни следа, что
             // и как подтверждать.
-            const confirm = suggested ? confirmButton() : null;
+            const confirmBtn = suggested ? confirmButton() : null;
             const inp = h('input', {
                 value: r.device_code || '', placeholder: 'код канала', class: 'lw-inp',
                 style: { width: '130px', ...(suggested ? UNCONFIRMED_LOOK : {}) },
@@ -883,11 +883,11 @@ export async function mountLabPanels(container) {
                 // здесь же: перерисовка на каждый символ сбила бы курсор.
                 oninput: (e) => {
                     r.device_code = e.target.value; r.device_code_confirmed = e.target.value.trim() ? 1 : 0;
-                    if (confirm) { inp.style.opacity = ''; inp.style.fontStyle = ''; confirm.style.display = 'none'; }
+                    if (confirmBtn) { inp.style.opacity = ''; inp.style.fontStyle = ''; confirmBtn.style.display = 'none'; }
                 },
             });
-            if (noLists && !confirm) return inp;
-            return h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, inp, confirm,
+            if (noLists && !confirmBtn) return inp;
+            return h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, inp, confirmBtn,
                 noLists ? null : h('button', {
                     class: 'lp-ic', type: 'button', title: 'Вернуться к списку', 'aria-label': 'Вернуться к списку',
                     onclick: () => { r._typing = false; paintEditor(); },
