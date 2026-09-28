@@ -28,7 +28,7 @@ import { currentClinicId } from '../tenant-tables.js';
 import { hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1
 // OWN_SHELF_ONLY_V1 — свои полки и «можно ли со склада» считает сервер; окно
 // у врача и медсестры показывает только своё (см. own-shelf.js).
-import { loadShelves, shelfItems, fmtShelfQty, emptyShelvesNotice } from './own-shelf.js';
+import { loadShelves, shelfItems, fmtShelfQty, emptyShelvesNotice, shelfRequestButton } from './own-shelf.js';
 
 // LIVE_AUDIT_FIX_V1 — ЕДИНИЦА ТОВАРА — СВОЙСТВО КАТАЛОГА, А НЕ СТРОКИ ВЫДАЧИ.
 // Выпадающий список у строки молча переписывал products.unit для всего
@@ -121,7 +121,12 @@ export function openItemPickerModal({
     // Selected-items cart — bounded so it never pushes the footer off-screen.
     const cartEl = h('div', { style: { flex: 'none', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--ink-100)', maxHeight: '190px', overflowY: 'auto' } });
 
-    body.append(searchInput, listEl, cartEl);
+    // OWN_SHELF_ONLY_V1 — у врача и медсестры над списком: что показано (свои
+    // полки) и заявка на склад для того, чего на них нет. Заполняется, когда
+    // сервер ответил, что склад этому человеку не источник.
+    const shelfHintEl = h('div', { style: { flex: 'none' } });
+
+    body.append(searchInput, shelfHintEl, listEl, cartEl);
 
     // --- footer -----------------------------------------------------------
     const summary = h('span', { style: { fontSize: '12.5px', color: 'var(--ink-500)' } }, 'Выберите товары');
@@ -155,6 +160,12 @@ export function openItemPickerModal({
                 if (!shelves.warehouse) {
                     state.shelfOnly = true;
                     state.items = shelfItems(shelves).map((it) => ({ ...it, _onHand: null }));
+                    if (state.items.length) {
+                        shelfHintEl.appendChild(h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap', margin: '-2px 0 10px' } },
+                            h('span', { class: 'muted', style: { fontSize: '12.5px', flex: '1 1 240px' } },
+                                tr('Показаны ваши полки: подотчёт, кабинет, отдел. Чего на них нет — запросите у склада.')),
+                            shelfRequestButton({ before: () => close() })));
+                    }
                     return;
                 }
             }
