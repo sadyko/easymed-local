@@ -58,7 +58,7 @@ test('ревью F2: приход в упаковке товара (уп = 10 т
 test('ревью F2: новая связь из прихода — в упаковке товара; импорт — в упаковке связи', () => {
   const { db, A, B, P } = seed();
   try {
-    call('receive_stock_lines', db, { lines: [{ product_id: P, unit: 'purchase', qty: 1, unit_cost: 800, supplier_id: B }] });
+    call('receive_stock_lines', db, { lines: [{ product_id: P, unit: 'purchase', qty: 1, unit_cost: 800, vat_rate: null, supplier_id: B }] });
     assert.deepEqual(link(db, P, B), { last_price: 800, vat_rate: null, pack_factor: 10, purchase_unit: 'уп' }, 'связи не было — упаковка товара');
     // Импорт: цена за базовую единицу (таб) → связь A помнит её за свою коробку.
     call('import_products_excel', db, { rows: [{ name: 'Парацетамол', qty: 50, unit_cost: 91, supplier: 'ООО Аптека' }] });

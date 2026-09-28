@@ -347,6 +347,20 @@ export function supplierSave(db, args, user) {
  * карточке товара. Связи ещё не было — заводится в упаковке товара
  * (`packFactor`, `purchaseUnit`), и цена — в ней же.
  */
+/**
+ * SUPPLIERS_VAT_V1 (ревью M8) — связь «товар ↔ поставщик» без цены: заводится,
+ * если её не было (упаковка и единица — товара), и ничего не меняет у
+ * существующей. Для прихода, чей НДС не указан (заказ до учёта НДС, старый
+ * вызов без ставки): его цена — себестоимость с НДС внутри, и записанная в
+ * связь как цена БЕЗ НДС рядом со ставкой связи она дала бы следующему
+ * приходу НДС дважды.
+ */
+export function ensureSupplierLink(db, { productId, supplierId, packFactor, purchaseUnit }) {
+  db.prepare('INSERT OR IGNORE INTO item_suppliers (product_id, supplier_id, pack_factor, purchase_unit) VALUES (?, ?, ?, ?)')
+    .run(productId, supplierId, packFactor ?? null, purchaseUnit ?? null);
+  db.prepare(`UPDATE products SET supplier_id = ?, updated_at = ${NOW} WHERE id = ? AND supplier_id IS NULL`).run(supplierId, productId);
+}
+
 export function rememberSupplierPrice(db, { productId, supplierId, price, per = 1, vat, packFactor, purchaseUnit }) {
   const keepVat = vat === undefined;
   const cur = db.prepare('SELECT pack_factor FROM item_suppliers WHERE product_id = ? AND supplier_id = ?').get(productId, supplierId);

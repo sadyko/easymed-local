@@ -558,3 +558,24 @@ test('ревью M6: связи сверх 5000 — поставщики тов�
   const capped = DBREADS.filter((q) => q.table === 'item_suppliers' && !(q.filters || []).length);
   assert.deepEqual(capped, [], 'связи без отбора: ' + JSON.stringify(capped.map((q) => q.limit)));
 });
+
+// Ревью M8 — список заказов: «Сумма» у новых заказов была с НДС, у заказов до
+// учёта НДС — без него, в одной колонке. Теперь — «Без НДС», «НДС», «С НДС»,
+// и у заказа до учёта НДС — «не указан» (как в отчёте «Приход по поставщикам»).
+test('ревью M8: список заказов — без НДС, НДС и с НДС раздельно; заказ до учёта НДС — «не указан»', async () => {
+  seed();
+  const old = DB.prepare("INSERT INTO purchase_orders (po_number, supplier_id, status, total) VALUES ('PO-OLD', 1, 'draft', 1000)").run().lastInsertRowid;
+  DB.prepare('INSERT INTO purchase_order_items (po_id, product_id, qty_ordered, unit_cost) VALUES (?, 11, 2, 500)').run(old);
+  const neu = getRpc('purchase_order_create')(DB, { supplier_id: 1, lines: [{ product_id: 10, qty: 20, unit_cost: 90, vat_rate: 12 }] }, USER);
+  const root = mk('div');
+  docs.renderPurchaseOrdersTab(root);
+  await settle();
+  const heads = walk(root).filter((e) => e.tagName === 'TH').map(flat);
+  for (const c of ['Без НДС', 'НДС', 'С НДС']) assert.ok(heads.includes(c), c + ': ' + heads.join(' | '));
+  assert.ok(!heads.includes('Сумма'), 'одной «Суммы» на две разные основы больше нет');
+  const row = (no) => walk(root).find((e) => e.tagName === 'TR' && flat(e).startsWith(no));
+  assert.match(flat(row('PO-OLD')), /1 000.*не указан.*1 000/);
+  assert.match(flat(row(neu.po_number)), /1 800.*216.*2 016/);
+  // Строки считаются по заказам списка, а не первыми 20 000 на всю клинику.
+  assert.ok(DBREADS.filter((q) => q.table === 'purchase_order_items').every((q) => (q.filters || []).some((f) => f.col === 'po_id')));
+});

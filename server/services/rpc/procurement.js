@@ -28,7 +28,7 @@ import { roundQty, factorOf, toBase, settleQty, coversQty } from '../domain/stoc
 import {
   GOODS_CATEGORY_LIST_RU, parseGoodsCategory, parseVatRate, vatOnNet, parseExpiryDmy, linkPriceFor,
 } from '../../../public/js/shared/goods-catalog.js';
-import { requireCatalogEdit, rememberSupplierPrice } from './catalog-goods.js';
+import { requireCatalogEdit, rememberSupplierPrice, ensureSupplierLink } from './catalog-goods.js';
 import { today } from '../domain/day.js';   // SUPPLIERS_VAT_V1 — номер заказа по дню клиники
 
 export class RpcError extends Error {
@@ -197,7 +197,11 @@ export function receiveStockLines(db, args, user) {
       // SUPPLIERS_VAT_V1 — связь «товар ↔ поставщик»: заводится, если её не
       // было, и помнит последнюю цену (без НДС) и ставку. Ревью F2: цена строки
       // — за factor базовых единиц, а связь хранит её в СВОЕЙ упаковке.
-      if (supplierId) {
+      // Ревью M8 — ставка не указана (старый вызов): цена — себестоимость с
+      // неизвестным НДС, в связь как «без НДС» она не пишется.
+      if (supplierId && vat === undefined) {
+        ensureSupplierLink(db, { productId, supplierId, packFactor: product.pack_factor, purchaseUnit: product.purchase_unit });
+      } else if (supplierId) {
         rememberSupplierPrice(db, {
           productId, supplierId, vat, price: unitCost, per: factor,
           packFactor: product.pack_factor, purchaseUnit: product.purchase_unit,
@@ -315,7 +319,11 @@ export function receivePurchaseOrder(db, args, user) {
       insertMovement.run(product.id, qty, round2(m.grossUnit), poId, `PO ${po.po_number}`, user.id,
         po.supplier_id || null, batchNo, expiry, m.vatRate, m.vatAmount, m.net);
       bumpReceived.run(qty, item.id);
-      if (po.supplier_id) {
+      // Ревью M8 — строка заказа до учёта НДС: её цена — себестоимость с НДС
+      // внутри; связь её не запоминает (иначе ставка связи легла бы сверху).
+      if (po.supplier_id && vat === undefined) {
+        ensureSupplierLink(db, { productId: product.id, supplierId: po.supplier_id, packFactor: product.pack_factor, purchaseUnit: product.purchase_unit });
+      } else if (po.supplier_id) {
         rememberSupplierPrice(db, {
           productId: product.id, supplierId: po.supplier_id, vat,
           price: item.unit_cost || 0, per: 1,   // цена заказа — за базовую единицу (ревью F2)

@@ -114,14 +114,43 @@ test('приход по заказу: НДС принятого количест
   assert.equal(rows.find((o) => o['Товар'] === 'Шприц')['Ставка НДС'], 'без НДС');
 });
 
-test('приход по заказу, оформленному до НДС: «не указан», цена — себестоимость, как прежде; ставка связи не стирается', () => {
+// Ревью M8 — было: «цена обновлена, ставка поставщика осталась» (950 при 12 %).
+// Цена заказа до учёта НДС — себестоимость, с НДС внутри; записанная в связь
+// как цена БЕЗ НДС рядом с прежними 12 %, она давала следующему приходу НДС
+// дважды. Цену с неизвестным НДС связь не запоминает.
+test('приход по заказу, оформленному до НДС: «не указан», цена — себестоимость, как прежде; цена и ставка связи не переписаны', () => {
   const { db, A, anal } = seed();
   const po = db.prepare("INSERT INTO purchase_orders (po_number, supplier_id) VALUES ('PO-OLD', ?)").run(A).lastInsertRowid;
   db.prepare('INSERT INTO purchase_order_items (po_id, product_id, qty_ordered, unit_cost) VALUES (?, ?, 10, 95)').run(po, anal);
   call('receive_purchase_order', db, { po_id: po });
   const mv = db.prepare("SELECT qty, unit_cost, vat_rate, vat_amount FROM stock_movements WHERE kind = 'receive'").get();
   assert.deepEqual({ ...mv }, { qty: 10, unit_cost: 95, vat_rate: null, vat_amount: null });
-  assert.deepEqual(link(db, anal, A), { last_price: 950, vat_rate: 12 }, 'цена обновлена, ставка поставщика осталась');
+  assert.deepEqual(link(db, anal, A), { last_price: 1000, vat_rate: 12 }, 'цена связи — прежняя, без НДС');
+  // Следующий заказ: 100 за таблетку без НДС + 12 % — а не 95 + 12 % поверх уже включённого НДС.
+  const next = call('purchase_order_create', db, { supplier_id: A, lines: [{ product_id: anal, qty: 10 }] });
+  assert.deepEqual([next.net, next.vat, next.total], [1000, 120, 1120]);
+  // «Принять товар» старым вызовом без ставки — тоже не переписывает цену связи.
+  call('receive_stock_lines', db, { lines: [{ product_id: anal, unit: 'purchase', qty: 1, unit_cost: 1120, supplier_id: A }] });
+  assert.deepEqual(link(db, anal, A), { last_price: 1000, vat_rate: 12 });
+});
+
+// Ревью M8 — поставщик заказа меняется только созданием заказа: правка
+// purchase_orders.supplier_id через /api/db запоминала цены одного поставщика
+// под другим (приход по заказу пишет связь с поставщиком заказа).
+test('ревью M8: поставщика заказа через /api/db не сменить — цены остаются у своего поставщика', async () => {
+  const { db, A, anal } = seed();
+  const B = Number(db.prepare("INSERT INTO suppliers (name) VALUES ('ООО Бинты')").run().lastInsertRowid);
+  const r = call('purchase_order_create', db, { supplier_id: A, lines: [{ product_id: anal, qty: 10, unit_cost: 90, vat_rate: 12 }] });
+  const { compile } = await import('../../db/query-compiler.js');
+  assert.throws(() => compile({ table: 'purchase_orders', op: 'update', values: { supplier_id: B }, filters: [{ col: 'id', op: 'eq', val: r.po_id }] }, INV, { db }),
+    (e) => e.status === 400, 'смена поставщика заказа закрыта');
+  // Смешанная правка: поставщик отбрасывается, прочее (примечание) проходит.
+  const q = compile({ table: 'purchase_orders', op: 'update', values: { supplier_id: B, notes: 'позвонить' }, filters: [{ col: 'id', op: 'eq', val: r.po_id }] }, INV, { db });
+  db.prepare(q.sql).run(...q.params);
+  assert.deepEqual({ ...db.prepare('SELECT supplier_id, notes FROM purchase_orders WHERE id = ?').get(r.po_id) }, { supplier_id: A, notes: 'позвонить' });
+  call('receive_purchase_order', db, { po_id: r.po_id });
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM item_suppliers WHERE supplier_id = ?').get(B).n, 0, 'у чужого поставщика связи не появилось');
+  assert.deepEqual(link(db, anal, A), { last_price: 900, vat_rate: 12 });
 });
 
 // SUPPLIERS_VAT_V1 (ревью F1) — было «право «Закупки: Изменение»»: кладовщик

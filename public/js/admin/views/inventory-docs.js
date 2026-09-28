@@ -194,8 +194,33 @@ export function renderPurchaseOrdersTab(container) {
     container.appendChild(h('div', null,
         h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' } },
             poRefs.totalEl, h('div', { class: 'page-head-actions' }, addBtn)),
-        tableCard(['№ заказа', 'Поставщик', 'Статус', 'Строк', 'Сумма', 'Дата'], poRefs.tbody, poRefs.emptyEl)));
+        tableCard(['№ заказа', 'Поставщик', 'Статус', 'Строк', 'Без НДС', 'НДС', 'С НДС', 'Дата'], poRefs.tbody, poRefs.emptyEl)));
     fetchPOsAndPaint();
+}
+
+/**
+ * SUPPLIERS_VAT_V1 (ревью M8) — деньги заказа в списке: без НДС, НДС и с НДС
+ * по его строкам. Одна колонка «Сумма» (purchase_orders.total) у заказа,
+ * оформленного после учёта НДС, была суммой С НДС, а у заказа до него — без
+ * НДС: две разные основы под одним заголовком. Заказ, ни у одной строки
+ * которого НДС не записан, — «не указан»: его сумма без НДС равна сумме с
+ * НДС (то же правило, что у строки заказа и у «Прихода по поставщикам»).
+ * → Map po_id → { lines, net, vat (null — не указан), gross }
+ */
+export function poMoneyByOrder(items) {
+    const by = new Map();
+    for (const it of items || []) {
+        const k = it.po_id;
+        if (k == null) continue;
+        const m = poItemMoney(it);
+        const t = by.get(k) || { lines: 0, net: 0, vat: null, gross: 0 };
+        t.lines += 1;
+        t.net = Math.round((t.net + m.net) * 100) / 100;
+        if (m.vat != null) t.vat = Math.round(((t.vat || 0) + m.vat) * 100) / 100;
+        t.gross = Math.round((t.gross + m.gross) * 100) / 100;
+        by.set(k, t);
+    }
+    return by;
 }
 
 // CLOUD_LEFTOVER_COLUMNS_V1 — сколько строк в каждом документе. Отдельный
@@ -213,27 +238,35 @@ async function countLines(table, parentKey) {
 
 async function fetchPOsAndPaint() {
     const token = ++lastFetchToken;
-    loadingRowInto(poRefs.tbody, 6); poRefs.emptyEl.style.display = 'none';
+    loadingRowInto(poRefs.tbody, 8); poRefs.emptyEl.style.display = 'none';
     try {
-        const [{ data, error }, lineCount] = await Promise.all([
-            supabase.from('purchase_orders')
-                .select('id,po_number,status,total,created_at, suppliers(id,name)')
-                .order('id', { ascending: false }).limit(200),
-            countLines('purchase_order_items', 'po_id'),
-        ]);
+        const { data, error } = await supabase.from('purchase_orders')
+            .select('id,po_number,status,total,created_at, suppliers(id,name)')
+            .order('id', { ascending: false }).limit(200);
         if (token !== lastFetchToken) return;
         if (error) throw error;
         const rows = data || [];
+        // Ревью M8 — строки ИМЕННО этих заказов (прежде — первые 20 000 строк на
+        // всю клинику): их число и деньги без НДС / НДС / с НДС.
+        const ids = rows.map((po) => po.id);
+        let money = new Map();
+        if (ids.length) {
+            const it = await supabase.from('purchase_order_items').select('po_id,qty_ordered,unit_cost,vat_rate,vat_amount').in('po_id', ids).limit(100000);
+            if (token !== lastFetchToken) return;
+            if (!it.error) money = poMoneyByOrder(it.data || []);   // деньги — украшение колонок, из-за них список не пропадает
+        }
         clear(poRefs.tbody);
         if (!rows.length) { poRefs.emptyEl.style.display = ''; }
         else for (const po of rows) {
-            const nLines = lineCount.get(po.id) || 0;
+            const m = money.get(po.id) || { lines: 0, net: 0, vat: null, gross: 0 };
             poRefs.tbody.appendChild(h('tr', { class: 'row-click', style: { cursor: 'pointer' }, onclick: () => openPODetail(po, fetchPOsAndPaint) },
                 h('td', { class: 'cell-strong' }, po.po_number || '—'),
                 h('td', null, (po.suppliers && po.suppliers.name) || h('span', { class: 'muted' }, '—')),
                 h('td', null, poStatusTag(po.status)),
-                h('td', { class: 'num' }, String(nLines)),
-                h('td', { class: 'num' }, fmtPrice(po.total)),
+                h('td', { class: 'num' }, String(m.lines)),
+                h('td', { class: 'num' }, fmtMoney2(m.net)),
+                h('td', { class: 'num' }, m.vat == null ? h('span', { class: 'muted' }, tr('не указан')) : fmtMoney2(m.vat)),
+                h('td', { class: 'num' }, fmtMoney2(m.gross)),
                 h('td', null, fmtDateTime(po.created_at))));
         }
         poRefs.totalEl.textContent = trf('Заказов: {n}', { n: rows.length });

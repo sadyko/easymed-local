@@ -1552,7 +1552,11 @@ export const REGISTRY = {
     // A PO is a purchasing DOCUMENT (no stock effect). Receiving it — the only
     // step that adds stock — is a Phase-2 RPC, not a write here.
     write: { insert: { roles: ['admin','inventory'], columns: ['po_number','supplier_id','status','order_date','expected_date','total','notes','created_by'] },
-             update: { roles: ['admin','inventory'], columns: ['supplier_id','status','order_date','expected_date','total','notes','received_at'] },
+             // SUPPLIERS_VAT_V1 (ревью M8) — supplier_id отсюда убран: поставщик
+             // заказа задаётся при создании (purchase_order_create), а приход по
+             // заказу запоминает цены у поставщика заказа — сменённый мимо
+             // сервера, он записал бы цены одного поставщика другому.
+             update: { roles: ['admin','inventory'], columns: ['status','order_date','expected_date','total','notes','received_at'] },
              delete: { roles: ['admin','inventory'] } },
     // created_at: закупки выгружаются ЗА ПЕРИОД (реестр строк заказа отбирает
     // `purchase_orders.created_at` через связь ниже — см. EMBED_FILTER_V1).

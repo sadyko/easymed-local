@@ -213,8 +213,11 @@ test('приход с НДС: цена без НДС, НДС строки, се�
     { unit_cost: 100, vat_rate: null, vat_amount: 0 },
     { unit_cost: 100, vat_rate: null, vat_amount: null },
   ]);
-  assert.deepEqual(links(db, 'product_id', p).map((l) => [l.last_price, l.vat_rate]), [[1000, 0]],
-    'приход без ставки обновил цену, но не стёр ставку поставщика');
+  // Ревью M8 — было: «приход без ставки обновил цену» (1 000). Цена прихода без
+  // ставки — себестоимость с неизвестным НДС; связь хранит цену БЕЗ НДС, и
+  // такая цена рядом со ставкой связи дала бы следующему приходу НДС дважды.
+  assert.deepEqual(links(db, 'product_id', p).map((l) => [l.last_price, l.vat_rate]), [[950, 0]],
+    'приход без ставки не переписал ни цену, ни ставку поставщика');
   // Чужая ставка — отказ целиком.
   const before = db.prepare('SELECT COUNT(*) n FROM stock_movements').get().n;
   assert.throws(() => call('receive_stock_lines', db, { lines: [
