@@ -34,6 +34,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { supabase } from '../../supabase.js';
 import { currentClinicId } from '../tenant-tables.js';
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';   // LAB_SERVICE_ROUTING_V1 — one shared definition of 'lab service'
+import { codeChoices, TYPE_OWN } from './lab-device-codes.js';   // LIS_MINDRAY_CODES_V1 — присланные коды, типовые, свой код
 
 const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагностика' };
 
@@ -49,7 +50,7 @@ const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагнос
 //      lab-section role (LAB_PANELS_BY_SECTION_V1).
 // v8 = one shared page head for queue+panels; marker moved off-screen into
 //      the data-attribute above; queue filter chips translate label-then-count.
-export const LAB_BUILD = 'lab-v12';   // LAB_RANGES_VISIBLE_V1 — named ranges as a visible link + presets
+export const LAB_BUILD = 'lab-v13';   // LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код
 
 // Mounts the editor into `container` and resolves once the first load has
 // painted — the caller can await it and know the screen is settled.
@@ -58,7 +59,9 @@ export async function mountLabPanels(container) {
     const state = { panels: [], services: [], selected: null, rows: [], panelQuery: '', loadError: null, loading: true, deptKindById: {}, typeNameById: {},
         // LIS_INGEST_V1 — приборы клиники и каналы их профилей: из них строится
         // колонка «Поле анализатора».
-        devices: [], profiles: [] };
+        devices: [], profiles: [],
+        // LIS_MINDRAY_CODES_V1 — коды, которые прибор действительно присылал, по id прибора.
+        deviceCodes: {} };
     const cid = currentClinicId();
 
     const listEl   = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
@@ -146,6 +149,7 @@ export async function mountLabPanels(container) {
         state.typeNameById = typeNameMap(typesRes && typesRes.data);
         state.devices = (devicesRes && devicesRes.data) || [];       // LIS_INGEST_V1
         state.profiles = (profilesRes && profilesRes.data) || [];
+        state.deviceCodes = {};   // LIS_MINDRAY_CODES_V1 — после сохранения перечитать: прибор мог прислать новое
         state.loading = false;   // read finished — from here an empty list really does mean «панелей нет»
         paintList();
         if (state.selected) { const again = state.panels.find(p => p.id === state.selected.id); selectPanel(again || null); }
@@ -181,6 +185,18 @@ export async function mountLabPanels(container) {
         }
     }
 
+    // LIS_MINDRAY_CODES_V1 — коды, которые прибор действительно присылал.
+    // Отказ не фатален: остаются типовой список и свой код.
+    async function loadDeviceCodes(deviceId) {
+        const id = Number(deviceId);
+        if (!id || state.deviceCodes[id]) return;
+        state.deviceCodes[id] = [];   // не спрашивать дважды, пока ждём ответ
+        const { data, error } = await supabase.rpc('lis_device_codes', { device_id: id });
+        if (error) { console.warn('[lab-panels] lis_device_codes:', error.message || error); return; }
+        state.deviceCodes[id] = Array.isArray(data) ? data : [];
+        if (state.selected && Number(state.selected.device_id) === id) paintEditor();
+    }
+
     // LAB_PANEL_RACE_V1 — показатели применяются, только если панель за время
     // запроса не сменилась.
     //
@@ -206,6 +222,7 @@ export async function mountLabPanels(container) {
         if (token !== panelToken) return;
         state.rowsPanelId = p.id || null;       // чьи показатели сейчас в редакторе
         paintEditor();
+        loadDeviceCodes(p.device_id);           // LIS_MINDRAY_CODES_V1 — перерисует, когда придёт ответ
     }
 
     function newBlankPanel() {
@@ -374,7 +391,7 @@ export async function mountLabPanels(container) {
                 (d.enabled ? d.name : trf('{name} (выключен)', { name: d.name })))));
         // Смена прибора перерисовывает таблицу: у другого прибора другие каналы,
         // и прежние подсказки к ним не относятся.
-        devSel.onchange = () => { p.device_id = Number(devSel.value) || null; suggestMapping(p.device_id); paintEditor(); };
+        devSel.onchange = () => { p.device_id = Number(devSel.value) || null; suggestMapping(p.device_id); paintEditor(); loadDeviceCodes(p.device_id); };
 
         const nameInp = h('input', { value: p.name || '', style: { width: '100%' } });
         const modSel = h('select', { style: { width: '100%' } },
@@ -818,27 +835,48 @@ export async function mountLabPanels(container) {
 
     /** Ячейка «Поле анализатора» одной строки. */
     function deviceCell(r) {
-        const channels = deviceChannels();
         if (!state.selected || !state.selected.device_id) {
             return h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('укажите «Анализатор» над таблицей'));
         }
-        if (!channels.length) {
-            return h('input', {
+        // LIS_MINDRAY_CODES_V1 — порядок решил владелец (2026-09-28): что прибор
+        // действительно присылал, потом типовой список модели, потом свой код.
+        // Раньше ввод руками появлялся, только когда у профиля нет каналов, — и
+        // настоящий код Mindray («6690-2») ввести было нельзя.
+        const sent = state.deviceCodes[Number(state.selected.device_id)] || [];
+        const choice = codeChoices({ sent, channels: deviceChannels(), current: r.device_code });
+        const noLists = !choice.sent.length && !choice.typical.length;
+
+        if (r._typing || noLists) {
+            const inp = h('input', {
                 value: r.device_code || '', placeholder: 'код канала', class: 'lw-inp', style: { width: '130px' },
-                title: 'У этой модели каналы не заданы — впишите код так, как его присылает прибор',
+                title: 'Впишите код так, как его присылает прибор',
+                // Вписал сам — это и есть подтверждение.
                 oninput: (e) => { r.device_code = e.target.value; r.device_code_confirmed = e.target.value.trim() ? 1 : 0; },
             });
+            if (noLists) return inp;
+            return h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, inp,
+                h('button', {
+                    class: 'lp-ic', type: 'button', title: 'Вернуться к списку', 'aria-label': 'Вернуться к списку',
+                    onclick: () => { r._typing = false; paintEditor(); },
+                }, Icon('ListBullet', { size: 12 })));   // значок системы, а не стрелка U+21A9: та — эмодзи (Extended_Pictographic)
         }
 
         const suggested = !!(r.device_code || '').trim() && !r.device_code_confirmed;
+        const opt = (o) => h('option', { value: o.value, selected: o.value === choice.selected ? true : null }, o.label);
         const sel = h('select', {
             class: 'lw-inp',
-            style: { width: '150px', ...(suggested ? { opacity: '0.65', fontStyle: 'italic' } : {}) },
-            // Человек выбрал сам — это и есть подтверждение.
-            onchange: (e) => { r.device_code = e.target.value; r.device_code_confirmed = e.target.value ? 1 : 0; paintEditor(); },
+            style: { width: '170px', ...(suggested ? { opacity: '0.65', fontStyle: 'italic' } : {}) },
+            onchange: (e) => {
+                if (e.target.value === TYPE_OWN) { r._typing = true; paintEditor(); return; }
+                // Человек выбрал сам — это и есть подтверждение.
+                r.device_code = e.target.value; r.device_code_confirmed = e.target.value ? 1 : 0; paintEditor();
+            },
         },
-            h('option', { value: '', selected: !(r.device_code || '').trim() }, '— не выбрано —'),
-            ...channels.map(c => h('option', { value: c.code, selected: c.code === r.device_code }, c.code + ' · ' + c.name)));
+            h('option', { value: '', selected: !choice.selected ? true : null }, '— не выбрано —'),
+            choice.orphan ? opt(choice.orphan) : null,
+            choice.sent.length ? h('optgroup', { label: tr('Присылал этот анализатор') }, ...choice.sent.map(opt)) : null,
+            choice.typical.length ? h('optgroup', { label: tr('Типовые для модели') }, ...choice.typical.map(opt)) : null,
+            h('option', { value: TYPE_OWN }, 'Вписать код…'));
 
         if (!suggested) return sel;
         return h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, sel,

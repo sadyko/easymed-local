@@ -519,6 +519,12 @@ export const STRINGS = {
   // LIS_MINDRAY_CODES_V1 (2026-09-28) — коды, которые присылал анализатор
   "Нужен номер прибора": {"en":"The device number is required","ru":"Нужен номер прибора","uz":"Qurilma raqami kerak"},
   "Прибор не найден": {"en":"Device not found","ru":"Прибор не найден","uz":"Qurilma topilmadi"},
+  // LIS_MINDRAY_CODES_V1 (2026-09-28) — «Поле анализатора» в редакторе панелей
+  "Присылал этот анализатор": {"en":"Sent by this analyzer","ru":"Присылал этот анализатор","uz":"Shu analizator yuborgan"},
+  "Типовые для модели": {"en":"Typical for this model","ru":"Типовые для модели","uz":"Model uchun odatiy"},
+  "Вписать код…": {"en":"Type a code…","ru":"Вписать код…","uz":"Kodni yozish…"},
+  "Впишите код так, как его присылает прибор": {"en":"Type the code exactly as the analyzer sends it","ru":"Впишите код так, как его присылает прибор","uz":"Kodni analizator yuborganidek yozing"},
+  "Вернуться к списку": {"en":"Back to the list","ru":"Вернуться к списку","uz":"Ro‘yxatga qaytish"},
   "Подтвердить сопоставление": {"en":"Confirm mapping","ru":"Подтвердить сопоставление","uz":"Solishtirishni tasdiqlash"},
   "Предложено сопоставлений: {n}. Подтвердите каждое — панель не сохранится, пока остались непроверенные.": {"en":"Mappings suggested: {n}. Confirm each one — the panel will not save while any remain unchecked.","ru":"Предложено сопоставлений: {n}. Подтвердите каждое — панель не сохранится, пока остались непроверенные.","uz":"Taklif etilgan solishtirishlar: {n}. Har birini tasdiqlang — tekshirilmagani qolsa, panel saqlanmaydi."},
   "Подтвердите поля анализатора: {list}": {"en":"Confirm the analyzer fields: {list}","ru":"Подтвердите поля анализатора: {list}","uz":"Analizator maydonlarini tasdiqlang: {list}"},
