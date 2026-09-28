@@ -119,3 +119,37 @@ test('R6: предварительное, пустое и «не получен�
     assert.equal(outcome(p).status, 'applied');
   }
 });
+
+test('R11: числовая строка без единой цифры («***», «----», «ERR») — не значение: не пишется, строка «не пришла»', () => {
+  // Прибор так пишет «не смог посчитать». Записать это в бланк значило бы
+  // стереть черновик лаборанта и выдать пустую цифру за результат.
+  for (const v of ['***', '----', 'ERR']) {
+    const p = planObservations([obs('WBC^^99MRC', v)], [line(1, 'Лейкоциты', 'WBC')]);
+    assert.equal(p.fills.length, 0, v + ' не пишется');
+    assert.deepEqual(p.missing.map((m) => m.reason), ['нет числа: ' + v]);
+    assert.equal(outcome(p).status, 'unmapped');
+  }
+  assert.equal(outcome(planObservations([obs('WBC^^99MRC', '***')], [line(1, 'Лейкоциты', 'WBC')])).detail,
+    'не пришли: Лейкоциты (WBC, нет числа: ***)');
+});
+
+test('R11: значение с цифрой («<0.01», «>1000», «*6.1») пишется как прежде и строку заполняет', () => {
+  for (const v of ['<0.01', '>1000', '*6.1']) {
+    const p = planObservations([obs('WBC^^99MRC', v)], [line(1, 'Лейкоциты', 'WBC')]);
+    assert.deepEqual(p.fills.map((f) => f.obs.value), [v]);
+    assert.equal(outcome(p).status, 'applied', v);
+  }
+  // Текстовая строка (не NM) цифр не обязана иметь: «Positive» — значение.
+  const st = planObservations([{ ...obs('HBSAG^^99MRC', 'Positive'), valueType: 'ST' }], [line(1, 'HBsAg', 'HBSAG')]);
+  assert.equal(st.fills.length, 1);
+});
+
+test('R11: «***» рядом с числом — не спор ни до, ни после', () => {
+  const lines = [line(1, 'Лейкоциты', 'WBC')];
+  for (const pair of [['6.1', '***'], ['***', '6.1']]) {
+    const p = planObservations(pair.map((v) => obs('WBC^^99MRC', v)), lines);
+    assert.deepEqual(p.fills.map((f) => f.obs.value), ['6.1'], pair.join(' → '));
+    assert.deepEqual(p.repeats, []);
+    assert.equal(outcome(p).status, 'applied');
+  }
+});

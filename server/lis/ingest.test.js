@@ -396,3 +396,26 @@ test('R5: код неподтверждённой строки пришёл, х�
   assert.match(message(db).detail, /не подтверждено: 6690-2\^WBC\^LN/);
   db.close();
 });
+
+test('R11: «***» на числовой строке не стирает набранное руками и считается «не пришло»', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, source, entered_by) VALUES (123,'Лейкоциты','9.9','manual',7)").run();
+  ingestMessage(db, MSG('LAB-000123', [OBXR(1, '6690-2^WBC^LN', '***'), OBXR(2, '718-7^HGB^LN', '142')]), '127.0.0.1');
+  const wbc = results(db).find((r) => r.parameter === 'Лейкоциты');
+  assert.equal(wbc.value, '9.9', 'черновик лаборанта не стёрт');
+  assert.equal(wbc.source, 'manual');
+  assert.equal(message(db).status, 'unmapped');
+  assert.match(message(db).detail, /не пришли: Лейкоциты \(WBC, нет числа: \*\*\*\)/);
+  db.close();
+});
+
+test('R11: «>1000» и «*6.1» пишутся текстом, как прежде, и бланк принят', () => {
+  const db = fresh();
+  ingestMessage(db, MSG('LAB-000123', [OBXR(1, '6690-2^WBC^LN', '*6.1'), OBXR(2, '718-7^HGB^LN', '>1000')]), '127.0.0.1');
+  assert.equal(results(db).find((r) => r.parameter === 'Лейкоциты').value, '*6.1');
+  const hgb = results(db).find((r) => r.parameter === 'Гемоглобин');
+  assert.equal(hgb.value, '>1000');
+  assert.equal(hgb.numeric_value, null, 'число не выдумывается');
+  assert.equal(message(db).status, 'applied');
+  db.close();
+});

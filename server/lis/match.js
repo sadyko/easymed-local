@@ -22,6 +22,13 @@
 
 const key = (s) => String(s == null ? '' : s).trim().toUpperCase();
 
+// Ревью R11: числовая строка (NM) без единой цифры — «***», «----», «ERR» — так
+// прибор пишет «не смог посчитать». Это не значение: в бланк не идёт (иначе
+// стёрла бы черновик лаборанта и легла бы пустышкой под видом результата), а
+// строка бланка «не пришла» с причиной. Значение с цифрой — «<0.01», «>1000»,
+// «*6.1» — пишется как было: у него есть смысл, и его читает человек.
+const noNumber = (obs, value) => key(obs.valueType) === 'NM' && !/\d/.test(value);
+
 /**
  * @param {Array<{code:string,name:string,codeRaw:string,value:string,status:string}>} observations  строки прибора
  * @param {Array<{id:number,name:string,device_code:string,device_code_confirmed:number}>} analytes  строки бланка в порядке бланка
@@ -34,7 +41,7 @@ const key = (s) => String(s == null ? '' : s).trim().toUpperCase();
  * }}
  *   fills        — что писать в бланк;
  *   missing      — ВСЕ подтверждённые строки бланка без значения, в порядке бланка;
- *                  reason: '' | 'статус P' | 'пустое значение' | 'код уже у строки «…»';
+ *                  reason: '' | 'статус P' | 'пустое значение' | 'нет числа: ***' | 'код уже у строки «…»';
  *   unconfirmed  — строки прибора, пришедшие для неподтверждённой строки бланка;
  *   repeats      — второе окончательное значение для уже заполненной строки бланка;
  *   unused       — строки прибора, которые ни к чему не относятся.
@@ -75,9 +82,10 @@ export function planObservations(observations = [], analytes = []) {
         // окончательное. Записанным остаётся первое (проход по коду идёт
         // раньше прохода по имени), но спор — повод для лотка: молча выбрать
         // одно из двух чисел значило бы выдать пациенту, возможно, не то.
-        // Предварительное (P), «не получено» (X) и пустое — не спор: «P,
-        // потом F» — законная пара, и такая строка остаётся «не использована».
-        if (status === 'F' && value) { used.add(i); repeats.push(obs); }
+        // Предварительное (P), «не получено» (X), пустое и «без числа» (R11)
+        // — не спор: «P, потом F» — законная пара, и такая строка остаётся
+        // «не использована».
+        if (status === 'F' && value && !noNumber(obs, value)) { used.add(i); repeats.push(obs); }
         return;
       }
       used.add(i);
@@ -86,6 +94,7 @@ export function planObservations(observations = [], analytes = []) {
       if (status !== 'F') { if (!why.has(a)) why.set(a, 'статус ' + status); return; }
       // Пустое значение — не значение: оно не стирает набранное руками.
       if (!value) { if (!why.has(a)) why.set(a, 'пустое значение'); return; }
+      if (noNumber(obs, value)) { if (!why.has(a)) why.set(a, 'нет числа: ' + value); return; }
       filled.add(a);
       fills.push({ obs, analyte: a });
     });
