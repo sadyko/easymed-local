@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { ensureDevice, guessProfile } from './discover.js';
+import { writableColumns } from '../db/schema-registry.js';   // LIS_ANALYZER_LIST_V1 (ревью C1)
 
 function fresh() {
   const db = openDb(':memory:');
@@ -188,4 +189,39 @@ test('новая находка заводится «не добавленной
   const id = db.prepare("INSERT INTO lab_devices (name, profile) VALUES ('Руками', 'mindray-bs-240')").run().lastInsertRowid;
   assert.equal(db.prepare('SELECT added FROM lab_devices WHERE id = ?').get(id).added, 1);
   db.close();
+});
+
+// ── LIS_ANALYZER_LIST_V1, ревью C1 — «Добавить» не меняет маршрутизацию ─────
+// «Добавить» писал discovered = 0, а для ensureDevice discovered = 0 значит
+// «заведён человеком на этот адрес»: модель у такой строки не сверяется. После
+// одного нажатия всё, что шлёт с того же адреса, — переадресаторы COM на одном
+// лабораторном ПК, переадресатор на компьютере с Easy-Med (127.0.0.1),
+// симулятор, — ложилось в добавленную строку: в лоток «другой модели», а новая
+// модель так и не получала своей строки. «Добавить» меняет место прибора на
+// экране, а не приём.
+test('ревью C1: «Добавить» у находки не меняет, куда ложатся сообщения с того же адреса', () => {
+  const db = fresh();
+  const hem = ensureDevice(db, { sendingApp: 'BC-5300', peer: '127.0.0.1' }).device;
+  const bio = ensureDevice(db, { sendingApp: 'BS-240', peer: '127.0.0.1' }).device;
+  assert.notEqual(hem.id, bio.id);
+  // Ровно то, что пишет «Добавить» (lab-devices.js, openAdopt): название и
+  // added; discovered не трогается.
+  db.prepare('UPDATE lab_devices SET name = ?, added = 1 WHERE id = ?').run('Гематология', hem.id);
+
+  const again = ensureDevice(db, { sendingApp: 'BS-240', peer: '127.0.0.1' });
+  assert.equal(again.created, false);
+  assert.equal(again.device.id, bio.id, 'биохимия ложится в свою строку, а не в добавленную гематологию');
+  const third = ensureDevice(db, { sendingApp: 'BC-20', peer: '127.0.0.1' });
+  assert.equal(third.created, true, 'новая модель с того же адреса получает свою строку');
+  assert.notEqual(third.device.id, hem.id);
+  assert.equal(third.device.added, 0, 'и ждёт своего «Добавить»');
+  assert.equal(ensureDevice(db, { sendingApp: 'BC-5300', peer: '127.0.0.1' }).device.id, hem.id, 'добавленная — по-прежнему своя строка');
+  assert.equal(devices(db).length, 3);
+  db.close();
+});
+
+test('ревью C1: признак «найден сам» браузер не пишет — реестр не пускает discovered в update', () => {
+  assert.ok(!writableColumns('lab_devices', 'update').includes('discovered'),
+    'discovered — правило приёма (ensureDevice), ставит его только сервер');
+  assert.ok(writableColumns('lab_devices', 'update').includes('added'), '«Добавить» — это update added = 1');
 });

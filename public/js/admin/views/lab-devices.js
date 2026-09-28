@@ -427,8 +427,14 @@ export async function mountLabDevices(container) {
     }
 
     // «Добавить» у находки: название подставлено, модель — догадка по имени;
-    // человек проверяет и нажимает — прибор уходит в таблицу. Пометка «найден
-    // сам — проверьте модель» снимается: модель проверил человек.
+    // человек проверяет и нажимает — прибор уходит в таблицу.
+    //
+    // Ревью C1: discovered здесь НЕ пишется — это правило приёма, а не
+    // пометка для глаз. Для discover.js discovered = 0 значит «заведён
+    // человеком на этот адрес», и модель у такой строки не сверяется: после
+    // одного «Добавить» всё, что шлёт с того же адреса (переадресаторы COM на
+    // одном ПК, 127.0.0.1, симулятор), ложилось бы в эту строку. «Добавить»
+    // меняет место прибора на экране, а не приём.
     function openAdopt(d) {
         state.formMode = 'adopt';
         clear(formCard);
@@ -451,7 +457,7 @@ export async function mountLabDevices(container) {
             const name = nameInp.value.trim();
             if (!name) { toast(tr('Укажите название прибора'), 'warn'); return; }
             const { error } = await supabase.from('lab_devices')
-                .update({ name, profile: profSel.value, added: 1, discovered: 0 }).eq('id', d.id);
+                .update({ name, profile: profSel.value, added: 1 }).eq('id', d.id);
             if (error) { toast(trf('Не удалось добавить прибор: {msg}', { msg: error.message || error }), 'fail'); return; }
             toast(trf('Прибор «{name}» добавлен', { name }));
             closeForm();

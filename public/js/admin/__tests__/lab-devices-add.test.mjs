@@ -145,7 +145,7 @@ test('окно «Добавить прибор»: находка с «Добав
   assert.ok(findButtonByText(root, /Анализатор не появился\? Добавить по адресу/), 'ручной путь остаётся');
 });
 
-test('«Добавить» у находки переводит её в таблицу: added = 1, модель подтверждена', async () => {
+test('«Добавить» у находки переводит её в таблицу: added = 1, признак «найден сам» не трогается', async () => {
   DEVICES = [HEARD, FOUND];
   const root = await mount();
   findButtonByText(root, /Добавить прибор/).click();
@@ -160,7 +160,9 @@ test('«Добавить» у находки переводит её в табл
   const upd = writes.find((w) => w.table === 'lab_devices' && w.op === 'update');
   assert.ok(upd, 'записано: ' + JSON.stringify(writes));
   assert.strictEqual(upd.values.added, 1);
-  assert.strictEqual(upd.values.discovered, 0, 'человек проверил модель — пометка «найден сам» снята');
+  // Ревью C1: discovered = 0 для discover.js — «заведён человеком на этот
+  // адрес», и после одного «Добавить» всё с того же адреса ложилось бы сюда.
+  assert.ok(!('discovered' in upd.values), 'discovered пишет только сервер: ' + JSON.stringify(upd.values));
   assert.strictEqual(upd.values.name, 'BC-5300');
   assert.ok(JSON.stringify(upd.filters || []).includes('5'), 'обновлена именно находка: ' + JSON.stringify(upd.filters));
 });

@@ -1221,9 +1221,11 @@ export const REGISTRY = {
   lab_devices: {
     read:  { roles: ALL_STAFF, columns: ['id','name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','last_seen_at','created_at','discovered','added'] },   // discovered: LIS_AUTODISCOVER_V1 (mig 124) — ставит только сервер; added: LIS_ANALYZER_LIST_V1 (мигр. 228)
     write: { insert: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled'] },
-             // discovered в update: правка прибора руками снимает пометку «модель
-             // подобрана, не подтверждена» — это и есть подтверждение.
-             update: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','discovered','added'] },   // added: LIS_ANALYZER_LIST_V1 — «Добавить» переводит находку в таблицу
+             // LIS_ANALYZER_LIST_V1 (ревью C1) — discovered в update НЕТ: это
+             // правило приёма, а не пометка. discover.js не сверяет модель у
+             // строки с discovered = 0 («заведён человеком на этот адрес»);
+             // «Добавить» писал 0, и всё с того же адреса ложилось в одну строку.
+             update: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','added'] },   // added: LIS_ANALYZER_LIST_V1 — «Добавить» переводит находку в таблицу
              delete: { roles: LAB_SECTION_ROLES } },
     filters: ['id','enabled','transport','profile'],
     embed:   {},
