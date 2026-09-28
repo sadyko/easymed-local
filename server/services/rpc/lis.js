@@ -137,7 +137,10 @@ export function lisMessageAttach(db, args, user) {
   // этими двумя чтениями никто другой не пишет, поэтому самая новая строка
   // после ingestMessage — его. «id > before» — страховка, а не надежда.
   const before = db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM lab_device_messages').get().m;
-  const code = ingestMessage(db, retagged, msg.peer, msg.device_id);
+  // LIS_ANALYZER_LIST_V1 (ревью M4) — { touch: false }: сообщение пришло
+  // тогда, а нажал человек сейчас; прибор, выключенный неделю назад, после
+  // разбора лотка иначе выглядел бы «на связи».
+  const code = ingestMessage(db, retagged, msg.peer, msg.device_id, { touch: false });
   const rec = db.prepare('SELECT status, detail FROM lab_device_messages WHERE id > ? ORDER BY id DESC LIMIT 1').get(before);
   resolveMessage(db, id);
   return { ok: code === 'AA', code, status: rec ? rec.status : null, detail: rec ? rec.detail || '' : '' };

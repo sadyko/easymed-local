@@ -67,8 +67,11 @@ function flagFromClinic(num, low, high) {
  * @param {string} raw     сырой текст сообщения
  * @param {string} peer    адрес отправителя (для лотка)
  * @param {number|null} deviceId  устройство, если удалось определить
+ * @param {{touch?: boolean}} [opts]  touch: false — не отмечать прибор «на
+ *        связи» (LIS_ANALYZER_LIST_V1, ревью M4): ручная привязка из лотка
+ *        прогоняет СТАРОЕ сообщение, и нажатие человека — не голос анализатора
  */
-export function ingestMessage(db, raw, peer = '', deviceId = null) {
+export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   let msg;
   try {
     msg = parseMessage(raw);
@@ -83,7 +86,8 @@ export function ingestMessage(db, raw, peer = '', deviceId = null) {
   // прибор, чьи пробы не находили заказ, выглядел молчащим неделями («kjkj» —
   // «молчит с 10.09», а слал до 14.09). Мусор (rejected, выше) прибор не
   // отмечает: неразобранное не доказывает, что говорил анализатор.
-  touchDevice(db, deviceId);
+  // Ревью M4: и повторный прогон из лотка — тоже нет (opts.touch = false).
+  if (opts.touch !== false) touchDevice(db, deviceId);
   const vsId = parseSampleId(msg.sampleId);
 
   const order = vsId

@@ -187,6 +187,30 @@ test('R9: ручная привязка отвечает статусом нов
   db.close();
 });
 
+// LIS_ANALYZER_LIST_V1, ревью M4 — приём внутри ручной привязки не отмечает
+// прибор «на связи»: нажал человек, а не заговорил анализатор. Иначе прибор,
+// выключенный неделю назад, после разбора лотка выглядел бы работающим.
+test('ревью M4: ручная привязка не трогает «на связи» прибора', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (id, full_name) VALUES (3,'Иванов')").run();
+  db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (55,3,'2026-09-10T09:00:00Z','scheduled')").run();
+  db.prepare("INSERT INTO services (id, name, is_lab) VALUES (9,'ОАК',1)").run();
+  db.prepare("INSERT INTO visit_services (id, visit_id, service_id, status) VALUES (77,55,9,'in_progress')").run();
+  db.prepare("INSERT INTO lab_devices (id, name, profile, last_seen_at) VALUES (1,'Гем','mindray-bc-5300','2026-09-10T08:00:00Z')").run();
+  db.prepare("INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (5,'ОАК',9,1)").run();
+  db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, device_code, device_code_confirmed)
+              VALUES (5,'WBC','Лейкоциты','10^9/л','WBC',1)`).run();
+  const raw = ['MSH|^~\\&|BC-5300|Mindray|||20260910143943||ORU^R01|42|P|2.3.1',
+    'OBR|1||LAB-999999|00001^Automated Count^99MRC', 'OBX|1|NM|WBC^^99MRC||6.1|10*9/L|||||F'].join('\r');
+  const id = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, sample_id, status) VALUES (1,'127.0.0.1',?, 'LAB-999999','unmatched')").run(raw).lastInsertRowid;
+
+  const out = lisMessageAttach(db, { id, visit_service_id: 77 }, LAB);
+  assert.deepEqual({ ok: out.ok, status: out.status }, { ok: true, status: 'applied' }, 'привязка сработала');
+  assert.equal(db.prepare('SELECT last_seen_at FROM lab_devices WHERE id = 1').get().last_seen_at, '2026-09-10T08:00:00Z',
+    'отметка связи — та, что была: сообщение пришло тогда, а не сейчас');
+  db.close();
+});
+
 test('LIS_ANALYZER_LIST_V1: какие порты слушаются — только лаборатории, чистое чтение', () => {
   const db = fresh();
   assert.throws(() => lisListeners(db, {}, { role: 'reception' }), /прав/);

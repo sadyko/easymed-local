@@ -445,3 +445,15 @@ test('проба без привязанной панели (unmapped) отме�
   assert.equal(lastSeen(db2), null, 'неразобранное не доказывает, что говорил анализатор');
   db2.close();
 });
+
+// Ревью M4 — повторный прогон старого сообщения (ручная привязка из лотка)
+// просит не отмечать связь: нажал человек, а не заговорил анализатор.
+test('ревью M4: { touch: false } — приём как обычно, но прибор «на связи» не отмечается', () => {
+  const db = fresh();
+  const code = ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1'), OBX(2, 'HGB', '142', { unit: 'g/L' })]), '127.0.0.1', 1, { touch: false });
+  assert.equal(code, 'AA');
+  assert.equal(message(db).status, 'applied', 'всё остальное — тот же приём');
+  assert.equal(results(db).length, 2);
+  assert.equal(lastSeen(db), null);
+  db.close();
+});
