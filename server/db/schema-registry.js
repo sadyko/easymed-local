@@ -570,10 +570,10 @@ export const REGISTRY = {
              // выдают пациенту только со своих полок (владелец 28.09).
              restricted: { lift: 'warehouse_stock', columns: ['on_hand'] } },
     // SUPPLIERS_VAT_V1 — ЦЕНУ ПРОДАЖИ И НДС ПИШЕТ ТОЛЬКО КАРТОЧКА ТОВАРА
-    // (rpc/catalog-goods.js product_save): там проверка ставки и право
-    // «Закупки: Изменение», которого реестр — таблица восьми ролей — выразить не
-    // может. sale_price отсюда убрана (её писала только карточка), vat_rate сюда
-    // и не добавлялась. Остальные колонки открыты, как были: выбор единицы в
+    // (rpc/catalog-goods.js product_save): там проверка ставки, а пишут те же
+    // администратор и склад (ревью F1 — как в 3.12.1). sale_price отсюда убрана
+    // (её писала только карточка), vat_rate сюда и не добавлялась. Остальные
+    // колонки открыты, как были: выбор единицы в
     // окне списания (item-picker-modal.js) пишет unit напрямую.
     write: { insert: { roles: ['admin','inventory'], columns: ['name','code','unit','category','reorder_level','active',
                 'base_unit','purchase_unit','pack_factor','consumption_unit','consumption_factor','is_drug','track_batches','procurement_category','supplier_id'] },
@@ -1535,8 +1535,8 @@ export const REGISTRY = {
     // SUPPLIERS_VAT_V1 — СВЯЗИ ПИШЕТ ТОЛЬКО СЕРВЕР. Карточка товара и карточка
     // поставщика сохраняют их одной транзакцией (rpc/catalog-goods.js
     // product_save / supplier_save), приход и импорт помнят цену поставщика
-    // (rememberSupplierPrice). Там — проверка ставки НДС, дублей и право
-    // «Закупки: Изменение». Прямая запись отсюда обходила бы все три, а живых
+    // (rememberSupplierPrice). Там — проверка ставки НДС и дублей (пишут те же
+    // администратор и склад). Прямая запись отсюда обходила бы обе, а живых
     // писателей у неё больше нет (облачные procurement.js и
     // section-import-export.js пишут item_id/company_id, которых здесь нет).
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },

@@ -124,10 +124,9 @@ function receiptMoney(unitCost, qty, vat) {
 }
 
 export function receiveStockLines(db, args, user) {
-  // SUPPLIERS_VAT_V1 — приход пишет цены и НДС: право «Закупки: Изменение»
-  // (строка справочника прав так и описана: «оформляет приход»). Пока роль его
-  // не настраивали — прежний список: администратор и склад.
-  requireCatalogEdit(db, user, 'принимать товар на склад');
+  // SUPPLIERS_VAT_V1 (ревью F1) — приход пишет цены и НДС, а принимают его те
+  // же, что в 3.12.1: администратор и склад (catalog-goods.js CATALOG_ROLES).
+  requireCatalogEdit(db, user);
 
   const rawLines = args && args.lines;
   if (!Array.isArray(rawLines) || rawLines.length === 0) {
@@ -235,10 +234,10 @@ const NOW = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 // себестоимость считает с НДС — то же правило, что у «Принять товар»
 // (receiptMoney). Строка заказа до НДС (обе колонки пусты) — «не указан»,
 // цена — себестоимость, как прежде. Связь «товар ↔ поставщик заказа» помнит
-// цену (за единицу закупки) и ставку. Право — «Закупки: Изменение».
+// цену (за единицу закупки) и ставку. Кто — администратор и склад, как в 3.12.1.
 // -----------------------------------------------------------------------------
 export function receivePurchaseOrder(db, args, user) {
-  requireCatalogEdit(db, user, 'принимать товар на склад');
+  requireCatalogEdit(db, user);
 
   const poId = args && args.po_id;
   if (!isPositiveInt(poId)) {
@@ -354,7 +353,7 @@ const MAX_PO_LINES = 500;
 const MAX_PO_MONEY = 1e12;
 
 export function purchaseOrderCreate(db, args, user) {
-  requireCatalogEdit(db, user, 'оформлять заказы на закупку');
+  requireCatalogEdit(db, user);
   const a = args || {};
   let supplierId = null;
   if (a.supplier_id !== undefined && a.supplier_id !== null && a.supplier_id !== '') {
@@ -850,7 +849,7 @@ function importNum(v, label, rowNo, max = MAX_QTY) {
 const cellText = (v) => String(v).trim().slice(0, 40);
 
 export function importProductsExcel(db, args, user) {
-  requireCatalogEdit(db, user, 'импортировать товары из Excel');
+  requireCatalogEdit(db, user);
 
   const rows = args && args.rows;
   if (!Array.isArray(rows) || rows.length === 0) {

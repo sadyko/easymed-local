@@ -102,8 +102,8 @@ test('visit_documents: пустая вставка — 400 по-русски, д
 });
 
 // SUPPLIERS_VAT_V1 (2026-09-28) — связи «товар ↔ поставщик» пишет только
-// сервер (product_save / supplier_save): там проверка НДС, дублей и право
-// «Закупки: Изменение». Прямая запись через /api/db — отказ; прежняя проверка
+// сервер (product_save / supplier_save): там проверка НДС и дублей (пишут
+// администратор и склад, как в 3.12.1). Прямая запись через /api/db — отказ; прежняя проверка
 // «пачкой по product_id» (V3120_FINAL) держится тем, что писать пачкой больше
 // нечего, а карточка сохраняет связи одним вызовом.
 test('item_suppliers: связи пишет только сервер — /api/db отказывает, product_save сохраняет', async (t) => {
@@ -123,7 +123,7 @@ test('item_suppliers: связи пишет только сервер — /api/d
   assert.equal(saved.status, 200, JSON.stringify(saved.json));
   const link = ctx.db.prepare('SELECT last_price, vat_rate FROM item_suppliers WHERE product_id = ?').get(prod);
   assert.deepEqual({ ...link }, { last_price: 120, vat_rate: 12 });
-  // Врачу каталог не открыт — отказ словами матрицы прав.
+  // Врачу каталог не открыт — отказ роли, как в 3.12.1 (ревью F1).
   const doc = await rpc(ctx, 'doctor', 'product_save', { id: prod, name: 'Шприц', procurement_category: 'consumables', vat_rate: 12, suppliers: [] });
   assert.equal(doc.status, 403, JSON.stringify(doc.json));
   assert.equal(ctx.db.prepare('SELECT COUNT(*) n FROM item_suppliers').get().n, 1);

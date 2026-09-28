@@ -117,22 +117,27 @@ test('product_save, правка: список поставщиков целик
   assert.throws(() => call('product_save', db, { id: 9999, name: 'Х', procurement_category: 'consumables', vat_rate: 0 }), (e) => e.status === 404);
 });
 
-test('product_save / supplier_save: право «Закупки: Изменение»; без настройки — администратор и склад', () => {
+// SUPPLIERS_VAT_V1 (ревью F1) — было «право «Закупки: Изменение»»: кладовщик
+// с «Просмотром» от старого экрана «Роли» терял приход, который делал в
+// 3.12.1. Кто ведёт товары — администратор и склад, как в 3.12.1; сверка всех
+// дверей между собой — suppliers-vat-roles.test.js.
+test('product_save / supplier_save: администратор и склад, как в 3.12.1; уровень «Закупки» не сужает и не расширяет', () => {
   const { db, A } = seed();
   const args = { name: 'Х', procurement_category: 'consumables', vat_rate: 12, suppliers: [{ supplier_id: A }] };
-  assert.throws(() => call('product_save', db, args, DOC), (e) => e.status === 403 && /недоступно вашей роли/.test(e.message));
+  assert.throws(() => call('product_save', db, args, DOC), (e) => e.status === 403 && e.message === 'Ваша роль не может выполнить это действие.');
   assert.throws(() => call('supplier_save', db, { name: 'Y' }, DOC), (e) => e.status === 403);
   assert.ok(call('product_save', db, args, ADMIN).product.id);
-  // Роль склада, которой «Закупки» выставили только «Просмотр», — отказ.
+  // Роль склада, которой старый экран оставил «Закупки: Просмотр», — принимает и ведёт товары, как в 3.12.1.
   db.prepare('INSERT OR REPLACE INTO role_permissions (role, permissions) VALUES (?, ?)')
     .run('inventory', JSON.stringify({ sections: ['inventory'], levels: { inventory: 'viewer' }, grants: { procurement: 'view' } }));
-  assert.throws(() => call('product_save', db, { ...args, name: 'Y' }, INV), (e) => e.status === 403);
-  assert.throws(() => call('receive_stock_lines', db, { lines: [{ product_id: 1, qty: 1, unit_cost: 1 }] }, INV), (e) => e.status === 403);
-  assert.throws(() => call('import_products_excel', db, { rows: [{ name: 'Z', category: 'Расходники' }] }, INV), (e) => e.status === 403);
-  // …а врачу, которому «Закупки: Изменение» выдали в матрице, — можно.
+  assert.ok(call('product_save', db, { ...args, name: 'Y' }, INV).product.id);
+  assert.equal(call('receive_stock_lines', db, { lines: [{ product_id: 1, qty: 1, unit_cost: 1 }] }, INV).received.length, 1);
+  assert.equal(call('import_products_excel', db, { rows: [{ name: 'Z', category: 'Расходники' }] }, INV).created, 1);
+  // …а врачу «Закупки: Изменение» в матрице товаров не открывает — как и в 3.12.1
+  // (его не пускают ни /api/db, ни receive_stock, ни корректировка).
   db.prepare('INSERT OR REPLACE INTO role_permissions (role, permissions) VALUES (?, ?)')
     .run('doctor', JSON.stringify({ sections: ['inventory'], levels: {}, grants: { procurement: 'edit' } }));
-  assert.ok(call('product_save', db, { ...args, name: 'Z' }, DOC).product.id);
+  assert.throws(() => call('product_save', db, { ...args, name: 'W' }, DOC), (e) => e.status === 403);
   // Запись — не чтение: при просроченной лицензии эти вызовы закрыты.
   for (const n of ['product_save', 'supplier_save']) assert.equal(isReadOnlyRpc(n), false, n);
 });

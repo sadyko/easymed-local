@@ -3,11 +3,11 @@
 //   purchase_order_create — строки заказа с ценой без НДС и ставкой НДС: по
 //     умолчанию — из связи товара с поставщиком заказа (цена за единицу
 //     закупки → за базовую единицу), иначе ставка товара; НДС строки и сумма
-//     заказа с НДС считает сервер; право «Закупки: Изменение».
+//     заказа с НДС считает сервер; администратор и склад (ревью F1).
 //   receive_purchase_order — приход по заказу пишет ставку и НДС принятого
 //     количества, себестоимость — с НДС, связь с поставщиком помнит цену и
-//     ставку; строка заказа до НДС — «не указан», как прежде; право —
-//     «Закупки: Изменение», как у «Принять товар».
+//     ставку; строка заказа до НДС — «не указан», как прежде; кто —
+//     администратор и склад, как у «Принять товар» и как в 3.12.1.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
@@ -65,7 +65,7 @@ test('purchase_order_create: цена и НДС по умолчанию — из
   assert.match(r2.po_number, /-002$/, 'номер по порядку за день');
 });
 
-test('purchase_order_create: неверные строки, поставщик и ставка — отказ, ничего не записано; право «Закупки: Изменение»', () => {
+test('purchase_order_create: неверные строки, поставщик и ставка — отказ, ничего не записано; врачу — отказ роли', () => {
   const { db, A, anal } = seed();
   const bad = (args, re, status = 400, user = INV) => assert.throws(() => call('purchase_order_create', db, args, user),
     (e) => e.status === status && re.test(e.message), JSON.stringify(args));
@@ -75,7 +75,7 @@ test('purchase_order_create: неверные строки, поставщик �
   bad({ supplier_id: A, lines: [{ product_id: anal, qty: 1, unit_cost: -5 }] }, /Цена закупки — неотрицательное число/);
   bad({ supplier_id: A, lines: [{ product_id: 999, qty: 1 }] }, /Товар №999 не найден/, 404);
   bad({ supplier_id: 999, lines: [{ product_id: anal, qty: 1 }] }, /Поставщик не найден/, 404);
-  bad({ supplier_id: A, lines: [{ product_id: anal, qty: 1 }] }, /недоступно вашей роли/, 403, DOC);
+  bad({ supplier_id: A, lines: [{ product_id: anal, qty: 1 }] }, /Ваша роль не может выполнить это действие/, 403, DOC);   // ревью F1 — отказ роли, как в 3.12.1
   assert.equal(db.prepare('SELECT COUNT(*) n FROM purchase_orders').get().n, 0);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM purchase_order_items').get().n, 0);
   assert.equal(isReadOnlyRpc('purchase_order_create'), false);
@@ -124,14 +124,17 @@ test('приход по заказу, оформленному до НДС: «н
   assert.deepEqual(link(db, anal, A), { last_price: 950, vat_rate: 12 }, 'цена обновлена, ставка поставщика осталась');
 });
 
-test('приход по заказу: право «Закупки: Изменение», как у «Принять товар»', () => {
+// SUPPLIERS_VAT_V1 (ревью F1) — было «право «Закупки: Изменение»»: кладовщик
+// с «Просмотром» от старого экрана «Роли» терял приход по заказу, который
+// делал в 3.12.1. Заказ и приход по нему — администратор и склад, как в 3.12.1.
+test('приход по заказу и заказ: администратор и склад, как в 3.12.1; «Закупки: Просмотр» у склада их не отнимает', () => {
   const { db, A, anal } = seed();
   const r = call('purchase_order_create', db, { supplier_id: A, lines: [{ product_id: anal, qty: 1 }] });
-  assert.throws(() => call('receive_purchase_order', db, { po_id: r.po_id }, DOC), (e) => e.status === 403 && /недоступно вашей роли/.test(e.message));
+  assert.throws(() => call('receive_purchase_order', db, { po_id: r.po_id }, DOC), (e) => e.status === 403 && e.message === 'Ваша роль не может выполнить это действие.');
+  assert.throws(() => call('purchase_order_create', db, { supplier_id: A, lines: [{ product_id: anal, qty: 1 }] }, DOC), (e) => e.status === 403);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM stock_movements").get().n, 0);
   db.prepare('INSERT OR REPLACE INTO role_permissions (role, permissions) VALUES (?, ?)')
     .run('inventory', JSON.stringify({ sections: ['inventory'], levels: { inventory: 'viewer' }, grants: { procurement: 'view' } }));
-  assert.throws(() => call('receive_purchase_order', db, { po_id: r.po_id }, INV), (e) => e.status === 403);
-  assert.throws(() => call('purchase_order_create', db, { supplier_id: A, lines: [{ product_id: anal, qty: 1 }] }, INV), (e) => e.status === 403);
-  assert.equal(db.prepare("SELECT COUNT(*) n FROM stock_movements").get().n, 0);
-  assert.equal(call('receive_purchase_order', db, { po_id: r.po_id }, ADMIN).status, 'received');
+  assert.equal(call('receive_purchase_order', db, { po_id: r.po_id }, INV).status, 'received');
+  assert.ok(call('purchase_order_create', db, { supplier_id: A, lines: [{ product_id: anal, qty: 1 }] }, INV).po_id);
 });

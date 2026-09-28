@@ -57,9 +57,7 @@ test('receive rejects empty lines, bad qty, and non-inventory role', () => {
   assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: 0, unit: 'base' }] }, inv), /Количество/i);
   assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: -5, unit: 'base' }] }, inv), /Количество/i);
   assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: 2_000_000, unit: 'base' }] }, inv), /Количество/i);
-  // SUPPLIERS_VAT_V1 — приход пишет цены и НДС: ворота «Закупки: Изменение»,
-  // отказ словами матрицы прав (как у выдачи, GRANTS_V1).
-  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: 1, unit: 'base' }] }, doc), (e) => e.status === 403 && /недоступно вашей роли/.test(e.message));
+  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: 1, unit: 'base' }] }, doc), /(role|allow|роль)/i);
   // nothing persisted from the failed attempts
   assert.equal(db.prepare('SELECT on_hand FROM products WHERE id=?').get(prod).on_hand, 0);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM stock_movements').get().n, 0);
@@ -194,7 +192,7 @@ test('import_products_excel aborts the whole batch on a bad row, names the Excel
 
   assert.throws(() => importProductsExcel(db, { rows: [{ name: 'X', qty: -1 }] }, inv), /Строка 2/);
   assert.throws(() => importProductsExcel(db, { rows: [] }, inv), /нет строк/i);
-  assert.throws(() => importProductsExcel(db, { rows: [{ name: 'X' }] }, doc), (e) => e.status === 403 && /недоступно вашей роли/.test(e.message));
+  assert.throws(() => importProductsExcel(db, { rows: [{ name: 'X' }] }, doc), /(role|allow|роль)/i);
 
   assert.throws(() => importProductsExcel(db, { rows: [{ name: 'X', qty: [1, 2] }] }, inv), /Кол-во/);
   assert.throws(() => importProductsExcel(db, { rows: [{ name: 'X', qty: '0x10' }] }, inv), /Кол-во/);

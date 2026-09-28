@@ -64,9 +64,7 @@ test('receive_purchase_order: rejects over-receipt, re-receipt, bad role — not
   const li = db.prepare("INSERT INTO purchase_order_items (po_id, product_id, qty_ordered, unit_cost) VALUES (?,?,?,?)").run(po, p, 10, 5).lastInsertRowid;
 
   assert.throws(() => receivePurchaseOrder(db, { po_id: po, lines: [{ po_item_id: li, qty: 999 }] }, inv), /больше, чем осталось/i);
-  // SUPPLIERS_VAT_V1 — приход по заказу пишет цены и НДС: ворота «Закупки:
-  // Изменение», как у «Принять товар»; отказ словами матрицы прав.
-  assert.throws(() => receivePurchaseOrder(db, { po_id: po }, doc), (e) => e.status === 403 && /недоступно вашей роли/.test(e.message));
+  assert.throws(() => receivePurchaseOrder(db, { po_id: po }, doc), /(role|allow|роль)/i);
   assert.throws(() => receivePurchaseOrder(db, { po_id: 9999 }, inv), /не найден/i);
   assert.equal(db.prepare('SELECT on_hand FROM products WHERE id=?').get(p).on_hand, 0);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM stock_movements').get().n, 0);
