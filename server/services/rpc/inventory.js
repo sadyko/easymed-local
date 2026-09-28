@@ -233,6 +233,12 @@ function ownShelfRefusal(product, need, found, inUnits = false) {
     have: `${num(have)} ${unit}`.trim(),
   }, 400);
   err.code = OWN_SHELF_SHORT;
+  // Ревью M1 — товар ОТКЛЮЧЁН в каталоге. Двери выдачи отвечают так же
+  // («запросите у склада»: остаток отключённого товара склад выдаёт на полку,
+  // issue_stock_lines), а лист назначений по плану (§5) держит отключённый
+  // товар предупреждением, а не отказом отметки — у всех, как у
+  // администратора (treatment-orders.js chargeAdministration).
+  if (!product.active) err.inactive = true;
   return err;
 }
 

@@ -569,7 +569,8 @@ function chargeAdministration(db, order, administration, user) {
         // означало бы препарат, взятый мимо склада, и дыру на следующей
         // инвентаризации. Отказ уходит наружу, транзакция отметки откатывается
         // целиком, и медсестра слышит «запросите у склада».
-        if (e.code === OWN_SHELF_SHORT) throw e;
+        // Ревью M1 — отключённый товар остаётся предупреждением у всех (план, §5).
+        if (e.code === OWN_SHELF_SHORT && !e.inactive) throw e;
         stockStatus = worseStock(stockStatus, 'short');
         notes.push(`не списано: ${e.message}`);
         warnings.push({ code: 'stock', message: e.message });
@@ -607,7 +608,7 @@ function chargeAdministration(db, order, administration, user) {
       stockStatus = worseStock(stockStatus, 'ok');
     } catch (e) {
       if (!(e instanceof StockError)) throw e;
-      if (e.code === OWN_SHELF_SHORT) throw e;   // OWN_SHELF_ONLY_V1 — то же правило, что у дозы выше
+      if (e.code === OWN_SHELF_SHORT && !e.inactive) throw e;   // OWN_SHELF_ONLY_V1 — то же правило, что у дозы выше (ревью M1)
       stockStatus = worseStock(stockStatus, 'short');
       notes.push(`расход сверх дозы не списан: ${e.message}`);
       warnings.push({ code: 'stock_extra', product_id: item.product_id, message: e.message });
