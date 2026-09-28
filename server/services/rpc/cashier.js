@@ -7,7 +7,7 @@ import { rpcT } from '../server-message.js';   // V3120_I18N — собранн�
 import { today as localToday, localRangeWhere } from '../domain/day.js';   // V3120_FIX (PERF) — дневные ветки по индексам
 import { outstandingWhere, idemReplay, idemRemember } from '../domain/money.js';   // V3120_FIX — ключ повтора
 import { assertTransition } from '../domain/lifecycle.js';
-import { hasAnyRole } from '../roles.js';
+import { hasAnyRole, sectionLevel } from '../roles.js';
 import { countsAsInflow } from '../../../public/js/shared/payment-methods.js';   // DEPOSIT_REVENUE_V1
 import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';   // DEBT_FLOW_V1 — «пациент ещё на койке»
 // BRANCH_MONEY_GUARD_V1 — тот же запрет и та же формулировка, что в billing.js:
@@ -34,6 +34,23 @@ const SHIFT_ROLES = ['admin', 'cashier'];
 // huge-but-finite value (e.g. 1e308) to Infinity, which would poison a shift's
 // stored expected/over_short and any report that SUMs across shifts.
 const MAX_MONEY = 1e12;
+
+// CASHIER_HEAD_V1 (2026-09-28) — «СТАРШИЙ КАССИР» ПРОВЕРЯЕТ И СЕРВЕР.
+//
+// Экран «Старший кассир» (раздел `cashier-head`) показывал все смены, но
+// открыть отчёт чужой смены или закрыть её сервер позволял одному
+// администратору — старший кассир видел смену, с которой ничего не мог
+// сделать. Теперь уровень раздела решает:
+//   «Просмотр»  — X-отчёт любой смены (shift_report с чужим shift_id);
+//   «Изменение» — ещё и пересчитать и закрыть чужую смену (close_cash_shift).
+// Раздел выдаётся надстройкой head_cashier (миграция 218) или в «Ролях».
+// Администратор — всё, как и раньше.
+export function headCashierLevel(db, user) {
+  if (hasAnyRole(user, ['admin'])) return 'edit';
+  const lvl = sectionLevel(db, user, 'cashier-head');
+  if (lvl === 'editor' || lvl === 'admin') return 'edit';
+  return lvl === 'viewer' ? 'view' : 'none';
+}
 
 function requireRole(user, allowed) {
   // MULTI_ROLE_SERVER_V1 — extras count too, not the primary role alone.
@@ -185,7 +202,8 @@ export function closeCashShift(db, args, user) {
       throw new RpcError('Смена уже закрыта.', 400);
     }
     // V3120_FIX (MAJOR) — админ дополнительной ролью тоже админ (hasAnyRole).
-    if (!hasAnyRole(user, ['admin']) && shift.cashier_id !== user.id) {
+    // CASHIER_HEAD_V1 — и старший кассир с «Изменением» своего раздела.
+    if (shift.cashier_id !== user.id && headCashierLevel(db, user) !== 'edit') {
       throw new RpcError('Закрыть можно только свою смену.', 403);
     }
 
@@ -344,7 +362,7 @@ export function shiftReport(db, args, user) {
     if (!shift) {
       throw new RpcError('Смена не найдена.', 400);
     }
-    if (!hasAnyRole(user, ['admin']) && shift.cashier_id !== user.id) {   // V3120_FIX — и дополнительной ролью
+    if (shift.cashier_id !== user.id && headCashierLevel(db, user) === 'none') {   // V3120_FIX — и дополнительной ролью; CASHIER_HEAD_V1 — и старший кассир
       throw new RpcError('Можно смотреть только свою смену.', 403);
     }
   } else {
@@ -428,6 +446,8 @@ export function cashierInvoices(db, args, user) {
            -- DEBT_FLOW_V1 — счёт стационара: окно отмены обязано знать, лежит
            -- ли пациент ещё на койке (тогда отмена его не выписывает).
            i.admission_id AS admission_id,
+           -- CASHIER_HEAD_V1 — «Исправить услуги» добавляет строку в визит счёта.
+           i.visit_id AS visit_id,
            (SELECT a.status FROM admissions a WHERE a.id = i.admission_id) AS admission_status,
            -- RECEIPT_PATIENT_ID_V1 — чек предъявляют в лаборатории как талон:
            -- по нему сверяют, ТОТ ли это пациент (ФИО + дата рождения + пол +

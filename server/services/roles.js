@@ -24,7 +24,13 @@ export const PRIMARY_ROLES = ['admin', 'registrar', 'doctor', 'cashier', 'lab', 
 //
 // routes/users.js проверяет основную роль по PRIMARY_ROLES, а дополнительные —
 // по VALID_ROLES. Разница намеренная, и объявлена она здесь.
-export const EXTRA_ONLY_ROLES = ['head_doctor', 'senior_nurse'];
+//
+// CASHIER_HEAD_V1 (2026-09-28) — «Старший кассир» (head_cashier) устроен так
+// же: надстройка ПОВЕРХ кассира. Данные кассы реестр таблиц раздаёт роли
+// `cashier`, поэтому основной ролью старший кассир быть не может — он кассир,
+// которому вдобавок выданы экран всех смен (раздел «Старший кассир») и
+// право «Исправляет услуги в счёте» (миграция 218).
+export const EXTRA_ONLY_ROLES = ['head_doctor', 'senior_nurse', 'head_cashier'];
 
 // Всё, что человек вправе носить в любом качестве.
 export const VALID_ROLES = [...PRIMARY_ROLES, ...EXTRA_ONLY_ROLES];
