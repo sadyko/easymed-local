@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
-import { startLisListeners, stopLisListeners } from './index.js';
+import { startLisListeners, stopLisListeners, listenerStatus } from './index.js';
 import { VT, FS, DEFAULT_MAX_BYTES } from './mllp.js';
 
 function freePort() {
@@ -85,6 +85,29 @@ test('сообщение больше потолка: прибору AE, в ло
   } finally {
     await stopLisListeners();
     if (prevPort === undefined) delete process.env.LIS_PORT; else process.env.LIS_PORT = prevPort;
+    db.close();
+  }
+});
+
+// LIS_ANALYZER_LIST_V1 — порт, который не поднялся, виден экрану, а не только
+// в журнале сервера: строка «порт N не слушается» у ждущего прибора.
+test('занятый порт виден как «не слушается», а не пропадает молча', async () => {
+  const blocker = net.createServer();
+  await new Promise((r) => blocker.listen(0, '0.0.0.0', r));
+  const busy = blocker.address().port;
+  const prev = process.env.LIS_PORT;
+  process.env.LIS_PORT = String(busy);
+  const db = openDb(':memory:');
+  migrate(db);
+  try {
+    await startLisListeners(db, { log: () => {} });
+    const st = listenerStatus();
+    assert.ok(st.failed.some((f) => f.port === busy && f.error), JSON.stringify(st));
+    assert.ok(!st.listening.includes(busy));
+  } finally {
+    await stopLisListeners();
+    await new Promise((r) => blocker.close(r));
+    if (prev === undefined) delete process.env.LIS_PORT; else process.env.LIS_PORT = prev;
     db.close();
   }
 });

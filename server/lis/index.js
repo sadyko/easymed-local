@@ -19,12 +19,16 @@ import { recordMessage } from './inbox.js';   // LIS_MINDRAY_CODES_V1 — пер
 export const DEFAULT_PORT = 2575;
 
 let running = [];
+// LIS_ANALYZER_LIST_V1 — порты, которые не поднялись (занял кто-то другой):
+// экран «Анализаторы» говорит это у ждущего прибора, а не только журнал.
+let failed = [];
 
 /** IPv4-mapped IPv6 ('::ffff:10.0.0.9') → '10.0.0.9'. */
 const normalizeIp = (peer) => String(peer || '').replace(/^::ffff:/, '');
 
 export async function startLisListeners(db, { log = console.log } = {}) {
   await stopLisListeners();
+  failed = [];
   if (process.env.LIS_ENABLED === '0') {
     log('LIS: выключен через LIS_ENABLED=0');
     return [];
@@ -89,6 +93,7 @@ export async function startLisListeners(db, { log = console.log } = {}) {
       // Приложение НЕ роняем: неподнявшийся слушатель — это неработающий
       // анализатор, а не неработающая клиника. Регистратура, касса и приём
       // пациентов не должны останавливаться из-за занятого порта.
+      failed.push({ port, error: e && e.message ? e.message : String(e) });
       log('LIS: ' + (e && e.message ? e.message : e));
     }
   }
@@ -105,3 +110,12 @@ export async function stopLisListeners() {
 
 /** Сколько слушателей поднято сейчас. Для экрана «Анализаторы» и тестов. */
 export function listenerCount() { return running.length; }
+
+/**
+ * LIS_ANALYZER_LIST_V1 — какие порты слушаются прямо сейчас и какие не
+ * поднялись. Для строки «порт N слушается» у ждущего прибора в окне
+ * «Добавить прибор» — это и есть проверка связи с нашей стороны.
+ */
+export function listenerStatus() {
+  return { listening: running.map((s) => s.port), failed: failed.map((f) => ({ ...f })) };
+}

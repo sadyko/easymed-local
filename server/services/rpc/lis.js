@@ -6,7 +6,7 @@
 // слушателей и разбор лотка.
 import { listProfiles } from '../../lis/profiles/index.js';
 import { pageInt } from './page-args.js';   // V3120_FINAL — числа и поиск из аргументов
-import { startLisListeners } from '../../lis/index.js';
+import { startLisListeners, listenerStatus } from '../../lis/index.js';
 import { ingestMessage } from '../../lis/ingest.js';
 import { resolveMessage } from '../../lis/inbox.js';
 import { parseMessage } from '../../lis/hl7.js';   // LIS_MINDRAY_CODES_V1 — тот же разбор, что у приёма
@@ -212,4 +212,15 @@ export function lisDeviceCodes(db, args, user) {
     }
   }
   return [...seen.values()];
+}
+
+/**
+ * LIS_ANALYZER_LIST_V1 — какие порты слушаются прямо сейчас и какие не
+ * поднялись. Экран показывает это у приборов, которые ждут первого сообщения:
+ * «порт 2575 слушается» — с нашей стороны всё готово, дело в настройке прибора;
+ * «порт 5100 не слушается» — его заняла другая программа.
+ */
+export function lisListeners(db, args, user) {
+  guard(user);
+  return listenerStatus();
 }

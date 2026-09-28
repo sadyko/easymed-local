@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { lisProfiles, lisMessageAttach, lisMessageDismiss, lisDeviceCodes } from './lis.js';
+import { lisProfiles, lisMessageAttach, lisMessageDismiss, lisDeviceCodes, lisListeners } from './lis.js';
 import { isReadOnlyRpc } from '../control/gate.js';   // LIS_MINDRAY_CODES_V1 (ревью R8)
 
 function fresh() {
@@ -184,5 +184,15 @@ test('R9: ручная привязка отвечает статусом нов
   const full = ins.run(raw('OBX|1|NM|WBC^^99MRC||6.1|10*9/L|||||F', 'OBX|2|NM|HGB^^99MRC||142|g/L|||||F')).lastInsertRowid;
   const done = lisMessageAttach(db, { id: full, visit_service_id: 77 }, LAB);
   assert.deepEqual({ ok: done.ok, status: done.status }, { ok: true, status: 'applied' });
+  db.close();
+});
+
+test('LIS_ANALYZER_LIST_V1: какие порты слушаются — только лаборатории, чистое чтение', () => {
+  const db = fresh();
+  assert.throws(() => lisListeners(db, {}, { role: 'reception' }), /прав/);
+  const out = lisListeners(db, {}, LAB);
+  assert.ok(Array.isArray(out.listening), JSON.stringify(out));
+  assert.ok(Array.isArray(out.failed));
+  assert.equal(isReadOnlyRpc('lis_listeners'), true, 'экран читает это и при просроченной лицензии');
   db.close();
 });
