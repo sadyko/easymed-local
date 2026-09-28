@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { lisProfiles, lisMessageAttach, lisMessageDismiss } from './lis.js';
+import { lisProfiles, lisMessageAttach, lisMessageDismiss, lisDeviceCodes } from './lis.js';
 
 function fresh() {
   const db = openDb(':memory:');
@@ -90,5 +90,39 @@ test('подтверждённое сопоставление применяет
   assert.equal(rows.length, 1);
   assert.equal(rows[0].parameter, 'Лейкоциты');
   assert.equal(rows[0].source, 'analyzer');
+  db.close();
+});
+
+// ── LIS_MINDRAY_CODES_V1 — коды, которые прибор действительно присылал ───────
+const RAW = (...obx) => ['MSH|^~\\&|BC-5380|Mindray|||20260928120000||ORU^R01|7|P|2.3.1',
+  'OBR|1||LAB-000098|00001^Automated Count^99MRC', ...obx].join('\r');
+
+test('коды прибора: различные, без картинок, с приборами той же модели и без чужой', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'Гем','mindray-bc-5300'), (2,'Гем 2','mindray-bc-5300'), (3,'Биохимия','mindray-bs-240')").run();
+  const ins = db.prepare('INSERT INTO lab_device_messages (device_id, peer, raw, status, received_at) VALUES (?,?,?,?,?)');
+  ins.run(1, '10.0.0.5', RAW('OBX|1|IS|08001^Take Mode^99MRC||O||||||F', 'OBX|2|NM|6690-2^WBC^LN||9.81|10*9/L|||||F',
+    'OBX|3|ED|15551-4^WBC Histogram. BMP^99MRC||^Image^BMP^Base64^Qk0=||||||F'), 'unmapped', '2026-09-28T10:00:00Z');
+  ins.run(2, '10.0.0.6', RAW('OBX|1|NM|6690-2^WBC^LN||7.1|10*9/L|||||F', 'OBX|2|NM|718-7^HGB^LN||142|g/L|||||F'), 'unmapped', '2026-09-28T11:00:00Z');
+  ins.run(3, '10.0.0.7', RAW('OBX|1|NM|ALT^^99MRC||31|U/L|||||F'), 'unmapped', '2026-09-28T12:00:00Z');
+  ins.run(1, '10.0.0.5', 'мусор, а не HL7', 'rejected', '2026-09-28T12:30:00Z');
+
+  const codes = lisDeviceCodes(db, { device_id: 1 }, LAB);
+  assert.deepEqual(codes.map((c) => c.code + '^' + c.name).sort(), ['08001^Take Mode', '6690-2^WBC', '718-7^HGB'],
+    'та же модель — те же коды; чужая модель и картинки (ED) — нет; мусор пропущен');
+  const wbc = codes.find((c) => c.code === '6690-2');
+  assert.equal(wbc.system, 'LN');
+  assert.equal(wbc.value_type, 'NM');
+  assert.equal(wbc.unit, '10*9/L');
+  assert.equal(wbc.last_at, '2026-09-28T11:00:00Z', 'последний раз — по самому свежему сообщению');
+  db.close();
+});
+
+test('коды прибора — только лаборатории; номер обязателен; прибор обязан существовать', () => {
+  const db = fresh();
+  assert.throws(() => lisDeviceCodes(db, { device_id: 1 }, { role: 'reception' }), /прав/);
+  assert.throws(() => lisDeviceCodes(db, {}, LAB), /номер/);
+  assert.throws(() => lisDeviceCodes(db, { device_id: 'abc' }, LAB), /номер/);
+  assert.throws(() => lisDeviceCodes(db, { device_id: 999 }, LAB), /не найден/);
   db.close();
 });

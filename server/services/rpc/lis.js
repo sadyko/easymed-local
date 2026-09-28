@@ -9,6 +9,7 @@ import { pageInt } from './page-args.js';   // V3120_FINAL — числа и п�
 import { startLisListeners } from '../../lis/index.js';
 import { ingestMessage } from '../../lis/ingest.js';
 import { resolveMessage } from '../../lis/inbox.js';
+import { parseMessage } from '../../lis/hl7.js';   // LIS_MINDRAY_CODES_V1 — тот же разбор, что у приёма
 import { LAB_SECTION_ROLES } from '../../db/schema-registry.js';
 import { hasAnyRole } from '../roles.js';   // ЭФФЕКТИВНЫЕ роли, как в lab-stats.js — не голая строка user.role
 
@@ -139,4 +140,52 @@ export function lisMessageDismiss(db, args, user) {
   if (!msg) throw new LisError('Сообщение не найдено', 404);
   resolveMessage(db, id);
   return { ok: true };
+}
+
+// LIS_MINDRAY_CODES_V1 — сколько последних сообщений читать ради списка кодов.
+// Сотня покрывает любой режим прибора и не тянет месяцы гистограмм.
+const CODES_SCAN_LIMIT = 100;
+
+/**
+ * Коды, которые прибор ДЕЙСТВИТЕЛЬНО присылал, — для «Поле анализатора» в
+ * редакторе панелей (решение владельца 2026-09-28: сначала присланное, потом
+ * типовой список модели, потом свой код).
+ *
+ * Типового списка мало: он собран со скриншотов и догадок, а Mindray пишет
+ * «6690-2^WBC^LN», и кода «6690-2» в нём нет. Здесь — факт из провода.
+ *
+ * Приборы той же модели читаются вместе: приём принимает пробу с любого из
+ * одинаковых приборов (ingest.js), значит, и коды у них одни. Картинки (ED)
+ * не предлагаются — в бланк они не кладутся. Неразбираемое пропускается:
+ * мусор на порту кодов не имеет.
+ */
+export function lisDeviceCodes(db, args, user) {
+  guard(user);
+  const id = Number(args && args.device_id);
+  if (!id) throw new LisError('Нужен номер прибора');
+  const dev = db.prepare('SELECT id, profile FROM lab_devices WHERE id = ?').get(id);
+  if (!dev) throw new LisError('Прибор не найден', 404);
+
+  const ids = dev.profile
+    ? db.prepare('SELECT id FROM lab_devices WHERE profile = ?').all(dev.profile).map((r) => r.id)
+    : [dev.id];
+  const rows = db.prepare(`SELECT raw, received_at FROM lab_device_messages
+                            WHERE device_id IN (${ids.map(() => '?').join(',')})
+                            ORDER BY id DESC LIMIT ?`).all(...ids, CODES_SCAN_LIMIT);
+
+  const seen = new Map();
+  for (const r of rows) {
+    let msg;
+    try { msg = parseMessage(r.raw); } catch { continue; }
+    for (const o of msg.observations) {
+      if (o.valueType.toUpperCase() === 'ED') continue;
+      if (!o.code && !o.name) continue;
+      const k = (o.code + '^' + o.name).toUpperCase();
+      // Строки идут от свежих к старым: первое появление — последний раз.
+      if (!seen.has(k)) {
+        seen.set(k, { code: o.code, name: o.name, system: o.system, value_type: o.valueType, unit: o.unit, last_at: r.received_at });
+      }
+    }
+  }
+  return [...seen.values()];
 }

@@ -504,6 +504,9 @@ export const STRINGS = {
   "У этой модели каналы не заданы — впишите код так, как его присылает прибор": {"en":"This model has no channels defined — type the code exactly as the device sends it","ru":"У этой модели каналы не заданы — впишите код так, как его присылает прибор","uz":"Bu modelda kanallar berilmagan — kodni qurilma yuborgandek kiriting"},
   "— не выбрано —": {"en":"— not selected —","ru":"— не выбрано —","uz":"— tanlanmagan —"},
   "Подтвердить это сопоставление": {"en":"Confirm this mapping","ru":"Подтвердить это сопоставление","uz":"Bu solishtirishni tasdiqlash"},
+  // LIS_MINDRAY_CODES_V1 (2026-09-28) — коды, которые присылал анализатор
+  "Нужен номер прибора": {"en":"The device number is required","ru":"Нужен номер прибора","uz":"Qurilma raqami kerak"},
+  "Прибор не найден": {"en":"Device not found","ru":"Прибор не найден","uz":"Qurilma topilmadi"},
   "Подтвердить сопоставление": {"en":"Confirm mapping","ru":"Подтвердить сопоставление","uz":"Solishtirishni tasdiqlash"},
   "Предложено сопоставлений: {n}. Подтвердите каждое — панель не сохранится, пока остались непроверенные.": {"en":"Mappings suggested: {n}. Confirm each one — the panel will not save while any remain unchecked.","ru":"Предложено сопоставлений: {n}. Подтвердите каждое — панель не сохранится, пока остались непроверенные.","uz":"Taklif etilgan solishtirishlar: {n}. Har birini tasdiqlang — tekshirilmagani qolsa, panel saqlanmaydi."},
   "Подтвердите поля анализатора: {list}": {"en":"Confirm the analyzer fields: {list}","ru":"Подтвердите поля анализатора: {list}","uz":"Analizator maydonlarini tasdiqlang: {list}"},

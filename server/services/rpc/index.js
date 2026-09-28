@@ -67,7 +67,7 @@ import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRe
          telephonyProvidersList, telephonyProviderSave, telephonyProviderDelete, telephonyProviderTest,
          telephonyDial, crmLeadCalls, telephonyOperatorStats, telephonyCallRecording,
          telephonyForgetBinotel } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1 / TELEPHONY_PROVIDERS_V1
-import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss } from './lis.js';   // LIS_INGEST_V1
+import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss, lisDeviceCodes } from './lis.js';   // LIS_INGEST_V1, LIS_MINDRAY_CODES_V1
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
 import { customRoleCreate } from './custom-roles.js';   // ADMIN_ROWS_GRANTABLE_V1 — своя роль одним действием
 import { crmLeadsByPhone, crmSearch, crmVisitLinks } from './crm-leads.js';   // CRM_DEDUP_SEARCH_TASKS_V1
@@ -561,6 +561,9 @@ export const RPC = {
   lis_profiles:             (db, args, user) => lisProfiles(db, args, user),
   lis_restart:              (db, args, user) => lisRestart(db, args, user),
   lis_recent:               (db, args, user) => lisRecent(db, args, user),
+  // LIS_MINDRAY_CODES_V1 — коды, которые прибор действительно присылал: из них
+  // «Поле анализатора» в редакторе панелей. Чистое чтение (gate.js).
+  lis_device_codes:         (db, args, user) => lisDeviceCodes(db, args, user),
   lis_message_attach:       (db, args, user) => lisMessageAttach(db, args, user),
   lis_message_dismiss:      (db, args, user) => lisMessageDismiss(db, args, user),
 
