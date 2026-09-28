@@ -562,15 +562,22 @@ export const REGISTRY = {
                embed:{ rooms: { table:'rooms', fk:'room_id', columns:['id','name'] } } },
   products: {
     read:  { roles: ALL_STAFF, columns: ['id','name','code','unit','category','sale_price','on_hand','reorder_level','active','created_at','updated_at',
-             'base_unit','purchase_unit','pack_factor','consumption_unit','consumption_factor','is_drug','avg_cost','track_batches','procurement_category','supplier_id'],
+             'base_unit','purchase_unit','pack_factor','consumption_unit','consumption_factor','is_drug','avg_cost','track_batches','procurement_category','supplier_id',
+             'vat_rate'],   // SUPPLIERS_VAT_V1 (мигр. 222) — НДС в цене продажи товара
              // OWN_SHELF_ONLY_V1 — остаток СКЛАДА видят те, кто видит склад
              // (администратор, кладовщик, «Закупки»: pay-visibility.js
              // seesWarehouseStock). Врачу и медсестре он приходит пустым: они
              // выдают пациенту только со своих полок (владелец 28.09).
              restricted: { lift: 'warehouse_stock', columns: ['on_hand'] } },
-    write: { insert: { roles: ['admin','inventory'], columns: ['name','code','unit','category','sale_price','reorder_level','active',
+    // SUPPLIERS_VAT_V1 — ЦЕНУ ПРОДАЖИ И НДС ПИШЕТ ТОЛЬКО КАРТОЧКА ТОВАРА
+    // (rpc/catalog-goods.js product_save): там проверка ставки и право
+    // «Закупки: Изменение», которого реестр — таблица восьми ролей — выразить не
+    // может. sale_price отсюда убрана (её писала только карточка), vat_rate сюда
+    // и не добавлялась. Остальные колонки открыты, как были: выбор единицы в
+    // окне списания (item-picker-modal.js) пишет unit напрямую.
+    write: { insert: { roles: ['admin','inventory'], columns: ['name','code','unit','category','reorder_level','active',
                 'base_unit','purchase_unit','pack_factor','consumption_unit','consumption_factor','is_drug','track_batches','procurement_category','supplier_id'] },
-             update: { roles: ['admin','inventory'], columns: ['name','code','unit','category','sale_price','reorder_level','active',
+             update: { roles: ['admin','inventory'], columns: ['name','code','unit','category','reorder_level','active',
                 'base_unit','purchase_unit','pack_factor','consumption_unit','consumption_factor','is_drug','track_batches','procurement_category','supplier_id'] },
              delete: { roles: [] } },
     filters: ['id','active','category','code','name','procurement_category','is_drug'],
@@ -594,7 +601,8 @@ export const REGISTRY = {
     // Настроенная клиникой роль «Закупки» сюда не попадает по имени роли — и не
     // должна: её уровень доступа умеет читать только RPC (grants), а реестр
     // знает лишь восемь основных ролей.
-    read:  { roles: ['admin','inventory'], columns: ['id','product_id','kind','qty','unit_cost','reference_type','reference_id','note','created_by','created_at','supplier_id','batch_no','expiry_date','branch_id','holder_type','holder_id'] },   // RECEIVE_EASYMED_V1 (mig 037); branch_id — в каком здании движение
+    read:  { roles: ['admin','inventory'], columns: ['id','product_id','kind','qty','unit_cost','reference_type','reference_id','note','created_by','created_at','supplier_id','batch_no','expiry_date','branch_id','holder_type','holder_id',
+             'vat_rate','vat_amount'] },   // RECEIVE_EASYMED_V1 (mig 037); branch_id — в каком здании движение; SUPPLIERS_VAT_V1 (мигр. 222) — НДС прихода
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
     // Карточка товара и «Движения» — это ЖУРНАЛ ЗА ПЕРИОД: отбор по дате, виду
     // документа и ненулевому количеству/цене считает SQL, иначе выборка
@@ -1521,18 +1529,23 @@ export const REGISTRY = {
     embed:   {},
   },
   item_suppliers: {
-    read:  { roles: ALL_STAFF, columns: ['id','product_id','supplier_id','last_price','pack_factor','purchase_unit','created_at'] },
-    write: { insert: { roles: ['admin','inventory'], columns: ['product_id','supplier_id','last_price','pack_factor','purchase_unit'] },
-             // V3120_FINAL — пачкой — по ТОВАРУ, а товар здесь — product_id: колонки
-             // item_id в офлайн-таблице нет (миграция 028), и прежнее bulkBy
-             // называло несуществующую колонку. item_id шлёт только облачный
-             // procurement.js, а #procurement ведёт на #inventory; живой экран
-             // (inventory-products.js) правит и удаляет связи по id.
-             update: { roles: ['admin','inventory'], columns: ['last_price','pack_factor','purchase_unit'], bulkBy: ['product_id'] },
-             delete: { roles: ['admin','inventory'], bulkBy: ['product_id'] } },
+    // SUPPLIERS_VAT_V1 (мигр. 222) — vat_rate: НДС поставщика на этот товар;
+    // last_price — цена закупки БЕЗ НДС за единицу закупки.
+    read:  { roles: ALL_STAFF, columns: ['id','product_id','supplier_id','last_price','pack_factor','purchase_unit','created_at','vat_rate'] },
+    // SUPPLIERS_VAT_V1 — СВЯЗИ ПИШЕТ ТОЛЬКО СЕРВЕР. Карточка товара и карточка
+    // поставщика сохраняют их одной транзакцией (rpc/catalog-goods.js
+    // product_save / supplier_save), приход и импорт помнят цену поставщика
+    // (rememberSupplierPrice). Там — проверка ставки НДС, дублей и право
+    // «Закупки: Изменение». Прямая запись отсюда обходила бы все три, а живых
+    // писателей у неё больше нет (облачные procurement.js и
+    // section-import-export.js пишут item_id/company_id, которых здесь нет).
+    write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
     filters: ['id','product_id','supplier_id'],
-    embed:   { products:  { table:'products',  fk:'product_id',  columns:['id','name','base_unit'] },
-               suppliers: { table:'suppliers', fk:'supplier_id', columns:['id','name'] } },
+    // Карточка поставщика показывает его товары со всем, что о них надо знать
+    // на строке: тип, единица, цена продажи, НДС, активен ли. Те же колонки
+    // products тем же ролям (ALL_STAFF) и так отдаёт напрямую.
+    embed:   { products:  { table:'products',  fk:'product_id',  columns:['id','name','base_unit','procurement_category','purchase_unit','pack_factor','sale_price','vat_rate','active'] },
+               suppliers: { table:'suppliers', fk:'supplier_id', columns:['id','name','active'] } },
   },
   purchase_orders: {
     read:  { roles: ALL_STAFF, columns: ['id','po_number','supplier_id','status','order_date','expected_date','total','notes','created_by','created_at','received_at'] },

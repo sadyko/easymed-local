@@ -1,7 +1,8 @@
 // V3120_FINAL — финальная проверка 3.12.0, мелочи вызовов /api/db и RPC:
 //   мусор в limit/offset/q у чтений — 400 по-русски, не 500;
 //   пустой документ визита не сохраняется (stamps created_by — не содержимое);
-//   связи поставщиков пачкой — по product_id (item_id такой колонки нет).
+//   связи поставщиков пачкой — по product_id (item_id такой колонки нет);
+//   SUPPLIERS_VAT_V1 — с 28.09 связи пишет только сервер (product_save).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -100,15 +101,30 @@ test('visit_documents: пустая вставка — 400 по-русски, д
   assert.equal(ok.status, 200, JSON.stringify(ok.json));
 });
 
-test('item_suppliers: связи товара пачкой — по product_id (item_id такой колонки нет)', async (t) => {
+// SUPPLIERS_VAT_V1 (2026-09-28) — связи «товар ↔ поставщик» пишет только
+// сервер (product_save / supplier_save): там проверка НДС, дублей и право
+// «Закупки: Изменение». Прямая запись через /api/db — отказ; прежняя проверка
+// «пачкой по product_id» (V3120_FINAL) держится тем, что писать пачкой больше
+// нечего, а карточка сохраняет связи одним вызовом.
+test('item_suppliers: связи пишет только сервер — /api/db отказывает, product_save сохраняет', async (t) => {
   const ctx = await start(t);
   const prod = Number(ctx.db.prepare("INSERT INTO products (name) VALUES ('Шприц 5 мл')").run().lastInsertRowid);
   const sup = Number(ctx.db.prepare("INSERT INTO suppliers (name) VALUES ('Aventus')").run().lastInsertRowid);
   ctx.db.prepare('INSERT INTO item_suppliers (product_id, supplier_id, last_price) VALUES (?,?,100)').run(prod, sup);
   const upd = await q(ctx, 'inventory', { table: 'item_suppliers', op: 'update', values: { last_price: 120 }, filters: [{ col: 'product_id', op: 'eq', val: prod }, { col: 'supplier_id', op: 'eq', val: sup }] });
-  assert.equal(upd.status, 200, JSON.stringify(upd.json));
-  assert.equal(ctx.db.prepare('SELECT last_price FROM item_suppliers WHERE product_id = ?').get(prod).last_price, 120);
+  assert.equal(upd.status, 403, JSON.stringify(upd.json));
   const del = await q(ctx, 'inventory', { table: 'item_suppliers', op: 'delete', filters: [{ col: 'product_id', op: 'eq', val: prod }] });
-  assert.equal(del.status, 200, JSON.stringify(del.json));
-  assert.equal(ctx.db.prepare('SELECT COUNT(*) n FROM item_suppliers').get().n, 0);
+  assert.equal(del.status, 403, JSON.stringify(del.json));
+  const ins = await q(ctx, 'admin', { table: 'item_suppliers', op: 'insert', values: { product_id: prod, supplier_id: sup } });
+  assert.equal(ins.status, 403, JSON.stringify(ins.json));
+  assert.equal(ctx.db.prepare('SELECT last_price FROM item_suppliers WHERE product_id = ?').get(prod).last_price, 100, 'прямая запись ничего не изменила');
+  const saved = await rpc(ctx, 'inventory', 'product_save', { id: prod, name: 'Шприц 5 мл', procurement_category: 'consumables', vat_rate: 12,
+    suppliers: [{ supplier_id: sup, last_price: 120, vat_rate: 12 }] });
+  assert.equal(saved.status, 200, JSON.stringify(saved.json));
+  const link = ctx.db.prepare('SELECT last_price, vat_rate FROM item_suppliers WHERE product_id = ?').get(prod);
+  assert.deepEqual({ ...link }, { last_price: 120, vat_rate: 12 });
+  // Врачу каталог не открыт — отказ словами матрицы прав.
+  const doc = await rpc(ctx, 'doctor', 'product_save', { id: prod, name: 'Шприц', procurement_category: 'consumables', vat_rate: 12, suppliers: [] });
+  assert.equal(doc.status, 403, JSON.stringify(doc.json));
+  assert.equal(ctx.db.prepare('SELECT COUNT(*) n FROM item_suppliers').get().n, 1);
 });

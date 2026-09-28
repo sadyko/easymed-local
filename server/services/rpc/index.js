@@ -6,6 +6,7 @@ import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDe
 import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDispensedAdmissionItem } from './inventory.js';
 import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOARD_TREND_V1
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel, createRequisition } from './procurement.js';
+import { productSave, supplierSave } from './catalog-goods.js';   // SUPPLIERS_VAT_V1 — карточки товара и поставщика со связями
 import { departmentList, departmentCard, departmentForm, departmentHeadSet, departmentMemberSet, departmentPlaceSet, departmentStaffOptions, departmentPlaceOptions } from './departments.js';   // DEPARTMENTS_V1
 import { stockMovementsList } from './stock-log.js';   // STOCK_LOG_V1
 import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCreate, stockRequestsMine } from './stock-requests.js';   // STOCK_REQUEST_V1
@@ -187,6 +188,10 @@ export const RPC = {
   outpatients_today:             (db, args, user) => outpatientsToday(db, args, user),
   visit_items:                   (db, args, user) => visitItems(db, args, user),
   import_products_excel:         (db, args, user) => importProductsExcel(db, args, user),           // PROCUREMENT_REDESIGN_V1 — Импорт из Excel
+  // SUPPLIERS_VAT_V1 — товар с поставщиками, поставщик с товарами: одна
+  // транзакция, тип и НДС проверяет сервер, право «Закупки: Изменение».
+  product_save:                  (db, args, user) => productSave(db, args, user),
+  supplier_save:                 (db, args, user) => supplierSave(db, args, user),
   reports_overview:         (db, args, user) => reportsOverview(db, args, user),
   run_report:               (db, args, user) => runReport(db, args, user),
   doctor_tier_positions:    (db, args, user) => doctorTierPositions(db, args, user),   // DOCTOR_TIER_V1 — позиции строк для кабинета врача

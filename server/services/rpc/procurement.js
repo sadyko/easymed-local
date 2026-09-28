@@ -23,6 +23,12 @@ import { insertRequisition, parseRequisitionLines, REQUISITION_ROLES } from './s
 // STOCK_QTY_V1 (V3120_FIX) — количества с шестью знаками, пыль округления —
 // ноль (domain/stock-qty.js). round2 ниже остаётся только у денег.
 import { roundQty, factorOf, toBase, settleQty, coversQty } from '../domain/stock-qty.js';
+// SUPPLIERS_VAT_V1 — тип товара, ставка НДС и срок годности импорта: один
+// список на сервер и экран; приход помнит цену и НДС поставщика.
+import {
+  GOODS_CATEGORY_LIST_RU, parseGoodsCategory, parseVatRate, vatOnNet, parseExpiryDmy,
+} from '../../../public/js/shared/goods-catalog.js';
+import { requireCatalogEdit, rememberSupplierPrice } from './catalog-goods.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -92,8 +98,35 @@ function readExpiry(l) {
   return s;
 }
 
+// SUPPLIERS_VAT_V1 — ставка НДС строки прихода. undefined — ставку не
+// прислали вовсе (старые вызовы): НДС «не указан», цена — себестоимость, как
+// прежде. null — «без НДС». Всё, кроме 12 / 0 / null, — отказ.
+function readVat(l) {
+  if (!l || l.vat_rate === undefined) return undefined;
+  const p = parseVatRate(l.vat_rate);
+  if (p.error) throw new RpcError('Ставка НДС — 12 %, 0 % или «без НДС».', 400);
+  return p.empty ? undefined : p.rate;
+}
+
+// SUPPLIERS_VAT_V1 — ДЕНЬГИ СТРОКИ ПРИХОДА, ОДНО ПРАВИЛО НА ПРИХОД И ИМПОРТ.
+// unitCost — цена за единицу строки БЕЗ НДС (как в счёте-фактуре поставщика),
+// vat — ставка (undefined — не указана). НДС строки = сумма без НДС × ставка;
+// себестоимость на складе — С НДС: столько клиника заплатила, и по ней идёт
+// средняя цена (WAC). Без ставки (undefined, null, 0) цена и есть себестоимость.
+function receiptMoney(unitCost, qty, vat) {
+  const rate = Number(vat) || 0;
+  return {
+    grossUnit: rate > 0 ? unitCost * (100 + rate) / 100 : unitCost,
+    vatRate: vat === undefined ? null : vat,
+    vatAmount: vat === undefined ? null : vatOnNet(unitCost * qty, vat),
+  };
+}
+
 export function receiveStockLines(db, args, user) {
-  requireRole(user, PROCUREMENT_ROLES);
+  // SUPPLIERS_VAT_V1 — приход пишет цены и НДС: право «Закупки: Изменение»
+  // (строка справочника прав так и описана: «оформляет приход»). Пока роль его
+  // не настраивали — прежний список: администратор и склад.
+  requireCatalogEdit(db, user, 'принимать товар на склад');
 
   const rawLines = args && args.lines;
   if (!Array.isArray(rawLines) || rawLines.length === 0) {
@@ -108,7 +141,7 @@ export function receiveStockLines(db, args, user) {
       if (!isPositiveInt(l.supplier_id)) throw new RpcError('Поставщик выбран неверно.', 400);
       supplierId = l.supplier_id;
     }
-    return { ...base, supplierId, batchNo: readBatch(l), expiry: readExpiry(l) };
+    return { ...base, supplierId, batchNo: readBatch(l), expiry: readExpiry(l), vat: readVat(l) };
   });
   const note = (args && args.note) || '';
 
@@ -120,12 +153,12 @@ export function receiveStockLines(db, args, user) {
       WHERE id = ?
     `);
     const insertMovement = db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, note, created_by, branch_id, supplier_id, batch_no, expiry_date)
-      VALUES (?, 'receive', ?, ?, 'manual', ?, ?, 1, ?, ?, ?)
+      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, note, created_by, branch_id, supplier_id, batch_no, expiry_date, vat_rate, vat_amount)
+      VALUES (?, 'receive', ?, ?, 'manual', ?, ?, 1, ?, ?, ?, ?, ?)
     `);
 
     const received = [];
-    for (const { productId, qty, unit, unitCost, supplierId, batchNo, expiry } of lines) {
+    for (const { productId, qty, unit, unitCost, supplierId, batchNo, expiry, vat } of lines) {
       const product = getProduct.get(productId);
       if (!product) {
         throw new RpcError('Товар не найден.', 400);
@@ -137,7 +170,8 @@ export function receiveStockLines(db, args, user) {
       const packFactor = product.pack_factor > 0 ? product.pack_factor : 1;
       const factor = unit === 'purchase' ? packFactor : 1;
       const baseQty = roundQty(qty * factor);
-      const costPerBase = round2(factor > 0 ? unitCost / factor : unitCost);
+      const m = receiptMoney(unitCost, qty, vat);
+      const costPerBase = round2(factor > 0 ? m.grossUnit / factor : m.grossUnit);
 
       const oldOnHand = product.on_hand;
       const newOnHand = settleQty(oldOnHand + baseQty, factorOf(product));
@@ -149,10 +183,20 @@ export function receiveStockLines(db, args, user) {
         : product.avg_cost;
 
       updateProduct.run(newOnHand, newAvg, productId);
-      insertMovement.run(productId, baseQty, costPerBase, note, user.id, supplierId, batchNo, expiry);
+      insertMovement.run(productId, baseQty, costPerBase, note, user.id, supplierId, batchNo, expiry, m.vatRate, m.vatAmount);
+      // SUPPLIERS_VAT_V1 — связь «товар ↔ поставщик»: заводится, если её не
+      // было, и помнит последнюю цену (без НДС, за единицу закупки) и ставку.
+      if (supplierId) {
+        rememberSupplierPrice(db, {
+          productId, supplierId, vat,
+          lastPrice: round2(unit === 'purchase' ? unitCost : unitCost * packFactor),
+          packFactor: product.pack_factor, purchaseUnit: product.purchase_unit,
+        });
+      }
 
       const fresh = getProduct.get(productId);
-      received.push({ product_id: productId, base_qty: baseQty, on_hand: fresh.on_hand, avg_cost: fresh.avg_cost });
+      received.push({ product_id: productId, base_qty: baseQty, on_hand: fresh.on_hand, avg_cost: fresh.avg_cost,
+        vat_rate: m.vatRate, vat_amount: m.vatAmount });
     }
 
     return { received };
@@ -639,8 +683,28 @@ export function createRequisition(db, args, user) {
 // costing (same math as receive_stock_lines). Unknown supplier names are
 // created. Any invalid row aborts the whole batch, naming its Excel row
 // (data row i -> Excel row i+2; row 1 is the template header).
+//
+// SUPPLIERS_VAT_V1 (2026-09-28) — владелец: «in the importing of the Excel we
+// need to add an expiration date with a hardcoded format, so the user won't
+// make mistakes», и типы товаров «жёстко». Новые колонки шаблона:
+//   • «Категория» — одно из восьми названий (или ключ, goods-catalog.js). У
+//     НОВОГО товара обязателен: прежде импорт молча заводил всё
+//     «Расходниками», и лекарство уходило не в свою категорию;
+//   • «НДС» — 12%, 0% или «без НДС» (ставка товара; ею же считается НДС
+//     прихода этой строки). Пусто — ставка не указана: новый товар «без НДС»,
+//     у существующего не меняется, приход — без НДС, как прежде;
+//   • «Цена закупки без НДС» (прежнее «Себестоимость» — та же колонка): с
+//     указанным НДС себестоимость на складе = цена × (1 + НДС), как у прихода;
+//   • «Цена продажи»;
+//   • «Партия» и «Срок годности (ДД.ММ.ГГГГ)» — у строки с количеством. Срок —
+//     ОДИН формат: настоящую дату-ячейку Excel экран превращает в ДД.ММ.ГГГГ сам,
+//     текст должен быть ровно ДД.ММ.ГГГГ. Другой формат, несуществующая дата и
+//     прошедшая — отказ с номером строки (решение владельца: прошедшая —
+//     отказ, а не предупреждение).
+// Сообщения — шаблонами (rpcT): экран переводит их на язык интерфейса.
 // ---------------------------------------------------------------------------
 const MAX_IMPORT_ROWS = 2000;
+const MAX_IMPORT_MONEY = 1e12;
 
 // Strip control characters before anything is stored — these strings are shown
 // in the Журнал and exported to Excel.
@@ -654,7 +718,10 @@ function importStr(v) {
   return (v === undefined || v === null) ? '' : String(v).trim();
 }
 
-function importNum(v, label, rowNo) {
+// SUPPLIERS_VAT_V1 — у денег свой потолок: цена закупки и продажи
+// оборудования легко больше миллиона сумов, а потолок количества (MAX_QTY)
+// отказывал таким строкам «должно быть числом от 0 до 1000000».
+function importNum(v, label, rowNo, max = MAX_QTY) {
   if (v === undefined || v === null || v === '') return null;
   let n;
   if (typeof v === 'number') {
@@ -667,34 +734,40 @@ function importNum(v, label, rowNo) {
   } else {
     n = NaN;
   }
-  if (!Number.isFinite(n) || n < 0 || n > MAX_QTY) {
-    throw new RpcError(`Строка ${rowNo}: «${label}» должно быть числом от 0 до ${MAX_QTY}.`, 400);
+  if (!Number.isFinite(n) || n < 0 || n > max) {
+    throw rpcT(RpcError, 'Строка {row}: «{label}» должно быть числом от 0 до {max}.', { row: rowNo, label, max }, 400);
   }
   return n;
 }
 
+// Значение ячейки в сообщении — коротко: длинный мусор из чужой колонки не
+// должен растягивать всплывающее окно на экран.
+const cellText = (v) => String(v).trim().slice(0, 40);
+
 export function importProductsExcel(db, args, user) {
-  requireRole(user, PROCUREMENT_ROLES);
+  requireCatalogEdit(db, user, 'импортировать товары из Excel');
 
   const rows = args && args.rows;
   if (!Array.isArray(rows) || rows.length === 0) {
     throw new RpcError('В файле нет строк для импорта.', 400);
   }
   if (rows.length > MAX_IMPORT_ROWS) {
-    throw new RpcError(`Не больше ${MAX_IMPORT_ROWS} строк за один импорт.`, 400);
+    throw rpcT(RpcError, 'Не больше {max} строк за один импорт.', { max: MAX_IMPORT_ROWS }, 400);
   }
+  // Сегодня — местный день сервера: срок годности раньше него — прошедший.
+  const todayIso = db.prepare("SELECT date('now','localtime') AS d").get().d;
 
   const run = db.transaction(() => {
     const findSupplier = db.prepare('SELECT id FROM suppliers WHERE name = ?');
     const insertSupplier = db.prepare('INSERT INTO suppliers (name) VALUES (?)');
     const findProduct = db.prepare('SELECT * FROM products WHERE name = ?');
     const insertProduct = db.prepare(`
-      INSERT INTO products (name, unit, base_unit, reorder_level, supplier_id, procurement_category, active)
-      VALUES (?, ?, ?, ?, ?, 'consumables', 1)
+      INSERT INTO products (name, unit, base_unit, reorder_level, supplier_id, procurement_category, vat_rate, sale_price, active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
     `);
     const updateCatalog = db.prepare(`
       UPDATE products
-      SET base_unit = ?, unit = ?, reorder_level = ?, supplier_id = ?,
+      SET base_unit = ?, unit = ?, reorder_level = ?, supplier_id = ?, procurement_category = ?, vat_rate = ?, sale_price = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
       WHERE id = ?
     `);
@@ -704,33 +777,67 @@ export function importProductsExcel(db, args, user) {
       WHERE id = ?
     `);
     const insertMovement = db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, note, created_by, branch_id)
-      VALUES (?, 'receive', ?, ?, 'import', 'Импорт из Excel', ?, 1)
+      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, note, created_by, branch_id, supplier_id, batch_no, expiry_date, vat_rate, vat_amount)
+      VALUES (?, 'receive', ?, ?, 'import', 'Импорт из Excel', ?, 1, ?, ?, ?, ?, ?)
     `);
 
     let created = 0, updated = 0, received = 0;
     rows.forEach((row, i) => {
       const rowNo = i + 2;
       if (!row || typeof row !== 'object') {
-        throw new RpcError(`Строка ${rowNo}: пустая строка.`, 400);
+        throw rpcT(RpcError, 'Строка {row}: пустая строка.', { row: rowNo }, 400);
       }
       const name = clean(importStr(row.name));
       if (!name) {
-        throw new RpcError(`Строка ${rowNo}: «Название» обязательно.`, 400);
+        throw rpcT(RpcError, 'Строка {row}: «Название» обязательно.', { row: rowNo }, 400);
       }
       if (name.length > MAX_NAME_LEN) {
-        throw new RpcError(`Строка ${rowNo}: «Название» длиннее ${MAX_NAME_LEN} символов.`, 400);
+        throw rpcT(RpcError, 'Строка {row}: «Название» длиннее {max} символов.', { row: rowNo, max: MAX_NAME_LEN }, 400);
       }
       const unit = clean(importStr(row.unit)).slice(0, 40);
       const supplierName = clean(importStr(row.supplier)).slice(0, MAX_NAME_LEN);
       const qty = importNum(row.qty, 'Кол-во', rowNo);
-      const unitCost = importNum(row.unit_cost, 'Себестоимость', rowNo);
+      const unitCost = importNum(row.unit_cost, 'Цена закупки без НДС', rowNo, MAX_IMPORT_MONEY);
       const reorder = importNum(row.reorder_level, 'Мин. остаток', rowNo);
+      const salePrice = importNum(row.sale_price, 'Цена продажи', rowNo, MAX_IMPORT_MONEY);
+
+      // Категория — только из восьми.
+      const categoryText = importStr(row.category);
+      let category = null;
+      if (categoryText) {
+        category = parseGoodsCategory(categoryText);
+        if (!category) {
+          throw rpcT(RpcError, 'Строка {row}: категория «{value}» — такой категории нет. Допустимо: {list}.',
+            { row: rowNo, value: cellText(categoryText), list: GOODS_CATEGORY_LIST_RU }, 400);
+        }
+      }
+      // НДС — 12%, 0% или «без НДС».
+      const vatCell = parseVatRate(typeof row.vat_rate === 'string' ? row.vat_rate.trim() : row.vat_rate);
+      if (vatCell.error) {
+        throw rpcT(RpcError, 'Строка {row}: НДС «{value}» — допустимо 12%, 0% или «без НДС».', { row: rowNo, value: cellText(row.vat_rate) }, 400);
+      }
+      // Срок годности — ровно ДД.ММ.ГГГГ, настоящая дата, не прошедшая.
+      // Число здесь — не дата: дату-ячейку экран уже превратил в ДД.ММ.ГГГГ.
+      const exp = parseExpiryDmy(row.expiry_date, todayIso);
+      if (exp.error === 'format') {
+        throw rpcT(RpcError, 'Строка {row}: срок годности «{value}» — неверный формат. Нужен ДД.ММ.ГГГГ, например 31.12.2027.',
+          { row: rowNo, value: cellText(row.expiry_date) }, 400);
+      }
+      if (exp.error === 'nodate') {
+        throw rpcT(RpcError, 'Строка {row}: срок годности {value} — такой даты нет; формат ДД.ММ.ГГГГ.', { row: rowNo, value: cellText(row.expiry_date) }, 400);
+      }
+      if (exp.error === 'past') {
+        throw rpcT(RpcError, 'Строка {row}: срок годности {value} уже прошёл — просроченный товар не принимается.', { row: rowNo, value: cellText(row.expiry_date) }, 400);
+      }
+      const batchNo = clean(importStr(row.batch_no)).slice(0, 80) || null;
+      if ((exp.iso || batchNo) && !(qty !== null && qty > 0)) {
+        throw rpcT(RpcError, 'Строка {row}: срок годности и партия относятся к приходу — укажите «Кол-во».', { row: rowNo }, 400);
+      }
 
       let supplierId = null;
       if (supplierName) {
         const found = findSupplier.get(supplierName);
-        supplierId = found ? found.id : insertSupplier.run(supplierName).lastInsertRowid;
+        supplierId = found ? found.id : Number(insertSupplier.run(supplierName).lastInsertRowid);
       }
 
       // An existing INACTIVE product matched by name is still updated and can
@@ -742,29 +849,54 @@ export function importProductsExcel(db, args, user) {
           unit || existing.unit,
           reorder !== null ? reorder : existing.reorder_level,
           supplierId !== null ? supplierId : existing.supplier_id,
+          category || existing.procurement_category,
+          vatCell.empty ? existing.vat_rate : vatCell.rate,
+          salePrice !== null ? salePrice : existing.sale_price,
           existing.id,
         );
         updated++;
       } else {
+        if (!category) {
+          throw rpcT(RpcError, 'Строка {row}: у нового товара «{name}» укажите «Категорию» — одну из: {list}.',
+            { row: rowNo, name: name.slice(0, 60), list: GOODS_CATEGORY_LIST_RU }, 400);
+        }
         const u = unit || 'pcs';
-        insertProduct.run(name, u, u, reorder !== null ? reorder : 0, supplierId);
+        insertProduct.run(name, u, u, reorder !== null ? reorder : 0, supplierId, category,
+          vatCell.empty ? null : vatCell.rate, salePrice !== null ? salePrice : 0);
         created++;
       }
 
       if (qty !== null && qty > 0) {
         const product = findProduct.get(name);   // fresh row after the catalog write
         const cost = unitCost !== null ? unitCost : 0;
+        // НДС прихода — ставка строки (если она указана); без неё — «не указан».
+        const vat = vatCell.empty ? undefined : vatCell.rate;
+        const m = receiptMoney(cost, qty, vat);
+        const costPerBase = round2(m.grossUnit);
         const newOnHand = roundQty(product.on_hand + qty);
 
         if (!Number.isFinite(newOnHand)) {
-          throw new RpcError(`Строка ${rowNo}: остаток вне диапазона.`, 400);
+          throw rpcT(RpcError, 'Строка {row}: остаток вне диапазона.', { row: rowNo }, 400);
         }
         const newAvg = newOnHand > 0
-          ? round2((product.avg_cost * product.on_hand + qty * cost) / newOnHand)
+          ? round2((product.avg_cost * product.on_hand + qty * costPerBase) / newOnHand)
           : product.avg_cost;
         updateStock.run(newOnHand, newAvg, product.id);
-        insertMovement.run(product.id, qty, cost, user.id);
+        insertMovement.run(product.id, qty, costPerBase, user.id, supplierId, batchNo, exp.iso || null, m.vatRate, m.vatAmount);
         received++;
+      }
+      // SUPPLIERS_VAT_V1 — поставщик строки связан с товаром (многие ко
+      // многим); приход с ценой обновляет его цену и НДС, как «Принять товар».
+      if (supplierId) {
+        const product = findProduct.get(name);
+        if (qty !== null && qty > 0 && unitCost !== null) {
+          const pack = product.pack_factor > 0 ? product.pack_factor : 1;
+          rememberSupplierPrice(db, { productId: product.id, supplierId, vat: vatCell.empty ? undefined : vatCell.rate,
+            lastPrice: round2(unitCost * pack), packFactor: product.pack_factor, purchaseUnit: product.purchase_unit });
+        } else {
+          db.prepare(`INSERT OR IGNORE INTO item_suppliers (product_id, supplier_id, pack_factor, purchase_unit)
+                      VALUES (?, ?, ?, ?)`).run(product.id, supplierId, product.pack_factor, product.purchase_unit);
+        }
       }
     });
 

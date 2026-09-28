@@ -57,7 +57,9 @@ test('receive rejects empty lines, bad qty, and non-inventory role', () => {
   assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: 0, unit: 'base' }] }, inv), /Количество/i);
   assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: -5, unit: 'base' }] }, inv), /Количество/i);
   assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: 2_000_000, unit: 'base' }] }, inv), /Количество/i);
-  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: 1, unit: 'base' }] }, doc), /(role|allow|роль)/i);
+  // SUPPLIERS_VAT_V1 — приход пишет цены и НДС: ворота «Закупки: Изменение»,
+  // отказ словами матрицы прав (как у выдачи, GRANTS_V1).
+  assert.throws(() => receiveStockLines(db, { lines: [{ product_id: prod, qty: 1, unit: 'base' }] }, doc), (e) => e.status === 403 && /недоступно вашей роли/.test(e.message));
   // nothing persisted from the failed attempts
   assert.equal(db.prepare('SELECT on_hand FROM products WHERE id=?').get(prod).on_hand, 0);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM stock_movements').get().n, 0);
@@ -146,9 +148,10 @@ test('issue_stock_lines rejects overdraw atomically, missing recipient, bad role
 
 test('import_products_excel creates, updates, receives with WAC, auto-creates suppliers', () => {
   const { db } = seed();
+  // SUPPLIERS_VAT_V1 — у нового товара тип обязателен (прежде молча «Расходники»).
   const r1 = importProductsExcel(db, { rows: [
-    { name: 'Шприц 5мл', unit: 'шт', qty: 100, unit_cost: 500, reorder_level: 20, supplier: 'ООО Медснаб' },
-    { name: 'Бинт 7м', unit: 'шт' },   // catalog-only row: no qty -> no movement
+    { name: 'Шприц 5мл', category: 'Расходники', unit: 'шт', qty: 100, unit_cost: 500, reorder_level: 20, supplier: 'ООО Медснаб' },
+    { name: 'Бинт 7м', category: 'Расходники', unit: 'шт' },   // catalog-only row: no qty -> no movement
   ] }, inv);
   assert.deepEqual(r1, { created: 2, updated: 0, received: 1 });
 
@@ -182,7 +185,7 @@ test('import_products_excel aborts the whole batch on a bad row, names the Excel
   const { db } = seed();
   // data row i has Excel row number i+2 (row 1 is the header)
   assert.throws(() => importProductsExcel(db, { rows: [
-    { name: 'Товар А', qty: 5, supplier: 'ООО Тест' },
+    { name: 'Товар А', category: 'Медикаменты', qty: 5, supplier: 'ООО Тест' },
     { name: '', qty: 3 },
   ] }, inv), /Строка 3/);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM products WHERE name='Товар А'").get().n, 0);
@@ -191,7 +194,7 @@ test('import_products_excel aborts the whole batch on a bad row, names the Excel
 
   assert.throws(() => importProductsExcel(db, { rows: [{ name: 'X', qty: -1 }] }, inv), /Строка 2/);
   assert.throws(() => importProductsExcel(db, { rows: [] }, inv), /нет строк/i);
-  assert.throws(() => importProductsExcel(db, { rows: [{ name: 'X' }] }, doc), /(role|allow|роль)/i);
+  assert.throws(() => importProductsExcel(db, { rows: [{ name: 'X' }] }, doc), (e) => e.status === 403 && /недоступно вашей роли/.test(e.message));
 
   assert.throws(() => importProductsExcel(db, { rows: [{ name: 'X', qty: [1, 2] }] }, inv), /Кол-во/);
   assert.throws(() => importProductsExcel(db, { rows: [{ name: 'X', qty: '0x10' }] }, inv), /Кол-во/);
