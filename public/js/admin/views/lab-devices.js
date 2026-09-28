@@ -336,11 +336,24 @@ export async function mountLabDevices(container) {
 
     // LIS_ANALYZER_LIST_V1 — удаление вынесено из openForm: «Удалить» есть и у
     // строк окна «Добавить прибор» (находка, ждущий), а не только в форме.
+    //
+    // Ревью C2 — через RPC lis_device_delete, а не голым DELETE в /api/db: у
+    // найденного анализатора всегда есть сообщения, они держат строку внешним
+    // ключом (мигр. 123), и «Удалить» не срабатывало ни разу. Сервер
+    // отвязывает сообщения (они остаются целиком), отказывает, если прибор
+    // стоит у панели, и сам перезапускает слушатели. Поэтому и вопрос —
+    // просто «Удалить?»: «панели перестанут принимать результаты» больше не
+    // случается, сервер такое удаление не делает.
     async function removeDevice(dev) {
-        if (!window.confirm(trf('Удалить «{name}»? Панели, привязанные к нему, перестанут принимать результаты.', { name: dev.name }))) return;
-        const { error } = await supabase.from('lab_devices').delete().eq('id', dev.id);
-        if (error) { toast(trf('Не удалось удалить прибор: {msg}', { msg: error.message || error }), 'fail'); return; }
-        await supabase.rpc('lis_restart', {});
+        if (!window.confirm(trf('Удалить «{name}»?', { name: dev.name }))) return;
+        const { error } = await supabase.rpc('lis_device_delete', { id: dev.id });
+        if (error) {
+            // Отказ по делу — его же словами: в нём названы панели, и «Не
+            // удалось удалить прибор:» перед ним было бы лишним.
+            if (error.code === 'device_in_use') toast(error.message, 'warn');
+            else toast(trf('Не удалось удалить прибор: {msg}', { msg: error.message || error }), 'fail');
+            return;
+        }
         toast(tr('Прибор удалён'));
         closeForm();
         await reload();

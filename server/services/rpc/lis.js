@@ -3,7 +3,8 @@
 // Сами устройства читаются и правятся обычным /api/db: они объявлены в реестре
 // схемы, и второй путь записи означал бы второй набор правил доступа. Здесь
 // живёт только то, чего таблицей не выразить: перечень профилей, перезапуск
-// слушателей и разбор лотка.
+// слушателей, разбор лотка и удаление прибора (сообщения держат его внешним
+// ключом — LIS_ANALYZER_LIST_V1, ревью C2).
 import { listProfiles } from '../../lis/profiles/index.js';
 import { pageInt } from './page-args.js';   // V3120_FINAL — числа и поиск из аргументов
 import { startLisListeners, listenerStatus } from '../../lis/index.js';
@@ -12,6 +13,7 @@ import { resolveMessage } from '../../lis/inbox.js';
 import { parseMessage } from '../../lis/hl7.js';   // LIS_MINDRAY_CODES_V1 — тот же разбор, что у приёма
 import { LAB_SECTION_ROLES } from '../../db/schema-registry.js';
 import { hasAnyRole } from '../roles.js';   // ЭФФЕКТИВНЫЕ роли, как в lab-stats.js — не голая строка user.role
+import { rpcT } from '../server-message.js';   // LIS_ANALYZER_LIST_V1 (ревью C2) — отказ с названиями панелей переводится
 
 class LisError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -223,4 +225,43 @@ export function lisDeviceCodes(db, args, user) {
 export function lisListeners(db, args, user) {
   guard(user);
   return listenerStatus();
+}
+
+/**
+ * LIS_ANALYZER_LIST_V1 (ревью C2) — удалить прибор.
+ *
+ * Экран удалял прибор голым DELETE через /api/db, и у найденного анализатора
+ * это не срабатывало НИ РАЗУ: у него всегда есть сообщения, а
+ * lab_device_messages.device_id и lab_panels.device_id ссылаются на
+ * lab_devices без ON DELETE (мигр. 123) — SQLite отказывал по внешнему ключу.
+ *
+ * Панель, привязанная к прибору, — отказ с её названием, а не тихая отвязка:
+ * пробы такой панели перестали бы ложиться в бланки, и лаборатория узнала бы
+ * об этом от врача. Выключенная панель тоже называется — ключ держит и её.
+ *
+ * Сообщения прибора остаются целиком (инвариант 2): они отвязываются от
+ * строки, а не удаляются. Всё — одной транзакцией; потом, как lis_restart,
+ * слушатели перечитывают приборы: порт удалённого больше слушать незачем.
+ */
+export async function lisDeviceDelete(db, args, user) {
+  guard(user);
+  const id = deviceIdArg(args && args.id);
+  if (!id) throw new LisError('Нужен номер прибора');
+
+  const detached = db.transaction(() => {
+    if (!db.prepare('SELECT id FROM lab_devices WHERE id = ?').get(id)) throw new LisError('Прибор не найден', 404);
+    const panels = db.prepare('SELECT name FROM lab_panels WHERE device_id = ? ORDER BY name, id').all(id);
+    if (panels.length) {
+      const err = rpcT(LisError, 'Прибор привязан к панелям: {panels} — сначала выберите у них другой анализатор.',
+        { panels: panels.map((p) => '«' + p.name + '»').join(', ') }, 409);
+      err.code = 'device_in_use';   // по коду экран показывает отказ его же словами
+      throw err;
+    }
+    const n = db.prepare('UPDATE lab_device_messages SET device_id = NULL WHERE device_id = ?').run(id).changes;
+    db.prepare('DELETE FROM lab_devices WHERE id = ?').run(id);
+    return n;
+  })();
+
+  await startLisListeners(db);
+  return { ok: true, detached };
 }

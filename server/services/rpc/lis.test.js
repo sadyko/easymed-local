@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
-import { lisProfiles, lisMessageAttach, lisMessageDismiss, lisDeviceCodes, lisListeners } from './lis.js';
+import { lisProfiles, lisMessageAttach, lisMessageDismiss, lisDeviceCodes, lisListeners, lisDeviceDelete } from './lis.js';
 import { isReadOnlyRpc } from '../control/gate.js';   // LIS_MINDRAY_CODES_V1 (ревью R8)
 
 function fresh() {
@@ -194,5 +194,81 @@ test('LIS_ANALYZER_LIST_V1: какие порты слушаются — тол�
   assert.ok(Array.isArray(out.listening), JSON.stringify(out));
   assert.ok(Array.isArray(out.failed));
   assert.equal(isReadOnlyRpc('lis_listeners'), true, 'экран читает это и при просроченной лицензии');
+  db.close();
+});
+
+// ── LIS_ANALYZER_LIST_V1, ревью C2 — «Удалить» прибор ───────────────────────
+// Обычным /api/db найденный анализатор не удалялся НИКОГДА: у него всегда есть
+// сообщения, а lab_device_messages.device_id (как и lab_panels.device_id)
+// ссылается на lab_devices без ON DELETE (мигр. 123) — SQLite отказывал.
+
+// После удаления слушатели перезапускаются по-настоящему, как в lis_restart.
+// Приём в этих тестах выключен, чтобы не занимать порт 2575.
+async function withLisOff(fn) {
+  const prev = process.env.LIS_ENABLED;
+  process.env.LIS_ENABLED = '0';
+  try { return await fn(); } finally {
+    if (prev === undefined) delete process.env.LIS_ENABLED; else process.env.LIS_ENABLED = prev;
+  }
+}
+
+test('ревью C2: удалить прибор — только лаборатория; номер — целое больше нуля; прибор обязан существовать', async () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'Гем','mindray-bc-5300')").run();
+  await assert.rejects(lisDeviceDelete(db, { id: 1 }, { role: 'reception' }), (e) => e.status === 403 && /прав/.test(e.message));
+  await assert.rejects(lisDeviceDelete(db, { id: 1 }, null), (e) => e.status === 403);
+  for (const bad of [undefined, null, 0, -1, 1.5, 'abc', '0x1', '', true, [1], {}, 1e308]) {
+    await assert.rejects(lisDeviceDelete(db, { id: bad }, LAB),
+      (e) => e.status === 400 && e.message === 'Нужен номер прибора', 'id=' + String(bad));
+  }
+  await assert.rejects(lisDeviceDelete(db, {}, LAB), (e) => e.status === 400);
+  await assert.rejects(lisDeviceDelete(db, { id: 999 }, LAB), (e) => e.status === 404 && e.message === 'Прибор не найден');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_devices').get().c, 1, 'отказы ничего не удалили');
+  assert.equal(isReadOnlyRpc('lis_device_delete'), false, 'удаление — запись: клиника с просроченной лицензией его не делает');
+  db.close();
+});
+
+test('ревью C2: прибор, привязанный к панелям, не удаляется — отказ называет панели', async () => {
+  // Молча отвязать панель значило бы, что её пробы перестают ложиться в
+  // бланки, и лаборатория узнала бы об этом от врача.
+  const db = fresh();
+  db.prepare("INSERT INTO services (id, name, is_lab) VALUES (9,'ОАК',1), (10,'Биохимия',1), (11,'Коагулограмма',1)").run();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'Гем','mindray-bc-5300'), (2,'Другой','mindray-bs-240')").run();
+  db.prepare("INSERT INTO lab_panels (id, name, service_id, device_id, active) VALUES (5,'ОАК',9,1,1), (6,'Биохимия',10,1,0), (7,'Коагулограмма',11,2,1)").run();
+  db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status) VALUES (1,'127.0.0.1','MSH|^~\\&|BC-5300','unmatched')").run();
+
+  await assert.rejects(withLisOff(() => lisDeviceDelete(db, { id: 1 }, LAB)), (e) => {
+    assert.equal(e.status, 409);
+    assert.equal(e.code, 'device_in_use', 'экран узнаёт этот отказ по коду');
+    assert.equal(e.message, 'Прибор привязан к панелям: «Биохимия», «ОАК» — сначала выберите у них другой анализатор.',
+      'выключенная панель тоже названа: внешний ключ держит и её');
+    assert.equal(e.template, 'Прибор привязан к панелям: {panels} — сначала выберите у них другой анализатор.');
+    assert.deepEqual(e.params, { panels: '«Биохимия», «ОАК»' });
+    return true;
+  });
+  assert.ok(db.prepare('SELECT id FROM lab_devices WHERE id = 1').get(), 'прибор на месте');
+  assert.equal(db.prepare('SELECT device_id FROM lab_device_messages').get().device_id, 1, 'отказ ничего не меняет: сообщения не отвязаны');
+  db.close();
+});
+
+test('ревью C2: найденный анализатор с сообщениями удаляется, сообщения остаются целиком', async () => {
+  const db = fresh();
+  const found = db.prepare("INSERT INTO lab_devices (name, profile, host, discovered, added) VALUES ('BC-5300','mindray-bc-5300','10.0.0.9',1,0)").run().lastInsertRowid;
+  const other = db.prepare("INSERT INTO lab_devices (name, profile) VALUES ('Гем','mindray-bc-5300')").run().lastInsertRowid;
+  const ins = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status) VALUES (?, '10.0.0.9', ?, ?)");
+  const m1 = ins.run(found, RAW('OBX|1|NM|6690-2^WBC^LN||9.81|10*9/L|||||F'), 'unmatched').lastInsertRowid;
+  const m2 = ins.run(found, 'мусор, а не HL7', 'rejected').lastInsertRowid;
+  const m3 = ins.run(other, RAW('OBX|1|NM|718-7^HGB^LN||142|g/L|||||F'), 'unmapped').lastInsertRowid;
+  const before = db.prepare('SELECT id, peer, raw, sample_id, status, detail, received_at, resolved_at FROM lab_device_messages ORDER BY id').all();
+  // Так было: обычное удаление упирается во внешний ключ.
+  assert.throws(() => db.prepare('DELETE FROM lab_devices WHERE id = ?').run(found), /FOREIGN KEY/);
+
+  const out = await withLisOff(() => lisDeviceDelete(db, { id: String(found) }, LAB));
+  assert.deepEqual(out, { ok: true, detached: 2 });
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_devices WHERE id = ?').get(found).c, 0, 'прибор удалён');
+  assert.deepEqual(db.prepare('SELECT id, peer, raw, sample_id, status, detail, received_at, resolved_at FROM lab_device_messages ORDER BY id').all(), before,
+    'инвариант 2: ни одно сообщение не потеряно и не изменено');
+  assert.deepEqual(db.prepare('SELECT id, device_id FROM lab_device_messages ORDER BY id').all(),
+    [{ id: m1, device_id: null }, { id: m2, device_id: null }, { id: m3, device_id: other }], 'отвязаны только сообщения удалённого прибора');
   db.close();
 });

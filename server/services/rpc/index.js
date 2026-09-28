@@ -69,7 +69,7 @@ import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRe
          telephonyProvidersList, telephonyProviderSave, telephonyProviderDelete, telephonyProviderTest,
          telephonyDial, crmLeadCalls, telephonyOperatorStats, telephonyCallRecording,
          telephonyForgetBinotel } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1 / TELEPHONY_PROVIDERS_V1
-import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss, lisDeviceCodes, lisListeners } from './lis.js';   // LIS_INGEST_V1, LIS_MINDRAY_CODES_V1, LIS_ANALYZER_LIST_V1
+import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss, lisDeviceCodes, lisListeners, lisDeviceDelete } from './lis.js';   // LIS_INGEST_V1, LIS_MINDRAY_CODES_V1, LIS_ANALYZER_LIST_V1
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
 import { customRoleCreate } from './custom-roles.js';   // ADMIN_ROWS_GRANTABLE_V1 — своя роль одним действием
 import { crmLeadsByPhone, crmSearch, crmVisitLinks } from './crm-leads.js';   // CRM_DEDUP_SEARCH_TASKS_V1
@@ -575,6 +575,10 @@ export const RPC = {
   // LIS_ANALYZER_LIST_V1 — какие порты слушаются: строка у ждущего прибора
   // в «Добавить прибор». Чистое чтение (gate.js).
   lis_listeners:            (db, args, user) => lisListeners(db, args, user),
+  // LIS_ANALYZER_LIST_V1 (ревью C2) — «Удалить» прибор: /api/db не удалял
+  // прибор с сообщениями (внешние ключи мигр. 123). Запись — НЕ в
+  // READ_ONLY_RPCS; async, как lis_restart.
+  lis_device_delete:        (db, args, user) => lisDeviceDelete(db, args, user),
   lis_message_attach:       (db, args, user) => lisMessageAttach(db, args, user),
   lis_message_dismiss:      (db, args, user) => lisMessageDismiss(db, args, user),
 

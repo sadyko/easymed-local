@@ -82,6 +82,8 @@ const findButtonByText = (root, re) => findButtons(root).find((b) => re.test(tex
 let DEVICES = [];
 let writes = [];
 let rpcCalls = [];
+// Ревью C2: ответ lis_device_delete. null — удалено; объект — ошибка сервера.
+let DELETE_REPLY = null;
 const PROFILES = [{ key: 'mindray-bc-5300', vendor: 'Mindray', model: 'BC-5300', channelsSource: 'screenshot', defaultPort: 2575, channels: [] }];
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
@@ -97,6 +99,11 @@ globalThis.fetch = async (url, opts) => {
     if (name === 'lis_profiles') return { ok: true, json: async () => ({ data: PROFILES }) };
     if (name === 'lis_listeners') return { ok: true, json: async () => ({ data: { listening: [2575], failed: [] } }) };
     if (name === 'lis_restart') return { ok: true, json: async () => ({ data: { ok: true, listeners: 1 } }) };
+    if (name === 'lis_device_delete') {
+      return DELETE_REPLY
+        ? { ok: false, status: 409, json: async () => ({ error: DELETE_REPLY }) }
+        : { ok: true, json: async () => ({ data: { ok: true, detached: 3 } }) };
+    }
     return { ok: true, json: async () => ({ data: [] }) };
   }
   return { ok: true, json: async () => ({ data: null }) };
@@ -175,4 +182,44 @@ test('ничего не подключено — окно пусто и объя
   const text = textOf(root);
   assert.ok(text.includes('Ни один анализатор пока не выходил на связь.'));
   assert.ok(text.includes('порт 2575, протокол HL7'), 'сказано, что настроить на приборе');
+});
+
+// ── Ревью C2 — «Удалить» идёт через RPC lis_device_delete ───────────────────
+// Голый DELETE в /api/db упирался во внешние ключи (мигр. 123): у найденного
+// анализатора всегда есть сообщения, и «Удалить» у него не срабатывало ни разу.
+const deleteButton = (root) => findButtons(root).find((b) => /^\s*Удалить\s*$/.test(textOf(b)));
+
+test('ревью C2: «Удалить» у находки — через lis_device_delete, а не голым DELETE в /api/db', async () => {
+  DEVICES = [HEARD, FOUND];
+  const root = await mount();
+  findButtonByText(root, /Добавить прибор/).click();
+  await tick();
+  const del = deleteButton(root);
+  assert.ok(del, 'у находки есть «Удалить»');
+  del.click();
+  await tick(60);
+  assert.deepStrictEqual(rpcCalls.filter((c) => c.name === 'lis_device_delete').map((c) => c.args), [{ id: 5 }]);
+  assert.ok(!writes.some((w) => w.table === 'lab_devices' && w.op === 'delete'), 'голого DELETE нет: ' + JSON.stringify(writes));
+  assert.ok(!rpcCalls.some((c) => c.name === 'lis_restart'), 'слушатели перезапускает сам сервер после удаления');
+  assert.strictEqual(toastMsg, 'Прибор удалён');
+});
+
+test('ревью C2: прибор привязан к панели — на экране отказ сервера с названиями панелей', async () => {
+  DEVICES = [HEARD, FOUND];
+  DELETE_REPLY = {
+    code: 'device_in_use',
+    message: 'Прибор привязан к панелям: «ОАК» — сначала выберите у них другой анализатор.',
+    template: 'Прибор привязан к панелям: {panels} — сначала выберите у них другой анализатор.',
+    params: { panels: '«ОАК»' },
+  };
+  try {
+    const root = await mount();
+    findButtonByText(root, /Добавить прибор/).click();
+    await tick();
+    deleteButton(root).click();
+    await tick(60);
+    assert.strictEqual(toastMsg, 'Прибор привязан к панелям: «ОАК» — сначала выберите у них другой анализатор.',
+      'отказ — словами сервера, без «Не удалось удалить прибор:» перед ними');
+    assert.strictEqual(toastEl.dataset.kind, 'warn');
+  } finally { DELETE_REPLY = null; }
 });
