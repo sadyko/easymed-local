@@ -89,6 +89,8 @@ const LISTENING_2575 = { listening: [2575], failed: [] };
 let LISTENERS = LISTENING_2575;
 // Ревью I1: чтение lab_devices отказывает с этим текстом (null — читается).
 let DEV_ERROR = null;
+// Ревью I2: lis_profiles отказывает.
+let PROFILES_FAIL = false;
 const PROFILES = [{ key: 'mindray-bc-5300', vendor: 'Mindray', model: 'BC-5300', channelsSource: 'screenshot', defaultPort: 2575, channels: [] }];
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
@@ -104,7 +106,10 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/rpc/')) {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     rpcCalls.push({ name, args: body });
-    if (name === 'lis_profiles') return { ok: true, json: async () => ({ data: PROFILES }) };
+    if (name === 'lis_profiles') {
+      if (PROFILES_FAIL) return { ok: false, status: 500, json: async () => ({ error: { code: 'internal', message: 'Ошибка сервера. Повторите позже.' } }) };
+      return { ok: true, json: async () => ({ data: PROFILES }) };
+    }
     if (name === 'lis_listeners') return { ok: true, json: async () => ({ data: JSON.parse(JSON.stringify(LISTENERS)) }) };
     if (name === 'lis_restart') return { ok: true, json: async () => ({ data: { ok: true, listeners: 1 } }) };
     if (name === 'lis_device_delete') {
@@ -169,12 +174,17 @@ test('«Добавить» у находки переводит её в табл
   assert.ok(addRow, 'у находки есть кнопка «Добавить»');
   addRow.click();
   await tick();
+  // Ревью M10: тестовый DOM не выводит value списка из selected-пункта, как
+  // браузер, — ставим его сами, иначе модель в записи не увидеть.
+  const sel = walk(root).find((n) => n.tagName === 'SELECT');
+  sel.value = 'mindray-bc-5300';
   const save = findButtons(root).filter((b) => /Добавить/.test(textOf(b))).pop();
   save.click();
   await tick(60);
   const upd = writes.find((w) => w.table === 'lab_devices' && w.op === 'update');
   assert.ok(upd, 'записано: ' + JSON.stringify(writes));
   assert.strictEqual(upd.values.added, 1);
+  assert.strictEqual(upd.values.profile, 'mindray-bc-5300', 'выбранная модель записана');
   // Ревью C1: discovered = 0 для discover.js — «заведён человеком на этот
   // адрес», и после одного «Добавить» всё с того же адреса ложилось бы сюда.
   assert.ok(!('discovered' in upd.values), 'discovered пишет только сервер: ' + JSON.stringify(upd.values));
@@ -307,4 +317,79 @@ test('ревью M5: у ждущего кабельного прибора не�
   assert.ok(off.includes('выключен'), off);
   assert.ok(!off.includes('слушается'), 'порт по умолчанию слушается всегда — выключенному прибору это ничего не обещает: ' + off);
   assert.ok(textOf(rowNamed(root, 'jjjj')).includes('порт 2575 слушается — ждём первое сообщение'), 'сетевой включённый — как прежде');
+});
+
+// ── Ревью I2 — пустая модель не стирает догадку и не подменяется первой ─────
+async function openAdoptFor(device) {
+  DEVICES = [HEARD, device];
+  const root = await mount();
+  findButtonByText(root, /Добавить прибор/).click();
+  await tick();
+  findButtons(root).find((b) => /^\s*(<svg[\s\S]*?<\/svg>)?\s*Добавить\s*$/.test(textOf(b))).click();
+  await tick();
+  return root;
+}
+async function saveAdopt(root) {
+  findButtons(root).filter((b) => /Добавить/.test(textOf(b))).pop().click();
+  await tick(60);
+  const upd = writes.find((w) => w.table === 'lab_devices' && w.op === 'update');
+  assert.ok(upd, 'записано: ' + JSON.stringify(writes));
+  return upd;
+}
+const optionsOf = (sel) => walk(sel).filter((n) => n.tagName === 'OPTION');
+const selectedValues = (sel) => optionsOf(sel).filter((o) => 'selected' in o.attrs).map((o) => o.value);
+const modelSelect = (root) => walk(root).find((n) => n.tagName === 'SELECT' && optionsOf(n).some((o) => textOf(o) === 'модель не выбрана'));
+
+test('ревью I2: «Добавить» с «модель не определена» — модель не пишется вовсе, догадка сервера остаётся', async () => {
+  const root = await openAdoptFor(FOUND);
+  walk(root).find((n) => n.tagName === 'SELECT').value = '';
+  const upd = await saveAdopt(root);
+  assert.deepStrictEqual(upd.values, { name: 'BC-5300', added: 1 });
+});
+
+test('ревью I2: lis_profiles не ответил — в списке один пустой пункт, и модель находки не стирается', async () => {
+  PROFILES_FAIL = true;
+  try {
+    const root = await openAdoptFor(FOUND);
+    assert.deepStrictEqual(optionsOf(walk(root).find((n) => n.tagName === 'SELECT')).map((o) => o.value), ['']);
+    const upd = await saveAdopt(root);
+    assert.ok(!('profile' in upd.values), JSON.stringify(upd.values));
+  } finally { PROFILES_FAIL = false; }
+});
+
+test('ревью I2: «Изменить» у прибора без модели — выбран «модель не выбрана», а не первый профиль', async () => {
+  // Без пустого пункта у такого прибора не было выбранного пункта, браузер
+  // показывал первый (Mindray BC-20), и «Изменить → Сохранить» молча ставил его.
+  DEVICES = [HEARD, { ...WAITING, profile: '' }];
+  const root = await mount();
+  findButtonByText(root, /Добавить прибор/).click();
+  await tick();
+  findButtonByText(rowNamed(root, 'jjjj'), /Изменить/).click();
+  await tick();
+  const sel = modelSelect(root);
+  assert.ok(sel, 'у модели есть пункт «модель не выбрана»');
+  assert.strictEqual(optionsOf(sel)[0].value, '', 'он первый');
+  assert.deepStrictEqual(selectedValues(sel), [''], 'и выбран');
+});
+
+test('ревью I2: модели прибора нет среди профилей — она своим пунктом и выбрана, «Сохранить» её не стирает', async () => {
+  DEVICES = [HEARD, { ...WAITING, profile: 'mindray-bc-9999' }];
+  const root = await mount();
+  findButtonByText(root, /Добавить прибор/).click();
+  await tick();
+  findButtonByText(rowNamed(root, 'jjjj'), /Изменить/).click();
+  await tick();
+  const sel = modelSelect(root);
+  assert.deepStrictEqual(selectedValues(sel), ['mindray-bc-9999']);
+  assert.ok(optionsOf(sel).some((o) => o.value === 'mindray-bc-9999' && textOf(o) === 'mindray-bc-9999 — профиль не найден'));
+});
+
+test('ревью I2: новый прибор по адресу — по-прежнему выбрана первая модель', async () => {
+  DEVICES = [HEARD];
+  const root = await mount();
+  findButtonByText(root, /Добавить прибор/).click();
+  await tick();
+  findButtonByText(root, /Добавить по адресу/).click();
+  await tick();
+  assert.deepStrictEqual(selectedValues(modelSelect(root)), ['mindray-bc-5300']);
 });

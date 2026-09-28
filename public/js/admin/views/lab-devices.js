@@ -256,8 +256,19 @@ export async function mountLabDevices(container) {
         const d = device || { name: '', profile: (state.profiles[0] || {}).key || '', transport: 'mllp', host: '', port: 2575, enabled: 1 };
 
         const nameInp = h('input', { type: 'text', value: d.name, placeholder: tr('Например: Гематология') });
-        const profSel = h('select', null, ...state.profiles.map((p) =>
-            h('option', { value: p.key, selected: p.key === d.profile ? true : null }, p.vendor + ' ' + p.model)));
+        // LIS_ANALYZER_LIST_V1 (ревью I2) — первый пункт «модель не выбрана».
+        // Без него у прибора без модели не было выбранного пункта, браузер
+        // показывал первый (Mindray BC-20), и «Изменить → Сохранить» молча
+        // ставил BC-20. Модель, которой нет среди профилей (профиль убрали или
+        // lis_profiles не ответил), — своим пунктом: сохранение её не стирает.
+        // Новый прибор по-прежнему начинает с первой модели (d выше).
+        const profSel = h('select', null,
+            h('option', { value: '', selected: !d.profile ? true : null }, tr('модель не выбрана')),
+            d.profile && !profileOf(d.profile)
+                ? h('option', { value: d.profile, selected: true }, trf('{key} — профиль не найден', { key: d.profile }))
+                : null,
+            ...state.profiles.map((p) =>
+                h('option', { value: p.key, selected: p.key === d.profile ? true : null }, p.vendor + ' ' + p.model)));
         const transSel = h('select', null, ...TRANSPORTS.map((t) =>
             h('option', { value: t.key, selected: t.key === d.transport ? true : null }, tr(t.label))));
         const hostInp = h('input', { type: 'text', value: d.host || '', placeholder: tr('пусто — принимать с любого адреса') });
@@ -491,8 +502,12 @@ export async function mountLabDevices(container) {
         async function save() {
             const name = nameInp.value.trim();
             if (!name) { toast(tr('Укажите название прибора'), 'warn'); return; }
-            const { error } = await supabase.from('lab_devices')
-                .update({ name, profile: profSel.value, added: 1 }).eq('id', d.id);
+            // Ревью I2: модель — только выбранная. «модель не определена» ('')
+            // не шлётся вовсе: иначе стиралась бы догадка сервера — и тогда,
+            // когда lis_profiles не ответил и в списке один пустой пункт.
+            const values = { name, added: 1 };
+            if (profSel.value) values.profile = profSel.value;
+            const { error } = await supabase.from('lab_devices').update(values).eq('id', d.id);
             if (error) { toast(trf('Не удалось добавить прибор: {msg}', { msg: error.message || error }), 'fail'); return; }
             toast(trf('Прибор «{name}» добавлен', { name }));
             closeForm();
