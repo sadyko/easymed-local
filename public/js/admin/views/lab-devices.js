@@ -88,12 +88,18 @@ export async function mountLabDevices(container) {
         // беды, и лечатся они по-разному.
         const [devRes, msgRes, profRes, recentRes] = await Promise.all([
             supabase.from('lab_devices').select('*').order('name'),
-            supabase.from('lab_device_messages').select('*').is('resolved_at', null).order('received_at', { ascending: false }).limit(100),
+            // LIS_MINDRAY_CODES_V1 (ревью R1) — принятые отсеиваются В ЗАПРОСЕ,
+            // до limit. Их никто не разбирает (resolved_at остаётся пустым), а с
+            // «тихим лотком» они — большинство: сотня заполнялась ими, настоящая
+            // беда (смазанный штрихкод) выпадала из окна, и экран говорил «Все
+            // результаты разложены по бланкам».
+            supabase.from('lab_device_messages').select('*').is('resolved_at', null).neq('status', 'applied').order('received_at', { ascending: false }).limit(100),
             supabase.rpc('lis_profiles', {}),
             supabase.rpc('lis_recent', { limit: 30 }),
         ]);
         if (devRes.error) state.loadError = devRes.error.message || String(devRes.error);
         state.devices = devRes.data || [];
+        // Фильтр на клиенте остаётся: лишний раз не повредит.
         state.messages = (msgRes.data || []).filter((m) => m.status !== 'applied');
         state.profiles = profRes.data || [];
         state.recent = recentRes.data || [];
