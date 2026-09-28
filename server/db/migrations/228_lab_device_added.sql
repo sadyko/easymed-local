@@ -11,6 +11,13 @@
 -- таблицы само ничего не выпадает. 0 ставит только сервер (discover.js).
 ALTER TABLE lab_devices ADD COLUMN added INTEGER NOT NULL DEFAULT 1 CHECK (added IN (0, 1));
 
+-- model_confirmed = 1 — модель найденного прибора проверил человек («Добавить»
+-- или «Изменить» с выбранной моделью). Только для пометки «найден сам —
+-- проверьте модель» в таблице: без неё пометка висела бы вечно, а discovered
+-- трогать нельзя — это правило приёма (discover.js сверяет модель только у
+-- строк с discovered = 1). Приём эту колонку не читает.
+ALTER TABLE lab_devices ADD COLUMN model_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (model_confirmed IN (0, 1));
+
 -- Ревью M7 — сообщения по прибору: бэкфиллу ниже, удалению прибора
 -- (lis_device_delete отвязывает его сообщения) и lis_device_codes («последняя
 -- сотня сообщений приборов этой модели»). Без индекса каждый читал весь лоток,

@@ -15,7 +15,7 @@ import { h, Icon, Tag, toast, clear, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { supabase } from '../../supabase.js';
 import { liveness } from './lab-devices-live.js';   // LIS_INGEST_V1 — правило связи, чистое и покрытое тестами
-import { splitDevices, portState } from './lab-devices-lists.js';   // LIS_ANALYZER_LIST_V1 — таблица / найдены / ждут
+import { splitDevices, portState } from './lab-devices-lists.js?v=lists2';   // LIS_ANALYZER_LIST_V1 — таблица / найдены / ждут
 
 // Ключи словаря, а не собранные строки: tr() ищет строку целиком.
 const TRANSPORTS = [
@@ -163,8 +163,11 @@ export async function mountLabDevices(container) {
                       : (d.profile ? trf('{key} — профиль не найден', { key: d.profile }) : tr('модель не выбрана')),
                     // Найденный прибор: модель ПОДОБРАНА по тому, как он себя
                     // назвал. Это догадка, и лаборант обязан её увидеть прежде,
-                    // чем привяжет прибор к панели.
-                    d.discovered
+                    // чем привяжет прибор к панели. LIS_ANALYZER_LIST_V1 — пока
+                    // модель не проверил человек («Добавить» или «Изменить» с
+                    // выбранной моделью ставят model_confirmed); discovered —
+                    // правило приёма, его не трогаем.
+                    d.discovered && !Number(d.model_confirmed)
                         ? h('div', null, Tag(tr('найден сам — проверьте модель'), { kind: 'warn' }))
                         : null,
                     // Список каналов модели — типовой или со скриншота, но не из
@@ -333,8 +336,12 @@ export async function mountLabDevices(container) {
             };
             if (!payload.name) { toast(tr('Укажите название прибора'), 'warn'); return; }
 
+            // LIS_ANALYZER_LIST_V1 — сохранение найденного прибора с выбранной
+            // моделью и есть проверка модели человеком: пометка «проверьте
+            // модель» снимается. Только в правке — у вставки такой колонки нет.
             const res = device
-                ? await supabase.from('lab_devices').update(payload).eq('id', device.id)
+                ? await supabase.from('lab_devices').update(
+                    device.discovered ? { ...payload, model_confirmed: payload.profile ? 1 : 0 } : payload).eq('id', device.id)
                 : await supabase.from('lab_devices').insert(payload);
             if (res.error) { toast(trf('Не удалось сохранить прибор: {msg}', { msg: res.error.message || res.error }), 'fail'); return; }
 
@@ -543,7 +550,9 @@ export async function mountLabDevices(container) {
             // не шлётся вовсе: иначе стиралась бы догадка сервера — и тогда,
             // когда lis_profiles не ответил и в списке один пустой пункт.
             const values = { name, added: 1 };
-            if (profSel.value) values.profile = profSel.value;
+            // Модель выбрана — её проверил человек: пометка «найден сам —
+            // проверьте модель» в таблице больше не нужна.
+            if (profSel.value) { values.profile = profSel.value; values.model_confirmed = 1; }
             const { error } = await supabase.from('lab_devices').update(values).eq('id', d.id);
             if (error) { toast(trf('Не удалось добавить прибор: {msg}', { msg: error.message || error }), 'fail'); return; }
             toast(trf('Прибор «{name}» добавлен', { name }));

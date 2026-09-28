@@ -186,6 +186,7 @@ test('«Добавить» у находки переводит её в табл
   assert.ok(upd, 'записано: ' + JSON.stringify(writes));
   assert.strictEqual(upd.values.added, 1);
   assert.strictEqual(upd.values.profile, 'mindray-bc-5300', 'выбранная модель записана');
+  assert.strictEqual(upd.values.model_confirmed, 1, 'человек выбрал модель — пометка «проверьте модель» снимается');
   // Ревью C1: discovered = 0 для discover.js — «заведён человеком на этот
   // адрес», и после одного «Добавить» всё с того же адреса ложилось бы сюда.
   assert.ok(!('discovered' in upd.values), 'discovered пишет только сервер: ' + JSON.stringify(upd.values));
@@ -346,6 +347,18 @@ test('ревью I2: «Добавить» с «модель не определ�
   walk(root).find((n) => n.tagName === 'SELECT').value = '';
   const upd = await saveAdopt(root);
   assert.deepStrictEqual(upd.values, { name: 'BC-5300', added: 1 });
+});
+
+// Пометка «найден сам — проверьте модель» в таблице — пока модель находки не
+// подтвердил человек. Раньше она оставалась навсегда: discovered — правило
+// приёма, трогать его нельзя (ревью C1), а отдельного признака не было.
+test('таблица: «найден сам — проверьте модель» — только пока модель не подтверждена', async () => {
+  DEVICES = [{ ...FOUND, added: 1, model_confirmed: 0 }];
+  let root = await mount();
+  assert.ok(textOf(walk(root).find((n) => n.tagName === 'TABLE')).includes('найден сам — проверьте модель'));
+  DEVICES = [{ ...FOUND, added: 1, model_confirmed: 1 }];
+  root = await mount();
+  assert.ok(!textOf(walk(root).find((n) => n.tagName === 'TABLE')).includes('найден сам'), 'модель проверил человек — пометки нет');
 });
 
 test('ревью I2: lis_profiles не ответил — в списке один пустой пункт, и модель находки не стирается', async () => {

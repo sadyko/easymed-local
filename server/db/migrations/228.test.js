@@ -37,6 +37,19 @@ test('228: колонка added, по умолчанию 1 — всё, что з
   } finally { db.close(); }
 });
 
+// Модель находки проверил человек («Добавить» или «Изменить» с выбранной
+// моделью) — пометка «найден сам — проверьте модель» больше не нужна. Приём
+// эту колонку не читает: правило адреса и модели в discover.js — на discovered.
+test('228: колонка model_confirmed, по умолчанию 0; мусор не проходит', () => {
+  const db = openDb(':memory:');
+  try {
+    migrate(db);
+    const id = db.prepare("INSERT INTO lab_devices (name, profile) VALUES ('Находка', 'mindray-bc-5300')").run().lastInsertRowid;
+    assert.equal(db.prepare('SELECT model_confirmed FROM lab_devices WHERE id = ?').get(id).model_confirmed, 0);
+    assert.throws(() => db.prepare("INSERT INTO lab_devices (name, profile, model_confirmed) VALUES ('Мусор', '', 2)").run(), /CHECK/);
+  } finally { db.close(); }
+});
+
 test('228: существующие приборы остаются добавленными; «на связи» — по самому позднему сообщению', () => {
   const db = dbBefore228();
   try {
