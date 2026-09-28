@@ -50,7 +50,7 @@ const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагнос
 //      lab-section role (LAB_PANELS_BY_SECTION_V1).
 // v8 = one shared page head for queue+panels; marker moved off-screen into
 //      the data-attribute above; queue filter chips translate label-then-count.
-export const LAB_BUILD = 'lab-v13';   // LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код
+export const LAB_BUILD = 'lab-v14';   // LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28
 
 // Mounts the editor into `container` and resolves once the first load has
 // painted — the caller can await it and know the screen is settled.
@@ -211,7 +211,11 @@ export async function mountLabPanels(container) {
     let panelToken = 0;
     async function selectPanel(p) {
         const token = ++panelToken;
-        state.selected = p;
+        // LIS_MINDRAY_CODES_V1 (ревью R3) — КОПИЯ строки списка: поля шапки
+        // редактора пишут в выбранную панель сразу (paintEditor), и без копии
+        // несохранённое имя появлялось бы в списке слева и переживало бы уход
+        // на другую панель — показатели-то перечитываются из базы.
+        state.selected = p ? { ...p } : p;
         paintList();
         if (!p) { state.rows = []; paintEditor(); return; }
         if (p.id) {
@@ -393,12 +397,21 @@ export async function mountLabPanels(container) {
         // и прежние подсказки к ним не относятся.
         devSel.onchange = () => { p.device_id = Number(devSel.value) || null; suggestMapping(p.device_id); paintEditor(); loadDeviceCodes(p.device_id); };
 
-        const nameInp = h('input', { value: p.name || '', style: { width: '100%' } });
-        const modSel = h('select', { style: { width: '100%' } },
+        // LIS_MINDRAY_CODES_V1 (ревью R3) — поля шапки пишут в панель p СРАЗУ.
+        // Редактор перерисовывается целиком — пришли коды прибора, добавлена
+        // строка, «Нормы по полу», смена типа строки, — а набранное здесь
+        // читалось только при сохранении: перерисовка строила шапку из прежних
+        // значений, и введённое имя молча пропадало. Сохранение читает поля,
+        // как и раньше; теперь они просто всегда совпадают с p.
+        const nameInp = h('input', { value: p.name || '', style: { width: '100%' }, oninput: (e) => { p.name = e.target.value; } });
+        const modSel = h('select', { style: { width: '100%' }, onchange: (e) => { p.modality = e.target.value; } },
             ...['lab', 'diagnostic'].map(m => h('option', { value: m, selected: p.modality === m }, MODALITY_RU[m])));
-        const narrChk = h('input', { type: 'checkbox', checked: !!p.has_narrative });
-        const activeChk = h('input', { type: 'checkbox', checked: p.active !== false });
-        const svcSel = h('select', { style: { width: '100%' } });
+        const narrChk = h('input', { type: 'checkbox', checked: !!p.has_narrative, onchange: (e) => { p.has_narrative = !!e.target.checked; } });
+        const activeChk = h('input', { type: 'checkbox', checked: p.active !== false, onchange: (e) => { p.active = !!e.target.checked; } });
+        // Значение select — строка, а id услуги держим в его настоящем типе:
+        // ниже он сравнивается строго (pinned, linkedSvc, takenBy).
+        const svcIdOf = (v) => { const s = state.services.find(x => String(x.id) === String(v)); return s ? s.id : (v || null); };
+        const svcSel = h('select', { style: { width: '100%' }, onchange: () => { p.service_id = svcIdOf(svcSel.value); } });
         const svcSearch = h('input', { placeholder: 'Поиск услуги…', style: { width: '100%', marginBottom: '6px', fontSize: '12.5px' } });
         // LAB_SERVICE_LINK_V1 — a service may carry at most ONE panel (unique index,
         // migration 048), so a service already spoken for by a DIFFERENT panel is

@@ -112,8 +112,10 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 
 // --- fake сервер: одна панель, привязанная к прибору 1 ---------------------
 const PANELS = [{ id: 'p-1', company_id: 'c-1', name: 'Общий анализ крови', modality: 'lab', has_narrative: false, service_id: 's-1', active: true, device_id: 1 }];
-const ANALYTES = [{ id: 'a-1', panel_id: 'p-1', code: 'WBC', name: 'Лейкоциты', unit: '10^9/л', value_type: 'numeric', decimals: 1,
-  ref_low: null, ref_high: null, group_label: '', sort_order: 0, ref_ranges: null, device_code: '', device_code_confirmed: 0 }];
+const analyte = (over = {}) => ({ id: 'a-1', panel_id: 'p-1', code: 'WBC', name: 'Лейкоциты', unit: '10^9/л', value_type: 'numeric', decimals: 1,
+  ref_low: null, ref_high: null, group_label: '', sort_order: 0, ref_ranges: null, device_code: '', device_code_confirmed: 0, ...over });
+// let, а не const: тесты ревью ставят свои строки бланка (fetch читает имя при вызове).
+let ANALYTES = [analyte()];
 const SERVICES = [{ id: 's-1', name: 'ОАК', type: 'lab', is_lab: true, department_id: 'd-1', type_id: null }];
 const DEVICES = [{ id: 1, name: 'Гематология', profile: 'mindray-bc-5300', enabled: 1 }];
 const PROFILES = [{ key: 'mindray-bc-5300', vendor: 'Mindray', model: 'BC-5300', channelsSource: 'screenshot',
@@ -125,6 +127,9 @@ const SENT_CODES = [
 
 let rpcCalls = [];
 let writes = [];
+// Ревью R3: ответ lis_device_codes можно задержать — редактор перерисуется,
+// когда он придёт, и набранное в шапке обязано это пережить.
+let codesGate = null;
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
@@ -141,7 +146,10 @@ globalThis.fetch = async (url, opts) => {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     rpcCalls.push({ name, args: body });
     if (name === 'lis_profiles') return { ok: true, json: async () => ({ data: PROFILES }) };
-    if (name === 'lis_device_codes') return { ok: true, json: async () => ({ data: SENT_CODES }) };
+    if (name === 'lis_device_codes') {
+      if (codesGate) await codesGate;
+      return { ok: true, json: async () => ({ data: SENT_CODES }) };
+    }
     return { ok: true, json: async () => ({ data: null }) };
   }
   return { ok: true, json: async () => ({ data: null }) };
@@ -189,4 +197,57 @@ test('«Поле анализатора»: присланные коды пер�
   const row = [].concat(ins.values).find((r) => r.name === 'Лейкоциты');
   assert.strictEqual(row.device_code, 'NRBC#');
   assert.strictEqual(row.device_code_confirmed, 1, 'вписал сам — это и есть подтверждение');
+});
+
+// ── Ревью 2026-09-28 ────────────────────────────────────────────────────────
+
+const fieldControl = (root, label, tag) => {
+  const f = walk(root).find((n) => hasClass(n, 'field') && (n.children || []).some((c) => c.tagName === 'LABEL' && textOf(c) === label));
+  return f && walk(f).find((n) => n.tagName === tag);
+};
+
+async function mountPanels() {
+  setEffectiveFromRole(LAB_SEEDED);
+  rpcCalls = []; writes = []; toastMsg = null;
+  const root = mk('div');
+  await renderLaboratory(root, { payload: { sub: 'panels' } });
+  await tick(80);
+  return root;
+}
+
+test('R3: набранное в шапке переживает перерисовку, когда приходят коды прибора, и уходит в сохранение', async () => {
+  ANALYTES = [analyte()];
+  let release;
+  codesGate = new Promise((r) => { release = r; });
+  try {
+    const root = await mountPanels();
+    assert.ok(rpcCalls.some((c) => c.name === 'lis_device_codes'), 'коды прибора ещё в пути');
+    assert.ok(!walk(root).some((n) => n.tagName === 'OPTGROUP' && n.attrs.label === 'Присылал этот анализатор'), 'ответа ещё нет');
+
+    const nameInp = fieldControl(root, 'Название панели', 'INPUT');
+    assert.strictEqual(nameInp.value, 'Общий анализ крови');
+    nameInp.value = 'ОАК — развёрнутый';
+    nameInp.dispatchEvent({ type: 'input', target: nameInp });
+    const modSel = fieldControl(root, 'Группа', 'SELECT');
+    modSel.value = 'diagnostic';
+    modSel.dispatchEvent({ type: 'change', target: modSel });
+
+    release();          // коды пришли — редактор перерисовывается целиком
+    await tick(80);
+    assert.ok(walk(root).some((n) => n.tagName === 'OPTGROUP' && n.attrs.label === 'Присылал этот анализатор'), 'перерисовка случилась');
+
+    const again = fieldControl(root, 'Название панели', 'INPUT');
+    assert.notStrictEqual(again, nameInp, 'это новое поле, построенное перерисовкой');
+    assert.strictEqual(again.value, 'ОАК — развёрнутый', 'набранное имя не пропало');
+    const picked = walk(fieldControl(root, 'Группа', 'SELECT')).find((o) => o.tagName === 'OPTION' && 'selected' in o.attrs);
+    assert.strictEqual(picked && picked.attrs.value, 'diagnostic', 'выбранная группа не пропала');
+    const listed = walk(root).filter((n) => hasClass(n, 'nav-item')).map((n) => textOf(n));
+    assert.ok(listed.some((t) => t.includes('Общий анализ крови')), 'до сохранения список слева — с прежним именем: ' + listed.join(' | '));
+
+    findButtonByText(root, /Сохранить панель/).click();
+    await tick(80);
+    const upd = writes.find((w) => w.table === 'lab_panels' && w.op === 'update');
+    assert.ok(upd, 'панель записана: ' + JSON.stringify(writes.map((w) => w.table + ':' + w.op)));
+    assert.strictEqual(upd.values.name, 'ОАК — развёрнутый');
+  } finally { codesGate = null; }
 });
