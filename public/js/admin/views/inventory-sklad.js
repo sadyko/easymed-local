@@ -76,14 +76,20 @@ export async function renderSkladTab(container) {
 
     let products = [], suppliers = [], links = [], loadError = null;
     try {
-        const [pr, sr, lk] = await Promise.all([
+        const [pr, sr] = await Promise.all([
             supabase.from('products').select('*, suppliers(id,name)').order('name', { ascending: true }).limit(1000),
             supabase.from('suppliers').select('id,name').eq('active', 1).order('name', { ascending: true }),
-            supabase.from('item_suppliers').select('product_id, supplier_id').limit(5000),   // SUPPLIERS_VAT_V1
         ]);
         if (pr.error) throw pr.error;
         products = pr.data || [];
         suppliers = (sr.error ? [] : sr.data) || [];
+        // SUPPLIERS_VAT_V1 — все поставщики товара для отбора. Ревью M6 —
+        // связи ИМЕННО этих товаров, а не первые 5000 на всю клинику: сверх
+        // них отбор по поставщику молча терял товары.
+        const ids = products.map((p) => p.id);
+        const lk = ids.length
+            ? await supabase.from('item_suppliers').select('product_id, supplier_id').in('product_id', ids).limit(100000)
+            : { data: [] };
         links = (lk && !lk.error && lk.data) || [];
     } catch (e) { loadError = e; }
     if (token !== fetchGuard.token) return;

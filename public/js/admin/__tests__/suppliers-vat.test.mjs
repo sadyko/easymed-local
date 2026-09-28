@@ -89,6 +89,7 @@ const USER = { id: 2, role: 'inventory', extra_roles: [] };
 let DB = null;
 const RPC = [];
 const DBWRITES = [];   // таблицы, в которые экран писал через /api/db
+const DBREADS = [];    // ревью M6 — чтения через /api/db (таблица, отбор, предел)
 let FAIL_TABLE = null;   // таблица, чтение которой «не загрузилось»
 
 globalThis.fetch = async (url, opts) => {
@@ -110,6 +111,7 @@ globalThis.fetch = async (url, opts) => {
     catch (e) { return { ok: false, status: 403, json: async () => ({ error: { code: 'forbidden', message: e.message } }) }; }
     const { sql, params, meta } = compiled;
     if (meta.op !== 'select') DBWRITES.push(meta.table);
+    else DBREADS.push({ table: body.table, filters: body.filters, limit: body.limit });
     const rows = meta.op === 'select' ? reshape(DB.prepare(sql).all(...params), meta) : (DB.prepare(sql).run(...params), []);
     if (meta.single === 'single') return ok(rows[0]);
     if (meta.single === 'maybe') return ok(rows[0] ?? null);
@@ -151,7 +153,7 @@ function seed() {
   db.prepare('INSERT INTO item_suppliers (product_id, supplier_id, last_price, vat_rate, pack_factor, purchase_unit) VALUES (10, 1, 1000, 12, 10, ?)').run('уп');
   db.prepare('INSERT INTO item_suppliers (product_id, supplier_id, last_price, vat_rate, pack_factor, purchase_unit) VALUES (10, 2, 950, NULL, 10, ?)').run('уп');
   DB = db;
-  RPC.length = 0; DBWRITES.length = 0; TOASTS.length = 0; FAIL_TABLE = null;
+  RPC.length = 0; DBWRITES.length = 0; DBREADS.length = 0; TOASTS.length = 0; FAIL_TABLE = null;
   BODY.children.length = 0;
   return db;
 }
@@ -273,6 +275,7 @@ test('«Принять товар»: цена и НДС — из связи с �
   const search = byPlaceholder(m, /Поиск товара/);
   setVal(search, 'Анальгин', 'focus');
   mousedownOn(m, 'Анальгин');
+  await settle();   // ревью M6 — связи товара грузятся, когда его строка появляется
   const cost = byAria(m, 'Цена без НДС')[0];
   assert.equal(cost.value, '1000', 'цена поставщика «ООО Аптека» (основного)');
   const vat = byAria(m, 'Ставка НДС')[0];
@@ -384,6 +387,7 @@ test('заказ на закупку: цена и ставка — из связ
   let m = modal();
   const supSel = walk(m).find((e) => e.tagName === 'SELECT' && walk(e).some((o) => o.tagName === 'OPTION' && flat(o) === 'ООО Аптека'));
   setVal(supSel, '1', 'change');
+  await settle();   // ревью M6 — связи выбранного поставщика грузятся при выборе
   setVal(byAria(m, 'Товар')[0], '10', 'change');
   assert.equal(byAria(m, 'Цена без НДС')[0].value, '100', 'связь: 1 000 за упаковку / 10');
   assert.equal(byAria(m, 'Ставка НДС')[0].value, '12');
@@ -391,11 +395,13 @@ test('заказ на закупку: цена и ставка — из связ
   assert.match(flat(m), /Без НДС: 2 000 · НДС: 240 · Итого с НДС: 2 240/);
   // Другой поставщик — его цена и ставка.
   setVal(supSel, '2', 'change');
+  await settle();
   assert.equal(byAria(m, 'Цена без НДС')[0].value, '95');
   assert.equal(byAria(m, 'Ставка НДС')[0].value, 'none');
   // Поправленная руками цена смену поставщика переживает, нетронутая ставка — нет.
   setVal(byAria(m, 'Цена без НДС')[0], '90');
   setVal(supSel, '1', 'change');
+  await settle();
   assert.equal(byAria(m, 'Цена без НДС')[0].value, '90');
   assert.equal(byAria(m, 'Ставка НДС')[0].value, '12');
   click(button(m, 'Создать заказ'));
@@ -476,4 +482,79 @@ test('ревью M5: варианты заголовков принимаютс�
   refuses([['Название*', 'Кол-во', 'Количество'], ['Вата', 1, 2]], /Колонка «Количество» повторяет колонку «Кол-во»/);
   // Пустая колонка без заголовка (хвост листа) — не ошибка.
   assert.equal(sklad.importRowsFromMatrix([['Название*', '', 'Кол-во', ''], ['Вата', '', 1, '']]).length, 1);
+});
+
+// Ревью M6 — списки связей «товар ↔ поставщик» брались первыми 5000 строками
+// на всю клинику, а миграция 222 заводит связь на каждую пару из истории
+// приходов (синтетический тест ревью — 191 499 связей). Сверх 5000 молча
+// пропадали цена по умолчанию, отбор по поставщику и счётчик товаров у
+// поставщика. Теперь каждый экран берёт то, что ему нужно: связи своих
+// товаров, связи выбранного поставщика, связи одного товара, а счётчики
+// считает сервер.
+function seedManyLinks() {
+  seed();
+  // Товар, чьи связи — последние и по номеру строки, и по номеру товара: сверх
+  // 5 000 при любом порядке выборки. Имя — первое по алфавиту (в первых 1 000).
+  const insP = DB.prepare("INSERT INTO products (id, name, base_unit, procurement_category, active) VALUES (?, ?, 'шт', 'consumables', 1)");
+  const insL = DB.prepare('INSERT INTO item_suppliers (product_id, supplier_id, last_price) VALUES (?, ?, 1)');
+  DB.transaction(() => {
+    for (let i = 0; i < 3000; i++) {
+      insP.run(1000 + i, 'Я-товар ' + String(i).padStart(4, '0'));
+      insL.run(1000 + i, 1); insL.run(1000 + i, 2);
+    }
+  })();
+  DB.prepare("INSERT INTO products (id, name, base_unit, unit, purchase_unit, pack_factor, procurement_category, vat_rate, sale_price, supplier_id, active) VALUES (99999, 'Аа-Анальгин', 'таб', 'таб', 'уп', 10, 'medicines', 12, 300, 1, 1)").run();
+  DB.prepare('INSERT INTO item_suppliers (product_id, supplier_id, last_price, vat_rate, pack_factor, purchase_unit) VALUES (99999, 1, 1000, 12, 10, ?)').run('уп');
+  DB.prepare('INSERT INTO item_suppliers (product_id, supplier_id, last_price, vat_rate, pack_factor, purchase_unit) VALUES (99999, 2, 950, NULL, 10, ?)').run('уп');
+}
+
+test('ревью M6: связи сверх 5000 — поставщики товара, счётчик поставщика, отбор «Склада», цена заказа и прихода', async () => {
+  seedManyLinks();
+  // «Товары»: у товара из хвоста видны оба поставщика.
+  const pRoot = mk('div');
+  products.renderProductsTab(pRoot);
+  await settle(150);
+  const row = walk(pRoot).find((e) => e.tagName === 'TR' && flat(e).startsWith('Аа-Анальгин'));
+  assert.ok(row, 'строка товара');
+  assert.match(flat(row), /ООО Аптека, ООО Бинты/);
+  // «Поставщики»: у каждого 3 001 товар (включая Анальгин и Бинт сида — 3 002 у Аптеки) — счёт сервера.
+  const sRoot = mk('div');
+  suppliers.renderSuppliersTab(sRoot);
+  await settle(150);
+  const count = (name) => { const tr = walk(sRoot).find((e) => e.tagName === 'TR' && flat(e).startsWith(name)); return tr && flat(tr); };
+  assert.match(count('ООО Аптека'), /3 ?002/, count('ООО Аптека'));
+  assert.match(count('ООО Бинты'), /3 ?002/, count('ООО Бинты'));
+  assert.ok(RPC.some((r) => r.name === 'supplier_product_counts'), 'счётчики — сервером');
+  // «Склад»: отбор по второму поставщику видит товар из хвоста.
+  const kRoot = mk('div');
+  await sklad.renderSkladTab(kRoot);
+  await settle(150);
+  const supFilter = walk(kRoot).find((e) => e.tagName === 'SELECT' && walk(e).some((o) => o.tagName === 'OPTION' && flat(o) === 'ООО Бинты'));
+  assert.ok(supFilter, 'отбор по поставщику');
+  setVal(supFilter, '2', 'change');
+  assert.ok(walk(kRoot).some((e) => e.tagName === 'TR' && flat(e).includes('Аа-Анальгин')), 'второй поставщик товара найден');
+  // Заказ: цена по умолчанию из связи за 5000-й строкой.
+  const oRoot = mk('div');
+  docs.renderPurchaseOrdersTab(oRoot);
+  await settle();
+  click(button(oRoot, 'Новый заказ'));
+  await settle(150);
+  const m = modal();
+  const supSel = walk(m).find((e) => e.tagName === 'SELECT' && walk(e).some((o) => o.tagName === 'OPTION' && flat(o) === 'ООО Аптека'));
+  setVal(supSel, '1', 'change');
+  await settle();
+  setVal(byAria(m, 'Товар')[0], '99999', 'change');
+  assert.equal(byAria(m, 'Цена без НДС')[0].value, '100');
+  // Приход: цена поставщика у товара из хвоста.
+  BODY.children.length = 0;
+  products.openReceiveModal(null);
+  await settle(150);
+  const r = modal();
+  setVal(byPlaceholder(r, /Поиск товара/), 'Аа-Анальгин', 'focus');
+  mousedownOn(r, 'Аа-Анальгин');
+  await settle();
+  assert.equal(byAria(modal(), 'Цена без НДС')[0].value, '1000');
+  // Ни один экран не просит связи «первыми N на всю клинику».
+  const capped = DBREADS.filter((q) => q.table === 'item_suppliers' && !(q.filters || []).length);
+  assert.deepEqual(capped, [], 'связи без отбора: ' + JSON.stringify(capped.map((q) => q.limit)));
 });

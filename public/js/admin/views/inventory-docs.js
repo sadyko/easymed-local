@@ -245,17 +245,40 @@ async function fetchPOsAndPaint() {
 }
 
 async function openPOModal(onSaved) {
-    let products = [], suppliers = [], links = [];
+    let products = [], suppliers = [];
     try { products = await loadActiveProducts('id,name,base_unit,pack_factor,vat_rate'); } catch (e) { toast('Не удалось загрузить товары.', 'fail'); }
     try { const r = await supabase.from('suppliers').select('id,name').eq('active', 1).order('name', { ascending: true }); suppliers = r.data || []; } catch (e) { /* optional */ }
-    // SUPPLIERS_VAT_V1 — цены и ставки поставщиков для строк по умолчанию.
-    try { const r = await supabase.from('item_suppliers').select('product_id, supplier_id, last_price, vat_rate, pack_factor').limit(5000); links = r.data || []; } catch (e) { /* без подсказок */ }
+    // SUPPLIERS_VAT_V1 — цены и ставки поставщика заказа для строк по
+    // умолчанию. Ревью M6 — связи ВЫБРАННОГО поставщика, а не первые 5000 на
+    // всю клинику: сверх них у товара не было цены по умолчанию. Массив один и
+    // тот же (редактор держит ссылку), меняется его содержимое.
+    const links = [];
+    const linksBySupplier = new Map();
+    let linksToken = 0;
+    async function loadSupplierLinks(sid) {
+        const token = ++linksToken;
+        let rows = [];
+        if (sid) {
+            if (!linksBySupplier.has(sid)) {
+                try {
+                    const r = await supabase.from('item_suppliers').select('product_id, supplier_id, last_price, vat_rate, pack_factor').eq('supplier_id', sid).limit(100000);
+                    linksBySupplier.set(sid, (r && !r.error && r.data) || []);
+                } catch (e) { linksBySupplier.set(sid, []); }
+            }
+            rows = linksBySupplier.get(sid);
+        }
+        if (token !== linksToken) return false;   // поставщика уже сменили ещё раз
+        links.splice(0, links.length, ...rows);
+        return true;
+    }
 
     const supplierSel = h('select', { style: selStyle }, h('option', { value: '' }, '— No supplier —'),
         ...suppliers.map(s => h('option', { value: String(s.id) }, s.name)));
     const notesInp = h('input', { type: 'text', placeholder: 'optional' });
     const editor = poLineEditor(products, links, () => (supplierSel.value ? Number(supplierSel.value) : null));
-    supplierSel.addEventListener('change', () => editor.supplierChanged());
+    supplierSel.addEventListener('change', async () => {
+        if (await loadSupplierLinks(supplierSel.value ? Number(supplierSel.value) : null)) editor.supplierChanged();
+    });
 
     const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Создать заказ');
     saveBtn.addEventListener('click', async () => {

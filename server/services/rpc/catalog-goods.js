@@ -359,3 +359,16 @@ export function rememberSupplierPrice(db, { productId, supplierId, price, per = 
     .run(productId, supplierId, lastPrice, keepVat ? null : vat, packFactor ?? null, purchaseUnit ?? null, keepVat ? 1 : 0);
   db.prepare(`UPDATE products SET supplier_id = ?, updated_at = ${NOW} WHERE id = ? AND supplier_id IS NULL`).run(supplierId, productId);
 }
+
+/**
+ * SUPPLIERS_VAT_V1 (ревью M6) — supplier_product_counts: сколько товаров у
+ * каждого поставщика. Экран «Поставщики» считал это сам по первым 5000 строкам
+ * связей на всю клинику, а миграция 222 заводит связь на каждую пару из
+ * истории приходов — сверх 5000 счётчики молча врали. Считает база, одной
+ * группировкой. Кто видит связи (реестр: весь персонал), тот видит и их число.
+ * → { counts: [{ supplier_id, products }] }
+ */
+export function supplierProductCounts(db) {
+  const rows = db.prepare('SELECT supplier_id, COUNT(*) AS n FROM item_suppliers GROUP BY supplier_id ORDER BY supplier_id').all();
+  return { counts: rows.map((r) => ({ supplier_id: r.supplier_id, products: r.n })) };
+}

@@ -110,11 +110,14 @@ async function fetchProductsAndPaint() {
     const token = ++fetchGuard.token;
     setLoadingRow();
     try {
-        const [pr, lk] = await Promise.all([
-            supabase.from('products').select('*').order('name', { ascending: true }).limit(1000),
-            // SUPPLIERS_VAT_V1 — у кого товар закупают (многие ко многим).
-            supabase.from('item_suppliers').select('product_id, supplier_id, suppliers(name)').limit(5000),
-        ]);
+        const pr = await supabase.from('products').select('*').order('name', { ascending: true }).limit(1000);
+        // SUPPLIERS_VAT_V1 — у кого товар закупают (многие ко многим). Ревью
+        // M6 — связи ИМЕННО этих товаров: первые 5000 связей на всю клинику
+        // (миграция 222 заводит связь на каждую пару из истории приходов)
+        // оставляли товары сверх них без поставщиков.
+        const ids = (pr.data || []).map((p) => p.id);
+        const lk = pr.error || !ids.length ? { data: [] }
+            : await supabase.from('item_suppliers').select('product_id, supplier_id, suppliers(name)').in('product_id', ids).limit(100000);
         if (token !== fetchGuard.token) return;   // a newer fetch already landed
         if (pr.error) {
             toast(trf('Не удалось загрузить товары: {msg}', { msg: pr.error.message || pr.error }), 'fail');
@@ -597,7 +600,7 @@ export function openReceiveModal(onSaved) {
     document.addEventListener('keydown', onKey);
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
-    const st = { products: [], suppliers: [], links: [], lines: [] };
+    const st = { products: [], suppliers: [], links: [], linksLoaded: new Set(), lines: [] };   // ревью M6 — связи по товару
 
     const linesEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
     const linesEmpty = h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '6px 2px' } },
@@ -708,7 +711,11 @@ export function openReceiveModal(onSaved) {
         refreshTotal();
     }
 
-    function addLineFor(p) {
+    async function addLineFor(p) {
+        // Ревью M6 — связи этого товара с поставщиками (цена и ставка по
+        // умолчанию) — до строки: окно берёт их по товару, а не первыми 5000
+        // на всю клинику.
+        await loadLinksFor(p.id);
         const ln = { product: p, supplierId: p.supplier_id || null, batchNo: '', expiry: '', qty: 1, unitCost: null, vat: null };
         applyDefaults(ln);
         st.lines.push(ln);
@@ -753,10 +760,10 @@ export function openReceiveModal(onSaved) {
     const newProductBtn = h('button', {
         class: 'btn', type: 'button', style: { flex: '0 0 auto' },
         onclick: () => openProductModal(null, async (saved) => {
-            await Promise.all([loadProducts(), loadLinks()]);
+            await loadProducts();
             const created = saved && saved.id ? st.products.find((x) => x.id === saved.id) || saved
                 : st.products.reduce((a, b) => (!a || b.id > a.id ? b : a), null);
-            if (created) addLineFor(created);
+            if (created) { st.linksLoaded.delete(created.id); await addLineFor(created); }
         }),
     }, Icon('Plus', { size: 14 }), ' Новый товар');
 
@@ -770,13 +777,21 @@ export function openReceiveModal(onSaved) {
         st.suppliers = data || [];
     }
     // SUPPLIERS_VAT_V1 — цена и НДС поставщика для строк по умолчанию.
-    async function loadLinks() {
+    // Ревью M6 — связи ОДНОГО товара, когда его строка появляется в окне: прежде
+    // окно брало первые 5000 связей на всю клинику, и у товаров сверх них цены
+    // поставщика по умолчанию не было.
+    async function loadLinksFor(productId) {
+        const id = Number(productId);
+        if (!id || st.linksLoaded.has(id)) return;
+        st.linksLoaded.add(id);
         try {
-            const { data } = await supabase.from('item_suppliers').select('product_id, supplier_id, last_price, vat_rate, pack_factor').limit(5000);
-            st.links = data || [];
-        } catch (e) { st.links = []; }
+            const { data, error } = await supabase.from('item_suppliers')
+                .select('product_id, supplier_id, last_price, vat_rate, pack_factor').eq('product_id', id);
+            if (error) throw error;
+            st.links = st.links.filter((l) => Number(l.product_id) !== id).concat(data || []);
+        } catch (e) { st.linksLoaded.delete(id); }
     }
-    (async () => { await Promise.all([loadProducts(), loadSuppliers(), loadLinks()]); paintLines(); })();
+    (async () => { await Promise.all([loadProducts(), loadSuppliers()]); paintLines(); })();
 
     // ---- печать этикеток (name · партия · годен до · Nx) ----
     /* i18n-exempt-start: печать этикеток — печатный документ */

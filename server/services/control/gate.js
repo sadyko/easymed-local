@@ -174,6 +174,10 @@ const READ_ONLY_RPCS = new Set([
   // отказ одной его половине читается как «программа сломалась». Поставить или
   // снять минимум и подать заявку — записи, сюда не входят.
   'stock_minimums_list', 'stock_requests_mine',
+  // SUPPLIERS_VAT_V1 (ревью M6) — сколько товаров у каждого поставщика: колонка
+  // списка «Поставщики». Чистое чтение (группировка item_suppliers), и без неё
+  // список поставщиков при просроченной лицензии показывал бы нули.
+  'supplier_product_counts',
 ]);
 
 // The way back in. These must work while locked or a clinic that wants to pay

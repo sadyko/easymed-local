@@ -7,7 +7,7 @@ import { createInvoiceForVisit, recordPayment, recordPaymentSplit, markInvoiceDe
 import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDispensedAdmissionItem } from './inventory.js';
 import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOARD_TREND_V1
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel, createRequisition } from './procurement.js';
-import { productSave, supplierSave } from './catalog-goods.js';   // SUPPLIERS_VAT_V1 — карточки товара и поставщика со связями
+import { productSave, supplierSave, supplierProductCounts } from './catalog-goods.js';   // SUPPLIERS_VAT_V1 — карточки товара и поставщика со связями; счётчики (ревью M6)
 import { purchaseOrderCreate } from './procurement.js';   // SUPPLIERS_VAT_V1 — заказ на закупку с НДС строк
 import { departmentList, departmentCard, departmentForm, departmentHeadSet, departmentMemberSet, departmentPlaceSet, departmentStaffOptions, departmentPlaceOptions } from './departments.js';   // DEPARTMENTS_V1
 import { stockMovementsList } from './stock-log.js';   // STOCK_LOG_V1
@@ -197,9 +197,10 @@ export const RPC = {
   visit_items:                   (db, args, user) => visitItems(db, args, user),
   import_products_excel:         (db, args, user) => importProductsExcel(db, args, user),           // PROCUREMENT_REDESIGN_V1 — Импорт из Excel
   // SUPPLIERS_VAT_V1 — товар с поставщиками, поставщик с товарами: одна
-  // транзакция, тип и НДС проверяет сервер, право «Закупки: Изменение».
+  // транзакция, тип и НДС проверяет сервер; администратор и склад (ревью F1).
   product_save:                  (db, args, user) => productSave(db, args, user),
   supplier_save:                 (db, args, user) => supplierSave(db, args, user),
+  supplier_product_counts:       (db) => supplierProductCounts(db),   // SUPPLIERS_VAT_V1 (ревью M6) — сколько товаров у поставщика
   purchase_order_create:         (db, args, user) => purchaseOrderCreate(db, args, user),   // SUPPLIERS_VAT_V1 — строки заказа с НДС
   reports_overview:         (db, args, user) => reportsOverview(db, args, user),
   run_report:               (db, args, user) => runReport(db, args, user),

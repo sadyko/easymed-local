@@ -322,3 +322,17 @@ test('ревью M5: импорт — незнакомое поле строки
     sale_price: '', sale_vat_rate: '', vat_rate: '', reorder_level: '', supplier: '', batch_no: '', expiry_date: '' }] });
   assert.deepEqual(r, { created: 1, updated: 0, received: 0 });
 });
+
+// Ревью M6 — счётчики товаров у поставщика считает база, а не экран по
+// первым 5000 строкам связей; чтение — открыто и при просроченной лицензии.
+test('ревью M6: supplier_product_counts — число товаров у каждого поставщика, сколько бы связей ни было', () => {
+  const { db, A, B } = seed();
+  const insP = db.prepare("INSERT INTO products (name, procurement_category) VALUES (?, 'consumables')");
+  const insL = db.prepare('INSERT INTO item_suppliers (product_id, supplier_id) VALUES (?, ?)');
+  db.transaction(() => {
+    for (let i = 0; i < 6000; i++) { const p = insP.run('Товар ' + i).lastInsertRowid; insL.run(p, A); if (i % 2) insL.run(p, B); }
+  })();
+  const r = call('supplier_product_counts', db, {}, DOC);
+  assert.deepEqual(r.counts, [{ supplier_id: A, products: 6000 }, { supplier_id: B, products: 3000 }]);
+  assert.equal(isReadOnlyRpc('supplier_product_counts'), true);
+});

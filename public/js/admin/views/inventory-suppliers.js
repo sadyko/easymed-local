@@ -62,12 +62,14 @@ async function fetchAndPaint() {
         const [{ data, error }, lk] = await Promise.all([
             supabase.from('suppliers').select('*').order('name', { ascending: true }).limit(500),
             // SUPPLIERS_VAT_V1 — сколько товаров у поставщика (многие ко многим).
-            supabase.from('item_suppliers').select('supplier_id').limit(5000),
+            // Ревью M6 — считает сервер: первые 5000 строк связей на всю
+            // клинику недосчитывали у поставщиков, чьи связи лежали дальше.
+            supabase.rpc('supplier_product_counts', {}),
         ]);
         if (token !== fetchGuard.token) return;
         if (error) throw error;
         const counts = new Map();
-        for (const l of ((lk && !lk.error && lk.data) || [])) counts.set(l.supplier_id, (counts.get(l.supplier_id) || 0) + 1);
+        for (const c of ((lk && !lk.error && lk.data && lk.data.counts) || [])) counts.set(c.supplier_id, Number(c.products) || 0);
         paintRows(data || [], counts);
         refs.totalEl.textContent = trf('Поставщиков: {n}', { n: (data || []).length });
     } catch (e) {
