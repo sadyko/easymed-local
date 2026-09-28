@@ -851,6 +851,18 @@ export const REGISTRY = {
              delete: { roles: [] } },
     filters: ['id','role'], embed: {},
   },
+  // V3121_ROLES (мигр. 215) — роли, чей «Просмотр» на стационаре или складе
+  // совпал с отпечатком старого экрана «Роли» (public/js/shared/old-screen-view.js).
+  // Заводит только миграция; администратор в «Ролях» решает: вернуть права по
+  // умолчанию или оставить как есть — отметка решения и есть единственная правка.
+  role_permission_reviews: {
+    read:  { roles: ['admin'], columns: ['id','role','area','found_at','resolution','resolved_at','resolved_by'] },
+    write: { insert: { roles: [] },
+             update: { roles: ['admin'], columns: ['resolution','resolved_at'] },
+             delete: { roles: [] } },
+    stamps: { resolved_by: { with: 'resolved_at' } },
+    filters: ['id','role','area','resolution'], embed: {},
+  },
 
   // ─── Clinical spine (migration 024) ──────────────────────────────────────
   // Doctor orders / referrals. consultation.js, service-workspace.js, visit-modal.js.

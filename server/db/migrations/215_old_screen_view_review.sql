@@ -7,28 +7,29 @@
 -- и действии раздела (permission-catalog.js grantsFromLegacy), а «Выписку» и
 -- «Выдачу со склада», у которых просмотра нет, — в «Нет». С 3.2 сервер эти
 -- ключи проверяет: медсестра не записывает измерения, не отмечает введение
--- препарата, не добавляет услугу в стационаре; склад не выдаёт со склада.
+-- препарата; склад не выдаёт со склада.
 --
--- ЧТО ДЕЛАЕМ. Только у строки с ТОЧНЫМ отпечатком того перевода — старый
--- уровень раздела «viewer» и ВСЕ ключи раздела ровно такие, какими их пишет
--- grantsFromLegacy из «viewer», — ключи снимаются. Решение возвращается
--- прежнему правилу ролей в коде, то есть тому, что основа роли получает по
--- умолчанию (штатная медсестра — та же): ни одной строки выше основы, ни
--- одного ключа «только администратор» или денег. Уровень раздела ставится
--- «editor», как у штатных ролей: иначе следующее «Сохранить» на матрице снова
--- вывело бы из «viewer» тот же «Просмотр». Строку, где хоть один ключ
--- выставлен иначе (руками), не трогаем. Повторный накат ничего не меняет.
+-- ПОЧЕМУ НЕ ИСПРАВЛЯЕМ САМИ. Такую строку нельзя отличить от НАМЕРЕННОГО
+-- «только просмотр», выставленного на нынешнем экране: сохранение даёт те же
+-- байты. Поэтому права здесь не меняются. Строки с точным отпечатком старого
+-- перевода (public/js/shared/old-screen-view.js — тот же отпечаток, тест
+-- сверяет) записываются в role_permission_reviews, и экран «Роли» показывает
+-- администратору такую роль с выбором: «Вернуть права по умолчанию» или
+-- «Оставить как есть». Повторный накат ничего не меняет.
+CREATE TABLE IF NOT EXISTS role_permission_reviews (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  role        TEXT NOT NULL,
+  area        TEXT NOT NULL CHECK (area IN ('inpatient', 'procurement')),
+  found_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  resolution  TEXT CHECK (resolution IS NULL OR resolution IN ('restored', 'kept')),
+  resolved_at TEXT,
+  resolved_by INTEGER REFERENCES users(id),
+  UNIQUE (role, area)
+);
 
 -- Стационар: разделы inpatient, mar, kitchen, discharges (старый ключ beds).
-UPDATE role_permissions
-   SET permissions = json_set(json_remove(permissions,
-         '$.grants."inpatient"', '$.grants."inpatient.requests"', '$.grants."inpatient.patients"',
-         '$.grants."inpatient.beds"', '$.grants."inpatient.history"', '$.grants."inpatient.prescriptions"',
-         '$.grants."inpatient.marks"', '$.grants."inpatient.vitals"', '$.grants."inpatient.reviews"',
-         '$.grants."inpatient.services"', '$.grants."inpatient.discharge"',
-         '$.grants."mar"', '$.grants."mar.outpatient"', '$.grants."mar.inpatient"',
-         '$.grants."kitchen"', '$.grants."discharges"'),
-         '$.levels.beds', 'editor')
+INSERT OR IGNORE INTO role_permission_reviews (role, area)
+SELECT role, 'inpatient' FROM role_permissions
  WHERE role <> 'admin'
    AND json_valid(permissions)
    AND json_extract(permissions, '$.levels.beds') = 'viewer'
@@ -50,9 +51,8 @@ UPDATE role_permissions
    AND json_extract(permissions, '$.grants."discharges"') = 'view';
 
 -- Закупки (старый ключ inventory): «Просмотр» раздела и «Нет» у выдачи.
-UPDATE role_permissions
-   SET permissions = json_set(json_remove(permissions, '$.grants."procurement"', '$.grants."procurement.issue"'),
-         '$.levels.inventory', 'editor')
+INSERT OR IGNORE INTO role_permission_reviews (role, area)
+SELECT role, 'procurement' FROM role_permissions
  WHERE role <> 'admin'
    AND json_valid(permissions)
    AND json_extract(permissions, '$.levels.inventory') = 'viewer'
