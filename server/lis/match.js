@@ -74,12 +74,16 @@ export function planObservations(observations = [], analytes = []) {
     });
   }
 
+  // Ревью R5 (правило 3 спецификации): совпадение с НЕподтверждённой строкой
+  // бланка считается и тогда, когда строку прибора уже взяла подтверждённая.
+  // «6690-2^WBC^LN» ложится в строку «WBC», но код «6690-2» человек положил в
+  // другую строку и не подтвердил — посмотреть обязан человек. Раньше
+  // проверялись только неиспользованные строки, и такая проба проходила молча.
   const unconfirmedHits = [];
   const unused = [];
   observations.forEach((obs, i) => {
-    if (used.has(i)) return;
     if (unconfirmed.has(key(obs.code)) || unconfirmed.has(key(obs.name))) unconfirmedHits.push(obs);
-    else unused.push(obs);
+    else if (!used.has(i)) unused.push(obs);
   });
 
   const missing = expected

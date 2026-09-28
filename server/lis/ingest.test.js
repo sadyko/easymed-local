@@ -382,3 +382,15 @@ test('R2: две подтверждённые строки бланка с од�
   assert.match(message(db).detail, /не пришли: Лейкоциты \(абс\.\) \(WBC, код уже у строки «Лейкоциты»\)/);
   db.close();
 });
+
+test('R5: код неподтверждённой строки пришёл, хотя его взяла подтверждённая, — проба в лотке', () => {
+  const db = fresh();
+  db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed)
+              VALUES (5,'WBC-LN','Лейкоциты (LOINC)','10^9/л',3,'6690-2',0)`).run();
+  ingestMessage(db, MSG('LAB-000123', [OBXR(1, '6690-2^WBC^LN', '9.81'), OBXR(2, '718-7^HGB^LN', '142')]), '127.0.0.1');
+  assert.equal(results(db).find((r) => r.parameter === 'Лейкоциты').value, '9.81');
+  assert.equal(results(db).filter((r) => r.parameter === 'Лейкоциты (LOINC)').length, 0, 'D4: неподтверждённое не применяется');
+  assert.equal(message(db).status, 'unmapped');
+  assert.match(message(db).detail, /не подтверждено: 6690-2\^WBC\^LN/);
+  db.close();
+});
