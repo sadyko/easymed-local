@@ -11,12 +11,29 @@
 -- таблицы само ничего не выпадает. 0 ставит только сервер (discover.js).
 ALTER TABLE lab_devices ADD COLUMN added INTEGER NOT NULL DEFAULT 1 CHECK (added IN (0, 1));
 
+-- Ревью M7 — сообщения по прибору: бэкфиллу ниже, удалению прибора
+-- (lis_device_delete отвязывает его сообщения) и lis_device_codes («последняя
+-- сотня сообщений приборов этой модели»). Без индекса каждый читал весь лоток,
+-- а в нём месяцы проб с картинками.
+CREATE INDEX IF NOT EXISTS idx_lab_device_messages_device ON lab_device_messages(device_id, id);
+
 -- «На связи» ставилась только когда проба ложилась в бланк; прибор, чьи пробы
 -- не находили заказ, выглядел молчащим неделями. Чиним прошлое: самое позднее
 -- сообщение прибора — его последняя связь, если оно позже отметки. Повторный
 -- накат ничего не меняет: условие уже не выполняется.
+--
+-- Ревью M7: один проход (UPDATE … FROM с GROUP BY), а не подзапрос на каждую
+-- строку. Мусор (rejected) не в счёт — неразобранное не доказывает, что
+-- говорил анализатор (то же правило, что в ingest.js). Метка из будущего
+-- (часы компьютера уезжали вперёд) не копируется: liveness() ей не верит, и
+-- прибор с ней выглядел бы так, будто не присылал ничего.
 UPDATE lab_devices
-   SET last_seen_at = (SELECT MAX(m.received_at) FROM lab_device_messages m WHERE m.device_id = lab_devices.id)
- WHERE EXISTS (SELECT 1 FROM lab_device_messages m
-                WHERE m.device_id = lab_devices.id
-                  AND (lab_devices.last_seen_at IS NULL OR m.received_at > lab_devices.last_seen_at));
+   SET last_seen_at = x.last
+  FROM (SELECT device_id, MAX(received_at) AS last
+          FROM lab_device_messages
+         WHERE device_id IS NOT NULL
+           AND status <> 'rejected'
+           AND received_at <= strftime('%Y-%m-%dT%H:%M:%SZ','now')
+         GROUP BY device_id) AS x
+ WHERE x.device_id = lab_devices.id
+   AND (lab_devices.last_seen_at IS NULL OR x.last > lab_devices.last_seen_at);

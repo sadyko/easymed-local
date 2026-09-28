@@ -11,7 +11,7 @@ import { tmpDir } from '../../test-helpers/tmpdir.js';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const SQL = fs.readFileSync(path.join(DIR, '228_lab_device_added.sql'), 'utf8');
-// Бэкфилл — второе предложение файла: повторный накат проверяется им одним
+// Бэкфилл — последнее предложение файла: повторный накат проверяется им одним
 // (ALTER TABLE второй раз не выполнить, и миграции второй раз не катятся).
 const BACKFILL = SQL.slice(SQL.indexOf('UPDATE lab_devices'));
 
@@ -61,5 +61,39 @@ test('228: существующие приборы остаются добавл
     const before = db.prepare('SELECT id, last_seen_at, added FROM lab_devices ORDER BY id').all();
     db.exec(BACKFILL);
     assert.deepEqual(db.prepare('SELECT id, last_seen_at, added FROM lab_devices ORDER BY id').all(), before, 'повторный бэкфилл ничего не меняет');
+  } finally { db.close(); }
+});
+
+// Ревью M7 — бэкфилл одним проходом; мусор и метки из будущего не в счёт.
+test('228 (ревью M7): мусор (rejected) и метка из будущего — не связь; повторный накат ничего не меняет', () => {
+  const db = dbBefore228();
+  try {
+    const dev = db.prepare("INSERT INTO lab_devices (id, name, profile, last_seen_at) VALUES (?, ?, '', ?)");
+    dev.run(1, 'Пробы и мусор после них', null);
+    dev.run(2, 'Только мусор', null);
+    dev.run(3, 'Пробы и метка из будущего', null);
+    dev.run(4, 'Только метка из будущего', '2026-09-01T00:00:00Z');
+    const msg = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status, received_at) VALUES (?, '127.0.0.1', 'MSH|', ?, ?)");
+    msg.run(1, 'unmatched', '2026-09-12T08:00:00Z');
+    msg.run(1, 'rejected', '2026-09-13T09:00:00Z');   // неразобранное не доказывает, что говорил анализатор (как в ingest.js)
+    msg.run(2, 'rejected', '2026-09-14T09:00:00Z');
+    msg.run(3, 'applied', '2026-09-13T08:00:00Z');
+    msg.run(3, 'unmapped', '2999-01-01T00:00:00Z');   // часы компьютера уезжали вперёд
+    msg.run(4, 'unmatched', '2999-01-01T00:00:00Z');
+    msg.run(null, 'unmatched', '2026-09-20T08:00:00Z');   // без прибора — никому
+
+    db.exec(SQL);
+    const seen = (id) => db.prepare('SELECT last_seen_at FROM lab_devices WHERE id = ?').get(id).last_seen_at;
+    assert.equal(seen(1), '2026-09-12T08:00:00Z', 'мусор после проб отметку не двигает');
+    assert.equal(seen(2), null, 'одним мусором прибор «на связь» не выходит');
+    assert.equal(seen(3), '2026-09-13T08:00:00Z', 'метка из будущего не копируется — берётся самая поздняя настоящая');
+    assert.equal(seen(4), '2026-09-01T00:00:00Z', 'будущее не затирает прежнюю отметку');
+    assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_lab_device_messages_device'").get(),
+      'индекс по прибору: бэкфилл, удаление прибора и lis_device_codes не читают весь лоток');
+
+    const before = db.prepare('SELECT id, last_seen_at FROM lab_devices ORDER BY id').all();
+    db.exec(BACKFILL);
+    assert.deepEqual(db.prepare('SELECT id, last_seen_at FROM lab_devices ORDER BY id').all(), before, 'повторный бэкфилл ничего не меняет');
+    assert.ok(!/CREATE INDEX|ALTER TABLE/.test(BACKFILL), 'повторяется только бэкфилл: ' + BACKFILL.slice(0, 80));
   } finally { db.close(); }
 });
