@@ -858,27 +858,46 @@ export async function mountLabPanels(container) {
         const sent = state.deviceCodes[Number(state.selected.device_id)] || [];
         const choice = codeChoices({ sent, channels: deviceChannels(), current: r.device_code });
         const noLists = !choice.sent.length && !choice.typical.length;
+        // Код есть, но человек его не подтверждал (подсказка suggestMapping или
+        // строка из базы): курсив и кнопка «Подтвердить» — и у списка, и у поля.
+        const suggested = !!(r.device_code || '').trim() && !r.device_code_confirmed;
+        const UNCONFIRMED_LOOK = { opacity: '0.65', fontStyle: 'italic' };
+        const confirmButton = () => h('button', {
+            class: 'lp-ic', type: 'button', title: 'Подтвердить это сопоставление',
+            'aria-label': 'Подтвердить сопоставление',
+            onclick: () => { r.device_code_confirmed = 1; paintEditor(); },
+        }, Icon('Check', { size: 12 }));
 
         if (r._typing || noLists) {
+            // LIS_MINDRAY_CODES_V1 (ревью R4) — неподтверждённый код видно и в
+            // режиме ввода. Раньше строка с подсказкой, переведённая в «Вписать
+            // код…», выглядела подтверждённой: сохранение отказывало
+            // «Подтвердите поля анализатора…», а на экране не было ни следа, что
+            // и как подтверждать.
+            const confirm = suggested ? confirmButton() : null;
             const inp = h('input', {
-                value: r.device_code || '', placeholder: 'код канала', class: 'lw-inp', style: { width: '130px' },
+                value: r.device_code || '', placeholder: 'код канала', class: 'lw-inp',
+                style: { width: '130px', ...(suggested ? UNCONFIRMED_LOOK : {}) },
                 title: 'Впишите код так, как его присылает прибор',
-                // Вписал сам — это и есть подтверждение.
-                oninput: (e) => { r.device_code = e.target.value; r.device_code_confirmed = e.target.value.trim() ? 1 : 0; },
+                // Вписал сам — это и есть подтверждение. Вид догоняет строку
+                // здесь же: перерисовка на каждый символ сбила бы курсор.
+                oninput: (e) => {
+                    r.device_code = e.target.value; r.device_code_confirmed = e.target.value.trim() ? 1 : 0;
+                    if (confirm) { inp.style.opacity = ''; inp.style.fontStyle = ''; confirm.style.display = 'none'; }
+                },
             });
-            if (noLists) return inp;
-            return h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, inp,
-                h('button', {
+            if (noLists && !confirm) return inp;
+            return h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, inp, confirm,
+                noLists ? null : h('button', {
                     class: 'lp-ic', type: 'button', title: 'Вернуться к списку', 'aria-label': 'Вернуться к списку',
                     onclick: () => { r._typing = false; paintEditor(); },
                 }, Icon('ListBullet', { size: 12 })));   // значок системы, а не стрелка U+21A9: та — эмодзи (Extended_Pictographic)
         }
 
-        const suggested = !!(r.device_code || '').trim() && !r.device_code_confirmed;
         const opt = (o) => h('option', { value: o.value, selected: o.value === choice.selected ? true : null }, o.label);
         const sel = h('select', {
             class: 'lw-inp',
-            style: { width: '170px', ...(suggested ? { opacity: '0.65', fontStyle: 'italic' } : {}) },
+            style: { width: '170px', ...(suggested ? UNCONFIRMED_LOOK : {}) },
             onchange: (e) => {
                 if (e.target.value === TYPE_OWN) { r._typing = true; paintEditor(); return; }
                 // Человек выбрал сам — это и есть подтверждение.
@@ -892,12 +911,7 @@ export async function mountLabPanels(container) {
             h('option', { value: TYPE_OWN }, 'Вписать код…'));
 
         if (!suggested) return sel;
-        return h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, sel,
-            h('button', {
-                class: 'lp-ic', type: 'button', title: 'Подтвердить это сопоставление',
-                'aria-label': 'Подтвердить сопоставление',
-                onclick: () => { r.device_code_confirmed = 1; paintEditor(); },
-            }, Icon('Check', { size: 12 })));
+        return h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, sel, confirmButton());
     }
 
     function analyteRow(r, idx) {

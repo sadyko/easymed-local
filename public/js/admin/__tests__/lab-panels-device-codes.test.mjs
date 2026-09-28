@@ -251,3 +251,61 @@ test('R3: набранное в шапке переживает перерисо
     assert.strictEqual(upd.values.name, 'ОАК — развёрнутый');
   } finally { codesGate = null; }
 });
+
+// R4: строка с подсказкой (код есть, не подтверждён), переведённая в «Вписать
+// код…», выглядела подтверждённой. Сохранение отказывало «Подтвердите поля
+// анализатора…», а на экране не было ни следа, что и как подтверждать.
+const deviceTbody = (root) => walk(root).find((n) => n.tagName === 'TBODY');
+const codeInput = (root) => walk(deviceTbody(root)).find((n) => n.tagName === 'INPUT' && n.attrs.placeholder === 'код канала');
+const confirmButton = (root) => walk(deviceTbody(root)).find((n) => n.tagName === 'BUTTON' && n.attrs['aria-label'] === 'Подтвердить сопоставление');
+async function typeOwnCode(root) {
+  const sel = walk(deviceTbody(root)).find((n) => n.tagName === 'SELECT' && walk(n).some((o) => o.tagName === 'OPTGROUP'));
+  sel.value = '__lis_type_own__';
+  sel.dispatchEvent({ type: 'change', target: sel });
+  await tick();
+}
+
+test('R4: «Вписать код…» с неподтверждённым кодом — курсив и кнопка «Подтвердить», как у списка', async () => {
+  ANALYTES = [analyte({ device_code: 'WBC', device_code_confirmed: 0 })];
+  const root = await mountPanels();
+  await typeOwnCode(root);
+  const inp = codeInput(root);
+  assert.ok(inp, 'поле своего кода');
+  assert.strictEqual(inp.value, 'WBC');
+  assert.strictEqual(inp.style.fontStyle, 'italic', 'неподтверждённое видно и в режиме ввода');
+  const btn = confirmButton(root);
+  assert.ok(btn && btn.style.display !== 'none', 'кнопка подтверждения рядом с полем');
+
+  findButtonByText(root, /Сохранить панель/).click();
+  await tick(80);
+  assert.strictEqual(toastMsg, 'Подтвердите поля анализатора: Лейкоциты');
+  assert.ok(!writes.length, 'неподтверждённое не сохраняется');
+
+  btn.click();
+  await tick();
+  const after = codeInput(root);
+  assert.ok(after, 'подтверждение не выбрасывает из режима ввода');
+  assert.notStrictEqual(after.style.fontStyle, 'italic');
+  const gone = confirmButton(root);
+  assert.ok(!gone || gone.style.display === 'none', 'подтверждать больше нечего');
+
+  findButtonByText(root, /Сохранить панель/).click();
+  await tick(80);
+  const ins = writes.find((w) => w.table === 'lab_panel_analytes' && w.op === 'insert');
+  assert.ok(ins, 'сохранено: ' + JSON.stringify(writes.map((w) => w.table + ':' + w.op)));
+  const row = [].concat(ins.values)[0];
+  assert.deepStrictEqual({ code: row.device_code, confirmed: row.device_code_confirmed }, { code: 'WBC', confirmed: 1 });
+});
+
+test('R4: вписанный руками код подтверждает строку сразу — курсив и кнопка уходят без перерисовки', async () => {
+  ANALYTES = [analyte({ device_code: 'WBC', device_code_confirmed: 0 })];
+  const root = await mountPanels();
+  await typeOwnCode(root);
+  const inp = codeInput(root);
+  const btn = confirmButton(root);
+  inp.value = '6690-2';
+  inp.dispatchEvent({ type: 'input', target: inp });
+  assert.strictEqual(codeInput(root), inp, 'поле то же — курсор не сбит перерисовкой');
+  assert.notStrictEqual(inp.style.fontStyle, 'italic');
+  assert.strictEqual(btn.style.display, 'none');
+});
