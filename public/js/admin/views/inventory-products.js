@@ -21,7 +21,7 @@ import { fetchGuard, fmtPrice, fmtMoney2, fmtQty, CATEGORY_LABEL, selStyle, numS
 import { categoryFilter, loadCategories, matchesCategories } from './category-filter.js';   // PROCUREMENT_FILTERS_V1
 import { openSupplierModal } from './inventory-suppliers.js';   // ADD_PRODUCT_EASYMED_V1 — «+ Новый поставщик» из карточки товара
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
-import { GOODS_CATEGORIES, VAT_STANDARD, vatOnNet } from '../../shared/goods-catalog.js';   // SUPPLIERS_VAT_V1
+import { GOODS_CATEGORIES, VAT_STANDARD, vatOnNet, linkPriceFor, packOf } from '../../shared/goods-catalog.js';   // SUPPLIERS_VAT_V1; цена связи — ревью F2
 
 const productRefs = { tbody: null, emptyEl: null, totalEl: null, all: [], q: '', cats: [], suppliersOf: new Map() };
 
@@ -571,11 +571,16 @@ export function receiptLineMoney(ln) {
     return { net, vat, gross: Math.round((net + vat) * 100) / 100 };
 }
 
-/** Цена и НДС строки по умолчанию: связь с поставщиком, иначе товар. */
+/**
+ * Цена и НДС строки по умолчанию: связь с поставщиком, иначе товар.
+ * Ревью F2 — строка прихода считается в единице закупки ТОВАРА (упаковка
+ * товара), а цена связи — за единицу закупки СВЯЗИ: у поставщика «кор = 100
+ * таб» по 9 000, у товара «уп = 10 таб» — строка получает 900 за уп.
+ */
 export function receiptDefaults(product, supplierId, links) {
     const link = supplierId ? (links || []).find((l) => l.product_id === product.id && l.supplier_id === supplierId) : null;
     if (link) {
-        return { unitCost: link.last_price == null ? null : Number(link.last_price), vat: link.vat_rate == null ? null : Number(link.vat_rate) };
+        return { unitCost: linkPriceFor(link, product, packOf(product.pack_factor) || 1), vat: link.vat_rate == null ? null : Number(link.vat_rate) };
     }
     const vat = product.vat_rate == null ? null : Number(product.vat_rate);
     const pack = Number(product.pack_factor) > 0 ? Number(product.pack_factor) : 1;
@@ -767,7 +772,7 @@ export function openReceiveModal(onSaved) {
     // SUPPLIERS_VAT_V1 — цена и НДС поставщика для строк по умолчанию.
     async function loadLinks() {
         try {
-            const { data } = await supabase.from('item_suppliers').select('product_id, supplier_id, last_price, vat_rate').limit(5000);
+            const { data } = await supabase.from('item_suppliers').select('product_id, supplier_id, last_price, vat_rate, pack_factor').limit(5000);
             st.links = data || [];
         } catch (e) { st.links = []; }
     }

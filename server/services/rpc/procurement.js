@@ -26,7 +26,7 @@ import { roundQty, factorOf, toBase, settleQty, coversQty } from '../domain/stoc
 // SUPPLIERS_VAT_V1 — тип товара, ставка НДС и срок годности импорта: один
 // список на сервер и экран; приход помнит цену и НДС поставщика.
 import {
-  GOODS_CATEGORY_LIST_RU, parseGoodsCategory, parseVatRate, vatOnNet, parseExpiryDmy,
+  GOODS_CATEGORY_LIST_RU, parseGoodsCategory, parseVatRate, vatOnNet, parseExpiryDmy, linkPriceFor,
 } from '../../../public/js/shared/goods-catalog.js';
 import { requireCatalogEdit, rememberSupplierPrice } from './catalog-goods.js';
 import { today } from '../domain/day.js';   // SUPPLIERS_VAT_V1 — номер заказа по дню клиники
@@ -185,11 +185,11 @@ export function receiveStockLines(db, args, user) {
       updateProduct.run(newOnHand, newAvg, productId);
       insertMovement.run(productId, baseQty, costPerBase, note, user.id, supplierId, batchNo, expiry, m.vatRate, m.vatAmount);
       // SUPPLIERS_VAT_V1 — связь «товар ↔ поставщик»: заводится, если её не
-      // было, и помнит последнюю цену (без НДС, за единицу закупки) и ставку.
+      // было, и помнит последнюю цену (без НДС) и ставку. Ревью F2: цена строки
+      // — за factor базовых единиц, а связь хранит её в СВОЕЙ упаковке.
       if (supplierId) {
         rememberSupplierPrice(db, {
-          productId, supplierId, vat,
-          lastPrice: round2(unit === 'purchase' ? unitCost : unitCost * packFactor),
+          productId, supplierId, vat, price: unitCost, per: factor,
           packFactor: product.pack_factor, purchaseUnit: product.purchase_unit,
         });
       }
@@ -306,10 +306,9 @@ export function receivePurchaseOrder(db, args, user) {
         po.supplier_id || null, batchNo, expiry, m.vatRate, m.vatAmount);
       bumpReceived.run(qty, item.id);
       if (po.supplier_id) {
-        const pack = product.pack_factor > 0 ? product.pack_factor : 1;
         rememberSupplierPrice(db, {
           productId: product.id, supplierId: po.supplier_id, vat,
-          lastPrice: round2((item.unit_cost || 0) * pack),   // цена заказа — за базовую единицу
+          price: item.unit_cost || 0, per: 1,   // цена заказа — за базовую единицу (ревью F2)
           packFactor: product.pack_factor, purchaseUnit: product.purchase_unit,
         });
       }
@@ -385,14 +384,15 @@ export function purchaseOrderCreate(db, args, user) {
       throw new RpcError('Поставщик не найден.', 404);
     }
     const getProduct = db.prepare('SELECT id, name, pack_factor, vat_rate FROM products WHERE id = ?');
-    const getLink = db.prepare('SELECT last_price, vat_rate FROM item_suppliers WHERE product_id = ? AND supplier_id = ?');
+    const getLink = db.prepare('SELECT last_price, vat_rate, pack_factor FROM item_suppliers WHERE product_id = ? AND supplier_id = ?');
     const priced = lines.map((l) => {
       const product = getProduct.get(l.productId);
       if (!product) throw rpcT(RpcError, 'Товар №{id} не найден.', { id: l.productId }, 404);
       const link = supplierId ? getLink.get(l.productId, supplierId) : null;
-      const pack = product.pack_factor > 0 ? product.pack_factor : 1;
-      const unitCost = l.unitCost !== undefined ? l.unitCost
-        : (link && link.last_price != null ? round2(link.last_price / pack) : 0);
+      // Ревью F2 — цена связи за её СОБСТВЕННУЮ упаковку («кор = 100 таб»), а не
+      // за упаковку товара: 9 000 за коробку → 90 за таблетку, а не 900.
+      const linkPrice = linkPriceFor(link, product, 1);
+      const unitCost = l.unitCost !== undefined ? l.unitCost : (linkPrice == null ? 0 : linkPrice);
       const vat = l.vat !== undefined ? l.vat
         : (link ? (link.vat_rate == null ? null : Number(link.vat_rate)) : (product.vat_rate == null ? null : Number(product.vat_rate)));
       const net = round2(l.qty * unitCost);
@@ -994,9 +994,9 @@ export function importProductsExcel(db, args, user) {
       if (supplierId) {
         const product = findProduct.get(name);
         if (qty !== null && qty > 0 && unitCost !== null) {
-          const pack = product.pack_factor > 0 ? product.pack_factor : 1;
+          // Ревью F2 — цена импорта — за базовую единицу; связь помнит её в своей упаковке.
           rememberSupplierPrice(db, { productId: product.id, supplierId, vat: vatCell.empty ? undefined : vatCell.rate,
-            lastPrice: round2(unitCost * pack), packFactor: product.pack_factor, purchaseUnit: product.purchase_unit });
+            price: unitCost, per: 1, packFactor: product.pack_factor, purchaseUnit: product.purchase_unit });
         } else {
           db.prepare(`INSERT OR IGNORE INTO item_suppliers (product_id, supplier_id, pack_factor, purchase_unit)
                       VALUES (?, ?, ?, ?)`).run(product.id, supplierId, product.pack_factor, product.purchase_unit);

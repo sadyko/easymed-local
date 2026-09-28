@@ -106,6 +106,45 @@ export function grossOfNet(net, rate) {
 }
 
 // ---------------------------------------------------------------------------
+// SUPPLIERS_VAT_V1 (ревью F2) — ЦЕНА СВЯЗИ «ТОВАР ↔ ПОСТАВЩИК» — ЗА ЕДИНИЦУ
+// ЗАКУПКИ СВЯЗИ.
+//
+// У каждой связи своя упаковка (item_suppliers.pack_factor: «1 кор = 100
+// таб»), и last_price — цена без НДС за ЭТУ упаковку; карточка поставщика так
+// её и подписывает («сум за кор»). Делить её на упаковку ТОВАРА (10 таб в
+// «уп») значило в десять раз ошибиться: заказ подставлял 900 за таблетку
+// вместо 90. Упаковки связи нет (старая строка) — упаковка товара, её нет —
+// базовая единица. Одно правило на сервер и экран.
+// ---------------------------------------------------------------------------
+/** Положительная упаковка или null. */
+export function packOf(v) {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Сколько базовых единиц в единице закупки СВЯЗИ. */
+export function linkPackOf(link, product) {
+    return packOf(link && link.pack_factor) || packOf(product && product.pack_factor) || 1;
+}
+
+/**
+ * Цена связи без НДС за `per` базовых единиц: per = 1 — за базовую единицу
+ * (строка заказа), per = упаковка товара — за единицу закупки товара (окно
+ * «Принять товар»). Цены у связи нет — null.
+ */
+export function linkPriceFor(link, product, per = 1) {
+    if (!link || link.last_price === null || link.last_price === undefined || link.last_price === '') return null;
+    const price = Number(link.last_price);
+    if (!Number.isFinite(price)) return null;
+    return round2(price * (packOf(per) || 1) / linkPackOf(link, product));
+}
+
+/** Обратно: цена за `per` базовых единиц → цена за единицу закупки связи (упаковка `linkPack`). */
+export function priceInLinkPack(price, per, linkPack) {
+    return round2((Number(price) || 0) * (packOf(linkPack) || 1) / (packOf(per) || 1));
+}
+
+// ---------------------------------------------------------------------------
 // СРОК ГОДНОСТИ В ИМПОРТЕ — ОДИН ФОРМАТ ДД.ММ.ГГГГ
 // ---------------------------------------------------------------------------
 export const EXPIRY_FORMAT_RU = 'ДД.ММ.ГГГГ';

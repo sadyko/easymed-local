@@ -9,7 +9,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, fmtDateTime, field, Tag } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { fmtPrice, fmtMoney2, fmtQty, fmtSignedQty, loadingCard, selStyle, numStyle, vatSelect, vatToSelect, vatText } from './inventory-shared.js';
-import { vatOnNet } from '../../shared/goods-catalog.js';   // SUPPLIERS_VAT_V1 — НДС строки заказа (для показа)
+import { vatOnNet, linkPriceFor } from '../../shared/goods-catalog.js';   // SUPPLIERS_VAT_V1 — НДС строки заказа (для показа); цена связи (ревью F2)
 
 // Локальный анти-гонковый токен (в старом файле был общий на модуль).
 let lastFetchToken = 0;
@@ -23,16 +23,15 @@ async function loadActiveProducts(cols = 'id,name,base_unit') {
 
 // SUPPLIERS_VAT_V1 (2026-09-28) — строка заказа на закупку: цена за БАЗОВУЮ
 // единицу без НДС и ставка НДС. По умолчанию — из связи товара с поставщиком
-// заказа (цена связи — за единицу закупки, делится на упаковку), иначе ставка
-// товара; поправленное руками смена поставщика не трогает. Суммы строки и
-// заказа — для показа; НДС и сумму заказа записывает сервер
-// (purchase_order_create).
+// заказа, иначе ставка товара; поправленное руками смена поставщика не
+// трогает. Суммы строки и заказа — для показа; НДС и сумму заказа записывает
+// сервер (purchase_order_create).
+// Ревью F2 — цена связи — за единицу закупки СВЯЗИ (её упаковка, «кор = 100
+// таб»), а не товара: делить её на упаковку товара значило ошибиться в разы.
 export function poLineDefaults(product, supplierId, links) {
     const link = supplierId ? (links || []).find((l) => l.product_id === product.id && l.supplier_id === supplierId) : null;
     if (link) {
-        const pack = Number(product.pack_factor) > 0 ? Number(product.pack_factor) : 1;
-        return { cost: link.last_price == null ? null : Math.round(Number(link.last_price) / pack * 100) / 100,
-                 vat: link.vat_rate == null ? null : Number(link.vat_rate) };
+        return { cost: linkPriceFor(link, product, 1), vat: link.vat_rate == null ? null : Number(link.vat_rate) };
     }
     return { cost: null, vat: product.vat_rate == null ? null : Number(product.vat_rate) };
 }
@@ -250,7 +249,7 @@ async function openPOModal(onSaved) {
     try { products = await loadActiveProducts('id,name,base_unit,pack_factor,vat_rate'); } catch (e) { toast('Не удалось загрузить товары.', 'fail'); }
     try { const r = await supabase.from('suppliers').select('id,name').eq('active', 1).order('name', { ascending: true }); suppliers = r.data || []; } catch (e) { /* optional */ }
     // SUPPLIERS_VAT_V1 — цены и ставки поставщиков для строк по умолчанию.
-    try { const r = await supabase.from('item_suppliers').select('product_id, supplier_id, last_price, vat_rate').limit(5000); links = r.data || []; } catch (e) { /* без подсказок */ }
+    try { const r = await supabase.from('item_suppliers').select('product_id, supplier_id, last_price, vat_rate, pack_factor').limit(5000); links = r.data || []; } catch (e) { /* без подсказок */ }
 
     const supplierSel = h('select', { style: selStyle }, h('option', { value: '' }, '— No supplier —'),
         ...suppliers.map(s => h('option', { value: String(s.id) }, s.name)));

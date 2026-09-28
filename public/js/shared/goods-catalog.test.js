@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   GOODS_CATEGORIES, GOODS_CATEGORY_RU, parseGoodsCategory, parseVatRate, vatLabel, vatOnNet, grossOfNet,
-  parseExpiryDmy, dmyOfDate,
+  parseExpiryDmy, dmyOfDate, packOf, linkPackOf, linkPriceFor, priceInLinkPack,
 } from './goods-catalog.js';
 import { PROCUREMENT_CATEGORIES } from '../../../server/services/rpc/expiry.js';
 import { openDb } from '../../../server/db/connection.js';
@@ -71,4 +71,21 @@ test('дата-ячейка Excel → ДД.ММ.ГГГГ при любой по�
   assert.equal(dmyOfDate(new Date(2027, 0, 5, 0, 0, 43)), '05.01.2027', 'секундная поправка старого пояса');
   assert.equal(dmyOfDate(new Date('x')), null);
   assert.equal(dmyOfDate('31.12.2027'), null);
+});
+
+// SUPPLIERS_VAT_V1 (ревью F2) — цена связи — за единицу закупки СВЯЗИ.
+test('ревью F2: цена связи переводится через упаковку связи, а не товара', () => {
+  const product = { pack_factor: 10 };                       // уп = 10 таб
+  const link = { last_price: 9000, pack_factor: 100 };       // кор = 100 таб
+  assert.equal(linkPackOf(link, product), 100);
+  assert.equal(linkPackOf({ last_price: 1 }, product), 10, 'у связи нет упаковки — упаковка товара');
+  assert.equal(linkPackOf({}, {}), 1);
+  assert.equal(linkPriceFor(link, product, 1), 90, 'за таблетку');
+  assert.equal(linkPriceFor(link, product, 10), 900, 'за упаковку товара');
+  assert.equal(linkPriceFor({ last_price: null, pack_factor: 100 }, product), null);
+  assert.equal(linkPriceFor(null, product), null);
+  assert.equal(priceInLinkPack(90, 1, 100), 9000);
+  assert.equal(priceInLinkPack(950, 10, 100), 9500);
+  assert.equal(priceInLinkPack(1000, 3, 3), 1000, 'та же упаковка — та же цена');
+  for (const v of [0, -1, 'x', null, undefined]) assert.equal(packOf(v), null, String(v));
 });

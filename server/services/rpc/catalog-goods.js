@@ -26,7 +26,7 @@
 // карточки стирал бы их все при «Сохранить».
 import { rpcT } from '../server-message.js';
 import { hasAnyRole } from '../roles.js';
-import { parseGoodsCategory, parseVatRate } from '../../../public/js/shared/goods-catalog.js';
+import { parseGoodsCategory, parseVatRate, packOf, linkPackOf, priceInLinkPack } from '../../../public/js/shared/goods-catalog.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -337,11 +337,20 @@ export function supplierSave(db, args, user) {
 
 /**
  * Приход и импорт помнят цену и НДС поставщика: связь заводится, если её не
- * было, и получает последнюю цену закупки (без НДС, за единицу закупки).
+ * было, и получает последнюю цену закупки (без НДС, за единицу закупки СВЯЗИ).
  * vat === undefined — ставку не прислали: у прежней связи она не меняется.
+ *
+ * SUPPLIERS_VAT_V1 (ревью F2) — `price` — цена без НДС за `per` базовых
+ * единиц (1 — за базовую единицу; упаковка товара — за его единицу закупки).
+ * Связь хранит цену в СВОЕЙ упаковке (у поставщика «кор = 100 таб», у товара
+ * «уп = 10 таб»), и сама упаковка связи здесь не меняется — её правят в
+ * карточке товара. Связи ещё не было — заводится в упаковке товара
+ * (`packFactor`, `purchaseUnit`), и цена — в ней же.
  */
-export function rememberSupplierPrice(db, { productId, supplierId, lastPrice, vat, packFactor, purchaseUnit }) {
+export function rememberSupplierPrice(db, { productId, supplierId, price, per = 1, vat, packFactor, purchaseUnit }) {
   const keepVat = vat === undefined;
+  const cur = db.prepare('SELECT pack_factor FROM item_suppliers WHERE product_id = ? AND supplier_id = ?').get(productId, supplierId);
+  const lastPrice = priceInLinkPack(price, per, cur ? linkPackOf(cur, { pack_factor: packFactor }) : (packOf(packFactor) || 1));
   db.prepare(`INSERT INTO item_suppliers (product_id, supplier_id, last_price, vat_rate, pack_factor, purchase_unit)
               VALUES (?, ?, ?, ?, ?, ?)
               ON CONFLICT (product_id, supplier_id) DO UPDATE SET

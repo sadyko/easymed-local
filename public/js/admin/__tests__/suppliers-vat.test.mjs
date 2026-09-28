@@ -302,6 +302,9 @@ test('чистые правила окна прихода: суммы строк
   // Без связи: себестоимость (с НДС) × упаковка, пересчитанная в цену без НДС.
   assert.deepEqual(products.receiptDefaults({ id: 5, avg_cost: 112, pack_factor: 10, vat_rate: 12 }, null, []), { unitCost: 1000, vat: 12 });
   assert.deepEqual(products.receiptDefaults({ id: 5, avg_cost: 0, pack_factor: 1, vat_rate: null }, 3, []), { unitCost: null, vat: null });
+  // Ревью F2 — строка прихода в упаковке товара (уп = 10 таб), цена связи — за её кор (100 таб): 9 000 → 900 за уп.
+  assert.deepEqual(products.receiptDefaults({ id: 5, pack_factor: 10, vat_rate: 0 }, 3, [{ product_id: 5, supplier_id: 3, last_price: 9000, vat_rate: 12, pack_factor: 100 }]), { unitCost: 900, vat: 12 });
+  assert.deepEqual(products.receiptDefaults({ id: 5, pack_factor: 10, vat_rate: 0 }, 3, [{ product_id: 5, supplier_id: 3, last_price: 950, vat_rate: null }]), { unitCost: 950, vat: null }, 'у связи нет своей упаковки — упаковка товара');
   assert.deepEqual(products.receiveLinesPayload([{ product: { id: 5 }, qty: '2', unitCost: '10', vat: null, supplierId: null, batchNo: '', expiry: '' }]),
     [{ product_id: 5, unit: 'purchase', qty: 2, unit_cost: 10, vat_rate: null, supplier_id: null, batch_no: null, expiry_date: null }]);
   assert.equal(products.suppliersCellText(['А', 'Б', 'В', 'Г']), 'А, Б +2');
@@ -421,6 +424,8 @@ test('чистые правила заказа: цена и ставка по у
   assert.deepEqual(docs.poLineDefaults(p, 1, links), { cost: 100, vat: 12 });
   assert.deepEqual(docs.poLineDefaults(p, 2, links), { cost: null, vat: 0 }, 'без связи — ставка товара');
   assert.deepEqual(docs.poLineDefaults({ id: 11, vat_rate: null }, null, links), { cost: null, vat: null });
+  // Ревью F2 — у связи своя упаковка: 9 000 за кор из 100 таб → 90 за таблетку (не 900 по упаковке товара).
+  assert.deepEqual(docs.poLineDefaults(p, 1, [{ product_id: 10, supplier_id: 1, last_price: 9000, vat_rate: 12, pack_factor: 100 }]), { cost: 90, vat: 12 });
   assert.deepEqual(docs.poLineMoney({ qty: 20, cost: 90, vat: 12 }), { net: 1800, vat: 216, gross: 2016 });
   assert.deepEqual(docs.poItemMoney({ qty_ordered: 2, unit_cost: 500, vat_rate: null, vat_amount: null }), { net: 1000, vat: null, gross: 1000, rate: 'не указан' });
   assert.deepEqual(docs.poItemMoney({ qty_ordered: 2, unit_cost: 500, vat_rate: null, vat_amount: 0 }), { net: 1000, vat: 0, gross: 1000, rate: 'Без НДС' });
