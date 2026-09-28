@@ -110,6 +110,21 @@ test('порт сообщает о себе, и закрытие действи�
   await again.close();
 });
 
+// LIS_ANALYZER_LIST_V1, ревью M6 — занятый порт узнаётся по коду, а не по
+// тексту: экран «Анализаторы» пишет «порт N занят другой программой» своими
+// словами на языке интерфейса, а не русскую строку сервера.
+test('занятый порт: отказ несёт код EADDRINUSE', async () => {
+  const blocker = net.createServer();
+  await new Promise((r) => blocker.listen(0, '0.0.0.0', r));
+  const port = blocker.address().port;
+  try {
+    await assert.rejects(startMllpServer({ port, onMessage: async () => 'AA' }),
+      (e) => e.code === 'EADDRINUSE' && /занят/.test(e.message));
+  } finally {
+    await new Promise((r) => blocker.close(r));
+  }
+});
+
 // ── LIS_MINDRAY_CODES_V1, ревью 2026-09-28 — потолок и переросшее сообщение ──
 // Настоящий Mindray шлёт в пробе гистограммы и скаттерграммы (BMP в base64).
 // Такое сообщение больше прежних 256 КБ, и результаты не приходили вовсе:

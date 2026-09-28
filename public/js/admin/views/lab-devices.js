@@ -415,8 +415,11 @@ export async function mountLabDevices(container) {
             const tb = h('tbody');
             for (const d of split.waiting) {
                 const ps = portState(d, state.listeners);
+                // Ревью M6: не поднявшийся порт — своими словами по коду, без
+                // сырого текста сервера (он русский и с догадкой о причине).
                 const portText = ps.kind === 'listening' ? trf('порт {port} слушается — ждём первое сообщение', { port: ps.port })
-                    : ps.kind === 'failed' ? trf('порт {port} не слушается: {error}', { port: ps.port, error: ps.error })
+                    : ps.kind === 'failed'
+                        ? (ps.code === 'busy' ? trf('порт {port} занят другой программой', { port: ps.port }) : trf('порт {port} не слушается', { port: ps.port }))
                     : ps.kind === 'off' ? trf('порт {port} сейчас не слушается', { port: ps.port })
                     : '';
                 tb.appendChild(h('tr', null,

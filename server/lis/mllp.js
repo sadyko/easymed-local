@@ -140,7 +140,12 @@ export function startMllpServer({ port, onMessage, onOversize = null, maxBytes =
       // Тот же дружелюбный разбор, что server/index.js делает для HTTP-порта:
       // оператор, запустивший второй раз, должен увидеть слова, а не стек.
       if (e && e.code === 'EADDRINUSE') {
-        reject(new Error(`LIS: порт ${port} уже занят — вероятно, Easy-Med уже запущен`));
+        // LIS_ANALYZER_LIST_V1 (ревью M6) — код едет дальше вместе с текстом:
+        // экран «Анализаторы» по нему пишет «порт N занят другой программой»
+        // своими словами, а этот текст остаётся журналу.
+        const busy = new Error(`LIS: порт ${port} уже занят — вероятно, Easy-Med уже запущен`);
+        busy.code = 'EADDRINUSE';
+        reject(busy);
       } else reject(e);
     });
 

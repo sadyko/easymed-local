@@ -102,11 +102,30 @@ test('занятый порт виден как «не слушается», а 
   try {
     await startLisListeners(db, { log: () => {} });
     const st = listenerStatus();
-    assert.ok(st.failed.some((f) => f.port === busy && f.error), JSON.stringify(st));
+    // Ревью M6: code — то, по чему экран выбирает свои слова; error — для журнала.
+    assert.ok(st.failed.some((f) => f.port === busy && f.code === 'busy' && f.error), JSON.stringify(st));
     assert.ok(!st.listening.includes(busy));
   } finally {
     await stopLisListeners();
     await new Promise((r) => blocker.close(r));
+    if (prev === undefined) delete process.env.LIS_PORT; else process.env.LIS_PORT = prev;
+    db.close();
+  }
+});
+
+// Ревью M6 — отказ не из-за занятости (здесь — невозможный номер порта) —
+// код 'error': экран скажет «порт N не слушается», без сырого текста сервера.
+test('порт не поднялся не из-за занятости — код error', async () => {
+  const prev = process.env.LIS_PORT;
+  process.env.LIS_PORT = '70000';
+  const db = openDb(':memory:');
+  migrate(db);
+  try {
+    await startLisListeners(db, { log: () => {} });
+    const st = listenerStatus();
+    assert.ok(st.failed.some((f) => f.port === 70000 && f.code === 'error' && f.error), JSON.stringify(st));
+  } finally {
+    await stopLisListeners();
     if (prev === undefined) delete process.env.LIS_PORT; else process.env.LIS_PORT = prev;
     db.close();
   }

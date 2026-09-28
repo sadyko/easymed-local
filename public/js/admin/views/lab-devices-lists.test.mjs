@@ -23,9 +23,17 @@ test('сервер до миграции 228 (added нет) — прибор н�
 });
 
 test('порт ждущего прибора: слушается, не поднялся, выключен, неизвестно', () => {
-  const st = { listening: [2575], failed: [{ port: 5100, error: 'порт 5100 уже занят' }] };
+  const st = { listening: [2575], failed: [
+    { port: 5100, code: 'busy', error: 'LIS: порт 5100 уже занят — вероятно, Easy-Med уже запущен' },
+    { port: 5200, code: 'error', error: 'listen EACCES: permission denied 0.0.0.0:5200' },
+  ] };
   assert.deepEqual(portState({ port: 2575 }, st), { kind: 'listening', port: 2575 });
-  assert.deepEqual(portState({ port: 5100 }, st), { kind: 'failed', port: 5100, error: 'порт 5100 уже занят' });
+  // Ревью M6: причина — кодом; сырой текст сервера (русский, с догадкой о
+  // причине) до экрана не доходит — экран говорит своими словами.
+  assert.deepEqual(portState({ port: 5100 }, st), { kind: 'failed', port: 5100, code: 'busy' });
+  assert.deepEqual(portState({ port: 5200 }, st), { kind: 'failed', port: 5200, code: 'error' });
+  assert.deepEqual(portState({ port: 5300 }, { listening: [], failed: [{ port: 5300, error: 'x' }] }),
+    { kind: 'failed', port: 5300, code: 'error' }, 'сервер без кода — просто «не слушается»');
   assert.deepEqual(portState({ port: 6000 }, st), { kind: 'off', port: 6000 });
   assert.deepEqual(portState({ port: 2575 }, null), { kind: 'unknown', port: 2575 });
   assert.equal(portState({}, st).port, 2575, 'порт не задан — значит, порт по умолчанию');

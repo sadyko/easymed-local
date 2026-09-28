@@ -24,15 +24,20 @@ export function splitDevices(devices = []) {
 /**
  * Слушается ли порт прибора прямо сейчас (lis_listeners). Проверка связи с
  * НАШЕЙ стороны: «слушается» — Easy-Med готов, дело в настройке прибора;
- * «не поднялся» — порт занят другой программой; «выключен» — прибор или приём
- * выключены; «неизвестно» — ответа сервера ещё нет.
- * @returns {{kind:'listening'|'failed'|'off'|'unknown', port:number, error?:string}}
+ * «не поднялся» — порт занят другой программой (code 'busy') или не поднялся
+ * по другой причине ('error'); «выключен» — прибор или приём выключены;
+ * «неизвестно» — ответа сервера ещё нет.
+ *
+ * Ревью M6: причина — кодом, а не текстом сервера. Текст русский и с догадкой
+ * («вероятно, Easy-Med уже запущен»), и на узбекском экране он стоял бы
+ * по-русски; экран говорит своими словами.
+ * @returns {{kind:'listening'|'failed'|'off'|'unknown', port:number, code?:'busy'|'error'}}
  */
 export function portState(device, status) {
     const port = Number(device && device.port) || 2575;
     if (!status) return { kind: 'unknown', port };
     if ((status.listening || []).includes(port)) return { kind: 'listening', port };
     const f = (status.failed || []).find((x) => Number(x.port) === port);
-    if (f) return { kind: 'failed', port, error: f.error || '' };
+    if (f) return { kind: 'failed', port, code: f.code === 'busy' ? 'busy' : 'error' };
     return { kind: 'off', port };
 }

@@ -93,7 +93,9 @@ export async function startLisListeners(db, { log = console.log } = {}) {
       // Приложение НЕ роняем: неподнявшийся слушатель — это неработающий
       // анализатор, а не неработающая клиника. Регистратура, касса и приём
       // пациентов не должны останавливаться из-за занятого порта.
-      failed.push({ port, error: e && e.message ? e.message : String(e) });
+      // Ревью M6: причина — кодом ('busy' — порт занят, 'error' — прочее);
+      // текст — для журнала, экран говорит своими словами на языке интерфейса.
+      failed.push({ port, code: e && e.code === 'EADDRINUSE' ? 'busy' : 'error', error: e && e.message ? e.message : String(e) });
       log('LIS: ' + (e && e.message ? e.message : e));
     }
   }

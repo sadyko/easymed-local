@@ -84,6 +84,9 @@ let writes = [];
 let rpcCalls = [];
 // Ревью C2: ответ lis_device_delete. null — удалено; объект — ошибка сервера.
 let DELETE_REPLY = null;
+// Ревью M6: ответ lis_listeners.
+const LISTENING_2575 = { listening: [2575], failed: [] };
+let LISTENERS = LISTENING_2575;
 const PROFILES = [{ key: 'mindray-bc-5300', vendor: 'Mindray', model: 'BC-5300', channelsSource: 'screenshot', defaultPort: 2575, channels: [] }];
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
@@ -97,7 +100,7 @@ globalThis.fetch = async (url, opts) => {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     rpcCalls.push({ name, args: body });
     if (name === 'lis_profiles') return { ok: true, json: async () => ({ data: PROFILES }) };
-    if (name === 'lis_listeners') return { ok: true, json: async () => ({ data: { listening: [2575], failed: [] } }) };
+    if (name === 'lis_listeners') return { ok: true, json: async () => ({ data: JSON.parse(JSON.stringify(LISTENERS)) }) };
     if (name === 'lis_restart') return { ok: true, json: async () => ({ data: { ok: true, listeners: 1 } }) };
     if (name === 'lis_device_delete') {
       return DELETE_REPLY
@@ -222,4 +225,22 @@ test('ревью C2: прибор привязан к панели — на эк
       'отказ — словами сервера, без «Не удалось удалить прибор:» перед ними');
     assert.strictEqual(toastEl.dataset.kind, 'warn');
   } finally { DELETE_REPLY = null; }
+});
+
+// ── Ревью M6 — строка о порте своими словами, без сырого текста сервера ─────
+test('ревью M6: порт не поднялся — «занят другой программой» или «не слушается», без текста сервера', async () => {
+  DEVICES = [HEARD, { ...WAITING, id: 6, name: 'Порт занят', port: 5100 }, { ...WAITING, id: 7, name: 'Порт не поднялся', port: 5200 }];
+  LISTENERS = { listening: [2575], failed: [
+    { port: 5100, code: 'busy', error: 'LIS: порт 5100 уже занят — вероятно, Easy-Med уже запущен' },
+    { port: 5200, code: 'error', error: 'listen EACCES: permission denied 0.0.0.0:5200' },
+  ] };
+  try {
+    const root = await mount();
+    findButtonByText(root, /Добавить прибор/).click();
+    await tick();
+    const text = textOf(root);
+    assert.ok(text.includes('порт 5100 занят другой программой'), text);
+    assert.ok(text.includes('порт 5200 не слушается'));
+    assert.ok(!text.includes('вероятно, Easy-Med уже запущен') && !text.includes('EACCES'), 'сырого текста сервера на экране нет');
+  } finally { LISTENERS = LISTENING_2575; }
 });
