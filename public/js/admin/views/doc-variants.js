@@ -1172,6 +1172,7 @@ ${s.address ? `<div class="f-sub">${esc(s.address)}</div>` : ''}${s.taxId ? `<di
 <div class="f-hr2"></div>
 ${d.patientName ? `<div class="f-pat">${esc(d.patientName)}</div><div class="f-hr2"></div>` : ''}
 <div class="f-title">Кассовый чек</div>
+${d.subtitle ? `<div class="f-sub" style="font-size:10.5px;">${esc(d.subtitle)}</div>` : ''}
 ${receiptDateRows(d).copy}
 <div class="f-kv"><span>Чек №</span><b>${esc(d.docNo || '—')}</b></div>
 ${receiptDateRows(d).when}

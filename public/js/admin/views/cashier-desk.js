@@ -26,7 +26,7 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TY
 import { dateNumeric } from '../../shared/date-words.js';   // V3120_FIX — дата чека не зависит от языка ОС
 import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANCE_V1
 import { searchTokens } from '../patient-search.js';   // CARD_SALE_V1 — поиск покупателя карты
-import { canOfferLineFix, openLineFix } from './cashier-line-fix.js';   // CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы
+import { canOfferLineFix, openLineFix, openRebill } from './cashier-line-fix.js';   // CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»
 import { canCloseOtherShifts } from '../permissions.js';   // CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
 
 // DEPOSIT_WALLET_V1 — «С баланса»: оплата и возврат через баланс пациента.
@@ -107,7 +107,7 @@ async function printInvoiceSheet(inv) {
 // частичная оплата «100 000 наличными + 50 000 картой» выходила чеком
 // «Наличные 378 001». inv — строка кассы ДО оплаты, поэтому её paid_amount —
 // внесённое раньше. Старый вызов (inv, сумма, способ) понимается как один платёж.
-async function printFiscalCheck(inv, tenders, legacyMethod) {
+async function printFiscalCheck(inv, tenders, legacyMethod, opts = {}) {   // CASHIER_PAID_SWAP_V1 — opts.subtitle («Доплата»)
     const legacy = !Array.isArray(tenders);
     const list = legacy ? [{ method: legacyMethod || 'cash', amount: Number(tenders) || 0 }] : tenders;
     // Старый вызов не знал, снята строка до оплаты или после, — «ранее
@@ -159,6 +159,7 @@ async function printFiscalCheck(inv, tenders, legacyMethod) {
             subtotal: inv.subtotal, discount: inv.discount_amount,
             total: inv.total_amount,
             payments: paymentLines(list), paidBefore, paid: paidBefore + paidNow,
+            subtitle: (opts && opts.subtitle) || '',   // CASHIER_PAID_SWAP_V1 — «Доплата» после замены в оплаченном счёте
             queue,   // QUEUE_TICKET_V1 — номера очереди на чеке
         } });
     } catch (e) { console.warn('[cashier] check print:', e && e.message); }
@@ -234,12 +235,13 @@ const shiftNo = (shift) => (shift && shift.id != null) ? 'CASHIER/' + String(shi
 // CASHIER WORKSPACE (Касса) — nav id 'cashier-shifts'
 // =============================================================================
 const state = {
-    filter: 'unpaid',       // 'unpaid' | 'debt' | 'partial' | 'paid' | 'cancelled' | 'all'
+    filter: 'unpaid',       // 'unpaid' | 'debt' | 'partial' | 'paid' | 'cancelled' | 'refunds' | 'all'
     search: '',
     rows:   [],
     counts: null,
     deposits: [],   // DEPOSIT_V1 — ждущие приёма предоплаты
     cards: [],      // CARD_SALE_V1 — подарочные карты и сертификаты (проданные и выданные без оплаты)
+    refunds: { from: null, to: null, rows: [], totals: null },   // CASHIER_PAID_SWAP_V1 — «Возвраты и отмены» за период
 };
 
 export async function renderCashier(container) {
@@ -738,6 +740,21 @@ async function loadInvoices() {
         const cr = await supabase.rpc('list_card_sales', {});
         state.cards = (cr && cr.data && cr.data.rows) || [];
     } catch (e) { state.cards = []; }
+    await loadRefunds();   // CASHIER_PAID_SWAP_V1 — сбой не прячет счета, плашка покажет 0
+}
+
+// CASHIER_PAID_SWAP_V1 — «Возвраты и отмены» за период (по умолчанию сегодня).
+async function loadRefunds() {
+    if (!state.refunds.from) { state.refunds.from = localYmd(); state.refunds.to = state.refunds.from; }
+    try {
+        const { data, error } = await supabase.rpc('cashier_refunds', { from: state.refunds.from, to: state.refunds.to });
+        if (error) throw error;
+        state.refunds.rows = (data && data.rows) || [];
+        state.refunds.totals = (data && data.totals) || null;
+    } catch (e) {
+        state.refunds.rows = [];
+        state.refunds.totals = null;
+    }
 }
 
 // CASHIER_ROW_FIT_V1 — invoice statuses in this screen's own language.
@@ -766,6 +783,9 @@ const CHIPS = [
     { key: 'partial',   label: 'ЧАСТИЧНО',   icon: 'Activity', color: '#b45309' },
     { key: 'paid',      label: 'ОПЛАЧЕН',    icon: 'Check',    color: 'var(--ok-600, #16a34a)' },
     { key: 'cancelled', label: 'ОТМЕНЁН',    icon: 'X',        color: 'var(--crit-600, #dc2626)' },
+    // CASHIER_PAID_SWAP_V1 — счета с возвратом (любым) и отменённые за период:
+    // иначе частичный возврат по оплаченному счёту и вчерашняя отмена из кассы пропадали.
+    { key: 'refunds',   label: 'ВОЗВРАТЫ И ОТМЕНЫ', icon: 'Repeat', color: 'var(--crit-600, #dc2626)' },
     { key: 'all',       label: 'ВСЕ СЧЕТА',  icon: 'Doc',      color: 'var(--ink-700)' },
     // DEPOSIT_V1 — предоплаты стоят рядом со счетами: касса принимает и то и
     // другое, и разводить их по разным экранам значит прятать половину работы.
@@ -791,7 +811,9 @@ function paintChips(el, onChange) {
                 ? { n: pendingDeps.length, sum: pendingDeps.reduce((n, d) => n + Number(d.amount || 0), 0) }
                 : chip.key === 'cards'
                     ? { n: liveCards.length, sum: liveCards.reduce((n, x) => n + Number(x.remaining || 0), 0) }
-                    : (c[chip.key] || { n: 0, sum: 0 });
+                    : chip.key === 'refunds'   // CASHIER_PAID_SWAP_V1 — за выбранный период; сумма — возвращённое
+                        ? { n: (state.refunds.totals && state.refunds.totals.n) || 0, sum: (state.refunds.totals && state.refunds.totals.refunded) || 0 }
+                        : (c[chip.key] || { n: 0, sum: 0 });
             const active = state.filter === chip.key;
             return h('button', {
                 type: 'button',
@@ -1110,6 +1132,120 @@ function openCardRefundModal(c, root) {
     }, 460);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CASHIER_PAID_SWAP_V1 — «ВОЗВРАТЫ И ОТМЕНЫ».
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Владелец: «Refunded bills in the cashier window disappear completely, so we
+// need to see them somewhere so we can change the service». Счета, по которым
+// за период был возврат (строкой, по платежу, заменой в оплаченном счёте), и
+// отменённые — с тем, что вернули: сумма, способ, когда, кто, причина. Из
+// строки: «Открыть визит», «Исправить услуги» (оплаченный счёт — замена с
+// расчётом разницы) и «Выставить заново» (строки визита без счёта). Сервер:
+// cashier_refunds (rpc/cashier.js), видит его вся касса.
+const REFUND_KIND_RU = { swap: 'Замена услуги', line: 'Возврат услуги', payment: 'Возврат оплаты' };
+const EVENT_RU = { void: 'Счёт отменён', refund_line: 'Возвращена услуга', line_swap_paid: 'Замена в оплаченном счёте' };
+
+// Опции окна «Исправить услуги»: доплата — окно оплаты кассы (чек «Доплата»),
+// возврат разницы — квитанция.
+function lineFixOptions(root) {
+    return {
+        onChanged: () => paint(root),
+        onPayDue: (row, due) => payModal(root, row, due, { checkSubtitle: 'Доплата' }),
+        printSlip: (data) => printSlip(printableSheet, data),
+    };
+}
+
+function paintRefunds(el, root) {
+    const rf = state.refunds;
+    const fromInp = h('input', { type: 'date', value: rf.from || '', 'aria-label': tr('С'), style: { height: '34px' } });
+    const toInp = h('input', { type: 'date', value: rf.to || '', 'aria-label': tr('По'), style: { height: '34px' } });
+    const show = async () => {
+        const f = String(fromInp.value || '').slice(0, 10);
+        const t = String(toInp.value || '').slice(0, 10) || f;
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) { toast(tr('Укажите период.'), 'fail'); return; }
+        state.refunds.from = f;
+        state.refunds.to = t < f ? f : t;
+        await loadRefunds();
+        clear(el);
+        paintRefunds(el, root);
+    };
+    el.appendChild(h('div', { class: 'row', 'data-refunds-period': '1', style: { gap: '8px', alignItems: 'center', margin: '0 0 12px', flexWrap: 'wrap' } },
+        h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Период:'), fromInp, h('span', { class: 'muted' }, '—'), toInp,
+        h('button', { class: 'btn btn-sm', type: 'button', onclick: show }, 'Показать')));
+    const rows = rf.rows || [];
+    if (!rows.length) {
+        el.appendChild(h('div', { class: 'empty' }, 'За этот период возвратов и отмен нет.'));
+        return;
+    }
+    const list = h('div', { style: { display: 'grid', gap: '10px' } });
+    for (const r of rows) list.appendChild(refundCard(r, root, async () => { await loadRefunds(); clear(el); paintRefunds(el, root); }));
+    el.appendChild(list);
+}
+
+function refundCard(r, root, reload) {
+    const line = (...kids) => h('div', { style: { fontSize: '12.5px', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'baseline' } }, ...kids);
+    const refunds = (r.refunds || []).map((x) => line(
+        h('strong', { class: 'num', style: { color: 'var(--crit-600, #dc2626)' } }, '−' + fmtPrice(x.amount)),
+        h('span', null, tr(METHOD_RU[x.method] || x.method)),
+        h('span', null, tr(REFUND_KIND_RU[x.kind] || 'Возврат')),
+        h('span', { class: 'muted' }, fmtRuShort(x.at)),
+        x.who ? h('span', { class: 'muted' }, x.who) : null,
+        x.reason ? h('span', { class: 'muted' }, '· ' + x.reason) : null));
+    const events = (r.events || []).filter((ev) => ev.action === 'void').map((ev) => line(
+        h('strong', null, tr(EVENT_RU[ev.action] || ev.action)),
+        h('span', { class: 'muted' }, fmtRuShort(ev.at)),
+        ev.who ? h('span', { class: 'muted' }, ev.who) : null,
+        ev.reason ? h('span', { class: 'muted' }, '· ' + ev.reason) : null,
+        ev.notes ? h('span', { class: 'muted' }, '· ' + ev.notes) : null));
+    const released = (r.rebill_lines || []);
+    const asInv = { ...r, id: r.invoice_id };
+    const buttons = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' } });
+    if (r.visit_id) {
+        buttons.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
+            try {
+                const { data: visit } = await supabase.from('visits').select('*, patients(full_name, mrn, phone, date_of_birth)').eq('id', r.visit_id).maybeSingle();
+                if (!visit) { toast(tr('Визит не найден.'), 'fail'); return; }
+                const mod = await import('./visit-bill.js');
+                mod.openVisitBillModal(visit, reload);
+            } catch (e) { toast((e && e.message) || tr('Не удалось.'), 'fail'); }
+        } }, 'Открыть визит'));
+    }
+    if (r.status !== 'void' && r.status !== 'refunded' && canOfferLineFix(asInv)) {
+        buttons.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openLineFix(asInv, { ...lineFixOptions(root), onChanged: async () => { await reload(); } }) }, 'Исправить услуги'));
+    }
+    if (r.can_rebill) {
+        buttons.appendChild(h('button', { class: 'btn btn-primary btn-sm', type: 'button', 'data-rebill': String(r.invoice_id), onclick: () => openRebill(r, {
+            onBilled: async (invoice) => {
+                // Окно оплаты открывается в любом случае: сбой перерисовки кассы
+                // не должен оставить выставленный счёт без приёма денег.
+                try { await paint(root); } catch (e) { console.warn('[cashier] repaint:', e && e.message); }
+                const due = Math.max(Math.round((Number(invoice.total_amount) - Number(invoice.paid_amount || 0)) * 100) / 100, 0);
+                if (due > 0) {
+                    payModal(root, { ...invoice, patient_name: r.patient_name, mrn: r.mrn, phone: r.phone, date_of_birth: r.date_of_birth,
+                        gender: r.gender, patient_id: r.patient_id, payer_id: null }, due);
+                } else {
+                    toast(tr('Счёт выставлен — к оплате ничего.'), 'ok');
+                }
+            },
+        }) }, 'Выставить заново'));
+    }
+    return h('div', { class: 'card', 'data-refund-row': String(r.invoice_id), style: { padding: '12px 14px', display: 'grid', gap: '6px' } },
+        h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+            h('strong', null, r.invoice_number || ('#' + r.invoice_id)),
+            h('span', null, r.patient_name || '—'),
+            r.mrn ? h('span', { class: 'muted' }, r.mrn) : null,
+            invStatusTag(r.status),
+            h('span', { class: 'grow' }),
+            Number(r.refunded_total) > 0
+                ? h('span', { class: 'num', style: { fontWeight: 700 } }, trf('Возвращено {sum} сум', { sum: fmtPrice(r.refunded_total) }))
+                : null),
+        ...refunds, ...events,
+        released.length ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+            trf('В визите без счёта: {n}', { n: released.length }) + ' — ' + released.map((l) => (l.name || '—') + (l.refunded ? ' (' + tr('возвращено') + ')' : '')).join(', ')) : null,
+        buttons);
+}
+
 function filteredRows() {
     let rows = state.rows;
     if (state.filter === 'cancelled') rows = rows.filter(r => r.status === 'void' || r.status === 'refunded');
@@ -1156,6 +1292,7 @@ function paintTable(el, root) {
     clear(el);
     if (state.filter === 'deposits') { paintDeposits(el, root); return; }
     if (state.filter === 'cards') { paintCards(el, root); return; }
+    if (state.filter === 'refunds') { paintRefunds(el, root); return; }   // CASHIER_PAID_SWAP_V1
     const rows = filteredRows();
     if (!rows.length) {
         el.appendChild(h('div', { class: 'empty' }, 'Нет счетов по выбранному фильтру.'));
@@ -1281,7 +1418,7 @@ function invoiceRow(inv, root) {
     // CASHIER_HEAD_V1 — «Исправить услуги»: только у того, кому выдано право
     // «Исправляет услуги в счёте» (без него кассир только принимает оплату).
     const fixBtn = canOfferLineFix(inv)
-        ? iconBtn('Исправить услуги', 'Edit', () => openLineFix(inv, { onChanged: () => paint(root) }),
+        ? iconBtn('Исправить услуги', 'Edit', () => openLineFix(inv, lineFixOptions(root)),
             'var(--ink-700)', 'var(--ink-200)')
         : null;
 
@@ -1332,7 +1469,7 @@ function invoiceRow(inv, root) {
     );
 }
 
-function payModal(root, inv, balance) {
+function payModal(root, inv, balance, opts = {}) {   // CASHIER_PAID_SWAP_V1 — opts.checkSubtitle
     // SPLIT_PAY_V1 — счёт можно оплатить одним или НЕСКОЛЬКИМИ способами сразу
     // (например: часть наличными, часть картой или эквайрингом). Каждая строка —
     // способ + сумма; все строки проводятся одной транзакцией (record_payment_split),
@@ -1660,7 +1797,7 @@ function payModal(root, inv, balance) {
             if (error) { toast((error.message) || 'Не удалось принять оплату.', 'fail'); return false; }
             idem.next();
             toast('Оплата принята', 'ok');
-            printFiscalCheck(inv, parts);   // CASH_CHECK_PRINT_V1 + V3120_FIX — строка на каждый способ (не блокирует)
+            printFiscalCheck(inv, parts, undefined, { subtitle: opts.checkSubtitle });   // CASH_CHECK_PRINT_V1 + V3120_FIX — строка на каждый способ (не блокирует)
             await paint(root);
             return true;
         },
@@ -1708,7 +1845,7 @@ function payModal(root, inv, balance) {
                     const { error: dErr } = await supabase.rpc('mark_invoice_debt', { invoice_id: inv.id });
                     if (dErr) throw new Error(dErr.message || 'Не удалось оформить долг');
                     toast(parts.length ? tr('Счёт оставлен как долг (частичная оплата записана) — услуги переданы в работу.') : tr('Счёт оставлен как долг — услуги переданы в работу.'), 'ok');
-                    if (sum > 0) printFiscalCheck(inv, parts);   // V3120_FIX — все способы, «Остаток» — долг
+                    if (sum > 0) printFiscalCheck(inv, parts, undefined, { subtitle: opts.checkSubtitle });   // V3120_FIX — все способы, «Остаток» — долг
                     close();
                     await paint(root);
                 } catch (err) {
@@ -2260,3 +2397,6 @@ export const __test_historyModal = historyModal;
 export const __test_invoiceRow = invoiceRow;
 export const __test_shiftBanner = shiftBanner;
 export const __test_closeShiftModal = closeShiftModal;
+export const __test_paintRefunds = paintRefunds;   // CASHIER_PAID_SWAP_V1
+export const __test_loadRefunds = loadRefunds;
+export const __test_paintChips = paintChips;

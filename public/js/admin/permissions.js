@@ -600,6 +600,16 @@ export function canFixCashierLines() {
     return grantLevel('cashier.lines') !== null && grantAllows('cashier.lines', 'edit');
 }
 
+// CASHIER_PAID_SWAP_V1 — замена в ОПЛАЧЕННОМ счёте двигает деньги (возврат
+// разницы или доплата): то же право, что у неоплаченных правок, И денежная
+// роль — кассир или администратор (сервер: billing.js requireSwapRight).
+// Регистратура правит неоплаченное, оплаченное — нет.
+export function canSwapPaidLines() {
+    if (!canFixCashierLines()) return false;
+    if (_effective == null && !_preview) return true;
+    return hasActorRole(['admin', 'cashier']);
+}
+
 // CASHIER_HEAD_V1 (ревью) — «Закрыть смену» у ЧУЖОЙ смены. Зеркало сервера
 // (rpc/cashier.js headCashierLevel → roles.js explicitSectionLevel): раздел
 // «Старший кассир», записанный БЕЗ уровня (старый экран), — только просмотр;

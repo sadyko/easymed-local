@@ -259,6 +259,31 @@ function fmtSum(n) { return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d
 // kind 'deposit' — { deposit, patient, balance, debtCovered, cashier }
 export function slipData(o = {}) {
     const now = dateNumeric(new Date(), { withTime: true });
+    // CASHIER_PAID_SWAP_V1 — замена услуги в оплаченном счёте: квитанция о
+    // возвращённой разнице — сколько и куда (каждый возврат своим способом).
+    // kind 'swap' — { invoice, patient, before, after, refunded, plan, cashier }
+    if (o.kind === 'swap') {
+        const inv = o.invoice || {};
+        const p = o.patient || {};
+        const where = (x) => (x.to_card ? 'Подарочная карта' : x.to_balance ? 'На баланс пациента' : (METHOD_RU[x.refund_method] || x.refund_method || ''));
+        return {
+            title: 'Квитанция',
+            subtitle: 'Возврат разницы',
+            docNo: inv.invoice_number || '',
+            date: now, cashier: o.cashier || '',
+            rows: [
+                ['Пациент', p.full_name || ''],
+                ['Карта пациента №', p.mrn || ''],
+                ['Было', o.before || ''],
+                ['Стало', o.after || ''],
+            ],
+            amountLabel: 'Возвращено',
+            amount: Number(o.refunded) || 0,
+            method: (o.plan || []).map((x) => where(x) + ' ' + fmtSum(x.amount)).join(', '),
+            afterRows: [['Сумма счёта', fmtSum(inv.total_amount)], ['Оплачено', fmtSum(inv.paid_amount)]],
+            note: 'Замена услуги — возврат разницы.',
+        };
+    }
     if (o.kind === 'card') {
         const c = o.card || {};
         const b = o.buyer || {};

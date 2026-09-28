@@ -244,17 +244,29 @@ test('«+ Добавить услугу»: услуга, врач (или «Бе
     assert.deepEqual(rpcCalls('cashier_line_add')[0][1], { invoice_id: 5, service_id: 3, doctor_id: null });
 });
 
-test('оплаченный счёт: строки не правятся, добавление объяснено — отдельным счётом', async () => {
-    asCashier({ 'cashier.lines': 'edit' });
+test('оплаченный счёт: без правки строк у регистратуры; у кассы — только замена с расчётом (CASHIER_PAID_SWAP_V1), без «Убрать»; добавление — отдельным счётом', async () => {
     const paid = { ...INV, status: 'paid', paid_amount: 230000 };
+    // Регистратура: деньги не двигает — строки оплаченного счёта не меняет.
+    perms.setEffectiveFromRole({ name: 'registrar', permissions: { sections: ['patients'], levels: { patients: 'editor' } } });
+    window.easymed.state.user = { id: 7, full_name: 'Регистратор', role: 'registrar' };
     world(paid);
     closeAll();
     await fix.openLineFix(paid);
-    const m = lastModal();
+    let m = lastModal();
     assert.equal(buttonByText(m, 'Заменить услугу'), undefined);
     assert.equal(buttonByText(m, 'Убрать'), undefined);
     assert.match(textOf(m), /Новая услуга будет выставлена отдельным счётом/);
     assert.ok(buttonByText(m, '+ Добавить услугу'));
+    // Касса с правом: замена с расчётом разницы, «Убрать» по-прежнему нет.
+    asCashier({ 'cashier.lines': 'edit' });
+    world(paid);
+    closeAll();
+    await fix.openLineFix(paid);
+    m = lastModal();
+    assert.ok(buttonByText(m, 'Заменить услугу'));
+    assert.equal(buttonByText(m, 'Убрать'), undefined);
+    assert.match(textOf(m), /разницу касса сразу вернёт/);
+    assert.match(textOf(m), /Новая услуга будет выставлена отдельным счётом/);
 });
 
 test('отказ сервера показывается его словами', async () => {
