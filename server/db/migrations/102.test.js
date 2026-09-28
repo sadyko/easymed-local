@@ -76,11 +76,15 @@ test('doctor_id остаётся денежной колонкой: счёт б�
   assert.equal(db.prepare('SELECT doctor_id FROM admission_services WHERE id = 1').get().doctor_id, 1);
 });
 
-test('журнал филиалов не шевелится, триггеров на таблице нет', () => {
+test('журнал филиалов не шевелится, журнальных триггеров на таблице нет', () => {
   const db = seed();
   const journal = db.prepare("SELECT COUNT(*) n FROM sync_journal WHERE tbl = 'admission_services'").get().n;
   assert.equal(journal, 0);
-  const trig = db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'admission_services'").get().n;
+  // Считаем только ЖУРНАЛЬНЫЕ триггеры — те, что пишут в sync_journal. Свои
+  // триггеры у таблицы законны и между зданиями ничего не везут: ставка НДС
+  // товара у строки (SUPPLIERS_VAT_V1, мигр. 224) и отмена «не списано со
+  // склада» при удалении строки (OWN_SHELF_ONLY_V1, мигр. 226).
+  const trig = db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'admission_services' AND sql LIKE '%sync_journal%'").get().n;
   assert.equal(trig, 0, 'стационар между зданиями не ездит — журнальных триггеров у него нет');
 });
 
