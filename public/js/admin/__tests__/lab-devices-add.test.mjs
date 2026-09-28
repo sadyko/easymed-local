@@ -87,13 +87,18 @@ let DELETE_REPLY = null;
 // Ревью M6: ответ lis_listeners.
 const LISTENING_2575 = { listening: [2575], failed: [] };
 let LISTENERS = LISTENING_2575;
+// Ревью I1: чтение lab_devices отказывает с этим текстом (null — читается).
+let DEV_ERROR = null;
 const PROFILES = [{ key: 'mindray-bc-5300', vendor: 'Mindray', model: 'BC-5300', channelsSource: 'screenshot', defaultPort: 2575, channels: [] }];
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (u.startsWith('/api/db')) {
     if (body && body.op && body.op !== 'select') { writes.push(body); return { ok: true, json: async () => ({ data: [] }) }; }
-    if (body && body.table === 'lab_devices') return { ok: true, json: async () => ({ data: JSON.parse(JSON.stringify(DEVICES)) }) };
+    if (body && body.table === 'lab_devices') {
+      if (DEV_ERROR) return { ok: false, status: 500, json: async () => ({ error: { message: DEV_ERROR } }) };
+      return { ok: true, json: async () => ({ data: JSON.parse(JSON.stringify(DEVICES)) }) };
+    }
     return { ok: true, json: async () => ({ data: [] }) };
   }
   if (u.startsWith('/api/rpc/')) {
@@ -177,14 +182,54 @@ test('«Добавить» у находки переводит её в табл
   assert.ok(JSON.stringify(upd.filters || []).includes('5'), 'обновлена именно находка: ' + JSON.stringify(upd.filters));
 });
 
-test('ничего не подключено — окно пусто и объясняет, как подключить', async () => {
-  DEVICES = [HEARD];
+// Ревью I1: «Ни один анализатор пока не выходил на связь.» стояло всякий раз,
+// когда не было НАХОДОК, — и при kjkj в таблице, и когда список приборов вовсе
+// не прочитался. Теперь — только когда пусто всё: таблица, находки и ждущие.
+async function openAddWindowWith(devices) {
+  DEVICES = devices;
   const root = await mount();
   findButtonByText(root, /Добавить прибор/).click();
   await tick();
-  const text = textOf(root);
+  return textOf(root);
+}
+
+test('ничего не подключено — окно пусто и объясняет, как подключить', async () => {
+  const text = await openAddWindowWith([]);
   assert.ok(text.includes('Ни один анализатор пока не выходил на связь.'));
   assert.ok(text.includes('порт 2575, протокол HL7'), 'сказано, что настроить на приборе');
+});
+
+test('ревью I1: в таблице есть выходивший на связь — «Новых анализаторов пока нет.», а не «ни один не выходил»', async () => {
+  const text = await openAddWindowWith([HEARD]);
+  assert.ok(text.includes('Новых анализаторов пока нет.'), text);
+  assert.ok(!text.includes('Ни один анализатор пока не выходил на связь.'), 'kjkj в таблице — значит, выходил');
+  assert.ok(text.includes('порт 2575, протокол HL7'), 'как подключить следующий — та же строка');
+});
+
+test('ревью I1: есть только ждущий первого сообщения — тоже «Новых анализаторов пока нет.»', async () => {
+  const text = await openAddWindowWith([WAITING]);
+  assert.ok(text.includes('Новых анализаторов пока нет.'), text);
+  assert.ok(!text.includes('Ни один анализатор пока не выходил на связь.'));
+});
+
+// Карточка окна «Добавить прибор» — по её заголовку.
+const addWindow = (root) => walk(root).find((n) => String(n.className).split(/\s+/).includes('card')
+  && walk(n).some((c) => c.tagName === 'H3' && textOf(c) === 'Добавить анализатор'));
+
+test('ревью I1: список приборов не прочитался — окно говорит об этом, а не «ни один не выходил»', async () => {
+  DEV_ERROR = 'нет связи с сервером';
+  try {
+    DEVICES = [HEARD, FOUND];
+    const root = await mount();
+    findButtonByText(root, /Добавить прибор/).click();
+    await tick();
+    const win = addWindow(root);
+    assert.ok(win, 'окно открыто');
+    const text = textOf(win);
+    assert.ok(text.includes('Не удалось прочитать список приборов: нет связи с сервером'), text);
+    assert.ok(!text.includes('Ни один анализатор пока не выходил на связь.'));
+    assert.ok(!text.includes('Новых анализаторов пока нет.'));
+  } finally { DEV_ERROR = null; }
 });
 
 // ── Ревью C2 — «Удалить» идёт через RPC lis_device_delete ───────────────────

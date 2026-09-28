@@ -618,6 +618,8 @@ export const STRINGS = {
   // LIS_ANALYZER_LIST_V1 (ревью 2026-09-29, M6) — не поднявшийся порт своими словами, по коду сервера
   "порт {port} занят другой программой": {"en":"port {port} is taken by another program","ru":"порт {port} занят другой программой","uz":"{port} portni boshqa dastur egallagan"},
   "порт {port} не слушается": {"en":"port {port} is not listening","ru":"порт {port} не слушается","uz":"{port} port tinglanmayapti"},
+  // LIS_ANALYZER_LIST_V1 (ревью 2026-09-29, I1) — находок нет, но приборы в клинике есть
+  "Новых анализаторов пока нет.": {"en":"No new analyzers yet.","ru":"Новых анализаторов пока нет.","uz":"Hozircha yangi analizatorlar yo‘q."},
   // LIS_MINDRAY_CODES_V1 (ревью 2026-09-28, R9) — ручная привязка: принято, но бланк заполнен не весь
   "Сообщение принято, но бланк заполнен не полностью: {detail}": {"en":"The message is accepted, but the form is not fully filled: {detail}","ru":"Сообщение принято, но бланк заполнен не полностью: {detail}","uz":"Xabar qabul qilindi, lekin blanka to‘liq to‘ldirilmadi: {detail}"},
   // LIS_MINDRAY_CODES_V1 (ревью 2026-09-28, R2) — одно поле анализатора у двух показателей панели

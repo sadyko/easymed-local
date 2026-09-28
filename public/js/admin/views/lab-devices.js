@@ -381,9 +381,19 @@ export async function mountLabDevices(container) {
             h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: closeForm }, tr('Закрыть'))));
 
         formCard.appendChild(h('div', { style: { fontWeight: 600, margin: '4px 0 8px' } }, tr('Найдены в сети')));
-        if (!split.found.length) {
+        if (state.loadError) {
+            // Ревью I1: список не прочитался — так и сказать. Пустой список
+            // здесь значит «не знаем», а не «никого нет».
             formCard.appendChild(h('div', { class: 'empty', style: { padding: '18px 16px' } },
-                h('div', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Ни один анализатор пока не выходил на связь.')),
+                trf('Не удалось прочитать список приборов: {msg}', { msg: state.loadError })));
+        } else if (!split.found.length) {
+            // Ревью I1: «ни один не выходил на связь» — только когда пусто всё:
+            // таблица, находки и ждущие. Раньше фраза стояла и при kjkj в
+            // таблице — просто потому, что новых находок не было.
+            const nothingAtAll = !split.table.length && !split.waiting.length;
+            formCard.appendChild(h('div', { class: 'empty', style: { padding: '18px 16px' } },
+                h('div', { style: { fontWeight: 600, marginBottom: '6px' } },
+                    nothingAtAll ? tr('Ни один анализатор пока не выходил на связь.') : tr('Новых анализаторов пока нет.')),
                 h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                     trf('На анализаторе в настройках связи (LIS) укажите адрес {ip}, порт 2575, протокол HL7 и отправьте пробу — анализатор появится здесь сам.', { ip: hostForGuide() }))));
         } else {
