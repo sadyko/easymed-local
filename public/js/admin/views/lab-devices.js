@@ -61,7 +61,8 @@ export async function mountLabDevices(container) {
     // formMode: что открыто под таблицей ('add' | 'adopt' | 'edit' | null) —
     // живой опрос перерисовывает окно «Добавить прибор», но не форму, в которой печатают.
     // backToAdd (ревью M3): форма открыта из окна «Добавить прибор» и вернётся туда.
-    const state = { devices: [], profiles: [], messages: [], recent: [], loadError: null, listeners: null, formMode: null, backToAdd: false };
+    // addSig (ревью M9): подпись того, что сейчас видно в окне «Добавить прибор».
+    const state = { devices: [], profiles: [], messages: [], recent: [], loadError: null, listeners: null, formMode: null, backToAdd: false, addSig: null };
 
     const devicesCard = h('div', { class: 'card' });
     const formCard = h('div', { class: 'card', style: { display: 'none' } });
@@ -113,7 +114,10 @@ export async function mountLabDevices(container) {
         paintDevices();
         paintLive();
         paintTray();
-        if (state.formMode === 'add') paintAddWindow();   // LIS_ANALYZER_LIST_V1 — список живой
+        // LIS_ANALYZER_LIST_V1 — список живой. Ревью M9: но перерисовка — только
+        // когда изменилось видимое: окно, перестроенное каждые 5 с, убирало
+        // кнопку из-под курсора, и нажатие терялось.
+        if (state.formMode === 'add' && addWindowSig() !== state.addSig) paintAddWindow();
     }
 
     const profileOf = (key) => state.profiles.find((p) => p.key === key) || null;
@@ -400,8 +404,24 @@ export async function mountLabDevices(container) {
         paintAddWindow();
     }
 
+    // Ревью M9 — всё, от чего зависит окно: строки находок и ждущих, текст связи
+    // находки (он меняется и сам, со временем), ответ lis_listeners, ошибка
+    // чтения, пуста ли таблица (от неё — пустое состояние, I1), модели.
+    function addWindowSig() {
+        const split = splitDevices(state.devices);
+        return JSON.stringify([
+            state.loadError,
+            split.table.length > 0,
+            split.found.map((d) => [d.id, d.name, d.host, d.port, d.enabled, d.last_seen_at, d.profile, livenessText(d.last_seen_at).text]),
+            split.waiting.map((d) => [d.id, d.name, d.host, d.port, d.enabled, d.last_seen_at, d.profile, d.transport]),
+            state.listeners,
+            state.profiles.map((p) => p.key),
+        ]);
+    }
+
     function paintAddWindow() {
         clear(formCard);
+        state.addSig = addWindowSig();   // ревью M9
         const split = splitDevices(state.devices);
         formCard.appendChild(h('div', { class: 'card-header' },
             h('h3', null, tr('Добавить анализатор')),

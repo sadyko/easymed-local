@@ -5,7 +5,7 @@
 // empty if analyzer not plugged or connected … (which shouldn't be there if
 // its not connected)». Таблица — только выходившие на связь; находка ждёт
 // одного нажатия «Добавить»; пусто — окно объясняет, как подключить.
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert';
 
 // Fake-DOM harness — copied from __tests__/lab-panels-mode.test.mjs (itself
@@ -430,6 +430,49 @@ test('ревью M3: «Изменить → Удалить» и «Изменит
   formButton(root, /^Отмена$/).click();
   await tick();
   assert.ok(addWindow(root), 'после отмены — окно');
+});
+
+// ── Ревью M9 — живой опрос не перестраивает окно «Добавить прибор» без нужды ─
+// Каждые 5 с окно строилось заново: кнопка, на которую как раз нажимали,
+// исчезала из-под курсора, и нажатие терялось. Метки времени здесь старые и
+// неподвижные («не отвечает с …»), чтобы текст связи не менялся сам по часам.
+test('ревью M9: опрос перерисовывает окно, только когда изменилось то, что в нём видно', async () => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const found = { ...FOUND, last_seen_at: '2026-09-20T08:00:00Z' };
+    DEVICES = [HEARD, found, WAITING];
+    writes = []; rpcCalls = []; toastMsg = null;
+    const root = mk('div');
+    await mountLabDevices(root);   // опрос включён: mount() теста его гасит
+    findButtonByText(root, /Добавить прибор/).click();
+    await tick();
+    const btn = findButtonByText(rowNamed(root, 'BC-5300'), /Добавить/);
+    assert.ok(btn, 'кнопка «Добавить» у находки');
+
+    const polls = () => rpcCalls.filter((c) => c.name === 'lis_listeners').length;
+    const before = polls();
+    mock.timers.tick(5000);   // опрос, данные те же
+    await tick(60);
+    assert.ok(polls() > before, 'опрос действительно прошёл');
+    assert.ok(walk(root).includes(btn), 'окно не перестроено: кнопка под курсором та же');
+
+    DEVICES = [HEARD, { ...found, last_seen_at: '2026-09-21T08:00:00Z' }, WAITING];   // находка прислала ещё пробу
+    mock.timers.tick(5000);
+    await tick(60);
+    assert.ok(!walk(root).includes(btn), 'видимое изменилось — окно перерисовано');
+    assert.ok(addWindow(root), 'и это всё то же окно');
+
+    const btn2 = findButtonByText(rowNamed(root, 'BC-5300'), /Добавить/);
+    LISTENERS = { listening: [], failed: [{ port: 2575, code: 'busy', error: 'x' }] };   // порт упал
+    mock.timers.tick(5000);
+    await tick(60);
+    assert.ok(!walk(root).includes(btn2), 'строка о порте ждущего изменилась — окно перерисовано');
+    assert.ok(textOf(addWindow(root)).includes('порт 2575 занят другой программой'));
+  } finally {
+    stopLabDevicesLive();
+    mock.timers.reset();
+    LISTENERS = LISTENING_2575;
+  }
 });
 
 test('ревью M3: форма из таблицы по-прежнему просто закрывается', async () => {
