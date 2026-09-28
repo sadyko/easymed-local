@@ -6,6 +6,7 @@
 // movements the same way.
 import { supabase } from '../../supabase.js';
 import { h, Icon, Tag } from '../ui.js';
+import { GOODS_CATEGORY_RU } from '../../shared/goods-catalog.js';   // SUPPLIERS_VAT_V1
 
 // Cross-module fetch-race guard: every tab's async fetch grabs a token and
 // bails (without touching the DOM) if a newer fetch — including one triggered
@@ -68,16 +69,35 @@ export function isLowStock(p) {
 }
 
 // PROCUREMENT_CATEGORIES_V1 — fixed catalog, stored in products.procurement_category.
-export const CATEGORY_LABEL = {
-    medicines:    'Медикаменты',
-    consumables:  'Расходники',
-    equipment:    'Оборудование',
-    lab_supplies: 'Лаб. материалы',
-    dental:       'Стоматология',
-    radiology:    'Радиология',
-    office_it:    'Офис / IT',
-    facility:     'Хозяйство',
-};
+// SUPPLIERS_VAT_V1 — типы товаров «жёстко»: один список на сервер и экран
+// (public/js/shared/goods-catalog.js — его же читают product_save, импорт Excel
+// и отчёты). Названия переводятся при показе (h() → tr()).
+export const CATEGORY_LABEL = GOODS_CATEGORY_RU;
+
+// SUPPLIERS_VAT_V1 — выбор ставки НДС: ровно три варианта. Значение <select> —
+// строка: '12', '0' или 'none' («без НДС»); на сервер уходит 12, 0 или null.
+export const VAT_OPTIONS = [['12', '12 %'], ['0', '0 %'], ['none', 'Без НДС']];
+export function vatToSelect(rate) {
+    if (rate === null || rate === undefined || rate === '') return 'none';
+    return String(Number(rate));
+}
+export function vatFromSelect(value) {
+    return value === 'none' || value === '' || value == null ? null : Number(value);
+}
+/** <select> ставки НДС; onChange получает 12 | 0 | null. */
+export function vatSelect(rate, onChange, style = {}) {
+    const sel = h('select', { style: { ...selStyle, width: 'auto', minWidth: '96px', ...style }, 'aria-label': 'Ставка НДС' },
+        ...VAT_OPTIONS.map(([v, label]) => h('option', { value: v, selected: vatToSelect(rate) === v }, label)));
+    sel.value = vatToSelect(rate);
+    if (typeof onChange === 'function') sel.addEventListener('change', () => onChange(vatFromSelect(sel.value)));
+    return sel;
+}
+/** Подпись ставки для таблиц: «12 %», «0 %», «Без НДС». */
+export function vatText(rate) {
+    const v = vatToSelect(rate);
+    const opt = VAT_OPTIONS.find(([x]) => x === v);
+    return opt ? opt[1] : 'Без НДС';
+}
 
 // Inline styles for selects / numeric inputs inside modal line tables.
 export const selStyle = { width: '100%', height: '34px', padding: '0 8px', border: '1px solid var(--ink-200)', borderRadius: '8px', fontSize: '13.5px', background: 'white', fontFamily: 'inherit' };

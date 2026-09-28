@@ -102,6 +102,11 @@ export const REPORT_DEFS = [
             // Переключатели конструктора — с одним выбором, отсюда одна категория.
             { arg: 'category', label: 'Категория',
               choices: [['all', 'Все категории'], ...Object.entries(CATEGORY_LABEL)] },
+            // SUPPLIERS_VAT_V1 — «Приход по поставщикам» по одному поставщику:
+            // выпадающий список, варианты — от сервера (report_choices), отбор и
+            // итоги с НДС и без — в SQL (rpc/reports.js reportSupplier).
+            { arg: 'supplier_id', label: 'Поставщик', type: 'select', kinds: ['procurement'],
+              choices: [['', 'Все поставщики']] },
         ],
     },
     {

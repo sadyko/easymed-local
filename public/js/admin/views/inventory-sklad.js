@@ -12,9 +12,12 @@ import { categoryFilter, loadCategories, matchesCategories } from './category-fi
 import { openReceiveModal, openAdjustModal } from './inventory-products.js';
 import { openStockIssueModal } from './stock-issue-modal.js';   // STOCK_ISSUE_MODAL_V1 — общий диалог выдачи
 import { renderInactiveHoldings } from './inventory-inactive-holdings.js';   // V3120_FIX — подотчёт отключённых
+// SUPPLIERS_VAT_V1 — типы товаров, ставки НДС и формат срока годности импорта —
+// один список с сервером.
+import { GOODS_CATEGORIES, GOODS_CATEGORY_RU, EXPIRY_FORMAT_RU, EXPIRY_EXAMPLE, dmyOfDate } from '../../shared/goods-catalog.js';
 
 const sklad = {
-    products: [], suppliers: [],
+    products: [], suppliers: [], linksOf: new Map(),
     q: '', unit: 'all', supplier: 'all', avail: 'all', flag: 'all',
     cats: [],   // PROCUREMENT_FILTERS_V1 — отметки вошедшего (category-filter.js)
     tbody: null, emptyEl: null, summaryEl: null,
@@ -33,6 +36,20 @@ export function skladSummary(rows) {
         if (isLowStock(p)) reorder += 1;
     }
     return { count: rows.length, value, reorder };
+}
+
+/**
+ * SUPPLIERS_VAT_V1 — отбор «Склада» по поставщику: у товара их может быть
+ * несколько (многие ко многим). «Без поставщика» — ни основного, ни связей;
+ * конкретный поставщик — основной или любой из связанных.
+ * linksOf — Map(id товара → Set id поставщиков).
+ */
+export function matchesSupplier(p, supplier, linksOf) {
+    if (supplier === 'all') return true;
+    const linked = (linksOf && linksOf.get(p.id)) || new Set();
+    if (supplier === 'none') return !p.supplier_id && linked.size === 0;
+    const sid = Number(supplier);
+    return p.supplier_id === sid || linked.has(sid);
 }
 
 // Единица выдачи: consumption unit если задана, иначе базовая (factor 1).
@@ -57,15 +74,17 @@ export async function renderSkladTab(container) {
     container.appendChild(loadingCard());
     const token = ++fetchGuard.token;
 
-    let products = [], suppliers = [], loadError = null;
+    let products = [], suppliers = [], links = [], loadError = null;
     try {
-        const [pr, sr] = await Promise.all([
+        const [pr, sr, lk] = await Promise.all([
             supabase.from('products').select('*, suppliers(id,name)').order('name', { ascending: true }).limit(1000),
             supabase.from('suppliers').select('id,name').eq('active', 1).order('name', { ascending: true }),
+            supabase.from('item_suppliers').select('product_id, supplier_id').limit(5000),   // SUPPLIERS_VAT_V1
         ]);
         if (pr.error) throw pr.error;
         products = pr.data || [];
         suppliers = (sr.error ? [] : sr.data) || [];
+        links = (lk && !lk.error && lk.data) || [];
     } catch (e) { loadError = e; }
     if (token !== fetchGuard.token) return;
 
@@ -78,6 +97,11 @@ export async function renderSkladTab(container) {
 
     sklad.products = products.filter(p => p.active);
     sklad.suppliers = suppliers;
+    sklad.linksOf = new Map();
+    for (const l of links) {
+        if (!sklad.linksOf.has(l.product_id)) sklad.linksOf.set(l.product_id, new Set());
+        sklad.linksOf.get(l.product_id).add(l.supplier_id);
+    }
     sklad.tbody = h('tbody');
     sklad.emptyEl = h('div', { class: 'empty', style: { display: 'none' } }, 'Ничего не найдено.');
     sklad.cats = loadCategories();
@@ -127,7 +151,7 @@ export async function renderSkladTab(container) {
             h('h3', null, Icon('Layers', { size: 15 }), ' Остатки на складе'),
             h('span', { class: 'grow' }),
             toolBtn('Excel', 'Download', exportExcel),
-            toolBtn('Шаблон', 'Doc', downloadTemplate),
+            toolBtn('Шаблон', 'Doc', downloadImportTemplate),
             toolBtn('Импорт из Excel', 'ArrowUp', () => openImportModal(reload)),
             toolBtn('Выдать', 'Send', () => openStockIssueModal({ onDone: reload })),   // STOCK_ISSUE_MODAL_V1
             toolBtn('Корректировка', 'Edit', () => openAdjustModal(null, reload)),
@@ -187,8 +211,7 @@ export async function renderSkladTab(container) {
             if (q && !(p.name || '').toLowerCase().includes(q)) return false;
             if (!matchesCategories(p, sklad.cats)) return false;
             if (sklad.unit !== 'all' && p.base_unit !== sklad.unit) return false;
-            if (sklad.supplier === 'none' && p.supplier_id) return false;
-            if (sklad.supplier !== 'all' && sklad.supplier !== 'none' && p.supplier_id !== Number(sklad.supplier)) return false;
+            if (!matchesSupplier(p, sklad.supplier, sklad.linksOf)) return false;
             if (sklad.avail === 'in' && !(onHand > 0)) return false;
             if (sklad.avail === 'low' && !(onHand > 0 && low)) return false;
             if (sklad.avail === 'out' && onHand > 0) return false;
@@ -207,6 +230,14 @@ export async function renderSkladTab(container) {
         if (!rows.length) { sklad.emptyEl.style.display = ''; return; }
         sklad.emptyEl.style.display = 'none';
         for (const p of rows) sklad.tbody.appendChild(productRow(p));
+    }
+
+    // Поставщик строки: основной и «+N», если товар берут ещё у кого-то.
+    function supplierCell(p) {
+        const main = (p.suppliers && p.suppliers.name) || '';
+        const others = [...(sklad.linksOf.get(p.id) || [])].filter((id) => id !== p.supplier_id).length;
+        if (!main) return others ? `+${others}` : '—';
+        return others ? `${main} +${others}` : main;
     }
 
     function productRow(p) {
@@ -228,7 +259,7 @@ export async function renderSkladTab(container) {
             h('td', { class: 'cell-strong' }, p.name || '—'),
             h('td', null, CATEGORY_LABEL[p.procurement_category] || p.procurement_category || '—'),
             h('td', null, p.base_unit || '—'),
-            h('td', null, (p.suppliers && p.suppliers.name) || '—'),
+            h('td', null, supplierCell(p)),
             h('td', { class: 'num' },
                 h('div', null, low
                     ? h('span', { style: { color: 'var(--crit-500)' } }, Icon('Warning', { size: 13 }), ' ' + stockText)
@@ -271,34 +302,115 @@ export async function renderSkladTab(container) {
             toast(trf('Не удалось сформировать Excel: {msg}', { msg: (e && e.message) || e }), 'fail');
         }
     }
-
-    // ---- Excel: import template -----------------------------------------
-    async function downloadTemplate() {
-        try {
-            const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
-            const matrix = [
-                ['Название*', 'Единица', 'Кол-во', 'Себестоимость', 'Мин. остаток', 'Поставщик'],
-                ['Парацетамол 500мг', 'шт', 100, 1500, 10, 'ООО Медснаб'],
-            ];
-            const ws = XLSX.utils.aoa_to_sheet(matrix);
-            const wb = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(wb, ws, 'Импорт');
-            XLSX.writeFile(wb, 'shablon-import-tovarov.xlsx');
-        } catch (e) {
-            toast(trf('Не удалось сформировать шаблон: {msg}', { msg: (e && e.message) || e }), 'fail');
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
 // ИМПОРТ ИЗ EXCEL — клиент читает книгу (vendored SheetJS), маппит колонки
 // шаблона, сервер (import_products_excel) делает всё в одной транзакции.
+//
+// SUPPLIERS_VAT_V1 (2026-09-28) — владелец: «in the importing of the Excel we
+// need to add an expiration date with a hardcoded format, so the user won't
+// make mistakes». В шаблоне — категория, НДС, цена продажи, партия и «Срок
+// годности (ДД.ММ.ГГГГ)»; второй лист «Подсказки» — допустимые типы, ставки и
+// формат с примером. Настоящую дату-ячейку Excel экран превращает в ДД.ММ.ГГГГ
+// сам (dmyOfDate); текст уходит на сервер как есть, и проверяет его сервер —
+// ровно ДД.ММ.ГГГГ, настоящая дата, не прошедшая (goods-catalog.js
+// parseExpiryDmy), с номером строки в отказе.
 // ---------------------------------------------------------------------------
+/* i18n-exempt-start: контракт файла импорта — заголовки, примеры и допустимые значения, которые человек пишет в Excel буквально */
+export const IMPORT_COLUMNS = [
+    'Название*', 'Категория*', 'Единица', 'Кол-во', 'Цена закупки без НДС', 'НДС', 'Цена продажи',
+    'Мин. остаток', 'Поставщик', 'Партия', `Срок годности (${EXPIRY_FORMAT_RU})`,
+];
+const IMPORT_EXAMPLE = ['Парацетамол 500мг', 'Медикаменты', 'шт', 100, 1500, '12%', 2500, 10, 'ООО Медснаб', 'A-2601', EXPIRY_EXAMPLE];
 const HEADER_MAP = {
     'название': 'name', 'единица': 'unit', 'кол-во': 'qty', 'количество': 'qty',
-    'себестоимость': 'unit_cost', 'мин. остаток': 'reorder_level', 'мин остаток': 'reorder_level',
+    'себестоимость': 'unit_cost', 'цена закупки без ндс': 'unit_cost', 'цена закупки': 'unit_cost',
+    'мин. остаток': 'reorder_level', 'мин остаток': 'reorder_level',
     'поставщик': 'supplier',
+    'тип товара': 'category', 'тип': 'category', 'категория': 'category',
+    'ндс': 'vat_rate', 'ставка ндс': 'vat_rate',
+    'цена продажи': 'sale_price',
+    'партия': 'batch_no', 'партия / серия': 'batch_no', 'серия': 'batch_no',
+    'срок годности (дд.мм.гггг)': 'expiry_date', 'срок годности': 'expiry_date', 'годен до': 'expiry_date',
 };
+function importHints() {
+    return [
+        ['Колонка', 'Что писать'],
+        ['Название*', 'Точное название товара. Совпало с товаром в каталоге — товар обновится, нет — будет создан.'],
+        ['Категория*', 'Одна из: ' + GOODS_CATEGORIES.map((k) => GOODS_CATEGORY_RU[k]).join(', ') + '. Для нового товара обязательна.'],
+        ['НДС', '12%, 0% или без НДС. Пусто — ставка не меняется (у нового товара — без НДС).'],
+        ['Цена закупки без НДС', 'Цена за единицу без НДС, как в счёте-фактуре. Себестоимость на складе будет с НДС.'],
+        [`Срок годности (${EXPIRY_FORMAT_RU})`, `Только ${EXPIRY_FORMAT_RU}, например ${EXPIRY_EXAMPLE}, или дата-ячейка Excel. Прошедшая или несуществующая дата — отказ.`],
+        ['Партия', 'Номер партии или серии. Партия и срок — только в строке с «Кол-во».'],
+    ];
+}
+/* i18n-exempt-end */
+
+export async function downloadImportTemplate() {
+    try {
+        const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.aoa_to_sheet([IMPORT_COLUMNS, IMPORT_EXAMPLE]);
+        // Срок годности в примере — ТЕКСТ «31.12.2027»: так формат виден, как есть.
+        const expCell = XLSX.utils.encode_cell({ r: 1, c: IMPORT_COLUMNS.length - 1 });
+        if (ws[expCell]) { ws[expCell].t = 's'; ws[expCell].z = '@'; }
+        ws['!cols'] = IMPORT_COLUMNS.map((c) => ({ wch: Math.max(12, c.length + 2) }));
+        XLSX.utils.book_append_sheet(wb, ws, 'Импорт');
+        const hints = XLSX.utils.aoa_to_sheet(importHints());
+        hints['!cols'] = [{ wch: 28 }, { wch: 100 }];
+        XLSX.utils.book_append_sheet(wb, hints, 'Подсказки');
+        XLSX.writeFile(wb, 'shablon-import-tovarov.xlsx');
+    } catch (e) {
+        toast(trf('Не удалось сформировать шаблон: {msg}', { msg: (e && e.message) || e }), 'fail');
+    }
+}
+
+/** Ячейка срока годности → то, что уходит на сервер: дата-ячейка → «ДД.ММ.ГГГГ». */
+export function expiryCellValue(v) {
+    if (v instanceof Date) return dmyOfDate(v) || '';
+    if (v === undefined || v === null) return '';
+    return typeof v === 'number' ? v : String(v).trim();
+}
+
+/**
+ * Строки импорта из листа (массив строк ячеек, первая — заголовок).
+ * Числа и тексты уходят как есть — их проверяет сервер (importProductsExcel —
+ * единственный проверяющий); дата-ячейка срока — ДД.ММ.ГГГГ.
+ */
+export function importRowsFromMatrix(matrix) {
+    if (!Array.isArray(matrix) || !matrix.length) throw new Error(tr('Файл пуст.'));
+    const headers = matrix[0].map(x => String(x).toLowerCase().replace(/\*/g, '').replace(/\s+/g, ' ').trim());
+    const keys = headers.map(hd => HEADER_MAP[hd] || null);
+    if (!keys.includes('name')) throw new Error(tr('Не найдена колонка «Название» — скачайте «Шаблон».'));
+    const rows = [];
+    for (const cells of matrix.slice(1)) {
+        if (!cells || cells.every(c => String(c).trim() === '')) continue;
+        const row = {};
+        keys.forEach((k, ci) => { if (k) row[k] = cells[ci]; });
+        rows.push(row);
+    }
+    if (!rows.length) throw new Error(tr('В файле нет строк данных.'));
+    // Numbers go to the server untouched: importProductsExcel is the single
+    // validator (it accepts a comma decimal and spacer whitespace, and rejects
+    // anything else naming the row). Coercing here would turn a typo'd cell
+    // into NaN -> null and import the row silently with no stock.
+    const cell = v => (v === undefined || v === null) ? '' : v;
+    const text = v => (v === undefined || v === null) ? '' : String(v);
+    return rows.map(r => ({
+        name: text(r.name),
+        category: text(r.category),
+        unit: text(r.unit),
+        qty: cell(r.qty),
+        unit_cost: cell(r.unit_cost),
+        vat_rate: cell(r.vat_rate),
+        sale_price: cell(r.sale_price),
+        reorder_level: cell(r.reorder_level),
+        supplier: text(r.supplier),
+        batch_no: text(r.batch_no),
+        expiry_date: expiryCellValue(r.expiry_date),
+    }));
+}
 
 function openImportModal(onDone) {
     const overlay = h('div', { class: 'modal' });
@@ -319,21 +431,11 @@ function openImportModal(onDone) {
         if (!file) return;
         try {
             const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
-            const wb = XLSX.read(await file.arrayBuffer());
+            // cellDates — настоящая дата-ячейка приходит датой, а не числом
+            // (46387): её и превращает в ДД.ММ.ГГГГ importRowsFromMatrix.
+            const wb = XLSX.read(await file.arrayBuffer(), { cellDates: true });
             const ws = wb.Sheets[wb.SheetNames[0]];
-            const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-            if (!matrix.length) throw new Error('Файл пуст.');
-            const headers = matrix[0].map(x => String(x).toLowerCase().replace(/\*/g, '').replace(/\s+/g, ' ').trim());
-            const keys = headers.map(hd => HEADER_MAP[hd] || null);
-            if (!keys.includes('name')) throw new Error('Не найдена колонка «Название» — скачайте «Шаблон».');
-            const rows = [];
-            for (const cells of matrix.slice(1)) {
-                if (!cells || cells.every(c => String(c).trim() === '')) continue;
-                const row = {};
-                keys.forEach((k, ci) => { if (k) row[k] = cells[ci]; });
-                rows.push(row);
-            }
-            if (!rows.length) throw new Error('В файле нет строк данных.');
+            const rows = importRowsFromMatrix(XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }));
             parsedRows = rows;
             importBtn.disabled = false;
             previewEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } },
@@ -350,20 +452,7 @@ function openImportModal(onDone) {
         const prev = importBtn.textContent;
         importBtn.textContent = tr('Импортируем…');
         try {
-            // Numbers go to the server untouched: importProductsExcel is the single
-            // validator (it accepts a comma decimal and spacer whitespace, and rejects
-            // anything else naming the row). Coercing here would turn a typo'd cell
-            // into NaN -> null and import the row silently with no stock.
-            const cell = v => (v === undefined || v === null) ? '' : v;
-            const rows = parsedRows.map(r => ({
-                name: r.name === undefined ? '' : String(r.name),
-                unit: r.unit === undefined ? '' : String(r.unit),
-                qty: cell(r.qty),
-                unit_cost: cell(r.unit_cost),
-                reorder_level: cell(r.reorder_level),
-                supplier: r.supplier === undefined ? '' : String(r.supplier),
-            }));
-            const { data, error } = await supabase.rpc('import_products_excel', { rows });
+            const { data, error } = await supabase.rpc('import_products_excel', { rows: parsedRows });
             if (error) throw error;
             toast(trf('Импорт готов: создано {created}, обновлено {updated}, приходов {received}.', { created: data.created, updated: data.updated, received: data.received }), 'ok');
             close();
@@ -375,13 +464,16 @@ function openImportModal(onDone) {
         }
     });
 
-    overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '520px', maxWidth: 'calc(100vw - 32px)' } },
+    overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '560px', maxWidth: 'calc(100vw - 32px)' } },
         h('header', { class: 'modal-head' },
             h('h2', null, Icon('ArrowUp', { size: 16 }), ' Импорт из Excel'),
             h('button', { class: 'modal-close', onclick: close }, '×')),
         h('div', { class: 'modal-body' },
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '6px' } },
+                'Колонки шаблона: Название*, Категория*, Единица, Кол-во, Цена закупки без НДС, НДС, Цена продажи, Мин. остаток, Поставщик, Партия, Срок годности (ДД.ММ.ГГГГ). Допустимые значения — на листе «Подсказки» шаблона.'),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '6px' } },
+                'Категория — одна из восьми; НДС — 12%, 0% или «без НДС»; срок годности — только ДД.ММ.ГГГГ, например 31.12.2027.'),
             h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } },
-                'Колонки шаблона: Название*, Единица, Кол-во, Себестоимость, Мин. остаток, Поставщик. ',
                 'Импорт — всё или ничего: ошибка в любой строке отменяет весь файл.'),
             field('Файл', fileInp),
             previewEl,

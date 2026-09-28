@@ -1,19 +1,29 @@
 // Закупки — «Товары» tab (catalog CRUD) + the shared Принять / Корректировка
 // modals. PROCUREMENT_REDESIGN_V1 — extracted from the original single-file
-// inventory.js. Catalog writes go through /api/db (allow-listed columns only)
-// — on_hand and avg_cost change ONLY through RPCs:
+// inventory.js. on_hand and avg_cost change ONLY through RPCs:
 //   receive_stock_lines («Принять»), adjust_stock («Корректировка»),
 //   issue_stock_lines («Выдать» — see inventory-sklad.js),
 //   dispense_item / void_dispense (visit-bill.js — unrelated, do not touch).
+//
+// SUPPLIERS_VAT_V1 (2026-09-28) — владелец: «connect the providers to the drug
+// products … when adding goods to the procurement we need to hardcode the types
+// of the goods, set up price and VAT rate». Карточка товара сохраняется ОДНИМ
+// вызовом product_save (товар + все его поставщики, одна транзакция, проверка
+// типа и НДС на сервере — rpc/catalog-goods.js); тип — одна из восьми
+// категорий без пустого варианта; у товара цена продажи и ставка НДС, у каждого
+// поставщика — своя цена закупки без НДС и ставка. «Принять товар» берёт цену и
+// НДС строки из связи товара с поставщиком и показывает суммы без НДС, НДС и с
+// НДС — ими сверяют счёт-фактуру.
 import { supabase } from '../../supabase.js';
-import { h, Icon, clear, toast, Tag, field, checkField } from '../ui.js';
+import { h, Icon, clear, toast, Tag, field } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { fetchGuard, fmtPrice, fmtQty, CATEGORY_LABEL, selStyle, numStyle, isLowStock } from './inventory-shared.js';
+import { fetchGuard, fmtPrice, fmtMoney2, fmtQty, CATEGORY_LABEL, selStyle, numStyle, isLowStock, vatSelect, vatText } from './inventory-shared.js';
 import { categoryFilter, loadCategories, matchesCategories } from './category-filter.js';   // PROCUREMENT_FILTERS_V1
 import { openSupplierModal } from './inventory-suppliers.js';   // ADD_PRODUCT_EASYMED_V1 — «+ Новый поставщик» из карточки товара
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
+import { GOODS_CATEGORIES, VAT_STANDARD, vatOnNet } from '../../shared/goods-catalog.js';   // SUPPLIERS_VAT_V1
 
-const productRefs = { tbody: null, emptyEl: null, totalEl: null, all: [], q: '', cats: [] };
+const productRefs = { tbody: null, emptyEl: null, totalEl: null, all: [], q: '', cats: [], suppliersOf: new Map() };
 
 // PROCUREMENT_FILTERS_V1 — «Товары» получили поиск (его не было вовсе) и
 // отметки категорий (общие с «Складом» и «Сроками годности», запоминаются за
@@ -29,6 +39,15 @@ export function filterProducts(rows, { q = '', cats = [] } = {}) {
     });
 }
 
+// SUPPLIERS_VAT_V1 — поставщики товара одной строкой для таблицы «Товары»:
+// первые два по имени и «+N», если их больше.
+export function suppliersCellText(names) {
+    const list = (names || []).filter(Boolean);
+    if (!list.length) return '—';
+    const head = list.slice(0, 2).join(', ');
+    return list.length > 2 ? `${head} +${list.length - 2}` : head;
+}
+
 export function renderProductsTab(container) {
     productRefs.tbody = h('tbody');
     productRefs.emptyEl = h('div', { class: 'empty', style: { display: 'none' } },
@@ -37,6 +56,7 @@ export function renderProductsTab(container) {
     productRefs.all = [];
     productRefs.q = '';
     productRefs.cats = loadCategories();
+    productRefs.suppliersOf = new Map();
 
     const searchInp = h('input', {
         type: 'text', placeholder: 'Поиск по названию или коду…', 'aria-label': 'Поиск товара',
@@ -64,18 +84,21 @@ export function renderProductsTab(container) {
                 searchInp,
                 categoryFilter({ selected: productRefs.cats, onChange: (c) => { productRefs.cats = c; paintRows(); } }),
             ),
-            h('table', { class: 'tbl' },
-                h('thead', null, h('tr', null,
-                    h('th', null, 'Название'),
-                    h('th', null, 'Категория'),
-                    h('th', null, 'В наличии'),
-                    h('th', null, 'Себестоимость'),
-                    h('th', null, 'Цена продажи'),
-                    h('th', null, 'Статус'),
-                    h('th', null, ''),
+            h('div', { style: { overflowX: 'auto' } },
+                h('table', { class: 'tbl' },
+                    h('thead', null, h('tr', null,
+                        h('th', null, 'Название'),
+                        h('th', null, 'Категория'),
+                        h('th', null, 'В наличии'),
+                        h('th', null, 'Себестоимость'),
+                        h('th', null, 'Цена продажи'),
+                        h('th', null, 'НДС'),
+                        h('th', null, 'Поставщики'),
+                        h('th', null, 'Статус'),
+                        h('th', null, ''),
+                    )),
+                    productRefs.tbody,
                 )),
-                productRefs.tbody,
-            ),
             productRefs.emptyEl,
         ),
     ));
@@ -87,18 +110,28 @@ async function fetchProductsAndPaint() {
     const token = ++fetchGuard.token;
     setLoadingRow();
     try {
-        const { data, error } = await supabase.from('products')
-            .select('*')
-            .order('name', { ascending: true })
-            .limit(1000);
+        const [pr, lk] = await Promise.all([
+            supabase.from('products').select('*').order('name', { ascending: true }).limit(1000),
+            // SUPPLIERS_VAT_V1 — у кого товар закупают (многие ко многим).
+            supabase.from('item_suppliers').select('product_id, supplier_id, suppliers(name)').limit(5000),
+        ]);
         if (token !== fetchGuard.token) return;   // a newer fetch already landed
-        if (error) {
-            toast(trf('Не удалось загрузить товары: {msg}', { msg: error.message || error }), 'fail');
+        if (pr.error) {
+            toast(trf('Не удалось загрузить товары: {msg}', { msg: pr.error.message || pr.error }), 'fail');
             productRefs.all = [];
             paintRows();
             return;
         }
-        productRefs.all = data || [];
+        productRefs.all = pr.data || [];
+        const map = new Map();
+        for (const l of ((lk && !lk.error && lk.data) || [])) {
+            const name = l.suppliers && l.suppliers.name;
+            if (!name) continue;
+            if (!map.has(l.product_id)) map.set(l.product_id, []);
+            map.get(l.product_id).push(name);
+        }
+        for (const list of map.values()) list.sort((a, b) => a.localeCompare(b, 'ru'));
+        productRefs.suppliersOf = map;
         paintRows();
     } catch (e) {
         if (token !== fetchGuard.token) return;
@@ -112,7 +145,7 @@ function setLoadingRow() {
     if (!productRefs.tbody) return;
     clear(productRefs.tbody);
     productRefs.tbody.appendChild(h('tr', null,
-        h('td', { colspan: '7', style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Загрузка…'),
+        h('td', { colspan: '9', style: { textAlign: 'center', padding: '24px', color: 'var(--ink-500)', fontSize: '12.5px' } }, 'Загрузка…'),
     ));
     productRefs.emptyEl.style.display = 'none';
 }
@@ -155,6 +188,8 @@ function productRow(p) {
         h('td', { class: 'num' }, `${onHand} ${p.base_unit || ''}`.trim()),
         h('td', { class: 'num' }, fmtPrice(p.avg_cost)),
         h('td', { class: 'num' }, fmtPrice(p.sale_price)),
+        h('td', null, vatText(p.vat_rate)),
+        h('td', { class: 'muted', style: { fontSize: '12.5px' } }, suppliersCellText(productRefs.suppliersOf.get(p.id))),
         h('td', null, Tag(p.active ? 'Активен' : 'Неактивен', { kind: p.active ? 'ok' : '', dot: true }),
             low ? h('span', { style: { marginLeft: '8px' } }, Tag('Мало', { kind: 'warn', dot: true })) : null),
         h('td', { style: { textAlign: 'right' } }, adjustBtn),
@@ -185,7 +220,51 @@ function unitSelect(value, minWidth = '150px') {
         ...UNIT_OPTIONS.map(([u, label]) => h('option', { value: u, selected: u === val }, label)));
 }
 
-function openProductModal(p, onSaved) {
+// SUPPLIERS_VAT_V1 — тип товара: ровно восемь, пустого варианта нет. У нового
+// товара по умолчанию «Медикаменты» (как было), у сохранённого — его тип.
+export function categorySelect(value) {
+    const current = GOODS_CATEGORIES.includes(value) ? value : 'medicines';
+    const sel = h('select', { style: selStyle, 'aria-label': 'Категория' },
+        ...GOODS_CATEGORIES.map((key) => h('option', { value: key, selected: key === current }, CATEGORY_LABEL[key])));
+    sel.value = current;
+    return sel;
+}
+
+/**
+ * Аргументы product_save из карточки. suppliers — только если список связей
+ * загружен (linksLoaded): не загрузился — связи не отправляются и сервер их не
+ * трогает, а не стирает.
+ */
+export function productSavePayload({ id = null, name, category, baseUnit, stockUnit, packFactor, salePrice, vat, active, linked, linksLoaded }) {
+    const payload = {
+        name: String(name || '').trim(),
+        procurement_category: category,
+        base_unit: baseUnit,
+        purchase_unit: stockUnit,
+        pack_factor: packFactor,
+        sale_price: salePrice,
+        vat_rate: vat === undefined ? null : vat,
+        active: !!active,
+    };
+    if (id != null) payload.id = id;
+    if (linksLoaded) {
+        payload.suppliers = (linked || []).map((l) => ({
+            supplier_id: l.supplier_id,
+            last_price: l.last_price == null || l.last_price === '' ? null : Number(l.last_price),
+            vat_rate: l.vat_rate === undefined ? null : l.vat_rate,
+            pack_factor: l.pack_factor == null || l.pack_factor === '' ? null : Number(l.pack_factor),
+            purchase_unit: l.purchase_unit || null,
+        }));
+    }
+    return payload;
+}
+
+/**
+ * Карточка товара. onSaved(product) получает сохранённый товар (ответ сервера).
+ * opts.presetSupplier — { id, name }: новый товар сразу привязан к этому
+ * поставщику (кнопка «Новый товар» в карточке поставщика).
+ */
+export function openProductModal(p, onSaved, opts = {}) {
     const isEdit = !!p;
 
     const overlay = h('div', { class: 'modal' });
@@ -199,10 +278,7 @@ function openProductModal(p, onSaved) {
 
     // ---- Name + Категория + Активен ----
     const nameInp = h('input', { type: 'text', required: true, value: p ? (p.name || '') : '', placeholder: 'e.g. Перчатки нитриловые М' });
-    const categorySel = h('select', { style: selStyle },
-        h('option', { value: '' }, 'Выберите категорию…'),
-        ...Object.entries(CATEGORY_LABEL).map(([key, label]) =>
-            h('option', { value: key, selected: (p ? p.procurement_category : 'medicines') === key }, label)));
+    const categorySel = categorySelect(p ? p.procurement_category : 'medicines');
     const activeChk = h('input', { type: 'checkbox', checked: p ? !!p.active : true });
 
     // ---- Единицы измерения ----
@@ -228,40 +304,68 @@ function openProductModal(p, onSaved) {
         hint('Если закупаете в той же единице, что и выдаёте — оставьте 1.'),
     );
 
+    // ---- Цена продажи и НДС ----
+    // SUPPLIERS_VAT_V1 — цена продажи С НДС (как у услуг); ставка — 12 %, 0 %
+    // или «без НДС». По ней отчёты считают налог строки товара в счёте.
+    const priceInp = h('input', { type: 'number', min: '0', step: 'any',
+        value: (p && p.sale_price != null) ? String(p.sale_price) : '', placeholder: '0',
+        style: { ...numStyle, width: '140px' } });
+    let productVat = p ? (p.vat_rate == null ? null : Number(p.vat_rate)) : VAT_STANDARD;
+    const productVatSel = vatSelect(productVat, (v) => { productVat = v; });
+    const pricePanel = h('div', { style: panelStyle },
+        cap('Цена продажи и НДС'),
+        h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+            h('span', { style: { fontSize: '12.5px', color: 'var(--ink-700)' } }, 'Цена продажи (списание пациенту), сум'),
+            priceInp,
+            h('span', { style: { fontSize: '12.5px', color: 'var(--ink-700)' } }, 'НДС'),
+            productVatSel),
+        hint('Цена продажи — с НДС, как у услуг: счёт пациента не меняется, в отчётах налог строки товара считается по этой ставке.'),
+    );
+
     // ---- Поставщики этого товара (item_suppliers) ----
     let allSuppliers = [];
-    const linked = [];   // [{ supplier_id, name, last_price, purchase_unit, pack_factor, _rowId? }]
+    // [{ supplier_id, name, last_price, vat_rate, purchase_unit, pack_factor }]
+    const linked = [];
+    // Список связей загружен (у нового товара — пуст и верен сразу). Не
+    // загрузился — связи при сохранении не отправляются.
+    let linksLoaded = !isEdit;
     const linkedEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
     const linkedEmpty = h('div', { class: 'muted', style: { fontSize: '12.5px' } },
         'Поставщики не привязаны — найдите ниже или создайте нового.');
+    if (opts.presetSupplier && opts.presetSupplier.id) {
+        linked.push({ supplier_id: opts.presetSupplier.id, name: opts.presetSupplier.name || '', last_price: null,
+            vat_rate: productVat, purchase_unit: null, pack_factor: null });
+    }
 
     function paintLinked() {
         clear(linkedEl);
-        if (!linked.length) { linkedEl.appendChild(linkedEmpty); return; }
+        if (!linked.length) { linkedEl.appendChild(isEdit && !linksLoaded ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загрузка…') : linkedEmpty); return; }
         for (const ln of linked) {
-            // ОДНА строка: имя (ellipsis) · Цена закупки [цена] сум · 1 [ед] = [N] шт ×
-            const priceInp = h('input', { type: 'number', min: '0', step: 'any', placeholder: 'цена',
+            // ОДНА строка: имя · Цена без НДС [цена] сум · НДС [ставка] · 1 [ед] = [N] шт ×
+            const priceInp2 = h('input', { type: 'number', min: '0', step: 'any', placeholder: 'цена',
                 value: ln.last_price != null ? String(ln.last_price) : '', style: { ...numStyle, width: '96px', flex: '0 0 auto' } });
-            priceInp.addEventListener('input', () => { ln.last_price = priceInp.value === '' ? null : Number(priceInp.value); });
+            priceInp2.addEventListener('input', () => { ln.last_price = priceInp2.value === '' ? null : Number(priceInp2.value); });
+            const vSel = vatSelect(ln.vat_rate, (v) => { ln.vat_rate = v; }, { minWidth: '86px', flex: '0 0 auto' });
             const uSel = unitSelect(ln.purchase_unit || stockUnitSel.value, '104px');
             uSel.style.flex = '0 0 auto';
             uSel.addEventListener('change', () => { ln.purchase_unit = uSel.value; });
             const fInp = h('input', { type: 'number', min: '0', step: 'any',
-                value: ln.pack_factor != null ? String(ln.pack_factor) : '1', style: { ...numStyle, width: '60px', flex: '0 0 auto' } });
-            fInp.addEventListener('input', () => { ln.pack_factor = fInp.value === '' ? 1 : Number(fInp.value); });
+                value: ln.pack_factor != null ? String(ln.pack_factor) : (packFactorInp.value || '1'), style: { ...numStyle, width: '60px', flex: '0 0 auto' } });
+            fInp.addEventListener('input', () => { ln.pack_factor = fInp.value === '' ? null : Number(fInp.value); });
             const lbl = (t) => h('span', { class: 'muted', style: { fontSize: '12.5px', flex: '0 0 auto', whiteSpace: 'nowrap' } }, t);
             linkedEl.appendChild(h('div', {
                 class: 'row',
-                style: { gap: '7px', alignItems: 'center', flexWrap: 'nowrap', padding: '8px 12px',
+                style: { gap: '7px', alignItems: 'center', flexWrap: 'wrap', padding: '8px 12px',
                          background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-100, #d7efe9)', borderRadius: '10px' },
             },
-                h('span', { style: { fontWeight: 700, color: 'var(--primary-700)', minWidth: '60px', flex: '1 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, ln.name),
-                lbl('Цена закупки'), priceInp,
-                lbl('сум · 1'), uSel,
+                h('span', { style: { fontWeight: 700, color: 'var(--primary-700)', minWidth: '60px', flex: '1 1 140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, ln.name),
+                lbl('Цена без НДС'), priceInp2, lbl('сум'),
+                lbl('НДС'), vSel,
+                lbl('· 1'), uSel,
                 h('span', { style: { flex: '0 0 auto' } }, '='), fInp,
                 lbl(dispenseUnitSel.value),
                 h('button', {
-                    type: 'button', title: 'Отвязать',
+                    type: 'button', title: 'Отвязать', 'aria-label': 'Отвязать',
                     style: { border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-400)', fontWeight: 700, flex: '0 0 auto' },
                     onclick: () => { linked.splice(linked.indexOf(ln), 1); paintLinked(); },
                 }, '×'),
@@ -286,6 +390,9 @@ function openProductModal(p, onSaved) {
             Icon('Search', { size: 14 })),
         supSearch);
     const supResults = h('div', { style: { display: 'none', border: '1px solid var(--ink-150, var(--ink-200))', borderRadius: '10px', marginTop: '4px', overflow: 'hidden', background: 'var(--white, #fff)' } });
+    const linkNew = (s) => {
+        linked.push({ supplier_id: s.id, name: s.name, last_price: null, vat_rate: productVat, purchase_unit: stockUnitSel.value, pack_factor: Number(packFactorInp.value) || 1 });
+    };
     function paintResults() {
         clear(supResults);
         const q = supSearch.value.trim().toLowerCase();
@@ -302,7 +409,7 @@ function openProductModal(p, onSaved) {
                 onmouseleave: (e) => { e.currentTarget.style.background = ''; },
                 onmousedown: (e) => {
                     e.preventDefault();
-                    linked.push({ supplier_id: s.id, name: s.name, last_price: null, purchase_unit: stockUnitSel.value, pack_factor: Number(packFactorInp.value) || 1 });
+                    linkNew(s);
                     supSearch.value = ''; supResults.style.display = 'none'; paintLinked();
                 },
             }, s.name, s.phone ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' · ' + s.phone) : null));
@@ -323,19 +430,20 @@ function openProductModal(p, onSaved) {
     const newSupplierBtn = h('button', {
         class: 'btn btn-sm', type: 'button',
         style: { background: 'var(--warn-50, #fdf3e1)', borderColor: 'var(--warn-200, #f2d9a6)', color: 'var(--warn-800, #8a6116)', fontWeight: 700 },
-        onclick: () => openSupplierModal(null, async () => {
-            // связываем только что созданного поставщика (самый свежий id)
+        onclick: () => openSupplierModal(null, async (saved) => {
+            // связываем только что созданного поставщика (ответ сервера; без него — самый свежий id)
             await loadSuppliers();
-            const newest = allSuppliers.reduce((a, b) => (!a || b.id > a.id ? b : a), null);
-            if (newest && !linked.some(l => l.supplier_id === newest.id)) {
-                linked.push({ supplier_id: newest.id, name: newest.name, last_price: null, purchase_unit: stockUnitSel.value, pack_factor: Number(packFactorInp.value) || 1 });
+            const created = saved && saved.id ? saved : allSuppliers.reduce((a, b) => (!a || b.id > a.id ? b : a), null);
+            if (created && !linked.some(l => l.supplier_id === created.id)) {
+                linkNew(created);
                 paintLinked();
             }
-        }),
+        }, { withProducts: false }),
     }, Icon('Plus', { size: 13 }), ' Новый поставщик');
 
     const suppliersPanel = h('div', { style: panelStyle },
         cap('Поставщики этого товара'),
+        hint('Цена закупки — без НДС, за единицу закупки; НДС — ставка этого поставщика. «Принять товар» подставляет их сам.'),
         linkedEl,
         h('div', { style: { marginTop: '10px' } }, supSearchWrap, supResults),
         h('div', { class: 'row', style: { gap: '8px', alignItems: 'center', marginTop: '10px', borderTop: '1px dashed var(--ink-150, var(--ink-200))', paddingTop: '10px' } },
@@ -343,25 +451,33 @@ function openProductModal(p, onSaved) {
             newSupplierBtn),
     );
 
-    // Цена продажи — в easymed её нет в этой форме, но локальный биллинг
-    // списаний берёт цену отсюда; одна компактная строка внизу.
-    const priceInp = h('input', { type: 'number', min: '0', step: 'any',
-        value: (p && p.sale_price != null) ? String(p.sale_price) : '', placeholder: '0',
-        style: { ...numStyle, width: '140px' } });
-
     // подтягиваем существующие связи поставщиков (режим редактирования)
     if (isEdit) {
         (async () => {
             try {
-                const { data } = await supabase.from('item_suppliers')
-                    .select('id, supplier_id, last_price, purchase_unit, pack_factor, suppliers(name)')
+                const { data, error } = await supabase.from('item_suppliers')
+                    .select('id, supplier_id, last_price, vat_rate, purchase_unit, pack_factor, suppliers(name)')
                     .eq('product_id', p.id);
+                if (error) throw error;
                 for (const r of (data || [])) {
-                    linked.push({ _rowId: r.id, supplier_id: r.supplier_id, name: (r.suppliers && r.suppliers.name) || ('#' + r.supplier_id),
-                        last_price: r.last_price, purchase_unit: r.purchase_unit, pack_factor: r.pack_factor });
+                    linked.push({ supplier_id: r.supplier_id, name: (r.suppliers && r.suppliers.name) || ('#' + r.supplier_id),
+                        last_price: r.last_price, vat_rate: r.vat_rate == null ? null : Number(r.vat_rate),
+                        purchase_unit: r.purchase_unit, pack_factor: r.pack_factor });
                 }
-                paintLinked();
-            } catch (e) { /* карточка работает и без связей */ }
+                linksLoaded = true;
+            } catch (e) {
+                // Карточка работает и без связей, но сохранять их тогда нельзя —
+                // иначе «Сохранить» стёр бы всех поставщиков товара. Привязка
+                // тоже закрыта: новая связь молча не сохранилась бы.
+                linksLoaded = false;
+                supSearch.disabled = true;
+                newSupplierBtn.disabled = true;
+                clear(linkedEl);
+                linkedEl.appendChild(h('div', { style: { fontSize: '12.5px', color: 'var(--crit-700)' } },
+                    'Поставщики не загрузились — при сохранении связи с ними не изменятся.'));
+                return;
+            }
+            paintLinked();
         })();
     }
     paintLinked();
@@ -376,49 +492,26 @@ function openProductModal(p, onSaved) {
         if (!Number.isFinite(packFactor) || packFactor <= 0) { toast('Укажите корректный коэффициент упаковки.', 'fail'); return; }
         const price = priceInp.value === '' ? (p && p.sale_price != null ? Number(p.sale_price) : 0) : Number(priceInp.value);
         if (!Number.isFinite(price) || price < 0) { toast('Укажите корректную цену продажи.', 'fail'); return; }
+        for (const ln of linked) {
+            if (ln.last_price != null && !(Number.isFinite(Number(ln.last_price)) && Number(ln.last_price) >= 0)) {
+                toast(trf('Цена закупки у поставщика «{name}» — неотрицательное число.', { name: ln.name }), 'fail'); return;
+            }
+        }
 
         saveBtn.disabled = true;
         const prevLabel = saveBtn.textContent;
         saveBtn.textContent = isEdit ? tr('Сохраняем…') : tr('Добавляем…');
         try {
             const baseUnit = dispenseUnitSel.value;
-            const payload = {
-                name,
-                procurement_category: categorySel.value || 'medicines',
-                base_unit:            baseUnit,
-                unit:                 baseUnit,
-                purchase_unit:        stockUnitSel.value,
-                pack_factor:          packFactor,
-                sale_price:           price,
-                supplier_id:          linked.length ? linked[0].supplier_id : null,
-                active:               activeChk.checked ? 1 : 0,
-            };
-
-            const { data: saved, error } = isEdit
-                ? await supabase.from('products').update(payload).eq('id', p.id).select().single()
-                : await supabase.from('products').insert(payload).select().single();
+            const payload = productSavePayload({
+                id: isEdit ? p.id : null, name, category: categorySel.value, baseUnit, stockUnit: stockUnitSel.value,
+                packFactor, salePrice: price, vat: productVat, active: activeChk.checked, linked, linksLoaded,
+            });
+            const { data, error } = await supabase.rpc('product_save', payload);
             if (error) throw error;
-            const productId = isEdit ? p.id : saved.id;
-
-            // синхронизируем item_suppliers с привязанными строками
-            const { data: existRows } = await supabase.from('item_suppliers')
-                .select('id, supplier_id').eq('product_id', productId);
-            const exist = existRows || [];
-            for (const ex of exist) {
-                if (!linked.some(l => l.supplier_id === ex.supplier_id)) {
-                    await supabase.from('item_suppliers').delete().eq('id', ex.id);
-                }
-            }
-            for (const ln of linked) {
-                const row = { last_price: ln.last_price, purchase_unit: ln.purchase_unit || stockUnitSel.value, pack_factor: ln.pack_factor || 1 };
-                const ex = exist.find(x => x.supplier_id === ln.supplier_id);
-                if (ex) await supabase.from('item_suppliers').update(row).eq('id', ex.id);
-                else await supabase.from('item_suppliers').insert({ product_id: productId, supplier_id: ln.supplier_id, ...row });
-            }
-
             toast('Сохранено', 'ok');
             close();
-            if (typeof onSaved === 'function') await onSaved();
+            if (typeof onSaved === 'function') await onSaved(data && data.product ? data.product : null, data);
         } catch (e) {
             toast((e && e.message) || 'Не удалось сохранить товар.', 'fail');
             saveBtn.disabled = false;
@@ -429,15 +522,13 @@ function openProductModal(p, onSaved) {
     const bodyChildren = [
         field('Название', nameInp, { required: true }),
         h('div', { class: 'row', style: { gap: '12px', alignItems: 'flex-end' } },
-            h('div', { style: { flex: 1 } }, field('Категория', categorySel)),
+            h('div', { style: { flex: 1 } }, field('Категория', categorySel, { required: true })),
             h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13.5px', paddingBottom: '12px', cursor: 'pointer', whiteSpace: 'nowrap' } },
                 activeChk, 'Активен'),
         ),
         unitsPanel,
+        pricePanel,
         suppliersPanel,
-        h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', marginTop: '14px' } },
-            h('span', { style: { fontSize: '12.5px', color: 'var(--ink-700)', flex: 1 } }, 'Цена продажи (списание пациенту), сум'),
-            priceInp),
     ];
     if (isEdit) {
         bodyChildren.push(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '10px' } },
@@ -446,7 +537,7 @@ function openProductModal(p, onSaved) {
 
     // modal-compact ОБЯЗАТЕЛЕН: без него глобальное правило (MODAL_COMPACT_OPTOUT_V1)
     // растягивает карточку почти на весь экран (!important).
-    overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '720px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column' } },
+    overlay.appendChild(h('div', { class: 'modal-card modal-compact', style: { width: '760px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 60px)', display: 'flex', flexDirection: 'column' } },
         h('header', { class: 'modal-head' },
             h('h2', null, isEdit ? 'Товар' : 'Новый товар'),
             h('button', { class: 'modal-close', onclick: close }, '×')),
@@ -464,9 +555,36 @@ function openProductModal(p, onSaved) {
 
 // -----------------------------------------------------------------------------
 // ПРИНЯТЬ — multi-line, unit-aware, cost-tracked receiving. Каждая строка:
-// { product, unit:'base'|'purchase', qty, unitCost }. Вся математика на
-// сервере (receive_stock_lines) — подсказка в строке только для отображения.
+// { product, unit:'purchase', qty, unitCost, vat }. Вся математика на сервере
+// (receive_stock_lines) — суммы в строке и внизу только для отображения.
+//
+// SUPPLIERS_VAT_V1 — цена строки БЕЗ НДС за единицу закупки (как в
+// счёте-фактуре поставщика) и ставка НДС строки. Поставщик строки подставляет
+// свою последнюю цену и ставку (связь item_suppliers); без связи — ставка
+// товара. Сервер считает НДС строки и себестоимость с НДС.
 // -----------------------------------------------------------------------------
+
+/** Суммы строки прихода для показа: без НДС, НДС и с НДС. */
+export function receiptLineMoney(ln) {
+    const net = Math.round((Number(ln.qty) || 0) * (Number(ln.unitCost) || 0) * 100) / 100;
+    const vat = vatOnNet(net, ln.vat);
+    return { net, vat, gross: Math.round((net + vat) * 100) / 100 };
+}
+
+/** Цена и НДС строки по умолчанию: связь с поставщиком, иначе товар. */
+export function receiptDefaults(product, supplierId, links) {
+    const link = supplierId ? (links || []).find((l) => l.product_id === product.id && l.supplier_id === supplierId) : null;
+    if (link) {
+        return { unitCost: link.last_price == null ? null : Number(link.last_price), vat: link.vat_rate == null ? null : Number(link.vat_rate) };
+    }
+    const vat = product.vat_rate == null ? null : Number(product.vat_rate);
+    const pack = Number(product.pack_factor) > 0 ? Number(product.pack_factor) : 1;
+    // Себестоимость на складе — с НДС; цена строки — без него.
+    const gross = Number(product.avg_cost) > 0 ? Number(product.avg_cost) * pack : null;
+    const unitCost = gross == null ? null : Math.round(gross / (1 + (vat || 0) / 100) * 100) / 100;
+    return { unitCost, vat };
+}
+
 export function openReceiveModal(onSaved) {
     const overlay = h('div', { class: 'modal' });
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
@@ -474,11 +592,13 @@ export function openReceiveModal(onSaved) {
     document.addEventListener('keydown', onKey);
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
 
-    const st = { products: [], suppliers: [], lines: [] };
+    const st = { products: [], suppliers: [], links: [], lines: [] };
 
     const linesEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
     const linesEmpty = h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '6px 2px' } },
         'Найдите товар в поиске выше — он появится здесь строкой прихода.');
+    const netEl = h('span', { style: { fontWeight: 700 } }, '0');
+    const vatEl = h('span', { style: { fontWeight: 700 } }, '0');
     const totalEl = h('span', { style: { fontWeight: 800 } }, '0');
 
     const genBatch = () => {
@@ -488,15 +608,33 @@ export function openReceiveModal(onSaved) {
     };
 
     function refreshTotal() {
-        const t = st.lines.reduce((s, ln) => s + (Number(ln.qty) || 0) * (Number(ln.unitCost) || 0), 0);
-        totalEl.textContent = fmtPrice(t);
+        let net = 0, vat = 0, gross = 0;
+        for (const ln of st.lines) {
+            const m = receiptLineMoney(ln);
+            net += m.net; vat += m.vat; gross += m.gross;
+            if (ln._grossEl) ln._grossEl.textContent = fmtMoney2(m.gross);
+        }
+        netEl.textContent = fmtMoney2(net);
+        vatEl.textContent = fmtMoney2(vat);
+        totalEl.textContent = fmtMoney2(gross);
+    }
+
+    function applyDefaults(ln) {
+        const d = receiptDefaults(ln.product, ln.supplierId, st.links);
+        ln.unitCost = d.unitCost;
+        ln.vat = d.vat;
     }
 
     function supplierSelect(ln) {
-        const sel = h('select', { style: { ...selStyle, width: 'auto', minWidth: '140px', maxWidth: '160px', flex: '0 0 auto' } },
+        const sel = h('select', { style: { ...selStyle, width: 'auto', minWidth: '140px', maxWidth: '180px', flex: '0 0 auto' }, 'aria-label': 'Поставщик' },
             h('option', { value: '' }, 'Выберите поставщика…'),
             ...st.suppliers.map(s => h('option', { value: String(s.id), selected: String(ln.supplierId || '') === String(s.id) }, s.name)));
-        sel.addEventListener('change', () => { ln.supplierId = sel.value ? Number(sel.value) : null; });
+        sel.addEventListener('change', () => {
+            ln.supplierId = sel.value ? Number(sel.value) : null;
+            // Поставщик со своей ценой и ставкой — подставляем их.
+            const link = st.links.find((l) => l.product_id === ln.product.id && l.supplier_id === ln.supplierId);
+            if (link) { applyDefaults(ln); paintLines(); }
+        });
         return sel;
     }
 
@@ -507,20 +645,20 @@ export function openReceiveModal(onSaved) {
         for (const ln of st.lines) {
             const supSel = supplierSelect(ln);
             const newSupBtn = h('button', {
-                class: 'btn btn-sm', type: 'button', title: 'Новый поставщик',
+                class: 'btn btn-sm', type: 'button', title: 'Новый поставщик', 'aria-label': 'Новый поставщик',
                 style: { background: 'var(--warn-50, #fdf3e1)', borderColor: 'var(--warn-200, #f2d9a6)', color: 'var(--warn-800, #8a6116)', fontWeight: 700, padding: '4px 8px', flex: '0 0 auto' },
-                onclick: () => openSupplierModal(null, async () => {
+                onclick: () => openSupplierModal(null, async (saved) => {
                     await loadSuppliers();
-                    const newest = st.suppliers.reduce((a, b) => (!a || b.id > a.id ? b : a), null);
-                    if (newest) ln.supplierId = newest.id;
+                    const created = saved && saved.id ? saved : st.suppliers.reduce((a, b) => (!a || b.id > a.id ? b : a), null);
+                    if (created) ln.supplierId = created.id;
                     paintLines();
-                }),
+                }, { withProducts: false }),
             }, '+');
             const batchInp = h('input', { type: 'text', placeholder: 'серия №', value: ln.batchNo || '',
                 style: { ...selStyle, width: '100px', flex: '0 0 auto' } });
             batchInp.addEventListener('input', () => { ln.batchNo = batchInp.value; });
             const regenBtn = h('button', {
-                type: 'button', title: 'Сгенерировать номер партии',
+                type: 'button', title: 'Сгенерировать номер партии', 'aria-label': 'Сгенерировать номер партии',
                 style: { border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-400)', flex: '0 0 auto', display: 'flex' },
                 onclick: () => { ln.batchNo = genBatch(); batchInp.value = ln.batchNo; },
             }, Icon('Refresh', { size: 14 }));
@@ -528,39 +666,47 @@ export function openReceiveModal(onSaved) {
                 style: { ...selStyle, width: '132px', flex: '0 0 auto' } });
             expInp.addEventListener('input', () => { ln.expiry = expInp.value; });
             const qtyInp = h('input', { type: 'number', min: '0', step: 'any', value: ln.qty != null ? String(ln.qty) : '1',
-                style: { ...numStyle, width: '72px', flex: '0 0 auto' } });
+                'aria-label': 'Количество', style: { ...numStyle, width: '72px', flex: '0 0 auto' } });
             qtyInp.addEventListener('input', () => { ln.qty = qtyInp.value === '' ? null : Number(qtyInp.value); refreshTotal(); });
             const costInp = h('input', { type: 'number', min: '0', step: 'any', value: ln.unitCost != null ? String(ln.unitCost) : '',
-                placeholder: 'цена', style: { ...numStyle, width: '96px', flex: '0 0 auto' } });
+                placeholder: 'цена', 'aria-label': 'Цена без НДС', style: { ...numStyle, width: '100px', flex: '0 0 auto' } });
             costInp.addEventListener('input', () => { ln.unitCost = costInp.value === '' ? null : Number(costInp.value); refreshTotal(); });
+            const vatSel = vatSelect(ln.vat, (v) => { ln.vat = v; refreshTotal(); }, { flex: '0 0 auto' });
+            ln._grossEl = h('span', { style: { fontWeight: 700, minWidth: '90px', textAlign: 'right', flex: '0 0 auto' } }, '0');
 
             const unitLabel = ln.product.purchase_unit || ln.product.base_unit || '';
             linesEl.appendChild(h('div', {
-                class: 'row',
-                style: { gap: '7px', alignItems: 'center', flexWrap: 'nowrap', padding: '9px 12px',
+                style: { display: 'flex', flexDirection: 'column', gap: '7px', padding: '9px 12px',
                          border: '1px solid var(--ink-100)', borderRadius: '12px', background: 'var(--white, #fff)' },
             },
-                h('span', { style: { minWidth: '90px', flex: '1 1 auto', overflow: 'hidden' } },
-                    h('span', { style: { display: 'block', fontWeight: 700, fontSize: '13.5px', color: 'var(--ink-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, ln.product.name),
-                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, unitLabel)),
-                lbl('Поставщик'), supSel, newSupBtn,
-                lbl('Партия / серия №'), batchInp, regenBtn,
-                h('span', { style: { flex: '0 0 auto', display: 'flex', color: 'var(--ink-400)' } }, Icon('Clock', { size: 13 })),
-                lbl('Срок годности'), expInp,
-                qtyInp, costInp,
-                h('button', {
-                    type: 'button', title: 'Убрать строку',
-                    style: { border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-400)', fontWeight: 700, flex: '0 0 auto' },
-                    onclick: () => { st.lines.splice(st.lines.indexOf(ln), 1); paintLines(); },
-                }, '×'),
+                h('div', { class: 'row', style: { gap: '7px', alignItems: 'center', flexWrap: 'wrap' } },
+                    h('span', { style: { minWidth: '120px', flex: '1 1 160px', overflow: 'hidden' } },
+                        h('span', { style: { display: 'block', fontWeight: 700, fontSize: '13.5px', color: 'var(--ink-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, ln.product.name),
+                        h('span', { class: 'muted', style: { fontSize: '12.5px' } }, unitLabel),
+                        h('span', { style: { marginLeft: '6px' } }, Tag(CATEGORY_LABEL[ln.product.procurement_category] || ln.product.procurement_category || '—', { kind: 'info' }))),
+                    lbl('Поставщик'), supSel, newSupBtn,
+                    lbl('Партия / серия №'), batchInp, regenBtn,
+                    h('span', { style: { flex: '0 0 auto', display: 'flex', color: 'var(--ink-400)' } }, Icon('Clock', { size: 13 })),
+                    lbl('Срок годности'), expInp,
+                    h('button', {
+                        type: 'button', title: 'Убрать строку', 'aria-label': 'Убрать строку',
+                        style: { border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-400)', fontWeight: 700, flex: '0 0 auto' },
+                        onclick: () => { st.lines.splice(st.lines.indexOf(ln), 1); paintLines(); },
+                    }, '×')),
+                h('div', { class: 'row', style: { gap: '7px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' } },
+                    lbl('Кол-во'), qtyInp, lbl(unitLabel),
+                    lbl('× цена без НДС'), costInp, lbl('сум'),
+                    lbl('НДС'), vatSel,
+                    lbl('= с НДС'), ln._grossEl),
             ));
         }
         refreshTotal();
     }
 
     function addLineFor(p) {
-        st.lines.push({ product: p, supplierId: p.supplier_id || null, batchNo: '', expiry: '',
-            qty: 1, unitCost: p.avg_cost != null && p.avg_cost > 0 ? p.avg_cost * (p.pack_factor > 0 ? p.pack_factor : 1) : null });
+        const ln = { product: p, supplierId: p.supplier_id || null, batchNo: '', expiry: '', qty: 1, unitCost: null, vat: null };
+        applyDefaults(ln);
+        st.lines.push(ln);
         paintLines();
     }
 
@@ -590,7 +736,8 @@ export function openReceiveModal(onSaved) {
                 onmouseenter: (e) => { e.currentTarget.style.background = 'var(--ink-25, #f6f8f9)'; },
                 onmouseleave: (e) => { e.currentTarget.style.background = ''; },
                 onmousedown: (e) => { e.preventDefault(); addLineFor(p); prodSearch.value = ''; prodResults.style.display = 'none'; },
-            }, p.name, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, ' · ' + (p.base_unit || '') + ' · ', trf('остаток {n}', { n: fmtQty(p.on_hand) }))));
+            }, p.name, h('span', { class: 'muted', style: { fontSize: '12.5px' } },
+                ' · ', CATEGORY_LABEL[p.procurement_category] || '', ' · ' + (p.base_unit || '') + ' · ', trf('остаток {n}', { n: fmtQty(p.on_hand) }))));
         }
     }
     prodSearch.addEventListener('input', paintProdResults);
@@ -600,10 +747,11 @@ export function openReceiveModal(onSaved) {
 
     const newProductBtn = h('button', {
         class: 'btn', type: 'button', style: { flex: '0 0 auto' },
-        onclick: () => openProductModal(null, async () => {
-            await loadProducts();
-            const newest = st.products.reduce((a, b) => (!a || b.id > a.id ? b : a), null);
-            if (newest) addLineFor(newest);
+        onclick: () => openProductModal(null, async (saved) => {
+            await Promise.all([loadProducts(), loadLinks()]);
+            const created = saved && saved.id ? st.products.find((x) => x.id === saved.id) || saved
+                : st.products.reduce((a, b) => (!a || b.id > a.id ? b : a), null);
+            if (created) addLineFor(created);
         }),
     }, Icon('Plus', { size: 14 }), ' Новый товар');
 
@@ -616,7 +764,14 @@ export function openReceiveModal(onSaved) {
         const { data } = await supabase.from('suppliers').select('id,name').eq('active', 1).order('name');
         st.suppliers = data || [];
     }
-    (async () => { await Promise.all([loadProducts(), loadSuppliers()]); paintLines(); })();
+    // SUPPLIERS_VAT_V1 — цена и НДС поставщика для строк по умолчанию.
+    async function loadLinks() {
+        try {
+            const { data } = await supabase.from('item_suppliers').select('product_id, supplier_id, last_price, vat_rate').limit(5000);
+            st.links = data || [];
+        } catch (e) { st.links = []; }
+    }
+    (async () => { await Promise.all([loadProducts(), loadSuppliers(), loadLinks()]); paintLines(); })();
 
     // ---- печать этикеток (name · партия · годен до · Nx) ----
     /* i18n-exempt-start: печать этикеток — печатный документ */
@@ -647,19 +802,11 @@ export function openReceiveModal(onSaved) {
         if (!st.lines.length) { toast('Добавьте хотя бы один товар.', 'fail'); return; }
         for (const ln of st.lines) {
             if (!(Number(ln.qty) > 0)) { toast(trf('Кол-во должно быть больше нуля: {name}', { name: ln.product.name }), 'fail'); return; }
-            if (!(Number(ln.unitCost) >= 0)) { toast(trf('Укажите цену за единицу: {name}', { name: ln.product.name }), 'fail'); return; }
+            if (!(Number(ln.unitCost) >= 0) || ln.unitCost === null) { toast(trf('Укажите цену за единицу: {name}', { name: ln.product.name }), 'fail'); return; }
         }
         saveBtn.disabled = true; saveBtn.textContent = tr('Проводим…');
         try {
-            const { error } = await supabase.rpc('receive_stock_lines', {
-                lines: st.lines.map(ln => ({
-                    product_id: ln.product.id, unit: 'purchase',
-                    qty: Number(ln.qty), unit_cost: Number(ln.unitCost),
-                    supplier_id: ln.supplierId || null,
-                    batch_no: ln.batchNo || null,
-                    expiry_date: ln.expiry || null,
-                })),
-            });
+            const { error } = await supabase.rpc('receive_stock_lines', { lines: receiveLinesPayload(st.lines) });
             if (error) throw error;
             toast('Приход проведён — остатки обновлены.', 'ok');
             close();
@@ -680,8 +827,12 @@ export function openReceiveModal(onSaved) {
             h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } }, searchWrap, newProductBtn),
             h('div', null,
                 h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-800)', margin: '2px 0 8px' } }, 'Товары ', h('span', { style: { color: 'var(--crit-500, #ef4444)' } }, '*')),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '0 0 8px' } },
+                    'Цена — за единицу закупки без НДС, как в счёте-фактуре поставщика; себестоимость на складе считается с НДС.'),
                 linesEl),
-            h('div', { style: { textAlign: 'right', fontSize: '13.5px', color: 'var(--ink-700)' } }, 'Итого: ', totalEl, ' UZS'),
+            h('div', { style: { textAlign: 'right', fontSize: '13.5px', color: 'var(--ink-700)' } },
+                h('span', null, 'Без НДС:'), ' ', netEl, ' · ', h('span', null, 'НДС:'), ' ', vatEl,
+                ' · ', h('span', null, 'Итого с НДС:'), ' ', totalEl, ' UZS'),
         ),
         h('footer', { class: 'modal-foot' },
             h('button', { class: 'btn', type: 'button', onclick: printLabels }, Icon('Print', { size: 14 }), ' Печать этикеток'),
@@ -691,6 +842,18 @@ export function openReceiveModal(onSaved) {
     ));
     document.body.appendChild(overlay);
     prodSearch.focus();
+}
+
+/** Строки receive_stock_lines из строк окна: цена без НДС и ставка строки. */
+export function receiveLinesPayload(lines) {
+    return (lines || []).map(ln => ({
+        product_id: ln.product.id, unit: 'purchase',
+        qty: Number(ln.qty), unit_cost: Number(ln.unitCost),
+        vat_rate: ln.vat === undefined ? null : ln.vat,
+        supplier_id: ln.supplierId || null,
+        batch_no: ln.batchNo || null,
+        expiry_date: ln.expiry || null,
+    }));
 }
 
 // -----------------------------------------------------------------------------
@@ -708,7 +871,7 @@ export function openAdjustModal(p, onSaved) {
     function refreshInfo() {
         infoEl.textContent = current
             ? trf('Сейчас в наличии: {n} {unit}', { n: fmtQty(Number(current.on_hand) || 0), unit: current.base_unit || '' }).trim()
-            : 'Выберите товар.';
+            : tr('Выберите товар.');
     }
 
     const prodSel = p ? null : h('select', { style: selStyle }, h('option', { value: '' }, '— Выберите товар —'));
