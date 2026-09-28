@@ -275,7 +275,7 @@ function paintTab(root, onNavigate) {
         // потому что лист тянет карточку госпитализации, а та тянет этот экран.
         const host = h('div');
         box.appendChild(host);
-        import('./mar-sheet.js?v=inp5').then(({ renderMarSheet, canOpenMarSheet }) => {
+        import('./mar-sheet.js?v=inp6').then(({ renderMarSheet, canOpenMarSheet }) => {
             // ПРАВО ТО ЖЕ, что и у отдельного адреса. Историю болезни открывает
             // более широкий круг (регистратура тоже), и показать ей сетку с
             // кнопками «назначить» и «отметить дозу» значило бы расширить доступ

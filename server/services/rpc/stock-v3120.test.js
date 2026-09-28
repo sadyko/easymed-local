@@ -52,6 +52,10 @@ const held = (db, type, id, pid) => (db.prepare('SELECT qty FROM stock_holdings 
 const visit = (db) => Number(db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status) VALUES (1, 5, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'arrived')").run().lastInsertRowid);
 const admission = (db) => Number(db.prepare("INSERT INTO admissions (patient_id, status, ward_id, bed_id, doctor_id, attending_doctor_id) VALUES (1, 'active', 1, 1, 5, 5)").run().lastInsertRowid);
 const issueTo = (db, userId, productId, units) => rpc(db, 'issue_stock_lines', { holder: { type: 'staff', id: userId }, lines: [{ product_id: productId, qty: units, unit: 'consumption' }] }, U.inv);
+// Ревью F5 — «Только со своих полок» — переключатель клиники (мигр. 226),
+// ВЫКЛЮЧЕННЫЙ по умолчанию (всё как в 3.12.1). Где положения отвечают
+// по-разному, сценарий проигран в обоих.
+const setOwnShelfOnly = (db, on) => db.prepare('UPDATE stock_settings SET own_shelf_only = ? WHERE id = 1').run(on ? 1 : 0);
 
 // ─── Округление: пачка по 7 и по 30, литр по миллилитру ───────────────────────
 
@@ -64,10 +68,17 @@ test('пачка по 7: семь таблеток по одной — на ру
   const mine = rpc(db, 'holdings_list', { mine: true }, U.nurse).holdings;
   assert.equal(mine.filter((h) => h.product_id === 3).length, 0, 'пустой подотчёт не висит строкой');
   // V3120_FIX — восьмая таблетка не берётся из «пыли» на руках: своя полка
-  // пуста. OWN_SHELF_ONLY_V1 — и склад медсестре не добирает: отказ «есть 0».
+  // пуста. OWN_SHELF_ONLY_V1 (переключатель включён) — и склад медсестре не
+  // добирает: отказ «есть 0».
+  setOwnShelfOnly(db, true);
   assert.throws(() => rpc(db, 'dispense_from_holding', { holder: { type: 'staff', id: 3 }, product_id: 3, quantity: 1, visit_id: v }, U.nurse),
     (e) => e.code === 'own_shelf_short' && /нужно 1 таб, есть 0 таб/.test(e.message));
   assert.equal(onHand(db, 3), 9, 'склад отдал ровно одну пачку — при выдаче медсестре');
+  // Ревью F5 — переключатель выключен (как в 3.12.1): своя полка пуста, и
+  // цепочка честно идёт на склад (свой подотчёт → … → склад).
+  setOwnShelfOnly(db, false);
+  const eighth = rpc(db, 'dispense_from_holding', { holder: { type: 'staff', id: 3 }, product_id: 3, quantity: 1, visit_id: v }, U.nurse);
+  assert.deepEqual(eighth.sources.map((s) => s.type), ['warehouse']);
 });
 
 test('пачка по 30: тридцать первую таблетку из тридцати не выдать', () => {
@@ -78,14 +89,21 @@ test('пачка по 30: тридцать первую таблетку из т
   assert.equal(held(db, 'staff', 3, 1), 0);
   // Склад отдал ровно одну пачку — и журнал склада это же и говорит.
   assert.equal(onHand(db, 1), 9);
-  // V3120_FIX — тридцать первая не берётся с пустых рук: своя полка пуста.
-  // OWN_SHELF_ONLY_V1 — медсестре склад не добирает; кладовщику склад отдаёт
-  // ровно 1/30 пачки.
-  assert.throws(() => rpc(db, 'dispense_from_holding', { holder: { type: 'staff', id: 3 }, product_id: 1, quantity: 1, visit_id: v }, U.nurse),
-    (e) => e.code === 'own_shelf_short');
-  const r31 = rpc(db, 'dispense_from_holding', { product_id: 1, quantity: 1, visit_id: v }, U.inv);
+  // V3120_FIX — тридцать первая не берётся с пустых рук: своя полка пуста,
+  // цепочка идёт на склад, и склад отдаёт ровно 1/30 пачки (переключатель
+  // выключен — как в 3.12.1).
+  const r31 = rpc(db, 'dispense_from_holding', { holder: { type: 'staff', id: 3 }, product_id: 1, quantity: 1, visit_id: v }, U.nurse);
   assert.deepEqual(r31.sources.map((s) => s.type), ['warehouse']);
   assert.equal(onHand(db, 1), 8.966667);
+  assert.equal(held(db, 'staff', 3, 1), 0);
+  // OWN_SHELF_ONLY_V1 (переключатель включён) — медсестре склад не добирает;
+  // кладовщику склад отдаёт ровно 1/30 пачки.
+  setOwnShelfOnly(db, true);
+  assert.throws(() => rpc(db, 'dispense_from_holding', { holder: { type: 'staff', id: 3 }, product_id: 1, quantity: 1, visit_id: v }, U.nurse),
+    (e) => e.code === 'own_shelf_short');
+  const r32 = rpc(db, 'dispense_from_holding', { product_id: 1, quantity: 1, visit_id: v }, U.inv);
+  assert.deepEqual(r32.sources.map((s) => s.type), ['warehouse']);
+  assert.equal(onHand(db, 1), 8.933334, "ещё 1/30 пачки (0.033333) со склада");
   assert.equal(held(db, 'staff', 3, 1), 0);
 });
 
@@ -96,8 +114,9 @@ test('литр: 4 мл выдаются, 5 мл списывают ровно 0.
   assert.equal(r.issued[0].base_qty, 0.004);
   assert.equal(held(db, 'staff', 3, 2), 0.004);
   assert.equal(onHand(db, 2), 9.996);
-  // OWN_SHELF_ONLY_V1 — медсестре 5 мл при 4 на руках — отказ «запросите у
-  // склада»: склад ей не добирает, даже если выбран «Склад».
+  // OWN_SHELF_ONLY_V1 (переключатель включён) — медсестре 5 мл при 4 на руках —
+  // отказ «запросите у склада»: склад ей не добирает, даже если выбран «Склад».
+  setOwnShelfOnly(db, true);
   assert.throws(() => rpc(db, 'dispense_from_holding', { holder: { type: 'warehouse' }, product_id: 2, quantity: 5, visit_id: v }, U.nurse),
     (e) => e.code === 'own_shelf_short' && /нужно 5 мл, есть 4 мл/.test(e.message));
   assert.equal(held(db, 'staff', 3, 2), 0.004, 'её 4 мл на месте');
@@ -108,6 +127,21 @@ test('литр: 4 мл выдаются, 5 мл списывают ровно 0.
   assert.deepEqual(give.sources, [{ type: 'staff', id: 2, qty: 0.004 }, { type: 'warehouse', id: null, qty: 0.001 }]);
   assert.equal(held(db, 'staff', 2, 2), 0);
   assert.equal(onHand(db, 2), 9.991);
+  const mv = db.prepare("SELECT SUM(qty) s FROM stock_movements WHERE product_id = 2 AND reference_type = 'visit'").get();
+  assert.equal(Math.round(mv.s * 1e6) / 1e6, -0.005);
+});
+
+test('литр, переключатель выключен (как в 3.12.1): медсестре выбран «Склад», а 4 мл у неё на руках — сначала своё, со склада 1 мл', () => {
+  const db = seed();
+  const v = visit(db);
+  issueTo(db, 3, 2, 4);
+  assert.equal(onHand(db, 2), 9.996);
+  // V3120_FIX — выбран «Склад», но 4 мл лежат у неё на руках: цепочка берёт
+  // сначала своё (4 мл), со склада — только недостающий 1 мл.
+  const give = rpc(db, 'dispense_from_holding', { holder: { type: 'warehouse' }, product_id: 2, quantity: 5, visit_id: v }, U.nurse);
+  assert.deepEqual(give.sources, [{ type: 'staff', id: 3, qty: 0.004 }, { type: 'warehouse', id: null, qty: 0.001 }]);
+  assert.equal(held(db, 'staff', 3, 2), 0);
+  assert.equal(onHand(db, 2), 9.995);
   const mv = db.prepare("SELECT SUM(qty) s FROM stock_movements WHERE product_id = 2 AND reference_type = 'visit'").get();
   assert.equal(Math.round(mv.s * 1e6) / 1e6, -0.005);
 });
@@ -271,8 +305,18 @@ test('отключённый товар: из подотчёта выдаётс�
   rpc(db, 'dispense_item', { product_id: 5, quantity: 1, visit_id: v }, U.nurse);
   rpc(db, 'dispense_from_holding', { holder: { type: 'staff', id: 3 }, product_id: 5, quantity: 1, visit_id: v }, U.nurse);
   assert.equal(held(db, 'staff', 3, 5), 0);
-  // Подотчёт кончился. OWN_SHELF_ONLY_V1 — медсестре склад не источник вовсе:
-  // отказ «запросите у склада» (про отключённый товар ей говорить не о чем).
+  // Ревью F5 — переключатель выключен (как в 3.12.1): подотчёт кончился — дальше
+  // пришлось бы брать со склада: отказ, по-русски, и медсестре тоже.
+  assert.throws(() => rpc(db, 'dispense_item', { product_id: 5, quantity: 1, visit_id: v }, U.nurse),
+    (e) => e.status === 400 && /отключ/i.test(e.message));
+  assert.throws(() => rpc(db, 'dispense_admission_item', { p_admission_id: admission(db), p_item_id: 5, p_qty: 1 }, U.nurse),
+    (e) => e.status === 400 && /отключ/i.test(e.message));
+  assert.throws(() => rpc(db, 'dispense_from_holding', { holder: { type: 'warehouse' }, product_id: 5, quantity: 1, visit_id: v }, U.nurse),
+    (e) => e.status === 400 && /отключ/i.test(e.message));
+  // Подотчёт кончился. OWN_SHELF_ONLY_V1 (переключатель включён) — медсестре
+  // склад не источник вовсе: отказ «запросите у склада» (про отключённый товар
+  // ей говорить не о чем).
+  setOwnShelfOnly(db, true);
   for (const call of [
     () => rpc(db, 'dispense_item', { product_id: 5, quantity: 1, visit_id: v }, U.nurse),
     () => rpc(db, 'dispense_admission_item', { p_admission_id: admission(db), p_item_id: 5, p_qty: 1 }, U.nurse),

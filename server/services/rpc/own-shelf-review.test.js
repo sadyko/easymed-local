@@ -7,6 +7,12 @@
 //     не ставили. Теперь отключённый товар — предупреждение у всех; двери
 //     выдачи отвечают, как прежде («запросите у склада» — склад и отключённый
 //     остаток выдаёт на полку).
+//
+// Ревью F5 — правило «только со своих полок» стало переключателем клиники
+// (мигр. 226), выключенным по умолчанию. Отказ own_shelf_short и «Запросить у
+// склада» (F4) — только при ВКЛЮЧЁННОМ; M1 (отключённый товар в листе
+// назначений — предупреждение) и M2 (число склада — только тому, кто видит
+// склад) — при любом положении, и проверены в обоих.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
@@ -40,6 +46,9 @@ function seed() {
   return db;
 }
 const rpc = (db, name, args, user) => getRpc(name)(db, args, user);
+// Ревью F5 — переключатель клиники «Только со своих полок» (мигр. 226).
+const setOwnShelfOnly = (db, on) => db.prepare('UPDATE stock_settings SET own_shelf_only = ? WHERE id = 1').run(on ? 1 : 0);
+const MODES = [['выключен', false], ['включён', true]];
 const admission = (db) => Number(db.prepare("INSERT INTO admissions (patient_id, status, ward_id, bed_id, doctor_id, attending_doctor_id) VALUES (1, 'active', 1, 1, 10, 10)").run().lastInsertRowid);
 const visit = (db) => Number(db.prepare("INSERT INTO visits (patient_id, doctor_id, room_id, visit_date, status) VALUES (1, 10, 20, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'arrived')").run().lastInsertRowid);
 const onHand = (db) => db.prepare('SELECT on_hand FROM products WHERE id = ?').get(P).on_hand;
@@ -52,9 +61,10 @@ const markGiven = (db, order, user, extra) => treatmentAdminMark(db, {
   order_id: order.id, date: '2026-09-04', slot: 10, status: 'given', ...(extra ? { extra } : {}),
 }, user);
 
-test('ревью M1: MAR, медсестра, отключённый товар не на её полках — отметка стоит с предупреждением, как у администратора', () => {
+for (const [mode, on] of MODES) test(`ревью M1 (переключатель ${mode}): MAR, медсестра, отключённый товар не на её полках — отметка стоит с предупреждением, как у администратора`, () => {
   const db = seed();
   try {
+    setOwnShelfOnly(db, on);
     const a = admission(db);
     const o = medOrder(db, a);
     db.prepare('UPDATE products SET active = 0 WHERE id = ?').run(P);
@@ -76,11 +86,15 @@ test('ревью M1: MAR, медсестра, отключённый товар 
   } finally { db.close(); }
 });
 
-test('ревью M1: двери выдачи не меняются — медсестре отключённый товар не с полок: «запросите у склада»', () => {
+test('ревью M1: двери выдачи не меняются — медсестре отключённый товар не с полок: выключено — «со склада не выдаётся» (3.12.1), включено — «запросите у склада»', () => {
   const db = seed();
   try {
     const v = visit(db);
     db.prepare('UPDATE products SET active = 0 WHERE id = ?').run(P);
+    // Ревью F5 — выключено: как в 3.12.1, склад отключённый товар не выдаёт.
+    assert.throws(() => rpc(db, 'dispense_visit_item', { p_visit_id: v, p_item_id: P, p_qty: 1, p_doctor_id: 10 }, U.nurse),
+      (e) => e.status === 400 && e.code !== OWN_SHELF_SHORT && e.message === 'Товар «Бинт» отключён в каталоге: со склада не выдаётся.');
+    setOwnShelfOnly(db, true);
     assert.throws(() => rpc(db, 'dispense_visit_item', { p_visit_id: v, p_item_id: P, p_qty: 1, p_doctor_id: 10 }, U.nurse),
       (e) => e.status === 400 && e.code === OWN_SHELF_SHORT);
     // Склад выдаёт остаток отключённого товара на полку — и медсестра его довыдаёт.
@@ -121,18 +135,30 @@ test('ревью M2: holdings_list — берёт ли со склада, вид
       const a = rpc(db, 'holdings_list', { reachable: true, visit_id: v }, u);
       assert.deepEqual([a.warehouse_allowed, a.warehouse_visible, a.warehouse_in_stock], [true, true, undefined], u.role);
     }
-    // Медсестра: со склада не берёт — ни числа, ни списка.
+    // Ревью F5 — медсестра при ВЫКЛЮЧЕННОМ переключателе берёт со склада, как в
+    // 3.12.1, но числа не видит (просьба владельца — при любом положении):
+    // только «есть на складе». Включён — со склада не берёт: ни числа, ни списка.
+    const off = rpc(db, 'holdings_list', { reachable: true, visit_id: v }, U.nurse);
+    assert.deepEqual([off.warehouse_allowed, off.warehouse_visible, off.warehouse_in_stock], [true, false, [P]]);
+    const nd = rpc(db, 'dispense_item', { visit_id: v, product_id: P, quantity: 1 }, U.nurse);
+    assert.equal(nd.on_hand, null, 'выключено: склад добирает, а числа медсестре не называет');
+    assert.equal(onHand(db), 98);
+    setOwnShelfOnly(db, true);
     const n = rpc(db, 'holdings_list', { reachable: true, visit_id: v }, U.nurse);
     assert.deepEqual([n.warehouse_allowed, n.warehouse_visible, n.warehouse_in_stock], [false, false, undefined]);
+    // Своя роль на основе администратора берёт и при включённом — числа по-прежнему не видит.
+    const s2 = rpc(db, 'holdings_list', { reachable: true, visit_id: v }, senior);
+    assert.deepEqual([s2.warehouse_allowed, s2.warehouse_visible, s2.warehouse_in_stock], [true, false, [P]]);
   } finally { db.close(); }
 });
 
 // F4. Отказ «нет на ваших полках» несёт экрану, ЧТО и СКОЛЬКО запросить у
 //     склада: товар и нехватку в единице заявки (единица расхода, как в
 //     диалоге «Запросить у склада»). Экран открывает заявку уже заполненной.
-test('ревью F4: отказ own_shelf_short — товар и нехватка в единице заявки', () => {
+test('ревью F4: отказ own_shelf_short — товар и нехватка в единице заявки (переключатель включён)', () => {
   const db = seed();
   try {
+    setOwnShelfOnly(db, true);   // ревью F5 — отказ и заявка только при включённом
     db.prepare("INSERT INTO products (id, name, unit, base_unit, consumption_unit, consumption_factor, sale_price, on_hand, is_drug) VALUES (2, 'Кеторол', 'уп', 'уп', 'амп', 10, 50000, 10, 1)").run();
     const v = visit(db);
     rpc(db, 'issue_stock_lines', { holder: { type: 'staff', id: 11 }, lines: [{ product_id: P, qty: 2, unit: 'base' }] }, U.inv);

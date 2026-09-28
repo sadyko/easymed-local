@@ -185,6 +185,9 @@ const READ_ONLY_RPCS = new Set([
   // списка «Поставщики». Чистое чтение (группировка item_suppliers), и без неё
   // список поставщиков при просроченной лицензии показывал бы нули.
   'supplier_product_counts',
+  // OWN_SHELF_ONLY_V1 (ревью F5) — положение переключателя «только со своих
+  // полок» и готовность полок: чтение. Включить и выключить — запись, сюда не входит.
+  'own_shelf_settings',
 ]);
 
 // The way back in. These must work while locked or a clinic that wants to pay

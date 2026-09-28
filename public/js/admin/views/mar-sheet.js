@@ -614,6 +614,9 @@ export function openOrderForm({ admissionId, patientName = '', patientSub = '', 
     // OWN_SHELF_ONLY_V1 — врачу остаток СКЛАДА сервер не присылает (on_hand
     // пустой: выдают со своих полок, склад — по заявке). Тогда позиция
     // называется без числа, а не «остаток 0 · на складе пусто».
+    // Ревью F5 — и без обещания, ОТКУДА спишется: это решает переключатель
+    // клиники «Только со своих полок» (выключен — склад добирает, как в
+    // 3.12.1), а форма назначения его не знает и знать не должна.
     const stockLeft = (r) => {
         if (r.on_hand == null) return null;
         const cf = r.consumption_unit && Number(r.consumption_factor) > 0 ? Number(r.consumption_factor) : 1;
@@ -633,7 +636,7 @@ export function openOrderForm({ admissionId, patientName = '', patientSub = '', 
         const left = stockLeft(r);
         if (left == null) {
             stockNote.appendChild(h('span', null,
-                trf('Позиция склада ({unit}): при отметке «введено» доза спишется с полок медсестры и отделения.', { unit: stockUnit(r) })));
+                trf('Позиция склада ({unit}): доза спишется при отметке «введено».', { unit: stockUnit(r) })));
             return;
         }
         stockNote.appendChild(h('span', null,

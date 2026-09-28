@@ -859,7 +859,8 @@ test('OWN_SHELF_ONLY_V1: остаток склада скрыт сервером
         row.dispatchEvent({ type: 'mousedown', target: row });
         await settle();
         const txt = textOf(overlay);
-        assert.ok(txt.includes('Позиция склада (шт.): при отметке «введено» доза спишется с полок медсестры и отделения.'), txt.slice(0, 400));
+        // Ревью F5 — без обещания, откуда спишется: это решает переключатель клиники.
+        assert.ok(txt.includes('Позиция склада (шт.): доза спишется при отметке «введено».'), txt.slice(0, 400));
         assert.equal(txt.includes('на складе пусто'), false);
         assert.equal(txt.includes('остаток 0'), false);
         rpcCalls = [];

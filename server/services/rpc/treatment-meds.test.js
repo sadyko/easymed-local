@@ -85,6 +85,10 @@ function order(db, admissionId, over = {}) {
 
 const mark = (db, o, over = {}, who = ACTOR.nurse) =>
   treatmentAdminMark(db, { order_id: o.id, date: START, slot: 6, status: 'given', ...over }, who);
+// Ревью F5 — «Только со своих полок» — переключатель клиники (мигр. 226),
+// ВЫКЛЮЧЕННЫЙ по умолчанию: тогда у медсестры всё как в 3.12.1 (склад
+// добирает, пустой склад — предупреждение).
+const ownShelfOn = (db) => db.prepare('UPDATE stock_settings SET own_shelf_only = 1 WHERE id = 1').run();
 
 // UNMARK_WINDOW_V1 — состарить отметку, не поспав пятнадцати минут: given_at
 // переписывается ТЕМИ ЖЕ часами, по которым правило её и читает.
@@ -475,13 +479,58 @@ test('сверхрасход, записанный текстом, не спис
 
 // ─── 6. Пустой склад ────────────────────────────────────────────────────────
 
-// OWN_SHELF_ONLY_V1 (владелец 28.09) — ДВА РАЗНЫХ СЛУЧАЯ. У медсестры склад не
-// источник: дозы нет на её полках — отметка НЕ ставится, отказ «запросите у
-// склада» (иначе «введено» значило бы препарат, взятый мимо склада). У
-// администратора склад — последнее звено цепочки, и пустой склад по-прежнему
-// предупреждение, а не отказ.
-test('медсестра: дозы нет на её полках — отметка НЕ ставится, ничего не записано', () => {
+// Ревью F5 — переключатель ВЫКЛЮЧЕН (по умолчанию): у медсестры, как в 3.12.1,
+// склад — последнее звено цепочки, и пустой склад — предупреждение, а не
+// отказ. Число склада медсестре не называется ни при каком положении.
+test('пустой склад не отменяет отметку медсестры, но ведёт себя как в амбулатории (переключатель выключен — как в 3.12.1)', () => {
   const db = seed();
+  const adm = admission(db);
+  const o = order(db, adm, { name: 'Кеторол', stock_item_id: 4 });
+
+  const r = mark(db, o);
+
+  // Медицинский факт записан — это главное.
+  assert.equal(r.administration.status, 'given');
+  assert.equal(r.stock.status, 'short');
+  assert.match(r.stock.note, /не списано: Недостаточно: Кеторол — нужно 1 pcs, на складе столько нет/);
+  assert.doesNotMatch(r.stock.note, /на складе 0/, 'число склада медсестре не называется');
+  assert.equal(r.warnings[0].code, 'stock');
+
+  // Остаток В МИНУС НЕ УХОДИТ и строки счёта нет — ровно то же, что при
+  // амбулаторной выдаче.
+  assert.equal(warehouse(db, 4), 0);
+  assert.equal(movements(db, 4).length, 0);
+  assert.equal(lines(db, adm).length, 0);
+  assert.throws(() => dispenseItem(db, { product_id: 4, quantity: 1 }, ACTOR.nurse),
+    (e) => e instanceof StockError && e.code !== 'own_shelf_short' && /Недостаточно: Кеторол — нужно 1 pcs, на складе столько нет/.test(e.message));
+
+  // И это тоже считается: несписанное видно человеку.
+  const list = treatmentOrdersList(db, { admission_id: adm, from: START, to: START }, ACTOR.nurse);
+  assert.equal(list.stock_issues.count, 1);
+  db.close();
+});
+
+test('медсестра, переключатель выключен: дозы нет на её полках — склад добирает, как в 3.12.1', () => {
+  const db = seed();
+  db.prepare('UPDATE products SET on_hand = 5 WHERE id = 4').run();
+  const adm = admission(db);
+  const o = order(db, adm, { name: 'Кеторол', stock_item_id: 4 });
+  const r = mark(db, o);
+  assert.equal(r.stock.status, 'ok', JSON.stringify(r.warnings));
+  assert.equal(warehouse(db, 4), 4, 'доза — со склада');
+  assert.equal(movements(db, 4)[0].holder_type, null);
+  assert.equal(lines(db, adm).length, 1);
+  db.close();
+});
+
+// OWN_SHELF_ONLY_V1 (владелец 28.09; переключатель ВКЛЮЧЁН) — ДВА РАЗНЫХ
+// СЛУЧАЯ. У медсестры склад не источник: дозы нет на её полках — отметка НЕ
+// ставится, отказ «запросите у склада» (иначе «введено» значило бы препарат,
+// взятый мимо склада). У администратора склад — последнее звено цепочки, и
+// пустой склад по-прежнему предупреждение, а не отказ.
+test('медсестра: дозы нет на её полках — отметка НЕ ставится, ничего не записано (переключатель включён)', () => {
+  const db = seed();
+  ownShelfOn(db);
   const adm = admission(db);
   const o = order(db, adm, { name: 'Кеторол', stock_item_id: 4 });
 

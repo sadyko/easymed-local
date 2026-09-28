@@ -25,6 +25,11 @@
 // у администратора и склада. Врачу и медсестре своих полок не хватило — отказ
 // «Нет на ваших полках … Запросите у склада.», склад не добирает (полная
 // матрица «дверь × роль» — own-shelf-only.test.js).
+//
+// Ревью F5 — это правило — ПЕРЕКЛЮЧАТЕЛЬ клиники «Только со своих полок»
+// (мигр. 226), и он ВЫКЛЮЧЕН по умолчанию: тогда всё как в 3.12.1 — своих
+// полок не хватило, склад добирает. Каждый сценарий порядка цепочки ниже
+// проигран в обоих положениях: выключенное — утверждения 3.12.1 дословно.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
@@ -79,70 +84,105 @@ const ADM_DOORS = {
   dispense_from_holding: (db, a, qty, user) => rpc(db, 'dispense_from_holding', { product_id: P, quantity: qty, admission_id: a }, user),
 };
 
-// ─── 1. Порядок: свой подотчёт → кабинет → отдел, на каждой двери ────────────
+// ─── 1. Порядок: свой подотчёт → кабинет → отдел → склад, на каждой двери ─────
 
 // OWN_SHELF_ONLY_V1 — своих полок не хватило: отказ, склад не добирает.
 const refused = (fn) => assert.throws(fn, (e) => e.status === 400 && e.code === 'own_shelf_short');
+// Ревью F5 — переключатель клиники «Только со своих полок» (мигр. 226).
+const ownShelfOn = (db) => db.prepare('UPDATE stock_settings SET own_shelf_only = 1 WHERE id = 1').run();
+const MODES = [['выключен — как в 3.12.1', false], ['включён', true]];
 
 for (const [door, call] of Object.entries(VISIT_DOORS)) {
-  test(`${door} (визит), ВРАЧ: свой подотчёт → свой кабинет → отдел; пусто — отказ, а не склад`, () => {
-    const db = seed();
-    const v = visit(db, 20);
-    put(db, 'staff', 10, 1); put(db, 'room', 20, 2); put(db, 'department', 30, 3);
-    put(db, 'staff', 13, 5); put(db, 'room', 22, 5); put(db, 'department', 31, 5);   // чужое — не трогать
-    assert.equal(onHand(db), 79);
-    assert.equal(src(call(db, v, 1, U.doctor)), 'staff:10=1');
-    assert.equal(src(call(db, v, 2, U.doctor)), 'room:20=2');
-    assert.equal(src(call(db, v, 3, U.doctor)), 'department:30=3');
-    refused(() => call(db, v, 1, U.doctor));
-    assert.equal(onHand(db), 79, 'склад не тронут: врачу он не источник');
-    assert.deepEqual([held(db, 'staff', 13), held(db, 'room', 22), held(db, 'department', 31)], [5, 5, 5], 'чужое не тронуто');
-  });
+  for (const [mode, on] of MODES) {
+    test(`${door} (визит), ВРАЧ: свой подотчёт → свой кабинет → отдел → склад [переключатель ${mode}]`, () => {
+      const db = seed();
+      if (on) ownShelfOn(db);
+      const v = visit(db, 20);
+      put(db, 'staff', 10, 1); put(db, 'room', 20, 2); put(db, 'department', 30, 3);
+      put(db, 'staff', 13, 5); put(db, 'room', 22, 5); put(db, 'department', 31, 5);   // чужое — не трогать
+      assert.equal(onHand(db), 79);
+      assert.equal(src(call(db, v, 1, U.doctor)), 'staff:10=1');
+      assert.equal(src(call(db, v, 2, U.doctor)), 'room:20=2');
+      assert.equal(src(call(db, v, 3, U.doctor)), 'department:30=3');
+      if (!on) {
+        assert.equal(src(call(db, v, 1, U.doctor)), 'warehouse=1', 'склад — только когда свои полки пусты');
+        assert.equal(onHand(db), 78);
+      } else {
+        refused(() => call(db, v, 1, U.doctor));
+        assert.equal(onHand(db), 79, 'склад не тронут: врачу он не источник');
+      }
+      assert.deepEqual([held(db, 'staff', 13), held(db, 'room', 22), held(db, 'department', 31)], [5, 5, 5], 'чужое не тронуто');
+    });
 
-  test(`${door} (визит), МЕДСЕСТРА: свой подотчёт → кабинет приёма → свой процедурный → отдел; чужое — никогда`, () => {
-    const db = seed();
-    const v = visit(db, 20);
-    put(db, 'staff', 11, 1); put(db, 'room', 20, 1); put(db, 'room', 21, 1); put(db, 'department', 30, 1);
-    put(db, 'staff', 13, 5); put(db, 'staff', 10, 5); put(db, 'room', 22, 5); put(db, 'department', 31, 5);
-    // На 5 своих полок не хватает — отказ; на 4 — частичное покрытие по всей цепочке.
-    refused(() => call(db, v, 5, U.nurse));
-    const r = call(db, v, 4, U.nurse);
-    assert.equal(src(r), 'staff:11=1 + room:20=1 + room:21=1 + department:30=1');
-    assert.deepEqual([held(db, 'staff', 13), held(db, 'staff', 10), held(db, 'room', 22), held(db, 'department', 31)], [5, 5, 5, 5],
-      'ни личный подотчёт врача или другой медсестры, ни чужой кабинет и отдел не тронуты');
-  });
+    test(`${door} (визит), МЕДСЕСТРА: свой подотчёт → кабинет приёма → свой процедурный → отдел → склад; чужое — никогда [переключатель ${mode}]`, () => {
+      const db = seed();
+      if (on) ownShelfOn(db);
+      const v = visit(db, 20);
+      put(db, 'staff', 11, 1); put(db, 'room', 20, 1); put(db, 'room', 21, 1); put(db, 'department', 30, 1);
+      put(db, 'staff', 13, 5); put(db, 'staff', 10, 5); put(db, 'room', 22, 5); put(db, 'department', 31, 5);
+      if (!on) {
+        // Одна выдача на 5 — частичное покрытие по всей цепочке, склад последним.
+        const r = call(db, v, 5, U.nurse);
+        assert.equal(src(r), 'staff:11=1 + room:20=1 + room:21=1 + department:30=1 + warehouse=1');
+      } else {
+        // На 5 своих полок не хватает — отказ; на 4 — частичное покрытие по всей цепочке.
+        refused(() => call(db, v, 5, U.nurse));
+        const r = call(db, v, 4, U.nurse);
+        assert.equal(src(r), 'staff:11=1 + room:20=1 + room:21=1 + department:30=1');
+      }
+      assert.deepEqual([held(db, 'staff', 13), held(db, 'staff', 10), held(db, 'room', 22), held(db, 'department', 31)], [5, 5, 5, 5],
+        'ни личный подотчёт врача или другой медсестры, ни чужой кабинет и отдел не тронуты');
+    });
 
-  test(`${door} (визит), СТАРШАЯ МЕДСЕСТРА без кабинета: свой подотчёт → кабинет приёма → его отдел → свой отдел`, () => {
-    const db = seed();
-    const v = visit(db, 20);
-    put(db, 'staff', 12, 1); put(db, 'room', 20, 1); put(db, 'department', 30, 1); put(db, 'department', 31, 1);
-    put(db, 'room', 21, 5);   // процедурный — не её кабинет и не кабинет приёма
-    refused(() => call(db, v, 5, U.senior));
-    assert.equal(src(call(db, v, 4, U.senior)), 'staff:12=1 + room:20=1 + department:30=1 + department:31=1');
-    assert.equal(held(db, 'room', 21), 5);
-  });
+    test(`${door} (визит), СТАРШАЯ МЕДСЕСТРА без кабинета: свой подотчёт → кабинет приёма → его отдел → свой отдел → склад [переключатель ${mode}]`, () => {
+      const db = seed();
+      if (on) ownShelfOn(db);
+      const v = visit(db, 20);
+      put(db, 'staff', 12, 1); put(db, 'room', 20, 1); put(db, 'department', 30, 1); put(db, 'department', 31, 1);
+      put(db, 'room', 21, 5);   // процедурный — не её кабинет и не кабинет приёма
+      if (!on) {
+        assert.equal(src(call(db, v, 5, U.senior)), 'staff:12=1 + room:20=1 + department:30=1 + department:31=1 + warehouse=1');
+      } else {
+        refused(() => call(db, v, 5, U.senior));
+        assert.equal(src(call(db, v, 4, U.senior)), 'staff:12=1 + room:20=1 + department:30=1 + department:31=1');
+      }
+      assert.equal(held(db, 'room', 21), 5);
+    });
+  }
 }
 
 for (const [door, call] of Object.entries(ADM_DOORS)) {
-  test(`${door} (койка), ВРАЧ и МЕДСЕСТРА: свой подотчёт → свой кабинет → отдел палаты → свой отдел`, () => {
-    const db = seed();
-    const a = admission(db);
-    put(db, 'staff', 10, 1); put(db, 'room', 20, 1); put(db, 'department', 30, 1);
-    put(db, 'staff', 11, 1); put(db, 'room', 21, 1);
-    put(db, 'staff', 13, 5); put(db, 'room', 22, 5); put(db, 'department', 31, 5);
-    assert.equal(src(call(db, a, 2, U.doctor)), 'staff:10=1 + room:20=1');
-    refused(() => call(db, a, 4, U.nurse));
-    assert.equal(src(call(db, a, 3, U.nurse)), 'staff:11=1 + room:21=1 + department:30=1');
-    assert.deepEqual([held(db, 'staff', 13), held(db, 'room', 22), held(db, 'department', 31)], [5, 5, 5]);
-  });
+  for (const [mode, on] of MODES) {
+    test(`${door} (койка), ВРАЧ и МЕДСЕСТРА: свой подотчёт → свой кабинет → отдел палаты → свой отдел → склад [переключатель ${mode}]`, () => {
+      const db = seed();
+      if (on) ownShelfOn(db);
+      const a = admission(db);
+      put(db, 'staff', 10, 1); put(db, 'room', 20, 1); put(db, 'department', 30, 1);
+      put(db, 'staff', 11, 1); put(db, 'room', 21, 1);
+      put(db, 'staff', 13, 5); put(db, 'room', 22, 5); put(db, 'department', 31, 5);
+      assert.equal(src(call(db, a, 2, U.doctor)), 'staff:10=1 + room:20=1');
+      if (!on) {
+        assert.equal(src(call(db, a, 4, U.nurse)), 'staff:11=1 + room:21=1 + department:30=1 + warehouse=1');
+      } else {
+        refused(() => call(db, a, 4, U.nurse));
+        assert.equal(src(call(db, a, 3, U.nurse)), 'staff:11=1 + room:21=1 + department:30=1');
+      }
+      assert.deepEqual([held(db, 'staff', 13), held(db, 'room', 22), held(db, 'department', 31)], [5, 5, 5]);
+    });
 
-  test(`${door} (койка), СТАРШАЯ МЕДСЕСТРА другого отдела: отдел палаты, потом свой отдел`, () => {
-    const db = seed();
-    const a = admission(db);
-    put(db, 'department', 30, 1); put(db, 'department', 31, 1);
-    refused(() => call(db, a, 3, U.senior));
-    assert.equal(src(call(db, a, 2, U.senior)), 'department:30=1 + department:31=1');
-  });
+    test(`${door} (койка), СТАРШАЯ МЕДСЕСТРА другого отдела: отдел палаты, потом свой отдел [переключатель ${mode}]`, () => {
+      const db = seed();
+      if (on) ownShelfOn(db);
+      const a = admission(db);
+      put(db, 'department', 30, 1); put(db, 'department', 31, 1);
+      if (!on) {
+        assert.equal(src(call(db, a, 3, U.senior)), 'department:30=1 + department:31=1 + warehouse=1');
+      } else {
+        refused(() => call(db, a, 3, U.senior));
+        assert.equal(src(call(db, a, 2, U.senior)), 'department:30=1 + department:31=1');
+      }
+    });
+  }
 }
 
 // ─── 2. Отмена возвращает КАЖДУЮ часть на её полку ────────────────────────────
@@ -170,6 +210,27 @@ test('отмена выдачи по частям: каждая часть — �
   assert.equal(src(r4), 'department:30=1 + warehouse=1');
   rpc(db, 'void_dispensed_visit_item', { p_line: r4.visit_service_id }, U.admin);
   assert.deepEqual([held(db, 'department', 30), onHand(db)], [1, 97]);
+});
+
+// Ревью F5 — переключатель выключен (по умолчанию): медсестре склад добирает,
+// как в 3.12.1, и отмена возвращает его часть на склад (утверждения 3.12.1).
+test('отмена выдачи по частям, переключатель выключен: часть медсестры со склада возвращается на склад', () => {
+  const db = seed();
+  const v = visit(db, 20);
+  const a = admission(db);
+  put(db, 'staff', 11, 1); put(db, 'room', 21, 1);
+  const r1 = VISIT_DOORS.dispense_visit_item(db, v, 3, U.nurse);
+  assert.equal(src(r1), 'staff:11=1 + room:21=1 + warehouse=1');
+  rpc(db, 'void_dispensed_visit_item', { p_line: r1.visit_service_id }, U.nurse);
+  assert.deepEqual([held(db, 'staff', 11), held(db, 'room', 21), onHand(db)], [1, 1, 98]);
+
+  const r2 = VISIT_DOORS.dispense_from_holding(db, v, 3, U.nurse);
+  rpc(db, 'void_holding_dispense', { visit_service_id: r2.line_id }, U.nurse);
+  assert.deepEqual([held(db, 'staff', 11), held(db, 'room', 21), onHand(db)], [1, 1, 98]);
+
+  const r3 = ADM_DOORS.dispense_admission_item(db, a, 3, U.nurse);
+  rpc(db, 'void_dispensed_admission_item', { p_line: r3.line_id }, U.nurse);
+  assert.deepEqual([held(db, 'staff', 11), held(db, 'room', 21), onHand(db)], [1, 1, 98]);
 });
 
 // ─── 3. Отметка «введено» в листе назначений ───────────────────────────────────
@@ -212,8 +273,17 @@ test('dispense_from_holding: названа своя полка — берётс
   assert.equal(onHand(db), 96, 'склад не тронут');
 });
 
-test('dispense_from_holding: выбран «Склад», а своё есть — сначала своё; склад — только остаток и только администратору', () => {
+test('dispense_from_holding: выбран «Склад», а своё есть — сначала своё; склад — только остаток (переключатель выключен — как в 3.12.1)', () => {
   const db = seed();
+  const v = visit(db, 20);
+  put(db, 'staff', 11, 1);
+  const r = rpc(db, 'dispense_from_holding', { holder: { type: 'warehouse' }, product_id: P, quantity: 3, visit_id: v }, U.nurse);
+  assert.equal(src(r), 'staff:11=1 + warehouse=2');
+});
+
+test('dispense_from_holding: выбран «Склад», а своё есть — сначала своё; склад — только остаток и только администратору (переключатель включён)', () => {
+  const db = seed();
+  ownShelfOn(db);
   const v = visit(db, 20);
   put(db, 'staff', 11, 1); put(db, 'staff', 1, 1);
   // OWN_SHELF_ONLY_V1 — медсестре своего мало: отказ, склад не добирает.

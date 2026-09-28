@@ -33,6 +33,9 @@ import { renderRequisitionsTab, renderPurchaseOrdersTab, renderStockCountsTab } 
 // ближайший срок первым. Расклад считает сервер (rpc/expiry.js), экран его
 // показывает и честно называет расчётом.
 import { renderExpiryTab } from './inventory-expiry.js';
+// OWN_SHELF_ONLY_V1 (ревью F5) — переключатель клиники «Только со своих полок»
+// и готовность полок: настройка склада, поэтому живёт здесь чипом.
+import { renderOwnShelfTab } from './inventory-own-shelf.js';
 
 const refs = { container: null, onNavigate: null, chipsEl: null, tabBarEl: null, contentEl: null };
 const state = { pane: 'sklad' };
@@ -50,6 +53,7 @@ const CHIPS = [
     { id: 'expiry',      label: 'Сроки годности', icon: 'Clock' },
     { id: 'stockcount',  label: 'Инвентаризация', icon: 'Grid' },
     { id: 'audit',       label: 'Журнал',         icon: 'Activity' },
+    { id: 'own_shelf',   label: 'Только со своих полок', icon: 'Shield' },   // OWN_SHELF_ONLY_V1 (ревью F5)
 ];
 
 export async function renderInventory(container, { onNavigate } = {}) {
@@ -138,6 +142,7 @@ async function repaint() {
             return void container.appendChild(comingSoon('Отделения',
                 'Товары и остатки по отделениям смотрите в «Настройки → Отделы».', 'Building'));
         case 'expiry':      return renderExpiryTab(container);   // EXPIRY_BALANCE_V1
+        case 'own_shelf':   return renderOwnShelfTab(container);   // OWN_SHELF_ONLY_V1 (ревью F5)
         default:
             return;
     }

@@ -15,6 +15,10 @@ function seed() {
 const inv = { id:3, role:'inventory' };
 const doc = { id:4, role:'doctor' };
 const lab = { id:5, role:'lab' };
+// Ревью F5 — «Только со своих полок» — переключатель клиники (мигр. 226),
+// ВЫКЛЮЧЕННЫЙ по умолчанию: тогда всё как в 3.12.1 (врачу склад добирает).
+// Где положения отвечают по-разному, сценарий проигран в обоих.
+const ownShelfOn = (db) => db.prepare('UPDATE stock_settings SET own_shelf_only = 1 WHERE id = 1').run();
 
 test('receive_stock increases on_hand and writes a ledger row', () => {
   const { db, prod } = seed();
@@ -26,9 +30,11 @@ test('receive_stock increases on_hand and writes a ledger row', () => {
   assert.throws(() => receiveStock(db, { product_id: prod, quantity: 5 }, lab), /(role|allow|роль)/i);
 });
 
-// OWN_SHELF_ONLY_V1 (владелец 28.09) — со склада пациенту выдают только
-// администратор и склад; врач — со своей полки (цепочка — ниже, seedChain). Тесты
-// о самом складе поэтому выдают от имени кладовщика.
+// OWN_SHELF_ONLY_V1 (владелец 28.09) — со склада пациенту при включённом
+// переключателе выдают только администратор и склад; врач — со своей полки
+// (цепочка — ниже, seedChain). Число склада в ответе видит только тот, кто
+// видит склад, — поэтому тест о самом складе выдаёт от имени кладовщика, а
+// врач (переключатель выключен — как в 3.12.1) выдаёт со склада без числа.
 test('dispense_item decrements stock, prices from catalog, links a visit line', () => {
   const { db, vid, prod } = seed();
   receiveStock(db, { product_id: prod, quantity: 10 }, inv);
@@ -42,6 +48,12 @@ test('dispense_item decrements stock, prices from catalog, links a visit line', 
   assert.equal(vs.total, 36000);
   const m = db.prepare("SELECT qty FROM stock_movements WHERE kind='dispense'").get();
   assert.equal(m.qty, -3);
+  // Ревью F5 — переключатель выключен: врач выдаёт со склада, как в 3.12.1, а
+  // остатка склада в ответе не видит (просьба владельца — при любом положении).
+  const d = dispenseItem(db, { product_id: prod, quantity: 1, visit_id: vid }, doc);
+  assert.deepEqual(d.sources, [{ type: 'warehouse', id: null, qty: 1 }]);
+  assert.equal(d.on_hand, null);
+  assert.equal(db.prepare('SELECT on_hand FROM products WHERE id=?').get(prod).on_hand, 6);
 });
 
 test('dispense_item NEVER goes negative (atomic reject on insufficient stock)', () => {
@@ -51,7 +63,14 @@ test('dispense_item NEVER goes negative (atomic reject on insufficient stock)', 
   // («insufficient stock: on hand 2, requested 5» говорил только про склад и
   // молчал о том, что половина лежит у сотрудника на руках).
   assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 5, visit_id: vid }, inv), /Недостаточно.*на складе 2 из 5/);
-  // OWN_SHELF_ONLY_V1 — врачу склад не источник вовсе: отказ о СВОИХ полках.
+  // Ревью F5 — переключатель выключен: врачу тот же отказ, что в 3.12.1, но без
+  // числа склада — остаток склада ему не показывается при любом положении.
+  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 5, visit_id: vid }, doc),
+    (e) => e.status === 400 && e.code !== 'own_shelf_short'
+      && e.message === 'Недостаточно: Paracetamol — нужно 5 pcs, на складе столько нет; на руках, в кабинете и в отделе — ничего.');
+  // OWN_SHELF_ONLY_V1 (переключатель включён) — врачу склад не источник вовсе:
+  // отказ о СВОИХ полках, даже на единицу, которая на складе есть.
+  ownShelfOn(db);
   assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 1, visit_id: vid }, doc),
     (e) => e.status === 400 && e.code === 'own_shelf_short' && /Нет на ваших полках: Paracetamol — нужно 1 pcs, есть 0 pcs\. Запросите у склада\./.test(e.message));
   assert.equal(db.prepare('SELECT on_hand FROM products WHERE id=?').get(prod).on_hand, 2); // unchanged
@@ -171,8 +190,28 @@ test('кабинет врача: сначала СВОЙ подотчёт, ск�
   assert.deepEqual(mv, { qty: -2, holder_type: 'staff', holder_id: 4 });
 });
 
-test('кабинет: у врача пусто — тратится подотчёт КАБИНЕТА приёма, потом отдела; склад — только кладовщику', () => {
+test('кабинет: у врача пусто — тратится подотчёт КАБИНЕТА приёма, потом отдела, потом склад (переключатель выключен — как в 3.12.1)', () => {
   const { db, vid, prod } = seedChain();
+  receiveStock(db, { product_id: prod, quantity: 10 }, inv);
+  hold(db, 'room', 7, prod, 3);        // visits.room_id = 7
+  hold(db, 'department', 9, prod, 1);  // rooms.department_id = 9
+
+  const a = dispenseItem(db, { product_id: prod, quantity: 3, visit_id: vid }, doc);
+  assert.deepEqual(a.sources, [{ type: 'room', id: 7, qty: 3 }]);
+  assert.equal(onHand(db, prod), 10);
+
+  const b = dispenseItem(db, { product_id: prod, quantity: 1, visit_id: vid }, doc);
+  assert.deepEqual(b.sources, [{ type: 'department', id: 9, qty: 1 }]);
+  assert.equal(onHand(db, prod), 10);
+
+  const c = dispenseItem(db, { product_id: prod, quantity: 4, visit_id: vid }, doc);
+  assert.deepEqual(c.sources, [{ type: 'warehouse', id: null, qty: 4 }], 'нигде на руках нет — склад');
+  assert.equal(onHand(db, prod), 6);
+});
+
+test('кабинет: у врача пусто — тратится подотчёт КАБИНЕТА приёма, потом отдела; склад — только кладовщику (переключатель включён)', () => {
+  const { db, vid, prod } = seedChain();
+  ownShelfOn(db);
   receiveStock(db, { product_id: prod, quantity: 10 }, inv);
   hold(db, 'room', 7, prod, 3);        // visits.room_id = 7
   hold(db, 'department', 9, prod, 1);  // rooms.department_id = 9
@@ -195,8 +234,30 @@ test('кабинет: у врача пусто — тратится подотч
   assert.equal(onHand(db, prod), 6);
 });
 
-test('частичное покрытие: 1 из кабинета + 4 со склада ОДНОЙ выдачей (кладовщик); отмена вернёт каждую часть своему источнику', () => {
+test('частичное покрытие: 1 из кабинета + 4 со склада ОДНОЙ выдачей; отмена вернёт каждую часть своему источнику (переключатель выключен — как в 3.12.1)', () => {
   const { db, vid, prod } = seedChain();
+  receiveStock(db, { product_id: prod, quantity: 10 }, inv);
+  hold(db, 'room', 7, prod, 1);
+
+  const r = dispenseItem(db, { product_id: prod, quantity: 5, visit_id: vid }, doc);
+  assert.deepEqual(r.sources, [{ type: 'room', id: 7, qty: 1 }, { type: 'warehouse', id: null, qty: 4 }]);
+  assert.equal(held(db, 'room', 7, prod), 0);
+  assert.equal(onHand(db, prod), 6);
+  // Одна строка счёта — и ДВА движения с общей ссылкой на неё.
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services').get().n, 1);
+  const mvs = db.prepare("SELECT qty, holder_type, holder_id FROM stock_movements WHERE kind='dispense' AND reference_type='visit' AND reference_id=? ORDER BY id").all(r.visit_service_id);
+  assert.deepEqual(mvs, [{ qty: -1, holder_type: 'room', holder_id: 7 }, { qty: -4, holder_type: null, holder_id: null }]);
+
+  const v = voidDispense(db, { visit_service_id: r.visit_service_id }, inv);
+  assert.deepEqual(v.sources, [{ type: 'room', id: 7, qty: 1 }, { type: 'warehouse', id: null, qty: 4 }]);
+  assert.equal(held(db, 'room', 7, prod), 1, 'кабинету — его единица');
+  assert.equal(onHand(db, prod), 10, 'складу — его четыре');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE id=?').get(r.visit_service_id).n, 0);
+});
+
+test('частичное покрытие: 1 из кабинета + 4 со склада ОДНОЙ выдачей (кладовщик); отмена вернёт каждую часть своему источнику (переключатель включён)', () => {
+  const { db, vid, prod } = seedChain();
+  ownShelfOn(db);
   receiveStock(db, { product_id: prod, quantity: 10 }, inv);
   hold(db, 'room', 7, prod, 1);
 
@@ -222,8 +283,44 @@ test('частичное покрытие: 1 из кабинета + 4 со ск
   assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE id=?').get(r.visit_service_id).n, 0);
 });
 
-test('отказ называет нехватку И то, где лежит остальное', () => {
+test('отказ называет нехватку И то, где лежит остальное (переключатель выключен — как в 3.12.1, без числа склада врачу)', () => {
   const { db, vid, prod } = seedChain();
+  receiveStock(db, { product_id: prod, quantity: 2 }, inv);
+  hold(db, 'staff', 4, prod, 3);
+  hold(db, 'department', 9, prod, 1);
+
+  // Ревью F5 — отказ в том же случае и с теми же полками, что в 3.12.1; число
+  // склада врачу не называется (в 3.12.1 — «на складе 2 из 10 уп»).
+  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 10, visit_id: vid }, doc), (e) => {
+    assert.equal(e.status, 400);
+    assert.notEqual(e.code, 'own_shelf_short');
+    assert.equal(e.message, 'Недостаточно: Парацетамол — нужно 10 уп, на складе столько нет; у вас на руках 3, в отделе 1.');
+    return true;
+  });
+  // Кладовщик склад видит — отказ с числом, как в 3.12.1.
+  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 10, visit_id: vid }, inv), (e) => {
+    assert.equal(e.message, 'Недостаточно: Парацетамол — на складе 2 из 10 уп; в отделе 1.');
+    return true;
+  });
+  // Отказ не тронул НИЧЕГО.
+  assert.equal(onHand(db, prod), 2);
+  assert.equal(held(db, 'staff', 4, prod), 3);
+  assert.equal(held(db, 'department', 9, prod), 1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services').get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM stock_movements WHERE kind='dispense'").get().n, 0);
+
+  // Нет нигде — отказ говорит и это, не выдумывая цифр.
+  db.prepare('DELETE FROM stock_holdings').run();
+  db.prepare('UPDATE products SET on_hand = 0 WHERE id = ?').run(prod);
+  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 1, visit_id: vid }, doc),
+    /нужно 1 уп, на складе столько нет; на руках, в кабинете и в отделе — ничего./);
+  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 1, visit_id: vid }, inv),
+    /на складе 0 из 1 уп; на руках, в кабинете и в отделе — ничего./);
+});
+
+test('отказ называет нехватку И то, где лежит остальное (переключатель включён)', () => {
+  const { db, vid, prod } = seedChain();
+  ownShelfOn(db);
   receiveStock(db, { product_id: prod, quantity: 2 }, inv);
   hold(db, 'staff', 4, prod, 3);
   hold(db, 'department', 9, prod, 1);

@@ -74,7 +74,7 @@ import { renderDocsArchive }  from './admin/views/docs-archive.js?v=q3one';   //
 import { renderReportsHub }   from './admin/views/reports-hub.js?v=ru6';   // REPORTS_HUB_RU_V1 — «Отчёты» card grid + full-screen report builder
 import { renderWardBeds }     from './admin/views/ward-beds.js?v=board5';   // INPATIENT_LOCAL_V1 — fresh local ward/bed board (legacy beds.js was cloud-coupled); BED_BOARD_SHARED_V1 — доска коек теперь ещё и окно выбора койки
 import { renderInpatient }    from './admin/views/admissions.js?v=inp3';   // INPATIENT_ONE_SECTION_V1 — «Стационар» одним разделом: заявки · койки · госпитализации
-import { renderMarNurse }    from './admin/views/mar-nurse.js?v=inp6';   // MAR_NURSE_V1 — задачи медсестры: пациент — якорь, «5 прав»
+import { renderMarNurse }    from './admin/views/mar-nurse.js?v=inp7';   // MAR_NURSE_V1 — задачи медсестры: пациент — якорь, «5 прав»; inp7 — mar-sheet inp6 (OWN_SHELF_ONLY_V1, ревью F5)
 import { renderKitchenSheet } from './admin/views/kitchen-sheet.js?v=diet1';   // KITCHEN_SHEET_V1 — порционник (Задача 7; экран был написан без маршрута)
 import { renderDischarge }   from './admin/views/discharge.js?v=disch1';   // TWO_STEP_DISCHARGE_V1 — «Выписки к оформлению» (Задача 8; экран был написан без маршрута)
 import { renderDoctorRoom }   from './admin/views/doctor-room.js?v=docroom1';   // DOCTOR_ROOM_V1 — Кабинет врача (consultation queue)
@@ -97,14 +97,14 @@ import { renderConsultationTypes } from './admin/views/consultation-types.js?v=c
 import { renderPharmacy }    from './admin/views/pharmacy.js?v=ph2';   // PHARMACY_V1
 import { renderRequestsInbox } from './admin/views/requests-inbox.js?v=btnright1';
 import { renderPacs }         from './admin/views/pacs.js';
-import { renderInventory }    from './admin/views/inventory.js?v=inv5';   // INVENTORY_UI_V1 — Suppliers/PO/Requisitions/Counts tabs live
+import { renderInventory }    from './admin/views/inventory.js?v=inv6';   // INVENTORY_UI_V1 — Suppliers/PO/Requisitions/Counts tabs live; inv6 — OWN_SHELF_ONLY_V1 (ревью F5) чип «Только со своих полок»
 import { renderStockLog }     from './admin/views/stock-log.js?v=stocklog1';   // STOCK_LOG_V1 — журнал движений (кто, кому, партия, срок)
 import { renderMyStock }      from './admin/views/my-stock.js?v=mystock1';   // MY_STOCK_V1 — свой подотчёт: что выдали, кто выдал, что списал
 import { renderSettingsHub }  from './admin/views/settings-hub.js?v=updbadge1';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route
 import { renderPatientDocuments } from './admin/views/patient-documents.js?v=docstoolbar1';   // PATIENT_DOCUMENTS_V1 + DOCS_TOOLBAR_V1
 import { renderDocumentsSettings } from './admin/views/documents-settings.js?v=doc2';   // DOCUMENTS_SETTINGS_V1
 // CASE_WORKSPACE_V1 — история болезни как рабочий экран: слева шаги, справа документ.
-import { renderCaseWorkspace } from './admin/views/case-workspace.js?v=cw2';
+import { renderCaseWorkspace } from './admin/views/case-workspace.js?v=cw3';   // cw3 — mar-sheet inp6 (OWN_SHELF_ONLY_V1, ревью F5)
 import { renderCaseOverview } from './admin/views/case-overview.js?v=co1';   // CASE_OVERVIEW_V1 — обзор госпитализации (экран врача)
 
 // ---------------------------------------------------------------------------

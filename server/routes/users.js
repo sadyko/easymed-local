@@ -867,6 +867,11 @@ const STAFF_HISTORY_REFS = [
   { table: 'treatment_administrations', columns: ['performed_by', 'voided_by'], label: 'отметки выполнения назначений' },
   { table: 'pay_periods',             columns: ['closed_by'],                 label: 'закрытые месяцы оплаты врачей' },
   { table: 'pay_period_log',          columns: ['user_id'],                   label: 'журнал закрытия месяцев' },
+  // OWN_SHELF_ONLY_V1 (ревью F5, мигр. 226) — кто переключал «Только со своих полок».
+  { table: 'stock_settings',          columns: ['changed_by'],                label: 'настройка «Только со своих полок»' },
+  { table: 'stock_settings_log',      columns: ['changed_by'],                label: 'журнал переключателя «Только со своих полок»' },
+  // Ревью F6 (та же мигр. 226) — кто ввёл дозу «не списано со склада» и кто её списал.
+  { table: 'stock_pending_writeoffs', columns: ['given_by', 'settled_by'],    label: '«не списано со склада»' },
 ];
 
 // V3120_FIX — ЛЮБАЯ ССЫЛКА НА СОТРУДНИКА ИЗ СХЕМЫ. Список выше — с понятными

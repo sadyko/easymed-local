@@ -205,15 +205,46 @@ export function holdingChain(db, user, place) {
 // не может о правиле забыть. Не передала человека — склада нет (отказ закрыт,
 // а не открыт).
 //
+// Ревью F5 (владелец 28.09) — ВСЁ ЭТО ТОЛЬКО ПРИ ВКЛЮЧЁННОМ ПЕРЕКЛЮЧАТЕЛЕ
+// КЛИНИКИ «Только со своих полок» (мигр. 226, stock-policy.js), а он выключен,
+// пока администратор его не включит: «Clinics keep working as today. The admin
+// turns it on in settings once the warehouse has issued stock to rooms and
+// nurses.» Выключен — цепочка кончается складом у всех, как в 3.12.1. Остаток
+// склада врачу и медсестре не показывается при ЛЮБОМ положении (warehouseAccess
+// .see — ответы дверей, holdings_list, отказ «Недостаточно»).
+//
 // Отмена выдачи правило не трогает: часть, пришедшая со склада (её выдал
 // администратор или кладовщик), возвращается на склад, как и прежде.
 // =============================================================================
 export const WAREHOUSE_DISPENSE_ROLES = Object.freeze(['admin', 'inventory']);
 export const OWN_SHELF_SHORT = 'own_shelf_short';
 
-/** Может ли этот человек брать со склада, выдавая пациенту. */
+/** Кому склад — источник при ВКЛЮЧЁННОМ «только со своих полок» (роль). */
 export function mayDispenseFromWarehouse(user) {
   return !!user && hasAnyRole(user, WAREHOUSE_DISPENSE_ROLES);
+}
+
+/**
+ * Ревью F5 — ПЕРЕКЛЮЧАТЕЛЬ КЛИНИКИ «ТОЛЬКО СО СВОИХ ПОЛОК» (мигр. 226), и он
+ * ВЫКЛЮЧЕН, пока администратор его не включит. Владелец: «Clinics keep working
+ * as today. The admin turns it on in settings once the warehouse has issued
+ * stock to rooms and nurses.» Выключенный — всё как в 3.12.1: своих полок не
+ * хватило — добирает склад, у любого, кого дверь выдачи пускает. Таблицы нет
+ * (база до 226, которую читает старый код) — выключен.
+ */
+export function ownShelfOnly(db) {
+  try {
+    const r = db.prepare('SELECT own_shelf_only FROM stock_settings WHERE id = 1').get();
+    return !!(r && Number(r.own_shelf_only) === 1);
+  } catch { return false; }
+}
+
+/**
+ * Берёт ли этот человек со склада, выдавая пациенту: выключено — да (как в
+ * 3.12.1), включено — только администратор и склад.
+ */
+export function mayTakeFromWarehouse(db, user) {
+  return !ownShelfOnly(db) || mayDispenseFromWarehouse(user);
 }
 
 /**
@@ -232,7 +263,9 @@ export function mayDispenseFromWarehouse(user) {
 export function warehouseAccess(db, user) {
   let see = false;
   try { see = !!user && canSeeAllMovements(db, user); } catch { see = false; }
-  return { take: mayDispenseFromWarehouse(user), see };
+  // Ревью F5 — «брать» зависит от переключателя клиники, «видеть число» — нет:
+  // врачу и медсестре остаток склада не показывается при любом положении.
+  return { take: mayTakeFromWarehouse(db, user), see, own_shelf_only: ownShelfOnly(db) };
 }
 
 /**
@@ -280,7 +313,12 @@ function warehouseOnHand(db, user, onHand) {
 /** Отказ, который называет и нехватку, и всё, что цепочка нашла по дороге. */
 // V3120_FIX — `inUnits`: дверь, где человек считает в единице расхода
 // (медсестра — таблетками), слышит отказ в таблетках, а не в долях пачки.
-function shortfallMessage(product, need, onHand, found, inUnits = false) {
+// Ревью F5 — `seesWarehouse`: число склада в отказе — только тому, кто видит
+// склад (warehouseAccess.see). Переключатель выключен — врач и медсестра снова
+// доходят до этого отказа (склад им добирает, как в 3.12.1), а остаток склада
+// им не показывается при любом положении переключателя (просьба владельца):
+// отказ звучит в тех же случаях, что в 3.12.1, только без числа склада.
+function shortfallMessage(product, need, onHand, found, inUnits = false, seesWarehouse = true) {
   const cf = inUnits ? factorOf(product) : 1;
   const unit = (inUnits && cf !== 1 ? product.consumption_unit : '') || product.base_unit || product.unit || '';
   const num = (v) => String(cf !== 1 ? unitsOf(v, cf) : round2(v));
@@ -288,7 +326,9 @@ function shortfallMessage(product, need, onHand, found, inUnits = false) {
   if (found.staff > 0) tail.push(`у вас на руках ${num(found.staff)}`);
   if (found.room > 0) tail.push(`в кабинете ${num(found.room)}`);
   if (found.department > 0) tail.push(`в отделе ${num(found.department)}`);
-  const head = `Недостаточно: ${product.name} — на складе ${num(onHand)} из ${num(need)}${unit ? ` ${unit}` : ''}`;
+  const head = seesWarehouse
+    ? `Недостаточно: ${product.name} — на складе ${num(onHand)} из ${num(need)}${unit ? ` ${unit}` : ''}`
+    : `Недостаточно: ${product.name} — нужно ${num(need)}${unit ? ` ${unit}` : ''}, на складе столько нет`;
   return `${head}; ${tail.length ? tail.join(', ') : 'на руках, в кабинете и в отделе — ничего'}.`;
 }
 
@@ -325,7 +365,9 @@ export function planSources(db, chain, product, quantity, opts = {}) {
     // OWN_SHELF_ONLY_V1 — своих полок не хватило, а склад этому человеку не
     // источник: отказ «запросите у склада». Отключённый товар и пустой склад
     // его уже не касаются — склада в его цепочке нет вовсе.
-    if (!mayDispenseFromWarehouse(opts.user)) throw ownShelfRefusal(product, quantity, found, !!opts.inUnits);
+    // Ревью F5 — только при ВКЛЮЧЁННОМ переключателе клиники; выключенный —
+    // склад добирает, как в 3.12.1.
+    if (!mayTakeFromWarehouse(db, opts.user)) throw ownShelfRefusal(product, quantity, found, !!opts.inUnits);
     const onHand = roundQty(product.on_hand);
     // V3120_FIX — ОТКЛЮЧЁННЫЙ ТОВАР, одно правило на все двери: уже выданное
     // (подотчёт, кабинет, отдел) довыдать можно — выше цепочка его и взяла;
@@ -337,7 +379,10 @@ export function planSources(db, chain, product, quantity, opts = {}) {
         + `${picks.length ? ', а на руках, в кабинете и в отделе его не хватает' : ''}.`, 400);
     }
     if (!coversQty(onHand, need, cf)) {
-      throw new RpcError(shortfallMessage(product, quantity, onHand, found, !!opts.inUnits), 400);
+      // Ревью F5 — число склада только тому, кто его видит; вызов без человека
+      // (внутренний) — как прежде, с числом.
+      const sees = opts.user === undefined ? true : warehouseAccess(db, opts.user).see;
+      throw new RpcError(shortfallMessage(product, quantity, onHand, found, !!opts.inUnits, sees), 400);
     }
     picks.push({ type: WAREHOUSE, id: null, qty: Math.min(need, onHand) });
   }

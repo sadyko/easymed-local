@@ -15,6 +15,11 @@
 //   dispense_admission_item  — консоль койки, история болезни «Добавить расход»;
 //   dispense_from_holding    — вкладка медсестры (амбулатория и стационар);
 //   treatment_admin_mark     — отметка «введено» в листе назначений.
+//
+// Ревью F5 — правило — ПЕРЕКЛЮЧАТЕЛЬ клиники «Только со своих полок» (мигр.
+// 226), выключенный по умолчанию: «Clinics keep working as today». Этот файл —
+// спецификация ВКЛЮЧЁННОГО правила, и seed() его включает. Выключенное (всё как
+// в 3.12.1) — own-shelf-switch.test.js.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
@@ -44,6 +49,7 @@ const K = 2;   // Кеторол: коробка по 10 ампул
 
 function seed() {
   const db = openDb(':memory:'); migrate(db);
+  db.prepare('UPDATE stock_settings SET own_shelf_only = 1 WHERE id = 1').run();   // ревью F5 — правило включено
   db.prepare("INSERT INTO departments (id, name) VALUES (30, 'Терапия'), (31, 'Хирургия')").run();
   db.prepare("INSERT INTO rooms (id, name, department_id) VALUES (20, 'Кабинет врача', 30), (21, 'Процедурный', 30), (22, 'Перевязочная', 31)").run();
   db.prepare("INSERT INTO custom_roles (code, name, base_role, active) VALUES ('proc_nurse', 'Процедурная медсестра', 'nurse', 1)").run();

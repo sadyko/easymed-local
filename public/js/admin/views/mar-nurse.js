@@ -85,7 +85,7 @@ import { inpatientModal } from './admission-modal.js?v=inp5';
 // обоих экранах одной смены (cellStateColor в views/mar-sheet.js).
 import {
     todayLocal, hhmm, cellStateLabel, cellGlyph, cellStateColor, cellStateTone, VOIDED_GLYPH,
-} from './mar-sheet.js?v=inp5';
+} from './mar-sheet.js?v=inp6';
 // DIET_TABLES_V1 — названия приёмов пищи и отметок берутся у порционника: три
 // копии одного списка разошлись бы молча, и «Полдник» здесь перестал бы быть
 // «Полдником» на кухне.
