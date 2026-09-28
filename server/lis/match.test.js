@@ -144,6 +144,13 @@ test('R11: значение с цифрой («<0.01», «>1000», «*6.1») п�
   assert.equal(st.fills.length, 1);
 });
 
+test('R7: строка прибора с пустым OBX-3 в списках — «(без кода)», а не пустое место', () => {
+  const o = outcome(planObservations([obs('WBC^^99MRC', '6.1'), obs('', 'O'), obs('08001^Take Mode^99MRC')],
+    [line(1, 'Лейкоциты', 'WBC')]));
+  assert.equal(o.status, 'applied');
+  assert.equal(o.detail, 'не использованы: (без кода), 08001^Take Mode^99MRC');
+});
+
 test('R11: «***» рядом с числом — не спор ни до, ни после', () => {
   const lines = [line(1, 'Лейкоциты', 'WBC')];
   for (const pair of [['6.1', '***'], ['***', '6.1']]) {

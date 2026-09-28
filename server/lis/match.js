@@ -125,6 +125,10 @@ const LIST_CAP = 15;
 const list = (items) => items.length > LIST_CAP
   ? items.slice(0, LIST_CAP).join(', ') + ' и ещё ' + (items.length - LIST_CAP)
   : items.join(', ');
+// Строка прибора в журнале — целиком, как пришла («6690-2^WBC^LN»). Пустой
+// OBX-3 (ревью R7) назван словами: пустое место между запятыми человек
+// прочитать не может, а сырое сообщение всё равно лежит целиком.
+const label = (o) => o.codeRaw || o.code || '(без кода)';
 
 /**
  * Статус сообщения и строка журнала.
@@ -137,9 +141,9 @@ export function outcome(plan) {
     parts.push('не пришли: ' + list(plan.missing.map(({ analyte: a, reason }) =>
       a.name + ' (' + String(a.device_code).trim() + (reason ? ', ' + reason : '') + ')')));
   }
-  if (plan.unconfirmed.length) parts.push('не подтверждено: ' + list(plan.unconfirmed.map((o) => o.codeRaw || o.code)));
-  if (plan.repeats.length) parts.push('повтор: ' + list(plan.repeats.map((o) => o.codeRaw || o.code)));
-  if (plan.unused.length) parts.push('не использованы: ' + list(plan.unused.map((o) => o.codeRaw || o.code)));
+  if (plan.unconfirmed.length) parts.push('не подтверждено: ' + list(plan.unconfirmed.map(label)));
+  if (plan.repeats.length) parts.push('повтор: ' + list(plan.repeats.map(label)));
+  if (plan.unused.length) parts.push('не использованы: ' + list(plan.unused.map(label)));
   if (!plan.fills.length && !parts.length) parts.push('в сообщении нет результатов');
   return { status: done ? 'applied' : 'unmapped', detail: parts.join('; ') };
 }
