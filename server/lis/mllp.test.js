@@ -109,3 +109,80 @@ test('порт сообщает о себе, и закрытие действи�
   assert.equal(again.port, srv.port);
   await again.close();
 });
+
+// ── LIS_MINDRAY_CODES_V1, ревью 2026-09-28 — потолок и переросшее сообщение ──
+// Настоящий Mindray шлёт в пробе гистограммы и скаттерграммы (BMP в base64).
+// Такое сообщение больше прежних 256 КБ, и результаты не приходили вовсе:
+// соединение рвалось молча — ни NAK, ни записи.
+
+test('сообщение около 1 МБ (проба с картинками) принимается целиком', async () => {
+  const seen = [];
+  const big = MSG('11') + '\rOBX|1|ED|15551-4^WBC Histogram. BMP^99MRC||^Image^BMP^Base64^' + 'Q'.repeat(1024 * 1024) + '||||||F';
+  await withServer(async (t) => { seen.push(t); return 'AA'; }, async (port) => {
+    const sock = await connect(port);
+    const reply = readFrame(sock);
+    sock.write(frame(big));
+    assert.match(await reply, /MSA\|AA\|11/);
+    sock.end();
+  });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].length, big.length, 'сообщение дошло до приёма целиком');
+});
+
+test('переросшее сообщение: прибору AE с его номером, вызывающему — начало текста', async () => {
+  const seen = [];
+  const over = [];
+  const text = MSG('77') + '\rOBR|1||LAB-000123|00001^Automated Count^99MRC\rOBX|1|ED|X^Y^99MRC||' + 'A'.repeat(4096);
+  await withServer(async (t) => { seen.push(t); return 'AA'; }, async (port) => {
+    const sock = await connect(port);
+    sock.on('error', () => {});   // сервер закрывает соединение — это и проверяется
+    const reply = readFrame(sock);
+    // Кадр не закрыт: прибор ещё шлёт, а потолок уже пройден.
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from(text, 'utf8')]));
+    assert.match(await reply, /MSA\|AE\|77/, 'прибор видит отказ, а не оборванный провод');
+    await settle(50);
+    sock.destroy();
+  }, { maxBytes: 1024, onOversize: (o) => over.push(o) });
+  assert.equal(seen.length, 0, 'переросшее до приёма не доходит');
+  assert.equal(over.length, 1, 'вызывающий узнал о переросшем сообщении');
+  assert.match(over[0].head, /^MSH\|/, 'начало — с MSH, без 0x0B');
+  assert.match(over[0].head, /LAB-000123/);
+  assert.ok(over[0].bytes > 1024, 'сколько пришло к моменту отказа: ' + over[0].bytes);
+  assert.equal(over[0].limit, 1024);
+  assert.ok(over[0].peer, 'адрес отправителя');
+});
+
+test('переросший кадр отвергается, даже если пришёл целиком одной записью', async () => {
+  const seen = [];
+  const over = [];
+  await withServer(async (t) => { seen.push(t); return 'AA'; }, async (port) => {
+    const sock = await connect(port);
+    sock.on('error', () => {});
+    const reply = readFrame(sock);
+    sock.write(frame(MSG('78') + '\r' + 'B'.repeat(4096)));
+    assert.match(await reply, /MSA\|AE\|78/);
+    await settle(50);
+    sock.destroy();
+  }, { maxBytes: 1024, onOversize: (o) => over.push(o) });
+  assert.equal(seen.length, 0);
+  assert.equal(over.length, 1);
+});
+
+test('начало, которое не MSH, — AE без номера; вызывающий всё равно узнаёт', async () => {
+  const over = [];
+  await withServer(async () => 'AA', async (port) => {
+    const sock = await connect(port);
+    sock.on('error', () => {});
+    const reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.alloc(4096, 0x41)]));
+    assert.match(await reply, /MSA\|AE\|$/);
+    await settle(50);
+    sock.destroy();
+  }, { maxBytes: 1024, onOversize: (o) => over.push(o) });
+  assert.equal(over.length, 1);
+});
+
+test('потолок по умолчанию — 4 МБ', async () => {
+  const { DEFAULT_MAX_BYTES } = await import('./mllp.js');
+  assert.equal(DEFAULT_MAX_BYTES, 4 * 1024 * 1024);
+});

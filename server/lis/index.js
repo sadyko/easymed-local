@@ -14,6 +14,7 @@ import { startMllpServer } from './mllp.js';
 import { ingestMessage } from './ingest.js';
 import { ensureDevice } from './discover.js';
 import { parseMessage } from './hl7.js';
+import { recordMessage } from './inbox.js';   // LIS_MINDRAY_CODES_V1 — переросшее сообщение ложится в лоток
 
 export const DEFAULT_PORT = 2575;
 
@@ -63,6 +64,21 @@ export async function startLisListeners(db, { log = console.log } = {}) {
           }
 
           return ingestMessage(db, text, ip, found.device ? found.device.id : null);
+        },
+        // LIS_MINDRAY_CODES_V1 (ревью 2026-09-28) — сообщение больше потолка
+        // (mllp.js уже ответил прибору AE). Инвариант 2 — ничего не теряется:
+        // строка ложится в лоток как «Не разобрано», с началом текста и
+        // номером пробы, если он в начале есть. Лаборант видит, чья проба не
+        // дошла, а не узнаёт об этом от врача. Прибор по началу не заводится:
+        // целого сообщения нет, а второй набор правил рядом с ensureDevice —
+        // ровно то, от чего здесь уже отказались.
+        onOversize: ({ peer, head, limit }) => {
+          const ip = normalizeIp(peer);
+          let sampleId = '';
+          try { sampleId = parseMessage(head).sampleId || ''; } catch { /* начало не разобралось — без номера */ }
+          const size = limit >= 1024 * 1024 ? (limit / (1024 * 1024)) + ' МБ' : Math.round(limit / 1024) + ' КБ';
+          recordMessage(db, { deviceId: null, peer: ip, raw: head, sampleId, status: 'rejected',
+            detail: 'сообщение больше ' + size + ' — не принято; в лотке только его начало' });
         },
       });
       running.push(srv);

@@ -14,8 +14,22 @@ export const VT = 0x0b;
 export const FS = 0x1c;
 export const CR = 0x0d;
 
-const DEFAULT_MAX_BYTES = 256 * 1024;
+// LIS_MINDRAY_CODES_V1 (ревью 2026-09-28) — потолок 4 МБ, а не 256 КБ.
+// Настоящий Mindray кладёт в пробу картинки: гистограммы и скаттерграммы BMP в
+// base64 (строки ED). Такое сообщение легко больше 256 КБ, и тогда результаты
+// не приходили вовсе — соединение рвалось молча. 4 МБ — с запасом на тяжёлые
+// пробы и всё ещё предел для того, кто не представился.
+export const DEFAULT_MAX_BYTES = 4 * 1024 * 1024;
 const IDLE_MS = 5 * 60 * 1000;
+// Сколько начала переросшего сообщения отдать вызывающему (в лоток): MSH, PID,
+// OBR и числа идут первыми, картинки — в конце. 64 КБ хватает, чтобы узнать
+// пробу, и не превращают лоток в склад картинок.
+const HEAD_BYTES = 64 * 1024;
+// После отказа прибору дают дочитать ответ, прежде чем оборвать соединение:
+// тот, кто продолжает слать, не держит его дольше этого.
+const OVERSIZE_GRACE_MS = 2000;
+
+const frameOf = (text) => Buffer.concat([Buffer.from([VT]), Buffer.from(text, 'utf8'), Buffer.from([FS, CR])]);
 
 /**
  * Достаёт номер сообщения (MSH-10) из сырого текста, не разбирая его целиком:
@@ -34,11 +48,14 @@ function controlIdOf(text) {
  * @param {object} o
  * @param {number} o.port          0 — занять свободный (тесты)
  * @param {(text:string, peer:string)=>Promise<'AA'|'AE'>} o.onMessage
- * @param {number} [o.maxBytes]
+ * @param {number} [o.maxBytes]    потолок одного сообщения (DEFAULT_MAX_BYTES)
+ * @param {(o:{peer:string, bytes:number, head:string, limit:number})=>void} [o.onOversize]
+ *        сообщение больше потолка: прибору уже ушёл AE, здесь — сколько пришло
+ *        к моменту отказа, первые 64 КБ текста и сам потолок (запись в лоток)
  * @param {(msg:string)=>void} [o.log]
  * @returns {Promise<{port:number, close:()=>Promise<void>}>}
  */
-export function startMllpServer({ port, onMessage, maxBytes = DEFAULT_MAX_BYTES, log = () => {} }) {
+export function startMllpServer({ port, onMessage, onOversize = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {} }) {
   return new Promise((resolve, reject) => {
     const server = net.createServer((sock) => {
       const peer = sock.remoteAddress || '';
@@ -51,24 +68,46 @@ export function startMllpServer({ port, onMessage, maxBytes = DEFAULT_MAX_BYTES,
 
       sock.setTimeout(IDLE_MS, () => sock.destroy());
 
+      // LIS_MINDRAY_CODES_V1 (ревью 2026-09-28) — сообщение больше потолка.
+      // Раньше соединение рвалось молча: ни NAK, ни записи, и проба с
+      // картинками пропадала бесследно. Теперь, как обещала спецификация
+      // («Ошибки»): прибору AE с номером сообщения (если начало разбирается),
+      // вызывающему — начало текста для лотка, потом соединение закрыто.
+      // Не копим по-прежнему: тот, кто не представился, не должен уметь съесть
+      // память, поэтому всё, что придёт после отказа, выбрасывается.
+      function refuse(body) {
+        overflow = true;
+        buf = Buffer.alloc(0);
+        const bytes = body.length;
+        const head = body.subarray(0, HEAD_BYTES).toString('utf8');
+        log(`LIS: сообщение больше ${maxBytes} байт от ${peer} — отказ (AE), соединение закрыто`);
+        // В ту же цепочку: ответы на кадры, пришедшие раньше, уходят первыми.
+        chain = chain.then(async () => {
+          if (!sock.destroyed) sock.write(frameOf(buildAck(controlIdOf(head), 'AE')));
+          try {
+            if (onOversize) await onOversize({ peer, bytes, head, limit: maxBytes });
+          } catch (e) {
+            log('LIS: переросшее сообщение не записано — ' + (e && e.message ? e.message : e));
+          }
+          if (sock.destroyed) return;
+          sock.end();
+          const t = setTimeout(() => sock.destroy(), OVERSIZE_GRACE_MS);
+          if (t.unref) t.unref();
+        });
+      }
+
       sock.on('data', (chunk) => {
         if (overflow) return;
         buf = Buffer.concat([buf, chunk]);
-
-        if (buf.length > maxBytes) {
-          // Не копим: тот, кто не представился, не должен уметь съесть память.
-          overflow = true;
-          log(`LIS: сообщение больше ${maxBytes} байт от ${peer} — соединение закрыто`);
-          buf = Buffer.alloc(0);
-          sock.destroy();
-          return;
-        }
 
         for (;;) {
           const start = buf.indexOf(VT);
           if (start === -1) break;
           const end = buf.indexOf(FS, start + 1);
           if (end === -1) break;   // кадр ещё не пришёл целиком
+          // Потолок — на одно сообщение, а не на то, что пришло одной записью:
+          // целый кадр больше потолка отвергается так же, как недошедший.
+          if (end - start - 1 > maxBytes) { refuse(buf.subarray(start + 1, end)); return; }
 
           const text = buf.slice(start + 1, end).toString('utf8');
           // За FS обычно идёт CR — съедаем и его, если он там.
@@ -83,9 +122,14 @@ export function startMllpServer({ port, onMessage, maxBytes = DEFAULT_MAX_BYTES,
               log('LIS: приём отказал — ' + (e && e.message ? e.message : e));
             }
             if (sock.destroyed) return;
-            const ack = buildAck(controlIdOf(text), code);
-            sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from(ack, 'utf8'), Buffer.from([FS, CR])]));
+            sock.write(frameOf(buildAck(controlIdOf(text), code)));
           });
+        }
+
+        // Начатый кадр перерос потолок, а конца всё нет.
+        if (buf.length > maxBytes) {
+          const start = buf.indexOf(VT);
+          refuse(buf.subarray(start === -1 ? 0 : start + 1));
         }
       });
 
