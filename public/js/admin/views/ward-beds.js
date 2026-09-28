@@ -63,7 +63,8 @@ import { searchableSelect } from './searchable-select.js?v=ss2';   // SEARCHABLE
 import { toastStockWarnings } from './stock-warnings.js';
 // V3120_FIX — «Товары для пациента»: рядом со складом виден остаток СВОИХ полок
 // (то, что сервер спишет первым: подотчёт → кабинет → отдел палаты → свой отдел).
-import { loadOwnShelves } from './item-picker-modal.js';
+// OWN_SHELF_ONLY_V1 — врачу и медсестре только свои полки: склад им не источник.
+import { loadShelves, shelfItems, fmtShelfQty, emptyShelvesNotice } from './own-shelf.js';
 import { canAddAdmissionService, isRouteAllowed } from '../permissions.js';   // FINAL_ROLES_SYNC_FIX_V1 (I2) — кнопка «Добавить услугу» только тому, кому сервер строку заведёт
 
 const STATUS = {
@@ -899,6 +900,10 @@ function bedDetailModal(bed, ward, adm, root) {
         const picked = [];   // [{ p, qty }]
         let productsAll = [];
         let ownShelves = new Map();   // V3120_FIX — product_id → базовых единиц на своих полках
+        // OWN_SHELF_ONLY_V1 — врач, медсестра: в поиске только товары своих полок
+        // («своё N»), склада нет; пустые полки — слова и заявка на склад.
+        let shelfOnly = false;
+        const shelfNoticeEl = h('div');
         const listEl = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
         const totalEl = h('span', { style: { fontWeight: 800 } }, '0');
         const refreshTotal = () => {
@@ -920,7 +925,9 @@ function bedDetailModal(bed, ward, adm, root) {
                         x.p.name, h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '12.5px' } }, ' ' + (x.p.base_unit || '') + ' · ' + fmtPrice(x.p.sale_price), ' сум')),
                     qtyInp,
                     h('button', { type: 'button', title: 'Убрать', style: { width: '28px', height: '28px', borderRadius: '999px', border: '1px solid var(--ink-150, var(--ink-200))', background: 'var(--white, #fff)', cursor: 'pointer', color: 'var(--ink-500)', fontWeight: 700, lineHeight: 1, flex: '0 0 auto' }, onmouseenter: (e) => { e.currentTarget.style.background = 'var(--crit-50, #fdecec)'; e.currentTarget.style.color = 'var(--crit-600, #dc2626)'; e.currentTarget.style.borderColor = 'var(--crit-200, #f5c2c2)'; }, onmouseleave: (e) => { e.currentTarget.style.background = 'var(--white, #fff)'; e.currentTarget.style.color = 'var(--ink-500)'; e.currentTarget.style.borderColor = 'var(--ink-150, var(--ink-200))'; },
-                        onclick: () => { picked.splice(picked.indexOf(x), 1); paintPicked(); paintCatalog(); } }, '×')));
+                        // OWN_SHELF_ONLY_V1 — здесь стоял вызов paintCatalog(): она живёт в
+                        // окне услуг выше, в этом окне её нет, и «×» падал ReferenceError.
+                        onclick: () => { picked.splice(picked.indexOf(x), 1); paintPicked(); } }, '×')));
             }
             refreshTotal();
         }
@@ -948,17 +955,34 @@ function bedDetailModal(bed, ward, adm, root) {
                 },
                     h('span', { style: { flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere' } }, p2.name),
                     h('span', { class: 'muted', style: { flex: '0 0 auto', fontSize: '12.5px', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } },
-                        (ownShelves.get(Number(p2.id)) || 0) > 0
-                            ? trf('своё {own} · склад {n} {unit}', { own: Number(ownShelves.get(Number(p2.id))).toLocaleString('ru-RU', { maximumFractionDigits: 3 }), n: p2.on_hand || 0, unit: p2.base_unit || '' })
-                            : trf('остаток {n} {unit}', { n: p2.on_hand || 0, unit: p2.base_unit || '' }))));
+                        shelfOnly
+                            ? trf('своё {own} {unit}', { own: fmtShelfQty(ownShelves.get(Number(p2.id)) || 0), unit: p2.base_unit || '' })
+                            : (ownShelves.get(Number(p2.id)) || 0) > 0
+                                ? trf('своё {own} · склад {n} {unit}', { own: fmtShelfQty(ownShelves.get(Number(p2.id))), n: p2.on_hand || 0, unit: p2.base_unit || '' })
+                                : trf('остаток {n} {unit}', { n: p2.on_hand || 0, unit: p2.base_unit || '' }))));
             }
         }
         prodSearch.addEventListener('input', paintProdResults);
         prodSearch.addEventListener('focus', paintProdResults);
         prodSearch.addEventListener('blur', () => setTimeout(() => { prodResults.style.display = 'none'; }, 150));
-        supabase.from('products').select('id, name, base_unit, on_hand, sale_price').eq('active', 1).order('name').limit(1000)
-            .then(({ data }) => { productsAll = data || []; });
-        loadOwnShelves({ admission_id: adm.id }).then((m) => { ownShelves = m; });
+        // OWN_SHELF_ONLY_V1 — сначала свои полки: сервер говорит, берёт ли этот
+        // человек со склада. Нет — каталог склада не спрашивается вовсе, в поиске
+        // только товары его полок.
+        loadShelves({ admission_id: adm.id }).then((sh) => {
+            ownShelves = sh.own;
+            if (!sh.warehouse) {
+                shelfOnly = true;
+                productsAll = shelfItems(sh).map((it) => ({ id: it.id, name: it.name, base_unit: it.unit, sale_price: it.sale_price, on_hand: null }));
+                if (!productsAll.length) {
+                    clear(shelfNoticeEl);
+                    shelfNoticeEl.appendChild(emptyShelvesNotice());
+                    prodSearch.disabled = true;
+                }
+                return null;
+            }
+            return supabase.from('products').select('id, name, base_unit, on_hand, sale_price').eq('active', 1).order('name').limit(1000)
+                .then(({ data }) => { productsAll = data || []; });
+        });
 
         const noteInp = h('input', { type: 'text', placeholder: 'Необязательно' });
         const billChk = h('input', { type: 'checkbox', checked: true, style: { width: '17px', height: '17px', accentColor: 'var(--primary-600)' } });
@@ -966,6 +990,7 @@ function bedDetailModal(bed, ward, adm, root) {
         modalWide('Товары для пациента', 'Pill',
             [
                 h('div', { style: { position: 'relative' } }, prodSearch, prodResults),
+                shelfNoticeEl,
                 listEl,
                 h('div', { class: 'row', style: { justifyContent: 'flex-end', alignItems: 'baseline', gap: '7px', padding: '10px 14px', background: 'var(--primary-25, #f2faf8)', border: '1px solid var(--primary-100, #d7efe9)', borderRadius: '10px' } }, h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'Итого:'), h('span', { style: { fontSize: '17px', fontWeight: 800, color: 'var(--primary-700)' } }, totalEl), h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'UZS')),
                 field('Примечание', noteInp),

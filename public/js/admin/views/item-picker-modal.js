@@ -26,6 +26,9 @@ import { h, Icon, clear, toast } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { currentClinicId } from '../tenant-tables.js';
 import { hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1
+// OWN_SHELF_ONLY_V1 — свои полки и «можно ли со склада» считает сервер; окно
+// у врача и медсестры показывает только своё (см. own-shelf.js).
+import { loadShelves, shelfItems, fmtShelfQty, emptyShelvesNotice } from './own-shelf.js';
 
 // LIVE_AUDIT_FIX_V1 — ЕДИНИЦА ТОВАРА — СВОЙСТВО КАТАЛОГА, А НЕ СТРОКИ ВЫДАЧИ.
 // Выпадающий список у строки молча переписывал products.unit для всего
@@ -48,22 +51,14 @@ function unitOptions(current) {
 
 /**
  * V3120_FIX — свои полки для этой выдачи: сервер отдаёт только то, что он же
- * и спишет первым (holdings_list reachable). Не прочиталось — просто склад.
+ * и спишет первым (holdings_list reachable). Не прочиталось — пусто.
+ * OWN_SHELF_ONLY_V1 — тот же запрос живёт в own-shelf.js (loadShelves: ещё и
+ * товары полок и warehouse_allowed); здесь — прежняя форма «товар → количество».
  */
 export async function loadOwnShelves(place) {
-    const own = new Map();
-    try {
-        const args = place.visit_id ? { reachable: true, visit_id: place.visit_id } : { reachable: true, admission_id: place.admission_id };
-        const { data, error } = await supabase.rpc('holdings_list', args);
-        if (error || !data || !Array.isArray(data.holdings)) return own;
-        for (const hd of data.holdings) {
-            const id = Number(hd.product_id);
-            own.set(id, Math.round(((own.get(id) || 0) + (Number(hd.qty_base) || 0)) * 1e6) / 1e6);
-        }
-    } catch { /* нет ответа — экран показывает склад, как прежде */ }
-    return own;
+    return (await loadShelves(place)).own;
 }
-const fmtOwn = (n) => Number(n).toLocaleString('ru-RU', { maximumFractionDigits: 3 });
+const fmtOwn = fmtShelfQty;
 
 export function openItemPickerModal({
     onConfirm,                       // async (lines) => void ; lines = [{item, qty, unit}] (throws → toast, dialog stays open)
@@ -76,6 +71,9 @@ export function openItemPickerModal({
     // складом виден и остаток СВОИХ полок (подотчёт, кабинет, отдел — то, что
     // сервер спишет первым), а «0 на складе» не красится тревогой, когда
     // товар лежит у человека на руках. Без place — как прежде, склад.
+    // OWN_SHELF_ONLY_V1 — врачу и медсестре (сервер: warehouse_allowed = false)
+    // окно показывает ТОЛЬКО товары их полок и «Своё: N»; склад — только
+    // администратору и складу («Своё: N · склад: M», как прежде).
     place        = null,
 } = {}) {
     const overlay = h('div', { class: 'modal', style: { zIndex: '135' } });
@@ -88,6 +86,9 @@ export function openItemPickerModal({
         loading:  true,
         branchId: branchId || null,
         own:      null,   // V3120_FIX — Map product_id → базовых единиц на своих полках (при place)
+        // OWN_SHELF_ONLY_V1 — true: врач, медсестра — окно показывает ТОЛЬКО свои
+        // полки («Своё: N»), складской остаток им не нужен и не приходит.
+        shelfOnly: false,
     };
 
     const card = h('div', { class: 'modal-card modal-compact', style: {   // PROD_BILL_OPTIN_V1 — not fullscreen
@@ -145,6 +146,18 @@ export function openItemPickerModal({
             return;
         }
         try {
+            // OWN_SHELF_ONLY_V1 — сначала свои полки: сервер говорит, берёт ли
+            // этот человек со склада. Врач и медсестра — нет (владелец 28.09):
+            // окно показывает только товары их полок, каталог склада не нужен.
+            if (place && (place.visit_id || place.admission_id)) {
+                const shelves = await loadShelves(place);
+                state.own = shelves.own;
+                if (!shelves.warehouse) {
+                    state.shelfOnly = true;
+                    state.items = shelfItems(shelves).map((it) => ({ ...it, _onHand: null }));
+                    return;
+                }
+            }
             // WAREHOUSE_NAMES_V1 — таблица товаров офлайн называется `products`,
             // цена лежит в `sale_price`, а остаток — прямо в строке товара
             // (`on_hand`): склад тут ОДИН на клинику, отдельной таблицы остатков
@@ -162,7 +175,6 @@ export function openItemPickerModal({
                 price:   it.sale_price,
                 _onHand: (it.on_hand == null ? null : Number(it.on_hand)),
             }));
-            if (place && (place.visit_id || place.admission_id)) state.own = await loadOwnShelves(place);
         } catch (err) {
             toast(err?.message || String(err), 'fail');
             state.items = [];
@@ -206,6 +218,12 @@ export function openItemPickerModal({
             listEl.appendChild(h('div', { style: { padding: '28px', textAlign: 'center', color: 'var(--ink-500)', fontSize: '13.5px' } }, 'Загрузка…'));
             return;
         }
+        // OWN_SHELF_ONLY_V1 — на своих полках пусто: не «каталог пуст», а куда
+        // идти. Окно выдачи стоит выше диалога заявки, поэтому сначала закрывается.
+        if (state.shelfOnly && !state.items.length) {
+            listEl.appendChild(emptyShelvesNotice({ before: () => close() }));
+            return;
+        }
         const rows = filtered();
         if (!rows.length) {
             listEl.appendChild(h('div', { style: { padding: '28px', textAlign: 'center', color: 'var(--ink-500)', fontSize: '13.5px' } },
@@ -218,9 +236,13 @@ export function openItemPickerModal({
             const onLabel = on == null ? '—' : Number(on).toLocaleString('ru-RU');
             const own = state.own ? (state.own.get(Number(it.id)) || 0) : 0;
             const lowStock = on != null && Number(on) + own <= 0;
-            const stockLabel = own > 0
-                ? trf('Своё: {own} · склад: {n}', { own: fmtOwn(own), n: onLabel })
-                : trf('Остаток: {n}', { n: onLabel });
+            // OWN_SHELF_ONLY_V1 — у врача и медсестры только «Своё: N»: склада
+            // для них нет (и остаток его сервер им не присылает — on_hand пуст).
+            const stockLabel = (state.shelfOnly || on == null)
+                ? (own > 0 ? trf('Своё: {own}', { own: fmtOwn(own) }) : '')
+                : own > 0
+                    ? trf('Своё: {own} · склад: {n}', { own: fmtOwn(own), n: onLabel })
+                    : trf('Остаток: {n}', { n: onLabel });
             const inCart = lineFor(it.id);
             listEl.appendChild(h('button', {
                 type: 'button',

@@ -252,6 +252,9 @@ let HOLDINGS = { holdings: [
     { holder_type: 'staff', holder_id: 6, holder_name: 'Другая медсестра', product_id: 40, product_name: 'Парацетамол', base_unit: 'уп', consumption_unit: 'таб', consumption_factor: 10, sale_price: 5000, is_drug: true, active: true, qty_base: 1, qty_units: 10 },
     { holder_type: 'room', holder_id: 7, holder_name: 'Процедурный', product_id: 41, product_name: 'Шприц 5 мл', base_unit: 'шт', consumption_unit: '', consumption_factor: 1, sale_price: 1500, is_drug: false, active: true, qty_base: 50, qty_units: 50 },
 ] };
+// OWN_SHELF_ONLY_V1 — ответ сервера «берёт ли вошедший со склада» (holdings_list
+// reachable → warehouse_allowed). Медсестра — нет; администратор и склад — да.
+let WAREHOUSE_OK = false;
 const PRODUCTS = [
     { id: 40, name: 'Парацетамол', unit: 'уп', base_unit: 'уп', consumption_unit: 'таб', consumption_factor: 10, on_hand: 12, sale_price: 5000, active: 1 },
     { id: 42, name: 'Бинт', unit: 'шт', base_unit: 'шт', consumption_unit: '', consumption_factor: 1, on_hand: 0, sale_price: 2000, active: 1 },
@@ -295,7 +298,7 @@ globalThis.fetch = async (url, opts = {}) => {
             return a.ok ? ok(a.data) : fail(a.message);
         }
         if (name === 'outpatients_today') return ok(OUTPATIENTS);
-        if (name === 'holdings_list') return ok(HOLDINGS);
+        if (name === 'holdings_list') return ok({ ...HOLDINGS, warehouse_allowed: WAREHOUSE_OK });
         if (name === 'visit_items') return ok({ items: VISIT_ITEMS[body.visit_id] || [] });
         if (name === 'dispense_from_holding') {
             if (body.quantity > 20) return fail('Недостаточно на руках: Парацетамол — есть 20 таб');
@@ -978,8 +981,12 @@ test('источники: свои запасы и кабинет — да, чу
     assert.ok(give, 'карточки «Выдать пациенту» нет');
     const src = walk(give).find((e) => e.tagName === 'SELECT');
     const opts = src.children.map((o) => textOf(o).trim());
-    assert.deepEqual(opts, ['Мои запасы', 'Кабинет: Процедурный', 'Склад (общий остаток)'], 'источники: свои, кабинет, склад последним; чужая медсестра — нет: ' + opts.join(' | '));
+    // OWN_SHELF_ONLY_V1 — медсестре склад не источник: «Склад (общий остаток)» в «Откуда» нет.
+    assert.deepEqual(opts, ['Мои запасы', 'Кабинет: Процедурный'], 'источники: свои и кабинет; ни чужой медсестры, ни склада: ' + opts.join(' | '));
     assert.ok(textOf(give).includes('Есть 20 таб'), 'остаток и цена за единицу видны: ' + textOf(give));
+    assert.ok(!textOf(give).includes('Пока только общий склад'), 'старой подсказки о складе нет');
+    assert.equal(dbCalls.filter((c) => c.table === 'products').length, 0, 'каталог склада с остатками медсестре не запрашивается');
+    assert.ok(findBtn(give, 'Запросить у склада'), 'заявка на склад — рядом с «Выдать»');
 
     const qty = walk(give).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'number');
     qty.value = '3';
@@ -995,13 +1002,13 @@ test('отказ сервера («недостаточно») доходит с
     const root = await renderOutpatients();
     const give = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Выдать пациенту'));
     const qty = walk(give).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'number');
-    // V3120_FIX — 20 таб на руках + 12 уп × 10 на складе = 140: выбранная полка
-    // может не покрыть всё (сервер доберёт со своих и склада), экран не
-    // отправляет только то, чего нет НИГДЕ.
-    qty.value = '141';
+    // OWN_SHELF_ONLY_V1 — у медсестры 20 таб на её полках, склада в сумме нет:
+    // больше, чем на своих полках, экран не отправляет и зовёт к складу.
+    qty.value = '21';
     findBtn(give, 'Выдать').click();
     await settle();
-    assert.equal(rpcCalls.filter((c) => c.name === 'dispense_from_holding').length, 0, 'больше, чем есть везде, экран не отправляет');
+    assert.equal(rpcCalls.filter((c) => c.name === 'dispense_from_holding').length, 0, 'больше, чем на своих полках, экран не отправляет');
+    assert.ok(lastToast().includes('На ваших полках всего 20 таб — остальное запросите у склада.'), lastToast());
 
     // Второй пациент: две строки — одна с рук (можно отменить), одна со склада в счёте (нельзя).
     const list = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Сегодня в клинике'));
@@ -1041,22 +1048,54 @@ test('V3120_FIX: «взято: …» — слова источников из о
     assert.equal(sourcesWords(undefined, 5), '');
 });
 
-test('ничего не выдано медсестре — выдаёт со склада напрямую, склад в списке источников единственный', async () => {
+// OWN_SHELF_ONLY_V1 (владелец 28.09) — «Склад (общий остаток)» и подсказка
+// «Пока только общий склад…» ушли у медсестры: со склада выдают администратор и
+// склад. Пустые полки медсестры — слова и заявка на склад.
+test('OWN_SHELF_ONLY_V1: ничего не выдано медсестре — «На ваших полках ничего нет — запросите у склада» и кнопка заявки; склада нет', async () => {
     const saved = HOLDINGS;
+    HOLDINGS = { holdings: [] };
+    try {
+        const root = await renderOutpatients();
+        const give = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Выдать пациенту'));
+        assert.equal(walk(give).filter((e) => e.tagName === 'SELECT').length, 0, 'выбирать нечего — «Откуда» не рисуется');
+        assert.ok(textOf(give).includes('На ваших полках ничего нет — запросите у склада'), textOf(give));
+        assert.ok(!textOf(give).includes('Склад (общий остаток)'));
+        assert.ok(!textOf(give).includes('Пока только общий склад'));
+        assert.ok(!textOf(give).includes('Парацетамол'), 'товар со склада медсестре не предлагается');
+        assert.ok(findBtn(give, 'Запросить у склада'), 'кнопка заявки на склад');
+        assert.equal(dbCalls.filter((c) => c.table === 'products').length, 0, 'каталог склада не запрашивается');
+        assert.equal(rpcCalls.filter((c) => c.name === 'dispense_from_holding').length, 0);
+    } finally { HOLDINGS = saved; }
+});
+
+test('OWN_SHELF_ONLY_V1: администратор (сервер: warehouse_allowed) — склад последним источником, можно выбрать явно', async () => {
+    const saved = HOLDINGS;
+    WAREHOUSE_OK = true;
     HOLDINGS = { holdings: [] };
     try {
         const root = await renderOutpatients();
         const give = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Выдать пациенту'));
         const src = walk(give).find((e) => e.tagName === 'SELECT');
         assert.deepEqual(src.children.map((o) => textOf(o).trim()), ['Склад (общий остаток)']);
-        assert.ok(textOf(give).includes('Пока только общий склад'), 'подсказка, откуда возьмутся свои запасы');
+        assert.ok(!textOf(give).includes('Пока только общий склад'), 'старая подсказка убрана и у администратора');
         assert.ok(textOf(give).includes('Парацетамол'), 'товар со склада в списке');
         assert.ok(!textOf(give).includes('Бинт'), 'товар с нулевым остатком не предлагается');
+        assert.ok(!findBtn(give, 'Запросить у склада'), 'администратору заявка на склад здесь не нужна');
         const qty = walk(give).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'number');
         qty.value = '2';
         findBtn(give, 'Выдать').click();
         await settle();
         const call = rpcCalls.find((c) => c.name === 'dispense_from_holding');
         assert.deepEqual(call.args, { holder: { type: 'warehouse' }, product_id: 40, quantity: 2, visit_id: 301, billable: true });
-    } finally { HOLDINGS = saved; }
+    } finally { HOLDINGS = saved; WAREHOUSE_OK = false; }
+});
+
+test('OWN_SHELF_ONLY_V1: у администратора свои полки первыми, склад последним', async () => {
+    WAREHOUSE_OK = true;
+    try {
+        const root = await renderOutpatients();
+        const give = walk(root).find((e) => e.className === 'card' && textOf(e).includes('Выдать пациенту'));
+        const src = walk(give).find((e) => e.tagName === 'SELECT');
+        assert.deepEqual(src.children.map((o) => textOf(o).trim()), ['Мои запасы', 'Кабинет: Процедурный', 'Склад (общий остаток)']);
+    } finally { WAREHOUSE_OK = false; }
 });

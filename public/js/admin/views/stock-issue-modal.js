@@ -43,6 +43,8 @@ export const inpStyle = { width: '100%', height: '34px', padding: '0 10px', bord
 /**
  * Поиск товара: поле + выпадающий список по названию или коду, с остатком в
  * единицах выдачи. Общий для выдачи и заявки: один поиск, одни слова.
+ * OWN_SHELF_ONLY_V1 — остаток склада показывается только тому, кому сервер его
+ * отдаёт (products.on_hand не пуст); врачу и медсестре — название и единица.
  * @returns {{ el: HTMLElement, drop: HTMLElement, clear: Function }}
  */
 export function productSearch({ products, excludeIds = () => new Set(), onChoose, placeholder = 'Название или код товара…' }) {
@@ -63,7 +65,12 @@ export function productSearch({ products, excludeIds = () => new Set(), onChoose
             const iu = issueUnitOf(p);
             drop.appendChild(h('button', { type: 'button', class: 'sim-drop-item', onclick: () => { chosen = p; search.value = p.name; drop.hidden = true; onChoose(p); } },
                 h('span', { class: 'sim-drop-name' }, p.name, p.code ? h('span', { class: 'muted' }, ' · ' + p.code) : null),
-                h('span', { class: 'sim-drop-avail muted' }, trf('Доступно: {qty} {unit}', { qty: fmtQty(availableOf(p)), unit: iu.unit || '' }).trim())));
+                // OWN_SHELF_ONLY_V1 — остаток склада пуст (null), когда сервер
+                // его этому человеку не отдаёт (врач, медсестра в заявке на
+                // склад): тогда только единица, без «Доступно: 0».
+                h('span', { class: 'sim-drop-avail muted' }, p.on_hand == null
+                    ? (iu.unit || '')
+                    : trf('Доступно: {qty} {unit}', { qty: fmtQty(availableOf(p)), unit: iu.unit || '' }).trim())));
         }
         drop.hidden = false;
     }

@@ -23,6 +23,8 @@ import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1
 // BRANCH_BILL_GUARD_V1 — тот же предикат, на котором стоят рабочие списки
 // (visits.js:91, procedures.js:50 — там он же, но в SQL: .is('sync_origin', null)).
 import { isOwnBuilding, originTag } from '../record-origin.js';
+// OWN_SHELF_ONLY_V1 — «Выдать» у врача и медсестры: только товары своих полок.
+import { loadShelves, shelfItems, fmtShelfQty } from './own-shelf.js';
 
 function currentUserId() {
     try { return (window.easymed && window.easymed.state && window.easymed.state.user && window.easymed.state.user.id) || null; }
@@ -258,6 +260,21 @@ export function openVisitBillModal(visit, onChanged) {
 
     async function loadProductOptions() {
         try {
+            // OWN_SHELF_ONLY_V1 — врач и медсестра выдают только со своих полок
+            // (сервер: warehouse_allowed); склада и его остатка им не показываем.
+            const shelves = await loadShelves({ visit_id: visit.id });
+            if (!shelves.warehouse) {
+                const mine = shelfItems(shelves);
+                if (!mine.length) {
+                    dispenseSelect.appendChild(h('option', { value: '', disabled: true },
+                        tr('На ваших полках ничего нет — запросите у склада')));
+                }
+                for (const p of mine) {
+                    dispenseSelect.appendChild(h('option', { value: p.id },
+                        trf('{name} (своё: {n})', { name: p.name, n: fmtShelfQty(shelves.own.get(Number(p.id)) || 0) })));
+                }
+                return;
+            }
             const { data, error } = await supabase.from('products')
                 .select('id,name,unit,on_hand,sale_price').eq('active', 1).order('name');
             if (error) throw error;

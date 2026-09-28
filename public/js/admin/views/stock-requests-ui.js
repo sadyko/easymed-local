@@ -32,7 +32,13 @@ async function rpc(name, args) {
     return data;
 }
 
-/** Активные товары для поиска — тот же запрос, что у выдачи и заявки отдела. */
+/**
+ * Активные товары для поиска — тот же запрос, что у выдачи и заявки отдела.
+ * OWN_SHELF_ONLY_V1 — on_hand (остаток склада) врачу и медсестре сервер отдаёт
+ * пустым (реестр: products.read.restricted, правило warehouse_stock), и поиск
+ * (stock-issue-modal.js productSearch) показывает им только название и единицу;
+ * администратор и склад видят «Доступно: N», как прежде.
+ */
 export async function loadRequestProducts() {
     const { data, error } = await supabase.from('products').select('id,name,code,base_unit,consumption_unit,consumption_factor,on_hand').eq('active', 1).order('name', { ascending: true });
     if (error) throw error;

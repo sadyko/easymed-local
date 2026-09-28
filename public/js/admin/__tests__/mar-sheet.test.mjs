@@ -833,3 +833,38 @@ test('ORDER_FROM_STOCK_V1: имя, поправленное руками, отв
     assert.equal(call.args.stock_item_id, undefined, 'списали бы не то, что написано в назначении');
     assert.equal(call.args.name, 'Paracetamol детский');
 });
+
+// OWN_SHELF_ONLY_V1 (владелец 28.09) — врачу остаток СКЛАДА сервер не отдаёт
+// (products.on_hand пустой: выдают со своих полок, склад — по заявке). Форма
+// назначения по-прежнему находит позицию склада, но не говорит «остаток 0 · на
+// складе пусто», которого врач и не должен видеть.
+test('OWN_SHELF_ONLY_V1: остаток склада скрыт сервером — позиция находится и уходит, но без числа и без «на складе пусто»', async () => {
+    const keep = PRODUCTS;
+    PRODUCTS = keep.map((p) => ({ ...p, on_hand: null }));
+    try {
+        const root = await renderScreen();
+        findBtn(root, 'Назначение').click();
+        await settle();
+        const overlay = BODY.children[BODY.children.length - 1];
+        const nameInp = walk(overlay).filter((e) => e.tagName === 'INPUT' && e.attrs.type === 'text')[0];
+        walk(overlay).filter((e) => e.tagName === 'SELECT').forEach((sel) => {
+            if (textOf(sel).includes('Препарат клиники')) sel.value = 'clinic';
+        });
+        nameInp.value = 'par';
+        nameInp.dispatchEvent({ type: 'input', target: nameInp });
+        await settle();
+        const row = walk(overlay).find((e) => e.tagName === 'BUTTON' && textOf(e).includes('Paracetamol'));
+        assert.ok(row, 'позиция склада не подсказана');
+        assert.equal(/\d/.test(textOf(row)), false, 'в подсказке число, которого врач не должен видеть: ' + textOf(row));
+        row.dispatchEvent({ type: 'mousedown', target: row });
+        await settle();
+        const txt = textOf(overlay);
+        assert.ok(txt.includes('Позиция склада (шт.): при отметке «введено» доза спишется с полок медсестры и отделения.'), txt.slice(0, 400));
+        assert.equal(txt.includes('на складе пусто'), false);
+        assert.equal(txt.includes('остаток 0'), false);
+        rpcCalls = [];
+        findBtn(overlay, 'Назначить').click();
+        await settle();
+        assert.equal(rpcCalls.find((c) => c.name === 'treatment_order_create').args.stock_item_id, 7, 'позиция склада уходит, как прежде');
+    } finally { PRODUCTS = keep; }
+});

@@ -611,7 +611,11 @@ export function openOrderForm({ admissionId, patientName = '', patientSub = '', 
     // V3120_FIX — остаток склада хранится в УПАКОВКАХ (on_hand), а подпись —
     // единица расхода: 10 коробок по 10 ампул показывались «10 амп». Теперь
     // число переводится в ту же единицу, что и подпись (как «Выдать со склада»).
+    // OWN_SHELF_ONLY_V1 — врачу остаток СКЛАДА сервер не присылает (on_hand
+    // пустой: выдают со своих полок, склад — по заявке). Тогда позиция
+    // называется без числа, а не «остаток 0 · на складе пусто».
     const stockLeft = (r) => {
+        if (r.on_hand == null) return null;
         const cf = r.consumption_unit && Number(r.consumption_factor) > 0 ? Number(r.consumption_factor) : 1;
         return Math.round((Number(r.on_hand) || 0) * cf * 100) / 100;
     };
@@ -627,6 +631,11 @@ export function openOrderForm({ admissionId, patientName = '', patientSub = '', 
             return;
         }
         const left = stockLeft(r);
+        if (left == null) {
+            stockNote.appendChild(h('span', null,
+                trf('Позиция склада ({unit}): при отметке «введено» доза спишется с полок медсестры и отделения.', { unit: stockUnit(r) })));
+            return;
+        }
         stockNote.appendChild(h('span', null,
             trf('Со склада: остаток {n} {unit}', { n: left, unit: stockUnit(r) })));
         if (left <= 0) {
@@ -649,7 +658,7 @@ export function openOrderForm({ admissionId, patientName = '', patientSub = '', 
         for (const r of rows) {
             const btn = h('button', { class: 'cd-icd-row', type: 'button', role: 'option' },
                 h('span', { class: 'cd-icd-name' }, r.name || ''),
-                h('span', { class: 'cd-icd-code' }, String(stockLeft(r)) + ' ' + stockUnit(r)));
+                h('span', { class: 'cd-icd-code' }, stockLeft(r) == null ? stockUnit(r) : String(stockLeft(r)) + ' ' + stockUnit(r)));
             // mousedown, а не click: click приходит ПОСЛЕ blur, к этому времени
             // список уже скрыт — тот же приём, что у подсказок МКБ-10.
             btn.addEventListener('mousedown', (e) => {

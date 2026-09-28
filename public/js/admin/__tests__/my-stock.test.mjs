@@ -521,3 +521,27 @@ test('отступы: тело каждого окна — в .card-pad-sm, ша
     assert.equal(box.style.flexDirection, 'column');
     assert.equal(box.style.gap, '14px');
 });
+
+// OWN_SHELF_ONLY_V1 (владелец 28.09) — «when requesting procurement in the
+// cabinet of the doctor or nurse … we don't need to see the items that we have
+// in the procurement overall». Остаток склада врачу и медсестре сервер отдаёт
+// пустым (products.on_hand — read.restricted), и поиск заявки показывает только
+// название и единицу; у того, кто склад видит, — «Доступно: N», как прежде.
+test('OWN_SHELF_ONLY_V1: «Запросить» — без остатка склада (сервер отдал пустым) только название и единица; со складом — «Доступно»', async () => {
+    const dropFor = async (products, q, name) => {
+        PRODUCTS = products;
+        const root = await open({ held: [HOLDING] });
+        findBtn(root, 'Запросить').click();
+        await settle();
+        const modal = lastModal();
+        const search = walk(modal).find((e) => e.tagName === 'INPUT' && e.attrs.type === 'text' && e.attrs.placeholder && /товар/i.test(e.attrs.placeholder));
+        type(search, q);
+        return walk(modal).find((e) => e.tagName === 'BUTTON' && String(e.className).includes('sim-drop-item') && textOf(e).includes(name));
+    };
+    const hidden = await dropFor(PRODUCT_LIST.map((p) => ({ ...p, on_hand: null })), 'Перч', 'Перчатки');
+    assert.ok(hidden, 'товар в поиске заявки есть');
+    assert.equal(/Доступно/.test(textOf(hidden)), false, 'остаток склада медсестре не показан: ' + textOf(hidden));
+    assert.match(textOf(hidden), /шт/, 'единица, в которой просят, видна');
+    const shown = await dropFor(PRODUCT_LIST, 'Перч', 'Перчатки');
+    assert.match(textOf(shown).replace(/\s+/g, ' '), /Доступно: 4\s?000 шт/, 'тому, кто видит склад, — как прежде: ' + textOf(shown));
+});

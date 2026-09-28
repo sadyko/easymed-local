@@ -23,6 +23,13 @@
 // подотчёт, кабинет приёма, свой кабинет, отдел, свой отдел) в порядке цепочки.
 // «Откуда» — с какой своей полки начать; не хватило — сервер добирает с
 // остальных своих, склад последним (rpc/holdings.js dispense_from_holding).
+//
+// OWN_SHELF_ONLY_V1 (владелец 28.09) — «Склад (общий остаток)» в «Откуда»
+// остался только администратору и складу: медсестра и врач выдают со своих
+// полок, а пустые полки — это заявка на склад («На ваших полках ничего нет —
+// запросите у склада» и кнопка). Кто берёт со склада, говорит сервер
+// (holdings_list reachable → warehouse_allowed); каталог склада с остатками
+// врачу и медсестре больше не запрашивается вовсе.
 import { supabase } from '../../supabase.js';
 import { h, Icon, Tag, clear, toast, field, checkField, initials } from '../ui.js';
 import { pastelFor } from '../pastel.js';
@@ -31,6 +38,7 @@ import { fmtPrice, fmtQty } from './inventory-shared.js';
 // EXPIRY_BALANCE_V1 — «списание просроченного предупреждает» (владелец 23.09).
 // Слова пишет сервер (rpc/expiry.js), вкладка их только показывает.
 import { toastStockWarnings } from './stock-warnings.js';
+import { loadShelves, emptyShelvesNotice, shelfRequestButton } from './own-shelf.js';   // OWN_SHELF_ONLY_V1
 
 const HOLDER_WORD = { staff: 'Мои запасы', room: 'Кабинет', department: 'Отделение' };
 const WAREHOUSE_KEY = 'warehouse';
@@ -71,8 +79,10 @@ export function holderLabel(hd, myId) {
  * затем кабинеты и отделения — только те, где что-то есть. Чужие личные
  * запасы (другого сотрудника) не предлагаются: выдавать из чужого кармана
  * нельзя, даже если он в списке.
+ * OWN_SHELF_ONLY_V1 — склад добавляется последним источником ТОЛЬКО при
+ * `warehouse: true` (администратор и склад; решает сервер).
  */
-export function sourcesFor(holdings, myId, products = []) {
+export function sourcesFor(holdings, myId, products = [], { warehouse = true } = {}) {
     const byKey = new Map();
     for (const hd of holdings || []) {
         if (hd.holder_type === 'staff' && Number(hd.holder_id) !== Number(myId)) continue;
@@ -83,8 +93,9 @@ export function sourcesFor(holdings, myId, products = []) {
     }
     const order = { staff: 0, room: 1, department: 2 };
     const out = [...byKey.values()].sort((a, b) => (order[a.holder_type] - order[b.holder_type]) || String(a.holder_name).localeCompare(String(b.holder_name)));
-    // The warehouse is always the last source: what nobody was issued yet can
-    // still be given from the general stock (the old dispense_item door).
+    // The warehouse is the last source — OWN_SHELF_ONLY_V1: for the admin and
+    // the warehouse role only. Everyone else gives from their own shelves.
+    if (!warehouse) return out;
     const stock = (products || []).filter((p) => p && p.active !== false && p.active !== 0 && Number(p.on_hand) > 0).map((p) => {
         const cf = p.consumption_unit && Number(p.consumption_factor) > 0 ? Number(p.consumption_factor) : 1;
         return { holder_type: WAREHOUSE_KEY, holder_id: null, holder_name: '', product_id: p.id, product_name: p.name,
@@ -104,30 +115,34 @@ export function visitTime(iso) {
 
 export async function mountOutpatients(body, { user, onEmpty } = {}) {
     const myId = user && user.id;
-    const state = { visits: [], selected: null, items: null, holdings: [], products: [], failed: '' };
+    // OWN_SHELF_ONLY_V1 — warehouse: берёт ли этот человек со склада (ответ
+    // сервера вместе с полками; до ответа — нет: склад не обещаем заранее).
+    const state = { visits: [], selected: null, items: null, holdings: [], products: [], failed: '', warehouse: false };
 
     async function loadProducts() {
+        // OWN_SHELF_ONLY_V1 — каталог склада с остатками нужен только тому, кто
+        // со склада выдаёт; врачу и медсестре он не запрашивается вовсе.
+        if (!state.warehouse) { state.products = []; return; }
         const { data } = await supabase.from('products')
             .select('id,name,unit,base_unit,consumption_unit,consumption_factor,on_hand,sale_price,active')
             .eq('active', 1).order('name', { ascending: true });
         state.products = Array.isArray(data) ? data : [];
     }
     async function load() {
-        const [v] = await Promise.all([
-            supabase.rpc('outpatients_today', {}),
-            loadProducts(),
-        ]);
+        const v = await supabase.rpc('outpatients_today', {});
         state.failed = v.error ? (v.error.message || tr('нет данных')) : '';
         state.visits = (!v.error && v.data && Array.isArray(v.data.visits)) ? v.data.visits : [];
         if (!state.visits.some((x) => x.id === state.selected)) state.selected = state.visits.length ? state.visits[0].id : null;
-        await Promise.all([loadItems(), loadHoldings()]);
+        await Promise.all([loadItems(), reloadHoldings()]);
         paint();
     }
     // V3120_FIX — только свои полки для выбранного визита (кабинет приёма у
-    // каждого визита свой), и уже в порядке цепочки.
+    // каждого визита свой), и уже в порядке цепочки. OWN_SHELF_ONLY_V1 — и
+    // ответ сервера, можно ли этому человеку брать со склада.
     async function loadHoldings() {
-        const hd = await supabase.rpc('holdings_list', state.selected ? { reachable: true, visit_id: state.selected } : { reachable: true });
-        state.holdings = (!hd.error && hd.data && Array.isArray(hd.data.holdings)) ? hd.data.holdings : [];
+        const shelves = await loadShelves(state.selected ? { visit_id: state.selected } : null);
+        state.holdings = shelves.rows;
+        state.warehouse = shelves.warehouse;
     }
     async function loadItems() {
         state.items = null;
@@ -136,7 +151,8 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
         state.items = data && Array.isArray(data.items) ? data.items : [];
     }
     async function reloadHoldings() {
-        await Promise.all([loadHoldings(), loadProducts()]);
+        await loadHoldings();
+        await loadProducts();
     }
 
     function paint() {
@@ -249,13 +265,20 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
     function giveCard(v) {
         const card = h('div', { class: 'card' },
             h('div', { class: 'card-header' }, h('h3', null, Icon('Send', { size: 16 }), ' ', tr('Выдать пациенту'))));
-        const sources = sourcesFor(state.holdings, myId, state.products);
+        const sources = sourcesFor(state.holdings, myId, state.products, { warehouse: state.warehouse });
         const bodyEl = h('div', { style: { padding: '14px 16px', display: 'grid', gap: '10px' } });
+        // OWN_SHELF_ONLY_V1 — заявка на склад, когда своих полок нет, открывается
+        // прямо отсюда; после неё вкладка перечитывает полки.
+        const onRequested = async () => { await reloadHoldings(); paint(); };
         if (!sources.length) {
-            bodyEl.appendChild(h('div', { class: 'empty', style: { padding: '14px' } },
-                h('p', null, tr('Выдавать нечего: на складе нет остатков.')),
-                h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
-                    tr('Приход оформляется в разделе «Склад». Выданное медсестре, в кабинет или в отделение появится здесь отдельным источником.'))));
+            if (!state.warehouse) {
+                bodyEl.appendChild(emptyShelvesNotice({ onDone: onRequested }));
+            } else {
+                bodyEl.appendChild(h('div', { class: 'empty', style: { padding: '14px' } },
+                    h('p', null, tr('Выдавать нечего: на складе нет остатков.')),
+                    h('p', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
+                        tr('Приход оформляется в разделе «Склад». Выданное медсестре, в кабинет или в отделение появится здесь отдельным источником.'))));
+            }
             card.appendChild(bodyEl);
             return card;
         }
@@ -296,7 +319,12 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
             // сервер доберёт с остальных своих полок, склад последним. Экран
             // останавливает только то, чего нет нигде.
             const reach = reachableUnits(sources, it.product_id);
-            if (qty > reach + 1e-9) return toast(trf('Всего доступно {qty} {unit}: на руках, в кабинете, в отделении и на складе.', { qty: fmtQty(reach), unit: it.consumption_unit || '' }), 'warn');
+            if (qty > reach + 1e-9) {
+                // OWN_SHELF_ONLY_V1 — у врача и медсестры склада в сумме нет.
+                return toast(state.warehouse
+                    ? trf('Всего доступно {qty} {unit}: на руках, в кабинете, в отделении и на складе.', { qty: fmtQty(reach), unit: it.consumption_unit || '' })
+                    : trf('На ваших полках всего {qty} {unit} — остальное запросите у склада.', { qty: fmtQty(reach), unit: it.consumption_unit || '' }), 'warn');
+            }
             giveBtn.disabled = true;
             try {
                 const src = current();
@@ -318,19 +346,22 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
         } }, Icon('Check', { size: 13 }), ' ', tr('Выдать'));
 
         bodyEl.appendChild(field('Откуда', srcSel));
+        // OWN_SHELF_ONLY_V1 — подсказка «Пока только общий склад…» убрана: у
+        // врача и медсестры склада в «Откуда» нет, у администратора он и так
+        // виден последним пунктом.
         bodyEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 0' } },
-            tr('Не хватит на выбранной полке — доберётся с других ваших, склад последним. Чужие запасы не берутся.')));
-        if (sources.length === 1 && sources[0].holder_type === WAREHOUSE_KEY) {
-            bodyEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 0' } },
-                tr('Пока только общий склад. Когда склад выдаст вам, в кабинет или в отделение, эти запасы появятся здесь первыми.')));
-        }
+            state.warehouse
+                ? tr('Не хватит на выбранной полке — доберётся с других ваших, склад последним. Чужие запасы не берутся.')
+                : tr('Не хватит на выбранной полке — доберётся с других ваших. Чужие запасы не берутся; чего нет на ваших полках — запросите у склада.')));
         bodyEl.appendChild(field('Что', prodSel));
         bodyEl.appendChild(field('Сколько', h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } }, qtyInp, unitEl)));
         bodyEl.appendChild(availEl);
         bodyEl.appendChild(checkField('В счёт пациента', billChk));
         bodyEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '-6px 0 0 26px' } },
             tr('Снимите, если расходник входит в услугу: строка ляжет на визит с нулевой суммой, остаток спишется.')));
-        bodyEl.appendChild(h('div', { class: 'row', style: { gap: '8px', marginTop: '4px' } }, giveBtn));
+        bodyEl.appendChild(h('div', { class: 'row', style: { gap: '8px', marginTop: '4px' } }, giveBtn,
+            // OWN_SHELF_ONLY_V1 — у врача и медсестры заявка на склад рядом с «Выдать».
+            state.warehouse ? null : shelfRequestButton({ onDone: onRequested })));
         card.appendChild(bodyEl);
         return card;
     }
