@@ -1,10 +1,12 @@
 // SUPPLIERS_VAT_V1 (2026-09-28) — НДС в отчётах.
 //
-//   1. Строка счёта с ТОВАРОМ берёт налог по ставке НДС товара (прежде — 0 при
-//      любой ставке): и у визита, и у стационара; формула та же, что у услуг;
-//      доля врача с товара — по-прежнему 0. Прежний SQL (__setReportsPushDown
+//   1. Строка счёта с ТОВАРОМ: налог — НДС, ВКЛЮЧЁННЫЙ в цену продажи товара
+//      (сумма после скидки × ставка / (100 + ставка); 112 000 при 12 % → НДС
+//      12 000, без НДС 100 000) — и у визита, и у стационара, и у строки без
+//      счёта. Услуги — как прежде (сумма после скидки × ставка / 100), доля
+//      врача не меняется, с товара она 0. Прежний SQL (__setReportsPushDown
 //      (false)) и нынешний дают один ответ (V3120_PERF).
-//   2. «Приход по поставщикам»: тип товара, цена без НДС, ставка и сумма НДС,
+//   2. «Приход по поставщикам»: категория, цена без НДС, ставка и сумма НДС,
 //      суммы без и с НДС, цена продажи; фильтр по поставщику; итог периода с НДС
 //      и без; приход без записанного НДС — «не указан».
 //   3. Выбор поставщика в хабе (report_choices) — за воротами отчёта.
@@ -30,55 +32,86 @@ function seedRevenue() {
     (1,'adm','x','admin','Админ',0,0), (2,'doc','x','doctor','Хирургов',1,20), (3,'inv','x','inventory','Склад',0,0), (4,'nur','x','nurse','Сестра',0,0)`).run();
   db.prepare("INSERT INTO services (id, name, price, tax_rate, type) VALUES (1, 'Перевязка', 100000, 12, 'procedure')").run();
   db.prepare(`INSERT INTO products (id, name, sale_price, vat_rate, procurement_category) VALUES
-    (1, 'Бинт', 5000, 12, 'consumables'), (2, 'Шприц', 1000, NULL, 'consumables'), (3, 'Маска', 800, 0, 'consumables')`).run();
+    (1, 'Бинт', 56000, 12, 'consumables'), (2, 'Шприц', 1000, NULL, 'consumables'), (3, 'Маска', 800, 0, 'consumables')`).run();
   db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (1, 'A-1', 'Азизов А.')").run();
   const now = new Date().toISOString();
-  const v = db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status) VALUES (1, 2, ?, 'arrived')").run(now).lastInsertRowid;
+  const visit = () => db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status) VALUES (1, 2, ?, 'arrived')").run(now).lastInsertRowid;
+  const v = visit();
   const vs = db.prepare('INSERT INTO visit_services (visit_id, service_id, clinic_item_id, doctor_id, quantity, unit_price, total, status) VALUES (?,?,?,?,?,?,?,?)');
   const l1 = vs.run(v, 1, null, 2, 1, 100000, 100000, 'completed').lastInsertRowid;
-  const l2 = vs.run(v, null, 1, 2, 2, 5000, 10000, 'added').lastInsertRowid;
+  const l2 = vs.run(v, null, 1, 2, 2, 56000, 112000, 'added').lastInsertRowid;
   const l3 = vs.run(v, null, 2, 2, 1, 1000, 1000, 'added').lastInsertRowid;
   const l4 = vs.run(v, null, 3, 2, 1, 800, 800, 'added').lastInsertRowid;
-  // Скидка счёта 10 %: налог товара — от суммы ПОСЛЕ скидки, как у услуги.
+  // Скидка счёта 10 %: налог — от суммы ПОСЛЕ скидки и у услуги, и у товара.
   const inv = db.prepare(`INSERT INTO invoices (invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_at, paid_at)
-                          VALUES ('INV-1', ?, 1, 111800, 11180, 100620, 100620, 'paid', ?, ?)`).run(v, now, now).lastInsertRowid;
+                          VALUES ('INV-1', ?, 1, 213800, 21380, 192420, 192420, 'paid', ?, ?)`).run(v, now, now).lastInsertRowid;
   const ii = db.prepare('INSERT INTO invoice_items (invoice_id, service_id, description, quantity, unit_price, total) VALUES (?,?,?,?,?,?)');
   const link = db.prepare('UPDATE visit_services SET invoice_item_id = ? WHERE id = ?');
   link.run(ii.run(inv, 1, 'Перевязка', 1, 100000, 100000).lastInsertRowid, l1);
-  link.run(ii.run(inv, null, 'Бинт', 2, 5000, 10000).lastInsertRowid, l2);
+  link.run(ii.run(inv, null, 'Бинт', 2, 56000, 112000).lastInsertRowid, l2);
   link.run(ii.run(inv, null, 'Шприц', 1, 1000, 1000).lastInsertRowid, l3);
   link.run(ii.run(inv, null, 'Маска', 1, 800, 800).lastInsertRowid, l4);
-  db.prepare("INSERT INTO payments (invoice_id, amount, method, paid_at, cashier_id) VALUES (?, 100620, 'cash', ?, 1)").run(inv, now);
+  db.prepare("INSERT INTO payments (invoice_id, amount, method, paid_at, cashier_id) VALUES (?, 192420, 'cash', ?, 1)").run(inv, now);
+  // Второй визит — бинт на 112 000 без скидки: НДС 12 000, без НДС 100 000.
+  const v2 = visit();
+  const l5 = vs.run(v2, null, 1, 2, 2, 56000, 112000, 'added').lastInsertRowid;
+  const inv2 = db.prepare(`INSERT INTO invoices (invoice_number, visit_id, patient_id, subtotal, discount_amount, total_amount, paid_amount, status, created_at)
+                           VALUES ('INV-2', ?, 1, 112000, 0, 112000, 0, 'unpaid', ?)`).run(v2, now).lastInsertRowid;
+  link.run(ii.run(inv2, null, 'Бинт', 2, 56000, 112000).lastInsertRowid, l5);
+  // Третий визит — бинт выдан и строка завершена, счёта ещё нет (строка
+  // выплаты без счёта: её деньги считает payLineMoney, а не SQL счёта).
+  vs.run(visit(), null, 1, 2, 2, 56000, 112000, 'completed');
   // Стационар: бинт в счёте госпитализации.
   const adm = db.prepare("INSERT INTO admissions (patient_id, doctor_id, status, admission_no, admitted_at) VALUES (1, 2, 'active', 'A-1', ?)").run(now).lastInsertRowid;
   const ainv = db.prepare(`INSERT INTO invoices (invoice_number, patient_id, admission_id, subtotal, discount_amount, total_amount, paid_amount, status, created_at)
-                           VALUES ('ADM-1', 1, ?, 15000, 0, 15000, 0, 'unpaid', ?)`).run(adm, now).lastInsertRowid;
-  const aii = ii.run(ainv, null, 'Бинт', 3, 5000, 15000).lastInsertRowid;
+                           VALUES ('ADM-1', 1, ?, 112000, 0, 112000, 0, 'unpaid', ?)`).run(adm, now).lastInsertRowid;
+  const aii = ii.run(ainv, null, 'Бинт', 2, 56000, 112000).lastInsertRowid;
   db.prepare(`INSERT INTO admission_services (admission_id, clinic_item_id, doctor_id, quantity, unit_price, total, status, billable, invoice_item_id, performed_at)
-              VALUES (?, 1, 2, 3, 5000, 15000, 'added', 1, ?, ?)`).run(adm, aii, now);
+              VALUES (?, 1, 2, 2, 56000, 112000, 'added', 1, ?, ?)`).run(adm, aii, now);
   return db;
 }
 
-test('налог строки товара — по ставке НДС товара, после скидки; «без НДС» и 0 % — ноль; доля врача с товара — 0', () => {
+test('налог строки товара — НДС, включённый в цену: 112 000 при 12 % → НДС 12 000, без НДС 100 000; услуги — как прежде', () => {
   const db = seedRevenue();
-  const rows = objects(run(db, 'total_revenue'));
+  const rev = run(db, 'total_revenue');
+  const rows = objects(rev);
   const line = (inv, name) => rows.find((o) => o['№ счёта'] === inv && o['Услуга'] === name);
-  assert.equal(line('INV-1', 'Перевязка')['Налог %'], 12);
-  assert.equal(line('INV-1', 'Перевязка')['Налог'], 10800, '(100 000 − 10 %) × 12 %');
-  assert.equal(line('INV-1', 'Бинт')['Налог %'], 12);
-  assert.equal(line('INV-1', 'Бинт')['Налог'], 1080, 'товар: (10 000 − 10 %) × 12 %');
+  // Товар без скидки — ровно пример владельца.
+  assert.equal(line('INV-2', 'Бинт')['Налог %'], 12);
+  assert.equal(line('INV-2', 'Бинт')['Налог'], 12000, '112 000 × 12 / 112');
+  assert.equal(line('INV-2', 'Бинт')['в т.ч. НДС (товары)'], 12000);
+  assert.equal(line('ADM-1', 'Бинт')['Налог'], 12000, 'товар в счёте госпитализации');
+  // Со скидкой счёта 10 %: 100 800 × 12 / 112 = 10 800.
+  assert.equal(line('INV-1', 'Бинт')['После скидки'], 100800);
+  assert.equal(line('INV-1', 'Бинт')['Налог'], 10800);
   assert.equal(line('INV-1', 'Бинт')['Доля врача'], 0);
   assert.equal(line('INV-1', 'Шприц')['Налог %'], 0, '«без НДС»');
   assert.equal(line('INV-1', 'Шприц')['Налог'], 0);
+  assert.equal(line('INV-1', 'Шприц')['в т.ч. НДС (товары)'], null, '«без НДС» — НДС нет вовсе');
   assert.equal(line('INV-1', 'Маска')['Налог'], 0, '0 %');
-  assert.equal(line('ADM-1', 'Бинт')['Налог %'], 12, 'товар в счёте госпитализации');
-  assert.equal(line('ADM-1', 'Бинт')['Налог'], 1800);
-  const bySvc = objects(run(db, 'by_services'));
-  const bint = bySvc.filter((o) => o['Услуга'] === 'Бинт');
-  assert.equal(bint.reduce((s, o) => s + o['Налог'], 0), 1080 + 1800);
-  assert.ok(bint.every((o) => o['Доля врача'] === 0));
-  // Доля врача за услугу не изменилась: (90 000 − 10 800) × 20 %.
+  assert.equal(line('INV-1', 'Маска')['в т.ч. НДС (товары)'], 0);
+  // Услуга — прежняя формула (× ставка / 100), доля врача та же: (90 000 − 10 800) × 20 %.
+  assert.equal(line('INV-1', 'Перевязка')['Налог %'], 12);
+  assert.equal(line('INV-1', 'Перевязка')['Налог'], 10800, '(100 000 − 10 %) × 12 / 100');
+  assert.equal(line('INV-1', 'Перевязка')['в т.ч. НДС (товары)'], null);
   assert.equal(line('INV-1', 'Перевязка')['Доля врача'], 15840);
+  assert.ok(rev.notes.includes('У товаров «Налог» — НДС, включённый в цену продажи: сумма после скидки × ставка / (100 + ставка), при 12 % — 12/112 суммы; он же — в колонке «в т.ч. НДС (товары)». У услуг «Налог» считается, как прежде: сумма после скидки × ставка.'),
+    rev.notes.join(' | '));
+  assert.ok(rev.summable_columns.includes('в т.ч. НДС (товары)'));
+  // «По услугам»: у бинта без НДС остаётся 90 000 + 100 000 (амбулатория) и 100 000 (стационар).
+  const bySvc = run(db, 'by_services');
+  const bint = objects(bySvc).filter((o) => o['Услуга'] === 'Бинт');
+  const out = bint.find((o) => o['Где'] === 'Амбулатория');
+  const inp = bint.find((o) => o['Где'] === 'Стационар');
+  assert.deepEqual([out['Налог'], out['После скидки и налога'], out['Остаток клинике']], [22800, 190000, 190000]);
+  assert.deepEqual([inp['Налог'], inp['После скидки и налога']], [12000, 100000]);
+  assert.ok(bint.every((o) => o['Доля врача'] === 0));
+  assert.ok(bySvc.notes.some((n) => n.startsWith('У товаров «Налог» — НДС, включённый в цену продажи')));
+  // Строка без счёта (выдано, счёта нет) — тот же НДС: кабинет врача показывает её деньги.
+  const pay = getRpc('doctor_pay_summary')(db, { doctor_id: 2, from: FROM, to: TO }, ADMIN);
+  const unbilled = pay.lines.find((l) => !l.invoiced && l.service === 'Бинт');
+  assert.ok(unbilled, 'строка без счёта в кабинете');
+  assert.deepEqual([unbilled.amount, unbilled.tax, unbilled.net, unbilled.fee], [112000, 12000, 100000, 0]);
   db.close();
 });
 

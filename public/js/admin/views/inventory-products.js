@@ -305,8 +305,8 @@ export function openProductModal(p, onSaved, opts = {}) {
     );
 
     // ---- Цена продажи и НДС ----
-    // SUPPLIERS_VAT_V1 — цена продажи С НДС (как у услуг); ставка — 12 %, 0 %
-    // или «без НДС». По ней отчёты считают налог строки товара в счёте.
+    // SUPPLIERS_VAT_V1 — цена продажи С НДС; ставка — 12 %, 0 % или «без НДС».
+    // НДС строки товара в отчётах — часть её суммы: × ставка / (100 + ставка).
     const priceInp = h('input', { type: 'number', min: '0', step: 'any',
         value: (p && p.sale_price != null) ? String(p.sale_price) : '', placeholder: '0',
         style: { ...numStyle, width: '140px' } });
@@ -319,7 +319,7 @@ export function openProductModal(p, onSaved, opts = {}) {
             priceInp,
             h('span', { style: { fontSize: '12.5px', color: 'var(--ink-700)' } }, 'НДС'),
             productVatSel),
-        hint('Цена продажи — с НДС, как у услуг: счёт пациента не меняется, в отчётах налог строки товара считается по этой ставке.'),
+        hint('Цена продажи — с НДС: счёт пациента не меняется, а в отчётах НДС строки товара — часть её суммы (при 12 % — 12/112).'),
     );
 
     // ---- Поставщики этого товара (item_suppliers) ----

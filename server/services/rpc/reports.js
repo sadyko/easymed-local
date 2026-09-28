@@ -914,20 +914,44 @@ const POST_SALE_KEEP_SQL = `(CASE WHEN ${POST_SALE_SQL} > 0 AND i.total_amount +
 // услуги (service_id NULL), и прежде её налог был 0 при любой ставке. Товар
 // строки — у связанной строки визита (visit_services.clinic_item_id) или
 // стационара (admission_services.clinic_item_id), обе ищутся по индексу
-// invoice_item_id. Формула налога ТА ЖЕ, что у услуг (ITEM_TAX_SQL), — одна
-// колонка «Налог» на все строки. Долю врача это не двигает: у товара её нет
-// (PAY_GOODS_NONE_V1), вознаграждение за направление от налога не зависит,
-// записанные закрытые месяцы (D6) пересчитываются по записанной доле налога,
-// а товар и там — 0. Услуга без ставки и строка без товара — как прежде.
+// invoice_item_id. Одна колонка «Налог» на все строки. Долю врача это не
+// двигает: у товара её нет (PAY_GOODS_NONE_V1), вознаграждение за направление
+// от налога не зависит, записанные закрытые месяцы (D6) пересчитываются по
+// записанной доле налога, а товар и там — 0. Услуга без ставки и строка без
+// товара — как прежде.
+//
+// НДС ТОВАРА — ВКЛЮЧЁННЫЙ В ЦЕНУ (решение 28.09): цена продажи товара — с НДС,
+// поэтому налог строки товара — ДОЛЯ её суммы: сумма после скидки × ставка /
+// (100 + ставка). 112 000 при 12 % → НДС 12 000, без НДС 100 000. Налог услуги
+// остаётся прежним (сумма после скидки × ставка / 100): ставка услуги может
+// быть налогом с оборота, и об этом владельца спросят отдельно. Делитель —
+// ITEM_TAX_BASE_SQL: 100 у услуги (100.0 + 0 — то же число, что прежнее 100.0,
+// поэтому налог услуги и доля врача бит в бит прежние) и 100 + ставка у товара.
+const ITEM_SVC_TAX_SQL = `(SELECT sx.tax_rate FROM services sx WHERE sx.id = ii.service_id)`;
 const ITEM_GOODS_VAT_SQL = `(CASE WHEN ii.service_id IS NULL THEN COALESCE(
   (SELECT gpx.vat_rate FROM visit_services gvx JOIN products gpx ON gpx.id = gvx.clinic_item_id
     WHERE gvx.invoice_item_id = ii.id ORDER BY gvx.id LIMIT 1),
   (SELECT gpx.vat_rate FROM admission_services gax JOIN products gpx ON gpx.id = gax.clinic_item_id
     WHERE gax.invoice_item_id = ii.id ORDER BY gax.id LIMIT 1)) END)`;
-const ITEM_TAX_RATE_SQL = `COALESCE((SELECT sx.tax_rate FROM services sx WHERE sx.id = ii.service_id), ${ITEM_GOODS_VAT_SQL}, 0)`;
+const ITEM_TAX_RATE_SQL = `COALESCE(${ITEM_SVC_TAX_SQL}, ${ITEM_GOODS_VAT_SQL}, 0)`;
+const ITEM_TAX_BASE_SQL = `(100.0 + CASE WHEN ${ITEM_SVC_TAX_SQL} IS NULL THEN COALESCE(${ITEM_GOODS_VAT_SQL}, 0) ELSE 0 END)`;
+// 1 — налог строки это НДС товара (ставка товара задана, 12 или 0); у «без
+// НДС» и у строки без товара — 0: колонка «в т.ч. НДС (товары)».
+const ITEM_GOODS_VAT_LINE_SQL = `(CASE WHEN ${ITEM_SVC_TAX_SQL} IS NULL AND ${ITEM_GOODS_VAT_SQL} IS NOT NULL THEN 1 ELSE 0 END)`;
 const ITEM_AFTER_DISCOUNT_SQL = `(ii.total - (${ITEM_DISCOUNT_SQL}))`;
-const ITEM_TAX_SQL = `(${ITEM_AFTER_DISCOUNT_SQL} * ${ITEM_TAX_RATE_SQL} / 100.0)`;
+const ITEM_TAX_SQL = `(${ITEM_AFTER_DISCOUNT_SQL} * ${ITEM_TAX_RATE_SQL} / ${ITEM_TAX_BASE_SQL})`;
 const ITEM_NET_SQL = `(${ITEM_AFTER_DISCOUNT_SQL} - ${ITEM_TAX_SQL})`;
+// Примечание к отчётам, где в одной колонке «Налог» и услуги, и товары.
+const GOODS_VAT_NOTE = 'У товаров «Налог» — НДС, включённый в цену продажи: сумма после скидки × ставка / (100 + ставка), при 12 % — 12/112 суммы; он же — в колонке «в т.ч. НДС (товары)». У услуг «Налог» считается, как прежде: сумма после скидки × ставка.';
+const GOODS_VAT_NOTE_SHORT = 'У товаров «Налог» — НДС, включённый в цену продажи: сумма после скидки × ставка / (100 + ставка), при 12 % — 12/112 суммы. У услуг «Налог» считается, как прежде: сумма после скидки × ставка.';
+
+/** Налог строки выплаты БЕЗ счёта — то же правило, что ITEM_TAX_SQL у строки со счётом. */
+function lineTaxOf(r, after) {
+  const rate = Number(r.tax_rate) || 0;
+  // Товар (строка визита с clinic_item_id, без услуги) — НДС внутри цены.
+  if (r.clinic_item_id != null && r.service_id == null) return after * rate / (100 + rate);
+  return after * rate / 100;
+}
 
 // V3120_PERF — ОДНИ И ТЕ ЖЕ ПОДЗАПРОСЫ ДЕСЯТКИ РАЗ НА СТРОКУ. Скидка строки
 // (ITEM_DISCOUNT_SQL) входит в «скидку», «налог», «после налога», долю врача —
@@ -942,10 +966,13 @@ function fastMoneySql(sql) {
   if (!PUSH_DOWN) return sql;
   // SUPPLIERS_VAT_V1 — ставка товара остаётся тем же подзапросом по индексу:
   // он считается только у строки без услуги (COALESCE не идёт дальше ставки
-  // услуги), а таких строк — товары и приёмы — немного.
+  // услуги), а таких строк — товары и приёмы — немного. Ставка услуги в
+  // делителе налога (ITEM_TAX_BASE_SQL) — та же колонка stx: у services.tax_rate
+  // NOT NULL, поэтому «stx.tax_rate IS NULL» — ровно «у строки нет услуги».
   return sql.split(OWN_DISCOUNT_SUM_SQL).join('COALESCE(od.s, 0)')
     .split(OWN_DISCOUNT_BASE_SQL).join('COALESCE(od.b, 0)')
-    .split(ITEM_TAX_RATE_SQL).join(`COALESCE(stx.tax_rate, ${ITEM_GOODS_VAT_SQL}, 0)`);
+    .split(ITEM_TAX_RATE_SQL).join(`COALESCE(stx.tax_rate, ${ITEM_GOODS_VAT_SQL}, 0)`)
+    .split(ITEM_SVC_TAX_SQL).join('stx.tax_rate');
 }
 // invIdExpr — счёт строки (алиас i), invScope — выборка id счетов, которые
 // соединение может спросить (null — все счета со своими скидками).
@@ -1105,6 +1132,7 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
            i.admission_id                     AS admission_id,
            ${ITEM_TAX_SQL}                    AS tax,
            ${ITEM_NET_SQL}                    AS net,
+           ${ITEM_GOODS_VAT_LINE_SQL}         AS goods_vat_line,   -- SUPPLIERS_VAT_V1 — налог строки = НДС товара
            ${LINE_DOCTOR_ID_SQL}              AS doctor_id,
            -- INPATIENT_SHARE_V1, ревью I1: стационарная ставка исполнителя
            -- (NULL — ставки нет, доля не начисляется).
@@ -1510,7 +1538,8 @@ function payLineMoney(r, pricer) {
     const pct = Math.max(catPct, pkgPct);
     discount = pct > 0 ? round2(amount * pct / 100) : 0;
     const after = amount - discount;
-    tax = after * (Number(r.tax_rate) || 0) / 100;
+    // SUPPLIERS_VAT_V1 — у товара налог — НДС внутри цены (lineTaxOf), у услуги — как прежде.
+    tax = lineTaxOf(r, after);
     net = after - tax;
   }
   // DOCTOR_FIX_RATE_V1 — фикс за единицу и налогом не режется; иначе процент
@@ -2316,7 +2345,7 @@ function totalRevenueReport(db, args, ctx) {
   const src = itemRowsQuery(db, args, ctx);
   return {
     columns: [BUILDING_COL, 'Дата', '№ счёта', 'Пациент', 'МРН', 'Услуга', 'Кол-во', 'Цена', 'Сумма',
-              'Скидка', 'После скидки', 'Налог %', 'Налог', 'Врач', 'Ставка врача', 'Фикс врача', 'Доля врача',
+              'Скидка', 'После скидки', 'Налог %', 'Налог', 'в т.ч. НДС (товары)', 'Врач', 'Ставка врача', 'Фикс врача', 'Доля врача',
               'Филиал', 'Регистратор', 'Реферал', 'Статус'],
     rows: src.map((r) => {
       const after = r.amount - r.discount;
@@ -2330,7 +2359,9 @@ function totalRevenueReport(db, args, ctx) {
       const fixed = r.doctor_fix != null;
       return [ctx.label(r.origin), r.date, r.invoice || '', r.patient, r.mrn || '', r.service || '', r.qty,
               round2(r.price), round2(r.amount), round2(r.discount), round2(after),
-              r.tax_rate, round2(after * r.tax_rate / 100), doctorCell(ctx, r),
+              // SUPPLIERS_VAT_V1 — налог строки считает SQL (ITEM_TAX_SQL): у услуги
+              // это прежние «после скидки × ставка / 100», у товара — НДС внутри цены.
+              r.tax_rate, round2(r.tax), Number(r.goods_vat_line) === 1 ? round2(r.tax) : null, doctorCell(ctx, r),
               fixed ? null : round2(r.doctor_pct), fixed ? round2(r.doctor_fix) : null,
               round2(r.doctor_fee), r.branch || '', r.registrar || '',
               r.referral || '', INV_STATUS_RU[r.status] || r.status];
@@ -2340,7 +2371,7 @@ function totalRevenueReport(db, args, ctx) {
       doctor_fee: (r) => r.doctor_fee || 0,
     }),
     total_label: 'После скидки',
-    notes: [PERFORMED_NOTE, REVENUE_SHARE_NOTE, REVENUE_EXCLUDED_NOTE, ...(hasUnattributed(ctx, src) ? [UNATTRIBUTED_NOTE] : [])],
+    notes: [PERFORMED_NOTE, REVENUE_SHARE_NOTE, REVENUE_EXCLUDED_NOTE, GOODS_VAT_NOTE, ...(hasUnattributed(ctx, src) ? [UNATTRIBUTED_NOTE] : [])],
     row_doctor_ids: src.map((r) => r.doctor_id ?? null),   // REPORTS_AUDIT_FIX_V1 — маска долей
   };
 }
@@ -3058,7 +3089,7 @@ function reportSupplier(args) {
 const VAT_UNKNOWN_RU = 'не указан';
 const receiptVatLabel = (r) => (r.vat_rate == null && r.vat_amount == null ? VAT_UNKNOWN_RU : vatLabel(r.vat_rate));
 const PROCUREMENT_VAT_NOTE = 'Цена прихода вводится без НДС; НДС строки — сумма без НДС × ставку; «Сумма с НДС» — сколько заплачено поставщику, по ней считается себестоимость на складе. «Цена продажи» — нынешняя цена товара в карточке (с НДС).';
-const PROCUREMENT_VAT_UNKNOWN_NOTE = 'Ставка «не указан» — у прихода НДС не записан (приход до учёта НДС или по заказу на закупку): его «Сумма без НДС» равна «Сумме с НДС».';
+const PROCUREMENT_VAT_UNKNOWN_NOTE = 'Ставка «не указан» — у прихода НДС не записан (приход до учёта НДС или по заказу, оформленному до него): его «Сумма без НДС» равна «Сумме с НДС».';
 const PROCUREMENT_TOTAL_T = 'Итого за период: без НДС {net} сум, НДС {vat} сум, с НДС {gross} сум.';
 const PROCUREMENT_SUPPLIER_T = 'Поставщик: «{name}» — приходы других поставщиков в отчёт и итоги не вошли.';
 
@@ -3449,7 +3480,7 @@ function surgeryProfitReport(db, args, ctx) {
   }
   const computed = src.map((r) => {
     const invoiced = r.amount - r.discount;
-    const tax = invoiced * r.tax_rate / 100;
+    const tax = r.tax;   // SUPPLIERS_VAT_V1 — ITEM_TAX_SQL: у услуги то же «× ставка / 100»
     // DOCTOR_SHARE_AFTER_TAX_V1 — гонорар хирурга считается от суммы ПОСЛЕ
     // налога, как и доля врача везде. Здесь это было особенно заметно: строкой
     // ниже налог вычитается из прибыли клиники, то есть один и тот же налог
@@ -3865,7 +3896,7 @@ function byServicesReport(db, args, ctx) {
   const list = [...buckets.values()].sort((a, b) =>
     (ctx.keyOf(a.origin) < ctx.keyOf(b.origin) ? -1 : ctx.keyOf(a.origin) > ctx.keyOf(b.origin) ? 1 : 0)
     || order(a.group) - order(b.group) || b.gross - a.gross);
-  const notes = [PERFORMED_NOTE, REVENUE_SHARE_NOTE, LINE_PAID_NOTE, REVENUE_EXCLUDED_NOTE];
+  const notes = [PERFORMED_NOTE, REVENUE_SHARE_NOTE, LINE_PAID_NOTE, REVENUE_EXCLUDED_NOTE, GOODS_VAT_NOTE_SHORT];
   if (hasUnattributed(ctx, src)) notes.push(UNATTRIBUTED_NOTE);
   return {
     columns: [BUILDING_COL, 'Группа', 'Услуга', 'Где', 'Кол-во', 'Сумма', 'Скидка', 'Налог',
