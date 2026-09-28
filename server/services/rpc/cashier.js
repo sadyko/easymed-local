@@ -16,7 +16,7 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // пришли. Касса — последний экран, у которого счёт открыт целиком, и первый, с
 // которого его можно стереть.
 import { assertOwnBuilding, PERFORMED_LINE_STATUSES } from './billing.js';
-import { markRefundRelease } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом
+import { markRefundRelease, refundedLineIds } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом; CASHIER_PAID_SWAP_V1 — «возвращено» у строк
 // V3120_FIX (MAJOR) — снятая при отмене товарная строка возвращает товар туда,
 // откуда его взяли (одно правило на сервер, rpc/inventory.js).
 import { restoreSources } from './inventory.js';
@@ -758,4 +758,112 @@ export function voidInvoice(db, args, user) {
   });
 
   return run();
+}
+
+// CASHIER_PAID_SWAP_V1 (2026-09-28) — «ВОЗВРАТЫ И ОТМЕНЫ» В КАССЕ.
+//
+// Владелец: «Refunded bills in the cashier window disappear completely, so we
+// need to see them somewhere so we can change the service».
+//
+// Список «Приёма оплат» показывает отменённые счета только за сегодня, а
+// частичный возврат (строкой, заменой, уступкой) по оплаченному счёту не
+// показывает вовсе — счёт выглядит обычным оплаченным. Здесь — счета, по
+// которым за период был хоть один возврат (отрицательный платёж) или которые
+// отменены, с тем, что вернули: сумма, способ, когда, кто, причина; события
+// журнала счёта (возврат строки, отмена, замена в оплаченном счёте); и
+// невыставленные строки визита — их касса выставляет заново («Выставить
+// заново»), при необходимости поменяв услугу или врача.
+//
+// Видят все, у кого касса (кассир, старший кассир, администратор): это касса
+// клиники, и список счетов кассы общий. Депозиты (DEP-) и продажи карт (CARD-)
+// возвращаются в своих вкладках — здесь их нет. Только чтение.
+const REFUND_EVENTS = ['refund_line', 'void', 'line_swap_paid'];
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function refundKind(notes) {
+  const n = String(notes || '');
+  if (/ SWAP#\d+/.test(n)) return 'swap';
+  if (/ LINE#\d+/.test(n)) return 'line';
+  return 'payment';
+}
+function refundReason(notes) {
+  const n = String(notes || '');
+  const i = n.indexOf(' — ');
+  return i >= 0 ? n.slice(i + 3) : '';
+}
+
+export function cashierRefunds(db, args, user) {
+  requireRole(user, SHIFT_ROLES);
+  const d = localToday(db);
+  const from = args && YMD_RE.test(String(args.from || '')) ? String(args.from) : d;
+  const to = args && YMD_RE.test(String(args.to || '')) ? String(args.to) : from;
+  if (to < from) throw new RpcError('Период указан неверно: «по» раньше «с».', 400);
+
+  const pay = localRangeWhere('p.paid_at', from, to);
+  const vd = localRangeWhere('i.voided_at', from, to);
+  const cr = localRangeWhere('i.created_at', from, to);
+  const ev = localRangeWhere('l.created_at', from, to);
+  const holes = REFUND_EVENTS.map(() => '?').join(',');
+  const ids = db.prepare(`
+    SELECT p.invoice_id AS id FROM payments p WHERE p.amount < 0 AND ${pay.sql}
+    UNION SELECT i.id FROM invoices i WHERE i.status IN ('void', 'refunded') AND ${vd.sql}
+    UNION SELECT i.id FROM invoices i WHERE i.status IN ('void', 'refunded') AND i.voided_at IS NULL AND ${cr.sql}
+    UNION SELECT l.invoice_id FROM invoice_audit_log l WHERE l.invoice_id IS NOT NULL AND l.action IN (${holes}) AND ${ev.sql}
+  `).all(...pay.params, ...vd.params, ...cr.params, ...REFUND_EVENTS, ...ev.params).map((r) => r.id).filter((x) => x != null);
+  if (!ids.length) return { from, to, rows: [], totals: { n: 0, refunded: 0 } };
+
+  const inList = ids.map(() => '?').join(',');
+  const invs = db.prepare(`
+    SELECT i.id AS invoice_id, i.invoice_number, i.status, i.subtotal, i.discount_amount, i.total_amount, i.paid_amount,
+           i.created_at, i.paid_at, i.voided_at, i.visit_id, i.admission_id, i.patient_id, i.payer_id, i.sync_origin,
+           pt.full_name AS patient_name, pt.mrn AS mrn, pt.phone AS phone, pt.date_of_birth AS date_of_birth, pt.gender AS gender,
+           v.sync_origin AS visit_origin
+      FROM invoices i
+      LEFT JOIN patients pt ON pt.id = i.patient_id
+      LEFT JOIN visits v ON v.id = i.visit_id
+     WHERE i.id IN (${inList})
+       AND COALESCE(i.invoice_number, '') NOT LIKE 'DEP-%' AND COALESCE(i.invoice_number, '') NOT LIKE 'CARD-%'
+  `).all(...ids);
+
+  const refundsOf = db.prepare(`SELECT p.id, p.amount, p.method, p.paid_at, p.notes, u.full_name AS who
+                                  FROM payments p LEFT JOIN users u ON u.id = p.cashier_id
+                                 WHERE p.invoice_id = ? AND p.amount < 0 ORDER BY p.id`);
+  const eventsOf = db.prepare(`SELECT action, created_at, actor_name, reason, notes, amount, refund_amount
+                                 FROM invoice_audit_log WHERE invoice_id = ? AND action IN (${holes}) ORDER BY id`);
+  const openLinesOf = db.prepare(`SELECT vs.id, vs.status, vs.quantity, vs.unit_price, vs.total, vs.service_id, vs.consultation_type_id,
+                                         vs.clinic_item_id, vs.doctor_id, s.name AS service_name, pr.name AS product_name, u.full_name AS doctor_name
+                                    FROM visit_services vs
+                                    LEFT JOIN services s ON s.id = vs.service_id
+                                    LEFT JOIN products pr ON pr.id = vs.clinic_item_id
+                                    LEFT JOIN users u ON u.id = vs.doctor_id
+                                   WHERE vs.visit_id = ? AND vs.invoice_item_id IS NULL
+                                     AND COALESCE(vs.status, '') <> 'cancelled' AND vs.sync_origin IS NULL
+                                   ORDER BY vs.id`);
+  const rows = [];
+  let refundedAll = 0;
+  for (const r of invs) {
+    const refunds = refundsOf.all(r.invoice_id).map((p) => ({
+      payment_id: p.id, amount: round2(-p.amount), method: p.method, at: p.paid_at, who: p.who || null,
+      kind: refundKind(p.notes), reason: refundReason(p.notes),
+    }));
+    const refundedTotal = round2(refunds.reduce((a, x) => a + x.amount, 0));
+    refundedAll = round2(refundedAll + refundedTotal);
+    const events = eventsOf.all(r.invoice_id, ...REFUND_EVENTS).map((e) => ({
+      action: e.action, at: e.created_at, who: e.actor_name || null, reason: e.reason || '', notes: e.notes || '',
+      amount: e.amount, refund_amount: e.refund_amount,
+    }));
+    const own = r.sync_origin == null && r.visit_origin == null;
+    const open = r.visit_id && own ? openLinesOf.all(r.visit_id) : [];
+    const refundedIds = new Set(refundedLineIds(db, 'out', open.map((l) => l.id)));
+    const rebill = open.map((l) => ({
+      id: l.id, status: l.status, name: l.service_name || l.product_name || null, doctor_name: l.doctor_name || null,
+      price: round2((Number(l.unit_price) || 0) * (Number(l.quantity) || 1)), refunded: refundedIds.has(l.id),
+      performed: PERFORMED_LINE_STATUSES.includes(l.status), product: l.clinic_item_id != null,
+    }));
+    const lastAt = [r.voided_at, ...refunds.map((x) => x.at), ...events.map((x) => x.at)].filter(Boolean).sort().pop() || r.created_at;
+    rows.push({ ...r, refunds, refunded_total: refundedTotal, events, rebill_lines: rebill,
+      can_rebill: !!(r.visit_id && own && !r.payer_id && rebill.length), last_at: lastAt });
+  }
+  rows.sort((a, b) => String(b.last_at || '').localeCompare(String(a.last_at || '')) || b.invoice_id - a.invoice_id);
+  return { from, to, rows: rows.slice(0, 300), totals: { n: rows.length, refunded: refundedAll } };
 }

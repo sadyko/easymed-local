@@ -24,6 +24,8 @@ const READ_ONLY_RPCS = new Set([
   'dashboard_trend', 'telephony_operator_stats',
   // CASHIER_HEAD_V1 — кого касса может поставить исполнителем и почём. Чистое чтение.
   'cashier_line_performers',
+  // CASHIER_PAID_SWAP_V1 — «Возвраты и отмены» кассы. Чистое чтение.
+  'cashier_refunds',
   // BUILDING_REPORTS_V1 — перечень зданий для выборки в «Отчётах». Чистое
   // чтение справочного порядка, как reports_overview рядом: клиника с
   // просроченной лицензией читает отчёты, и «читает» не должно означать
