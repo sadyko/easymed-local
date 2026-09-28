@@ -90,6 +90,30 @@ export function sectionLevel(db, user, key) {
   return best;
 }
 
+// CASHIER_HEAD_V1 (ревью, 2026-09-28) — уровень раздела, ЗАПИСАННЫЙ ЯВНО.
+//
+// sectionLevel считает раздел без уровня полным доступом ('admin') — так
+// раздел, выданный до появления уровней, не терял прав. Для денежных ворот
+// это слишком щедро: «Старший кассир», отмеченный старым экраном без уровня,
+// закрывал бы чужие смены. Здесь раздел без уровня — только просмотр
+// ('viewer'); «изменение» — только записанное 'editor' / 'admin'.
+export function explicitSectionLevel(db, user, key) {
+  const roles = rolesForPermissions(db, user);
+  let best = null;
+  for (const role of roles) {
+    let row;
+    try { row = db.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get(role); } catch { row = null; }
+    if (!row || !row.permissions) continue;
+    let perms;
+    try { perms = JSON.parse(row.permissions); } catch { continue; }
+    const sections = Array.isArray(perms && perms.sections) ? perms.sections : [];
+    if (!sections.includes(key)) continue;
+    const lvl = (perms.levels && perms.levels[key]) || 'viewer';
+    if (!best || (LEVEL_RANK[lvl] || 0) > (LEVEL_RANK[best] || 0)) best = lvl;
+  }
+  return best;
+}
+
 // CUSTOM_ROLES_V1 (2026-09-16) — ПО КАКИМ РОЛЯМ СЧИТАТЬ ПРАВА НА РАЗДЕЛЫ.
 //
 // У своей роли клиники есть ОСНОВА (штатная роль) — по ней сервер отдаёт

@@ -7,7 +7,7 @@ import { rpcT } from '../server-message.js';   // V3120_I18N — собранн�
 import { today as localToday, localRangeWhere } from '../domain/day.js';   // V3120_FIX (PERF) — дневные ветки по индексам
 import { outstandingWhere, idemReplay, idemRemember } from '../domain/money.js';   // V3120_FIX — ключ повтора
 import { assertTransition } from '../domain/lifecycle.js';
-import { hasAnyRole, sectionLevel } from '../roles.js';
+import { hasAnyRole, explicitSectionLevel } from '../roles.js';
 import { countsAsInflow } from '../../../public/js/shared/payment-methods.js';   // DEPOSIT_REVENUE_V1
 import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';   // DEBT_FLOW_V1 — «пациент ещё на койке»
 // BRANCH_MONEY_GUARD_V1 — тот же запрет и та же формулировка, что в billing.js:
@@ -44,10 +44,12 @@ const MAX_MONEY = 1e12;
 //   «Просмотр»  — X-отчёт любой смены (shift_report с чужим shift_id);
 //   «Изменение» — ещё и пересчитать и закрыть чужую смену (close_cash_shift).
 // Раздел выдаётся надстройкой head_cashier (миграция 218) или в «Ролях».
-// Администратор — всё, как и раньше.
+// Администратор — всё, как и раньше. Ревью: раздел, записанный без уровня
+// (старый экран), — только просмотр; закрывать чужие смены даёт лишь
+// явное «Изменение» (explicitSectionLevel).
 export function headCashierLevel(db, user) {
   if (hasAnyRole(user, ['admin'])) return 'edit';
-  const lvl = sectionLevel(db, user, 'cashier-head');
+  const lvl = explicitSectionLevel(db, user, 'cashier-head');
   if (lvl === 'editor' || lvl === 'admin') return 'edit';
   return lvl === 'viewer' ? 'view' : 'none';
 }
@@ -219,9 +221,10 @@ export function closeCashShift(db, args, user) {
           counted_amount = ?,
           expected_amount = ?,
           over_short = ?,
-          notes = ?
+          notes = ?,
+          closed_by = ?
       WHERE id = ?
-    `).run(countedAmount, expected, overShort, notes, shiftId);
+    `).run(countedAmount, expected, overShort, notes, user.id, shiftId);   // CASHIER_HEAD_V1 (мигр. 219) — кто закрыл
 
     return { shift: db.prepare('SELECT * FROM cash_shifts WHERE id = ?').get(shiftId) };
   });
@@ -562,10 +565,11 @@ export function deleteInvoice(db, args, user) {
                  WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE invoice_id = ?)`).run(invoiceId);
     // Госпитализация помнит свой счёт отдельным полем — иначе FK не даст удалить.
     db.prepare('UPDATE admissions SET invoice_id = NULL WHERE invoice_id = ?').run(invoiceId);
-    // Журнал правок этого счёта уходит вместе с ним: строки со ссылкой на
-    // несуществующий документ FK не переживёт, а с обнулённой ссылкой они
-    // ничего не значат.
-    db.prepare('DELETE FROM invoice_audit_log WHERE invoice_id = ?').run(invoiceId);
+    // CASHIER_HEAD_V1 (ревью) — журнал правок счёта ОСТАЁТСЯ: удаление —
+    // уборка списка кассы, а не повод стереть, кто что менял в счёте. Ссылку
+    // на удаляемый документ строки отпускают (FK), номер счёта в них остаётся
+    // — так же, как при удалении счёта, оставшегося без строк (billing.js).
+    db.prepare('UPDATE invoice_audit_log SET invoice_id = NULL WHERE invoice_id = ?').run(invoiceId);
 
     db.prepare('DELETE FROM invoice_items WHERE invoice_id = ?').run(invoiceId);
     db.prepare('DELETE FROM invoices WHERE id = ?').run(invoiceId);

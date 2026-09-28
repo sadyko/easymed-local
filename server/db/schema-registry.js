@@ -440,10 +440,12 @@ export const REGISTRY = {
     // not ALL_STAFF. The cashier workspace reads its own shift via the
     // cash_shift_summary RPC; this raw read backs the Head-cashier overview.
     // V3120_FIX (мигр. 194) — auto_closed: смена закрыта в полночь без пересчёта.
-    read:  { roles: ['admin','cashier'], columns: ['id','cashier_id','branch_id','opening_float','opened_at','closed_at','counted_amount','expected_amount','over_short','status','notes','created_at','auto_closed'] },
+    // CASHIER_HEAD_V1 (мигр. 219) — closed_by: кто закрыл смену (старший кассир закрывает чужие).
+    read:  { roles: ['admin','cashier'], columns: ['id','cashier_id','branch_id','opening_float','opened_at','closed_at','counted_amount','expected_amount','over_short','status','notes','created_at','auto_closed','closed_by'] },
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },  // written only by the cash-shift RPCs (money)
     filters: ['id','cashier_id','status','branch_id'],
-    embed:   { users: { table:'users', fk:'cashier_id', columns:['id','full_name'] } },
+    embed:   { users: { table:'users', fk:'cashier_id', columns:['id','full_name'] },
+               closed_by: { table:'users', fk:'closed_by', columns:['id','full_name'] } },
   },
   cash_movements: {
     // «Внести»/«Изъять» drawer movements — read backs the cashier «История»

@@ -301,14 +301,15 @@ test('закрытый месяц оплаты врачей — отказ вс�
   assert.equal(inv(db, invoiceId).total_amount, 150000);
 });
 
-test('исполнитель: работающий, оказывающий услуги и назначенный на эту услугу', () => {
+test('исполнитель: работающий, оказывающий услуги; список — с ценами, назначенные первыми', () => {
   const { db, vs, CONS, vid } = clinic();
   setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
   refused(() => call('cashier_line_set_doctor', db, { visit_service_id: vs, doctor_id: FIRED }, cashier), /уволен/, 400);
-  refused(() => call('cashier_line_set_doctor', db, { visit_service_id: vs, doctor_id: cashier2.id }, cashier), /врач, медсестра или лаборант/, 400);
+  refused(() => call('cashier_line_set_doctor', db, { visit_service_id: vs, doctor_id: cashier2.id }, cashier), /врач/, 400);
+  refused(() => call('cashier_line_add', db, { visit_id: vid, service_id: svc(db, 'Перевязка', 1, { type: 'procedure' }), doctor_id: cashier2.id }, cashier), /врач, медсестра или лаборант/, 400);
   refused(() => call('cashier_line_set_doctor', db, { visit_service_id: vs, doctor_id: 999 }, cashier), /нет/, 400);
-  // У приёма отмечены исполнители (DOC, DOC2) — медсестра не из них.
-  refused(() => call('cashier_line_set_doctor', db, { visit_service_id: vs, doctor_id: NURSE }, cashier), /не оказывает/, 400);
+  // Приём — консультация (группа услуг по умолчанию): его ведёт врач.
+  refused(() => call('cashier_line_set_doctor', db, { visit_service_id: vs, doctor_id: NURSE }, cashier), /врач/, 400);
   // Список, который экран предлагает, — те же двое, с их ценами.
   const p = call('cashier_line_performers', db, { visit_id: vid, service_id: CONS }, cashier);
   assert.deepEqual(p.performers.map((x) => [x.id, x.unit_price]).sort(), [[DOC, 150000], [DOC2, 120000]]);
@@ -405,4 +406,220 @@ test('кассир со старым «просмотром» кассы при�
   assert.equal(call('cashier_line_change_service', db, { visit_service_id: vs, new_service_id: USG }, cashier).changed, true);
   const paid = call('record_payment', db, { invoice_id: invoiceId, amount: 80000, method: 'cash' }, cashier);
   assert.equal(paid.invoice.status, 'paid');
+});
+
+// ═══ Ревью CASHIER_HEAD_V1 (2026-09-28) ═══════════════════════════════════
+
+test('I1: бесплатный счёт стал платным после смены врача — строка снова ждёт кассу, номер очереди снят', () => {
+  const db = seed();
+  const FREE = svc(db, 'Осмотр', 0);
+  rates(db, DOC2, [{ service_id: FREE, price: 50000 }]);
+  const { vid } = visit(db);
+  const l = line(db, vid, FREE, DOC);
+  const o = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [l] }, registrar);
+  assert.equal(o.invoice.status, 'paid');
+  assert.equal(vsRow(db, l).status, 'queued');
+  db.prepare("UPDATE visit_services SET queue_key = 'doc:20:x', queue_no = 3 WHERE id = ?").run(l);
+  setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
+  const r = call('cashier_line_set_doctor', db, { visit_service_id: l, doctor_id: DOC2 }, cashier);
+  assert.equal(r.invoice.status, 'unpaid');
+  assert.equal(r.invoice.total_amount, 50000);
+  const after = vsRow(db, l);
+  assert.equal(after.status, 'added', 'неоплаченная строка не должна стоять в очереди');
+  assert.equal(after.queue_key, null);
+  assert.equal(after.queue_no, null);
+});
+
+test('I2: регистратура с «Услуги: Просмотр» в карте — отказ и в дверях кассы; «Изменение» без «Удаления» — не убирает', () => {
+  const { db, USG, vs, invoiceId } = clinic();
+  const perms = (tab) => db.prepare('UPDATE role_permissions SET permissions = ? WHERE role = ?')
+    .run(JSON.stringify({ sections: ['patients'], levels: { patients: 'admin' }, patient_tabs: { services: tab } }), 'registrar');
+  perms('view');
+  refused(() => call('cashier_line_change_service', db, { visit_service_id: vs, new_service_id: USG }, registrar));
+  refused(() => call('cashier_line_set_doctor', db, { visit_service_id: vs, doctor_id: DOC2 }, registrar));
+  refused(() => call('cashier_line_add', db, { invoice_id: invoiceId, service_id: USG }, registrar));
+  perms('edit');
+  refused(() => call('cashier_line_remove', db, { visit_service_id: vs }, registrar));
+  assert.equal(call('cashier_line_set_doctor', db, { visit_service_id: vs, doctor_id: DOC2 }, registrar).changed, true);
+  // Кассир с правом кассы вкладкой карты не ограничен: его право — cashier.lines.
+  setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
+  db.prepare("UPDATE role_permissions SET permissions = json_set(permissions, '$.patient_tabs', json('{\"services\":\"view\"}')) WHERE role = 'cashier'").run();
+  assert.equal(call('cashier_line_remove', db, { visit_service_id: vs }, cashier).removed, true);
+});
+
+test('I3: ручная скидка счёта считается от того, как её дали: врач A→B→A возвращает прежний итог', () => {
+  const { db, vs, vid } = (() => {
+    const d = seed();
+    const CONS = svc(d, 'Приём', 100000);
+    rates(d, DOC, [{ service_id: CONS, price: 150000 }]);
+    rates(d, DOC2, [{ service_id: CONS, price: 120000 }]);
+    const v = visit(d);
+    return { db: d, vs: line(d, v.vid, CONS, DOC), vid: v.vid };
+  })();
+  const o = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vs], discount_amount: 30000 }, registrar);
+  assert.equal(o.invoice.total_amount, 120000);
+  setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
+  // Дешевле врач — скидка в той же доле (30 000 × 120/150 = 24 000), как у
+  // убранной строки (FATAL-1); вернули врача — вернулась и скидка.
+  assert.equal(call('cashier_line_set_doctor', db, { visit_service_id: vs, doctor_id: DOC2 }, cashier).invoice.total_amount, 96000);
+  assert.equal(call('cashier_line_set_doctor', db, { visit_service_id: vs, doctor_id: DOC }, cashier).invoice.total_amount, 120000);
+  // Добавили услугу — ручная скидка не растёт сверх данной суммы.
+  const extra = svc(db, 'ЭКГ', 50000, { type: 'procedure' });
+  assert.equal(call('cashier_line_add', db, { invoice_id: o.invoice.id, service_id: extra }, cashier).invoice.total_amount, 170000);
+  // Счёт, выставленный до этой версии (пара не записана): пара выводится из
+  // скидки счёта (30 000 на 200 000) и дальше держится так же.
+  db.prepare('UPDATE invoices SET manual_discount = NULL, manual_base = NULL WHERE id = ?').run(o.invoice.id);
+  assert.equal(call('cashier_line_set_doctor', db, { visit_service_id: vs, doctor_id: DOC2 }, cashier).invoice.total_amount, 144500);
+  assert.equal(call('cashier_line_set_doctor', db, { visit_service_id: vs, doctor_id: DOC }, cashier).invoice.total_amount, 170000);
+});
+
+test('I4: хирургию без койки касса не добавляет и не подставляет', () => {
+  const { db, vs, invoiceId } = clinic();
+  setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
+  const OP = svc(db, 'Операция', 900000, { type: 'other' });
+  refused(() => call('cashier_line_add', db, { invoice_id: invoiceId, service_id: OP, doctor_id: DOC }, cashier), /Хирургия/, 400);
+  refused(() => call('cashier_line_change_service', db, { visit_service_id: vs, new_service_id: OP }, cashier), /Хирургия/, 400);
+  assert.equal(inv(db, invoiceId).total_amount, 150000);
+});
+
+test('I5: номер очереди прежнего врача снимается при смене врача и услуги', () => {
+  const { db, vs, USG } = clinic();
+  setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
+  const q = () => db.prepare("UPDATE visit_services SET queue_key = 'doc:20:2026-09-10', queue_no = 4 WHERE id = ?").run(vs);
+  q();
+  call('cashier_line_set_doctor', db, { visit_service_id: vs, doctor_id: DOC2 }, cashier);
+  assert.deepEqual([vsRow(db, vs).queue_key, vsRow(db, vs).queue_no], [null, null]);
+  q();
+  call('cashier_line_change_service', db, { visit_service_id: vs, new_service_id: USG }, cashier);
+  assert.deepEqual([vsRow(db, vs).queue_key, vsRow(db, vs).queue_no], [null, null]);
+});
+
+test('счёт плательщику и счёт, по которому были платежи, — касса строки не правит', () => {
+  const db = seed();
+  const CONS = svc(db, 'Приём', 100000);
+  const USG = svc(db, 'УЗИ', 80000);
+  setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
+  const payer = Number(db.prepare("INSERT INTO payers (name, kind, active) VALUES ('Страховая', 'insurance', 1)").run().lastInsertRowid);
+  const a = visit(db);
+  const la = line(db, a.vid, CONS, DOC);
+  const ia = createInvoiceForVisit(db, { visit_id: a.vid, visit_service_ids: [la], payer_id: payer }, registrar).invoice.id;
+  refused(() => call('cashier_line_set_doctor', db, { visit_service_id: la, doctor_id: DOC2 }, cashier), /плательщик/, 400);
+  refused(() => call('cashier_line_change_service', db, { visit_service_id: la, new_service_id: USG }, cashier), /плательщик/, 400);
+  refused(() => call('cashier_line_remove', db, { visit_service_id: la }, cashier), /плательщик/, 400);
+  refused(() => call('cashier_line_add', db, { invoice_id: ia, service_id: USG }, cashier), /плательщик/, 400);
+  // Платежи по счёту были (оплата и её возврат), денег на счёте 0 и статус
+  // «не оплачен» — такой остаток бывает у счетов со скидкой после продажи.
+  const b = visit(db);
+  const lb = line(db, b.vid, CONS, DOC);
+  const ib = createInvoiceForVisit(db, { visit_id: b.vid, visit_service_ids: [lb] }, registrar).invoice.id;
+  db.prepare("INSERT INTO payments (invoice_id, amount, method) VALUES (?, 100000, 'cash'), (?, -100000, 'cash')").run(ib, ib);
+  assert.equal(inv(db, ib).paid_amount, 0);
+  assert.equal(inv(db, ib).status, 'unpaid');
+  refused(() => call('cashier_line_change_service', db, { visit_service_id: lb, new_service_id: USG }, cashier), /платеж/, 400);
+});
+
+test('ключ повтора: второй вызов с тем же ключом ничего не добавляет', () => {
+  const { db, invoiceId, USG } = clinic();
+  setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
+  const args = { invoice_id: invoiceId, service_id: USG, idempotency_key: 'k-cashier-line-0001' };
+  const a = call('cashier_line_add', db, args, cashier);
+  const b = call('cashier_line_add', db, args, cashier);
+  assert.equal(b.repeated, true);
+  assert.equal(b.line.id, a.line.id);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM invoice_items WHERE invoice_id = ?').get(invoiceId).n, 2);
+  assert.throws(() => call('cashier_line_add', db, { ...args, service_id: svc(db, 'ЭКГ', 1000) }, cashier), (e) => e.status === 409);
+});
+
+test('закрытый месяц — по МЕСТНОМУ дню визита: визит 1 октября 01:00 (местное) не заперт закрытым сентябрём', () => {
+  const db = seed();
+  const CONS = svc(db, 'Приём', 100000);
+  const USG = svc(db, 'УЗИ', 80000);
+  const { vid } = visit(db, { at: '2026-09-30T20:00:00Z' });   // UTC+5 → 1 октября 01:00
+  const l = line(db, vid, CONS, DOC, { created_at: '2026-09-30T20:00:00Z' });
+  createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [l] }, registrar);
+  db.prepare("INSERT INTO pay_periods (month, closed_by, total, lines) VALUES ('2026-09', 1, 0, 0)").run();
+  setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
+  const localDay = db.prepare("SELECT date('2026-09-30T20:00:00Z', 'localtime') d").get().d;
+  if (localDay.startsWith('2026-10')) {
+    assert.equal(call('cashier_line_change_service', db, { visit_service_id: l, new_service_id: USG }, cashier).changed, true);
+  } else {
+    refused(() => call('cashier_line_change_service', db, { visit_service_id: l, new_service_id: USG }, cashier), /месяц/, 409);
+  }
+});
+
+test('консультацию ведёт только врач; исполнитель без назначения — любой работающий', () => {
+  const { db, vs, vid } = clinic();
+  setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
+  const ct = Number(db.prepare("INSERT INTO consultation_types (name, price) VALUES ('Первичный приём', 90000)").run().lastInsertRowid);
+  const c = line(db, vid, null, DOC, { consultation_type_id: ct });
+  db.prepare('UPDATE visit_services SET service_id = NULL WHERE id = ?').run(c);
+  refused(() => call('cashier_line_set_doctor', db, { visit_service_id: c, doctor_id: NURSE }, cashier), /врач/, 400);
+  // Услуга типа «консультация» — тоже только врачу.
+  const CONS2 = svc(db, 'Консультация хирурга', 70000, { type: 'consultation' });
+  refused(() => call('cashier_line_add', db, { visit_id: vid, service_id: CONS2, doctor_id: NURSE }, cashier), /врач/, 400);
+  // Личная цена одного врача не делает его единственным исполнителем.
+  const PROC = svc(db, 'Перевязка', 30000, { type: 'procedure' });
+  rates(db, DOC, [{ service_id: PROC, price: 45000 }]);
+  const p = call('cashier_line_add', db, { visit_id: vid, service_id: PROC, doctor_id: DOC }, cashier);
+  assert.equal(call('cashier_line_set_doctor', db, { visit_service_id: p.line.id, doctor_id: NURSE }, cashier).line.doctor_id, NURSE);
+  void vs;
+});
+
+test('CRM: смена врача доходит до заявки; добавленная кассой строка попадает в заявку; снятая — снимается', () => {
+  const { db, vs, vid, invoiceId, USG, CONS } = clinic();
+  setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
+  const req = Number(db.prepare("INSERT INTO crm_requests (full_name) VALUES ('Пациент')").run().lastInsertRowid);
+  const crmLine = Number(db.prepare(`INSERT INTO crm_request_services (request_id, service_id, status, doctor_id, visit_id, visit_service_id, visit_service_auto)
+                                     VALUES (?, ?, 'pending', ?, ?, ?, 0)`).run(req, CONS, DOC, vid, vs).lastInsertRowid);
+  call('cashier_line_set_doctor', db, { visit_service_id: vs, doctor_id: DOC2 }, cashier);
+  assert.equal(db.prepare('SELECT doctor_id FROM crm_request_services WHERE id = ?').get(crmLine).doctor_id, DOC2);
+  const add = call('cashier_line_add', db, { invoice_id: invoiceId, service_id: USG, doctor_id: DOC2 }, cashier);
+  const mirrored = db.prepare('SELECT * FROM crm_request_services WHERE visit_service_id = ?').get(add.line.id);
+  assert.ok(mirrored, 'строка, добавленная кассой, не дошла до заявки');
+  assert.equal(mirrored.request_id, req);
+  assert.equal(mirrored.doctor_id, DOC2);
+  call('cashier_line_remove', db, { visit_service_id: add.line.id }, cashier);
+  const gone = db.prepare('SELECT status, visit_service_id FROM crm_request_services WHERE id = ?').get(mirrored.id);
+  assert.ok(!gone || gone.status === 'cancelled' || gone.visit_service_id == null, 'снятая строка осталась в заявке живой');
+});
+
+test('журнал: удаление отменённого счёта журнал не стирает; строки журнала кассы не держат пустой визит', async () => {
+  const { discardEmptyVisit } = await import('./visits.js');
+  const { voidInvoice, deleteInvoice } = await import('./cashier.js');
+  const { db, invoiceId, vs, vid } = clinic();
+  setGrants(db, 'cashier', { 'cashier.lines': 'edit' });
+  call('cashier_line_set_doctor', db, { visit_service_id: vs, doctor_id: DOC2 }, cashier);
+  voidInvoice(db, { invoice_id: invoiceId }, admin);
+  deleteInvoice(db, { invoice_id: invoiceId }, admin);
+  const kept = db.prepare("SELECT invoice_id FROM invoice_audit_log WHERE action = 'line_change_doctor'").all();
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].invoice_id, null);
+  // Визит без строк, заведённый только что регистратором, удаляется несмотря на запись журнала кассы.
+  db.prepare('DELETE FROM visit_services WHERE visit_id = ?').run(vid);
+  db.prepare("UPDATE visits SET created_by = ?, status = 'scheduled', created_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(registrar.id, vid);
+  db.prepare("DELETE FROM invoice_audit_log WHERE action <> 'line_change_doctor'").run();
+  const r = discardEmptyVisit(db, { visit_id: vid }, registrar);
+  assert.equal(r.discarded, true);
+});
+
+test('«Старший кассир» без уровня — только просмотр: закрыть чужую смену нельзя; кто закрыл — записано', () => {
+  const db = seed();
+  db.prepare('UPDATE role_permissions SET permissions = ? WHERE role = ?')
+    .run(JSON.stringify({ sections: ['cashier', 'cashier-head'] }), 'head_cashier');
+  cashMove(db, { kind: 'in', amount: 1000, note: 'Размен' }, cashier);
+  const shift = db.prepare('SELECT * FROM cash_shifts WHERE cashier_id = ?').get(cashier.id);
+  assert.equal(shiftReport(db, { shift_id: shift.id }, head).shift.id, shift.id);
+  refused(() => closeCashShift(db, { shift_id: shift.id, counted_amount: 1000 }, head), /свою/);
+  const closed = closeCashShift(db, { shift_id: shift.id, counted_amount: 1000 }, admin);
+  assert.equal(closed.shift.closed_by, admin.id);
+});
+
+test('касса без базы кассира (своя роль медсестры с правом) добавляет новым счётом и получает цену', () => {
+  const { db, invoiceId, USG } = clinic();
+  recordPayment(db, { invoice_id: invoiceId, amount: 150000, method: 'cash' }, cashier);
+  const nurse = { id: NURSE, role: 'nurse', full_name: 'Медсестра' };
+  setGrants(db, 'nurse', { cashier: 'edit', 'cashier.lines': 'edit' });
+  const r = call('cashier_line_add', db, { invoice_id: invoiceId, service_id: USG }, nurse);
+  assert.equal(r.invoice_created, true);
+  assert.equal(r.invoice.total_amount, 80000);
 });

@@ -129,10 +129,13 @@ export const RPC = {
   // правом вкладки «Услуги» карты пациента — поэтому двери свои, без
   // requireServicesEdit/Delete; сами обработчики те же, что у карты, и право
   // проверяют внутри (billing.js canFixInvoiceLines).
-  cashier_line_change_service: (db, args, user) => changeUnpaidService(db, args, user),
-  cashier_line_set_doctor:     (db, args, user) => setUnpaidLineDoctor(db, args, user),
-  cashier_line_add:            (db, args, user) => addServiceToVisitInvoice(db, args, user),
-  cashier_line_remove:         (db, args, user) => removeUnpaidService(db, args, user),
+  // Ревью: регистратура и администратор проходят их с тем же правом вкладки
+  // «Услуги», что у дверей карты (проверка внутри, requireLineFix); счёт
+  // плательщику касса не правит (cashier: true); ключ повтора — своё имя.
+  cashier_line_change_service: (db, args, user) => changeUnpaidService(db, args, user, { rpc: 'cashier_line_change_service', cashier: true }),
+  cashier_line_set_doctor:     (db, args, user) => setUnpaidLineDoctor(db, args, user, { rpc: 'cashier_line_set_doctor', cashier: true }),
+  cashier_line_add:            (db, args, user) => addServiceToVisitInvoice(db, args, user, { rpc: 'cashier_line_add' }),
+  cashier_line_remove:         (db, args, user) => removeUnpaidService(db, args, user, { rpc: 'cashier_line_remove', cashier: true }),
   cashier_line_performers:     (db, args, user) => cashierLinePerformers(db, args, user),   // только чтение
   refund_payment:           (db, args, user) => refundPayment(db, args, user),   // CASHIER_REFUND_V1 — возврат оплаты (отрицательный платёж)
   refund_invoice_line:      (db, args, user) => refundInvoiceLine(db, args, user),   // BILLING_AUDIT_FIX_V1 (B1) — вернуть одну услугу счёта
