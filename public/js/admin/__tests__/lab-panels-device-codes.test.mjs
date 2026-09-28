@@ -376,3 +376,41 @@ test('«Анализатор» у панели: уже привязанный п
     assert.ok(labels.includes('Найденный BC-5300'), 'привязка не превращается молча в «— нет —»: ' + labels.join(' | '));
   } finally { PANELS[0].device_id = was; }
 });
+
+// ── LIS_ANALYZER_LIST_V1, ревью M1 — подсказка под «Анализатор» — по тому же
+// списку, что и сам выбор. Раньше она считала ВСЕ приборы: при одной ненажатой
+// находке говорила «Выберите прибор», а в списке было только «— нет —».
+const HINT_PICK = 'Выберите прибор — тогда у каждого показателя можно указать, какое поле анализатора его заполняет.';
+const HINT_WAITS = 'Новый анализатор ждёт «Добавить» во вкладке «Анализаторы».';
+const HINT_NONE = 'Приборов пока нет. Запустите пробу на анализаторе — он появится во вкладке «Анализаторы» → «Добавить прибор».';
+
+async function panelsWith(devices) {
+  const saved = DEVICES.splice(0, DEVICES.length, ...devices);
+  const was = PANELS[0].device_id;
+  PANELS[0].device_id = null;
+  try {
+    return textOf(await mountPanels());
+  } finally {
+    DEVICES.splice(0, DEVICES.length, ...saved);
+    PANELS[0].device_id = was;
+  }
+}
+
+test('ревью M1: есть только ненажатая находка — подсказка ведёт к «Добавить», а не «Выберите прибор»', async () => {
+  const text = await panelsWith([{ id: 2, name: 'Найденный BC-5300', profile: 'mindray-bc-5300', enabled: 1, added: 0 }]);
+  assert.ok(text.includes(HINT_WAITS), text.slice(0, 400));
+  assert.ok(!text.includes(HINT_PICK), 'выбирать в списке нечего');
+});
+
+test('ревью M1: приборов нет совсем — как появиться: «Анализаторы» → «Добавить прибор»', async () => {
+  const text = await panelsWith([]);
+  assert.ok(text.includes(HINT_NONE));
+  assert.ok(!text.includes(HINT_PICK) && !text.includes(HINT_WAITS));
+});
+
+test('ревью M1: есть добавленный прибор — прежняя подсказка «Выберите прибор»', async () => {
+  const text = await panelsWith([{ id: 1, name: 'Гематология', profile: 'mindray-bc-5300', enabled: 1, added: 1 },
+    { id: 2, name: 'Найденный BC-5300', profile: 'mindray-bc-5300', enabled: 1, added: 0 }]);
+  assert.ok(text.includes(HINT_PICK));
+  assert.ok(!text.includes(HINT_WAITS));
+});

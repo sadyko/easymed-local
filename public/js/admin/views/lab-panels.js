@@ -389,12 +389,13 @@ export async function mountLabPanels(container) {
         // LIS_INGEST_V1 — какой прибор кормит эту панель. «— нет —» законно:
         // панель, которую заполняют руками, анализатора не имеет.
         state.devSelValue = String(p.device_id || '');
+        // LIS_ANALYZER_LIST_V1 — только добавленные приборы (находка ждёт
+        // «Добавить» на экране «Анализаторы») плюс уже привязанный. Ревью M1:
+        // список — одной переменной: по нему же выбирается подсказка ниже.
+        const devChoices = state.devices.filter(d => d.added == null || Number(d.added) === 1 || Number(p.device_id) === d.id);
         const devSel = h('select', { style: { width: '100%' }, onchange: (e) => { state.devSelValue = e.target.value; paintEditor(); } },
             h('option', { value: '', selected: !p.device_id }, '— нет —'),
-            // LIS_ANALYZER_LIST_V1 — только добавленные приборы (находка ждёт
-            // «Добавить» на экране «Анализаторы») плюс уже привязанный.
-            ...state.devices.filter(d => d.added == null || Number(d.added) === 1 || Number(p.device_id) === d.id)
-                .map(d => h('option', { value: String(d.id), selected: Number(p.device_id) === d.id },
+            ...devChoices.map(d => h('option', { value: String(d.id), selected: Number(p.device_id) === d.id },
                 (d.enabled ? d.name : trf('{name} (выключен)', { name: d.name })))));
         // Смена прибора перерисовывает таблицу: у другого прибора другие каналы,
         // и прежние подсказки к ним не относятся.
@@ -515,10 +516,15 @@ export async function mountLabPanels(container) {
                     tr('Заказ этой услуги (после оплаты в кассе) попадёт в «Лабораторию» с показателями панели.')),
                 // LIS_INGEST_V1 — which machine feeds this panel. Until one is chosen
                 // the «Поле анализатора» column is not shown at all.
+                // Ревью M1: подсказка — по тому же списку, что и выбор выше.
+                // Раньше она считала все приборы и при одной ненажатой находке
+                // говорила «Выберите прибор», а выбрать было нечего.
                 fld(tr('Анализатор'), devSel,
-                    state.devices.length
+                    devChoices.length
                         ? tr('Выберите прибор — тогда у каждого показателя можно указать, какое поле анализатора его заполняет.')
-                        : tr('Приборов пока нет. Запустите пробу на анализаторе — он появится сам во вкладке «Анализаторы».'))),
+                        : state.devices.length
+                            ? tr('Новый анализатор ждёт «Добавить» во вкладке «Анализаторы».')
+                            : tr('Приборов пока нет. Запустите пробу на анализаторе — он появится во вкладке «Анализаторы» → «Добавить прибор».'))),
             linkLine));
 
         // ── analyte table ──
