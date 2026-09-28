@@ -421,3 +421,13 @@ test('products.on_hand: по скрытому остатку нельзя сор
   assert.throws(() => readAs(db, U.nurse, { ...PRODUCTS, order: [{ col: 'on_hand', asc: false }] }), (e) => e.status === 400);
   assert.doesNotThrow(() => readAs(db, U.admin, { ...PRODUCTS, order: [{ col: 'on_hand', asc: false }] }));
 });
+
+test('сводка (дашборд): «Низкий остаток» склада — тем, кто видит склад; врачу и медсестре — пусто', () => {
+  const db = seed();
+  db.prepare('UPDATE products SET reorder_level = 200 WHERE id = ?').run(P);   // 100 на складе < 200 — низкий остаток
+  assert.equal(rpc(db, 'dashboard_summary', {}, U.admin).low_stock_count, 1);
+  assert.equal(rpc(db, 'dashboard_summary', {}, U.inv).low_stock_count, 1);
+  for (const k of ['doctor', 'nurse', 'senior', 'head', 'lab', 'custom']) {
+    assert.equal(rpc(db, 'dashboard_summary', {}, U[k]).low_stock_count, null, k);
+  }
+});

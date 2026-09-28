@@ -29,11 +29,20 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // (группа reports.revenue): то же правило, что у самих отчётов. Счётчики —
 // пациенты, визиты, число счетов, койки — остаются всем, кто видит сводку.
 import { canSeeReportKey } from '../report-access.js';
+// OWN_SHELF_ONLY_V1 — «низкий остаток» — число СКЛАДА: его видит тот, кто
+// видит склад (журнал «вся клиника», то же правило, что у products.on_hand).
+import { canSeeAllMovements } from './stock-log.js';
 
 /** Видит ли человек деньги на сводке. Без пользователя (внутренний вызов) — да. */
 function seesMoney(db, user) {
   if (!user) return true;
   try { return canSeeReportKey(db, user, 'reports.revenue'); } catch (_) { return false; }
+}
+
+/** OWN_SHELF_ONLY_V1 — видит ли человек склад на сводке. Без пользователя — да. */
+function seesWarehouse(db, user) {
+  if (!user) return true;
+  try { return canSeeAllMovements(db, user); } catch (_) { return false; }
 }
 // Счёт депозита (DEP-…) и продажи подарочной карты (CARD-…): предоплата, а не
 // услуга — та же граница, что у отчётов (reports.js NOT_DEPOSIT_INVOICE_SQL).
@@ -132,7 +141,9 @@ export function dashboardSummary(db, _args, user) {
     outstanding_patient_amount: money ? patientAmount : null,
     outstanding_payer_count: sum('outstanding_count') - sum('outstanding_patient_count'),
     outstanding_payer_amount: money ? r2(outstandingAmount - patientAmount) : null,
-    low_stock_count,
+    // OWN_SHELF_ONLY_V1 (владелец 28.09) — врачу и медсестре склад не нужен:
+    // они выдают со своих полок; число склада уходит только тем, кто его видит.
+    low_stock_count: seesWarehouse(db, user) ? low_stock_count : null,
     lab_pending_count: sum('lab_pending_count'),
     // Разрез по зданиям и сколько их. Плитка с одним числом на два дома обязана
     // сказать, из чего это число сложено; клиника в одном здании получает
