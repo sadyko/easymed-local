@@ -12,8 +12,12 @@
 //   D4           применяются ТОЛЬКО подтверждённые человеком сопоставления
 //   D6           значение прибора замещает набранное руками в ЧЕРНОВИКЕ
 //   D7           выданный результат молча не переписывается
+//   LIS_MINDRAY_CODES_V1  код бланка сравнивается с компонентом 1 или 2 поля
+//                         OBX-3; в лоток — только когда бланк не заполнен
+//                         (решение владельца 2026-09-28; server/lis/match.js)
 import { parseMessage } from './hl7.js';
 import { recordMessage, touchDevice } from './inbox.js';
+import { planObservations, outcome } from './match.js';   // LIS_MINDRAY_CODES_V1 — правило сопоставления и лотка
 // CRM_REAL_BOOKING_V1 — работа над пациентом это доказательство его прихода.
 import { crmServiceEvidence } from '../services/crm/visit-status.js';
 
@@ -138,29 +142,17 @@ export function ingestMessage(db, raw, peer = '', deviceId = null) {
     return 'AA';
   }
 
-  const analytes = db.prepare('SELECT * FROM lab_panel_analytes WHERE panel_id = ? AND active = 1').all(panel.id);
-  // D4 — применяются ТОЛЬКО подтверждённые сопоставления. Совпадение кода само
-  // по себе разрешением не является: подтвердить обязан человек.
-  const byCode = new Map(analytes
-    .filter((a) => a.device_code && a.device_code_confirmed)
-    .map((a) => [String(a.device_code).toUpperCase(), a]));
+  // LIS_MINDRAY_CODES_V1 — какая строка прибора ложится в какую строку бланка,
+  // решает planObservations (match.js): компонент 1 ИЛИ 2 поля OBX-3 (Mindray
+  // пишет «6690-2^WBC^LN»), только подтверждённые сопоставления (D4), пустое
+  // значение — не значение. Порядок бланка — чтобы спор решался одинаково.
+  const analytes = db.prepare('SELECT * FROM lab_panel_analytes WHERE panel_id = ? AND active = 1 ORDER BY sort_order, id').all(panel.id);
+  const plan = planObservations(msg.observations, analytes);
 
-  const unapplied = [];
   let applied = 0;
 
   const run = db.transaction(() => {
-    for (const obs of msg.observations) {
-      const status = (obs.status || 'F').toUpperCase();
-      if (status !== 'F') {
-        // Предварительный (P) и неполученный (X) в бланк не идут: лаборант
-        // подтвердил бы число, которое прибор ещё сам не считает окончательным.
-        unapplied.push(obs.code + ' (статус ' + status + ')');
-        continue;
-      }
-
-      const a = byCode.get(String(obs.code || '').toUpperCase());
-      if (!a) { unapplied.push(obs.code); continue; }
-
+    for (const { obs, analyte: a } of plan.fills) {
       const num = obs.valueType === 'NM' && /^-?\d+(\.\d+)?$/.test(obs.value) ? parseFloat(obs.value) : null;
       const flag = flagFromClinic(num, a.ref_low, a.ref_high) || flagFromDevice(obs.abnormal);
       // Инвариант 3 и 4: диапазон, имя и единица — из панели. Диапазон прибора
@@ -195,12 +187,10 @@ export function ingestMessage(db, raw, peer = '', deviceId = null) {
       crmServiceEvidence(db, [order.id]);
     }
 
-    recordMessage(db, {
-      ...base,
-      visitServiceId: order.id,
-      status: unapplied.length ? 'unmapped' : 'applied',
-      detail: unapplied.length ? 'не применены: ' + unapplied.join(', ') : '',
-    });
+    // Лоток (решение владельца 2026-09-28): проба принята, когда заполнена
+    // каждая подтверждённая строка бланка; лишние строки прибора — справка.
+    const { status, detail } = outcome(plan);
+    recordMessage(db, { ...base, visitServiceId: order.id, status, detail });
   });
 
   try {

@@ -244,9 +244,12 @@ test('второй анализатор ТОЙ ЖЕ модели принима�
   // одинаковых моделей те же самые — сопоставление панели верно для обеих.
   const db = fresh();
   db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'Гематология 2','mindray-bc-5300')").run();
-  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1')]), '10.0.0.12', 2);
+  // Проба полная: с LIS_MINDRAY_CODES_V1 (решение владельца 2026-09-28) бланк,
+  // в котором не пришла подтверждённая строка, лежит в лотке. Этот тест — про
+  // приём с прибора той же модели, поэтому проба заполняет весь бланк.
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1'), OBX(2, 'HGB', '142', { unit: 'g/L' })]), '10.0.0.12', 2);
 
-  assert.equal(results(db).length, 1, 'результат с одинаковой модели обязан лечь');
+  assert.equal(results(db).length, 2, 'результат с одинаковой модели обязан лечь');
   assert.equal(results(db)[0].value, '6.1');
   assert.equal(message(db).status, 'applied');
   db.close();
@@ -276,5 +279,92 @@ test('успешный приём отмечает, что прибор на с�
   ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1')]), '127.0.0.1', 1);
   assert.ok(db.prepare('SELECT last_seen_at FROM lab_devices WHERE id = 1').get().last_seen_at,
     'без отметки «на связи» экран не отличит работающий прибор от молчащего');
+  db.close();
+});
+
+// ── LIS_MINDRAY_CODES_V1 — провод Mindray: OBX-3 = «LOINC^ИМЯ^LN» ────────────
+// Воспроизведено 2026-09-28 на копии базы: «6690-2^WBC^LN» → ACK AA и ни одного
+// значения в бланке. Симулятор слал «КОД^^99MRC» и ошибку поймать не мог.
+const OBXR = (n, id, value, opts = {}) =>
+  `OBX|${n}|${opts.type || 'NM'}|${id}||${value}|${opts.unit || '10*9/L'}|${opts.range || ''}|${opts.flag || ''}|||${opts.status || 'F'}`;
+
+test('Mindray «6690-2^WBC^LN» ложится в строку, подтверждённую как WBC', () => {
+  const db = fresh();
+  const code = ingestMessage(db, MSG('LAB-000123', [OBXR(1, '6690-2^WBC^LN', '9.81'), OBXR(2, '718-7^HGB^LN', '142', { unit: 'g/L' })]), '127.0.0.1');
+  assert.equal(code, 'AA');
+  const wbc = results(db).find((r) => r.parameter === 'Лейкоциты');
+  assert.ok(wbc, 'до исправления здесь было 0 значений при ACK AA');
+  assert.equal(wbc.value, '9.81');
+  assert.equal(message(db).status, 'applied');
+  db.close();
+});
+
+test('Mindray «6690-2^WBC^LN» ложится и в строку, подтверждённую кодом LOINC 6690-2', () => {
+  const db = fresh();
+  db.prepare("UPDATE lab_panel_analytes SET device_code = '6690-2' WHERE code = 'WBC'").run();
+  ingestMessage(db, MSG('LAB-000123', [OBXR(1, '6690-2^WBC^LN', '9.81'), OBXR(2, '718-7^HGB^LN', '142')]), '127.0.0.1');
+  assert.equal(results(db).find((r) => r.parameter === 'Лейкоциты').value, '9.81');
+  assert.equal(message(db).status, 'applied');
+  db.close();
+});
+
+test('Mindray: неподтверждённый код не применяется, проба в лотке с полным кодом', () => {
+  const db = fresh({ confirmed: 0 });
+  ingestMessage(db, MSG('LAB-000123', [OBXR(1, '6690-2^WBC^LN', '9.81'), OBXR(2, '718-7^HGB^LN', '142')]), '127.0.0.1');
+  assert.equal(results(db).filter((r) => r.parameter === 'Лейкоциты').length, 0, 'D4: совпадение само по себе не разрешение');
+  assert.equal(message(db).status, 'unmapped');
+  assert.match(message(db).detail, /не подтверждено: 6690-2\^WBC\^LN/);
+  db.close();
+});
+
+test('бланк заполнен, лишние строки Mindray (режимы, референсная группа, гистограмма) — не в лоток', () => {
+  const db = fresh();
+  ingestMessage(db, MSG('LAB-000123', [
+    OBXR(1, '08001^Take Mode^99MRC', 'O', { type: 'IS' }),
+    OBXR(2, '01002^Ref Group^99MRC', 'General', { type: 'IS' }),
+    OBXR(3, '6690-2^WBC^LN', '9.81'),
+    OBXR(4, '718-7^HGB^LN', '142'),
+    OBXR(5, '15551-4^WBC Histogram. BMP^99MRC', '^Image^BMP^Base64^Qk0=', { type: 'ED' }),
+  ]), '127.0.0.1');
+  assert.equal(results(db).length, 2);
+  const m = message(db);
+  assert.equal(m.status, 'applied', 'нормальная проба Mindray не требует клика в «Необработанных»');
+  assert.match(m.detail, /не использованы: 08001\^Take Mode\^99MRC, 01002\^Ref Group\^99MRC, 15551-4\^WBC Histogram\. BMP\^99MRC/);
+  db.close();
+});
+
+test('подтверждённая строка бланка не пришла — проба в лотке, строка названа, пришедшее записано', () => {
+  const db = fresh();
+  ingestMessage(db, MSG('LAB-000123', [OBXR(1, '6690-2^WBC^LN', '9.81')]), '127.0.0.1');
+  assert.equal(results(db).length, 1, 'то, что пришло, всё равно ложится');
+  assert.equal(message(db).status, 'unmapped');
+  assert.match(message(db).detail, /не пришли: Гемоглобин \(HGB\)/);
+  db.close();
+});
+
+test('пустое значение не стирает набранное руками и считается «не пришло»', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, source, entered_by) VALUES (123,'Лейкоциты','9.9','manual',7)").run();
+  ingestMessage(db, MSG('LAB-000123', [OBXR(1, '6690-2^WBC^LN', ''), OBXR(2, '718-7^HGB^LN', '142')]), '127.0.0.1');
+  const wbc = results(db).find((r) => r.parameter === 'Лейкоциты');
+  assert.equal(wbc.value, '9.9');
+  assert.equal(wbc.source, 'manual');
+  assert.equal(message(db).status, 'unmapped');
+  assert.match(message(db).detail, /Лейкоциты \(WBC, пустое значение\)/);
+  db.close();
+});
+
+test('две строки прибора на одну строку бланка — ложится совпавшая по коду', () => {
+  const db = fresh();
+  ingestMessage(db, MSG('LAB-000123', [OBXR(1, '12345^WBC^99MRC', '1.0'), OBXR(2, 'WBC^^99MRC', '2.0'), OBXR(3, 'HGB^^99MRC', '142')]), '127.0.0.1');
+  assert.equal(results(db).find((r) => r.parameter === 'Лейкоциты').value, '2.0');
+  assert.match(message(db).detail, /не использованы: 12345\^WBC\^99MRC/);
+  db.close();
+});
+
+test('флаг «H~N» без диапазона клиники — высокий, а не «отклонение»', () => {
+  const db = fresh();
+  ingestMessage(db, MSG('LAB-000123', [OBXR(1, '6690-2^WBC^LN', '12.36', { flag: 'H~N' })]), '127.0.0.1');
+  assert.equal(results(db)[0].flag, 'high');
   db.close();
 });
