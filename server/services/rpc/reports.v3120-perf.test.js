@@ -143,6 +143,38 @@ function seed() {
     insPay.run(inv, a === 1 ? total : Math.round(total / 2), 'cash', at(-5));
     db.prepare('UPDATE invoices SET paid_amount = ? WHERE id = ?').run(a === 1 ? total : Math.round(total / 2), inv);
   }
+  // SUPPLIERS_VAT_V1 — товары под НДС: налог строки товара берётся у товара
+  // (products.vat_rate) подзапросом по строке визита / стационара — и прежний, и
+  // нынешний SQL обязаны найти его одинаково. Строки товара — со счётом (своя
+  // скидка, скидка счёта) и без, «без НДС» и 0 % рядом; стационар — строкой в
+  // счёте госпитализации. Без rand(): случайная последовательность выше не
+  // сдвигается.
+  db.prepare('UPDATE products SET vat_rate = 12 WHERE id = 1').run();
+  db.prepare("INSERT INTO products (id, name, avg_cost, sale_price, vat_rate) VALUES (2, 'Шприц', 300, 700, NULL), (3, 'Маска', 100, 800, 0)").run();
+  const insGoods = db.prepare(`INSERT INTO visit_services (visit_id, clinic_item_id, doctor_id, quantity, unit_price, total, status, created_at)
+                               VALUES (?,?,?,?,?,?,'added',?) RETURNING id`);
+  for (let k = -70, n2 = 0; k <= 0; k += 5, n2++) {
+    const day = dayOf(k) + 'T0' + (n2 % 9) + ':30:00Z';
+    const v = insV.get(1 + (n2 % 7), 1 + (n2 % 4), day, 'arrived', null, null).id;
+    const g1 = insGoods.get(v, 1, 1 + (n2 % 4), 2, 2000, 4000, day).id;
+    const g2 = insGoods.get(v, 2 + (n2 % 2), n2 % 3 ? 2 : null, 1, 700, 700, day).id;
+    insGoods.get(v, 1, 3, 1, 2000, 2000, day);                        // без счёта
+    if (n2 % 4 === 3) continue;
+    const disc = n2 % 3 === 0 ? 470 : 0;
+    const inv = insInv.get('GDS-' + n2, v, 1 + (n2 % 7), null, 4700, disc, 4700 - disc, 0, n2 % 5 ? 'paid' : 'unpaid', day, n2 % 5 ? day : null, null, null).id;
+    db.prepare('UPDATE visit_services SET invoice_item_id = ? WHERE id = ?').run(insIi.get(inv, null, 'Бинт', 2, 2000, 4000, n2 % 2 ? 133.33 : 0).id, g1);
+    db.prepare('UPDATE visit_services SET invoice_item_id = ? WHERE id = ?').run(insIi.get(inv, null, 'Шприц', 1, 700, 700, 0).id, g2);
+    if (n2 % 5) { insPay.run(inv, 4700 - disc, 'cash', day); db.prepare('UPDATE invoices SET paid_amount = ? WHERE id = ?').run(4700 - disc, inv); }
+  }
+  {
+    const adm = db.prepare(`INSERT INTO admissions (patient_id, doctor_id, status, admission_no, admitted_at)
+                            VALUES (3, 2, 'active', 'A-G', ?) RETURNING id`).get(dayOf(-20) + 'T08:00:00Z').id;
+    const inv = insInv.get('ADM-G', null, 3, adm, 6000, 0, 6000, 6000, 'paid', dayOf(-3) + 'T10:00:00Z', dayOf(-3) + 'T10:00:00Z', null, null).id;
+    const ii = insIi.get(inv, null, 'Бинт', 3, 2000, 6000, 0).id;
+    db.prepare(`INSERT INTO admission_services (admission_id, clinic_item_id, doctor_id, quantity, unit_price, total, status, billable, invoice_item_id, performed_at)
+                VALUES (?, 1, 2, 3, 2000, 6000, 'added', 1, ?, ?)`).run(adm, ii, dayOf(-10) + 'T12:00:00Z');
+    insPay.run(inv, 6000, 'cash', dayOf(-3) + 'T10:00:00Z');
+  }
   // Закрытый месяц (позапрошлый) и изменение ПОСЛЕ закрытия — корректировка.
   const prev2 = dayOf(-62).slice(0, 7);
   payPeriodClose(db, { month: prev2 }, admin);

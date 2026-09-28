@@ -250,7 +250,11 @@ test('procurement: receive movements only, with line sum', () => {
   assert.equal(r.rows.length, 1);           // the dispense movement is NOT a purchase
   const cols = r.columns;
   assert.equal(r.rows[0][cols.indexOf('Товар')], 'Шовный материал');
-  assert.equal(r.rows[0][cols.indexOf('Сумма')], 20000);
+  // SUPPLIERS_VAT_V1 — «Сумма» стала «Суммой с НДС» (сколько заплачено), рядом
+  // «Сумма без НДС» и «НДС»; у прихода без записанного НДС они равны.
+  assert.equal(r.rows[0][cols.indexOf('Сумма с НДС')], 20000);
+  assert.equal(r.rows[0][cols.indexOf('Сумма без НДС')], 20000);
+  assert.equal(r.rows[0][cols.indexOf('Ставка НДС')], 'не указан');
 });
 
 test('surgery_profit: filters surgery lines, subtracts tax + fee + consumables', () => {

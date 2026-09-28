@@ -55,7 +55,7 @@ function rangeLit(db, col, from, to) {
   return localRangeSql(col, d.a, d.b);
 }
 import { outstandingWhere } from '../domain/money.js';
-import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы шаблоном
+import { rpcT, fillTemplate } from '../server-message.js';   // V3120_I18N — собранные фразы шаблоном
 // BUILDING_REPORTS_V1 — «в каком ЗДАНИИ это произошло». Отдельное измерение от
 // branch_id: см. шапку domain/buildings.js.
 import {
@@ -81,6 +81,9 @@ import { categoryOf, CAT_ORDER } from '../../../public/js/shared/service-categor
 // а партии и их остатки — тем же расчётом, что экран «Сроки годности».
 import { holderNameSql, movementPatientSql } from './stock-log.js';
 import { lotBalances, EXPIRING_SOON_DAYS, parseCategories, categoryClause } from './expiry.js';
+// SUPPLIERS_VAT_V1 — названия типов товаров и подпись ставки НДС — те же, что
+// на экранах склада (один модуль на сервер и браузер).
+import { GOODS_CATEGORY_RU, vatLabel } from '../../../public/js/shared/goods-catalog.js';
 // REPORTS_V2, ревью I6 — кто видит начисления врача: сам врач или тот, кому
 // открыта группа «Оплата врачей» (ROLE_REPORTS_SETTINGS_V1; прежде — весь
 // раздел «Отчёты»), и администратор.
@@ -904,7 +907,24 @@ const POST_SALE_KEEP_SQL = `(CASE WHEN ${POST_SALE_SQL} > 0 AND i.total_amount +
 // Ставку налога берём подзапросом, а не через алиас s: services джойнится не во
 // всех отчётах (в doctor_salaries его нет), и ссылка на s.tax_rate там уронила
 // бы запрос.
-const ITEM_TAX_RATE_SQL = `COALESCE((SELECT sx.tax_rate FROM services sx WHERE sx.id = ii.service_id), 0)`;
+//
+// SUPPLIERS_VAT_V1 (2026-09-28) — НАЛОГ СТРОКИ ТОВАРА — СТАВКА НДС ТОВАРА.
+// Владелец: у товара цена продажи и ставка НДС (12 %, 0 %, «без НДС»), и она
+// «used on the patient's bill for goods lines». У строки счёта с товаром нет
+// услуги (service_id NULL), и прежде её налог был 0 при любой ставке. Товар
+// строки — у связанной строки визита (visit_services.clinic_item_id) или
+// стационара (admission_services.clinic_item_id), обе ищутся по индексу
+// invoice_item_id. Формула налога ТА ЖЕ, что у услуг (ITEM_TAX_SQL), — одна
+// колонка «Налог» на все строки. Долю врача это не двигает: у товара её нет
+// (PAY_GOODS_NONE_V1), вознаграждение за направление от налога не зависит,
+// записанные закрытые месяцы (D6) пересчитываются по записанной доле налога,
+// а товар и там — 0. Услуга без ставки и строка без товара — как прежде.
+const ITEM_GOODS_VAT_SQL = `(CASE WHEN ii.service_id IS NULL THEN COALESCE(
+  (SELECT gpx.vat_rate FROM visit_services gvx JOIN products gpx ON gpx.id = gvx.clinic_item_id
+    WHERE gvx.invoice_item_id = ii.id ORDER BY gvx.id LIMIT 1),
+  (SELECT gpx.vat_rate FROM admission_services gax JOIN products gpx ON gpx.id = gax.clinic_item_id
+    WHERE gax.invoice_item_id = ii.id ORDER BY gax.id LIMIT 1)) END)`;
+const ITEM_TAX_RATE_SQL = `COALESCE((SELECT sx.tax_rate FROM services sx WHERE sx.id = ii.service_id), ${ITEM_GOODS_VAT_SQL}, 0)`;
 const ITEM_AFTER_DISCOUNT_SQL = `(ii.total - (${ITEM_DISCOUNT_SQL}))`;
 const ITEM_TAX_SQL = `(${ITEM_AFTER_DISCOUNT_SQL} * ${ITEM_TAX_RATE_SQL} / 100.0)`;
 const ITEM_NET_SQL = `(${ITEM_AFTER_DISCOUNT_SQL} - ${ITEM_TAX_SQL})`;
@@ -920,9 +940,12 @@ const ITEM_NET_SQL = `(${ITEM_AFTER_DISCOUNT_SQL} - ${ITEM_TAX_SQL})`;
 // одном знаке — меняется только, откуда берутся два числа.
 function fastMoneySql(sql) {
   if (!PUSH_DOWN) return sql;
+  // SUPPLIERS_VAT_V1 — ставка товара остаётся тем же подзапросом по индексу:
+  // он считается только у строки без услуги (COALESCE не идёт дальше ставки
+  // услуги), а таких строк — товары и приёмы — немного.
   return sql.split(OWN_DISCOUNT_SUM_SQL).join('COALESCE(od.s, 0)')
     .split(OWN_DISCOUNT_BASE_SQL).join('COALESCE(od.b, 0)')
-    .split(ITEM_TAX_RATE_SQL).join('COALESCE(stx.tax_rate, 0)');
+    .split(ITEM_TAX_RATE_SQL).join(`COALESCE(stx.tax_rate, ${ITEM_GOODS_VAT_SQL}, 0)`);
 }
 // invIdExpr — счёт строки (алиас i), invScope — выборка id счетов, которые
 // соединение может спросить (null — все счета со своими скидками).
@@ -1037,7 +1060,8 @@ function itemRowsQuery(db, args, ctx, extra = { clause: '', params: [] }) {
            ii.unit_price                      AS price,
            ii.total                           AS amount,
            ${ITEM_DISCOUNT_SQL}               AS discount,
-           COALESCE(s.tax_rate, 0)            AS tax_rate,
+           -- SUPPLIERS_VAT_V1 — ставка строки: у услуги её, у товара — НДС товара.
+           ${ITEM_TAX_RATE_SQL}               AS tax_rate,
            -- INPATIENT_SHARE_V1 — у строки стационара врач свой: исполнитель,
            -- иначе назначивший (idoc); у амбулаторной — прежний doc.
            COALESCE(doc.full_name, idoc.full_name) AS doctor,
@@ -1220,7 +1244,9 @@ function outpatientPayRows(db, { from, to, doctorId, bf, gf, withoutDoctor = fal
            s.type                             AS service_group,
            s.is_lab                           AS service_is_lab,
            CASE WHEN ii.id IS NOT NULL THEN ii.quantity ELSE vs.quantity END AS qty,
-           COALESCE(s.tax_rate, 0)            AS tax_rate,
+           -- SUPPLIERS_VAT_V1 — у строки товара ставка — НДС товара (как у
+           -- строки счёта, ITEM_TAX_RATE_SQL): налог строки без счёта тот же.
+           COALESCE(s.tax_rate, pr.vat_rate, 0) AS tax_rate,
            ${BILLED_COLUMNS_SQL},
            vs.clinic_item_id                  AS clinic_item_id,
            vs.unit_price                      AS line_unit_price,
@@ -2997,11 +3023,8 @@ const STOCK_UNIT_SQL = `CASE WHEN COALESCE(pr.base_unit, '') IN ('', 'pcs') AND 
 // поставщикам, итог здания и сверка ведомости считаются по одной и той же
 // выборке. Конструктор отчётов рисует фильтры переключателями с одним выбором —
 // отсюда одна категория, а не список.
-const CATEGORY_RU = {
-  medicines: 'Медикаменты', consumables: 'Расходники', equipment: 'Оборудование',
-  lab_supplies: 'Лаб. материалы', dental: 'Стоматология', radiology: 'Радиология',
-  office_it: 'Офис / IT', facility: 'Хозяйство',
-};
+// SUPPLIERS_VAT_V1 — названия — из общего с экранами склада списка.
+const CATEGORY_RU = GOODS_CATEGORY_RU;
 function reportCategory(args) {
   const v = args && args.category;
   if (v === undefined || v === null || v === '' || v === 'all') return null;
@@ -3020,11 +3043,38 @@ function categoryNote(cats) {
     + ' — товары других категорий в отчёт и итоги не вошли.';
 }
 
+// SUPPLIERS_VAT_V1 — отбор прихода по поставщику: id поставщика (выпадающий
+// список хаба хранит его строкой) или пусто — все. Поставщик строки — тот же,
+// что в колонке «Поставщик»: свой у прихода, у прихода по заказу — заказа.
+function reportSupplier(args) {
+  const v = args && args.supplier_id;
+  if (v === undefined || v === null || v === '' || v === 'all') return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n <= 0) throw new RpcError('Поставщик отчёта указан неверно.', 400);
+  return n;
+}
+// Подпись ставки прихода: 12 % / 0 % / «без НДС»; приход, у которого НДС не
+// записан вовсе (до учёта НДС, по заказу на закупку), — «не указан».
+const VAT_UNKNOWN_RU = 'не указан';
+const receiptVatLabel = (r) => (r.vat_rate == null && r.vat_amount == null ? VAT_UNKNOWN_RU : vatLabel(r.vat_rate));
+const PROCUREMENT_VAT_NOTE = 'Цена прихода вводится без НДС; НДС строки — сумма без НДС × ставку; «Сумма с НДС» — сколько заплачено поставщику, по ней считается себестоимость на складе. «Цена продажи» — нынешняя цена товара в карточке (с НДС).';
+const PROCUREMENT_VAT_UNKNOWN_NOTE = 'Ставка «не указан» — у прихода НДС не записан (приход до учёта НДС или по заказу на закупку): его «Сумма без НДС» равна «Сумме с НДС».';
+const PROCUREMENT_TOTAL_T = 'Итого за период: без НДС {net} сум, НДС {vat} сум, с НДС {gross} сум.';
+const PROCUREMENT_SUPPLIER_T = 'Поставщик: «{name}» — приходы других поставщиков в отчёт и итоги не вошли.';
+
 // (а) ПРИХОД ПО ПОСТАВЩИКАМ. Поставщик — stock_movements.supplier_id (приход
 // через «Принять товар»), у прихода по заказу — поставщик заказа
 // (reference_type 'purchase_order', reference_id = заказ). Прежде в колонке
 // «Поставщик / примечание» стояло свободное примечание движения, и поставщика
 // там не было почти никогда.
+//
+// SUPPLIERS_VAT_V1 (2026-09-28) — владелец: «set up price and VAT rate. Also in
+// the report of the procurement too». Строка прихода показывает категорию,
+// цену без НДС, ставку и сумму НДС, суммы без НДС и с НДС и цену продажи;
+// отбор — по типу (категории) и поставщику; итог периода — с НДС и без.
+// «Сумма с НДС» — количество × себестоимость единицы (как прежняя «Сумма»):
+// себестоимость прихода и есть цена с НДС. НДС — записанная сумма строки
+// (stock_movements.vat_amount), «без НДС» — их разность.
 function procurementReport(db, args, ctx) {
   const { from, to } = resolveRange(db, args);
   const bf = branchFilter(args, 'sm.branch_id');
@@ -3034,20 +3084,29 @@ function procurementReport(db, args, ctx) {
   const gf = buildingWhere(db, ctx, args, 'stock_movements', 'sm');
   const cats = reportCategory(args);
   const cf = categoryAnd(cats);
+  const supplierId = reportSupplier(args);
+  const sf = supplierId ? { clause: ' AND COALESCE(sm.supplier_id, po.supplier_id) = ?', params: [supplierId] } : { clause: '', params: [] };
   const rows = db.prepare(`
     SELECT ${originExpr(db, 'stock_movements', 'sm')} AS origin,
            ${localDate('sm.created_at')} AS date, pr.name AS product, sm.note AS note,
            sm.qty AS qty, sm.unit_cost AS unit_cost, ${STOCK_UNIT_SQL} AS unit,
            sm.batch_no AS batch_no, sm.expiry_date AS expiry_date,
-           sup.name AS supplier
+           sup.name AS supplier,
+           pr.procurement_category AS category, pr.sale_price AS sale_price,
+           sm.vat_rate AS vat_rate, sm.vat_amount AS vat_amount
       FROM stock_movements sm
       JOIN products pr ON pr.id = sm.product_id
       LEFT JOIN purchase_orders po ON sm.reference_type = 'purchase_order' AND po.id = sm.reference_id
       LEFT JOIN suppliers sup ON sup.id = COALESCE(sm.supplier_id, po.supplier_id)
      WHERE sm.kind = 'receive'
-       AND ${rangeSql('sm.created_at')}${bf.clause}${gf.clause}${cf.clause}
+       AND ${rangeSql('sm.created_at')}${bf.clause}${gf.clause}${cf.clause}${sf.clause}
      ORDER BY sup.name IS NULL, sup.name, sm.created_at DESC, sm.id DESC
-  `).all(...rangeParams(from, to), ...bf.params, ...gf.params, ...cf.params);
+  `).all(...rangeParams(from, to), ...bf.params, ...gf.params, ...cf.params, ...sf.params).map((r) => {
+    const gross = round2(r.qty * (r.unit_cost || 0));
+    const vat = r.vat_amount == null ? null : round2(r.vat_amount);
+    const net = round2(gross - (vat || 0));
+    return { ...r, gross, vat, net };
+  });
   const NO_SUPPLIER = 'Поставщик не указан';
   const perSupplier = new Map();
   for (const r of rows) {
@@ -3061,15 +3120,25 @@ function procurementReport(db, args, ctx) {
   const totals = [...perSupplier.entries()].sort((a, b) => b[1].sum - a[1].sum)
     .map(([name, t]) => 'Итого — ' + name + ': ' + t.lines + ' '
       + pluralRu(t.lines, 'позиция', 'позиции', 'позиций') + ', ' + moneyRu(t.sum) + ' сум.');
+  const sum = (f) => round2(rows.reduce((s, r) => s + (f(r) || 0), 0));
+  const all = { net: moneyRu(sum((r) => r.net)), vat: moneyRu(sum((r) => r.vat)), gross: moneyRu(sum((r) => r.gross)) };
+  const supplierName = supplierId ? ((db.prepare('SELECT name FROM suppliers WHERE id = ?').get(supplierId) || {}).name || '#' + supplierId) : null;
   return {
-    columns: [BUILDING_COL, 'Дата', 'Поставщик', 'Товар', 'Партия', 'Срок годности', 'Количество', 'Ед.',
-              'Цена за ед.', 'Сумма', 'Примечание'],
-    rows: rows.map((r) => [ctx.label(r.origin), r.date, r.supplier || NO_SUPPLIER, r.product, r.batch_no || '',
-      r.expiry_date || '', r.qty, r.unit || '', r.unit_cost == null ? null : round2(r.unit_cost),
-      round2(r.qty * (r.unit_cost || 0)), r.note || '']),
+    columns: [BUILDING_COL, 'Дата', 'Поставщик', 'Категория', 'Товар', 'Партия', 'Срок годности', 'Количество', 'Ед.',
+              'Цена за ед. без НДС', 'Ставка НДС', 'Сумма без НДС', 'НДС', 'Сумма с НДС', 'Цена продажи', 'Примечание'],
+    rows: rows.map((r) => [ctx.label(r.origin), r.date, r.supplier || NO_SUPPLIER, CATEGORY_RU[r.category] || r.category || '',
+      r.product, r.batch_no || '', r.expiry_date || '', r.qty, r.unit || '',
+      r.unit_cost == null ? null : (r.qty ? round2(r.net / r.qty) : round2(r.unit_cost)),
+      receiptVatLabel(r), r.net, r.vat, r.gross,
+      r.sale_price == null ? null : round2(r.sale_price), r.note || '']),
     by_building: summariseByBuilding(ctx, rows, { total: (r) => r.qty * (r.unit_cost || 0) }),
     total_label: 'Сумма закупок',
-    notes: [STOCK_LOCAL_NOTE, categoryNote(cats), ...totals].filter(Boolean),
+    notes: [STOCK_LOCAL_NOTE, categoryNote(cats),
+      supplierName ? noteT(fillTemplate(PROCUREMENT_SUPPLIER_T, { name: supplierName }), PROCUREMENT_SUPPLIER_T, { name: supplierName }) : null,
+      PROCUREMENT_VAT_NOTE,
+      rows.some((r) => r.vat_amount == null && r.vat_rate == null) ? PROCUREMENT_VAT_UNKNOWN_NOTE : null,
+      noteT(fillTemplate(PROCUREMENT_TOTAL_T, all), PROCUREMENT_TOTAL_T, all),
+      ...totals].filter(Boolean),
   };
 }
 
@@ -3217,6 +3286,7 @@ function stockStatementReport(db, args, ctx) {
   const day = `${localDate('m.created_at')}`;
   const rows = db.prepare(`
     SELECT pr.id, pr.name, COALESCE(pr.code, '') AS code, ${STOCK_UNIT_SQL} AS unit,
+           pr.procurement_category AS category,
            COALESCE(pr.avg_cost, 0) AS avg_cost, COALESCE(pr.on_hand, 0) AS on_hand,
            COALESCE(SUM(CASE WHEN ${day} < date(?) THEN m.qty END), 0) AS opening,
            COALESCE(SUM(CASE WHEN ${day} BETWEEN date(?) AND date(?) AND m.kind = 'receive' THEN m.qty END), 0) AS received,
@@ -3255,7 +3325,7 @@ function stockStatementReport(db, args, ctx) {
   return {
     columns: statementColumns(checkNow),
     rows: list.map((r) => {
-      const row = [ctx.label(''), r.name, r.code, r.unit || '',
+      const row = [ctx.label(''), r.name, r.code, CATEGORY_RU[r.category] || r.category || '', r.unit || '',
         round2(r.opening), round2(r.received), round2(r.issued), round2(r.used), round2(r.adjusted), r.closing,
         round2(r.avg_cost),
         money(r.opening, r), money(r.received, r), money(r.issued, r), money(r.used, r), money(r.adjusted, r), money(r.closing, r)];
@@ -3267,8 +3337,9 @@ function stockStatementReport(db, args, ctx) {
     notes,
   };
 }
+// SUPPLIERS_VAT_V1 — «Категория» — одна из восьми, как на «Складе».
 function statementColumns(checkNow) {
-  const cols = [BUILDING_COL, 'Товар', 'Код', 'Ед.',
+  const cols = [BUILDING_COL, 'Товар', 'Код', 'Категория', 'Ед.',
     'Начало: кол-во', 'Приход: кол-во', 'Выдано: кол-во', 'Списано на пациентов: кол-во', 'Корректировки: кол-во', 'Конец: кол-во',
     'Средняя себестоимость',
     'Начало: сумма', 'Приход: сумма', 'Выдано: сумма', 'Списано на пациентов: сумма', 'Корректировки: сумма', 'Конец: сумма'];
@@ -4141,6 +4212,15 @@ const REPORT_CHOICES = {
                    WHERE COALESCE(performer_id, doctor_id) IS NOT NULL)
   `).all().sort((a, b) => ruCompare(a.name, b.name))
     .map((u) => [String(u.id), u.name || '—']),
+  // SUPPLIERS_VAT_V1 — поставщики для «Приход по поставщикам»: действующие и
+  // все, от кого был приход (отключённый поставщик в истории остаётся).
+  supplier_id: (db) => db.prepare(`
+    SELECT id, name FROM suppliers
+     WHERE active = 1
+        OR id IN (SELECT DISTINCT supplier_id FROM stock_movements WHERE kind = 'receive' AND supplier_id IS NOT NULL)
+        OR id IN (SELECT DISTINCT supplier_id FROM purchase_orders WHERE supplier_id IS NOT NULL)
+  `).all().sort((a, b) => ruCompare(a.name, b.name))
+    .map((s) => [String(s.id), s.name || '—']),
 };
 export function reportChoices(db, args, user) {
   const kind = args && args.kind;
@@ -4359,6 +4439,8 @@ const NOT_SUMMABLE_COLS = new Set([
   'Цена', 'Цена за ед.', 'Себестоимость ед.', 'Средняя себестоимость', 'Дней до срока',
   'Пациентов', 'Визитов', 'Госпитализаций', 'Средний % врача', 'Ставка врача', 'Ставка', 'Фикс врача',
   'Unit cost',
+  // SUPPLIERS_VAT_V1 — цены за единицу и ставка у прихода.
+  'Цена за ед. без НДС', 'Цена продажи', 'Ставка НДС',
 ]);
 const STOCK_KINDS = new Set(['procurement', 'stock_consumption', 'stock_statement', 'stock_expiry', 'stock_movements']);
 // V3120_FIX — «В карточке товара» и «Расхождение» у «Оборотной ведомости» —
