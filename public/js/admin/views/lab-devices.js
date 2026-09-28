@@ -15,6 +15,7 @@ import { h, Icon, Tag, toast, clear, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { supabase } from '../../supabase.js';
 import { liveness } from './lab-devices-live.js';   // LIS_INGEST_V1 — правило связи, чистое и покрытое тестами
+import { splitDevices, portState } from './lab-devices-lists.js';   // LIS_ANALYZER_LIST_V1 — таблица / найдены / ждут
 
 // Ключи словаря, а не собранные строки: tr() ищет строку целиком.
 const TRANSPORTS = [
@@ -56,7 +57,10 @@ export async function mountLabDevices(container) {
     stopLabDevicesLive();
     clear(container);
 
-    const state = { devices: [], profiles: [], messages: [], recent: [], loadError: null };
+    // LIS_ANALYZER_LIST_V1 — listeners: какие порты слушаются (lis_listeners);
+    // formMode: что открыто под таблицей ('add' | 'adopt' | 'edit' | null) —
+    // живой опрос перерисовывает окно «Добавить прибор», но не форму, в которой печатают.
+    const state = { devices: [], profiles: [], messages: [], recent: [], loadError: null, listeners: null, formMode: null };
 
     const devicesCard = h('div', { class: 'card' });
     const formCard = h('div', { class: 'card', style: { display: 'none' } });
@@ -86,7 +90,7 @@ export async function mountLabDevices(container) {
         // Ошибки ЗАХВАТЫВАЮТСЯ, а не отбрасываются: экран без приборов и экран,
         // который не смог их прочитать, выглядели бы одинаково — а это разные
         // беды, и лечатся они по-разному.
-        const [devRes, msgRes, profRes, recentRes] = await Promise.all([
+        const [devRes, msgRes, profRes, recentRes, lisRes] = await Promise.all([
             supabase.from('lab_devices').select('*').order('name'),
             // LIS_MINDRAY_CODES_V1 (ревью R1) — принятые отсеиваются В ЗАПРОСЕ,
             // до limit. Их никто не разбирает (resolved_at остаётся пустым), а с
@@ -96,6 +100,7 @@ export async function mountLabDevices(container) {
             supabase.from('lab_device_messages').select('*').is('resolved_at', null).neq('status', 'applied').order('received_at', { ascending: false }).limit(100),
             supabase.rpc('lis_profiles', {}),
             supabase.rpc('lis_recent', { limit: 30 }),
+            supabase.rpc('lis_listeners', {}),
         ]);
         if (devRes.error) state.loadError = devRes.error.message || String(devRes.error);
         state.devices = devRes.data || [];
@@ -103,9 +108,11 @@ export async function mountLabDevices(container) {
         state.messages = (msgRes.data || []).filter((m) => m.status !== 'applied');
         state.profiles = profRes.data || [];
         state.recent = recentRes.data || [];
+        state.listeners = (lisRes && lisRes.data) || null;   // LIS_ANALYZER_LIST_V1
         paintDevices();
         paintLive();
         paintTray();
+        if (state.formMode === 'add') paintAddWindow();   // LIS_ANALYZER_LIST_V1 — список живой
     }
 
     const profileOf = (key) => state.profiles.find((p) => p.key === key) || null;
@@ -114,25 +121,34 @@ export async function mountLabDevices(container) {
 
     function paintDevices() {
         clear(devicesCard);
+        const split = splitDevices(state.devices);   // LIS_ANALYZER_LIST_V1
         devicesCard.appendChild(h('div', { class: 'card-header' },
             h('h3', null, tr('Анализаторы')),
             h('span', { class: 'grow' }),
-            h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openForm(null) },
-                Icon('Plus', { size: 13 }), ' ', tr('Добавить прибор'))));
+            h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: openAddWindow },
+                Icon('Plus', { size: 13 }), ' ',
+                split.found.length ? trf('Добавить прибор · найдено {n}', { n: split.found.length }) : tr('Добавить прибор'))));
 
         if (state.loadError) {
             devicesCard.appendChild(h('div', { class: 'empty', style: { padding: '26px' } },
                 trf('Не удалось прочитать список приборов: {msg}', { msg: state.loadError })));
             return;
         }
-        if (!state.devices.length) {
+        // LIS_ANALYZER_LIST_V1 — в таблице только добавленные и выходившие на
+        // связь (решение владельца 2026-09-28). Находки и молчащие — в окне
+        // «Добавить прибор».
+        if (!split.table.length) {
             devicesCard.appendChild(h('div', { class: 'empty', style: { padding: '26px 20px' } },
-                tr('Приборов пока нет — запустите пробу на анализаторе, и он появится здесь сам.')));
+                h('div', { style: { fontWeight: 600, marginBottom: '4px' } }, tr('Подключённых анализаторов нет.')),
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                    split.found.length
+                        ? trf('Найдено новых: {n} — откройте «Добавить прибор».', { n: split.found.length })
+                        : tr('Откройте «Добавить прибор»: там появится анализатор, как только пришлёт первую пробу.'))));
             return;
         }
 
         const tb = h('tbody');
-        for (const d of state.devices) {
+        for (const d of split.table) {
             const p = profileOf(d.profile);
             const live = livenessText(d.last_seen_at);
             tb.appendChild(h('tr', null,
@@ -233,6 +249,7 @@ export async function mountLabDevices(container) {
     // ---------- форма прибора ----------
 
     function openForm(device) {
+        state.formMode = 'edit';   // LIS_ANALYZER_LIST_V1
         formCard.style.display = '';
         clear(formCard);
 
@@ -270,6 +287,12 @@ export async function mountLabDevices(container) {
             field(tr('Название'), nameInp), field(tr('Модель'), profSel), field(tr('Подключение'), transSel)));
         formCard.appendChild(netRow);
         formCard.appendChild(notReady);
+        // LIS_ANALYZER_LIST_V1 — честная строка ручного пути: прибор-сервер
+        // (программа LIS звонит ему сама) пока не поддержан.
+        if (!device) {
+            formCard.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px' } },
+                tr('Анализаторы, которые сами ждут звонка от программы LIS (например, Mindray BC-3600), пока не поддерживаются: такой прибор не отправит результаты сам.')));
+        }
         formCard.appendChild(h('label', { style: { display: 'flex', gap: '7px', alignItems: 'center', margin: '12px 0' } },
             enabledInp, h('span', null, tr('Включён — слушать этот прибор'))));
 
@@ -277,7 +300,7 @@ export async function mountLabDevices(container) {
             h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: save }, tr('Сохранить')),
             h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: closeForm }, tr('Отмена')),
             h('span', { class: 'grow' }),
-            device ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => remove(device) }, tr('Удалить')) : null));
+            device ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => removeDevice(device) }, tr('Удалить')) : null));
 
         syncTransport();
         nameInp.focus();
@@ -305,20 +328,139 @@ export async function mountLabDevices(container) {
             else toast(tr('Прибор сохранён'));
             closeForm();
             await reload();
+            // LIS_ANALYZER_LIST_V1 — новый прибор по адресу ждёт первого
+            // сообщения: показать его там, где он теперь стоит.
+            if (!device) openAddWindow();
+        }
+    }
+
+    // LIS_ANALYZER_LIST_V1 — удаление вынесено из openForm: «Удалить» есть и у
+    // строк окна «Добавить прибор» (находка, ждущий), а не только в форме.
+    async function removeDevice(dev) {
+        if (!window.confirm(trf('Удалить «{name}»? Панели, привязанные к нему, перестанут принимать результаты.', { name: dev.name }))) return;
+        const { error } = await supabase.from('lab_devices').delete().eq('id', dev.id);
+        if (error) { toast(trf('Не удалось удалить прибор: {msg}', { msg: error.message || error }), 'fail'); return; }
+        await supabase.rpc('lis_restart', {});
+        toast(tr('Прибор удалён'));
+        closeForm();
+        await reload();
+    }
+
+    // ---------- окно «Добавить прибор» (LIS_ANALYZER_LIST_V1) ----------
+    //
+    // Владелец (2026-09-28): «list of the analyzers when adding a dynamic list,
+    // which will be empty if analyzer not plugged or connected». Здесь только те,
+    // кто что-то присылал и ждёт нажатия «Добавить»; добавленные руками, но ещё
+    // молчащие — ниже, со строкой о порте. Ручной путь — ссылкой внизу.
+
+    function openAddWindow() {
+        state.formMode = 'add';
+        formCard.style.display = '';
+        paintAddWindow();
+    }
+
+    function paintAddWindow() {
+        clear(formCard);
+        const split = splitDevices(state.devices);
+        formCard.appendChild(h('div', { class: 'card-header' },
+            h('h3', null, tr('Добавить анализатор')),
+            h('span', { class: 'grow' }),
+            h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: closeForm }, tr('Закрыть'))));
+
+        formCard.appendChild(h('div', { style: { fontWeight: 600, margin: '4px 0 8px' } }, tr('Найдены в сети')));
+        if (!split.found.length) {
+            formCard.appendChild(h('div', { class: 'empty', style: { padding: '18px 16px' } },
+                h('div', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Ни один анализатор пока не выходил на связь.')),
+                h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                    trf('На анализаторе в настройках связи (LIS) укажите адрес {ip}, порт 2575, протокол HL7 и отправьте пробу — анализатор появится здесь сам.', { ip: hostForGuide() }))));
+        } else {
+            const tb = h('tbody');
+            for (const d of split.found) {
+                const p = profileOf(d.profile);
+                const live = livenessText(d.last_seen_at);
+                tb.appendChild(h('tr', null,
+                    h('td', { style: { fontWeight: 600 } }, d.name),
+                    h('td', { class: 'muted' }, p ? p.vendor + ' ' + p.model : tr('модель не определена')),
+                    h('td', { class: 'cell-mono', style: { fontSize: '12.5px' } }, d.host || tr('адрес неизвестен')),
+                    h('td', null, live.kind === 'idle'
+                        ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, live.text)
+                        : Tag(live.text, { kind: live.kind })),
+                    h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
+                        h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => openAdopt(d) }, Icon('Plus', { size: 13 }), ' ', tr('Добавить')),
+                        ' ',
+                        h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => removeDevice(d) }, tr('Удалить')))));
+            }
+            formCard.appendChild(h('table', { class: 'list' },
+                h('thead', null, h('tr', null,
+                    h('th', null, tr('Как назвался')), h('th', null, tr('Модель')), h('th', null, tr('Адрес')),
+                    h('th', null, tr('Связь')), h('th', null, ''))),
+                tb));
         }
 
-        async function remove(dev) {
-            if (!window.confirm(trf('Удалить «{name}»? Панели, привязанные к нему, перестанут принимать результаты.', { name: dev.name }))) return;
-            const { error } = await supabase.from('lab_devices').delete().eq('id', dev.id);
-            if (error) { toast(trf('Не удалось удалить прибор: {msg}', { msg: error.message || error }), 'fail'); return; }
-            await supabase.rpc('lis_restart', {});
-            toast(tr('Прибор удалён'));
+        if (split.waiting.length) {
+            formCard.appendChild(h('div', { style: { fontWeight: 600, margin: '14px 0 8px' } }, tr('Ждут первого сообщения')));
+            const tb = h('tbody');
+            for (const d of split.waiting) {
+                const ps = portState(d, state.listeners);
+                const portText = ps.kind === 'listening' ? trf('порт {port} слушается — ждём первое сообщение', { port: ps.port })
+                    : ps.kind === 'failed' ? trf('порт {port} не слушается: {error}', { port: ps.port, error: ps.error })
+                    : ps.kind === 'off' ? trf('порт {port} сейчас не слушается', { port: ps.port })
+                    : '';
+                tb.appendChild(h('tr', null,
+                    h('td', { style: { fontWeight: 600 } }, d.name),
+                    h('td', { class: 'cell-mono', style: { fontSize: '12.5px' } },
+                        d.transport === 'mllp'
+                            ? trf('{host}:{port}', { host: d.host || tr('любой адрес'), port: d.port || 2575 })
+                            : tr(TRANSPORT_LABEL[d.transport] || d.transport)),
+                    h('td', null, portText ? Tag(portText, { kind: ps.kind === 'listening' ? '' : 'warn' }) : null),
+                    h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
+                        h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => openForm(d) }, Icon('Edit', { size: 13 }), ' ', tr('Изменить')),
+                        ' ',
+                        h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => removeDevice(d) }, tr('Удалить')))));
+            }
+            formCard.appendChild(h('table', { class: 'list' }, tb));
+        }
+
+        formCard.appendChild(h('div', { style: { marginTop: '12px' } },
+            h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => openForm(null) },
+                tr('Анализатор не появился? Добавить по адресу'))));
+    }
+
+    // «Добавить» у находки: название подставлено, модель — догадка по имени;
+    // человек проверяет и нажимает — прибор уходит в таблицу. Пометка «найден
+    // сам — проверьте модель» снимается: модель проверил человек.
+    function openAdopt(d) {
+        state.formMode = 'adopt';
+        clear(formCard);
+        const nameInp = h('input', { type: 'text', value: d.name || '' });
+        const profSel = h('select', null,
+            h('option', { value: '', selected: !d.profile ? true : null }, tr('модель не определена')),
+            ...state.profiles.map((p) => h('option', { value: p.key, selected: p.key === d.profile ? true : null }, p.vendor + ' ' + p.model)));
+        formCard.appendChild(h('div', { class: 'card-header' }, h('h3', null, trf('Добавить «{name}»', { name: d.name }))));
+        formCard.appendChild(h('div', { class: 'row', style: { gap: '14px', flexWrap: 'wrap', marginBottom: '10px' } },
+            field(tr('Название'), nameInp), field(tr('Модель'), profSel)));
+        formCard.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px' } },
+            profileOf(d.profile)
+                ? tr('Модель подобрана по тому, как прибор себя назвал, — проверьте её.')
+                : tr('Модель по имени прибора не определилась — выберите её сами.')));
+        formCard.appendChild(h('div', { class: 'row', style: { gap: '8px', marginTop: '6px' } },
+            h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: save }, tr('Добавить')),
+            h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: openAddWindow }, tr('Назад'))));
+
+        async function save() {
+            const name = nameInp.value.trim();
+            if (!name) { toast(tr('Укажите название прибора'), 'warn'); return; }
+            const { error } = await supabase.from('lab_devices')
+                .update({ name, profile: profSel.value, added: 1, discovered: 0 }).eq('id', d.id);
+            if (error) { toast(trf('Не удалось добавить прибор: {msg}', { msg: error.message || error }), 'fail'); return; }
+            toast(trf('Прибор «{name}» добавлен', { name }));
             closeForm();
             await reload();
         }
     }
 
     function closeForm() {
+        state.formMode = null;   // LIS_ANALYZER_LIST_V1
         formCard.style.display = 'none';
         clear(formCard);
     }
