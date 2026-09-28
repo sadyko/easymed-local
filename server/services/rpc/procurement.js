@@ -61,6 +61,7 @@ function isPositiveInt(v) {
 const MAX_QTY = 1_000_000;
 
 const RECEIVE_UNITS = ['base', 'purchase'];
+const MAX_RECEIPT_MONEY = 1e12;   // ревью M7 — тот же потолок денег, что у импорта и заказа
 
 function validateLine(line) {
   if (!line || typeof line !== 'object') {
@@ -79,7 +80,9 @@ function validateLine(line) {
     throw new RpcError('Единица: базовая или единица закупки.', 400);
   }
   const unitCost = line.unit_cost === undefined ? 0 : line.unit_cost;
-  if (!(typeof unitCost === 'number' && Number.isFinite(unitCost) && unitCost >= 0)) {
+  // Ревью M7 — потолок цены, как у импорта и заказа (1e12): 1e308 × 1,12 уходило
+  // в бесконечность, и в базе оставались avg_cost и vat_amount = NULL.
+  if (!(typeof unitCost === 'number' && Number.isFinite(unitCost) && unitCost >= 0 && unitCost <= MAX_RECEIPT_MONEY)) {
     throw new RpcError('Цена за единицу — неотрицательное число.', 400);
   }
   return { productId, qty, unit, unitCost };

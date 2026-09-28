@@ -336,3 +336,21 @@ test('ревью M6: supplier_product_counts — число товаров у к
   assert.deepEqual(r.counts, [{ supplier_id: A, products: 6000 }, { supplier_id: B, products: 3000 }]);
   assert.equal(isReadOnlyRpc('supplier_product_counts'), true);
 });
+
+// Ревью M7 — цена строки прихода без потолка: 1e308 × 1,12 уходило в
+// бесконечность, и в базе оставались avg_cost и vat_amount = NULL. Потолок —
+// тот же 1e12, что у импорта и заказа на закупку.
+test('ревью M7: «Принять товар» — цена больше 1e12 — отказ до записи; 1e12 — принимается', () => {
+  const { db } = seed();
+  const p = call('product_save', db, { name: 'УЗИ', procurement_category: 'equipment', vat_rate: 12 }).product.id;
+  for (const bad of [1e308, 1e13, Number.MAX_VALUE]) {
+    assert.throws(() => call('receive_stock_lines', db, { lines: [{ product_id: p, qty: 1, unit_cost: bad, vat_rate: 12 }] }),
+      (e) => e.status === 400 && /Цена за единицу — неотрицательное число/.test(e.message), String(bad));
+  }
+  assert.throws(() => call('receive_stock', db, { product_id: p, quantity: 1, unit_cost: 1e308 }), (e) => e.status === 400);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM stock_movements').get().n, 0);
+  call('receive_stock_lines', db, { lines: [{ product_id: p, qty: 1, unit_cost: 1e12, vat_rate: 12 }] });
+  const pr = db.prepare('SELECT avg_cost FROM products WHERE id = ?').get(p);
+  const mv = db.prepare('SELECT vat_amount, net_amount FROM stock_movements').get();
+  assert.ok(Number.isFinite(pr.avg_cost) && Number.isFinite(mv.vat_amount) && Number.isFinite(mv.net_amount), JSON.stringify({ ...pr, ...mv }));
+});

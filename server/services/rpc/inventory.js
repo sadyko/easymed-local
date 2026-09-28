@@ -440,6 +440,10 @@ export function receiveStock(db, args, user) {
   requireQuantity(quantity);
   const unitCost = args && args.unit_cost;
   const unitCostValue = typeof unitCost === 'number' && Number.isFinite(unitCost) ? unitCost : null;
+  // SUPPLIERS_VAT_V1 (ревью M7) — тот же потолок цены, что у «Принять товар».
+  if (unitCostValue !== null && unitCostValue > 1e12) {
+    throw new RpcError('Цена за единицу — неотрицательное число.', 400);
+  }
   const note = (args && args.note) || '';
 
   const run = db.transaction(() => {
