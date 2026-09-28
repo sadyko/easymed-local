@@ -5,9 +5,12 @@
 // Mindray пишет OBX-3 как «6690-2^WBC^LN», переадресатор с лабораторного ПК —
 // как «WBC^^99MRC». Подтверждённый device_code совпадает с компонентом 1 ИЛИ 2,
 // без учёта регистра. Два прохода: сначала по коду, потом по имени, и только в
-// строки бланка, которые ещё свободны. Поэтому при споре двух строк прибора за
-// одну строку бланка побеждает совпавшая по коду, и исход не зависит от
-// порядка строк в сообщении.
+// строки бланка, которые ещё свободны. Поэтому совпадение по коду бьёт
+// совпадение по имени, где бы ни стояли строки в сообщении; внутри одного
+// прохода пишется первая по порядку сообщения. Сам спор исходом не прячется
+// (ревью R6): второе окончательное значение для уже заполненной строки бланка
+// названо «повтор», и проба лежит в лотке — какое из двух чисел верное, решает
+// человек, а не порядок строк.
 //
 // D4 не меняется: неподтверждённое сопоставление не применяется никогда. Но
 // значение, пришедшее для неподтверждённой строки, названо отдельно: человек
@@ -26,12 +29,14 @@ const key = (s) => String(s == null ? '' : s).trim().toUpperCase();
  *   fills: Array<{obs:object, analyte:object}>,
  *   missing: Array<{analyte:object, reason:string}>,
  *   unconfirmed: object[],
+ *   repeats: object[],
  *   unused: object[],
  * }}
  *   fills        — что писать в бланк;
  *   missing      — ВСЕ подтверждённые строки бланка без значения, в порядке бланка;
  *                  reason: '' | 'статус P' | 'пустое значение' | 'код уже у строки «…»';
  *   unconfirmed  — строки прибора, пришедшие для неподтверждённой строки бланка;
+ *   repeats      — второе окончательное значение для уже заполненной строки бланка;
  *   unused       — строки прибора, которые ни к чему не относятся.
  */
 export function planObservations(observations = [], analytes = []) {
@@ -56,19 +61,31 @@ export function planObservations(observations = [], analytes = []) {
   const filled = new Set();         // строки бланка, получившие значение
   const used = new Set();           // индексы строк прибора, уже отнесённых к строке бланка
   const fills = [];
+  const repeats = [];               // второе значение для уже заполненной строки (ревью R6)
 
   for (const part of ['code', 'name']) {
     observations.forEach((obs, i) => {
       if (used.has(i)) return;
       const a = confirmed.get(key(obs[part]));
-      if (!a || filled.has(a)) return;
-      used.add(i);
+      if (!a) return;
       const status = key(obs.status) || 'F';
+      const value = String(obs.value == null ? '' : obs.value).trim();
+      if (filled.has(a)) {
+        // Ревью R6: строка бланка уже получила значение, а пришло второе
+        // окончательное. Записанным остаётся первое (проход по коду идёт
+        // раньше прохода по имени), но спор — повод для лотка: молча выбрать
+        // одно из двух чисел значило бы выдать пациенту, возможно, не то.
+        // Предварительное (P), «не получено» (X) и пустое — не спор: «P,
+        // потом F» — законная пара, и такая строка остаётся «не использована».
+        if (status === 'F' && value) { used.add(i); repeats.push(obs); }
+        return;
+      }
+      used.add(i);
       // Предварительный (P) и неполученный (X) в бланк не идут: лаборант
       // подтвердил бы число, которое прибор ещё сам не считает окончательным.
       if (status !== 'F') { if (!why.has(a)) why.set(a, 'статус ' + status); return; }
       // Пустое значение — не значение: оно не стирает набранное руками.
-      if (!String(obs.value == null ? '' : obs.value).trim()) { if (!why.has(a)) why.set(a, 'пустое значение'); return; }
+      if (!value) { if (!why.has(a)) why.set(a, 'пустое значение'); return; }
       filled.add(a);
       fills.push({ obs, analyte: a });
     });
@@ -90,7 +107,7 @@ export function planObservations(observations = [], analytes = []) {
     .filter((a) => !filled.has(a))
     .map((a) => ({ analyte: a, reason: why.get(a) || '' }));
 
-  return { fills, missing, unconfirmed: unconfirmedHits, unused };
+  return { fills, missing, unconfirmed: unconfirmedHits, repeats, unused };
 }
 
 // Журнал читает человек в лотке: полсотни кодов гистограмм и режимов в одной
@@ -105,13 +122,14 @@ const list = (items) => items.length > LIST_CAP
  * @returns {{status:'applied'|'unmapped', detail:string}}
  */
 export function outcome(plan) {
-  const done = plan.fills.length > 0 && !plan.missing.length && !plan.unconfirmed.length;
+  const done = plan.fills.length > 0 && !plan.missing.length && !plan.unconfirmed.length && !plan.repeats.length;
   const parts = [];
   if (plan.missing.length) {
     parts.push('не пришли: ' + list(plan.missing.map(({ analyte: a, reason }) =>
       a.name + ' (' + String(a.device_code).trim() + (reason ? ', ' + reason : '') + ')')));
   }
   if (plan.unconfirmed.length) parts.push('не подтверждено: ' + list(plan.unconfirmed.map((o) => o.codeRaw || o.code)));
+  if (plan.repeats.length) parts.push('повтор: ' + list(plan.repeats.map((o) => o.codeRaw || o.code)));
   if (plan.unused.length) parts.push('не использованы: ' + list(plan.unused.map((o) => o.codeRaw || o.code)));
   if (!plan.fills.length && !parts.length) parts.push('в сообщении нет результатов');
   return { status: done ? 'applied' : 'unmapped', detail: parts.join('; ') };

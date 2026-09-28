@@ -18,11 +18,17 @@ test('подтверждённый код ловит строку прибора
   assert.equal(planObservations([obs('6690-2^wbc^LN')], [line(1, 'Лейкоциты', 'WBC')]).fills.length, 1, 'регистр не важен');
 });
 
-test('две строки прибора на одну строку бланка — побеждает совпавшая по коду', () => {
+test('две строки прибора на одну строку бланка — пишется совпавшая по коду, вторая — «повтор», проба в лотке', () => {
+  // Ревью R6: какое из двух чисел верное, решает человек, а не порядок строк.
+  // Записанное значение прежнее — совпадение по коду бьёт совпадение по имени.
   const p = planObservations([obs('12345^WBC^99MRC', '1.0'), obs('WBC^^99MRC', '2.0')], [line(1, 'Лейкоциты', 'WBC')]);
   assert.equal(p.fills.length, 1);
   assert.equal(p.fills[0].obs.value, '2.0');
-  assert.deepEqual(p.unused.map((o) => o.codeRaw), ['12345^WBC^99MRC']);
+  assert.deepEqual(p.repeats.map((o) => o.codeRaw), ['12345^WBC^99MRC']);
+  assert.deepEqual(p.unused, [], 'спорная строка — не «лишняя»');
+  const o = outcome(p);
+  assert.equal(o.status, 'unmapped');
+  assert.equal(o.detail, 'повтор: 12345^WBC^99MRC');
 });
 
 test('неподтверждённая строка не заполняется, а пришедшее для неё названо отдельно (D4)', () => {
@@ -89,4 +95,27 @@ test('R5: строка прибора совпала с неподтверждё
   const o = outcome(p);
   assert.equal(o.status, 'unmapped');
   assert.equal(o.detail, 'не подтверждено: 6690-2^WBC^LN; не использованы: 08001^Take Mode^99MRC');
+});
+
+test('R6: два окончательных значения одного кода — пишется первое, второе — «повтор», проба в лотке', () => {
+  const p = planObservations([obs('WBC^^99MRC', '1.0'), obs('WBC^^99MRC', '2.0')], [line(1, 'Лейкоциты', 'WBC')]);
+  assert.deepEqual(p.fills.map((f) => f.obs.value), ['1.0']);
+  assert.deepEqual(p.repeats.map((o) => o.value), ['2.0']);
+  assert.equal(outcome(p).status, 'unmapped');
+  assert.equal(outcome(p).detail, 'повтор: WBC^^99MRC');
+});
+
+test('R6: предварительное, пустое и «не получено» — не спор; P, потом F — законно', () => {
+  const lines = [line(1, 'Лейкоциты', 'WBC')];
+  const pf = planObservations([obs('WBC^^99MRC', '5.9', 'P'), obs('WBC^^99MRC', '6.1')], lines);
+  assert.deepEqual(pf.fills.map((f) => f.obs.value), ['6.1']);
+  assert.deepEqual(pf.repeats, []);
+  assert.equal(outcome(pf).status, 'applied');
+
+  for (const second of [obs('WBC^^99MRC', '5.9', 'P'), obs('WBC^^99MRC', '', 'F'), obs('WBC^^99MRC', '', 'X')]) {
+    const p = planObservations([obs('WBC^^99MRC', '6.1'), second], lines);
+    assert.deepEqual(p.fills.map((f) => f.obs.value), ['6.1']);
+    assert.deepEqual(p.repeats, [], 'статус ' + second.status + ', значение «' + second.value + '» — не спор');
+    assert.equal(outcome(p).status, 'applied');
+  }
 });

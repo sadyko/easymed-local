@@ -354,11 +354,13 @@ test('пустое значение не стирает набранное ру�
   db.close();
 });
 
-test('две строки прибора на одну строку бланка — ложится совпавшая по коду', () => {
+test('две строки прибора на одну строку бланка — ложится совпавшая по коду, вторая — «повтор», проба в лотке', () => {
+  // Ревью R6: спор двух чисел за одну строку бланка решает человек.
   const db = fresh();
   ingestMessage(db, MSG('LAB-000123', [OBXR(1, '12345^WBC^99MRC', '1.0'), OBXR(2, 'WBC^^99MRC', '2.0'), OBXR(3, 'HGB^^99MRC', '142')]), '127.0.0.1');
   assert.equal(results(db).find((r) => r.parameter === 'Лейкоциты').value, '2.0');
-  assert.match(message(db).detail, /не использованы: 12345\^WBC\^99MRC/);
+  assert.equal(message(db).status, 'unmapped');
+  assert.match(message(db).detail, /повтор: 12345\^WBC\^99MRC/);
   db.close();
 });
 
