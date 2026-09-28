@@ -419,3 +419,29 @@ test('R11: «>1000» и «*6.1» пишутся текстом, как преж�
   assert.equal(message(db).status, 'applied');
   db.close();
 });
+
+// ── LIS_ANALYZER_LIST_V1 — «на связи» на любом разобранном сообщении ────────
+const lastSeen = (db) => db.prepare('SELECT last_seen_at FROM lab_devices WHERE id = 1').get().last_seen_at;
+
+test('проба со смазанным штрихкодом (unmatched) всё равно отмечает прибор «на связи»', () => {
+  const db = fresh();
+  ingestMessage(db, MSG('LAB-999999', [OBX(1, 'WBC', '6.1')]), '127.0.0.1', 1);
+  assert.equal(message(db).status, 'unmatched');
+  assert.ok(lastSeen(db), 'прибор говорил — значит, он на связи («kjkj» выглядел молчащим неделю)');
+  db.close();
+});
+
+test('проба без привязанной панели (unmapped) отмечает прибор; мусор (rejected) — нет', () => {
+  const db = fresh();
+  db.prepare('UPDATE lab_panels SET device_id = NULL WHERE id = 5').run();
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1')]), '127.0.0.1', 1);
+  assert.equal(message(db).status, 'unmapped');
+  assert.ok(lastSeen(db));
+  db.close();
+
+  const db2 = fresh();
+  ingestMessage(db2, 'это не HL7', '127.0.0.1', 1);
+  assert.equal(message(db2).status, 'rejected');
+  assert.equal(lastSeen(db2), null, 'неразобранное не доказывает, что говорил анализатор');
+  db2.close();
+});

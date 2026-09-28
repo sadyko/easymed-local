@@ -177,3 +177,15 @@ test('с одного адреса и ТА ЖЕ модель — та же ст�
   assert.equal(devices(db).length, 1);
   db.close();
 });
+
+// LIS_ANALYZER_LIST_V1 — находка ждёт нажатия «Добавить» (решение владельца
+// 2026-09-29); строка, заведённая человеком, уже добавлена.
+test('новая находка заводится «не добавленной», заведённый руками — добавлен', () => {
+  const db = fresh();
+  const out = ensureDevice(db, { sendingApp: 'BC-5300', peer: '10.0.0.12', port: 2575 });
+  assert.equal(out.created, true);
+  assert.equal(out.device.added, 0, 'находка ждёт одного нажатия в «Добавить прибор»');
+  const id = db.prepare("INSERT INTO lab_devices (name, profile) VALUES ('Руками', 'mindray-bs-240')").run().lastInsertRowid;
+  assert.equal(db.prepare('SELECT added FROM lab_devices WHERE id = ?').get(id).added, 1);
+  db.close();
+});

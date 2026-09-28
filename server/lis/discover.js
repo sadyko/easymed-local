@@ -123,8 +123,12 @@ export function ensureDevice(db, { sendingApp = '', peer = '', port = 2575, allo
   if (db.prepare('SELECT COUNT(*) c FROM lab_devices WHERE name = ?').get(name).c > 0) {
     name = ip ? name + ' (' + ip + ')' : name + ' #' + (found + 1);
   }
-  const id = db.prepare(`INSERT INTO lab_devices (name, profile, transport, host, port, enabled, discovered)
-                         VALUES (?, ?, 'mllp', ?, ?, 1, 1)`)
+  // LIS_ANALYZER_LIST_V1 — находка ждёт одного нажатия «Добавить» в окне
+  // «Добавить прибор» (added = 0; решение владельца 2026-09-29). Приём от
+  // этого не зависит: пробы найденного прибора сохраняются и ложатся в бланки
+  // по тем же правилам.
+  const id = db.prepare(`INSERT INTO lab_devices (name, profile, transport, host, port, enabled, discovered, added)
+                         VALUES (?, ?, 'mllp', ?, ?, 1, 1, 0)`)
     .run(name, profile ? profile.key : '', ip, port).lastInsertRowid;
 
   return { device: db.prepare('SELECT * FROM lab_devices WHERE id = ?').get(id), created: true, reason: 'заведён по первому сообщению' };

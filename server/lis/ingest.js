@@ -78,6 +78,12 @@ export function ingestMessage(db, raw, peer = '', deviceId = null) {
   }
 
   const base = { deviceId, peer, raw, sampleId: msg.sampleId };
+  // LIS_ANALYZER_LIST_V1 — «на связи» на ЛЮБОМ разобранном сообщении известного
+  // прибора. Раньше отметка ставилась, только когда проба ложилась в бланк:
+  // прибор, чьи пробы не находили заказ, выглядел молчащим неделями («kjkj» —
+  // «молчит с 10.09», а слал до 14.09). Мусор (rejected, выше) прибор не
+  // отмечает: неразобранное не доказывает, что говорил анализатор.
+  touchDevice(db, deviceId);
   const vsId = parseSampleId(msg.sampleId);
 
   const order = vsId
@@ -138,7 +144,6 @@ export function ingestMessage(db, raw, peer = '', deviceId = null) {
   if (released > 0) {
     recordMessage(db, { ...base, visitServiceId: order.id, status: 'superseded',
       detail: 'результат уже выдан; новый результат требует подтверждения человеком' });
-    touchDevice(db, deviceId);
     return 'AA';
   }
 
@@ -202,6 +207,5 @@ export function ingestMessage(db, raw, peer = '', deviceId = null) {
     return 'AE';
   }
 
-  touchDevice(db, deviceId);
   return 'AA';
 }
