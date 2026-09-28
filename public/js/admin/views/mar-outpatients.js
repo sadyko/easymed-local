@@ -59,13 +59,26 @@ export function sourcesWords(sources, myId) {
     return words.join(', ');
 }
 
-/** Сколько этого товара можно выдать всего: свои полки + склад. */
+/**
+ * Сколько этого товара можно выдать всего: свои полки + склад.
+ * Ревью M2 — склад без числа (берёт, но не видит остаток): сколько там,
+ * экран не знает — Infinity, и потолок ставит сервер, а не экран.
+ */
 export function reachableUnits(sources, productId) {
     let n = 0;
     for (const s of sources || []) {
-        for (const it of s.items || []) if (Number(it.product_id) === Number(productId)) n += Number(it.qty_units) || 0;
+        for (const it of s.items || []) {
+            if (Number(it.product_id) !== Number(productId)) continue;
+            if (it.qty_units == null) return Infinity;
+            n += Number(it.qty_units) || 0;
+        }
     }
     return Math.round(n * 1000) / 1000;
+}
+
+/** Ревью M2 — «10 амп» у товара источника, у склада без числа — «есть на складе». */
+export function sourceQtyText(it) {
+    return it.qty_units == null ? tr('есть на складе') : fmtQty(it.qty_units) + ' ' + (it.consumption_unit || '');
 }
 
 export function holderLabel(hd, myId) {
@@ -82,7 +95,7 @@ export function holderLabel(hd, myId) {
  * OWN_SHELF_ONLY_V1 — склад добавляется последним источником ТОЛЬКО при
  * `warehouse: true` (администратор и склад; решает сервер).
  */
-export function sourcesFor(holdings, myId, products = [], { warehouse = true } = {}) {
+export function sourcesFor(holdings, myId, products = [], { warehouse = true, visible = true, inStock = null } = {}) {
     const byKey = new Map();
     for (const hd of holdings || []) {
         if (hd.holder_type === 'staff' && Number(hd.holder_id) !== Number(myId)) continue;
@@ -96,11 +109,17 @@ export function sourcesFor(holdings, myId, products = [], { warehouse = true } =
     // The warehouse is the last source — OWN_SHELF_ONLY_V1: for the admin and
     // the warehouse role only. Everyone else gives from their own shelves.
     if (!warehouse) return out;
-    const stock = (products || []).filter((p) => p && p.active !== false && p.active !== 0 && Number(p.on_hand) > 0).map((p) => {
+    // Ревью M2 — берёт со склада, а числа не видит (своя роль на основе
+    // администратора или склада с «Закупки: Нет»): склад — источник, как и
+    // раньше на сервере, но без количества: «есть на складе» по списку сервера.
+    const onWarehouse = (p) => (visible ? Number(p.on_hand) > 0 : !!(inStock && inStock.has(Number(p.id))));
+    const stock = (products || []).filter((p) => p && p.active !== false && p.active !== 0 && onWarehouse(p)).map((p) => {
         const cf = p.consumption_unit && Number(p.consumption_factor) > 0 ? Number(p.consumption_factor) : 1;
         return { holder_type: WAREHOUSE_KEY, holder_id: null, holder_name: '', product_id: p.id, product_name: p.name,
             base_unit: p.base_unit || p.unit || '', consumption_unit: p.consumption_unit || p.base_unit || p.unit || '', consumption_factor: cf,
-            sale_price: Number(p.sale_price) || 0, qty_base: Number(p.on_hand), qty_units: Math.round(Number(p.on_hand) * cf * 100) / 100 };
+            sale_price: Number(p.sale_price) || 0,
+            qty_base: visible ? Number(p.on_hand) : null,
+            qty_units: visible ? Math.round(Number(p.on_hand) * cf * 100) / 100 : null };
     });
     if (stock.length) out.push({ key: WAREHOUSE_KEY, holder_type: WAREHOUSE_KEY, holder_id: null, holder_name: '', items: stock });
     return out;
@@ -117,7 +136,8 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
     const myId = user && user.id;
     // OWN_SHELF_ONLY_V1 — warehouse: берёт ли этот человек со склада (ответ
     // сервера вместе с полками; до ответа — нет: склад не обещаем заранее).
-    const state = { visits: [], selected: null, items: null, holdings: [], products: [], failed: '', warehouse: false };
+    const state = { visits: [], selected: null, items: null, holdings: [], products: [], failed: '', warehouse: false,
+        warehouseVisible: false, inStock: new Set() };   // ревью M2 — видит ли число склада; что на складе есть
 
     async function loadProducts() {
         // OWN_SHELF_ONLY_V1 — каталог склада с остатками нужен только тому, кто
@@ -143,6 +163,8 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
         const shelves = await loadShelves(state.selected ? { visit_id: state.selected } : null);
         state.holdings = shelves.rows;
         state.warehouse = shelves.warehouse;
+        state.warehouseVisible = shelves.warehouseVisible;
+        state.inStock = shelves.inStock;
     }
     async function loadItems() {
         state.items = null;
@@ -265,7 +287,7 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
     function giveCard(v) {
         const card = h('div', { class: 'card' },
             h('div', { class: 'card-header' }, h('h3', null, Icon('Send', { size: 16 }), ' ', tr('Выдать пациенту'))));
-        const sources = sourcesFor(state.holdings, myId, state.products, { warehouse: state.warehouse });
+        const sources = sourcesFor(state.holdings, myId, state.products, { warehouse: state.warehouse, visible: state.warehouseVisible, inStock: state.inStock });
         const bodyEl = h('div', { style: { padding: '14px 16px', display: 'grid', gap: '10px' } });
         // OWN_SHELF_ONLY_V1 — заявка на склад, когда своих полок нет, открывается
         // прямо отсюда; после неё вкладка перечитывает полки.
@@ -295,16 +317,17 @@ export async function mountOutpatients(body, { user, onEmpty } = {}) {
         function paintProducts() {
             clear(prodSel);
             for (const it of current().items) {
-                prodSel.appendChild(h('option', { value: String(it.product_id) }, it.product_name + ' — ' + fmtQty(it.qty_units) + ' ' + (it.consumption_unit || '')));
+                prodSel.appendChild(h('option', { value: String(it.product_id) }, it.product_name + ' — ' + sourceQtyText(it)));   // ревью M2
             }
             paintUnit();
         }
         function paintUnit() {
             const it = currentItem();
             unitEl.textContent = it ? (it.consumption_unit || '') : '';
-            availEl.textContent = it
-                ? trf('Есть {qty} {unit} · цена за единицу {price}', { qty: fmtQty(it.qty_units), unit: it.consumption_unit || '', price: fmtPrice((it.sale_price || 0) / (it.consumption_factor || 1)) })
-                : '';
+            const price = it ? fmtPrice((it.sale_price || 0) / (it.consumption_factor || 1)) : '';
+            availEl.textContent = !it ? ''
+                : it.qty_units == null ? trf('Есть на складе · цена за единицу {price}', { price })   // ревью M2 — склад без числа
+                : trf('Есть {qty} {unit} · цена за единицу {price}', { qty: fmtQty(it.qty_units), unit: it.consumption_unit || '', price });
         }
         srcSel.addEventListener('change', paintProducts);
         prodSel.addEventListener('change', paintUnit);

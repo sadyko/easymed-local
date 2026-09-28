@@ -88,7 +88,7 @@ globalThis.fetch = async (url, opts = {}) => {
 };
 
 async function renderRegister() {
-    const { admissionsHistoryCard } = await import('../views/ward-beds.js?v=board4');
+    const { admissionsHistoryCard } = await import('../views/ward-beds.js?v=board5');
     const card = await admissionsHistoryCard();
     await settle();
     return card;

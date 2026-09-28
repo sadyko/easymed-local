@@ -64,7 +64,7 @@ import { moneyDisplay } from '../../shared/money-input.js';   // CASE_OVERVIEW_V
 // Адрес модуля с тем же '?v=', что у admin.js и views/admissions.js: разошедшийся
 // суффикс — это ВТОРОЙ экземпляр ward-beds.js со своим `state`, то есть доска в
 // разделе и доска в окне жили бы каждая своей жизнью.
-import { loadBedFund, bedBoardEl, wardPillsEl } from './ward-beds.js?v=board4';
+import { loadBedFund, bedBoardEl, wardPillsEl } from './ward-beds.js?v=board5';
 // TWO_STEP_DISCHARGE_V1 — исход госпитализации спрашивают ЗДЕСЬ (врач подаёт
 // заявку) и показывают ТАМ (очередь оформления). Список и подписи берутся из
 // экрана очереди, а не заводятся вторые: разойдись они, один экран называл бы

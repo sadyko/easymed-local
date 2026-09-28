@@ -23,7 +23,7 @@ import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
 // удалены: свободное время называет calendar_slots, записывает calendar_book.
 import { loadSlotDay, freeStartMinutes, hhmmToMin } from './service-picker-modal.js?v=aug17e';
 import { bookVisit } from './visit-booking.js';
-import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // DISPENSE_ITEM_V1
+import { openItemPickerModal } from './item-picker-modal.js?v=billoptin2';   // DISPENSE_ITEM_V1
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 import { logPatientActivity } from './activity-log.js';
 import { canDelete as canDeleteRole, patientTabCanEdit } from '../permissions.js';

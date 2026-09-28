@@ -89,3 +89,40 @@ test('ревью M1: двери выдачи не меняются — медс�
     assert.ok(r.visit_service_id || r.id || r.line_id, JSON.stringify(r));
   } finally { db.close(); }
 });
+
+// M2. Два правила «склада»: брать со склада решала роль (администратор и
+//     склад), видеть его остаток — право «Закупки». Своя роль на основе
+//     администратора или склада с «Закупки: Нет» брала со склада, а число
+//     получала пустым — и экраны печатали «(остаток: null)», «склад 0» или
+//     прятали склад, который сервер всё равно добирал. Теперь одна функция
+//     (inventory.js warehouseAccess) отвечает на оба вопроса, и ответ
+//     holdings_list несёт оба: берёт ли (warehouse_allowed) и видит ли число
+//     (warehouse_visible); тому, кто берёт, но число не видит, — только
+//     «есть на складе» по каждому товару (warehouse_in_stock), без количества.
+test('ревью M2: holdings_list — берёт ли со склада, видит ли число и, без числа, что на складе есть', () => {
+  const db = seed();
+  try {
+    db.prepare("INSERT INTO products (id, name, unit, base_unit, sale_price, on_hand, active) VALUES (5, 'Вата', 'шт', 'шт', 500, 0, 1), (6, 'Маска', 'шт', 'шт', 500, 3, 0)").run();
+    db.prepare("INSERT INTO custom_roles (code, name, base_role, active) VALUES ('senior_admin', 'Старший администратор', 'admin', 1)").run();
+    db.prepare(`INSERT INTO role_permissions (role, permissions) VALUES ('senior_admin', '{"sections":["patients"],"grants":{"procurement":"none"}}')`).run();
+    db.prepare("INSERT INTO users (id, username, password_hash, role, full_name, custom_role_code) VALUES (20, 'sadm', 'x', 'admin', 'Старший администратор', 'senior_admin')").run();
+    const senior = { id: 20, role: 'admin', custom_role_code: 'senior_admin' };
+    const v = visit(db);
+    const r = rpc(db, 'holdings_list', { reachable: true, visit_id: v }, senior);
+    assert.equal(r.warehouse_allowed, true, 'основа — администратор: со склада берёт');
+    assert.equal(r.warehouse_visible, false, '«Закупки: Нет»: числа склада не видит');
+    assert.deepEqual(r.warehouse_in_stock, [P], 'только «есть на складе»: действующие товары с остатком');
+    // Дверь выдачи этому человеку числа тоже не называет — и склад всё равно добирает.
+    const d = rpc(db, 'dispense_item', { visit_id: v, product_id: P, quantity: 1 }, senior);
+    assert.equal(d.on_hand, null);
+    assert.equal(onHand(db), 99);
+    // Администратор и склад: видят число — список «есть» им не нужен.
+    for (const u of [U.admin, U.inv]) {
+      const a = rpc(db, 'holdings_list', { reachable: true, visit_id: v }, u);
+      assert.deepEqual([a.warehouse_allowed, a.warehouse_visible, a.warehouse_in_stock], [true, true, undefined], u.role);
+    }
+    // Медсестра: со склада не берёт — ни числа, ни списка.
+    const n = rpc(db, 'holdings_list', { reachable: true, visit_id: v }, U.nurse);
+    assert.deepEqual([n.warehouse_allowed, n.warehouse_visible, n.warehouse_in_stock], [false, false, undefined]);
+  } finally { db.close(); }
+});

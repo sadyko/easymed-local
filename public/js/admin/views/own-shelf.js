@@ -42,6 +42,8 @@ export async function loadShelves(place) {
     const items = new Map();
     let rows = [];
     let warehouse = null;
+    let warehouseVisible = null;   // ревью M2 — видит ли число склада
+    let inStock = null;            // ревью M2 — берёт, но числа не видит: что на складе есть
     try {
         const args = { reachable: true };
         if (place && place.visit_id) args.visit_id = place.visit_id;
@@ -50,6 +52,8 @@ export async function loadShelves(place) {
         if (!error && data && Array.isArray(data.holdings)) {
             rows = data.holdings;
             if (typeof data.warehouse_allowed === 'boolean') warehouse = data.warehouse_allowed;
+            if (typeof data.warehouse_visible === 'boolean') warehouseVisible = data.warehouse_visible;
+            if (Array.isArray(data.warehouse_in_stock)) inStock = new Set(data.warehouse_in_stock.map(Number));
             for (const hd of rows) {
                 const id = Number(hd.product_id);
                 own.set(id, Math.round(((own.get(id) || 0) + (Number(hd.qty_base) || 0)) * 1e6) / 1e6);
@@ -65,7 +69,34 @@ export async function loadShelves(place) {
         }
     } catch { /* нет ответа — полки пусты, склад решит роль ниже */ }
     if (warehouse === null) warehouse = hasActorRole(WAREHOUSE_DISPENSE_ROLES);
-    return { own, items, rows, warehouse };
+    // Старый сервер флага «видит» не присылал: число видели те же, кто брал.
+    if (warehouseVisible === null) warehouseVisible = warehouse;
+    return { own, items, rows, warehouse, warehouseVisible, inStock: inStock || new Set() };
+}
+
+/**
+ * Ревью M2 — СКЛАД В ПОДПИСИ ТОВАРА: одно правило на четыре экрана выдачи.
+ *   null                          — склад этому человеку не источник;
+ *   { visible: true, qty, has }   — источник, и число видно (как прежде);
+ *   { visible: false, has }       — источник, а числа не видно (своя роль на
+ *                                   основе администратора или склада с
+ *                                   «Закупки: Нет»): «есть на складе» /
+ *                                   «нет на складе», без количества.
+ * В подпись никогда не попадают null и NaN: пустое число склада — 0.
+ */
+export function warehouseStock(shelves, productId, onHand) {
+    if (!shelves || !shelves.warehouse) return null;
+    if (shelves.warehouseVisible) {
+        const n = Number(onHand);
+        const qty = onHand == null || !Number.isFinite(n) ? 0 : n;
+        return { visible: true, qty, has: qty > 0 };
+    }
+    return { visible: false, qty: null, has: !!(shelves.inStock && shelves.inStock.has(Number(productId))) };
+}
+
+/** «есть на складе» / «нет на складе» — склад без числа. */
+export function warehouseWord(ws) {
+    return ws && ws.has ? tr('есть на складе') : tr('нет на складе');
 }
 
 /** Товары своих полок в порядке каталога: препараты первыми, дальше по имени. */

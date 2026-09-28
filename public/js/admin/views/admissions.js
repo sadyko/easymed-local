@@ -56,7 +56,7 @@ import { openAdmissionOrderModal, openAdmissionBedPicker, openAdmissionCancelMod
 // Те же адреса модулей, что у admin.js: одна строка импорта — один экземпляр
 // модуля (у ward-beds.js есть свой `state`, и второй экземпляр развёл бы
 // фильтры доски на две копии).
-import { renderWardBeds, admissionsHistoryCard } from './ward-beds.js?v=board4';
+import { renderWardBeds, admissionsHistoryCard } from './ward-beds.js?v=board5';
 // MOTION_REVEAL_V1 — переход между вкладками: панель проявляется, полоса
 // вкладок возвращается в поле зрения. Общий помощник, не свой на экран.
 import { animateIn } from '../motion.js?v=mo1';   // TAB_NO_SCROLL_V1 — прокрутки к вкладкам больше нет

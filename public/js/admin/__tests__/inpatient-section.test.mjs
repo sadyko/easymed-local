@@ -249,7 +249,7 @@ const settle = (ms = 40) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------------------
 const { renderInpatient, renderAdmissions } = await import('../views/admissions.js');
-const wardBeds = await import('../views/ward-beds.js?v=board4');
+const wardBeds = await import('../views/ward-beds.js?v=board5');
 const perms = await import('../permissions.js');
 
 const walk = (e, out = []) => { if (!e || typeof e !== 'object') return out; out.push(e); for (const c of e.children || []) walk(c, out); return out; };
@@ -315,13 +315,13 @@ test('старые адреса резолвятся: #admissions — разде
 
 test('окно выбора койки рисует ДОСКУ, а не свой список — и той же функцией', () => {
     const modal = read('public/js/admin/views/admission-modal.js');
-    assert.ok(/import \{ loadBedFund, bedBoardEl, wardPillsEl \} from '\.\/ward-beds\.js\?v=board4'/.test(modal),
+    assert.ok(/import \{ loadBedFund, bedBoardEl, wardPillsEl \} from '\.\/ward-beds\.js\?v=board5'/.test(modal),
         'окно снова рисует койки само — копия разойдётся с доской при первой же правке доски');
     // Один экземпляр модуля на всё приложение: у ward-beds.js свой `state`.
     for (const [file, src] of [['admin.js', SHELL], ['views/admissions.js', read('public/js/admin/views/admissions.js')], ['views/admission-modal.js', modal]]) {
         const tags = [...src.matchAll(/ward-beds\.js\?v=([\w-]+)/g)].map((m) => m[1]);
         for (const tagValue of tags) {
-            assert.equal(tagValue, 'board4', file + ' импортирует ward-beds.js другим ?v= — это ВТОРОЙ экземпляр модуля со своим состоянием');
+            assert.equal(tagValue, 'board5', file + ' импортирует ward-beds.js другим ?v= — это ВТОРОЙ экземпляр модуля со своим состоянием');
         }
     }
     // И сама доска экспортирует то, чем её зовут.

@@ -24,7 +24,21 @@ import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1
 // (visits.js:91, procedures.js:50 — там он же, но в SQL: .is('sync_origin', null)).
 import { isOwnBuilding, originTag } from '../record-origin.js';
 // OWN_SHELF_ONLY_V1 — «Выдать» у врача и медсестры: только товары своих полок.
-import { loadShelves, shelfItems, fmtShelfQty } from './own-shelf.js';
+import { loadShelves, shelfItems, fmtShelfQty, warehouseStock } from './own-shelf.js';
+
+/**
+ * Ревью M2 — строка товара в «Выдать» у того, кто берёт со склада: с числом
+ * склада, если его видно; без числа — «есть на складе» / «нет на складе».
+ * Прежде своя роль на основе администратора с «Закупки: Нет» видела здесь
+ * «(остаток: null)».
+ */
+export function dispenseOptionText(p, shelves) {
+    const ws = warehouseStock(shelves, p.id, p.on_hand);
+    if (ws && !ws.visible) {
+        return ws.has ? trf('{name} (есть на складе)', { name: p.name }) : trf('{name} (нет на складе)', { name: p.name });
+    }
+    return trf('{name} (остаток: {n})', { name: p.name, n: ws ? ws.qty : (Number(p.on_hand) || 0) });
+}
 
 function currentUserId() {
     try { return (window.easymed && window.easymed.state && window.easymed.state.user && window.easymed.state.user.id) || null; }
@@ -279,8 +293,7 @@ export function openVisitBillModal(visit, onChanged) {
                 .select('id,name,unit,on_hand,sale_price').eq('active', 1).order('name');
             if (error) throw error;
             for (const p of (data || [])) {
-                dispenseSelect.appendChild(h('option', { value: p.id },
-                    trf('{name} (остаток: {n})', { name: p.name, n: p.on_hand })));
+                dispenseSelect.appendChild(h('option', { value: p.id }, dispenseOptionText(p, shelves)));   // ревью M2
             }
         } catch (e) {
             console.warn('[visit-bill] products load failed', e && e.message || e);

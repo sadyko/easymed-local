@@ -186,3 +186,70 @@ test('все четыре двери, что зовут окно выдачи, �
     assert.match(src('ward-beds.js'), /loadShelves\(\{ admission_id: adm\.id \}\)/);
     assert.match(src('visit-bill.js'), /loadShelves\(\{ visit_id: visit\.id \}\)/);
 });
+
+// ─── ревью M2 — берёт со склада, а числа не видит ─────────────────────────────
+// Своя роль на основе администратора или склада с «Закупки: Нет»: сервер
+// берёт со склада (warehouse_allowed), но число не присылает (on_hand пуст,
+// warehouse_visible = false) и вместо числа даёт список «есть на складе»
+// (warehouse_in_stock). Экраны пишут «есть на складе» / «нет на складе» и
+// никогда — null, NaN, «склад 0» или прочерк вместо остатка.
+const HIDDEN = { holdings: MINE_ROWS, warehouse_allowed: true, warehouse_visible: false, warehouse_in_stock: [41] };
+const NO_NUMBER = [
+    { id: 40, name: 'Бинт', unit: 'шт', sale_price: 2000, on_hand: null, active: 1, is_drug: 0 },
+    { id: 41, name: 'Шприц', unit: 'шт', sale_price: 1500, on_hand: null, active: 1, is_drug: 0 },
+];
+const noJunk = (txt) => { for (const bad of ['null', 'NaN', 'undefined', 'склад 0', 'склад: —', 'Остаток: —']) assert.ok(!txt.includes(bad), `«${bad}» в тексте: ${txt}`); };
+
+test('ревью M2: loadShelves — берёт ли, видит ли число и что на складе есть; старый ответ — видит тот, кто берёт', async () => {
+    reset(HIDDEN);
+    const sh = await loadShelves({ visit_id: 301 });
+    assert.deepEqual([sh.warehouse, sh.warehouseVisible, [...sh.inStock]], [true, false, [41]]);
+    const { warehouseStock, warehouseWord } = await import('../views/own-shelf.js');
+    assert.deepEqual(warehouseStock(sh, 41, null), { visible: false, qty: null, has: true });
+    assert.equal(warehouseWord(warehouseStock(sh, 40, null)), 'нет на складе');
+    reset({ holdings: [], warehouse_allowed: true });
+    const old = await loadShelves({ visit_id: 301 });
+    assert.deepEqual([old.warehouse, old.warehouseVisible], [true, true], 'прежний сервер: кто берёт, тот и видит');
+    assert.deepEqual(warehouseStock(old, 40, null), { visible: true, qty: 0, has: false }, 'пустое число — 0, не null');
+});
+
+test('ревью M2: окно выдачи — «Своё: 5 · нет на складе» и «Есть на складе» вместо числа; ни null, ни прочерка', async () => {
+    reset(HIDDEN);
+    const saved = PRODUCTS.splice(0, PRODUCTS.length, ...NO_NUMBER);
+    try {
+        openItemPickerModal({ place: { visit_id: 301 }, onConfirm: async () => {} });
+        await settle();
+        const txt = textOf(BODY);
+        assert.ok(txt.includes('Своё: 5 · нет на складе'), txt);
+        assert.ok(txt.includes('Есть на складе'), 'товар без своей полки — есть на складе: ' + txt);
+        noJunk(txt);
+    } finally { PRODUCTS.splice(0, PRODUCTS.length, ...saved); }
+});
+
+test('ревью M2: счёт визита, консоль койки и вкладка медсестры — те же слова без числа', async () => {
+    reset(HIDDEN);
+    const sh = await loadShelves({ visit_id: 301 });
+    const { dispenseOptionText } = await import('../views/visit-bill.js');
+    assert.equal(dispenseOptionText({ id: 41, name: 'Шприц', on_hand: null }, sh), 'Шприц (есть на складе)');
+    assert.equal(dispenseOptionText({ id: 40, name: 'Бинт', on_hand: null }, sh), 'Бинт (нет на складе)');
+    reset({ holdings: [], warehouse_allowed: true, warehouse_visible: true });
+    const vis = await loadShelves({ visit_id: 301 });
+    assert.equal(dispenseOptionText({ id: 41, name: 'Шприц', on_hand: 7 }, vis), 'Шприц (остаток: 7)', 'видит число — как прежде');
+    assert.equal(dispenseOptionText({ id: 41, name: 'Шприц', on_hand: null }, vis), 'Шприц (остаток: 0)', 'не «null»');
+
+    const { wardStockHint } = await import('../views/ward-beds.js');
+    assert.equal(wardStockHint({ id: 40, base_unit: 'шт', on_hand: null }, 5, sh, false), 'своё 5 шт · нет на складе');
+    assert.equal(wardStockHint({ id: 41, base_unit: 'шт', on_hand: null }, 0, sh, false), 'есть на складе');
+    assert.equal(wardStockHint({ id: 41, base_unit: 'шт', on_hand: 7 }, 2, vis, false), 'своё 2 · склад 7 шт', 'видит — как прежде');
+
+    const mo = await import('../views/mar-outpatients.js');
+    const products = NO_NUMBER.map((p) => ({ ...p, base_unit: 'шт' }));
+    const src = mo.sourcesFor(MINE_ROWS.map((r) => ({ ...r, qty_units: r.qty_base })), 11, products,
+        { warehouse: true, visible: false, inStock: sh.inStock });
+    const wh = src.find((s) => s.key === 'warehouse');
+    assert.ok(wh, 'склад — источник, раз сервер его добирает');
+    assert.deepEqual(wh.items.map((i) => [i.product_id, i.qty_units]), [[41, null]], 'на складе только то, что есть, без числа');
+    assert.equal(mo.sourceQtyText(wh.items[0]), 'есть на складе');
+    assert.equal(mo.reachableUnits(src, 41), Infinity, 'потолок ставит сервер, а не экран');
+    assert.equal(mo.reachableUnits(src, 40), 5);
+});

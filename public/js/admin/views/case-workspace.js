@@ -351,7 +351,7 @@ function paintTab(root, onNavigate) {
                 // цепочкой сервера: свой подотчёт → свой кабинет → отдел палаты
                 // → свой отдел → склад (V3120_FIX: раньше здесь было написано
                 // «со склада», и окно показывало только складской остаток).
-                const { openItemPickerModal } = await import('./item-picker-modal.js?v=billoptin1');
+                const { openItemPickerModal } = await import('./item-picker-modal.js?v=billoptin2');
                 openItemPickerModal({
                     title: tr('Добавить расход'), confirmLabel: tr('Списать'),
                     place: { admission_id: state.admissionId },

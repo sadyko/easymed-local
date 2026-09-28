@@ -30,7 +30,7 @@ import { supabase } from '../../supabase.js';
 import { h, Icon, PageHead, toast, clear, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { currentUser } from '../data.js';
-import { openItemPickerModal } from './item-picker-modal.js?v=billoptin1';   // PROC_PRODUCTS_V1 — reuse the dispense picker
+import { openItemPickerModal } from './item-picker-modal.js?v=billoptin2';   // PROC_PRODUCTS_V1 — reuse the dispense picker
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 
 const STATUS_RU = { added: 'Назначено', queued: 'В очереди', in_progress: 'Выполняется', completed: 'Выполнено' };

@@ -64,6 +64,18 @@ export const STRINGS = {
   "Не хватит на выбранной полке — доберётся с других ваших. Чужие запасы не берутся; чего нет на ваших полках — запросите у склада.": {"en":"If the chosen shelf runs short, the rest is taken from your other shelves. Other people's stock is never used; what is not on your shelves — request from the warehouse.","ru":"Не хватит на выбранной полке — доберётся с других ваших. Чужие запасы не берутся; чего нет на ваших полках — запросите у склада.","uz":"Tanlangan javonda yetmasa — qolgani boshqa javonlaringizdan olinadi. Boshqalarning zaxirasi olinmaydi; javonlaringizda yo'q narsani ombordan so'rang."},
   "Позиция склада ({unit}): при отметке «введено» доза спишется с полок медсестры и отделения.": {"en":"Warehouse item ({unit}): when marked as given, the dose is taken from the nurse's and the department's shelves.","ru":"Позиция склада ({unit}): при отметке «введено» доза спишется с полок медсестры и отделения.","uz":"Ombor pozitsiyasi ({unit}): «berildi» deb belgilanganda doza hamshira va bo'lim javonlaridan hisobdan chiqariladi."},
   "Показаны ваши полки: подотчёт, кабинет, отдел. Чего на них нет — запросите у склада.": {"en":"Your shelves are shown: personal stock, room, department. What is not on them — request from the warehouse.","ru":"Показаны ваши полки: подотчёт, кабинет, отдел. Чего на них нет — запросите у склада.","uz":"Javonlaringiz ko'rsatilgan: shaxsiy zaxira, xona, bo'lim. Ularda yo'q narsani ombordan so'rang."},
+  // OWN_SHELF_ONLY_V1 (ревью M2) — склад без числа: «есть на складе»
+  "есть на складе": {"en":"in stock at the warehouse","ru":"есть на складе","uz":"omborda bor"},
+  "нет на складе": {"en":"not in stock at the warehouse","ru":"нет на складе","uz":"omborda yo'q"},
+  "Есть на складе": {"en":"In stock at the warehouse","ru":"Есть на складе","uz":"Omborda bor"},
+  "Нет на складе": {"en":"Not in stock at the warehouse","ru":"Нет на складе","uz":"Omborda yo'q"},
+  "{name} (есть на складе)": {"en":"{name} (in stock at the warehouse)","ru":"{name} (есть на складе)","uz":"{name} (omborda bor)"},
+  "{name} (нет на складе)": {"en":"{name} (not in stock at the warehouse)","ru":"{name} (нет на складе)","uz":"{name} (omborda yo'q)"},
+  "своё {own} {unit} · есть на складе": {"en":"own {own} {unit} · in stock at the warehouse","ru":"своё {own} {unit} · есть на складе","uz":"o'zimniki {own} {unit} · omborda bor"},
+  "своё {own} {unit} · нет на складе": {"en":"own {own} {unit} · not in stock at the warehouse","ru":"своё {own} {unit} · нет на складе","uz":"o'zimniki {own} {unit} · omborda yo'q"},
+  "Своё: {own} · есть на складе": {"en":"Own: {own} · in stock at the warehouse","ru":"Своё: {own} · есть на складе","uz":"O'zimniki: {own} · omborda bor"},
+  "Своё: {own} · нет на складе": {"en":"Own: {own} · not in stock at the warehouse","ru":"Своё: {own} · нет на складе","uz":"O'zimniki: {own} · omborda yo'q"},
+  "Есть на складе · цена за единицу {price}": {"en":"In stock at the warehouse · unit price {price}","ru":"Есть на складе · цена за единицу {price}","uz":"Omborda bor · birlik narxi {price}"},
   // OWN_SHELF_ONLY_V1 — END
   // CASHIER_HEAD_V1 (2026-09-28) — старший кассир и «Исправляет услуги в счёте»
   "Счёт выставлен плательщику (страховой или организации) — его строки у кассы не правят.": {"en":"The invoice is billed to a payer (insurer or company) — its lines are not edited at the cash desk.","ru":"Счёт выставлен плательщику (страховой или организации) — его строки у кассы не правят.","uz":"Hisob to'lovchiga (sug'urta yoki tashkilot) chiqarilgan — uning qatorlari kassada tuzatilmaydi."},

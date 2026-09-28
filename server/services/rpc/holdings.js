@@ -30,7 +30,7 @@ import { roundQty, factorOf, toBase, settleQty, coversQty, unitsOf } from '../do
 // (свой подотчёт → кабинет → отдел → склад). Импорт взаимный (inventory.js
 // берёт отсюда moveHolding/moveWarehouse), и это безопасно: обе стороны
 // зовут друг друга только внутри функций, не при загрузке модуля.
-import { holdingChain, planSources, applySources, restoreSources, mayDispenseFromWarehouse } from './inventory.js';
+import { holdingChain, planSources, applySources, restoreSources, warehouseAccess } from './inventory.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -152,8 +152,16 @@ function reachableHoldings(db, a, user) {
   // OWN_SHELF_ONLY_V1 — добирает ли склад недостачу ЭТОМУ человеку. Экран
   // выдачи (окно выдачи, вкладка медсестры, консоль койки, счёт визита) по
   // этому ответу решает, показывать ли склад вообще: правило считает сервер
-  // (inventory.js mayDispenseFromWarehouse), а не догадка браузера о роли.
-  return { holdings: out, warehouse_allowed: mayDispenseFromWarehouse(user) };
+  // (inventory.js warehouseAccess), а не догадка браузера о роли.
+  // Ревью M2 — и видит ли он ЧИСЛО склада. Берёт, но не видит — ему вместо
+  // числа список «есть на складе» (id действующих товаров с остатком): экран
+  // пишет «есть на складе» / «нет на складе» и не печатает null.
+  const access = warehouseAccess(db, user);
+  const res = { holdings: out, warehouse_allowed: access.take, warehouse_visible: access.see };
+  if (access.take && !access.see) {
+    res.warehouse_in_stock = db.prepare('SELECT id FROM products WHERE active = 1 AND on_hand > 0 ORDER BY id').all().map((r) => r.id);
+  }
+  return res;
 }
 
 /**

@@ -64,7 +64,27 @@ import { toastStockWarnings } from './stock-warnings.js';
 // V3120_FIX — «Товары для пациента»: рядом со складом виден остаток СВОИХ полок
 // (то, что сервер спишет первым: подотчёт → кабинет → отдел палаты → свой отдел).
 // OWN_SHELF_ONLY_V1 — врачу и медсестре только свои полки: склад им не источник.
-import { loadShelves, shelfItems, fmtShelfQty, emptyShelvesNotice } from './own-shelf.js';
+import { loadShelves, shelfItems, fmtShelfQty, emptyShelvesNotice, warehouseStock } from './own-shelf.js';
+
+/**
+ * Ревью M2 — подпись товара в поиске «Товары для пациента»: свои полки и
+ * склад. Склад без числа (берёт, но «Закупки: Нет») — «есть на складе» /
+ * «нет на складе»; прежде здесь стояло «склад 0» при любом остатке.
+ * `shelves` — ответ loadShelves; shelfOnly — склад этому человеку не источник.
+ */
+export function wardStockHint(p2, own, shelves, shelfOnly) {
+    const unit = p2.base_unit || '';
+    if (shelfOnly) return trf('своё {own} {unit}', { own: fmtShelfQty(own || 0), unit });
+    const ws = warehouseStock(shelves, p2.id, p2.on_hand);
+    if (ws && !ws.visible) {
+        if (own > 0) return ws.has ? trf('своё {own} {unit} · есть на складе', { own: fmtShelfQty(own), unit }) : trf('своё {own} {unit} · нет на складе', { own: fmtShelfQty(own), unit });
+        return ws.has ? tr('есть на складе') : tr('нет на складе');
+    }
+    const n = ws ? ws.qty : (Number(p2.on_hand) || 0);
+    return own > 0
+        ? trf('своё {own} · склад {n} {unit}', { own: fmtShelfQty(own), n, unit })
+        : trf('остаток {n} {unit}', { n, unit });
+}
 import { canAddAdmissionService, isRouteAllowed } from '../permissions.js';   // FINAL_ROLES_SYNC_FIX_V1 (I2) — кнопка «Добавить услугу» только тому, кому сервер строку заведёт
 
 const STATUS = {
@@ -900,6 +920,7 @@ function bedDetailModal(bed, ward, adm, root) {
         const picked = [];   // [{ p, qty }]
         let productsAll = [];
         let ownShelves = new Map();   // V3120_FIX — product_id → базовых единиц на своих полках
+        let shelvesAnswer = null;     // ревью M2 — ответ сервера: берёт ли со склада и видит ли число
         // OWN_SHELF_ONLY_V1 — врач, медсестра: в поиске только товары своих полок
         // («своё N»), склада нет; пустые полки — слова и заявка на склад.
         let shelfOnly = false;
@@ -955,11 +976,7 @@ function bedDetailModal(bed, ward, adm, root) {
                 },
                     h('span', { style: { flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere' } }, p2.name),
                     h('span', { class: 'muted', style: { flex: '0 0 auto', fontSize: '12.5px', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' } },
-                        shelfOnly
-                            ? trf('своё {own} {unit}', { own: fmtShelfQty(ownShelves.get(Number(p2.id)) || 0), unit: p2.base_unit || '' })
-                            : (ownShelves.get(Number(p2.id)) || 0) > 0
-                                ? trf('своё {own} · склад {n} {unit}', { own: fmtShelfQty(ownShelves.get(Number(p2.id))), n: p2.on_hand || 0, unit: p2.base_unit || '' })
-                                : trf('остаток {n} {unit}', { n: p2.on_hand || 0, unit: p2.base_unit || '' }))));
+                        wardStockHint(p2, ownShelves.get(Number(p2.id)) || 0, shelvesAnswer, shelfOnly))));   // ревью M2
             }
         }
         prodSearch.addEventListener('input', paintProdResults);
@@ -970,6 +987,7 @@ function bedDetailModal(bed, ward, adm, root) {
         // только товары его полок.
         loadShelves({ admission_id: adm.id }).then((sh) => {
             ownShelves = sh.own;
+            shelvesAnswer = sh;
             if (!sh.warehouse) {
                 shelfOnly = true;
                 productsAll = shelfItems(sh).map((it) => ({ id: it.id, name: it.name, base_unit: it.unit, sale_price: it.sale_price, on_hand: null }));

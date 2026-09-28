@@ -217,6 +217,25 @@ export function mayDispenseFromWarehouse(user) {
 }
 
 /**
+ * Ревью M2 — СКЛАД И ЭТОТ ЧЕЛОВЕК: ОДИН ОТВЕТ НА ОБА ВОПРОСА.
+ *   take — берёт ли он со склада, выдавая пациенту (planSources выше);
+ *   see  — видит ли ЧИСЛО остатка склада (products.on_hand в реестре, ответы
+ *          дверей выдачи; stock-log.js canSeeAllMovements — то же правило, что
+ *          у журнала «вся клиника»).
+ * Два вопроса решали два правила в двух местах, и своя роль на основе
+ * администратора или склада с «Закупки: Нет» брала со склада, а число
+ * получала пустым: экраны печатали «(остаток: null)», «склад 0» или прятали
+ * склад, который сервер всё равно добирал. Теперь экран получает оба ответа
+ * от сервера (holdings_list reachable) и обязан уметь «берёт, но числа не
+ * видит»: такому — «есть на складе» / «нет на складе», без количества.
+ */
+export function warehouseAccess(db, user) {
+  let see = false;
+  try { see = !!user && canSeeAllMovements(db, user); } catch { see = false; }
+  return { take: mayDispenseFromWarehouse(user), see };
+}
+
+/**
  * «Нет на ваших полках: Бинт — нужно 5 шт, есть 2 шт. Запросите у склада.»
  * `found` — всё, что цепочка нашла на своих полках (подотчёт, кабинет, отдел).
  * Шаблон — ключ словаря (server-message.js): узбекский экран слышит своё.
@@ -250,7 +269,7 @@ function ownShelfRefusal(product, need, found, inUnits = false) {
  * экране значило бы его не спрятать.
  */
 function warehouseOnHand(db, user, onHand) {
-  try { return canSeeAllMovements(db, user) ? onHand : null; } catch { return null; }
+  return warehouseAccess(db, user).see ? onHand : null;   // ревью M2 — то же решение, что у экранов
 }
 
 /** Отказ, который называет и нехватку, и всё, что цепочка нашла по дороге. */
