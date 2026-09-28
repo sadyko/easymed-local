@@ -1561,10 +1561,16 @@ export const REGISTRY = {
                users:     { table:'users',     fk:'created_by',  columns:['id','full_name'] } },
   },
   purchase_order_items: {
-    read:  { roles: ALL_STAFF, columns: ['id','po_id','product_id','qty_ordered','qty_received','unit_cost','line_total'] },
-    write: { insert: { roles: ['admin','inventory'], columns: ['po_id','product_id','qty_ordered','unit_cost'] },  // line_total is GENERATED
-             update: { roles: ['admin','inventory'], columns: ['qty_ordered','unit_cost','qty_received'] },
-             delete: { roles: ['admin','inventory'] } },
+    // SUPPLIERS_VAT_V1 (мигр. 223) — vat_rate / vat_amount: НДС строки заказа
+    // (unit_cost — цена без НДС за базовую единицу).
+    read:  { roles: ALL_STAFF, columns: ['id','po_id','product_id','qty_ordered','qty_received','unit_cost','line_total','vat_rate','vat_amount'] },
+    // SUPPLIERS_VAT_V1 — СТРОКИ ЗАКАЗА ПИШЕТ ТОЛЬКО СЕРВЕР: purchase_order_create
+    // (цена, ставка по умолчанию из связи с поставщиком, НДС строки, сумма заказа
+    // с НДС) и receive_purchase_order (принятое количество). Прямая запись
+    // отсюда оставила бы НДС строки и сумму заказа устаревшими, а правка
+    // qty_received — «принятым» то, чего на складе нет. Живой экран
+    // (inventory-docs.js) заводит заказ одним вызовом.
+    write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
     filters: ['id','po_id','product_id'],
     // Строка заказа тянет ШАПКУ заказа (номер, дата, поставщик) — без неё
     // реестр закупок за период не собрать. Те же колонки тем же ролям уже

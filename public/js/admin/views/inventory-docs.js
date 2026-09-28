@@ -8,7 +8,8 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, fmtDateTime, field, Tag } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { fmtPrice, fmtQty, fmtSignedQty, loadingCard, selStyle, numStyle } from './inventory-shared.js';
+import { fmtPrice, fmtMoney2, fmtQty, fmtSignedQty, loadingCard, selStyle, numStyle, vatSelect, vatToSelect, vatText } from './inventory-shared.js';
+import { vatOnNet } from '../../shared/goods-catalog.js';   // SUPPLIERS_VAT_V1 — НДС строки заказа (для показа)
 
 // Локальный анти-гонковый токен (в старом файле был общий на модуль).
 let lastFetchToken = 0;
@@ -20,46 +21,99 @@ async function loadActiveProducts(cols = 'id,name,base_unit') {
     return data || [];
 }
 
-function lineEditor(products, { withCost }) {
+// SUPPLIERS_VAT_V1 (2026-09-28) — строка заказа на закупку: цена за БАЗОВУЮ
+// единицу без НДС и ставка НДС. По умолчанию — из связи товара с поставщиком
+// заказа (цена связи — за единицу закупки, делится на упаковку), иначе ставка
+// товара; поправленное руками смена поставщика не трогает. Суммы строки и
+// заказа — для показа; НДС и сумму заказа записывает сервер
+// (purchase_order_create).
+export function poLineDefaults(product, supplierId, links) {
+    const link = supplierId ? (links || []).find((l) => l.product_id === product.id && l.supplier_id === supplierId) : null;
+    if (link) {
+        const pack = Number(product.pack_factor) > 0 ? Number(product.pack_factor) : 1;
+        return { cost: link.last_price == null ? null : Math.round(Number(link.last_price) / pack * 100) / 100,
+                 vat: link.vat_rate == null ? null : Number(link.vat_rate) };
+    }
+    return { cost: null, vat: product.vat_rate == null ? null : Number(product.vat_rate) };
+}
+export function poLineMoney({ qty, cost, vat }) {
+    const net = Math.round((Number(qty) || 0) * (Number(cost) || 0) * 100) / 100;
+    const v = vatOnNet(net, vat);
+    return { net, vat: v, gross: Math.round((net + v) * 100) / 100 };
+}
+
+function poLineEditor(products, links, getSupplierId) {
     const lineObjs = [];
     const body = h('tbody');
+    const netEl = h('span', { style: { fontWeight: 700 } }, '0');
+    const vatEl = h('span', { style: { fontWeight: 700 } }, '0');
+    const grossEl = h('span', { style: { fontWeight: 800 } }, '0');
 
+    function refresh() {
+        let net = 0, vat = 0, gross = 0;
+        for (const l of lineObjs) {
+            const m = poLineMoney(l);
+            net += m.net; vat += m.vat; gross += m.gross;
+            if (l.grossEl) l.grossEl.textContent = fmtMoney2(m.gross);
+        }
+        netEl.textContent = fmtMoney2(net); vatEl.textContent = fmtMoney2(vat); grossEl.textContent = fmtMoney2(gross);
+    }
+    function applyDefaults(line) {
+        if (!line.product) return;
+        const d = poLineDefaults(line.product, getSupplierId(), links);
+        if (!line.costTouched) { line.cost = d.cost == null ? '' : String(d.cost); if (line.costInp) line.costInp.value = line.cost; }
+        if (!line.vatTouched) { line.vat = d.vat; if (line.vatSel) line.vatSel.value = vatToSelect(d.vat); }
+    }
     function addLine() {
-        const line = { product: null, qty: '', cost: '' };
+        const line = { product: null, qty: '', cost: '', vat: null, costTouched: false, vatTouched: false };
         lineObjs.push(line);
         body.appendChild(buildRow(line));
+        refresh();
     }
     function buildRow(line) {
-        const prodSel = h('select', { style: selStyle },
+        const unitEl = h('span', { class: 'muted', style: { fontSize: '12.5px', marginLeft: '6px' } }, '');
+        const prodSel = h('select', { style: selStyle, 'aria-label': 'Товар' },
             h('option', { value: '' }, '— Select product —'),
             ...products.map(p => h('option', { value: String(p.id) }, p.name)));
         prodSel.addEventListener('change', () => {
             line.product = products.find(p => p.id === Number(prodSel.value)) || null;
+            unitEl.textContent = (line.product && line.product.base_unit) || '';
+            applyDefaults(line);
+            refresh();
         });
-        const qtyInp = h('input', { type: 'number', min: '0', step: 'any', style: numStyle });
-        qtyInp.addEventListener('input', () => { line.qty = qtyInp.value; });
-        const costInp = withCost ? h('input', { type: 'number', min: '0', step: 'any', style: numStyle }) : null;
-        if (costInp) costInp.addEventListener('input', () => { line.cost = costInp.value; });
+        const qtyInp = h('input', { type: 'number', min: '0', step: 'any', style: numStyle, 'aria-label': 'Количество' });
+        qtyInp.addEventListener('input', () => { line.qty = qtyInp.value; refresh(); });
+        line.costInp = h('input', { type: 'number', min: '0', step: 'any', style: numStyle, placeholder: 'цена', 'aria-label': 'Цена без НДС' });
+        line.costInp.addEventListener('input', () => { line.cost = line.costInp.value; line.costTouched = true; refresh(); });
+        line.vatSel = vatSelect(line.vat, (v) => { line.vat = v; line.vatTouched = true; refresh(); });
+        line.grossEl = h('span', { style: { fontWeight: 700 } }, '0');
         const removeBtn = h('button', {
-            class: 'btn btn-ghost btn-sm', type: 'button', title: 'Убрать строку',
-            onclick: () => { const i = lineObjs.indexOf(line); if (i >= 0) lineObjs.splice(i, 1); tr.remove(); if (!lineObjs.length) addLine(); },
+            class: 'btn btn-ghost btn-sm', type: 'button', title: 'Убрать строку', 'aria-label': 'Убрать строку',
+            onclick: () => { const i = lineObjs.indexOf(line); if (i >= 0) lineObjs.splice(i, 1); row.remove(); if (!lineObjs.length) addLine(); refresh(); },
         }, '×');
-        const cells = [h('td', null, prodSel), h('td', { style: { width: '120px' } }, qtyInp)];
-        if (withCost) cells.push(h('td', { style: { width: '130px' } }, costInp));
-        cells.push(h('td', { style: { width: '36px', textAlign: 'center' } }, removeBtn));
-        const tr = h('tr', null, ...cells);
-        return tr;
+        const row = h('tr', null,
+            h('td', null, prodSel),
+            h('td', { style: { width: '150px', whiteSpace: 'nowrap' } }, h('span', { style: { display: 'inline-block', width: '90px' } }, qtyInp), unitEl),
+            h('td', { style: { width: '120px' } }, line.costInp),
+            h('td', { style: { width: '110px' } }, line.vatSel),
+            h('td', { class: 'num', style: { width: '120px' } }, line.grossEl),
+            h('td', { style: { width: '36px', textAlign: 'center' } }, removeBtn));
+        return row;
     }
 
     addLine();
-    const headCells = [h('th', null, 'Товар'), h('th', null, 'Кол-во')];
-    if (withCost) headCells.push(h('th', null, 'Цена за единицу'));
-    headCells.push(h('th', null, ''));
-
     const el = h('div', null,
         h('div', { style: { overflowX: 'auto', border: '1px solid var(--ink-100)', borderRadius: '10px', marginBottom: '10px' } },
-            h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ...headCells)), body)),
-        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => addLine() }, Icon('Plus', { size: 13 }), ' Добавить строку'));
+            h('table', { class: 'tbl' }, h('thead', null, h('tr', null,
+                h('th', null, 'Товар'), h('th', null, 'Кол-во'), h('th', null, 'Цена без НДС'), h('th', null, 'НДС'), h('th', null, 'Сумма с НДС'), h('th', null, ''))),
+            body)),
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+            h('button', { class: 'btn btn-sm', type: 'button', onclick: () => addLine() }, Icon('Plus', { size: 13 }), ' Добавить строку'),
+            h('span', { class: 'grow' }),
+            h('span', { style: { fontSize: '13.5px', color: 'var(--ink-700)' } },
+                h('span', null, 'Без НДС:'), ' ', netEl, ' · ', h('span', null, 'НДС:'), ' ', vatEl, ' · ', h('span', null, 'Итого с НДС:'), ' ', grossEl)),
+        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
+            'Цена — за единицу выдачи без НДС; цена и ставка подставляются из связи товара с поставщиком заказа.'));
 
     function getLines() {
         const out = [];
@@ -67,13 +121,27 @@ function lineEditor(products, { withCost }) {
             if (!l.product) continue;
             const qty = Number(l.qty);
             if (!Number.isFinite(qty) || qty <= 0) continue;
-            const row = { product: l.product, qty };
-            if (withCost) { const c = Number(l.cost); row.cost = (Number.isFinite(c) && c >= 0) ? c : 0; }
-            out.push(row);
+            const cost = l.cost === '' || l.cost == null ? null : Number(l.cost);
+            out.push({ product: l.product, qty, cost: Number.isFinite(cost) && cost >= 0 ? cost : null, vat: l.vat });
         }
         return out;
     }
-    return { el, getLines };
+    // Смена поставщика заказа — цены и ставки его связи там, где их не правили руками.
+    function supplierChanged() { for (const l of lineObjs) applyDefaults(l); refresh(); }
+    return { el, getLines, supplierChanged };
+}
+
+/** Аргументы purchase_order_create из окна заказа. */
+export function poCreatePayload({ supplierId, notes, lines }) {
+    return {
+        supplier_id: supplierId || null,
+        notes: String(notes || '').trim() || null,
+        lines: (lines || []).map((l) => ({
+            product_id: l.product.id, qty: l.qty,
+            ...(l.cost != null ? { unit_cost: l.cost } : {}),
+            vat_rate: l.vat === undefined ? null : l.vat,
+        })),
+    };
 }
 
 // Small overlay/modal helper for the document modals below.
@@ -104,8 +172,11 @@ function loadingRowInto(tbody, span) {
 
 // =============================================================================
 // PURCHASE ORDERS TAB (live — PO_V1) — create purchasing documents and RECEIVE
-// them into stock. Creating a PO + its lines is plain /api/db; receiving is the
-// receive_purchase_order RPC (adds on_hand + WAC, marks the PO received/partial).
+// them into stock. Receiving is the receive_purchase_order RPC (adds on_hand +
+// WAC, marks the PO received/partial). SUPPLIERS_VAT_V1 — creating a PO with
+// its lines is ONE purchase_order_create call (lines carry a price without VAT
+// and a VAT rate; the server records each line's VAT and the PO total with
+// VAT) — the lines table is no longer writable through /api/db.
 // =============================================================================
 const poRefs = { tbody: null, emptyEl: null, totalEl: null };
 
@@ -175,31 +246,29 @@ async function fetchPOsAndPaint() {
 }
 
 async function openPOModal(onSaved) {
-    let products = [], suppliers = [];
-    try { products = await loadActiveProducts(); } catch (e) { toast('Не удалось загрузить товары.', 'fail'); }
+    let products = [], suppliers = [], links = [];
+    try { products = await loadActiveProducts('id,name,base_unit,pack_factor,vat_rate'); } catch (e) { toast('Не удалось загрузить товары.', 'fail'); }
     try { const r = await supabase.from('suppliers').select('id,name').eq('active', 1).order('name', { ascending: true }); suppliers = r.data || []; } catch (e) { /* optional */ }
+    // SUPPLIERS_VAT_V1 — цены и ставки поставщиков для строк по умолчанию.
+    try { const r = await supabase.from('item_suppliers').select('product_id, supplier_id, last_price, vat_rate').limit(5000); links = r.data || []; } catch (e) { /* без подсказок */ }
 
     const supplierSel = h('select', { style: selStyle }, h('option', { value: '' }, '— No supplier —'),
         ...suppliers.map(s => h('option', { value: String(s.id) }, s.name)));
     const notesInp = h('input', { type: 'text', placeholder: 'optional' });
-    const editor = lineEditor(products, { withCost: true });
+    const editor = poLineEditor(products, links, () => (supplierSel.value ? Number(supplierSel.value) : null));
+    supplierSel.addEventListener('change', () => editor.supplierChanged());
 
     const saveBtn = h('button', { class: 'btn btn-primary', type: 'button' }, 'Создать заказ');
     saveBtn.addEventListener('click', async () => {
         const lines = editor.getLines();
         if (!lines.length) { toast('Добавьте хотя бы одну строку.', 'fail'); return; }
-        const total = lines.reduce((s, l) => s + l.qty * l.cost, 0);
-        saveBtn.disabled = true; const prev = saveBtn.textContent; saveBtn.textContent = 'Creating…';
+        saveBtn.disabled = true; const prev = saveBtn.textContent; saveBtn.textContent = tr('Creating…');
         try {
-            const payload = { po_number: 'PO-' + Date.now().toString(36).toUpperCase(), status: 'draft', total,
-                supplier_id: supplierSel.value ? Number(supplierSel.value) : null, notes: notesInp.value.trim() || null };
-            const { data: po, error } = await supabase.from('purchase_orders').insert(payload).select('id').single();
+            // SUPPLIERS_VAT_V1 — заказ и строки одним вызовом: сервер считает НДС
+            // строк и сумму заказа с НДС (purchase_order_create).
+            const { error } = await supabase.rpc('purchase_order_create', poCreatePayload({
+                supplierId: supplierSel.value ? Number(supplierSel.value) : null, notes: notesInp.value, lines }));
             if (error) throw error;
-            for (const l of lines) {
-                const { error: liErr } = await supabase.from('purchase_order_items')
-                    .insert({ po_id: po.id, product_id: l.product.id, qty_ordered: l.qty, unit_cost: l.cost }).select('id').single();
-                if (liErr) throw liErr;
-            }
             toast('Заказ на закупку создан', 'ok');
             close();
             if (typeof onSaved === 'function') await onSaved();
@@ -210,10 +279,22 @@ async function openPOModal(onSaved) {
     });
 
     const { close } = docModal({
-        title: 'Новый заказ на закупку', icon: 'Receipt',
+        title: 'Новый заказ на закупку', icon: 'Receipt', width: 900,
         body: [field('Поставщик', supplierSel), editor.el, field('Примечание', notesInp)],
         footer: (close) => [h('button', { class: 'btn', type: 'button', onclick: close }, 'Отмена'), h('span', { class: 'grow' }), saveBtn],
     });
+}
+
+/**
+ * SUPPLIERS_VAT_V1 — деньги строки заказа для окна заказа: без НДС, ставка,
+ * НДС и с НДС. Строка до учёта НДС (обе колонки пусты) — «не указан», её
+ * сумма без НДС и с НДС равны.
+ */
+export function poItemMoney(it) {
+    const net = Math.round((Number(it.qty_ordered) || 0) * (Number(it.unit_cost) || 0) * 100) / 100;
+    const unknown = it.vat_amount == null && it.vat_rate == null;
+    const vat = unknown ? null : Math.round((Number(it.vat_amount) || 0) * 100) / 100;
+    return { net, vat, gross: Math.round((net + (vat || 0)) * 100) / 100, rate: unknown ? tr('не указан') : vatText(it.vat_rate) };
 }
 
 async function openPODetail(po, onSaved) {
@@ -221,7 +302,7 @@ async function openPODetail(po, onSaved) {
     const footWrap = h('div', { style: { display: 'flex', width: '100%', alignItems: 'center', gap: '8px' } });
 
     const { close } = docModal({
-        title: trf('Заказ на закупку {no}', { no: po.po_number }), icon: 'Receipt', width: 640,
+        title: trf('Заказ на закупку {no}', { no: po.po_number }), icon: 'Receipt', width: 900,
         body: [h('div', { style: { marginBottom: '8px' } }, poStatusTag(po.status),
             (po.suppliers && po.suppliers.name) ? h('span', { class: 'muted', style: { marginLeft: '10px', fontSize: '12.5px' } }, po.suppliers.name) : null),
             bodyWrap],
@@ -229,22 +310,33 @@ async function openPODetail(po, onSaved) {
     });
 
     const { data: items, error } = await supabase.from('purchase_order_items')
-        .select('id,qty_ordered,qty_received,unit_cost,line_total, products(name,base_unit)').eq('po_id', po.id);
+        .select('id,qty_ordered,qty_received,unit_cost,line_total,vat_rate,vat_amount, products(name,base_unit)').eq('po_id', po.id);
     clear(bodyWrap);
     if (error) { bodyWrap.appendChild(h('div', { class: 'empty' }, 'Не удалось загрузить строки.')); return; }
     const rows = items || [];
+    const sum = { net: 0, vat: 0, gross: 0 };
+    const body = rows.map(it => {
+        const unit = (it.products && it.products.base_unit) || '';
+        const m = poItemMoney(it);
+        sum.net += m.net; sum.vat += m.vat || 0; sum.gross += m.gross;
+        return h('tr', null,
+            h('td', { class: 'cell-strong' }, (it.products && it.products.name) || '—'),
+            h('td', { class: 'num' }, `${fmtQty(it.qty_ordered)} ${unit}`.trim()),
+            h('td', { class: 'num' }, fmtQty(it.qty_received)),
+            h('td', { class: 'num' }, fmtMoney2(it.unit_cost)),
+            h('td', null, m.rate),
+            h('td', { class: 'num' }, fmtMoney2(m.net)),
+            h('td', { class: 'num' }, m.vat == null ? '—' : fmtMoney2(m.vat)),
+            h('td', { class: 'num' }, fmtMoney2(m.gross)));
+    });
     bodyWrap.appendChild(h('div', { style: { overflowX: 'auto', border: '1px solid var(--ink-100)', borderRadius: '10px' } },
         h('table', { class: 'tbl' },
-            h('thead', null, h('tr', null, h('th', null, 'Товар'), h('th', null, 'Заказано'), h('th', null, 'Принято'), h('th', null, 'Цена за единицу'), h('th', null, 'Сумма строки'))),
-            h('tbody', null, ...rows.map(it => {
-                const unit = (it.products && it.products.base_unit) || '';
-                return h('tr', null,
-                    h('td', { class: 'cell-strong' }, (it.products && it.products.name) || '—'),
-                    h('td', { class: 'num' }, `${fmtQty(it.qty_ordered)} ${unit}`.trim()),
-                    h('td', { class: 'num' }, fmtQty(it.qty_received)),
-                    h('td', { class: 'num' }, fmtPrice(it.unit_cost)),
-                    h('td', { class: 'num' }, fmtPrice(it.line_total)));
-            })))));
+            h('thead', null, h('tr', null, h('th', null, 'Товар'), h('th', null, 'Заказано'), h('th', null, 'Принято'), h('th', null, 'Цена без НДС'),
+                h('th', null, 'Ставка НДС'), h('th', null, 'Сумма без НДС'), h('th', null, 'НДС'), h('th', null, 'Сумма с НДС'))),
+            h('tbody', null, ...body))));
+    bodyWrap.appendChild(h('div', { style: { textAlign: 'right', fontSize: '13.5px', color: 'var(--ink-700)', marginTop: '8px' } },
+        h('span', null, 'Без НДС:'), ' ', fmtMoney2(sum.net), ' · ', h('span', null, 'НДС:'), ' ', fmtMoney2(sum.vat),
+        ' · ', h('span', null, 'Итого с НДС:'), ' ', h('b', null, fmtMoney2(sum.gross))));
 
     const canReceive = !['received', 'cancelled'].includes(po.status);
     clear(footWrap);

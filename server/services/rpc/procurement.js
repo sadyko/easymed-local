@@ -29,6 +29,7 @@ import {
   GOODS_CATEGORY_LIST_RU, parseGoodsCategory, parseVatRate, vatOnNet, parseExpiryDmy,
 } from '../../../public/js/shared/goods-catalog.js';
 import { requireCatalogEdit, rememberSupplierPrice } from './catalog-goods.js';
+import { today } from '../domain/day.js';   // SUPPLIERS_VAT_V1 — номер заказа по дню клиники
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -228,9 +229,16 @@ const NOW = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 // unit_cost, writes a 'receive' stock_movement (ref purchase_order/po_id), and
 // bumps po_item.qty_received. The PO becomes 'received' once every line is
 // fully received, otherwise 'partial'. Cost is held in base units.
+//
+// SUPPLIERS_VAT_V1 (2026-09-28) — строка заказа несёт цену БЕЗ НДС и ставку
+// (мигр. 223): приход пишет в движение ставку и НДС ПРИНЯТОГО количества, а
+// себестоимость считает с НДС — то же правило, что у «Принять товар»
+// (receiptMoney). Строка заказа до НДС (обе колонки пусты) — «не указан»,
+// цена — себестоимость, как прежде. Связь «товар ↔ поставщик заказа» помнит
+// цену (за единицу закупки) и ставку. Право — «Закупки: Изменение».
 // -----------------------------------------------------------------------------
 export function receivePurchaseOrder(db, args, user) {
-  requireRole(user, PROCUREMENT_ROLES);
+  requireCatalogEdit(db, user, 'принимать товар на склад');
 
   const poId = args && args.po_id;
   if (!isPositiveInt(poId)) {
@@ -280,21 +288,34 @@ export function receivePurchaseOrder(db, args, user) {
     const getProduct = db.prepare('SELECT * FROM products WHERE id = ?');
     const updateProduct = db.prepare(`UPDATE products SET on_hand = ?, avg_cost = ?, updated_at = ${NOW} WHERE id = ?`);
     const insertMovement = db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, branch_id, supplier_id, batch_no, expiry_date)
-      VALUES (?, 'receive', ?, ?, 'purchase_order', ?, ?, ?, 1, ?, ?, ?)`);
+      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, branch_id, supplier_id, batch_no, expiry_date, vat_rate, vat_amount)
+      VALUES (?, 'receive', ?, ?, 'purchase_order', ?, ?, ?, 1, ?, ?, ?, ?, ?)`);
     const bumpReceived = db.prepare('UPDATE purchase_order_items SET qty_received = round(qty_received + ?, 6) WHERE id = ?');
 
     const received = [];
     for (const { item, qty, batchNo, expiry } of plan) {
       const product = getProduct.get(item.product_id);
       if (!product) throw new RpcError('Товар строки заказа не найден.', 400);
-      const { newOnHand, newAvg } = wac(product.on_hand, product.avg_cost, qty, item.unit_cost || 0);
+      // Ставка строки заказа: обе колонки пусты — «не указан» (заказ до НДС).
+      const vat = item.vat_amount == null && item.vat_rate == null ? undefined
+        : (item.vat_rate == null ? null : Number(item.vat_rate));
+      const m = receiptMoney(item.unit_cost || 0, qty, vat);
+      const { newOnHand, newAvg } = wac(product.on_hand, product.avg_cost, qty, m.grossUnit);
       if (!Number.isFinite(newOnHand)) throw new RpcError('Остаток вне допустимого диапазона.', 400);
       updateProduct.run(newOnHand, newAvg, product.id);
-      insertMovement.run(product.id, qty, round2(item.unit_cost || 0), poId, `PO ${po.po_number}`, user.id,
-        po.supplier_id || null, batchNo, expiry);
+      insertMovement.run(product.id, qty, round2(m.grossUnit), poId, `PO ${po.po_number}`, user.id,
+        po.supplier_id || null, batchNo, expiry, m.vatRate, m.vatAmount);
       bumpReceived.run(qty, item.id);
-      received.push({ po_item_id: item.id, product_id: product.id, qty, on_hand: newOnHand, avg_cost: newAvg });
+      if (po.supplier_id) {
+        const pack = product.pack_factor > 0 ? product.pack_factor : 1;
+        rememberSupplierPrice(db, {
+          productId: product.id, supplierId: po.supplier_id, vat,
+          lastPrice: round2((item.unit_cost || 0) * pack),   // цена заказа — за базовую единицу
+          packFactor: product.pack_factor, purchaseUnit: product.purchase_unit,
+        });
+      }
+      received.push({ po_item_id: item.id, product_id: product.id, qty, on_hand: newOnHand, avg_cost: newAvg,
+        vat_rate: m.vatRate, vat_amount: m.vatAmount });
     }
 
     // Fully received iff no line has any outstanding quantity left.
@@ -310,6 +331,90 @@ export function receivePurchaseOrder(db, args, user) {
     return { po_id: poId, status, received };
   });
 
+  return run();
+}
+
+// -----------------------------------------------------------------------------
+// SUPPLIERS_VAT_V1 (2026-09-28) — purchase_order_create: заказ на закупку со
+// строками, ценой без НДС и ставкой НДС у каждой строки.
+//
+// Прежде экран писал заказ и его строки напрямую через /api/db, по одной
+// строке, без проверки и без НДС. Теперь — одна транзакция здесь:
+//   • цена строки — за БАЗОВУЮ единицу без НДС (как принимает заказ
+//     receive_purchase_order); не прислана — из связи товара с поставщиком
+//     заказа (цена связи — за единицу закупки, делится на упаковку), иначе 0,
+//     как было;
+//   • ставка — 12 %, 0 % или «без НДС» (null); не прислана — ставка связи,
+//     иначе ставка товара;
+//   • НДС строки = количество × цена × ставка / 100; сумма заказа — с НДС;
+//   • номер PO-ГГГГММДД-NNN по дню клиники (как у заявок REQ-…).
+// args: { supplier_id?, notes?, lines: [{ product_id, qty, unit_cost?, vat_rate? }] }
+// -----------------------------------------------------------------------------
+const MAX_PO_LINES = 500;
+const MAX_PO_MONEY = 1e12;
+
+export function purchaseOrderCreate(db, args, user) {
+  requireCatalogEdit(db, user, 'оформлять заказы на закупку');
+  const a = args || {};
+  let supplierId = null;
+  if (a.supplier_id !== undefined && a.supplier_id !== null && a.supplier_id !== '') {
+    supplierId = Number(a.supplier_id);
+    if (!isPositiveInt(supplierId)) throw new RpcError('Поставщик выбран неверно.', 400);
+  }
+  const notes = typeof a.notes === 'string' ? clean(a.notes).trim().slice(0, 500) : '';
+  const rawLines = a.lines;
+  if (!Array.isArray(rawLines) || rawLines.length === 0) throw new RpcError('Добавьте хотя бы одну строку.', 400);
+  if (rawLines.length > MAX_PO_LINES) throw rpcT(RpcError, 'Не больше {max} строк в одном заказе.', { max: MAX_PO_LINES }, 400);
+  const lines = rawLines.map((l) => {
+    if (!l || typeof l !== 'object') throw new RpcError('Строка заказа заполнена неверно.', 400);
+    const productId = Number(l.product_id);
+    if (!isPositiveInt(productId)) throw new RpcError('Товар не выбран.', 400);
+    const qty = l.qty;
+    if (!(typeof qty === 'number' && Number.isFinite(qty) && qty > 0 && qty <= MAX_QTY)) {
+      throw rpcT(RpcError, 'Количество — положительное число, не больше {max}.', { max: MAX_QTY }, 400);
+    }
+    let unitCost;
+    if (l.unit_cost !== undefined && l.unit_cost !== null && l.unit_cost !== '') {
+      unitCost = Number(l.unit_cost);
+      if (!(Number.isFinite(unitCost) && unitCost >= 0 && unitCost <= MAX_PO_MONEY)) throw new RpcError('Цена закупки — неотрицательное число.', 400);
+    }
+    return { productId, qty: roundQty(qty), unitCost, vat: readVat(l) };
+  });
+
+  const run = db.transaction(() => {
+    if (supplierId && !db.prepare('SELECT 1 FROM suppliers WHERE id = ?').get(supplierId)) {
+      throw new RpcError('Поставщик не найден.', 404);
+    }
+    const getProduct = db.prepare('SELECT id, name, pack_factor, vat_rate FROM products WHERE id = ?');
+    const getLink = db.prepare('SELECT last_price, vat_rate FROM item_suppliers WHERE product_id = ? AND supplier_id = ?');
+    const priced = lines.map((l) => {
+      const product = getProduct.get(l.productId);
+      if (!product) throw rpcT(RpcError, 'Товар №{id} не найден.', { id: l.productId }, 404);
+      const link = supplierId ? getLink.get(l.productId, supplierId) : null;
+      const pack = product.pack_factor > 0 ? product.pack_factor : 1;
+      const unitCost = l.unitCost !== undefined ? l.unitCost
+        : (link && link.last_price != null ? round2(link.last_price / pack) : 0);
+      const vat = l.vat !== undefined ? l.vat
+        : (link ? (link.vat_rate == null ? null : Number(link.vat_rate)) : (product.vat_rate == null ? null : Number(product.vat_rate)));
+      const net = round2(l.qty * unitCost);
+      const vatAmount = vatOnNet(net, vat);
+      return { ...l, unitCost, vat, net, vatAmount };
+    });
+    const day = today(db).replace(/-/g, '');
+    const prefix = `PO-${day}-`;
+    const last = db.prepare('SELECT MAX(CAST(substr(po_number, ?) AS INTEGER)) AS n FROM purchase_orders WHERE po_number LIKE ?')
+      .get(prefix.length + 1, `${prefix}%`).n;
+    const poNumber = prefix + String((Number(last) || 0) + 1).padStart(3, '0');
+    const net = round2(priced.reduce((s, l) => s + l.net, 0));
+    const vat = round2(priced.reduce((s, l) => s + l.vatAmount, 0));
+    const total = round2(net + vat);
+    const poId = Number(db.prepare(`INSERT INTO purchase_orders (po_number, supplier_id, status, total, notes, created_by)
+                                    VALUES (?, ?, 'draft', ?, ?, ?)`).run(poNumber, supplierId, total, notes || null, user.id).lastInsertRowid);
+    const ins = db.prepare(`INSERT INTO purchase_order_items (po_id, product_id, qty_ordered, unit_cost, vat_rate, vat_amount)
+                            VALUES (?, ?, ?, ?, ?, ?)`);
+    for (const l of priced) ins.run(poId, l.productId, l.qty, l.unitCost, l.vat, l.vatAmount);
+    return { po_id: poId, po_number: poNumber, net, vat, total };
+  });
   return run();
 }
 

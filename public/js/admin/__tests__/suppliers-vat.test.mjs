@@ -88,6 +88,7 @@ const { reshape } = await import('../../../../server/routes/db.js');
 const USER = { id: 2, role: 'inventory', extra_roles: [] };
 let DB = null;
 const RPC = [];
+const DBWRITES = [];   // таблицы, в которые экран писал через /api/db
 let FAIL_TABLE = null;   // таблица, чтение которой «не загрузилось»
 
 globalThis.fetch = async (url, opts) => {
@@ -108,6 +109,7 @@ globalThis.fetch = async (url, opts) => {
     try { compiled = compile(body, USER, { db: DB }); }
     catch (e) { return { ok: false, status: 403, json: async () => ({ error: { code: 'forbidden', message: e.message } }) }; }
     const { sql, params, meta } = compiled;
+    if (meta.op !== 'select') DBWRITES.push(meta.table);
     const rows = meta.op === 'select' ? reshape(DB.prepare(sql).all(...params), meta) : (DB.prepare(sql).run(...params), []);
     if (meta.single === 'single') return ok(rows[0]);
     if (meta.single === 'maybe') return ok(rows[0] ?? null);
@@ -120,6 +122,7 @@ const products = await import('../views/inventory-products.js');
 const suppliers = await import('../views/inventory-suppliers.js');
 const sklad = await import('../views/inventory-sklad.js');
 const { REPORT_DEFS, optionsFor, reportArgs } = await import('../views/reports-hub.js');
+const docs = await import('../views/inventory-docs.js');
 
 // ─── помощники ──────────────────────────────────────────────────────────────
 const walk = (e, out = []) => { if (!e || typeof e !== 'object') return out; out.push(e); for (const c of e.children || []) walk(c, out); return out; };
@@ -148,7 +151,7 @@ function seed() {
   db.prepare('INSERT INTO item_suppliers (product_id, supplier_id, last_price, vat_rate, pack_factor, purchase_unit) VALUES (10, 1, 1000, 12, 10, ?)').run('уп');
   db.prepare('INSERT INTO item_suppliers (product_id, supplier_id, last_price, vat_rate, pack_factor, purchase_unit) VALUES (10, 2, 950, NULL, 10, ?)').run('уп');
   DB = db;
-  RPC.length = 0; TOASTS.length = 0; FAIL_TABLE = null;
+  RPC.length = 0; DBWRITES.length = 0; TOASTS.length = 0; FAIL_TABLE = null;
   BODY.children.length = 0;
   return db;
 }
@@ -364,4 +367,63 @@ test('«Закупки и склад»: фильтр «Поставщик» — 
   assert.deepEqual(optionsFor(d, 'stock_statement').map((x) => x.arg), ['category']);
   assert.deepEqual(reportArgs(d, 'procurement', { category: 'all', supplier_id: '' }), { category: 'all' }, '«все» не уезжает');
   assert.deepEqual(reportArgs(d, 'procurement', { category: 'all', supplier_id: '7' }), { category: 'all', supplier_id: '7' });
+});
+
+// ─── заказ на закупку с НДС ─────────────────────────────────────────────────
+test('заказ на закупку: цена и ставка — из связи с поставщиком заказа, ручная правка остаётся; один purchase_order_create; окно заказа показывает НДС', async () => {
+  seed();
+  const root = mk('div');
+  docs.renderPurchaseOrdersTab(root);
+  await settle();
+  click(button(root, 'Новый заказ'));
+  await settle();
+  let m = modal();
+  const supSel = walk(m).find((e) => e.tagName === 'SELECT' && walk(e).some((o) => o.tagName === 'OPTION' && flat(o) === 'ООО Аптека'));
+  setVal(supSel, '1', 'change');
+  setVal(byAria(m, 'Товар')[0], '10', 'change');
+  assert.equal(byAria(m, 'Цена без НДС')[0].value, '100', 'связь: 1 000 за упаковку / 10');
+  assert.equal(byAria(m, 'Ставка НДС')[0].value, '12');
+  setVal(byAria(m, 'Количество')[0], '20');
+  assert.match(flat(m), /Без НДС: 2 000 · НДС: 240 · Итого с НДС: 2 240/);
+  // Другой поставщик — его цена и ставка.
+  setVal(supSel, '2', 'change');
+  assert.equal(byAria(m, 'Цена без НДС')[0].value, '95');
+  assert.equal(byAria(m, 'Ставка НДС')[0].value, 'none');
+  // Поправленная руками цена смену поставщика переживает, нетронутая ставка — нет.
+  setVal(byAria(m, 'Цена без НДС')[0], '90');
+  setVal(supSel, '1', 'change');
+  assert.equal(byAria(m, 'Цена без НДС')[0].value, '90');
+  assert.equal(byAria(m, 'Ставка НДС')[0].value, '12');
+  click(button(m, 'Создать заказ'));
+  await settle();
+  const call = RPC.find((r) => r.name === 'purchase_order_create');
+  assert.ok(call, 'purchase_order_create не позван');
+  assert.deepEqual(call.body, { supplier_id: 1, notes: null, lines: [{ product_id: 10, qty: 20, unit_cost: 90, vat_rate: 12 }] });
+  const po = DB.prepare('SELECT * FROM purchase_orders').get();
+  assert.equal(po.total, 2016, 'сумма заказа с НДС: 1 800 + 216');
+  assert.deepEqual(DBWRITES, [], 'заказ и его строки больше не пишутся через /api/db');
+  // Строка заказа до учёта НДС — рядом, «не указан».
+  DB.prepare('INSERT INTO purchase_order_items (po_id, product_id, qty_ordered, unit_cost) VALUES (?, 11, 2, 500)').run(po.id);
+  await settle();
+  const row = walk(root).find((e) => e.tagName === 'TR' && e._l.click && flat(e).includes(po.po_number));
+  assert.ok(row, 'заказ в списке');
+  click(row);
+  await settle();
+  m = modal();
+  assert.match(flat(m), /12 %/);
+  assert.match(flat(m), /не указан/);
+  assert.match(flat(m), /Без НДС: 2 800 · НДС: 216 · Итого с НДС: 3 016/);
+});
+
+test('чистые правила заказа: цена и ставка по умолчанию, деньги строки, строка до НДС', () => {
+  const p = { id: 10, pack_factor: 10, vat_rate: 0 };
+  const links = [{ product_id: 10, supplier_id: 1, last_price: 1000, vat_rate: 12 }];
+  assert.deepEqual(docs.poLineDefaults(p, 1, links), { cost: 100, vat: 12 });
+  assert.deepEqual(docs.poLineDefaults(p, 2, links), { cost: null, vat: 0 }, 'без связи — ставка товара');
+  assert.deepEqual(docs.poLineDefaults({ id: 11, vat_rate: null }, null, links), { cost: null, vat: null });
+  assert.deepEqual(docs.poLineMoney({ qty: 20, cost: 90, vat: 12 }), { net: 1800, vat: 216, gross: 2016 });
+  assert.deepEqual(docs.poItemMoney({ qty_ordered: 2, unit_cost: 500, vat_rate: null, vat_amount: null }), { net: 1000, vat: null, gross: 1000, rate: 'не указан' });
+  assert.deepEqual(docs.poItemMoney({ qty_ordered: 2, unit_cost: 500, vat_rate: null, vat_amount: 0 }), { net: 1000, vat: 0, gross: 1000, rate: 'Без НДС' });
+  assert.deepEqual(docs.poCreatePayload({ supplierId: null, notes: '  ', lines: [{ product: { id: 5 }, qty: 1, cost: null, vat: null }] }),
+    { supplier_id: null, notes: null, lines: [{ product_id: 5, qty: 1, vat_rate: null }] });
 });

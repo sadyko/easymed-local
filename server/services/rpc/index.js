@@ -7,6 +7,7 @@ import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDi
 import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOARD_TREND_V1
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel, createRequisition } from './procurement.js';
 import { productSave, supplierSave } from './catalog-goods.js';   // SUPPLIERS_VAT_V1 — карточки товара и поставщика со связями
+import { purchaseOrderCreate } from './procurement.js';   // SUPPLIERS_VAT_V1 — заказ на закупку с НДС строк
 import { departmentList, departmentCard, departmentForm, departmentHeadSet, departmentMemberSet, departmentPlaceSet, departmentStaffOptions, departmentPlaceOptions } from './departments.js';   // DEPARTMENTS_V1
 import { stockMovementsList } from './stock-log.js';   // STOCK_LOG_V1
 import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCreate, stockRequestsMine } from './stock-requests.js';   // STOCK_REQUEST_V1
@@ -192,6 +193,7 @@ export const RPC = {
   // транзакция, тип и НДС проверяет сервер, право «Закупки: Изменение».
   product_save:                  (db, args, user) => productSave(db, args, user),
   supplier_save:                 (db, args, user) => supplierSave(db, args, user),
+  purchase_order_create:         (db, args, user) => purchaseOrderCreate(db, args, user),   // SUPPLIERS_VAT_V1 — строки заказа с НДС
   reports_overview:         (db, args, user) => reportsOverview(db, args, user),
   run_report:               (db, args, user) => runReport(db, args, user),
   doctor_tier_positions:    (db, args, user) => doctorTierPositions(db, args, user),   // DOCTOR_TIER_V1 — позиции строк для кабинета врача
