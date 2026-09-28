@@ -60,6 +60,7 @@ const ROLE_WORD = {
     admin: 'администратор', registrar: 'регистратор', doctor: 'врач',
     nurse: 'медсестра', cashier: 'кассир', lab: 'лаборант', inventory: 'склад',
     callcenter: 'оператор колл-центра', head_doctor: 'главный врач', senior_nurse: 'старшая медсестра',
+    head_cashier: 'старший кассир',   // CASHIER_HEAD_V1
 };
 
 /**

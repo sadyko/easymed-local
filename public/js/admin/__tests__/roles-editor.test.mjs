@@ -319,10 +319,15 @@ test('ROLES_ACCORDION_V1: разделы свёрнуты, раскрывают�
 
   // Раздел без окон и действий не раскрывается: ни кнопки, ни тела — владелец
   // раскрыл «Настройки», увидел пустоту и написал «nothing is found».
-  // («Настройки» с DEPARTMENTS_V1 обзавелись окном «Отделы» — пустым примером служит касса.)
-  assert.ok(!toggleOf('cashier') || toggleOf('cashier').tagName !== 'BUTTON', 'у пустого раздела шеврон-кнопка');
-  assert.equal(bodyOf('cashier'), undefined, 'у пустого раздела есть тело, в котором ничего нет');
-  assert.ok(radiosFor(root, 'cashier').length > 0, 'уровень пустого раздела остался в форме');
+  // («Настройки» с DEPARTMENTS_V1 обзавелись окном «Отделы»; касса с
+  // CASHIER_HEAD_V1 — действием «Исправляет услуги в счёте»; пустым примером
+  // служит дашборд.)
+  assert.ok(!toggleOf('dashboard') || toggleOf('dashboard').tagName !== 'BUTTON', 'у пустого раздела шеврон-кнопка');
+  assert.equal(bodyOf('dashboard'), undefined, 'у пустого раздела есть тело, в котором ничего нет');
+  assert.ok(radiosFor(root, 'dashboard').length > 0, 'уровень пустого раздела остался в форме');
+  // CASHIER_HEAD_V1 — у кассы теперь есть что раскрыть: право мелких исправлений.
+  assert.equal(toggleOf('cashier').tagName, 'BUTTON', 'у кассы нет шеврона — право исправлений не видно');
+  assert.ok(radiosFor(root, 'cashier.lines').length > 0, 'строки «Исправляет услуги в счёте» нет в матрице');
 });
 
 test('ошибка загрузки: видимая ошибка с повтором, а НЕ пустая матрица', async () => {
@@ -923,4 +928,38 @@ test('«Новая роль» — один вызов custom_role_create, без
     const writes = calls.filter((c) => c.url.startsWith('/api/db') && c.body && c.body.op === 'insert' && ['custom_roles', 'role_permissions'].includes(c.body.table));
     assert.deepEqual(writes, [], 'полроли можно оставить прямыми записями');
   } finally { globalThis.fetch = prev; }
+});
+
+// CASHIER_HEAD_V1 (2026-09-28) — «касса только принимает оплату или принимает и
+// исправляет»: переключатель в разделе «Касса». У кассира, которого не
+// настраивали, он ВЫКЛЮЧЕН, и простое пересохранение роли его не включает;
+// включённый уходит в базу явным «Изменением». «Старший кассир» — в списке ролей.
+test('CASHIER_HEAD_V1: «Исправляет услуги в счёте» у кассира выключено, включается и сохраняется', async () => {
+  resetServer();
+  SAVED.cashier = { sections: ['cashier', 'patients', 'dashboard'], levels: { cashier: 'admin', patients: 'editor', dashboard: 'viewer' } };
+  try {
+    const root = await render();
+    assert.ok(roleButton(root, 'head_cashier'), 'в списке ролей нет «Старшего кассира»');
+    assert.ok(textOf(root).includes('Старший кассир'));
+    roleButton(root, 'cashier').click();
+    await tick();
+    const on = () => radiosFor(root, 'cashier.lines').find((n) => n.checked);
+    assert.equal(on() && on().attrs.value, 'none', 'у кассира по умолчанию право должно быть выключено');
+    assert.ok(textOf(root).includes('Исправляет услуги в счёте'));
+
+    // Пересохранили роль, ничего не трогая, — право так и не выдано.
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    let written = JSON.parse(lastUpdate.values.permissions);
+    assert.equal(lastUpdate.role, 'cashier');
+    assert.ok(!('cashier.lines' in written.grants), 'пересохранение раздало право: ' + written.grants['cashier.lines']);
+
+    // Включили — уходит «Изменение».
+    pick(root, 'cashier.lines', 'edit');
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    written = JSON.parse(lastUpdate.values.permissions);
+    assert.equal(written.grants['cashier.lines'], 'edit');
+    assert.ok(written.sections.includes('cashier'), 'касса осталась выдана');
+  } finally { delete SAVED.cashier; }
 });
