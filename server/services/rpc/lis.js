@@ -147,6 +147,20 @@ export function lisMessageDismiss(db, args, user) {
 const CODES_SCAN_LIMIT = 100;
 
 /**
+ * Ревью R8 — номер прибора из аргументов: целое больше нуля, числом или
+ * строкой из цифр (пробелы вокруг обрезаются). Всё прочее — null, и вызов
+ * получает 400. Голый Number() принимал true, [1] и «0x1» за единицу — ответ
+ * приходил про чужой прибор, — а 1.5, -1 и 1e308 доходили до базы и
+ * возвращались 404 «не найден» вместо «вызов неверен».
+ */
+function deviceIdArg(v) {
+  let n = NaN;
+  if (typeof v === 'number') n = v;
+  else if (typeof v === 'string' && /^\s*\d+\s*$/.test(v)) n = Number(v.trim());
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
+/**
  * Коды, которые прибор ДЕЙСТВИТЕЛЬНО присылал, — для «Поле анализатора» в
  * редакторе панелей (решение владельца 2026-09-28: сначала присланное, потом
  * типовой список модели, потом свой код).
@@ -161,7 +175,7 @@ const CODES_SCAN_LIMIT = 100;
  */
 export function lisDeviceCodes(db, args, user) {
   guard(user);
-  const id = Number(args && args.device_id);
+  const id = deviceIdArg(args && args.device_id);
   if (!id) throw new LisError('Нужен номер прибора');
   const dev = db.prepare('SELECT id, profile FROM lab_devices WHERE id = ?').get(id);
   if (!dev) throw new LisError('Прибор не найден', 404);

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { lisProfiles, lisMessageAttach, lisMessageDismiss, lisDeviceCodes } from './lis.js';
+import { isReadOnlyRpc } from '../control/gate.js';   // LIS_MINDRAY_CODES_V1 (ревью R8)
 
 function fresh() {
   const db = openDb(':memory:');
@@ -125,4 +126,29 @@ test('коды прибора — только лаборатории; номе�
   assert.throws(() => lisDeviceCodes(db, { device_id: 'abc' }, LAB), /номер/);
   assert.throws(() => lisDeviceCodes(db, { device_id: 999 }, LAB), /не найден/);
   db.close();
+});
+
+// ── Ревью 2026-09-28 ────────────────────────────────────────────────────────
+
+test('R8: номер прибора — только целое больше нуля, числом или строкой из цифр; прочее — 400', () => {
+  // true, [1] и «0x1» Number() превращал в 1 — чужой прибор отвечал на мусор;
+  // 1.5, -1 и 1e308 доходили до базы и возвращались 404 вместо «вызов неверен».
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'Гем','mindray-bc-5300')").run();
+  for (const bad of [true, [1], '0x1', 1.5, -1, 1e308, {}, 0, '0', '', '1.5', ' ', '1e3', null, NaN, Infinity, '99999999999999999999']) {
+    assert.throws(() => lisDeviceCodes(db, { device_id: bad }, LAB),
+      (e) => e.status === 400 && e.message === 'Нужен номер прибора', 'device_id=' + String(bad));
+  }
+  assert.deepEqual(lisDeviceCodes(db, { device_id: 1 }, LAB), []);
+  assert.deepEqual(lisDeviceCodes(db, { device_id: '1' }, LAB), []);
+  assert.deepEqual(lisDeviceCodes(db, { device_id: ' 1 ' }, LAB), [], 'пробелы вокруг цифр обрезаются');
+  db.close();
+});
+
+test('R8: коды прибора, список моделей и живая лента — чистое чтение: доступны и при просроченной лицензии', () => {
+  // Без lis_profiles ячейка «Поле анализатора» теряла типовой список, без
+  // lis_recent пустела лента «Анализаторов» — у клиники, которая может читать.
+  for (const name of ['lis_device_codes', 'lis_profiles', 'lis_recent']) assert.equal(isReadOnlyRpc(name), true, name);
+  // Перезапуск слушателей, привязка и отклонение сообщения — запись.
+  for (const name of ['lis_restart', 'lis_message_attach', 'lis_message_dismiss']) assert.equal(isReadOnlyRpc(name), false, name);
 });
