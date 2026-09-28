@@ -23,6 +23,9 @@ import { roundQty, factorOf, toBase, coversQty, qtyTolerance, unitsOf } from '..
 // 23.09). Предупреждение НЕ отказ: оно едет в ответе рядом с результатом, и
 // считает его сервер — иначе каждая из восьми дверей сказала бы своими словами.
 import { expiryWarnings } from './expiry.js';
+// OWN_SHELF_ONLY_V1 — остаток склада в ответе двери видит тот, кто видит склад
+// (то же правило, что у журнала «вся клиника» и у products.on_hand в реестре).
+import { canSeeAllMovements } from './stock-log.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) {
@@ -176,6 +179,74 @@ export function holdingChain(db, user, place) {
   return chain;
 }
 
+// =============================================================================
+// OWN_SHELF_ONLY_V1 (2026-09-28) — СКЛАД КАК ИСТОЧНИК — ТОЛЬКО АДМИНИСТРАТОРУ И
+// СКЛАДУ.
+//
+// Владелец: «in the doctor's cabinet or in the procedures, items should be
+// dispensed from their shelf not from the procurement overall. Also in the
+// stationary too.» Спросили, кому склад всё-таки оставить, — ответ: «Admin and
+// warehouse only».
+//
+// ЧТО БЫЛО. Цепочка HOLDINGS_FIRST_V1 кончалась складом для ВСЕХ: врач и
+// медсестра, у которых на полках пусто, молча выдавали пациенту со склада —
+// мимо заявки, мимо кладовщика, и склад не знал, куда ушёл товар, пока не
+// придёт инвентаризация. Экраны при этом показывали им общий остаток («Склад
+// (общий остаток)», «Остаток: 90»), который им и не нужен.
+//
+// ЧТО СТАЛО. Склад остаётся последним звеном цепочки только у ролей «Склад» и
+// «Администратор» (основной или дополнительной — hasAnyRole; своя роль клиники
+// считается по основе, users.role). Все остальные — врач, главный врач,
+// медсестра, старшая, лаборант, своя роль на их основе — выдают ТОЛЬКО со
+// своих полок, и нехватка — отказ со словами «запросите у склада» ДО первой
+// записи. Правило стоит ЗДЕСЬ, в planSources, а не у каждой двери: двери
+// (кабинет, окно визита, процедуры, счёт визита, койка, история болезни,
+// вкладка медсестры, лист назначений) передают только, КТО выдаёт, — и ни одна
+// не может о правиле забыть. Не передала человека — склада нет (отказ закрыт,
+// а не открыт).
+//
+// Отмена выдачи правило не трогает: часть, пришедшая со склада (её выдал
+// администратор или кладовщик), возвращается на склад, как и прежде.
+// =============================================================================
+export const WAREHOUSE_DISPENSE_ROLES = Object.freeze(['admin', 'inventory']);
+export const OWN_SHELF_SHORT = 'own_shelf_short';
+
+/** Может ли этот человек брать со склада, выдавая пациенту. */
+export function mayDispenseFromWarehouse(user) {
+  return !!user && hasAnyRole(user, WAREHOUSE_DISPENSE_ROLES);
+}
+
+/**
+ * «Нет на ваших полках: Бинт — нужно 5 шт, есть 2 шт. Запросите у склада.»
+ * `found` — всё, что цепочка нашла на своих полках (подотчёт, кабинет, отдел).
+ * Шаблон — ключ словаря (server-message.js): узбекский экран слышит своё.
+ * Код ответа `own_shelf_short` — по нему экран предлагает «Запросить у склада».
+ */
+function ownShelfRefusal(product, need, found, inUnits = false) {
+  const cf = inUnits ? factorOf(product) : 1;
+  const unit = (inUnits && cf !== 1 ? product.consumption_unit : '') || product.base_unit || product.unit || '';
+  const num = (v) => String(cf !== 1 ? unitsOf(v, cf) : round2(v));
+  const have = roundQty((found.staff || 0) + (found.room || 0) + (found.department || 0));
+  const err = rpcT(RpcError, 'Нет на ваших полках: {name} — нужно {need}, есть {have}. Запросите у склада.', {
+    name: product.name,
+    need: `${num(need)} ${unit}`.trim(),
+    have: `${num(have)} ${unit}`.trim(),
+  }, 400);
+  err.code = OWN_SHELF_SHORT;
+  return err;
+}
+
+/**
+ * Остаток склада в ответе двери выдачи — ЧИСЛОМ только тому, кто видит склад
+ * (администратор, кладовщик, «Закупки»: stock-log.js canSeeAllMovements, то же
+ * правило, что прячет products.on_hand в реестре). Врачу и медсестре — null:
+ * ответ сервера виден во вкладке «Сеть» браузера, и спрятать число только на
+ * экране значило бы его не спрятать.
+ */
+function warehouseOnHand(db, user, onHand) {
+  try { return canSeeAllMovements(db, user) ? onHand : null; } catch { return null; }
+}
+
 /** Отказ, который называет и нехватку, и всё, что цепочка нашла по дороге. */
 // V3120_FIX — `inUnits`: дверь, где человек считает в единице расхода
 // (медсестра — таблетками), слышит отказ в таблетках, а не в долях пачки.
@@ -195,6 +266,9 @@ function shortfallMessage(product, need, onHand, found, inUnits = false) {
  * Сколько и откуда возьмётся — БЕЗ ЕДИНОЙ ЗАПИСИ. Не хватило нигде — 400 со
  * словами, и вызывающая транзакция не тронула ни остатка, ни строки счёта.
  * Количества — базовые единицы товара, как products.on_hand и stock_holdings.qty.
+ *
+ * opts: { inUnits?, user } — `user` это тот, КТО выдаёт: склад добирает
+ * недостачу только администратору и складу (OWN_SHELF_ONLY_V1 выше).
  */
 export function planSources(db, chain, product, quantity, opts = {}) {
   const q = db.prepare('SELECT qty FROM stock_holdings WHERE holder_type = ? AND holder_id = ? AND product_id = ?');
@@ -218,6 +292,10 @@ export function planSources(db, chain, product, quantity, opts = {}) {
     need = need <= have + tol ? 0 : roundQty(need - take);
   }
   if (need > 0) {
+    // OWN_SHELF_ONLY_V1 — своих полок не хватило, а склад этому человеку не
+    // источник: отказ «запросите у склада». Отключённый товар и пустой склад
+    // его уже не касаются — склада в его цепочке нет вовсе.
+    if (!mayDispenseFromWarehouse(opts.user)) throw ownShelfRefusal(product, quantity, found, !!opts.inUnits);
     const onHand = roundQty(product.on_hand);
     // V3120_FIX — ОТКЛЮЧЁННЫЙ ТОВАР, одно правило на все двери: уже выданное
     // (подотчёт, кабинет, отдел) довыдать можно — выше цепочка его и взяла;
@@ -400,7 +478,8 @@ export function dispenseItem(db, args, user) {
     // HOLDINGS_FIRST_V1 — свой подотчёт → кабинет приёма → отдел → склад.
     // Отказ (нигде не хватило) звучит ДО первой записи: транзакция уходит
     // назад нетронутой, как и при прежней проверке остатка.
-    const picks = planSources(db, holdingChain(db, user, { visit }), product, quantity);
+    // OWN_SHELF_ONLY_V1 — склад в конце цепочки только у администратора и склада.
+    const picks = planSources(db, holdingChain(db, user, { visit }), product, quantity, { user });
     // EXPIRY_BALANCE_V1 — партия смотрится ДО списания: тревожит та, которую
     // возьмут сейчас. Предупреждение проверяет ТОВАР, а не источник: партии у
     // подотчёта не записаны, но просроченная коробка стоит в клинике одна и та
@@ -422,7 +501,7 @@ export function dispenseItem(db, args, user) {
     applySources(db, picks, productId, user, visitId != null ? 'visit' : 'manual', visitServiceId);
 
     const fresh = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(productId);
-    return { product_id: productId, item_name: product.name, on_hand: fresh.on_hand, visit_service_id: visitServiceId, sources: picks, warnings };
+    return { product_id: productId, item_name: product.name, on_hand: warehouseOnHand(db, user, fresh.on_hand), visit_service_id: visitServiceId, sources: picks, warnings };
   });
 
   return run();
@@ -469,7 +548,7 @@ export function voidDispense(db, args, user) {
     if (!fresh) {
       throw new RpcError('Товар не найден.', 400);
     }
-    return { product_id: line.clinic_item_id, on_hand: fresh.on_hand, sources: parts };
+    return { product_id: line.clinic_item_id, on_hand: warehouseOnHand(db, user, fresh.on_hand), sources: parts };   // OWN_SHELF_ONLY_V1
   });
 
   return run();
@@ -553,7 +632,9 @@ export function dispenseAdmissionItemCore(db, args, user) {
 
     // HOLDINGS_FIRST_V1 — свой подотчёт → свой кабинет → отдел палаты → свой
     // отдел → склад. Не хватило нигде — отказ со словами, до первой записи.
-    const picks = planSources(db, holdingChain(db, user, { admission: adm }), product, baseQty, { inUnits });
+    // OWN_SHELF_ONLY_V1 — склад только администратору и складу; медсестре,
+    // отмечающей дозу в листе назначений, — тоже только свои полки.
+    const picks = planSources(db, holdingChain(db, user, { admission: adm }), product, baseQty, { inUnits, user });
     // EXPIRY_BALANCE_V1 — та же тревога у койки, что и в амбулатории.
     const warnings = expiryWarnings(db, [productId]);
 
@@ -569,7 +650,7 @@ export function dispenseAdmissionItemCore(db, args, user) {
     applySources(db, picks, productId, user, 'admission', info.lastInsertRowid);
 
     const fresh = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(productId);
-    return { line_id: info.lastInsertRowid, item_name: product.name, on_hand: fresh.on_hand, sources: picks, warnings };
+    return { line_id: info.lastInsertRowid, item_name: product.name, on_hand: warehouseOnHand(db, user, fresh.on_hand), sources: picks, warnings };
   });
   return run();
 }
@@ -600,7 +681,7 @@ export function voidDispensedAdmissionItemCore(db, args, user) {
     db.prepare('DELETE FROM admission_services WHERE id = ?').run(lineId);
 
     const fresh = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(line.clinic_item_id);
-    return { product_id: line.clinic_item_id, on_hand: fresh ? fresh.on_hand : null, sources: parts };
+    return { product_id: line.clinic_item_id, on_hand: fresh ? warehouseOnHand(db, user, fresh.on_hand) : null, sources: parts };   // OWN_SHELF_ONLY_V1
   });
   return run();
 }

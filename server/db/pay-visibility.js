@@ -17,6 +17,10 @@
 // Без базы (компилятор вызван без контекста) ответ самый узкий: только роли.
 import { isAdminUser, grantAllowsAdminOr } from '../services/grants.js';
 import { canSeeReportKey } from '../services/report-access.js';
+import { hasAnyRole } from '../services/roles.js';
+// OWN_SHELF_ONLY_V1 — «кто видит склад» живёт у журнала движений (область
+// «вся клиника»); здесь на него только ссылается реестр, второго правила нет.
+import { canSeeAllMovements } from '../services/rpc/stock-log.js';
 
 export function seesDoctorPay(db, user) {
   if (!user) return false;
@@ -45,8 +49,27 @@ export function seesEmployeePay(db, user) {
   }
 }
 
+// OWN_SHELF_ONLY_V1 (владелец 28.09) — ОСТАТОК СКЛАДА ВИДЯТ ТЕ, КТО ВИДИТ СКЛАД.
+//
+// «when requesting procurement in the cabinet of the doctor or nurse … we don't
+// need to see the items that we have in the procurement overall». Врач и
+// медсестра выдают пациенту только со своих полок, и общий остаток им не
+// нужен, — а через /api/db любой вошедший читал products.on_hand одним
+// запросом. Видят его: администратор, кладовщик, роль с разделом «Закупки и
+// склад» или с уровнем «Закупки: Просмотр» и выше — ровно те, кому журнал
+// движений отдаёт всю клинику (stock-log.js canSeeAllMovements).
+export function seesWarehouseStock(db, user) {
+  if (!user) return false;
+  if (!db) return hasAnyRole(user, ['admin', 'inventory']);   // без базы — только роли
+  try {
+    return canSeeAllMovements(db, user);
+  } catch {
+    return false;
+  }
+}
+
 /** Именованные правила «кто видит всё», на которые ссылается реестр (`lift`). */
-export const LIFTS = Object.freeze({ doctor_pay: seesDoctorPay, employee_pay: seesEmployeePay });
+export const LIFTS = Object.freeze({ doctor_pay: seesDoctorPay, employee_pay: seesEmployeePay, warehouse_stock: seesWarehouseStock });
 
 export function liftAllows(name, db, user) {
   const fn = name ? LIFTS[name] : null;

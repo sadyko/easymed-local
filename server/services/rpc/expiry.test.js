@@ -357,10 +357,14 @@ test('списание на пациента предупреждает так �
   const db = seed();
   try {
     threeLots(db);
+    // OWN_SHELF_ONLY_V1 — медсестра выдаёт пациенту со своей полки: склад
+    // выдал ей три упаковки. Тревога — о ТОВАРЕ, а не об источнике.
+    issueStockLines(db, { holder: { type: 'staff', id: 4 }, lines: [{ product_id: 7, qty: 3, unit: 'base' }] }, INV);
     const r1 = dispenseItem(db, { product_id: 7, quantity: 1, visit_id: 300 }, NURSE);
     assert.equal(r1.warnings.length, 1, 'окно визита промолчало о просроченной партии');
     assert.equal(r1.warnings[0].batch_no, 'A-1');
 
+    // «Склад», выбранный медсестрой (старый экран), значит «со своих полок».
     const r2 = dispenseFromHolding(db, { visit_id: 300, product_id: 7, quantity: 1, holder: { type: 'warehouse' } }, NURSE);
     assert.equal(r2.warnings.length, 1, 'амбулаторная вкладка медсестры промолчала');
 
@@ -392,7 +396,8 @@ test('предупреждение НИКОГДА не становится 400 
   const db = seed();
   try {
     threeLots(db);
-    assert.doesNotThrow(() => issueStockLines(db, { holder: { type: 'department', id: 1 }, lines: [{ product_id: 7, qty: 1, unit: 'base' }] }, INV));
+    // OWN_SHELF_ONLY_V1 — выдано медсестре на руки: с этой полки она и выдаёт пациенту.
+    assert.doesNotThrow(() => issueStockLines(db, { holder: { type: 'staff', id: 4 }, lines: [{ product_id: 7, qty: 1, unit: 'base' }] }, INV));
     assert.doesNotThrow(() => dispenseItem(db, { product_id: 7, quantity: 1, visit_id: 300 }, NURSE));
     // Ledger не изменился от предупреждения: движений ровно столько, сколько операций.
     const moved = db.prepare("SELECT COUNT(*) c FROM stock_movements WHERE product_id = 7 AND kind = 'dispense'").get().c;

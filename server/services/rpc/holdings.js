@@ -30,17 +30,17 @@ import { roundQty, factorOf, toBase, settleQty, coversQty, unitsOf } from '../do
 // (свой подотчёт → кабинет → отдел → склад). Импорт взаимный (inventory.js
 // берёт отсюда moveHolding/moveWarehouse), и это безопасно: обе стороны
 // зовут друг друга только внутри функций, не при загрузке модуля.
-import { holdingChain, planSources, applySources, restoreSources } from './inventory.js';
+import { holdingChain, planSources, applySources, restoreSources, mayDispenseFromWarehouse } from './inventory.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
 }
 
 export const HOLDER_TYPES = ['staff', 'room', 'department'];
-// The warehouse itself is also a valid SOURCE for a dispense (not a holder):
-// a nurse with nothing issued to her can still give from the general stock —
-// the old dispense_item behaviour, kept under one door (owner 2026-09-14:
-// «i cannot dispense items to the patients in the ambulatory»).
+// The warehouse itself is also a valid SOURCE for a dispense (not a holder).
+// OWN_SHELF_ONLY_V1 (владелец 28.09) — но только для администратора и склада:
+// врач и медсестра выдают пациенту со своих полок, а пустая полка — это
+// заявка на склад, а не выдача мимо него (inventory.js planSources).
 export const WAREHOUSE = 'warehouse';
 const LIST_ROLES = ['admin', 'inventory', 'nurse', 'doctor', 'registrar', 'cashier'];
 const DISPENSE_ROLES = ['admin', 'inventory', 'nurse', 'doctor'];
@@ -149,7 +149,11 @@ function reachableHoldings(db, a, user) {
     const { holdings } = holdingsListRows(db, ['h.holder_type = ?', 'h.holder_id = ?', 'h.qty > 0'], [c.type, c.id]);
     for (const row of holdings) out.push({ ...row, chain_rank: rank });
   });
-  return { holdings: out };
+  // OWN_SHELF_ONLY_V1 — добирает ли склад недостачу ЭТОМУ человеку. Экран
+  // выдачи (окно выдачи, вкладка медсестры, консоль койки, счёт визита) по
+  // этому ответу решает, показывать ли склад вообще: правило считает сервер
+  // (inventory.js mayDispenseFromWarehouse), а не догадка браузера о роли.
+  return { holdings: out, warehouse_allowed: mayDispenseFromWarehouse(user) };
 }
 
 /**
@@ -253,6 +257,11 @@ function holdingsListRows(db, where, params) {
  *     последним;
  *   • «Склад» или держатель не назван — просто цепочка: склад только тогда,
  *     когда своих полок не хватило.
+ *
+ * OWN_SHELF_ONLY_V1 (владелец 28.09) — склад в конце цепочки только у
+ * администратора и склада (planSources). Врач и медсестра, назвавшие «Склад»
+ * (старый экран), выдают со своих полок; не хватило — «Нет на ваших полках …
+ * Запросите у склада.»
  */
 function assertOwnHolder(db, user, named, chain) {
   if (named.type === 'staff') {
@@ -304,7 +313,7 @@ export function dispenseFromHolding(db, args, user) {
       : own;
     // Нигде не хватило — отказ со словами ДО первой записи (planSources). Отключённый
     // товар: со своих полок довыдать можно, со склада — нет (там же).
-    const picks = planSources(db, chain, product, baseQty, { inUnits: true });
+    const picks = planSources(db, chain, product, baseQty, { inUnits: true, user });
     // EXPIRY_BALANCE_V1 — партия смотрится ДО списания. Тревожит ТОВАР, а не
     // источник: у подотчёта партии не записаны, но просроченная коробка в
     // клинике одна, из чьих бы рук её ни взяли.

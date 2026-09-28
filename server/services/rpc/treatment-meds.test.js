@@ -12,6 +12,9 @@
 //   • расход сверх дозы виден ОТДЕЛЬНОЙ строкой, а не спрятан в дозе;
 //   • пустой склад не отменяет медицинскую запись, но ведёт себя ровно как в
 //     амбулатории — в минус не уходит;
+//   • OWN_SHELF_ONLY_V1 — медсестра списывает только со своих полок: дозы на
+//     них нет — отметка НЕ ставится («Нет на ваших полках … Запросите у
+//     склада.»); склад в конце цепочки — только у администратора;
 //   • начисление попадает на нужную госпитализацию и доходит до счёта.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -60,6 +63,9 @@ function seed() {
   p.run(2, 'Натрия хлорид 0,9%', 'мл', 'drug', 200, 500);     // объёмный
   p.run(3, 'Шприц 5 мл', 'шт', 'consumable', 1500, 100);      // расход сверх дозы
   p.run(4, 'Кеторол', 'шт', 'drug', 8000, 0);                 // пустой остаток
+  // OWN_SHELF_ONLY_V1 — склад выдал медсестре на руки то же, что лежит на
+  // складе; Кеторола ей не выдавали.
+  db.prepare("INSERT INTO stock_holdings (holder_type, holder_id, product_id, qty) VALUES ('staff',2,1,20),('staff',2,2,500),('staff',2,3,100)").run();
   return db;
 }
 
@@ -86,7 +92,11 @@ const ageMark = (db, id, minutes) => db.prepare(
   "UPDATE treatment_administrations SET given_at = strftime('%Y-%m-%dT%H:%M:%SZ','now',?) WHERE id = ?")
   .run(`-${minutes} minutes`, id);
 
-const onHand = (db, id) => db.prepare('SELECT on_hand FROM products WHERE id = ?').get(id).on_hand;
+// OWN_SHELF_ONLY_V1 — медсестра отмечает дозу только со СВОЕЙ полки (склад —
+// источник лишь администратору и складу). «Остаток» в этих тестах — её полка;
+// склад клиники (warehouse) отметки медсестры не трогают вовсе.
+const stock = (db, id) => (db.prepare("SELECT qty FROM stock_holdings WHERE holder_type = 'staff' AND holder_id = 2 AND product_id = ?").get(id) || { qty: 0 }).qty;
+const warehouse = (db, id) => db.prepare('SELECT on_hand FROM products WHERE id = ?').get(id).on_hand;
 const movements = (db, productId) => db.prepare(
   'SELECT * FROM stock_movements WHERE product_id = ? ORDER BY id').all(productId);
 const lines = (db, admissionId) => db.prepare(
@@ -106,13 +116,16 @@ test('отметка «дала» списывает препарат и соз�
   assert.deepEqual(r.warnings, []);
 
   // Склад: ровно одно движение, ровно на одну единицу, в минус.
-  assert.equal(onHand(db, 1), 19);
+  assert.equal(stock(db, 1), 19);
+  assert.equal(warehouse(db, 1), 20, 'OWN_SHELF_ONLY_V1 — доза с полки медсестры, склад не тронут');
   const mv = movements(db, 1);
   assert.equal(mv.length, 1);
   assert.equal(mv[0].kind, 'dispense');
   assert.equal(mv[0].qty, -1);
   assert.equal(mv[0].reference_type, 'admission');
   assert.equal(mv[0].created_by, ACTOR.nurse.id);
+  assert.equal(mv[0].holder_type, 'staff');
+  assert.equal(mv[0].holder_id, ACTOR.nurse.id);
 
   // Деньги: ровно одна строка госпитализации, ценой из каталога.
   const ls = lines(db, adm);
@@ -141,7 +154,7 @@ test('второе нажатие ничего не создаёт: одно с�
 
   assert.equal(second.already, true);
   assert.equal(second.administration.id, first.administration.id);
-  assert.equal(onHand(db, 1), 19, 'остаток не уехал на две штуки');
+  assert.equal(stock(db, 1), 19, 'остаток не уехал на две штуки');
   assert.equal(movements(db, 1).length, 1);
   assert.equal(lines(db, adm).length, 1);
   // Ответ на повтор — тот же, что на первое нажатие: экран не должен решить,
@@ -165,7 +178,7 @@ test('явное количество из назначения списывае
   const r = mark(db, o);
   assert.equal(r.stock.status, 'ok');
   assert.equal(r.stock.basis, 'order', 'списано по явному количеству, а не по разбору дозы');
-  assert.equal(onHand(db, 2), 496);
+  assert.equal(stock(db, 2), 496);
   assert.equal(lines(db, adm)[0].total, 800);          // 4 мл × 200
   db.close();
 });
@@ -184,7 +197,7 @@ test('снятие отметки возвращает препарат на с�
   assert.equal(back.already, false);
   assert.equal(back.reversal.reversed, 1);
   assert.equal(back.reversal.kept, 0);
-  assert.equal(onHand(db, 1), 20, 'остаток вернулся полностью');
+  assert.equal(stock(db, 1), 20, 'остаток вернулся полностью');
   assert.equal(lines(db, adm).length, 0, 'начисление снято');
 
   // След остался: отметка не удалена, движение возврата записано.
@@ -205,7 +218,7 @@ test('своё снятие в первые 15 минут возвращает �
   const adm = admission(db);
   const o = order(db, adm);
   const m = mark(db, o);                                  // отметила медсестра (id 2)
-  assert.equal(onHand(db, 1), 19);
+  assert.equal(stock(db, 1), 19);
   assert.equal(lines(db, adm).length, 1);
   ageMark(db, m.administration.id, 3);
 
@@ -215,7 +228,7 @@ test('своё снятие в первые 15 минут возвращает �
   assert.equal(back.already, false);
   assert.equal(back.reversal.reversed, 1);
   assert.equal(back.reversal.kept, 0);
-  assert.equal(onHand(db, 1), 20, 'остаток вернулся полностью');
+  assert.equal(stock(db, 1), 20, 'остаток вернулся полностью');
   assert.equal(lines(db, adm).length, 0, 'начисление снято');
   // След — такой же, как у старшей: скорость, а не тишина.
   assert.ok(back.administration.voided_at);
@@ -247,7 +260,7 @@ test('выставленная в счёт строка не отменяетс�
   assert.equal(back.warnings[0].code, 'invoiced');
   assert.match(back.warnings[0].message, /через кассу/);
   assert.equal(lines(db, adm).length, 1);
-  assert.equal(onHand(db, 1), 19);
+  assert.equal(stock(db, 1), 19);
   assert.ok(back.administration.voided_at, 'сама отметка при этом снята');
   db.close();
 });
@@ -264,7 +277,7 @@ test('второе снятие не возвращает второй раз', 
 
   assert.equal(twice.already, true);
   assert.equal(twice.reversal.reversed, 0);
-  assert.equal(onHand(db, 1), 20, 'остаток не вырос выше исходного');
+  assert.equal(stock(db, 1), 20, 'остаток не вырос выше исходного');
   assert.equal(movements(db, 1).length, 2, 'второго возврата в журнале нет');
   assert.equal(lines(db, adm).length, 0);
   db.close();
@@ -280,7 +293,7 @@ test('после снятия слот свободен, и новая отме�
   const again = mark(db, o);
   assert.equal(again.already, false);
   assert.notEqual(again.administration.id, first.administration.id);
-  assert.equal(onHand(db, 1), 19);
+  assert.equal(stock(db, 1), 19);
   assert.equal(lines(db, adm).length, 1);
   // Новая строка помечена НОВОЙ отметкой — снятую она с собой не тянет.
   assert.equal(medAdminIdOf(lines(db, adm)[0]), again.administration.id);
@@ -304,7 +317,7 @@ test('выставленную в счёт строку снятие НЕ тро
   assert.match(back.warnings[0].message, /через кассу/);
   // За строкой уже стоят деньги пациента: ни счёт, ни остаток тайком не меняются.
   assert.equal(lines(db, adm).length, 1);
-  assert.equal(onHand(db, 1), 19);
+  assert.equal(stock(db, 1), 19);
   assert.ok(back.administration.voided_at, 'сама отметка при этом снята');
   db.close();
 });
@@ -319,7 +332,7 @@ test('препарат пациента записывается, но не сп
   const r = mark(db, o);
   assert.equal(r.administration.status, 'given', 'введение записано');
   assert.equal(r.stock.status, 'none');
-  assert.equal(onHand(db, 1), 20);
+  assert.equal(stock(db, 1), 20);
   assert.equal(movements(db, 1).length, 0);
   assert.equal(lines(db, adm).length, 0);
   db.close();
@@ -341,7 +354,7 @@ test('отказ, пропуск и задержка дозы не списыв�
   const o = order(db, adm);
   const r = mark(db, o, { status: 'refused', reason: 'пациент отказался' });
   assert.equal(r.stock.status, '');
-  assert.equal(onHand(db, 1), 20);
+  assert.equal(stock(db, 1), 20);
   assert.equal(lines(db, adm).length, 0);
   db.close();
 });
@@ -361,7 +374,7 @@ test('нечитаемая доза: введение записано, спис
   assert.equal(r.warnings[0].code, 'quantity');
   assert.match(r.warnings[0].message, /не списано: не удалось определить количество/);
   // Ничего не угадано: склад и счёт нетронуты.
-  assert.equal(onHand(db, 1), 20);
+  assert.equal(stock(db, 1), 20);
   assert.equal(movements(db, 1).length, 0);
   assert.equal(lines(db, adm).length, 0);
 
@@ -395,8 +408,8 @@ test('расход сверх дозы — ОТДЕЛЬНАЯ видимая с�
   const r = mark(db, o, { extra: [{ product_id: 3, qty: 2, name: 'Шприц (разбит)' }] });
 
   assert.equal(r.stock.status, 'ok');
-  assert.equal(onHand(db, 1), 19, 'доза списана');
-  assert.equal(onHand(db, 3), 98, 'сверхрасход списан');
+  assert.equal(stock(db, 1), 19, 'доза списана');
+  assert.equal(stock(db, 3), 98, 'сверхрасход списан');
 
   const ls = lines(db, adm);
   assert.equal(ls.length, 2, 'две строки, а не одна на всё');
@@ -433,8 +446,8 @@ test('снятие возвращает и дозу, и сверхрасход',
     { administration_id: m.administration.id, reason: 'не тот пациент' }, ACTOR.senior_nurse);
 
   assert.equal(back.reversal.reversed, 2);
-  assert.equal(onHand(db, 1), 20);
-  assert.equal(onHand(db, 3), 100);
+  assert.equal(stock(db, 1), 20);
+  assert.equal(stock(db, 3), 100);
   assert.equal(lines(db, adm).length, 0);
   db.close();
 });
@@ -446,7 +459,7 @@ test('сверхрасход «не в счёт пациенту» станов�
   mark(db, o, { extra: [{ product_id: 3, qty: 1, billable: false }] });
   const extra = lines(db, adm).find(isExtraConsumptionLine);
   assert.equal(extra.billable, 0, 'разбитую ампулу клиника вправе не выставлять больному');
-  assert.equal(onHand(db, 3), 99, 'но со склада она всё равно ушла');
+  assert.equal(stock(db, 3), 99, 'но со склада она всё равно ушла');
   db.close();
 });
 
@@ -462,12 +475,34 @@ test('сверхрасход, записанный текстом, не спис
 
 // ─── 6. Пустой склад ────────────────────────────────────────────────────────
 
-test('пустой склад не отменяет отметку, но ведёт себя как в амбулатории', () => {
+// OWN_SHELF_ONLY_V1 (владелец 28.09) — ДВА РАЗНЫХ СЛУЧАЯ. У медсестры склад не
+// источник: дозы нет на её полках — отметка НЕ ставится, отказ «запросите у
+// склада» (иначе «введено» значило бы препарат, взятый мимо склада). У
+// администратора склад — последнее звено цепочки, и пустой склад по-прежнему
+// предупреждение, а не отказ.
+test('медсестра: дозы нет на её полках — отметка НЕ ставится, ничего не записано', () => {
   const db = seed();
   const adm = admission(db);
   const o = order(db, adm, { name: 'Кеторол', stock_item_id: 4 });
 
-  const r = mark(db, o);
+  assert.throws(() => mark(db, o), (e) => e instanceof StockError && e.status === 400
+    && e.code === 'own_shelf_short'
+    && e.message === 'Нет на ваших полках: Кеторол — нужно 1 pcs, есть 0 pcs. Запросите у склада.');   // pcs — базовая единица товара по умолчанию
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM treatment_administrations').get().n, 0, 'отметки нет');
+  assert.equal(movements(db, 4).length, 0);
+  assert.equal(lines(db, adm).length, 0);
+  // Тот же отказ у амбулаторной выдачи — два пути не разъехались.
+  assert.throws(() => dispenseItem(db, { product_id: 4, quantity: 1 }, ACTOR.nurse),
+    (e) => e instanceof StockError && e.code === 'own_shelf_short');
+  db.close();
+});
+
+test('пустой склад не отменяет отметку АДМИНИСТРАТОРА, но ведёт себя как в амбулатории', () => {
+  const db = seed();
+  const adm = admission(db);
+  const o = order(db, adm, { name: 'Кеторол', stock_item_id: 4 });
+
+  const r = mark(db, o, {}, ACTOR.admin);
 
   // Медицинский факт записан — это главное.
   assert.equal(r.administration.status, 'given');
@@ -480,10 +515,10 @@ test('пустой склад не отменяет отметку, но вед�
   // Остаток В МИНУС НЕ УХОДИТ и строки счёта нет — ровно то же самое склад
   // делает при амбулаторной выдаче, и это здесь же и проверяется, чтобы два
   // пути не разъехались.
-  assert.equal(onHand(db, 4), 0);
+  assert.equal(warehouse(db, 4), 0);
   assert.equal(movements(db, 4).length, 0);
   assert.equal(lines(db, adm).length, 0);
-  assert.throws(() => dispenseItem(db, { product_id: 4, quantity: 1 }, ACTOR.nurse),
+  assert.throws(() => dispenseItem(db, { product_id: 4, quantity: 1 }, ACTOR.admin),
     (e) => e instanceof StockError && /Недостаточно: Кеторол — на складе 0 из 1/.test(e.message));
 
   // И это тоже считается: несписанное видно человеку.
@@ -492,15 +527,20 @@ test('пустой склад не отменяет отметку, но вед�
   db.close();
 });
 
-test('погашенная позиция склада не отменяет отметку', () => {
+test('погашенная позиция склада не отменяет отметку администратора; медсестра довыдаёт своё', () => {
   const db = seed();
   db.prepare('UPDATE products SET active = 0 WHERE id = 1').run();
   const adm = admission(db);
   const o = order(db, adm);
-  const r = mark(db, o);
+  const r = mark(db, o, {}, ACTOR.admin);
   assert.equal(r.administration.status, 'given');
   assert.equal(r.stock.status, 'short');
   assert.equal(lines(db, adm).length, 0);
+  // V3120_FIX — отключённый товар из подотчёта довыдать можно: у медсестры он на руках.
+  const n = mark(db, o, { slot: 14 });
+  assert.equal(n.stock.status, 'ok');
+  assert.equal(stock(db, 1), 19);
+  assert.equal(lines(db, adm).length, 1);
   db.close();
 });
 
@@ -547,11 +587,11 @@ test('две дозы «по требованию» за день — два с�
   const b = treatmentAdminMark(db, { order_id: o.id, date: START, status: 'given' }, ACTOR.nurse);
 
   assert.notEqual(a.administration.id, b.administration.id);
-  assert.equal(onHand(db, 1), 18);
+  assert.equal(stock(db, 1), 18);
   assert.equal(lines(db, adm).length, 2);
   // Снятие одной не забирает деньги за вторую: метка несёт id ОТМЕТКИ.
   treatmentAdminUnmark(db, { administration_id: a.administration.id, reason: 'ошибка' }, ACTOR.senior_nurse);
-  assert.equal(onHand(db, 1), 19);
+  assert.equal(stock(db, 1), 19);
   const left = lines(db, adm);
   assert.equal(left.length, 1);
   assert.equal(medAdminIdOf(left[0]), b.administration.id);

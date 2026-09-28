@@ -48,7 +48,7 @@ import { doseQuantity, parseDose, UNKNOWN_QTY_MESSAGE } from '../domain/dose.js'
 // наружу отказом всей отметки, то есть ровно тем запретом, которого план
 // велит избегать («Нет остатка — предупреждение, а не запрет»).
 import {
-  dispenseAdmissionItemCore, voidDispensedAdmissionItemCore, RpcError as StockError,
+  dispenseAdmissionItemCore, voidDispensedAdmissionItemCore, RpcError as StockError, OWN_SHELF_SHORT,
 } from './inventory.js';
 import {
   doseNotePrefix, extraNotePrefix, administrationNotePrefix, medAdminIdOf,
@@ -348,6 +348,9 @@ export function treatmentOrdersList(db, args, user) {
 //   2. СКЛАД — препарат физически ушёл. Может не получиться (нет остатка,
 //      количество не выводится из дозы) — и тогда это ПРЕДУПРЕЖДЕНИЕ, а не
 //      запрет (правило плана: «Нет остатка — предупреждение»).
+//      OWN_SHELF_ONLY_V1 (владелец 28.09) — одно исключение: дозы нет на
+//      полках отмечающего (медсестре склад не источник) — отметка НЕ ставится,
+//      отказ «Нет на ваших полках … Запросите у склада.».
 //   3. ДЕНЬГИ — строка admission_services, которую касса соберёт в счёт стаци-
 //      онара наравне с проживанием и процедурами.
 //
@@ -560,6 +563,13 @@ function chargeAdministration(db, order, administration, user) {
         // целиком (inventory.js dispenseItem). Разница только в том, что здесь
         // отказ не отменяет отметку — он становится предупреждением.
         if (!(e instanceof StockError)) throw e;
+        // OWN_SHELF_ONLY_V1 — КРОМЕ ОДНОГО: дозы нет на полках медсестры
+        // (подотчёт, кабинет, отдел палаты), а склад ей не источник. Решение
+        // владельца — такую отметку НЕ ставить: «введено» с пустых полок
+        // означало бы препарат, взятый мимо склада, и дыру на следующей
+        // инвентаризации. Отказ уходит наружу, транзакция отметки откатывается
+        // целиком, и медсестра слышит «запросите у склада».
+        if (e.code === OWN_SHELF_SHORT) throw e;
         stockStatus = worseStock(stockStatus, 'short');
         notes.push(`не списано: ${e.message}`);
         warnings.push({ code: 'stock', message: e.message });
@@ -597,6 +607,7 @@ function chargeAdministration(db, order, administration, user) {
       stockStatus = worseStock(stockStatus, 'ok');
     } catch (e) {
       if (!(e instanceof StockError)) throw e;
+      if (e.code === OWN_SHELF_SHORT) throw e;   // OWN_SHELF_ONLY_V1 — то же правило, что у дозы выше
       stockStatus = worseStock(stockStatus, 'short');
       notes.push(`расход сверх дозы не списан: ${e.message}`);
       warnings.push({ code: 'stock_extra', product_id: item.product_id, message: e.message });

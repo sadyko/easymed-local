@@ -47,6 +47,9 @@ function seed() {
   p.run(2, 'Натрия хлорид 0,9%', 'мл', 'drug', 200, 500);     // объёмный
   p.run(3, 'Шприц 5 мл', 'шт', 'consumable', 1500, 100);      // расход сверх дозы
   p.run(4, 'Кеторол', 'шт', 'drug', 8000, 0);                 // пустой остаток
+  // OWN_SHELF_ONLY_V1 — медсестра отмечает дозу только со своей полки: склад
+  // выдал ей на руки цефтриаксон, физраствор и шприцы.
+  db.prepare("INSERT INTO stock_holdings (holder_type, holder_id, product_id, qty) VALUES ('staff',2,1,20),('staff',2,2,500),('staff',2,3,100)").run();
   return db;
 }
 
@@ -74,6 +77,8 @@ const ageMark = (db, id, minutes) => db.prepare(
   .run(`-${minutes} minutes`, id);
 
 const onHand = (db, id) => db.prepare('SELECT on_hand FROM products WHERE id = ?').get(id).on_hand;
+// OWN_SHELF_ONLY_V1 — доза уходит с полки медсестры и туда же возвращается.
+const shelf = (db, id) => (db.prepare("SELECT qty FROM stock_holdings WHERE holder_type = 'staff' AND holder_id = 2 AND product_id = ?").get(id) || { qty: 0 }).qty;
 const movements = (db, productId) => db.prepare(
   'SELECT * FROM stock_movements WHERE product_id = ? ORDER BY id').all(productId);
 const lines = (db, admissionId) => db.prepare(
@@ -90,7 +95,8 @@ function givenAndInvoiced() {
   const { invoice } = createInvoiceForAdmission(db, { admission_id: adm, admission_service_ids: [lineId] }, ACTOR.registrar);
   const back = treatmentAdminUnmark(db, { administration_id: m.administration.id, reason: 'не вводили' }, ACTOR.senior_nurse);
   assert.equal(back.reversal.kept, 1, 'строка в счёте осталась — касса');
-  assert.equal(onHand(db, 1), 19);
+  assert.equal(shelf(db, 1), 19);
+  assert.equal(onHand(db, 1), 20, 'склад не тронут: доза — с полки медсестры');
   return { db, adm, lineId, invoice };
 }
 
@@ -98,7 +104,8 @@ test('S1: касса отменила счёт — строка снятой д�
   const { db, adm, invoice } = givenAndInvoiced();
   voidInvoice(db, { invoice_id: invoice.id, in_bed_ack: true, reason: 'доза снята' }, CASH);
   assert.equal(lines(db, adm).length, 0, 'строка за неведённую дозу снова «к оплате»');
-  assert.equal(onHand(db, 1), 20, 'препарат не вернулся на склад');
+  assert.equal(shelf(db, 1), 20, 'препарат не вернулся на полку, откуда взят');
+  assert.equal(onHand(db, 1), 20);
   assert.equal(admissionBalance(db, adm).balance, 0);
   db.close();
 });
@@ -107,7 +114,7 @@ test('S1: строку сняли со счёта — то же самое', () 
   const { db, adm, lineId } = givenAndInvoiced();
   removeAdmissionLineFromInvoice(db, { line_id: lineId }, CASH);
   assert.equal(lines(db, adm).length, 0);
-  assert.equal(onHand(db, 1), 20);
+  assert.equal(shelf(db, 1), 20);
   db.close();
 });
 
@@ -122,6 +129,6 @@ test('S1: у ДЕЙСТВУЮЩЕЙ отметки строка при отме�
   const [l] = lines(db, adm);
   assert.ok(l, 'введённая доза пропала');
   assert.equal(l.invoice_item_id, null);
-  assert.equal(onHand(db, 1), 19);
+  assert.equal(shelf(db, 1), 19);
   db.close();
 });

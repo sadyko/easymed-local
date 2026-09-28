@@ -281,6 +281,9 @@ function consoleSeed() {
   db.prepare("INSERT INTO beds (id, ward_id, code, status, active) VALUES (1,1,'K1','free',1),(2,2,'K2','free',1)").run();
   db.prepare("INSERT INTO services (id, name, price) VALUES (1,'Перевязка',30000)").run();
   db.prepare("INSERT INTO products (id, name, unit, sale_price, on_hand, active) VALUES (1,'Trimol','мл',5000,50,1)").run();
+  // OWN_SHELF_ONLY_V1 — медсестра выдаёт у койки только со своей полки: склад
+  // выдал ей 10 на руки.
+  db.prepare("INSERT INTO stock_holdings (holder_type, holder_id, product_id, qty) VALUES ('staff', 2, 1, 10)").run();
   db.prepare("INSERT INTO users (id, username, password_hash, role) VALUES (4,'d','x','doctor')").run();
   // Старый путь принимает только дообновленческую заявку и требует лечащего
   // врача — см. блок про границу выпуска в начале файла.
@@ -292,15 +295,18 @@ function consoleSeed() {
 test('bed console: dispense/void admission item moves stock + admission_services', () => {
   const { db, adm } = consoleSeed();
   const nurse = { id: 2, role: 'nurse' };
+  const shelf = () => db.prepare("SELECT qty FROM stock_holdings WHERE holder_type = 'staff' AND holder_id = 2 AND product_id = 1").get().qty;
   const r = dispenseAdmissionItem(db, { admission_id: adm.id, product_id: 1, quantity: 2 }, nurse);
   assert.equal(r.item_name, 'Trimol');
-  assert.equal(r.on_hand, 48);
+  assert.equal(r.on_hand, null, 'OWN_SHELF_ONLY_V1 — остаток склада медсестре не называется');
+  assert.equal(shelf(), 8, 'списано с её полки');
   const line = db.prepare('SELECT * FROM admission_services WHERE id = ?').get(r.line_id);
   assert.equal(line.total, 10000);
   assert.equal(line.clinic_item_id, 1);
   // void restores stock and deletes the line (admin)
   const v = voidDispensedAdmissionItem(db, { line_id: r.line_id }, { id: 3, role: 'admin' });
-  assert.equal(v.on_hand, 50);
+  assert.equal(v.on_hand, 50, 'склад не тронут ни выдачей, ни отменой');
+  assert.equal(shelf(), 10, 'отмена вернула на её полку');
   assert.equal(db.prepare('SELECT COUNT(*) n FROM admission_services').get().n, 0);
 });
 

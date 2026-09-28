@@ -43,6 +43,9 @@ function seed() {
   const prod = db.prepare(`INSERT INTO products (name, sale_price, consumption_unit, base_unit)
                            VALUES ('Система для инфузий', 7000, 'шт.', 'pcs')`).run().lastInsertRowid;
   db.prepare('UPDATE products SET on_hand = 100 WHERE id = ?').run(prod);   // списывают со СКЛАДА, а не из воздуха
+  // OWN_SHELF_ONLY_V1 — медсестра выдаёт пациенту только со своей полки: склад
+  // выдал ей 100 на руки (напрямую со склада выдают администратор и склад).
+  db.prepare("INSERT INTO stock_holdings (holder_type, holder_id, product_id, qty) VALUES ('staff', ?, ?, 100)").run(NURSE.id, prod);
   const svc = db.prepare("INSERT INTO services (name, price) VALUES ('Перевязка', 50000)").run().lastInsertRowid;
   return { db, adm, pid, prod, svc };
 }

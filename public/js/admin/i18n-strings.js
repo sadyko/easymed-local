@@ -3,6 +3,9 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // OWN_SHELF_ONLY_V1 (2026-09-28) — выдача пациенту только со своих полок — BEGIN
+  "Нет на ваших полках: {name} — нужно {need}, есть {have}. Запросите у склада.": {"en":"Not enough on your shelves: {name} — {need} needed, {have} available. Request it from the warehouse.","ru":"Нет на ваших полках: {name} — нужно {need}, есть {have}. Запросите у склада.","uz":"Javonlaringizda yetarli emas: {name} — {need} kerak, {have} bor. Ombordan so'rang."},
+  // OWN_SHELF_ONLY_V1 — END
   // CASHIER_HEAD_V1 (2026-09-28) — старший кассир и «Исправляет услуги в счёте»
   "Счёт выставлен плательщику (страховой или организации) — его строки у кассы не правят.": {"en":"The invoice is billed to a payer (insurer or company) — its lines are not edited at the cash desk.","ru":"Счёт выставлен плательщику (страховой или организации) — его строки у кассы не правят.","uz":"Hisob to'lovchiga (sug'urta yoki tashkilot) chiqarilgan — uning qatorlari kassada tuzatilmaydi."},
   "Консультацию проводит врач — выберите врача.": {"en":"A consultation is performed by a doctor — choose a doctor.","ru":"Консультацию проводит врач — выберите врача.","uz":"Konsultatsiyani shifokor o'tkazadi — shifokorni tanlang."},

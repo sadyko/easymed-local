@@ -134,14 +134,24 @@ test('032 compile-check: every other literal query the two doctor views issue', 
 
 test('032 RPC aliases: dispense_visit_item / void_dispensed_visit_item (easymed p_* args)', () => {
   const db = seedWorkspace(freshDb());
+  // OWN_SHELF_ONLY_V1 — врач выдаёт пациенту только со своей полки, и остаток
+  // склада ему не называется: склад выдал ему 5 таблеток на руки.
+  db.prepare("INSERT INTO stock_holdings (holder_type, holder_id, product_id, qty) VALUES ('staff', 2, 1, 5)").run();
+  const shelf = () => db.prepare("SELECT qty FROM stock_holdings WHERE holder_type = 'staff' AND holder_id = 2 AND product_id = 1").get().qty;
   const res = RPC.dispense_visit_item(db, { p_visit_id: 1, p_item_id: 1, p_qty: 3, p_doctor_id: 2 }, DOCTOR);
   assert.equal(res.item_name, 'Парацетамол');
-  assert.equal(res.on_hand, 47);
+  assert.equal(res.on_hand, null, 'остаток склада врачу не называется');
+  assert.equal(shelf(), 2);
   assert.ok(res.visit_service_id);
   // doctor may void the not-yet-invoiced line (VOID_ROLES includes doctor)
   const v = RPC.void_dispensed_visit_item(db, { p_line: res.visit_service_id }, DOCTOR);
-  assert.equal(v.on_hand, 50);
+  assert.equal(v.on_hand, null);
+  assert.equal(shelf(), 5, 'отмена вернула на его полку');
   assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE clinic_item_id IS NOT NULL').get().n, 0);
+  // Администратор выдаёт со склада — и видит его остаток, как прежде.
+  const a = RPC.dispense_visit_item(db, { p_visit_id: 1, p_item_id: 1, p_qty: 3, p_doctor_id: 2 }, ADMIN);
+  assert.equal(a.on_hand, 47);
+  assert.equal(RPC.void_dispensed_visit_item(db, { p_line: a.visit_service_id }, ADMIN).on_hand, 50);
 });
 
 test('032 RPC alias: request_admission creates a bed-less requested admission, one per patient', () => {

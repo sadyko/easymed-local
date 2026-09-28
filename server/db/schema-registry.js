@@ -562,7 +562,12 @@ export const REGISTRY = {
                embed:{ rooms: { table:'rooms', fk:'room_id', columns:['id','name'] } } },
   products: {
     read:  { roles: ALL_STAFF, columns: ['id','name','code','unit','category','sale_price','on_hand','reorder_level','active','created_at','updated_at',
-             'base_unit','purchase_unit','pack_factor','consumption_unit','consumption_factor','is_drug','avg_cost','track_batches','procurement_category','supplier_id'] },
+             'base_unit','purchase_unit','pack_factor','consumption_unit','consumption_factor','is_drug','avg_cost','track_batches','procurement_category','supplier_id'],
+             // OWN_SHELF_ONLY_V1 — остаток СКЛАДА видят те, кто видит склад
+             // (администратор, кладовщик, «Закупки»: pay-visibility.js
+             // seesWarehouseStock). Врачу и медсестре он приходит пустым: они
+             // выдают пациенту только со своих полок (владелец 28.09).
+             restricted: { lift: 'warehouse_stock', columns: ['on_hand'] } },
     write: { insert: { roles: ['admin','inventory'], columns: ['name','code','unit','category','sale_price','reorder_level','active',
                 'base_unit','purchase_unit','pack_factor','consumption_unit','consumption_factor','is_drug','track_batches','procurement_category','supplier_id'] },
              update: { roles: ['admin','inventory'], columns: ['name','code','unit','category','sale_price','reorder_level','active',

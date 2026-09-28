@@ -26,10 +26,13 @@ test('receive_stock increases on_hand and writes a ledger row', () => {
   assert.throws(() => receiveStock(db, { product_id: prod, quantity: 5 }, lab), /(role|allow|роль)/i);
 });
 
+// OWN_SHELF_ONLY_V1 (владелец 28.09) — со склада пациенту выдают только
+// администратор и склад; врач — со своей полки (цепочка — ниже, seedChain). Тесты
+// о самом складе поэтому выдают от имени кладовщика.
 test('dispense_item decrements stock, prices from catalog, links a visit line', () => {
   const { db, vid, prod } = seed();
   receiveStock(db, { product_id: prod, quantity: 10 }, inv);
-  const r = dispenseItem(db, { product_id: prod, quantity: 3, visit_id: vid }, doc);
+  const r = dispenseItem(db, { product_id: prod, quantity: 3, visit_id: vid }, inv);
   assert.equal(r.on_hand, 7);
   assert.ok(r.visit_service_id);
   const vs = db.prepare('SELECT clinic_item_id, service_id, quantity, unit_price, total, status FROM visit_services WHERE id=?').get(r.visit_service_id);
@@ -47,7 +50,10 @@ test('dispense_item NEVER goes negative (atomic reject on insufficient stock)', 
   // HOLDINGS_FIRST_V1 — отказ теперь по-русски и называет ВСЕ источники цепочки
   // («insufficient stock: on hand 2, requested 5» говорил только про склад и
   // молчал о том, что половина лежит у сотрудника на руках).
-  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 5, visit_id: vid }, doc), /Недостаточно.*на складе 2 из 5/);
+  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 5, visit_id: vid }, inv), /Недостаточно.*на складе 2 из 5/);
+  // OWN_SHELF_ONLY_V1 — врачу склад не источник вовсе: отказ о СВОИХ полках.
+  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 1, visit_id: vid }, doc),
+    (e) => e.status === 400 && e.code === 'own_shelf_short' && /Нет на ваших полках: Paracetamol — нужно 1 pcs, есть 0 pcs\. Запросите у склада\./.test(e.message));
   assert.equal(db.prepare('SELECT on_hand FROM products WHERE id=?').get(prod).on_hand, 2); // unchanged
   assert.equal(db.prepare("SELECT COUNT(*) n FROM visit_services").get().n, 0);              // no line
   assert.equal(db.prepare("SELECT COUNT(*) n FROM stock_movements WHERE kind='dispense'").get().n, 0); // no movement
@@ -67,13 +73,13 @@ test('dispense_item validates qty/product/role; stock-only (no visit) works', ()
 test('void_dispense restores stock and deletes the line; blocked once invoiced', () => {
   const { db, vid, prod } = seed();
   receiveStock(db, { product_id: prod, quantity: 10 }, inv);
-  const d = dispenseItem(db, { product_id: prod, quantity: 4, visit_id: vid }, doc);
+  const d = dispenseItem(db, { product_id: prod, quantity: 4, visit_id: vid }, inv);
   const v = voidDispense(db, { visit_service_id: d.visit_service_id }, inv);
   assert.equal(v.on_hand, 10);   // restored
   assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE id=?').get(d.visit_service_id).n, 0); // deleted
   assert.equal(db.prepare("SELECT qty FROM stock_movements WHERE kind='void'").get().qty, 4);
   // a fresh dispense that then gets invoiced can't be voided
-  const d2 = dispenseItem(db, { product_id: prod, quantity: 1, visit_id: vid }, doc);
+  const d2 = dispenseItem(db, { product_id: prod, quantity: 1, visit_id: vid }, inv);
   db.prepare("INSERT INTO invoices (patient_id) VALUES (1)").run();
   db.prepare("INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, total) VALUES (1,'x',1,1,1)").run();
   db.prepare("UPDATE visit_services SET invoice_item_id=1 WHERE id=?").run(d2.visit_service_id);
@@ -105,7 +111,7 @@ test('чужая строка: отменить выдачу отсюда нел
   const { db, vid, prod } = seed();
   db.prepare("INSERT INTO branches (name, letter) VALUES ('Чиланзар', 'B')").run();
   receiveStock(db, { product_id: prod, quantity: 10 }, inv);
-  const d = dispenseItem(db, { product_id: prod, quantity: 2, visit_id: vid }, doc);
+  const d = dispenseItem(db, { product_id: prod, quantity: 2, visit_id: vid }, inv);
   db.prepare("UPDATE visit_services SET sync_origin = 'B' WHERE id = ?").run(d.visit_service_id);
 
   assert.throws(() => voidDispense(db, { visit_service_id: d.visit_service_id }, inv), /Чиланзар \(B\)/);
@@ -118,7 +124,7 @@ test('чужая строка: отменить выдачу отсюда нел
 test('своя выдача отменяется как прежде — запрет касается только чужих строк', () => {
   const { db, vid, prod } = seed();
   receiveStock(db, { product_id: prod, quantity: 10 }, inv);
-  const d = dispenseItem(db, { product_id: prod, quantity: 2, visit_id: vid }, doc);
+  const d = dispenseItem(db, { product_id: prod, quantity: 2, visit_id: vid }, inv);
   const v = voidDispense(db, { visit_service_id: d.visit_service_id }, inv);
   assert.equal(v.on_hand, 10);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM visit_services WHERE id = ?').get(d.visit_service_id).n, 0);
@@ -165,7 +171,7 @@ test('кабинет врача: сначала СВОЙ подотчёт, ск�
   assert.deepEqual(mv, { qty: -2, holder_type: 'staff', holder_id: 4 });
 });
 
-test('кабинет: у врача пусто — тратится подотчёт КАБИНЕТА приёма, потом отдела, потом склад', () => {
+test('кабинет: у врача пусто — тратится подотчёт КАБИНЕТА приёма, потом отдела; склад — только кладовщику', () => {
   const { db, vid, prod } = seedChain();
   receiveStock(db, { product_id: prod, quantity: 10 }, inv);
   hold(db, 'room', 7, prod, 3);        // visits.room_id = 7
@@ -179,17 +185,28 @@ test('кабинет: у врача пусто — тратится подотч
   assert.deepEqual(b.sources, [{ type: 'department', id: 9, qty: 1 }]);
   assert.equal(onHand(db, prod), 10);
 
-  const c = dispenseItem(db, { product_id: prod, quantity: 4, visit_id: vid }, doc);
-  assert.deepEqual(c.sources, [{ type: 'warehouse', id: null, qty: 4 }], 'нигде на руках нет — склад');
+  // OWN_SHELF_ONLY_V1 — нигде на своих полках нет: врачу — отказ «запросите у
+  // склада», склад НЕ добирает; кладовщику склад по-прежнему последнее звено.
+  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 4, visit_id: vid }, doc),
+    (e) => e.code === 'own_shelf_short' && e.message === 'Нет на ваших полках: Парацетамол — нужно 4 уп, есть 0 уп. Запросите у склада.');
+  assert.equal(onHand(db, prod), 10);
+  const c = dispenseItem(db, { product_id: prod, quantity: 4, visit_id: vid }, inv);
+  assert.deepEqual(c.sources, [{ type: 'warehouse', id: null, qty: 4 }], 'нигде на руках нет — склад (кладовщику)');
   assert.equal(onHand(db, prod), 6);
 });
 
-test('частичное покрытие: 1 из кабинета + 4 со склада ОДНОЙ выдачей; отмена вернёт каждую часть своему источнику', () => {
+test('частичное покрытие: 1 из кабинета + 4 со склада ОДНОЙ выдачей (кладовщик); отмена вернёт каждую часть своему источнику', () => {
   const { db, vid, prod } = seedChain();
   receiveStock(db, { product_id: prod, quantity: 10 }, inv);
   hold(db, 'room', 7, prod, 1);
 
-  const r = dispenseItem(db, { product_id: prod, quantity: 5, visit_id: vid }, doc);
+  // OWN_SHELF_ONLY_V1 — врачу единица из кабинета дозу в пять не покрывает:
+  // отказ, а не добор со склада; ничего не списано.
+  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 5, visit_id: vid }, doc), (e) => e.code === 'own_shelf_short');
+  assert.equal(held(db, 'room', 7, prod), 1);
+  assert.equal(onHand(db, prod), 10);
+
+  const r = dispenseItem(db, { product_id: prod, quantity: 5, visit_id: vid }, inv);
   assert.deepEqual(r.sources, [{ type: 'room', id: 7, qty: 1 }, { type: 'warehouse', id: null, qty: 4 }]);
   assert.equal(held(db, 'room', 7, prod), 0);
   assert.equal(onHand(db, prod), 6);
@@ -211,9 +228,18 @@ test('отказ называет нехватку И то, где лежит о
   hold(db, 'staff', 4, prod, 3);
   hold(db, 'department', 9, prod, 1);
 
+  // OWN_SHELF_ONLY_V1 — врачу: сколько на СВОИХ полках (3 на руках + 1 в
+  // отделе) и куда идти; про склад ему не говорят — склад ему не источник.
   assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 10, visit_id: vid }, doc), (e) => {
     assert.equal(e.status, 400);
-    assert.equal(e.message, 'Недостаточно: Парацетамол — на складе 2 из 10 уп; у вас на руках 3, в отделе 1.');
+    assert.equal(e.message, 'Нет на ваших полках: Парацетамол — нужно 10 уп, есть 4 уп. Запросите у склада.');
+    return true;
+  });
+  // Кладовщику (склад — последнее звено) отказ называет склад и каждую полку
+  // его цепочки: у него своего подотчёта нет, отдел кабинета приёма — 1.
+  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 10, visit_id: vid }, inv), (e) => {
+    assert.equal(e.status, 400);
+    assert.equal(e.message, 'Недостаточно: Парацетамол — на складе 2 из 10 уп; в отделе 1.');
     return true;
   });
   // Отказ не тронул НИЧЕГО.
@@ -226,8 +252,10 @@ test('отказ называет нехватку И то, где лежит о
   // Нет нигде — отказ говорит и это, не выдумывая цифр.
   db.prepare('DELETE FROM stock_holdings').run();
   db.prepare('UPDATE products SET on_hand = 0 WHERE id = ?').run(prod);
-  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 1, visit_id: vid }, doc),
+  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 1, visit_id: vid }, inv),
     /на складе 0 из 1 уп; на руках, в кабинете и в отделе — ничего\./);
+  assert.throws(() => dispenseItem(db, { product_id: prod, quantity: 1, visit_id: vid }, doc),
+    /Нет на ваших полках: Парацетамол — нужно 1 уп, есть 0 уп\. Запросите у склада\./);
 });
 
 test('визит без кабинета: цепочка берёт СВОЙ кабинет сотрудника, а не чужой', () => {
