@@ -123,6 +123,7 @@ globalThis.fetch = async (url, opts) => {
 };
 
 const { mountLabDevices, stopLabDevicesLive } = await import('../views/lab-devices.js');
+const { STRINGS } = await import('../i18n-strings.js');   // ревью M2 — названия экранов на en/uz
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 
 const HEARD = { id: 1, name: 'kjkj', profile: 'mindray-bc-5300', transport: 'mllp', host: '', port: 2575, enabled: 1, added: 1, discovered: 0, last_seen_at: '2026-09-14T08:02:50Z' };
@@ -472,6 +473,29 @@ test('ревью M9: опрос перерисовывает окно, толь�
     stopLabDevicesLive();
     mock.timers.reset();
     LISTENERS = LISTENING_2575;
+  }
+});
+
+// ── Ревью M2 — инструкция ведёт туда, где прибор теперь появляется ──────────
+// «Прибор появится в списке выше сам» — больше неправда: находка ждёт в окне
+// «Добавить прибор», а в таблицу попадает после нажатия «Добавить».
+const GUIDE_STEP = 'Прогоните одну пробу. Прибор появится в «Добавить прибор» → «Найдены в сети»: нажмите «Добавить», затем в «Панелях» выберите его у панели и подтвердите поля.';
+const GUIDE_NOTE = 'Если прибор уже присылал пробы, но значения не ложатся — смотрите «Необработанные»: там написано, чего именно не хватает.';
+
+test('ревью M2: инструкция — «Добавить прибор» → «Найдены в сети» → «Добавить», а не «в списке выше»', async () => {
+  DEVICES = [HEARD];
+  const text = textOf(await mount());
+  assert.ok(text.includes(GUIDE_STEP), 'шаг инструкции');
+  assert.ok(text.includes(GUIDE_NOTE), 'строка «Важно»');
+  assert.ok(!text.includes('в списке выше') && !text.includes('появился в списке'), 'про «список» больше ни слова');
+});
+
+test('ревью M2: английская и узбекская инструкция называют экраны так, как они подписаны на этом языке', () => {
+  for (const lang of ['en', 'uz']) {
+    for (const label of ['Добавить прибор', 'Найдены в сети', 'Добавить', 'Панели']) {
+      assert.ok(STRINGS[GUIDE_STEP][lang].includes('«' + STRINGS[label][lang] + '»'), `${lang}: «${STRINGS[label][lang]}» — ${STRINGS[GUIDE_STEP][lang]}`);
+    }
+    assert.ok(STRINGS[GUIDE_NOTE][lang].includes('«' + STRINGS['Необработанные'][lang] + '»'), lang);
   }
 });
 
