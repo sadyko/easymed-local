@@ -565,12 +565,12 @@ export const RPC = {
   // LIS_MINDRAY_CODES_V1 — коды, которые прибор действительно присылал: из них
   // «Поле анализатора» в редакторе панелей. Чистое чтение (gate.js).
   lis_device_codes:         (db, args, user) => lisDeviceCodes(db, args, user),
-  lis_message_attach:       (db, args, user) => lisMessageAttach(db, args, user),
-  lis_message_dismiss:      (db, args, user) => lisMessageDismiss(db, args, user),
-
   // LIS_ANALYZER_LIST_V1 — какие порты слушаются: строка у ждущего прибора
   // в «Добавить прибор». Чистое чтение (gate.js).
   lis_listeners:            (db, args, user) => lisListeners(db, args, user),
+  lis_message_attach:       (db, args, user) => lisMessageAttach(db, args, user),
+  lis_message_dismiss:      (db, args, user) => lisMessageDismiss(db, args, user),
+
   telephony_settings_get:   (db, args, user) => telephonySettingsGet(db, args, user),
   telephony_settings_save:  (db, args, user) => telephonySettingsSave(db, args, user),
   telephony_test:           (db, args, user) => telephonyTest(db, args, user),
