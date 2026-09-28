@@ -329,18 +329,36 @@ export const IMPORT_COLUMNS = [
     'Мин. остаток', 'Поставщик', 'Партия', `Срок годности (${EXPIRY_FORMAT_RU})`,
 ];
 const IMPORT_EXAMPLE = ['Парацетамол 500мг', 'Медикаменты', 'шт', 100, 1500, '12%', 2500, '12%', 10, 'ООО Медснаб', 'A-2601', EXPIRY_EXAMPLE];
+// Ревью M5 — заголовок читается через headerKey(): регистр, «ё», звёздочка,
+// подсказка в скобках («(ДД.ММ.ГГГГ)», «(сум)», «(%)») и хвост «, %» / «, сум»
+// не делают его другим. Всё, что и после этого ни во что не ложится, —
+// отказ с именем колонки (importRowsFromMatrix): прежде такая колонка молча
+// выбрасывалась, и «НДС, %» или «Годен до (ДД.ММ.ГГГГ)» теряли ставку и срок.
 const HEADER_MAP = {
-    'название': 'name', 'единица': 'unit', 'кол-во': 'qty', 'количество': 'qty',
-    'себестоимость': 'unit_cost', 'цена закупки без ндс': 'unit_cost', 'цена закупки': 'unit_cost',
-    'мин. остаток': 'reorder_level', 'мин остаток': 'reorder_level',
+    'название': 'name', 'наименование': 'name', 'название товара': 'name', 'наименование товара': 'name',
+    'категория': 'category', 'категория товара': 'category', 'тип товара': 'category', 'тип': 'category',
+    'единица': 'unit', 'единица измерения': 'unit', 'ед.': 'unit', 'ед': 'unit', 'ед. изм.': 'unit', 'ед. изм': 'unit', 'ед изм': 'unit',
+    'кол-во': 'qty', 'количество': 'qty',
+    'цена закупки без ндс': 'unit_cost', 'цена закупки': 'unit_cost', 'закупочная цена': 'unit_cost', 'себестоимость': 'unit_cost',
+    'ндс прихода': 'receipt_vat_rate', 'ставка ндс прихода': 'receipt_vat_rate', 'ндс закупки': 'receipt_vat_rate',
+    'цена продажи': 'sale_price', 'продажная цена': 'sale_price',
+    'ндс продажи': 'sale_vat_rate', 'ставка ндс продажи': 'sale_vat_rate',
+    'мин. остаток': 'reorder_level', 'мин остаток': 'reorder_level', 'минимальный остаток': 'reorder_level',
     'поставщик': 'supplier',
-    'тип товара': 'category', 'тип': 'category', 'категория': 'category',
-    'ндс прихода': 'receipt_vat_rate', 'ндс продажи': 'sale_vat_rate',
-    'ндс': 'vat_rate', 'ставка ндс': 'vat_rate',   // прежняя единая колонка — сервер отказывает словами
-    'цена продажи': 'sale_price',
-    'партия': 'batch_no', 'партия / серия': 'batch_no', 'серия': 'batch_no',
-    'срок годности (дд.мм.гггг)': 'expiry_date', 'срок годности': 'expiry_date', 'годен до': 'expiry_date',
+    'партия': 'batch_no', 'партия / серия': 'batch_no', 'серия / партия': 'batch_no', 'серия': 'batch_no', 'номер партии': 'batch_no',
+    'срок годности': 'expiry_date', 'годен до': 'expiry_date',
 };
+// Прежняя единая колонка «НДС» (ревью F3) — отказ словами о двух колонках.
+const RETIRED_VAT_HEADERS = new Set(['ндс', 'ставка ндс']);
+
+/** Ревью M5 — заголовок колонки в том виде, в каком его ищут в HEADER_MAP. */
+export function headerKey(raw) {
+    return String(raw == null ? '' : raw).toLowerCase().replace(/ё/g, 'е').replace(/\*/g, '')
+        .replace(/\([^)]*\)/g, ' ')
+        .replace(/,\s*(%|сум|uzs|дд\.мм\.гггг)\s*$/, ' ')
+        .replace(/%/g, ' ')
+        .replace(/\s+/g, ' ').trim();
+}
 function importHints() {
     return [
         ['Колонка', 'Что писать'],
@@ -397,6 +415,13 @@ export function sheetMatrix(XLSX, ws) {
     return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 }
 
+/** Буква колонки Excel: 0 → A, 25 → Z, 26 → AA. */
+function columnLetter(i) {
+    let n = i + 1; let out = '';
+    while (n > 0) { const r = (n - 1) % 26; out = String.fromCharCode(65 + r) + out; n = Math.floor((n - 1) / 26); }
+    return out;
+}
+
 /** Ячейка срока годности → то, что уходит на сервер: дата-ячейка → «ДД.ММ.ГГГГ». */
 export function expiryCellValue(v) {
     if (v instanceof Date) return dmyOfDate(v) || '';
@@ -411,9 +436,28 @@ export function expiryCellValue(v) {
  */
 export function importRowsFromMatrix(matrix) {
     if (!Array.isArray(matrix) || !matrix.length) throw new Error(tr('Файл пуст.'));
-    const headers = matrix[0].map(x => String(x).toLowerCase().replace(/\*/g, '').replace(/\s+/g, ' ').trim());
-    const keys = headers.map(hd => HEADER_MAP[hd] || null);
+    const raw = (matrix[0] || []).map((x) => (x == null ? '' : String(x).trim()));
+    const keys = raw.map((hd) => HEADER_MAP[headerKey(hd)] || null);
     if (!keys.includes('name')) throw new Error(tr('Не найдена колонка «Название» — скачайте «Шаблон».'));
+    // Ревью M5 — строгий формат: каждая подписанная колонка должна лечь в
+    // шаблон, одна колонка — один раз, данные без заголовка — отказ.
+    const firstOf = new Map();
+    raw.forEach((hd, ci) => {
+        const hk = headerKey(hd);
+        if (!hk) {
+            if (matrix.slice(1).some((cells) => cells && cells[ci] !== undefined && cells[ci] !== null && String(cells[ci]).trim() !== '')) {
+                throw new Error(trf('В колонке {col} есть данные, но нет заголовка — подпишите её по «Шаблону» или удалите.', { col: columnLetter(ci) }));
+            }
+            return;
+        }
+        if (RETIRED_VAT_HEADERS.has(hk)) {
+            throw new Error(trf('Колонка «{name}» теперь разделена — «НДС продажи» (ставка товара) и «НДС прихода» (ставка этого прихода). Скачайте новый «Шаблон».', { name: hd }));
+        }
+        const k = keys[ci];
+        if (!k) throw new Error(trf('Колонка «{name}» не распознана — в шаблоне такой нет. Допустимо: {list}. Скачайте «Шаблон».', { name: hd, list: IMPORT_COLUMNS.join(', ') }));
+        if (firstOf.has(k)) throw new Error(trf('Колонка «{name}» повторяет колонку «{first}» — оставьте одну.', { name: hd, first: firstOf.get(k) }));
+        firstOf.set(k, hd);
+    });
     const rows = [];
     for (const cells of matrix.slice(1)) {
         if (!cells || cells.every(c => String(c).trim() === '')) continue;

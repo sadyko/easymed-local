@@ -309,3 +309,16 @@ test('импорт — всё или ничего: ошибка в третье�
   assert.equal(db.prepare('SELECT COUNT(*) n FROM item_suppliers').get().n, 0);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM stock_movements').get().n, 0);
 });
+
+// Ревью M5 — строгий формат и на сервере: поле строки, которого импорт не
+// знает, — отказ со словами, а не молча выброшенная колонка.
+test('ревью M5: импорт — незнакомое поле строки — отказ с его именем, ничего не записано', () => {
+  const { db } = seed();
+  assert.throws(() => call('import_products_excel', db, { rows: [{ name: 'Вата', category: 'Расходники', discount: 5 }] }),
+    (e) => e.status === 400 && e.message === 'Строка 2: поле «discount» импорт не знает — скачайте новый «Шаблон».');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM products').get().n, 0);
+  // Все поля экрана — известны (пустые значения — как не присланные).
+  const r = call('import_products_excel', db, { rows: [{ name: 'Вата', category: 'Расходники', unit: '', qty: '', unit_cost: '', receipt_vat_rate: '',
+    sale_price: '', sale_vat_rate: '', vat_rate: '', reorder_level: '', supplier: '', batch_no: '', expiry_date: '' }] });
+  assert.deepEqual(r, { created: 1, updated: 0, received: 0 });
+});

@@ -824,6 +824,10 @@ export function createRequisition(db, args, user) {
 // ---------------------------------------------------------------------------
 const MAX_IMPORT_ROWS = 2000;
 const MAX_IMPORT_MONEY = 1e12;
+// Ревью M5 — поля строки импорта, которые сервер знает (экран шлёт ровно их;
+// vat_rate — прежняя единая колонка «НДС», на неё отказ словами о двух).
+const IMPORT_FIELDS = new Set(['name', 'category', 'unit', 'qty', 'unit_cost', 'receipt_vat_rate', 'sale_price', 'sale_vat_rate',
+  'vat_rate', 'reorder_level', 'supplier', 'batch_no', 'expiry_date']);
 
 // Strip control characters before anything is stored — these strings are shown
 // in the Журнал and exported to Excel.
@@ -905,6 +909,15 @@ export function importProductsExcel(db, args, user) {
       const rowNo = i + 2;
       if (!row || typeof row !== 'object') {
         throw rpcT(RpcError, 'Строка {row}: пустая строка.', { row: rowNo }, 400);
+      }
+      // Ревью M5 — строгий формат (владелец: «hardcoded format, so the user
+      // won't make mistakes»): поле, которого импорт не знает, — отказ, а не
+      // молча выброшенная колонка. Экран сам отказывает по незнакомому
+      // заголовку; здесь — та же граница для любого другого вызова.
+      for (const key of Object.keys(row)) {
+        if (!IMPORT_FIELDS.has(key)) {
+          throw rpcT(RpcError, 'Строка {row}: поле «{key}» импорт не знает — скачайте новый «Шаблон».', { row: rowNo, key: cellText(key) }, 400);
+        }
       }
       const name = clean(importStr(row.name));
       if (!name) {
