@@ -114,12 +114,19 @@ function readVat(l) {
 // vat — ставка (undefined — не указана). НДС строки = сумма без НДС × ставка;
 // себестоимость на складе — С НДС: столько клиника заплатила, и по ней идёт
 // средняя цена (WAC). Без ставки (undefined, null, 0) цена и есть себестоимость.
+//
+// Ревью M3 — net: сумма строки без НДС РОВНО КАК ЕЁ ВВЕЛИ (количество × цена
+// строки, до деления на упаковку) — её пишет stock_movements.net_amount (мигр.
+// 224). Себестоимость единицы округлена до тийина после деления на упаковку, и
+// «количество × себестоимость» расходилось со счётом-фактурой: 100 кор по 3 шт
+// по 100 000 давали 9 999 999 вместо 10 000 000.
 function receiptMoney(unitCost, qty, vat) {
   const rate = Number(vat) || 0;
   return {
     grossUnit: rate > 0 ? unitCost * (100 + rate) / 100 : unitCost,
     vatRate: vat === undefined ? null : vat,
     vatAmount: vat === undefined ? null : vatOnNet(unitCost * qty, vat),
+    net: round2(unitCost * qty),
   };
 }
 
@@ -153,8 +160,8 @@ export function receiveStockLines(db, args, user) {
       WHERE id = ?
     `);
     const insertMovement = db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, note, created_by, branch_id, supplier_id, batch_no, expiry_date, vat_rate, vat_amount)
-      VALUES (?, 'receive', ?, ?, 'manual', ?, ?, 1, ?, ?, ?, ?, ?)
+      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, note, created_by, branch_id, supplier_id, batch_no, expiry_date, vat_rate, vat_amount, net_amount)
+      VALUES (?, 'receive', ?, ?, 'manual', ?, ?, 1, ?, ?, ?, ?, ?, ?)
     `);
 
     const received = [];
@@ -183,7 +190,7 @@ export function receiveStockLines(db, args, user) {
         : product.avg_cost;
 
       updateProduct.run(newOnHand, newAvg, productId);
-      insertMovement.run(productId, baseQty, costPerBase, note, user.id, supplierId, batchNo, expiry, m.vatRate, m.vatAmount);
+      insertMovement.run(productId, baseQty, costPerBase, note, user.id, supplierId, batchNo, expiry, m.vatRate, m.vatAmount, m.net);
       // SUPPLIERS_VAT_V1 — связь «товар ↔ поставщик»: заводится, если её не
       // было, и помнит последнюю цену (без НДС) и ставку. Ревью F2: цена строки
       // — за factor базовых единиц, а связь хранит её в СВОЕЙ упаковке.
@@ -287,8 +294,8 @@ export function receivePurchaseOrder(db, args, user) {
     const getProduct = db.prepare('SELECT * FROM products WHERE id = ?');
     const updateProduct = db.prepare(`UPDATE products SET on_hand = ?, avg_cost = ?, updated_at = ${NOW} WHERE id = ?`);
     const insertMovement = db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, branch_id, supplier_id, batch_no, expiry_date, vat_rate, vat_amount)
-      VALUES (?, 'receive', ?, ?, 'purchase_order', ?, ?, ?, 1, ?, ?, ?, ?, ?)`);
+      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, reference_id, note, created_by, branch_id, supplier_id, batch_no, expiry_date, vat_rate, vat_amount, net_amount)
+      VALUES (?, 'receive', ?, ?, 'purchase_order', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`);
     const bumpReceived = db.prepare('UPDATE purchase_order_items SET qty_received = round(qty_received + ?, 6) WHERE id = ?');
 
     const received = [];
@@ -303,7 +310,7 @@ export function receivePurchaseOrder(db, args, user) {
       if (!Number.isFinite(newOnHand)) throw new RpcError('Остаток вне допустимого диапазона.', 400);
       updateProduct.run(newOnHand, newAvg, product.id);
       insertMovement.run(product.id, qty, round2(m.grossUnit), poId, `PO ${po.po_number}`, user.id,
-        po.supplier_id || null, batchNo, expiry, m.vatRate, m.vatAmount);
+        po.supplier_id || null, batchNo, expiry, m.vatRate, m.vatAmount, m.net);
       bumpReceived.run(qty, item.id);
       if (po.supplier_id) {
         rememberSupplierPrice(db, {
@@ -889,8 +896,8 @@ export function importProductsExcel(db, args, user) {
       WHERE id = ?
     `);
     const insertMovement = db.prepare(`
-      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, note, created_by, branch_id, supplier_id, batch_no, expiry_date, vat_rate, vat_amount)
-      VALUES (?, 'receive', ?, ?, 'import', 'Импорт из Excel', ?, 1, ?, ?, ?, ?, ?)
+      INSERT INTO stock_movements (product_id, kind, qty, unit_cost, reference_type, note, created_by, branch_id, supplier_id, batch_no, expiry_date, vat_rate, vat_amount, net_amount)
+      VALUES (?, 'receive', ?, ?, 'import', 'Импорт из Excel', ?, 1, ?, ?, ?, ?, ?, ?)
     `);
 
     let created = 0, updated = 0, received = 0;
@@ -1007,7 +1014,7 @@ export function importProductsExcel(db, args, user) {
           ? round2((product.avg_cost * product.on_hand + qty * costPerBase) / newOnHand)
           : product.avg_cost;
         updateStock.run(newOnHand, newAvg, product.id);
-        insertMovement.run(product.id, qty, costPerBase, user.id, supplierId, batchNo, exp.iso || null, m.vatRate, m.vatAmount);
+        insertMovement.run(product.id, qty, costPerBase, user.id, supplierId, batchNo, exp.iso || null, m.vatRate, m.vatAmount, m.net);
         received++;
       }
       // SUPPLIERS_VAT_V1 — поставщик строки связан с товаром (многие ко

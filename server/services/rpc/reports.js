@@ -3128,7 +3128,7 @@ function procurementReport(db, args, ctx) {
            sm.batch_no AS batch_no, sm.expiry_date AS expiry_date,
            sup.name AS supplier,
            pr.procurement_category AS category, pr.sale_price AS sale_price,
-           sm.vat_rate AS vat_rate, sm.vat_amount AS vat_amount
+           sm.vat_rate AS vat_rate, sm.vat_amount AS vat_amount, sm.net_amount AS net_amount
       FROM stock_movements sm
       JOIN products pr ON pr.id = sm.product_id
       LEFT JOIN purchase_orders po ON sm.reference_type = 'purchase_order' AND po.id = sm.reference_id
@@ -3137,17 +3137,24 @@ function procurementReport(db, args, ctx) {
        AND ${rangeSql('sm.created_at')}${bf.clause}${gf.clause}${cf.clause}${sf.clause}
      ORDER BY sup.name IS NULL, sup.name, sm.created_at DESC, sm.id DESC
   `).all(...rangeParams(from, to), ...bf.params, ...gf.params, ...cf.params, ...sf.params).map((r) => {
-    const gross = round2(r.qty * (r.unit_cost || 0));
     const vat = r.vat_amount == null ? null : round2(r.vat_amount);
-    const net = round2(gross - (vat || 0));
-    return { ...r, gross, vat, net };
+    // Ревью M3 — сумма строки, как её ввели (net_amount, мигр. 224), плюс
+    // записанный НДС: ровно счёт-фактура. «Количество × себестоимость единицы»
+    // расходилось с ним на тийины деления на упаковку (100 кор по 3 шт по
+    // 100 000 — 9 999 999 вместо 10 000 000). Приход до мигр. 224 — как прежде.
+    if (r.net_amount != null) {
+      const net = round2(r.net_amount);
+      return { ...r, net, vat, gross: round2(net + (vat || 0)) };
+    }
+    const gross = round2(r.qty * (r.unit_cost || 0));
+    return { ...r, gross, vat, net: round2(gross - (vat || 0)) };
   });
   const NO_SUPPLIER = 'Поставщик не указан';
   const perSupplier = new Map();
   for (const r of rows) {
     const k = r.supplier || NO_SUPPLIER;
     const t = perSupplier.get(k) || { lines: 0, sum: 0 };
-    t.lines += 1; t.sum += r.qty * (r.unit_cost || 0);
+    t.lines += 1; t.sum += r.gross;   // ревью M3 — сумма с НДС строки, как в колонке
     perSupplier.set(k, t);
   }
   // Итоги по поставщикам — примечаниями над таблицей, по убыванию суммы:
@@ -3166,7 +3173,7 @@ function procurementReport(db, args, ctx) {
       r.unit_cost == null ? null : (r.qty ? round2(r.net / r.qty) : round2(r.unit_cost)),
       receiptVatLabel(r), r.net, r.vat, r.gross,
       r.sale_price == null ? null : round2(r.sale_price), r.note || '']),
-    by_building: summariseByBuilding(ctx, rows, { total: (r) => r.qty * (r.unit_cost || 0) }),
+    by_building: summariseByBuilding(ctx, rows, { total: (r) => r.gross }),   // ревью M3
     total_label: 'Сумма закупок',
     notes: [STOCK_LOCAL_NOTE, categoryNote(cats),
       supplierName ? noteT(fillTemplate(PROCUREMENT_SUPPLIER_T, { name: supplierName }), PROCUREMENT_SUPPLIER_T, { name: supplierName }) : null,
