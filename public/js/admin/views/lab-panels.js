@@ -970,6 +970,27 @@ export async function mountLabPanels(container) {
             toast(trf('Подтвердите поля анализатора: {list}', { list: unconfirmed.map(r => r.name || '(без имени)').join(', ') }), 'fail');
             return;
         }
+        // LIS_MINDRAY_CODES_V1 (ревью R2) — одно поле анализатора — один
+        // показатель. Прибор шлёт код один раз, и значение ложится в первую
+        // строку; вторая осталась бы пустой навсегда, а приём клал бы каждую
+        // пробу этой панели в лоток («код уже у строки …»). Код сравнивается
+        // без регистра и пробелов, как на приёме (server/lis/match.js). Строка
+        // без имени не сохраняется — и спором не считается.
+        const byCode = new Map();
+        for (const r of state.rows) {
+            const code = String(r.device_code || '').trim();
+            const name = String(r.name || '').trim();
+            if (!code || !r.device_code_confirmed || !name) continue;
+            const k = code.toUpperCase();
+            if (!byCode.has(k)) byCode.set(k, { code, names: [] });
+            byCode.get(k).names.push(name);
+        }
+        const clashes = [...byCode.values()].filter(g => g.names.length > 1);
+        if (clashes.length) {
+            toast(trf('Одно поле анализатора выбрано у нескольких показателей: {list}. Прибор заполнит только первый — выберите каждому своё поле.',
+                { list: clashes.map(g => g.names.join(', ') + ' (' + g.code + ')').join('; ') }), 'fail');
+            return;
+        }
         const p = state.selected;
         try {
             let panelId = p.id;

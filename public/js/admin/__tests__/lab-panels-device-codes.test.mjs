@@ -309,3 +309,37 @@ test('R4: вписанный руками код подтверждает стр
   assert.notStrictEqual(inp.style.fontStyle, 'italic');
   assert.strictEqual(btn.style.display, 'none');
 });
+
+// R2: два показателя с одним подтверждённым полем анализатора. Прибор шлёт код
+// один раз — второй показатель остался бы пустым навсегда, а каждая проба
+// панели лежала бы в лотке. Сохранение отказывает и называет строки.
+test('R2: одно поле анализатора у двух показателей — сохранение отказывает и называет их', async () => {
+  ANALYTES = [
+    analyte({ id: 'a-1', name: 'Лейкоциты', device_code: 'WBC', device_code_confirmed: 1, sort_order: 0 }),
+    analyte({ id: 'a-2', code: 'WBC#', name: 'Лейкоциты (абс.)', device_code: ' wbc ', device_code_confirmed: 1, sort_order: 1 }),
+    analyte({ id: 'a-3', code: 'HGB', name: 'Гемоглобин', device_code: 'HGB', device_code_confirmed: 1, sort_order: 2 }),
+  ];
+  const root = await mountPanels();
+  findButtonByText(root, /Сохранить панель/).click();
+  await tick(80);
+  assert.strictEqual(toastMsg,
+    'Одно поле анализатора выбрано у нескольких показателей: Лейкоциты, Лейкоциты (абс.) (WBC). Прибор заполнит только первый — выберите каждому своё поле.');
+  assert.strictEqual(toastEl.dataset.kind, 'fail');
+  assert.deepStrictEqual(writes, [], 'ничего не записано');
+});
+
+test('R2: разные поля, пустые поля и строка без имени — не спор, панель сохраняется', async () => {
+  ANALYTES = [
+    analyte({ id: 'a-1', name: 'Лейкоциты', device_code: 'WBC', device_code_confirmed: 1, sort_order: 0 }),
+    analyte({ id: 'a-2', code: 'RBC', name: 'Эритроциты', device_code: '', device_code_confirmed: 0, sort_order: 1 }),
+    analyte({ id: 'a-3', code: 'PLT', name: 'Тромбоциты', device_code: '', device_code_confirmed: 0, sort_order: 2 }),
+    analyte({ id: 'a-4', code: 'X', name: '', device_code: 'WBC', device_code_confirmed: 1, sort_order: 3 }),
+  ];
+  const root = await mountPanels();
+  findButtonByText(root, /Сохранить панель/).click();
+  await tick(80);
+  const ins = writes.find((w) => w.table === 'lab_panel_analytes' && w.op === 'insert');
+  assert.ok(ins, 'сохранено: ' + toastMsg);
+  assert.deepStrictEqual([].concat(ins.values).map((r) => r.name), ['Лейкоциты', 'Эритроциты', 'Тромбоциты'],
+    'строка без имени не сохраняется — и спором не считается');
+});
