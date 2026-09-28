@@ -367,7 +367,15 @@ export function planSources(db, chain, product, quantity, opts = {}) {
     // его уже не касаются — склада в его цепочке нет вовсе.
     // Ревью F5 — только при ВКЛЮЧЁННОМ переключателе клиники; выключенный —
     // склад добирает, как в 3.12.1.
-    if (!mayTakeFromWarehouse(db, opts.user)) throw ownShelfRefusal(product, quantity, found, !!opts.inUnits);
+    if (!mayTakeFromWarehouse(db, opts.user)) {
+      const err = ownShelfRefusal(product, quantity, found, !!opts.inUnits);
+      // Ревью F6 — что свои полки всё-таки покрывают и сколько не хватает (в
+      // базовых единицах): лист назначений берёт своё, а остаток ставит в
+      // «не списано со склада» (dispenseAdmissionItemCore, pendingWhenShort).
+      err.shelfPicks = picks;
+      err.shortBase = need;
+      throw err;
+    }
     const onHand = roundQty(product.on_hand);
     // V3120_FIX — ОТКЛЮЧЁННЫЙ ТОВАР, одно правило на все двери: уже выданное
     // (подотчёт, кабинет, отдел) довыдать можно — выше цепочка его и взяла;
@@ -672,7 +680,18 @@ export function dispenseAdmissionItem(db, args, user) {
 // 0.1 коробки), а строка счёта пишется в ампулах по цене ампулы: «1 × 5 000»,
 // а не «0.1 × 50 000». Так зовёт лист назначений; без флага — базовые, как
 // всегда (консоль койки).
-export function dispenseAdmissionItemCore(db, args, user) {
+/**
+ * Ревью F6 — «НЕ СПИСАНО СО СКЛАДА». `opts` — только для листа назначений
+ * (treatment-orders.js chargeAdministration), аргументами RPC не достаётся:
+ *   pendingWhenShort — при включённом «Только со своих полок» дозы нет на
+ *     полках медсестры: НЕ отказ. Строка начисления пишется ровно как при
+ *     обычной выдаче (деньги — один раз, сейчас), с полок берётся то, что на
+ *     них есть, а остаток ложится в stock_pending_writeoffs — склад спишет его
+ *     по списку (rpc/stock-pending.js). Отключённый товар — по-прежнему отказ
+ *     склада, который лист назначений превращает в предупреждение (ревью M1).
+ *   administrationId, kind ('dose' | 'extra') — к какой отметке запись.
+ */
+export function dispenseAdmissionItemCore(db, args, user, opts = {}) {
   const admissionId = args && args.admission_id;
   if (!isPositiveInt(admissionId)) throw new RpcError('Госпитализация не выбрана.', 400);
   const productId = args && args.product_id;
@@ -713,7 +732,15 @@ export function dispenseAdmissionItemCore(db, args, user) {
     // отдел → склад. Не хватило нигде — отказ со словами, до первой записи.
     // OWN_SHELF_ONLY_V1 — склад только администратору и складу; медсестре,
     // отмечающей дозу в листе назначений, — тоже только свои полки.
-    const picks = planSources(db, holdingChain(db, user, { admission: adm }), product, baseQty, { inUnits, user });
+    let picks;
+    let shortBase = 0;
+    try {
+      picks = planSources(db, holdingChain(db, user, { admission: adm }), product, baseQty, { inUnits, user });
+    } catch (e) {
+      if (!(opts && opts.pendingWhenShort && e && e.code === OWN_SHELF_SHORT && !e.inactive)) throw e;
+      picks = Array.isArray(e.shelfPicks) ? e.shelfPicks : [];
+      shortBase = roundQty(Number(e.shortBase) || 0);
+    }
     // EXPIRY_BALANCE_V1 — та же тревога у койки, что и в амбулатории.
     const warnings = expiryWarnings(db, [productId]);
 
@@ -728,10 +755,44 @@ export function dispenseAdmissionItemCore(db, args, user) {
 
     applySources(db, picks, productId, user, 'admission', info.lastInsertRowid);
 
+    // Ревью F6 — остаток дозы, которого на полках не было: «не списано со
+    // склада», одна запись на строку начисления (UNIQUE), в той же единице,
+    // что и доза.
+    let pending = null;
+    const shownQty = shortBase > 0 ? (inUnits ? unitsOf(shortBase, cf) : shortBase) : 0;
+    if (shortBase > 0 && shownQty > 0) {
+      const unitLabel = (inUnits && cf !== 1 ? product.consumption_unit : '') || product.base_unit || product.unit || '';
+      const pid = db.prepare(`INSERT INTO stock_pending_writeoffs
+          (admission_service_id, administration_id, admission_id, product_id, base_qty, qty, unit, kind, given_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(info.lastInsertRowid, opts.administrationId || null, admissionId, productId,
+        shortBase, shownQty, unitLabel, opts.kind === 'extra' ? 'extra' : 'dose', user.id).lastInsertRowid;
+      pending = { id: Number(pid), base_qty: shortBase, qty: shownQty, unit: unitLabel };
+    }
+
     const fresh = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(productId);
-    return { line_id: info.lastInsertRowid, item_name: product.name, on_hand: warehouseOnHand(db, user, fresh.on_hand), sources: picks, warnings };
+    return { line_id: info.lastInsertRowid, item_name: product.name, on_hand: warehouseOnHand(db, user, fresh.on_hand), sources: picks, warnings, pending };
   });
   return run();
+}
+
+/** Ревью F6 — запись «не списано со склада» строки начисления (или null). */
+function pendingOfLine(db, lineId) {
+  try {
+    return db.prepare('SELECT id, status FROM stock_pending_writeoffs WHERE admission_service_id = ?').get(lineId) || null;
+  } catch { return null; }   // база до мигр. 226
+}
+
+/**
+ * Ревью F6 — снять «не списано со склада» у строки: отметку сняли или строку
+ * убрали до того, как склад списал. Списанное не трогается — его вернёт
+ * обычная отмена по движениям.
+ */
+export function cancelPendingForLine(db, lineId, note) {
+  try {
+    return db.prepare(`UPDATE stock_pending_writeoffs
+                          SET status = 'cancelled', cancelled_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'), cancel_note = ?
+                        WHERE admission_service_id = ? AND status = 'pending'`).run(String(note || '').slice(0, 200), lineId).changes;
+  } catch { return 0; }
 }
 
 export function voidDispensedAdmissionItem(db, args, user) {
@@ -756,7 +817,13 @@ export function voidDispensedAdmissionItemCore(db, args, user) {
 
     // HOLDINGS_FIRST_V1 — каждая часть возвращается СВОЕМУ источнику: движения
     // этой строки называют их все, а не только последний.
-    const parts = restoreSources(db, 'admission', lineId, line.clinic_item_id, line.quantity, user);
+    // Ревью F6 — у строки есть запись «не списано со склада»: возвращается
+    // ТОЛЬКО то, что записано движениями (своя полка при отметке, склад или
+    // полка при «Списать»). Не списанное не брали — и на склад оно не идёт
+    // (без этого «строка старше журнала» вернула бы на склад всю дозу).
+    const pending = pendingOfLine(db, lineId);
+    if (pending && pending.status === 'pending') cancelPendingForLine(db, lineId, 'начисление снято');
+    const parts = restoreSources(db, 'admission', lineId, line.clinic_item_id, pending ? 0 : line.quantity, user);
     db.prepare('DELETE FROM admission_services WHERE id = ?').run(lineId);
 
     const fresh = db.prepare('SELECT on_hand FROM products WHERE id = ?').get(line.clinic_item_id);

@@ -188,6 +188,10 @@ const READ_ONLY_RPCS = new Set([
   // OWN_SHELF_ONLY_V1 (ревью F5) — положение переключателя «только со своих
   // полок» и готовность полок: чтение. Включить и выключить — запись, сюда не входит.
   'own_shelf_settings',
+  // OWN_SHELF_ONLY_V1 (ревью F6) — очередь «не списано со склада» и её счёт
+  // (бейдж меню): чтение. «Списать» — запись, сюда не входит.
+  'stock_pending_list',
+  'stock_pending_count',
 ]);
 
 // The way back in. These must work while locked or a clinic that wants to pay

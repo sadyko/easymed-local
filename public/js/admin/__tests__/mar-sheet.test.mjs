@@ -187,6 +187,7 @@ const USERS = [
 let orders = [CEF, DRESSING, KETOROL, CANCELLED];
 // MED_ADMIN_CHARGE_V1 (Задача 6) — отметка «дала», за которой не пошёл склад.
 let stockIssues = { count: 0, items: [] };
+let stockPending = { count: 0, items: [] };   // OWN_SHELF_ONLY_V1 (ревью F6)
 // ORDER_FROM_STOCK_V1 — склад клиники. У этой позиции НЕТ пометки «медикамент»
 // (is_drug 0, category 'other') — ровно как в базе владельца: именно на такой
 // разметке подсказки и оказались пустыми.
@@ -209,7 +210,7 @@ globalThis.fetch = async (url, opts = {}) => {
         if (name === 'treatment_orders_list') {
             return ok({
                 admission_id: body.admission_id, from: body.from, to: body.to,
-                include_cancelled: !!body.include_cancelled, orders, stock_issues: stockIssues,
+                include_cancelled: !!body.include_cancelled, orders, stock_issues: stockIssues, stock_pending: stockPending,
             });
         }
         if (name === 'treatment_order_create') {
@@ -496,6 +497,25 @@ test('несписанная со склада доза видна на лист
     assert.ok(txt.includes('Не списано со склада: 1'),
         'молча это нашлось бы через месяц, когда уже не вспомнить, что вводили');
     assert.ok(txt.includes('нет остатка'), 'и с объяснением, что именно случилось');
+});
+
+// OWN_SHELF_ONLY_V1 (ревью F6) — «не списано со склада» (доза начислена, спишет
+// склад) — своей строкой и с предупреждением «вручную не проводите».
+test('«не списано со склада — спишет склад» видно на листе отдельно от несписанного для старшей', async () => {
+    stockPending = {
+        count: 1,
+        items: [{ id: 502, order_id: 1, due_date: TODAY, due_slot: 10, stock_status: 'pending',
+                  stock_note: 'не списано со склада: Кеторол — 2 амп', name: 'Кеторол', dose: '2 амп', stock_item_id: 1 }],
+    };
+    const root = await renderScreen();
+    stockPending = { count: 0, items: [] };
+    const card = walk(root).find((e) => e.attrs && Object.prototype.hasOwnProperty.call(e.attrs, 'data-stock-pending'));
+    assert.ok(card, 'карточки «спишет склад» нет');
+    const txt = textOf(card);
+    assert.ok(txt.includes('Не списано со склада — спишет склад: 1'), txt);
+    assert.ok(txt.includes('Вручную не проводите'), 'иначе пациент заплатит дважды');
+    assert.ok(txt.includes('Кеторол — 2 амп'));
+    assert.ok(!textOf(root).includes('Не списано со склада: 1'), 'в «несписанное для старшей» она не попадает');
 });
 
 test('без несписанного предупреждения на листе нет', async () => {

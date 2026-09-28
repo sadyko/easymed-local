@@ -48,7 +48,7 @@ import { doseQuantity, parseDose, UNKNOWN_QTY_MESSAGE } from '../domain/dose.js'
 // наружу отказом всей отметки, то есть ровно тем запретом, которого план
 // велит избегать («Нет остатка — предупреждение, а не запрет»).
 import {
-  dispenseAdmissionItemCore, voidDispensedAdmissionItemCore, RpcError as StockError, OWN_SHELF_SHORT,
+  dispenseAdmissionItemCore, voidDispensedAdmissionItemCore, RpcError as StockError, cancelPendingForLine,
 } from './inventory.js';
 import {
   doseNotePrefix, extraNotePrefix, administrationNotePrefix, medAdminIdOf,
@@ -331,9 +331,25 @@ export function treatmentOrdersList(db, args, user) {
        AND a.stock_status IN (${STOCK_ISSUE.map(() => '?').join(',')})
      ORDER BY a.due_date, a.due_slot, a.id`).all(adm.id, from, to, ...STOCK_ISSUE);
 
+  // OWN_SHELF_ONLY_V1 (ревью F6) — «НЕ СПИСАНО СО СКЛАДА»: доза введена и
+  // начислена, препарат спишет склад по своему списку (rpc/stock-pending.js).
+  // Отдельно от «несписанного» выше: то — работа для старшей, а это — для
+  // склада; провести такую дозу вручную консолью значило бы начислить дважды.
+  const pending = db.prepare(`
+    SELECT a.id, a.order_id, a.due_date, a.due_slot, a.stock_status, a.stock_note,
+           o.name, o.dose, o.stock_item_id
+      FROM treatment_administrations a
+      JOIN treatment_orders o ON o.id = a.order_id
+     WHERE o.admission_id = ?
+       AND a.voided_at IS NULL
+       AND a.due_date BETWEEN ? AND ?
+       AND a.stock_status = 'pending'
+     ORDER BY a.due_date, a.due_slot, a.id`).all(adm.id, from, to);
+
   return {
     admission_id: adm.id, from, to, include_cancelled: includeCancelled, orders,
     stock_issues: { count: issues.length, items: issues },
+    stock_pending: { count: pending.length, items: pending },
   };
 }
 
@@ -348,9 +364,13 @@ export function treatmentOrdersList(db, args, user) {
 //   2. СКЛАД — препарат физически ушёл. Может не получиться (нет остатка,
 //      количество не выводится из дозы) — и тогда это ПРЕДУПРЕЖДЕНИЕ, а не
 //      запрет (правило плана: «Нет остатка — предупреждение»).
-//      OWN_SHELF_ONLY_V1 (владелец 28.09) — одно исключение: дозы нет на
-//      полках отмечающего (медсестре склад не источник) — отметка НЕ ставится,
-//      отказ «Нет на ваших полках … Запросите у склада.».
+//      OWN_SHELF_ONLY_V1, ревью F6 (владелец 28.09) — и при включённом «Только
+//      со своих полок» отметка НЕ отказывается: «The dose is recorded, so the
+//      patient's chart is never blocked. The drug is marked «не списано со
+//      склада», and the warehouse sees it in a list to settle.» Дозы нет на
+//      полках медсестры — с полок берётся то, что есть, остаток ложится в
+//      «не списано со склада» (stock_status 'pending'), склад спишет его
+//      по списку (rpc/stock-pending.js).
 //   3. ДЕНЬГИ — строка admission_services, которую касса соберёт в счёт стаци-
 //      онара наравне с проживанием и процедурами.
 //
@@ -359,6 +379,16 @@ export function treatmentOrdersList(db, args, user) {
 // бывает начисленного, но не списанного. Если склад отказал — нет ни того, ни
 // другого, и человек об этом слышит; тогда провести препарат вручную можно
 // консолью койки, ровно как раньше.
+// Ревью F6 — одно исключение, и деньги в нём решены так: «не списано со
+// склада» НАЧИСЛЯЕТСЯ СРАЗУ, при отметке, той же строкой, что и обычная
+// выдача (та же цена, единица, ставка НДС, метка отметки), а склад
+// списывается позже, по списку. Начислить при списании было бы опаснее:
+// склад может не списать никогда, пациента могут выписать и рассчитать раньше
+// (а закрытой госпитализации начисление уже не принять) — доза осталась бы
+// бесплатной. Дважды не начислится тоже: «Списать» строк не пишет, только
+// движение склада, и запись у строки одна (UNIQUE). Такая отметка НЕ идёт в
+// «несписанное для старшей» (STOCK_ISSUE): проведи её старшая вручную
+// консолью — пациент заплатил бы дважды.
 //
 // ─── ИДЕМПОТЕНТНОСТЬ ────────────────────────────────────────────────────────
 //
@@ -375,7 +405,9 @@ export function treatmentOrdersList(db, args, user) {
 
 // Порядок «серьёзности» складского исхода: итог отметки — САМЫЙ ПЛОХОЙ из
 // случившегося. Одна списанная доза не отменяет одну несписанную ампулу.
-const STOCK_RANK = { '': 0, none: 1, ok: 2, reversed: 2, skipped: 3, short: 4 };
+// Ревью F6 — 'pending': доза начислена, склад спишет по списку — хуже «ok»,
+// но не «несписанное для старшей» (в STOCK_ISSUE её нет).
+const STOCK_RANK = { '': 0, none: 1, ok: 2, reversed: 2, pending: 3, skipped: 4, short: 5 };
 const STOCK_ISSUE = ['skipped', 'short'];
 
 function worseStock(a, b) {
@@ -540,7 +572,7 @@ function chargeAdministration(db, order, administration, user) {
       warnings.push({ code: 'quantity', reason: q.reason, message: q.message });
     } else {
       try {
-        dispenseAdmissionItemCore(db, {
+        const r = dispenseAdmissionItemCore(db, {
           admission_id: order.admission_id,
           product_id: order.stock_item_id,
           quantity: q.quantity,
@@ -554,23 +586,26 @@ function chargeAdministration(db, order, administration, user) {
           // HOLDINGS_FIRST_V1 — флага prefer_holdings больше нет: подотчёт
           // медсестры, её кабинет и отдел палаты идут перед складом ВЕЗДЕ,
           // одной цепочкой (rpc/inventory.js holdingChain).
-        }, user);
-        stockStatus = worseStock(stockStatus, 'ok');
+        }, user, { pendingWhenShort: true, administrationId: administration.id, kind: 'dose' });   // ревью F6
         basis = q.basis;
+        if (r && r.pending) {
+          const msg = `не списано со склада: ${product.name} — ${r.pending.qty} ${r.pending.unit}`.trim();
+          stockStatus = worseStock(stockStatus, 'pending');
+          notes.push(msg);
+          warnings.push({ code: 'stock_pending', product_id: order.stock_item_id,
+            message: `${msg}. Доза записана и начислена; склад спишет препарат по списку «Не списано со склада».` });
+        } else {
+          stockStatus = worseStock(stockStatus, 'ok');
+        }
       } catch (e) {
         // Нет остатка / позиция погашена / товара нет в каталоге. Склад ведёт
         // себя ТОЧНО КАК В АМБУЛАТОРИИ: он не уходит в минус и отказывает
         // целиком (inventory.js dispenseItem). Разница только в том, что здесь
         // отказ не отменяет отметку — он становится предупреждением.
         if (!(e instanceof StockError)) throw e;
-        // OWN_SHELF_ONLY_V1 — КРОМЕ ОДНОГО: дозы нет на полках медсестры
-        // (подотчёт, кабинет, отдел палаты), а склад ей не источник. Решение
-        // владельца — такую отметку НЕ ставить: «введено» с пустых полок
-        // означало бы препарат, взятый мимо склада, и дыру на следующей
-        // инвентаризации. Отказ уходит наружу, транзакция отметки откатывается
-        // целиком, и медсестра слышит «запросите у склада».
-        // Ревью M1 — отключённый товар остаётся предупреждением у всех (план, §5).
-        if (e.code === OWN_SHELF_SHORT && !e.inactive) throw e;
+        // Ревью F6 — «нет на ваших полках» сюда больше не доходит: его ловит
+        // pendingWhenShort выше («не списано со склада»). Отключённый товар —
+        // предупреждение у всех, при любом положении переключателя (ревью M1).
         stockStatus = worseStock(stockStatus, 'short');
         notes.push(`не списано: ${e.message}`);
         warnings.push({ code: 'stock', message: e.message });
@@ -597,18 +632,28 @@ function chargeAdministration(db, order, administration, user) {
   }
   for (const item of extra.items) {
     try {
-      dispenseAdmissionItemCore(db, {
+      const r = dispenseAdmissionItemCore(db, {
         admission_id: order.admission_id,
         product_id: item.product_id,
         quantity: item.quantity,
         doctor_id: order.prescribed_by,
         billable: !!item.billable,
         note: `${extraNotePrefix(administration.id, item.product_id)}${item.name || 'расход сверх дозы'}`,
-      }, user);   // HOLDINGS_FIRST_V1 — источник выбирает цепочка, флага нет
-      stockStatus = worseStock(stockStatus, 'ok');
+      }, user, { pendingWhenShort: true, administrationId: administration.id, kind: 'extra' });   // HOLDINGS_FIRST_V1 — источник выбирает цепочка; ревью F6
+      if (r && r.pending) {
+        const name = (db.prepare('SELECT name FROM products WHERE id = ?').get(item.product_id) || {}).name || '';
+        const msg = `расход сверх дозы не списан со склада: ${name} — ${r.pending.qty} ${r.pending.unit}`.trim();
+        stockStatus = worseStock(stockStatus, 'pending');
+        notes.push(msg);
+        warnings.push({ code: 'stock_pending', product_id: item.product_id,
+          message: `${msg}. Записан и начислен; склад спишет по списку «Не списано со склада».` });
+      } else {
+        stockStatus = worseStock(stockStatus, 'ok');
+      }
     } catch (e) {
       if (!(e instanceof StockError)) throw e;
-      if (e.code === OWN_SHELF_SHORT && !e.inactive) throw e;   // OWN_SHELF_ONLY_V1 — то же правило, что у дозы выше (ревью M1)
+      // Ревью F6 — «нет на ваших полках» ловит pendingWhenShort; отключённый
+      // товар — предупреждение (ревью M1), как у дозы выше.
       stockStatus = worseStock(stockStatus, 'short');
       notes.push(`расход сверх дозы не списан: ${e.message}`);
       warnings.push({ code: 'stock_extra', product_id: item.product_id, message: e.message });
@@ -644,6 +689,10 @@ function reverseAdministration(db, administration, user) {
       kept += 1;
       warnings.push({ code: 'invoiced', line_id: line.id,
                       message: 'Строка уже в счёте — уберите её через кассу.' });
+      // Ревью F6 — доза не введена: «не списано со склада» у этой строки
+      // списывать нечего. Строку уберёт касса; товар, который успели списать,
+      // вернёт тогда обычная отмена по движениям (voidReleasedDoseLines).
+      cancelPendingForLine(db, line.id, 'отметка снята');
       continue;
     }
     // Тот же код возврата, что у консоли койки: остаток обратно, движение

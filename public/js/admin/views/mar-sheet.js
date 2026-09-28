@@ -1257,6 +1257,24 @@ export async function renderMarSheet(root, ctx = {}) {
     function stockIssuesCard() {
         const issues = (state.sheet && state.sheet.stock_issues) || { count: 0, items: [] };
         const box = h('div');
+        // OWN_SHELF_ONLY_V1 (ревью F6) — «не списано со склада»: доза введена и
+        // начислена, препарат спишет склад по своему списку. Отдельно от
+        // «несписанного» ниже: провести такую дозу вручную консолью — значит
+        // начислить пациенту дважды, и лист говорит это словами.
+        const pending = (state.sheet && state.sheet.stock_pending) || { count: 0, items: [] };
+        if (pending.count) {
+            box.appendChild(h('div', {
+                class: 'card', 'data-stock-pending': '',
+                style: { marginTop: '14px', padding: '12px 16px', border: '1px solid var(--ink-200)' },
+            },
+                h('div', { style: { fontSize: '13.5px', fontWeight: 700 } },
+                    trf('Не списано со склада — спишет склад: {n}', { n: pending.count })),
+                h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
+                    tr('Доза введена и начислена пациенту; препарат спишет склад по своему списку. Вручную не проводите — пациент заплатит дважды.')),
+                ...(pending.items || []).slice(0, 8).map((it) => h('div', { style: { fontSize: '12.5px', marginTop: '3px' } },
+                    [it.name || '', it.due_date || '', it.due_slot === null || it.due_slot === undefined ? '' : String(it.due_slot).padStart(2, '0') + ':00',
+                        it.stock_note || ''].filter(Boolean).join(' · ')))));
+        }
         if (!issues.count) return box;
         box.appendChild(h('div', {
             class: 'card',

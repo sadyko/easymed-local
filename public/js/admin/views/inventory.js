@@ -15,7 +15,7 @@
 // adjust_stock, issue_stock_lines, dispense_item/void_dispense) — the
 // allow-list in server/db/schema-registry.js enforces this.
 import { supabase } from '../../supabase.js';
-import { h, Icon, clear, toast, fmtDateTime } from '../ui.js';
+import { h, Icon, Tag, clear, toast, fmtDateTime } from '../ui.js';
 import { trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import {
     fetchGuard, loadingCard, comingSoon, fmtPrice, fmtQty,
@@ -36,9 +36,12 @@ import { renderExpiryTab } from './inventory-expiry.js';
 // OWN_SHELF_ONLY_V1 (ревью F5) — переключатель клиники «Только со своих полок»
 // и готовность полок: настройка склада, поэтому живёт здесь чипом.
 import { renderOwnShelfTab } from './inventory-own-shelf.js';
+// OWN_SHELF_ONLY_V1 (ревью F6) — «Не списано со склада»: очередь склада со
+// счётом на чипе (тот же счёт — бейдж «Закупок» в меню).
+import { renderPendingTab, loadPendingCount, canSettlePending } from './inventory-pending.js';
 
 const refs = { container: null, onNavigate: null, chipsEl: null, tabBarEl: null, contentEl: null };
-const state = { pane: 'sklad' };
+const state = { pane: 'sklad', pendingCount: null };   // pendingCount — ревью F6
 
 const TABS = [
     { id: 'sklad',           label: 'Склад',             icon: 'Layers' },
@@ -54,6 +57,7 @@ const CHIPS = [
     { id: 'stockcount',  label: 'Инвентаризация', icon: 'Grid' },
     { id: 'audit',       label: 'Журнал',         icon: 'Activity' },
     { id: 'own_shelf',   label: 'Только со своих полок', icon: 'Shield' },   // OWN_SHELF_ONLY_V1 (ревью F5)
+    { id: 'pending',     label: 'Не списано со склада', icon: 'Warning' },  // OWN_SHELF_ONLY_V1 (ревью F6) — только складу и администратору
 ];
 
 export async function renderInventory(container, { onNavigate } = {}) {
@@ -61,7 +65,18 @@ export async function renderInventory(container, { onNavigate } = {}) {
     refs.onNavigate = onNavigate;
     state.pane = 'sklad';   // всегда открываемся на Складе
     mount();
+    refreshPendingCount();   // ревью F6 — счёт на чипе, не задерживая «Склад»
     await repaint();
+}
+
+// Ревью F6 — сколько доз ждут списания: чип и бейдж меню. Не складу — не спрашиваем.
+async function refreshPendingCount() {
+    if (!canSettlePending()) return;
+    const n = await loadPendingCount();
+    if (n === null) return;
+    state.pendingCount = n;
+    if (refs.chipsEl) paintChips();
+    try { if (window.easymed && typeof window.easymed.refreshNav === 'function') window.easymed.refreshNav(); } catch { /* подсказка, не операция */ }
 }
 
 function mount() {
@@ -98,14 +113,18 @@ function setPane(id) {
 function paintChips() {
     clear(refs.chipsEl);
     for (const c of CHIPS) {
+        if (c.id === 'pending' && !canSettlePending()) continue;   // ревью F6 — очередь склада
         const active = state.pane === c.id;
+        const count = c.id === 'pending' && state.pendingCount > 0
+            ? h('span', { 'data-pending-count': String(state.pendingCount), style: { marginLeft: '6px' } }, Tag(String(state.pendingCount), { kind: 'warn' }))
+            : null;
         refs.chipsEl.appendChild(h('button', {
             class: 'btn btn-sm ' + (active ? 'btn-primary' : 'btn-outline'),
             type: 'button',
             // DEPARTMENTS_V1 — «Отделения» больше не заглушка: это экран отделов
             // (руководитель, команда, помещения, что выдано и на руках).
             onclick: () => (c.id === 'departments' && refs.onNavigate ? refs.onNavigate('departments') : setPane(c.id)),
-        }, Icon(c.icon, { size: 14 }), ' ' + c.label));
+        }, Icon(c.icon, { size: 14 }), ' ' + c.label, count));
     }
     refs.chipsEl.appendChild(h('button', {
         class: 'btn btn-sm btn-outline', type: 'button', title: 'Обновить данные',
@@ -143,6 +162,7 @@ async function repaint() {
                 'Товары и остатки по отделениям смотрите в «Настройки → Отделы».', 'Building'));
         case 'expiry':      return renderExpiryTab(container);   // EXPIRY_BALANCE_V1
         case 'own_shelf':   return renderOwnShelfTab(container);   // OWN_SHELF_ONLY_V1 (ревью F5)
+        case 'pending':     return renderPendingTab(container, { onChanged: refreshPendingCount });   // ревью F6
         default:
             return;
     }

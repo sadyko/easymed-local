@@ -8,6 +8,7 @@ import { receiveStock, dispenseItem, voidDispense, dispenseAdmissionItem, voidDi
 import { dashboardSummary, dashboardTrend } from './dashboard.js';   // DASHBOARD_TREND_V1
 import { receiveStockLines, adjustStock, receivePurchaseOrder, approveRequisitionAndIssue, postStockCount, issueStockLines, importProductsExcel, createRequisition } from './procurement.js';
 import { ownShelfSettings, ownShelfSet } from './stock-policy.js';   // OWN_SHELF_ONLY_V1 (ревью F5) — переключатель «только со своих полок»
+import { stockPendingList, stockPendingCount, stockPendingSettle } from './stock-pending.js';   // OWN_SHELF_ONLY_V1 (ревью F6) — «не списано со склада»
 import { productSave, supplierSave, supplierProductCounts } from './catalog-goods.js';   // SUPPLIERS_VAT_V1 — карточки товара и поставщика со связями; счётчики (ревью M6)
 import { purchaseOrderCreate } from './procurement.js';   // SUPPLIERS_VAT_V1 — заказ на закупку с НДС строк
 import { departmentList, departmentCard, departmentForm, departmentHeadSet, departmentMemberSet, departmentPlaceSet, departmentStaffOptions, departmentPlaceOptions } from './departments.js';   // DEPARTMENTS_V1
@@ -204,6 +205,9 @@ export const RPC = {
   supplier_product_counts:       (db) => supplierProductCounts(db),   // SUPPLIERS_VAT_V1 (ревью M6) — сколько товаров у поставщика
   own_shelf_settings:            (db, args, user) => ownShelfSettings(db, args, user),   // OWN_SHELF_ONLY_V1 (ревью F5) — положение, журнал, готовность
   own_shelf_set:                 (db, args, user) => ownShelfSet(db, args, user),        // OWN_SHELF_ONLY_V1 (ревью F5) — только администратор
+  stock_pending_list:            (db, args, user) => stockPendingList(db, args, user),   // OWN_SHELF_ONLY_V1 (ревью F6) — очередь «не списано со склада»
+  stock_pending_count:           (db, args, user) => stockPendingCount(db, args, user),  // OWN_SHELF_ONLY_V1 (ревью F6) — бейдж
+  stock_pending_settle:          (db, args, user) => stockPendingSettle(db, args, user), // OWN_SHELF_ONLY_V1 (ревью F6) — «Списать», ровно один раз
   purchase_order_create:         (db, args, user) => purchaseOrderCreate(db, args, user),   // SUPPLIERS_VAT_V1 — строки заказа с НДС
   reports_overview:         (db, args, user) => reportsOverview(db, args, user),
   run_report:               (db, args, user) => runReport(db, args, user),

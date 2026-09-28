@@ -524,23 +524,28 @@ test('медсестра, переключатель выключен: дозы 
 });
 
 // OWN_SHELF_ONLY_V1 (владелец 28.09; переключатель ВКЛЮЧЁН) — ДВА РАЗНЫХ
-// СЛУЧАЯ. У медсестры склад не источник: дозы нет на её полках — отметка НЕ
-// ставится, отказ «запросите у склада» (иначе «введено» значило бы препарат,
-// взятый мимо склада). У администратора склад — последнее звено цепочки, и
-// пустой склад по-прежнему предупреждение, а не отказ.
-test('медсестра: дозы нет на её полках — отметка НЕ ставится, ничего не записано (переключатель включён)', () => {
+// СЛУЧАЯ. У медсестры склад не источник. Ревью F6 — было: дозы нет на её
+// полках — отметка НЕ ставилась; стало: отметка стоит, пациенту начислено
+// (один раз, как при выдаче), склад не тронут, а доза ждёт склада в «не
+// списано со склада». Двери выдачи (амбулатория, консоль койки) отказывают,
+// как в F4. У администратора склад — последнее звено цепочки, и пустой склад
+// по-прежнему предупреждение, а не отказ.
+test('медсестра: дозы нет на её полках — отметка стоит, начислено, «не списано со склада»; амбулаторная выдача — отказ (переключатель включён)', () => {
   const db = seed();
   ownShelfOn(db);
   const adm = admission(db);
   const o = order(db, adm, { name: 'Кеторол', stock_item_id: 4 });
 
-  assert.throws(() => mark(db, o), (e) => e instanceof StockError && e.status === 400
-    && e.code === 'own_shelf_short'
-    && e.message === 'Нет на ваших полках: Кеторол — нужно 1 pcs, есть 0 pcs. Запросите у склада.');   // pcs — базовая единица товара по умолчанию
-  assert.equal(db.prepare('SELECT COUNT(*) n FROM treatment_administrations').get().n, 0, 'отметки нет');
-  assert.equal(movements(db, 4).length, 0);
-  assert.equal(lines(db, adm).length, 0);
-  // Тот же отказ у амбулаторной выдачи — два пути не разъехались.
+  const r = mark(db, o);
+  assert.equal(r.administration.status, 'given');
+  assert.equal(r.stock.status, 'pending');
+  assert.match(r.stock.note, /^не списано со склада: Кеторол — 1 pcs/);   // pcs — базовая единица товара по умолчанию
+  assert.equal(r.warnings[0].code, 'stock_pending');
+  assert.equal(movements(db, 4).length, 0, 'склад не тронут');
+  assert.equal(lines(db, adm).length, 1, 'начислено');
+  assert.equal(lines(db, adm)[0].total, 8000);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM stock_pending_writeoffs WHERE status = 'pending'").get().n, 1);
+  // Амбулаторная выдача — отказ «нет на ваших полках», как и было (F4).
   assert.throws(() => dispenseItem(db, { product_id: 4, quantity: 1 }, ACTOR.nurse),
     (e) => e instanceof StockError && e.code === 'own_shelf_short');
   db.close();

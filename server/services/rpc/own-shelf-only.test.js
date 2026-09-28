@@ -16,6 +16,11 @@
 //   dispense_from_holding    — вкладка медсестры (амбулатория и стационар);
 //   treatment_admin_mark     — отметка «введено» в листе назначений.
 //
+// Ревью F6 — ЛИСТ НАЗНАЧЕНИЙ — ИСКЛЮЧЕНИЕ: отметка «введено» (и расход сверх
+// дозы) не отказывается никогда. Дозы нет на полках — отметка записана, пациенту
+// начислено как при обычной выдаче, склад не тронут, а остаток ждёт склада в
+// «не списано со склада» (подробно — mar-pending-writeoff.test.js).
+//
 // Ревью F5 — правило — ПЕРЕКЛЮЧАТЕЛЬ клиники «Только со своих полок» (мигр.
 // 226), выключенный по умолчанию: «Clinics keep working as today». Этот файл —
 // спецификация ВКЛЮЧЁННОГО правила, и seed() его включает. Выключенное (всё как
@@ -299,21 +304,27 @@ test('MAR, медсестра: доза с её полки или с отдел�
   assert.equal(onHand(db), 98, 'склад не тронут отметками');
 });
 
+// Ревью F6 (владелец 28.09) — было: отметка НЕ ставилась, отказ «запросите у
+// склада». Стало: «The dose is recorded, so the patient's chart is never
+// blocked. The drug is marked «не списано со склада», and the warehouse sees it
+// in a list to settle.»
+const pendingRows = (db) => db.prepare('SELECT status, kind, base_qty FROM stock_pending_writeoffs ORDER BY id').all();
 for (const who of ['nurse', 'senior', 'custom']) {
-  test(`MAR, ${who}: дозы нет на своих полках — отметка «введено» НЕ ставится, отказ словами, ничего не записано`, () => {
+  test(`MAR, ${who}: дозы нет на своих полках — «введено» записано и начислено, склад не тронут, «не списано со склада» (ревью F6)`, () => {
     const db = seed();
     const a = admission(db);
-    const o = medOrder(db, a);
-    assertOwnShelfRefusal(() => markGiven(db, o, U[who]),
-      'Нет на ваших полках: Бинт — нужно 1 шт, есть 0 шт. Запросите у склада.');
-    assert.equal(marks(db), 0, 'отметки нет');
-    assert.equal(patientLines(db), 0, 'начисления нет');
+    const m = markGiven(db, medOrder(db, a), U[who]);
+    assert.equal(m.administration.status, 'given');
+    assert.equal(m.stock.status, 'pending');
+    assert.equal(marks(db), 1, 'отметка есть');
+    assert.equal(patientLines(db), 1, 'начислено один раз');
     assert.equal(onHand(db), 100, 'склад не тронут');
-    // Склад выдал в отдел палаты — отметка проходит.
+    assert.deepEqual(pendingRows(db), [{ status: 'pending', kind: 'dose', base_qty: 1 }]);
+    // Склад выдал в отдел палаты — следующая доза уходит с полки, как обычно.
     put(db, 'department', 30, 1);
-    const m = markGiven(db, o, U[who]);
-    assert.equal(m.stock.status, 'ok');
-    assert.equal(marks(db), 1);
+    const m2 = markGiven(db, medOrder(db, a), U[who]);
+    assert.equal(m2.stock.status, 'ok');
+    assert.equal(pendingRows(db).length, 1);
   });
 }
 
@@ -327,17 +338,16 @@ test('MAR, старшая медсестра другого отдела: доз
   assert.equal(onHand(db), 99);
 });
 
-test('MAR, лаборант с правом «отметки введения»: только свои полки, нехватка — отказ', () => {
+test('MAR, лаборант с правом «отметки введения»: только свои полки; нехватка — «не списано со склада» (ревью F6), склад не тронут', () => {
   const db = seed();
   grant(db, 'lab', 'inpatient.marks', 'edit');
   const a = admission(db);
-  const o = medOrder(db, a);
-  assertOwnShelfRefusal(() => markGiven(db, o, U.lab));
-  assert.equal(marks(db), 0);
+  assert.equal(markGiven(db, medOrder(db, a), U.lab).stock.status, 'pending');
+  assert.equal(onHand(db), 100);
   put(db, 'staff', 15, 1);
-  assert.equal(markGiven(db, o, U.lab).stock.status, 'ok');
+  assert.equal(markGiven(db, medOrder(db, a), U.lab).stock.status, 'ok');
   assert.equal(held(db, 'staff', 15), 0);
-  assert.equal(onHand(db), 99);
+  assert.equal(onHand(db), 99, 'склад отдал лаборанту одну при выдаче на полку; отметки его не трогают');
 });
 
 test('MAR, администратор: своих полок нет — доза со склада, как прежде', () => {
@@ -357,7 +367,7 @@ test('MAR, администратор: пустой склад — по-преж
   assert.equal(marks(db), 1);
 });
 
-test('MAR, медсестра: непонятная доза — по-прежнему предупреждение (отметка стоит); отказ только за «нет на полках»', () => {
+test('MAR, медсестра: непонятная доза — по-прежнему предупреждение (отметка стоит)', () => {
   const db = seed();
   const a = admission(db);
   const m = markGiven(db, medOrder(db, a, { dose: 'по схеме' }), U.nurse);
@@ -365,14 +375,17 @@ test('MAR, медсестра: непонятная доза — по-прежн
   assert.equal(marks(db), 1);
 });
 
-test('MAR, медсестра: расход сверх дозы не на полках — вся отметка отказана, и доза не списана', () => {
+test('MAR, медсестра: расход сверх дозы не на полках — отметка стоит, доза с полки, расход — «не списано со склада» (ревью F6)', () => {
   const db = seed();
   const a = admission(db);
   put(db, 'staff', 11, 1);   // доза есть, лишней ампулы — нет
-  assertOwnShelfRefusal(() => markGiven(db, medOrder(db, a), U.nurse, [{ product_id: P, qty: 1, billable: false, name: 'брак' }]));
-  assert.equal(marks(db), 0);
-  assert.equal(held(db, 'staff', 11), 1, 'доза вернулась на полку вместе с откатом');
-  assert.equal(patientLines(db), 0);
+  const m = markGiven(db, medOrder(db, a), U.nurse, [{ product_id: P, qty: 1, billable: false, name: 'брак' }]);
+  assert.equal(m.stock.status, 'pending');
+  assert.equal(marks(db), 1);
+  assert.equal(held(db, 'staff', 11), 0, 'доза — с её полки');
+  assert.equal(patientLines(db), 2, 'доза и расход — две строки, как всегда');
+  assert.deepEqual(pendingRows(db), [{ status: 'pending', kind: 'extra', base_qty: 1 }]);
+  assert.equal(onHand(db), 99, 'склад отдал медсестре дозу при выдаче на полку; отметка его не трогает');
 });
 
 // ─── 6. Что экран узнаёт от сервера ─────────────────────────────────────────
