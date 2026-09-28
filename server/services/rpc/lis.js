@@ -113,6 +113,11 @@ export async function lisRestart(db, args, user) {
  * а не сбой. Здесь тот же приём прогоняется повторно с номером, который назвал
  * человек: второй путь записи означал бы второй набор правил, и однажды они
  * разошлись бы.
+ *
+ * LIS_MINDRAY_CODES_V1 (ревью R9) — ответ `{ ok, code, status, detail }`:
+ * status и detail — той строки лотка, которую приём только что записал. ACK
+ * «AA» значит «принято и сохранено», а не «бланк заполнен»: по одному ему экран
+ * говорил «Сообщение применено», хотя в бланке не хватало строк.
  */
 export function lisMessageAttach(db, args, user) {
   guard(user);
@@ -126,9 +131,14 @@ export function lisMessageAttach(db, args, user) {
   // Подменяется ТОЛЬКО номер пробы в OBR-3; всё остальное сообщение идёт как
   // пришло, поэтому применяются те же правила сопоставления и те же запреты.
   const retagged = msg.raw.replace(/^(OBR\|[^|]*\|[^|]*\|)[^|]*/m, '$1' + vsId);
+  // Приём пишет ровно одну строку лотка, и better-sqlite3 синхронный: между
+  // этими двумя чтениями никто другой не пишет, поэтому самая новая строка
+  // после ingestMessage — его. «id > before» — страховка, а не надежда.
+  const before = db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM lab_device_messages').get().m;
   const code = ingestMessage(db, retagged, msg.peer, msg.device_id);
+  const rec = db.prepare('SELECT status, detail FROM lab_device_messages WHERE id > ? ORDER BY id DESC LIMIT 1').get(before);
   resolveMessage(db, id);
-  return { ok: code === 'AA', code };
+  return { ok: code === 'AA', code, status: rec ? rec.status : null, detail: rec ? rec.detail || '' : '' };
 }
 
 /** Отклонить строку лотка: сообщение остаётся, но перестаёт требовать внимания. */

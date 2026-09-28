@@ -527,6 +527,8 @@ export const STRINGS = {
   "Вписать код…": {"en":"Type a code…","ru":"Вписать код…","uz":"Kodni yozish…"},
   "Впишите код так, как его присылает прибор": {"en":"Type the code exactly as the analyzer sends it","ru":"Впишите код так, как его присылает прибор","uz":"Kodni analizator yuborganidek yozing"},
   "Вернуться к списку": {"en":"Back to the list","ru":"Вернуться к списку","uz":"Ro‘yxatga qaytish"},
+  // LIS_MINDRAY_CODES_V1 (ревью 2026-09-28, R9) — ручная привязка: принято, но бланк заполнен не весь
+  "Сообщение принято, но бланк заполнен не полностью: {detail}": {"en":"The message is accepted, but the form is not fully filled: {detail}","ru":"Сообщение принято, но бланк заполнен не полностью: {detail}","uz":"Xabar qabul qilindi, lekin blanka to‘liq to‘ldirilmadi: {detail}"},
   "Подтвердить сопоставление": {"en":"Confirm mapping","ru":"Подтвердить сопоставление","uz":"Solishtirishni tasdiqlash"},
   "Предложено сопоставлений: {n}. Подтвердите каждое — панель не сохранится, пока остались непроверенные.": {"en":"Mappings suggested: {n}. Confirm each one — the panel will not save while any remain unchecked.","ru":"Предложено сопоставлений: {n}. Подтвердите каждое — панель не сохранится, пока остались непроверенные.","uz":"Taklif etilgan solishtirishlar: {n}. Har birini tasdiqlang — tekshirilmagani qolsa, panel saqlanmaydi."},
   "Подтвердите поля анализатора: {list}": {"en":"Confirm the analyzer fields: {list}","ru":"Подтвердите поля анализатора: {list}","uz":"Analizator maydonlarini tasdiqlang: {list}"},

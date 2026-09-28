@@ -110,9 +110,16 @@ globalThis.fetch = async (url, opts) => {
     }
     return { ok: true, json: async () => ({ data: [] }) };
   }
-  if (u.startsWith('/api/rpc/')) return { ok: true, json: async () => ({ data: [] }) };
+  if (u.startsWith('/api/rpc/')) {
+    const name = decodeURIComponent(u.slice('/api/rpc/'.length));
+    rpcCalls.push({ name, args: body });
+    if (name === 'lis_message_attach') return { ok: true, json: async () => ({ data: attachAnswer }) };
+    return { ok: true, json: async () => ({ data: [] }) };
+  }
   return { ok: true, json: async () => ({ data: null }) };
 };
+let rpcCalls = [];
+let attachAnswer = null;
 
 const { mountLabDevices, stopLabDevicesLive } = await import('../views/lab-devices.js');
 
@@ -148,6 +155,42 @@ test('R1: смазанный штрихкод виден в лотке, даже
   const text = textOf(root);
   assert.ok(text.includes('LAB-000777'), 'проба со смазанным штрихкодом в лотке');
   assert.ok(!text.includes('Все результаты разложены по бланкам.'), 'ложное «всё разложено» не показано');
+});
+
+// R9. Ручная привязка говорила «Сообщение применено» по одному ACK — даже
+// когда бланк заполнился не весь. Сервер теперь отдаёт статус новой строки
+// лотка, и экран говорит, что именно вышло.
+test('R9: привязка — «применено» только при applied; принято, но бланк не весь — предупреждение с причиной', async () => {
+  const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
+  const cases = [
+    { answer: { ok: true, code: 'AA', status: 'applied', detail: '' }, text: 'Сообщение применено', kind: 'info' },
+    { answer: { ok: true, code: 'AA', status: 'unmapped', detail: 'не пришли: Гемоглобин (HGB)' },
+      text: 'Сообщение принято, но бланк заполнен не полностью: не пришли: Гемоглобин (HGB)', kind: 'warn' },
+    { answer: { ok: true, code: 'AA', status: 'unmatched', detail: 'услуга «ОАК» не помечена как лабораторная' },
+      text: 'Приём не применил сообщение — смотрите лоток', kind: 'fail' },
+    { answer: { ok: false, code: 'AE', status: 'rejected', detail: 'ошибка записи' },
+      text: 'Приём не применил сообщение — смотрите лоток', kind: 'fail' },
+  ];
+  const prevPrompt = window.prompt;
+  window.prompt = () => '123';
+  try {
+    for (const c of cases) {
+      MESSAGES = [row(42, 'unmatched', 1, { sample_id: 'LAB-000124', detail: 'заказ по номеру пробы не найден' })];
+      attachAnswer = c.answer;
+      rpcCalls = [];
+      toastMsg = null;
+      const root = await mount();
+      const btn = walk(root).find((n) => n.tagName === 'BUTTON' && textOf(n) === 'Привязать');
+      assert.ok(btn, 'у строки лотка есть «Привязать»');
+      btn.click();
+      await tick();
+      const call = rpcCalls.find((x) => x.name === 'lis_message_attach');
+      assert.deepStrictEqual(call && call.args, { id: 42, visit_service_id: 123 });
+      assert.strictEqual(toastMsg, c.text, 'status ' + c.answer.status);
+      assert.strictEqual(toastEl.dataset.kind, c.kind, 'status ' + c.answer.status);
+      stopLabDevicesLive();
+    }
+  } finally { window.prompt = prevPrompt; }
 });
 
 test('R1: фильтр на клиенте остаётся — принятая проба не показана, даже если сервер её прислал', async () => {
