@@ -29,23 +29,32 @@ const key = (s) => String(s == null ? '' : s).trim().toUpperCase();
  *   unused: object[],
  * }}
  *   fills        — что писать в бланк;
- *   missing      — подтверждённые строки бланка без значения; reason: '' | 'статус P' | 'пустое значение';
+ *   missing      — ВСЕ подтверждённые строки бланка без значения, в порядке бланка;
+ *                  reason: '' | 'статус P' | 'пустое значение' | 'код уже у строки «…»';
  *   unconfirmed  — строки прибора, пришедшие для неподтверждённой строки бланка;
  *   unused       — строки прибора, которые ни к чему не относятся.
  */
 export function planObservations(observations = [], analytes = []) {
   const confirmed = new Map();      // код → строка бланка (первая по порядку бланка)
+  const expected = [];              // все подтверждённые строки бланка — каждая ждёт значения
   const unconfirmed = new Set();
+  const why = new Map();            // строка бланка → почему значение не легло
   for (const a of analytes) {
     const k = key(a.device_code);
     if (!k) continue;
-    if (a.device_code_confirmed) { if (!confirmed.has(k)) confirmed.set(k, a); }
-    else unconfirmed.add(k);
+    if (!a.device_code_confirmed) { unconfirmed.add(k); continue; }
+    expected.push(a);
+    // Ревью R2: вторая подтверждённая строка с тем же кодом значения не получит
+    // никогда — прибор шлёт его один раз, и оно ложится в первую. Раньше её не
+    // было даже в «не пришли», и проба с пустой строкой считалась принятой.
+    // Теперь она названа, и проба лежит в лотке: какую из двух строк кормит
+    // этот код, решает человек (редактор панелей такое и сохранить не даёт).
+    if (confirmed.has(k)) why.set(a, 'код уже у строки «' + confirmed.get(k).name + '»');
+    else confirmed.set(k, a);
   }
 
   const filled = new Set();         // строки бланка, получившие значение
   const used = new Set();           // индексы строк прибора, уже отнесённых к строке бланка
-  const why = new Map();            // строка бланка → почему значение не легло
   const fills = [];
 
   for (const part of ['code', 'name']) {
@@ -73,7 +82,7 @@ export function planObservations(observations = [], analytes = []) {
     else unused.push(obs);
   });
 
-  const missing = [...confirmed.values()]
+  const missing = expected
     .filter((a) => !filled.has(a))
     .map((a) => ({ analyte: a, reason: why.get(a) || '' }));
 
@@ -96,7 +105,7 @@ export function outcome(plan) {
   const parts = [];
   if (plan.missing.length) {
     parts.push('не пришли: ' + list(plan.missing.map(({ analyte: a, reason }) =>
-      a.name + ' (' + a.device_code + (reason ? ', ' + reason : '') + ')')));
+      a.name + ' (' + String(a.device_code).trim() + (reason ? ', ' + reason : '') + ')')));
   }
   if (plan.unconfirmed.length) parts.push('не подтверждено: ' + list(plan.unconfirmed.map((o) => o.codeRaw || o.code)));
   if (plan.unused.length) parts.push('не использованы: ' + list(plan.unused.map((o) => o.codeRaw || o.code)));

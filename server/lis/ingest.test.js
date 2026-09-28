@@ -368,3 +368,17 @@ test('флаг «H~N» без диапазона клиники — высоки
   assert.equal(results(db)[0].flag, 'high');
   db.close();
 });
+
+// ── Ревью 2026-09-28 ────────────────────────────────────────────────────────
+
+test('R2: две подтверждённые строки бланка с одним кодом — проба в лотке, вторая названа', () => {
+  const db = fresh();
+  db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed)
+              VALUES (5,'WBC#','Лейкоциты (абс.)','10^9/л',3,'WBC',1)`).run();
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1'), OBX(2, 'HGB', '142')]), '127.0.0.1');
+  assert.equal(results(db).find((r) => r.parameter === 'Лейкоциты').value, '6.1');
+  assert.equal(results(db).filter((r) => r.parameter === 'Лейкоциты (абс.)').length, 0);
+  assert.equal(message(db).status, 'unmapped', 'пустая строка бланка при «применено» — ложное «всё легло»');
+  assert.match(message(db).detail, /не пришли: Лейкоциты \(абс\.\) \(WBC, код уже у строки «Лейкоциты»\)/);
+  db.close();
+});
