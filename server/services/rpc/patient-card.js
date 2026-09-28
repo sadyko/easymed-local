@@ -620,6 +620,16 @@ const PERFORMER_ROLES = Object.freeze(['doctor', 'head_doctor', 'nurse', 'senior
 // V3120_FIX (F2) — кто отзывает документ пациента и подписывает протокол в
 // кабинете: роли, у которых было табличное удаление visit_documents.
 const DOC_VOID_ROLES = Object.freeze(['admin', 'doctor', 'head_doctor']);
+// V3121_ROLES — ПОДПИСЬ В КАБИНЕТЕ — ДЕЛО ИСПОЛНИТЕЛЯ, А НЕ ТОЛЬКО ВРАЧА.
+// До 3.12 кабинет писал протокол в visit_documents сам, и вставку делали
+// администратор, регистратура, врач и медсестра. Клиники дают «Кабинет врача»
+// медсестре (массаж, процедуры) и лаборанту (УЗИ, ЭКГ): исполнитель строки —
+// они, и в 3.12.0 их протокол молча перестал сохраняться (кабинет пишет отказ
+// лишь в консоль). Теперь строку с исполнителем подписывает её исполнитель
+// любой роли из PERFORMER_ROLES; строку без исполнителя — врач и медсестра
+// (как до 3.12). Чужую строку по-прежнему не подписывает никто, кроме
+// администратора; регистратура протоколов не подписывает.
+const SIGN_FREE_LINE_ROLES = Object.freeze(['nurse', 'senior_nurse']);
 const ARCHIVE_TYPES = Object.freeze(['protocol', 'diag']);
 
 /**
@@ -637,7 +647,9 @@ const ARCHIVE_TYPES = Object.freeze(['protocol', 'diag']);
  */
 export function visitDocumentArchive(db, args, user) {
   const roles = effectiveRoles(user);
-  if (!roles.some((r) => DOC_VOID_ROLES.includes(r))) {
+  // V3121_ROLES — роль проверяется ПОСЛЕ того, как известна строка: подписывает
+  // её исполнитель, кем бы он ни был (см. SIGN_FREE_LINE_ROLES ниже).
+  if (!roles.some((r) => DOC_VOID_ROLES.includes(r) || SIGN_FREE_LINE_ROLES.includes(r) || PERFORMER_ROLES.includes(r))) {
     throw new RpcError('Подписать документ приёма может врач, который оказывает услугу.', 403);
   }
   const vsId = Number(args && args.visit_service_id);
@@ -653,6 +665,12 @@ export function visitDocumentArchive(db, args, user) {
   const me = user && Number.isInteger(Number(user.id)) ? Number(user.id) : null;
   if (!roles.includes('admin') && line.doctor_id != null && Number(line.doctor_id) !== me) {
     throw new RpcError('Эту услугу оказывает другой врач — подписать её документ может только он.', 403);
+  }
+  // V3121_ROLES — строку без исполнителя подписывают те, кто и до 3.12 писал
+  // протокол из кабинета (врач, медсестра); строку с исполнителем — он сам.
+  const performer = line.doctor_id != null && Number(line.doctor_id) === me;
+  if (!roles.includes('admin') && !performer && !roles.some((r) => DOC_VOID_ROLES.includes(r) || SIGN_FREE_LINE_ROLES.includes(r))) {
+    throw new RpcError('Подписать документ приёма может врач, который оказывает услугу.', 403);
   }
   const run = db.transaction(() => {
     db.prepare(`UPDATE visit_documents SET voided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'), voided_by = ?,
