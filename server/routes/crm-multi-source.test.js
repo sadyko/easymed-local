@@ -76,20 +76,88 @@ test('sources пишется, а главный source ставит сервер
   assert.deepEqual(sel.json.data[0].sources, ['referral', 'call']);
 });
 
-test('запись одного source (старый экран, соседи) сбрасывает sources в [source]', async (t) => {
+// Ревью M2 — вкладка со СТАРЫМ crm.js (до обновления) шлёт при каждом
+// сохранении только source. Сбрасывать sources в [source] значило бы молча
+// стирать остальные источники заявки; поэтому правка одним source ставит его
+// ГЛАВНЫМ, а остальные источники заявки остаются за ним.
+test('правка одним source (старая вкладка): он встаёт главным, остальные источники заявки остаются', async (t) => {
   const { db, server, base } = await startServer();
   t.after(() => { server.close(); db.close(); });
   const reg = await login(base, 'reg');
   const id = (await dbCall(base, reg, insert({ sources: ['instagram', 'referral'] }))).json.data.id;
-  const r = await dbCall(base, reg, update(id, { source: 'website' }));
+  // Старая вкладка сохранила, ничего не трогая: главный тот же — ничего не меняется.
+  let r = await dbCall(base, reg, update(id, { source: 'instagram', note: 'правка' }));
   assert.equal(r.status, 200, JSON.stringify(r.json));
-  assert.deepEqual(row(db, id), { source: 'website', sources: '["website"]' });
-  // Вставка только с source — тоже с массивом (два поля не расходятся с рождения).
+  assert.deepEqual(row(db, id), { source: 'instagram', sources: '["instagram","referral"]' });
+  // Выбран другой, уже стоящий у заявки, — переезжает вперёд, повтора нет.
+  r = await dbCall(base, reg, update(id, { source: 'referral' }));
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.deepEqual(row(db, id), { source: 'referral', sources: '["referral","instagram"]' });
+  // Новый — встаёт первым, прежние за ним.
+  r = await dbCall(base, reg, update(id, { source: 'website' }));
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.deepEqual(row(db, id), { source: 'website', sources: '["website","referral","instagram"]' },
+    'правка одним source стёрла остальные источники заявки');
+  // Старая заявка без sources (только source) — по правилу чтения.
+  const old = Number(db.prepare("INSERT INTO crm_requests (full_name, phone, source) VALUES ('Старая', '+998907778899', 'call')").run().lastInsertRowid);
+  r = await dbCall(base, reg, update(old, { source: 'instagram' }));
+  assert.deepEqual(row(db, old), { source: 'instagram', sources: '["instagram","call"]' });
+  // Вставка только с source — [source].
   const id2 = (await dbCall(base, reg, insert({ source: 'call' }))).json.data.id;
   assert.deepEqual(row(db, id2), { source: 'call', sources: '["call"]' });
   // Правка, где источника нет вовсе, sources не трогает.
   await dbCall(base, reg, update(id, { note: 'перезвонить' }));
-  assert.deepEqual(row(db, id), { source: 'website', sources: '["website"]' });
+  assert.deepEqual(row(db, id), { source: 'website', sources: '["website","referral","instagram"]' });
+});
+
+test('правка одним source: не длиннее десяти — новый главный встаёт первым, лишний хвост отрезается', async (t) => {
+  const { db, server, base } = await startServer();
+  t.after(() => { server.close(); db.close(); });
+  const reg = await login(base, 'reg');
+  const ins = db.prepare('INSERT INTO crm_sources (key, label, position, is_active) VALUES (?, ?, ?, 1)');
+  const extra = ['x1', 'x2', 'x3', 'x4'];
+  extra.forEach((k, i) => ins.run(k, 'Доп ' + k, 20 + i));
+  const ten = ['call', 'instagram', 'website', 'walk_in', 'referral', 'other', 'telephony', 'x1', 'x2', 'x3'];
+  const id = (await dbCall(base, reg, insert({ sources: ten }))).json.data.id;
+  const r = await dbCall(base, reg, update(id, { source: 'x4' }));
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.deepEqual(JSON.parse(row(db, id).sources), ['x4', ...ten.slice(0, 9)]);
+  assert.equal(row(db, id).source, 'x4');
+});
+
+test('одним source скрытый источник не ставится — та же проверка, что у sources', async (t) => {
+  const { db, server, base } = await startServer();
+  t.after(() => { server.close(); db.close(); });
+  const op = await login(base, 'operator');
+  const ins = await dbCall(base, op, insert({ source: 'telegram' }));
+  assert.equal(ins.status, 400, 'скрытый источник поставлен новой заявке одним source');
+  assert.match(ins.json.error.message, /«Telegram» скрыт в настройках/);
+  const id = (await dbCall(base, op, insert({ sources: ['call', 'instagram'] }))).json.data.id;
+  const upd = await dbCall(base, op, update(id, { source: 'telegram' }));
+  assert.equal(upd.status, 400, 'скрытый источник поставлен заявке, где его не было');
+  assert.deepEqual(row(db, id), { source: 'call', sources: '["call","instagram"]' });
+  const nope = await dbCall(base, op, update(id, { source: 'nope' }));
+  assert.equal(nope.status, 400);
+  assert.match(nope.json.error.message, /Источника «nope» нет в справочнике/);
+  // У заявки Telegram уже стоит (стоял до того, как его скрыли) — можно сделать главным.
+  db.prepare("UPDATE crm_requests SET sources = '[\"call\",\"telegram\"]' WHERE id = ?").run(id);
+  const keep = await dbCall(base, op, update(id, { source: 'telegram' }));
+  assert.equal(keep.status, 200, JSON.stringify(keep.json));
+  assert.deepEqual(row(db, id), { source: 'telegram', sources: '["telegram","call"]' });
+});
+
+test('одним source по нескольким заявкам с разными источниками — отказ, а не одинаковый список всем', async (t) => {
+  const { db, server, base } = await startServer();
+  t.after(() => { server.close(); db.close(); });
+  const reg = await login(base, 'reg');
+  const a = (await dbCall(base, reg, insert({ sources: ['instagram', 'referral'] }))).json.data.id;
+  const b = (await dbCall(base, reg, insert({ sources: ['call'] }))).json.data.id;
+  const r = await dbCall(base, reg, { table: 'crm_requests', op: 'update', values: { source: 'website' },
+    filters: [{ col: 'id', op: 'in', val: [a, b] }] });
+  assert.equal(r.status, 400, JSON.stringify(r.json));
+  assert.match(r.json.error.message, /у одной заявки за раз/);
+  assert.deepEqual([row(db, a), row(db, b)], [
+    { source: 'instagram', sources: '["instagram","referral"]' }, { source: 'call', sources: '["call"]' }]);
 });
 
 test('кривой sources — 400 словами, база не тронута', async (t) => {

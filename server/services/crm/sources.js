@@ -70,8 +70,12 @@ function heldSources(db, body, user) {
  * Держит равенство «source = sources[0]» на сервере, а не на экране:
  *   • в строке есть `sources` — проверить (checkSources) и поставить
  *     `source = sources[0]`, что бы ни прислали в source;
- *   • есть только непустой `source` — `sources = [source]`: старый экран и
- *     соседи пишут одно поле, и два поля не должны разойтись;
+ *   • есть только непустой `source` (вкладка со старым экраном, соседи) —
+ *     ревью M2: он проходит ту же проверку ключа (справочник, скрытый — только
+ *     там, где уже стоит) и становится ГЛАВНЫМ: у вставки `sources = [source]`,
+ *     у правки — он первым, а остальные источники заявки (правило чтения) за
+ *     ним, без повтора, не больше десяти. Сбрасывать в [source] значило бы
+ *     молча стирать источники при каждом сохранении из старой вкладки;
  *   • нет ни того, ни другого — строка не трогается.
  * Строки тела правятся НА МЕСТЕ; вызывающий перекомпилирует запрос, если
  * вернулось true. Отказ — CrmSourcesError (маршрут отвечает 400).
@@ -98,11 +102,31 @@ export function crmSourcesWrite(db, meta, body, user) {
       row.source = keys[0];
       changed = true;
     } else if (own(row, 'source') && row.source != null && String(row.source) !== '') {
-      row.sources = [String(row.source)];
+      const key = checkSources(db, [String(row.source)], held)[0];
+      row.sources = frontSource(key, meta.op === 'update' ? held() : []);
+      row.source = key;
       changed = true;
     }
   }
   return changed;
+}
+
+/**
+ * Ревью M2 — правка одним `source`: он первым, источники заявки за ним (без
+ * повтора, не больше MAX_LEAD_SOURCES). Правят несколько заявок с РАЗНЫМИ
+ * источниками — один UPDATE не может дать каждой свой список, поэтому отказ,
+ * а не одинаковый список всем.
+ * @param {string} key
+ * @param {string[][]} held источники задетых заявок по правилу чтения
+ */
+function frontSource(key, held) {
+  if (!held.length) return [key];
+  const lists = held.map((have) => [key, ...have.filter((k) => k !== key)].slice(0, MAX_LEAD_SOURCES));
+  const one = JSON.stringify(lists[0]);
+  if (lists.some((l) => JSON.stringify(l) !== one)) {
+    throw new CrmSourcesError('Главный источник меняют у одной заявки за раз.');
+  }
+  return lists[0];
 }
 
 /**
