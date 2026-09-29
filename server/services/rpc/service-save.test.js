@@ -108,7 +108,8 @@ test('create with three typed-in combobox values: all created AND linked in one 
 
   // …and the performer entry landed in the same save, reports-ready.
   const rates = JSON.parse(db.prepare('SELECT service_rates FROM users WHERE id = ?').get(doc).service_rates);
-  assert.deepEqual(rates, [{ service_id: res.id, pct: 30, branches: [1] }]);
+  // RATES_HONEST_V1 — новая запись: branches пустой (ставки — во всех филиалах).
+  assert.deepEqual(rates, [{ service_id: res.id, pct: 30, branches: [] }]);
 });
 
 test('an existing name typed again does NOT create a twin — case and spaces included', () => {
@@ -187,7 +188,7 @@ test('editing performers never clobbers a person\'s OTHER services\' rates', () 
   const res = serviceSave(db, baseArgs({ requires_doctor: true, performers: [doc] }), admin);
   let rates = JSON.parse(db.prepare('SELECT service_rates FROM users WHERE id = ?').get(doc).service_rates);
   assert.deepEqual(rates[0], otherEntry, 'the pre-existing entry is byte-identical');
-  assert.deepEqual(rates[1], { service_id: res.id, pct: 30, branches: [1] });
+  assert.deepEqual(rates[1], { service_id: res.id, pct: 30, branches: [] });   // RATES_HONEST_V1
 
   // Untick on edit: only this service's entry goes.
   serviceSave(db, baseArgs({ id: res.id, requires_doctor: false, performers: [] }), admin);
@@ -307,7 +308,7 @@ test('default share 0: the membership entry carries NO pct, and the REAL pay rep
   }), admin);
 
   const rates = JSON.parse(db.prepare('SELECT service_rates FROM users WHERE id = ?').get(doc).service_rates);
-  assert.deepEqual(rates, [{ service_id: res.id, branches: [1] }], 'no pct key — the card governs');
+  assert.deepEqual(rates, [{ service_id: res.id, branches: [] }], 'no pct key — the card governs');   // RATES_HONEST_V1 — branches []
 
   // …and the actual salary report agrees: 100 000 − 6% налог = 94 000; 40% = 37 600.
   db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (1,'P-1','Пациент')").run();

@@ -31,7 +31,7 @@ import { h, Icon, clear, toast, Tag } from '../ui.js';
 import { tr, trf } from '../i18n.js';
 import { importExportButtons, exportSectionRows } from './section-import-export.js?v=aug17e';   // DATA_TRANSFER_V1 + SERVICES_BULK_V1
 import { ratesOf } from './doctor-pool.js?v=dp1';   // SVC_PERFORMERS_V1 — тот же разбор service_rates, что и в мастере визита
-import { openServiceEditor } from './service-editor.js?v=svceditor2';   // SERVICES_ONE_EDITOR_V1
+import { openServiceEditor } from './service-editor.js?v=rh1';   // SERVICES_ONE_EDITOR_V1
 import { openTableSetup, readColPrefs, writeColPrefs, widthShare } from './table-setup.js';   // TABLE_SETUP_V1
 import { externalLabTag } from '../external-lab.js';   // EXTERNAL_LAB_V1 — только подпись
 import { storedTierProblem } from '../service-editor-logic.js';   // DOCTOR_TIER_V2 — «Ступени нарушены»

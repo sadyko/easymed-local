@@ -279,11 +279,17 @@ const clampPct = (v) => {
  *   нет тика         -> убрать запись ЭТОЙ услуги; записи других услуг
  *                       проходят насквозь нетронутыми, с любыми полями.
  *
+ * RATES_HONEST_V1 (2026-09-30) — branches новой записи — ПУСТОЙ список, а не
+ * все филиалы клиники: ставки действуют во всех филиалах, расчёт филиал не
+ * читает, колонки «Филиалы» в карточке нет. branches прежних записей — как
+ * были (запись с тиком не трогается). Пятый аргумент (прежде branchIds)
+ * больше не читается.
+ *
  * @returns {{changed: boolean, rates: Array|null, corrupt?: true}}
  *   changed=false — писать нечего (rpc не делает пустых UPDATE);
  *   corrupt=true — колонку нельзя было прочитать, rates=null, писать НЕЛЬЗЯ.
  */
-export function mergeServiceRates(raw, serviceId, isPerformer, defaultPct, branchIds) {
+export function mergeServiceRates(raw, serviceId, isPerformer, defaultPct) {
   const { rates, corrupt } = ratesArray(raw);
   if (corrupt) return { changed: false, rates: null, corrupt: true };
 
@@ -293,7 +299,7 @@ export function mergeServiceRates(raw, serviceId, isPerformer, defaultPct, branc
   if (isPerformer) {
     if (mine) return { changed: false, rates };
     const pct = clampPct(defaultPct);
-    const entry = { service_id: sid, branches: Array.isArray(branchIds) ? branchIds : [] };
+    const entry = { service_id: sid, branches: [] };   // RATES_HONEST_V1
     // 0 — это «не задано», и тогда ключа нет (см. шапку: карточная ставка
     // должна остаться решающей).
     if (pct > 0) entry.pct = pct;

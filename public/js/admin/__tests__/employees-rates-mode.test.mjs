@@ -261,7 +261,7 @@ test('M2: строка «по умолчанию» — 25 000 → «сум» →
   await flush();
   const inp = rateOf(rowOf(card, 'Перевязка'));
   assert.equal(inp.value, '', 'сумма стала процентом');
-  assert.match(String(inp.attrs.placeholder || ''), /умолчанию/i);
+  assert.equal(String(inp.attrs.placeholder || ''), '0 % — не задано');   // RATES_HONEST_V1 — «по умолчанию» платит 0 %
   body = await savedBody(card);
   assert.deepEqual(body.service_rates[1], { service_id: 2, branches: [1] });
 });

@@ -938,20 +938,20 @@ function ratesSection(emp, arrayKey, opts, touch) {
     // sticky, so column labels stay visible down a long catalogue.
     // INPATIENT_BONUS_V1 — колонки «Стационар, %» здесь больше нет: ставки
     // стационара — во вкладке «Стационар» (inpatientSection ниже).
+    // RATES_HONEST_V1 — колонки «Филиалы» тоже нет (владелец, 30.09: «Remove the
+    // column»): расчёт доли и своей цены филиал не читает, а две записи «по
+    // филиалам» на одну услугу молча сливались в последнюю (routes/users.js
+    // parseRates). Над таблицей — одна строка: ставки действуют во всех филиалах.
     const rowCls = 'rt-row' + (opts.ownPrice ? '' : ' rt-row--noprice');
     const headRow = () => h('div', { class: rowCls + ' rt-head' },
-        h('span'), h('span', null, 'Услуга'), h('span', null, 'Филиалы'),
+        h('span'), h('span', null, 'Услуга'),
         h('span', { class: 'r' }, opts.ownPrice ? 'Своя цена' : 'Цена'),
         h('span', { class: 'r' }, opts.rateLabel || opts.pctLabel));
 
-    // SOLE_BRANCH_V1 — филиал в клинике один: «Все филиалы» и он же — одно и то
-    // же, поэтому новая строка ставки сразу привязана к нему, а не к пустому
-    // списку. При нескольких филиалах поведение прежнее: пусто = все.
-    const soleBranch = () => (branches.length === 1 ? branches[0] : null);
-    const newRate = (sid) => ({
-        service_id: Number(sid), pct: 0,
-        branches: soleBranch() ? [Number(soleBranch().id)] : [],
-    });
+    // RATES_HONEST_V1 — новая запись несёт ПУСТОЙ список филиалов (прежде при
+    // единственном филиале — его, SOLE_BRANCH_V1). У прежних записей branches
+    // не трогается: карточка его не показывает, не правит и отдаёт как было.
+    const newRate = (sid) => ({ service_id: Number(sid), pct: 0, branches: [] });
 
     const toggle = (sid) => { const i = idxOf(sid); if (i >= 0) arr().splice(i, 1); else arr().push(newRate(sid)); touch(); refreshCount(); renderRows(); };
     const setPct = (sid, v) => { const i = idxOf(sid); if (i >= 0) { arr()[i].pct = v; touch(); } };
@@ -986,7 +986,6 @@ function ratesSection(emp, arrayKey, opts, touch) {
         }
         touch(); renderRows();
     };
-    const setBranches = (sid, v) => { const i = idxOf(sid); if (i >= 0) { arr()[i].branches = v; touch(); } };
     // DOCTOR_OWN_PRICE_V1 — an EMPTY field means "no own price": the key is
     // removed so the invoice falls back to the catalog. A typed 0 is kept as a
     // real price of zero. Never write the catalog price in here as a default —
@@ -1101,28 +1100,23 @@ function ratesSection(emp, arrayKey, opts, touch) {
             const on = !!r;
             const chk = h('input', { type: 'checkbox', checked: on });
             chk.addEventListener('change', () => toggle(s.id));
-            // SOLE_BRANCH_V1 — при единственном филиале «Все филиалы» — это он же:
-            // второй пункт только путал бы. Показываем сам филиал и считаем его
-            // выбранным, в том числе у давних строк, где сохранён пустой список.
-            const only = soleBranch();
-            const brSel = only
-                ? h('select', { class: 'rt-select', disabled: !on },
-                    h('option', { value: String(only.id), selected: true }, only.name))
-                : h('select', { class: 'rt-select', disabled: !on },
-                    h('option', { value: '' }, 'Все филиалы'),
-                    ...branches.map(b => h('option', { value: String(b.id), selected: on && (r.branches || []).map(Number).includes(Number(b.id)) }, b.name)));
-            brSel.addEventListener('change', () => setBranches(s.id, brSel.value ? [Number(brSel.value)] : []));
 
             // DOCTOR_FIX_RATE_V1 — mode picker + the value it applies to.
             const fixed = isFix(r);
+            // RATES_HONEST_V1 — процента нет: платится users.service_rate_default,
+            // а его не пишет ни один экран, то есть 0 % (владелец: «Keep 0, label
+            // it honestly»). Подсказка не обещает «по умолчанию» — говорит 0 %.
+            const noPct = on && !fixed && r.pct == null;
             const rateInp = h('input', {
                 type: 'number', min: '0', class: 'rt-num', disabled: !on,
                 max: fixed ? null : '100',
                 step: fixed ? '1000' : '1',
                 // Ревью I5 — процента нет: пустое поле с подсказкой, а не «0».
                 value: on ? String(fixed ? r.fix : (r.pct == null ? '' : r.pct)) : '0',
-                placeholder: on && !fixed ? tr('По умолчанию') : null,
-                title: fixed ? 'Врач получает эту сумму за каждую единицу услуги' : 'Процент от суммы строки после скидки и налога',   // RATES_MODE_TYPED_V1 (m12)
+                placeholder: on && !fixed ? tr('0 % — не задано') : null,
+                title: fixed ? 'Врач получает эту сумму за каждую единицу услуги'
+                    : noPct ? 'Ставка не задана — врач за эту услугу получает 0 %. Введите процент или сумму.'   // RATES_HONEST_V1
+                        : 'Процент от суммы строки после скидки и налога',   // RATES_MODE_TYPED_V1 (m12)
             });
             // RATES_MODE_TYPED_V1 — процент строки на момент отрисовки: к нему
             // переключатель возвращает строку, если набранное процентом быть не может.
@@ -1132,11 +1126,15 @@ function ratesSection(emp, arrayKey, opts, touch) {
             rateInp.addEventListener('input', () => {
                 const n = Number(rateInp.value) || 0;
                 if (fixed) setFix(s.id, Math.max(0, n));
-                // Стёртый процент — снова «по умолчанию» (ключа pct нет).
+                // Стёртый процент — снова «не задано» (ключа pct нет, 0 %).
                 else if (String(rateInp.value).trim() === '') { const i = idxOf(s.id); if (i >= 0) { delete arr()[i].pct; touch(); } }
                 // RATES_MODE_TYPED_V1 — без тихого зажима в 100: больше 100
                 // хранится как набрано, и сохранение откажет (save → overPct).
                 else setPct(s.id, Math.max(0, n));
+                // RATES_HONEST_V1 — подсказка под мышью следует за полем (без перерисовки: фокус остаётся).
+                if (!fixed) rateInp.title = String(rateInp.value).trim() === ''
+                    ? tr('Ставка не задана — врач за эту услугу получает 0 %. Введите процент или сумму.')
+                    : tr('Процент от суммы строки после скидки и налога');
             });
 
             scroll.appendChild(h('div', { class: rowCls + ' rt-item' + (on ? ' on' : '') },
@@ -1145,7 +1143,6 @@ function ratesSection(emp, arrayKey, opts, touch) {
                     h('div', { class: 'rt-name', title: s.name }, s.name),
                     // group · type · category — whichever the service has
                     h('div', { class: 'rt-type' }, [tr(svcTypeLabel(svcTypeVal(s))), nameIn(serviceTypes, s.type_id), nameIn(serviceCategories, s.category_id)].filter(Boolean).join(' · '))),
-                brSel,
                 opts.ownPrice ? ownPriceCell(s, r, on) : h('div', { class: 'rt-catalog' }, fmtPrice(s.price)),
                 h('div', { class: 'rt-rate' },
                     modeSeg,
@@ -1169,6 +1166,8 @@ function ratesSection(emp, arrayKey, opts, touch) {
                 bulkSeg,
                 h('div', { class: 'rt-field', style: { flex: '0 0 auto' } }, bulkInp, bulkUnit),
                 bulkApply)),
+        // RATES_HONEST_V1 — вместо колонки «Филиалы».
+        h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '0 0 8px' } }, 'Ставки и своя цена действуют во всех филиалах.'),
         h('div', { class: 'rt-box' }, scroll),
     );
     renderRows();

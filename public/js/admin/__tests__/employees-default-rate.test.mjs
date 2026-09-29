@@ -130,11 +130,14 @@ async function save(card) {
 
 const rateOf = (row) => byClass(row, 'rt-num').find((n) => !String(n.className).includes('rt-num--price'));
 
-test('запись без процента: поле пустое с подсказкой «по умолчанию», а не «0»', async () => {
+// RATES_HONEST_V1 — подсказка говорит правду: ставку по умолчанию не пишет ни
+// один экран, и запись без процента платит 0 % (владелец: «Keep 0, label it
+// honestly»). Поле по-прежнему пустое — pct: 0 при сохранении не дописывается.
+test('запись без процента: поле пустое с подсказкой «0 % — не задано», а не «0»', async () => {
   const card = await openTab('Услуги и ставки');
   const dflt = rateOf(rowOf(card, 'Аппендэктомия'));
   assert.equal(dflt.value, '', 'нет процента — пустое поле');
-  assert.match(String(dflt.attrs.placeholder || dflt.placeholder || ''), /умолчанию/i);
+  assert.equal(String(dflt.attrs.placeholder || dflt.placeholder || ''), '0 % — не задано');
   assert.equal(rateOf(rowOf(card, 'Перевязка')).value, '40');
 });
 

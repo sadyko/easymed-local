@@ -142,15 +142,20 @@ test('гейт: «оказывает специалист» без единог�
 // Слияние users.service_rates — сердце опасности этого редактора.
 // ---------------------------------------------------------------------------
 
-test('тик нового исполнителя добавляет запись формы reports.js: service_id, pct, branches', () => {
-  const { changed, rates } = mergeServiceRates('', 5, true, 30, [1, 2]);
+// RATES_HONEST_V1 (2026-09-30) — branches новой записи — пустой список: ставки
+// действуют во всех филиалах, расчёт филиал не читает (прежде — все филиалы
+// клиники). Старые записи несут свой branches как есть.
+test('тик нового исполнителя добавляет запись формы reports.js: service_id, pct, branches: [] (RATES_HONEST_V1)', () => {
+  const { changed, rates } = mergeServiceRates('', 5, true, 30);
   assert.equal(changed, true);
-  assert.deepEqual(rates, [{ service_id: 5, pct: 30, branches: [1, 2] }]);
+  assert.deepEqual(rates, [{ service_id: 5, pct: 30, branches: [] }]);
+  // Прежний пятый аргумент (филиалы клиники) больше не читается.
+  assert.deepEqual(mergeServiceRates('', 5, true, 30, [1, 2]).rates, [{ service_id: 5, pct: 30, branches: [] }]);
 });
 
 test('уже существующая запись исполнителя НЕ перезаписывается — персональная ставка живёт в карточке', () => {
   const stored = [{ service_id: 5, pct: 50, fix: 20000, price: 90000, branches: [2] }];
-  const { changed, rates } = mergeServiceRates(JSON.stringify(stored), 5, true, 30, [1, 2]);
+  const { changed, rates } = mergeServiceRates(JSON.stringify(stored), 5, true, 30);
   assert.equal(changed, false, 'нечего писать — членство уже есть');
   assert.deepEqual(rates, stored, 'fix/price/branches персональной записи неприкосновенны');
 });
@@ -191,12 +196,12 @@ test('доля 0/пустая — записи БЕЗ pct: правит став
   // не заполнивший «долю по умолчанию», имеет в виду «я её не задал», а не
   // «этой услугой никто не зарабатывает» — поэтому 0/пусто = ключа нет.
   for (const zero of [0, '', null, undefined, -3, NaN]) {
-    const { rates } = mergeServiceRates('', 5, true, zero, [1]);
+    const { rates } = mergeServiceRates('', 5, true, zero);
     assert.equal('pct' in rates[0], false, 'zero=' + String(zero));
-    assert.deepEqual(rates[0], { service_id: 5, branches: [1] });
+    assert.deepEqual(rates[0], { service_id: 5, branches: [] });   // RATES_HONEST_V1
   }
   // Настоящая доля > 0 — записывается как раньше.
-  assert.deepEqual(mergeServiceRates('', 5, true, 30, [1]).rates[0], { service_id: 5, pct: 30, branches: [1] });
+  assert.deepEqual(mergeServiceRates('', 5, true, 30).rates[0], { service_id: 5, pct: 30, branches: [] });
 });
 
 test('испорченный JSON никогда не «чинится» перезаписью — corrupt, и вызывающий решает', () => {

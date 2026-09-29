@@ -4075,9 +4075,10 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .rt-scroll { max-height: 430px; overflow-y: auto; }
 
 /* One grid definition for the header and every row — they cannot drift apart. */
-.rt-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 136px 124px 168px; gap: 10px; align-items: center;
+/* RATES_HONEST_V1 — колонки «Филиалы» (136px) больше нет: услуга, цена, ставка. */
+.rt-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 124px 168px; gap: 10px; align-items: center;
     padding: 9px 14px; }
-.rt-row--noprice { grid-template-columns: 28px minmax(0, 1fr) 136px 100px 104px; }
+.rt-row--noprice { grid-template-columns: 28px minmax(0, 1fr) 100px 104px; }
 /* INPATIENT_BONUS_V1 — вкладка «Стационар»: услуга, цена каталога, ставка (% / сум). */
 .rt-row--inpatient { grid-template-columns: 28px minmax(0, 1fr) 124px 196px; }
 
@@ -4159,8 +4160,8 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .rt-sel > i { width: 6px; height: 6px; border-radius: 50%; background: var(--primary-500); display: block; }
 
 @media (max-width: 1100px) {
-    .rt-row { grid-template-columns: 26px 1fr 120px 110px 150px; gap: 8px; padding: 9px 10px; }
-    .rt-row--noprice { grid-template-columns: 26px 1fr 120px 96px 96px; }
+    .rt-row { grid-template-columns: 26px 1fr 110px 150px; gap: 8px; padding: 9px 10px; }   /* RATES_HONEST_V1 — без «Филиалов» */
+    .rt-row--noprice { grid-template-columns: 26px 1fr 96px 96px; }
     .rt-row--inpatient { grid-template-columns: 26px 1fr 110px 170px; }
 }
 /* ============================ end RATES_UI_V2 ============================ */

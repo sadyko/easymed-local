@@ -56,7 +56,11 @@ db.prepare(`INSERT INTO users (id, username, password_hash, full_name, role, is_
   { service_id: 1, pct: 30, branches: [1] },
   { service_id: 2, pct: 0, fix: 50000, branches: [] },
 ]), JSON.stringify([{ service_id: 1, pct: 20 }]));
-db.prepare("INSERT INTO services (id, name, price) VALUES (1,'Аппендэктомия',1000000), (2,'Перевязка',100000), (3,'УЗИ',200000)").run();
+// RATES_HONEST_V1 — второй врач: «Перевязку» не оказывает (записи нет) — «Все
+// врачи» его не трогает.
+db.prepare(`INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, service_rates)
+            VALUES (8,'doc2','x','Терапевтов Тимур','doctor',1,?)`).run(JSON.stringify([{ service_id: 1, pct: 25, branches: [1] }]));
+db.prepare("INSERT INTO services (id, name, price, default_doctor_percent) VALUES (1,'Аппендэктомия',1000000,0), (2,'Перевязка',100000,5), (3,'УЗИ',200000,0)").run();
 const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
 const base = `http://127.0.0.1:${server.address().port}`;
 const login = await realFetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'boss', password: 'password1' }) });
@@ -110,17 +114,34 @@ test('«Выбранные врачи»: доля доходит до service_ra
   assert.ok(!rates.some((r) => 'percentage' in r));
 });
 
-test('«Все врачи»: доля по умолчанию у услуги и обновление строк врачей, у которых услуга есть', async () => {
+// RATES_HONEST_V1 (2026-09-30) — «Все врачи» говорит правду. Прежде он писал
+// services.default_doctor_percent (расчёт его не читает — это только подстановка
+// новому исполнителю в окне услуги), ставил % рядом с фиксированной суммой (а
+// сумма продолжала действовать) и обещал «доля задана». Теперь: % ставится в
+// записи врачей, которые услугу уже оказывают, фиксированная сумма у них
+// снимается, тост называет число врачей; врачей без записи действие не трогает,
+// и подсказка на экране это говорит.
+test('RATES_HONEST_V1: «Все врачи» — % оказывающим, фикс снят, тост с числом врачей; без записи — не тронуты', async () => {
   writes.length = 0;
+  TOASTS.length = 0;
+  const before8 = db.prepare('SELECT service_rates FROM users WHERE id = 8').get().service_rates;
+  const pct1 = ratesOf(7).find((r) => Number(r.service_id) === 1).pct;
   const host = await open();
+  assert.match(textOf(host), /не оказывает[^.]*не трогает/, 'подсказка не говорит, что врачей без записи действие не трогает');
   tick(tags(labelWith(host, 'Перевязка'), 'input')[0]);
   const pct = tags(host, 'input').find((n) => n.attrs.type === 'number');
   pct.value = '12';
   tags(host, 'button').find((b) => textOf(b).includes('Применить долю')).click();
   await flush(60);
   await new Promise((r) => setTimeout(r, 100));
-  assert.equal(db.prepare('SELECT default_doctor_percent AS p FROM services WHERE id = 2').get().p, 12);
   const bandage = ratesOf(7).find((r) => Number(r.service_id) === 2);
-  assert.equal(bandage.pct, 12);
-  assert.equal(bandage.fix, 50000, 'фиксированная ставка стёрта');
+  assert.equal(bandage.pct, 12, 'процент не поставлен');
+  assert.equal('fix' in bandage, false, 'фиксированная сумма осталась — процент бы не действовал');
+  assert.deepEqual(bandage.branches, [], 'branches записи тронуты');
+  assert.equal(ratesOf(7).find((r) => Number(r.service_id) === 1).pct, pct1, 'чужая услуга тронута');
+  assert.deepEqual(writes, ['/api/users/7'], 'сохранение ушло не только оказывающему врачу');
+  assert.equal(db.prepare('SELECT service_rates FROM users WHERE id = 8').get().service_rates, before8, 'врач без записи тронут');
+  assert.ok(TOASTS.includes('Ставка 12% поставлена 1 врачам, которые оказывают услугу'), 'тост: ' + JSON.stringify(TOASTS));
+  // Колонку, которую расчёт не читает, экран больше не пишет как ставку.
+  assert.equal(db.prepare('SELECT default_doctor_percent AS p FROM services WHERE id = 2').get().p, 5);
 });

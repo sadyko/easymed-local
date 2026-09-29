@@ -432,6 +432,10 @@ export async function openServiceEditor({ row = null, readOnly = false, onSaved 
                 grid(2,
                     checkField('Услугу оказывает специалист (врач / медсестра)', reqDoc),
                     unitField('Доля исполнителя по умолчанию', pctInp, '%')),
+                // RATES_HONEST_V1 — расчёт доли эту колонку не читает: она лишь
+                // подставляется в запись врача, которого отмечают исполнителем
+                // (service-editor-logic.js mergeServiceRates), и отмеченных не меняет.
+                h('div', { class: 'svc-ed-note' }, 'Подставляется врачу, когда его отмечают исполнителем этой услуги; у уже отмеченных врачей ставку не меняет.'),
                 h('div', { class: 'svc-ed-note' }, 'Ступени по объёму: услуги сверх порога в календарном месяце идут по доле ступени самого высокого пройденного порога — не ниже доли исполнителя. Ступени заполняются по порядку, пороги растут. Пусто — ступени нет.'),
                 ...tierInputs.map((t) => h('div', { class: 'svc-ed-steprow' },
                     h('span', { class: 'svc-ed-steplbl' }, TIER_STEP_LABEL[t.n]),

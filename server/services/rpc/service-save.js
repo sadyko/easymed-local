@@ -332,9 +332,9 @@ export function serviceSave(db, args, user) {
     }
 
     // --- членство исполнителей ---------------------------------------------
-    // Новые записи получают branches = все филиалы клиники — то же, чем
-    // карточка сотрудника наполняет СВОЮ новую строку (buildRates seeds all).
-    const branchIds = db.prepare('SELECT id FROM branches WHERE active = 1 ORDER BY id').all().map((b) => b.id);
+    // RATES_HONEST_V1 — новые записи получают branches = [] (прежде — все
+    // филиалы клиники): ставки действуют во всех филиалах, расчёт филиал не
+    // читает, и карточка сотрудника пишет новую строку так же.
     const ticked = new Set(performers);
 
     // Затронуты и те, кого отметили, и те, у кого запись уже есть (их тик
@@ -344,7 +344,7 @@ export function serviceSave(db, args, user) {
     // а сохранение услуги важнее чужой давно битой строки.
     for (const u of db.prepare("SELECT id, service_rates FROM users WHERE service_rates != '' OR id IN "
       + `(${performers.map(() => '?').join(', ') || 'NULL'})`).all(...performers)) {
-      const merged = mergeServiceRates(u.service_rates, serviceId, ticked.has(u.id), defaultPct, branchIds);
+      const merged = mergeServiceRates(u.service_rates, serviceId, ticked.has(u.id), defaultPct);
       if (merged.corrupt || !merged.changed) continue;
       db.prepare('UPDATE users SET service_rates = ? WHERE id = ?').run(JSON.stringify(merged.rates), u.id);
     }

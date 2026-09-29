@@ -1,10 +1,20 @@
 // Settings → «Зарплата врачей» (DOCTOR_PAY_BULK_V1). Bulk-set the doctor share (%)
-// across several services at once. Single source for doctor pay = users.service_rates
-// JSONB + services.default_doctor_percent (the doctor_prices/doctor_referral_bonuses
-// tables were removed — DOCTOR_PAY_CONSOLIDATE_V1).
-//   • Все врачи     → sets services.default_doctor_percent AND updates every current
-//                     performer's service_rates[].percentage.
+// across several services at once. The doctor's pay is read from ONE place —
+// users.service_rates (the doctor_prices/doctor_referral_bonuses tables were
+// removed — DOCTOR_PAY_CONSOLIDATE_V1).
+//   • Все врачи     → the % goes into the record of every doctor who ALREADY
+//                     performs the service (has a record for it); a doctor with
+//                     no record is not touched.
 //   • Выбранные врачи → writes/adds the % into the selected doctors' service_rates only.
+//
+// RATES_HONEST_V1 (2026-09-30) — аудит денег: «Все врачи» писал
+// services.default_doctor_percent, которую расчёт НЕ читает (это лишь
+// подстановка врачу, которого отмечают исполнителем в окне услуги), ставил %
+// рядом с фиксированной суммой (сумма продолжала действовать) и обещал «доля
+// задана». Теперь экран колонку услуги не пишет вовсе (её правят в окне
+// услуги, и там сказано, что она делает), у записи с суммой сумма снимается,
+// чтобы процент действовал (в обоих режимах), тост называет, скольким врачам
+// ставка поставлена, а подсказка — что врачей без записи действие не трогает.
 import { h, Icon, PageHead, toast, clear } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { supabase } from '../../supabase.js';
@@ -32,13 +42,18 @@ async function saveServiceRates(doctorId, rates) {
 
 // Доля в ставке: канонический ключ — pct (его читают отчёты); прежний
 // «percentage» маршрут понимает только как синоним, поэтому пишется pct, а
-// остальные ключи строки (стационарная доля, фикс, своя цена) остаются.
+// остальные ключи строки (своя цена, branches) остаются.
+// RATES_HONEST_V1 — фиксированная сумма (fix) снимается: присутствие fix и есть
+// режим «сумма за единицу», и рядом с ним поставленный процент не действовал бы.
 function setPct(rate, pct) {
     rate.pct = pct;
     delete rate.percentage;
+    delete rate.fix;
     return rate;
 }
-const fmtPct = (v) => (v == null || v === '' ? '—' : (Number(v) || 0) + '%');
+// RATES_HONEST_V1 — сколько врачей услугу уже оказывают (есть запись в их ставках).
+const performersOf = (doctors, sid) => doctors.filter((d) => Array.isArray(d.service_rates)
+    && d.service_rates.some((r) => r && String(r.service_id) === String(sid))).length;
 
 export async function renderDoctorPay(container) {
     clear(container);
@@ -46,7 +61,8 @@ export async function renderDoctorPay(container) {
     container.appendChild(root);
     root.appendChild(PageHead({
         title: 'Зарплата врачей — доля от услуг',
-        subtitle: 'Массово задайте долю врача (%) сразу по нескольким услугам. «Все врачи» задаёт долю по умолчанию для услуги и обновляет всех, кто её выполняет; «Выбранные врачи» — задаёт долю только им.',
+        // RATES_HONEST_V1 — подзаголовок говорит, что делает кнопка, а не «долю по умолчанию».
+        subtitle: 'Массово задайте долю врача (%) сразу по нескольким услугам. «Все врачи» ставит долю врачам, которые уже оказывают услугу; «Выбранные врачи» — только отмеченным, и добавляет им услугу, если её не было.',
     }));
 
     const c = cid();
@@ -55,7 +71,7 @@ export async function renderDoctorPay(container) {
 
     let services = [], doctors = [];
     try {
-        let qs = supabase.from('services').select('id, name, default_doctor_percent, active').eq('active', true).order('name');
+        let qs = supabase.from('services').select('id, name, active').eq('active', true).order('name');   // RATES_HONEST_V1 — default_doctor_percent здесь не нужна
         if (c) qs = qs.eq('company_id', c);
         const { data } = await qs; services = data || [];
     } catch (e) { /* fail-soft */ }
@@ -84,7 +100,9 @@ export async function renderDoctorPay(container) {
             cb.addEventListener('change', () => { if (cb.checked) selSvc.add(s.id); else selSvc.delete(s.id); updateCount(); });
             svcList.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px', borderRadius: '8px', cursor: 'pointer', fontSize: '13.5px' } },
                 cb, h('span', { style: { flex: 1, minWidth: '0' } }, s.name || '—'),
-                h('span', { class: 'muted', style: { fontSize: '12.5px', flex: '0 0 auto' } }, trf('тек. {pct}', { pct: fmtPct(s.default_doctor_percent) }))));
+                // RATES_HONEST_V1 — не «тек. N %» из колонки, которую расчёт не
+                // читает, а сколько врачей услугу оказывают: их и тронет «Все врачи».
+                h('span', { class: 'muted', style: { fontSize: '12.5px', flex: '0 0 auto' } }, trf('оказывают: {k}', { k: performersOf(doctors, s.id) }))));
         }
     }
     const selectAllShown = h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => {
@@ -133,8 +151,9 @@ export async function renderDoctorPay(container) {
         const btn = ev.currentTarget; btn.disabled = true;
         try {
             if (mode === 'all') {
-                const { error } = await supabase.from('services').update({ default_doctor_percent: pct }).in('id', svcIds);
-                if (error) throw error;
+                // RATES_HONEST_V1 — только записи врачей, которые услугу уже
+                // оказывают; у них процент ставится, а фикс снимается (setPct).
+                // services.default_doctor_percent не пишется: расчёт её не читает.
                 let touched = 0, failed = 0;
                 for (const doc of doctors) {
                     const rates = Array.isArray(doc.service_rates) ? doc.service_rates.map(r => ({ ...r })) : [];
@@ -145,9 +164,8 @@ export async function renderDoctorPay(container) {
                         catch (e2) { failed++; console.warn('[doctor-pay] save', doc.id, e2 && e2.message); }
                     }
                 }
-                for (const s of services) if (svcIds.includes(String(s.id))) s.default_doctor_percent = pct;
                 paintSvc();
-                toast(trf('Доля {pct}% задана для {n} услуг(и): по умолчанию + {touched} врач(ей) обновлено.', { pct, n: svcIds.length, touched }));
+                toast(trf('Ставка {n}% поставлена {k} врачам, которые оказывают услугу', { n: pct, k: touched }));
                 if (failed) toast(trf('Не сохранено у врачей: {n}', { n: failed }), 'fail');
             } else {
                 let touched = 0, failed = 0;
@@ -164,6 +182,7 @@ export async function renderDoctorPay(container) {
                     try { await saveServiceRates(doc.id, rates); touched++; doc.service_rates = rates; }
                     catch (e2) { failed++; console.warn('[doctor-pay] save', doc.id, e2 && e2.message); }
                 }
+                paintSvc();   // RATES_HONEST_V1 — «оказывают: N» меняется у добавленных услуг
                 toast(trf('Доля {pct}% задана для {n} услуг(и) у {touched} врач(ей).', { pct, n: svcIds.length, touched }));
                 if (failed) toast(trf('Не сохранено у врачей: {n}', { n: failed }), 'fail');
             }
@@ -180,6 +199,9 @@ export async function renderDoctorPay(container) {
         h('div', { class: 'field', style: { marginTop: '16px' } }, h('label', null, '2. Доля врача, %'), pctInput),
         h('div', { class: 'field', style: { marginTop: '12px' } }, h('label', null, '3. Применить к'),
             h('div', null, modeRadio('all', 'Все врачи'), modeRadio('selected', 'Выбранные врачи'))),
+        // RATES_HONEST_V1 — что именно сделает кнопка, словами.
+        h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px', lineHeight: 1.5 } },
+            'Процент ставится в запись врача по услуге; фиксированная сумма в этой записи снимается, чтобы процент действовал. «Все врачи» — это врачи, которые уже оказывают услугу; тех, кто её не оказывает, действие не трогает — добавьте их через «Выбранные врачи».'),
         docWrap,
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '14px', marginTop: '16px', borderTop: '1px solid var(--ink-100)', paddingTop: '14px' } }, applyBtn, countEl),
     ));
