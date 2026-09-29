@@ -655,12 +655,14 @@ function servicesPane(state, onReload) {
                     openDispenseItem(state, onReload);
                 },
             }, Icon('Pill', { size: 13 }), ' Dispense item'),
-            h('button', {
+            // REFBILL_REVIEW_V1 (ревью M4) — только денежным ролям: врач без неё
+            // выставляет лишь свои направления, мастером направления.
+            canGenerateVisitInvoice() ? h('button', {
                 class: 'btn btn-primary btn-sm',
                 disabled: unbilled.length === 0 || selected.size === 0 ? true : null,
                 title: unbilled.length === 0 ? 'All services are already invoiced' : 'Create an invoice from the selected services',
                 onclick: () => generateInvoiceFromSelection(state, selected, onReload),
-            }, Icon('Wallet', { size: 13 }), ' Generate invoice'),
+            }, Icon('Wallet', { size: 13 }), ' Generate invoice') : null,
         ),
         h('div', { style: { overflowX: 'auto' } },
         h('table', { class: 'tbl' },
@@ -1140,6 +1142,10 @@ export async function addServiceFromPicker(state, pick, onReload) {
 // RPC_PORT_V1 — экспорт ради поведенческого теста (picker-invoice.test.mjs):
 // денежные шаги окна визита гоняются через настоящий реестр RPC.
 export async function generateInvoiceFromSelection(state, selectedIds, onReload) {
+    // REFBILL_REVIEW_V1 (ревью M4) — отмеченные строки визита могут быть чужими;
+    // врач без денежной роли их не выставляет (сервер пустит только его
+    // собственные, и дверь для них — мастер направления).
+    if (!canGenerateVisitInvoice()) { toast(tr('Счёт выставит касса — пациент в «Приём оплат» → «Ждут счёта».'), 'info'); return; }
     if (selectedIds.size === 0) { toast('Tick at least one service.', 'fail'); return; }
     // LIVE_AUDIT_FIX_V1 — строка за счёт плательщика уже привязана к счёту
     // контрагента (invoice_item_id), поэтому сюда не попадает; сервер к тому же
@@ -1652,6 +1658,13 @@ const DETAILS_COLUMNS = ['visit_type', 'visit_kind', 'notes'];
 // LIVE_AUDIT_FIX_V1 — зеркало visits.update (server/db/schema-registry.js).
 export const VISIT_DETAILS_ROLES = ['admin', 'registrar', 'doctor'];
 export function canSaveVisitDetails() { return hasActorRole(VISIT_DETAILS_ROLES); }
+
+// REFBILL_REVIEW_V1 (ревью M4) — «Сформировать счёт» окна визита — зеркало
+// CREATE_INVOICE_ROLES (billing.js): отмеченные строки могут быть чьими угодно.
+// Врач без денежной роли выставляет только свои строки живого визита
+// (doctorLinesRefusal) — мастером направления.
+export const VISIT_INVOICE_ROLES = ['admin', 'registrar', 'cashier'];
+export function canGenerateVisitInvoice() { return hasActorRole(VISIT_INVOICE_ROLES); }
 
 export async function saveDetails(card, state) {
     if (!canSaveVisitDetails()) { toast(tr('Визит меняют регистратура, врач или администратор.'), 'fail'); return false; }

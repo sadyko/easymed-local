@@ -3310,7 +3310,7 @@ export function openServicePickerModal({
                 // invoice for the patient-paid services. Dynamic import avoids the
                 // visit-modal <-> service-picker static import cycle.
                 try {
-                    const mod = await import('./visit-modal.js?v=aug17f');
+                    const mod = await import('./visit-modal.js?v=rbr1');   // REFBILL_REVIEW_V1 — штамп: «Сформировать счёт» только денежным ролям
                     mod.openVisitModal({ visit: openServicesFor, patient: (p._raw || p), onChange: (typeof onBooked === 'function' ? onBooked : undefined) });
                 } catch (e) { console.warn('[wizard] open Services tab:', e); }
             }

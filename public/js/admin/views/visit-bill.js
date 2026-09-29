@@ -501,11 +501,17 @@ export function openVisitBillModal(visit, onChanged) {
                     h('div', { style: { width: '90px' } }, field('Кол-во', dispenseQty)),
                     dispenseBtn) : null,
             ),
-            h('div', null,
+            // REFBILL_REVIEW_V1 (ревью M4) — «Выставить счёт» здесь выставляет ВСЕ
+            // невыставленные строки визита, чьи бы они ни были, — только
+            // денежным ролям. Врач без денежной роли выставляет лишь свои
+            // направления, и дверь для них — мастер направления; ему — куда
+            // идёт счёт.
+            hasActorRole(BILL_INVOICE_ROLES) ? h('div', null,
                 sectionTitle('Выставить счёт'),
                 h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' } },
                     generateInfoEl, generateBtn),
-            ),
+            ) : h('div', { class: 'muted', 'data-bill-by-cashier': '', style: { fontSize: '12.5px' } },
+                tr('Счёт выставит касса — пациент в «Приём оплат» → «Ждут счёта».')),
             h('div', null,
                 sectionTitle('Счета и оплата'),
                 invoicesContainer,
@@ -533,6 +539,10 @@ export const BILL_REMOVE_ROLES = ['admin', 'registrar', 'doctor'];
 export const BILL_VOID_ROLES = ['admin', 'inventory', 'doctor', 'nurse'];   // INPATIENT_MONEY_FIX_V1 (C4)
 export const BILL_ADD_ROLES = ['admin', 'registrar', 'doctor'];
 export const BILL_DISPENSE_ROLES = ['admin', 'doctor', 'nurse', 'inventory'];
+// REFBILL_REVIEW_V1 (ревью M4) — «Выставить счёт» (все невыставленные строки
+// визита) — зеркало CREATE_INVOICE_ROLES (billing.js). Врач без денежной роли
+// выставляет только свои строки (doctorLinesRefusal) — мастером направления.
+export const BILL_INVOICE_ROLES = ['admin', 'registrar', 'cashier'];
 
 /**
  * LIVE_AUDIT_FIX_V1 (B8) — строка «Add» окна счёта: цена и уровень цены — по
