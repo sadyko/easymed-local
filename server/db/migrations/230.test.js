@@ -16,8 +16,9 @@ import { hashPassword } from '../../services/auth.js';
 import { createApp } from '../../app.js';
 import { licensedDataDir } from '../../services/control/licensed-fixture.js';
 import { listen } from '../../../control-plane/server/test-helpers/listen.js';
-import { GATE_FALLBACK, fallbackLevel } from '../../services/gate-fallbacks.js';
+import { GATE_FALLBACK, FALLBACK_FN_KEYS, fallbackLevel } from '../../services/gate-fallbacks.js';
 import { VALID_ROLES } from '../../services/roles.js';
+import { pseudoUserOfRole } from '../../services/rpc/roles-effective.js';
 import { MAIN_CLINIC_TABLES } from '../schema-registry.js';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -71,6 +72,83 @@ test('230: на проверку — ровно расширенные пары 
       { role: 'registrar', key: 'inpatient.vitals', level: 'edit', standard: 'none', resolution: null },
       { role: 'senior-op', key: 'crm.all', level: 'edit', standard: 'none', resolution: null },
     ]);
+  } finally { db.close(); }
+});
+
+// Ревью M4 — ключи с воротами-функцией (gate-fallbacks.js FALLBACK_FN). Их
+// стандарт — не список ролей основы, а прежняя галочка раздела САМОЙ роли, и
+// старый экран выводил их из той же галочки ВЫШЕ ворот: «Оплату врачей» из
+// «Отчётов» на «Изменении» — 'edit' (закрыть месяц оплаты врачей; ворота —
+// только администратор), «Закупки» из «Склада» на «Изменении» — 'edit'
+// (заявки всех отделов; ворота — администратор и снабженец).
+test('230 (ревью M4): «Оплата врачей» и «Закупки» выше ворот — на проверке, со стандартом по разделам самой роли', () => {
+  const db = setup({
+    chief: { sections: ['patients', 'reports-hub'], levels: { patients: 'editor', 'reports-hub': 'editor' }, grants: { 'reports.doctor_pay': 'edit' } },
+    'chief-view': { sections: ['reports-hub'], levels: { 'reports-hub': 'viewer' }, grants: { 'reports.doctor_pay': 'view' } },
+    'no-reports': { sections: ['patients'], levels: { patients: 'editor' }, grants: { 'reports.doctor_pay': 'delete' } },
+    'supply-nurse': { sections: ['inventory'], levels: { inventory: 'editor' }, grants: { procurement: 'edit' } },
+    'store-keeper': { sections: ['inventory'], levels: { inventory: 'editor' }, grants: { procurement: 'edit' } },
+    deputy: { sections: ['reports-hub'], levels: {}, grants: { 'reports.doctor_pay': 'edit', procurement: 'edit' } },
+  }, [['chief', 'doctor'], ['chief-view', 'doctor'], ['no-reports', 'registrar'], ['supply-nurse', 'nurse'], ['store-keeper', 'inventory'], ['deputy', 'admin']]);
+  try {
+    db.exec(SQL);
+    assert.deepEqual(reviewsOf(db), [
+      { role: 'chief', key: 'reports.doctor_pay', level: 'edit', standard: 'view', resolution: null },
+      { role: 'no-reports', key: 'reports.doctor_pay', level: 'delete', standard: 'none', resolution: null },
+      { role: 'supply-nurse', key: 'procurement', level: 'edit', standard: 'view', resolution: null },
+    ]);
+  } finally { db.close(); }
+});
+
+// Стандарт ключа с воротами-функцией миграция считает сама, по строке роли, —
+// сверяем его с самими воротами (fallbackLevel для «человека с этой ролью») на
+// всех состояниях прежних разделов: раздела нет / «Просмотр» / «Изменение» /
+// «Полный» / без уровня / пустой уровень — у каждой основы. «Зонд» пишет «Удаление» во все
+// ключи: на проверку попадает каждая пара, и её стандарт виден; «смесь» —
+// разные уровни: на проверку попадают ровно те, что выше стандарта.
+test('230 (ревью M4): стандарт ключей FALLBACK_FN = fallbackLevel по строке самой роли; на проверке — ровно записанные выше него', () => {
+  const bases = VALID_ROLES.filter((r) => r !== 'admin');
+  const STATES = [null, 'viewer', 'editor', 'admin', undefined, ''];   // null — раздела нет; undefined — раздел без уровня; '' — пустой уровень
+  const SECTIONS = ['custdev', 'settings', 'inventory', 'reports-hub'];
+  const STORED = ['delete', 'edit', 'view', 'none', 'admin', 7];
+  const rows = {};
+  const custom = [];
+  for (let i = 0; i < bases.length * STATES.length; i++) {
+    const sections = ['patients'];
+    const levels = { patients: 'editor' };
+    SECTIONS.forEach((s, j) => {
+      const st = STATES[(i + j * 2) % STATES.length];
+      if (st === null) return;
+      sections.push(s);
+      if (st !== undefined) levels[s] = st;
+    });
+    const base = bases[i % bases.length];
+    custom.push(['fn-probe-' + i, base], ['fn-mixed-' + i, base]);
+    rows['fn-probe-' + i] = { sections, levels, grants: Object.fromEntries(FALLBACK_FN_KEYS.map((k) => [k, 'delete'])) };
+    rows['fn-mixed-' + i] = { sections, levels, grants: Object.fromEntries(FALLBACK_FN_KEYS.map((k, j) => [k, STORED[(i + j) % STORED.length]])) };
+  }
+  custom.push(['fn-deputy', 'admin']);
+  rows['fn-deputy'] = { sections: [], levels: {}, grants: Object.fromEntries(FALLBACK_FN_KEYS.map((k) => [k, 'delete'])) };
+  const db = setup(rows, custom);
+  try {
+    db.exec(SQL);
+    const got = new Map(db.prepare("SELECT role, key, level, standard FROM role_grant_reviews WHERE role LIKE 'fn-%'").all()
+      .map((r) => [r.role + '|' + r.key, { ...r }]));
+    const RANK = { view: 1, edit: 2, delete: 3 };
+    const want = new Map();
+    for (const role of Object.keys(rows)) {
+      const pseudo = pseudoUserOfRole(db, role);
+      if (pseudo.role === 'admin') continue;
+      for (const key of FALLBACK_FN_KEYS) {
+        const level = rows[role].grants[key];
+        const standard = fallbackLevel(db, pseudo, key, 'all');
+        if ((RANK[level] || 0) > (RANK[standard] || 0)) want.set(role + '|' + key, { role, key, level, standard });
+      }
+    }
+    assert.deepEqual(got, want, 'стандарт миграции разошёлся с воротами-функцией (gate-fallbacks.js FALLBACK_FN)');
+    for (const role of Object.keys(rows).filter((r) => r.startsWith('fn-probe-'))) {
+      for (const key of FALLBACK_FN_KEYS) assert.ok(got.has(role + '|' + key), role + ' · ' + key + ': ключ с воротами-функцией не попал на проверку');
+    }
   } finally { db.close(); }
 });
 

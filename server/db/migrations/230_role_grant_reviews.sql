@@ -24,6 +24,16 @@
 -- самим воротам, и тест 230.test.js сверяет её с fallbackLevel для каждой
 -- основы × ключа: разойтись молча они не могут.
 --
+-- Ревью M4 — и ключи с воротами-функцией (FALLBACK_FN: «Доска обзвона»,
+-- «Оценить разговор», «Отделы», «Закупки», «Оплата врачей»). Их стандарт — не
+-- список ролей основы, а прежняя галочка раздела САМОЙ роли, и старый экран
+-- выводил из той же галочки больше, чем дают ворота: «Оплату врачей» из
+-- «Отчётов» на «Изменении» — 'edit' (закрыть месяц; ворота — только
+-- администратор), «Закупки» из «Склада» на «Изменении» — 'edit' (заявки всех
+-- отделов; ворота — администратор и снабженец). Стандарт считается здесь по
+-- строке роли теми же правилами, что у ворот (CTE legacy/fn ниже); тест
+-- сверяет его с fallbackLevel на всех состояниях разделов у каждой основы.
+--
 -- Администратор и свои роли на его основе пропускаются: у администратора
 -- стандарт — всё. Своя роль клиники сверяется со своей основой. Уровень, не
 -- являющийся строкой уровня ('admin', число), выше стандарта не считается — так
@@ -204,18 +214,65 @@ WITH standards(base, key, standard) AS (VALUES
   ('head_cashier', 'crm.all', 'none'),
   ('head_cashier', 'crm.convert', 'none')
 ),
+-- Строки ролей, которые сверяются: без администратора и его основы, основа —
+-- штатная роль. Невалидный JSON читается как «ничего не записано» (так его
+-- читают и ворота), и json-функции ниже на нём не падают.
 roles AS (
-  SELECT rp.role AS role, COALESCE(cr.base_role, rp.role) AS base, rp.permissions AS permissions
+  SELECT rp.role AS role, COALESCE(cr.base_role, rp.role) AS base,
+         CASE WHEN json_valid(rp.permissions) THEN rp.permissions ELSE '{}' END AS p
     FROM role_permissions rp
     LEFT JOIN custom_roles cr ON cr.code = rp.role
+   WHERE rp.role <> 'admin' AND COALESCE(cr.base_role, rp.role) <> 'admin'
+     AND COALESCE(cr.base_role, rp.role) IN (SELECT base FROM standards)
+),
+-- Ревью M4 — прежние галочки разделов САМОЙ роли, как их читает sectionLevel
+-- (server/services/roles.js): раздел выдан, если он в списке sections;
+-- «изменение» — уровень editor/admin или уровень не записан (раздел, выданный
+-- до появления уровней, — полный доступ).
+legacy AS (
+  SELECT role, base,
+         (json_type(p, '$.sections') = 'array'
+           AND EXISTS (SELECT 1 FROM json_each(p, '$.sections') WHERE value = 'custdev')) AS custdev_on,
+         (json_type(p, '$.sections') = 'array'
+           AND EXISTS (SELECT 1 FROM json_each(p, '$.sections') WHERE value = 'custdev')
+           AND (json_extract(p, '$.levels."custdev"') IS NULL
+                OR json_extract(p, '$.levels."custdev"') IN (0, '', 'editor', 'admin'))) AS custdev_edit,
+         (json_type(p, '$.sections') = 'array'
+           AND EXISTS (SELECT 1 FROM json_each(p, '$.sections') WHERE value = 'settings')) AS settings_on,
+         (json_type(p, '$.sections') = 'array'
+           AND EXISTS (SELECT 1 FROM json_each(p, '$.sections') WHERE value = 'settings')
+           AND (json_extract(p, '$.levels."settings"') IS NULL
+                OR json_extract(p, '$.levels."settings"') IN (0, '', 'editor', 'admin'))) AS settings_edit,
+         (json_type(p, '$.sections') = 'array'
+           AND EXISTS (SELECT 1 FROM json_each(p, '$.sections') WHERE value = 'inventory')) AS inventory_on,
+         (json_type(p, '$.sections') = 'array'
+           AND EXISTS (SELECT 1 FROM json_each(p, '$.sections') WHERE value = 'reports-hub')) AS reports_on
+    FROM roles
+),
+-- Ревью M4 — стандарт ключей с воротами-функцией (gate-fallbacks.js
+-- FALLBACK_FN) — те же правила, что у самих ворот, по строке роли.
+fn(role, key, standard) AS (
+  SELECT role, 'custdev.list', CASE WHEN custdev_on THEN 'view' ELSE 'none' END FROM legacy
+  UNION ALL
+  SELECT role, 'custdev.rate', CASE WHEN custdev_edit THEN 'edit' ELSE 'none' END FROM legacy
+  UNION ALL
+  SELECT role, 'settings.departments',
+         CASE WHEN settings_edit THEN 'edit' WHEN base = 'inventory' OR settings_on THEN 'view' ELSE 'none' END FROM legacy
+  UNION ALL
+  SELECT role, 'procurement', CASE WHEN base = 'inventory' THEN 'edit' WHEN inventory_on THEN 'view' ELSE 'none' END FROM legacy
+  UNION ALL
+  SELECT role, 'reports.doctor_pay', CASE WHEN reports_on THEN 'view' ELSE 'none' END FROM legacy
+),
+pairs(role, key, standard) AS (
+  SELECT r.role, s.key, s.standard FROM roles r JOIN standards s ON s.base = r.base
+  UNION ALL
+  SELECT role, key, standard FROM fn
 )
 INSERT OR IGNORE INTO role_grant_reviews (role, key, level, standard)
-SELECT r.role, s.key, json_extract(r.permissions, '$.grants."' || s.key || '"'), s.standard
-  FROM roles r
-  JOIN standards s ON s.base = r.base
- WHERE r.role <> 'admin' AND r.base <> 'admin'
-   AND json_valid(r.permissions)
-   AND json_type(r.permissions, '$.grants."' || s.key || '"') = 'text'
-   AND (CASE json_extract(r.permissions, '$.grants."' || s.key || '"')
+SELECT pr.role, pr.key, json_extract(r.p, '$.grants."' || pr.key || '"'), pr.standard
+  FROM pairs pr
+  JOIN roles r ON r.role = pr.role
+ WHERE json_type(r.p, '$.grants."' || pr.key || '"') = 'text'
+   AND (CASE json_extract(r.p, '$.grants."' || pr.key || '"')
           WHEN 'view' THEN 1 WHEN 'edit' THEN 2 WHEN 'delete' THEN 3 ELSE 0 END)
-     > (CASE s.standard WHEN 'view' THEN 1 WHEN 'edit' THEN 2 WHEN 'delete' THEN 3 ELSE 0 END);
+     > (CASE pr.standard WHEN 'view' THEN 1 WHEN 'edit' THEN 2 WHEN 'delete' THEN 3 ELSE 0 END);

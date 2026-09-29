@@ -121,6 +121,15 @@ test('ключ, изменённый после того, как плашка н
   assert.ok(!('crm.all' in ROW.grants));
 });
 
+// Ревью M4 — на проверке и ключи с воротами-функцией, среди них раздел
+// «Закупки» (его ключ — сам раздел, не окно): плашка называет его словами
+// справочника, а не кодом.
+test('ревью M4: «Оплата врачей» и раздел «Закупки» — словами справочника', () => {
+  assert.strictEqual(review.grantKeyLabel('reports.doctor_pay'), 'Отчёты → Оплата врачей');
+  assert.strictEqual(review.grantKeyLabel('procurement'), 'Закупки');
+  assert.strictEqual(review.grantKeyLabel('settings.departments'), 'Настройки → Отделы');
+});
+
 test('нет строк проверки — нет и плашки', async () => {
   fresh(); REVIEWS = [];
   assert.strictEqual((await notice()).children.length, 0);

@@ -22,9 +22,11 @@ function parse(p) {
 }
 const grantsOf = (perms) => { const p = parse(perms) || {}; return (p.grants && typeof p.grants === 'object') ? p.grants : {}; };
 
-/** Строка справочника словами экрана: «Стационар → Измерения». */
+/** Строка справочника словами экрана: «Стационар → Измерения»; раздел — «Закупки». */
 export function grantKeyLabel(key) {
     for (const s of CATALOG) {
+        // Ревью M4 — на проверке бывает и раздел: «Закупки» (ворота-функция).
+        if (s.key === key) return tr(s.label);
         for (const r of [...(s.windows || []), ...(s.actions || [])]) {
             if (r.key === key) return tr(s.label) + ' → ' + tr(r.label);
         }

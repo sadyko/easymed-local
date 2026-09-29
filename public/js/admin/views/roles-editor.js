@@ -59,7 +59,7 @@ import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from 
 // V3121_ROLES — «Проверьте права этой роли»: «Просмотр» от старого экрана «Роли» (мигр. 215).
 import { roleReviewNotice } from './roles-review.js';
 // ROLES_SAVE_TRUTH_V1 — «Проверьте права этой роли»: права выше обычных для основы (мигр. 230).
-import { roleGrantReviewNotice } from './roles-grant-review.js';
+import { roleGrantReviewNotice } from './roles-grant-review.js?v=rgr2';   // ROLES_REVIEW_V1 — раздел «Закупки» словами справочника (ревью M4)
 
 // ROLE_KEYS_V2 — матрица строится из permissions.js NAV_MODULES, того же
 // списка, который читают сами ворота бокового меню. Когда-то это была вторая

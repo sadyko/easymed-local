@@ -33,7 +33,7 @@ import { TYPE_TO_GROUP_NAME } from './service-group.js?v=aug17e';
 // здесь и тянул за собой NAV_MODULES; вынесен по конвенции «один файл на
 // экран» и чтобы правки прав не задевали этот файл. Хаб только монтирует
 // экран и даёт ему дорогу назад.
-import { renderRolesEditor } from './roles-editor.js?v=roles7';   // ROLES_SAVE_TRUTH_V1 — правда сервера, «Сохранить роль» пишет тронутое, плашка мигр. 230; ROLES_REVIEW_V1
+import { renderRolesEditor } from './roles-editor.js?v=roles8';   // ROLES_SAVE_TRUTH_V1 — правда сервера, «Сохранить роль» пишет тронутое, плашка мигр. 230; ROLES_REVIEW_V1
 // ROLE_REPORTS_SETTINGS_V1 — какие плитки видит роль и можно ли в них менять.
 import { isRouteAllowed, settingsTileLevel, hasRestriction, actorIsAdmin, settingsGrantColumns } from '../permissions.js';
 
