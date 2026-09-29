@@ -278,38 +278,63 @@ export async function mountLabDevices(container) {
                 : null,
             ...state.profiles.map((p) =>
                 h('option', { value: p.key, selected: p.key === d.profile ? true : null }, p.vendor + ' ' + p.model)));
-        const transSel = h('select', null, ...TRANSPORTS.map((t) =>
-            h('option', { value: t.key, selected: t.key === d.transport ? true : null }, tr(t.label))));
-        const hostInp = h('input', { type: 'text', value: d.host || '', placeholder: tr('пусто — принимать с любого адреса') });
+        // LIS_DISCOVERY_FIX_V1 (экран) — решение владельца 2026-09-29: новый
+        // прибор руками — только СЕТЕВОЙ. Анализатор на кабеле COM приходит
+        // через переадресатор на лабораторном ПК и появляется в «Найдены в
+        // сети» сам, а строка «Кабель COM» или «Папка», заведённая руками, не
+        // принимала ничего и только путала приём. Поэтому у нового прибора
+        // выбора «Подключение» нет вовсе. У заведённой строки — сеть и её
+        // прежнее значение, если оно другое: иначе «Изменить → Сохранить»
+        // молча превращало бы кабель в сеть, а человек этого не просил.
+        const transKeys = ['mllp'];
+        if (device && d.transport && d.transport !== 'mllp') transKeys.push(d.transport);
+        const transSel = device
+            ? h('select', { onchange: () => syncTransport() }, ...transKeys.map((k) =>
+                h('option', { value: k, selected: k === (d.transport || 'mllp') ? true : null },
+                    TRANSPORT_LABEL[k] ? tr(TRANSPORT_LABEL[k]) : k)))
+            : null;
+        const transport = () => (transSel ? transSel.value : 'mllp');
+        const hostInp = h('input', { type: 'text', value: d.host || '', placeholder: tr('адрес анализатора в сети, например 10.0.0.20'),
+            oninput: () => syncTransport() });
         const portInp = h('input', { type: 'number', value: d.port || 2575, min: '1', max: '65535', style: { width: '110px' } });
         const enabledInp = h('input', { type: 'checkbox', checked: d.enabled ? true : null });
 
         const notReady = h('p', { class: 'muted', style: { fontSize: '12.5px' } },
             tr('Этот транспорт пока не поддерживается — настройка сохранится, но приём по нему не заработает.'));
+        // Адрес обязателен только новому прибору (сохранение ниже). Старая
+        // строка без адреса законна — сервер отдаёт ей только сетевой прибор
+        // на её порту и с первой пробы запоминает его, — но человек должен
+        // видеть, что адрес лучше вписать.
         const netRow = h('div', { class: 'row', style: { gap: '14px', flexWrap: 'wrap' } },
-            field(tr('Адрес прибора'), hostInp), field(tr('Порт'), portInp));
+            field(tr('Адрес прибора'), hostInp, { required: !device }), field(tr('Порт'), portInp));
+        const noHostHint = device
+            ? h('p', { class: 'muted', style: { fontSize: '12.5px' } },
+                tr('Без адреса прибор примет пробы только от сетевого анализатора на своём порту и запомнит первого — лучше укажите адрес.'))
+            : null;
 
         function syncTransport() {
-            const t = TRANSPORTS.find((x) => x.key === transSel.value);
-            netRow.style.display = transSel.value === 'mllp' ? '' : 'none';
+            const key = transport();
+            const t = TRANSPORTS.find((x) => x.key === key);
+            netRow.style.display = key === 'mllp' ? '' : 'none';
             notReady.style.display = t && t.ready ? 'none' : '';
+            if (noHostHint) noHostHint.style.display = key === 'mllp' && !hostInp.value.trim() ? '' : 'none';
         }
-        transSel.onchange = () => {
-            const p = profileOf(profSel.value);
-            if (transSel.value === 'mllp' && p && !device) portInp.value = p.defaultPort;
-            syncTransport();
-        };
         profSel.onchange = () => { if (!device) portInp.value = (profileOf(profSel.value) || {}).defaultPort || 2575; };
 
         formCard.appendChild(h('div', { class: 'card-header' },
             h('h3', null, device ? trf('Анализатор: {name}', { name: d.name }) : tr('Новый анализатор'))));
         formCard.appendChild(h('div', { class: 'row', style: { gap: '14px', flexWrap: 'wrap', marginBottom: '10px' } },
-            field(tr('Название'), nameInp), field(tr('Модель'), profSel), field(tr('Подключение'), transSel)));
+            field(tr('Название'), nameInp), field(tr('Модель'), profSel), transSel ? field(tr('Подключение'), transSel) : null));
         formCard.appendChild(netRow);
+        if (noHostHint) formCard.appendChild(noHostHint);
         formCard.appendChild(notReady);
         // LIS_ANALYZER_LIST_V1 — честная строка ручного пути: прибор-сервер
         // (программа LIS звонит ему сама) пока не поддержан.
         if (!device) {
+            // LIS_DISCOVERY_FIX_V1 (экран) — куда делся «Кабель COM»: такой
+            // прибор руками не заводят, он приходит сам.
+            formCard.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px' } },
+                tr('Анализатор на кабеле COM подключается через переадресатор на лабораторном компьютере и появится в «Найдены в сети» сам — добавлять его здесь не нужно.')));
             formCard.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px' } },
                 tr('Анализаторы, которые сами ждут звонка от программы LIS (например, Mindray BC-3600), пока не поддерживаются: такой прибор не отправит результаты сам.')));
         }
@@ -329,12 +354,21 @@ export async function mountLabDevices(container) {
             const payload = {
                 name: nameInp.value.trim(),
                 profile: profSel.value,
-                transport: transSel.value,
+                transport: transport(),
                 host: hostInp.value.trim(),
                 port: Number(portInp.value) || 2575,
                 enabled: enabledInp.checked ? 1 : 0,
             };
             if (!payload.name) { toast(tr('Укажите название прибора'), 'warn'); return; }
+            // LIS_DISCOVERY_FIX_V1 (экран) — новый прибор — только с адресом
+            // (решение владельца 2026-09-29): по адресу сервер узнаёт прибор, а
+            // строка без адреса забирала бы первый попавшийся сетевой прибор на
+            // своём порту.
+            if (!device && !payload.host) {
+                toast(tr('Укажите адрес анализатора в сети — например, 10.0.0.20'), 'warn');
+                hostInp.focus();
+                return;
+            }
 
             // LIS_ANALYZER_LIST_V1 — сохранение найденного прибора с выбранной
             // моделью и есть проверка модели человеком: пометка «проверьте

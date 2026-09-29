@@ -533,3 +533,93 @@ test('ревью I2: новый прибор по адресу — по-преж
   await tick();
   assert.deepStrictEqual(selectedValues(modelSelect(root)), ['mindray-bc-5300']);
 });
+
+// ── LIS_DISCOVERY_FIX_V1 (экран), C1 — ручная форма: только сеть, адрес обязателен ──
+// Решение владельца 2026-09-29: новый прибор руками — только сетевой и только с
+// адресом. Анализатор на кабеле COM приходит через переадресатор на
+// лабораторном ПК и появляется в «Найдены в сети» сам; «Кабель COM» и «Папка»
+// в новой форме больше не предлагаются. Уже заведённые строки своё значение
+// сохраняют и видят его в правке.
+const ADDR_PH = 'адрес анализатора в сети, например 10.0.0.20';
+const COM_NOTE = 'Анализатор на кабеле COM подключается через переадресатор на лабораторном компьютере и появится в «Найдены в сети» сам — добавлять его здесь не нужно.';
+const NO_HOST_HINT = 'Без адреса прибор примет пробы только от сетевого анализатора на своём порту и запомнит первого — лучше укажите адрес.';
+const inputByPlaceholder = (root, ph) => walk(root).find((n) => n.tagName === 'INPUT' && n.attrs.placeholder === ph);
+const transportSelect = (root) => walk(root).find((n) => n.tagName === 'SELECT' && optionsOf(n).some((o) => o.value === 'mllp'));
+
+async function openNewDeviceForm() {
+  const root = await openAddWindowRoot([HEARD]);
+  findButtonByText(root, /Добавить по адресу/).click();
+  await tick();
+  return root;
+}
+
+test('C1: новый прибор руками — без выбора «Подключение», адрес с сетевой подсказкой, строка про COM', async () => {
+  const root = await openNewDeviceForm();
+  assert.ok(!transportSelect(root), 'списка «Подключение» в новой форме нет');
+  assert.ok(!walk(root).some((n) => n.tagName === 'LABEL' && textOf(n).startsWith('Подключение')), 'и подписи его нет');
+  assert.ok(inputByPlaceholder(root, ADDR_PH), 'у адреса подсказка — пример сетевого адреса');
+  const text = textOf(root);
+  assert.ok(text.includes(COM_NOTE), 'сказано, откуда берётся прибор на кабеле COM');
+  assert.ok(!text.includes('Кабель COM (RS-232)') && !text.includes('Папка с файлами'), 'кабель и папка не предлагаются');
+  assert.ok(!text.includes(NO_HOST_HINT), 'подсказка «без адреса» — только в правке: новому прибору адрес обязателен');
+});
+
+test('C1: новый прибор без адреса не сохраняется — предупреждение, в базу ничего', async () => {
+  const root = await openNewDeviceForm();
+  inputByPlaceholder(root, 'Например: Гематология').value = 'Гематология';
+  inputByPlaceholder(root, ADDR_PH).value = '   ';
+  formButton(root, /^Сохранить$/).click();
+  await tick(60);
+  assert.strictEqual(toastMsg, 'Укажите адрес анализатора в сети — например, 10.0.0.20');
+  assert.strictEqual(toastEl.dataset.kind, 'warn');
+  assert.ok(!writes.some((w) => w.table === 'lab_devices'), 'ничего не записано: ' + JSON.stringify(writes));
+  assert.ok(!rpcCalls.some((c) => c.name === 'lis_restart'), 'слушатели не перезапускаются');
+  assert.ok(formButton(root, /^Сохранить$/), 'форма осталась на экране — адрес можно вписать');
+});
+
+test('C1: новый прибор с адресом записывается сетевым: transport = mllp', async () => {
+  const root = await openNewDeviceForm();
+  inputByPlaceholder(root, 'Например: Гематология').value = 'Гематология';
+  inputByPlaceholder(root, ADDR_PH).value = ' 10.0.0.20 ';
+  formButton(root, /^Сохранить$/).click();
+  await tick(60);
+  const ins = writes.find((w) => w.table === 'lab_devices' && w.op === 'insert');
+  assert.ok(ins, 'записано: ' + JSON.stringify(writes));
+  const v = [].concat(ins.values)[0];
+  assert.strictEqual(v.transport, 'mllp');
+  assert.strictEqual(v.host, '10.0.0.20');
+  assert.strictEqual(v.name, 'Гематология');
+});
+
+test('C1: «Изменить» у старого прибора на кабеле COM — его подключение по-прежнему выбрано и видно', async () => {
+  const root = await openAddWindowRoot([HEARD, { ...WAITING, id: 8, name: 'Кабельный', transport: 'serial', port: null }]);
+  findButtonByText(rowNamed(root, 'Кабельный'), /Изменить/).click();
+  await tick();
+  const sel = transportSelect(root);
+  assert.ok(sel, 'в правке список «Подключение» есть');
+  assert.deepStrictEqual(optionsOf(sel).map((o) => o.value), ['mllp', 'serial'], 'сеть и прежнее значение строки; папки нет');
+  assert.deepStrictEqual(selectedValues(sel), ['serial'], '«Изменить → Сохранить» не превращает кабель в сеть');
+  assert.ok(optionsOf(sel).some((o) => o.value === 'serial' && textOf(o) === 'Кабель COM (RS-232)'));
+});
+
+test('C1: «Изменить» у сетевого прибора без адреса — в списке только сеть и подсказка «лучше укажите адрес»', async () => {
+  const root = await openAddWindowRoot([HEARD, WAITING]);   // у jjjj адреса нет
+  findButtonByText(rowNamed(root, 'jjjj'), /Изменить/).click();
+  await tick();
+  const sel = transportSelect(root);
+  assert.deepStrictEqual(optionsOf(sel).map((o) => o.value), ['mllp']);
+  const host = inputByPlaceholder(root, ADDR_PH);
+  assert.ok(host, 'у адреса в правке та же подсказка');
+  const hint = walk(root).find((n) => n.tagName === 'P' && textOf(n) === NO_HOST_HINT);
+  assert.ok(hint, 'подсказка про прибор без адреса');
+  // Ревью M10: тестовый DOM не выводит value списка из selected-пункта — ставим сами.
+  sel.value = 'mllp';
+  sel.dispatchEvent({ type: 'change', target: sel });
+  assert.notStrictEqual(hint.style.display, 'none', 'адреса нет — подсказка видна');
+  host.value = '10.0.0.7';
+  host.dispatchEvent({ type: 'input', target: host });
+  assert.strictEqual(hint.style.display, 'none', 'адрес вписан — подсказка ушла');
+  host.value = '';
+  host.dispatchEvent({ type: 'input', target: host });
+  assert.notStrictEqual(hint.style.display, 'none', 'адрес стёрли — подсказка снова видна');
+});
