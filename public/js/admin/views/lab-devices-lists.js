@@ -8,6 +8,9 @@
 //   добавлен и выходил на связь  added = 1, last_seen_at есть  → таблица
 // Нет поля added (сервер старее миграции 228) — прибор считается добавленным:
 // из таблицы ничего не должно пропадать само.
+//
+// LIS_DISCOVERY_FIX_V1 (экран) — и одно правило лотка «Необработанные»: какую
+// строку нельзя «Привязать» (isTruncatedMessage).
 
 /** @returns {{table:object[], found:object[], waiting:object[]}} */
 export function splitDevices(devices = []) {
@@ -40,4 +43,17 @@ export function portState(device, status) {
     const f = (status.failed || []).find((x) => Number(x.port) === port);
     if (f) return { kind: 'failed', port, code: f.code === 'busy' ? 'busy' : 'error' };
     return { kind: 'off', port };
+}
+
+/**
+ * LIS_DISCOVERY_FIX_V1 (экран) — строка лотка от ПЕРЕРОСШЕГО сообщения: прибору
+ * ушёл AE, а в лотке лежит только начало текста (server/lis/index.js,
+ * onOversize, «сообщение больше … — не принято»). «Привязать» такую строку
+ * значило бы положить в бланк обрезанное число — PLT «25» вместо 250, — и
+ * сервер эту привязку отклоняет. Другой пометки у строки нет: узнаётся по
+ * статусу и началу строки журнала.
+ */
+export function isTruncatedMessage(m) {
+    // i18n-exempt: начало строки журнала сервера (server/lis/index.js) — признак для сравнения, а не текст экрана
+    return !!m && m.status === 'rejected' && String(m.detail || '').startsWith('сообщение больше ');
 }

@@ -113,13 +113,18 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/rpc/')) {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     rpcCalls.push({ name, args: body });
-    if (name === 'lis_message_attach') return { ok: true, json: async () => ({ data: attachAnswer }) };
+    if (name === 'lis_message_attach') {
+      // LIS_DISCOVERY_FIX_V1 (экран), C2 — сервер может и отказать (409 и прочее).
+      if (attachError) return { ok: false, status: attachError.status, json: async () => ({ error: attachError.error }) };
+      return { ok: true, json: async () => ({ data: attachAnswer }) };
+    }
     return { ok: true, json: async () => ({ data: [] }) };
   }
   return { ok: true, json: async () => ({ data: null }) };
 };
 let rpcCalls = [];
 let attachAnswer = null;
+let attachError = null;   // { status, error } — ответ сервера с ошибкой на lis_message_attach
 
 const { mountLabDevices, stopLabDevicesLive } = await import('../views/lab-devices.js');
 
@@ -201,4 +206,59 @@ test('R1: фильтр на клиенте остаётся — принятая
     assert.ok(text.includes('LAB-000006'));
     assert.ok(!text.includes('LAB-000005'), 'applied в лоток не попадает');
   } finally { serverIgnoresStatus = false; }
+});
+
+// ── LIS_DISCOVERY_FIX_V1 (экран), C2 — обрезанное переросшее сообщение ────────
+// От сообщения больше потолка в лотке лежит только начало (server/lis/index.js,
+// onOversize). «Привязать» положило бы в бланк обрезанное число — PLT «25»
+// вместо 250, — поэтому кнопки нет, а сервер такую привязку отклоняет (409).
+const wait = (ms = 30) => new Promise((r) => setTimeout(r, ms));
+const trWith = (root, text) => walk(root).find((n) => n.tagName === 'TR' && textOf(n).includes(text));
+const buttonIn = (el, label) => walk(el).find((n) => n.tagName === 'BUTTON' && textOf(n) === label);
+const CUT_NOTE = 'пришло не целиком — пусть прибор отправит пробу ещё раз';
+
+test('C2: обрезанное сообщение — без «Привязать», с пометкой «пришло не целиком»; «Отклонить» на месте', async () => {
+  MESSAGES = [
+    row(90, 'rejected', 1, { detail: 'сообщение больше 4 МБ — не принято; в лотке только его начало' }),
+    row(91, 'unmatched', 2, { detail: 'заказ по номеру пробы не найден' }),
+  ];
+  const root = await mount();
+  const cut = trWith(root, 'LAB-000090');
+  const whole = trWith(root, 'LAB-000091');
+  assert.ok(cut && whole, 'обе строки в лотке');
+  assert.ok(!buttonIn(cut, 'Привязать'), 'у обрезанного «Привязать» нет');
+  assert.ok(buttonIn(cut, 'Отклонить'), '«Отклонить» остаётся — строку можно убрать из лотка');
+  assert.ok(textOf(cut).includes(CUT_NOTE), 'сказано, что делать');
+  assert.ok(buttonIn(whole, 'Привязать'), 'обычная строка — с «Привязать», как прежде');
+  assert.ok(!textOf(whole).includes(CUT_NOTE));
+});
+
+async function attachWithError(err) {
+  MESSAGES = [row(42, 'rejected', 1, { detail: 'нет сегмента OBR' })];
+  attachError = err;
+  const prevPrompt = window.prompt;
+  window.prompt = () => '123';
+  try {
+    rpcCalls = []; toastMsg = null;
+    const root = await mount();
+    const reads = messageReads.length;
+    buttonIn(trWith(root, 'LAB-000042'), 'Привязать').click();
+    await wait(60);
+    assert.ok(rpcCalls.some((c) => c.name === 'lis_message_attach'), 'привязка спрошена у сервера');
+    return { reread: messageReads.length > reads };
+  } finally { window.prompt = prevPrompt; attachError = null; }
+}
+
+test('C2: сервер отказал в привязке (409) — его словами и предупреждением, лоток перечитан', async () => {
+  const msg = 'Сообщение пришло не целиком — привязать его нельзя: пусть прибор отправит пробу ещё раз.';
+  const r = await attachWithError({ status: 409, error: { code: 'bad_request', message: msg } });
+  assert.strictEqual(toastMsg, msg, 'отказ — словами сервера, без «Не удалось привязать сообщение:» перед ними');
+  assert.strictEqual(toastEl.dataset.kind, 'warn', 'отказ по правилу — не сбой');
+  assert.ok(r.reread, 'лоток перечитан: строка могла измениться');
+});
+
+test('C2: сбой сервера при привязке — как прежде: «Не удалось привязать сообщение: …»', async () => {
+  await attachWithError({ status: 500, error: { code: 'internal', message: 'Ошибка сервера. Повторите позже.' } });
+  assert.strictEqual(toastMsg, 'Не удалось привязать сообщение: Ошибка сервера. Повторите позже.');
+  assert.strictEqual(toastEl.dataset.kind, 'fail');
 });

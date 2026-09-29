@@ -15,7 +15,7 @@ import { h, Icon, Tag, toast, clear, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { supabase } from '../../supabase.js';
 import { liveness } from './lab-devices-live.js';   // LIS_INGEST_V1 — правило связи, чистое и покрытое тестами
-import { splitDevices, portState } from './lab-devices-lists.js?v=lists2';   // LIS_ANALYZER_LIST_V1 — таблица / найдены / ждут
+import { splitDevices, portState, isTruncatedMessage } from './lab-devices-lists.js?v=lists3';   // LIS_ANALYZER_LIST_V1 — таблица / найдены / ждут · LIS_DISCOVERY_FIX_V1 — обрезанное в лотке
 
 // Ключи словаря, а не собранные строки: tr() ищет строку целиком.
 const TRANSPORTS = [
@@ -686,6 +686,11 @@ export async function mountLabDevices(container) {
                     borderRadius: '6px', fontSize: '12.5px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                 },
             }, (m.raw || '').split('\r').join('\n'));
+            // LIS_DISCOVERY_FIX_V1 (экран) — от переросшего сообщения здесь только
+            // начало: «Привязать» положило бы в бланк обрезанное число, и сервер
+            // такую привязку отклоняет. Кнопки нет; «Отклонить» остаётся — строку
+            // убирают из лотка, а пробу прибор отправляет заново.
+            const truncated = isTruncatedMessage(m);
 
             tb.appendChild(h('tr', null,
                 h('td', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, fmtDateTime(m.received_at)),
@@ -697,10 +702,14 @@ export async function mountLabDevices(container) {
                         class: 'btn btn-outline btn-sm', type: 'button', style: { marginLeft: '8px' },
                         onclick: () => { raw.style.display = raw.style.display === 'none' ? '' : 'none'; },
                     }, tr('Сырое')),
+                    truncated
+                        ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
+                            tr('пришло не целиком — пусть прибор отправит пробу ещё раз'))
+                        : null,
                     raw),
                 h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
-                    h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => attach(m) }, tr('Привязать')),
-                    ' ',
+                    truncated ? null : h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => attach(m) }, tr('Привязать')),
+                    truncated ? null : ' ',
                     h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => dismiss(m) }, tr('Отклонить')))));
         }
         trayCard.appendChild(h('table', { class: 'list' },
@@ -719,7 +728,21 @@ export async function mountLabDevices(container) {
         if (!vsId) { toast(tr('Нужен номер заказа'), 'warn'); return; }
 
         const { data, error } = await supabase.rpc('lis_message_attach', { id: m.id, visit_service_id: vsId });
-        if (error) { toast(trf('Не удалось привязать сообщение: {msg}', { msg: error.message || error }), 'fail'); return; }
+        if (error) {
+            // LIS_DISCOVERY_FIX_V1 (экран) — отказ по правилу, а не сбой: сообщение,
+            // пришедшее не целиком, сервер не привязывает (409 — иначе в бланк
+            // легло бы обрезанное число); так же он отвечает «Сообщение не
+            // найдено» (404) и «Недостаточно прав» (403). Отказ — его же словами и
+            // предупреждением; лоток перечитывается: строка могла измениться.
+            // Сбой сервера (internal) и связи (кода нет) — как прежде.
+            if (error.code && error.code !== 'internal') {
+                toast(error.message || String(error.code), 'warn');
+                await reload();
+                return;
+            }
+            toast(trf('Не удалось привязать сообщение: {msg}', { msg: error.message || error }), 'fail');
+            return;
+        }
         // ok=false здесь — НЕ сбой связи: приём мог отказать по своим правилам
         // (заказ не лабораторный, поле не подтверждено). Человеку надо сказать,
         // что именно, а не «готово».

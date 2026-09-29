@@ -2,7 +2,7 @@
 // (LIS_ANALYZER_LIST_V1). Чистое правило: список на входе, раскладка на выходе.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { splitDevices, portState } from './lab-devices-lists.js';
+import { splitDevices, portState, isTruncatedMessage } from './lab-devices-lists.js';
 
 const D = (id, added, last_seen_at, extra = {}) => ({ id, name: 'П' + id, added, last_seen_at, port: 2575, ...extra });
 
@@ -37,4 +37,18 @@ test('порт ждущего прибора: слушается, не подн�
   assert.deepEqual(portState({ port: 6000 }, st), { kind: 'off', port: 6000 });
   assert.deepEqual(portState({ port: 2575 }, null), { kind: 'unknown', port: 2575 });
   assert.equal(portState({}, st).port, 2575, 'порт не задан — значит, порт по умолчанию');
+});
+
+// LIS_DISCOVERY_FIX_V1 (экран), C2 — от переросшего сообщения в лотке лежит
+// только начало; привязать его значит положить в бланк обрезанное число.
+test('обрезанное переросшее сообщение узнаётся по статусу и началу строки журнала', () => {
+  const cut = { status: 'rejected', detail: 'сообщение больше 4 МБ — не принято; в лотке только его начало' };
+  assert.equal(isTruncatedMessage(cut), true);
+  assert.equal(isTruncatedMessage({ ...cut, detail: 'сообщение больше 512 КБ — не принято; в лотке только его начало' }), true, 'потолок любой');
+  assert.equal(isTruncatedMessage({ ...cut, status: 'unmatched' }), false, 'только «Не разобрано» (rejected)');
+  assert.equal(isTruncatedMessage({ status: 'rejected', detail: 'нет сегмента MSH' }), false, 'другое «Не разобрано» — не обрезанное');
+  assert.equal(isTruncatedMessage({ status: 'rejected', detail: 'заказ: сообщение больше 4 МБ' }), false, 'признак — НАЧАЛО строки журнала');
+  assert.equal(isTruncatedMessage({ status: 'rejected', detail: null }), false);
+  assert.equal(isTruncatedMessage({ status: 'rejected' }), false);
+  assert.equal(isTruncatedMessage(null), false);
 });
