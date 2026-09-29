@@ -489,6 +489,37 @@ test('ревью M9: опрос перерисовывает окно, толь�
   }
 });
 
+// ── LIS_DISCOVERY_FIX_V1 (экран), C3 — подпись окна без сырой метки last_seen_at ──
+// Сырая метка меняется с каждой пробой: работающий анализатор перестраивал окно
+// «Добавить прибор» на каждом опросе, и нажатие «Добавить» терялось. В подписи
+// остаётся видимый текст связи — «на связи» от новой пробы не меняется.
+test('C3: находка прислала ещё пробу, текст связи тот же — окно не перестраивается', async () => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const secAgo = (s) => new Date(Date.now() - s * 1000).toISOString();
+    DEVICES = [HEARD, { ...FOUND, last_seen_at: secAgo(40) }, WAITING];
+    writes = []; rpcCalls = []; toastMsg = null;
+    const root = mk('div');
+    await mountLabDevices(root);   // опрос включён: mount() теста его гасит
+    findButtonByText(root, /Добавить прибор/).click();
+    await tick();
+    const btn = findButtonByText(rowNamed(root, 'BC-5300'), /Добавить/);
+    assert.ok(btn, 'кнопка «Добавить» у находки');
+    assert.ok(textOf(rowNamed(root, 'BC-5300')).includes('на связи'));
+
+    const polls = () => rpcCalls.filter((c) => c.name === 'lis_listeners').length;
+    const before = polls();
+    DEVICES = [HEARD, { ...FOUND, last_seen_at: secAgo(5) }, WAITING];   // новая проба: метка другая, текст тот же
+    mock.timers.tick(5000);
+    await tick(60);
+    assert.ok(polls() > before, 'опрос действительно прошёл');
+    assert.ok(walk(root).includes(btn), 'окно не перестроено: кнопка под курсором та же');
+  } finally {
+    stopLabDevicesLive();
+    mock.timers.reset();
+  }
+});
+
 // ── Ревью M2 — инструкция ведёт туда, где прибор теперь появляется ──────────
 // «Прибор появится в списке выше сам» — больше неправда: находка ждёт в окне
 // «Добавить прибор», а в таблицу попадает после нажатия «Добавить».

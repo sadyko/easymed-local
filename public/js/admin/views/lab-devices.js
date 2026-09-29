@@ -448,13 +448,17 @@ export async function mountLabDevices(container) {
     // Ревью M9 — всё, от чего зависит окно: строки находок и ждущих, текст связи
     // находки (он меняется и сам, со временем), ответ lis_listeners, ошибка
     // чтения, пуста ли таблица (от неё — пустое состояние, I1), модели.
+    // LIS_DISCOVERY_FIX_V1 (экран) — сырой метки last_seen_at здесь нет: она
+    // меняется с каждой пробой, и работающий анализатор перестраивал окно на
+    // каждом опросе — нажатие «Добавить» опять терялось. Видимое от неё —
+    // текст связи — в подписи есть.
     function addWindowSig() {
         const split = splitDevices(state.devices);
         return JSON.stringify([
             state.loadError,
             split.table.length > 0,
-            split.found.map((d) => [d.id, d.name, d.host, d.port, d.enabled, d.last_seen_at, d.profile, livenessText(d.last_seen_at).text]),
-            split.waiting.map((d) => [d.id, d.name, d.host, d.port, d.enabled, d.last_seen_at, d.profile, d.transport]),
+            split.found.map((d) => [d.id, d.name, d.host, d.port, d.enabled, d.profile, livenessText(d.last_seen_at).text]),
+            split.waiting.map((d) => [d.id, d.name, d.host, d.port, d.enabled, d.profile, d.transport]),
             state.listeners,
             state.profiles.map((p) => p.key),
         ]);
