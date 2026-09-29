@@ -275,6 +275,44 @@ test('ревью C2: прибор, привязанный к панелям, н�
   db.close();
 });
 
+// LIS_DISCOVERY_FIX_V1 (ревью 2026-09-29) — переросшее сообщение лежит в лотке
+// обрезанным: только его первые 64 КБ (mllp.js). Доказано: «Привязать» такое
+// клало в бланк обрезанное число — PLT «25» вместо 250. Сервер отказывает, а
+// строка лотка ждёт повтора пробы с прибора.
+const CUT_DETAIL = 'сообщение больше 4 МБ — не принято; в лотке только его начало';   // как пишет index.js
+test('обрезанное переросшее сообщение не привязывается: 409, бланк не тронут, строка ждёт человека', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (id, full_name) VALUES (3,'Иванов')").run();
+  db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (55,3,'2026-09-10T09:00:00Z','scheduled')").run();
+  db.prepare("INSERT INTO services (id, name, is_lab) VALUES (9,'ОАК',1)").run();
+  db.prepare("INSERT INTO visit_services (id, visit_id, service_id, status) VALUES (77,55,9,'in_progress')").run();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'Гем','mindray-bc-5300')").run();
+  db.prepare("INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (5,'ОАК',9,1)").run();
+  db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, device_code, device_code_confirmed)
+              VALUES (5,'PLT','Тромбоциты','10^9/л','PLT',1)`).run();
+  const head = ['MSH|^~\\&|BC-5300|Mindray|||20260929120000||ORU^R01|42|P|2.3.1',
+    'OBR|1||LAB-000077|00001^Automated Count^99MRC',
+    'OBX|1|NM|777-3^PLT^LN||25'].join('\r');   // «250» оборвано потолком на полуслове
+  const ins = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, sample_id, status, detail) VALUES (NULL,'10.0.0.9',?,'LAB-000077','rejected',?)");
+  const id = ins.run(head, CUT_DETAIL).lastInsertRowid;
+
+  assert.throws(() => lisMessageAttach(db, { id, visit_service_id: 77 }, LAB), (e) => {
+    assert.equal(e.status, 409);
+    assert.equal(e.message, 'Сообщение пришло не целиком — привязать его нельзя. Попросите анализатор отправить эту пробу ещё раз.');
+    return true;
+  });
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_results WHERE visit_service_id = 77').get().c, 0, 'обрезанное число в бланк не легло');
+  assert.equal(db.prepare('SELECT resolved_at FROM lab_device_messages WHERE id = ?').get(id).resolved_at, null, 'строка лотка ждёт повтора пробы');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_device_messages').get().c, 1, 'и новой строки лотка отказ не пишет');
+  assert.notEqual(db.prepare("SELECT status FROM visit_services WHERE id = 77").get().status, 'resulted');
+
+  // Отказ — только обрезанному: прочий мусор привязка прогоняет как раньше.
+  const junk = ins.run('MSH|^~\\&|BC-5300|Mindray|||20260929120000||ADT^A01|43|P|2.3.1', 'ожидался ORU^R01, получен ADT^A01').lastInsertRowid;
+  const out = lisMessageAttach(db, { id: junk, visit_service_id: 77 }, LAB);
+  assert.deepEqual({ ok: out.ok, status: out.status }, { ok: false, status: 'rejected' });
+  db.close();
+});
+
 test('ревью C2: найденный анализатор с сообщениями удаляется, сообщения остаются целиком', async () => {
   const db = fresh();
   const found = db.prepare("INSERT INTO lab_devices (name, profile, host, discovered, added) VALUES ('BC-5300','mindray-bc-5300','10.0.0.9',1,0)").run().lastInsertRowid;

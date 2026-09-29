@@ -632,6 +632,8 @@ export const STRINGS = {
   // LIS_DISCOVERY_FIX_V1 (сервер) — причины, по которым приём узнал прибор (discover.js: адрес и имя, которым прибор назвал себя сам)
   "по адресу и имени": {"en":"by address and name","ru":"по адресу и имени","uz":"manzil va nomi bo‘yicha"},
   "без адреса, по имени": {"en":"without an address, by name","ru":"без адреса, по имени","uz":"manzilsiz, nomi bo‘yicha"},
+  // LIS_DISCOVERY_FIX_V1 (сервер) — «Привязать» обрезанное переросшее сообщение: отказ сервера (rpc/lis.js, 409)
+  "Сообщение пришло не целиком — привязать его нельзя. Попросите анализатор отправить эту пробу ещё раз.": {"en":"The message arrived incomplete — it cannot be attached. Ask the analyzer to send this sample again.","ru":"Сообщение пришло не целиком — привязать его нельзя. Попросите анализатор отправить эту пробу ещё раз.","uz":"Xabar to‘liq kelmadi — uni bog‘lab bo‘lmaydi. Analizatordan bu namunani qayta yuborishni so‘rang."},
   // LIS_ANALYZER_LIST_V1 (ревью 2026-09-29, I1) — находок нет, но приборы в клинике есть
   "Новых анализаторов пока нет.": {"en":"No new analyzers yet.","ru":"Новых анализаторов пока нет.","uz":"Hozircha yangi analizatorlar yo‘q."},
   // LIS_ANALYZER_LIST_V1 (ревью 2026-09-29, M2) — инструкция: находка ждёт в «Добавить прибор»; экраны — их подписями на en/uz

@@ -9,7 +9,7 @@ import { listProfiles } from '../../lis/profiles/index.js';
 import { pageInt } from './page-args.js';   // V3120_FINAL — числа и поиск из аргументов
 import { startLisListeners, listenerStatus } from '../../lis/index.js';
 import { ingestMessage } from '../../lis/ingest.js';
-import { resolveMessage } from '../../lis/inbox.js';
+import { resolveMessage, OVERSIZE_DETAIL_PREFIX } from '../../lis/inbox.js';
 import { parseMessage } from '../../lis/hl7.js';   // LIS_MINDRAY_CODES_V1 — тот же разбор, что у приёма
 import { LAB_SECTION_ROLES } from '../../db/schema-registry.js';
 import { hasAnyRole } from '../roles.js';   // ЭФФЕКТИВНЫЕ роли, как в lab-stats.js — не голая строка user.role
@@ -129,6 +129,16 @@ export function lisMessageAttach(db, args, user) {
 
   const msg = db.prepare('SELECT * FROM lab_device_messages WHERE id = ?').get(id);
   if (!msg) throw new LisError('Сообщение не найдено', 404);
+
+  // LIS_DISCOVERY_FIX_V1 (ревью 2026-09-29) — переросшее сообщение лежит в
+  // лотке обрезанным: только первые 64 КБ (mllp.js, index.js). Прогнать его
+  // через приём значит положить в бланк обрезанное число — доказано: PLT «25»
+  // вместо 250. Отказ, и строка лотка остаётся ждать: верное значение даст
+  // только повтор пробы с прибора. Экран у такой строки «Привязать» не
+  // показывает; этот отказ — для старой вкладки и прямого вызова.
+  if (msg.status === 'rejected' && String(msg.detail || '').startsWith(OVERSIZE_DETAIL_PREFIX)) {
+    throw new LisError('Сообщение пришло не целиком — привязать его нельзя. Попросите анализатор отправить эту пробу ещё раз.', 409);
+  }
 
   // Подменяется ТОЛЬКО номер пробы в OBR-3; всё остальное сообщение идёт как
   // пришло, поэтому применяются те же правила сопоставления и те же запреты.

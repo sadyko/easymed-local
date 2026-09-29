@@ -8,6 +8,16 @@
 // свидетельство о том, что пришло по проводу, и правка их из интерфейса
 // превратила бы журнал в пересказ.
 
+/**
+ * LIS_DISCOVERY_FIX_V1 (ревью 2026-09-29) — начало строки лотка у переросшего
+ * сообщения («сообщение больше 4 МБ — не принято; в лотке только его начало»,
+ * index.js). В лотке от такого сообщения только первые 64 КБ, и привязать его
+ * к заказу нельзя: в бланк легло бы обрезанное число (PLT «25» вместо 250).
+ * По этому началу привязка (rpc/lis.js) его и узнаёт — поэтому оно одно на оба
+ * места.
+ */
+export const OVERSIZE_DETAIL_PREFIX = 'сообщение больше ';
+
 export function recordMessage(db, { deviceId = null, peer = '', raw, sampleId = '', visitServiceId = null, status, detail = '' }) {
   return db.prepare(`INSERT INTO lab_device_messages
       (device_id, peer, raw, sample_id, visit_service_id, status, detail)

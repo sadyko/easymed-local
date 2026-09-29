@@ -13,6 +13,7 @@ import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { startLisListeners, stopLisListeners, listenerStatus } from './index.js';
 import { VT, FS, DEFAULT_MAX_BYTES } from './mllp.js';
+import { OVERSIZE_DETAIL_PREFIX } from './inbox.js';   // LIS_DISCOVERY_FIX_V1 — по нему привязка узнаёт обрезанное
 
 function freePort() {
   return new Promise((res, rej) => {
@@ -78,6 +79,7 @@ test('сообщение больше потолка: прибору AE, в ло
     assert.equal(row.peer, '127.0.0.1');
     assert.equal(row.sample_id, 'LAB-000123', 'по номеру пробы лаборант узнаёт, чья проба не дошла');
     assert.match(row.detail, /сообщение больше 4 МБ — не принято/);
+    assert.ok(row.detail.startsWith(OVERSIZE_DETAIL_PREFIX), 'по этому началу «Привязать» отказывает (rpc/lis.js)');
     assert.match(row.raw, /^MSH\|/);
     assert.ok(row.raw.length <= 64 * 1024, 'в лотке — начало, а не 4 МБ картинок: ' + row.raw.length);
     assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_devices').get().c, 0,

@@ -14,7 +14,7 @@ import { startMllpServer } from './mllp.js';
 import { ingestMessage } from './ingest.js';
 import { ensureDevice } from './discover.js';
 import { parseMessage } from './hl7.js';
-import { recordMessage } from './inbox.js';   // LIS_MINDRAY_CODES_V1 — переросшее сообщение ложится в лоток
+import { recordMessage, OVERSIZE_DETAIL_PREFIX } from './inbox.js';   // LIS_MINDRAY_CODES_V1 — переросшее сообщение ложится в лоток
 
 export const DEFAULT_PORT = 2575;
 
@@ -81,8 +81,10 @@ export async function startLisListeners(db, { log = console.log } = {}) {
           let sampleId = '';
           try { sampleId = parseMessage(head).sampleId || ''; } catch { /* начало не разобралось — без номера */ }
           const size = limit >= 1024 * 1024 ? (limit / (1024 * 1024)) + ' МБ' : Math.round(limit / 1024) + ' КБ';
+          // LIS_DISCOVERY_FIX_V1 — начало строки общее с привязкой (rpc/lis.js):
+          // по нему она отказывается привязывать обрезанное. Текст прежний.
           recordMessage(db, { deviceId: null, peer: ip, raw: head, sampleId, status: 'rejected',
-            detail: 'сообщение больше ' + size + ' — не принято; в лотке только его начало' });
+            detail: OVERSIZE_DETAIL_PREFIX + size + ' — не принято; в лотке только его начало' });
         },
       });
       running.push(srv);
