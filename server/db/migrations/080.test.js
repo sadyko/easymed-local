@@ -11,6 +11,12 @@ import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — �
 const MIGRATIONS_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 function freshDb() { const db = openDb(':memory:'); migrate(db); return db; }
+// MRN_BEYOND_99999_V1 (review 1) — the year the TRIGGER uses: SQLite's
+// strftime('%Y','now'), which is UTC. new Date().getFullYear() is LOCAL time
+// and disagrees with it for five hours every New Year in Tashkent (UTC+5), so
+// the tests would fail from 00:00 to 04:59 on 1 January.
+const yyOf = (db) => db.prepare("SELECT substr(strftime('%Y','now'), 3, 2) y").get().y;
+const prevOf = (db) => db.prepare("SELECT substr(CAST(strftime('%Y','now') AS INTEGER) - 1, 3, 2) y").get().y;
 
 test('branches gains a letter column and the seeded Main Branch is A', () => {
   const db = freshDb();
@@ -202,16 +208,16 @@ test('an MRN supplied explicitly is never overwritten (the Excel importer relies
 
 test('numbering continues past legacy P- rows instead of restarting at 1', () => {
   const db = freshDb();
-  const yy = String(new Date().getFullYear()).slice(2);
+  const yy = yyOf(db);
   db.prepare('INSERT INTO patients (full_name, mrn) VALUES (?, ?)').run('Старый', `P-${yy}-00042`);
   db.prepare("INSERT INTO patients (full_name) VALUES ('Новый')").run();
   const p = db.prepare("SELECT mrn FROM patients WHERE full_name = 'Новый'").get();
   assert.equal(p.mrn, `A-${yy}-00043`, 'must not collide with the legacy row');
 });
 
-test('a two-letter branch still numbers correctly (the suffix is the last 5 chars, not a fixed offset)', () => {
+test('a two-letter branch still numbers correctly (positions come from the hyphens, not fixed offsets)', () => {
   const db = freshDb();
-  const yy = String(new Date().getFullYear()).slice(2);
+  const yy = yyOf(db);
   db.prepare("UPDATE branch_identity SET letter = 'AB' WHERE id = 1").run();
   db.prepare('INSERT INTO patients (full_name, mrn) VALUES (?, ?)').run('Первый', `AB-${yy}-00009`);
   db.prepare("INSERT INTO patients (full_name) VALUES ('Второй')").run();
@@ -222,7 +228,9 @@ test('a two-letter branch still numbers correctly (the suffix is the last 5 char
 // ---------------------------------------------------------------------------
 // The year predicate, proven rather than assumed.
 //
-// The trigger matches the year with substr(mrn, -9, 4) = '-YY-'. Getting this
+// Since migration 232 the trigger matches the year right after the FIRST hyphen:
+// substr(mrn, instr(mrn, '-'), 4) = '-YY-' (080 used a window from the end,
+// substr(mrn, -9, 4), which lost every six-digit number). Getting this
 // wrong is silent and expensive in exactly two directions: too narrow and
 // numbering restarts at 1 while last year's numbers are still live (UNIQUE
 // violations, or worse, two patients sharing a printed card number); too wide
@@ -231,7 +239,7 @@ test('a two-letter branch still numbers correctly (the suffix is the last 5 char
 
 test('the year window lands on -YY- for every letter length, so no shape is missed', () => {
   const db = freshDb();
-  const yy = String(new Date().getFullYear()).slice(2);
+  const yy = yyOf(db);
   // One row per letter shape a clinic can actually hold: legacy, this branch,
   // a two-letter branch past 26, a three-letter one past 702.
   for (const [name, mrn] of [
@@ -242,7 +250,7 @@ test('the year window lands on -YY- for every letter length, so no shape is miss
   ]) db.prepare('INSERT INTO patients (full_name, mrn) VALUES (?, ?)').run(name, mrn);
 
   const matched = db.prepare(
-    "SELECT mrn FROM patients WHERE substr(mrn, -9, 4) = '-' || ? || '-' ORDER BY mrn"
+    "SELECT mrn FROM patients WHERE substr(mrn, instr(mrn, '-'), 4) = '-' || ? || '-' ORDER BY mrn"
   ).all(yy).map((r) => r.mrn);
   assert.deepEqual(matched, [`A-${yy}-00022`, `AB-${yy}-00033`, `ABC-${yy}-00044`, `P-${yy}-00011`],
     'all four shapes must be visible to the predicate, not just the one-letter one');
@@ -255,8 +263,8 @@ test('the year window lands on -YY- for every letter length, so no shape is miss
 
 test('a new year starts at 1 again and does not collide with last year', () => {
   const db = freshDb();
-  const yy = String(new Date().getFullYear()).slice(2);
-  const prev = String(new Date().getFullYear() - 1).slice(2);
+  const yy = yyOf(db);
+  const prev = prevOf(db);
   // Last year ran to 99 000-odd. This year must NOT continue from there.
   db.prepare('INSERT INTO patients (full_name, mrn) VALUES (?, ?)').run('Прошлогодний', `A-${prev}-99000`);
   db.prepare("INSERT INTO patients (full_name) VALUES ('Первый в году')").run();
@@ -266,7 +274,7 @@ test('a new year starts at 1 again and does not collide with last year', () => {
 
 test('the trigger fires only when mrn IS NULL — an UPDATE never re-triggers it', () => {
   const db = freshDb();
-  const yy = String(new Date().getFullYear()).slice(2);
+  const yy = yyOf(db);
   db.prepare("INSERT INTO patients (full_name) VALUES ('Первичный')").run();
   const before = db.prepare("SELECT id, mrn FROM patients WHERE full_name='Первичный'").get();
   assert.equal(before.mrn, `A-${yy}-00001`);
@@ -301,7 +309,7 @@ test('an existing clinic with 70 000 legacy P- MRNs upgrades without error and w
     assert.equal(db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name='branch_identity'").get().n, 0,
       'sanity: this database must be at 079, i.e. before branch identity exists');
 
-    const yy = String(new Date().getFullYear()).slice(2);
+    const yy = yyOf(db);
     const ins = db.prepare('INSERT INTO patients (full_name, mrn) VALUES (?, ?)');
     db.transaction(() => {
       for (let i = 1; i <= 70000; i++) ins.run('Пациент ' + i, `P-${yy}-${String(i).padStart(5, '0')}`);
