@@ -17,7 +17,7 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // которого его можно стереть.
 import { assertOwnBuilding, PERFORMED_LINE_STATUSES } from './billing.js';
 import { markRefundRelease, refundedLineIds, notRefundReleasedSql } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом; CASHIER_PAID_SWAP_V1 — «возвращено» у строк; REFERRAL_BILL_V1 — «Ждут счёта»
-import { lineUnitPrice, consultationFor } from '../domain/pricing.js';   // REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта
+import { lineUnitPrice, consultationFor, doctorPriceLookup } from '../domain/pricing.js';   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта
 // V3120_FIX (MAJOR) — снятая при отмене товарная строка возвращает товар туда,
 // откуда его взяли (одно правило на сервер, rpc/inventory.js).
 import { restoreSources } from './inventory.js';
@@ -938,6 +938,17 @@ export function cashierUnbilled(db, args, user) {
   const services = new Map();
   const products = new Map();
   const once = (cache, id, stmt) => { if (!cache.has(id)) cache.set(id, stmt.get(id) || null); return cache.get(id); };
+  // REFBILL_REVIEW_V1 (ревью M2) — своя цена врача не запрос на строку: цены
+  // всех врачей выборки — одним запросом (doctorPriceLookup, то же правило,
+  // что doctorPriceFor), консультация — один раз на вид приёма и врача.
+  // Прежде json_each по карточке ставок на КАЖДУЮ строку держал сервер секунды.
+  const ownPrice = doctorPriceLookup(db, lines.map((l) => l.doctor_id));
+  const consults = new Map();
+  const consult = (typeId, doctorId) => {
+    const key = typeId + ':' + (doctorId ?? '');
+    if (!consults.has(key)) consults.set(key, consultationFor(db, typeId, doctorId));
+    return consults.get(key);
+  };
 
   // Строки идут от самой свежей: первая строка визита задаёт его место в
   // списке и «добавил» (автор самой свежей строки).
@@ -946,9 +957,9 @@ export function cashierUnbilled(db, args, user) {
     let svc = null, prod = null, name = null;
     if (l.service_id != null) { svc = once(services, l.service_id, getService); name = svc && svc.name; }
     else if (l.clinic_item_id != null) { prod = once(products, l.clinic_item_id, getProduct); name = prod && prod.name; }
-    else if (l.consultation_type_id != null) { const c = consultationFor(db, l.consultation_type_id, l.doctor_id); name = c && c.name; }
+    else if (l.consultation_type_id != null) { const c = consult(l.consultation_type_id, l.doctor_id); name = c && c.name; }
     const qty = Number(l.quantity);
-    const unit = Number(lineUnitPrice(db, l, { service: svc, product: prod })) || 0;
+    const unit = Number(lineUnitPrice(db, l, { service: svc, product: prod, ownPrice, consult })) || 0;   // REFBILL_REVIEW_V1
     const sum = Number.isFinite(qty) && qty > 0 ? round2(unit * qty) : 0;
     let g = byVisit.get(l.visit_id);
     if (!g) {

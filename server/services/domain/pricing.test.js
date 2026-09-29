@@ -164,3 +164,51 @@ test('a corrupt rates blob degrades to the catalog price instead of throwing', (
   db.prepare("UPDATE users SET service_rates = ? WHERE id = 3").run(JSON.stringify([{ service_id: svc, price: -5 }]));
   assert.equal(doctorPriceFor(db, 3, svc), null, 'a negative stored price is ignored, never billed');
 });
+
+// REFBILL_REVIEW_V1 (ревью M2) — «Ждут счёта» кассы берёт свои цены врачей
+// одним запросом (doctorPriceLookup) вместо doctorPriceFor на каждую строку.
+// Ответ обязан быть ТЕМ ЖЕ на любой карточке ставок — с дублями, строковыми,
+// пустыми, отрицательными ценами, испорченным JSON и объектом вместо списка.
+test('doctorPriceLookup отвечает ровно как doctorPriceFor — на любых карточках ставок', async () => {
+  const { lineUnitPrice, doctorPriceLookup, consultationFor } = await import('./pricing.js');
+  const db = openDb(':memory:'); migrate(db);
+  const s = [];
+  for (let i = 1; i <= 8; i++) s.push(Number(db.prepare('INSERT INTO services (name, price) VALUES (?, ?)').run('S' + i, 1000 * i).lastInsertRowid));
+  const cards = {
+    10: JSON.stringify([{ service_id: s[0], pct: 10 }, { service_id: s[0], price: 80000 }]),
+    11: JSON.stringify([{ service_id: s[0], price: '80000.5' }, { service_id: s[1], price: '' }, { service_id: s[2], price: 'abc' },
+      { service_id: s[3], price: -5 }, { service_id: s[4], price: null }, { service_id: s[5], price: 0 },
+      { service_id: s[6], price: ' 70000 ' }, { service_id: s[7], price: '1e5' }]),
+    12: 'not json',
+    13: '',
+    14: JSON.stringify({ a: { service_id: s[0], price: 100 } }),
+    15: JSON.stringify([{ service_id: String(s[0]), price: 90000 }, { service_id: s[1] + 0.4, price: 5 }]),
+    16: JSON.stringify([{ service_id: s[0], price: 50000 }, { service_id: s[0], price: 60000 }]),
+  };
+  for (const [id, rates] of Object.entries(cards)) {
+    db.prepare("INSERT INTO users (id, username, password_hash, role, service_rates) VALUES (?, ?, 'x', 'doctor', ?)").run(Number(id), 'd' + id, rates);
+  }
+  const doctors = [10, 11, 12, 13, 14, 15, 16, 999, null, 0, -1];
+  const lookup = doctorPriceLookup(db, [...doctors, 10, '11', undefined]);
+  for (const d of doctors) {
+    for (const sid of [...s, 999, null]) {
+      assert.equal(lookup(d, sid), doctorPriceFor(db, d, sid), `врач ${d}, услуга ${sid}`);
+    }
+  }
+  assert.equal(lookup(10, s[0]), 80000, 'дубль — берётся запись С ценой');
+  assert.equal(lookup(16, s[0]), 50000, 'две записи с ценой — первая, как у doctorPriceFor');
+  assert.equal(lookup(11, s[5]), 0, '0 — настоящая цена');
+  // Правило цены строки от готовых ответов не меняется.
+  db.prepare("INSERT INTO consultation_types (id, name, price) VALUES (4, 'Первичный', 120000)").run();
+  db.prepare('INSERT INTO doctor_consultation_prices (doctor_id, consultation_type_id, price) VALUES (11, 4, 95000)').run();
+  const svc = db.prepare('SELECT * FROM services WHERE id = ?').get(s[0]);
+  const consult = (t, d) => consultationFor(db, t, d);
+  for (const row of [
+    { service_id: s[0], doctor_id: 10, price_tier: null }, { service_id: s[0], doctor_id: 16, price_tier: null },
+    { service_id: s[0], doctor_id: 12, price_tier: null }, { service_id: s[0], doctor_id: null, price_tier: null },
+    { service_id: null, consultation_type_id: 4, doctor_id: 11, unit_price: 1 }, { service_id: null, consultation_type_id: 4, doctor_id: 10, unit_price: 1 },
+    { service_id: null, clinic_item_id: 5, unit_price: 700 }, { service_id: null, unit_price: 333 },
+  ]) {
+    assert.equal(lineUnitPrice(db, row, { service: row.service_id ? svc : null, ownPrice: lookup, consult }), lineUnitPrice(db, row, { service: row.service_id ? svc : null }), JSON.stringify(row));
+  }
+});

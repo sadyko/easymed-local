@@ -15,19 +15,12 @@ import { tierUnitPrice } from './visit-tier.js';   // PAY_BASIS_PERFORMED_V1 —
 // Rule: no handler reads users.service_rates for money itself. It calls in here,
 // so there is exactly one answer to "what does this line cost".
 
-// The doctor's own price for a service, or null when they have none.
-// `doctorId` may be null (an unassigned line) — that simply has no override.
-export function doctorPriceFor(db, doctorId, serviceId) {
-  if (!Number.isInteger(doctorId) || doctorId <= 0) return null;
-  if (!Number.isInteger(serviceId) || serviceId <= 0) return null;
-
-  const row = db.prepare(`
-    SELECT CAST(json_extract(j.value, '$.price') AS REAL) AS price
-      FROM users u, json_each(u.service_rates) j
-     WHERE u.id = ?
-       AND u.service_rates IS NOT NULL AND u.service_rates != ''
+// Которая запись карточки ставок (users u, json_each(u.service_rates) j) несёт
+// СВОЮ ЦЕНУ врача. Одно условие на doctorPriceFor и doctorPriceLookup
+// (REFBILL_REVIEW_V1): вторая копия правила разошлась бы с первой.
+const OWN_PRICE_ENTRY = `
+       u.service_rates IS NOT NULL AND u.service_rates != ''
        AND json_valid(u.service_rates)
-       AND CAST(json_extract(j.value, '$.service_id') AS INTEGER) = ?
        -- FINAL_MONEY_FIX_V1 (M4) — при дублях услуги в карточке берётся запись
        -- С ЦЕНОЙ (ставка без цены и кривая отрицательная цена пропускаются) —
        -- то же правило, что у миграции 175. Прежде бралась первая запись, и
@@ -41,22 +34,77 @@ export function doctorPriceFor(db, doctorId, serviceId) {
        AND (json_type(j.value, '$.price') IN ('integer', 'real')
             OR (json_type(j.value, '$.price') = 'text'
                 AND trim(json_extract(j.value, '$.price')) GLOB '[0-9]*'
-                AND trim(json_extract(j.value, '$.price')) NOT GLOB '*[^0-9.]*'))
-     LIMIT 1
-  `).get(doctorId, serviceId);
+                AND trim(json_extract(j.value, '$.price')) NOT GLOB '*[^0-9.]*'))`;
 
+// Найденная цена → своя цена или null (кривая строка — каталог).
+function ownPriceOf(price) {
   // json_extract returns NULL both for a missing key and for a JSON null, which
   // is exactly the "no own price" case we want to fall through on.
-  if (!row || row.price === null || row.price === undefined) return null;
-  if (!Number.isFinite(row.price) || row.price < 0) return null;   // corrupt row -> catalog
-  return row.price;
+  if (price === null || price === undefined) return null;
+  if (!Number.isFinite(price) || price < 0) return null;   // corrupt row -> catalog
+  return price;
+}
+
+// The doctor's own price for a service, or null when they have none.
+// `doctorId` may be null (an unassigned line) — that simply has no override.
+export function doctorPriceFor(db, doctorId, serviceId) {
+  if (!Number.isInteger(doctorId) || doctorId <= 0) return null;
+  if (!Number.isInteger(serviceId) || serviceId <= 0) return null;
+
+  const row = db.prepare(`
+    SELECT CAST(json_extract(j.value, '$.price') AS REAL) AS price
+      FROM users u, json_each(u.service_rates) j
+     WHERE u.id = ?
+       AND CAST(json_extract(j.value, '$.service_id') AS INTEGER) = ?
+       AND ${OWN_PRICE_ENTRY}
+     LIMIT 1
+  `).get(doctorId, serviceId);
+  return row ? ownPriceOf(row.price) : null;
+}
+
+// REFBILL_REVIEW_V1 (ревью M2) — СВОИ ЦЕНЫ ВРАЧЕЙ ВЫБОРКИ ОДНИМ ЗАПРОСОМ.
+//
+// «Ждут счёта» кассы (cashier_unbilled) спрашивал doctorPriceFor на КАЖДУЮ
+// строку — json_each по всей карточке ставок врача, запрос за запросом: на
+// объёме клиники 0,6–2,7 с на перерисовку, и всё это время стоит сервер
+// (better-sqlite3 синхронный). Здесь карточки всех врачей выборки читаются
+// одним запросом с тем же условием записи (OWN_PRICE_ENTRY) и тем же порядком:
+// у doctorPriceFor LIMIT 1 без ORDER BY отдаёт первую подходящую запись
+// карточки в порядке документа, здесь — первая встреченная на пару «врач,
+// услуга». Возвращает функцию (doctorId, serviceId) → своя цена или null —
+// то же, что ответил бы doctorPriceFor; её принимает lineUnitPrice (ownPrice).
+export function doctorPriceLookup(db, doctorIds) {
+  const ids = [...new Set((doctorIds || []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+  const prices = new Map();
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const rows = db.prepare(`
+      SELECT u.id AS doctor_id,
+             CAST(json_extract(j.value, '$.service_id') AS INTEGER) AS service_id,
+             CAST(json_extract(j.value, '$.price') AS REAL) AS price
+        FROM users u, json_each(u.service_rates) j
+       WHERE u.id IN (${chunk.map(() => '?').join(', ')})
+         AND ${OWN_PRICE_ENTRY}
+    `).all(...chunk);
+    for (const r of rows) {
+      const key = r.doctor_id + ':' + r.service_id;
+      if (!prices.has(key)) prices.set(key, r.price);
+    }
+  }
+  return (doctorId, serviceId) => {
+    if (!Number.isInteger(doctorId) || doctorId <= 0) return null;
+    if (!Number.isInteger(serviceId) || serviceId <= 0) return null;
+    const key = doctorId + ':' + serviceId;
+    return prices.has(key) ? ownPriceOf(prices.get(key)) : null;
+  };
 }
 
 // The unit price to bill for one line: the performing doctor's own price when
 // they have one, otherwise the catalog price. Kept as a named function so the
 // precedence rule is stated once and can be cited from the billing handlers.
-export function unitPriceFor(db, { doctorId, serviceId, catalogPrice }) {
-  const own = doctorPriceFor(db, doctorId, serviceId);
+// REFBILL_REVIEW_V1 — ownPrice: готовый ответ doctorPriceLookup вместо запроса.
+export function unitPriceFor(db, { doctorId, serviceId, catalogPrice }, ownPrice = null) {
+  const own = ownPrice ? ownPrice(doctorId, serviceId) : doctorPriceFor(db, doctorId, serviceId);
   return own === null ? catalogPrice : own;
 }
 
@@ -77,17 +125,21 @@ export function unitPriceFor(db, { doctorId, serviceId, catalogPrice }) {
 //   • an ad-hoc line (neither) — the price stored on the line.
 // `service` / `product` are the rows already looked up by the caller (the
 // till throws on a missing one; the pay report reads NULL as "catalog 0").
-export function lineUnitPrice(db, row, { service = null, product = null, tiered = true } = {}) {
+// REFBILL_REVIEW_V1 (ревью M2) — для выборки из тысяч строк вызывающий может
+// дать готовые ответы: `ownPrice` (doctorPriceLookup) вместо запроса своей цены
+// врача на строку и `consult(typeId, doctorId)` (запомненный consultationFor).
+// Правило цены от этого не меняется — меняется только, откуда взят ответ.
+export function lineUnitPrice(db, row, { service = null, product = null, tiered = true, ownPrice = null, consult = null } = {}) {
   if (row.service_id != null) {
     const catalogPrice = service ? service.price : 0;
-    const unit = unitPriceFor(db, { doctorId: row.doctor_id, serviceId: row.service_id, catalogPrice });
+    const unit = unitPriceFor(db, { doctorId: row.doctor_id, serviceId: row.service_id, catalogPrice }, ownPrice);
     return tiered && service ? tierUnitPrice(service, row.price_tier, unit) : unit;
   }
   if (row.clinic_item_id != null) return productLineUnitPrice(row, product);
   // BILLING_AUDIT_FIX_V1 (B7) — консультация (service_id NULL +
   // consultation_type_id) — цена врача по виду приёма, а не присланная браузером.
   if (row.consultation_type_id != null) {
-    const c = consultationFor(db, row.consultation_type_id, row.doctor_id);
+    const c = consult ? consult(row.consultation_type_id, row.doctor_id) : consultationFor(db, row.consultation_type_id, row.doctor_id);
     if (c) return c.price;
   }
   return row.unit_price;
