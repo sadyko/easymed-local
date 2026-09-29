@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { ingestMessage, parseSampleId } from './ingest.js';
+import { ensureDevice } from './discover.js';   // LIS_DISCOVERY_FIX_V1 — провод целиком, как index.js
+import { parseMessage } from './hl7.js';
 
 const MSG = (sampleId, obx) => [
   'MSH|^~\\&|BC-5300|Mindray|||20260910143943||ORU^R01|42|P|2.3.1',
@@ -455,5 +457,32 @@ test('ревью M4: { touch: false } — приём как обычно, но �
   assert.equal(message(db).status, 'applied', 'всё остальное — тот же приём');
   assert.equal(results(db).length, 2);
   assert.equal(lastSeen(db), null);
+  db.close();
+});
+
+// ── LIS_DISCOVERY_FIX_V1 (ревью 2026-09-29, S5) — провод целиком, как index.js:
+// ensureDevice, потом ingestMessage. Человек привязал панель к находке и
+// поправил её модель. Раньше следующая проба искала строку по УГАДАННОЙ модели,
+// заводила дубль, и панель отвечала «кормится анализатором другой модели» —
+// все пробы уходили в лоток.
+test('S5: панель у находки с исправленной моделью — следующая проба ложится в бланк, дубля нет', () => {
+  const db = fresh();
+  // Прибор сида стоит на своём адресе: иначе он, единственный без адреса,
+  // забрал бы первую пробу сам (правило владельца), и находки бы не было.
+  db.prepare("UPDATE lab_devices SET host = '10.0.0.5' WHERE id = 1").run();
+  const first = ensureDevice(db, { sendingApp: 'BC-5300', peer: '10.0.0.60', port: 2575 });
+  assert.equal(first.created, true, 'находка');
+  db.prepare('UPDATE lab_panels SET device_id = ? WHERE id = 5').run(first.device.id);
+  // «Изменить» с выбранной моделью: лаборант знает свой аппарат лучше догадки.
+  db.prepare("UPDATE lab_devices SET profile = 'mindray-bc-2800', added = 1, model_confirmed = 1 WHERE id = ?").run(first.device.id);
+
+  const raw = MSG('LAB-000123', [OBX(1, 'WBC', '6.1'), OBX(2, 'HGB', '142', { unit: 'g/L' })]);
+  const next = ensureDevice(db, { sendingApp: parseMessage(raw).sendingApp, peer: '10.0.0.60', port: 2575 });
+  assert.equal(next.created, false, 'раньше здесь заводилась «BC-5300 (10.0.0.60)»');
+  assert.equal(next.device.id, first.device.id);
+  assert.equal(ingestMessage(db, raw, '10.0.0.60', next.device.id), 'AA');
+  assert.equal(message(db).status, 'applied', 'раньше — unmatched: «кормится анализатором другой модели»');
+  assert.equal(results(db).length, 2);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_devices').get().c, 2, 'прибор сида и находка — дубля нет');
   db.close();
 });

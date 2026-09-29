@@ -9,12 +9,24 @@
 // Чтобы его результаты куда-то легли, человек всё равно обязан привязать его к
 // панели и подтвердить поля (D3/D4). Самоопределение экономит настройку, а не
 // отменяет подтверждение.
+//
+// LIS_DISCOVERY_FIX_V1 (ревью 2026-09-29) — прибор узнаётся по адресу и по
+// тому, КАК ОН СЕБЯ НАЗВАЛ (MSH-3, колонка sending_app, мигр. 229), а не по
+// модели. Модель и название правит человек («Добавить», «Изменить»), и строка,
+// которую искали по угаданной модели, после правки терялась: следующая проба
+// заводила дубль, а панели исправленной строки уходили в лоток (S5). Имя,
+// которым прибор назвался сам, человек не правит — на нём различение и держится.
 import { listProfiles } from './profiles/index.js';
 
 // Потолок на находки: порт неаутентифицирован, и без предела кто угодно в сети
 // клиники мог бы наплодить строк. Двадцать приборов — это больше, чем есть у
 // любой клиники, которую мы видели.
 const MAX_DISCOVERED = 20;
+
+// Порт по умолчанию — тот же, что у слушателей (index.js, DEFAULT_PORT).
+// Отсюда не импортируется: index.js сам импортирует этот файл, и цикл импортов
+// ради одного числа не нужен.
+const DEFAULT_PORT = 2575;
 
 /** Схлопывает «BC-5300», «bc 5300», «BC_5300» к одному виду для сравнения. */
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -39,42 +51,87 @@ export function guessProfile(sendingApp) {
   return contains[0] || null;
 }
 
+/** Как прибор назвал себя — для сравнения: без пробелов вокруг и без учёта регистра. */
+const appKey = (s) => String(s == null ? '' : s).trim().toLowerCase();
+/** Строка уже знает, как называет себя её прибор. */
+const hasApp = (d) => appKey(d.sending_app) !== '';
+
 /**
- * Находит прибор по адресу или заводит новый.
- *
- * @returns {{device: object|null, created: boolean, reason: string}}
- *   device = null означает «не завели» — потолок находок исчерпан. Сообщение
- *   при этом всё равно сохранится в лотке (инвариант 2), просто без прибора.
+ * Дописывает строке адрес (если он передан) и имя отправителя и возвращает её
+ * свежей. Имя пишется, только если строка его ещё не знает: запомненное первым
+ * не перезаписывается — так же, как в бэкфилле мигр. 229.
  */
-export function ensureDevice(db, { sendingApp = '', peer = '', port = 2575, allowCreate = true } = {}) {
+function claim(db, dev, { host = '', app = '' }) {
+  if (host) db.prepare('UPDATE lab_devices SET host = ? WHERE id = ?').run(host, dev.id);
+  if (app && !hasApp(dev)) db.prepare('UPDATE lab_devices SET sending_app = ? WHERE id = ?').run(app, dev.id);
+  return db.prepare('SELECT * FROM lab_devices WHERE id = ?').get(dev.id);
+}
+
+/**
+ * Находит прибор по адресу и имени, которым он назвался, или заводит новый.
+ *
+ * @param {object} o
+ * @param {string} [o.sendingApp]  MSH-3, как прибор назвал себя ('' — не назвался)
+ * @param {string} [o.peer]        адрес отправителя
+ * @param {number} [o.port]        порт, на который пришло сообщение
+ * @param {boolean} [o.allowCreate] false — сообщение не разобралось (мусор)
+ * @returns {{device: object|null, created: boolean, reason: string}}
+ *   device = null означает «не завели» — мусор на порту или потолок находок
+ *   исчерпан. Сообщение при этом всё равно сохранится в лотке (инвариант 2),
+ *   просто без прибора.
+ */
+export function ensureDevice(db, { sendingApp = '', peer = '', port = DEFAULT_PORT, allowCreate = true } = {}) {
   const ip = String(peer || '').replace(/^::ffff:/, '');
+  const app = String(sendingApp == null ? '' : sendingApp).trim();
+  const key = appKey(app);
+  const listenPort = Number(port) || DEFAULT_PORT;
 
-  const guessed = guessProfile(sendingApp);
+  const guessed = guessProfile(app);
 
-  // 1. Прибор с этим адресом уже заведён — при условии, что он ТОЙ ЖЕ модели.
+  // 1. Тот же адрес.
   //
   //    Совпадения адреса мало. Два прибора бывают видны системе с одного адреса
-  //    (оба подключены к одному лабораторному ПК, или сеть за NAT), и если
-  //    отправитель назвался другой моделью, приписать его чужой строке значит
-  //    накормить панель данными не того аппарата. Модель мы узнать можем —
-  //    значит обязаны проверить.
+  //    (два переадресатора COM на одном лабораторном ПК, сеть за NAT), и
+  //    приписать второй к строке первого значит накормить панель данными не
+  //    того аппарата — или спрятать второй навсегда: AutoLumo (модель не
+  //    угадать) ложился в строку BC-2800 «по адресу» и не появлялся никогда
+  //    (S4). Поэтому по адресу ищется строка, знающая ИМЯ отправителя.
   if (ip) {
     const byHost = db.prepare('SELECT * FROM lab_devices WHERE host = ? ORDER BY id').all(ip);
-    if (byHost.length) {
+    if (byHost.length && key) {
+      // (а) Строка этого адреса, которая уже знает это имя, — она, какими бы
+      //     ни были её модель и название сейчас. Их правит человек, и строка
+      //     после правки обязана остаться своей (S5).
+      const named = byHost.find((d) => appKey(d.sending_app) === key);
+      if (named) return { device: named, created: false, reason: 'по адресу и имени' };
+
+      // (б) Строки этого адреса, ещё не знающие имени, — заведённые до
+      //     мигр. 229 или человеком и ещё не принимавшие проб. Строка берёт
+      //     отправителя и запоминает его имя: дальше она его и только его.
+      const unnamed = byHost.filter((d) => !hasApp(d));
       // Прибор, заведённый ЧЕЛОВЕКОМ на этот адрес, — истина в последней
       // инстанции, и модель мы у него не оспариваем. Человек сказал «по адресу
       // 10.0.0.9 стоит вот этот прибор»; если он ошибся с моделью, это его
       // ошибка и его правка, а не повод завести вторую строку у него за спиной.
-      const byHuman = byHost.find((d) => !d.discovered);
-      if (byHuman) return { device: byHuman, created: false, reason: 'заведён человеком на этот адрес' };
+      const byHuman = unnamed.find((d) => !d.discovered);
+      if (byHuman) return { device: claim(db, byHuman, { app }), created: false, reason: 'заведён человеком на этот адрес' };
+      // Найденная строка без имени (старая, до мигр. 229) — по прежнему правилу
+      // модели: её модель — наша догадка, и склеивать по ней два разных
+      // аппарата нельзя. Модель не опознана — верим адресу, иначе незнакомый
+      // прибор заводил бы новую строку на каждое сообщение.
+      const oldFound = guessed
+        ? unnamed.find((d) => d.discovered && d.profile === guessed.key)
+        : unnamed.find((d) => d.discovered);
+      if (oldFound) return { device: claim(db, oldFound, { app }), created: false, reason: guessed ? 'по адресу и модели' : 'по адресу' };
 
-      // Среди НАЙДЕННЫХ строк модель проверяем: их имена и профили — наша
-      // догадка, и склеивать по ней два разных аппарата нельзя.
-      const sameModel = guessed ? byHost.find((d) => d.profile === guessed.key) : null;
-      if (sameModel) return { device: sameModel, created: false, reason: 'по адресу и модели' };
-      // Модель не опознана — верим адресу. Иначе незнакомый прибор заводил бы
-      // новую строку на каждое сообщение.
-      if (!guessed) return { device: byHost[0], created: false, reason: 'по адресу' };
+      // (в) Строки этого адреса знают другие имена (или это старая находка
+      //     другой модели) — значит, за адресом другой прибор. Дальше по
+      //     шагам, и в конце — новая находка.
+    } else if (byHost.length) {
+      // Прибор не назвался (MSH-3 пуст) — различать нечем, кроме адреса.
+      // Строка, которая тоже не знает имени, вернее: её заводил безымянный.
+      const dev = byHost.find((d) => !hasApp(d)) || byHost[0];
+      return { device: dev, created: false, reason: 'по адресу' };
     }
   }
 
@@ -94,29 +151,62 @@ export function ensureDevice(db, { sendingApp = '', peer = '', port = 2575, allo
   //       удаляется одним щелчком, а результаты продолжают ложиться (панель
   //       принимает от прибора той же модели),
   //    вторая заметна и обратима, а первая тиха и вводит в заблуждение.
-  if (sendingApp) {
-    const byName = db.prepare("SELECT * FROM lab_devices WHERE discovered = 1 AND name = ? AND (host IS NULL OR host = '') LIMIT 1").get(sendingApp);
-    if (byName) {
-      if (ip) db.prepare('UPDATE lab_devices SET host = ? WHERE id = ?').run(ip, byName.id);
-      return { device: db.prepare('SELECT * FROM lab_devices WHERE id = ?').get(byName.id), created: false, reason: 'по имени' };
-    }
+  //
+  //    LIS_DISCOVERY_FIX_V1 — «представился так же» значит то же имя в
+  //    sending_app (без учёта регистра): название строки мог поменять человек.
+  //    У строки, ещё не знающей имени (до мигр. 229), — по названию, как раньше.
+  if (key) {
+    const hostless = db.prepare("SELECT * FROM lab_devices WHERE discovered = 1 AND (host IS NULL OR host = '') ORDER BY id").all();
+    const byName = hostless.find((d) => appKey(d.sending_app) === key)
+      || hostless.find((d) => !hasApp(d) && d.name === app);
+    if (byName) return { device: claim(db, byName, { host: ip, app }), created: false, reason: 'по имени' };
   }
-
-  // 3. Единственный настроенный прибор без адреса — он и есть отправитель.
-  //    Клиника с одним анализатором не обязана заполнять поле адреса.
-  const hostless = db.prepare("SELECT * FROM lab_devices WHERE enabled = 1 AND (host IS NULL OR host = '')").all();
-  if (hostless.length === 1) return { device: hostless[0], created: false, reason: 'единственный без адреса' };
 
   // Мусор на порту не должен заводить приборов: сообщение, которое не удалось
   // даже разобрать, ничего о себе не сообщило, и строка по нему была бы
   // выдумкой. Оно всё равно сохранится в лотке (инвариант 2).
+  //
+  // LIS_DISCOVERY_FIX_V1 — и строку без адреса (шаг 3) мусор не забирает: она
+  // запоминает адрес первого, кого приняла, и отдать её тому, кто шлёт на
+  // порт неразбираемое, значило бы закрыть её для настоящего анализатора.
   if (!allowCreate) return { device: null, created: false, reason: 'нераспознанное сообщение — прибор не заводим' };
+
+  // 3. Прибор, заведённый ЧЕЛОВЕКОМ без адреса (решение владельца 2026-09-29).
+  //    Клиника с одним анализатором не обязана заполнять поле адреса — но
+  //    прежнее «единственный без адреса — он и есть отправитель» не смотрело ни
+  //    на порт, ни на вид подключения: строка «Кабель COM», у которой адреса
+  //    нет никогда, забирала сетевой BS-240 (S1), строка на порту 5100 —
+  //    чужой прибор на 2575 (S2), и настоящий прибор так и не появлялся в
+  //    «Найдены в сети». Теперь такая строка принимает пробу, только если всё
+  //    сразу:
+  //     — она сетевая (mllp) и включена;
+  //     — сообщение пришло на ЕЁ порт (пустой порт — 2575);
+  //     — модель отправителя ей не противоречит: противоречие — это угаданная
+  //       модель есть, у строки модель есть, и они разные;
+  //     — она ещё не привязана к другому прибору (не знает другого имени).
+  //    С первой пробы строка запоминает имя И адрес отправителя и дальше
+  //    принимает только его: два одинаковых прибора называют себя одинаково и
+  //    различаются только адресом. Любой другой прибор — новая находка.
+  //    Если таких строк несколько: та, что уже знает это имя (бэкфилл мигр. 229
+  //    пишет имя без адреса); иначе единственная свободная; иначе находка —
+  //    угадывать между двумя свободными строками нельзя.
+  const hostless = db.prepare(`SELECT * FROM lab_devices
+                                WHERE discovered = 0 AND enabled = 1 AND transport = 'mllp'
+                                  AND (host IS NULL OR host = '')
+                                  AND COALESCE(port, ?) = ?
+                                ORDER BY id`).all(DEFAULT_PORT, listenPort)
+    .filter((d) => !(guessed && d.profile && d.profile !== guessed.key))
+    .filter((d) => !hasApp(d) || (key && appKey(d.sending_app) === key));
+  const knowsName = key ? hostless.find((d) => hasApp(d)) : null;
+  if (knowsName) return { device: claim(db, knowsName, { host: ip, app }), created: false, reason: 'без адреса, по имени' };
+  const free = hostless.filter((d) => !hasApp(d));
+  if (free.length === 1) return { device: claim(db, free[0], { host: ip, app }), created: false, reason: 'единственный без адреса' };
 
   const found = db.prepare('SELECT COUNT(*) c FROM lab_devices WHERE discovered = 1').get().c;
   if (found >= MAX_DISCOVERED) return { device: null, created: false, reason: 'достигнут предел найденных приборов' };
 
   const profile = guessed;
-  let name = sendingApp || (ip ? 'Анализатор ' + ip : 'Анализатор');
+  let name = app || (ip ? 'Анализатор ' + ip : 'Анализатор');
   // Два одинаковых прибора обязаны различаться в списке. Единственное, чем они
   // отличаются, — адрес, поэтому он и уходит в имя: две строки «BC-20» человек
   // не разберёт, а «BC-20 (10.0.0.12)» разберёт сразу.
@@ -127,9 +217,11 @@ export function ensureDevice(db, { sendingApp = '', peer = '', port = 2575, allo
   // «Добавить прибор» (added = 0; решение владельца 2026-09-29). Приём от
   // этого не зависит: пробы найденного прибора сохраняются и ложатся в бланки
   // по тем же правилам.
-  const id = db.prepare(`INSERT INTO lab_devices (name, profile, transport, host, port, enabled, discovered, added)
-                         VALUES (?, ?, 'mllp', ?, ?, 1, 1, 0)`)
-    .run(name, profile ? profile.key : '', ip, port).lastInsertRowid;
+  // LIS_DISCOVERY_FIX_V1 — находка сразу помнит, как прибор себя назвал
+  // (NULL — не назвался): по этому имени она и найдётся после любой правки.
+  const id = db.prepare(`INSERT INTO lab_devices (name, profile, transport, host, port, enabled, discovered, added, sending_app)
+                         VALUES (?, ?, 'mllp', ?, ?, 1, 1, 0, ?)`)
+    .run(name, profile ? profile.key : '', ip, listenPort, app || null).lastInsertRowid;
 
   return { device: db.prepare('SELECT * FROM lab_devices WHERE id = ?').get(id), created: true, reason: 'заведён по первому сообщению' };
 }
