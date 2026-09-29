@@ -26,7 +26,7 @@ import { externalLabTag } from '../external-lab.js';   // EXTERNAL_LAB_V1 — п
 import { openVisitWizard, canAddVisitLines } from './visit-wizard.js?v=refbill4';   // LIVE_AUDIT_FIX_V1 — canAddVisitLines · REFERRAL_BILL_V1 — штамп кэша · REFBILL_REVIEW_V1
 import { printInvoiceCheck } from './receipt-print.js?v=rp1';   // REPRINT_SERVICE_CHECK_V1
 import { printableSheet as _printSheet } from './doc-settings.js?v=noqr1';   // VISIT_WIZARD_LOCAL_V1 — full-screen «Добавить услугу к визиту»
-import { openVisitBillModal } from './visit-bill.js?v=rbr1';   // REFBILL_REVIEW_V1 — штамп: «Выставить счёт» только денежным ролям
+import { openVisitBillModal } from './visit-bill.js?v=rbr2';   // REFBILL_REVIEW_V1 — штамп: «Выставить счёт» только денежным ролям
 import { openAdmissionOrderModal } from './admission-modal.js?v=inp2';   // ADMISSION_ORDER_V1 — «Госпитализация» с карты пациента
 import { caseFilePrintHtml } from './case-docs.js?v=cw1';   // PATIENT_HISTORY_TAB_V1 — печать подшитой истории тем же бланком
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // PATIENT_HISTORY_TAB_V1

@@ -1150,7 +1150,7 @@ export async function generateInvoiceFromSelection(state, selectedIds, onReload)
     // LIVE_AUDIT_FIX_V1 — строка за счёт плательщика уже привязана к счёту
     // контрагента (invoice_item_id), поэтому сюда не попадает; сервер к тому же
     // отказывает строке, у которой счёт уже есть («already invoiced»).
-    const lineItems = (state.services || []).filter(r => selectedIds.has(r.id) && !r.invoice_item_id);
+    const lineItems = (state.services || []).filter(r => selectedIds.has(r.id) && !r.invoice_item_id && r.status !== 'cancelled');   // REFBILL_REVIEW_V1
     if (lineItems.length === 0) { toast('All selected services are already invoiced.', 'fail'); return; }
 
     if (!state.visit?.id) {
@@ -1776,8 +1776,10 @@ export async function loadRefundedFlags(state) {
 
 // FINAL_MONEY_FIX_V1 (I1) — что окно визита отмечает для счёта само:
 // невыставленные строки, кроме возвращённых (их отмечают вручную).
+// REFBILL_REVIEW_V1 (проверка ревью) — и не отменённые: сервер отменённую
+// строку в счёт не берёт, и одна такая строка роняла весь счёт.
 export function defaultInvoiceSelection(services) {
-    return new Set((services || []).filter(r => !r.invoice_item_id && !r.__refunded).map(r => r.id));
+    return new Set((services || []).filter(r => !r.invoice_item_id && !r.__refunded && r.status !== 'cancelled').map(r => r.id));
 }
 
 async function loadServices(state) {

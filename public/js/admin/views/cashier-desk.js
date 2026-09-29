@@ -1301,7 +1301,7 @@ async function openVisitWindow(visitId, reload) {
     try {
         const { data: visit } = await supabase.from('visits').select('*, patients(full_name, mrn, phone, date_of_birth)').eq('id', visitId).maybeSingle();
         if (!visit) { toast(tr('Визит не найден.'), 'fail'); return; }
-        const mod = await import('./visit-bill.js?v=rbr1');   // REFBILL_REVIEW_V1 — штамп: «Выставить счёт» только денежным ролям
+        const mod = await import('./visit-bill.js?v=rbr2');   // REFBILL_REVIEW_V1 — штамп: «Выставить счёт» только денежным ролям
         mod.openVisitBillModal(visit, reload);
     } catch (e) { toast((e && e.message) || tr('Не удалось.'), 'fail'); }
 }

@@ -188,7 +188,9 @@ export function openVisitBillModal(visit, onChanged) {
                 const { data: rf } = await supabase.rpc('visit_refunded_lines', { visit_id: visit.id });
                 refunded = new Set(((rf && rf.line_ids) || []).map(Number));
             } catch (e) { /* без пометки сервер всё равно не выставит их молча */ }
-            unInvoicedIds = rows.filter(r => r.invoice_item_id == null && !refunded.has(Number(r.id))).map(r => r.id);
+            // REFBILL_REVIEW_V1 (проверка ревью) — отменённая строка в счёт не
+            // идёт: сервер её отклоняет, и одна такая строка роняла весь счёт.
+            unInvoicedIds = rows.filter(r => r.invoice_item_id == null && r.status !== 'cancelled' && !refunded.has(Number(r.id))).map(r => r.id);
             clear(linesTbody);
             if (rows.length === 0) {
                 linesEmptyEl.style.display = '';
