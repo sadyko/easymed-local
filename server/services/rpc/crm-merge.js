@@ -47,6 +47,8 @@ import { canSeeAllLeads, leadVisible } from '../crm/visibility.js';
 import { listStages } from '../crm/config.js';
 // V3120_FIX — после слияния одна услуга записи — одна строка (booking-mirror.js).
 import { lineKey, mirrorVisit } from '../crm/booking-mirror.js';
+// CRM_MULTI_SOURCE_V1 — источники оставленной: объединение всех сливаемых.
+import { unionLeadSources } from '../crm/sources.js';
 
 /**
  * V3120_FIX — ДУБЛИ СТРОК ПОСЛЕ СЛИЯНИЯ. Две карточки одного человека почти
@@ -300,6 +302,10 @@ export function crmMergeLeads(db, args, user) {
     }
     // 3. Сама карточка. Дата обращения, автор и источник — СВОИ (I2/M5):
     //    слияние не переписывает историю, по которой считаются отчёты.
+    //    CRM_MULTI_SOURCE_V1 — главный источник (source) остаётся своим, а
+    //    список источников (sources) — объединение всех сливаемых: человек,
+    //    который писал в Instagram и звонил по совету знакомых, пришёл из обоих
+    //    каналов. Свои — первыми, влитые — от ранней к поздней, не больше десяти.
     const lineFirst = db.prepare(`
       SELECT service_id, scheduled_date FROM crm_request_services
        WHERE request_id = ? AND status NOT IN ('cancelled', 'done')
@@ -318,11 +324,12 @@ export function crmMergeLeads(db, args, user) {
       // то же правило, что у окна заявки (ближайшая назначенная дата).
       service_id: lineFirst ? lineFirst.service_id : firstNonEmpty(order, (c) => c.service_id),
       scheduled_date: lineFirst ? (lineFirst.scheduled_date || null) : firstNonEmpty(order, (c) => c.scheduled_date),
+      sources: JSON.stringify(unionLeadSources(order)),   // CRM_MULTI_SOURCE_V1
     };
     db.prepare(`UPDATE crm_requests
                    SET full_name = @full_name, phone = @phone, patient_id = @patient_id, assigned_to = @assigned_to,
                        status = @status, note = @note, call_id = @call_id, service_id = @service_id,
-                       scheduled_date = @scheduled_date,
+                       scheduled_date = @scheduled_date, sources = @sources,
                        updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
                  WHERE id = @id`).run({ ...patch, id: keepId });
     // 4. Проигравшие — удаляются. Строк у них уже нет: каскаду нечего уносить.

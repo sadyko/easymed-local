@@ -106,6 +106,25 @@ export function crmSourcesWrite(db, meta, body, user) {
 }
 
 /**
+ * СЛИЯНИЕ ДУБЛЕЙ (rpc/crm-merge.js): объединение источников сливаемых заявок.
+ * Порядок — порядок карточек (оставленная первой, её главный — главный),
+ * каждая по правилу чтения; повтор — один раз; не длиннее MAX_LEAD_SOURCES —
+ * лишнее отрезается с конца, то есть свои источники оставленной не теряются.
+ * @param {Array<{source?: string, sources?: string[]|string|null}>} cards
+ * @returns {string[]}
+ */
+export function unionLeadSources(cards) {
+  const out = [];
+  for (const c of (Array.isArray(cards) ? cards : [])) {
+    for (const k of leadSources(c)) {
+      if (out.length >= MAX_LEAD_SOURCES) return out;
+      if (!out.includes(k)) out.push(k);
+    }
+  }
+  return out;
+}
+
+/**
  * JSON-массив источников заявки по правилу чтения — SQL-выражение над строкой
  * crm_requests с псевдонимом `alias`. В массиве `sources` в счёт идут только
  * непустые строки (как в leadSources); если такой нет ни одной — [source],

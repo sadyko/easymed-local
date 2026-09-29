@@ -354,12 +354,18 @@ export function saveSources(db, sources) {
 
   const existing = db.prepare('SELECT key FROM crm_sources').all().map((r) => r.key);
   const removed = existing.filter((k) => !seen.has(k));
-  const leadCount = db.prepare('SELECT COUNT(*) AS n FROM crm_requests WHERE source = ?');
+  // CRM_MULTI_SOURCE_V1 — «стоит у заявки» это и главный source, и любой ключ
+  // её sources (миграция 231): удалённый ключ остался бы в списке заявки
+  // висеть без подписи, а её следующее сохранение сервер отказал бы как
+  // «нет в справочнике».
+  const leadCount = db.prepare(`SELECT COUNT(*) AS n FROM crm_requests
+    WHERE source = ? OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(sources) AND json_type(sources) = 'array'
+                                                            THEN sources ELSE '[]' END) AS s WHERE s.value = ?)`);
   for (const key of removed) {
     if (UNDELETABLE_SOURCE_KEYS.includes(key)) {
       throw new CrmConfigError(`Источник «${key}» удалить нельзя — на него ссылается сама система. Его можно скрыть.`, 409);
     }
-    const n = leadCount.get(key).n;
+    const n = leadCount.get(key, key).n;
     if (n) throw new CrmConfigError(`Источник «${key}» стоит у ${n} заявок — его можно только скрыть, но не удалить.`, 409);
   }
 
