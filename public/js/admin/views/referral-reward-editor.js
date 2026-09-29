@@ -90,7 +90,7 @@ export function referralRewardEditor({ doctorId, holder, onChange, readOnly = fa
                 h('td', null, h('div', { class: 'rate-cell' },
                     h('input', { type: 'number', min: '0', step: '0.01', 'data-rate-group': g,
                         value: cur && Number.isFinite(Number(cur.value)) ? String(cur.value) : '',
-                        placeholder: tr('по стандарту') }),
+                        placeholder: tr('как «Свой процент»') }),   // RATES_MODE_TYPED_V1 — пусто значит «Свой процент», а не стандарт категории
                     h('select', { 'data-rate-unit': g },
                         h('option', { value: 'pct', selected: !cur || cur.unit !== 'fix' }, '%'),
                         h('option', { value: 'fix', selected: !!(cur && cur.unit === 'fix') }, 'сум'))))));

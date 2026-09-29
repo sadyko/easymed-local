@@ -3180,6 +3180,7 @@ export const STRINGS = {
   "По категории": {"en": "From category", "ru": "По категории", "uz": "Toifa bo'yicha"},
   "Своя": {"en": "Own", "ru": "Своя", "uz": "O'z stavkasi"},
   "по стандарту": {"en": "standard", "ru": "по стандарту", "uz": "standart bo'yicha"},
+  "как «Свой процент»": {"en":"as «Own percent»","ru":"как «Свой процент»","uz":"«O‘z foizi» kabi"},   // RATES_MODE_TYPED_V1
   "Вознаграждение по источникам направлений: услуги, суммы и ставки по группам (по категории или свои).": {"en": "Reward per referral source: services, amounts and per-group rates (from the category or the source's own).", "ru": "Вознаграждение по источникам направлений: услуги, суммы и ставки по группам (по категории или свои).", "uz": "Yo'llanma manbalari bo'yicha mukofot: xizmatlar, summalar va guruh stavkalari (toifa bo'yicha yoki o'z stavkasi)."},
   "Ставка": {"en": "Rate", "ru": "Ставка", "uz": "Stavka"},
   "Стандартный %": {"en": "Standard %", "ru": "Стандартный %", "uz": "Standart %"},
