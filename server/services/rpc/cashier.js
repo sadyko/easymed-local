@@ -4,7 +4,7 @@
 // DB work inside db.transaction(...)() for atomicity.
 
 import { rpcT } from '../server-message.js';   // V3120_I18N — собранные фразы переводятся на экране
-import { today as localToday, localRangeWhere } from '../domain/day.js';   // V3120_FIX (PERF) — дневные ветки по индексам
+import { today as localToday, localRangeWhere, localDate } from '../domain/day.js';   // V3120_FIX (PERF) — дневные ветки по индексам; REFBILL_REVIEW_V1 — localDate (день визита «Ждут счёта»)
 import { outstandingWhere, idemReplay, idemRemember } from '../domain/money.js';   // V3120_FIX — ключ повтора
 import { assertTransition } from '../domain/lifecycle.js';
 import { hasAnyRole, explicitSectionLevel } from '../roles.js';
@@ -18,6 +18,7 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 import { assertOwnBuilding, PERFORMED_LINE_STATUSES } from './billing.js';
 import { markRefundRelease, refundedLineIds, notRefundReleasedSql } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом; CASHIER_PAID_SWAP_V1 — «возвращено» у строк; REFERRAL_BILL_V1 — «Ждут счёта»
 import { lineUnitPrice, consultationFor, doctorPriceLookup } from '../domain/pricing.js';   // REFBILL_REVIEW_V1 — doctorPriceLookup; REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта
+import { searchArg } from './page-args.js';   // REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта» на сервере
 // V3120_FIX (MAJOR) — снятая при отмене товарная строка возвращает товар туда,
 // откуда его взяли (одно правило на сервер, rpc/inventory.js).
 import { restoreSources } from './inventory.js';
@@ -885,9 +886,20 @@ export function cashierRefunds(db, args, user) {
 //   • своего здания — и строка, и визит (у соседа своя касса);
 //   • не отпущенные с возвратом — те в «Возвратах и отменах»
 //     (pay_refund_releases, как у refundedLineIds);
-// у живого визита (не 'cancelled', не 'no_show' — словарь миграции 003),
-// местный день которого не старше UNBILLED_DAYS (будущие — да). Визит с
-// нулевой суммой пропускается: бесплатным строкам платить нечего.
+// у живого визита (не 'cancelled', не 'no_show' — словарь миграции 003). Визит
+// с нулевой суммой пропускается: бесплатным строкам платить нечего.
+//
+// REFBILL_REVIEW_V1 (ревью M1) — ОКНО И ПОИСК. Каждая запись колл-центра
+// заводит невыставленные строки с ценой (booking_lines_add), а прошлые записи,
+// которых никто не отметил «Не пришёл», висели вечно: 320 записей вперёд —
+// и направление врача не попадало в первые 300, а поиск кассы шёл в браузере
+// по этим 300. Теперь:
+//   • без поиска — местный день визита СЕГОДНЯ и UNBILLED_DAYS дней назад;
+//     будущие записи — в свой день; totals — число плашки «ЖДУТ СЧЁТА · N»;
+//   • с поиском (q: ФИО, номер карты, телефон — и одними цифрами) — НА
+//     СЕРВЕРЕ, за UNBILLED_DAYS дней назад и все будущие дни;
+//   • порядок: сегодня; затем будущие от ближних (только в поиске); затем
+//     прошлые от новых к старым; в одном дне — по самой свежей строке.
 //
 // Сумма — ДО скидок, по тому же правилу цены, что у счёта (lineUnitPrice:
 // личная цена врача, каталог, тариф визита, сохранённая цена товара); скидки
@@ -900,16 +912,45 @@ const UNBILLED_DAYS = 30;
 const UNBILLED_LIMIT = 300;
 const UNBILLED_NAMES = 5;
 
+// REFBILL_REVIEW_V1 (ревью M1) — «содержит» для LIKE из строки человека: % и _
+// — буквы, а не шаблон (ESCAPE '\').
+function likeContains(s) {
+  return '%' + String(s).replace(/[\\%_]/g, (c) => '\\' + c) + '%';
+}
+
+// REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта»: ФИО, номер карты, телефон.
+// lower_uni — регистр кириллицы (CYRILLIC_ILIKE_V1, db/connection.js). Строка
+// из одних цифр телефона («90 111 22 33», «+998-90…») ищется ещё и по цифрам
+// телефона: в карте он записан как угодно.
+function unbilledSearch(q) {
+  const like = likeContains(q);
+  const parts = [
+    "lower_uni(pt.full_name) LIKE lower_uni(?) ESCAPE '\\'",
+    "lower_uni(COALESCE(pt.mrn, '')) LIKE lower_uni(?) ESCAPE '\\'",
+    "COALESCE(pt.phone, '') LIKE ? ESCAPE '\\'",
+  ];
+  const params = [like, like, like];
+  const digits = q.replace(/\D/g, '');
+  if (/^[\d\s+\-()]+$/.test(q) && digits.length >= 3) {
+    parts.push("replace(replace(replace(replace(replace(COALESCE(pt.phone, ''), ' ', ''), '-', ''), '(', ''), ')', ''), '+', '') LIKE ?");
+    params.push('%' + digits + '%');
+  }
+  return { sql: ' AND (' + parts.join(' OR ') + ')', params };
+}
+
 export function cashierUnbilled(db, args, user) {
   requireRole(user, SHIFT_ROLES);
+  const q = searchArg(args && args.q) || null;   // REFBILL_REVIEW_V1 — не текст или длиннее 200 → 400
   const d = localToday(db);
   const from = db.prepare('SELECT date(?, ?) AS d').get(d, `-${UNBILLED_DAYS} days`).d;
-  const since = localRangeWhere('v.visit_date', from, null);
+  const since = localRangeWhere('v.visit_date', from, q ? null : d);   // REFBILL_REVIEW_V1 — будущие только в поиске
+  const search = q ? unbilledSearch(q) : { sql: '', params: [] };
   const lines = db.prepare(`
     SELECT vs.id, vs.visit_id, vs.service_id, vs.clinic_item_id, vs.consultation_type_id, vs.doctor_id,
            vs.quantity, vs.unit_price, vs.price_tier, vs.created_at,
            ub.full_name AS added_by,
            v.visit_date, v.patient_id,
+           ${localDate('v.visit_date')} AS visit_day,
            pt.full_name AS patient_name, pt.mrn AS mrn, pt.phone AS phone,
            pt.date_of_birth AS date_of_birth, pt.gender AS gender,
            -- REFERRAL_BILL_V1 («Card's payer, can split», 29.09) — плательщик из
@@ -929,9 +970,9 @@ export function cashierUnbilled(db, args, user) {
        AND vs.invoice_item_id IS NULL
        AND COALESCE(vs.status, '') <> 'cancelled'
        AND vs.sync_origin IS NULL
-       AND ${notRefundReleasedSql('vs', 'out')}
+       AND ${notRefundReleasedSql('vs', 'out')}${search.sql}
      ORDER BY vs.created_at DESC, vs.id DESC
-  `).all(...since.params);
+  `).all(...since.params, ...search.params);
 
   const getService = db.prepare('SELECT price, name, price_secondary, secondary_days_from, secondary_days_to, price_repeat, repeat_days_from, repeat_days_to FROM services WHERE id = ?');
   const getProduct = db.prepare('SELECT sale_price, name FROM products WHERE id = ?');
@@ -964,7 +1005,7 @@ export function cashierUnbilled(db, args, user) {
     let g = byVisit.get(l.visit_id);
     if (!g) {
       g = {
-        visit_id: l.visit_id, visit_date: l.visit_date, patient_id: l.patient_id,
+        visit_id: l.visit_id, visit_date: l.visit_date, visit_day: l.visit_day, patient_id: l.patient_id,   // REFBILL_REVIEW_V1 — visit_day: местный день визита
         patient_name: l.patient_name, mrn: l.mrn, phone: l.phone, date_of_birth: l.date_of_birth, gender: l.gender,
         lines_count: 0, total: 0, names: [], added_by: l.added_by || null, last_line_at: l.created_at, line_ids: [],
         // REFERRAL_BILL_V1 — плательщик из карты (null — выбора «Кому счёт» нет).
@@ -978,7 +1019,15 @@ export function cashierUnbilled(db, args, user) {
     g.line_ids.push(l.id);
     if (name && !g.names.includes(name) && g.names.length < UNBILLED_NAMES) g.names.push(name);
   }
-  const waiting = [...byVisit.values()].filter((g) => g.total > 0);
+  // REFBILL_REVIEW_V1 (ревью M1) — сегодня; будущие от ближних; прошлые от
+  // новых. В одном дне — порядок самой свежей строки (визиты заведены в
+  // byVisit именно в нём: строки шли от самой свежей).
+  const place = new Map([...byVisit.keys()].map((id, i) => [id, i]));
+  const band = (day) => (day === d ? 0 : day > d ? 1 : 2);
+  const waiting = [...byVisit.values()].filter((g) => g.total > 0).sort((a, b) =>
+    band(a.visit_day) - band(b.visit_day)
+    || (band(a.visit_day) === 1 ? String(a.visit_day).localeCompare(String(b.visit_day)) : String(b.visit_day).localeCompare(String(a.visit_day)))
+    || place.get(a.visit_id) - place.get(b.visit_id));
   const sum = round2(waiting.reduce((a, g) => a + g.total, 0));
-  return { from, rows: waiting.slice(0, UNBILLED_LIMIT), totals: { n: waiting.length, sum } };
+  return { from, to: q ? null : d, q, rows: waiting.slice(0, UNBILLED_LIMIT), totals: { n: waiting.length, sum } };
 }

@@ -913,7 +913,9 @@ test('REFERRAL_BILL_V1: врач снял «Сразу выставить счё
     await pressUntilCreate();
     assert.equal(RPC.filter((c) => c.name === 'create_invoice_for_visit').length, 0, 'счёт выставлен при снятой галочке');
     assert.ok(TOASTS.some((t) => t.includes(WAITING_HINT)), 'тост не говорит, где касса найдёт пациента: ' + JSON.stringify(TOASTS));
-    const out = getRpc('cashier_unbilled')(DB, {}, { id: 1, role: 'cashier' });
+    // REFBILL_REVIEW_V1 (ревью M1) — запись может лечь на завтра (слот подбирается по часам врача),
+    // а будущие визиты касса находит поиском — поиск на сервере.
+    const out = getRpc('cashier_unbilled')(DB, { q: 'Иванов' }, { id: 1, role: 'cashier' });
     assert.equal(out.rows.length, 1, 'касса не видит строки врача без счёта');
     assert.equal(out.rows[0].patient_id, 3);
     assert.equal(out.rows[0].total, 100000);
@@ -959,7 +961,9 @@ test('REFERRAL_BILL_V1: плательщик в карте — у врача с�
     assert.equal(DB.prepare('SELECT COUNT(*) c FROM invoices').get().c, 0);
     assert.ok(TOASTS.some((t) => t.includes(WAITING_HINT)), 'тост не ведёт в «Ждут счёта»: ' + JSON.stringify(TOASTS));
     assert.ok(!TOASTS.some((t) => /не выставлен/.test(t)), 'это не отказ, а правило: ' + JSON.stringify(TOASTS));
-    const out = getRpc('cashier_unbilled')(DB, {}, { id: 1, role: 'cashier' });
+    // REFBILL_REVIEW_V1 (ревью M1) — запись может лечь на завтра (слот подбирается по часам врача),
+    // а будущие визиты касса находит поиском — поиск на сервере.
+    const out = getRpc('cashier_unbilled')(DB, { q: 'Иванов' }, { id: 1, role: 'cashier' });
     assert.equal(out.rows.length, 1, 'касса не видит визит в «Ждут счёта»');
     assert.equal(out.rows[0].patient_id, 3);
     assert.equal(w.saved(), 1);

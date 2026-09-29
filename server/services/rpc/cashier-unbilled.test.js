@@ -168,7 +168,9 @@ test('бесплатные строки: визит с нулевой суммо
   assert.equal(r.lines_count, 2);
 });
 
-test('визит старше 30 местных дней не попадает; ровно 30 дней и будущие — попадают', () => {
+// REFBILL_REVIEW_V1 (ревью M1) — будущие визиты по умолчанию не показываются
+// (записи колл-центра топили направления); они — в свой день или поиском.
+test('визит старше 30 местных дней не попадает; ровно 30 дней — попадает; будущий — только поиском', () => {
   const { db, LAB, pid } = seed();
   const old = visit(db, pid, { offset: -31 });
   line(db, old, { service_id: LAB });
@@ -178,7 +180,9 @@ test('визит старше 30 местных дней не попадает; 
   line(db, future, { service_id: LAB });
   assert.equal(rowOf(db, old), undefined, 'визит 31 день назад');
   assert.ok(rowOf(db, edge), 'визит ровно 30 дней назад');
-  assert.ok(rowOf(db, future), 'будущий визит');
+  assert.equal(rowOf(db, future), undefined, 'будущий визит по умолчанию');
+  const found = RPC.cashier_unbilled(db, { q: 'Рахимов' }, cashier).rows.map((r) => r.visit_id);
+  assert.deepEqual(found, [future, edge], 'поиск: будущий и ровно 30 дней назад, но не 31');
 });
 
 test('отменённый и несостоявшийся («не пришёл») визит не попадает', () => {
