@@ -221,3 +221,76 @@ test('роли: касса, старший кассир и администра�
   refused(() => unbilled(db, doctor));
   assert.equal(isReadOnlyRpc('cashier_unbilled'), true, 'чтение доступно и клинике с просроченной лицензией');
 });
+
+// ─── Решение владельца 2026-09-29: «Card's payer, can split» ────────────────
+// Касса выставляет строки «Ждут счёта» плательщику ИЗ КАРТЫ пациента (только
+// ему) или пациенту, и может разделить: часть строк плательщику, остальное
+// пациенту. Счёт плательщику — create_invoice_for_visit с payer_id, как в
+// мастере визита (COVERAGE_SPLIT_V1). Сервер уже умеет это для СУЩЕСТВУЮЩИХ
+// строк — здесь это проверено: цены сервера, без скидки группы пациента
+// (BILLING_AUDIT_FIX_V1, B5), строки сразу в очередь (V3120_FIX, FATAL-2), в
+// «Приём оплат» счёт плательщика не попадает.
+function insured(db, pid, { active = 1, vip = false } = {}) {
+  const payer = Number(db.prepare("INSERT INTO payers (name, kind, active) VALUES ('Esado', 'insurance', ?)").run(active).lastInsertRowid);
+  db.prepare("UPDATE patients SET payer_id = ?, insurance_policy_number = 'POL-77' WHERE id = ?").run(payer, pid);
+  if (vip) {
+    const cat = db.prepare("INSERT INTO patient_categories (name, discount_percent, active) VALUES ('VIP', 10, 1)").run().lastInsertRowid;
+    db.prepare('UPDATE patients SET category_id = ? WHERE id = ?').run(cat, pid);
+  }
+  return payer;
+}
+const invoicesListed = (db) => RPC.cashier_invoices(db, {}, cashier).rows.map((r) => r.id);
+
+test('«Ждут счёта» несёт плательщика из карты: действующий — имя, вид и полис; выключенный и отсутствующий — пусто', () => {
+  const { db, LAB, pid, pid2 } = seed();
+  const payer = insured(db, pid);
+  line(db, visit(db, pid), { service_id: LAB });
+  line(db, visit(db, pid2), { service_id: LAB });
+  const rows = unbilled(db).rows;
+  const a = rows.find((r) => r.patient_id === pid);
+  assert.deepEqual([a.card_payer_id, a.card_payer_name, a.card_payer_kind, a.card_policy_no], [payer, 'Esado', 'insurance', 'POL-77']);
+  const b = rows.find((r) => r.patient_id === pid2);
+  assert.deepEqual([b.card_payer_id, b.card_payer_name, b.card_payer_kind], [null, null, null], 'без плательщика в карте — выбора нет');
+  db.prepare('UPDATE payers SET active = 0 WHERE id = ?').run(payer);
+  const off = unbilled(db).rows.find((r) => r.patient_id === pid);
+  assert.deepEqual([off.card_payer_id, off.card_payer_name], [null, null], 'выключенный плательщик — не плательщик');
+});
+
+test('касса выставляет существующие строки плательщику из карты: цены сервера, без скидки группы, строки в очередь, в «Приём оплат» не попадает', () => {
+  const { db, LAB, CONS, pid } = seed();
+  const payer = insured(db, pid, { vip: true });
+  const vid = visit(db, pid);
+  const a = line(db, vid, { service_id: LAB });
+  const b = line(db, vid, { service_id: CONS, doctor_id: DOC });
+  const out = RPC.create_invoice_for_visit(db, { visit_id: vid, visit_service_ids: [a, b], payer_id: payer, discount_amount: 0 }, cashier);
+  assert.equal(out.invoice.payer_id, payer);
+  assert.equal(out.invoice.status, 'unpaid', 'долг плательщика, а не оплата');
+  assert.equal(out.invoice.subtotal, 190000, 'анализ по каталогу 40 000 + приём по цене врача 150 000 — не присланные 1 + 1');
+  assert.equal(out.invoice.discount_amount, 0, 'скидка группы пациента на счёт плательщика не идёт');
+  assert.deepEqual(db.prepare('SELECT status FROM visit_services WHERE id IN (?, ?) ORDER BY id').all(a, b).map((r) => r.status), ['queued', 'queued'],
+    'денег у кассы по нему не будет — строки сразу в очереди');
+  assert.ok(!invoicesListed(db).includes(out.invoice.id), 'счёт плательщика в «Приёме оплат»');
+  assert.equal(rowOf(db, vid), undefined, 'выставленный визит всё ещё «ждёт счёта»');
+});
+
+test('раздельно: часть строк плательщику, остальное пациенту — оба счёта верны, в кассе только счёт пациента', () => {
+  const { db, LAB, CONS, pid } = seed();
+  const payer = insured(db, pid, { vip: true });
+  const vid = visit(db, pid);
+  const a = line(db, vid, { service_id: LAB });
+  const b = line(db, vid, { service_id: CONS });
+  // Первый проход — анализ плательщику.
+  const toPayer = RPC.create_invoice_for_visit(db, { visit_id: vid, visit_service_ids: [a], payer_id: payer, discount_amount: 0 }, cashier).invoice;
+  const still = rowOf(db, vid);
+  assert.ok(still, 'невыставленная строка ждёт второго прохода');
+  assert.equal(still.lines_count, 1);
+  assert.equal(still.total, 100000);
+  // Второй проход — приём пациенту: скидка группы — его.
+  const toPatient = RPC.create_invoice_for_visit(db, { visit_id: vid, visit_service_ids: [b] }, cashier).invoice;
+  assert.deepEqual([toPayer.payer_id, toPayer.total_amount, toPayer.discount_amount], [payer, 40000, 0]);
+  assert.deepEqual([toPatient.payer_id, toPatient.total_amount, toPatient.discount_amount], [null, 90000, 10000]);
+  const listed = invoicesListed(db);
+  assert.ok(listed.includes(toPatient.id), 'счёт пациента — в «Приёме оплат»');
+  assert.ok(!listed.includes(toPayer.id), 'счёт плательщика — нет');
+  assert.equal(rowOf(db, vid), undefined);
+});

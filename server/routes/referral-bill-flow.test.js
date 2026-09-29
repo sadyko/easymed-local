@@ -169,5 +169,11 @@ test('REFERRAL_BILL_V1: плательщик в карте — врачу отк
     const byPayer = await t.rpc('create_invoice_for_visit', 'cash', { visit_id: visitId, visit_service_ids: lineIds, payer_id: 5 });
     assert.equal(byPayer.status, 200, JSON.stringify(byPayer.json));
     assert.equal(byPayer.json.data.invoice.payer_id, 5, 'касса выставила счёт страховой');
+    // «Card's payer, can split» (29.09) — счёт плательщика в «Приём оплат» не
+    // попадает (денег у кассы нет — расчёт по акту), и визит больше не ждёт.
+    const list = await t.rpc('cashier_invoices', 'cash', {});
+    assert.ok(!list.json.data.rows.some((r) => r.id === byPayer.json.data.invoice.id), 'счёт плательщика в «Приёме оплат»');
+    const after = await t.rpc('cashier_unbilled', 'cash', {});
+    assert.ok(!after.json.data.rows.some((r) => r.visit_id === visitId));
   } finally { t.close(); }
 });

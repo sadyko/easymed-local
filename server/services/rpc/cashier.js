@@ -911,10 +911,17 @@ export function cashierUnbilled(db, args, user) {
            ub.full_name AS added_by,
            v.visit_date, v.patient_id,
            pt.full_name AS patient_name, pt.mrn AS mrn, pt.phone AS phone,
-           pt.date_of_birth AS date_of_birth, pt.gender AS gender
+           pt.date_of_birth AS date_of_birth, pt.gender AS gender,
+           -- REFERRAL_BILL_V1 («Card's payer, can split», 29.09) — плательщик из
+           -- карты: касса выставляет счёт ему (только ему) или пациенту. Только
+           -- ДЕЙСТВУЮЩИЙ — то же правило, что у отказа врачу (billing.js
+           -- visitHasCardPayer): выключенному счёт не выставит никто.
+           cp.id AS card_payer_id, cp.name AS card_payer_name, cp.kind AS card_payer_kind,
+           pt.insurance_policy_number AS card_policy_no
       FROM visits v
      CROSS JOIN visit_services vs ON vs.visit_id = v.id
       JOIN patients pt ON pt.id = v.patient_id
+      LEFT JOIN payers cp ON cp.id = pt.payer_id AND cp.active = 1   -- REFERRAL_BILL_V1: плательщик из карты
       LEFT JOIN users ub ON ub.id = vs.created_by
      WHERE ${since.sql}
        AND COALESCE(v.status, '') NOT IN ('cancelled', 'no_show')
@@ -949,6 +956,9 @@ export function cashierUnbilled(db, args, user) {
         visit_id: l.visit_id, visit_date: l.visit_date, patient_id: l.patient_id,
         patient_name: l.patient_name, mrn: l.mrn, phone: l.phone, date_of_birth: l.date_of_birth, gender: l.gender,
         lines_count: 0, total: 0, names: [], added_by: l.added_by || null, last_line_at: l.created_at, line_ids: [],
+        // REFERRAL_BILL_V1 — плательщик из карты (null — выбора «Кому счёт» нет).
+        card_payer_id: l.card_payer_id ?? null, card_payer_name: l.card_payer_name ?? null,
+        card_payer_kind: l.card_payer_kind ?? null, card_policy_no: l.card_policy_no || null,
       };
       byVisit.set(l.visit_id, g);
     }
