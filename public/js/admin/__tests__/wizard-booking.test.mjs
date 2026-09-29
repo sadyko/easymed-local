@@ -935,3 +935,59 @@ test('REFERRAL_BILL_V1: регистратура — как прежде: пла
     assert.ok(opened.n >= 1, 'регистратуре счёт печатается, как раньше');
   });
 });
+
+// REFERRAL_BILL_V1, дополнение владельца (2026-09-29) — «Leave for Касса»: у
+// пациента в карте плательщик (действующий) — врач счёта не выставляет вовсе;
+// строки ждут кассу в «Ждут счёта», и касса выставит счёт нужному плательщику.
+const CARD_PAYER_NOTE = 'У пациента в карте плательщик — счёт выставит касса.';
+const cardPayer = (active = 1) => (db) => {
+  db.prepare("INSERT INTO payers (id, name, kind, active) VALUES (5, 'Esado', 'insurance', ?)").run(active);
+  db.prepare('UPDATE patients SET payer_id = 5 WHERE id = 3').run();
+};
+
+test('REFERRAL_BILL_V1: плательщик в карте — у врача счёта нет: примечание вместо галочки, счёт не зовётся, тост «Ждут счёта», касса видит визит', async () => {
+  await asRole('doctor', 7, async () => {
+    const w = await openWizardReadyWith(cardPayer(1));
+    await pressUntilConfirm();
+    const ov = w.overlay();
+    assert.ok(textOf(ov).includes(CARD_PAYER_NOTE), 'на подтверждении не сказано, что счёт выставит касса: ' + textOf(ov));
+    assert.equal(invoiceTick(ov), undefined, 'галочка «Сразу выставить счёт» обещает счёт, которого врач не выставит');
+    assert.match(textOf(ov), /Кто платит\s+Esado · Страховая/, '«Кто платит» — плательщик из карты');
+    assert.ok(!textOf(ov).includes('Пациент — оплата в кассе'), '«оплата в кассе» спорит с плательщиком в карте');
+    await pressUntilCreate();
+    assert.equal(RPC.filter((c) => c.name === 'create_invoice_for_visit').length, 0, 'врач выставил счёт пациенту со страховой в карте');
+    assert.equal(DB.prepare('SELECT COUNT(*) c FROM invoices').get().c, 0);
+    assert.ok(TOASTS.some((t) => t.includes(WAITING_HINT)), 'тост не ведёт в «Ждут счёта»: ' + JSON.stringify(TOASTS));
+    assert.ok(!TOASTS.some((t) => /не выставлен/.test(t)), 'это не отказ, а правило: ' + JSON.stringify(TOASTS));
+    const out = getRpc('cashier_unbilled')(DB, {}, { id: 1, role: 'cashier' });
+    assert.equal(out.rows.length, 1, 'касса не видит визит в «Ждут счёта»');
+    assert.equal(out.rows[0].patient_id, 3);
+    assert.equal(w.saved(), 1);
+  });
+});
+
+test('REFERRAL_BILL_V1: плательщик в карте выключен — врач выставляет счёт пациенту, как обычно', async () => {
+  await asRole('doctor', 7, async () => {
+    const w = await openWizardReadyWith(cardPayer(0));
+    await pressUntilConfirm();
+    assert.ok(invoiceTick(w.overlay()), 'выключенный плательщик — не плательщик: галочка на месте');
+    assert.ok(!textOf(w.overlay()).includes(CARD_PAYER_NOTE));
+    await pressUntilCreate();
+    const inv = DB.prepare('SELECT * FROM invoices').all();
+    assert.equal(inv.length, 1, 'счёт не выставлен: ' + JSON.stringify(TOASTS));
+    assert.equal(inv[0].payer_id, null);
+  });
+});
+
+test('REFERRAL_BILL_V1: плательщик в карте — регистратура как прежде: галочка, счёт выставлен', async () => {
+  await asRole('registrar', 1, async () => {
+    const w = await openWizardReadyWith(cardPayer(1));
+    await pressUntilConfirm();
+    const tick = invoiceTick(w.overlay());
+    assert.ok(tick && tick.hasAttribute('checked'), 'у регистратуры пропала галочка');
+    assert.ok(!textOf(w.overlay()).includes(CARD_PAYER_NOTE));
+    await pressUntilCreate();
+    assert.ok(RPC.some((c) => c.name === 'create_invoice_for_visit'), 'регистратура не выставила счёт');
+    assert.equal(DB.prepare('SELECT COUNT(*) c FROM invoices').get().c, 1);
+  });
+});

@@ -23,7 +23,7 @@ import { labFlagCell, labPosCell, fmtDMY, labSexRu, labRefLines, labRefText, mat
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
 import { originTag } from '../record-origin.js';   // BRANCH_ORIGIN_V1 — откуда запись
 import { externalLabTag } from '../external-lab.js';   // EXTERNAL_LAB_V1 — подпись у результата
-import { openVisitWizard, canAddVisitLines } from './visit-wizard.js?v=refbill1';   // LIVE_AUDIT_FIX_V1 — canAddVisitLines · REFERRAL_BILL_V1 — штамп кэша
+import { openVisitWizard, canAddVisitLines } from './visit-wizard.js?v=refbill2';   // LIVE_AUDIT_FIX_V1 — canAddVisitLines · REFERRAL_BILL_V1 — штамп кэша
 import { printInvoiceCheck } from './receipt-print.js?v=rp1';   // REPRINT_SERVICE_CHECK_V1
 import { printableSheet as _printSheet } from './doc-settings.js?v=noqr1';   // VISIT_WIZARD_LOCAL_V1 — full-screen «Добавить услугу к визиту»
 import { openVisitBillModal } from './visit-bill.js';

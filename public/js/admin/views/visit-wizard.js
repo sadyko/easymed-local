@@ -194,6 +194,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         refCats: [],   // REFERRAL_CAT_FROM_BOOK_V1 — справочник категорий, как он заведён в настройках
         payers: [],
         payersError: null,   // PAYER_LOAD_V2 — «не загрузились» ≠ «не заведены»
+        cardPayerId: null,   // REFERRAL_BILL_V1 (дополнение 29.09) — плательщик в карте пациента (patients.payer_id)
         cart: [],            // [{ svc, qty }]
         search: '',
         cat: 'Все',
@@ -258,6 +259,20 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         raiseInvoice: canInvoice,   // INVOICE_ROLE_HONEST_V1
         creating: false,
     };
+
+    // REFERRAL_BILL_V1 (дополнение владельца 29.09) — «Leave for Касса». У
+    // пациента в карте ДЕЙСТВУЮЩИЙ плательщик (patients.payer_id; выключенный —
+    // уже не плательщик, как в Калькуляторе и на сервере) — врач без денежной
+    // роли счёта не выставляет вовсе: строки ждут кассу в «Ждут счёта», и касса
+    // выставит счёт нужному плательщику. Сервер держит то же правило сам
+    // (billing.js visitHasCardPayer, 403). Список плательщиков не загрузился —
+    // проверить нечем, и счёт тоже оставляем кассе.
+    function cardPayerOnFile() {
+        if (wiz.cardPayerId == null) return false;
+        if (wiz.payersError) return true;
+        return wiz.payers.some(p => String(p.id) === String(wiz.cardPayerId));
+    }
+    function leaveForCashier() { return doctorBill && cardPayerOnFile(); }
 
     // Страховка платит по полису (её выбор добавляет шаг с номером полиса);
     // любая другая организация — корпоратив, госпрограмма вроде ФМС — платит по
@@ -597,11 +612,12 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         try {
             const [dRes, pRes] = await Promise.all([
                 supabase.from('patient_discounts').select('id, name, kind, percent, amount, remaining, active, valid_from, valid_until, category_id, service_ids').eq('active', 1).order('name'),
-                supabase.from('patients').select('id, category_id, referral_source_id, patient_categories(id, name, discount_percent, active)').eq('id', patient.id).maybeSingle(),   // referral_source_id: REPORTS_V2 ревью I3
+                supabase.from('patients').select('id, category_id, referral_source_id, payer_id, patient_categories(id, name, discount_percent, active)').eq('id', patient.id).maybeSingle(),   // referral_source_id: REPORTS_V2 ревью I3; payer_id: REFERRAL_BILL_V1 — плательщик в карте
             ]);
             wiz.discounts = (!dRes.error && Array.isArray(dRes.data)) ? dRes.data : [];
             const cat = pRes && !pRes.error && pRes.data ? pRes.data.patient_categories : null;
             wiz.patientReferralSourceId = pRes && !pRes.error && pRes.data ? (pRes.data.referral_source_id ?? null) : null;
+            wiz.cardPayerId = pRes && !pRes.error && pRes.data ? (pRes.data.payer_id ?? null) : null;   // REFERRAL_BILL_V1 (дополнение 29.09)
             wiz.categoryId = pRes && !pRes.error && pRes.data && pRes.data.category_id != null ? Number(pRes.data.category_id) : null;
             if (cat && cat.active !== 0 && cat.active !== false && Number(cat.discount_percent) > 0) {
                 wiz.categoryName = cat.name || '';
@@ -653,7 +669,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // it is what tells you whether the browser is running the file you just
         // edited, which is exactly the question when a fix "does not work".
         /* i18n-exempt-start: console-диагностика */
-        console.info('[visit-wizard refbill1] catalog load —', wiz.dbg,   // REFERRAL_BILL_V1 — тег = штамп ?v= импортов
+        console.info('[visit-wizard refbill2] catalog load —', wiz.dbg,   // REFERRAL_BILL_V1 — тег = штамп ?v= импортов
             '· плательщики:', wiz.payersError ? 'ОШИБКА ' + wiz.payersError : wiz.payers.length);
         /* i18n-exempt-end */
         if (svcRes.error) toast(trf('Услуги не загрузились: {msg}', { msg: wiz.loadError }), 'fail');
@@ -1781,6 +1797,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             kv('Кто платит', payer
                 ? payer.name + ' · ' + tr(payerKindRu(payer.kind))
                     + (wiz.payMethod === 'dms' && wiz.policyNo.trim() ? ' · ' + trf('полис {no}', { no: wiz.policyNo.trim() }) : '')
+                // REFERRAL_BILL_V1 (дополнение 29.09) — у врача с плательщиком в
+                // карте пациента: платит он, а не «пациент в кассе».
+                : leaveForCashier() ? cardPayerText()
                 : tr('Пациент — оплата в кассе')),
             h('div', { style: { margin: '14px 0 6px', fontSize: '12.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ink-500)' } }, 'Услуги'),
             ...wiz.cart.map(c => {
@@ -1801,12 +1820,23 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             h('div', { class: 'row', style: { padding: '10px 0 0', fontSize: '13.5px', gap: '10px' } },
                 h('span', { style: { flex: 1, fontWeight: 700 } }, 'Итого'),
                 h('span', { class: 'num', style: { fontWeight: 800, color: 'var(--primary-700)' } }, fmtPrice(grandTotal()), ' сум')),
-            canInvoice
+            // REFERRAL_BILL_V1 (дополнение 29.09) — плательщик в карте: галочки
+            // нет, счёт выставит касса (строки ждут её в «Ждут счёта»).
+            canInvoice && !leaveForCashier()
                 ? h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px', fontSize: '12.5px', color: 'var(--ink-700)', cursor: 'pointer' } },
                     invoiceCb, 'Сразу выставить счёт — он появится в кассе («Приём оплат»)')
-                : h('div', { class: 'muted', style: { marginTop: '16px', fontSize: '12.5px' } },
-                    'Счёт выставит касса — у вашей роли нет права выставлять счета.'),
+                : h('div', { class: 'muted', 'data-invoice-note': '', style: { marginTop: '16px', fontSize: '12.5px' } },
+                    leaveForCashier()   // REFERRAL_BILL_V1
+                        ? 'У пациента в карте плательщик — счёт выставит касса.'
+                        : 'Счёт выставит касса — у вашей роли нет права выставлять счета.'),
         ));
+    }
+
+    // REFERRAL_BILL_V1 (дополнение 29.09) — плательщик из карты тем же видом,
+    // что выбранный («Название · тип»); список не загрузился — без названия.
+    function cardPayerText() {
+        const cp = wiz.payers.find(p => String(p.id) === String(wiz.cardPayerId));
+        return cp ? cp.name + ' · ' + tr(payerKindRu(cp.kind)) : '—';
     }
 
     // ---------------------------------------------------------------------
@@ -2456,7 +2486,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         const nextStep = seqIdx >= 0 && seqIdx < seq.length - 1 ? seq[seqIdx + 1] : null;
         const nextLabel = nextStep
             ? trf('Далее: {step}', { step: tr(NEXT_TITLES[nextStep]) })
-            : (canInvoice ? tr('Сформировать счёт') : tr('Записать услуги'));   // WIZ_INVOICE_PRINT_V1 + INVOICE_ROLE_HONEST_V1
+            : (canInvoice && !leaveForCashier() ? tr('Сформировать счёт') : tr('Записать услуги'));   // WIZ_INVOICE_PRINT_V1 + INVOICE_ROLE_HONEST_V1 · REFERRAL_BILL_V1 — плательщик в карте: счёт выставит касса
         const blocked = nextBlockReason();
         const nextBtn = h('button', {
             class: 'btn', type: 'button',
@@ -2584,6 +2614,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
             let invoicesOk = 0, invoiceFail = '';
             let billedLines = 0;                           // REFERRAL_BILL_V1 — сколько строк легло в счета
+            // REFERRAL_BILL_V1 (дополнение 29.09) — плательщик в карте у врача:
+            // счёт не выставляется вовсе, строки ждут кассу («Ждут счёта»).
+            const billNow = wiz.raiseInvoice && !leaveForCashier();
             const aktJobs = [];                            // AKT_DOC_V1 — акты по счетам контрагентов
             let firstInvoice = null;                       // WIZ_INVOICE_PRINT_V1 — печатаем первый счёт
             const patientInvoices = [];                    // DEPOSIT_WALLET_V1 — счета пациента для «с баланса»
@@ -2740,7 +2773,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     if (isCovered(c)) coveredVsIds.push(res.data.id);
                 }
 
-                if (wiz.raiseInvoice && vsIds.length) {
+                if (billNow && vsIds.length) {   // REFERRAL_BILL_V1 — billNow: без плательщика в карте у врача
                     // COVERAGE_SPLIT_V1 — визит делится на ДВА счёта: покрытые
                     // услуги уходят контрагенту (payer_id), остальные — пациенту.
                     // Скидка — только на счёт пациента: контрагент платит по
