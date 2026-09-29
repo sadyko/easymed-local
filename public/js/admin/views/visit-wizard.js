@@ -115,8 +115,8 @@ const refSourcesIn = (sources, cat) => (sources || []).filter(s => (cat === REF_
 
 // INVOICE_ROLE_HONEST_V1 (2026-09-16) — ЗЕРКАЛО CREATE_INVOICE_ROLES
 // (server/services/rpc/billing.js): счёт выставляют администратор,
-// регистратура и касса. Врач направляет на услуги, но счёта не выставляет —
-// это правило про деньги, а не про экран, и сервер держит его сам.
+// регистратура и касса. До 29.09 правило было «врач направляет на услуги, но
+// счёта не выставляет» — ОТМЕНЕНО решением владельца (REFERRAL_BILL_V1 ниже).
 //
 // Мастер об этом правиле молчал: галочка «Сразу выставить счёт» стояла у всех,
 // врач нажимал «Сформировать счёт» и получал английский отказ сервера «Your
@@ -124,7 +124,25 @@ const refSourcesIn = (sources, cat) => (sources || []).filter(s => (cat === REF_
 // галочки нет, кнопка называется «Записать услуги», а внизу написано, кто
 // выставит счёт. Услуги при этом записываются как и раньше — касса выставляет
 // по ним счёт из визита.
+//
+// REFERRAL_BILL_V1 (2026-09-29) — РЕШЕНИЕ ВЛАДЕЛЬЦА: НАПРАВЛЕНИЕ ВРАЧА САМО
+// ВЫСТАВЛЯЕТ СЧЁТ. Владелец: «While we are seeing the patient as a doctor and
+// refer to another service or a doctor we cannot see them in the cashier's
+// window. Which means flow is broken.» Обещание «Счёт выставит касса» касса
+// выполнить не могла: «Приём оплат» строится из одних счетов, и визит со
+// строками без счёта ей не виден. Теперь врач (и главный врач) выставляет
+// неоплаченный счёт сразу — зеркало DOCTOR_INVOICE_ROLES сервера ниже. Врач
+// без денежной роли (INVOICE_ROLES) выставляет только сам счёт: «Кто платит»
+// ему не показывается, ручной скидки и промокода у него нет (в счёт уходит
+// discount_amount: 0 — скидку группы и пакета сервер даст сам), строки
+// плательщика он не выставляет. Всё, что у врача осталось без счёта (галочка
+// снята, отказ, строки плательщика), касса видит в «Приём оплат» →
+// «Ждут счёта» (cashier_unbilled) — туда и отправляет тост. Роль без права
+// (её сейчас нет: мастер открывают администратор, регистратура и врач)
+// по-прежнему видит внизу, кто выставит счёт.
 const INVOICE_ROLES = ['admin', 'registrar', 'cashier'];
+// REFERRAL_BILL_V1 — ЗЕРКАЛО DOCTOR_INVOICE_ROLES (billing.js).
+const DOCTOR_INVOICE_ROLES = ['doctor', 'head_doctor'];
 
 // LIVE_AUDIT_FIX_V1 — ЗЕРКАЛО visit_services.insert (server/db/schema-registry.js).
 // Мастер пишет строки услуг через /api/db, а их вставку сервер даёт только этим
@@ -148,12 +166,19 @@ function currentUserId() {
 export async function openVisitWizard(onSaved, patient, opts = {}) {
     if (!patient || !patient.id) { toast('Сначала выберите пациента.', 'fail'); return; }
     if (!canAddVisitLines()) { toast(tr('Услуги в визит добавляют регистратура, врач или администратор.'), 'fail'); return; }
-    const canInvoice = hasActorRole(INVOICE_ROLES);   // INVOICE_ROLE_HONEST_V1
+    // REFERRAL_BILL_V1 — денежная роль (администратор, регистратура, касса)
+    // выставляет счёт со скидкой и плательщику; врач — только сам счёт
+    // (doctorBill: без ручной скидки, без плательщика, без печати счёта у себя).
+    const moneyRole = hasActorRole(INVOICE_ROLES);   // INVOICE_ROLE_HONEST_V1
+    const canInvoice = moneyRole || hasActorRole(DOCTOR_INVOICE_ROLES);   // REFERRAL_BILL_V1
+    const doctorBill = canInvoice && !moneyRole;   // REFERRAL_BILL_V1
     // LIVE_AUDIT_FIX_V1 — выбор плательщика куда-то должен лечь: в счёт
     // контрагента (создаёт тот, кто выставляет счета) или в карту пациента
     // (регистратура, администратор). У врача не ложился никуда — ряд «Кто
     // платит» ему не показывается, плательщика укажет регистратура или касса.
-    const canPickPayer = canInvoice || hasActorRole(PATIENT_PAYER_ROLES);
+    // REFERRAL_BILL_V1 — от денежной роли, а не от canInvoice: счёт врач теперь
+    // выставляет, но плательщику — нет (сервер откажет).
+    const canPickPayer = moneyRole || hasActorRole(PATIENT_PAYER_ROLES);
     const canSavePatientPayer = hasActorRole(PATIENT_PAYER_ROLES);
 
     const wiz = {
@@ -628,7 +653,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // it is what tells you whether the browser is running the file you just
         // edited, which is exactly the question when a fix "does not work".
         /* i18n-exempt-start: console-диагностика */
-        console.info('[visit-wizard vw7] catalog load —', wiz.dbg,
+        console.info('[visit-wizard refbill1] catalog load —', wiz.dbg,   // REFERRAL_BILL_V1 — тег = штамп ?v= импортов
             '· плательщики:', wiz.payersError ? 'ОШИБКА ' + wiz.payersError : wiz.payers.length);
         /* i18n-exempt-end */
         if (svcRes.error) toast(trf('Услуги не загрузились: {msg}', { msg: wiz.loadError }), 'fail');
@@ -2007,7 +2032,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             return h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--crit-600)' } },
                 trf('Долг по кэшбэку: {sum} сум', { sum: fmtPrice(wiz.walletDebt) }));
         }
-        if (!(bal > 0) || !canInvoice) return null;
+        if (!(bal > 0) || !moneyRole) return null;   // REFERRAL_BILL_V1 — врачу, как и раньше, не показывается
         if (!canSpendStoredValue()) {
             return h('div', { class: 'muted', style: { fontSize: '12.5px' } },
                 trf('На балансе пациента {sum} — списать его можно в кассе.', { sum: fmtPrice(bal) }));
@@ -2399,13 +2424,18 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             h('div', { style: { fontSize: '13.5px', fontWeight: 800, color: 'var(--ink-900)' } }, 'Кто платит'),
             ...(canPickPayer ? [payRow, companyRow, noPayersHint, dmsHint]
                 : [h('div', { class: 'muted', 'data-payer-note': '', style: { fontSize: '12.5px' } }, tr('Плательщика укажет регистратура или касса.'))]),   // LIVE_AUDIT_FIX_V1
-            h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
+            // REFERRAL_BILL_V1 — ручной скидки и промокода у врача нет: сервер
+            // их врачу не примет (в счёт уходит discount_amount: 0).
+            doctorBill ? null : h('div', { class: 'row', style: { gap: '8px', alignItems: 'center' } },
                 discLabelEl, modesEl, discInp),
             // CATEGORY_DISCOUNT_V1 — откуда взялся процент: скидка группы пациента.
-            wiz.categoryPct > 0 ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '-4px' } },
-                trf('Скидка группы «{name}» — {pct}% подставлена; можно изменить.', { name: wiz.categoryName, pct: wiz.categoryPct })) : null,
-            promoTick,
-            promoRow,
+            // REFERRAL_BILL_V1 — врачу: её даст сам счёт, менять нечего.
+            wiz.categoryPct > 0 ? h('div', { class: 'muted', 'data-category-note': '', style: { fontSize: '12.5px', marginTop: doctorBill ? '0' : '-4px' } },
+                doctorBill
+                    ? trf('Скидка группы «{name}» — {pct}%: применится в счёте сама.', { name: wiz.categoryName, pct: wiz.categoryPct })
+                    : trf('Скидка группы «{name}» — {pct}% подставлена; можно изменить.', { name: wiz.categoryName, pct: wiz.categoryPct })) : null,
+            doctorBill ? null : promoTick,   // REFERRAL_BILL_V1
+            doctorBill ? null : promoRow,    // REFERRAL_BILL_V1
             balanceRow(),
         ));
 
@@ -2553,6 +2583,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             }
 
             let invoicesOk = 0, invoiceFail = '';
+            let billedLines = 0;                           // REFERRAL_BILL_V1 — сколько строк легло в счета
             const aktJobs = [];                            // AKT_DOC_V1 — акты по счетам контрагентов
             let firstInvoice = null;                       // WIZ_INVOICE_PRINT_V1 — печатаем первый счёт
             const patientInvoices = [];                    // DEPOSIT_WALLET_V1 — счета пациента для «с баланса»
@@ -2567,7 +2598,9 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // сколько влезло в первый, остаток — в следующий (см. ниже).
             // PACKAGES_V1 (ревью I-1) — переносится только скидка на строки без
             // своей (restDiscount): скидку пакета сервер считает по строкам сам.
-            let discountLeft = restDiscount();
+            // REFERRAL_BILL_V1 — врач ручной скидки не даёт: в счёт уходит 0
+            // (скидку группы пациента и пакета сервер даст сам).
+            let discountLeft = doctorBill ? 0 : restDiscount();
             for (const [day, lines] of [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
                 // самый ранний слот дня — время визита; врач дня — первый врач строк.
                 // DATE_ONLY_V1 — полуночные услуги без времени не должны перебивать
@@ -2716,16 +2749,28 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     const patientIds = vsIds.filter(id => !covered.has(id));
                     const jobs = [
                         { ids: patientIds,   payer: null,                    label: 'пациенту' },
-                        { ids: coveredVsIds, payer: Number(wiz.payerId) || null, label: 'плательщику' },
-                    ].filter(j => j.ids.length && (j.payer === null || wiz.payKind !== 'self'));
+                        { ids: coveredVsIds, payer: Number(wiz.payerId) || null, label: 'плательщику', covered: true },
+                    ].filter(j => j.ids.length && (j.payer === null || wiz.payKind !== 'self'))
+                        // REFERRAL_BILL_V1 — счёт плательщику врач не выставляет:
+                        // покрытые строки остаются без счёта — касса видит их в
+                        // «Ждут счёта» и выставит страховой или организации.
+                        .filter(j => !(doctorBill && j.covered));
 
                     for (const job of jobs) {
                         // WIZARD_DISCOUNT_V1 — сервер зажимает discount_amount в [0, subtotal].
                         const disc = job.payer === null ? discountLeft : 0;
                         const { data: iRes, error: iErr } = await supabase.rpc('create_invoice_for_visit',
                             { visit_id: visit.id, visit_service_ids: job.ids, discount_amount: disc, payer_id: job.payer });
-                        if (iErr) { invoiceFail = ' ' + trf('Счёт ({day}, {label}) не выставлен: {msg} — можно выставить из визита.', { day, label: job.label, msg: iErr.message || iErr }); continue; }
+                        if (iErr) {
+                            // REFERRAL_BILL_V1 — врачу «выставить из визита» не
+                            // подсказываем: куда идти, скажет тост ниже («Ждут счёта»).
+                            invoiceFail = ' ' + (doctorBill
+                                ? trf('Счёт ({day}) не выставлен: {msg}.', { day, msg: String(iErr.message || iErr).replace(/[.\s]+$/, '') })
+                                : trf('Счёт ({day}, {label}) не выставлен: {msg} — можно выставить из визита.', { day, label: job.label, msg: iErr.message || iErr }));
+                            continue;
+                        }
                         invoicesOk++;
+                        billedLines += job.ids.length;   // REFERRAL_BILL_V1
                         // DISCOUNT_CARRY_V1 — остаток скидки переходит на счёт
                         // СЛЕДУЮЩЕГО дня, а не сгорает.
                         //
@@ -2808,7 +2853,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // Кассе приходили счета, ни один из которых не совпадал с бумагой.
             // Теперь как в service-picker-modal: номер, строки, скидка и сумма —
             // ровно выставленные; очередь и исполнитель — по строкам ЭТОГО счёта.
-            if (firstInvoice && patientInvoices.length) {
+            // REFERRAL_BILL_V1 — у врача счёт не печатается: его бумага —
+            // «Маршрутный лист» кабинета («Оплатите в кассе…»), чек с талонами
+            // очереди печатает касса при оплате. Второе окно печати у врача
+            // было бы лишним.
+            if (firstInvoice && patientInvoices.length && !doctorBill) {
                 try {
                     // PAYER_FROM_SETTINGS_V1 — на печатном счёте плательщик назван
                     // так же, как в настройках и в подтверждении мастера.
@@ -2865,11 +2914,15 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
 
             const dayWord = byDay.size > 1 ? ' ' + trf('(дней: {n})', { n: byDay.size }) : '';
             const cashInvoices = invoicesOk - aktJobs.length;
-            const invMsg = invoiceFail || [
+            // REFERRAL_BILL_V1 — строки врача, оставшиеся без счёта (галочка
+            // снята, отказ сервера, строки плательщика), касса видит в
+            // «Приём оплат» → «Ждут счёта» (cashier_unbilled): туда и тост.
+            const leftUnbilled = doctorBill && billedLines < booked.length;
+            const invMsg = (invoiceFail || [
                 !canInvoice ? ' ' + tr('Счёт выставит касса.') : '',
                 cashInvoices > 0 ? ' ' + tr('Счёт пациента выставлен — виден в кассе.') : '',
                 aktJobs.length ? ' ' + tr('Услуги плательщика — по акту, в кассу не идут.') : '',
-            ].join('');
+            ].join('')) + (leftUnbilled ? ' ' + tr('Счёт выставит касса — пациент в «Приём оплат» → «Ждут счёта».') : '');   // REFERRAL_BILL_V1
             toast(tr('Услуги добавлены') + dayWord + '.' + invMsg + balanceMsg, invoiceFail ? 'info' : 'ok');
             close();
             if (typeof onSaved === 'function') {

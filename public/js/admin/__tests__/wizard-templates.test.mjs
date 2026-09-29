@@ -66,7 +66,8 @@ test('applying a template repaints via a function that is actually in scope', ()
 const strip = (s) => s.replace(/\/\/[^\n]*/g, '');
 test('в счёт уходит только скидка на строки без пакета, и переносится по rest_discount', () => {
   const code = strip(wizard);
-  assert.match(code, /let discountLeft = restDiscount\(\)/, 'в счёт — скидка без пакетов (сервер считает пакет сам)');
+  // REFERRAL_BILL_V1 — у врача без денежной роли ручной скидки нет: в счёт уходит 0.
+  assert.match(code, /let discountLeft = doctorBill \? 0 : restDiscount\(\)/, 'в счёт — скидка без пакетов (сервер считает пакет сам); у врача — 0');
   assert.match(code, /iRes\.rest_discount/, 'перенос по тому, что сервер применил БЕЗ скидок пакета');
   const loyalty = code.slice(code.indexOf('function loyaltyDiscount('), code.indexOf('function promoLines('));
   assert.match(loyalty, /restTotal\(\)/, 'лояльность — только по строкам без своей скидки');

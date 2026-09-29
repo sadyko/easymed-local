@@ -798,3 +798,140 @@ test('LIVE_AUDIT_FIX_V1 (A5): мастер визита — хирургия б�
   assert.ok(!RPC.some((c) => c.name === 'ensure_visit'), 'визит заведён до отказа');
   assert.equal(countVisits(), 0);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REFERRAL_BILL_V1 (2026-09-29) — НАПРАВЛЕНИЕ ВРАЧА САМО ВЫСТАВЛЯЕТ СЧЁТ.
+//
+// Владелец: «While we are seeing the patient as a doctor and refer to another
+// service or a doctor we cannot see them in the cashier's window.» Мастер у
+// врача заводил строки без счёта, а касса видит только счета. Теперь у врача
+// «Сразу выставить счёт» стоит и отмечена; «Кто платит», ручной скидки и
+// промокода у него нет, в счёт уходит discount_amount: 0 и payer_id: null
+// (скидку группы даёт сервер). Сервер здесь настоящий и тоже врачебный.
+// ═══════════════════════════════════════════════════════════════════════════
+const INVOICE_TICK = 'Сразу выставить счёт — он появится в кассе («Приём оплат»)';
+const WAITING_HINT = 'Счёт выставит касса — пациент в «Приём оплат» → «Ждут счёта».';
+
+/** Жать «Далее», пока смета не дойдёт до «Подтверждения» (без записи). */
+async function pressUntilConfirm() {
+  for (let i = 0; i < 6; i++) {
+    const ov = document.body.children.find(isWizard);
+    if (!ov || textOf(ov).includes(INVOICE_TICK)) break;
+    const btn = walk(ov).filter((n) => n.tagName === 'BUTTON').find((n) => /^\s*Далее/.test(textOf(n).replace(/\s+/g, ' ').trim()));
+    if (!btn) break;
+    btn.click();
+    await wait(40); await flush(20);
+  }
+}
+const invoiceTick = (ov) => {
+  const label = walk(ov).find((n) => n.tagName === 'LABEL' && textOf(n).includes(INVOICE_TICK));
+  return label && label.children.find((n) => n.tagName === 'INPUT');
+};
+
+// Стенд отдаёт вложенные связи плоскими ('patient_categories.name'), и скидка
+// группы в смету не подставлялась. Здесь — тем же reshape, что настоящий
+// маршрут (routes/db.js): у врача смета показывает скидку группы, и ровно
+// поэтому важно, что в счёт он шлёт 0 (иначе сервер отказал бы, 403).
+const { reshape } = await import('../../../../server/routes/db.js');
+async function asRole(role, id, fn) {
+  const perms = await import('../permissions.js');
+  const was = { id: USER.id, role: USER.role };
+  const openWas = window.open;
+  const fetchWas = globalThis.fetch;
+  const opened = { n: 0 };
+  window.open = () => { opened.n++; return { document: { open() {}, write() {}, close() {} }, focus() {}, print() {}, close() {} }; };
+  globalThis.fetch = async (url, opts) => {
+    const res = await fetchWas(url, opts);
+    if (String(url) !== '/api/db' || !res.ok) return res;
+    let meta;
+    try { meta = compile(JSON.parse((opts && opts.body) || '{}'), USER).meta; } catch { return res; }
+    if (meta.op !== 'select' || !meta.embeds || !meta.embeds.length) return res;
+    const json = await res.json();
+    const rows = Array.isArray(json.data) ? json.data : (json.data ? [json.data] : []);
+    reshape(rows, meta);
+    return { ok: true, status: res.status, json: async () => json };
+  };
+  window.easymed = { state: { user: { id, role, extra_roles: [] } } };
+  perms.setActorRoles([role]);
+  Object.assign(USER, { id, role });
+  try { await fn(opened); }
+  finally {
+    Object.assign(USER, was);
+    window.open = openWas;
+    globalThis.fetch = fetchWas;
+    delete window.easymed;
+    perms.setActorRoles([]);
+  }
+}
+const vipPatient = (db) => {
+  const cat = db.prepare("INSERT INTO patient_categories (name, discount_percent) VALUES ('VIP', 10)").run().lastInsertRowid;
+  db.prepare('UPDATE patients SET category_id = ? WHERE id = 3').run(cat);
+};
+
+test('REFERRAL_BILL_V1: врач — счёт стоит и отмечен, плательщика и ручной скидки нет, в счёт уходят discount_amount: 0 и payer_id: null', async () => {
+  await asRole('doctor', 7, async (opened) => {
+    const w = await openWizardReadyWith(vipPatient);
+    const txt = textOf(w.overlay());
+    assert.match(txt, /Плательщика укажет регистратура или касса/, 'врачу показан выбор плательщика');
+    assert.equal(walk(w.overlay()).find((n) => n.tagName === 'INPUT' && n.max === '100'), undefined, 'врачу показано поле ручной скидки');
+    assert.ok(!/Скидка \(лояльность\)/.test(txt), 'врачу показана подпись ручной скидки');
+    assert.ok(!/Промокод \/ карта \/ сертификат/.test(txt), 'врачу показан промокод');
+    assert.match(txt, /Скидка группы «VIP» — 10%: применится в счёте сама/, 'врачу не сказано, откуда скидка группы');
+
+    await pressUntilConfirm();
+    const tick = invoiceTick(w.overlay());
+    assert.ok(tick, 'у врача нет галочки «Сразу выставить счёт»: ' + textOf(w.overlay()));
+    assert.ok(tick.hasAttribute('checked'), 'галочка «Сразу выставить счёт» у врача не отмечена');
+    assert.ok(!textOf(w.overlay()).includes('у вашей роли нет права'), 'врачу сказано, что права нет');
+
+    await pressUntilCreate();
+    const calls = RPC.filter((c) => c.name === 'create_invoice_for_visit').map((c) => c.body);
+    assert.ok(calls.length >= 1, 'мастер врача не выставил счёт');
+    for (const b of calls) {
+      assert.equal(b.discount_amount, 0, 'врач прислал ручную скидку: ' + JSON.stringify(b));
+      assert.equal(b.payer_id, null, 'врач выставил счёт плательщику: ' + JSON.stringify(b));
+    }
+    const inv = DB.prepare('SELECT * FROM invoices ORDER BY id').all();
+    assert.equal(inv.length, calls.length, 'сервер отказал врачу в счёте: ' + JSON.stringify(TOASTS));
+    assert.ok(inv.every((i) => i.status === 'unpaid' && i.created_by === 7 && i.payer_id === null));
+    assert.ok(inv.every((i) => Math.abs(i.discount_amount - i.subtotal * 0.1) < 0.01), 'скидку группы сервер дал сам: ' + JSON.stringify(inv));
+    assert.ok(TOASTS.some((t) => /Счёт пациента выставлен — виден в кассе/.test(t)), JSON.stringify(TOASTS));
+    assert.ok(!TOASTS.some((t) => t.includes(WAITING_HINT)), 'всё выставлено — «Ждут счёта» не при чём');
+    assert.equal(opened.n, 0, 'у врача напечатался счёт — его бумага маршрутный лист кабинета');
+    assert.equal(w.saved(), 1);
+  });
+});
+
+test('REFERRAL_BILL_V1: врач снял «Сразу выставить счёт» — строки ждут кассу, тост ведёт в «Ждут счёта», и касса их видит', async () => {
+  await asRole('doctor', 7, async () => {
+    const w = await openWizardReady();
+    await pressUntilConfirm();
+    const tick = invoiceTick(w.overlay());
+    assert.ok(tick, 'у врача нет галочки «Сразу выставить счёт»');
+    tick.checked = false;   // снять — как человек
+    tick.dispatchEvent({ type: 'change', target: tick, currentTarget: tick });
+    await pressUntilCreate();
+    assert.equal(RPC.filter((c) => c.name === 'create_invoice_for_visit').length, 0, 'счёт выставлен при снятой галочке');
+    assert.ok(TOASTS.some((t) => t.includes(WAITING_HINT)), 'тост не говорит, где касса найдёт пациента: ' + JSON.stringify(TOASTS));
+    const out = getRpc('cashier_unbilled')(DB, {}, { id: 1, role: 'cashier' });
+    assert.equal(out.rows.length, 1, 'касса не видит строки врача без счёта');
+    assert.equal(out.rows[0].patient_id, 3);
+    assert.equal(out.rows[0].total, 100000);
+  });
+});
+
+test('REFERRAL_BILL_V1: регистратура — как прежде: плательщик, ручная скидка, промокод и печать счёта', async () => {
+  await asRole('registrar', 1, async (opened) => {
+    const w = await openWizardReadyWith(vipPatient);
+    const txt = textOf(w.overlay());
+    assert.ok(!/Плательщика укажет регистратура/.test(txt));
+    assert.ok(walk(w.overlay()).find((n) => n.tagName === 'INPUT' && n.max === '100'), 'у регистратуры пропало поле скидки');
+    assert.match(txt, /Промокод \/ карта \/ сертификат/);
+    assert.match(txt, /Скидка группы «VIP» — 10% подставлена; можно изменить/);
+    await pressUntilCreate();
+    const calls = RPC.filter((c) => c.name === 'create_invoice_for_visit').map((c) => c.body);
+    assert.ok(calls.length >= 1);
+    assert.equal(calls[0].discount_amount, 10000, 'скидка регистратуры (подставленная группа) уходит в счёт, как раньше');
+    assert.ok(opened.n >= 1, 'регистратуре счёт печатается, как раньше');
+  });
+});

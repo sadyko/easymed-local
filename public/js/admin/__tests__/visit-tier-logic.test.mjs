@@ -85,8 +85,10 @@ test('the editor sends the four tier fields; the wizard, attach path and doctor 
     assert.match(vw, /price_tier:\s*lineTier\(c\)/, 'строка визита из мастера несёт ступень');
     assert.match(vw, /if \(day\) args\.date = day;/, 'котировка спрашивается на ДЕНЬ записи, а не на сегодня');
     assert.match(vw, /if \(tierApplies\(tq\)\) return Number\(tq\.price\);/, 'ступень сильнее личной цены врача — как в кассе');
-    for (const f of ['views/crm.js', 'views/patient-card.js', 'views/patient-create-modal.js']) {
-        assert.ok(read(f).includes('visit-wizard.js?v=tier2'), f + ' держит старый кэш мастера записи');
+    // REFERRAL_BILL_V1 — штамп поднят вместе с правкой мастера; кабинет врача
+    // («Направить на услуги») — такой же импортёр, и держит тот же штамп.
+    for (const f of ['views/crm.js', 'views/patient-card.js', 'views/patient-create-modal.js', 'views/service-workspace.js']) {
+        assert.ok(read(f).includes('visit-wizard.js?v=refbill1'), f + ' держит старый кэш мастера записи');
     }
 });
 

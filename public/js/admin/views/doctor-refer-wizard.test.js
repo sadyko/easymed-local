@@ -22,7 +22,11 @@ import { fileURLToPath } from 'node:url';
 //      оформляет своим макетом, который рисуется раньше нашего текста, и лист
 //      выходил демо-бланком анализов с чужой фамилией;
 //   4. право выставить счёт мастер спрашивает у ролей — зеркало
-//      CREATE_INVOICE_ROLES на сервере (у врача такого права нет).
+//      CREATE_INVOICE_ROLES на сервере. REFERRAL_BILL_V1 (2026-09-29) —
+//      решение владельца: врач и главный врач теперь выставляют счёт по
+//      направлению (зеркало DOCTOR_INVOICE_ROLES), но плательщика и ручную
+//      скидку в него не ставят — прежняя проверка «у врача права нет»
+//      переписана под это правило.
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ws = fs.readFileSync(path.join(HERE, 'service-workspace.js'), 'utf8');
@@ -65,12 +69,21 @@ test('маршрутный лист печатается своим тексто
 });
 
 test('право выставить счёт в мастере — зеркало сервера', () => {
+  const norm = (s) => s.split(',').map((x) => x.trim().replace(/['"]/g, '')).filter(Boolean).sort();
   const mirror = wiz.match(/const INVOICE_ROLES = \[([^\]]+)\]/);
   assert.ok(mirror, 'в мастере объявлен список ролей');
   const server = billing.match(/const CREATE_INVOICE_ROLES = \[([^\]]+)\]/);
   assert.ok(server, 'на сервере объявлен CREATE_INVOICE_ROLES');
-  const norm = (s) => s.split(',').map((x) => x.trim().replace(/['"]/g, '')).filter(Boolean).sort();
-  assert.deepEqual(norm(mirror[1]), norm(server[1]), 'экран и сервер называют одни и те же роли');
-  assert.ok(!norm(server[1]).includes('doctor'), 'врач счёт не выставляет — это правило про деньги');
+  assert.deepEqual(norm(mirror[1]), norm(server[1]), 'экран и сервер называют одни и те же денежные роли');
+  assert.ok(!norm(server[1]).includes('doctor'), 'денежные роли (скидка, плательщик) — без врача');
+  // REFERRAL_BILL_V1 — врач и главный врач выставляют счёт по направлению сами.
+  const docMirror = wiz.match(/const DOCTOR_INVOICE_ROLES = \[([^\]]+)\]/);
+  const docServer = billing.match(/const DOCTOR_INVOICE_ROLES = \[([^\]]+)\]/);
+  assert.ok(docMirror && docServer, 'список врачебных ролей счёта объявлен и в мастере, и на сервере');
+  assert.deepEqual(norm(docMirror[1]), norm(docServer[1]), 'экран и сервер называют одни и те же врачебные роли');
+  assert.deepEqual(norm(docServer[1]), ['doctor', 'head_doctor'], 'решение владельца: врач и главный врач');
+  assert.match(wiz, /const canInvoice = moneyRole \|\| hasActorRole\(DOCTOR_INVOICE_ROLES\)/, 'врачу галочка «сразу выставить счёт» есть');
   assert.match(wiz, /raiseInvoice:\s*canInvoice/, 'галочка «сразу выставить счёт» зависит от роли');
+  // Плательщика врач не выбирает: выбор — от денежной роли, а не от права на счёт.
+  assert.match(wiz, /const canPickPayer = moneyRole \|\| hasActorRole\(PATIENT_PAYER_ROLES\)/, '«Кто платит» у врача снова появился бы');
 });
