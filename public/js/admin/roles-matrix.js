@@ -45,8 +45,40 @@ export { grantsFromLegacy };
  * `prev` — прежние sections/levels: ключи, которых справочник не знает
  * ('registration', 'custdev', 'queue'…), переносятся как есть — сохранение
  * роли не должно молча стирать настройку, сделанную другим экраном.
+ *
+ * ROLES_SAVE_TRUTH_V1 (2026-09-29) — `initial`: значения, показанные при
+ * открытии роли. ВЫВОД СТАРЫХ ПОЛЕЙ ТЕРЯЕТ СВЕДЕНИЯ: «Кабинет врача» — строка
+ * «Нет / Просмотр», и записанный «editor» выводится обратно «viewer»;
+ * «Пациенты: Изменение» дописывает `registration` роли, которой его никто не
+ * давал; «admin» у CRM возвращается «editor». На свежей базе так при КАЖДОМ
+ * сохранении менялись семь ролей из десяти — и пока матрица писалась целиком,
+ * это было не видно: окна врача спасала их собственная запись. Теперь
+ * нетронутые окна не пишутся, и «viewer» отнял бы у врача «Мои визиты:
+ * Изменение». Поэтому с `initial` старый ключ меняется, только если его ВЫВОД
+ * сдвинулся от того, что был при открытии (значит, тронули то, из чего он
+ * выводится), а у остальных остаётся ровно то, что записано.
  */
-export function legacyFromGrants(grants, prev = {}) {
+export function legacyFromGrants(grants, prev = {}, initial = null) {
+    const now = deriveLegacy(grants, prev);
+    if (!initial) return now;
+    const was = deriveLegacy(initial, prev);
+    const pSec = Array.isArray(prev.sections) ? prev.sections : [];
+    const pLv = (prev.levels && typeof prev.levels === 'object') ? prev.levels : {};
+    const keys = [...new Set([...pSec, ...now.sections, ...was.sections, ...Object.keys(pLv), ...Object.keys(now.levels), ...Object.keys(was.levels)])];
+    const sections = [];
+    const levels = {};
+    for (const k of keys) {
+        const moved = was.sections.includes(k) !== now.sections.includes(k) || was.levels[k] !== now.levels[k];
+        const on = moved ? now.sections.includes(k) : pSec.includes(k);
+        const lvl = moved ? now.levels[k] : pLv[k];
+        if (on) sections.push(k);
+        if (lvl !== undefined) levels[k] = lvl;
+    }
+    return { sections, levels };
+}
+
+// Прежний вывод старых полей из grants — без оглядки на то, что записано.
+function deriveLegacy(grants, prev = {}) {
     const known = new Set(CATALOG.map((s) => s.legacy).filter(Boolean));
     const sections = [];
     const levels = {};
@@ -101,27 +133,84 @@ export function legacyFromGrants(grants, prev = {}) {
  * Раздел, закрытый здесь и сейчас, обнуляет свои строки сразу (paintCatalog),
  * поэтому сюда они приходят уже нулями; clamp ниже — страховка и починка тех
  * записей, что сделаны до этой правки.
+ *
+ * ROLES_SAVE_TRUTH_V1 (2026-09-29) — ПИШЕТСЯ ТОЛЬКО РЕШЁННОЕ, И ЭТО ГЛАВНОЕ.
+ *
+ * Матрица целиком писала в базу и то, чего администратор не решал: у ключа,
+ * который роль не настраивала, экран показывает догадку или ответ сервера, и
+ * запись превращала её в настоящее право. Доказано на копии данных: пустое
+ * «Сохранить роль» выдало оператору колл-центра `crm.all` (чужие заявки), а
+ * регистратуре — измерения стационара (403 → 200). С `initial` — значениями,
+ * показанными при открытии роли, — пишется:
+ *   • каждый ключ, уже записанный у роли (`explicit`), с текущим значением;
+ *   • каждый ключ, чьё значение сейчас ОТЛИЧАЕТСЯ от показанного при открытии;
+ *   • строки разделов, чей старый ключ (`legacy`) сдвинула правка раздела, —
+ *     такими, какими их видно (movedFamilyKeys ниже).
+ * Нетронутый незаписанный ключ не пишется: решать продолжает сервер — ровно
+ * так, как экран и показал. Прежние правила — частные случаи «не тронуто —
+ * не пишется»: нетронутая строка «только администратор» и несвершённое «Нет»
+ * раздела. Без `initial` — прежний сбор матрицей целиком.
  */
-export function collectGrants(controls, { explicit = {}, closed = null } = {}) {
-    const out = {};
-    for (const [key, ctl] of Object.entries(controls)) out[key] = ctl.value();
-    // ADMIN_ROWS_GRANTABLE_V1 — строка с правилом «только администратор»,
-    // которую роль не настраивала и которую здесь не открыли, в базу НЕ
-    // пишется: записанное «Нет» у своей роли на основе администратора стало бы
-    // её собственным запретом (grants.js «своё „Нет“») и отняло бы у неё
-    // «Сотрудников» или «Роли» просто потому, что роль пересохранили.
-    for (const r of catalogRows()) {
-        if (r.adminDefault && out[r.key] === 'none' && !(r.key in (explicit || {}))) delete out[r.key];
+export function collectGrants(controls, { explicit = {}, closed = null, initial = null } = {}) {
+    const cur = {};
+    for (const [key, ctl] of Object.entries(controls)) cur[key] = ctl.value();
+    const exp = explicit || {};
+    let out;
+    if (initial) {
+        out = {};
+        for (const [key, v] of Object.entries(cur)) {
+            if (key in exp || v !== (key in initial ? initial[key] : 'none')) out[key] = v;
+        }
+        for (const key of movedFamilyKeys(initial, cur)) out[key] = cur[key];
+    } else {
+        out = { ...cur };
+        // ADMIN_ROWS_GRANTABLE_V1 — строка с правилом «только администратор»,
+        // которую роль не настраивала и которую здесь не открыли, в базу НЕ
+        // пишется: записанное «Нет» у своей роли на основе администратора стало бы
+        // её собственным запретом (grants.js «своё „Нет“») и отняло бы у неё
+        // «Сотрудников» или «Роли» просто потому, что роль пересохранили.
+        for (const r of catalogRows()) {
+            if (r.adminDefault && out[r.key] === 'none' && !(r.key in exp)) delete out[r.key];
+        }
     }
     for (const s of CATALOG) {
         if (!(s.key in out) || out[s.key] !== 'none') continue;
-        const decided = (s.key in (explicit || {})) || !!(closed && closed.has(s.key));
+        const decided = (s.key in exp) || !!(closed && closed.has(s.key));
         if (!decided) { delete out[s.key]; continue; }
         for (const r of [...(s.windows || []), ...(s.actions || [])]) {
             if (r.key in out) out[r.key] = 'none';
         }
     }
     return out;
+}
+
+/**
+ * ROLES_SAVE_TRUTH_V1 — ЧТО СДВИНУЛА ПРАВКА РАЗДЕЛА.
+ *
+ * Незаписанные строки раздела оболочка и сервер ВЫВОДЯТ из его старого ключа
+ * (grantsFromLegacy, правила перехода gate-fallbacks.js): «Отчёты» выданы —
+ * видны все группы, «Кабинет врача» выдан — все его окна. Сдвинула правка
+ * раздела старый ключ — и эти строки тоже сдвинутся, хотя экран показывал их
+ * прежними: открыли «Отчёты» лаборанту и отметили одну группу — сервер отдал
+ * бы все. Поэтому строки всех разделов с таким старым ключом пишутся такими,
+ * какими их видно. Строки «только администратор» (adminDefault) из старого
+ * ключа не выводятся и сюда не входят.
+ */
+function movedFamilyKeys(initial, cur) {
+    const was = deriveLegacy(initial, {});
+    const now = deriveLegacy(cur, {});
+    const moved = new Set();
+    for (const k of new Set([...was.sections, ...now.sections])) {
+        if (was.sections.includes(k) !== now.sections.includes(k) || was.levels[k] !== now.levels[k]) moved.add(k);
+    }
+    const keys = [];
+    for (const s of CATALOG) {
+        if (!s.legacy || !moved.has(s.legacy)) continue;
+        for (const r of [s, ...(s.windows || []), ...(s.actions || [])]) {
+            if (!r.adminDefault && !r.locked && r.key in cur) keys.push(r.key);
+        }
+    }
+    return keys;
 }
 
 // ---------------------------------------------------------------------------
