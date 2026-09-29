@@ -7,7 +7,7 @@
 // ими, настоящая беда (смазанный штрихкод — unmatched) выпадала из окна, и
 // экран говорил «Все результаты разложены по бланкам.» Фильтр по статусу
 // теперь в самом запросе — до limit.
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert';
 
 // Fake-DOM harness — copied from __tests__/lab-panels-mode.test.mjs (itself
@@ -108,11 +108,14 @@ globalThis.fetch = async (url, opts) => {
       messageReads.push(body);
       return { ok: true, json: async () => ({ data: serveMessages(body) }) };
     }
+    // LIS_DISCOVERY_FIX_V1 (экран), C4 — таблица приборов и живая лента для теста опроса.
+    if (body && body.table === 'lab_devices') return { ok: true, json: async () => ({ data: JSON.parse(JSON.stringify(DEVICES)) }) };
     return { ok: true, json: async () => ({ data: [] }) };
   }
   if (u.startsWith('/api/rpc/')) {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     rpcCalls.push({ name, args: body });
+    if (name === 'lis_recent') return { ok: true, json: async () => ({ data: JSON.parse(JSON.stringify(RECENT)) }) };
     if (name === 'lis_message_attach') {
       // LIS_DISCOVERY_FIX_V1 (экран), C2 — сервер может и отказать (409 и прочее).
       if (attachError) return { ok: false, status: attachError.status, json: async () => ({ error: attachError.error }) };
@@ -125,6 +128,8 @@ globalThis.fetch = async (url, opts) => {
 let rpcCalls = [];
 let attachAnswer = null;
 let attachError = null;   // { status, error } — ответ сервера с ошибкой на lis_message_attach
+let DEVICES = [];         // C4 — строки lab_devices
+let RECENT = [];          // C4 — ответ lis_recent (живая лента)
 
 const { mountLabDevices, stopLabDevicesLive } = await import('../views/lab-devices.js');
 
@@ -261,4 +266,87 @@ test('C2: сбой сервера при привязке — как прежд�
   await attachWithError({ status: 500, error: { code: 'internal', message: 'Ошибка сервера. Повторите позже.' } });
   assert.strictEqual(toastMsg, 'Не удалось привязать сообщение: Ошибка сервера. Повторите позже.');
   assert.strictEqual(toastEl.dataset.kind, 'fail');
+});
+
+// ── LIS_DISCOVERY_FIX_V1 (экран), C4 — опрос перерисовывает только изменившееся ──
+// reload() каждые 5 с перерисовывал таблицу, живую ленту и лоток без условий:
+// раскрытое «Сырое» схлопывалось, а нажатие «Изменить» или «Привязать»
+// приходилось в кнопку, которой уже нет. Теперь у каждой карточки подпись
+// того, что она показывает, — как у окна «Добавить прибор» (ревью M9).
+const HEMA = { id: 1, name: 'Гематология', profile: '', transport: 'mllp', host: '10.0.0.5', port: 2575, enabled: 1,
+  added: 1, discovered: 0, last_seen_at: '2026-09-20T08:00:00Z' };
+const LIVE_ROW = { id: 7, received_at: at(3), device_name: 'BC-5380', sample_id: 'LAB-000124', patient_name: 'Каримова Азиза',
+  service_name: 'ОАК', values: [{ parameter: 'WBC', value: '6.1', unit: '' }], status: 'applied' };
+const buttonMatching = (root, re) => walk(root).find((n) => n.tagName === 'BUTTON' && re.test(textOf(n)));
+const rawOf = (root, sample) => walk(trWith(root, sample)).find((n) => n.tagName === 'PRE');
+async function poll() { mock.timers.tick(5000); await wait(60); }
+
+async function mountPolling() {
+  DEVICES = [HEMA];
+  RECENT = [LIVE_ROW];
+  MESSAGES = [row(42, 'unmatched', 1, { detail: 'заказ по номеру пробы не найден' })];
+  const root = mk('div');
+  await mountLabDevices(root);   // опрос включён: mount() теста его гасит
+  return root;
+}
+
+test('C4: опрос без перемен не трогает таблицу, ленту и лоток; раскрытое «Сырое» остаётся раскрытым', async () => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const root = await mountPolling();
+    const edit = buttonMatching(root, /Изменить/);
+    const liveRow = trWith(root, 'LAB-000124');
+    const attachBtn = buttonIn(trWith(root, 'LAB-000042'), 'Привязать');
+    assert.ok(edit && liveRow && attachBtn, 'все три карточки нарисованы');
+    buttonIn(trWith(root, 'LAB-000042'), 'Сырое').click();
+    const raw = rawOf(root, 'LAB-000042');
+    assert.strictEqual(raw.style.display, '', '«Сырое» раскрыто');
+
+    const reads = messageReads.length;
+    await poll();
+    assert.ok(messageReads.length > reads, 'опрос действительно прошёл');
+    assert.ok(walk(root).includes(edit), 'таблица не перерисована: «Изменить» та же');
+    assert.ok(walk(root).includes(liveRow), 'живая лента не перерисована');
+    assert.ok(walk(root).includes(attachBtn), 'лоток не перерисован: «Привязать» та же');
+    assert.ok(walk(root).includes(raw), 'и «Сырое» то же');
+    assert.strictEqual(raw.style.display, '', 'раскрытое «Сырое» не схлопнулось');
+  } finally {
+    stopLabDevicesLive();
+    mock.timers.reset();
+    DEVICES = []; RECENT = [];
+  }
+});
+
+test('C4: изменилось видимое — перерисована только своя карточка; читаемое «Сырое» раскрыто и после перерисовки лотка', async () => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const root = await mountPolling();
+    buttonIn(trWith(root, 'LAB-000042'), 'Сырое').click();
+    const edit = buttonMatching(root, /Изменить/);
+    const liveRow = trWith(root, 'LAB-000124');
+
+    // В лоток пришла ещё одна беда — лоток перерисован, остальное нет.
+    MESSAGES = [...MESSAGES, row(43, 'unmatched', 2, { detail: 'заказ по номеру пробы не найден' })];
+    await poll();
+    assert.ok(trWith(root, 'LAB-000043'), 'новая строка лотка видна');
+    assert.strictEqual(rawOf(root, 'LAB-000042').style.display, '', 'читаемое «Сырое» не схлопнулось и после перерисовки');
+    assert.strictEqual(rawOf(root, 'LAB-000043').style.display, 'none', 'новое — свёрнуто');
+    assert.ok(walk(root).includes(edit) && walk(root).includes(liveRow), 'таблица и лента не тронуты');
+
+    // Лента: новая проба — перерисована лента, таблица нет.
+    RECENT = [{ ...LIVE_ROW, id: 8, sample_id: 'LAB-000125' }, LIVE_ROW];
+    await poll();
+    assert.ok(trWith(root, 'LAB-000125'), 'лента перерисована');
+    assert.ok(walk(root).includes(edit), 'таблица не тронута');
+
+    // Таблица: изменился текст связи прибора.
+    DEVICES = [{ ...HEMA, last_seen_at: '2026-09-21T08:00:00Z' }];
+    await poll();
+    assert.ok(!walk(root).includes(edit), 'таблица перерисована');
+    assert.ok(buttonMatching(root, /Изменить/), 'и «Изменить» снова на месте');
+  } finally {
+    stopLabDevicesLive();
+    mock.timers.reset();
+    DEVICES = []; RECENT = [];
+  }
 });

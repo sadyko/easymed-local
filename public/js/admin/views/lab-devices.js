@@ -62,7 +62,10 @@ export async function mountLabDevices(container) {
     // живой опрос перерисовывает окно «Добавить прибор», но не форму, в которой печатают.
     // backToAdd (ревью M3): форма открыта из окна «Добавить прибор» и вернётся туда.
     // addSig (ревью M9): подпись того, что сейчас видно в окне «Добавить прибор».
-    const state = { devices: [], profiles: [], messages: [], recent: [], loadError: null, listeners: null, formMode: null, backToAdd: false, addSig: null };
+    // sigs, rawOpen (LIS_DISCOVERY_FIX_V1): подписи таблицы, живой ленты и лотка;
+    // сообщения лотка, у которых человек раскрыл «Сырое».
+    const state = { devices: [], profiles: [], messages: [], recent: [], loadError: null, listeners: null, formMode: null, backToAdd: false, addSig: null,
+        sigs: { devices: null, live: null, tray: null }, rawOpen: new Set() };
 
     const devicesCard = h('div', { class: 'card' });
     const formCard = h('div', { class: 'card', style: { display: 'none' } });
@@ -111,9 +114,14 @@ export async function mountLabDevices(container) {
         state.profiles = profRes.data || [];
         state.recent = recentRes.data || [];
         state.listeners = (lisRes && lisRes.data) || null;   // LIS_ANALYZER_LIST_V1
-        paintDevices();
-        paintLive();
-        paintTray();
+        // LIS_DISCOVERY_FIX_V1 (экран) — и таблица, живая лента и лоток
+        // перерисовываются, только когда изменилось то, что они показывают
+        // (тот же приём, что у окна ниже). Раньше опрос каждые 5 с строил их
+        // заново: раскрытое «Сырое» схлопывалось, а нажатие «Изменить» или
+        // «Привязать» приходилось в кнопку, которой уже нет.
+        if (devicesSig() !== state.sigs.devices) paintDevices();
+        if (liveSig() !== state.sigs.live) paintLive();
+        if (traySig() !== state.sigs.tray) paintTray();
         // LIS_ANALYZER_LIST_V1 — список живой. Ревью M9: но перерисовка — только
         // когда изменилось видимое: окно, перестроенное каждые 5 с, убирало
         // кнопку из-под курсора, и нажатие терялось.
@@ -124,7 +132,23 @@ export async function mountLabDevices(container) {
 
     // ---------- список приборов ----------
 
+    // LIS_DISCOVERY_FIX_V1 (экран) — всё, что видно в карточке «Анализаторы»:
+    // ошибка чтения, число находок на кнопке, строки таблицы с текстом связи
+    // (он меняется и сам, со временем) и модели. Сырой метки last_seen_at здесь
+    // нет — она меняется с каждой пробой (как у окна «Добавить прибор»).
+    function devicesSig() {
+        const split = splitDevices(state.devices);
+        return JSON.stringify([
+            state.loadError,
+            split.found.length,
+            split.table.map((d) => [d.id, d.name, d.profile, d.discovered, d.model_confirmed, d.transport, d.host, d.port, d.enabled,
+                livenessText(d.last_seen_at).text]),
+            state.profiles.map((p) => [p.key, p.vendor, p.model, p.channelsSource]),
+        ]);
+    }
+
     function paintDevices() {
+        state.sigs.devices = devicesSig();   // LIS_DISCOVERY_FIX_V1
         clear(devicesCard);
         const split = splitDevices(state.devices);   // LIS_ANALYZER_LIST_V1
         devicesCard.appendChild(h('div', { class: 'card-header' },
@@ -184,8 +208,12 @@ export async function mountLabDevices(container) {
                 h('td', null, live.kind === 'idle'
                     ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, live.text)
                     : Tag(live.text, { kind: live.kind })),
+                // LIS_DISCOVERY_FIX_V1 — строка теперь переживает опросы, поэтому
+                // форма открывается по СВЕЖЕЙ строке прибора, а не по той, с
+                // которой её нарисовали.
                 h('td', { style: { textAlign: 'right' } },
-                    h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => openForm(d) }, Icon('Edit', { size: 13 }), ' ', tr('Изменить')))));
+                    h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => openForm(state.devices.find((x) => x.id === d.id) || d) },
+                        Icon('Edit', { size: 13 }), ' ', tr('Изменить')))));
         }
         devicesCard.appendChild(h('table', { class: 'list' },
             h('thead', null, h('tr', null,
@@ -206,7 +234,11 @@ export async function mountLabDevices(container) {
     // связкой «время → номер пробы → ПАЦИЕНТ → значения»: номер пробы сам по
     // себе человеку не говорит ничего.
 
+    // LIS_DISCOVERY_FIX_V1 (экран) — лента показывает ответ lis_recent как есть.
+    const liveSig = () => JSON.stringify(state.recent);
+
     function paintLive() {
+        state.sigs.live = liveSig();   // LIS_DISCOVERY_FIX_V1
         clear(liveCard);
         liveCard.appendChild(h('div', { class: 'card-header' },
             h('h3', null, tr('Последние результаты')),
@@ -669,7 +701,17 @@ export async function mountLabDevices(container) {
 
     // ---------- лоток ----------
 
+    // LIS_DISCOVERY_FIX_V1 (экран) — что видно в строке лотка. Текст «Сырого»
+    // у сообщения не меняется, а статус и строка журнала — могут.
+    const traySig = () => JSON.stringify(state.messages.map((m) => [m.id, m.status, m.detail, m.sample_id, m.received_at]));
+
     function paintTray() {
+        state.sigs.tray = traySig();   // LIS_DISCOVERY_FIX_V1
+        // LIS_DISCOVERY_FIX_V1 — раскрытое «Сырое» переживает и перерисовку
+        // лотка: неверно настроенный прибор кладёт сюда каждую пробу, и лоток
+        // меняется как раз тогда, когда человек читает сырое сообщение.
+        const shown = new Set(state.messages.map((m) => m.id));
+        for (const id of state.rawOpen) if (!shown.has(id)) state.rawOpen.delete(id);
         clear(trayCard);
         trayCard.appendChild(h('div', { class: 'card-header' },
             h('h3', null, tr('Необработанные')),
@@ -686,7 +728,7 @@ export async function mountLabDevices(container) {
         for (const m of state.messages) {
             const raw = h('pre', {
                 style: {
-                    display: 'none', margin: '8px 0 0', padding: '10px', background: 'var(--ink-050, #f4f6f8)',
+                    display: state.rawOpen.has(m.id) ? '' : 'none', margin: '8px 0 0', padding: '10px', background: 'var(--ink-050, #f4f6f8)',
                     borderRadius: '6px', fontSize: '12.5px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                 },
             }, (m.raw || '').split('\r').join('\n'));
@@ -704,7 +746,11 @@ export async function mountLabDevices(container) {
                     m.detail || '—',
                     h('button', {
                         class: 'btn btn-outline btn-sm', type: 'button', style: { marginLeft: '8px' },
-                        onclick: () => { raw.style.display = raw.style.display === 'none' ? '' : 'none'; },
+                        onclick: () => {
+                            const open = raw.style.display === 'none';
+                            raw.style.display = open ? '' : 'none';
+                            if (open) state.rawOpen.add(m.id); else state.rawOpen.delete(m.id);
+                        },
                     }, tr('Сырое')),
                     truncated
                         ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
