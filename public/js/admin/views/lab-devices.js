@@ -24,6 +24,8 @@ const TRANSPORTS = [
     { key: 'folder', label: 'Папка с файлами',     ready: false },
 ];
 const TRANSPORT_LABEL = Object.fromEntries(TRANSPORTS.map((t) => [t.key, t.label]));
+// LD_LAYOUT_V1 — сколько строк ленты и лотка видно до «Показать все».
+const LIST_PREVIEW = 10;
 
 const STATUS_RU = {
     unmatched:  'Не найден заказ',
@@ -65,7 +67,8 @@ export async function mountLabDevices(container) {
     // sigs, rawOpen (LIS_DISCOVERY_FIX_V1): подписи таблицы, живой ленты и лотка;
     // сообщения лотка, у которых человек раскрыл «Сырое».
     const state = { devices: [], profiles: [], messages: [], recent: [], loadError: null, listeners: null, formMode: null, backToAdd: false, addSig: null,
-        sigs: { devices: null, live: null, tray: null }, rawOpen: new Set() };
+        sigs: { devices: null, live: null, tray: null }, rawOpen: new Set(),
+        showAll: { live: false, tray: false } };   // LD_LAYOUT_V1 — «Показать все» у ленты и лотка
 
     const devicesCard = h('div', { class: 'card' });
     const formCard = h('div', { class: 'card', style: { display: 'none' } });
@@ -251,7 +254,7 @@ export async function mountLabDevices(container) {
         }
 
         const tb = h('tbody');
-        for (const r of state.recent) {
+        for (const r of previewRows(state.recent, 'live')) {   // LD_LAYOUT_V1
             const vals = r.values || [];
             const valueCell = vals.length
                 ? h('span', { style: { display: 'inline-flex', gap: '6px', flexWrap: 'wrap' } },
@@ -284,6 +287,24 @@ export async function mountLabDevices(container) {
                 h('th', null, tr('Получено')), h('th', null, tr('Прибор')), h('th', null, tr('Номер пробы')),
                 h('th', null, tr('Пациент')), h('th', null, tr('Значения')), h('th', null, tr('Состояние')))),
             tb));
+        const more = moreToggle(state.recent.length, 'live', paintLive);
+        if (more) liveCard.appendChild(more);
+    }
+
+    // LD_LAYOUT_V1 — лента и лоток показывали по сотне строк рядом, в
+    // половину ширины: имена и названия разламывались на пять строк, а
+    // страница уходила на шесть с половиной тысяч точек вниз. Теперь обе
+    // карточки во всю ширину (admin-views.css .ld-grid), и в каждой сначала
+    // последние десять строк (LIST_PREVIEW); остальные — по «Показать все», не теряются.
+    function previewRows(rows, which) {
+        return state.showAll[which] ? rows : rows.slice(0, LIST_PREVIEW);
+    }
+    function moreToggle(total, which, repaint) {
+        if (total <= LIST_PREVIEW) return null;
+        return h('div', { class: 'ld-more' },
+            h('button', { class: 'btn btn-ghost btn-sm', type: 'button',
+                onclick: () => { state.showAll[which] = !state.showAll[which]; repaint(); } },
+                state.showAll[which] ? tr('Свернуть') : trf('Показать все · {n}', { n: total })));
     }
 
     // ---------- форма прибора ----------
@@ -328,26 +349,34 @@ export async function mountLabDevices(container) {
         const transport = () => (transSel ? transSel.value : 'mllp');
         const hostInp = h('input', { type: 'text', value: d.host || '', placeholder: tr('адрес анализатора в сети, например 10.0.0.20'),
             oninput: () => syncTransport() });
-        const portInp = h('input', { type: 'number', value: d.port || 2575, min: '1', max: '65535', style: { width: '110px' } });
+        const portInp = h('input', { type: 'number', value: d.port || 2575, min: '1', max: '65535' });
         const enabledInp = h('input', { type: 'checkbox', checked: d.enabled ? true : null });
 
-        const notReady = h('p', { class: 'muted', style: { fontSize: '12.5px' } },
+        const notReady = h('p', null,
             tr('Этот транспорт пока не поддерживается — настройка сохранится, но приём по нему не заработает.'));
         // Адрес обязателен только новому прибору (сохранение ниже). Старая
         // строка без адреса законна — сервер отдаёт ей только сетевой прибор
         // на её порту и с первой пробы запоминает его, — но человек должен
         // видеть, что адрес лучше вписать.
-        const netRow = h('div', { class: 'row', style: { gap: '14px', flexWrap: 'wrap' } },
-            field(tr('Адрес прибора'), hostInp, { required: !device }), field(tr('Порт'), portInp));
+        // LD_LAYOUT_V1 — владелец: «fix the layout of the analyzator window».
+        // Поля стояли вплотную к краю карточки двумя неровными рядами, а
+        // кнопки — прижаты к низу. Теперь все поля — одной сеткой с общими
+        // колонками (ld-form-fields), пояснения — одним блоком под ней, кнопки —
+        // отдельной строкой с чертой. Адрес и порт прячутся по одному, а не
+        // своим рядом: у кабеля COM их нет.
+        const hostField = field(tr('Адрес прибора'), hostInp, { required: !device });
+        hostField.style.gridColumn = 'span 2';   // LD_LAYOUT_V1 — подсказка адреса длинная
+        const portField = field(tr('Порт'), portInp);
         const noHostHint = device
-            ? h('p', { class: 'muted', style: { fontSize: '12.5px' } },
+            ? h('p', null,
                 tr('Без адреса прибор примет пробы только от сетевого анализатора на своём порту и запомнит первого — лучше укажите адрес.'))
             : null;
 
         function syncTransport() {
             const key = transport();
             const t = TRANSPORTS.find((x) => x.key === key);
-            netRow.style.display = key === 'mllp' ? '' : 'none';
+            hostField.style.display = key === 'mllp' ? '' : 'none';
+            portField.style.display = key === 'mllp' ? '' : 'none';
             notReady.style.display = t && t.ready ? 'none' : '';
             if (noHostHint) noHostHint.style.display = key === 'mllp' && !hostInp.value.trim() ? '' : 'none';
         }
@@ -355,29 +384,33 @@ export async function mountLabDevices(container) {
 
         formCard.appendChild(h('div', { class: 'card-header' },
             h('h3', null, device ? trf('Анализатор: {name}', { name: d.name }) : tr('Новый анализатор'))));
-        formCard.appendChild(h('div', { class: 'row', style: { gap: '14px', flexWrap: 'wrap', marginBottom: '10px' } },
-            field(tr('Название'), nameInp), field(tr('Модель'), profSel), transSel ? field(tr('Подключение'), transSel) : null));
-        formCard.appendChild(netRow);
-        if (noHostHint) formCard.appendChild(noHostHint);
-        formCard.appendChild(notReady);
+        const body = h('div', { class: 'ld-form' });   // LD_LAYOUT_V1
+        body.appendChild(h('div', { class: 'ld-form-fields' },
+            field(tr('Название'), nameInp), field(tr('Модель'), profSel), transSel ? field(tr('Подключение'), transSel) : null,
+            hostField, portField));
+        const notes = h('div', { class: 'ld-form-notes muted' });
+        if (noHostHint) notes.appendChild(noHostHint);
+        notes.appendChild(notReady);
         // LIS_ANALYZER_LIST_V1 — честная строка ручного пути: прибор-сервер
         // (программа LIS звонит ему сама) пока не поддержан.
         if (!device) {
             // LIS_DISCOVERY_FIX_V1 (экран) — куда делся «Кабель COM»: такой
             // прибор руками не заводят, он приходит сам.
-            formCard.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px' } },
+            notes.appendChild(h('p', null,
                 tr('Анализатор на кабеле COM подключается через переадресатор на лабораторном компьютере и появится в «Найдены в сети» сам — добавлять его здесь не нужно.')));
-            formCard.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px' } },
+            notes.appendChild(h('p', null,
                 tr('Анализаторы, которые сами ждут звонка от программы LIS (например, Mindray BC-3600), пока не поддерживаются: такой прибор не отправит результаты сам.')));
         }
-        formCard.appendChild(h('label', { style: { display: 'flex', gap: '7px', alignItems: 'center', margin: '12px 0' } },
+        body.appendChild(notes);
+        body.appendChild(h('label', { class: 'ld-form-check' },
             enabledInp, h('span', null, tr('Включён — слушать этот прибор'))));
 
-        formCard.appendChild(h('div', { class: 'row', style: { gap: '8px', marginTop: '6px' } },
+        body.appendChild(h('div', { class: 'ld-form-foot' },
             h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: save }, tr('Сохранить')),
             h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: leaveForm }, tr('Отмена')),
             h('span', { class: 'grow' }),
             device ? h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => removeDevice(device) }, tr('Удалить')) : null));
+        formCard.appendChild(body);
 
         syncTransport();
         nameInp.focus();
@@ -505,7 +538,8 @@ export async function mountLabDevices(container) {
             h('span', { class: 'grow' }),
             h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: closeForm }, tr('Закрыть'))));
 
-        formCard.appendChild(h('div', { style: { fontWeight: 600, margin: '4px 0 8px' } }, tr('Найдены в сети')));
+        // LD_LAYOUT_V1 — подзаголовки окна стояли вплотную к краю карточки.
+        formCard.appendChild(h('div', { class: 'ld-subhead' }, tr('Найдены в сети')));
         if (state.loadError) {
             // Ревью I1: список не прочитался — так и сказать. Пустой список
             // здесь значит «не знаем», а не «никого нет».
@@ -516,11 +550,18 @@ export async function mountLabDevices(container) {
             // таблица, находки и ждущие. Раньше фраза стояла и при kjkj в
             // таблице — просто потому, что новых находок не было.
             const nothingAtAll = !split.table.length && !split.waiting.length;
+            // LD_LAYOUT_V1 — «укажите адрес адрес этого компьютера»: когда
+            // программа открыта как localhost, адреса мы не знаем, и подставлялась
+            // фраза, сама начинающаяся со слова «адрес». Для этого случая — своё
+            // целое предложение.
+            const guideIp = guideHostKnown();
             formCard.appendChild(h('div', { class: 'empty', style: { padding: '18px 16px' } },
                 h('div', { style: { fontWeight: 600, marginBottom: '6px' } },
                     nothingAtAll ? tr('Ни один анализатор пока не выходил на связь.') : tr('Новых анализаторов пока нет.')),
                 h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                    trf('На анализаторе в настройках связи (LIS) укажите адрес {ip}, порт 2575, протокол HL7 и отправьте пробу — анализатор появится здесь сам.', { ip: hostForGuide() }))));
+                    guideIp
+                        ? trf('На анализаторе в настройках связи (LIS) укажите адрес {ip}, порт 2575, протокол HL7 и отправьте пробу — анализатор появится здесь сам.', { ip: guideIp })
+                        : tr('На анализаторе в настройках связи (LIS) укажите адрес этого компьютера в сети, порт 2575, протокол HL7 и отправьте пробу — анализатор появится здесь сам.'))));
         } else {
             const tb = h('tbody');
             for (const d of split.found) {
@@ -550,7 +591,7 @@ export async function mountLabDevices(container) {
         }
 
         if (split.waiting.length) {
-            formCard.appendChild(h('div', { style: { fontWeight: 600, margin: '14px 0 8px' } }, tr('Ждут первого сообщения')));
+            formCard.appendChild(h('div', { class: 'ld-subhead' }, tr('Ждут первого сообщения')));   // LD_LAYOUT_V1
             const tb = h('tbody');
             for (const d of split.waiting) {
                 // Ревью M5: строка о порте — только у СЕТЕВОГО прибора: у кабеля
@@ -585,7 +626,7 @@ export async function mountLabDevices(container) {
             formCard.appendChild(h('table', { class: 'list' }, tb));
         }
 
-        formCard.appendChild(h('div', { style: { marginTop: '12px' } },
+        formCard.appendChild(h('div', { class: 'ld-add-foot' },   // LD_LAYOUT_V1
             h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => openForm(null, { fromAdd: true }) },
                 tr('Анализатор не появился? Добавить по адресу'))));
     }
@@ -650,9 +691,13 @@ export async function mountLabDevices(container) {
     // самом, прибор, подключённый к компьютеру только кабелем, ПОКА не
     // поддержан — и сказать это здесь важнее, чем выглядеть законченным.
 
-    function hostForGuide() {
+    // LD_LAYOUT_V1 — настоящий адрес, если программа открыта по нему; иначе ''.
+    function guideHostKnown() {
         const hn = (typeof location !== 'undefined' && location && location.hostname) || '';
-        return (!hn || hn === 'localhost' || hn === '127.0.0.1') ? tr('адрес этого компьютера в сети') : hn;
+        return (!hn || hn === 'localhost' || hn === '127.0.0.1') ? '' : hn;
+    }
+    function hostForGuide() {
+        return guideHostKnown() || tr('адрес этого компьютера в сети');
     }
 
     function paintGuide() {
@@ -738,7 +783,7 @@ export async function mountLabDevices(container) {
         }
 
         const tb = h('tbody');
-        for (const m of state.messages) {
+        for (const m of previewRows(state.messages, 'tray')) {   // LD_LAYOUT_V1
             const raw = h('pre', {
                 style: {
                     display: state.rawOpen.has(m.id) ? '' : 'none', margin: '8px 0 0', padding: '10px', background: 'var(--ink-050, #f4f6f8)',
@@ -780,6 +825,8 @@ export async function mountLabDevices(container) {
                 h('th', null, tr('Получено')), h('th', null, tr('Номер пробы')), h('th', null, tr('Состояние')),
                 h('th', null, tr('Подробности')), h('th', null, ''))),
             tb));
+        const more = moreToggle(state.messages.length, 'tray', paintTray);   // LD_LAYOUT_V1
+        if (more) trayCard.appendChild(more);
     }
 
     async function attach(m) {

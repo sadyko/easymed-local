@@ -7207,7 +7207,22 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
    списки — table.list, объяснения ушли в подсказки. Панели: список слева —
    карточка с шапкой и полем поиска, редактор справа, зазоры 12 px. */
 .ld{ display:grid; gap:12px; }
-.ld-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; align-items:start; }
+/* LD_LAYOUT_V1 — лента и лоток во всю ширину, одна под другой: в половину
+   ширины их таблицы разламывали каждое имя на несколько строк. Форма прибора
+   и окно «Добавить анализатор» — с полями внутри карточки и ровной сеткой. */
+.ld-grid{ display:grid; grid-template-columns:1fr; gap:12px; align-items:start; }
+.ld-form{ padding:14px 16px 16px; display:grid; gap:12px; }
+.ld-form-fields{ display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:12px 16px; align-items:end; }
+.ld-form-fields .field{ margin:0; min-width:0; }
+.ld-form-fields input, .ld-form-fields select{ width:100%; box-sizing:border-box; }
+.ld-form-notes{ display:grid; gap:4px; font-size:12.5px; line-height:1.45; }
+.ld-form-notes:empty{ display:none; }
+.ld-form-notes p{ margin:0; }
+.ld-form-check{ display:flex; gap:8px; align-items:center; font-size:13.5px; }
+.ld-form-foot{ display:flex; align-items:center; gap:8px; padding-top:12px; border-top:1px solid var(--ink-100, #e6eaee); }
+.ld-subhead{ padding:12px 14px 6px; font-weight:600; font-size:13px; }
+.ld-add-foot{ padding:8px 10px 12px; border-top:1px solid var(--ink-100, #e6eaee); margin-top:8px; }
+.ld-more{ display:flex; justify-content:center; padding:8px 10px; border-top:1px solid var(--ink-100, #e6eaee); }
 .ld .card-header{ padding:10px 14px; }
 .ld table.list td, .ld table.list th{ font-size:12.5px; }
 .lp-grid{ display:grid; grid-template-columns:250px minmax(0,1fr); gap:12px; align-items:start; }
