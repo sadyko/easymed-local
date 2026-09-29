@@ -348,6 +348,40 @@ test('R2: разные поля, пустые поля и строка без и
     'строка без имени не сохраняется — и спором не считается');
 });
 
+// ── LIS_DISCOVERY_FIX_V1 (экран), C7 — одно поле прибора под двумя именами ───
+// Прибор шлёт «6690-2^WBC^LN», и приём сверяет код строки бланка с компонентом
+// 1 ИЛИ 2 (server/lis/match.js). «WBC» у одной строки и вписанный «6690-2» у
+// другой — одно поле: заполнится одна строка, и каждая проба панели уйдёт в
+// лоток. Раньше сохранение сравнивало коды буквально и такое пропускало.
+test('C7: «WBC» и «6690-2» у двух показателей — одно поле прибора (lis_device_codes), сохранение отказывает', async () => {
+  ANALYTES = [
+    analyte({ id: 'a-1', name: 'Лейкоциты', device_code: 'WBC', device_code_confirmed: 1, sort_order: 0 }),
+    analyte({ id: 'a-2', code: 'WBC#', name: 'Лейкоциты (абс.)', device_code: '6690-2', device_code_confirmed: 1, sort_order: 1 }),
+    analyte({ id: 'a-3', code: 'HGB', name: 'Гемоглобин', device_code: 'HGB', device_code_confirmed: 1, sort_order: 2 }),
+  ];
+  const root = await mountPanels();
+  assert.ok(rpcCalls.some((c) => c.name === 'lis_device_codes'), 'коды прибора прочитаны');
+  findButtonByText(root, /Сохранить панель/).click();
+  await tick(80);
+  assert.strictEqual(toastMsg,
+    'Одно поле анализатора выбрано у нескольких показателей: Лейкоциты, Лейкоциты (абс.) (WBC / 6690-2). Прибор заполнит только первый — выберите каждому своё поле.');
+  assert.strictEqual(toastEl.dataset.kind, 'fail');
+  assert.deepStrictEqual(writes, [], 'ничего не записано');
+});
+
+test('C7: разные поля прибора — не спор, даже когда одно выбрано кодом, а другое именем', async () => {
+  ANALYTES = [
+    analyte({ id: 'a-1', name: 'Лейкоциты', device_code: '6690-2', device_code_confirmed: 1, sort_order: 0 }),
+    analyte({ id: 'a-2', code: 'MODE', name: 'Режим пробы', device_code: 'Take Mode', device_code_confirmed: 1, sort_order: 1 }),
+  ];
+  const root = await mountPanels();
+  findButtonByText(root, /Сохранить панель/).click();
+  await tick(80);
+  const ins = writes.find((w) => w.table === 'lab_panel_analytes' && w.op === 'insert');
+  assert.ok(ins, 'сохранено: ' + toastMsg);
+  assert.deepStrictEqual([].concat(ins.values).map((r) => r.device_code), ['6690-2', 'Take Mode']);
+});
+
 // LIS_ANALYZER_LIST_V1 — у панели выбирают из ДОБАВЛЕННЫХ приборов: находка,
 // которую ещё не добавили, не выглядит выбранным прибором. Уже привязанный
 // показывается всегда — иначе привязка молча стала бы «— нет —».

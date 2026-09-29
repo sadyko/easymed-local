@@ -50,7 +50,27 @@ const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагнос
 //      lab-section role (LAB_PANELS_BY_SECTION_V1).
 // v8 = one shared page head for queue+panels; marker moved off-screen into
 //      the data-attribute above; queue filter chips translate label-then-count.
-export const LAB_BUILD = 'lab-v16';   // LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1)
+export const LAB_BUILD = 'lab-v17';   // LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1); v17 — одно поле прибора под двумя именами (LIS_DISCOVERY_FIX_V1)
+
+// LIS_DISCOVERY_FIX_V1 (экран) — какое ПОЛЕ ПРИБОРА стоит за кодом строки
+// бланка. Прибор называет поле двумя именами сразу — «6690-2^WBC^LN», — и приём
+// сверяет код строки с любым из них (server/lis/match.js). Пары код/имя — то,
+// что прибор действительно присылал (lis_device_codes): код и имя пары ведут к
+// одному ключу, а пары с общим кодом или именем — одно поле (прошивка сменила
+// код; прибор слал и через переадресатор — «WBC^^99MRC»). Код вне пар — сам
+// себе поле. Без регистра и пробелов, как на приёме.
+function deviceFieldKeys(sent) {
+    const K = (s) => String(s == null ? '' : s).trim().toUpperCase();
+    const up = new Map();   // ключ → ключ, к которому его присоединили; у главного ключа поля записи нет
+    const root = (k) => { while (up.has(k)) k = up.get(k); return k; };
+    for (const c of sent || []) {
+        const a = K(c && c.code), b = K(c && c.name);
+        if (!a || !b) continue;
+        const ra = root(a), rb = root(b);
+        if (ra !== rb) up.set(ra, rb);
+    }
+    return (code) => root(K(code));
+}
 
 // Mounts the editor into `container` and resolves once the first load has
 // painted — the caller can await it and know the screen is settled.
@@ -985,19 +1005,28 @@ export async function mountLabPanels(container) {
         // пробу этой панели в лоток («код уже у строки …»). Код сравнивается
         // без регистра и пробелов, как на приёме (server/lis/match.js). Строка
         // без имени не сохраняется — и спором не считается.
-        const byCode = new Map();
+        // LIS_DISCOVERY_FIX_V1 (экран) — и с учётом того, что прибор называет
+        // поле двумя именами: «WBC» у одной строки и «6690-2» у другой — одно
+        // поле (deviceFieldKeys, по кодам, которые прибор присылал). Раньше коды
+        // сравнивались буквально: сохранение проходило, «6690-2^WBC^LN»
+        // заполняло одну строку, и каждая проба панели уходила в лоток. В отказе
+        // названы оба написания — иначе человек не увидит, в чём спор.
+        const fieldOf = deviceFieldKeys(state.deviceCodes[Number(state.selected && state.selected.device_id)]);
+        const byField = new Map();
         for (const r of state.rows) {
             const code = String(r.device_code || '').trim();
             const name = String(r.name || '').trim();
             if (!code || !r.device_code_confirmed || !name) continue;
-            const k = code.toUpperCase();
-            if (!byCode.has(k)) byCode.set(k, { code, names: [] });
-            byCode.get(k).names.push(name);
+            const k = fieldOf(code);
+            if (!byField.has(k)) byField.set(k, { codes: [], names: [] });
+            const g = byField.get(k);
+            if (!g.codes.some(c => c.toUpperCase() === code.toUpperCase())) g.codes.push(code);
+            g.names.push(name);
         }
-        const clashes = [...byCode.values()].filter(g => g.names.length > 1);
+        const clashes = [...byField.values()].filter(g => g.names.length > 1);
         if (clashes.length) {
             toast(trf('Одно поле анализатора выбрано у нескольких показателей: {list}. Прибор заполнит только первый — выберите каждому своё поле.',
-                { list: clashes.map(g => g.names.join(', ') + ' (' + g.code + ')').join('; ') }), 'fail');
+                { list: clashes.map(g => g.names.join(', ') + ' (' + g.codes.join(' / ') + ')').join('; ') }), 'fail');
             return;
         }
         const p = state.selected;
