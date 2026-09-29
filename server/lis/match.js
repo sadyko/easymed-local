@@ -29,6 +29,13 @@ const key = (s) => String(s == null ? '' : s).trim().toUpperCase();
 // «*6.1» — пишется как было: у него есть смысл, и его читает человек.
 const noNumber = (obs, value) => key(obs.valueType) === 'NM' && !/\d/.test(value);
 
+// LIS_DISCOVERY_FIX_V1 (ревью 2026-09-29) — одни звёздочки («*», «***») — не
+// значение НИ У КАКОЙ строки, как пустое. R11 ловил только числовые (NM), а
+// «не смог посчитать» прибор пишет звёздочками и в текстовых строках (ST):
+// «***» ложилось в бланк, стирало черновик лаборанта и выглядело результатом.
+// Звёздочка рядом с текстом («*6.1», «Positive*») — по-прежнему значение.
+const onlyStars = (value) => /^\*+$/.test(value);
+
 /**
  * @param {Array<{code:string,name:string,codeRaw:string,value:string,status:string}>} observations  строки прибора
  * @param {Array<{id:number,name:string,device_code:string,device_code_confirmed:number}>} analytes  строки бланка в порядке бланка
@@ -41,7 +48,7 @@ const noNumber = (obs, value) => key(obs.valueType) === 'NM' && !/\d/.test(value
  * }}
  *   fills        — что писать в бланк;
  *   missing      — ВСЕ подтверждённые строки бланка без значения, в порядке бланка;
- *                  reason: '' | 'статус P' | 'пустое значение' | 'нет числа: ***' | 'код уже у строки «…»';
+ *                  reason: '' | 'статус P' | 'пустое значение' | 'нет значения: ***' | 'нет числа: ----' | 'код уже у строки «…»';
  *   unconfirmed  — строки прибора, пришедшие для неподтверждённой строки бланка;
  *   repeats      — второе окончательное значение для уже заполненной строки бланка;
  *   unused       — строки прибора, которые ни к чему не относятся.
@@ -84,8 +91,8 @@ export function planObservations(observations = [], analytes = []) {
         // одно из двух чисел значило бы выдать пациенту, возможно, не то.
         // Предварительное (P), «не получено» (X), пустое и «без числа» (R11)
         // — не спор: «P, потом F» — законная пара, и такая строка остаётся
-        // «не использована».
-        if (status === 'F' && value && !noNumber(obs, value)) { used.add(i); repeats.push(obs); }
+        // «не использована». Одни звёздочки (LIS_DISCOVERY_FIX_V1) — тоже.
+        if (status === 'F' && value && !onlyStars(value) && !noNumber(obs, value)) { used.add(i); repeats.push(obs); }
         return;
       }
       used.add(i);
@@ -94,6 +101,9 @@ export function planObservations(observations = [], analytes = []) {
       if (status !== 'F') { if (!why.has(a)) why.set(a, 'статус ' + status); return; }
       // Пустое значение — не значение: оно не стирает набранное руками.
       if (!value) { if (!why.has(a)) why.set(a, 'пустое значение'); return; }
+      // LIS_DISCOVERY_FIX_V1 — звёздочки раньше «нет числа»: у любой строки
+      // одна и та же причина, в том числе у числовой.
+      if (onlyStars(value)) { if (!why.has(a)) why.set(a, 'нет значения: ' + value); return; }
       if (noNumber(obs, value)) { if (!why.has(a)) why.set(a, 'нет числа: ' + value); return; }
       filled.add(a);
       fills.push({ obs, analyte: a });

@@ -407,7 +407,23 @@ test('R11: «***» на числовой строке не стирает наб
   assert.equal(wbc.value, '9.9', 'черновик лаборанта не стёрт');
   assert.equal(wbc.source, 'manual');
   assert.equal(message(db).status, 'unmapped');
-  assert.match(message(db).detail, /не пришли: Лейкоциты \(WBC, нет числа: \*\*\*\)/);
+  // LIS_DISCOVERY_FIX_V1 — одни звёздочки: «нет значения» у любой строки.
+  assert.match(message(db).detail, /не пришли: Лейкоциты \(WBC, нет значения: \*\*\*\)/);
+  db.close();
+});
+
+// LIS_DISCOVERY_FIX_V1 (ревью 2026-09-29) — «***» и на текстовой строке (ST)
+// не значение: R11 ловил только числовые, и звёздочки ST стирали черновик.
+test('«***» на текстовой строке (ST) не стирает набранное руками; проба в лотке', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, source, entered_by) VALUES (123,'Лейкоциты','9.9','manual',7)").run();
+  ingestMessage(db, MSG('LAB-000123', [OBXR(1, '6690-2^WBC^LN', '***', { type: 'ST' }), OBXR(2, '718-7^HGB^LN', '142')]), '127.0.0.1');
+  const wbc = results(db).find((r) => r.parameter === 'Лейкоциты');
+  assert.equal(wbc.value, '9.9', 'черновик лаборанта не стёрт');
+  assert.equal(wbc.source, 'manual');
+  assert.equal(results(db).find((r) => r.parameter === 'Гемоглобин').value, '142', 'пришедшее всё равно ложится');
+  assert.equal(message(db).status, 'unmapped', 'проба в лотке');
+  assert.match(message(db).detail, /не пришли: Лейкоциты \(WBC, нет значения: \*\*\*\)/);
   db.close();
 });
 

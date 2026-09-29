@@ -126,11 +126,15 @@ test('R11: числовая строка без единой цифры («***»
   for (const v of ['***', '----', 'ERR']) {
     const p = planObservations([obs('WBC^^99MRC', v)], [line(1, 'Лейкоциты', 'WBC')]);
     assert.equal(p.fills.length, 0, v + ' не пишется');
-    assert.deepEqual(p.missing.map((m) => m.reason), ['нет числа: ' + v]);
+    // LIS_DISCOVERY_FIX_V1 — одни звёздочки теперь «нет значения» у любой
+    // строки (тест ниже); «нет числа» — прочим числовым строкам без цифр.
+    assert.deepEqual(p.missing.map((m) => m.reason), [(v === '***' ? 'нет значения: ' : 'нет числа: ') + v]);
     assert.equal(outcome(p).status, 'unmapped');
   }
   assert.equal(outcome(planObservations([obs('WBC^^99MRC', '***')], [line(1, 'Лейкоциты', 'WBC')])).detail,
-    'не пришли: Лейкоциты (WBC, нет числа: ***)');
+    'не пришли: Лейкоциты (WBC, нет значения: ***)');
+  assert.equal(outcome(planObservations([obs('WBC^^99MRC', '----')], [line(1, 'Лейкоциты', 'WBC')])).detail,
+    'не пришли: Лейкоциты (WBC, нет числа: ----)');
 });
 
 test('R11: значение с цифрой («<0.01», «>1000», «*6.1») пишется как прежде и строку заполняет', () => {
@@ -157,6 +161,40 @@ test('R11: «***» рядом с числом — не спор ни до, ни 
     const p = planObservations(pair.map((v) => obs('WBC^^99MRC', v)), lines);
     assert.deepEqual(p.fills.map((f) => f.obs.value), ['6.1'], pair.join(' → '));
     assert.deepEqual(p.repeats, []);
+    assert.equal(outcome(p).status, 'applied');
+  }
+});
+
+// ── LIS_DISCOVERY_FIX_V1 (ревью 2026-09-29) — одни звёздочки не значение ни у
+// какой строки. R11 ловил только числовые (NM) строки без цифр, а «не смог
+// посчитать» прибор пишет звёздочками и в текстовых строках (ST): «***»
+// ложилось в бланк, стирало черновик лаборанта и выглядело результатом.
+const as = (type, codeRaw, value, status) => ({ ...obs(codeRaw, value, status), valueType: type });
+
+test('одни звёздочки — не значение у любого типа строки: не пишется, строка «не пришла»', () => {
+  for (const type of ['ST', 'NM', 'TX', 'IS', 'CE', '']) {
+    for (const v of ['*', '***', '*****', ' *** ']) {
+      const p = planObservations([as(type, 'HBSAG^^99MRC', v)], [line(1, 'HBsAg', 'HBSAG')]);
+      assert.equal(p.fills.length, 0, type + ' «' + v + '» не пишется');
+      assert.deepEqual(p.missing.map((m) => m.reason), ['нет значения: ' + v.trim()], type + ' «' + v + '»');
+      assert.equal(outcome(p).status, 'unmapped');
+    }
+  }
+  assert.equal(outcome(planObservations([as('ST', 'HBSAG^^99MRC', '***')], [line(1, 'HBsAg', 'HBSAG')])).detail,
+    'не пришли: HBsAg (HBSAG, нет значения: ***)');
+});
+
+test('звёздочка рядом с текстом — значение, как прежде; звёздочки до или после значения — не спор', () => {
+  for (const v of ['*6.1', 'Positive*', '* см. примечание']) {
+    const p = planObservations([as('ST', 'HBSAG^^99MRC', v)], [line(1, 'HBsAg', 'HBSAG')]);
+    assert.deepEqual(p.fills.map((f) => f.obs.value), [v]);
+    assert.equal(outcome(p).status, 'applied', v);
+  }
+  const lines = [line(1, 'HBsAg', 'HBSAG')];
+  for (const pair of [['Positive', '***'], ['***', 'Positive']]) {
+    const p = planObservations(pair.map((v) => as('ST', 'HBSAG^^99MRC', v)), lines);
+    assert.deepEqual(p.fills.map((f) => f.obs.value), ['Positive'], pair.join(' → '));
+    assert.deepEqual(p.repeats, [], 'звёздочки — не второе значение');
     assert.equal(outcome(p).status, 'applied');
   }
 });
