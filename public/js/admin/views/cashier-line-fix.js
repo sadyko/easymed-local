@@ -30,9 +30,10 @@
 // «Выставить заново» (openRebill) — невыставленные строки визита отменённого
 // счёта: поменять услугу или врача, выставить счёт и принять оплату.
 import { supabase } from '../../supabase.js';
-import { h, Icon, clear, toast } from '../ui.js';
+import { h, Icon, clear, toast, fmtDate } from '../ui.js';   // fmtDate: REFERRAL_BILL_V1 — день визита в пояснении «со дня визита»
 import { tr, trf } from '../i18n.js';
 import { canFixCashierLines, canSwapPaidLines } from '../permissions.js';
+import { localYmd } from '../discount-rules.js';   // REFERRAL_BILL_V1 — местный день, как у остальной кассы
 
 // Работа по строке начата или сделана — сервер её не меняет (PERFORMED_LINE_STATUSES).
 const PERFORMED = ['collected', 'in_progress', 'resulted', 'completed'];
@@ -452,12 +453,21 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
 // печатает акт, — и окно ОСТАЁТСЯ с невыставленными строками, уже отмеченными
 // и с «Пациенту»: второй проход выставляет остаток пациенту. Не осталось —
 // окно закрывается. Неотмеченное ждёт в «Ждут счёта».
+//
+// REFERRAL_BILL_V1 — решение владельца 29.09 «From the visit day»: счёт
+// плательщику из карты — только со дня визита (местный день: тот же
+// localYmd, что у остальной кассы; сервер считает день визита так же —
+// date(visit_date, 'localtime')). Визит ещё впереди — плательщик в «Кому
+// счёт» виден, но не выбирается, и сказано почему: сейчас можно выставить
+// только пациенту (предоплата). В день визита и позже — как прежде.
 export async function openRebill(row, { onBilled = null, title = null, preselectRefunded = true, cardPayer = null } = {}) {
     const s = sheet(title || trf('Выставить заново · {no}', { no: row.invoice_number || ('#' + row.invoice_id) }), 'Receipt', 640);
     s.body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } },
         tr('Строки визита без счёта: отметьте, что выставить. Услугу и врача можно поменять до выставления.')));
     const payer = cardPayer && cardPayer.id != null ? cardPayer : null;   // REFERRAL_BILL_V1
-    let target = payer ? 'payer' : 'patient';
+    const visitDay = row && row.visit_date ? localYmd(new Date(row.visit_date)) : '';   // REFERRAL_BILL_V1 — «From the visit day»
+    const payerLocked = !!(payer && visitDay && visitDay > localYmd());
+    let target = payer && !payerLocked ? 'payer' : 'patient';
     const targetBox = payer ? h('div', { class: 'row', style: { gap: '14px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' } }) : null;
     if (targetBox) s.body.appendChild(targetBox);
     const table = h('div', { style: { display: 'grid', gap: '6px' } });
@@ -478,9 +488,14 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
         clear(targetBox);
         targetBox.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700 } }, tr('Кому счёт')));
         for (const [v, label] of [['payer', trf('{name} — плательщик в карте', { name: payer.name || '—' })], ['patient', tr('Пациенту')]]) {
-            const radio = h('input', { type: 'radio', name: 'bill-target', value: v, checked: target === v ? true : null });
-            radio.addEventListener('change', () => { target = v; paintTarget(); });
-            targetBox.appendChild(h('label', { 'data-bill-target': v, style: { display: 'flex', gap: '6px', alignItems: 'center', fontSize: '13.5px', cursor: 'pointer' } }, radio, label));
+            const locked = v === 'payer' && payerLocked;   // REFERRAL_BILL_V1 — до дня визита
+            const radio = h('input', { type: 'radio', name: 'bill-target', value: v, checked: target === v ? true : null, disabled: locked ? true : null });
+            if (!locked) radio.addEventListener('change', () => { target = v; paintTarget(); });
+            targetBox.appendChild(h('label', { 'data-bill-target': v, style: { display: 'flex', gap: '6px', alignItems: 'center', fontSize: '13.5px', cursor: locked ? 'not-allowed' : 'pointer', opacity: locked ? '0.55' : '1' } }, radio, label));
+        }
+        if (payerLocked) {   // REFERRAL_BILL_V1 — почему плательщика выбрать нельзя
+            targetBox.appendChild(h('div', { class: 'muted', 'data-payer-locked': '', style: { flexBasis: '100%', fontSize: '12.5px' } },
+                trf('Счёт плательщику — со дня визита ({date}). Сейчас можно выставить только пациенту (предоплата).', { date: fmtDate(row.visit_date) })));
         }
     };
     paintTarget();
@@ -548,7 +563,7 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
         const ids = [...chosen];
         if (!ids.length) { toast(tr('Отметьте, что выставить.'), 'fail'); return; }
         billBtn.disabled = true;
-        const toPayer = target === 'payer' && !!payer;   // REFERRAL_BILL_V1
+        const toPayer = target === 'payer' && !!payer && !payerLocked;   // REFERRAL_BILL_V1 — и только со дня визита
         const { data, error } = await supabase.rpc('create_invoice_for_visit', {
             visit_id: row.visit_id, visit_service_ids: ids,
             // REFERRAL_BILL_V1 — плательщику: без скидки пациента, как задание COVERAGE_SPLIT_V1 мастера.

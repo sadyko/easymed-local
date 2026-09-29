@@ -270,8 +270,10 @@ test('«Выставить счёт»: окно «Выставить счёт ·
 // визита, payer-act.js); окно остаётся с невыставленными строками — второй
 // проход выставляет их пациенту с окном оплаты.
 // ═══════════════════════════════════════════════════════════════════════════
+// Визит СЕГОДНЯ: счёт плательщику — со дня визита («From the visit day»).
 const INSURED = {
     ...ROW_A, visit_id: 50, lines_count: 2, total: 140000, names: ['Анализ крови', 'Приём терапевта'],
+    visit_date: new Date().toISOString(),
     card_payer_id: 5, card_payer_name: 'Esado', card_payer_kind: 'insurance', card_policy_no: 'POL-77',
 };
 function insuredWorld() {
@@ -398,5 +400,58 @@ test('плательщик в карте, но касса выбрала «Па�
     assert.deepEqual(rpcCalls('create_invoice_for_visit')[0][1], { visit_id: 50, visit_service_ids: [401, 402] });
     assert.match(textOf(lastModal()), /Оплата · INV-A-26-00091/);
     assert.equal(printed.filter((x) => /Акт оказанных/.test(x)).length, 0);
+    desk.__test_cardState.filter = 'unpaid';
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Решение владельца 2026-09-29: «From the visit day». Счёт плательщику из
+// карты — только со дня визита (местный день). Визит впереди — плательщик в
+// «Кому счёт» виден, но не выбирается, сказано почему; выставить можно только
+// пациенту (предоплата). В день визита и позже — как прежде.
+// ═══════════════════════════════════════════════════════════════════════════
+test('визит впереди: плательщик из карты виден, но не выбирается, с пояснением; счёт — пациенту', async () => {
+    asCashier();
+    closeAll();
+    insuredWorld();
+    const future = new Date(Date.now() + 2 * 86400000).toISOString();
+    const el = openInsuredBill({ ...INSURED, visit_date: future });
+    buttonByText(byAttr(el, 'data-unbilled-row', '50'), 'Выставить счёт').click();
+    await tick(80);
+    const dlg = lastModal();
+    const payerRadio = targetRadio(dlg, 'payer');
+    assert.ok(payerRadio, 'плательщик из карты должен быть виден');
+    assert.ok(payerRadio.hasAttribute('disabled'), 'до дня визита плательщика выбрать нельзя');
+    assert.ok(!payerRadio.hasAttribute('checked'));
+    assert.ok(targetRadio(dlg, 'patient').hasAttribute('checked'), 'выбран «Пациенту»');
+    const { fmtDate } = await import('../ui.js');
+    assert.ok(textOf(dlg).includes('Счёт плательщику — со дня визита (' + fmtDate(future) + '). Сейчас можно выставить только пациенту (предоплата).'),
+        'нет пояснения: ' + textOf(dlg));
+    assert.ok(buttonByText(dlg, 'Выставить счёт и принять оплату'), 'кнопка — счёт пациенту');
+    assert.equal(buttonByText(dlg, 'Выставить счёт плательщику'), undefined);
+    payerRadio.fire('change');   // нажатие по выключенному ничего не меняет
+    await tick(20);
+    buttonByText(dlg, 'Выставить счёт и принять оплату').click();
+    await tick(250);
+    assert.deepEqual(rpcCalls('create_invoice_for_visit')[0][1], { visit_id: 50, visit_service_ids: [401, 402] }, 'до дня визита счёт уходит пациенту');
+    assert.match(textOf(lastModal()), /Оплата · /, 'предоплата — окно оплаты');
+    assert.equal(printed.filter((x) => /Акт оказанных/.test(x)).length, 0);
+    desk.__test_cardState.filter = 'unpaid';
+});
+
+test('визит сегодня: плательщик из карты выбирается и стоит по умолчанию, пояснения нет', async () => {
+    asCashier();
+    closeAll();
+    insuredWorld();
+    const el = openInsuredBill({ ...INSURED, visit_date: new Date().toISOString() });
+    buttonByText(byAttr(el, 'data-unbilled-row', '50'), 'Выставить счёт').click();
+    await tick(80);
+    const dlg = lastModal();
+    const payerRadio = targetRadio(dlg, 'payer');
+    assert.ok(payerRadio && !payerRadio.hasAttribute('disabled'), 'в день визита плательщик доступен');
+    assert.ok(payerRadio.hasAttribute('checked'), 'и стоит по умолчанию');
+    assert.ok(!/со дня визита/.test(textOf(dlg)));
+    buttonByText(dlg, 'Выставить счёт плательщику').click();
+    await tick(250);
+    assert.equal(rpcCalls('create_invoice_for_visit')[0][1].payer_id, 5, 'счёт ушёл плательщику');
     desk.__test_cardState.filter = 'unpaid';
 });

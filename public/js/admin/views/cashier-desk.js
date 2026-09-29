@@ -27,7 +27,7 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TY
 import { dateNumeric } from '../../shared/date-words.js';   // V3120_FIX — дата чека не зависит от языка ОС
 import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANCE_V1
 import { searchTokens } from '../patient-search.js';   // CARD_SALE_V1 — поиск покупателя карты
-import { canOfferLineFix, openLineFix, openRebill } from './cashier-line-fix.js?v=refbill2';   // CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»; REFERRAL_BILL_V1 — «Выставить счёт» (title, «Кому счёт», штамп)
+import { canOfferLineFix, openLineFix, openRebill } from './cashier-line-fix.js?v=refbill3';   // CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»; REFERRAL_BILL_V1 — «Выставить счёт» (title, «Кому счёт» со дня визита, штамп)
 import { printInvoiceAct } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 — акт по счёту плательщику, та же сборка, что у мастера визита
 import { canCloseOtherShifts } from '../permissions.js';   // CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
 
