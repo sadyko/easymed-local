@@ -18,12 +18,20 @@ class F{constructor(t){this.tagName=String(t).toUpperCase();this.style={};this.c
  appendChild(c){this.children.push(c);return c;} removeChild(c){const i=this.children.indexOf(c);if(i>-1)this.children.splice(i,1);return c;}
  append(...cs){for(const c of cs)if(c)this.children.push(c);}
  get firstChild(){return this.children[0]||null;} replaceChildren(){this.children.length=0;}
- setAttribute(k,v){this.attrs[k]=String(v); if (k === 'value') this.value = String(v);} getAttribute(k){return this.attrs[k]??null;} hasAttribute(k){return k in this.attrs;}
+ setAttribute(k,v){this.attrs[k]=String(v); if (k === 'value') this.value = String(v);
+   // REFERRAL_OWN_BOX_V1 — как в браузере: атрибут checked отмечает поле, data-* попадают в dataset.
+   if (k === 'checked') this.checked = true;
+   if (k.startsWith('data-')) this.dataset[k.slice(5).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = String(v);}
+ getAttribute(k){return this.attrs[k]??null;} hasAttribute(k){return k in this.attrs;}
  addEventListener(t,fn){(this._l[t]||(this._l[t]=[])).push(fn);} removeEventListener(){}
  dispatchEvent(e){for(const fn of this._l[e.type]||[])fn(e);return true;}
  click(){this.dispatchEvent({type:'click',currentTarget:this,preventDefault(){},stopPropagation(){}});}
  focus(){} blur(){} scrollTo(){} remove(){} select(){}
- querySelector(){return null;} querySelectorAll(){return [];}
+ // REFERRAL_OWN_BOX_V1 — ровно те выборки, которыми редактор собирает ставки групп:
+ // tag[attr] и tag[attr="value"].
+ querySelectorAll(sel){const m=String(sel).match(/^(\w+)\[([\w-]+)(?:="([^"]*)")?\]$/);if(!m)return [];const out=[];
+   const go=(e)=>{for(const c of e.children||[]){if(c.tagName===m[1].toUpperCase()&&(m[3]===undefined?(m[2] in (c.attrs||{})):(c.attrs||{})[m[2]]===m[3]))out.push(c);go(c);}};go(this);return out;}
+ querySelector(sel){return this.querySelectorAll(sel)[0]||null;}
  get textContent(){return this._t;} set textContent(v){this._t=String(v);this.children.length=0;}
  get classList(){const s=this;return{contains:c=>String(s.className).split(/\s+/).includes(c),add(){},remove(){},toggle(){}};}
  get isConnected(){return true;}}
@@ -149,6 +157,50 @@ test('своя ставка сохраняется в строку источн�
   assert.equal(upd.values.reward_mode, 'own');
   assert.equal(upd.values.own_percent, 12);
   assert.ok((upd.filters || []).some((f) => f.col === 'doctor_id' && String(f.val) === '7'), JSON.stringify(upd.filters));
+});
+
+// REFERRAL_OWN_BOX_V1 (2026-09-29) — владелец: «editing … the provider shares
+// doesn't save the currency and share». С галочкой «по категории» блок своих
+// ставок стоял НА ЭКРАНЕ: атрибут hidden перебивался встроенным display:flex.
+// Человек вписывал «Лаборатория: 10 сум», сохранял — и сохранение честно писало
+// режим «по категории» с пустыми своими ставками: всё введённое пропадало молча.
+// Теперь блок скрыт по-настоящему (display:none), пока стоит галочка, а под
+// галочкой сказано, как задать свою ставку.
+test('с галочкой «по категории» своих ставок на экране НЕТ — введённое не пропадает молча', async () => {
+  const card = await openReferralTab();
+  const chkBox = byClass(card, 'checkbox').find((n) => textOf(n).includes('Вознаграждение по категории'));
+  const modeChk = tags(chkBox, 'input')[0];
+  const ownBox = walk(card).find((n) => n.tagName === 'DIV'
+    && (n.children || []).some((c) => c.tagName === 'TABLE')
+    && (n.children || []).some((c) => textOf(c).includes('Свой процент')));
+  assert.ok(ownBox, 'нет блока своих ставок');
+  assert.equal(modeChk.checked, true, 'источник по категории — галочка стоит');
+  assert.equal(ownBox.style.display, 'none', 'свои ставки видны при «по категории» — введённое не сохранится');
+  assert.ok(textOf(card).includes('Чтобы задать врачу свою ставку, снимите галочку.'), 'не сказано, как задать свою ставку');
+  modeChk.checked = false; modeChk.dispatchEvent({ type: 'change' });
+  assert.notEqual(ownBox.style.display, 'none', 'галочку сняли — свои ставки обязаны появиться');
+  modeChk.checked = true; modeChk.dispatchEvent({ type: 'change' });
+  assert.equal(ownBox.style.display, 'none');
+});
+
+test('своя ставка группы в «сум» уходит в источник с единицей fix', async () => {
+  const card = await openReferralTab();
+  const chkBox = byClass(card, 'checkbox').find((n) => textOf(n).includes('Вознаграждение по категории'));
+  const modeChk = tags(chkBox, 'input')[0];
+  modeChk.checked = false; modeChk.dispatchEvent({ type: 'change' });
+  const labInp = tags(card, 'input').find((n) => n.attrs['data-rate-group'] === 'lab');
+  const labSel = tags(card, 'select').find((n) => n.attrs['data-rate-unit'] === 'lab');
+  labInp.value = '10'; labSel.value = 'fix';
+  // В браузере событие поля всплывает до таблицы — её слушатель и собирает ставки.
+  const tbody = tags(card, 'tbody').find((t) => walk(t).includes(labInp));
+  tbody.dispatchEvent({ type: 'input' });
+  buttonWith(card, 'Сохранить сотрудника').click();
+  await flush();
+  const upd = dbCalls.find((d) => d.table === 'referral_sources' && d.op === 'update');
+  assert.ok(upd, 'ставка не записана в источник врача');
+  assert.equal(upd.values.reward_mode, 'own');
+  const rates = typeof upd.values.own_rates === 'string' ? JSON.parse(upd.values.own_rates) : upd.values.own_rates;
+  assert.deepStrictEqual(rates, [{ group: 'lab', unit: 'fix', value: 10 }]);
 });
 
 test('вкладку не открывали — строка источника не переписывается', async () => {

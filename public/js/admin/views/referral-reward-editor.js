@@ -127,14 +127,27 @@ export function referralRewardEditor({ doctorId, holder, onChange, readOnly = fa
             return { mode: modeChk.checked ? 'category' : 'own',
                      percent: Number(pctInp.value) || 0, rates: collect() };
         }
+        // REFERRAL_OWN_BOX_V1 (2026-09-29) — владелец: «editing … the provider
+        // shares doesn't save the currency and share». Блок своих ставок прятался
+        // атрибутом hidden, а встроенный display:flex его перебивал: при галочке
+        // «по категории» поля стояли на экране, человек вписывал «Лаборатория:
+        // 10 сум» — и сохранение писало режим «по категории» с пустыми своими
+        // ставками. Всё введённое пропадало молча. Теперь блок скрывается самим
+        // display, а под галочкой сказано, как задать врачу свою ставку.
+        const ownHint = h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+            tr('Чтобы задать врачу свою ставку, снимите галочку.'));
+        function showOwn() {
+            ownBox.style.display = modeChk.checked ? 'none' : 'flex';
+            ownHint.style.display = modeChk.checked ? '' : 'none';
+        }
         function push() {
             holder.referralReward = snapshot();
-            ownBox.hidden = modeChk.checked;
+            showOwn();
             if (onChange) onChange();
         }
         // Стартовое состояние без onChange: открытая вкладка — не правка.
         holder.referralReward = snapshot();
-        ownBox.hidden = modeChk.checked;
+        showOwn();
         modeChk.addEventListener('change', push);
         pctInp.addEventListener('input', push);
         tbody.addEventListener('change', push);
@@ -144,6 +157,7 @@ export function referralRewardEditor({ doctorId, holder, onChange, readOnly = fa
             h('div', { class: 'field checkbox' }, modeChk,
                 h('label', null, tr('Вознаграждение по категории (общая ставка)'))),
             h('div', { class: 'muted', style: { fontSize: '12.5px' } }, stdNote),
+            ownHint,
             ownBox));
         if (readOnly) {
             modeChk.disabled = true;
