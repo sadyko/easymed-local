@@ -297,6 +297,7 @@ export function createInvoiceForVisit(db, args, user) {
   if (!hasAnyRole(user, CREATE_INVOICE_ROLES)) {
     requireRole(user, DOCTOR_INVOICE_ROLES);
     doctorInvoiceRefusal(db, args);
+    return issueVisitInvoice(db, args, user, { doctorOnly: true });   // REFBILL_REVIEW_V1 — строки врача сверяются (doctorLinesRefusal)
   }
   return issueVisitInvoice(db, args, user);
 }
@@ -345,11 +346,81 @@ function visitHasCardPayer(db, visitId) {
      WHERE v.id = ?`).get(visitId);
 }
 
+// REFBILL_REVIEW_V1 (ревью C1, M4) — ЧТО ВРАЧ БЕЗ ДЕНЕЖНОЙ РОЛИ ВЫСТАВЛЯЕТ САМ.
+//
+// Счёт считает строку по колонкам самой строки (lineUnitPrice: тариф визита
+// price_tier, врач doctor_id, количество), а врач пишет их сам через /api/db.
+// Ревью: «повторный визит» (0 сум) первичному пациенту, которому сервер
+// насчитал 200 000, давал счёт на ноль — «оплачен», строка в очереди, касса не
+// видит ничего. И второе: врач выставлял ЛЮБОЙ визит — чужую запись
+// регистратуры, отменённый и «не пришёл», визит закрытого месяца. Поэтому у
+// врача без денежной роли:
+//   • визит живой (не 'cancelled', не 'no_show') и его месяц в «Оплате
+//     врачей» не закрыт;
+//   • каждая строка — СВОЯ: created_by ставит сервер из сессии
+//     (schema-registry, stamps), браузер его не пишет; строка без автора — не
+//     своя (remove_own_visit_line и то смотрит в created_by);
+//   • количество услуги — целое, не меньше одной (0,001 услуги за 200 000 —
+//     счёт на 200 сум);
+//   • исполнитель — тот, кому услугу оказывать можно (assertPerformer — то же
+//     правило, что у кассы при смене врача): своя цена такого исполнителя
+//     законна — это и есть направление к коллеге;
+//   • тариф строки = расчёт сервера для ЭТОГО визита (quoteTier — котировка
+//     service_price_quote: пациент, местный день визита, сам визит исключён).
+// Товарную строку оценила выдача (RPC склада) — врач её не пишет, она не
+// сверяется. Отказ — в транзакции и до номера счёта: ни счёта, ни номера.
+// Зеркало на экране — мастер визита (visit-wizard.js): у врача тариф строк
+// дня спрашивается у сервера теми же входами прямо перед записью.
+function doctorLinesRefusal(db, visit, rows, user) {
+  if (visit.status === 'cancelled' || visit.status === 'no_show') {
+    throw new RpcError('Визит отменён или отмечен «Не пришёл» — счёт по нему врач не выставляет.', 403);
+  }
+  const month = db.prepare(`SELECT ${localMonth('?')} AS m`).get(visit.visit_date).m;
+  if (month && db.prepare('SELECT 1 FROM pay_periods WHERE month = ?').get(month)) {
+    throw new RpcError('Месяц этого визита закрыт в «Оплате врачей» — счёт по нему выставит касса.', 409);
+  }
+  const me = Number(user && user.id);
+  for (const row of rows) {
+    if (row.created_by == null || Number(row.created_by) !== me) {
+      throw new RpcError('Врач выставляет счёт только за услуги, которые добавил сам. Остальное выставит касса.', 403);
+    }
+  }
+  for (const row of rows) {
+    if (row.clinic_item_id != null) continue;
+    const name = doctorLineName(db, row);
+    const qty = Number(row.quantity);
+    if (!(Number.isInteger(qty) && qty >= 1)) {
+      throw rpcT(RpcError, 'Количество услуги «{name}» — целое число, не меньше одной.', { name }, 403);
+    }
+    if (row.doctor_id != null) assertPerformer(db, row.doctor_id, row.service_id, row.consultation_type_id);
+    if (row.service_id != null) {
+      const stamped = row.price_tier === 'secondary' || row.price_tier === 'repeat' ? row.price_tier : 'primary';
+      if (stamped !== quoteTier(db, visit, visit.id, row.service_id)) {
+        throw rpcT(RpcError, 'Тариф визита в строке «{name}» не совпадает с расчётом сервера — счёт по ней выставит касса.', { name }, 403);
+      }
+    }
+  }
+}
+
+// REFBILL_REVIEW_V1 — имя строки для отказа врачу: услуга или вид приёма.
+function doctorLineName(db, row) {
+  if (row.service_id != null) {
+    const s = db.prepare('SELECT name FROM services WHERE id = ?').get(row.service_id);
+    if (s && s.name) return s.name;
+  } else if (row.consultation_type_id != null) {
+    const c = consultationFor(db, row.consultation_type_id, row.doctor_id);
+    if (c && c.name) return c.name;
+  }
+  return '№' + row.id;
+}
+
 // CASHIER_HEAD_V1 (ревью) — выставление без проверки роли: дверь кассы
 // (addServiceToVisitInvoice) уже проверила СВОЁ право «Исправляет услуги в
 // счёте», и своя роль клиники на другой основе, которой это право выдано,
 // не должна упираться в список ролей выставления.
-function issueVisitInvoice(db, args, user) {
+// REFBILL_REVIEW_V1 — doctorOnly: зовёт create_invoice_for_visit для врача без
+// денежной роли — его строки сверяет doctorLinesRefusal.
+function issueVisitInvoice(db, args, user, { doctorOnly = false } = {}) {
 
   const visitId = args && args.visit_id;
   if (!isPositiveInt(visitId)) {
@@ -388,8 +459,15 @@ function issueVisitInvoice(db, args, user) {
       if (row.invoice_item_id !== null) {
         throw rpcT(RpcError, 'Услуга №{id} уже в счёте.', { id }, 400);
       }
+      // REFBILL_REVIEW_V1 (ревью M4) — ОТМЕНЁННУЮ СТРОКУ В СЧЁТ НЕ СТАВИТ
+      // НИКТО. Отменённая услуга — не работа: «Ждут счёта» и окно визита её
+      // не предлагают, но RPC по номеру строки выставлял и её.
+      if (row.status === 'cancelled') {
+        throw rpcT(RpcError, 'Услуга №{id} отменена — в счёт её не ставят.', { id }, 400);
+      }
       rows.push(row);
     }
+    if (doctorOnly) doctorLinesRefusal(db, visit, rows, user);   // REFBILL_REVIEW_V1 (ревью C1, M4)
 
     // FINAL_MONEY_FIX_V1 (I1) — УСЛУГУ, ЗА КОТОРУЮ ПАЦИЕНТУ ВЕРНУЛИ ДЕНЬГИ, СНОВА
     // НЕ ВЫСТАВЛЯЮТ МОЛЧА. Возврат строки (refund_invoice_line) и отмена счёта

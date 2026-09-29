@@ -54,12 +54,14 @@ function seed() {
 /**
  * Визит врача с направленными строками — цена в строке «от браузера» (1 сум).
  * День визита — сейчас: «Ждут счёта» (cashier_unbilled) смотрит 30 дней назад.
+ * REFBILL_REVIEW_V1 (ревью M4) — `by`: кто завёл строки. Врач без денежной
+ * роли выставляет только СВОИ строки (created_by).
  */
-function referral(db, pid, lines) {
-  const vid = Number(db.prepare("INSERT INTO visits (patient_id, visit_date, created_by) VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?)").run(pid, DOC).lastInsertRowid);
+function referral(db, pid, lines, by = DOC) {
+  const vid = Number(db.prepare("INSERT INTO visits (patient_id, visit_date, created_by) VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?)").run(pid, by).lastInsertRowid);
   const ids = lines.map(({ service_id, doctor_id = null }) => Number(db.prepare(
     "INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by) VALUES (?, ?, ?, 1, 1, 1, 'added', ?)",
-  ).run(vid, service_id, doctor_id, DOC).lastInsertRowid));
+  ).run(vid, service_id, doctor_id, by).lastInsertRowid));
   return { vid, ids };
 }
 const countInvoices = (db) => db.prepare('SELECT COUNT(*) n FROM invoices').get().n;
@@ -112,12 +114,13 @@ test('врач со счётом плательщику — 403 с понятн�
 
 test('главный врач (надстройка над врачом) — как врач: счёт можно, скидку и плательщика нельзя', () => {
   const { db, LAB, pid, payer } = seed();
-  const { vid, ids } = referral(db, pid, [{ service_id: LAB }]);
+  // REFBILL_REVIEW_V1 (ревью M4) — строки главного врача заводит он сам.
+  const { vid, ids } = referral(db, pid, [{ service_id: LAB }], headDoctor.id);
   assert.equal(createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: ids, discount_amount: 0, payer_id: null }, headDoctor).invoice.total_amount, 40000);
   // Право даёт и сама надстройка «Главный врач» (решение владельца: роли doctor
   // и head_doctor), даже поверх не врачебной основной роли — с теми же границами.
   const onlyHead = { id: 30, role: 'nurse', extra_roles: ['head_doctor'], full_name: 'Медсестра' };
-  const b = referral(db, pid, [{ service_id: LAB }]);
+  const b = referral(db, pid, [{ service_id: LAB }], onlyHead.id);
   assert.equal(createInvoiceForVisit(db, { visit_id: b.vid, visit_service_ids: b.ids }, onlyHead).invoice.status, 'unpaid');
   const c = referral(db, pid, [{ service_id: LAB }]);
   refused(() => createInvoiceForVisit(db, { visit_id: c.vid, visit_service_ids: c.ids, discount_amount: 1000 }, onlyHead), /Скидку в счёт ставят/);
