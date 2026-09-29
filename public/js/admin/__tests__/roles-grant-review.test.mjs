@@ -145,6 +145,33 @@ test('ревью m8: «восстановлено» отмечено тольк�
   assert.ok(REVIEWS.every((r) => r.resolution === null));
 });
 
+// Ревью N3 — снимать было нечего (все ключи поменяли руками, пока плашка
+// висела): тост говорит правду, а не «Права убраны».
+test('ревью N3: снимать нечего — тост так и говорит; сняли — «Права убраны»', async () => {
+  const msgs = [];
+  const toastEl = mk('div');
+  Object.defineProperty(toastEl, 'textContent', { configurable: true, get() { return msgs[msgs.length - 1] || ''; }, set(v) { msgs.push(String(v)); } });
+  const prev = document.getElementById;
+  document.getElementById = (id) => (id === 'toast' ? toastEl : null);
+  try {
+    fresh();
+    const box = await notice();
+    ROW.grants['inpatient.vitals'] = 'view';
+    ROW.grants['crm.all'] = 'none';
+    buttons(box).find((b) => textOf(b).includes('Убрать эти права')).click();
+    await tick();
+    assert.deepStrictEqual(msgs, ['Эти права уже изменили — снимать нечего.'], 'тост «Права убраны», хотя ничего не снято');
+    assert.strictEqual(toastEl.dataset.kind, 'info');
+    msgs.length = 0;
+    fresh();
+    const box2 = await notice();
+    buttons(box2).find((b) => textOf(b).includes('Убрать эти права')).click();
+    await tick();
+    assert.deepStrictEqual(msgs, ['Права убраны — решает основа роли.']);
+    assert.strictEqual(toastEl.dataset.kind, 'ok');
+  } finally { document.getElementById = prev; }
+});
+
 // Ревью M4 — на проверке и ключи с воротами-функцией, среди них раздел
 // «Закупки» (его ключ — сам раздел, не окно): плашка называет его словами
 // справочника, а не кодом.

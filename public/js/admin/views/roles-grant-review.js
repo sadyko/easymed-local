@@ -85,13 +85,18 @@ export function roleGrantReviewNotice(role, perms, { onDone } = {}) {
         if (!items.length) return;
         const removeBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'Убрать эти права');
         const keepBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button' }, 'Оставить как есть');
-        const act = async (fn, okText) => {
+        // fn отвечает [текст, вид] тоста — что на самом деле произошло.
+        const act = async (fn) => {
             removeBtn.disabled = true; keepBtn.disabled = true;
-            try { await fn(); toast(tr(okText), 'ok'); if (onDone) onDone(); }
+            try { const [text, kind] = await fn(); toast(tr(text), kind); if (onDone) onDone(); }
             catch (e) { toast(tr('Не удалось сохранить решение.') + ' ' + ((e && e.message) || ''), 'fail'); removeBtn.disabled = false; keepBtn.disabled = false; }
         };
-        removeBtn.addEventListener('click', () => act(() => removeReviewedGrants(role, items), 'Права убраны — решает основа роли.'));
-        keepBtn.addEventListener('click', () => act(() => resolve(items, 'kept'), 'Права оставлены как есть.'));
+        // Ревью N3 — снимать было нечего (ключи поменяли руками, пока плашка
+        // висела): тост так и говорит, а не «Права убраны».
+        removeBtn.addEventListener('click', () => act(async () => ((await removeReviewedGrants(role, items)) > 0
+            ? ['Права убраны — решает основа роли.', 'ok']
+            : ['Эти права уже изменили — снимать нечего.', 'info'])));
+        keepBtn.addEventListener('click', () => act(async () => { await resolve(items, 'kept'); return ['Права оставлены как есть.', 'ok']; }));
         const list = items.map((i) => '«' + grantKeyLabel(i.key) + '»').join(', ');
         box.appendChild(h('div', { class: 'card roles-note', role: 'status', dataset: { grantReview: role } },
             h('span', { class: 'roles-note-ico' }, Icon('Warning', { size: 15 })),
