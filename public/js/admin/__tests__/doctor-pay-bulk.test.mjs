@@ -60,7 +60,7 @@ db.prepare(`INSERT INTO users (id, username, password_hash, full_name, role, is_
 // врачи» его не трогает.
 db.prepare(`INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, service_rates)
             VALUES (8,'doc2','x','Терапевтов Тимур','doctor',1,?)`).run(JSON.stringify([{ service_id: 1, pct: 25, branches: [1] }]));
-db.prepare("INSERT INTO services (id, name, price, default_doctor_percent) VALUES (1,'Аппендэктомия',1000000,0), (2,'Перевязка',100000,5), (3,'УЗИ',200000,0)").run();
+db.prepare("INSERT INTO services (id, name, price, default_doctor_percent) VALUES (1,'Аппендэктомия',1000000,0), (2,'Перевязка',100000,5), (3,'УЗИ',200000,0), (4,'Капельница',80000,0)").run();   // RATES_HONEST_V1 (ревью 1) — 4: её не оказывает никто
 const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
 const base = `http://127.0.0.1:${server.address().port}`;
 const login = await realFetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'boss', password: 'password1' }) });
@@ -141,7 +141,46 @@ test('RATES_HONEST_V1: «Все врачи» — % оказывающим, фи�
   assert.equal(ratesOf(7).find((r) => Number(r.service_id) === 1).pct, pct1, 'чужая услуга тронута');
   assert.deepEqual(writes, ['/api/users/7'], 'сохранение ушло не только оказывающему врачу');
   assert.equal(db.prepare('SELECT service_rates FROM users WHERE id = 8').get().service_rates, before8, 'врач без записи тронут');
-  assert.ok(TOASTS.includes('Ставка 12% поставлена 1 врачам, которые оказывают услугу'), 'тост: ' + JSON.stringify(TOASTS));
+  // RATES_HONEST_V1 (ревью 1) — число стоит отдельно: «1 врачам» было неграмотно.
+  assert.deepEqual(TOASTS, ['Ставка 12% поставлена. Врачей, которые оказывают услугу: 1.']);
   // Колонку, которую расчёт не читает, экран больше не пишет как ставку.
   assert.equal(db.prepare('SELECT default_doctor_percent AS p FROM services WHERE id = 2').get().p, 5);
+});
+
+// RATES_HONEST_V1 (ревью 1) — услугу не оказывает никто: не «поставлена 0
+// врачам», а предупреждение, куда идти (подпись переключателя на экране —
+// «Выбранные врачи»); на сервер не уходит ничего.
+test('RATES_HONEST_V1: «Все врачи» по услуге, которую никто не оказывает, — предупреждение, записей нет', async () => {
+  writes.length = 0;
+  TOASTS.length = 0;
+  const host = await open();
+  assert.ok(labelWith(host, 'Выбранные врачи'), 'переключатель называется иначе — поправьте текст предупреждения');
+  tick(tags(labelWith(host, 'Капельница'), 'input')[0]);
+  tags(host, 'input').find((n) => n.attrs.type === 'number').value = '15';
+  tags(host, 'button').find((b) => textOf(b).includes('Применить долю')).click();
+  await flush(60);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.deepEqual(writes, []);
+  assert.deepEqual(TOASTS, ['Эту услугу пока никто не оказывает — добавьте врачей через «Выбранные врачи».']);
+});
+
+// RATES_HONEST_V1 (ревью 1) — сбой у одного врача: тост один (второй заменил бы
+// первый) и называет и сохранённых, и несохранённых.
+test('RATES_HONEST_V1: «Все врачи» со сбоем у одного врача — «Сохранено у врачей: 1, не сохранено: 1.»', async () => {
+  writes.length = 0;
+  TOASTS.length = 0;
+  const was = globalThis.fetch;
+  globalThis.fetch = (url, opts) => (String(url) === '/api/users/8'
+    ? Promise.resolve({ ok: false, status: 500, json: async () => ({ error: { message: 'сбой' } }) })
+    : was(url, opts));
+  try {
+    const host = await open();
+    tick(tags(labelWith(host, 'Аппендэктомия'), 'input')[0]);   // оказывают оба врача
+    tags(host, 'input').find((n) => n.attrs.type === 'number').value = '33';
+    tags(host, 'button').find((b) => textOf(b).includes('Применить долю')).click();
+    await flush(60);
+    await new Promise((r) => setTimeout(r, 100));
+  } finally { globalThis.fetch = was; }
+  assert.equal(ratesOf(7).find((r) => Number(r.service_id) === 1).pct, 33);
+  assert.deepEqual(TOASTS, ['Сохранено у врачей: 1, не сохранено: 1.']);
 });

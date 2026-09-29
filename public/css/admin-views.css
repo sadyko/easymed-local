@@ -4077,8 +4077,9 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 /* One grid definition for the header and every row — they cannot drift apart. */
 /* RATES_HONEST_V1 — колонки «Филиалы» (136px) больше нет: услуга, цена, ставка.
    Ставка шире (168 → 236px): подсказка пустого поля «0 % — не задано» и сумма
-   «15 000 сум» помещаются целиком, а не под значком единицы. */
-.rt-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 124px 236px; gap: 10px; align-items: center;
+   «15 000 сум» помещаются целиком, а не под значком единицы.
+   Ревью 1 — 236 → 252px (на узком 240 → 256px): «25 % — по умолчанию». */
+.rt-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 124px 252px; gap: 10px; align-items: center;
     padding: 9px 14px; }
 .rt-row--noprice { grid-template-columns: 28px minmax(0, 1fr) 100px 104px; }
 /* INPATIENT_BONUS_V1 — вкладка «Стационар»: услуга, цена каталога, ставка (% / сум). */
@@ -4128,6 +4129,15 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     border-radius: 5px; display: grid; place-items: center; }
 .rt-clear:hover { background: var(--ink-100); color: var(--ink-700); }
 .rt-num--price { padding-right: 28px; }
+/* RATES_HONEST_V1 (ревью 1) — значок единицы «сум» (22.5px при right:10px) не
+   помещался в 30px отступа: число уходило под него на 1.5px. У полей ставки —
+   40px. Пустое поле показывает подсказку с «%» внутри («0 % — не задано»,
+   «25 % — по умолчанию»): отступ под значок не нужен, а сам значок дал бы
+   «… не задано %» — он прячется, пока видна подсказка. */
+.rt-field > .rt-num:not(.rt-num--price) { padding-right: 40px; }
+.rt-rate .rt-num:placeholder-shown { padding-right: 10px; }
+.rt-rate .rt-num:placeholder-shown + .rt-unit { visibility: hidden; }
+.rt-rate .rt-num::placeholder { font-size: 12.5px; }
 
 /* Segmented % / сум — one click, and the active mode is readable at a glance. */
 .rt-seg { display: inline-flex; flex: 0 0 auto; border: 1px solid var(--ink-200); border-radius: 8px;
@@ -4162,9 +4172,12 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 .rt-sel > i { width: 6px; height: 6px; border-radius: 50%; background: var(--primary-500); display: block; }
 
 @media (max-width: 1100px) {
-    .rt-row { grid-template-columns: 26px 1fr 110px 240px; gap: 8px; padding: 9px 10px; }   /* RATES_HONEST_V1 — без «Филиалов» */
-    .rt-row--noprice { grid-template-columns: 26px 1fr 96px 96px; }
-    .rt-row--inpatient { grid-template-columns: 26px 1fr 110px 170px; }
+    /* RATES_HONEST_V1 (ревью 1) — minmax(0, 1fr), а не 1fr: у 1fr минимум — ширина
+       содержимого, и длинное название раздвигало строку, а шапка оставалась —
+       колонки шапки и строк расходились (52px на 390px). */
+    .rt-row { grid-template-columns: 26px minmax(0, 1fr) 110px 256px; gap: 8px; padding: 9px 10px; }   /* RATES_HONEST_V1 — без «Филиалов» */
+    .rt-row--noprice { grid-template-columns: 26px minmax(0, 1fr) 96px 96px; }
+    .rt-row--inpatient { grid-template-columns: 26px minmax(0, 1fr) 110px 200px; }   /* ревью 1 — 170 → 200px: «150 000 сум» с отступом 40px помещается */
 }
 /* ============================ end RATES_UI_V2 ============================ */
 

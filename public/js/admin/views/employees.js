@@ -428,6 +428,10 @@ function openEditor(user, root) {
             salary_fixed: user.salary_fixed ? String(user.salary_fixed) : '', salary_percent: user.salary_percent ? String(user.salary_percent) : '',
             working_hours: parseHours(user.working_hours),
             service_rates: loadRates(user.service_rates),
+            // RATES_HONEST_V1 (ревью 1) — только для подсказки пустого процента:
+            // запись без pct платит его (reports.js COALESCE). Не сохраняется —
+            // payload собирается по списку полей.
+            service_rate_default: Number(user.service_rate_default) || 0,
             referral_rates: loadRates(user.referral_rates),
             // INPATIENT_BONUS_V1 — вкладка «Стационар».
             inpatient_rates: loadInpatientRates(user.inpatient_rates),
@@ -948,6 +952,16 @@ function ratesSection(emp, arrayKey, opts, touch) {
         h('span', { class: 'r' }, opts.ownPrice ? 'Своя цена' : 'Цена'),
         h('span', { class: 'r' }, opts.rateLabel || opts.pctLabel));
 
+    // RATES_HONEST_V1 (ревью 1) — пустой процент платит то, что стоит за ним в
+    // расчёте: COALESCE(dr.percent, doc.service_rate_default, 0) (reports.js).
+    // Ставку по умолчанию экраны не пишут, но PATCH /api/users её принимает:
+    // если она есть — подсказка называет её, нет — «0 % — не задано».
+    const dfltPct = Number(emp.service_rate_default) > 0 ? Number(emp.service_rate_default) : 0;
+    const emptyHint = () => (dfltPct > 0 ? trf('{n} % — по умолчанию', { n: dfltPct }) : tr('0 % — не задано'));
+    const emptyTip = () => (dfltPct > 0
+        ? trf('Ставка не задана — врач получает ставку по умолчанию {n} %. Введите процент или сумму.', { n: dfltPct })
+        : tr('Ставка не задана — врач за эту услугу получает 0 %. Введите процент или сумму.'));
+
     // RATES_HONEST_V1 — новая запись несёт ПУСТОЙ список филиалов (прежде при
     // единственном филиале — его, SOLE_BRANCH_V1). У прежних записей branches
     // не трогается: карточка его не показывает, не правит и отдаёт как было.
@@ -1104,8 +1118,8 @@ function ratesSection(emp, arrayKey, opts, touch) {
             // DOCTOR_FIX_RATE_V1 — mode picker + the value it applies to.
             const fixed = isFix(r);
             // RATES_HONEST_V1 — процента нет: платится users.service_rate_default,
-            // а его не пишет ни один экран, то есть 0 % (владелец: «Keep 0, label
-            // it honestly»). Подсказка не обещает «по умолчанию» — говорит 0 %.
+            // а его не пишет ни один экран, то есть обычно 0 % (владелец: «Keep 0,
+            // label it honestly»). Подсказка называет то, что заплатит расчёт.
             const noPct = on && !fixed && r.pct == null;
             const rateInp = h('input', {
                 type: 'number', min: '0', class: 'rt-num', disabled: !on,
@@ -1113,9 +1127,9 @@ function ratesSection(emp, arrayKey, opts, touch) {
                 step: fixed ? '1000' : '1',
                 // Ревью I5 — процента нет: пустое поле с подсказкой, а не «0».
                 value: on ? String(fixed ? r.fix : (r.pct == null ? '' : r.pct)) : '0',
-                placeholder: on && !fixed ? tr('0 % — не задано') : null,
+                placeholder: on && !fixed ? emptyHint() : null,   // RATES_HONEST_V1
                 title: fixed ? 'Врач получает эту сумму за каждую единицу услуги'
-                    : noPct ? 'Ставка не задана — врач за эту услугу получает 0 %. Введите процент или сумму.'   // RATES_HONEST_V1
+                    : noPct ? emptyTip()   // RATES_HONEST_V1
                         : 'Процент от суммы строки после скидки и налога',   // RATES_MODE_TYPED_V1 (m12)
             });
             // RATES_MODE_TYPED_V1 — процент строки на момент отрисовки: к нему
@@ -1133,8 +1147,7 @@ function ratesSection(emp, arrayKey, opts, touch) {
                 else setPct(s.id, Math.max(0, n));
                 // RATES_HONEST_V1 — подсказка под мышью следует за полем (без перерисовки: фокус остаётся).
                 if (!fixed) rateInp.title = String(rateInp.value).trim() === ''
-                    ? tr('Ставка не задана — врач за эту услугу получает 0 %. Введите процент или сумму.')
-                    : tr('Процент от суммы строки после скидки и налога');
+                    ? emptyTip() : tr('Процент от суммы строки после скидки и налога');
             });
 
             scroll.appendChild(h('div', { class: rowCls + ' rt-item' + (on ? ' on' : '') },

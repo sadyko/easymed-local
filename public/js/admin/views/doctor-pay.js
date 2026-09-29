@@ -165,8 +165,15 @@ export async function renderDoctorPay(container) {
                     }
                 }
                 paintSvc();
-                toast(trf('Ставка {n}% поставлена {k} врачам, которые оказывают услугу', { n: pct, k: touched }));
-                if (failed) toast(trf('Не сохранено у врачей: {n}', { n: failed }), 'fail');
+                // RATES_HONEST_V1 (ревью 1) — число стоит отдельно, ни с чем не
+                // согласуется («1 врачам» было неграмотно); некому поставить —
+                // предупреждение, а не «поставлена»; сбой называет и сохранённых
+                // (тост один: второй заменил бы первый).
+                if (failed) toast(trf('Сохранено у врачей: {ok}, не сохранено: {fail}.', { ok: touched, fail: failed }), 'fail');
+                else if (!touched) toast(svcIds.length > 1
+                    ? tr('Эти услуги пока никто не оказывает — добавьте врачей через «Выбранные врачи».')
+                    : tr('Эту услугу пока никто не оказывает — добавьте врачей через «Выбранные врачи».'), 'warn');
+                else toast(trf('Ставка {n}% поставлена. Врачей, которые оказывают услугу: {k}.', { n: pct, k: touched }));
             } else {
                 let touched = 0, failed = 0;
                 for (const doc of doctors.filter(d => selDoc.has(d.id))) {
@@ -183,8 +190,10 @@ export async function renderDoctorPay(container) {
                     catch (e2) { failed++; console.warn('[doctor-pay] save', doc.id, e2 && e2.message); }
                 }
                 paintSvc();   // RATES_HONEST_V1 — «оказывают: N» меняется у добавленных услуг
-                toast(trf('Доля {pct}% задана для {n} услуг(и) у {touched} врач(ей).', { pct, n: svcIds.length, touched }));
-                if (failed) toast(trf('Не сохранено у врачей: {n}', { n: failed }), 'fail');
+                // RATES_HONEST_V1 (ревью 1) — сбой называет и сохранённых: второй
+                // тост заменил бы первый, и число сохранённых терялось.
+                if (failed) toast(trf('Сохранено у врачей: {ok}, не сохранено: {fail}.', { ok: touched, fail: failed }), 'fail');
+                else toast(trf('Доля {pct}% задана для {n} услуг(и) у {touched} врач(ей).', { pct, n: svcIds.length, touched }));
             }
         } catch (e) {
             toast(trf('Не удалось применить: {msg}', { msg: e.message || e }), 'fail');

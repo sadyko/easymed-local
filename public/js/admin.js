@@ -78,14 +78,14 @@ import { renderMarNurse }    from './admin/views/mar-nurse.js?v=inp8';   // MAR_
 import { renderKitchenSheet } from './admin/views/kitchen-sheet.js?v=diet1';   // KITCHEN_SHEET_V1 — порционник (Задача 7; экран был написан без маршрута)
 import { renderDischarge }   from './admin/views/discharge.js?v=disch1';   // TWO_STEP_DISCHARGE_V1 — «Выписки к оформлению» (Задача 8; экран был написан без маршрута)
 import { renderDoctorRoom }   from './admin/views/doctor-room.js?v=docroom1';   // DOCTOR_ROOM_V1 — Кабинет врача (consultation queue)
-import { renderEmployees }    from './admin/views/employees.js?v=rh1';   // RATES_HONEST_V1 — штамп карточки · EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen) · rmt1 = RATES_MODE_TYPED_V1
+import { renderEmployees }    from './admin/views/employees.js?v=rh2';   // RATES_HONEST_V1 — штамп карточки (ревью 1) · EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen) · rmt1 = RATES_MODE_TYPED_V1
 import { renderMarketing }    from './admin/views/marketing.js?v=btnright1';
 import { renderCallCenter }   from './admin/views/callcenter.js';
 import { renderDocuments }    from './admin/views/documents.js?v=noqr1';
 import { renderDiscountsSettings } from './admin/views/discounts-settings.js?v=btnright1';   // PATIENT_DISCOUNTS_V1
 import { renderApiSettings } from './admin/views/api-settings.js?v=api4';   // CLINIC_API_V1
 import { renderWithViewOnly } from './admin/view-only.js';   // ADMIN_ROWS_GRANTABLE_V1
-import { renderDoctorPay } from './admin/views/doctor-pay.js?v=rh1';   // DOCTOR_PAY_BULK_V1 · RATES_HONEST_V1 — штамп
+import { renderDoctorPay } from './admin/views/doctor-pay.js?v=rh2';   // DOCTOR_PAY_BULK_V1 · RATES_HONEST_V1 — штамп (ревью 1)
 import { renderCashierSettings } from './admin/views/cashier-settings.js?v=shiftmode1';   // CASHIER_SHIFT_MODE_V1
 import { renderRoomsSetup } from './admin/views/rooms-setup.js?v=rooms7';   // ROOMS_SETUP_V1 — кабинеты и палаты одним разделом
 import { renderDepartments } from './admin/views/departments.js?v=dept1';   // DEPARTMENTS_V1 — отделы: руководитель, команда, помещения, снабжение

@@ -153,6 +153,31 @@ test('пустой процент: подсказка «0 % — не задан�
   assert.notEqual(attr(set, 'title'), TOOLTIP);
 });
 
+// Ревью 1 — подсказка называет то, что заплатит расчёт:
+// COALESCE(dr.percent, doc.service_rate_default, 0). Ставку по умолчанию экраны
+// не пишут, но PATCH /api/users её принимает — если она есть, пустое поле
+// говорит «{N} % — по умолчанию».
+test('пустой процент при ставке по умолчанию 25 %: «25 % — по умолчанию», под мышью — ставка по умолчанию', async () => {
+  DOC.service_rate_default = 25;
+  try {
+    const card = await openTab('Услуги и ставки');
+    const empty = rateOf(rowOf(card, 'Аппендэктомия'));
+    assert.equal(empty.value, '');
+    assert.equal(attr(empty, 'placeholder'), '25 % — по умолчанию');
+    assert.equal(attr(empty, 'title'), 'Ставка не задана — врач получает ставку по умолчанию 25 %. Введите процент или сумму.');
+    // Подсказка не уходит в сохранение: ставку по умолчанию карточка не пишет.
+    const body = await save(card);
+    assert.equal('service_rate_default' in body, false);
+  } finally { delete DOC.service_rate_default; }
+  // 0 / нет — снова «0 % — не задано».
+  DOC.service_rate_default = 0;
+  try {
+    const card = await openTab('Услуги и ставки');
+    assert.equal(attr(rateOf(rowOf(card, 'Аппендэктомия')), 'placeholder'), PLACEHOLDER);
+    assert.equal(attr(rateOf(rowOf(card, 'Аппендэктомия')), 'title'), TOOLTIP);
+  } finally { delete DOC.service_rate_default; }
+});
+
 // ─── 2. колонки «Филиалы» нет ────────────────────────────────────────────────
 test('колонки «Филиалы» нет: ни заголовка, ни выбора в строке; над таблицей — «во всех филиалах»', async () => {
   const card = await openTab('Услуги и ставки');
@@ -194,7 +219,8 @@ test('сохранение: branches прежних записей — как б
 
 // ─── переводы ────────────────────────────────────────────────────────────────
 test('новые фразы — на трёх языках', () => {
-  for (const key of [PLACEHOLDER, TOOLTIP, ALL_BRANCHES]) {
+  for (const key of [PLACEHOLDER, TOOLTIP, ALL_BRANCHES, '{n} % — по умолчанию',
+    'Ставка не задана — врач получает ставку по умолчанию {n} %. Введите процент или сумму.']) {
     const e = STRINGS[key];
     assert.ok(e, 'нет в словаре: ' + key);
     for (const lang of ['ru', 'uz', 'en']) assert.ok(e[lang], key + ': нет ' + lang);
