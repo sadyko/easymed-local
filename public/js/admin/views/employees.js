@@ -385,6 +385,15 @@ const loadInpatientRates = (list) => asArr(list).map((r) => (r && r.fix != null
     ? { service_id: Number(r.service_id), fix: Number(r.fix) || 0 }
     : { service_id: Number(r && r.service_id), pct: Number(r && r.pct) || 0 }));
 const moneyText = (v) => (Number(v) > 0 ? String(Number(v)) : '');
+// RATES_MODE_TYPED_V1 (2026-09-29) — процент ставки годен, только если он в
+// 0..100. Больше 100 карточка теперь хранит КАК НАБРАН (прежде молча
+// прижимала к 100 — и сумма, набранная в режиме «%», становилась долей 100 %):
+// такое значение останавливает сохранение (overPct), а переключатель
+// «% / сум» не возвращает его строке процентом (pctOk).
+const pctOk = (v) => v != null && v !== '' && Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 100;
+// Первая запись в режиме «%» (без fix) с процентом больше 100 — или null.
+const overPct = (list) => asArr(list).find((r) => r && r.fix == null && r.pct != null && r.pct !== '' && Number(r.pct) > 100) || null;
+const serviceName = (sid) => (services.find((s) => Number(s.id) === Number(sid)) || {}).name || String(sid);
 
 function openEditor(user, root) {
     const isEdit = !!user;
@@ -669,7 +678,8 @@ function openEditor(user, root) {
         } else if (active === 'schedule') {
             body.append(head('Рабочее время', 'Дни и часы работы сотрудника.'), buildHours(emp, markDirty));
         } else if (active === 'services') {
-            body.append(ratesSection(emp, 'service_rates', { icon: sec.icon, title: 'Услуги и ставки', sub: 'Сколько врач получает за оказанную услугу: процент от суммы после скидки либо фиксированная сумма за единицу. Своя цена — если этот врач берёт за услугу не как в каталоге; пусто = цена каталога.', rateLabel: 'Ставка врача', allowFix: true, ownPrice: true }, touch));
+            // RATES_MODE_TYPED_V1 (m12) — доля берётся после скидки И налога.
+            body.append(ratesSection(emp, 'service_rates', { icon: sec.icon, title: 'Услуги и ставки', sub: 'Сколько врач получает за оказанную услугу: процент от суммы после скидки и налога либо фиксированная сумма за единицу. Своя цена — если этот врач берёт за услугу не как в каталоге; пусто = цена каталога.', rateLabel: 'Ставка врача', allowFix: true, ownPrice: true }, touch));
         } else if (active === 'inpatient') {
             // INPATIENT_BONUS_V1 — стационар отдельно от «Услуг и ставок»:
             // ставка здесь не заводит амбулаторной записи и не обнуляет
@@ -810,6 +820,21 @@ function openEditor(user, root) {
         for (const f of ['last_name', 'first_name', 'phone']) if (!String(emp[f]).trim()) { active = 'personal'; renderRail(); renderBody(); toast('Заполните личные данные.', 'fail'); return; }
         if (!emp.staff_type) { active = 'job'; renderRail(); renderBody(); toast('Выберите категорию сотрудника.', 'fail'); return; }
         if (!String(emp.username).trim() || (!isEdit && !String(emp.password).trim())) { active = 'access'; renderRail(); renderBody(); toast('Заполните логин и пароль.', 'fail'); return; }
+        // RATES_MODE_TYPED_V1 — процент больше 100 не прижимается молча, а
+        // останавливает сохранение: чаще всего это сумма, набранная в режиме
+        // «%» (аудит: 25 000 становились 100 %, а врач получал не то, что
+        // договорено). Открываем вкладку, где он набран, и говорим, как быть.
+        // Без «Цены и проценты» ставки не уходят вовсе — и не проверяются.
+        if (acc.money) {
+            const over = overPct(emp.service_rates) ? ['services', overPct(emp.service_rates)]
+                : overPct(emp.inpatient_rates) ? ['inpatient', overPct(emp.inpatient_rates)] : null;
+            if (over) {
+                active = over[0]; renderRail(); renderBody();
+                toast(trf('Ставка «{name}» — {n}%: процент не больше 100. Если это сумма, переключите на «сум».',
+                    { name: serviceName(over[1].service_id), n: over[1].pct }), 'fail');
+                return;
+            }
+        }
 
         const payload = {
             last_name: emp.last_name.trim(), first_name: emp.first_name.trim(), middle_name: emp.middle_name.trim(),
@@ -885,7 +910,7 @@ function segmented(enabled, isFix, onPick, disabled = false) {
         return b;
     };
     return h('div', { class: 'rt-seg' },
-        mk('%',   false, 'Процент от суммы строки после скидки'),
+        mk('%',   false, 'Процент от суммы строки после скидки и налога'),   // RATES_MODE_TYPED_V1 (m12)
         mk('сум', true,  'Фиксированная сумма за единицу услуги'));
 }
 
@@ -936,10 +961,29 @@ function ratesSection(emp, arrayKey, opts, touch) {
     // fixed is active so switching back restores the rate that was there.
     const isFix = (r) => !!opts.allowFix && !!r && r.fix != null;
     const setFix = (sid, v) => { const i = idxOf(sid); if (i >= 0) { arr()[i].fix = v; touch(); } };
-    const setMode = (sid, mode) => {
+    // RATES_MODE_TYPED_V1 — переключатель переносит НАБРАННОЕ число. Аудит:
+    // 25 000 в «%», затем «сум» — процент прижимался к 100, а сумма
+    // становилась 0 (Number(undefined) || 0): врачу платилось 0, обратный
+    // щелчок давал 100 %.
+    //   %→сум: сумма = число в поле; процент строки — каким он был при
+    //          отрисовке строки (не было — ключа нет, «по умолчанию»).
+    //   сум→%: число становится процентом, только если оно не больше 100;
+    //          иначе процент — каким он был при отрисовке (или «по умолчанию»).
+    // Сумма никогда не превращается в долю 100 %.
+    const restorePct = (r, pctAtRender) => { if (pctOk(pctAtRender)) r.pct = Number(pctAtRender); else delete r.pct; };
+    const setMode = (sid, mode, boxRaw, pctAtRender) => {
         const i = idxOf(sid); if (i < 0) return;
-        if (mode === 'fix') arr()[i].fix = Number(arr()[i].fix) || 0;
-        else delete arr()[i].fix;
+        const r = arr()[i];
+        const raw = String(boxRaw == null ? '' : boxRaw).trim();
+        const typed = raw !== '' && Number.isFinite(Number(raw)) ? Math.max(0, Number(raw)) : null;
+        if (mode === 'fix') {
+            r.fix = typed == null ? 0 : typed;
+            restorePct(r, pctAtRender);
+        } else {
+            delete r.fix;
+            if (typed != null && typed <= 100) r.pct = typed;
+            else restorePct(r, pctAtRender);
+        }
         touch(); renderRows();
     };
     const setBranches = (sid, v) => { const i = idxOf(sid); if (i >= 0) { arr()[i].branches = v; touch(); } };
@@ -982,10 +1026,16 @@ function ratesSection(emp, arrayKey, opts, touch) {
     // whole list can be put on a fixed rate in one go rather than row by row.
     // RATES_UI_V2 — a two-button segment beats a dropdown here: the active mode
     // is legible without opening anything, and switching is one click.
+    // RATES_MODE_TYPED_V1 (C1) — поле применяется ТОЛЬКО по Enter или кнопке
+    // «Применить», а не на blur. Аудит: 50 000, затем щелчок «сум» — щелчок
+    // снимал фокус, поле применялось ещё в режиме «%», прижималось к 100, и
+    // каждая отмеченная услуга сохранялась как 100 % под тостом «Сотрудник
+    // сохранён». Смена режима ничего не применяет; «%» больше 100 не
+    // применяется вовсе — это почти наверняка сумма.
     let bulkFix = false;
     const bulkUnit = h('span', { class: 'rt-unit' }, '%');
     const bulkInp = h('input', { type: 'number', min: '0', max: '100', placeholder: '0', class: 'rt-num',
-        style: { width: '104px' }, title: 'Введите ставку и нажмите Enter — применится ко всем отмеченным услугам из списка' });
+        style: { width: '104px' }, title: 'Введите ставку и нажмите Enter или «Применить» — применится ко всем отмеченным услугам из списка' });
     const bulkSeg = segmented(opts.allowFix, () => bulkFix, (fix) => {
         bulkFix = fix;
         bulkInp.max = fix ? '' : '100';
@@ -995,17 +1045,20 @@ function ratesSection(emp, arrayKey, opts, touch) {
         const raw = String(bulkInp.value).trim();
         if (raw === '') return;
         const fix = opts.allowFix && bulkFix;
-        const n = fix ? Math.max(0, Number(raw) || 0) : Math.min(100, Math.max(0, Number(raw) || 0));
+        const n = Math.max(0, Number(raw) || 0);
+        if (!fix && n > 100) { toast('Процент не больше 100 — для суммы выберите «сум».', 'fail'); return; }
         const vis = new Set(visible().map(s => Number(s.id)));
         for (const r of arr()) {
             if (!vis.has(Number(r.service_id))) continue;
-            if (fix) r.fix = n;
+            // Процент, набранный больше 100, рядом с суммой не остаётся: сервер
+            // прижал бы его к 100, и обратный переход дал бы 100 %.
+            if (fix) { r.fix = n; if (r.pct != null && !pctOk(r.pct)) delete r.pct; }
             else { delete r.fix; r.pct = n; }
         }
         bulkInp.value = ''; touch(); renderRows();
     };
-    bulkInp.addEventListener('blur', applyBulk);
     bulkInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applyBulk(); } });
+    const bulkApply = h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: applyBulk }, 'Применить');
 
     // DOCTOR_OWN_PRICE_V1 — the price cell. Empty shows the catalog price as a
     // placeholder (that is what will be billed); a typed value is the doctor's
@@ -1062,7 +1115,6 @@ function ratesSection(emp, arrayKey, opts, touch) {
 
             // DOCTOR_FIX_RATE_V1 — mode picker + the value it applies to.
             const fixed = isFix(r);
-            const modeSeg = segmented(opts.allowFix, () => fixed, (wantFix) => setMode(s.id, wantFix ? 'fix' : 'pct'), !on);
             const rateInp = h('input', {
                 type: 'number', min: '0', class: 'rt-num', disabled: !on,
                 max: fixed ? null : '100',
@@ -1070,14 +1122,21 @@ function ratesSection(emp, arrayKey, opts, touch) {
                 // Ревью I5 — процента нет: пустое поле с подсказкой, а не «0».
                 value: on ? String(fixed ? r.fix : (r.pct == null ? '' : r.pct)) : '0',
                 placeholder: on && !fixed ? tr('По умолчанию') : null,
-                title: fixed ? 'Врач получает эту сумму за каждую единицу услуги' : 'Процент от суммы строки после скидки',
+                title: fixed ? 'Врач получает эту сумму за каждую единицу услуги' : 'Процент от суммы строки после скидки и налога',   // RATES_MODE_TYPED_V1 (m12)
             });
+            // RATES_MODE_TYPED_V1 — процент строки на момент отрисовки: к нему
+            // переключатель возвращает строку, если набранное процентом быть не может.
+            const pctAtRender = on && r.pct != null ? r.pct : null;
+            const modeSeg = segmented(opts.allowFix, () => fixed,
+                (wantFix) => setMode(s.id, wantFix ? 'fix' : 'pct', rateInp.value, pctAtRender), !on);
             rateInp.addEventListener('input', () => {
                 const n = Number(rateInp.value) || 0;
                 if (fixed) setFix(s.id, Math.max(0, n));
                 // Стёртый процент — снова «по умолчанию» (ключа pct нет).
                 else if (String(rateInp.value).trim() === '') { const i = idxOf(s.id); if (i >= 0) { delete arr()[i].pct; touch(); } }
-                else setPct(s.id, Math.min(100, Math.max(0, n)));
+                // RATES_MODE_TYPED_V1 — без тихого зажима в 100: больше 100
+                // хранится как набрано, и сохранение откажет (save → overPct).
+                else setPct(s.id, Math.max(0, n));
             });
 
             scroll.appendChild(h('div', { class: rowCls + ' rt-item' + (on ? ' on' : '') },
@@ -1108,7 +1167,8 @@ function ratesSection(emp, arrayKey, opts, touch) {
             h('div', { class: 'rt-bulk' },
                 h('span', { class: 'muted' }, 'Ставка для всех'),
                 bulkSeg,
-                h('div', { class: 'rt-field', style: { flex: '0 0 auto' } }, bulkInp, bulkUnit))),
+                h('div', { class: 'rt-field', style: { flex: '0 0 auto' } }, bulkInp, bulkUnit),
+                bulkApply)),
         h('div', { class: 'rt-box' }, scroll),
     );
     renderRows();
@@ -1169,16 +1229,35 @@ function inpatientSection(emp, touch) {
         if (i >= 0) arr().splice(i, 1); else arr().push({ service_id: Number(sid), pct: 0 });
         touch(); refreshCount(); renderRows();
     };
-    const setMode = (sid, fix) => {
+    // RATES_MODE_TYPED_V1 — то же правило переноса, что в «Услугах и ставках»
+    // (там прежний процент лежит в записи рядом с суммой; здесь у записи ровно
+    // одна ставка — сервер примет только одну, — поэтому процент строки на
+    // время «сум» помнит pctMemo). Прежде переключение обнуляло строку:
+    // набранные 25 000 пропадали, обратный щелчок давал 0 %.
+    //   %→сум: сумма = число в поле.
+    //   сум→%: число — процентом, только если оно не больше 100; иначе прежний
+    //          процент строки (до «сум»), а его нет — 0, как у новой отметки.
+    const pctMemo = new Map();
+    const setMode = (sid, fix, boxRaw, pctAtRender) => {
         const i = idxOf(sid); if (i < 0) return;
-        arr()[i] = fix ? { service_id: Number(sid), fix: 0 } : { service_id: Number(sid), pct: 0 };
+        const raw = String(boxRaw == null ? '' : boxRaw).trim();
+        const typed = raw !== '' && Number.isFinite(Number(raw)) ? Math.max(0, Number(raw)) : null;
+        if (fix) {
+            if (pctOk(pctAtRender)) pctMemo.set(Number(sid), Number(pctAtRender));
+            arr()[i] = { service_id: Number(sid), fix: typed == null ? 0 : typed };
+        } else {
+            const back = pctMemo.has(Number(sid)) ? pctMemo.get(Number(sid)) : 0;
+            arr()[i] = { service_id: Number(sid), pct: typed != null && typed <= 100 ? typed : back };
+        }
         touch(); renderRows();
     };
     const setValue = (sid, raw) => {
         const i = idxOf(sid); if (i < 0) return;
         const n = Number(raw) || 0;
         if (isFix(arr()[i])) arr()[i].fix = Math.max(0, n);
-        else arr()[i].pct = Math.min(100, Math.max(0, n));
+        // RATES_MODE_TYPED_V1 — без тихого зажима: больше 100 хранится как
+        // набрано, и сохранение откажет (save → overPct).
+        else arr()[i].pct = Math.max(0, n);
         touch();
     };
 
@@ -1200,10 +1279,13 @@ function inpatientSection(emp, touch) {
     });
     // Своя «Ставка для всех»: пишет только стационарные ставки отмеченных услуг
     // из списка; амбулаторных не касается.
+    // RATES_MODE_TYPED_V1 (C1) — как в «Услугах и ставках»: только Enter или
+    // «Применить», не blur; смена режима ничего не применяет; «%» больше 100 —
+    // не применяется, а говорит тостом.
     let bulkFix = false;
     const bulkUnit = h('span', { class: 'rt-unit' }, '%');
     const bulkInp = h('input', { type: 'number', min: '0', max: '100', placeholder: '0', class: 'rt-num rt-num--inp-bulk',
-        style: { width: '104px' }, title: 'Введите ставку и нажмите Enter — применится ко всем отмеченным услугам из списка' });
+        style: { width: '104px' }, title: 'Введите ставку и нажмите Enter или «Применить» — применится ко всем отмеченным услугам из списка' });
     const bulkSeg = segmented(true, () => bulkFix, (fix) => {
         bulkFix = fix;
         bulkInp.max = fix ? '' : '100';
@@ -1212,7 +1294,8 @@ function inpatientSection(emp, touch) {
     const applyBulk = () => {
         const raw = String(bulkInp.value).trim();
         if (raw === '') return;
-        const n = bulkFix ? Math.max(0, Number(raw) || 0) : Math.min(100, Math.max(0, Number(raw) || 0));
+        const n = Math.max(0, Number(raw) || 0);
+        if (!bulkFix && n > 100) { toast('Процент не больше 100 — для суммы выберите «сум».', 'fail'); return; }
         const vis = new Set(visible().map((s) => Number(s.id)));
         for (let i = 0; i < arr().length; i += 1) {
             const sid = Number(arr()[i].service_id);
@@ -1221,8 +1304,8 @@ function inpatientSection(emp, touch) {
         }
         bulkInp.value = ''; touch(); renderRows();
     };
-    bulkInp.addEventListener('blur', applyBulk);
     bulkInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applyBulk(); } });
+    const bulkApply = h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: applyBulk }, 'Применить');
 
     function renderRows() {
         const keep = scroll.scrollTop;
@@ -1237,7 +1320,6 @@ function inpatientSection(emp, touch) {
             const chk = h('input', { type: 'checkbox', checked: on });
             chk.addEventListener('change', () => toggle(s.id));
             const fixed = isFix(r);
-            const modeSeg = segmented(true, () => fixed, (wantFix) => setMode(s.id, wantFix), !on);
             const rateInp = h('input', {
                 type: 'number', min: '0', class: 'rt-num rt-num--inp', disabled: !on,
                 max: fixed ? null : '100', step: fixed ? '1000' : '1',
@@ -1246,6 +1328,9 @@ function inpatientSection(emp, touch) {
                 title: !on ? tr('Отметьте услугу, чтобы задать ставку')
                     : tr('Доля врача за услугу в стационаре: исполнителю, иначе назначившему. Процент — от суммы после скидки и налога, сумма — за единицу.'),
             });
+            // RATES_MODE_TYPED_V1 — набранное число и процент строки на момент отрисовки.
+            const pctAtRender = on && !fixed ? r.pct : null;
+            const modeSeg = segmented(true, () => fixed, (wantFix) => setMode(s.id, wantFix, rateInp.value, pctAtRender), !on);
             rateInp.addEventListener('input', () => setValue(s.id, rateInp.value));
             scroll.appendChild(h('div', { class: rowCls + ' rt-item' + (on ? ' on' : '') },
                 chk,
@@ -1276,7 +1361,8 @@ function inpatientSection(emp, touch) {
             h('div', { class: 'rt-bulk' },
                 h('span', { class: 'muted' }, 'Ставка для всех'),
                 bulkSeg,
-                h('div', { class: 'rt-field', style: { flex: '0 0 auto' } }, bulkInp, bulkUnit))),
+                h('div', { class: 'rt-field', style: { flex: '0 0 auto' } }, bulkInp, bulkUnit),
+                bulkApply)),
         h('div', { class: 'rt-box' }, scroll),
         hintEl('Отмеченная услуга без введённой ставки — 0: это решение, а не «не задано». Неотмеченная — стационарной доли нет. Ставка в стационаре не меняет амбулаторную ставку и ставку по умолчанию.'),
     );
