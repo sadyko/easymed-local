@@ -63,6 +63,9 @@ const ALLOW = {
   'services/role-guard.js|grantAllowsOr|key': { n: 1, why: 'защита «Ролей»: gatePasses по спискам карты' },
   // ROLES_SAVE_TRUTH_V1 — role_effective_grants: уровень каждой строки с воротами, теми же воротами.
   'services/rpc/roles-effective.js|effectiveLevel|row.key': { n: 1, why: 'role_effective_grants: что у роли есть сейчас — effectiveLevel по каждой строке справочника с fallbackLevel !== null' },
+  // ROLES_SAVE_TRUTH_V1 (ревью M1, оговорка) — if_open: строки раздела, записанного «Нет», — записанный уровень или стандарт основы.
+  'services/rpc/roles-effective.js|grantLevel|row.parent': { n: 1, why: 'if_open: записан ли раздел строки «Нет» — не ворота, а чтение записи' },
+  'services/rpc/roles-effective.js|grantLevel|row.key': { n: 1, why: 'if_open: записанный уровень строки закрытого раздела — не ворота, а чтение записи' },
   // Cust Dev: ключи custdev.list / custdev.rate, прежнее правило — галочка раздела (FALLBACK_FN).
   'services/rpc/custdev.js|grantAllowsOr|key': { n: 1, why: 'custdev.list / custdev.rate — FALLBACK_FN', wrapper: 'grantedOr', must: 'fn' },
   // Telegram: settings.telegram / reports.telegram — строки adminDefault.

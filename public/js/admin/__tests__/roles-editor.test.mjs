@@ -146,6 +146,9 @@ let selectCalls, updateCalls, lastUpdate, selectRespond, updateRespond;
 // старых полей, и прежние проверки экрана остаются о своём. Своя правда — в
 // EFFECTIVE, сбой — в effectiveRespond.
 const EFFECTIVE = {};
+// ROLES_SAVE_TRUTH_V1 (ревью M1, оговорка) — if_open: строки раздела, записанного
+// «Нет», такими, какими станут, если раздел откроют.
+const IF_OPEN = {};
 let effectiveRespond = null;
 // ROLES_SAVE_TRUTH_V1 — строки проверки миграции 230 («Проверьте права этой роли»).
 let GRANT_REVIEWS = [];
@@ -161,7 +164,7 @@ globalThis.fetch = async (url, opts) => {
   const desc = opts && opts.body ? JSON.parse(opts.body) : null;
   if (u.startsWith('/api/rpc/role_effective_grants')) {
     if (effectiveRespond) return effectiveRespond(desc);
-    return jsonOk({ levels: EFFECTIVE[desc && desc.role] || {} });
+    return jsonOk({ levels: EFFECTIVE[desc && desc.role] || {}, if_open: IF_OPEN[desc && desc.role] || {} });
   }
   if (u.startsWith('/api/db') && desc && desc.table === 'role_grant_reviews' && desc.op === 'select') {
     return jsonOk(GRANT_REVIEWS.filter((r) => r.role === roleOf(desc) && r.resolution == null));
@@ -1077,4 +1080,30 @@ test('ROLES_SAVE_TRUTH_V1: плашка «Проверьте права этой
     await tick();
     assert.ok(!textOf(ro).includes('Проверьте права этой роли'), 'плашка с кнопками на «Просмотре»');
   } finally { delete SAVED.registrar.grants; GRANT_REVIEWS = []; }
+});
+
+// ROLES_SAVE_TRUTH_V1 (ревью M1, оговорка) — у раздела, записанного «Нет»,
+// строки нарисованы такими, какими станут, если раздел откроют (if_open), а не
+// «Нет» из закрытого раздела. Открыли раздел и сохранили — строки не пишутся,
+// и после записи у роли ровно то, что было на экране.
+test('ревью M1: у раздела, записанного «Нет», строки показаны такими, какими станут, если раздел открыть', async () => {
+  resetServer();
+  SAVED.nurse = { sections: ['patients', 'beds'], levels: { patients: 'editor', beds: 'editor' }, grants: { inpatient: 'none' } };
+  EFFECTIVE.nurse = { 'inpatient.vitals': 'none', 'inpatient.marks': 'none' };
+  IF_OPEN.nurse = { 'inpatient.vitals': 'edit', 'inpatient.marks': 'edit' };
+  try {
+    const root = await render();
+    roleButton(root, 'nurse').click();
+    await tick();
+    const chosen = (key) => ((radiosFor(root, key).find((n) => n.checked) || {}).attrs || {}).value;
+    assert.equal(chosen('inpatient'), 'none');
+    assert.equal(chosen('inpatient.vitals'), 'edit', 'строка закрытого раздела нарисована «Нет» — открой раздел, и она окажется «Изменение»');
+    assert.equal(chosen('inpatient.marks'), 'edit');
+    pick(root, 'inpatient', 'view');
+    assert.equal(chosen('inpatient.vitals'), 'edit', 'открытый раздел изменил показанное у строки');
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    assert.deepStrictEqual(saved.grants, { inpatient: 'view' }, 'открыли раздел — а записаны и его строки');
+  } finally { delete SAVED.nurse; delete EFFECTIVE.nurse; delete IF_OPEN.nurse; }
 });

@@ -437,7 +437,12 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
     async function readTruth(req) {
         try {
             const { data, error } = await req;
-            if (!error && data && data.levels && typeof data.levels === 'object') return { levels: data.levels, why: '' };
+            if (!error && data && data.levels && typeof data.levels === 'object') {
+                // Ревью M1 (оговорка) — if_open: строки раздела, записанного
+                // «Нет», такими, какими станут, если раздел откроют.
+                const ifOpen = (data.if_open && typeof data.if_open === 'object') ? data.if_open : {};
+                return { levels: data.levels, ifOpen, why: '' };
+            }
             return { levels: null, why: (error && error.message) || '' };
         } catch (e) {
             return { levels: null, why: (e && e.message) || String(e) };
@@ -599,7 +604,11 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         // там, где серверных ворот нет: у разделов и окон-маршрутов оболочки.
         // У ключа с воротами экран показывает то, что ворота дают роли сейчас,
         // — оператору «Видит все заявки: Нет», регистратуре «Измерения: Нет».
-        const grants = { ...grantsFromLegacy(perms), ...(truthLost ? {} : truth.levels), ...(perms.grants || {}) };
+        // Ревью M1 (оговорка) — строки раздела, записанного «Нет», показаны
+        // такими, какими станут, если раздел откроют (if_open): раздел стоит
+        // «Нет», строки погашены, а открой его — будут ровно такими.
+        const truthShown = truthLost ? {} : { ...truth.levels, ...(truth.ifOpen || {}) };
+        const grants = { ...grantsFromLegacy(perms), ...truthShown, ...(perms.grants || {}) };
         card.appendChild(h('div', { class: 'roles-group' },
             h('span', { class: 'roles-group-name' }, 'Разделы, окна и действия'),
             h('span', { class: 'roles-group-lvl' }, 'Нет · Просмотр · Изменение · Удаление'),

@@ -92,6 +92,26 @@ test('закрытый раздел даёт «Нет» внутри; запис
   } finally { db.close(); }
 });
 
+// ROLES_SAVE_TRUTH_V1 (ревью M1, оговорка) — у раздела, записанного «Нет», строки
+// внутри закрыты (levels), но экран рисует их такими, какими они станут, если
+// раздел откроют (if_open): записанный уровень или то, что дают ворота по
+// основе. Иначе открытый обратно раздел показывал бы «Нет», а после сохранения
+// строки получали бы стандарт основы (медсестра: 9 строк «Нет» → edit/view).
+test('раздел, записанный «Нет»: levels — «Нет» внутри, if_open — что строки получат, если раздел откроют', () => {
+  const db = fresh();
+  try {
+    setGrants(db, 'nurse', { inpatient: 'none', 'inpatient.marks': 'view' });
+    const { levels, if_open: ifOpen } = roleEffectiveGrants(db, { role: 'nurse' }, ADMIN);
+    assert.equal(levels['inpatient.vitals'], 'none', 'закрытый раздел обязан закрывать строки в levels');
+    assert.deepEqual(ifOpen, {
+      'inpatient.requests': 'none', 'inpatient.patients': 'view', 'inpatient.beds': 'edit', 'inpatient.history': 'view',
+      'inpatient.prescriptions': 'view', 'inpatient.marks': 'view', 'inpatient.vitals': 'edit', 'inpatient.reviews': 'view',
+      'inpatient.services': 'edit', 'inpatient.discharge': 'edit',
+    }, 'if_open — не то, что строки получат по основе медсестры (записанное — как записано)');
+    assert.deepEqual(roleEffectiveGrants(db, { role: 'registrar' }, ADMIN).if_open, {}, 'if_open у роли без закрытых разделов не пуст');
+  } finally { db.close(); }
+});
+
 test('кто спрашивает: без «Ролей» — 403, с «Роли: Просмотр» — ответ; без входа — 401; нет роли — 404/400', () => {
   const db = fresh();
   try {

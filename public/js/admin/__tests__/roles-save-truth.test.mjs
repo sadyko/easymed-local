@@ -268,7 +268,7 @@ test('сторож: у незаписанного ключа с воротами
   for (const [role, label] of SCREEN_ROLES) {
     const res = await fetch('/api/rpc/role_effective_grants', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role }) });
     assert.equal(res.status, 200, role);
-    const { levels } = (await res.json()).data;
+    const { levels, if_open: ifOpen } = (await res.json()).data;
     const pseudo = { id: 0, role, extra_roles: [], custom_role_code: null };
     const gated = catalogRows().filter((r) => r.kind !== 'section' && !r.locked && fallbackLevel(db, pseudo, r.key, 'all') !== null).map((r) => r.key).sort();
     assert.deepEqual(Object.keys(levels).sort(), gated, role + ': сервер ответил не про все ключи с воротами');
@@ -276,7 +276,9 @@ test('сторож: у незаписанного ключа с воротами
     await openRole(root, role, label);
     for (const k of gated) {
       if (k in explicit) continue;
-      assert.equal(chosen(root, k), levels[k], `${role}: «${k}» — экран показывает не то, что дают ворота`);
+      // Ревью M1 (оговорка): строки раздела, записанного «Нет», — как станут, если раздел откроют.
+      const want = ifOpen && k in ifOpen ? ifOpen[k] : levels[k];
+      assert.equal(chosen(root, k), want, `${role}: «${k}» — экран показывает не то, что дают ворота`);
     }
   }
 });
@@ -389,4 +391,26 @@ test('ревью M1: правка семьи «Стационара» не от�
   await saveRole(root);
   assert.ok(!('inpatient.services' in (permsOf(db, 'cashier').grants || {})), 'семья записала кассе «Услуги в стационаре»');
   assert.equal(await addService('cash'), 400, 'касса потеряла добавление услуги у койки');
+});
+
+// ROLES_SAVE_TRUTH_V1 (ревью M1, оговорка) — раздел, записанный «Нет», открыли
+// обратно и сохранили: строки раздела после записи ровно такие, какими их
+// показывал экран (rule-eval2.mjs: прежде девять строк медсестры «Нет» после
+// сохранения становились «Изменение»/«Просмотр»), и ворота сервера дают то же.
+test('ревью M1, оговорка: раздел, записанный «Нет», открыли и сохранили — строки такие, какими их видели', async (t) => {
+  const { db } = await world(t);
+  db.prepare("INSERT INTO custom_roles (code, name, base_role, active) VALUES ('nurse-closed','Медсестра без стационара','nurse',1)").run();
+  db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?,?)').run('nurse-closed', JSON.stringify({
+    sections: ['patients', 'beds', 'labs'], levels: { patients: 'editor', beds: 'editor', labs: 'viewer' }, grants: { inpatient: 'none' } }));
+  const shownAll = (root) => Object.fromEntries(catalogRows().filter((r) => !r.locked).map((r) => [r.key, chosen(root, r.key)]));
+  const root = await render();
+  await openRole(root, 'nurse-closed', 'Медсестра без стационара');
+  pick(root, 'inpatient', 'view');
+  const shown = shownAll(root);
+  await saveRole(root);
+  await openRole(root, 'nurse-closed', 'Медсестра без стационара');
+  const reopened = shownAll(root);
+  const lies = Object.keys(shown).filter((k) => shown[k] !== reopened[k]).map((k) => `${k}: было ${shown[k]}, стало ${reopened[k]}`);
+  assert.deepEqual(lies, [], 'после сохранения экран показывает не то, что показывал');
+  for (const [k, v] of Object.entries(effectiveGrantsOf(db, 'nurse-closed'))) assert.equal(v, shown[k], k + ': ворота дают не то, что было на экране');
 });
