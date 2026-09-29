@@ -96,7 +96,7 @@ const { licensedDataDir } = await import('../../../../server/services/control/li
 const { listen } = await import('../../../../control-plane/server/test-helpers/listen.js');
 const { effectiveGrantsOf } = await import('../../../../server/services/rpc/roles-effective.js');
 const { customRoleCreate } = await import('../../../../server/services/rpc/custom-roles.js');
-const { fallbackLevel } = await import('../../../../server/services/gate-fallbacks.js');
+const { fallbackLevel, isFnGate } = await import('../../../../server/services/gate-fallbacks.js');
 const { tabRankOfPerms, PATIENT_CARD_TABS } = await import('../../../../server/services/roles.js');
 const { catalogRows, grantsFromLegacy } = await import('../../shared/permission-catalog.js');
 
@@ -270,7 +270,10 @@ test('сторож: у незаписанного ключа с воротами
     assert.equal(res.status, 200, role);
     const { levels, if_open: ifOpen } = (await res.json()).data;
     const pseudo = { id: 0, role, extra_roles: [], custom_role_code: null };
-    const gated = catalogRows().filter((r) => r.kind !== 'section' && !r.locked && fallbackLevel(db, pseudo, r.key, 'all') !== null).map((r) => r.key).sort();
+    // Ревью M2: плитки «Настроек» без своих ворот сервер не называет — их
+    // экран рисует правилом оболочки (settingsLegacyView).
+    const plainSettingsTile = (r) => r.parent === 'settings' && !r.adminDefault && !isFnGate(r.key);
+    const gated = catalogRows().filter((r) => r.kind !== 'section' && !r.locked && fallbackLevel(db, pseudo, r.key, 'all') !== null && !plainSettingsTile(r)).map((r) => r.key).sort();
     assert.deepEqual(Object.keys(levels).sort(), gated, role + ': сервер ответил не про все ключи с воротами');
     const explicit = permsOf(db, role).grants || {};
     await openRole(root, role, label);
@@ -413,4 +416,32 @@ test('ревью M1, оговорка: раздел, записанный «Не
   const lies = Object.keys(shown).filter((k) => shown[k] !== reopened[k]).map((k) => `${k}: было ${shown[k]}, стало ${reopened[k]}`);
   assert.deepEqual(lies, [], 'после сохранения экран показывает не то, что показывал');
   for (const [k, v] of Object.entries(effectiveGrantsOf(db, 'nurse-closed'))) assert.equal(v, shown[k], k + ': ворота дают не то, что было на экране');
+});
+
+// ROLES_SAVE_TRUTH_V1 (ревью M2) — плитки «Настроек» без своих ворот экран рисует
+// правилом оболочки (settingsLegacyView), а не «Просмотром» сервера за всех.
+// Доказано ревью в браузере (pw-settings.mjs): экран показывал лаборанту «Список
+// услуг: Просмотр», администратор опустил «Настройки» Изменение → Просмотр, семья
+// записала 16 плиток «Просмотр» — и лаборант открыл прайс-лист (#services),
+// который оболочка ему не открывает (ROLE_AUDIT_V1, исправление 4).
+test('ревью M2: «Настройки» Изменение → Просмотр не открывает лаборанту прайс-лист и «Настройки → Пациенты»', async (t) => {
+  const { db } = await world(t);
+  db.prepare("INSERT INTO custom_roles (code, name, base_role, active) VALUES ('lab-set','Лаборант с настройками','lab',1)").run();
+  db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?,?)').run('lab-set', JSON.stringify({
+    sections: ['labs', 'patients', 'settings'], levels: { labs: 'editor', patients: 'viewer', settings: 'admin' } }));
+  // Отдельный экземпляр оболочки — экран «Роли» свой не делит.
+  const P = await import('../permissions.js?shell=review-m2');
+  const shellRoute = (view) => { P.setEffectiveFromRole({ name: 'lab', permissions: permsOf(db, 'lab-set') }); return P.isRouteAllowed(view); };
+  assert.equal(shellRoute('services'), false, 'стенд неверен: прайс-лист открыт лаборанту и до правки');
+
+  const root = await render();
+  await openRole(root, 'lab-set', 'Лаборант с настройками');
+  assert.equal(chosen(root, 'settings.services'), 'none', 'экран показывает «Список услуг», которого оболочка лаборанту не открывает');
+  assert.equal(chosen(root, 'settings.patients'), 'none');
+  pick(root, 'settings', 'view');
+  await saveRole(root);
+  const g = permsOf(db, 'lab-set').grants || {};
+  assert.notEqual(g['settings.services'], 'view', 'семья записала лаборанту «Список услуг: Просмотр»');
+  assert.equal(shellRoute('services'), false, 'лаборант получил прайс-лист (#services)');
+  assert.equal(shellRoute('settings:patients'), false, 'лаборант получил «Настройки → Пациенты»');
 });

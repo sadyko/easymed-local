@@ -9,8 +9,14 @@ import { roleEffectiveGrants, effectiveGrantsOf } from './roles-effective.js';
 import { customRoleCreate } from './custom-roles.js';
 import { getRpc } from './index.js';
 import { isReadOnlyRpc } from '../control/gate.js';
-import { fallbackLevel } from '../gate-fallbacks.js';
+import { fallbackLevel, isFnGate } from '../gate-fallbacks.js';
 import { catalogRows } from '../../../public/js/shared/permission-catalog.js';
+
+// Ревью M2 — плитка «Настроек» без своих ворот (не «только администратор», не
+// прежнее правило-функция): её «Просмотр» у сервера — «читать таблицы никто не
+// запрещает», а видна плитка по правилу оболочки (settingsLegacyView). О ней
+// сервер не отвечает — экран рисует её тем же правилом, что оболочка.
+const plainSettingsTile = (r) => r.parent === 'settings' && !r.adminDefault && !isFnGate(r.key);
 
 const ADMIN = { id: 1, role: 'admin', extra_roles: [] };
 const NURSE = { id: 2, role: 'nurse', extra_roles: [] };
@@ -129,11 +135,15 @@ test('в ответе — ровно строки с серверными вор
   try {
     const pseudo = { id: 0, role: 'nurse', extra_roles: [], custom_role_code: null };
     const want = catalogRows()
-      .filter((r) => r.kind !== 'section' && !r.locked && fallbackLevel(db, pseudo, r.key, 'all') !== null)
+      .filter((r) => r.kind !== 'section' && !r.locked && fallbackLevel(db, pseudo, r.key, 'all') !== null && !plainSettingsTile(r))
       .map((r) => r.key).sort();
     assert.deepEqual(Object.keys(levelsOf(db, 'nurse')).sort(), want);
-    for (const k of ['crm.all', 'inpatient.vitals', 'custdev.rate', 'reports.revenue', 'settings.roles', 'cashier.lines']) assert.ok(want.includes(k), k);
+    for (const k of ['crm.all', 'inpatient.vitals', 'custdev.rate', 'reports.revenue', 'settings.roles', 'cashier.lines', 'settings.departments', 'settings.rooms.money']) assert.ok(want.includes(k), k);
     for (const k of ['procurement', 'patients', 'patients.list', 'doctor.visits', 'mar.inpatient']) assert.ok(!want.includes(k), k + ' — без серверных ворот');
+    // Ревью M2 — «Список услуг» (маршрут оболочки) и прочие плитки без своих
+    // ворот: сервер отвечал «Просмотр» за всех, и экран показывал лаборанту
+    // прайс-лист, который оболочка ему не открывает.
+    for (const k of ['settings.services', 'settings.patients', 'settings.service_types', 'settings.rooms', 'settings.company']) assert.ok(!want.includes(k), k + ' — плитка без своих ворот');
     assert.equal(typeof getRpc('role_effective_grants'), 'function');
     assert.equal(isReadOnlyRpc('role_effective_grants'), true, 'при запертой лицензии «Роли» не откроются');
     assert.deepEqual(effectiveGrantsOf(db, 'nurse'), levelsOf(db, 'nurse'));

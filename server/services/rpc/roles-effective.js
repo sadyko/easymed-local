@@ -25,8 +25,15 @@
 // «Закупки» (FALLBACK_FN) — тоже: его уровень пишется в старый ключ
 // `inventory`, и правда ворот вместо вывода переписала бы его при пустом
 // сохранении.
+//
+// Ревью M2 — и плитки «Настроек» без своих ворот (не «только администратор»,
+// не прежнее правило-функция) в ответ не входят. Их «Просмотр» у сервера —
+// «читать таблицы никто не запрещает» (fallbackLevel), а видна плитка по
+// правилу оболочки (settingsLegacyView): сервер отвечал «Просмотр» за всех, и
+// экран показывал лаборанту «Список услуг», который оболочка ему не открывает,
+// а сохранение раздела писало его настоящим правом — прайс-лист открывался.
 import { grantAllowsAdminOr, effectiveLevel, grantLevel } from '../grants.js';
-import { fallbackLevel } from '../gate-fallbacks.js';
+import { fallbackLevel, isFnGate } from '../gate-fallbacks.js';
 import { VALID_ROLES } from '../roles.js';
 import { catalogRows } from '../../../public/js/shared/permission-catalog.js';
 
@@ -59,10 +66,13 @@ function clampToRow(row, lvl) {
   return best;
 }
 
+// Плитка «Настроек» без своих ворот: видна по правилу оболочки (ревью M2).
+const plainSettingsTile = (row) => row.parent === 'settings' && !row.adminDefault && !isFnGate(row.key);
+
 // Строки, о которых отвечает сервер, — со своим стандартом (fallbackLevel).
 function* answeredRows(db, pseudo) {
   for (const row of catalogRows()) {
-    if (row.kind === 'section' || row.locked) continue;
+    if (row.kind === 'section' || row.locked || plainSettingsTile(row)) continue;
     const standard = fallbackLevel(db, pseudo, row.key, 'all');
     if (standard === null) continue;   // маршрут оболочки — серверных ворот нет
     yield { row, standard };
