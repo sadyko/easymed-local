@@ -12,9 +12,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { openDb } from '../connection.js';
 import { migrate } from '../migrate.js';
+import { constraintRefusal } from '../../services/server-message.js';
 import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -153,6 +154,57 @@ test('232: нелепо длинный номер (10+ цифр) счётчик 
   db.close();
 });
 
+// Потолок серии (ревью 1): считаются номера 0…999 999 999. Выдай триггер
+// 1 000 000 000 — он сам его не увидит, выдаст снова, и каждая регистрация до
+// конца года упрётся в UNIQUE. Туда хватает ОДНОЙ импортированной заглушки.
+const SERIES_FULL = (e) => e && e.code === 'SQLITE_CONSTRAINT_TRIGGER'
+  && /999 999 999/.test(e.message) && !/UNIQUE/.test(e.message);
+
+test('232: потолок серии — номер, которого триггер не считает, не выдаётся никогда; отказ называет причину', () => {
+  const db = freshDb();
+  const yy = yyOf(db);
+  put(db, `P-${yy}-999999998`);
+  assert.equal(register(db), `A-${yy}-999999999`, 'последний номер, который триггер ещё считает');
+  const rows = db.prepare('SELECT COUNT(*) n FROM patients').get().n;
+  for (let i = 0; i < 3; i++) assert.throws(() => register(db), SERIES_FULL, 'каждый раз — понятный отказ, а не UNIQUE');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM patients').get().n, rows, 'отказанная карта не осталась ни без номера, ни с чужим');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM patients WHERE mrn LIKE '%-1000000000'").get().n, 0);
+
+  // Экран получает эти слова как есть — 409, а не «значение patients.mrn должно быть уникальным».
+  let err;
+  try { register(db); } catch (e) { err = e; }
+  const refusal = constraintRefusal(err);
+  assert.equal(refusal.status, 409);
+  assert.equal(refusal.message, err.message);
+  assert.doesNotMatch(refusal.message, /уникальным/);
+  db.close();
+});
+
+test('232: одна заглушка 999999999 из импорта — отказ с причиной; исправили номер — выдача идёт дальше', () => {
+  const db = freshDb();
+  const yy = yyOf(db);
+  put(db, `P-${yy}-00076`);
+  put(db, `P-${yy}-999999999`, 'Заглушка');
+  put(db, `P-${yearAt(yy, -1)}-999999999`);   // чужой год потолка этого года не касается
+  assert.throws(() => register(db), SERIES_FULL);
+  db.prepare("UPDATE patients SET mrn = ? WHERE full_name = 'Заглушка'").run(`P-${yy}-00077`);
+  assert.equal(register(db), `A-${yy}-00078`);
+  db.close();
+});
+
+test('232: отказы триггера — статьи словаря на ru, uz и en', async () => {
+  const { STRINGS } = await import(pathToFileURL(path.resolve(HERE, '../../../public/js/admin/i18n-strings.js')).href);
+  const db = freshDb();
+  const trig = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'patients_mrn_autogen'").get().sql;
+  const texts = [...trig.matchAll(/RAISE\(ABORT, '([^']+)'\)/g)].map((m) => m[1]);
+  assert.equal(texts.length, 2, 'нет филиала и исчерпана серия');
+  for (const t of texts) {
+    const e = STRINGS[t];
+    assert.ok(e && e.ru && e.uz && e.en, 'нет полной статьи словаря: ' + t);
+  }
+  db.close();
+});
+
 test('232: нет строки branch_identity — регистрация отказывает громко, как и прежде', () => {
   const db = freshDb();
   const before = db.prepare('SELECT COUNT(*) n FROM patients').get().n;
@@ -234,16 +286,19 @@ test('232: повторный накат ничего не меняет — ни
 test('232: MAX триггера идёт одним спуском по индексу — и индекс ровно под выражения триггера', () => {
   const db = freshDb();
   const trig = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'patients_mrn_autogen'").get().sql;
-  // Подзапрос берётся ИЗ ТЕКСТА ТРИГГЕРА, а не переписывается здесь: проверяется
-  // именно то, что исполняется на каждой регистрации.
-  const m = /SELECT COALESCE\(MAX\([\s\S]*?BETWEEN 0 AND 999999999/.exec(trig);
-  assert.ok(m, 'подзапрос номера найден в триггере');
+  // Подзапросы берутся ИЗ ТЕКСТА ТРИГГЕРА, а не переписываются здесь:
+  // проверяется именно то, что исполняется на каждой регистрации, — и проверка
+  // потолка, и сам номер.
+  const subs = [...trig.matchAll(/SELECT (?:COALESCE\()?MAX\([\s\S]*?BETWEEN 0 AND 999999999/g)].map((m) => m[0]);
+  assert.equal(subs.length, 2, 'в триггере два подзапроса MAX — потолок и номер');
   assert.doesNotMatch(trig, /substr\(mrn, -5\)|substr\(mrn, -9, 4\)|'00000'/, 'старого окна от конца больше нет');
-  const plan = db.prepare('EXPLAIN QUERY PLAN ' + m[0]).all().map((r) => r.detail).join(' | ');
-  assert.match(plan, /SEARCH patients USING COVERING INDEX idx_patients_mrn_seq/, plan);
-  const ops = db.prepare('EXPLAIN ' + m[0]).all().map((o) => o.opcode);
-  assert.ok(ops.some((o) => /^Seek(LE|LT)$/.test(o)) && ops.includes('Prev'), 'MAX берётся с конца диапазона: ' + ops.join(','));
-  assert.ok(!ops.includes('Rewind'), 'перебора карт нет');
+  for (const sub of subs) {
+    const plan = db.prepare('EXPLAIN QUERY PLAN ' + sub).all().map((r) => r.detail).join(' | ');
+    assert.match(plan, /SEARCH patients USING COVERING INDEX idx_patients_mrn_seq/, plan);
+    const ops = db.prepare('EXPLAIN ' + sub).all().map((o) => o.opcode);
+    assert.ok(ops.some((o) => /^Seek(LE|LT)$/.test(o)) && ops.includes('Prev'), 'MAX берётся с конца диапазона: ' + ops.join(','));
+    assert.ok(!ops.includes('Rewind'), 'перебора карт нет');
+  }
   db.close();
 });
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
   normalizeName, firstNameOf, phoneKey, idKey, namesMatch,
-  duplicateGroups, duplicateIdSet, mrnOrder,
+  duplicateGroups, duplicateIdSet, mrnOrder, mrnSeriesRefusal,
 } from './patient-duplicates.js';
 
 // ---------------------------------------------------------------------------
@@ -206,8 +206,41 @@ test('mrnOrder: year first, then the number, across letters — one counter span
 
 test('mrnOrder: hand-typed or missing numbers go after the parsed ones and never throw', () => {
   const sorted = ['без-формата', '', 'A-26-00007', null, 'MRN-08124'].sort(mrnOrder);
-  assert.deepEqual(sorted.slice(0, 1), ['A-26-00007']);
-  assert.equal(sorted.length, 5);
+  // Parsed first; the rest as text under the fixed 'ru' collation with digit
+  // runs as numbers: the empty ones ('' and null read as '') keep their input
+  // order (sort is stable), then Cyrillic before Latin — whatever the locale of
+  // the machine running this.
+  assert.deepEqual(sorted, ['A-26-00007', '', null, 'без-формата', 'MRN-08124']);
+  assert.deepEqual(['P-7', 'P-10', 'P-9'].sort(mrnOrder), ['P-7', 'P-9', 'P-10'], 'unparsed: digit runs compare as numbers');
+});
+
+// ---------------------------------------------------------------------------
+// mrnSeriesRefusal — MRN_BEYOND_99999_V1, review 1: the import window refuses a
+// card number that would use up its year's series. The trigger (migration 232)
+// counts 0…999 999 999 and refuses to issue past it; one imported placeholder
+// 'P-26-999999999' would stop registration for the rest of the year.
+// ---------------------------------------------------------------------------
+test('mrnSeriesRefusal: 999 999 000 … 999 999 999 in any year is refused, with the reason', () => {
+  for (const m of ['P-26-999999000', 'A-26-999999999', 'AB-27-999999500', ' P-26-999999999 ', 'P-26-0999999999']) {
+    const why = mrnSeriesRefusal(m);
+    assert.equal(typeof why, 'string', m);
+    assert.match(why, /999 999 000/);
+  }
+});
+
+test('mrnSeriesRefusal: ordinary, empty, uncounted and hand-typed numbers pass', () => {
+  for (const m of [null, undefined, '', '   ', 'P-26-00042', 'A-26-100000', 'P-26-999998999',
+    'P-26-1000000000', 'P-26-99999999999999999999', 'без-формата', 'MRN-08124']) {
+    assert.equal(mrnSeriesRefusal(m), null, String(m));
+  }
+});
+
+test('mrnSeriesRefusal: the patients import checks every new row with it', () => {
+  const src = fs.readFileSync(new URL('./views/section-import-export.js', import.meta.url), 'utf8');
+  const at = src.indexOf('\n    patients: {');
+  assert.ok(at > 0, 'patients import config found');
+  const cfg = src.slice(at, src.indexOf('columns:', at));
+  assert.match(cfg, /validateInsert:\s*\(payload\)\s*=>\s*mrnSeriesRefusal\(payload\.mrn\)/);
 });
 
 test('mrnOrder: the merge dialog picks its default card with it, not with text order', () => {

@@ -158,7 +158,8 @@ export function duplicateIdSet(rows) {
 // year's counter is shared by every letter (legacy P-26-… and A-26-… are one
 // series), so year + number IS the order of issue. Numbers not in that shape
 // (typed by hand, imported) sort after the parsed ones, among themselves as
-// text with digit runs compared as numbers.
+// text with digit runs compared as numbers — under the 'ru' collation, fixed,
+// so the order does not change with the browser's or the machine's locale.
 const MRN_PARTS = /^[^-]*-(\d\d)-(\d+)/;
 export function mrnOrder(a, b) {
     const sa = String(a ?? ''), sb = String(b ?? '');
@@ -173,5 +174,23 @@ export function mrnOrder(a, b) {
     } else if (ma || mb) {
         return ma ? -1 : 1;
     }
-    return sa.localeCompare(sb, undefined, { numeric: true });
+    return sa.localeCompare(sb, 'ru', { numeric: true });
+}
+
+// MRN_BEYOND_99999_V1 (review 1) — the import window's guard against a card
+// number that would use up its year's series. The trigger (migration 232)
+// counts numbers 0…999 999 999 and, once that is reached, refuses every new
+// registration of the year with its own message — so one imported placeholder
+// like 'P-26-999999999' would stop the front desk until someone fixes that
+// card. Refused here instead, row by row, with the reason: 999 999 000 up to
+// 999 999 999 (leading zeros do not count, any year — the placeholder would
+// block ITS year). Ten digits and more are left alone: the trigger does not
+// count them, so they cannot block anything.
+const MRN_SERIES_GUARD_FROM = 999999000;
+export function mrnSeriesRefusal(mrn) {
+    const m = MRN_PARTS.exec(String(mrn ?? '').trim());
+    if (!m) return null;
+    const digits = m[2].replace(/^0+(?=\d)/, '');
+    if (digits.length !== 9 || Number(digits) < MRN_SERIES_GUARD_FROM) return null;
+    return 'номер карты от 999 999 000 до 999 999 999 не принимается: после него у года кончаются номера карт. Проверьте номер или оставьте поле пустым — номер выдастся сам.';
 }

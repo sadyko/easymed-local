@@ -117,6 +117,7 @@ import { h, Icon, toast, clear } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { TIER_STEP_COLUMNS, tierStepsProblem, tierStepRangeProblem } from '../service-editor-logic.js';   // DOCTOR_TIER_V2
 import { SECTIONS, FK_LABEL_COLUMN } from '../sections.js?v=noikpu1';
+import { mrnSeriesRefusal } from '../patient-duplicates.js';   // MRN_BEYOND_99999_V1 — номер, исчерпавший бы серию года
 
 // EXCEL_SELF_HOST_V1 — served from our own origin (CSP allows 'self'); the
 // SheetJS CDN is NOT in the site CSP, so the external import was blocked and
@@ -557,6 +558,11 @@ const IMPORT_CONFIGS = {
         // usually has only a PINFL, which still matches. Rows with neither always
         // insert, so the sample imports cleanly. DATA_TRANSFER_V1.
         matchFields: ['mrn', 'national_id'],
+        // MRN_BEYOND_99999_V1 (ревью 1) — новая карта с номером 999 999 000…
+        // 999 999 999 не ввозится: триггер номера (миграция 232) дальше такого
+        // номера не выдаёт, и одна заглушка остановила бы регистрацию до конца
+        // года. Строка отказывается с причиной, остальные ложатся.
+        validateInsert: (payload) => mrnSeriesRefusal(payload.mrn),
         columns: [
             { key: 'last_name',          required: true, hint: 'Family name (required)' },
             { key: 'first_name',         required: true, hint: 'Given name (required)' },
