@@ -673,7 +673,7 @@ export const PATIENT_TABS = [
     { id: 'labs',        label: 'Лаборатория',   caps: { edit: false, del: false }, note: 'Результаты вносит раздел «Лаборатория» — карта их только показывает' },
     { id: 'docs',        label: 'Документы',     caps: { edit: true,  del: true  }, note: 'Загрузка файла и удаление документа' },
     { id: 'history',     label: 'История',       caps: { edit: false, del: false }, note: 'Госпитализации и подшитые истории болезни — карта их только показывает и печатает' },   // PATIENT_HISTORY_TAB_V1
-    { id: 'billing',     label: 'Счёт',          caps: { edit: false, del: false }, note: 'Счета и оплаты пишет только касса; удаления счёта нет нигде' },
+    { id: 'billing',     label: 'Счёт',          caps: { edit: false, del: false }, note: 'Счёт выставляют касса, регистратура и администратор, а врач — только по своему направлению; принимает деньги только касса; удаления счёта нет нигде' },   // REFBILL_REVIEW_V1 (ревью m9) — врач выставляет счёт по направлению (REFERRAL_BILL_V1)
     { id: 'visits',      label: 'Визиты',        caps: { edit: true,  del: false }, note: 'Запись визита; удаления визита в карте нет' },
     { id: 'details',     label: 'Деталь',        caps: { edit: true,  del: false }, note: 'Правка анкеты и отметок; удаление пациента — «Настройки → Пациенты»' },
     { id: 'recommended', label: 'Рекомендации',  caps: { edit: true,  del: false }, note: 'Кнопка «Рекомендовать услугу» в кабинете врача' },
