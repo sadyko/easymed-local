@@ -925,17 +925,18 @@ const POST_SALE_KEEP_SQL = `(CASE WHEN ${POST_SALE_SQL} > 0 AND i.total_amount +
 // обновления, ставки не имеет — налог 0, как в 3.12.1. Ревью M9 — ставку везёт
 // сама строка счёта, поэтому и счёт соседнего здания считается так же.
 //
-// НДС ТОВАРА — ВКЛЮЧЁННЫЙ В ЦЕНУ (решение 28.09): цена продажи товара — с НДС,
-// поэтому налог строки товара — ДОЛЯ её суммы: сумма после скидки × ставка /
-// (100 + ставка). 112 000 при 12 % → НДС 12 000, без НДС 100 000. Налог услуги
-// остаётся прежним (сумма после скидки × ставка / 100): ставка услуги может
-// быть налогом с оборота, и об этом владельца спросят отдельно. Делитель —
-// ITEM_TAX_BASE_SQL: 100 у услуги (100.0 + 0 — то же число, что прежнее 100.0,
-// поэтому налог услуги и доля врача бит в бит прежние) и 100 + ставка у товара.
+// НДС — ВНУТРИ ЦЕНЫ, ОДНО ПРАВИЛО ДЛЯ УСЛУГ И ТОВАРОВ (решение владельца
+// 2026-09-29: «Services and goods have the same rate of the vat. Which means
+// 100 = 12% + 88 price»). Налог строки — сумма после скидки × ставка / 100, и
+// у услуги, и у товара: из 100 при 12 % — 12 налога и 88 «после налога».
+// Услуги так считались и прежде (налог услуги и доля врача не меняются ни в
+// одном знаке). Товар первая версия SUPPLIERS_VAT_V1 считала иначе —
+// × ставка / (100 + ставка), 12/112 суммы; теперь он как услуга. Доли врача у
+// товара нет (PAY_GOODS_NONE_V1), так что его налог ни на чью выплату не влияет.
 const ITEM_SVC_TAX_SQL = `(SELECT sx.tax_rate FROM services sx WHERE sx.id = ii.service_id)`;
 const ITEM_GOODS_VAT_SQL = `(CASE WHEN ii.service_id IS NULL THEN ii.goods_vat_rate END)`;
 const ITEM_TAX_RATE_SQL = `COALESCE(${ITEM_SVC_TAX_SQL}, ${ITEM_GOODS_VAT_SQL}, 0)`;
-const ITEM_TAX_BASE_SQL = `(100.0 + CASE WHEN ${ITEM_SVC_TAX_SQL} IS NULL THEN COALESCE(${ITEM_GOODS_VAT_SQL}, 0) ELSE 0 END)`;
+const ITEM_TAX_BASE_SQL = '100.0';
 // 1 — налог строки это НДС товара (ставка товара задана, 12 или 0); у «без
 // НДС» и у строки без товара — 0: колонка «в т.ч. НДС (товары)».
 const ITEM_GOODS_VAT_LINE_SQL = `(CASE WHEN ${ITEM_SVC_TAX_SQL} IS NULL AND ${ITEM_GOODS_VAT_SQL} IS NOT NULL THEN 1 ELSE 0 END)`;
@@ -943,14 +944,14 @@ const ITEM_AFTER_DISCOUNT_SQL = `(ii.total - (${ITEM_DISCOUNT_SQL}))`;
 const ITEM_TAX_SQL = `(${ITEM_AFTER_DISCOUNT_SQL} * ${ITEM_TAX_RATE_SQL} / ${ITEM_TAX_BASE_SQL})`;
 const ITEM_NET_SQL = `(${ITEM_AFTER_DISCOUNT_SQL} - ${ITEM_TAX_SQL})`;
 // Примечание к отчётам, где в одной колонке «Налог» и услуги, и товары.
-const GOODS_VAT_NOTE = 'У товаров «Налог» — НДС, включённый в цену продажи: сумма после скидки × ставка / (100 + ставка), при 12 % — 12/112 суммы; он же — в колонке «в т.ч. НДС (товары)». У услуг «Налог» считается, как прежде: сумма после скидки × ставка.';
-const GOODS_VAT_NOTE_SHORT = 'У товаров «Налог» — НДС, включённый в цену продажи: сумма после скидки × ставка / (100 + ставка), при 12 % — 12/112 суммы. У услуг «Налог» считается, как прежде: сумма после скидки × ставка.';
+const GOODS_VAT_NOTE = '«Налог» у услуг и товаров считается одинаково — он внутри цены: сумма после скидки × ставка / 100 (из 100 при 12 % — 12 налога и 88). У товаров он же — в колонке «в т.ч. НДС (товары)».';
+const GOODS_VAT_NOTE_SHORT = '«Налог» у услуг и товаров считается одинаково — он внутри цены: сумма после скидки × ставка / 100 (из 100 при 12 % — 12 налога и 88).';
 
 /** Налог строки выплаты БЕЗ счёта — то же правило, что ITEM_TAX_SQL у строки со счётом. */
 function lineTaxOf(r, after) {
   const rate = Number(r.tax_rate) || 0;
-  // Товар (строка визита с clinic_item_id, без услуги) — НДС внутри цены.
-  if (r.clinic_item_id != null && r.service_id == null) return after * rate / (100 + rate);
+  // Решение владельца 2026-09-29: у услуги и у товара одно правило — налог
+  // внутри цены, × ставка / 100.
   return after * rate / 100;
 }
 
@@ -966,9 +967,10 @@ function lineTaxOf(r, after) {
 function fastMoneySql(sql) {
   if (!PUSH_DOWN) return sql;
   // SUPPLIERS_VAT_V1 — ставка товара — колонка самой строки счёта
-  // (ii.goods_vat_rate, ревью F3), подзапроса у неё нет. Ставка услуги в
-  // делителе налога (ITEM_TAX_BASE_SQL) — та же колонка stx: у services.tax_rate
-  // NOT NULL, поэтому «stx.tax_rate IS NULL» — ровно «у строки нет услуги».
+  // (ii.goods_vat_rate, ревью F3), подзапроса у неё нет. Ставка услуги — та же
+  // колонка stx: у services.tax_rate NOT NULL, поэтому «stx.tax_rate IS NULL» —
+  // ровно «у строки нет услуги». Делитель налога — 100 у всех строк (решение
+  // владельца 2026-09-29), подставлять в нём нечего.
   return sql.split(OWN_DISCOUNT_SUM_SQL).join('COALESCE(od.s, 0)')
     .split(OWN_DISCOUNT_BASE_SQL).join('COALESCE(od.b, 0)')
     .split(ITEM_TAX_RATE_SQL).join(`COALESCE(stx.tax_rate, ${ITEM_GOODS_VAT_SQL}, 0)`)
@@ -1542,7 +1544,7 @@ function payLineMoney(r, pricer) {
     const pct = Math.max(catPct, pkgPct);
     discount = pct > 0 ? round2(amount * pct / 100) : 0;
     const after = amount - discount;
-    // SUPPLIERS_VAT_V1 — у товара налог — НДС внутри цены (lineTaxOf), у услуги — как прежде.
+    // SUPPLIERS_VAT_V1 — налог внутри цены, одно правило у товара и услуги (lineTaxOf).
     tax = lineTaxOf(r, after);
     net = after - tax;
   }

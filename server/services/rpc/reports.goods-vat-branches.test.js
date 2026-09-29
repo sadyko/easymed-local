@@ -51,10 +51,10 @@ test('ревью M9: ставка НДС товара едет со строко
     const line = objects(getRpc('run_report')(B, { kind: 'total_revenue', from: '2020-01-01', to: '2099-12-31' }, ADMIN))
       .find((o) => o['№ счёта'] === 'INV-A1');
     assert.ok(line, 'счёт соседа в сводной выручке');
-    assert.deepEqual([line['Налог %'], line['Налог'], line['в т.ч. НДС (товары)']], [12, 12000, 12000]);
+    assert.deepEqual([line['Налог %'], line['Налог'], line['в т.ч. НДС (товары)']], [12, 13440, 13440]);
     // «По услугам» (строки соседа идут отдельной выборкой) — тот же налог.
     const bint = objects(getRpc('run_report')(B, { kind: 'by_services', from: '2020-01-01', to: '2099-12-31' }, ADMIN))
       .filter((o) => o['Услуга'] === 'Бинт');
-    assert.equal(bint.reduce((s, o) => s + (o['Налог'] || 0), 0), 12000);
+    assert.equal(bint.reduce((s, o) => s + (o['Налог'] || 0), 0), 13440);
   } finally { A.close(); B.close(); }
 });

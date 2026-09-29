@@ -96,15 +96,15 @@ test('ревью F3: новая выдача берёт ставку на мом
     assert.ok(inv0);
     assert.deepEqual(money(revenueLine(db, no0)), [0, 0, null], 'выдано до ставки — налог 0');
 
-    // Выдано при 12 %: 112 000 → НДС 12 000 (внутри цены).
+    // Выдано при 12 %: 112 000 → налог 13 440 (внутри цены, × 12 / 100, как у услуги).
     const s = newSale(db);
     const no1 = db.prepare('SELECT i.invoice_number FROM invoices i JOIN invoice_items ii ON ii.invoice_id = i.id JOIN visit_services vs ON vs.invoice_item_id = ii.id WHERE vs.id = ?').get(s.vs).invoice_number;
-    assert.deepEqual(money(revenueLine(db, no1)), [12, 12000, 12000]);
+    assert.deepEqual(money(revenueLine(db, no1)), [12, 13440, 13440]);
     assert.equal(db.prepare('SELECT goods_vat_rate FROM visit_services WHERE id = ?').get(s.vs).goods_vat_rate, 12);
 
     // Ставку сменили на 0 % — записанная продажа остаётся с 12 %.
     call('product_save', db, { id: 1, name: 'Бинт', procurement_category: 'consumables', vat_rate: 0 });
-    assert.deepEqual(money(revenueLine(db, no1)), [12, 12000, 12000]);
+    assert.deepEqual(money(revenueLine(db, no1)), [12, 13440, 13440]);
     assert.deepEqual(money(revenueLine(db, no0)), [0, 0, null]);
   } finally { db.close(); }
 });
@@ -121,7 +121,7 @@ test('ревью F3: строка стационара — ставка на м�
     db.prepare(`INSERT INTO admission_services (admission_id, clinic_item_id, doctor_id, quantity, unit_price, total, status, billable, invoice_item_id, performed_at)
                 VALUES (?, 1, 1, 2, 56000, 112000, 'added', 1, ?, ?)`).run(adm, aii, now);
     db.prepare('UPDATE products SET vat_rate = NULL WHERE id = 1').run();
-    assert.deepEqual(money(revenueLine(db, 'ADM-1')), [12, 12000, 12000]);
+    assert.deepEqual(money(revenueLine(db, 'ADM-1')), [12, 13440, 13440]);
     assert.equal(db.prepare('SELECT goods_vat_rate FROM invoice_items WHERE id = ?').get(aii).goods_vat_rate, 12);
   } finally { db.close(); }
 });
