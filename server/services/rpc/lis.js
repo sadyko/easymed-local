@@ -171,6 +171,28 @@ export function lisMessageDismiss(db, args, user) {
 // Сотня покрывает любой режим прибора и не тянет месяцы гистограмм.
 const CODES_SCAN_LIMIT = 100;
 
+// LIS_DISCOVERY_FIX_V1 (ревью 2026-09-29) — сколько начала каждого сообщения
+// читать ради кодов. Коды (NM, ST, IS) идут в начале, картинки (ED, base64
+// гистограмм) — в конце, и сотня проб по нескольку мегабайт разбиралась бы
+// целиком ради строк, которых в «Поле анализатора» всё равно не будет.
+// Столько же начала лоток хранит от переросшего сообщения (mllp.js).
+const CODES_HEAD_CHARS = 64 * 1024;
+
+/**
+ * Начало сообщения для списка кодов: не больше CODES_HEAD_CHARS знаков, а у
+ * сообщения длиннее — только до последнего конца сегмента (CR или LF) перед
+ * границей. Оборванная строка отбрасывается: из половины сегмента вышел бы
+ * код, которого прибор не присылал («777-» вместо «777-3»). База отдаёт на знак
+ * больше границы — по нему и видно, что сообщение длиннее.
+ */
+function codesHead(text) {
+  const s = String(text == null ? '' : text);
+  if (s.length <= CODES_HEAD_CHARS) return s;
+  const head = s.slice(0, CODES_HEAD_CHARS);
+  const cut = Math.max(head.lastIndexOf('\r'), head.lastIndexOf('\n'));
+  return cut > 0 ? head.slice(0, cut) : '';
+}
+
 /**
  * Ревью R8 — номер прибора из аргументов: целое больше нуля, числом или
  * строкой из цифр (пробелы вокруг обрезаются). Всё прочее — null, и вызов
@@ -208,14 +230,16 @@ export function lisDeviceCodes(db, args, user) {
   const ids = dev.profile
     ? db.prepare('SELECT id FROM lab_devices WHERE profile = ?').all(dev.profile).map((r) => r.id)
     : [dev.id];
-  const rows = db.prepare(`SELECT raw, received_at FROM lab_device_messages
+  // LIS_DISCOVERY_FIX_V1 — из базы только начало (substr), а не мегабайты
+  // картинок: на знак больше границы, чтобы codesHead видел, что обрезано.
+  const rows = db.prepare(`SELECT substr(raw, 1, ?) AS head, received_at FROM lab_device_messages
                             WHERE device_id IN (${ids.map(() => '?').join(',')})
-                            ORDER BY id DESC LIMIT ?`).all(...ids, CODES_SCAN_LIMIT);
+                            ORDER BY id DESC LIMIT ?`).all(CODES_HEAD_CHARS + 1, ...ids, CODES_SCAN_LIMIT);
 
   const seen = new Map();
   for (const r of rows) {
     let msg;
-    try { msg = parseMessage(r.raw); } catch { continue; }
+    try { msg = parseMessage(codesHead(r.head)); } catch { continue; }
     for (const o of msg.observations) {
       if (o.valueType.toUpperCase() === 'ED') continue;
       if (!o.code && !o.name) continue;

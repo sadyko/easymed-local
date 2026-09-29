@@ -128,6 +128,32 @@ test('коды прибора — только лаборатории; номе�
   db.close();
 });
 
+// LIS_DISCOVERY_FIX_V1 (ревью 2026-09-29) — коды читаются из первых 64 КБ
+// каждого сообщения: коды идут в начале, картинки (ED) — в конце, и сотня
+// проб с гистограммами не должна разбираться целиком. Строка, оборванная
+// границей, отбрасывается: из половины сегмента вышел бы выдуманный код.
+test('коды прибора — из первых 64 КБ сообщения; оборванная строка не даёт выдуманного кода', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'Гем','mindray-bc-5300')").run();
+  const LIMIT = 64 * 1024;
+  const pre = ['MSH|^~\\&|BC-5300|Mindray|||20260929120000||ORU^R01|7|P|2.3.1',
+    'OBR|1||LAB-000098|00001^Automated Count^99MRC',
+    'OBX|1|NM|6690-2^WBC^LN||9.81|10*9/L|||||F',
+    'OBX|2|NM|718-7^HGB^LN||142|g/L|||||F'].join('\r') + '\r';
+  const edHead = 'OBX|3|ED|15551-4^WBC Histogram. BMP^99MRC||^Image^BMP^Base64^';
+  const edTail = '||||||F';
+  const cutAt = 'OBX|4|NM|777-';   // граница 64 КБ — посреди кода «777-3»
+  const pad = LIMIT - pre.length - edHead.length - edTail.length - 1 - cutAt.length;
+  const raw = pre + edHead + 'Q'.repeat(pad) + edTail + '\r' + 'OBX|4|NM|777-3^PLT^LN||250|10*9/L|||||F'
+    + '\r' + 'OBX|5|NM|LATE^^99MRC||1|x|||||F';
+  assert.ok(raw.slice(0, LIMIT).endsWith('\r' + cutAt), 'граница там, где задумано');
+  db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status, received_at) VALUES (1,'10.0.0.5',?,'unmapped','2026-09-29T10:00:00Z')").run(raw);
+
+  assert.deepEqual(lisDeviceCodes(db, { device_id: 1 }, LAB).map((c) => c.code + '^' + c.name).sort(), ['6690-2^WBC', '718-7^HGB'],
+    'ранние коды на месте; ни «777-» из оборванной строки, ни кодов после 64 КБ');
+  db.close();
+});
+
 // ── Ревью 2026-09-28 ────────────────────────────────────────────────────────
 
 test('R8: номер прибора — только целое больше нуля, числом или строкой из цифр; прочее — 400', () => {
