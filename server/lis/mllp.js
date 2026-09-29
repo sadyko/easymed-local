@@ -57,7 +57,16 @@ function controlIdOf(text) {
  */
 export function startMllpServer({ port, onMessage, onOversize = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {} }) {
   return new Promise((resolve, reject) => {
+    // LIS_DISCOVERY_FIX_V1 (ревью 2026-09-29) — открытые соединения приборов.
+    // server.close() перестаёт принимать новые, но отвечает, только когда
+    // закроются ВСЕ открытые, а анализатор держит своё часами (простой рвётся
+    // через IDLE_MS). На этом висели lis_restart и lis_device_delete. Поэтому
+    // сокеты помнятся, и закрытие рвёт их само: прибор переподключится к новому
+    // слушателю, а неотвеченный кадр пришлёт снова.
+    const socks = new Set();
     const server = net.createServer((sock) => {
+      socks.add(sock);
+      sock.on('close', () => socks.delete(sock));
       const peer = sock.remoteAddress || '';
       let buf = Buffer.alloc(0);
       let overflow = false;
@@ -159,7 +168,10 @@ export function startMllpServer({ port, onMessage, onOversize = null, maxBytes =
       server.unref();
       resolve({
         port: server.address().port,
-        close: () => new Promise((r) => server.close(() => r())),
+        close: () => new Promise((r) => {
+          for (const s of socks) s.destroy();
+          server.close(() => r());
+        }),
       });
     });
   });

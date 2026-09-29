@@ -201,3 +201,31 @@ test('потолок по умолчанию — 4 МБ', async () => {
   const { DEFAULT_MAX_BYTES } = await import('./mllp.js');
   assert.equal(DEFAULT_MAX_BYTES, 4 * 1024 * 1024);
 });
+
+// LIS_DISCOVERY_FIX_V1 (ревью 2026-09-29) — закрытие слушателя не ждёт
+// открытого соединения прибора. server.close() ждёт, пока закроются ВСЕ
+// соединения, а анализатор держит своё часами (простой рвётся через 5 минут):
+// lis_restart и lis_device_delete висели.
+test('закрытие не ждёт открытого соединения прибора — рвёт его само', async () => {
+  const srv = await startMllpServer({ port: 0, onMessage: async () => 'AA' });
+  const sock = await connect(srv.port);
+  sock.on('error', () => {});   // сервер рвёт соединение — это и проверяется
+  const dropped = new Promise((r) => sock.once('close', r));
+  let timer;
+  try {
+    // Соединение живое: прибор прислал пробу, получил ответ и молчит дальше.
+    const reply = readFrame(sock);
+    sock.write(frame(MSG('12')));
+    assert.match(await reply, /MSA\|AA\|12/);
+
+    const late = new Promise((_, rej) => {
+      timer = setTimeout(() => rej(new Error('close() ждёт открытого соединения прибора дольше 2 с')), 2000);
+    });
+    await Promise.race([srv.close(), late]);
+    await Promise.race([dropped, late]);
+    assert.ok(sock.destroyed || sock.readableEnded, 'соединение прибора закрыто сервером');
+  } finally {
+    clearTimeout(timer);
+    sock.destroy();
+  }
+});
