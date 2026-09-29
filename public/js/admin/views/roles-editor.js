@@ -55,7 +55,7 @@ import { levelsFor, openAction, actionFor, levelFromActions, actionsFromLevel }
 // ROLES_MATRIX_V1 — матрица «раздел → окно → действие» по общему справочнику
 // прав (shared/permission-catalog.js). Старые поля sections/levels выводятся
 // из неё при сохранении, чтобы прежние ворота продолжали работать.
-import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm8';   // ROLES_SAVE_TRUTH_V1 — сбор с «показанным при открытии»; ROLES_REVIEW_V1 — семья без ворот по списку ролей
+import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm9';   // ROLES_SAVE_TRUTH_V1 — сбор с «показанным при открытии»; ROLES_REVIEW_V1 — семья без ворот по списку ролей, ключи другой сборки переносятся
 // V3121_ROLES — «Проверьте права этой роли»: «Просмотр» от старого экрана «Роли» (мигр. 215).
 import { roleReviewNotice } from './roles-review.js';
 // ROLES_SAVE_TRUTH_V1 — «Проверьте права этой роли»: права выше обычных для основы (мигр. 230).

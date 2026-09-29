@@ -181,6 +181,13 @@ export function collectGrants(controls, { explicit = {}, closed = null, initial 
             if (r.key in out) out[r.key] = 'none';
         }
     }
+    // Ревью m5 — записанный ключ, которому экран не нарисовал строку (ключ
+    // другой сборки — новее или старше этой), переносится как есть, в обоих
+    // режимах: сохранение роли не стирает молча то, чего на экране не было.
+    // Добавляется после правила закрытого раздела — его строкой он не нарисован.
+    for (const [key, v] of Object.entries(exp)) {
+        if (!(key in controls) && !(key in out)) out[key] = v;
+    }
     return out;
 }
 

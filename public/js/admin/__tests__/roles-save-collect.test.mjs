@@ -169,3 +169,20 @@ test('старые поля: тронутый раздел меняет свой
   const closed = legacyFromGrants({ ...shown, labs: 'none' }, lab, shown);
   assert.ok(!closed.sections.includes('labs') && !('labs' in closed.levels), 'закрытая лаборатория осталась в старых полях');
 });
+
+// Ревью m5 — записанный ключ, которому экран не нарисовал строку (ключ другой
+// сборки: новее или старше этой), переносится как есть: сохранение роли не
+// стирает молча то, чего на экране не было, — в обоих режимах сбора, и
+// закрытый раздел его не трогает (в свой раздел он не нарисован).
+test('ревью m5: записанный ключ без строки на экране переносится как есть — в обоих режимах', () => {
+  const perms = { ...REG, grants: { ...REG.grants, 'crm.future_key': 'edit', 'inpatient.old_window': 'view', 'odd.value': 7 } };
+  const shown = shownFor(perms, TRUTH);
+  const carried = { 'crm.future_key': 'edit', 'inpatient.old_window': 'view', 'odd.value': 7 };
+  const noop = collectGrants(controlsOf(shown), { explicit: perms.grants, initial: shown });
+  assert.deepEqual(noop, { 'crm.dial': 'edit', ...carried }, 'пустое сохранение стёрло ключ другой сборки');
+  const closedCrm = collectGrants(controlsOf({ ...shown, crm: 'none' }), { explicit: perms.grants, closed: new Set(['crm']), initial: shown });
+  assert.equal(closedCrm['crm.future_key'], 'edit', 'закрытый раздел переписал ключ, которого на экране не было');
+  assert.equal(closedCrm['crm.dial'], 'none');
+  const legacy = collectGrants(controlsOf(shown), { explicit: perms.grants });
+  for (const [k, v] of Object.entries(carried)) assert.equal(legacy[k], v, k + ': без initial ключ другой сборки стёрт');
+});

@@ -129,7 +129,8 @@ const SCREEN_ROLES = [
 //   written — записанные ключи: выше основы (crm.all, inpatient.marks), ниже
 //     (crm.dial), раздел «Нет» с незаписанными окнами (mar), строка «только
 //     администратор» (settings.api), окна разделов, закрытых по выводу
-//     (reports.cashier, procurement.issue), раздел, записанный без старого поля (settings).
+//     (reports.cashier, procurement.issue), раздел, записанный без старого поля (settings),
+//     ключ другой сборки без строки на экране (crm.future_key, ревью m5).
 const LEGACY_ONLY = {
   sections: ['patients', 'consultation', 'labs', 'inventory', 'beds', 'crm', 'reports-hub', 'settings', 'custdev', 'my-stock'],
   levels: { patients: 'editor', consultation: 'editor', labs: 'admin', inventory: 'editor', beds: 'viewer', crm: 'admin', 'reports-hub': 'viewer', settings: 'viewer', custdev: 'editor' },
@@ -138,7 +139,10 @@ const WRITTEN = {
   sections: ['patients', 'crm', 'beds', 'queue', 'registration', 'patient-documents'],
   levels: { patients: 'editor', crm: 'editor', beds: 'editor', queue: 'viewer', registration: 'editor', 'patient-documents': 'viewer' },
   grants: { 'crm.all': 'edit', 'crm.dial': 'none', 'inpatient.vitals': 'view', 'inpatient.marks': 'edit', mar: 'none',
-    settings: 'view', 'settings.api': 'view', 'reports.cashier': 'view', 'patients.calendar': 'view', 'procurement.issue': 'edit', 'cashier.lines': 'edit' },
+    settings: 'view', 'settings.api': 'view', 'reports.cashier': 'view', 'patients.calendar': 'view', 'procurement.issue': 'edit', 'cashier.lines': 'edit',
+    // Ревью m5 — ключ другой сборки: строки на экране у него нет, и пустое
+    // сохранение обязано перенести его как есть.
+    'crm.future_key': 'edit' },
 };
 const SYNTHETIC = [['op-senior', 'Старший оператор'], ['deputy', 'Заместитель'], ['legacy-only', 'Только старые поля'], ['written', 'Записанные ключи']];
 
