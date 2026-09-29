@@ -121,6 +121,30 @@ test('ключ, изменённый после того, как плашка н
   assert.ok(!('crm.all' in ROW.grants));
 });
 
+// Ревью m8 — «восстановлено» — только у ключей, которые правда сняты. Ключ,
+// который поменяли руками, пока плашка висела, остаётся нерешённым: снимать
+// его никто не снимал.
+test('ревью m8: «восстановлено» отмечено только у снятых ключей; изменённый с тех пор — нерешённый', async () => {
+  fresh();
+  const box = await notice();
+  ROW.grants['inpatient.vitals'] = 'view';
+  buttons(box).find((b) => textOf(b).includes('Убрать эти права')).click();
+  await tick();
+  const marks = calls.filter((d) => d.table === 'role_grant_reviews' && d.op === 'update');
+  assert.deepStrictEqual(marks.map((d) => d.filters), [[{ col: 'id', op: 'in', val: [1] }]]);
+  assert.strictEqual(REVIEWS.find((r) => r.id === 1).resolution, 'restored');
+  assert.strictEqual(REVIEWS.find((r) => r.id === 2).resolution, null, 'ключ, изменённый руками, отмечен «восстановлено»');
+
+  fresh();
+  const box2 = await notice();
+  ROW.grants['inpatient.vitals'] = 'view';
+  ROW.grants['crm.all'] = 'none';
+  buttons(box2).find((b) => textOf(b).includes('Убрать эти права')).click();
+  await tick();
+  assert.ok(!calls.some((d) => d.op === 'update'), 'снимать нечего — а запись ушла');
+  assert.ok(REVIEWS.every((r) => r.resolution === null));
+});
+
 // Ревью M4 — на проверке и ключи с воротами-функцией, среди них раздел
 // «Закупки» (его ключ — сам раздел, не окно): плашка называет его словами
 // справочника, а не кодом.

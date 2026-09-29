@@ -52,21 +52,27 @@ async function resolve(items, resolution) {
     if (error) throw new Error(error.message || String(error));
 }
 
-/** «Убрать эти права»: строка роли перечитывается, снимаются только ключи, стоящие как найдено. */
+/**
+ * «Убрать эти права»: строка роли перечитывается, снимаются только ключи,
+ * стоящие как найдено. Ревью m8 — и «восстановлено» отмечается только у них:
+ * ключ, который поменяли руками, пока плашка висела, остаётся нерешённым (его
+ * никто не снимал; плашка покажет его снова, только если он опять встанет, как
+ * нашла миграция). Возвращает, сколько ключей снято.
+ */
 export async function removeReviewedGrants(role, items) {
     const { data, error } = await supabase.from('role_permissions').select('permissions').eq('role', role).maybeSingle();
     if (error) throw new Error(error.message || String(error));
     const p = parse(data && data.permissions) || {};
     const grants = { ...grantsOf(p) };
-    let changed = false;
+    const removed = [];
     for (const it of items) {
-        if (grants[it.key] === it.level) { delete grants[it.key]; changed = true; }
+        if (grants[it.key] === it.level) { delete grants[it.key]; removed.push(it); }
     }
-    if (changed) {
-        const up = await supabase.from('role_permissions').update({ permissions: JSON.stringify({ ...p, grants }) }).eq('role', role).select().single();
-        if (up.error) throw new Error(up.error.message || String(up.error));
-    }
-    await resolve(items, 'restored');
+    if (!removed.length) return 0;
+    const up = await supabase.from('role_permissions').update({ permissions: JSON.stringify({ ...p, grants }) }).eq('role', role).select().single();
+    if (up.error) throw new Error(up.error.message || String(up.error));
+    await resolve(removed, 'restored');
+    return removed.length;
 }
 
 /**
