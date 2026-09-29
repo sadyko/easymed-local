@@ -73,6 +73,7 @@ import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRe
 import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss, lisDeviceCodes, lisListeners, lisDeviceDelete } from './lis.js';   // LIS_INGEST_V1, LIS_MINDRAY_CODES_V1, LIS_ANALYZER_LIST_V1
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
 import { customRoleCreate } from './custom-roles.js';   // ADMIN_ROWS_GRANTABLE_V1 — своя роль одним действием
+import { roleEffectiveGrants } from './roles-effective.js';   // ROLES_SAVE_TRUTH_V1 — что у роли есть сейчас
 import { crmLeadsByPhone, crmSearch, crmVisitLinks } from './crm-leads.js';   // CRM_DEDUP_SEARCH_TASKS_V1
 import { crmDuplicateGroups, crmMergeLeads } from './crm-merge.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { updateStatus, updateApprove, updateCancel, updateCheckNow } from './updates.js';   // UPDATE_DELIVERY_V1
@@ -622,6 +623,9 @@ export const RPC = {
   // ADMIN_ROWS_GRANTABLE_V1 — своя роль клиники: обе записи в одной транзакции,
   // права не выше заводящего. Запись — при просроченной лицензии закрыта (402).
   custom_role_create:       (db, args, user) => customRoleCreate(db, args, user),
+  // ROLES_SAVE_TRUTH_V1 — «Роли»: что у роли есть сейчас по строкам с серверными
+  // воротами (правда сервера вместо догадки экрана). Чистое чтение (READ_ONLY_RPCS).
+  role_effective_grants:    (db, args, user) => roleEffectiveGrants(db, args, user),
   // CRM_DEDUP_SEARCH_TASKS_V1 — «у этого номера уже есть карточка?» перед
   // созданием новой заявки. Номер сравнивается по одному ключу (последние девять
   // цифр) на сервере; чистое чтение (READ_ONLY_RPCS в control/gate.js).

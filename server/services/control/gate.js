@@ -194,6 +194,9 @@ const READ_ONLY_RPCS = new Set([
   // (бейдж меню): чтение. «Списать» — запись, сюда не входит.
   'stock_pending_list',
   'stock_pending_count',
+  // ROLES_SAVE_TRUTH_V1 — «Роли»: что у роли есть сейчас. Чистое чтение: экран
+  // прав открывается и при просроченной лицензии, только ничего не сохраняет.
+  'role_effective_grants',
 ]);
 
 // The way back in. These must work while locked or a clinic that wants to pay

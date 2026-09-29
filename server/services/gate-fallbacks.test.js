@@ -61,6 +61,8 @@ const ALLOW = {
   // Сама защита сравнивает уровни — она не ворота.
   'services/role-guard.js|effectiveLevel|key': { n: 2, why: 'защита «Ролей»: сравнение уровней' },
   'services/role-guard.js|grantAllowsOr|key': { n: 1, why: 'защита «Ролей»: gatePasses по спискам карты' },
+  // ROLES_SAVE_TRUTH_V1 — role_effective_grants: уровень каждой строки с воротами, теми же воротами.
+  'services/rpc/roles-effective.js|effectiveLevel|row.key': { n: 1, why: 'role_effective_grants: что у роли есть сейчас — effectiveLevel по каждой строке справочника с fallbackLevel !== null' },
   // Cust Dev: ключи custdev.list / custdev.rate, прежнее правило — галочка раздела (FALLBACK_FN).
   'services/rpc/custdev.js|grantAllowsOr|key': { n: 1, why: 'custdev.list / custdev.rate — FALLBACK_FN', wrapper: 'grantedOr', must: 'fn' },
   // Telegram: settings.telegram / reports.telegram — строки adminDefault.
