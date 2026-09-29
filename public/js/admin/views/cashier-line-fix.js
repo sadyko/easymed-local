@@ -434,8 +434,14 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
 // выставить, и выставляет счёт; строки, за которые пациенту вернули деньги,
 // выставляются только этим явным выбором (rebill_refunded). `onBilled(invoice)`
 // — касса открывает окно оплаты.
-export async function openRebill(row, { onBilled = null } = {}) {
-    const s = sheet(trf('Выставить заново · {no}', { no: row.invoice_number || ('#' + row.invoice_id) }), 'Receipt', 640);
+//
+// REFERRAL_BILL_V1 (2026-09-29) — то же окно открывает «Ждут счёта» кассы
+// (визит без отменённого счёта): `title` — свой заголовок («Выставить счёт ·
+// {пациент}»), `preselectRefunded: false` — строки, за которые пациенту вернули
+// деньги, не отмечены сразу: здесь их снова выставляют только явной галочкой.
+// «Возвраты и отмены» по-прежнему отмечают всё (выставляют заново осознанно).
+export async function openRebill(row, { onBilled = null, title = null, preselectRefunded = true } = {}) {
+    const s = sheet(title || trf('Выставить заново · {no}', { no: row.invoice_number || ('#' + row.invoice_id) }), 'Receipt', 640);
     s.body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } },
         tr('Строки визита без счёта: отметьте, что выставить. Услугу и врача можно поменять до выставления.')));
     const table = h('div', { style: { display: 'grid', gap: '6px' } });
@@ -463,7 +469,7 @@ export async function openRebill(row, { onBilled = null } = {}) {
             const { data: rf } = await supabase.rpc('visit_refunded_lines', { visit_id: row.visit_id });
             refunded = new Set(((rf && rf.line_ids) || []).map(Number));
         } catch (e) { /* без пометки сервер всё равно не выставит их молча */ }
-        if (!seeded) { for (const l of lines) chosen.add(Number(l.id)); seeded = true; }
+        if (!seeded) { for (const l of lines) if (preselectRefunded || !refunded.has(Number(l.id))) chosen.add(Number(l.id)); seeded = true; }   // REFERRAL_BILL_V1 — preselectRefunded
         for (const id of [...chosen]) if (!lines.some((l) => Number(l.id) === id)) chosen.delete(id);
         clear(table);
         if (!lines.length) {

@@ -9,6 +9,7 @@
 //   cash_move        — «Внести» / «Изъять» drawer movements
 //   shift_report     — X-отчёт / внутренний отчёт / история смены
 //   cashier_invoices — the invoice list + chip aggregates, joined server-side
+//   cashier_unbilled — REFERRAL_BILL_V1: «Ждут счёта», визиты со строками без счёта
 //   record_payment   — stamps payments.shift_id from the cashier's open shift
 //   void_invoice     — отмена счёта (только без принятых денег; возвраты — follow-up)
 // DEPOSIT_V1 — депозиты ПОРТИРОВАНЫ: чип «ДЕПОЗИТЫ» показывает предоплаты,
@@ -26,7 +27,7 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TY
 import { dateNumeric } from '../../shared/date-words.js';   // V3120_FIX — дата чека не зависит от языка ОС
 import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANCE_V1
 import { searchTokens } from '../patient-search.js';   // CARD_SALE_V1 — поиск покупателя карты
-import { canOfferLineFix, openLineFix, openRebill } from './cashier-line-fix.js';   // CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»
+import { canOfferLineFix, openLineFix, openRebill } from './cashier-line-fix.js?v=refbill1';   // CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»; REFERRAL_BILL_V1 — «Выставить счёт» (title, штамп)
 import { canCloseOtherShifts } from '../permissions.js';   // CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
 
 // DEPOSIT_WALLET_V1 — «С баланса»: оплата и возврат через баланс пациента.
@@ -242,6 +243,7 @@ const state = {
     deposits: [],   // DEPOSIT_V1 — ждущие приёма предоплаты
     cards: [],      // CARD_SALE_V1 — подарочные карты и сертификаты (проданные и выданные без оплаты)
     refunds: { from: null, to: null, rows: [], totals: null },   // CASHIER_PAID_SWAP_V1 — «Возвраты и отмены» за период
+    unbilled: { rows: [], totals: null },   // REFERRAL_BILL_V1 — «Ждут счёта»: визиты со строками без счёта (filter 'unbilled')
 };
 
 export async function renderCashier(container) {
@@ -741,6 +743,22 @@ async function loadInvoices() {
         state.cards = (cr && cr.data && cr.data.rows) || [];
     } catch (e) { state.cards = []; }
     await loadRefunds();   // CASHIER_PAID_SWAP_V1 — сбой не прячет счета, плашка покажет 0
+    await loadUnbilled();   // REFERRAL_BILL_V1 — то же правило: сбой не прячет счета
+}
+
+// REFERRAL_BILL_V1 — «Ждут счёта»: визиты, у которых амбулаторные услуги
+// записаны, а счёта нет (cashier_unbilled, rpc/cashier.js). «Приём оплат»
+// строится из одних счетов, и такого пациента касса раньше не видела вовсе.
+async function loadUnbilled() {
+    try {
+        const { data, error } = await supabase.rpc('cashier_unbilled', {});
+        if (error) throw error;
+        state.unbilled.rows = (data && data.rows) || [];
+        state.unbilled.totals = (data && data.totals) || null;
+    } catch (e) {
+        state.unbilled.rows = [];
+        state.unbilled.totals = null;
+    }
 }
 
 // CASHIER_PAID_SWAP_V1 — «Возвраты и отмены» за период (по умолчанию сегодня).
@@ -779,6 +797,8 @@ function invStatusTag(status) {
 
 const CHIPS = [
     { key: 'unpaid',    label: 'НЕ ОПЛАЧЕН', icon: 'Warning',  color: 'var(--crit-600, #dc2626)' },
+    // REFERRAL_BILL_V1 — услуги записаны, счёта нет: касса выставит его здесь же.
+    { key: 'unbilled',  label: 'ЖДУТ СЧЁТА', icon: 'Clock',    color: '#b45309' },
     { key: 'debt',      label: 'ДОЛГ',       icon: 'Receipt',  color: '#b45309' },
     { key: 'partial',   label: 'ЧАСТИЧНО',   icon: 'Activity', color: '#b45309' },
     { key: 'paid',      label: 'ОПЛАЧЕН',    icon: 'Check',    color: 'var(--ok-600, #16a34a)' },
@@ -813,7 +833,9 @@ function paintChips(el, onChange) {
                     ? { n: liveCards.length, sum: liveCards.reduce((n, x) => n + Number(x.remaining || 0), 0) }
                     : chip.key === 'refunds'   // CASHIER_PAID_SWAP_V1 — за выбранный период; сумма — возвращённое
                         ? { n: (state.refunds.totals && state.refunds.totals.n) || 0, sum: (state.refunds.totals && state.refunds.totals.refunded) || 0 }
-                        : (c[chip.key] || { n: 0, sum: 0 });
+                        : chip.key === 'unbilled'   // REFERRAL_BILL_V1 — все ждущие (список — первые 300); сумма — до скидок
+                            ? { n: (state.unbilled.totals && state.unbilled.totals.n) || 0, sum: (state.unbilled.totals && state.unbilled.totals.sum) || 0 }
+                            : (c[chip.key] || { n: 0, sum: 0 });
             const active = state.filter === chip.key;
             return h('button', {
                 type: 'button',
@@ -1202,32 +1224,14 @@ function refundCard(r, root, reload) {
     const asInv = { ...r, id: r.invoice_id };
     const buttons = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' } });
     if (r.visit_id) {
-        buttons.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
-            try {
-                const { data: visit } = await supabase.from('visits').select('*, patients(full_name, mrn, phone, date_of_birth)').eq('id', r.visit_id).maybeSingle();
-                if (!visit) { toast(tr('Визит не найден.'), 'fail'); return; }
-                const mod = await import('./visit-bill.js');
-                mod.openVisitBillModal(visit, reload);
-            } catch (e) { toast((e && e.message) || tr('Не удалось.'), 'fail'); }
-        } }, 'Открыть визит'));
+        buttons.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openVisitWindow(r.visit_id, reload) }, 'Открыть визит'));   // REFERRAL_BILL_V1 — одна дверь с «Ждут счёта»
     }
     if (r.status !== 'void' && r.status !== 'refunded' && canOfferLineFix(asInv)) {
         buttons.appendChild(h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openLineFix(asInv, { ...lineFixOptions(root), onChanged: async () => { await reload(); } }) }, 'Исправить услуги'));
     }
     if (r.can_rebill) {
         buttons.appendChild(h('button', { class: 'btn btn-primary btn-sm', type: 'button', 'data-rebill': String(r.invoice_id), onclick: () => openRebill(r, {
-            onBilled: async (invoice) => {
-                // Окно оплаты открывается в любом случае: сбой перерисовки кассы
-                // не должен оставить выставленный счёт без приёма денег.
-                try { await paint(root); } catch (e) { console.warn('[cashier] repaint:', e && e.message); }
-                const due = Math.max(Math.round((Number(invoice.total_amount) - Number(invoice.paid_amount || 0)) * 100) / 100, 0);
-                if (due > 0) {
-                    payModal(root, { ...invoice, patient_name: r.patient_name, mrn: r.mrn, phone: r.phone, date_of_birth: r.date_of_birth,
-                        gender: r.gender, patient_id: r.patient_id, payer_id: null }, due);
-                } else {
-                    toast(tr('Счёт выставлен — к оплате ничего.'), 'ok');
-                }
-            },
+            onBilled: payAfterBilling(root, r),   // REFERRAL_BILL_V1 — одно правило с «Ждут счёта»
         }) }, 'Выставить заново'));
     }
     return h('div', { class: 'card', 'data-refund-row': String(r.invoice_id), style: { padding: '12px 14px', display: 'grid', gap: '6px' } },
@@ -1246,6 +1250,86 @@ function refundCard(r, root, reload) {
         buttons);
 }
 
+// REFERRAL_BILL_V1 — «Открыть визит» из «Возвратов и отмен» и из «Ждут счёта»:
+// окно счёта визита (visit-bill.js); после правок там касса перечитывается.
+async function openVisitWindow(visitId, reload) {
+    try {
+        const { data: visit } = await supabase.from('visits').select('*, patients(full_name, mrn, phone, date_of_birth)').eq('id', visitId).maybeSingle();
+        if (!visit) { toast(tr('Визит не найден.'), 'fail'); return; }
+        const mod = await import('./visit-bill.js');
+        mod.openVisitBillModal(visit, reload);
+    } catch (e) { toast((e && e.message) || tr('Не удалось.'), 'fail'); }
+}
+
+// CASHIER_PAID_SWAP_V1 → REFERRAL_BILL_V1 — после «Выставить заново» и
+// «Выставить счёт»: касса перечитывает оба списка (paint → loadInvoices: счета
+// и «Ждут счёта») и сразу открывает окно оплаты выставленного счёта. Окно
+// оплаты открывается в любом случае: сбой перерисовки кассы не должен оставить
+// выставленный счёт без приёма денег. `r` — строка, из которой выставили:
+// пациент для окна оплаты.
+function payAfterBilling(root, r) {
+    return async (invoice) => {
+        try { await paint(root); } catch (e) { console.warn('[cashier] repaint:', e && e.message); }
+        const due = Math.max(Math.round((Number(invoice.total_amount) - Number(invoice.paid_amount || 0)) * 100) / 100, 0);
+        if (due > 0) {
+            payModal(root, { ...invoice, patient_name: r.patient_name, mrn: r.mrn, phone: r.phone, date_of_birth: r.date_of_birth,
+                gender: r.gender, patient_id: r.patient_id, payer_id: null }, due);
+        } else {
+            toast(tr('Счёт выставлен — к оплате ничего.'), 'ok');
+        }
+    };
+}
+
+// =============================================================================
+// REFERRAL_BILL_V1 (2026-09-29) — «ЖДУТ СЧЁТА».
+// =============================================================================
+// Владелец: «While we are seeing the patient as a doctor and refer to another
+// service or a doctor we cannot see them in the cashier's window. Which means
+// flow is broken.» Направление врача теперь само выставляет счёт; здесь —
+// страховка на всё, что осталось без счёта (снятая галочка, отказ, строки
+// плательщика, отмена счёта с «Оставить услуги»): пациенты, у которых
+// амбулаторные услуги записаны, а счёта нет. Касса выставляет счёт здесь же —
+// окном «Выставить заново» (openRebill) с заголовком «Выставить счёт ·
+// {пациент}» — и сразу принимает оплату. Строки, за которые пациенту вернули
+// деньги, в окне не отмечены: их снова выставляют только явным выбором (это
+// решение «Возвратов и отмен»). Сервер: cashier_unbilled (rpc/cashier.js).
+function paintUnbilled(el, root) {
+    const all = state.unbilled.rows || [];
+    const rows = filteredUnbilled();
+    el.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '0 0 10px' } },
+        'Услуги записаны, а счёта нет — за последние 30 дней и вперёд. Выставьте счёт и примите оплату.'));
+    if (!rows.length) {
+        el.appendChild(h('div', { class: 'empty' }, all.length ? 'Нет пациентов по этому поиску.' : 'Все услуги выставлены — ждущих счёта нет.'));
+        return;
+    }
+    const list = h('div', { style: { display: 'grid', gap: '10px' } });
+    for (const r of rows) list.appendChild(unbilledCard(r, root));
+    el.appendChild(list);
+}
+
+function unbilledCard(r, root) {
+    const names = Array.isArray(r.names) ? r.names : [];
+    const more = Math.max(0, (Number(r.lines_count) || 0) - names.length);
+    const services = (names.join(', ') || '—') + (more > 0 ? ' ' + trf('+{n} ещё', { n: more }) : '');
+    const buttons = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' } },
+        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openVisitWindow(r.visit_id, () => paint(root)) }, 'Открыть визит'),
+        h('button', { class: 'btn btn-primary btn-sm', type: 'button', 'data-bill-visit': String(r.visit_id), onclick: () => openRebill(r, {
+            title: trf('Выставить счёт · {patient}', { patient: r.patient_name || '—' }),
+            preselectRefunded: false,
+            onBilled: payAfterBilling(root, r),
+        }) }, 'Выставить счёт'));
+    return h('div', { class: 'card', 'data-unbilled-row': String(r.visit_id), style: { padding: '12px 14px', display: 'grid', gap: '6px' } },
+        h('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+            h('strong', null, r.patient_name || '—'),
+            r.mrn ? h('span', { class: 'muted' }, r.mrn) : null,
+            h('span', { class: 'muted' }, fmtDate(r.visit_date)),
+            h('span', { class: 'grow' }),
+            h('span', { class: 'num', style: { fontWeight: 700 } }, trf('{sum} сум', { sum: fmtPrice(r.total) }))),
+        h('div', { style: { fontSize: '12.5px' } }, services),
+        r.added_by ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, trf('добавил: {name}', { name: r.added_by })) : null,
+        buttons);
+}
+
 function filteredRows() {
     let rows = state.rows;
     if (state.filter === 'cancelled') rows = rows.filter(r => r.status === 'void' || r.status === 'refunded');
@@ -1259,6 +1343,18 @@ function filteredRows() {
             (r.phone || '').toLowerCase().includes(q));
     }
     return rows;
+}
+
+// REFERRAL_BILL_V1 — тот же поиск кассы по карточкам «Ждут счёта»: пациент,
+// карта, телефон (номера счёта у них ещё нет).
+function filteredUnbilled() {
+    const rows = state.unbilled.rows || [];
+    const q = state.search.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(r =>
+        (r.patient_name || '').toLowerCase().includes(q) ||
+        (r.mrn || '').toLowerCase().includes(q) ||
+        (r.phone || '').toLowerCase().includes(q));
 }
 
 function paintSearch(el, onChange) {
@@ -1277,8 +1373,10 @@ function paintSearch(el, onChange) {
         clearTimeout(tmr);
         tmr = setTimeout(() => { state.search = inp.value; onChange(); }, 200);
     });
-    const shown = filteredRows().length;
-    const total = state.counts ? state.counts.all.n : state.rows.length;
+    // REFERRAL_BILL_V1 — у «Ждут счёта» счёт идёт по карточкам, а не по счетам.
+    const unbilled = state.filter === 'unbilled';
+    const shown = unbilled ? filteredUnbilled().length : filteredRows().length;
+    const total = unbilled ? (state.unbilled.rows || []).length : (state.counts ? state.counts.all.n : state.rows.length);
     el.appendChild(h('div', { class: 'row', style: { alignItems: 'center', gap: '10px', margin: '2px 0 12px' } },
         inp,
         h('span', { class: 'grow' }),
@@ -1293,6 +1391,7 @@ function paintTable(el, root) {
     if (state.filter === 'deposits') { paintDeposits(el, root); return; }
     if (state.filter === 'cards') { paintCards(el, root); return; }
     if (state.filter === 'refunds') { paintRefunds(el, root); return; }   // CASHIER_PAID_SWAP_V1
+    if (state.filter === 'unbilled') { paintUnbilled(el, root); return; }   // REFERRAL_BILL_V1
     const rows = filteredRows();
     if (!rows.length) {
         el.appendChild(h('div', { class: 'empty' }, 'Нет счетов по выбранному фильтру.'));
@@ -2400,3 +2499,6 @@ export const __test_closeShiftModal = closeShiftModal;
 export const __test_paintRefunds = paintRefunds;   // CASHIER_PAID_SWAP_V1
 export const __test_loadRefunds = loadRefunds;
 export const __test_paintChips = paintChips;
+export const __test_loadInvoices = loadInvoices;   // REFERRAL_BILL_V1 — счета и «Ждут счёта» одним заходом
+export const __test_paintTable = paintTable;       // REFERRAL_BILL_V1
+export const __test_paintSearch = paintSearch;     // REFERRAL_BILL_V1
