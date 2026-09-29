@@ -13,6 +13,7 @@ import { constraintRefusal, errorBody } from '../services/server-message.js';   
 // эту дверь: работа над пациентом доказывает, что он пришёл.
 import { crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../services/crm/visit-status.js';
 import { tagInsertRefusal } from '../services/crm/config.js';   // CRM_HEAD_MERGE_TAGS_V1 (ревью M4)
+import { crmSourcesWrite, CrmSourcesError } from '../services/crm/sources.js';   // CRM_MULTI_SOURCE_V1
 import { roleWriteRefusal } from '../services/role-guard.js';   // ADMIN_ROWS_GRANTABLE_V1
 import { packageStampRefusal } from '../services/rpc/billing.js';   // PACKAGES_V1 (ревью I-3)
 // CRM_CALENDAR_MIRROR_V1 — строки записи и строки заявки — одна запись.
@@ -290,6 +291,16 @@ export function dbRoutes(db) {
     // берёт заявку себе или отпускает её в общую стопку (NULL).
     const assignRefusal = crmAssignRefusal(db, compiled.meta, req.body, req.user);
     if (assignRefusal) return res.status(403).json({ error: { code: 'forbidden', message: assignRefusal } });
+    // CRM_MULTI_SOURCE_V1 — источники заявки: сервер проверяет `sources` и сам
+    // ставит главный `source = sources[0]`; запись одного `source` сбрасывает
+    // `sources` в [source]. Тело правится на месте и собирается заново тем же
+    // compile() — те же права и отбор. Кривой `sources` — 400 словами.
+    try {
+      if (crmSourcesWrite(db, compiled.meta, req.body, req.user)) compiled = compile(req.body, req.user, { db });   // CRM_MULTI_SOURCE_V1
+    } catch (e) {
+      if (e instanceof CrmSourcesError) return res.status(400).json({ error: errorBody('bad_request', e) });   // CRM_MULTI_SOURCE_V1
+      throw e;
+    }
     if (compiled.meta.table === 'crm_request_tags' && compiled.meta.op === 'insert') {
       const tagRefusal = tagInsertRefusal(db, req.body && req.body.values);
       if (tagRefusal) return res.status(400).json({ error: { code: 'bad_request', message: tagRefusal } });
