@@ -25,7 +25,7 @@ export const REGISTRY = {
   // CRM_V1 (mig 044) — журнал обращений; конверсия в пациента выставляет
   // patient_id + status 'converted' (обычный /api/db, денег нет).
   crm_requests: {
-    read:  { roles: ALL_STAFF, columns: ['id','full_name','phone','source','note','status','patient_id','assigned_to','created_by','created_at','updated_at','service_id','scheduled_date','call_id'] },   // service_id: CRM_V3 (045); scheduled_date: CRM_V7 (047); call_id: CRM_CONFIG_V1 (077)
+    read:  { roles: ALL_STAFF, columns: ['id','full_name','phone','source','note','status','patient_id','assigned_to','created_by','created_at','updated_at','service_id','scheduled_date','call_id','sources'] },   // service_id: CRM_V3 (045); scheduled_date: CRM_V7 (047); call_id: CRM_CONFIG_V1 (077); sources: CRM_MULTI_SOURCE_V1 (231)
     // call_id is READ-ONLY on purpose: only lead-from-call.js writes it, and it
     // is the card's proof that a lead came from a real phone call. A screen
     // able to set it could claim a call that never happened.
@@ -35,8 +35,8 @@ export const REGISTRY = {
     // V3120_FIX — created_by ставит СЕРВЕР (stamps ниже): присланное значение
     // выдавало заявку за чужую. assigned_to «на другого» — только тем, кто видит
     // всю доску (routes/db.js crmAssignRefusal).
-    write: { insert: { roles: ['admin','registrar','callcenter'], columns: ['full_name','phone','source','note','status','assigned_to','service_id','patient_id','scheduled_date'] },   // patient_id: CRM_V5; scheduled_date: CRM_V7
-             update: { roles: ['admin','registrar','callcenter'], columns: ['full_name','phone','source','note','status','patient_id','assigned_to','service_id','scheduled_date'] },
+    write: { insert: { roles: ['admin','registrar','callcenter'], columns: ['full_name','phone','source','note','status','assigned_to','service_id','patient_id','scheduled_date','sources'] },   // patient_id: CRM_V5; scheduled_date: CRM_V7; sources: CRM_MULTI_SOURCE_V1
+             update: { roles: ['admin','registrar','callcenter'], columns: ['full_name','phone','source','note','status','patient_id','assigned_to','service_id','scheduled_date','sources'] },   // sources: CRM_MULTI_SOURCE_V1
              delete: { roles: ['admin'] } },
     filters: ['id','status','source','phone','full_name','created_at','patient_id','scheduled_date','assigned_to'],
     embed:   { patients: { table:'patients', fk:'patient_id', columns:['id','full_name','mrn'] },
@@ -61,6 +61,10 @@ export const REGISTRY = {
     // Удаление заявки от права не зависит: write.delete — только admin.
     scope: { column: 'assigned_to', allRoles: ['admin'], allGrant: 'crm.all', nullVisible: true },
     stamps: { created_by: { on: 'insert' } },   // V3120_FIX
+    // CRM_MULTI_SOURCE_V1 (mig 231) — источники заявки JSON-массивом, главный
+    // (source) — первый. Сервер проверяет sources и ставит source = sources[0]
+    // (routes/db.js → services/crm/sources.js crmSourcesWrite).
+    json: ['sources'],   // CRM_MULTI_SOURCE_V1
   },
 
   // CRM_MULTI_SERVICE_V1 (mig 057) — the services a call-centre request covers,
