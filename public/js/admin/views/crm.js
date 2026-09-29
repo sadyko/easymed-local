@@ -1526,7 +1526,7 @@ async function paint() {
         const srcChoices = [...SOURCES.map(([k]) => k), ...srcChosen.filter((k) => !SOURCES.some(([s]) => s === k))];
         const srcRow = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } });
         const srcBox = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } }, srcRow,
-            h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Можно выбрать несколько. Первый выбранный — главный, он отмечен звёздочкой.'));
+            h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Можно выбрать несколько. Первый выбранный — главный, он отмечен звёздочкой.'));
         function paintSrc() {
             clear(srcRow);
             for (const v of srcChoices) {

@@ -7220,7 +7220,7 @@ table.tbl tbody tr.bsync-tr-self:hover td { background: var(--primary-50); }
 .ld-form-notes p{ margin:0; }
 .ld-form-check{ display:flex; gap:8px; align-items:center; font-size:13.5px; }
 .ld-form-foot{ display:flex; align-items:center; gap:8px; padding-top:12px; border-top:1px solid var(--ink-100, #e6eaee); }
-.ld-subhead{ padding:12px 14px 6px; font-weight:600; font-size:13px; }
+.ld-subhead{ padding:12px 14px 6px; font-weight:600; font-size:13.5px; }
 .ld-add-foot{ padding:8px 10px 12px; border-top:1px solid var(--ink-100, #e6eaee); margin-top:8px; }
 .ld-more{ display:flex; justify-content:center; padding:8px 10px; border-top:1px solid var(--ink-100, #e6eaee); }
 .ld .card-header{ padding:10px 14px; }
