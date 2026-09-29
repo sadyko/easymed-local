@@ -1,10 +1,31 @@
 // V3120_PERF (мигр. 211) — номер карты выдаётся по индексу, а правило номера
 // то же: сравнивается с тем, что выдаёт тот же триггер БЕЗ индекса, на картах
 // своих, приехавших от соседа, введённых руками, прошлогодних и мусорных.
+//
+// MRN_BEYOND_99999_V1: миграция 232 заменила и триггер, и этот индекс (номер
+// теперь читается целиком после второго дефиса — см. 232 и 232.test.js).
+// Поэтому здесь база стоит РОВНО на 211: проверяется то, что сделала 211, а
+// не то, что лежит в схеме сегодня.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { openDb } from '../connection.js';
 import { migrate } from '../migrate.js';
+import { tmpDir } from '../../test-helpers/tmpdir.js';   // TEST_TMPDIR_V1 — папка уберётся сама
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+let upTo211 = null;
+function dirUpTo211() {
+  if (upTo211) return upTo211;
+  upTo211 = tmpDir('em-211-');
+  for (const f of fs.readdirSync(HERE)) {
+    const m = /^(\d{3,})_.*\.sql$/.exec(f);
+    if (m && Number(m[1]) <= 211) fs.copyFileSync(path.join(HERE, f), path.join(upTo211, f));
+  }
+  return upTo211;
+}
 
 const MAX_SQL = `SELECT COALESCE(MAX(CAST(substr(mrn, -5) AS INTEGER)), 0) + 1
                    FROM patients
@@ -12,7 +33,9 @@ const MAX_SQL = `SELECT COALESCE(MAX(CAST(substr(mrn, -5) AS INTEGER)), 0) + 1
 
 function seeded() {
   const db = openDb(':memory:');
-  migrate(db);
+  migrate(db, dirUpTo211());
+  assert.equal(db.prepare('SELECT name FROM schema_migrations ORDER BY name DESC LIMIT 1').get().name,
+    '211_v3120_mrn_seq_index.sql', 'база стоит ровно на 211');
   const yy = db.prepare("SELECT substr(strftime('%Y','now'), 3, 2) y").get().y;
   const prev = String((Number(yy) + 99) % 100).padStart(2, '0');
   const ins = db.prepare('INSERT INTO patients (full_name, mrn) VALUES (?, ?)');
