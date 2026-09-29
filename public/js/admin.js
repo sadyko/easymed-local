@@ -68,7 +68,7 @@ import { renderReport }       from './admin/views/report.js';
 import { renderLaboratory }   from './admin/views/laboratory.js?v=labwords8';   // LAB_STATS_V1 — third mode «Статистика» (usage counters, no money) on the shared LAB_HEAD_ONE_V1 head · LIS_MINDRAY_CODES_V1 — штамп · LIS_ANALYZER_LIST_V1 · LIS_DISCOVERY_FIX_V1 (экран)
 import { renderProcedures }   from './admin/views/procedures.js?v=unassigned2';
 import { renderQueue }       from './admin/views/queue.js?v=q7';   // QUEUE_BOARD_V1
-import { renderCrm }          from './admin/views/crm.js?v=rst1';   // CRM_V10 — поиск пациента: телефон (и короткая форма), дата рождения; CRM_SERVICE_FILTER_V1 — рейка категорий (тег поднят, иначе браузер оставит старую копию) · ROLES_SAVE_TRUTH_V1 — «Прослушать» по can_listen
+import { renderCrm }          from './admin/views/crm.js?v=msrc1';   // CRM_V10 — поиск пациента: телефон (и короткая форма), дата рождения; CRM_SERVICE_FILTER_V1 — рейка категорий (тег поднят, иначе браузер оставит старую копию) · ROLES_SAVE_TRUTH_V1 — «Прослушать» по can_listen · CRM_MULTI_SOURCE_V1 — несколько источников у заявки и в фильтре
 import { overdueTaskCount } from './admin/views/crm-tasks.js';   // CRM_DEDUP_SEARCH_TASKS_V1 — красный счётчик просроченных задач у пункта CRM
 import { renderDocsArchive }  from './admin/views/docs-archive.js?v=q3one';   // CLINICAL_DOCS_ARCHIVE_V1 — restored after concurrent clobber
 import { renderReportsHub }   from './admin/views/reports-hub.js?v=ru6';   // REPORTS_HUB_RU_V1 — «Отчёты» card grid + full-screen report builder

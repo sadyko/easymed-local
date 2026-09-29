@@ -57,6 +57,9 @@ import { readEnsureVisit } from '../ensure-visit-answer.js';
 // CRM_DEDUP_SEARCH_TASKS_V1 — задачи на карточке заявки (миграция 148): блок в
 // окне заявки, метка «задача: …» на карточке доски.
 import { crmTasksBlock, loadOpenTasks, nearestOpenTasks, isOverdue, nowIso } from './crm-tasks.js';
+// CRM_MULTI_SOURCE_V1 — несколько источников у заявки (миграция 231). Правило
+// чтения одно на экран и сервер: sources, иначе [source], иначе ['other'].
+import { leadSources, toggleLeadSource, leadHasAnySource, sourceTally, MAX_LEAD_SOURCES } from '../crm-sources.js';
 
 // CRM_CONFIG_V1 — воронка перестала быть константой.
 //
@@ -155,7 +158,8 @@ export function boardStaff(users) {
 
 // CRM_FILTERS_V1 — источник и период сужают доску. Живут в state, потому что
 // paintBody() перерисовывает только тело, без повторного запроса к базе.
-const state = { view: 'kanban', filter: 'all', search: '', rows: [], source: '', period: 'all',
+// CRM_MULTI_SOURCE_V1 — `sources`: отмеченные в фильтре источники (пусто = все).
+const state = { view: 'kanban', filter: 'all', search: '', rows: [], sources: [], period: 'all',
                 // CRM_PERIOD_CUSTOM_V1 — границы своего периода, 'YYYY-MM-DD'.
                 // Пустая граница = без ограничения с этой стороны: «с 01.08 и
                 // далее» — нормальный вопрос, и запрещать его незачем.
@@ -238,8 +242,36 @@ function inPeriod(r) {
     const d = new Date(r.created_at);
     return !isNaN(d) && d >= from;
 }
+// CRM_MULTI_SOURCE_V1 — фильтр отмечается по несколько: заявка видна, если
+// ХОТЯ БЫ ОДИН её источник отмечен (ничего не отмечено — видны все).
 function inSource(r) {
-    return !state.source || (r.source || 'other') === state.source;
+    return leadHasAnySource(r, state.sources);
+}
+// Подпись источника — из справочника (включая скрытые); ключа нет — сам ключ.
+function sourceLabel(k) {
+    return (SOURCE_RU && SOURCE_RU[k]) || k;
+}
+/** CRM_MULTI_SOURCE_V1 — все источники заявки через запятую, главный первым (список, Excel). */
+export function sourcesText(r) {
+    return leadSources(r).map(sourceLabel).join(', ');
+}
+/**
+ * Строки выгрузки Excel доски (первая — заголовки). Вынесены из exportExcel
+ * чистой функцией (CRM_MULTI_SOURCE_V1), чтобы колонки проверялись без файла.
+ * «Источник» — все источники заявки через запятую, главный первым;
+ * «Метки» — подписи через запятую (CRM_HEAD_MERGE_TAGS_V1).
+ */
+export function crmExcelRows(rows) {
+    return [
+        ['Имя', 'Телефон', 'Источник', 'Услуга', 'Дата записи', 'Комментарий', 'Статус', 'Метки', 'Пациент (MRN)', 'Дата'],
+        ...(Array.isArray(rows) ? rows : []).map((r) => [
+            r.full_name || '', r.phone || '', sourcesText(r),
+            r.services ? r.services.name : '', r.scheduled_date || '', r.note || '', (STATUS_RU[r.status] || [r.status])[0],
+            tagsOf(r).map((k) => (TAG_RU[k] || [k])[0]).join(', '),
+            r.patients ? (r.patients.mrn || r.patients.full_name || '') : '',
+            (r.created_at || '').replace('T', ' ').slice(0, 16),
+        ]),
+    ];
 }
 // CRM_HEAD_MERGE_TAGS_V1 — метки заявки и фильтр доски по метке.
 function tagsOf(r) {
@@ -649,15 +681,29 @@ async function paint() {
         // метку, а счётчики меток — выбранный источник: каждый ряд считается по
         // ОСТАЛЬНЫМ фильтрам, как и раньше.
         const byPeriod = byPeriodAll.filter(inTag);
-        const counts = {};
-        for (const r of byPeriod) { const k = r.source || 'other'; counts[k] = (counts[k] || 0) + 1; }
+        // CRM_MULTI_SOURCE_V1 — число на чипе: сколько заявок выборки имеют этот
+        // источник. Заявка с двумя источниками считается в обоих, поэтому сумма
+        // чипов бывает больше «Все · N» — а «Все» считает заявки.
+        const tally = sourceTally(byPeriod);
 
-        const srcRow = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } }, lbl('Источник'),
-            chip(!state.source, trf('Все · {n}', { n: byPeriod.length }), () => { state.source = ''; paintFilters(); paintBody(); }));
-        for (const [key, label] of SOURCES) {
-            if (!counts[key]) continue;
-            srcRow.appendChild(chip(state.source === key, label + ' · ' + counts[key],
-                () => { state.source = key; paintFilters(); paintBody(); }));
+        const srcRow = h('div', { class: 'row', 'data-crm-src-filter': '', style: { gap: '6px', flexWrap: 'wrap' } }, lbl('Источник'),
+            chip(!state.sources.length, trf('Все · {n}', { n: byPeriod.length }), () => { state.sources = []; paintFilters(); paintBody(); }));
+        // Видимые источники по порядку справочника, затем скрытые, которые стоят
+        // у заявок выборки (заявку со скрытым источником тоже надо уметь найти).
+        // Источник без заявок не рисуется — кроме отмеченного: иначе отметку
+        // нечем было бы снять.
+        const srcOrder = [...SOURCES.map(([k]) => k), ...[...tally.keys()].filter((k) => !SOURCES.some(([s]) => s === k))];
+        for (const key of srcOrder) {
+            const n = tally.has(key) ? tally.get(key).total : 0;
+            const on = state.sources.includes(key);
+            if (!n && !on) continue;
+            const btn = chip(on, sourceLabel(key) + ' · ' + n, () => {
+                state.sources = on ? state.sources.filter((k) => k !== key) : [...state.sources, key];
+                paintFilters(); paintBody();
+            });
+            btn.setAttribute('data-src-chip', key);
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+            srcRow.appendChild(btn);
         }
 
         const perRow = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } }, lbl('Период'));
@@ -830,7 +876,12 @@ async function paint() {
         // ведёт, на какой день записан. Состояние воронки меткой НЕ дублируется:
         // его несёт колонка, в которой карточка лежит.
         const tags = [];
-        tags.push(Tag(SOURCE_RU[r.source] || r.source || 'Источник не указан', { kind: '' }));
+        // CRM_MULTI_SOURCE_V1 — тег на КАЖДЫЙ источник заявки, главный первым.
+        for (const k of leadSources(r)) {
+            const t = Tag(sourceLabel(k), { kind: '' });
+            t.setAttribute('data-lead-source', k);
+            tags.push(t);
+        }
         if (r.patients) tags.push(Tag(r.patients.mrn ? trf('Карта {mrn}', { mrn: r.patients.mrn }) : 'Карта заведена', { kind: 'ok' }));
         if (r.users && r.users.full_name) tags.push(Tag(trf('Ведёт {name}', { name: r.users.full_name }), { kind: 'teal' }));
         if (r.scheduled_date) tags.push(Tag(trf('Запись на {d}', { d: fmtD(r.scheduled_date) }), { kind: 'purple' }));
@@ -1043,7 +1094,7 @@ async function paint() {
                 // список и доска показывают ОДНО И ТО ЖЕ поле, и разная запись
                 // в них читалась бы как разные номера.
                 h('td', { class: 'num' }, formatPhone(r.phone) || r.phone || '—'),
-                h('td', null, SOURCE_RU[r.source] || r.source || '—'),
+                h('td', { 'data-list-sources': '' }, sourcesText(r)),   // CRM_MULTI_SOURCE_V1 — все источники
                 h('td', null, r.services ? r.services.name : h('span', { class: 'muted' }, '—')),
                 h('td', { class: 'muted', style: { maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, r.note || '—'),
                 // CRM_HEAD_MERGE_TAGS_V1 — метки заявки.
@@ -1150,7 +1201,10 @@ async function paint() {
      */
     function leadHintLine({ source, when, service } = {}) {
         const bits = [];
-        const srcLabel = source ? ((SOURCE_RU && SOURCE_RU[source]) || source) : '';
+        // CRM_MULTI_SOURCE_V1 — источник приходит и списком (окно заявки):
+        // подписи через запятую, главный первым.
+        const srcKeys = Array.isArray(source) ? source : (source ? [source] : []);
+        const srcLabel = srcKeys.map(sourceLabel).join(', ');
         // Дату печатаем так же, как на карточке заявки: день.месяц.год.
         const raw = String(when || '').slice(0, 10).split('-').reverse().join('.');
         const day = raw.length === 10 ? raw : '';
@@ -1222,7 +1276,7 @@ async function paint() {
         // заявку не знает, и контекст пропал — регистратор, у которого открыто
         // несколько заявок, заводил карту, не видя, ЧЬЮ именно.
         const ctx = leadHintLine({
-            source:  prefill && prefill.source  !== undefined ? prefill.source  : r.source,
+            source:  prefill && prefill.source  !== undefined ? prefill.source  : ((r.source || r.sources) ? leadSources(r) : ''),   // CRM_MULTI_SOURCE_V1
             when:    prefill && prefill.when    !== undefined ? prefill.when    : r.created_at,
             service: prefill && prefill.service !== undefined ? prefill.service : (r.services && r.services.name),
         });
@@ -1460,20 +1514,42 @@ async function paint() {
         }, 'Не он? Заполните остальные поля — заявка создастся как новый лид.');
 
         // Источник — чипы вместо выпадающего списка: видно всё сразу, один клик.
-        let srcChosen = r ? (r.source || defaultSource()) : defaultSource();
+        // CRM_MULTI_SOURCE_V1 — ИСТОЧНИКОВ НЕСКОЛЬКО: «пришла из Instagram и по
+        // совету знакомых». Чип нажимается — источник встаёт в конец списка,
+        // нажимается снова — снимается; порядок выбора сохраняется, и ПЕРВЫЙ —
+        // главный (source, на него опираются старые места и соседи). Последний
+        // не снимается: у заявки хотя бы один источник. Выбор начинается с
+        // источников заявки по правилу чтения; у новой — с источника по
+        // умолчанию, как раньше. Предлагаются видимые источники плюс скрытые,
+        // что уже стоят у заявки (иначе снять скрытый было бы нечем).
+        let srcChosen = r ? leadSources(r) : [defaultSource()];
+        const srcChoices = [...SOURCES.map(([k]) => k), ...srcChosen.filter((k) => !SOURCES.some(([s]) => s === k))];
         const srcRow = h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } });
+        const srcBox = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } }, srcRow,
+            h('div', { class: 'muted', style: { fontSize: '12px' } }, 'Можно выбрать несколько. Первый выбранный — главный, он отмечен звёздочкой.'));
         function paintSrc() {
             clear(srcRow);
-            for (const [v, l] of SOURCES) {
-                const on = srcChosen === v;
+            for (const v of srcChoices) {
+                const on = srcChosen.includes(v);
+                // Главный (первый выбранный) — со звёздочкой: чипы стоят в
+                // порядке справочника, и порядок выбора иначе не был бы виден.
+                const main = on && srcChosen[0] === v;
                 srcRow.appendChild(h('button', {
-                    type: 'button',
+                    type: 'button', 'data-src-pick': v, 'aria-pressed': on ? 'true' : 'false',
+                    ...(main ? { 'data-src-main': '', title: 'Главный источник' } : {}),
                     style: { padding: '6px 13px', borderRadius: '999px', fontSize: '12.5px', fontFamily: 'inherit', cursor: 'pointer', fontWeight: on ? '700' : '500',
+                        display: 'inline-flex', alignItems: 'center', gap: '5px',
                         border: '1px solid ' + (on ? 'var(--teal-600, #00897b)' : 'var(--ink-200)'),
                         background: on ? 'var(--teal-600, #00897b)' : 'var(--white, #fff)',
                         color: on ? '#fff' : 'var(--ink-600, #3f4b52)' },
-                    onclick: () => { srcChosen = v; paintSrc(); },
-                }, l));
+                    onclick: () => {
+                        const t = toggleLeadSource(srcChosen, v);
+                        if (t.refused === 'last') toast(tr('Нужен хотя бы один источник.'), 'fail');
+                        else if (t.refused === 'max') toast(trf('У заявки может быть не больше {max} источников.', { max: MAX_LEAD_SOURCES }), 'fail');
+                        srcChosen = t.list;
+                        paintSrc();
+                    },
+                }, main ? Icon('Star', { size: 12 }) : (on ? Icon('Check', { size: 12 }) : null), sourceLabel(v)));
             }
         }
         paintSrc();
@@ -1991,7 +2067,9 @@ async function paint() {
             if (!phone && !linkedPatient) { toast('Укажите телефон.', 'fail'); return null; }
             // CRM_LINKS_V1 — дата берётся из строк услуг (см. primaryDate).
             const bookedDate = primaryDate();
-            const payload = { full_name: name, phone, source: srcChosen, note: noteInp.value.trim(), service_id: svcChosen || null, patient_id: linkedPatient ? linkedPatient.id : null, scheduled_date: bookedDate || null };
+            // CRM_MULTI_SOURCE_V1 — уходят ВСЕ источники в порядке выбора и главный
+            // (первый). Главный сервер всё равно поставит сам (source = sources[0]).
+            const payload = { full_name: name, phone, source: srcChosen[0], sources: srcChosen.slice(), note: noteInp.value.trim(), service_id: svcChosen || null, patient_id: linkedPatient ? linkedPatient.id : null, scheduled_date: bookedDate || null };
             // CRM_REASSIGN_V1 — ключ уходит на сервер ТОЛЬКО когда поле было
             // нарисовано. Оператор, правящий комментарий в своей заявке, не
             // должен отправлять «хозяин = такой-то»: поля он не видел, значения
@@ -2757,7 +2835,7 @@ async function paint() {
                 (contactRow = h('div', { class: 'row', style: { gap: '12px', alignItems: 'flex-start' } },
                     h('div', { style: { flex: 1 } }, field('Телефон', phoneWrap, { required: true })),
                     h('div', { style: { flex: 1 } }, field('Дата рождения', dobWrap)))),
-                field('Источник', srcRow),
+                field('Источник', srcBox),   // CRM_MULTI_SOURCE_V1 — чипы и подсказка «первый — главный»
                 // CRM_REASSIGN_V1 — «кто ведёт» стоит сразу за «откуда пришла»:
                 // это два факта о самой заявке, а всё ниже — о том, что пациенту
                 // нужно. Видно только администратору (см. объявление поля).
@@ -2899,21 +2977,25 @@ async function paint() {
                 })));
 
             // по источникам
-            const bySrc = new Map();
-            for (const r of rows) {
-                const k = r.source || 'other';
-                const s = bySrc.get(k) || { total: 0, conv: 0 };
-                s.total++; if (r.status === CONVERT_STATUS) s.conv++;
-                bySrc.set(k, s);
-            }
+            // CRM_MULTI_SOURCE_V1 — заявка считается в КАЖДОМ своём источнике
+            // (с двумя — в обоих), поэтому сумма строк бывает больше числа
+            // заявок. Строка «Всего» считает ЗАЯВКИ, а не складывает строки.
+            const bySrc = sourceTally(rows, (r) => r.status === CONVERT_STATUS);
             const tbody = h('tbody');
             [...bySrc.entries()].sort((a, b) => b[1].total - a[1].total).forEach(([src, s]) => {
-                tbody.appendChild(h('tr', null,
-                    h('td', null, SOURCE_RU[src] || src),
+                tbody.appendChild(h('tr', { 'data-src-row': src },
+                    h('td', null, sourceLabel(src)),
                     h('td', { class: 'num' }, String(s.total)),
-                    h('td', { class: 'num' }, String(s.conv)),
-                    h('td', { class: 'num', style: { fontWeight: 700 } }, (s.total ? Math.round(s.conv / s.total * 100) : 0) + '%')));
+                    h('td', { class: 'num' }, String(s.won)),
+                    h('td', { class: 'num', style: { fontWeight: 700 } }, (s.total ? Math.round(s.won / s.total * 100) : 0) + '%')));
             });
+            if (rows.length) {
+                tbody.appendChild(h('tr', { 'data-src-total': '', style: { borderTop: '2px solid var(--ink-200)' } },
+                    h('td', { class: 'cell-strong' }, 'Всего'),
+                    h('td', { class: 'num', style: { fontWeight: 700 } }, String(rows.length)),
+                    h('td', { class: 'num', style: { fontWeight: 700 } }, String(conv)),
+                    h('td', { class: 'num', style: { fontWeight: 700 } }, rate + '%')));
+            }
             bodyEl.appendChild(h('div', { class: 'card' }, h('table', { class: 'tbl' },
                 h('thead', null, h('tr', null,
                     h('th', null, 'Источник'), h('th', { style: { textAlign: 'right' } }, 'Заявок'),
@@ -2939,17 +3021,7 @@ async function paint() {
         if (!rows.length) { toast('Нет заявок для выгрузки.', 'fail'); return; }
         try {
             const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
-            const aoa = [
-                // CRM_HEAD_MERGE_TAGS_V1 — «Метки»: подписи через запятую.
-                ['Имя', 'Телефон', 'Источник', 'Услуга', 'Дата записи', 'Комментарий', 'Статус', 'Метки', 'Пациент (MRN)', 'Дата'],
-                ...rows.map(r => [
-                    r.full_name || '', r.phone || '', SOURCE_RU[r.source] || r.source || '',
-                    r.services ? r.services.name : '', r.scheduled_date || '', r.note || '', (STATUS_RU[r.status] || [r.status])[0],
-                    tagsOf(r).map((k) => (TAG_RU[k] || [k])[0]).join(', '),
-                    r.patients ? (r.patients.mrn || r.patients.full_name || '') : '',
-                    (r.created_at || '').replace('T', ' ').slice(0, 16),
-                ]),
-            ];
+            const aoa = crmExcelRows(rows);   // CRM_MULTI_SOURCE_V1 — строки собирает чистая функция
             const ws = XLSX.utils.aoa_to_sheet(aoa);
             ws['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 13 }, { wch: 34 }, { wch: 12 }, { wch: 16 }, { wch: 17 }];
             const wb = XLSX.utils.book_new();
