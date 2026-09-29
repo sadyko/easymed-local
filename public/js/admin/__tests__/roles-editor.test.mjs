@@ -141,16 +141,26 @@ const SAVED = {
   doctor:    { sections: ['patients', 'labs'],      levels: { patients: 'editor', labs: 'admin' } },
 };
 let selectCalls, updateCalls, lastUpdate, selectRespond, updateRespond;
+// ROLES_SAVE_TRUTH_V1 — «что у роли есть сейчас» (role_effective_grants). По
+// умолчанию сервер не называет ни одного ключа: экран рисует прежний вывод из
+// старых полей, и прежние проверки экрана остаются о своём. Своя правда — в
+// EFFECTIVE, сбой — в effectiveRespond.
+const EFFECTIVE = {};
+let effectiveRespond = null;
 function resetServer() {
   selectCalls = 0; updateCalls = 0; lastUpdate = null; toastMsg = null;
   confirmAnswer = true; confirmCalls = 0; lastConfirmText = null;
-  selectRespond = null; updateRespond = null;
+  selectRespond = null; updateRespond = null; effectiveRespond = null;
 }
 const roleOf = (desc) => (desc.filters.find((f) => f.col === 'role') || {}).val;
 
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const desc = opts && opts.body ? JSON.parse(opts.body) : null;
+  if (u.startsWith('/api/rpc/role_effective_grants')) {
+    if (effectiveRespond) return effectiveRespond(desc);
+    return jsonOk({ levels: EFFECTIVE[desc && desc.role] || {} });
+  }
   if (u.startsWith('/api/db') && desc && desc.table === 'role_permissions') {
     if (desc.op === 'select') {
       selectCalls++;
@@ -383,21 +393,18 @@ test('сохранение: кнопка заперта на время запр
   assert.strictEqual(roleButton(root, 'doctor').disabled, false);
   assert.strictEqual(checkboxes(root)[0].disabled, false);
   assert.strictEqual(lastUpdate.role, 'registrar');
-  // ROLES_MATRIX_V1 — в базу уходят grants по справочнику, а старые
-  // sections/levels ВЫВОДЯТСЯ из них: «Пациенты: изменение» открывает и кнопку
-  // регистрации, а окно «Очередь» — и отдельный маршрут очереди. Это те ключи,
-  // которыми живут прежние ворота, и они не должны остаться без ответа.
+  // ROLES_SAVE_TRUTH_V1 — ПУСТОЕ СОХРАНЕНИЕ НИЧЕГО НЕ МЕНЯЕТ. Прежде сюда
+  // уезжала матрица целиком, и старые поля выводились из неё заново: «Пациенты:
+  // изменение» дописывали registration, окно «Очередь» — queue. Роль, у
+  // которой их не было, получала их просто оттого, что её открыли и сохранили
+  // (а заодно — и всё, что экран вывел для неё из старых галочек). Теперь в
+  // grants — только записанное у роли (у этой — ничего), старые поля — те же.
+  // Как «Пациенты: Изменение» дописывает registration, когда раздел ТРОНУЛИ, —
+  // в тесте ROLES_SAVE_TRUTH_V1 ниже.
   const written = JSON.parse(lastUpdate.values.permissions);
-  assert.deepStrictEqual(written.sections.sort(), ['dashboard', 'patients', 'queue', 'registration']);
-  assert.deepStrictEqual(written.levels, { patients: 'editor', dashboard: 'viewer', registration: 'editor', queue: 'viewer' });
-  assert.strictEqual(written.grants.patients, 'edit');
-  assert.strictEqual(written.grants['patients.queue'], 'view');
-  // CALLCENTER_OPERATOR_V1 — РАЗДЕЛ, ЗАКРЫТЫЙ ЛИШЬ ВЫВОДОМ ИЗ СТАРОЙ ГАЛОЧКИ, В
-  // МАТРИЦУ НЕ ПИШЕТСЯ. Записанное «Нет» сервер читает как РЕШЕНИЕ и закрывает
-  // по нему всё, что внутри (grants.js), — а решения такого никто не принимал:
-  // раздела просто нет в старых полях. Раньше здесь стояло «inpatient: none».
-  assert.ok(!('inpatient' in written.grants), 'выведенное «Нет» уехало в базу решением');
-  assert.strictEqual(written.grants['inpatient.vitals'], 'none', 'строки раздела пишутся как были');
+  assert.deepStrictEqual(written.grants, {}, 'пустое сохранение записало ключи, которых не трогали');
+  assert.deepStrictEqual(written.sections, ['patients', 'dashboard']);
+  assert.deepStrictEqual(written.levels, { patients: 'editor', dashboard: 'viewer' });
   assert.ok(String(toastMsg).includes('Права сохранены'), toastMsg);
 });
 
@@ -642,7 +649,9 @@ test('явное «Нет» в grants не перебивается старым
     const saved = JSON.parse(lastUpdate.values.permissions);
     assert.equal(saved.grants['crm.dial'], 'none', 'сохранение вернуло роли отнятое право');
     assert.equal(saved.grants['crm.recording'], 'none', 'сохранение вернуло роли отнятое право');
-    assert.equal(saved.grants['crm.calls'], 'view', 'сохранение отняло то, что роль имела по старым полям');
+    // ROLES_SAVE_TRUTH_V1 — нетронутый незаписанный ключ не пишется: журнал
+    // регистратуре по-прежнему даёт сервер по списку ролей, а не запись.
+    assert.ok(!('crm.calls' in saved.grants), 'нетронутый ключ записан');
   } finally {
     SAVED.registrar.sections = ['patients', 'dashboard'];
     SAVED.registrar.levels = { patients: 'editor', dashboard: 'viewer' };
@@ -686,7 +695,9 @@ test('раздел, поставленный в «Нет», сохраняетс
     assert.equal(saved.grants.crm, 'none');
     assert.ok(!saved.sections.includes('custdev'), 'старая галочка закрытого раздела осталась выданной');
     assert.ok(!saved.sections.includes('crm'));
-    assert.equal(saved.grants.patients, 'edit', 'закрытие одного раздела задело соседний');
+    // ROLES_SAVE_TRUTH_V1 — соседний раздел не тронут и не записан.
+    assert.ok(!('patients' in saved.grants), 'закрытие одного раздела задело соседний');
+    assert.ok(saved.sections.includes('patients') && saved.levels.patients === 'editor', 'старые поля соседнего раздела тронуты');
   } finally {
     delete SAVED.callcenter;
   }
@@ -806,7 +817,10 @@ test('раздел, закрытый и снова открытый, возвр�
     findButtonByText(root, /Сохранить роль/).click();
     await tick();
     const saved = JSON.parse(lastUpdate.values.permissions);
-    assert.equal(saved.grants.crm, 'edit');
+    // ROLES_SAVE_TRUTH_V1 — открыли обратно: раздел вернулся к показанному и не
+    // пишется; его старый уровень остаётся тем, что записан.
+    assert.ok(!('crm' in saved.grants), 'раздел, вернувшийся к показанному, записан');
+    assert.equal(saved.levels.crm, 'admin', 'старый уровень раздела переписан выводом');
     assert.equal(saved.grants['crm.dial'], 'edit', 'сохранение записало обнулённую строку');
   } finally {
     delete SAVED.callcenter;
@@ -845,8 +859,10 @@ test('закрыть → открыть → снять право → закры
     await tick();
     const saved = JSON.parse(lastUpdate.values.permissions);
     assert.equal(saved.grants['custdev.rate'], 'none', 'в базу уехало право, которое администратор снял');
-    assert.equal(saved.grants['custdev.list'], 'view');
-    assert.equal(saved.grants.custdev, 'edit');
+    // ROLES_SAVE_TRUTH_V1 — нетронутые строки не пишутся: «Доска обзвона» и сам
+    // раздел вернулись к показанному.
+    assert.ok(!('custdev.list' in saved.grants), 'нетронутое окно записано');
+    assert.ok(!('custdev' in saved.grants), 'вернувшийся раздел записан');
   } finally {
     delete SAVED.callcenter;
   }
@@ -962,4 +978,79 @@ test('CASHIER_HEAD_V1: «Исправляет услуги в счёте» у к
     assert.equal(written.grants['cashier.lines'], 'edit');
     assert.ok(written.sections.includes('cashier'), 'касса осталась выдана');
   } finally { delete SAVED.cashier; }
+});
+
+// ---------------------------------------------------------------------------
+// ROLES_SAVE_TRUTH_V1 — ЭКРАН ПОКАЗЫВАЕТ ПРАВДУ, «СОХРАНИТЬ РОЛЬ» ПИШЕТ ТРОНУТОЕ.
+// ---------------------------------------------------------------------------
+// Экран рисовал у незаписанного ключа догадку из старой галочки раздела и
+// писал матрицу целиком: первое же «Сохранить роль» без правок выдавало
+// регистратуре измерения стационара, а оператору — чужие заявки. Теперь
+// незаписанный ключ с серверными воротами рисуется ответом сервера
+// (role_effective_grants), записанный — как записан, а в базу уходит только
+// записанное и тронутое. Сквозь настоящий сервер то же проверяет
+// roles-save-truth.test.mjs.
+test('ROLES_SAVE_TRUTH_V1: правда сервера перекрывает догадку экрана, записанное — всё; пустое сохранение пишет только записанное', async () => {
+  resetServer();
+  SAVED.registrar = { sections: ['patients', 'crm', 'beds'], levels: { patients: 'editor', crm: 'editor', beds: 'editor' }, grants: { 'inpatient.marks': 'view' } };
+  EFFECTIVE.registrar = { 'crm.all': 'none', 'inpatient.vitals': 'none', 'inpatient.marks': 'none', 'crm.calls': 'view' };
+  try {
+    const root = await render();
+    const chosen = (key) => ((radiosFor(root, key).find((n) => n.checked) || {}).attrs || {}).value;
+    assert.equal(chosen('crm.all'), 'none', 'догадка «раздел выдан — внутри всё» перебила сервер');
+    assert.equal(chosen('inpatient.vitals'), 'none');
+    assert.equal(chosen('inpatient.marks'), 'view', 'записанное у роли перебито ответом сервера');
+    assert.equal(chosen('crm'), 'edit', 'раздел выводится из старых полей, как и прежде');
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    assert.deepStrictEqual(saved.grants, { 'inpatient.marks': 'view' }, 'пустое сохранение записало то, чего не трогали');
+    assert.deepStrictEqual([...saved.sections].sort(), ['beds', 'crm', 'patients']);
+    assert.deepStrictEqual(saved.levels, { patients: 'editor', crm: 'editor', beds: 'editor' });
+  } finally {
+    SAVED.registrar = { sections: ['patients', 'dashboard'], levels: { patients: 'editor', dashboard: 'viewer' } };
+    delete EFFECTIVE.registrar;
+  }
+});
+
+// Вернуться к догадке экрана без ответа сервера значило бы вернуть ту самую
+// ошибку: поэтому без правды сервера роль только смотрят.
+test('ROLES_SAVE_TRUTH_V1: сервер не сказал, что у роли есть сейчас — только чтение, «Сохранить роль» заперта', async () => {
+  resetServer();
+  effectiveRespond = () => ({ ok: false, status: 500, json: async () => ({ error: { message: 'database is locked' } }) });
+  const root = await render();
+  const text = textOf(root);
+  assert.ok(text.includes('Не удалось узнать, какие права у роли сейчас, — сохранять нельзя. Обновите страницу.'), 'нет предупреждения');
+  assert.ok(text.includes('database is locked'), 'причина не показана');
+  const btn = findButtonByText(root, /Сохранить роль/);
+  assert.ok(btn && btn.disabled === true, '«Сохранить роль» не заперта');
+  btn.click();
+  await tick();
+  assert.strictEqual(updateCalls, 0, 'без правды сервера роль сохранилась — вернулась бы прежняя ошибка');
+  assert.ok(radios(root).length && radios(root).every((n) => n.disabled), 'переключатели живые');
+  assert.ok(tabBoxes(root).every((n) => n.disabled), 'галочки вкладок живые');
+});
+
+// Незаписанные окна раздела оболочка выводит из его старого ключа: сдвинь
+// правка раздела старый ключ — и окна сдвинутся следом, хотя экран показывал
+// их прежними. Поэтому тронутый раздел пишет свои окна такими, как их видно.
+test('ROLES_SAVE_TRUTH_V1: тронутый раздел пишет свои окна такими, как их видно; старые поля следуют выводу только там, где он сдвинулся', async () => {
+  resetServer();
+  SAVED.lab = { sections: ['labs', 'patients', 'dashboard'], levels: { labs: 'editor', patients: 'viewer', dashboard: 'viewer' } };
+  try {
+    const root = await render();
+    roleButton(root, 'lab').click();
+    await tick();
+    pick(root, 'patients', 'edit');
+    findButtonByText(root, /Сохранить роль/).click();
+    await tick();
+    const saved = JSON.parse(lastUpdate.values.permissions);
+    assert.equal(lastUpdate.role, 'lab');
+    assert.deepStrictEqual(saved.grants, { patients: 'edit', 'patients.list': 'view', 'patients.queue': 'view', 'patients.calendar': 'view' },
+      'окна раздела не записаны такими, какими их видно — «Записи» вывелись бы из нового «editor» в «Изменение»');
+    assert.ok(saved.sections.includes('registration'), '«Пациенты: Изменение» не открыли регистрацию');
+    assert.ok(!saved.sections.includes('queue'), 'очередь дописана, хотя её вывод не сдвинулся');
+    assert.equal(saved.levels.patients, 'editor');
+    assert.equal(saved.levels.labs, 'editor', 'чужой раздел тронут');
+  } finally { delete SAVED.lab; }
 });

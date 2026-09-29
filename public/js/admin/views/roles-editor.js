@@ -55,7 +55,7 @@ import { levelsFor, openAction, actionFor, levelFromActions, actionsFromLevel }
 // ROLES_MATRIX_V1 — матрица «раздел → окно → действие» по общему справочнику
 // прав (shared/permission-catalog.js). Старые поля sections/levels выводятся
 // из неё при сохранении, чтобы прежние ворота продолжали работать.
-import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm6';
+import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm7';   // ROLES_SAVE_TRUTH_V1 — сбор с «показанным при открытии»
 // V3121_ROLES — «Проверьте права этой роли»: «Просмотр» от старого экрана «Роли» (мигр. 215).
 import { roleReviewNotice } from './roles-review.js';
 
@@ -194,6 +194,8 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         baseline: null,   // снимок на момент загрузки; null = данных нет
         busy: false,      // идёт сохранение — форма и переключатель заперты
         openSections: new Set(),   // ROLES_ACCORDION_V1 — раскрытые разделы матрицы, живут пока открыт экран
+        initialGrants: null,   // ROLES_SAVE_TRUTH_V1 — показанное при открытии роли: пишется только отличное от него
+        truthLost: false,      // ROLES_SAVE_TRUTH_V1 — сервер не сказал, что у роли есть сейчас: только чтение
     };
 
     const roleBtns   = h('div', { class: 'segmented roles-tabs', role: 'group', 'aria-label': 'Выберите роль' });
@@ -253,6 +255,13 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         return snapshot(sections, levels, patient_tabs, grants);
     }
 
+    // ROLES_SAVE_TRUTH_V1 — то, что сейчас стоит на переключателях матрицы.
+    function shownGrants() {
+        const out = {};
+        for (const [key, ctl] of Object.entries(state.grantControls || {})) out[key] = ctl.value();
+        return out;
+    }
+
     // Одно место, где состояние экрана превращается в то, что уходит в базу —
     // и «изменено ли», и «что сохранить» считаются по нему, иначе они разойдутся.
     function collect() {
@@ -264,11 +273,17 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         // (closedSections). «Нет», выведенное из старой галочки, ничего не
         // отнимает и само в матрицу не пишется — иначе сервер прочитал бы его
         // как решение. Подробности — в collectGrants.
+        // ROLES_SAVE_TRUTH_V1 — и третий список: показанное при открытии
+        // (initialGrants). В grants уходит только записанное у роли и тронутое
+        // здесь; старые поля выводятся из ВСЕХ показанных значений, но меняются
+        // только там, где их вывод сдвинулся от открытия.
+        const initial = state.initialGrants || null;
         const grants = collectGrants(state.grantControls || {}, {
             explicit: state.explicitGrants || {},
             closed: state.closedSections,
+            initial,
         });
-        const { sections, levels } = legacyFromGrants(grants, state.prevLegacy || {});
+        const { sections, levels } = legacyFromGrants(shownGrants(), state.prevLegacy || {}, initial);
         // ROLE_SAVE_PRESERVE_V1 — вкладки, которых этот экран не рисует,
         // переносим как есть: иначе сохранение роли молча стирало бы настройку,
         // сделанную где-то ещё.
@@ -380,6 +395,7 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         state.controls = {};
         state.grantControls = {};
         state.prevLegacy = {};
+        state.initialGrants = null;   // ROLES_SAVE_TRUTH_V1
         state.tabControls = {};
         state.otherTabs = {};
         paintActive();
@@ -388,6 +404,11 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         // Строка загрузки заканчивается многоточием — правило рекомендаций и
         // единственный способ отличить «ещё грузится» от «пусто».
         matrixWrap.appendChild(h('div', { class: 'roles-state', role: 'status' }, 'Загрузка…'));
+
+        // ROLES_SAVE_TRUTH_V1 — ЧТО У РОЛИ ЕСТЬ СЕЙЧАС спрашивается у сервера
+        // вместе со строкой роли: по ключам, которые роль не настраивала, решает
+        // не экран, а ворота сервера (server/services/rpc/roles-effective.js).
+        const truthReq = supabase.rpc('role_effective_grants', { role: key });
 
         let perms = null;   // null = не загрузилось; {} = сервер ответил
         let failure = null;
@@ -405,8 +426,20 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         } catch (e) {
             failure = (e && e.message) || String(e);
         }
+        const truth = await readTruth(truthReq);
         if (key !== state.selected) return;   // пока грузили, переключились — ответ устарел
-        if (failure) paintError(failure); else paintMatrix(perms);
+        if (failure) paintError(failure); else paintMatrix(perms, truth);
+    }
+
+    // ROLES_SAVE_TRUTH_V1 — ответ role_effective_grants или причина, почему его нет.
+    async function readTruth(req) {
+        try {
+            const { data, error } = await req;
+            if (!error && data && data.levels && typeof data.levels === 'object') return { levels: data.levels, why: '' };
+            return { levels: null, why: (error && error.message) || '' };
+        } catch (e) {
+            return { levels: null, why: (e && e.message) || String(e) };
+        }
     }
 
     // Экран прав НИКОГДА не показывает пустую матрицу вместо ошибки: пустая
@@ -429,7 +462,7 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         ));
     }
 
-    function paintMatrix(perms) {
+    function paintMatrix(perms, truth = { levels: null, why: '' }) {
         clear(matrixWrap);
         state.controls = {};
         const granted = new Set(perms.sections || []);
@@ -440,6 +473,13 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         // жив после clear() и уносил с собой состояние прошлого рендера.
         const saveBtn = h('button', { class: 'btn btn-primary btn-sm', type: 'button' }, 'Сохранить роль');
         saveBtn.addEventListener('click', () => save(saveBtn));
+
+        // ROLES_SAVE_TRUTH_V1 — сервер не сказал, что у роли есть сейчас.
+        // Прежняя догадка экрана — это и есть ошибка, которую чинит этот
+        // выпуск: роль открывается ТОЛЬКО ДЛЯ ЧТЕНИЯ, «Сохранить роль» заперта.
+        const truthLost = !(truth && truth.levels);
+        state.truthLost = truthLost;
+        if (truthLost) saveBtn.disabled = true;
 
         // ADMIN_ROWS_GRANTABLE_V1 — роль, которую этот человек менять не может.
         const cur0 = customOf(state.selected);
@@ -455,6 +495,14 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
                 lockWhy ? h('span', { class: 'muted roles-locked-why' }, Icon('Lock', { size: 13 }), ' ', lockWhy) : saveBtn,
             ),
         );
+
+        if (truthLost) {
+            card.appendChild(h('div', { class: 'card roles-error', role: 'alert' },
+                h('div', { class: 'roles-error-head' },
+                    h('span', { class: 'roles-error-ico' }, Icon('Warning', { size: 16 })),
+                    h('strong', null, 'Не удалось узнать, какие права у роли сейчас, — сохранять нельзя. Обновите страницу.')),
+                truth && truth.why ? h('p', { class: 'roles-error-why' }, String(truth.why)) : null));
+        }
 
         // CUSTOM_ROLES_V1 — у своей роли видно, на чём она стоит, и её можно
         // отключить: удаления нет намеренно (людей с этой ролью нельзя оставить
@@ -538,7 +586,12 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         // он читался бы как запрет, которого администратор не ставил.
         state.prevLegacy = { sections: perms.sections || [], levels: perms.levels || {} };
         state.explicitGrants = (perms.grants && typeof perms.grants === 'object') ? perms.grants : {};
-        const grants = { ...grantsFromLegacy(perms), ...(perms.grants || {}) };
+        // ROLES_SAVE_TRUTH_V1 — ПРАВДА СЕРВЕРА ПЕРЕКРЫВАЕТ ДОГАДКУ, ЗАПИСАННОЕ — ВСЁ.
+        // Вывод из старых полей («раздел выдан — внутри всё») остаётся только
+        // там, где серверных ворот нет: у разделов и окон-маршрутов оболочки.
+        // У ключа с воротами экран показывает то, что ворота дают роли сейчас,
+        // — оператору «Видит все заявки: Нет», регистратуре «Измерения: Нет».
+        const grants = { ...grantsFromLegacy(perms), ...(truthLost ? {} : truth.levels), ...(perms.grants || {}) };
         card.appendChild(h('div', { class: 'roles-group' },
             h('span', { class: 'roles-group-name' }, 'Разделы, окна и действия'),
             h('span', { class: 'roles-group-lvl' }, 'Нет · Просмотр · Изменение · Удаление'),
@@ -553,6 +606,9 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         state.grantControls = paintCatalog(matrixHost, grants, {
             onAnyChange: paintReach, openSections: state.openSections, closedSections: state.closedSections,
         });
+        // ROLES_SAVE_TRUTH_V1 — «показанное при открытии» — ровно то, что стоит
+        // на переключателях: collectGrants пишет только отличное от него.
+        state.initialGrants = shownGrants();
 
         // PATIENT_TAB_ACCESS_V1 — вкладки карты пациента. Владелец: «we need to
         // add a patients card tabs to the view/edit/delete option». Отдельная
@@ -578,7 +634,8 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         state.baseline = current();
         // ADMIN_ROWS_GRANTABLE_V1 — нельзя менять — значит и нечего отмечать:
         // гасим всё, как на время записи (setBusy), только без записи.
-        if (lockWhy) {
+        // ROLES_SAVE_TRUTH_V1 — и без правды сервера тоже.
+        if (lockWhy || truthLost) {
             for (const ctl of Object.values(state.grantControls || {})) ctl.disable(true);
             for (const ctl of Object.values(state.tabControls)) {
                 ctl.view.disabled = true;
@@ -700,7 +757,7 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
     }
 
     async function save(saveBtn) {
-        if (state.busy) return;
+        if (state.busy || state.truthLost) return;   // ROLES_SAVE_TRUTH_V1 — без правды сервера не сохраняем
         const { sections, levels, patient_tabs, grants } = collect();
         const permissions = JSON.stringify({ sections, levels, patient_tabs, grants });
         const role = state.selected;
@@ -713,6 +770,13 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
                 .update({ permissions }).eq('role', role).select().single();
             if (error) throw new Error(error.message || String(error));
             state.baseline = snapshot(sections, levels, patient_tabs, grants);
+            // ROLES_SAVE_TRUTH_V1 — сохранённое стало тем, что у роли есть
+            // сейчас: записанное — записано, показанное — «при открытии». Иначе
+            // следующее «Сохранить» сравнивало бы с тем, что было ДО этой записи.
+            state.explicitGrants = { ...grants };
+            state.initialGrants = shownGrants();
+            state.prevLegacy = { sections, levels };
+            if (state.closedSections) state.closedSections.clear();
             toast(tr('Права сохранены — сотрудники увидят их при следующем входе.') + ' · ' + (customOf(role) ? customOf(role).name : tr(roleLabel(role))), 'ok');
         } catch (e) {
             // В сообщении есть следующий шаг, а не только беда.
