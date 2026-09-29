@@ -180,12 +180,30 @@ test('скидка группы пациента — пол: меньшая ру
   assert.equal(inv.discount_amount, 155000);
 });
 
+// REFERRAL_BILL_V1 (2026-09-29) — врач теперь выставляет счёт по визиту сам
+// (решение владельца), поэтому примером роли, которой сервер откажет, служит
+// медсестра; а врачу сервер откажет в ручной скидке — и этот отказ тоже
+// обязан дойти до экрана.
 test('отказ сервера возвращается экрану, а не глотается', async () => {
+  seed();
+  USER = { id: 1, role: 'nurse', extra_roles: [] };
+  try {
+    const out = await invoicePickerLines({ visitId: 40, lines: LINES, pct: 0, promo: null });
+    assert.ok(out.error, 'медсестра не выставляет счета — сервер обязан отказать');
+    assert.match(out.error.message, /Вашей роли это действие недоступно/);
+    assert.equal(DB.prepare('SELECT COUNT(*) c FROM invoices').get().c, 0);
+  } finally {
+    USER = { id: 1, role: 'registrar', extra_roles: [] };
+  }
+});
+
+test('REFERRAL_BILL_V1: врачу с ручной скидкой сервер отказывает — отказ доходит до экрана', async () => {
   seed();
   USER = { id: 1, role: 'doctor', extra_roles: [] };
   try {
-    const out = await invoicePickerLines({ visitId: 40, lines: LINES, pct: 0, promo: null });
-    assert.ok(out.error, 'врач не выставляет счета — сервер обязан отказать');
+    const out = await invoicePickerLines({ visitId: 40, lines: LINES, pct: 10, promo: null });
+    assert.ok(out.error, 'врачу со скидкой сервер обязан отказать');
+    assert.equal(out.error.message, 'Скидку в счёт ставят касса, регистратура или администратор.');
     assert.equal(DB.prepare('SELECT COUNT(*) c FROM invoices').get().c, 0);
   } finally {
     USER = { id: 1, role: 'registrar', extra_roles: [] };
