@@ -228,6 +228,16 @@ test('расхождение в файле вне services/rpc — красны�
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
+// ROLES_SAVE_TRUTH_V1 (ревью M1) — экран «Роли» не пишет «семьёй» строки, чьи
+// ворота — список ролей в коде: по незаписанному такому ключу решают роли, а не
+// старые поля, и запись показанного уровня только сужала бы (регистратура
+// теряла добавление услуги у койки). Экран узнаёт их по флагу справочника
+// `roleListGate`; флаг обязан совпадать с картой ворот ключ в ключ.
+test('флаг roleListGate в справочнике — ровно ключи GATE_FALLBACK', () => {
+  const flagged = [...BY_KEY.values()].filter((r) => r.roleListGate).map((r) => r.key).sort();
+  assert.deepEqual(flagged, Object.keys(GATE_FALLBACK).sort());
+});
+
 test('ограничение по владельцу из реестра (scope.allGrant): каждый ключ — строкой карты с теми же ролями', async () => {
   const { REGISTRY } = await import('../db/schema-registry.js');
   let n = 0;

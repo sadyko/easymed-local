@@ -85,6 +85,14 @@ export function levelAllows(have, need) {
  *                    `grantColumns` плитки (db/write-grant.js);
  *   `grantOps`     — у плитки: какие операции над таблицей открывает право,
  *                    если не все (ключ API создаёт только администратор).
+ *
+ * ROLES_SAVE_TRUTH_V1 (ревью M1) — `roleListGate`: ворота строки — список
+ * ролей в коде (server/services/gate-fallbacks.js GATE_FALLBACK, тест сверяет
+ * ключ в ключ). По незаписанному такому ключу решают роли основы, а не старые
+ * поля роли, поэтому экран «Роли» не пишет его вместе с разделом, чей старый
+ * ключ сдвинули (roles-matrix.js movedFamilyKeys): запись показанного уровня
+ * («все ворота уровня») только сузила бы — регистратура теряла добавление
+ * услуги у койки.
  */
 export const CATALOG = [
   {
@@ -121,11 +129,11 @@ export const CATALOG = [
     // запись» ниже. Администратор, выдавший «Звонки и записи», ждал, что
     // оператор будет слушать, — и получал «прослушивание не работает».
     windows: [
-      { key: 'crm.calls', label: 'Журнал звонков', desc: 'Журнал звонков этого человека в карточке заявки: кто звонил, когда и сколько говорили. Слушать записи — отдельная строка «Прослушать запись».', levels: ['none', 'view'], enforced: 'rpc:crm_lead_calls' },
+      { key: 'crm.calls', label: 'Журнал звонков', desc: 'Журнал звонков этого человека в карточке заявки: кто звонил, когда и сколько говорили. Слушать записи — отдельная строка «Прослушать запись».', levels: ['none', 'view'], roleListGate: true, enforced: 'rpc:crm_lead_calls' },
     ],
     actions: [
-      { key: 'crm.dial',      label: 'Позвонить пациенту',        desc: 'Набор номера из программы: звонок уходит с ТРУБКИ САМОГО сотрудника (внутренний номер берётся из сессии), поэтому разбор по операторам считает его этому человеку.', levels: ['none', 'edit'], levelDesc: { edit: 'Звонит пациенту из заявки, карты и очереди.' }, enforced: 'rpc:telephony_dial' },
-      { key: 'crm.recording', label: 'Прослушать запись',         desc: 'Запись разговора — это голос пациента: видеть строку в журнале и слушать сам разговор это разные права.', levels: ['none', 'edit'], levelDesc: { edit: 'Открывает и слушает записи разговоров.' }, enforced: 'rpc:telephony_call_recording' },
+      { key: 'crm.dial',      label: 'Позвонить пациенту',        desc: 'Набор номера из программы: звонок уходит с ТРУБКИ САМОГО сотрудника (внутренний номер берётся из сессии), поэтому разбор по операторам считает его этому человеку.', levels: ['none', 'edit'], levelDesc: { edit: 'Звонит пациенту из заявки, карты и очереди.' }, roleListGate: true, enforced: 'rpc:telephony_dial' },
+      { key: 'crm.recording', label: 'Прослушать запись',         desc: 'Запись разговора — это голос пациента: видеть строку в журнале и слушать сам разговор это разные права.', levels: ['none', 'edit'], levelDesc: { edit: 'Открывает и слушает записи разговоров.' }, roleListGate: true, enforced: 'rpc:telephony_call_recording' },
       // Проверка — ОКНО заведения карты в оболочке (permissions.js
       // canCreatePatient), и приставка говорит об этом прямо: сервер ключа
       // `crm.convert` не читает. Его опора другая и не настраиваемая — реестр
@@ -137,7 +145,7 @@ export const CATALOG = [
       // и прежний ключ `registration`, и оболочка спрашивает новый ТОЛЬКО как
       // прибавку — иначе первое же сохранение роли на этом экране оставило бы
       // без карт всех, у кого работает прежний ключ.
-      { key: 'crm.convert',   label: 'Завести пациента из заявки', desc: 'Превратить обращение в карту пациента, не открывая регистратуру. Открывает то же окно, что «+ Новый пациент»; сохранить карту сервер разрешает регистратуре, колл-центру и администратору.', levels: ['none', 'edit'], levelDesc: { edit: 'Заводит карту пациента из заявки.' }, enforced: 'client:canCreatePatient' },
+      { key: 'crm.convert',   label: 'Завести пациента из заявки', desc: 'Превратить обращение в карту пациента, не открывая регистратуру. Открывает то же окно, что «+ Новый пациент»; сохранить карту сервер разрешает регистратуре, колл-центру и администратору.', levels: ['none', 'edit'], levelDesc: { edit: 'Заводит карту пациента из заявки.' }, roleListGate: true, enforced: 'client:canCreatePatient' },
       // CRM_HEAD_MERGE_TAGS_V1 (2026-09-25) — «РУКОВОДИТЕЛЬ КОЛЛ-ЦЕНТРА» ГАЛОЧКОЙ.
       //
       // Оператор видит свои заявки и ничьи (CRM_OWNERSHIP_V1), и до сих пор
@@ -149,7 +157,7 @@ export const CATALOG = [
       // дубля (rpc/crm-leads.js), показатели звонков (telephony_operator_stats),
       // слияние дублей (crm_merge_leads) и отчёт колл-центра. Удалять заявки
       // по-прежнему может только администратор.
-      { key: 'crm.all',       label: 'Видит все заявки и передаёт их', desc: 'Руководитель колл-центра: видит все карточки, а не только свои и ничьи, передаёт заявку другому оператору, видит звонки каждого оператора и просроченные задачи всей команды, объединяет дубли. Удалять заявки может только администратор.', levels: ['none', 'edit'], levelDesc: { edit: 'Видит и передаёт все заявки, объединяет дубли.' }, enforced: 'rpc:telephony_operator_stats' },
+      { key: 'crm.all',       label: 'Видит все заявки и передаёт их', desc: 'Руководитель колл-центра: видит все карточки, а не только свои и ничьи, передаёт заявку другому оператору, видит звонки каждого оператора и просроченные задачи всей команды, объединяет дубли. Удалять заявки может только администратор.', levels: ['none', 'edit'], levelDesc: { edit: 'Видит и передаёт все заявки, объединяет дубли.' }, roleListGate: true, enforced: 'rpc:telephony_operator_stats' },
     ],
   },
   // CALLCENTER_OPERATOR_V1 — Cust Dev звонит ТОТ ЖЕ оператор, и до сих пор это
@@ -203,18 +211,18 @@ export const CATALOG = [
     levels: ['none', 'view'],
     levelDesc: { view: 'Открывает раздел с теми окнами, что отмечены ниже.' },
     windows: [
-      { key: 'inpatient.requests', label: 'Заявки',         desc: 'Заявки на госпитализацию: кого и куда класть.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Создаёт заявку и размещает на койку.' }, enforced: 'rpc:admission_order_create' },
-      { key: 'inpatient.patients', label: 'Пациенты',       desc: 'История болезни лежащего пациента: обзор, осмотры, документы.', levels: ['none', 'view'], enforced: 'rpc:case_overview' },
-      { key: 'inpatient.beds',     label: 'Койки',          desc: 'Коечный фонд: кто где лежит, свободные и на уборке.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Меняет состояние койки.' }, enforced: 'rpc:bed_set_status' },
-      { key: 'inpatient.history',  label: 'Госпитализации', desc: 'Журнал госпитализаций по образцу клиники, с выгрузкой в Excel.', levels: ['none', 'view'], enforced: 'rpc:admissions_register' },
+      { key: 'inpatient.requests', label: 'Заявки',         desc: 'Заявки на госпитализацию: кого и куда класть.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Создаёт заявку и размещает на койку.' }, roleListGate: true, enforced: 'rpc:admission_order_create' },
+      { key: 'inpatient.patients', label: 'Пациенты',       desc: 'История болезни лежащего пациента: обзор, осмотры, документы.', levels: ['none', 'view'], roleListGate: true, enforced: 'rpc:case_overview' },
+      { key: 'inpatient.beds',     label: 'Койки',          desc: 'Коечный фонд: кто где лежит, свободные и на уборке.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Меняет состояние койки.' }, roleListGate: true, enforced: 'rpc:bed_set_status' },
+      { key: 'inpatient.history',  label: 'Госпитализации', desc: 'Журнал госпитализаций по образцу клиники, с выгрузкой в Excel.', levels: ['none', 'view'], roleListGate: true, enforced: 'rpc:admissions_register' },
     ],
     actions: [
-      { key: 'inpatient.prescriptions', label: 'Назначения',  desc: 'Лист назначений: препараты, дозы, время.', levels: ['none', 'view', 'edit', 'delete'], levelDesc: { view: 'Видит лист назначений.', edit: 'Добавляет и правит назначения.', delete: 'Отменяет назначение.' }, enforced: 'rpc:treatment_orders' },
-      { key: 'inpatient.marks',         label: 'Отметки о введении', desc: 'Медсестра отмечает, что препарат дан.', levels: ['none', 'view', 'edit', 'delete'], levelDesc: { view: 'Видит отметки.', edit: 'Ставит отметку «дано».', delete: 'Снимает любую отметку, в том числе чужую.' }, enforced: 'rpc:treatment_mark' },
-      { key: 'inpatient.vitals',        label: 'Измерения',   desc: 'Температура, давление, пульс, сатурация.', levels: ['none', 'view', 'edit', 'delete'], levelDesc: { view: 'Видит измерения.', edit: 'Записывает измерение.', delete: 'Удаляет ошибочное измерение.' }, enforced: 'rpc:vitals' },
-      { key: 'inpatient.reviews',       label: 'Осмотры',     desc: 'Дневник осмотров лечащего врача.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Читает осмотры.', edit: 'Пишет и публикует осмотр.' }, enforced: 'rpc:inpatient_reviews' },
-      { key: 'inpatient.services',      label: 'Услуги в стационаре', desc: 'Услуги и процедуры, добавленные лежащему пациенту.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит список услуг.', edit: 'Добавляет услугу и отмечает выполнение.' }, enforced: 'rpc:admission_services' },
-      { key: 'inpatient.discharge',     label: 'Выписка',     desc: 'Выписать пациента из стационара.', levels: ['none', 'edit'], levelDesc: { edit: 'Выписывает.' }, enforced: 'rpc:discharge' },
+      { key: 'inpatient.prescriptions', label: 'Назначения',  desc: 'Лист назначений: препараты, дозы, время.', levels: ['none', 'view', 'edit', 'delete'], levelDesc: { view: 'Видит лист назначений.', edit: 'Добавляет и правит назначения.', delete: 'Отменяет назначение.' }, roleListGate: true, enforced: 'rpc:treatment_orders' },
+      { key: 'inpatient.marks',         label: 'Отметки о введении', desc: 'Медсестра отмечает, что препарат дан.', levels: ['none', 'view', 'edit', 'delete'], levelDesc: { view: 'Видит отметки.', edit: 'Ставит отметку «дано».', delete: 'Снимает любую отметку, в том числе чужую.' }, roleListGate: true, enforced: 'rpc:treatment_mark' },
+      { key: 'inpatient.vitals',        label: 'Измерения',   desc: 'Температура, давление, пульс, сатурация.', levels: ['none', 'view', 'edit', 'delete'], levelDesc: { view: 'Видит измерения.', edit: 'Записывает измерение.', delete: 'Удаляет ошибочное измерение.' }, roleListGate: true, enforced: 'rpc:vitals' },
+      { key: 'inpatient.reviews',       label: 'Осмотры',     desc: 'Дневник осмотров лечащего врача.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Читает осмотры.', edit: 'Пишет и публикует осмотр.' }, roleListGate: true, enforced: 'rpc:inpatient_reviews' },
+      { key: 'inpatient.services',      label: 'Услуги в стационаре', desc: 'Услуги и процедуры, добавленные лежащему пациенту.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит список услуг.', edit: 'Добавляет услугу и отмечает выполнение.' }, roleListGate: true, enforced: 'rpc:admission_services' },
+      { key: 'inpatient.discharge',     label: 'Выписка',     desc: 'Выписать пациента из стационара.', levels: ['none', 'edit'], levelDesc: { edit: 'Выписывает.' }, roleListGate: true, enforced: 'rpc:discharge' },
     ],
   },
   {
@@ -258,7 +266,7 @@ export const CATALOG = [
   { key: 'procurement', label: 'Закупки',             legacy: 'inventory', desc: 'Товары, остатки, поступления, заявки на закупку.', levels: ['none', 'view', 'edit'], levelDesc: { view: 'Видит склад и остатки.', edit: 'Оформляет приход, заявки и списания.' }, windows: [], actions: [
       // DEPARTMENTS_V1 — выдача со склада получателю (отдел, кабинет, сотрудник):
       // ворота issue_stock_lines. По умолчанию — администратор и снабженец.
-      { key: 'procurement.issue', label: 'Выдача со склада', desc: 'Выдать товар отделу, кабинету или сотруднику.', levels: ['none', 'edit'], levelDesc: { edit: 'Выдаёт товар со склада получателю; склад списывается, получатель получает остаток.' }, enforced: 'rpc:issue_stock_lines' },
+      { key: 'procurement.issue', label: 'Выдача со склада', desc: 'Выдать товар отделу, кабинету или сотруднику.', levels: ['none', 'edit'], levelDesc: { edit: 'Выдаёт товар со склада получателю; склад списывается, получатель получает остаток.' }, roleListGate: true, enforced: 'rpc:issue_stock_lines' },
     ] },
   { key: 'dashboard',   label: 'Дашборд',             legacy: 'dashboard', desc: 'Сводка по клинике за день.', levels: ['none', 'view'], windows: [], actions: [] },
   // ROLE_REPORTS_SETTINGS_V1 (2026-09-25) — ОТЧЁТЫ ПО ГРУППАМ.

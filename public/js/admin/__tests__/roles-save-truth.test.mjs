@@ -147,7 +147,7 @@ async function world(t) {
   migrate(db);
   const scols = db.prepare('PRAGMA table_info(sessions)').all().map((c) => c.name);
   const sid = {};
-  for (const [id, name, role] of [[1, 'adm', 'admin'], [2, 'op1', 'callcenter'], [3, 'op2', 'callcenter'], [4, 'reg', 'registrar']]) {
+  for (const [id, name, role] of [[1, 'adm', 'admin'], [2, 'op1', 'callcenter'], [3, 'op2', 'callcenter'], [4, 'reg', 'registrar'], [5, 'cash', 'cashier']]) {
     db.prepare('INSERT INTO users (id, username, password_hash, full_name, role) VALUES (?,?,?,?,?)').run(id, name, 'x', name, role);
     const cols = ['id', 'user_id', 'expires_at'];
     const vals = ['sid-' + name, id, iso(Date.now() + 8 * 3600e3)];
@@ -362,4 +362,31 @@ test('плашка миграции 230 сквозь сервер: «Убрат�
   const r = await realFetch(BASE + '/api/db', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: sid.op1 },
     body: JSON.stringify({ table: 'crm_requests', op: 'select', columns: 'id', filters: [{ col: 'id', op: 'eq', val: lead }] }) });
   assert.deepEqual((await r.json()).data, [], 'оператор по-прежнему читает чужую заявку');
+});
+
+// ROLES_SAVE_TRUTH_V1 (ревью M1) — правка «семьи» Стационара (Порционник и
+// Выписки у регистратуры, открытый Стационар у кассы) сдвигает старый ключ beds,
+// но строк с воротами по списку ролей не пишет: регистратура и касса проходят
+// ворота «добавить услугу у койки» и после сохранения. Отказ 400 «Госпитализация
+// не выбрана» — это ворота прав пройдены; 403 — отняты.
+test('ревью M1: правка семьи «Стационара» не отнимает у регистратуры и кассы добавление услуги у койки', async (t) => {
+  const { db, sid } = await world(t);
+  const addService = async (who) => (await realFetch(BASE + '/api/rpc/admission_service_add', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: sid[who] }, body: '{}' })).status;
+  assert.equal(await addService('reg'), 400, 'стенд неверен: регистратура не проходит ворота и до правки');
+  assert.equal(await addService('cash'), 400, 'стенд неверен: касса не проходит ворота и до правки');
+
+  const root = await render();
+  await openRole(root, 'registrar', 'Регистратор');
+  pick(root, 'kitchen', 'view');
+  pick(root, 'discharges', 'view');
+  await saveRole(root);
+  assert.ok(!('inpatient.services' in (permsOf(db, 'registrar').grants || {})), 'семья записала регистратуре «Услуги в стационаре»');
+  assert.equal(await addService('reg'), 400, 'регистратура потеряла добавление услуги у койки');
+
+  await openRole(root, 'cashier', 'Кассир');
+  pick(root, 'inpatient', 'view');
+  await saveRole(root);
+  assert.ok(!('inpatient.services' in (permsOf(db, 'cashier').grants || {})), 'семья записала кассе «Услуги в стационаре»');
+  assert.equal(await addService('cash'), 400, 'касса потеряла добавление услуги у койки');
 });

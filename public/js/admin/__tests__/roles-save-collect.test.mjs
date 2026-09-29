@@ -62,7 +62,13 @@ test('закрытый здесь раздел: «Нет» у него и у в�
   for (const k of kidsOf('crm')) cur[k] = 'none';   // paintCatalog обнуляет строки закрытого раздела
   const out = collectGrants(controlsOf(cur), { explicit: REG.grants, closed: new Set(['crm']), initial: shown });
   assert.equal(out.crm, 'none');
-  for (const k of kidsOf('crm')) assert.equal(out[k], 'none', k);
+  // Строки, что были открыты, записаны «Нет»; строка, что и была «Нет», может
+  // остаться незаписанной — записанное «Нет» раздела закрывает её на сервере
+  // (grants.js), а ворота по списку ролей семьёй не пишутся (ревью M1).
+  for (const k of kidsOf('crm')) {
+    if (shown[k] !== 'none') assert.equal(out[k], 'none', k + ': открытая строка закрытого раздела не записана «Нет»');
+    else assert.ok(!(k in out) || out[k] === 'none', k);
+  }
   assert.ok(!('patients' in out), 'закрытие задело соседний раздел');
 });
 
@@ -96,6 +102,36 @@ test('строка «только администратор»: нетронут
   assert.ok(!('settings.api' in collectGrants(controlsOf(shown), { explicit: {}, initial: shown })));
   const out = collectGrants(controlsOf({ ...shown, 'settings.api': 'view' }), { explicit: {}, initial: shown });
   assert.equal(out['settings.api'], 'view');
+});
+
+// ROLES_SAVE_TRUTH_V1 (ревью M1) — «семья» сдвинутого раздела не пишет строки,
+// чьи ворота — список ролей в коде (roleListGate): по незаписанному такому
+// ключу решают роли, а не старые поля, и старый ключ раздела им не указ.
+// Показанный уровень у них — «все ворота уровня» (режим 'all'), и запись его
+// только сужала бы: регистратура и касса проходят ворота «добавить услугу у
+// койки», но не «отметить выполнение», — «Просмотр», записанный семьёй, отнял
+// бы у них добавление услуги (admission_service_add 400 → 403).
+const GATED_INPATIENT = kidsOf('inpatient');
+test('семья сдвинутого раздела не пишет строки с воротами по списку ролей: регистратура опускает «Порционник» и «Выписки»', () => {
+  const truth = { 'inpatient.services': 'view', 'inpatient.history': 'view', 'inpatient.requests': 'edit', 'inpatient.beds': 'edit',
+    'inpatient.patients': 'none', 'inpatient.reviews': 'none', 'inpatient.discharge': 'none', 'inpatient.prescriptions': 'none', 'inpatient.marks': 'none', 'inpatient.vitals': 'none' };
+  const shown = shownFor(REG, truth);
+  const cur = { ...shown, kitchen: 'view', discharges: 'view' };   // старый ключ beds: editor → viewer
+  const out = collectGrants(controlsOf(cur), { explicit: REG.grants, initial: shown });
+  for (const k of GATED_INPATIENT) assert.ok(!(k in out), k + ' записан семьёй — ворота по списку ролей решают сами');
+  assert.equal(out.kitchen, 'view');
+  assert.equal(out.discharges, 'view');
+  assert.equal(out['mar.outpatient'], shown['mar.outpatient'], 'окно-маршрут семьи не записано таким, как его видно');
+  assert.equal(out.inpatient, shown.inpatient, 'раздел семьи не записан таким, как его видно');
+});
+
+test('семья сдвинутого раздела: касса открывает «Стационар» — окна-маршруты «Нет», строки с воротами по списку ролей не пишутся', () => {
+  const cashier = { sections: ['cashier', 'patients', 'dashboard'], levels: { cashier: 'admin', patients: 'editor', dashboard: 'viewer' } };
+  const truth = { 'inpatient.services': 'view', 'inpatient.history': 'view' };
+  for (const k of GATED_INPATIENT) if (!(k in truth)) truth[k] = 'none';
+  const shown = shownFor(cashier, truth);
+  const out = collectGrants(controlsOf({ ...shown, inpatient: 'view' }), { explicit: {}, initial: shown });
+  assert.deepEqual(out, { inpatient: 'view', 'mar.outpatient': 'none', 'mar.inpatient': 'none' });
 });
 
 test('без initial — прежнее правило: матрица целиком, без несвершённых «Нет» и нетронутых строк администратора', () => {

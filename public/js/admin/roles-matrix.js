@@ -195,6 +195,12 @@ export function collectGrants(controls, { explicit = {}, closed = null, initial 
  * бы все. Поэтому строки всех разделов с таким старым ключом пишутся такими,
  * какими их видно. Строки «только администратор» (adminDefault) из старого
  * ключа не выводятся и сюда не входят.
+ *
+ * Ревью M1 — и строки с воротами по списку ролей (`roleListGate`) тоже не
+ * входят: по незаписанному такому ключу решают роли основы, старый ключ им не
+ * указ, и сдвигаться нечему. А показан у них уровень, который пускают ВСЕ
+ * ворота уровня: записанный, он сузил бы — у регистратуры и кассы «Услуги в
+ * стационаре: Просмотр» отнимали добавление услуги у койки.
  */
 function movedFamilyKeys(initial, cur) {
     const was = deriveLegacy(initial, {});
@@ -207,7 +213,7 @@ function movedFamilyKeys(initial, cur) {
     for (const s of CATALOG) {
         if (!s.legacy || !moved.has(s.legacy)) continue;
         for (const r of [s, ...(s.windows || []), ...(s.actions || [])]) {
-            if (!r.adminDefault && !r.locked && r.key in cur) keys.push(r.key);
+            if (!r.adminDefault && !r.locked && !r.roleListGate && r.key in cur) keys.push(r.key);
         }
     }
     return keys;
