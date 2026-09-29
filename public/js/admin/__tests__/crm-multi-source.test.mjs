@@ -35,10 +35,10 @@ const LEADS = [
   { id: 4, full_name: 'Азимов Жасур', phone: '+998904445566', status: 'in_process', source: 'telegram', sources: ['telegram', 'call'], created_at: now },
 ];
 
-async function board(view = 'kanban') {
+async function board(view = 'kanban', leads = LEADS) {
   window.easymed.state.user = ADMIN;
   S.config = { tags: [], sources: SOURCES };
-  S.leads = LEADS.map((l) => ({ ...l }));
+  S.leads = leads.map((l) => ({ ...l }));
   S.leadTags = [];
   S.dups = [];
   document.body.children.length = 0;
@@ -207,4 +207,37 @@ test('«Отчёт»: заявка с двумя источниками — в �
   assert.ok(total, 'нет строки «Всего»');
   assert.deepEqual(total.children.map(textOf), ['Всего', '4', '1', '25%'], '«Всего» посчитано суммой строк (6), а не по заявкам (4)');
   window.easymed.state.user = null;
+});
+
+// Ревью M1 — отмеченный скрытый источник, у которого в новом периоде нет ни
+// одной заявки, пропадал из ряда: доска пустая, ни один чип не отмечен, и
+// снять отметку нечем. Отмеченный источник рисуется всегда (с нулём).
+test('ревью M1: отмеченный источник остаётся в ряду с нулём, когда в периоде его заявок нет, — и снимается', async () => {
+  const old = new Date(Date.now() - 40 * 86400000).toISOString();
+  const leads = [
+    { id: 11, full_name: 'Старая Telegram', phone: '+998905556677', status: 'in_process', source: 'telegram', sources: ['telegram'], created_at: old },
+    { id: 12, full_name: 'Свежая Instagram', phone: '+998906667788', status: 'in_process', source: 'instagram', sources: null, created_at: now },
+  ];
+  const root = await board('kanban', leads);
+  const period = (re) => walk(root).find((n) => n.tagName === 'BUTTON' && re.test(textOf(n)));
+  try {
+    chipOf(root, 'telegram').click();
+    await tick();
+    assert.equal(cards(root).length, 1);
+    period(/^30 дней$/).click();
+    await tick();
+    const tg = chipOf(root, 'telegram');
+    assert.ok(tg, 'отмеченный «Telegram» пропал из ряда — снять отметку нечем');
+    assert.equal(textOf(tg), 'Telegram · 0');
+    assert.equal(tg.getAttribute('aria-pressed'), 'true');
+    assert.equal(cards(root).length, 0);
+    tg.click();
+    await tick();
+    assert.equal(cards(root).length, 1, 'после снятия отметки доска не вернулась');
+    assert.ok(!chipOf(root, 'telegram'), 'неотмеченный источник без заявок в периоде нарисован');
+  } finally {
+    period(/^Всё время$/).click();
+    await tick();
+    window.easymed.state.user = null;
+  }
 });

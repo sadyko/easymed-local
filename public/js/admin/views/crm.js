@@ -691,8 +691,10 @@ async function paint() {
         // Видимые источники по порядку справочника, затем скрытые, которые стоят
         // у заявок выборки (заявку со скрытым источником тоже надо уметь найти).
         // Источник без заявок не рисуется — кроме отмеченного: иначе отметку
-        // нечем было бы снять.
-        const srcOrder = [...SOURCES.map(([k]) => k), ...[...tally.keys()].filter((k) => !SOURCES.some(([s]) => s === k))];
+        // нечем было бы снять. Ревью M1 — отмеченный добавляется в ряд и сам:
+        // скрытый источник, у которого в новом периоде нет заявок, иначе
+        // пропадал — доска пустая, и ни один чип не отмечен.
+        const srcOrder = [...new Set([...SOURCES.map(([k]) => k), ...tally.keys(), ...state.sources])];
         for (const key of srcOrder) {
             const n = tally.has(key) ? tally.get(key).total : 0;
             const on = state.sources.includes(key);
