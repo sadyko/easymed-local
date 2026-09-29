@@ -520,6 +520,41 @@ test('C3: находка прислала ещё пробу, текст связ
   }
 });
 
+// ── LIS_DISCOVERY_FIX_V1 (экран), C5 — «Как назвался» — как прибор назвал себя сам ──
+// Сервер пишет в lab_devices.sending_app MSH-3 первого сообщения (мигр. 229).
+// Имя человек может поменять, а «как назвался» — нет; колонка показывает его.
+test('C5: «Как назвался» — sending_app находки; у строки без него (сервер старее 229) — имя', async () => {
+  const root = await openAddWindowRoot([HEARD,
+    { ...FOUND, name: 'Гематология-2', sending_app: 'BC-5380' },
+    { ...FOUND, id: 6, name: 'Старая находка', host: '10.0.0.9' }]);
+  const first = walk(addWindow(root)).filter((n) => n.tagName === 'TR').map((r) => r.children[0])
+    .filter((c) => c && c.tagName === 'TD').map(textOf);
+  assert.ok(first.includes('BC-5380'), 'как назвался: ' + first.join(' | '));
+  assert.ok(!first.includes('Гематология-2'), 'не имя строки, а как прибор назвал себя сам');
+  assert.ok(first.includes('Старая находка'), 'sending_app нет — имя, как раньше');
+});
+
+test('C5: сервер узнал, как прибор назвался, — окно перерисовано и это показывает', async () => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const found = { ...FOUND, last_seen_at: '2026-09-20T08:00:00Z' };   // текст связи неподвижен
+    DEVICES = [HEARD, found];
+    writes = []; rpcCalls = []; toastMsg = null;
+    const root = mk('div');
+    await mountLabDevices(root);   // опрос включён: mount() теста его гасит
+    findButtonByText(root, /Добавить прибор/).click();
+    await tick();
+    assert.ok(rowNamed(root, 'BC-5300'));
+    DEVICES = [HEARD, { ...found, sending_app: 'BC-5380' }];
+    mock.timers.tick(5000);
+    await tick(60);
+    assert.ok(rowNamed(root, 'BC-5380'), '«Как назвался» — в подписи окна');
+  } finally {
+    stopLabDevicesLive();
+    mock.timers.reset();
+  }
+});
+
 // ── Ревью M2 — инструкция ведёт туда, где прибор теперь появляется ──────────
 // «Прибор появится в списке выше сам» — больше неправда: находка ждёт в окне
 // «Добавить прибор», а в таблицу попадает после нажатия «Добавить».

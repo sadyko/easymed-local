@@ -489,7 +489,7 @@ export async function mountLabDevices(container) {
         return JSON.stringify([
             state.loadError,
             split.table.length > 0,
-            split.found.map((d) => [d.id, d.name, d.host, d.port, d.enabled, d.profile, livenessText(d.last_seen_at).text]),
+            split.found.map((d) => [d.id, d.name, d.sending_app, d.host, d.port, d.enabled, d.profile, livenessText(d.last_seen_at).text]),
             split.waiting.map((d) => [d.id, d.name, d.host, d.port, d.enabled, d.profile, d.transport]),
             state.listeners,
             state.profiles.map((p) => p.key),
@@ -527,7 +527,11 @@ export async function mountLabDevices(container) {
                 const p = profileOf(d.profile);
                 const live = livenessText(d.last_seen_at);
                 tb.appendChild(h('tr', null,
-                    h('td', { style: { fontWeight: 600 } }, d.name),
+                    // LIS_DISCOVERY_FIX_V1 (экран) — «Как назвался» — как прибор
+                    // назвал себя сам (MSH-3, lab_devices.sending_app, мигр. 229):
+                    // его пишет только сервер, а имя человек может поменять.
+                    // Строка без него (сервер старее миграции) — по имени, как раньше.
+                    h('td', { style: { fontWeight: 600 } }, d.sending_app || d.name),
                     h('td', { class: 'muted' }, p ? p.vendor + ' ' + p.model : tr('модель не определена')),
                     h('td', { class: 'cell-mono', style: { fontSize: '12.5px' } }, d.host || tr('адрес неизвестен')),
                     h('td', null, live.kind === 'idle'
