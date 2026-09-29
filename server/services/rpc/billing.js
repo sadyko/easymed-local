@@ -296,7 +296,7 @@ export function createInvoiceForVisit(db, args, user) {
   // REFERRAL_BILL_V1 — денежные роли как прежде; врач — со своими границами.
   if (!hasAnyRole(user, CREATE_INVOICE_ROLES)) {
     requireRole(user, DOCTOR_INVOICE_ROLES);
-    doctorInvoiceRefusal(args);
+    doctorInvoiceRefusal(db, args);
   }
   return issueVisitInvoice(db, args, user);
 }
@@ -307,7 +307,14 @@ export function createInvoiceForVisit(db, args, user) {
 // счёт страховой или организации — договор с ними, его выставляет стойка.
 // Покрытые плательщиком строки мастер врача оставляет без счёта — их видит
 // касса в «Ждут счёта» (cashier_unbilled).
-function doctorInvoiceRefusal(args) {
+//
+// Дополнение владельца (29.09):
+//   • возвращённую услугу заново выставляет только касса — своим явным
+//     выбором (rebill_refunded); без флага сервер и так отказывает (409);
+//   • «Leave for Касса» — у пациента в карте плательщик: врач счёта не
+//     выставляет вовсе, строки ждут кассу в «Ждут счёта», а она выставит счёт
+//     нужному плательщику (visitHasCardPayer ниже).
+function doctorInvoiceRefusal(db, args) {
   const a = args || {};
   if (Number(a.discount_amount) > 0) {
     throw new RpcError('Скидку в счёт ставят касса, регистратура или администратор.', 403);
@@ -315,6 +322,27 @@ function doctorInvoiceRefusal(args) {
   if (a.payer_id !== undefined && a.payer_id !== null) {
     throw new RpcError('Счёт организации или страховой выставляют касса, регистратура или администратор.', 403);
   }
+  if (a.rebill_refunded === true || a.rebill_refunded === 1) {
+    throw new RpcError('Возвращённые услуги заново выставляет касса.', 403);
+  }
+  if (visitHasCardPayer(db, a.visit_id)) {
+    throw new RpcError('У пациента в карте указан плательщик — счёт выставляет касса.', 403);
+  }
+}
+
+// REFERRAL_BILL_V1 (дополнение 29.09) — ПЛАТЕЛЬЩИК В КАРТЕ ПАЦИЕНТА ВИЗИТА:
+// patients.payer_id, указывающий на ДЕЙСТВУЮЩЕГО плательщика. Выключенный —
+// уже не плательщик: счёт ему не выставит никто («Плательщик №… выключен»), и
+// Калькулятор подставляет из карты только действующих (service-picker-modal.js).
+// Зеркало на экране — мастер визита (visit-wizard.js, cardPayerOnFile).
+// Визита нет — ответит issueVisitInvoice своим отказом.
+function visitHasCardPayer(db, visitId) {
+  if (!isPositiveInt(visitId)) return false;
+  return !!db.prepare(`
+    SELECT 1 FROM visits v
+      JOIN patients p ON p.id = v.patient_id
+      JOIN payers py ON py.id = p.payer_id AND py.active = 1
+     WHERE v.id = ?`).get(visitId);
 }
 
 // CASHIER_HEAD_V1 (ревью) — выставление без проверки роли: дверь кассы

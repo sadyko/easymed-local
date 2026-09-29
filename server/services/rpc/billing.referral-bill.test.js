@@ -51,9 +51,12 @@ function seed() {
   return { db, CONS, LAB, pid, payer };
 }
 
-/** Визит врача с направленными строками — цена в строке «от браузера» (1 сум). */
+/**
+ * Визит врача с направленными строками — цена в строке «от браузера» (1 сум).
+ * День визита — сейчас: «Ждут счёта» (cashier_unbilled) смотрит 30 дней назад.
+ */
 function referral(db, pid, lines) {
-  const vid = Number(db.prepare("INSERT INTO visits (patient_id, visit_date, created_by) VALUES (?, '2026-09-29T05:00:00Z', ?)").run(pid, DOC).lastInsertRowid);
+  const vid = Number(db.prepare("INSERT INTO visits (patient_id, visit_date, created_by) VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?)").run(pid, DOC).lastInsertRowid);
   const ids = lines.map(({ service_id, doctor_id = null }) => Number(db.prepare(
     "INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by) VALUES (?, ?, ?, 1, 1, 1, 'added', ?)",
   ).run(vid, service_id, doctor_id, DOC).lastInsertRowid));
@@ -170,4 +173,75 @@ test('врачу по-прежнему закрыты оплата, счёт с�
   refused(() => recordPayment(db, { invoice_id: invoice.id, amount: 40000, method: 'cash' }, doctor), /Вашей роли это действие недоступно/);
   refused(() => createInvoiceForAdmission(db, { admission_id: 1, admission_service_ids: [1] }, doctor), /Вашей роли это действие недоступно/);
   refused(() => removeAdmissionLineFromInvoice(db, { line_id: 1 }, doctor), /Вашей роли это действие недоступно/);
+});
+
+// ─── Дополнение владельца (2026-09-29) ──────────────────────────────────────
+// 1. Плательщик в карте пациента («Leave for Касса»): врач счёта не выставляет
+//    вовсе — строки ждут кассу в «Ждут счёта», а касса выставит счёт нужному
+//    плательщику. Плательщик в карте — patients.payer_id на ДЕЙСТВУЮЩЕГО
+//    плательщика (выключенному счёт не выставит никто).
+// 2. Возвращённые услуги заново выставляет только касса.
+const cardPayer = (db, pid, payer) => db.prepare('UPDATE patients SET payer_id = ? WHERE id = ?').run(payer, pid);
+
+test('плательщик в карте пациента: врач — 403 до записи, визит ждёт кассу в «Ждут счёта»', () => {
+  const { db, LAB, pid, payer } = seed();
+  cardPayer(db, pid, payer);
+  const { vid, ids } = referral(db, pid, [{ service_id: LAB }]);
+  const seq = () => JSON.stringify(db.prepare('SELECT year, next_seq FROM invoice_counters ORDER BY year').all());
+  const before = seq();
+  refused(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: ids, discount_amount: 0, payer_id: null }, doctor),
+    /^У пациента в карте указан плательщик — счёт выставляет касса\.$/);
+  refused(() => RPC.create_invoice_for_visit(db, { visit_id: vid, visit_service_ids: ids }, headDoctor),
+    /У пациента в карте указан плательщик — счёт выставляет касса/);
+  assert.equal(countInvoices(db), 0, 'отказ не оставил счёта');
+  assert.equal(seq(), before, 'номер счёта не израсходован');
+  assert.equal(db.prepare('SELECT invoice_item_id FROM visit_services WHERE id = ?').get(ids[0]).invoice_item_id, null);
+  const waiting = RPC.cashier_unbilled(db, {}, cashier).rows.find((r) => r.visit_id === vid);
+  assert.ok(waiting, 'визит врача не виден кассе в «Ждут счёта»');
+  assert.equal(waiting.total, 40000);
+});
+
+test('плательщик в карте: касса, регистратура и администратор — как прежде; врач с денежной ролью — по ней', () => {
+  for (const who of [admin, registrar, cashier, doctorCashier, adminDoctor]) {
+    const { db, LAB, pid, payer } = seed();
+    cardPayer(db, pid, payer);
+    const a = referral(db, pid, [{ service_id: LAB }]);
+    assert.equal(createInvoiceForVisit(db, { visit_id: a.vid, visit_service_ids: a.ids, payer_id: payer }, who).invoice.payer_id, payer, who.full_name + ': счёт плательщику');
+    const b = referral(db, pid, [{ service_id: LAB }]);
+    assert.equal(createInvoiceForVisit(db, { visit_id: b.vid, visit_service_ids: b.ids }, who).invoice.payer_id, null, who.full_name + ': счёт пациенту');
+  }
+});
+
+test('плательщик в карте выключен — это уже не плательщик: врач выставляет счёт пациенту', () => {
+  const { db, LAB, pid, payer } = seed();
+  cardPayer(db, pid, payer);
+  db.prepare('UPDATE payers SET active = 0 WHERE id = ?').run(payer);
+  const { vid, ids } = referral(db, pid, [{ service_id: LAB }]);
+  const out = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: ids }, doctor);
+  assert.equal(out.invoice.payer_id, null);
+  assert.equal(out.invoice.status, 'unpaid');
+});
+
+test('возвращённые услуги заново выставляет касса: врач с rebill_refunded — 403 до записи; касса — да', () => {
+  const { db, LAB, pid } = seed();
+  // Строку выставили, оплатили, работа сделана — и вернули деньги строкой:
+  // она осталась в визите без счёта, с отметкой «возвращено».
+  const { vid, ids } = referral(db, pid, [{ service_id: LAB }]);
+  const inv = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: ids }, registrar).invoice;
+  recordPayment(db, { invoice_id: inv.id, amount: 40000, method: 'cash' }, cashier);
+  db.prepare("UPDATE visit_services SET status = 'completed' WHERE id = ?").run(ids[0]);
+  const item = db.prepare('SELECT id FROM invoice_items WHERE invoice_id = ?').get(inv.id).id;
+  RPC.refund_invoice_line(db, { invoice_item_id: item, reason: 'передумал' }, cashier);
+  assert.equal(db.prepare('SELECT invoice_item_id FROM visit_services WHERE id = ?').get(ids[0]).invoice_item_id, null);
+  const count = countInvoices(db);
+  refused(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: ids, rebill_refunded: true }, doctor),
+    /^Возвращённые услуги заново выставляет касса\.$/);
+  refused(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: ids, rebill_refunded: 1 }, headDoctor),
+    /Возвращённые услуги заново выставляет касса/);
+  // Без флага сервер врачу тоже не выставит — прежнее правило (409).
+  refused(() => createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: ids }, doctor), /уже вернули деньги/, 409);
+  assert.equal(countInvoices(db), count, 'отказы врачу не оставили счёта');
+  // Касса выставляет заново явным выбором — как прежде.
+  const again = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: ids, rebill_refunded: true }, cashier);
+  assert.equal(again.invoice.status, 'unpaid');
 });

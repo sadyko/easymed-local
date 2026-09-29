@@ -151,3 +151,23 @@ test('REFERRAL_BILL_V1: направление без счёта — касса 
     assert.ok(list.json.data.rows.some((r) => r.id === inv.json.data.invoice.id && r.status === 'unpaid'));
   } finally { t.close(); }
 });
+
+// Дополнение владельца (2026-09-29): у пациента в карте плательщик — «Leave
+// for Касса». Врач счёта не выставляет; касса видит визит в «Ждут счёта» и
+// выставляет счёт нужному плательщику.
+test('REFERRAL_BILL_V1: плательщик в карте — врачу отказ, касса видит визит и выставляет счёт страховой', async () => {
+  const t = await start();
+  try {
+    t.db.prepare("INSERT INTO payers (id, name, kind, active) VALUES (5, 'Страховая', 'insurance', 1)").run();
+    t.db.prepare('UPDATE patients SET payer_id = 5 WHERE id = 77').run();
+    const { visitId, lineIds } = await referral(t, [{ service_id: 40 }]);
+    const inv = await t.rpc('create_invoice_for_visit', 'doc', { visit_id: visitId, visit_service_ids: lineIds, discount_amount: 0, payer_id: null });
+    assert.equal(inv.status, 403, 'врач выставил счёт пациенту со страховой в карте: ' + JSON.stringify(inv.json));
+    assert.equal(inv.json.error.message, 'У пациента в карте указан плательщик — счёт выставляет касса.');
+    const un = await t.rpc('cashier_unbilled', 'cash', {});
+    assert.ok(un.json.data.rows.some((r) => r.visit_id === visitId), 'визит не ждёт кассу');
+    const byPayer = await t.rpc('create_invoice_for_visit', 'cash', { visit_id: visitId, visit_service_ids: lineIds, payer_id: 5 });
+    assert.equal(byPayer.status, 200, JSON.stringify(byPayer.json));
+    assert.equal(byPayer.json.data.invoice.payer_id, 5, 'касса выставила счёт страховой');
+  } finally { t.close(); }
+});
