@@ -2067,7 +2067,11 @@ function salaryConfigCard(salary) {
         kvRow(tr('Схема'),         salaryKindLabel(salary.kind)),
         // PAY_ALL_EARNINGS_V1 — оклад карточки — сведения, в итог не входит.
         kvRow(tr('Оклад'),         trf('{sum} UZS в месяц — в итог не входит', { sum: Math.round(salary.fixed).toLocaleString('ru-RU') })),
-        kvRow(tr('Ставки по услугам'), trf('услуг задано: {n}', { n: (Array.isArray(doc.service_rates) ? doc.service_rates.filter(r => Number(r.value != null ? r.value : r.percentage) > 0).length : 0) })),
+        // RATES_MODE_TYPED_V1 (m9) — считалось по ключам value / percentage,
+        // которых карточка не пишет ({pct} / {fix}): у каждого врача выходил 0.
+        // Считается каждая запись ставки — как «Выбрано: N» в «Услугах и
+        // ставках»: запись без процента — тоже решение («по умолчанию»).
+        kvRow(tr('Ставки по услугам'), trf('услуг задано: {n}', { n: (Array.isArray(doc.service_rates) ? doc.service_rates.filter(r => r && r.service_id != null).length : 0) })),
         kvRow(tr('Выручка за период'), Math.round(salary.revenue).toLocaleString('ru-RU') + ' UZS'),
         kvRow(tr('Начислено (после налога)'), state.dash.payDenied ? '—' : Math.round(salary.variable).toLocaleString('ru-RU') + ' UZS'),   // ревью M2
         // PAY_BASIS_PERFORMED_V1 — сколько из этих услуг ещё без счёта: доля по

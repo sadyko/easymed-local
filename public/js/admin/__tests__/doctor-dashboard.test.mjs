@@ -769,3 +769,29 @@ test('DOCTOR_TIER_V1: карта ставок различает фиксиро�
   const legacyMap = dash.serviceRateMap({ service_rates: [{ service_id: 'x', mode: 'fixed', value: 15000 }] });
   assert.strictEqual(legacyMap.get('x').fixPay, 15000, 'старая форма {mode:fixed} не прочитана');
 });
+
+// RATES_MODE_TYPED_V1 (m9) — «Ставки по услугам: услуг задано» в «Как
+// считается зарплата» считала записи по ключам value / percentage, а карточка
+// сотрудника пишет {pct} и {fix}: у каждого врача выходило «услуг задано: 0».
+// Считается каждая запись ставки — как «Выбрано: N» в «Услугах и ставках»:
+// запись без процента — тоже решение («по умолчанию»).
+test('m9: «услуг задано» — число записей ставок карточки ({pct}, {fix}, «по умолчанию»)', async (t) => {
+  const saved = DOCTOR_A.service_rates;
+  DOCTOR_A.service_rates = [
+    { service_id: 's-1', pct: 40, branches: [] },
+    { service_id: 's-2', pct: 30, fix: 15000, branches: [] },
+    { service_id: 's-3', branches: [] },
+  ];
+  t.after(() => { DOCTOR_A.service_rates = saved; });
+  reset();
+  loginAs(DOCTOR_A);
+  // Вкладка «Зарплата» держит загруженных врачей в памяти модуля до перезагрузки
+  // страницы — свежий экземпляр модуля, как после F5, читает ставки заново.
+  const fresh = await import('../views/consultation.js?m9=fresh');
+  const root = mk('div');
+  await fresh.renderConsultation(root, { tabId: 'consultation', payload: { sub: 'pay' } });
+  await tick(60);
+  const txt = textOf(root);
+  assert.ok(txt.includes('Ставки по услугам'), 'нет строки «Ставки по услугам»: ' + txt.slice(0, 300));
+  assert.ok(txt.includes('услуг задано: 3'), 'счёт ставок врача неверен: ' + (txt.match(/услуг задано: \d+/) || ['—'])[0]);
+});

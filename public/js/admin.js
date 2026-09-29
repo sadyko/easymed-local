@@ -58,7 +58,7 @@ import { renderPatientsHub } from './admin/views/patients-hub.js?v=phub1';
 import { renderServices }     from './admin/views/services.js?v=aug31a';   // SERVICES_CATALOG_V1 — + SERVICES_ONE_EDITOR_V1 (единый редактор + удаление в строке)
 import { renderRegistration } from './admin/views/registration.js?v=aug17f';
 import { renderRoomCalendar } from './admin/views/room-calendar.js?v=aug17e';   // RESCAL_WIRE_V1 — «Календарь записи» (legacy Scheduling retired)
-import { renderConsultation }     from './admin/views/consultation.js?v=dashpay1';
+import { renderConsultation }     from './admin/views/consultation.js?v=rmt1';
 import { renderServiceWorkspace } from './admin/views/service-workspace.js?v=aug17f';
 import { renderPatientCard }  from './admin/views/patient-card.js?v=labshared1';   // PATIENT_CARD_DESIGN_V2 + SVC_ROW_ACTIONS_V1 (?v must match service-workspace.js)
 import { renderPlaceholder }  from './admin/views/placeholder.js';
@@ -78,7 +78,7 @@ import { renderMarNurse }    from './admin/views/mar-nurse.js?v=inp8';   // MAR_
 import { renderKitchenSheet } from './admin/views/kitchen-sheet.js?v=diet1';   // KITCHEN_SHEET_V1 — порционник (Задача 7; экран был написан без маршрута)
 import { renderDischarge }   from './admin/views/discharge.js?v=disch1';   // TWO_STEP_DISCHARGE_V1 — «Выписки к оформлению» (Задача 8; экран был написан без маршрута)
 import { renderDoctorRoom }   from './admin/views/doctor-room.js?v=docroom1';   // DOCTOR_ROOM_V1 — Кабинет врача (consultation queue)
-import { renderEmployees }    from './admin/views/employees.js?v=arch1';   // EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen)
+import { renderEmployees }    from './admin/views/employees.js?v=rmt1';   // EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen) · rmt1 = RATES_MODE_TYPED_V1
 import { renderMarketing }    from './admin/views/marketing.js?v=btnright1';
 import { renderCallCenter }   from './admin/views/callcenter.js';
 import { renderDocuments }    from './admin/views/documents.js?v=noqr1';
@@ -100,7 +100,7 @@ import { renderPacs }         from './admin/views/pacs.js';
 import { renderInventory }    from './admin/views/inventory.js?v=inv7';   // INVENTORY_UI_V1 — Suppliers/PO/Requisitions/Counts tabs live; inv6 — OWN_SHELF_ONLY_V1 (ревью F5) чип «Только со своих полок»; inv7 — ревью F6 «Не списано со склада»
 import { renderStockLog }     from './admin/views/stock-log.js?v=stocklog1';   // STOCK_LOG_V1 — журнал движений (кто, кому, партия, срок)
 import { renderMyStock }      from './admin/views/my-stock.js?v=mystock1';   // MY_STOCK_V1 — свой подотчёт: что выдали, кто выдал, что списал
-import { renderSettingsHub }  from './admin/views/settings-hub.js?v=rst9';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route · ROLES_SAVE_TRUTH_V1 — «Роли» (штамп) · ROLES_REVIEW_V1
+import { renderSettingsHub }  from './admin/views/settings-hub.js?v=rmt1';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route · ROLES_SAVE_TRUTH_V1 — «Роли» (штамп) · ROLES_REVIEW_V1
 import { renderPatientDocuments } from './admin/views/patient-documents.js?v=docstoolbar1';   // PATIENT_DOCUMENTS_V1 + DOCS_TOOLBAR_V1
 import { renderDocumentsSettings } from './admin/views/documents-settings.js?v=doc2';   // DOCUMENTS_SETTINGS_V1
 // CASE_WORKSPACE_V1 — история болезни как рабочий экран: слева шаги, справа документ.

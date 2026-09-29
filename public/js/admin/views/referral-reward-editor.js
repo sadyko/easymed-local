@@ -99,8 +99,13 @@ export function referralRewardEditor({ doctorId, holder, onChange, readOnly = fa
         const ownBox = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
             h('div', { class: 'field' },
                 h('label', null, tr('Свой процент — со всех услуг, кроме перечисленных ниже')), pctInp),
+            // RATES_MODE_TYPED_V1 — подсказка стоит сразу под «Стандарт категории
+            // …», и прежнее «пусто — стандартный процент сверху» читали как
+            // «пусто = ставка категории». В режиме своих ставок категория не
+            // читается вовсе (shared/referral-reward.js): пустая группа — «Свой
+            // процент», пуст и он — 0.
             h('div', { class: 'muted', style: { fontSize: '12.5px' } },
-                tr('Пусто — действует стандартный процент сверху. Заполненная строка его перекрывает: % — доля от стоимости услуги, сум — фиксированная сумма за услугу.')),
+                tr('Пусто — действует «Свой процент» выше (если и он пуст — 0 %); ставка категории в этом режиме не применяется. Заполненная строка его перекрывает: % — доля от стоимости услуги, сум — фиксированная сумма за услугу.')),
             h('table', { class: 'tbl' },
                 h('thead', null, h('tr', null,
                     h('th', null, tr('Группа услуг')),
@@ -177,12 +182,16 @@ export function referralRewardEditor({ doctorId, holder, onChange, readOnly = fa
  */
 export async function saveReferralReward(doctorId, rr) {
     if (!rr || !doctorId) return null;
+    // RATES_MODE_TYPED_V1 (m6) — «по категории» пишет ТОЛЬКО режим. Прежде он
+    // писал own_percent: 0 и own_rates: [] — галочка и «Сохранить» стирали
+    // свои ставки врача. Режим категории их не читает (shared/referral-reward.js),
+    // поэтому они остаются лежать как были — как в карточке партнёра
+    // (settings-hub) — и снова действуют, если галочку снимут.
+    const values = rr.mode === 'own'
+        ? { reward_mode: 'own', own_percent: Number(rr.percent) || 0, own_rates: rr.rates || [] }
+        : { reward_mode: 'category' };
     try {
-        const { error } = await supabase.from('referral_sources').update({
-            reward_mode: rr.mode === 'own' ? 'own' : 'category',
-            own_percent: rr.mode === 'own' ? (Number(rr.percent) || 0) : 0,
-            own_rates:   rr.mode === 'own' ? (rr.rates || []) : [],
-        }).eq('doctor_id', doctorId);
+        const { error } = await supabase.from('referral_sources').update(values).eq('doctor_id', doctorId);
         return error ? (error.message || String(error)) : null;
     } catch (e) { return (e && e.message) || String(e); }
 }

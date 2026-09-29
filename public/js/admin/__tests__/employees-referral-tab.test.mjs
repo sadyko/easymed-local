@@ -79,6 +79,9 @@ const dbCalls = [];
 // Ревью M6 — ставка группы, которой нет среди показанных (выключенная группа).
 let SOURCE_RATES = '';
 let SERVICE_TYPES = [];
+// RATES_MODE_TYPED_V1 (m6) — источник в режиме своих ставок.
+let SOURCE_MODE = 'category';
+let SOURCE_PCT = 0;
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   if (u === '/api/users') return { ok: true, json: async () => ({ users: [DOC] }) };
@@ -88,7 +91,7 @@ globalThis.fetch = async (url, opts) => {
     dbCalls.push(desc);
     let rows = [];
     if (desc.table === 'referral_sources' && desc.op === 'select') {
-      rows = [{ id: 55, reward_mode: 'category', own_percent: 0, own_rates: SOURCE_RATES, category_id: 3 }];
+      rows = [{ id: 55, reward_mode: SOURCE_MODE, own_percent: SOURCE_PCT, own_rates: SOURCE_RATES, category_id: 3 }];
     } else if (desc.table === 'referral_source_categories') {
       rows = [{ id: 3, name: 'Внутренние врачи', standard_percent: 0 }];
     } else if (desc.table === 'branches') rows = [{ id: 1, name: 'Чиланзар' }];
@@ -201,6 +204,50 @@ test('своя ставка группы в «сум» уходит в исто�
   assert.equal(upd.values.reward_mode, 'own');
   const rates = typeof upd.values.own_rates === 'string' ? JSON.parse(upd.values.own_rates) : upd.values.own_rates;
   assert.deepStrictEqual(rates, [{ group: 'lab', unit: 'fix', value: 10 }]);
+});
+
+// RATES_MODE_TYPED_V1 (m6) — галочка «по категории» и «Сохранить» стирали
+// свои ставки врача: сохранение писало own_percent: 0 и own_rates: []. Режим
+// «по категории» свои ставки не читает (shared/referral-reward.js), поэтому
+// они остаются лежать как были — как в карточке партнёра (settings-hub) — и
+// возвращаются, если галочку снимут снова.
+test('m6: «по категории» пишет только режим — свои ставки врача не стираются', async () => {
+  SOURCE_MODE = 'own';
+  SOURCE_PCT = 12;
+  SOURCE_RATES = JSON.stringify([{ group: 'lab', unit: 'fix', value: 10000 }]);
+  try {
+    const card = await openReferralTab();
+    const chkBox = byClass(card, 'checkbox').find((n) => textOf(n).includes('Вознаграждение по категории'));
+    const modeChk = tags(chkBox, 'input')[0];
+    assert.ok(!modeChk.checked, 'источник со своими ставками — галочки нет');
+    modeChk.checked = true; modeChk.dispatchEvent({ type: 'change' });
+    buttonWith(card, 'Сохранить сотрудника').click();
+    await flush();
+    const upd = dbCalls.find((d) => d.table === 'referral_sources' && d.op === 'update');
+    assert.ok(upd, 'режим не записан в источник врача');
+    assert.deepStrictEqual(upd.values, { reward_mode: 'category' }, 'свои ставки стёрты: ' + JSON.stringify(upd.values));
+  } finally { SOURCE_MODE = 'category'; SOURCE_PCT = 0; SOURCE_RATES = ''; }
+});
+
+// RATES_MODE_TYPED_V1 — подсказка под таблицей своих ставок стояла прямо под
+// «Стандарт категории …» и говорила «пусто — стандартный процент сверху»: её
+// читали как «пусто = ставка категории». В режиме своих ставок категория не
+// читается вовсе (shared/referral-reward.js): пустая группа — «Свой процент»,
+// пуст и он — 0. У КАТЕГОРИИ (settings-hub, referral_source_categories) «пусто
+// — стандартный процент» верно, и её подсказка остаётся прежней.
+const OWN_HINT = 'Пусто — действует «Свой процент» выше (если и он пуст — 0 %); ставка категории в этом режиме не применяется. Заполненная строка его перекрывает: % — доля от стоимости услуги, сум — фиксированная сумма за услугу.';
+const CATEGORY_HINT = 'Пусто — действует стандартный процент сверху. Заполненная строка его перекрывает: % — доля от стоимости услуги, сум — фиксированная сумма за услугу.';
+test('подсказка своих ставок: пусто — «Свой процент», не ставка категории (карточка врача и партнёра)', async () => {
+  const card = await openReferralTab();
+  const t = textOf(card);
+  assert.ok(t.includes(OWN_HINT), 'в карточке врача старая подсказка');
+  assert.ok(!t.includes(CATEGORY_HINT), 'подсказка категории в режиме своих ставок');
+  const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
+  const hub = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin', 'views', 'settings-hub.js'), 'utf8');
+  const own = hub.slice(hub.indexOf("key: 'own_rates'"), hub.indexOf("key: 'inpatient_bonus_enabled'"));
+  assert.ok(own.includes(OWN_HINT), 'в карточке партнёра (own_rates) старая подсказка');
+  const cat = hub.slice(hub.indexOf('referral_source_categories: {'), hub.indexOf('doctor_rates: {'));
+  assert.ok(cat.includes(CATEGORY_HINT), 'подсказку категории менять нельзя — там «пусто» и правда стандарт');
 });
 
 test('вкладку не открывали — строка источника не переписывается', async () => {
