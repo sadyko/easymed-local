@@ -878,6 +878,22 @@ export const REGISTRY = {
     stamps: { resolved_by: { with: 'resolved_at' } },
     filters: ['id','role','area','resolution'], embed: {},
   },
+  // ROLES_SAVE_TRUTH_V1 (мигр. 230) — ключи, у которых записанный уровень выше
+  // стандарта основы роли: так их мог выдать сам экран «Роли» до этого
+  // выпуска. Заводит только миграция; решает администратор или «Роли:
+  // Изменение» — «Убрать эти права» / «Оставить как есть»
+  // (views/roles-grant-review.js); отметка решения — единственная правка.
+  // Читает и «Роли: Просмотр» (write.grant → readGrantAllows). Живёт в
+  // главном здании, как и сами права (MAIN_CLINIC_TABLES ниже).
+  role_grant_reviews: {
+    read:  { roles: ['admin'], columns: ['id','role','key','level','standard','found_at','resolution','resolved_at','resolved_by'] },
+    write: { grant: 'settings.roles',
+             insert: { roles: [] },
+             update: { roles: ['admin'], columns: ['resolution','resolved_at'] },
+             delete: { roles: [] } },
+    stamps: { resolved_by: { with: 'resolved_at' } },
+    filters: ['id','role','key','resolution'], embed: {},
+  },
 
   // ─── Clinical spine (migration 024) ──────────────────────────────────────
   // Doctor orders / referrals. consultation.js, service-workspace.js, visit-modal.js.
@@ -1742,4 +1758,8 @@ export const MAIN_CLINIC_TABLES = Object.freeze({
   role_permissions: 'Права ролей настраивает главная клиника — там же их и меняйте.'
     + ' Изменение, сделанное здесь, будет отменено при ближайшей синхронизации'
     + ' справочника (в течение часа).',
+  // ROLES_SAVE_TRUTH_V1 — проверка прав ролей (мигр. 230) живёт там же, где сами
+  // права: «Убрать эти права» пишет role_permissions, и в филиале её всё равно
+  // отклонил бы запрет строкой выше.
+  role_grant_reviews: 'Проверку прав ролей ведёт главная клиника — там же решайте, убрать права или оставить.',
 });
