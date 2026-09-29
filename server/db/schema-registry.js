@@ -215,6 +215,17 @@ export const REGISTRY = {
     // V3120_FIX — middle_name: окно заведения пациента ищет дубль и по отчеству
     // (patient-create-modal.js), и без него каждое нажатие клавиши отвечало 400.
     filters: ['id','mrn','phone','national_id','full_name','last_name','first_name','middle_name','email','gender','date_of_birth','branch_id','primary_doctor_id','payer_id','payer_policy_id','active','created_at','registration_date','sync_origin'],
+    // MRN_BEYOND_99999_V1 — сортировка «MRN» (реестр пациентов) по НОМЕРУ, а не
+    // по тексту: текстом 'A-26-100000' стоит между 'A-26-10000' и 'A-26-10001'.
+    // Ключи — правило триггера номера (миграция 232): окно года после первого
+    // дефиса, номер целиком после второго, потом сам mrn. Первые два — ровно
+    // выражения индекса idx_patients_mrn_seq, и страница берётся по нему.
+    // Постоянный текст SQL, без значений, как read.where (query-compiler.js).
+    order: { mrn: [
+      `substr("patients"."mrn", instr("patients"."mrn", '-'), 4)`,
+      `CAST(substr("patients"."mrn", instr("patients"."mrn", '-') + 4) AS INTEGER)`,
+      '"patients"."mrn"',
+    ] },   // MRN_BEYOND_99999_V1
     embed:   { branches: { table:'branches', fk:'branch_id', columns:['id','name'] },
                payers:   { table:'payers',   fk:'payer_id',  columns:['id','name'] },
                // creator:created_by(full_name) — кто завёл карту. Имя сотрудника
@@ -1678,6 +1689,9 @@ export function actorStamps(t) { const e = REGISTRY[t]; return (e && e.stamps) |
 // V3120_FIX (F2) — постоянное условие чтения (`read.where`): строки, которых
 // через /api/db не видно вовсе (отозванный документ визита).
 export function readWhere(t) { const e = REGISTRY[t]; return (e && e.read && typeof e.read.where === 'string') ? e.read.where : null; }
+// MRN_BEYOND_99999_V1 — ключи сортировки колонки (`order.<col>`: постоянные
+// выражения SQL) вместо самой колонки; null — сортировать по колонке как есть.
+export function readOrder(t, col) { const e = REGISTRY[t]; const k = e && e.order && Object.prototype.hasOwnProperty.call(e.order, col) ? e.order[col] : null; return Array.isArray(k) && k.length ? [...k] : null; }
 // V3120_FIX (F2) — `write.<op>.own`: правится только своя строка ({ column, where }).
 export function ownRowsRule(t, op) { const e = REGISTRY[t]; const w = e && e.write && e.write[op]; return (w && typeof w === 'object' && w.own) || null; }
 // V3120_FIX (M9) — `write.<op>.bulkBy`: колонки, по которым экран законно

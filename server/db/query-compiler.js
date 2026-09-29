@@ -5,6 +5,7 @@ import { scopeLifted } from './row-scope.js';   // CRM_HEAD_MERGE_TAGS_V1
 import { restrictedRead } from './schema-registry.js';   // FINAL_ROLES_SYNC_FIX_V1 (M1)
 import { readWhere, ownRowsRule, bulkWriteKeys } from './schema-registry.js';   // V3120_FIX (F2, M9)
 import { insertRequiresAny } from './schema-registry.js';   // V3120_FINAL
+import { readOrder } from './schema-registry.js';   // MRN_BEYOND_99999_V1 — «MRN» сортируется номером
 import { patientDataRefusal } from './patient-data-gate.js';   // V3120_FIX (M4)
 import { liftAllows } from './pay-visibility.js';
 import { withTemplate } from '../services/server-message.js';   // V3120_I18N
@@ -414,7 +415,12 @@ function compileSelect(desc, table, user, db, mask = null) {
       // V3120_FIX — колонка квалифицирована базовой таблицей: у embed'а бывают
       // колонки с тем же именем (created_at), и голое "created_at" SQLite
       // называл двусмысленным — 500 на весь запрос.
-      return `"${table}"."${o.col}" ${o.asc === false ? 'DESC' : 'ASC'}`;
+      const dir = o.asc === false ? 'DESC' : 'ASC';
+      // MRN_BEYOND_99999_V1 — у колонки бывают свои ключи сортировки из реестра
+      // (patients.mrn: год, номер целиком, сам mrn); направление — каждому ключу.
+      const keys = readOrder(table, o.col);
+      if (keys) return keys.map((k) => `${k} ${dir}`).join(', ');
+      return `"${table}"."${o.col}" ${dir}`;
     });
     if (parts.length) sql += ` ORDER BY ${parts.join(', ')}`;
   }
