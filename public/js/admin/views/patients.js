@@ -6,6 +6,7 @@ import { h, Icon, Avatar, Tag, StatusTag, PageHead, toast, clear, fmtDate } from
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { registrarHeader } from './registrar-header.js?v=roleaud1';
 import { loadPatientsPaged, findAllDuplicatePatientIds, mergePatients } from '../data.js';   // DUP_MERGE_V1
+import { mrnOrder } from '../patient-duplicates.js';   // MRN_BEYOND_99999_V1 — номер карты целиком, как у триггера (232)
 import { scopedDoctorId, canView, actorIsAdmin, canCreatePatient, canOrderAdmission } from '../permissions.js';   // V3120_FIX — canCreatePatient, canOrderAdmission
 // PATIENT_ROW_V2 — телефон в реестре читается так же, как на карточке CRM.
 import { formatPhone } from '../phone-format.js';
@@ -664,8 +665,10 @@ function openMergeModal() {
     const chosen = (refs.lastRows || []).filter(p => selectedDup.has(p.id));
     if (chosen.length < 2) { toast('Выберите минимум два дубликата.', 'fail'); return; }
     // Default primary = most visits, tiebreak the lowest (oldest) MRN.
+    // MRN_BEYOND_99999_V1 — «oldest» by year + WHOLE number (mrnOrder), not by
+    // text: as text 'A-26-100000' sorts before 'A-26-99999'.
     const byBest = [...chosen].sort((a, b) =>
-        (b.visitCount || 0) - (a.visitCount || 0) || String(a.mrn || '').localeCompare(String(b.mrn || '')));
+        (b.visitCount || 0) - (a.visitCount || 0) || mrnOrder(a.mrn, b.mrn));
     let primaryId = byBest[0].id;
 
     const overlay = h('div', { class: 'modal', style: { zIndex: '9000' } });

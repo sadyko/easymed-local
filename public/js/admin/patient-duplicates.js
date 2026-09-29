@@ -148,3 +148,30 @@ export function duplicateIdSet(rows) {
     for (const group of duplicateGroups(rows)) for (const id of group) set.add(id);
     return set;
 }
+
+// MRN_BEYOND_99999_V1 — which of two cards is OLDER by its number, for the
+// merge dialog's default «keep» card. Same rule as the trigger that mints the
+// numbers (migration 232): the year is the two digits right after the FIRST
+// hyphen, the number is read WHOLE after the second. Text order is wrong past
+// 99 999: 'A-26-100000' < 'A-26-99999' because '1' < '9', so the card issued
+// LAST was offered as the oldest. The letter is not part of the order: the
+// year's counter is shared by every letter (legacy P-26-… and A-26-… are one
+// series), so year + number IS the order of issue. Numbers not in that shape
+// (typed by hand, imported) sort after the parsed ones, among themselves as
+// text with digit runs compared as numbers.
+const MRN_PARTS = /^[^-]*-(\d\d)-(\d+)/;
+export function mrnOrder(a, b) {
+    const sa = String(a ?? ''), sb = String(b ?? '');
+    const ma = MRN_PARTS.exec(sa), mb = MRN_PARTS.exec(sb);
+    if (ma && mb) {
+        if (ma[1] !== mb[1]) return ma[1] < mb[1] ? -1 : 1;
+        // Compared as digit strings, not Number(): no precision limit, and
+        // leading zeros ('00042' vs '42') do not decide anything.
+        const na = ma[2].replace(/^0+(?=\d)/, ''), nb = mb[2].replace(/^0+(?=\d)/, '');
+        if (na.length !== nb.length) return na.length - nb.length;
+        if (na !== nb) return na < nb ? -1 : 1;
+    } else if (ma || mb) {
+        return ma ? -1 : 1;
+    }
+    return sa.localeCompare(sb, undefined, { numeric: true });
+}

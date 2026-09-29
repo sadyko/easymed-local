@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {
   normalizeName, firstNameOf, phoneKey, idKey, namesMatch,
-  duplicateGroups, duplicateIdSet,
+  duplicateGroups, duplicateIdSet, mrnOrder,
 } from './patient-duplicates.js';
 
 // ---------------------------------------------------------------------------
@@ -185,4 +186,35 @@ test('empty / malformed input never throws', () => {
   assert.deepEqual(duplicateGroups([]), []);
   assert.deepEqual(duplicateGroups(null), []);
   assert.deepEqual(duplicateGroups([null, {}, { phone: PHONE }]), [], 'rows without an id are skipped');
+});
+
+// ---------------------------------------------------------------------------
+// mrnOrder — MRN_BEYOND_99999_V1: «самая старая карта» по номеру, тем же
+// правилом, что у триггера выдачи (миграция 232).
+// ---------------------------------------------------------------------------
+test('mrnOrder: after 99 999 the number is read whole — A-26-99999 is older than A-26-100000', () => {
+  assert.ok(mrnOrder('A-26-99999', 'A-26-100000') < 0, 'text order would say the opposite ("1" < "9")');
+  assert.ok(mrnOrder('A-26-100000', 'A-26-99999') > 0);
+  assert.ok(mrnOrder('A-26-100001', 'A-26-100000') > 0);
+  assert.equal(mrnOrder('A-26-00042', 'A-26-00042'), 0);
+});
+
+test('mrnOrder: year first, then the number, across letters — one counter spans P- and A-', () => {
+  const sorted = ['A-26-100000', 'P-26-00005', 'A-26-99999', 'A-25-120000', 'AB-26-70128'].sort(mrnOrder);
+  assert.deepEqual(sorted, ['A-25-120000', 'P-26-00005', 'AB-26-70128', 'A-26-99999', 'A-26-100000']);
+});
+
+test('mrnOrder: hand-typed or missing numbers go after the parsed ones and never throw', () => {
+  const sorted = ['без-формата', '', 'A-26-00007', null, 'MRN-08124'].sort(mrnOrder);
+  assert.deepEqual(sorted.slice(0, 1), ['A-26-00007']);
+  assert.equal(sorted.length, 5);
+});
+
+test('mrnOrder: the merge dialog picks its default card with it, not with text order', () => {
+  const src = fs.readFileSync(new URL('./views/patients.js', import.meta.url), 'utf8');
+  const at = src.indexOf('function openMergeModal');
+  assert.ok(at > 0, 'openMergeModal found');
+  const body = src.slice(at, src.indexOf('let primaryId', at));
+  assert.match(body, /mrnOrder\(a\.mrn, b\.mrn\)/);
+  assert.doesNotMatch(body, /localeCompare/);
 });
