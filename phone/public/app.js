@@ -125,9 +125,15 @@ async function loadMe() {
 }
 
 async function loadCalls() {
-  const { calls } = await api('/api/calls?limit=60');
+  const { calls, may_hear: mayHear } = await api('/api/calls?limit=60');
   const rows = $('rows');
   rows.innerHTML = '';
+  // ROLES_SAVE_TRUTH_V1 — «Прослушать» только при may_hear (те же ворота, что у
+  // /api/recording), а почему кнопки нет — одной строкой под журналом, а не
+  // молчанием: пустая ячейка у разговора читалась как «не работает».
+  const note = $('recNote');
+  note.textContent = 'Слушать записи разговоров вашей роли не разрешено — право «Прослушать запись» в «Роли».';
+  note.hidden = !!mayHear || !calls.some((c) => Number(c.billsec) > 0);
   if (!calls.length) {
     rows.innerHTML = '<tr><td colspan="6">Звонков пока нет.</td></tr>';
     return;
@@ -160,22 +166,27 @@ async function loadCalls() {
     tr.appendChild(cell(c.operator_name || c.internal_number || '—'));
 
     const rec = document.createElement('td');
-    if (answered) {
+    if (answered && mayHear) {
       const b = document.createElement('button');
       b.textContent = 'Прослушать';
+      // ROLES_SAVE_TRUTH_V1 — отказ и ошибка ТЕКСТОМ в строке. Прежде кнопка
+      // становилась «Не вышло», а причина пряталась в подсказку под мышью.
+      const why = document.createElement('div');
+      why.className = 'rec-msg';
       b.addEventListener('click', async () => {
         holdUntil = Date.now() + 60000;
-        b.disabled = true; b.textContent = 'Ищем…';
+        b.disabled = true; b.textContent = 'Ищем…'; why.textContent = '';
         try {
           const r = await api('/api/recording?call_id=' + encodeURIComponent(c.id));
           if (!r.url) { b.textContent = 'Записи нет'; return; }
           const a = document.createElement('audio');
           a.controls = true; a.autoplay = true; a.src = r.url;
           b.replaceWith(a);
-        } catch (e) { b.textContent = 'Не вышло'; b.title = e.message; }
+        } catch (e) { b.textContent = 'Прослушать'; why.textContent = e.message; }
         finally { b.disabled = false; }
       });
       rec.appendChild(b);
+      rec.appendChild(why);
     } else {
       rec.textContent = '—';
     }

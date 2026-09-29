@@ -121,3 +121,16 @@ test('запись разговора приходит только тому, к
     assert.equal(boss.calls[0].recording_url, 'https://rec/1.mp3');
   });
 });
+
+// ROLES_SAVE_TRUTH_V1 — экран рисует «Прослушать» только тому, кому слушать можно:
+// журнал говорит это одним флагом, теми же воротами, что у /api/recording. И
+// отказ журнала называет строку «Ролей» её нынешним именем — «Журнал звонков».
+test('журнал говорит экрану, можно ли слушать записи (may_hear); отказ журнала называет строку «Журнал звонков»', async () => {
+  await withApp(async ({ get }) => {
+    assert.equal((await (await get('/api/calls', 'watcher')).json()).may_hear, false);
+    assert.equal((await (await get('/api/calls', 'listener')).json()).may_hear, true);
+    assert.equal((await (await get('/api/calls', 'adm')).json()).may_hear, true);
+    const denied = await (await get('/api/calls', 'dialer')).json();
+    assert.match(denied.error.message, /«Журнал звонков»/);
+  });
+});
