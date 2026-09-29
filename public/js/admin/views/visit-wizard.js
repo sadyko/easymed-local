@@ -55,6 +55,7 @@ import { pendingCrmLines } from '../crm-lines.js';
 import { readEnsureVisit } from '../ensure-visit-answer.js';
 import { printableSheet } from './doc-settings.js?v=noqr1';   // WIZ_INVOICE_PRINT_V1 — тот же брендированный бланк «Счёт» (Настройки → Документы); ?v как у всех импортёров
 import { printInvoiceSheetById } from './receipt-print.js?v=rp1';   // V3120_FIX — лист на каждый счёт, из серверных строк
+import { actSheet, isDmsPayer } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 — акт плательщика одной сборкой с кассой
 
 
 function fmtPrice(n) {
@@ -277,7 +278,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // Страховка платит по полису (её выбор добавляет шаг с номером полиса);
     // любая другая организация — корпоратив, госпрограмма вроде ФМС — платит по
     // договору, полиса у неё нет. Пустой kind трактуем как страховую.
-    const isDmsPayer = (p) => ['insurance', 'dms', ''].includes(String(p && p.kind || '').toLowerCase());
+    // REFERRAL_BILL_V1 — isDmsPayer теперь из payer-act.js: то же правило
+    // решает, «полис» или «договор» печатать в акте кассы.
     // (payersFor убран вместе с выбором компании в смете — шаг «Кто платит»
     //  фильтрует точнее, по конкретному типу: payersOfKind.)
 
@@ -669,7 +671,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // it is what tells you whether the browser is running the file you just
         // edited, which is exactly the question when a fix "does not work".
         /* i18n-exempt-start: console-диагностика */
-        console.info('[visit-wizard refbill2] catalog load —', wiz.dbg,   // REFERRAL_BILL_V1 — тег = штамп ?v= импортов
+        console.info('[visit-wizard refbill3] catalog load —', wiz.dbg,   // REFERRAL_BILL_V1 — тег = штамп ?v= импортов
             '· плательщики:', wiz.payersError ? 'ОШИБКА ' + wiz.payersError : wiz.payers.length);
         /* i18n-exempt-end */
         if (svcRes.error) toast(trf('Услуги не загрузились: {msg}', { msg: wiz.loadError }), 'fail');
@@ -1550,48 +1552,27 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // же брендированном бланке (Настройки → Документы), но это НЕ счёт пациенту:
     // документ адресован организации, содержит только покрытые ею услуги и место
     // для подписей обеих сторон — им закрывают расчёт по договору.
+    // REFERRAL_BILL_V1 (29.09) — бланк собирает payer-act.js (actSheet): тот же
+    // акт печатает касса по счёту плательщику из «Ждут счёта». Здесь остались
+    // только данные мастера: плательщик, полис, строки сметы и талоны.
     function printAkt({ invoice, payerId, lines, visitDate, queue }) {
         const payer = wiz.payers.find(p => String(p.id) === String(payerId));
-        const no = invoice.invoice_number || String(invoice.id);
         const docName = (c) => {
             const id = c.doctorId || (c.svc.requires_doctor ? wiz.doctorId : null);
             const d = id ? wiz.doctors.find(x => String(x.id) === String(id)) : null;
             return d ? (d.full_name || d.username || '') : '';
         };
-        const dms = payer ? isDmsPayer(payer) : false;
-        // В бланке 'act' уже есть блок плательщика, покрытие и подписи сторон
-        // (пациент / врач / представитель страховой) — свой бланк не нужен,
-        // достаточно отдать данные в его форме. Итоги он считает по items сам.
-        /* i18n-exempt-start: печатный акт — печатный документ, намеренно русский */
-        printableSheet({
-            type: 'act',
-            idLine: 'АКТ ' + no,
-            data: {
-                title: 'Акт оказанных медицинских услуг',
-                docNo: 'АКТ ' + no,
-                issueDate: 'Дата ' + new Date().toLocaleDateString('ru-RU'),
-                coverage: dms ? 'По полису ДМС' : 'По договору',
-                patient: [
-                    ['ФИО', patient.full_name || '—'],
-                    ['Карта №', patient.mrn || '—'],
-                    ['Дата услуг', (visitDate || '').split('-').reverse().join('.')],
-                ],
-                payer: [
-                    ['Организация', payer ? payer.name : '—'],
-                    [dms ? 'Полис' : 'Договор', dms ? (wiz.policyNo.trim() || '—') : ('счёт ' + no)],
-                    ['Покрытие', '100% от суммы акта'],
-                ],
-                items: lines.map((c, i) => {
-                    const dn = docName(c);
-                    return { name: c.svc.name + (dn ? ' · ' + dn : ''), qty: c.qty, price: cartLinePrice(c), _alt: i % 2 === 1 };
-                }),
-                // ACT_SHEET_V1 — очередь по услугам АКТА. Готовый queueRows
-                // счёта здесь не годится: он собран для услуг ПАЦИЕНТА, то есть
-                // ровно для тех, которых в акте нет (COVERAGE_SPLIT_V1).
-                queue: queue || [],
-            },
-        });
-        /* i18n-exempt-end */
+        printableSheet(actSheet({   // REFERRAL_BILL_V1 — общая сборка акта (payer-act.js)
+            invoice, payer, patient, visitDay: visitDate, policyNo: wiz.policyNo,
+            items: lines.map((c, i) => {
+                const dn = docName(c);
+                return { name: c.svc.name + (dn ? ' · ' + dn : ''), qty: c.qty, price: cartLinePrice(c), _alt: i % 2 === 1 };
+            }),
+            // ACT_SHEET_V1 — очередь по услугам АКТА. Готовый queueRows
+            // счёта здесь не годится: он собран для услуг ПАЦИЕНТА, то есть
+            // ровно для тех, которых в акте нет (COVERAGE_SPLIT_V1).
+            queue: queue || [],
+        }));
     }
 
     // ---------------------------------------------------------------------

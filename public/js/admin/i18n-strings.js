@@ -20,6 +20,13 @@ export const STRINGS = {
   "Все услуги выставлены — ждущих счёта нет.": {"en":"All services are invoiced — nothing is awaiting an invoice.","ru":"Все услуги выставлены — ждущих счёта нет.","uz":"Barcha xizmatlar hisobga chiqarilgan — hisob kutayotganlar yo'q."},   // REFERRAL_BILL_V1
   "Выставить счёт · {patient}": {"en":"Issue invoice · {patient}","ru":"Выставить счёт · {patient}","uz":"Hisob chiqarish · {patient}"},   // REFERRAL_BILL_V1
   "добавил: {name}": {"en":"added by: {name}","ru":"добавил: {name}","uz":"qo'shgan: {name}"},   // REFERRAL_BILL_V1
+  // REFERRAL_BILL_V1 — «Card's payer, can split» (29.09): «Кому счёт» в окне «Выставить счёт»
+  "Плательщик в карте: {name}": {"en":"Payer on the card: {name}","ru":"Плательщик в карте: {name}","uz":"Kartadagi to'lovchi: {name}"},   // REFERRAL_BILL_V1
+  "Кому счёт": {"en":"Bill to","ru":"Кому счёт","uz":"Hisob kimga"},   // REFERRAL_BILL_V1
+  "{name} — плательщик в карте": {"en":"{name} — payer on the card","ru":"{name} — плательщик в карте","uz":"{name} — kartadagi to'lovchi"},   // REFERRAL_BILL_V1
+  "Пациенту": {"en":"To the patient","ru":"Пациенту","uz":"Bemorga"},   // REFERRAL_BILL_V1
+  "Выставить счёт плательщику": {"en":"Invoice the payer","ru":"Выставить счёт плательщику","uz":"To'lovchiga hisob chiqarish"},   // REFERRAL_BILL_V1
+  "Счёт плательщику {payer} выставлен — оплата по акту": {"en":"Invoice to the payer {payer} issued — payment under the act","ru":"Счёт плательщику {payer} выставлен — оплата по акту","uz":"{payer} to'lovchisiga hisob chiqarildi — to'lov dalolatnoma bo'yicha"},   // REFERRAL_BILL_V1
   // CASHIER_PAID_SWAP_V1 (2026-09-28) — замена в оплаченном счёте, «Возвраты и отмены»
   "Замена услуги в оплаченном счёте двигает деньги (возврат разницы или доплата) — её делает касса: кассир или администратор.": {"en":"Replacing a service on a paid invoice moves money (a refund of the difference or an extra payment) — the cash desk does it: a cashier or an administrator.","ru":"Замена услуги в оплаченном счёте двигает деньги (возврат разницы или доплата) — её делает касса: кассир или администратор.","uz":"To'langan hisobda xizmatni almashtirish pulni harakatga keltiradi (farqni qaytarish yoki qo'shimcha to'lov) — buni kassa qiladi: kassir yoki administrator."},
   "Услуга ещё не в счёте — её меняют обычной правкой, без расчёта денег.": {"en":"The service is not on an invoice yet — it is changed with a regular fix, without settling money.","ru":"Услуга ещё не в счёте — её меняют обычной правкой, без расчёта денег.","uz":"Xizmat hali hisobda emas — u pul hisob-kitobisiz oddiy tuzatish bilan o'zgartiriladi."},

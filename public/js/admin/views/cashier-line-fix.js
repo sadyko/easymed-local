@@ -440,10 +440,26 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
 // {пациент}»), `preselectRefunded: false` — строки, за которые пациенту вернули
 // деньги, не отмечены сразу: здесь их снова выставляют только явной галочкой.
 // «Возвраты и отмены» по-прежнему отмечают всё (выставляют заново осознанно).
-export async function openRebill(row, { onBilled = null, title = null, preselectRefunded = true } = {}) {
+//
+// REFERRAL_BILL_V1 — решение владельца 29.09 «Card's payer, can split».
+// `cardPayer` ({ id, name, kind }) — ДЕЙСТВУЮЩИЙ плательщик из карты пациента
+// (cashier_unbilled; то же правило, что у отказа врачу). С ним в окне «Кому
+// счёт»: этот плательщик (по умолчанию) или «Пациенту» — других плательщиков
+// здесь нет. Отмеченные строки уходят выбранному. Счёт плательщику —
+// create_invoice_for_visit с payer_id и discount_amount: 0, как задание
+// COVERAGE_SPLIT_V1 мастера визита; окна оплаты у него нет (денег у кассы не
+// будет — расчёт по акту): тост, `onBilled(invoice, { payer, items })` — касса
+// печатает акт, — и окно ОСТАЁТСЯ с невыставленными строками, уже отмеченными
+// и с «Пациенту»: второй проход выставляет остаток пациенту. Не осталось —
+// окно закрывается. Неотмеченное ждёт в «Ждут счёта».
+export async function openRebill(row, { onBilled = null, title = null, preselectRefunded = true, cardPayer = null } = {}) {
     const s = sheet(title || trf('Выставить заново · {no}', { no: row.invoice_number || ('#' + row.invoice_id) }), 'Receipt', 640);
     s.body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } },
         tr('Строки визита без счёта: отметьте, что выставить. Услугу и врача можно поменять до выставления.')));
+    const payer = cardPayer && cardPayer.id != null ? cardPayer : null;   // REFERRAL_BILL_V1
+    let target = payer ? 'payer' : 'patient';
+    const targetBox = payer ? h('div', { class: 'row', style: { gap: '14px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' } }) : null;
+    if (targetBox) s.body.appendChild(targetBox);
     const table = h('div', { style: { display: 'grid', gap: '6px' } });
     s.body.appendChild(table);
     const billBtn = h('button', { class: 'btn btn-primary', type: 'button', disabled: true }, tr('Выставить счёт и принять оплату'));
@@ -454,6 +470,20 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
     let seeded = false;
     let refunded = new Set();
     const canFix = canFixCashierLines();
+
+    // REFERRAL_BILL_V1 — «Кому счёт» и подпись кнопки по выбору.
+    const paintTarget = () => {
+        billBtn.textContent = target === 'payer' ? tr('Выставить счёт плательщику') : tr('Выставить счёт и принять оплату');
+        if (!targetBox) return;
+        clear(targetBox);
+        targetBox.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700 } }, tr('Кому счёт')));
+        for (const [v, label] of [['payer', trf('{name} — плательщик в карте', { name: payer.name || '—' })], ['patient', tr('Пациенту')]]) {
+            const radio = h('input', { type: 'radio', name: 'bill-target', value: v, checked: target === v ? true : null });
+            radio.addEventListener('change', () => { target = v; paintTarget(); });
+            targetBox.appendChild(h('label', { 'data-bill-target': v, style: { display: 'flex', gap: '6px', alignItems: 'center', fontSize: '13.5px', cursor: 'pointer' } }, radio, label));
+        }
+    };
+    paintTarget();
 
     const paint = async () => {
         clear(table);
@@ -475,7 +505,7 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
         if (!lines.length) {
             table.appendChild(h('div', { class: 'empty' }, 'Невыставленных строк не осталось — выставлять нечего.'));
             billBtn.disabled = true;
-            return;
+            return 0;   // REFERRAL_BILL_V1 — после счёта плательщику: окно закрывается
         }
         for (const l of lines) {
             const id = Number(l.id);
@@ -511,17 +541,36 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
             actions));
         }
         billBtn.disabled = !chosen.size;
+        return lines.length;   // REFERRAL_BILL_V1 — остаток строк (0 — окно после счёта плательщику закрывается)
     };
 
     billBtn.addEventListener('click', async () => {
         const ids = [...chosen];
         if (!ids.length) { toast(tr('Отметьте, что выставить.'), 'fail'); return; }
         billBtn.disabled = true;
+        const toPayer = target === 'payer' && !!payer;   // REFERRAL_BILL_V1
         const { data, error } = await supabase.rpc('create_invoice_for_visit', {
             visit_id: row.visit_id, visit_service_ids: ids,
+            // REFERRAL_BILL_V1 — плательщику: без скидки пациента, как задание COVERAGE_SPLIT_V1 мастера.
+            ...(toPayer ? { payer_id: Number(payer.id), discount_amount: 0 } : {}),
             ...(ids.some((id) => refunded.has(id)) ? { rebill_refunded: true } : {}),
         });
         if (error) { toast(error.message || tr('Не удалось.'), 'fail'); billBtn.disabled = false; return; }
+        if (toPayer) {
+            // REFERRAL_BILL_V1 — денег у кассы по нему не будет: тост, акт, и
+            // окно остаётся с остатком — вторым проходом пациенту.
+            toast(trf('Счёт плательщику {payer} выставлен — оплата по акту', { payer: payer.name || '—' }), 'ok');
+            if (onBilled && data && data.invoice) {
+                try { await onBilled(data.invoice, { payer, items: (data && data.items) || [] }); }
+                catch (e) { console.warn('[rebill] after payer bill:', e && e.message); }
+            }
+            target = 'patient';
+            seeded = false;
+            paintTarget();
+            const left = await paint();
+            if (!left) s.overlay.remove();
+            return;
+        }
         toast(trf('Счёт выставлен: {no}.', { no: (data && data.invoice && data.invoice.invoice_number) || '' }), 'ok');
         s.overlay.remove();
         if (onBilled && data && data.invoice) await onBilled(data.invoice);

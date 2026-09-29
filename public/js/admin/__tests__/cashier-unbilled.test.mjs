@@ -58,13 +58,22 @@ function mkEl(tag) {
 const calls = [];
 let rpcAnswers = {};
 let tables = {};
+// Тосты слышны: toast() пишет текст в #toast (ui.js) — журнал, как в
+// wizard-booking.test.mjs. Печать слышна: окно печати собирает HTML бланка.
+const TOASTS = [];
+const printed = [];
 globalThis.Node = FakeNode;
+const TOAST_EL = mkEl('div');
+Object.defineProperty(TOAST_EL, 'textContent', { get() { return ''; }, set(v) { TOASTS.push(String(v)); }, configurable: true });
 globalThis.document = {
     createElement: mkEl, createElementNS: (_n, t) => mkEl(t), createTextNode: (t) => new FakeText(t),
     head: mkEl('head'), body: mkEl('body'), documentElement: mkEl('html'),
-    addEventListener() {}, removeEventListener() {}, getElementById() { return null; }, querySelectorAll() { return []; },
+    addEventListener() {}, removeEventListener() {}, getElementById(id) { return id === 'toast' ? TOAST_EL : null; }, querySelectorAll() { return []; },
 };
-const openWin = () => ({ document: { open() {}, write() {}, close() {} }, focus() {}, print() {}, close() {} });
+const openWin = () => {
+    const w = { _html: '', document: { open() {}, write(x) { w._html += x; }, close() { printed.push(w._html); } }, focus() {}, print() {}, close() {} };
+    return w;
+};
 globalThis.window = { location: { hostname: 'localhost' }, localStorage: { getItem: () => null, setItem() {} }, open: openWin, easymed: { state: { user: { id: 9, full_name: 'Кассир', role: 'cashier' } } } };
 const store = new Map([['admin.lang', 'ru']]);
 globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem(k, v) { store.set(k, String(v)); }, removeItem(k) { store.delete(k); }, clear() {} };
@@ -251,4 +260,143 @@ test('«Выставить счёт»: окно «Выставить счёт ·
     assert.ok(rpcCalls('cashier_invoices').length >= 1, 'список счетов не перечитан');
     assert.ok(rpcCalls('cashier_unbilled').length >= 1, 'список «Ждут счёта» не перечитан');
     st.filter = 'unpaid';
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Решение владельца 2026-09-29: «Card's payer, can split». В окне «Выставить
+// счёт» у пациента с ДЕЙСТВУЮЩИМ плательщиком в карте — «Кому счёт»: этот
+// плательщик (по умолчанию) или «Пациенту»; других плательщиков нет. Счёт
+// плательщику — без окна оплаты: тост и АКТ (та же сборка, что у мастера
+// визита, payer-act.js); окно остаётся с невыставленными строками — второй
+// проход выставляет их пациенту с окном оплаты.
+// ═══════════════════════════════════════════════════════════════════════════
+const INSURED = {
+    ...ROW_A, visit_id: 50, lines_count: 2, total: 140000, names: ['Анализ крови', 'Приём терапевта'],
+    card_payer_id: 5, card_payer_name: 'Esado', card_payer_kind: 'insurance', card_policy_no: 'POL-77',
+};
+function insuredWorld() {
+    tables = {
+        visit_services: [
+            { id: 401, visit_id: 50, invoice_item_id: null, status: 'added', service_id: 2, unit_price: 40000, quantity: 1, clinic_item_id: null, services: { name: 'Анализ крови' } },
+            { id: 402, visit_id: 50, invoice_item_id: null, status: 'added', service_id: 1, unit_price: 100000, quantity: 1, clinic_item_id: null, services: { name: 'Приём терапевта' }, doctor_id: { id: 20, full_name: 'Иванов Врач' } },
+        ],
+        payment_providers: [], patient_discounts: [], services: [],
+    };
+    // Сервер привязывает выставленные строки к счёту — окно перечитает остаток.
+    let seq = 90;
+    const bill = (b) => {
+        const no = ++seq;
+        const byPayer = b.payer_id != null;
+        const lines = tables.visit_services.filter((l) => b.visit_service_ids.includes(l.id));
+        const items = lines.map((l, i) => ({ id: no * 10 + i, invoice_id: no, description: l.services.name, quantity: 1, unit_price: l.unit_price, total: l.unit_price, discount_amount: 0 }));
+        lines.forEach((l, i) => { l.invoice_item_id = items[i].id; });
+        const total = items.reduce((a, it) => a + it.total, 0);
+        return { invoice: { id: no, invoice_number: 'INV-A-26-000' + no, visit_id: 50, patient_id: 3, payer_id: byPayer ? b.payer_id : null, status: 'unpaid', subtotal: total, discount_amount: 0, total_amount: total, paid_amount: 0 }, items, rest_discount: 0 };
+    };
+    calls.length = 0; TOASTS.length = 0; printed.length = 0;
+    rpcAnswers = {
+        ...LISTS(),
+        visit_refunded_lines: { line_ids: [] },
+        create_invoice_for_visit: bill,
+        issue_queue_numbers: (b) => (b.p_ids || []).map((id) => ({ visit_service_id: id, label: 'Лаборатория', number: 12, queue_key: 'lab' })),
+        cash_shift_summary: SUMMARY,
+        cashier_unbilled: { rows: [], totals: { n: 0, sum: 0 } },
+        deposit_balance: { balance: 0, debt: 0 },
+    };
+}
+function openInsuredBill(row = INSURED) {
+    const st = desk.__test_cardState;
+    st.filter = 'unbilled';
+    st.search = '';
+    st.unbilled = { rows: [row], totals: { n: 1, sum: row.total } };
+    const el = mkEl('div');
+    desk.__test_paintTable(el, mkEl('div'));
+    return el;
+}
+const targetRadio = (dlg, v) => walk(byAttr(dlg, 'data-bill-target', v)).find((e) => e.tagName === 'INPUT');
+const lineBox = (dlg, id) => walk(byAttr(dlg, 'data-rebill-line', String(id))).find((e) => e.tagName === 'INPUT');
+
+test('плательщик в карте: карточка говорит «Плательщик в карте: …», окно — «Кому счёт» только тогда', async () => {
+    asCashier();
+    closeAll();
+    insuredWorld();
+    const el = openInsuredBill();
+    const card = byAttr(el, 'data-unbilled-row', '50');
+    assert.match(textOf(card), /Плательщик в карте: Esado/);
+    buttonByText(card, 'Выставить счёт').click();
+    await tick(80);
+    const dlg = lastModal();
+    assert.match(textOf(dlg), /Кому счёт/);
+    assert.ok(targetRadio(dlg, 'payer') && targetRadio(dlg, 'payer').hasAttribute('checked'), 'плательщик из карты — по умолчанию');
+    assert.ok(targetRadio(dlg, 'patient') && !targetRadio(dlg, 'patient').hasAttribute('checked'));
+    assert.match(textOf(byAttr(dlg, 'data-bill-target', 'payer')), /Esado/);
+    assert.ok(buttonByText(dlg, 'Выставить счёт плательщику'), 'кнопка говорит, кому счёт');
+    // Без плательщика в карте — выбора нет вовсе.
+    closeAll();
+    const plain = openInsuredBill({ ...INSURED, card_payer_id: null, card_payer_name: null, card_payer_kind: null });
+    assert.ok(!/Плательщик в карте/.test(textOf(plain)));
+    buttonByText(byAttr(plain, 'data-unbilled-row', '50'), 'Выставить счёт').click();
+    await tick(80);
+    const dlg2 = lastModal();
+    assert.ok(!/Кому счёт/.test(textOf(dlg2)), '«Кому счёт» без плательщика в карте');
+    assert.equal(byAttr(dlg2, 'data-bill-target', 'payer'), undefined);
+    assert.ok(buttonByText(dlg2, 'Выставить счёт и принять оплату'));
+    desk.__test_cardState.filter = 'unpaid';
+});
+
+test('раздельно: анализ — плательщику (тост, акт, без окна оплаты, окно остаётся), приём — пациенту (окно оплаты)', async () => {
+    asCashier();
+    closeAll();
+    insuredWorld();
+    const el = openInsuredBill();
+    buttonByText(byAttr(el, 'data-unbilled-row', '50'), 'Выставить счёт').click();
+    await tick(80);
+    const dlg = lastModal();
+    // Первый проход: только анализ, плательщику.
+    const b402 = lineBox(dlg, 402);
+    b402.fire('change');   // снять приём: в свежем окне отмечено всё, а свойство checked у заглушки — false
+    buttonByText(dlg, 'Выставить счёт плательщику').click();
+    await tick(250);
+    assert.deepEqual(rpcCalls('create_invoice_for_visit')[0][1], { visit_id: 50, visit_service_ids: [401], payer_id: 5, discount_amount: 0 });
+    assert.ok(TOASTS.some((t) => t.includes('Счёт плательщику Esado выставлен — оплата по акту')), 'тоста нет: ' + JSON.stringify(TOASTS));
+    assert.ok(!modals().some((m) => /Оплата · /.test(textOf(m))), 'по счёту плательщика у кассы окна оплаты нет');
+    const act = printed.find((x) => /Акт оказанных медицинских услуг/.test(x));
+    assert.ok(act, 'акт не напечатан');
+    assert.match(act, /Esado/);
+    assert.match(act, /АКТ INV-A-26-00091/);
+    assert.match(act, /POL-77/, 'полис из карты');
+    assert.match(act, /Анализ крови/);
+    assert.doesNotMatch(act, /Приём терапевта/, 'в акте только строки плательщика');
+    assert.match(act, /Лаборатория/, 'талон очереди на акте');
+    // Окно осталось: невыставленный приём, теперь — пациенту и отмечен.
+    const still = lastModal();
+    assert.equal(still, dlg, 'окно «Выставить счёт» закрылось после счёта плательщику');
+    assert.equal(byAttr(still, 'data-rebill-line', '401'), undefined, 'выставленная строка всё ещё в окне');
+    assert.ok(lineBox(still, 402).hasAttribute('checked'), 'остаток отмечен для второго прохода');
+    assert.ok(targetRadio(still, 'patient').hasAttribute('checked'), 'второй проход — пациенту');
+    calls.length = 0;
+    buttonByText(still, 'Выставить счёт и принять оплату').click();
+    await tick(250);
+    assert.deepEqual(rpcCalls('create_invoice_for_visit')[0][1], { visit_id: 50, visit_service_ids: [402] });
+    assert.match(textOf(lastModal()), /Оплата · INV-A-26-00092/, 'окно оплаты счёта пациента не открылось');
+    assert.equal(printed.filter((x) => /Акт оказанных/.test(x)).length, 1, 'по счёту пациента акта нет');
+    desk.__test_cardState.filter = 'unpaid';
+});
+
+test('плательщик в карте, но касса выбрала «Пациенту» — обычный счёт и окно оплаты, без акта', async () => {
+    asCashier();
+    closeAll();
+    insuredWorld();
+    const el = openInsuredBill();
+    buttonByText(byAttr(el, 'data-unbilled-row', '50'), 'Выставить счёт').click();
+    await tick(80);
+    const dlg = lastModal();
+    targetRadio(dlg, 'patient').fire('change');
+    await tick(20);
+    buttonByText(dlg, 'Выставить счёт и принять оплату').click();
+    await tick(250);
+    assert.deepEqual(rpcCalls('create_invoice_for_visit')[0][1], { visit_id: 50, visit_service_ids: [401, 402] });
+    assert.match(textOf(lastModal()), /Оплата · INV-A-26-00091/);
+    assert.equal(printed.filter((x) => /Акт оказанных/.test(x)).length, 0);
+    desk.__test_cardState.filter = 'unpaid';
 });

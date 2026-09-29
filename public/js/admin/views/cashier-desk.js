@@ -27,7 +27,8 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TY
 import { dateNumeric } from '../../shared/date-words.js';   // V3120_FIX — дата чека не зависит от языка ОС
 import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANCE_V1
 import { searchTokens } from '../patient-search.js';   // CARD_SALE_V1 — поиск покупателя карты
-import { canOfferLineFix, openLineFix, openRebill } from './cashier-line-fix.js?v=refbill1';   // CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»; REFERRAL_BILL_V1 — «Выставить счёт» (title, штамп)
+import { canOfferLineFix, openLineFix, openRebill } from './cashier-line-fix.js?v=refbill2';   // CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»; REFERRAL_BILL_V1 — «Выставить счёт» (title, «Кому счёт», штамп)
+import { printInvoiceAct } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 — акт по счёту плательщику, та же сборка, что у мастера визита
 import { canCloseOtherShifts } from '../permissions.js';   // CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
 
 // DEPOSIT_WALLET_V1 — «С баланса»: оплата и возврат через баланс пациента.
@@ -1267,9 +1268,24 @@ async function openVisitWindow(visitId, reload) {
 // оплаты открывается в любом случае: сбой перерисовки кассы не должен оставить
 // выставленный счёт без приёма денег. `r` — строка, из которой выставили:
 // пациент для окна оплаты.
+//
+// REFERRAL_BILL_V1 («Card's payer, can split», 29.09) — счёт ПЛАТЕЛЬЩИКУ
+// (invoice.payer_id): денег у кассы по нему не будет, окна оплаты нет —
+// печатается АКТ, та же сборка, что у мастера визита (payer-act.js). Тост
+// сказало окно «Выставить счёт»; `extra` — { payer, items } оттуда же.
 function payAfterBilling(root, r) {
-    return async (invoice) => {
+    return async (invoice, extra = {}) => {   // REFERRAL_BILL_V1 — extra: { payer, items } у счёта плательщику
         try { await paint(root); } catch (e) { console.warn('[cashier] repaint:', e && e.message); }
+        if (invoice && invoice.payer_id != null) {   // REFERRAL_BILL_V1 — счёт плательщику: акт, окна оплаты нет
+            try {
+                await printInvoiceAct({
+                    supabase, printableSheet, invoice, items: extra.items || [], payer: extra.payer || null,
+                    patient: { full_name: r.patient_name, mrn: r.mrn },
+                    visitDay: r.visit_date ? ymdLocal(new Date(r.visit_date)) : '', policyNo: r.card_policy_no || '',
+                });
+            } catch (e) { console.warn('[cashier] act print:', e && e.message); }
+            return;
+        }
         const due = Math.max(Math.round((Number(invoice.total_amount) - Number(invoice.paid_amount || 0)) * 100) / 100, 0);
         if (due > 0) {
             payModal(root, { ...invoice, patient_name: r.patient_name, mrn: r.mrn, phone: r.phone, date_of_birth: r.date_of_birth,
@@ -1316,6 +1332,8 @@ function unbilledCard(r, root) {
         h('button', { class: 'btn btn-primary btn-sm', type: 'button', 'data-bill-visit': String(r.visit_id), onclick: () => openRebill(r, {
             title: trf('Выставить счёт · {patient}', { patient: r.patient_name || '—' }),
             preselectRefunded: false,
+            // REFERRAL_BILL_V1 — «Кому счёт»: только плательщик из карты (действующий).
+            cardPayer: r.card_payer_id != null ? { id: r.card_payer_id, name: r.card_payer_name, kind: r.card_payer_kind } : null,
             onBilled: payAfterBilling(root, r),
         }) }, 'Выставить счёт'));
     return h('div', { class: 'card', 'data-unbilled-row': String(r.visit_id), style: { padding: '12px 14px', display: 'grid', gap: '6px' } },
@@ -1327,6 +1345,9 @@ function unbilledCard(r, root) {
             h('span', { class: 'num', style: { fontWeight: 700 } }, trf('{sum} сум', { sum: fmtPrice(r.total) }))),
         h('div', { style: { fontSize: '12.5px' } }, services),
         r.added_by ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, trf('добавил: {name}', { name: r.added_by })) : null,
+        // REFERRAL_BILL_V1 — касса знает ДО окна, что счёт, может быть, плательщику.
+        r.card_payer_name ? h('div', { 'data-card-payer': '', style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--primary-700)' } },
+            trf('Плательщик в карте: {name}', { name: r.card_payer_name })) : null,
         buttons);
 }
 
