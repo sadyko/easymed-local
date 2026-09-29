@@ -17,6 +17,7 @@ import { stockMinimumSet, stockMinimumClear, stockMinimumsList, stockRequestCrea
 import { expiryLots } from './expiry.js';   // EXPIRY_BALANCE_V1 — остатки партиями, ближайший срок первым
 import { reportsOverview, runReport, ownerReport, reportBuildings, reportFreshness, doctorTierPositions, doctorInpatientShare, doctorReferralReward, doctorPaySummary, reportChoices, payPeriodClose, payPeriodReopen, payPeriodStatus } from './reports.js';   // BUILDING_REPORTS_V1 / BUILDING_FRESHNESS_V1
 import { openCashShift, closeCashShift, cashShiftSummary, cashMove, shiftReport, cashierInvoices, voidInvoice, deleteInvoice, cashierRefunds } from './cashier.js';   // cashierRefunds: CASHIER_PAID_SWAP_V1
+import { cashierUnbilled } from './cashier.js';   // REFERRAL_BILL_V1 — «Ждут счёта» кассы
 import { admitPatient, dischargePatient, setBedStatus, requestAdmission, transferAdmission, setAdmissionDiscount, cancelAdmissionRequest, admissionOrderCreate, admissionOrderCancel, admissionAdmit, admissionReferralDefault,
   admissionDischargeRequest, admissionDischargeCancelRequest, admissionDischargeFinalize, admissionDischargeQueue,
   admissionPrepareWalletPayment } from './inpatient.js';   // ADMISSION_ORDER_V1 / TWO_STEP_DISCHARGE_V1
@@ -148,6 +149,7 @@ export const RPC = {
   cashier_line_swap_paid:      (db, args, user) => swapPaidLine(db, args, user),
   cashier_line_swap_quote:     (db, args, user) => swapPaidLineQuote(db, args, user),
   cashier_refunds:             (db, args, user) => cashierRefunds(db, args, user),
+  cashier_unbilled:            (db, args, user) => cashierUnbilled(db, args, user),   // REFERRAL_BILL_V1 — «Ждут счёта» кассы; только чтение
   refund_payment:           (db, args, user) => refundPayment(db, args, user),   // CASHIER_REFUND_V1 — возврат оплаты (отрицательный платёж)
   refund_invoice_line:      (db, args, user) => refundInvoiceLine(db, args, user),   // BILLING_AUDIT_FIX_V1 (B1) — вернуть одну услугу счёта
   visit_refunded_lines:     (db, args, user) => visitRefundedLines(db, args, user),   // FINAL_MONEY_FIX_V1 (I1) — возвращённые строки визита; чтение

@@ -26,6 +26,8 @@ const READ_ONLY_RPCS = new Set([
   'cashier_line_performers',
   // CASHIER_PAID_SWAP_V1 — «Возвраты и отмены» кассы. Чистое чтение.
   'cashier_refunds',
+  // REFERRAL_BILL_V1 — «Ждут счёта» кассы: визиты со строками без счёта. Чистое чтение.
+  'cashier_unbilled',
   // BUILDING_REPORTS_V1 — перечень зданий для выборки в «Отчётах». Чистое
   // чтение справочного порядка, как reports_overview рядом: клиника с
   // просроченной лицензией читает отчёты, и «читает» не должно означать

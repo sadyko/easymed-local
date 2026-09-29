@@ -65,8 +65,13 @@ export function clearRefundRelease(db, kind, lineIds) {
 // счета). Остаток госпитализации, обзор, акт и доначисление проживания
 // исключают её тем же условием. Выставили заново (buildAdmissionInvoice) —
 // отметка снимается (clearRefundRelease), и строка снова обычная.
-export function notRefundReleasedSql(alias) {
-  return `NOT EXISTS (SELECT 1 FROM pay_refund_releases prr_x WHERE prr_x.kind = 'in' AND prr_x.line_id = ${alias}.id)`;
+// REFERRAL_BILL_V1 (2026-09-29) — то же условие и для строк визита (kind
+// 'out'): «Ждут счёта» в кассе (cashier_unbilled) не показывает строку,
+// отпущенную с возвратом, — она в «Возвратах и отменах», как и у refundedLineIds.
+// kind — только из двух слов, в SQL не попадает ничего другого.
+export function notRefundReleasedSql(alias, kind = 'in') {
+  const k = kind === 'out' ? 'out' : 'in';
+  return `NOT EXISTS (SELECT 1 FROM pay_refund_releases prr_x WHERE prr_x.kind = '${k}' AND prr_x.line_id = ${alias}.id)`;
 }
 export function refundReleasedSql(alias) {
   return `EXISTS (SELECT 1 FROM pay_refund_releases prr_x WHERE prr_x.kind = 'in' AND prr_x.line_id = ${alias}.id)`;

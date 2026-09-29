@@ -16,7 +16,8 @@ import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 // пришли. Касса — последний экран, у которого счёт открыт целиком, и первый, с
 // которого его можно стереть.
 import { assertOwnBuilding, PERFORMED_LINE_STATUSES } from './billing.js';
-import { markRefundRelease, refundedLineIds } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом; CASHIER_PAID_SWAP_V1 — «возвращено» у строк
+import { markRefundRelease, refundedLineIds, notRefundReleasedSql } from '../domain/pay-releases.js';   // PAY_REFUND_V1 — отпущено со счёта с возвратом; CASHIER_PAID_SWAP_V1 — «возвращено» у строк; REFERRAL_BILL_V1 — «Ждут счёта»
+import { lineUnitPrice, consultationFor } from '../domain/pricing.js';   // REFERRAL_BILL_V1 — сумма «Ждут счёта» по правилу цены счёта
 // V3120_FIX (MAJOR) — снятая при отмене товарная строка возвращает товар туда,
 // откуда его взяли (одно правило на сервер, rpc/inventory.js).
 import { restoreSources } from './inventory.js';
@@ -866,4 +867,97 @@ export function cashierRefunds(db, args, user) {
   }
   rows.sort((a, b) => String(b.last_at || '').localeCompare(String(a.last_at || '')) || b.invoice_id - a.invoice_id);
   return { from, to, rows: rows.slice(0, 300), totals: { n: rows.length, refunded: refundedAll } };
+}
+
+// REFERRAL_BILL_V1 (2026-09-29) — «ЖДУТ СЧЁТА» В КАССЕ.
+//
+// Владелец: «While we are seeing the patient as a doctor and refer to another
+// service or a doctor we cannot see them in the cashier's window. Which means
+// flow is broken.» «Приём оплат» строится из одних счетов (cashier_invoices):
+// визит со строками и без счёта кассе не виден вовсе, а обещание «счёт
+// выставит касса» выполнить было нечем. Направление врача теперь выставляет
+// счёт само (billing.js, DOCTOR_INVOICE_ROLES); это — страховка на всё, что
+// всё-таки осталось без счёта: снятая галочка, отказ сервера, строки
+// плательщика у врача, отмена счёта с «Оставить услуги», строка из кабинета.
+//
+// Визит (одна строка ответа на визит) попадает, если у него есть строки визита:
+//   • без счёта (invoice_item_id IS NULL) и не отменённые;
+//   • своего здания — и строка, и визит (у соседа своя касса);
+//   • не отпущенные с возвратом — те в «Возвратах и отменах»
+//     (pay_refund_releases, как у refundedLineIds);
+// у живого визита (не 'cancelled', не 'no_show' — словарь миграции 003),
+// местный день которого не старше UNBILLED_DAYS (будущие — да). Визит с
+// нулевой суммой пропускается: бесплатным строкам платить нечего.
+//
+// Сумма — ДО скидок, по тому же правилу цены, что у счёта (lineUnitPrice:
+// личная цена врача, каталог, тариф визита, сохранённая цена товара); скидки
+// группы и пакета посчитает сам счёт. Только чтение (READ_ONLY_RPCS).
+//
+// План: визиты окна берутся по индексу дня (idx_visits_date), строки — по
+// визиту (idx_visit_services_visit). CROSS JOIN держит этот порядок: иначе
+// SQLite мог бы пойти от «строк без счёта» по всей истории клиники.
+const UNBILLED_DAYS = 30;
+const UNBILLED_LIMIT = 300;
+const UNBILLED_NAMES = 5;
+
+export function cashierUnbilled(db, args, user) {
+  requireRole(user, SHIFT_ROLES);
+  const d = localToday(db);
+  const from = db.prepare('SELECT date(?, ?) AS d').get(d, `-${UNBILLED_DAYS} days`).d;
+  const since = localRangeWhere('v.visit_date', from, null);
+  const lines = db.prepare(`
+    SELECT vs.id, vs.visit_id, vs.service_id, vs.clinic_item_id, vs.consultation_type_id, vs.doctor_id,
+           vs.quantity, vs.unit_price, vs.price_tier, vs.created_at,
+           ub.full_name AS added_by,
+           v.visit_date, v.patient_id,
+           pt.full_name AS patient_name, pt.mrn AS mrn, pt.phone AS phone,
+           pt.date_of_birth AS date_of_birth, pt.gender AS gender
+      FROM visits v
+     CROSS JOIN visit_services vs ON vs.visit_id = v.id
+      JOIN patients pt ON pt.id = v.patient_id
+      LEFT JOIN users ub ON ub.id = vs.created_by
+     WHERE ${since.sql}
+       AND COALESCE(v.status, '') NOT IN ('cancelled', 'no_show')
+       AND v.sync_origin IS NULL
+       AND vs.invoice_item_id IS NULL
+       AND COALESCE(vs.status, '') <> 'cancelled'
+       AND vs.sync_origin IS NULL
+       AND ${notRefundReleasedSql('vs', 'out')}
+     ORDER BY vs.created_at DESC, vs.id DESC
+  `).all(...since.params);
+
+  const getService = db.prepare('SELECT price, name, price_secondary, secondary_days_from, secondary_days_to, price_repeat, repeat_days_from, repeat_days_to FROM services WHERE id = ?');
+  const getProduct = db.prepare('SELECT sale_price, name FROM products WHERE id = ?');
+  const services = new Map();
+  const products = new Map();
+  const once = (cache, id, stmt) => { if (!cache.has(id)) cache.set(id, stmt.get(id) || null); return cache.get(id); };
+
+  // Строки идут от самой свежей: первая строка визита задаёт его место в
+  // списке и «добавил» (автор самой свежей строки).
+  const byVisit = new Map();
+  for (const l of lines) {
+    let svc = null, prod = null, name = null;
+    if (l.service_id != null) { svc = once(services, l.service_id, getService); name = svc && svc.name; }
+    else if (l.clinic_item_id != null) { prod = once(products, l.clinic_item_id, getProduct); name = prod && prod.name; }
+    else if (l.consultation_type_id != null) { const c = consultationFor(db, l.consultation_type_id, l.doctor_id); name = c && c.name; }
+    const qty = Number(l.quantity);
+    const unit = Number(lineUnitPrice(db, l, { service: svc, product: prod })) || 0;
+    const sum = Number.isFinite(qty) && qty > 0 ? round2(unit * qty) : 0;
+    let g = byVisit.get(l.visit_id);
+    if (!g) {
+      g = {
+        visit_id: l.visit_id, visit_date: l.visit_date, patient_id: l.patient_id,
+        patient_name: l.patient_name, mrn: l.mrn, phone: l.phone, date_of_birth: l.date_of_birth, gender: l.gender,
+        lines_count: 0, total: 0, names: [], added_by: l.added_by || null, last_line_at: l.created_at, line_ids: [],
+      };
+      byVisit.set(l.visit_id, g);
+    }
+    g.lines_count += 1;
+    g.total = round2(g.total + sum);
+    g.line_ids.push(l.id);
+    if (name && !g.names.includes(name) && g.names.length < UNBILLED_NAMES) g.names.push(name);
+  }
+  const waiting = [...byVisit.values()].filter((g) => g.total > 0);
+  const sum = round2(waiting.reduce((a, g) => a + g.total, 0));
+  return { from, rows: waiting.slice(0, UNBILLED_LIMIT), totals: { n: waiting.length, sum } };
 }
