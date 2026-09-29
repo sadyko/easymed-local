@@ -267,7 +267,7 @@ const { renderCrm } = await import('../views/crm.js');
 // окно), поэтому между тестами его чистит тот же forgetSlots(), что чистит его
 // после записи. Адрес модуля — ТОТ ЖЕ, что в crm.js: другой адрес это другой
 // модуль, то есть другой кэш, и тест смотрел бы не на то.
-const { forgetSlots } = await import('../views/service-picker-modal.js?v=aug17e');
+const { forgetSlots } = await import('../views/service-picker-modal.js?v=ownrep1');
 
 async function board(leads) {
   LEADS = leads;

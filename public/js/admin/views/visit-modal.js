@@ -14,7 +14,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — sink-обёрт�
 import { currentUser } from '../data.js';
 import { h, Icon, Tag, StatusTag, statusLabel, toast, clear } from '../ui.js';
 import { canDelete, actorRoleCodes, hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — hasActorRole
-import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
+import { openServicePickerModal } from './service-picker-modal.js?v=ownrep1';
 import { openItemPickerModal, isOwnShelfShort } from './item-picker-modal.js?v=billoptin2';   // DISPENSE_ITEM_V1; отказ «нет на полках» — ревью F4
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 import { openCancelInvoiceDialog, logInvoiceAction as _logInvoiceAction, canMoveInvoiceMoney, invoiceMoneyErrorText } from './invoice-actions.js?v=ia3';
@@ -1100,7 +1100,7 @@ async function voidDispensedItem(row, state, onReload) {
 // ИСКЛЮЧЕНИЕМ: каталог (attachCartToVisit) считает по нему, что легло, и не
 // говорит «Услуга добавлена к визиту» после провала.
 export async function addServiceFromPicker(state, pick, onReload) {
-    const { service, doctor, startISO, price_tier, package: pkg } = pick || {};
+    const { service, doctor, startISO, price_tier, package: pkg, unit_price: pickedPrice } = pick || {};
     const fail = (msg) => { throw new Error(msg); };
     // The visit day is over — refuse even if the picker was opened earlier.
     if (isVisitEnded(state.visit)) fail(VISIT_ENDED_MSG);
@@ -1111,7 +1111,12 @@ export async function addServiceFromPicker(state, pick, onReload) {
     if ((state.services || []).some(s => sameLine(s, service, performer))) {
         fail(`"${service.name}" is already in this visit.`);
     }
-    const price = Number(service.price || 0);
+    // OWN_PRICE_REPEAT_V1 — цена строки — та, что назвала смета Калькулятора
+    // (pickerLinePrice: своя цена врача на любом визите, иначе цена визита по
+    // счёту), а не цена яруса из котировки: у врача со своей ценой второй визит
+    // стоит его цену. Счёт всё равно считает сервер тем же правилом.
+    const picked = Number(pickedPrice);
+    const price = pickedPrice != null && Number.isFinite(picked) && picked >= 0 ? picked : Number(service.price || 0);
     const { error } = await insertVisitServiceRow({
         visit_id:     state.visit.id,
         service_id:   ident.service_id,

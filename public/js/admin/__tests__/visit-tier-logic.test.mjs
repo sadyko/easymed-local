@@ -84,11 +84,16 @@ test('the editor sends the four tier fields; the wizard, attach path and doctor 
     assert.match(vw, /rpc\('service_price_quote'/, 'мастер записи спрашивает цену у сервера');
     assert.match(vw, /price_tier:\s*lineTier\(c\)/, 'строка визита из мастера несёт ступень');
     assert.match(vw, /if \(day\) args\.date = day;/, 'котировка спрашивается на ДЕНЬ записи, а не на сегодня');
-    assert.match(vw, /if \(tierApplies\(tq\)\) return Number\(tq\.price\);/, 'ступень сильнее личной цены врача — как в кассе');
+    // OWN_PRICE_REPEAT_V1 (владелец, 30.09: «Own price for repeat too») — своя
+    // цена врача сильнее ступени, ступень — сильнее каталога; правило одно с
+    // кассой (shared/own-price-rule.js serviceLinePrice).
+    assert.match(vw, /return serviceLinePrice\(lineOwnPrice\(svc, doctorId\), tierApplies\(tq\) \? Number\(tq\.price\) : cat\);/,
+        'своя цена врача сильнее ступени — как в кассе');
     // REFERRAL_BILL_V1 — штамп поднят вместе с правкой мастера; кабинет врача
     // («Направить на услуги») — такой же импортёр, и держит тот же штамп.
+    // OWN_PRICE_REPEAT_V1 — штамп поднят снова.
     for (const f of ['views/crm.js', 'views/patient-card.js', 'views/patient-create-modal.js', 'views/service-workspace.js']) {
-        assert.ok(read(f).includes('visit-wizard.js?v=refbill4'), f + ' держит старый кэш мастера записи');
+        assert.ok(read(f).includes('visit-wizard.js?v=ownrep1'), f + ' держит старый кэш мастера записи');
     }
 });
 

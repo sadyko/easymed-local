@@ -33,6 +33,7 @@ import { listTemplates, createTemplate, retireTemplate, resolveTemplate, templat
 import { packageTermsText } from './template-picker-modal.js?v=tpl1';   // PACKAGES_V1 — «скидка 20 % · до 30.09.2026»
 import { doctorPoolFor } from './doctor-pool.js?v=dp1';   // DOCTOR_POOL_V1
 import { tierLabel, tierApplies } from '../visit-tier-logic.js';   // VISIT_TIER_PRICING_V1
+import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule.js';   // OWN_PRICE_REPEAT_V1 — одно правило с сервером
 // DISCOUNT_RULES_V1 — какие скидки подходят этому пациенту сегодня и на что
 // они действуют; одно правило на оба мастера.
 import { eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining } from '../discount-rules.js';
@@ -41,7 +42,7 @@ import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // 
 // свободен» на весь продукт: его задаёт серверу этот клиент, а считает
 // server/services/rpc/slot-engine.js. ?v как у остальных импортёров модуля.
 import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
-         askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=aug17e';
+         askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=ownrep1';
 import { surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 (A5) — хирургия без койки: отказ до визита
 import { hasActorRole, canWriteServiceTemplates, VISIT_LINE_ROLES, canAddVisitLines } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1 · LIVE_AUDIT_FIX_V1 — шаблоны сметы
 import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
@@ -346,21 +347,21 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
     // and charged another at the till.
     // A stored price of 0 is a real free-of-charge price, so test for null/undefined
     // rather than falsiness.
+    // OWN_PRICE_REPEAT_V1 — своя цена врача строки по её услуге или null.
+    function lineOwnPrice(svc, doctorId) {
+        if (!svc || !doctorId) return null;
+        const doc = wiz.doctors.find(d => String(d.id) === String(doctorId));
+        return doc ? ownPriceFromRates(doc.service_rates, svc.id) : null;
+    }
     function linePrice(svc, doctorId, tierDay = null) {
         const cat = Number(svc && svc.price) || 0;
         // VISIT_TIER_PRICING_V1 — a second/repeat visit of this service for
-        // THIS patient is priced by its tier, over the catalog AND over the
-        // doctor's own price (both are first-visit prices) — the same
-        // precedence the till applies (billing.js tierUnitPrice).
+        // THIS patient is priced by its tier, over the catalog.
+        // OWN_PRICE_REPEAT_V1 (владелец, 30.09: «Own price for repeat too») —
+        // the doctor's own price wins over the tier too, on any visit: the same
+        // rule the till applies (pricing.js lineUnitPrice → serviceLinePrice).
         const tq = svc && wiz.tiers[tierKey(svc.id, tierDay)];
-        if (tierApplies(tq)) return Number(tq.price);
-        if (!doctorId) return cat;
-        const doc = wiz.doctors.find(d => String(d.id) === String(doctorId));
-        if (!doc || !Array.isArray(doc.service_rates)) return cat;
-        const rate = doc.service_rates.find(r => r && String(r.service_id) === String(svc.id));
-        if (!rate || rate.price == null) return cat;
-        const own = Number(rate.price);
-        return Number.isFinite(own) && own >= 0 ? own : cat;
+        return serviceLinePrice(lineOwnPrice(svc, doctorId), tierApplies(tq) ? Number(tq.price) : cat);
     }
     // VISIT_TIER_PRICING_V1 — the tier depends on the DAY the line is planned
     // for (a visit today and a booking for tomorrow are one day apart), so the
@@ -424,9 +425,11 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         } catch (_) { /* прежняя смета */ }
     }
     // The chip beside a quoted line: «Второй визит» / «Повторный визит».
+    // OWN_PRICE_REPEAT_V1 — у врача строки своя цена: ярус цену не меняет, и
+    // чип с «ценой первого визита» объяснял бы разницу, которой нет.
     const tierChip = (c) => {
         const q = c && c.svc && wiz.tiers[tierKey(c.svc.id, lineDay(c))];
-        if (!tierApplies(q)) return null;
+        if (!tierApplies(q) || lineOwnPrice(c.svc, c.doctorId) !== null) return null;
         return h('span', { class: 'wzc-tier', title: q.days_since != null
             ? trf('Прошлый визит по этой услуге — {n} дн. назад. Цена первого визита: {price}', { n: q.days_since, price: fmtPrice(q.base_price) })
             : '' }, tierLabel(q.tier));

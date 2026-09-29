@@ -45,6 +45,8 @@ import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS
 // VISIT_TIER_PRICING_V1 — цена по счёту визита: смета спрашивает сервер, что
 // эти услуги стоят ЭТОМУ пациенту сегодня, и кладёт ответ на строки.
 import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTierOf } from '../visit-tier-logic.js';
+// OWN_PRICE_REPEAT_V1 — своя цена врача на любом визите: правило одно с сервером.
+import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule.js';
 import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining } from '../discount-rules.js';   // DISCOUNT_RULES_V1 · CARD_BALANCE_V1
 import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
 // CRM_LINKS_V1 — и чтение «что ждёт пациента в этот день», и правило закрытия
@@ -1372,11 +1374,16 @@ export function openServicePickerModal({
         return state.added.reduce((s, a) => s + itemPrice(a), 0);
     }
     // RPC_PORT_V1 (ревью I2) — цена строки сметы та же, что выставит касса
-    // (pricing.js lineUnitPrice): цена визита по счёту, иначе своя цена врача,
-    // иначе каталог. Раньше смета брала каталог, а касса — цену врача:
-    // назвали 900 000, выставили 1 100 000.
+    // (pricing.js lineUnitPrice): своя цена врача (OWN_PRICE_REPEAT_V1 — на
+    // любом визите), иначе цена визита по счёту, иначе каталог. Раньше смета
+    // брала каталог, а касса — цену врача: назвали 900 000, выставили 1 100 000.
     function itemPrice(a) {
         return pickerLinePrice(a, (state.providers || []).concat(state.doctors || []));
+    }
+    // OWN_PRICE_REPEAT_V1 — у строки своя цена врача: цена от яруса визита не
+    // зависит, и зачёркнутая «цена первого визита» рядом была бы неправдой.
+    function itemTierShown(a) {
+        return tierApplies(a && a.tier) && pickerOwnPrice(a, (state.providers || []).concat(state.doctors || [])) === null;
     }
 
     // The right-panel action bar under the cart. Two states:
@@ -2256,10 +2263,11 @@ export function openServicePickerModal({
                         // VISIT_TIER_PRICING_V1 — a quoted second/repeat visit shows its
                         // tier and the crossed-out first-visit price, so the registrar sees
                         // WHY the number differs from the catalog before the patient asks.
-                        tierApplies(a.tier) ? h('span', { class: 'wzc-tier', title: a.tier.days_since != null
+                        // OWN_PRICE_REPEAT_V1 — у врача своя цена: ярус цену не меняет, чипа нет.
+                        itemTierShown(a) ? h('span', { class: 'wzc-tier', title: a.tier.days_since != null
                             ? trf('Прошлый визит по этой услуге — {n} дн. назад. Цена первого визита: {price}', { n: a.tier.days_since, price: formatMoney(a.tier.base_price) })
                             : '' }, tierLabel(a.tier.tier)) : null,
-                        tierApplies(a.tier) ? h('s', { class: 'num muted', style: { fontSize: '12.5px' } }, formatMoney(Number(a.tier.base_price || 0))) : null,
+                        itemTierShown(a) ? h('s', { class: 'num muted', style: { fontSize: '12.5px' } }, formatMoney(Number(a.tier.base_price || 0))) : null,
                         h('span', { class: 'num', style: { fontWeight: 700 } }, formatMoney(itemPrice(a))),
                         itemComplete(a) ? h('button', { type: 'button', title: 'Изменить врача и время',
                             style: { border: '0', background: 'none', cursor: 'pointer', font: 'inherit', fontSize: '12.5px', color: 'var(--primary-700, #115d5a)', textDecoration: 'underline', padding: '0', flex: 'none' },
@@ -2335,7 +2343,7 @@ export function openServicePickerModal({
         const landed = [];   // CRM_LINKS_V1 — услуги, реально легшие в визит
         for (const a of rows) {
             try {
-                await onPick({ service: a.service, doctor: a.doctor || null, startISO: a.startISO || null, price_tier: priceTierOf(a), package: a.package || null });   // VISIT_TIER_PRICING_V1; PACKAGES_V1
+                await onPick({ service: a.service, doctor: a.doctor || null, startISO: a.startISO || null, price_tier: priceTierOf(a), package: a.package || null, unit_price: itemPrice(a) });   // VISIT_TIER_PRICING_V1; PACKAGES_V1; OWN_PRICE_REPEAT_V1 — цена строки сметы
                 added++;
                 landed.push(a.service.id);
             } catch (e) {
@@ -3310,7 +3318,7 @@ export function openServicePickerModal({
                 // invoice for the patient-paid services. Dynamic import avoids the
                 // visit-modal <-> service-picker static import cycle.
                 try {
-                    const mod = await import('./visit-modal.js?v=rbr2');   // REFBILL_REVIEW_V1 — штамп: «Сформировать счёт» только денежным ролям
+                    const mod = await import('./visit-modal.js?v=ownrep1');   // REFBILL_REVIEW_V1 — штамп: «Сформировать счёт» только денежным ролям
                     mod.openVisitModal({ visit: openServicesFor, patient: (p._raw || p), onChange: (typeof onBooked === 'function' ? onBooked : undefined) });
                 } catch (e) { console.warn('[wizard] open Services tab:', e); }
             }
@@ -3686,31 +3694,40 @@ export function pickerDiscount(lines, { pct = 0, promo = null, categoryPct = 0 }
 }
 
 /**
+ * OWN_PRICE_REPEAT_V1 — своя цена исполнителя строки сметы по её услуге
+ * (users.service_rates[].price) или null: своей нет, у строки нет врача, это
+ * консультация (её цена врачебная и так). `people` — сотрудники, среди которых
+ * ищется исполнитель, если в строке у него нет списка ставок (врач кабинета).
+ */
+export function pickerOwnPrice(a, people = []) {
+    const s = (a && a.service) || {};
+    if (s.__consult) return null;
+    const doc = a && a.doctor;
+    if (!doc || doc.id == null) return null;
+    const rates = Array.isArray(doc.service_rates) ? doc.service_rates
+        : (((people || []).find((u) => u && String(u.id) === String(doc.id)) || {}).service_rates || []);
+    return ownPriceFromRates(rates, s.id);
+}
+
+/**
  * RPC_PORT_V1 (ревью I2) — цена строки сметы, та же, что выставит касса
  * (server/services/domain/pricing.js lineUnitPrice):
  *   • консультация — её цена уже врачебная (consultPriceFor), строка счёта —
  *     без услуги, по сохранённой цене;
- *   • второй / повторный визит по котировке (service_price_quote) — цена визита
- *     по счёту, над ценой врача и каталогом (tierUnitPrice);
- *   • иначе — своя цена исполнителя (users.service_rates[].price; null — своей
- *     нет, 0 — настоящая бесплатная), иначе каталог (до котировки).
- * `people` — сотрудники, среди которых ищется исполнитель, если в строке у него
- * нет списка ставок (врач кабинета).
+ *   • OWN_PRICE_REPEAT_V1 — своя цена исполнителя (users.service_rates[].price;
+ *     null — своей нет, 0 — настоящая бесплатная) на ЛЮБОМ визите: первом,
+ *     втором, повторном;
+ *   • своей нет — второй / повторный визит по котировке (service_price_quote)
+ *     стоит цену визита по счёту, иначе каталог (до котировки).
+ * Правило — shared/own-price-rule.js serviceLinePrice, одно с сервером.
  */
 export function pickerLinePrice(a, people = []) {
     const s = (a && a.service) || {};
     if (s.__consult) return Number(s.price || 0);
     const t = a && a.tier;
-    if (t && (t.tier === 'secondary' || t.tier === 'repeat')) return Number(t.price || 0);
     const cat = s.__base_price != null ? Number(s.__base_price) : Number(s.price || 0);
-    const doc = a && a.doctor;
-    if (!doc || doc.id == null) return cat;
-    const rates = Array.isArray(doc.service_rates) ? doc.service_rates
-        : (((people || []).find((u) => u && String(u.id) === String(doc.id)) || {}).service_rates || []);
-    const rate = (Array.isArray(rates) ? rates : []).find((r) => r && String(r.service_id) === String(s.id));
-    if (!rate || rate.price == null || rate.price === '') return cat;
-    const own = Number(rate.price);
-    return Number.isFinite(own) && own >= 0 ? own : cat;
+    const tierPrice = t && (t.tier === 'secondary' || t.tier === 'repeat') ? Number(t.price || 0) : cat;
+    return serviceLinePrice(pickerOwnPrice(a, people), tierPrice);
 }
 
 /**

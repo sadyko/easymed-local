@@ -514,10 +514,10 @@ function issueVisitInvoice(db, args, user, { doctorOnly = false } = {}) {
         if (c) svcName = c.name;
       }
       // PAY_BASIS_PERFORMED_V1 — the price rule lives in ONE place
-      // (domain/pricing.js lineUnitPrice): the doctor's own price over the
-      // catalog, then VISIT_TIER_PRICING_V1 — the tier recorded on the line
-      // wins over both (those are first-visit prices, and this visit was quoted
-      // as the second or a repeat). The doctor's pay for a performed line that
+      // (domain/pricing.js lineUnitPrice): VISIT_TIER_PRICING_V1 — the tier
+      // recorded on the line wins over the catalog (this visit was quoted as
+      // the second or a repeat); OWN_PRICE_REPEAT_V1 — the doctor's own price
+      // wins over both, on any tier. The doctor's pay for a performed line that
       // is not invoiced yet reads the same function, so issuing the invoice
       // never moves the doctor's share.
       const unit = lineUnitPrice(db, row, { service: svc, product: prod });
@@ -1285,8 +1285,8 @@ export function changeUnpaidService(db, args, user, { rpc = 'change_unpaid_servi
     // врач с личной ценой терял её, а тариф старой услуги («второй визит»)
     // оставался на строке новой. Теперь тариф спрашивается заново
     // (service_price_quote по дню ЭТОГО визита, сам визит исключён), а цена —
-    // lineUnitPrice: личная цена врача строки, поверх — тариф. Одно правило с
-    // кассой и выплатой врачу.
+    // lineUnitPrice: тариф поверх каталога, личная цена врача строки — поверх
+    // тарифа (OWN_PRICE_REPEAT_V1). Одно правило с кассой и выплатой врачу.
     const visitRow = db.prepare('SELECT patient_id, visit_date FROM visits WHERE id = ?').get(vs.visit_id);
     const tier = quoteTier(db, visitRow, vs.visit_id, newServiceId, user);
     const unit = round2(lineUnitPrice(db, { ...vs, service_id: newServiceId, clinic_item_id: null, consultation_type_id: null, price_tier: tier }, { service: svc }));

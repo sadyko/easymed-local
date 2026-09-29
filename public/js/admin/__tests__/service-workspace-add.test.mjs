@@ -84,8 +84,13 @@ test('addOwnService пишет строку в ТЕКУЩИЙ приём (visit_
 test('исполнитель строки: выбранный в смете врач → врач консультации → врач приёма', () => {
     // LIVE_AUDIT_FIX_V1 (C3) — порядок тот же, но правило одно на все двери
     // (visit-line-row.js linePerformer): врач приёма — только врачебной услуге.
-    assert.match(addOwn(), /doctor_id:\s*linePerformer\(svc, doctor\?\.id, ctx\.patient\?\.__service\?\.doctorId\)/,
+    // OWN_PRICE_REPEAT_V1 — исполнитель считается один раз: он же едет в
+    // котировку (своя цена врача на любом визите) и он же пишется в строку.
+    assert.match(addOwn(), /const performer = linePerformer\(svc, doctor\?\.id, ctx\.patient\?\.__service\?\.doctorId\)/,
         'врач строки берётся не в этом порядке: выбранный в смете исполнитель должен быть сильнее врача приёма, а приём — сильнее пустоты');
+    assert.match(addOwn(), /doctor_id:\s*performer\b/, 'в строку пишется не тот исполнитель, что в котировке');
+    assert.match(addOwn(), /rpc\('service_price_quote',\s*\{[^}]*doctor_id: performer/,
+        'котировка без врача строки — своя цена врача на втором визите потеряется');
 });
 
 test('карточка перерисовывается после добавления, а вторая та же услуга получает отказ с тостом', () => {

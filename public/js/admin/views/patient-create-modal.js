@@ -710,7 +710,7 @@ export function buildPatientCreateDialog({ onNavigate, onSaved, patient = null }
     // каталог услуг при каждом открытии.
     function openServiceWizard(created) {
         if (!created || !created.id) return;
-        import('./visit-wizard.js?v=refbill4')   // REFERRAL_BILL_V1 — штамп кэша · REFBILL_REVIEW_V1
+        import('./visit-wizard.js?v=ownrep1')   // REFERRAL_BILL_V1 — штамп кэша · REFBILL_REVIEW_V1
             .then((mod) => mod.openVisitWizard(null, {
                 id: created.id, full_name: created.fullName, mrn: created.mrn, phone: created.phone,
             }))

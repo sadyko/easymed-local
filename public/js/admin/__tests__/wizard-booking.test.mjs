@@ -1037,3 +1037,72 @@ test('REFBILL_REVIEW_V1: регистратура — прежний поряд�
     assert.equal(DB.prepare('SELECT COUNT(*) c FROM invoices').get().c, 1);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OWN_PRICE_REPEAT_V1 (2026-09-30) — владелец: «Own price for repeat too».
+// Пациент был на приёме 3 дня назад: для сервера новая запись — второй визит
+// (60 000 каталога). У врача своя цена 150 000 — смета мастера пишет её в
+// строку, счёт выставляет её же; ярус «второй» записан, как прежде. Врачу без
+// своей цены — 60 000, как прежде.
+// ═══════════════════════════════════════════════════════════════════════════
+function repeatHistory(db, rates) {
+  db.prepare('UPDATE services SET price_secondary = 60000, secondary_days_from = 1, secondary_days_to = 30 WHERE id = 21').run();
+  db.prepare('UPDATE users SET service_rates = ? WHERE id = 7').run(JSON.stringify(rates));
+  const past = db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', date('now','localtime','-3 days') || ' 10:00:00', 'utc') t").get().t;
+  const pv = db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (3, 7, ?, 'arrived', 1)").run(past).lastInsertRowid;
+  db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by, price_tier) VALUES (?, 21, 7, 1, 100000, 100000, 'completed', 1, 'primary')").run(pv);
+  return pv;
+}
+// Что мастер САМ пишет в строку (до того, как счёт перепишет её цену своей):
+// тело вставки visit_services, перехваченное на пути к стенду. И JSON-колонки
+// users (service_rates) — разобранными, как их отдаёт настоящий маршрут
+// (routes/db.js parseJsonColumns): стенд отдаёт строку как есть.
+async function withLineInserts(fn) {
+  const was = globalThis.fetch;
+  const rows = [];
+  globalThis.fetch = async (url, opts) => {
+    let b = null;
+    if (String(url) === '/api/db') {
+      b = JSON.parse((opts && opts.body) || '{}');
+      if (b.table === 'visit_services' && b.op === 'insert') rows.push(Array.isArray(b.values) ? b.values[0] : b.values);
+    }
+    const res = await was(url, opts);
+    if (!b || b.table !== 'users' || (b.op && b.op !== 'select') || !res.ok) return res;
+    const json = await res.json();
+    const list = Array.isArray(json.data) ? json.data : (json.data ? [json.data] : []);
+    for (const r of list) if (r && typeof r.service_rates === 'string') { try { r.service_rates = JSON.parse(r.service_rates); } catch { /* как есть */ } }
+    return { ok: true, status: res.status, json: async () => json };
+  };
+  try { await fn(); } finally { globalThis.fetch = was; }
+  return rows;
+}
+
+test('OWN_PRICE_REPEAT_V1: мастер — второй визит у врача со своей ценой: смета, строка и счёт по своей цене, ярус «второй»', async () => {
+  let pv = null;
+  const rows = await withLineInserts(async () => {
+    await openWizardReadyWith((db) => { pv = repeatHistory(db, [{ service_id: 21, pct: 10, price: 150000 }]); });
+    await pressUntilCreate();
+  });
+  const sent = rows.find((r) => Number(r.service_id) === 21);
+  assert.ok(sent, 'мастер не записал строку: ' + JSON.stringify(TOASTS));
+  assert.equal(sent.price_tier, 'secondary', 'ярус второго визита не записан');
+  assert.equal(sent.unit_price, 150000, 'смета мастера записала цену яруса вместо своей цены врача');
+  const inv = DB.prepare('SELECT total_amount FROM invoices').all();
+  assert.equal(inv.length, 1, 'счёт не выставлен: ' + JSON.stringify(TOASTS));
+  assert.equal(inv[0].total_amount, sent.unit_price, 'смета ≠ счёт');
+  const line = DB.prepare('SELECT price_tier FROM visit_services WHERE visit_id <> ? AND service_id = 21').get(pv);
+  assert.equal(line.price_tier, 'secondary');
+});
+
+test('OWN_PRICE_REPEAT_V1: мастер — второй визит у врача без своей цены: цена яруса, как прежде', async () => {
+  let pv = null;
+  const rows = await withLineInserts(async () => {
+    await openWizardReadyWith((db) => { pv = repeatHistory(db, [{ service_id: 21, pct: 10 }]); });
+    await pressUntilCreate();
+  });
+  assert.ok(pv);
+  const sent = rows.find((r) => Number(r.service_id) === 21);
+  assert.ok(sent, 'мастер не записал строку: ' + JSON.stringify(TOASTS));
+  assert.deepEqual([sent.unit_price, sent.price_tier], [60000, 'secondary']);
+  assert.equal(DB.prepare('SELECT total_amount FROM invoices').get().total_amount, 60000);
+});

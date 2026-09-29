@@ -15,13 +15,13 @@ import { shortName } from '../../shared/person-name.js';   // PERSON_NAME_SHORT_
 import { h, Icon, Avatar, Tag, StatusTag, clear, toast } from '../ui.js';
 import { tr, trf, monthName } from '../i18n.js';
 import { linePerformer } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 — исполнитель строки   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';
+import { openServicePickerModal } from './service-picker-modal.js?v=ownrep1';
 // WIZARD_ONE_ENGINE_V1 / VISITS_ONE_DOOR_V1 — «Повторный визит» держал ЧЕТВЁРТУЮ
 // реализацию расписания (loadBookedSlots: своя сетка 20 минут, свои 08:00–19:00,
 // свой обед 13:00–14:00 — ни графика врача, ни часов клиники) и записывал
 // пациента прямой вставкой в visits, мимо запрета двойной записи. Обе копии
 // удалены: свободное время называет calendar_slots, записывает calendar_book.
-import { loadSlotDay, freeStartMinutes, hhmmToMin } from './service-picker-modal.js?v=aug17e';
+import { loadSlotDay, freeStartMinutes, hhmmToMin } from './service-picker-modal.js?v=ownrep1';
 import { bookVisit } from './visit-booking.js';
 import { openItemPickerModal, isOwnShelfShort } from './item-picker-modal.js?v=billoptin2';   // DISPENSE_ITEM_V1; отказ «нет на полках» — ревью F4
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
@@ -3647,12 +3647,18 @@ async function addOwnService(ctx, svc, doctor) {
         try {
             let price = svc.price != null ? Number(svc.price) : 0;
             let priceTier = null;
+            // SVC_ATTACH_V1 — исполнитель: выбранный в смете врач → врач консультации → врач приёма.
+            // LIVE_AUDIT_FIX_V1 (C3) — врач приёма только у врачебной услуги:
+            // процедура, анализ и услуга «без врача» исполнителя от приёма не берут.
+            const performer = linePerformer(svc, doctor?.id, ctx.patient?.__service?.doctorId);
             // VISIT_TIER_PRICING_V1 — the doctor's own «добавить услугу» goes
             // through the same quote as the front desk: a second visit costs
             // the second-visit price wherever the line is born.
+            // OWN_PRICE_REPEAT_V1 — the line's performer rides along: their own
+            // price holds on any visit, as on the invoice.
             if (!svc.__consult && svc.id && ctx.patient?.id) {
                 try {
-                    const q = await supabase.rpc('service_price_quote', { patient_id: ctx.patient.id, service_ids: [svc.id], visit_id: ctx.visitId });
+                    const q = await supabase.rpc('service_price_quote', { patient_id: ctx.patient.id, service_ids: [svc.id], visit_id: ctx.visitId, ...(performer ? { doctor_id: performer } : {}) });
                     const quote = q && !q.error && q.data && q.data.quotes ? q.data.quotes[svc.id] : null;
                     if (quote && Number.isFinite(Number(quote.price))) { price = Number(quote.price); priceTier = quote.tier === 'secondary' || quote.tier === 'repeat' ? quote.tier : 'primary'; }
                 } catch (_) { /* old server — catalog price */ }
@@ -3660,10 +3666,7 @@ async function addOwnService(ctx, svc, doctor) {
             const row = {
                 visit_id:   ctx.visitId,
                 company_id: currentClinicId() || null,
-                // SVC_ATTACH_V1 — исполнитель: выбранный в смете врач → врач консультации → врач приёма.
-                // LIVE_AUDIT_FIX_V1 (C3) — врач приёма только у врачебной услуги:
-                // процедура, анализ и услуга «без врача» исполнителя от приёма не берут.
-                doctor_id:  linePerformer(svc, doctor?.id, ctx.patient?.__service?.doctorId),
+                doctor_id:  performer,   // OWN_PRICE_REPEAT_V1 — тот же, что в котировке
                 quantity:   1, unit_price: price, total: price, status: 'added',
             };
             if (priceTier) row.price_tier = priceTier;
@@ -4215,7 +4218,7 @@ function referringDoctorId(ctx) {
 
 function openReferralWizard(ctx) {
     if (!ctx.patient || !ctx.patient.id) { toast('Нет контекста пациента.', 'fail'); return; }
-    import('./visit-wizard.js?v=refbill4')   // REFERRAL_BILL_V1 — штамп кэша · REFBILL_REVIEW_V1
+    import('./visit-wizard.js?v=ownrep1')   // REFERRAL_BILL_V1 — штамп кэша · REFBILL_REVIEW_V1
         .then((mod) => mod.openVisitWizard(async (res) => {
             try { await loadPatientEmr(ctx.patient); paintEmr(); } catch (e) {}
             if (res && res.rows && res.rows.length) printRouteSheet(ctx, res);

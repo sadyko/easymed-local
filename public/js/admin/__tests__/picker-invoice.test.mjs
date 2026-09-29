@@ -458,9 +458,9 @@ test('M4: живые экраны не режут числовой id как с�
 });
 
 // ─── ревью I2 / M1 / M2 — смета == счёт ─────────────────────────────────────
-const { pickerLinePrice } = await import('../views/service-picker-modal.js');
+const { pickerLinePrice, pickerOwnPrice } = await import('../views/service-picker-modal.js');
 
-test('I2: цена строки сметы — как у кассы (pricing.js lineUnitPrice): цена врача, над ней — цена визита по счёту', () => {
+test('I2 / OWN_PRICE_REPEAT_V1: цена строки сметы — как у кассы (pricing.js lineUnitPrice): своя цена врача на любом визите, иначе цена визита по счёту', () => {
   const svc = { id: 21, price: 900000 };
   const doc = { id: 7, service_rates: [{ service_id: 21, price: 1100000, percentage: 30 }] };
   assert.equal(pickerLinePrice({ service: svc, doctor: null }), 900000, 'без врача — каталог');
@@ -468,9 +468,15 @@ test('I2: цена строки сметы — как у кассы (pricing.js 
   assert.equal(pickerLinePrice({ service: svc, doctor: { id: 7 } }, [doc]), 1100000, 'врач без ставок в строке — ищется среди сотрудников по id');
   assert.equal(pickerLinePrice({ service: svc, doctor: { id: 8, service_rates: [{ service_id: 21, price: null }] } }), 900000, 'price null — у врача своей цены нет');
   assert.equal(pickerLinePrice({ service: svc, doctor: { id: 8, service_rates: [{ service_id: 21, price: 0 }] } }), 0, '0 — настоящая бесплатная цена');
-  // цена визита по счёту (второй/повторный) бьёт и каталог, и цену врача
+  // OWN_PRICE_REPEAT_V1 — владелец: «Own price for repeat too». Своя цена врача
+  // действует и на второй/повторный визит; цена визита по счёту — только
+  // врачу без своей цены (и строке без врача).
   const quoted = { service: { id: 21, price: 450000, __base_price: 900000 }, doctor: doc, tier: { tier: 'repeat', price: 450000 } };
-  assert.equal(pickerLinePrice(quoted), 450000);
+  assert.equal(pickerLinePrice(quoted), 1100000, 'повторный визит у врача со своей ценой — его цена');
+  assert.equal(pickerOwnPrice(quoted), 1100000);
+  assert.equal(pickerLinePrice({ ...quoted, doctor: { id: 8, service_rates: [{ service_id: 21, pct: 30 }] } }), 450000, 'без своей цены — цена визита по счёту');
+  assert.equal(pickerOwnPrice({ ...quoted, doctor: { id: 8, service_rates: [{ service_id: 21, pct: 30 }] } }), null);
+  assert.equal(pickerLinePrice({ ...quoted, doctor: null }), 450000, 'без врача — цена визита по счёту');
   // первичный визит по котировке — снова цена врача, а не каталог из котировки
   const primary = { service: { id: 21, price: 900000, __base_price: 900000 }, doctor: doc, tier: { tier: 'primary', price: 900000 } };
   assert.equal(pickerLinePrice(primary), 1100000);
@@ -495,6 +501,77 @@ test('I2: своя цена врача — смета и счёт сходятс
   const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
   assert.equal(inv.subtotal, 1200000);
   assert.equal(inv.total_amount, out.payable, 'смета ' + out.payable + ' ≠ счёт ' + inv.total_amount);
+});
+
+// OWN_PRICE_REPEAT_V1 — пациент был на МРТ 3 дня назад: для сервера это второй
+// визит (450 000 каталога). У врача своя цена 1 100 000 — её называет смета
+// Калькулятора, её же ставит счёт; врачу без своей цены — 450 000, как прежде.
+function repeatPatient() {
+  seed();
+  DB.prepare('UPDATE services SET price_secondary = 450000, secondary_days_from = 1, secondary_days_to = 10, requires_doctor = 1 WHERE id = 21').run();
+  DB.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, service_rates) VALUES (7,'doc','x','Петров','doctor',1,?)")
+    .run(JSON.stringify([{ service_id: 21, price: 1100000, pct: 30 }]));
+  DB.prepare("INSERT INTO users (id, username, password_hash, full_name, role, is_doctor, service_rates) VALUES (8,'doc2','x','Сидоров','doctor',1,?)")
+    .run(JSON.stringify([{ service_id: 21, pct: 30 }]));
+  const past = new Date(Date.now() - 3 * 86400000).toISOString();
+  const pv = DB.prepare("INSERT INTO visits (patient_id, visit_date, status) VALUES (3, ?, 'arrived')").run(past).lastInsertRowid;
+  DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier) VALUES (?, 21, 8, 1, 900000, 900000, 'completed', 'primary')").run(pv);
+  DB.prepare('UPDATE visit_services SET package_id = NULL WHERE id = 102').run();
+}
+
+test('OWN_PRICE_REPEAT_V1: Калькулятор — второй визит у врача со своей ценой: смета = счёт = своя цена', async () => {
+  repeatPatient();
+  // visit_id — строки сметы уже лежат в визите 40 (стенд), а при записи из
+  // Калькулятора их ещё нет: сам визит из «прошлых» исключается.
+  const q = getRpc('service_price_quote')(DB, { patient_id: 3, service_ids: [21], visit_id: 40 }, USER).quotes[21];
+  assert.deepEqual([q.tier, q.price], ['secondary', 450000], 'Калькулятор спрашивает котировку без врача — цена яруса');
+  const docRow = { id: 7, service_rates: [{ service_id: 21, price: 1100000, pct: 30 }] };
+  const a = { service: { id: 21, price: q.price, __base_price: 900000 }, doctor: docRow, tier: { tier: q.tier, price: q.price } };
+  assert.equal(pickerLinePrice(a), 1100000, 'смета: своя цена врача');
+  DB.prepare("UPDATE visit_services SET doctor_id = 7, price_tier = 'secondary', unit_price = ? WHERE id = 101").run(pickerLinePrice(a));
+  const lines = [a, { service: { id: 22, price: 100000 }, doctor: null }]
+    .map((x, i) => ({ visit_service_id: 101 + i, service_id: x.service.id, price: pickerLinePrice(x), packaged: false }));
+  const out = await invoicePickerLines({ visitId: 40, lines, pct: 0, promo: null });
+  assert.equal(out.error, null);
+  const inv = DB.prepare('SELECT * FROM invoices WHERE visit_id = 40').get();
+  assert.equal(inv.subtotal, 1200000, 'счёт: своя цена врача 1 100 000 + анализ 100 000');
+  assert.equal(inv.total_amount, out.payable, 'смета ' + out.payable + ' ≠ счёт ' + inv.total_amount);
+  assert.equal(DB.prepare('SELECT price_tier FROM visit_services WHERE id = 101').get().price_tier, 'secondary', 'ярус строки пишется по-прежнему');
+});
+
+test('OWN_PRICE_REPEAT_V1: Калькулятор — второй визит у врача БЕЗ своей цены: цена яруса, как прежде', async () => {
+  repeatPatient();
+  const a = { service: { id: 21, price: 450000, __base_price: 900000 }, doctor: { id: 8, service_rates: [{ service_id: 21, pct: 30 }] }, tier: { tier: 'secondary', price: 450000 } };
+  assert.equal(pickerLinePrice(a), 450000);
+  DB.prepare("UPDATE visit_services SET doctor_id = 8, price_tier = 'secondary' WHERE id = 101").run();
+  const out = await invoicePickerLines({ visitId: 40, lines: [{ visit_service_id: 101, service_id: 21, price: pickerLinePrice(a), packaged: false }], pct: 0, promo: null });
+  assert.equal(out.error, null);
+  assert.equal(DB.prepare('SELECT total_amount FROM invoices WHERE visit_id = 40').get().total_amount, 450000);
+});
+
+test('OWN_PRICE_REPEAT_V1: окно визита — строка из Калькулятора ложится с ценой сметы, а не с ценой яруса', async () => {
+  repeatPatient();
+  DB.prepare('DELETE FROM visit_services WHERE visit_id = 40').run();
+  const state = { visit: DB.prepare('SELECT * FROM visits WHERE id = 40').get(), patient: { id: 3 }, services: [] };
+  const docRow = { id: 7, service_rates: [{ service_id: 21, price: 1100000, pct: 30 }] };
+  await VM.addServiceFromPicker(state, { service: { id: 21, name: 'МРТ', price: 450000, __base_price: 900000 }, doctor: docRow, price_tier: 'secondary', unit_price: 1100000 }, () => {});
+  const row = DB.prepare('SELECT unit_price, total, price_tier, doctor_id FROM visit_services WHERE visit_id = 40').get();
+  assert.deepEqual({ ...row }, { unit_price: 1100000, total: 1100000, price_tier: 'secondary', doctor_id: 7 });
+  // Калькулятор отдаёт окну цену своей сметы.
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../views/service-picker-modal.js', import.meta.url), 'utf8');
+  assert.match(src, /onPick\(\{[^}]*unit_price: itemPrice\(a\)/, 'Калькулятор не отдаёт окну визита цену строки сметы');
+});
+
+test('OWN_PRICE_REPEAT_V1: окно счёта «Добавить» — котировка с врачом строки: своя цена на второй визит; без своей — цена яруса', async () => {
+  repeatPatient();
+  const VB = await import('../views/visit-bill.js');
+  DB.prepare('UPDATE visits SET doctor_id = 7 WHERE id = 40').run();
+  const own = await VB.billLineFor(DB.prepare('SELECT * FROM visits WHERE id = 40').get(), { id: 21, price: 900000, requires_doctor: 1 }, 1);
+  assert.deepEqual([own.doctor_id, own.unit_price, own.price_tier], [7, 1100000, 'secondary']);
+  DB.prepare('UPDATE visits SET doctor_id = 8 WHERE id = 40').run();
+  const plain = await VB.billLineFor(DB.prepare('SELECT * FROM visits WHERE id = 40').get(), { id: 21, price: 900000, requires_doctor: 1 }, 1);
+  assert.deepEqual([plain.doctor_id, plain.unit_price, plain.price_tier], [8, 450000, 'secondary']);
 });
 
 test('M1: скидка группы пациента — пол в смете, как в счёте; на строке пакета — большая из пакета и группы', async () => {

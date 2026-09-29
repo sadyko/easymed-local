@@ -75,7 +75,7 @@ import { hasActorRole } from '../permissions.js';
 // модуле на три доски (календарь, очередь, канбан), чтобы «мятный» везде
 // означал одно и то же.
 import { pastelFor } from '../pastel.js?v=pastel1';
-import { openServicePickerModal } from './service-picker-modal.js?v=aug17e';   // RESCAL_WIRE_V1 — same URL as other importers (one instance)
+import { openServicePickerModal } from './service-picker-modal.js?v=ownrep1';   // RESCAL_WIRE_V1 — same URL as other importers (one instance)
 import { registrarHeader } from './registrar-header.js?v=aurora5';   // NO_GREETING_V1 — same URL as patients.js (one instance)
 // RCAL_REFERENCE_LAYOUT_V1 — счётная часть новой раскладки (мини-месяц, сколько
 // дней помещается, загрузка колонки, рабочий набор оператора). Отдельным

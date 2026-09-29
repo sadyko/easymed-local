@@ -555,9 +555,13 @@ export const BILL_INVOICE_ROLES = ['admin', 'registrar', 'cashier'];
 export async function billLineFor(visit, service, qty) {
     let price = Number(service.price) || 0;
     let tier = null;
+    // OWN_PRICE_REPEAT_V1 — врач строки едет в котировку: у врача со своей ценой
+    // она действует на любом визите, и строка ложится с той же ценой, что
+    // выставит счёт (прежде — цена яруса без врача).
+    const performer = linePerformer(service, null, visit.doctor_id);
     try {
         if (visit.patient_id) {
-            const q = await supabase.rpc('service_price_quote', { patient_id: visit.patient_id, service_ids: [service.id], visit_id: visit.id });
+            const q = await supabase.rpc('service_price_quote', { patient_id: visit.patient_id, service_ids: [service.id], visit_id: visit.id, ...(performer ? { doctor_id: performer } : {}) });
             const quote = q && !q.error && q.data && q.data.quotes ? q.data.quotes[service.id] : null;
             if (quote && Number.isFinite(Number(quote.price))) {
                 price = Number(quote.price);
@@ -573,7 +577,7 @@ export async function billLineFor(visit, service, qty) {
         total: round2(price * qty),
         status: 'added',
         created_by: currentUserId(),
-        doctor_id: linePerformer(service, null, visit.doctor_id),
+        doctor_id: performer,
     };
     if (tier) row.price_tier = tier;
     return row;

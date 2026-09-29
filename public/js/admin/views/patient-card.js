@@ -23,10 +23,10 @@ import { labFlagCell, labPosCell, fmtDMY, labSexRu, labRefLines, labRefText, mat
 import { analyteIndex, resolveAnalyte, analytesForService } from './lab-analyte-index.js?v=labshared1';   // LAB_BLANK_DESIGNED_V1
 import { originTag } from '../record-origin.js';   // BRANCH_ORIGIN_V1 — откуда запись
 import { externalLabTag } from '../external-lab.js';   // EXTERNAL_LAB_V1 — подпись у результата
-import { openVisitWizard, canAddVisitLines } from './visit-wizard.js?v=refbill4';   // LIVE_AUDIT_FIX_V1 — canAddVisitLines · REFERRAL_BILL_V1 — штамп кэша · REFBILL_REVIEW_V1
+import { openVisitWizard, canAddVisitLines } from './visit-wizard.js?v=ownrep1';   // LIVE_AUDIT_FIX_V1 — canAddVisitLines · REFERRAL_BILL_V1 — штамп кэша · REFBILL_REVIEW_V1
 import { printInvoiceCheck } from './receipt-print.js?v=rp1';   // REPRINT_SERVICE_CHECK_V1
 import { printableSheet as _printSheet } from './doc-settings.js?v=noqr1';   // VISIT_WIZARD_LOCAL_V1 — full-screen «Добавить услугу к визиту»
-import { openVisitBillModal } from './visit-bill.js?v=rbr2';   // REFBILL_REVIEW_V1 — штамп: «Выставить счёт» только денежным ролям
+import { openVisitBillModal } from './visit-bill.js?v=ownrep1';   // REFBILL_REVIEW_V1 — штамп: «Выставить счёт» только денежным ролям
 import { openAdmissionOrderModal } from './admission-modal.js?v=inp2';   // ADMISSION_ORDER_V1 — «Госпитализация» с карты пациента
 import { caseFilePrintHtml } from './case-docs.js?v=cw1';   // PATIENT_HISTORY_TAB_V1 — печать подшитой истории тем же бланком
 import { IN_BED_STATUSES, admissionStatusLabel } from '../../shared/admission-status.js';   // PATIENT_HISTORY_TAB_V1

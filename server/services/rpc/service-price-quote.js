@@ -15,6 +15,8 @@ import { tierFor, hasTiers } from '../domain/visit-tier.js';
 import { today, localDate } from '../domain/day.js';
 // BILLING_AUDIT_FIX_V1 (A2) — личная цена врача: то же правило, что у кассы.
 import { doctorPriceFor } from '../domain/pricing.js';
+// OWN_PRICE_REPEAT_V1 — своя цена сильнее яруса: то же правило, что у счёта.
+import { serviceLinePrice } from '../../../public/js/shared/own-price-rule.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -32,12 +34,18 @@ const QUOTE_ROLES = ['admin', 'registrar', 'doctor', 'nurse', 'cashier', 'callce
  *
  * BILLING_AUDIT_FIX_V1 (A2) — ВРАЧ СТРОКИ ВХОДИТ В ЦЕНУ. Касса считает строку
  * через lineUnitPrice (domain/pricing.js): личная цена врача поверх каталога,
- * а тариф второго/повторного визита — поверх обеих. Котировка без врача
+ * а тариф второго/повторного визита — поверх каталога (OWN_PRICE_REPEAT_V1:
+ * личная цена — поверх тарифа тоже, см. ниже). Котировка без врача
  * отдавала каталог, и быстрая регистрация показывала и печатала 100 000, пока
  * счёт брал личные 150 000 врача (а разницу рисовала «Скидкой»). Теперь врач
- * строки — doctor_ids[service_id], иначе doctor_id — даёт ту же цену: при
- * первичном тарифе это его личная цена (base_price тоже), при втором и
- * повторном — цена тарифа, как и в счёте.
+ * строки — doctor_ids[service_id], иначе doctor_id — даёт ту же цену, что
+ * счёт: его личная цена (base_price тоже).
+ *
+ * OWN_PRICE_REPEAT_V1 (2026-09-30) — личная цена действует на ЛЮБОМ ярусе:
+ * второй и повторный визит у врача со своей ценой стоят его цену, а не цену
+ * тарифа (прежде тариф перекрывал её). Ярус (tier) котировка называет
+ * по-прежнему — он пишется в строку, по нему считаются визиты. own_price в
+ * ответе говорит экрану, что цена — врачебная и от яруса не зависит.
  */
 export function servicePriceQuote(db, args, user) {
   if (!hasAnyRole(user, QUOTE_ROLES)) throw new RpcError('Нет доступа к ценам услуг.', 403);
@@ -89,7 +97,7 @@ export function quoteServicePrices(db, args) {
     if (!svc) continue;
     const own = doctorPriceFor(db, doctorOf(id), id);
     const withOwn = (q) => (own === null ? q
-      : { ...q, own_price: own, base_price: own, price: q.tier === 'primary' ? own : q.price });
+      : { ...q, own_price: own, base_price: own, price: serviceLinePrice(own, q.price) });   // OWN_PRICE_REPEAT_V1
     if (!hasTiers(svc)) {
       quotes[id] = withOwn({ tier: 'primary', price: Number(svc.price) || 0, base_price: Number(svc.price) || 0, days_since: null, reason: 'no_tiers', prev_day: null });
       continue;
