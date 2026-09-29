@@ -991,3 +991,45 @@ test('REFERRAL_BILL_V1: плательщик в карте — регистра�
     assert.equal(DB.prepare('SELECT COUNT(*) c FROM invoices').get().c, 1);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REFBILL_REVIEW_V1 (ревью C1) — сервер сверяет тариф строки врача с расчётом
+// ЭТОГО визита (quoteTier: пациент, день визита, сам визит исключён) и чужой
+// тариф отказывает. Смета мастера спрашивала тариф раньше и без визита: строки
+// прошлых дней той же записи (массаж на пять дней одной записью) и строки
+// визита дня она видела иначе, и врачу отказывали в законном счёте. Теперь у
+// врача тариф строк дня спрашивается у сервера теми же входами прямо перед
+// записью. Здесь история меняется между сметой и записью — ровно то, что
+// делают строки первого дня той же записи для второго.
+// ═══════════════════════════════════════════════════════════════════════════
+test('REFBILL_REVIEW_V1: у врача тариф строки — свежий расчёт сервера на визит дня; устаревшая смета счёт не ломает', async () => {
+  await asRole('doctor', 7, async () => {
+    await openWizardReadyWith((db) => {
+      db.prepare('UPDATE services SET price_secondary = 60000, secondary_days_from = 1, secondary_days_to = 10 WHERE id = 21').run();
+    });
+    // Смета уже спросила: пациент первичный. Теперь у него появляется приём
+    // этой услуги 3 дня назад — визит, на который записывает мастер (сегодня
+    // или в ближайшие дни), для сервера второй.
+    const past = DB.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', date('now','localtime','-3 days') || ' 10:00:00', 'utc') t").get().t;
+    const pv = DB.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (3, 7, ?, 'arrived', 1)").run(past).lastInsertRowid;
+    DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by) VALUES (?, 21, 7, 1, 100000, 100000, 'completed', 1)").run(pv);
+    await pressUntilCreate();
+    const inv = DB.prepare('SELECT * FROM invoices').all();
+    assert.equal(inv.length, 1, 'врачу отказано в счёте: ' + JSON.stringify(TOASTS));
+    assert.equal(inv[0].total_amount, 60000, 'счёт — по тарифу «второй визит», как считает сервер');
+    const line = DB.prepare('SELECT price_tier FROM visit_services WHERE visit_id <> ? AND service_id = 21').get(pv);
+    assert.equal(line.price_tier, 'secondary', 'строка записана с устаревшим тарифом сметы');
+    assert.ok(!TOASTS.some((t) => /не выставлен/.test(t)), JSON.stringify(TOASTS));
+  });
+});
+
+test('REFBILL_REVIEW_V1: регистратура — прежний порядок, без второго расчёта тарифа', async () => {
+  await asRole('registrar', 1, async () => {
+    await openWizardReady();
+    const before = RPC.filter((c) => c.name === 'service_price_quote').length;
+    await pressUntilCreate();
+    const after = RPC.filter((c) => c.name === 'service_price_quote');
+    assert.ok(!after.slice(before).some((c) => c.body && c.body.visit_id != null), 'у регистратуры появился расчёт на визит дня: ' + JSON.stringify(after));
+    assert.equal(DB.prepare('SELECT COUNT(*) c FROM invoices').get().c, 1);
+  });
+});

@@ -408,6 +408,21 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         repaintRail();
         if (wiz.step === 1 && typeof _repaintCatalog === 'function') _repaintCatalog();
     }
+    // REFBILL_REVIEW_V1 (ревью C1) — тариф строк ОДНОГО дня записи теми же
+    // входами, что у сервера при счёте врача (billing.js quoteTier): визит дня
+    // уже заведён (ensure_visit), он из расчёта исключён, день — его. Ответ
+    // ложится в wiz.tiers под ключ дня, и строки ниже пишутся с ним. Сбой —
+    // остаётся прежняя смета: сервер сверит сам и, если что, откажет словами.
+    async function requoteDay(visitId, day, lines) {
+        if (!patient || !patient.id || !visitId || !day) return;
+        const ids = [...new Set(lines.map((c) => Number(c && c.svc && c.svc.id)).filter((n) => Number.isInteger(n) && n > 0))];
+        if (!ids.length) return;
+        try {
+            const res = await supabase.rpc('service_price_quote', { patient_id: patient.id, service_ids: ids, visit_id: visitId, date: day });
+            if (!res || res.error || !res.data || !res.data.quotes) return;
+            for (const [id, q] of Object.entries(res.data.quotes)) wiz.tiers[tierKey(id, day)] = q;
+        } catch (_) { /* прежняя смета */ }
+    }
     // The chip beside a quoted line: «Второй визит» / «Повторный визит».
     const tierChip = (c) => {
         const q = c && c.svc && wiz.tiers[tierKey(c.svc.id, lineDay(c))];
@@ -671,7 +686,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
         // it is what tells you whether the browser is running the file you just
         // edited, which is exactly the question when a fix "does not work".
         /* i18n-exempt-start: console-диагностика */
-        console.info('[visit-wizard refbill3] catalog load —', wiz.dbg,   // REFERRAL_BILL_V1 — тег = штамп ?v= импортов
+        console.info('[visit-wizard refbill4] catalog load —', wiz.dbg,   // REFERRAL_BILL_V1 — тег = штамп ?v= импортов
             '· плательщики:', wiz.payersError ? 'ОШИБКА ' + wiz.payersError : wiz.payers.length);
         /* i18n-exempt-end */
         if (svcRes.error) toast(trf('Услуги не загрузились: {msg}', { msg: wiz.loadError }), 'fail');
@@ -2706,6 +2721,13 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                         .update({ notes: (visit.notes ? visit.notes + '\n' : '') + mark })
                         .eq('id', visit.id);
                 }
+
+                // REFBILL_REVIEW_V1 (ревью C1) — у врача тариф строк дня — свежий
+                // расчёт сервера на ЭТОТ визит: сервер сверяет счёт врача с
+                // quoteTier (пациент, день визита, сам визит исключён) и чужой
+                // тариф отказывает. Смета спрашивала раньше и без визита — строки
+                // прошлых дней этой же записи и строки визита дня она видела иначе.
+                if (doctorBill) await requoteDay(visit.id, day, lines);
 
                 const vsIds = [];
                 const coveredVsIds = [];   // COVERAGE_SPLIT_V1 — строки за счёт контрагента

@@ -4215,7 +4215,7 @@ function referringDoctorId(ctx) {
 
 function openReferralWizard(ctx) {
     if (!ctx.patient || !ctx.patient.id) { toast('Нет контекста пациента.', 'fail'); return; }
-    import('./visit-wizard.js?v=refbill3')   // REFERRAL_BILL_V1 — штамп кэша
+    import('./visit-wizard.js?v=refbill4')   // REFERRAL_BILL_V1 — штамп кэша · REFBILL_REVIEW_V1
         .then((mod) => mod.openVisitWizard(async (res) => {
             try { await loadPatientEmr(ctx.patient); paintEmr(); } catch (e) {}
             if (res && res.rows && res.rows.length) printRouteSheet(ctx, res);
