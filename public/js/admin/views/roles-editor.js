@@ -58,6 +58,8 @@ import { levelsFor, openAction, actionFor, levelFromActions, actionsFromLevel }
 import { paintCatalog, collectGrants, grantsFromLegacy, legacyFromGrants } from '../roles-matrix.js?v=rm7';   // ROLES_SAVE_TRUTH_V1 — сбор с «показанным при открытии»
 // V3121_ROLES — «Проверьте права этой роли»: «Просмотр» от старого экрана «Роли» (мигр. 215).
 import { roleReviewNotice } from './roles-review.js';
+// ROLES_SAVE_TRUTH_V1 — «Проверьте права этой роли»: права выше обычных для основы (мигр. 230).
+import { roleGrantReviewNotice } from './roles-grant-review.js';
 
 // ROLE_KEYS_V2 — матрица строится из permissions.js NAV_MODULES, того же
 // списка, который читают сами ворота бокового меню. Когда-то это была вторая
@@ -523,6 +525,12 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         // того, кому выдано «Роли: Изменение».
         if (isAdmin && !readOnly) {
             card.appendChild(roleReviewNotice(state.selected, perms, { onDone: () => { state.baseline = null; selectRole(state.selected); } }));
+        }
+        // ROLES_SAVE_TRUTH_V1 — «Проверьте права этой роли» (мигр. 230): права
+        // выше обычных для основы — возможно, выданные самим экраном. Решает
+        // тот, кто вправе менять эту роль; без правды сервера — не предлагаем.
+        if (!lockWhy && !truthLost) {
+            card.appendChild(roleGrantReviewNotice(state.selected, perms, { onDone: () => { state.baseline = null; selectRole(state.selected); } }));
         }
 
         if (!perms.configured) {

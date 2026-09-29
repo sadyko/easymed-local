@@ -147,10 +147,12 @@ let selectCalls, updateCalls, lastUpdate, selectRespond, updateRespond;
 // EFFECTIVE, сбой — в effectiveRespond.
 const EFFECTIVE = {};
 let effectiveRespond = null;
+// ROLES_SAVE_TRUTH_V1 — строки проверки миграции 230 («Проверьте права этой роли»).
+let GRANT_REVIEWS = [];
 function resetServer() {
   selectCalls = 0; updateCalls = 0; lastUpdate = null; toastMsg = null;
   confirmAnswer = true; confirmCalls = 0; lastConfirmText = null;
-  selectRespond = null; updateRespond = null; effectiveRespond = null;
+  selectRespond = null; updateRespond = null; effectiveRespond = null; GRANT_REVIEWS = [];
 }
 const roleOf = (desc) => (desc.filters.find((f) => f.col === 'role') || {}).val;
 
@@ -160,6 +162,9 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/rpc/role_effective_grants')) {
     if (effectiveRespond) return effectiveRespond(desc);
     return jsonOk({ levels: EFFECTIVE[desc && desc.role] || {} });
+  }
+  if (u.startsWith('/api/db') && desc && desc.table === 'role_grant_reviews' && desc.op === 'select') {
+    return jsonOk(GRANT_REVIEWS.filter((r) => r.role === roleOf(desc) && r.resolution == null));
   }
   if (u.startsWith('/api/db') && desc && desc.table === 'role_permissions') {
     if (desc.op === 'select') {
@@ -1053,4 +1058,23 @@ test('ROLES_SAVE_TRUTH_V1: тронутый раздел пишет свои о�
     assert.equal(saved.levels.patients, 'editor');
     assert.equal(saved.levels.labs, 'editor', 'чужой раздел тронут');
   } finally { delete SAVED.lab; }
+});
+
+// Плашка миграции 230 — у того, кто вправе менять роль; на «Просмотре» решать
+// нечем, и кнопок, которые всё равно отклонят, там быть не должно.
+test('ROLES_SAVE_TRUTH_V1: плашка «Проверьте права этой роли» — у того, кто вправе менять роль; на «Просмотре» её нет', async () => {
+  resetServer();
+  SAVED.registrar.grants = { 'crm.all': 'edit' };
+  GRANT_REVIEWS = [{ id: 5, role: 'registrar', key: 'crm.all', level: 'edit', standard: 'none', resolution: null }];
+  try {
+    const root = await render();
+    await tick();
+    assert.ok(textOf(root).includes('Проверьте права этой роли'), 'плашки нет');
+    assert.ok(textOf(root).includes('«CRM · Заявки → Видит все заявки и передаёт их»'), 'право не названо словами справочника');
+    assert.ok(findButtonByText(root, /Убрать эти права/), 'нет кнопки «Убрать эти права»');
+    const ro = mk('div');
+    await renderRolesEditor(ro, { readOnly: true });
+    await tick();
+    assert.ok(!textOf(ro).includes('Проверьте права этой роли'), 'плашка с кнопками на «Просмотре»');
+  } finally { delete SAVED.registrar.grants; GRANT_REVIEWS = []; }
 });

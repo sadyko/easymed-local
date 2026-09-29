@@ -100,7 +100,7 @@ import { renderPacs }         from './admin/views/pacs.js';
 import { renderInventory }    from './admin/views/inventory.js?v=inv7';   // INVENTORY_UI_V1 — Suppliers/PO/Requisitions/Counts tabs live; inv6 — OWN_SHELF_ONLY_V1 (ревью F5) чип «Только со своих полок»; inv7 — ревью F6 «Не списано со склада»
 import { renderStockLog }     from './admin/views/stock-log.js?v=stocklog1';   // STOCK_LOG_V1 — журнал движений (кто, кому, партия, срок)
 import { renderMyStock }      from './admin/views/my-stock.js?v=mystock1';   // MY_STOCK_V1 — свой подотчёт: что выдали, кто выдал, что списал
-import { renderSettingsHub }  from './admin/views/settings-hub.js?v=rst1';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route · ROLES_SAVE_TRUTH_V1 — «Роли» (штамп)
+import { renderSettingsHub }  from './admin/views/settings-hub.js?v=rst2';   // SETTINGS_HUB_V1 — Документы -> rich designer; Пациенты -> settings:patients route · ROLES_SAVE_TRUTH_V1 — «Роли» (штамп)
 import { renderPatientDocuments } from './admin/views/patient-documents.js?v=docstoolbar1';   // PATIENT_DOCUMENTS_V1 + DOCS_TOOLBAR_V1
 import { renderDocumentsSettings } from './admin/views/documents-settings.js?v=doc2';   // DOCUMENTS_SETTINGS_V1
 // CASE_WORKSPACE_V1 — история болезни как рабочий экран: слева шаги, справа документ.

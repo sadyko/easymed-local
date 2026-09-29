@@ -323,3 +323,43 @@ test('доказанные сценарии сквозь сервер: посл�
   put('registrar', { 'inpatient.vitals': 'edit' });
   assert.notEqual(await registrarVitals(), 403, 'стенд не отличает: с измерениями регистратор проходит ворота');
 });
+
+// Роль, которую прежний экран уже расширил: миграция 230 ставит её на проверку,
+// плашка называет право словами, «Убрать эти права» снимает его — сквозь сервер.
+test('плашка миграции 230 сквозь сервер: «Убрать эти права» снимает право, решение записано, плашки больше нет', async (t) => {
+  const { db, sid } = await world(t);
+  const fs = await import('node:fs');
+  const SQL = fs.readFileSync(new URL('../../../../server/db/migrations/230_role_grant_reviews.sql', import.meta.url), 'utf8');
+  const lead = Number(db.prepare("INSERT INTO crm_requests (full_name, phone, assigned_to) VALUES ('Чужая заявка', '+998901112233', 3)").run().lastInsertRowid);
+  const p = permsOf(db, 'callcenter');
+  p.grants = { ...(p.grants || {}), 'crm.all': 'edit' };   // так сохранял роль прежний экран
+  db.prepare('UPDATE role_permissions SET permissions = ? WHERE role = ?').run(JSON.stringify(p), 'callcenter');
+  db.exec(SQL);
+  // (Синтетическую роль «Записанные ключи» миграция тоже ставит на проверку —
+  // её crm.all, отметки, измерения и выдача выше основы-регистратора.)
+  assert.deepEqual(db.prepare("SELECT role, key, level, standard FROM role_grant_reviews WHERE role = 'callcenter'").all(),
+    [{ role: 'callcenter', key: 'crm.all', level: 'edit', standard: 'none' }]);
+  assert.deepEqual(db.prepare("SELECT key FROM role_grant_reviews WHERE role = 'written' ORDER BY key").all().map((x) => x.key),
+    ['crm.all', 'inpatient.marks', 'inpatient.vitals', 'procurement.issue']);
+
+  const root = await render();
+  await openRole(root, 'callcenter', 'Оператор колл-центра');
+  await until(() => textOf(root).includes('Проверьте права этой роли'), 'плашка «Проверьте права этой роли»');
+  assert.ok(textOf(root).includes('«CRM · Заявки → Видит все заявки и передаёт их»'));
+  toastMsg = null;
+  findButtonByText(root, /^Убрать эти права$/).click();
+  await until(() => toastMsg !== null, 'ответ на «Убрать эти права»');
+  assert.match(String(toastMsg), /Права убраны/, String(toastMsg));
+
+  assert.ok(!('crm.all' in (permsOf(db, 'callcenter').grants || {})), 'право не снято');
+  assert.equal(permsOf(db, 'callcenter').grants['crm.dial'], 'edit', 'снято лишнее');
+  const row = db.prepare("SELECT resolution, resolved_by FROM role_grant_reviews WHERE role = 'callcenter'").get();
+  assert.equal(row.resolution, 'restored');
+  assert.equal(row.resolved_by, 1, 'кто решил — из сессии');
+  await until(() => byClass(root, 'roles-card').length > 0 && byClass(root, 'roles-state').length === 0, 'роль перечитана');
+  await new Promise((r) => setTimeout(r, 50));
+  assert.ok(!textOf(root).includes('Проверьте права этой роли'), 'после решения плашка осталась');
+  const r = await realFetch(BASE + '/api/db', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: sid.op1 },
+    body: JSON.stringify({ table: 'crm_requests', op: 'select', columns: 'id', filters: [{ col: 'id', op: 'eq', val: lead }] }) });
+  assert.deepEqual((await r.json()).data, [], 'оператор по-прежнему читает чужую заявку');
+});
