@@ -70,6 +70,7 @@ globalThis.confirm = () => true;
 const { openDb } = await import('../../../../server/db/connection.js');
 const { migrate } = await import('../../../../server/db/migrate.js');
 const { compile } = await import('../../../../server/db/query-compiler.js');
+const { readableColumns } = await import('../../../../server/db/schema-registry.js');   // OWN_PRICE_REPEAT_V1 (ревью 1)
 const { getRpc } = await import('../../../../server/services/rpc/index.js');
 
 let USER = { id: 1, role: 'registrar', extra_roles: [] };
@@ -100,6 +101,14 @@ globalThis.fetch = async (url, opts) => {
     catch (e) { return { ok: false, status: 403, json: async () => ({ error: { code: 'forbidden', message: e.message } }) }; }
     const { sql, params, meta } = compiled;
     if (meta.op !== 'select') DBWRITES.push(meta.table);
+    // OWN_PRICE_REPEAT_V1 (ревью 1) — вставка с .select() отдаёт строку, как
+    // настоящий маршрут (routes/db.js): перечитывается по rowid колонками реестра.
+    // Кабинет врача (addOwnService) без id легшей строки считает вставку сбоем.
+    if (meta.op === 'insert' && meta.returning) {
+      const info = DB.prepare(sql).run(...params);
+      const row = DB.prepare(`SELECT ${readableColumns(meta.table).map((c) => `"${c}"`).join(', ')} FROM "${meta.table}" WHERE rowid = ?`).get(info.lastInsertRowid);
+      return ok(meta.single ? row : [row]);
+    }
     const rows = meta.op === 'select' ? DB.prepare(sql).all(...params) : (DB.prepare(sql).run(...params), []);
     if (meta.single === 'single') return ok(rows[0]);
     if (meta.single === 'maybe') return ok(rows[0] ?? null);
@@ -572,6 +581,32 @@ test('OWN_PRICE_REPEAT_V1: окно счёта «Добавить» — коти
   DB.prepare('UPDATE visits SET doctor_id = 8 WHERE id = 40').run();
   const plain = await VB.billLineFor(DB.prepare('SELECT * FROM visits WHERE id = 40').get(), { id: 21, price: 900000, requires_doctor: 1 }, 1);
   assert.deepEqual([plain.doctor_id, plain.unit_price, plain.price_tier], [8, 450000, 'secondary']);
+});
+
+// OWN_PRICE_REPEAT_V1 (ревью 1) — «Добавить» кабинета врача (service-workspace.js
+// addOwnService) — поведением, а не только по исходнику: строка ложится в приём
+// с врачом приёма, ценой котировки с этим врачом и ярусом «второй визит».
+test('OWN_PRICE_REPEAT_V1: кабинет врача «Добавить» — второй визит у врача приёма со своей ценой: своя цена; без своей — цена яруса', async () => {
+  const WS = await import('../views/service-workspace.js');
+  // Список кабинета живёт на модуле (wsState) и ловит дубликат услуги, поэтому
+  // у второго врача — своя услуга 23 с теми же ценами и тем же прошлым визитом.
+  for (const [doctorId, sid, want] of [[7, 21, 1100000], [8, 23, 450000]]) {
+    repeatPatient();
+    DB.prepare('DELETE FROM visit_services WHERE id = 101').run();   // приём 40 — без МРТ
+    if (sid === 23) {
+      DB.prepare("INSERT INTO services (id, name, price, price_secondary, secondary_days_from, secondary_days_to, requires_doctor) VALUES (23, 'МРТ повторно', 900000, 450000, 1, 10, 1)").run();
+      DB.prepare('UPDATE users SET service_rates = ? WHERE id = 8').run(JSON.stringify([{ service_id: 23, pct: 30 }]));
+      const pv = DB.prepare("SELECT visit_id FROM visit_services WHERE service_id = 21 AND status = 'completed'").get().visit_id;
+      DB.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, price_tier) VALUES (?, 23, 8, 1, 900000, 900000, 'completed', 'primary')").run(pv);
+    }
+    const ctx = { visitId: 40, visitServiceId: 102, patient: { id: 3, __service: { doctorId } }, container: null };
+    await WS.addOwnService(ctx, { id: sid, name: 'МРТ', price: 900000, requires_doctor: 1 }, null);
+    const row = DB.prepare('SELECT doctor_id, unit_price, total, price_tier FROM visit_services WHERE visit_id = 40 AND service_id = ?').get(sid);
+    assert.ok(row, 'строка не легла в приём');
+    assert.deepEqual({ ...row }, { doctor_id: doctorId, unit_price: want, total: want, price_tier: 'secondary' }, 'врач ' + doctorId);
+    const q = RPC.filter((r) => r.name === 'service_price_quote').pop();
+    assert.equal(q && q.body.doctor_id, doctorId, 'котировка без врача строки');
+  }
 });
 
 test('M1: скидка группы пациента — пол в смете, как в счёте; на строке пакета — большая из пакета и группы', async () => {

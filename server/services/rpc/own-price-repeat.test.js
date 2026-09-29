@@ -22,6 +22,7 @@ import { createInvoiceForVisit, recordPayment } from './billing.js';
 import { openCashShift, cashierUnbilled } from './cashier.js';
 import { doctorPaySummary } from './reports.js';
 import { priceFor } from '../crm/booking-mirror.js';
+import { doctorPriceFor, doctorPriceLookup } from '../domain/pricing.js';
 import { serviceLinePrice, ownPriceValue, ownPriceFromRates } from '../../../public/js/shared/own-price-rule.js';
 
 const admin = { id: 1, role: 'admin', full_name: 'Админ' };
@@ -98,6 +99,27 @@ test('правило: своя цена сильнее яруса; своей н
   assert.equal(ownPriceFromRates([{ service_id: 5, pct: 30 }, { service_id: '5', price: 90000 }], 5), 90000);
   assert.equal(ownPriceFromRates([{ service_id: 5, price: '' }], 5), null);
   assert.equal(ownPriceFromRates(null, 5), null);
+});
+
+// Ревью 1 — экран разбирает сохранённую цену РОВНО как сервер: любая строка,
+// которую сервер прочтёт как свою цену, экраном читается тем же числом, а
+// отброшенная сервером — отброшена и экраном. Иначе смета мастера или
+// Калькулятора назвала бы одну сумму, а счёт выставил бы другую.
+test('правило: разбор своей цены на экране = разбор сервера (OWN_PRICE_ENTRY + CAST), в том числе кривые строки', () => {
+  const db = openDb(':memory:'); migrate(db);
+  const RAW = [80000, 80000.5, 0, -1, '80000', '80000.5', ' 80000 ', '80.000.5', '80.', '80..5', '1.2.3', '0',
+    '', ' ', 'abc', '80 000', '80,5', '.5', '-5', '\t80', '80\t', '1e3', null, true, false, '٣٠'];
+  const ins = db.prepare("INSERT INTO users (id, username, password_hash, role, service_rates) VALUES (?, ?, 'x', 'doctor', ?)");
+  RAW.forEach((price, i) => ins.run(100 + i, 'd' + i, JSON.stringify([{ service_id: 7, pct: 10, price }])));
+  const lookup = doctorPriceLookup(db, RAW.map((_, i) => 100 + i));
+  const got = RAW.map((price, i) => ({ price, server: doctorPriceFor(db, 100 + i, 7), batch: lookup(100 + i, 7), screen: ownPriceFromRates([{ service_id: 7, pct: 10, price }], 7) }));
+  for (const g of got) {
+    assert.equal(g.screen, g.server, 'цена ' + JSON.stringify(g.price) + ': экран ' + g.screen + ', сервер ' + g.server);
+    assert.equal(g.batch, g.server, 'цена ' + JSON.stringify(g.price) + ': выборка кассы ' + g.batch + ', сервер ' + g.server);
+  }
+  // Прямо — то, что нашло ревью: '80.000.5' сервер читает как 80.
+  assert.equal(ownPriceValue('80.000.5'), 80);
+  assert.equal(doctorPriceFor(db, 100 + RAW.indexOf('80.000.5'), 7), 80);
 });
 
 // ─── котировка = счёт ────────────────────────────────────────────────────────

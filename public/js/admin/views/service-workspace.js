@@ -3626,7 +3626,9 @@ function paintOwnServices(ctx) {
 // SVC_ATTACH_V1 — вызывается каталогом («Добавить» на карточке «Услуги приёма»)
 // по одной строке сметы: {service, doctor}. Исполнитель — выбранный в смете врач,
 // а если его не выбирали — врач текущего приёма.
-async function addOwnService(ctx, svc, doctor) {
+// OWN_PRICE_REPEAT_V1 (ревью 1) — export только для поведенческой проверки
+// цены строки (picker-invoice.test.mjs); вызывающий на экране — каталог.
+export async function addOwnService(ctx, svc, doctor) {
     if (!svc) return;
     // SVC_ATTACH_V1 — одну и ту же услугу в приём дважды не добавляем. Каталог
     // гасит уже добавленные (excludeServiceIds), но строки, заведённые до этой
