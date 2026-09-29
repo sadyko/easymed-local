@@ -90,7 +90,11 @@ test('230: повторный накат ничего не добавляет и
   } finally { fresh.close(); }
 });
 
-test('230: строки проверки читают и отмечают администратор и «Роли: Изменение»; «Просмотр» — только читает; кто решил — из сессии', async (t) => {
+// Ревью M3/m1 — плашка только у администратора, и строки проверки тоже только
+// его: «Роли: Изменение» мог отметить «Оставить» у СВОЕЙ роли (у записи в
+// реестре не было проверки, чья это роль), а «Убрать» ему всё равно откажет
+// защита «Ролей».
+test('230: строки проверки читает и отмечает только администратор; кто решил — из сессии', async (t) => {
   const db = setup({
     callcenter: withGrants({ 'crm.all': 'edit' }),
     lab: withGrants({ 'settings.roles': 'edit' }),
@@ -115,16 +119,16 @@ test('230: строки проверки читают и отмечают адм
     return { status: r.status, json: await r.json().catch(() => ({})) };
   };
   const read = { table: 'role_grant_reviews', op: 'select', columns: 'id,role,key,level,standard,resolution', filters: [] };
-  for (const who of ['admin', 'editor', 'viewer']) assert.equal((await q(who, read)).status, 200, who + ' не читает');
-  assert.equal((await q('nurse', read)).status, 403);
+  assert.equal((await q('admin', read)).status, 200, 'администратор не читает');
+  for (const who of ['editor', 'viewer', 'nurse']) assert.equal((await q(who, read)).status, 403, who + ' читает строки проверки');
   const id = (await q('admin', read)).json.data[0].id;
   const mark = (who) => q(who, { table: 'role_grant_reviews', op: 'update', values: { resolution: 'kept', resolved_at: '2026-09-29T10:00:00Z' }, filters: [{ col: 'id', op: 'in', val: [id] }] });
-  assert.equal((await mark('nurse')).status, 403);
-  assert.equal((await mark('viewer')).status, 403, '«Роли: Просмотр» отметил решение');
-  const ok = await mark('editor');
+  for (const who of ['nurse', 'viewer', 'editor']) assert.equal((await mark(who)).status, 403, who + ' отметил решение');
+  assert.equal(db.prepare('SELECT resolution FROM role_grant_reviews WHERE id = ?').get(id).resolution, null);
+  const ok = await mark('admin');
   assert.equal(ok.status, 200, JSON.stringify(ok.json));
   const row = db.prepare('SELECT resolution, resolved_by FROM role_grant_reviews WHERE id = ?').get(id);
   assert.equal(row.resolution, 'kept');
-  assert.equal(row.resolved_by, ids.editor, 'кто решил — из сессии');
+  assert.equal(row.resolved_by, ids.admin, 'кто решил — из сессии');
   assert.equal(typeof MAIN_CLINIC_TABLES.role_grant_reviews, 'string', 'проверку прав решает главная клиника');
 });

@@ -533,8 +533,12 @@ export async function renderRolesEditor(container, { onBack, readOnly = false } 
         }
         // ROLES_SAVE_TRUTH_V1 — «Проверьте права этой роли» (мигр. 230): права
         // выше обычных для основы — возможно, выданные самим экраном. Решает
-        // тот, кто вправе менять эту роль; без правды сервера — не предлагаем.
-        if (!lockWhy && !truthLost) {
+        // администратор, как и по V3121_ROLES выше (ревью M3): «Убрать эти
+        // права» у «Ролей: Изменение» всё равно отказала бы защита ролей
+        // (ключ выше его собственных прав), а строки проверки теперь читает
+        // только администратор (реестр, ревью m1). Без правды сервера — не
+        // предлагаем.
+        if (isAdmin && !readOnly && !truthLost) {
             card.appendChild(roleGrantReviewNotice(state.selected, perms, { onDone: () => { state.baseline = null; selectRole(state.selected); } }));
         }
 

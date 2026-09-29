@@ -1063,9 +1063,11 @@ test('ROLES_SAVE_TRUTH_V1: тронутый раздел пишет свои о�
   } finally { delete SAVED.lab; }
 });
 
-// Плашка миграции 230 — у того, кто вправе менять роль; на «Просмотре» решать
-// нечем, и кнопок, которые всё равно отклонят, там быть не должно.
-test('ROLES_SAVE_TRUTH_V1: плашка «Проверьте права этой роли» — у того, кто вправе менять роль; на «Просмотре» её нет', async () => {
+// Плашка миграции 230 — только администратору (ревью M3): «Убрать эти права»
+// снимает ключ, а защита «Ролей» считает снятие подъёмом до максимума — у
+// не-администратора с «Роли: Изменение» кнопка всегда кончалась бы отказом
+// сервера. На «Просмотре» решать нечем тем более.
+test('ROLES_SAVE_TRUTH_V1: плашка «Проверьте права этой роли» — у администратора; на «Просмотре» её нет', async () => {
   resetServer();
   SAVED.registrar.grants = { 'crm.all': 'edit' };
   GRANT_REVIEWS = [{ id: 5, role: 'registrar', key: 'crm.all', level: 'edit', standard: 'none', resolution: null }];
@@ -1080,6 +1082,33 @@ test('ROLES_SAVE_TRUTH_V1: плашка «Проверьте права этой
     await tick();
     assert.ok(!textOf(ro).includes('Проверьте права этой роли'), 'плашка с кнопками на «Просмотре»');
   } finally { delete SAVED.registrar.grants; GRANT_REVIEWS = []; }
+});
+
+// ROLES_SAVE_TRUTH_V1 (ревью M3) — доказано prove-nonadmin-notice.mjs: у
+// не-администратора с «Роли: Изменение» плашка рисовалась, а «Убрать эти права»
+// получало 403 «нельзя выдать больше, чем есть у вас самих», хотя сам он crm.all
+// держит. Плашка — только администратору, как и плашка миграции 215.
+test('ревью M3: не-администратору с «Роли: Изменение» плашки миграции 230 нет — даже у роли, которую он вправе менять', async () => {
+  resetServer();
+  const perms = await import('../permissions.js');
+  SAVED.nurse = { sections: ['patients'], levels: { patients: 'editor' }, grants: { settings: 'view', 'settings.roles': 'edit' } };
+  SAVED.registrar.grants = { 'crm.all': 'edit' };
+  GRANT_REVIEWS = [{ id: 5, role: 'registrar', key: 'crm.all', level: 'edit', standard: 'none', resolution: null }];
+  window.easymed.state.user = { id: 60, role: 'nurse', extra_roles: [] };
+  perms.setEffectiveFromRole({ name: 'nurse', permissions: SAVED.nurse });
+  try {
+    const root = await render();
+    await tick();
+    assert.ok(findButtonByText(root, /Сохранить роль/), 'стенд неверен: регистратора этот человек менять вправе');
+    assert.ok(!textOf(root).includes('Проверьте права этой роли'), 'плашка у не-администратора — «Убрать эти права» ему откажет сервер');
+    assert.ok(!findButtonByText(root, /Убрать эти права/));
+  } finally {
+    delete SAVED.nurse;
+    delete SAVED.registrar.grants;
+    GRANT_REVIEWS = [];
+    window.easymed.state.user = null;
+    perms.setFullAccess('Admin');
+  }
 });
 
 // ROLES_SAVE_TRUTH_V1 (ревью M1, оговорка) — у раздела, записанного «Нет»,

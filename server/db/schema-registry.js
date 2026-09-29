@@ -880,15 +880,14 @@ export const REGISTRY = {
   },
   // ROLES_SAVE_TRUTH_V1 (мигр. 230) — ключи, у которых записанный уровень выше
   // стандарта основы роли: так их мог выдать сам экран «Роли» до этого
-  // выпуска. Заводит только миграция; решает администратор или «Роли:
-  // Изменение» — «Убрать эти права» / «Оставить как есть»
-  // (views/roles-grant-review.js); отметка решения — единственная правка.
-  // Читает и «Роли: Просмотр» (write.grant → readGrantAllows). Живёт в
-  // главном здании, как и сами права (MAIN_CLINIC_TABLES ниже).
+  // выпуска. Заводит только миграция; решает администратор — «Убрать эти
+  // права» / «Оставить как есть» (views/roles-grant-review.js); отметка
+  // решения — единственная правка. Живёт в главном здании, как и сами права
+  // (MAIN_CLINIC_TABLES ниже).
+  // ROLES_REVIEW_V1 (ревью m1) — без write.grant: читает и отмечает ТОЛЬКО администратор, как role_permission_reviews выше.
   role_grant_reviews: {
     read:  { roles: ['admin'], columns: ['id','role','key','level','standard','found_at','resolution','resolved_at','resolved_by'] },
-    write: { grant: 'settings.roles',
-             insert: { roles: [] },
+    write: { insert: { roles: [] },   // ROLES_REVIEW_V1 — grant: 'settings.roles' снят (ревью m1)
              update: { roles: ['admin'], columns: ['resolution','resolved_at'] },
              delete: { roles: [] } },
     stamps: { resolved_by: { with: 'resolved_at' } },
