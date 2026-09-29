@@ -2652,6 +2652,12 @@ async function paint() {
                         'Звонков по этому номеру пока нет.'));
                     return;
                 }
+                // ROLES_SAVE_TRUTH_V1 — «Прослушать» рисуется только тому, кому
+                // сервер разрешил слушать (can_listen — те же ворота, что у
+                // telephony_call_recording): кнопка, нажатие которой всё равно
+                // откажут, и была «прослушивание не работает». Остальным — одна
+                // строка под списком: почему кнопки нет и где это право выдают.
+                let listenDenied = false;
                 for (const c of rows) {
                     // Длительность СЛОВАМИ: «0 сек» и «нет ответа» — разные вещи,
                     // и оператор решает по ним по-разному.
@@ -2684,7 +2690,8 @@ async function paint() {
                         line.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px' } },
                             'Разговора не было — записывать нечего.'));
                     }
-                    if (Number(c.billsec) > 0) {
+                    if (Number(c.billsec) > 0 && !c.can_listen) listenDenied = true;
+                    if (Number(c.billsec) > 0 && c.can_listen) {
                         const play = h('button', { class: 'btn btn-sm', type: 'button',
                             style: { marginTop: '8px' },
                             onclick: async (ev) => {
@@ -2716,6 +2723,10 @@ async function paint() {
                         line.appendChild(play);
                     }
                     callsList.appendChild(line);
+                }
+                if (listenDenied) {
+                    callsList.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' }, dataset: { listenDenied: '1' } },
+                        'Слушать записи разговоров вашей роли не разрешено — право «Прослушать запись» в «Роли».'));
                 }
             })();
         }

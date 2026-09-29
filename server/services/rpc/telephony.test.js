@@ -296,6 +296,18 @@ test('запись разговора — отдельное право: стр�
   assert.equal(heard.has_recording, true);
 });
 
+// ROLES_SAVE_TRUTH_V1 — у каждой строки журнала can_listen: карточка рисует
+// «Прослушать» только тому, кому нажатие не откажут (те же ворота crm.recording).
+test('журнал в карточке говорит строке, можно ли её слушать (can_listen)', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO calls (general_call_id, started_at, external_number, billsec, recording_url) VALUES ('1','2026-09-20T08:00:00Z','998901112233',42,'https://rec/1.mp3')").run();
+  assert.equal(crmLeadCalls(db, { phone: '+998901112233' }, registrar)[0].can_listen, true, 'по прежнему правилу регистратура слушает');
+  setGrants(db, 'registrar', { 'crm.calls': 'view', 'crm.recording': 'none' });
+  const [row] = crmLeadCalls(db, { phone: '+998901112233' }, registrar);
+  assert.equal(row.can_listen, false, 'кнопку нарисуют тому, кому прослушивание закрыто');
+  assert.equal(row.recording_url, null);
+});
+
 // ADMIN_DOCTOR_V1 — АДМИНИСТРАТОР КЛИНИКИ, КОТОРЫЙ ЕЩЁ И ВРАЧ.
 //
 // Его основная роль `doctor`, а `admin` стоит дополнительной, и матрица прав

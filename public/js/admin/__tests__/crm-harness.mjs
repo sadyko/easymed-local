@@ -78,7 +78,9 @@ export const S = { leads: [], dups: [], search: [], tasks: [], staff: [], nextTa
   config: null, leadTags: [],
   // Ревью M4 — вставка метки отвечает UNIQUE (409), хотя строка на месте:
   // её в ту же секунду поставил коллега.
-  tagInsertConflict: false };
+  tagInsertConflict: false,
+  // ROLES_SAVE_TRUTH_V1 — ответ crm_lead_calls: журнал звонков в карточке заявки.
+  leadCalls: [] };
 export const CALLS = [];
 export const RPC = [];
 const jsonOk = (data, count) => ({ ok: true, json: async () => ({ data, count }) });
@@ -106,7 +108,7 @@ globalThis.fetch = async (url, opts) => {
     if (name === 'crm_config_get') return jsonOk(S.config);
     if (name === 'crm_leads_by_phone') return jsonOk(S.dups);
     if (name === 'crm_search') return jsonOk(typeof S.search === 'function' ? S.search(body) : S.search);
-    if (name === 'crm_lead_calls') return jsonOk([]);
+    if (name === 'crm_lead_calls') return jsonOk(S.leadCalls || []);
     if (name === 'crm_duplicate_groups') return jsonOk(S.dupGroups);
     if (name === 'crm_merge_leads') {
       if (S.mergeError) return { ok: false, json: async () => ({ error: { message: S.mergeError } }) };

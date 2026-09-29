@@ -350,7 +350,9 @@ export function crmLeadCalls(db, args, user) {
      WHERE replace(replace(replace(replace(c.external_number,' ',''),'-',''),'(',''),')','') LIKE ?
      ORDER BY c.started_at DESC, c.id DESC
      LIMIT ?`).all('%' + tail, limit);
-  return rows.map((c) => ({ ...c, recording_url: mayHear ? c.recording_url : null, has_recording: !!c.recording_url }));
+  // ROLES_SAVE_TRUTH_V1 — can_listen: те же ворота, что у прослушивания, чтобы
+  // карточка рисовала «Прослушать» только тому, кому нажатие не откажут.
+  return rows.map((c) => ({ ...c, recording_url: mayHear ? c.recording_url : null, has_recording: !!c.recording_url, can_listen: mayHear }));
 }
 
 // ---------------------------------------------------------------------------
