@@ -886,7 +886,9 @@ export const REGISTRY = {
   // (MAIN_CLINIC_TABLES ниже).
   // ROLES_REVIEW_V1 (ревью m1) — без write.grant: читает и отмечает ТОЛЬКО администратор, как role_permission_reviews выше.
   role_grant_reviews: {
-    read:  { roles: ['admin'], columns: ['id','role','key','level','standard','found_at','resolution','resolved_at','resolved_by'] },
+    read:  { roles: ['admin'], columns: ['id','role','key','level','standard','found_at','resolution','resolved_at','resolved_by'],
+             // ROLES_REVIEW_V1 (ревью m2) — в филиале строк не видно: решает главная клиника (отметка здесь — 409), и плашка с неработающими кнопками висела бы вечно.
+             where: `NOT EXISTS (SELECT 1 FROM "branch_identity" WHERE "branch_identity"."id" = 1 AND "branch_identity"."role" = 'secondary')` },   // ROLES_REVIEW_V1
     write: { insert: { roles: [] },   // ROLES_REVIEW_V1 — grant: 'settings.roles' снят (ревью m1)
              update: { roles: ['admin'], columns: ['resolution','resolved_at'] },
              delete: { roles: [] } },

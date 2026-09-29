@@ -20,6 +20,7 @@ import { GATE_FALLBACK, FALLBACK_FN_KEYS, fallbackLevel } from '../../services/g
 import { VALID_ROLES } from '../../services/roles.js';
 import { pseudoUserOfRole } from '../../services/rpc/roles-effective.js';
 import { MAIN_CLINIC_TABLES } from '../schema-registry.js';
+import { becomeSecondary } from '../../services/branch-sync/identity.js';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const SQL = fs.readFileSync(path.join(DIR, '230_role_grant_reviews.sql'), 'utf8');
@@ -209,4 +210,37 @@ test('230: строки проверки читает и отмечает тол
   assert.equal(row.resolution, 'kept');
   assert.equal(row.resolved_by, ids.admin, 'кто решил — из сессии');
   assert.equal(typeof MAIN_CLINIC_TABLES.role_grant_reviews, 'string', 'проверку прав решает главная клиника');
+});
+
+// Ревью m2 — в филиале плашки нет. Права ролей ведёт главная клиника: там
+// решают, убрать или оставить (MAIN_CLINIC_TABLES — отметка в филиале 409).
+// Строки проверки филиала, найденные в его копии прав, не решит никто, и плашка
+// с неработающими кнопками висела бы вечно. Поэтому в филиале через /api/db их
+// не видно (read.where); в главной клинике — как были.
+test('230 (ревью m2): в филиале строк проверки не видно, отметить нельзя (409); в главной клинике — видны', async (t) => {
+  const db = setup({ callcenter: withGrants({ 'crm.all': 'edit' }) });
+  db.exec(SQL);
+  db.prepare('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)').run('boss', hashPassword('password1'), 'boss', 'admin');
+  const server = await listen(createApp(db, { dataDir: licensedDataDir() }));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  t.after(() => { server.close(); db.close(); });
+  const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'boss', password: 'password1' }) });
+  const cookie = login.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+  const q = async (desc) => {
+    const r = await fetch(base + '/api/db', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify(desc) });
+    return { status: r.status, json: await r.json().catch(() => ({})) };
+  };
+  const read = { table: 'role_grant_reviews', op: 'select', columns: 'id,role,key,resolution', filters: [{ col: 'role', op: 'eq', val: 'callcenter' }] };
+  const main = await q(read);
+  assert.equal(main.status, 200);
+  assert.deepEqual(main.json.data.map((r) => r.key), ['crm.all'], 'в главной клинике строки проверки не видны');
+  const id = main.json.data[0].id;
+
+  becomeSecondary(db, { letter: 'C', name: 'Чиланзар' });
+  const branch = await q(read);
+  assert.equal(branch.status, 200, JSON.stringify(branch.json));
+  assert.deepEqual(branch.json.data, [], 'в филиале видна строка проверки — плашка с неработающими кнопками');
+  const mark = await q({ table: 'role_grant_reviews', op: 'update', values: { resolution: 'kept', resolved_at: '2026-09-29T10:00:00Z' }, filters: [{ col: 'id', op: 'in', val: [id] }] });
+  assert.equal(mark.status, 409, JSON.stringify(mark.json));
+  assert.equal(db.prepare('SELECT resolution FROM role_grant_reviews WHERE id = ?').get(id).resolution, null, 'строку проверки в филиале отметили');
 });
