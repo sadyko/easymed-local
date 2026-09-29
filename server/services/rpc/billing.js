@@ -54,6 +54,23 @@ export class RpcError extends Error {
 }
 
 const CREATE_INVOICE_ROLES = ['admin', 'registrar', 'cashier'];
+// REFERRAL_BILL_V1 (2026-09-29) — СЧЁТ ПО ВИЗИТУ ВЫСТАВЛЯЕТ И ВРАЧ.
+//
+// Владелец: «While we are seeing the patient as a doctor and refer to another
+// service or a doctor we cannot see them in the cashier's window. Which means
+// flow is broken.» «Направить на услуги» из кабинета заводило строки без
+// счёта (INVOICE_ROLE_HONEST_V1, 16.09: «врач счёта не выставляет»), а
+// «Приём оплат» кассы строится из одних счетов — пациента касса не видела.
+// Решение 29.09: направление врача сразу выставляет неоплаченный счёт.
+//
+// Только create_invoice_for_visit: счёт стационара и снятие строки из него
+// остаются CREATE_INVOICE_ROLES, деньги принимает PAYMENT_ROLES. Врач без
+// денежной роли (ни одной из CREATE_INVOICE_ROLES) — без ручной скидки и без
+// плательщика (doctorInvoiceRefusal ниже); скидки группы, пакета и тариф
+// визита считает сервер, как у всех. Врач-администратор и врач с ролью кассы
+// или регистратуры выставляют по своей денежной роли — как раньше.
+// Зеркало на экране — visit-wizard.js (DOCTOR_INVOICE_ROLES).
+const DOCTOR_INVOICE_ROLES = ['doctor', 'head_doctor'];
 const PAYMENT_ROLES = ['admin', 'cashier'];
 // DEPOSIT_REVENUE_V1 — 'wallet' — оплата с депозитного баланса пациента. Это
 // НЕ приход денег: они пришли раньше, когда касса приняла депозит. Способ
@@ -276,8 +293,28 @@ export function packageStampRefusal(db, rows) {
 }
 
 export function createInvoiceForVisit(db, args, user) {
-  requireRole(user, CREATE_INVOICE_ROLES);
+  // REFERRAL_BILL_V1 — денежные роли как прежде; врач — со своими границами.
+  if (!hasAnyRole(user, CREATE_INVOICE_ROLES)) {
+    requireRole(user, DOCTOR_INVOICE_ROLES);
+    doctorInvoiceRefusal(args);
+  }
   return issueVisitInvoice(db, args, user);
+}
+
+// REFERRAL_BILL_V1 — ЧЕГО ВРАЧ В СЧЁТ НЕ СТАВИТ. Отказ до транзакции: ни
+// счёта, ни израсходованного номера. Ручная скидка — решение кассы,
+// регистратуры или администратора (скидку группы пациента сервер даст сам);
+// счёт страховой или организации — договор с ними, его выставляет стойка.
+// Покрытые плательщиком строки мастер врача оставляет без счёта — их видит
+// касса в «Ждут счёта» (cashier_unbilled).
+function doctorInvoiceRefusal(args) {
+  const a = args || {};
+  if (Number(a.discount_amount) > 0) {
+    throw new RpcError('Скидку в счёт ставят касса, регистратура или администратор.', 403);
+  }
+  if (a.payer_id !== undefined && a.payer_id !== null) {
+    throw new RpcError('Счёт организации или страховой выставляют касса, регистратура или администратор.', 403);
+  }
 }
 
 // CASHIER_HEAD_V1 (ревью) — выставление без проверки роли: дверь кассы
