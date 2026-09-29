@@ -169,12 +169,12 @@ test('плашка «ЖДУТ СЧЁТА»: грузится вместе со �
     assert.match(textOf(buttons(el2).find((b) => /ЖДУТ СЧЁТА/.test(textOf(b)))), /(^|\s)0(\s|$)/);
 });
 
-test('карточки «Ждут счёта»: пациент, карта, дата, услуги, «добавил», сумма; поиск кассы фильтрует и их', async () => {
+test('карточки «Ждут счёта»: пациент, карта, дата, услуги, «добавил», сумма; окно — сегодня и 30 дней назад', async () => {
     asCashier();
     const st = desk.__test_cardState;
     st.filter = 'unbilled';
     st.search = '';
-    st.unbilled = { rows: [ROW_A, ROW_B], totals: { n: 2, sum: 160000 } };
+    st.unbilled = { rows: [ROW_A, ROW_B], totals: { n: 2, sum: 160000 }, found: null };
     const el = mkEl('div');
     desk.__test_paintTable(el, mkEl('div'));
     const a = byAttr(el, 'data-unbilled-row', '40');
@@ -187,29 +187,79 @@ test('карточки «Ждут счёта»: пациент, карта, да
     assert.ok(buttonByText(a, 'Выставить счёт'), 'нет «Выставить счёт»');
     assert.ok(buttonByText(a, 'Открыть визит'), 'нет «Открыть визит»');
     assert.ok(byAttr(el, 'data-unbilled-row', '41'));
-    // Поиск: фамилия, карта, телефон.
-    for (const [q, want] of [['карим', '41'], ['A-000015', '40'], ['998901112233', '40']]) {
-        st.search = q;
-        const e2 = mkEl('div');
-        desk.__test_paintTable(e2, mkEl('div'));
-        const shown = walk(e2).filter((x) => x.attrs && x.attrs['data-unbilled-row']).map((x) => x.attrs['data-unbilled-row']);
-        assert.deepEqual(shown, [want], 'поиск «' + q + '»');
-    }
-    // «Показано N из M» считает карточки, а не счета.
-    st.search = 'карим';
+    // REFBILL_REVIEW_V1 (ревью M1) — окно по умолчанию названо: сегодня и 30
+    // дней назад; будущие записи — в свой день или поиском.
+    assert.ok(textOf(el).includes('Услуги записаны, а счёта нет — сегодня и за 30 дней назад. Выставьте счёт и примите оплату.'), textOf(el).slice(0, 200));
     const s = mkEl('div');
     desk.__test_paintSearch(s, () => {});
-    assert.match(textOf(s), /Показано\s+1\s+из\s+2/);
-    st.search = 'никого';
-    const e3 = mkEl('div');
-    desk.__test_paintTable(e3, mkEl('div'));
-    assert.equal(byAttr(e3, 'data-unbilled-row', '40'), undefined);
-    st.search = '';
-    st.unbilled = { rows: [], totals: { n: 0, sum: 0 } };
+    assert.match(textOf(s), /Показано\s+2\s+из\s+2/);
+    st.unbilled = { rows: [], totals: { n: 0, sum: 0 }, found: null };
     const e4 = mkEl('div');
     desk.__test_paintTable(e4, mkEl('div'));
-    assert.match(textOf(e4), /ждущих счёта нет/);
+    assert.ok(textOf(e4).includes('Ждущих счёта за сегодня и 30 дней назад нет. Записи на будущие дни появятся здесь в свой день или по поиску.'), textOf(e4));
     st.filter = 'unpaid';
+});
+
+// REFBILL_REVIEW_V1 (ревью M1) — ПОИСК «ЖДУТ СЧЁТА» — НА СЕРВЕРЕ. Проба
+// ревьюера: 320 записей + направление — в первые 300 строк направление не
+// попадало, и поиск в браузере по этим 300 не находил «Рахимова». Экран шлёт
+// строку поиска серверу (cashier_unbilled { q }) и рисует его ответ — с
+// будущими визитами; плашка остаётся числом окна по умолчанию.
+test('поиск «Ждут счёта» — на сервере: экран шлёт q, рисует ответ (и будущие визиты), плашка — число окна', async () => {
+    asCashier();
+    const st = desk.__test_cardState;
+    st.filter = 'unbilled';
+    st.search = '';
+    st.unbilled = { rows: [ROW_A, ROW_B], totals: { n: 2, sum: 160000 }, found: null };
+    const FUTURE = { ...ROW_B, visit_id: 42, visit_date: new Date(Date.now() + 5 * 86400000).toISOString() };
+    calls.length = 0;
+    rpcAnswers = { ...LISTS(), cashier_unbilled: (b) => (b.q === 'карим'
+        ? { q: 'карим', rows: [ROW_B, FUTURE], totals: { n: 2, sum: 80000 } }
+        : { q: b.q || null, rows: [], totals: { n: 0, sum: 0 } }) };
+    st.search = 'карим';
+    const repaints = { n: 0 };
+    const s = mkEl('div');
+    desk.__test_paintSearch(s, () => { repaints.n++; });
+    // Пока сервер отвечает — «Ищем…», не местный отбор.
+    const busy = mkEl('div');
+    desk.__test_paintTable(busy, mkEl('div'));
+    assert.match(textOf(busy), /Ищем…/);
+    await tick(60);
+    assert.deepEqual(rpcCalls('cashier_unbilled').map(([, b]) => b), [{ q: 'карим' }], 'строка поиска не ушла на сервер');
+    assert.equal(repaints.n, 1, 'ответ поиска не перерисовал экран');
+    const e2 = mkEl('div');
+    desk.__test_paintTable(e2, mkEl('div'));
+    const shown = walk(e2).filter((x) => x.attrs && x.attrs['data-unbilled-row']).map((x) => x.attrs['data-unbilled-row']);
+    assert.deepEqual(shown, ['41', '42'], 'экран рисует ответ сервера — и будущий визит');
+    const s2 = mkEl('div');
+    desk.__test_paintSearch(s2, () => { repaints.n++; });
+    await tick(20);
+    assert.equal(rpcCalls('cashier_unbilled').length, 1, 'тот же поиск спрошен второй раз');
+    assert.match(textOf(s2), /Показано\s+2\s+из\s+2/);
+    const chips = mkEl('div');
+    desk.__test_paintChips(chips, () => {});
+    assert.match(textOf(buttons(chips).find((b) => /ЖДУТ СЧЁТА/.test(textOf(b)))), /(^|\s)2(\s|$)/, 'плашка — число окна по умолчанию');
+    // Никого — так и сказано.
+    st.search = 'никого';
+    desk.__test_paintSearch(mkEl('div'), () => {});
+    await tick(60);
+    const e3 = mkEl('div');
+    desk.__test_paintTable(e3, mkEl('div'));
+    assert.match(textOf(e3), /Нет пациентов по этому поиску\./);
+    // Поиск стёрт — снова окно по умолчанию, без сервера.
+    st.search = '';
+    const before = rpcCalls('cashier_unbilled').length;
+    desk.__test_paintSearch(mkEl('div'), () => {});
+    const e4 = mkEl('div');
+    desk.__test_paintTable(e4, mkEl('div'));
+    assert.equal(rpcCalls('cashier_unbilled').length, before);
+    assert.deepEqual(walk(e4).filter((x) => x.attrs && x.attrs['data-unbilled-row']).map((x) => x.attrs['data-unbilled-row']), ['40', '41']);
+    // Источник: в браузере «Ждут счёта» больше не отбираются.
+    const fs = await import('node:fs');
+    const src = fs.readFileSync(new URL('../views/cashier-desk.js', import.meta.url), 'utf8');
+    assert.ok(!/function filteredUnbilled\(/.test(src), 'местный отбор «Ждут счёта» вернулся');
+    st.filter = 'unpaid';
+    st.search = '';
 });
 
 test('«Выставить счёт»: окно «Выставить счёт · пациент», возвращённая строка не отмечена; счёт — и сразу окно оплаты; обе ленты перечитаны', async () => {
@@ -262,6 +312,56 @@ test('«Выставить счёт»: окно «Выставить счёт ·
     st.filter = 'unpaid';
 });
 
+// REFBILL_REVIEW_V1 (ревью m6) — отказ сервера (строку, пока окно было
+// открыто, выставил другой кассир: «уже в счёте») оставлял в окне прежние
+// строки и галочки: второе нажатие снова слало ту же строку. Теперь окно
+// перечитывает строки — выставленной нет, её галочки нет, остаток выставляется.
+test('m6: отказ сервера — окно перечитывает строки, устаревшие галочки уходят; второе нажатие — только живые строки', async () => {
+    asCashier();
+    closeAll();
+    tables = {
+        visit_services: [
+            { id: 301, visit_id: 40, invoice_item_id: null, status: 'added', service_id: 1, unit_price: 100000, quantity: 1, clinic_item_id: null, services: { name: 'Приём терапевта' } },
+            { id: 304, visit_id: 40, invoice_item_id: null, status: 'added', service_id: 2, unit_price: 20000, quantity: 1, clinic_item_id: null, services: { name: 'Анализ крови' } },
+        ],
+        payment_providers: [], patient_discounts: [], services: [],
+    };
+    TOASTS.length = 0;
+    rpcAnswers = {
+        ...LISTS(),
+        visit_refunded_lines: { line_ids: [] },
+        create_invoice_for_visit: { __error: 'Услуга №301 уже в счёте.' },
+        cash_shift_summary: SUMMARY,
+        cashier_unbilled: { rows: [], totals: { n: 0, sum: 0 } },
+        deposit_balance: { balance: 0, debt: 0 },
+    };
+    const st = desk.__test_cardState;
+    st.filter = 'unbilled';
+    st.search = '';
+    st.unbilled = { rows: [ROW_A], totals: { n: 1, sum: 120000 }, found: null };
+    const el = mkEl('div');
+    desk.__test_paintTable(el, mkEl('div'));
+    buttonByText(byAttr(el, 'data-unbilled-row', '40'), 'Выставить счёт').click();
+    await tick(80);
+    const dlg = lastModal();
+    tables.visit_services[0].invoice_item_id = 99;   // строку 301 выставил другой кассир
+    calls.length = 0;
+    buttonByText(dlg, 'Выставить счёт и принять оплату').click();
+    await tick(200);
+    assert.deepEqual(rpcCalls('create_invoice_for_visit')[0][1], { visit_id: 40, visit_service_ids: [301, 304] });
+    assert.ok(TOASTS.some((t) => t.includes('Услуга №301 уже в счёте.')), JSON.stringify(TOASTS));
+    assert.equal(lastModal(), dlg, 'окно закрылось после отказа');
+    assert.equal(byAttr(dlg, 'data-rebill-line', '301'), undefined, 'выставленная строка осталась в окне');
+    const box = walk(byAttr(dlg, 'data-rebill-line', '304')).find((e) => e.tagName === 'INPUT');
+    assert.ok(box && box.hasAttribute('checked'), 'живая строка потеряла галочку');
+    rpcAnswers.create_invoice_for_visit = { invoice: { id: 89, invoice_number: 'INV-A-26-00089', visit_id: 40, status: 'unpaid', subtotal: 20000, discount_amount: 0, total_amount: 20000, paid_amount: 0 } };
+    calls.length = 0;
+    buttonByText(dlg, 'Выставить счёт и принять оплату').click();
+    await tick(200);
+    assert.deepEqual(rpcCalls('create_invoice_for_visit')[0][1], { visit_id: 40, visit_service_ids: [304] }, 'второе нажатие снова шлёт выставленную строку');
+    st.filter = 'unpaid';
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Решение владельца 2026-09-29: «Card's payer, can split». В окне «Выставить
 // счёт» у пациента с ДЕЙСТВУЮЩИМ плательщиком в карте — «Кому счёт»: этот
@@ -283,6 +383,9 @@ function insuredWorld() {
             { id: 402, visit_id: 50, invoice_item_id: null, status: 'added', service_id: 1, unit_price: 100000, quantity: 1, clinic_item_id: null, services: { name: 'Приём терапевта' }, doctor_id: { id: 20, full_name: 'Иванов Врач' } },
         ],
         payment_providers: [], patient_discounts: [], services: [],
+        // REFBILL_REVIEW_V1 (ревью m2) — окно само перечитывает плательщика карты.
+        patients: [{ id: 3, payer_id: 5, insurance_policy_number: 'POL-77' }],
+        payers: [{ id: 5, name: 'Esado', kind: 'insurance', active: 1 }, { id: 6, name: 'Uzbekinvest', kind: 'insurance', active: 1 }],
     };
     // Сервер привязывает выставленные строки к счёту — окно перечитает остаток.
     let seq = 90;
@@ -335,6 +438,7 @@ test('плательщик в карте: карточка говорит «Пл
     assert.ok(buttonByText(dlg, 'Выставить счёт плательщику'), 'кнопка говорит, кому счёт');
     // Без плательщика в карте — выбора нет вовсе.
     closeAll();
+    tables.patients[0].payer_id = null;   // REFBILL_REVIEW_V1 — и в самой карте плательщика нет
     const plain = openInsuredBill({ ...INSURED, card_payer_id: null, card_payer_name: null, card_payer_kind: null });
     assert.ok(!/Плательщик в карте/.test(textOf(plain)));
     buttonByText(byAttr(plain, 'data-unbilled-row', '50'), 'Выставить счёт').click();
@@ -453,5 +557,53 @@ test('визит сегодня: плательщик из карты выбир
     buttonByText(dlg, 'Выставить счёт плательщику').click();
     await tick(250);
     assert.equal(rpcCalls('create_invoice_for_visit')[0][1].payer_id, 5, 'счёт ушёл плательщику');
+    desk.__test_cardState.filter = 'unpaid';
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REFBILL_REVIEW_V1 (ревью m2) — окно «Выставить счёт» выставляло плательщику
+// из СТРОКИ СПИСКА: если регистратура убрала или сменила страховую в карте,
+// пока список висел или окно было открыто, счёт молча уходил прежней. Теперь
+// окно перечитывает плательщика карты при открытии и ещё раз перед счётом;
+// изменился — перерисовка и слова, а счёт не уходит, пока касса не нажмёт снова.
+// ═══════════════════════════════════════════════════════════════════════════
+test('m2: плательщика убрали из карты после списка — окно при открытии говорит об этом, «Кому счёт» нет, счёт — пациенту', async () => {
+    asCashier();
+    closeAll();
+    insuredWorld();
+    tables.patients[0].payer_id = null;   // регистратура убрала страховую, список ещё старый
+    const el = openInsuredBill();
+    buttonByText(byAttr(el, 'data-unbilled-row', '50'), 'Выставить счёт').click();
+    await tick(120);
+    const dlg = lastModal();
+    assert.ok(TOASTS.some((t) => t.includes('В карте пациента больше нет плательщика «Esado» — счёт выставляется пациенту.')), JSON.stringify(TOASTS));
+    assert.equal(byAttr(dlg, 'data-bill-target', 'payer'), undefined, 'старый плательщик остался в «Кому счёт»');
+    assert.ok(!/Кому счёт/.test(textOf(dlg)));
+    calls.length = 0;
+    buttonByText(dlg, 'Выставить счёт и принять оплату').click();
+    await tick(250);
+    assert.deepEqual(rpcCalls('create_invoice_for_visit')[0][1], { visit_id: 50, visit_service_ids: [401, 402] }, 'счёт ушёл не пациенту');
+    desk.__test_cardState.filter = 'unpaid';
+});
+
+test('m2: плательщик в карте сменился, пока окно открыто — счёт не уходит прежнему; окно перерисовано и сказано; второе нажатие — новому', async () => {
+    asCashier();
+    closeAll();
+    insuredWorld();
+    const el = openInsuredBill();
+    buttonByText(byAttr(el, 'data-unbilled-row', '50'), 'Выставить счёт').click();
+    await tick(120);
+    const dlg = lastModal();
+    assert.match(textOf(byAttr(dlg, 'data-bill-target', 'payer')), /Esado/);
+    tables.patients[0].payer_id = 6;   // пока окно открыто, в карте поставили другую страховую
+    calls.length = 0; TOASTS.length = 0;
+    buttonByText(dlg, 'Выставить счёт плательщику').click();
+    await tick(250);
+    assert.equal(rpcCalls('create_invoice_for_visit').length, 0, 'счёт ушёл прежнему плательщику');
+    assert.ok(TOASTS.some((t) => t.includes('Плательщик в карте пациента изменился: теперь «Uzbekinvest». Проверьте «Кому счёт».')), JSON.stringify(TOASTS));
+    assert.match(textOf(byAttr(dlg, 'data-bill-target', 'payer')), /Uzbekinvest/, '«Кому счёт» не перерисован');
+    buttonByText(dlg, 'Выставить счёт плательщику').click();
+    await tick(250);
+    assert.equal(rpcCalls('create_invoice_for_visit')[0][1].payer_id, 6, 'второе нажатие — новому плательщику');
     desk.__test_cardState.filter = 'unpaid';
 });

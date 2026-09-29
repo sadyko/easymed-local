@@ -460,15 +460,23 @@ export async function openLineFix(inv, { onChanged = null, onPayDue = null, prin
 // date(visit_date, 'localtime')). Визит ещё впереди — плательщик в «Кому
 // счёт» виден, но не выбирается, и сказано почему: сейчас можно выставить
 // только пациенту (предоплата). В день визита и позже — как прежде.
-export async function openRebill(row, { onBilled = null, title = null, preselectRefunded = true, cardPayer = null } = {}) {
+//
+// REFBILL_REVIEW_V1 (ревью m2) — `patientId`: окно «Ждут счёта» само
+// перечитывает плательщика из карты пациента — при открытии и ещё раз прямо
+// перед счётом. Прежде счёт уходил плательщику из СТРОКИ СПИСКА: регистратура
+// убрала или сменила страховую, пока список висел или окно было открыто, — и
+// прежней страховой молча выставлялся счёт. Изменился — «Кому счёт»
+// перерисован, сказано словами, а счёт не уходит, пока касса не нажмёт снова.
+export async function openRebill(row, { onBilled = null, title = null, preselectRefunded = true, cardPayer = null, patientId = null } = {}) {
     const s = sheet(title || trf('Выставить заново · {no}', { no: row.invoice_number || ('#' + row.invoice_id) }), 'Receipt', 640);
     s.body.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '10px' } },
         tr('Строки визита без счёта: отметьте, что выставить. Услугу и врача можно поменять до выставления.')));
-    const payer = cardPayer && cardPayer.id != null ? cardPayer : null;   // REFERRAL_BILL_V1
+    let payer = cardPayer && cardPayer.id != null ? cardPayer : null;   // REFERRAL_BILL_V1 · REFBILL_REVIEW_V1 — перечитывается из карты
     const visitDay = row && row.visit_date ? localYmd(new Date(row.visit_date)) : '';   // REFERRAL_BILL_V1 — «From the visit day»
-    const payerLocked = !!(payer && visitDay && visitDay > localYmd());
+    const lockedFor = (p) => !!(p && visitDay && visitDay > localYmd());
+    let payerLocked = lockedFor(payer);
     let target = payer && !payerLocked ? 'payer' : 'patient';
-    const targetBox = payer ? h('div', { class: 'row', style: { gap: '14px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' } }) : null;
+    const targetBox = payer || patientId != null ? h('div', { class: 'row', style: { gap: '14px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' } }) : null;
     if (targetBox) s.body.appendChild(targetBox);
     const table = h('div', { style: { display: 'grid', gap: '6px' } });
     s.body.appendChild(table);
@@ -486,6 +494,7 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
         billBtn.textContent = target === 'payer' ? tr('Выставить счёт плательщику') : tr('Выставить счёт и принять оплату');
         if (!targetBox) return;
         clear(targetBox);
+        if (!payer) return;   // REFBILL_REVIEW_V1 — плательщика в карте (больше) нет: выбора нет
         targetBox.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px', fontWeight: 700 } }, tr('Кому счёт')));
         for (const [v, label] of [['payer', trf('{name} — плательщик в карте', { name: payer.name || '—' })], ['patient', tr('Пациенту')]]) {
             const locked = v === 'payer' && payerLocked;   // REFERRAL_BILL_V1 — до дня визита
@@ -499,6 +508,26 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
         }
     };
     paintTarget();
+
+    // REFBILL_REVIEW_V1 (ревью m2) — плательщик карты сейчас. true — тот же, что
+    // в окне; false — изменился (окно перерисовано, сказано) или проверить не
+    // удалось. Окно без patientId («Возвраты и отмены») карты не читает.
+    const recheckCardPayer = async () => {
+        if (patientId == null) return true;
+        let live;
+        try { live = await readCardPayer(patientId); }
+        catch (e) { toast(tr('Не удалось проверить плательщика в карте — повторите.'), 'fail'); return false; }
+        if ((live ? Number(live.id) : null) === (payer ? Number(payer.id) : null)) return true;
+        const was = payer;
+        payer = live;
+        payerLocked = lockedFor(payer);
+        target = payer && !payerLocked ? 'payer' : 'patient';
+        paintTarget();
+        toast(payer
+            ? trf('Плательщик в карте пациента изменился: теперь «{name}». Проверьте «Кому счёт».', { name: payer.name || '—' })
+            : trf('В карте пациента больше нет плательщика «{name}» — счёт выставляется пациенту.', { name: (was && was.name) || '—' }), 'info');
+        return false;
+    };
 
     const paint = async () => {
         clear(table);
@@ -563,6 +592,9 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
         const ids = [...chosen];
         if (!ids.length) { toast(tr('Отметьте, что выставить.'), 'fail'); return; }
         billBtn.disabled = true;
+        // REFBILL_REVIEW_V1 (ревью m2) — плательщик карты ещё раз, прямо перед
+        // счётом: изменился — окно перерисовано и сказано, счёт не уходит.
+        if (!(await recheckCardPayer())) { billBtn.disabled = !chosen.size; return; }
         const toPayer = target === 'payer' && !!payer && !payerLocked;   // REFERRAL_BILL_V1 — и только со дня визита
         const { data, error } = await supabase.rpc('create_invoice_for_visit', {
             visit_id: row.visit_id, visit_service_ids: ids,
@@ -570,7 +602,14 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
             ...(toPayer ? { payer_id: Number(payer.id), discount_amount: 0 } : {}),
             ...(ids.some((id) => refunded.has(id)) ? { rebill_refunded: true } : {}),
         });
-        if (error) { toast(error.message || tr('Не удалось.'), 'fail'); billBtn.disabled = false; return; }
+        if (error) {
+            toast(error.message || tr('Не удалось.'), 'fail');
+            // REFBILL_REVIEW_V1 (ревью m6) — отказ сервера (строку, пока окно было
+            // открыто, выставил другой: «уже в счёте») — строки перечитываются,
+            // устаревшие галочки уходят, кнопка — по тому, что осталось.
+            await paint();
+            return;
+        }
         if (toPayer) {
             // REFERRAL_BILL_V1 — денег у кассы по нему не будет: тост, акт, и
             // окно остаётся с остатком — вторым проходом пациенту.
@@ -591,6 +630,20 @@ export async function openRebill(row, { onBilled = null, title = null, preselect
         if (onBilled && data && data.invoice) await onBilled(data.invoice);
     });
 
+    await recheckCardPayer();   // REFBILL_REVIEW_V1 (ревью m2) — при открытии: список мог устареть
     await paint();
     return s;
+}
+
+// REFBILL_REVIEW_V1 (ревью m2) — ДЕЙСТВУЮЩИЙ плательщик из карты пациента
+// сейчас: { id, name, kind } или null. Правило то же, что у сервера
+// (cashier_unbilled, billing.js visitHasCardPayer): patients.payer_id на
+// плательщика с active = 1; выключенный — не плательщик.
+async function readCardPayer(patientId) {
+    const { data: p, error } = await supabase.from('patients').select('id, payer_id').eq('id', patientId).maybeSingle();
+    if (error) throw error;
+    if (!p || p.payer_id == null) return null;
+    const { data: py, error: e2 } = await supabase.from('payers').select('id, name, kind, active').eq('id', p.payer_id).maybeSingle();
+    if (e2) throw e2;
+    return py && (py.active === true || Number(py.active) === 1) ? { id: Number(py.id), name: py.name, kind: py.kind } : null;
 }

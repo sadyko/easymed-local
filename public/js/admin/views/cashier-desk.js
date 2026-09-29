@@ -27,7 +27,7 @@ import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TY
 import { dateNumeric } from '../../shared/date-words.js';   // V3120_FIX — дата чека не зависит от языка ОС
 import { localYmd, cardRemaining } from '../discount-rules.js';   // CARD_BALANCE_V1
 import { searchTokens } from '../patient-search.js';   // CARD_SALE_V1 — поиск покупателя карты
-import { canOfferLineFix, openLineFix, openRebill } from './cashier-line-fix.js?v=refbill3';   // CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»; REFERRAL_BILL_V1 — «Выставить счёт» (title, «Кому счёт» со дня визита, штамп)
+import { canOfferLineFix, openLineFix, openRebill } from './cashier-line-fix.js?v=refbill4';   // CASHIER_HEAD_V1 — «Исправить услуги» по праву кассы; CASHIER_PAID_SWAP_V1 — «Выставить заново»; REFERRAL_BILL_V1 — «Выставить счёт» (title, «Кому счёт» со дня визита, штамп) · REFBILL_REVIEW_V1 — плательщик карты перечитывается, отказ перечитывает строки
 import { printInvoiceAct } from './payer-act.js?v=act1';   // REFERRAL_BILL_V1 — акт по счёту плательщику, та же сборка, что у мастера визита
 import { canCloseOtherShifts } from '../permissions.js';   // CASHIER_HEAD_V1 — «Старший кассир: Изменение» (явное) закрывает чужую смену
 
@@ -244,7 +244,7 @@ const state = {
     deposits: [],   // DEPOSIT_V1 — ждущие приёма предоплаты
     cards: [],      // CARD_SALE_V1 — подарочные карты и сертификаты (проданные и выданные без оплаты)
     refunds: { from: null, to: null, rows: [], totals: null },   // CASHIER_PAID_SWAP_V1 — «Возвраты и отмены» за период
-    unbilled: { rows: [], totals: null },   // REFERRAL_BILL_V1 — «Ждут счёта»: визиты со строками без счёта (filter 'unbilled')
+    unbilled: { rows: [], totals: null, found: null, pendingQ: null },   // REFERRAL_BILL_V1 — «Ждут счёта»: визиты со строками без счёта (filter 'unbilled'); REFBILL_REVIEW_V1 — found: ответ поиска сервера { q, rows, totals, error }
 };
 
 export async function renderCashier(container) {
@@ -751,6 +751,11 @@ async function loadInvoices() {
 // записаны, а счёта нет (cashier_unbilled, rpc/cashier.js). «Приём оплат»
 // строится из одних счетов, и такого пациента касса раньше не видела вовсе.
 async function loadUnbilled() {
+    // REFBILL_REVIEW_V1 (ревью M1) — перечитали кассу (после счёта, «Обновить»):
+    // прежний ответ поиска устарел — следующая перерисовка спросит его заново.
+    _unbilledSeq++;
+    state.unbilled.found = null;
+    state.unbilled.pendingQ = null;
     try {
         const { data, error } = await supabase.rpc('cashier_unbilled', {});
         if (error) throw error;
@@ -760,6 +765,45 @@ async function loadUnbilled() {
         state.unbilled.rows = [];
         state.unbilled.totals = null;
     }
+}
+
+// REFBILL_REVIEW_V1 (ревью M1) — ПОИСК «ЖДУТ СЧЁТА» — НА СЕРВЕРЕ. Список по
+// умолчанию — сегодня и 30 дней назад, не больше 300 визитов; поиск в
+// браузере по этим 300 не находил пациента с направлением, стоило колл-центру
+// записать побольше (проба ревьюера). Строка поиска уходит серверу
+// (cashier_unbilled { q }: ФИО, телефон, номер карты; 30 дней назад и все
+// будущие дни), экран рисует его ответ. Спрашивается один раз на строку
+// (набор уже отложен на 200 мс полем поиска); устаревший ответ отбрасывается.
+let _unbilledSeq = 0;
+function ensureUnbilledSearch(onChange) {
+    const u = state.unbilled;
+    const q = state.search.trim();
+    if (!q || (u.found && u.found.q === q) || u.pendingQ === q) return;
+    u.pendingQ = q;
+    const seq = ++_unbilledSeq;
+    Promise.resolve(supabase.rpc('cashier_unbilled', { q })).then((res) => {
+        if (seq !== _unbilledSeq) return;
+        const { data, error } = res || {};
+        u.found = error ? { q, rows: [], totals: null, error: error.message || String(error) }
+            : { q, rows: (data && data.rows) || [], totals: (data && data.totals) || null };
+    }, (e) => {
+        if (seq !== _unbilledSeq) return;
+        u.found = { q, rows: [], totals: null, error: (e && e.message) || String(e) };
+    }).then(() => {
+        if (seq !== _unbilledSeq) return;
+        u.pendingQ = null;
+        if (typeof onChange === 'function') onChange();
+    });
+}
+
+// Что показывает «Ждут счёта» сейчас: ответ поиска сервера или окно по умолчанию.
+// searching — ответа на эту строку ещё нет.
+function unbilledView() {
+    const u = state.unbilled;
+    const q = state.search.trim();
+    if (!q) return { q: '', rows: u.rows || [], total: (u.totals && u.totals.n) || (u.rows || []).length, searching: false, error: null };
+    if (!u.found || u.found.q !== q) return { q, rows: [], total: 0, searching: true, error: null };
+    return { q, rows: u.found.rows, total: (u.found.totals && u.found.totals.n) || u.found.rows.length, searching: false, error: u.found.error || null };
 }
 
 // CASHIER_PAID_SWAP_V1 — «Возвраты и отмены» за период (по умолчанию сегодня).
@@ -1309,13 +1353,19 @@ function payAfterBilling(root, r) {
 // {пациент}» — и сразу принимает оплату. Строки, за которые пациенту вернули
 // деньги, в окне не отмечены: их снова выставляют только явным выбором (это
 // решение «Возвратов и отмен»). Сервер: cashier_unbilled (rpc/cashier.js).
+// REFBILL_REVIEW_V1 (ревью M1) — окно по умолчанию — сегодня и 30 дней назад
+// (будущие записи колл-центра топили направления); будущие — в свой день или
+// поиском. Поиск — ответ сервера (unbilledView), а не отбор этих 300 карточек.
 function paintUnbilled(el, root) {
-    const all = state.unbilled.rows || [];
-    const rows = filteredUnbilled();
+    const view = unbilledView();
     el.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px', margin: '0 0 10px' } },
-        'Услуги записаны, а счёта нет — за последние 30 дней и вперёд. Выставьте счёт и примите оплату.'));
+        'Услуги записаны, а счёта нет — сегодня и за 30 дней назад. Выставьте счёт и примите оплату.'));
+    if (view.searching) { el.appendChild(h('div', { class: 'empty' }, 'Ищем…')); return; }
+    if (view.error) { el.appendChild(h('div', { class: 'empty' }, trf('Не удалось загрузить: {msg}', { msg: view.error }))); return; }
+    const rows = view.rows;
     if (!rows.length) {
-        el.appendChild(h('div', { class: 'empty' }, all.length ? 'Нет пациентов по этому поиску.' : 'Все услуги выставлены — ждущих счёта нет.'));
+        el.appendChild(h('div', { class: 'empty' }, view.q ? 'Нет пациентов по этому поиску.'
+            : 'Ждущих счёта за сегодня и 30 дней назад нет. Записи на будущие дни появятся здесь в свой день или по поиску.'));
         return;
     }
     const list = h('div', { style: { display: 'grid', gap: '10px' } });
@@ -1334,6 +1384,7 @@ function unbilledCard(r, root) {
             preselectRefunded: false,
             // REFERRAL_BILL_V1 — «Кому счёт»: только плательщик из карты (действующий).
             cardPayer: r.card_payer_id != null ? { id: r.card_payer_id, name: r.card_payer_name, kind: r.card_payer_kind } : null,
+            patientId: r.patient_id,   // REFBILL_REVIEW_V1 (ревью m2) — окно перечитывает плательщика карты само
             onBilled: payAfterBilling(root, r),
         }) }, 'Выставить счёт'));
     return h('div', { class: 'card', 'data-unbilled-row': String(r.visit_id), style: { padding: '12px 14px', display: 'grid', gap: '6px' } },
@@ -1366,18 +1417,6 @@ function filteredRows() {
     return rows;
 }
 
-// REFERRAL_BILL_V1 — тот же поиск кассы по карточкам «Ждут счёта»: пациент,
-// карта, телефон (номера счёта у них ещё нет).
-function filteredUnbilled() {
-    const rows = state.unbilled.rows || [];
-    const q = state.search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter(r =>
-        (r.patient_name || '').toLowerCase().includes(q) ||
-        (r.mrn || '').toLowerCase().includes(q) ||
-        (r.phone || '').toLowerCase().includes(q));
-}
-
 function paintSearch(el, onChange) {
     clear(el);
     const inp = h('input', {
@@ -1395,9 +1434,13 @@ function paintSearch(el, onChange) {
         tmr = setTimeout(() => { state.search = inp.value; onChange(); }, 200);
     });
     // REFERRAL_BILL_V1 — у «Ждут счёта» счёт идёт по карточкам, а не по счетам.
+    // REFBILL_REVIEW_V1 (ревью M1) — поиск «Ждут счёта» спрашивается у сервера
+    // (ensureUnbilledSearch); «из» — всех найденных (или всех ждущих окна).
     const unbilled = state.filter === 'unbilled';
-    const shown = unbilled ? filteredUnbilled().length : filteredRows().length;
-    const total = unbilled ? (state.unbilled.rows || []).length : (state.counts ? state.counts.all.n : state.rows.length);
+    if (unbilled) ensureUnbilledSearch(onChange);
+    const view = unbilled ? unbilledView() : null;
+    const shown = unbilled ? view.rows.length : filteredRows().length;
+    const total = unbilled ? view.total : (state.counts ? state.counts.all.n : state.rows.length);
     el.appendChild(h('div', { class: 'row', style: { alignItems: 'center', gap: '10px', margin: '2px 0 12px' } },
         inp,
         h('span', { class: 'grow' }),
