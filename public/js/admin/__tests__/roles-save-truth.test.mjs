@@ -449,3 +449,46 @@ test('ревью M2: «Настройки» Изменение → Просмо�
   assert.equal(shellRoute('services'), false, 'лаборант получил прайс-лист (#services)');
   assert.equal(shellRoute('settings:patients'), false, 'лаборант получил «Настройки → Пациенты»');
 });
+
+// Ревью N1 (после M2) — у своей роли на основе администратора правда плитки
+// «Настроек» — уровень администратора: оболочка (settingsTileLevel) даёт
+// «Изменение», запись в таблицу плитки пускает. Сервер обязан её называть:
+// иначе экран рисовал правило оболочки для не-администратора («Просмотр»), и
+// правка уровня «Настроек» записывала его — заместитель терял переименование
+// типа услуги (200 → 403), «Список услуг» и «Настройки → Пациенты».
+test('ревью N1: своя роль на основе администратора — «Настройки» Изменение → Просмотр не отнимает плиток', async (t) => {
+  const { db } = await world(t);
+  db.prepare("INSERT INTO custom_roles (code, name, base_role, active) VALUES ('dep-set','Заместитель с настройками','admin',1)").run();
+  db.prepare('INSERT INTO role_permissions (role, permissions) VALUES (?,?)').run('dep-set', JSON.stringify({
+    sections: ['dashboard', 'patients', 'settings', 'reports-hub', 'crm'], levels: { settings: 'admin' },
+    grants: { 'settings.roles': 'edit', 'settings.employees': 'edit' } }));
+  const uid = Number(db.prepare("INSERT INTO users (username, password_hash, full_name, role, custom_role_code) VALUES ('dep','x','dep','admin','dep-set')").run().lastInsertRowid);
+  const scols = db.prepare('PRAGMA table_info(sessions)').all().map((c) => c.name);
+  const cols = ['id', 'user_id', 'expires_at'];
+  const vals = ['sid-dep', uid, iso(Date.now() + 8 * 3600e3)];
+  if (scols.includes('last_seen_at')) { cols.push('last_seen_at'); vals.push(iso(Date.now())); }
+  db.prepare(`INSERT INTO sessions (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...vals);
+  const typeId = (db.prepare('SELECT id FROM service_types ORDER BY id LIMIT 1').get() || {}).id
+    ?? Number(db.prepare("INSERT INTO service_types (name, code) VALUES ('T','t')").run().lastInsertRowid);
+  const rename = async (n) => (await realFetch(BASE + '/api/db', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: 'emsid=sid-dep' },
+    body: JSON.stringify({ table: 'service_types', op: 'update', values: { name: 'n1-' + n }, filters: [{ col: 'id', op: 'eq', val: typeId }] }) })).status;
+  // Отдельный экземпляр оболочки — как её видит сам заместитель.
+  const P = await import('../permissions.js?shell=review-n1');
+  const shell = () => {
+    P.setFullAccess('adm'); P.setOwnCustomGrants(permsOf(db, 'dep-set').grants);
+    const o = { tile: P.settingsTileLevel('settings.service_types'), services: P.isRouteAllowed('services'), patients: P.isRouteAllowed('settings:patients') };
+    P.setOwnCustomGrants(null);
+    return o;
+  };
+  const before = shell();
+  assert.deepEqual(before, { tile: 'edit', services: true, patients: true }, 'стенд неверен');
+  assert.equal(await rename(1), 200, 'стенд неверен: заместитель не переименовывает тип услуги и до правки');
+
+  const root = await render();
+  await openRole(root, 'dep-set', 'Заместитель с настройками');
+  assert.equal(chosen(root, 'settings.service_types'), 'edit', 'экран рисует роли на основе администратора правило оболочки для не-администратора');
+  pick(root, 'settings', 'view');
+  await saveRole(root);
+  assert.deepEqual(shell(), before, 'правка уровня «Настроек» отняла у заместителя плитки и маршруты');
+  assert.equal(await rename(2), 200, 'заместитель больше не переименовывает тип услуги');
+});

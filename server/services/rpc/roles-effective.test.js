@@ -80,6 +80,13 @@ test('своя роль на основе администратора — ве�
       const levels = byKey.get(k).levels;
       assert.equal(v, levels[levels.length - 1], k + ': у роли на основе администратора не верхний уровень');
     }
+    // Ревью N1 — плитки «Настроек» без своих ворот у неё названы: её правда —
+    // уровень администратора, а не правило оболочки для не-администратора.
+    const tiles = catalogRows().filter(plainSettingsTile).map((r) => r.key);
+    assert.ok(tiles.length >= 10, 'стенд неверен: плиток без своих ворот не нашлось');
+    for (const k of tiles) assert.ok(k in levelsOf(db, 'deputy'), k + ': у роли на основе администратора плитка не названа');
+    assert.equal(levelsOf(db, 'deputy')['settings.service_types'], 'edit');
+    for (const k of tiles) assert.ok(!(k in levelsOf(db, 'nurse')), k + ': у медсестры плитка названа (ревью M2)');
     setGrants(db, 'deputy', { 'crm.all': 'none' });
     assert.equal(levelsOf(db, 'deputy')['crm.all'], 'none', 'своё «Нет» роли на основе администратора не прочиталось');
   } finally { db.close(); }

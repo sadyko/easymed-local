@@ -32,7 +32,9 @@
 // правилу оболочки (settingsLegacyView): сервер отвечал «Просмотр» за всех, и
 // экран показывал лаборанту «Список услуг», который оболочка ему не открывает,
 // а сохранение раздела писало его настоящим правом — прайс-лист открывался.
-import { grantAllowsAdminOr, effectiveLevel, grantLevel } from '../grants.js';
+// Ревью N1 — это только у НЕ-администратора: у своей роли на основе
+// администратора плитки названы (её правда — уровень администратора).
+import { grantAllowsAdminOr, effectiveLevel, grantLevel, isAdminUser } from '../grants.js';
 import { fallbackLevel, isFnGate } from '../gate-fallbacks.js';
 import { VALID_ROLES } from '../roles.js';
 import { catalogRows } from '../../../public/js/shared/permission-catalog.js';
@@ -70,9 +72,17 @@ function clampToRow(row, lvl) {
 const plainSettingsTile = (row) => row.parent === 'settings' && !row.adminDefault && !isFnGate(row.key);
 
 // Строки, о которых отвечает сервер, — со своим стандартом (fallbackLevel).
+// Ревью N1 — плитки без своих ворот пропускаются только у НЕ-администратора.
+// У своей роли на основе администратора правда плитки — уровень
+// администратора (оболочка settingsTileLevel — «Изменение», запись в её
+// таблицы пускает), а правило оболочки для не-администратора
+// (settingsLegacyView) дало бы «Просмотр»: правка уровня «Настроек» писала
+// его, и заместитель терял переименование типа услуги, «Список услуг» и
+// «Настройки → Пациенты».
 function* answeredRows(db, pseudo) {
+  const skipPlainTiles = !isAdminUser(pseudo);
   for (const row of catalogRows()) {
-    if (row.kind === 'section' || row.locked || plainSettingsTile(row)) continue;
+    if (row.kind === 'section' || row.locked || (skipPlainTiles && plainSettingsTile(row))) continue;
     const standard = fallbackLevel(db, pseudo, row.key, 'all');
     if (standard === null) continue;   // маршрут оболочки — серверных ворот нет
     yield { row, standard };
