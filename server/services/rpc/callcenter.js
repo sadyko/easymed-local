@@ -21,6 +21,11 @@ import { categoryOf } from '../../../public/js/shared/service-categories.js';   
 // ROLE_REPORTS_SETTINGS_V1 — отчёт колл-центра — группа «Колл-центр» раздела «Отчёты».
 import { requireReportKind } from '../report-access.js';
 import { resolveRange } from './reports.js';   // REPORTS_AUDIT_FIX_V1
+// CRM_MULTI_SOURCE_V1 — у заявки несколько источников (миграция 231). Правило
+// чтения одно: sources, иначе [source], иначе ['other'] — на SQL для json_each
+// (sourceEachSql) и на JS для выгрузки (leadSources).
+import { sourceEachSql } from '../crm/sources.js';
+import { leadSources } from '../../../public/js/admin/crm-sources.js';
 
 // Сидовая колонка «Записан» (миграция 077) — граница между «заявку ещё ведёт
 // оператор» и «пациента уже ждут в конкретный день». Имя здесь не поведение, а
@@ -143,9 +148,16 @@ export function callcenterReport(db, args, user) {
       FROM crm_requests r ${where} GROUP BY r.status ORDER BY count DESC`).all(...p)
     .map((x) => ({ ...x, label: stageLabel(x.status) }));
 
+  // CRM_MULTI_SOURCE_V1 — заявка считается в КАЖДОМ своём источнике (решение
+  // владельца «Both»): «пришла из Instagram и по совету знакомых» — это и
+  // Instagram, и «Рекомендация». Поэтому сумма по источникам бывает больше
+  // числа заявок; доля на экране считается от kpi.total — по заявкам.
+  // COUNT(DISTINCT r.id): повтор ключа внутри одной заявки — один раз.
+  const SRC = sourceEachSql('r', 'src');
   const bySource = db.prepare(`
-    SELECT r.source AS source, COUNT(*) AS count
-      FROM crm_requests r ${where} GROUP BY r.source ORDER BY count DESC`).all(...p)
+    SELECT src.value AS source, COUNT(DISTINCT r.id) AS count
+      FROM crm_requests r, ${SRC.join} ${where} AND ${SRC.ok}
+     GROUP BY src.value ORDER BY count DESC, src.value`).all(...p)
     .map((x) => ({ ...x, label: sourceLabel(x.source, '—') }));
 
   // По оператору — не только объём, но и доля дошедших: сто заявок, из которых
@@ -317,9 +329,13 @@ export function callcenterReport(db, args, user) {
   // 1. Конверсия по источникам. «Источники» показывают только объём, а канал с
   //    сорока заявками и конверсией 5% хуже канала с десятью и 60% — по
   //    столбикам объёма это неразличимо, и деньги уходят не туда.
+  //    CRM_MULTI_SOURCE_V1 — тем же json_each: заявка и её «пришли» — в каждом
+  //    её источнике.
   const sourceConv = db.prepare(`
-    SELECT r.source AS src, COUNT(*) AS count, SUM(r.status = ?) AS came
-      FROM crm_requests r ${where} GROUP BY r.source ORDER BY count DESC`).all(WON, ...p)
+    SELECT src.value AS src, COUNT(DISTINCT r.id) AS count,
+           COUNT(DISTINCT CASE WHEN r.status = ? THEN r.id END) AS came
+      FROM crm_requests r, ${SRC.join} ${where} AND ${SRC.ok}
+     GROUP BY src.value ORDER BY count DESC, src.value`).all(WON, ...p)
     .map((x) => ({
       name: sourceLabel(x.src, 'Другое'),
       count: x.count, came: x.came || 0, came_pct: pct(x.came || 0, x.count),
@@ -415,7 +431,7 @@ export function callcenterReport(db, args, user) {
   const columns = ['Дата', 'Час', 'Имя', 'Телефон', 'Источник', 'Статус', 'Оператор', 'Создал', 'Услуга', 'Дата записи', 'Стал пациентом'];
   const rows = db.prepare(`
     SELECT ${localDate('r.created_at')} AS day, ${localHour('r.created_at')} AS hour,
-           r.full_name AS name, r.phone AS phone, r.source AS source, r.status AS status,
+           r.full_name AS name, r.phone AS phone, r.source AS source, r.sources AS sources, r.status AS status,
            COALESCE(u.full_name, '—') AS operator, COALESCE(c.full_name, '—') AS creator,
            COALESCE(s.name, '') AS service,
            COALESCE(r.scheduled_date, '') AS sched, (r.patient_id IS NOT NULL) AS converted
@@ -425,7 +441,8 @@ export function callcenterReport(db, args, user) {
       LEFT JOIN services s ON s.id = r.service_id
      ${where}${visibleSql} ORDER BY r.created_at DESC`).all(...p, ...visibleArgs)
     .map((x) => [x.day, x.hour, x.name || '', x.phone || '',
-      sourceLabel(x.source), stageLabel(x.status),
+      // CRM_MULTI_SOURCE_V1 — все источники заявки через запятую, главный первым.
+      leadSources(x).map((k) => sourceLabel(k)).join(', '), stageLabel(x.status),
       x.operator, x.creator, x.service, x.sched, x.converted ? 'да' : 'нет']);
 
   return {
