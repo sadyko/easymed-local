@@ -1549,7 +1549,7 @@ async function paint() {
                         srcChosen = t.list;
                         paintSrc();
                     },
-                }, main ? Icon('Star', { size: 12 }) : (on ? Icon('Check', { size: 12 }) : null), sourceLabel(v)));
+                }, main ? Icon('Sparkles', { size: 12 }) : (on ? Icon('Check', { size: 12 }) : null), sourceLabel(v)));   // Sparkles — звезда (icon-map.js)
             }
         }
         paintSrc();
