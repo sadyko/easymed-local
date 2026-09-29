@@ -255,7 +255,8 @@ async function attachWithError(err) {
 }
 
 test('C2: сервер отказал в привязке (409) — его словами и предупреждением, лоток перечитан', async () => {
-  const msg = 'Сообщение пришло не целиком — привязать его нельзя: пусть прибор отправит пробу ещё раз.';
+  // Ответ — как у настоящего сервера (rpc/lis.js: LisError без кода, 409 → code 'bad_request').
+  const msg = 'Сообщение пришло не целиком — привязать его нельзя. Попросите анализатор отправить эту пробу ещё раз.';
   const r = await attachWithError({ status: 409, error: { code: 'bad_request', message: msg } });
   assert.strictEqual(toastMsg, msg, 'отказ — словами сервера, без «Не удалось привязать сообщение:» перед ними');
   assert.strictEqual(toastEl.dataset.kind, 'warn', 'отказ по правилу — не сбой');
