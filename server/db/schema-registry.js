@@ -1219,7 +1219,7 @@ export const REGISTRY = {
   // Лаборатория → «Анализаторы». Принадлежность ЗДАНИЮ: в справочник филиалов
   // не едут, потому что прибор соседнего здания в нашей базе бессмыслен.
   lab_devices: {
-    read:  { roles: ALL_STAFF, columns: ['id','name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','last_seen_at','created_at','discovered','added','model_confirmed'] },   // discovered: LIS_AUTODISCOVER_V1 (mig 124) — ставит только сервер; added, model_confirmed: LIS_ANALYZER_LIST_V1 (мигр. 228)
+    read:  { roles: ALL_STAFF, columns: ['id','name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','last_seen_at','created_at','discovered','added','model_confirmed','sending_app'] },   // discovered: LIS_AUTODISCOVER_V1 (mig 124) — ставит только сервер; added, model_confirmed: LIS_ANALYZER_LIST_V1 (мигр. 228); sending_app: LIS_DISCOVERY_FIX_V1 (сервер) (мигр. 229) — как прибор назвал себя сам (MSH-3), пишет только сервер, в insert/update её нет
     write: { insert: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled'] },
              // LIS_ANALYZER_LIST_V1 (ревью C1) — discovered в update НЕТ: это
              // правило приёма, а не пометка. discover.js не сверяет модель у
