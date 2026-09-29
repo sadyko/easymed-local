@@ -578,6 +578,37 @@ test('ревью M2: английская и узбекская инструкц
   }
 });
 
+// ── LIS_DISCOVERY_FIX_V1 (экран), C6 — инструкция «Как подключить анализатор» ──
+// «В Easy-Med ничего настраивать не нужно» — уже неправда: прибор надо
+// «Добавить». Не появился — «Добавить по адресу»; на кабеле COM — не руками.
+const GUIDE_EASY = 'В Easy-Med настраивать почти ничего не нужно: прибор появится в «Добавить прибор» → «Найдены в сети» — останется нажать «Добавить».';
+const GUIDE_BY_ADDRESS = 'Анализатор не появился? В «Добавить прибор» → «Добавить по адресу» укажите его адрес и порт — он будет ждать в «Ждут первого сообщения», пока не пришлёт пробу.';
+const GUIDE_COM = 'Прибор на кабеле COM руками не добавляйте — через переадресатор он появится в «Найдены в сети» сам.';
+
+test('C6: инструкция — почти ничего не настраивать, «Добавить по адресу», если прибор не появился, COM — не руками', async () => {
+  DEVICES = [HEARD];
+  const text = textOf(await mount());
+  for (const s of [GUIDE_EASY, GUIDE_BY_ADDRESS, GUIDE_COM]) assert.ok(text.includes(s), s);
+  assert.ok(!text.includes('В Easy-Med ничего настраивать не нужно'), 'прежнее «ничего не нужно» — неправда: прибор ещё надо «Добавить»');
+});
+
+test('C6: английская и узбекская инструкция называют экраны их подписями на этом языке', () => {
+  const byAddress = (lang) => STRINGS['Анализатор не появился? Добавить по адресу'][lang].split('? ')[1];   // подпись кнопки после вопроса
+  const quoted = {
+    [GUIDE_EASY]: (lang) => ['Добавить прибор', 'Найдены в сети', 'Добавить'].map((k) => STRINGS[k][lang]),
+    [GUIDE_BY_ADDRESS]: (lang) => [STRINGS['Добавить прибор'][lang], byAddress(lang), STRINGS['Ждут первого сообщения'][lang]],
+    [GUIDE_COM]: (lang) => [STRINGS['Найдены в сети'][lang]],
+  };
+  for (const lang of ['en', 'uz']) {
+    for (const [key, labels] of Object.entries(quoted)) {
+      assert.ok(STRINGS[key], 'в словаре: ' + key);
+      for (const label of labels(lang)) {
+        assert.ok(label && STRINGS[key][lang].includes('«' + label + '»'), `${lang}: «${label}» — ${STRINGS[key][lang]}`);
+      }
+    }
+  }
+});
+
 test('ревью M3: форма из таблицы по-прежнему просто закрывается', async () => {
   DEVICES = [HEARD];
   const root = await mount();
