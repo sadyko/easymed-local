@@ -6,7 +6,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { openVisitWizard, canAddVisitLines } from './visit-wizard.js?v=ownrep1';   // CRM_V4 — конверсия сразу в реальный заказ услуги · LIVE_AUDIT_FIX_V1 — canAddVisitLines · REFERRAL_BILL_V1 — штамп кэша · REFBILL_REVIEW_V1
+import { openVisitWizard, canAddVisitLines } from './visit-wizard.js?v=ownrep3';   // CRM_V4 — конверсия сразу в реальный заказ услуги · LIVE_AUDIT_FIX_V1 — canAddVisitLines · REFERRAL_BILL_V1 — штамп кэша · REFBILL_REVIEW_V1
 import { digitsOf, phoneLikePattern, filterPhoneMatches, uzLocalDigits, MIN_PHONE_DIGITS, leadMatchesQuery, phoneKey } from './crm-phone-match.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
 // CRM_CARD_V2 — номер на карточке группируется ТЕМ ЖЕ правилом, что и во всех
@@ -43,7 +43,7 @@ import { pastelAt } from '../pastel.js?v=pastel1';
 // адрес модуля здесь тот же (?v=aug17e): другой адрес это для браузера другой
 // модуль, то есть второй кэш занятости и второй ответ на один вопрос.
 import { loadSlotDay, freeStartMinutes, forgetSlots, bookErrorText, askEmergencyReason }
-    from './service-picker-modal.js?v=ownrep1';
+    from './service-picker-modal.js?v=ownrep3';
 // CRM_REAL_BOOKING_V1 — ОТМЕНА СТАРОГО ПРИЁМА ИДЁТ ОБЩЕЙ ДВЕРЬЮ. Смена статуса
 // визита — это тоже расписание (возврат отменённой записи перепродаёт слот), и
 // делает её один файл на весь продукт. Своего calendar_book у карточки заявки

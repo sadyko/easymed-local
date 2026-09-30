@@ -590,7 +590,7 @@ export function openFastRegistrationDialog({ onNavigate, onSaved } = {}) {
     async function openServicePicker() {
         if (locked()) return;
         try {
-            const mod = await import('./service-picker-modal.js?v=ownrep1');
+            const mod = await import('./service-picker-modal.js?v=ownrep3');
             mod.openServicePickerModal({
                 attachMode: true,
                 requireSlot: false,

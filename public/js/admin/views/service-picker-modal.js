@@ -45,7 +45,7 @@ import { resolveTypeId } from './service-group.js?v=aug17e';   // SERVICE_GROUPS
 // VISIT_TIER_PRICING_V1 — цена по счёту визита: смета спрашивает сервер, что
 // эти услуги стоят ЭТОМУ пациенту сегодня, и кладёт ответ на строки.
 import { tierLabel, tierApplies, quotableIds, applyQuotes, resetQuotes, priceTierOf } from '../visit-tier-logic.js';
-// OWN_PRICE_REPEAT_V1 — своя цена врача на любом визите: правило одно с сервером.
+// OWN_PRICE_TIER_RATIO_V1 — своя цена врача со скидкой яруса: правило одно с сервером.
 import { ownPriceFromRates, serviceLinePrice } from '../../shared/own-price-rule.js';
 import { discountBlockReason, eligibleDiscounts, discountValue, discountOptionParts, localYmd, isStoredValueCard, cardRemaining } from '../discount-rules.js';   // DISCOUNT_RULES_V1 · CARD_BALANCE_V1
 import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1
@@ -1374,16 +1374,18 @@ export function openServicePickerModal({
         return state.added.reduce((s, a) => s + itemPrice(a), 0);
     }
     // RPC_PORT_V1 (ревью I2) — цена строки сметы та же, что выставит касса
-    // (pricing.js lineUnitPrice): своя цена врача (OWN_PRICE_REPEAT_V1 — на
-    // любом визите), иначе цена визита по счёту, иначе каталог. Раньше смета
+    // (pricing.js lineUnitPrice): своя цена врача (OWN_PRICE_TIER_RATIO_V1 — на
+    // втором и повторном со скидкой яруса), иначе цена визита по счёту, иначе
+    // каталог. Раньше смета
     // брала каталог, а касса — цену врача: назвали 900 000, выставили 1 100 000.
     function itemPrice(a) {
         return pickerLinePrice(a, (state.providers || []).concat(state.doctors || []));
     }
-    // OWN_PRICE_REPEAT_V1 — у строки своя цена врача: цена от яруса визита не
-    // зависит, и зачёркнутая «цена первого визита» рядом была бы неправдой.
-    function itemTierShown(a) {
-        return tierApplies(a && a.tier) && pickerOwnPrice(a, (state.providers || []).concat(state.doctors || [])) === null;
+    // OWN_PRICE_TIER_RATIO_V1 — чип яруса и зачёркнутая цена первого визита: у
+    // врача со своей ценой ярус снова меняет цену (та же скидка, что у каталога),
+    // поэтому чип есть у всех; зачёркнута своя цена первого визита.
+    function itemTierNote(a) {
+        return pickerTierNote(a, (state.providers || []).concat(state.doctors || []));
     }
 
     // The right-panel action bar under the cart. Two states:
@@ -2241,6 +2243,7 @@ export function openServicePickerModal({
             // WIZ_RAIL_SCROLL_V1 — rows scroll; money block below stays visible.
             const rowsWrap = h('div', { style: { overflowY: 'auto', flex: '1 1 auto', minHeight: '90px' } });
             for (const a of state.added) {
+                const note = itemTierNote(a);   // OWN_PRICE_TIER_RATIO_V1
                 let who;
                 if (!itemComplete(a)) who = h('button', { class: 'wzc-warn', type: 'button',
                     style: { background: 'none', border: '0', padding: '0', cursor: 'pointer', font: 'inherit', textDecoration: 'underline' },
@@ -2263,11 +2266,12 @@ export function openServicePickerModal({
                         // VISIT_TIER_PRICING_V1 — a quoted second/repeat visit shows its
                         // tier and the crossed-out first-visit price, so the registrar sees
                         // WHY the number differs from the catalog before the patient asks.
-                        // OWN_PRICE_REPEAT_V1 — у врача своя цена: ярус цену не меняет, чипа нет.
-                        itemTierShown(a) ? h('span', { class: 'wzc-tier', title: a.tier.days_since != null
-                            ? trf('Прошлый визит по этой услуге — {n} дн. назад. Цена первого визита: {price}', { n: a.tier.days_since, price: formatMoney(a.tier.base_price) })
-                            : '' }, tierLabel(a.tier.tier)) : null,
-                        itemTierShown(a) ? h('s', { class: 'num muted', style: { fontSize: '12.5px' } }, formatMoney(Number(a.tier.base_price || 0))) : null,
+                        // OWN_PRICE_TIER_RATIO_V1 — и у врача со своей ценой: зачёркнута
+                        // его цена первого визита, рядом — она же со скидкой яруса.
+                        note ? h('span', { class: 'wzc-tier', title: a.tier.days_since != null
+                            ? trf('Прошлый визит по этой услуге — {n} дн. назад. Цена первого визита: {price}', { n: a.tier.days_since, price: formatMoney(note.firstPrice) })
+                            : '' }, tierLabel(note.tier)) : null,
+                        note ? h('s', { class: 'num muted', style: { fontSize: '12.5px' } }, formatMoney(note.firstPrice)) : null,
                         h('span', { class: 'num', style: { fontWeight: 700 } }, formatMoney(itemPrice(a))),
                         itemComplete(a) ? h('button', { type: 'button', title: 'Изменить врача и время',
                             style: { border: '0', background: 'none', cursor: 'pointer', font: 'inherit', fontSize: '12.5px', color: 'var(--primary-700, #115d5a)', textDecoration: 'underline', padding: '0', flex: 'none' },
@@ -3318,7 +3322,7 @@ export function openServicePickerModal({
                 // invoice for the patient-paid services. Dynamic import avoids the
                 // visit-modal <-> service-picker static import cycle.
                 try {
-                    const mod = await import('./visit-modal.js?v=ownrep1');   // REFBILL_REVIEW_V1 — штамп: «Сформировать счёт» только денежным ролям
+                    const mod = await import('./visit-modal.js?v=ownrep3');   // REFBILL_REVIEW_V1 — штамп: «Сформировать счёт» только денежным ролям
                     mod.openVisitModal({ visit: openServicesFor, patient: (p._raw || p), onChange: (typeof onBooked === 'function' ? onBooked : undefined) });
                 } catch (e) { console.warn('[wizard] open Services tab:', e); }
             }
@@ -3714,11 +3718,13 @@ export function pickerOwnPrice(a, people = []) {
  * (server/services/domain/pricing.js lineUnitPrice):
  *   • консультация — её цена уже врачебная (consultPriceFor), строка счёта —
  *     без услуги, по сохранённой цене;
- *   • OWN_PRICE_REPEAT_V1 — своя цена исполнителя (users.service_rates[].price;
- *     null — своей нет, 0 — настоящая бесплатная) на ЛЮБОМ визите: первом,
- *     втором, повторном;
- *   • своей нет — второй / повторный визит по котировке (service_price_quote)
- *     стоит цену визита по счёту, иначе каталог (до котировки).
+ *   • своей цены у исполнителя нет — второй / повторный визит по котировке
+ *     (service_price_quote) стоит цену визита по счёту, иначе каталог (до
+ *     котировки);
+ *   • OWN_PRICE_TIER_RATIO_V1 — своя цена исполнителя (users.service_rates[].price;
+ *     null — своей нет, 0 — настоящая бесплатная): на первом визите — она сама,
+ *     на втором / повторном — со скидкой яруса: своя × (цена визита по счёту ÷
+ *     каталог первого визита), до 0,01.
  * Правило — shared/own-price-rule.js serviceLinePrice, одно с сервером.
  */
 export function pickerLinePrice(a, people = []) {
@@ -3727,7 +3733,21 @@ export function pickerLinePrice(a, people = []) {
     const t = a && a.tier;
     const cat = s.__base_price != null ? Number(s.__base_price) : Number(s.price || 0);
     const tierPrice = t && (t.tier === 'secondary' || t.tier === 'repeat') ? Number(t.price || 0) : cat;
-    return serviceLinePrice(pickerOwnPrice(a, people), tierPrice);
+    return serviceLinePrice(pickerOwnPrice(a, people), tierPrice, cat);
+}
+
+/**
+ * OWN_PRICE_TIER_RATIO_V1 — чип яруса строки сметы: null — ярус цену не меняет
+ * (первый визит, котировки нет, консультация); иначе { tier, firstPrice, price }:
+ * ярус, цена ПЕРВОГО визита (своя цена врача, если она есть, иначе каталог) —
+ * её рельс зачёркивает, и цена этой строки (pickerLinePrice).
+ */
+export function pickerTierNote(a, people = []) {
+    const s = (a && a.service) || {};
+    if (s.__consult || !tierApplies(a && a.tier)) return null;
+    const own = pickerOwnPrice(a, people);
+    const cat = s.__base_price != null ? Number(s.__base_price) : Number(a.tier.base_price || 0);
+    return { tier: a.tier.tier, firstPrice: own !== null ? own : cat, price: pickerLinePrice(a, people) };
 }
 
 /**

@@ -16,7 +16,7 @@ import { moneyDisplay } from '../../shared/money-input.js?v=mi2';   // DEBT_FLOW
 import { supabase } from '../../supabase.js';
 import { originTag } from '../record-origin.js';   // BRANCH_ORIGIN_V1 — откуда запись
 import { branchSyncButton } from './branch-sync-button.js';   // BRANCH_SYNC_HOURLY_V1
-import { openServicePickerModal } from './service-picker-modal.js?v=ownrep1';   // OWN_PRICE_REPEAT_V1 — штамп каталога
+import { openServicePickerModal } from './service-picker-modal.js?v=ownrep3';   // OWN_PRICE_REPEAT_V1 — штамп каталога
 // PATIENT_ONE_WINDOW_V1 — заведение пациента больше не отдельная страница:
 // «Создать пациента» открывает окно ПОВЕРХ списка, и сохранённая карта
 // появляется в этом же списке без перехода туда-обратно.

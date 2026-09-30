@@ -1046,13 +1046,20 @@ test('REFBILL_REVIEW_V1: регистратура — прежний поряд�
 // своей цены — 60 000, как прежде.
 // ═══════════════════════════════════════════════════════════════════════════
 function repeatHistory(db, rates) {
-  db.prepare('UPDATE services SET price_secondary = 60000, secondary_days_from = 1, secondary_days_to = 30 WHERE id = 21').run();
+  // OWN_PRICE_TIER_RATIO_V1 — пример владельца: 200 000 первый, 60 000 второй, повторный бесплатно.
+  db.prepare('UPDATE services SET price = 200000, price_secondary = 60000, secondary_days_from = 1, secondary_days_to = 30, price_repeat = 0 WHERE id = 21').run();
   db.prepare('UPDATE users SET service_rates = ? WHERE id = 7').run(JSON.stringify(rates));
   const past = db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', date('now','localtime','-3 days') || ' 10:00:00', 'utc') t").get().t;
   const pv = db.prepare("INSERT INTO visits (patient_id, doctor_id, visit_date, status, created_by) VALUES (3, 7, ?, 'arrived', 1)").run(past).lastInsertRowid;
-  db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by, price_tier) VALUES (?, 21, 7, 1, 100000, 100000, 'completed', 1, 'primary')").run(pv);
+  db.prepare("INSERT INTO visit_services (visit_id, service_id, doctor_id, quantity, unit_price, total, status, created_by, price_tier) VALUES (?, 21, 7, 1, 200000, 200000, 'completed', 1, 'primary')").run(pv);
   return pv;
 }
+// OWN_PRICE_TIER_RATIO_V1 — чип яруса строки сметы и цена первого визита в его подсказке.
+const tierChipOf = (ov) => walk(ov).find((n) => String(n.className || '').split(/\s+/).includes('wzc-tier'));
+const firstPriceIn = (chip) => {
+  const m = /Цена первого визита: (.+)$/.exec(String((chip && chip.attrs && chip.attrs.title) || ''));
+  return m ? Number(m[1].replace(/\D/g, '')) : null;
+};
 // Что мастер САМ пишет в строку (до того, как счёт перепишет её цену своей):
 // тело вставки visit_services, перехваченное на пути к стенду. И JSON-колонки
 // users (service_rates) — разобранными, как их отдаёт настоящий маршрут
@@ -1077,16 +1084,23 @@ async function withLineInserts(fn) {
   return rows;
 }
 
-test('OWN_PRICE_REPEAT_V1: мастер — второй визит у врача со своей ценой: смета, строка и счёт по своей цене, ярус «второй»', async () => {
+// OWN_PRICE_TIER_RATIO_V1 (владелец, 30.09; заменяет 3.14.0) — своя цена 300 000
+// получает скидку второго визита, как каталог: 90 000. Чип «Второй визит» есть и у
+// врача со своей ценой, в подсказке — его цена первого визита.
+test('OWN_PRICE_TIER_RATIO_V1: мастер — второй визит у врача со своей ценой 300 000: смета, строка и счёт — 90 000, ярус «второй», чип с его ценой первого визита', async () => {
   let pv = null;
+  let chip = null;
   const rows = await withLineInserts(async () => {
-    await openWizardReadyWith((db) => { pv = repeatHistory(db, [{ service_id: 21, pct: 10, price: 150000 }]); });
+    const w = await openWizardReadyWith((db) => { pv = repeatHistory(db, [{ service_id: 21, pct: 10, price: 300000 }]); });
+    chip = tierChipOf(w.overlay());
     await pressUntilCreate();
   });
+  assert.ok(chip, 'у врача со своей ценой нет чипа яруса');
+  assert.equal(firstPriceIn(chip), 300000, 'в подсказке чипа — не его цена первого визита');
   const sent = rows.find((r) => Number(r.service_id) === 21);
   assert.ok(sent, 'мастер не записал строку: ' + JSON.stringify(TOASTS));
   assert.equal(sent.price_tier, 'secondary', 'ярус второго визита не записан');
-  assert.equal(sent.unit_price, 150000, 'смета мастера записала цену яруса вместо своей цены врача');
+  assert.equal(sent.unit_price, 90000, 'смета мастера: не 30 % своей цены');
   const inv = DB.prepare('SELECT total_amount FROM invoices').all();
   assert.equal(inv.length, 1, 'счёт не выставлен: ' + JSON.stringify(TOASTS));
   assert.equal(inv[0].total_amount, sent.unit_price, 'смета ≠ счёт');
@@ -1094,13 +1108,17 @@ test('OWN_PRICE_REPEAT_V1: мастер — второй визит у врач�
   assert.equal(line.price_tier, 'secondary');
 });
 
-test('OWN_PRICE_REPEAT_V1: мастер — второй визит у врача без своей цены: цена яруса, как прежде', async () => {
+test('OWN_PRICE_TIER_RATIO_V1: мастер — второй визит у врача без своей цены: цена яруса, как прежде; чип с ценой каталога', async () => {
   let pv = null;
+  let chip = null;
   const rows = await withLineInserts(async () => {
-    await openWizardReadyWith((db) => { pv = repeatHistory(db, [{ service_id: 21, pct: 10 }]); });
+    const w = await openWizardReadyWith((db) => { pv = repeatHistory(db, [{ service_id: 21, pct: 10 }]); });
+    chip = tierChipOf(w.overlay());
     await pressUntilCreate();
   });
   assert.ok(pv);
+  assert.ok(chip, 'нет чипа яруса');
+  assert.equal(firstPriceIn(chip), 200000);
   const sent = rows.find((r) => Number(r.service_id) === 21);
   assert.ok(sent, 'мастер не записал строку: ' + JSON.stringify(TOASTS));
   assert.deepEqual([sent.unit_price, sent.price_tier], [60000, 'secondary']);

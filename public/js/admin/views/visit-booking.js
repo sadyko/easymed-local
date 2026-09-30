@@ -28,7 +28,7 @@ import { supabase } from '../../supabase.js';
 // Клиент записи общий с мастерами: диалог экстренной причины, перевод отказа
 // сервера по коду и сброс кэша слотов уже реализованы там, и заводить им
 // вторую реализацию — то же самое, из-за чего появился slot-engine.js.
-import { bookErrorText, calendarBookOrAsk, forgetSlots } from './service-picker-modal.js?v=ownrep1';
+import { bookErrorText, calendarBookOrAsk, forgetSlots } from './service-picker-modal.js?v=ownrep3';
 
 export { bookErrorText, forgetSlots };
 

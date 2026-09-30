@@ -556,8 +556,8 @@ export async function billLineFor(visit, service, qty) {
     let price = Number(service.price) || 0;
     let tier = null;
     // OWN_PRICE_REPEAT_V1 — врач строки едет в котировку: у врача со своей ценой
-    // она действует на любом визите, и строка ложится с той же ценой, что
-    // выставит счёт (прежде — цена яруса без врача).
+    // строка ложится с той же ценой, что выставит счёт (OWN_PRICE_TIER_RATIO_V1 —
+    // своя цена со скидкой яруса; прежде — цена яруса без врача).
     const performer = linePerformer(service, null, visit.doctor_id);
     try {
         if (visit.patient_id) {

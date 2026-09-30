@@ -182,20 +182,21 @@ test('A2: котировка с врачом отдаёт его личную ц
   assert.equal(inv.total_amount, 150000);
 });
 
-// OWN_PRICE_REPEAT_V1 (2026-09-30) — владелец: «Own price for repeat too».
-// Прежде тариф второго визита перекрывал личную цену (60 000); теперь личная
-// цена действует на любом ярусе, а ярус называется по-прежнему.
-test('A2 / OWN_PRICE_REPEAT_V1: второй визит у врача с личной ценой — его цена, ярус «второй»', () => {
+// OWN_PRICE_TIER_RATIO_V1 (владелец, 2026-09-30; заменяет OWN_PRICE_REPEAT_V1
+// 3.14.0, где личная цена шла на любой ярус как есть) — личная цена получает ту
+// же скидку тарифа, что каталог: 200 000 → 60 000 у каталога, 300 000 → 90 000
+// у врача; ярус называется по-прежнему, base_price — личная цена первого визита.
+test('A2 / OWN_PRICE_TIER_RATIO_V1: второй визит у врача с личной ценой 300 000 — 90 000, ярус «второй»', () => {
   const db = fresh();
   const sid = tiered(db);
   db.prepare("INSERT INTO users (id, username, password_hash, role, service_rates) VALUES (7,'doc','x','doctor',?)")
-    .run(JSON.stringify([{ service_id: sid, price: 250000 }]));
+    .run(JSON.stringify([{ service_id: sid, price: 300000 }]));
   pastVisit(db, { daysAgo: 3, serviceId: sid });
   const q = servicePriceQuote(db, { patient_id: 1, service_ids: [sid], doctor_ids: { [sid]: 7 } }, registrar).quotes[sid];
   assert.equal(q.tier, 'secondary');
-  assert.equal(q.price, 250000);
-  assert.equal(q.base_price, 250000);
-  assert.equal(q.own_price, 250000);
+  assert.equal(q.price, 90000);
+  assert.equal(q.base_price, 300000);
+  assert.equal(q.own_price, 300000);
   // Без врача — цена тарифа, как прежде.
   assert.equal(servicePriceQuote(db, { patient_id: 1, service_ids: [sid] }, registrar).quotes[sid].price, 60000);
 });

@@ -107,7 +107,8 @@ export function doctorPriceLookup(db, doctorIds) {
 // REFBILL_REVIEW_V1 — ownPrice: готовый ответ doctorPriceLookup вместо запроса.
 export function unitPriceFor(db, { doctorId, serviceId, catalogPrice }, ownPrice = null) {
   const own = ownPrice ? ownPrice(doctorId, serviceId) : doctorPriceFor(db, doctorId, serviceId);
-  return serviceLinePrice(own, catalogPrice);   // OWN_PRICE_REPEAT_V1 — одно правило
+  // OWN_PRICE_REPEAT_V1 — одно правило; OWN_PRICE_TIER_RATIO_V1 — без яруса доля 1: своя цена.
+  return serviceLinePrice(own, catalogPrice, catalogPrice);
 }
 
 // PAY_BASIS_PERFORMED_V1 — the unit price the INVOICE will charge for one
@@ -118,14 +119,16 @@ export function unitPriceFor(db, { doctorId, serviceId, catalogPrice }, ownPrice
 // cashier's invoice will price it, so the doctor's share does not change when
 // the invoice is issued. That is only true while there is ONE answer to
 // "what will the invoice charge", so the billing handlers call this too:
-//   • a service line — OWN_PRICE_REPEAT_V1 (владелец, 30.09: «Own price for
-//     repeat too»): the performing doctor's own price on ANY visit tier;
-//     without one, the price of the line's recorded tier (VISIT_TIER_PRICING_V1,
-//     tierUnitPrice), which for a first visit is the catalog. The rule itself
-//     is public/js/shared/own-price-rule.js serviceLinePrice — the screens
-//     read the same function. Прежде ярус второго/повторного визита
-//     перекрывал и свою цену. Inpatient lines carry no tier: pass
-//     tiered = false, as buildAdmissionInvoice does;
+//   • a service line — without an own price, the price of the line's recorded
+//     tier (VISIT_TIER_PRICING_V1, tierUnitPrice), which for a first visit is
+//     the catalog. OWN_PRICE_TIER_RATIO_V1 (владелец, 30.09; заменяет
+//     OWN_PRICE_REPEAT_V1 3.14.0, где своя цена шла на любой ярус как есть):
+//     with an own price — the own price on a first visit, and on a second /
+//     repeat visit the own price discounted like the catalog: own × (tier
+//     price ÷ catalog first-visit price), to 0.01. The rule itself is
+//     public/js/shared/own-price-rule.js serviceLinePrice — the screens read
+//     the same function. Inpatient lines carry no tier: pass tiered = false,
+//     as buildAdmissionInvoice does (the own price as is);
 //   • a product line (clinic_item_id) — the price stored on the line at
 //     dispense, in the line's own quantity unit (productLineUnitPrice);
 //   • an ad-hoc line (neither) — the price stored on the line.
@@ -138,10 +141,11 @@ export function unitPriceFor(db, { doctorId, serviceId, catalogPrice }, ownPrice
 export function lineUnitPrice(db, row, { service = null, product = null, tiered = true, ownPrice = null, consult = null } = {}) {
   if (row.service_id != null) {
     const catalogPrice = service ? service.price : 0;
-    // OWN_PRICE_REPEAT_V1 — своя цена врача на любом ярусе; нет её — цена яруса.
+    // OWN_PRICE_TIER_RATIO_V1 — нет своей цены — цена яруса; есть — своя со
+    // скидкой яруса: своя × (цена яруса ÷ каталог первичного).
     const own = ownPrice ? ownPrice(row.doctor_id, row.service_id) : doctorPriceFor(db, row.doctor_id, row.service_id);
     const tierPrice = tiered && service ? tierUnitPrice(service, row.price_tier, catalogPrice) : catalogPrice;
-    return serviceLinePrice(own, tierPrice);
+    return serviceLinePrice(own, tierPrice, catalogPrice);
   }
   if (row.clinic_item_id != null) return productLineUnitPrice(row, product);
   // BILLING_AUDIT_FIX_V1 (B7) — консультация (service_id NULL +
