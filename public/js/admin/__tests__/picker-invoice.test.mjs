@@ -498,17 +498,48 @@ test('I2 / OWN_PRICE_TIER_RATIO_V1: цена строки сметы — как 
 test('OWN_PRICE_TIER_RATIO_V1: чип яруса в смете — и у врача со своей ценой; зачёркнута его цена первого визита', () => {
   const own = { id: 7, service_rates: [{ service_id: 21, price: 300000, pct: 30 }] };
   const second = { service: { id: 21, price: 60000, __base_price: 200000 }, tier: { tier: 'secondary', price: 60000, base_price: 200000, days_since: 3 } };
-  assert.deepEqual(pickerTierNote({ ...second, doctor: own }), { tier: 'secondary', firstPrice: 300000, price: 90000 });
-  assert.deepEqual(pickerTierNote({ ...second, doctor: { id: 8, service_rates: [{ service_id: 21, pct: 30 }] } }), { tier: 'secondary', firstPrice: 200000, price: 60000 });
-  assert.deepEqual(pickerTierNote({ ...second, doctor: null }), { tier: 'secondary', firstPrice: 200000, price: 60000 });
+  assert.deepEqual(pickerTierNote({ ...second, doctor: own }), { tier: 'secondary', firstPrice: 300000, price: 90000, struck: 300000 });
+  assert.deepEqual(pickerTierNote({ ...second, doctor: { id: 8, service_rates: [{ service_id: 21, pct: 30 }] } }), { tier: 'secondary', firstPrice: 200000, price: 60000, struck: 200000 });
+  assert.deepEqual(pickerTierNote({ ...second, doctor: null }), { tier: 'secondary', firstPrice: 200000, price: 60000, struck: 200000 });
   assert.equal(pickerTierNote({ service: { id: 21, price: 200000 }, doctor: own, tier: { tier: 'primary', price: 200000 } }), null, 'первичный — чипа нет');
   assert.equal(pickerTierNote({ service: { id: 21, price: 200000 }, doctor: own }), null, 'котировки нет — чипа нет');
-  // Рельс сметы рисует чип этой функцией, а не прежним «скрыть при своей цене».
+  // Рельс сметы рисует чип этой функцией, а не прежним «скрыть при своей цене»;
+  // зачёркнутая цена — только поле struck.
   return import('node:fs').then((fs) => {
     const src = fs.readFileSync(new URL('../views/service-picker-modal.js', import.meta.url), 'utf8');
     assert.ok(!/itemTierShown/.test(src), 'рельс снова прячет чип у врача со своей ценой');
     assert.match(src, /const note = itemTierNote\(a\)/);
+    assert.match(src, /note && note\.struck != null \? h\('s'/, 'рельс зачёркивает не по полю struck');
   });
+});
+
+// Ревью a386a07 — зачёркнутая цена — это скидка, и её не должно быть, где скидки
+// нет: цена со скидкой равна цене первого визита (своя 0; каталог первого визита
+// 0 — своя цена без доли; ярус по цене первого визита) или ярус дороже первого
+// визита («~~200 000~~ 300 000» читалось бы как скидка). Чип яруса остаётся.
+test('OWN_PRICE_TIER_RATIO_V1 (ревью): чип яруса без зачёркнутой цены, когда скидки нет — равная цена или ярус дороже', () => {
+  const sec = (svc, tier) => ({ service: svc, tier: { tier: 'secondary', ...tier } });
+  const withOwn = (price) => ({ id: 7, service_rates: [{ service_id: 21, price, pct: 30 }] });
+  const plainDoc = { id: 8, service_rates: [{ service_id: 21, pct: 30 }] };
+  // своя 0 → ~~0~~ 0 — нет
+  assert.deepEqual(pickerTierNote({ ...sec({ id: 21, price: 60000, __base_price: 200000 }, { price: 60000, base_price: 200000 }), doctor: withOwn(0) }),
+    { tier: 'secondary', firstPrice: 0, price: 0, struck: null });
+  // каталог первого визита 0, своя 300 000 → ~~300 000~~ 300 000 — нет
+  assert.deepEqual(pickerTierNote({ ...sec({ id: 21, price: 50000, __base_price: 0 }, { price: 50000, base_price: 0 }), doctor: withOwn(300000) }),
+    { tier: 'secondary', firstPrice: 300000, price: 300000, struck: null });
+  // ярус по цене первого визита → равные цены — нет (и у врача без своей цены)
+  assert.deepEqual(pickerTierNote({ ...sec({ id: 21, price: 200000, __base_price: 200000 }, { price: 200000, base_price: 200000 }), doctor: withOwn(300000) }),
+    { tier: 'secondary', firstPrice: 300000, price: 300000, struck: null });
+  assert.deepEqual(pickerTierNote({ ...sec({ id: 21, price: 200000, __base_price: 200000 }, { price: 200000, base_price: 200000 }), doctor: plainDoc }),
+    { tier: 'secondary', firstPrice: 200000, price: 200000, struck: null });
+  // ярус дороже первого визита → не скидка — нет (и у врача без своей цены: было и прежде)
+  assert.deepEqual(pickerTierNote({ ...sec({ id: 21, price: 150000, __base_price: 100000 }, { price: 150000, base_price: 100000 }), doctor: withOwn(200000) }),
+    { tier: 'secondary', firstPrice: 200000, price: 300000, struck: null });
+  assert.deepEqual(pickerTierNote({ ...sec({ id: 21, price: 150000, __base_price: 100000 }, { price: 150000, base_price: 100000 }), doctor: plainDoc }),
+    { tier: 'secondary', firstPrice: 100000, price: 150000, struck: null });
+  // настоящая скидка — зачёркнута: своя 250 000 при 300 000 / 100 000 → ~~250 000~~ 83 333
+  assert.deepEqual(pickerTierNote({ ...sec({ id: 21, price: 100000, __base_price: 300000 }, { price: 100000, base_price: 300000 }), doctor: withOwn(250000) }),
+    { tier: 'secondary', firstPrice: 250000, price: 83333, struck: 250000 });
 });
 
 test('I2: своя цена врача — смета и счёт сходятся (было: назвали 900 000, выставили 1 100 000)', async () => {

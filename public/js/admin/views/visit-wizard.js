@@ -42,7 +42,7 @@ import { splitCompanies, toggleCompanyId } from './payer-choice.js?v=pc1';   // 
 // свободен» на весь продукт: его задаёт серверу этот клиент, а считает
 // server/services/rpc/slot-engine.js. ?v как у остальных импортёров модуля.
 import { primeSlotDays, slotDayCached, freeStartMinutes, loadSlotDay, hhmmToMin,
-         askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=ownrep3';
+         askEmergencyReason, bookErrorText, forgetSlots } from './service-picker-modal.js?v=ownrep4';
 import { surgeryBedRefusal } from './visit-line-row.js';   // LIVE_AUDIT_FIX_V1 (A5) — хирургия без койки: отказ до визита
 import { hasActorRole, canWriteServiceTemplates, VISIT_LINE_ROLES, canAddVisitLines } from '../permissions.js';   // INVOICE_ROLE_HONEST_V1 · LIVE_AUDIT_FIX_V1 — шаблоны сметы
 import { canSpendStoredValue, loadPatientWallet, payFromStoredValue } from '../stored-value-pay.js';   // DEPOSIT_WALLET_V1

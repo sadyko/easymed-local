@@ -124,11 +124,20 @@ test('правило: своя цена × (ярус ÷ каталог перв�
   assert.equal(serviceLinePrice(70000, 50000, -5), 70000);
   // Своя 0 — настоящая бесплатная цена на любом ярусе.
   assert.equal(serviceLinePrice(0, 60000, 200000), 0);
-  // Округление — до 0,01, как у строк и счетов (billing.js round2).
+  // Ревью a386a07 — цена по доле округляется до ЦЕЛОГО сума, половина — вверх:
+  // касса вводит только цифры, и 83 333,33 не закрыть ни 83 333 (остаётся долг
+  // 0,33), ни 83 334 («Сумма больше остатка к оплате»).
   assert.equal(serviceLinePrice(175000, 60000, 200000), 52500);
-  assert.equal(serviceLinePrice(123457, 60000, 200000), 37037.1);
-  assert.equal(serviceLinePrice(100000, 1, 3), 33333.33);
-  assert.equal(serviceLinePrice(100000, 2, 3), 66666.67);
+  assert.equal(serviceLinePrice(123457, 60000, 200000), 37037, '37 037,1 → 37 037');
+  assert.equal(serviceLinePrice(250000, 100000, 300000), 83333, '83 333,33 → 83 333');
+  assert.equal(serviceLinePrice(100000, 1, 3), 33333);
+  assert.equal(serviceLinePrice(100000, 2, 3), 66667, '66 666,67 → 66 667');
+  assert.equal(serviceLinePrice(150005, 60000, 200000), 45002, '45 001,5 → 45 002: половина — вверх');
+  assert.equal(serviceLinePrice(150001, 60000, 200000), 45000, '45 000,3 → 45 000');
+  // Без доли — ничего не округляется: своя цена как записана, цена яруса как есть.
+  assert.equal(serviceLinePrice(80000.5, 200000, 200000), 80000.5, 'первичный — своя цена как записана');
+  assert.equal(serviceLinePrice(80000.5, 60000, 0), 80000.5, 'каталог первичного 0 — своя цена как записана');
+  assert.equal(serviceLinePrice(null, 60000.5, 200000), 60000.5, 'своей нет — цена яруса как есть');
 });
 
 test('правило: разбор своей цены — строки, как у сервера', () => {
@@ -208,7 +217,8 @@ test('правило: цена строки на экране = цена стр�
   assert.equal(at(4, 51, 'secondary'), 450000, 'ярус дороже первичного — дороже в той же доле');
   assert.equal(at(5, 51, 'secondary'), 300000, 'каталог первичного 0 — своя цена');
   assert.equal(at(6, 51, 'secondary'), 300000, 'ярусов нет — своя цена');
-  assert.equal(at(7, 50 + OWNS.indexOf(123457), 'secondary'), 41152.33, '123 457 × 1/3 — до 0,01');
+  assert.equal(at(7, 50 + OWNS.indexOf(123457), 'secondary'), 41152, '123 457 × 1/3 = 41 152,33 — до целого сума');
+  assert.equal(at(7, 50 + OWNS.indexOf(123457), 'repeat'), 28807, '123 457 × 7/30 = 28 806,63 — до целого сума, вверх');
 });
 
 // ─── пример владельца: котировка = счёт ──────────────────────────────────────
@@ -269,8 +279,8 @@ test('ярус дороже первичного — своя цена доро�
   assert.equal(billOne(db, pid, DEAR, OWN, 'secondary'), 300000);
 });
 
-test('округление: своя 175 000 → 52 500; своя 123 457 → 37 037,1 — котировка = счёт = «Ждут счёта», доля от неё', () => {
-  for (const [ownPrice, want] of [[175000, 52500], [123457, 37037.1]]) {
+test('округление до целого сума: своя 175 000 → 52 500; своя 123 457 → 37 037 — котировка = счёт = «Ждут счёта», доля от неё', () => {
+  for (const [ownPrice, want] of [[175000, 52500], [123457, 37037]]) {
     const { db, CONS, USG, pid } = seed({ ownPrice });
     setOwn(db, CONS, USG, ownPrice);
     history(db, pid, CONS, -3);
@@ -288,6 +298,45 @@ test('округление: своя 175 000 → 52 500; своя 123 457 → 37
     const fee = doctorPaySummary(db, { doctor_id: OWN, from: dayOf(db, -30), to: dayOf(db, 1) }, admin).outpatient.fee;
     assert.equal(fee, Math.round(want * 0.1 * 100) / 100, 'доля 10 % от выставленной суммы');
   }
+});
+
+// Ревью a386a07 — пример ревью: каталог 300 000 / 100 000, своя цена 250 000.
+// Прежде счёт выставлял 83 333,33, а касса вводит только цифры: 83 333 оставляли
+// счёт «частично оплачен» с долгом 0,33, 83 334 — отказ «Сумма больше остатка».
+// Теперь 83 333 — в котировке, в счёте и в «Ждут счёта»; оплата 83 333 закрывает счёт.
+test('своя 250 000 при каталоге 300 000 / 100 000 → 83 333: котировка = «Ждут счёта» = счёт, оплата 83 333 закрывает счёт, доля от 83 333', () => {
+  const { db, pid } = seed();
+  const SVC = Number(db.prepare(`INSERT INTO services (name, price, tax_rate, type, price_secondary, secondary_days_from, secondary_days_to)
+                                 VALUES ('Приём кардиолога', 300000, 0, 'consultation', 100000, 1, 6)`).run().lastInsertRowid);
+  db.prepare('UPDATE users SET service_rates = ? WHERE id = ?').run(JSON.stringify([{ service_id: SVC, pct: 10, price: 250000 }]), OWN);
+  history(db, pid, SVC, -3);
+  const q = quote(db, pid, SVC, 0, OWN);
+  assert.deepEqual([q.tier, q.price], ['secondary', 83333]);
+  const v = visit(db, pid, 0);
+  const l = line(db, v, { service_id: SVC, doctor_id: OWN, tier: 'secondary' });
+  assert.equal(cashierUnbilled(db, {}, cashier).rows.find((r) => r.visit_id === v).total, 83333, '«Ждут счёта»');
+  const out = createInvoiceForVisit(db, { visit_id: v, visit_service_ids: [l] }, registrar);
+  assert.equal(out.invoice.total_amount, q.price, 'котировка ≠ счёт');
+  openCashShift(db, { opening_float: 0 }, cashier);
+  recordPayment(db, { invoice_id: out.invoice.id, amount: 83333, method: 'cash' }, cashier);
+  assert.equal(inv(db, out.invoice.id).status, 'paid', 'оплата целой суммой не закрыла счёт');
+  db.prepare("UPDATE visit_services SET status = 'completed' WHERE id = ?").run(l);
+  assert.equal(doctorPaySummary(db, { doctor_id: OWN, from: dayOf(db, -30), to: dayOf(db, 1) }, admin).outpatient.fee, 8333.3, '10 % от 83 333');
+});
+
+// Известное поведение (спецификация п. 3а, без правки кода): строка без счёта
+// оценивается при выставлении, по каталогу, каким он стал. Поднята только цена
+// первого визита (200 000 → 400 000) — у врача со своей ценой ждущий счёта второй
+// визит дешевеет: 300 000 × 60 000 ÷ 400 000 = 45 000 (было 90 000).
+test('известное поведение: подняли только цену первого визита — ждущая счёта строка второго визита врача со своей ценой 90 000 → 45 000', () => {
+  const { db, CONS, pid } = seed();
+  history(db, pid, CONS, -3);
+  const v = visit(db, pid, 0);
+  const l = line(db, v, { service_id: CONS, doctor_id: OWN, tier: 'secondary' });
+  assert.equal(cashierUnbilled(db, {}, cashier).rows.find((r) => r.visit_id === v).total, 90000);
+  db.prepare('UPDATE services SET price = 400000 WHERE id = ?').run(CONS);
+  assert.equal(cashierUnbilled(db, {}, cashier).rows.find((r) => r.visit_id === v).total, 45000);
+  assert.equal(createInvoiceForVisit(db, { visit_id: v, visit_service_ids: [l] }, registrar).invoice.total_amount, 45000);
 });
 
 test('строка стационара (без ярусов, tiered: false) — своя цена как прежде, даже со словом яруса', () => {

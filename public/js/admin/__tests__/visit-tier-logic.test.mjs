@@ -93,7 +93,7 @@ test('the editor sends the four tier fields; the wizard, attach path and doctor 
     // («Направить на услуги») — такой же импортёр, и держит тот же штамп.
     // OWN_PRICE_REPEAT_V1, OWN_PRICE_TIER_RATIO_V1 — штамп поднят снова.
     for (const f of ['views/crm.js', 'views/patient-card.js', 'views/patient-create-modal.js', 'views/service-workspace.js']) {
-        assert.ok(read(f).includes('visit-wizard.js?v=ownrep3'), f + ' держит старый кэш мастера записи');
+        assert.ok(read(f).includes('visit-wizard.js?v=ownrep4'), f + ' держит старый кэш мастера записи');
     }
 });
 

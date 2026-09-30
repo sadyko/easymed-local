@@ -59,7 +59,7 @@ import { renderServices }     from './admin/views/services.js?v=aug31a';   // SE
 import { renderRegistration } from './admin/views/registration.js?v=aug17f';
 import { renderRoomCalendar } from './admin/views/room-calendar.js?v=aug17e';   // RESCAL_WIRE_V1 — «Календарь записи» (legacy Scheduling retired)
 import { renderConsultation }     from './admin/views/consultation.js?v=rmt1';
-import { renderServiceWorkspace } from './admin/views/service-workspace.js?v=ownrep3';   // OWN_PRICE_REPEAT_V1 — штамп кабинета врача · OWN_PRICE_TIER_RATIO_V1
+import { renderServiceWorkspace } from './admin/views/service-workspace.js?v=ownrep4';   // OWN_PRICE_REPEAT_V1 — штамп кабинета врача · OWN_PRICE_TIER_RATIO_V1 (ревью)
 import { renderPatientCard }  from './admin/views/patient-card.js?v=labshared1';   // PATIENT_CARD_DESIGN_V2 + SVC_ROW_ACTIONS_V1 (?v must match service-workspace.js)
 import { renderPlaceholder }  from './admin/views/placeholder.js';
 import { renderSectionCrud }  from './admin/views/section-crud.js?v=svceditor1';

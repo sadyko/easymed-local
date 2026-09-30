@@ -14,7 +14,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — sink-обёрт�
 import { currentUser } from '../data.js';
 import { h, Icon, Tag, StatusTag, statusLabel, toast, clear } from '../ui.js';
 import { canDelete, actorRoleCodes, hasActorRole } from '../permissions.js';   // LIVE_AUDIT_FIX_V1 — hasActorRole
-import { openServicePickerModal } from './service-picker-modal.js?v=ownrep3';
+import { openServicePickerModal } from './service-picker-modal.js?v=ownrep4';
 import { openItemPickerModal, isOwnShelfShort } from './item-picker-modal.js?v=billoptin2';   // DISPENSE_ITEM_V1; отказ «нет на полках» — ревью F4
 import { toastStockWarnings } from './stock-warnings.js';   // EXPIRY_BALANCE_V1 — слова про просрочку одни на все двери
 import { openCancelInvoiceDialog, logInvoiceAction as _logInvoiceAction, canMoveInvoiceMoney, invoiceMoneyErrorText } from './invoice-actions.js?v=ia3';

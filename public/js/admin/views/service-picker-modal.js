@@ -2271,7 +2271,8 @@ export function openServicePickerModal({
                         note ? h('span', { class: 'wzc-tier', title: a.tier.days_since != null
                             ? trf('Прошлый визит по этой услуге — {n} дн. назад. Цена первого визита: {price}', { n: a.tier.days_since, price: formatMoney(note.firstPrice) })
                             : '' }, tierLabel(note.tier)) : null,
-                        note ? h('s', { class: 'num muted', style: { fontSize: '12.5px' } }, formatMoney(note.firstPrice)) : null,
+                        // Ревью a386a07 — зачёркнута только настоящая скидка (struck).
+                        note && note.struck != null ? h('s', { class: 'num muted', style: { fontSize: '12.5px' } }, formatMoney(note.struck)) : null,
                         h('span', { class: 'num', style: { fontWeight: 700 } }, formatMoney(itemPrice(a))),
                         itemComplete(a) ? h('button', { type: 'button', title: 'Изменить врача и время',
                             style: { border: '0', background: 'none', cursor: 'pointer', font: 'inherit', fontSize: '12.5px', color: 'var(--primary-700, #115d5a)', textDecoration: 'underline', padding: '0', flex: 'none' },
@@ -3322,7 +3323,7 @@ export function openServicePickerModal({
                 // invoice for the patient-paid services. Dynamic import avoids the
                 // visit-modal <-> service-picker static import cycle.
                 try {
-                    const mod = await import('./visit-modal.js?v=ownrep3');   // REFBILL_REVIEW_V1 — штамп: «Сформировать счёт» только денежным ролям
+                    const mod = await import('./visit-modal.js?v=ownrep4');   // REFBILL_REVIEW_V1 — штамп: «Сформировать счёт» только денежным ролям
                     mod.openVisitModal({ visit: openServicesFor, patient: (p._raw || p), onChange: (typeof onBooked === 'function' ? onBooked : undefined) });
                 } catch (e) { console.warn('[wizard] open Services tab:', e); }
             }
@@ -3737,17 +3738,23 @@ export function pickerLinePrice(a, people = []) {
 }
 
 /**
- * OWN_PRICE_TIER_RATIO_V1 — чип яруса строки сметы: null — ярус цену не меняет
- * (первый визит, котировки нет, консультация); иначе { tier, firstPrice, price }:
- * ярус, цена ПЕРВОГО визита (своя цена врача, если она есть, иначе каталог) —
- * её рельс зачёркивает, и цена этой строки (pickerLinePrice).
+ * OWN_PRICE_TIER_RATIO_V1 — чип яруса строки сметы: null — ярусного визита нет
+ * (первый визит, котировки нет, консультация); иначе
+ * { tier, firstPrice, price, struck }: ярус, цена ПЕРВОГО визита (своя цена
+ * врача, если она есть, иначе каталог), цена этой строки (pickerLinePrice) и
+ * что зачеркнуть. Ревью a386a07 — зачёркнутая цена — это скидка: struck —
+ * цена первого визита, только если строка ДЕШЕВЛЕ неё; равная цена (своя 0,
+ * каталог первого визита 0, ярус по цене первого визита) или ярус дороже —
+ * struck null, чип остаётся без зачёркнутой цены.
  */
 export function pickerTierNote(a, people = []) {
     const s = (a && a.service) || {};
     if (s.__consult || !tierApplies(a && a.tier)) return null;
     const own = pickerOwnPrice(a, people);
     const cat = s.__base_price != null ? Number(s.__base_price) : Number(a.tier.base_price || 0);
-    return { tier: a.tier.tier, firstPrice: own !== null ? own : cat, price: pickerLinePrice(a, people) };
+    const firstPrice = own !== null ? own : cat;
+    const price = pickerLinePrice(a, people);
+    return { tier: a.tier.tier, firstPrice, price, struck: price < firstPrice ? firstPrice : null };
 }
 
 /**
