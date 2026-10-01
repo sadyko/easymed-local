@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { planObservations, outcome } from './match.js';
+import { planSeries, seriesOutcome, SERIES_WINDOW_MS } from './match.js';   // LIS_REAL_ANALYZERS_V1_SERIES
 
 const obs = (codeRaw, value = '1', status = 'F') => {
   const [code = '', name = '', system = ''] = codeRaw.split('^');
@@ -197,4 +198,101 @@ test('звёздочка рядом с текстом — значение, ка
     assert.deepEqual(p.repeats, [], 'звёздочки — не второе значение');
     assert.equal(outcome(p).status, 'applied');
   }
+});
+
+// ── LIS_REAL_ANALYZERS_V1_SERIES — по одному тесту в сообщении ──────────────
+// BS-200 шлёт тест в сообщении (руководство, с. 5); по правилу одного
+// сообщения каждое было бы «подтверждённая строка не пришла», и все легли бы в
+// лоток, хотя бланк в итоге полон. Бланк судится по серии: сообщения одного
+// заказа с того же прибора (той же модели) за SERIES_WINDOW_MS.
+// Провод BS-200: код — номер теста (OBX-3), подпись — имя (OBX-4).
+const bs = (n, label, value = '1', status = 'F') => ({ code: n, name: '', system: '', codeRaw: n, label, value, status, valueType: 'NM', unit: '', range: '', abnormal: '' });
+const BS_LINES = [line(1, 'Глюкоза', '2'), line(2, 'Мочевина', '3'), line(3, 'Креатинин', '4')];
+
+test('окно серии — 60 минут (решение владельца 2026-10-01, вопрос 4)', () => {
+  assert.equal(SERIES_WINDOW_MS, 60 * 60 * 1000);
+});
+
+test('серия: три сообщения по строке — после 1-го и 2-го «ждём остальные», после 3-го — принята', () => {
+  const m1 = [bs('2', 'GLU', '5.1')];
+  const m2 = [bs('3', 'UREA', '4.2')];
+  const m3 = [bs('4', 'CREA', '80')];
+
+  const s1 = planSeries([m1], BS_LINES);
+  assert.equal(s1.count, 1);
+  assert.deepEqual(s1.missing.map((m) => m.analyte.name), ['Мочевина', 'Креатинин']);
+  assert.deepEqual(seriesOutcome(s1), { status: 'unmapped', pending: true, detail: 'не пришли: Мочевина (3), Креатинин (4)' });
+
+  const s2 = planSeries([m1, m2], BS_LINES);
+  assert.deepEqual(seriesOutcome(s2), { status: 'unmapped', pending: true, detail: 'не пришли: Креатинин (4)' });
+
+  const s3 = planSeries([m1, m2, m3], BS_LINES);
+  assert.equal(s3.count, 3);
+  assert.deepEqual(s3.filled.map((a) => a.name), ['Глюкоза', 'Мочевина', 'Креатинин']);
+  assert.deepEqual(seriesOutcome(s3), { status: 'applied', pending: false, detail: 'серия из 3 сообщений принята' });
+});
+
+test('серия: «не использованы» — только самого последнего сообщения', () => {
+  const s = planSeries([[bs('2', 'GLU', '5.1'), bs('102', 'calctest1')], [bs('3', 'UREA', '4.2')], [bs('4', 'CREA', '80'), bs('103', 'calctest2')]], BS_LINES);
+  assert.deepEqual(seriesOutcome(s), { status: 'applied', pending: false, detail: 'серия из 3 сообщений принята; не использованы: 103 (calctest2)' });
+});
+
+test('серия: всё в одном сообщении (руководство, с. 23) — принято сразу, как правило одного сообщения', () => {
+  const one = [bs('2', 'GLU', '5.1'), bs('3', 'UREA', '4.2'), bs('4', 'CREA', '80')];
+  const s = planSeries([one], BS_LINES);
+  assert.deepEqual(seriesOutcome(s), { status: 'applied', pending: false, detail: '' });
+  assert.deepEqual(seriesOutcome(s), { ...outcome(planObservations(one, BS_LINES)), pending: false });
+});
+
+test('серия: повторный прогон с другим значением — «повтор: было …, в бланке …», в лотке без «ждём»', () => {
+  const s = planSeries([[bs('2', 'GLU', '5.1')], [bs('3', 'UREA', '4.2')], [bs('4', 'CREA', '80')], [bs('2', 'GLU', '5.4')]], BS_LINES);
+  assert.deepEqual(s.changed.map((c) => [c.analyte.name, c.was, c.now]), [['Глюкоза', ['5.1'], '5.4']]);
+  assert.deepEqual(seriesOutcome(s), { status: 'unmapped', pending: false, detail: 'повтор: 2 (GLU): было 5.1, в бланке 5.4' });
+});
+
+test('серия: то же значение ещё раз — повторная передача, не спор; серия чистая', () => {
+  const s = planSeries([[bs('2', 'GLU', '5.1')], [bs('3', 'UREA', '4.2')], [bs('2', 'GLU', '5.1')], [bs('4', 'CREA', '80')]], BS_LINES);
+  assert.deepEqual(s.changed, []);
+  assert.deepEqual(s.resent.map((r) => r.analyte.name), ['Глюкоза']);
+  assert.deepEqual(seriesOutcome(s), { status: 'applied', pending: false, detail: 'серия из 4 сообщений принята; повторная передача: 2 (GLU)' });
+});
+
+test('серия: неподтверждённый код во 2-м сообщении — серия не чистая и после последнего', () => {
+  const lines = [...BS_LINES, line(4, 'Белок', '9', 0)];
+  const s2 = planSeries([[bs('2', 'GLU', '5.1')], [bs('3', 'UREA', '4.2'), bs('9', 'TP', '70')]], lines);
+  assert.deepEqual(seriesOutcome(s2), { status: 'unmapped', pending: false, detail: 'не пришли: Креатинин (4); не подтверждено: 9 (TP)' });
+  const s3 = planSeries([[bs('2', 'GLU', '5.1')], [bs('3', 'UREA', '4.2'), bs('9', 'TP', '70')], [bs('4', 'CREA', '80')]], lines);
+  assert.deepEqual(seriesOutcome(s3), { status: 'unmapped', pending: false, detail: 'не подтверждено: 9 (TP)' });
+});
+
+test('серия: причина «не пришла» — из сообщения, где она была (статус P)', () => {
+  const s = planSeries([[bs('2', 'GLU', '5.1')], [bs('3', 'UREA', '4.2', 'P')]], BS_LINES);
+  assert.deepEqual(s.missing.map((m) => m.analyte.name + ':' + m.reason), ['Мочевина:статус P', 'Креатинин:']);
+  assert.equal(seriesOutcome(s).pending, true, 'причина «не пришли» — всё ещё ожидание');
+});
+
+test('серия: строка, которую серия «заполнила», но в бланке её нет, — «не пришла» (written)', () => {
+  // Значение пришло, когда код строки ещё не был подтверждён, и в бланк не
+  // легло; потом человек подтвердил код. Пересчёт по сырому сказал бы
+  // «заполнено» — бланк говорит иное, и верить надо бланку.
+  const s = planSeries([[bs('2', 'GLU', '5.1')], [bs('3', 'UREA', '4.2')], [bs('4', 'CREA', '80')]], BS_LINES,
+    { written: new Set(['Мочевина', 'Креатинин']) });
+  assert.deepEqual(s.missing.map((m) => m.analyte.name + ':' + m.reason), ['Глюкоза:в бланк не записано']);
+  assert.equal(seriesOutcome(s).status, 'unmapped');
+});
+
+test('серия: «серия из N» — по-русски: 2–4, 5–20, 21', () => {
+  const run = (n) => {
+    const msgs = Array.from({ length: n }, () => [bs('2', 'GLU', '5.1')]);
+    return seriesOutcome(planSeries(msgs, [line(1, 'Глюкоза', '2')])).detail;
+  };
+  assert.match(run(2), /^серия из 2 сообщений принята/);
+  assert.match(run(5), /^серия из 5 сообщений принята/);
+  assert.match(run(21), /^серия из 21 сообщения принята/);
+});
+
+test('журнал показывает подпись прибора рядом с кодом; у прежнего провода подписи нет — как раньше', () => {
+  const p = planObservations([bs('2', 'GLU', '5.1'), bs('102', 'calctest1')], [line(1, 'Глюкоза', '2'), line(2, 'Мочевина', '3')]);
+  assert.equal(outcome(p).detail, 'не пришли: Мочевина (3); не использованы: 102 (calctest1)');
+  assert.equal(outcome(planObservations([obs('ALT^^99MRC')], [])).detail, 'не использованы: ALT^^99MRC');
 });

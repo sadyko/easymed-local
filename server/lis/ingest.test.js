@@ -9,6 +9,7 @@ import { migrate } from '../db/migrate.js';
 import { ingestMessage, parseSampleId } from './ingest.js';
 import { ensureDevice } from './discover.js';   // LIS_DISCOVERY_FIX_V1 — провод целиком, как index.js
 import { parseMessage } from './hl7.js';
+import { SERIES_PENDING_PREFIX, resolveMessage } from './inbox.js';   // LIS_REAL_ANALYZERS_V1_SERIES
 
 const MSG = (sampleId, obx) => [
   'MSH|^~\\&|BC-5300|Mindray|||20260910143943||ORU^R01|42|P|2.3.1',
@@ -500,5 +501,261 @@ test('S5: панель у находки с исправленной модел�
   assert.equal(message(db).status, 'applied', 'раньше — unmatched: «кормится анализатором другой модели»');
   assert.equal(results(db).length, 2);
   assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_devices').get().c, 2, 'прибор сида и находка — дубля нет');
+  db.close();
+});
+
+// ── LIS_REAL_ANALYZERS_V1_SERIES — BS-200 шлёт по одному тесту в сообщении ──
+// Правило лотка владельца (2026-09-28) то же: проба принята, когда каждая
+// подтверждённая строка бланка получила значение. У прибора с
+// oneTestPerMessage «бланк заполнен» судится по СЕРИИ — сообщениям этого
+// заказа с прибора той же модели за 60 минут, а не по одному сообщению.
+// Пока не пришли только строки бланка — сообщение лежит в лотке с отметкой
+// «ждём» (SERIES_PENDING_PREFIX); дошла серия — ранние строки становятся
+// applied в той же транзакции. D4, D7 и запрет автовыдачи не меняются.
+// Фикстуры — руководство BS-200 (Host Interface Manual v1.2), с. 24–25.
+const BS = (n, name, value, { label = 'LAB-000123', status = 'F', id = '1' } = {}) => [
+  `MSH|^~\\&|Mindray|BS-200E|||20261001101500||ORU^R01|${id}|P|2.3.1||||0||ASCII|||`,
+  'PID|1|854||12|Tommy||19830719145307|F|A||||||||||||||||||||||',
+  `OBR|1|${label}|2|Mindray^BS-200E|Y||||||||||serum|||||||||||||||||||||||||||||||||`,
+  `OBX|1|NM|${n}|${name}|${value}|g/ml|-||||${status}|||||||`,
+].join('\r');
+
+/** Клиника с BS-200 (прибор 1, профиль mindray-bs-200) и биохимией из трёх строк. */
+function chem({ profile = 'mindray-bs-200', lines = [['GLU', 'Глюкоза', '2'], ['UREA', 'Мочевина', '3'], ['CALC', 'Расчётный', '102']], unconfirmed = [] } = {}) {
+  const db = openDb(':memory:');
+  migrate(db);
+  db.prepare("INSERT INTO patients (id, full_name) VALUES (3,'Иванов Иван')").run();
+  db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (55,3,'2026-10-01T09:00:00Z','scheduled')").run();
+  db.prepare("INSERT INTO services (id, name, is_lab) VALUES (9,'Биохимия',1)").run();
+  db.prepare("INSERT INTO visit_services (id, visit_id, service_id, status) VALUES (123,55,9,'in_progress')").run();
+  db.prepare("INSERT INTO lab_devices (id, name, profile, transport, port) VALUES (1,'BS-200',?,'mllp',2575)").run(profile);
+  db.prepare("INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (5,'Биохимия',9,1)").run();
+  lines.forEach(([code, name, dc], i) => {
+    db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed)
+                VALUES (5, ?, ?, '', ?, ?, ?)`).run(code, name, i + 1, dc, unconfirmed.includes(code) ? 0 : 1);
+  });
+  return db;
+}
+const rows = (db) => db.prepare('SELECT * FROM lab_device_messages ORDER BY id').all();
+const tray = (db) => db.prepare('SELECT * FROM lab_device_messages WHERE resolved_at IS NULL AND status <> \'applied\' ORDER BY id').all();
+const blank = (db) => Object.fromEntries(db.prepare('SELECT parameter, value FROM lab_results WHERE visit_service_id = 123').all().map((r) => [r.parameter, r.value]));
+const ago = (db, id, minutes) => db.prepare(`UPDATE lab_device_messages SET received_at = strftime('%Y-%m-%dT%H:%M:%SZ','now', ?) WHERE id = ?`).run('-' + minutes + ' minutes', id);
+
+test('серия BS-200: после 1-го и 2-го — «ждём остальные», после 3-го — все три applied, лоток пуст', () => {
+  const db = chem();
+  assert.equal(SERIES_PENDING_PREFIX, 'серия: ждём остальные строки — ');
+  ingestMessage(db, BS('2', 'test2', '5.000000'), '10.0.0.40', 1);
+  assert.equal(message(db).status, 'unmapped');
+  assert.equal(message(db).detail, SERIES_PENDING_PREFIX + 'не пришли: Мочевина (3), Расчётный (102)');
+  ingestMessage(db, BS('3', 'test3', '10.000000', { id: '2' }), '10.0.0.40', 1);
+  assert.equal(message(db).detail, SERIES_PENDING_PREFIX + 'не пришли: Расчётный (102)');
+  ingestMessage(db, BS('102', 'calctest1', '15.000000', { id: '3' }), '10.0.0.40', 1);
+
+  const all = rows(db);
+  assert.deepEqual(all.map((m) => m.status), ['applied', 'applied', 'applied']);
+  assert.equal(all[2].detail, 'серия из 3 сообщений принята');
+  assert.equal(all[0].detail, 'принято серией (сообщение № ' + all[2].id + ')');
+  assert.equal(all[1].detail, 'принято серией (сообщение № ' + all[2].id + ')');
+  assert.deepEqual(all.map((m) => m.resolved_at), [null, null, null], 'серия не «разрешает» строки — она их принимает');
+  assert.deepEqual(tray(db), [], 'в «Необработанных» пусто');
+  assert.deepEqual(blank(db), { 'Глюкоза': '5', 'Мочевина': '10', 'Расчётный': '15' });
+  assert.equal(order(db).status, 'resulted');
+  assert.ok(all.every((m) => m.raw.startsWith('MSH|^~\\&|Mindray|BS-200E')), 'сырое не трогается (инвариант 2)');
+  db.close();
+});
+
+test('серия: ИНВАРИАНТ 1 — дошедшая серия не выдаёт результат', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  for (const r of db.prepare('SELECT * FROM lab_results WHERE visit_service_id = 123').all()) {
+    assert.equal(r.verified_at, null);
+    assert.equal(r.verified_by, null);
+  }
+  assert.notEqual(order(db).status, 'completed');
+  db.close();
+});
+
+test('серия: тест, которого нет в панели, — unmapped в лотке и серию не портит', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  ingestMessage(db, BS('77', 'other', '1'), '10.0.0.40', 1);
+  const stray = message(db);
+  assert.equal(stray.status, 'unmapped');
+  assert.ok(!stray.detail.startsWith(SERIES_PENDING_PREFIX), 'ничего не легло — правило одного сообщения, не «ждём»');
+  assert.match(stray.detail, /не использованы: 77 \(other\)/);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  assert.equal(message(db).detail, 'серия из 3 сообщений принята', 'чужой тест в серию не вошёл');
+  assert.deepEqual(tray(db).map((m) => m.id), [stray.id], 'в лотке — только чужой тест: его можно «Привязать»');
+  db.close();
+});
+
+test('серия: повторный прогон с другим значением — «повтор», в бланке последнее', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5.1'), '10.0.0.40', 1);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  ingestMessage(db, BS('2', 'test2', '5.4'), '10.0.0.40', 1);
+  assert.equal(message(db).status, 'unmapped');
+  assert.equal(message(db).detail, 'повтор: 2 (test2): было 5.1, в бланке 5.4');
+  assert.equal(blank(db)['Глюкоза'], '5.4', 'D6: каждое сообщение пишет своё — в бланке последнее');
+  assert.deepEqual(rows(db).slice(0, 3).map((m) => m.status), ['applied', 'applied', 'applied'], 'принятые раньше не трогаются');
+  db.close();
+});
+
+test('серия: то же значение ещё раз (прибор не получил ACK) — не повтор, серия чистая', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5.1'), '10.0.0.40', 1);
+  ingestMessage(db, BS('2', 'test2', '5.100000'), '10.0.0.40', 1);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  assert.equal(message(db).status, 'applied');
+  assert.equal(message(db).detail, 'серия из 4 сообщений принята; повторная передача: 2 (test2)');
+  assert.deepEqual(tray(db), []);
+  db.close();
+});
+
+test('серия: неподтверждённый код во 2-м сообщении — серия не чистая, строки в лотке (D4)', () => {
+  const db = chem({ unconfirmed: ['UREA'] });
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  assert.equal(message(db).status, 'unmapped');
+  // Из сообщения ничего не легло — правило одного сообщения, и в серию оно не
+  // входит (спецификация, раздел 3, п. 2): лежит в лотке само по себе.
+  assert.equal(message(db).detail, 'не пришли: Глюкоза (2), Расчётный (102); не подтверждено: 3 (test3)');
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  assert.equal(message(db).status, 'applied', 'подтверждённые строки бланка — Глюкоза и Расчётный — пришли');
+  assert.equal(blank(db)['Мочевина'], undefined, 'D4: неподтверждённое не применяется');
+  assert.equal(tray(db).length, 1, 'сообщение с неподтверждённым кодом — в лотке');
+  db.close();
+});
+
+test('серия: неподтверждённый код вместе с подтверждённым — серия не чистая до правки', () => {
+  const db = chem({ lines: [['GLU', 'Глюкоза', '2'], ['UREA', 'Мочевина', '3'], ['TP', 'Белок', '9']], unconfirmed: ['TP'] });
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  const raw2 = BS('3', 'test3', '10').replace(/\rOBX.*$/, '\rOBX|1|NM|3|test3|10|g/ml|-||||F\rOBX|2|NM|9|TP|70|g/l|-||||F');
+  ingestMessage(db, raw2, '10.0.0.40', 1);
+  assert.equal(message(db).status, 'unmapped');
+  assert.equal(message(db).detail, 'не подтверждено: 9 (TP)', 'не «ждём»: значение для неподтверждённой строки — повод для человека');
+  assert.ok(rows(db)[0].detail.startsWith(SERIES_PENDING_PREFIX), 'ранняя строка не принята');
+  assert.equal(rows(db)[0].status, 'unmapped');
+  db.close();
+});
+
+test('серия: сообщение через 61 минуту — новая серия', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  for (const m of rows(db)) ago(db, m.id, 61);
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  assert.equal(message(db).detail, SERIES_PENDING_PREFIX + 'не пришли: Глюкоза (2), Мочевина (3)');
+  assert.deepEqual(rows(db).slice(0, 2).map((m) => m.status), ['unmapped', 'unmapped'], 'старые строки серии не приняты задним числом');
+  db.close();
+});
+
+test('серия: в пределах 60 минут — та же серия', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  for (const m of rows(db)) ago(db, m.id, 59);
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  assert.equal(message(db).status, 'applied');
+  db.close();
+});
+
+test('серия: строка, «Отклонённая» человеком, не переводится в applied', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  const first = message(db);
+  resolveMessage(db, first.id);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  assert.equal(message(db).status, 'applied', 'значение отклонённой строки в бланке — серия полна');
+  const again = db.prepare('SELECT * FROM lab_device_messages WHERE id = ?').get(first.id);
+  assert.equal(again.status, 'unmapped', 'строку тронул человек — серия её не трогает');
+  assert.equal(again.detail, first.detail);
+  db.close();
+});
+
+test('серия: всё в одном сообщении (руководство, с. 23) — applied сразу', () => {
+  const db = chem();
+  const raw = BS('2', 'test2', '5').replace(/\rOBX.*$/, '\rOBX|1|NM|2|test2|5|g/ml|-||||F\rOBX|2|NM|3|test3|10|g/ml|-||||F\rOBX|3|NM|102|calctest1|15|g/ml|-||||F');
+  ingestMessage(db, raw, '10.0.0.40', 1);
+  assert.equal(message(db).status, 'applied');
+  assert.equal(message(db).detail, '');
+  db.close();
+});
+
+test('серия: D7 — по выданному бланку superseded, серия не считается', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  db.prepare("UPDATE lab_results SET verified_by = NULL, verified_at = '2026-10-01T10:00:00Z' WHERE visit_service_id = 123").run();
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  assert.equal(message(db).status, 'superseded');
+  assert.equal(blank(db)['Мочевина'], undefined, 'выданный отчёт пациента не переписывается');
+  assert.ok(rows(db)[0].detail.startsWith(SERIES_PENDING_PREFIX), 'ранняя строка серии не принята выданным');
+  db.close();
+});
+
+test('серия: сообщения второго прибора той же модели — в той же серии', () => {
+  const db = chem();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'BS-200 (2)','mindray-bs-200')").run();
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.41', 2);
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  assert.deepEqual(rows(db).map((m) => m.status), ['applied', 'applied', 'applied']);
+  db.close();
+});
+
+test('серия: строка, остановленная до бланка («панель не привязана»), в серию не входит', () => {
+  const db = chem();
+  db.prepare('UPDATE lab_panels SET device_id = NULL WHERE id = 5').run();
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  assert.match(message(db).detail, /не привязана к анализатору/);
+  db.prepare('UPDATE lab_panels SET device_id = 1 WHERE id = 5').run();
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  assert.equal(message(db).detail, SERIES_PENDING_PREFIX + 'не пришли: Глюкоза (2)', 'значение первого сообщения в бланк не легло');
+  assert.equal(blank(db)['Глюкоза'], undefined);
+  db.close();
+});
+
+test('серия: строка, заполненная по пересчёту, но не записанная в бланк, — «не пришла»', () => {
+  // Глюкоза пришла, когда её код ещё не был подтверждён, и в бланк не легла
+  // (D4); потом человек подтвердил код. Серия верит бланку, а не пересчёту.
+  const db = chem({ unconfirmed: ['GLU'] });
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  db.prepare("UPDATE lab_panel_analytes SET device_code_confirmed = 1 WHERE code = 'GLU'").run();
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  assert.equal(message(db).status, 'unmapped');
+  assert.match(message(db).detail, /не пришли: Глюкоза \(2, в бланк не записано\)/);
+  db.close();
+});
+
+test('серия: ручная привязка — новая строка входит в серию и, принятая серией, помнит «привязано вручную»', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5', { label: 'LAB-999999' }), '10.0.0.40', 1);
+  assert.equal(message(db).status, 'unmatched');
+  ingestMessage(db, message(db).raw, '10.0.0.40', 1, { touch: false, sampleIdOverride: 123 });
+  const manual = message(db);
+  assert.equal(manual.detail, SERIES_PENDING_PREFIX + 'не пришли: Мочевина (3), Расчётный (102); привязано вручную');
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  const after = db.prepare('SELECT * FROM lab_device_messages WHERE id = ?').get(manual.id);
+  assert.equal(after.status, 'applied');
+  assert.equal(after.detail, 'принято серией (сообщение № ' + message(db).id + '); привязано вручную');
+  db.close();
+});
+
+test('прибор без oneTestPerMessage (BC-5300): правило прежнее — по сообщению, без «ждём»', () => {
+  const db = fresh();
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1')]), '127.0.0.1', 1);
+  assert.equal(message(db).status, 'unmapped');
+  assert.equal(message(db).detail, 'не пришли: Гемоглобин (HGB)');
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'HGB', '142')]), '127.0.0.1', 1);
+  assert.equal(message(db).detail, 'не пришли: Лейкоциты (WBC)', 'серии нет: каждое сообщение — само по себе');
   db.close();
 });
