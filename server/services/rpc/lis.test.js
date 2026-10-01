@@ -713,20 +713,25 @@ test('R2 п. 2: «Привязать» ждущую строку к другом
 });
 
 test('R2 п. 2: выданное или изменённое после прибора значение не снимается — сказано в журнале', () => {
+  // Ревью R3, п. 8 — «выдан» — по заказу: выдана глюкоза — не снимается и
+  // мочевина. «Изменено после прибора» — на невыданном заказе (второй случай).
   const db = reattachClinic();
   ingestMessage(db, BS2('LAB-000123', '2', 'GLU', '5.5'), '10.0.0.40', 1);
   const glu = newest(db);
-  ingestMessage(db, BS2('LAB-000123', '3', 'UREA', '10'), '10.0.0.40', 1);
-  const urea = newest(db);
   db.prepare("UPDATE lab_results SET verified_at = '2026-10-01T08:00:00Z' WHERE visit_service_id = 123 AND parameter = 'Глюкоза'").run();
-  db.prepare("UPDATE lab_results SET value = '11' WHERE visit_service_id = 123 AND parameter = 'Мочевина'").run();
-
   const a = lisMessageAttach(db, { id: glu.id, visit_service_id: 124 }, LAB);
   assert.match(a.detail, /оставлено в бланке заказа № 123: Глюкоза \(выдан\)/);
-  const b = lisMessageAttach(db, { id: urea.id, visit_service_id: 124 }, LAB);
-  assert.match(b.detail, /оставлено в бланке заказа № 123: Мочевина \(изменено после прибора\)/);
-  assert.deepEqual(formOf(db, 123), { 'Глюкоза': '5.5', 'Мочевина': '11' });
+  assert.deepEqual(formOf(db, 123), { 'Глюкоза': '5.5' });
   db.close();
+
+  const db2 = reattachClinic();
+  ingestMessage(db2, BS2('LAB-000123', '3', 'UREA', '10'), '10.0.0.40', 1);
+  const urea = newest(db2);
+  db2.prepare("UPDATE lab_results SET value = '11' WHERE visit_service_id = 123 AND parameter = 'Мочевина'").run();
+  const b = lisMessageAttach(db2, { id: urea.id, visit_service_id: 124 }, LAB);
+  assert.match(b.detail, /оставлено в бланке заказа № 123: Мочевина \(изменено после прибора\)/);
+  assert.deepEqual(formOf(db2, 123), { 'Мочевина': '11' });
+  db2.close();
 });
 
 test('R2 п. 2: то же значение пришло в заказ 123 и другим сообщением — не снимается', () => {
@@ -760,5 +765,105 @@ test('R2 п. 13: lis_message_dismiss — номер только целое бо
   }
   assert.equal(db.prepare('SELECT resolved_at FROM lab_device_messages WHERE id = 1').get().resolved_at, null);
   assert.equal(lisMessageDismiss(db, { id: ' 1 ' }, LAB).ok, true);
+  db.close();
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R3 ───────────────────────────────────────
+
+test('R3 п. 2: lis_profiles отдаёт codesPerInstrument — экран сбрасывает подтверждения при смене прибора', () => {
+  const db = fresh();
+  const all = lisProfiles(db, {}, LAB);
+  assert.equal(all.find((p) => p.key === 'mindray-bs-200').codesPerInstrument, true);
+  assert.ok(all.filter((p) => p.key !== 'mindray-bs-200').every((p) => p.codesPerInstrument === false));
+  db.close();
+});
+
+// П. 1 — проба второго BS-200 в лотке; лаборатория удаляет его строку («Удалить»
+// ставит device_id = NULL у его сообщений) и жмёт «Привязать»: раньше прибор
+// становился неизвестным, и проверка «своя панель» пропускалась — креатинин
+// второго прибора ложился в «Глюкозу».
+test('R3 п. 1: удалили строку второго BS-200 и «Привязали» его пробу — в бланк не легло, лоток с причиной', async () => {
+  const db = reattachClinic();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'BS-200 (2)','mindray-bs-200')").run();
+  ingestMessage(db, BS2('LAB-000123', '2', 'CREA', '88'), '10.0.0.41', 2);
+  const row = newest(db);
+  assert.equal(row.status, 'unmatched');
+  await withLisOff(() => lisDeviceDelete(db, { id: 2 }, LAB));
+  assert.equal(db.prepare('SELECT device_id FROM lab_device_messages WHERE id = ?').get(row.id).device_id, null);
+  const out = lisMessageAttach(db, { id: row.id, visit_service_id: 123 }, LAB);
+  assert.equal(out.status, 'unmatched');
+  assert.match(out.detail, /прибор этого сообщения неизвестен/);
+  assert.deepEqual(formOf(db, 123), {});
+  db.close();
+});
+
+// П. 7 — снять значение из первого заказа можно, только если второй его
+// принял: иначе (выдан, нет такого заказа — опечатка) привязка откатывается
+// целиком, и первый бланк не тронут.
+test('R3 п. 7: второй заказ выдан или номер с опечаткой — привязка откатывается, первый бланк и строка лотка не тронуты', () => {
+  const db = reattachClinic();
+  ingestMessage(db, BS2('LAB-000123', '2', 'GLU', '5.5'), '10.0.0.40', 1);
+  const glu = newest(db);
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, source, verified_at) VALUES (124, 'Мочевина', '9', 'manual', '2026-10-01T08:00:00Z')").run();
+  const count = () => db.prepare('SELECT COUNT(*) c FROM lab_device_messages').get().c;
+  for (const target of [124, 999]) {
+    const before = count();
+    assert.throws(() => lisMessageAttach(db, { id: glu.id, visit_service_id: target }, LAB), (e) => {
+      assert.equal(e.status, 409, String(target));
+      assert.equal(e.message, 'Привязка не сделана: этот заказ пробу не принял — значения в прежнем заказе не тронуты, строка осталась в лотке. Проверьте номер заказа.');
+      return true;
+    });
+    assert.equal(count(), before, target + ': новой строки нет');
+    assert.deepEqual(formOf(db, 123), { 'Глюкоза': '5.5' }, target + ': первый бланк не тронут');
+    const again = db.prepare('SELECT * FROM lab_device_messages WHERE id = ?').get(glu.id);
+    assert.deepEqual([again.resolved_at, again.visit_service_id, again.detail], [null, 123, glu.detail], target + ': строка лотка прежняя');
+  }
+  db.close();
+});
+
+// П. 8 — «выдан» — по заказу, как у правила выдачи (D7), а не по строке.
+test('R3 п. 8: в первом заказе выдан другой показатель — заказ выдан, значение не снимается', () => {
+  const db = reattachClinic();
+  ingestMessage(db, BS2('LAB-000123', '2', 'GLU', '5.5'), '10.0.0.40', 1);
+  const glu = newest(db);
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, source, verified_at) VALUES (123, 'Мочевина', '9', 'manual', '2026-10-01T08:00:00Z')").run();
+  const out = lisMessageAttach(db, { id: glu.id, visit_service_id: 124 }, LAB);
+  assert.match(out.detail, /оставлено в бланке заказа № 123: Глюкоза \(выдан\)/);
+  assert.equal(formOf(db, 123)['Глюкоза'], '5.5');
+  db.close();
+});
+
+// П. 9 — после снятия бланк первого заказа пуст: заказ возвращается в работу
+// лаборатории, а не стоит «результаты внесены» с пустым бланком; исходная
+// строка лотка уходит с первого заказа — иначе касса не могла снять или
+// отменить его строку («по услуге уже пришли данные анализатора»), а лента
+// показывала имя его пациента.
+test('R3 п. 9: бланк первого заказа опустел — заказ снова «ждёт забора» («проба взята», если забор отмечен); строка лотка с него снята', () => {
+  for (const [collected, want] of [[null, 'queued'], ['2026-10-01T07:00:00Z', 'collected']]) {
+    const db = reattachClinic();
+    db.prepare('UPDATE visit_services SET sample_collected_at = ? WHERE id = 123').run(collected);
+    ingestMessage(db, BS2('LAB-000123', '2', 'GLU', '5.5'), '10.0.0.40', 1);
+    const glu = newest(db);
+    assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = 123').get().status, 'resulted');
+    lisMessageAttach(db, { id: glu.id, visit_service_id: 124 }, LAB);
+    assert.deepEqual(formOf(db, 123), {});
+    assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = 123').get().status, want);
+    assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_device_messages WHERE visit_service_id = 123').get().c, 0,
+      'след прибора на заказе 123 не держит кассу');
+    const orig = db.prepare('SELECT * FROM lab_device_messages WHERE id = ?').get(glu.id);
+    assert.match(orig.detail, /перепривязано к заказу № 124 \(был заказ № 123\)/, 'история читается');
+    assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = 124').get().status, 'resulted');
+    db.close();
+  }
+});
+
+test('R3 п. 9: в первом бланке остались другие значения — статус не меняется', () => {
+  const db = reattachClinic();
+  ingestMessage(db, BS2('LAB-000123', '2', 'GLU', '5.5'), '10.0.0.40', 1);
+  const glu = newest(db);
+  ingestMessage(db, BS2('LAB-000123', '3', 'UREA', '10'), '10.0.0.40', 1);
+  lisMessageAttach(db, { id: glu.id, visit_service_id: 124 }, LAB);
+  assert.deepEqual(formOf(db, 123), { 'Мочевина': '10' });
+  assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = 123').get().status, 'resulted');
   db.close();
 });

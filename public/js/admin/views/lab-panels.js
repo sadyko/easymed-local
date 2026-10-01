@@ -50,7 +50,7 @@ const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагнос
 //      lab-section role (LAB_PANELS_BY_SECTION_V1).
 // v8 = one shared page head for queue+panels; marker moved off-screen into
 //      the data-attribute above; queue filter chips translate label-then-count.
-export const LAB_BUILD = 'lab-v18';   // LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1); v17 — одно поле прибора под двумя именами (LIS_DISCOVERY_FIX_V1); v18 — «12 · GLU», подсказка «коды появятся», типовые BC-780 по соседним моделям (LIS_REAL_ANALYZERS_V1)
+export const LAB_BUILD = 'lab-v19';   // v19 — смена BS-200 у панели снимает подтверждения (LIS_REAL_ANALYZERS_V1, ревью R3) · LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1); v17 — одно поле прибора под двумя именами (LIS_DISCOVERY_FIX_V1); v18 — «12 · GLU», подсказка «коды появятся», типовые BC-780 по соседним моделям (LIS_REAL_ANALYZERS_V1)
 
 // LIS_REAL_ANALYZERS_V1 — у модели нет типового списка (BS-200, A1000), а прибор ещё ничего не присылал.
 const NO_DEVICE_CODES_HINT = 'Коды появятся, когда анализатор пришлёт первую пробу; номер теста — как в настройках тестов прибора. Пока код можно вписать руками.';
@@ -239,6 +239,7 @@ export async function mountLabPanels(container) {
         // несохранённое имя появлялось бы в списке слева и переживало бы уход
         // на другую панель — показатели-то перечитываются из базы.
         state.selected = p ? { ...p } : p;
+        state.reconfirmModel = null;   // LIS_REAL_ANALYZERS_V1 (ревью R3, п. 2) — сказ о снятых подтверждениях — только у своей панели
         paintList();
         if (!p) { state.rows = []; paintEditor(); return; }
         if (p.id) {
@@ -422,7 +423,25 @@ export async function mountLabPanels(container) {
                 (d.enabled ? d.name : trf('{name} (выключен)', { name: d.name })))));
         // Смена прибора перерисовывает таблицу: у другого прибора другие каналы,
         // и прежние подсказки к ним не относятся.
-        devSel.onchange = () => { p.device_id = Number(devSel.value) || null; suggestMapping(p.device_id); paintEditor(); loadDeviceCodes(p.device_id); };
+        // LIS_REAL_ANALYZERS_V1 (ревью R3, п. 2) — у BS-200 номер теста свой у
+        // каждого прибора: панель перепривязали с BS-200 или на BS-200 —
+        // подтверждения полей анализатора сняты (база делает то же триггером
+        // мигр. 233), и сохранить панель можно, только подтвердив каждое заново.
+        devSel.onchange = () => {
+            const was = p.device_id;
+            p.device_id = Number(devSel.value) || null;
+            const perInstrument = (id) => {
+                const d = id ? state.devices.find(x => x.id === Number(id)) : null;
+                const pr = d && state.profiles.find(x => x.key === d.profile);
+                return pr && pr.codesPerInstrument ? pr : null;
+            };
+            const pr = Number(was || 0) !== Number(p.device_id || 0) && (perInstrument(was) || perInstrument(p.device_id));
+            if (pr) {
+                for (const r of state.rows) if ((r.device_code || '').trim()) r.device_code_confirmed = 0;
+                state.reconfirmModel = pr.model;
+            }
+            suggestMapping(p.device_id); paintEditor(); loadDeviceCodes(p.device_id);
+        };
 
         // LIS_MINDRAY_CODES_V1 (ревью R3) — поля шапки пишут в панель p СРАЗУ.
         // Редактор перерисовывается целиком — пришли коды прибора, добавлена
@@ -543,10 +562,14 @@ export async function mountLabPanels(container) {
                 // Раньше она считала все приборы и при одной ненажатой находке
                 // говорила «Выберите прибор», а выбрать было нечего.
                 fld(tr('Анализатор'), devSel,
+                    // LIS_REAL_ANALYZERS_V1 (ревью R3, п. 2) — прибор панели
+                    // сменился у BS-200: сказать, что подтверждения сняты.
+                    state.reconfirmModel
+                        ? trf('Анализатор панели сменился: у {model} номера тестов свои у каждого прибора — подтверждения полей анализатора сняты, подтвердите каждое заново.', { model: state.reconfirmModel })
                     // LIS_REAL_ANALYZERS_V1 — у BS-200 и A1000 типового списка
                     // нет (номера тестов задаёт клиника): пока прибор ничего не
                     // присылал, сказать, откуда возьмутся коды.
-                    devChoices.length && deviceCodesEmpty()
+                    : devChoices.length && deviceCodesEmpty()
                         ? tr(NO_DEVICE_CODES_HINT)
                         : devChoices.length
                         ? tr('Выберите прибор — тогда у каждого показателя можно указать, какое поле анализатора его заполняет.')

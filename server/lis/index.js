@@ -57,24 +57,32 @@ const isoNow = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
  * уже лежит в лотке за последний час. Кадр в 5 МБ без конца ходит по кругу:
  * AE, обрыв, переподключение, снова — и раньше каждый круг писал строку лотка.
  * Теперь одна в час: прибор по-прежнему каждый раз получает отказ.
+ *
+ * Ревью R3, п. 4 — «такая же» — та же ПРОБА: тот же номер пробы, а без номера
+ * — то же начало сообщения (первые SAME_HEAD_CHARS знаков; в нём MSH с номером
+ * сообщения). Ключ «прибор + вид строки» гасил разные пробы: второй брошенный
+ * кадр другой пробы за час терялся.
  */
 const SAME_ROW_WINDOW_SECONDS = 60 * 60;
-function recentRow(db, { deviceId, peer, prefix }) {
+const SAME_HEAD_CHARS = 512;
+function recentRow(db, { deviceId, peer, prefix, sampleId, head }) {
   return !!db.prepare(`SELECT 1 FROM lab_device_messages
                         WHERE status = 'rejected' AND substr(detail, 1, ?) = ?
                           AND received_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)
                           AND (CASE WHEN ? IS NOT NULL THEN device_id = ? ELSE device_id IS NULL AND peer = ? END)
+                          AND (CASE WHEN ? <> '' THEN sample_id = ? ELSE COALESCE(sample_id, '') = '' AND substr(raw, 1, ?) = ? END)
                         LIMIT 1`)
-    .get(prefix.length, prefix, '-' + SAME_ROW_WINDOW_SECONDS + ' seconds', deviceId, deviceId, peer || '');
+    .get(prefix.length, prefix, '-' + SAME_ROW_WINDOW_SECONDS + ' seconds', deviceId, deviceId, peer || '',
+      sampleId || '', sampleId || '', SAME_HEAD_CHARS, String(head || '').slice(0, SAME_HEAD_CHARS));
 }
 
 function recordOversize(db, { deviceId = null, peer, head, limit }) {
-  if (recentRow(db, { deviceId, peer, prefix: OVERSIZE_DETAIL_PREFIX })) return;   // ревью R2, п. 10б
   // LIS_REAL_ANALYZERS_V1_SAMPLE — номер той же pickSampleId с проводом
   // default: LAB- узнаётся в OBR-2 и OBR-3, голые цифры — только OBR-3.
   // Начало не разобралось — без номера (readResult не бросает).
   // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 1) — по всем OBR начала, как у приёма.
   const sampleId = pickMessageSample(readResult(head, 'default').obrs, 'default').sampleId;
+  if (recentRow(db, { deviceId, peer, prefix: OVERSIZE_DETAIL_PREFIX, sampleId, head })) return;   // ревью R2, п. 10б; R3, п. 4
   const size = limit >= 1024 * 1024 ? (limit / (1024 * 1024)) + ' МБ' : Math.round(limit / 1024) + ' КБ';
   // LIS_DISCOVERY_FIX_V1 — начало строки общее с привязкой (rpc/lis.js):
   // по нему она отказывается привязывать обрезанное. Текст прежний.
@@ -90,8 +98,8 @@ function recordOversize(db, { deviceId = null, peer, head, limit }) {
  * чаще одной в час с прибора (адреса), как и переросшее.
  */
 function recordAbandoned(db, { deviceId = null, peer, head }) {
-  if (recentRow(db, { deviceId, peer, prefix: ABANDONED_DETAIL_PREFIX })) return;
   const sampleId = pickMessageSample(readResult(head, 'default').obrs, 'default').sampleId;
+  if (recentRow(db, { deviceId, peer, prefix: ABANDONED_DETAIL_PREFIX, sampleId, head })) return;   // ревью R3, п. 4
   recordMessage(db, { deviceId, peer, raw: head, sampleId, status: 'rejected',
     detail: ABANDONED_DETAIL_PREFIX + 'прибор начал новый кадр, не закончив этот; в лотке только его начало — если проба не дошла, повторите её на приборе' });
 }
@@ -157,26 +165,42 @@ function selfHost(host) {
  * назвал себя (MSH-3/4), дописывается в строку, если она этого ещё не знает, —
  * тогда, если прибор позже станет звонить сам, discover.js найдёт ту же строку.
  */
-function startDialers(db, devices, lisPorts, log) {
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R3, п. 11) — кому звонить: чистое решение по
+ * строкам приборов, без единого соединения. Адрес приводится к одному виду
+ * (canonicalIp: без «::ffff:», IPv6 кратко, БЕЗ ЗОНЫ) только для проверки,
+ * петли на себя и ключа дубля (ревью R2, п. 7); звонят по адресу строки как
+ * есть — с зоной («fe80::1%eth0»): без неё ссылочный адрес IPv6 не набрать.
+ * @returns {Array<{device:object, device_id:number, host:string, port:number|null, code:string|null}>}
+ *   host — адрес строки (по нему и звонок); code — null или bad_address / self / duplicate.
+ */
+export function dialPlan(devices, lisPorts) {
   const mine = selfPorts(lisPorts);
   const taken = new Set();
+  const out = [];
   for (const d of [...devices].sort((a, b) => a.id - b.id)) {
     const raw = String(d.host == null ? '' : d.host).trim();
     const port = d.port == null || d.port === '' ? NaN : Number(d.port);
-    // Ревью R2, п. 7 — адрес к одному виду до проверки, сравнения и звонка
-    // (isLocalIp — прежний, общий с экраном: lab-devices-lists.js).
-    const host = canonicalIp(raw);
+    // (isLocalIp — прежний, общий с экраном: lab-devices-lists.js.)
+    const key = canonicalIp(raw);
     let code = null;
-    if (!isLocalIp(host) || !Number.isInteger(port) || port < 1 || port > 65535) code = 'bad_address';
-    else if (selfHost(host) && mine.includes(port)) code = 'self';
-    else if (taken.has(host + '|' + port)) code = 'duplicate';
+    if (!isLocalIp(key) || !Number.isInteger(port) || port < 1 || port > 65535) code = 'bad_address';
+    else if (selfHost(key) && mine.includes(port)) code = 'self';
+    else if (taken.has(key + '|' + port)) code = 'duplicate';
+    if (!code) taken.add(key + '|' + port);
+    out.push({ device: d, device_id: d.id, host: raw, port: Number.isInteger(port) ? port : null, code });
+  }
+  return out;
+}
+
+function startDialers(db, devices, lisPorts, log) {
+  for (const { device: d, host, port, code } of dialPlan(devices, lisPorts)) {
     if (code) {
-      dialRefused.push({ device_id: d.id, host, port: Number.isInteger(port) ? port : null, state: 'off',
+      dialRefused.push({ device_id: d.id, host, port, state: 'off',
         since: isoNow(), last_rx_at: null, code, retry_at: null });
-      log(`LIS: «${d.name}» — Easy-Med не подключается к ${host || '(адрес пуст)'}:${Number.isInteger(port) ? port : '(порт пуст)'} (${code})`);
+      log(`LIS: «${d.name}» — Easy-Med не подключается к ${host || '(адрес пуст)'}:${port == null ? '(порт пуст)' : port} (${code})`);
       continue;
     }
-    taken.add(host + '|' + port);
     const deviceId = d.id;
     // Строку могли удалить, пока кадр шёл: сообщение всё равно сохраняется
     // (инвариант 2), но без прибора — иначе его не пустил бы внешний ключ.

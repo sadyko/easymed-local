@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { planObservations, outcome } from './match.js';
 import { planSeries, seriesOutcome, SERIES_WINDOW_MS } from './match.js';   // LIS_REAL_ANALYZERS_V1_SERIES
 import { changeText, SERIES_MAX_MESSAGES } from './match.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, пп. 6 и 9
+import { sameValue, SERIES_FORM_MAX_AGE_MS } from './match.js';   // LIS_REAL_ANALYZERS_V1 — ревью R3, пп. 6 и 10
 
 const obs = (codeRaw, value = '1', status = 'F') => {
   const [code = '', name = '', system = ''] = codeRaw.split('^');
@@ -332,4 +333,26 @@ test('R2 п. 5: changeText — строка спора, по которой уз
 
 test('R2 п. 9: потолок серии — 200 сообщений', () => {
   assert.equal(SERIES_MAX_MESSAGES, 200);
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R3, п. 10 ────────────────────────────────
+// «390.10» и «390.1» — одно число: повторная передача, а не «повтор». Нули
+// срезаются только для сравнения; в бланк значение идёт как пришло.
+test('R3 п. 10: числа сравниваются без хвостовых нулей — «390.10» = «390.1», «5.0» = «5»; текст — как есть', () => {
+  const lines = [line(1, 'Витамин B12', '206')];
+  const ab = (v) => ({ code: '206', name: '', system: '', codeRaw: '206', label: '', value: v, status: 'F', valueType: /\d/.test(v) ? 'NM' : 'ST', unit: '', range: '', abnormal: '' });
+  for (const [was, now] of [['390.10', '390.1'], ['5.0', '5'], ['5', '5.000'], ['-0.50', '-0.5']]) {
+    const s = planSeries([[ab(now)]], lines, { written: new Set(['Витамин B12']), before: new Map([['Витамин B12', was]]) });
+    assert.deepEqual([s.changed.length, s.resent.length], [0, 1], was + ' → ' + now);
+  }
+  for (const [was, now] of [['390.1', '390.11'], ['50', '5'], ['Positive', 'positive'], ['<0.10', '<0.1']]) {
+    const s = planSeries([[ab(now)]], lines, { written: new Set(['Витамин B12']), before: new Map([['Витамин B12', was]]) });
+    assert.equal(s.changed.length, 1, was + ' → ' + now);
+  }
+  assert.equal(sameValue('390.10', '390.1'), true);
+  assert.equal(sameValue('390.10', '390.11'), false);
+});
+
+test('R3 п. 6: значения прибора в бланке старше суток бланк не дополняют — постоянная 24 ч', () => {
+  assert.equal(SERIES_FORM_MAX_AGE_MS, 24 * 60 * 60 * 1000);
 });

@@ -25,6 +25,7 @@ import { startLisListeners, stopLisListeners, listenerStatus, selfPorts } from '
 import { VT, FS } from './mllp.js';
 import { SERIES_PENDING_PREFIX } from './inbox.js';
 import { lisRecent, lisServiceCounts, lisDeviceDelete, lisListeners } from '../services/rpc/lis.js';
+import { lisMessageAttach } from '../services/rpc/lis.js';   // LIS_REAL_ANALYZERS_V1 — ревью R3, п. 3
 
 const LAB = { role: 'lab' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -436,5 +437,58 @@ test('BC-780, прибор ждёт звонка (dial): Easy-Med подключ
       assert.equal(dialing(), undefined);
       assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_device_messages WHERE device_id IS NULL').get().c, 2, 'сообщения остались целиком, отвязаны');
     } finally { await fake.close(); }
+  });
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R3, п. 3: BS-200 сменил адрес (DHCP) ─────
+// Клиника с одним BS-200: компьютер прибора получил новый адрес. Easy-Med
+// видит новый прибор (новая строка — адрес другой), панель биохимии привязана
+// к старой строке, а у BS-200 номер теста свой у каждого прибора — пробы идут в
+// «Необработанные» и говорят, что делать: в «Панелях» выбрать для панели новую
+// строку и подтвердить номера тестов заново (смена прибора панели их снимает —
+// триггер мигр. 233), потом «Привязать» ждущие строки.
+test('BS-200 сменил адрес: лоток с понятной причиной → панель на новую строку → номера подтверждены заново → «Привязать» → принято', async () => {
+  await withClinic(async (db, lisPort) => {
+    await startLisListeners(db, { log: () => {} });
+    const before = await analyzer(lisPort, '127.0.0.2');
+    let oldDev;
+    try {
+      bsId = 100;
+      await before.send(BS_QRY('LAB-000001'));
+      oldDev = db.prepare("SELECT * FROM lab_devices WHERE host = '127.0.0.2'").get();
+      db.prepare('UPDATE lab_devices SET added = 1 WHERE id = ?').run(oldDev.id);
+      bindPanel(db, { id: 5, serviceId: 9, deviceId: oldDev.id, name: 'Биохимия', lines: [
+        ['GLU', 'Глюкоза', 'ммоль/л', '2'], ['UREA', 'Мочевина', 'ммоль/л', '3'], ['CALC', 'Расчётный', '', '102']] });
+    } finally { before.close(); }
+
+    // Новый адрес.
+    const after = await analyzer(lisPort, '127.0.0.7');
+    try {
+      for (const t of [['2', 'test2', '5.000000'], ['3', 'test3', '10.000000'], ['102', 'calctest1', '15.000000']]) {
+        assert.match(await after.send(BS_ORU('LAB-000001', ...t)), /\rMSA\|AA\|/);
+      }
+    } finally { after.close(); }
+    const newDev = db.prepare("SELECT * FROM lab_devices WHERE host = '127.0.0.7'").get();
+    assert.ok(newDev && newDev.id !== oldDev.id, 'новый адрес — новая строка прибора');
+    assert.equal(newDev.profile, 'mindray-bs-200');
+    const waiting = tray(db);
+    assert.equal(waiting.length, 3, 'все три пробы — в «Необработанных»');
+    for (const m of waiting) {
+      assert.equal(m.status, 'unmatched');
+      assert.match(m.detail, /если это тот же анализатор с новым адресом — в «Лаборатория → Панели» выберите для панели этот прибор и заново подтвердите номера тестов, потом «Привязать»/);
+    }
+    assert.deepEqual(blank(db, 1), {});
+
+    // Лаборатория: панель — на новую строку; подтверждения сняты базой.
+    db.prepare('UPDATE lab_panels SET device_id = ? WHERE id = 5').run(newDev.id);
+    assert.deepEqual(db.prepare('SELECT device_code_confirmed AS c FROM lab_panel_analytes WHERE panel_id = 5').all().map((r) => r.c), [0, 0, 0]);
+    // Номера тестов сверены с программой прибора — подтверждены заново.
+    db.prepare('UPDATE lab_panel_analytes SET device_code_confirmed = 1 WHERE panel_id = 5').run();
+    for (const m of waiting) lisMessageAttach(db, { id: m.id, visit_service_id: 1 }, LAB);
+    assert.deepEqual(blank(db, 1), { 'Глюкоза': '5', 'Мочевина': '10', 'Расчётный': '15' });
+    assert.deepEqual(tray(db), [], '«Необработанные» пусты');
+    assert.equal(last(db).status, 'applied');
+    assert.match(last(db).detail, /серия из 3 сообщений принята/);
+    notReleased(db, 1);
   });
 });

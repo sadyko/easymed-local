@@ -32,3 +32,20 @@ ALTER TABLE lab_device_messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'result'
 -- строки, а их немного.
 CREATE INDEX IF NOT EXISTS idx_lab_device_messages_service
   ON lab_device_messages(received_at, device_id, kind) WHERE kind <> 'result';
+
+-- Ревью R3, п. 2 — у BS-200 номер теста свой у КАЖДОГО прибора (ItemID.ini):
+-- «2» у второго BS-200 бывает креатинином, а не глюкозой. Панель перепривязали
+-- с BS-200 или на BS-200 — подтверждения сопоставлений (D4) больше не про этот
+-- прибор: они снимаются, коды остаются, человек подтверждает их заново. Панель
+-- сохраняют обычным /api/db (lab-panels.js), поэтому правило — здесь, в базе, а
+-- не только на экране. Список профилей — ровно профили с codesPerInstrument
+-- (server/lis/profiles/; тест 233.test.js сверяет их).
+CREATE TRIGGER IF NOT EXISTS trg_lab_panels_device_reconfirm
+AFTER UPDATE OF device_id ON lab_panels
+WHEN OLD.device_id IS NOT NEW.device_id
+ AND EXISTS (SELECT 1 FROM lab_devices
+              WHERE id IN (OLD.device_id, NEW.device_id)
+                AND profile IN ('mindray-bs-200'))
+BEGIN
+  UPDATE lab_panel_analytes SET device_code_confirmed = 0 WHERE panel_id = NEW.id;
+END;

@@ -103,12 +103,19 @@ test('233: счётчик служебных за день идёт по мал�
   } finally { db.close(); }
 });
 
-test('233: в файле только ADD COLUMN и индекс — ни пересборки, ни UPDATE, ни DELETE', () => {
-  const code = SQL.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n');
+test('233: в файле только ADD COLUMN, индекс и триггер сброса подтверждений — ни пересборки, ни UPDATE данных, ни DELETE', () => {
+  const all = SQL.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n');
+  // LIS_REAL_ANALYZERS_V1 (ревью R3, п. 2) — единственный UPDATE — в теле
+  // триггера, и он только снимает подтверждения у строк перепривязанной панели.
+  const trig = /CREATE TRIGGER[\s\S]*?\bEND;/i.exec(all);
+  assert.ok(trig, 'триггер есть');
+  assert.match(trig[0], /AFTER UPDATE OF device_id ON lab_panels/i);
+  assert.match(trig[0], /UPDATE lab_panel_analytes SET device_code_confirmed = 0 WHERE panel_id = NEW\.id;/);
+  const code = all.replace(trig[0], '');
   assert.ok(!/\bCREATE\s+TABLE\b/i.test(code), 'пересборка таблицы внутри migrate() роняет клинику при запуске');
   assert.ok(!/\bDROP\b/i.test(code));
-  assert.ok(!/^\s*UPDATE\s/im.test(code));
-  assert.ok(!/\bDELETE\b/i.test(code));
+  assert.ok(!/^\s*UPDATE\s/im.test(code), 'данные миграция не правит');
+  assert.ok(!/\bDELETE\b/i.test(all));
   assert.equal((code.match(/ALTER\s+TABLE\s+\w+\s+ADD\s+COLUMN/gi) || []).length, 3);
 });
 
@@ -130,4 +137,56 @@ test('233: анализатор принадлежит зданию — в сп�
     assert.ok(!TABLES.some((x) => x.name === t), t + ' в справочнике филиалов');
     assert.ok(!Object.prototype.hasOwnProperty.call(SHIPPED, t), t + ' в журнале филиалов');
   }
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R3, п. 2 ─────────────────────────────────
+// У BS-200 номер теста свой у каждого прибора. Панель перепривязали к другому
+// прибору (или с BS-200 на другой), а подтверждения сопоставлений остались —
+// и «2» второго прибора легло бы в «Глюкозу» под подтверждением, данным для
+// нумерации первого. Сохраняют панель обычным /api/db (lab-panels.js), поэтому
+// сброс — в базе: триггер на смену lab_panels.device_id.
+function panelOn(db, deviceId) {
+  db.prepare("INSERT INTO services (id, name, is_lab) VALUES (9, 'Биохимия', 1)").run();
+  db.prepare('INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (5, ?, 9, ?)').run('Биохимия', deviceId);
+  db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, device_code, device_code_confirmed)
+              VALUES (5, 'GLU', 'Глюкоза', '', '2', 1), (5, 'UREA', 'Мочевина', '', '3', 1)`).run();
+}
+const confirmedOf = (db) => db.prepare('SELECT device_code_confirmed AS c FROM lab_panel_analytes WHERE panel_id = 5 ORDER BY id').all().map((r) => r.c);
+
+test('233 (R3 п. 2): смена прибора панели с BS-200 или на BS-200 — подтверждения сопоставлений сброшены', () => {
+  const db = openDb(':memory:');
+  try {
+    migrate(db);
+    db.prepare(`INSERT INTO lab_devices (id, name, profile) VALUES (1, 'BS-200', 'mindray-bs-200'), (2, 'BS-200 (2)', 'mindray-bs-200'),
+                (3, 'BC-5300', 'mindray-bc-5300'), (4, 'BC-5300 (2)', 'mindray-bc-5300')`).run();
+    panelOn(db, 1);
+    db.prepare('UPDATE lab_panels SET name = ? WHERE id = 5').run('Биохимия крови');
+    assert.deepEqual(confirmedOf(db), [1, 1], 'прибор не менялся — подтверждения на месте');
+    db.prepare('UPDATE lab_panels SET device_id = 1 WHERE id = 5').run();
+    assert.deepEqual(confirmedOf(db), [1, 1], 'тот же прибор — не смена');
+    db.prepare('UPDATE lab_panels SET device_id = 2 WHERE id = 5').run();
+    assert.deepEqual(confirmedOf(db), [0, 0], 'BS-200 → другой BS-200: номера тестов другие');
+    assert.deepEqual(db.prepare('SELECT device_code FROM lab_panel_analytes WHERE panel_id = 5 ORDER BY id').all().map((r) => r.device_code), ['2', '3'],
+      'коды остаются — подтверждать их заново');
+
+    db.prepare('UPDATE lab_panel_analytes SET device_code_confirmed = 1 WHERE panel_id = 5').run();
+    db.prepare('UPDATE lab_panels SET device_id = 3 WHERE id = 5').run();
+    assert.deepEqual(confirmedOf(db), [0, 0], 'с BS-200 на гематологию — тоже');
+    db.prepare('UPDATE lab_panel_analytes SET device_code_confirmed = 1 WHERE panel_id = 5').run();
+    db.prepare('UPDATE lab_panels SET device_id = 4 WHERE id = 5').run();
+    assert.deepEqual(confirmedOf(db), [1, 1], 'BC-5300 → BC-5300: коды производителя, подтверждения прежние');
+    db.prepare('UPDATE lab_panels SET device_id = NULL WHERE id = 5').run();
+    assert.deepEqual(confirmedOf(db), [1, 1], 'отвязали от гематологии — не BS-200');
+    db.prepare('UPDATE lab_panels SET device_id = 2 WHERE id = 5').run();
+    assert.deepEqual(confirmedOf(db), [0, 0], 'привязали к BS-200');
+  } finally { db.close(); }
+});
+
+test('233 (R3 п. 2): список профилей в триггере — ровно профили с codesPerInstrument', async () => {
+  const { listProfiles } = await import('../../lis/profiles/index.js');
+  const want = listProfiles().filter((p) => p.codesPerInstrument).map((p) => p.key).sort();
+  const m = /CREATE TRIGGER[\s\S]*?profile IN \(([^)]*)\)/i.exec(SQL);
+  assert.ok(m, 'триггер со списком профилей');
+  const got = m[1].split(',').map((x) => x.trim().replace(/^'|'$/g, '')).sort();
+  assert.deepEqual(got, want);
 });

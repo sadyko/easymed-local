@@ -200,14 +200,39 @@ export const SERIES_WINDOW_MS = 60 * 60 * 1000;
 export const SERIES_MAX_MESSAGES = 200;
 
 /**
+ * LIS_REAL_ANALYZERS_V1 (ревью R3, п. 6) — бланк судится по значениям прибора,
+ * записанным не раньше суток назад: глюкоза, ждущая с прошлого понедельника, и
+ * сегодняшние мочевина и расчётный — разные прогоны, и «принято» здесь было бы
+ * неправдой. Ждущие строки старше суток серия не переводит — на экране они
+ * «серия не дошла до конца».
+ */
+export const SERIES_FORM_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
  * Причина «не пришла» у строки, которую серия по пересчёту заполнила, но в
  * бланке её нет. Журнал лотка, как и прочие причины planObservations: читается
  * как есть, через словарь не идёт.
  */
 const NOT_IN_BLANK = 'в бланк не записано';
 
-/** Значение для сравнения двух прогонов: «5.1» и « 5.1» — одно и то же. */
-const valueKey = (v) => String(v == null ? '' : v).trim();
+/**
+ * Значение для сравнения двух прогонов: «5.1» и « 5.1» — одно и то же.
+ * LIS_REAL_ANALYZERS_V1 (ревью R3, п. 10) — и число без хвостовых нулей:
+ * «390.10» и «390.1», «5.0» и «5» — одно число (A1000 пишет то так, то так).
+ * Только для сравнения: в бланк значение идёт как пришло. Текст и «<0.10» —
+ * как есть.
+ */
+const valueKey = (v) => {
+  const t = String(v == null ? '' : v).trim();
+  const m = /^([-+]?\d+)(?:\.(\d*?)0*)?$/.exec(t);
+  if (!m) return t;
+  return m[2] ? m[1] + '.' + m[2] : m[1];
+};
+
+/** LIS_REAL_ANALYZERS_V1 (ревью R3, п. 10) — два значения прибора — одно и то же (valueKey). */
+export function sameValue(a, b) {
+  return valueKey(a) === valueKey(b);
+}
 
 /**
  * Общий план серии. Чистая функция: сообщения серии по порядку прихода
@@ -276,9 +301,10 @@ export function planSeries(messages = [], analytes = [], opts = {}) {
   const resent = [];
   for (const { obs, analyte } of current.fills) {
     if (!before.has(analyte.name)) continue;
-    const was = valueKey(before.get(analyte.name));
-    const now = valueKey(obs.value);
-    if (was === now) resent.push({ obs, analyte });
+    // В журнал — как пришло; сравнение — без хвостовых нулей (R3, п. 10).
+    const was = String(before.get(analyte.name) == null ? '' : before.get(analyte.name)).trim();
+    const now = String(obs.value == null ? '' : obs.value).trim();
+    if (sameValue(was, now)) resent.push({ obs, analyte });
     else changed.push({ obs, analyte, was: [was], now });
   }
 

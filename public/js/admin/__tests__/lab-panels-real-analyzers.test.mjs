@@ -123,9 +123,11 @@ const SERVICES = [{ id: 's-1', name: 'Биохимия', type: 'lab', is_lab: tr
 const DEVICES = [
   { id: 1, name: 'BS-200', profile: 'mindray-bs-200', enabled: 1, added: 1 },
   { id: 2, name: 'BC-780', profile: 'mindray-bc-780', enabled: 1, added: 1 },
+  { id: 3, name: 'BS-200 (2)', profile: 'mindray-bs-200', enabled: 1, added: 1 },   // ревью R3, п. 2
+  { id: 4, name: 'BC-780 (2)', profile: 'mindray-bc-780', enabled: 1, added: 1 },
 ];
 const PROFILES = [
-  { key: 'mindray-bs-200', vendor: 'Mindray', model: 'BS-200', channelsSource: 'device', wireSource: 'documented', channels: [] },
+  { key: 'mindray-bs-200', vendor: 'Mindray', model: 'BS-200', channelsSource: 'device', wireSource: 'documented', channels: [], codesPerInstrument: true },
   { key: 'mindray-bc-780', vendor: 'Mindray', model: 'BC-780', channelsSource: 'siblings', wireSource: 'siblings',
     channels: [{ code: 'WBC', name: 'Лейкоциты', loinc: '6690-2' }, { code: 'HGB', name: 'Гемоглобин', loinc: '718-7' }] },
 ];
@@ -159,10 +161,10 @@ const { renderLaboratory } = await import('../views/laboratory.js');
 const { setEffectiveFromRole } = await import('../permissions.js');
 const LAB_SEEDED = { name: 'lab', permissions: { sections: ['labs', 'patients', 'dashboard'], levels: { labs: 'editor', patients: 'viewer', dashboard: 'viewer' } } };
 
-async function mountPanels({ deviceId = 1, sent = [] } = {}) {
+async function mountPanels({ deviceId = 1, sent = [], analytes = null } = {}) {
   PANELS[0].device_id = deviceId;
   SENT_CODES = sent;
-  ANALYTES = [analyte()];
+  ANALYTES = analytes || [analyte()];
   setEffectiveFromRole(LAB_SEEDED);
   rpcCalls = []; writes = []; toastMsg = null;
   const root = mk('div');
@@ -218,4 +220,41 @@ test('BC-780: типовой список подписан «по докумен
   assert.deepStrictEqual(walk(sel).filter((n) => n.tagName === 'OPTGROUP').map((g) => g.attrs.label),
     ['Типовые для модели — по документам соседних моделей']);
   assert.ok(!textOf(root).includes(NO_CODES_HINT), 'типовой список есть — подсказка не нужна');
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R3, п. 2 ─────────────────────────────────
+// У BS-200 номер теста свой у каждого прибора: панель перепривязали с BS-200
+// (или на BS-200) — подтверждения полей анализатора сняты (на сервере это же
+// делает триггер мигр. 233), экран говорит об этом, и сохранить панель можно,
+// только подтвердив каждое поле заново.
+const deviceSelect = (root) => walk(root).find((n) => n.tagName === 'SELECT' && walk(n).some((o) => o.tagName === 'OPTION' && textOf(o) === '— нет —'));
+const RECONFIRM = 'Анализатор панели сменился: у BS-200 номера тестов свои у каждого прибора — подтверждения полей анализатора сняты, подтвердите каждое заново.';
+
+test('R3 п. 2: панель перепривязали на другой BS-200 — подтверждения сняты, экран говорит об этом, сохранить без подтверждения нельзя', async () => {
+  const root = await mountPanels({ analytes: [analyte({ device_code: '2', device_code_confirmed: 1 })] });
+  assert.ok(!textOf(root).includes(RECONFIRM));
+  const sel = deviceSelect(root);
+  assert.ok(sel, 'выбор анализатора');
+  sel.value = '3';
+  sel.onchange();
+  await tick(80);
+  assert.ok(textOf(root).includes(RECONFIRM), 'сказано, что подтверждения сняты');
+  findButtonByText(root, /Сохранить панель/).click();
+  await tick(80);
+  assert.ok(!writes.some((w) => w.table === 'lab_panel_analytes' && w.op === 'insert'), 'без подтверждения не сохраняется: ' + toastMsg);
+  assert.match(String(toastMsg), /Подтвердите поля анализатора: Глюкоза/);
+});
+
+test('R3 п. 2: BC-780 → другой BC-780 (коды производителя) — подтверждения остаются', async () => {
+  const root = await mountPanels({ deviceId: 2, analytes: [analyte({ device_code: 'WBC', device_code_confirmed: 1 })] });
+  const sel = deviceSelect(root);
+  sel.value = '4';
+  sel.onchange();
+  await tick(80);
+  assert.ok(!textOf(root).includes(RECONFIRM));
+  findButtonByText(root, /Сохранить панель/).click();
+  await tick(80);
+  const ins = writes.find((w) => w.table === 'lab_panel_analytes' && w.op === 'insert');
+  assert.ok(ins, 'сохранено: ' + toastMsg);
+  assert.equal([].concat(ins.values)[0].device_code_confirmed, 1);
 });

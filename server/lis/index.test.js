@@ -16,6 +16,7 @@ import { VT, FS, DEFAULT_MAX_BYTES } from './mllp.js';
 import { OVERSIZE_DETAIL_PREFIX } from './inbox.js';   // LIS_DISCOVERY_FIX_V1 — по нему привязка узнаёт обрезанное
 import { ABANDONED_DETAIL_PREFIX } from './inbox.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 10
 import { selfPorts } from './index.js';   // LIS_REAL_ANALYZERS_V1_DIAL — порты самого Easy-Med (нет петли на себя)
+import { dialPlan } from './index.js';   // LIS_REAL_ANALYZERS_V1 — ревью R3, п. 11
 import { lisRestart, lisDeviceDelete, lisListeners } from '../services/rpc/lis.js';   // LIS_REAL_ANALYZERS_V1_DIAL
 
 function freePort() {
@@ -532,4 +533,72 @@ test('R2 п. 10б: переросшее с одного адреса — одн�
     await sleep(300);
     assert.equal(db.prepare("SELECT COUNT(*) c FROM lab_device_messages WHERE status = 'rejected'").get().c, 1);
   });
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R3 ───────────────────────────────────────
+
+// П. 4 — «одна строка в час» гасила РАЗНЫЕ пробы: ключ был только прибор
+// (адрес) и вид строки. Теперь и номер пробы (без номера — начало сообщения):
+// повтор той же пробы — одна строка, другая проба — своя.
+async function abandon(lisPort, partial, full) {
+  const sock = await connect(lisPort);
+  try {
+    const reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from(partial, 'utf8'), frameOf(full)]));
+    await reply;
+  } finally { sock.destroy(); }
+}
+const HEAD = (id, label) => `MSH|^~\\&|BC-5300|Mindray|||20261001090000||ORU^R01|${id}|P|2.3.1\rOBR|1||${label}|00001^Automated Count^99MRC\rOBX|1|NM|WBC^^99MRC||6.`;
+const FULL = (id) => `MSH|^~\\&|BC-5300|Mindray|||20261001090000||ORU^R01|${id}|P|2.3.1\rOBR|1||LAB-000999|00001^Automated Count^99MRC\rOBX|1|NM|WBC^^99MRC||7.1|10*9/L|||||F`;
+const rejectedRows = (db) => db.prepare("SELECT sample_id, raw FROM lab_device_messages WHERE status = 'rejected' ORDER BY id").all();
+
+test('R3 п. 4: брошенные кадры разных проб — каждый своей строкой; та же проба повторно — одна', async () => {
+  await withLis(async (db, lisPort) => {
+    await startLisListeners(db, { log: () => {} });
+    await abandon(lisPort, HEAD(61, 'LAB-000123'), FULL(62));
+    await abandon(lisPort, HEAD(63, 'LAB-000124'), FULL(64));
+    await abandon(lisPort, HEAD(61, 'LAB-000123'), FULL(65));
+    await until(() => db.prepare('SELECT COUNT(*) c FROM lab_device_messages').get().c >= 5, 3000, 'строки');
+    await sleep(100);
+    assert.deepEqual(rejectedRows(db).map((r) => r.sample_id), ['LAB-000123', 'LAB-000124']);
+  });
+});
+
+test('R3 п. 4: переросшие сообщения разных проб — каждое своей строкой; без номера — по началу сообщения', async () => {
+  await withLis(async (db, lisPort) => {
+    await startLisListeners(db, { log: () => {} });
+    const send = async (head) => {
+      const sock = await connect(lisPort);
+      sock.on('error', () => {});
+      const reply = readFrame(sock);
+      sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from(head, 'utf8'), Buffer.alloc(DEFAULT_MAX_BYTES + 1024, 0x51)]));
+      await reply;
+      sock.destroy();
+    };
+    const head = (id, label) => `MSH|^~\\&|BC-5380|Mindray|||20260928120000||ORU^R01|${id}|P|2.3.1\rOBR|1||${label}|00001^Automated Count^99MRC\r`;
+    await send(head(555, 'LAB-000123'));
+    await send(head(556, 'LAB-000124'));
+    await send(head(557, ''));
+    await send(head(558, ''));
+    await send(head(557, ''));
+    await sleep(300);
+    const rows = rejectedRows(db);
+    assert.deepEqual(rows.map((r) => r.sample_id), ['LAB-000123', 'LAB-000124', '', ''], 'две пробы с номером и две разные без номера');
+  });
+});
+
+// П. 11 — зона IPv6 («%2») отбрасывается только для сравнения и ключа дубля;
+// звонят по адресу строки, как прежде, — с зоной.
+test('R3 п. 11: dialPlan — дубль по адресу без зоны, звонок — по адресу строки с зоной', () => {
+  const plan = dialPlan([
+    { id: 1, name: 'A', host: 'fe80::1%2', port: 5600 },
+    { id: 2, name: 'B', host: 'fe80::1%3', port: 5600 },
+    { id: 3, name: 'C', host: '::ffff:10.0.0.9', port: 5600 },
+    { id: 4, name: 'D', host: '10.0.0.9', port: 5600 },
+  ], [2575]);
+  const by = Object.fromEntries(plan.map((p) => [p.device_id, p]));
+  assert.deepEqual([by[1].code, by[1].host], [null, 'fe80::1%2'], 'звонок — с зоной');
+  assert.equal(by[2].code, 'duplicate');
+  assert.deepEqual([by[3].code, by[3].host], [null, '::ffff:10.0.0.9']);
+  assert.equal(by[4].code, 'duplicate');
 });
