@@ -541,3 +541,14 @@ test('lis_device_codes: прежний провод — подпись пуст�
   assert.deepEqual(lisDeviceCodes(db, { device_id: 1 }, LAB).map((c) => [c.code, c.name, c.label]), [['6690-2', 'WBC', '']]);
   db.close();
 });
+
+// ── LIS_REAL_ANALYZERS_V1_DIAL — lis_listeners говорит и о звонках прибору ──
+test('lis_listeners: dialing — список соединений, которые Easy-Med держит сам (пустой без таких приборов)', () => {
+  const db = fresh();
+  const out = lisListeners(db, {}, LAB);
+  assert.ok(Array.isArray(out.dialing), JSON.stringify(out));
+  for (const d of out.dialing) {
+    for (const k of ['device_id', 'host', 'port', 'state', 'since', 'last_rx_at', 'code', 'retry_at']) assert.ok(k in d, k);
+  }
+  db.close();
+});

@@ -101,6 +101,18 @@ function learn(db, dev, { app = '', facility = '' }) {
 }
 
 /**
+ * LIS_REAL_ANALYZERS_V1_DIAL — к прибору, который ждёт звонка, Easy-Med
+ * подключается сам: прибор известен заранее, ensureDevice не нужен. Строка
+ * лишь дописывает, как он назвал себя (MSH-3/4), если ещё не знает: тогда, если
+ * прибор позже станет звонить сам, шаг 1(а) найдёт ту же строку.
+ */
+export function learnSender(db, deviceId, { app = '', facility = '' } = {}) {
+  const dev = db.prepare('SELECT * FROM lab_devices WHERE id = ?').get(deviceId);
+  if (!dev) return;
+  learn(db, dev, { app: String(app == null ? '' : app).trim(), facility: String(facility == null ? '' : facility).trim() });
+}
+
+/**
  * Дописывает строке адрес (если он передан) и имя отправителя и возвращает её
  * свежей. Имя пишется, только если строка его ещё не знает: запомненное первым
  * не перезаписывается — так же, как в бэкфилле мигр. 229.

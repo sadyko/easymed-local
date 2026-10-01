@@ -10,10 +10,16 @@
 // ОДИН слушатель на ЗАНЯТЫЙ ПОРТ, а не один на устройство: два прибора,
 // настроенных на 2575, иначе подрались бы за него, и второй молча не поднялся
 // бы — а молча неработающий приём результатов хуже явно ненастроенного.
+//
+// LIS_REAL_ANALYZERS_V1_DIAL — и клиенты к приборам, которые сами не звонят, а
+// ждут звонка LIS (lab_devices.dial = 1; Mindray BC-3600, возможно BC-780):
+// поднимаются и гасятся здесь же, вместе со слушателями.
+import os from 'node:os';   // LIS_REAL_ANALYZERS_V1_DIAL — свои адреса: нет петли на себя
 import { startMllpServer } from './mllp.js';
+import { startMllpClient, isLocalIp } from './dial.js';   // LIS_REAL_ANALYZERS_V1_DIAL — Easy-Med подключается к прибору сам
 import { receiveMessage } from './receive.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — проба или служебное, и ответ прибору
 import { readEnvelope, readResult, pickSampleId } from './wire.js';   // LIS_REAL_ANALYZERS_V1_SERVICE / _SAMPLE — вид, имя отправителя, номер пробы
-import { ensureDevice } from './discover.js';
+import { ensureDevice, learnSender } from './discover.js';   // learnSender: LIS_REAL_ANALYZERS_V1_DIAL
 import { recordMessage, OVERSIZE_DETAIL_PREFIX } from './inbox.js';   // LIS_MINDRAY_CODES_V1 — переросшее сообщение ложится в лоток
 
 export const DEFAULT_PORT = 2575;
@@ -22,9 +28,115 @@ let running = [];
 // LIS_ANALYZER_LIST_V1 — порты, которые не поднялись (занял кто-то другой):
 // экран «Анализаторы» говорит это у ждущего прибора, а не только журнал.
 let failed = [];
+// LIS_REAL_ANALYZERS_V1_DIAL — приборы, к которым Easy-Med подключается сам:
+// клиенты по номеру строки и строки, которым клиент не поднят (дубль адреса,
+// адрес не из локальной сети, петля на себя).
+let dialers = new Map();
+let dialRefused = [];
 
 /** IPv4-mapped IPv6 ('::ffff:10.0.0.9') → '10.0.0.9'. */
 const normalizeIp = (peer) => String(peer || '').replace(/^::ffff:/, '');
+
+const isoNow = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+/**
+ * LIS_MINDRAY_CODES_V1 (ревью 2026-09-28) — сообщение больше потолка (mllp.js
+ * уже ответил прибору AE). Инвариант 2 — ничего не теряется: строка ложится в
+ * лоток как «Не разобрано», с началом текста и номером пробы, если он в начале
+ * есть. Лаборант видит, чья проба не дошла, а не узнаёт об этом от врача.
+ * deviceId: у слушателя — null (прибор по началу не заводится: целого
+ * сообщения нет, а второй набор правил рядом с ensureDevice — ровно то, от чего
+ * здесь уже отказались); у звонка прибору (LIS_REAL_ANALYZERS_V1_DIAL) прибор
+ * известен заранее.
+ */
+function recordOversize(db, { deviceId = null, peer, head, limit }) {
+  // LIS_REAL_ANALYZERS_V1_SAMPLE — номер той же pickSampleId с проводом
+  // default: LAB- узнаётся в OBR-2 и OBR-3, голые цифры — только OBR-3.
+  // Начало не разобралось — без номера (readResult не бросает).
+  const sampleId = pickSampleId(readResult(head, 'default').obr, 'default').sampleId;
+  const size = limit >= 1024 * 1024 ? (limit / (1024 * 1024)) + ' МБ' : Math.round(limit / 1024) + ' КБ';
+  // LIS_DISCOVERY_FIX_V1 — начало строки общее с привязкой (rpc/lis.js):
+  // по нему она отказывается привязывать обрезанное. Текст прежний.
+  recordMessage(db, { deviceId, peer, raw: head, sampleId, status: 'rejected',
+    detail: OVERSIZE_DETAIL_PREFIX + size + ' — не принято; в лотке только его начало' });
+}
+
+/**
+ * LIS_REAL_ANALYZERS_V1_DIAL — порты, которые слушает сам Easy-Med: порты LIS
+ * (переданные — или LIS_PORT / 2575 и поднятые сейчас), HTTP (PORT, 8000) и
+ * EasyPhone (EASYPHONE_PORT, иначе HTTP + 20 — server/index.js). Звонок на свой
+ * адрес с таким портом — петля на себя.
+ */
+export function selfPorts(lisPorts) {
+  const http = Number(process.env.PORT || 8000);
+  const phone = Number(process.env.EASYPHONE_PORT) || (http + 20);
+  const lis = Array.isArray(lisPorts) ? lisPorts : [Number(process.env.LIS_PORT) || DEFAULT_PORT, ...running.map((s) => s.port)];
+  return [...new Set([...lis, http, phone].filter((p) => Number.isInteger(p) && p > 0))];
+}
+
+/** Адрес этого компьютера: петля 127/8, ::1 и адреса его сетевых карт. */
+function selfHost(host) {
+  const h = String(host).toLowerCase().replace(/^::ffff:/, '').split('%')[0];
+  if (h === '::1' || /^127\./.test(h)) return true;
+  try {
+    for (const list of Object.values(os.networkInterfaces())) {
+      for (const a of list || []) if (String(a.address).toLowerCase().split('%')[0] === h) return true;
+    }
+  } catch { /* нет списка карт — остаётся петля */ }
+  return false;
+}
+
+/**
+ * LIS_REAL_ANALYZERS_V1_DIAL — клиенты к приборам, которые ждут звонка LIS
+ * (lab_devices.dial = 1; спецификация, раздел 8). Один прибор — одно
+ * соединение; исходящее — только на адрес и порт строки и только на IP
+ * локальной сети. Отказ — кодом, без единой попытки соединения:
+ *   bad_address — не IP (имя — это DNS, лишнее соединение), не локальная сеть
+ *                 или порт не задан;
+ *   self        — свой адрес и порт, который слушает сам Easy-Med;
+ *   duplicate   — тот же адрес и порт уже у строки с меньшим номером.
+ * Сообщение по такому соединению — тот же приём (receive.js: D4, D7, серия,
+ * служебные): прибор известен заранее, ensureDevice не зовётся. Как прибор
+ * назвал себя (MSH-3/4), дописывается в строку, если она этого ещё не знает, —
+ * тогда, если прибор позже станет звонить сам, discover.js найдёт ту же строку.
+ */
+function startDialers(db, devices, lisPorts, log) {
+  const mine = selfPorts(lisPorts);
+  const taken = new Set();
+  for (const d of [...devices].sort((a, b) => a.id - b.id)) {
+    const host = String(d.host == null ? '' : d.host).trim();
+    const port = d.port == null || d.port === '' ? NaN : Number(d.port);
+    let code = null;
+    if (!isLocalIp(host) || !Number.isInteger(port) || port < 1 || port > 65535) code = 'bad_address';
+    else if (selfHost(host) && mine.includes(port)) code = 'self';
+    else if (taken.has(host.toLowerCase() + '|' + port)) code = 'duplicate';
+    if (code) {
+      dialRefused.push({ device_id: d.id, host, port: Number.isInteger(port) ? port : null, state: 'off',
+        since: isoNow(), last_rx_at: null, code, retry_at: null });
+      log(`LIS: «${d.name}» — Easy-Med не подключается к ${host || '(адрес пуст)'}:${Number.isInteger(port) ? port : '(порт пуст)'} (${code})`);
+      continue;
+    }
+    taken.add(host.toLowerCase() + '|' + port);
+    const deviceId = d.id;
+    // Строку могли удалить, пока кадр шёл: сообщение всё равно сохраняется
+    // (инвариант 2), но без прибора — иначе его не пустил бы внешний ключ.
+    const alive = () => !!db.prepare('SELECT id FROM lab_devices WHERE id = ?').get(deviceId);
+    const client = startMllpClient({
+      host,
+      port,
+      log,
+      onMessage: async (text) => {
+        const known = alive();
+        const env = readEnvelope(text);
+        if (known && (env.kind === 'result' || env.service)) learnSender(db, deviceId, { app: env.app, facility: env.facility });
+        return receiveMessage(db, text, { peer: host, deviceId: known ? deviceId : null });
+      },
+      onOversize: ({ head, limit }) => recordOversize(db, { deviceId: alive() ? deviceId : null, peer: host, head, limit }),
+    });
+    dialers.set(deviceId, client);
+    log(`LIS: Easy-Med подключается к «${d.name}» ${host}:${port}`);
+  }
+}
 
 export async function startLisListeners(db, { log = console.log } = {}) {
   await stopLisListeners();
@@ -39,6 +151,9 @@ export async function startLisListeners(db, { log = console.log } = {}) {
   // Порт по умолчанию есть в списке всегда — даже с пустой клиникой.
   const byPort = new Map([[Number(process.env.LIS_PORT) || DEFAULT_PORT, []]]);
   for (const d of devices) {
+    // LIS_REAL_ANALYZERS_V1_DIAL — к прибору, который ждёт звонка, Easy-Med
+    // подключается сам: его порт — порт ПРИБОРА, слушать его здесь нельзя.
+    if (Number(d.dial) === 1) continue;
     const port = d.port || DEFAULT_PORT;
     if (!byPort.has(port)) byPort.set(port, []);
     byPort.get(port).push(d);
@@ -78,25 +193,10 @@ export async function startLisListeners(db, { log = console.log } = {}) {
 
           return receiveMessage(db, text, { peer: ip, deviceId: found.device ? found.device.id : null });
         },
-        // LIS_MINDRAY_CODES_V1 (ревью 2026-09-28) — сообщение больше потолка
-        // (mllp.js уже ответил прибору AE). Инвариант 2 — ничего не теряется:
-        // строка ложится в лоток как «Не разобрано», с началом текста и
-        // номером пробы, если он в начале есть. Лаборант видит, чья проба не
-        // дошла, а не узнаёт об этом от врача. Прибор по началу не заводится:
-        // целого сообщения нет, а второй набор правил рядом с ensureDevice —
-        // ровно то, от чего здесь уже отказались.
-        onOversize: ({ peer, head, limit }) => {
-          const ip = normalizeIp(peer);
-          // LIS_REAL_ANALYZERS_V1_SAMPLE — номер той же pickSampleId с проводом
-          // default: LAB- узнаётся в OBR-2 и OBR-3, голые цифры — только OBR-3.
-          // Начало не разобралось — без номера (readResult не бросает).
-          const sampleId = pickSampleId(readResult(head, 'default').obr, 'default').sampleId;
-          const size = limit >= 1024 * 1024 ? (limit / (1024 * 1024)) + ' МБ' : Math.round(limit / 1024) + ' КБ';
-          // LIS_DISCOVERY_FIX_V1 — начало строки общее с привязкой (rpc/lis.js):
-          // по нему она отказывается привязывать обрезанное. Текст прежний.
-          recordMessage(db, { deviceId: null, peer: ip, raw: head, sampleId, status: 'rejected',
-            detail: OVERSIZE_DETAIL_PREFIX + size + ' — не принято; в лотке только его начало' });
-        },
+        // LIS_MINDRAY_CODES_V1 (ревью 2026-09-28) — переросшее сообщение:
+        // строка «Не разобрано» в лотке (recordOversize), прибор по началу не
+        // заводится.
+        onOversize: ({ peer, head, limit }) => recordOversize(db, { deviceId: null, peer: normalizeIp(peer), head, limit }),
       });
       running.push(srv);
       log(list.length
@@ -112,10 +212,23 @@ export async function startLisListeners(db, { log = console.log } = {}) {
       log('LIS: ' + (e && e.message ? e.message : e));
     }
   }
+
+  // LIS_REAL_ANALYZERS_V1_DIAL — клиенты к приборам, ждущим звонка. Свои порты
+  // — все, что слушатели ПЫТАЛИСЬ занять (и занятый чужой — тоже наш по смыслу).
+  startDialers(db, devices.filter((d) => Number(d.dial) === 1), [...byPort.keys()], log);
   return running;
 }
 
 export async function stopLisListeners() {
+  // LIS_REAL_ANALYZERS_V1_DIAL — клиенты закрываются сразу и ничего не ждут
+  // (dial.js close): урок lis_restart / lis_device_delete — закрытие, ждущее
+  // прибора, вешало RPC.
+  const oldDialers = dialers;
+  dialers = new Map();
+  dialRefused = [];
+  for (const c of oldDialers.values()) {
+    try { c.close(); } catch { /* уже закрыт — это не ошибка */ }
+  }
   const old = running;
   running = [];
   for (const s of old) {
@@ -130,7 +243,16 @@ export function listenerCount() { return running.length; }
  * LIS_ANALYZER_LIST_V1 — какие порты слушаются прямо сейчас и какие не
  * поднялись. Для строки «порт N слушается» у ждущего прибора в окне
  * «Добавить прибор» — это и есть проверка связи с нашей стороны.
+ *
+ * LIS_REAL_ANALYZERS_V1_DIAL — dialing: соединения, которые Easy-Med держит сам,
+ * по номеру строки прибора: { device_id, host, port, state, since, last_rx_at,
+ * code, retry_at }. state — connecting / connected / waiting (dial.js) или off
+ * (клиент не поднят: code bad_address / self / duplicate).
  */
 export function listenerStatus() {
-  return { listening: running.map((s) => s.port), failed: failed.map((f) => ({ ...f })) };
+  const dialing = [
+    ...[...dialers.entries()].map(([device_id, c]) => ({ device_id, ...c.status() })),
+    ...dialRefused.map((r) => ({ ...r })),
+  ].sort((a, b) => a.device_id - b.device_id);
+  return { listening: running.map((s) => s.port), failed: failed.map((f) => ({ ...f })), dialing };
 }

@@ -14,6 +14,8 @@ import { migrate } from '../db/migrate.js';
 import { startLisListeners, stopLisListeners, listenerStatus } from './index.js';
 import { VT, FS, DEFAULT_MAX_BYTES } from './mllp.js';
 import { OVERSIZE_DETAIL_PREFIX } from './inbox.js';   // LIS_DISCOVERY_FIX_V1 — по нему привязка узнаёт обрезанное
+import { selfPorts } from './index.js';   // LIS_REAL_ANALYZERS_V1_DIAL — порты самого Easy-Med (нет петли на себя)
+import { lisRestart, lisDeviceDelete, lisListeners } from '../services/rpc/lis.js';   // LIS_REAL_ANALYZERS_V1_DIAL
 
 function freePort() {
   return new Promise((res, rej) => {
@@ -266,4 +268,179 @@ test('BS-200 по проводу: находка с моделью mindray-bs-20
     if (prevPort === undefined) delete process.env.LIS_PORT; else process.env.LIS_PORT = prevPort;
     db.close();
   }
+});
+
+// ── LIS_REAL_ANALYZERS_V1_DIAL — Easy-Med подключается к прибору сам ────────
+// Строка прибора с dial = 1: слушатели её порт не берут, а клиент звонит на
+// адрес и порт строки. Поддельный анализатор-сервер — 127.0.0.1, порт 0; номер
+// берётся заново, если совпал с портом самого Easy-Med (LIS, HTTP, EasyPhone):
+// такой адрес клиент по правилу «нет петли на себя» и не тронет.
+async function fakeAnalyzer() {
+  for (;;) {
+    const conns = [];
+    const acks = [];
+    const server = net.createServer((sock) => {
+      conns.push(sock);
+      sock.on('error', () => {});
+      let buf = Buffer.alloc(0);
+      sock.on('data', (d) => {
+        buf = Buffer.concat([buf, d]);
+        for (;;) {
+          const s = buf.indexOf(VT);
+          const e = buf.indexOf(FS, s + 1);
+          if (s === -1 || e === -1) break;
+          acks.push(buf.slice(s + 1, e).toString('utf8'));
+          buf = buf.slice(e + 1);
+        }
+      });
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const port = server.address().port;
+    if (selfPorts().includes(port)) { await new Promise((r) => server.close(r)); continue; }
+    return {
+      port, conns, acks,
+      live: () => conns.filter((c) => !c.destroyed && !c.readableEnded),
+      async close() { for (const c of conns) c.destroy(); await new Promise((r) => server.close(() => r())); },
+    };
+  }
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function until(fn, ms = 5000, what = 'условие') {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = fn();
+    if (v) return v;
+    if (Date.now() > end) throw new Error(what + ' не наступило за ' + ms + ' мс');
+    await sleep(10);
+  }
+}
+const frameOf = (s) => Buffer.concat([Buffer.from([VT]), Buffer.from(s, 'utf8'), Buffer.from([FS, 0x0d])]);
+const dialRow = (db, { id, host = '127.0.0.1', port, enabled = 1, name = 'BC-780' }) => db.prepare(
+  "INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled, dial) VALUES (?, ?, 'mindray-bc-780', 'mllp', ?, ?, ?, 1)",
+).run(id, name, host, port, enabled);
+const dialing = (id) => listenerStatus().dialing.find((d) => d.device_id === id);
+
+/** Свежая база и свободный порт LIS; fn(db, lisPort). Слушатели и клиенты гасятся всегда. */
+async function withLis(fn) {
+  const db = openDb(':memory:');
+  migrate(db);
+  const lisPort = await freePort();
+  const prevPort = process.env.LIS_PORT;
+  process.env.LIS_PORT = String(lisPort);
+  try { await fn(db, lisPort); } finally {
+    await stopLisListeners();
+    if (prevPort === undefined) delete process.env.LIS_PORT; else process.env.LIS_PORT = prevPort;
+    db.close();
+  }
+}
+
+test('строка dial = 1: клиент звонит прибору, её порт не слушается; проба — тот же приём, ответ ACK^R01', async () => {
+  const fake = await fakeAnalyzer();
+  try {
+    await withLis(async (db, lisPort) => {
+      dialRow(db, { id: 7, port: fake.port });
+      await startLisListeners(db, { log: () => {} });
+      const st = listenerStatus();
+      assert.ok(st.listening.includes(lisPort), 'порт по умолчанию слушается, как всегда');
+      assert.ok(!st.listening.includes(fake.port), 'порт прибора Easy-Med не слушает');
+      await until(() => fake.live().length === 1, 5000, 'подключение');
+      await until(() => dialing(7) && dialing(7).state === 'connected', 5000, 'connected');
+      const d = dialing(7);
+      assert.deepEqual([d.host, d.port, d.code], ['127.0.0.1', fake.port, null]);
+      assert.ok(d.since);
+
+      fake.live()[0].write(frameOf([
+        'MSH|^~\\&|BC-780|Mindray|||20261001090000||ORU^R01|11|P|2.3.1||||||UNICODE',
+        'OBR|1||LAB-000999|00001^Automated Count^99MRC',
+        'OBX|1|NM|6690-2^WBC^LN||7.25|10*9/L|4.0-10.0|N|||F',
+      ].join('\r')));
+      await until(() => fake.acks.length === 1, 5000, 'ответ');
+      assert.equal(fake.acks[0].split('\r')[0].split('|')[8], 'ACK^R01');
+      assert.match(fake.acks[0], /MSA\|AA\|11\|/);
+
+      const m = db.prepare('SELECT * FROM lab_device_messages').get();
+      assert.equal(m.device_id, 7, 'прибор известен заранее — сообщение его');
+      assert.equal(m.peer, '127.0.0.1');
+      assert.equal(m.status, 'unmatched', 'тот же приём: заказа LAB-000999 нет');
+      const dev = db.prepare('SELECT * FROM lab_devices WHERE id = 7').get();
+      assert.deepEqual([dev.sending_app, dev.sending_facility], ['BC-780', 'Mindray'], 'как назвался — дописано');
+      assert.ok(dev.last_seen_at, 'на связи');
+      assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_devices').get().c, 1, 'ensureDevice не зовётся — находок нет');
+      assert.ok(dialing(7).last_rx_at);
+    });
+  } finally { await fake.close(); }
+});
+
+test('дубль адреса: вторая строка с тем же адресом и портом клиента не поднимает', async () => {
+  const fake = await fakeAnalyzer();
+  try {
+    await withLis(async (db) => {
+      dialRow(db, { id: 7, port: fake.port });
+      dialRow(db, { id: 8, port: fake.port, name: 'BC-780 (2)' });
+      await startLisListeners(db, { log: () => {} });
+      await until(() => dialing(7) && dialing(7).state === 'connected', 5000, 'connected');
+      assert.deepEqual([dialing(8).state, dialing(8).code], ['off', 'duplicate']);
+      await sleep(200);
+      assert.equal(fake.conns.length, 1, 'один прибор — одно соединение');
+    });
+  } finally { await fake.close(); }
+});
+
+test('адрес не из локальной сети, имя вместо IP, порт не задан, петля на себя — отказ с кодом, без подключения', async () => {
+  await withLis(async (db, lisPort) => {
+    dialRow(db, { id: 1, host: '8.8.8.8', port: 5600 });
+    dialRow(db, { id: 2, host: 'analyzer.local', port: 5600 });
+    db.prepare("INSERT INTO lab_devices (id, name, profile, transport, host, port, enabled, dial) VALUES (3, 'Без порта', '', 'mllp', '10.0.0.30', NULL, 1, 1)").run();
+    dialRow(db, { id: 4, host: '127.0.0.1', port: lisPort });
+    dialRow(db, { id: 5, host: '', port: 5600 });
+    dialRow(db, { id: 6, host: '127.0.0.1', port: 5600, enabled: 0 });
+    await startLisListeners(db, { log: () => {} });
+    const codes = Object.fromEntries(listenerStatus().dialing.map((d) => [d.device_id, d.state + ':' + d.code]));
+    assert.deepEqual(codes, { 1: 'off:bad_address', 2: 'off:bad_address', 3: 'off:bad_address', 4: 'off:self', 5: 'off:bad_address' },
+      'выключенный прибор не звонит и не значится');
+    assert.ok(!listenerStatus().listening.includes(5600), 'порт строки dial не слушается и при отказе');
+  });
+});
+
+test('selfPorts: порты LIS, HTTP и EasyPhone', () => {
+  const prev = [process.env.PORT, process.env.EASYPHONE_PORT];
+  try {
+    process.env.PORT = '8100';
+    delete process.env.EASYPHONE_PORT;
+    assert.deepEqual(selfPorts([2575]).sort((a, b) => a - b), [2575, 8100, 8120]);
+    process.env.EASYPHONE_PORT = '9000';
+    assert.ok(selfPorts([]).includes(9000));
+  } finally {
+    if (prev[0] === undefined) delete process.env.PORT; else process.env.PORT = prev[0];
+    if (prev[1] === undefined) delete process.env.EASYPHONE_PORT; else process.env.EASYPHONE_PORT = prev[1];
+  }
+});
+
+test('lis_restart и lis_device_delete рвут соединение и не ждут прибора', async () => {
+  const fake = await fakeAnalyzer();
+  const LAB = { role: 'lab' };
+  try {
+    await withLis(async (db) => {
+      dialRow(db, { id: 7, port: fake.port });
+      await startLisListeners(db, { log: () => {} });
+      await until(() => fake.live().length === 1, 5000, 'подключение');
+      const first = fake.live()[0];
+
+      let t = Date.now();
+      await lisRestart(db, {}, LAB);
+      assert.ok(Date.now() - t < 2000, 'перезапуск не висит на открытом соединении прибора');
+      await until(() => first.destroyed || first.readableEnded, 3000, 'старое соединение порвано');
+      await until(() => fake.live().length === 1 && fake.conns.length === 2, 5000, 'новый клиент подключился');
+      assert.equal(lisListeners(db, {}, LAB).dialing.find((d) => d.device_id === 7).state, 'connected');
+
+      t = Date.now();
+      const out = await lisDeviceDelete(db, { id: 7 }, LAB);
+      assert.equal(out.ok, true);
+      assert.ok(Date.now() - t < 2000, 'удаление не висит на открытом соединении прибора');
+      await until(() => fake.live().length === 0, 3000, 'соединение порвано удалением');
+      await sleep(300);
+      assert.equal(fake.conns.length, 2, 'удалённый прибор больше не звонят');
+      assert.equal(dialing(7), undefined);
+    });
+  } finally { await fake.close(); }
 });

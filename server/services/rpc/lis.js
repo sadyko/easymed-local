@@ -297,6 +297,11 @@ export function lisDeviceCodes(db, args, user) {
  * поднялись. Экран показывает это у приборов, которые ждут первого сообщения:
  * «порт 2575 слушается» — с нашей стороны всё готово, дело в настройке прибора;
  * «порт 5100 не слушается» — его заняла другая программа.
+ *
+ * LIS_REAL_ANALYZERS_V1_DIAL — и dialing: соединения, которые Easy-Med держит с
+ * приборами сам (lab_devices.dial = 1), — { device_id, host, port, state, since,
+ * last_rx_at, code, retry_at } (lis/index.js listenerStatus). Живое состояние,
+ * а не база: «подключено с 10:02 · сигнал 2 с назад», «повтор через 30 с».
  */
 export function lisListeners(db, args, user) {
   guard(user);

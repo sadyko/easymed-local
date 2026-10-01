@@ -296,3 +296,63 @@ test('переросшее сообщение — AE 207 с номером из 
     sock.destroy();
   }, { maxBytes: 1024, onOversize: () => {} });
 });
+
+// ── LIS_REAL_ANALYZERS_V1_DIAL — читатель кадров отдельно от сервера ────────
+// attachMllpReader — тот же разбор кадров, цепочка ответов, потолок и AE на
+// переросшее для сервера (каждое входящее соединение) и для клиента, который
+// звонит прибору сам (dial.js). Байты вне кадра (сигнал 0x02 у BC-3600)
+// отбрасываются сразу, а не копятся до потолка.
+
+test('байты до VT не копятся: после 4 КБ мусора без VT кадр принимается при потолке 1 КБ', async () => {
+  const seen = [];
+  const over = [];
+  await withServer(async (t) => { seen.push(t); return 'AA'; }, async (port) => {
+    const sock = await connect(port);
+    for (let i = 0; i < 4; i++) { sock.write(Buffer.alloc(1024, 0x02)); await settle(20); }
+    const reply = readFrame(sock);
+    sock.write(frame(MSG('31')));
+    assert.match(await reply, /MSA\|AA\|31/, 'раньше мусор копился до потолка, и кадр получал AE');
+    sock.end();
+  }, { maxBytes: 1024, onOversize: (o) => over.push(o) });
+  assert.equal(seen.length, 1);
+  assert.equal(over.length, 0, 'мусор вне кадра — не переросшее сообщение');
+});
+
+test('сигнал 0x02 между кадрами не мешает: оба кадра приняты, по порядку', async () => {
+  const seen = [];
+  await withServer(async (t) => { seen.push(t); return 'AA'; }, async (port) => {
+    const sock = await connect(port);
+    sock.write(Buffer.concat([Buffer.from([0x02, 0x02]), frame(MSG('41')), Buffer.from([0x02]), frame(MSG('42')), Buffer.from([0x02])]));
+    await settle(250);
+    sock.end();
+  });
+  assert.deepEqual(seen.map((t) => t.split('|')[9]), ['41', '42']);
+});
+
+test('attachMllpReader: читает кадры с любого сокета и называет байты вне кадра (onNoise)', async () => {
+  const { attachMllpReader } = await import('./mllp.js');
+  const noise = [];
+  const seen = [];
+  const accepted = [];
+  const server = net.createServer((sock) => {
+    accepted.push(sock);
+    sock.on('error', () => {});
+    attachMllpReader(sock, { onMessage: async (t, peer) => { seen.push({ t, peer }); return 'AA'; }, onNoise: (n) => noise.push(n), peer: 'прибор' });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  let sock = null;
+  try {
+    sock = await connect(server.address().port);
+    const reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([0x02, 0x02, 0x02]), frame(MSG('51'))]));
+    assert.match(await reply, /MSA\|AA\|51/);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].peer, 'прибор');
+    assert.deepEqual(noise, [3]);
+  } finally {
+    // Иначе server.close() ждал бы открытого соединения вечно.
+    if (sock) sock.destroy();
+    for (const s of accepted) s.destroy();
+    await new Promise((r) => server.close(r));
+  }
+});

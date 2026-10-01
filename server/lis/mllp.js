@@ -37,6 +37,121 @@ const frameOf = (text) => Buffer.concat([Buffer.from([VT]), Buffer.from(text, 'u
 // эхом заголовка; сорвавшийся приём и переросшее — AE 207 (ACK_INTERNAL), а не
 // «ошибка разбора» 100: сообщение могло быть верным.
 
+/** Байты вне кадра, кроме концов строк: CR после FS может прийти отдельной записью. */
+function noiseBytes(buf, from, to) {
+  let n = 0;
+  for (let i = from; i < to; i++) if (buf[i] !== CR && buf[i] !== 0x0a) n++;
+  return n;
+}
+
+/**
+ * LIS_REAL_ANALYZERS_V1_DIAL — читатель кадров одного соединения: общий для
+ * сервера (каждое входящее соединение, startMllpServer) и клиента, который
+ * звонит прибору сам (dial.js). Разбор кадров, последовательная цепочка
+ * ответов, потолок, AE на переросшее и ответ после записи — одни на оба.
+ *
+ * Байты вне кадра (сигнал 0x02 у Mindray BC-3600 раз в 3 с) отбрасываются
+ * сразу, до первого VT, а не копятся до потолка: раньше прибор с сигналом за
+ * сутки дорастал бы до отказа «больше 4 МБ» без единого настоящего кадра.
+ *
+ * @param {import('node:net').Socket} sock
+ * @param {object} o
+ * @param {(text:string, peer:string)=>Promise<any>} o.onMessage  как у startMllpServer
+ * @param {(o:{peer:string, bytes:number, head:string, limit:number})=>void} [o.onOversize]
+ * @param {number} [o.maxBytes]
+ * @param {(msg:string)=>void} [o.log]
+ * @param {string} [o.peer]       адрес для приёма и журнала (по умолчанию — адрес сокета)
+ * @param {(n:number)=>void} [o.onNoise]  отброшено n байт вне кадра (сигнал прибора)
+ */
+export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {}, peer = sock.remoteAddress || '', onNoise = null } = {}) {
+  let buf = Buffer.alloc(0);
+  let overflow = false;
+  // Обработка кадров последовательная: прибор ждёт ответа на первый кадр
+  // прежде, чем слать второй, и параллельная запись в базу переставила бы
+  // ответы местами.
+  let chain = Promise.resolve();
+  const noise = (from, to) => {
+    if (!onNoise) return;
+    const n = noiseBytes(buf, from, to);
+    if (n) onNoise(n);
+  };
+
+  // LIS_MINDRAY_CODES_V1 (ревью 2026-09-28) — сообщение больше потолка.
+  // Раньше соединение рвалось молча: ни NAK, ни записи, и проба с
+  // картинками пропадала бесследно. Теперь, как обещала спецификация
+  // («Ошибки»): прибору AE с номером сообщения (если начало разбирается),
+  // вызывающему — начало текста для лотка, потом соединение закрыто.
+  // Не копим по-прежнему: тот, кто не представился, не должен уметь съесть
+  // память, поэтому всё, что придёт после отказа, выбрасывается.
+  function refuse(body) {
+    overflow = true;
+    buf = Buffer.alloc(0);
+    const bytes = body.length;
+    const head = body.subarray(0, HEAD_BYTES).toString('utf8');
+    log(`LIS: сообщение больше ${maxBytes} байт от ${peer} — отказ (AE), соединение закрыто`);
+    // В ту же цепочку: ответы на кадры, пришедшие раньше, уходят первыми.
+    chain = chain.then(async () => {
+      if (!sock.destroyed) sock.write(frameOf(buildAck(mshOf(head), 'AE', ACK_INTERNAL)));
+      try {
+        if (onOversize) await onOversize({ peer, bytes, head, limit: maxBytes });
+      } catch (e) {
+        log('LIS: переросшее сообщение не записано — ' + (e && e.message ? e.message : e));
+      }
+      if (sock.destroyed) return;
+      sock.end();
+      const t = setTimeout(() => sock.destroy(), OVERSIZE_GRACE_MS);
+      if (t.unref) t.unref();
+    });
+  }
+
+  sock.on('data', (chunk) => {
+    if (overflow) return;
+    buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
+
+    for (;;) {
+      const start = buf.indexOf(VT);
+      if (start === -1) break;
+      const end = buf.indexOf(FS, start + 1);
+      if (end === -1) break;   // кадр ещё не пришёл целиком
+      // Потолок — на одно сообщение, а не на то, что пришло одной записью:
+      // целый кадр больше потолка отвергается так же, как недошедший.
+      if (end - start - 1 > maxBytes) { refuse(buf.subarray(start + 1, end)); return; }
+
+      noise(0, start);
+      const text = buf.slice(start + 1, end).toString('utf8');
+      // За FS обычно идёт CR — съедаем и его, если он там.
+      buf = buf.slice(end + 1 < buf.length && buf[end + 1] === CR ? end + 2 : end + 1);
+
+      chain = chain.then(async () => {
+        const msh = mshOf(text);
+        let ack;
+        try {
+          const r = await onMessage(text, peer);
+          const code = r && typeof r === 'object' ? r.code : r;
+          if (r && typeof r === 'object' && typeof r.reply === 'string' && r.reply) ack = r.reply;
+          else ack = code ? buildAck(msh, code) : buildAck(msh, 'AE', ACK_INTERNAL);
+        } catch (e) {
+          ack = buildAck(msh, 'AE', ACK_INTERNAL);
+          log('LIS: приём отказал — ' + (e && e.message ? e.message : e));
+        }
+        if (sock.destroyed) return;
+        sock.write(frameOf(ack));
+      });
+    }
+
+    // LIS_REAL_ANALYZERS_V1_DIAL — всё до первого VT — не кадр: отбрасывается
+    // сейчас, а не копится до потолка.
+    const vt = buf.indexOf(VT);
+    if (vt === -1) { noise(0, buf.length); buf = Buffer.alloc(0); } else if (vt > 0) { noise(0, vt); buf = buf.subarray(vt); }
+
+    // Начатый кадр перерос потолок, а конца всё нет.
+    if (buf.length > maxBytes) {
+      const start = buf.indexOf(VT);
+      refuse(buf.subarray(start === -1 ? 0 : start + 1));
+    }
+  });
+}
+
 /**
  * @param {object} o
  * @param {number} o.port          0 — занять свободный (тесты)
@@ -62,85 +177,10 @@ export function startMllpServer({ port, onMessage, onOversize = null, maxBytes =
     const server = net.createServer((sock) => {
       socks.add(sock);
       sock.on('close', () => socks.delete(sock));
-      const peer = sock.remoteAddress || '';
-      let buf = Buffer.alloc(0);
-      let overflow = false;
-      // Обработка кадров последовательная: прибор ждёт ответа на первый кадр
-      // прежде, чем слать второй, и параллельная запись в базу переставила бы
-      // ответы местами.
-      let chain = Promise.resolve();
-
       sock.setTimeout(IDLE_MS, () => sock.destroy());
-
-      // LIS_MINDRAY_CODES_V1 (ревью 2026-09-28) — сообщение больше потолка.
-      // Раньше соединение рвалось молча: ни NAK, ни записи, и проба с
-      // картинками пропадала бесследно. Теперь, как обещала спецификация
-      // («Ошибки»): прибору AE с номером сообщения (если начало разбирается),
-      // вызывающему — начало текста для лотка, потом соединение закрыто.
-      // Не копим по-прежнему: тот, кто не представился, не должен уметь съесть
-      // память, поэтому всё, что придёт после отказа, выбрасывается.
-      function refuse(body) {
-        overflow = true;
-        buf = Buffer.alloc(0);
-        const bytes = body.length;
-        const head = body.subarray(0, HEAD_BYTES).toString('utf8');
-        log(`LIS: сообщение больше ${maxBytes} байт от ${peer} — отказ (AE), соединение закрыто`);
-        // В ту же цепочку: ответы на кадры, пришедшие раньше, уходят первыми.
-        chain = chain.then(async () => {
-          if (!sock.destroyed) sock.write(frameOf(buildAck(mshOf(head), 'AE', ACK_INTERNAL)));
-          try {
-            if (onOversize) await onOversize({ peer, bytes, head, limit: maxBytes });
-          } catch (e) {
-            log('LIS: переросшее сообщение не записано — ' + (e && e.message ? e.message : e));
-          }
-          if (sock.destroyed) return;
-          sock.end();
-          const t = setTimeout(() => sock.destroy(), OVERSIZE_GRACE_MS);
-          if (t.unref) t.unref();
-        });
-      }
-
-      sock.on('data', (chunk) => {
-        if (overflow) return;
-        buf = Buffer.concat([buf, chunk]);
-
-        for (;;) {
-          const start = buf.indexOf(VT);
-          if (start === -1) break;
-          const end = buf.indexOf(FS, start + 1);
-          if (end === -1) break;   // кадр ещё не пришёл целиком
-          // Потолок — на одно сообщение, а не на то, что пришло одной записью:
-          // целый кадр больше потолка отвергается так же, как недошедший.
-          if (end - start - 1 > maxBytes) { refuse(buf.subarray(start + 1, end)); return; }
-
-          const text = buf.slice(start + 1, end).toString('utf8');
-          // За FS обычно идёт CR — съедаем и его, если он там.
-          buf = buf.slice(end + 1 < buf.length && buf[end + 1] === CR ? end + 2 : end + 1);
-
-          chain = chain.then(async () => {
-            const msh = mshOf(text);
-            let ack;
-            try {
-              const r = await onMessage(text, peer);
-              const code = r && typeof r === 'object' ? r.code : r;
-              if (r && typeof r === 'object' && typeof r.reply === 'string' && r.reply) ack = r.reply;
-              else ack = code ? buildAck(msh, code) : buildAck(msh, 'AE', ACK_INTERNAL);
-            } catch (e) {
-              ack = buildAck(msh, 'AE', ACK_INTERNAL);
-              log('LIS: приём отказал — ' + (e && e.message ? e.message : e));
-            }
-            if (sock.destroyed) return;
-            sock.write(frameOf(ack));
-          });
-        }
-
-        // Начатый кадр перерос потолок, а конца всё нет.
-        if (buf.length > maxBytes) {
-          const start = buf.indexOf(VT);
-          refuse(buf.subarray(start === -1 ? 0 : start + 1));
-        }
-      });
-
+      // LIS_REAL_ANALYZERS_V1_DIAL — разбор кадров вынесен: тот же читатель у
+      // клиента, который звонит прибору сам (dial.js).
+      attachMllpReader(sock, { onMessage, onOversize, maxBytes, log, peer: sock.remoteAddress || '' });
       sock.on('error', () => sock.destroy());
     });
 
