@@ -616,3 +616,31 @@ test('R1 п. 10: уже разобранную или принятую стро�
   assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_results WHERE visit_service_id = 77').get().c, 0);
   db.close();
 });
+
+// LIS_REAL_ANALYZERS_V1 (экран) — живая лента собирает сообщения одной серии
+// (BS-200 шлёт по тесту) в одну строку по прибору и заказу; прибор — номером,
+// а не именем: два прибора с одним названием — две серии.
+test('lis_recent отдаёт номер прибора — лента склеивает серию по нему, а не по имени', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'BS-200','mindray-bs-200'), (2,'BS-200','mindray-bs-200')").run();
+  const ins = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status) VALUES (?, '10.0.0.40', ?, 'unmatched')");
+  ins.run(1, RAW('OBX|1|NM|2|test2|5|g/ml|-||||F'));
+  ins.run(2, RAW('OBX|1|NM|2|test2|5|g/ml|-||||F'));
+  assert.deepEqual(lisRecent(db, {}, LAB).map((r) => [r.device_id, r.device_name]), [[2, 'BS-200'], [1, 'BS-200']]);
+  db.close();
+});
+
+// LIS_REAL_ANALYZERS_V1 (экран, ревью) — «сейчас» сервера: окно серии (60 мин),
+// «сигнал N с назад» и «повтор через N с» считаются от меток сервера, и экран
+// меряет их часами сервера, а не своего компьютера (часы лабораторного ПК
+// могут отставать на часы — и просроченная серия пряталась бы в «Идёт приём»).
+test('lis_listeners отдаёт «сейчас» сервера', () => {
+  const db = fresh();
+  const before = Date.now();
+  const out = lisListeners(db, {}, LAB);
+  const now = Date.parse(out.now);
+  assert.ok(Number.isFinite(now), JSON.stringify(out));
+  assert.ok(now >= before - 1000 && now <= Date.now() + 1000, out.now);
+  assert.match(out.now, /Z$/, 'UTC, как received_at');
+  db.close();
+});

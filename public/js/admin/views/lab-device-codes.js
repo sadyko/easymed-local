@@ -44,8 +44,16 @@ export function codeChoices({ sent = [], channels = [], current = '' } = {}) {
         const value = String(c.name || c.code || '').trim();
         if (!value || seen.has(K(value))) continue;
         seen.add(K(value));
-        const both = c.code && c.name && K(c.code) !== K(c.name);
-        sentOpts.push({ value, label: both ? c.code + ' · ' + c.name : value });
+        // LIS_REAL_ANALYZERS_V1_WIRE (экран) — подпись строки прибора (label:
+        // BS-200 — имя теста из OBX-4, Autobio — OBX-3) — только показ: «12 ·
+        // GLU». Сохраняется, как прежде, имя, иначе код: у BS-200 имени нет, и
+        // сопоставление идёт по номеру теста, который задала клиника.
+        const shown = [];
+        for (const part of [c.code, c.name, c.label]) {
+            const s = String(part == null ? '' : part).trim();
+            if (s && !shown.some((x) => K(x) === K(s))) shown.push(s);
+        }
+        sentOpts.push({ value, label: shown.length ? shown.join(' · ') : value });
         if (cur && !selected && (cur === K(c.code) || cur === K(c.name))) selected = value;
     }
 

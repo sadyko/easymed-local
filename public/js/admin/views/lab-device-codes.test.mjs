@@ -45,3 +45,27 @@ test('пункт «Вписать код…» — служебное значе�
   assert.match(TYPE_OWN, /^__/);
   assert.ok(!codeChoices({ sent: SENT, channels: CHANNELS }).sent.some((o) => o.value === TYPE_OWN));
 });
+
+// LIS_REAL_ANALYZERS_V1_WIRE (экран) — подпись строки прибора (lis_device_codes
+// label: BS-200 — имя теста из OBX-4, Autobio — OBX-3) только показывается.
+// Сохраняется, как прежде, имя, если оно есть, иначе код: у BS-200 имени нет,
+// сохраняется номер теста «12» — сопоставление идёт по номеру, а человек видит имя.
+test('BS-200: «12 · GLU», сохраняется «12»; сохранённое «12» узнаётся', () => {
+  const sent = [
+    { code: '12', name: '', label: 'GLU', value_type: 'NM' },
+    { code: '3', name: '', label: '', value_type: 'NM' },
+    { code: '206', name: '', label: 'Vitamin B12', value_type: 'NM' },
+  ];
+  const c = codeChoices({ sent, current: '12' });
+  assert.deepEqual(c.sent.map((o) => [o.label, o.value]), [['12 · GLU', '12'], ['3', '3'], ['206 · Vitamin B12', '206']]);
+  assert.equal(c.selected, '12');
+});
+
+test('код, имя и подпись — все три в пункте, повторы не дублируются; сохраняется имя', () => {
+  const c = codeChoices({ sent: [
+    { code: '6690-2', name: 'WBC', label: 'Лейкоциты', value_type: 'NM' },
+    { code: 'HGB', name: 'HGB', label: 'hgb', value_type: 'NM' },
+    { code: '718-7', name: 'HGB', label: '', value_type: 'NM' },
+  ] });
+  assert.deepEqual(c.sent.map((o) => [o.label, o.value]), [['6690-2 · WBC · Лейкоциты', 'WBC'], ['HGB', 'HGB']]);
+});

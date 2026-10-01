@@ -85,6 +85,7 @@ export function lisRecent(db, args, user) {
   const rows = db.prepare(`
     SELECT m.id, m.received_at, m.sample_id, m.status, m.detail, m.peer,
            m.visit_service_id, m.resolved_at,
+           m.device_id,   -- LIS_REAL_ANALYZERS_V1 (экран): серия в ленте — по прибору и заказу (groupSeries)
            d.name  AS device_name,
            s.name  AS service_name,
            p.full_name AS patient_name,
@@ -329,10 +330,15 @@ export function lisDeviceCodes(db, args, user) {
  * приборами сам (lab_devices.dial = 1), — { device_id, host, port, state, since,
  * last_rx_at, code, retry_at } (lis/index.js listenerStatus). Живое состояние,
  * а не база: «подключено с 10:02 · сигнал 2 с назад», «повтор через 30 с».
+ *
+ * LIS_REAL_ANALYZERS_V1 (экран) — now: «сейчас» сервера (ISO, UTC). Метки
+ * лотка и звонков ставит сервер, и экран меряет их его часами: часы
+ * лабораторного ПК могут отставать, и серия, просроченная по серверу, иначе
+ * пряталась бы в «Идёт приём результатов».
  */
 export function lisListeners(db, args, user) {
   guard(user);
-  return listenerStatus();
+  return { ...listenerStatus(), now: new Date().toISOString() };   // LIS_REAL_ANALYZERS_V1 (экран) — часы сервера
 }
 
 /**

@@ -14,8 +14,12 @@
 import { h, Icon, Tag, toast, clear, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
 import { supabase } from '../../supabase.js';
-import { liveness } from './lab-devices-live.js';   // LIS_INGEST_V1 — правило связи, чистое и покрытое тестами
-import { splitDevices, portState, isTruncatedMessage } from './lab-devices-lists.js?v=lists3';   // LIS_ANALYZER_LIST_V1 — таблица / найдены / ждут · LIS_DISCOVERY_FIX_V1 — обрезанное в лотке
+import { liveness, groupSeries } from './lab-devices-live.js?v=live2';   // LIS_INGEST_V1 — правило связи, чистое и покрытое тестами · LIS_REAL_ANALYZERS_V1 — серия одной строкой ленты
+import { splitDevices, portState, isTruncatedMessage } from './lab-devices-lists.js?v=lists4';   // LIS_ANALYZER_LIST_V1 — таблица / найдены / ждут · LIS_DISCOVERY_FIX_V1 — обрезанное в лотке
+// LIS_REAL_ANALYZERS_V1 (экран) — «Идёт приём результатов» в лотке, звонок прибору (флажок,
+// проверка адреса, строка состояния), служебные за сегодня, подпись модели.
+import { splitTray, groupReceiving, staleSeriesRest, seriesPendingRest, isLocalIp, isIpAddress, dialLine, dialSig,
+    serviceSummary, modelNote, connectionOf } from './lab-devices-lists.js?v=lists4';
 
 // Ключи словаря, а не собранные строки: tr() ищет строку целиком.
 const TRANSPORTS = [
@@ -38,11 +42,36 @@ const STATUS_RU = {
 // Правило «что говорить о связи» вынесено в чистый модуль без DOM и словаря
 // (lab-devices-live.js): проверять надо правило, а не разметку. Здесь остаётся
 // только перевод его решения в текст экрана.
-function livenessText(lastSeen) {
-    const s = liveness(lastSeen);
+// LIS_REAL_ANALYZERS_V1 (ревью) — now: часы сервера (метку last_seen_at ставит он).
+function livenessText(lastSeen, now = Date.now()) {
+    const s = liveness(lastSeen, now);
     const params = s.params && s.params.when ? { ...s.params, when: fmtDateTime(s.params.when) } : s.params;
     return { kind: s.kind, text: Object.keys(params || {}).length ? trf(s.key, params) : tr(s.key) };
 }
+
+// LIS_REAL_ANALYZERS_V1 (экран) — время соединения часами («подключено с
+// 10:02»), если это сегодня; иначе — дата и время, как в остальном экране.
+function clockOf(iso) {
+    const d = new Date(iso);
+    if (!Number.isFinite(d.getTime())) return '—';
+    if (d.toDateString() !== new Date().toDateString()) return fmtDateTime(iso);
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+
+// LIS_REAL_ANALYZERS_V1 (экран) — одна часть решения чистого правила
+// (lab-devices-lists.js: dialLine, serviceSummary) — ключ словаря и
+// подстановки — в текст экрана. Перевод СНАЧАЛА, подстановка ПОТОМ.
+function partText(p) {
+    const params = p.params || {};
+    if (!Object.keys(params).length) return tr(p.key);
+    return trf(p.key, params.time ? { ...params, time: clockOf(params.time) } : params);
+}
+
+// LIS_REAL_ANALYZERS_V1 (экран) — подписи, которые цитируют друг друга: флажок
+// формы и подсказки, называющие его (тест сверяет кавычки и на uz/en).
+const DIAL_LABEL = 'Easy-Med подключается к прибору сам';
+const DIAL_ADD_HINT = 'Анализатор сам не звонит, а ждёт программу LIS? «Добавить по адресу» — и отметьте «Easy-Med подключается к прибору сам».';
+const CONNECT_UNKNOWN_HINT = 'Если в настройках LIS прибора нет адреса сервера, а есть только «порт прибора», — отметьте «Easy-Med подключается к прибору сам».';
 
 // Живая лента опрашивает сервер, пока экран открыт. Таймер модульный и гасится
 // при следующем монтировании и при уходе с вкладки (laboratory.js): иначе
@@ -68,7 +97,18 @@ export async function mountLabDevices(container) {
     // сообщения лотка, у которых человек раскрыл «Сырое».
     const state = { devices: [], profiles: [], messages: [], recent: [], loadError: null, listeners: null, formMode: null, backToAdd: false, addSig: null,
         sigs: { devices: null, live: null, tray: null }, rawOpen: new Set(),
-        showAll: { live: false, tray: false } };   // LD_LAYOUT_V1 — «Показать все» у ленты и лотка
+        showAll: { live: false, tray: false },   // LD_LAYOUT_V1 — «Показать все» у ленты и лотка
+        // LIS_REAL_ANALYZERS_V1 (экран) — counts: служебные за сегодня
+        // (lis_service_counts); dialNodes: строки состояния звонка, которые
+        // опрос обновляет НА МЕСТЕ — «сигнал 2 с назад» меняется каждые 5 с,
+        // и перестройка таблицы ради него снова уносила бы кнопку из-под курсора.
+        counts: [], dialNodes: { table: [], add: [] },
+        // LIS_REAL_ANALYZERS_V1 (ревью) — на сколько часы сервера впереди часов
+        // этого компьютера (lis_listeners.now). Метки лотка, ленты и звонков
+        // ставит сервер: часы лабораторного ПК могут отставать на часы, и серия,
+        // просроченная по серверу, пряталась бы в «Идёт приём результатов».
+        clockOffset: 0 };
+    const serverNow = () => Date.now() + state.clockOffset;
 
     const devicesCard = h('div', { class: 'card' });
     const formCard = h('div', { class: 'card', style: { display: 'none' } });
@@ -98,7 +138,7 @@ export async function mountLabDevices(container) {
         // Ошибки ЗАХВАТЫВАЮТСЯ, а не отбрасываются: экран без приборов и экран,
         // который не смог их прочитать, выглядели бы одинаково — а это разные
         // беды, и лечатся они по-разному.
-        const [devRes, msgRes, profRes, recentRes, lisRes] = await Promise.all([
+        const [devRes, msgRes, profRes, recentRes, lisRes, countsRes] = await Promise.all([
             supabase.from('lab_devices').select('*').order('name'),
             // LIS_MINDRAY_CODES_V1 (ревью R1) — принятые отсеиваются В ЗАПРОСЕ,
             // до limit. Их никто не разбирает (resolved_at остаётся пустым), а с
@@ -109,14 +149,20 @@ export async function mountLabDevices(container) {
             supabase.rpc('lis_profiles', {}),
             supabase.rpc('lis_recent', { limit: 30 }),
             supabase.rpc('lis_listeners', {}),
+            supabase.rpc('lis_service_counts', {}),   // LIS_REAL_ANALYZERS_V1 — контроль, калибровка, запросы за сегодня
         ]);
         if (devRes.error) state.loadError = devRes.error.message || String(devRes.error);
+        // LIS_REAL_ANALYZERS_V1 — счётчик не обязателен: не ответил — строки нет.
+        state.counts = (countsRes && Array.isArray(countsRes.data)) ? countsRes.data : [];
         state.devices = devRes.data || [];
         // Фильтр на клиенте остаётся: лишний раз не повредит.
         state.messages = (msgRes.data || []).filter((m) => m.status !== 'applied');
         state.profiles = profRes.data || [];
         state.recent = recentRes.data || [];
         state.listeners = (lisRes && lisRes.data) || null;   // LIS_ANALYZER_LIST_V1
+        // LIS_REAL_ANALYZERS_V1 (ревью) — часы сервера; не ответил — прежнее смещение.
+        const srvNow = state.listeners && Date.parse(state.listeners.now);
+        if (Number.isFinite(srvNow)) state.clockOffset = srvNow - Date.now();
         // LIS_DISCOVERY_FIX_V1 (экран) — и таблица, живая лента и лоток
         // перерисовываются, только когда изменилось то, что они показывают
         // (тот же приём, что у окна ниже). Раньше опрос каждые 5 с строил их
@@ -129,9 +175,72 @@ export async function mountLabDevices(container) {
         // когда изменилось видимое: окно, перестроенное каждые 5 с, убирало
         // кнопку из-под курсора, и нажатие терялось.
         if (state.formMode === 'add' && addWindowSig() !== state.addSig) paintAddWindow();
+        // LIS_REAL_ANALYZERS_V1 — секунды сигнала и повтора — на месте.
+        refreshDialNodes();
     }
 
     const profileOf = (key) => state.profiles.find((p) => p.key === key) || null;
+
+    // ---------- звонок прибору (LIS_REAL_ANALYZERS_V1) ----------
+    //
+    // Прибор, который ждёт звонка LIS (lab_devices.dial = 1: Mindray BC-3600,
+    // возможно BC-780), Easy-Med набирает сам. Состояние соединения — живое, из
+    // lis_listeners.dialing, а не из базы: «подключено с 10:02 · сигнал 2 с
+    // назад», «нет ответа · повтор через 30 с». Слова — у чистого правила
+    // (dialLine), здесь — перевод.
+
+    const countsOf = (d) => state.counts.find((c) => Number(c.device_id) === Number(d.id)) || null;
+
+    /** Запись lis_listeners.dialing этого прибора; null — нет (или сервер о звонках не знает). */
+    function dialEntry(d) {
+        const list = state.listeners && Array.isArray(state.listeners.dialing) ? state.listeners.dialing : null;
+        return list ? (list.find((x) => Number(x.device_id) === Number(d.id)) || null) : null;
+    }
+
+    /** Строка состояния звонка: { kind, text } или null — прибор не звонимый, выключен или ответа сервера нет. */
+    function dialView(d) {
+        if (Number(d.dial) !== 1 || d.transport !== 'mllp' || !d.enabled) return null;
+        if (!state.listeners || !Array.isArray(state.listeners.dialing)) return null;
+        const line = dialLine(dialEntry(d), serverNow()) || { kind: 'warn', parts: [{ key: 'Easy-Med сейчас не подключается к прибору', params: {} }] };
+        return { kind: line.kind, text: line.parts.map(partText).join(' · ') };
+    }
+
+    function paintDialNode(el, d) {
+        const v = dialView(d);
+        const cls = 'tag' + (v && v.kind ? ' tag-' + v.kind : '');
+        if (el.className !== cls) el.className = cls;
+        const text = v ? v.text : '';
+        if (el.textContent !== text) el.textContent = text;
+        el.style.display = v ? '' : 'none';
+    }
+
+    /** Узел строки состояния; bucket — 'table' или 'add' (окно «Добавить прибор»). */
+    function dialNode(d, bucket) {
+        const el = h('span', { class: 'tag' });
+        state.dialNodes[bucket].push({ id: d.id, el });
+        paintDialNode(el, d);
+        return el;
+    }
+
+    function refreshDialNodes() {
+        for (const bucket of ['table', 'add']) {
+            for (const n of state.dialNodes[bucket]) {
+                const d = state.devices.find((x) => x.id === n.id);
+                if (d) paintDialNode(n.el, d);
+            }
+        }
+    }
+
+    /**
+     * Подпись ответа lis_listeners для решения «перерисовать»: порты и
+     * состояния звонков без секунд (dialSig) — секунды обновляет refreshDialNodes.
+     */
+    function listenersSig() {
+        const l = state.listeners;
+        if (!l) return null;
+        return JSON.stringify([l.listening || [], (l.failed || []).map((f) => [f.port, f.code]),
+            Array.isArray(l.dialing) ? l.dialing.map((x) => [x.device_id, dialSig(x)]) : null]);
+    }
 
     // ---------- список приборов ----------
 
@@ -145,13 +254,17 @@ export async function mountLabDevices(container) {
             state.loadError,
             split.found.length,
             split.table.map((d) => [d.id, d.name, d.profile, d.discovered, d.model_confirmed, d.transport, d.host, d.port, d.enabled,
-                livenessText(d.last_seen_at).text]),
-            state.profiles.map((p) => [p.key, p.vendor, p.model, p.channelsSource]),
+                livenessText(d.last_seen_at, serverNow()).text,
+                // LIS_REAL_ANALYZERS_V1 — звонок (состояние без секунд) и служебные за сегодня
+                d.dial, dialSig(dialEntry(d)), countsOf(d)]),
+            state.profiles.map((p) => [p.key, p.vendor, p.model, p.channelsSource, p.wireSource]),
+            !!(state.listeners && Array.isArray(state.listeners.dialing)),
         ]);
     }
 
     function paintDevices() {
         state.sigs.devices = devicesSig();   // LIS_DISCOVERY_FIX_V1
+        state.dialNodes.table = [];   // LIS_REAL_ANALYZERS_V1 — строки состояния звонка рисуются заново
         clear(devicesCard);
         const split = splitDevices(state.devices);   // LIS_ANALYZER_LIST_V1
         devicesCard.appendChild(h('div', { class: 'card-header' },
@@ -182,7 +295,12 @@ export async function mountLabDevices(container) {
         const tb = h('tbody');
         for (const d of split.table) {
             const p = profileOf(d.profile);
-            const live = livenessText(d.last_seen_at);
+            const live = livenessText(d.last_seen_at, serverNow());
+            // LIS_REAL_ANALYZERS_V1 — кто кому звонит, служебные за сегодня, подпись модели.
+            const conn = connectionOf(d);
+            const dials = conn && Number(d.dial) === 1;
+            const sum = serviceSummary(countsOf(d));
+            const note = modelNote(p);
             tb.appendChild(h('tr', null,
                 h('td', { style: { fontWeight: 600 } }, d.name),
                 h('td', { class: 'muted' },
@@ -197,20 +315,29 @@ export async function mountLabDevices(container) {
                     d.discovered && !Number(d.model_confirmed)
                         ? h('div', null, Tag(tr('найден сам — проверьте модель'), { kind: 'warn' }))
                         : null,
-                    // Список каналов модели — типовой или со скриншота, но не из
-                    // документации: Mindray протокол не публикует. Лаборант обязан
-                    // знать, что коды в выпадающем списке — ожидание, а не факт.
-                    p && p.channelsSource !== 'documented'
-                        ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('список показателей типовой — сверьте по прибору'))
-                        : (p ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('формат документирован')) : null)),
-                h('td', { class: 'cell-mono', style: { fontSize: '12.5px' } },
-                    d.transport === 'mllp'
-                        ? trf('{host}:{port}', { host: d.host || tr('любой адрес'), port: d.port || 2575 })
-                        : tr(TRANSPORT_LABEL[d.transport] || d.transport)),
+                    // Откуда известны список показателей и формат модели. Лаборант
+                    // обязан знать, что коды в выпадающем списке — ожидание, а не
+                    // факт. LIS_REAL_ANALYZERS_V1 — словами по источнику: раньше
+                    // всё, что не «документировано», называлось «типовым» — и
+                    // BS-200, у которого типового списка нет вовсе.
+                    note ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr(note)) : null),
+                // LIS_REAL_ANALYZERS_V1 — «Подключение»: кто кому звонит; у
+                // сетевого прибора, который звонит сам, — его адрес строкой ниже;
+                // у прибора, которому звонит Easy-Med, — состояние соединения.
+                h('td', { style: { fontSize: '12.5px' } },
+                    conn ? h('div', null, trf(conn.key, conn.params)) : h('div', null, tr(TRANSPORT_LABEL[d.transport] || d.transport)),
+                    conn && !dials ? h('div', { class: 'cell-mono muted', style: { fontSize: '12.5px' } }, d.host || tr('любой адрес')) : null,
+                    dials ? h('div', { style: { marginTop: '4px' } }, dialNode(d, 'table')) : null),
                 h('td', null, d.enabled ? Tag(tr('включён'), { kind: 'success' }) : Tag(tr('выключен'))),
                 h('td', null, live.kind === 'idle'
                     ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, live.text)
-                    : Tag(live.text, { kind: live.kind })),
+                    : Tag(live.text, { kind: live.kind }),
+                    // LIS_REAL_ANALYZERS_V1 — служебные сообщения за сегодня: в
+                    // бланки и «Необработанные» они не идут, видно только их число.
+                    sum ? h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '4px' } },
+                        trf('сегодня: {list}', { list: sum.parts.map(partText).join(', ') })) : null,
+                    sum && sum.queryHint ? h('div', { class: 'muted', style: { fontSize: '12.5px' } },
+                        tr('прибор спрашивает рабочий список — Easy-Med заказов не отдаёт, выключите запрос в настройках LIS прибора')) : null),
                 // LIS_DISCOVERY_FIX_V1 — строка теперь переживает опросы, поэтому
                 // форма открывается по СВЕЖЕЙ строке прибора, а не по той, с
                 // которой её нарисовали.
@@ -238,7 +365,9 @@ export async function mountLabDevices(container) {
     // себе человеку не говорит ничего.
 
     // LIS_DISCOVERY_FIX_V1 (экран) — лента показывает ответ lis_recent как есть.
-    const liveSig = () => JSON.stringify(state.recent);
+    // LIS_REAL_ANALYZERS_V1 — и состояние строк серии: «идёт приём» через час
+    // становится бедой само, без нового ответа сервера.
+    const liveSig = () => JSON.stringify([state.recent, groupSeries(state.recent, serverNow()).map((g) => g.status)]);
 
     function paintLive() {
         state.sigs.live = liveSig();   // LIS_DISCOVERY_FIX_V1
@@ -248,13 +377,16 @@ export async function mountLabDevices(container) {
             h('span', { class: 'grow' }),
             h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr('обновляется само'))));
 
-        if (!state.recent.length) {
+        // LIS_REAL_ANALYZERS_V1 — сообщения одной серии (BS-200 шлёт по тесту)
+        // — одной строкой: «LAB-000123 · Иванов · BS-200 · сообщений: 5 · Применено».
+        const groups = groupSeries(state.recent, serverNow());
+        if (!groups.length) {
             liveCard.appendChild(h('div', { class: 'empty', style: { padding: '26px 20px' } }, tr('Приборы пока ничего не присылали.')));
             return;
         }
 
         const tb = h('tbody');
-        for (const r of previewRows(state.recent, 'live')) {   // LD_LAYOUT_V1
+        for (const r of previewRows(groups, 'live')) {   // LD_LAYOUT_V1
             const vals = r.values || [];
             const valueCell = vals.length
                 ? h('span', { style: { display: 'inline-flex', gap: '6px', flexWrap: 'wrap' } },
@@ -267,7 +399,8 @@ export async function mountLabDevices(container) {
 
             tb.appendChild(h('tr', null,
                 h('td', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, fmtDateTime(r.received_at)),
-                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, r.device_name || '—'),
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, r.device_name || '—',
+                    r.count > 1 ? h('div', null, trf('сообщений: {n}', { n: r.count })) : null),   // LIS_REAL_ANALYZERS_V1
                 h('td', { class: 'cell-mono' }, r.sample_id || '—'),
                 // Имя пациента — обязательное поле этой строки, а не украшение.
                 h('td', null,
@@ -278,16 +411,19 @@ export async function mountLabDevices(container) {
                         ? h('div', { class: 'muted', style: { fontSize: '12.5px' } }, r.service_name)
                         : null),
                 h('td', null, valueCell),
-                h('td', null, Tag(tr(STATUS_RU[r.status] || r.status), {
-                    kind: r.status === 'applied' ? 'success' : (r.status === 'superseded' ? 'warn' : ''),
-                }))));
+                // LIS_REAL_ANALYZERS_V1 — серия ещё идёт: «идёт приём», а не «Не сопоставлено».
+                h('td', null, r.status === 'receiving'
+                    ? Tag(tr('идёт приём'))
+                    : Tag(tr(STATUS_RU[r.status] || r.status), {
+                        kind: r.status === 'applied' ? 'success' : (r.status === 'superseded' ? 'warn' : ''),
+                    }))));
         }
         liveCard.appendChild(h('table', { class: 'list' },
             h('thead', null, h('tr', null,
                 h('th', null, tr('Получено')), h('th', null, tr('Прибор')), h('th', null, tr('Номер пробы')),
                 h('th', null, tr('Пациент')), h('th', null, tr('Значения')), h('th', null, tr('Состояние')))),
             tb));
-        const more = moreToggle(state.recent.length, 'live', paintLive);
+        const more = moreToggle(groups.length, 'live', paintLive);
         if (more) liveCard.appendChild(more);
     }
 
@@ -314,8 +450,10 @@ export async function mountLabDevices(container) {
         state.backToAdd = fromAdd;   // ревью M3
         formCard.style.display = '';
         clear(formCard);
+        state.dialNodes.add = [];   // LIS_REAL_ANALYZERS_V1 — окно «Добавить прибор» больше не на экране
 
-        const d = device || { name: '', profile: (state.profiles[0] || {}).key || '', transport: 'mllp', host: '', port: 2575, enabled: 1 };
+        const d = device || { name: '', profile: (state.profiles[0] || {}).key || '', transport: 'mllp', host: '', port: 2575, enabled: 1, dial: 0 };
+        const dialsNow = Number(d.dial) === 1;   // LIS_REAL_ANALYZERS_V1
 
         const nameInp = h('input', { type: 'text', value: d.name, placeholder: tr('Например: Гематология') });
         // LIS_ANALYZER_LIST_V1 (ревью I2) — первый пункт «модель не выбрана».
@@ -349,8 +487,33 @@ export async function mountLabDevices(container) {
         const transport = () => (transSel ? transSel.value : 'mllp');
         const hostInp = h('input', { type: 'text', value: d.host || '', placeholder: tr('адрес анализатора в сети, например 10.0.0.20'),
             oninput: () => syncTransport() });
-        const portInp = h('input', { type: 'number', value: d.port || 2575, min: '1', max: '65535' });
+        // LIS_REAL_ANALYZERS_V1 — у прибора, которому звонит Easy-Med, порт —
+        // ЕГО порт, и по умолчанию пусто: 2575 тут ни при чём.
+        const portInp = h('input', { type: 'number', value: dialsNow ? (d.port || '') : (d.port || 2575), min: '1', max: '65535' });
         const enabledInp = h('input', { type: 'checkbox', checked: d.enabled ? true : null });
+        // LIS_REAL_ANALYZERS_V1 (спецификация, раздел 8) — прибор, который сам не
+        // звонит, а ждёт звонка программы LIS (Mindray BC-3600, возможно BC-780):
+        // Easy-Med подключается к нему сам. Нужны IP-адрес локальной сети и порт
+        // прибора; сервер другой адрес и так не наберёт (bad_address), но
+        // /api/db строку сохранит — поэтому проверка здесь, до записи.
+        const defaultPort = () => (profileOf(profSel.value) || {}).defaultPort || 2575;
+        const dialInp = h('input', { type: 'checkbox', checked: dialsNow ? true : null, onchange: () => {
+            if (dialInp.checked) {
+                const p = String(portInp.value == null ? '' : portInp.value).trim();
+                if (p === String(defaultPort()) || p === '2575') portInp.value = '';
+            } else if (!String(portInp.value == null ? '' : portInp.value).trim()) {
+                portInp.value = String(defaultPort());
+            }
+            syncTransport();
+        } });
+        const dialRow = h('label', { class: 'ld-form-check' }, dialInp,
+            h('span', null, tr(DIAL_LABEL),
+                h('span', { class: 'muted', style: { marginLeft: '6px' } }, tr('(прибор ждёт звонка, как Mindray BC-3600)'))));
+        const dialNote = h('p', null,
+            tr('Easy-Med сам подключится к этому адресу и порту и будет держать соединение. Адрес — только IP локальной сети, порт — из настроек LIS прибора.'));
+        // У модели, про которую неизвестно, кто звонит (BC-780, connect: 'unknown').
+        const connectHint = h('p', null, tr(CONNECT_UNKNOWN_HINT));
+        const dialOn = () => transport() === 'mllp' && !!dialInp.checked;
 
         const notReady = h('p', null,
             tr('Этот транспорт пока не поддерживается — настройка сохранится, но приём по нему не заработает.'));
@@ -378,9 +541,24 @@ export async function mountLabDevices(container) {
             hostField.style.display = key === 'mllp' ? '' : 'none';
             portField.style.display = key === 'mllp' ? '' : 'none';
             notReady.style.display = t && t.ready ? 'none' : '';
-            if (noHostHint) noHostHint.style.display = key === 'mllp' && !hostInp.value.trim() ? '' : 'none';
+            // LIS_REAL_ANALYZERS_V1 — флажок звонка — только у сетевого прибора.
+            // Звонит Easy-Med — адрес только IP, пояснение про соединение; у
+            // модели «кто звонит — неизвестно» — подсказка про флажок.
+            const dialing = dialOn();
+            dialRow.style.display = key === 'mllp' ? '' : 'none';
+            dialNote.style.display = dialing ? '' : 'none';
+            const prof = profileOf(profSel.value);
+            connectHint.style.display = key === 'mllp' && !dialing && prof && prof.connect === 'unknown' ? '' : 'none';
+            hostInp.setAttribute('placeholder', dialing ? tr('IP-адрес прибора, например 10.0.0.30') : tr('адрес анализатора в сети, например 10.0.0.20'));
+            if (noHostHint) noHostHint.style.display = key === 'mllp' && !dialing && !hostInp.value.trim() ? '' : 'none';
         }
-        profSel.onchange = () => { if (!device) portInp.value = (profileOf(profSel.value) || {}).defaultPort || 2575; };
+        // LIS_REAL_ANALYZERS_V1 — слушатель, а не свойство onchange: смена модели
+        // ещё и показывает или прячет подсказку про звонок (syncTransport).
+        // Порт по умолчанию модели — только новому прибору, который звонит сам.
+        profSel.addEventListener('change', () => {
+            if (!device && !dialOn()) portInp.value = String(defaultPort());
+            syncTransport();
+        });
 
         formCard.appendChild(h('div', { class: 'card-header' },
             h('h3', null, device ? trf('Анализатор: {name}', { name: d.name }) : tr('Новый анализатор'))));
@@ -388,18 +566,19 @@ export async function mountLabDevices(container) {
         body.appendChild(h('div', { class: 'ld-form-fields' },
             field(tr('Название'), nameInp), field(tr('Модель'), profSel), transSel ? field(tr('Подключение'), transSel) : null,
             hostField, portField));
+        body.appendChild(dialRow);   // LIS_REAL_ANALYZERS_V1
         const notes = h('div', { class: 'ld-form-notes muted' });
         if (noHostHint) notes.appendChild(noHostHint);
         notes.appendChild(notReady);
-        // LIS_ANALYZER_LIST_V1 — честная строка ручного пути: прибор-сервер
-        // (программа LIS звонит ему сама) пока не поддержан.
+        notes.appendChild(dialNote);      // LIS_REAL_ANALYZERS_V1
+        notes.appendChild(connectHint);   // LIS_REAL_ANALYZERS_V1
+        // LIS_REAL_ANALYZERS_V1 — строки «прибор-сервер пока не поддержан»
+        // больше нет: его заменил флажок «Easy-Med подключается к прибору сам».
         if (!device) {
             // LIS_DISCOVERY_FIX_V1 (экран) — куда делся «Кабель COM»: такой
             // прибор руками не заводят, он приходит сам.
             notes.appendChild(h('p', null,
                 tr('Анализатор на кабеле COM подключается через переадресатор на лабораторном компьютере и появится в «Найдены в сети» сам — добавлять его здесь не нужно.')));
-            notes.appendChild(h('p', null,
-                tr('Анализаторы, которые сами ждут звонка от программы LIS (например, Mindray BC-3600), пока не поддерживаются: такой прибор не отправит результаты сам.')));
         }
         body.appendChild(notes);
         body.appendChild(h('label', { class: 'ld-form-check' },
@@ -416,6 +595,7 @@ export async function mountLabDevices(container) {
         nameInp.focus();
 
         async function save() {
+            const dial = dialOn();   // LIS_REAL_ANALYZERS_V1
             const payload = {
                 name: nameInp.value.trim(),
                 profile: profSel.value,
@@ -423,6 +603,7 @@ export async function mountLabDevices(container) {
                 host: hostInp.value.trim(),
                 port: Number(portInp.value) || 2575,
                 enabled: enabledInp.checked ? 1 : 0,
+                dial: dial ? 1 : 0,   // LIS_REAL_ANALYZERS_V1 — Easy-Med подключается к прибору сам
             };
             if (!payload.name) { toast(tr('Укажите название прибора'), 'warn'); return; }
             // LIS_DISCOVERY_FIX_V1 (экран) — новый прибор — только с адресом
@@ -433,6 +614,22 @@ export async function mountLabDevices(container) {
                 toast(tr('Укажите адрес анализатора в сети — например, 10.0.0.20'), 'warn');
                 hostInp.focus();
                 return;
+            }
+            // LIS_REAL_ANALYZERS_V1 — звонит Easy-Med: адрес — только IP
+            // локальной сети (те же правила, что у сервера, dial.js isLocalIp),
+            // порт — обязателен и свой у прибора.
+            if (dial) {
+                if (!payload.host) { toast(tr('Укажите IP-адрес анализатора — Easy-Med подключится к нему сам'), 'warn'); hostInp.focus(); return; }
+                if (!isIpAddress(payload.host)) { toast(tr('Нужен IP-адрес анализатора, например 10.0.0.30, — имя не подходит'), 'warn'); hostInp.focus(); return; }
+                if (!isLocalIp(payload.host)) { toast(tr('Адрес не из локальной сети — анализатор в интернете означает ошибку в адресе'), 'warn'); hostInp.focus(); return; }
+                const rawPort = String(portInp.value == null ? '' : portInp.value).trim();
+                const port = /^\d+$/.test(rawPort) ? Number(rawPort) : NaN;
+                if (!Number.isInteger(port) || port < 1 || port > 65535) {
+                    toast(tr('Укажите порт анализатора — он в настройках LIS прибора'), 'warn');
+                    portInp.focus();
+                    return;
+                }
+                payload.port = port;
             }
 
             // LIS_ANALYZER_LIST_V1 — сохранение найденного прибора с выбранной
@@ -522,15 +719,19 @@ export async function mountLabDevices(container) {
         return JSON.stringify([
             state.loadError,
             split.table.length > 0,
-            split.found.map((d) => [d.id, d.name, d.sending_app, d.host, d.port, d.enabled, d.profile, livenessText(d.last_seen_at).text]),
-            split.waiting.map((d) => [d.id, d.name, d.host, d.port, d.enabled, d.profile, d.transport]),
-            state.listeners,
+            split.found.map((d) => [d.id, d.name, d.sending_app, d.host, d.port, d.enabled, d.profile, livenessText(d.last_seen_at, serverNow()).text]),
+            split.waiting.map((d) => [d.id, d.name, d.host, d.port, d.enabled, d.profile, d.transport, d.dial]),
+            // LIS_REAL_ANALYZERS_V1 — порты и состояния звонков без секунд:
+            // «повтор через 30 с» обновляется на месте (refreshDialNodes), окно
+            // ради него не перестраивается.
+            listenersSig(),
             state.profiles.map((p) => p.key),
         ]);
     }
 
     function paintAddWindow() {
         clear(formCard);
+        state.dialNodes.add = [];   // LIS_REAL_ANALYZERS_V1
         state.addSig = addWindowSig();   // ревью M9
         const split = splitDevices(state.devices);
         formCard.appendChild(h('div', { class: 'card-header' },
@@ -566,7 +767,7 @@ export async function mountLabDevices(container) {
             const tb = h('tbody');
             for (const d of split.found) {
                 const p = profileOf(d.profile);
-                const live = livenessText(d.last_seen_at);
+                const live = livenessText(d.last_seen_at, serverNow());
                 tb.appendChild(h('tr', null,
                     // LIS_DISCOVERY_FIX_V1 (экран) — «Как назвался» — как прибор
                     // назвал себя сам (MSH-3, lab_devices.sending_app, мигр. 229):
@@ -600,6 +801,10 @@ export async function mountLabDevices(container) {
                 // слушается всегда, и строка обещала бы приём, которого нет.
                 let lineTag = null;
                 if (!d.enabled) lineTag = Tag(tr('выключен'));
+                // LIS_REAL_ANALYZERS_V1 — прибору, который ждёт звонка, Easy-Med
+                // звонит сам: его порт не слушается, и строка о порте была бы
+                // неправдой — вместо неё состояние соединения.
+                else if (d.transport === 'mllp' && Number(d.dial) === 1) lineTag = dialNode(d, 'add');
                 else if (d.transport === 'mllp') {
                     const ps = portState(d, state.listeners);
                     // Ревью M6: не поднявшийся порт — своими словами по коду, без
@@ -628,7 +833,9 @@ export async function mountLabDevices(container) {
 
         formCard.appendChild(h('div', { class: 'ld-add-foot' },   // LD_LAYOUT_V1
             h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => openForm(null, { fromAdd: true }) },
-                tr('Анализатор не появился? Добавить по адресу'))));
+                tr('Анализатор не появился? Добавить по адресу')),
+            // LIS_REAL_ANALYZERS_V1 — прибор-сервер найти нельзя: он не звонит.
+            h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '4px 8px 0' } }, tr(DIAL_ADD_HINT))));
     }
 
     // «Добавить» у находки: название подставлено, модель — догадка по имени;
@@ -643,6 +850,7 @@ export async function mountLabDevices(container) {
     function openAdopt(d) {
         state.formMode = 'adopt';
         clear(formCard);
+        state.dialNodes.add = [];   // LIS_REAL_ANALYZERS_V1 — окно «Добавить прибор» больше не на экране
         const nameInp = h('input', { type: 'text', value: d.name || '' });
         const profSel = h('select', null,
             h('option', { value: '', selected: !d.profile ? true : null }, tr('модель не определена')),
@@ -681,15 +889,18 @@ export async function mountLabDevices(container) {
         state.backToAdd = false;   // ревью M3
         formCard.style.display = 'none';
         clear(formCard);
+        state.dialNodes.add = [];   // LIS_REAL_ANALYZERS_V1
     }
 
     // ---------- инструкция по подключению ----------
     //
     // Единственное место, где человек, стоящий у прибора, прочитает, что
     // нажать. Раньше эти шаги жили в переписке с разработчиком — то есть нигде.
-    // Инструкция честная: сетевой прибор подключается одной настройкой на нём
-    // самом, прибор, подключённый к компьютеру только кабелем, ПОКА не
-    // поддержан — и сказать это здесь важнее, чем выглядеть законченным.
+    // Инструкция честная: сетевой прибор подключается настройкой на нём самом
+    // (или в программе прибора на его компьютере — BS-200); прибор, который сам
+    // не звонит, Easy-Med набирает сам; прибор только на кабеле COM — через
+    // переадресатор на лабораторном компьютере. Что сделано по документам, а не
+    // проверено на приборе, сказано прямо (LIS_REAL_ANALYZERS_V1).
 
     // LD_LAYOUT_V1 — настоящий адрес, если программа открыта по нему; иначе ''.
     function guideHostKnown() {
@@ -716,27 +927,43 @@ export async function mountLabDevices(container) {
             toggle));
 
         const step = (text) => h('li', { style: { marginBottom: '6px' } }, text);
-        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Прибор с сетевым разъёмом (BC-20, BC-5300, BS-240, CL-900i)')));
+        // LIS_REAL_ANALYZERS_V1 — и три настоящих прибора клиники: BC-780, BS-200, A1000 по сети.
+        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Прибор с сетевым разъёмом (BC-20, BC-5300, BC-780, BS-200, BS-240, CL-900i, AutoLumo A1000)')));
         // LIS_DISCOVERY_FIX_V1 (экран) — «ничего настраивать не нужно» было
         // неправдой: прибор ещё надо «Добавить».
         body.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '8px' } },
             tr('В Easy-Med настраивать почти ничего не нужно: прибор появится в «Добавить прибор» → «Найдены в сети» — останется нажать «Добавить».')));
         body.appendChild(h('ol', { style: { paddingLeft: '20px', marginBottom: '12px' } },
             step(tr('Подключите прибор сетевым кабелем к той же сети, где стоит компьютер с Easy-Med.')),
-            step(tr('На приборе откройте: Настройка → Системные настройки → Связь (Setup → System Setup → Communication).')),
+            // LIS_REAL_ANALYZERS_V1 — путь меню был только гематологии Mindray;
+            // у BS-200 связь с LIS — в программе прибора на его компьютере.
+            step(tr('Откройте на приборе настройки связи с LIS: у гематологии Mindray — Настройка → Системные настройки → Связь (Setup → System Setup → Communication); у BS-200 — в программе прибора на его компьютере.')),
             step(tr('Связь: «сетевой порт» (Network port), а не «последовательный порт».')),
             // location может отсутствовать (тестовый DOM); а localhost человеку у
             // прибора бесполезен — ему нужен адрес компьютера В СЕТИ клиники.
             step(trf('Адрес назначения: адрес компьютера с Easy-Med — {ip}. Порт: 2575. Протокол: HL7.', { ip: hostForGuide() })),
+            // LIS_REAL_ANALYZERS_V1 — Easy-Med только принимает результаты.
+            step(tr('Передача — в одну сторону: прибор только отправляет результаты. Запрос заказов из LIS (рабочий список, «загрузка из LIS») выключите — Easy-Med заказов не отдаёт.')),
             step(tr('Включите «Автоматическая передача» (Auto Communicate) — тогда прибор отправляет каждую готовую пробу сам.')),
             // Ревью M2: находка ждёт в окне «Добавить прибор», а не появляется
             // «в списке выше» сама — инструкция ведёт туда, где она есть.
             step(tr('Прогоните одну пробу. Прибор появится в «Добавить прибор» → «Найдены в сети»: нажмите «Добавить», затем в «Панелях» выберите его у панели и подтвердите поля.')),
             // LIS_DISCOVERY_FIX_V1 (экран) — ручной путь: адрес обязателен, и
             // прибор ждёт первую пробу в своём разделе окна.
-            step(tr('Анализатор не появился? В «Добавить прибор» → «Добавить по адресу» укажите его адрес и порт — он будет ждать в «Ждут первого сообщения», пока не пришлёт пробу.'))));
+            step(tr('Анализатор не появился? В «Добавить прибор» → «Добавить по адресу» укажите его адрес и порт — он будет ждать в «Ждут первого сообщения», пока не пришлёт пробу.')),
+            // LIS_REAL_ANALYZERS_V1 — входящий 2575 в брандмауэре Windows
+            // открывает только администратор, и без него прибор молчит.
+            step(tr('Прибор не появляется, хотя адрес и порт верны? На компьютере с Easy-Med разрешите входящий TCP-порт 2575 в брандмауэре Windows — это делается с правами администратора.'))));
 
-        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Прибор, подключённый к компьютеру только кабелем COM (BC-2800, BC-3000 Plus, AutoLumo A1000 и другие)')));
+        // LIS_REAL_ANALYZERS_V1 — три настоящих прибора клиники, у каждого своё.
+        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Особенности моделей')));
+        body.appendChild(h('ul', { style: { paddingLeft: '20px', fontSize: '12.5px', marginBottom: '12px' } },
+            h('li', { style: { marginBottom: '4px' } }, tr('Mindray BS-200 — связь с LIS настраивается в программе прибора на его компьютере: адрес этого компьютера, порт 2575. Номер пробирки прибор передаёт из поля «Штрихкод» (Barcode): сканируйте этикетку LAB-… или впишите её номер в это поле, а не в «Номер пробы» (Sample ID) — это место в штативе, Easy-Med его не читает. Тесты приходят по одному: пока проба не пришла целиком, она видна в «Необработанные» → «Идёт приём результатов».')),
+            h('li', { style: { marginBottom: '4px' } }, tr('Mindray BC-780 — если в настройках LIS прибора есть адрес сервера, укажите адрес этого компьютера и порт 2575: прибор позвонит сам. Если есть только «порт прибора» — прибор ждёт звонка: «Добавить по адресу», впишите IP-адрес и порт прибора и отметьте «Easy-Med подключается к прибору сам».')),
+            h('li', null, tr('Autobio AutoLumo A1000 — лучше по сети: связь с LIS по TCP/IP, протокол HL7, тип порта «As client», адрес этого компьютера и порт 2575, приоритет LIS «только локальный» (2), «Get from LIS…» выключите. Если сетевой разъём занят — кабелем COM через переадресатор (FORWARD-AutoLumo-A1000.bat), на приборе протокол ASTM.'))));
+
+        // LIS_REAL_ANALYZERS_V1 — A1000 больше не «только кабелем COM»: основной путь у него — сеть.
+        body.appendChild(h('p', { style: { fontWeight: 600, marginBottom: '6px' } }, tr('Прибор, подключённый к компьютеру только кабелем COM (BC-2800, BC-3000 Plus и другие)')));
         body.appendChild(h('p', { class: 'muted', style: { fontSize: '12.5px', marginBottom: '12px' } },
             tr('Такой прибор не умеет отправлять по сети — за него это делает переадресатор на том же компьютере. Папку «analyzers» выдаёт разработчик: скопируйте её целиком на лабораторный компьютер и запустите файл своей модели — FORWARD-BC-2800.bat, FORWARD-AutoLumo-A1000.bat и так далее. При первом запуске он спросит COM-порт, скорость и адрес этого компьютера с Easy-Med. Дальше результаты приходят сюда так же, как с сетевого прибора.')));
         // LIS_DISCOVERY_FIX_V1 (экран) — решение владельца 2026-09-29: в ручной
@@ -750,6 +977,11 @@ export async function mountLabDevices(container) {
         body.appendChild(h('ul', { style: { paddingLeft: '20px', fontSize: '12.5px' } },
             h('li', { style: { marginBottom: '4px' } }, tr('Прибор отправляет результаты только по ОДНОМУ адресу. Если он сейчас направлен на другую программу, после переключения та программа результаты получать перестанет.')),
             h('li', { style: { marginBottom: '4px' } }, tr('Результат никогда не выдаётся сам: прибор заполняет бланк, а проверяет и выдаёт лаборант.')),
+            // LIS_REAL_ANALYZERS_V1 — что сделано по документам, а не на приборе;
+            // единицы; служебные сообщения.
+            h('li', { style: { marginBottom: '4px' } }, tr('Первую пробу каждого нового прибора сверьте построчно с распечаткой прибора: BS-200 сделан по руководству производителя, AutoLumo A1000 — по рабочим программам других LIS, BC-780 — по документам соседних моделей.')),
+            h('li', { style: { marginBottom: '4px' } }, tr('Единицы не пересчитываются: настройте на приборе те же единицы, что в панели.')),
+            h('li', { style: { marginBottom: '4px' } }, tr('Контроль качества, калибровка и запросы заказов в бланки и «Необработанные» не идут — их число за сегодня видно у прибора в таблице.')),
             // Ревью M2: пробы находки ложатся и до «Добавить» — значит, условие
             // не «появился в списке», а «уже присылал пробы».
             h('li', null, tr('Если прибор уже присылал пробы, но значения не ложатся — смотрите «Необработанные»: там написано, чего именно не хватает.'))));
@@ -761,7 +993,36 @@ export async function mountLabDevices(container) {
 
     // LIS_DISCOVERY_FIX_V1 (экран) — что видно в строке лотка. Текст «Сырого»
     // у сообщения не меняется, а статус и строка журнала — могут.
-    const traySig = () => JSON.stringify(state.messages.map((m) => [m.id, m.status, m.detail, m.sample_id, m.received_at]));
+    // LIS_REAL_ANALYZERS_V1 — и раскладка по времени: строка серии через 60
+    // минут переходит из «Идёт приём результатов» в лоток сама, без нового ответа сервера.
+    const traySig = () => {
+        const split = splitTray(state.messages, serverNow());
+        return JSON.stringify([state.messages.map((m) => [m.id, m.status, m.detail, m.sample_id, m.received_at]),
+            split.receiving.map((m) => m.id)]);
+    };
+
+    // LIS_REAL_ANALYZERS_V1 (спецификация, раздел 3, «Что видит лаборатория») —
+    // прибор шлёт по тесту в сообщении (BS-200, A1000): пока не пришли остальные
+    // строки бланка, сообщения серии ждут — это идущий приём, а не беда.
+    // Приглушённой группой, без кнопок разбора и не в счёт «Необработанных».
+    // Одна строка на пробу (groupReceiving): самая новая говорит, чего не хватает сейчас.
+    function receivingBlock(groups) {
+        const tb = h('tbody');
+        for (const m of groups) {
+            const dev = state.devices.find((d) => d.id === m.device_id);
+            tb.appendChild(h('tr', null,
+                h('td', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, fmtDateTime(m.received_at)),
+                h('td', { class: 'cell-mono muted' }, m.sample_id || '—'),
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, dev ? dev.name : '—',
+                    m.count > 1 ? h('div', null, trf('сообщений: {n}', { n: m.count })) : null),
+                h('td', { class: 'muted', style: { fontSize: '12.5px' } }, seriesPendingRest(m) || '—')));
+        }
+        return h('div', { style: { opacity: '0.85' } },
+            h('div', { class: 'ld-subhead' }, tr('Идёт приём результатов')),
+            h('div', { class: 'muted', style: { fontSize: '12.5px', padding: '0 14px 6px' } },
+                tr('Анализатор присылает тесты по одному: строка ждёт остальные результаты бланка до 60 минут.')),
+            h('table', { class: 'list' }, tb));
+    }
 
     function paintTray() {
         state.sigs.tray = traySig();   // LIS_DISCOVERY_FIX_V1
@@ -771,19 +1032,25 @@ export async function mountLabDevices(container) {
         const shown = new Set(state.messages.map((m) => m.id));
         for (const id of state.rawOpen) if (!shown.has(id)) state.rawOpen.delete(id);
         clear(trayCard);
+        // LIS_REAL_ANALYZERS_V1 — идущая серия — отдельно и не в счёт.
+        const { receiving: receivingRows, tray } = splitTray(state.messages, serverNow());
+        const receiving = groupReceiving(receivingRows);
         trayCard.appendChild(h('div', { class: 'card-header' },
             h('h3', null, tr('Необработанные')),
             h('span', { class: 'grow' }),
             h('span', { class: 'muted', style: { fontSize: '12.5px' } },
-                state.messages.length ? trf('ждут разбора: {n}', { n: state.messages.length }) : tr('пусто'))));
+                tray.length ? trf('ждут разбора: {n}', { n: tray.length })
+                    : receiving.length ? trf('идёт приём: {n}', { n: receiving.length }) : tr('пусто'))));
 
-        if (!state.messages.length) {
-            trayCard.appendChild(h('div', { class: 'empty', style: { padding: '26px 20px' } }, tr('Все результаты разложены по бланкам.')));
+        if (receiving.length) trayCard.appendChild(receivingBlock(receiving));
+        if (!tray.length) {
+            // Идёт приём — «всё разложено» было бы неправдой: бланк ещё не полон.
+            if (!receiving.length) trayCard.appendChild(h('div', { class: 'empty', style: { padding: '26px 20px' } }, tr('Все результаты разложены по бланкам.')));
             return;
         }
 
         const tb = h('tbody');
-        for (const m of previewRows(state.messages, 'tray')) {   // LD_LAYOUT_V1
+        for (const m of previewRows(tray, 'tray')) {   // LD_LAYOUT_V1
             const raw = h('pre', {
                 style: {
                     display: state.rawOpen.has(m.id) ? '' : 'none', margin: '8px 0 0', padding: '10px', background: 'var(--ink-050, #f4f6f8)',
@@ -795,13 +1062,16 @@ export async function mountLabDevices(container) {
             // такую привязку отклоняет. Кнопки нет; «Отклонить» остаётся — строку
             // убирают из лотка, а пробу прибор отправляет заново.
             const truncated = isTruncatedMessage(m);
+            // LIS_REAL_ANALYZERS_V1 — серия не дошла за 60 минут: «серия не
+            // дошла до конца: не пришли: …», а слова «ждём» к старой строке нет.
+            const staleRest = staleSeriesRest(m, serverNow());
 
             tb.appendChild(h('tr', null,
                 h('td', { class: 'muted', style: { fontSize: '12.5px', whiteSpace: 'nowrap' } }, fmtDateTime(m.received_at)),
                 h('td', { class: 'cell-mono' }, m.sample_id || '—'),
                 h('td', null, Tag(tr(STATUS_RU[m.status] || m.status), { kind: m.status === 'superseded' ? 'warn' : '' })),
                 h('td', { class: 'muted', style: { fontSize: '12.5px' } },
-                    m.detail || '—',
+                    staleRest != null ? trf('серия не дошла до конца: {rest}', { rest: staleRest }) : (m.detail || '—'),
                     h('button', {
                         class: 'btn btn-outline btn-sm', type: 'button', style: { marginLeft: '8px' },
                         onclick: () => {
@@ -825,7 +1095,7 @@ export async function mountLabDevices(container) {
                 h('th', null, tr('Получено')), h('th', null, tr('Номер пробы')), h('th', null, tr('Состояние')),
                 h('th', null, tr('Подробности')), h('th', null, ''))),
             tb));
-        const more = moreToggle(state.messages.length, 'tray', paintTray);   // LD_LAYOUT_V1
+        const more = moreToggle(tray.length, 'tray', paintTray);   // LD_LAYOUT_V1
         if (more) trayCard.appendChild(more);
     }
 
@@ -834,7 +1104,11 @@ export async function mountLabDevices(container) {
             tr('Номер заказа — число, напечатанное на пробирке после LAB-'),
             String(m.sample_id || '').replace(/^lab[-_ ]?/i, '').replace(/^0+/, ''));
         if (answer == null) return;
-        const vsId = Number(String(answer).trim());
+        // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 10) — номер или этикетка целиком
+        // («LAB-000123»), как принимает сервер; прочее — не номер.
+        const typed = String(answer).trim();
+        const fromLabel = /^lab-(\d+)$/i.exec(typed);
+        const vsId = fromLabel ? Number(fromLabel[1]) : (/^\d+$/.test(typed) ? Number(typed) : 0);
         if (!vsId) { toast(tr('Нужен номер заказа'), 'warn'); return; }
 
         const { data, error } = await supabase.rpc('lis_message_attach', { id: m.id, visit_service_id: vsId });

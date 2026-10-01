@@ -34,7 +34,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { supabase } from '../../supabase.js';
 import { currentClinicId } from '../tenant-tables.js';
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';   // LAB_SERVICE_ROUTING_V1 — one shared definition of 'lab service'
-import { codeChoices, TYPE_OWN } from './lab-device-codes.js';   // LIS_MINDRAY_CODES_V1 — присланные коды, типовые, свой код
+import { codeChoices, TYPE_OWN } from './lab-device-codes.js?v=codes2';   // LIS_MINDRAY_CODES_V1 — присланные коды, типовые, свой код · LIS_REAL_ANALYZERS_V1 — «12 · GLU»
 
 const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагностика' };
 
@@ -50,7 +50,10 @@ const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагнос
 //      lab-section role (LAB_PANELS_BY_SECTION_V1).
 // v8 = one shared page head for queue+panels; marker moved off-screen into
 //      the data-attribute above; queue filter chips translate label-then-count.
-export const LAB_BUILD = 'lab-v17';   // LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1); v17 — одно поле прибора под двумя именами (LIS_DISCOVERY_FIX_V1)
+export const LAB_BUILD = 'lab-v18';   // LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1); v17 — одно поле прибора под двумя именами (LIS_DISCOVERY_FIX_V1); v18 — «12 · GLU», подсказка «коды появятся», типовые BC-780 по соседним моделям (LIS_REAL_ANALYZERS_V1)
+
+// LIS_REAL_ANALYZERS_V1 — у модели нет типового списка (BS-200, A1000), а прибор ещё ничего не присылал.
+const NO_DEVICE_CODES_HINT = 'Коды появятся, когда анализатор пришлёт первую пробу; номер теста — как в настройках тестов прибора. Пока код можно вписать руками.';
 
 // LIS_DISCOVERY_FIX_V1 (экран) — какое ПОЛЕ ПРИБОРА стоит за кодом строки
 // бланка. Прибор называет поле двумя именами сразу — «6690-2^WBC^LN», — и приём
@@ -540,7 +543,12 @@ export async function mountLabPanels(container) {
                 // Раньше она считала все приборы и при одной ненажатой находке
                 // говорила «Выберите прибор», а выбрать было нечего.
                 fld(tr('Анализатор'), devSel,
-                    devChoices.length
+                    // LIS_REAL_ANALYZERS_V1 — у BS-200 и A1000 типового списка
+                    // нет (номера тестов задаёт клиника): пока прибор ничего не
+                    // присылал, сказать, откуда возьмутся коды.
+                    devChoices.length && deviceCodesEmpty()
+                        ? tr(NO_DEVICE_CODES_HINT)
+                        : devChoices.length
                         ? tr('Выберите прибор — тогда у каждого показателя можно указать, какое поле анализатора его заполняет.')
                         : state.devices.length
                             ? tr('Новый анализатор ждёт «Добавить» во вкладке «Анализаторы».')
@@ -854,6 +862,25 @@ export async function mountLabPanels(container) {
         return (prof && prof.channels) || [];
     }
 
+    // LIS_REAL_ANALYZERS_V1 — прибор у панели выбран, а выбирать коды не из
+    // чего: он ничего не присылал, и типового списка у модели нет (BS-200,
+    // A1000: channels [], channelsSource 'device').
+    function deviceCodesEmpty() {
+        const p = state.selected;
+        if (!p || !p.device_id) return false;
+        const sent = state.deviceCodes[Number(p.device_id)] || [];
+        return !sent.length && !deviceChannels().length;
+    }
+
+    // LIS_REAL_ANALYZERS_V1 — подпись группы типового списка: у BC-780 он по
+    // документам соседних моделей (channelsSource 'siblings'), и это видно.
+    function typicalGroupLabel() {
+        const p = state.selected;
+        const dev = p && p.device_id ? state.devices.find(d => d.id === Number(p.device_id)) : null;
+        const prof = dev && state.profiles.find(x => x.key === dev.profile);
+        return prof && prof.channelsSource === 'siblings' ? tr('Типовые для модели — по документам соседних моделей') : tr('Типовые для модели');
+    }
+
     /**
      * Предзаполнить очевидные строки ПОДСКАЗКАМИ (не применением). Трогает
      * только пустые: уже сопоставленное человеком не перебиваем.
@@ -907,7 +934,8 @@ export async function mountLabPanels(container) {
             const inp = h('input', {
                 value: r.device_code || '', placeholder: 'код канала', class: 'lw-inp',
                 style: { width: '130px', ...(suggested ? UNCONFIRMED_LOOK : {}) },
-                title: 'Впишите код так, как его присылает прибор',
+                // LIS_REAL_ANALYZERS_V1 — выбирать не из чего (BS-200 ещё не присылал): откуда возьмутся коды.
+                title: noLists ? NO_DEVICE_CODES_HINT : 'Впишите код так, как его присылает прибор',
                 // Вписал сам — это и есть подтверждение. Вид догоняет строку
                 // здесь же: перерисовка на каждый символ сбила бы курсор.
                 oninput: (e) => {
@@ -936,7 +964,7 @@ export async function mountLabPanels(container) {
             h('option', { value: '', selected: !choice.selected ? true : null }, '— не выбрано —'),
             choice.orphan ? opt(choice.orphan) : null,
             choice.sent.length ? h('optgroup', { label: tr('Присылал этот анализатор') }, ...choice.sent.map(opt)) : null,
-            choice.typical.length ? h('optgroup', { label: tr('Типовые для модели') }, ...choice.typical.map(opt)) : null,
+            choice.typical.length ? h('optgroup', { label: typicalGroupLabel() }, ...choice.typical.map(opt)) : null,   // LIS_REAL_ANALYZERS_V1
             h('option', { value: TYPE_OWN }, 'Вписать код…'));
 
         if (!suggested) return sel;
