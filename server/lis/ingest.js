@@ -20,8 +20,10 @@ import { recordMessage, touchDevice, SERIES_PENDING_PREFIX } from './inbox.js'; 
 import { REATTACHED_NOTE } from './inbox.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 2
 import { planObservations, outcome } from './match.js';   // LIS_MINDRAY_CODES_V1 — правило сопоставления и лотка
 import { planSeries, seriesOutcome, SERIES_WINDOW_MS } from './match.js';   // LIS_REAL_ANALYZERS_V1_SERIES — бланк по серии сообщений
-import { changeText, SERIES_MAX_MESSAGES } from './match.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, пп. 6 и 9
+import { SERIES_MAX_MESSAGES } from './match.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 9
 import { sameValue, SERIES_FORM_MAX_AGE_MS } from './match.js';   // LIS_REAL_ANALYZERS_V1 — ревью R3, пп. 6 и 10
+import { disputeOf, sameDispute } from './match.js';   // LIS_REAL_ANALYZERS_V1 — ревью R4, п. D
+import { guessProfile } from './discover.js';   // LIS_REAL_ANALYZERS_V1 — ревью R4, п. A: модель по имени сообщения и прибора панели
 // CRM_REAL_BOOKING_V1 — работа над пациентом это доказательство его прихода.
 import { crmServiceEvidence } from '../services/crm/visit-status.js';
 // LIS_REAL_ANALYZERS_V1_SAMPLE — провод прибора: номер пробы и строки теста из
@@ -99,6 +101,14 @@ function bareIdRefusal(db, order, number) {
 
 /** Строка журнала у сообщения, прогнанного «Привязать» с номером человека. */
 const MANUAL = 'привязано вручную';
+
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R4, п. A) — в сообщении значения для строк
+ * панели, подтверждённых для другого прибора (или до мигр. 233): в бланк они
+ * не идут; что делать. Следом — какие строки. Экран «Панели» у таких строк
+ * говорит «подтверждено для другого прибора — подтвердите заново».
+ */
+const STALE_DETAIL = 'подтверждено для другого прибора — подтвердите заново в «Лаборатория → Панели»: ';
 
 /**
  * Спор о номере пробы — чья проба, не знает никто: номера нет, бланки не
@@ -189,29 +199,23 @@ function waitingRows(db, { orderId, deviceId, perInstrument, profileKey }) {
 /**
  * LIS_REAL_ANALYZERS_V1 (ревью R2, п. 6) — спор «повтор», который человек уже
  * разобрал («Отклонить», «Привязать»): тот же тест и те же два числа (в любом
- * порядке) второй раз не поднимаются. Узнаётся по строке спора (changeText) в
- * журнале разобранных строк этого заказа.
+ * порядке) второй раз не поднимаются.
+ * Ревью R4, п. D — узнаётся по СТРУКТУРЕ спора у разобранных строк этого
+ * заказа (lab_device_messages.disputes: код поля и два значения без хвостовых
+ * нулей), а не по тексту журнала: текст — для человека, и подстроки в нём
+ * путались («5.45» и «5.4», «12 (GLU)» и «2 (GLU)» — ревью R3, п. 5).
  */
 function dismissedChange(db, orderId) {
-  const details = db.prepare(`SELECT detail FROM lab_device_messages
+  const seen = [];
+  for (const r of db.prepare(`SELECT disputes FROM lab_device_messages
                                WHERE visit_service_id = ? AND kind = 'result' AND resolved_at IS NOT NULL
-                                 AND instr(COALESCE(detail, ''), 'повтор: ') > 0`).all(orderId).map((r) => r.detail);
-  return (c) => details.some((d) => hasEntry(d, changeText(c)) || hasEntry(d, changeText({ ...c, was: [c.now], now: c.was[0] })));
-}
-
-/**
- * LIS_REAL_ANALYZERS_V1 (ревью R3, п. 5) — строка спора в журнале — ЦЕЛЫМ
- * пунктом списка «повтор: …»: перед ней «повтор: » или «, » (граница пунктов),
- * после — конец, «; » или «, ». Подстрокой разобранное «было 5.1, в бланке
- * 5.45» гасило новое «5.1 → 5.4», а «12 (GLU): …» — «2 (GLU): …».
- */
-function hasEntry(detail, text) {
-  for (let i = detail.indexOf(text); i !== -1; i = detail.indexOf(text, i + 1)) {
-    const head = detail.slice(0, i);
-    const rest = detail.slice(i + text.length);
-    if ((head.endsWith('повтор: ') || head.endsWith(', ')) && (rest === '' || rest.startsWith('; ') || rest.startsWith(', '))) return true;
+                                 AND disputes IS NOT NULL`).all(orderId)) {
+    try {
+      const list = JSON.parse(r.disputes);
+      if (Array.isArray(list)) seen.push(...list);
+    } catch { /* не JSON — не спор */ }
   }
-  return false;
+  return (c) => seen.some((d) => sameDispute(d, disputeOf(c)));
 }
 
 /**
@@ -229,76 +233,105 @@ function hasEntry(detail, text) {
  * входит: его бланк снова неполон, и следующее сообщение это скажет. Сырое
  * сообщение не трогается (инвариант 2).
  *
- * Ревью R3: dryRun — только посчитать, что было бы снято (rpc/lis.js снимает,
- * лишь когда новый заказ пробу принял, п. 7); «выдан» — по заказу (п. 8);
- * опустевший бланк возвращает заказ лаборатории, а строка уходит с первого
- * заказа (п. 9); числа сравниваются без хвостовых нулей (п. 10).
- * @returns {{fromOrderId:number|null, taken:string[], kept:Array<{name:string, why:string}>, status:string|null}}
+ * Ревью R3: rpc/lis.js снимает, лишь когда новый заказ пробу принял (п. 7);
+ * «выдан» — по заказу (п. 8); числа сравниваются без хвостовых нулей (п. 10).
+ *
+ * Ревью R4, п. B — снимается ровно то, что записала ЭТА строка лотка
+ * (lab_results.source_message_id, ставит приём), а не пересчёт сырого
+ * сообщения нынешним сопоставлением: после перепривязки панели или снятых
+ * подтверждений пересчёт не находил ничего, и значение оставалось в чужом
+ * бланке молча. «Изменено после прибора» — значение в бланке не то, что эта
+ * строка прислала для поля показателя (сырое читается по коду показателя, без
+ * оглядки на подтверждения); не найти, что прислано (показатель переименован,
+ * код сменён), — «не удалось сверить с сообщением», остаётся. Строка уходит
+ * с прежнего заказа (visit_service_id = NULL), только когда её значений там не осталось;
+ * выданное и изменённое остаются — и строка остаётся при заказе: её след
+ * держит кассу (billing.js assertNotPerformed). Значения прибора без отметки
+ * строки (записаны до мигр. 233) не снимаются — чьи они, не известно; строка
+ * остаётся при заказе, а человеку сказано проверить бланк (legacy).
+ * П. C — опустевший бланк (ни значения, ни примечания) возвращает заказ из
+ * «результаты внесены» ровно в статус до прибора (lis_status_before);
+ * неизвестен — «в работе», не «ждёт оплату» и не «ждёт забора».
+ * @returns {{fromOrderId:number|null, taken:string[], kept:Array<{name:string, why:string}>,
+ *            legacy:boolean, unlinked:boolean, status:string|null}}
  *   status — куда вернулся первый заказ, если его бланк опустел.
  */
-export function takeBackValues(db, msg, toOrderId, { dryRun = false } = {}) {
-  const out = { fromOrderId: null, taken: [], kept: [], status: null };
+export function takeBackValues(db, msg, toOrderId) {
+  const out = { fromOrderId: null, taken: [], kept: [], legacy: false, unlinked: false, status: null };
   const fromId = msg && msg.visit_service_id;
   if (!fromId || Number(fromId) === Number(toOrderId)) return out;
   out.fromOrderId = fromId;
-  // Ревью R3, п. 9 — строка уходит с первого заказа (visit_service_id = NULL):
-  // иначе её след держал кассу — «по услуге уже пришли данные анализатора»
-  // (billing.js assertNotPerformed, visit-lines.js) — и лента показывала имя
-  // его пациента. История — в журнале строки: куда перепривязана и откуда.
-  if (!dryRun) {
-    const note = REATTACHED_NOTE + toOrderId + ' (был заказ № ' + fromId + ')';
-    db.prepare("UPDATE lab_device_messages SET visit_service_id = NULL, detail = CASE WHEN COALESCE(detail, '') = '' THEN ? ELSE detail || '; ' || ? END WHERE id = ?")
-      .run(note, note, msg.id);
-  }
-  if (msg.kind && msg.kind !== 'result') return out;
-  if (!['applied', 'unmapped'].includes(msg.status) || BEFORE_BLANK.test(String(msg.detail || ''))) return out;
 
-  const order = db.prepare('SELECT service_id FROM visit_services WHERE id = ?').get(fromId);
-  const panel = order && db.prepare('SELECT * FROM lab_panels WHERE service_id = ? AND active = 1 ORDER BY id LIMIT 1').get(order.service_id);
-  if (!panel) return out;
-  const analytes = db.prepare('SELECT * FROM lab_panel_analytes WHERE panel_id = ? AND active = 1 ORDER BY sort_order, id').all(panel.id);
-  const fillsOf = (row) => {
-    const dev = row.device_id ? db.prepare('SELECT profile FROM lab_devices WHERE id = ?').get(row.device_id) : null;
-    const head = mshOf(row.raw);
-    const wire = wireFor({ profile: dev ? getProfile(dev.profile) : null, facility: head.facility, app: head.app });
-    return planObservations(readResult(row.raw, wire).observations, analytes).fills;
-  };
-  const others = db.prepare(`SELECT id, raw, device_id, detail FROM lab_device_messages
-                               WHERE visit_service_id = ? AND id <> ? AND kind = 'result' AND status IN ('applied', 'unmapped')
-                                 AND instr(COALESCE(detail, ''), ?) = 0
-                               ORDER BY id DESC LIMIT ?`).all(fromId, msg.id, REATTACHED_NOTE, SERIES_MAX_MESSAGES)
-    .filter((r) => !BEFORE_BLANK.test(String(r.detail || '')));
-  // Ревью R3, п. 8 — «выдан» — по ЗАКАЗУ, как у правила выдачи (D7 в приёме):
-  // выдан хоть один показатель — бланк заказа не трогается.
-  const released = db.prepare('SELECT COUNT(*) c FROM lab_results WHERE visit_service_id = ? AND verified_at IS NOT NULL').get(fromId).c > 0;
-  let otherFills = null;
-  for (const { obs, analyte: a } of fillsOf(msg)) {
-    const row = db.prepare('SELECT * FROM lab_results WHERE visit_service_id = ? AND parameter = ?').get(fromId, a.name);
-    if (!row) continue;
-    if (released) { out.kept.push({ name: a.name, why: 'выдан' }); continue; }
-    // Ревью R3, п. 10 — «390.10» и «390.1» — одно значение.
-    if (row.source !== 'analyzer' || !sameValue(row.value, obs.value)) { out.kept.push({ name: a.name, why: 'изменено после прибора' }); continue; }
-    if (!otherFills) otherFills = others.flatMap(fillsOf);
-    if (otherFills.some((f) => f.analyte.name === a.name && sameValue(f.obs.value, obs.value))) {
-      out.kept.push({ name: a.name, why: 'то же значение пришло другим сообщением' });
-      continue;
+  const mine = db.prepare('SELECT * FROM lab_results WHERE visit_service_id = ? AND source_message_id = ? ORDER BY id').all(fromId, msg.id);
+  if (mine.length) {
+    // Ревью R3, п. 8 — «выдан» — по ЗАКАЗУ, как у правила выдачи (D7 в приёме):
+    // выдан хоть один показатель — бланк заказа не трогается.
+    const released = db.prepare('SELECT COUNT(*) c FROM lab_results WHERE visit_service_id = ? AND verified_at IS NOT NULL').get(fromId).c > 0;
+    const order = db.prepare('SELECT service_id FROM visit_services WHERE id = ?').get(fromId);
+    const panel = order && db.prepare('SELECT * FROM lab_panels WHERE service_id = ? AND active = 1 ORDER BY id LIMIT 1').get(order.service_id);
+    const analytes = panel ? db.prepare('SELECT * FROM lab_panel_analytes WHERE panel_id = ? AND active = 1 ORDER BY sort_order, id').all(panel.id) : [];
+    let others = null;
+    for (const row of mine) {
+      if (released) { out.kept.push({ name: row.parameter, why: 'выдан' }); continue; }
+      const a = analytes.find((x) => x.name === row.parameter);
+      const sent = a ? deliveredValue(db, msg, a) : null;
+      // Ревью R3, п. 10 — «390.10» и «390.1» — одно значение.
+      if (row.source !== 'analyzer' || sent == null || !sameValue(row.value, sent)) {
+        out.kept.push({ name: row.parameter, why: sent == null && row.source === 'analyzer' ? 'не удалось сверить с сообщением' : 'изменено после прибора' });
+        continue;
+      }
+      if (!others) {
+        others = db.prepare(`SELECT id, raw, device_id, detail FROM lab_device_messages
+                              WHERE visit_service_id = ? AND id <> ? AND kind = 'result' AND status IN ('applied', 'unmapped')
+                                AND instr(COALESCE(detail, ''), ?) = 0
+                              ORDER BY id DESC LIMIT ?`).all(fromId, msg.id, REATTACHED_NOTE, SERIES_MAX_MESSAGES)
+          .filter((r) => !BEFORE_BLANK.test(String(r.detail || '')));
+      }
+      if (others.some((o) => { const v = deliveredValue(db, o, a); return v != null && sameValue(v, sent); })) {
+        out.kept.push({ name: row.parameter, why: 'то же значение пришло другим сообщением' });
+        continue;
+      }
+      db.prepare('DELETE FROM lab_results WHERE id = ?').run(row.id);
+      out.taken.push(row.parameter);
     }
-    if (!dryRun) db.prepare('DELETE FROM lab_results WHERE id = ?').run(row.id);
-    out.taken.push(a.name);
   }
-  // Ревью R3, п. 9 — бланк первого заказа опустел (ни значения прибора, ни
-  // набранного руками): заказ не стоит «результаты внесены» с пустым бланком —
-  // он снова у лаборатории: «проба взята», если забор отмечен, иначе «ждёт
-  // забора». Только из «результаты внесены»: выданный и прочие не трогаются.
-  if (!dryRun && out.taken.length) {
-    const left = db.prepare("SELECT COUNT(*) c FROM lab_results WHERE visit_service_id = ? AND TRIM(COALESCE(value, '')) <> ''").get(fromId).c;
-    const ord = db.prepare('SELECT status, sample_collected_at FROM visit_services WHERE id = ?').get(fromId);
+  out.legacy = ['applied', 'unmapped'].includes(msg.status) && !BEFORE_BLANK.test(String(msg.detail || ''))
+    && db.prepare("SELECT COUNT(*) c FROM lab_results WHERE visit_service_id = ? AND source = 'analyzer' AND source_message_id IS NULL").get(fromId).c > 0;
+  // Ревью R3, п. 9; R4, п. B — строка уходит с первого заказа, только когда её
+  // значений там не осталось: иначе её след держал бы кассу зря («по услуге
+  // уже пришли данные анализатора»), а лента показывала бы имя его пациента.
+  // История — в журнале строки: куда перепривязана и откуда.
+  out.unlinked = !out.kept.length && !out.legacy;
+  const note = REATTACHED_NOTE + toOrderId + (out.unlinked ? ' (был заказ № ' + fromId + ')' : ' (значения остались в заказе № ' + fromId + ')');
+  db.prepare(`UPDATE lab_device_messages SET visit_service_id = CASE WHEN ? THEN NULL ELSE visit_service_id END,
+                detail = CASE WHEN COALESCE(detail, '') = '' THEN ? ELSE detail || '; ' || ? END WHERE id = ?`)
+    .run(out.unlinked ? 1 : 0, note, note, msg.id);
+
+  if (out.taken.length) {
+    // Примечание без значения («гемолиз») — тоже содержимое бланка (п. C).
+    const left = db.prepare(`SELECT COUNT(*) c FROM lab_results WHERE visit_service_id = ?
+                               AND (TRIM(COALESCE(value, '')) <> '' OR TRIM(COALESCE(notes, '')) <> '')`).get(fromId).c;
+    const ord = db.prepare('SELECT status, lis_status_before FROM visit_services WHERE id = ?').get(fromId);
     if (!left && ord && ord.status === 'resulted') {
-      out.status = ord.sample_collected_at ? 'collected' : 'queued';
-      db.prepare("UPDATE visit_services SET status = ? WHERE id = ? AND status = 'resulted'").run(out.status, fromId);
+      out.status = ord.lis_status_before && ord.lis_status_before !== 'resulted' ? ord.lis_status_before : 'in_progress';
+      db.prepare("UPDATE visit_services SET status = ?, lis_status_before = NULL WHERE id = ? AND status = 'resulted'").run(out.status, fromId);
     }
   }
   return out;
+}
+
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R4, п. B) — что строка лотка прислала для
+ * показателя: сырое тем же проводом, по коду показателя, без оглядки на
+ * подтверждение (здесь вопрос «что прислано», а не «что применять»). null —
+ * не прислала или код у показателя пуст.
+ */
+function deliveredValue(db, row, analyte) {
+  const dev = row.device_id ? db.prepare('SELECT profile FROM lab_devices WHERE id = ?').get(row.device_id) : null;
+  const head = mshOf(row.raw);
+  const wire = wireFor({ profile: dev ? getProfile(dev.profile) : null, facility: head.facility, app: head.app });
+  const fill = planObservations(readResult(row.raw, wire).observations, [{ ...analyte, device_code_confirmed: 1 }]).fills[0];
+  return fill ? fill.obs.value : null;
 }
 
 /**
@@ -508,21 +541,38 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // ложился в «Глюкозу». Панель кормит прибор с номерами тестов, своими у
   // каждого прибора (codesPerInstrument), — ничего не пишется. У кодов
   // производителя (гематология и прочие) — как прежде.
-  if (!deviceId) {
-    const panelDev = db.prepare('SELECT profile, name FROM lab_devices WHERE id = ?').get(panel.device_id);
-    const pp = panelDev && getProfile(panelDev.profile);
-    if (pp && pp.codesPerInstrument) {
-      record({ ...base, visitServiceId: linkId, status: 'unmatched',
-        detail: 'прибор этого сообщения неизвестен (его строку удалили или он не заведён), а панель «' + panel.name + '» кормит '
-          + pp.model + (panelDev.name ? ' («' + panelDev.name + '»)' : '') + ': у ' + pp.model + ' номер теста свой у каждого прибора'
-          + ' — значения не записаны; внесите их вручную или пришлите пробу с прибора ещё раз' });
-      return 'AA';
-    }
+  //
+  // LIS_REAL_ANALYZERS_V1 (ревью R4, п. A) — номер теста свой у каждого
+  // прибора, если codesPerInstrument у ЛЮБОГО из: профиль строки отправителя,
+  // профиль строки прибора панели, модель, которой называет себя сообщение
+  // (MSH-3/4), модель, которой называл себя прибор панели (sending_app и
+  // sending_facility строки). По одному профилю строки правило обходилось:
+  // строку BS-200 переименовали в BS-240, два BS-200 завели как BS-240,
+  // неизвестный прибор при панели на строке BS-240. Тогда значения пишет только
+  // прибор панели — и только в строки, подтверждённые для него (ниже).
+  const sender = deviceId ? db.prepare('SELECT profile, name FROM lab_devices WHERE id = ?').get(deviceId) : null;
+  const panelDev = db.prepare('SELECT profile, name, sending_app, sending_facility FROM lab_devices WHERE id = ?').get(panel.device_id);
+  const panelProfile = panelDev ? getProfile(panelDev.profile) : null;
+  const messageModel = guessProfile({ app: head.app, facility: head.facility });
+  const panelModel = panelDev ? guessProfile({ app: panelDev.sending_app, facility: panelDev.sending_facility }) : null;
+  const perInstrumentOf = (p) => !!(p && p.codesPerInstrument);
+  const pi = [profile, panelProfile, messageModel, panelModel].find(perInstrumentOf) || null;
+  // Модель узнана по имени, а строка заведена другой моделью: человек правит
+  // модель в «Анализаторах» — тогда и экран «Панели» покажет, что подтверждать.
+  const misnamed = (row, p) => '; в «Анализаторах» прибор «' + row.name + '» заведён как '
+    + (p ? p.model : 'прибор без модели') + ', а называет себя ' + pi.model + ' — исправьте модель прибора';
+  let mislabel = '';
+  if (pi && sender && perInstrumentOf(messageModel) && !perInstrumentOf(profile)) mislabel = misnamed(sender, profile);
+  else if (pi && panelDev && perInstrumentOf(panelModel) && !perInstrumentOf(panelProfile)) mislabel = misnamed(panelDev, panelProfile);
+  if (!deviceId && pi) {
+    record({ ...base, visitServiceId: linkId, status: 'unmatched',
+      detail: 'прибор этого сообщения неизвестен (его строку удалили или он не заведён), а панель «' + panel.name + '» кормит '
+        + pi.model + (panelDev && panelDev.name ? ' («' + panelDev.name + '»)' : '') + ': у ' + pi.model + ' номер теста свой у каждого прибора'
+        + ' — значения не записаны; внесите их вручную или пришлите пробу с прибора ещё раз' + mislabel });
+    return 'AA';
   }
   if (deviceId && panel.device_id !== deviceId) {
-    const mine = db.prepare('SELECT profile FROM lab_devices WHERE id = ?').get(deviceId);
-    const panelDev = db.prepare('SELECT profile, name FROM lab_devices WHERE id = ?').get(panel.device_id);
-    const sameModel = mine && panelDev && mine.profile && mine.profile === panelDev.profile;
+    const sameModel = sender && panelDev && sender.profile && sender.profile === panelDev.profile;
     if (!sameModel) {
       record({ ...base, visitServiceId: linkId, status: 'unmatched',
         detail: 'панель «' + panel.name + '» кормится анализатором другой модели'
@@ -533,16 +583,16 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
     // каждого прибора (ItemID.ini): «2» второго BS-200 бывает креатинином, и
     // подмена «та же модель» положила бы его в строку «Глюкоза» панели первого.
     // У такого профиля (codesPerInstrument) панель кормит только свой прибор.
-    if (profile && profile.codesPerInstrument) {
+    if (pi) {
       record({ ...base, visitServiceId: linkId, status: 'unmatched',
         detail: 'панель «' + panel.name + '» привязана к другому анализатору той же модели'
           + (panelDev && panelDev.name ? ' («' + panelDev.name + '»)' : '')
-          + ': у ' + profile.model + ' номер теста свой у каждого прибора — значения этого прибора в её бланк не идут;'
+          + ': у ' + pi.model + ' номер теста свой у каждого прибора — значения этого прибора в её бланк не идут;'
           // Ревью R3, пп. 2 и 3 — что делать: у услуги панель одна
           // (lab_panels.service_id UNIQUE), «заведите свою» было невозможно.
           + ' если это тот же анализатор с новым адресом — в «Лаборатория → Панели» выберите для панели этот прибор'
-          + ' и заново подтвердите номера тестов, потом «Привязать»; если это второй ' + profile.model
-          + ' — номера тестов у него свои: его результаты вносятся вручную или нужна отдельная услуга со своей панелью' });
+          + ' и заново подтвердите номера тестов, потом «Привязать»; если это второй ' + pi.model
+          + ' — номера тестов у него свои: его результаты вносятся вручную или нужна отдельная услуга со своей панелью' + mislabel });
       return 'AA';
     }
   }
@@ -564,13 +614,27 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // решает planObservations (match.js): компонент 1 ИЛИ 2 поля OBX-3 (Mindray
   // пишет «6690-2^WBC^LN»), только подтверждённые сопоставления (D4), пустое
   // значение — не значение. Порядок бланка — чтобы спор решался одинаково.
-  const analytes = db.prepare('SELECT * FROM lab_panel_analytes WHERE panel_id = ? AND active = 1 ORDER BY sort_order, id').all(panel.id);
+  //
+  // LIS_REAL_ANALYZERS_V1 (ревью R4, п. A) — у прибора с номерами тестов,
+  // своими у каждого прибора (pi выше), подтверждение действует, только если
+  // дано для прибора панели (device_code_confirmed_device_id, мигр. 233).
+  // Данное для другого прибора — и до мигр. 233 (NULL) — здесь «не
+  // подтверждено»: значение в бланк не идёт (D4), проба — в лоток с причиной.
+  // У кодов производителя отметка не читается.
+  const rawAnalytes = db.prepare('SELECT * FROM lab_panel_analytes WHERE panel_id = ? AND active = 1 ORDER BY sort_order, id').all(panel.id);
+  const stale = pi ? rawAnalytes.filter((a) => a.device_code_confirmed && String(a.device_code == null ? '' : a.device_code).trim()
+    && a.device_code_confirmed_device_id !== panel.device_id) : [];
+  const analytes = stale.length ? rawAnalytes.map((a) => (stale.includes(a) ? { ...a, device_code_confirmed: 0 } : a)) : rawAnalytes;
   const plan = planObservations(observations, analytes);
+  const codeKey = (s) => String(s == null ? '' : s).trim().toUpperCase();
+  const staleHit = stale.filter((a) => plan.unconfirmed.some((o) => codeKey(o.code) === codeKey(a.device_code) || codeKey(o.name) === codeKey(a.device_code)));
+  const staleText = staleHit.length ? STALE_DETAIL + staleHit.map((a) => a.name + ' (' + String(a.device_code).trim() + ')').join(', ') + mislabel : '';
 
   let applied = 0;
+  const writtenIds = [];   // ревью R4, п. B — строки бланка, записанные этим сообщением
   // LIS_REAL_ANALYZERS_V1_SERIES — прибор шлёт по тесту в сообщении.
   const seriesOn = !!(profile && profile.oneTestPerMessage && plan.fills.length > 0);
-  const perInstrument = !!(profile && profile.codesPerInstrument);   // ревью R2, п. 1
+  const perInstrument = !!pi;   // ревью R2, п. 1; R4, п. A — по любому из четырёх
   // Ревью R3, п. 6 — fresh: только записанные не раньше суток назад — ими
   // судится «бланк полон»; «повтор» — против любого значения прибора в бланке.
   const analyzerValues = ({ fresh = false } = {}) => new Map(db.prepare(`SELECT parameter, value FROM lab_results
@@ -598,11 +662,12 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
                       entered_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
                     WHERE id = ?`)
           .run(obs.value, num, a.unit || '', range, a.ref_low, a.ref_high, flag, existing.id);
+        writtenIds.push(existing.id);
       } else {
-        db.prepare(`INSERT INTO lab_results
+        writtenIds.push(db.prepare(`INSERT INTO lab_results
                       (visit_service_id, parameter, value, numeric_value, unit, reference_range, ref_low, ref_high, flag, entered_by, source)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'analyzer')`)
-          .run(order.id, a.name, obs.value, num, a.unit || '', range, a.ref_low, a.ref_high, flag);
+          .run(order.id, a.name, obs.value, num, a.unit || '', range, a.ref_low, a.ref_high, flag).lastInsertRowid);
       }
       applied++;
     }
@@ -611,7 +676,12 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
       // Инвариант 1: до «resulted», и ни шагом дальше. verified_* не трогаем.
       // sample_collected_at не подставляем: времени забора мы не наблюдали, и
       // выдумать его значило бы записать в карту факт, которого не было.
-      db.prepare("UPDATE visit_services SET status = 'resulted' WHERE id = ?").run(order.id);
+      // LIS_REAL_ANALYZERS_V1 (ревью R4, п. C) — статус, из которого прибор
+      // перевёл заказ в «результаты внесены», запоминается: «Привязать» к
+      // другому заказу, опустошившее бланк, вернёт ровно его. Уже стоящий
+      // «результаты внесены» прибор не переводил — запомненное не трогается.
+      db.prepare(`UPDATE visit_services SET lis_status_before = CASE WHEN status = 'resulted' THEN lis_status_before ELSE status END,
+                    status = 'resulted' WHERE id = ?`).run(order.id);
       // CRM_REAL_BOOKING_V1 — прибор отдал результат по пробе, которую взяли у
       // человека здесь: для заявки колл-центра это доказательство прихода.
       crmServiceEvidence(db, [order.id]);
@@ -630,6 +700,7 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
     // Сообщение, из которого в бланк не легло ничего, — правило одного
     // сообщения, как прежде, и в серию оно не входит.
     let accepted = [];
+    let disputes = null;   // ревью R4, п. D
     if (seriesOn) {
       const who = { orderId: order.id, deviceId, perInstrument, profileKey: device.profile };
       const { members, overflow } = seriesMembers(db, { ...who, profile, analytes });
@@ -648,6 +719,9 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
         const series = planSeries([...members.map((m) => m.observations), observations], analytes, { written, before });
         const seen = dismissedChange(db, order.id);
         series.changed = series.changed.filter((c) => !seen(c));
+        // Ревью R4, п. D — спор этой строки структурой: по ней его узнают,
+        // когда человек его разберёт.
+        if (series.changed.length) disputes = JSON.stringify(series.changed.map(disputeOf));
         const r = seriesOutcome(series);
         status = r.status;
         detail = r.pending ? SERIES_PENDING_PREFIX + r.detail : r.detail;
@@ -660,7 +734,11 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
       }
     }
 
-    const id = record({ ...base, visitServiceId: order.id, status, detail });
+    // Ревью R4, п. A — подтверждено для другого прибора: что делать.
+    if (staleText) detail = (detail ? detail + '; ' : '') + staleText;
+    const id = record({ ...base, visitServiceId: order.id, status, detail, disputes });
+    // Ревью R4, п. B — у записанного — номер этой строки лотка.
+    for (const rid of writtenIds) db.prepare('UPDATE lab_results SET source_message_id = ? WHERE id = ?').run(id, rid);
     for (const m of accepted) {
       db.prepare("UPDATE lab_device_messages SET status = 'applied', detail = ? WHERE id = ? AND status = 'unmapped' AND resolved_at IS NULL")
         .run('принято серией (сообщение № ' + id + ')' + (m.detail.endsWith(MANUAL) ? '; ' + MANUAL : ''), m.id);

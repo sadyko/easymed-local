@@ -64,7 +64,8 @@ export function lisProfiles(db, args, user) {
     wireSource: p.wireSource || null,
     // LIS_REAL_ANALYZERS_V1 (ревью R3, п. 2) — номер теста свой у каждого
     // прибора (BS-200): экран при смене прибора панели снимает подтверждения
-    // полей анализатора (база — то же, триггер мигр. 233).
+    // полей анализатора (база помнит, для какого прибора подтверждено, —
+    // мигр. 233, ревью R4).
     codesPerInstrument: !!p.codesPerInstrument,
   }));
 }
@@ -210,8 +211,11 @@ export function lisMessageAttach(db, args, user) {
   // в его бланк значениями. Иначе (новый заказ выдан, не найден — опечатка в
   // номере, отказ приёма, сорвалась запись) привязка откатывается целиком:
   // прежний бланк и строка лотка не тронуты, человеку — простыми словами.
+  // Ревью R4, п. B — так для ЛЮБОЙ строки, привязанной к другому заказу, что бы
+  // ни было снято: прежняя проверка «снимается что-то» пропускала выданный
+  // первый заказ (снимать нечего) — и строка разбиралась и уходила с заказа,
+  // хотя пробу не принял никто.
   return db.transaction(() => {
-    const plan = takeBackValues(db, msg, vsId, { dryRun: true });
     const before = db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM lab_device_messages').get().m;
     // LIS_ANALYZER_LIST_V1 (ревью M4) — { touch: false }: сообщение пришло
     // тогда, а нажал человек сейчас; прибор, выключенный неделю назад, после
@@ -219,7 +223,8 @@ export function lisMessageAttach(db, args, user) {
     const report = {};
     const code = ingestMessage(db, msg.raw, msg.peer, msg.device_id, { touch: false, sampleIdOverride: vsId, report });
     const accepted = report.status === 'applied' || (report.status === 'unmapped' && report.written > 0);
-    if (plan.taken.length && !accepted) {
+    const linkedElsewhere = msg.visit_service_id != null && Number(msg.visit_service_id) !== vsId;
+    if (linkedElsewhere && !accepted) {
       throw new LisError('Привязка не сделана: этот заказ пробу не принял — значения в прежнем заказе не тронуты, строка осталась в лотке. Проверьте номер заказа.', 409);
     }
     const back = takeBackValues(db, msg, vsId);
@@ -230,6 +235,9 @@ export function lisMessageAttach(db, args, user) {
     if (back.taken.length) notes.push('снято из бланка заказа № ' + back.fromOrderId + ': ' + back.taken.join(', '));
     if (back.kept.length) {
       notes.push('оставлено в бланке заказа № ' + back.fromOrderId + ': ' + back.kept.map((k) => k.name + ' (' + k.why + ')').join(', '));
+    }
+    if (back.legacy) {   // ревью R4, п. B
+      notes.push('в бланке заказа № ' + back.fromOrderId + ' есть значения прибора без отметки сообщения (записаны до обновления) — проверьте его вручную');
     }
     if (back.status) notes.push('бланк заказа № ' + back.fromOrderId + ' пуст — заказ снова в работе лаборатории');   // ревью R3, п. 9
     if (rec && notes.length) {

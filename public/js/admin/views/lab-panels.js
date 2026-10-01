@@ -50,10 +50,14 @@ const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагнос
 //      lab-section role (LAB_PANELS_BY_SECTION_V1).
 // v8 = one shared page head for queue+panels; marker moved off-screen into
 //      the data-attribute above; queue filter chips translate label-then-count.
-export const LAB_BUILD = 'lab-v19';   // v19 — смена BS-200 у панели снимает подтверждения (LIS_REAL_ANALYZERS_V1, ревью R3) · LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1); v17 — одно поле прибора под двумя именами (LIS_DISCOVERY_FIX_V1); v18 — «12 · GLU», подсказка «коды появятся», типовые BC-780 по соседним моделям (LIS_REAL_ANALYZERS_V1)
+export const LAB_BUILD = 'lab-v20';   // v20 — подтверждение помнит прибор: «подтверждено для другого прибора — подтвердите заново» (LIS_REAL_ANALYZERS_V1, ревью R4) · v19 — смена BS-200 у панели снимает подтверждения (LIS_REAL_ANALYZERS_V1, ревью R3) · LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1); v17 — одно поле прибора под двумя именами (LIS_DISCOVERY_FIX_V1); v18 — «12 · GLU», подсказка «коды появятся», типовые BC-780 по соседним моделям (LIS_REAL_ANALYZERS_V1)
 
 // LIS_REAL_ANALYZERS_V1 — у модели нет типового списка (BS-200, A1000), а прибор ещё ничего не присылал.
 const NO_DEVICE_CODES_HINT = 'Коды появятся, когда анализатор пришлёт первую пробу; номер теста — как в настройках тестов прибора. Пока код можно вписать руками.';
+// LIS_REAL_ANALYZERS_V1 (ревью R4, п. A) — строка подтверждена для другого прибора (или до обновления), а у прибора панели номер теста свой у каждого прибора.
+const STALE_CONFIRM_HINT = 'подтверждено для другого прибора — подтвердите заново';
+// LIS_REAL_ANALYZERS_V1 (ревью R4, п. A) — прибор панели сменился, а его модель экрану неизвестна (не загрузились модели или модель не опознана).
+const RECONFIRM_UNKNOWN = 'Анализатор панели сменился, а модель прибора неизвестна — подтверждения полей анализатора сняты, подтвердите каждое заново.';
 
 // LIS_DISCOVERY_FIX_V1 (экран) — какое ПОЛЕ ПРИБОРА стоит за кодом строки
 // бланка. Прибор называет поле двумя именами сразу — «6690-2^WBC^LN», — и приём
@@ -240,6 +244,7 @@ export async function mountLabPanels(container) {
         // на другую панель — показатели-то перечитываются из базы.
         state.selected = p ? { ...p } : p;
         state.reconfirmModel = null;   // LIS_REAL_ANALYZERS_V1 (ревью R3, п. 2) — сказ о снятых подтверждениях — только у своей панели
+        state.reconfirmUnknown = false;   // ревью R4, п. A
         paintList();
         if (!p) { state.rows = []; paintEditor(); return; }
         if (p.id) {
@@ -425,20 +430,25 @@ export async function mountLabPanels(container) {
         // и прежние подсказки к ним не относятся.
         // LIS_REAL_ANALYZERS_V1 (ревью R3, п. 2) — у BS-200 номер теста свой у
         // каждого прибора: панель перепривязали с BS-200 или на BS-200 —
-        // подтверждения полей анализатора сняты (база делает то же триггером
-        // мигр. 233), и сохранить панель можно, только подтвердив каждое заново.
+        // подтверждения полей анализатора сняты, и сохранить панель можно,
+        // только подтвердив каждое заново.
+        // Ревью R4, п. A — и когда модель прибора экрану неизвестна (модели не
+        // загрузились, модель не опознана): вдруг это BS-200. Защита — в базе:
+        // подтверждение помнит прибор, для которого дано (мигр. 233), и приём
+        // применяет только данные для прибора панели; сброс здесь говорит
+        // человеку, что подтверждать.
         devSel.onchange = () => {
             const was = p.device_id;
             p.device_id = Number(devSel.value) || null;
-            const perInstrument = (id) => {
-                const d = id ? state.devices.find(x => x.id === Number(id)) : null;
-                const pr = d && state.profiles.find(x => x.key === d.profile);
-                return pr && pr.codesPerInstrument ? pr : null;
-            };
-            const pr = Number(was || 0) !== Number(p.device_id || 0) && (perInstrument(was) || perInstrument(p.device_id));
-            if (pr) {
-                for (const r of state.rows) if ((r.device_code || '').trim()) r.device_code_confirmed = 0;
-                state.reconfirmModel = pr.model;
+            if (Number(was || 0) !== Number(p.device_id || 0)) {
+                const sides = [was, p.device_id].filter(Boolean);
+                const pr = sides.map(deviceProfile).find(x => x && x.codesPerInstrument) || null;
+                const unknown = sides.some(id => !deviceProfile(id));
+                if (pr || unknown) {
+                    for (const r of state.rows) if ((r.device_code || '').trim()) setConfirmed(r, false);
+                    state.reconfirmModel = pr ? pr.model : null;
+                    state.reconfirmUnknown = !pr;
+                }
             }
             suggestMapping(p.device_id); paintEditor(); loadDeviceCodes(p.device_id);
         };
@@ -566,6 +576,7 @@ export async function mountLabPanels(container) {
                     // сменился у BS-200: сказать, что подтверждения сняты.
                     state.reconfirmModel
                         ? trf('Анализатор панели сменился: у {model} номера тестов свои у каждого прибора — подтверждения полей анализатора сняты, подтвердите каждое заново.', { model: state.reconfirmModel })
+                    : state.reconfirmUnknown ? tr(RECONFIRM_UNKNOWN)   // ревью R4, п. A
                     // LIS_REAL_ANALYZERS_V1 — у BS-200 и A1000 типового списка
                     // нет (номера тестов задаёт клиника): пока прибор ничего не
                     // присылал, сказать, откуда возьмутся коды.
@@ -630,7 +641,7 @@ export async function mountLabPanels(container) {
         editorEl.appendChild(body);
     }
 
-    function blankRow() { return { id: null, name: '', unit: '', value_type: 'numeric', value_options: '', decimals: 1, ref_low: null, ref_high: null, ref_text: '', ref_low_m: null, ref_high_m: null, ref_low_f: null, ref_high_f: null, group_label: '', ref_ranges: [], device_code: '', device_code_confirmed: 0 }; }
+    function blankRow() { return { id: null, name: '', unit: '', value_type: 'numeric', value_options: '', decimals: 1, ref_low: null, ref_high: null, ref_text: '', ref_low_m: null, ref_high_m: null, ref_low_f: null, ref_high_f: null, group_label: '', ref_ranges: [], device_code: '', device_code_confirmed: 0, device_code_confirmed_device_id: null }; }
 
     // ── LAB_ANALYTE_LIBRARY_V1 — pick indicators from the parameter dictionary ──
     // Reads lab_analyte_templates (migration 052), which is read-only reference
@@ -904,6 +915,31 @@ export async function mountLabPanels(container) {
         return prof && prof.channelsSource === 'siblings' ? tr('Типовые для модели — по документам соседних моделей') : tr('Типовые для модели');
     }
 
+    // LIS_REAL_ANALYZERS_V1 (ревью R4, п. A) — подтверждение помнит прибор
+    // панели, для которого дано (device_code_confirmed_device_id, мигр. 233):
+    // сохранение передаёт его, и база ставит отметку по нему.
+    function setConfirmed(r, on) {
+        r.device_code_confirmed = on ? 1 : 0;
+        r.device_code_confirmed_device_id = on ? (Number(state.selected && state.selected.device_id) || null) : null;
+    }
+    /** Профиль модели прибора или null — прибор не найден или модель экрану неизвестна. */
+    function deviceProfile(id) {
+        const d = id ? state.devices.find(x => x.id === Number(id)) : null;
+        return (d && state.profiles.find(x => x.key === d.profile)) || null;
+    }
+    /**
+     * Строка подтверждена, но не для прибора панели (для другого или до
+     * обновления), а у прибора панели номер теста свой у каждого прибора — или
+     * его модель неизвестна. У кодов производителя отметка не читается.
+     */
+    function staleConfirm(r) {
+        if (!r.device_code_confirmed || !(r.device_code || '').trim()) return false;
+        const dev = Number(state.selected && state.selected.device_id) || null;
+        if (!dev || Number(r.device_code_confirmed_device_id || 0) === dev) return false;
+        const pr = deviceProfile(dev);
+        return !pr || !!pr.codesPerInstrument;
+    }
+
     /**
      * Предзаполнить очевидные строки ПОДСКАЗКАМИ (не применением). Трогает
      * только пустые: уже сопоставленное человеком не перебиваем.
@@ -920,7 +956,7 @@ export async function mountLabPanels(container) {
             const code = (r.code || '').trim().toUpperCase();
             if (!code) continue;
             const ch = channels.find(c => c.code.toUpperCase() === code);
-            if (ch) { r.device_code = ch.code; r.device_code_confirmed = 0; hinted++; }
+            if (ch) { r.device_code = ch.code; setConfirmed(r, false); hinted++; }
         }
         if (hinted) toast(trf('Предложено сопоставлений: {n}. Подтвердите каждое — панель не сохранится, пока остались непроверенные.', { n: hinted }), 'warn');
     }
@@ -939,12 +975,16 @@ export async function mountLabPanels(container) {
         const noLists = !choice.sent.length && !choice.typical.length;
         // Код есть, но человек его не подтверждал (подсказка suggestMapping или
         // строка из базы): курсив и кнопка «Подтвердить» — и у списка, и у поля.
-        const suggested = !!(r.device_code || '').trim() && !r.device_code_confirmed;
+        // LIS_REAL_ANALYZERS_V1 (ревью R4, п. A) — или подтверждено для другого
+        // прибора: тот же вид, кнопка и подсказка «подтвердите заново».
+        const stale = staleConfirm(r);
+        const suggested = !!(r.device_code || '').trim() && (!r.device_code_confirmed || stale);
+        const staleNote = stale ? h('span', { class: 'muted', style: { fontSize: '12px' } }, tr(STALE_CONFIRM_HINT)) : null;
         const UNCONFIRMED_LOOK = { opacity: '0.65', fontStyle: 'italic' };
         const confirmButton = () => h('button', {
             class: 'lp-ic', type: 'button', title: 'Подтвердить это сопоставление',
             'aria-label': 'Подтвердить сопоставление',
-            onclick: () => { r.device_code_confirmed = 1; paintEditor(); },
+            onclick: () => { setConfirmed(r, true); paintEditor(); },
         }, Icon('Check', { size: 12 }));
 
         if (r._typing || noLists) {
@@ -962,12 +1002,13 @@ export async function mountLabPanels(container) {
                 // Вписал сам — это и есть подтверждение. Вид догоняет строку
                 // здесь же: перерисовка на каждый символ сбила бы курсор.
                 oninput: (e) => {
-                    r.device_code = e.target.value; r.device_code_confirmed = e.target.value.trim() ? 1 : 0;
+                    r.device_code = e.target.value; setConfirmed(r, !!e.target.value.trim());
                     if (confirmBtn) { inp.style.opacity = ''; inp.style.fontStyle = ''; confirmBtn.style.display = 'none'; }
+                    if (staleNote) staleNote.style.display = 'none';
                 },
             });
             if (noLists && !confirmBtn) return inp;
-            return h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, inp, confirmBtn,
+            return h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, inp, confirmBtn, staleNote,
                 noLists ? null : h('button', {
                     class: 'lp-ic', type: 'button', title: 'Вернуться к списку', 'aria-label': 'Вернуться к списку',
                     onclick: () => { r._typing = false; paintEditor(); },
@@ -981,7 +1022,7 @@ export async function mountLabPanels(container) {
             onchange: (e) => {
                 if (e.target.value === TYPE_OWN) { r._typing = true; paintEditor(); return; }
                 // Человек выбрал сам — это и есть подтверждение.
-                r.device_code = e.target.value; r.device_code_confirmed = e.target.value ? 1 : 0; paintEditor();
+                r.device_code = e.target.value; setConfirmed(r, !!e.target.value); paintEditor();
             },
         },
             h('option', { value: '', selected: !choice.selected ? true : null }, '— не выбрано —'),
@@ -991,7 +1032,7 @@ export async function mountLabPanels(container) {
             h('option', { value: TYPE_OWN }, 'Вписать код…'));
 
         if (!suggested) return sel;
-        return h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, sel, confirmButton());
+        return h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, sel, confirmButton(), staleNote);
     }
 
     function analyteRow(r, idx) {
@@ -1118,6 +1159,10 @@ export async function mountLabPanels(container) {
                 // базу вместе с кодом, а не выводится там заново.
                 device_code: (r.device_code || '').trim(),
                 device_code_confirmed: r.device_code_confirmed ? 1 : 0,
+                // LIS_REAL_ANALYZERS_V1 (ревью R4, п. A) — для какого прибора
+                // подтверждено (последнее слово — у триггера мигр. 233).
+                device_code_confirmed_device_id: r.device_code_confirmed && r.device_code_confirmed_device_id != null
+                    ? Number(r.device_code_confirmed_device_id) : null,
             }));
             if (ins.length) {
                 let { error } = await supabase.from('lab_panel_analytes').insert(ins);

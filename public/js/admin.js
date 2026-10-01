@@ -65,7 +65,7 @@ import { renderPlaceholder }  from './admin/views/placeholder.js';
 import { renderSectionCrud }  from './admin/views/section-crud.js?v=svceditor1';
 import { renderCashier, renderCashierHead } from './admin/views/cashier-desk.js?v=cash11';   // CASHIER_DESIGN_V2 + CASHIER_ROW_FIT_V1 — patient cell width, RU status, compact date · REFERRAL_BILL_V1 — «Ждут счёта», «Кому счёт» (со дня визита) · REFBILL_REVIEW_V1 — «Ждут счёта»: окно по умолчанию, поиск на сервере
 import { renderReport }       from './admin/views/report.js';
-import { renderLaboratory }   from './admin/views/laboratory.js?v=labwords10';   // LAB_STATS_V1 — third mode «Статистика» (usage counters, no money) on the shared LAB_HEAD_ONE_V1 head · LIS_MINDRAY_CODES_V1 — штамп · LIS_ANALYZER_LIST_V1 · LIS_DISCOVERY_FIX_V1 (экран) · LIS_REAL_ANALYZERS_V1 (экран; ревью R3 — штамп)
+import { renderLaboratory }   from './admin/views/laboratory.js?v=labwords11';   // LAB_STATS_V1 — third mode «Статистика» (usage counters, no money) on the shared LAB_HEAD_ONE_V1 head · LIS_MINDRAY_CODES_V1 — штамп · LIS_ANALYZER_LIST_V1 · LIS_DISCOVERY_FIX_V1 (экран) · LIS_REAL_ANALYZERS_V1 (экран; ревью R3, R4 — штамп)
 import { renderProcedures }   from './admin/views/procedures.js?v=unassigned2';
 import { renderQueue }       from './admin/views/queue.js?v=q7';   // QUEUE_BOARD_V1
 import { renderCrm }          from './admin/views/crm.js?v=msrc3';   // CRM_V10 — поиск пациента: телефон (и короткая форма), дата рождения; CRM_SERVICE_FILTER_V1 — рейка категорий (тег поднят, иначе браузер оставит старую копию) · ROLES_SAVE_TRUTH_V1 — «Прослушать» по can_listen · CRM_MULTI_SOURCE_V1 — несколько источников у заявки и в фильтре

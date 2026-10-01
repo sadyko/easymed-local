@@ -235,6 +235,24 @@ export function sameValue(a, b) {
 }
 
 /**
+ * LIS_REAL_ANALYZERS_V1 (ревью R4, п. D) — спор «повтор» (planSeries changed)
+ * структурой — для lab_device_messages.disputes: код поля бланка (как его
+ * сравнивает приём — без регистра и пробелов) и два значения без хвостовых
+ * нулей. По ней узнаётся спор, уже разобранный человеком, — не по тексту
+ * журнала.
+ */
+export function disputeOf(c) {
+  return { code: key(c.analyte.device_code), a: valueKey(c.was[0]), b: valueKey(c.now) };
+}
+
+/** Тот же спор: тот же код и те же два значения, в любом порядке. */
+export function sameDispute(x, y) {
+  if (!x || !y || key(x.code) !== key(y.code)) return false;
+  const [xa, xb, ya, yb] = [x.a, x.b, y.a, y.b].map(valueKey);
+  return (xa === ya && xb === yb) || (xa === yb && xb === ya);
+}
+
+/**
  * Общий план серии. Чистая функция: сообщения серии по порядку прихода
  * (последнее — текущее) и строки бланка в порядке бланка.
  *

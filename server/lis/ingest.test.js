@@ -742,9 +742,8 @@ test('серия: строка, остановленная до бланка («
   ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
   assert.match(message(db).detail, /не привязана к анализатору/);
   db.prepare('UPDATE lab_panels SET device_id = 1 WHERE id = 5').run();
-  // Ревью R3, п. 2 — привязка панели к BS-200 снимает подтверждения (триггер
-  // мигр. 233): лаборатория подтверждает номера тестов заново.
-  db.prepare('UPDATE lab_panel_analytes SET device_code_confirmed = 1 WHERE panel_id = 5').run();
+  // Ревью R4, п. A — подтверждения даны для прибора 1, и панель снова на нём:
+  // подтверждать заново нечего (триггер R3 их снимал).
   ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
   ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
   assert.equal(message(db).detail, SERIES_PENDING_PREFIX + 'не пришли: Глюкоза (2)', 'значение первого сообщения в бланк не легло');
@@ -1008,5 +1007,163 @@ test('R3 п. 10: A1000 «390.10», потом «390.1» — повторная �
   assert.equal(message(db).status, 'applied');
   assert.equal(message(db).detail, 'серия из 2 сообщений принята; повторная передача: 206 (X)');
   assert.equal(blank(db)['Витамин B12'], '390.1', 'D6 — пишется как пришло');
+  db.close();
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R4 ───────────────────────────────────────
+
+// П. A — подтверждение сопоставления помнит, для какого прибора оно дано
+// (lab_panel_analytes.device_code_confirmed_device_id, мигр. 233). Номер теста
+// свой у каждого прибора, если codesPerInstrument у ЛЮБОГО из: профиль строки
+// отправителя, профиль строки прибора панели, модель, которой называет себя
+// сообщение (MSH-3/4), модель, которой называл себя прибор панели. Тогда
+// значения пишет только прибор панели и только в строки, подтверждённые для
+// него. Прочие профили — как прежде: та же модель кормит панель, отметка не
+// читается.
+const BS240 = (n, value) => ['MSH|^~\\&|BS-240|Mindray|||20261001101500||ORU^R01|42|P|2.3.1',
+  'OBR|1||LAB-000123|x', `OBX|1|NM|${n}^^99MRC||${value}|umol/L|||||F`].join('\r');
+
+test('R4 п. A (дыра a): строку BS-200 панели переименовали в BS-240 — проба другого прибора «BS-240» в её бланк не идёт', () => {
+  const db = chem();
+  // Прибор панели — BS-200 (так он называл себя), но в «Анализаторах» его
+  // модель сменили на BS-240. Второй прибор заведён как BS-240 и шлёт «2».
+  db.prepare("UPDATE lab_devices SET profile = 'mindray-bs-240', sending_app = 'Mindray', sending_facility = 'BS-200E' WHERE id = 1").run();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (4,'BS-240','mindray-bs-240')").run();
+  ingestMessage(db, BS240('2', '88'), '10.0.0.44', 4);
+  const m = message(db);
+  assert.equal(m.status, 'unmatched');
+  assert.match(m.detail, /номер теста свой у каждого прибора/);
+  assert.match(m.detail, /в «Анализаторах» прибор «BS-200» заведён как BS-240, а называет себя BS-200 — исправьте модель прибора/);
+  assert.deepEqual(blank(db), {}, '«2» другого прибора не легло в «Глюкозу»');
+  // Свой прибор панели (тот же, переименованный) — пишет, как пишал.
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  assert.equal(blank(db)['Глюкоза'], '5');
+  db.close();
+});
+
+test('R4 п. A (дыра b): прибор неизвестен, панель на строке BS-240, сообщение — «Mindray|BS-200E» — ничего не записано', () => {
+  const db = chem();
+  db.prepare("UPDATE lab_devices SET profile = 'mindray-bs-240' WHERE id = 1").run();
+  ingestMessage(db, BS('2', 'CREA', '88'), '10.0.0.41', null, { touch: false, sampleIdOverride: 123 });
+  const m = message(db);
+  assert.equal(m.status, 'unmatched');
+  assert.match(m.detail, /прибор этого сообщения неизвестен/);
+  assert.deepEqual(blank(db), {});
+  db.close();
+});
+
+test('R4 п. A (дыра c): два BS-200 заведены как BS-240 — проба второго в панель первого не идёт', () => {
+  const db = chem();
+  db.prepare("UPDATE lab_devices SET profile = 'mindray-bs-240' WHERE id = 1").run();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'BS-240 (2)','mindray-bs-240')").run();
+  ingestMessage(db, BS('2', 'CREA', '88'), '10.0.0.41', 2);
+  const m = message(db);
+  assert.equal(m.status, 'unmatched');
+  assert.match(m.detail, /привязана к другому анализатору той же модели \(«BS-200»\)/);
+  assert.match(m.detail, /в «Анализаторах» прибор «BS-240 \(2\)» заведён как BS-240, а называет себя BS-200 — исправьте модель прибора/);
+  assert.deepEqual(blank(db), {});
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  assert.equal(blank(db)['Глюкоза'], '5', 'свой прибор панели пишет');
+  db.close();
+});
+
+test('R4 п. A (дыра d): панель перепривязали к другому BS-200 — подтверждения первого не применяются, лоток говорит, что делать', () => {
+  const db = chem();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'BS-200 (2)','mindray-bs-200')").run();
+  db.prepare('UPDATE lab_panels SET device_id = 2 WHERE id = 5').run();
+  ingestMessage(db, BS('2', 'CREA', '88'), '10.0.0.41', 2);
+  const m = message(db);
+  assert.equal(m.status, 'unmapped');
+  assert.match(m.detail, /не подтверждено: 2 \(CREA\)/);
+  assert.match(m.detail, /подтверждено для другого прибора — подтвердите заново в «Лаборатория → Панели»: Глюкоза \(2\)/);
+  assert.deepEqual(blank(db), {});
+  // Прежний прибор панели больше не её.
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  assert.equal(message(db).status, 'unmatched');
+  assert.deepEqual(blank(db), {});
+  // Подтвердили заново (снять и поставить галочку) — для прибора 2.
+  db.prepare("UPDATE lab_panel_analytes SET device_code_confirmed = 0 WHERE code = 'GLU'").run();
+  db.prepare("UPDATE lab_panel_analytes SET device_code_confirmed = 1 WHERE code = 'GLU'").run();
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.41', 2);
+  assert.equal(blank(db)['Глюкоза'], '5');
+  // Мочевина и расчётный подтверждены для прибора 1 — для прибора 2 они «не
+  // подтверждены», и бланк их не ждёт (правило владельца: заполнена каждая
+  // ПОДТВЕРЖДЁННАЯ строка); придёт их значение — лоток с причиной.
+  assert.equal(message(db).status, 'applied', message(db).detail);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.41', 2);
+  assert.equal(message(db).status, 'unmapped');
+  assert.match(message(db).detail, /подтверждено для другого прибора — подтвердите заново в «Лаборатория → Панели»: Мочевина \(3\)$/);
+  assert.equal(blank(db)['Мочевина'], undefined);
+  db.close();
+});
+
+test('R4 п. A: подтверждение, данное до мигр. 233 (без прибора), у BS-200 — «не подтверждено», не применяется', () => {
+  const db = chem();
+  db.prepare('UPDATE lab_panel_analytes SET device_code_confirmed_device_id = NULL WHERE panel_id = 5').run();
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  assert.deepEqual(blank(db), {});
+  assert.match(message(db).detail, /подтверждено для другого прибора/);
+  db.close();
+});
+
+test('R4 п. A: коды производителя (BC-5300) — отметка не читается: та же модель и прежние подтверждения пишут, как прежде', () => {
+  const db = fresh();
+  db.prepare('UPDATE lab_panel_analytes SET device_code_confirmed_device_id = NULL WHERE panel_id = 5').run();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'Гематология 2','mindray-bc-5300')").run();
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1'), OBX(2, 'HGB', '142')]), '10.0.0.12', 2);
+  assert.equal(message(db).status, 'applied');
+  assert.equal(results(db).length, 2);
+  db.close();
+});
+
+// П. B — у значения прибора в бланке — номер строки лотка, которая его
+// записала (lab_results.source_message_id): «Привязать» снимает по нему.
+test('R4 п. B: значение прибора помнит строку лотка, которая его записала; следующее сообщение — своё', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5.1'), '10.0.0.40', 1);
+  const first = message(db);
+  const src = () => db.prepare("SELECT source_message_id AS s FROM lab_results WHERE visit_service_id = 123 AND parameter = 'Глюкоза'").get().s;
+  assert.equal(src(), first.id);
+  ingestMessage(db, BS('2', 'test2', '5.4'), '10.0.0.40', 1);
+  assert.equal(src(), message(db).id, 'переписал — его значение');
+  db.close();
+});
+
+// П. C — статус заказа до того, как прибор поставил «результаты внесены».
+test('R4 п. C: прибор запоминает статус заказа до «результаты внесены»; поверх «результаты внесены» не переписывает', () => {
+  const db = chem();
+  db.prepare("UPDATE visit_services SET status = 'collected' WHERE id = 123").run();
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  const st = () => ({ ...db.prepare('SELECT status, lis_status_before FROM visit_services WHERE id = 123').get() });
+  assert.deepEqual(st(), { status: 'resulted', lis_status_before: 'collected' });
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  assert.deepEqual(st(), { status: 'resulted', lis_status_before: 'collected' });
+  db.close();
+});
+
+// П. D — разобранный спор хранится структурой (lab_device_messages.disputes:
+// [{code, a, b}], значения без хвостовых нулей) и узнаётся по ней, а не по
+// тексту журнала.
+test('R4 п. D: спор «повтор» записан структурой; разобранный узнаётся по ней — и с «5.10» вместо «5.1»', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5.10'), '10.0.0.40', 1);
+  ingestMessage(db, BS('2', 'test2', '5.40'), '10.0.0.40', 1);
+  const dispute = message(db);
+  assert.deepEqual(JSON.parse(dispute.disputes), [{ code: '2', a: '5.1', b: '5.4' }]);
+  assert.equal(rows(db)[0].disputes, null, 'у сообщения без спора — пусто');
+  resolveMessage(db, dispute.id);
+  ingestMessage(db, BS('2', 'test2', '5.1'), '10.0.0.40', 1);
+  assert.ok(!/повтор:/.test(message(db).detail), message(db).detail);
+  ingestMessage(db, BS('2', 'test2', '5.4'), '10.0.0.40', 1);
+  assert.ok(!/повтор:/.test(message(db).detail), 'те же два числа в любом порядке: ' + message(db).detail);
+  db.close();
+});
+
+test('R4 п. D: текст спора в журнале разобранной строки без структуры спор не гасит', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5.1'), '10.0.0.40', 1);
+  db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, visit_service_id, status, detail, resolved_at) VALUES (1, '10.0.0.40', 'MSH|', 123, 'unmapped', 'повтор: 2 (test2): было 5.1, в бланке 5.4', '2026-10-01T08:00:00Z')").run();
+  ingestMessage(db, BS('2', 'test2', '5.4'), '10.0.0.40', 1);
+  assert.match(message(db).detail, /повтор: 2 \(test2\): было 5\.1, в бланке 5\.4/);
   db.close();
 });

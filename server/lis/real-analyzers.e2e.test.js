@@ -445,8 +445,8 @@ test('BC-780, прибор ждёт звонка (dial): Easy-Med подключ
 // видит новый прибор (новая строка — адрес другой), панель биохимии привязана
 // к старой строке, а у BS-200 номер теста свой у каждого прибора — пробы идут в
 // «Необработанные» и говорят, что делать: в «Панелях» выбрать для панели новую
-// строку и подтвердить номера тестов заново (смена прибора панели их снимает —
-// триггер мигр. 233), потом «Привязать» ждущие строки.
+// строку и подтвердить номера тестов заново (подтверждение помнит прибор, для
+// которого дано, — ревью R4, мигр. 233), потом «Привязать» ждущие строки.
 test('BS-200 сменил адрес: лоток с понятной причиной → панель на новую строку → номера подтверждены заново → «Привязать» → принято', async () => {
   await withClinic(async (db, lisPort) => {
     await startLisListeners(db, { log: () => {} });
@@ -479,16 +479,34 @@ test('BS-200 сменил адрес: лоток с понятной причи�
     }
     assert.deepEqual(blank(db, 1), {});
 
-    // Лаборатория: панель — на новую строку; подтверждения сняты базой.
+    // Лаборатория: панель — на новую строку. Ревью R4, п. A: подтверждения
+    // помнят прибор — они даны для старой строки и для новой не действуют.
     db.prepare('UPDATE lab_panels SET device_id = ? WHERE id = 5').run(newDev.id);
-    assert.deepEqual(db.prepare('SELECT device_code_confirmed AS c FROM lab_panel_analytes WHERE panel_id = 5').all().map((r) => r.c), [0, 0, 0]);
-    // Номера тестов сверены с программой прибора — подтверждены заново.
-    db.prepare('UPDATE lab_panel_analytes SET device_code_confirmed = 1 WHERE panel_id = 5').run();
-    for (const m of waiting) lisMessageAttach(db, { id: m.id, visit_service_id: 1 }, LAB);
+    const stamps = () => db.prepare('SELECT device_code_confirmed AS c, device_code_confirmed_device_id AS d FROM lab_panel_analytes WHERE panel_id = 5 ORDER BY sort_order')
+      .all().map((r) => [r.c, r.d]);
+    assert.deepEqual(stamps(), [[1, oldDev.id], [1, oldDev.id], [1, oldDev.id]]);
+    // «Привязать» до подтверждения заново — в бланк не легло, лоток говорит, что делать.
+    lisMessageAttach(db, { id: waiting[0].id, visit_service_id: 1 }, LAB);
+    assert.deepEqual(blank(db, 1), {});
+    assert.match(last(db).detail, /подтверждено для другого прибора — подтвердите заново в «Лаборатория → Панели»: Глюкоза \(2\)/);
+    // Номера тестов сверены с программой прибора — подтверждены заново в
+    // редакторе: сохранение вставляет строки с прибором, для которого человек
+    // подтвердил (lab-panels.js savePanel), и удаляет прежние.
+    const oldRows = db.prepare('SELECT * FROM lab_panel_analytes WHERE panel_id = 5 ORDER BY sort_order').all();
+    for (const r of oldRows) {
+      db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed, device_code_confirmed_device_id)
+                  VALUES (5, ?, ?, ?, ?, ?, 1, ?)`).run(r.code, r.name, r.unit, r.sort_order, r.device_code, newDev.id);
+      db.prepare('DELETE FROM lab_panel_analytes WHERE id = ?').run(r.id);
+    }
+    assert.deepEqual(stamps(), [[1, newDev.id], [1, newDev.id], [1, newDev.id]]);
+    for (const m of tray(db)) lisMessageAttach(db, { id: m.id, visit_service_id: 1 }, LAB);
     assert.deepEqual(blank(db, 1), { 'Глюкоза': '5', 'Мочевина': '10', 'Расчётный': '15' });
     assert.deepEqual(tray(db), [], '«Необработанные» пусты');
     assert.equal(last(db).status, 'applied');
-    assert.match(last(db).detail, /серия из 3 сообщений принята/);
+    // 4: строка глюкозы, «Привязанная» до повторного подтверждения, — тоже
+    // член серии (строки, которых коснулся человек, в серию входят; бланк
+    // судится по записанному).
+    assert.match(last(db).detail, /серия из 4 сообщений принята/);
     notReleased(db, 1);
   });
 });

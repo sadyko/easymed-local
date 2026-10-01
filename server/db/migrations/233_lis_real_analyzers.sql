@@ -33,19 +33,74 @@ ALTER TABLE lab_device_messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'result'
 CREATE INDEX IF NOT EXISTS idx_lab_device_messages_service
   ON lab_device_messages(received_at, device_id, kind) WHERE kind <> 'result';
 
--- Ревью R3, п. 2 — у BS-200 номер теста свой у КАЖДОГО прибора (ItemID.ini):
--- «2» у второго BS-200 бывает креатинином, а не глюкозой. Панель перепривязали
--- с BS-200 или на BS-200 — подтверждения сопоставлений (D4) больше не про этот
--- прибор: они снимаются, коды остаются, человек подтверждает их заново. Панель
--- сохраняют обычным /api/db (lab-panels.js), поэтому правило — здесь, в базе, а
--- не только на экране. Список профилей — ровно профили с codesPerInstrument
--- (server/lis/profiles/; тест 233.test.js сверяет их).
-CREATE TRIGGER IF NOT EXISTS trg_lab_panels_device_reconfirm
-AFTER UPDATE OF device_id ON lab_panels
-WHEN OLD.device_id IS NOT NEW.device_id
- AND EXISTS (SELECT 1 FROM lab_devices
-              WHERE id IN (OLD.device_id, NEW.device_id)
-                AND profile IN ('mindray-bs-200'))
+-- Ревью R4, п. A — у BS-200 номер теста свой у КАЖДОГО прибора (ItemID.ini):
+-- «2» у второго BS-200 бывает креатинином, а не глюкозой. Подтверждение
+-- сопоставления (D4) поэтому помнит, ДЛЯ КАКОГО ПРИБОРА оно дано. NULL — не
+-- подтверждено ни для какого (в том числе всё, что подтверждали до этой
+-- миграции: бэкфилла нет). Приём (server/lis/ingest.js) у приборов с номерами
+-- тестов, своими у каждого прибора (codesPerInstrument), применяет только
+-- строки, подтверждённые для прибора панели; у кодов производителя отметка не
+-- читается. Смена прибора панели ничего не переписывает: отметка остаётся
+-- прежней и просто не совпадает с новым прибором (триггер R3, снимавший
+-- подтверждения при смене lab_panels.device_id, убран — он не защищал
+-- сохранение редактора: правка панели, потом вставка строк заново).
+ALTER TABLE lab_panel_analytes ADD COLUMN device_code_confirmed_device_id INTEGER;
+
+-- Ставит отметку база, на каждом пути записи. Вставка (редактор панелей
+-- сохраняет так: правка lab_panels, вставка новых строк, удаление прежних —
+-- lab-panels.js savePanel):
+--   не подтверждено или кода нет — NULL;
+--   редактор назвал прибор, для которого человек подтвердил, — он;
+--   иначе (старая вкладка) — отметка прежней подтверждённой строки этой панели
+--   с тем же кодом, какой бы она ни была (в том числе NULL): иначе сохранение
+--   «отмыло» бы подтверждение старого прибора под новым;
+--   иначе (новый код) — прибор панели сейчас.
+CREATE TRIGGER IF NOT EXISTS trg_lab_panel_analytes_confirm_ins
+AFTER INSERT ON lab_panel_analytes
 BEGIN
-  UPDATE lab_panel_analytes SET device_code_confirmed = 0 WHERE panel_id = NEW.id;
+  UPDATE lab_panel_analytes SET device_code_confirmed_device_id = CASE
+      WHEN NEW.device_code_confirmed IS NOT 1 OR TRIM(COALESCE(NEW.device_code, '')) = '' THEN NULL
+      WHEN NEW.device_code_confirmed_device_id IS NOT NULL THEN NEW.device_code_confirmed_device_id
+      WHEN EXISTS (SELECT 1 FROM lab_panel_analytes o
+                    WHERE o.panel_id = NEW.panel_id AND o.id < NEW.id AND o.device_code_confirmed = 1
+                      AND UPPER(TRIM(o.device_code)) = UPPER(TRIM(NEW.device_code)))
+        THEN (SELECT o.device_code_confirmed_device_id FROM lab_panel_analytes o
+               WHERE o.panel_id = NEW.panel_id AND o.id < NEW.id AND o.device_code_confirmed = 1
+                 AND UPPER(TRIM(o.device_code)) = UPPER(TRIM(NEW.device_code))
+               ORDER BY o.id LIMIT 1)
+      ELSE (SELECT p.device_id FROM lab_panels p WHERE p.id = NEW.panel_id)
+    END
+  WHERE id = NEW.id;
 END;
+
+-- Правка строки: подтвердили (было не подтверждено) или сменили код — прибор
+-- панели сейчас; подтверждение и код прежние — прежняя отметка; не
+-- подтверждено или кода нет — NULL. Через /api/db отметку правкой не задать
+-- (реестр), и без смены подтверждения или кода триггер её не трогает.
+CREATE TRIGGER IF NOT EXISTS trg_lab_panel_analytes_confirm_upd
+AFTER UPDATE OF device_code_confirmed, device_code ON lab_panel_analytes
+BEGIN
+  UPDATE lab_panel_analytes SET device_code_confirmed_device_id = CASE
+      WHEN NEW.device_code_confirmed IS NOT 1 OR TRIM(COALESCE(NEW.device_code, '')) = '' THEN NULL
+      WHEN OLD.device_code_confirmed IS 1
+       AND UPPER(TRIM(COALESCE(OLD.device_code, ''))) = UPPER(TRIM(NEW.device_code)) THEN OLD.device_code_confirmed_device_id
+      ELSE (SELECT p.device_id FROM lab_panels p WHERE p.id = NEW.panel_id)
+    END
+  WHERE id = NEW.id;
+END;
+
+-- Ревью R4, п. B — какая строка лотка записала это значение прибора в бланк
+-- (ставит приём; NULL — набрано руками или записано до этой миграции).
+-- «Привязать» к другому заказу снимает из прежнего ровно значения этой строки.
+ALTER TABLE lab_results ADD COLUMN source_message_id INTEGER;
+
+-- Ревью R4, п. D — споры «повтор» этой строки лотка структурой:
+-- JSON [{"code": "2", "a": "5.1", "b": "5.4"}] (код поля бланка, два значения
+-- без хвостовых нулей). Разобранный человеком спор узнаётся по ней, а не по
+-- тексту журнала. NULL — споров нет.
+ALTER TABLE lab_device_messages ADD COLUMN disputes TEXT;
+
+-- Ревью R4, п. C — статус заказа до того, как прибор поставил «результаты
+-- внесены». «Привязать» к другому заказу, опустошившее бланк, возвращает
+-- ровно его (неизвестен — «в работе», не «ждёт оплату» и не «ждёт забора»).
+ALTER TABLE visit_services ADD COLUMN lis_status_before TEXT;

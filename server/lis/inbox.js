@@ -40,7 +40,9 @@ export const ABANDONED_DETAIL_PREFIX = 'кадр оборван: ';
  * LIS_REAL_ANALYZERS_V1 (ревью R2, п. 2) — пометка в журнале строки, которую
  * человек «Привязал» к ДРУГОМУ заказу: её значения сняты из бланка первого
  * заказа (ingest.js takeBackValues), и в серию первого заказа она больше не
- * входит. Пометка — после «; », номер нового заказа — следом.
+ * входит. Пометка — после «; », номер нового заказа — следом. Ревью R4, п. B:
+ * потом — «(был заказ № A)», если строка с прежнего заказа снята, или
+ * «(значения остались в заказе № A)», если её значения там остались.
  */
 export const REATTACHED_NOTE = 'перепривязано к заказу № ';
 
@@ -49,12 +51,14 @@ export const REATTACHED_NOTE = 'перепривязано к заказу № '
  * calibration, query); resolved: строка разрешена сразу — служебное сообщение
  * хранится целиком (инвариант 2), но в лоток не попадает: экран берёт только
  * строки без resolved_at.
+ * LIS_REAL_ANALYZERS_V1 (ревью R4, п. D) — disputes: споры «повтор» строки
+ * структурой (JSON-строка, match.js disputeOf) или null.
  */
-export function recordMessage(db, { deviceId = null, peer = '', raw, sampleId = '', visitServiceId = null, status, detail = '', kind = 'result', resolved = false }) {
+export function recordMessage(db, { deviceId = null, peer = '', raw, sampleId = '', visitServiceId = null, status, detail = '', kind = 'result', resolved = false, disputes = null }) {
   return db.prepare(`INSERT INTO lab_device_messages
-      (device_id, peer, raw, sample_id, visit_service_id, status, detail, kind, resolved_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') END)`)
-    .run(deviceId, peer, String(raw == null ? '' : raw), sampleId, visitServiceId, status, detail, kind, resolved ? 1 : 0).lastInsertRowid;
+      (device_id, peer, raw, sample_id, visit_service_id, status, detail, kind, resolved_at, disputes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') END, ?)`)
+    .run(deviceId, peer, String(raw == null ? '' : raw), sampleId, visitServiceId, status, detail, kind, resolved ? 1 : 0, disputes).lastInsertRowid;
 }
 
 /**

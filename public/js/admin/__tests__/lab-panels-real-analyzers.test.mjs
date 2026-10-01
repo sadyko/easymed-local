@@ -132,6 +132,7 @@ const PROFILES = [
     channels: [{ code: 'WBC', name: 'Лейкоциты', loinc: '6690-2' }, { code: 'HGB', name: 'Гемоглобин', loinc: '718-7' }] },
 ];
 let SENT_CODES = [];
+let PROFILES_FAIL = false;   // LIS_REAL_ANALYZERS_V1 (ревью R4) — lis_profiles не загрузился
 
 let rpcCalls = [];
 let writes = [];
@@ -150,6 +151,7 @@ globalThis.fetch = async (url, opts) => {
   if (u.startsWith('/api/rpc/')) {
     const name = decodeURIComponent(u.slice('/api/rpc/'.length));
     rpcCalls.push({ name, args: body });
+    if (name === 'lis_profiles' && PROFILES_FAIL) return { ok: false, status: 500, json: async () => ({ error: { message: 'boom' } }) };   // ревью R4
     if (name === 'lis_profiles') return { ok: true, json: async () => ({ data: PROFILES }) };
     if (name === 'lis_device_codes') return { ok: true, json: async () => ({ data: JSON.parse(JSON.stringify(SENT_CODES)) }) };
     return { ok: true, json: async () => ({ data: null }) };
@@ -224,9 +226,10 @@ test('BC-780: типовой список подписан «по докумен
 
 // ── LIS_REAL_ANALYZERS_V1 — ревью R3, п. 2 ─────────────────────────────────
 // У BS-200 номер теста свой у каждого прибора: панель перепривязали с BS-200
-// (или на BS-200) — подтверждения полей анализатора сняты (на сервере это же
-// делает триггер мигр. 233), экран говорит об этом, и сохранить панель можно,
-// только подтвердив каждое поле заново.
+// (или на BS-200) — подтверждения полей анализатора сняты (на сервере
+// подтверждение помнит прибор, для которого дано, — мигр. 233, ревью R4),
+// экран говорит об этом, и сохранить панель можно, только подтвердив каждое
+// поле заново.
 const deviceSelect = (root) => walk(root).find((n) => n.tagName === 'SELECT' && walk(n).some((o) => o.tagName === 'OPTION' && textOf(o) === '— нет —'));
 const RECONFIRM = 'Анализатор панели сменился: у BS-200 номера тестов свои у каждого прибора — подтверждения полей анализатора сняты, подтвердите каждое заново.';
 
@@ -257,4 +260,71 @@ test('R3 п. 2: BC-780 → другой BC-780 (коды производите�
   const ins = writes.find((w) => w.table === 'lab_panel_analytes' && w.op === 'insert');
   assert.ok(ins, 'сохранено: ' + toastMsg);
   assert.equal([].concat(ins.values)[0].device_code_confirmed, 1);
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R4, п. A ─────────────────────────────────
+// Подтверждение помнит, для какого прибора оно дано (мигр. 233,
+// device_code_confirmed_device_id). Экран: строка, подтверждённая для другого
+// прибора (или до обновления), у прибора с номерами тестов, своими у каждого
+// прибора, — «подтверждено для другого прибора — подтвердите заново»;
+// подтверждение уходит в сохранение с прибором панели. У кодов производителя
+// отметка не читается — и не показывается.
+const STALE = 'подтверждено для другого прибора — подтвердите заново';
+const insertedRow = () => {
+  const ins = writes.find((w) => w.table === 'lab_panel_analytes' && w.op === 'insert');
+  return ins ? [].concat(ins.values)[0] : null;
+};
+
+test('R4 п. A: строка подтверждена для другого BS-200 — экран так и говорит; подтвердили — сохраняется с прибором панели', async () => {
+  const root = await mountPanels({ deviceId: 3, analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: 1 })] });
+  assert.ok(textOf(root).includes(STALE), 'сказано у строки');
+  findButtonByText(root, /Сохранить панель/).click();
+  await tick(80);
+  assert.ok(insertedRow(), 'сохранить можно: ' + toastMsg);
+  assert.deepStrictEqual([insertedRow().device_code_confirmed, insertedRow().device_code_confirmed_device_id], [1, 1], 'как было — для прибора 1');
+
+  const root2 = await mountPanels({ deviceId: 3, analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: 1 })] });
+  findByAriaLabel(root2, 'Подтвердить сопоставление').click();
+  await tick(30);
+  assert.ok(!textOf(root2).includes(STALE));
+  findButtonByText(root2, /Сохранить панель/).click();
+  await tick(80);
+  assert.deepStrictEqual([insertedRow().device_code_confirmed, insertedRow().device_code_confirmed_device_id], [1, 3]);
+});
+
+test('R4 п. A: подтверждение до обновления (без прибора) у BS-200 — тоже «подтвердите заново»; своё — нет', async () => {
+  const root = await mountPanels({ analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: null })] });
+  assert.ok(textOf(root).includes(STALE));
+  const own = await mountPanels({ analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: 1 })] });
+  assert.ok(!textOf(own).includes(STALE));
+});
+
+test('R4 п. A: коды производителя (BC-780) — отметка другого прибора не показывается и не мешает', async () => {
+  const root = await mountPanels({ deviceId: 4, analytes: [analyte({ device_code: 'WBC', device_code_confirmed: 1, device_code_confirmed_device_id: 2 })] });
+  assert.ok(!textOf(root).includes(STALE));
+});
+
+test('R4 п. A: выбрали код из списка — подтверждено для прибора панели', async () => {
+  const root = await mountPanels({ sent: [{ code: '12', name: '', system: '', value_type: 'NM', unit: 'mmol/L', label: 'GLU' }] });
+  const sel = codeSelect(root);
+  sel.value = '12';
+  sel.dispatchEvent({ type: 'change', target: sel });
+  findButtonByText(root, /Сохранить панель/).click();
+  await tick(80);
+  assert.deepStrictEqual([insertedRow().device_code, insertedRow().device_code_confirmed_device_id], ['12', 1]);
+});
+
+test('R4 п. A: модели приборов не загрузились — смена прибора панели снимает подтверждения (вдруг это BS-200)', async () => {
+  PROFILES_FAIL = true;
+  try {
+    const root = await mountPanels({ deviceId: 2, analytes: [analyte({ device_code: 'WBC', device_code_confirmed: 1, device_code_confirmed_device_id: 2 })] });
+    const sel = deviceSelect(root);
+    sel.value = '4';
+    sel.onchange();
+    await tick(80);
+    assert.ok(textOf(root).includes('Анализатор панели сменился, а модель прибора неизвестна — подтверждения полей анализатора сняты, подтвердите каждое заново.'));
+    findButtonByText(root, /Сохранить панель/).click();
+    await tick(80);
+    assert.ok(!insertedRow(), 'без подтверждения не сохраняется: ' + toastMsg);
+  } finally { PROFILES_FAIL = false; }
 });

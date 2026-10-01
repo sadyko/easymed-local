@@ -171,8 +171,12 @@ function selfHost(host) {
  * (canonicalIp: без «::ffff:», IPv6 кратко, БЕЗ ЗОНЫ) только для проверки,
  * петли на себя и ключа дубля (ревью R2, п. 7); звонят по адресу строки как
  * есть — с зоной («fe80::1%eth0»): без неё ссылочный адрес IPv6 не набрать.
+ * Ревью R4, п. E — зона остаётся только у IPv6: «10.0.0.5%eth0» (и
+ * «::ffff:10.0.0.5%eth0») набирается без зоны; адрес, который с зоной не IP
+ * («fe80::1%eth0%x», «fe80::1%»), — bad_address: такую строку connect отдал
+ * бы в DNS.
  * @returns {Array<{device:object, device_id:number, host:string, port:number|null, code:string|null}>}
- *   host — адрес строки (по нему и звонок); code — null или bad_address / self / duplicate.
+ *   host — адрес, по которому звонок; code — null или bad_address / self / duplicate.
  */
 export function dialPlan(devices, lisPorts) {
   const mine = selfPorts(lisPorts);
@@ -183,12 +187,15 @@ export function dialPlan(devices, lisPorts) {
     const port = d.port == null || d.port === '' ? NaN : Number(d.port);
     // (isLocalIp — прежний, общий с экраном: lab-devices-lists.js.)
     const key = canonicalIp(raw);
+    const zoned = raw.includes('%');
+    const v6 = net.isIP(key) === 6;
+    const host = zoned && !v6 ? raw.slice(0, raw.indexOf('%')) : raw;   // ревью R4, п. E
     let code = null;
-    if (!isLocalIp(key) || !Number.isInteger(port) || port < 1 || port > 65535) code = 'bad_address';
+    if (!isLocalIp(key) || !Number.isInteger(port) || port < 1 || port > 65535 || (zoned && v6 && net.isIP(raw) !== 6)) code = 'bad_address';
     else if (selfHost(key) && mine.includes(port)) code = 'self';
     else if (taken.has(key + '|' + port)) code = 'duplicate';
     if (!code) taken.add(key + '|' + port);
-    out.push({ device: d, device_id: d.id, host: raw, port: Number.isInteger(port) ? port : null, code });
+    out.push({ device: d, device_id: d.id, host, port: Number.isInteger(port) ? port : null, code });
   }
   return out;
 }

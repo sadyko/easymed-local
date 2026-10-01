@@ -602,3 +602,24 @@ test('R3 п. 11: dialPlan — дубль по адресу без зоны, зв
   assert.deepEqual([by[3].code, by[3].host], [null, '::ffff:10.0.0.9']);
   assert.equal(by[4].code, 'duplicate');
 });
+
+// LIS_REAL_ANALYZERS_V1 — ревью R4, п. E: зона — только у IPv6. «10.0.0.5%eth0»
+// набирается как «10.0.0.5»; адрес, который с зоной не IP (две зоны, пустая
+// зона), — bad_address: такой «адрес» ушёл бы в DNS.
+test('R4 п. E: dialPlan — у IPv4 зона отбрасывается и для звонка; зона только у IPv6; негодная зона — bad_address', () => {
+  const plan = dialPlan([
+    { id: 1, name: 'A', host: '10.0.0.5%eth0', port: 5600 },
+    { id: 2, name: 'B', host: '::ffff:10.0.0.6%eth0', port: 5600 },
+    { id: 3, name: 'C', host: 'fe80::1%eth0', port: 5600 },
+    { id: 4, name: 'D', host: 'fe80::2%eth0%x', port: 5600 },
+    { id: 5, name: 'E', host: 'fe80::3%', port: 5600 },
+    { id: 6, name: 'F', host: '10.0.0.5', port: 5600 },
+  ], [2575]);
+  const by = Object.fromEntries(plan.map((p) => [p.device_id, p]));
+  assert.deepEqual([by[1].code, by[1].host], [null, '10.0.0.5']);
+  assert.deepEqual([by[2].code, by[2].host], [null, '::ffff:10.0.0.6']);
+  assert.deepEqual([by[3].code, by[3].host], [null, 'fe80::1%eth0']);
+  assert.equal(by[4].code, 'bad_address');
+  assert.equal(by[5].code, 'bad_address');
+  assert.equal(by[6].code, 'duplicate', '«10.0.0.5%eth0» и «10.0.0.5» — один прибор');
+});

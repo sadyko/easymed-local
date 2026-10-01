@@ -1295,12 +1295,16 @@ export const REGISTRY = {
     // device_code_confirmed: человек это сопоставление подтвердил. Приём
     // применяет только подтверждённые (решение владельца D4), поэтому обе
     // колонки обязаны быть и читаемыми, и записываемыми из редактора панелей.
+    // LIS_REAL_ANALYZERS_V1 (ревью R4, мигр. 233) — device_code_confirmed_device_id:
+    // для какого прибора подтверждено. Редактор читает её и при вставке
+    // называет прибор, для которого человек подтвердил; последнее слово — у
+    // триггера мигр. 233. Правкой строки её не задать (в update её нет).
     read:  { roles: ALL_STAFF, columns: ['id','panel_id','code','name','unit','value_type','value_options','decimals',
              'ref_low','ref_high','ref_text','ref_low_m','ref_high_m','ref_low_f','ref_high_f','group_label','sort_order','ref_ranges','active','created_at',
-             'device_code','device_code_confirmed'] },
+             'device_code','device_code_confirmed','device_code_confirmed_device_id'] },   // LIS_REAL_ANALYZERS_V1 (ревью R4)
     write: { insert: { roles: LAB_SECTION_ROLES, columns: ['panel_id','code','name','unit','value_type','value_options','decimals',
                'ref_low','ref_high','ref_text','ref_low_m','ref_high_m','ref_low_f','ref_high_f','group_label','sort_order','ref_ranges','active',
-               'device_code','device_code_confirmed'] },
+               'device_code','device_code_confirmed','device_code_confirmed_device_id'] },   // LIS_REAL_ANALYZERS_V1 (ревью R4)
              update: { roles: LAB_SECTION_ROLES, columns: ['code','name','unit','value_type','value_options','decimals',
                'ref_low','ref_high','ref_text','ref_low_m','ref_high_m','ref_low_f','ref_high_f','group_label','sort_order','ref_ranges','active',
                'device_code','device_code_confirmed'] },
