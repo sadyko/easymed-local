@@ -210,3 +210,33 @@ test('прежняя форма buildAck(номер, код) по-прежнем
   assert.equal(fieldsOf(mshLine)[9], '42');
   assert.equal(msa, 'MSA|AE|42|Segment sequence error|||100');
 });
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R1, п. 9: эхо в ответе ────────────────────
+// MSH-16 эхом — только числа 0/1/2 из руководства BS-200 (с. 8: «0- Sample
+// result; 1- Calibration result; 2- QC result»). Стандартные AL/NE/ER/SU —
+// просьба отправителя о виде подтверждения, а не вид результата: в ответ они
+// не возвращаются.
+test('R1 п. 9: MSH-16 эхом — только 0/1/2; AL, NE, ER, SU и прочее — пусто', () => {
+  for (const v of ['0', '1', '2']) {
+    const f = buildAck(mshOf(`MSH|^~\\&|Mindray|BS-200E|||20070719145353||ORU^R01|1|P|2.3.1||||${v}||ASCII`), 'AA').split('\r')[0].split('|');
+    assert.equal(f[15], v, v);
+  }
+  for (const v of ['AL', 'NE', 'ER', 'SU', '3', '22', 'x']) {
+    const f = buildAck(mshOf(`MSH|^~\\&|X|Y|||20070719145353||ORU^R01|1|P|2.3.1||||${v}||ASCII`), 'AA').split('\r')[0].split('|');
+    assert.equal(f[15] || '', '', v + ' не эхом');
+    assert.equal(f[17], 'ASCII', 'MSH-18 — эхом, как прежде');
+  }
+});
+
+test('R1 п. 9: номер сообщения, MSH-12 и MSH-18 чистятся так же, как MSH-3/4 — чужой разделитель не ломает ответ', () => {
+  // Отправитель с разделителем полей «#»: «|» в его полях — просто знак, но в
+  // нашем ответе разделитель — «|», и без чистки поля бы съехали.
+  const m = mshOf('MSH#^~\\&#X|1#Y#####ORU^R01#4|2#P#2.3|1####2##AS|CII');
+  const [mshLine, msa] = buildAck(m, 'AA').split('\r');
+  const f = mshLine.split('|');
+  assert.equal(f[9], '4 2', 'MSH-10');
+  assert.equal(f[11], '2.3 1', 'MSH-12');
+  assert.equal(f[17], 'AS CII', 'MSH-18');
+  assert.equal(f[4], 'X 1', 'MSH-5 — эхо MSH-3, как прежде');
+  assert.equal(msa, 'MSA|AA|4 2|Message accepted|||0', 'MSA-2 — тот же чищеный номер');
+});

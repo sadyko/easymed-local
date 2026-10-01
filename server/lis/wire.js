@@ -18,6 +18,7 @@
 // Чего здесь НЕТ: решения, что применять. D4 (только подтверждённое человеком)
 // живёт в match.js и ingest.js; провод решает только, что СРАВНИВАТЬ.
 import { mshOf } from './hl7.js';
+import { guessProfile } from './discover.js';   // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 11) — провод и по тому, как сообщение называет себя
 
 export const WIRES = Object.freeze(['default', 'forwarder', 'mindray-chem', 'autobio-hl7', 'mindray-hematology']);
 
@@ -40,14 +41,47 @@ const FIELD_NAME = { placer: 'OBR-2', filler: 'OBR-3' };
 const known = (wire) => (WIRES.includes(wire) ? wire : 'default');
 
 /**
+ * LIS_REAL_ANALYZERS_V1 (ревью R1, п. 11) — какой провод безопаснее, когда
+ * профиль строки и само сообщение называют разные: меньше полей, откуда берутся
+ * голые цифры. mindray-chem не читает OBR-3 никогда (место в штативе BS-200),
+ * autobio-hl7 берёт голые цифры только из OBR-2, mindray-hematology — из OBR-3
+ * и запасного OBR-2.
+ */
+const SAFER = ['default', 'forwarder', 'mindray-hematology', 'autobio-hl7', 'mindray-chem'];
+
+/**
  * Какой провод у сообщения: переадресатор узнаётся по MSH-4, иначе — провод
  * профиля прибора, иначе (прибор без профиля, прежние профили) — default.
- * @param {{profile?: {wire?:string}|null, facility?: string}} [o]
+ *
+ * LIS_REAL_ANALYZERS_V1 (ревью R1, п. 11) — и по тому, как сообщение называет
+ * себя (MSH-3 / MSH-4, псевдонимы профилей — discover.js guessProfile):
+ *   — у строки нет профиля или профиль провода не называет (прежние, чужой) —
+ *     провод сообщения: строка BS-200 без профиля или с профилем BS-240 иначе
+ *     читала бы OBR-3 — номер места в штативе;
+ *   — профиль и сообщение называют РАЗНЫЕ провода — безопасный из двух (SAFER):
+ *     сообщение, назвавшее себя BS-200, OBR-3 не читает никогда.
+ * @param {{profile?: {wire?:string}|null, facility?: string, app?: string}} [o]
  */
-export function wireFor({ profile = null, facility = '' } = {}) {
+export function wireFor({ profile = null, facility = '', app = '' } = {}) {
   if (String(facility == null ? '' : facility).trim().toLowerCase() === FORWARDER_FACILITY.toLowerCase()) return 'forwarder';
-  return known(profile && profile.wire);
+  const own = guessProfile({ app, facility });
+  const fromRow = known(profile && profile.wire);
+  const fromMessage = known(own && own.wire);
+  if (fromRow === fromMessage || fromMessage === 'default') return fromRow;
+  if (fromRow === 'default') return fromMessage;
+  return SAFER.indexOf(fromRow) >= SAFER.indexOf(fromMessage) ? fromRow : fromMessage;
 }
+
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R1, п. 7) — провода, у которых MSH-16 = 1/2
+ * значит калибровку и контроль качества: химия Mindray (руководство BS-200,
+ * с. 8: «0- Sample result; 1- Calibration result; 2- QC result») и Autobio по
+ * сети (тот же заголовок «…|2.3.1||||0||ASCII|||», «A2000 plus HL7 protocol
+ * V0.02»). BS-240 и CL-900i — на проводе default: руководства на их HL7 у нас
+ * нет, и прятать пробу пациента в «служебные» по догадке нельзя; их контроль,
+ * если придёт, ляжет в «Необработанные», как до E4, и его отклонит человек.
+ */
+const VENDOR_KIND_WIRES = new Set(['mindray-chem', 'autobio-hl7']);
 
 // Запросы рабочего списка (раздел 7): Easy-Med заказов не отдаёт, отвечает
 // «заказов нет». QRY^Q02 — BS-200 и химия Mindray, QRY^Q01 — Autobio,
@@ -62,9 +96,11 @@ const SEG = /\r\n?|\n/;
  * kind:
  *   'result'      — ORU^R01 пробы пациента: MSH-16 = 0, пусто или любое другое;
  *   'calibration' — ORU^R01 с MSH-16 = 1;
- *   'qc'          — ORU^R01 с MSH-16 = 2 (руководство BS-200, с. 8 и 23). В
- *                   стандарте HL7 у MSH-16 значения AL/NE/ER/SU, никогда не 1/2,
- *                   поэтому правило общее для всех проводов;
+ *   'qc'          — ORU^R01 с MSH-16 = 2 (руководство BS-200, с. 8 и 23).
+ *                   LIS_REAL_ANALYZERS_V1 (ревью R1, п. 7) — калибровка и контроль
+ *                   по MSH-16 — только у проводов VENDOR_KIND_WIRES (wire —
+ *                   второй аргумент; не назван — по MSH-3/4 сообщения). У прочих
+ *                   MSH-16 вида не меняет: проба пациента не прячется в служебные;
  *   'query'       — запрос рабочего списка (QRY^Q02, QRY^Q01, ORM^O01);
  *   'unsupported' — разобранный заголовок известного, но не поддержанного типа
  *                   (ADT^A01 …) — ответ AR;
@@ -75,12 +111,16 @@ const SEG = /\r\n?|\n/;
  * QRD-9 = CAN (отмена группового запроса, с. 34), qrd/qrf — сегменты целиком
  * для эха в ответе Autobio (DSR^Q01).
  */
-export function readEnvelope(text) {
+export function readEnvelope(text, wire) {
   const msh = mshOf(text);
   const env = { ...msh, kind: 'unparsed', service: false, queryBarcode: '', queryCancel: false, qrd: '', qrf: '' };
   if (!msh.ok || !msh.type) return env;
   if (msh.type === 'ORU^R01') {
-    env.kind = msh.ackType === '2' ? 'qc' : msh.ackType === '1' ? 'calibration' : 'result';
+    // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 7) — только у провода, объявившего
+    // это соглашение; провод не назван — по тому, как сообщение называет себя.
+    const w = wire === undefined ? wireFor({ app: msh.app, facility: msh.facility }) : known(wire);
+    const vendor = VENDOR_KIND_WIRES.has(w);
+    env.kind = vendor && msh.ackType === '2' ? 'qc' : vendor && msh.ackType === '1' ? 'calibration' : 'result';
   } else if (QUERY_TYPES.has(msh.type)) {
     env.kind = 'query';
     for (const s of String(text).split(SEG)) {
@@ -129,13 +169,16 @@ function trimZeros(v) {
  *
  * obr — первый OBR: { placer: OBR-2, filler: OBR-3 }, компонент 1 без пробелов
  * по краям; null — OBR нет.
+ * obrs (LIS_REAL_ANALYZERS_V1, ревью R1, п. 1) — ВСЕ OBR сообщения: поля OBR-2 и
+ * OBR-3 целиком (без пробелов по краям) и разделитель компонентов отправителя —
+ * для pickMessageSample: номер пробы ищется у каждого OBR и во всех компонентах.
  *
- * @returns {{obr: {placer:string, filler:string}|null, observations: object[]}}
+ * @returns {{obr: {placer:string, filler:string}|null, obrs: Array<{placer:string, filler:string, compSep:string}>, observations: object[]}}
  */
 export function readResult(raw, wire = 'default') {
   const w = known(wire);
   const segments = String(raw == null ? '' : raw).split(SEG).filter((s) => s.trim() !== '');
-  if (!segments.length || !segments[0].startsWith('MSH')) return { obr: null, observations: [] };
+  if (!segments.length || !segments[0].startsWith('MSH')) return { obr: null, obrs: [], observations: [] };
   const msh = segments[0];
   const fieldSep = msh[3] || '|';
   const encEnd = msh.indexOf(fieldSep, 4);
@@ -146,12 +189,14 @@ export function readResult(raw, wire = 'default') {
   const t = (v) => String(v == null ? '' : v).trim();
 
   let obr = null;
+  const obrs = [];
   const observations = [];
   for (const seg of segments.slice(1)) {
     const f = seg.split(fieldSep);
     if (seg.startsWith('OBR')) {
       // Первый OBR задаёт пробу, как в parseMessage.
       if (!obr) obr = { placer: comp(f[2])[0].trim(), filler: comp(f[3])[0].trim() };
+      obrs.push({ placer: t(f[2]), filler: t(f[3]), compSep });
     } else if (seg.startsWith('OBX')) {
       const obx3 = comp(f[3]);
       const o = {
@@ -193,47 +238,119 @@ export function readResult(raw, wire = 'default') {
       observations.push(o);
     }
   }
-  return { obr, observations };
+  return { obr, obrs, observations };
 }
 
-/** Наша этикетка: «LAB-000123» (lab-barcode.js) — та же проверка, что у parseSampleId. */
-const LAB_RE = /^lab[-_ ]?(\d+)$/i;
-const labNumber = (v) => { const m = LAB_RE.exec(v); return m ? parseInt(m[1], 10) : null; };
+/**
+ * Наша этикетка: «LAB-000123» — 'LAB-' и не меньше 6 цифр (lab-doc.js
+ * labAccession: 'LAB-' + padStart(6)), регистр не важен.
+ *
+ * LIS_REAL_ANALYZERS_V1 (ревью R1, п. 8) — раньше здесь была проверка
+ * parseSampleId (/^lab[-_ ]?\d+$/i): «LAB2», «lab 2», «lab_2», «LAB-123»
+ * считались нашей этикеткой и обходили правило голых цифр (открытый заказ
+ * последних 7 дней). Easy-Med так не печатает — это не наше.
+ */
+const LAB_RE = /^lab-(\d{6,})$/i;
+const labNumber = (v) => { const m = LAB_RE.exec(String(v == null ? '' : v).trim()); return m ? parseInt(m[1], 10) : null; };
+const DIGITS = /^\d+$/;
 
 /**
- * Номер пробы из первого OBR по проводу (раздел 1). Одна чистая функция.
+ * LIS_REAL_ANALYZERS_V1 (ревью R1, п. 2) — что несёт поле OBR целиком, по
+ * компонентам. Раньше читался только компонент 1: OBR-3 = «2^LAB-000123»
+ * читалось как голое «2» и ложилось в открытый свежий заказ № 2.
+ *   lab      — этикетка LAB- в ЛЮБОМ компоненте (одна и та же — хоть дважды);
+ *   conflict — в компонентах РАЗНЫЕ этикетки LAB-;
+ *   bare     — поле ЦЕЛИКОМ из цифр (один компонент), как читал parseMessage;
+ *   foreign  — что-то есть, но это не этикетка и не голые цифры («2^15», «15^»,
+ *              «QC1», «lab_000123»): номера нет;
+ *   empty    — поле пусто.
+ * Этикетка рядом с голыми цифрами в другом компоненте («2^LAB-000123») —
+ * этикетка: LAB- бьёт всё и внутри поля, как между полями OBR-2 и OBR-3.
+ */
+function fieldInfo(raw, compSep = '^') {
+  const whole = String(raw == null ? '' : raw).trim();
+  if (!whole) return { kind: 'empty', whole };
+  const comps = whole.split(compSep).map((c) => c.trim()).filter(Boolean);
+  const labs = comps.filter((c) => labNumber(c) != null);
+  const numbers = [...new Set(labs.map(labNumber))];
+  if (numbers.length > 1) return { kind: 'conflict', whole };
+  if (numbers.length === 1) return { kind: 'lab', whole, value: labs[0], number: numbers[0] };
+  if (DIGITS.test(whole)) return { kind: 'bare', whole, value: whole, number: parseInt(whole, 10) };
+  return { kind: 'foreign', whole };
+}
+
+/**
+ * Номер пробы одного OBR по проводу (раздел 1). Одна чистая функция.
  *
- *   1. LAB- бьёт всё: значение вида LAB-… в OBR-2 или OBR-3 (кроме полей
- *      «никогда») — наша пробирка, в каком бы поле прибор её ни передал.
- *   2. Два РАЗНЫХ LAB- — номера нет (conflict); в sample_id — оба через « / ».
- *   3. Иначе основное поле провода, а если оно пусто — запасное.
+ *   1. LAB- бьёт всё: этикетка LAB- в OBR-2 или OBR-3 (кроме полей «никогда»),
+ *      в любом компоненте поля, — наша пробирка, в каком бы поле прибор её ни
+ *      передал.
+ *   2. Два РАЗНЫХ LAB- (в двух полях или в компонентах одного) — номера нет
+ *      (conflict); в sample_id — что пришло.
+ *   3. Иначе основное поле провода, а если оно пусто — запасное: голые цифры —
+ *      только поле целиком из цифр; другое непустое (foreign) — номера нет.
  *   4. Иначе номера нет.
  * Решать, примет ли заказ голые цифры (правило «открытый недавний заказ»), —
  * дело приёма (ingest.js): здесь только выбор поля.
  *
- * @param {{placer:string, filler:string}|null} obr
- * @returns {{sampleId:string, value:string, field:''|'OBR-2'|'OBR-3', lab:boolean, conflict:boolean}}
+ * @param {{placer:string, filler:string, compSep?:string}|null} obr  поля целиком
+ *        (readResult().obrs) или, по-старому, компонент 1 (readResult().obr)
+ * @returns {{sampleId:string, value:string, field:''|'OBR-2'|'OBR-3', lab:boolean, conflict:boolean, why?:string, foreign?:boolean}}
  *   sampleId — что записать в lab_device_messages.sample_id;
  *   value    — выбранный номер ('' — номера нет);
- *   lab      — выбран по правилу LAB-.
+ *   lab      — выбран по правилу LAB-;
+ *   why      — у спора в компонентах одного поля: 'components';
+ *   foreign  — в поле не этикетка и не голые цифры (ревью R1, пп. 2 и 8).
  */
 export function pickSampleId(obr, wire = 'default') {
   const rule = SAMPLE_FIELDS[known(wire)];
   const none = { sampleId: '', value: '', field: '', lab: false, conflict: false };
   if (!obr) return none;
   const readable = ['placer', 'filler'].filter((k) => !rule.never.includes(k));
-  const val = (k) => String(obr[k] == null ? '' : obr[k]).trim();
+  const info = Object.fromEntries(readable.map((k) => [k, fieldInfo(obr[k], obr.compSep || '^')]));
 
-  const labs = readable.filter((k) => labNumber(val(k)) != null);
-  if (labs.length === 2 && labNumber(val(labs[0])) !== labNumber(val(labs[1]))) {
-    return { sampleId: labs.map(val).join(' / '), value: '', field: '', lab: true, conflict: true };
+  const torn = readable.find((k) => info[k].kind === 'conflict');
+  if (torn) return { sampleId: info[torn].whole, value: '', field: '', lab: true, conflict: true, why: 'components' };
+  const labs = readable.filter((k) => info[k].kind === 'lab');
+  if (labs.length === 2 && info[labs[0]].number !== info[labs[1]].number) {
+    return { sampleId: labs.map((k) => info[k].value).join(' / '), value: '', field: '', lab: true, conflict: true };
   }
   if (labs.length) {
     const k = labs.includes(rule.primary) ? rule.primary : labs[0];
-    return { sampleId: val(k), value: val(k), field: FIELD_NAME[k], lab: true, conflict: false };
+    return { sampleId: info[k].value, value: info[k].value, field: FIELD_NAME[k], lab: true, conflict: false };
   }
   for (const k of [rule.primary, rule.fallback]) {
-    if (k && val(k)) return { sampleId: val(k), value: val(k), field: FIELD_NAME[k], lab: false, conflict: false };
+    if (!k || info[k].kind === 'empty') continue;
+    if (info[k].kind === 'bare') return { sampleId: info[k].value, value: info[k].value, field: FIELD_NAME[k], lab: false, conflict: false };
+    return { sampleId: info[k].whole, value: '', field: FIELD_NAME[k], lab: false, conflict: false, foreign: true };
   }
   return none;
+}
+
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R1, пп. 1 и 5) — номер пробы сообщения по ВСЕМ
+ * OBR (readResult().obrs). Раньше номер брался у первого OBR, а строки OBX — у
+ * всех: «OBR|1||LAB-000123 …, OBR|2||LAB-000124 …» клал значения пробы 124 в
+ * бланк 123.
+ *   — номер каждого OBR — по тому же правилу провода (pickSampleId);
+ *   — спор внутри OBR — спор сообщения;
+ *   — у разных OBR РАЗНЫЕ номера — номера нет (conflict, why: 'obrs'), ничего не
+ *     пишется; в sample_id — все номера через « / »;
+ *   — иначе первый НЕПУСТОЙ номер по OBR (до E5 parseMessage брал первый
+ *     непустой OBR-3 — пустой первый OBR не делает пробу ничьей); тот же номер,
+ *     записанный этикеткой и голыми цифрами, — не спор, этикетка бьёт.
+ */
+export function pickMessageSample(obrs, wire = 'default') {
+  const none = { sampleId: '', value: '', field: '', lab: false, conflict: false };
+  const picks = (Array.isArray(obrs) ? obrs : []).map((o) => pickSampleId(o, wire));
+  const torn = picks.find((p) => p.conflict);
+  if (torn) return torn;
+  const named = picks.filter((p) => p.sampleId);
+  if (!named.length) return none;
+  const keyOf = (p) => (p.value ? 'n' + parseInt(String(p.value).replace(/^lab-/i, ''), 10) : 's' + p.sampleId);
+  const keys = [...new Set(named.map(keyOf))];
+  if (keys.length > 1) {
+    return { sampleId: [...new Set(named.map((p) => p.sampleId))].join(' / '), value: '', field: '', lab: named.some((p) => p.lab), conflict: true, why: 'obrs' };
+  }
+  return named.find((p) => p.lab) || named[0];
 }

@@ -11,7 +11,7 @@ import { startLisListeners, listenerStatus } from '../../lis/index.js';
 import { ingestMessage } from '../../lis/ingest.js';
 import { resolveMessage, OVERSIZE_DETAIL_PREFIX } from '../../lis/inbox.js';
 import { mshOf } from '../../lis/hl7.js';   // LIS_REAL_ANALYZERS_V1_WIRE — тип и MSH-4 без исключений
-import { readResult, wireFor } from '../../lis/wire.js';   // LIS_REAL_ANALYZERS_V1_WIRE — тот же провод, что у приёма
+import { readResult, wireFor, readEnvelope } from '../../lis/wire.js';   // LIS_REAL_ANALYZERS_V1_WIRE — тот же провод, что у приёма; readEnvelope: ревью R1, п. 6
 import { LAB_SECTION_ROLES } from '../../db/schema-registry.js';
 import { hasAnyRole } from '../roles.js';   // ЭФФЕКТИВНЫЕ роли, как в lab-stats.js — не голая строка user.role
 import { rpcT } from '../server-message.js';   // LIS_ANALYZER_LIST_V1 (ревью C2) — отказ с названиями панелей переводится
@@ -136,8 +136,11 @@ export async function lisRestart(db, args, user) {
  */
 export function lisMessageAttach(db, args, user) {
   guard(user);
-  const id = Number(args && args.id);
-  const vsId = Number(args && args.visit_service_id);
+  // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 10) — номера — только целое больше
+  // нуля: голый Number() принимал true, «0x7b», [123] и «1e0». У заказа можно
+  // с этикетки: «LAB-000123».
+  const id = positiveIntArg(args && args.id);
+  const vsId = positiveIntArg(args && args.visit_service_id, { label: true });
   if (!id || !vsId) throw new LisError('Нужны номер сообщения и номер заказа');
 
   const msg = db.prepare('SELECT * FROM lab_device_messages WHERE id = ?').get(id);
@@ -157,8 +160,22 @@ export function lisMessageAttach(db, args, user) {
   // калибровка, запрос рабочего списка) — не проба пациента: у QC BS-200 в
   // OBR-2 стоит номер теста. Привязать его к заказу значило бы положить
   // контрольный материал в бланк пациента.
-  if (msg.kind && msg.kind !== 'result') {
+  // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 6) — и по содержимому: строки до
+  // мигр. 233 по умолчанию kind = 'result', и старый контроль качества BS-200
+  // (MSH-16 = 2) или запрос рабочего списка прошли бы в бланк пациента. Вид —
+  // тем же проводом, что у приёма (профиль строки и имя сообщения).
+  const dev = msg.device_id ? db.prepare('SELECT profile FROM lab_devices WHERE id = ?').get(msg.device_id) : null;
+  const head = mshOf(msg.raw);
+  const env = readEnvelope(msg.raw, wireFor({ profile: dev ? getProfile(dev.profile) : null, facility: head.facility, app: head.app }));
+  if ((msg.kind && msg.kind !== 'result') || env.service) {
     throw new LisError('Служебное сообщение прибора (контроль качества, калибровка или запрос) к заказу не привязывается', 409);
+  }
+
+  // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 10) — строку, которую уже разобрал
+  // человек или которая уже принята (applied), второй раз не прогоняем: в
+  // лотке её нет, а прогон записал бы ещё одну строку и снова тронул бланк.
+  if (msg.resolved_at || msg.status === 'applied') {
+    throw new LisError('Сообщение уже разобрано или принято — привязать его ещё раз нельзя', 409);
   }
 
   // LIS_REAL_ANALYZERS_V1_SAMPLE — номер заказа уходит в приём ЯВНО
@@ -225,9 +242,19 @@ function codesHead(text) {
  * возвращались 404 «не найден» вместо «вызов неверен».
  */
 function deviceIdArg(v) {
+  return positiveIntArg(v);
+}
+
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R1, п. 10) — целое больше нуля, числом или
+ * строкой из цифр (пробелы вокруг обрезаются); с label — и с этикетки
+ * «LAB-000123». Всё прочее — null (вызов получает 400).
+ */
+function positiveIntArg(v, { label = false } = {}) {
   let n = NaN;
   if (typeof v === 'number') n = v;
   else if (typeof v === 'string' && /^\s*\d+\s*$/.test(v)) n = Number(v.trim());
+  else if (label && typeof v === 'string') { const m = /^\s*LAB-(\d+)\s*$/i.exec(v); if (m) n = Number(m[1]); }
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
@@ -274,7 +301,7 @@ export function lisDeviceCodes(db, args, user) {
     // мусор и неподдержанный тип кодов не имеют.
     const msh = mshOf(head);
     if (msh.type !== 'ORU^R01') continue;
-    const { observations } = readResult(head, wireFor({ profile, facility: msh.facility }));
+    const { observations } = readResult(head, wireFor({ profile, facility: msh.facility, app: msh.app }));   // app: ревью R1, п. 11
     for (const o of observations) {
       if (o.valueType.toUpperCase() === 'ED') continue;
       if (!o.code && !o.name) continue;

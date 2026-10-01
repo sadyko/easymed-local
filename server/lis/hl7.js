@@ -137,10 +137,13 @@ export function mshOf(text) {
     // приём, иначе «проба» по заголовку получила бы отказ приёма и не тот ответ.
     type: t.slice(0, 2).filter(Boolean).join('^'),
     event: echo(t[1]),
-    controlId: (f[9] || '').trim(),
-    version: (f[11] || '').trim(),
-    ackType: (f[15] || '').trim(),
-    charset: (f[17] || '').trim(),
+    // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 9) — номер, MSH-12, MSH-16 и MSH-18
+    // идут в ответ эхом и чистятся так же, как MSH-3/4: у отправителя со своим
+    // разделителем полей «|» в поле — просто знак, а в нашем ответе — граница.
+    controlId: echo(f[9]),
+    version: echo(f[11]),
+    ackType: echo(f[15]),
+    charset: echo(f[17]),
   };
 }
 
@@ -156,8 +159,14 @@ export function mshOf(text) {
 export function replyMsh(msh, type) {
   const m = msh || mshOf('');
   const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 9) — MSH-16 эхом только 0/1/2 — вид
+  // результата по руководству BS-200 (с. 8: «0- Sample result; 1- Calibration
+  // result; 2- QC result»; эхом в ACK^R01 на с. 25 и 27). Стандартные
+  // AL/NE/ER/SU — просьба отправителя о виде подтверждения, а не вид
+  // результата: в ответ не возвращаются. Поля — чищеные (echo).
+  const ackType = /^[012]$/.test(echo(m.ackType)) ? echo(m.ackType) : '';
   const f = ['MSH', '^~\\&', 'EASYMED', 'CLINIC', m.appField || '', m.facilityField || '', stamp, '', type,
-    m.controlId || '1', 'P', m.version || '2.3.1', '', '', '', m.ackType || '', '', m.charset || ''];
+    echo(m.controlId) || '1', 'P', echo(m.version) || '2.3.1', '', '', '', ackType, '', echo(m.charset)];
   while (f.length > 12 && f[f.length - 1] === '') f.pop();
   return f.join('|');
 }
@@ -189,7 +198,7 @@ export function buildAck(msh, code, why = {}) {
   const error = why.error || MSA_TEXT[c].error;
   return [
     replyMsh(m, m.event ? 'ACK^' + m.event : 'ACK'),
-    ['MSA', c, m.controlId || '', text, '', '', error].join('|'),
+    ['MSA', c, echo(m.controlId), text, '', '', error].join('|'),   // echo: ревью R1, п. 9
   ].join('\r');
 }
 
@@ -209,7 +218,7 @@ export function buildAck(msh, code, why = {}) {
  * @param {object} env  readEnvelope() запроса (wire.js): заголовок, qrd, qrf
  */
 export function buildQueryReply(env) {
-  const msa = ['MSA', 'AA', env.controlId || '', MSA_TEXT.AA.text, '', '', MSA_TEXT.AA.error].join('|');
+  const msa = ['MSA', 'AA', echo(env.controlId), MSA_TEXT.AA.text, '', '', MSA_TEXT.AA.error].join('|');   // echo: ревью R1, п. 9
   if (env.type === 'QRY^Q02') return [replyMsh(env, 'QCK^Q02'), msa, 'ERR|0', 'QAK|SR|NF'].join('\r');
   if (env.type === 'QRY^Q01') return [replyMsh(env, 'DSR^Q01'), msa, 'ERR|0', 'QAK|SR|NF', env.qrd, env.qrf].filter(Boolean).join('\r');
   return buildAck(env, 'AA');

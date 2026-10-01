@@ -362,3 +362,163 @@ test('прежний профиль (BC-5300): голые цифры OBR-2 по-
   assert.equal(last(db).status, 'unmatched');
   db.close();
 });
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R1 (E1–E5 на 1728cbc) ─────────────────────
+
+// П. 1 — две пробы в одном сообщении: значение пробы 124 ложилось в бланк 123.
+test('R1 п. 1: два OBR с разными номерами — unmatched, ни в один бланк ничего не легло', () => {
+  const db = clinic({ orders: [{ id: 123 }, { id: 124 }], analytes: [['WBC', 'Лейкоциты', 'WBC'], ['HGB', 'Гемоглобин', 'HGB']] });
+  assert.equal(ingestMessage(db, seg(
+    'MSH|^~\\&|BC-5300|Mindray|||20261001090000||ORU^R01|1|P|2.3.1',
+    'OBR|1||LAB-000123|00001^Automated Count^99MRC',
+    'OBX|1|NM|WBC^^99MRC||9.9|10*9/L|||||F',
+    'OBR|2||LAB-000124|00001^Automated Count^99MRC',
+    'OBX|1|NM|HGB^^99MRC||142|g/L|||||F',
+  ), '10.0.0.9', 1), 'AA');
+  const m = last(db);
+  assert.equal(m.status, 'unmatched');
+  assert.equal(m.visit_service_id, null);
+  assert.equal(m.sample_id, 'LAB-000123 / LAB-000124');
+  assert.match(m.detail, /в сообщении пробы с разными номерами/);
+  assert.equal(results(db).length + results(db, 124).length, 0, 'бланки не тронуты');
+  db.close();
+});
+
+test('R1 п. 1 и 5: первый OBR без номера — номер из следующего, как у parseMessage до E5', () => {
+  const db = clinic();
+  ingestMessage(db, seg(
+    'MSH|^~\\&|BC-5300|Mindray|||20261001090000||ORU^R01|1|P|2.3.1',
+    'OBR|1|||00001^Automated Count^99MRC',
+    'OBR|2||LAB-000123|00001^Automated Count^99MRC',
+    'OBX|1|NM|WBC^^99MRC||6.1|10*9/L|||||F',
+  ), '10.0.0.9', 1);
+  assert.equal(last(db).status, 'applied', last(db).detail);
+  assert.equal(results(db)[0].value, '6.1');
+  db.close();
+});
+
+// П. 2 — «2^LAB-000123» читалось как голое «2».
+test('R1 п. 2: OBR-3 = «2^LAB-000123» — проба заказа 123, открытый свежий заказ № 2 не тронут', () => {
+  const db = clinic({ orders: [{ id: 2 }, { id: 123 }] });
+  ingestMessage(db, HEM('', '2^LAB-000123'), '10.0.0.9', 1);
+  assert.equal(last(db).visit_service_id, 123);
+  assert.equal(last(db).sample_id, 'LAB-000123');
+  assert.equal(results(db).length, 1);
+  assert.equal(results(db, 2).length, 0);
+  db.close();
+});
+
+test('R1 п. 2: поле из нескольких компонентов без этикетки — номера нет, ни один заказ не тронут', () => {
+  for (const field of ['2^15', '15^', '123^x']) {
+    const db = clinic({ orders: [{ id: 2 }, { id: 15 }, { id: 123 }] });
+    ingestMessage(db, HEM('', field), '10.0.0.9', 1);
+    const m = last(db);
+    assert.equal(m.status, 'unmatched', field);
+    assert.equal(m.visit_service_id, null, field);
+    assert.equal(m.sample_id, field, field + ': в sample_id — поле как пришло');
+    assert.match(m.detail, /не этикетка Easy-Med и не номер из одних цифр/, field);
+    assert.equal(results(db, 2).length + results(db, 15).length + results(db).length, 0, field);
+    db.close();
+  }
+});
+
+// П. 3 — голый номер, отказанный дальше по приёму, не привязывает чужой заказ:
+// иначе лента показывает имя чужого пациента рядом с пробой, а касса не может
+// снять его неоплаченную строку (billing.js assertNotPerformed, visit-lines.js).
+test('R1 п. 3: голый номер, отказ «не лабораторная / нет панели / панель без прибора / другая модель» — visit_service_id NULL', () => {
+  const cases = {
+    'не лабораторная': (db) => db.prepare('UPDATE services SET is_lab = 0 WHERE id = 9').run(),
+    'нет панели': (db) => db.prepare('UPDATE lab_panels SET service_id = NULL WHERE id = 5').run(),
+    'панель без прибора': (db) => db.prepare('UPDATE lab_panels SET device_id = NULL WHERE id = 5').run(),
+  };
+  for (const [name, spoil] of Object.entries(cases)) {
+    const db = clinic({ orders: [{ id: 2 }] });
+    spoil(db);
+    ingestMessage(db, HEM('', '2'), '10.0.0.9', 1);
+    assert.equal(last(db).visit_service_id, null, name);
+    assert.notEqual(last(db).status, 'applied', name);
+    db.close();
+  }
+  const db = clinic({ orders: [{ id: 2 }] });
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'Другой','mindray-bs-240')").run();
+  ingestMessage(db, HEM('', '2'), '10.0.0.9', 2);
+  assert.equal(last(db).status, 'unmatched');
+  assert.equal(last(db).visit_service_id, null, 'другая модель');
+  assert.equal(results(db, 2).length, 0);
+  db.close();
+});
+
+test('R1 п. 3: с этикеткой LAB- те же отказы, как прежде, привязаны к заказу', () => {
+  const db = clinic();
+  db.prepare('UPDATE lab_panels SET device_id = NULL WHERE id = 5').run();
+  ingestMessage(db, HEM('', 'LAB-000123'), '10.0.0.9', 1);
+  assert.equal(last(db).visit_service_id, 123);
+  db.close();
+});
+
+// П. 4 — запись колл-центра и календаря создаёт строку заранее (scheduled_at,
+// booking-mirror.js): строка, созданная 10 дней назад на СЕГОДНЯШНИЙ визит,
+// отказывалась как «старше 7 дней». Возраст — от позднейшего из: создана,
+// запись, день визита — всё по местному календарному дню.
+test('R1 п. 4: заказ создан 10 дней назад, записан или визит сегодня — голые цифры принимаются', () => {
+  const booked = clinic({ orders: [{ id: 2, status: 'queued', created: dayStart(10) }] });
+  booked.prepare(`UPDATE visit_services SET scheduled_at = ${NOW} WHERE id = 2`).run();
+  ingestMessage(booked, HEM('', '2'), '10.0.0.9', 1);
+  assert.equal(last(booked).visit_service_id, 2, 'запись на сегодня');
+  assert.equal(results(booked, 2).length, 1);
+  booked.close();
+
+  const visit = clinic({ orders: [{ id: 2, status: 'queued', created: dayStart(10) }] });
+  visit.prepare(`UPDATE visits SET visit_date = ${NOW} WHERE id = 55`).run();
+  ingestMessage(visit, HEM('', '2'), '10.0.0.9', 1);
+  assert.equal(last(visit).visit_service_id, 2, 'визит сегодня');
+  visit.close();
+});
+
+test('R1 п. 4: создан, записан и визит — всё старше 7 дней: отказ, назван позднейший день', () => {
+  const db = clinic({ orders: [{ id: 2, status: 'queued', created: dayStart(30) }] });
+  db.prepare(`UPDATE visit_services SET scheduled_at = ${dayStart(20)} WHERE id = 2`).run();
+  db.prepare(`UPDATE visits SET visit_date = ${dayStart(25)} WHERE id = 55`).run();
+  ingestMessage(db, HEM('', '2'), '10.0.0.9', 1);
+  const m = last(db);
+  assert.equal(m.status, 'unmatched');
+  assert.equal(m.visit_service_id, null);
+  const day = db.prepare(`SELECT date(${dayStart(20)}, 'localtime') d`).get().d;
+  assert.ok(m.detail.includes(day.slice(8, 10) + '.' + day.slice(5, 7) + '.' + day.slice(0, 4)), 'день записи — позднейший: ' + m.detail);
+  assert.match(m.detail, /старше 7 дней/);
+  db.close();
+});
+
+// П. 8 — «LAB2», «lab 2», «lab_2», «LAB-123» считались нашей этикеткой и
+// обходили правило голых цифр.
+test('R1 п. 8: не наша этикетка (не «LAB-» и 6+ цифр) — отказ, а не голые цифры и не этикетка', () => {
+  for (const loose of ['LAB-123', 'lab_000123', 'LAB000123', 'lab 123']) {
+    const db = clinic({ orders: [{ id: 123, status: 'completed', created: dayStart(30) }] });
+    ingestMessage(db, HEM('', loose), '10.0.0.9', 1);
+    assert.equal(last(db).status, 'unmatched', loose);
+    assert.equal(last(db).visit_service_id, null, loose);
+    assert.match(last(db).detail, /не этикетка Easy-Med/, loose);
+    db.close();
+  }
+});
+
+test('R1 п. 8: голые цифры с ведущими нулями (переадресатор шлёт 8 знаков) — правило голых цифр, как прежде', () => {
+  const db = clinic();
+  ingestMessage(db, HEM('', '00000123'), '10.0.0.9', 1);
+  assert.equal(last(db).visit_service_id, 123);
+  assert.equal(results(db).length, 1);
+  db.close();
+});
+
+// П. 11 — у строки BS-200 нет профиля или он чужой: провод — по тому, как
+// сообщение называет себя. OBR-3 BS-200 (место в штативе) не читается.
+test('R1 п. 11: BS-200 на строке без профиля или с чужим профилем — OBR-3 не читается', () => {
+  for (const profile of ['', 'mindray-bs-240', 'mindray-bc-780']) {
+    const db = clinic({ orders: [{ id: 2 }], analytes: [['GLU', 'Глюкоза', '2']], profile });
+    ingestMessage(db, BS200('', '2'), '10.0.0.40', 1);
+    assert.equal(last(db).status, 'unmatched', profile || '(без профиля)');
+    assert.equal(last(db).sample_id, '', profile);
+    assert.equal(results(db, 2).length, 0, profile + ': место в штативе «2» не легло в заказ № 2');
+    db.close();
+  }
+});

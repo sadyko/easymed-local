@@ -23,7 +23,7 @@ import { planSeries, seriesOutcome, SERIES_WINDOW_MS } from './match.js';   // L
 import { crmServiceEvidence } from '../services/crm/visit-status.js';
 // LIS_REAL_ANALYZERS_V1_SAMPLE — провод прибора: номер пробы и строки теста из
 // нужных полей (wire.js); профиль называет провод.
-import { readResult, pickSampleId, wireFor } from './wire.js';
+import { readResult, pickMessageSample, wireFor } from './wire.js';   // pickMessageSample: LIS_REAL_ANALYZERS_V1, ревью R1, п. 1
 import { getProfile } from './profiles/index.js';
 import { today, localDate } from '../services/domain/day.js';
 
@@ -59,16 +59,27 @@ const dmy = (ymd) => (/^\d{4}-\d{2}-\d{2}$/.test(String(ymd || '')) ? ymd.slice(
  * null — заказ принимает голые цифры; иначе — причина отказа словами для
  * журнала лотка: закрыт и/или старше 7 дней, номер без LAB-, возможно, это
  * номер места в штативе.
+ *
+ * LIS_REAL_ANALYZERS_V1 (ревью R1, п. 4) — возраст заказа — от ПОЗДНЕЙШЕГО из:
+ * создан (created_at), записан на время (scheduled_at), день визита
+ * (visits.visit_date), всё по местному календарному дню. Запись колл-центра и
+ * календаря создаёт строку заранее (booking-mirror.js): строка, созданная 10
+ * дней назад на СЕГОДНЯШНИЙ визит, иначе отказывалась как «старше 7 дней».
+ * Пустое не в счёт (COALESCE: у max() с NULL результат NULL).
  */
 function bareIdRefusal(db, order, number) {
-  const row = db.prepare(`SELECT ${localDate('created_at')} AS day, date(?, ?) AS cutoff FROM visit_services WHERE id = ?`)
+  const row = db.prepare(`SELECT max(COALESCE(${localDate('vs.created_at')}, ''), COALESCE(${localDate('vs.scheduled_at')}, ''),
+                                     COALESCE(${localDate('v.visit_date')}, '')) AS day,
+                                 date(?, ?) AS cutoff
+                            FROM visit_services vs LEFT JOIN visits v ON v.id = vs.visit_id
+                           WHERE vs.id = ?`)
     .get(today(db), '-' + BARE_ID_MAX_AGE_DAYS + ' days', order.id);
   const open = OPEN_LAB_STATUSES.has(order.status);
   const recent = !!(row && row.day && row.day >= row.cutoff);
   if (open && recent) return null;
   const why = [];
   if (!open) why.push('закрыт (статус «' + (STATUS_WORDS[order.status] || order.status) + '»)');
-  if (!recent) why.push('создан ' + dmy(row && row.day) + ' — старше ' + BARE_ID_MAX_AGE_DAYS + ' дней');
+  if (!recent) why.push('датирован ' + dmy(row && row.day) + ' (позднейшее из: создан, записан, визит) — старше ' + BARE_ID_MAX_AGE_DAYS + ' дней');
   return 'номер пробы «' + number + '» без префикса LAB- указывает на заказ № ' + order.id + ', который '
     + why.join(' и ') + ' — возможно, это номер места в штативе прибора, а не номер пробирки; '
     + 'если проба этого заказа — нажмите «Привязать»';
@@ -76,6 +87,17 @@ function bareIdRefusal(db, order, number) {
 
 /** Строка журнала у сообщения, прогнанного «Привязать» с номером человека. */
 const MANUAL = 'привязано вручную';
+
+/**
+ * Спор о номере пробы — чья проба, не знает никто: номера нет, бланки не
+ * трогаются. LIS_REAL_ANALYZERS_V1 (ревью R1, пп. 1 и 2) — и разные номера у
+ * разных OBR одного сообщения, и разные этикетки в компонентах одного поля.
+ */
+const CONFLICT_DETAIL = {
+  fields: 'в OBR-2 и OBR-3 разные номера LAB-… — проверьте настройку штрихкода на приборе',
+  components: 'в одном поле OBR разные номера LAB-… — проверьте настройку штрихкода на приборе',
+  obrs: 'в сообщении пробы с разными номерами — ничего не записано: значения одной пробы легли бы в бланк другой; проверьте настройку прибора',
+};
 
 // LIS_REAL_ANALYZERS_V1_SERIES — строки лотка, остановленные ДО бланка: у
 // услуги нет панели или панель не привязана к анализатору (ниже в приёме). У
@@ -106,7 +128,8 @@ function seriesMembers(db, { orderId, profileKey, profile, analytes }) {
   const out = [];
   for (const r of rows) {
     if (BEFORE_BLANK.test(String(r.detail || ''))) continue;
-    const { observations } = readResult(r.raw, wireFor({ profile, facility: mshOf(r.raw).facility }));
+    const head = mshOf(r.raw);
+    const { observations } = readResult(r.raw, wireFor({ profile, facility: head.facility, app: head.app }));
     if (!planObservations(observations, analytes).fills.length) continue;
     out.push({ id: r.id, status: r.status, detail: r.detail || '', resolved_at: r.resolved_at, observations });
   }
@@ -187,15 +210,21 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // профили и прибор без профиля читаются ровно как раньше).
   const device = deviceId ? db.prepare('SELECT profile FROM lab_devices WHERE id = ?').get(deviceId) : null;
   const profile = device ? getProfile(device.profile) : null;
-  const wire = opts.wire || wireFor({ profile, facility: mshOf(raw).facility });
-  const { obr, observations } = readResult(raw, wire);
+  // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 11) — и по тому, как сообщение называет
+  // себя (MSH-3/4): BS-200 на строке без профиля или с чужим профилем не
+  // читает OBR-3; при споре профиля и сообщения — безопасный провод.
+  const head = mshOf(raw);
+  const wire = opts.wire || wireFor({ profile, facility: head.facility, app: head.app });
+  const { obrs, observations } = readResult(raw, wire);
 
   // Номер пробы — из поля провода: LAB- в OBR-2 или OBR-3 бьёт всё, иначе
   // основное поле, иначе запасное (wire.js pickSampleId). Номер, названный
   // человеком, — как есть.
+  // LIS_REAL_ANALYZERS_V1 (ревью R1, пп. 1, 2, 5) — у КАЖДОГО OBR и во всех
+  // компонентах поля; разные номера у разных OBR — номера нет; первый непустой.
   const pick = manual
     ? { sampleId: String(opts.sampleIdOverride), value: String(opts.sampleIdOverride), lab: false, conflict: false }
-    : pickSampleId(obr, wire);
+    : pickMessageSample(obrs, wire);
 
   const base = { deviceId, peer, raw, sampleId: pick.sampleId };
   // LIS_ANALYZER_LIST_V1 — «на связи» на ЛЮБОМ разобранном сообщении известного
@@ -209,7 +238,16 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // Две РАЗНЫЕ этикетки LAB- в OBR-2 и OBR-3 — чья проба, не знает никто:
   // номера нет, бланки не трогаются, в sample_id — оба номера.
   if (pick.conflict) {
-    record({ ...base, status: 'unmatched', detail: 'в OBR-2 и OBR-3 разные номера LAB-… — проверьте настройку штрихкода на приборе' });
+    record({ ...base, status: 'unmatched', detail: CONFLICT_DETAIL[pick.why] || CONFLICT_DETAIL.fields });
+    return 'AA';
+  }
+  // LIS_REAL_ANALYZERS_V1 (ревью R1, пп. 2 и 8) — в поле номера не этикетка
+  // Easy-Med и не голые цифры («2^15», «QC1», «lab_2», «LAB-123»): номера нет.
+  // Раньше «LAB2», «lab 2», «LAB-123» сходили за этикетку и обходили правило
+  // голых цифр, а у «2^15» читался компонент 1.
+  if (pick.foreign) {
+    record({ ...base, status: 'unmatched', detail: 'номер пробы «' + pick.sampleId + '» — не этикетка Easy-Med и не номер из одних цифр'
+      + ' (этикетка — «LAB-» и не меньше 6 цифр) — проверьте настройку штрихкода на приборе; если проба вашего заказа — нажмите «Привязать»' });
     return 'AA';
   }
 
@@ -236,8 +274,15 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
       return 'AA';
     }
   }
+  // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 3) — голый номер прибора (не этикетка
+  // и не номер человека), отказанный дальше по приёму, заказ НЕ привязывает
+  // (visit_service_id = NULL): иначе лента показала бы имя чужого пациента
+  // рядом с пробой, а касса не смогла бы снять его неоплаченную строку
+  // (billing.js assertNotPerformed, visit-lines.js). Этикетка LAB- и номер
+  // человека привязывают, как прежде. D7 ниже — как прежде.
+  const linkId = pick.lab || manual ? order.id : null;
   if (!order.is_lab) {
-    record({ ...base, visitServiceId: order.id, status: 'unmatched',
+    record({ ...base, visitServiceId: linkId, status: 'unmatched',
       detail: 'услуга «' + (order.service_name || order.service_id) + '» не помечена как лабораторная' });
     return 'AA';
   }
@@ -248,12 +293,12 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
     // названных услуг («Общий анализ крови (CBC)», «(ОАК)», «(стационар)»), и
     // безымянное «у услуги нет панели» не отвечает на единственный вопрос,
     // который человек задаёт в этот момент: у КАКОЙ именно.
-    record({ ...base, visitServiceId: order.id, status: 'unmapped',
+    record({ ...base, visitServiceId: linkId, status: 'unmapped',
       detail: 'услуга «' + (order.service_name || order.service_id) + '» не привязана ни к одной панели' });
     return 'AA';
   }
   if (!panel.device_id) {
-    record({ ...base, visitServiceId: order.id, status: 'unmapped',
+    record({ ...base, visitServiceId: linkId, status: 'unmapped',
       detail: 'панель «' + panel.name + '» не привязана к анализатору' });
     return 'AA';
   }
@@ -271,7 +316,7 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
     const panelDev = db.prepare('SELECT profile, name FROM lab_devices WHERE id = ?').get(panel.device_id);
     const sameModel = mine && panelDev && mine.profile && mine.profile === panelDev.profile;
     if (!sameModel) {
-      record({ ...base, visitServiceId: order.id, status: 'unmatched',
+      record({ ...base, visitServiceId: linkId, status: 'unmatched',
         detail: 'панель «' + panel.name + '» кормится анализатором другой модели'
           + (panelDev && panelDev.name ? ' («' + panelDev.name + '»)' : '') });
       return 'AA';

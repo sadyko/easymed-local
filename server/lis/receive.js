@@ -15,8 +15,9 @@
 // Проба пациента идёт в тот же приём, что и прежде; здесь решается только
 // ответ: AE 100 — не разобрано, AR 200 — известный, но не поддержанный тип
 // (отказ без повтора), AE 207 — сорвалась запись (прибор пришлёт снова).
-import { readEnvelope } from './wire.js';
-import { buildAck, buildQueryReply, ACK_INTERNAL } from './hl7.js';
+import { readEnvelope, wireFor } from './wire.js';   // wireFor: LIS_REAL_ANALYZERS_V1, ревью R1, пп. 7 и 11
+import { buildAck, buildQueryReply, ACK_INTERNAL, mshOf } from './hl7.js';
+import { getProfile } from './profiles/index.js';
 import { ingestMessage } from './ingest.js';
 import { recordMessage, touchDevice } from './inbox.js';
 
@@ -37,7 +38,14 @@ function serviceDetail(env) {
  *   reply — готовый ответ прибору (без кадра MLLP); mllp.js шлёт его как есть.
  */
 export function receiveMessage(db, text, { peer = '', deviceId = null } = {}) {
-  const env = readEnvelope(text);
+  // LIS_REAL_ANALYZERS_V1 (ревью R1, пп. 7 и 11) — провод: профиль строки
+  // прибора и то, как сообщение называет себя (wire.js wireFor). Калибровка и
+  // контроль по MSH-16 — только у провода, объявившего это соглашение (химия
+  // Mindray, Autobio по сети); приём читает тем же проводом.
+  const device = deviceId ? db.prepare('SELECT profile FROM lab_devices WHERE id = ?').get(deviceId) : null;
+  const head = mshOf(text);
+  const wire = wireFor({ profile: device ? getProfile(device.profile) : null, facility: head.facility, app: head.app });
+  const env = readEnvelope(text, wire);
 
   if (env.service) {
     recordMessage(db, {
@@ -52,7 +60,7 @@ export function receiveMessage(db, text, { peer = '', deviceId = null } = {}) {
 
   // Проба пациента, неразобранное и неподдержанное — прежний приём: он пишет
   // строку лотка (rejected — у мусора и неподдержанного типа) и решает AA/AE.
-  const code = ingestMessage(db, text, peer, deviceId);
+  const code = ingestMessage(db, text, peer, deviceId, { wire });
   if (env.kind === 'unsupported') return { code: 'AR', kind: 'result', reply: buildAck(env, 'AR') };
   if (env.kind === 'unparsed') return { code: 'AE', kind: 'result', reply: buildAck(env, 'AE') };
   // Заголовок разобран как ORU^R01, значит AE приёма — сорвавшаяся запись.

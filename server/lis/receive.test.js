@@ -226,3 +226,34 @@ test('вид «проба» у заголовка — ровно там, где 
   assert.equal(last(db).status, 'rejected');
   db.close();
 });
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R1, п. 7 ─────────────────────────────────
+// MSH-16 = 1/2 — калибровка и контроль только у провода, который объявляет
+// это соглашение (химия Mindray, Autobio по сети). У гематологии и прочих
+// MSH-16 в виде сообщения не участвует: проба пациента не прячется в
+// «служебные», где её никто не увидит.
+test('R1 п. 7: гематология с MSH-16 = 2 — проба, а не контроль: идёт в приём и в бланк', () => {
+  const db = fresh();
+  const raw = seg(
+    'MSH|^~\\&|BC-5300|Mindray|||20260910143943||ORU^R01|42|P|2.3.1||||2',
+    'OBR|1||LAB-000001|00001^Automated Count^99MRC',
+    'OBX|1|NM|WBC^^99MRC||6.1|10*9/L|||||F',
+  );
+  const out = receiveMessage(db, raw, { peer: '10.0.0.5', deviceId: 1 });
+  assert.equal(out.kind, 'result');
+  assert.equal(last(db).kind, 'result');
+  assert.equal(last(db).resolved_at, null);
+  assert.equal(results(db).find((r) => r.parameter === 'Лейкоциты').value, '6.1');
+  const f = out.reply.split('\r')[0].split('|');
+  assert.equal(f[15] || '', '2', 'эхо MSH-16 — как пришло: 0/1/2 руководства BS-200');
+  db.close();
+});
+
+test('R1 п. 7: строка прибора BS-200 — MSH-16 = 2 по-прежнему контроль', () => {
+  const db = fresh();
+  db.prepare("UPDATE lab_devices SET profile = 'mindray-bs-200' WHERE id = 1").run();
+  const out = receiveMessage(db, BS200_QC().replace('Mindray|BS-200E', 'X|Y'), { peer: '10.0.0.40', deviceId: 1 });
+  assert.equal(out.kind, 'qc', 'провод профиля — mindray-chem');
+  assert.equal(last(db).kind, 'qc');
+  db.close();
+});

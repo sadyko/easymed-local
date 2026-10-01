@@ -552,3 +552,67 @@ test('lis_listeners: dialing — список соединений, которы
   }
   db.close();
 });
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R1, пп. 6 и 10: «Привязать» ──────────────
+
+// П. 6 — строки до мигр. 233 по умолчанию kind = 'result', и старый контроль
+// качества BS-200 (MSH-16 = 2) прошёл бы через «Привязать» в бланк пациента.
+// Отказ — и по содержимому сообщения, а не только по колонке kind.
+test('R1 п. 6: служебное по содержимому (QC и запрос с kind = result, строки до мигр. 233) — 409, бланк не тронут', () => {
+  const db = fresh();
+  attachClinic(db);
+  db.prepare("UPDATE lab_devices SET profile = 'mindray-bs-200' WHERE id = 1").run();
+  const qc = ['MSH|^~\\&|Mindray|BS-200E|||20070720120202||ORU^R01|1|P|2.3.1||||2||ASCII|||',
+    'OBR|1|1|test1|Mindray^BS-200E||20070720120143|||||||QUAL1|1111|20080720000000||H|5.000000|2.000000|0.11029|g/ml',
+    'OBX|1|NM|2|test2|5.000000|g/ml|-||||F'].join('\r');
+  const qry = ['MSH|^~\\&|Mindray|BS-200E|||20070723170707||QRY^Q02|1|P|2.3.1||||||ASCII|||',
+    'QRD|20070723170707|R|D|1|||RD|34567743|OTH|||T|'].join('\r');
+  for (const raw of [qc, qry]) {
+    const id = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status) VALUES (1,'10.0.0.40',?,'unmatched')").run(raw).lastInsertRowid;
+    assert.equal(db.prepare('SELECT kind FROM lab_device_messages WHERE id = ?').get(id).kind, 'result', 'как у строк до мигр. 233');
+    assert.throws(() => lisMessageAttach(db, { id, visit_service_id: 77 }, LAB), (e) => e.status === 409
+      && e.message === 'Служебное сообщение прибора (контроль качества, калибровка или запрос) к заказу не привязывается');
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_results WHERE visit_service_id = 77').get().c, 0);
+  db.close();
+});
+
+// П. 10 — Number() принимал true, «0x7b», [123] и «1e0» за номер.
+test('R1 п. 10: номер сообщения и заказа — только целое больше нуля; у заказа можно «LAB-»', () => {
+  const db = fresh();
+  attachClinic(db);
+  const raw = ['MSH|^~\\&|Mindray|BS-200E|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||',
+    'OBR|1|LAB-999999|2|Mindray^BS-200E|Y', 'OBX|1|NM|2|test2|5.000000|g/ml|-||||F'].join('\r');
+  const ins = () => db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status) VALUES (1,'10.0.0.40',?,'unmatched')").run(raw).lastInsertRowid;
+  const id = ins();
+  for (const bad of [true, [77], '0x4d', '7.7e1', 77.5, -77, 0, '', ' ', null, {}, 'LAB-', 'LAB-x', 'LAB2', '77abc']) {
+    assert.throws(() => lisMessageAttach(db, { id, visit_service_id: bad }, LAB),
+      (e) => e.status === 400 && e.message === 'Нужны номер сообщения и номер заказа', 'visit_service_id=' + JSON.stringify(bad));
+  }
+  for (const bad of [true, [id], String(id) + '.0', '0x' + id.toString(16)]) {
+    assert.throws(() => lisMessageAttach(db, { id: bad, visit_service_id: 77 }, LAB),
+      (e) => e.status === 400, 'id=' + JSON.stringify(bad));
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_device_messages').get().c, 1, 'ни одного прогона');
+  assert.equal(lisMessageAttach(db, { id, visit_service_id: 'LAB-000077' }, LAB).status, 'applied', 'номер с этикетки');
+  const id2 = ins();
+  assert.equal(lisMessageAttach(db, { id: String(id2), visit_service_id: ' 77 ' }, LAB).ok, true);
+  db.close();
+});
+
+test('R1 п. 10: уже разобранную или принятую строку привязать нельзя — 409 простыми словами', () => {
+  const db = fresh();
+  attachClinic(db);
+  const raw = ['MSH|^~\\&|Mindray|BS-200E|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||',
+    'OBR|1|LAB-999999|2|Mindray^BS-200E|Y', 'OBX|1|NM|2|test2|5.000000|g/ml|-||||F'].join('\r');
+  const resolved = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status, resolved_at) VALUES (1,'10.0.0.40',?,'unmatched','2026-10-01T08:00:00Z')").run(raw).lastInsertRowid;
+  const applied = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status) VALUES (1,'10.0.0.40',?,'applied')").run(raw).lastInsertRowid;
+  for (const id of [resolved, applied]) {
+    const before = db.prepare('SELECT COUNT(*) c FROM lab_device_messages').get().c;
+    assert.throws(() => lisMessageAttach(db, { id, visit_service_id: 77 }, LAB),
+      (e) => e.status === 409 && e.message === 'Сообщение уже разобрано или принято — привязать его ещё раз нельзя');
+    assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_device_messages').get().c, before, 'нового прогона нет');
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_results WHERE visit_service_id = 77').get().c, 0);
+  db.close();
+});

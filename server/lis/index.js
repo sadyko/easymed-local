@@ -18,7 +18,7 @@ import os from 'node:os';   // LIS_REAL_ANALYZERS_V1_DIAL — свои адре�
 import { startMllpServer } from './mllp.js';
 import { startMllpClient, isLocalIp } from './dial.js';   // LIS_REAL_ANALYZERS_V1_DIAL — Easy-Med подключается к прибору сам
 import { receiveMessage } from './receive.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — проба или служебное, и ответ прибору
-import { readEnvelope, readResult, pickSampleId } from './wire.js';   // LIS_REAL_ANALYZERS_V1_SERVICE / _SAMPLE — вид, имя отправителя, номер пробы
+import { readEnvelope, readResult, pickMessageSample } from './wire.js';   // LIS_REAL_ANALYZERS_V1_SERVICE / _SAMPLE — вид, имя отправителя, номер пробы
 import { ensureDevice, learnSender } from './discover.js';   // learnSender: LIS_REAL_ANALYZERS_V1_DIAL
 import { recordMessage, OVERSIZE_DETAIL_PREFIX } from './inbox.js';   // LIS_MINDRAY_CODES_V1 — переросшее сообщение ложится в лоток
 
@@ -53,7 +53,8 @@ function recordOversize(db, { deviceId = null, peer, head, limit }) {
   // LIS_REAL_ANALYZERS_V1_SAMPLE — номер той же pickSampleId с проводом
   // default: LAB- узнаётся в OBR-2 и OBR-3, голые цифры — только OBR-3.
   // Начало не разобралось — без номера (readResult не бросает).
-  const sampleId = pickSampleId(readResult(head, 'default').obr, 'default').sampleId;
+  // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 1) — по всем OBR начала, как у приёма.
+  const sampleId = pickMessageSample(readResult(head, 'default').obrs, 'default').sampleId;
   const size = limit >= 1024 * 1024 ? (limit / (1024 * 1024)) + ' МБ' : Math.round(limit / 1024) + ' КБ';
   // LIS_DISCOVERY_FIX_V1 — начало строки общее с привязкой (rpc/lis.js):
   // по нему она отказывается привязывать обрезанное. Текст прежний.

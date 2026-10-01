@@ -8,6 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readEnvelope, readResult, pickSampleId, wireFor, WIRES, FORWARDER_FACILITY } from './wire.js';
+import { pickMessageSample } from './wire.js';   // LIS_REAL_ANALYZERS_V1 — ревью R1, п. 1
 import { parseMessage } from './hl7.js';
 
 const seg = (...s) => s.join('\r');
@@ -204,8 +205,9 @@ test('readResult: первый OBR — компонент 1 полей 2 и 3 б
   const r = readResult(seg('MSH|^~\\&|X|Y|||1||ORU^R01|1|P|2.3.1', 'OBR|1| LAB-000007^x | 15^y ', 'OBR|2|LAB-9|LAB-9'), 'default');
   assert.deepEqual(r.obr, { placer: 'LAB-000007', filler: '15' });
   assert.equal(readResult('MSH|^~\\&|X|Y|||1||ORU^R01|1|P|2.3.1', 'default').obr, null);
-  assert.deepEqual(readResult('это не HL7', 'default'), { obr: null, observations: [] });
-  assert.deepEqual(readResult(null, 'default'), { obr: null, observations: [] });
+  // LIS_REAL_ANALYZERS_V1 (ревью R1, п. 1) — и obrs: все OBR сообщения, поля целиком.
+  assert.deepEqual(readResult('это не HL7', 'default'), { obr: null, obrs: [], observations: [] });
+  assert.deepEqual(readResult(null, 'default'), { obr: null, obrs: [], observations: [] });
 });
 
 // ── pickSampleId: номер пробы из нужного поля ───────────────────────────────
@@ -258,16 +260,24 @@ test('два разных LAB- в OBR-2 и OBR-3 — номера нет, в sam
     assert.deepEqual(pickSampleId(obr('LAB-000124', 'LAB-000123'), wire),
       { sampleId: 'LAB-000124 / LAB-000123', value: '', field: '', lab: true, conflict: true }, wire);
   }
-  // Один и тот же заказ, записанный по-разному, — не спор.
-  assert.equal(pickSampleId(obr('LAB-123', 'lab_000123'), 'default').conflict, false);
-  assert.equal(pickSampleId(obr('LAB-123', 'lab_000123'), 'default').value, 'lab_000123', 'основное поле, раз номера равны');
+  // Один и тот же заказ, записанный по-разному, — не спор. (Ревью R1, п. 8:
+  // этикетка — только «LAB-» и не меньше 6 цифр, регистр не важен.)
+  assert.equal(pickSampleId(obr('LAB-000123', 'lab-0000123'), 'default').conflict, false);
+  assert.equal(pickSampleId(obr('LAB-000123', 'lab-0000123'), 'default').value, 'lab-0000123', 'основное поле, раз номера равны');
   // У BS-200 OBR-3 не читается — и спора нет.
   assert.equal(pickSampleId(obr('LAB-000124', 'LAB-000123'), 'mindray-chem').value, 'LAB-000124');
 });
 
-test('LAB- узнаётся так же, как parseSampleId: регистр, «_» и пробел; прочее — не LAB-', () => {
-  assert.equal(pickSampleId(obr('lab 000123', '15'), 'default').value, 'lab 000123');
-  assert.equal(pickSampleId(obr('LAB000123', '15'), 'default').value, 'LAB000123');
+// LIS_REAL_ANALYZERS_V1 (ревью R1, п. 8) — наша этикетка — ровно «LAB-» и не
+// меньше 6 цифр (lab-doc.js labAccession: 'LAB-' + padStart(6)). «LAB2», «lab 2»,
+// «lab_2», «LAB000123» и «LAB-123» раньше считались нашими и обходили правило
+// голых цифр (открытый заказ последних 7 дней).
+test('LAB- узнаётся только как печатает Easy-Med: «LAB-» и 6+ цифр, регистр не важен; прочее — не LAB-', () => {
+  assert.equal(pickSampleId(obr('lab-000123', '15'), 'default').value, 'lab-000123');
+  assert.equal(pickSampleId(obr('LAB-1234567', '15'), 'default').value, 'LAB-1234567', 'заказ больше 999 999 — семь цифр');
+  for (const loose of ['lab 000123', 'LAB000123', 'lab_000123', 'LAB2', 'lab 2', 'lab_2', 'LAB-123', 'LAB-00012']) {
+    assert.equal(pickSampleId(obr(loose, '15'), 'default').value, '15', '«' + loose + '» — не наша этикетка');
+  }
   assert.equal(pickSampleId(obr('LAB-12a', '15'), 'default').value, '15', '«LAB-12a» — не наша этикетка');
   assert.equal(pickSampleId(obr('QC-LAB-1', '15'), 'default').value, '15');
 });
@@ -288,4 +298,103 @@ test('wireFor: MSH-4 = LabPC — переадресатор, что бы ни г
   assert.equal(wireFor({ profile: null, facility: '' }), 'default');
   assert.equal(wireFor({ profile: { wire: 'nonsense' } }), 'default');
   assert.equal(wireFor(), 'default');
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R1 (E1–E5 на 1728cbc) ─────────────────────
+
+// П. 1 — номер пробы у КАЖДОГО OBR. Раньше номер брался у первого OBR, а строки
+// OBX — у всех: «OBR|1||LAB-000123 + OBX, OBR|2||LAB-000124 + OBX» клал значение
+// пробы 124 в бланк 123.
+const MULTI = (o1, o2) => seg(
+  'MSH|^~\\&|BC-5300|Mindray|||20261001090000||ORU^R01|1|P|2.3.1',
+  `OBR|1||${o1}|00001^Automated Count^99MRC`,
+  'OBX|1|NM|WBC^^99MRC||9.9|10*9/L|||||F',
+  `OBR|2||${o2}|00001^Automated Count^99MRC`,
+  'OBX|1|NM|HGB^^99MRC||142|g/L|||||F',
+);
+
+test('R1 п. 1: readResult отдаёт все OBR — поля целиком, с разделителем компонентов', () => {
+  const r = readResult(seg('MSH|^~\\&|X|Y|||1||ORU^R01|1|P|2.3.1', 'OBR|1| 2^LAB-000123 |', 'OBR|2||15'), 'default');
+  assert.deepEqual(r.obrs, [{ placer: '2^LAB-000123', filler: '', compSep: '^' }, { placer: '', filler: '15', compSep: '^' }]);
+  assert.deepEqual(r.obr, { placer: '2', filler: '' }, 'obr — как прежде: первый OBR, компонент 1');
+});
+
+test('R1 п. 1: разные номера в разных OBR — номера нет (спор), в sample_id оба', () => {
+  const p = pickMessageSample(readResult(MULTI('LAB-000123', 'LAB-000124'), 'default').obrs, 'default');
+  assert.deepEqual({ value: p.value, conflict: p.conflict, why: p.why, sampleId: p.sampleId },
+    { value: '', conflict: true, why: 'obrs', sampleId: 'LAB-000123 / LAB-000124' });
+  const bare = pickMessageSample(readResult(MULTI('LAB-000123', '15'), 'default').obrs, 'default');
+  assert.equal(bare.conflict, true, 'LAB-000123 и голое «15» — тоже разные номера');
+});
+
+test('R1 п. 1 и 5: номер — первый НЕПУСТОЙ по OBR; тот же номер в разных записях — не спор', () => {
+  assert.equal(pickMessageSample(readResult(MULTI('', 'LAB-000123'), 'default').obrs, 'default').value, 'LAB-000123',
+    'до E5 parseMessage брал первый непустой OBR-3 — пустой первый не делает пробу ничьей');
+  const same = pickMessageSample(readResult(MULTI('000123', 'LAB-000123'), 'default').obrs, 'default');
+  assert.deepEqual([same.conflict, same.value, same.lab], [false, 'LAB-000123', true], 'тот же номер; этикетка бьёт голые цифры');
+  assert.deepEqual(pickMessageSample([], 'default'), { sampleId: '', value: '', field: '', lab: false, conflict: false });
+});
+
+// П. 2 — компоненты поля. Раньше читался только компонент 1: OBR-3 =
+// «2^LAB-000123» читалось как голое «2» и ложилось в открытый свежий заказ № 2.
+test('R1 п. 2: LAB- узнаётся в ЛЮБОМ компоненте поля; голые цифры — только поле целиком из цифр', () => {
+  const o = (filler) => ({ placer: '', filler, compSep: '^' });
+  assert.deepEqual(pickSampleId(o('2^LAB-000123'), 'default'), { sampleId: 'LAB-000123', value: 'LAB-000123', field: 'OBR-3', lab: true, conflict: false });
+  assert.equal(pickSampleId(o('^LAB-000123^'), 'default').value, 'LAB-000123');
+  assert.equal(pickSampleId(o('000123'), 'default').value, '000123', 'поле целиком из цифр — голые цифры, как parseMessage');
+  for (const notBare of ['2^15', '15^', '15^x', 'QC1', 'lab_000123']) {
+    const p = pickSampleId(o(notBare), 'default');
+    assert.deepEqual([p.value, p.foreign, p.sampleId], ['', true, notBare], '«' + notBare + '» — не этикетка и не голые цифры: номера нет');
+  }
+  const two = pickSampleId(o('LAB-000123^LAB-000124'), 'default');
+  assert.deepEqual([two.value, two.conflict, two.why], ['', true, 'components'], 'разные номера в компонентах одного поля');
+  assert.equal(pickSampleId(o('LAB-000123^lab-000123'), 'default').conflict, false, 'один номер дважды — не спор');
+  // Поле «никогда» не читается и по компонентам.
+  assert.equal(pickSampleId({ placer: '', filler: '2^LAB-000123', compSep: '^' }, 'mindray-chem').value, '');
+  // Свой разделитель компонентов отправителя.
+  assert.equal(pickSampleId({ placer: '', filler: '2*LAB-000123', compSep: '*' }, 'default').value, 'LAB-000123');
+});
+
+test('R1 п. 8: восьмизначный голый номер прежнего переадресателя — по-прежнему голые цифры', () => {
+  const p = pickSampleId({ placer: '', filler: '29260001', compSep: '^' }, 'forwarder');
+  assert.deepEqual([p.value, p.lab, !!p.foreign], ['29260001', false, false]);
+});
+
+// П. 7 — MSH-16 = 1/2 значит калибровку и контроль только у приборов, чей
+// провод объявляет это соглашение: химия Mindray (BS-200, руководство с. 8) и
+// Autobio по сети (тот же заголовок «…|2.3.1||||0||ASCII», A2000 plus HL7
+// protocol V0.02). У прочих MSH-16 в виде сообщения не участвует.
+test('R1 п. 7: MSH-16 = 1/2 — служебное только у mindray-chem и autobio-hl7; прочие провода — проба', () => {
+  const qc = (app, facility) => seg(`MSH|^~\\&|${app}|${facility}|||20261001090000||ORU^R01|1|P|2.3.1||||2||ASCII|||`, 'OBR|1||LAB-000123');
+  assert.equal(readEnvelope(qc('X', 'Y'), 'mindray-chem').kind, 'qc');
+  assert.equal(readEnvelope(qc('X', 'Y'), 'autobio-hl7').kind, 'qc');
+  for (const wire of ['default', 'forwarder', 'mindray-hematology']) {
+    assert.equal(readEnvelope(qc('X', 'Y'), wire).kind, 'result', wire);
+    assert.equal(readEnvelope(qc('X', 'Y'), wire).service, false, wire);
+  }
+  // Провод не назван — по тому, как сообщение называет себя.
+  assert.equal(readEnvelope(qc('Mindray', 'BS-200E')).kind, 'qc', 'BS-200 по MSH-4');
+  assert.equal(readEnvelope(qc('A1000', 'Autolumo')).kind, 'qc', 'Autobio по MSH-3');
+  assert.equal(readEnvelope(qc('BC-5300', 'Mindray')).kind, 'result', 'гематология — соглашения нет');
+  assert.equal(readEnvelope(qc('X', 'Y')).kind, 'result', 'незнакомый прибор — соглашения нет');
+  // Запросы — по типу сообщения, у всех.
+  assert.equal(readEnvelope('MSH|^~\\&|X|Y|||1||QRY^Q02|1|P|2.3.1', 'default').kind, 'query');
+});
+
+// П. 11 — провод и из того, как сообщение называет себя (MSH-3/MSH-4,
+// псевдонимы профилей). Своё имя сообщения бьёт пустой профиль строки; при
+// споре — БЕЗОПАСНЫЙ провод: OBR-3 никогда не читается, если сообщение
+// называет себя BS-200.
+test('R1 п. 11: провод по имени сообщения, если у профиля строки провода нет; при споре — безопасный', () => {
+  const bs = { app: 'Mindray', facility: 'BS-200E' };
+  assert.equal(wireFor({ profile: null, ...bs }), 'mindray-chem', 'строка без профиля');
+  assert.equal(wireFor({ profile: { key: 'mindray-bs-240' }, ...bs }), 'mindray-chem', 'строка с чужим профилем без провода');
+  assert.equal(wireFor({ profile: { wire: 'mindray-hematology' }, ...bs }), 'mindray-chem', 'спор: BS-200 — OBR-3 не читать');
+  assert.equal(wireFor({ profile: { wire: 'autobio-hl7' }, ...bs }), 'mindray-chem');
+  assert.equal(wireFor({ profile: { wire: 'mindray-chem' }, app: 'BC-780', facility: 'Mindray' }), 'mindray-chem', 'спор: строка BS-200 — безопаснее');
+  assert.equal(wireFor({ profile: { wire: 'mindray-hematology' }, app: 'A1000', facility: 'Autolumo' }), 'autobio-hl7', 'спор: голые цифры только OBR-2');
+  assert.equal(wireFor({ profile: null, app: 'A1000', facility: 'Autolumo' }), 'autobio-hl7');
+  assert.equal(wireFor({ profile: { wire: 'mindray-chem' }, app: 'Mindray', facility: '' }), 'mindray-chem', 'сообщение себя не назвало — провод строки');
+  assert.equal(wireFor({ profile: { wire: 'mindray-chem' }, app: 'AutoLumo A1000', facility: 'LabPC' }), 'forwarder', 'переадресатор — по MSH-4, как прежде');
+  assert.equal(wireFor({ profile: null, app: 'BC-5300', facility: 'Mindray' }), 'default', 'прежние профили провода не называют');
 });
