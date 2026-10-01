@@ -8,7 +8,7 @@
 // «Безопасность»). Отсюда потолок размера и тайм-аут простоя: это единственное,
 // чем можно ограничить того, кто не представился.
 import net from 'node:net';
-import { buildAck } from './hl7.js';
+import { buildAck, mshOf, ACK_INTERNAL } from './hl7.js';   // mshOf, ACK_INTERNAL: LIS_REAL_ANALYZERS_V1_ACK
 
 export const VT = 0x0b;
 export const FS = 0x1c;
@@ -31,18 +31,11 @@ const OVERSIZE_GRACE_MS = 2000;
 
 const frameOf = (text) => Buffer.concat([Buffer.from([VT]), Buffer.from(text, 'utf8'), Buffer.from([FS, CR])]);
 
-/**
- * Достаёт номер сообщения (MSH-10) из сырого текста, не разбирая его целиком:
- * ответить надо и на то, что разобрать не удалось, иначе прибор не поймёт, на
- * что пришёл отказ.
- */
-function controlIdOf(text) {
-  const first = String(text || '').split(/\r\n?|\n/)[0] || '';
-  if (!first.startsWith('MSH')) return '';
-  const sep = first[3];
-  const f = first.split(sep);
-  return (f[9] || '').trim();
-}
+// LIS_REAL_ANALYZERS_V1_ACK — заголовок входящего читает mshOf (hl7.js) без
+// исключений, вместо прежнего controlIdOf: ответить надо и на то, что разобрать
+// не удалось, иначе прибор не поймёт, на что пришёл отказ. Ответ — buildAck с
+// эхом заголовка; сорвавшийся приём и переросшее — AE 207 (ACK_INTERNAL), а не
+// «ошибка разбора» 100: сообщение могло быть верным.
 
 /**
  * @param {object} o
@@ -92,7 +85,7 @@ export function startMllpServer({ port, onMessage, onOversize = null, maxBytes =
         log(`LIS: сообщение больше ${maxBytes} байт от ${peer} — отказ (AE), соединение закрыто`);
         // В ту же цепочку: ответы на кадры, пришедшие раньше, уходят первыми.
         chain = chain.then(async () => {
-          if (!sock.destroyed) sock.write(frameOf(buildAck(controlIdOf(head), 'AE')));
+          if (!sock.destroyed) sock.write(frameOf(buildAck(mshOf(head), 'AE', ACK_INTERNAL)));
           try {
             if (onOversize) await onOversize({ peer, bytes, head, limit: maxBytes });
           } catch (e) {
@@ -123,15 +116,17 @@ export function startMllpServer({ port, onMessage, onOversize = null, maxBytes =
           buf = buf.slice(end + 1 < buf.length && buf[end + 1] === CR ? end + 2 : end + 1);
 
           chain = chain.then(async () => {
-            let code = 'AE';
+            const msh = mshOf(text);
+            let ack;
             try {
-              code = (await onMessage(text, peer)) || 'AE';
+              const code = await onMessage(text, peer);
+              ack = code ? buildAck(msh, code) : buildAck(msh, 'AE', ACK_INTERNAL);
             } catch (e) {
-              code = 'AE';
+              ack = buildAck(msh, 'AE', ACK_INTERNAL);
               log('LIS: приём отказал — ' + (e && e.message ? e.message : e));
             }
             if (sock.destroyed) return;
-            sock.write(frameOf(buildAck(controlIdOf(text), code)));
+            sock.write(frameOf(ack));
           });
         }
 

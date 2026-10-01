@@ -190,7 +190,8 @@ test('начало, которое не MSH, — AE без номера; выз�
     sock.on('error', () => {});
     const reply = readFrame(sock);
     sock.write(Buffer.concat([Buffer.from([VT]), Buffer.alloc(4096, 0x41)]));
-    assert.match(await reply, /MSA\|AE\|$/);
+    // LIS_REAL_ANALYZERS_V1_ACK — за пустым номером теперь идут MSA-3…6.
+    assert.match(await reply, /MSA\|AE\|(\||$)/);
     await settle(50);
     sock.destroy();
   }, { maxBytes: 1024, onOversize: (o) => over.push(o) });
@@ -228,4 +229,57 @@ test('закрытие не ждёт открытого соединения п�
     clearTimeout(timer);
     sock.destroy();
   }
+});
+
+// ── LIS_REAL_ANALYZERS_V1_ACK — ответ по руководству BS-200 (с. 8–9, 25) ─────
+// Провод отвечает через buildAck(mshOf(…)): ACK^<событие>, эхо MSH-3/4 в
+// MSH-5/6, MSH-10/16/18 входящего, MSA-3 и MSA-6.
+
+test('ответ на ORU — ACK^R01 с эхом заголовка и MSA-3/6', async () => {
+  const oru = 'MSH|^~\\&|Mindray|BS-200E|||20070719145353||ORU^R01|5|P|2.3.1||||0||ASCII|||';
+  await withServer(async () => 'AA', async (port) => {
+    const sock = await connect(port);
+    const reply = readFrame(sock);
+    sock.write(frame(oru));
+    const [mshLine, msa] = (await reply).split('\r');
+    const f = mshLine.split('|');
+    assert.deepEqual([f[2], f[3], f[4], f[5], f[8], f[9], f[15], f[17]],
+      ['EASYMED', 'CLINIC', 'Mindray', 'BS-200E', 'ACK^R01', '5', '0', 'ASCII']);
+    assert.equal(msa, 'MSA|AA|5|Message accepted|||0');
+    sock.end();
+  });
+});
+
+test('приём ответил AR — прибору AR 200 (известный, но не поддержанный тип)', async () => {
+  await withServer(async () => 'AR', async (port) => {
+    const sock = await connect(port);
+    const reply = readFrame(sock);
+    sock.write(frame('MSH|^~\\&|X|Y|||20260910143943||ADT^A01|9|P|2.3.1'));
+    const text = await reply;
+    assert.match(text, /\|ACK\^A01\|9\|/);
+    assert.match(text, /MSA\|AR\|9\|Unsupported message type\|\|\|200/);
+    sock.end();
+  });
+});
+
+test('приём бросил — AE 207 «Application internal error», а не «ошибка разбора»', async () => {
+  await withServer(async () => { throw new Error('база недоступна'); }, async (port) => {
+    const sock = await connect(port);
+    const reply = readFrame(sock);
+    sock.write(frame(MSG('21')));
+    assert.match(await reply, /MSA\|AE\|21\|Application internal error\|\|\|207/);
+    sock.end();
+  });
+});
+
+test('переросшее сообщение — AE 207 с номером из начала', async () => {
+  await withServer(async () => 'AA', async (port) => {
+    const sock = await connect(port);
+    sock.on('error', () => {});
+    const reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from(MSG('79') + '\r' + 'C'.repeat(4096), 'utf8')]));
+    assert.match(await reply, /MSA\|AE\|79\|Application internal error\|\|\|207/);
+    await settle(50);
+    sock.destroy();
+  }, { maxBytes: 1024, onOversize: () => {} });
 });

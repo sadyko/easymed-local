@@ -91,14 +91,99 @@ export function parseMessage(text) {
   return { type, controlId, sendingApp, sampleId, observations, sep: { fieldSep, compSep, repSep, escChar, subSep } };
 }
 
+// LIS_REAL_ANALYZERS_V1_ACK — терпимый разбор заголовка и ответ прибору по
+// руководству BS-200 («Host Interface Manual» v1.2, с. 8–9, 25, 27).
+//
+// Ответить надо и на то, что не разобралось целиком, поэтому заголовок читается
+// отдельно и без исключений: mshOf() никогда не бросает, а у неразобранного
+// возвращает пустые поля (ok = false).
+
+/** MSH-3/4 в заголовок ответа: наши разделители и конец сегмента в эхо не попадают. */
+const echo = (v) => String(v == null ? '' : v).replace(/[|\r\n]/g, ' ').trim();
+
 /**
- * ACK (`AA`) или NAK (`AE`). Номер исходного сообщения обязателен: по нему
- * прибор понимает, на что именно ему ответили, и решает, повторять ли.
+ * Заголовок сообщения без исключений.
+ * @returns {{ok:boolean, fieldSep:string, compSep:string, app:string, facility:string,
+ *   appField:string, facilityField:string, type:string, event:string, controlId:string,
+ *   version:string, ackType:string, charset:string}}
+ *   app/facility — компонент 1 MSH-3/MSH-4 (как прибор себя назвал);
+ *   appField/facilityField — поля целиком, для эха в MSH-5/6 ответа;
+ *   type — 'ORU^R01' в нашем виде, event — 'R01';
+ *   ackType — MSH-16 (у Mindray и Autobio: 0 — проба, 1 — калибровка, 2 — контроль);
+ *   charset — MSH-18.
  */
-export function buildAck(controlId, code) {
+export function mshOf(text) {
+  const out = { ok: false, fieldSep: '|', compSep: '^', app: '', facility: '', appField: '', facilityField: '',
+    type: '', event: '', controlId: '', version: '', ackType: '', charset: '' };
+  const first = String(text == null ? '' : text).split(SEG)[0] || '';
+  if (!first.startsWith('MSH') || first.length < 4) return out;
+  const fieldSep = first[3];
+  const f = first.split(fieldSep);
+  const compSep = (f[1] || '')[0] || '^';
+  const comp = (v) => String(v == null ? '' : v).split(compSep);
+  const t = comp(f[8]).map((s) => s.trim());
+  return {
+    ok: true,
+    fieldSep,
+    compSep,
+    app: comp(f[2])[0].trim(),
+    facility: comp(f[3])[0].trim(),
+    appField: echo(comp(f[2]).join('^')),
+    facilityField: echo(comp(f[3]).join('^')),
+    type: t.slice(0, 2).filter(Boolean).join('^'),
+    event: t[1] || '',
+    controlId: (f[9] || '').trim(),
+    version: (f[11] || '').trim(),
+    ackType: (f[15] || '').trim(),
+    charset: (f[17] || '').trim(),
+  };
+}
+
+/**
+ * Заголовок ответа: «MSH|^~\&|EASYMED|CLINIC|<MSH-3>|<MSH-4>|<время>||<тип>|
+ * <MSH-10>|P|<MSH-12 или 2.3.1>||||<MSH-16>||<MSH-18>». MSH-5/6 — эхо MSH-3/4
+ * входящего (с. 8: «fields 5 and 6 are set to Manufacturer and Model»), MSH-10
+ * — номер входящего (с. 25: «returned unchanged in the response message»),
+ * MSH-16 и MSH-18 — эхом (с. 27: у ответа на контроль стоит 2). Пустые поля в
+ * конце не пишутся: у прибора без MSH-16/18 заголовок кончается на MSH-12, как
+ * и до этой правки.
+ */
+export function replyMsh(msh, type) {
+  const m = msh || mshOf('');
   const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  const f = ['MSH', '^~\\&', 'EASYMED', 'CLINIC', m.appField || '', m.facilityField || '', stamp, '', type,
+    m.controlId || '1', 'P', m.version || '2.3.1', '', '', '', m.ackType || '', '', m.charset || ''];
+  while (f.length > 12 && f[f.length - 1] === '') f.pop();
+  return f.join('|');
+}
+
+/** MSA-3 и MSA-6 по коду ответа (с. 9). */
+const MSA_TEXT = {
+  AA: { text: 'Message accepted', error: '0' },
+  AE: { text: 'Segment sequence error', error: '100' },      // не разобрано
+  AR: { text: 'Unsupported message type', error: '200' },   // известный, но не поддержанный тип
+};
+/** AE, когда разобрано, но сорвалась запись или сообщение переросло потолок. */
+export const ACK_INTERNAL = Object.freeze({ text: 'Application internal error', error: '207' });
+
+/**
+ * ACK (`AA`), NAK (`AE`) или отказ без повтора (`AR`). Номер исходного
+ * сообщения обязателен: по нему прибор понимает, на что именно ему ответили, и
+ * решает, повторять ли.
+ *
+ * LIS_REAL_ANALYZERS_V1_ACK — `msh` — заголовок входящего (mshOf). Строка
+ * вместо него — прежняя форма: номер исходного сообщения.
+ * @param {ReturnType<typeof mshOf>|string} msh
+ * @param {'AA'|'AE'|'AR'} code
+ * @param {{text?:string, error?:string}} [why]  MSA-3/MSA-6 вместо принятых для кода (ACK_INTERNAL)
+ */
+export function buildAck(msh, code, why = {}) {
+  const m = typeof msh === 'string' || msh == null ? { ...mshOf(''), controlId: String(msh == null ? '' : msh).trim() } : msh;
+  const c = MSA_TEXT[code] ? code : 'AE';
+  const text = why.text || MSA_TEXT[c].text;
+  const error = why.error || MSA_TEXT[c].error;
   return [
-    `MSH|^~\\&|EASYMED|CLINIC|||${stamp}||ACK|${controlId || '1'}|P|2.3.1`,
-    `MSA|${code}|${controlId || ''}`,
+    replyMsh(m, m.event ? 'ACK^' + m.event : 'ACK'),
+    ['MSA', c, m.controlId || '', text, '', '', error].join('|'),
   ].join('\r');
 }

@@ -2,7 +2,7 @@
 // проверяется, это текст на входе и объект на выходе.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseMessage, buildAck } from './hl7.js';
+import { parseMessage, buildAck, mshOf, ACK_INTERNAL } from './hl7.js';   // mshOf, ACK_INTERNAL: LIS_REAL_ANALYZERS_V1_ACK
 
 const ORU = [
   'MSH|^~\\&|BC-5300|Mindray|||20260910143943||ORU^R01|42|P|2.3.1',
@@ -89,4 +89,113 @@ test('«6690-2^WBC^LN» разбирается на код, имя и систе
   assert.equal(plain.code, 'WBC');
   assert.equal(plain.name, '', 'у «WBC^^99MRC» имени нет — и это не ошибка');
   assert.equal(plain.codeRaw, 'WBC^^99MRC');
+});
+
+// ── LIS_REAL_ANALYZERS_V1_ACK — ответ прибору по руководству ────────────────
+// «BS-200 Host Interface Manual» v1.2 (обезличенная копия — «Chemistry Analyzer
+// Host Interface Manual»), с. 8–9 и 23–28. Примеры ниже — оттуда дословно;
+// «Manufacturer|Model» заменены на то, как называет себя BS-200.
+const BS200_ORU = [
+  'MSH|^~\\&|Mindray|BS-200E|||20070719145353||ORU^R01|1|P|2.3.1||||0||ASCII|||',
+  'PID|1|854||12|Tommy||19830719145307|F|A||||||||||||||||||||||',
+  'OBR|1|0000000002|2|Mindray^BS-200E|Y||||||||||serum|||||||||||||||||||||||||||||||||',
+  'OBX|1|NM|2|test2|5.000000|g/ml|-||||F|||||||',
+].join('\r');
+
+// Пустые поля в конце сегмента в HL7 смысла не несут: руководство пишет
+// «…|ASCII|||», Easy-Med — «…|ASCII». Сравнивается всё остальное, поле в поле.
+const fieldsOf = (seg) => { const f = seg.split('|'); while (f.length && f[f.length - 1] === '') f.pop(); return f; };
+
+test('mshOf: терпимый разбор MSH — поля заголовка и ничего не бросает', () => {
+  const m = mshOf(BS200_ORU);
+  assert.equal(m.ok, true);
+  assert.equal(m.app, 'Mindray', 'MSH-3 у BS-200 — производитель');
+  assert.equal(m.facility, 'BS-200E', 'MSH-4 у BS-200 — модель');
+  assert.equal(m.type, 'ORU^R01');
+  assert.equal(m.event, 'R01');
+  assert.equal(m.controlId, '1');
+  assert.equal(m.version, '2.3.1');
+  assert.equal(m.ackType, '0', 'MSH-16: 0 — проба, 1 — калибровка, 2 — контроль (с. 8)');
+  assert.equal(m.charset, 'ASCII', 'MSH-18');
+  for (const junk of ['', null, undefined, 'это не HL7', 'OBX|1|NM|WBC||6.1', 'MSH']) {
+    const j = mshOf(junk);
+    assert.equal(j.ok, false, String(junk));
+    assert.equal(j.controlId, '');
+    assert.equal(j.type, '');
+  }
+});
+
+test('mshOf: свои разделители отправителя из MSH-2', () => {
+  const m = mshOf('MSH|*~\\&|BC-5300*X|Mindray|||20260910143943||ORU*R01|42|P|2.3.1');
+  assert.equal(m.type, 'ORU^R01', 'тип нормализуется в наш вид');
+  assert.equal(m.event, 'R01');
+  assert.equal(m.app, 'BC-5300');
+  assert.equal(m.controlId, '42');
+});
+
+test('ответ на ORU BS-200 совпадает с примером руководства (с. 25), кроме времени и MSH-3/4', () => {
+  const ack = buildAck(mshOf(BS200_ORU), 'AA').split('\r');
+  assert.equal(ack.length, 2);
+  // с. 25: «MSH|^~\&|||Manufacturer|Model|20070719145307||ACK^R01|1|P|2.3.1||||0||ASCII|||»
+  const want = fieldsOf('MSH|^~\\&|EASYMED|CLINIC|Mindray|BS-200E|<время>||ACK^R01|1|P|2.3.1||||0||ASCII|||');
+  const got = fieldsOf(ack[0]);
+  assert.match(got[6], /^\d{14}$/, 'MSH-7 — время ответа');
+  got[6] = '<время>';
+  assert.deepEqual(got, want, 'MSH-5/6 — эхо MSH-3/4 («fields 5 and 6 are set to Manufacturer and Model», с. 8); MSH-10 — номер входящего');
+  // с. 25: «MSA|AA|1|Message accepted|||0|»
+  assert.deepEqual(fieldsOf(ack[1]), fieldsOf('MSA|AA|1|Message accepted|||0|'));
+});
+
+test('ответ на контроль качества несёт MSH-16 = 2 эхом (с. 27)', () => {
+  const qc = 'MSH|^~\\&|Mindray|BS-200E|||20070720120202||ORU^R01|1|P|2.3.1||||2||ASCII|||';
+  const [mshLine, msa] = buildAck(mshOf(qc), 'AA').split('\r');
+  // с. 27: «MSH|^~\&|||Manufacturer|Model|20070720120225||ACK^R01|1|P|2.3.1||||2||ASCII|||»
+  const got = fieldsOf(mshLine);
+  got[6] = '<время>';
+  assert.deepEqual(got, fieldsOf('MSH|^~\\&|EASYMED|CLINIC|Mindray|BS-200E|<время>||ACK^R01|1|P|2.3.1||||2||ASCII|||'));
+  assert.equal(msa, 'MSA|AA|1|Message accepted|||0');
+});
+
+test('гематология Mindray: MSH-18 UNICODE эхом, MSH-5/6 — её MSH-3/4', () => {
+  const oru = 'MSH|^~\\&|BC-780|Mindray|||20261001090000||ORU^R01|7|P|2.3.1||||||UNICODE';
+  const f = fieldsOf(buildAck(mshOf(oru), 'AA').split('\r')[0]);
+  assert.equal(f[4], 'BC-780');
+  assert.equal(f[5], 'Mindray');
+  assert.equal(f[8], 'ACK^R01');
+  assert.equal(f[9], '7');
+  assert.equal(f[15], '', 'MSH-16 пуст — пуст и в ответе');
+  assert.equal(f[17], 'UNICODE');
+});
+
+test('прибор без MSH-16 и MSH-18 получает заголовок без хвоста — как прежде', () => {
+  // Существующие приборы (BC-5300, переадресатор) MSH-16/18 не шлют: их ответ
+  // оканчивается на MSH-12, как и до этой правки.
+  const mshLine = buildAck(mshOf('MSH|^~\\&|BC-5300|Mindray|||20260910143943||ORU^R01|42|P|2.3.1'), 'AA').split('\r')[0];
+  assert.match(mshLine, /^MSH\|\^~\\&\|EASYMED\|CLINIC\|BC-5300\|Mindray\|\d{14}\|\|ACK\^R01\|42\|P\|2\.3\.1$/);
+});
+
+test('неразобранное: голый ACK и MSA|AE||Segment sequence error|||100', () => {
+  const [mshLine, msa] = buildAck(mshOf('это не HL7'), 'AE').split('\r');
+  const f = fieldsOf(mshLine);
+  assert.equal(f[8], 'ACK', 'событие не разобралось — голый ACK, как сегодня');
+  assert.equal(f[9], '1', 'MSH-10 ответа не бывает пустым');
+  assert.equal(msa, 'MSA|AE||Segment sequence error|||100');
+});
+
+test('известный, но не поддержанный тип (ADT^A01) — AR 200, отказ без повтора', () => {
+  const adt = 'MSH|^~\\&|BC-5300|Mindray|||20260910143943||ADT^A01|43|P|2.3.1';
+  const [mshLine, msa] = buildAck(mshOf(adt), 'AR').split('\r');
+  assert.equal(fieldsOf(mshLine)[8], 'ACK^A01');
+  assert.equal(msa, 'MSA|AR|43|Unsupported message type|||200');
+});
+
+test('сорвалась запись или переросшее — AE 207 «Application internal error»', () => {
+  const msa = buildAck(mshOf(BS200_ORU), 'AE', ACK_INTERNAL).split('\r')[1];
+  assert.equal(msa, 'MSA|AE|1|Application internal error|||207');
+});
+
+test('прежняя форма buildAck(номер, код) по-прежнему отвечает с номером', () => {
+  const [mshLine, msa] = buildAck('42', 'AE').split('\r');
+  assert.equal(fieldsOf(mshLine)[9], '42');
+  assert.equal(msa, 'MSA|AE|42|Segment sequence error|||100');
 });
