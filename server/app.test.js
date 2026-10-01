@@ -327,7 +327,9 @@ test('a 4xx (unknown /api route) never records a server_error ops_event', async 
   const { db, server, base } = await startServer();
   try {
     assert.equal((await fetch(`${base}/api/no-such-thing`)).status, 404);
-    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ops_events').get().n, 0);
+    // TEST_SLOW_EVENT_FIX — под нагрузкой полного прогона медленный запрос
+    // пишет свою законную запись slow_request; считаем только server_error.
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM ops_events WHERE kind = 'server_error'").get().n, 0);
   } finally { server.close(); }
 });
 
@@ -348,7 +350,7 @@ test('an RPC handler throwing 500 answers correctly AND records its own server_e
     const admin = login.headers.get('set-cookie').split(';')[0];
     const res = await post(base, '/api/rpc/__ops_events_test_throw', {}, admin);
     assert.equal(res.status, 500, 'the RPC route still answers 500 correctly');
-    const row = db.prepare('SELECT * FROM ops_events').get();
+    const row = db.prepare("SELECT * FROM ops_events WHERE kind = 'server_error'").get();   // TEST_SLOW_EVENT_FIX
     assert.equal(row.kind, 'server_error');
     assert.equal(row.route, '/api/rpc/__ops_events_test_throw', 'the RPC name is a safe, fixed-vocabulary identifier');
   } finally {
@@ -370,7 +372,7 @@ test('/api/db: a truly unexpected query failure records its own server_error eve
 
     let res = await post(base, '/api/db', { table: 'patients', op: 'select', columns: '*' }, admin);
     assert.equal(res.status, 200);
-    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ops_events').get().n, 0, 'an ordinary request records nothing');
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM ops_events WHERE kind = 'server_error'").get().n, 0, 'an ordinary request records nothing');   // TEST_SLOW_EVENT_FIX
 
     // Force the truly-unexpected branch: compile() only checks the registry
     // allow-list, not whether the table literally exists in this connection,
@@ -382,7 +384,7 @@ test('/api/db: a truly unexpected query failure records its own server_error eve
     db.exec('DROP TABLE patients');
     res = await post(base, '/api/db', { table: 'patients', op: 'select', columns: '*' }, admin);
     assert.equal(res.status, 500);
-    const row = db.prepare('SELECT * FROM ops_events').get();
+    const row = db.prepare("SELECT * FROM ops_events WHERE kind = 'server_error'").get();   // TEST_SLOW_EVENT_FIX
     assert.equal(row.kind, 'server_error');
     assert.equal(row.route, '/api/db/patients', 'the schema-registry table name is a safe, fixed-vocabulary identifier');
   } finally { server.close(); }
