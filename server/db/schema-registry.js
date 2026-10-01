@@ -1251,13 +1251,13 @@ export const REGISTRY = {
   // Лаборатория → «Анализаторы». Принадлежность ЗДАНИЮ: в справочник филиалов
   // не едут, потому что прибор соседнего здания в нашей базе бессмыслен.
   lab_devices: {
-    read:  { roles: ALL_STAFF, columns: ['id','name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','last_seen_at','created_at','discovered','added','model_confirmed','sending_app'] },   // discovered: LIS_AUTODISCOVER_V1 (mig 124) — ставит только сервер; added, model_confirmed: LIS_ANALYZER_LIST_V1 (мигр. 228); sending_app: LIS_DISCOVERY_FIX_V1 (сервер) (мигр. 229) — как прибор назвал себя сам (MSH-3), пишет только сервер, в insert/update её нет
-    write: { insert: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled'] },
+    read:  { roles: ALL_STAFF, columns: ['id','name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','last_seen_at','created_at','discovered','added','model_confirmed','sending_app','dial','sending_facility'] },   // discovered: LIS_AUTODISCOVER_V1 (mig 124) — ставит только сервер; added, model_confirmed: LIS_ANALYZER_LIST_V1 (мигр. 228); sending_app: LIS_DISCOVERY_FIX_V1 (сервер) (мигр. 229) — как прибор назвал себя сам (MSH-3), пишет только сервер, в insert/update её нет; dial, sending_facility: LIS_REAL_ANALYZERS_V1 (мигр. 233) — dial: Easy-Med подключается к прибору сам (пишет человек: «Добавить по адресу», «Изменить»); sending_facility: MSH-4, пишет только сервер, в insert/update её нет
+    write: { insert: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','dial'] },   // dial: LIS_REAL_ANALYZERS_V1
              // LIS_ANALYZER_LIST_V1 (ревью C1) — discovered в update НЕТ: это
              // правило приёма, а не пометка. discover.js не сверяет модель у
              // строки с discovered = 0 («заведён человеком на этот адрес»);
              // «Добавить» писал 0, и всё с того же адреса ложилось в одну строку.
-             update: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','added','model_confirmed'] },   // added: LIS_ANALYZER_LIST_V1 — «Добавить» переводит находку в таблицу; model_confirmed — модель проверил человек (пометка, не правило приёма)
+             update: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','added','model_confirmed','dial'] },   // added: LIS_ANALYZER_LIST_V1 — «Добавить» переводит находку в таблицу; model_confirmed — модель проверил человек (пометка, не правило приёма); dial: LIS_REAL_ANALYZERS_V1 — «Изменить»
              delete: { roles: LAB_SECTION_ROLES } },
     filters: ['id','enabled','transport','profile'],
     embed:   {},
@@ -1268,9 +1268,9 @@ export const REGISTRY = {
   // браузера превратила бы журнал в пересказ. Разрешение строки идёт через
   // RPC lis_message_attach / lis_message_dismiss, а не записью в таблицу.
   lab_device_messages: {
-    read:  { roles: ALL_STAFF, columns: ['id','device_id','peer','raw','sample_id','visit_service_id','status','detail','received_at','resolved_at'] },
+    read:  { roles: ALL_STAFF, columns: ['id','device_id','peer','raw','sample_id','visit_service_id','status','detail','received_at','resolved_at','kind'] },   // kind: LIS_REAL_ANALYZERS_V1 (мигр. 233) — проба, контроль, калибровка или запрос
     write: { insert: { roles: [] }, update: { roles: [] }, delete: { roles: [] } },
-    filters: ['id','status','visit_service_id','device_id','resolved_at'],
+    filters: ['id','status','visit_service_id','device_id','resolved_at','kind'],   // kind: LIS_REAL_ANALYZERS_V1 — лоток и лента берут только пробы
     embed:   {},
   },
 
