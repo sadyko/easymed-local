@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { lisProfiles, lisMessageAttach, lisMessageDismiss, lisDeviceCodes, lisListeners, lisDeviceDelete } from './lis.js';
+import { lisServiceCounts, lisRecent } from './lis.js';   // LIS_REAL_ANALYZERS_V1_SERVICE
+import { RPC } from './index.js';                           // LIS_REAL_ANALYZERS_V1_SERVICE — RPC заведён в карте
 import { isReadOnlyRpc } from '../control/gate.js';   // LIS_MINDRAY_CODES_V1 (ревью R8)
 
 function fresh() {
@@ -358,5 +360,57 @@ test('ревью C2: найденный анализатор с сообщени
     'инвариант 2: ни одно сообщение не потеряно и не изменено');
   assert.deepEqual(db.prepare('SELECT id, device_id FROM lab_device_messages ORDER BY id').all(),
     [{ id: m1, device_id: null }, { id: m2, device_id: null }, { id: m3, device_id: other }], 'отвязаны только сообщения удалённого прибора');
+  db.close();
+});
+
+// ── LIS_REAL_ANALYZERS_V1_SERVICE — служебные сообщения прибора ─────────────
+// Контроль качества, калибровка и запросы хранятся (инвариант 2), но в бланк,
+// лоток, ленту и «Поле анализатора» не идут. Таблица «Анализаторы» показывает
+// их число у прибора за сегодня: «контроль: 12 · запросы: 40».
+
+test('lis_service_counts: по прибору за сегодня — контроль, калибровка, запросы; пробы, вчерашнее и сообщения без прибора не в счёт', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'BS-200','mindray-bs-240'), (2,'A1000',''), (3,'Молчит','')").run();
+  const ins = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status, kind, resolved_at) VALUES (?, '10.0.0.5', 'MSH|', ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))");
+  const old = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status, kind, received_at) VALUES (?, '10.0.0.5', 'MSH|', 'unmatched', ?, strftime('%Y-%m-%dT%H:%M:%SZ','now','-2 days'))");
+  for (let i = 0; i < 2; i++) ins.run(1, 'unmatched', 'qc');
+  ins.run(1, 'unmatched', 'calibration');
+  for (let i = 0; i < 3; i++) ins.run(1, 'unmatched', 'query');
+  ins.run(1, 'applied', 'result');
+  ins.run(2, 'unmatched', 'query');
+  ins.run(null, 'unmatched', 'query');
+  old.run(1, 'qc');
+  old.run(3, 'query');
+
+  assert.deepEqual(lisServiceCounts(db, {}, LAB), [
+    { device_id: 1, qc: 2, calibration: 1, query: 3 },
+    { device_id: 2, qc: 0, calibration: 0, query: 1 },
+  ]);
+  db.close();
+});
+
+test('lis_service_counts — только лаборатории; чистое чтение; заведён в карте RPC', () => {
+  const db = fresh();
+  assert.throws(() => lisServiceCounts(db, {}, { role: 'reception' }), /прав/);
+  assert.throws(() => lisServiceCounts(db, {}, null), /прав/);
+  assert.deepEqual(lisServiceCounts(db, {}, { role: 'admin' }), []);
+  assert.equal(isReadOnlyRpc('lis_service_counts'), true, 'счётчик виден и клинике с просроченной лицензией');
+  assert.equal(typeof RPC.lis_service_counts, 'function');
+  db.close();
+});
+
+test('служебные сообщения не идут ни в живую ленту, ни в «Поле анализатора»', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'Гем','mindray-bc-5300')").run();
+  const ins = db.prepare('INSERT INTO lab_device_messages (device_id, peer, raw, status, kind, resolved_at) VALUES (1, ?, ?, ?, ?, ?)');
+  ins.run('10.0.0.5', RAW('OBX|1|NM|6690-2^WBC^LN||9.81|10*9/L|||||F'), 'unmapped', 'result', null);
+  ins.run('10.0.0.5', RAW('OBX|1|NM|QCX^Контроль^99MRC||5.1|g/L|||||F'), 'unmatched', 'qc', '2026-10-01T08:00:00Z');
+  ins.run('10.0.0.5', RAW('OBX|1|NM|CALX^^99MRC||1|x|||||F'), 'unmatched', 'calibration', '2026-10-01T08:00:00Z');
+  ins.run('10.0.0.5', 'MSH|^~\\&|BC-5300|Mindray|||20261001090000||ORM^O01|9|P|2.3.1', 'unmatched', 'query', '2026-10-01T08:00:00Z');
+
+  const recent = lisRecent(db, {}, LAB);
+  assert.equal(recent.length, 1, 'утренний контроль не вытесняет пробы пациентов');
+  assert.equal(recent[0].status, 'unmapped');
+  assert.deepEqual(lisDeviceCodes(db, { device_id: 1 }, LAB).map((c) => c.code), ['6690-2'], 'коды контроля и калибровки не предлагаются');
   db.close();
 });

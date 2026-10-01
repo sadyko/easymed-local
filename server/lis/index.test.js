@@ -132,3 +132,72 @@ test('порт не поднялся не из-за занятости — ко�
     db.close();
   }
 });
+
+// ── LIS_REAL_ANALYZERS_V1_SERVICE — проводка через receive ─────────────────
+// Запрос рабочего списка — разобранное сообщение: прибор, который сначала
+// спросил, появляется в «Найдены в сети» с первого запроса. Ответ — не ACK, а
+// QCK^Q02 «заказов нет» (руководство BS-200, с. 28); в лотке пусто.
+test('QRY^Q02 по проводу: ответ QCK^Q02 NF, прибор заведён, служебная строка разрешена', async () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  const port = await freePort();
+  const prevPort = process.env.LIS_PORT;
+  process.env.LIS_PORT = String(port);
+  try {
+    await startLisListeners(db, { log: () => {} });
+    const sock = await connect(port);
+    const reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from([
+      'MSH|^~\\&|Mindray|BS-200E|||20070723170707||QRY^Q02|1|P|2.3.1||||||ASCII|||',
+      'QRD|20070723170707|R|D|1|||RD|34567743|OTH|||T|',
+      'QRF|BS-200E|20070723170749|20070723170749|||RCT|COR|ALL||',
+    ].join('\r'), 'utf8'), Buffer.from([FS, 0x0d])]));
+    const text = await reply;
+    sock.destroy();
+    const lines = text.split('\r');
+    assert.equal(lines[0].split('|')[8], 'QCK^Q02', text);
+    assert.equal(lines[1], 'MSA|AA|1|Message accepted|||0');
+    assert.equal(lines[3], 'QAK|SR|NF');
+
+    const dev = db.prepare('SELECT * FROM lab_devices').all();
+    assert.equal(dev.length, 1, 'прибор, который спросил, заведён');
+    assert.equal(dev[0].discovered, 1);
+    assert.equal(dev[0].sending_app, 'Mindray');
+    assert.ok(dev[0].last_seen_at, 'на связи');
+    const m = db.prepare('SELECT * FROM lab_device_messages').get();
+    assert.equal(m.kind, 'query');
+    assert.equal(m.device_id, dev[0].id);
+    assert.ok(m.resolved_at, 'в «Необработанных» пусто');
+  } finally {
+    await stopLisListeners();
+    if (prevPort === undefined) delete process.env.LIS_PORT; else process.env.LIS_PORT = prevPort;
+    db.close();
+  }
+});
+
+// Неподдержанный тип (ADT^A01) прибора не заводит, как и прежде: заводит
+// только то, что разобрано как результат или служебное.
+test('ADT^A01 по проводу: AR 200, прибор не заводится, строка rejected в лотке', async () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  const port = await freePort();
+  const prevPort = process.env.LIS_PORT;
+  process.env.LIS_PORT = String(port);
+  try {
+    await startLisListeners(db, { log: () => {} });
+    const sock = await connect(port);
+    const reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from('MSH|^~\\&|BC-5300|Mindray|||20260910143943||ADT^A01|43|P|2.3.1', 'utf8'), Buffer.from([FS, 0x0d])]));
+    const text = await reply;
+    sock.destroy();
+    assert.match(text, /MSA\|AR\|43\|Unsupported message type\|\|\|200/);
+    assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_devices').get().c, 0);
+    const m = db.prepare('SELECT * FROM lab_device_messages').get();
+    assert.equal(m.status, 'rejected');
+    assert.equal(m.resolved_at, null);
+  } finally {
+    await stopLisListeners();
+    if (prevPort === undefined) delete process.env.LIS_PORT; else process.env.LIS_PORT = prevPort;
+    db.close();
+  }
+});

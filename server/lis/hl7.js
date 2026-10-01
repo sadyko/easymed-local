@@ -115,7 +115,9 @@ const echo = (v) => String(v == null ? '' : v).replace(/[|\r\n]/g, ' ').trim();
 export function mshOf(text) {
   const out = { ok: false, fieldSep: '|', compSep: '^', app: '', facility: '', appField: '', facilityField: '',
     type: '', event: '', controlId: '', version: '', ackType: '', charset: '' };
-  const first = String(text == null ? '' : text).split(SEG)[0] || '';
+  // Первый непустой сегмент — как у parseMessage: прибор, приславший пустую
+  // строку перед MSH, разобран приёмом, и ответ обязан это знать.
+  const first = String(text == null ? '' : text).split(SEG).find((s) => s.trim() !== '') || '';
   if (!first.startsWith('MSH') || first.length < 4) return out;
   const fieldSep = first[3];
   const f = first.split(fieldSep);
@@ -186,4 +188,26 @@ export function buildAck(msh, code, why = {}) {
     replyMsh(m, m.event ? 'ACK^' + m.event : 'ACK'),
     ['MSA', c, m.controlId || '', text, '', '', error].join('|'),
   ].join('\r');
+}
+
+/**
+ * LIS_REAL_ANALYZERS_V1_SERVICE — ответ на запрос рабочего списка: «заказов
+ * нет». Easy-Med остаётся «только результаты» и заказов приборам не отдаёт
+ * (docs/specs/2026-10-01-lis-real-analyzers-design.md, раздел 7).
+ *
+ *   QRY^Q02 (BS-200, химия Mindray) → QCK^Q02: MSA AA, ERR|0, QAK|SR|NF —
+ *     руководство BS-200, с. 28, дословно («If the sample of the bar code does
+ *     not exist»); с QRD-9 = CAN (отмена группового, с. 34) — тот же ответ;
+ *   QRY^Q01 (Autobio) → DSR^Q01: MSA AA, ERR|0, QAK|SR|NF, эхо QRD и QRF, без
+ *     DSP — по образцу AutoLumoHL7.cs (там QAK|SR|OK и DSP с заказом); «нет
+ *     данных» — по аналогии, ПРОВЕРИТЬ НА ПРИБОРЕ;
+ *   ORM^O01 (гематология Mindray) → ACK^O01 «принято» — документа нет,
+ *     ПРОВЕРИТЬ НА ПРИБОРЕ.
+ * @param {object} env  readEnvelope() запроса (wire.js): заголовок, qrd, qrf
+ */
+export function buildQueryReply(env) {
+  const msa = ['MSA', 'AA', env.controlId || '', MSA_TEXT.AA.text, '', '', MSA_TEXT.AA.error].join('|');
+  if (env.type === 'QRY^Q02') return [replyMsh(env, 'QCK^Q02'), msa, 'ERR|0', 'QAK|SR|NF'].join('\r');
+  if (env.type === 'QRY^Q01') return [replyMsh(env, 'DSR^Q01'), msa, 'ERR|0', 'QAK|SR|NF', env.qrd, env.qrf].filter(Boolean).join('\r');
+  return buildAck(env, 'AA');
 }

@@ -125,6 +125,17 @@ test('mshOf: терпимый разбор MSH — поля заголовка �
   }
 });
 
+// LIS_REAL_ANALYZERS_V1_SERVICE — заголовок ищется так же, как у parseMessage:
+// иначе проба, которую приём разобрал и применил, получила бы ответ «не
+// разобрано», и прибор слал бы её снова.
+test('mshOf: пустые строки перед MSH пропускаются — как у parseMessage', () => {
+  const text = '\r\n' + BS200_ORU;
+  assert.equal(parseMessage(text).type, 'ORU^R01');
+  assert.equal(mshOf(text).ok, true);
+  assert.equal(mshOf(text).controlId, '1');
+  assert.equal(mshOf('  MSH|^~\\&|X').ok, false, 'MSH не с начала сегмента — не заголовок, как и у parseMessage');
+});
+
 test('mshOf: свои разделители отправителя из MSH-2', () => {
   const m = mshOf('MSH|*~\\&|BC-5300*X|Mindray|||20260910143943||ORU*R01|42|P|2.3.1');
   assert.equal(m.type, 'ORU^R01', 'тип нормализуется в наш вид');

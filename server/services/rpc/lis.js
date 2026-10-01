@@ -14,6 +14,7 @@ import { parseMessage } from '../../lis/hl7.js';   // LIS_MINDRAY_CODES_V1 — �
 import { LAB_SECTION_ROLES } from '../../db/schema-registry.js';
 import { hasAnyRole } from '../roles.js';   // ЭФФЕКТИВНЫЕ роли, как в lab-stats.js — не голая строка user.role
 import { rpcT } from '../server-message.js';   // LIS_ANALYZER_LIST_V1 (ревью C2) — отказ с названиями панелей переводится
+import { today, utcDayRange } from '../domain/day.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — «сегодня» местного дня клиники
 
 class LisError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -83,6 +84,7 @@ export function lisRecent(db, args, user) {
       LEFT JOIN services       s  ON s.id  = vs.service_id
       LEFT JOIN visits         v  ON v.id  = vs.visit_id
       LEFT JOIN patients       p  ON p.id  = v.patient_id
+     WHERE m.kind = 'result'   -- LIS_REAL_ANALYZERS_V1_SERVICE: утренний контроль (тридцать тестов на два уровня) не вытесняет пробы пациентов
      ORDER BY m.id DESC
      LIMIT ?`).all(limit);
 
@@ -232,8 +234,10 @@ export function lisDeviceCodes(db, args, user) {
     : [dev.id];
   // LIS_DISCOVERY_FIX_V1 — из базы только начало (substr), а не мегабайты
   // картинок: на знак больше границы, чтобы codesHead видел, что обрезано.
+  // LIS_REAL_ANALYZERS_V1_SERVICE — только пробы (kind = 'result'): коды
+  // контроля качества и калибровки в «Поле анализатора» не предлагаются.
   const rows = db.prepare(`SELECT substr(raw, 1, ?) AS head, received_at FROM lab_device_messages
-                            WHERE device_id IN (${ids.map(() => '?').join(',')})
+                            WHERE device_id IN (${ids.map(() => '?').join(',')}) AND kind = 'result'
                             ORDER BY id DESC LIMIT ?`).all(CODES_HEAD_CHARS + 1, ...ids, CODES_SCAN_LIMIT);
 
   const seen = new Map();
@@ -262,6 +266,30 @@ export function lisDeviceCodes(db, args, user) {
 export function lisListeners(db, args, user) {
   guard(user);
   return listenerStatus();
+}
+
+/**
+ * LIS_REAL_ANALYZERS_V1_SERVICE — служебные сообщения у прибора за сегодня
+ * (местный день клиники): контроль качества, калибровка, запросы рабочего
+ * списка. Таблица «Анализаторы» показывает «контроль: 12 · запросы: 40»; если
+ * запросов много — подсказку выключить запрос в настройках LIS прибора: Easy-Med
+ * заказов не отдаёт. Чистое чтение (READ_ONLY_RPCS); идёт по частичному индексу
+ * idx_lab_device_messages_service (мигр. 233), а не по сырым пробам.
+ * @returns {Array<{device_id:number, qc:number, calibration:number, query:number}>}
+ *   только приборы, у которых сегодня было служебное; по номеру прибора
+ */
+export function lisServiceCounts(db, args, user) {
+  guard(user);
+  const [lo, hi] = utcDayRange(db, today(db));
+  const rows = db.prepare(`SELECT device_id, kind, COUNT(*) AS n FROM lab_device_messages
+                            WHERE kind <> 'result' AND device_id IS NOT NULL AND received_at >= ? AND received_at < ?
+                            GROUP BY device_id, kind`).all(lo, hi);
+  const by = new Map();
+  for (const r of rows) {
+    if (!by.has(r.device_id)) by.set(r.device_id, { device_id: r.device_id, qc: 0, calibration: 0, query: 0 });
+    by.get(r.device_id)[r.kind] = r.n;
+  }
+  return [...by.values()].sort((a, b) => a.device_id - b.device_id);
 }
 
 /**

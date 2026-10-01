@@ -71,6 +71,7 @@ import { telephonySettingsGet, telephonySettingsSave, telephonyTest, telephonyRe
          telephonyDial, crmLeadCalls, telephonyOperatorStats, telephonyCallRecording,
          telephonyForgetBinotel } from './telephony.js';   // TELEPHONY_V1 / TELEPHONY_ROUTING_V1 / TELEPHONY_PROVIDERS_V1
 import { lisProfiles, lisRestart, lisRecent, lisMessageAttach, lisMessageDismiss, lisDeviceCodes, lisListeners, lisDeviceDelete } from './lis.js';   // LIS_INGEST_V1, LIS_MINDRAY_CODES_V1, LIS_ANALYZER_LIST_V1
+import { lisServiceCounts } from './lis.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — контроль, калибровка, запросы у прибора за сегодня
 import { crmConfigGet, crmConfigSave } from './crm-config.js';   // CRM_CONFIG_V1
 import { customRoleCreate } from './custom-roles.js';   // ADMIN_ROWS_GRANTABLE_V1 — своя роль одним действием
 import { roleEffectiveGrants } from './roles-effective.js';   // ROLES_SAVE_TRUTH_V1 — что у роли есть сейчас
@@ -578,6 +579,8 @@ export const RPC = {
   // LIS_ANALYZER_LIST_V1 — какие порты слушаются: строка у ждущего прибора
   // в «Добавить прибор». Чистое чтение (gate.js).
   lis_listeners:            (db, args, user) => lisListeners(db, args, user),
+  // LIS_REAL_ANALYZERS_V1_SERVICE — служебные сообщения у прибора за сегодня. Чистое чтение (gate.js).
+  lis_service_counts:       (db, args, user) => lisServiceCounts(db, args, user),
   // LIS_ANALYZER_LIST_V1 (ревью C2) — «Удалить» прибор: /api/db не удалял
   // прибор с сообщениями (внешние ключи мигр. 123). Запись — НЕ в
   // READ_ONLY_RPCS; async, как lis_restart.

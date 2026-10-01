@@ -40,7 +40,9 @@ const frameOf = (text) => Buffer.concat([Buffer.from([VT]), Buffer.from(text, 'u
 /**
  * @param {object} o
  * @param {number} o.port          0 — занять свободный (тесты)
- * @param {(text:string, peer:string)=>Promise<'AA'|'AE'>} o.onMessage
+ * @param {(text:string, peer:string)=>Promise<'AA'|'AE'|'AR'|{code:string, reply?:string}>} o.onMessage
+ *        код ответа — или (LIS_REAL_ANALYZERS_V1_SERVICE) готовый ответ { reply }:
+ *        на запрос рабочего списка уходит не ACK, а QCK^Q02 / DSR^Q01
  * @param {number} [o.maxBytes]    потолок одного сообщения (DEFAULT_MAX_BYTES)
  * @param {(o:{peer:string, bytes:number, head:string, limit:number})=>void} [o.onOversize]
  *        сообщение больше потолка: прибору уже ушёл AE, здесь — сколько пришло
@@ -119,8 +121,10 @@ export function startMllpServer({ port, onMessage, onOversize = null, maxBytes =
             const msh = mshOf(text);
             let ack;
             try {
-              const code = await onMessage(text, peer);
-              ack = code ? buildAck(msh, code) : buildAck(msh, 'AE', ACK_INTERNAL);
+              const r = await onMessage(text, peer);
+              const code = r && typeof r === 'object' ? r.code : r;
+              if (r && typeof r === 'object' && typeof r.reply === 'string' && r.reply) ack = r.reply;
+              else ack = code ? buildAck(msh, code) : buildAck(msh, 'AE', ACK_INTERNAL);
             } catch (e) {
               ack = buildAck(msh, 'AE', ACK_INTERNAL);
               log('LIS: приём отказал — ' + (e && e.message ? e.message : e));

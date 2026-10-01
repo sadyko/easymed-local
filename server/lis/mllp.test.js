@@ -272,6 +272,19 @@ test('приём бросил — AE 207 «Application internal error», а не
   });
 });
 
+// LIS_REAL_ANALYZERS_V1_SERVICE — на запрос рабочего списка ответ не ACK, а
+// QCK^Q02 / DSR^Q01: приём отдаёт готовый ответ, провод шлёт его как есть.
+test('приём отдал готовый ответ ({ reply }) — он и уходит прибору', async () => {
+  const qck = 'MSH|^~\\&|EASYMED|CLINIC|Mindray|BS-200E|20261001000000||QCK^Q02|1|P|2.3.1\rMSA|AA|1|Message accepted|||0\rERR|0\rQAK|SR|NF';
+  await withServer(async () => ({ code: 'AA', reply: qck }), async (port) => {
+    const sock = await connect(port);
+    const reply = readFrame(sock);
+    sock.write(frame('MSH|^~\\&|Mindray|BS-200E|||20070723170707||QRY^Q02|1|P|2.3.1'));
+    assert.equal(await reply, qck);
+    sock.end();
+  });
+});
+
 test('переросшее сообщение — AE 207 с номером из начала', async () => {
   await withServer(async () => 'AA', async (port) => {
     const sock = await connect(port);

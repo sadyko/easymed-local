@@ -18,11 +18,17 @@
  */
 export const OVERSIZE_DETAIL_PREFIX = 'сообщение больше ';
 
-export function recordMessage(db, { deviceId = null, peer = '', raw, sampleId = '', visitServiceId = null, status, detail = '' }) {
+/**
+ * LIS_REAL_ANALYZERS_V1_SERVICE — kind: вид сообщения (мигр. 233: result, qc,
+ * calibration, query); resolved: строка разрешена сразу — служебное сообщение
+ * хранится целиком (инвариант 2), но в лоток не попадает: экран берёт только
+ * строки без resolved_at.
+ */
+export function recordMessage(db, { deviceId = null, peer = '', raw, sampleId = '', visitServiceId = null, status, detail = '', kind = 'result', resolved = false }) {
   return db.prepare(`INSERT INTO lab_device_messages
-      (device_id, peer, raw, sample_id, visit_service_id, status, detail)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .run(deviceId, peer, String(raw == null ? '' : raw), sampleId, visitServiceId, status, detail).lastInsertRowid;
+      (device_id, peer, raw, sample_id, visit_service_id, status, detail, kind, resolved_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') END)`)
+    .run(deviceId, peer, String(raw == null ? '' : raw), sampleId, visitServiceId, status, detail, kind, resolved ? 1 : 0).lastInsertRowid;
 }
 
 /**

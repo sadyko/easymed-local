@@ -11,7 +11,8 @@
 // настроенных на 2575, иначе подрались бы за него, и второй молча не поднялся
 // бы — а молча неработающий приём результатов хуже явно ненастроенного.
 import { startMllpServer } from './mllp.js';
-import { ingestMessage } from './ingest.js';
+import { receiveMessage } from './receive.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — проба или служебное, и ответ прибору
+import { readEnvelope } from './wire.js';         // LIS_REAL_ANALYZERS_V1_SERVICE — вид и имя отправителя по заголовку
 import { ensureDevice } from './discover.js';
 import { parseMessage } from './hl7.js';
 import { recordMessage, OVERSIZE_DETAIL_PREFIX } from './inbox.js';   // LIS_MINDRAY_CODES_V1 — переросшее сообщение ложится в лоток
@@ -57,9 +58,15 @@ export async function startLisListeners(db, { log = console.log } = {}) {
           // и приписывал второй анализатор, стоящий за тем же адресом, к первой
           // найденной строке. Два набора правил про одно и то же неизбежно
           // расходятся — правило должно быть одно, и оно там.
-          let sendingApp = '';
-          let parsed = true;
-          try { sendingApp = parseMessage(text).sendingApp || ''; } catch { parsed = false; }
+          //
+          // LIS_REAL_ANALYZERS_V1_SERVICE — «разобрано» теперь значит проба
+          // ИЛИ служебное (контроль, калибровка, запрос рабочего списка): прибор,
+          // который сначала спросил заказ, появляется в «Найдены в сети» с
+          // первого запроса. Мусор и неподдержанный тип (ADT^A01) прибора не
+          // заводят и имени не дают — как прежде, когда parseMessage бросал.
+          const env = readEnvelope(text);
+          const parsed = env.kind === 'result' || env.service;
+          const sendingApp = parsed ? env.app : '';
 
           const found = ensureDevice(db, { sendingApp, peer: ip, port, allowCreate: parsed });
           if (found.created) {
@@ -67,7 +74,7 @@ export async function startLisListeners(db, { log = console.log } = {}) {
             list.push(found.device);
           }
 
-          return ingestMessage(db, text, ip, found.device ? found.device.id : null);
+          return receiveMessage(db, text, { peer: ip, deviceId: found.device ? found.device.id : null });
         },
         // LIS_MINDRAY_CODES_V1 (ревью 2026-09-28) — сообщение больше потолка
         // (mllp.js уже ответил прибору AE). Инвариант 2 — ничего не теряется:
