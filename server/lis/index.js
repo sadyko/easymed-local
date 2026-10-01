@@ -12,9 +12,8 @@
 // бы — а молча неработающий приём результатов хуже явно ненастроенного.
 import { startMllpServer } from './mllp.js';
 import { receiveMessage } from './receive.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — проба или служебное, и ответ прибору
-import { readEnvelope } from './wire.js';         // LIS_REAL_ANALYZERS_V1_SERVICE — вид и имя отправителя по заголовку
+import { readEnvelope, readResult, pickSampleId } from './wire.js';   // LIS_REAL_ANALYZERS_V1_SERVICE / _SAMPLE — вид, имя отправителя, номер пробы
 import { ensureDevice } from './discover.js';
-import { parseMessage } from './hl7.js';
 import { recordMessage, OVERSIZE_DETAIL_PREFIX } from './inbox.js';   // LIS_MINDRAY_CODES_V1 — переросшее сообщение ложится в лоток
 
 export const DEFAULT_PORT = 2575;
@@ -85,8 +84,10 @@ export async function startLisListeners(db, { log = console.log } = {}) {
         // ровно то, от чего здесь уже отказались.
         onOversize: ({ peer, head, limit }) => {
           const ip = normalizeIp(peer);
-          let sampleId = '';
-          try { sampleId = parseMessage(head).sampleId || ''; } catch { /* начало не разобралось — без номера */ }
+          // LIS_REAL_ANALYZERS_V1_SAMPLE — номер той же pickSampleId с проводом
+          // default: LAB- узнаётся в OBR-2 и OBR-3, голые цифры — только OBR-3.
+          // Начало не разобралось — без номера (readResult не бросает).
+          const sampleId = pickSampleId(readResult(head, 'default').obr, 'default').sampleId;
           const size = limit >= 1024 * 1024 ? (limit / (1024 * 1024)) + ' МБ' : Math.round(limit / 1024) + ' КБ';
           // LIS_DISCOVERY_FIX_V1 — начало строки общее с привязкой (rpc/lis.js):
           // по нему она отказывается привязывать обрезанное. Текст прежний.

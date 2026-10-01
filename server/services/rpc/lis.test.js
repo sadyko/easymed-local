@@ -414,3 +414,71 @@ test('служебные сообщения не идут ни в живую л�
   assert.deepEqual(lisDeviceCodes(db, { device_id: 1 }, LAB).map((c) => c.code), ['6690-2'], 'коды контроля и калибровки не предлагаются');
   db.close();
 });
+
+// ── LIS_REAL_ANALYZERS_V1_SAMPLE — привязка из лотка номером, без подмены ───
+// Раньше привязка переписывала OBR-3 регуляркой. У BS-200 номер в OBR-2, а в
+// OBR-3 — место в штативе: подмена OBR-3 привязала бы не то (этикетка LAB- в
+// OBR-2 бьёт голые цифры). Теперь приём получает номер явно, сырое — исходное.
+
+function attachClinic(db, { created = "strftime('%Y-%m-%dT%H:%M:%SZ','now')" } = {}) {
+  db.prepare("INSERT INTO patients (id, full_name) VALUES (3,'Иванов')").run();
+  db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (55,3,'2026-09-10T09:00:00Z','scheduled')").run();
+  db.prepare("INSERT INTO services (id, name, is_lab) VALUES (9,'Биохимия',1)").run();
+  db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (77,55,9,'queued',${created})`).run();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'BS-200','mindray-bs-240')").run();
+  db.prepare("INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (5,'Биохимия',9,1)").run();
+  db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, device_code, device_code_confirmed)
+              VALUES (5,'GLU','Глюкоза','ммоль/л','2',1)`).run();
+}
+// BS-200, руководство с. 24–25: в OBR-2 — смазанная/чужая этикетка, в OBR-3 — место в штативе.
+const BS200_RAW = ['MSH|^~\\&|Mindray|BS-200E|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||',
+  'OBR|1|LAB-999999|2|Mindray^BS-200E|Y||||||||||serum',
+  'OBX|1|NM|2|test2|5.000000|g/ml|-||||F|||||||'].join('\r');
+
+test('привязка BS-200 (номер в OBR-2): ложится в названный заказ, сырое не изменено, sample_id — номер человека', () => {
+  const db = fresh();
+  attachClinic(db);
+  const id = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, sample_id, status, detail) VALUES (1,'10.0.0.40',?,'LAB-999999','unmatched','заказ по номеру пробы не найден')").run(BS200_RAW).lastInsertRowid;
+
+  const out = lisMessageAttach(db, { id, visit_service_id: 77 }, LAB);
+  assert.deepEqual({ ok: out.ok, status: out.status }, { ok: true, status: 'applied' }, out.detail);
+  assert.match(out.detail, /привязано вручную/);
+  const rows = db.prepare('SELECT * FROM lab_results WHERE visit_service_id = 77').all();
+  assert.equal(rows.length, 1);
+  assert.equal(Number(rows[0].value), 5, 'значение легло (провод BS-200 срежет нули, когда появится профиль)');
+  const fresh_ = db.prepare('SELECT * FROM lab_device_messages ORDER BY id DESC LIMIT 1').get();
+  assert.equal(fresh_.raw, BS200_RAW, 'инвариант 2: сырое сообщение новой строки — исходное, без подмены');
+  assert.equal(fresh_.sample_id, '77');
+  assert.equal(fresh_.visit_service_id, 77);
+  assert.ok(db.prepare('SELECT resolved_at FROM lab_device_messages WHERE id = ?').get(id).resolved_at);
+  db.close();
+});
+
+test('привязка: правило голых цифр не действует — номер назвал человек; старый открытый заказ принимает', () => {
+  const db = fresh();
+  attachClinic(db, { created: "strftime('%Y-%m-%dT%H:%M:%SZ','now','-30 days')" });
+  const id = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, sample_id, status) VALUES (1,'10.0.0.40',?,'','unmatched')").run(BS200_RAW).lastInsertRowid;
+  const out = lisMessageAttach(db, { id, visit_service_id: 77 }, LAB);
+  assert.equal(out.status, 'applied', out.detail);
+  db.close();
+});
+
+test('служебное сообщение (контроль, калибровка, запрос) к заказу не привязывается — 409', () => {
+  const db = fresh();
+  attachClinic(db);
+  const qc = ['MSH|^~\\&|Mindray|BS-200E|||20070720120202||ORU^R01|1|P|2.3.1||||2||ASCII|||',
+    'OBR|1|1|test1|Mindray^BS-200E||20070720120143|||||||QUAL1|1111|20080720000000||H|5.000000|2.000000|0.11029|g/ml'].join('\r');
+  for (const kind of ['qc', 'calibration', 'query']) {
+    const id = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status, kind, resolved_at) VALUES (1,'10.0.0.40',?,'unmatched',?,'2026-10-01T08:00:00Z')").run(qc, kind).lastInsertRowid;
+    const before = db.prepare('SELECT COUNT(*) c FROM lab_device_messages').get().c;
+    assert.throws(() => lisMessageAttach(db, { id, visit_service_id: 77 }, LAB), (e) => {
+      assert.equal(e.status, 409);
+      assert.equal(e.message, 'Служебное сообщение прибора (контроль качества, калибровка или запрос) к заказу не привязывается');
+      return true;
+    }, kind);
+    assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_device_messages').get().c, before, kind + ': новой строки нет');
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM lab_results WHERE visit_service_id = 77').get().c, 0);
+  assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = 77').get().status, 'queued');
+  db.close();
+});

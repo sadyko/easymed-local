@@ -91,6 +91,42 @@ test('сообщение больше потолка: прибору AE, в ло
   }
 });
 
+// LIS_REAL_ANALYZERS_V1_SAMPLE — номер пробы переросшего сообщения ищет та же
+// pickSampleId с проводом default: этикетка LAB- узнаётся и в OBR-2, а голое
+// «2» из OBR-3 рядом с ней не побеждает.
+test('переросшее сообщение: номер пробы — pickSampleId (default), LAB- в OBR-2 бьёт голое в OBR-3', async () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  const port = await freePort();
+  const prevPort = process.env.LIS_PORT;
+  process.env.LIS_PORT = String(port);
+  try {
+    await startLisListeners(db, { log: () => {} });
+    const head = [
+      'MSH|^~\\&|BC-780|Mindray|||20261001090000||ORU^R01|556|P|2.3.1||||||UNICODE',
+      'OBR|1|LAB-000123|2|00001^Automated Count^99MRC',
+      'OBX|1|ED|15551-4^WBC Histogram. BMP^99MRC||^Image^BMP^Base64^',
+    ].join('\r');
+    const sock = await connect(port);
+    sock.on('error', () => {});
+    const reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from(head, 'utf8'), Buffer.alloc(DEFAULT_MAX_BYTES + 64 * 1024, 0x51)]));
+    assert.match(await reply, /MSA\|AE\|556/);
+    sock.destroy();
+    let row = null;
+    for (let i = 0; i < 50 && !row; i++) {
+      row = db.prepare('SELECT * FROM lab_device_messages ORDER BY id DESC LIMIT 1').get();
+      if (!row) await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.ok(row, 'переросшее сообщение записано');
+    assert.equal(row.sample_id, 'LAB-000123');
+  } finally {
+    await stopLisListeners();
+    if (prevPort === undefined) delete process.env.LIS_PORT; else process.env.LIS_PORT = prevPort;
+    db.close();
+  }
+});
+
 // LIS_ANALYZER_LIST_V1 — порт, который не поднялся, виден экрану, а не только
 // в журнале сервера: строка «порт N не слушается» у ждущего прибора.
 test('занятый порт виден как «не слушается», а не пропадает молча', async () => {

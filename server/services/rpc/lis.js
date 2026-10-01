@@ -142,9 +142,20 @@ export function lisMessageAttach(db, args, user) {
     throw new LisError('Сообщение пришло не целиком — привязать его нельзя. Попросите анализатор отправить эту пробу ещё раз.', 409);
   }
 
-  // Подменяется ТОЛЬКО номер пробы в OBR-3; всё остальное сообщение идёт как
-  // пришло, поэтому применяются те же правила сопоставления и те же запреты.
-  const retagged = msg.raw.replace(/^(OBR\|[^|]*\|[^|]*\|)[^|]*/m, '$1' + vsId);
+  // LIS_REAL_ANALYZERS_V1_SAMPLE — служебное сообщение (контроль качества,
+  // калибровка, запрос рабочего списка) — не проба пациента: у QC BS-200 в
+  // OBR-2 стоит номер теста. Привязать его к заказу значило бы положить
+  // контрольный материал в бланк пациента.
+  if (msg.kind && msg.kind !== 'result') {
+    throw new LisError('Служебное сообщение прибора (контроль качества, калибровка или запрос) к заказу не привязывается', 409);
+  }
+
+  // LIS_REAL_ANALYZERS_V1_SAMPLE — номер заказа уходит в приём ЯВНО
+  // (sampleIdOverride), а сырое сообщение идёт как пришло (инвариант 2).
+  // Раньше здесь регуляркой подменялся OBR-3, но у BS-200 номер — в OBR-2, а
+  // в OBR-3 — место в штативе, и этикетка LAB- в любом поле бьёт подмену:
+  // привязка ложилась бы не туда. Правила сопоставления и запреты (D4, D7) —
+  // те же; правило голых цифр — нет: номер назвал человек.
   // Приём пишет ровно одну строку лотка, и better-sqlite3 синхронный: между
   // этими двумя чтениями никто другой не пишет, поэтому самая новая строка
   // после ingestMessage — его. «id > before» — страховка, а не надежда.
@@ -152,7 +163,7 @@ export function lisMessageAttach(db, args, user) {
   // LIS_ANALYZER_LIST_V1 (ревью M4) — { touch: false }: сообщение пришло
   // тогда, а нажал человек сейчас; прибор, выключенный неделю назад, после
   // разбора лотка иначе выглядел бы «на связи».
-  const code = ingestMessage(db, retagged, msg.peer, msg.device_id, { touch: false });
+  const code = ingestMessage(db, msg.raw, msg.peer, msg.device_id, { touch: false, sampleIdOverride: vsId });
   const rec = db.prepare('SELECT status, detail FROM lab_device_messages WHERE id > ? ORDER BY id DESC LIMIT 1').get(before);
   resolveMessage(db, id);
   return { ok: code === 'AA', code, status: rec ? rec.status : null, detail: rec ? rec.detail || '' : '' };
