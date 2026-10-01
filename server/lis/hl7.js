@@ -123,7 +123,7 @@ export function mshOf(text) {
   const f = first.split(fieldSep);
   const compSep = (f[1] || '')[0] || '^';
   const comp = (v) => String(v == null ? '' : v).split(compSep);
-  const t = comp(f[8]).map((s) => s.trim());
+  const t = comp(f[8]);
   return {
     ok: true,
     fieldSep,
@@ -132,8 +132,11 @@ export function mshOf(text) {
     facility: comp(f[3])[0].trim(),
     appField: echo(comp(f[2]).join('^')),
     facilityField: echo(comp(f[3]).join('^')),
+    // Тип — ровно как у parseMessage, без обрезки пробелов: вид сообщения по
+    // заголовку (wire.js readEnvelope) обязан совпадать с тем, что разберёт
+    // приём, иначе «проба» по заголовку получила бы отказ приёма и не тот ответ.
     type: t.slice(0, 2).filter(Boolean).join('^'),
-    event: t[1] || '',
+    event: echo(t[1]),
     controlId: (f[9] || '').trim(),
     version: (f[11] || '').trim(),
     ackType: (f[15] || '').trim(),

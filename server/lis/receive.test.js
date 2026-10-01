@@ -12,6 +12,8 @@ import { openDb } from '../db/connection.js';
 import { migrate } from '../db/migrate.js';
 import { receiveMessage } from './receive.js';
 import { lisRecent } from '../services/rpc/lis.js';
+import { readEnvelope } from './wire.js';
+import { parseMessage } from './hl7.js';
 
 const seg = (...s) => s.join('\r');
 // Пустые поля в конце сегмента смысла не несут: руководство пишет «…|NF|».
@@ -204,6 +206,23 @@ test('сорвалась запись пробы — AE 207 «Application intern
   const out = receiveMessage(db, ORU(), { peer: '10.0.0.9', deviceId: 1 });
   assert.equal(out.code, 'AE');
   assert.equal(out.reply.split('\r')[1], 'MSA|AE|42|Application internal error|||207');
+  assert.equal(last(db).status, 'rejected');
+  db.close();
+});
+
+// Вид по заголовку и разбор приёма обязаны совпадать: «проба» для заголовка, но
+// «не ORU» для parseMessage дала бы AE 207 («сорвалась запись») вместо AE 100 и
+// завела бы прибор по мусору (index.js: allowCreate — по виду).
+test('вид «проба» у заголовка — ровно там, где parseMessage разбирает ORU^R01', () => {
+  for (const t of ['ORU^R01', 'ORU^R01^ORU_R01', 'ORU^R01 ', ' ORU^R01', 'ORU ^R01', 'ORU', 'ORU^', '^R01', 'oru^r01']) {
+    const raw = `MSH|^~\\&|BC-5300|Mindray|||20260910143943||${t}|42|P|2.3.1\rOBR|1||LAB-000001`;
+    let parsed = true;
+    try { parseMessage(raw); } catch { parsed = false; }
+    assert.equal(readEnvelope(raw).kind === 'result', parsed, JSON.stringify(t));
+  }
+  const db = fresh();
+  const out = receiveMessage(db, 'MSH|^~\\&|BC-5300|Mindray|||20260910143943||ORU^R01 |42|P|2.3.1\rOBR|1||LAB-000001', { peer: '10.0.0.9' });
+  assert.equal(out.code, 'AR', 'разобранный заголовок неподдержанного типа — AR, а не «сорвалась запись»');
   assert.equal(last(db).status, 'rejected');
   db.close();
 });
