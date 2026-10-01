@@ -436,3 +436,19 @@ test('R6 п. 1: у кодов производителя (BC-780) смена а�
     assert.ok(insertedRow(), 'сохранено: ' + toastMsg);
   } finally { DEVICES[1].host = '10.0.0.30'; }
 });
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R7, п. 3 ─────────────────────────────────
+// Находка дописала адрес строке BS-200, у которой его не было (discover.js), —
+// эпоха та же, отметки целы: сохранению это не мешает. Отказ — только когда
+// эпоха другая или адрес/порт сменились с непустого.
+test('R7 п. 3: адрес дописан строке без адреса (эпоха та же) — сохранить можно', async () => {
+  const was = { host: DEVICES[0].host, port: DEVICES[0].port };
+  DEVICES[0].host = ''; DEVICES[0].port = null;
+  try {
+    const root = await mountPanels({ analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: 1, device_code_confirmed_epoch: 0 })] });
+    DEVICES[0].host = '10.0.0.40'; DEVICES[0].port = 2575;   // находка: первый адрес и порт
+    findButtonByText(root, /Сохранить панель/).click();
+    await tick(80);
+    assert.ok(insertedRow(), 'сохранено: ' + toastMsg);
+  } finally { Object.assign(DEVICES[0], was); }
+});

@@ -1207,3 +1207,77 @@ test('R6 п. 1: адрес BS-200 сменили, старая вкладка с
   assert.equal(blank(db)['Глюкоза'], '5');
   db.close();
 });
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R7, п. 1 ─────────────────────────────────
+// Ворота лаборатории (INPATIENT_MONEY_FIX_V1, правило владельца) — те же, что
+// у ручного ввода (rpc/lab.js saveLabResults): результат принимается только у
+// заказа «ждёт забора», «проба взята», «в работе», «результаты внесены» или
+// «выдан». Прибор их обходил с первого выпуска LIS: проба с этикеткой
+// неоплаченного, отменённого или возвращённого заказа писала значения и
+// переводила заказ в «результаты внесены» — после чего открывался и ручной
+// ввод. Теперь такая проба — в лоток, и не пишется ничего.
+test('R7 п. 1: неоплаченный заказ — прибор ничего не пишет; лоток «заказ ещё не оплачен…», строка с заказом (этикетка LAB-)', () => {
+  const db = fresh();
+  db.prepare("UPDATE visit_services SET status = 'added' WHERE id = 123").run();
+  assert.equal(ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1'), OBX(2, 'HGB', '142')]), '127.0.0.1', 1), 'AA');
+  const m = message(db);
+  assert.equal(m.status, 'unmatched');
+  assert.equal(m.visit_service_id, 123);
+  assert.equal(m.detail, 'заказ ещё не оплачен — результат прибора можно «Привязать» после оплаты');
+  assert.equal(results(db).length, 0);
+  assert.equal(order(db).status, 'added', 'касса закрыта, как была');
+  db.close();
+});
+
+test('R7 п. 1: отменённый и возвращённый заказ — ничего не пишется, лоток называет причину', () => {
+  for (const [st, why] of [['cancelled', 'заказ отменён'], ['refunded', 'по заказу возврат']]) {
+    const db = fresh();
+    db.prepare('UPDATE visit_services SET status = ? WHERE id = 123').run(st);
+    ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1'), OBX(2, 'HGB', '142')]), '127.0.0.1', 1);
+    assert.deepEqual([message(db).status, message(db).detail], ['unmatched', why], st);
+    assert.equal(results(db).length, 0, st);
+    assert.equal(order(db).status, st, st);
+    db.close();
+  }
+});
+
+test('R7 п. 1: выданный бланк — superseded, как прежде', () => {
+  const db = fresh();
+  db.prepare("UPDATE visit_services SET status = 'completed' WHERE id = 123").run();
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, verified_at) VALUES (123, 'Лейкоциты', '5.0', '2026-10-01T08:00:00Z')").run();
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1')]), '127.0.0.1', 1);
+  assert.equal(message(db).status, 'superseded');
+  assert.equal(results(db)[0].value, '5.0');
+  db.close();
+});
+
+test('R7 п. 1: серия BS-200 — заказ отменили посреди серии: третье сообщение ничего не пишет, ждущие строки не переводятся', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  const waiting = rows(db).map((r) => r.id);
+  db.prepare("UPDATE visit_services SET status = 'cancelled' WHERE id = 123").run();
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  assert.deepEqual([message(db).status, message(db).detail], ['unmatched', 'заказ отменён']);
+  assert.equal(blank(db)['Расчётный'], undefined);
+  for (const id of waiting) assert.equal(db.prepare('SELECT status FROM lab_device_messages WHERE id = ?').get(id).status, 'unmapped', 'ждущие не приняты');
+  db.close();
+});
+
+// Стационар: анализ лежащего пациента — обычная строка визита (очередь
+// лаборатории — visit_services); в очередь её отпускает касса, плательщик
+// (счёт организации) или долг — как всякую. Отпущенная (queued и дальше)
+// принимает прибор, как прежде.
+test('R7 п. 1: анализ пациента в стационаре, отпущенный в очередь счётом плательщика, — прибор пишет, как прежде', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO admissions (id, patient_id, status) VALUES (40, 3, 'admitted')").run();
+  db.prepare("INSERT INTO payers (id, name) VALUES (7, 'Страховая')").run();
+  db.prepare("INSERT INTO invoices (id, patient_id, status, payer_id, total_amount) VALUES (900, 3, 'unpaid', 7, 100)").run();
+  db.prepare('INSERT INTO invoice_items (id, invoice_id) VALUES (901, 900)').run();
+  db.prepare("UPDATE visit_services SET status = 'queued', invoice_item_id = 901 WHERE id = 123").run();
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1'), OBX(2, 'HGB', '142')]), '127.0.0.1', 1);
+  assert.equal(message(db).status, 'applied');
+  assert.equal(results(db).length, 2);
+  assert.equal(order(db).status, 'resulted');
+  db.close();
+});

@@ -50,7 +50,7 @@ const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагнос
 //      lab-section role (LAB_PANELS_BY_SECTION_V1).
 // v8 = one shared page head for queue+panels; marker moved off-screen into
 //      the data-attribute above; queue filter chips translate label-then-count.
-export const LAB_BUILD = 'lab-v22';   // v22 — эпоха кодов прибора: подтверждение до смены адреса BS-200 — «подтвердите заново», окно, открытое до смены, не сохраняет (LIS_REAL_ANALYZERS_V1, ревью R6) · v21 — подтверждение без отметки прибора сохраняется «ни для какого», модель и по имени прибора (LIS_REAL_ANALYZERS_V1, ревью R5) · v20 — подтверждение помнит прибор: «подтверждено для другого прибора — подтвердите заново» (LIS_REAL_ANALYZERS_V1, ревью R4) · v19 — смена BS-200 у панели снимает подтверждения (LIS_REAL_ANALYZERS_V1, ревью R3) · LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1); v17 — одно поле прибора под двумя именами (LIS_DISCOVERY_FIX_V1); v18 — «12 · GLU», подсказка «коды появятся», типовые BC-780 по соседним моделям (LIS_REAL_ANALYZERS_V1)
+export const LAB_BUILD = 'lab-v23';   // v23 — первый адрес строки без адреса сохранению не мешает (LIS_REAL_ANALYZERS_V1, ревью R7) · v22 — эпоха кодов прибора: подтверждение до смены адреса BS-200 — «подтвердите заново», окно, открытое до смены, не сохраняет (LIS_REAL_ANALYZERS_V1, ревью R6) · v21 — подтверждение без отметки прибора сохраняется «ни для какого», модель и по имени прибора (LIS_REAL_ANALYZERS_V1, ревью R5) · v20 — подтверждение помнит прибор: «подтверждено для другого прибора — подтвердите заново» (LIS_REAL_ANALYZERS_V1, ревью R4) · v19 — смена BS-200 у панели снимает подтверждения (LIS_REAL_ANALYZERS_V1, ревью R3) · LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1); v17 — одно поле прибора под двумя именами (LIS_DISCOVERY_FIX_V1); v18 — «12 · GLU», подсказка «коды появятся», типовые BC-780 по соседним моделям (LIS_REAL_ANALYZERS_V1)
 
 // LIS_REAL_ANALYZERS_V1 — у модели нет типового списка (BS-200, A1000), а прибор ещё ничего не присылал.
 const NO_DEVICE_CODES_HINT = 'Коды появятся, когда анализатор пришлёт первую пробу; номер теста — как в настройках тестов прибора. Пока код можно вписать руками.';
@@ -1158,8 +1158,13 @@ export async function mountLabPanels(container) {
             const seen = state.devices.find(x => x.id === devId);
             const { data: fresh, error: freshErr } = await supabase.from('lab_devices').select('id, host, port, code_epoch').eq('id', devId);
             const now = (fresh || []).find(x => Number(x.id) === devId);
-            const norm = (d) => [String(d.host == null ? '' : d.host).trim().toLowerCase(), d.port == null ? null : Number(d.port), Number(d.code_epoch || 0)].join('|');
-            if (!freshErr && seen && now && norm(now) !== norm(seen)) { toast(tr(ADDRESS_CHANGED), 'fail'); return; }
+            // Ревью R7, п. 3 — как у триггера адреса (мигр. 233): первый адрес
+            // или порт, дописанный строке без них (находка), — не смена; отказ —
+            // эпоха другая или адрес/порт сменились с непустого.
+            const host = (d) => String(d.host == null ? '' : d.host).trim().toLowerCase();
+            const changed = (a, b) => Number(a.code_epoch || 0) !== Number(b.code_epoch || 0)
+                || (host(a) !== '' && host(a) !== host(b)) || (a.port != null && Number(a.port) !== Number(b.port));
+            if (!freshErr && seen && now && changed(seen, now)) { toast(tr(ADDRESS_CHANGED), 'fail'); return; }
         }
         const p = state.selected;
         try {

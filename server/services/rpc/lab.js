@@ -17,6 +17,8 @@
 import { hasAnyRole } from '../roles.js';
 // CRM_REAL_BOOKING_V1 — работа над пациентом это доказательство его прихода.
 import { crmServiceEvidence } from '../crm/visit-status.js';
+// LIS_REAL_ANALYZERS_V1 (ревью R7, п. 1) — список ворот один на ручной ввод и прибор.
+import { LAB_RESULT_STATUSES } from '../visit-status-guard.js';
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -27,7 +29,9 @@ export class RpcError extends Error {
 const WRITE_ROLES = ['admin', 'lab'];
 
 // INPATIENT_MONEY_FIX_V1 — где результат принимается (см. saveLabResults).
-const RESULT_STATUSES = ['queued', 'collected', 'in_progress', 'resulted', 'completed'];
+// LIS_REAL_ANALYZERS_V1 (ревью R7, п. 1) — тот же список, что у прибора
+// (server/lis/ingest.js): общий, visit-status-guard.js LAB_RESULT_STATUSES.
+const RESULT_STATUSES = LAB_RESULT_STATUSES;
 
 const FLAGS = new Set(['normal', 'high', 'low', 'abnormal', 'critical']);
 

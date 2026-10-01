@@ -30,6 +30,7 @@ import { crmServiceEvidence } from '../services/crm/visit-status.js';
 // нужных полей (wire.js); профиль называет провод.
 import { readResult, pickMessageSample, wireFor, wireDecision } from './wire.js';   // pickMessageSample: LIS_REAL_ANALYZERS_V1, ревью R1, п. 1; wireDecision: ревью R2, п. 12
 import { getProfile } from './profiles/index.js';
+import { LAB_RESULT_STATUSES } from '../services/visit-status-guard.js';   // LIS_REAL_ANALYZERS_V1 — ревью R7, п. 1: ворота лаборатории, общие с ручным вводом
 import { today, localDate } from '../services/domain/day.js';
 
 /**
@@ -50,6 +51,11 @@ import { today, localDate } from '../services/domain/day.js';
  * открытый статус отсекают и их, и выданный чужой бланк (D7 его бы не
  * переписал, но сообщение легло бы рядом с чужим пациентом в ленте).
  * Этикетка LAB- этому правилу не подчиняется: её печатает только Easy-Med.
+ *
+ * LIS_REAL_ANALYZERS_V1 (ревью R7, п. 1) — «ожидает оплату» (added) правило
+ * голых цифр пропускает как открытый, но дальше стоят ворота лаборатории
+ * (gateRefusal): голый номер неоплаченного заказа отказывается той же
+ * причиной, что и этикетка, — «заказ ещё не оплачен…», без привязки.
  */
 export const BARE_ID_MAX_AGE_DAYS = 7;
 const OPEN_LAB_STATUSES = new Set(['added', 'queued', 'collected', 'in_progress', 'resulted']);
@@ -59,16 +65,38 @@ const LAB_SIDE_STATUSES = new Set(['queued', 'collected', 'in_progress']);
 const KEEP_STATUSES = new Set(['cancelled', 'canceled', 'refunded']);
 
 /**
- * LIS_REAL_ANALYZERS_V1 (ревью R6, п. 2) — счёт строки заказа оплачен,
- * частично или в долг: ровно то, после чего касса переводит строку из
- * «ожидает оплату» в очередь (billing.js).
+ * LIS_REAL_ANALYZERS_V1 (ревью R6, п. 2) — касса отпустила строку заказа в
+ * очередь: ровно то, после чего она переводит строку из «ожидает оплату» в
+ * «ждёт забора» (billing.js). Ревью R7, п. 2 — все три пути кассы: счёт
+ * оплачен, частично или в долг (record_payment, долг); счёт ПЛАТЕЛЬЩИКУ —
+ * сам он остаётся 'unpaid' (createInvoiceForVisit, V3120_FIX FATAL-2); счёт на
+ * ноль (FREE_SERVICE_V1, settleZeroTotal). Аннулированный и возвращённый счёт
+ * не отпускает ничего.
  */
 function linePaid(db, vsId) {
-  const r = db.prepare(`SELECT i.status FROM visit_services vs
+  const r = db.prepare(`SELECT i.status, i.payer_id, i.total_amount FROM visit_services vs
                           JOIN invoice_items ii ON ii.id = vs.invoice_item_id
                           JOIN invoices i ON i.id = ii.invoice_id
                          WHERE vs.id = ?`).get(vsId);
-  return !!(r && ['paid', 'partial', 'debt'].includes(r.status));
+  if (!r || r.status === 'void' || r.status === 'refunded') return false;
+  return ['paid', 'partial', 'debt'].includes(r.status) || r.payer_id != null || Math.round((Number(r.total_amount) || 0) * 100) <= 0;
+}
+
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R7, п. 1) — ворота лаборатории (INPATIENT_MONEY_FIX_V1,
+ * правило владельца): прибор, как и ручной ввод (rpc/lab.js saveLabResults),
+ * пишет только в заказ из LAB_RESULT_STATUSES. Остальное — в лоток, с
+ * причиной словами; не пишется ничего.
+ */
+const GATE_DETAIL = {
+  added: 'заказ ещё не оплачен — результат прибора можно «Привязать» после оплаты',
+  cancelled: 'заказ отменён',
+  canceled: 'заказ отменён',
+  refunded: 'по заказу возврат',
+};
+function gateRefusal(order) {
+  if (LAB_RESULT_STATUSES.includes(order.status)) return null;
+  return GATE_DETAIL[order.status] || 'заказ не в работе лаборатории (статус «' + (STATUS_WORDS[order.status] || order.status) + '»)';
 }
 const STATUS_WORDS = {
   added: 'ожидает оплату', queued: 'ждёт забора пробы', collected: 'проба взята',
@@ -559,6 +587,18 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   if (!order.is_lab) {
     record({ ...base, visitServiceId: linkId, status: 'unmatched',
       detail: 'услуга «' + (order.service_name || order.service_id) + '» не помечена как лабораторная' });
+    return 'AA';
+  }
+  // LIS_REAL_ANALYZERS_V1 (ревью R7, п. 1) — ворота лаборатории, те же, что у
+  // ручного ввода: неоплаченный, отменённый, возвращённый заказ прибор не
+  // заполняет и в «результаты внесены» не переводит (иначе после этого
+  // открывался и ручной ввод). Строка лотка — с заказом, только если номер —
+  // этикетка LAB- (или номер назвал человек), как у прочих отказов; голый
+  // номер не привязывает. Оплатили — «Привязать» её к тому же заказу. Серия
+  // такого заказа тоже ничего не переводит: до неё приём не доходит.
+  const gate = gateRefusal(order);
+  if (gate) {
+    record({ ...base, visitServiceId: linkId, status: 'unmatched', detail: gate });
     return 'AA';
   }
 

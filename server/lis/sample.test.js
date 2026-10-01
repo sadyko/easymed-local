@@ -184,9 +184,12 @@ test('два разных LAB- в OBR-2 и OBR-3 — unmatched с причино
 
 // ── Голые цифры: только открытый заказ последних 7 дней ─────────────────────
 
-test('голые цифры принимаются для открытого заказа: added, queued, collected, in_progress, resulted', () => {
+// LIS_REAL_ANALYZERS_V1 (ревью R7, п. 1) — «ожидает оплату» (added) больше не
+// принимается и голым номером: ворота лаборатории те же, что у ручного ввода
+// (тест ниже).
+test('голые цифры принимаются для открытого заказа: queued, collected, in_progress, resulted', () => {
   assert.equal(BARE_ID_MAX_AGE_DAYS, 7);
-  for (const st of ['added', 'queued', 'collected', 'in_progress', 'resulted']) {
+  for (const st of ['queued', 'collected', 'in_progress', 'resulted']) {
     const db = clinic({ orders: [{ id: 123, status: st }] });
     ingestMessage(db, HEM('', '123'), '10.0.0.9', 1);
     assert.equal(last(db).visit_service_id, 123, st);
@@ -583,5 +586,18 @@ test('R2 п. 14: голый номер открытого свежего зак�
   assert.equal(last(db).status, 'superseded');
   assert.equal(last(db).visit_service_id, 123);
   assert.equal(results(db)[0].value, '5.5', 'выданный не переписан');
+  db.close();
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R7, п. 1 ─────────────────────────────────
+test('R7 п. 1: голые цифры к неоплаченному заказу — та же причина, что у этикетки; без привязки, ничего не записано', () => {
+  const db = clinic({ orders: [{ id: 123, status: 'added' }] });
+  assert.equal(ingestMessage(db, HEM('', '123'), '10.0.0.9', 1), 'AA');
+  const m = last(db);
+  assert.equal(m.status, 'unmatched');
+  assert.equal(m.visit_service_id, null, 'голый номер отказа заказ не привязывает');
+  assert.equal(m.detail, 'заказ ещё не оплачен — результат прибора можно «Привязать» после оплаты');
+  assert.equal(results(db).length, 0);
+  assert.equal(status(db, 123), 'added');
   db.close();
 });

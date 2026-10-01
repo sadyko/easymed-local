@@ -34,6 +34,17 @@
 /** Статусы, означающие «над пациентом уже работают». */
 export const WORK_STATUSES = Object.freeze(['collected', 'in_progress', 'resulted', 'completed']);
 
+/**
+ * INPATIENT_MONEY_FIX_V1 — где результат анализа принимается: оплачен
+ * ('queued' — «Забор»), проба взята, в работе, готов или уже проверен
+ * (правка). Неоплаченный ('added'), отменённый, возвращённый — нет.
+ * LIS_REAL_ANALYZERS_V1 (ревью R7, п. 1) — ОДИН список для обеих дверей:
+ * ручной ввод (rpc/lab.js saveLabResults) и прибор (server/lis/ingest.js).
+ * Прибор с первого выпуска LIS проверял только «выдан» и писал в
+ * неоплаченный и отменённый заказ, открывая после этого и ручной ввод.
+ */
+export const LAB_RESULT_STATUSES = Object.freeze(['queued', 'collected', 'in_progress', 'resulted', 'completed']);
+
 const holes = (a) => a.map(() => '?').join(',');
 
 /**

@@ -1027,22 +1027,32 @@ test('R4 п. C: статус до прибора неизвестен — зак
 // стать «ждёт забора»: это открыло бы ворота кассы — saveLabResults принял бы
 // результат неоплаченного анализа. Счёт строки оплачен, частично или в долг —
 // «ждёт забора пробы»; нет — «ожидает оплату». Отменён и возвращён — как были.
-function withInvoice(db, status) {
-  db.prepare("INSERT INTO invoices (id, patient_id, status) VALUES (900, 3, ?)").run(status);
+function withInvoice(db, kind) {
+  // Ревью R7, п. 2 — счёт плательщику (не оплачен), он же аннулированный, счёт на ноль.
+  const [status, payer, total] = kind === 'payer' ? ['unpaid', 7, 100] : kind === 'payer-void' ? ['void', 7, 100]
+    : kind === 'zero' ? ['unpaid', null, 0] : [kind, null, 100];
+  if (payer) db.prepare("INSERT INTO payers (id, name) VALUES (7, 'Страховая')").run();
+  db.prepare('INSERT INTO invoices (id, patient_id, status, payer_id, total_amount) VALUES (900, 3, ?, ?, ?)').run(status, payer, total);
   db.prepare('INSERT INTO invoice_items (id, invoice_id) VALUES (901, 900)').run();
   db.prepare('UPDATE visit_services SET invoice_item_id = 901 WHERE id = 123').run();
 }
-test('R5 п. 3, R6 п. 2: до прибора «ожидает оплату» — счёт не оплачен: снова «ожидает оплату» (касса закрыта); оплачен, частично, в долг: «ждёт забора пробы»; отменён и возвращён — как были', () => {
+// Ревью R7, п. 1 — прибор в такой заказ больше не пишет (ворота лаборатории),
+// и «до прибора было «ожидает оплату»» остаётся только у строк, записанных
+// раньше; правило восстановления — то же. Ревью R7, п. 2 — «оплачен» — ровно
+// как у кассы (billing.js): счёт оплачен, частично или в долг, ИЛИ счёт
+// плательщику (не аннулирован и не возвращён), ИЛИ счёт на ноль.
+test('R5 п. 3, R6 п. 2, R7 п. 2: до прибора «ожидает оплату» — счёт не отпущен: снова «ожидает оплату» (касса закрыта); оплачен, частично, в долг, плательщику, на ноль: «ждёт забора пробы»; отменён и возвращён — как были', () => {
   const cases = [[null, 'added', 'added'], ['unpaid', 'added', 'added'], ['paid', 'added', 'queued'], ['partial', 'added', 'queued'], ['debt', 'added', 'queued'],
+    ['payer', 'added', 'queued'], ['payer-void', 'added', 'added'], ['zero', 'added', 'queued'],
     [null, 'cancelled', 'cancelled'], [null, 'refunded', 'refunded']];
   const words = { added: 'ожидает оплату', queued: 'ждёт забора пробы', cancelled: 'отменён', refunded: 'возвращён' };
   for (const [invoice, before, want] of cases) {
     const db = reattachClinic();
     if (invoice) withInvoice(db, invoice);
-    db.prepare('UPDATE visit_services SET status = ? WHERE id = 123').run(before);
     ingestMessage(db, BS2('LAB-000123', '2', 'GLU', '5.5'), '10.0.0.40', 1);
     const glu = newest(db);
-    assert.equal(db.prepare('SELECT lis_status_before AS s FROM visit_services WHERE id = 123').get().s, before);
+    // Строка, записанная прибором до ревью R7: статус до прибора — «before».
+    db.prepare('UPDATE visit_services SET lis_status_before = ? WHERE id = 123').run(before);
     const out = lisMessageAttach(db, { id: glu.id, visit_service_id: 124 }, LAB);
     const label = (invoice || 'без счёта') + ' / ' + before;
     assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = 123').get().status, want, label);
@@ -1083,4 +1093,29 @@ test('R6 п. 3: отклонённая строка значение не при
   assert.deepEqual(formOf(db2, 123), { 'Глюкоза': '5.5' });
   assert.equal(db2.prepare('SELECT source_message_id AS s FROM lab_results WHERE visit_service_id = 123').get().s, applied);
   db2.close();
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R7, п. 1 ─────────────────────────────────
+// Проба неоплаченного заказа — в лоток, бланк не тронут; касса приняла оплату
+// (строка — «ждёт забора пробы»), «Привязать» строку лотка к тому же заказу —
+// принято.
+test('R7 п. 1: не оплачен — в лоток; оплатили — «Привязать» к тому же заказу — значения легли', () => {
+  const db = reattachClinic();
+  db.prepare("UPDATE visit_services SET status = 'added' WHERE id = 123").run();
+  ingestMessage(db, BS2('LAB-000123', '2', 'GLU', '5.5'), '10.0.0.40', 1);
+  const row = newest(db);
+  assert.equal(row.status, 'unmatched');
+  assert.equal(row.detail, 'заказ ещё не оплачен — результат прибора можно «Привязать» после оплаты');
+  assert.deepEqual(formOf(db, 123), {});
+  // «Привязать» до оплаты — тот же отказ, бланк не тронут.
+  const early = lisMessageAttach(db, { id: row.id, visit_service_id: 123 }, LAB);
+  assert.equal(early.status, 'unmatched');
+  assert.deepEqual(formOf(db, 123), {});
+  db.prepare("UPDATE visit_services SET status = 'queued' WHERE id = 123").run();   // касса приняла оплату
+  const again = newest(db);
+  const out = lisMessageAttach(db, { id: again.id, visit_service_id: 123 }, LAB);
+  assert.equal(out.ok, true);
+  assert.deepEqual(formOf(db, 123), { 'Глюкоза': '5.5' });
+  assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = 123').get().status, 'resulted');
+  db.close();
 });
