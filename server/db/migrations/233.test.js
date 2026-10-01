@@ -92,7 +92,9 @@ test('233: на живой базе прежние строки — result и 0,
     // Ревью R4, п. A — бэкфилла нет: прежнее подтверждение — без прибора
     // (NULL). У BS-200 это «не подтверждено» (ingest.js), у кодов
     // производителя отметка не читается.
-    assert.deepEqual({ ...db.prepare('SELECT device_code_confirmed AS c, device_code_confirmed_device_id AS d FROM lab_panel_analytes WHERE id = 1').get() }, { c: 1, d: null });
+    assert.deepEqual({ ...db.prepare('SELECT device_code_confirmed AS c, device_code_confirmed_device_id AS d, device_code_confirmed_epoch AS e FROM lab_panel_analytes WHERE id = 1').get() }, { c: 1, d: null, e: null });
+    // Ревью R6, п. 1 — эпоха кодов прибора у прежних строк — 0.
+    assert.equal(db.prepare('SELECT code_epoch AS e FROM lab_devices WHERE id = 1').get().e, 0);
   } finally { db.close(); }
 });
 
@@ -103,11 +105,16 @@ test('233 (R4): новые колонки — без значения по ум�
   try {
     migrate(db);
     for (const [t, c, type] of [['lab_panel_analytes', 'device_code_confirmed_device_id', 'INTEGER'], ['lab_results', 'source_message_id', 'INTEGER'],
-      ['lab_device_messages', 'disputes', 'TEXT'], ['visit_services', 'lis_status_before', 'TEXT']]) {
+      ['lab_device_messages', 'disputes', 'TEXT'], ['visit_services', 'lis_status_before', 'TEXT'],
+      ['lab_panel_analytes', 'device_code_confirmed_epoch', 'INTEGER']]) {   // ревью R6, п. 1
       const k = col(db, t, c);
       assert.ok(k, t + '.' + c);
       assert.deepEqual([k.type, k.notnull, k.dflt_value], [type, 0, null], t + '.' + c);
     }
+    // Ревью R6, п. 1 — эпоха кодов прибора: 0, пока адрес строки BS-200 не меняли.
+    const ep = col(db, 'lab_devices', 'code_epoch');
+    assert.ok(ep, 'lab_devices.code_epoch');
+    assert.deepEqual([ep.type, ep.notnull, ep.dflt_value], ['INTEGER', 1, '0']);
   } finally { db.close(); }
 });
 
@@ -145,8 +152,12 @@ test('233: в файле только ADD COLUMN, индекс и триггер
     assert.equal(body.split(';').filter((s) => s.trim()).length, 1, 'одна инструкция: ' + body);
     assert.match(body, /^UPDATE lab_panel_analytes SET device_code_confirmed_device_id = CASE[\s\S]*WHERE id = NEW\.id;$/);
   }
-  const addr = /\bBEGIN\b([\s\S]*)\bEND;/i.exec(trigs[2])[1].trim();
-  assert.equal(addr, 'UPDATE lab_panel_analytes SET device_code_confirmed_device_id = NULL WHERE device_code_confirmed_device_id = NEW.id;');
+  // Ревью R6, п. 1 — и эпоха кодов прибора +1.
+  const addr = /\bBEGIN\b([\s\S]*)\bEND;/i.exec(trigs[2])[1].trim().split(/;\s*/).filter(Boolean);
+  assert.deepEqual(addr, [
+    'UPDATE lab_panel_analytes SET device_code_confirmed_device_id = NULL, device_code_confirmed_epoch = NULL WHERE device_code_confirmed_device_id = NEW.id',
+    'UPDATE lab_devices SET code_epoch = code_epoch + 1 WHERE id = NEW.id',
+  ]);
   assert.ok(!/ON lab_panels\b/i.test(all), 'смена прибора панели ничего не переписывает');
   let code = all;
   for (const t of trigs) code = code.replace(t, '');
@@ -154,7 +165,7 @@ test('233: в файле только ADD COLUMN, индекс и триггер
   assert.ok(!/\bDROP\b/i.test(code));
   assert.ok(!/^\s*UPDATE\s/im.test(code), 'данные миграция не правит');
   assert.ok(!/\bDELETE\b/i.test(all));
-  assert.equal((code.match(/ALTER\s+TABLE\s+\w+\s+ADD\s+COLUMN/gi) || []).length, 7);
+  assert.equal((code.match(/ALTER\s+TABLE\s+\w+\s+ADD\s+COLUMN/gi) || []).length, 9);
 });
 
 test('233: реестр схемы — dial читается и пишется человеком; sending_facility и kind пишет только сервер', () => {
@@ -175,6 +186,13 @@ test('233: реестр схемы — dial читается и пишется �
   assert.ok(an.read.columns.includes('device_code_confirmed_device_id'));
   assert.ok(an.write.insert.columns.includes('device_code_confirmed_device_id'));
   assert.ok(!an.write.update.columns.includes('device_code_confirmed_device_id'));
+  // Ревью R6, п. 1 — эпоха: редактор передаёт её вместе с отметкой; эпоху
+  // прибора пишет только триггер адреса.
+  assert.ok(an.read.columns.includes('device_code_confirmed_epoch'));
+  assert.ok(an.write.insert.columns.includes('device_code_confirmed_epoch'));
+  assert.ok(!an.write.update.columns.includes('device_code_confirmed_epoch'));
+  assert.ok(dev.read.columns.includes('code_epoch'));
+  assert.ok(!dev.write.insert.columns.includes('code_epoch') && !dev.write.update.columns.includes('code_epoch'));
   // Источник значения, разобранные споры, статус до прибора — пишет только сервер.
   assert.ok(!REGISTRY.lab_results.write.insert.columns.includes('source_message_id'));
   assert.ok(!REGISTRY.lab_results.write.update.columns.includes('source_message_id'));
@@ -220,11 +238,15 @@ function devices(db) {
   db.prepare(`INSERT INTO lab_devices (id, name, profile) VALUES (1, 'BS-200', 'mindray-bs-200'), (2, 'BS-200 (2)', 'mindray-bs-200'),
               (3, 'BC-5300', 'mindray-bc-5300')`).run();
 }
-const insA = (db, { code = 'GLU', name = 'Глюкоза', dc = '2', confirmed = 1, claim, panel = 5 } = {}) => (claim === undefined
+const insA = (db, { code = 'GLU', name = 'Глюкоза', dc = '2', confirmed = 1, claim, epoch, panel = 5 } = {}) => (claim === undefined
   ? db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, device_code, device_code_confirmed) VALUES (?, ?, ?, '', ?, ?)`).run(panel, code, name, dc, confirmed)
-  : db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, device_code, device_code_confirmed, device_code_confirmed_device_id)
-                VALUES (?, ?, ?, '', ?, ?, ?)`).run(panel, code, name, dc, confirmed, claim)).lastInsertRowid;
+  : epoch === undefined
+    ? db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, device_code, device_code_confirmed, device_code_confirmed_device_id)
+                  VALUES (?, ?, ?, '', ?, ?, ?)`).run(panel, code, name, dc, confirmed, claim)
+    : db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, device_code, device_code_confirmed, device_code_confirmed_device_id, device_code_confirmed_epoch)
+                  VALUES (?, ?, ?, '', ?, ?, ?, ?)`).run(panel, code, name, dc, confirmed, claim, epoch)).lastInsertRowid;
 const stampOf = (db, id) => db.prepare('SELECT device_code_confirmed_device_id AS d FROM lab_panel_analytes WHERE id = ?').get(id).d;
+const epochOf = (db, id) => db.prepare('SELECT device_code_confirmed_epoch AS e FROM lab_panel_analytes WHERE id = ?').get(id).e;   // ревью R6, п. 1
 /** Сохранение редактора: правка панели, вставка строк, удаление прежних. */
 function editorSave(db, deviceId, lines) {
   db.prepare('UPDATE lab_panels SET device_id = ? WHERE id = 5').run(deviceId);
@@ -353,11 +375,69 @@ test('233 (R5 п. 6): адрес или порт строки BS-200 смени�
   } finally { db.close(); }
 });
 
+// ── LIS_REAL_ANALYZERS_V1 — ревью R6 ───────────────────────────────────────
+
+// П. 1 — эпоха кодов прибора. Вкладка «Панели», открытая ДО смены адреса,
+// сохранила бы отметку прибора 1 снова — и триггер адреса был бы отменён.
+// Теперь у подтверждения есть и эпоха, которую экран видел при загрузке; смена
+// адреса BS-200 её увеличивает, и старая эпоха не совпадает никогда.
+test('233 (R6 п. 1): эпоха — что передал редактор (нет — NULL), наследуется вместе с отметкой; правка — эпоха прибора панели; смена адреса BS-200 — эпоха +1', () => {
+  const db = openDb(':memory:');
+  try {
+    migrate(db);
+    db.prepare("INSERT INTO lab_devices (id, name, profile, host, port) VALUES (1, 'BS-200', 'mindray-bs-200', '10.0.0.40', 2575), (2, 'BS-200 (2)', 'mindray-bs-200', '10.0.0.41', 2575)").run();
+    panelOn(db, 1);
+    const devEpoch = (id) => db.prepare('SELECT code_epoch AS e FROM lab_devices WHERE id = ?').get(id).e;
+    const a = insA(db, { claim: 1, epoch: 0 });
+    assert.deepEqual([stampOf(db, a), epochOf(db, a)], [1, 0]);
+    const b = insA(db, { code: 'UREA', name: 'Мочевина', dc: '3', claim: 1 });
+    assert.deepEqual([stampOf(db, b), epochOf(db, b)], [1, null], 'эпоху не передали — NULL (не совпадёт никогда)');
+    // Старая вкладка без отметки: отметка и эпоха — у прежней строки той же пары.
+    const [a2] = editorSave(db, 1, [{}]);
+    assert.deepEqual([stampOf(db, a2), epochOf(db, a2)], [1, 0]);
+    // Смена адреса строки BS-200: отметки сняты, эпоха прибора +1.
+    db.prepare("UPDATE lab_devices SET host = '10.0.0.50' WHERE id = 1").run();
+    assert.equal(devEpoch(1), 1);
+    assert.deepEqual([stampOf(db, a2), epochOf(db, a2)], [null, null]);
+    // Вкладка, открытая до смены адреса, сохранила отметку прибора 1 и эпоху 0 — так и записано: эпоха прибора уже 1.
+    const [stale] = editorSave(db, 1, [{ claim: 1, epoch: 0 }]);
+    assert.deepEqual([stampOf(db, stale), epochOf(db, stale), devEpoch(1)], [1, 0, 1]);
+    // Правка строки (подтвердили заново) — эпоха прибора панели сейчас.
+    db.prepare('UPDATE lab_panel_analytes SET device_code_confirmed = 0 WHERE id = ?').run(stale);
+    db.prepare('UPDATE lab_panel_analytes SET device_code_confirmed = 1 WHERE id = ?').run(stale);
+    assert.deepEqual([stampOf(db, stale), epochOf(db, stale)], [1, 1]);
+    db.prepare("UPDATE lab_panel_analytes SET name = 'Глюкоза крови' WHERE id = ?").run(stale);
+    assert.equal(epochOf(db, stale), 1, 'прочая правка эпоху не трогает');
+    assert.equal(devEpoch(2), 0, 'чужая строка не тронута');
+  } finally { db.close(); }
+});
+
+// П. 4 — края триггера адреса.
+test('233 (R6 п. 4): BS-200 → BC-5300 и новый адрес одной правкой — отметки сняты; регистр букв адреса — не смена; порт впервые — не смена', () => {
+  const db = openDb(':memory:');
+  try {
+    migrate(db);
+    db.prepare(`INSERT INTO lab_devices (id, name, profile, host, port) VALUES (1, 'BS-200', 'mindray-bs-200', 'BS200-LAB', 2575),
+                (2, 'BS-200 (2)', 'mindray-bs-200', '10.0.0.41', NULL)`).run();
+    panelOn(db, 1);
+    const a = insA(db, { claim: 1, epoch: 0 });
+    const b = insA(db, { code: 'UREA', name: 'Мочевина', dc: '3', claim: 2, epoch: 0 });
+    db.prepare("UPDATE lab_devices SET host = 'bs200-lab' WHERE id = 1").run();
+    assert.equal(stampOf(db, a), 1, 'регистр букв адреса — тот же адрес');
+    db.prepare('UPDATE lab_devices SET port = 2575 WHERE id = 2').run();
+    assert.equal(stampOf(db, b), 2, 'порта не было — дописали, не смена (OLD.port IS NOT NULL)');
+    db.prepare("UPDATE lab_devices SET profile = 'mindray-bc-5300', host = '10.0.0.60' WHERE id = 1").run();
+    assert.equal(stampOf(db, a), null, 'была BS-200 — отметки сняты, хоть теперь и BC-5300');
+    assert.equal(db.prepare('SELECT code_epoch AS e FROM lab_devices WHERE id = 1').get().e, 1);
+  } finally { db.close(); }
+});
+
 test('233 (R5 п. 6): список профилей в триггере адреса — ровно профили с codesPerInstrument', async () => {
   const { listProfiles } = await import('../../lis/profiles/index.js');
   const want = listProfiles().filter((p) => p.codesPerInstrument).map((p) => p.key).sort();
-  const m = /ON lab_devices[\s\S]*?profile IN \(([^)]*)\)/i.exec(SQL);
-  assert.ok(m, 'триггер со списком профилей');
-  const got = m[1].split(',').map((x) => x.trim().replace(/^'|'$/g, '')).sort();
-  assert.deepEqual(got, want);
+  const trig = /CREATE TRIGGER[^;]*ON lab_devices[\s\S]*?\bEND;/i.exec(SQL);
+  assert.ok(trig, 'триггер адреса');
+  const lists = [...trig[0].matchAll(/profile IN \(([^)]*)\)/gi)];
+  assert.equal(lists.length, 2, 'OLD.profile и NEW.profile (ревью R6, п. 4)');
+  for (const m of lists) assert.deepEqual(m[1].split(',').map((x) => x.trim().replace(/^'|'$/g, '')).sort(), want);
 });

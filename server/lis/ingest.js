@@ -55,6 +55,21 @@ export const BARE_ID_MAX_AGE_DAYS = 7;
 const OPEN_LAB_STATUSES = new Set(['added', 'queued', 'collected', 'in_progress', 'resulted']);
 /** LIS_REAL_ANALYZERS_V1 (ревью R5, п. 3) — куда «Привязать» может вернуть опустевший заказ: статусы лаборатории. */
 const LAB_SIDE_STATUSES = new Set(['queued', 'collected', 'in_progress']);
+/** LIS_REAL_ANALYZERS_V1 (ревью R6, п. 2) — и эти — как были: отменённый и возвращённый заказ таким и остаётся. */
+const KEEP_STATUSES = new Set(['cancelled', 'canceled', 'refunded']);
+
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R6, п. 2) — счёт строки заказа оплачен,
+ * частично или в долг: ровно то, после чего касса переводит строку из
+ * «ожидает оплату» в очередь (billing.js).
+ */
+function linePaid(db, vsId) {
+  const r = db.prepare(`SELECT i.status FROM visit_services vs
+                          JOIN invoice_items ii ON ii.id = vs.invoice_item_id
+                          JOIN invoices i ON i.id = ii.invoice_id
+                         WHERE vs.id = ?`).get(vsId);
+  return !!(r && ['paid', 'partial', 'debt'].includes(r.status));
+}
 const STATUS_WORDS = {
   added: 'ожидает оплату', queued: 'ждёт забора пробы', collected: 'проба взята',
   in_progress: 'в работе', resulted: 'результаты внесены', completed: 'выдан',
@@ -253,10 +268,13 @@ function dismissedChange(db, orderId) {
  * остаётся при заказе, а человеку сказано проверить бланк (legacy).
  * П. C — опустевший бланк (ни значения, ни примечания) возвращает заказ из
  * «результаты внесены» в статус до прибора (lis_status_before), если это
- * статус лаборатории; «ожидает оплату» — в «ждёт забора пробы» (ревью R5,
- * п. 3); неизвестен или другой — «в работе».
+ * статус лаборатории, «отменён» или «возвращён»; «ожидает оплату» — в «ждёт
+ * забора пробы», если счёт строки оплачен (иначе так и остаётся «ожидает
+ * оплату»: ревью R5, п. 3; R6, п. 2); неизвестен или другой — «в работе».
  * Ревью R5, п. 1 — значение, оставленное потому, что то же прислала другая
- * строка этого заказа, переходит к ней (source_message_id).
+ * строка этого заказа, переходит к ней (source_message_id); R6, п. 3 — только
+ * к неразобранной: сперва к принятой (applied), иначе к той, что можно
+ * «Привязать»; нет такой — снимается.
  * @returns {{fromOrderId:number|null, taken:string[], kept:Array<{name:string, why:string}>,
  *            legacy:boolean, unlinked:boolean, status:string|null, statusWord:string|null}}
  *   status — куда вернулся первый заказ, если его бланк опустел; statusWord — он же словами.
@@ -288,9 +306,12 @@ export function takeBackValues(db, msg, toOrderId) {
         continue;
       }
       if (!others) {
-        others = db.prepare(`SELECT id, raw, device_id, detail FROM lab_device_messages
+        // Ревью R6, п. 3 — только строки, которые не разобраны человеком
+        // («Отклонить», «Привязать» ставят resolved_at): отклонённую строку
+        // «Привязать» уже нельзя, и значение, перешедшее к ней, застряло бы.
+        others = db.prepare(`SELECT id, raw, device_id, detail, status FROM lab_device_messages
                               WHERE visit_service_id = ? AND id <> ? AND kind = 'result' AND status IN ('applied', 'unmapped')
-                                AND instr(COALESCE(detail, ''), ?) = 0
+                                AND resolved_at IS NULL AND instr(COALESCE(detail, ''), ?) = 0
                               ORDER BY id DESC LIMIT ?`).all(fromId, msg.id, REATTACHED_NOTE, SERIES_MAX_MESSAGES)
           .filter((r) => !BEFORE_BLANK.test(String(r.detail || '')));
       }
@@ -299,10 +320,15 @@ export function takeBackValues(db, msg, toOrderId) {
       // Иначе, привязав потом и её, снимать было бы нечего: у неё «своих»
       // строк нет, и значение пациента другого заказа оставалось бы здесь
       // молча. Эта строка своих значений здесь больше не держит.
-      const heir = others.find((o) => { const v = deliveredValue(db, o, a); return v != null && sameValue(v, sent); });
+      // Ревью R6, п. 3 — сперва принятая (applied) строка этого заказа: это
+      // его собственная проба с тем же значением, и значение остаётся по
+      // праву; иначе строка, которую ещё можно «Привязать»; нет такой —
+      // значение снимается, как обычно. В журнале — номер строки.
+      const same = others.filter((o) => { const v = deliveredValue(db, o, a); return v != null && sameValue(v, sent); });
+      const heir = same.find((o) => o.status === 'applied') || same[0];
       if (heir) {
         db.prepare('UPDATE lab_results SET source_message_id = ? WHERE id = ?').run(heir.id, row.id);
-        out.kept.push({ name: row.parameter, why: 'то же значение пришло другим сообщением' });
+        out.kept.push({ name: row.parameter, why: 'то же значение пришло другим сообщением — теперь за строкой № ' + heir.id });
         continue;
       }
       db.prepare('DELETE FROM lab_results WHERE id = ?').run(row.id);
@@ -328,13 +354,17 @@ export function takeBackValues(db, msg, toOrderId) {
                                AND (TRIM(COALESCE(value, '')) <> '' OR TRIM(COALESCE(notes, '')) <> '')`).get(fromId).c;
     const ord = db.prepare('SELECT status, lis_status_before FROM visit_services WHERE id = ?').get(fromId);
     if (!left && ord && ord.status === 'resulted') {
-      // Ревью R5, п. 3 — только статусы лаборатории. «Ожидает оплату» до
-      // прибора после оплаты устарел (касса строку «результаты внесены» не
-      // трогает: billing.js), и оплаченный заказ вернулся бы в «ожидает
-      // оплату»: проба уже была в приборе — «ждёт забора пробы». Неизвестен
-      // или другой (отменён и прочее) — «в работе».
+      // Ревью R5, п. 3; R6, п. 2 — статусы лаборатории, «отменён» и
+      // «возвращён» — как были. «Ожидает оплату» до прибора после оплаты
+      // устарел (касса строку «результаты внесены» не трогает: billing.js) —
+      // счёт строки оплачен, частично или в долг: «ждёт забора пробы»; иначе
+      // снова «ожидает оплату»: «ждёт забора» открыл бы кассу — результат
+      // неоплаченного анализа (rpc/lab.js saveLabResults). Неизвестен или
+      // другой — «в работе».
       const was = ord.lis_status_before;
-      out.status = LAB_SIDE_STATUSES.has(was) ? was : (was === 'added' ? 'queued' : 'in_progress');
+      if (LAB_SIDE_STATUSES.has(was) || KEEP_STATUSES.has(was)) out.status = was;
+      else if (was === 'added') out.status = linePaid(db, fromId) ? 'queued' : 'added';
+      else out.status = 'in_progress';
       out.statusWord = STATUS_WORDS[out.status];
       db.prepare("UPDATE visit_services SET status = ?, lis_status_before = NULL WHERE id = ? AND status = 'resulted'").run(out.status, fromId);
     }
@@ -573,7 +603,7 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // неизвестный прибор при панели на строке BS-240. Тогда значения пишет только
   // прибор панели — и только в строки, подтверждённые для него (ниже).
   const sender = deviceId ? db.prepare('SELECT profile, name FROM lab_devices WHERE id = ?').get(deviceId) : null;
-  const panelDev = db.prepare('SELECT profile, name, sending_app, sending_facility FROM lab_devices WHERE id = ?').get(panel.device_id);
+  const panelDev = db.prepare('SELECT profile, name, sending_app, sending_facility, code_epoch FROM lab_devices WHERE id = ?').get(panel.device_id);   // code_epoch: ревью R6, п. 1
   const panelProfile = panelDev ? getProfile(panelDev.profile) : null;
   const messageModel = guessProfile({ app: head.app, facility: head.facility });
   const panelModel = panelDev ? guessProfile({ app: panelDev.sending_app, facility: panelDev.sending_facility }) : null;
@@ -643,9 +673,15 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // Данное для другого прибора — и до мигр. 233 (NULL) — здесь «не
   // подтверждено»: значение в бланк не идёт (D4), проба — в лоток с причиной.
   // У кодов производителя отметка не читается.
+  // Ревью R6, п. 1 — и эпоха кодов прибора: подтверждение действует, только
+  // если дано при нынешней эпохе прибора (lab_devices.code_epoch растёт со
+  // сменой адреса строки BS-200). Вкладка, открытая до смены адреса,
+  // сохраняет прежнюю эпоху — и не совпадает; NULL не совпадает никогда.
   const rawAnalytes = db.prepare('SELECT * FROM lab_panel_analytes WHERE panel_id = ? AND active = 1 ORDER BY sort_order, id').all(panel.id);
+  const epochNow = panelDev ? panelDev.code_epoch : null;
   const stale = pi ? rawAnalytes.filter((a) => a.device_code_confirmed && String(a.device_code == null ? '' : a.device_code).trim()
-    && a.device_code_confirmed_device_id !== panel.device_id) : [];
+    && (a.device_code_confirmed_device_id !== panel.device_id || a.device_code_confirmed_epoch == null
+        || a.device_code_confirmed_epoch !== epochNow)) : [];
   const analytes = stale.length ? rawAnalytes.map((a) => (stale.includes(a) ? { ...a, device_code_confirmed: 0 } : a)) : rawAnalytes;
   const plan = planObservations(observations, analytes);
   const codeKey = (s) => String(s == null ? '' : s).trim().toUpperCase();

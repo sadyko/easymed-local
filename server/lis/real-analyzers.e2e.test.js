@@ -137,8 +137,9 @@ function seedClinic(db) {
 function bindPanel(db, { id, serviceId, deviceId, name, lines }) {
   db.prepare('INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (?, ?, ?, ?)').run(id, name, serviceId, deviceId);
   lines.forEach(([code, label, unit, deviceCode], i) => db.prepare(`INSERT INTO lab_panel_analytes
-      (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed, device_code_confirmed_device_id) VALUES (?, ?, ?, ?, ?, ?, 1, ?)`)
-    .run(id, code, label, unit, i + 1, deviceCode, deviceId));
+      (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed, device_code_confirmed_device_id, device_code_confirmed_epoch)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, (SELECT code_epoch FROM lab_devices WHERE id = ?))`)
+    .run(id, code, label, unit, i + 1, deviceCode, deviceId, deviceId));   // и эпоха кодов прибора, которую видел экран (ревью R6, п. 1)
 }
 
 const blank = (db, vsId) => Object.fromEntries(db.prepare('SELECT parameter, value FROM lab_results WHERE visit_service_id = ? ORDER BY id').all(vsId).map((r) => [r.parameter, r.value]));
@@ -497,8 +498,8 @@ test('BS-200 сменил адрес: лоток с понятной причи�
     // подтвердил (lab-panels.js savePanel), и удаляет прежние.
     const oldRows = db.prepare('SELECT * FROM lab_panel_analytes WHERE panel_id = 5 ORDER BY sort_order').all();
     for (const r of oldRows) {
-      db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed, device_code_confirmed_device_id)
-                  VALUES (5, ?, ?, ?, ?, ?, 1, ?)`).run(r.code, r.name, r.unit, r.sort_order, r.device_code, newDev.id);
+      db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed, device_code_confirmed_device_id, device_code_confirmed_epoch)
+                  VALUES (5, ?, ?, ?, ?, ?, 1, ?, ?)`).run(r.code, r.name, r.unit, r.sort_order, r.device_code, newDev.id, newDev.code_epoch);
       db.prepare('DELETE FROM lab_panel_analytes WHERE id = ?').run(r.id);
     }
     assert.deepEqual(stamps(), [[1, newDev.id], [1, newDev.id], [1, newDev.id]]);

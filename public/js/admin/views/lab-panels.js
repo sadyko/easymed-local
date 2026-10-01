@@ -50,7 +50,7 @@ const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагнос
 //      lab-section role (LAB_PANELS_BY_SECTION_V1).
 // v8 = one shared page head for queue+panels; marker moved off-screen into
 //      the data-attribute above; queue filter chips translate label-then-count.
-export const LAB_BUILD = 'lab-v21';   // v21 — подтверждение без отметки прибора сохраняется «ни для какого», модель и по имени прибора (LIS_REAL_ANALYZERS_V1, ревью R5) · v20 — подтверждение помнит прибор: «подтверждено для другого прибора — подтвердите заново» (LIS_REAL_ANALYZERS_V1, ревью R4) · v19 — смена BS-200 у панели снимает подтверждения (LIS_REAL_ANALYZERS_V1, ревью R3) · LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1); v17 — одно поле прибора под двумя именами (LIS_DISCOVERY_FIX_V1); v18 — «12 · GLU», подсказка «коды появятся», типовые BC-780 по соседним моделям (LIS_REAL_ANALYZERS_V1)
+export const LAB_BUILD = 'lab-v22';   // v22 — эпоха кодов прибора: подтверждение до смены адреса BS-200 — «подтвердите заново», окно, открытое до смены, не сохраняет (LIS_REAL_ANALYZERS_V1, ревью R6) · v21 — подтверждение без отметки прибора сохраняется «ни для какого», модель и по имени прибора (LIS_REAL_ANALYZERS_V1, ревью R5) · v20 — подтверждение помнит прибор: «подтверждено для другого прибора — подтвердите заново» (LIS_REAL_ANALYZERS_V1, ревью R4) · v19 — смена BS-200 у панели снимает подтверждения (LIS_REAL_ANALYZERS_V1, ревью R3) · LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1); v17 — одно поле прибора под двумя именами (LIS_DISCOVERY_FIX_V1); v18 — «12 · GLU», подсказка «коды появятся», типовые BC-780 по соседним моделям (LIS_REAL_ANALYZERS_V1)
 
 // LIS_REAL_ANALYZERS_V1 — у модели нет типового списка (BS-200, A1000), а прибор ещё ничего не присылал.
 const NO_DEVICE_CODES_HINT = 'Коды появятся, когда анализатор пришлёт первую пробу; номер теста — как в настройках тестов прибора. Пока код можно вписать руками.';
@@ -58,6 +58,8 @@ const NO_DEVICE_CODES_HINT = 'Коды появятся, когда анализ
 const STALE_CONFIRM_HINT = 'подтверждено для другого прибора — подтвердите заново';
 // LIS_REAL_ANALYZERS_V1 (ревью R4, п. A) — прибор панели сменился, а его модель экрану неизвестна (не загрузились модели или модель не опознана).
 const RECONFIRM_UNKNOWN = 'Анализатор панели сменился, а модель прибора неизвестна — подтверждения полей анализатора сняты, подтвердите каждое заново.';
+// LIS_REAL_ANALYZERS_V1 (ревью R6, п. 1) — адрес, порт или эпоха кодов прибора панели сменились, пока окно было открыто.
+const ADDRESS_CHANGED = 'Адрес анализатора изменился, пока окно было открыто — обновите страницу и подтвердите номера тестов заново';
 
 // LIS_DISCOVERY_FIX_V1 (экран) — какое ПОЛЕ ПРИБОРА стоит за кодом строки
 // бланка. Прибор называет поле двумя именами сразу — «6690-2^WBC^LN», — и приём
@@ -162,7 +164,8 @@ export async function mountLabPanels(container) {
             // не фатален: колонка «Поле анализатора» просто не появится, а
             // панель по-прежнему заполняется руками.
             // LIS_REAL_ANALYZERS_V1 (ревью R5, п. 5) — и как прибор назвал себя (MSH-3/4): модель BS-200 узнаётся и по имени.
-            supabase.from('lab_devices').select('id, name, profile, enabled, added, sending_app, sending_facility').order('name'),
+            // Ревью R6, п. 1 — адрес, порт и эпоха кодов прибора: подтверждение несёт эпоху, сохранение сверяет адрес.
+            supabase.from('lab_devices').select('id, name, profile, enabled, added, sending_app, sending_facility, host, port, code_epoch').order('name'),
             supabase.rpc('lis_profiles', {}),
         ]);
         if (panelsRes.error)   state.loadError = trf('панели: {msg}', { msg: panelsRes.error.message || panelsRes.error });
@@ -919,9 +922,15 @@ export async function mountLabPanels(container) {
     // LIS_REAL_ANALYZERS_V1 (ревью R4, п. A) — подтверждение помнит прибор
     // панели, для которого дано (device_code_confirmed_device_id, мигр. 233):
     // сохранение передаёт его, и база ставит отметку по нему.
+    // Ревью R6, п. 1 — и эпоху кодов этого прибора, которую видит экран
+    // (lab_devices.code_epoch): смена адреса строки BS-200 её увеличивает, и
+    // подтверждение, данное раньше, не совпадёт — на экране и на приёме.
     function setConfirmed(r, on) {
+        const dev = on ? (Number(state.selected && state.selected.device_id) || null) : null;
+        const d = dev ? state.devices.find(x => x.id === dev) : null;
         r.device_code_confirmed = on ? 1 : 0;
-        r.device_code_confirmed_device_id = on ? (Number(state.selected && state.selected.device_id) || null) : null;
+        r.device_code_confirmed_device_id = dev;
+        r.device_code_confirmed_epoch = d && d.code_epoch != null ? Number(d.code_epoch) : null;
     }
     /** Профиль модели прибора или null — прибор не найден или модель экрану неизвестна. */
     function deviceProfile(id) {
@@ -948,8 +957,13 @@ export async function mountLabPanels(container) {
     function staleConfirm(r) {
         if (!r.device_code_confirmed || !(r.device_code || '').trim()) return false;
         const dev = Number(state.selected && state.selected.device_id) || null;
-        if (!dev || Number(r.device_code_confirmed_device_id || 0) === dev) return false;
-        return !deviceProfile(dev) || !!perInstrumentModel(dev);   // ревью R5, п. 5 — и по имени прибора
+        if (!dev) return false;
+        if (deviceProfile(dev) && !perInstrumentModel(dev)) return false;   // коды производителя; ревью R5, п. 5 — и по имени прибора
+        // Ревью R6, п. 1 — другой прибор, или эпоха кодов прибора не та (адрес
+        // строки BS-200 сменили после подтверждения), или эпохи нет.
+        const d = state.devices.find(x => x.id === dev);
+        return Number(r.device_code_confirmed_device_id || 0) !== dev || r.device_code_confirmed_epoch == null
+            || !d || Number(r.device_code_confirmed_epoch) !== Number(d.code_epoch || 0);
     }
 
     /**
@@ -1133,6 +1147,20 @@ export async function mountLabPanels(container) {
                 { list: clashes.map(g => g.names.join(', ') + ' (' + g.codes.join(' / ') + ')').join('; ') }), 'fail');
             return;
         }
+        // LIS_REAL_ANALYZERS_V1 (ревью R6, п. 1) — адрес, порт или эпоха кодов
+        // прибора панели сменились, пока окно было открыто («Изменить» в
+        // «Анализаторах»): подтверждения в этом окне даны для прежнего адреса.
+        // База их и так не примет (эпоха), но сохранять их незачем — человек
+        // обновит страницу и подтвердит заново. Только у BS-200 и неизвестной
+        // модели: у кодов производителя адрес номеров тестов не меняет.
+        const devId = Number(fields.device_id || (state.selected && state.selected.device_id)) || null;   // прибор панели (выбор держит p.device_id)
+        if (devId && (!deviceProfile(devId) || perInstrumentModel(devId))) {
+            const seen = state.devices.find(x => x.id === devId);
+            const { data: fresh, error: freshErr } = await supabase.from('lab_devices').select('id, host, port, code_epoch').eq('id', devId);
+            const now = (fresh || []).find(x => Number(x.id) === devId);
+            const norm = (d) => [String(d.host == null ? '' : d.host).trim().toLowerCase(), d.port == null ? null : Number(d.port), Number(d.code_epoch || 0)].join('|');
+            if (!freshErr && seen && now && norm(now) !== norm(seen)) { toast(tr(ADDRESS_CHANGED), 'fail'); return; }
+        }
         const p = state.selected;
         try {
             let panelId = p.id;
@@ -1179,6 +1207,9 @@ export async function mountLabPanels(container) {
                 // панели («Копировать») идёт этим же путём — отметки как есть.
                 device_code_confirmed_device_id: r.device_code_confirmed
                     ? (r.device_code_confirmed_device_id != null ? Number(r.device_code_confirmed_device_id) : 0) : null,
+                // Ревью R6, п. 1 — эпоха кодов прибора, при которой подтверждено.
+                device_code_confirmed_epoch: r.device_code_confirmed && r.device_code_confirmed_device_id != null && r.device_code_confirmed_epoch != null
+                    ? Number(r.device_code_confirmed_epoch) : null,
             }));
             if (ins.length) {
                 let { error } = await supabase.from('lab_panel_analytes').insert(ins);

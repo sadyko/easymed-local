@@ -533,8 +533,8 @@ function chem({ profile = 'mindray-bs-200', lines = [['GLU', 'Глюкоза', '
   // Ревью R5, п. 2 — «подтверждено человеком для прибора 1» — отметкой: без
   // неё вставка — «ни для какого прибора».
   lines.forEach(([code, name, dc], i) => {
-    db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed, device_code_confirmed_device_id)
-                VALUES (5, ?, ?, '', ?, ?, ?, ?)`).run(code, name, i + 1, dc, unconfirmed.includes(code) ? 0 : 1, unconfirmed.includes(code) ? null : 1);
+    db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed, device_code_confirmed_device_id, device_code_confirmed_epoch)
+                VALUES (5, ?, ?, '', ?, ?, ?, ?, ?)`).run(code, name, i + 1, dc, unconfirmed.includes(code) ? 0 : 1, unconfirmed.includes(code) ? null : 1, unconfirmed.includes(code) ? null : 0);   // эпоха 0: ревью R6, п. 1
   });
   return db;
 }
@@ -1178,5 +1178,32 @@ test('R5 п. 4: «5,10», потом «5.1» — повторная переда
   ingestMessage(db, BS('2', 'test2', '5.1'), '10.0.0.40', 1);
   assert.ok(!/повтор:/.test(message(db).detail), message(db).detail);
   assert.match(message(db).detail, /повторная передача: 2 \(test2\)/);
+  db.close();
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R6, п. 1 ─────────────────────────────────
+// Вкладка «Панели», открытая ДО смены адреса BS-200, сохраняет и заново шлёт
+// отметку прибора 1 — триггер адреса был бы отменён, и другой BS-200 по
+// новому адресу писал бы креатинин в «Глюкозу». Подтверждение несёт эпоху
+// кодов прибора, которую видел экран; смена адреса её увеличивает.
+test('R6 п. 1: адрес BS-200 сменили, старая вкладка сохранила прежнюю отметку — в бланк не идёт; подтвердили заново — идёт', () => {
+  const db = chem();
+  db.prepare("UPDATE lab_devices SET host = '10.0.0.40' WHERE id = 1").run();
+  db.prepare("UPDATE lab_devices SET host = '10.0.0.77' WHERE id = 1").run();
+  assert.equal(db.prepare('SELECT code_epoch AS e FROM lab_devices WHERE id = 1').get().e, 1);
+  // Старая вкладка: правка панели, вставка строк с отметкой 1 и эпохой 0, удаление прежних.
+  const old = db.prepare('SELECT * FROM lab_panel_analytes WHERE panel_id = 5').all();
+  for (const r of old) {
+    db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed, device_code_confirmed_device_id, device_code_confirmed_epoch)
+                VALUES (5, ?, ?, '', ?, ?, 1, 1, 0)`).run(r.code, r.name, r.sort_order, r.device_code);
+    db.prepare('DELETE FROM lab_panel_analytes WHERE id = ?').run(r.id);
+  }
+  ingestMessage(db, BS('2', 'CREA', '88'), '10.0.0.77', 1);
+  assert.deepEqual(blank(db), {}, 'креатинин прибора по новому адресу не лёг в «Глюкозу»');
+  assert.match(message(db).detail, /подтверждено для другого прибора — подтвердите заново в «Лаборатория → Панели»: Глюкоза \(2\)/);
+  // Подтвердили заново на свежем экране — эпоха 1.
+  db.prepare("UPDATE lab_panel_analytes SET device_code_confirmed_epoch = 1 WHERE panel_id = 5 AND code = 'GLU'").run();
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.77', 1);
+  assert.equal(blank(db)['Глюкоза'], '5');
   db.close();
 });

@@ -1251,7 +1251,7 @@ export const REGISTRY = {
   // Лаборатория → «Анализаторы». Принадлежность ЗДАНИЮ: в справочник филиалов
   // не едут, потому что прибор соседнего здания в нашей базе бессмыслен.
   lab_devices: {
-    read:  { roles: ALL_STAFF, columns: ['id','name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','last_seen_at','created_at','discovered','added','model_confirmed','sending_app','dial','sending_facility'] },   // discovered: LIS_AUTODISCOVER_V1 (mig 124) — ставит только сервер; added, model_confirmed: LIS_ANALYZER_LIST_V1 (мигр. 228); sending_app: LIS_DISCOVERY_FIX_V1 (сервер) (мигр. 229) — как прибор назвал себя сам (MSH-3), пишет только сервер, в insert/update её нет; dial, sending_facility: LIS_REAL_ANALYZERS_V1 (мигр. 233) — dial: Easy-Med подключается к прибору сам (пишет человек: «Добавить по адресу», «Изменить»); sending_facility: MSH-4, пишет только сервер, в insert/update её нет
+    read:  { roles: ALL_STAFF, columns: ['id','name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','last_seen_at','created_at','discovered','added','model_confirmed','sending_app','dial','sending_facility','code_epoch'] },   // discovered: LIS_AUTODISCOVER_V1 (mig 124) — ставит только сервер; added, model_confirmed: LIS_ANALYZER_LIST_V1 (мигр. 228); sending_app: LIS_DISCOVERY_FIX_V1 (сервер) (мигр. 229) — как прибор назвал себя сам (MSH-3), пишет только сервер, в insert/update её нет; dial, sending_facility: LIS_REAL_ANALYZERS_V1 (мигр. 233) — dial: Easy-Med подключается к прибору сам (пишет человек: «Добавить по адресу», «Изменить»); sending_facility: MSH-4, пишет только сервер, в insert/update её нет; code_epoch (ревью R6): эпоха кодов прибора — пишет только триггер адреса мигр. 233, в insert/update её нет
     write: { insert: { roles: LAB_SECTION_ROLES, columns: ['name','profile','transport','host','port','folder_path','serial_port','serial_baud','enabled','dial'] },   // dial: LIS_REAL_ANALYZERS_V1
              // LIS_ANALYZER_LIST_V1 (ревью C1) — discovered в update НЕТ: это
              // правило приёма, а не пометка. discover.js не сверяет модель у
@@ -1301,10 +1301,10 @@ export const REGISTRY = {
     // триггера мигр. 233. Правкой строки её не задать (в update её нет).
     read:  { roles: ALL_STAFF, columns: ['id','panel_id','code','name','unit','value_type','value_options','decimals',
              'ref_low','ref_high','ref_text','ref_low_m','ref_high_m','ref_low_f','ref_high_f','group_label','sort_order','ref_ranges','active','created_at',
-             'device_code','device_code_confirmed','device_code_confirmed_device_id'] },   // LIS_REAL_ANALYZERS_V1 (ревью R4)
+             'device_code','device_code_confirmed','device_code_confirmed_device_id','device_code_confirmed_epoch'] },   // LIS_REAL_ANALYZERS_V1 (ревью R4; эпоха — R6)
     write: { insert: { roles: LAB_SECTION_ROLES, columns: ['panel_id','code','name','unit','value_type','value_options','decimals',
                'ref_low','ref_high','ref_text','ref_low_m','ref_high_m','ref_low_f','ref_high_f','group_label','sort_order','ref_ranges','active',
-               'device_code','device_code_confirmed','device_code_confirmed_device_id'] },   // LIS_REAL_ANALYZERS_V1 (ревью R4)
+               'device_code','device_code_confirmed','device_code_confirmed_device_id','device_code_confirmed_epoch'] },   // LIS_REAL_ANALYZERS_V1 (ревью R4; эпоха — R6)
              update: { roles: LAB_SECTION_ROLES, columns: ['code','name','unit','value_type','value_options','decimals',
                'ref_low','ref_high','ref_text','ref_low_m','ref_high_m','ref_low_f','ref_high_f','group_label','sort_order','ref_ranges','active',
                'device_code','device_code_confirmed'] },

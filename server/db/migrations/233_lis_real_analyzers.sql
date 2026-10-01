@@ -46,6 +46,13 @@ CREATE INDEX IF NOT EXISTS idx_lab_device_messages_service
 -- сохранение редактора: правка панели, потом вставка строк заново).
 ALTER TABLE lab_panel_analytes ADD COLUMN device_code_confirmed_device_id INTEGER;
 
+-- Ревью R6, п. 1 — и ЭПОХА кодов прибора, которую видел экран, когда человек
+-- подтверждал (lab_devices.code_epoch, ниже). Смена адреса строки BS-200
+-- эпоху увеличивает: вкладка «Панели», открытая до смены, сохранила бы
+-- прежнюю отметку прибора снова — а с прежней эпохой подтверждение не
+-- совпадает никогда (ingest.js). NULL — не совпадает никогда.
+ALTER TABLE lab_panel_analytes ADD COLUMN device_code_confirmed_epoch INTEGER;
+
 -- Ставит отметку база, на каждом пути записи. Вставка (редактор панелей
 -- сохраняет так: правка lab_panels, вставка новых строк, удаление прежних —
 -- lab-panels.js savePanel; он же сохраняет копию панели):
@@ -62,6 +69,8 @@ ALTER TABLE lab_panel_analytes ADD COLUMN device_code_confirmed_device_id INTEGE
 --   свежее подтверждение человека на экране. Иначе подтверждение до этой
 --   миграции «отмывалось» бы в копии панели и у строки, которой переставили
 --   код (креатинин второго BS-200 ложился в «Глюкозу»).
+-- Эпоха (ревью R6, п. 1) — та, что передал редактор вместе с прибором (не
+-- передал — NULL); без прибора — NULL; унаследованная — вместе с отметкой.
 CREATE TRIGGER IF NOT EXISTS trg_lab_panel_analytes_confirm_ins
 AFTER INSERT ON lab_panel_analytes
 BEGIN
@@ -73,14 +82,25 @@ BEGIN
                AND UPPER(TRIM(o.device_code)) = UPPER(TRIM(NEW.device_code))
                AND TRIM(COALESCE(o.name, '')) = TRIM(COALESCE(NEW.name, ''))
              ORDER BY o.id LIMIT 1)
+    END,
+    device_code_confirmed_epoch = CASE
+      WHEN NEW.device_code_confirmed IS NOT 1 OR TRIM(COALESCE(NEW.device_code, '')) = '' THEN NULL
+      WHEN NEW.device_code_confirmed_device_id IS NOT NULL
+        THEN CASE WHEN NEW.device_code_confirmed_device_id = 0 THEN NULL ELSE NEW.device_code_confirmed_epoch END
+      ELSE (SELECT o.device_code_confirmed_epoch FROM lab_panel_analytes o
+             WHERE o.panel_id = NEW.panel_id AND o.id < NEW.id AND o.device_code_confirmed = 1
+               AND UPPER(TRIM(o.device_code)) = UPPER(TRIM(NEW.device_code))
+               AND TRIM(COALESCE(o.name, '')) = TRIM(COALESCE(NEW.name, ''))
+             ORDER BY o.id LIMIT 1)
     END
   WHERE id = NEW.id;
 END;
 
 -- Правка строки: подтвердили (было не подтверждено) или сменили код — прибор
--- панели сейчас; подтверждение и код прежние — прежняя отметка; не
--- подтверждено или кода нет — NULL. Через /api/db отметку правкой не задать
--- (реестр), и без смены подтверждения или кода триггер её не трогает.
+-- панели и его эпоха сейчас; подтверждение и код прежние — прежние отметка и
+-- эпоха; не подтверждено или кода нет — NULL. Через /api/db ни отметку, ни
+-- эпоху правкой не задать (реестр), и без смены подтверждения или кода
+-- триггер их не трогает.
 CREATE TRIGGER IF NOT EXISTS trg_lab_panel_analytes_confirm_upd
 AFTER UPDATE OF device_code_confirmed, device_code ON lab_panel_analytes
 BEGIN
@@ -89,6 +109,12 @@ BEGIN
       WHEN OLD.device_code_confirmed IS 1
        AND UPPER(TRIM(COALESCE(OLD.device_code, ''))) = UPPER(TRIM(NEW.device_code)) THEN OLD.device_code_confirmed_device_id
       ELSE (SELECT p.device_id FROM lab_panels p WHERE p.id = NEW.panel_id)
+    END,
+    device_code_confirmed_epoch = CASE
+      WHEN NEW.device_code_confirmed IS NOT 1 OR TRIM(COALESCE(NEW.device_code, '')) = '' THEN NULL
+      WHEN OLD.device_code_confirmed IS 1
+       AND UPPER(TRIM(COALESCE(OLD.device_code, ''))) = UPPER(TRIM(NEW.device_code)) THEN OLD.device_code_confirmed_epoch
+      ELSE (SELECT d.code_epoch FROM lab_panels p JOIN lab_devices d ON d.id = p.device_id WHERE p.id = NEW.panel_id)
     END
   WHERE id = NEW.id;
 END;
@@ -107,13 +133,22 @@ ALTER TABLE lab_results ADD COLUMN source_message_id INTEGER;
 -- codesPerInstrument (тест 233.test.js сверяет). Строку, заведённую другой
 -- моделью, а называющую себя BS-200, триггер не узнаёт — известное
 -- ограничение (спецификация, «Реализация»).
+-- Ревью R6: эпоха кодов прибора +1 (п. 1) — отметку, сохранённую вкладкой,
+-- открытой до смены, приём не примет; и прежняя модель тоже (п. 4: BS-200 →
+-- BC-5300 с новым адресом одной правкой); регистр букв адреса — не смена.
+
+-- Ревью R6, п. 1 — эпоха кодов прибора: растёт со сменой адреса или порта
+-- строки BS-200 (триггер ниже). Пишет только триггер.
+ALTER TABLE lab_devices ADD COLUMN code_epoch INTEGER NOT NULL DEFAULT 0;
+
 CREATE TRIGGER IF NOT EXISTS trg_lab_devices_address_unstamp
 AFTER UPDATE OF host, port ON lab_devices
-WHEN NEW.profile IN ('mindray-bs-200')
- AND ((TRIM(COALESCE(OLD.host, '')) <> '' AND TRIM(COALESCE(OLD.host, '')) IS NOT TRIM(COALESCE(NEW.host, '')))
+WHEN (OLD.profile IN ('mindray-bs-200') OR NEW.profile IN ('mindray-bs-200'))
+ AND ((TRIM(COALESCE(OLD.host, '')) <> '' AND LOWER(TRIM(COALESCE(OLD.host, ''))) IS NOT LOWER(TRIM(COALESCE(NEW.host, ''))))
       OR (OLD.port IS NOT NULL AND OLD.port IS NOT NEW.port))
 BEGIN
-  UPDATE lab_panel_analytes SET device_code_confirmed_device_id = NULL WHERE device_code_confirmed_device_id = NEW.id;
+  UPDATE lab_panel_analytes SET device_code_confirmed_device_id = NULL, device_code_confirmed_epoch = NULL WHERE device_code_confirmed_device_id = NEW.id;
+  UPDATE lab_devices SET code_epoch = code_epoch + 1 WHERE id = NEW.id;
 END;
 
 -- Ревью R4, п. D — споры «повтор» этой строки лотка структурой:
@@ -125,7 +160,9 @@ ALTER TABLE lab_device_messages ADD COLUMN disputes TEXT;
 -- Ревью R4, п. C — статус заказа до того, как прибор поставил «результаты
 -- внесены». «Привязать» к другому заказу, опустошившее бланк, возвращает
 -- его, если это статус лаборатории («ждёт забора», «проба взята», «в
--- работе»); «ожидает оплату» после оплаты устарел (касса строку «результаты
--- внесены» не трогает) — «ждёт забора» (ревью R5, п. 3); неизвестен или
--- другой — «в работе».
+-- работе»), отменён или возвращён; «ожидает оплату» — «ждёт забора», если
+-- счёт строки оплачен, частично или в долг (после оплаты он устарел: касса
+-- строку «результаты внесены» не трогает), иначе «ожидает оплату» — касса
+-- остаётся закрытой (ревью R5, п. 3; R6, п. 2); неизвестен или другой — «в
+-- работе».
 ALTER TABLE visit_services ADD COLUMN lis_status_before TEXT;

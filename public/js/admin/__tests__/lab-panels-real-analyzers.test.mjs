@@ -120,13 +120,15 @@ const analyte = (over = {}) => ({ id: 'a-1', panel_id: 'p-1', code: 'GLU', name:
   ref_low: null, ref_high: null, group_label: '', sort_order: 0, ref_ranges: null, device_code: '', device_code_confirmed: 0, ...over });
 let ANALYTES = [analyte()];
 const SERVICES = [{ id: 's-1', name: 'Биохимия', type: 'lab', is_lab: true, department_id: 'd-1', type_id: null }];
+// Ревью R6, п. 1 — адрес, порт и эпоха кодов прибора (code_epoch): экран
+// передаёт эпоху вместе с отметкой и сверяет адрес перед сохранением.
 const DEVICES = [
-  { id: 1, name: 'BS-200', profile: 'mindray-bs-200', enabled: 1, added: 1 },
-  { id: 2, name: 'BC-780', profile: 'mindray-bc-780', enabled: 1, added: 1 },
-  { id: 3, name: 'BS-200 (2)', profile: 'mindray-bs-200', enabled: 1, added: 1 },   // ревью R3, п. 2
-  { id: 4, name: 'BC-780 (2)', profile: 'mindray-bc-780', enabled: 1, added: 1 },
+  { id: 1, name: 'BS-200', profile: 'mindray-bs-200', enabled: 1, added: 1, host: '10.0.0.40', port: 2575, code_epoch: 0 },
+  { id: 2, name: 'BC-780', profile: 'mindray-bc-780', enabled: 1, added: 1, host: '10.0.0.30', port: 5600, code_epoch: 0 },
+  { id: 3, name: 'BS-200 (2)', profile: 'mindray-bs-200', enabled: 1, added: 1, host: '10.0.0.41', port: 2575, code_epoch: 0 },   // ревью R3, п. 2
+  { id: 4, name: 'BC-780 (2)', profile: 'mindray-bc-780', enabled: 1, added: 1, host: '10.0.0.31', port: 5600, code_epoch: 0 },
   // ревью R5, п. 5 — BS-200, заведённый как BS-240: модель выдаёт имя, которым он назвался (MSH-3/4)
-  { id: 5, name: 'BS-240', profile: 'mindray-bs-240', enabled: 1, added: 1, sending_app: 'Mindray', sending_facility: 'BS-200E' },
+  { id: 5, name: 'BS-240', profile: 'mindray-bs-240', enabled: 1, added: 1, sending_app: 'Mindray', sending_facility: 'BS-200E', host: '10.0.0.42', port: 2575, code_epoch: 0 },
 ];
 const PROFILES = [
   { key: 'mindray-bs-200', vendor: 'Mindray', model: 'BS-200', channelsSource: 'device', wireSource: 'documented', channels: [], codesPerInstrument: true, aliases: ['BS-200', 'BS-200E'] },
@@ -300,7 +302,7 @@ test('R4 п. A: строка подтверждена для другого BS-2
 test('R4 п. A: подтверждение до обновления (без прибора) у BS-200 — тоже «подтвердите заново»; своё — нет', async () => {
   const root = await mountPanels({ analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: null })] });
   assert.ok(textOf(root).includes(STALE));
-  const own = await mountPanels({ analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: 1 })] });
+  const own = await mountPanels({ analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: 1, device_code_confirmed_epoch: 0 })] });
   assert.ok(!textOf(own).includes(STALE));
 });
 
@@ -376,6 +378,61 @@ test('R5 п. 5: строка заведена как BS-240, а прибор н�
   assert.ok(textOf(root).includes(STALE), 'сказано у строки');
   const dev = reads.find((r) => r.table === 'lab_devices');
   assert.ok(dev && /sending_app/.test(dev.columns) && /sending_facility/.test(dev.columns), 'экран читает, как прибор назвался: ' + (dev && dev.columns));
-  const own = await mountPanels({ deviceId: 5, analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: 5 })] });
+  const own = await mountPanels({ deviceId: 5, analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: 5, device_code_confirmed_epoch: 0 })] });
   assert.ok(!textOf(own).includes(STALE));
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R6, п. 1 ─────────────────────────────────
+// Эпоха кодов прибора: смена адреса строки BS-200 её увеличивает (триггер
+// мигр. 233). Подтверждение несёт эпоху, которую видел экран; другая эпоха —
+// «подтвердите заново». Окно, открытое до смены адреса, сохранить нельзя.
+const ADDRESS_CHANGED = 'Адрес анализатора изменился, пока окно было открыто — обновите страницу и подтвердите номера тестов заново';
+
+test('R6 п. 1: эпоха строки не та, что у прибора, — «подтвердите заново»; подтвердили — в сохранение уходит эпоха прибора', async () => {
+  DEVICES[0].code_epoch = 1;
+  try {
+    const root = await mountPanels({ analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: 1, device_code_confirmed_epoch: 0 })] });
+    assert.ok(textOf(root).includes(STALE), 'эпоха 0, у прибора 1');
+    findByAriaLabel(root, 'Подтвердить сопоставление').click();
+    await tick(30);
+    assert.ok(!textOf(root).includes(STALE));
+    findButtonByText(root, /Сохранить панель/).click();
+    await tick(80);
+    const r = insertedRow();
+    assert.ok(r, 'сохранено: ' + toastMsg);
+    assert.deepStrictEqual([r.device_code_confirmed_device_id, r.device_code_confirmed_epoch], [1, 1]);
+  } finally { DEVICES[0].code_epoch = 0; }
+});
+
+test('R6 п. 1: строка, сохранённая как есть, везёт свою эпоху; без отметки — без эпохи', async () => {
+  const root = await mountPanels({ analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: 1, device_code_confirmed_epoch: 0 }),
+    analyte({ id: 'a-2', code: 'UREA', name: 'Мочевина', device_code: '3', device_code_confirmed: 1, device_code_confirmed_device_id: null, sort_order: 1 })] });
+  findButtonByText(root, /Сохранить панель/).click();
+  await tick(80);
+  const ins = writes.find((w) => w.table === 'lab_panel_analytes' && w.op === 'insert');
+  assert.deepStrictEqual([].concat(ins.values).map((r) => [r.device_code_confirmed_device_id, r.device_code_confirmed_epoch]), [[1, 0], [0, null]]);
+});
+
+test('R6 п. 1: адрес, порт или эпоха прибора панели сменились, пока окно открыто, — сохранить нельзя, сказано обновить страницу', async () => {
+  for (const [key, value] of [['host', '10.0.0.77'], ['port', 5601], ['code_epoch', 1]]) {
+    const was = DEVICES[0][key];
+    const root = await mountPanels({ analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: 1, device_code_confirmed_epoch: 0 })] });
+    DEVICES[0][key] = value;   // «Изменить» в «Анализаторах» в другой вкладке
+    try {
+      findButtonByText(root, /Сохранить панель/).click();
+      await tick(80);
+      assert.ok(!writes.some((w) => w.table === 'lab_panel_analytes' || w.table === 'lab_panels'), key + ': ничего не записано');
+      assert.ok(String(toastMsg).includes(ADDRESS_CHANGED), key + ': ' + toastMsg);
+    } finally { DEVICES[0][key] = was; }
+  }
+});
+
+test('R6 п. 1: у кодов производителя (BC-780) смена адреса сохранению не мешает', async () => {
+  const root = await mountPanels({ deviceId: 2, analytes: [analyte({ device_code: 'WBC', device_code_confirmed: 1, device_code_confirmed_device_id: 2 })] });
+  DEVICES[1].host = '10.0.0.99';
+  try {
+    findButtonByText(root, /Сохранить панель/).click();
+    await tick(80);
+    assert.ok(insertedRow(), 'сохранено: ' + toastMsg);
+  } finally { DEVICES[1].host = '10.0.0.30'; }
 });
