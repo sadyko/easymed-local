@@ -979,7 +979,7 @@ export async function mountLabPanels(container) {
         // прибора: тот же вид, кнопка и подсказка «подтвердите заново».
         const stale = staleConfirm(r);
         const suggested = !!(r.device_code || '').trim() && (!r.device_code_confirmed || stale);
-        const staleNote = stale ? h('span', { class: 'muted', style: { fontSize: '12px' } }, tr(STALE_CONFIRM_HINT)) : null;
+        const staleNote = stale ? h('span', { class: 'muted', style: { fontSize: '12.5px' } }, tr(STALE_CONFIRM_HINT)) : null;
         const UNCONFIRMED_LOOK = { opacity: '0.65', fontStyle: 'italic' };
         const confirmButton = () => h('button', {
             class: 'lp-ic', type: 'button', title: 'Подтвердить это сопоставление',
