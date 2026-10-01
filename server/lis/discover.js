@@ -16,7 +16,7 @@
 // которую искали по угаданной модели, после правки терялась: следующая проба
 // заводила дубль, а панели исправленной строки уходили в лоток (S5). Имя,
 // которым прибор назвался сам, человек не правит — на нём различение и держится.
-import { listProfiles } from './profiles/index.js';
+import { listProfiles, aliasesOf } from './profiles/index.js';   // aliasesOf: LIS_REAL_ANALYZERS_V1_MODEL
 
 // Потолок на находки: порт неаутентифицирован, и без предела кто угодно в сети
 // клиники мог бы наплодить строк. Двадцать приборов — это больше, чем есть у
@@ -32,23 +32,54 @@ const DEFAULT_PORT = 2575;
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 /**
- * Профиль по тому, как прибор себя назвал в MSH-3. null — не узнали, и это
- * законно: у прибора останется пустая модель, а лаборант выберет её сам.
+ * LIS_REAL_ANALYZERS_V1_MODEL — модель «содержится» в имени, только если сразу
+ * за ней не цифра: «bs200» не узнаётся в «bs2000m», «bc20» — в «bc2006»; за
+ * моделью буква или конец — узнаётся («bs200e», «bc20s», «mindraybc5300»).
  */
-export function guessProfile(sendingApp) {
-  const want = norm(sendingApp);
-  if (!want) return null;
-  const all = listProfiles();
-  // Точное совпадение модели — единственный надёжный случай.
-  const exact = all.find((p) => norm(p.model) === want);
-  if (exact) return exact;
-  // «MINDRAY BC-5300» или «BC-5300 v2» — имя прибора содержит модель. Берём
-  // самую длинную из подошедших: «BC-5300» точнее, чем «BC-20», если строка
-  // содержит обе.
-  const contains = all
-    .filter((p) => norm(p.model).length >= 4 && want.includes(norm(p.model)))
-    .sort((a, b) => norm(b.model).length - norm(a.model).length);
-  return contains[0] || null;
+function containsModel(name, model) {
+  for (let i = name.indexOf(model); i !== -1; i = name.indexOf(model, i + 1)) {
+    if (!/[0-9]/.test(name.charAt(i + model.length))) return true;
+  }
+  return false;
+}
+
+/**
+ * Профиль по тому, как прибор себя назвал. null — не узнали, и это законно: у
+ * прибора останется пустая модель, а лаборант выберет её сам.
+ *
+ * LIS_REAL_ANALYZERS_V1_MODEL — MSH-3 И MSH-4 по очереди, модель И псевдонимы
+ * профиля (aliases): так узнаются оба порядка — «производитель | модель»
+ * (BS-200: «Mindray|BS-200E», руководство, с. 7–8) и «модель | марка»
+ * (Autobio: «A1000|Autolumo»; гематология Mindray: «BC-780|Mindray»).
+ *   1. точное совпадение — сначала по MSH-3, потом по MSH-4;
+ *   2. «содержит» с границей-цифрой — сначала MSH-3, потом MSH-4; из
+ *      подошедших — самая длинная: «BC-5300» точнее, чем «BC-20»;
+ *   3. не узнали — null.
+ * Прежняя форма — строка MSH-3 — работает как раньше.
+ * @param {{app?: string, facility?: string}|string} who
+ */
+export function guessProfile(who) {
+  const { app = '', facility = '' } = who && typeof who === 'object' ? who : { app: who };
+  const names = [norm(app), norm(facility)].filter(Boolean);
+  if (!names.length) return null;
+  const all = listProfiles().map((p) => ({ p, keys: aliasesOf(p).map(norm).filter(Boolean) }));
+  // Точное совпадение модели или псевдонима — единственный надёжный случай.
+  for (const want of names) {
+    const exact = all.find(({ keys }) => keys.includes(want));
+    if (exact) return exact.p;
+  }
+  // «MINDRAY BC-5300» или «BC-5300 v2» — имя прибора содержит модель.
+  for (const want of names) {
+    let best = null;
+    let bestLen = 0;
+    for (const { p, keys } of all) {
+      for (const k of keys) {
+        if (k.length >= 4 && k.length > bestLen && containsModel(want, k)) { best = p; bestLen = k.length; }
+      }
+    }
+    if (best) return best;
+  }
+  return null;
 }
 
 /** Как прибор назвал себя — для сравнения: без пробелов вокруг и без учёта регистра. */
@@ -57,13 +88,26 @@ const appKey = (s) => String(s == null ? '' : s).trim().toLowerCase();
 const hasApp = (d) => appKey(d.sending_app) !== '';
 
 /**
+ * LIS_REAL_ANALYZERS_V1_MODEL — дописывает строке, как прибор назвал себя:
+ * MSH-3 (sending_app) и MSH-4 (sending_facility, мигр. 233). Каждое пишется,
+ * только если строка его ещё не знает: запомненное первым не перезаписывается
+ * — так же, как в бэкфилле мигр. 229. Пишет только сервер.
+ */
+function learn(db, dev, { app = '', facility = '' }) {
+  if (app && !hasApp(dev)) db.prepare('UPDATE lab_devices SET sending_app = ? WHERE id = ?').run(app, dev.id);
+  if (facility && String(dev.sending_facility == null ? '' : dev.sending_facility).trim() === '') {
+    db.prepare('UPDATE lab_devices SET sending_facility = ? WHERE id = ?').run(facility, dev.id);
+  }
+}
+
+/**
  * Дописывает строке адрес (если он передан) и имя отправителя и возвращает её
  * свежей. Имя пишется, только если строка его ещё не знает: запомненное первым
  * не перезаписывается — так же, как в бэкфилле мигр. 229.
  */
-function claim(db, dev, { host = '', app = '' }) {
+function claim(db, dev, { host = '', app = '', facility = '' }) {
   if (host) db.prepare('UPDATE lab_devices SET host = ? WHERE id = ?').run(host, dev.id);
-  if (app && !hasApp(dev)) db.prepare('UPDATE lab_devices SET sending_app = ? WHERE id = ?').run(app, dev.id);
+  learn(db, dev, { app, facility });   // LIS_REAL_ANALYZERS_V1_MODEL — и MSH-4
   return db.prepare('SELECT * FROM lab_devices WHERE id = ?').get(dev.id);
 }
 
@@ -72,6 +116,8 @@ function claim(db, dev, { host = '', app = '' }) {
  *
  * @param {object} o
  * @param {string} [o.sendingApp]  MSH-3, как прибор назвал себя ('' — не назвался)
+ * @param {string} [o.sendingFacility]  MSH-4 (LIS_REAL_ANALYZERS_V1_MODEL): только
+ *        для догадки о модели и показа; в различении приборов не участвует
  * @param {string} [o.peer]        адрес отправителя
  * @param {number} [o.port]        порт, на который пришло сообщение
  * @param {boolean} [o.allowCreate] false — сообщение не разобралось (мусор)
@@ -80,13 +126,17 @@ function claim(db, dev, { host = '', app = '' }) {
  *   исчерпан. Сообщение при этом всё равно сохранится в лотке (инвариант 2),
  *   просто без прибора.
  */
-export function ensureDevice(db, { sendingApp = '', peer = '', port = DEFAULT_PORT, allowCreate = true } = {}) {
+export function ensureDevice(db, { sendingApp = '', sendingFacility = '', peer = '', port = DEFAULT_PORT, allowCreate = true } = {}) {
   const ip = String(peer || '').replace(/^::ffff:/, '');
   const app = String(sendingApp == null ? '' : sendingApp).trim();
   const key = appKey(app);
   const listenPort = Number(port) || DEFAULT_PORT;
+  // LIS_REAL_ANALYZERS_V1_MODEL — MSH-4: модель угадывается и по нему (BS-200:
+  // «Mindray|BS-200E»), а строка его запоминает. Различение — по-прежнему
+  // адрес и MSH-3.
+  const facility = String(sendingFacility == null ? '' : sendingFacility).trim();
 
-  const guessed = guessProfile(app);
+  const guessed = guessProfile({ app, facility });
 
   // 1. Тот же адрес.
   //
@@ -103,6 +153,11 @@ export function ensureDevice(db, { sendingApp = '', peer = '', port = DEFAULT_PO
       //     ни были её модель и название сейчас. Их правит человек, и строка
       //     после правки обязана остаться своей (S5).
       const named = byHost.find((d) => appKey(d.sending_app) === key);
+      // LIS_REAL_ANALYZERS_V1_MODEL — строка, заведённая до мигр. 233, узнаёт
+      // MSH-4 со следующей пробы (бэкфилла нет).
+      if (named && facility && !String(named.sending_facility == null ? '' : named.sending_facility).trim()) {
+        return { device: claim(db, named, { facility }), created: false, reason: 'по адресу и имени' };
+      }
       if (named) return { device: named, created: false, reason: 'по адресу и имени' };
 
       // (б) Строки этого адреса, ещё не знающие имени, — заведённые до
@@ -114,7 +169,7 @@ export function ensureDevice(db, { sendingApp = '', peer = '', port = DEFAULT_PO
       // 10.0.0.9 стоит вот этот прибор»; если он ошибся с моделью, это его
       // ошибка и его правка, а не повод завести вторую строку у него за спиной.
       const byHuman = unnamed.find((d) => !d.discovered);
-      if (byHuman) return { device: claim(db, byHuman, { app }), created: false, reason: 'заведён человеком на этот адрес' };
+      if (byHuman) return { device: claim(db, byHuman, { app, facility }), created: false, reason: 'заведён человеком на этот адрес' };
       // Найденная строка без имени (старая, до мигр. 229) — по прежнему правилу
       // модели: её модель — наша догадка, и склеивать по ней два разных
       // аппарата нельзя. Модель не опознана — верим адресу, иначе незнакомый
@@ -122,7 +177,7 @@ export function ensureDevice(db, { sendingApp = '', peer = '', port = DEFAULT_PO
       const oldFound = guessed
         ? unnamed.find((d) => d.discovered && d.profile === guessed.key)
         : unnamed.find((d) => d.discovered);
-      if (oldFound) return { device: claim(db, oldFound, { app }), created: false, reason: guessed ? 'по адресу и модели' : 'по адресу' };
+      if (oldFound) return { device: claim(db, oldFound, { app, facility }), created: false, reason: guessed ? 'по адресу и модели' : 'по адресу' };
 
       // (в) Строки этого адреса знают другие имена (или это старая находка
       //     другой модели) — значит, за адресом другой прибор. Дальше по
@@ -159,7 +214,7 @@ export function ensureDevice(db, { sendingApp = '', peer = '', port = DEFAULT_PO
     const hostless = db.prepare("SELECT * FROM lab_devices WHERE discovered = 1 AND (host IS NULL OR host = '') ORDER BY id").all();
     const byName = hostless.find((d) => appKey(d.sending_app) === key)
       || hostless.find((d) => !hasApp(d) && d.name === app);
-    if (byName) return { device: claim(db, byName, { host: ip, app }), created: false, reason: 'по имени' };
+    if (byName) return { device: claim(db, byName, { host: ip, app, facility }), created: false, reason: 'по имени' };
   }
 
   // Мусор на порту не должен заводить приборов: сообщение, которое не удалось
@@ -198,9 +253,9 @@ export function ensureDevice(db, { sendingApp = '', peer = '', port = DEFAULT_PO
     .filter((d) => !(guessed && d.profile && d.profile !== guessed.key))
     .filter((d) => !hasApp(d) || (key && appKey(d.sending_app) === key));
   const knowsName = key ? hostless.find((d) => hasApp(d)) : null;
-  if (knowsName) return { device: claim(db, knowsName, { host: ip, app }), created: false, reason: 'без адреса, по имени' };
+  if (knowsName) return { device: claim(db, knowsName, { host: ip, app, facility }), created: false, reason: 'без адреса, по имени' };
   const free = hostless.filter((d) => !hasApp(d));
-  if (free.length === 1) return { device: claim(db, free[0], { host: ip, app }), created: false, reason: 'единственный без адреса' };
+  if (free.length === 1) return { device: claim(db, free[0], { host: ip, app, facility }), created: false, reason: 'единственный без адреса' };
 
   const found = db.prepare('SELECT COUNT(*) c FROM lab_devices WHERE discovered = 1').get().c;
   if (found >= MAX_DISCOVERED) return { device: null, created: false, reason: 'достигнут предел найденных приборов' };
@@ -219,9 +274,10 @@ export function ensureDevice(db, { sendingApp = '', peer = '', port = DEFAULT_PO
   // по тем же правилам.
   // LIS_DISCOVERY_FIX_V1 — находка сразу помнит, как прибор себя назвал
   // (NULL — не назвался): по этому имени она и найдётся после любой правки.
-  const id = db.prepare(`INSERT INTO lab_devices (name, profile, transport, host, port, enabled, discovered, added, sending_app)
-                         VALUES (?, ?, 'mllp', ?, ?, 1, 1, 0, ?)`)
-    .run(name, profile ? profile.key : '', ip, listenPort, app || null).lastInsertRowid;
+  // LIS_REAL_ANALYZERS_V1_MODEL — и MSH-4 (NULL — не назвался).
+  const id = db.prepare(`INSERT INTO lab_devices (name, profile, transport, host, port, enabled, discovered, added, sending_app, sending_facility)
+                         VALUES (?, ?, 'mllp', ?, ?, 1, 1, 0, ?, ?)`)
+    .run(name, profile ? profile.key : '', ip, listenPort, app || null, facility || null).lastInsertRowid;
 
   return { device: db.prepare('SELECT * FROM lab_devices WHERE id = ?').get(id), created: true, reason: 'заведён по первому сообщению' };
 }

@@ -49,7 +49,10 @@ test('каждый профиль говорит, ОТКУДА его списо
   // BC-3000 Plus напечатан в их руководствах целиком (приложения A и D).
   // Честность машинно-читаема: экран предупреждает «набор типовой» у всех,
   // кроме этих двух, — и заявить документ там, где его нет, тест не даст.
-  const allowed = ['documented', 'screenshot', 'conventional'];
+  // LIS_REAL_ANALYZERS_V1_PROFILES — 'device': типового списка нет, коды — из
+  // того, что прибор присылал (BS-200, A1000); 'siblings': по документам
+  // соседних моделей (BC-780).
+  const allowed = ['documented', 'screenshot', 'conventional', 'device', 'siblings'];
   const DOCUMENTED = new Set(['mindray-bc-2800', 'mindray-bc-3000-plus']);
   for (const p of listProfiles()) {
     assert.ok(allowed.includes(p.channelsSource), p.key + ': channelsSource=' + p.channelsSource);
@@ -78,4 +81,72 @@ test('канал ищется без учёта регистра — прибо�
   assert.equal(findChannel('mindray-bc-5300', 'wbc').code, 'WBC');
   assert.equal(findChannel('mindray-bc-5300', 'rdw-sd').code, 'RDW-SD');
   assert.equal(findChannel('mindray-bc-5300', 'нет'), null);
+});
+
+// ── LIS_REAL_ANALYZERS_V1_PROFILES — настоящие анализаторы клиники ──────────
+// (docs/specs/2026-10-01-lis-real-analyzers-design.md, раздел 9). Новые поля
+// профиля — ДАННЫЕ: aliases (как прибор может назвать себя), wire (провод:
+// поля номера пробы, кода и значения — wire.js), oneTestPerMessage (по одному
+// тесту в сообщении — серия, match.js), connect (кто звонит), wireSource
+// (откуда известен провод).
+
+test('три профиля клиники в списке, у каждого провод из известных', async () => {
+  const { WIRES } = await import('../wire.js');
+  for (const key of ['mindray-bs-200', 'autobio-autolumo-a1000', 'mindray-bc-780']) {
+    assert.ok(getProfile(key), 'нет профиля ' + key);
+  }
+  assert.equal(getProfile('mindray-bs-200').wire, 'mindray-chem');
+  assert.equal(getProfile('autobio-autolumo-a1000').wire, 'autobio-hl7');
+  assert.equal(getProfile('mindray-bc-780').wire, 'mindray-hematology');
+  for (const p of listProfiles()) {
+    assert.ok(WIRES.includes(p.wire || 'default'), p.key + ': провод ' + p.wire);
+  }
+});
+
+test('прежние профили провода не называют — читаются проводом default, как раньше', () => {
+  for (const key of ['mindray-bc-20', 'mindray-bc-5300', 'mindray-bs-240', 'mindray-cl-900i', 'mindray-bc-2800', 'mindray-bc-3000-plus']) {
+    const p = getProfile(key);
+    assert.equal(p.wire, undefined, key);
+    assert.ok(!p.oneTestPerMessage, key + ': серия — только у тех, кто шлёт по тесту');
+  }
+});
+
+test('BS-200 и A1000: типового списка нет, коды — от прибора; по одному тесту в сообщении', () => {
+  for (const key of ['mindray-bs-200', 'autobio-autolumo-a1000']) {
+    const p = getProfile(key);
+    assert.deepEqual(p.channels, [], key + ': набор тестов задают реагенты клиники, номер теста — не имя');
+    assert.equal(p.channelsSource, 'device', key);
+    assert.equal(p.oneTestPerMessage, true, key);
+    assert.equal(p.connect, 'listen', key);
+    assert.deepEqual(p.transports, ['mllp'], key);
+    assert.equal(p.defaultPort, 2575, key);
+  }
+  const bs = getProfile('mindray-bs-200');
+  assert.deepEqual([bs.vendor, bs.model, bs.kind, bs.wireSource], ['Mindray', 'BS-200', 'chemistry', 'documented']);
+  assert.deepEqual(bs.aliases, ['BS-200', 'BS-200E']);
+  const lumo = getProfile('autobio-autolumo-a1000');
+  assert.deepEqual([lumo.vendor, lumo.model, lumo.kind, lumo.wireSource], ['Autobio', 'AutoLumo A1000', 'immunoassay', 'driver']);
+  assert.deepEqual(lumo.aliases, ['AutoLumo A1000', 'Autolumo A1000', 'A1000']);
+});
+
+test('BC-780: 27 каналов по документам соседних моделей, код канала — имя (компонент 2 OBX-3)', () => {
+  const p = getProfile('mindray-bc-780');
+  assert.deepEqual([p.vendor, p.model, p.kind, p.wireSource, p.channelsSource, p.connect],
+    ['Mindray', 'BC-780', 'hematology', 'siblings', 'siblings', 'unknown']);
+  assert.deepEqual(p.aliases, ['BC-780', 'BC-780R']);
+  assert.ok(!p.oneTestPerMessage);
+  assert.equal(p.channels.length, 27);
+  // Тот же набор CBC + 5-diff, что у BC-5300 (снят с экрана Mindray).
+  assert.deepEqual(p.channels.map((c) => c.code).sort(), getProfile('mindray-bc-5300').channels.map((c) => c.code).sort());
+  assert.equal(findChannel('mindray-bc-780', 'WBC').code, 'WBC');
+  assert.equal(findChannel('mindray-bc-780', 'WBC').loinc, '6690-2', 'LOINC — подпись, не код: «6690-2^WBC^LN» ловится по имени');
+  assert.equal(findChannel('mindray-bc-780', 'HGB').loinc, '718-7');
+  assert.equal(findChannel('mindray-bc-780', 'ALY%').loinc, '', 'у ALY и LIC LOINC нет, как у BC-5300');
+});
+
+test('aliasesOf: у профиля без списка псевдоним — сама модель', async () => {
+  const { aliasesOf } = await import('./index.js');
+  assert.deepEqual(aliasesOf(getProfile('mindray-bc-5300')), ['BC-5300']);
+  assert.deepEqual(aliasesOf(getProfile('mindray-bs-200')), ['BS-200', 'BS-200E']);
+  assert.deepEqual(aliasesOf(null), []);
 });

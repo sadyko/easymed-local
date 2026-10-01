@@ -237,3 +237,33 @@ test('ADT^A01 по проводу: AR 200, прибор не заводится,
     db.close();
   }
 });
+
+// ── LIS_REAL_ANALYZERS_V1_MODEL — слушатель передаёт MSH-4 в ensureDevice ────
+// BS-200 называет себя «Mindray|BS-200E»: модель — в MSH-4. Находка помнит его
+// (sending_facility) и угадывает модель по нему.
+test('BS-200 по проводу: находка с моделью mindray-bs-200 и MSH-4 «BS-200E»', async () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  const port = await freePort();
+  const prevPort = process.env.LIS_PORT;
+  process.env.LIS_PORT = String(port);
+  try {
+    await startLisListeners(db, { log: () => {} });
+    const sock = await connect(port);
+    const reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from([
+      'MSH|^~\&|Mindray|BS-200E|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||',
+      'OBR|1|LAB-000123|2|Mindray^BS-200E|Y',
+      'OBX|1|NM|2|test2|5.000000|g/ml|-||||F|||||||',
+    ].join('\r'), 'utf8'), Buffer.from([FS, 0x0d])]));
+    assert.match(await reply, /MSA\|AA\|1\|/);
+    sock.destroy();
+    const dev = db.prepare('SELECT * FROM lab_devices').all();
+    assert.equal(dev.length, 1);
+    assert.deepEqual([dev[0].sending_app, dev[0].sending_facility, dev[0].profile], ['Mindray', 'BS-200E', 'mindray-bs-200']);
+  } finally {
+    await stopLisListeners();
+    if (prevPort === undefined) delete process.env.LIS_PORT; else process.env.LIS_PORT = prevPort;
+    db.close();
+  }
+});

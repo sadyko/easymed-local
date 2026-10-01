@@ -5,12 +5,13 @@
 // живёт только то, чего таблицей не выразить: перечень профилей, перезапуск
 // слушателей, разбор лотка и удаление прибора (сообщения держат его внешним
 // ключом — LIS_ANALYZER_LIST_V1, ревью C2).
-import { listProfiles } from '../../lis/profiles/index.js';
+import { listProfiles, getProfile, aliasesOf } from '../../lis/profiles/index.js';   // getProfile, aliasesOf: LIS_REAL_ANALYZERS_V1_PROFILES
 import { pageInt } from './page-args.js';   // V3120_FINAL — числа и поиск из аргументов
 import { startLisListeners, listenerStatus } from '../../lis/index.js';
 import { ingestMessage } from '../../lis/ingest.js';
 import { resolveMessage, OVERSIZE_DETAIL_PREFIX } from '../../lis/inbox.js';
-import { parseMessage } from '../../lis/hl7.js';   // LIS_MINDRAY_CODES_V1 — тот же разбор, что у приёма
+import { mshOf } from '../../lis/hl7.js';   // LIS_REAL_ANALYZERS_V1_WIRE — тип и MSH-4 без исключений
+import { readResult, wireFor } from '../../lis/wire.js';   // LIS_REAL_ANALYZERS_V1_WIRE — тот же провод, что у приёма
 import { LAB_SECTION_ROLES } from '../../db/schema-registry.js';
 import { hasAnyRole } from '../roles.js';   // ЭФФЕКТИВНЫЕ роли, как в lab-stats.js — не голая строка user.role
 import { rpcT } from '../server-message.js';   // LIS_ANALYZER_LIST_V1 (ревью C2) — отказ с названиями панелей переводится
@@ -50,6 +51,16 @@ export function lisProfiles(db, args, user) {
     // а не изображать знание протокола, которого у нас нет.
     channelsSource: p.channelsSource || 'conventional',
     channels: p.channels,
+    // LIS_REAL_ANALYZERS_V1_PROFILES — данные профиля для экрана: как прибор
+    // может назвать себя, провод, по одному тесту в сообщении (серия), кто
+    // звонит ('listen' / 'unknown') и откуда известен провод ('documented',
+    // 'driver', 'siblings'; у прежних профилей — null). Прежние профили провода
+    // не называют — 'default'.
+    aliases: aliasesOf(p),
+    wire: p.wire || 'default',
+    oneTestPerMessage: !!p.oneTestPerMessage,
+    connect: p.connect || 'listen',
+    wireSource: p.wireSource || null,
   }));
 }
 
@@ -239,6 +250,11 @@ export function lisDeviceCodes(db, args, user) {
   if (!id) throw new LisError('Нужен номер прибора');
   const dev = db.prepare('SELECT id, profile FROM lab_devices WHERE id = ?').get(id);
   if (!dev) throw new LisError('Прибор не найден', 404);
+  // LIS_REAL_ANALYZERS_V1_WIRE — читается тем же проводом, что у приёма: у
+  // BS-200 код — номер теста (OBX-3), у Autobio по сети — OBX-4; сообщения
+  // переадресателя (MSH-4 = LabPC) — проводом forwarder. Приборы одной модели
+  // делят профиль, а значит, и провод.
+  const profile = getProfile(dev.profile);
 
   const ids = dev.profile
     ? db.prepare('SELECT id FROM lab_devices WHERE profile = ?').all(dev.profile).map((r) => r.id)
@@ -253,15 +269,23 @@ export function lisDeviceCodes(db, args, user) {
 
   const seen = new Map();
   for (const r of rows) {
-    let msg;
-    try { msg = parseMessage(codesHead(r.head)); } catch { continue; }
-    for (const o of msg.observations) {
+    const head = codesHead(r.head);
+    // Только пробы ORU^R01 — как прежде, когда здесь стоял parseMessage:
+    // мусор и неподдержанный тип кодов не имеют.
+    const msh = mshOf(head);
+    if (msh.type !== 'ORU^R01') continue;
+    const { observations } = readResult(head, wireFor({ profile, facility: msh.facility }));
+    for (const o of observations) {
       if (o.valueType.toUpperCase() === 'ED') continue;
       if (!o.code && !o.name) continue;
       const k = (o.code + '^' + o.name).toUpperCase();
       // Строки идут от свежих к старым: первое появление — последний раз.
+      // LIS_REAL_ANALYZERS_V1_WIRE — label: подпись строки (BS-200: имя теста
+      // из OBX-4, «12 · GLU»), только показ: сохраняется и сравнивается код.
       if (!seen.has(k)) {
-        seen.set(k, { code: o.code, name: o.name, system: o.system, value_type: o.valueType, unit: o.unit, last_at: r.received_at });
+        seen.set(k, { code: o.code, name: o.name, system: o.system, value_type: o.valueType, unit: o.unit, last_at: r.received_at, label: o.label || '' });
+      } else if (!seen.get(k).label && o.label) {
+        seen.get(k).label = o.label;
       }
     }
   }

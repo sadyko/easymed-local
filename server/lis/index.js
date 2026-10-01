@@ -66,8 +66,11 @@ export async function startLisListeners(db, { log = console.log } = {}) {
           const env = readEnvelope(text);
           const parsed = env.kind === 'result' || env.service;
           const sendingApp = parsed ? env.app : '';
+          // LIS_REAL_ANALYZERS_V1_MODEL — MSH-4: модель угадывается и по нему
+          // (BS-200 называет себя «Mindray|BS-200E»), строка его запоминает.
+          const sendingFacility = parsed ? env.facility : '';
 
-          const found = ensureDevice(db, { sendingApp, peer: ip, port, allowCreate: parsed });
+          const found = ensureDevice(db, { sendingApp, sendingFacility, peer: ip, port, allowCreate: parsed });
           if (found.created) {
             log(`LIS: обнаружен анализатор «${found.device.name}» (${ip || 'адрес неизвестен'}), порт ${port}`);
             list.push(found.device);

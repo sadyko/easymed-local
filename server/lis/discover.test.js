@@ -255,13 +255,16 @@ test('находка запоминает, как прибор себя назв
 
 test('S5: человек поправил модель и название находки — следующая проба в ту же строку, дубля нет', () => {
   const db = fresh();
-  const first = ensureDevice(db, { sendingApp: 'BC-2006', peer: '10.0.0.60', port: 2575 });
+  // LIS_REAL_ANALYZERS_V1_MODEL — имя было «BC-2006»: с границей-цифрой оно
+  // больше не BC-20 (как «BS-2000M» — не BS-200), и догадки не было бы вовсе.
+  // «BC-20s» — по-прежнему BC-20: за моделью буква, а не цифра.
+  const first = ensureDevice(db, { sendingApp: 'BC-20s', peer: '10.0.0.60', port: 2575 });
   assert.equal(first.device.profile, 'mindray-bc-20', 'догадка по имени — BC-20');
   // Ровно то, что пишут «Добавить» и «Изменить» с выбранной моделью.
   db.prepare("UPDATE lab_devices SET name = 'Гематология', profile = 'mindray-bc-5300', added = 1, model_confirmed = 1 WHERE id = ?").run(first.device.id);
 
-  const next = ensureDevice(db, { sendingApp: 'BC-2006', peer: '10.0.0.60', port: 2575 });
-  assert.equal(next.created, false, 'раньше здесь заводилась «BC-2006 (10.0.0.60)», и панели этой строки уходили в лоток');
+  const next = ensureDevice(db, { sendingApp: 'BC-20s', peer: '10.0.0.60', port: 2575 });
+  assert.equal(next.created, false, 'раньше здесь заводилась «BC-20s (10.0.0.60)», и панели этой строки уходили в лоток');
   assert.equal(next.device.id, first.device.id);
   assert.equal(next.reason, 'по адресу и имени');
   assert.equal(next.device.profile, 'mindray-bc-5300', 'правка человека не откатывается');
@@ -391,7 +394,9 @@ test('S4: два переадресатора на одном ПК — две с
   const lumo = ensureDevice(db, { sendingApp: 'AutoLumo A1000', peer: '10.0.0.50', port: 2575 });
   assert.equal(lumo.created, true, 'раньше AutoLumo ложился в строку BC-2800 «по адресу» и не появлялся никогда');
   assert.notEqual(lumo.device.id, bc.device.id);
-  assert.equal(lumo.device.profile, '', 'модель не угадать — лаборант выберет сам');
+  // LIS_REAL_ANALYZERS_V1_MODEL — раньше '': модели AutoLumo не было. Теперь
+  // «AutoLumo A1000» — модель профиля autobio-autolumo-a1000.
+  assert.equal(lumo.device.profile, 'autobio-autolumo-a1000', 'переадресатор A1000 называет модель в MSH-3');
 
   const again = ensureDevice(db, { sendingApp: 'AutoLumo A1000', peer: '10.0.0.50', port: 2575 });
   assert.equal(again.created, false);
@@ -464,5 +469,94 @@ test('найденная строка без адреса узнаётся по 
   assert.equal(out.reason, 'по имени');
   assert.equal(out.device.host, '10.0.0.9', 'адрес дописан');
   assert.equal(out.device.sending_app, 'BC-5300');
+  db.close();
+});
+
+// ── LIS_REAL_ANALYZERS_V1_MODEL — модель по MSH-3 И MSH-4, псевдонимы, ──────
+// граница-цифра; как прибор назвал себя в MSH-4 (sending_facility, мигр. 233).
+// Различение приборов НЕ меняется: адрес и MSH-3 (LIS_DISCOVERY_FIX_V1).
+
+test('модель — по MSH-3, потом по MSH-4: «производитель | модель» и «модель | марка»', () => {
+  const key = (app, facility) => { const p = guessProfile({ app, facility }); return p ? p.key : null; };
+  assert.equal(key('Mindray', 'BS-200E'), 'mindray-bs-200', 'BS-200: MSH-3 — производитель, MSH-4 — модель (руководство, с. 7–8)');
+  assert.equal(key('A1000', 'Autolumo'), 'autobio-autolumo-a1000', 'Autobio по сети: модель в MSH-3');
+  assert.equal(key('AutoLumo A1000', 'LabPC'), 'autobio-autolumo-a1000', 'переадресатор A1000');
+  assert.equal(key('BC-780', 'Mindray'), 'mindray-bc-780');
+  assert.equal(key('Mindray', 'BC-780'), 'mindray-bc-780');
+  assert.equal(key('BC-780R', 'Mindray'), 'mindray-bc-780', 'псевдоним BC-780R');
+  assert.equal(key('MINDRAY BC-5300', ''), 'mindray-bc-5300', 'имя с производителем — как было');
+  assert.equal(key('BC-5300', 'Mindray'), 'mindray-bc-5300');
+  assert.equal(key('Mindray', 'LabPC'), null, 'не узнали — null, как сегодня');
+});
+
+test('граница-цифра: «BS-2000M» — не BS-200, «BC-2006» — не BC-20; за моделью буква — узнаётся', () => {
+  assert.equal(guessProfile({ app: 'BS-2000M' }), null);
+  assert.equal(guessProfile({ app: 'Mindray', facility: 'BS-2000M' }), null);
+  assert.equal(guessProfile('BC-2006'), null);
+  assert.equal(guessProfile('Mindray BS-200E v2').key, 'mindray-bs-200');
+  assert.equal(guessProfile('BC-20s').key, 'mindray-bc-20');
+  assert.equal(guessProfile('A2000 Plus'), null, 'другая модель Autobio — не A1000');
+});
+
+test('точное совпадение по MSH-4 бьёт «содержит» по MSH-3', () => {
+  // MSH-3 «Mindray BC-5300 LIS» содержит BC-5300, но MSH-4 называет модель
+  // ровно — сначала точные совпадения по обоим полям, потом «содержит».
+  assert.equal(guessProfile({ app: 'Mindray BC-5300 LIS', facility: 'BS-200E' }).key, 'mindray-bs-200');
+});
+
+test('прежняя форма guessProfile(строка MSH-3) работает как раньше', () => {
+  assert.equal(guessProfile('BC-5300').key, 'mindray-bc-5300');
+  assert.equal(guessProfile('Mindray'), null);
+  assert.equal(guessProfile(undefined), null);
+});
+
+test('находка запоминает MSH-4 и угадывает модель по нему', () => {
+  const db = fresh();
+  const out = ensureDevice(db, { sendingApp: 'Mindray', sendingFacility: 'BS-200E', peer: '10.0.0.40', port: 2575 });
+  assert.equal(out.created, true);
+  assert.equal(out.device.sending_app, 'Mindray', 'различение — по MSH-3, как было');
+  assert.equal(out.device.sending_facility, 'BS-200E');
+  assert.equal(out.device.profile, 'mindray-bs-200');
+  const anon = ensureDevice(db, { sendingApp: 'X', peer: '10.0.0.41', port: 2575 });
+  assert.equal(anon.device.sending_facility, null, 'не назвался в MSH-4 — NULL');
+  db.close();
+});
+
+test('sending_facility пишется один раз; строка без него узнаёт MSH-4 со следующей пробы', () => {
+  const db = fresh();
+  const first = ensureDevice(db, { sendingApp: 'Mindray', sendingFacility: 'BS-200E', peer: '10.0.0.40', port: 2575 });
+  const again = ensureDevice(db, { sendingApp: 'Mindray', sendingFacility: 'BS-200', peer: '10.0.0.40', port: 2575 });
+  assert.equal(again.device.id, first.device.id);
+  assert.equal(again.device.sending_facility, 'BS-200E', 'запомненное не перезаписывается');
+
+  // Строка, заведённая до мигр. 233: имя знает, MSH-4 — нет (бэкфилла нет).
+  const old = db.prepare("INSERT INTO lab_devices (name, profile, host, discovered, sending_app) VALUES ('BC-5300', 'mindray-bc-5300', '10.0.0.9', 1, 'BC-5300')").run().lastInsertRowid;
+  const next = ensureDevice(db, { sendingApp: 'BC-5300', sendingFacility: 'Mindray', peer: '10.0.0.9', port: 2575 });
+  assert.equal(next.device.id, old);
+  assert.equal(next.reason, 'по адресу и имени');
+  assert.equal(next.device.sending_facility, 'Mindray');
+  db.close();
+});
+
+test('две строки за одним адресом с разными MSH-3 различаются, как было; MSH-4 в различении не участвует', () => {
+  const db = fresh();
+  const bs = ensureDevice(db, { sendingApp: 'Mindray', sendingFacility: 'BS-200E', peer: '10.0.0.50', port: 2575 });
+  const lumo = ensureDevice(db, { sendingApp: 'A1000', sendingFacility: 'Autolumo', peer: '10.0.0.50', port: 2575 });
+  assert.equal(lumo.created, true);
+  assert.notEqual(lumo.device.id, bs.device.id);
+  assert.equal(ensureDevice(db, { sendingApp: 'Mindray', sendingFacility: 'другое', peer: '10.0.0.50', port: 2575 }).device.id, bs.device.id,
+    'тот же MSH-3 с того же адреса — та же строка, что бы ни было в MSH-4');
+  assert.equal(devices(db).length, 2);
+  db.close();
+});
+
+test('строка без адреса с моделью BS-240 не забирает BS-200 (раньше его модель не угадывалась)', () => {
+  const db = fresh();
+  const bs240 = addByHand(db, { name: 'Биохимия', profile: 'mindray-bs-240' });
+  const out = ensureDevice(db, { sendingApp: 'Mindray', sendingFacility: 'BS-200E', peer: '10.0.0.40', port: 2575 });
+  assert.equal(out.created, true, 'модель BS-200 противоречит строке BS-240 — своя находка');
+  assert.equal(out.device.profile, 'mindray-bs-200');
+  assert.equal(row(db, bs240).host, '');
+  assert.equal(row(db, bs240).sending_app, null);
   db.close();
 });

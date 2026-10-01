@@ -16,9 +16,9 @@
 // анализаторе (данные разработки: completed 280, added 23, resulted 12, queued
 // 9, collected 4).
 //
-// Провод прибора в этих тестах назван явно ({ wire }): профили BS-200, A1000 и
-// BC-780 появятся следующим шагом (LIS_REAL_ANALYZERS_V1_PROFILES), а правило
-// поля — уже здесь.
+// Провод прибора в первых тестах назван явно ({ wire }): они писались до
+// профилей BS-200, A1000 и BC-780. С LIS_REAL_ANALYZERS_V1_PROFILES провод
+// берётся из профиля прибора сам — тесты в конце файла, без { wire }.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../db/connection.js';
@@ -40,7 +40,7 @@ const dayEnd = (n) => `strftime('%Y-%m-%dT%H:%M:%SZ', date('now','localtime','-$
  * списку: { id, status, created (выражение SQLite) }. Строки бланка — по
  * списку [код строки, имя, поле анализатора].
  */
-function clinic({ orders = [{ id: 123 }], analytes = [['WBC', 'Лейкоциты', 'WBC']] } = {}) {
+function clinic({ orders = [{ id: 123 }], analytes = [['WBC', 'Лейкоциты', 'WBC']], profile = 'mindray-bc-5300' } = {}) {
   const db = openDb(':memory:');
   migrate(db);
   db.prepare("INSERT INTO patients (id, full_name) VALUES (3,'Иванов Иван')").run();
@@ -50,7 +50,7 @@ function clinic({ orders = [{ id: 123 }], analytes = [['WBC', 'Лейкоцит�
     db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (?, 55, 9, ?, ${o.created || NOW})`)
       .run(o.id, o.status || 'in_progress');
   }
-  db.prepare("INSERT INTO lab_devices (id, name, profile, transport, port) VALUES (1,'Анализатор','mindray-bc-5300','mllp',2575)").run();
+  db.prepare("INSERT INTO lab_devices (id, name, profile, transport, port) VALUES (1,'Анализатор',?,'mllp',2575)").run(profile);   // profile: LIS_REAL_ANALYZERS_V1_PROFILES
   db.prepare("INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (5,'Панель',9,1)").run();
   analytes.forEach(([code, name, dc], i) => {
     db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed)
@@ -288,5 +288,77 @@ test('sampleIdOverride к несуществующему заказу — unmatc
   assert.match(last(db).detail, /не найден/);
   assert.match(last(db).detail, /привязано вручную/);
   assert.equal(results(db).length, 0);
+  db.close();
+});
+
+// ── LIS_REAL_ANALYZERS_V1_PROFILES — провод из профиля прибора, без { wire } ──
+// Приём сам берёт провод у профиля строки прибора (wire.js wireFor); сообщения
+// переадресателя (MSH-4 = LabPC) — провод forwarder, что бы ни говорил профиль.
+
+test('профиль BS-200: OBR-3 («2» — место в штативе) не читается — unmatched, заказ № 2 пуст', () => {
+  const db = clinic({ orders: [{ id: 2 }], analytes: [['GLU', 'Глюкоза', '2']], profile: 'mindray-bs-200' });
+  assert.equal(ingestMessage(db, BS200('', '2'), '10.0.0.40', 1), 'AA');
+  assert.equal(last(db).status, 'unmatched');
+  assert.equal(last(db).visit_service_id, null);
+  assert.equal(last(db).sample_id, '');
+  assert.equal(results(db, 2).length, 0, 'значения пробы со штатива не легли в чужой заказ');
+  db.close();
+});
+
+test('профиль BS-200: штрихкод из OBR-2, код — номер теста, «5.000000» → «5»', () => {
+  const db = clinic({ analytes: [['GLU', 'Глюкоза', '2']], profile: 'mindray-bs-200' });
+  ingestMessage(db, BS200('LAB-000123', '2'), '10.0.0.40', 1);
+  assert.equal(last(db).status, 'applied', last(db).detail);
+  assert.equal(results(db)[0].value, '5');
+  db.close();
+});
+
+test('профиль BS-200: имя теста (OBX-4) не сравнивается — строка бланка «test2» не ловит номер «2»', () => {
+  const db = clinic({ analytes: [['GLU', 'Глюкоза', 'test2']], profile: 'mindray-bs-200' });
+  ingestMessage(db, BS200('LAB-000123', '2'), '10.0.0.40', 1);
+  assert.equal(results(db).length, 0, 'подпись правит оператор как хочет — сравнивается только номер');
+  assert.equal(last(db).status, 'unmapped');
+  db.close();
+});
+
+test('профиль A1000: номер — OBR-2, код — OBX-4, значение — компонент 2 OBX-5', () => {
+  const db = clinic({ analytes: [['B12', 'Витамин B12', '206']], profile: 'autobio-autolumo-a1000' });
+  ingestMessage(db, seg(
+    'MSH|^~\&|A1000|Autolumo|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||',
+    'OBR|1|LAB-000123|||',
+    'OBX|1|NM|1^Vitamin B12|206|5981666^390.946|pg/mL|||||F',
+  ), '10.0.0.41', 1);
+  assert.equal(last(db).status, 'applied', last(db).detail);
+  assert.equal(results(db)[0].value, '390.946');
+  db.close();
+});
+
+test('профиль A1000, сообщение переадресателя (MSH-4 = LabPC): провод forwarder — OBR-3 и OBX-3', () => {
+  const db = clinic({ analytes: [['B12', 'Витамин B12', '206']], profile: 'autobio-autolumo-a1000' });
+  ingestMessage(db, seg(
+    'MSH|^~\&|AutoLumo A1000|LabPC|||20261001101500||ORU^R01|5|P|2.3.1',
+    'OBR|1||LAB-000123|00001^Automated Count^99MRC',
+    'OBX|1|NM|206^^AUTOBIO|Vitamin B12|390.946||||||F',
+  ), '10.0.0.50', 1);
+  assert.equal(last(db).status, 'applied', last(db).detail);
+  assert.equal(results(db)[0].value, '390.946', 'сетевой провод Autobio взял бы компонент 2 «390.946» → пусто');
+  db.close();
+});
+
+test('профиль BC-780: OBR-3 пуст — запасное OBR-2 (и голые цифры); голые цифры OBR-3 — для открытого свежего заказа', () => {
+  const db = clinic({ orders: [{ id: 123 }, { id: 15 }], profile: 'mindray-bc-780' });
+  ingestMessage(db, HEM('123', ''), '10.0.0.42', 1);
+  assert.equal(last(db).visit_service_id, 123, 'запасное поле — только у провода гематологии; default голые OBR-2 не читает');
+  assert.equal(results(db).length, 1);
+  ingestMessage(db, HEM('', '15'), '10.0.0.42', 1);
+  assert.equal(last(db).visit_service_id, 15);
+  assert.equal(results(db, 15).length, 1);
+  db.close();
+});
+
+test('прежний профиль (BC-5300): голые цифры OBR-2 по-прежнему не читаются', () => {
+  const db = clinic();
+  ingestMessage(db, HEM('123', ''), '10.0.0.9', 1);
+  assert.equal(last(db).status, 'unmatched');
   db.close();
 });

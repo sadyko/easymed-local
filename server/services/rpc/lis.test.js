@@ -482,3 +482,62 @@ test('служебное сообщение (контроль, калибров�
   assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = 77').get().status, 'queued');
   db.close();
 });
+
+// ── LIS_REAL_ANALYZERS_V1_PROFILES / _MODEL — новые поля профиля экрану ─────
+test('lis_profiles отдаёт aliases, wire, oneTestPerMessage, connect, wireSource; прежние — по умолчанию', () => {
+  const db = fresh();
+  const all = lisProfiles(db, {}, LAB);
+  const bs = all.find((p) => p.key === 'mindray-bs-200');
+  assert.deepEqual({ aliases: bs.aliases, wire: bs.wire, one: bs.oneTestPerMessage, connect: bs.connect, src: bs.wireSource, ch: bs.channelsSource, n: bs.channels.length },
+    { aliases: ['BS-200', 'BS-200E'], wire: 'mindray-chem', one: true, connect: 'listen', src: 'documented', ch: 'device', n: 0 });
+  const lumo = all.find((p) => p.key === 'autobio-autolumo-a1000');
+  assert.deepEqual([lumo.wire, lumo.oneTestPerMessage, lumo.wireSource, lumo.channelsSource], ['autobio-hl7', true, 'driver', 'device']);
+  const bc780 = all.find((p) => p.key === 'mindray-bc-780');
+  assert.deepEqual([bc780.wire, bc780.oneTestPerMessage, bc780.connect, bc780.wireSource, bc780.channelsSource, bc780.channels.length],
+    ['mindray-hematology', false, 'unknown', 'siblings', 'siblings', 27]);
+  const old = all.find((p) => p.key === 'mindray-bc-5300');
+  assert.deepEqual({ aliases: old.aliases, wire: old.wire, one: old.oneTestPerMessage, connect: old.connect, src: old.wireSource },
+    { aliases: ['BC-5300'], wire: 'default', one: false, connect: 'listen', src: null });
+  db.close();
+});
+
+// ── LIS_REAL_ANALYZERS_V1_WIRE — «Поле анализатора» читает провод прибора ───
+test('lis_device_codes: BS-200 — код «2» (номер теста), подпись «test2»; имени нет', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'BS-200','mindray-bs-200')").run();
+  const ins = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status, received_at) VALUES (1,'10.0.0.40',?,'unmapped',?)");
+  const bs = (n, name, v) => ['MSH|^~\&|Mindray|BS-200E|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||',
+    'OBR|1|LAB-000123|2|Mindray^BS-200E|Y', `OBX|1|NM|${n}|${name}|${v}|g/ml|-||||F|||||||`].join('\r');
+  ins.run(bs('2', 'test2', '5.000000'), '2026-10-01T10:00:00Z');
+  ins.run(bs('12', 'GLU', '5.400000'), '2026-10-01T10:01:00Z');
+  const codes = lisDeviceCodes(db, { device_id: 1 }, LAB);
+  assert.deepEqual(codes.map((c) => [c.code, c.name, c.label]).sort(), [['12', '', 'GLU'], ['2', '', 'test2']],
+    'сохраняется код: подпись правит оператор, сравнивается только номер');
+  db.close();
+});
+
+test('lis_device_codes: Autobio по сети — код из OBX-4; сообщение переадресателя — провод forwarder', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'A1000','autobio-autolumo-a1000')").run();
+  const ins = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status, received_at) VALUES (1,'10.0.0.41',?,'unmapped',?)");
+  ins.run(['MSH|^~\&|A1000|Autolumo|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||', 'OBR|1|LAB-000123|||',
+    'OBX|1|NM|1^Vitamin B12|206|5981666^390.946|pg/mL|||||F'].join('\r'), '2026-10-01T10:00:00Z');
+  ins.run(['MSH|^~\&|AutoLumo A1000|LabPC|||20261001101500||ORU^R01|5|P|2.3.1', 'OBR|1||LAB-000124|00001^Automated Count^99MRC',
+    'OBX|1|NM|207^^AUTOBIO|Ferritin|52.1||||||F'].join('\r'), '2026-10-01T10:05:00Z');
+  const codes = lisDeviceCodes(db, { device_id: 1 }, LAB);
+  const by = Object.fromEntries(codes.map((c) => [c.code, c]));
+  assert.deepEqual(Object.keys(by).sort(), ['206', '207']);
+  assert.deepEqual([by['206'].name, by['206'].label], ['', 'Vitamin B12'], 'OBX-3 Autobio — номер заявки, не сравнивается');
+  assert.deepEqual([by['207'].name, by['207'].system, by['207'].label], ['', 'AUTOBIO', 'Ferritin'], 'переадресатор: OBX-3, подпись OBX-4');
+  db.close();
+});
+
+test('lis_device_codes: прежний провод — подпись пустая, коды прежние; не ORU пропускается', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'Гем','mindray-bc-5300')").run();
+  const ins = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status, received_at) VALUES (1,'10.0.0.5',?,'unmapped','2026-10-01T10:00:00Z')");
+  ins.run(RAW('OBX|1|NM|6690-2^WBC^LN||9.81|10*9/L|||||F'));
+  ins.run('MSH|^~\&|BC-5300|Mindray|||20260910143943||ADT^A01|43|P|2.3.1\rOBX|1|NM|ZZZ^^99MRC||1|x|||||F');
+  assert.deepEqual(lisDeviceCodes(db, { device_id: 1 }, LAB).map((c) => [c.code, c.name, c.label]), [['6690-2', 'WBC', '']]);
+  db.close();
+});
