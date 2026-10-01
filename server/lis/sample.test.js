@@ -52,9 +52,10 @@ function clinic({ orders = [{ id: 123 }], analytes = [['WBC', 'Лейкоцит�
   }
   db.prepare("INSERT INTO lab_devices (id, name, profile, transport, port) VALUES (1,'Анализатор',?,'mllp',2575)").run(profile);   // profile: LIS_REAL_ANALYZERS_V1_PROFILES
   db.prepare("INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (5,'Панель',9,1)").run();
+  // LIS_REAL_ANALYZERS_V1 (ревью R5, п. 2) — подтверждено человеком для прибора 1 (отметкой).
   analytes.forEach(([code, name, dc], i) => {
-    db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed)
-                VALUES (5, ?, ?, '', ?, ?, 1)`).run(code, name, i + 1, dc);
+    db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed, device_code_confirmed_device_id)
+                VALUES (5, ?, ?, '', ?, ?, 1, 1)`).run(code, name, i + 1, dc);
   });
   return db;
 }

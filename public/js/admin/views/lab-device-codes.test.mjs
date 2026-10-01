@@ -69,3 +69,25 @@ test('код, имя и подпись — все три в пункте, пов
   ] });
   assert.deepEqual(c.sent.map((o) => [o.label, o.value]), [['6690-2 · WBC · Лейкоциты', 'WBC'], ['HGB', 'HGB']]);
 });
+
+// LIS_REAL_ANALYZERS_V1 — ревью R5, п. 5: экран узнаёт модель по имени, которым
+// прибор назвался (MSH-3/4), по тем же правилам, что сервер (discover.js
+// guessProfile): «Панели» помечают подтверждения BS-200 под чужой моделью.
+import { namedModel } from './lab-device-codes.js';
+import { guessProfile } from '../../../../server/lis/discover.js';
+import { listProfiles, aliasesOf } from '../../../../server/lis/profiles/index.js';
+
+test('R5 п. 5: модель по имени прибора — та же, что у сервера (guessProfile), на настоящих и спорных именах', () => {
+  const profiles = listProfiles().map((p) => ({ key: p.key, model: p.model, aliases: aliasesOf(p), codesPerInstrument: !!p.codesPerInstrument }));
+  const cases = [
+    ['Mindray', 'BS-200E'], ['BS-200', ''], ['', 'BS-200E'], ['Mindray BS-200E v2', ''], ['BS-2000M', ''], ['Mindray', ''],
+    ['BC-5300', 'Mindray'], ['MINDRAY BC-5300', ''], ['BC-5300 v2', ''], ['BC-20s', ''], ['Mindray BC-20', ''],
+    ['AutoLumo A1000', ''], ['A1000', 'Autolumo'], ['XA1000', ''], ['Sysmex CA-1000', ''], ['EasyLab A1000X', ''],
+    ['BS-240', 'Mindray'], ['A2000 Plus', ''], ['', ''], ['LabPC', ''], ['BC-780', ''], ['bc 780', ''], ['CL-900i', 'Mindray'],
+  ];
+  for (const [app, facility] of cases) {
+    const server = guessProfile({ app, facility });
+    const client = namedModel({ app, facility }, profiles);
+    assert.equal(client ? client.key : null, server ? server.key : null, JSON.stringify([app, facility]));
+  }
+});

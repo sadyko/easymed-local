@@ -6,6 +6,7 @@ import { planObservations, outcome } from './match.js';
 import { planSeries, seriesOutcome, SERIES_WINDOW_MS } from './match.js';   // LIS_REAL_ANALYZERS_V1_SERIES
 import { changeText, SERIES_MAX_MESSAGES } from './match.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, пп. 6 и 9
 import { sameValue, SERIES_FORM_MAX_AGE_MS } from './match.js';   // LIS_REAL_ANALYZERS_V1 — ревью R3, пп. 6 и 10
+import { disputeOf, sameDispute } from './match.js';   // LIS_REAL_ANALYZERS_V1 — ревью R4, п. D; R5, п. 4
 
 const obs = (codeRaw, value = '1', status = 'F') => {
   const [code = '', name = '', system = ''] = codeRaw.split('^');
@@ -355,4 +356,22 @@ test('R3 п. 10: числа сравниваются без хвостовых �
 
 test('R3 п. 6: значения прибора в бланке старше суток бланк не дополняют — постоянная 24 ч', () => {
   assert.equal(SERIES_FORM_MAX_AGE_MS, 24 * 60 * 60 * 1000);
+});
+
+// LIS_REAL_ANALYZERS_V1 — ревью R5, п. 4: десятичная запятая. Прибор с чужой
+// локалью пишет «5,10» — для спора и повторной передачи это «5.1». В бланк —
+// как пришло; правило только для сравнения (sameValue, disputeOf).
+test('R5 п. 4: «5,10» = «5.1» для сравнения и спора; «5,1» ≠ «5.2»; текст — как есть', () => {
+  assert.equal(sameValue('5,10', '5.1'), true);
+  assert.equal(sameValue('5,1', '5,10'), true);
+  assert.equal(sameValue('-0,50', '-0.5'), true);
+  assert.equal(sameValue('5,1', '5.2'), false);
+  assert.equal(sameValue('5,1,2', '5.12'), false, 'две запятые — не число');
+  assert.equal(sameValue('<0,10', '<0.1'), false, 'не число — как есть');
+  const a = { device_code: '2' };
+  assert.deepEqual(disputeOf({ analyte: a, was: ['5,10'], now: '5.40' }), { code: '2', a: '5.1', b: '5.4' });
+  assert.equal(sameDispute({ code: '2', a: '5,1', b: '5.4' }, { code: '2', a: '5.40', b: '5.10' }), true);
+  const s = planSeries([[{ code: '2', name: 'GLU', value: '5,10', valueType: 'NM', status: 'F' }]],
+    [{ id: 1, name: 'Глюкоза', device_code: '2', device_code_confirmed: 1 }], { before: new Map([['Глюкоза', '5.1']]) });
+  assert.deepEqual([s.changed.length, s.resent.length], [0, 1], 'повторная передача, а не спор');
 });

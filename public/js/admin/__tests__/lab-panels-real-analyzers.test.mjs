@@ -125,9 +125,12 @@ const DEVICES = [
   { id: 2, name: 'BC-780', profile: 'mindray-bc-780', enabled: 1, added: 1 },
   { id: 3, name: 'BS-200 (2)', profile: 'mindray-bs-200', enabled: 1, added: 1 },   // ревью R3, п. 2
   { id: 4, name: 'BC-780 (2)', profile: 'mindray-bc-780', enabled: 1, added: 1 },
+  // ревью R5, п. 5 — BS-200, заведённый как BS-240: модель выдаёт имя, которым он назвался (MSH-3/4)
+  { id: 5, name: 'BS-240', profile: 'mindray-bs-240', enabled: 1, added: 1, sending_app: 'Mindray', sending_facility: 'BS-200E' },
 ];
 const PROFILES = [
-  { key: 'mindray-bs-200', vendor: 'Mindray', model: 'BS-200', channelsSource: 'device', wireSource: 'documented', channels: [], codesPerInstrument: true },
+  { key: 'mindray-bs-200', vendor: 'Mindray', model: 'BS-200', channelsSource: 'device', wireSource: 'documented', channels: [], codesPerInstrument: true, aliases: ['BS-200', 'BS-200E'] },
+  { key: 'mindray-bs-240', vendor: 'Mindray', model: 'BS-240', channelsSource: 'conventional', channels: [{ code: 'GLU', name: 'Глюкоза' }], codesPerInstrument: false, aliases: ['BS-240'] },
   { key: 'mindray-bc-780', vendor: 'Mindray', model: 'BC-780', channelsSource: 'siblings', wireSource: 'siblings',
     channels: [{ code: 'WBC', name: 'Лейкоциты', loinc: '6690-2' }, { code: 'HGB', name: 'Гемоглобин', loinc: '718-7' }] },
 ];
@@ -136,11 +139,13 @@ let PROFILES_FAIL = false;   // LIS_REAL_ANALYZERS_V1 (ревью R4) — lis_pr
 
 let rpcCalls = [];
 let writes = [];
+let reads = [];   // ревью R5, п. 5 — какие колонки экран просит
 globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (u.startsWith('/api/db')) {
     if (body && body.op && body.op !== 'select') writes.push(body);
+    if (body && body.op === 'select') reads.push(body);
     const rows = {
       lab_panels: PANELS, lab_panel_analytes: ANALYTES, services: SERVICES, lab_devices: DEVICES,
       departments: [{ id: 'd-1', name: 'Лаборатория', kind: 'laboratory' }], service_types: [],
@@ -168,7 +173,7 @@ async function mountPanels({ deviceId = 1, sent = [], analytes = null } = {}) {
   SENT_CODES = sent;
   ANALYTES = analytes || [analyte()];
   setEffectiveFromRole(LAB_SEEDED);
-  rpcCalls = []; writes = []; toastMsg = null;
+  rpcCalls = []; writes = []; reads = []; toastMsg = null;
   const root = mk('div');
   await renderLaboratory(root, { payload: { sub: 'panels' } });
   await tick(80);
@@ -327,4 +332,50 @@ test('R4 п. A: модели приборов не загрузились — с
     await tick(80);
     assert.ok(!insertedRow(), 'без подтверждения не сохраняется: ' + toastMsg);
   } finally { PROFILES_FAIL = false; }
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R5 ───────────────────────────────────────
+
+// П. 2 — подтверждение до мигр. 233 (отметки нет) уходит в сохранение как 0 —
+// «ни для какого прибора», и база его так и пишет (NULL); без этого вставка
+// получала бы прибор панели. Копия панели («Копировать») везёт отметки как есть.
+test('R5 п. 2: подтверждено без отметки прибора — в сохранение идёт 0; копия панели везёт отметки как есть', async () => {
+  const rows = () => [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: null }),
+    analyte({ id: 'a-2', code: 'UREA', name: 'Мочевина', device_code: '3', device_code_confirmed: 1, device_code_confirmed_device_id: 1, sort_order: 1 })];
+  const root = await mountPanels({ analytes: rows() });
+  findButtonByText(root, /Сохранить панель/).click();
+  await tick(80);
+  const ins = writes.find((w) => w.table === 'lab_panel_analytes' && w.op === 'insert');
+  assert.ok(ins, 'сохранено: ' + toastMsg);
+  assert.deepStrictEqual([].concat(ins.values).map((r) => [r.name, r.device_code_confirmed_device_id]), [['Глюкоза', 0], ['Мочевина', 1]]);
+
+  const root2 = await mountPanels({ analytes: rows() });
+  findByAriaLabel(root2, 'Создать копию выбранной панели').click();
+  await tick(30);
+  findButtonByText(root2, /Сохранить панель/).click();
+  await tick(80);
+  const copy = writes.find((w) => w.table === 'lab_panel_analytes' && w.op === 'insert');
+  assert.ok(copy, 'копия сохранена: ' + toastMsg);
+  assert.deepStrictEqual([].concat(copy.values).map((r) => [r.name, r.device_code_confirmed, r.device_code_confirmed_device_id]),
+    [['Глюкоза', 1, 0], ['Мочевина', 1, 1]], 'копия не подтверждает за человека');
+});
+
+test('R5 п. 2: обычный путь — подтвердили на экране и сохранили — отметка прибора панели', async () => {
+  const root = await mountPanels({ analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: null })] });
+  findByAriaLabel(root, 'Подтвердить сопоставление').click();
+  await tick(30);
+  findButtonByText(root, /Сохранить панель/).click();
+  await tick(80);
+  assert.equal(insertedRow().device_code_confirmed_device_id, 1);
+});
+
+// П. 5 — как на сервере (ingest.js): номер теста свой у каждого прибора и
+// тогда, когда строка заведена другой моделью, а прибор назвал себя BS-200.
+test('R5 п. 5: строка заведена как BS-240, а прибор называет себя BS-200E — «подтвердите заново» у строки, подтверждённой для другого прибора', async () => {
+  const root = await mountPanels({ deviceId: 5, analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: 1 })] });
+  assert.ok(textOf(root).includes(STALE), 'сказано у строки');
+  const dev = reads.find((r) => r.table === 'lab_devices');
+  assert.ok(dev && /sending_app/.test(dev.columns) && /sending_facility/.test(dev.columns), 'экран читает, как прибор назвался: ' + (dev && dev.columns));
+  const own = await mountPanels({ deviceId: 5, analytes: [analyte({ device_code: '2', device_code_confirmed: 1, device_code_confirmed_device_id: 5 })] });
+  assert.ok(!textOf(own).includes(STALE));
 });

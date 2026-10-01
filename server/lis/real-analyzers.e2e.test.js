@@ -130,12 +130,15 @@ function seedClinic(db) {
   db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, status, created_at) VALUES (124, 57, 9, 'queued', ${old})`).run();
 }
 
-/** Панель услуги, привязанная к прибору, с подтверждёнными (D4) кодами прибора. */
+/**
+ * Панель услуги, привязанная к прибору, с подтверждёнными (D4) кодами прибора —
+ * подтверждёнными для этого прибора (ревью R5, п. 2: так их пишет экран).
+ */
 function bindPanel(db, { id, serviceId, deviceId, name, lines }) {
   db.prepare('INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (?, ?, ?, ?)').run(id, name, serviceId, deviceId);
   lines.forEach(([code, label, unit, deviceCode], i) => db.prepare(`INSERT INTO lab_panel_analytes
-      (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed) VALUES (?, ?, ?, ?, ?, ?, 1)`)
-    .run(id, code, label, unit, i + 1, deviceCode));
+      (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed, device_code_confirmed_device_id) VALUES (?, ?, ?, ?, ?, ?, 1, ?)`)
+    .run(id, code, label, unit, i + 1, deviceCode, deviceId));
 }
 
 const blank = (db, vsId) => Object.fromEntries(db.prepare('SELECT parameter, value FROM lab_results WHERE visit_service_id = ? ORDER BY id').all(vsId).map((r) => [r.parameter, r.value]));

@@ -34,7 +34,7 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод �
 import { supabase } from '../../supabase.js';
 import { currentClinicId } from '../tenant-tables.js';
 import { isLabService, deptKindMap, typeNameMap } from './lab-service.js';   // LAB_SERVICE_ROUTING_V1 — one shared definition of 'lab service'
-import { codeChoices, TYPE_OWN } from './lab-device-codes.js?v=codes2';   // LIS_MINDRAY_CODES_V1 — присланные коды, типовые, свой код · LIS_REAL_ANALYZERS_V1 — «12 · GLU»
+import { codeChoices, TYPE_OWN, namedModel } from './lab-device-codes.js?v=codes3';   // LIS_MINDRAY_CODES_V1 — присланные коды, типовые, свой код · LIS_REAL_ANALYZERS_V1 — «12 · GLU»; namedModel — ревью R5, п. 5
 
 const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагностика' };
 
@@ -50,7 +50,7 @@ const MODALITY_RU = { lab: 'Лаборатория', diagnostic: 'Диагнос
 //      lab-section role (LAB_PANELS_BY_SECTION_V1).
 // v8 = one shared page head for queue+panels; marker moved off-screen into
 //      the data-attribute above; queue filter chips translate label-then-count.
-export const LAB_BUILD = 'lab-v20';   // v20 — подтверждение помнит прибор: «подтверждено для другого прибора — подтвердите заново» (LIS_REAL_ANALYZERS_V1, ревью R4) · v19 — смена BS-200 у панели снимает подтверждения (LIS_REAL_ANALYZERS_V1, ревью R3) · LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1); v17 — одно поле прибора под двумя именами (LIS_DISCOVERY_FIX_V1); v18 — «12 · GLU», подсказка «коды появятся», типовые BC-780 по соседним моделям (LIS_REAL_ANALYZERS_V1)
+export const LAB_BUILD = 'lab-v21';   // v21 — подтверждение без отметки прибора сохраняется «ни для какого», модель и по имени прибора (LIS_REAL_ANALYZERS_V1, ревью R5) · v20 — подтверждение помнит прибор: «подтверждено для другого прибора — подтвердите заново» (LIS_REAL_ANALYZERS_V1, ревью R4) · v19 — смена BS-200 у панели снимает подтверждения (LIS_REAL_ANALYZERS_V1, ревью R3) · LIS_MINDRAY_CODES_V1 — «Поле анализатора»: присланные коды, типовые, свой код; v14 — правки ревью 2026-09-28; v15 — в «Анализатор» только добавленные (LIS_ANALYZER_LIST_V1); v16 — правки ревью 2026-09-29 (LIS_ANALYZER_LIST_V1); v17 — одно поле прибора под двумя именами (LIS_DISCOVERY_FIX_V1); v18 — «12 · GLU», подсказка «коды появятся», типовые BC-780 по соседним моделям (LIS_REAL_ANALYZERS_V1)
 
 // LIS_REAL_ANALYZERS_V1 — у модели нет типового списка (BS-200, A1000), а прибор ещё ничего не присылал.
 const NO_DEVICE_CODES_HINT = 'Коды появятся, когда анализатор пришлёт первую пробу; номер теста — как в настройках тестов прибора. Пока код можно вписать руками.';
@@ -161,7 +161,8 @@ export async function mountLabPanels(container) {
             // LIS_INGEST_V1 — приборы клиники и каналы их профилей. Отказ здесь
             // не фатален: колонка «Поле анализатора» просто не появится, а
             // панель по-прежнему заполняется руками.
-            supabase.from('lab_devices').select('id, name, profile, enabled, added').order('name'),
+            // LIS_REAL_ANALYZERS_V1 (ревью R5, п. 5) — и как прибор назвал себя (MSH-3/4): модель BS-200 узнаётся и по имени.
+            supabase.from('lab_devices').select('id, name, profile, enabled, added, sending_app, sending_facility').order('name'),
             supabase.rpc('lis_profiles', {}),
         ]);
         if (panelsRes.error)   state.loadError = trf('панели: {msg}', { msg: panelsRes.error.message || panelsRes.error });
@@ -442,7 +443,7 @@ export async function mountLabPanels(container) {
             p.device_id = Number(devSel.value) || null;
             if (Number(was || 0) !== Number(p.device_id || 0)) {
                 const sides = [was, p.device_id].filter(Boolean);
-                const pr = sides.map(deviceProfile).find(x => x && x.codesPerInstrument) || null;
+                const pr = sides.map(perInstrumentModel).find(Boolean) || null;   // ревью R5, п. 5 — и по имени прибора
                 const unknown = sides.some(id => !deviceProfile(id));
                 if (pr || unknown) {
                     for (const r of state.rows) if ((r.device_code || '').trim()) setConfirmed(r, false);
@@ -928,6 +929,18 @@ export async function mountLabPanels(container) {
         return (d && state.profiles.find(x => x.key === d.profile)) || null;
     }
     /**
+     * Ревью R5, п. 5 — профиль с номерами тестов, своими у каждого прибора, —
+     * по модели строки ИЛИ по имени, которым прибор назвался (MSH-3/4), как
+     * у приёма (server/lis/ingest.js). null — ни то, ни другое.
+     */
+    function perInstrumentModel(id) {
+        const pr = deviceProfile(id);
+        if (pr && pr.codesPerInstrument) return pr;
+        const d = id ? state.devices.find(x => x.id === Number(id)) : null;
+        const named = d ? namedModel({ app: d.sending_app, facility: d.sending_facility }, state.profiles) : null;
+        return named && named.codesPerInstrument ? named : null;
+    }
+    /**
      * Строка подтверждена, но не для прибора панели (для другого или до
      * обновления), а у прибора панели номер теста свой у каждого прибора — или
      * его модель неизвестна. У кодов производителя отметка не читается.
@@ -936,8 +949,7 @@ export async function mountLabPanels(container) {
         if (!r.device_code_confirmed || !(r.device_code || '').trim()) return false;
         const dev = Number(state.selected && state.selected.device_id) || null;
         if (!dev || Number(r.device_code_confirmed_device_id || 0) === dev) return false;
-        const pr = deviceProfile(dev);
-        return !pr || !!pr.codesPerInstrument;
+        return !deviceProfile(dev) || !!perInstrumentModel(dev);   // ревью R5, п. 5 — и по имени прибора
     }
 
     /**
@@ -1161,8 +1173,12 @@ export async function mountLabPanels(container) {
                 device_code_confirmed: r.device_code_confirmed ? 1 : 0,
                 // LIS_REAL_ANALYZERS_V1 (ревью R4, п. A) — для какого прибора
                 // подтверждено (последнее слово — у триггера мигр. 233).
-                device_code_confirmed_device_id: r.device_code_confirmed && r.device_code_confirmed_device_id != null
-                    ? Number(r.device_code_confirmed_device_id) : null,
+                // Ревью R5, п. 2 — подтверждено без отметки (до обновления, копия
+                // такой строки) — 0: «ни для какого прибора», и база так и пишет;
+                // без него вставка искала бы отметку у прежней строки. Копия
+                // панели («Копировать») идёт этим же путём — отметки как есть.
+                device_code_confirmed_device_id: r.device_code_confirmed
+                    ? (r.device_code_confirmed_device_id != null ? Number(r.device_code_confirmed_device_id) : 0) : null,
             }));
             if (ins.length) {
                 let { error } = await supabase.from('lab_panel_analytes').insert(ins);

@@ -53,6 +53,8 @@ import { today, localDate } from '../services/domain/day.js';
  */
 export const BARE_ID_MAX_AGE_DAYS = 7;
 const OPEN_LAB_STATUSES = new Set(['added', 'queued', 'collected', 'in_progress', 'resulted']);
+/** LIS_REAL_ANALYZERS_V1 (ревью R5, п. 3) — куда «Привязать» может вернуть опустевший заказ: статусы лаборатории. */
+const LAB_SIDE_STATUSES = new Set(['queued', 'collected', 'in_progress']);
 const STATUS_WORDS = {
   added: 'ожидает оплату', queued: 'ждёт забора пробы', collected: 'проба взята',
   in_progress: 'в работе', resulted: 'результаты внесены', completed: 'выдан',
@@ -250,17 +252,21 @@ function dismissedChange(db, orderId) {
  * строки (записаны до мигр. 233) не снимаются — чьи они, не известно; строка
  * остаётся при заказе, а человеку сказано проверить бланк (legacy).
  * П. C — опустевший бланк (ни значения, ни примечания) возвращает заказ из
- * «результаты внесены» ровно в статус до прибора (lis_status_before);
- * неизвестен — «в работе», не «ждёт оплату» и не «ждёт забора».
+ * «результаты внесены» в статус до прибора (lis_status_before), если это
+ * статус лаборатории; «ожидает оплату» — в «ждёт забора пробы» (ревью R5,
+ * п. 3); неизвестен или другой — «в работе».
+ * Ревью R5, п. 1 — значение, оставленное потому, что то же прислала другая
+ * строка этого заказа, переходит к ней (source_message_id).
  * @returns {{fromOrderId:number|null, taken:string[], kept:Array<{name:string, why:string}>,
- *            legacy:boolean, unlinked:boolean, status:string|null}}
- *   status — куда вернулся первый заказ, если его бланк опустел.
+ *            legacy:boolean, unlinked:boolean, status:string|null, statusWord:string|null}}
+ *   status — куда вернулся первый заказ, если его бланк опустел; statusWord — он же словами.
  */
 export function takeBackValues(db, msg, toOrderId) {
-  const out = { fromOrderId: null, taken: [], kept: [], legacy: false, unlinked: false, status: null };
+  const out = { fromOrderId: null, taken: [], kept: [], legacy: false, unlinked: false, status: null, statusWord: null };
   const fromId = msg && msg.visit_service_id;
   if (!fromId || Number(fromId) === Number(toOrderId)) return out;
   out.fromOrderId = fromId;
+  let stays = 0;   // значения ЭТОЙ строки, оставшиеся в бланке (выдано, изменено, не сверить)
 
   const mine = db.prepare('SELECT * FROM lab_results WHERE visit_service_id = ? AND source_message_id = ? ORDER BY id').all(fromId, msg.id);
   if (mine.length) {
@@ -272,12 +278,13 @@ export function takeBackValues(db, msg, toOrderId) {
     const analytes = panel ? db.prepare('SELECT * FROM lab_panel_analytes WHERE panel_id = ? AND active = 1 ORDER BY sort_order, id').all(panel.id) : [];
     let others = null;
     for (const row of mine) {
-      if (released) { out.kept.push({ name: row.parameter, why: 'выдан' }); continue; }
+      if (released) { out.kept.push({ name: row.parameter, why: 'выдан' }); stays++; continue; }
       const a = analytes.find((x) => x.name === row.parameter);
       const sent = a ? deliveredValue(db, msg, a) : null;
       // Ревью R3, п. 10 — «390.10» и «390.1» — одно значение.
       if (row.source !== 'analyzer' || sent == null || !sameValue(row.value, sent)) {
         out.kept.push({ name: row.parameter, why: sent == null && row.source === 'analyzer' ? 'не удалось сверить с сообщением' : 'изменено после прибора' });
+        stays++;
         continue;
       }
       if (!others) {
@@ -287,7 +294,14 @@ export function takeBackValues(db, msg, toOrderId) {
                               ORDER BY id DESC LIMIT ?`).all(fromId, msg.id, REATTACHED_NOTE, SERIES_MAX_MESSAGES)
           .filter((r) => !BEFORE_BLANK.test(String(r.detail || '')));
       }
-      if (others.some((o) => { const v = deliveredValue(db, o, a); return v != null && sameValue(v, sent); })) {
+      // Ревью R5, п. 1 — то же значение прислала другая строка, всё ещё при
+      // этом заказе: значение остаётся и ПЕРЕХОДИТ к ней (source_message_id).
+      // Иначе, привязав потом и её, снимать было бы нечего: у неё «своих»
+      // строк нет, и значение пациента другого заказа оставалось бы здесь
+      // молча. Эта строка своих значений здесь больше не держит.
+      const heir = others.find((o) => { const v = deliveredValue(db, o, a); return v != null && sameValue(v, sent); });
+      if (heir) {
+        db.prepare('UPDATE lab_results SET source_message_id = ? WHERE id = ?').run(heir.id, row.id);
         out.kept.push({ name: row.parameter, why: 'то же значение пришло другим сообщением' });
         continue;
       }
@@ -300,8 +314,9 @@ export function takeBackValues(db, msg, toOrderId) {
   // Ревью R3, п. 9; R4, п. B — строка уходит с первого заказа, только когда её
   // значений там не осталось: иначе её след держал бы кассу зря («по услуге
   // уже пришли данные анализатора»), а лента показывала бы имя его пациента.
-  // История — в журнале строки: куда перепривязана и откуда.
-  out.unlinked = !out.kept.length && !out.legacy;
+  // История — в журнале строки: куда перепривязана и откуда. Значение,
+  // перешедшее к другой строке (п. 1 R5), — уже не её.
+  out.unlinked = !stays && !out.legacy;
   const note = REATTACHED_NOTE + toOrderId + (out.unlinked ? ' (был заказ № ' + fromId + ')' : ' (значения остались в заказе № ' + fromId + ')');
   db.prepare(`UPDATE lab_device_messages SET visit_service_id = CASE WHEN ? THEN NULL ELSE visit_service_id END,
                 detail = CASE WHEN COALESCE(detail, '') = '' THEN ? ELSE detail || '; ' || ? END WHERE id = ?`)
@@ -313,7 +328,14 @@ export function takeBackValues(db, msg, toOrderId) {
                                AND (TRIM(COALESCE(value, '')) <> '' OR TRIM(COALESCE(notes, '')) <> '')`).get(fromId).c;
     const ord = db.prepare('SELECT status, lis_status_before FROM visit_services WHERE id = ?').get(fromId);
     if (!left && ord && ord.status === 'resulted') {
-      out.status = ord.lis_status_before && ord.lis_status_before !== 'resulted' ? ord.lis_status_before : 'in_progress';
+      // Ревью R5, п. 3 — только статусы лаборатории. «Ожидает оплату» до
+      // прибора после оплаты устарел (касса строку «результаты внесены» не
+      // трогает: billing.js), и оплаченный заказ вернулся бы в «ожидает
+      // оплату»: проба уже была в приборе — «ждёт забора пробы». Неизвестен
+      // или другой (отменён и прочее) — «в работе».
+      const was = ord.lis_status_before;
+      out.status = LAB_SIDE_STATUSES.has(was) ? was : (was === 'added' ? 'queued' : 'in_progress');
+      out.statusWord = STATUS_WORDS[out.status];
       db.prepare("UPDATE visit_services SET status = ?, lis_status_before = NULL WHERE id = ? AND status = 'resulted'").run(out.status, fromId);
     }
   }

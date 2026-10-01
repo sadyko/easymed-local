@@ -75,3 +75,65 @@ export function codeChoices({ sent = [], channels = [], current = '' } = {}) {
     }
     return { sent: sentOpts, typical, orphan, selected };
 }
+
+// ── LIS_REAL_ANALYZERS_V1 (ревью R5, п. 5) — модель по имени прибора ────────
+// Как прибор назвал себя (MSH-3 и MSH-4: lab_devices.sending_app и
+// sending_facility) → профиль модели из lis_profiles (с псевдонимами aliases).
+// ТО ЖЕ правило, что у сервера (server/lis/discover.js guessProfile; тест
+// lab-device-codes.test.mjs сверяет оба на настоящих и спорных именах): по нему
+// приём решает, что у прибора номер теста свой у каждого прибора (BS-200), даже
+// если строка заведена другой моделью, — и «Панели» должны видеть то же.
+
+/** «BC-5300», «bc 5300», «BC_5300» — одно и то же для сравнения. */
+const normModel = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+const LETTER = /\p{L}/u;
+/** Короткая модель (до 5 знаков: «A1000», «BS-200») — только целым словом. */
+const SHORT_MODEL = 5;
+
+/** Модель «содержится» в имени: с начала слова, за ней не цифра (короткая — и не буква). */
+function containsModel(raw, model) {
+  const chars = [];
+  const at = [];
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i].toLowerCase();
+    if (/[a-z0-9]/.test(c)) { chars.push(c); at.push(i); }
+  }
+  const name = chars.join('');
+  for (let i = name.indexOf(model); i !== -1; i = name.indexOf(model, i + 1)) {
+    if (/[0-9]/.test(name.charAt(i + model.length))) continue;
+    const before = raw.charAt(at[i] - 1);
+    if (before && WORD_CHAR.test(before)) continue;
+    const after = raw.charAt(at[i + model.length - 1] + 1);
+    if (model.length <= SHORT_MODEL && after && LETTER.test(after)) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @param {{app?:string, facility?:string}} who  как прибор назвал себя
+ * @param {Array<{key:string, model:string, aliases?:string[]}>} profiles  lis_profiles, в их порядке
+ * @returns {object|null} профиль или null — не узнали
+ */
+export function namedModel({ app = '', facility = '' } = {}, profiles = []) {
+  const raws = [String(app == null ? '' : app), String(facility == null ? '' : facility)].filter((r) => normModel(r));
+  if (!raws.length) return null;
+  const all = (profiles || []).map((p) => ({ p, keys: (Array.isArray(p.aliases) && p.aliases.length ? p.aliases : [p.model]).map(normModel).filter(Boolean) }));
+  for (const raw of raws) {
+    const want = normModel(raw);
+    const exact = all.find(({ keys }) => keys.includes(want));
+    if (exact) return exact.p;
+  }
+  for (const raw of raws) {
+    let best = null;
+    let bestLen = 0;
+    for (const { p, keys } of all) {
+      for (const k of keys) {
+        if (k.length >= 4 && k.length > bestLen && containsModel(raw, k)) { best = p; bestLen = k.length; }
+      }
+    }
+    if (best) return best;
+  }
+  return null;
+}

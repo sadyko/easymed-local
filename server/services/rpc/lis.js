@@ -239,7 +239,8 @@ export function lisMessageAttach(db, args, user) {
     if (back.legacy) {   // ревью R4, п. B
       notes.push('в бланке заказа № ' + back.fromOrderId + ' есть значения прибора без отметки сообщения (записаны до обновления) — проверьте его вручную');
     }
-    if (back.status) notes.push('бланк заказа № ' + back.fromOrderId + ' пуст — заказ снова в работе лаборатории');   // ревью R3, п. 9
+    // Ревью R3, п. 9; R5, п. 3 — куда вернулся заказ — словами.
+    if (back.status) notes.push('бланк заказа № ' + back.fromOrderId + ' пуст — заказ снова у лаборатории: «' + back.statusWord + '»');
     if (rec && notes.length) {
       detail = (detail ? detail + '; ' : '') + notes.join('; ');
       db.prepare('UPDATE lab_device_messages SET detail = ? WHERE id = ?').run(detail, rec.id);

@@ -530,9 +530,11 @@ function chem({ profile = 'mindray-bs-200', lines = [['GLU', 'Глюкоза', '
   db.prepare("INSERT INTO visit_services (id, visit_id, service_id, status) VALUES (123,55,9,'in_progress')").run();
   db.prepare("INSERT INTO lab_devices (id, name, profile, transport, port) VALUES (1,'BS-200',?,'mllp',2575)").run(profile);
   db.prepare("INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (5,'Биохимия',9,1)").run();
+  // Ревью R5, п. 2 — «подтверждено человеком для прибора 1» — отметкой: без
+  // неё вставка — «ни для какого прибора».
   lines.forEach(([code, name, dc], i) => {
-    db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed)
-                VALUES (5, ?, ?, '', ?, ?, ?)`).run(code, name, i + 1, dc, unconfirmed.includes(code) ? 0 : 1);
+    db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed, device_code_confirmed_device_id)
+                VALUES (5, ?, ?, '', ?, ?, ?, ?)`).run(code, name, i + 1, dc, unconfirmed.includes(code) ? 0 : 1, unconfirmed.includes(code) ? null : 1);
   });
   return db;
 }
@@ -1165,5 +1167,16 @@ test('R4 п. D: текст спора в журнале разобранной �
   db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, visit_service_id, status, detail, resolved_at) VALUES (1, '10.0.0.40', 'MSH|', 123, 'unmapped', 'повтор: 2 (test2): было 5.1, в бланке 5.4', '2026-10-01T08:00:00Z')").run();
   ingestMessage(db, BS('2', 'test2', '5.4'), '10.0.0.40', 1);
   assert.match(message(db).detail, /повтор: 2 \(test2\): было 5\.1, в бланке 5\.4/);
+  db.close();
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R5, п. 4 ─────────────────────────────────
+test('R5 п. 4: «5,10», потом «5.1» — повторная передача, а не спор; в бланке — как пришло', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5,10'), '10.0.0.40', 1);
+  assert.equal(blank(db)['Глюкоза'], '5,10', 'значение как пришло');
+  ingestMessage(db, BS('2', 'test2', '5.1'), '10.0.0.40', 1);
+  assert.ok(!/повтор:/.test(message(db).detail), message(db).detail);
+  assert.match(message(db).detail, /повторная передача: 2 \(test2\)/);
   db.close();
 });

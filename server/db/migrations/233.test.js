@@ -133,16 +133,21 @@ test('233: в файле только ADD COLUMN, индекс и триггер
   // LIS_REAL_ANALYZERS_V1 (ревью R4, п. A) — UPDATE — только в телах двух
   // триггеров, и они пишут только отметку «для какого прибора подтверждено»
   // у той строки, которую вставили или правят. Триггера R3 на lab_panels нет.
+  // Ревью R5, п. 6 — третий: смена адреса или порта строки BS-200 снимает
+  // отметки, данные для этой строки (подтверждения остаются).
   const trigs = all.match(/CREATE TRIGGER[\s\S]*?\bEND;/gi) || [];
-  assert.equal(trigs.length, 2, 'два триггера');
+  assert.equal(trigs.length, 3, 'три триггера');
   assert.match(trigs[0], /AFTER INSERT ON lab_panel_analytes/i);
   assert.match(trigs[1], /AFTER UPDATE OF device_code_confirmed, device_code ON lab_panel_analytes/i);
-  for (const t of trigs) {
+  assert.match(trigs[2], /AFTER UPDATE OF host, port ON lab_devices/i);
+  for (const t of trigs.slice(0, 2)) {
     const body = /\bBEGIN\b([\s\S]*)\bEND;/i.exec(t)[1].trim();
     assert.equal(body.split(';').filter((s) => s.trim()).length, 1, 'одна инструкция: ' + body);
     assert.match(body, /^UPDATE lab_panel_analytes SET device_code_confirmed_device_id = CASE[\s\S]*WHERE id = NEW\.id;$/);
   }
-  assert.ok(!/ON lab_panels\b|ON lab_devices\b/i.test(all), 'смена прибора панели и модели прибора ничего не переписывают');
+  const addr = /\bBEGIN\b([\s\S]*)\bEND;/i.exec(trigs[2])[1].trim();
+  assert.equal(addr, 'UPDATE lab_panel_analytes SET device_code_confirmed_device_id = NULL WHERE device_code_confirmed_device_id = NEW.id;');
+  assert.ok(!/ON lab_panels\b/i.test(all), 'смена прибора панели ничего не переписывает');
   let code = all;
   for (const t of trigs) code = code.replace(t, '');
   assert.ok(!/\bCREATE\s+TABLE\b/i.test(code), 'пересборка таблицы внутри migrate() роняет клинику при запуске');
@@ -201,10 +206,12 @@ test('233: анализатор принадлежит зданию — в сп�
 //
 // Редактор панелей сохраняет показатели так: правка lab_panels (в том числе
 // device_id), потом вставка новых строк, потом удаление прежних
-// (lab-panels.js savePanel). Поэтому вставка, которая не говорит, для какого
-// прибора подтверждено (старая вкладка), наследует отметку прежней строки с
-// тем же кодом — иначе сохранение «отмыло» бы подтверждение старого прибора
-// под новым.
+// (lab-panels.js savePanel), и называет при вставке, для какого прибора
+// подтверждено (0 — ни для какого). Ревью R5, п. 2: вставка без этого
+// (старая вкладка, прямая запись) наследует отметку прежней строки ТОЙ ЖЕ
+// пары «код + показатель», а без такой строки — NULL, не прибор панели:
+// иначе подтверждение, данное до 233 или для другого прибора, «отмывалось»
+// бы — у копии панели, у строки, которой код переставили.
 function panelOn(db, deviceId) {
   db.prepare("INSERT INTO services (id, name, is_lab) VALUES (9, 'Биохимия', 1)").run();
   db.prepare('INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (5, ?, 9, ?)').run('Биохимия', deviceId);
@@ -213,10 +220,10 @@ function devices(db) {
   db.prepare(`INSERT INTO lab_devices (id, name, profile) VALUES (1, 'BS-200', 'mindray-bs-200'), (2, 'BS-200 (2)', 'mindray-bs-200'),
               (3, 'BC-5300', 'mindray-bc-5300')`).run();
 }
-const insA = (db, { code = 'GLU', name = 'Глюкоза', dc = '2', confirmed = 1, claim } = {}) => (claim === undefined
-  ? db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, device_code, device_code_confirmed) VALUES (5, ?, ?, '', ?, ?)`).run(code, name, dc, confirmed)
+const insA = (db, { code = 'GLU', name = 'Глюкоза', dc = '2', confirmed = 1, claim, panel = 5 } = {}) => (claim === undefined
+  ? db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, device_code, device_code_confirmed) VALUES (?, ?, ?, '', ?, ?)`).run(panel, code, name, dc, confirmed)
   : db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, device_code, device_code_confirmed, device_code_confirmed_device_id)
-                VALUES (5, ?, ?, '', ?, ?, ?)`).run(code, name, dc, confirmed, claim)).lastInsertRowid;
+                VALUES (?, ?, ?, '', ?, ?, ?)`).run(panel, code, name, dc, confirmed, claim)).lastInsertRowid;
 const stampOf = (db, id) => db.prepare('SELECT device_code_confirmed_device_id AS d FROM lab_panel_analytes WHERE id = ?').get(id).d;
 /** Сохранение редактора: правка панели, вставка строк, удаление прежних. */
 function editorSave(db, deviceId, lines) {
@@ -227,56 +234,61 @@ function editorSave(db, deviceId, lines) {
   return ids;
 }
 
-test('233 (R4 п. A): вставка — подтверждено для прибора панели; не подтверждено или кода нет — NULL', () => {
+test('233 (R4 п. A; R5 п. 2): вставка — прибор, названный редактором; 0 — ни для какого; без названного и без прежней строки — NULL', () => {
   const db = openDb(':memory:');
   try {
     migrate(db);
     devices(db);
     panelOn(db, 1);
-    assert.equal(stampOf(db, insA(db)), 1, 'подтверждено при панели на приборе 1');
+    assert.equal(stampOf(db, insA(db, { claim: 1 })), 1, 'человек подтвердил при приборе 1 — экран так и передал');
+    assert.equal(stampOf(db, insA(db, { code: 'K', dc: '8', claim: 0 })), null, '0 — подтверждено ни для какого прибора');
+    assert.equal(stampOf(db, insA(db, { code: 'Q', dc: '6' })), null, 'никто не назвал прибор — не прибор панели (ревью R5, п. 2)');
     assert.equal(stampOf(db, insA(db, { code: 'UREA', dc: '3', confirmed: 0 })), null);
-    assert.equal(stampOf(db, insA(db, { code: 'X', dc: '  ', confirmed: 1 })), null, 'кода нет — подтверждать нечего');
+    assert.equal(stampOf(db, insA(db, { code: 'X', dc: '  ', confirmed: 1, claim: 1 })), null, 'кода нет — подтверждать нечего');
     assert.equal(stampOf(db, insA(db, { code: 'Y', dc: '9', confirmed: 0, claim: 1 })), null, 'отметка без подтверждения не держится');
-    db.prepare('UPDATE lab_panels SET device_id = NULL WHERE id = 5').run();
-    assert.equal(stampOf(db, insA(db, { code: 'Z', dc: '7' })), null, 'панель без прибора — подтверждено ни для какого');
   } finally { db.close(); }
 });
 
-test('233 (R4 п. A, дыра d): старая вкладка перепривязала панель и сохранила — отметка прежнего прибора не «отмывается»', () => {
+test('233 (R4 п. A, дыра d; R5 п. 2): старая вкладка сохранила — отметка наследуется только у той же пары «код + показатель»', () => {
   const db = openDb(':memory:');
   try {
     migrate(db);
     devices(db);
     panelOn(db, 1);
-    editorSave(db, 1, [{}, { code: 'UREA', name: 'Мочевина', dc: '3' }]);
+    editorSave(db, 1, [{ claim: 1 }, { code: 'UREA', name: 'Мочевина', dc: '3', claim: 1 }]);
     // Вкладка без отметки (или не загрузила профили): прибор панели — 2,
     // строки по-прежнему «подтверждены».
     const ids = editorSave(db, 2, [{}, { code: 'UREA', name: 'Мочевина', dc: '3' }, { code: 'CREA', name: 'Креатинин', dc: '5' }]);
-    assert.deepEqual(ids.map((id) => stampOf(db, id)), [1, 1, 2],
-      'прежние коды — для прибора 1 (не совпадает с панелью — приём BS-200 их не применит); новый код подтверждён сейчас — для прибора 2');
-    // Второе сохранение той же вкладкой отметку тоже не меняет.
+    assert.deepEqual(ids.map((id) => stampOf(db, id)), [1, 1, null],
+      'прежние пары — для прибора 1 (не совпадает с панелью — приём BS-200 их не применит); новую никто не подтверждал при приборе 2');
     const again = editorSave(db, 2, [{}, { code: 'UREA', name: 'Мочевина', dc: '3' }]);
-    assert.deepEqual(again.map((id) => stampOf(db, id)), [1, 1]);
-    // Код сменили — это новое сопоставление, подтверждённое при приборе 2.
-    const changed = editorSave(db, 2, [{ dc: '12' }]);
-    assert.equal(stampOf(db, changed[0]), 2);
+    assert.deepEqual(again.map((id) => stampOf(db, id)), [1, 1], 'второе сохранение той же вкладкой отметку не меняет');
+    // Ревью R5, п. 2 (повтор Б) — код «2» переставили на другой показатель:
+    // отметка глюкозы креатинину не достаётся.
+    const remap = editorSave(db, 2, [{ code: 'CREA', name: 'Креатинин', dc: '2' }, { name: 'Глюкоза', dc: '7' }]);
+    assert.deepEqual(remap.map((id) => stampOf(db, id)), [null, null]);
   } finally { db.close(); }
 });
 
-test('233 (R4 п. A): редактор передаёт, для какого прибора подтвердил, — так и записано; прежнее «не для этого прибора» остаётся', () => {
+test('233 (R4 п. A; R5 п. 2): редактор передаёт, для какого прибора подтвердил, — так и записано; до 233 (NULL) остаётся NULL', () => {
   const db = openDb(':memory:');
   try {
     migrate(db);
     devices(db);
     panelOn(db, 1);
-    editorSave(db, 1, [{}, { code: 'UREA', name: 'Мочевина', dc: '3' }]);
+    editorSave(db, 1, [{ claim: 1 }, { code: 'UREA', name: 'Мочевина', dc: '3', claim: 1 }]);
     // Экран: панель на приборе 2, глюкоза подтверждена заново (для 2), мочевина — нет (отметка 1).
     const ids = editorSave(db, 2, [{ claim: 2 }, { code: 'UREA', name: 'Мочевина', dc: '3', claim: 1 }]);
     assert.deepEqual(ids.map((id) => stampOf(db, id)), [2, 1]);
-    // Подтверждение, данное до 233 (NULL), наследуется как есть — «не для этого прибора».
+    // Подтверждение, данное до 233 (NULL): экран шлёт 0, старая вкладка — ничего; NULL в обоих случаях.
     db.prepare('UPDATE lab_panel_analytes SET device_code_confirmed_device_id = NULL WHERE panel_id = 5').run();
-    const legacy = editorSave(db, 2, [{}, { code: 'UREA', name: 'Мочевина', dc: '3' }]);
+    const legacy = editorSave(db, 2, [{ claim: 0 }, { code: 'UREA', name: 'Мочевина', dc: '3' }]);
     assert.deepEqual(legacy.map((id) => stampOf(db, id)), [null, null]);
+    // «Копировать»: копия — другая панель; отметки едут как есть (экран называет их).
+    db.prepare("INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (6, 'Биохимия (копия)', NULL, 2)").run();
+    const copy = [insA(db, { panel: 6, claim: 1 }), insA(db, { panel: 6, code: 'UREA', name: 'Мочевина', dc: '3', claim: 0 }),
+      insA(db, { panel: 6, code: 'CREA', name: 'Креатинин', dc: '5' })];
+    assert.deepEqual(copy.map((id) => stampOf(db, id)), [1, null, null]);
   } finally { db.close(); }
 });
 
@@ -286,7 +298,7 @@ test('233 (R4 п. A): правка строки — подтвердили ил�
     migrate(db);
     devices(db);
     panelOn(db, 1);
-    const id = insA(db);
+    const id = insA(db, { claim: 1 });
     db.prepare('UPDATE lab_panels SET device_id = 2 WHERE id = 5').run();
     assert.equal(stampOf(db, id), 1, 'смена прибора панели отметку не переписывает');
     assert.equal(db.prepare('SELECT device_code_confirmed AS c FROM lab_panel_analytes WHERE id = ?').get(id).c, 1, 'и подтверждение не снимает (триггера R3 нет)');
@@ -306,4 +318,46 @@ test('233 (R4 п. A): правка строки — подтвердили ил�
     db.prepare("UPDATE lab_panel_analytes SET device_code = '' WHERE id = ?").run(id);
     assert.equal(stampOf(db, id), null, 'кода нет');
   } finally { db.close(); }
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R5, п. 6 ─────────────────────────────────
+// Строке BS-200 сменили адрес или порт («Изменить» в «Анализаторах»): за
+// строкой, возможно, уже другой прибор, а у BS-200 номер теста свой у каждого.
+// Отметки «подтверждено для этой строки» снимаются (подтверждения остаются —
+// экран и лоток скажут «подтвердите заново»). Дописанный адрес строки, у
+// которой его не было (discover.js claim), — не смена.
+test('233 (R5 п. 6): адрес или порт строки BS-200 сменили — отметки, данные для неё, сняты; у прочих моделей и без смены — нет', () => {
+  const db = openDb(':memory:');
+  try {
+    migrate(db);
+    db.prepare(`INSERT INTO lab_devices (id, name, profile, host, port) VALUES (1, 'BS-200', 'mindray-bs-200', '10.0.0.40', 2575),
+                (2, 'BS-200 (2)', 'mindray-bs-200', '', 2575), (3, 'BC-5300', 'mindray-bc-5300', '10.0.0.9', 2575)`).run();
+    panelOn(db, 1);
+    db.prepare("INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (6, 'ОАК', NULL, 3)").run();
+    const glu = insA(db, { claim: 1 });
+    const other = insA(db, { code: 'UREA', name: 'Мочевина', dc: '3', claim: 2 });
+    const wbc = insA(db, { panel: 6, code: 'WBC', name: 'Лейкоциты', dc: 'WBC', claim: 3 });
+    const st = () => [stampOf(db, glu), stampOf(db, other), stampOf(db, wbc)];
+
+    db.prepare("UPDATE lab_devices SET name = 'BS-200 лаборатория', host = '10.0.0.40', port = 2575 WHERE id = 1").run();
+    assert.deepEqual(st(), [1, 2, 3], 'имя сменили, адрес и порт те же');
+    db.prepare("UPDATE lab_devices SET host = '10.0.0.41' WHERE id = 2").run();
+    assert.deepEqual(st(), [1, 2, 3], 'строке без адреса адрес дописали — не смена');
+    db.prepare("UPDATE lab_devices SET host = '10.0.0.10' WHERE id = 3").run();
+    assert.deepEqual(st(), [1, 2, 3], 'коды производителя — отметка не читается и не снимается');
+    db.prepare("UPDATE lab_devices SET host = '10.0.0.50' WHERE id = 1").run();
+    assert.deepEqual(st(), [null, 2, 3], 'адрес BS-200 сменили — отметки этой строки сняты');
+    assert.equal(db.prepare('SELECT device_code_confirmed AS c FROM lab_panel_analytes WHERE id = ?').get(glu).c, 1, 'подтверждение остаётся — подтвердить заново');
+    db.prepare("UPDATE lab_devices SET port = 5600 WHERE id = 2").run();
+    assert.deepEqual(st(), [null, null, 3], 'порт BS-200 сменили');
+  } finally { db.close(); }
+});
+
+test('233 (R5 п. 6): список профилей в триггере адреса — ровно профили с codesPerInstrument', async () => {
+  const { listProfiles } = await import('../../lis/profiles/index.js');
+  const want = listProfiles().filter((p) => p.codesPerInstrument).map((p) => p.key).sort();
+  const m = /ON lab_devices[\s\S]*?profile IN \(([^)]*)\)/i.exec(SQL);
+  assert.ok(m, 'триггер со списком профилей');
+  const got = m[1].split(',').map((x) => x.trim().replace(/^'|'$/g, '')).sort();
+  assert.deepEqual(got, want);
 });
