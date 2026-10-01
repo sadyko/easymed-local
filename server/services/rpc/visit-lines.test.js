@@ -103,9 +103,13 @@ test('visit_set_referral_source: стойка ставит и снимает и�
 test('LIVE_AUDIT_FIX_V1: ensure_visit медсестре закрыт — пустого визита она не заведёт', async () => {
   const db = freshDb();
   const before = db.prepare('SELECT COUNT(*) c FROM visits').get().c;
-  await assert.rejects(() => call('ensure_visit', db, { patient_id: 1, date: '2026-10-01' }, NURSE), (e) => e.status === 403);
+  // TEST_DATE_DRIFT_FIX — день всегда в будущем: жёсткая '2026-10-01' 1 октября
+  // совпала с визитом 40, который freshDb заводит на сегодня, и ensure_visit
+  // вернул его (created: false).
+  const day = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+  await assert.rejects(() => call('ensure_visit', db, { patient_id: 1, date: day }, NURSE), (e) => e.status === 403);
   assert.equal(db.prepare('SELECT COUNT(*) c FROM visits').get().c, before);
-  const ok = await call('ensure_visit', db, { patient_id: 1, date: '2026-10-01' }, DOC);
+  const ok = await call('ensure_visit', db, { patient_id: 1, date: day }, DOC);
   assert.equal(ok.created, true, 'врачу ensure_visit по-прежнему открыт');
 });
 
