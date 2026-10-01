@@ -9,6 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readEnvelope, readResult, pickSampleId, wireFor, WIRES, FORWARDER_FACILITY } from './wire.js';
 import { pickMessageSample } from './wire.js';   // LIS_REAL_ANALYZERS_V1 — ревью R1, п. 1
+import { wireDecision } from './wire.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 12
 import { parseMessage } from './hl7.js';
 
 const seg = (...s) => s.join('\r');
@@ -364,17 +365,19 @@ test('R1 п. 8: восьмизначный голый номер прежнег�
 // провод объявляет это соглашение: химия Mindray (BS-200, руководство с. 8) и
 // Autobio по сети (тот же заголовок «…|2.3.1||||0||ASCII», A2000 plus HL7
 // protocol V0.02). У прочих MSH-16 в виде сообщения не участвует.
-test('R1 п. 7: MSH-16 = 1/2 — служебное только у mindray-chem и autobio-hl7; прочие провода — проба', () => {
+// Ревью R2, п. 11 — у Autobio по сети соглашение не проверено (провод по
+// драйверу, не по документу): MSH-16 = 1/2 у него — обычная проба; без
+// этикетки LAB- она ляжет в лоток, где её видно. Проверить на приборе.
+test('R1 п. 7, R2 п. 11: MSH-16 = 1/2 — служебное только у mindray-chem; прочие провода, и autobio-hl7, — проба', () => {
   const qc = (app, facility) => seg(`MSH|^~\\&|${app}|${facility}|||20261001090000||ORU^R01|1|P|2.3.1||||2||ASCII|||`, 'OBR|1||LAB-000123');
   assert.equal(readEnvelope(qc('X', 'Y'), 'mindray-chem').kind, 'qc');
-  assert.equal(readEnvelope(qc('X', 'Y'), 'autobio-hl7').kind, 'qc');
-  for (const wire of ['default', 'forwarder', 'mindray-hematology']) {
+  for (const wire of ['default', 'forwarder', 'mindray-hematology', 'autobio-hl7']) {
     assert.equal(readEnvelope(qc('X', 'Y'), wire).kind, 'result', wire);
     assert.equal(readEnvelope(qc('X', 'Y'), wire).service, false, wire);
   }
   // Провод не назван — по тому, как сообщение называет себя.
   assert.equal(readEnvelope(qc('Mindray', 'BS-200E')).kind, 'qc', 'BS-200 по MSH-4');
-  assert.equal(readEnvelope(qc('A1000', 'Autolumo')).kind, 'qc', 'Autobio по MSH-3');
+  assert.equal(readEnvelope(qc('A1000', 'Autolumo')).kind, 'result', 'Autobio — соглашение не проверено (R2, п. 11)');
   assert.equal(readEnvelope(qc('BC-5300', 'Mindray')).kind, 'result', 'гематология — соглашения нет');
   assert.equal(readEnvelope(qc('X', 'Y')).kind, 'result', 'незнакомый прибор — соглашения нет');
   // Запросы — по типу сообщения, у всех.
@@ -397,4 +400,22 @@ test('R1 п. 11: провод по имени сообщения, если у п
   assert.equal(wireFor({ profile: { wire: 'mindray-chem' }, app: 'Mindray', facility: '' }), 'mindray-chem', 'сообщение себя не назвало — провод строки');
   assert.equal(wireFor({ profile: { wire: 'mindray-chem' }, app: 'AutoLumo A1000', facility: 'LabPC' }), 'forwarder', 'переадресатор — по MSH-4, как прежде');
   assert.equal(wireFor({ profile: null, app: 'BC-5300', facility: 'Mindray' }), 'default', 'прежние профили провода не называют');
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R2, п. 12 ────────────────────────────────
+// Профиль строки и само сообщение называют РАЗНЫЕ провода (не default) — это
+// спор: приём кладёт сообщение в лоток с причиной, а не выбирает наугад.
+// wireFor по-прежнему отдаёт безопасный провод — им читается вид сообщения,
+// номер для человека, «Поле анализатора».
+test('R2 п. 12: wireDecision — спор, когда профиль и сообщение называют разные провода', () => {
+  const bs = { app: 'Mindray', facility: 'BS-200E' };
+  const c = wireDecision({ profile: { wire: 'mindray-hematology', model: 'BC-780' }, ...bs });
+  assert.deepEqual({ wire: c.wire, conflict: c.conflict, rowModel: c.rowModel, messageModel: c.messageModel },
+    { wire: 'mindray-chem', conflict: true, rowModel: 'BC-780', messageModel: 'BS-200' });
+  assert.equal(wireDecision({ profile: null, ...bs }).conflict, false, 'строка без профиля — провод сообщения');
+  assert.equal(wireDecision({ profile: { key: 'mindray-bs-240', model: 'BS-240' }, ...bs }).conflict, false, 'прежний профиль без провода');
+  assert.equal(wireDecision({ profile: { wire: 'mindray-chem', model: 'BS-200' }, ...bs }).conflict, false, 'согласны');
+  assert.equal(wireDecision({ profile: { wire: 'mindray-chem', model: 'BS-200' }, app: 'X', facility: 'Y' }).conflict, false, 'сообщение себя не назвало');
+  assert.equal(wireDecision({ profile: { wire: 'mindray-chem', model: 'BS-200' }, app: 'AutoLumo A1000', facility: 'LabPC' }).wire, 'forwarder');
+  assert.equal(wireFor({ profile: { wire: 'mindray-hematology' }, ...bs }), 'mindray-chem', 'wireFor — безопасный, как в R1');
 });

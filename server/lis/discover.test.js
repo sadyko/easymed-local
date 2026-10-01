@@ -257,14 +257,15 @@ test('S5: человек поправил модель и название на�
   const db = fresh();
   // LIS_REAL_ANALYZERS_V1_MODEL — имя было «BC-2006»: с границей-цифрой оно
   // больше не BC-20 (как «BS-2000M» — не BS-200), и догадки не было бы вовсе.
-  // «BC-20s» — по-прежнему BC-20: за моделью буква, а не цифра.
-  const first = ensureDevice(db, { sendingApp: 'BC-20s', peer: '10.0.0.60', port: 2575 });
+  // Ревью R2, п. 8: и «BC-20s» не BC-20 (короткая модель — целым словом);
+  // «Mindray BC-20» — BC-20.
+  const first = ensureDevice(db, { sendingApp: 'Mindray BC-20', peer: '10.0.0.60', port: 2575 });
   assert.equal(first.device.profile, 'mindray-bc-20', 'догадка по имени — BC-20');
   // Ровно то, что пишут «Добавить» и «Изменить» с выбранной моделью.
   db.prepare("UPDATE lab_devices SET name = 'Гематология', profile = 'mindray-bc-5300', added = 1, model_confirmed = 1 WHERE id = ?").run(first.device.id);
 
-  const next = ensureDevice(db, { sendingApp: 'BC-20s', peer: '10.0.0.60', port: 2575 });
-  assert.equal(next.created, false, 'раньше здесь заводилась «BC-20s (10.0.0.60)», и панели этой строки уходили в лоток');
+  const next = ensureDevice(db, { sendingApp: 'Mindray BC-20', peer: '10.0.0.60', port: 2575 });
+  assert.equal(next.created, false, 'раньше здесь заводилась «Mindray BC-20 (10.0.0.60)», и панели этой строки уходили в лоток');
   assert.equal(next.device.id, first.device.id);
   assert.equal(next.reason, 'по адресу и имени');
   assert.equal(next.device.profile, 'mindray-bc-5300', 'правка человека не откатывается');
@@ -494,7 +495,8 @@ test('граница-цифра: «BS-2000M» — не BS-200, «BC-2006» — �
   assert.equal(guessProfile({ app: 'Mindray', facility: 'BS-2000M' }), null);
   assert.equal(guessProfile('BC-2006'), null);
   assert.equal(guessProfile('Mindray BS-200E v2').key, 'mindray-bs-200');
-  assert.equal(guessProfile('BC-20s').key, 'mindray-bc-20');
+  assert.equal(guessProfile('BC-20s'), null, 'ревью R2, п. 8: короткая модель — целым словом (BC-20s — другая модель)');
+  assert.equal(guessProfile('Mindray BC-20').key, 'mindray-bc-20');
   assert.equal(guessProfile('A2000 Plus'), null, 'другая модель Autobio — не A1000');
 });
 
@@ -558,5 +560,42 @@ test('строка без адреса с моделью BS-240 не забир�
   assert.equal(out.device.profile, 'mindray-bs-200');
   assert.equal(row(db, bs240).host, '');
   assert.equal(row(db, bs240).sending_app, null);
+  db.close();
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R2 ───────────────────────────────────────
+
+// П. 8 — у короткого псевдонима «A1000» не было левой границы: Sysmex CA-1000
+// (коагулометр), «XA1000», «EasyLab A1000X» угадывались как AutoLumo. Теперь
+// модель в имени — с начала слова; короткая (до 5 знаков) — целым словом.
+test('R2 п. 8: «A1000» — только словом: CA-1000, XA1000, EasyLab A1000X — не AutoLumo; настоящие заголовки Autobio — да', () => {
+  for (const name of ['Sysmex CA-1000', 'CA1000', 'XA1000', 'EasyLab A1000X', 'A2000 Plus']) {
+    assert.equal(guessProfile({ app: name }), null, name);
+    assert.equal(guessProfile({ app: 'Lab', facility: name }), null, name + ' в MSH-4');
+  }
+  assert.equal(guessProfile({ app: 'A1000', facility: 'Autolumo' }).key, 'autobio-autolumo-a1000');
+  assert.equal(guessProfile({ app: 'AutoLumo A1000', facility: 'LabPC' }).key, 'autobio-autolumo-a1000');
+  assert.equal(guessProfile({ app: 'Autobio A1000 v2' }).key, 'autobio-autolumo-a1000', 'модель словом внутри имени');
+  // Прежние формы — как были.
+  assert.equal(guessProfile('MINDRAY BC-5300').key, 'mindray-bc-5300');
+  assert.equal(guessProfile('BC-5300 v2').key, 'mindray-bc-5300');
+  assert.equal(guessProfile('Mindray BS-200E v2').key, 'mindray-bs-200');
+  assert.equal(guessProfile('BS-2000M'), null);
+});
+
+// Находка BS-200 называла себя «Mindray»: MSH-3 у него — производитель. Если
+// модель узнана по MSH-4, название находки — «MSH-3 MSH-4». Различение
+// приборов НЕ меняется: адрес и MSH-3 (sending_app).
+test('R2: находка, чья модель узнана по MSH-4, называется «Mindray BS-200E»; различение — по-прежнему адрес и MSH-3', () => {
+  const db = fresh();
+  const a = ensureDevice(db, { sendingApp: 'Mindray', sendingFacility: 'BS-200E', peer: '10.0.0.40', port: 2575 });
+  assert.deepEqual([a.device.name, a.device.sending_app, a.device.sending_facility, a.device.profile],
+    ['Mindray BS-200E', 'Mindray', 'BS-200E', 'mindray-bs-200']);
+  assert.equal(ensureDevice(db, { sendingApp: 'Mindray', sendingFacility: 'BS-200E', peer: '10.0.0.40', port: 2575 }).device.id, a.device.id);
+  const b = ensureDevice(db, { sendingApp: 'Mindray', sendingFacility: 'BS-200E', peer: '10.0.0.41', port: 2575 });
+  assert.equal(b.device.name, 'Mindray BS-200E (10.0.0.41)', 'второй такой же — с адресом, как прежде');
+  // Модель в MSH-3 — название, как прежде.
+  assert.equal(ensureDevice(db, { sendingApp: 'BC-780', sendingFacility: 'Mindray', peer: '10.0.0.50', port: 2575 }).device.name, 'BC-780');
+  assert.equal(ensureDevice(db, { sendingApp: 'Sysmex XN', sendingFacility: 'Lab', peer: '10.0.0.51', port: 2575 }).device.name, 'Sysmex XN');
   db.close();
 });

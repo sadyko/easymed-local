@@ -62,26 +62,46 @@ const SAFER = ['default', 'forwarder', 'mindray-hematology', 'autobio-hl7', 'min
  *     сообщение, назвавшее себя BS-200, OBR-3 не читает никогда.
  * @param {{profile?: {wire?:string}|null, facility?: string, app?: string}} [o]
  */
-export function wireFor({ profile = null, facility = '', app = '' } = {}) {
-  if (String(facility == null ? '' : facility).trim().toLowerCase() === FORWARDER_FACILITY.toLowerCase()) return 'forwarder';
+export function wireFor(o = {}) {
+  return wireDecision(o).wire;
+}
+
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R2, п. 12) — провод и СПОР. Профиль строки и
+ * само сообщение называют РАЗНЫЕ провода, и ни один не default: строка
+ * прибора — «BC-780», а сообщение назвало себя «Mindray|BS-200E». Безопасный
+ * провод (wire) годится, чтобы прочесть вид сообщения и номер для человека, но
+ * не чтобы класть значения в бланк: какое поле значение и где код, решает
+ * провод, и выбирать наугад нельзя. Приём (ingest.js) такое сообщение кладёт в
+ * лоток с причиной — человек правит модель прибора.
+ * @returns {{wire:string, conflict:boolean, rowModel?:string, messageModel?:string}}
+ */
+export function wireDecision({ profile = null, facility = '', app = '' } = {}) {
+  if (String(facility == null ? '' : facility).trim().toLowerCase() === FORWARDER_FACILITY.toLowerCase()) return { wire: 'forwarder', conflict: false };
   const own = guessProfile({ app, facility });
   const fromRow = known(profile && profile.wire);
   const fromMessage = known(own && own.wire);
-  if (fromRow === fromMessage || fromMessage === 'default') return fromRow;
-  if (fromRow === 'default') return fromMessage;
-  return SAFER.indexOf(fromRow) >= SAFER.indexOf(fromMessage) ? fromRow : fromMessage;
+  if (fromRow === fromMessage || fromMessage === 'default') return { wire: fromRow, conflict: false };
+  if (fromRow === 'default') return { wire: fromMessage, conflict: false };
+  const wire = SAFER.indexOf(fromRow) >= SAFER.indexOf(fromMessage) ? fromRow : fromMessage;
+  return { wire, conflict: true, rowModel: profile.model || profile.key || '', messageModel: own.model };
 }
 
 /**
  * LIS_REAL_ANALYZERS_V1 (ревью R1, п. 7) — провода, у которых MSH-16 = 1/2
  * значит калибровку и контроль качества: химия Mindray (руководство BS-200,
- * с. 8: «0- Sample result; 1- Calibration result; 2- QC result») и Autobio по
- * сети (тот же заголовок «…|2.3.1||||0||ASCII|||», «A2000 plus HL7 protocol
- * V0.02»). BS-240 и CL-900i — на проводе default: руководства на их HL7 у нас
- * нет, и прятать пробу пациента в «служебные» по догадке нельзя; их контроль,
- * если придёт, ляжет в «Необработанные», как до E4, и его отклонит человек.
+ * с. 8: «0- Sample result; 1- Calibration result; 2- QC result»). BS-240 и
+ * CL-900i — на проводе default: руководства на их HL7 у нас нет, и прятать
+ * пробу пациента в «служебные» по догадке нельзя; их контроль, если придёт,
+ * ляжет в «Необработанные», как до E4, и его отклонит человек.
+ *
+ * Ревью R2, п. 11 — Autobio по сети (autobio-hl7) снят: его провод — по
+ * полевому драйверу, не по документу, и то, что MSH-16 у него значит то же,
+ * — догадка по заголовку «A2000 plus HL7 protocol V0.02». Его MSH-16 = 1/2
+ * идёт обычным приёмом: без этикетки LAB- — в лоток, где его видно.
+ * ПРОВЕРИТЬ НА ПРИБОРЕ (спецификация, раздел 5).
  */
-const VENDOR_KIND_WIRES = new Set(['mindray-chem', 'autobio-hl7']);
+const VENDOR_KIND_WIRES = new Set(['mindray-chem']);
 
 // Запросы рабочего списка (раздел 7): Easy-Med заказов не отдаёт, отвечает
 // «заказов нет». QRY^Q02 — BS-200 и химия Mindray, QRY^Q01 — Autobio,

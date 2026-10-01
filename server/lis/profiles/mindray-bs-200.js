@@ -29,6 +29,12 @@
 // Типового списка каналов нет и быть не может: номера тестов задаёт клиника
 // (ItemID.ini). Коды появятся в «Поле анализатора», когда прибор пришлёт первую
 // пробу (lis_device_codes).
+//
+// LIS_REAL_ANALYZERS_V1 (ревью R2, п. 1) — codesPerInstrument: номер теста свой
+// у КАЖДОГО прибора — «2» у второго BS-200 бывает креатинином, а не глюкозой.
+// Поэтому подмены «та же модель» нет (ingest.js): панель кормит только тот
+// прибор, к которому привязана; коды в «Поле анализатора» — только своего
+// прибора; серия — только своего прибора.
 export default {
   key: 'mindray-bs-200',
   vendor: 'Mindray',
@@ -40,6 +46,7 @@ export default {
   connect: 'listen',
   wire: 'mindray-chem',
   oneTestPerMessage: true,
+  codesPerInstrument: true,   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 1
   wireSource: 'documented',
   channelsSource: 'device',
   channels: [],

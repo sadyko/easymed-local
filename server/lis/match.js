@@ -175,9 +175,29 @@ export function outcome(plan) {
 // из сырых сообщений (инвариант 2): ни новых колонок, ни состояния в памяти,
 // которое потерялось бы при перезапуске. D4 не меняется: серия решает, когда
 // бланк заполнен, а не что применять.
+//
+// LIS_REAL_ANALYZERS_V1 (ревью R2, пп. 5 и 6) — что судится по чему:
+//   — «заполнено / не пришли» — по БЛАНКУ (written): строки, заполненные
+//     раньше окна, заполнены. Окно скользило с каждым сообщением, и бланк,
+//     полный по сообщениям в −61, −30 и 0 минут, ждал вечно;
+//   — «повтор» — значение ТЕКУЩЕГО сообщения против значения прибора в бланке
+//     ДО записи (before), в любом окне: тот же тест через 2 часа с другим
+//     числом раньше молча менял черновик; то же значение — повторная передача;
+//   — «не подтверждено», повтор внутри сообщения и «не использованы» — у
+//     ТЕКУЩЕГО сообщения. Спор раннего сообщения остаётся в его строке лотка и
+//     следующими не повторяется — и отклонённый человеком не всплывает.
+// Окно — для числа сообщений серии и причин «не пришла».
 
 /** Окно серии — 60 минут (решение владельца 2026-10-01, вопрос 4). */
 export const SERIES_WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R2, п. 9) — потолок серии: больше сообщений по
+ * одному заказу за окно не пересчитывается (стоимость приёма росла квадратично
+ * — 114 мс на сообщение при 5 000 и останов цикла событий). Сверх потолка —
+ * лоток с причиной (ingest.js).
+ */
+export const SERIES_MAX_MESSAGES = 200;
 
 /**
  * Причина «не пришла» у строки, которую серия по пересчёту заполнила, но в
@@ -195,11 +215,15 @@ const valueKey = (v) => String(v == null ? '' : v).trim();
  *
  * @param {Array<object[]>} messages  строки прибора каждого сообщения серии
  * @param {object[]} analytes          строки бланка, как у planObservations
- * @param {{written?: Set<string>}} [opts]
- *   written — имена строк бланка, где сейчас лежит значение прибора. Строка,
- *   которую серия по пересчёту «заполнила», но которой в бланке нет (значение
- *   пришло, когда код ещё не был подтверждён, и по D4 не легло), — «не пришла»:
- *   серия верит бланку, а не пересчёту.
+ * @param {{written?: Set<string>, before?: Map<string,string>}} [opts]
+ *   written — имена строк бланка, где сейчас (после записи текущего) лежит
+ *   значение прибора. По нему судится «заполнено»; строка, которую серия по
+ *   пересчёту «заполнила», но которой в бланке нет (значение пришло, когда код
+ *   ещё не был подтверждён, и по D4 не легло), — «не пришла» с причиной. Без
+ *   written — по сообщениям серии (как в E7).
+ *   before — значение прибора в бланке ДО текущего сообщения, по имени строки:
+ *   против него судятся повтор и повторная передача. Без before — последнее
+ *   значение строки по ранним сообщениям серии.
  * @returns {{
  *   count: number,
  *   filled: object[],
@@ -210,70 +234,76 @@ const valueKey = (v) => String(v == null ? '' : v).trim();
  *   resent: Array<{obs:object, analyte:object}>,
  *   unused: object[],
  * }}
- *   filled      — подтверждённые строки бланка, получившие значение хоть в одном сообщении;
- *   missing     — подтверждённые строки, не заполненные никем, с причинами, как у planObservations;
- *   unconfirmed — все попадания в неподтверждённые строки по всей серии (правило 3, R5);
- *   repeats     — второе значение одной строки ВНУТРИ сообщения (R6);
- *   changed     — повтор между сообщениями: более позднее окончательное значение
- *                 уже заполненной строки, и оно ДРУГОЕ («5.1», потом «5.4») —
- *                 повторный прогон или разведение, какое число верное, решает
- *                 человек (R6); в бланке — последнее (D6);
+ *   filled      — подтверждённые строки бланка со значением прибора;
+ *   missing     — подтверждённые строки без него, с причинами, как у planObservations;
+ *   unconfirmed — попадания текущего сообщения в неподтверждённые строки (правило 3, R5);
+ *   repeats     — второе значение одной строки ВНУТРИ текущего сообщения (R6);
+ *   changed     — повтор: текущее сообщение меняет значение прибора в бланке
+ *                 («5.1», потом «5.4») — повторный прогон или разведение, какое
+ *                 число верное, решает человек (R6); в бланке — новое (D6);
  *   resent      — то же значение по той же строке ещё раз: прибор не получил ACK
  *                 и прислал снова. Не спор — справка;
- *   unused      — «не использованы» ПОСЛЕДНЕГО сообщения.
+ *   unused      — «не использованы» текущего сообщения.
  */
 export function planSeries(messages = [], analytes = [], opts = {}) {
   const plans = messages.map((obs) => planObservations(obs, analytes));
-  const values = new Map();         // строка бланка → [{ obs, value }] по порядку прихода
+  const current = plans.length ? plans[plans.length - 1] : planObservations([], analytes);
+  const union = new Set();          // строки бланка, заполненные хоть одним сообщением серии
   const reasons = new Map();        // строка бланка → последняя непустая причина «не пришла»
-  const unconfirmed = [];
-  const repeats = [];
   for (const p of plans) {
-    for (const { obs, analyte } of p.fills) {
-      if (!values.has(analyte)) values.set(analyte, []);
-      values.get(analyte).push({ obs, value: valueKey(obs.value) });
-    }
+    for (const { analyte } of p.fills) union.add(analyte);
     for (const { analyte, reason } of p.missing) if (reason) reasons.set(analyte, reason);
-    unconfirmed.push(...p.unconfirmed);
-    repeats.push(...p.repeats);
+  }
+  let before = opts.before instanceof Map ? opts.before : null;
+  if (!before) {
+    before = new Map();
+    for (const p of plans.slice(0, -1)) for (const { obs, analyte } of p.fills) before.set(analyte.name, valueKey(obs.value));
   }
 
   const written = opts.written instanceof Set ? opts.written : null;
   const filled = [];
   const missing = [];
-  const changed = [];
-  const resent = [];
   for (const a of analytes) {
     if (!a.device_code_confirmed || !String(a.device_code == null ? '' : a.device_code).trim()) continue;
-    const got = values.get(a);
-    if (!got) {
-      // Не заполнена ни одним сообщением — с причиной из того сообщения, где
-      // она была (статус P, пустое, «нет числа», код у другой строки).
-      missing.push({ analyte: a, reason: reasons.get(a) || '' });
-      continue;
-    }
-    if (written && !written.has(a.name)) { missing.push({ analyte: a, reason: NOT_IN_BLANK }); continue; }
-    filled.push(a);
-    if (got.length < 2) continue;
-    const now = got[got.length - 1];
-    const was = [...new Set(got.slice(0, -1).map((g) => g.value))].filter((v) => v !== now.value);
-    if (was.length) changed.push({ obs: now.obs, analyte: a, was, now: now.value });
-    else resent.push({ obs: now.obs, analyte: a });
+    if (written ? written.has(a.name) : union.has(a)) { filled.push(a); continue; }
+    // Не заполнена — с причиной из того сообщения, где она была (статус P,
+    // пустое, «нет числа», код у другой строки); пересчёт заполнил, а в бланке
+    // нет — «в бланк не записано».
+    missing.push({ analyte: a, reason: written && union.has(a) ? NOT_IN_BLANK : (reasons.get(a) || '') });
+  }
+
+  const changed = [];
+  const resent = [];
+  for (const { obs, analyte } of current.fills) {
+    if (!before.has(analyte.name)) continue;
+    const was = valueKey(before.get(analyte.name));
+    const now = valueKey(obs.value);
+    if (was === now) resent.push({ obs, analyte });
+    else changed.push({ obs, analyte, was: [was], now });
   }
 
   return {
     count: messages.length,
     filled,
     missing,
-    unconfirmed,
-    repeats,
+    unconfirmed: current.unconfirmed,
+    repeats: current.repeats,
     changed,
     resent,
-    unused: plans.length ? plans[plans.length - 1].unused : [],
+    unused: current.unused,
   };
 }
 
 const messagesWord = (n) => (n % 10 === 1 && n % 100 !== 11 ? 'сообщения' : 'сообщений');
+
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R2, п. 6) — строка спора в журнале: «2 (GLU):
+ * было 5.1, в бланке 5.4». По ней приём узнаёт спор, уже отклонённый
+ * человеком, — тот же тест и те же два числа второй раз не поднимаются.
+ */
+export function changeText(c) {
+  return label(c.obs) + ': было ' + c.was.join(', ') + ', в бланке ' + c.now;
+}
 
 /**
  * Статус ТЕКУЩЕГО сообщения серии и строка журнала (раздел 3, пп. 4–6).
@@ -294,10 +324,7 @@ export function seriesOutcome(s) {
   if (clean && s.count > 1) parts.push('серия из ' + s.count + ' ' + messagesWord(s.count) + ' принята');
   if (s.missing.length) parts.push(missingText(s.missing));
   if (s.unconfirmed.length) parts.push('не подтверждено: ' + list(s.unconfirmed.map(label)));
-  const disputes = [
-    ...s.repeats.map(label),
-    ...s.changed.map((c) => label(c.obs) + ': было ' + c.was.join(', ') + ', в бланке ' + c.now),
-  ];
+  const disputes = [...s.repeats.map(label), ...s.changed.map(changeText)];
   if (disputes.length) parts.push('повтор: ' + list(disputes));
   if (s.resent.length) parts.push('повторная передача: ' + list(s.resent.map((r) => label(r.obs))));
   if (s.unused.length) parts.push('не использованы: ' + list(s.unused.map(label)));

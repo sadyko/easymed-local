@@ -14,6 +14,7 @@ import { migrate } from '../db/migrate.js';
 import { startLisListeners, stopLisListeners, listenerStatus } from './index.js';
 import { VT, FS, DEFAULT_MAX_BYTES } from './mllp.js';
 import { OVERSIZE_DETAIL_PREFIX } from './inbox.js';   // LIS_DISCOVERY_FIX_V1 — по нему привязка узнаёт обрезанное
+import { ABANDONED_DETAIL_PREFIX } from './inbox.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 10
 import { selfPorts } from './index.js';   // LIS_REAL_ANALYZERS_V1_DIAL — порты самого Easy-Med (нет петли на себя)
 import { lisRestart, lisDeviceDelete, lisListeners } from '../services/rpc/lis.js';   // LIS_REAL_ANALYZERS_V1_DIAL
 
@@ -443,4 +444,92 @@ test('lis_restart и lis_device_delete рвут соединение и не ж�
       assert.equal(dialing(7), undefined);
     });
   } finally { await fake.close(); }
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R2 ───────────────────────────────────────
+
+// П. 3 — два запуска слушателей одновременно (два «Перезапустить» подряд,
+// удаление во время перезапуска): второй затирал клиента первого в карте, не
+// закрыв его, — сирота звонил прибору вечно, а порт LIS второй запуск видел
+// «уже занятым». Запуски и остановка теперь идут по очереди.
+test('R2 п. 3: два запуска одновременно, потом остановка — ни одного соединения, ни нового звонка, порт не «занят»', async () => {
+  const fake = await fakeAnalyzer();
+  try {
+    await withLis(async (db, lisPort) => {
+      dialRow(db, { id: 7, port: fake.port });
+      await Promise.all([startLisListeners(db, { log: () => {} }), startLisListeners(db, { log: () => {} })]);
+      assert.deepEqual(listenerStatus().failed, [], 'порт LIS не «занят» сам собой');
+      assert.ok(listenerStatus().listening.includes(lisPort));
+      assert.equal(listenerStatus().dialing.length, 1);
+      await until(() => fake.live().length === 1, 5000, 'одно живое соединение');
+      await sleep(200);
+      assert.equal(fake.live().length, 1, 'сироты нет');
+      await stopLisListeners();
+      await until(() => fake.live().length === 0, 3000, 'остановка рвёт всё');
+      const n = fake.conns.length;
+      await sleep(400);
+      assert.equal(fake.conns.length, n, 'после остановки никто не звонит');
+    });
+  } finally { await fake.close(); }
+});
+
+// П. 7 — дубль адреса сравнивался строкой: «127.0.0.1» и «::ffff:127.0.0.1»
+// давали два соединения с одним прибором.
+test('R2 п. 7: дубль адреса — после приведения: «::ffff:127.0.0.1» = «127.0.0.1», «0:0:0:0:0:0:0:1» = «::1»', async () => {
+  const fake = await fakeAnalyzer();
+  try {
+    await withLis(async (db) => {
+      dialRow(db, { id: 7, port: fake.port });
+      dialRow(db, { id: 8, host: '::ffff:127.0.0.1', port: fake.port, name: 'BC-780 (2)' });
+      dialRow(db, { id: 9, host: '::1', port: 5611 });
+      dialRow(db, { id: 10, host: '0:0:0:0:0:0:0:1', port: 5611 });
+      await startLisListeners(db, { log: () => {} });
+      await until(() => dialing(7) && dialing(7).state === 'connected', 5000, 'connected');
+      assert.deepEqual([dialing(8).state, dialing(8).code], ['off', 'duplicate']);
+      assert.deepEqual([dialing(10).state, dialing(10).code], ['off', 'duplicate']);
+      await sleep(200);
+      assert.equal(fake.conns.length, 1, 'один прибор — одно соединение');
+    });
+  } finally { await fake.close(); }
+});
+
+// П. 10 — читатель кадров (общий у слушателя и звонка).
+test('R2 п. 10а: брошенный кадр и следом новый — новый принят, в лотке одна строка «кадр оборван»', async () => {
+  await withLis(async (db, lisPort) => {
+    await startLisListeners(db, { log: () => {} });
+    const sock = await connect(lisPort);
+    try {
+      const reply = readFrame(sock);
+      const partial = 'MSH|^~\\&|BC-5300|Mindray|||20261001090000||ORU^R01|61|P|2.3.1\rOBR|1||LAB-000123|00001^Automated Count^99MRC\rOBX|1|NM|WBC^^99MRC||6.';
+      const full = 'MSH|^~\\&|BC-5300|Mindray|||20261001090000||ORU^R01|62|P|2.3.1\rOBR|1||LAB-000999|00001^Automated Count^99MRC\rOBX|1|NM|WBC^^99MRC||7.1|10*9/L|||||F';
+      sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from(partial, 'utf8'), frameOf(full)]));
+      assert.match(await reply, /MSA\|AA\|62\|/, 'ответ — на новый кадр, с его номером');
+      await until(() => db.prepare('SELECT COUNT(*) c FROM lab_device_messages').get().c === 2, 3000, 'две строки');
+      const rows = db.prepare('SELECT * FROM lab_device_messages ORDER BY id').all();
+      const cut = rows.find((r) => r.status === 'rejected');
+      assert.ok(cut, JSON.stringify(rows.map((r) => [r.status, r.detail])));
+      assert.ok(cut.detail.startsWith(ABANDONED_DETAIL_PREFIX), cut.detail);
+      assert.equal(cut.raw, partial, 'в лотке — начало брошенного кадра');
+      assert.equal(cut.sample_id, 'LAB-000123');
+      const ok = rows.find((r) => r.status !== 'rejected');
+      assert.equal(ok.raw, full, 'новый кадр — целиком, без начала брошенного');
+    } finally { sock.destroy(); }
+  });
+});
+
+test('R2 п. 10б: переросшее с одного адреса — одна строка лотка в час, а не на каждое переподключение', async () => {
+  await withLis(async (db, lisPort) => {
+    await startLisListeners(db, { log: () => {} });
+    const head = 'MSH|^~\\&|BC-5380|Mindray|||20260928120000||ORU^R01|555|P|2.3.1\rOBR|1||LAB-000123|00001^Automated Count^99MRC\r';
+    for (let i = 0; i < 3; i++) {
+      const sock = await connect(lisPort);
+      sock.on('error', () => {});
+      const reply = readFrame(sock);
+      sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from(head, 'utf8'), Buffer.alloc(DEFAULT_MAX_BYTES + 1024, 0x51)]));
+      assert.match(await reply, /MSA\|AE\|555/, 'прибор каждый раз видит отказ');
+      sock.destroy();
+    }
+    await sleep(300);
+    assert.equal(db.prepare("SELECT COUNT(*) c FROM lab_device_messages WHERE status = 'rejected'").get().c, 1);
+  });
 });

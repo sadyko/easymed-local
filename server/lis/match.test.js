@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { planObservations, outcome } from './match.js';
 import { planSeries, seriesOutcome, SERIES_WINDOW_MS } from './match.js';   // LIS_REAL_ANALYZERS_V1_SERIES
+import { changeText, SERIES_MAX_MESSAGES } from './match.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, пп. 6 и 9
 
 const obs = (codeRaw, value = '1', status = 'F') => {
   const [code = '', name = '', system = ''] = codeRaw.split('^');
@@ -250,19 +251,25 @@ test('серия: повторный прогон с другим значени
   assert.deepEqual(seriesOutcome(s), { status: 'unmapped', pending: false, detail: 'повтор: 2 (GLU): было 5.1, в бланке 5.4' });
 });
 
+// Ревью R2, п. 5 — повтор и повторная передача — у ТЕКУЩЕГО сообщения: его
+// значение против того, что уже лежит в бланке. Спор раннего сообщения остаётся
+// в его строке лотка и следующими сообщениями не повторяется (п. 6).
 test('серия: то же значение ещё раз — повторная передача, не спор; серия чистая', () => {
-  const s = planSeries([[bs('2', 'GLU', '5.1')], [bs('3', 'UREA', '4.2')], [bs('2', 'GLU', '5.1')], [bs('4', 'CREA', '80')]], BS_LINES);
+  const s = planSeries([[bs('2', 'GLU', '5.1')], [bs('3', 'UREA', '4.2')], [bs('4', 'CREA', '80')], [bs('2', 'GLU', '5.1')]], BS_LINES);
   assert.deepEqual(s.changed, []);
   assert.deepEqual(s.resent.map((r) => r.analyte.name), ['Глюкоза']);
   assert.deepEqual(seriesOutcome(s), { status: 'applied', pending: false, detail: 'серия из 4 сообщений принята; повторная передача: 2 (GLU)' });
 });
 
-test('серия: неподтверждённый код во 2-м сообщении — серия не чистая и после последнего', () => {
+// Ревью R2, пп. 5 и 6 — «не подтверждено» — у того сообщения, где оно пришло:
+// его строка лежит в лотке, а следующее сообщение судится само. Раньше спор
+// тянулся по серии 60 минут и всплывал снова и снова, даже отклонённый.
+test('серия: неподтверждённый код во 2-м сообщении — строка 2-го в лотке; 3-е, дополнившее бланк, — принято', () => {
   const lines = [...BS_LINES, line(4, 'Белок', '9', 0)];
   const s2 = planSeries([[bs('2', 'GLU', '5.1')], [bs('3', 'UREA', '4.2'), bs('9', 'TP', '70')]], lines);
   assert.deepEqual(seriesOutcome(s2), { status: 'unmapped', pending: false, detail: 'не пришли: Креатинин (4); не подтверждено: 9 (TP)' });
   const s3 = planSeries([[bs('2', 'GLU', '5.1')], [bs('3', 'UREA', '4.2'), bs('9', 'TP', '70')], [bs('4', 'CREA', '80')]], lines);
-  assert.deepEqual(seriesOutcome(s3), { status: 'unmapped', pending: false, detail: 'не подтверждено: 9 (TP)' });
+  assert.deepEqual(seriesOutcome(s3), { status: 'applied', pending: false, detail: 'серия из 3 сообщений принята' });
 });
 
 test('серия: причина «не пришла» — из сообщения, где она была (статус P)', () => {
@@ -295,4 +302,34 @@ test('журнал показывает подпись прибора рядом
   const p = planObservations([bs('2', 'GLU', '5.1'), bs('102', 'calctest1')], [line(1, 'Глюкоза', '2'), line(2, 'Мочевина', '3')]);
   assert.equal(outcome(p).detail, 'не пришли: Мочевина (3); не использованы: 102 (calctest1)');
   assert.equal(outcome(planObservations([obs('ALT^^99MRC')], [])).detail, 'не использованы: ALT^^99MRC');
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R2, п. 5: бланк, а не окно ─────────────────
+// «Не пришли» судится по тому, что лежит в бланке (written), а не по окну 60
+// минут: строки, заполненные раньше окна, — заполнены. Повтор — значение
+// текущего сообщения против значения прибора в бланке ДО записи (before), в
+// любом окне; то же значение — безобидная повторная передача.
+test('R2 п. 5: «не пришли» — по бланку: строка, заполненная до окна, заполнена', () => {
+  const s = planSeries([[bs('3', 'UREA', '4.2')], [bs('4', 'CREA', '80')]], BS_LINES,
+    { written: new Set(['Глюкоза', 'Мочевина', 'Креатинин']) });
+  assert.deepEqual(s.missing, []);
+  assert.deepEqual(seriesOutcome(s), { status: 'applied', pending: false, detail: 'серия из 2 сообщений принята' });
+});
+
+test('R2 п. 5: повтор — против значения в бланке до записи, в любом окне; то же значение — повторная передача', () => {
+  const lines = [line(1, 'Глюкоза', '2')];
+  const changed = planSeries([[bs('2', 'GLU', '9.9')]], lines, { written: new Set(['Глюкоза']), before: new Map([['Глюкоза', '5.1']]) });
+  assert.deepEqual(changed.changed.map((c) => [c.analyte.name, c.was, c.now]), [['Глюкоза', ['5.1'], '9.9']]);
+  assert.deepEqual(seriesOutcome(changed), { status: 'unmapped', pending: false, detail: 'повтор: 2 (GLU): было 5.1, в бланке 9.9' });
+  const same = planSeries([[bs('2', 'GLU', '5.1')]], lines, { written: new Set(['Глюкоза']), before: new Map([['Глюкоза', '5.1']]) });
+  assert.deepEqual(seriesOutcome(same), { status: 'applied', pending: false, detail: 'повторная передача: 2 (GLU)' });
+});
+
+test('R2 п. 5: changeText — строка спора, по которой узнаётся отклонённый человеком', () => {
+  const c = { obs: bs('2', 'GLU', '5.4'), analyte: line(1, 'Глюкоза', '2'), was: ['5.1'], now: '5.4' };
+  assert.equal(changeText(c), '2 (GLU): было 5.1, в бланке 5.4');
+});
+
+test('R2 п. 9: потолок серии — 200 сообщений', () => {
+  assert.equal(SERIES_MAX_MESSAGES, 200);
 });

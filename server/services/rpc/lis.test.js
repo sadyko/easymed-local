@@ -6,6 +6,8 @@ import { lisProfiles, lisMessageAttach, lisMessageDismiss, lisDeviceCodes, lisLi
 import { lisServiceCounts, lisRecent } from './lis.js';   // LIS_REAL_ANALYZERS_V1_SERVICE
 import { RPC } from './index.js';                           // LIS_REAL_ANALYZERS_V1_SERVICE — RPC заведён в карте
 import { isReadOnlyRpc } from '../control/gate.js';   // LIS_MINDRAY_CODES_V1 (ревью R8)
+import { ingestMessage } from '../../lis/ingest.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 2
+import { ABANDONED_DETAIL_PREFIX } from '../../lis/inbox.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 10
 
 function fresh() {
   const db = openDb(':memory:');
@@ -642,5 +644,121 @@ test('lis_listeners отдаёт «сейчас» сервера', () => {
   assert.ok(Number.isFinite(now), JSON.stringify(out));
   assert.ok(now >= before - 1000 && now <= Date.now() + 1000, out.now);
   assert.match(out.now, /Z$/, 'UTC, как received_at');
+  db.close();
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R2 ───────────────────────────────────────
+
+// П. 1 — у BS-200 номер теста свой у каждого прибора (ItemID.ini): коды двух
+// BS-200 в «Поле анализатора» не сливаются. У гематологии (коды
+// производителя) — сливаются, как прежде.
+test('R2 п. 1: lis_device_codes у BS-200 — только своего прибора', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'BS-200','mindray-bs-200'), (2,'BS-200 (2)','mindray-bs-200')").run();
+  const bs = (n, name) => ['MSH|^~\\&|Mindray|BS-200E|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||',
+    'OBR|1|LAB-000123|2|Mindray^BS-200E|Y', `OBX|1|NM|${n}|${name}|5|g/ml|-||||F`].join('\r');
+  const ins = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, status) VALUES (?, '10.0.0.40', ?, 'unmapped')");
+  ins.run(1, bs('2', 'GLU'));
+  ins.run(2, bs('2', 'CREA'));
+  ins.run(2, bs('7', 'UREA'));
+  assert.deepEqual(lisDeviceCodes(db, { device_id: 1 }, LAB).map((c) => c.code + ' · ' + c.label), ['2 · GLU']);
+  assert.deepEqual(lisDeviceCodes(db, { device_id: 2 }, LAB).map((c) => c.code + ' · ' + c.label).sort(), ['2 · CREA', '7 · UREA']);
+  db.close();
+});
+
+// П. 2 — «Привязать» строку серии к другому заказу: значение, которое она уже
+// положила в бланк первого заказа, оттуда снимается (если это всё ещё значение
+// прибора из этой строки и бланк — черновик), а строка выходит из серии
+// первого заказа — его бланк снова неполон и всплывает в лотке.
+function reattachClinic() {
+  const db = fresh();
+  db.prepare("INSERT INTO patients (id, full_name) VALUES (3,'Иванов'), (4,'Петров')").run();
+  db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (55,3,strftime('%Y-%m-%dT%H:%M:%SZ','now'),'scheduled'), (56,4,strftime('%Y-%m-%dT%H:%M:%SZ','now'),'scheduled')").run();
+  db.prepare("INSERT INTO services (id, name, is_lab) VALUES (9,'Биохимия',1)").run();
+  db.prepare("INSERT INTO visit_services (id, visit_id, service_id, status) VALUES (123,55,9,'in_progress'), (124,56,9,'in_progress')").run();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (1,'BS-200','mindray-bs-200')").run();
+  db.prepare("INSERT INTO lab_panels (id, name, service_id, device_id) VALUES (5,'Биохимия',9,1)").run();
+  db.prepare(`INSERT INTO lab_panel_analytes (panel_id, code, name, unit, sort_order, device_code, device_code_confirmed)
+              VALUES (5,'GLU','Глюкоза','',1,'2',1), (5,'UREA','Мочевина','',2,'3',1), (5,'CALC','Расчётный','',3,'102',1)`).run();
+  return db;
+}
+const BS2 = (label, n, name, v) => ['MSH|^~\\&|Mindray|BS-200E|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||',
+  `OBR|1|${label}|2|Mindray^BS-200E|Y`, `OBX|1|NM|${n}|${name}|${v}|g/ml|-||||F`].join('\r');
+const formOf = (db, id) => Object.fromEntries(db.prepare('SELECT parameter, value FROM lab_results WHERE visit_service_id = ?').all(id).map((r) => [r.parameter, r.value]));
+const newest = (db) => db.prepare('SELECT * FROM lab_device_messages ORDER BY id DESC LIMIT 1').get();
+
+test('R2 п. 2: «Привязать» ждущую строку к другому заказу — значение снято из первого бланка; первый заказ снова ждёт', () => {
+  const db = reattachClinic();
+  ingestMessage(db, BS2('LAB-000123', '2', 'GLU', '5.5'), '10.0.0.40', 1);
+  const glu = newest(db);
+  assert.equal(glu.visit_service_id, 123);
+  assert.deepEqual(formOf(db, 123), { 'Глюкоза': '5.5' });
+
+  const out = lisMessageAttach(db, { id: glu.id, visit_service_id: 124 }, LAB);
+  assert.equal(out.ok, true);
+  assert.match(out.detail, /снято из бланка заказа № 123: Глюкоза/);
+  assert.deepEqual(formOf(db, 123), {}, 'значение ушло из бланка чужого заказа');
+  assert.deepEqual(formOf(db, 124), { 'Глюкоза': '5.5' });
+  const orig = db.prepare('SELECT * FROM lab_device_messages WHERE id = ?').get(glu.id);
+  assert.ok(orig.resolved_at);
+  assert.match(orig.detail, /перепривязано к заказу № 124/);
+  assert.equal(orig.raw, BS2('LAB-000123', '2', 'GLU', '5.5'), 'сырое не тронуто (инвариант 2)');
+
+  ingestMessage(db, BS2('LAB-000123', '3', 'UREA', '10'), '10.0.0.40', 1);
+  ingestMessage(db, BS2('LAB-000123', '102', 'CALC', '15'), '10.0.0.40', 1);
+  const last = newest(db);
+  assert.equal(last.status, 'unmapped');
+  assert.match(last.detail, /не пришли: Глюкоза \(2\)/, 'перепривязанная строка — не член серии заказа 123');
+  db.close();
+});
+
+test('R2 п. 2: выданное или изменённое после прибора значение не снимается — сказано в журнале', () => {
+  const db = reattachClinic();
+  ingestMessage(db, BS2('LAB-000123', '2', 'GLU', '5.5'), '10.0.0.40', 1);
+  const glu = newest(db);
+  ingestMessage(db, BS2('LAB-000123', '3', 'UREA', '10'), '10.0.0.40', 1);
+  const urea = newest(db);
+  db.prepare("UPDATE lab_results SET verified_at = '2026-10-01T08:00:00Z' WHERE visit_service_id = 123 AND parameter = 'Глюкоза'").run();
+  db.prepare("UPDATE lab_results SET value = '11' WHERE visit_service_id = 123 AND parameter = 'Мочевина'").run();
+
+  const a = lisMessageAttach(db, { id: glu.id, visit_service_id: 124 }, LAB);
+  assert.match(a.detail, /оставлено в бланке заказа № 123: Глюкоза \(выдан\)/);
+  const b = lisMessageAttach(db, { id: urea.id, visit_service_id: 124 }, LAB);
+  assert.match(b.detail, /оставлено в бланке заказа № 123: Мочевина \(изменено после прибора\)/);
+  assert.deepEqual(formOf(db, 123), { 'Глюкоза': '5.5', 'Мочевина': '11' });
+  db.close();
+});
+
+test('R2 п. 2: то же значение пришло в заказ 123 и другим сообщением — не снимается', () => {
+  const db = reattachClinic();
+  ingestMessage(db, BS2('LAB-000123', '2', 'GLU', '5.5'), '10.0.0.40', 1);
+  const first = newest(db);
+  ingestMessage(db, BS2('LAB-000123', '2', 'GLU', '5.5'), '10.0.0.40', 1);
+  const a = lisMessageAttach(db, { id: first.id, visit_service_id: 124 }, LAB);
+  assert.match(a.detail, /оставлено в бланке заказа № 123: Глюкоза \(то же значение пришло другим сообщением\)/);
+  assert.deepEqual(formOf(db, 123), { 'Глюкоза': '5.5' });
+  db.close();
+});
+
+// П. 10а — оборванный кадр в лотке — начало, а не сообщение целиком:
+// «Привязать» его нельзя, как переросшее.
+test('R2 п. 10: оборванный кадр не привязывается — 409, как переросшее', () => {
+  const db = fresh();
+  const id = db.prepare("INSERT INTO lab_device_messages (peer, raw, status, detail) VALUES ('10.0.0.5', ?, 'rejected', ?)")
+    .run('MSH|^~\\&|BC-5300|Mindray|||1||ORU^R01|1|P|2.3.1\rOBR|1||LAB-000123', ABANDONED_DETAIL_PREFIX + 'x').lastInsertRowid;
+  assert.throws(() => lisMessageAttach(db, { id, visit_service_id: 123 }, LAB),
+    (e) => e.status === 409 && /пришло не целиком/.test(e.message));
+  db.close();
+});
+
+// П. 13 — «Отклонить» тем же строгим разбором номера: {id: true} отклонял № 1.
+test('R2 п. 13: lis_message_dismiss — номер только целое больше нуля', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_device_messages (peer, raw, status) VALUES ('10.0.0.5', 'MSH|', 'unmatched')").run();
+  for (const bad of [true, [1], '0x1', '1e0', 1.5, -1, 0, '', null]) {
+    assert.throws(() => lisMessageDismiss(db, { id: bad }, LAB), (e) => e.status === 400, JSON.stringify(bad));
+  }
+  assert.equal(db.prepare('SELECT resolved_at FROM lab_device_messages WHERE id = 1').get().resolved_at, null);
+  assert.equal(lisMessageDismiss(db, { id: ' 1 ' }, LAB).ok, true);
   db.close();
 });

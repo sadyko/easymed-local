@@ -62,8 +62,12 @@ function noiseBytes(buf, from, to) {
  * @param {(msg:string)=>void} [o.log]
  * @param {string} [o.peer]       адрес для приёма и журнала (по умолчанию — адрес сокета)
  * @param {(n:number)=>void} [o.onNoise]  отброшено n байт вне кадра (сигнал прибора)
+ * @param {(o:{peer:string, bytes:number, head:string})=>void} [o.onAbandoned]
+ *        LIS_REAL_ANALYZERS_V1 (ревью R2, п. 10а) — прибор бросил кадр и начал
+ *        новый (новый VT до FS): здесь — начало брошенного (первые 64 КБ), для
+ *        одной строки лотка. Ответа прибору на брошенный нет — он его не ждёт.
  */
-export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {}, peer = sock.remoteAddress || '', onNoise = null } = {}) {
+export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {}, peer = sock.remoteAddress || '', onNoise = null, onAbandoned = null } = {}) {
   let buf = Buffer.alloc(0);
   let overflow = false;
   // Обработка кадров последовательная: прибор ждёт ответа на первый кадр
@@ -112,6 +116,25 @@ export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes 
       const start = buf.indexOf(VT);
       if (start === -1) break;
       const end = buf.indexOf(FS, start + 1);
+      // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 10а) — новый VT раньше конца кадра:
+      // прибор бросил кадр и начал новый. Раньше новый кадр прирастал к
+      // брошенному, и приём получал склейку двух сообщений (ответ — с номером
+      // брошенного). Теперь брошенное начало — вызывающему, одной строкой
+      // лотка, а новый кадр начинается с нового VT.
+      const next = buf.indexOf(VT, start + 1);
+      if (next !== -1 && (end === -1 || next < end)) {
+        noise(0, start);
+        const cut = buf.subarray(start + 1, next);
+        const head = cut.subarray(0, HEAD_BYTES).toString('utf8');
+        log(`LIS: кадр от ${peer} брошен на середине — прибор начал новый`);
+        if (onAbandoned) {
+          chain = chain.then(async () => {
+            try { await onAbandoned({ peer, bytes: cut.length, head }); } catch (e) { log('LIS: брошенный кадр не записан — ' + (e && e.message ? e.message : e)); }
+          });
+        }
+        buf = buf.subarray(next);
+        continue;
+      }
       if (end === -1) break;   // кадр ещё не пришёл целиком
       // Потолок — на одно сообщение, а не на то, что пришло одной записью:
       // целый кадр больше потолка отвергается так же, как недошедший.
@@ -165,7 +188,7 @@ export function attachMllpReader(sock, { onMessage, onOversize = null, maxBytes 
  * @param {(msg:string)=>void} [o.log]
  * @returns {Promise<{port:number, close:()=>Promise<void>}>}
  */
-export function startMllpServer({ port, onMessage, onOversize = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {} }) {
+export function startMllpServer({ port, onMessage, onOversize = null, onAbandoned = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {} }) {
   return new Promise((resolve, reject) => {
     // LIS_DISCOVERY_FIX_V1 (ревью 2026-09-29) — открытые соединения приборов.
     // server.close() перестаёт принимать новые, но отвечает, только когда
@@ -180,7 +203,7 @@ export function startMllpServer({ port, onMessage, onOversize = null, maxBytes =
       sock.setTimeout(IDLE_MS, () => sock.destroy());
       // LIS_REAL_ANALYZERS_V1_DIAL — разбор кадров вынесен: тот же читатель у
       // клиента, который звонит прибору сам (dial.js).
-      attachMllpReader(sock, { onMessage, onOversize, maxBytes, log, peer: sock.remoteAddress || '' });
+      attachMllpReader(sock, { onMessage, onOversize, onAbandoned, maxBytes, log, peer: sock.remoteAddress || '' });   // onAbandoned: ревью R2, п. 10а
       sock.on('error', () => sock.destroy());
     });
 

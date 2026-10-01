@@ -356,3 +356,24 @@ test('attachMllpReader: читает кадры с любого сокета и 
     await new Promise((r) => server.close(r));
   }
 });
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R2, п. 10а ───────────────────────────────
+// Прибор бросил кадр на середине и начал новый: раньше новый VT становился
+// частью брошенного, и приём получал склейку двух сообщений (ответ — с номером
+// брошенного). Теперь новый кадр начинается с нового VT, а брошенное начало
+// уходит вызывающему (onAbandoned) — одной строкой лотка.
+test('R2 п. 10а: новый VT до конца кадра — брошенное начало отдельно, новый кадр принят целиком', async () => {
+  const seen = [];
+  const cut = [];
+  await withServer(async (t) => { seen.push(t); return 'AA'; }, async (port) => {
+    const sock = await connect(port);
+    const reply = readFrame(sock);
+    sock.write(Buffer.concat([Buffer.from([VT]), Buffer.from(MSG('71') + '\rOBX|1|NM|WBC^^99MRC||6.', 'utf8'), frame(MSG('72'))]));
+    assert.match(await reply, /MSA\|AA\|72/);
+    sock.end();
+  }, { onAbandoned: (o) => cut.push(o) });
+  assert.deepEqual(seen, [MSG('72')]);
+  assert.equal(cut.length, 1);
+  assert.equal(cut[0].head, MSG('71') + '\rOBX|1|NM|WBC^^99MRC||6.');
+  assert.ok(cut[0].peer);
+});

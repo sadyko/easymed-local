@@ -150,3 +150,11 @@ test('aliasesOf: у профиля без списка псевдоним — с
   assert.deepEqual(aliasesOf(getProfile('mindray-bs-200')), ['BS-200', 'BS-200E']);
   assert.deepEqual(aliasesOf(null), []);
 });
+
+// LIS_REAL_ANALYZERS_V1 — ревью R2, п. 1: у BS-200 номер теста задаёт клиника
+// на каждом приборе (ItemID.ini) — «2» у двух BS-200 бывает разным тестом.
+// Подмены «та же модель» у такого профиля нет. У A1000 код позиции — код
+// производителя (206 = витамин B12; одна панель через COM и по сети).
+test('R2 п. 1: codesPerInstrument — только у BS-200', () => {
+  assert.deepEqual(listProfiles().filter((p) => p.codesPerInstrument).map((p) => p.key), ['mindray-bs-200']);
+});

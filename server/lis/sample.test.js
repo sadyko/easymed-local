@@ -522,3 +522,65 @@ test('R1 п. 11: BS-200 на строке без профиля или с чуж
     db.close();
   }
 });
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R2 ───────────────────────────────────────
+
+// П. 4 — день в будущем (запись на завтра, визит на следующей неделе) не
+// делает старый заказ свежим: «позднейшее из» берётся только из дней не позже
+// сегодняшнего.
+test('R2 п. 4: запись или визит в будущем не делают старый заказ свежим', () => {
+  const fut = clinic({ orders: [{ id: 2, status: 'queued', created: dayStart(10) }] });
+  fut.prepare("UPDATE visit_services SET scheduled_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','+3 days') WHERE id = 2").run();
+  fut.prepare("UPDATE visits SET visit_date = strftime('%Y-%m-%dT%H:%M:%SZ','now','+5 days') WHERE id = 55").run();
+  ingestMessage(fut, HEM('', '2'), '10.0.0.9', 1);
+  assert.equal(last(fut).status, 'unmatched');
+  assert.equal(last(fut).visit_service_id, null);
+  assert.match(last(fut).detail, /старше 7 дней/);
+  assert.equal(results(fut, 2).length, 0);
+  fut.close();
+});
+
+test('R2 п. 4: scheduled_at без пояса читается, как везде (queue.js: date(…, localtime)) — запись на сейчас — свежая', () => {
+  const db = clinic({ orders: [{ id: 2, status: 'queued', created: dayStart(10) }] });
+  // Время без «Z» и без смещения — как его читает остальной код: UTC.
+  db.prepare("UPDATE visit_services SET scheduled_at = strftime('%Y-%m-%d %H:%M:%S','now') WHERE id = 2").run();
+  ingestMessage(db, HEM('', '2'), '10.0.0.9', 1);
+  assert.equal(last(db).visit_service_id, 2);
+  assert.equal(results(db, 2).length, 1);
+  db.close();
+});
+
+// П. 12 — профиль строки и само сообщение называют РАЗНЫЕ провода: какое поле
+// номер и где значение, решать наугад нельзя — в лоток, с причиной.
+test('R2 п. 12: строка BC-780, а сообщение — от BS-200: в лоток «прибор назван как …», ничего не прочитано', () => {
+  const db = clinic({ orders: [{ id: 2 }, { id: 123 }], analytes: [['GLU', 'Глюкоза', '2']], profile: 'mindray-bc-780' });
+  assert.equal(ingestMessage(db, BS200('LAB-000123', '2'), '10.0.0.40', 1), 'AA');
+  const m = last(db);
+  assert.equal(m.status, 'unmatched');
+  assert.equal(m.visit_service_id, null);
+  assert.equal(m.sample_id, 'LAB-000123', 'номер для человека — по безопасному проводу (OBR-2), OBR-3 не читается');
+  assert.match(m.detail, /прибор заведён как «BC-780», а сообщение — от «Mindray BS-200E» \(модель «BS-200»\)/);
+  assert.equal(results(db).length + results(db, 2).length, 0);
+  db.close();
+});
+
+test('R2 п. 12: строка прежней модели без провода (BS-240) и сообщение BS-200 — не спор: провод сообщения', () => {
+  const db = clinic({ analytes: [['GLU', 'Глюкоза', '2']], profile: 'mindray-bs-240' });
+  ingestMessage(db, BS200('LAB-000123', '2'), '10.0.0.40', 1);
+  assert.equal(last(db).status, 'applied', last(db).detail);
+  assert.equal(results(db)[0].value, '5');
+  db.close();
+});
+
+// П. 14 — голый номер, ПРОШЕДШИЙ правило «открытый заказ последних 7 дней», —
+// обычное совпадение: по выданному бланку superseded И с привязкой к заказу
+// (D7 — как у этикетки). Пункт 3 R1 снимает привязку только у отказанных.
+test('R2 п. 14: голый номер открытого свежего заказа с выданным бланком — superseded, заказ привязан', () => {
+  const db = clinic({ orders: [{ id: 123, status: 'resulted' }] });
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, source, verified_at) VALUES (123,'Лейкоциты','5.5','analyzer','2026-10-01T08:00:00Z')").run();
+  ingestMessage(db, HEM('', '123'), '10.0.0.9', 1);
+  assert.equal(last(db).status, 'superseded');
+  assert.equal(last(db).visit_service_id, 123);
+  assert.equal(results(db)[0].value, '5.5', 'выданный не переписан');
+  db.close();
+});

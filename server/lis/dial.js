@@ -103,7 +103,7 @@ const iso = (ms = Date.now()) => new Date(ms).toISOString().replace(/\.\d{3}Z$/,
  *   'unreachable' — адрес недоступен, 'closed' — соединение закрыл прибор,
  *   'silent' — прибор слал сигнал и замолчал, 'error' — прочее.
  */
-export function startMllpClient({ host, port, onMessage, onOversize = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {}, timing = {}, onWait = null }) {
+export function startMllpClient({ host, port, onMessage, onOversize = null, onAbandoned = null, maxBytes = DEFAULT_MAX_BYTES, log = () => {}, timing = {}, onWait = null }) {
   const T = { ...DIAL_DEFAULTS, ...timing };
   const st = { host, port, state: 'connecting', since: iso(), last_rx_at: null, code: null, retry_at: null };
   let closed = false;
@@ -152,6 +152,7 @@ export function startMllpClient({ host, port, onMessage, onOversize = null, maxB
       maxBytes,
       log,
       onOversize,
+      onAbandoned,   // ревью R2, п. 10а
       onMessage: (text, peer) => { gotFrame = true; return onMessage(text, peer); },
       // Сигнал прибора — байты вне кадра. С первого сигнала прибор обязан
       // говорить хоть что-то: 20 с тишины — соединение мёртвое (кабель, свитч,

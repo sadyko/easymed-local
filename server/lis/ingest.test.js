@@ -612,7 +612,10 @@ test('серия: то же значение ещё раз (прибор не п
   ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
   ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
   assert.equal(message(db).status, 'applied');
-  assert.equal(message(db).detail, 'серия из 4 сообщений принята; повторная передача: 2 (test2)');
+  // Ревью R2, п. 5 — повторная передача — справка у того сообщения, которое
+  // повторило значение (второе), а не у каждого следующего.
+  assert.equal(message(db).detail, 'серия из 4 сообщений принята');
+  assert.equal(rows(db)[1].detail, 'принято серией (сообщение № ' + message(db).id + ')');
   assert.deepEqual(tray(db), []);
   db.close();
 });
@@ -639,19 +642,37 @@ test('серия: неподтверждённый код вместе с под
   ingestMessage(db, raw2, '10.0.0.40', 1);
   assert.equal(message(db).status, 'unmapped');
   assert.equal(message(db).detail, 'не подтверждено: 9 (TP)', 'не «ждём»: значение для неподтверждённой строки — повод для человека');
-  assert.ok(rows(db)[0].detail.startsWith(SERIES_PENDING_PREFIX), 'ранняя строка не принята');
-  assert.equal(rows(db)[0].status, 'unmapped');
+  // Ревью R2, п. 5 — бланк полон (Глюкоза, Мочевина): ожидание ранней строки
+  // кончилось, она принята; спор — в строке второго сообщения, в лотке.
+  assert.equal(rows(db)[0].status, 'applied');
+  assert.deepEqual(tray(db).map((m) => m.id), [message(db).id]);
   db.close();
 });
 
-test('серия: сообщение через 61 минуту — новая серия', () => {
+// Ревью R2, п. 5 (случай B) — «не пришли» судится по бланку, а не по окну:
+// строки, пришедшие раньше 60 минут, лежат в бланке — бланк полон, и все
+// ждущие строки этого заказа приняты, в том числе старше окна. Раньше все три
+// строки ждали, а последняя говорила «не пришли: Глюкоза».
+test('серия: сообщения в −61, −30 и 0 минут — бланк полон: принято, ждущие строки приняты все', () => {
   const db = chem();
   ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
   ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
-  for (const m of rows(db)) ago(db, m.id, 61);
+  ago(db, rows(db)[0].id, 61);
+  ago(db, rows(db)[1].id, 30);
   ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
-  assert.equal(message(db).detail, SERIES_PENDING_PREFIX + 'не пришли: Глюкоза (2), Мочевина (3)');
-  assert.deepEqual(rows(db).slice(0, 2).map((m) => m.status), ['unmapped', 'unmapped'], 'старые строки серии не приняты задним числом');
+  assert.equal(message(db).status, 'applied');
+  assert.equal(message(db).detail, 'серия из 2 сообщений принята', 'в окне — два сообщения');
+  assert.deepEqual(rows(db).map((m) => m.status), ['applied', 'applied', 'applied']);
+  assert.deepEqual(tray(db), []);
+  db.close();
+});
+
+test('серия: строка бланка не пришла ни в окне, ни раньше — «ждём» по бланку', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  ago(db, rows(db)[0].id, 61);
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  assert.equal(message(db).detail, SERIES_PENDING_PREFIX + 'не пришли: Мочевина (3)', 'Глюкоза в бланке — не «не пришла»');
   db.close();
 });
 
@@ -699,13 +720,19 @@ test('серия: D7 — по выданному бланку superseded, сер
   db.close();
 });
 
-test('серия: сообщения второго прибора той же модели — в той же серии', () => {
-  const db = chem();
-  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'BS-200 (2)','mindray-bs-200')").run();
-  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
-  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.41', 2);
-  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
-  assert.deepEqual(rows(db).map((m) => m.status), ['applied', 'applied', 'applied']);
+// Ревью R2, п. 1 — у BS-200 «та же модель» не действует (номер теста свой у
+// каждого прибора; тест «R2 п. 1» ниже). У A1000 код позиции — код
+// производителя (206 = витамин B12), и серия идёт по модели, как прежде.
+test('серия: сообщения второго прибора той же модели (A1000) — в той же серии', () => {
+  const db = chem({ profile: 'autobio-autolumo-a1000', lines: [['B12', 'Витамин B12', '206'], ['FER', 'Ферритин', '207']] });
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'A1000 (2)','autobio-autolumo-a1000')").run();
+  const A = (code, v) => ['MSH|^~\\&|A1000|Autolumo|||20261001101500||ORU^R01|1|P|2.3.1||||0||ASCII|||',
+    'OBR|1|LAB-000123|||', `OBX|1|NM|1^X|${code}|1^${v}|pg/mL|||||F`].join('\r');
+  ingestMessage(db, A('206', '390.9'), '10.0.0.40', 1);
+  assert.ok(message(db).detail.startsWith(SERIES_PENDING_PREFIX), message(db).detail);
+  ingestMessage(db, A('207', '52.1'), '10.0.0.41', 2);
+  assert.deepEqual(rows(db).map((m) => m.status), ['applied', 'applied']);
+  assert.deepEqual(blank(db), { 'Витамин B12': '390.9', 'Ферритин': '52.1' });
   db.close();
 });
 
@@ -757,5 +784,114 @@ test('прибор без oneTestPerMessage (BC-5300): правило прежн
   assert.equal(message(db).detail, 'не пришли: Гемоглобин (HGB)');
   ingestMessage(db, MSG('LAB-000123', [OBX(1, 'HGB', '142')]), '127.0.0.1', 1);
   assert.equal(message(db).detail, 'не пришли: Лейкоциты (WBC)', 'серии нет: каждое сообщение — само по себе');
+  db.close();
+});
+
+// ── LIS_REAL_ANALYZERS_V1 — ревью R2 ───────────────────────────────────────
+
+// П. 5 (случай E) — один тест прогнали снова через 2 часа с другим числом.
+// Раньше новое значение молча заменяло черновик, а строка говорила «ждём: не
+// пришли: …». Теперь: значение прибора в бланке сменилось — «повтор», в лотке,
+// в любом окне. Машина по-прежнему пишет в ЧЕРНОВИК (D6) — но смена видна.
+test('R2 п. 5: тот же тест через 2 часа с другим числом — «повтор: было 5.1, в бланке 9.9», в лотке', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5.1'), '10.0.0.40', 1);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  for (const m of rows(db)) ago(db, m.id, 120);
+  ingestMessage(db, BS('2', 'test2', '9.9'), '10.0.0.40', 1);
+  assert.equal(message(db).status, 'unmapped');
+  assert.equal(message(db).detail, 'повтор: 2 (test2): было 5.1, в бланке 9.9');
+  assert.equal(blank(db)['Глюкоза'], '9.9', 'D6: машина пишет в черновик');
+  assert.deepEqual(tray(db).map((m) => m.id), [message(db).id]);
+  db.close();
+});
+
+test('R2 п. 5: тот же тест через 2 часа с тем же числом — повторная передача, принято', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5.1'), '10.0.0.40', 1);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  for (const m of rows(db)) ago(db, m.id, 120);
+  ingestMessage(db, BS('2', 'test2', '5.100000'), '10.0.0.40', 1);
+  assert.equal(message(db).status, 'applied');
+  assert.equal(message(db).detail, 'повторная передача: 2 (test2)');
+  db.close();
+});
+
+test('R2 п. 5: значение, набранное руками (не прибором), — не «повтор»: D6, как прежде', () => {
+  const db = chem();
+  db.prepare("INSERT INTO lab_results (visit_service_id, parameter, value, source) VALUES (123,'Глюкоза','4.0','manual')").run();
+  ingestMessage(db, BS('2', 'test2', '5.1'), '10.0.0.40', 1);
+  assert.ok(message(db).detail.startsWith(SERIES_PENDING_PREFIX), message(db).detail);
+  assert.ok(!/повтор/.test(message(db).detail));
+  assert.equal(blank(db)['Глюкоза'], '5.1');
+  db.close();
+});
+
+// П. 6 — спор, отклонённый человеком, не всплывает снова.
+test('R2 п. 6: «повтор», отклонённый человеком, следующими сообщениями не повторяется', () => {
+  const db = chem();
+  ingestMessage(db, BS('2', 'test2', '5.1'), '10.0.0.40', 1);
+  ingestMessage(db, BS('2', 'test2', '5.4'), '10.0.0.40', 1);
+  const dispute = message(db);
+  assert.match(dispute.detail, /повтор: 2 \(test2\): было 5\.1, в бланке 5\.4/);
+  resolveMessage(db, dispute.id);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  assert.ok(!/повтор/.test(message(db).detail), 'следующее сообщение спор не тянет: ' + message(db).detail);
+  ingestMessage(db, BS('2', 'test2', '5.1'), '10.0.0.40', 1);
+  assert.ok(!/повтор/.test(message(db).detail), 'те же два числа того же теста — спор уже разобран человеком: ' + message(db).detail);
+  ingestMessage(db, BS('2', 'test2', '7.7'), '10.0.0.40', 1);
+  assert.match(message(db).detail, /повтор: 2 \(test2\): было 5\.1, в бланке 7\.7/, 'новое число — новый спор');
+  db.close();
+});
+
+// П. 9 — серия не растёт без предела: стоимость приёма была квадратичной.
+test('R2 п. 9: больше 200 сообщений по заказу за час — серия не считается, сообщение в лотке с причиной', () => {
+  const db = chem();
+  const raw = BS('2', 'test2', '5');
+  const ins = db.prepare("INSERT INTO lab_device_messages (device_id, peer, raw, sample_id, visit_service_id, status, detail) VALUES (1, '10.0.0.40', ?, 'LAB-000123', 123, 'unmapped', 'x')");
+  db.transaction(() => { for (let i = 0; i < 200; i++) ins.run(raw); })();
+  const t = Date.now();
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  assert.ok(Date.now() - t < 2000);
+  assert.equal(message(db).status, 'unmapped');
+  assert.match(message(db).detail, /больше 200 сообщений/);
+  assert.equal(blank(db)['Мочевина'], '10', 'значение легло, как у любого сообщения');
+  db.close();
+});
+
+// П. 1 — у BS-200 номер теста свой у каждого прибора (ItemID.ini): «2» у
+// второго BS-200 — другой тест. Подмена «та же модель» здесь положила бы
+// креатинин второго прибора в строку «Глюкоза» панели первого.
+test('R2 п. 1: два BS-200 — проба второго в панель первого не ложится: лоток с причиной, бланк не тронут', () => {
+  const db = chem();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'BS-200 (2)','mindray-bs-200')").run();
+  ingestMessage(db, BS('2', 'CREA', '88'), '10.0.0.41', 2);
+  const m = message(db);
+  assert.equal(m.status, 'unmatched');
+  assert.equal(m.visit_service_id, 123, 'этикетка LAB- — заказ назван верно, не та только панель');
+  assert.match(m.detail, /привязана к другому анализатору той же модели \(«BS-200»\)/);
+  assert.match(m.detail, /номер теста свой у каждого прибора/);
+  assert.deepEqual(blank(db), {});
+  db.close();
+});
+
+test('R2 п. 1: BS-200 — серия только своего прибора', () => {
+  const db = chem();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'BS-200 (2)','mindray-bs-200')").run();
+  ingestMessage(db, BS('2', 'test2', '5'), '10.0.0.40', 1);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.41', 2);
+  ingestMessage(db, BS('3', 'test3', '10'), '10.0.0.40', 1);
+  ingestMessage(db, BS('102', 'calctest1', '15'), '10.0.0.40', 1);
+  assert.equal(message(db).detail, 'серия из 3 сообщений принята', 'сообщение второго прибора — не член серии');
+  db.close();
+});
+
+test('R2 п. 1: гематология (коды производителя) — подмена «та же модель» прежняя', () => {
+  const db = fresh();
+  db.prepare("INSERT INTO lab_devices (id, name, profile) VALUES (2,'Гематология 2','mindray-bc-5300')").run();
+  ingestMessage(db, MSG('LAB-000123', [OBX(1, 'WBC', '6.1'), OBX(2, 'HGB', '142', { unit: 'g/L' })]), '10.0.0.12', 2);
+  assert.equal(message(db).status, 'applied');
   db.close();
 });

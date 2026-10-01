@@ -17,13 +17,15 @@
 //                         (решение владельца 2026-09-28; server/lis/match.js)
 import { parseMessage, mshOf } from './hl7.js';
 import { recordMessage, touchDevice, SERIES_PENDING_PREFIX } from './inbox.js';   // SERIES_PENDING_PREFIX: LIS_REAL_ANALYZERS_V1_SERIES
+import { REATTACHED_NOTE } from './inbox.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 2
 import { planObservations, outcome } from './match.js';   // LIS_MINDRAY_CODES_V1 — правило сопоставления и лотка
 import { planSeries, seriesOutcome, SERIES_WINDOW_MS } from './match.js';   // LIS_REAL_ANALYZERS_V1_SERIES — бланк по серии сообщений
+import { changeText, SERIES_MAX_MESSAGES } from './match.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, пп. 6 и 9
 // CRM_REAL_BOOKING_V1 — работа над пациентом это доказательство его прихода.
 import { crmServiceEvidence } from '../services/crm/visit-status.js';
 // LIS_REAL_ANALYZERS_V1_SAMPLE — провод прибора: номер пробы и строки теста из
 // нужных полей (wire.js); профиль называет провод.
-import { readResult, pickMessageSample, wireFor } from './wire.js';   // pickMessageSample: LIS_REAL_ANALYZERS_V1, ревью R1, п. 1
+import { readResult, pickMessageSample, wireFor, wireDecision } from './wire.js';   // pickMessageSample: LIS_REAL_ANALYZERS_V1, ревью R1, п. 1; wireDecision: ревью R2, п. 12
 import { getProfile } from './profiles/index.js';
 import { today, localDate } from '../services/domain/day.js';
 
@@ -65,15 +67,24 @@ const dmy = (ymd) => (/^\d{4}-\d{2}-\d{2}$/.test(String(ymd || '')) ? ymd.slice(
  * (visits.visit_date), всё по местному календарному дню. Запись колл-центра и
  * календаря создаёт строку заранее (booking-mirror.js): строка, созданная 10
  * дней назад на СЕГОДНЯШНИЙ визит, иначе отказывалась как «старше 7 дней».
- * Пустое не в счёт (COALESCE: у max() с NULL результат NULL).
+ * Пустое не в счёт.
+ *
+ * LIS_REAL_ANALYZERS_V1 (ревью R2, п. 4) — день в БУДУЩЕМ (запись на завтра,
+ * визит на следующей неделе) старый заказ свежим не делает: в «позднейшее из»
+ * идут только дни не позже сегодняшнего. Все три — localDate (date(…,
+ * 'localtime')), ровно как читает их остальной код (queue.js: день талона —
+ * localDate(COALESCE(scheduled_at, visit_date))): запись колл-центра пишет
+ * scheduled_at в ISO с «Z» (booking-lines.js toISOString), время без пояса
+ * читается как UTC — как везде.
  */
 function bareIdRefusal(db, order, number) {
-  const row = db.prepare(`SELECT max(COALESCE(${localDate('vs.created_at')}, ''), COALESCE(${localDate('vs.scheduled_at')}, ''),
-                                     COALESCE(${localDate('v.visit_date')}, '')) AS day,
+  const t = today(db);
+  const row = db.prepare(`SELECT ${localDate('vs.created_at')} AS c, ${localDate('vs.scheduled_at')} AS s, ${localDate('v.visit_date')} AS v,
                                  date(?, ?) AS cutoff
                             FROM visit_services vs LEFT JOIN visits v ON v.id = vs.visit_id
                            WHERE vs.id = ?`)
-    .get(today(db), '-' + BARE_ID_MAX_AGE_DAYS + ' days', order.id);
+    .get(t, '-' + BARE_ID_MAX_AGE_DAYS + ' days', order.id);
+  if (row) row.day = [row.c, row.s, row.v].filter((d) => d && d <= t).sort().pop() || '';
   const open = OPEN_LAB_STATUSES.has(order.status);
   const recent = !!(row && row.day && row.day >= row.cutoff);
   if (open && recent) return null;
@@ -115,23 +126,129 @@ const BEFORE_BLANK = /^(услуга|панель) «/;
  * входят (их значения в бланке), но серия их не переводит.
  * @returns {Array<{id:number, status:string, detail:string, resolved_at:string|null, observations:object[]}>}
  */
-function seriesMembers(db, { orderId, profileKey, profile, analytes }) {
-  const rows = db.prepare(`SELECT m.id, m.raw, m.status, m.detail, m.resolved_at
-                             FROM lab_device_messages m
-                             JOIN lab_devices d ON d.id = m.device_id
-                            WHERE m.visit_service_id = ? AND m.kind = 'result'
-                              AND m.status IN ('applied', 'unmapped')
-                              AND d.profile = ?
-                              AND m.received_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)
-                            ORDER BY m.id`)
-    .all(orderId, profileKey, '-' + Math.round(SERIES_WINDOW_MS / 1000) + ' seconds');
-  const out = [];
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R2, п. 1) — чьи сообщения — «тот же прибор» для
+ * серии: у профиля с codesPerInstrument (BS-200: номер теста свой у каждого
+ * прибора) — только этот прибор, у прочих — та же модель.
+ */
+const senderClause = (perInstrument) => (perInstrument ? 'm.device_id = ?' : 'd.profile = ?');
+
+/**
+ * LIS_REAL_ANALYZERS_V1_SERIES — ранние сообщения серии заказа (раздел 3
+ * спецификации) за SERIES_WINDOW_MS: вида «результат», applied или unmapped, и
+ * в каждом легло хотя бы одно значение. Серия пересчитывается из сырых
+ * сообщений тем же проводом (инвариант 2: сырое лежит целиком) — новых колонок
+ * и состояния в памяти не нужно. Строки, которых коснулся человек, в серию
+ * входят (их значения в бланке), но серия их не переводит.
+ * LIS_REAL_ANALYZERS_V1 (ревью R2) — не входят строки, перепривязанные
+ * человеком к другому заказу (п. 2: их значения сняты из этого бланка); их
+ * не больше SERIES_MAX_MESSAGES (п. 9): сверх — overflow, без пересчёта.
+ * @returns {{members: Array<{id:number, observations:object[]}>, overflow:boolean}}
+ */
+function seriesMembers(db, { orderId, deviceId, perInstrument, profileKey, profile, analytes }) {
+  const where = `FROM lab_device_messages m
+                  JOIN lab_devices d ON d.id = m.device_id
+                 WHERE m.visit_service_id = ? AND m.kind = 'result'
+                   AND m.status IN ('applied', 'unmapped')
+                   AND ${senderClause(perInstrument)}
+                   AND instr(COALESCE(m.detail, ''), ?) = 0
+                   AND m.received_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)`;
+  const args = [orderId, perInstrument ? deviceId : profileKey, REATTACHED_NOTE, '-' + Math.round(SERIES_WINDOW_MS / 1000) + ' seconds'];
+  if (db.prepare('SELECT COUNT(*) AS n ' + where).get(...args).n >= SERIES_MAX_MESSAGES) return { members: [], overflow: true };
+  const rows = db.prepare('SELECT m.id, m.raw, m.detail ' + where + ' ORDER BY m.id').all(...args);
+  const members = [];
   for (const r of rows) {
     if (BEFORE_BLANK.test(String(r.detail || ''))) continue;
     const head = mshOf(r.raw);
     const { observations } = readResult(r.raw, wireFor({ profile, facility: head.facility, app: head.app }));
     if (!planObservations(observations, analytes).fills.length) continue;
-    out.push({ id: r.id, status: r.status, detail: r.detail || '', resolved_at: r.resolved_at, observations });
+    members.push({ id: r.id, observations });
+  }
+  return { members, overflow: false };
+}
+
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R2, п. 5) — строки «ждём» этого заказа (тот же
+ * прибор или та же модель), которых не касался человек, — в любом окне: бланк
+ * полон — ожидание каждой кончилось, хоть она и пришла раньше окна.
+ */
+function waitingRows(db, { orderId, deviceId, perInstrument, profileKey }) {
+  return db.prepare(`SELECT m.id, m.detail FROM lab_device_messages m JOIN lab_devices d ON d.id = m.device_id
+                      WHERE m.visit_service_id = ? AND m.kind = 'result' AND m.status = 'unmapped' AND m.resolved_at IS NULL
+                        AND substr(m.detail, 1, ?) = ? AND ${senderClause(perInstrument)}`)
+    .all(orderId, SERIES_PENDING_PREFIX.length, SERIES_PENDING_PREFIX, perInstrument ? deviceId : profileKey);
+}
+
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R2, п. 6) — спор «повтор», который человек уже
+ * разобрал («Отклонить», «Привязать»): тот же тест и те же два числа (в любом
+ * порядке) второй раз не поднимаются. Узнаётся по строке спора (changeText) в
+ * журнале разобранных строк этого заказа.
+ */
+function dismissedChange(db, orderId) {
+  const details = db.prepare(`SELECT detail FROM lab_device_messages
+                               WHERE visit_service_id = ? AND kind = 'result' AND resolved_at IS NOT NULL
+                                 AND instr(COALESCE(detail, ''), 'повтор: ') > 0`).all(orderId).map((r) => r.detail);
+  return (c) => details.some((d) => d.includes(changeText(c)) || d.includes(changeText({ ...c, was: [c.now], now: c.was[0] })));
+}
+
+/** Значение для сравнения: «5.1» и « 5.1» — одно и то же (как в match.js). */
+const valueKey = (v) => String(v == null ? '' : v).trim();
+
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R2, п. 2) — человек «Привязал» строку лотка к
+ * ДРУГОМУ заказу (rpc/lis.js lis_message_attach). Если строка уже положила
+ * значения прибора в бланк первого заказа, они оттуда снимаются — иначе одна
+ * проба лежала бы в двух бланках, а серия первого заказа считала бы её своей.
+ * Снимается строка бланка, только если это всё ещё значение прибора из этой
+ * строки и бланк — черновик. Остаётся (и сказано, почему):
+ *   — выдан (verified_at, D7 — выданное не трогает и машина);
+ *   — изменено после прибора (значение другое: правил человек или переписало
+ *     следующее сообщение);
+ *   — то же значение пришло в этот заказ другим сообщением (оно и останется).
+ * Сама строка помечается REATTACHED_NOTE и в серию первого заказа больше не
+ * входит: его бланк снова неполон, и следующее сообщение это скажет. Сырое
+ * сообщение не трогается (инвариант 2).
+ * @returns {{fromOrderId:number|null, taken:string[], kept:Array<{name:string, why:string}>}}
+ */
+export function takeBackValues(db, msg, toOrderId) {
+  const out = { fromOrderId: null, taken: [], kept: [] };
+  const fromId = msg && msg.visit_service_id;
+  if (!fromId || Number(fromId) === Number(toOrderId)) return out;
+  out.fromOrderId = fromId;
+  db.prepare("UPDATE lab_device_messages SET detail = CASE WHEN COALESCE(detail, '') = '' THEN ? ELSE detail || '; ' || ? END WHERE id = ?")
+    .run(REATTACHED_NOTE + toOrderId, REATTACHED_NOTE + toOrderId, msg.id);
+  if (msg.kind && msg.kind !== 'result') return out;
+  if (!['applied', 'unmapped'].includes(msg.status) || BEFORE_BLANK.test(String(msg.detail || ''))) return out;
+
+  const order = db.prepare('SELECT service_id FROM visit_services WHERE id = ?').get(fromId);
+  const panel = order && db.prepare('SELECT * FROM lab_panels WHERE service_id = ? AND active = 1 ORDER BY id LIMIT 1').get(order.service_id);
+  if (!panel) return out;
+  const analytes = db.prepare('SELECT * FROM lab_panel_analytes WHERE panel_id = ? AND active = 1 ORDER BY sort_order, id').all(panel.id);
+  const fillsOf = (row) => {
+    const dev = row.device_id ? db.prepare('SELECT profile FROM lab_devices WHERE id = ?').get(row.device_id) : null;
+    const head = mshOf(row.raw);
+    const wire = wireFor({ profile: dev ? getProfile(dev.profile) : null, facility: head.facility, app: head.app });
+    return planObservations(readResult(row.raw, wire).observations, analytes).fills;
+  };
+  const others = db.prepare(`SELECT id, raw, device_id, detail FROM lab_device_messages
+                               WHERE visit_service_id = ? AND id <> ? AND kind = 'result' AND status IN ('applied', 'unmapped')
+                                 AND instr(COALESCE(detail, ''), ?) = 0
+                               ORDER BY id DESC LIMIT ?`).all(fromId, msg.id, REATTACHED_NOTE, SERIES_MAX_MESSAGES)
+    .filter((r) => !BEFORE_BLANK.test(String(r.detail || '')));
+  let otherFills = null;
+  for (const { obs, analyte: a } of fillsOf(msg)) {
+    const row = db.prepare('SELECT * FROM lab_results WHERE visit_service_id = ? AND parameter = ?').get(fromId, a.name);
+    if (!row) continue;
+    if (row.verified_at) { out.kept.push({ name: a.name, why: 'выдан' }); continue; }
+    if (row.source !== 'analyzer' || valueKey(row.value) !== valueKey(obs.value)) { out.kept.push({ name: a.name, why: 'изменено после прибора' }); continue; }
+    if (!otherFills) otherFills = others.flatMap(fillsOf);
+    if (otherFills.some((f) => f.analyte.name === a.name && valueKey(f.obs.value) === valueKey(obs.value))) {
+      out.kept.push({ name: a.name, why: 'то же значение пришло другим сообщением' });
+      continue;
+    }
+    db.prepare('DELETE FROM lab_results WHERE id = ?').run(row.id);
+    out.taken.push(a.name);
   }
   return out;
 }
@@ -214,7 +331,10 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // себя (MSH-3/4): BS-200 на строке без профиля или с чужим профилем не
   // читает OBR-3; при споре профиля и сообщения — безопасный провод.
   const head = mshOf(raw);
-  const wire = opts.wire || wireFor({ profile, facility: head.facility, app: head.app });
+  // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 12) — спор профиля и сообщения ниже
+  // кладёт сообщение в лоток; безопасный провод — для номера человеку.
+  const decision = opts.wire ? { wire: opts.wire, conflict: false } : wireDecision({ profile, facility: head.facility, app: head.app });
+  const wire = decision.wire;
   const { obrs, observations } = readResult(raw, wire);
 
   // Номер пробы — из поля провода: LAB- в OBR-2 или OBR-3 бьёт всё, иначе
@@ -234,6 +354,21 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   // отмечает: неразобранное не доказывает, что говорил анализатор.
   // Ревью M4: и повторный прогон из лотка — тоже нет (opts.touch = false).
   if (opts.touch !== false) touchDevice(db, deviceId);
+
+  // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 12) — строка прибора и само сообщение
+  // называют РАЗНЫЕ модели с разными проводами (строка — BC-780, сообщение —
+  // «Mindray|BS-200E»): где номер пробы, где код и значение, решает провод, и
+  // выбрать наугад — значит, может быть, прочесть место в штативе как номер
+  // или RLU как результат. Ничего не читается, в лоток; номер в sample_id — по
+  // безопасному проводу (у BS-200 OBR-3 не читается и здесь), для человека.
+  // И при ручной привязке: номер назвал человек, но провод он не выбирал.
+  if (decision.conflict) {
+    const said = [head.app, head.facility].filter(Boolean).join(' ');
+    record({ ...base, status: 'unmatched', detail: 'прибор заведён как «' + decision.rowModel + '», а сообщение — от «' + said
+      + '» (модель «' + decision.messageModel + '»): у этих моделей разные поля номера пробы и значений — значения не прочитаны;'
+      + ' исправьте модель прибора в «Анализаторах»' });
+    return 'AA';
+  }
 
   // Две РАЗНЫЕ этикетки LAB- в OBR-2 и OBR-3 — чья проба, не знает никто:
   // номера нет, бланки не трогаются, в sample_id — оба номера.
@@ -321,10 +456,26 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
           + (panelDev && panelDev.name ? ' («' + panelDev.name + '»)' : '') });
       return 'AA';
     }
+    // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 1) — у BS-200 номер теста свой у
+    // каждого прибора (ItemID.ini): «2» второго BS-200 бывает креатинином, и
+    // подмена «та же модель» положила бы его в строку «Глюкоза» панели первого.
+    // У такого профиля (codesPerInstrument) панель кормит только свой прибор.
+    if (profile && profile.codesPerInstrument) {
+      record({ ...base, visitServiceId: linkId, status: 'unmatched',
+        detail: 'панель «' + panel.name + '» привязана к другому анализатору той же модели'
+          + (panelDev && panelDev.name ? ' («' + panelDev.name + '»)' : '')
+          + ': у ' + profile.model + ' номер теста свой у каждого прибора — значения этого прибора в её бланк не идут;'
+          + ' привяжите панель к этому прибору или заведите для него свою' });
+      return 'AA';
+    }
   }
 
   // D7 — выданный бланк молча не переписывается. Проверка ДО записи: замещать
   // черновик помощь, замещать выданный отчёт пациента — другое дело.
+  // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 14) — здесь заказ привязывается и у
+  // голого номера: он уже прошёл правило «открытый заказ последних 7 дней» и
+  // проверки панели и модели — это обычное совпадение, как у этикетки. Пункт
+  // 3 R1 снимает привязку только у ОТКАЗАННЫХ голых номеров (выше).
   const released = db.prepare('SELECT COUNT(*) c FROM lab_results WHERE visit_service_id = ? AND verified_at IS NOT NULL').get(order.id).c;
   if (released > 0) {
     record({ ...base, visitServiceId: order.id, status: 'superseded',
@@ -340,8 +491,17 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
   const plan = planObservations(observations, analytes);
 
   let applied = 0;
+  // LIS_REAL_ANALYZERS_V1_SERIES — прибор шлёт по тесту в сообщении.
+  const seriesOn = !!(profile && profile.oneTestPerMessage && plan.fills.length > 0);
+  const perInstrument = !!(profile && profile.codesPerInstrument);   // ревью R2, п. 1
+  const analyzerValues = () => new Map(db.prepare(`SELECT parameter, value FROM lab_results
+                                                    WHERE visit_service_id = ? AND source = 'analyzer' AND TRIM(COALESCE(value, '')) <> ''`)
+    .all(order.id).map((r) => [r.parameter, r.value]));
 
   const run = db.transaction(() => {
+    // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 5) — значения прибора в бланке ДО
+    // записи: против них судится «повтор» — в любом окне.
+    const before = seriesOn ? analyzerValues() : null;
     for (const { obs, analyte: a } of plan.fills) {
       const num = obs.valueType === 'NM' && /^-?\d+(\.\d+)?$/.test(obs.value) ? parseFloat(obs.value) : null;
       const flag = flagFromClinic(num, a.ref_low, a.ref_high) || flagFromDevice(obs.abnormal);
@@ -390,21 +550,33 @@ export function ingestMessage(db, raw, peer = '', deviceId = null, opts = {}) {
     // Сообщение, из которого в бланк не легло ничего, — правило одного
     // сообщения, как прежде, и в серию оно не входит.
     let accepted = [];
-    if (profile && profile.oneTestPerMessage && plan.fills.length > 0) {
-      const earlier = seriesMembers(db, { orderId: order.id, profileKey: device.profile, profile, analytes });
-      // Серия верит бланку: строка, которую пересчёт «заполнил», но которой
-      // в бланке нет (по D4 не легла), — не заполнена.
-      const written = new Set(db.prepare(`SELECT parameter FROM lab_results
-                                           WHERE visit_service_id = ? AND source = 'analyzer' AND TRIM(COALESCE(value, '')) <> ''`)
-        .all(order.id).map((r) => r.parameter));
-      const series = seriesOutcome(planSeries([...earlier.map((m) => m.observations), observations], analytes, { written }));
-      status = series.status;
-      detail = series.pending ? SERIES_PENDING_PREFIX + series.detail : series.detail;
-      // Дошла серия — её ранние строки «ждём» становятся applied в этой же
-      // транзакции. Строки, которых коснулся человек («Привязать», «Отклонить»
-      // ставят resolved_at), не трогаются. Сырое не трогается никогда.
-      if (status === 'applied') {
-        accepted = earlier.filter((m) => m.status === 'unmapped' && !m.resolved_at && m.detail.startsWith(SERIES_PENDING_PREFIX));
+    if (seriesOn) {
+      const who = { orderId: order.id, deviceId, perInstrument, profileKey: device.profile };
+      const { members, overflow } = seriesMembers(db, { ...who, profile, analytes });
+      if (overflow) {
+        // Ревью R2, п. 9 — серия не растёт без предела: сверх потолка она не
+        // пересчитывается, а сообщение — в лоток, со своим журналом.
+        status = 'unmapped';
+        detail = 'больше ' + SERIES_MAX_MESSAGES + ' сообщений по этому заказу за ' + Math.round(SERIES_WINDOW_MS / 60000)
+          + ' минут — серия не считается: проверьте прибор и бланк' + (detail ? '; ' + detail : '');
+      } else {
+        // Серия верит бланку (ревью R2, п. 5): «заполнено» — значение прибора
+        // в бланке, в том числе пришедшее раньше окна; «повтор» — против
+        // значения в бланке до записи; отклонённый человеком спор не
+        // поднимается снова (п. 6).
+        const written = new Set(analyzerValues().keys());
+        const series = planSeries([...members.map((m) => m.observations), observations], analytes, { written, before });
+        const seen = dismissedChange(db, order.id);
+        series.changed = series.changed.filter((c) => !seen(c));
+        const r = seriesOutcome(series);
+        status = r.status;
+        detail = r.pending ? SERIES_PENDING_PREFIX + r.detail : r.detail;
+        // Бланк полон — ожидание строк «ждём» этого заказа кончилось: они
+        // становятся applied в этой же транзакции, в любом окне и даже если у
+        // этого сообщения свой спор (он — в его строке). Строки, которых
+        // коснулся человек («Привязать», «Отклонить» ставят resolved_at), не
+        // трогаются. Сырое не трогается никогда.
+        if (!series.missing.length && series.filled.length) accepted = waitingRows(db, who);
       }
     }
 

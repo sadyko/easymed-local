@@ -247,6 +247,24 @@ test('BS-200: запрос — «заказов нет»; контроль и к
       assert.equal(service.size, 3);
       assert.ok(lisRecent(db, { limit: 50 }, LAB).every((r) => !service.has(r.id)), 'контроль, калибровка и запрос в ленту не попали');
       assert.ok(db.prepare('SELECT last_seen_at FROM lab_devices WHERE id = ?').get(dev.id).last_seen_at, 'прибор на связи');
+
+      // 7. Ревью R2 — находка названа «Mindray BS-200E» (модель — в MSH-4), а не
+      //    «Mindray»; различение — по-прежнему адрес и MSH-3.
+      assert.equal(dev.name, 'Mindray BS-200E');
+      // 8. Ревью R2, п. 1 — второй BS-200: номер теста свой у каждого прибора
+      //    (ItemID.ini), «2» у него — креатинин. Панель биохимии привязана к
+      //    первому — в её бланк проба второго не идёт: лоток с причиной.
+      const bs2 = await analyzer(lisPort, '127.0.0.6');
+      try {
+        const ack = await bs2.send(BS_ORU('LAB-000002', '2', 'CREA', '88.000000'));
+        assert.match(ack, /\rMSA\|AA\|/);
+        const dev2 = db.prepare("SELECT * FROM lab_devices WHERE host = '127.0.0.6'").get();
+        assert.deepEqual([dev2.profile, dev2.name], ['mindray-bs-200', 'Mindray BS-200E (127.0.0.6)']);
+        m = last(db);
+        assert.deepEqual([m.status, m.device_id, m.visit_service_id], ['unmatched', dev2.id, 2]);
+        assert.match(m.detail, /привязана к другому анализатору той же модели/);
+        assert.deepEqual(blank(db, 2), {}, 'креатинин второго прибора не лёг в «Глюкозу» заказа № 2');
+      } finally { bs2.close(); }
     } finally { bs.close(); }
   });
 });

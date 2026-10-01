@@ -60,7 +60,9 @@ export function receiveMessage(db, text, { peer = '', deviceId = null } = {}) {
 
   // Проба пациента, неразобранное и неподдержанное — прежний приём: он пишет
   // строку лотка (rejected — у мусора и неподдержанного типа) и решает AA/AE.
-  const code = ingestMessage(db, text, peer, deviceId, { wire });
+  // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 12) — провод приём решает сам тем же
+  // wireDecision: при споре профиля и сообщения он кладёт пробу в лоток.
+  const code = ingestMessage(db, text, peer, deviceId);
   if (env.kind === 'unsupported') return { code: 'AR', kind: 'result', reply: buildAck(env, 'AR') };
   if (env.kind === 'unparsed') return { code: 'AE', kind: 'result', reply: buildAck(env, 'AE') };
   // Заголовок разобран как ORU^R01, значит AE приёма — сорвавшаяся запись.

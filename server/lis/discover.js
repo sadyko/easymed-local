@@ -31,14 +31,39 @@ const DEFAULT_PORT = 2575;
 /** Схлопывает «BC-5300», «bc 5300», «BC_5300» к одному виду для сравнения. */
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+const LETTER = /\p{L}/u;
+/** Короткая модель (до 5 знаков: «A1000», «BS-200», «BC-20») — только целым словом. */
+const SHORT_MODEL = 5;
+
 /**
  * LIS_REAL_ANALYZERS_V1_MODEL — модель «содержится» в имени, только если сразу
- * за ней не цифра: «bs200» не узнаётся в «bs2000m», «bc20» — в «bc2006»; за
- * моделью буква или конец — узнаётся («bs200e», «bc20s», «mindraybc5300»).
+ * за ней не цифра: «bs200» не узнаётся в «bs2000m», «bc20» — в «bc2006».
+ *
+ * LIS_REAL_ANALYZERS_V1 (ревью R2, п. 8) — и с начала слова: перед моделью в
+ * имени, как оно пришло, — начало или не буква и не цифра. У «A1000» левой
+ * границы не было, и Sysmex CA-1000 (коагулометр), «XA1000» угадывались как
+ * AutoLumo. Короткая модель (до 5 знаков) — целым словом и справа: за ней не
+ * буква («EasyLab A1000X», «BC-20s» — другие приборы). Длинная («BC-5300»,
+ * «BS-200E») — как прежде справа: только не цифра.
+ * @param {string} raw    имя, как прибор его написал
+ * @param {string} model  модель, сжатая norm()
  */
-function containsModel(name, model) {
+function containsModel(raw, model) {
+  const chars = [];
+  const at = [];   // позиция каждого знака сжатого имени в имени, как оно пришло
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i].toLowerCase();
+    if (/[a-z0-9]/.test(c)) { chars.push(c); at.push(i); }
+  }
+  const name = chars.join('');
   for (let i = name.indexOf(model); i !== -1; i = name.indexOf(model, i + 1)) {
-    if (!/[0-9]/.test(name.charAt(i + model.length))) return true;
+    if (/[0-9]/.test(name.charAt(i + model.length))) continue;
+    const before = raw.charAt(at[i] - 1);
+    if (before && WORD_CHAR.test(before)) continue;
+    const after = raw.charAt(at[i + model.length - 1] + 1);
+    if (model.length <= SHORT_MODEL && after && LETTER.test(after)) continue;
+    return true;
   }
   return false;
 }
@@ -60,21 +85,22 @@ function containsModel(name, model) {
  */
 export function guessProfile(who) {
   const { app = '', facility = '' } = who && typeof who === 'object' ? who : { app: who };
-  const names = [norm(app), norm(facility)].filter(Boolean);
-  if (!names.length) return null;
+  const raws = [String(app == null ? '' : app), String(facility == null ? '' : facility)].filter((r) => norm(r));
+  if (!raws.length) return null;
   const all = listProfiles().map((p) => ({ p, keys: aliasesOf(p).map(norm).filter(Boolean) }));
   // Точное совпадение модели или псевдонима — единственный надёжный случай.
-  for (const want of names) {
+  for (const raw of raws) {
+    const want = norm(raw);
     const exact = all.find(({ keys }) => keys.includes(want));
     if (exact) return exact.p;
   }
   // «MINDRAY BC-5300» или «BC-5300 v2» — имя прибора содержит модель.
-  for (const want of names) {
+  for (const raw of raws) {
     let best = null;
     let bestLen = 0;
     for (const { p, keys } of all) {
       for (const k of keys) {
-        if (k.length >= 4 && k.length > bestLen && containsModel(want, k)) { best = p; bestLen = k.length; }
+        if (k.length >= 4 && k.length > bestLen && containsModel(raw, k)) { best = p; bestLen = k.length; }
       }
     }
     if (best) return best;
@@ -273,7 +299,12 @@ export function ensureDevice(db, { sendingApp = '', sendingFacility = '', peer =
   if (found >= MAX_DISCOVERED) return { device: null, created: false, reason: 'достигнут предел найденных приборов' };
 
   const profile = guessed;
-  let name = app || (ip ? 'Анализатор ' + ip : 'Анализатор');
+  // LIS_REAL_ANALYZERS_V1 (ревью R2) — модель узнана только по MSH-4 (в MSH-3
+  // производитель: BS-200 — «Mindray|BS-200E»): название — «MSH-3 MSH-4»,
+  // «Mindray BS-200E», а не «Mindray». Только название: различение приборов
+  // — по-прежнему адрес и MSH-3 (sending_app).
+  const byFacility = guessed && facility && !guessProfile({ app });
+  let name = (byFacility ? [app, facility].filter(Boolean).join(' ') : app) || (ip ? 'Анализатор ' + ip : 'Анализатор');
   // Два одинаковых прибора обязаны различаться в списке. Единственное, чем они
   // отличаются, — адрес, поэтому он и уходит в имя: две строки «BC-20» человек
   // не разберёт, а «BC-20 (10.0.0.12)» разберёт сразу.

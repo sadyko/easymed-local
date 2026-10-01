@@ -8,8 +8,9 @@
 import { listProfiles, getProfile, aliasesOf } from '../../lis/profiles/index.js';   // getProfile, aliasesOf: LIS_REAL_ANALYZERS_V1_PROFILES
 import { pageInt } from './page-args.js';   // V3120_FINAL — числа и поиск из аргументов
 import { startLisListeners, listenerStatus } from '../../lis/index.js';
-import { ingestMessage } from '../../lis/ingest.js';
+import { ingestMessage, takeBackValues } from '../../lis/ingest.js';   // takeBackValues: LIS_REAL_ANALYZERS_V1, ревью R2, п. 2
 import { resolveMessage, OVERSIZE_DETAIL_PREFIX } from '../../lis/inbox.js';
+import { ABANDONED_DETAIL_PREFIX } from '../../lis/inbox.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 10
 import { mshOf } from '../../lis/hl7.js';   // LIS_REAL_ANALYZERS_V1_WIRE — тип и MSH-4 без исключений
 import { readResult, wireFor, readEnvelope } from '../../lis/wire.js';   // LIS_REAL_ANALYZERS_V1_WIRE — тот же провод, что у приёма; readEnvelope: ревью R1, п. 6
 import { LAB_SECTION_ROLES } from '../../db/schema-registry.js';
@@ -153,7 +154,10 @@ export function lisMessageAttach(db, args, user) {
   // вместо 250. Отказ, и строка лотка остаётся ждать: верное значение даст
   // только повтор пробы с прибора. Экран у такой строки «Привязать» не
   // показывает; этот отказ — для старой вкладки и прямого вызова.
-  if (msg.status === 'rejected' && String(msg.detail || '').startsWith(OVERSIZE_DETAIL_PREFIX)) {
+  // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 10) — и брошенный кадр: в лотке тоже
+  // только его начало.
+  if (msg.status === 'rejected' && (String(msg.detail || '').startsWith(OVERSIZE_DETAIL_PREFIX)
+      || String(msg.detail || '').startsWith(ABANDONED_DETAIL_PREFIX))) {
     throw new LisError('Сообщение пришло не целиком — привязать его нельзя. Попросите анализатор отправить эту пробу ещё раз.', 409);
   }
 
@@ -188,20 +192,43 @@ export function lisMessageAttach(db, args, user) {
   // Приём пишет ровно одну строку лотка, и better-sqlite3 синхронный: между
   // этими двумя чтениями никто другой не пишет, поэтому самая новая строка
   // после ingestMessage — его. «id > before» — страховка, а не надежда.
-  const before = db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM lab_device_messages').get().m;
-  // LIS_ANALYZER_LIST_V1 (ревью M4) — { touch: false }: сообщение пришло
-  // тогда, а нажал человек сейчас; прибор, выключенный неделю назад, после
-  // разбора лотка иначе выглядел бы «на связи».
-  const code = ingestMessage(db, msg.raw, msg.peer, msg.device_id, { touch: false, sampleIdOverride: vsId });
-  const rec = db.prepare('SELECT status, detail FROM lab_device_messages WHERE id > ? ORDER BY id DESC LIMIT 1').get(before);
-  resolveMessage(db, id);
-  return { ok: code === 'AA', code, status: rec ? rec.status : null, detail: rec ? rec.detail || '' : '' };
+  //
+  // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 2) — строка уже положила значения в
+  // бланк ДРУГОГО заказа (ждущая строка серии): они оттуда снимаются, если
+  // это всё ещё значение прибора из этой строки и бланк — черновик, а строка
+  // выходит из серии того заказа (ingest.js takeBackValues). Иначе одна проба
+  // лежала бы в двух бланках, и серия первого заказа досчиталась бы ею. Что
+  // снято и что осталось (выдано, изменено) — в журнале новой строки.
+  // Всё — одной транзакцией.
+  return db.transaction(() => {
+    const back = takeBackValues(db, msg, vsId);
+    const before = db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM lab_device_messages').get().m;
+    // LIS_ANALYZER_LIST_V1 (ревью M4) — { touch: false }: сообщение пришло
+    // тогда, а нажал человек сейчас; прибор, выключенный неделю назад, после
+    // разбора лотка иначе выглядел бы «на связи».
+    const code = ingestMessage(db, msg.raw, msg.peer, msg.device_id, { touch: false, sampleIdOverride: vsId });
+    const rec = db.prepare('SELECT id, status, detail FROM lab_device_messages WHERE id > ? ORDER BY id DESC LIMIT 1').get(before);
+    resolveMessage(db, id);
+    let detail = rec ? rec.detail || '' : '';
+    const notes = [];
+    if (back.taken.length) notes.push('снято из бланка заказа № ' + back.fromOrderId + ': ' + back.taken.join(', '));
+    if (back.kept.length) {
+      notes.push('оставлено в бланке заказа № ' + back.fromOrderId + ': ' + back.kept.map((k) => k.name + ' (' + k.why + ')').join(', '));
+    }
+    if (rec && notes.length) {
+      detail = (detail ? detail + '; ' : '') + notes.join('; ');
+      db.prepare('UPDATE lab_device_messages SET detail = ? WHERE id = ?').run(detail, rec.id);
+    }
+    return { ok: code === 'AA', code, status: rec ? rec.status : null, detail };
+  })();
 }
 
 /** Отклонить строку лотка: сообщение остаётся, но перестаёт требовать внимания. */
 export function lisMessageDismiss(db, args, user) {
   guard(user);
-  const id = Number(args && args.id);
+  // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 13) — строгий номер, как у
+  // «Привязать»: Number(true) отклонял сообщение № 1.
+  const id = positiveIntArg(args && args.id);
   if (!id) throw new LisError('Нужен номер сообщения');
   const msg = db.prepare('SELECT id FROM lab_device_messages WHERE id = ?').get(id);
   if (!msg) throw new LisError('Сообщение не найдено', 404);
@@ -284,7 +311,10 @@ export function lisDeviceCodes(db, args, user) {
   // делят профиль, а значит, и провод.
   const profile = getProfile(dev.profile);
 
-  const ids = dev.profile
+  // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 1) — у профиля с codesPerInstrument
+  // (BS-200: номер теста свой у каждого прибора) коды НЕ сливаются: «2»
+  // второго прибора — другой тест, и в «Поле анализатора» первого его нет.
+  const ids = dev.profile && !(profile && profile.codesPerInstrument)
     ? db.prepare('SELECT id FROM lab_devices WHERE profile = ?').all(dev.profile).map((r) => r.id)
     : [dev.id];
   // LIS_DISCOVERY_FIX_V1 — из базы только начало (substr), а не мегабайты

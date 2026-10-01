@@ -15,12 +15,14 @@
 // ждут звонка LIS (lab_devices.dial = 1; Mindray BC-3600, возможно BC-780):
 // поднимаются и гасятся здесь же, вместе со слушателями.
 import os from 'node:os';   // LIS_REAL_ANALYZERS_V1_DIAL — свои адреса: нет петли на себя
+import net from 'node:net';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 7: адрес IPv6 к одному виду
 import { startMllpServer } from './mllp.js';
 import { startMllpClient, isLocalIp } from './dial.js';   // LIS_REAL_ANALYZERS_V1_DIAL — Easy-Med подключается к прибору сам
 import { receiveMessage } from './receive.js';   // LIS_REAL_ANALYZERS_V1_SERVICE — проба или служебное, и ответ прибору
 import { readEnvelope, readResult, pickMessageSample } from './wire.js';   // LIS_REAL_ANALYZERS_V1_SERVICE / _SAMPLE — вид, имя отправителя, номер пробы
 import { ensureDevice, learnSender } from './discover.js';   // learnSender: LIS_REAL_ANALYZERS_V1_DIAL
 import { recordMessage, OVERSIZE_DETAIL_PREFIX } from './inbox.js';   // LIS_MINDRAY_CODES_V1 — переросшее сообщение ложится в лоток
+import { ABANDONED_DETAIL_PREFIX } from './inbox.js';   // LIS_REAL_ANALYZERS_V1 — ревью R2, п. 10а
 
 export const DEFAULT_PORT = 2575;
 
@@ -49,7 +51,25 @@ const isoNow = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
  * здесь уже отказались); у звонка прибору (LIS_REAL_ANALYZERS_V1_DIAL) прибор
  * известен заранее.
  */
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R2, п. 10б) — такая же строка («больше
+ * потолка», «кадр оборван») от этого прибора (или, без прибора, с этого адреса)
+ * уже лежит в лотке за последний час. Кадр в 5 МБ без конца ходит по кругу:
+ * AE, обрыв, переподключение, снова — и раньше каждый круг писал строку лотка.
+ * Теперь одна в час: прибор по-прежнему каждый раз получает отказ.
+ */
+const SAME_ROW_WINDOW_SECONDS = 60 * 60;
+function recentRow(db, { deviceId, peer, prefix }) {
+  return !!db.prepare(`SELECT 1 FROM lab_device_messages
+                        WHERE status = 'rejected' AND substr(detail, 1, ?) = ?
+                          AND received_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)
+                          AND (CASE WHEN ? IS NOT NULL THEN device_id = ? ELSE device_id IS NULL AND peer = ? END)
+                        LIMIT 1`)
+    .get(prefix.length, prefix, '-' + SAME_ROW_WINDOW_SECONDS + ' seconds', deviceId, deviceId, peer || '');
+}
+
 function recordOversize(db, { deviceId = null, peer, head, limit }) {
+  if (recentRow(db, { deviceId, peer, prefix: OVERSIZE_DETAIL_PREFIX })) return;   // ревью R2, п. 10б
   // LIS_REAL_ANALYZERS_V1_SAMPLE — номер той же pickSampleId с проводом
   // default: LAB- узнаётся в OBR-2 и OBR-3, голые цифры — только OBR-3.
   // Начало не разобралось — без номера (readResult не бросает).
@@ -60,6 +80,42 @@ function recordOversize(db, { deviceId = null, peer, head, limit }) {
   // по нему она отказывается привязывать обрезанное. Текст прежний.
   recordMessage(db, { deviceId, peer, raw: head, sampleId, status: 'rejected',
     detail: OVERSIZE_DETAIL_PREFIX + size + ' — не принято; в лотке только его начало' });
+}
+
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R2, п. 10а) — прибор бросил кадр и начал новый
+ * (mllp.js onAbandoned): одна строка лотка «Не разобрано» с началом брошенного
+ * и номером пробы, если он в начале есть (инвариант 2 — ничего не теряется).
+ * Привязать её нельзя, как переросшее (rpc/lis.js — по началу строки). Не
+ * чаще одной в час с прибора (адреса), как и переросшее.
+ */
+function recordAbandoned(db, { deviceId = null, peer, head }) {
+  if (recentRow(db, { deviceId, peer, prefix: ABANDONED_DETAIL_PREFIX })) return;
+  const sampleId = pickMessageSample(readResult(head, 'default').obrs, 'default').sampleId;
+  recordMessage(db, { deviceId, peer, raw: head, sampleId, status: 'rejected',
+    detail: ABANDONED_DETAIL_PREFIX + 'прибор начал новый кадр, не закончив этот; в лотке только его начало — если проба не дошла, повторите её на приборе' });
+}
+
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R2, п. 7) — адрес к одному виду: «::ffff:» у
+ * IPv4 снимается, IPv6 записывается кратко («0:0:0:0:0:0:0:1» → «::1»), зона
+ * («%eth0») отбрасывается. Иначе «127.0.0.1» и «::ffff:127.0.0.1» были двумя
+ * адресами, и к одному прибору поднималось два соединения.
+ */
+function canonicalIp(host) {
+  let h = String(host == null ? '' : host).trim().toLowerCase().split('%')[0];
+  const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(h);
+  if (dotted) return dotted[1];
+  if (net.isIP(h) === 6) {
+    try { h = new URL('http://[' + h + ']/').hostname.slice(1, -1); } catch { /* как есть */ }
+    const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
+    if (hex) {
+      const a = parseInt(hex[1], 16);
+      const b = parseInt(hex[2], 16);
+      return [a >> 8, a & 255, b >> 8, b & 255].join('.');
+    }
+  }
+  return h;
 }
 
 /**
@@ -105,19 +161,22 @@ function startDialers(db, devices, lisPorts, log) {
   const mine = selfPorts(lisPorts);
   const taken = new Set();
   for (const d of [...devices].sort((a, b) => a.id - b.id)) {
-    const host = String(d.host == null ? '' : d.host).trim();
+    const raw = String(d.host == null ? '' : d.host).trim();
     const port = d.port == null || d.port === '' ? NaN : Number(d.port);
+    // Ревью R2, п. 7 — адрес к одному виду до проверки, сравнения и звонка
+    // (isLocalIp — прежний, общий с экраном: lab-devices-lists.js).
+    const host = canonicalIp(raw);
     let code = null;
     if (!isLocalIp(host) || !Number.isInteger(port) || port < 1 || port > 65535) code = 'bad_address';
     else if (selfHost(host) && mine.includes(port)) code = 'self';
-    else if (taken.has(host.toLowerCase() + '|' + port)) code = 'duplicate';
+    else if (taken.has(host + '|' + port)) code = 'duplicate';
     if (code) {
       dialRefused.push({ device_id: d.id, host, port: Number.isInteger(port) ? port : null, state: 'off',
         since: isoNow(), last_rx_at: null, code, retry_at: null });
       log(`LIS: «${d.name}» — Easy-Med не подключается к ${host || '(адрес пуст)'}:${Number.isInteger(port) ? port : '(порт пуст)'} (${code})`);
       continue;
     }
-    taken.add(host.toLowerCase() + '|' + port);
+    taken.add(host + '|' + port);
     const deviceId = d.id;
     // Строку могли удалить, пока кадр шёл: сообщение всё равно сохраняется
     // (инвариант 2), но без прибора — иначе его не пустил бы внешний ключ.
@@ -133,14 +192,42 @@ function startDialers(db, devices, lisPorts, log) {
         return receiveMessage(db, text, { peer: host, deviceId: known ? deviceId : null });
       },
       onOversize: ({ head, limit }) => recordOversize(db, { deviceId: alive() ? deviceId : null, peer: host, head, limit }),
+      onAbandoned: ({ head }) => recordAbandoned(db, { deviceId: alive() ? deviceId : null, peer: host, head }),   // ревью R2, п. 10а
     });
+    // Ревью R2, п. 3 — прежний клиент этой строки (если вдруг остался) закрыт
+    // прежде, чем его место займёт новый: сирота звонил бы прибору вечно.
+    const prev = dialers.get(deviceId);
+    if (prev) { try { prev.close(); } catch { /* уже закрыт */ } }
     dialers.set(deviceId, client);
     log(`LIS: Easy-Med подключается к «${d.name}» ${host}:${port}`);
   }
 }
 
-export async function startLisListeners(db, { log = console.log } = {}) {
-  await stopLisListeners();
+/**
+ * LIS_REAL_ANALYZERS_V1 (ревью R2, п. 3) — запуск и остановка — по очереди.
+ * Два запуска одновременно (два «Перезапустить» подряд, удаление прибора во
+ * время перезапуска) раньше перемешивались на await: второй затирал клиента
+ * первого в карте, не закрыв его, — сирота звонил прибору вечно, — а порт LIS
+ * второй видел «уже занятым» первым. Теперь каждый ждёт, пока закончит
+ * предыдущий; ошибка одного не останавливает очередь.
+ */
+let queue = Promise.resolve();
+function inTurn(fn) {
+  const run = queue.then(fn, fn);
+  queue = run.then(() => {}, () => {});
+  return run;
+}
+
+export function startLisListeners(db, opts = {}) {
+  return inTurn(() => start(db, opts));
+}
+
+export function stopLisListeners() {
+  return inTurn(stop);
+}
+
+async function start(db, { log = console.log } = {}) {
+  await stop();
   failed = [];
   if (process.env.LIS_ENABLED === '0') {
     log('LIS: выключен через LIS_ENABLED=0');
@@ -198,6 +285,9 @@ export async function startLisListeners(db, { log = console.log } = {}) {
         // строка «Не разобрано» в лотке (recordOversize), прибор по началу не
         // заводится.
         onOversize: ({ peer, head, limit }) => recordOversize(db, { deviceId: null, peer: normalizeIp(peer), head, limit }),
+        // LIS_REAL_ANALYZERS_V1 (ревью R2, п. 10а) — брошенный кадр: строка
+        // «кадр оборван» в лотке; прибор по началу не заводится, как и выше.
+        onAbandoned: ({ peer, head }) => recordAbandoned(db, { deviceId: null, peer: normalizeIp(peer), head }),
       });
       running.push(srv);
       log(list.length
@@ -220,7 +310,7 @@ export async function startLisListeners(db, { log = console.log } = {}) {
   return running;
 }
 
-export async function stopLisListeners() {
+async function stop() {
   // LIS_REAL_ANALYZERS_V1_DIAL — клиенты закрываются сразу и ничего не ждут
   // (dial.js close): урок lis_restart / lis_device_delete — закрытие, ждущее
   // прибора, вешало RPC.
