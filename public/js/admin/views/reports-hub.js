@@ -44,8 +44,8 @@ import { CATEGORY_LABEL } from './inventory-shared.js';
 // ROLE_REPORTS_SETTINGS_V1 — плитка видна, если её группа отчётов выдана роли.
 import { reportKindAllowed } from '../permissions.js';
 // JOURNALS_V1_SERVICE — окно выбора услуг журнала и запомненный выбор.
-import { openReportServicePicker, loadRememberedServices, rememberServices, browserStorage, servicesButtonText } from './report-service-picker.js?v=jrn1';
-import { reportPrintHtml } from './report-print.js?v=jrn1';   // JOURNALS_V1_PRINT — печатная страница отчёта
+import { openReportServicePicker, loadRememberedServices, rememberServices, browserStorage, servicesButtonText } from './report-service-picker.js?v=jrn2';   // JOURNALS_V1 — jrn2 поиск во всю ширину
+import { reportPrintHtml } from './report-print.js?v=jrn2';   // JOURNALS_V1_PRINT — печатная страница отчёта (jrn2 — перенос без разрыва слов)
 
 // Экспортируется, чтобы определения (в т.ч. рисовалку графиков) можно было
 // проверить тестом — страница целиком без DOM не поднимается.

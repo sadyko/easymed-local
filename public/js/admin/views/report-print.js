@@ -25,6 +25,8 @@ export function dmy(ymd) {
 
 // Размеры печатного листа — бумажные метрики в pt: шкала экрана (12.5…40 px)
 // к печати не относится (TYPE_SCALE_V1, исключение для печатных документов).
+// Перенос в ячейках — break-word, не anywhere: anywhere сжимает минимальную
+// ширину колонки до буквы, и при длинном заключении имена рвутся по буквам.
 /* type-scale-exempt-start: печатный лист отчёта — бумажные метрики (pt), шкала экрана к печати не относится */
 const PRINT_CSS = `
 body { font-family: ${PRINT_FONT_STACK}; color: #111; margin: 0; }
@@ -32,7 +34,7 @@ h1 { font-size: 14pt; margin: 0 0 3pt; }
 .rp-sub { font-size: 9pt; color: #444; margin: 0 0 8pt; }
 .rp-tbl { width: 100%; border-collapse: collapse; font-size: 8pt; }
 .rp-tbl th { text-align: left; border-bottom: 1.2pt solid #333; padding: 3pt 4pt; font-weight: 700; vertical-align: bottom; }
-.rp-tbl td { border-bottom: 0.5pt solid #ccc; padding: 3pt 4pt; vertical-align: top; overflow-wrap: anywhere; }
+.rp-tbl td { border-bottom: 0.5pt solid #ccc; padding: 3pt 4pt; vertical-align: top; overflow-wrap: break-word; }
 .rp-tbl .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .rp-tbl tfoot td { font-weight: 800; border-top: 1.2pt solid #333; border-bottom: 0; }
 tr { page-break-inside: avoid; break-inside: avoid; }

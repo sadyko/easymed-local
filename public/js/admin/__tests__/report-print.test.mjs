@@ -67,3 +67,13 @@ test('dmy: ГГГГ-ММ-ДД → дд.мм.гггг; прочее — как е
   assert.equal(dmy(''), '');
   assert.equal(dmy('вчера'), 'вчера');
 });
+
+// Проверка в браузере (02.10): с overflow-wrap: anywhere у ячеек минимальная
+// ширина колонки — одна буква, длинное заключение забирает весь лист, и имена
+// рвутся по буквам («Карим / ов»). break-word ломает только слово, которое не
+// влезает, и не сжимает колонки до буквы.
+test('печать: слова в узких колонках не рвутся по буквам', () => {
+  const html = reportPrintHtml({ columns: ['ФИО', 'Заключение'], rows: [['Каримов Алишер', 'Х '.repeat(300)]] }, { title: 'Т', from: '2026-10-01', to: '2026-10-01' }, tx);
+  assert.doesNotMatch(html, /overflow-wrap:\s*anywhere/);
+  assert.match(html, /\.rp-tbl td \{[^}]*overflow-wrap: break-word;/);
+});

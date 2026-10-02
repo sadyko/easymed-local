@@ -145,3 +145,9 @@ test('окно: Esc закрывает только окно выбора, ко�
   assert.equal(keyListeners.length, 0);
   void overlay;
 });
+
+test('окно: поле поиска — на всю ширину окна', async () => {
+  const { overlay } = P.openReportServicePicker({ selected: [], onApply: () => {}, loadCatalog: async () => CATALOG });
+  await tick();
+  assert.equal(searchBox(overlay).style.width, '100%');
+});

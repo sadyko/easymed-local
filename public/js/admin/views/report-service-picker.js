@@ -90,6 +90,7 @@ export function openReportServicePicker({ selected = [], onApply, loadCatalog })
         h('div', { class: 'muted', style: { fontSize: '13.5px', padding: '12px 0' } }, tr('Загрузка…')));
     const search = h('input', {
         class: 'inp', type: 'text', placeholder: 'Найти услугу…', 'aria-label': 'Найти услугу…',
+        style: { width: '100%', boxSizing: 'border-box' },
         oninput: (e) => { query = String((e.target || e.currentTarget).value || ''); paintList(); },
     });
     const paintCount = () => { countEl.textContent = trf('Выбрано: {n}', { n: chosen.size }); };
