@@ -76,14 +76,37 @@ async function post(domain, pathName, params, { headers = {}, fetchImpl = global
   return { ok: true, data: body.data };
 }
 
+// ONLINEPBX_KEY_SHARE_V1 (2026-10-02) — ОДИН КЛЮЧ НА ВСЕ УСТАНОВКИ.
+//
+// Проверка на этом компьютере: ключ подключения менялся каждые ~11 секунд, на
+// каждом шаге опроса, при одном работающем Easy-Med. Тем же auth_key
+// пользуются несколько установок (эта и серверы клиники), а авторизация
+// всегда шла с new=true — «каждая новая авторизация даёт новый ключ»
+// (документация onlinePBX), и он гасит ключ всех остальных. Установки по
+// очереди выбивали друг друга, и «Прослушать» сразу после чужой авторизации
+// получал isNotAuth — оператор читал «записи нет».
+//
+// Параметр new у auth.json — «необходимость обновления ключа», значения
+// "true"/"false". Теперь:
+//   • авторизация по умолчанию — new=false (явно: в описании параметра
+//     значение по умолчанию — "true"): станция отдаёт ДЕЙСТВУЮЩИЙ ключ, и все
+//     установки работают с одним, не мешая друг другу;
+//   • новый ключ (new=true) — крайняя мера: только если и с только что
+//     полученным общим ключом станция ответила isNotAuth;
+//   • не больше MAX_PBX_AUTHS_PER_CALL авторизаций на вызов, дальше —
+//     bad_credentials. Никаких циклов.
+export const MAX_PBX_AUTHS_PER_CALL = 2;
+
 /**
- * Получить пару key_id/key по auth_key из панели.
+ * Получить пару key_id/key по auth_key из панели. По умолчанию — действующий
+ * ключ (new=false); `newKey: true` — выпустить новый (гасит ключи остальных
+ * установок с этим auth_key, поэтому только крайней мерой).
  * @returns {Promise<{ok:true, key_id:string, key:string}|{ok:false, reason:string}>}
  */
-export async function pbxAuth(domain, authKey, opts = {}) {
+export async function pbxAuth(domain, authKey, { newKey = false, ...opts } = {}) {
   const d = normalizeDomain(domain);
   if (!d || !authKey) return { ok: false, reason: 'bad_credentials' };
-  const r = await post(d, 'auth.json', { auth_key: String(authKey).trim(), new: 'true' }, opts);
+  const r = await post(d, 'auth.json', { auth_key: String(authKey).trim(), new: newKey ? 'true' : 'false' }, opts);
   if (!r.ok) return r.reason === 'not_auth' ? { ok: false, reason: 'bad_credentials' } : r;
   const data = r.data || {};
   if (!data.key_id || !data.key) return { ok: false, reason: 'bad_response' };
@@ -92,26 +115,40 @@ export async function pbxAuth(domain, authKey, opts = {}) {
 
 /**
  * Один запрос к API с уже выданным ключом. `creds` — {key_id, key}.
- * При «ключ протух» (isNotAuth) — ровно ОДНА повторная авторизация по
- * auth_key и повтор запроса; новую пару отдаём наверх через onRenew.
+ *
+ * ONLINEPBX_KEY_SHARE_V1 — при «ключ протух» (isNotAuth): сначала общий ключ
+ * (new=false) и повтор; если и он — isNotAuth, новый ключ (new=true) и ещё
+ * один повтор; дальше — bad_credentials. Не больше двух авторизаций на вызов,
+ * включая первую, когда пары ещё не было. Каждую полученную пару отдаём
+ * наверх через onRenew — её сохраняют, и следующий вызов (опрос, «Прослушать»,
+ * «Позвонить») берёт уже её.
  */
 export async function pbxCall(domain, pathName, params, { creds, authKey, onRenew, ...opts } = {}) {
   const d = normalizeDomain(domain);
   let c = creds && creds.key_id && creds.key ? creds : null;
+  let auths = 0;
+  // Первая авторизация вызова — общий ключ, вторая — новый.
+  const renew = async () => {
+    const a = await pbxAuth(d, authKey, { ...opts, newKey: auths > 0 });
+    auths += 1;
+    if (!a.ok) return a;
+    c = { key_id: a.key_id, key: a.key };
+    if (onRenew) await onRenew(c);
+    return null;
+  };
+  const send = () => post(d, pathName, params, { ...opts, headers: { 'x-pbx-authentication': c.key_id + ':' + c.key } });
+
   if (!c) {
     if (!authKey) return { ok: false, reason: 'bad_credentials' };
-    const a = await pbxAuth(d, authKey, opts);
-    if (!a.ok) return a;
-    c = { key_id: a.key_id, key: a.key };
-    if (onRenew) await onRenew(c);
+    const fail = await renew();
+    if (fail) return fail;
   }
-  let r = await post(d, pathName, params, { ...opts, headers: { 'x-pbx-authentication': c.key_id + ':' + c.key } });
-  if (!r.ok && r.reason === 'not_auth' && authKey) {
-    const a = await pbxAuth(d, authKey, opts);
-    if (!a.ok) return a;
-    c = { key_id: a.key_id, key: a.key };
-    if (onRenew) await onRenew(c);
-    r = await post(d, pathName, params, { ...opts, headers: { 'x-pbx-authentication': c.key_id + ':' + c.key } });
+  let r = await send();
+  // Ограничено MAX_PBX_AUTHS_PER_CALL: тело выполняется не больше двух раз.
+  while (!r.ok && r.reason === 'not_auth' && authKey && auths < MAX_PBX_AUTHS_PER_CALL) {
+    const fail = await renew();
+    if (fail) return fail;
+    r = await send();
   }
   if (!r.ok && r.reason === 'not_auth') return { ok: false, reason: 'bad_credentials' };
   return r;
