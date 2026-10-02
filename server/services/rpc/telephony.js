@@ -22,6 +22,8 @@ import { dialCall } from '../telephony/dial.js';
 // CALL_RECORDING_V1 — разбор ссылки на запись и история станции.
 import { recordingUrlOf } from '../telephony/recording.js';
 import { pbxHistory, pbxRecordingUrl, pbxAuth, normalizeDomain } from '../telephony/onlinepbx.js';
+// CALL_RECORDING_REASONS_V1 — сроки «запись готовится» и повтора: одно место с экраном.
+import { RECORDING_NOT_READY_WINDOW_MS, RECORDING_SERVER_RETRY_MS, RECORDING_SERVER_RETRY_REASONS } from '../../../public/js/shared/call-recording.js';
 import { normalizeMzDomain } from '../telephony/moizvonki.js';   // ADMIN_ROWS_GRANTABLE_V1 (ревью I2)
 
 export class RpcError extends Error {
@@ -436,10 +438,35 @@ export function telephonyOperatorStats(db, args, user) {
 //
 // Для Binotel и «Моих Звонков» ссылка приезжает вместе со звонком и лежит в
 // самой строке — тогда станцию не тревожим вовсе.
-export async function telephonyCallRecording(db, args, user, { pbxRecordingUrlImpl = pbxRecordingUrl } = {}) {
+//
+// CALL_RECORDING_REASONS_V1 (2026-10-02) — ПРИЧИНА СЛОВАМИ, А НЕ ВСЁ В «НЕТ».
+// Владелец: оператор нажал «Прослушать» через пару минут после разговора и
+// прочёл «Записи этого разговора у станции нет.», хотя запись была — onlinePBX
+// отдал её по тому же звонку чуть позже. Прежде сюда сливались и сбой связи,
+// и «не чаще», и ошибка станции, и неподходящий ключ, и запись, которую
+// станция ещё не склеила. Теперь:
+//   • отказ станции — его собственная причина (offline, rate_limited,
+//     server_error, bad_response, bad_credentials); сбой связи и ошибку
+//     станции переспрашиваем ОДИН раз через полторы секунды — это почти
+//     всегда мигание сети, и оператору незачем жать второй раз. «Не чаще» и
+//     ключ не переспрашиваем: повтор там только вредит;
+//   • станция ответила, но без ссылки: разговор кончился меньше десяти минут
+//     назад — not_ready (экран сам спросит ещё), раньше — not_found.
+// Сроки — в public/js/shared/call-recording.js, одном месте с экраном.
+const PBX_FAIL_REASONS = new Set(['offline', 'rate_limited', 'server_error', 'bad_response', 'bad_credentials']);   // CALL_RECORDING_REASONS_V1
+const waitMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Когда кончился разговор: начало + ожидание + разговор. NaN — время не читается. */
+function callEndedAt(call) {
+  const start = Date.parse(String(call.started_at || ''));
+  if (!Number.isFinite(start)) return NaN;
+  return start + ((Number(call.waitsec) || 0) + (Number(call.billsec) || 0)) * 1000;
+}
+
+export async function telephonyCallRecording(db, args, user, { pbxRecordingUrlImpl = pbxRecordingUrl, sleep = waitMs, now = Date.now } = {}) {
   requireGrant(db, user, 'crm.recording', 'edit', CALL_LOG_ROLES, 'слушать записи разговоров');
   const id = Number((args && args.call_id) || 0);
-  const call = id ? db.prepare('SELECT id, general_call_id, provider, provider_id, billsec, recording_url FROM calls WHERE id = ?').get(id) : null;
+  const call = id ? db.prepare('SELECT id, general_call_id, provider, provider_id, started_at, waitsec, billsec, recording_url FROM calls WHERE id = ?').get(id) : null;
   if (!call) throw new RpcError('Звонок не найден.', 404);
   if (call.recording_url) return { url: call.recording_url };
   if (!Number(call.billsec)) return { url: '', reason: 'no_talk' };
@@ -450,8 +477,21 @@ export async function telephonyCallRecording(db, args, user, { pbxRecordingUrlIm
   // Идентификатор звонка у станции — то, что стоит после «onlinepbx:» (так его
   // кладёт normalizePbxCall). Без этого запрос уйдёт с чужим номером.
   const uuid = String(call.general_call_id || '').replace(/^onlinepbx:/, '');
-  const r = await pbxRecordingUrlImpl(providerConfig(row).domain, uuid, pbxOptions(db, row));
-  const url = (r && r.ok && typeof r.data === 'string' && /^https?:\/\//.test(r.data)) ? r.data : '';
-  if (!url) return { url: '', reason: 'not_found' };
-  return { url };
+  // Строка подключения перечитывается к повтору: если первый запрос получил
+  // новый ключ (onRenew), второй идёт с ним, а не переавторизуется заново.
+  const ask = () => {
+    const cur = getProviderRow(db, row.id) || row;
+    return pbxRecordingUrlImpl(providerConfig(cur).domain, uuid, pbxOptions(db, cur));
+  };
+  let r = await ask();
+  if (r && !r.ok && RECORDING_SERVER_RETRY_REASONS.includes(r.reason)) {
+    await sleep(RECORDING_SERVER_RETRY_MS);
+    r = await ask();
+  }
+  if (!r || !r.ok) return { url: '', reason: r && PBX_FAIL_REASONS.has(r.reason) ? r.reason : 'server_error' };
+  const url = (typeof r.data === 'string' && /^https?:\/\//.test(r.data)) ? r.data : '';
+  if (url) return { url };
+  const ended = callEndedAt(call);
+  const fresh = Number.isFinite(ended) && now() - ended < RECORDING_NOT_READY_WINDOW_MS;
+  return { url: '', reason: fresh ? 'not_ready' : 'not_found' };
 }

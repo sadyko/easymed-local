@@ -6,6 +6,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, Tag, field, fmtDateTime } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
+import { askRecordingUntilReady, recordingMessage, RECORDING_WAITING, RECORDING_GAVE_UP } from '../../shared/call-recording.js?v=crr1';   // CALL_RECORDING_REASONS_V1 — «Прослушать»: причина словами, повтор, пока запись готовится
 import { openVisitWizard, canAddVisitLines } from './visit-wizard.js?v=ownrep4';   // CRM_V4 — конверсия сразу в реальный заказ услуги · LIVE_AUDIT_FIX_V1 — canAddVisitLines · REFERRAL_BILL_V1 — штамп кэша · REFBILL_REVIEW_V1
 import { digitsOf, phoneLikePattern, filterPhoneMatches, uzLocalDigits, MIN_PHONE_DIGITS, leadMatchesQuery, phoneKey } from './crm-phone-match.js';
 import { phoneInput } from '../phone-input.js?v=ph1';
@@ -2772,34 +2773,48 @@ async function paint() {
                     }
                     if (Number(c.billsec) > 0 && !c.can_listen) listenDenied = true;
                     if (Number(c.billsec) > 0 && c.can_listen) {
+                        // CALL_RECORDING_REASONS_V1 — надпись живёт в своём <span>:
+                        // прежде textContent кнопки стирал и значок наушников.
+                        const playLabel = h('span', null, 'Прослушать');
                         const play = h('button', { class: 'btn btn-sm', type: 'button',
                             style: { marginTop: '8px' },
                             onclick: async (ev) => {
                                 ev.stopPropagation();
                                 play.disabled = true;
-                                const wasText = play.textContent;
-                                play.textContent = tr('Ищем запись…');
+                                playLabel.textContent = tr('Ищем запись…');
                                 try {
-                                    const { data, error } = await supabase.rpc('telephony_call_recording', { call_id: c.id });
-                                    if (error) { toast(error.message, 'fail'); return; }
-                                    if (!data || !data.url) {
-                                        // Причину называем словами: «нет записи» и
-                                        // «станция не хранит так давно» — разные вещи.
-                                        toast(data && data.reason === 'not_supported'
-                                            ? 'Эта телефония записи не отдаёт.'
-                                            : 'Записи этого разговора у станции нет.', 'warn');
-                                        return;
-                                    }
+                                    // CALL_RECORDING_REASONS_V1 — причину называем
+                                    // словами, каждую своей (shared/call-recording.js):
+                                    // «нет связи», «не чаще», «ключ», «ошибка станции»
+                                    // и «ещё готовится» прежде читались одним «записи
+                                    // нет». «Готовится» карточка спрашивает сама каждые
+                                    // 10 секунд, не больше 6 раз, и перестаёт, как
+                                    // только окно закрыли (кнопки нет в документе).
+                                    const r = await askRecordingUntilReady(async () => {
+                                        const { data, error } = await supabase.rpc('telephony_call_recording', { call_id: c.id });
+                                        if (error) throw error;
+                                        return data || {};
+                                    }, {
+                                        alive: () => play.isConnected,
+                                        onWait: (n, max) => {
+                                            if (n === 1) toast(recordingMessage('not_ready'), 'info');
+                                            playLabel.textContent = trf(RECORDING_WAITING, { n, max });
+                                        },
+                                    });
+                                    if (r.reason === 'gone') return;
+                                    if (!r.url) { toast(r.gave_up ? RECORDING_GAVE_UP : recordingMessage(r.reason), 'warn'); return; }
                                     play.replaceWith(h('audio', {
-                                        controls: true, autoplay: true, preload: 'none', src: data.url,
+                                        controls: true, autoplay: true, preload: 'none', src: r.url,
                                         style: { width: '100%', marginTop: '8px' },
                                     }));
+                                } catch (e) {
+                                    toast((e && e.message) || String(e), 'fail');
                                 } finally {
                                     play.disabled = false;
-                                    play.textContent = wasText;
+                                    playLabel.textContent = tr('Прослушать');
                                 }
                             },
-                        }, Icon('Headset', { size: 13 }), h('span', null, 'Прослушать'));
+                        }, Icon('Headset', { size: 13 }), playLabel);
                         line.appendChild(play);
                     }
                     callsList.appendChild(line);

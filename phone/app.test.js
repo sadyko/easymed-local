@@ -6,6 +6,7 @@
 // «Не вышло» — причина пряталась в title, и оператор видел лишь «не работает».
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { RECORDING_MESSAGES, RECORDING_GAVE_UP } from '../public/js/shared/call-recording.js';   // CALL_RECORDING_REASONS_V1
 
 // Крошечная DOM ровно под phone/public/app.js.
 class El {
@@ -48,7 +49,7 @@ async function boot(name, { mayHear, recording }) {
     if (path === '/api/me') return { status: 200, body: { id: 1, full_name: 'Оператор', extension: '', line: null, seen_extensions: [] } };
     if (path === '/api/extensions') return { status: 200, body: { extensions: [] } };
     if (path.startsWith('/api/calls')) return { status: 200, body: { may_hear: mayHear, calls: [CALL] } };
-    if (path.startsWith('/api/recording')) return recording;
+    if (path.startsWith('/api/recording')) return typeof recording === 'function' ? recording() : recording;   // CALL_RECORDING_REASONS_V1 — ответы по очереди
     return { status: 404, body: { error: { message: 'нет такого маршрута' } } };
   };
   await import('./public/app.js?case=' + name);
@@ -74,4 +75,58 @@ test('с правом — кнопка есть; отказ виден текс�
   await flush();
   assert.ok(rec.textContent.includes(message), 'причина отказа не видна в строке: ' + rec.textContent);
   assert.equal(b.textContent, 'Прослушать', 'кнопка осталась «Не вышло» — повторить нельзя');
+});
+
+// CALL_RECORDING_REASONS_V1 (2026-10-02) — причина, почему записи нет, словами
+// в строке (те же фразы, что в карточке заявки: shared/call-recording.js), и
+// повтор, пока станция запись ещё готовит. Прежде любой ответ без ссылки
+// становился «Записи нет» на кнопке — и «нет связи», и «не чаще», и запись,
+// которую onlinePBX склеит через минуту.
+
+const queue = (...answers) => { let i = 0; const f = () => answers[Math.min(i++, answers.length - 1)]; f.count = () => i; return f; };
+const soon = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
+
+test('отказ станции — его причина текстом в строке, кнопку можно нажать снова', async () => {
+  for (const reason of ['offline', 'rate_limited', 'bad_credentials', 'server_error', 'no_line', 'not_found']) {
+    const { rec } = await boot('reason-' + reason, { mayHear: true, recording: { status: 200, body: { url: '', reason } } });
+    const [b] = buttons(rec);
+    b.click();
+    await flush();
+    assert.ok(rec.textContent.includes(RECORDING_MESSAGES[reason]), reason + ': в строке ' + rec.textContent);
+    assert.equal(b.textContent, 'Прослушать', reason);
+    assert.equal(b.disabled, false, reason);
+  }
+});
+
+test('«готовится»: счёт на кнопке, повтор через 10 секунд, плеер, когда запись готова', async (t) => {
+  const answers = queue({ status: 200, body: { url: '', reason: 'not_ready' } }, { status: 200, body: { url: 'https://rec/7.mp3' } });
+  const { rec } = await boot('not-ready', { mayHear: true, recording: answers });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const [b] = buttons(rec);
+  b.click();
+  await soon();
+  assert.equal(answers.count(), 1);
+  assert.equal(b.textContent, 'Запись готовится… (1/6)');
+  assert.ok(rec.textContent.includes(RECORDING_MESSAGES.not_ready), rec.textContent);
+  t.mock.timers.tick(10_000);
+  await soon();
+  assert.equal(answers.count(), 2);
+  const audio = walk(rec).find((n) => n.tagName === 'AUDIO');
+  assert.ok(audio, 'плеер не появился');
+  assert.equal(audio.src, 'https://rec/7.mp3');
+  assert.ok(!rec.textContent.includes(RECORDING_MESSAGES.not_ready), 'над плеером осталось «готовится»');
+});
+
+test('станция готовит больше минуты — шесть повторов и «ещё не готова» текстом', async (t) => {
+  const answers = queue({ status: 200, body: { url: '', reason: 'not_ready' } });
+  const { rec } = await boot('gave-up', { mayHear: true, recording: answers });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const [b] = buttons(rec);
+  b.click();
+  await soon();
+  for (let i = 0; i < 6; i++) { t.mock.timers.tick(10_000); await soon(); }
+  assert.equal(answers.count(), 7);
+  assert.ok(rec.textContent.includes(RECORDING_GAVE_UP), rec.textContent);
+  assert.equal(b.textContent, 'Прослушать');
+  assert.equal(b.disabled, false);
 });

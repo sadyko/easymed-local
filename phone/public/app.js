@@ -8,6 +8,13 @@
 // EasyMed. Программа живёт в клинике без интернета, и «сначала соберите» здесь
 // не работает.
 
+// CALL_RECORDING_REASONS_V1 — слова «почему записи нет» и повтор, пока запись
+// готовится: один модуль с карточкой заявки EasyMed. phone/index.js отдаёт его
+// ровно по этому пути (/public/js/shared/call-recording.js), поэтому один и
+// тот же импорт работает и в браузере, и в тесте.
+import { askRecordingUntilReady, recordingMessage, fillRecordingText, RECORDING_WAITING, RECORDING_GAVE_UP, RECORDING_RETRY_EVERY_MS }
+  from '../../public/js/shared/call-recording.js';
+
 const $ = (id) => document.getElementById(id);
 const api = async (path, opts) => {
   const res = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...opts });
@@ -173,16 +180,33 @@ async function loadCalls() {
       // становилась «Не вышло», а причина пряталась в подсказку под мышью.
       const why = document.createElement('div');
       why.className = 'rec-msg';
+      // CALL_RECORDING_REASONS_V1 — и «записи нет» тоже словами, каждая
+      // причина своей фразой (те же, что в карточке заявки EasyMed): прежде
+      // любой ответ без ссылки — нет связи, «не чаще», ключ, запись, которую
+      // станция ещё склеивает, — становился одним «Записи нет» на кнопке.
+      // «Готовится» спрашиваем снова каждые 10 секунд, не больше 6 раз; пока
+      // ждём, журнал не перерисовывается (иначе кнопка ушла бы из документа и
+      // повтор прекратился бы сам).
+      const say = (text, waiting) => { why.className = waiting ? 'rec-msg wait' : 'rec-msg'; why.textContent = text; };
       b.addEventListener('click', async () => {
         holdUntil = Date.now() + 60000;
-        b.disabled = true; b.textContent = 'Ищем…'; why.textContent = '';
+        b.disabled = true; b.textContent = 'Ищем…'; say('');
         try {
-          const r = await api('/api/recording?call_id=' + encodeURIComponent(c.id));
-          if (!r.url) { b.textContent = 'Записи нет'; return; }
+          const r = await askRecordingUntilReady(() => api('/api/recording?call_id=' + encodeURIComponent(c.id)), {
+            alive: () => b.isConnected !== false,
+            onWait: (n, max) => {
+              holdUntil = Date.now() + RECORDING_RETRY_EVERY_MS + 60000;
+              b.textContent = fillRecordingText(RECORDING_WAITING, { n, max });
+              say(recordingMessage('not_ready'), true);
+            },
+          });
+          if (r.reason === 'gone') return;
+          if (!r.url) { b.textContent = 'Прослушать'; say(r.gave_up ? RECORDING_GAVE_UP : recordingMessage(r.reason)); return; }
           const a = document.createElement('audio');
           a.controls = true; a.autoplay = true; a.src = r.url;
+          say('');
           b.replaceWith(a);
-        } catch (e) { b.textContent = 'Прослушать'; why.textContent = e.message; }
+        } catch (e) { b.textContent = 'Прослушать'; say(e.message); }
         finally { b.disabled = false; }
       });
       rec.appendChild(b);

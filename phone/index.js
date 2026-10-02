@@ -183,6 +183,15 @@ export function createPhoneApp(db) {
     }
   });
 
+  // CALL_RECORDING_REASONS_V1 — фразы «почему записи нет» и повтор, пока запись
+  // готовится, у EasyPhone и карточки заявки EasyMed — ОДИН модуль. Отдаётся
+  // ровно он, по пути, который даёт относительный импорт из app.js
+  // ('../../public/js/shared/…' от /app.js), — а не вся папка shared.
+  app.get('/public/js/shared/call-recording.js', (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.type('application/javascript').sendFile(path.join(path.dirname(ROOT), 'public', 'js', 'shared', 'call-recording.js'));
+  });
+
   // Страница программы.
   app.use(express.static(path.join(ROOT, 'public'), { extensions: ['html'] }));
   app.get('/', (req, res) => res.sendFile(path.join(ROOT, 'public', 'index.html')));

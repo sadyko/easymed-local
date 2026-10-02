@@ -134,3 +134,48 @@ test('журнал говорит экрану, можно ли слушать �
     assert.match(denied.error.message, /«Журнал звонков»/);
   });
 });
+
+// CALL_RECORDING_REASONS_V1 (2026-10-02) — EasyPhone получает ту же причину,
+// что карточка заявки: станция ответила без ссылки через пару минут после
+// разговора — «готовится» (экран спросит снова), через час — «записи нет».
+// И модуль с фразами и повтором отдаётся по тому пути, куда смотрит app.js.
+test('/api/recording называет причину: свежий разговор — not_ready, давний — not_found', async () => {
+  const realFetch = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (url, init) => {
+    if (String(url).startsWith('https://api2.onlinepbx.ru/')) {
+      asked.push(String(url));
+      return new Response(JSON.stringify({ status: '1', data: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return realFetch(url, init);
+  };
+  try {
+    await withApp(async ({ db, get }) => {
+      const p = db.prepare(`INSERT INTO telephony_providers (kind, vendor, name, enabled, config, secret, poll_interval_sec)
+          VALUES ('onlinepbx', 'onlinepbx', 'onlinePBX', 1, ?, ?, 30)`)
+        .run(JSON.stringify({ domain: 'clinic.onpbx.ru' }), JSON.stringify({ auth_key: 'a', key_id: 'k', key: 'v' }));
+      const iso = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      const add = db.prepare(`INSERT INTO calls (general_call_id, started_at, call_type, external_number, internal_number,
+          waitsec, billsec, disposition, provider, provider_id) VALUES (?, ?, 0, '998901112233', '101', 8, 97, 'ANSWER', 'onlinepbx', ?)`);
+      const freshId = add.run('onlinepbx:fresh', iso(Date.now() - 3 * 60_000), p.lastInsertRowid).lastInsertRowid;
+      const oldId = add.run('onlinepbx:old', iso(Date.now() - 60 * 60_000), p.lastInsertRowid).lastInsertRowid;
+
+      assert.deepEqual(await (await get('/api/recording?call_id=' + freshId, 'listener')).json(), { url: '', reason: 'not_ready' });
+      assert.deepEqual(await (await get('/api/recording?call_id=' + oldId, 'listener')).json(), { url: '', reason: 'not_found' });
+      assert.equal(asked.length, 2, 'станцию спросили не по разу на звонок');
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('модуль фраз и повтора отдаётся по пути, куда смотрит app.js — и только он', async () => {
+  await withApp(async ({ base }) => {
+    const r = await fetch(base + '/public/js/shared/call-recording.js');
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('content-type') || '', /javascript/);
+    assert.match(await r.text(), /export async function askRecordingUntilReady/);
+    const other = await fetch(base + '/public/js/shared/permission-catalog.js');
+    assert.notEqual(other.status, 200, 'вся папка shared раздаётся наружу');
+  });
+});
