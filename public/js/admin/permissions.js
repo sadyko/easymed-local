@@ -787,7 +787,17 @@ export function reportGroupAllowed(key) {
     // ADMIN_ROWS_GRANTABLE_V1 — группа с правилом «только администратор»
     // (охват Telegram-бота) у ненастроенной роли закрыта, как вчера.
     if (key && isAdminDefault(key)) return false;
+    // JOURNALS_V1_RJ2 (F1) — «Журналы» у роли с настроенными группами отчётов
+    // (есть ключ «reports.…») — «Нет», даже если ключ «Журналов» стёрт
+    // (справочник старой главной клиники, устаревшая вкладка «Роли»). То же
+    // правило, что у сервера (report-access.js canSeeReportKey).
+    if (key === JOURNALS_KEY && reportsConfigured()) return false;
     return _effective.has('reports-hub');
+}
+// JOURNALS_V1_RJ2 (F1) — ключ «Журналов» и признак «группы отчётов настроены».
+const JOURNALS_KEY = 'reports.journals';
+function reportsConfigured() {
+    return Object.keys(_grants).some((k) => k.startsWith('reports.'));
 }
 
 /** Видна ли плитка отчёта по виду (REPORT_GROUP); вид без группы — только полному доступу. */

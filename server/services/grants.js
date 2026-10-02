@@ -57,6 +57,13 @@ function grantsOfRole(db, role) {
   return perms && perms.grants && typeof perms.grants === 'object' ? perms.grants : null;
 }
 
+// JOURNALS_V1_RJ2 (финальное ревью, F1/F3) — права по справочнику КАЖДОЙ роли
+// в силе, без слияния: «Журналам» (report-access.js) важно, КАКАЯ роль что
+// записала — настроены ли у неё группы отчётов и закрыт ли у неё раздел.
+export function roleGrantsOf(db, user) {
+  return rolesForGrants(db, user).map((role) => grantsOfRole(db, role) || {});
+}
+
 /**
  * Уровень по ключу справочника для этого человека — 'none'|'view'|'edit'|'delete',
  * или null, если НИ ОДНА из его ролей этот ключ не настраивала (тогда ворота

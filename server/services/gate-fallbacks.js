@@ -14,6 +14,7 @@
 // оригиналом молча.
 import { hasAnyRole, canViewSection, canEditSection } from './roles.js';
 import { catalogByKey } from '../../public/js/shared/permission-catalog.js';
+import { JOURNALS_KEY, reportsConfigured } from './report-access.js';   // JOURNALS_V1_RJ2 (F1)
 
 export const GATE_FALLBACK = Object.freeze({
   'inpatient.services':      { view: [['admin', 'head_doctor', 'registrar', 'nurse', 'doctor', 'cashier']],
@@ -96,6 +97,10 @@ export function fallbackLevel(db, user, key, mode = 'all') {
   const row = byKey.get(key);
   if (!row) return 'none';
   if (row.adminDefault) return hasAnyRole(user, ['admin']) ? (row.levels[row.levels.length - 1] || 'none') : 'none';
+  // JOURNALS_V1_RJ2 (F1) — «Журналы» у роли с настроенными группами отчётов —
+  // «Нет» (report-access.js): экран «Роли» обязан показать то же, иначе
+  // нарисовал бы «Просмотр» и записал его при сохранении.
+  if (key === JOURNALS_KEY && !hasAnyRole(user, ['admin']) && reportsConfigured(db, user)) return 'none';
   if (row.parent === 'reports') return (hasAnyRole(user, ['admin']) || canViewSection(db, user, 'reports-hub')) ? 'view' : 'none';
   // Плитки настроек: читать их таблицы сервер не запрещает, пишет по праву — «нет».
   if (row.parent === 'settings') return 'view';
