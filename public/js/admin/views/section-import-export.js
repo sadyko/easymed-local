@@ -1146,9 +1146,12 @@ export async function openSectionImporter({ sectionKey, onImported } = {}) {
     const confirmBtn = h('button', {
         class: 'btn btn-primary', disabled: '',
         onclick: async (ev) => {
-            ev.currentTarget.disabled = true;
+            // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
+            // event.currentTarget уже null, и разблокировка кнопки не срабатывала.
+            const btn = ev.currentTarget;
+            btn.disabled = true;
             try { await runImport(); }
-            finally { if (ev.currentTarget?.isConnected) ev.currentTarget.disabled = false; }
+            finally { if (btn?.isConnected) btn.disabled = false; }
         },
     }, Icon('Check', { size: 14 }), ' Импортировать');
 

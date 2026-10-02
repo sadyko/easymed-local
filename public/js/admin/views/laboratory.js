@@ -1885,9 +1885,12 @@ async function openPatientWorksheet(g, patient) {
             h('button', {
                 class: 'btn btn-primary', type: 'button',
                 onclick: async (ev) => {
-                    ev.currentTarget.disabled = true;
+                    // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
+                    // event.currentTarget уже null, и разблокировка кнопки не срабатывала.
+                    const btn = ev.currentTarget;
+                    btn.disabled = true;
                     try { await saveAll(); }
-                    finally { if (ev.currentTarget && ev.currentTarget.isConnected) ev.currentTarget.disabled = false; }
+                    finally { if (btn && btn.isConnected) btn.disabled = false; }
                 },
             }, Icon('Check', { size: 14 }), ' Сохранить всё'),
         ),

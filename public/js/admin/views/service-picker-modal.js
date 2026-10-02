@@ -730,7 +730,10 @@ export function openServicePickerModal({
                 onmouseover: (e) => { e.currentTarget.style.background = 'var(--crit-50)'; e.currentTarget.style.borderColor = '#fecaca'; },
                 onmouseout:  (e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'transparent'; },
                 onclick: async (ev) => {
-                    ev.currentTarget.disabled = true;
+                    // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
+                    // event.currentTarget уже null, и разблокировка кнопки не срабатывала.
+                    const btn = ev.currentTarget;
+                    btn.disabled = true;
                     try {
                         if (onUndo) await onUndo(a);
                         state.added.splice(idx, 1);
@@ -739,7 +742,7 @@ export function openServicePickerModal({
                         updateColumn(1);
                     } catch (e) {
                         toast(e?.message || 'Не удалось убрать.', 'fail');
-                        if (ev.currentTarget?.isConnected) ev.currentTarget.disabled = false;
+                        if (btn?.isConnected) btn.disabled = false;
                     }
                 },
             }, '✕');
@@ -2458,10 +2461,13 @@ export function openServicePickerModal({
                     }
                 };
                 const applyBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: async (ev) => {
+                    // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
+                    // event.currentTarget уже null, и разблокировка кнопки не срабатывала.
+                    const btn = ev.currentTarget;
                     const code = codeIn.value.trim(); if (!code) return;
-                    ev.currentTarget.disabled = true;
+                    btn.disabled = true;
                     try { await wizApplyCode(code); codeIn.value = ''; paintRailApplied(); refresh(); }
-                    finally { if (ev.currentTarget && ev.currentTarget.isConnected) ev.currentTarget.disabled = false; }
+                    finally { if (btn && btn.isConnected) btn.disabled = false; }
                 } }, 'Применить');
                 box.appendChild(h('div', { class: 'row', style: { gap: '6px', marginTop: '8px' } }, codeIn, applyBtn));
                 box.appendChild(appliedBox);

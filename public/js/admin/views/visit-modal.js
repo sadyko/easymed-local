@@ -90,7 +90,9 @@ export function openVisitModal({ visit, patient, doctor, service, onChange, onSt
                 close();
             }
         } finally {
-            if (saveBtn.isConnected) ev.currentTarget.disabled = false;
+            // BUTTON_REENABLE_V1 — ev.currentTarget уже null после await; saveBtn —
+            // тот же элемент, захваченный замыканием до него.
+            if (saveBtn.isConnected) saveBtn.disabled = false;
         }
     } }, Icon('Check', { size: 14 }), ' Save changes') : null;
 
@@ -107,7 +109,9 @@ export function openVisitModal({ visit, patient, doctor, service, onChange, onSt
                     close();
                 }
             } finally {
-                if (deleteBtn.isConnected) ev.currentTarget.disabled = false;
+                // BUTTON_REENABLE_V1 — ev.currentTarget уже null после await; deleteBtn —
+                // тот же элемент, захваченный замыканием до него.
+                if (deleteBtn.isConnected) deleteBtn.disabled = false;
             }
         },
     }, Icon('Trash', { size: 14 }), ' Delete visit') : null;
@@ -344,7 +348,10 @@ function statusActionsEl(state, onAfterChange) {
     const set = (newStatus, label) => h('button', {
         class: 'btn btn-sm ' + buttonKindForStatus(newStatus),
         onclick: async (ev) => {
-            ev.currentTarget.disabled = true;
+            // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
+            // event.currentTarget уже null, и это падало (без `?.`) на каждый клик.
+            const btn = ev.currentTarget;
+            btn.disabled = true;
             try {
                 await setVisitStatus(state, newStatus);
                 onAfterChange();    // re-render modal header + body with new status
@@ -355,7 +362,7 @@ function statusActionsEl(state, onAfterChange) {
                 toast(trf('Статус: {status}', { status: statusLabel(newStatus) }));
             } catch (e) {
                 toast(e.message || String(e), 'fail');
-            } finally { ev.currentTarget.disabled = false; }
+            } finally { btn.disabled = false; }
         },
     }, label);
 
@@ -928,13 +935,16 @@ function openAttachRecommendationModal(state, rec, onReload) {
         h('footer', { class: 'modal-foot' },
             h('button', { class: 'btn', onclick: close }, 'Cancel'),
             h('button', { class: 'btn btn-primary', onclick: async (ev) => {
-                ev.currentTarget.disabled = true;
+                // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
+                // event.currentTarget уже null, и разблокировка кнопки не срабатывала.
+                const btn = ev.currentTarget;
+                btn.disabled = true;
                 try {
                     const chosenDoctorId = doctorSelect.value || null;
                     await attachRecommendation(state, rec, chosenDoctorId, onReload);
                     close();
                 } finally {
-                    if (ev.currentTarget?.isConnected) ev.currentTarget.disabled = false;
+                    if (btn?.isConnected) btn.disabled = false;
                 }
             } }, Icon('Check', { size: 14 }), ' Add to visit'),
         ),

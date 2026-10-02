@@ -416,9 +416,12 @@ function openBatchImporter() {
         }
     }
     async function onImport(ev) {
+        // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
+        // event.currentTarget уже null, и разблокировка кнопки не срабатывала.
+        const btn = ev.currentTarget;
         const branchId = state.branches.length === 1 ? state.branches[0].id : (branchSel ? branchSel.value : (state.branch !== 'all' ? state.branch : ''));
         if (!branchId) { toast('Выберите филиал.', 'fail'); if (branchSel) branchSel.focus(); return; }
-        ev.currentTarget.disabled = true;
+        btn.disabled = true;
         status.textContent = tr('Загрузка…');
         try {
             const res = await importBatch(parsed, branchId);
@@ -431,7 +434,7 @@ function openBatchImporter() {
             status.textContent = trf('Ошибка: {msg}', { msg: e.message || e });
             toast(e.message || String(e), 'fail');
         } finally {
-            if (ev.currentTarget && ev.currentTarget.isConnected) ev.currentTarget.disabled = null;
+            if (btn && btn.isConnected) btn.disabled = null;
         }
     }
 

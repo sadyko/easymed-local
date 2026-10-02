@@ -637,10 +637,13 @@ export async function mountLabPanels(container) {
 
         body.appendChild(h('div', { class: 'row', style: { gap: '8px', marginTop: '16px', justifyContent: 'flex-end' } },
             h('button', { class: 'btn btn-primary', onclick: async (ev) => {
-                ev.currentTarget.disabled = true;
+                // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
+                // event.currentTarget уже null, и разблокировка кнопки не срабатывала.
+                const btn = ev.currentTarget;
+                btn.disabled = true;
                 try {
                     await savePanel({ name: nameInp.value.trim(), modality: modSel.value, has_narrative: narrChk.checked, service_id: svcSel.value || null, active: activeChk.checked, device_id: Number(devSel.value) || null });
-                } finally { if (ev.currentTarget?.isConnected) ev.currentTarget.disabled = false; }
+                } finally { if (btn?.isConnected) btn.disabled = false; }
             } }, Icon('Check', { size: 14 }), ' Сохранить панель')));
         editorEl.appendChild(body);
     }

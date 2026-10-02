@@ -423,7 +423,10 @@ function paintModal({ row, emp, lookups, onSaved, readOnly }) {
     }
 
     const saveBtn = h('button', { class: 'btn btn-primary', onclick: async (ev) => {
-        ev.currentTarget.disabled = true;
+        // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
+        // event.currentTarget уже null, и разблокировка кнопки падала/не срабатывала.
+        const btn = ev.currentTarget;
+        btn.disabled = true;
         try {
             const { dropped = [], authError, syncWarnings = [] } = (await saveEmployee(emp, row)) || {};
             dirty = false;
@@ -454,7 +457,7 @@ function paintModal({ row, emp, lookups, onSaved, readOnly }) {
         } catch (e) {
             toast('Save failed: ' + (e.message || e), 'fail');
         } finally {
-            if (ev.currentTarget?.isConnected) ev.currentTarget.disabled = false;
+            if (btn.isConnected) btn.disabled = false;
         }
     } }, Icon('Check', { size: 14 }), ' Save employee');
 

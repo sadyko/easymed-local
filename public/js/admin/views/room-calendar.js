@@ -665,11 +665,14 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 h('button', { class: 'btn btn-outline', onclick: close }, 'Отмена'),
                 h('button', {
                     class: 'btn btn-primary', onclick: async (ev) => {
+                        // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
+                        // event.currentTarget уже null, и разблокировка кнопки не срабатывала.
+                        const btn = ev.currentTarget;
                         const text = (reason.value || '').trim();
                         if (text.length < 3) { toast('Укажите причину экстренной записи.', 'fail'); return; }
-                        ev.currentTarget.disabled = true;
+                        btn.disabled = true;
                         const ok = await onConfirm(text);
-                        if (ok) close(); else ev.currentTarget.disabled = false;
+                        if (ok) close(); else btn.disabled = false;
                     },
                 }, 'Записать экстренно'))));
         document.body.appendChild(overlay);
@@ -944,9 +947,12 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                         type: 'button', class: 'btn btn-sm', title: tr('Снять услугу с записи'), 'aria-label': tr('Снять услугу с записи'),
                         style: { color: 'var(--crit-700, #b91c1c)' },
                         onclick: async (ev) => {
-                            ev.currentTarget.disabled = true;
+                            // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
+                            // event.currentTarget уже null, и разблокировка кнопки не срабатывала.
+                            const btn = ev.currentTarget;
+                            btn.disabled = true;
                             const { error } = await supabase.rpc('booking_line_remove', { visit_service_id: r.id });
-                            if (error) { toast(error.message || String(error), 'fail'); ev.currentTarget.disabled = false; return; }
+                            if (error) { toast(error.message || String(error), 'fail'); btn.disabled = false; return; }
                             toast(tr('Услуга снята с записи.'), 'ok');
                             await refreshLines();
                         },
@@ -963,9 +969,12 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
         const addBtn = h('button', {
             type: 'button', class: 'btn btn-sm btn-outline',
             onclick: async (ev) => {
+                // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
+                // event.currentTarget уже null, и разблокировка кнопки не срабатывала.
+                const btn = ev.currentTarget;
                 const v = String(addSel.value || '');
                 if (!v) return;
-                ev.currentTarget.disabled = true;
+                btn.disabled = true;
                 const id = Number(v.slice(2));
                 // Разбор ревью (M3) — врач записи ставится только той строке,
                 // которой без врача не бывает (консультация, услуга с
@@ -975,7 +984,7 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 const doctorId = needsDoctor ? (docSel.value ? Number(docSel.value) : (a.doctorId || null)) : null;
                 const line = v.startsWith('c:') ? { consultation_type_id: id, doctor_id: doctorId } : { service_id: id, doctor_id: doctorId };
                 const { error } = await supabase.rpc('booking_lines_add', { visit_id: a.id, patient_id: a.patientId || undefined, lines: [line] });
-                ev.currentTarget.disabled = false;
+                btn.disabled = false;
                 if (error) { toast(error.message || String(error), 'fail'); return; }
                 addSel.value = '';
                 toast(tr('Услуга добавлена к записи.'), 'ok');
@@ -995,14 +1004,17 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                 pillsBox.appendChild(h('button', {
                     class: 'rcal-stbtn' + (a.status === k ? ' on' : ''), type: 'button',
                     onclick: async (ev) => {
-                        ev.currentTarget.disabled = true;
+                        // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
+                        // event.currentTarget уже null, и разблокировка кнопки не срабатывала.
+                        const btn = ev.currentTarget;
+                        btn.disabled = true;
                         // Смена статуса идёт ТЕМ ЖЕ обработчиком: возврат
                         // отменённой записи в «Записан» обязан спросить, свободен
                         // ли ещё её слот.
                         const args = { visit_id: a.id, start: localIso(a.date, a.start), status: k };
                         const ok = await commit(args, { onSlotTaken: (err) => offerEmergency(args, err, () => { a.status = k; paintPills(); }) });
                         if (ok) { a.status = k; toast(trf('Статус: {status}', { status: tr(m.label) })); paintPills(); }
-                        else ev.currentTarget.disabled = false;
+                        else btn.disabled = false;
                     },
                 }, h('span', { class: 'rcal-dot', style: { background: m.color } }), tr(m.label)));
             }
@@ -1044,9 +1056,12 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
             h('footer', { class: 'modal-foot' },
                 h('button', {
                     class: 'btn', style: { color: 'var(--crit-700)' }, onclick: async (ev) => {
-                        ev.currentTarget.disabled = true;
+                        // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
+                        // event.currentTarget уже null, и разблокировка кнопки не срабатывала.
+                        const btn = ev.currentTarget;
+                        btn.disabled = true;
                         const ok = await commit({ visit_id: a.id, start: localIso(a.date, a.start), status: 'cancelled' });
-                        if (ok) { toast('Запись отменена'); close(); } else ev.currentTarget.disabled = false;
+                        if (ok) { toast('Запись отменена'); close(); } else btn.disabled = false;
                     },
                 }, 'Отменить запись'),
                 h('span', { class: 'grow' }),
@@ -1054,10 +1069,14 @@ export async function renderRoomCalendar(container, { onNavigate, embedded = fal
                     Icon('ID', { size: 13 }), ' ', tr('Карта пациента')),
                 h('button', {
                     class: 'btn btn-primary', onclick: async (ev) => {
-                        ev.currentTarget.disabled = true;
+                        // BUTTON_REENABLE_V1 — кнопка берётся ДО ожидания: после await
+                        // event.currentTarget уже null — в т.ч. внутри onSlotTaken,
+                        // колбэка, который commit() вызывает уже после своего await.
+                        const btn = ev.currentTarget;
+                        btn.disabled = true;
                         const args = editArgs();
-                        const ok = await commit(args, { onSlotTaken: (err) => { ev.currentTarget.disabled = false; offerEmergency(args, err, close); } });
-                        if (ok) { toast('Запись сохранена'); close(); } else ev.currentTarget.disabled = false;
+                        const ok = await commit(args, { onSlotTaken: (err) => { btn.disabled = false; offerEmergency(args, err, close); } });
+                        if (ok) { toast('Запись сохранена'); close(); } else btn.disabled = false;
                     },
                 }, 'Готово'))));
         document.body.appendChild(overlay);
