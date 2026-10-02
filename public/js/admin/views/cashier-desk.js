@@ -143,7 +143,8 @@ async function printFiscalCheck(inv, tenders, legacyMethod, opts = {}) {   // CA
             }
         }
         const u = (window.easymed && window.easymed.state && window.easymed.state.user) || {};
-        printableSheet({ type: 'fiscal', idLine: inv.invoice_number || String(inv.id), data: {
+        // PRINT_AUTO_V1 — чек открывается сам после оплаты: только показ, печать — кнопкой окна.
+        printableSheet({ type: 'fiscal', idLine: inv.invoice_number || String(inv.id), autoPrint: false, data: {
             docNo: inv.invoice_number || String(inv.id),
             date: dateNumeric(new Date(), { withTime: true }),
             patientName: inv.patient_name || '—',
@@ -1318,12 +1319,14 @@ async function openVisitWindow(visitId, reload) {
 // печатается АКТ, та же сборка, что у мастера визита (payer-act.js). Тост
 // сказало окно «Выставить счёт»; `extra` — { payer, items } оттуда же.
 function payAfterBilling(root, r) {
+    // PRINT_AUTO_V1 — акт открывается сам после «Выставить счёт»: только показ, печать — кнопкой окна.
+    const viewOnlyPrint = (opts) => printableSheet({ ...opts, autoPrint: false });
     return async (invoice, extra = {}) => {   // REFERRAL_BILL_V1 — extra: { payer, items } у счёта плательщику
         try { await paint(root); } catch (e) { console.warn('[cashier] repaint:', e && e.message); }
         if (invoice && invoice.payer_id != null) {   // REFERRAL_BILL_V1 — счёт плательщику: акт, окна оплаты нет
             try {
                 await printInvoiceAct({
-                    supabase, printableSheet, invoice, items: extra.items || [], payer: extra.payer || null,
+                    supabase, printableSheet: viewOnlyPrint, invoice, items: extra.items || [], payer: extra.payer || null,   // PRINT_AUTO_V1
                     patient: { full_name: r.patient_name, mrn: r.mrn },
                     visitDay: r.visit_date ? ymdLocal(new Date(r.visit_date)) : '', policyNo: r.card_policy_no || '',
                 });

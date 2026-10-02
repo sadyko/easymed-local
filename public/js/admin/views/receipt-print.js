@@ -213,7 +213,9 @@ export function invoiceSheetData({ inv, items, patient, payerName = '', methods 
 
 // Печать A4-счёта по id: всё подгружается само. Несуществующий счёт или счёт
 // без строк НЕ печатается — бланк без позиций подменился бы образцом.
-export async function printInvoiceSheetById({ supabase, printableSheet, invoiceId, title = '', extraPatient = [], extraBilling = [], withPerformer = false }) {
+// PRINT_AUTO_V1 — autoPrint: кнопка «Печать» — сразу (по умолчанию); счёт,
+// открытый сам после сохранения (мастер, окно визита), — false: только показ.
+export async function printInvoiceSheetById({ supabase, printableSheet, invoiceId, title = '', extraPatient = [], extraBilling = [], withPerformer = false, autoPrint = true }) {
     const { data: inv, error } = await supabase.from('invoices')
         .select('id, invoice_number, subtotal, discount_amount, total_amount, paid_amount, status, patient_id, payer_id, created_at')
         .eq('id', invoiceId).single();
@@ -241,7 +243,7 @@ export async function printInvoiceSheetById({ supabase, printableSheet, invoiceI
     } catch (e) { /* способ оплаты — не повод не печатать счёт */ }
     const lines = await loadInvoiceLines(supabase, inv.id, items.map((i) => i.id));
     const data = invoiceSheetData({ inv, items, patient, payerName, methods, lines, title, extraPatient, extraBilling, withPerformer });
-    printableSheet({ type: 'invoice', idLine: data.docNo, data });
+    printableSheet({ type: 'invoice', idLine: data.docNo, data, autoPrint });   // PRINT_AUTO_V1
     return { ok: true };
 }
 
@@ -333,10 +335,12 @@ export function slipData(o = {}) {
 }
 
 // Печать квитанции. Best-effort: сбой печати не отменяет проведённую операцию.
+// PRINT_AUTO_V1 — квитанция открывается сама после операции (продажа карты,
+// депозит, замена услуги): только показ, печать — кнопкой окна.
 export function printSlip(printableSheet, o) {
     try {
         const data = slipData(o);
-        printableSheet({ type: 'slip', idLine: data.docNo, data });
+        printableSheet({ type: 'slip', idLine: data.docNo, data, autoPrint: false });
         return true;
     } catch (e) {
         console.warn('[receipt] slip:', e && e.message);

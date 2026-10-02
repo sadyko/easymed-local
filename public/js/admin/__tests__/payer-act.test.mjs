@@ -99,7 +99,8 @@ test('мастер визита печатает акт общей сборко�
   const at = wiz.indexOf('function printAkt(');
   assert.ok(at > 0);
   const fn = wiz.slice(at, wiz.indexOf('\n    }\n', at));
-  assert.match(fn, /printableSheet\(actSheet\(\{/, 'мастер зовёт actSheet');
+  // PRINT_AUTO_V1 (ревью) — акт мастера открывается сам после сохранения: только показ.
+  assert.match(fn, /printableSheet\(\{ \.\.\.actSheet\(\{[\s\S]*\}\), autoPrint: false \}\);/, 'мастер зовёт actSheet');
   assert.ok(!wiz.includes('Акт оказанных медицинских услуг'), 'в мастере осталась копия бланка акта');
   assert.ok(!/const isDmsPayer\s*=/.test(wiz), 'в мастере осталась копия isDmsPayer');
   assert.match(wiz, /import \{ actSheet, isDmsPayer \} from '\.\/payer-act\.js\?v=act1'/);

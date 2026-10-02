@@ -30,10 +30,19 @@ export const AUTO_PRINT_SCRIPT = '<script>/* PRINT_AUTO_V1 */'
     + '</scr' + 'ipt>';
 
 const PRINT_CALL_RE = /window\.print\s*\(/;
+const SCRIPT_RE = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
 
-/** Есть ли в HTML своя печать (window.print). */
+/**
+ * Есть ли в HTML своя печать: window.print( внутри <script>…</script>.
+ * PRINT_AUTO_V1 (ревью) — только в теле скрипта: те же слова в тексте
+ * документа (заключение, где врач их написал) или в onclick кнопки «Печать»
+ * окна «Открыть» — не печать при открытии.
+ */
 export function hasAutoPrint(html) {
-    return PRINT_CALL_RE.test(String(html == null ? '' : html));
+    for (const m of String(html == null ? '' : html).matchAll(SCRIPT_RE)) {
+        if (PRINT_CALL_RE.test(m[1])) return true;
+    }
+    return false;
 }
 
 /** Вставка перед последним </body> (нет его — в конец). */
@@ -52,7 +61,9 @@ export function ensureAutoPrint(html) {
 // ---------------------------------------------------------------------------
 // «Открыть» — окно, которое только ПОКАЗЫВАЕТ документ (координатор, 02.10):
 // архив документов, ссылка-название в списке документов карты, результат в
-// истории болезни. Окно печати само не открывается: убирается и скрипт
+// истории болезни, предпросмотр шаблона, документы, которые открываются сами
+// после сохранения (мастера записи, касса после оплаты) — печать сразу только
+// по нажатой «Печать». Окно печати само не открывается: убирается и скрипт
 // помощника, и свой скрипт запасной обёртки doc-render.js. Печать — кнопкой
 // «Печать» в углу окна: одно нажатие, на бумагу кнопка не попадает.
 // ---------------------------------------------------------------------------
@@ -60,7 +71,7 @@ export function ensureAutoPrint(html) {
 /** HTML без скриптов, которые зовут window.print(); прочие скрипты остаются. */
 export function withoutAutoPrint(html) {
     return String(html == null ? '' : html)
-        .replace(/<script\b[^>]*>([\s\S]*?)<\/script>/gi, (m, body) => (PRINT_CALL_RE.test(body) ? '' : m));
+        .replace(SCRIPT_RE, (m, body) => (PRINT_CALL_RE.test(body) ? '' : m));
 }
 
 const VIEW_PRINT_CLASS = 'pa-view-print';

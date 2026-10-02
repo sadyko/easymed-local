@@ -64,7 +64,7 @@ import { renderServiceWorkspace } from './admin/views/service-workspace.js?v=cab
 import { renderPatientCard }  from './admin/views/patient-card.js?v=labshared1';   // PATIENT_CARD_DESIGN_V2 + SVC_ROW_ACTIONS_V1 (?v must match service-workspace.js)
 import { renderPlaceholder }  from './admin/views/placeholder.js';
 import { renderSectionCrud }  from './admin/views/section-crud.js?v=ecs1';   // EMPLOYEE_CARD_SAVE_V1 — штамп: employee-editor.js берёт разбор ФИО из shared/employee-name.js
-import { renderCashier, renderCashierHead } from './admin/views/cashier-desk.js?v=cash11';   // CASHIER_DESIGN_V2 + CASHIER_ROW_FIT_V1 — patient cell width, RU status, compact date · REFERRAL_BILL_V1 — «Ждут счёта», «Кому счёт» (со дня визита) · REFBILL_REVIEW_V1 — «Ждут счёта»: окно по умолчанию, поиск на сервере
+import { renderCashier, renderCashierHead } from './admin/views/cashier-desk.js?v=cash12';   // CASHIER_DESIGN_V2 + CASHIER_ROW_FIT_V1 — patient cell width, RU status, compact date · REFERRAL_BILL_V1 — «Ждут счёта», «Кому счёт» (со дня визита) · REFBILL_REVIEW_V1 — «Ждут счёта»: окно по умолчанию, поиск на сервере · PRINT_AUTO_V1 — cash12: чек после оплаты и акт после «Выставить счёт» — только показ
 import { renderReport }       from './admin/views/report.js';
 import { renderLaboratory }   from './admin/views/laboratory.js?v=labwords14';   // LAB_STATS_V1 — third mode «Статистика» (usage counters, no money) on the shared LAB_HEAD_ONE_V1 head · LIS_MINDRAY_CODES_V1 — штамп · LIS_ANALYZER_LIST_V1 · LIS_DISCOVERY_FIX_V1 (экран) · LIS_REAL_ANALYZERS_V1 (экран; ревью R3–R7 — штамп)
 import { renderProcedures }   from './admin/views/procedures.js?v=unassigned2';
@@ -82,7 +82,7 @@ import { renderDoctorRoom }   from './admin/views/doctor-room.js?v=docroom1';   
 import { renderEmployees }    from './admin/views/employees.js?v=ecs1';   // EMPLOYEE_CARD_SAVE_V1 — ФИО из full_name, отказ называет пустые поля · RATES_HONEST_V1 — штамп карточки (ревью 1) · EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen) · rmt1 = RATES_MODE_TYPED_V1
 import { renderMarketing }    from './admin/views/marketing.js?v=btnright1';
 import { renderCallCenter }   from './admin/views/callcenter.js';
-import { renderDocuments }    from './admin/views/documents.js?v=cabrx1';   // CABINET_FIX_V1_TPL — шаблоны — библиотека кабинета врача · RX_TEMPLATES_V1 — штамп кабинета
+import { renderDocuments }    from './admin/views/documents.js?v=pa3';   // CABINET_FIX_V1_TPL — шаблоны — библиотека кабинета врача · RX_TEMPLATES_V1 — штамп кабинета · PRINT_AUTO_V1 — pa3: предпросмотр шаблона — только показ
 import { renderDiscountsSettings } from './admin/views/discounts-settings.js?v=btnright1';   // PATIENT_DISCOUNTS_V1
 import { renderApiSettings } from './admin/views/api-settings.js?v=api4';   // CLINIC_API_V1
 import { renderWithViewOnly } from './admin/view-only.js';   // ADMIN_ROWS_GRANTABLE_V1

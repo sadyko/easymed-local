@@ -95,6 +95,7 @@ function paint() {
                     onclick: () => printableSheet({
                         type:     state.active,
                         settings: state.s,
+                        autoPrint: false,   // PRINT_AUTO_V1 — предпросмотр шаблона: только показ, печать — кнопкой окна
                     }),
                 }, Icon('Print', { size: 14 }), ' Print preview'),
                 h('button', { class: 'btn btn-outline', onclick: () => openDocTemplatesModal() }, Icon('Doc', { size: 14 }), ' Шаблоны заключений'),

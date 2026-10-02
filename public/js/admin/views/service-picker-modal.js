@@ -3228,7 +3228,8 @@ export function openServicePickerModal({
                         const invNo = inv.invoice_number || String(inv.id);
                         const pkgOff = Math.max(0, Number(inv.discount_amount || 0) - Number(bill.data.rest_discount || 0));
                         /* i18n-exempt-start: печатный счёт (бланк) — печатные документы намеренно русские */
-                        printableSheet({ type: 'invoice', idLine: invNo, data: {
+                        // PRINT_AUTO_V1 — счёт открывается сам после сохранения: только показ, печать — кнопкой окна.
+                        printableSheet({ type: 'invoice', idLine: invNo, autoPrint: false, data: {
                             title: 'Амбулаторные услуги',
                             docNo: invNo,
                             issueDate: new Date().toLocaleDateString('ru-RU'),   // V3120_FIX — «Дата» ставит бланк
@@ -3285,7 +3286,8 @@ export function openServicePickerModal({
                     const actNo = visit.visit_number || String(visit.id);   // RPC_PORT_V1 — id офлайн целый: .slice() ронял печать акта
                     /* i18n-exempt-end */
                     /* i18n-exempt-start: печатный акт оказанных услуг — печатный документ */
-                    printableSheet({ type: 'act', idLine: actNo, data: {
+                    // PRINT_AUTO_V1 — акт открывается сам после сохранения: только показ.
+                    printableSheet({ type: 'act', idLine: actNo, autoPrint: false, data: {
                         title: 'Акт оказанных медицинских услуг',
                         docNo: actNo,
                         issueDate: 'Дата ' + new Date(visit.visit_date || Date.now()).toLocaleDateString('ru-RU'),
@@ -3323,7 +3325,7 @@ export function openServicePickerModal({
                 // invoice for the patient-paid services. Dynamic import avoids the
                 // visit-modal <-> service-picker static import cycle.
                 try {
-                    const mod = await import('./visit-modal.js?v=ownrep4');   // REFBILL_REVIEW_V1 — штамп: «Сформировать счёт» только денежным ролям
+                    const mod = await import('./visit-modal.js?v=pa3');   // REFBILL_REVIEW_V1 — штамп: «Сформировать счёт» только денежным ролям
                     mod.openVisitModal({ visit: openServicesFor, patient: (p._raw || p), onChange: (typeof onBooked === 'function' ? onBooked : undefined) });
                 } catch (e) { console.warn('[wizard] open Services tab:', e); }
             }

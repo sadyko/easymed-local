@@ -1583,7 +1583,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             const d = id ? wiz.doctors.find(x => String(x.id) === String(id)) : null;
             return d ? (d.full_name || d.username || '') : '';
         };
-        printableSheet(actSheet({   // REFERRAL_BILL_V1 — общая сборка акта (payer-act.js)
+        // PRINT_AUTO_V1 — акт открывается сам после сохранения мастера: только показ, печать — кнопкой окна.
+        printableSheet({ ...actSheet({   // REFERRAL_BILL_V1 — общая сборка акта (payer-act.js)
             invoice, payer, patient, visitDay: visitDate, policyNo: wiz.policyNo,
             items: lines.map((c, i) => {
                 const dn = docName(c);
@@ -1593,7 +1594,7 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
             // счёта здесь не годится: он собран для услуг ПАЦИЕНТА, то есть
             // ровно для тех, которых в акте нет (COVERAGE_SPLIT_V1).
             queue: queue || [],
-        }));
+        }), autoPrint: false });   // PRINT_AUTO_V1
     }
 
     // ---------------------------------------------------------------------
@@ -2925,7 +2926,8 @@ export async function openVisitWizard(onSaved, patient, opts = {}) {
                     ];
                     /* i18n-exempt-end */
                     for (const pInv of patientInvoices) {
-                        const r = await printInvoiceSheetById({ supabase, printableSheet, invoiceId: pInv.id, withPerformer: true, extraPatient, extraBilling });
+                        // PRINT_AUTO_V1 — счета открываются сами после сохранения (по одному на счёт): только показ.
+                        const r = await printInvoiceSheetById({ supabase, printableSheet, invoiceId: pInv.id, withPerformer: true, extraPatient, extraBilling, autoPrint: false });
                         if (r && !r.ok) console.warn('[wizard] invoice print:', pInv.id, r.reason);
                     }
                 } catch (e) { console.warn('[wizard] invoice print:', e); }

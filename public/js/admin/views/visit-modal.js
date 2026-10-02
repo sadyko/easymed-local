@@ -1210,7 +1210,7 @@ export async function generateInvoiceFromSelection(state, selectedIds, onReload)
     openInvoicePrintWindow(state, inv, (res.items || []).map((it) => ({
         description: it.description, quantity: it.quantity, unit_price: it.unit_price,
         __doctor_name: (it.service_id != null && (lineItems.find((r) => r.service_id === it.service_id) || {}).__doctor_name) || '',
-    })));
+    })), { autoPrint: false });   // PRINT_AUTO_V1 — счёт открывается сам после создания: только показ
     // Close the visit modal — the registrar's work here is done. The
     // invoice now lives on the Cashier screen; keeping the modal open
     // forced the user to manually close it every time and obscured the
@@ -1232,7 +1232,8 @@ export async function generateInvoiceFromSelection(state, selectedIds, onReload)
 // плательщик по справочнику, «Оплачено» / «Остаток», суммы — как на сервере.
 // Врач по-прежнему стоит в строке услуги («Услуга · Врач»). lineItems больше
 // не нужны: строки берутся из выставленного счёта.
-function openInvoicePrintWindow(state, inv, lineItems) {   // eslint-disable-line no-unused-vars
+// PRINT_AUTO_V1 — autoPrint: «Print receipt» — печать сразу; счёт, открытый сам после создания, — только показ.
+function openInvoicePrintWindow(state, inv, lineItems, { autoPrint = true } = {}) {   // eslint-disable-line no-unused-vars
     if (!inv || inv.id == null) { toast('Счёта для печати ещё нет.', 'fail'); return; }
     const v = state.visit || {};
     // Дата визита — МЕСТНЫЙ день: visit_date бывает и «ГГГГ-ММ-ДД», и отметкой
@@ -1243,7 +1244,7 @@ function openInvoicePrintWindow(state, inv, lineItems) {   // eslint-disable-lin
     const pad2 = (n) => String(n).padStart(2, '0');
     const visitDay = vDt && !Number.isNaN(vDt.getTime()) ? pad2(vDt.getDate()) + '.' + pad2(vDt.getMonth() + 1) + '.' + vDt.getFullYear() : '';
     return printInvoiceSheetById({
-        supabase, printableSheet, invoiceId: inv.id, withPerformer: true,
+        supabase, printableSheet, invoiceId: inv.id, withPerformer: true, autoPrint,   // PRINT_AUTO_V1
         extraPatient: visitDay ? [['Дата визита', visitDay]] : [],   // i18n-exempt: подпись ПЕЧАТНОГО бланка — печатные документы намеренно русские
     }).then((r) => {
         if (r && !r.ok) toast(r.reason || 'Не удалось напечатать счёт.', 'fail');

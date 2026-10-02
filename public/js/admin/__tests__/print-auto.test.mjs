@@ -200,16 +200,26 @@ const SB = fakeSupabase({
   visit_services: [],
 });
 
-test('касса: чек (printInvoiceCheck), счёт (printInvoiceSheetById) и квитанция (printSlip) — печать сразу, скрипт ровно один', async () => {
+// PRINT_AUTO_V1 (ревью, решение координатора) — печать сразу — только по
+// нажатой «Печать»: кнопка «Печать чека» (printInvoiceCheck) и счёт по кнопке
+// (printInvoiceSheetById по умолчанию). Квитанция (printSlip) открывается сама
+// после операции (продажа карты, депозит, замена услуги) — только показ.
+test('касса: чек и счёт по кнопке — печать сразу; счёт, открытый сам (autoPrint: false), и квитанция — только показ', async () => {
   opened.length = 0;
   assert.deepEqual(await printInvoiceCheck({ supabase: SB, printableSheet, invoiceId: 1, cashierName: 'Кассир' }), { ok: true });
   assert.deepEqual(await printInvoiceSheetById({ supabase: SB, printableSheet, invoiceId: 1 }), { ok: true });
+  assert.deepEqual(await printInvoiceSheetById({ supabase: SB, printableSheet, invoiceId: 1, autoPrint: false }), { ok: true });
   assert.equal(printSlip(printableSheet, { kind: 'deposit', deposit: { deposit_number: 'DEP-1', amount: 50000, method: 'cash', status: 'paid' }, patient: { full_name: 'Азизов Бахтиёр', mrn: 'P-1' }, balance: 50000 }), true);
-  assert.equal(opened.length, 3, 'три окна печати');
-  for (const [i, name] of ['чек', 'счёт', 'квитанция'].entries()) {
+  assert.equal(opened.length, 4, 'четыре окна');
+  for (const [i, name] of ['чек', 'счёт'].entries()) {
     assert.match(opened[i], /Азизов Бахтиёр/, name + ': бланк этого пациента');
     assert.equal(prints(opened[i]), 1, name + ': window.print — ровно один раз');
     assert.ok(opened[i].includes(AUTO_PRINT_SCRIPT), name + ': скрипт общего помощника');
+  }
+  for (const [i, name] of [[2, 'счёт, открытый сам'], [3, 'квитанция']]) {
+    assert.match(opened[i], /Азизов Бахтиёр/, name + ': бланк этого пациента');
+    assert.equal(scripts(opened[i]), 0, name + ': окно печати само не открывается');
+    assert.match(opened[i], /class="pa-view-print" onclick="window\.print\(\)"/, name + ': «Печать» в окне');
   }
 });
 
@@ -325,10 +335,97 @@ test('«Открыть» — без печати: архив документо�
   }
 });
 
-test('«Печать» — печать сразу: кабинет врача и касса не просят «только показать»', () => {
-  for (const rel of ['public/js/admin/views/service-workspace.js', 'public/js/admin/views/receipt-print.js', 'public/js/admin/views/cashier-desk.js', 'public/js/admin/views/laboratory.js']) {
+test('«Печать» — печать сразу: кабинет врача и лаборатория не просят «только показать»; по умолчанию printableSheet печатает', () => {
+  for (const rel of ['public/js/admin/views/service-workspace.js', 'public/js/admin/views/laboratory.js']) {
     assert.doesNotMatch(src(rel), /autoPrint:\s*false/, rel);
   }
   const ds = src('public/js/admin/views/doc-settings.js');
   assert.match(ds, /autoPrint = true/, 'по умолчанию printableSheet печатает');
+});
+
+// ---------------------------------------------------------------------------
+// PRINT_AUTO_V1 (ревью 02.10, решение координатора) — печать сразу ТОЛЬКО там,
+// где человек нажал «Печать». Документ, который открывается сам после
+// сохранения (мастера записи, касса после оплаты), «Открыть» и предпросмотр
+// шаблона — только показ, «Печать» — кнопкой окна. Мастер с N счетами иначе
+// поднимал N окон печати (а при заблокированных окнах — N самопечатающих
+// предпросмотров).
+// ---------------------------------------------------------------------------
+test('«уже печатает» — только скрипт: слова window.print( в тексте документа не мешают помощнику', () => {
+  const doc = '<html><body><p>Пример: window.print(); — это текст, не скрипт</p></body></html>';
+  assert.equal(hasAutoPrint(doc), false);
+  const out = ensureAutoPrint(doc);
+  assert.ok(out.includes(AUTO_PRINT_SCRIPT));
+  assert.equal(scripts(out), 1);
+  assert.equal(hasAutoPrint('<body><script>window.print()</script></body>'), true);
+  assert.equal(hasAutoPrint('<body><SCRIPT type="text/javascript">setTimeout(function(){ window.print (); }, 1)</SCRIPT></body>'), true);
+  assert.equal(hasAutoPrint('<body><script>var a = 1;</script><p>window.print(</p></body>'), false, 'печать в тексте после скрипта — не печать');
+  assert.equal(hasAutoPrint('<body><button onclick="window.print()">Печать</button></body>'), false, 'кнопка окна «Открыть» — не самопечать');
+  // Бланк, в тексте которого врач написал «window.print()», всё равно печатается сразу.
+  opened.length = 0;
+  printableSheet({ type: 'diag', settings: S, data: { patientName: 'Азизов Б.', service: 'УЗИ', description: 'window.print()', conclusion: 'Норма', __editor: true } });
+  assert.equal(scripts(opened[0]), 1);
+  assert.ok(opened[0].includes(AUTO_PRINT_SCRIPT));
+});
+
+test('предпросмотр шаблона в «Документах» — только показ', () => {
+  const docs = src('public/js/admin/views/documents.js');
+  assert.match(docs, /onclick: \(\) => printableSheet\(\{\s*type:\s*state\.active,\s*settings: state\.s,\s*autoPrint: false,/);
+});
+
+test('мастера записи и касса: документы, открытые сами после сохранения, — только показ; кнопки «Печать» — печать сразу', () => {
+  const spm = src('public/js/admin/views/service-picker-modal.js');
+  assert.match(spm, /printableSheet\(\{ type: 'invoice', idLine: invNo, autoPrint: false, data: \{/, 'счёт пациента мастера');
+  assert.match(spm, /printableSheet\(\{ type: 'act', idLine: actNo, autoPrint: false, data: \{/, 'акт плательщику мастера');
+  const wiz = src('public/js/admin/views/visit-wizard.js');
+  assert.match(wiz, /printInvoiceSheetById\(\{ supabase, printableSheet, invoiceId: pInv\.id, withPerformer: true, extraPatient, extraBilling, autoPrint: false \}\)/, 'счета мастера — в цикле');
+  assert.match(sliceFn(wiz, 'function printAkt(', '\n    }\n'), /printableSheet\(\{ \.\.\.actSheet\(\{[\s\S]*\}\), autoPrint: false \}\);/, 'акты мастера');
+  const vm = src('public/js/admin/views/visit-modal.js');
+  assert.match(vm, /function openInvoicePrintWindow\(state, inv, lineItems, \{ autoPrint = true \} = \{\}\)/);
+  assert.match(sliceFn(vm, 'function openInvoicePrintWindow(', '\n}\n'), /printInvoiceSheetById\(\{[\s\S]*?autoPrint,[\s\S]*?\}\)/);
+  assert.match(vm, /openInvoicePrintWindow\(state, inv, \(res\.items \|\| \[\]\)\.map\([\s\S]*?\}\)\), \{ autoPrint: false \}\);/, 'счёт, созданный в окне визита, — открывается сам');
+  assert.match(vm, /onclick: \(\) => openInvoicePrintWindow\(state, inv, null\),/, '«Print receipt» — печать сразу');
+  const desk = src('public/js/admin/views/cashier-desk.js');
+  assert.match(sliceFn(desk, 'async function printFiscalCheck(', '\n}\n'), /printableSheet\(\{ type: 'fiscal', idLine: inv\.invoice_number \|\| String\(inv\.id\), autoPrint: false, data: \{/, 'чек после оплаты');
+  assert.doesNotMatch(sliceFn(desk, 'async function printInvoiceSheet(', '\n}\n'), /autoPrint/, '«Печать счёта» — печать сразу');
+  assert.match(sliceFn(desk, 'function payAfterBilling(', '\n}\n'), /printableSheet: viewOnlyPrint,/, 'акт после «Выставить счёт» плательщику');
+  assert.match(desk, /const viewOnlyPrint = \(opts\) => printableSheet\(\{ \.\.\.opts, autoPrint: false \}\);/);
+  const rp = src('public/js/admin/views/receipt-print.js');
+  assert.match(sliceFn(rp, 'export function printSlip(', '\n}\n'), /printableSheet\(\{ type: 'slip', idLine: data\.docNo, data, autoPrint: false \}\)/);
+});
+
+// Каждый вызов printableSheet в экранах — на своём месте: печать сразу (нажата
+// «Печать») или только показ (открылся сам, «Открыть», предпросмотр). Новый
+// вызов без решения роняет эту проверку. view — сколько раз в файле стоит
+// autoPrint: false (и у косвенных вызовов: printInvoiceSheetById, VIEW_ONLY).
+const CALLERS = {
+  'admission-modal.js':      { calls: 1, view: 0 },   // «Печать» документа истории болезни
+  'case-file-tabs.js':       { calls: 2, view: 2 },   // «Открыть» результата и заключения
+  'case-workspace.js':       { calls: 1, view: 0 },   // «Печать» реестра акта
+  'cashier-desk.js':         { calls: 3, view: 2 },   // «Печать счёта» — печать; чек после оплаты — показ; viewOnlyPrint — акт после «Выставить счёт»
+  'docs-archive.js':         { calls: 1, view: 1 },   // «Открыть»
+  'documents.js':            { calls: 1, view: 1 },   // предпросмотр шаблона
+  'fast-registration.js':    { calls: 1, view: 0 },   // «Печать»
+  'laboratory.js':           { calls: 1, view: 0 },   // «Бланк», «Отчёт», галочка «Распечатать бланк результатов»
+  'patient-card.js':         { calls: 3, view: 1 },   // вид окна — от вызывающего (...view): название — показ, «Печать» — печать
+  'patient-documents.js':    { calls: 3, view: 0 },   // «Print» (анализы, заключение)
+  'payer-act.js':            { calls: 1, view: 0 },   // вызывающий передаёт принтер (касса — показ)
+  'receipt-print.js':        { calls: 3, view: 1 },   // чек — печать; счёт — autoPrint вызывающего; квитанция — показ
+  'service-picker-modal.js': { calls: 2, view: 2 },   // счёт и акт мастера после сохранения
+  'service-workspace.js':    { calls: 2, view: 0 },   // «Печать» кабинета; маршрутный лист (обёртка, печатает сама)
+  'title-sheet.js':          { calls: 1, view: 0 },   // «Печать» бумаг при поступлении
+  'visit-wizard.js':         { calls: 1, view: 2 },   // акт и счета мастера (printInvoiceSheetById) после сохранения
+};
+test('все вызовы printableSheet в экранах разобраны: печать сразу или только показ', () => {
+  const dir = path.join(ROOT, 'public', 'js', 'admin', 'views');
+  const found = {};
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.js') && x !== 'doc-settings.js')) {
+    const code = fs.readFileSync(path.join(dir, f), 'utf8').split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .map((l) => l.replace(/\s\/\/\s.*$/, '')).join('\n');   // и хвостовые комментарии (у адресов «//» без пробела перед)
+    const calls = (code.match(/\bprintableSheet\(\s*\{|\bprintableSheet\(actSheet\(/g) || []).length;
+    if (!calls) continue;
+    found[f] = { calls, view: (code.match(/autoPrint:\s*false/g) || []).length };
+  }
+  assert.deepEqual(found, CALLERS, 'новый или изменённый вызов printableSheet: нажата «Печать» — по умолчанию; открылся сам, «Открыть», предпросмотр — autoPrint: false; впишите его в CALLERS');
 });
