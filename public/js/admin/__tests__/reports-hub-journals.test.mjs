@@ -1,0 +1,78 @@
+// JOURNALS_V1 — карточки журналов в «Отчётах»: договор экрана и сервера.
+//
+// Браузер зовёт run_report с kind карточки и аргументами её опций, сервер
+// обязан знать и вид, и аргументы. Страница целиком без DOM не поднимается,
+// поэтому проверяются определения, чистые функции и места в исходнике.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const store = new Map();
+globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
+globalThis.document = globalThis.document || { documentElement: {}, addEventListener() {}, createElement: () => ({ style: {} }), head: { appendChild() {} }, body: { appendChild() {} }, getElementById: () => null };
+globalThis.window = globalThis.window || { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, addEventListener() {}, dispatchEvent() { return true; } };
+
+const { REPORT_DEFS, reportKinds, defaultReportOptions, reportArgs, servicesMissing } = await import('../views/reports-hub.js');
+const { REPORT_GROUP } = await import('../../shared/permission-catalog.js');
+const { ICON_MAP } = await import('../icon-map.js');
+const { openDb } = await import('../../../../server/db/connection.js');
+const { migrate } = await import('../../../../server/db/migrate.js');
+const { runReport } = await import('../../../../server/services/rpc/reports.js');
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
+const hub = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin', 'views', 'reports-hub.js'), 'utf8');
+const def = (kind) => REPORT_DEFS.find((d) => d.kind === kind);
+
+test('две карточки журналов: табличные, со значками, обе — группа «Журналы»', () => {
+  for (const kind of ['service_journal', 'inpatient_register']) {
+    const d = def(kind);
+    assert.ok(d, 'нет карточки ' + kind);
+    assert.ok(ICON_MAP[d.icon], kind + ': нет значка ' + d.icon);
+    assert.ok(!d.mode && !d.rpc && !d.open, kind + ': журнал — обычный табличный отчёт run_report');
+    assert.deepEqual(reportKinds(d), [kind]);
+    assert.equal(REPORT_GROUP[kind], 'reports.journals');
+  }
+  assert.equal(def('service_journal').title, 'Журнал услуг');
+  assert.equal(def('inpatient_register').title, 'Реестр стационарных пациентов');
+});
+
+test('«Журнал услуг»: «Услуги» — окно выбора, «Тип» — Все / Стационар / Амбулатория; по умолчанию — пусто и «Все»', () => {
+  const d = def('service_journal');
+  const svc = d.options.find((o) => o.arg === 'service_ids');
+  assert.equal(svc.type, 'services');
+  assert.equal(svc.label, 'Услуги');
+  const care = d.options.find((o) => o.arg === 'kind_of_care');
+  assert.equal(care.label, 'Тип');
+  assert.deepEqual(care.choices, [['all', 'Все'], ['inpatient', 'Стационар'], ['outpatient', 'Амбулатория']]);
+  assert.deepEqual(defaultReportOptions(d), { service_ids: [], kind_of_care: 'all' });
+  assert.deepEqual(reportArgs(d, 'service_journal', { service_ids: [3, 7], kind_of_care: 'inpatient' }), { service_ids: [3, 7], kind_of_care: 'inpatient' });
+  // Два открытия конструктора не делят один массив выбора.
+  assert.notEqual(defaultReportOptions(d).service_ids, defaultReportOptions(d).service_ids);
+});
+
+test('пустой выбор услуг — отчёт не строится: подсказка вместо запроса', () => {
+  const d = def('service_journal');
+  assert.equal(servicesMissing(d, 'service_journal', { service_ids: [] }), true);
+  assert.equal(servicesMissing(d, 'service_journal', {}), true);
+  assert.equal(servicesMissing(d, 'service_journal', { service_ids: [1] }), false);
+  assert.equal(servicesMissing(def('inpatient_register'), 'inpatient_register', {}), false);
+  assert.equal(servicesMissing(def('total_revenue'), 'total_revenue', {}), false);
+  const gen = hub.slice(hub.indexOf('async function generate()'), hub.indexOf('const token = ++st.reqSeq;'));
+  assert.match(gen, /if \(servicesMissing\(rep, st\.kind, st\.opts\)\) \{\s*toast\(tr\('Выберите услуги\.'\), 'info'\);/);
+});
+
+test('сервер знает оба вида и отвечает колонками журналов', () => {
+  const db = openDb(':memory:');
+  migrate(db);
+  try {
+    const admin = { id: 1, role: 'admin' };
+    const j = runReport(db, { kind: 'service_journal', from: '2026-01-01', to: '2026-01-31', ...reportArgs(def('service_journal'), 'service_journal', { service_ids: [1], kind_of_care: 'all' }) }, admin);
+    assert.equal(j.columns[0], '№');
+    assert.ok(j.columns.includes('Ич. рақам (Пор. № пациента)') && j.columns.includes('Заключение'));
+    const reg = runReport(db, { kind: 'inpatient_register', from: '2026-01-01', to: '2026-01-31' }, admin);
+    assert.equal(reg.columns[0], 'ИБ №');
+    assert.deepEqual(reg.summable_columns, ['Сумма оплаты']);
+  } finally { db.close(); }
+});

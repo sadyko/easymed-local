@@ -3,6 +3,12 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // JOURNALS_V1 (2026-10-02) — карточки журналов в «Отчётах» (reports-hub.js REPORT_DEFS)
+  "Журнал услуг": {"en":"Service journal","ru":"Журнал услуг","uz":"Xizmatlar jurnali"},
+  "Один журнал на выбранные услуги — УЗИ, ЭКГ или любые другие: пациент, кто направил, диагноз при направлении, дата, заключение и врач. Стационар и амбулатория — вместе или порознь.": {"en":"One journal for the selected services — ultrasound, ECG or any other: the patient, who referred, the referral diagnosis, the date, the conclusion and the doctor. Inpatient and outpatient — together or separately.","ru":"Один журнал на выбранные услуги — УЗИ, ЭКГ или любые другие: пациент, кто направил, диагноз при направлении, дата, заключение и врач. Стационар и амбулатория — вместе или порознь.","uz":"Tanlangan xizmatlar uchun bitta jurnal — UZI, EKG yoki boshqa har qanday: bemor, kim yo'llagan, yo'llanmadagi tashxis, sana, xulosa va shifokor. Statsionar va ambulatoriya — birga yoki alohida."},
+  "Реестр стационарных пациентов": {"en":"Inpatient register","ru":"Реестр стационарных пациентов","uz":"Statsionar bemorlar reyestri"},
+  "Каждая госпитализация с поступлением в периоде: ИБ №, пациент, отделение, даты поступления и выписки, лечащий врач, сумма и дата оплаты, тип палаты, адрес, паспорт и телефон.": {"en":"Every admission with the patient admitted in the period: case no., patient, department, admission and discharge dates, attending physician, amount and date of payment, ward class, address, passport and phone.","ru":"Каждая госпитализация с поступлением в периоде: ИБ №, пациент, отделение, даты поступления и выписки, лечащий врач, сумма и дата оплаты, тип палаты, адрес, паспорт и телефон.","uz":"Davr ichida yotqizilgan har bir bemor: kasallik tarixi №, bemor, bo'lim, yotqizish va chiqarish sanalari, davolovchi shifokor, to'lov summasi va sanasi, palata turi, manzil, pasport va telefon."},
+  "Выберите услуги.": {"en":"Choose services.","ru":"Выберите услуги.","uz":"Xizmatlarni tanlang."},
   // JOURNALS_V1_SERVICE (2026-10-02) — «Журнал услуг» (rpc/reports.js serviceJournalReport)
   "Ич. рақам (Пор. № пациента)": {"en":"Patient No. (in the journal)","ru":"Ич. рақам (Пор. № пациента)","uz":"Ich. raqam (bemorning tartib raqami)"},
   "сам": {"en":"self-referred","ru":"сам","uz":"o'zi kelgan"},

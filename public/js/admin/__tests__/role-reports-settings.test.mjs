@@ -79,7 +79,8 @@ const REGISTRAR = { sections: ['patients', 'dashboard', 'patient-documents', 're
 const CASHIER = { sections: ['cashier', 'patients', 'dashboard', 'reports-hub', 'queue'],
   levels: { cashier: 'admin', patients: 'editor', dashboard: 'viewer', 'reports-hub': 'viewer', queue: 'viewer' } };
 const ONLY_CASHIER = { reports: 'view', 'reports.revenue': 'none', 'reports.cashier': 'view', 'reports.doctor_pay': 'none',
-  'reports.referrals': 'none', 'reports.services': 'none', 'reports.stock': 'none', 'reports.callcenter': 'none' };
+  'reports.referrals': 'none', 'reports.services': 'none', 'reports.stock': 'none', 'reports.callcenter': 'none',
+  'reports.journals': 'none' };   // JOURNALS_V1_ACCESS — экран «Роли» пишет и эту строку
 
 const visibleReports = () => REPORT_DEFS.filter(reportVisible).map((r) => r.kind);
 const visibleTiles = () => GROUPS.flatMap((g) => g.items).filter(tileVisible).map((i) => i.label);
@@ -94,6 +95,41 @@ test('роль только с «Кассой» видит одну плитку
     assert.equal(perms.isModuleAllowed('reports-hub'), true);
     assert.equal(perms.isRouteAllowed('reports'), false, '«Обзор владельца» — это выручка');
     assert.equal(perms.isRouteAllowed('report:orders_salary_report'), false);
+  } finally { perms.setFullAccess('Admin'); }
+});
+
+// JOURNALS_V1_ACCESS — роль с одной группой «Журналы» (как главный врач после
+// миграции 235): хаб отчётов открыт, в нём ровно две плитки журналов.
+test('роль только с «Журналами» видит две плитки журналов', () => {
+  perms.setEffectiveFromRole(savedRole('Главврач', REGISTRAR, { reports: 'view', 'reports.journals': 'view' }));
+  try {
+    assert.deepStrictEqual(visibleReports(), ['service_journal', 'inpatient_register']);
+    assert.equal(perms.isModuleAllowed('reports-hub'), true);
+  } finally { perms.setFullAccess('Admin'); }
+});
+
+// JOURNALS_V1_ACCESS — штатный главный врач КАК ЕГО ЗАПИСАЛА миграция 235: раздела
+// «Отчёты» (reports-hub) нет, ключа `reports` нет, есть одна группа «Журналы:
+// Просмотр». Пункт меню и маршрут хаба открываются по группе (как у оператора
+// колл-центра ниже) — иначе выданные журналы были бы недостижимы.
+test('главный врач после миграции 235: пункт меню и маршрут «Отчётов» открыты, внутри — только журналы', async () => {
+  const { openDb } = await import('../../../../server/db/connection.js');
+  const { migrate } = await import('../../../../server/db/migrate.js');
+  const db = openDb(':memory:');
+  let row;
+  try {
+    migrate(db);
+    row = db.prepare("SELECT permissions FROM role_permissions WHERE role = 'head_doctor'").get();
+  } finally { db.close(); }
+  const p = JSON.parse(row.permissions);
+  assert.ok(!p.sections.includes('reports-hub') && !('reports' in p.grants), 'стенд не тот: у главного врача появился раздел «Отчёты»');
+  assert.equal(p.grants['reports.journals'], 'view');
+  perms.setEffectiveFromRole({ name: 'head_doctor', permissions: p });
+  try {
+    assert.deepStrictEqual(visibleReports(), ['service_journal', 'inpatient_register']);
+    assert.equal(perms.isModuleAllowed('reports-hub'), true, 'пункта меню «Отчёты» нет');
+    assert.equal(perms.isRouteAllowed('reports-hub'), true, 'пункт меню есть, а маршрут отказывает');
+    assert.equal(perms.isRouteAllowed('reports'), false, '«Обзор владельца» — это выручка');
   } finally { perms.setFullAccess('Admin'); }
 });
 

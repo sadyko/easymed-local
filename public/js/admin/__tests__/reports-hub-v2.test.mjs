@@ -29,6 +29,12 @@ const hub = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin', 'views', 'r
 const tableDefs = REPORT_DEFS.filter((d) => !d.mode && !d.open);
 const def = (kind) => REPORT_DEFS.find((d) => d.kind === kind);
 
+// JOURNALS_V1 — журналы печатают колонки бумажного журнала владельца (без
+// «Здание»: фильтр и разрез по зданиям у них работают), а «Журналу услуг»
+// нужен выбор услуг — без него сервер отказывает.
+const JOURNAL_KINDS = new Set(['service_journal', 'inpatient_register']);
+const FIXTURE_ARGS = { service_journal: { service_ids: [1] } };
+
 test('каждый вид и каждое значение фильтра табличной карточки известны серверу', () => {
   const db = openDb(':memory:');
   migrate(db);
@@ -36,11 +42,11 @@ test('каждый вид и каждое значение фильтра таб
     for (const d of tableDefs) {
       assert.ok(ICON_MAP[d.icon], 'нет значка ' + d.icon + ' у «' + d.title + '»');
       for (const kind of reportKinds(d)) {
-        const base = { kind, from: '2026-01-01', to: '2026-01-31', ...reportArgs(d, kind, defaultReportOptions(d)) };
+        const base = { kind, from: '2026-01-01', to: '2026-01-31', ...reportArgs(d, kind, defaultReportOptions(d)), ...(FIXTURE_ARGS[kind] || {}) };
         const r = runReport(db, base, { id: 1, role: 'admin' });
-        assert.equal(r.columns[0], 'Здание', kind + ': первая колонка — «Здание»');
+        if (!JOURNAL_KINDS.has(kind)) assert.equal(r.columns[0], 'Здание', kind + ': первая колонка — «Здание»');
         for (const o of optionsFor(d, kind)) {
-          for (const [value] of o.choices) {
+          for (const [value] of o.choices || []) {
             assert.doesNotThrow(() => runReport(db, { ...base, [o.arg]: value }, { id: 1, role: 'admin' }),
               kind + ': значение ' + o.arg + '=' + value + ' не принято сервером');
           }

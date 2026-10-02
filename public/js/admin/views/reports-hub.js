@@ -169,6 +169,28 @@ export const REPORT_DEFS = [
         title: 'По специальностям',
         desc:  'Какие услуги оказывает каждая специальность: количество, пациенты, сумма после скидки, оплачено и доля врачей. Специальность — основная у врача-исполнителя; услуги без врача и врачи без специальности — отдельными группами.',
     },
+    // JOURNALS_V1 (владелец, 02.10) — журналы прежней программы: «один журнал,
+    // где выбирают услуги из списка и тип — стационар или амбулатория», и
+    // «Годовой отчёт по пациентам» — реестр стационарных пациентов. Группа прав
+    // «Журналы» (reports.journals): в них диагнозы, заключения и паспорта.
+    {
+        kind:  'service_journal',
+        icon:  'NotePencil',
+        title: 'Журнал услуг',
+        desc:  'Один журнал на выбранные услуги — УЗИ, ЭКГ или любые другие: пациент, кто направил, диагноз при направлении, дата, заключение и врач. Стационар и амбулатория — вместе или порознь.',
+        options: [
+            // Окно выбора с поиском и «Выбрать все найденные» (report-service-picker.js),
+            // выбор помнится в этом браузере. Пусто — отчёт не строится.
+            { arg: 'service_ids', label: 'Услуги', type: 'services', choices: [] },
+            { arg: 'kind_of_care', label: 'Тип', choices: [['all', 'Все'], ['inpatient', 'Стационар'], ['outpatient', 'Амбулатория']] },
+        ],
+    },
+    {
+        kind:  'inpatient_register',
+        icon:  'Folder',
+        title: 'Реестр стационарных пациентов',
+        desc:  'Каждая госпитализация с поступлением в периоде: ИБ №, пациент, отделение, даты поступления и выписки, лечащий врач, сумма и дата оплаты, тип палаты, адрес, паспорт и телефон.',
+    },
     {
         kind:  'owner',
         icon:  'Trend',
@@ -227,9 +249,10 @@ export function reportKinds(rep) {
     return Array.isArray(rep.views) && rep.views.length ? rep.views.map(v => v.kind) : [rep.kind];
 }
 // Значения фильтров по умолчанию — первый вариант каждого.
+// JOURNALS_V1_SERVICE — у выбора услуг вариантов нет: по умолчанию ничего не выбрано.
 export function defaultReportOptions(rep) {
     const out = {};
-    for (const o of rep.options || []) out[o.arg] = o.choices[0][0];
+    for (const o of rep.options || []) out[o.arg] = o.type === 'services' ? [] : o.choices[0][0];   // JOURNALS_V1_SERVICE
     return out;
 }
 // Фильтр может относиться только к некоторым видам (kinds): «Разрез» есть у
@@ -261,6 +284,12 @@ export function reportArgs(rep, kind, opts) {
         out[o.arg] = opts[o.arg];
     }
     return out;
+}
+// JOURNALS_V1_SERVICE — у вида есть выбор услуг, а он пуст: отчёт не строится,
+// человек видит «Выберите услуги.» (сервер ответил бы тем же отказом, но
+// запрос не нужен).
+export function servicesMissing(rep, kind, opts) {
+    return optionsFor(rep, kind).some((o) => o.type === 'services' && !(Array.isArray(opts && opts[o.arg]) && opts[o.arg].length));
 }
 // DOCTOR_LINES_SPECIALTY_V1 — варианты выпадающего фильтра: статические
 // (первый — «все») плюс пришедшие от сервера. Пришедшее значение, совпавшее со
@@ -742,6 +771,13 @@ async function openReportBuilder(rep) {
 
     async function generate() {
         if (st.generating) return;
+        // JOURNALS_V1_SERVICE — без выбранных услуг журнал не строится:
+        // подсказка вместо запроса.
+        if (servicesMissing(rep, st.kind, st.opts)) {
+            toast(tr('Выберите услуги.'), 'info');
+            paintPreviewEmpty(tr('Выберите услуги.'));
+            return;
+        }
         st.generating = true;
         // REPORTS_V2, ревью M1 — вид и фильтры берутся ДО ожидания ответа, а
         // ответ, пришедший после смены вида (или после сброса результата),
