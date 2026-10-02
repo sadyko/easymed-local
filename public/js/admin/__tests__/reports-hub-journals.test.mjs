@@ -76,3 +76,18 @@ test('сервер знает оба вида и отвечает колонка
     assert.deepEqual(reg.summable_columns, ['Сумма оплаты']);
   } finally { db.close(); }
 });
+
+test('выбор услуг помнится в браузере и открывает окно выбора; новый выбор сбрасывает результат', () => {
+  assert.match(hub, /import \{ openReportServicePicker, loadRememberedServices, rememberServices, browserStorage, servicesButtonText \} from '\.\/report-service-picker\.js\?v=jrn1';/);
+  assert.match(hub, /if \(o\.type === 'services'\) st\.opts\[o\.arg\] = loadRememberedServices\(browserStorage\(\), rep\.kind\);/);
+  const fn = hub.slice(hub.indexOf('function servicesOption(o)'), hub.indexOf('function resetResult()'));
+  assert.ok(fn.length > 100, 'нет servicesOption');
+  assert.match(fn, /openReportServicePicker\(\{/);
+  assert.match(fn, /loadCatalog: loadServiceCatalog/);
+  assert.match(fn, /rememberServices\(browserStorage\(\), rep\.kind, next\);/);
+  assert.match(fn, /paintChoices\(\); resetResult\(\);/);
+  assert.match(hub, /if \(o\.type === 'services'\) \{ choiceRow\.appendChild\(servicesOption\(o\)\); continue; \}/);
+  assert.match(hub, /supabase\.from\('services'\)\.select\('id, name, active'\)/);
+  const admin = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin.js'), 'utf8');
+  assert.match(admin, /from '\.\/admin\/views\/reports-hub\.js\?v=jrn2';/, 'штамп reports-hub.js не обновлён после окна выбора');
+});

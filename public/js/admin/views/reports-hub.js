@@ -43,6 +43,8 @@ import { freshnessState, freshnessWorthShowing } from './report-buildings.js?v=f
 import { CATEGORY_LABEL } from './inventory-shared.js';
 // ROLE_REPORTS_SETTINGS_V1 — плитка видна, если её группа отчётов выдана роли.
 import { reportKindAllowed } from '../permissions.js';
+// JOURNALS_V1_SERVICE — окно выбора услуг журнала и запомненный выбор.
+import { openReportServicePicker, loadRememberedServices, rememberServices, browserStorage, servicesButtonText } from './report-service-picker.js?v=jrn1';
 
 // Экспортируется, чтобы определения (в т.ч. рисовалку графиков) можно было
 // проверить тестом — страница целиком без DOM не поднимается.
@@ -299,6 +301,15 @@ export function selectChoices(o, loaded) {
     const seen = new Set(head.map(([v]) => String(v)));
     return [...head, ...(Array.isArray(loaded) ? loaded : []).filter(([v]) => !seen.has(String(v)))];
 }
+// JOURNALS_V1_SERVICE — каталог для окна выбора: все услуги, и отключённые
+// тоже — журнал за прошлый год спрашивает и про снятую с прайса услугу.
+function loadServiceCatalog() {
+    return supabase.from('services').select('id, name, active').order('name').limit(10000)
+        .then(({ data, error }) => {
+            if (error) throw new Error(error.message || String(error));
+            return data || [];
+        });
+}
 
 // ---------------------------------------------------------------------------
 // Entry point — the hub page is only the cards.
@@ -524,6 +535,8 @@ async function openReportBuilder(rep) {
         loading: new Set(),
     };
     [st.from, st.to] = presetRange('month');
+    // JOURNALS_V1_SERVICE — выбор услуг журнала помнится в этом браузере (удобство, не данные).
+    for (const o of rep.options || []) if (o.type === 'services') st.opts[o.arg] = loadRememberedServices(browserStorage(), rep.kind);
 
     const overlay = h('div', {
         style: {
@@ -900,6 +913,27 @@ async function openReportBuilder(rep) {
         }
         return sel;
     }
+    // JOURNALS_V1_SERVICE — «Выбрать услуги (N)»: окно со списком, поиском и
+    // «Выбрать все найденные». Новый выбор запоминается и сбрасывает результат.
+    function servicesOption(o) {
+        const ids = Array.isArray(st.opts[o.arg]) ? st.opts[o.arg] : [];
+        return h('button', {
+            type: 'button', class: 'btn btn-sm',
+            disabled: st.generating || null,   // ревью M1 — пока идёт запрос, выбор не меняется
+            onclick: () => {
+                if (st.generating) return;
+                openReportServicePicker({
+                    selected: ids,
+                    loadCatalog: loadServiceCatalog,
+                    onApply: (next) => {
+                        st.opts[o.arg] = next;
+                        rememberServices(browserStorage(), rep.kind, next);
+                        paintChoices(); resetResult();
+                    },
+                });
+            },
+        }, Icon('ListBullet', { size: 13 }), ' ', servicesButtonText(ids.length));
+    }
     function resetResult() {
         st.reqSeq++;   // ревью M1 — ответ, который ещё в пути, уже не наш
         st.result = null;
@@ -919,6 +953,7 @@ async function openReportBuilder(rep) {
         for (const o of optionsFor(rep, st.kind)) {
             choiceRow.appendChild(label(o.label));
             if (o.type === 'select') { choiceRow.appendChild(selectOption(o)); continue; }
+            if (o.type === 'services') { choiceRow.appendChild(servicesOption(o)); continue; }   // JOURNALS_V1_SERVICE
             choiceRow.appendChild(h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } },
                 ...o.choices.map(([value, text]) => pill(st.opts[o.arg] === value, text, () => {
                     if (st.generating || st.opts[o.arg] === value) return;

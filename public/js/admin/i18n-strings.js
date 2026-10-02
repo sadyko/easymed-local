@@ -3,6 +3,15 @@
 // Keyed by the SOURCE string as it appears in code; tr(str) in i18n.js looks it up.
 // Unknown strings pass through unchanged, so this can never break a screen.
 export const STRINGS = {
+  // JOURNALS_V1_SERVICE (2026-10-02) — окно выбора услуг журнала (report-service-picker.js)
+  "Выбрать услуги ({n})": {"en":"Choose services ({n})","ru":"Выбрать услуги ({n})","uz":"Xizmatlarni tanlash ({n})"},
+  "Выбор услуг": {"en":"Service selection","ru":"Выбор услуг","uz":"Xizmatlar tanlovi"},
+  "Найти услугу…": {"en":"Find a service…","ru":"Найти услугу…","uz":"Xizmatni qidirish…"},
+  "Выбрать все найденные": {"en":"Select all found","ru":"Выбрать все найденные","uz":"Topilganlarning hammasini tanlash"},
+  "Снять все": {"en":"Clear all","ru":"Снять все","uz":"Hammasini olib tashlash"},
+  "не активна": {"en":"inactive","ru":"не активна","uz":"faol emas"},
+  "Показаны первые {n} из {total} — уточните поиск. «Выбрать все найденные» отметит все {total}.": {"en":"The first {n} of {total} are shown — refine the search. «Select all found» marks all {total}.","ru":"Показаны первые {n} из {total} — уточните поиск. «Выбрать все найденные» отметит все {total}.","uz":"{total} tadan birinchi {n} tasi ko'rsatilgan — qidiruvni aniqlashtiring. «Topilganlarning hammasini tanlash» {total} tasining hammasini belgilaydi."},
+  "Не больше {max} услуг в одном журнале — уточните поиск.": {"en":"No more than {max} services in one journal — refine the search.","ru":"Не больше {max} услуг в одном журнале — уточните поиск.","uz":"Bitta jurnalda {max} tadan ortiq xizmat bo'lmasin — qidiruvni aniqlashtiring."},
   // JOURNALS_V1 (2026-10-02) — карточки журналов в «Отчётах» (reports-hub.js REPORT_DEFS)
   "Журнал услуг": {"en":"Service journal","ru":"Журнал услуг","uz":"Xizmatlar jurnali"},
   "Один журнал на выбранные услуги — УЗИ, ЭКГ или любые другие: пациент, кто направил, диагноз при направлении, дата, заключение и врач. Стационар и амбулатория — вместе или порознь.": {"en":"One journal for the selected services — ultrasound, ECG or any other: the patient, who referred, the referral diagnosis, the date, the conclusion and the doctor. Inpatient and outpatient — together or separately.","ru":"Один журнал на выбранные услуги — УЗИ, ЭКГ или любые другие: пациент, кто направил, диагноз при направлении, дата, заключение и врач. Стационар и амбулатория — вместе или порознь.","uz":"Tanlangan xizmatlar uchun bitta jurnal — UZI, EKG yoki boshqa har qanday: bemor, kim yo'llagan, yo'llanmadagi tashxis, sana, xulosa va shifokor. Statsionar va ambulatoriya — birga yoki alohida."},
