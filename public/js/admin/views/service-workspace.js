@@ -791,7 +791,7 @@ function fmtToolbar(ctx) {
     const outd = fb('Уменьшить отступ', h('span', null, '⇤'), exec('outdent'));
     const ind = fb('Увеличить отступ', h('span', null, '⇥'), exec('indent'));
     const quote = fb('Цитата', h('span', { style: { fontSize: '17px' } }, '“'), exec('formatBlock', 'blockquote'));
-    const link = fb('Ссылка', h('span', null, '🔗'), (e) => { e.preventDefault(); const url = prompt('Ссылка (URL):', 'https://'); if (url) { document.execCommand('createLink', false, url); wsState.saved = false; resetSaveBtn(ctx); } });
+    const link = fb('Ссылка', Icon('Link', { size: 15 }), (e) => { e.preventDefault(); const url = prompt('Ссылка (URL):', 'https://'); if (url) { document.execCommand('createLink', false, url); wsState.saved = false; resetSaveBtn(ctx); } });
     const clearF = fb('Очистить форматирование', h('span', null, '⌫'), exec('removeFormat'));
 
     // AUTO_CHIPS_REMOVED_V1 — top insert chips (Рекомендации/Рецепт/Диагноз/Функц. иссл./Лучевая/
@@ -1284,7 +1284,7 @@ function paintRtab(ctx) {
             },
                 h('div', { style: { width: '26px', height: '26px', borderRadius: '7px', background: 'var(--primary-50)', color: 'var(--primary-700)', display: 'grid', placeItems: 'center', flex: '0 0 auto' } }, Icon('Doc', { size: 13 })),
                 h('div', { style: { flex: 1, minWidth: 0 } },
-                    h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-900)' } }, 'Черновик'),
+                    h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-900)' } }, e.kept ? 'Черновик из другого окна' : 'Черновик'),   // CABINET_FIX_V1_R6 (п. 2)
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, dateTimeShort(e.savedAt)),
                 ),
                 h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => { applyFields(ctx, e.fields); wsState.saved = false; resetSaveBtn(ctx); toast('Черновик загружен', 'ok'); } },   // CABINET_FIX_V1_R5 (E)
@@ -2540,12 +2540,15 @@ export function lineSigning(vsId) { return LINE_SIGNING.has(Number(vsId)); }
 // CABINET_FIX_V1_R5 (ревью 5, D) — запись строки, на которую сервер не ответил в
 // срок, ещё «в пути»: пока её ответа нет, строка не пишется (поздний ответ не
 // гонится с новой записью), а кнопки доступны и объясняют.
-const LINE_PENDING = new Set();
+// CABINET_FIX_V1_R6 (ревью 6, п. 4) — не навсегда: через TIMING.pendingMaxMs замок
+// снимается словами (запись, дошедшая ещё позже, несёт старую основу и ничего не
+// перезапишет — сервер ответит ей 409). Строка → метка ожидания.
+const LINE_PENDING = new Map();
 /** Ответа на запись строки ещё нет (после срока)? Экспорт — для проверки. */
 export function lineWritePending(vsId) { return LINE_PENDING.has(Number(vsId)); }
 // CABINET_FIX_V1_R4 — сроки: повтор неудачной загрузки (с паузой, растущей до
 // 30 с) и ожидание записи подписи (сервер не ответил — замок снимается).
-const TIMING = { retryBaseMs: 1500, retryMaxMs: 30000, signTimeoutMs: 30000, writeTimeoutMs: 30000 };   // writeTimeoutMs — CABINET_FIX_V1_R5 (E): у любой записи строки
+const TIMING = { retryBaseMs: 1500, retryMaxMs: 30000, signTimeoutMs: 30000, writeTimeoutMs: 30000, pendingMaxMs: 150000 };   // writeTimeoutMs — CABINET_FIX_V1_R5 (E): у любой записи строки; pendingMaxMs — CABINET_FIX_V1_R6 (п. 4): потолок ожидания ответа
 /** Только для проверок. */
 export function __setTimingForTests(t) { Object.assign(TIMING, t || {}); }
 const withTimeout = (thenable, ms) => {
@@ -2679,7 +2682,9 @@ async function readPayload(ctx) {
     let parsed = null;
     // CABINET_FIX_V1_R5 (B) — заметка медсестры, лежавшая текстом до первого сохранения кабинета, — не теряется.
     try { parsed = JSON.parse(data.notes); } catch { return based({ ...emptyPayload(), nurseNote: String(data.notes) }); }
-    if (!parsed || parsed[DRAFT_TAG] !== 1) return based(emptyPayload());
+    // CABINET_FIX_V1_R6 (п. 3) — «37.5», «true», «[1,2]» — корректный JSON, но не записи
+    // кабинета: это тоже заметка медсестры, а не пустота.
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || parsed[DRAFT_TAG] !== 1) return based({ ...emptyPayload(), nurseNote: String(data.notes) });
     if (!Array.isArray(parsed.history)) parsed.history = [];
     return based(parsed);
 }
@@ -2715,18 +2720,27 @@ export async function currentPayload(ctx) {
  * поля на экране — текст врача — не трогаются: следующее «Сохранить» понесёт
  * их вместе с подписанной историей.
  */
-async function adoptServerRecords(ctx) {
+// CABINET_FIX_V1_R6 (ревью 6, п. 2) — черновики, которых эта вкладка не знала
+// (их записало другое окно), помечаются kept: их не заменяет ни следующий
+// «Черновик», ни подпись этой вкладки — текст другого окна остаётся в истории
+// («Возобновить»). Возвращает { ok, foreign } — сколько таких черновиков.
+async function adoptServerRecords(ctx, attempted = null) {
     const fresh = await readPayload(ctx);
-    if (FAILED_READ.has(fresh)) return false;
+    if (FAILED_READ.has(fresh)) return { ok: false, foreign: 0 };
     const st = stateOf(ctx);
+    const known = new Set();
+    for (const src of [st.payload, attempted]) for (const e of (src && Array.isArray(src.history) ? src.history : [])) if (e && e.savedAt) known.add(String(e.savedAt));
+    let foreign = 0;
+    for (const e of fresh.history || []) if (e && e.kind === 'draft' && !e.kept && !known.has(String(e.savedAt))) { e.kept = 1; foreign++; }
     st.payload = fresh;
     st.payloadVs = ctx.visitServiceId;
     st.saved = false;
     if (wsState.ctx === ctx) {
         for (const paint of [paintHistoryList, paintPrescriptions]) { try { paint(ctx); } catch (e) { /* дорисуется позже */ } }
         try { paintDiagnoses(ctx); } catch (e) { /* бланк перерисуется позже */ }
+        try { if (wsState.rtab === 'drafts') paintRtab(ctx); } catch (e) { /* панель дорисуется позже */ }   // CABINET_FIX_V1_R6
     }
-    return true;
+    return { ok: true, foreign };
 }
 
 /**
@@ -2764,26 +2778,59 @@ export async function writePayload(ctx, payload, extraUpdate = {}, opts = {}) {
     const res = ms ? await withTimeout(req, ms) : await req;
     if (res && res.timedOut) {
         // CABINET_FIX_V1_R5 (D) — строка заперта, пока не придёт ответ; тогда — доделать.
-        LINE_PENDING.add(k);
+        // CABINET_FIX_V1_R6 (п. 4) — но не дольше TIMING.pendingMaxMs: потом замок
+        // снимается словами; ответ, пришедший ещё позже, — тихо (кроме успеха).
+        const token = {};
+        LINE_PENDING.set(k, token);
+        const cap = setTimeout(() => {
+            if (LINE_PENDING.get(k) !== token) return;
+            LINE_PENDING.delete(k);
+            toast(tr('Сервер так и не ответил на прошлое сохранение — сохранять снова можно. Если то сохранение всё же дойдёт, оно ничего не перезапишет.'), 'fail');
+        }, TIMING.pendingMaxMs);
         req.then((late) => late, (e) => ({ error: { message: String((e && e.message) || e) } }))
-            .then((late) => { LINE_PENDING.delete(k); return settleWrite(ctx, payload, sent, late, opts, true); })
+            .then((late) => {
+                clearTimeout(cap);
+                const expired = LINE_PENDING.get(k) !== token;
+                if (!expired) LINE_PENDING.delete(k);
+                if (expired && late && late.error) { console.warn('[workspace] late answer after the wait was given up:', late.error.message || late.error); return false; }
+                return settleWrite(ctx, payload, sent, late, opts, true, extraUpdate);
+            })
             .catch((e) => console.warn('[workspace] late write:', e));
         toast(tr('Сервер не ответил вовремя. Ждём ответа — сохранять можно будет, когда он придёт.'), 'fail');
         return false;
     }
-    return settleWrite(ctx, payload, sent, res, opts, false);
+    return settleWrite(ctx, payload, sent, res, opts, false, extraUpdate);
+}
+// CABINET_FIX_V1_R6 (п. 5) — фраза сервера — на языке экрана; «слишком большой» в
+// кабинете — это снимки (сервер для /api/db говорит общими словами).
+function serverSaveError(error) {
+    if (error && error.code === 'too_large') return tr('Документ слишком большой для сохранения (больше 8 МБ) — уберите часть снимков или замените их снимками поменьше и сохраните снова.');
+    return trf('Не удалось сохранить: {msg}', { msg: tr(String((error && error.message) || '')) });
 }
 // Ответ на запись строки — сразу или после срока (late).
-async function settleWrite(ctx, payload, sent, res, opts, late) {
+// CABINET_FIX_V1_R6 (п. 6) — opts.reapply(копия новой версии) → записи с той же
+// правкой или null: правка списка (диагноз, рецепт, услуга, запись истории),
+// получившая «документ изменился», один раз ложится в новую версию.
+async function settleWrite(ctx, payload, sent, res, opts, late, extraUpdate = {}) {
     const { error } = res || {};
     if (error) {
         if (error.code === 'notes_conflict' || error.code === 'signed_conflict') {   // CABINET_FIX_V1_R4 (п. 2) · CABINET_FIX_V1_R5 (A)
-            await adoptServerRecords(ctx);
-            toast(late && opts.sign
+            const adopted = await adoptServerRecords(ctx, payload);
+            if (!late && typeof opts.reapply === 'function' && adopted.ok) {
+                const fresh = stateOf(ctx).payload;
+                let again = null;
+                try { again = opts.reapply(ownPayload(derivePayload(fresh, JSON.parse(JSON.stringify(fresh))), ctx.visitServiceId)); } catch (e) { console.warn('[workspace] reapply:', e); }
+                if (!again) { toast(tr('Документ изменился, пока шло сохранение. Список обновлён — повторите действие, если оно ещё нужно.'), 'fail'); return false; }
+                const ok = await writePayload(ctx, again, extraUpdate, { ...opts, reapply: null });
+                if (ok) toast(tr('Документ изменился, пока шло сохранение — изменение применено к новой версии.'), 'ok');
+                return ok;
+            }
+            const msg = late && opts.sign
                 ? tr('Подпись не прошла: документ изменился, пока шло сохранение. Ваш текст остался на экране — сохраните и подпишите ещё раз.')
-                : tr('Документ изменился, пока шло сохранение. Ваш текст остался на экране — нажмите «Сохранить» ещё раз.'), 'fail');
+                : tr('Документ изменился, пока шло сохранение. Ваш текст остался на экране — нажмите «Сохранить» ещё раз.');
+            toast(adopted.foreign ? msg + ' ' + tr('Версия из другого окна сохранена в истории.') : msg, 'fail');   // CABINET_FIX_V1_R6 (п. 2)
         } else {
-            toast(trf('Не удалось сохранить: {msg}', { msg: error.message }), 'fail');
+            toast(serverSaveError(error), 'fail');   // CABINET_FIX_V1_R6 (п. 5)
         }
         if (late && opts.onLate) { try { await opts.onLate(false); } catch (e) { console.warn('[workspace] late:', e); } }
         return false;
@@ -3340,6 +3387,7 @@ export function openPrescriptionDialog(ctx, editIndex) {   // CABINET_FIX_V1_R4 
                     const entries = rows.map(r => r.read()).filter(e => e.name);
                     const payload = await currentPayload(ctx);
                     payload.prescriptions = Array.isArray(payload.prescriptions) ? payload.prescriptions : [];
+                    const was = editIndex != null ? JSON.stringify(payload.prescriptions[editIndex] ?? null) : null;   // CABINET_FIX_V1_R6 (п. 6)
                     if (editIndex != null) {
                         if (!entries.length) { toast('Укажите название препарата.', 'fail'); return; }
                         payload.prescriptions[editIndex] = entries[0];
@@ -3347,7 +3395,16 @@ export function openPrescriptionDialog(ctx, editIndex) {   // CABINET_FIX_V1_R4 
                         if (!entries.length && payload.prescriptions.length && !confirm(tr('Удалить все препараты из рецепта?'))) return;
                         payload.prescriptions = entries;   // RX_MANAGE_V1 — the dialog is the full list
                     }
-                    if (!await writePayload(ctx, payload)) return;
+                    // CABINET_FIX_V1_R6 (п. 6) — документ изменился: та же правка — в новую версию
+                    // (правка одного препарата — по нему самому, а не по номеру).
+                    const reapply = (p) => {
+                        const list = Array.isArray(p.prescriptions) ? p.prescriptions : [];
+                        if (editIndex == null) { p.prescriptions = entries; return p; }
+                        const i = list.findIndex((x) => JSON.stringify(x) === was);
+                        if (i < 0) return null;
+                        list[i] = entries[0]; p.prescriptions = list; return p;
+                    };
+                    if (!await writePayload(ctx, payload, {}, { reapply })) return;
                     paintPrescriptions(ctx);
                     overlay.remove();
                     toast(existing ? 'Рецепт обновлён.' : 'Рецепт сохранён.');
@@ -3375,7 +3432,15 @@ async function removePrescription(ctx, index) {
     if (!confirm(trf('Удалить {name}?', { name: entry.name || tr('этот препарат') }))) return;
     items.splice(index, 1);
     payload.prescriptions = items;
-    if (!await writePayload(ctx, payload)) return;
+    // CABINET_FIX_V1_R6 (п. 6) — документ изменился: убрать тот же препарат из новой версии.
+    const was = JSON.stringify(entry);
+    const reapply = (p) => {
+        const list = Array.isArray(p.prescriptions) ? p.prescriptions : [];
+        const i = list.findIndex((x) => JSON.stringify(x) === was);
+        if (i < 0) return null;
+        list.splice(i, 1); p.prescriptions = list; return p;
+    };
+    if (!await writePayload(ctx, payload, {}, { reapply })) return;
     paintPrescriptions(ctx);
     toast('Удалено.');
 }
@@ -3771,7 +3836,7 @@ async function removeAllDiagnoses(ctx) {
     if (FAILED_READ.has(payload)) { refuseWhileLoading(ctx, { force: true }); return false; }
     const removed = Array.isArray(payload.diagnoses) ? payload.diagnoses.slice() : [];
     const next = ownPayload(derivePayload(payload, { ...payload, diagnoses: [] }), ctx.visitServiceId);   // CABINET_FIX_V1_R5 — копия с основой
-    if (!await writePayload(ctx, next)) return false;
+    if (!await writePayload(ctx, next, {}, { reapply: (p) => { p.diagnoses = []; return p; } })) return false;   // CABINET_FIX_V1_R6 (п. 6)
     if (wsState.ctx === ctx) { try { paintDiagnoses(ctx); } catch (e) { /* бланк перерисуется позже */ } }
     else ctx.__wsDirty = true;
     if (ctx.patient && ctx.patient.id) {
@@ -4058,10 +4123,15 @@ export function syncDiagnosisToDoc(ctx, opts = {}) {
 async function addDiagnosis(ctx, { code, name, type }) {
     if (refuseWhileLoading(ctx)) return;   // CABINET_FIX_V1_R4 (п. 3) — незагруженный лист вставок не принимает
     const payload = await currentPayload(ctx);
-    if (!Array.isArray(payload.diagnoses)) payload.diagnoses = [];
-    if (type === 'main') payload.diagnoses.forEach(d => { if (d.type === 'main') d.type = 'concomitant'; });
-    payload.diagnoses.push({ code, name, type });
-    if (!await writePayload(ctx, payload)) return;
+    // CABINET_FIX_V1_R6 (п. 6) — одна правка для этой версии и, если документ изменился, для новой.
+    const apply = (p) => {
+        if (!Array.isArray(p.diagnoses)) p.diagnoses = [];
+        if (type === 'main') p.diagnoses.forEach(d => { if (d.type === 'main') d.type = 'concomitant'; });
+        p.diagnoses.push({ code, name, type });
+        return p;
+    };
+    apply(payload);
+    if (!await writePayload(ctx, payload, {}, { reapply: apply })) return;
     paintDiagnoses(ctx);
     syncDiagnosisToConditions(ctx, { code, name });   // AURORA_DX_SYNC_V1 — land it on the patient card
 }
@@ -4088,7 +4158,15 @@ async function removeDiagnosis(ctx, idx) {
     if (!Array.isArray(payload.diagnoses)) return;
     const removed = payload.diagnoses[idx];
     payload.diagnoses.splice(idx, 1);
-    if (!await writePayload(ctx, payload)) return;
+    // CABINET_FIX_V1_R6 (п. 6) — документ изменился: убрать тот же диагноз (по нему самому).
+    const was = JSON.stringify(removed ?? null);
+    const reapply = (p) => {
+        const list = Array.isArray(p.diagnoses) ? p.diagnoses : [];
+        const i = list.findIndex((d) => JSON.stringify(d) === was);
+        if (i < 0) return null;
+        list.splice(i, 1); p.diagnoses = list; return p;
+    };
+    if (!await writePayload(ctx, payload, {}, { reapply })) return;
     paintDiagnoses(ctx);
     // AURORA_DX_SYNC_V1 — drop the matching active condition from the patient card.
     if (removed && removed.code && ctx.patient?.id) {
@@ -4822,8 +4900,15 @@ export async function addOwnService(ctx, svc, doctor) {
     const payload = await currentPayload(ctx);
     if (!Array.isArray(payload.services)) payload.services = [];
     // SVC_ATTACH_V1 — serviceId нужен карточке: по нему каталог гасит уже добавленные.
-    payload.services.push({ name: svc.name, price: svc.price, vsId, serviceId: svc.id || null });   // catalog price for the doctor's list; the bill carries the quoted one
-    if (!await writePayload(ctx, payload)) return;
+    const item = { name: svc.name, price: svc.price, vsId, serviceId: svc.id || null };
+    payload.services.push(item);   // catalog price for the doctor's list; the bill carries the quoted one
+    // CABINET_FIX_V1_R6 (п. 6) — документ изменился: строка визита уже заведена — пункт ложится в новую версию.
+    const reapply = (p) => {
+        if (!Array.isArray(p.services)) p.services = [];
+        if (!p.services.some((x) => vsId && x && x.vsId === vsId)) p.services.push(item);
+        return p;
+    };
+    if (!await writePayload(ctx, payload, {}, { reapply })) return;
     paintOwnServices(ctx);
     toast('Услуга добавлена в приём', 'ok');
 }
@@ -4842,7 +4927,15 @@ async function removeOwnService(ctx, idx) {
         if (error) { toast(trf('Услугу не снять: {msg}', { msg: error.message || error }), 'fail'); return; }
     }
     payload.services.splice(idx, 1);
-    if (!await writePayload(ctx, payload)) return;
+    // CABINET_FIX_V1_R6 (п. 6) — строка визита уже снята: убрать тот же пункт из новой версии.
+    const was = JSON.stringify(removed ?? null);
+    const reapply = (p) => {
+        const list = Array.isArray(p.services) ? p.services : [];
+        const i = list.findIndex((x) => JSON.stringify(x) === was);
+        if (i < 0) return null;
+        list.splice(i, 1); p.services = list; return p;
+    };
+    if (!await writePayload(ctx, payload, {}, { reapply })) return;
     paintOwnServices(ctx);
 }
 
@@ -4879,7 +4972,7 @@ async function handleSaveDraft(ctx, opts = {}) {
     payload.diagImages = diagImages;
     payload.docType = docType;
     payload.dxSplit = 1;   // CABINET_FIX_V1_R3 (F7) — «Диагноз» сохранён после ревью 2: код в нём — текст врача
-    payload.history = payload.history.filter(e => e.kind !== 'draft');
+    payload.history = payload.history.filter(e => e.kind !== 'draft' || e.kept);   // CABINET_FIX_V1_R6 (п. 2) — версия другого окна остаётся
     payload.history.push(entry);
     const saved = () => {
         clearUnsaved(ctx, tCollect);   // CABINET_FIX_V1_R4 ([U])
@@ -5000,7 +5093,7 @@ async function handleSignFinalize(ctx) {
     payload.diagImages = diagImages;   // DIAG_IMAGES_V1
     payload.docType = docType;   // CABINET_FIX_V1_TPL
     payload.dxSplit = 1;   // CABINET_FIX_V1_R3 (F7)
-    payload.history = payload.history.filter(e => e.kind !== 'draft');
+    payload.history = payload.history.filter(e => e.kind !== 'draft' || e.kept);   // CABINET_FIX_V1_R6 (п. 2) — версию другого окна подпись не убирает
     payload.history.push(entry);
     // DOC_AMEND_AUDIT_V1 — attestation stamp on the archived snapshot (signer / when / version).
     _docData.meta = { signedBy: _actor.full_name || '', signedAt: entry.savedAt, version: _prevSigned.length + 1 };
@@ -5066,7 +5159,7 @@ async function handleSignFinalize(ctx) {
                 const _cErr = _cr && _cr.timedOut ? { message: tr('Сервер не ответил — проверьте и повторите.') } : (_cr && _cr.error);
                 // Молчать здесь нельзя: врач написал заключение, а в историю
                 // болезни его никто не вставит — и узнается это у постели.
-                if (_cErr) toast(trf('Заключение не записано в визит: {msg}', { msg: _cErr.message || '' }), 'fail');
+                if (_cErr) toast(trf('Заключение не записано в визит: {msg}', { msg: tr(_cErr.message || '') }), 'fail');   // CABINET_FIX_V1_R6 (п. 5)
             }
         } catch (e) { console.warn('[visits.conclusion] persist:', e.message); }
 
@@ -5106,6 +5199,10 @@ export const finishVisit = (ctx) => tryFinish(ctx);
 export const hydrateLine = (ctx) => hydrateWorkspace(ctx);
 export const deleteHistoryEntry = (ctx, item) => handleDeleteEntry(ctx, item);   // CABINET_FIX_V1_R5 — экспорт для проверки
 export const diagAddImages = (ctx, files) => _diagAddImages(ctx, files);          // CABINET_FIX_V1_R5 — экспорт для проверки
+export const addDiagnosisEntry = (ctx, d) => addDiagnosis(ctx, d);                // CABINET_FIX_V1_R6 — экспорт для проверки
+export const removeDiagnosisEntry = (ctx, idx) => removeDiagnosis(ctx, idx);      // CABINET_FIX_V1_R6 — экспорт для проверки
+export const removePrescriptionEntry = (ctx, idx) => removePrescription(ctx, idx); // CABINET_FIX_V1_R6 — экспорт для проверки
+export const removeOwnServiceEntry = (ctx, idx) => removeOwnService(ctx, idx);    // CABINET_FIX_V1_R6 — экспорт для проверки
 export const pastePickField = (ctx, html, defaultField, okMsg) => _pastePickField(ctx, html, defaultField, okMsg);   // CABINET_FIX_V1_R4 — экспорт для проверки
 
 // Recompute the parent visit's status from its services. The visit is marked
@@ -5155,7 +5252,14 @@ async function handleDeleteEntry(ctx, item) {
     const label = entry.kind === 'referral' ? 'referral' : 'draft';
     if (!confirm(tr('Удалить эту запись?'))) return;
     const next = ownPayload(derivePayload(payload, { ...payload, history: history.filter((_, i) => i !== idx) }), ctx.visitServiceId);
-    if (!await writePayload(ctx, next)) return;
+    // CABINET_FIX_V1_R6 (п. 6) — документ изменился: убрать ту же запись из новой версии.
+    const reapply = (p) => {
+        const h = Array.isArray(p.history) ? p.history : [];
+        const i = h.findIndex((e) => e && e.kind === item.kind && e.savedAt === item.savedAt);
+        if (i < 0) return null;
+        p.history = h.filter((_, j) => j !== i); return p;
+    };
+    if (!await writePayload(ctx, next, {}, { reapply })) return;
     paintHistoryList(ctx);
     toast(label.charAt(0).toUpperCase() + label.slice(1) + ' deleted.');
 }
