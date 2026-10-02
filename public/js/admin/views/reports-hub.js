@@ -751,9 +751,10 @@ async function openReportBuilder(rep) {
     const downloadBtn = h('button', {
         class: 'btn', disabled: true,
         onclick: async (ev) => {
+            const btn = ev.currentTarget;   // JOURNALS_V1 — после await у события currentTarget уже null
             const r = st.result;
             if (!r || !Array.isArray(r.rows) || !r.rows.length) return;
-            ev.currentTarget.disabled = true;
+            btn.disabled = true;
             try {
                 const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
                 // V3120_FIX — заголовки на языке экрана, строка «Итого» (как под
@@ -773,7 +774,7 @@ async function openReportBuilder(rep) {
             } catch (e) {
                 console.error('[reports-hub] download:', e);
                 toast(trf('Не удалось скачать: {msg}', { msg: e.message || e }), 'fail');
-            } finally { ev.currentTarget.disabled = false; }
+            } finally { btn.disabled = false; }   // JOURNALS_V1
         },
     }, Icon('Download', { size: 14 }), ' Скачать Excel');
     // Кнопку прячем только у отчётов, которым нечего выгружать (отчёт владельца).
@@ -1635,7 +1636,8 @@ function ccrTable({ title, tone, columns, rows, numericCol, kind, period }) {
     const xlsBtn = h('button', { class: 'btn btn-sm', type: 'button',
         style: { background: 'var(--ok-600,#16a34a)', borderColor: 'var(--ok-600,#16a34a)', color: '#fff' },
         onclick: async (ev) => {
-            ev.currentTarget.disabled = true;
+            const btn = ev.currentTarget;   // JOURNALS_V1 — после await у события currentTarget уже null
+            btn.disabled = true;
             try {
                 const XLSX = await import('../../vendor/xlsx-0.20.3.mjs');
                 // В файл уходят ВСЕ строки, а не показанная страница: «показать
@@ -1655,7 +1657,7 @@ function ccrTable({ title, tone, columns, rows, numericCol, kind, period }) {
                 XLSX.writeFile(wb, 'cashier_' + kind + '_' + period + '.xlsx');
                 toast('Файл скачан', 'ok');
             } catch (e) { toast(trf('Не удалось скачать: {msg}', { msg: e.message || e }), 'fail'); }
-            finally { ev.currentTarget.disabled = false; }
+            finally { btn.disabled = false; }   // JOURNALS_V1
         },
     }, Icon('Download', { size: 13 }), ' Excel');
 

@@ -114,9 +114,22 @@ test('«Печать» рядом со «Скачать Excel»: страниц�
   assert.match(printSrc, /from '\.\/report-totals\.js\?v=rt3';/);
 });
 
+// JOURNALS_V1 (проверка в браузере 02.10) — «Скачать Excel» бросал
+// «Cannot set properties of null (setting 'disabled')»: после await у события
+// уже нет currentTarget (браузер обнуляет его, когда обработка события
+// закончилась), и finally не возвращал кнопку — она оставалась серой до нового
+// «Сформировать отчёт». Кнопку берём в переменную ДО первого await.
+test('«Скачать Excel»: кнопка берётся до await и снова доступна после выгрузки', () => {
+  const uses = hub.match(/ev\.currentTarget/g) || [];
+  const captured = hub.match(/async \(ev\) => \{\s*const btn = ev\.currentTarget;/g) || [];
+  assert.ok(captured.length >= 2, 'обе кнопки Excel (конструктор и отчёт кассира) берут кнопку до await');
+  assert.equal(uses.length, captured.length, 'ev.currentTarget прочитан не в первой строке обработчика — после await он null');
+  assert.equal((hub.match(/finally \{ btn\.disabled = false; \}/g) || []).length, captured.length);
+});
+
 // Каждая задача, менявшая reports-hub.js, меняет и его штамп в admin.js: модуль
 // с прежним адресом браузер взял бы из своего кэша модулей.
 test('штамп reports-hub.js в admin.js — последний в серии журналов', () => {
   const admin = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin.js'), 'utf8');
-  assert.match(admin, /from '\.\/admin\/views\/reports-hub\.js\?v=jrn4';/);
+  assert.match(admin, /from '\.\/admin\/views\/reports-hub\.js\?v=jrn5';/);
 });
