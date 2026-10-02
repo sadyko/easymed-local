@@ -63,7 +63,7 @@ import { renderConsultation }     from './admin/views/consultation.js?v=rmt1';
 import { renderServiceWorkspace } from './admin/views/service-workspace.js?v=cabdiag1';   // OWN_PRICE_REPEAT_V1 — штамп кабинета врача · OWN_PRICE_TIER_RATIO_V1 (ревью) · CABINET_FIX_V1_DIAG — бланк диагностики
 import { renderPatientCard }  from './admin/views/patient-card.js?v=labshared1';   // PATIENT_CARD_DESIGN_V2 + SVC_ROW_ACTIONS_V1 (?v must match service-workspace.js)
 import { renderPlaceholder }  from './admin/views/placeholder.js';
-import { renderSectionCrud }  from './admin/views/section-crud.js?v=svceditor1';
+import { renderSectionCrud }  from './admin/views/section-crud.js?v=ecs1';   // EMPLOYEE_CARD_SAVE_V1 — штамп: employee-editor.js берёт разбор ФИО из shared/employee-name.js
 import { renderCashier, renderCashierHead } from './admin/views/cashier-desk.js?v=cash11';   // CASHIER_DESIGN_V2 + CASHIER_ROW_FIT_V1 — patient cell width, RU status, compact date · REFERRAL_BILL_V1 — «Ждут счёта», «Кому счёт» (со дня визита) · REFBILL_REVIEW_V1 — «Ждут счёта»: окно по умолчанию, поиск на сервере
 import { renderReport }       from './admin/views/report.js';
 import { renderLaboratory }   from './admin/views/laboratory.js?v=labwords14';   // LAB_STATS_V1 — third mode «Статистика» (usage counters, no money) on the shared LAB_HEAD_ONE_V1 head · LIS_MINDRAY_CODES_V1 — штамп · LIS_ANALYZER_LIST_V1 · LIS_DISCOVERY_FIX_V1 (экран) · LIS_REAL_ANALYZERS_V1 (экран; ревью R3–R7 — штамп)
@@ -79,7 +79,7 @@ import { renderMarNurse }    from './admin/views/mar-nurse.js?v=inp8';   // MAR_
 import { renderKitchenSheet } from './admin/views/kitchen-sheet.js?v=diet1';   // KITCHEN_SHEET_V1 — порционник (Задача 7; экран был написан без маршрута)
 import { renderDischarge }   from './admin/views/discharge.js?v=disch1';   // TWO_STEP_DISCHARGE_V1 — «Выписки к оформлению» (Задача 8; экран был написан без маршрута)
 import { renderDoctorRoom }   from './admin/views/doctor-room.js?v=docroom1';   // DOCTOR_ROOM_V1 — Кабинет врача (consultation queue)
-import { renderEmployees }    from './admin/views/employees.js?v=rh2';   // RATES_HONEST_V1 — штамп карточки (ревью 1) · EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen) · rmt1 = RATES_MODE_TYPED_V1
+import { renderEmployees }    from './admin/views/employees.js?v=ecs1';   // EMPLOYEE_CARD_SAVE_V1 — ФИО из full_name, отказ называет пустые поля · RATES_HONEST_V1 — штамп карточки (ревью 1) · EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen) · rmt1 = RATES_MODE_TYPED_V1
 import { renderMarketing }    from './admin/views/marketing.js?v=btnright1';
 import { renderCallCenter }   from './admin/views/callcenter.js';
 import { renderDocuments }    from './admin/views/documents.js?v=noqr1';

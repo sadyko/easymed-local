@@ -17,6 +17,7 @@ import { canEdit } from '../permissions.js';   // ROLE_DELEGATION_V1
 import { getLang, tr, trf } from '../i18n.js';   // EMP_STAFF_TYPE_V1 + I18N_COVERAGE_V1
 import { phoneInput } from '../phone-input.js?v=ph1';
 import { referralRewardEditor, saveReferralReward } from './referral-reward-editor.js';   // REPORTS_V2 — одна правка ставки на обе карточки
+import { employeeNameParts } from '../../shared/employee-name.js';   // EMPLOYEE_CARD_SAVE_V1 — разбор full_name, общий с employees.js
 
 // ROLE_ADMIN_ONLY_V1 — assigning a user's role is the clinic owner's job alone
 // (the DB also enforces it: users.role_id writes require current_user_is_admin()).
@@ -272,13 +273,9 @@ export function buildEmp(row, lookups) {
 
     // Name parts. Prefer the dedicated columns (migration 026); fall back to
     // splitting full_name (1st token = surname, 2nd = name, rest = patronymic).
-    let last_name = r.last_name || '', first_name = r.first_name || '', middle_name = r.middle_name || '';
-    if (!last_name && !first_name && r.full_name) {
-        const parts = r.full_name.trim().split(/\s+/);
-        last_name = parts[0] || '';
-        first_name = parts[1] || '';
-        middle_name = parts.slice(2).join(' ');
-    }
+    // EMPLOYEE_CARD_SAVE_V1 — the split now lives in shared/employee-name.js,
+    // one rule for this card and for views/employees.js.
+    const { last_name, first_name, middle_name } = employeeNameParts(r);
 
     return {
         __id:        r.id || null,

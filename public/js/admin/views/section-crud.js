@@ -25,7 +25,7 @@ import {
     exportRowsToExcel,
     exportSectionRows,   // FULL_EXPORT_V1
 } from './section-import-export.js?v=aug17e';
-import { openEmployeeEditor } from './employee-editor.js?v=multirole3';
+import { openEmployeeEditor } from './employee-editor.js?v=ecs1';   // EMPLOYEE_CARD_SAVE_V1 — штамп: разбор ФИО из shared/employee-name.js
 import { openServiceEditor } from './service-editor.js?v=rh1';   // SERVICE_EDITOR_V1
 import { openTableSetup, readColPrefs, writeColPrefs, widthShare } from './table-setup.js';   // CRUD_LIST_V2
 import { renderItemsLedger } from './items-ledger.js?v=ledger3';   // ITEMS_LEDGER_V1

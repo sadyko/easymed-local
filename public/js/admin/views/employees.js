@@ -17,6 +17,7 @@ import { importExportButtons } from './section-import-export.js?v=aug17e';   // 
 import { soleBranchId } from '../branch-context.js?v=bc3';                  // SOLE_BRANCH_V1
 import { specialtyOptions, canonicalSpecialty, SPECIALTY_ROWS } from '../specialties.js?v=spec2';   // SPECIALTY_LIST_V1 + SPECIALTIES_CLONED_V1 + MULTI_SPECIALTY_V1
 import { referralRewardEditor, saveReferralReward } from './referral-reward-editor.js';   // REPORTS_V2 — рабочая ставка за направления (источник врача)
+import { employeeNameParts, employeeSaveGaps, NAME_KEYS } from '../../shared/employee-name.js';   // EMPLOYEE_CARD_SAVE_V1 — имя из full_name и что держит сохранение
 
 const ROLES = [
     ['registrar', 'Регистратор'], ['doctor', 'Врач'], ['nurse', 'Медсестра'],
@@ -411,7 +412,11 @@ function openEditor(user, root) {
         // У существующего сотрудника ниже победит его собственное значение.
         ...(soleBranchId() != null ? { branch_id: String(soleBranchId()) } : {}),
         ...(user ? {
-            last_name: user.last_name || '', first_name: user.first_name || '', middle_name: user.middle_name || '',
+            // EMPLOYEE_CARD_SAVE_V1 — у сотрудника, заведённого одной строкой
+            // full_name (демо-врачи, `admin` первого запуска), частей имени нет:
+            // поля были пустыми, а шапка показывала логин. Теперь full_name
+            // разбирается так же, как в старой карточке (shared/employee-name.js).
+            ...employeeNameParts(user),
             phone: user.phone || '', email: user.email || '',
             staff_type: user.staff_type || (user.is_doctor ? 'doctor' : ''), scheduling_mode: user.scheduling_mode || 'schedulable',
             pbx_extension: user.pbx_extension || '',   // CALL_FROM_CRM_V1
@@ -447,6 +452,19 @@ function openEditor(user, root) {
     const profilePatch = {};
     let active = 'personal';
     let dirty = false;
+    // EMPLOYEE_CARD_SAVE_V1 — с чем карточка открылась: сохранение существующего
+    // сотрудника держат только поля, которые ПРАВИЛИ и оставили пустыми
+    // (shared/employee-name.js employeeSaveGaps). `refusal` — последний отказ
+    // сохранения: он стоит в своём разделе, пока поля не заполнят, а не гаснет
+    // тостом через 2,4 с. `ctrls` — поля раздела на экране, чтобы отметить пустое
+    // и поставить в него курсор.
+    const was = { last_name: emp.last_name, first_name: emp.first_name, middle_name: emp.middle_name, staff_type: emp.staff_type };
+    let refusal = null;
+    let statusBox = null;
+    const ctrls = {};
+    const FIELD_LABEL = { last_name: 'Фамилия', first_name: 'Имя', phone: 'Телефон', staff_type: 'Категория сотрудника', username: 'Логин', password: 'Пароль' };
+    const saveGaps = () => employeeSaveGaps({ isEdit, now: emp, was });
+    const namesTouched = () => NAME_KEYS.some((k) => String(emp[k] || '').trim() !== String(was[k] || '').trim());
     // STAFF_SYNC_V1 — карточка сотрудника, приехавшего из главной клиники,
     // ОТКРЫВАЕТСЯ, но не правится. Открывается — потому что филиалу нужно
     // видеть телефон врача и его специальность; не правится — потому что
@@ -474,7 +492,66 @@ function openEditor(user, root) {
     function sectionComplete(sec) { const req = sec.key === 'access' ? (isEdit ? sec.required : sec.required.concat('password')) : sec.required; return req.every(reqFilled); }
     function completionPct() { const all = railSections().flatMap(s => (s.key === 'access' && !isEdit) ? s.required.concat('password') : s.required); if (!all.length) return 100; return Math.round(all.filter(reqFilled).length / all.length * 100); }
     function touch() { dirty = true; dirtyEl.textContent = tr('● Есть несохранённые изменения'); }
-    function markDirty(patch) { if (readOnly) return; Object.assign(emp, patch); touch(); renderRail(); renderHead(); }
+    function markDirty(patch) { if (readOnly) return; Object.assign(emp, patch); touch(); renderRail(); renderHead(); paintStatus(); }   // EMPLOYEE_CARD_SAVE_V1 — отказ и пометки следят за вводом
+
+    // EMPLOYEE_CARD_SAVE_V1 — строка раздела над полями. Отказ сохранения
+    // называет пустые поля («Не заполнено: Фамилия, Имя»), отмечает их и стоит,
+    // пока их не заполнят; пометки ниже сохранение не держат — они говорят, чего
+    // в карточке нет. Перерисовывается на каждый ввод (markDirty), без
+    // перестройки раздела — фокус остаётся в поле.
+    const ALERT_STYLE = {
+        display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px',
+        padding: '9px 12px', borderRadius: '9px', fontSize: '13.5px', lineHeight: 1.5,
+        background: 'var(--crit-50, #fef2f2)', border: '1px solid var(--crit-200, #fecaca)', color: 'var(--crit-700, #b91c1c)',
+    };
+    const NOTE_STYLE = {
+        display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px',
+        padding: '9px 12px', borderRadius: '9px', fontSize: '12.5px', lineHeight: 1.5,
+        background: 'var(--ink-25, #f6f8f9)', border: '1px solid var(--ink-100)', color: 'var(--ink-600)',
+    };
+    function sectionNotes() {
+        if (!isEdit) return [];
+        const notes = [];
+        if (active === 'personal') {
+            // Одно слово в full_name (или имени нет вовсе), ФИО не правили: части
+            // имени не уходят, и сервер оставит full_name прежним.
+            if (!saveGaps().sendNames && !namesTouched()) notes.push('Фамилия или имя не заполнены. Остальные разделы карточки сохраняются, а ФИО останется прежним, пока не заполните оба поля.');
+            if (!String(emp.phone || '').trim()) notes.push('Телефон не заполнен');
+        }
+        if (active === 'job' && !String(emp.staff_type || '').trim()) notes.push('Категория сотрудника не выбрана');
+        return notes;
+    }
+    function paintStatus() {
+        if (refusal) {
+            const r = saveGaps().refuse;
+            refusal = r && r.section === refusal.section ? r : null;
+        }
+        const missing = refusal && refusal.section === active ? refusal.keys : [];
+        for (const k of Object.keys(FIELD_LABEL)) {
+            if (!ctrls[k]) continue;
+            const el = ctrls[k].input || ctrls[k];   // у телефона рамку несёт само поле, а не обёртка
+            el.setAttribute('aria-invalid', missing.includes(k) ? 'true' : 'false');
+            el.style.borderColor = missing.includes(k) ? 'var(--crit-500, #d64545)' : '';
+        }
+        if (!statusBox) return;
+        clear(statusBox);
+        if (missing.length) {
+            statusBox.appendChild(h('div', { role: 'alert', style: ALERT_STYLE }, Icon('Warning', { size: 15 }),
+                h('span', null, trf('Не заполнено: {list}', { list: missing.map((k) => tr(FIELD_LABEL[k])).join(', ') }))));
+        }
+        for (const n of sectionNotes()) statusBox.appendChild(h('div', { style: NOTE_STYLE }, Icon('Info', { size: 15 }), h('span', null, n)));
+    }
+    // Отказ: раздел с пустым полем, строка в нём, курсор в первое пустое поле.
+    function refuse(r) {
+        refusal = r;
+        active = r.section; renderRail(); renderBody();
+        toast(trf('Не заполнено: {list}', { list: r.keys.map((k) => tr(FIELD_LABEL[k])).join(', ') }), 'fail');
+        const first = ctrls[r.keys[0]];
+        if (!first) return;
+        if (typeof first.focus === 'function') first.focus();
+        const el = first.input || first;
+        if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center' });
+    }
 
     function renderHead() {
         clear(ringWrap);
@@ -515,17 +592,18 @@ function openEditor(user, root) {
         }
     }
 
-    const txt = (key, ph) => { const i = h('input', { type: 'text', value: emp[key] || '', placeholder: ph || '' }); i.addEventListener('input', () => markDirty({ [key]: i.value })); return i; };
+    // EMPLOYEE_CARD_SAVE_V1 — txt / phonef / sel записывают поле в ctrls.
+    const txt = (key, ph) => { const i = h('input', { type: 'text', value: emp[key] || '', placeholder: ph || '' }); i.addEventListener('input', () => markDirty({ [key]: i.value })); ctrls[key] = i; return i; };
     // PHONE_INPUT_V1 — same country-code control as patient registration; the
     // wrapper's 'input' bubbles from the real field, and .value reads '' while
     // only the «+998» default is showing.
-    const phonef = (key, ph) => { const w = phoneInput(key, ph, { value: emp[key] }); w.addEventListener('input', () => markDirty({ [key]: w.value })); return w; };
+    const phonef = (key, ph) => { const w = phoneInput(key, ph, { value: emp[key] }); w.addEventListener('input', () => markDirty({ [key]: w.value })); ctrls[key] = w; return w; };
     const numf = (key, ph) => { const i = h('input', { type: 'number', min: '0', step: '1', value: emp[key] || '', placeholder: ph || '' }); i.addEventListener('input', () => markDirty({ [key]: i.value })); return i; };
     const datef = (key) => { const i = h('input', { type: 'date', value: (emp[key] || '').slice(0, 10) }); i.addEventListener('input', () => markDirty({ [key]: i.value })); return i; };
     // CUSTOM_ROLES_V1 — четвёртым аргументом можно назвать ТЕКУЩЕЕ значение: у
     // списка ролей оно собирается из двух полей (role + код своей роли) и в
     // emp[key] не лежит.
-    const sel = (key, opts, onset, curValue) => { const cur = curValue !== undefined ? curValue : emp[key]; const s = h('select', null, ...opts.map(([v, l]) => h('option', { value: v, selected: String(cur) === String(v) }, l))); s.addEventListener('change', () => onset ? onset(s.value) : markDirty({ [key]: s.value })); return s; };
+    const sel = (key, opts, onset, curValue) => { const cur = curValue !== undefined ? curValue : emp[key]; const s = h('select', null, ...opts.map(([v, l]) => h('option', { value: v, selected: String(cur) === String(v) }, l))); s.addEventListener('change', () => onset ? onset(s.value) : markDirty({ [key]: s.value })); ctrls[key] = s; return s; };
 
     // DOCTOR_PUBLIC_PROFILE_V1 — поля публичного профиля врача. Тексты
     // правятся здесь; списки (образование, опыт, сертификаты, курсы) — в
@@ -601,6 +679,9 @@ function openEditor(user, root) {
 
     function renderBody() {
         clear(body);
+        // EMPLOYEE_CARD_SAVE_V1 — поля и строка состояния — этого раздела.
+        for (const k of Object.keys(ctrls)) delete ctrls[k];
+        statusBox = ['personal', 'job', 'access'].includes(active) ? h('div') : null;
         if (managed) body.appendChild(managedNote());
         else if (readOnly) body.appendChild(viewOnlyNote());
         const sec = ALL_SECTIONS.find(s => s.key === active) || ALL_SECTIONS[0];
@@ -636,7 +717,7 @@ function openEditor(user, root) {
         const hint = (t) => h('div', { class: 'muted', style: { fontSize: '12.5px', marginTop: '6px', lineHeight: 1.5 } }, t);
 
         if (active === 'personal') {
-            body.append(head('Личные данные', 'Личные и контактные данные сотрудника.'),
+            body.append(head('Личные данные', 'Личные и контактные данные сотрудника.'), statusBox,   // EMPLOYEE_CARD_SAVE_V1
                 grid(field('Фамилия', txt('last_name', 'Каюмов'), { required: true }), field('Имя', txt('first_name', 'Араббек'), { required: true }),
                     field('Отчество', txt('middle_name', 'Акмалович')), field('Телефон', phonef('phone', '+998 90 961 00 04'), { required: true }), field('Email', txt('email', 'name@example.uz')),
                     // CALL_FROM_CRM_V1 — внутренний номер на АТС. Среди контактов,
@@ -651,7 +732,7 @@ function openEditor(user, root) {
                 hint('Заполняйте, только если у сотрудника своя трубка в АТС. Тогда по кнопке «Позвонить» зазвонит именно она, и в журнале будет видно, кто звонил. Если номер у клиники один — оставьте пусто, звонок пойдёт с номера линии из настроек телефонии.'),
                 hint('Пациент в любом случае видит номер клиники: что он увидит, решает сама АТС, а не это поле.'));
         } else if (active === 'job') {
-            body.append(head('Должность', 'Роль, отдел и должность в клинике.'),
+            body.append(head('Должность', 'Роль, отдел и должность в клинике.'), statusBox,   // EMPLOYEE_CARD_SAVE_V1
                 field('Категория сотрудника', sel('staff_type', [['', 'Выберите категорию…']].concat(STAFF_TYPES), pickCategory), { required: true }),
                 hint('Врачи получают роль доступа «Врач», попадают в список врачей клиники, и для них открываются разделы Лицензия / Услуги и ставки / Вознаграждение за направления.'),
                 // NULL_IN_APPEND_V1 — пустая ветка тут превратилась бы в слово «null»
@@ -732,10 +813,10 @@ function openEditor(user, root) {
                 c.addEventListener('change', () => { const set = new Set(emp.extra_roles || []); c.checked ? set.add(rk) : set.delete(rk); markDirty({ extra_roles: [...set].filter(r => r !== emp.role) }); });
                 extraRoles.appendChild(h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '13.5px', padding: '5px 10px', border: '1px solid ' + (on ? 'var(--primary-300, #9fd0cb)' : 'var(--ink-100)'), borderRadius: '20px', cursor: 'pointer', background: on ? 'var(--primary-50, #e8f3f2)' : 'transparent' } }, c, rl));
             }
-            body.append(head('Вход и доступ', 'Логин, пароль и роли доступа. Каждый сотрудник входит в систему.'),
-                grid(field('Логин', (() => { const i = h('input', { type: 'text', value: emp.username, placeholder: 'login', disabled: isEdit }); i.addEventListener('input', () => markDirty({ username: i.value })); return i; })(), { required: true }),
+            body.append(head('Вход и доступ', 'Логин, пароль и роли доступа. Каждый сотрудник входит в систему.'), statusBox,   // EMPLOYEE_CARD_SAVE_V1
+                grid(field('Логин', (() => { const i = h('input', { type: 'text', value: emp.username, placeholder: 'login', disabled: isEdit }); i.addEventListener('input', () => markDirty({ username: i.value })); ctrls.username = i; return i; })(), { required: true }),
                     field('Основная роль', roleSel, { required: true }),
-                    field(isEdit ? 'Новый пароль (пусто — не менять)' : 'Пароль', (() => { const i = h('input', { type: 'password', value: '', placeholder: '••••••••' }); i.addEventListener('input', () => markDirty({ password: i.value })); return i; })(), { required: !isEdit })),
+                    field(isEdit ? 'Новый пароль (пусто — не менять)' : 'Пароль', (() => { const i = h('input', { type: 'password', value: '', placeholder: '••••••••' }); i.addEventListener('input', () => markDirty({ password: i.value })); ctrls.password = i; return i; })(), { required: !isEdit })),
                 h('div', { style: { marginTop: '14px' } }, h('div', { style: { fontSize: '13.5px', fontWeight: 600, marginBottom: '7px' } }, 'Дополнительные роли'), extraRoles,
                     hint('Сотруднику открывается объединение разделов всех его ролей. Права на данные определяются основной ролью.')),
                 h('div', { style: { marginTop: '12px' } }, checkField('Активен', (() => { const c = h('input', { type: 'checkbox', checked: emp.is_active }); c.addEventListener('change', () => markDirty({ is_active: c.checked })); return c; })())),
@@ -751,6 +832,7 @@ function openEditor(user, root) {
                 body.append(hint('Логин 3–30 символов (латиница, цифры, . _ -). Пароль — любой, длину выбирает клиника.'));
             }
         }
+        if (!readOnly) paintStatus();   // EMPLOYEE_CARD_SAVE_V1 — у карточки «только просмотр» нечего сохранять
         if (readOnly) disableAll(body);
     }
 
@@ -821,9 +903,13 @@ function openEditor(user, root) {
     }
 
     async function save() {
-        for (const f of ['last_name', 'first_name', 'phone']) if (!String(emp[f]).trim()) { active = 'personal'; renderRail(); renderBody(); toast('Заполните личные данные.', 'fail'); return; }
-        if (!emp.staff_type) { active = 'job'; renderRail(); renderBody(); toast('Выберите категорию сотрудника.', 'fail'); return; }
-        if (!String(emp.username).trim() || (!isEdit && !String(emp.password).trim())) { active = 'access'; renderRail(); renderBody(); toast('Заполните логин и пароль.', 'fail'); return; }
+        // EMPLOYEE_CARD_SAVE_V1 — прежде здесь стояла одна проверка на всю
+        // карточку: без Фамилии, Имени И Телефона не уходило ничего, даже ставки
+        // (21 карточка из 45 на базе разработки). Теперь у существующего
+        // сотрудника её держит только то, что правили и оставили пустым;
+        // новому по-прежнему нужны Фамилия, Имя и Телефон (employeeSaveGaps).
+        const gaps = saveGaps();
+        if (gaps.refuse) { refuse(gaps.refuse); return; }
         // RATES_MODE_TYPED_V1 — процент больше 100 не прижимается молча, а
         // останавливает сохранение: чаще всего это сумма, набранная в режиме
         // «%» (аудит: 25 000 становились 100 %, а врач получал не то, что
@@ -867,6 +953,12 @@ function openEditor(user, root) {
             role: emp.role, custom_role_code: emp.custom_role_code || '', extra_roles: (emp.extra_roles || []).filter(r => r !== emp.role), is_active: !!emp.is_active,
         };
         if (String(emp.password).trim()) payload.password = emp.password;
+        // EMPLOYEE_CARD_SAVE_V1 — Фамилии или Имени нет, а ФИО не правили (одно
+        // слово в full_name): части не уходят вовсе. Сервер пересобирает
+        // full_name, только когда части присланы (routes/users.js), — без них
+        // имя остаётся ровно таким, каким было, а неполные части не ложатся в
+        // колонки.
+        if (isEdit && !gaps.sendNames) for (const k of NAME_KEYS) delete payload[k];
         // DOCTOR_PUBLIC_PROFILE_V1 — только изменённые поля профиля.
         if (Object.keys(profilePatch).length) payload.public_profile = { ...profilePatch };
         // ADMIN_ROWS_GRANTABLE_V1 — без «Цены и проценты» деньги не уходят вовсе:

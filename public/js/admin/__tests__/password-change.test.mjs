@@ -230,6 +230,8 @@ test('карточка сотрудника: «Сменить пароль» ш�
   assert.deepEqual(calls, [{ u: '/api/users/1', method: 'PATCH', body: { password: '1' } }]);
   assert.ok(modal.removed);
   assert.ok(!textOf(document.body).includes('Заполните личные данные.'), 'проверка всей карточки здесь не участвует');
+  // EMPLOYEE_CARD_SAVE_V1 — и новый отказ карточки («Не заполнено: …») сюда не попадает.
+  assert.ok(!textOf(document.body).includes('Не заполнено'), 'проверка карточки вмешалась в смену пароля');
   } finally { window.easymed.state.user = me; }
 });
 

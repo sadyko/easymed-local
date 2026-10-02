@@ -7,6 +7,7 @@ import { createApp } from '../app.js';
 import { parseEmployeeFields } from './users.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';   // LICENCE_CORE_V1
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
+import { employeeNameParts } from '../../public/js/shared/employee-name.js';   // EMPLOYEE_CARD_SAVE_V1
 
 // Mirrors server/app.test.js's harness (startServer/post) since that file
 // does not export its helpers.
@@ -666,5 +667,41 @@ test('service_rates: inpatient_pct от старого экрана отбрас
     const stored = db.prepare('SELECT service_rates, inpatient_rates FROM users WHERE id = ?').get(u.id);
     assert.ok(!stored.service_rates.includes('inpatient_pct'));
     assert.equal(stored.inpatient_rates, '');
+  } finally { server.close(); }
+});
+
+// EMPLOYEE_CARD_SAVE_V1 (2026-10-02) — то, на что опирается карточка
+// сотрудника. У демо-врачей и `admin` первого запуска имя лежит одной строкой
+// full_name, частей нет, телефона нет. Карточка теперь разбирает full_name на
+// части (shared/employee-name.js) и шлёт их, только когда есть и фамилия, и
+// имя; иначе — не шлёт вовсе. Сервер обязан: (1) без частей оставить full_name
+// как был, (2) из разобранных частей собрать ТОТ ЖЕ full_name, (3) принять
+// пустой телефон.
+test('EMPLOYEE_CARD_SAVE_V1: сотрудник только с full_name — ставки сохраняются, full_name прежний', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const admin = await loginAdmin(base);
+    const mk = (username, full) => Number(db.prepare(
+      "INSERT INTO users (username, password_hash, full_name, role, is_doctor, specialty, is_active) VALUES (?, 'demo', ?, 'doctor', 1, 'Терапевт', 1)",
+    ).run(username, full).lastInsertRowid);
+    const row = (id) => db.prepare('SELECT full_name, last_name, first_name, middle_name, phone, service_rates FROM users WHERE id = ?').get(id);
+
+    // Части не уходят (одно слово — имени нет): full_name не трогается.
+    const one = mk('madina', 'Мадина');
+    let res = await patch(base, '/api/users/' + one, { phone: '', staff_type: 'doctor', service_rates: [{ service_id: 1, pct: 25 }] }, admin);
+    assert.equal(res.status, 200);
+    assert.equal(row(one).full_name, 'Мадина');
+    assert.equal(row(one).phone, '');
+    assert.deepEqual(JSON.parse(row(one).service_rates).map((r) => r.pct), [25]);
+
+    // Разобранные части — тот же full_name; теперь они в своих колонках.
+    for (const full of ['Абдуллаев Шерзод', "Karimov Anvar Akmal o'g'li"]) {
+      const id = mk('demo_' + full.length, full);
+      res = await patch(base, '/api/users/' + id, { ...employeeNameParts({ full_name: full }), phone: '', inpatient_referral_pct: 7 }, admin);
+      assert.equal(res.status, 200, full);
+      const r = row(id);
+      assert.equal(r.full_name, full);
+      assert.deepEqual([r.last_name, r.first_name, r.middle_name], [full.split(' ')[0], full.split(' ')[1], full.split(' ').slice(2).join(' ')]);
+    }
   } finally { server.close(); }
 });
