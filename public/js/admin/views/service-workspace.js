@@ -32,7 +32,7 @@ import { currentClinicId } from '../tenant-tables.js';   // AURORA_CONSULT_TOOLB
 import { isAdminActor } from '../admin-actor.js';   // CABINET_FIX_V1_TPL — администратор правит любой шаблон
 import { BRANCH_BUCKET, signedUrl } from '../storage.js?v=aurora20b';   // SLICED2_PRINT_HEADER (dynamic company name + logo)
 import { printableSheet, loadDocSettings } from './doc-settings.js?v=noqr1';   // UNIFY_PRINT_V1 — ?v=db9 must match in EVERY importer
-import { renderDesignedVariant } from './doc-variants.js?v=cabr1';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1) · CABINET_FIX_V1_DIAG — cabdiag1 · CABINET_FIX_V1_R1 — cabr1
+import { renderDesignedVariant } from './doc-variants.js?v=cabr2';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1) · CABINET_FIX_V1_DIAG — cabdiag1 · CABINET_FIX_V1_R1 — cabr1 · CABINET_FIX_V1_R2 — cabr2
 import { openVitalsDialog } from './patient-card.js?v=labshared1';   // CARD_SPEC_V1 — same URL as admin.js (one instance)
 import { serviceGroupLabel, TYPE_TO_GROUP_NAME } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — chips must survive a NULL type_id
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
@@ -177,11 +177,13 @@ export function renderServiceWorkspace(container, { onNavigate, payload }) {
                 // CABINET_FIX_V1_DIAG — у диагностических услуг клиники отделения
                 // нет, и бланк «Диагностика» не включался НИКОГДА: врач выбирал его
                 // руками на каждом УЗИ. Правило — opensAsDiagnostics ниже.
-                if (!ctx.docTypeSaved && opensAsDiagnostics({ deptKind: ctx.deptKind, svcType: ctx.svcType, typeName: ctx.typeName }) && wsState.docType !== 'diag') {   // CABINET_FIX_V1_TPL — сохранённый тип сильнее
-                    wsState.docType = 'diag';
-                    const _sel = ctx.container && ctx.container.querySelector('[data-doctype]');
-                    if (_sel) _sel.value = 'diag';
-                    if (wsState.blank) renderBlank(ctx); else setBlankMode(ctx, true);
+                if (!ctx.docTypeSaved && opensAsDiagnostics({ deptKind: ctx.deptKind, svcType: ctx.svcType, typeName: ctx.typeName })) {   // CABINET_FIX_V1_TPL — сохранённый тип сильнее
+                    // CABINET_FIX_V1_R2 (ревью п. 4) — поздний ответ строки, которая уже
+                    // не открыта, переключал ОТКРЫТУЮ строку другого пациента. Теперь он
+                    // ждёт возвращения к своей строке (resumeWorkspace), а смена типа
+                    // идёт через switchDocType — с вопросом, если текст станет не виден.
+                    if (wsState.ctx !== ctx) { ctx.pendingAutoType = 'diag'; return; }
+                    if (wsState.docType !== 'diag') switchDocType(ctx, 'diag');
                 }
             }).catch(() => {});
     }
@@ -192,12 +194,16 @@ export function renderServiceWorkspace(container, { onNavigate, payload }) {
     // user's — an admin may be viewing a doctor's document) and reflect it in the sheet.
     Promise.resolve(resolveWsDoctorId(ctx)).then((did) => {
         if (!did) return;
-        wsState.wsDoctorKnown = true;
+        // CABINET_FIX_V1_R2 (ревью п. 4) — ответ пишется в состояние СВОЕЙ строки;
+        // лист перерисовывается, только если эта строка открыта (wsState.ctx !== ctx — нет).
+        stateOf(ctx).wsDoctorKnown = true;
         return supabase.from('users').select('phone').eq('id', did).maybeSingle().then(({ data }) => {
-            wsState.wsDoctorPhone = (data && data.phone) || '';
+            const st = stateOf(ctx);
+            st.wsDoctorPhone = (data && data.phone) || '';
             try {
                 const inp = ctx.container && ctx.container.querySelector('[data-field="doctor_phone"]');
-                if (inp && !(inp.innerText || '').trim()) inp.textContent = wsState.wsDoctorPhone;
+                if (inp && !(inp.innerText || '').trim()) inp.textContent = st.wsDoctorPhone;
+                if (wsState.ctx !== ctx) return;
                 renderBlank(ctx);
             } catch (e) {}
         });
@@ -206,7 +212,16 @@ export function renderServiceWorkspace(container, { onNavigate, payload }) {
     // across all visits) and paint it into the left-column EMR card.
     wsState.emr = null;
     wsState.emrFilter = 'all';
-    loadPatientEmr(p).then(() => paintEmr());
+    loadPatientEmr(p, ctx).then(() => { if (wsState.ctx === ctx) paintEmr(); });   // CABINET_FIX_V1_R2 — только своей строке
+}
+
+/**
+ * CABINET_FIX_V1_R2 — состояние строки: открытой — wsState, отложенной — её ctx.
+ * Поздний ответ сервера пишется сюда и не задевает открытую строку другого пациента.
+ */
+function stateOf(ctx) {
+    if (!ctx || wsState.ctx === ctx) return wsState;
+    return ctx.__wsState || (ctx.__wsState = {});
 }
 
 // ---------------------------------------------------------------------------
@@ -322,7 +337,7 @@ function openEmrModal(ctx) {
         ),
     ));
     document.body.appendChild(overlay);
-    if (wsState.emr) paintEmr(); else loadPatientEmr(ctx.patient).then(() => paintEmr());
+    if (wsState.emr) paintEmr(); else loadPatientEmr(ctx.patient, ctx).then(() => { if (wsState.ctx === ctx) paintEmr(); });   // CABINET_FIX_V1_R2 — только своей строке
 }
 
 function leftColumn(ctx) {
@@ -499,15 +514,15 @@ function prescriptionsClinicCard(ctx) {
 // Mirrors visit-modal loadServices but filtered to item lines + keyed on
 // ctx.visitId. Stored on wsState.dispensed.
 async function loadDispensedItems(ctx) {
-    wsState.dispensed = [];
+    stateOf(ctx).dispensed = [];   // CABINET_FIX_V1_R2 — в состояние своей строки
     if (!ctx.visitId) return;
     const { data, error } = await supabase
         .from('visit_services')
         .select('id, quantity, unit_price, invoice_item_id, clinic_item_id, clinic_items(name, unit)')
         .eq('visit_id', ctx.visitId)
         .not('clinic_item_id', 'is', null);
-    if (error) { console.warn('[workspace] loadDispensedItems:', error.message); wsState.dispensed = []; return; }
-    wsState.dispensed = (data || []).map(r => {
+    if (error) { console.warn('[workspace] loadDispensedItems:', error.message); stateOf(ctx).dispensed = []; return; }
+    stateOf(ctx).dispensed = (data || []).map(r => {
         const qty   = Number(r.quantity ?? 1);
         const price = Number(r.unit_price ?? 0);
         return {
@@ -526,6 +541,7 @@ async function loadDispensedItems(ctx) {
 // paintPrescriptions: empty-state + one row per dispensed line with a Void
 // action. Free-text item name rendered via h() text node (auto-escaped).
 function paintDispensed(ctx) {
+    if (wsState.ctx && ctx && wsState.ctx !== ctx) return;   // CABINET_FIX_V1_R2 — рисует только открытая строка (данные в wsState — её)
     const listEl = ctx.container?.querySelector('[data-dispensed-list]');
     if (!listEl) return;
     clear(listEl);
@@ -1237,6 +1253,7 @@ function rtabBtn(ctx, id, label) {
 
 // Repaint the active right-column tab body.
 function paintRtab(ctx) {
+    if (wsState.ctx && ctx && wsState.ctx !== ctx) return;   // CABINET_FIX_V1_R2 — рисует только открытая строка (данные в wsState — её)
     const body = ctx.container.querySelector('[data-rtab-body]');
     if (!body) return;
     clear(body);
@@ -1322,10 +1339,10 @@ async function resolveWsDoctorId(ctx) {
 async function openHospitalizationRequestModal(ctx) {
     const patientId = ctx.patient?.id;
     if (!patientId) { toast('Нет контекста пациента.', 'fail'); return; }
+    const dxList = wsState.payload?.diagnoses || [];   // CABINET_FIX_V1_R2 — диагнозы ЭТОЙ строки, до ожидания
     const doctorId = await resolveWsDoctorId(ctx);
 
     const ccEl = ctx.container?.querySelector('.a4-input[data-field="chief_complaint"]');
-    const dxList = wsState.payload?.diagnoses || [];
     const mainDx = dxList.find(d => d.type === 'main') || dxList[0] || null;
 
     const overlay = h('div', { class: 'modal', style: { zIndex: '140' } });
@@ -1657,9 +1674,12 @@ function noteInRecommendations(ctx, html) {
 // services join service_types), bucketed by type into Services / Labs /
 // Diagnostics. Lab results, when present, fold under the matching order.
 // ---------------------------------------------------------------------------
-async function loadPatientEmr(patient) {
+export async function loadPatientEmr(patient, ctx = null) {   // CABINET_FIX_V1_R2 — экспорт для проверки
+    // CABINET_FIX_V1_R2 (ревью п. 4) — ответ пишется в состояние СВОЕЙ строки (stateOf):
+    // поздний ответ строки, которая не открыта (wsState.ctx !== ctx), не задевает открытую.
+    const st = ctx ? stateOf(ctx) : wsState;
     const patientId = patient?.id || patient?.patientId;
-    if (!patientId) { wsState.emr = { services: [], labs: [], diagnostics: [] }; return; }
+    if (!patientId) { st.emr = { services: [], labs: [], diagnostics: [] }; return; }
     const { data, error } = await supabase
         .from('visit_services')
         .select(`
@@ -1674,7 +1694,7 @@ async function loadPatientEmr(patient) {
         .limit(200);
     if (error) {
         console.warn('[workspace EMR] load failed:', error.message);
-        wsState.emr = { services: [], labs: [], diagnostics: [] };
+        (ctx ? stateOf(ctx) : wsState).emr = { services: [], labs: [], diagnostics: [] };
         return;
     }
     const rows = (data || []).map(r => ({
@@ -1704,7 +1724,7 @@ async function loadPatientEmr(patient) {
         else if (isDiagnostic(r.typeName))      diagnostics.push(r);
         else                                    services.push(r);
     }
-    wsState.emr = { services, labs, diagnostics };
+    (ctx ? stateOf(ctx) : wsState).emr = { services, labs, diagnostics };
 }
 
 function paintEmr() {
@@ -2080,12 +2100,13 @@ async function fillServiceConclusion(body, row) {
         }, 'Черновик (не подписан)'));
     }
     const f = latest.fields || {};
+    const _dxF = dxParts(f.primary_diagnosis, payload && payload.diagnoses).full;   // CABINET_FIX_V1_R2 — код больше не в поле врача
     body.append(
         snapshotKv('Жалобы',            f.chief_complaint   || '—', true),
         snapshotKv('Анамнез',           f.hpi               || '—', true),
         snapshotKv('Осмотр',            f.physical_exam     || '—', true),
         h('div', { class: 'row', style: { gap: '12px', marginTop: '6px' } },
-            h('div', { style: { flex: 2 } }, snapshotKv('Основной диагноз', f.primary_diagnosis || '—')),
+            h('div', { style: { flex: 2 } }, snapshotKv('Основной диагноз', _dxF || '—')),
             h('div', { style: { flex: 1 } }, snapshotKv('МКБ-10',           f.icd10             || '—')),
         ),
         h('div', { class: 'row', style: { gap: '12px' } },
@@ -2096,7 +2117,7 @@ async function fillServiceConclusion(body, row) {
     const _parts = [];
     /* i18n-exempt-start: HTML сводки уходит В ДОКУМЕНТ, не в интерфейс */
     if (f.physical_exam)        _parts.push('Осмотр: ' + esc(f.physical_exam));
-    if (f.primary_diagnosis)    _parts.push('Диагноз: ' + esc(f.primary_diagnosis));
+    if (_dxF)                   _parts.push('Диагноз: ' + esc(_dxF).replace(/\n/g, '; '));
     if (f.recommendations_text) _parts.push('Рекомендации: ' + esc(f.recommendations_text));
     /* i18n-exempt-end */
     return { html: _parts.length ? '<div>' + _parts.join('. ') + '</div>' : null };
@@ -2406,7 +2427,8 @@ export function applyFields(ctx, fields, opts = {}) {
             // different clinician on the same tenant, so any markup MUST be sanitized
             // before it re-enters the live DOM — otherwise a stored SOAP field is a
             // stored-XSS sink. (STORED_XSS_HARDEN_V1)
-            if (/<[a-z!\/]/i.test(v)) el.innerHTML = sanitizeRichHtml(v); else el.textContent = v;
+            // CABINET_FIX_V1_R2 — opts.sanitized: значение уже очищено (шаблон: и текст поля, и шаблон прошли sanitizeRichHtml).
+            if (/<[a-z!\/]/i.test(v)) el.innerHTML = opts.sanitized ? v : sanitizeRichHtml(v); else el.textContent = v;
         } else {
             el.value = fields[k];
         }
@@ -2466,7 +2488,16 @@ const ownPayload = (p, vsId) => { if (p && typeof p === 'object') PAYLOAD_LINE.s
 
 /** Начать приём строки: сбросить состояние прежнего и запомнить, чей он. Экспорт — для проверки. */
 export function activateWorkspace(ctx) {
+    parkWorkspace();                   // CABINET_FIX_V1_R2 — состояние прежней строки уходит с ней
     wsState.ctx = ctx;                 // WS_PASTE_V1 — target for pasting results from the popup
+    // CABINET_FIX_V1_R2 — панели кабинета КЭШИРУЮТСЯ (admin.js: открытая строка
+    // показывается снова без перерисовки). Возврат к строке A после строки B
+    // оставлял состояние B (тип документа, записи, разделы) под листом A. Любое
+    // касание листа A сначала возвращает ей её состояние (resumeWorkspace).
+    if (ctx && ctx.container && typeof ctx.container.addEventListener === 'function' && !ctx.__resumeWired) {
+        ctx.__resumeWired = true;
+        for (const ev of ['pointerdown', 'focusin', 'keydown']) ctx.container.addEventListener(ev, () => resumeWorkspace(ctx), true);
+    }
     // Reset the per-workspace cache so a navigation away + back can't show
     // someone else's history while we re-hydrate.
     wsState.payload = null;
@@ -2482,6 +2513,40 @@ export function activateWorkspace(ctx) {
     wsState.wsDoctorKnown = false;      // DOC_PHONE_SOURCE_V1 — was a consultation doctor resolved?
     wsState.docType = 'conclusion';     // DOCTYPE_FROM_DOCUMENTS_V1 — reset per consultation
     wsState.diagImages = [];            // DIAG_IMAGES_V1
+    wsState.recommendations = [];       // CABINET_FIX_V1_R2 — рекомендации прежнего пациента не переезжают
+    wsState.emr = null;
+    wsState.emrFilter = 'all';
+    wsState.dispensed = [];
+}
+
+// CABINET_FIX_V1_R2 — всё, что wsState держит ПРО ОДНУ СТРОКУ. Уходя к другой
+// строке, кабинет откладывает это в ctx строки (parkWorkspace), возвращаясь —
+// достаёт (resumeWorkspace). Поздние ответы сервера для строки, которая сейчас
+// не открыта, в wsState не пишутся (проверка wsState.ctx !== ctx).
+const WS_PER_LINE = ['payload', 'payloadVs', 'saved', 'docType', 'docSections', 'docPhone', 'emr', 'emrFilter',
+    'diagImages', 'blank', 'recommendations', 'rtab', 'docZoom', 'wsDoctorPhone', 'sectionOrder', 'docDoctorInfo',
+    'wsDoctorKnown', 'freeSeq', 'dispensed', 'lastA4', '_focusField'];
+function parkWorkspace() {
+    const c = wsState.ctx;
+    if (!c) return;
+    const st = {};
+    for (const k of WS_PER_LINE) st[k] = wsState[k];
+    c.__wsState = st;
+}
+/** Вернуть открытой строке её состояние. Экспорт — для проверки. */
+export function resumeWorkspace(ctx) {
+    if (!ctx || wsState.ctx === ctx) return false;
+    parkWorkspace();
+    wsState.ctx = ctx;
+    const st = ctx.__wsState;
+    if (st) for (const k of WS_PER_LINE) wsState[k] = st[k];
+    // записи, ответ на которые пришёл, пока строка не была открыта, загружаются сейчас
+    if (!ctx.__hydrated && ctx.visitServiceId && !wsState.payload) hydrateWorkspace(ctx);
+    // ответ «вид услуги», пришедший, пока строка не была открыта, доезжает сейчас
+    if (ctx.pendingAutoType) { const t = ctx.pendingAutoType; ctx.pendingAutoType = null; if (!ctx.docTypeSaved && wsState.docType !== t) switchDocType(ctx, t); }
+    // то, что пришло, пока строка была отложена, — дорисовать
+    try { paintRecommendations(ctx); paintDispensed(ctx); } catch (e) { /* дорисуется при следующем действии */ }
+    return true;
 }
 
 async function readPayload(ctx) {
@@ -2559,6 +2624,7 @@ async function hydrateWorkspace(ctx) {
     try {
         const payload = await loadLinePayload(ctx);   // CABINET_FIX_V1_R1 — поздний ответ чужой строки отбрасывается
         if (!payload) return;
+        ctx.__hydrated = true;   // CABINET_FIX_V1_R2 — иначе resumeWorkspace загрузит записи при возврате к строке
         wsState.diagImages = Array.isArray(payload.diagImages) ? payload.diagImages.slice() : [];   // DIAG_IMAGES_V1 — restore uploaded images
         // CABINET_FIX_V1_TPL — тип документа — тот, с которым его сохранили: врач
         // переключил тип, вставил шаблон, сохранил — и при следующем открытии видит
@@ -2589,6 +2655,7 @@ async function hydrateWorkspace(ctx) {
 // ---------------------------------------------------------------------------
 // RX_IN_FORM_V1 — render prescriptions as a read-only table on the editable sheet.
 function paintRxDoc(ctx) {
+    if (wsState.ctx && ctx && wsState.ctx !== ctx) return;   // CABINET_FIX_V1_R2 — рисует только открытая строка (данные в wsState — её)
     const els = ctx.container ? ctx.container.querySelectorAll('[data-rx-doc]') : null;
     if (!els || !els.length) return;
     const list = (wsState.payload && wsState.payload.prescriptions || []).filter(r => r && r.name);
@@ -2616,6 +2683,7 @@ function paintRxDoc(ctx) {
 }
 
 function paintPrescriptions(ctx) {
+    if (wsState.ctx && ctx && wsState.ctx !== ctx) return;   // CABINET_FIX_V1_R2 — рисует только открытая строка (данные в wsState — её)
     try { setTimeout(() => renderBlank(ctx), 0); } catch (e) {}   // WYSIWYG_BLANK_V1
     try { paintRxDoc(ctx); } catch (e) {}   // RX_IN_FORM_V1
     const listEl = ctx.container?.querySelector('[data-prescriptions-list]');
@@ -2993,8 +3061,10 @@ async function removePrescription(ctx, index) {
 // current patient. The doctor adds entries via the Refer-to panel on the right;
 // the list re-renders here in the Plan block as well as on the patient card.
 // ---------------------------------------------------------------------------
-async function loadRecommendations(ctx) {
-    if (!ctx.patient?.id) { wsState.recommendations = []; return; }
+export async function loadRecommendations(ctx) {   // CABINET_FIX_V1_R2 — экспорт для проверки
+    // CABINET_FIX_V1_R2 (ревью п. 4) — рекомендации пишутся в состояние СВОЕЙ строки;
+    // строка, которая уже не открыта (wsState.ctx !== ctx), открытую не задевает.
+    if (!ctx.patient?.id) { stateOf(ctx).recommendations = []; return; }
     console.debug('[workspace] loadRecommendations for patient', ctx.patient.id);
     let { data, error } = await supabase
         .from('recommended_services')
@@ -3009,7 +3079,7 @@ async function loadRecommendations(ctx) {
             .order('created_at', { ascending: false });
         if (flat.error) {
             console.error('[workspace recs] flat select also failed:', flat.error);
-            wsState.recommendations = [];
+            stateOf(ctx).recommendations = [];
             if (/relation .* does not exist/i.test(flat.error.message) ||
                 /could not find the table/i.test(flat.error.message) ||
                 /schema cache/i.test(flat.error.message)) {
@@ -3022,7 +3092,7 @@ async function loadRecommendations(ctx) {
         data = flat.data;
     }
     console.debug(`[workspace] recommendations loaded: ${data?.length || 0}`);
-    wsState.recommendations = (data || []).map(r => ({
+    stateOf(ctx).recommendations = (data || []).map(r => ({
         ...r,
         __service_name: r.services?.name || r.service_name || '—',
         __doctor_name:  r.users?.full_name || r.recommended_by_name || '(unknown)',
@@ -3031,6 +3101,7 @@ async function loadRecommendations(ctx) {
 }
 
 function paintRecommendations(ctx) {
+    if (wsState.ctx && ctx && wsState.ctx !== ctx) return;   // CABINET_FIX_V1_R2 — рисует только открытая строка (данные в wsState — её)
     try { setTimeout(() => renderBlank(ctx), 0); } catch (e) {}   // WYSIWYG_BLANK_V1
     // PAPER_RECS_DUAL_V1 — «Рекомендации» card now lives in BOTH the side panel and the
     // document tools; paint every list instance (querySelector only found the first).
@@ -3149,6 +3220,7 @@ function openPatientDoc(ctx, d) {
 }
 
 function paintHistoryList(ctx) {
+    if (wsState.ctx && ctx && wsState.ctx !== ctx) return;   // CABINET_FIX_V1_R2 — рисует только открытая строка (данные в wsState — её)
     const body = ctx.container.querySelector('[data-history-body]');
     if (!body) return;
     const history = wsState.payload?.history || [];
@@ -3236,12 +3308,21 @@ function historyRow(item, isFirst, ctx, originalIdx) {
     return row;
 }
 
+// CABINET_FIX_V1_R2 — «Диагноз» записи истории: код записи (icd10) с названием
+// из диагнозов строки и текст врача (код в поле врача больше не пишется).
+function entryDx(f) {
+    const ff = f || {};
+    const code = String(ff.icd10 || '').trim();
+    const list = (wsState.payload && wsState.payload.diagnoses || []).filter((d) => code && d && d.code === code);
+    const parts = dxParts(ff.primary_diagnosis, list);
+    return parts.full || (code || '');
+}
 function historyMeta(item) {
     if (item.kind === 'signed') {
         return {
             icon: 'Check', bg: 'var(--ok-50)', fg: 'var(--ok-700)',
             title: item.byName ? trf('Подписано · {name} и завершено', { name: item.byName }) : tr('Подписано и завершено'),
-            subtitle: (item.fields?.primary_diagnosis || '').trim() || null,
+            subtitle: entryDx(item.fields).split('\n')[0] || null,   // CABINET_FIX_V1_R2
         };
     }
     if (item.kind === 'referral') {
@@ -3297,7 +3378,28 @@ const DOC_SECTIONS_DEFAULT = [];   // SECTIONS_ON_DEMAND_V1 — EVERY section (i
 function ensureDocSections() { if (!wsState.docSections) wsState.docSections = new Set(DOC_SECTIONS_DEFAULT); }
 function wsSectionOn(sec) { return wsState.docSections ? wsState.docSections.has(sec) : DOC_SECTIONS_DEFAULT.includes(sec); }
 function wsAddSection(ctx, sec) { ensureDocSections(); wsState.docSections.add(sec); syncSections(ctx); }
-function wsRemoveSection(ctx, sec) { ensureDocSections(); wsState.docSections.delete(sec); syncSections(ctx); }
+/**
+ * CABINET_FIX_V1_R2 (ревью 2, п. 9) — «×» У РАЗДЕЛА С ТЕКСТОМ СПРАШИВАЕТ.
+ * Убранный раздел не сохраняется и не печатается: «×» молча убирал написанное
+ * с бумаги и из записи. Теперь: «Удалить текст раздела «…»?» — «Да» стирает
+ * текст и убирает раздел, «Нет» — раздел остаётся открытым, текст цел.
+ * Пустой раздел убирается без вопроса. Экспорт — для проверки.
+ */
+export function wsRemoveSection(ctx, sec) {
+    const def = DOC_SECTIONS.find((d) => d.sec === sec);
+    const el = def && ctx && ctx.container && ctx.container.querySelector('.a4-input[data-field="' + def.field + '"]');
+    if (el && textOf(el.innerHTML)) {
+        if (!confirm(trf('Удалить текст раздела «{name}»?', { name: tr(def.label) }))) {
+            if (!wsSectionOn(sec)) wsAddSection(ctx, sec);
+            return false;
+        }
+        el.innerHTML = '';
+        wsState.saved = false;
+        try { resetSaveBtn(ctx); } catch (e) { /* кнопка нарисуется позже */ }
+    }
+    ensureDocSections(); wsState.docSections.delete(sec); syncSections(ctx);
+    return true;
+}
 // WS_EXAM_AND_FREE_V1 — СВОЙ РАЗДЕЛ ПРИЁМА.
 //
 // Ключи пары: free_N__title (имя, которое дал врач) и free_N (текст). Оба —
@@ -3345,6 +3447,10 @@ function wsRemoveFreeSection(ctx, id) {
     const host = ctx.container && ctx.container.querySelector('[data-free-secs]');
     const box = host && host.querySelector('[data-sec="free_' + id + '"]');
     if (!box) return;
+    // CABINET_FIX_V1_R2 (ревью 2, п. 9) — свой раздел с текстом тоже спрашивает.
+    const txt = box.querySelector('.a4-input[data-field="free_' + id + '"]');
+    const ttl = box.querySelector('[data-field="free_' + id + '__title"]');
+    if (txt && textOf(txt.innerHTML) && !confirm(trf('Удалить текст раздела «{name}»?', { name: String((ttl && ttl.value) || '').trim() || tr('Свой раздел') }))) return;
     box.remove();
     wsState.saved = false;
     try { resetSaveBtn(ctx); } catch (e) { /* кнопка нарисуется позже */ }
@@ -3434,7 +3540,7 @@ async function handleSave(ctx, btnEl) {
         return;
     }
     if (!await handleSaveDraft(ctx, { silent: true })) return;  // handleSaveDraft toasts on failure
-    wsState.saved = true;
+    stateOf(ctx).saved = true;   // CABINET_FIX_V1_R2 — «сохранено» этой строки, не открытой после ожидания
     if (btnEl) { btnEl.textContent = ''; btnEl.appendChild(Icon('Check', { size: 14 })); btnEl.appendChild(document.createTextNode(' Сохранено ✓')); }
     toast('Документ сохранён', 'ok');
 }
@@ -3447,7 +3553,7 @@ async function tryFinish(ctx) {
     if (!wsState.saved) {
         const btn = ctx.container ? ctx.container.querySelector('[data-save-btn]') : null;
         try { await handleSave(ctx, btn); } catch (e) { /* handleSave/handleSaveDraft уже показали ошибку */ }
-        if (!wsState.saved) return;   // не сохранилось (пустые обязательные поля / сбой) — остаёмся в приёме
+        if (!stateOf(ctx).saved) return;   // CABINET_FIX_V1_R2 — своей строки   // не сохранилось (пустые обязательные поля / сбой) — остаёмся в приёме
     }
     await handleSignFinalize(ctx);
 }
@@ -3477,6 +3583,7 @@ const ICD_SEED = [
 /* i18n-exempt-end */
 
 function paintDiagnoses(ctx, opts = {}) {
+    if (wsState.ctx && ctx && wsState.ctx !== ctx) return;   // CABINET_FIX_V1_R2 — рисует только открытая строка (данные в wsState — её)
     const list = ctx.container?.querySelector('[data-dx-list]');
     const items = wsState.payload?.diagnoses || [];
     const countEl = ctx.container?.querySelector('[data-dx-count]');
@@ -3501,69 +3608,53 @@ function paintDiagnoses(ctx, opts = {}) {
 }
 
 /**
- * CABINET_FIX_V1_DIAG — строка «Диагноз» (primary_diagnosis) и основной код МКБ-10.
+ * CABINET_FIX_V1_R2 (ревью 2, п. 2 и 8) — КОД МКБ-10 И ТЕКСТ ВРАЧА — РАЗНЫЕ УЗЛЫ.
  *
- * Строку переписывали ВСЕГДА: есть основной диагноз — «код — название», нет —
- * пусто. Но та же строка — «Заключение» бланка диагностики, и открытие
- * сохранённого документа (hydrate → paintDiagnoses) стирало набранное
- * заключение у каждого исследования без кода МКБ. Теперь:
- *   • keep (открытие документа): сохранённый текст сильнее — код встаёт только
- *     в пустую строку;
- *   • выбран основной диагноз — строка получает его, как прежде, и помнит, что
- *     это текст от кода (data-auto-dx);
- *   • основного диагноза нет — стирается только то, что строка получила от
- *     кода, а не то, что набрал врач.
+ * Строка «Диагноз» (primary_diagnosis) — это ТЕКСТ ВРАЧА: и «Диагноз» приёма, и
+ * «Заключение» диагностики. Код в неё больше не пишется вовсе: прежде выбор
+ * основного диагноза заменял набранное («N28.9 — …» вместо текста), ревью 1
+ * вставляло код первой строкой и узнавало его потом по ТЕКСТУ — а имя с «"»
+ * (миграция 106: «Болезнь "кленового сиропа"») сохранялось как &quot;, Chrome
+ * делил строки <div>'ами, и код не узнавался: при снятии он оставался, при
+ * смене типа и сопутствующем диагнозе текст врача стирался.
+ *
+ * Теперь основной диагноз берётся из списка диагнозов приёма и рисуется на
+ * бланке СВОИМ узлом (data-dx-auto, не редактируется); в печать и архив он идёт
+ * первой строкой перед текстом врача (buildBlankData: dxAuto / dxText / dx).
+ * Выбор, смена и снятие кода текст врача не трогают никогда.
+ *
+ * keep (открытие документа): записи до ревью 2 хранили код ВНУТРИ строки — он
+ * убирается из неё, если первая строка (по <br> или по <div>) после разбора
+ * сущностей совпадает с основным диагнозом; иначе строка не трогается.
  * Экспорт — только для поведенческой проверки.
  */
-export function applyDxBand(band, main, { keep = false, preserve = false } = {}) {
-    if (!band) return;
-    const auto = main ? `${main.code} — ${main.name}` : '';
-    // CABINET_FIX_V1_R1 (ревью п. 5) — у ДИАГНОСТИКИ эта строка — «Заключение»
-    // врача: код МКБ-10 его не затирает, а встаёт первой строкой над ним; смена
-    // кода меняет только эту строку, снятие — убирает только её (data-auto-dx).
-    if (preserve) {
-        const html = String(band.innerHTML || '');
-        const marked = band.getAttribute('data-auto-dx');
-        const mHtml = marked != null ? escapeHtml(marked) : null;
-        let rest = html;
-        if (mHtml != null) {
-            if (rest === mHtml) rest = '';
-            else if (rest.startsWith(mHtml + '<br>')) rest = rest.slice(mHtml.length + 4);
-        }
-        const aHtml = escapeHtml(auto);
-        if (keep) {
-            // открытие документа: код уже стоит первой строкой — только запомнить это
-            if (auto && (html === aHtml || html.startsWith(aHtml + '<br>'))) band.setAttribute('data-auto-dx', auto);
-            else if (auto && !textOf(html)) { band.innerHTML = aHtml; band.setAttribute('data-auto-dx', auto); }
-            return;
-        }
-        if (auto) { band.innerHTML = rest ? aHtml + '<br>' + rest : aHtml; band.setAttribute('data-auto-dx', auto); }
-        else { band.innerHTML = rest; band.removeAttribute('data-auto-dx'); }
-        return;
-    }
-    const text = String(band.textContent || '');
-    if (auto) {
-        if (keep && text.trim() && text !== auto) return;
-        band.innerHTML = auto;
-        band.setAttribute('data-auto-dx', auto);
-        return;
-    }
-    const marked = band.getAttribute('data-auto-dx');
-    if (marked != null && text === marked) {
-        band.innerHTML = '';
-        band.removeAttribute('data-auto-dx');
-    }
+const DX_ENTITY = { '&quot;': '"', '&#39;': "'", '&#x27;': "'", '&amp;': '&', '&lt;': '<', '&gt;': '>', '&nbsp;': ' ' };
+const dxPlain = (html) => String(html || '').replace(/<[^>]*>/g, '').replace(/&(quot|#39|#x27|amp|lt|gt|nbsp);/g, (m) => DX_ENTITY[m]).replace(/\s+/g, ' ').trim();
+function dxSplitFirstLine(html) {
+    const s = String(html || '');
+    const div = /^\s*<div>([\s\S]*?)<\/div>/i.exec(s);
+    if (div) return { first: div[1], rest: s.slice(div[0].length) };
+    const br = /<br\s*\/?>/i.exec(s);
+    if (br) return { first: s.slice(0, br.index), rest: s.slice(br.index + br[0].length) };
+    return { first: s, rest: '' };
+}
+export function applyDxBand(band, main, { keep = false } = {}) {
+    if (!band || !keep || !main) return;
+    const auto = dxPlain(`${main.code} — ${main.name}`);
+    const { first, rest } = dxSplitFirstLine(band.innerHTML);
+    if (dxPlain(first) === auto) band.innerHTML = rest;
 }
 
-// Mirror the main diagnosis into the legacy primary_diagnosis band + icd10.
-function syncDiagnosisToDoc(ctx, opts = {}) {
+// Mirror the main diagnosis into the hidden icd10 control and open «Диагноз».
+// Экспорт — для поведенческой проверки (CABINET_FIX_V1_R2).
+export function syncDiagnosisToDoc(ctx, opts = {}) {
     try { setTimeout(() => renderBlank(ctx), 0); } catch (e) {}   // WYSIWYG_BLANK_V1
     const main = (wsState.payload?.diagnoses || []).find(d => d.type === 'main');
     // DX_SAVE_FIX_V1 — the diagnosis section starts collapsed; collectFields skips collapsed
     // sections, so a picked diagnosis got dropped on save. Open the section when a dx is set.
     if (main) { ensureDocSections(); if (!wsState.docSections.has('diagnosis')) { wsState.docSections.add('diagnosis'); try { syncSections(ctx); } catch (e) {} } }
     const band = ctx.container?.querySelector('.a4-input[data-field="primary_diagnosis"]');
-    applyDxBand(band, main, { keep: !!opts.keepBand, preserve: wsState.docType === 'diag' });   // CABINET_FIX_V1_DIAG · CABINET_FIX_V1_R1 — у диагностики код не затирает «Заключение»
+    applyDxBand(band, main, { keep: !!opts.keepBand });   // CABINET_FIX_V1_DIAG · CABINET_FIX_V1_R2 — код в строку врача не пишется
     const icd = ctx.container?.querySelector('[data-field="icd10"]');
     if (icd && 'value' in icd) icd.value = main ? (main.code || '') : '';
 }
@@ -3876,7 +3967,16 @@ export function tplApply(ctx, t, profile = null) {
     const fields = {};
     const keys = tplTypeOf(dt).keys.concat((TPL_LEGACY_KEYS[Number(dt)] || []).map(([k]) => k));   // CABINET_FIX_V1_R1 — и старые ключи
     for (const k of keys) if (_clean[k] != null && tplHasText(_clean[k])) fields[k] = _clean[k];
-    applyFields(ctx, fields, { template: true });
+    // CABINET_FIX_V1_R2 (ревью п. 1) — шаблон НЕ ЗАТИРАЕТ написанное: в поле с
+    // текстом его текст дописывается после пустой строки. Одно правило на все
+    // поля шаблона — и разделы рода, и старые ключи («Описание», «Диагноз»,
+    // «Лабораторные»), которые прежде заменяли набранное врачом.
+    for (const k of Object.keys(fields)) {
+        const el = ctx.container && ctx.container.querySelector('.a4-input[data-field="' + k + '"]');
+        const cur = el ? String(el.innerHTML || '').trim() : '';
+        if (textOf(cur)) fields[k] = cur + '<br><br>' + fields[k];
+    }
+    applyFields(ctx, fields, { template: true, sanitized: true });
     wsState.saved = false;
     try { resetSaveBtn(ctx); } catch (e) { /* кнопка нарисуется позже */ }
     if (wsState.blank) { try { renderBlank(ctx); } catch (e) { /* бланк перерисуется позже */ } }
@@ -4233,6 +4333,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
 
 // --- Own services (payload.services[] — display-only additive key) --------
 function paintOwnServices(ctx) {
+    if (wsState.ctx && ctx && wsState.ctx !== ctx) return;   // CABINET_FIX_V1_R2 — рисует только открытая строка (данные в wsState — её)
     const list = ctx.container?.querySelector('[data-own-services-list]');
     const items = wsState.payload?.services || [];
     const countEl = ctx.container?.querySelector('[data-own-svc-count]');
@@ -4361,17 +4462,23 @@ async function pauseAndLeave(ctx) {
 // ---------------------------------------------------------------------------
 async function handleSaveDraft(ctx, opts = {}) {
     if (!ctx.visitServiceId) { toast('Услуга не привязана — откройте из «Мои услуги».', 'fail'); return false; }
+    // CABINET_FIX_V1_R2 (ревью 2, п. 3) — всё, что пишет черновик, берётся ДО
+    // первого ожидания: после него открытой может быть уже другая строка, и
+    // изображения / тип документа были бы её.
+    if (wsState.ctx !== ctx) { if (!opts.silent) toast(tr('Документ открыт в другой строке — вернитесь к нему и повторите.'), 'fail'); return false; }
     const fields = collectFields(ctx);
+    const diagImages = (wsState.diagImages || []).slice();   // DIAG_IMAGES_V1 — survive draft reopen
+    const docType = wsState.docType;   // CABINET_FIX_V1_TPL — тип документа открывается тем, каким сохранён
     const entry  = { kind: 'draft', savedAt: new Date().toISOString(), fields };
     const payload = await currentPayload(ctx);
     payload.current = fields;
-    payload.diagImages = (wsState.diagImages || []).slice();   // DIAG_IMAGES_V1 — survive draft reopen
-    payload.docType = wsState.docType;   // CABINET_FIX_V1_TPL — тип документа открывается тем, каким сохранён
+    payload.diagImages = diagImages;
+    payload.docType = docType;
     payload.history = payload.history.filter(e => e.kind !== 'draft');
     payload.history.push(entry);
     if (!await writePayload(ctx, payload)) return false;
     paintHistoryList(ctx);
-    if (wsState.rtab === 'drafts') paintRtab(ctx);
+    if (wsState.ctx === ctx && wsState.rtab === 'drafts') paintRtab(ctx);
     updateSavedMarker(ctx, trf('Сохранено · {time}', { time: shortTime(entry.savedAt) }));
     if (!opts.silent) toast('Черновик сохранён', 'ok');
     return true;
@@ -4391,22 +4498,49 @@ export function lostOnResign(prev, next) {
     const n = next || {};
     return RESIGN_FIELDS.filter(([k]) => textOf(prev[k]) && !textOf(n[k])).map(([, label]) => tr(label));
 }
+/**
+ * CABINET_FIX_V1_R2 (ревью 2, п. 3) — ПОДПИСЬ СОБИРАЕТ ВСЁ ДО ПЕРВОГО ОЖИДАНИЯ.
+ *
+ * Было: поля — до ожидания, а снимок для архива, заключение визита, тип,
+ * изображения и рецепты — ПОСЛЕ записи строки. Пока запись была «в пути»,
+ * врач открывал строку другого пациента, и в архив и визит пациента A
+ * уходили шапка, рецепты и заключение пациента B.
+ *
+ * Теперь из открытой строки и КОПИИ её записей сразу собираются: поля, тип,
+ * изображения, снимок документа (docSnapshot), заключение визита, номер
+ * визита, история подписей. Дальше — только вопросы врачу (синхронные) и
+ * запись собранного. Подпись не из открытой строки или до загрузки её записей
+ * отказывает словами — и ничего не пишет. Экспорт signDocument — для проверки.
+ */
 async function handleSignFinalize(ctx) {
     if (!ctx.visitServiceId) { toast('Услуга не привязана — откройте из «Мои услуги».', 'fail'); return; }
+    if (wsState.ctx !== ctx) { toast(tr('Документ открыт в другой строке — вернитесь к нему и повторите.'), 'fail'); return; }
+    if (!wsState.payload || wsState.payloadVs !== ctx.visitServiceId || PAYLOAD_LINE.get(wsState.payload) !== Number(ctx.visitServiceId)) {
+        toast(tr('Документ ещё загружается — подождите секунду и повторите.'), 'fail'); return;
+    }
     const fields = collectFields(ctx);
+    const docType = wsState.docType === 'diag' ? 'diag' : 'conclusion';
     // CABINET_FIX_V1_R1 (ревью п. 1) — подписанный документ содержит всё, что
     // написано: текст, которого бланк не показывает, сначала переносится или удаляется.
-    const _refusal = signRefusal(fields, wsState.docType);
+    const _refusal = signRefusal(fields, docType);
     if (_refusal) { toast(_refusal, 'fail'); return; }
     // CLINICAL_SIGN_GATE_V1 — warn before signing an empty document.
     const _hasText = [fields.chief_complaint, fields.hpi, fields.physical_exam, fields.instrumental_text, fields.primary_diagnosis, fields.therapy_text, fields.recommendations_text, fields.conclusion_text, fields.labs_text]   // CABINET_FIX_V1_R1 — + заключение и лабораторные
-        .some(x => String(x || '').replace(/<[^>]*>/g, '').trim());
+        .some(x => String(x || '').replace(/<[^>]*>/g, '').trim()) || !!_mainDxText();   // CABINET_FIX_V1_R2 — основной диагноз в документе — тоже текст
     const _actor = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || {};
+    // Снимок этой строки — ДО любых ожиданий (см. выше).
+    const payload = ownPayload(JSON.parse(JSON.stringify(wsState.payload)), ctx.visitServiceId);
+    if (!Array.isArray(payload.history)) payload.history = [];
+    const diagImages = (wsState.diagImages || []).slice();
+    const _base = buildBlankData(ctx);
+    const _docData = docType === 'diag' ? diagDocData(_base, { editor: false, images: diagImages }) : Object.assign(_base, { __editor: false });   // = docSnapshot
+    const _conclText = String(_base.conclusionText || '').trim();
+    const visitId = ctx.visitId;
+    const serviceName = ctx.serviceName;
     // DOC_AMEND_AUDIT_V1 — re-signing an already-signed document creates a NEW version (the
     // prior signed entry stays in history). Only the original author or a clinic admin/owner
     // may amend; every version is stamped with its signer + timestamp.
-    const _pl = await currentPayload(ctx);   // CABINET_FIX_V1_R1 — история именно этой строки
-    const _prevSigned = (((_pl && _pl.history) || []).filter(e => e.kind === 'signed'));
+    const _prevSigned = payload.history.filter(e => e.kind === 'signed');   // CABINET_FIX_V1_R1 — история именно этой строки
     const _last = _prevSigned.length ? _prevSigned[_prevSigned.length - 1] : null;
     const _isOwner = _actor.is_super_admin === true || (_actor.is_admin === true && !!_actor.company_id);
     if (_last && _last.by && _last.by !== _actor.id && !_isOwner) {
@@ -4425,12 +4559,14 @@ async function handleSignFinalize(ctx) {
     const _lost = _last ? lostOnResign(_last.fields, fields) : [];
     if (_lost.length && !confirm(trf('В новой версии пусты разделы, которые были в подписанной: {list}. Подписать всё равно? Прежняя версия останется в истории.', { list: _lost.join(', ') }))) return;
     const entry  = { kind: 'signed', savedAt: new Date().toISOString(), fields, by: _actor.id || null, byName: _actor.full_name || '' };
-    const payload = await currentPayload(ctx);
     payload.current = fields;
-    payload.diagImages = (wsState.diagImages || []).slice();   // DIAG_IMAGES_V1
-    payload.docType = wsState.docType;   // CABINET_FIX_V1_TPL
+    payload.diagImages = diagImages;   // DIAG_IMAGES_V1
+    payload.docType = docType;   // CABINET_FIX_V1_TPL
     payload.history = payload.history.filter(e => e.kind !== 'draft');
     payload.history.push(entry);
+    // DOC_AMEND_AUDIT_V1 — attestation stamp on the archived snapshot (signer / when / version).
+    _docData.meta = { signedBy: _actor.full_name || '', signedAt: entry.savedAt, version: _prevSigned.length + 1 };
+    // ─── ниже только запись собранного: ни экран, ни wsState больше не читаются ───
     if (!await writePayload(ctx, payload, { status: 'completed' })) return;
 
     // CLINICAL_DOCTYPE_V1 — archive the signed document as a self-contained, render-ready
@@ -4441,14 +4577,10 @@ async function handleSignFinalize(ctx) {
     try {
         // CABINET_FIX_V1_R1 (ревью п. 6) — вид архива — по СОХРАНЁННОМУ типу документа:
         // «Приём» у строки отделения диагностики архивировался заключением диагностики.
-        const _isDiag       = wsState.docType === 'diag';
+        const _isDiag       = docType === 'diag';
         const _archiveType  = _isDiag ? 'diag' : 'protocol';
-        // CABINET_FIX_V1_DIAG / CABINET_FIX_V1_R1 — архив — тот же снимок, что экран и печать (docSnapshot).
-        const _docData = docSnapshot(ctx);   // DIAG_IMAGES_V1 — persist snapshots with the signed doc
-        // DOC_AMEND_AUDIT_V1 — attestation stamp on the archived snapshot (signer / when / version).
-        _docData.meta = { signedBy: _actor.full_name || '', signedAt: entry.savedAt, version: _prevSigned.length + 1 };
         const _archiveTitle = (_isDiag ? 'Заключение' : 'Протокол осмотра')
-            + (ctx.serviceName && ctx.serviceName !== '—' ? ' · ' + ctx.serviceName : '');
+            + (serviceName && serviceName !== '—' ? ' · ' + serviceName : '');
         // V3120_FIX (F2) — прежний протокол строки ОТЗЫВАЕТ сервер (не стирает):
         // пациент, визит и автор берутся на сервере со строки и из сессии.
         const { error: _archErr } = await supabase.rpc('visit_document_archive', {
@@ -4467,12 +4599,10 @@ async function handleSignFinalize(ctx) {
     // Тип заключения ставится по роду документа: диагностика — 'diagnostic',
     // приём — 'consultation'. По нему панель и понимает, что перед ней.
     try {
-        const _conclText = String((buildBlankData(ctx) || {}).conclusionText || '').trim();
-        if (ctx.visitId && _conclText) {
-            const _isDiag2 = wsState.docType === 'diag';   // CABINET_FIX_V1_R1 — по сохранённому типу
+        if (visitId && _conclText) {
             const { error: _cErr } = await supabase.from('visits')
-                .update({ conclusion: _conclText, conclusion_type: _isDiag2 ? 'diagnostic' : 'consultation' })
-                .eq('id', ctx.visitId);
+                .update({ conclusion: _conclText, conclusion_type: docType === 'diag' ? 'diagnostic' : 'consultation' })   // CABINET_FIX_V1_R1 — по сохранённому типу
+                .eq('id', visitId);
             // Молчать здесь нельзя: врач написал заключение, а в историю
             // болезни его никто не вставит — и узнается это у постели.
             if (_cErr) toast(trf('Заключение не записано в визит: {msg}', { msg: _cErr.message || '' }), 'fail');
@@ -4483,15 +4613,17 @@ async function handleSignFinalize(ctx) {
     // the patient leaves the queue. The visit only becomes "completed" once
     // every service on it is done — otherwise it stays in_progress so a
     // pending lab/diagnostic doesn't get prematurely closed out.
-    const visitCompleted = await syncVisitStatus(ctx.visitId);
+    const visitCompleted = await syncVisitStatus(visitId);
 
-    paintHistoryList(ctx);
+    paintHistoryList(ctx);   // CABINET_FIX_V1_R2 — рисует, только если строка открыта
     updateSavedMarker(ctx, trf('Подписано · {time}', { time: shortTime(entry.savedAt) }));
     toast(visitCompleted ? 'Документ подписан. Приём пациента завершён.' : 'Документ подписан. Услуга отмечена выполненной.');
 
-    // Bounce back to the My services list so the queue refreshes.
-    if (ctx.onNavigate) setTimeout(() => ctx.onNavigate('consultation'), 600);
+    // Bounce back to the My services list so the queue refreshes — только из этой строки.
+    if (ctx.onNavigate) setTimeout(() => { if (wsState.ctx === ctx) ctx.onNavigate('consultation'); }, 600);
 }
+/** CABINET_FIX_V1_R2 — подпись документа строки (кнопка «Подписать»). Экспорт — для проверки. */
+export const signDocument = (ctx) => handleSignFinalize(ctx);
 
 // Recompute the parent visit's status from its services. The visit is marked
 // 'completed' once every non-cancelled service on it is completed; while any
@@ -4573,7 +4705,7 @@ function openSnapshotModal(ctx, item) {
             snapshotKv('Анамнез',           f.hpi              || '—', true),
             snapshotKv('Осмотр',            f.physical_exam    || '—', true),
             h('div', { class: 'row', style: { gap: '12px', marginTop: '6px' } },
-                h('div', { style: { flex: '2' } }, snapshotKv('Основной диагноз', f.primary_diagnosis || '—')),
+                h('div', { style: { flex: '2' } }, snapshotKv('Основной диагноз', entryDx(f) || '—')),   // CABINET_FIX_V1_R2
                 h('div', { style: { flex: '1' } }, snapshotKv('МКБ-10',           f.icd10             || '—')),
             ),
             h('div', { class: 'row', style: { gap: '12px' } },
@@ -5032,6 +5164,7 @@ async function handlePrint(ctx) {
     // Pull fresh data so the printout reflects whatever's just been added.
     await currentPayload(ctx);   // CABINET_FIX_V1_R1 — записи именно этой строки
     await loadRecommendations(ctx);
+    if (wsState.ctx !== ctx) { toast(tr('Печать отменена: открыт документ другой строки.'), 'fail'); return; }   // CABINET_FIX_V1_R2 (ревью 2, п. 3) — после ожидания лист и wsState могли стать чужими
     try {
         const _dt = wsState.docType || 'conclusion';   // DOCTYPE_FROM_DOCUMENTS_V1
         // CABINET_FIX_V1_R1 (ревью п. 12) — печать — тот же снимок, что уходит в
@@ -5058,8 +5191,9 @@ async function handlePrint(ctx) {
 // before entering the on-screen modal AND the print-window HTML.
 async function openRecipeModal(ctx) {
     // Read fresh — payload may be null/stale at click time (mirrors handlePrint).
-    await currentPayload(ctx);   // CABINET_FIX_V1_R1 — записи именно этой строки
-    const items = (wsState.payload?.prescriptions || []);
+    // CABINET_FIX_V1_R2 (ревью 2, п. 3) — рецепт — из записей, которые вернулись для ЭТОЙ строки, а не из wsState.
+    const _rxPl = await currentPayload(ctx);   // CABINET_FIX_V1_R1 — записи именно этой строки
+    const items = ((_rxPl && _rxPl.prescriptions) || []);
     if (!items.length) {
         toast('Нет назначений для рецепта', 'info');
         return;
@@ -5349,12 +5483,25 @@ const _BLANK_FIELD_MAP = [
 ];
 function _blankStrip(x) {
     return String(x || '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li)>/gi, '\n')
-        .replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+        .replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')   // CABINET_FIX_V1_R2 — «"» в названии МКБ
         .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\n{3,}/g, '\n\n').trim();
 }
-function _mainDxText() {
-    const m = (wsState.payload && wsState.payload.diagnoses || []).find(d => d && d.type === 'main');
+function _mainDxText(diagnoses = wsState.payload && wsState.payload.diagnoses) {
+    const m = (diagnoses || []).find(d => d && d.type === 'main');
     return m ? ((m.code ? m.code + ' — ' : '') + (m.name || '')).trim() : '';
+}
+/**
+ * CABINET_FIX_V1_R2 (ревью 2, п. 2) — «Диагноз» строки целиком: основной
+ * диагноз (код — название) своей строкой и текст врача. Запись до ревью 2,
+ * где код стоял первой строкой поля врача, не даёт его дважды.
+ * → { auto, text, full }. Экспорт — для проверки.
+ */
+export function dxParts(primaryDiagnosis, diagnoses) {
+    const auto = _mainDxText(diagnoses || []);
+    let text = _blankStrip(primaryDiagnosis);
+    const lines = text.split('\n');
+    if (auto && lines[0].replace(/\s+/g, ' ').trim() === auto.replace(/\s+/g, ' ').trim()) text = lines.slice(1).join('\n').trim();
+    return { auto, text, full: [auto, text].filter(Boolean).join('\n') };
 }
 /**
  * CABINET_FIX_V1_R1 (ревью п. 7) — кто подписывает документ: имя и специальность
@@ -5399,7 +5546,14 @@ function buildBlankData(ctx) {
     };
     data.complaint = _blankStrip(f.chief_complaint); data.hpi = _blankStrip(f.hpi);
     data.labs = _blankStrip(f.labs_text); data.instrumental = _blankStrip(f.instrumental_text);
-    data.exam = _blankStrip(f.physical_exam); data.dx = _blankStrip(f.primary_diagnosis) || _mainDxText();   // DX_SAVE_FIX_V1
+    data.exam = _blankStrip(f.physical_exam);
+    // CABINET_FIX_V1_R2 (ревью 2, п. 2) — «Диагноз» = основной диагноз своей
+    // строкой (dxAuto, рисуется отдельным узлом) + текст врача (dxText). В поле
+    // врача кода нет; запись до ревью 2 с кодом первой строкой не печатает его дважды.
+    const _dx = dxParts(f.primary_diagnosis, wsState.payload && wsState.payload.diagnoses);
+    data.dxAuto = _dx.auto;
+    data.dxText = _dx.text;
+    data.dx = _dx.full;   // DX_SAVE_FIX_V1
     data.icd10 = _blankStrip(f.icd10); data.therapy = _blankStrip(f.therapy_text);
     data.recsText = _blankStrip(f.recommendations_text);
     data.conclusionText = _blankStrip(f.conclusion_text);
@@ -5437,7 +5591,12 @@ export function diagDocData(base, { editor = false, images = [] } = {}) {
         doctorName: b.doctorName || '', doctorSpec: b.doctorSpec || '', service: b.service || '',
         radiologist: b.doctorName || '', radiologistSpec: b.doctorSpec || '', issueDate: b.issueDate || '',
         description: b.instrumental || '', conclusion: b.dx || '',
+        conclusionAuto: b.dxAuto || '', conclusionText: b.dxText != null ? b.dxText : (b.dx || ''),   // CABINET_FIX_V1_R2 — код отдельным узлом бланка
         images: (images || []).slice(),   // DIAG_IMAGES_V1
+        // CABINET_FIX_V1_R2 (ревью 2, п. 5) — рецепт и все диагнозы приёма: на
+        // бумаге и в архиве исследования (раньше терялись при подписи).
+        prescriptions: (b.prescriptions || []).slice(),
+        diagnoses: (b.diagnoses || []).slice(),
     };
 }
 function setBlankMode(ctx, on) {
@@ -5456,6 +5615,7 @@ function setBlankMode(ctx, on) {
     if (on) renderBlank(ctx);
 }
 function renderBlank(ctx) {
+    if (wsState.ctx && ctx && wsState.ctx !== ctx) return;   // CABINET_FIX_V1_R2 — рисует только открытая строка (данные в wsState — её)
     if (!wsState.blank) return;
     const wrap = ctx.container && ctx.container.querySelector('[data-blank-wrap]');
     if (!wrap || wrap.style.display === 'none') return;
@@ -5531,12 +5691,14 @@ async function _diagAddImages(ctx, fileList) {
     const files = [...(fileList || [])].filter(f => /^image\//.test(f.type));
     if (!files.length) return;
     const MAX = 12;
+    // CABINET_FIX_V1_R2 — снимки этой строки: список берётся до ожиданий.
+    const imgs = stateOf(ctx).diagImages || (stateOf(ctx).diagImages = []);
     for (const f of files) {
-        if ((wsState.diagImages || []).length >= MAX) { toast(trf('Максимум {n} изображений.', { n: MAX }), 'warn'); break; }
-        try { wsState.diagImages.push(await _compressImage(f, 1400, 0.82)); }
+        if (imgs.length >= MAX) { toast(trf('Максимум {n} изображений.', { n: MAX }), 'warn'); break; }
+        try { imgs.push(await _compressImage(f, 1400, 0.82)); }
         catch (e) { console.warn('[diag image]', e); toast('Не удалось обработать изображение.', 'fail'); }
     }
-    wsState.saved = false;
+    stateOf(ctx).saved = false;
     resetSaveBtn(ctx);
     renderBlank(ctx);
 }
@@ -5559,6 +5721,9 @@ function applyDocZoom(ctx) {
 
 function _wireBlankEditing(ctx, frame) {
     const doc = frame.contentDocument;
+    // CABINET_FIX_V1_R2 — события внутри iframe до листа кабинета не всплывают:
+    // касание бланка тоже возвращает строке её состояние.
+    for (const ev of ['pointerdown', 'focusin', 'keydown']) { try { doc.addEventListener(ev, () => resumeWorkspace(ctx), true); } catch (e) { /* без iframe — нечего */ } }
     // editor affordances injected by the parent (templates ship without scripts)
     const st = doc.createElement('style');
     st.textContent = '.sec{border:1px solid #e2e8f0;border-radius:8px;padding:9px 12px 10px;background:#fff;transition:border-color .12s,box-shadow .12s;}' +   // LINKED_SECTION_V1 — header + writing area = one block

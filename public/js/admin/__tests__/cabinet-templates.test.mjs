@@ -204,8 +204,10 @@ test('«Использовать» не стирает свои разделы �
 
 test('тип документа сохраняется с документом и открывается тем же — не выбранным по услуге', () => {
     const ws = code(WS_SRC);
-    const saves = ws.match(/payload\.docType = wsState\.docType;/g) || [];
+    // CABINET_FIX_V1_R2 — тип берётся вместе с полями до первого ожидания (const docType), потом пишется
+    const saves = ws.match(/payload\.docType = docType;/g) || [];
     assert.equal(saves.length, 2, 'тип документа сохраняют не и черновик, и подпись');
+    assert.equal((ws.match(/const docType = wsState\.docType(?: === 'diag' \? 'diag' : 'conclusion')?;/g) || []).length, 2, 'тип документа берётся не из открытой строки');
     // CABINET_FIX_V1_R1 — тип при открытии — savedDocType (и у старых записей без типа)
     assert.match(ws, /const _saved = savedDocType\(payload\);\s*if \(_saved\) \{ ctx\.docTypeSaved = true; if \(wsState\.docType !== _saved\) setDocType\(ctx, _saved\); \}/,
         'открытие не восстанавливает тип документа');

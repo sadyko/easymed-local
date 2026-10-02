@@ -752,7 +752,7 @@ function setVariant(type, key) {
 // (динамический import — разрешённый способ позвать соседний экран).
 async function openDocTemplatesModal() {
     try {
-        const { openTemplateLibraryModal } = await import('./service-workspace.js?v=cabr1');   // CABINET_FIX_V1_TPL — тот же штамп, что в admin.js · RX_TEMPLATES_V1 · CABINET_FIX_V1_R1
+        const { openTemplateLibraryModal } = await import('./service-workspace.js?v=cabr2');   // CABINET_FIX_V1_TPL — тот же штамп, что в admin.js · RX_TEMPLATES_V1 · CABINET_FIX_V1_R1 · CABINET_FIX_V1_R2 — cabr2
         openTemplateLibraryModal(null, { manage: true });
     } catch (e) {
         toast(trf('Не удалось открыть шаблоны: {msg}', { msg: (e && e.message) || '' }), 'fail');

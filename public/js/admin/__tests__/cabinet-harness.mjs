@@ -17,6 +17,11 @@ export class El {
         };
         if (this.tagName === 'TEMPLATE') this.content = new El('#fragment');
         if (this.tagName === 'IFRAME') this.contentDocument = fakeDocument();   // бланк кабинета пишет в iframe
+        // CABINET_FIX_V1_R2 — как в браузере: у списка без выбора значение — первый пункт.
+        if (this.tagName === 'SELECT') {
+            let v = '';
+            Object.defineProperty(this, 'value', { configurable: true, get() { const o = this.children.find((c) => c.tagName === 'OPTION'); return v !== '' || !o ? v : String(o.value || o.getAttribute('value') || ''); }, set(x) { v = String(x == null ? '' : x); } });
+        }
     }
     set className(v) { this.classList._s = new Set(String(v).split(/\s+/).filter(Boolean)); this.attrs.class = String(v); }
     get className() { return this.attrs.class || ''; }
@@ -99,5 +104,6 @@ export function installFakeDom() {
     };
     globalThis.confirm = (msg) => { CONFIRMS.push(String(msg)); return confirmAnswer; };
     globalThis.MutationObserver = class { observe() {} disconnect() {} };
+    globalThis.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} };   // CABINET_FIX_V1_R2 — лист приёма
     globalThis.requestAnimationFrame = (fn) => fn();
 }

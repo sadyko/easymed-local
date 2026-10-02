@@ -126,7 +126,8 @@ test('п. 1: подпись диагностики с невидимым тек�
     assert.equal(WS.signRefusal(f, 'conclusion'), null);
     const c = code(WS_SRC);
     const sign = c.slice(c.indexOf('async function handleSignFinalize('), c.indexOf('async function syncVisitStatus('));
-    assert.match(sign, /const _refusal = signRefusal\(fields, wsState\.docType\);\s*if \(_refusal\) \{ toast\(_refusal, 'fail'\); return; \}/, 'подпись не проверяет невидимый текст');
+    // CABINET_FIX_V1_R2 — тип берётся вместе с полями, до первого ожидания (docType)
+    assert.match(sign, /const _refusal = signRefusal\(fields, docType\);\s*if \(_refusal\) \{ toast\(_refusal, 'fail'\); return; \}/, 'подпись не проверяет невидимый текст');
     const print = c.slice(c.indexOf('async function handlePrint('), c.indexOf('async function openRecipeModal('));
     assert.match(print, /hiddenTextFor\(/, 'печать не предупреждает о невидимом тексте');
 });
@@ -186,31 +187,36 @@ test('п. 4 и 12: «Заключение» и «Осмотр» приёма —
     const print = c.slice(c.indexOf('async function handlePrint('), c.indexOf('async function openRecipeModal('));
     assert.match(print, /docSnapshot\(ctx, _dt\)/, 'печать собирает свои данные, а не снимок архива');
     const sign = c.slice(c.indexOf('async function handleSignFinalize('), c.indexOf('async function syncVisitStatus('));
-    assert.match(sign, /docSnapshot\(ctx\)/, 'архив собирает свои данные');
+    // CABINET_FIX_V1_R2 — архив — тот же снимок (buildBlankData → diagDocData / __editor:false),
+    // собранный до первого ожидания; поведенчески — cabinet-review-r2 п. 3
+    assert.match(sign, /const _docData = docType === 'diag' \? diagDocData\(_base, \{ editor: false, images: diagImages \}\) : Object\.assign\(_base, \{ __editor: false \}\);/, 'архив собирает свои данные');
+    const snap2 = c.slice(c.indexOf('export function docSnapshot('), c.indexOf('function buildBlankData('));
+    assert.match(snap2, /diagDocData\(base, \{ editor: false, images: wsState\.diagImages \|\| \[\] \}\)/);
+    assert.match(snap2, /base\.__editor = false;/);
 });
 
 test('п. 5: у диагностики МКБ-10 не затирает набранное «Заключение» и не стирает его при снятии кода', () => {
+    // CABINET_FIX_V1_R2 (ревью 2, п. 2) — при ЛЮБОМ типе код в строку врача не
+    // пишется: выбор, смена и снятие кода её не трогают (код — отдельный узел бланка).
     const band = (html) => { const e = new El('div'); e.innerHTML = html; return e; };
     const main = { code: 'N28.9', name: 'Болезнь почки' };
     const b = band('Эхопризнаков патологии нет');
-    WS.applyDxBand(b, main, { preserve: true });
-    assert.equal(b.innerHTML, 'N28.9 — Болезнь почки<br>Эхопризнаков патологии нет', 'код затёр «Заключение»');
-    WS.applyDxBand(b, { code: 'N20.0', name: 'Камни почки' }, { preserve: true });
-    assert.equal(b.innerHTML, 'N20.0 — Камни почки<br>Эхопризнаков патологии нет', 'смена кода не заменила прежний код');
-    WS.applyDxBand(b, null, { preserve: true });
+    WS.applyDxBand(b, main);
+    assert.equal(b.innerHTML, 'Эхопризнаков патологии нет', 'код затёр «Заключение»');
+    WS.applyDxBand(b, { code: 'N20.0', name: 'Камни почки' });
+    assert.equal(b.innerHTML, 'Эхопризнаков патологии нет', 'смена кода тронула «Заключение»');
+    WS.applyDxBand(b, null);
     assert.equal(b.innerHTML, 'Эхопризнаков патологии нет', 'снятие кода стёрло «Заключение»');
     const e = band('');
-    WS.applyDxBand(e, main, { preserve: true });
-    assert.equal(e.innerHTML, 'N28.9 — Болезнь почки');
-    WS.applyDxBand(e, null, { preserve: true });
-    assert.equal(e.innerHTML, '');
-    assert.match(code(WS_SRC), /applyDxBand\(band, main, \{ keep: !!opts\.keepBand, preserve: wsState\.docType === 'diag' \}\)/);
+    WS.applyDxBand(e, main);
+    assert.equal(e.innerHTML, '', 'код вписан в строку врача');
+    assert.match(code(WS_SRC), /applyDxBand\(band, main, \{ keep: !!opts\.keepBand \}\)/);
 });
 
 test('п. 6 и 7: вид архива — по сохранённому типу; подпись — один и тот же человек', () => {
     const c = code(WS_SRC);
     assert.ok(!/ctx\.deptKind === 'diagnostics'\) \|\| \(wsState\.docType === 'diag'\)/.test(c), 'вид архива снова зависит от отделения');
-    assert.match(c, /const _isDiag\s+= wsState\.docType === 'diag';/);
+    assert.match(c, /const _isDiag\s+= docType === 'diag';/);   // CABINET_FIX_V1_R2 — тип, взятый до первого ожидания
     assert.deepEqual(WS.docSigner({ doctorName: 'Каримов Алишер', doctorSpec: '' }, { full_name: 'Администратор', specialty: 'Терапевт' }),
         { doctorName: 'Каримов Алишер', doctorSpec: '' }, 'имя одного врача, специальность другого');
     assert.deepEqual(WS.docSigner({}, { full_name: 'Юсупова Нигора', specialty: 'Терапевт' }), { doctorName: 'Юсупова Нигора', doctorSpec: 'Терапевт' });

@@ -446,6 +446,39 @@ function flagN(f) { return (f === 'H' || f === 'L') ? f.toUpperCase() : 'N'; }
 // ---------------------------------------------------------------------------
 const CHEV_UP = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 15l-6-6-6 6"/></svg>';
 const CHEV_DN = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+// CABINET_FIX_V1_R2 (ревью 2, п. 2 и 8) — «Диагноз»: основной диагноз МКБ-10
+// своей строкой (data-dx-auto, не редактируется) и под ней текст врача
+// (data-field). Код больше не живёт внутри поля врача: снимок кабинета несёт
+// их раздельно (dxAuto / dxText), и ни выбор кода, ни «"» в названии, ни
+// строки Chrome текст врача не задевают. Старые снимки (только dx) — как было.
+function dxRows(d, txCls) {
+    const cls = txCls ? ` class="${txCls}"` : '';
+    if (d.dxText == null) return `<div class="dx-row">${d.icd10 ? `<span class="icd">${esc(d.icd10)}</span>` : ''}<span${cls} data-field="primary_diagnosis">${esc(d.dx)}</span></div>`;
+    const auto = d.dxAuto ? `<div class="dx-row"><span class="${txCls ? txCls + ' ' : ''}dx-auto" data-dx-auto="1" contenteditable="false" style="font-weight:700;">${esc(d.dxAuto)}</span></div>` : '';
+    return auto + `<div class="dx-row"${auto ? ' style="margin-top:3px;"' : ''}><span${cls} data-field="primary_diagnosis" style="white-space:pre-wrap;">${esc(d.dxText)}</span></div>`;
+}
+// CABINET_FIX_V1_R2 — «Заключение» исследования: так же — код своей строкой, текст врача отдельно.
+function diagConclusion(d) {
+    if (d.conclusionText == null) return `<p data-field="primary_diagnosis">${esc(d.conclusion)}</p>`;
+    return (d.conclusionAuto ? `<p class="dx-auto" data-dx-auto="1" contenteditable="false" style="font-weight:700;">${esc(d.conclusionAuto)}</p>` : '')
+        + `<p data-field="primary_diagnosis">${esc(d.conclusionText)}</p>`;
+}
+// CABINET_FIX_V1_R2 (ревью 2, п. 5) — рецепт и остальные диагнозы приёма на
+// бланке исследования: снимок диагностики их не нёс, и при подписи из
+// «Диагностики» назначенное и сопутствующие пропадали с бумаги и из архива.
+function diagRxDx(d, compact) {
+    const rx = (d.prescriptions || []).filter((r) => r && r.name);
+    const dx = (d.diagnoses || []).filter((x) => x && x.type !== 'main' && (x.code || x.name));
+    if (!rx.length && !dx.length) return '';
+    const fz = compact ? 12 : 13.5;
+    const head = (ru, uz) => compact
+        ? `<div class="secbar"><span class="ru">${ru}</span><span class="uz">· ${uz}</span></div>`
+        : `<div class="sec-h"><span class="ru" style="font-size:15px;font-weight:800;text-transform:uppercase;color:var(--accent);">${ru}</span><span class="uz" style="font-style:italic;color:var(--faint);">· ${uz}</span></div>`;
+    const td = 'padding:4px 6px;border-bottom:1px solid var(--line,#e3e6ec);text-align:left;vertical-align:top;';
+    const rxHtml = rx.length ? `<div class="sec" style="break-inside:avoid;">${head('Рецепт', 'Retsept')}<table style="width:100%;border-collapse:collapse;font-size:${fz}px;line-height:1.4;color:var(--ink-2);${compact ? '' : 'margin-left:11px;width:calc(100% - 11px);'}"><thead><tr>${['№', 'Препарат', 'Доза', 'Режим приёма', 'Длительность'].map((t) => `<th style="${td}font-weight:700;color:var(--muted);">${t}</th>`).join('')}</tr></thead><tbody>${rx.map((r, i) => `<tr><td style="${td}">${i + 1}</td><td style="${td}font-weight:700;color:var(--ink);">${esc(r.name)}${r.notes ? `<div style="font-weight:400;color:var(--muted);">${esc(r.notes)}</div>` : ''}</td><td style="${td}">${esc(r.dose || '—')}</td><td style="${td}">${esc(r.freq || '—')}</td><td style="${td}">${esc(r.dur || '—')}</td></tr>`).join('')}</tbody></table></div>` : '';
+    const dxHtml = dx.length ? `<div class="sec" style="break-inside:avoid;">${head('Сопутствующие диагнозы', 'Yondosh tashxislar')}<div style="${compact ? '' : 'padding-left:11px;'}font-size:${fz}px;line-height:1.45;color:var(--ink-2);">${dx.map((x) => `<div style="display:flex;gap:7px;align-items:baseline;margin-top:3px;">${x.code ? `<b style="color:var(--ink);">${esc(x.code)}</b>` : ''}<span>${esc(x.name || '')}</span>${x.typeLabel ? `<span style="margin-left:auto;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;opacity:.6;">${esc(x.typeLabel)}</span>` : ''}</div>`).join('')}</div></div>` : '';
+    return rxHtml + dxHtml;
+}
 function conclusionClassic(s, d) {
     const accent2 = s.accent;   // emphasis colour = brand accent
     // BLANK_EDITOR_V1 — field: data-field marker for the WYSIWYG editor; in editor
@@ -467,7 +500,7 @@ function conclusionClassic(s, d) {
         `<div style="display:flex;gap:7px;align-items:baseline;margin-top:4px;font-size:13.5px;line-height:1.4;">${x.code ? `<span class="icd">${esc(x.code)}</span>` : ''}<span>${esc(x.name)}</span><span style="margin-left:auto;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;opacity:.55;">${esc(x.typeLabel || '')}</span></div>`).join('');
     const dxHtml = (d.__editor && d.activeFields && d.activeFields.indexOf('primary_diagnosis') < 0)
         ? `<button type="button" class="bk-add" data-add="primary_diagnosis">+ Добавить: Диагноз</button>`
-        : ((d.dx || d.__editor || dxExtras) ? `<div class="dx"><div class="dh"><span class="ru">Диагноз</span><span class="uz">· Tashxis</span>${d.__editor ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="primary_diagnosis" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="primary_diagnosis" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="primary_diagnosis" title="Убрать раздел">×</button></span>` : ''}</div><div class="dx-row">${d.icd10 ? `<span class="icd">${esc(d.icd10)}</span>` : ''}<span class="dx-tx" data-field="primary_diagnosis">${esc(d.dx)}</span></div>${dxExtras}</div>` : '');
+        : ((d.dx || d.__editor || dxExtras) ? `<div class="dx"><div class="dh"><span class="ru">Диагноз</span><span class="uz">· Tashxis</span>${d.__editor ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="primary_diagnosis" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="primary_diagnosis" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="primary_diagnosis" title="Убрать раздел">×</button></span>` : ''}</div>${dxRows(d, 'dx-tx')}${dxExtras}</div>` : '');
     const _secByField = {
         chief_complaint: sec('Жалобы', 'Shikoyatlar', d.complaint, 'chief_complaint'),
         hpi: sec('Анамнез', 'Anamnez', d.hpi, 'hpi'),
@@ -587,7 +620,7 @@ function conclusionCompact(s, d) {
         `<div style="display:flex;gap:6px;align-items:baseline;margin-top:3px;font-size:11.5px;line-height:1.35;">${x.code ? `<span class="icd">${esc(x.code)}</span>` : ''}<span>${esc(x.name)}</span><span style="margin-left:auto;font-size:10px;letter-spacing:.06em;text-transform:uppercase;opacity:.55;">${esc(x.typeLabel || '')}</span></div>`).join('');
     const dxHtml = (d.__editor && d.activeFields && d.activeFields.indexOf('primary_diagnosis') < 0)
         ? `<button type="button" class="bk-add" data-add="primary_diagnosis">+ Добавить: Диагноз</button>`
-        : ((d.dx || d.__editor || dxExtras) ? `<div class="dx"><div class="dh">Диагноз <span class="uz">· Tashxis</span>${d.__editor ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="primary_diagnosis" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="primary_diagnosis" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="primary_diagnosis" title="Убрать раздел">×</button></span>` : ''}</div><div class="dx-row">${d.icd10 ? `<span class="icd">${esc(d.icd10)}</span>` : ''}<span data-field="primary_diagnosis">${esc(d.dx)}</span></div>${dxExtras}</div>` : '');
+        : ((d.dx || d.__editor || dxExtras) ? `<div class="dx"><div class="dh">Диагноз <span class="uz">· Tashxis</span>${d.__editor ? `<span class="bk-ctl"><button type="button" class="bk-up" data-up="primary_diagnosis" title="Выше">${CHEV_UP}</button><button type="button" class="bk-dn" data-dn="primary_diagnosis" title="Ниже">${CHEV_DN}</button><button type="button" class="bk-rm" data-rm="primary_diagnosis" title="Убрать раздел">×</button></span>` : ''}</div>${dxRows(d, '')}${dxExtras}</div>` : '');
     const fld = (l, uz, v) => `<div class="fld"><span class="l">${esc(l)}${uz ? ` <i>· ${esc(uz)}</i>` : ''}</span><span class="d"></span><span class="v">${esc(v || '—')}</span></div>`;
     const _secByField = {
         chief_complaint: sec('Жалобы', 'Shikoyatlar', d.complaint, 'chief_complaint'),
@@ -879,7 +912,8 @@ ${PRINT_FONT_FACE_CSS}
   </div>` : ''}
   ${films.length ? `<div class="films">${films.map(fl => `<div class="film"><div class="lab">${FILM_SVG}<div class="t">Место для снимка</div></div><div class="cap">${esc(fl.caption || '')}</div><div class="cap2">${esc(fl.sub || '')}</div></div>`).join('')}</div>` : ''}
   <div class="sec"><div class="sec-h"><span class="ru">Описание</span><span class="uz">· Tavsif</span></div><div class="sec-b" data-field="instrumental_text">${paras(d.description).map(p => `<p>${esc(p)}</p>`).join('') || (d.__editor ? '' : '<p>—</p>')}</div></div>
-  ${(d.conclusion || d.__editor) ? `<div class="concl"><div class="ch">Заключение <span class="uz">· Xulosa</span></div><p data-field="primary_diagnosis">${esc(d.conclusion)}</p></div>` : ''}
+  ${(d.conclusion || d.__editor) ? `<div class="concl"><div class="ch">Заключение <span class="uz">· Xulosa</span></div>${diagConclusion(d)}</div>` : ''}
+  ${diagRxDx(d, false)}
   ${imagingImages(d)}
   <div class="signoff"><div class="sig"><div class="role">${esc(diagSignerRole(d))} <i>· Shifokor</i></div><div class="mark">${SIG_SVG}</div><div class="name">${esc(d.radiologist || '—')}</div><div class="spec">подпись</div></div>
     <div class="sign-right"></div></div>
@@ -923,7 +957,8 @@ ${ECONOMY_BW_CSS}
   </div>
   <div class="secbar"><span class="ru">Описание</span><span class="uz">· Tavsif</span></div>
   <div class="sec-b" data-field="instrumental_text">${paras(d.description).map(p => `<p>${esc(p)}</p>`).join('') || (d.__editor ? '' : '<p>—</p>')}</div>
-  ${(d.conclusion || d.__editor) ? `<div class="concl"><div class="ch">Заключение · Xulosa</div><p data-field="primary_diagnosis">${esc(d.conclusion)}</p></div>` : ''}
+  ${(d.conclusion || d.__editor) ? `<div class="concl"><div class="ch">Заключение · Xulosa</div>${diagConclusion(d)}</div>` : ''}
+  ${diagRxDx(d, true)}
   ${imagingImages(d)}
   <div class="signoff"><div class="sig"><div class="role">${esc(diagSignerRole(d))}</div><div class="name">${esc(d.radiologist || '—')}</div><div class="spec">подпись</div></div>
     <div class="sign-right"></div></div>
