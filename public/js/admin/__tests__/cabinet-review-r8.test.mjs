@@ -146,6 +146,7 @@ test('п. 1 (PROBE-1): весь список — отказ «повторите
     TOASTS.length = 0;
     await clickSave();
     assert.deepEqual(rxOf(91), ['Парацетамол 750 мг', 'Ибупрофен 200 мг', 'Амоксициллин 1 г'], 'второе «Сохранить» стёрло правку другого окна');
+    assert.ok(TOASTS.some((t) => /Рецепт сохранён/.test(t)) && document.body.querySelectorAll('.modal').length === 0, 'окно с новой версией не сохраняется: ' + TOASTS.join(' | '));
     // врач повторяет правку в обновлённом окне
     WS.openPrescriptionDialog(a);
     d = rxDialog();
@@ -174,6 +175,7 @@ test('п. 1 (PROBE-2): один препарат — по содержимому
     TOASTS.length = 0;
     await clickSave();   // без правок
     assert.deepEqual(rxOf(92), ['B 1', 'C 5', 'D 1'], 'второе «Сохранить» потеряло D или задвоило C');
+    assert.ok(TOASTS.some((t) => /Рецепт обновлён/.test(t)) && document.body.querySelectorAll('.modal').length === 0, 'окно с новой версией препарата не сохраняется: ' + TOASTS.join(' | '));
     // правка заново — ложится на C, а не на третий по номеру
     WS.openPrescriptionDialog(a, 1);
     d = rxDialog();
@@ -215,6 +217,42 @@ test('п. 1: правка одного препарата после сдвиг�
     d.names[d.names.length - 1].value = 'C'; d.doses[d.doses.length - 1].value = '2';
     await clickSave();
     assert.deepEqual(rxOf(95), ['B 1', 'C 2', 'D 1'], 'правка легла по номеру');
+    closeDialogs();
+});
+
+test('п. 1: «Изменить рецепт», а в новой версии таких препаратов два — окно не угадывает, закрывается; ничего не записано', async () => {
+    closeDialogs();
+    const a = await opened(99, notesOf({ chief_complaint: 'X' }, { prescriptions: [{ name: 'C', dose: '1' }] }));
+    touch(a);
+    WS.openPrescriptionDialog(a, 0);
+    const d = rxDialog();
+    d.names[d.names.length - 1].value = 'C'; d.doses[d.doses.length - 1].value = '2';
+    otherWindowWrites(99, 'ДРУГОЕ', { prescriptions: [{ name: 'C', dose: '5' }, { name: 'C', dose: '7' }] });
+    TOASTS.length = 0;
+    await clickSave();
+    assert.ok(TOASTS.some((t) => /повторите действие/.test(t)), TOASTS.join(' | '));
+    assert.equal(document.body.querySelectorAll('.modal').length, 0, 'окно осталось с препаратом, которого не определить');
+    assert.deepEqual(rxOf(99), ['C 5', 'C 7']);
+});
+
+test('п. 1: список вкладки обновился, пока окно открыто, и правку не повторить — без записи, окно показывает новую версию', async () => {
+    closeDialogs();
+    const a = await opened(100, notesOf({ chief_complaint: 'X' }, { prescriptions: [{ name: 'A', dose: '1' }] }));
+    touch(a);
+    WS.openPrescriptionDialog(a);   // [A 1]
+    otherWindowWrites(100, 'ДРУГОЕ', { prescriptions: [{ name: 'A', dose: '3' }, { name: 'B', dose: '1' }] });
+    put(a, 'chief_complaint', 'X2');
+    assert.equal(await WS.saveDraft(a, { silent: true }), false);   // перечитала: [A 3, B 1]
+    assert.ok(await WS.saveDraft(a, { silent: true }));
+    const d = rxDialog();
+    d.names[d.names.length - 1].value = 'A'; d.doses[d.doses.length - 1].value = '2';
+    const writes0 = LOG.filter((e) => e.kind === 'line' && e.id === 100).length;
+    TOASTS.length = 0;
+    await clickSave();
+    assert.ok(TOASTS.some((t) => /повторите действие/.test(t)), TOASTS.join(' | '));
+    assert.equal(LOG.filter((e) => e.kind === 'line' && e.id === 100).length, writes0, 'записано, хотя правку не повторить');
+    assert.deepEqual(rxOf(100), ['A 3', 'B 1']);
+    assert.deepEqual(rowValues(), ['A 3', 'B 1'], 'окно не показывает новую версию');
     closeDialogs();
 });
 
