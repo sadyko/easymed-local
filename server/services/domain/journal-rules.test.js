@@ -5,6 +5,7 @@ import {
   birthYear, JOURNAL_SERVICE_MAX, KINDS_OF_CARE, parseServiceIds, parseKindOfCare, genderWord, dayMinus,
   dedupeJournalLines, sortJournalLines, patientOrdinals, indexRecommendations, referrerOf,
   diagnosisOfBody, consultDiagnosis, referralDiagnosis, conclusionOfDoc,
+  ruDay, journalConclusion, RESULTS_RELEASED_T, DONE_WORD,   // JOURNALS_V1_CONCLUSION
 } from './journal-rules.js';
 
 test('год рождения — первые четыре знака даты, если это год', () => {
@@ -112,11 +113,36 @@ test('диагноз строки: стационар — при поступл�
   assert.equal(referralDiagnosis({ admission_id: null, patient_id: 1, day: '2026-03-09' }, null, { doctorId: 2 }, docs), 'R10.4 — Боль в животе');
 });
 
-test('заключение: conclusion → conclusionText → dx → description; пусто — пусто', () => {
+// JOURNALS_V1_CONCLUSION (владелец, 02.10): «the fields of the "conclusion" in
+// the journal → the "diagnosis" or "conclusion" in the doctors cabinet». Поле
+// кабинета «Заключение» (conclusion_text → тело conclusionText; у заключения
+// диагностики — conclusion), пустое — «Диагноз» (основной «код — название»,
+// иначе dx). «Описание» исследования (description) — не заключение.
+test('заключение документа: «Заключение» кабинета, иначе «Диагноз» — основной «код — название», иначе dx; описание — нет', () => {
   assert.equal(conclusionOfDoc({ conclusion: 'Гепатомегалия', description: 'Печень увеличена' }), 'Гепатомегалия');
-  assert.equal(conclusionOfDoc({ conclusion: ' ', description: 'Без патологии' }), 'Без патологии');
+  assert.equal(conclusionOfDoc({ conclusion: ' ', description: 'Без патологии' }), '', 'описание исследования — не заключение');
   assert.equal(conclusionOfDoc({ conclusionText: 'Синусовый ритм', dx: 'I49' }), 'Синусовый ритм');
+  assert.equal(conclusionOfDoc({ conclusionText: '  ', diagnoses: JSON.stringify([{ code: 'I20.8', name: 'Стенокардия напряжения', type: 'main' }]), dx: 'Стенокардия' }),
+    'I20.8 — Стенокардия напряжения', 'пустое «Заключение» — основной диагноз');
   assert.equal(conclusionOfDoc({ dx: 'I49' }), 'I49');
   assert.equal(conclusionOfDoc({}), '');
   assert.equal(conclusionOfDoc(null), '');
+});
+
+test('заключение строки: документ врача, иначе у анализа — «Результаты выданы дд.мм.гггг», у прочего — «Выполнено»; иначе пусто', () => {
+  assert.equal(RESULTS_RELEASED_T, 'Результаты выданы {date}');
+  assert.equal(DONE_WORD, 'Выполнено');
+  assert.equal(ruDay('2026-03-19'), '19.03.2026');
+  assert.equal(ruDay(null), '');
+  assert.equal(ruDay('мусор'), '');
+  const blank = { text: '', template: null, params: null };
+  // а. Подписанный документ — всегда первым, и у анализа тоже.
+  assert.deepEqual(journalConclusion({ done: 1, released_day: '2026-03-19' }, ' Гепатомегалия ', true), { text: 'Гепатомегалия', template: null, params: null });
+  // б. Анализ без документа: выдан — день выдачи шаблоном; не выдан — пусто, даже если «completed».
+  assert.deepEqual(journalConclusion({ done: 1, released_day: '2026-03-19' }, '', true),
+    { text: 'Результаты выданы 19.03.2026', template: 'Результаты выданы {date}', params: { date: '19.03.2026' } });
+  assert.deepEqual(journalConclusion({ done: 1, released_day: null }, '', true), blank);
+  // в. Прочая услуга без документа: отмечена выполненной — «Выполнено».
+  assert.deepEqual(journalConclusion({ done: 1, released_day: null }, '', false), { text: 'Выполнено', template: 'Выполнено', params: {} });
+  assert.deepEqual(journalConclusion({ done: 0, released_day: '2026-03-19' }, null, false), blank);
 });

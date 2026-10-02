@@ -158,15 +158,58 @@ export function referralDiagnosis(line, adm, ref, docs) {
   return consultDiagnosis(docs, line.patient_id, ref && ref.doctorId, line.day);
 }
 
-// Заключение подписанного документа: у заключения диагностики (doc_type
-// 'diag') — conclusion, иначе description; у протокола ('protocol') —
-// conclusionText, иначе dx (service-workspace.js handleSignFinalize).
-const CONCLUSION_FIELDS = ['conclusion', 'conclusionText', 'dx', 'description'];
+// JOURNALS_V1_CONCLUSION (владелец, 02.10): «the fields of the "conclusion" in
+// the journal → the "diagnosis" or "conclusion" in the doctors cabinet». Что
+// пишет кабинет при подписи (service-workspace.js handleSignFinalize →
+// buildBlankData, _BLANK_FIELD_MAP):
+//   протокол приёма ('protocol') — снимок buildBlankData: раздел «Заключение»
+//     (conclusion_text) → conclusionText; раздел «Диагноз» (primary_diagnosis,
+//     иначе основной диагноз «код — название», _mainDxText) → dx; все диагнозы
+//     с типами → diagnoses;
+//   заключение исследования ('diag') — { description, conclusion }: поле
+//     «Заключение» бланка исследования (primary_diagnosis) → conclusion,
+//     «Описание» (instrumental_text) → description.
+// Берётся «Заключение» (conclusionText, у исследования conclusion), пустое —
+// «Диагноз» (основной «код — название», иначе dx). Описание исследования —
+// находки, а не заключение: его не берём.
+const CONCLUSION_FIELDS = ['conclusionText', 'conclusion'];
 export function conclusionOfDoc(doc) {
   for (const k of CONCLUSION_FIELDS) {
     const v = doc ? doc[k] : null;
     const s = String(v == null ? '' : v).trim();
     if (s) return s;
   }
-  return '';
+  return doc ? diagnosisOfBody(doc) : '';
+}
+
+// JOURNALS_V1_CONCLUSION — без подписанного документа («Status only»):
+// анализ — «Результаты выданы дд.мм.гггг» по дню «Проверить и выдать»
+// (visit_services.verified_at), прочая услуга — «Выполнено», если отмечена
+// выполненной. Шаблон и значения едут в cells_t: колонка «Заключение» — не
+// перечисление, словарём целиком её экран не переводит.
+export const RESULTS_RELEASED_T = 'Результаты выданы {date}';
+export const DONE_WORD = 'Выполнено';
+const BLANK_CELL = Object.freeze({ text: '', template: null, params: null });
+
+/** 'ГГГГ-ММ-ДД' → 'дд.мм.гггг'; мусор — ''. */
+export function ruDay(ymd) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(ymd || ''));
+  return m ? m[3] + '.' + m[2] + '.' + m[1] : '';
+}
+
+/**
+ * «Заключение» строки журнала → { text, template, params }. docText — текст
+ * подписанного документа строки (conclusionOfDoc) или ''. line.done — строка
+ * отмечена выполненной (визит — status 'completed', акт — performed_at);
+ * line.released_day — местный день выдачи результатов анализа или null.
+ * Документ без текста — как нет документа: показывается статус строки.
+ */
+export function journalConclusion(line, docText, isLab) {
+  const text = String(docText == null ? '' : docText).trim();
+  if (text) return { text, template: null, params: null };
+  if (isLab) {
+    const date = ruDay(line && line.released_day);
+    return date ? { text: 'Результаты выданы ' + date, template: RESULTS_RELEASED_T, params: { date } } : { ...BLANK_CELL };
+  }
+  return line && line.done ? { text: DONE_WORD, template: DONE_WORD, params: {} } : { ...BLANK_CELL };
 }

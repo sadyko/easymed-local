@@ -100,6 +100,7 @@ import { specialtyGroupName } from '../../../public/js/shared/specialty-list.js'
 import {   // JOURNALS_V1
   birthYear, genderWord, parseServiceIds, parseKindOfCare, dedupeJournalLines, sortJournalLines, patientOrdinals,
   indexRecommendations, referrerOf, referralDiagnosis, diagnosisOfBody, conclusionOfDoc, JOURNAL_SERVICE_MAX, CONSULT_DX_DAYS,
+  journalConclusion,   // JOURNALS_V1_CONCLUSION — «Заключение»: документ врача, иначе статус строки
 } from '../domain/journal-rules.js';
 import { ADMISSION_PAID_TOTAL_SQL, ADMISSION_LAST_PAID_AT_SQL, ADMISSION_REVIEW_DIAGNOSIS_SQL } from '../domain/admission-facts.js';   // JOURNALS_V1
 import { wardClassLabel } from '../../../public/js/shared/ward-class.js';
@@ -107,6 +108,9 @@ import { wardClassLabel } from '../../../public/js/shared/ward-class.js';
 // результат анализа; «пациент лежит» — те же состояния, что у доски коек.
 import { LAB_RESULT_STATUSES } from '../visit-status-guard.js';
 import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
+// JOURNALS_V1_CONCLUSION — «анализ ли это» — то же правило, что у очереди
+// лаборатории (LAB_SERVICE_ROUTING_V1; чистый модуль, его же читает lab-stats.js).
+import { isLabService, deptKindMap, typeNameMap } from '../../../public/js/admin/views/lab-service.js';
 
 /**
  * Начисления врача (кабинет): свои — ВСЕГДА, и ни одна галочка «Отчётов» этого
@@ -4346,6 +4350,8 @@ const JOURNAL_CARE_MSG = 'Тип — «Все», «Стационар» или �
 const JOURNAL_SERVICE_NOTE = 'Строка — одна оказанная услуга из выбранных: амбулаторная — прошедшая кассу и не отменённая, стационарная — из акта госпитализации. «Стационар» — если в этот день пациент лежал в стационаре; одна и та же услуга в визите и в акте за один день показана один раз.';
 const JOURNAL_REFERRER_NOTE = '«Кто направил»: у стационара — лечащий врач; у амбулатории — врач, рекомендовавший услугу в кабинете, иначе источник направления визита, иначе «сам». «Диагноз при направлении»: у стационара — диагноз при поступлении или последнего опубликованного осмотра; у амбулатории — основной диагноз подписанной консультации направившего врача за 30 дней.';
 const JOURNAL_CONCLUSION_NOTE = 'Заключение — только подписанное врачом; черновики не показываются. На экране длинное заключение обрезано, в Excel и при печати — целиком.';
+// JOURNALS_V1_CONCLUSION (владелец, 02.10) — откуда «Заключение» и что стоит без документа.
+const JOURNAL_STATUS_NOTE = 'Заключение берётся из подписанного документа врача: поле «Заключение», а если оно пустое — «Диагноз» (основной диагноз «код — название»). Без документа у анализа стоит «Результаты выданы» и день выдачи, у другой услуги — «Выполнено», когда она отмечена выполненной; иначе пусто.';
 const sqlList = (xs) => xs.map((s) => "'" + s + "'").join(', ');
 const JOURNAL_PAID_SQL = (vs) => `${vs}.status IN (${sqlList(LAB_RESULT_STATUSES)})`;
 // Госпитализация, которая шла в этот местный день: поступил (не заявка — у
@@ -4373,6 +4379,9 @@ function journalVisitLines(db, args, ctx, { from, to, idsJson }) {
            vs.service_id AS service_id, s.name AS service,
            COALESCE(NULLIF(pu.full_name, ''), pu.username) AS performer,
            rs.name AS visit_source, rs.doctor_id AS visit_source_doctor_id,
+           -- JOURNALS_V1_CONCLUSION — статус строки для «Заключения» без документа: отмечена
+           -- выполненной; день «Проверить и выдать» лаборатории (verified_at).
+           CASE WHEN vs.status = 'completed' THEN 1 ELSE 0 END AS done, ${localDate('vs.verified_at')} AS released_day,
            ${IN_BED_ON_DAY_SQL('v.patient_id', day)} AS admission_id
       FROM visit_services vs
       JOIN visits v   ON v.id = vs.visit_id
@@ -4397,6 +4406,8 @@ function journalAdmissionLines(db, args, ctx, { from, to, idsJson }) {
            ias.service_id AS service_id, s.name AS service,
            COALESCE(NULLIF(pu.full_name, ''), pu.username) AS performer,
            NULL AS visit_source, NULL AS visit_source_doctor_id,
+           -- JOURNALS_V1_CONCLUSION — «Выполнено» строки акта — отметка performed_at; выдачи анализа у неё нет.
+           CASE WHEN ias.performed_at IS NOT NULL THEN 1 ELSE 0 END AS done, NULL AS released_day,
            a.id AS admission_id
       FROM admission_services ias
       JOIN admissions a ON a.id = ias.admission_id
@@ -4465,7 +4476,7 @@ function journalFacts(db, lines, { from, to, idsJson }) {
            CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.conclusion') END AS conclusion,
            CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.conclusionText') END AS conclusionText,
            CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.dx') END AS dx,
-           CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.description') END AS description
+           CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.diagnoses') END AS diagnoses   -- JOURNALS_V1_CONCLUSION: «Диагноз», если «Заключение» пусто; описание — не заключение
       FROM visit_documents d
      WHERE d.visit_service_id IN (SELECT value FROM json_each(?))
        AND d.doc_type IN ('diag', 'protocol') AND d.voided_at IS NULL
@@ -4473,6 +4484,20 @@ function journalFacts(db, lines, { from, to, idsJson }) {
     if (!conclusions.has(d.vs_id)) conclusions.set(d.vs_id, conclusionOfDoc(d));
   }
   return { patients, admissions, recs, dxDocs, conclusions };   // JOURNALS_V1_SERVICE
+}
+
+// JOURNALS_V1_CONCLUSION — какие из выбранных услуг — анализы: то же правило
+// из четырёх веток, что у очереди лаборатории (lab-service.js isLabService,
+// LAB_SERVICE_ROUTING_V1): type 'lab' / is_lab, отдел-лаборатория, вид услуги
+// с «лабораторным» именем, привязанная активная панель.
+function journalLabServiceIds(db, idsJson) {
+  const svcs = db.prepare(`SELECT id, type, is_lab, department_id, type_id FROM services
+     WHERE id IN (SELECT value FROM json_each(?))`).all(idsJson);
+  const deptKindById = deptKindMap(db.prepare('SELECT id, kind FROM departments').all());
+  const typeNameById = typeNameMap(db.prepare('SELECT id, name FROM service_types').all());
+  const panels = new Set(db.prepare(`SELECT service_id FROM lab_panels
+     WHERE active = 1 AND service_id IN (SELECT value FROM json_each(?))`).all(idsJson).map((r) => r.service_id));
+  return new Set(svcs.filter((s) => isLabService(s, { deptKindById, typeNameById, hasPanel: (id) => panels.has(id) })).map((s) => s.id));
 }
 
 function serviceJournalReport(db, args, ctx) {
@@ -4495,10 +4520,17 @@ function serviceJournalReport(db, args, ctx) {
   const lines = sortJournalLines(kept.map((l) => ({ ...l, patient: (facts.patients.get(l.patient_id) || {}).full_name || '' })), ruCompare);
   const ordinals = patientOrdinals(lines);
   const columns = JOURNAL_COLUMNS.filter((c) => !(care === 'outpatient' && JOURNAL_INPATIENT_ONLY.has(c)));
+  // JOURNALS_V1_CONCLUSION — статус без документа переводится шаблоном (cells_t:
+  // [строка, колонка, шаблон, значения]) — «Заключение» не колонка-перечисление.
+  const labIds = journalLabServiceIds(db, idsJson);
+  const conclCol = columns.indexOf('Заключение');
+  const cellsT = [];
   const rows = lines.map((l, i) => {
     const p = facts.patients.get(l.patient_id) || {};
     const adm = l.admission_id != null ? facts.admissions.get(l.admission_id) || null : null;
     const ref = referrerOf(l, facts.recs, adm);
+    const concl = journalConclusion(l, l.src === 'vs' ? facts.conclusions.get(l.line_id) : '', labIds.has(l.service_id));   // JOURNALS_V1_CONCLUSION
+    if (concl.template && conclCol >= 0) cellsT.push([i, conclCol, concl.template, concl.params]);   // JOURNALS_V1_CONCLUSION
     const cells = {
       '№': i + 1,
       'Ич. рақам (Пор. № пациента)': ordinals[i],
@@ -4510,7 +4542,7 @@ function serviceJournalReport(db, args, ctx) {
       'Диагноз при направлении': referralDiagnosis(l, adm, ref, facts.dxDocs),
       'Дата': l.day || '',
       'Услуга': l.service || '',
-      'Заключение': l.src === 'vs' ? (facts.conclusions.get(l.line_id) || '') : '',
+      'Заключение': concl.text,   // JOURNALS_V1_CONCLUSION
       'Врач': l.performer || '',
       'Лечащий врач': adm ? (adm.attending || '') : '',
     };
@@ -4520,7 +4552,8 @@ function serviceJournalReport(db, args, ctx) {
     columns, rows,
     by_building: summariseByBuilding(ctx, lines, {}),
     total_label: '',
-    notes: [JOURNAL_SERVICE_NOTE, JOURNAL_REFERRER_NOTE, JOURNAL_CONCLUSION_NOTE],
+    notes: [JOURNAL_SERVICE_NOTE, JOURNAL_REFERRER_NOTE, JOURNAL_CONCLUSION_NOTE, JOURNAL_STATUS_NOTE],   // JOURNALS_V1_CONCLUSION — четвёртое
+    cells_t: cellsT,   // JOURNALS_V1_CONCLUSION
   };
 }
 
@@ -4822,7 +4855,7 @@ export function runReport(db, args, user) {
       by_building: by_building || [], notes: notes || [], total_label: total_label || '',
       // V3120_FIX (I18N) — шаблоны собранных примечаний и подписей корректировок.
       notes_t: (notes || []).map((n) => NOTE_T.get(n) || null),
-      cells_t: cellTemplates(rows),
+      cells_t: [...cellTemplates(rows), ...(Array.isArray(raw.cells_t) ? raw.cells_t : [])],   // JOURNALS_V1_CONCLUSION — и свои шаблоны отчёта (статус в «Заключении» журнала)
       // REPORTS_AUDIT_FIX_V1 — строки, которые «Итого» под таблицей не складывает
       // (отменённые счета и DEP-/CARD- в «Счетах»): номера строк в rows.
       total_skip_rows: Array.isArray(total_skip_rows) ? total_skip_rows : [],

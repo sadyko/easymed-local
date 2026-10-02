@@ -163,7 +163,7 @@ test('итога нет; здания — только соседнее — пу
   try {
     const r = journal(db);
     assert.deepEqual(r.summable_columns, []);
-    assert.equal(r.notes.length, 3);
+    assert.equal(r.notes.length, 4, 'JOURNALS_V1_CONCLUSION — четвёртое примечание: откуда «Заключение»');
     assert.deepEqual(journal(db, { buildings: ['B'] }).rows, []);
     __setReportsPushDown(false);
     try { assert.deepEqual(journal(db).rows, r.rows); } finally { __setReportsPushDown(true); }
@@ -194,6 +194,8 @@ function chains(db) {
   doc.run(4, 4, 1, 'diag', j({ conclusion: 'Отозванное' }), 1, at('2026-03-13'), '2026-03-13T08:00:00Z');
   doc.run(8, 6, 3, 'diag', '{oops', 1, at('2026-03-25'), null);   // битое тело — пусто, не 500
   doc.run(7, 5, 2, 'diag', j({ conclusion: 'Х'.repeat(400) }), 1, at('2026-03-15'), null);
+  // JOURNALS_V1_CONCLUSION — «Заключение» кабинета пустое: «Диагноз» (основной «код — название»).
+  doc.run(9, 7, 4, 'protocol', j({ conclusionText: '', diagnoses: [{ code: 'I20.8', name: 'Стенокардия напряжения', type: 'main' }], dx: 'Стенокардия' }), 1, at('2026-03-05'), null);
 }
 
 test('кто направил: ближайшая рекомендация не позже дня визита; удалённая и поздняя — не в счёт', () => {
@@ -214,13 +216,51 @@ test('диагноз при направлении: основной диагн�
   } finally { db.close(); }
 });
 
-test('заключение: только подписанное, отозванное не берётся, битое тело — пусто, длинное — целиком', () => {
+// JOURNALS_V1_CONCLUSION (владелец, 02.10): «the fields of the "conclusion" in
+// the journal → the "diagnosis" or "conclusion" in the doctors cabinet. if lab
+// or any other leave blank or offer something» → «Status only». Подписанный
+// документ строки: «Заключение» кабинета, иначе «Диагноз»; без него — у прочей
+// услуги «Выполнено», если она отмечена выполненной; иначе пусто.
+test('заключение: подписанный документ — «Заключение», иначе «Диагноз»; отозванное и описание — нет; без документа — «Выполнено» шаблоном', () => {
   const db = clinic();
   try {
     chains(db);
-    const c = col(journal(db), 'Заключение');
-    assert.deepEqual(c.slice(0, 7), ['', '', 'Без патологии', 'Гепатомегалия', '', 'Синусовый ритм, ЧСС 72', '']);
+    const r = journal(db);
+    const c = col(r, 'Заключение');
+    assert.deepEqual(c.slice(0, 7), ['Выполнено', 'I20.8 — Стенокардия напряжения', 'Выполнено', 'Гепатомегалия', 'Выполнено',
+      'Синусовый ритм, ЧСС 72', 'Выполнено']);
     assert.equal(c[7].length, 400, 'сервер отдаёт заключение целиком — обрезает только экран');
-    assert.deepEqual(c.slice(8), ['', '']);
+    assert.deepEqual(c.slice(8), ['', 'Выполнено'], 'строка акта без «Выполнено» — пусто; битое тело документа — статус строки');
+    const ci = r.columns.indexOf('Заключение');
+    assert.deepEqual(r.cells_t.filter((t) => t[1] === ci), [0, 2, 4, 6, 9].map((ri) => [ri, ci, 'Выполнено', {}]),
+      'статус переводится шаблоном: столбец «Заключение» — не перечисление');
+  } finally { db.close(); }
+});
+
+test('заключение анализа: выдан — «Результаты выданы дд.мм.гггг» (день «Проверить и выдать»), не выдан — пусто; документ врача — первым', () => {
+  const db = clinic();
+  try {
+    // Анализы по общему правилу лаборатории (lab-service.js isLabService):
+    // 5 — type 'lab', 6 — услуга с привязанной активной панелью.
+    db.prepare("INSERT INTO services (id, name, price, type) VALUES (5, 'Общий анализ крови', 50000, 'lab'), (6, 'Глюкоза', 30000, 'other')").run();
+    db.prepare("INSERT INTO lab_panels (name, service_id, active) VALUES ('Глюкоза', 6, 1)").run();
+    const v = db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (?,?,?, 'arrived')");
+    const vs = db.prepare('INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status, verified_at) VALUES (?,?,?,NULL,1,0,0,?,?)');
+    v.run(30, 4, at('2026-03-06')); vs.run(30, 30, 5, 'completed', null);                     // «completed» без выдачи — пусто
+    v.run(31, 2, at('2026-03-18')); vs.run(31, 31, 5, 'completed', '2026-03-19T07:00:00Z');   // выдан на следующий день
+    v.run(32, 3, at('2026-03-26')); vs.run(32, 32, 6, 'resulted', null);                      // результаты внесены, не выданы
+    v.run(34, 1, at('2026-03-20')); vs.run(34, 34, 6, 'completed', '2026-03-20T09:00:00Z');   // выдан, но есть документ врача
+    db.prepare(`INSERT INTO visit_documents (visit_service_id, visit_id, patient_id, doc_type, body, created_by, created_at)
+                VALUES (34, 34, 1, 'protocol', ?, 1, ?)`).run(JSON.stringify({ conclusionText: 'Гипергликемия' }), at('2026-03-20'));
+    db.prepare(`INSERT INTO admission_services (id, admission_id, service_id, doctor_id, quantity, unit_price, total, billable, performed_at, created_at)
+                VALUES (30, 1, 5, 3, 1, 0, 0, 1, ?, ?)`).run(at('2026-03-11'), at('2026-03-11'));   // строка акта: выдачи нет — пусто
+    const r = journal(db, { service_ids: [5, 6] });
+    assert.deepEqual(col(r, 'Дата'), ['2026-03-06', '2026-03-11', '2026-03-18', '2026-03-20', '2026-03-26']);
+    assert.deepEqual(col(r, 'Заключение'), ['', '', 'Результаты выданы 19.03.2026', 'Гипергликемия', '']);
+    const ci = r.columns.indexOf('Заключение');
+    assert.deepEqual(r.cells_t, [[2, ci, 'Результаты выданы {date}', { date: '19.03.2026' }]]);
+    const out = journal(db, { service_ids: [5, 6], kind_of_care: 'outpatient' });
+    assert.deepEqual(out.cells_t, [[1, out.columns.indexOf('Заключение'), 'Результаты выданы {date}', { date: '19.03.2026' }]],
+      'позиция шаблона — в колонках этого журнала');
   } finally { db.close(); }
 });
