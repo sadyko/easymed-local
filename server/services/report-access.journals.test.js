@@ -165,3 +165,32 @@ test('F1: справочник старой главной клиники на �
     assert.equal(canSeeReportKey(branch, HEAD, 'reports.journals'), false);
   } finally { main.close(); branch.close(); }
 });
+
+// JOURNALS_V1_RJ2 (финальное ревью, F3) — клиника закрыла «Отчёты» роли «Врач»
+// (reports: none), а главный врач — врач с надстройкой «Главный врач»
+// («Журналы: Просмотр»). Самый щедрый уровень раздела по ролям — «Нет» (у
+// надстройки раздела нет), и закрытый раздел запирал выданные журналы.
+// Теперь ЯВНАЯ выдача «Журналов» роли, у которой «Отчёты» не закрыты самой
+// этой ролью, открывает журналы — и только их.
+test('F3: «Отчёты» закрыты врачу, главному врачу выданы «Журналы» — журналы видны, прочие отчёты — нет', () => {
+  const db = seed();
+  try {
+    const doc = JSON.parse(db.prepare("SELECT permissions FROM role_permissions WHERE role = 'doctor'").get().permissions);
+    doc.grants = { ...(doc.grants || {}), reports: 'none' };
+    db.prepare("UPDATE role_permissions SET permissions = ? WHERE role = 'doctor'").run(JSON.stringify(doc));
+    const HEAD = { id: 81, role: 'doctor', extra_roles: ['head_doctor'] };
+    const DOC = { id: 82, role: 'doctor', extra_roles: [] };
+    assert.equal(canSeeReportKey(db, HEAD, 'reports.journals'), true);
+    for (const kind of ['service_journal', 'inpatient_register']) assert.doesNotThrow(() => requireReportKind(db, HEAD, kind), kind);
+    for (const key of ['reports.revenue', 'reports.cashier', 'reports.doctor_pay', 'reports.services', 'reports.stock']) {
+      assert.equal(canSeeReportKey(db, HEAD, key), false, key + ' открылся «Журналами»');
+    }
+    assert.throws(() => requireReportKind(db, HEAD, 'total_revenue'), (e) => e.status === 403);
+    assert.equal(canSeeReportKey(db, DOC, 'reports.journals'), false, 'врачу без надстройки — нет');
+    // Своя роль «Главный врач», которой клиника САМА закрыла «Отчёты»: её «Журналы» — нет.
+    const head = JSON.parse(db.prepare("SELECT permissions FROM role_permissions WHERE role = 'head_doctor'").get().permissions);
+    head.grants = { ...head.grants, reports: 'none' };
+    db.prepare("UPDATE role_permissions SET permissions = ? WHERE role = 'head_doctor'").run(JSON.stringify(head));
+    assert.equal(canSeeReportKey(db, HEAD, 'reports.journals'), false, 'закрытый ЭТОЙ ролью раздел закрывает и её журналы');
+  } finally { db.close(); }
+});

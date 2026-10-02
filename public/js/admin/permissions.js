@@ -127,6 +127,7 @@ let _levels       = {};     // { key: 'viewer'|'editor'|'admin' }
 let _patientTabs  = {};     // { tabId: 'none'|'view'|'edit' } — absent key = visible (default)
 let _grants       = {};     // GRANTS_V1 — { 'inpatient.vitals': 'edit', … } по справочнику прав
 let _ownCustom    = null;   // ROLE_REPORTS_SETTINGS_V1 (ревью I1) — записи своей роли администратора; см. setOwnCustomGrants
+let _roleGrants   = [];     // JOURNALS_V1_RJ2 (F3) — права по справочнику КАЖДОЙ роли в силе, без слияния (reportGroupAllowed)
 let _roleLabel    = null;   // human label of the role currently in force
 let _actorRoles   = [];     // INPATIENT_ROLE_GATE_V1 — role CODES currently in force
 
@@ -320,6 +321,7 @@ export function hasRestriction()   { return _effective instanceof Set; }
 // Grant full access (super admin / no role / "view as Super Admin").
 export function setFullAccess(label = null) {
     _grants = {};   // GRANTS_V1 — полному доступу окна не закрывают
+    _roleGrants = [];   // JOURNALS_V1_RJ2 (F3)
     _ownCustom = null;   // ROLE_REPORTS_SETTINGS_V1 (ревью I1) — задаёт setOwnCustomGrants после
     _effective = null;
     _levels    = {};
@@ -362,6 +364,7 @@ export function setEffectiveFromRole(roleRow) {
     const perms    = (roleRow && roleRow.permissions) || null;
     const sections = perms && Array.isArray(perms.sections) ? perms.sections : null;
     _grants = { ...(grantsOf(perms) || {}) };
+    _roleGrants = [{ ..._grants }];   // JOURNALS_V1_RJ2 (F3)
     _levels = (perms && perms.levels && typeof perms.levels === 'object') ? { ...perms.levels } : {};
     _patientTabs = (perms && perms.patient_tabs && typeof perms.patient_tabs === 'object') ? { ...perms.patient_tabs } : {};
     // SERVICES_TAB_V1 shim — the Услуги tab split out of Визиты; role configs saved
@@ -434,6 +437,7 @@ export function setEffectiveFromRoles(roleRows) {
     _levels      = levels;
     _patientTabs = tabs;
     _grants      = grants;
+    _roleGrants  = rows.map((r) => ({ ...(grantsOf(r && r.permissions) || {}) }));   // JOURNALS_V1_RJ2 (F3)
     _roleLabel   = (rows[0] && rows[0].name) || 'Roles';
     rememberRoles(rows.map((r) => r && r.name));
 }
@@ -470,7 +474,8 @@ export function previewRole(roleRow, fn, opts = {}) {
     // вместе с остальным: setEffectiveFromRole их переписывает, и без этого
     // предпросмотр оставлял вошедшему сотруднику права ЧУЖОЙ роли, а плитки
     // отчётов и настроек отвечали за читателя, а не за роль.
-    const saved = { eff: _effective, levels: _levels, tabs: _patientTabs, grants: _grants, own: _ownCustom, label: _roleLabel, roles: _actorRoles, preview: _preview };
+    const saved = { eff: _effective, levels: _levels, tabs: _patientTabs, grants: _grants, own: _ownCustom, label: _roleLabel, roles: _actorRoles, preview: _preview,
+        roleGrants: _roleGrants };   // JOURNALS_V1_RJ2 (F3)
     try {
         setEffectiveFromRole(roleRow);
         _ownCustom = null;   // ревью I1 — записи своей роли читающего к предпросматриваемой роли не относятся
@@ -480,6 +485,7 @@ export function previewRole(roleRow, fn, opts = {}) {
     } finally {
         _effective = saved.eff; _levels = saved.levels; _patientTabs = saved.tabs; _grants = saved.grants; _ownCustom = saved.own;
         _roleLabel = saved.label; _actorRoles = saved.roles; _preview = saved.preview;
+        _roleGrants = saved.roleGrants;   // JOURNALS_V1_RJ2 (F3)
     }
 }
 
@@ -781,6 +787,10 @@ export function reportGroupAllowed(key) {
         const own = ownLevel(key, 'reports');
         return own === null ? true : own !== 'none';
     }
+    // JOURNALS_V1_RJ2 (F3) — роль, которая САМА выдала «Журналы» и сама «Отчёты»
+    // не закрыла, открывает журналы (и только их), даже если раздел закрыт
+    // другой ролью человека (врач + надстройка «Главный врач»). Как сервер.
+    if (key === JOURNALS_KEY && journalsGrantedByRole()) return true;
     if (grantLevel('reports') === 'none') return false;   // закрытый раздел закрывает все группы
     const lvl = key ? grantLevel(key) : null;
     if (lvl !== null) return lvl !== 'none';
@@ -798,6 +808,10 @@ export function reportGroupAllowed(key) {
 const JOURNALS_KEY = 'reports.journals';
 function reportsConfigured() {
     return Object.keys(_grants).some((k) => k.startsWith('reports.'));
+}
+// JOURNALS_V1_RJ2 (F3) — «Журналы: Просмотр» записаны ролью, у которой «Отчёты» не «Нет».
+function journalsGrantedByRole() {
+    return _roleGrants.some((g) => g && (_GRANT_RANK[g[JOURNALS_KEY]] || 0) >= _GRANT_RANK.view && g.reports !== 'none');
 }
 
 /** Видна ли плитка отчёта по виду (REPORT_GROUP); вид без группы — только полному доступу. */

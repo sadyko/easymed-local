@@ -80,3 +80,34 @@ test('F1: матрица ролей — сервер и оболочка отв�
     assert.equal(both(db, { role: 'registrar', code: 'plain_reports' }).server['reports.revenue'], true);
   } finally { db.close(); }
 });
+
+// JOURNALS_V1_RJ2 (F3) — «Отчёты» закрыты роли «Врач», «Журналы» выданы надстройке
+// «Главный врач»: журналы видны, хаб и маршрут открыты, плитки — только журналов.
+test('F3: врач с закрытыми «Отчётами» + «Главный врач» — журналы, хаб и только плитки журналов; сервер = оболочка', () => {
+  const db = clinic();
+  try {
+    const p = permsOf(db, 'doctor');
+    p.grants = { ...(p.grants || {}), reports: 'none' };
+    writePerms(db, 'doctor', p);
+    const r = both(db, { role: 'doctor', extra: ['head_doctor'] });
+    assert.deepEqual(r.client, r.server, 'оболочка и сервер разошлись');
+    assert.deepEqual(Object.keys(r.server).filter((k) => r.server[k]), [J], 'видна ровно группа «Журналы»');
+    assert.equal(r.hub, true, 'пункт меню и маршрут «Отчётов» закрыты — выданные журналы недостижимы');
+    window.easymed = { state: { user: { id: 90, role: 'doctor', extra_roles: ['head_doctor'] } } };
+    perms.setEffectiveFromRoles([{ name: 'doctor', permissions: permsOf(db, 'doctor') }, { name: 'head_doctor', permissions: permsOf(db, 'head_doctor') }]);
+    try {
+      assert.deepEqual(Object.keys(REPORT_GROUP).filter((k) => perms.reportKindAllowed(k)), ['service_journal', 'inpatient_register']);
+      assert.equal(perms.isRouteAllowed('reports'), false, '«Обзор владельца» — это выручка');
+      // previewRole не оставляет чужих прав ролей.
+      perms.previewRole({ name: 'cashier', permissions: permsOf(db, 'cashier') }, () => assert.equal(perms.reportGroupAllowed(J), false));
+      assert.equal(perms.reportGroupAllowed(J), true, 'после предпросмотра права вернулись');
+    } finally { perms.setFullAccess('Admin'); delete window.easymed; }
+    // Закрыла «Отчёты» сама роль «Главный врач» — её «Журналы» не открываются.
+    const h = permsOf(db, 'head_doctor');
+    h.grants = { ...h.grants, reports: 'none' };
+    writePerms(db, 'head_doctor', h);
+    const r2 = both(db, { role: 'doctor', extra: ['head_doctor'] });
+    assert.deepEqual(r2.client, r2.server);
+    assert.equal(r2.server[J], false);
+  } finally { db.close(); }
+});

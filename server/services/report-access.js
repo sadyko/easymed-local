@@ -19,7 +19,7 @@
 // теряет ни одного отчёта; сужает только то, что заведующая сама поставила.
 import { grantAllowsOr, isAdminUser, GrantError, roleGrantsOf } from './grants.js';
 import { canViewSection } from './roles.js';
-import { REPORT_GROUP, isAdminDefault } from '../../public/js/shared/permission-catalog.js';
+import { REPORT_GROUP, isAdminDefault, levelAllows } from '../../public/js/shared/permission-catalog.js';   // levelAllows: JOURNALS_V1_RJ2 (F3)
 
 /** Прежнее правило: кому оболочка открывала хаб отчётов. */
 export function reportsLegacyAllowed(db, user) {
@@ -47,9 +47,21 @@ export function reportsConfigured(db, user) {
   return roleGrantsOf(db, user).some((g) => Object.keys(g).some((k) => k.startsWith('reports.')));
 }
 
+// JOURNALS_V1_RJ2 (финальное ревью, F3) — ЯВНАЯ ВЫДАЧА «ЖУРНАЛОВ» ОДНОЙ РОЛИ.
+// Главный врач — врач с надстройкой «Главный врач»; закрой клиника «Отчёты»
+// роли «Врач», и самый щедрый уровень раздела по ролям — «Нет» (у надстройки
+// раздела нет), а закрытый раздел запирал выданные ей журналы. Поэтому роль,
+// которая САМА записала «Журналы: Просмотр» и сама «Отчёты» не закрыла,
+// открывает журналы, как бы ни стоял раздел у других ролей человека. Прочие
+// группы это не открывает. Оболочка — то же (permissions.js reportGroupAllowed).
+export function journalsGrantedByRole(db, user) {
+  return roleGrantsOf(db, user).some((g) => levelAllows(g[JOURNALS_KEY], 'view') && g.reports !== 'none');
+}
+
 /** Видит ли человек группу отчётов (ключ окна раздела «Отчёты» или сам раздел). */
 export function canSeeReportKey(db, user, key) {
   if (!user || !key) return false;
+  if (key === JOURNALS_KEY && journalsGrantedByRole(db, user)) return true;   // JOURNALS_V1_RJ2 (F3)
   // ADMIN_ROWS_GRANTABLE_V1 — группа с правилом «только администратор»
   // (охват Telegram-бота) у ненастроенной роли открыта одному администратору,
   // а не всем, кому выданы «Отчёты».
