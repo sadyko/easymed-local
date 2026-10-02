@@ -700,8 +700,8 @@ export const REGISTRY = {
     filters:['id','active','floor_id','department_id','room_type','queue_mode'],
     embed:{ floors:{table:'floors',fk:'floor_id',columns:['id','name']},
             departments:{table:'departments',fk:'department_id',columns:['id','name','kind']} } },
-  wards: { read:{roles:ALL_STAFF,columns:['id','name','code','floor_id','department_id','active','created_at','type','billing_mode','price_per_day','price_per_hour','color','plan_x','plan_y','plan_w','plan_h']},
-    write:{ grant:'settings.rooms',insert:{roles:['admin'],columns:['name','code','floor_id','department_id','active','type','billing_mode','price_per_day','price_per_hour','color','plan_x','plan_y','plan_w','plan_h']},update:{roles:['admin'],columns:['name','code','floor_id','department_id','active','type','billing_mode','price_per_day','price_per_hour','color','plan_x','plan_y','plan_w','plan_h']},delete:{roles:[]}},
+  wards: { read:{roles:ALL_STAFF,columns:['id','name','code','floor_id','department_id','active','created_at','type','billing_mode','price_per_day','price_per_hour','color','plan_x','plan_y','plan_w','plan_h','ward_class']},   // ward_class: JOURNALS_V1_WARD_CLASS (мигр. 234)
+    write:{ grant:'settings.rooms',insert:{roles:['admin'],columns:['name','code','floor_id','department_id','active','type','billing_mode','price_per_day','price_per_hour','color','plan_x','plan_y','plan_w','plan_h','ward_class']},update:{roles:['admin'],columns:['name','code','floor_id','department_id','active','type','billing_mode','price_per_day','price_per_hour','color','plan_x','plan_y','plan_w','plan_h','ward_class']},delete:{roles:[]}},   // JOURNALS_V1_WARD_CLASS
     filters:['id','active','floor_id','department_id'],
     embed:{ floors:{table:'floors',fk:'floor_id',columns:['id','name']},
             departments:{table:'departments',fk:'department_id',columns:['id','name','kind']} } },
