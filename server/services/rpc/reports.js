@@ -4528,11 +4528,17 @@ function journalFacts(db, lines, { from, to, idsJson }) {
            CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.diagnoses') END AS diagnoses   -- JOURNALS_V1_CONCLUSION: «Диагноз», если «Заключение» пусто; описание — не заключение
       FROM visit_documents d
       LEFT JOIN visit_services cvs ON cvs.id = d.visit_service_id   -- JOURNALS_V1_RJ1 — врач строки
+      JOIN visits cv ON cv.id = cvs.visit_id   -- JOURNALS_V1_RJ2 (F4) — пациент строки
      WHERE d.visit_service_id IN (SELECT value FROM json_each(?))
        AND d.doc_type IN ('diag', 'protocol') AND d.voided_at IS NULL
+       AND d.patient_id = cv.patient_id   -- JOURNALS_V1_RJ2 (F4) — документ этого пациента, а не чужой строки с тем же номером
        AND ${DOCTOR_AUTHOR_SQL('d', 'cvs.doctor_id')}   -- JOURNALS_V1_RJ1 — только документ врача
      ORDER BY d.created_at DESC, d.id DESC`).all(uniq(lines.filter((l) => l.src === 'vs').map((l) => l.line_id)))) {
-    if (!conclusions.has(d.vs_id)) conclusions.set(d.vs_id, conclusionOfDoc(d));
+    // JOURNALS_V1_RJ2 (F5) — новые сначала; документ без текста «Заключения» и
+    // «Диагноза» (повторная подпись пустой) не прячет прежний с текстом.
+    if (conclusions.has(d.vs_id)) continue;
+    const text = conclusionOfDoc(d);
+    if (text) conclusions.set(d.vs_id, text);
   }
   return { patients, admissions, recs, dxDocs, conclusions };   // JOURNALS_V1_SERVICE
 }
