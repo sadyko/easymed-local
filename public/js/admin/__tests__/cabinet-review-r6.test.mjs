@@ -175,6 +175,18 @@ test('п. 2: документ изменился без чужого черно�
     assert.deepEqual(draftTexts(22), ['Жалобы 2'], 'свой прежний черновик остался как «чужой»');
 });
 
+test('п. 2: черновик, который экран прочитал при открытии, — не «версия из другого окна»', async () => {
+    const D0 = { kind: 'draft', savedAt: '2026-10-01T09:00:00.000Z', fields: { chief_complaint: 'Вчерашний черновик' } };
+    const a = await opened(32, notesOf({ chief_complaint: 'Вчерашний черновик' }, { history: [D0] }));
+    const o = JSON.parse(NOTES.get(32)); o.nurseNote = 'в/в'; NOTES.set(32, JSON.stringify(o));
+    put(a, 'chief_complaint', 'Сегодня');
+    TOASTS.length = 0;
+    assert.equal(await WS.saveDraft(a, { silent: true }), false);
+    assert.ok(!TOASTS.some((t) => /Версия из другого окна/.test(t)), 'прочитанный при открытии черновик назван чужим: ' + TOASTS.join(' | '));
+    assert.ok(await WS.saveDraft(a, { silent: true }));
+    assert.deepEqual(draftTexts(32), ['Сегодня']);
+});
+
 // ─── п. 3: заметка медсестры — корректный JSON ───────────────────────────────
 test('п. 3: заметка медсестры «37.5» (и любой JSON не кабинета) не теряется при первом сохранении кабинета', async () => {
     for (const [id, note] of [[23, '37.5'], [33, '{"t":1}'], [43, 'true'], [53, '[1,2]']]) {

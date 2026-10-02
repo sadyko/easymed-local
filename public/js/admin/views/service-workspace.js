@@ -2555,7 +2555,9 @@ function seenEntries(ctx) {
     if (!root.__wsSeen.has(k)) root.__wsSeen.set(k, new Set());
     return root.__wsSeen.get(k);
 }
-function markSeen(ctx, payload) { const set = seenEntries(ctx); for (const e of (payload && Array.isArray(payload.history) ? payload.history : [])) if (e && e.savedAt) set.add(String(e.savedAt)); }
+// Ключ записи — время И содержимое: два черновика в одну миллисекунду с разных компьютеров — разные.
+const entryKey = (e) => String(e.savedAt) + '|' + JSON.stringify(e.fields === undefined ? null : e.fields);
+function markSeen(ctx, payload) { const set = seenEntries(ctx); for (const e of (payload && Array.isArray(payload.history) ? payload.history : [])) if (e && e.savedAt) set.add(entryKey(e)); }
 /** Ответа на запись строки ещё нет (после срока)? Экспорт — для проверки. */
 export function lineWritePending(vsId) { return LINE_PENDING.has(Number(vsId)); }
 // CABINET_FIX_V1_R4 — сроки: повтор неудачной загрузки (с паузой, растущей до
@@ -2741,11 +2743,11 @@ export async function currentPayload(ctx) {
 async function adoptServerRecords(ctx, attempted = null) {
     const st = stateOf(ctx);
     const known = new Set(seenEntries(ctx));
-    for (const src of [st.payload, attempted]) for (const e of (src && Array.isArray(src.history) ? src.history : [])) if (e && e.savedAt) known.add(String(e.savedAt));
+    for (const src of [st.payload, attempted]) for (const e of (src && Array.isArray(src.history) ? src.history : [])) if (e && e.savedAt) known.add(entryKey(e));
     const fresh = await readPayload(ctx);
     if (FAILED_READ.has(fresh)) return { ok: false, foreign: 0 };
     let foreign = 0;
-    for (const e of fresh.history || []) if (e && e.kind === 'draft' && !e.kept && !known.has(String(e.savedAt))) { e.kept = 1; foreign++; }
+    for (const e of fresh.history || []) if (e && e.kind === 'draft' && !e.kept && !known.has(entryKey(e))) { e.kept = 1; foreign++; }
     st.payload = fresh;
     st.payloadVs = ctx.visitServiceId;
     st.saved = false;
