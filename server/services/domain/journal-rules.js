@@ -25,19 +25,34 @@ export const CONSULT_DX_DAYS = 30;
 export const REC_WINDOW_DAYS = 90;
 
 /**
- * Выбор услуг журнала → { error: null | 'empty' | 'too_many', ids }.
+ * Выбор услуг журнала → { error: null | 'too_many', ids, all }.
  * Предел проверяется на присланном массиве — до разбора; мусор (не целые > 0)
  * отбрасывается; повторы — один раз. Числа строкой принимаются (<select>).
+ *
+ * JOURNALS_V1_ALL (владелец, 02.10) — «with not selected service can you make
+ * show all the services»: ничего не выбрано (пусто, нет аргумента, только
+ * мусор) — не отказ, а журнал по ВСЕМ услугам: all = true, ids = [].
  */
 export function parseServiceIds(raw) {
-  if (Array.isArray(raw) && raw.length > JOURNAL_SERVICE_MAX) return { error: 'too_many', ids: [] };
+  if (Array.isArray(raw) && raw.length > JOURNAL_SERVICE_MAX) return { error: 'too_many', ids: [], all: false };
   const ids = [];
   const seen = new Set();
   for (const v of Array.isArray(raw) ? raw : []) {
     const n = typeof v === 'number' ? v : (typeof v === 'string' && /^\s*\d+\s*$/.test(v) ? Number(v) : NaN);
     if (Number.isSafeInteger(n) && n > 0 && !seen.has(n)) { seen.add(n); ids.push(n); }
   }
-  return { error: ids.length ? null : 'empty', ids };
+  return { error: null, ids, all: ids.length === 0 };   // JOURNALS_V1_ALL
+}
+
+// JOURNALS_V1_ALL — примечание журнала: по каким услугам он построен. Число
+// выбранных едет шаблоном (notes_t) — фраза с числом целиком в словаре не найдётся.
+export const JOURNAL_ALL_SERVICES_NOTE = 'Журнал построен по всем услугам: ни одна не выбрана.';
+export const JOURNAL_SELECTED_SERVICES_T = 'Журнал построен по выбранным услугам — выбрано услуг: {n}.';
+/** ids — разобранный выбор (parseServiceIds) → { text, template, params }. */
+export function journalScopeNote(ids) {
+  const n = Array.isArray(ids) ? ids.length : 0;
+  if (!n) return { text: JOURNAL_ALL_SERVICES_NOTE, template: null, params: null };
+  return { text: JOURNAL_SELECTED_SERVICES_T.replace('{n}', String(n)), template: JOURNAL_SELECTED_SERVICES_T, params: { n: String(n) } };
 }
 
 /** Тип: пусто — «все»; иначе одно из трёх значений, прочее — null (отказ). */

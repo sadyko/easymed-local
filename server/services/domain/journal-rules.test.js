@@ -10,6 +10,7 @@ import {
   diagnosisOfBody, consultDiagnosis, referralDiagnosis, conclusionOfDoc,
   ruDay, journalConclusion, RESULTS_RELEASED_T, DONE_WORD,   // JOURNALS_V1_CONCLUSION
   indexConsultDocs, REC_WINDOW_DAYS,   // JOURNALS_V1_RJ1
+  journalScopeNote, JOURNAL_ALL_SERVICES_NOTE, JOURNAL_SELECTED_SERVICES_T,   // JOURNALS_V1_ALL
 } from './journal-rules.js';
 
 test('год рождения — первые четыре знака даты, если это год', () => {
@@ -23,14 +24,31 @@ test('год рождения — первые четыре знака даты,
 const RU = new Intl.Collator('ru');
 const cmp = (a, b) => RU.compare(String(a || ''), String(b || ''));
 
-test('выбор услуг: числа и числа-строки без повторов; пусто и мусор — «empty»; больше 2000 — «too_many»', () => {
+// JOURNALS_V1_ALL (владелец, 02.10) — «with not selected service can you make
+// show all the services»: пусто и мусор — не отказ, а журнал по ВСЕМ услугам
+// (all: true); предел 2000 — только у явного выбора.
+test('выбор услуг: числа и числа-строки без повторов; пусто и мусор — все услуги (all); больше 2000 — «too_many»', () => {
   assert.equal(JOURNAL_SERVICE_MAX, 2000);
-  assert.deepEqual(parseServiceIds([3, '7', 3, ' 9 ']), { error: null, ids: [3, 7, 9] });
-  for (const bad of [undefined, null, 'abc', 5, [], [null, 'x', -1, 0, 1.5, {}, true]]) {
-    assert.deepEqual(parseServiceIds(bad), { error: 'empty', ids: [] }, JSON.stringify(bad));
+  assert.deepEqual(parseServiceIds([3, '7', 3, ' 9 ']), { error: null, ids: [3, 7, 9], all: false });
+  for (const none of [undefined, null, 'abc', 5, [], [null, 'x', -1, 0, 1.5, {}, true]]) {
+    assert.deepEqual(parseServiceIds(none), { error: null, ids: [], all: true }, JSON.stringify(none));
   }
-  assert.equal(parseServiceIds(Array.from({ length: 2001 }, (_, i) => i + 1)).error, 'too_many');
-  assert.equal(parseServiceIds(Array.from({ length: 2000 }, (_, i) => i + 1)).ids.length, 2000);
+  assert.deepEqual(parseServiceIds(Array.from({ length: 2001 }, (_, i) => i + 1)), { error: 'too_many', ids: [], all: false });
+  const max = parseServiceIds(Array.from({ length: 2000 }, (_, i) => i + 1));
+  assert.equal(max.error, null);
+  assert.equal(max.ids.length, 2000);
+  assert.equal(max.all, false);
+});
+
+test('JOURNALS_V1_ALL — примечание журнала: «по всем услугам» словом, «выбрано услуг: N» шаблоном', () => {
+  assert.deepEqual(journalScopeNote([]), { text: JOURNAL_ALL_SERVICES_NOTE, template: null, params: null });
+  assert.equal(JOURNAL_ALL_SERVICES_NOTE, 'Журнал построен по всем услугам: ни одна не выбрана.');
+  assert.deepEqual(journalScopeNote([3, 7, 9]), {
+    text: 'Журнал построен по выбранным услугам — выбрано услуг: 3.',
+    template: JOURNAL_SELECTED_SERVICES_T, params: { n: '3' },
+  });
+  assert.equal(JOURNAL_SELECTED_SERVICES_T, 'Журнал построен по выбранным услугам — выбрано услуг: {n}.');
+  assert.deepEqual(journalScopeNote(undefined), journalScopeNote([]));
 });
 
 test('тип: пусто — «все»; три значения; прочее — отказ (null)', () => {

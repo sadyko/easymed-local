@@ -93,8 +93,11 @@ export function selectAllFound(selected, found) {
     return cleanServiceIds([...(selected || []), ...(found || []).map((sv) => sv.id)]);
 }
 
+// JOURNALS_V1_ALL (владелец, 02.10) — ничего не выбрано — журнал по всем
+// услугам, и кнопка говорит это прямо: «Все услуги»; выбраны — «Выбрано услуг: N».
 export function servicesButtonText(n) {
-    return trf('Выбрать услуги ({n})', { n: Number(n) || 0 });
+    const count = Number(n) || 0;
+    return count > 0 ? trf('Выбрано услуг: {n}', { n: count }) : tr('Все услуги');
 }
 
 /**

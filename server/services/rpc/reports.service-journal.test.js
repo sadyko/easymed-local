@@ -157,18 +157,50 @@ test('кто направил (без рекомендаций): стацион�
   } finally { db.close(); }
 });
 
-test('service_ids: пусто или мусор — отказ с подсказкой; больше 2000 — отказ; неизвестный id — без строк; неверный тип — отказ', () => {
+// JOURNALS_V1_ALL (владелец, 02.10) — «with not selected service can you make
+// show all the services»: ничего не выбрано (пусто, нет аргумента, мусор) —
+// журнал по ВСЕМ услугам, ровно те же строки, что при выборе всех услуг.
+test('JOURNALS_V1_ALL — ничего не выбрано (пусто, нет, мусор): журнал по всем услугам; примечание «по всем услугам»', () => {
   const db = clinic();
   try {
     const run = (extra) => runReport(db, { kind: 'service_journal', ...MARCH, ...extra }, admin);
-    for (const bad of [undefined, [], 'abc', [null, 'x', -1, 0, 1.5, {}]]) {
-      assert.throws(() => run({ service_ids: bad }), (e) => e.status === 400 && /Выберите услуги/.test(e.message), JSON.stringify(bad));
+    const allIds = db.prepare('SELECT id FROM services ORDER BY id').all().map((s) => s.id);
+    const every = run({ service_ids: allIds });
+    assert.ok(col(every, 'Услуга').includes('Приём терапевта'), 'услуга, которой нет в выборе журнала по умолчанию, — тоже строка');
+    assert.equal(every.rows.length, journal(db).rows.length + 1);
+    for (const none of [undefined, null, [], 'abc', 5, [null, 'x', -1, 0, 1.5, {}]]) {
+      const r = run(none === undefined ? {} : { service_ids: none });
+      assert.deepEqual(r.columns, every.columns, JSON.stringify(none));
+      assert.deepEqual(r.rows, every.rows, JSON.stringify(none));
+      assert.deepEqual(r.cells_t, every.cells_t, JSON.stringify(none));
+      assert.equal(r.notes[0], 'Журнал построен по всем услугам: ни одна не выбрана.', JSON.stringify(none));
+      assert.equal(r.notes_t[0], null, 'фраза без чисел — словарём целиком');
+      assert.deepEqual(r.notes.slice(1), every.notes.slice(1));
     }
+    // Тип и здания работают и без выбора услуг.
+    assert.deepEqual(col(run({ kind_of_care: 'inpatient' }), 'Дата'), ['2026-03-10', '2026-03-11', '2026-03-12', '2026-03-22', '2026-03-25']);
+    assert.deepEqual(col(run({ kind_of_care: 'outpatient' }), 'Услуга'), col(run({ service_ids: allIds, kind_of_care: 'outpatient' }), 'Услуга'));
+    assert.deepEqual(run({ buildings: ['B'] }).rows, []);
+    __setReportsPushDown(false);
+    try { assert.deepEqual(run({}).rows, every.rows); } finally { __setReportsPushDown(true); }
+    assert.throws(() => run({ kind_of_care: 'day' }), (e) => e.status === 400 && /Амбулатория/.test(e.message));
+  } finally { db.close(); }
+});
+
+test('явный выбор — как прежде: больше 2000 — отказ; неизвестный id — без строк; неверный тип — отказ; примечание «выбрано услуг: N» шаблоном', () => {
+  const db = clinic();
+  try {
+    const run = (extra) => runReport(db, { kind: 'service_journal', ...MARCH, ...extra }, admin);
     assert.throws(() => run({ service_ids: Array.from({ length: 2001 }, (_, i) => i + 1) }),
       (e) => e.status === 400 && /не больше 2000/.test(e.message) && e.template && e.params.max === '2000');
+    // JOURNALS_V1_ALL — предел — у присланного массива: 2001 мусорный элемент — тоже отказ, а не «все услуги».
+    assert.throws(() => run({ service_ids: Array.from({ length: 2001 }, () => 'x') }), (e) => e.status === 400 && /не больше 2000/.test(e.message));
     const r = run({ service_ids: ['3', 'мусор', 3, 999999] });   // ЭКГ строкой и числом, неизвестный id
     assert.deepEqual(col(r, 'Услуга'), ['ЭКГ', 'ЭКГ', 'ЭКГ']);
+    assert.equal(r.notes[0], 'Журнал построен по выбранным услугам — выбрано услуг: 2.', 'ЭКГ и неизвестный id — два выбранных');
+    assert.deepEqual(r.notes_t[0], { template: 'Журнал построен по выбранным услугам — выбрано услуг: {n}.', params: { n: '2' } });
     assert.deepEqual(run({ service_ids: [999999] }).rows, []);
+    assert.equal(journal(db).notes[0], 'Журнал построен по выбранным услугам — выбрано услуг: 3.');
     assert.throws(() => run({ service_ids: [1], kind_of_care: 'day' }), (e) => e.status === 400 && /Амбулатория/.test(e.message));
   } finally { db.close(); }
 });
@@ -178,7 +210,7 @@ test('итога нет; здания — только соседнее — пу
   try {
     const r = journal(db);
     assert.deepEqual(r.summable_columns, []);
-    assert.equal(r.notes.length, 4, 'JOURNALS_V1_CONCLUSION — четвёртое примечание: откуда «Заключение»');
+    assert.equal(r.notes.length, 5, 'JOURNALS_V1_CONCLUSION — откуда «Заключение»; JOURNALS_V1_ALL — по каким услугам построен');
     assert.deepEqual(journal(db, { buildings: ['B'] }).rows, []);
     __setReportsPushDown(false);
     try { assert.deepEqual(journal(db).rows, r.rows); } finally { __setReportsPushDown(true); }

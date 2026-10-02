@@ -29,7 +29,12 @@ test('пул потоков: массив service_ids доезжает до жу
   assert.equal(configureReportPool({ db, dbFile: file }), true, 'пул не включился — база не в WAL?');
   try {
     assert.deepEqual(await dispatchRpc(db, 'run_report', getRpc('run_report'), args, admin), want);
-    await assert.rejects(dispatchRpc(db, 'run_report', getRpc('run_report'), { ...args, service_ids: [] }, admin),
-      (e) => e.status === 400 && /Выберите услуги/.test(e.message));
+    // JOURNALS_V1_ALL — пустой выбор — журнал по всем услугам, и через пул тот же ответ.
+    const all = { ...args, service_ids: [] };
+    const wantAll = getRpc('run_report')(db, all, admin);
+    assert.equal(wantAll.rows.length, 2, 'ничего не выбрано — обе услуги');
+    assert.deepEqual(await dispatchRpc(db, 'run_report', getRpc('run_report'), all, admin), wantAll);
+    await assert.rejects(dispatchRpc(db, 'run_report', getRpc('run_report'), { ...args, service_ids: Array.from({ length: 2001 }, (_, i) => i + 1) }, admin),
+      (e) => e.status === 400 && /не больше 2000/.test(e.message));
   } finally { await shutdownReportPool(); }
 });

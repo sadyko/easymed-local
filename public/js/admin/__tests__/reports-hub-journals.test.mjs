@@ -14,7 +14,8 @@ globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null)
 globalThis.document = globalThis.document || { documentElement: {}, addEventListener() {}, createElement: () => ({ style: {} }), head: { appendChild() {} }, body: { appendChild() {} }, getElementById: () => null };
 globalThis.window = globalThis.window || { location: { hostname: 'localhost' }, localStorage: globalThis.localStorage, addEventListener() {}, dispatchEvent() { return true; } };
 
-const { REPORT_DEFS, reportKinds, defaultReportOptions, reportArgs, servicesMissing } = await import('../views/reports-hub.js');
+const HUB = await import('../views/reports-hub.js');
+const { REPORT_DEFS, reportKinds, defaultReportOptions, reportArgs } = HUB;
 const { REPORT_GROUP } = await import('../../shared/permission-catalog.js');
 const { ICON_MAP } = await import('../icon-map.js');
 const { openDb } = await import('../../../../server/db/connection.js');
@@ -52,15 +53,31 @@ test('«Журнал услуг»: «Услуги» — окно выбора, �
   assert.notEqual(defaultReportOptions(d).service_ids, defaultReportOptions(d).service_ids);
 });
 
-test('пустой выбор услуг — отчёт не строится: подсказка вместо запроса', () => {
+// JOURNALS_V1_ALL (владелец, 02.10) — «with not selected service can you make
+// show all the services»: пустой выбор больше не останавливает отчёт — запрос
+// уходит с service_ids: [], и сервер строит журнал по всем услугам.
+test('пустой выбор услуг — журнал по всем услугам: подсказки «Выберите услуги» нет, запрос уходит', () => {
   const d = def('service_journal');
-  assert.equal(servicesMissing(d, 'service_journal', { service_ids: [] }), true);
-  assert.equal(servicesMissing(d, 'service_journal', {}), true);
-  assert.equal(servicesMissing(d, 'service_journal', { service_ids: [1] }), false);
-  assert.equal(servicesMissing(def('inpatient_register'), 'inpatient_register', {}), false);
-  assert.equal(servicesMissing(def('total_revenue'), 'total_revenue', {}), false);
+  assert.equal(HUB.servicesMissing, undefined, 'проверка «услуги не выбраны» убрана');
+  assert.doesNotMatch(hub, /servicesMissing|Выберите услуги/);
   const gen = hub.slice(hub.indexOf('async function generate()'), hub.indexOf('const token = ++st.reqSeq;'));
-  assert.match(gen, /if \(servicesMissing\(rep, st\.kind, st\.opts\)\) \{\s*toast\(tr\('Выберите услуги\.'\), 'info'\);/);
+  assert.ok(gen.length > 20, 'нет generate()');
+  assert.doesNotMatch(gen, /paintPreviewEmpty/, 'до запроса ничего не останавливает отчёт');
+  assert.deepEqual(reportArgs(d, 'service_journal', defaultReportOptions(d)), { service_ids: [], kind_of_care: 'all' });
+  const db = openDb(':memory:');
+  migrate(db);
+  try {
+    db.prepare("INSERT INTO services (id, name, price) VALUES (901, 'УЗИ', 1), (902, 'ЭКГ', 1)").run();
+    db.prepare("INSERT INTO patients (id, mrn, full_name) VALUES (1, 'P-1', 'Пациент')").run();
+    db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (1, 1, '2026-01-10T07:00:00Z', 'arrived')").run();
+    db.prepare("INSERT INTO visit_services (visit_id, service_id, quantity, unit_price, total, status) VALUES (1, 901, 1, 1, 1, 'completed'), (1, 902, 1, 1, 1, 'queued')").run();
+    const args = (opts) => ({ kind: 'service_journal', from: '2026-01-01', to: '2026-01-31', ...reportArgs(d, 'service_journal', opts) });
+    const all = runReport(db, args(defaultReportOptions(d)), { id: 1, role: 'admin' });
+    assert.equal(all.rows.length, 2, 'ничего не выбрано — обе услуги');
+    assert.equal(all.notes[0], 'Журнал построен по всем услугам: ни одна не выбрана.');
+    const one = runReport(db, args({ service_ids: [902], kind_of_care: 'all' }), { id: 1, role: 'admin' });
+    assert.equal(one.rows.length, 1, 'выбор — как прежде');
+  } finally { db.close(); }
 });
 
 test('сервер знает оба вида и отвечает колонками журналов', () => {
@@ -79,7 +96,8 @@ test('сервер знает оба вида и отвечает колонка
 
 test('выбор услуг помнится в браузере и открывает окно выбора; новый выбор сбрасывает результат', () => {
   // JOURNALS_V1_RJ2C (ревью F7) — выбор помнится у каждого сотрудника свой.
-  assert.match(hub, /import \{ openReportServicePicker, loadRememberedServices, rememberServices, browserStorage, servicesButtonText, currentUserId \} from '\.\/report-service-picker\.js\?v=jrn3';/);
+  // JOURNALS_V1_ALL — jrn4: кнопка «Все услуги» / «Выбрано услуг: N».
+  assert.match(hub, /import \{ openReportServicePicker, loadRememberedServices, rememberServices, browserStorage, servicesButtonText, currentUserId \} from '\.\/report-service-picker\.js\?v=jrn4';/);
   assert.match(hub, /if \(o\.type === 'services'\) st\.opts\[o\.arg\] = loadRememberedServices\(browserStorage\(\), rep\.kind, currentUserId\(\)\);/);
   const fn = hub.slice(hub.indexOf('function servicesOption(o)'), hub.indexOf('function resetResult()'));
   assert.ok(fn.length > 100, 'нет servicesOption');
@@ -132,5 +150,5 @@ test('«Скачать Excel»: кнопка берётся до await и сно
 // с прежним адресом браузер взял бы из своего кэша модулей.
 test('штамп reports-hub.js в admin.js — последний в серии журналов', () => {
   const admin = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin.js'), 'utf8');
-  assert.match(admin, /from '\.\/admin\/views\/reports-hub\.js\?v=jrn8';/);
+  assert.match(admin, /from '\.\/admin\/views\/reports-hub\.js\?v=jrn9';/);   // JOURNALS_V1_ALL
 });

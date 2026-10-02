@@ -103,6 +103,7 @@ import {   // JOURNALS_V1
   journalConclusion,   // JOURNALS_V1_CONCLUSION — «Заключение»: документ врача, иначе статус строки
   indexConsultDocs,    // JOURNALS_V1_RJ1 — консультации по «пациент|врач», не поиск по всем на строку
   REC_WINDOW_DAYS,     // JOURNALS_V1_RJ1 — окно рекомендации из кабинета
+  journalScopeNote,    // JOURNALS_V1_ALL — примечание «по всем услугам» / «выбрано услуг: N»
 } from '../domain/journal-rules.js';
 import { ADMISSION_PAID_TOTAL_SQL, ADMISSION_LAST_PAID_AT_SQL, ADMISSION_REVIEW_DIAGNOSIS_SQL } from '../domain/admission-facts.js';   // JOURNALS_V1
 import { wardClassLabel } from '../../../public/js/shared/ward-class.js';
@@ -4346,15 +4347,21 @@ function inpatientRegisterReport(db, args, ctx) {
 const JOURNAL_COLUMNS = ['№', 'Ич. рақам (Пор. № пациента)', 'ФИО', 'Пол', 'Год рождения', 'ИБ №', 'Кто направил',
   'Диагноз при направлении', 'Дата', 'Услуга', 'Заключение', 'Врач', 'Лечащий врач'];
 const JOURNAL_INPATIENT_ONLY = new Set(['ИБ №', 'Лечащий врач']);
-const JOURNAL_EMPTY_MSG = 'Выберите услуги — журнал строится только по выбранным услугам.';
 const JOURNAL_TOO_MANY_T = 'Слишком много услуг в журнале: не больше {max}. Сузьте выбор.';
 const JOURNAL_CARE_MSG = 'Тип — «Все», «Стационар» или «Амбулатория».';
-const JOURNAL_SERVICE_NOTE = 'Строка — одна оказанная услуга из выбранных: амбулаторная — прошедшая кассу и не отменённая, стационарная — из акта госпитализации. «Стационар» — если в этот день пациент лежал в стационаре; одна и та же услуга в визите и в акте за один день показана один раз.';
+// JOURNALS_V1_ALL — без выбора журнал строится по всем услугам: строка — не «из выбранных».
+const JOURNAL_SERVICE_NOTE = 'Строка — одна оказанная услуга: амбулаторная — прошедшая кассу и не отменённая, стационарная — из акта госпитализации. «Стационар» — если в этот день пациент лежал в стационаре; одна и та же услуга в визите и в акте за один день показана один раз.';
 const JOURNAL_REFERRER_NOTE = '«Кто направил»: у стационара — лечащий врач; у амбулатории — врач, рекомендовавший услугу в кабинете, иначе источник направления визита, иначе «сам». «Диагноз при направлении»: у стационара — диагноз при поступлении или последнего опубликованного осмотра; у амбулатории — основной диагноз подписанной консультации направившего врача за 30 дней.';
 const JOURNAL_CONCLUSION_NOTE = 'Заключение — только подписанное врачом; черновики не показываются. На экране длинное заключение обрезано, в Excel и при печати — целиком.';
 // JOURNALS_V1_CONCLUSION (владелец, 02.10) — откуда «Заключение» и что стоит без документа.
 const JOURNAL_STATUS_NOTE = 'Заключение берётся из подписанного документа врача: поле «Заключение», а если оно пустое — «Диагноз» (основной диагноз «код — название»). Без документа у анализа стоит «Результаты выданы» и день выдачи, у другой услуги — «Выполнено», когда она отмечена выполненной; иначе пусто.';
 const sqlList = (xs) => xs.map((s) => "'" + s + "'").join(', ');
+// JOURNALS_V1_ALL — услуга строки: выбор — список одним параметром-массивом
+// (json_each); ничего не выбрано (idsJson = null) — все услуги, условия нет
+// вовсе: выборку ведёт индекс периода, а не список из тысяч услуг.
+const JOURNAL_SERVICE_SQL = (colExpr, idsJson) => (idsJson == null
+  ? { sql: '1 = 1', params: [] }
+  : { sql: `${colExpr} IN (SELECT value FROM json_each(?))`, params: [idsJson] });
 const JOURNAL_PAID_SQL = (vs) => `${vs}.status IN (${sqlList(LAB_RESULT_STATUSES)})`;
 // Госпитализация, которая шла в этот местный день: поступил (не заявка — у
 // заявки admitted_at = время заявки; не отмена — у неё нет выписки) не позже
@@ -4423,6 +4430,7 @@ function journalVisitLines(db, args, ctx, { from, to, idsJson }) {
   const bf = branchFilter(args, OWN_BRANCH_OR('v.branch_id'));
   const gf = buildingWhere(db, ctx, args, 'visit_services', 'vs');
   const day = localDate('v.visit_date');
+  const svc = JOURNAL_SERVICE_SQL('vs.service_id', idsJson);   // JOURNALS_V1_ALL
   return db.prepare(`
     SELECT 'vs' AS src, vs.id AS line_id, ${originExpr(db, 'visit_services', 'vs')} AS origin,
            v.patient_id AS patient_id, ${day} AS day,
@@ -4442,12 +4450,12 @@ function journalVisitLines(db, args, ctx, { from, to, idsJson }) {
       -- счёт, оставленный открытым после полного возврата (void_when_zero: false), строку не оставляет.
       LEFT JOIN invoice_items jri ON jri.id = vs.invoice_item_id
       ${REFUND_JOIN('jrf', 'jri.invoice_id')}
-     WHERE vs.service_id IN (SELECT value FROM json_each(?))
+     WHERE ${svc.sql}   -- JOURNALS_V1_ALL
        AND ${JOURNAL_PAID_SQL('vs')}
        AND ${LIVE_VISIT_SQL('v')}
        AND ${NOT_REFUNDED_LINE_SQL('vs', 'out')}   -- JOURNALS_V1_RJ1
        AND ${NOT_FULLY_REFUNDED_SQL('jrf')}   -- JOURNALS_V1_RJ2 (F6) — то же правило, что у выплаты врачу
-       AND ${range.sql}${bf.clause}${gf.clause}`).all(idsJson, ...range.params, ...bf.params, ...gf.params);
+       AND ${range.sql}${bf.clause}${gf.clause}`).all(...svc.params, ...range.params, ...bf.params, ...gf.params);   // JOURNALS_V1_ALL
 }
 
 function journalAdmissionLines(db, args, ctx, { from, to, idsJson }) {
@@ -4459,6 +4467,7 @@ function journalAdmissionLines(db, args, ctx, { from, to, idsJson }) {
   const range = rangeOf(when, from, to);
   const bf = branchFilter(args, OWN_BRANCH_SQL);   // счёт госпитализации — без филиала: свой
   const gf = buildingWhere(db, ctx, args, 'admission_services', 'ias');
+  const svc = JOURNAL_SERVICE_SQL('ias.service_id', idsJson);   // JOURNALS_V1_ALL
   return db.prepare(`
     SELECT 'as' AS src, ias.id AS line_id, '' AS origin,
            a.patient_id AS patient_id, ${localDate(when)} AS day,
@@ -4472,7 +4481,7 @@ function journalAdmissionLines(db, args, ctx, { from, to, idsJson }) {
       JOIN admissions a ON a.id = ias.admission_id
       JOIN services s   ON s.id = ias.service_id
       LEFT JOIN users pu ON pu.id = COALESCE(ias.performer_id, ias.doctor_id)
-     WHERE ias.service_id IN (SELECT value FROM json_each(?))
+     WHERE ${svc.sql}   -- JOURNALS_V1_ALL
        AND ias.performed_at IS NOT NULL   -- JOURNALS_V1_RJ1 — только выполненная
        AND ias.clinic_item_id IS NULL
        AND COALESCE(ias.notes, '') NOT LIKE 'ACCOMMODATION%'
@@ -4480,7 +4489,7 @@ function journalAdmissionLines(db, args, ctx, { from, to, idsJson }) {
        AND COALESCE(a.status, '') <> 'cancelled'
        AND ${NOT_REFUNDED_INVOICE_SQL('ias')}
        AND ${NOT_RELEASED_AFTER_STAY_SQL('ias', 'a')}   -- JOURNALS_V1_RJ2 (F6) — возврат, пока лежит, строку не убирает
-       AND ${range.sql}${bf.clause}${gf.clause}`).all(idsJson, ...range.params, ...bf.params, ...gf.params);
+       AND ${range.sql}${bf.clause}${gf.clause}`).all(...svc.params, ...range.params, ...bf.params, ...gf.params);   // JOURNALS_V1_ALL
 }
 
 // JOURNALS_V1_SERVICE — сведения к строкам журнала: по одному запросу на вид
@@ -4575,26 +4584,29 @@ function journalLabServiceIds(db, idsJson) {
 function serviceJournalReport(db, args, ctx) {
   const parsed = parseServiceIds(args && args.service_ids);
   if (parsed.error === 'too_many') throw rpcT(RpcError, JOURNAL_TOO_MANY_T, { max: String(JOURNAL_SERVICE_MAX) }, 400);
-  if (parsed.error) throw new RpcError(JOURNAL_EMPTY_MSG, 400);
   const care = parseKindOfCare(args && args.kind_of_care);
   if (!care) throw new RpcError(JOURNAL_CARE_MSG, 400);
   const { from, to } = resolveRange(db, args);
   // Один параметр-массив, а не 2000 знаков «?»: неизвестный id просто не
-  // находит строк.
-  const idsJson = JSON.stringify(parsed.ids);
+  // находит строк. JOURNALS_V1_ALL — ничего не выбрано (parsed.all): null —
+  // строки всех услуг, без условия на услугу.
+  const idsJson = parsed.all ? null : JSON.stringify(parsed.ids);
   const raw = [
     ...journalVisitLines(db, args, ctx, { from, to, idsJson }),
     ...journalAdmissionLines(db, args, ctx, { from, to, idsJson }),
   ];
   const kept = dedupeJournalLines(raw)
     .filter((l) => care === 'all' || (care === 'inpatient') === (l.admission_id != null));
-  const facts = journalFacts(db, kept, { from, to, idsJson });
+  // JOURNALS_V1_ALL — рекомендациям и признаку «анализ» нужны только услуги
+  // строк журнала: без выбора — услуги найденных строк, а не весь справочник.
+  const factIdsJson = idsJson != null ? idsJson : JSON.stringify([...new Set(kept.map((l) => l.service_id))]);
+  const facts = journalFacts(db, kept, { from, to, idsJson: factIdsJson });
   const lines = sortJournalLines(kept.map((l) => ({ ...l, patient: (facts.patients.get(l.patient_id) || {}).full_name || '' })), ruCompare);
   const ordinals = patientOrdinals(lines);
   const columns = JOURNAL_COLUMNS.filter((c) => !(care === 'outpatient' && JOURNAL_INPATIENT_ONLY.has(c)));
   // JOURNALS_V1_CONCLUSION — статус без документа переводится шаблоном (cells_t:
   // [строка, колонка, шаблон, значения]) — «Заключение» не колонка-перечисление.
-  const labIds = journalLabServiceIds(db, idsJson);
+  const labIds = journalLabServiceIds(db, factIdsJson);   // JOURNALS_V1_ALL
   const conclCol = columns.indexOf('Заключение');
   const cellsT = [];
   const rows = lines.map((l, i) => {
@@ -4620,11 +4632,15 @@ function serviceJournalReport(db, args, ctx) {
     };
     return columns.map((c) => cells[c]);
   });
+  // JOURNALS_V1_ALL — первым примечанием: по каким услугам построен журнал;
+  // число выбранных — шаблоном (noteT → notes_t), фраза «по всем» — словарём.
+  const scope = journalScopeNote(parsed.ids);
   return {
     columns, rows,
     by_building: summariseByBuilding(ctx, lines, {}),
     total_label: '',
-    notes: [JOURNAL_SERVICE_NOTE, JOURNAL_REFERRER_NOTE, JOURNAL_CONCLUSION_NOTE, JOURNAL_STATUS_NOTE],   // JOURNALS_V1_CONCLUSION — четвёртое
+    notes: [scope.template ? noteT(scope.text, scope.template, scope.params) : scope.text,   // JOURNALS_V1_ALL
+      JOURNAL_SERVICE_NOTE, JOURNAL_REFERRER_NOTE, JOURNAL_CONCLUSION_NOTE, JOURNAL_STATUS_NOTE],   // JOURNALS_V1_CONCLUSION — «Заключение»
     cells_t: cellsT,   // JOURNALS_V1_CONCLUSION
   };
 }

@@ -77,7 +77,9 @@ test('HTTP: журнал услуг — массив service_ids в теле д�
   assert.equal(r.status, 200, JSON.stringify(r.json).slice(0, 300));
   const d = r.json.data;
   assert.equal(d.columns.length, 13);
-  assert.equal(d.notes.length, 4);
+  assert.equal(d.notes.length, 5);   // JOURNALS_V1_ALL — пятое: по каким услугам построен
+  assert.equal(d.notes[0], 'Журнал построен по выбранным услугам — выбрано услуг: 2.');
+  assert.deepEqual(d.notes_t[0], { template: 'Журнал построен по выбранным услугам — выбрано услуг: {n}.', params: { n: '2' } });
   assert.deepEqual(d.summable_columns, []);
   const rows = objectsOf(d);
   assert.equal(rows.length, 2);
@@ -101,11 +103,21 @@ test('HTTP: журнал услуг — массив service_ids в теле д�
   assert.equal(amb.json.data.rows.length, 1);
 });
 
+// JOURNALS_V1_ALL (владелец, 02.10) — ничего не выбрано — журнал по всем услугам, не отказ.
+test('HTTP: без выбора услуг (пусто, нет аргумента, не массив) — журнал по всем услугам', async (t) => {
+  const ctx = await start(t);
+  const both = await rpc(ctx, 'admin', { kind: 'service_journal', ...MARCH, service_ids: [1, 2] });
+  assert.equal(both.status, 200);
+  for (const none of [{ service_ids: [] }, {}, { service_ids: '1' }, { service_ids: ['x', -1] }]) {
+    const r = await rpc(ctx, 'admin', { kind: 'service_journal', ...MARCH, ...none });
+    assert.equal(r.status, 200, JSON.stringify(none) + ' ' + JSON.stringify(r.json).slice(0, 200));
+    assert.deepEqual(r.json.data.rows, both.json.data.rows, JSON.stringify(none));
+    assert.equal(r.json.data.notes[0], 'Журнал построен по всем услугам: ни одна не выбрана.');
+  }
+});
+
 test('HTTP: отказы журнала услуг — по-русски, 400', async (t) => {
   const ctx = await start(t);
-  const empty = await rpc(ctx, 'admin', { kind: 'service_journal', ...MARCH, service_ids: '1' });
-  assert.equal(empty.status, 400);
-  assert.match(empty.json.error.message, /Выберите услуги/);
   const many = await rpc(ctx, 'admin', { kind: 'service_journal', ...MARCH, service_ids: Array.from({ length: 2001 }, (_, i) => i + 1) });
   assert.equal(many.status, 400);
   assert.match(many.json.error.message, /не больше 2000/);

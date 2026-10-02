@@ -44,7 +44,7 @@ import { CATEGORY_LABEL } from './inventory-shared.js';
 // ROLE_REPORTS_SETTINGS_V1 — плитка видна, если её группа отчётов выдана роли.
 import { reportKindAllowed } from '../permissions.js';
 // JOURNALS_V1_SERVICE — окно выбора услуг журнала и запомненный выбор.
-import { openReportServicePicker, loadRememberedServices, rememberServices, browserStorage, servicesButtonText, currentUserId } from './report-service-picker.js?v=jrn3';   // JOURNALS_V1 — jrn2 поиск во всю ширину; JOURNALS_V1_RJ2C — jrn3 предел у галочки и «Готово», выбор у каждого сотрудника свой
+import { openReportServicePicker, loadRememberedServices, rememberServices, browserStorage, servicesButtonText, currentUserId } from './report-service-picker.js?v=jrn4';   // JOURNALS_V1 — jrn2 поиск во всю ширину; JOURNALS_V1_RJ2C — jrn3 предел у галочки и «Готово», выбор у каждого сотрудника свой; JOURNALS_V1_ALL — jrn4 «Все услуги» / «Выбрано услуг: N»
 import { reportPrintHtml } from './report-print.js?v=jrn4';   // JOURNALS_V1_PRINT — печатная страница отчёта (jrn2 — перенос без разрыва слов); JOURNALS_V1_RJ2C — jrn3 не больше 5000 строк, jrn4 «Итого — по всем строкам»
 
 // Экспортируется, чтобы определения (в т.ч. рисовалку графиков) можно было
@@ -183,7 +183,7 @@ export const REPORT_DEFS = [
         desc:  'Один журнал на выбранные услуги — УЗИ, ЭКГ или любые другие: пациент, кто направил, диагноз при направлении, дата, заключение и врач. Стационар и амбулатория — вместе или порознь.',
         options: [
             // Окно выбора с поиском и «Выбрать все найденные» (report-service-picker.js),
-            // выбор помнится в этом браузере. Пусто — отчёт не строится.
+            // выбор помнится в этом браузере. JOURNALS_V1_ALL — пусто — журнал по всем услугам.
             { arg: 'service_ids', label: 'Услуги', type: 'services', choices: [] },
             { arg: 'kind_of_care', label: 'Тип', choices: [['all', 'Все'], ['inpatient', 'Стационар'], ['outpatient', 'Амбулатория']] },
         ],
@@ -288,12 +288,9 @@ export function reportArgs(rep, kind, opts) {
     }
     return out;
 }
-// JOURNALS_V1_SERVICE — у вида есть выбор услуг, а он пуст: отчёт не строится,
-// человек видит «Выберите услуги.» (сервер ответил бы тем же отказом, но
-// запрос не нужен).
-export function servicesMissing(rep, kind, opts) {
-    return optionsFor(rep, kind).some((o) => o.type === 'services' && !(Array.isArray(opts && opts[o.arg]) && opts[o.arg].length));
-}
+// JOURNALS_V1_ALL (владелец, 02.10) — пустой выбор услуг отчёт больше не
+// останавливает: запрос уходит с service_ids: [], сервер строит журнал по
+// всем услугам (прежняя проверка пустого выбора и её подсказка убраны).
 // DOCTOR_LINES_SPECIALTY_V1 — варианты выпадающего фильтра: статические
 // (первый — «все») плюс пришедшие от сервера. Пришедшее значение, совпавшее со
 // статическим, не дублируется.
@@ -818,13 +815,6 @@ async function openReportBuilder(rep) {
 
     async function generate() {
         if (st.generating) return;
-        // JOURNALS_V1_SERVICE — без выбранных услуг журнал не строится:
-        // подсказка вместо запроса.
-        if (servicesMissing(rep, st.kind, st.opts)) {
-            toast(tr('Выберите услуги.'), 'info');
-            paintPreviewEmpty(tr('Выберите услуги.'));
-            return;
-        }
         st.generating = true;
         // REPORTS_V2, ревью M1 — вид и фильтры берутся ДО ожидания ответа, а
         // ответ, пришедший после смены вида (или после сброса результата),
@@ -951,8 +941,9 @@ async function openReportBuilder(rep) {
         }
         return sel;
     }
-    // JOURNALS_V1_SERVICE — «Выбрать услуги (N)»: окно со списком, поиском и
-    // «Выбрать все найденные». Новый выбор запоминается и сбрасывает результат.
+    // JOURNALS_V1_SERVICE — окно со списком, поиском и «Выбрать все найденные».
+    // Новый выбор запоминается и сбрасывает результат. JOURNALS_V1_ALL — на
+    // кнопке «Все услуги», пока ничего не выбрано, иначе «Выбрано услуг: N».
     function servicesOption(o) {
         const ids = Array.isArray(st.opts[o.arg]) ? st.opts[o.arg] : [];
         return h('button', {

@@ -58,8 +58,11 @@ test('чистые правила: выбор без мусора и повто�
   assert.deepEqual(P.findServices(CATALOG, 'узи').map((s) => s.id), [1, 2, 4]);
   assert.deepEqual(P.findServices(CATALOG, '').map((s) => s.id), [1, 2, 3, 4]);
   assert.deepEqual(P.selectAllFound([3], P.findServices(CATALOG, 'узи')), [3, 1, 2, 4]);
-  assert.equal(P.servicesButtonText(3), 'Выбрать услуги (3)');
-  assert.equal(P.servicesButtonText(0), 'Выбрать услуги (0)');
+  // JOURNALS_V1_ALL — ничего не выбрано — журнал по всем услугам, и кнопка говорит это.
+  assert.equal(P.servicesButtonText(3), 'Выбрано услуг: 3');
+  assert.equal(P.servicesButtonText(1), 'Выбрано услуг: 1');
+  assert.equal(P.servicesButtonText(0), 'Все услуги');
+  assert.equal(P.servicesButtonText(undefined), 'Все услуги');
 });
 
 test('запомненный выбор: свой на каждый вид и каждого сотрудника; битое, чужое и недоступное хранилище — пусто, без ошибки', () => {
