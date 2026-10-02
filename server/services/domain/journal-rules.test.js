@@ -9,7 +9,7 @@ import {
   dedupeJournalLines, sortJournalLines, patientOrdinals, indexRecommendations, referrerOf,
   diagnosisOfBody, consultDiagnosis, referralDiagnosis, conclusionOfDoc,
   ruDay, journalConclusion, RESULTS_RELEASED_T, DONE_WORD,   // JOURNALS_V1_CONCLUSION
-  indexConsultDocs,   // JOURNALS_V1_RJ1
+  indexConsultDocs, REC_WINDOW_DAYS,   // JOURNALS_V1_RJ1
 } from './journal-rules.js';
 
 test('год рождения — первые четыре знака даты, если это год', () => {
@@ -179,4 +179,20 @@ test('диагноз консультации: документы — индек
   // Журнал раскладывает документы индексом один раз (reports.js journalFacts).
   const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'rpc', 'reports.js'), 'utf8');
   assert.match(src, /dxDocs = indexConsultDocs\(/, 'журнал передаёт в referralDiagnosis список, а не индекс');
+});
+
+// JOURNALS_V1_RJ1 (ревью, п. 5) — рекомендация восьмимесячной давности, давно
+// выполненная, называла направившего навсегда. Теперь — только за 90 дней до
+// дня визита и не закрытая раньше него (recommended_services: окно визита
+// ставит status 'done' + closed_at, когда рекомендацию добавили в визит;
+// «Удалить» — 'cancelled' + closed_at).
+test('кто направил: рекомендация — за 90 дней до визита и не закрытая до него; закрытая в день визита — его', () => {
+  assert.equal(REC_WINDOW_DAYS, 90);
+  const line = { admission_id: null, patient_id: 2, service_id: 2, day: '2026-03-15', visit_source: 'Клиника «Шифо»', visit_source_doctor_id: null };
+  const ref = (recs) => referrerOf(line, indexRecommendations(recs), null).text;
+  assert.equal(ref([{ patient_id: 2, service_id: 2, day: '2025-07-10', closed_day: '2025-07-11', doctor_id: 4, name: 'Кардиолог К.К.' }]), 'Клиника «Шифо»', 'восемь месяцев и давно выполнена');
+  assert.equal(ref([{ patient_id: 2, service_id: 2, day: '2025-12-01', closed_day: null, doctor_id: 2, name: 'Терапевт Т.Т.' }]), 'Клиника «Шифо»', '104 дня — старше окна');
+  assert.equal(ref([{ patient_id: 2, service_id: 2, day: '2025-12-15', closed_day: null, doctor_id: 2, name: 'Терапевт Т.Т.' }]), 'Терапевт Т.Т.', 'ровно 90 дней — в окне');
+  assert.equal(ref([{ patient_id: 2, service_id: 2, day: '2026-03-01', closed_day: '2026-03-03', doctor_id: 3, name: 'Лечащий Л.Л.' }]), 'Клиника «Шифо»', 'выполнена другим визитом до этого');
+  assert.equal(ref([{ patient_id: 2, service_id: 2, day: '2026-03-10', closed_day: '2026-03-15', doctor_id: 4, name: 'Кардиолог К.К.' }]), 'Кардиолог К.К.', 'закрыта в день визита — этим визитом');
 });

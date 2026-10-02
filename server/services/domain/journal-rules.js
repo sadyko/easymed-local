@@ -21,6 +21,8 @@ export const INPATIENT_REFERRER = 'Стационар';
 export const GENDER_RU = Object.freeze({ male: 'Муж.', female: 'Жен.' });
 /** Сколько дней назад ищется подписанная консультация направившего врача. */
 export const CONSULT_DX_DAYS = 30;
+/** JOURNALS_V1_RJ1 — сколько дней до визита рекомендация из кабинета ещё называет направившего. */
+export const REC_WINDOW_DAYS = 90;
 
 /**
  * Выбор услуг журнала → { error: null | 'empty' | 'too_many', ids }.
@@ -116,7 +118,13 @@ export function referrerOf(line, recIndex, adm) {
     return { text: name || INPATIENT_REFERRER, doctorId: name ? (adm.attending_doctor_id ?? null) : null };
   }
   const recs = (recIndex && recIndex.get(line.patient_id + '|' + line.service_id)) || [];
-  const rec = recs.find((r) => String(r.day || '') <= String(line.day || '') && String(r.name || '').trim());
+  // JOURNALS_V1_RJ1 (ревью, п. 5) — за REC_WINDOW_DAYS до дня визита и не
+  // закрытая раньше него (closed_day — день closed_at: «добавлена в визит» или
+  // «удалена»); закрытая в день визита — закрыта им.
+  const day = String(line.day || '');
+  const lo = dayMinus(day, REC_WINDOW_DAYS);
+  const rec = recs.find((r) => String(r.day || '') <= day && String(r.day || '') >= lo
+    && (!r.closed_day || String(r.closed_day) >= day) && String(r.name || '').trim());
   if (rec) return { text: String(rec.name).trim(), doctorId: rec.doctor_id ?? null };
   const source = String(line.visit_source || '').trim();
   if (source) return { text: source, doctorId: line.visit_source_doctor_id ?? null };

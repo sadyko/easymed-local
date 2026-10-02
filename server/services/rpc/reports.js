@@ -102,6 +102,7 @@ import {   // JOURNALS_V1
   indexRecommendations, referrerOf, referralDiagnosis, diagnosisOfBody, conclusionOfDoc, JOURNAL_SERVICE_MAX, CONSULT_DX_DAYS,
   journalConclusion,   // JOURNALS_V1_CONCLUSION — «Заключение»: документ врача, иначе статус строки
   indexConsultDocs,    // JOURNALS_V1_RJ1 — консультации по «пациент|врач», не поиск по всем на строку
+  REC_WINDOW_DAYS,     // JOURNALS_V1_RJ1 — окно рекомендации из кабинета
 } from '../domain/journal-rules.js';
 import { ADMISSION_PAID_TOTAL_SQL, ADMISSION_LAST_PAID_AT_SQL, ADMISSION_REVIEW_DIAGNOSIS_SQL } from '../domain/admission-facts.js';   // JOURNALS_V1
 import { wardClassLabel } from '../../../public/js/shared/ward-class.js';
@@ -4457,14 +4458,16 @@ function journalFacts(db, lines, { from, to, idsJson }) {
   // 'cancelled') — не направление. Имя — карточка врача, иначе записанное.
   const recs = indexRecommendations(db.prepare(`
     SELECT r.patient_id, r.service_id, ${localDate('r.created_at')} AS day, r.recommended_by AS doctor_id,
-           COALESCE(NULLIF(u.full_name, ''), NULLIF(r.recommended_by_name, '')) AS name
+           COALESCE(NULLIF(u.full_name, ''), NULLIF(r.recommended_by_name, '')) AS name,
+           ${localDate('r.closed_at')} AS closed_day   -- JOURNALS_V1_RJ1 — «добавлена в визит» / «удалена»
       FROM recommended_services r
       LEFT JOIN users u ON u.id = r.recommended_by
      WHERE r.patient_id IN (SELECT value FROM json_each(?))
        AND r.service_id IN (SELECT value FROM json_each(?))
        AND COALESCE(r.status, '') <> 'cancelled'
        AND ${localDate('r.created_at')} <= date(?)
-     ORDER BY r.created_at DESC, r.id DESC`).all(pids, idsJson, to));
+       AND ${localDate('r.created_at')} >= date(?, '-${REC_WINDOW_DAYS} days')   -- JOURNALS_V1_RJ1 — окно рекомендации (точное — referrerOf)
+     ORDER BY r.created_at DESC, r.id DESC`).all(pids, idsJson, to, from));
   // JOURNALS_V1_SERVICE — «Диагноз при направлении» у амбулатории: подписанная
   // консультация (protocol, не отозвана) за CONSULT_DX_DAYS до начала периода
   // и по его конец; точное окно строки — consultDiagnosis. Врач документа —
