@@ -95,6 +95,11 @@ import { lineUnitPrice, packageDiscountPct } from '../domain/pricing.js';
 // DOCTOR_LINES_SPECIALTY_V1 — «По специальностям» группирует тем же правилом,
 // которым карточка сотрудника сохраняет специальность (старые имена → одно).
 import { specialtyGroupName } from '../../../public/js/shared/specialty-list.js';
+// JOURNALS_V1 — журналы: правила без базы, общие с вкладкой «Госпитализации»
+// фрагменты SQL и словарь класса палаты (один модуль на сервер и браузер).
+import { birthYear } from '../domain/journal-rules.js';
+import { ADMISSION_PAID_TOTAL_SQL, ADMISSION_LAST_PAID_AT_SQL } from '../domain/admission-facts.js';
+import { wardClassLabel } from '../../../public/js/shared/ward-class.js';
 
 /**
  * Начисления врача (кабинет): свои — ВСЕГДА, и ни одна галочка «Отчётов» этого
@@ -4241,6 +4246,83 @@ function bySpecialtyReport(db, args, ctx) {
   };
 }
 
+// ===========================================================================
+// JOURNALS_V1 (владелец, 2026-10-02) — ЖУРНАЛЫ В «ОТЧЁТАХ».
+//
+// Владелец показал три журнала прежней программы («Годовой отчет по
+// пациентам», «УЗИ стационар», «ЭКГ журнал») и сказал: не журнал на каждую
+// услугу, а ОДИН журнал, где услуги выбирают из списка, и тип — стационар или
+// амбулатория. Отсюда два вида run_report одной группы прав «Журналы»
+// (reports.journals): «Реестр стационарных пациентов» (inpatient_register) и
+// «Журнал услуг» (service_journal). Колонки — по бумажному журналу владельца,
+// поэтому «Здание» колонкой не стоит (фильтр и разрез по зданиям работают).
+// Спецификация — docs/specs/2026-10-02-journals-design.md.
+// ===========================================================================
+
+// JOURNALS_V1_REGISTER — строка на госпитализацию, у которой местный день
+// поступления в периоде. Заявка (ordered) пациента ещё не положила, отменённая
+// (cancelled) в годовой реестр не входит. Палата — палата койки случая (койка
+// после выписки остаётся записанной), иначе палата случая; переводы не
+// разбираются. «Сумма оплаты» и «Дата оплаты» — domain/admission-facts.js, тем
+// же правилом, что вкладка «Госпитализации».
+const REGISTER_COLUMNS = ['ИБ №', 'ФИО', 'Год рождения', 'Отделение', 'Дата рег', 'Дата выписки', 'ФИО ЛВ', 'Сумма оплаты',
+  'Тип палаты', 'Дата оплаты', 'Страна', 'Регион', 'Адрес', 'Паспорт', 'Телефон'];
+const REGISTER_PAID_NOTE = '«Сумма оплаты» — оплачено по счетам госпитализации, кроме отменённых и возвращённых; «Дата оплаты» — день последней оплаты по ним. Заявки без поступления и отменённые госпитализации в реестр не входят.';
+const REGISTER_WARD_CLASS_NOTE = '«Тип палаты» — класс палаты, где стоит койка госпитализации (у выписанного — койка при выписке). Переводы между палатами не разбираются; класс задаётся в «Настройки → Помещения».';
+
+function inpatientRegisterReport(db, args, ctx) {
+  const { from, to } = resolveRange(db, args);
+  const range = rangeOf('a.admitted_at', from, to);
+  // Госпитализации пишутся без филиала и в своём здании: филиал — свой,
+  // здание — только своё (у admissions нет sync_origin).
+  const bf = branchFilter(args, OWN_BRANCH_SQL);
+  const gf = buildingWhere(db, ctx, args, 'admissions', 'a');
+  const list = db.prepare(`
+    SELECT a.id, a.admission_no, a.department,
+           ${localDate('a.admitted_at')}   AS admitted_day,
+           ${localDate('a.discharged_at')} AS discharged_day,
+           dep.name AS ward_department, w.ward_class AS ward_class,
+           COALESCE(NULLIF(doc.full_name, ''), doc.username) AS attending,
+           p.full_name, p.date_of_birth, p.country, p.region, p.district, p.address,
+           p.passport_number, p.national_id, p.phone,
+           ${ADMISSION_PAID_TOTAL_SQL('a')} AS paid_total,
+           ${localDate(ADMISSION_LAST_PAID_AT_SQL('a'))} AS paid_day
+      FROM admissions a
+      LEFT JOIN patients p      ON p.id = a.patient_id
+      LEFT JOIN beds b          ON b.id = a.bed_id
+      LEFT JOIN wards w         ON w.id = COALESCE(b.ward_id, a.ward_id)
+      LEFT JOIN departments dep ON dep.id = w.department_id
+      LEFT JOIN users doc       ON doc.id = a.attending_doctor_id
+     WHERE a.status NOT IN ('ordered', 'cancelled')
+       AND ${range.sql}${bf.clause}${gf.clause}
+     ORDER BY admitted_day, COALESCE(NULLIF(a.admission_no, ''), '#' || a.id), a.id`)
+    .all(...range.params, ...bf.params, ...gf.params);
+  const text = (v) => String(v == null ? '' : v).trim();
+  return {
+    columns: REGISTER_COLUMNS,
+    rows: list.map((r) => [
+      text(r.admission_no) || '#' + r.id,
+      r.full_name || '',
+      birthYear(r.date_of_birth),
+      text(r.department) || text(r.ward_department),
+      r.admitted_day || '',
+      r.discharged_day || '',
+      r.attending || '',
+      round2(r.paid_total),
+      wardClassLabel(r.ward_class),
+      r.paid_day || '',
+      text(r.country),
+      text(r.region),
+      [r.district, r.address].map(text).filter(Boolean).join(', '),
+      text(r.passport_number) || text(r.national_id),
+      text(r.phone),
+    ]),
+    by_building: summariseByBuilding(ctx, list.map((r) => ({ ...r, origin: '' })), { total: (r) => r.paid_total || 0 }),
+    total_label: 'Сумма оплаты',
+    notes: [REGISTER_PAID_NOTE, REGISTER_WARD_CLASS_NOTE],
+  };
+}
+
 // DOCTOR_LINES_SPECIALTY_V1 — варианты фильтра-выпадающего списка хаба
 // (option type 'select'): report_choices({ kind, arg }) → { choices: [[value,
 // label]] }. За ТЕМИ ЖЕ воротами, что сам отчёт: кому «Оплата врачей» закрыта,
@@ -4295,6 +4377,8 @@ const REPORTS_RU = {
   stock_consumption: stockConsumptionReport,
   stock_statement:   stockStatementReport,
   stock_expiry:      stockExpiryReport,
+  // JOURNALS_V1 — журналы: группа «Журналы» (reports.journals).
+  inpatient_register: inpatientRegisterReport,   // JOURNALS_V1_REGISTER — реестр стационарных пациентов
 };
 
 // OWNER_REPORT_V1 — chart data for «Отчёт владельца»: period KPIs, last-12-months
@@ -4491,7 +4575,13 @@ const STOCK_KINDS = new Set(['procurement', 'stock_consumption', 'stock_statemen
 // V3120_FIX — «В карточке товара» и «Расхождение» у «Оборотной ведомости» —
 // тоже КОЛИЧЕСТВА (разных товаров), их сумма в подвале бессмысленна.
 const STOCK_QTY_RE = /кол-во|количество|остаток \(расчёт\)|^qty$|^в карточке товара$|^расхождение$/i;
+// JOURNALS_V1 — у журналов складывается только «Сумма оплаты» реестра: «№»,
+// «Ич. рақам» и год рождения — номера, их сумма — бессмыслица.
+const JOURNAL_SUMMABLE = { service_journal: [], inpatient_register: ['Сумма оплаты'] };
 export function summableColumns(kind, columns) {
+  if (Object.prototype.hasOwnProperty.call(JOURNAL_SUMMABLE, kind)) {   // JOURNALS_V1
+    return (columns || []).filter((c) => JOURNAL_SUMMABLE[kind].includes(c));
+  }
   return (columns || []).filter((c) => {
     const label = String(c == null ? '' : c);
     if (NOT_SUMMABLE_COLS.has(label) || label.includes('%')) return false;
