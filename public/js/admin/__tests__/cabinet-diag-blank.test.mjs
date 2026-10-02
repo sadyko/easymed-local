@@ -149,7 +149,10 @@ test('collectFields: у диагностики «Описание» и «Зак�
     assert.ok(!('therapy_text' in diag), 'свёрнутый раздел приёма попал в документ диагностики');
     // у приёма правило прежнее: убранный раздел не сохраняется и не печатается
     const conc = WS.collectFields(ctxOf(els), { docType: 'conclusion' });
-    assert.ok(!('primary_diagnosis' in conc));
+    // CABINET_FIX_V1_R1 (ревью п. 1) — строка «Диагноз» с текстом собирается при любом
+    // типе: иначе переход диагностика → «Приём» терял «Заключение». Прочие свёрнутые — нет.
+    assert.equal(conc.primary_diagnosis, 'Патологии не выявлено.');
+    assert.ok(!('therapy_text' in conc));
     assert.equal(conc.instrumental_text, 'Почки обычных размеров.');
     // шаблон собирает свои разделы независимо от того, открыты ли они
     const tpl = WS.collectFields(ctxOf(els), { docType: 'conclusion', always: ['therapy_text'] });
@@ -199,6 +202,8 @@ test('кабинет: проводка правил бланка диагнос�
     // открытие сохранённого документа не стирает строку «Диагноз»
     assert.match(code, /paintDiagnoses\(ctx, \{ keepBand: true \}\)/, 'hydrate снова стирает «Заключение» диагностики');
     // экран, печать и архив берут данные бланка исследования из одного места
-    const uses = code.match(/diagDocData\(/g) || [];
-    assert.ok(uses.length >= 4, 'diagDocData зовут не экран, печать и архив: ' + uses.length);
+    // CABINET_FIX_V1_R1 — печать и архив берут ОДИН снимок (docSnapshot), а он у
+    // диагностики — diagDocData; экран — тоже diagDocData.
+    assert.match(code, /function docSnapshot\(ctx, type = wsState\.docType\) \{[\s\S]{0,120}if \(type === 'diag'\) return diagDocData\(/);
+    assert.match(code, /data = diagDocData\(buildBlankData\(ctx\), \{ editor: true/, 'экран бланка — не diagDocData');
 });

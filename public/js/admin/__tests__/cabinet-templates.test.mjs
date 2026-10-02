@@ -206,7 +206,8 @@ test('тип документа сохраняется с документом �
     const ws = code(WS_SRC);
     const saves = ws.match(/payload\.docType = wsState\.docType;/g) || [];
     assert.equal(saves.length, 2, 'тип документа сохраняют не и черновик, и подпись');
-    assert.match(ws, /if \(payload\.docType === 'diag' \|\| payload\.docType === 'conclusion'\) \{ ctx\.docTypeSaved = true; if \(wsState\.docType !== payload\.docType\) setDocType\(ctx, payload\.docType\); \}/,
+    // CABINET_FIX_V1_R1 — тип при открытии — savedDocType (и у старых записей без типа)
+    assert.match(ws, /const _saved = savedDocType\(payload\);\s*if \(_saved\) \{ ctx\.docTypeSaved = true; if \(wsState\.docType !== _saved\) setDocType\(ctx, _saved\); \}/,
         'открытие не восстанавливает тип документа');
     assert.match(ws, /if \(!ctx\.docTypeSaved && opensAsDiagnostics\(/, 'выбор по услуге перебивает сохранённый тип');
 });

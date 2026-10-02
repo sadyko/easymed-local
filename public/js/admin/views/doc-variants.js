@@ -477,8 +477,13 @@ function conclusionClassic(s, d) {
         primary_diagnosis: dxHtml,
         therapy_text: sec('Терапия', 'Davolash', d.therapy, 'therapy_text'),
         recommendations_text: (d.__editor ? sec('Рекомендации', 'Tavsiyalar', d.recsText, 'recommendations_text') : recsHtml),
+        // CABINET_FIX_V1_R1 (ревью п. 4) — «Заключение» приёма (WS_CONCLUSION_V1): у раздела
+        // не было места в бланке — ни на экране, ни на бумаге, ни в архиве.
+        conclusion_text: sec('Заключение', 'Xulosa', d.conclusionText, 'conclusion_text'),
     };
-    const _DEF_ORDER = ['chief_complaint', 'hpi', 'primary_diagnosis', 'therapy_text', 'recommendations_text'];
+    // CABINET_FIX_V1_R1 (ревью п. 4, 12) — порядок по умолчанию — все разделы листа
+    // приёма: без порядка от кабинета (старые снимки) «Осмотр» и «Заключение» выпадали.
+    const _DEF_ORDER = ['chief_complaint', 'hpi', 'physical_exam', 'primary_diagnosis', 'therapy_text', 'recommendations_text', 'conclusion_text'];
     // CONCL_SECTIONS_KEEP_V1 - фильтруем по ИЗВЕСТНЫМ разделам, а не по
     // порядку по умолчанию. Раньше здесь стоял _DEF_ORDER, и разделы, которых
     // в нём нет - «Осмотр», «Лабораторные исследования», «Инструментальные
@@ -488,6 +493,8 @@ function conclusionClassic(s, d) {
     const _KNOWN = Object.keys(_secByField);
     let _order = (d.sectionOrder && d.sectionOrder.length) ? d.sectionOrder.filter(k => _KNOWN.indexOf(k) > -1) : _DEF_ORDER.slice();
     for (const k of _DEF_ORDER) if (_order.indexOf(k) < 0) _order.push(k);
+    // CABINET_FIX_V1_R1 — «Лабораторные» и «Инструментальные» с текстом печатаются всегда.
+    for (const [k, v] of [['labs_text', d.labs], ['instrumental_text', d.instrumental]]) if (String(v || '').trim() && _order.indexOf(k) < 0) _order.push(k);
     const _bodyHtml = _order.map(k => _secByField[k] || '').join('\n');
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Заключение · ${esc(d.patientName || '')}</title><style>
 ${PRINT_FONT_FACE_CSS}
@@ -591,8 +598,13 @@ function conclusionCompact(s, d) {
         primary_diagnosis: dxHtml,
         therapy_text: sec('Терапия', 'Davolash', d.therapy, 'therapy_text'),
         recommendations_text: (d.__editor ? sec('Рекомендации', 'Tavsiyalar', d.recsText, 'recommendations_text') : recsHtml),
+        // CABINET_FIX_V1_R1 (ревью п. 4) — «Заключение» приёма (WS_CONCLUSION_V1): у раздела
+        // не было места в бланке — ни на экране, ни на бумаге, ни в архиве.
+        conclusion_text: sec('Заключение', 'Xulosa', d.conclusionText, 'conclusion_text'),
     };
-    const _DEF_ORDER = ['chief_complaint', 'hpi', 'primary_diagnosis', 'therapy_text', 'recommendations_text'];
+    // CABINET_FIX_V1_R1 (ревью п. 4, 12) — порядок по умолчанию — все разделы листа
+    // приёма: без порядка от кабинета (старые снимки) «Осмотр» и «Заключение» выпадали.
+    const _DEF_ORDER = ['chief_complaint', 'hpi', 'physical_exam', 'primary_diagnosis', 'therapy_text', 'recommendations_text', 'conclusion_text'];
     // CONCL_SECTIONS_KEEP_V1 - фильтруем по ИЗВЕСТНЫМ разделам, а не по
     // порядку по умолчанию. Раньше здесь стоял _DEF_ORDER, и разделы, которых
     // в нём нет - «Осмотр», «Лабораторные исследования», «Инструментальные
@@ -602,6 +614,8 @@ function conclusionCompact(s, d) {
     const _KNOWN = Object.keys(_secByField);
     let _order = (d.sectionOrder && d.sectionOrder.length) ? d.sectionOrder.filter(k => _KNOWN.indexOf(k) > -1) : _DEF_ORDER.slice();
     for (const k of _DEF_ORDER) if (_order.indexOf(k) < 0) _order.push(k);
+    // CABINET_FIX_V1_R1 — «Лабораторные» и «Инструментальные» с текстом печатаются всегда.
+    for (const [k, v] of [['labs_text', d.labs], ['instrumental_text', d.instrumental]]) if (String(v || '').trim() && _order.indexOf(k) < 0) _order.push(k);
     const _bodyHtml = _order.map(k => _secByField[k] || '').join('\n');
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Заключение · ${esc(d.patientName || '')}</title><style>
 ${PRINT_FONT_FACE_CSS}

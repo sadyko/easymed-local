@@ -32,7 +32,7 @@ import { currentClinicId } from '../tenant-tables.js';   // AURORA_CONSULT_TOOLB
 import { isAdminActor } from '../admin-actor.js';   // CABINET_FIX_V1_TPL — администратор правит любой шаблон
 import { BRANCH_BUCKET, signedUrl } from '../storage.js?v=aurora20b';   // SLICED2_PRINT_HEADER (dynamic company name + logo)
 import { printableSheet, loadDocSettings } from './doc-settings.js?v=noqr1';   // UNIFY_PRINT_V1 — ?v=db9 must match in EVERY importer
-import { renderDesignedVariant } from './doc-variants.js?v=cabdiag1';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1) · CABINET_FIX_V1_DIAG — cabdiag1
+import { renderDesignedVariant } from './doc-variants.js?v=cabr1';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1) · CABINET_FIX_V1_DIAG — cabdiag1 · CABINET_FIX_V1_R1 — cabr1
 import { openVitalsDialog } from './patient-card.js?v=labshared1';   // CARD_SPEC_V1 — same URL as admin.js (one instance)
 import { serviceGroupLabel, TYPE_TO_GROUP_NAME } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — chips must survive a NULL type_id
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
@@ -134,19 +134,7 @@ export function renderServiceWorkspace(container, { onNavigate, payload }) {
         visitId:        p.__service?.visitId || null,
         patient:        p,
     };
-    // Reset the per-workspace cache so a navigation away + back can't show
-    // someone else's history while we re-hydrate.
-    wsState.payload = null;
-    wsState.saved = false;
-    wsState.docSections = new Set(DOC_SECTIONS_DEFAULT);   // WS_FLEX_DOC_V1
-    wsState.freeSeq = 0;   // WS_EXAM_AND_FREE_V1 — нумерация своих разделов у каждого приёма своя
-    wsState.sectionOrder = DOC_SECTIONS.map(sd => sd.field);   // WS_REORDER_V1 — default order per consultation
-    wsState.ctx = ctx;                 // WS_PASTE_V1 — target for pasting results from the popup
-    wsState.docPhone = true;           // DOC_PHONE_DEFAULT_V1 — doctor phone ON by default (toggle can remove it)
-    wsState.docZoom = 1.3;             // DOC_ZOOM_V1 — default document zoom 130%
-    wsState.wsDoctorPhone = '';         // DOC_PHONE_SOURCE_V1 — the CONSULTATION doctor's own phone (loaded async below)
-    wsState.docDoctorInfo = true;       // DOC_DOCTOR_TOGGLE_V1 — doctor-info card in the header ON by default
-    wsState.wsDoctorKnown = false;      // DOC_PHONE_SOURCE_V1 — was a consultation doctor resolved?
+    activateWorkspace(ctx);   // CABINET_FIX_V1_R1 — состояние приёма и чья это строка
 
     // WS_FULLWIDTH_V1 — right sidebar removed: the document is full-width for a bigger, more
     // convenient view. Patient summary + Подсказки/Черновики/История live in a slim top bar; the
@@ -856,7 +844,8 @@ function onA4Edit(ctx, sec) {
     }
 }
 
-function soapForm(ctx) {
+// CABINET_FIX_V1_R1 — экспорт: проверка на НАСТОЯЩЕЙ форме (cabinet-review-r1.test.mjs).
+export function soapForm(ctx) {
     const p   = ctx.patient || {};
     const svc = p.__service || {};
     const patientName = `${p.lastName || ''} ${p.firstName || ''} ${p.middle || ''}`.trim() || p.fullName || 'Пациент';
@@ -877,7 +866,7 @@ function soapForm(ctx) {
     const doctypeSel = h('select', {
         'data-doctype': '',
         style: { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: 'var(--r-sm)', background: 'var(--white)', fontFamily: 'inherit', fontSize: '13.5px', color: 'var(--ink-900)' },
-        onchange: (ev) => setDocType(ctx, ev.currentTarget.value || 'conclusion'),   // CABINET_FIX_V1_TPL — одна дверь смены типа
+        onchange: (ev) => { switchDocType(ctx, ev.currentTarget.value || 'conclusion'); },   // CABINET_FIX_V1_TPL — одна дверь смены типа · CABINET_FIX_V1_R1 — с вопросом о невидимом тексте
     },
         // WS_DOCTYPE_TWO_V1 (2026-09-10) — владелец: «remove from the dropdown
         // list of the doctors workspace the everything except diagnostics and
@@ -1102,7 +1091,9 @@ function soapForm(ctx) {
         // попадало в архив; вставка шаблона диагностики тоже клала его в никуда.
         // Хранилище стоит вне разделов листа — свернуть его нечему.
         h('div', { 'data-diag-fields': '', style: { display: 'none' } },
-            h('div', { class: 'a4-input', 'data-field': 'instrumental_text', contentEditable: 'true' })),
+            h('div', { class: 'a4-input', 'data-field': 'instrumental_text', contentEditable: 'true' }),
+            // CABINET_FIX_V1_R1 — «Лабораторные» старых шаблонов приёма: на «Приёме» — разделом «Лабораторные исследования».
+            h('div', { class: 'a4-input', 'data-field': 'labs_text', contentEditable: 'true' })),
         // Hidden legacy controls (follow_up / referral) — preserve save/print round-trip.
         h('div', { style: { display: 'none' } },
             h('select', { 'data-field': 'follow_up' },
@@ -2193,7 +2184,7 @@ let tplState = { rows: [], filter: 'all', q: '', selId: null, mode: 'view', draf
 // CABINET_FIX_V1_TPL — ровно разделы листа приёма (DOC_SECTIONS без «Диагноза»).
 // «Лабораторные» и «Инструментальные» здесь были, а на листе приёма таких
 // разделов нет: шаблон с ними вставлялся в поля, которых врач не видит. Старые
-// шаблоны с этими ключами вставляются своими разделами врача (TPL_LEGACY_FREE).
+// шаблоны с этими ключами вставляются как есть (TPL_LEGACY_KEYS ниже).
 const TPL_BODY_KEYS = [
     'chief_complaint',      // ЖАЛОБЫ
     'hpi',                  // АНАМНЕЗ
@@ -2207,9 +2198,13 @@ const TPL_LABELS = {
     therapy_text: 'Терапия', recommendations_text: 'Рекомендации',
     conclusion_text: 'Заключение',
 };
-/* i18n-exempt-start: имена разделов, которые уходят В ДОКУМЕНТ (свой раздел врача), не текст экрана */
-const TPL_LEGACY_FREE = [['labs_text', 'Лабораторные исследования'], ['instrumental_text', 'Инструментальные исследования']];
-/* i18n-exempt-end */
+// CABINET_FIX_V1_R1 (ревью п. 3) — ключи СТАРЫХ шаблонов приёма, которых нет в
+// редакторе: «Диагноз», «Лабораторные», «Инструментальные». «Использовать»
+// кладёт их в документ (на «Приёме» они видны — buildBlankData), просмотр их
+// показывает, а правка и переименование шаблона их не стирают (tplSaveBody).
+// Раньше «Использовать» молча терял «Диагноз», а правка удаляла все три.
+// (Свои разделы врача сюда не годятся: на бланке их не видно.)
+const TPL_LEGACY_KEYS = { 0: [['primary_diagnosis', 'Диагноз'], ['labs_text', 'Лабораторные исследования'], ['instrumental_text', 'Инструментальные исследования']] };
 // DOC_TPL_DIAG_V1 — templates can also target the imaging «Диагностика» document.
 const TPL_DIAG_KEYS = ['instrumental_text', 'primary_diagnosis'];
 const TPL_DIAG_LABELS = { instrumental_text: 'Описание', primary_diagnosis: 'Заключение' };
@@ -2270,8 +2265,62 @@ export function setDocType(ctx, type) {
     wsState.docType = type === 'diag' ? 'diag' : 'conclusion';
     const sel = ctx && ctx.container && ctx.container.querySelector('[data-doctype]');
     if (sel && sel.value !== wsState.docType) sel.value = wsState.docType;
+    // CABINET_FIX_V1_R1 — «Заключение» диагностики — это строка «Диагноз» приёма:
+    // на «Приёме» она с текстом обязана быть ОТКРЫТА, иначе её не видно на листе.
+    if (wsState.docType === 'conclusion') {
+        const band = ctx && ctx.container && ctx.container.querySelector('.a4-input[data-field="primary_diagnosis"]');
+        if (band && textOf(band.innerHTML) && !wsSectionOn('diagnosis')) { ensureDocSections(); wsState.docSections.add('diagnosis'); try { syncSections(ctx); } catch (e) { /* лист перерисуется позже */ } }
+    }
     if (!wsState.blank) setBlankMode(ctx, true);
     else renderBlank(ctx);
+}
+
+// CABINET_FIX_V1_R1 (ревью п. 1) — ТЕКСТ, КОТОРОГО НЕ ВИДНО В БЛАНКЕ.
+//
+// Бланк «Приём» показывает всё, что в нём можно написать, и ещё «Описание»
+// диагностики и старые «Лабораторные» — разделами «Инструментальные /
+// Лабораторные исследования» (buildBlankData). Бланк «Диагностика» показывает
+// только «Описание» и «Заключение»: текст разделов приёма в нём не виден.
+// Такой текст не удаляется никогда: смена типа спрашивает, подпись диагностики с
+// ним отказывает (подписанный документ должен содержать всё, что написано),
+// печать спрашивает. Свои разделы врача (free_N) не на бланке ни у какого типа
+// и здесь не считаются.
+const HIDDEN_IN_DIAG = [
+    ['chief_complaint', 'Жалобы'], ['hpi', 'Анамнез'], ['physical_exam', 'Осмотр'],
+    ['labs_text', 'Лабораторные исследования'], ['therapy_text', 'Терапия'],
+    ['recommendations_text', 'Рекомендации'], ['conclusion_text', 'Заключение'],
+];
+const textOf = (v) => String(v == null ? '' : v).replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+/** Названия разделов с текстом, которых бланк `type` не показывает. Экспорт — для проверки. */
+export function hiddenTextFor(fields, type) {
+    if (type !== 'diag') return [];
+    const f = fields || {};
+    return HIDDEN_IN_DIAG.filter(([k]) => textOf(f[k])).map(([, label]) => tr(label));
+}
+const typeWord = (type) => tr(type === 'diag' ? 'Диагностика' : 'Приём');
+/** Причина отказа подписи — или null. Экспорт — для проверки. */
+export function signRefusal(fields, type) {
+    const hidden = hiddenTextFor(fields, type);
+    if (!hidden.length) return null;
+    return trf('В документе есть текст, которого нет в бланке «{type}»: {list}. Переключите тип документа на «{other}» или удалите этот текст — подписанный документ должен содержать всё, что написано.',
+        { type: typeWord(type), list: hidden.join(', '), other: typeWord(type === 'diag' ? 'conclusion' : 'diag') });
+}
+/**
+ * Смена типа документа ВРАЧОМ (список «Тип документа», шаблон другого рода).
+ * Если в новом бланке не будет видно уже написанного — спросить; «Нет» —
+ * тип не меняется. Текст не удаляется ни в каком случае. Экспорт — для проверки.
+ */
+export function switchDocType(ctx, type) {
+    const next = type === 'diag' ? 'diag' : 'conclusion';
+    if (next === wsState.docType) return true;
+    const hidden = hiddenTextFor(collectFields(ctx), next);
+    if (hidden.length && !confirm(trf('В документе есть текст, который в бланке «{type}» не виден: {list}. Переключить всё равно? Текст останется в записи.', { type: typeWord(next), list: hidden.join(', ') }))) {
+        const sel = ctx && ctx.container && ctx.container.querySelector('[data-doctype]');
+        if (sel) sel.value = wsState.docType;
+        return false;
+    }
+    setDocType(ctx, next);
+    return true;
 }
 const me = () => currentUser() || {};
 const myId = () => me().id || null;
@@ -2320,7 +2369,11 @@ export function collectFields(ctx, opts = {}) {
     const always = new Set([...(docType === 'diag' ? DIAG_FIELDS : []), ...(opts.always || [])]);
     for (const el of root.querySelectorAll('[data-field]')) {
         const k = el.getAttribute('data-field');
-        if (el.closest('.a4-sec-off') && !always.has(k)) continue;   // WS_FLEX_DOC_V1 — removed sections don't save/print
+        // CABINET_FIX_V1_R1 (ревью п. 1) — строка «Диагноз» с текстом собирается
+        // при ЛЮБОМ типе и состоянии раздела: это и «Заключение» диагностики, и
+        // переход диагностика → «Приём» его терял (раздел свёрнут).
+        const keepDx = k === 'primary_diagnosis' && el.classList.contains('a4-input') && textOf(el.innerHTML);
+        if (el.closest('.a4-sec-off') && !always.has(k) && !keepDx) continue;   // WS_FLEX_DOC_V1 — removed sections don't save/print
         if (el.classList.contains('a4-input')) {
             out[k] = (el.innerHTML || '').trim();
         } else {
@@ -2401,38 +2454,118 @@ function dateTimeShort(iso) {
     return dateOnly(iso) + ' ' + shortTime(iso);
 }
 
-async function readPayload(ctx) {
-    if (!ctx.visitServiceId) return emptyPayload();
-    const { data, error } = await supabase
-        .from('visit_services').select('notes').eq('id', ctx.visitServiceId).maybeSingle();
-    if (error) { console.warn('[workspace] read failed:', error.message); return emptyPayload(); }
-    if (!data?.notes) return emptyPayload();
-    let parsed = null;
-    try { parsed = JSON.parse(data.notes); } catch { return emptyPayload(); }
-    if (!parsed || parsed[DRAFT_TAG] !== 1) return emptyPayload();
-    if (!Array.isArray(parsed.history)) parsed.history = [];
-    return parsed;
+// CABINET_FIX_V1_R1 (ревью п. 13) — ЗАПИСИ ОДНОЙ СТРОКИ НЕ ПОПАДАЮТ В ДРУГУЮ.
+//
+// wsState.payload — один на модуль, а записи приёма читаются асинхронно. Врач,
+// переключивший строки за миллисекунды, получал поздний ответ прежней строки
+// поверх открытой — и следующее сохранение писало записи строки A в строку B.
+// Теперь у каждого объекта записей есть «чей он» (PAYLOAD_LINE), поздний ответ
+// не открытой строки отбрасывается, а запись чужих записей в строку — отказ.
+const PAYLOAD_LINE = new WeakMap();
+const ownPayload = (p, vsId) => { if (p && typeof p === 'object') PAYLOAD_LINE.set(p, vsId == null ? null : Number(vsId)); return p; };
+
+/** Начать приём строки: сбросить состояние прежнего и запомнить, чей он. Экспорт — для проверки. */
+export function activateWorkspace(ctx) {
+    wsState.ctx = ctx;                 // WS_PASTE_V1 — target for pasting results from the popup
+    // Reset the per-workspace cache so a navigation away + back can't show
+    // someone else's history while we re-hydrate.
+    wsState.payload = null;
+    wsState.payloadVs = null;
+    wsState.saved = false;
+    wsState.docSections = new Set(DOC_SECTIONS_DEFAULT);   // WS_FLEX_DOC_V1
+    wsState.freeSeq = 0;   // WS_EXAM_AND_FREE_V1 — нумерация своих разделов у каждого приёма своя
+    wsState.sectionOrder = DOC_SECTIONS.map(sd => sd.field);   // WS_REORDER_V1 — default order per consultation
+    wsState.docPhone = true;           // DOC_PHONE_DEFAULT_V1 — doctor phone ON by default (toggle can remove it)
+    wsState.docZoom = 1.3;             // DOC_ZOOM_V1 — default document zoom 130%
+    wsState.wsDoctorPhone = '';         // DOC_PHONE_SOURCE_V1 — the CONSULTATION doctor's own phone (loaded async below)
+    wsState.docDoctorInfo = true;       // DOC_DOCTOR_TOGGLE_V1 — doctor-info card in the header ON by default
+    wsState.wsDoctorKnown = false;      // DOC_PHONE_SOURCE_V1 — was a consultation doctor resolved?
+    wsState.docType = 'conclusion';     // DOCTYPE_FROM_DOCUMENTS_V1 — reset per consultation
+    wsState.diagImages = [];            // DIAG_IMAGES_V1
 }
 
-async function writePayload(ctx, payload, extraUpdate = {}) {
+async function readPayload(ctx) {
+    if (!ctx.visitServiceId) return ownPayload(emptyPayload(), ctx.visitServiceId);
+    const { data, error } = await supabase
+        .from('visit_services').select('notes').eq('id', ctx.visitServiceId).maybeSingle();
+    if (error) { console.warn('[workspace] read failed:', error.message); return ownPayload(emptyPayload(), ctx.visitServiceId); }
+    if (!data?.notes) return ownPayload(emptyPayload(), ctx.visitServiceId);
+    let parsed = null;
+    try { parsed = JSON.parse(data.notes); } catch { return ownPayload(emptyPayload(), ctx.visitServiceId); }
+    if (!parsed || parsed[DRAFT_TAG] !== 1) return ownPayload(emptyPayload(), ctx.visitServiceId);
+    if (!Array.isArray(parsed.history)) parsed.history = [];
+    return ownPayload(parsed, ctx.visitServiceId);
+}
+
+/**
+ * Прочитать записи строки. Ответ для строки, которая уже не открыта, —
+ * отбрасывается (null). opts.force — прочитать, не трогая открытый приём.
+ * Экспорт — для проверки.
+ */
+export async function loadLinePayload(ctx, opts = {}) {
+    const payload = await readPayload(ctx);
+    if (opts.force) return payload;
+    if (wsState.ctx !== ctx) return null;
+    wsState.payload = payload;
+    wsState.payloadVs = ctx.visitServiceId;
+    return payload;
+}
+
+/** Записи открытой строки: кэш — только если он загружен для НЕЁ. Экспорт — для проверки. */
+export async function currentPayload(ctx) {
+    if (wsState.payload && wsState.payloadVs === ctx.visitServiceId && PAYLOAD_LINE.get(wsState.payload) === Number(ctx.visitServiceId)) return wsState.payload;
+    const p = await readPayload(ctx);
+    if (wsState.ctx === ctx) { wsState.payload = p; wsState.payloadVs = ctx.visitServiceId; }
+    return p;
+}
+
+export async function writePayload(ctx, payload, extraUpdate = {}) {
     if (!ctx.visitServiceId) return false;
+    // CABINET_FIX_V1_R1 — записи, загруженные для другой строки, сюда не пишутся.
+    const owner = PAYLOAD_LINE.get(payload);
+    if (owner !== undefined && owner !== Number(ctx.visitServiceId)) {
+        console.warn('[workspace] payload of line', owner, 'refused for line', ctx.visitServiceId);
+        toast(tr('Записи открыты для другой строки — сохранение отменено. Откройте приём заново.'), 'fail');
+        return false;
+    }
     const { error } = await supabase.from('visit_services')
         .update({ notes: JSON.stringify(payload), ...extraUpdate })
         .eq('id', ctx.visitServiceId);
     if (error) { toast(trf('Не удалось сохранить: {msg}', { msg: error.message }), 'fail'); return false; }
-    wsState.payload = payload;
+    ownPayload(payload, ctx.visitServiceId);
+    if (wsState.ctx === ctx) { wsState.payload = payload; wsState.payloadVs = ctx.visitServiceId; }
     return true;
+}
+
+/**
+ * CABINET_FIX_V1_R1 (ревью п. 2) — тип документа, с которым его открыть.
+ * Сохранённый тип сильнее всего. У старых записей типа нет: документ, в котором
+ * написан текст ПРИЁМА, открывается «Приёмом» — иначе УЗИ, записанное разделами
+ * приёма, открывалось пустым бланком диагностики (и так печаталось и
+ * переподписывалось). null — решает услуга (opensAsDiagnostics).
+ * Экспорт — для проверки.
+ */
+const CONSULT_ONLY_FIELDS = ['chief_complaint', 'hpi', 'physical_exam', 'therapy_text', 'recommendations_text', 'conclusion_text'];
+export function savedDocType(payload) {
+    if (!payload) return null;
+    if (payload.docType === 'diag' || payload.docType === 'conclusion') return payload.docType;
+    const cur = payload.current || {};
+    const has = (k) => cur[k] != null && String(cur[k]).replace(/<[^>]*>/g, '').trim() !== '';
+    if (CONSULT_ONLY_FIELDS.some(has) || Object.keys(cur).some((k) => /^free_\d+$/.test(k) && has(k))) return 'conclusion';
+    return null;
 }
 
 async function hydrateWorkspace(ctx) {
     try {
-        const payload = await readPayload(ctx);
-        wsState.payload = payload;
+        const payload = await loadLinePayload(ctx);   // CABINET_FIX_V1_R1 — поздний ответ чужой строки отбрасывается
+        if (!payload) return;
         wsState.diagImages = Array.isArray(payload.diagImages) ? payload.diagImages.slice() : [];   // DIAG_IMAGES_V1 — restore uploaded images
         // CABINET_FIX_V1_TPL — тип документа — тот, с которым его сохранили: врач
         // переключил тип, вставил шаблон, сохранил — и при следующем открытии видит
         // тот же бланк, а не выбранный по услуге (текст другого типа под ним не виден).
-        if (payload.docType === 'diag' || payload.docType === 'conclusion') { ctx.docTypeSaved = true; if (wsState.docType !== payload.docType) setDocType(ctx, payload.docType); }
+        // CABINET_FIX_V1_R1 — у старых записей без типа — по написанному (savedDocType).
+        const _saved = savedDocType(payload);
+        if (_saved) { ctx.docTypeSaved = true; if (wsState.docType !== _saved) setDocType(ctx, _saved); }
         if (payload.current) applyFields(ctx, payload.current);
         paintHistoryList(ctx);
         paintPrescriptions(ctx);
@@ -2571,7 +2704,12 @@ export function rxRowsFromTemplate(t) {
 }
 // Источники подсказок читаются ОДИН раз на открытие окна: врач назначает подряд,
 // и за эти минуты ни его рецепты, ни справочник не меняются.
-async function loadRxSources() {
+// CABINET_FIX_V1_R1 (ревью п. 10) — источники держатся до конца сеанса: rx_my_drugs
+// разбирает JSON рецептов на сервере, и звать его на каждое окно незачем. После
+// сохранения рецепта или шаблона — перечитываются (force).
+let rxSourcesCache = null;
+async function loadRxSources({ force = false } = {}) {
+    if (rxSourcesCache && !force) return rxSourcesCache;
     const out = { mine: [], templates: [], catalog: [], tpls: [] };
     const [mine, tpls, cat] = await Promise.all([
         supabase.rpc('rx_my_drugs', {}).then(({ data }) => (data && data.rows) || []).catch(() => []),
@@ -2585,6 +2723,7 @@ async function loadRxSources() {
     out.tpls = tplKindRows(tpls, '3');
     out.templates = [].concat(...out.tpls.filter((t) => isMine(t)).map(rxRowsFromTemplate));
     out.catalog = cat;
+    rxSourcesCache = out;
     return out;
 }
 
@@ -2707,8 +2846,27 @@ function openPrescriptionDialog(ctx, editIndex) {
             const box = h('div', { 'data-rx-tpl-list': '', style: { display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '220px', overflowY: 'auto' } });
             for (const t of list) {
                 const drugs = rxRowsFromTemplate(t);
-                box.appendChild(h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-rx-tpl-pick': '',
-                    style: { justifyContent: 'flex-start', gap: '8px', textAlign: 'left', flexWrap: 'wrap' },
+                // CABINET_FIX_V1_R1 (ревью п. 9) — свой шаблон рецепта (или любой —
+                // администратору) переименовывается и удаляется прямо здесь: другого
+                // места у шаблонов рецептов нет. Сервер проверяет то же правило.
+                const row = h('div', { 'data-rx-tpl-row': '', style: { display: 'flex', alignItems: 'center', gap: '6px' } });
+                const reload = async () => { Object.assign(rxSrc, await loadRxSources({ force: true })); showFromTemplate(); };
+                const renameRow = () => {
+                    clear(row);
+                    const inp = h('input', { class: 'tplm-input', value: t.name || '', style: { flex: '1 1 auto' } });
+                    row.append(inp,
+                        h('button', { type: 'button', class: 'btn btn-primary btn-sm', onclick: async () => {
+                            const name = inp.value.trim();
+                            if (!name) { toast('Укажите название шаблона', 'warn'); return; }
+                            const { error } = await supabase.from('consultation_templates').update({ name: name }).eq('id', t.id);
+                            if (error) { toast(trf('Не удалось сохранить: {msg}', { msg: errText(error) }), 'fail'); return; }
+                            await reload();
+                        } }, Icon('Check', { size: 13 }), ' ', 'Сохранить'),
+                        h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: () => showFromTemplate() }, 'Отмена'));
+                    setTimeout(() => inp.focus(), 30);
+                };
+                row.appendChild(h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-rx-tpl-pick': '',
+                    style: { justifyContent: 'flex-start', gap: '8px', textAlign: 'left', flexWrap: 'wrap', flex: '1 1 auto', minWidth: 0 },
                     onclick: () => {
                         // Пустая первая строка — заготовка окна, а не препарат: шаблон её заменяет.
                         if (rows.length === 1 && !rows[0].read().name) { rows[0].el.remove(); rows.length = 0; }
@@ -2719,6 +2877,17 @@ function openPrescriptionDialog(ctx, editIndex) {
                     h('b', { style: { fontWeight: 600 } }, t.name || '—'),
                     scopePill(t.scope),
                     h('span', { class: 'muted', style: { fontSize: '12.5px' } }, drugs.map((d) => d.name).join(', '))));
+                if (canManage(t)) {
+                    row.appendChild(h('button', { type: 'button', class: 'btn btn-ghost btn-sm', title: 'Переименовать', 'aria-label': 'Переименовать', onclick: renameRow }, Icon('Edit', { size: 13 })));
+                    row.appendChild(h('button', { type: 'button', class: 'btn btn-ghost btn-sm', title: 'Удалить', 'aria-label': 'Удалить', style: { color: 'var(--crit-700)' }, onclick: async () => {
+                        if (!confirm(trf('Удалить шаблон «{name}»?', { name: t.name || '' }))) return;
+                        const { error } = await supabase.from('consultation_templates').delete().eq('id', t.id);
+                        if (error) { toast(trf('Не удалось удалить: {msg}', { msg: errText(error) }), 'fail'); return; }
+                        toast('Шаблон удалён', 'ok');
+                        await reload();
+                    } }, Icon('Trash', { size: 13 })));
+                }
+                box.appendChild(row);
             }
             tplPanel.appendChild(box);
         });
@@ -2745,7 +2914,7 @@ function openPrescriptionDialog(ctx, editIndex) {
                 if (error) { toast(trf('Не удалось сохранить: {msg}', { msg: errText(error) }), 'fail'); return; }
                 toast('Шаблон рецепта сохранён', 'ok');
                 closePanel();
-                Object.assign(rxSrc, await loadRxSources());   // новый шаблон — сразу в «Из шаблона» и в подсказках
+                Object.assign(rxSrc, await loadRxSources({ force: true }));   // новый шаблон — сразу в «Из шаблона» и в подсказках · CABINET_FIX_V1_R1 — мимо кэша сеанса
             } finally { if (saveBtn.isConnected) saveBtn.disabled = false; }
         } }, Icon('Check', { size: 13 }), ' Сохранить');
         tplPanel.append(
@@ -2777,7 +2946,7 @@ function openPrescriptionDialog(ctx, editIndex) {
                 ev.currentTarget.disabled = true;
                 try {
                     const entries = rows.map(r => r.read()).filter(e => e.name);
-                    const payload = wsState.payload || await readPayload(ctx);
+                    const payload = await currentPayload(ctx);
                     payload.prescriptions = Array.isArray(payload.prescriptions) ? payload.prescriptions : [];
                     if (editIndex != null) {
                         if (!entries.length) { toast('Укажите название препарата.', 'fail'); return; }
@@ -2790,6 +2959,7 @@ function openPrescriptionDialog(ctx, editIndex) {
                     paintPrescriptions(ctx);
                     overlay.remove();
                     toast(existing ? 'Рецепт обновлён.' : 'Рецепт сохранён.');
+                    loadRxSources({ force: true }).catch(() => {});   // CABINET_FIX_V1_R1 — свои препараты обновились: подсказки перечитать
                 } finally {
                     if (ev.currentTarget?.isConnected) ev.currentTarget.disabled = false;
                 }
@@ -2806,7 +2976,7 @@ function openPrescriptionDialog(ctx, editIndex) {
 }
 
 async function removePrescription(ctx, index) {
-    const payload = wsState.payload || await readPayload(ctx);
+    const payload = await currentPayload(ctx);
     const items = Array.isArray(payload.prescriptions) ? payload.prescriptions : [];
     const entry = items[index];
     if (!entry) return;
@@ -3345,9 +3515,32 @@ function paintDiagnoses(ctx, opts = {}) {
  *     кода, а не то, что набрал врач.
  * Экспорт — только для поведенческой проверки.
  */
-export function applyDxBand(band, main, { keep = false } = {}) {
+export function applyDxBand(band, main, { keep = false, preserve = false } = {}) {
     if (!band) return;
     const auto = main ? `${main.code} — ${main.name}` : '';
+    // CABINET_FIX_V1_R1 (ревью п. 5) — у ДИАГНОСТИКИ эта строка — «Заключение»
+    // врача: код МКБ-10 его не затирает, а встаёт первой строкой над ним; смена
+    // кода меняет только эту строку, снятие — убирает только её (data-auto-dx).
+    if (preserve) {
+        const html = String(band.innerHTML || '');
+        const marked = band.getAttribute('data-auto-dx');
+        const mHtml = marked != null ? escapeHtml(marked) : null;
+        let rest = html;
+        if (mHtml != null) {
+            if (rest === mHtml) rest = '';
+            else if (rest.startsWith(mHtml + '<br>')) rest = rest.slice(mHtml.length + 4);
+        }
+        const aHtml = escapeHtml(auto);
+        if (keep) {
+            // открытие документа: код уже стоит первой строкой — только запомнить это
+            if (auto && (html === aHtml || html.startsWith(aHtml + '<br>'))) band.setAttribute('data-auto-dx', auto);
+            else if (auto && !textOf(html)) { band.innerHTML = aHtml; band.setAttribute('data-auto-dx', auto); }
+            return;
+        }
+        if (auto) { band.innerHTML = rest ? aHtml + '<br>' + rest : aHtml; band.setAttribute('data-auto-dx', auto); }
+        else { band.innerHTML = rest; band.removeAttribute('data-auto-dx'); }
+        return;
+    }
     const text = String(band.textContent || '');
     if (auto) {
         if (keep && text.trim() && text !== auto) return;
@@ -3370,13 +3563,13 @@ function syncDiagnosisToDoc(ctx, opts = {}) {
     // sections, so a picked diagnosis got dropped on save. Open the section when a dx is set.
     if (main) { ensureDocSections(); if (!wsState.docSections.has('diagnosis')) { wsState.docSections.add('diagnosis'); try { syncSections(ctx); } catch (e) {} } }
     const band = ctx.container?.querySelector('.a4-input[data-field="primary_diagnosis"]');
-    applyDxBand(band, main, { keep: !!opts.keepBand });   // CABINET_FIX_V1_DIAG
+    applyDxBand(band, main, { keep: !!opts.keepBand, preserve: wsState.docType === 'diag' });   // CABINET_FIX_V1_DIAG · CABINET_FIX_V1_R1 — у диагностики код не затирает «Заключение»
     const icd = ctx.container?.querySelector('[data-field="icd10"]');
     if (icd && 'value' in icd) icd.value = main ? (main.code || '') : '';
 }
 
 async function addDiagnosis(ctx, { code, name, type }) {
-    const payload = wsState.payload || await readPayload(ctx);
+    const payload = await currentPayload(ctx);
     if (!Array.isArray(payload.diagnoses)) payload.diagnoses = [];
     if (type === 'main') payload.diagnoses.forEach(d => { if (d.type === 'main') d.type = 'concomitant'; });
     payload.diagnoses.push({ code, name, type });
@@ -3403,7 +3596,7 @@ async function syncDiagnosisToConditions(ctx, { code, name }) {
 }
 
 async function removeDiagnosis(ctx, idx) {
-    const payload = wsState.payload || await readPayload(ctx);
+    const payload = await currentPayload(ctx);
     if (!Array.isArray(payload.diagnoses)) return;
     const removed = payload.diagnoses[idx];
     payload.diagnoses.splice(idx, 1);
@@ -3621,7 +3814,25 @@ export function tplDraftFrom(t) {
     const dt = Number(tplDocType(t.doc_type));
     const body = tplBlankBody(dt);
     for (const k of tplTypeOf(dt).keys) body[k] = (t.body && t.body[k]) || '';
-    return { id: t.id, name: t.name || '', scope: t.scope || 'private', doc_type: dt, body };
+    // CABINET_FIX_V1_R1 (ревью п. 3) — ключи тела, которых нет в редакторе этого
+    // рода (старые «Диагноз», «Лабораторные»…), едут в черновике отдельно и
+    // возвращаются при сохранении: правка и переименование их не стирают.
+    const extra = {};
+    for (const [k, v] of Object.entries((t.body && typeof t.body === 'object') ? t.body : {})) if (!(k in body)) extra[k] = v;
+    return { id: t.id, name: t.name || '', scope: t.scope || 'private', doc_type: dt, body, extra };
+}
+/**
+ * CABINET_FIX_V1_R1 — тело шаблона к сохранению: разделы редактора с текстом
+ * плюс ВСЕ прочие ключи, с которыми шаблон пришёл (и разделы прежнего рода,
+ * если род сменили в редакторе). Ничего не выбрасывается. Экспорт — для проверки.
+ */
+export function tplSaveBody(d) {
+    const out = { ...((d && d.extra) || {}) };
+    for (const k of tplTypeOf(d.doc_type).keys) {
+        const v = String((d.body && d.body[k]) || '').trim();
+        if (tplHasText(v)) out[k] = v; else delete out[k];
+    }
+    return out;
 }
 // Collect the current A4 document's safe sections only (omits primary_diagnosis/icd10/follow_up/referral).
 // CABINET_FIX_V1_TPL (A) — разделы своего рода собираются, открыты они или нет:
@@ -3658,18 +3869,14 @@ export function tplApply(ctx, t, profile = null) {
     if (!ctx) return null;
     const dt = tplDocType(t && t.doc_type);
     const type = dt === '1' ? 'diag' : 'conclusion';
-    if (wsState.docType !== type) setDocType(ctx, type);
+    // CABINET_FIX_V1_R1 (ревью п. 1) — шаблон другого рода меняет тип документа
+    // так же, как список «Тип документа»: если написанное станет не видно — вопрос;
+    // «Нет» — шаблон не вставляется.
+    if (wsState.docType !== type && !switchDocType(ctx, type)) return null;
     const fields = {};
-    for (const k of tplTypeOf(dt).keys) if (_clean[k] != null && String(_clean[k]).trim()) fields[k] = _clean[k];
+    const keys = tplTypeOf(dt).keys.concat((TPL_LEGACY_KEYS[Number(dt)] || []).map(([k]) => k));   // CABINET_FIX_V1_R1 — и старые ключи
+    for (const k of keys) if (_clean[k] != null && tplHasText(_clean[k])) fields[k] = _clean[k];
     applyFields(ctx, fields, { template: true });
-    if (dt === '0') {
-        for (const [k, title] of TPL_LEGACY_FREE) {
-            if (!_clean[k] || !String(_clean[k]).trim()) continue;
-            const box = wsAddFreeSection(ctx, title);
-            const inp = box && box.querySelector('.a4-input');
-            if (inp) inp.innerHTML = _clean[k];
-        }
-    }
     wsState.saved = false;
     try { resetSaveBtn(ctx); } catch (e) { /* кнопка нарисуется позже */ }
     if (wsState.blank) { try { renderBlank(ctx); } catch (e) { /* бланк перерисуется позже */ } }
@@ -3830,7 +4037,10 @@ export function openTemplateLibraryModal(ctx, profile = null) {
 
         const secWrap = h('div', { class: 'tplm-secs' });
         let any = false;
-        for (const k of tplTypeOf(sel.doc_type).keys) {
+        // CABINET_FIX_V1_R1 — и старые ключи шаблона (что «Использовать» тоже вставит).
+        const _legacy = TPL_LEGACY_KEYS[Number(tplDocType(sel.doc_type))] || [];
+        const _labels = { ...tplTypeOf(sel.doc_type).labels, ...Object.fromEntries(_legacy) };
+        for (const k of tplTypeOf(sel.doc_type).keys.concat(_legacy.map(([lk]) => lk))) {
             const v = (sel.body && sel.body[k]) || '';
             if (!tplHasText(v)) continue;
             any = true;
@@ -3840,7 +4050,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
             // HTML показывался текстом — «Почки<br>норма».
             body.innerHTML = sanitizeRichHtml(v);
             secWrap.appendChild(h('div', { class: 'tplm-sec' },
-                h('div', { class: 'tplm-sec-l' }, tplTypeOf(sel.doc_type).labels[k] || k),
+                h('div', { class: 'tplm-sec-l' }, tr(_labels[k] || k)),
                 body,
             ));
         }
@@ -3902,8 +4112,12 @@ export function openTemplateLibraryModal(ctx, profile = null) {
                     onclick: () => {
                         if (d.doc_type === _T.dt) return;
                         const nb = tplBlankBody(_T.dt);
-                        for (const k of Object.keys(nb)) if (d.body[k] != null) nb[k] = d.body[k];
-                        d.doc_type = _T.dt; d.body = nb;
+                        // CABINET_FIX_V1_R1 — разделы прежнего рода не выбрасываются: ждут в extra
+                        // (вернутся, если род сменят обратно, и сохранятся вместе с шаблоном).
+                        const pool = { ...(d.extra || {}), ...d.body };
+                        const extra = {};
+                        for (const [k, v] of Object.entries(pool)) { if (k in nb) nb[k] = v; else if (v != null && String(v) !== '') extra[k] = v; }
+                        d.doc_type = _T.dt; d.body = nb; d.extra = extra;
                         modal.querySelectorAll('.tplm-scopepick [data-dt]').forEach(b => b.classList.toggle('on', b.getAttribute('data-dt') === String(_T.dt)));
                         paintSecFields();
                     } }, Icon('Doc', { size: 13 }), ' ' + _T.label)))),
@@ -3935,6 +4149,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
     function tplUse(t) {
         const before = wsState.docType;
         const type = tplApply(ctx, t, profile);   // CABINET_FIX_V1_TPL
+        if (!profile && !type) return;   // CABINET_FIX_V1_R1 — врач отказался менять тип: окно остаётся, ничего не вставлено
         close();
         if (profile) return;
         toast('Шаблон вставлен', 'ok');
@@ -3945,8 +4160,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
     async function tplSave() {
         const d = tplState.draft;
         if (!d || !d.name.trim()) { toast('Укажите название шаблона', 'warn'); return; }
-        const body = {};
-        for (const k of tplTypeOf(d.doc_type).keys) { const v = String(d.body[k] || '').trim(); if (tplHasText(v)) body[k] = v; }
+        const body = tplSaveBody(d);   // CABINET_FIX_V1_R1 — прочие ключи шаблона не стираются
         if (d.id) {
             // UPDATE — only these 4 columns, by id. NEVER company_id/author_id.
             // CABINET_FIX_V1_TPL (D) — род строкой: '0' / '1' / '2', не 1.0.
@@ -4104,7 +4318,7 @@ export async function addOwnService(ctx, svc, doctor) {
         }
     }
     // Keep the workspace's own JSON list (drives the left-column display + print).
-    const payload = wsState.payload || await readPayload(ctx);
+    const payload = await currentPayload(ctx);
     if (!Array.isArray(payload.services)) payload.services = [];
     // SVC_ATTACH_V1 — serviceId нужен карточке: по нему каталог гасит уже добавленные.
     payload.services.push({ name: svc.name, price: svc.price, vsId, serviceId: svc.id || null });   // catalog price for the doctor's list; the bill carries the quoted one
@@ -4119,7 +4333,7 @@ export async function addOwnService(ctx, svc, doctor) {
 // снимается настоящая строка, и только при успехе — пункт списка кабинета;
 // отказ сервера показывается его словами.
 async function removeOwnService(ctx, idx) {
-    const payload = wsState.payload || await readPayload(ctx);
+    const payload = await currentPayload(ctx);
     if (!Array.isArray(payload.services)) return;
     const removed = payload.services[idx];
     if (removed && removed.vsId) {
@@ -4149,7 +4363,7 @@ async function handleSaveDraft(ctx, opts = {}) {
     if (!ctx.visitServiceId) { toast('Услуга не привязана — откройте из «Мои услуги».', 'fail'); return false; }
     const fields = collectFields(ctx);
     const entry  = { kind: 'draft', savedAt: new Date().toISOString(), fields };
-    const payload = wsState.payload || await readPayload(ctx);
+    const payload = await currentPayload(ctx);
     payload.current = fields;
     payload.diagImages = (wsState.diagImages || []).slice();   // DIAG_IMAGES_V1 — survive draft reopen
     payload.docType = wsState.docType;   // CABINET_FIX_V1_TPL — тип документа открывается тем, каким сохранён
@@ -4167,17 +4381,32 @@ async function handleSaveDraft(ctx, opts = {}) {
 // Sign & finalize — promotes the current draft to a signed entry. Any
 // outstanding draft is auto-pruned (signed snapshot supersedes it).
 // ---------------------------------------------------------------------------
+// CABINET_FIX_V1_R1 (ревью п. 2) — разделы, которые были в подписанной версии и
+// пусты в новой. Экспорт — для проверки.
+const RESIGN_FIELDS = [['chief_complaint', 'Жалобы'], ['hpi', 'Анамнез'], ['physical_exam', 'Осмотр'],
+    ['labs_text', 'Лабораторные исследования'], ['instrumental_text', 'Описание'], ['primary_diagnosis', 'Диагноз'],
+    ['therapy_text', 'Терапия'], ['recommendations_text', 'Рекомендации'], ['conclusion_text', 'Заключение']];
+export function lostOnResign(prev, next) {
+    if (!prev) return [];
+    const n = next || {};
+    return RESIGN_FIELDS.filter(([k]) => textOf(prev[k]) && !textOf(n[k])).map(([, label]) => tr(label));
+}
 async function handleSignFinalize(ctx) {
     if (!ctx.visitServiceId) { toast('Услуга не привязана — откройте из «Мои услуги».', 'fail'); return; }
     const fields = collectFields(ctx);
+    // CABINET_FIX_V1_R1 (ревью п. 1) — подписанный документ содержит всё, что
+    // написано: текст, которого бланк не показывает, сначала переносится или удаляется.
+    const _refusal = signRefusal(fields, wsState.docType);
+    if (_refusal) { toast(_refusal, 'fail'); return; }
     // CLINICAL_SIGN_GATE_V1 — warn before signing an empty document.
-    const _hasText = [fields.chief_complaint, fields.hpi, fields.physical_exam, fields.instrumental_text, fields.primary_diagnosis, fields.therapy_text, fields.recommendations_text]
+    const _hasText = [fields.chief_complaint, fields.hpi, fields.physical_exam, fields.instrumental_text, fields.primary_diagnosis, fields.therapy_text, fields.recommendations_text, fields.conclusion_text, fields.labs_text]   // CABINET_FIX_V1_R1 — + заключение и лабораторные
         .some(x => String(x || '').replace(/<[^>]*>/g, '').trim());
     const _actor = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || {};
     // DOC_AMEND_AUDIT_V1 — re-signing an already-signed document creates a NEW version (the
     // prior signed entry stays in history). Only the original author or a clinic admin/owner
     // may amend; every version is stamped with its signer + timestamp.
-    const _prevSigned = (((wsState.payload && wsState.payload.history) || []).filter(e => e.kind === 'signed'));
+    const _pl = await currentPayload(ctx);   // CABINET_FIX_V1_R1 — история именно этой строки
+    const _prevSigned = (((_pl && _pl.history) || []).filter(e => e.kind === 'signed'));
     const _last = _prevSigned.length ? _prevSigned[_prevSigned.length - 1] : null;
     const _isOwner = _actor.is_super_admin === true || (_actor.is_admin === true && !!_actor.company_id);
     if (_last && _last.by && _last.by !== _actor.id && !_isOwner) {
@@ -4190,8 +4419,13 @@ async function handleSignFinalize(ctx) {
             ? 'Подписать и завершить приём?\n\nУслуга будет отмечена выполненной, а пациент покинет вашу очередь.'
             : 'Документ выглядит ПУСТЫМ.\n\nВсё равно подписать и завершить приём?');
     if (!confirm(_signMsg)) return;
+    // CABINET_FIX_V1_R1 (ревью п. 2) — новая версия беднее подписанной: назвать,
+    // что пропадёт, и спросить. Прежняя версия остаётся в истории, а её снимок —
+    // в архиве (сервер не отзывает документ с текстом пустой подписью).
+    const _lost = _last ? lostOnResign(_last.fields, fields) : [];
+    if (_lost.length && !confirm(trf('В новой версии пусты разделы, которые были в подписанной: {list}. Подписать всё равно? Прежняя версия останется в истории.', { list: _lost.join(', ') }))) return;
     const entry  = { kind: 'signed', savedAt: new Date().toISOString(), fields, by: _actor.id || null, byName: _actor.full_name || '' };
-    const payload = wsState.payload || await readPayload(ctx);
+    const payload = await currentPayload(ctx);
     payload.current = fields;
     payload.diagImages = (wsState.diagImages || []).slice();   // DIAG_IMAGES_V1
     payload.docType = wsState.docType;   // CABINET_FIX_V1_TPL
@@ -4202,14 +4436,15 @@ async function handleSignFinalize(ctx) {
     // CLINICAL_DOCTYPE_V1 — archive the signed document as a self-contained, render-ready
     // SNAPSHOT (buildBlankData → the shape the print/preview templates consume) so it can be
     // reopened from the patient card. Diagnostics archive as doc_type='diag' (imaging
-    // conclusion: описание/заключение), consultations as 'protocol'. Dedup deletes BOTH so a
-    // prior mis-archive on a diagnostic service is cleaned up on re-sign.
+    // conclusion: описание/заключение), consultations as 'protocol'. CABINET_FIX_V1_R1 — the server
+    // voids only the previous document of the SAME kind, and never a full one by an empty signature.
     try {
-        const _isDiag       = (ctx.deptKind === 'diagnostics') || (wsState.docType === 'diag');
+        // CABINET_FIX_V1_R1 (ревью п. 6) — вид архива — по СОХРАНЁННОМУ типу документа:
+        // «Приём» у строки отделения диагностики архивировался заключением диагностики.
+        const _isDiag       = wsState.docType === 'diag';
         const _archiveType  = _isDiag ? 'diag' : 'protocol';
-        const _snap = buildBlankData(ctx); _snap.__editor = false;
-        // CABINET_FIX_V1_DIAG — архив диагностики — те же данные, что экран и печать.
-        const _docData = _isDiag ? diagDocData(_snap, { editor: false, images: wsState.diagImages || [] }) : _snap;   // DIAG_IMAGES_V1 — persist snapshots with the signed doc
+        // CABINET_FIX_V1_DIAG / CABINET_FIX_V1_R1 — архив — тот же снимок, что экран и печать (docSnapshot).
+        const _docData = docSnapshot(ctx);   // DIAG_IMAGES_V1 — persist snapshots with the signed doc
         // DOC_AMEND_AUDIT_V1 — attestation stamp on the archived snapshot (signer / when / version).
         _docData.meta = { signedBy: _actor.full_name || '', signedAt: entry.savedAt, version: _prevSigned.length + 1 };
         const _archiveTitle = (_isDiag ? 'Заключение' : 'Протокол осмотра')
@@ -4234,7 +4469,7 @@ async function handleSignFinalize(ctx) {
     try {
         const _conclText = String((buildBlankData(ctx) || {}).conclusionText || '').trim();
         if (ctx.visitId && _conclText) {
-            const _isDiag2 = (ctx.deptKind === 'diagnostics') || (wsState.docType === 'diag');
+            const _isDiag2 = wsState.docType === 'diag';   // CABINET_FIX_V1_R1 — по сохранённому типу
             const { error: _cErr } = await supabase.from('visits')
                 .update({ conclusion: _conclText, conclusion_type: _isDiag2 ? 'diagnostic' : 'consultation' })
                 .eq('id', ctx.visitId);
@@ -4291,7 +4526,7 @@ async function syncVisitStatus(visitId) {
 // Drafts and referrals can be deleted; signed conclusions remain as audit.
 // ---------------------------------------------------------------------------
 async function handleDeleteEntry(ctx, originalIdx) {
-    const payload = wsState.payload || await readPayload(ctx);
+    const payload = await currentPayload(ctx);
     const entry = payload.history[originalIdx];
     if (!entry || (entry.kind !== 'draft' && entry.kind !== 'referral')) {
         toast('Эту запись нельзя удалить.', 'fail');
@@ -4795,61 +5030,20 @@ async function handlePrint(ctx) {
         : '';
 
     // Pull fresh data so the printout reflects whatever's just been added.
-    if (!wsState.payload) wsState.payload = await readPayload(ctx);
+    await currentPayload(ctx);   // CABINET_FIX_V1_R1 — записи именно этой строки
     await loadRecommendations(ctx);
-    const prescriptions = (wsState.payload?.prescriptions || []);
-    const recs = (wsState.recommendations || []);
-
-    /* i18n-exempt-start: HTML заключения (назначения) — содержимое ДОКУМЕНТА */
-    const rxBlock = prescriptions.length === 0
-        ? `<dd class="muted">Препараты не назначены.</dd>`
-        : prescriptions.map(rx => `
-            <div class="rx-row">
-              <div class="rx-name">${escapeHtml(rx.name || '(без названия)')}${rx.dose ? ' · <span class="muted">' + escapeHtml(rx.dose) + '</span>' : ''}</div>
-              <div class="muted small">${escapeHtml([rx.freq, rx.dur, rx.notes].filter(Boolean).join(' · ') || '—')}</div>
-              ${rx.nurse ? '<div class="muted small">Медсестре: ' + escapeHtml(rx.nurse) + '</div>' : ''}
-            </div>`).join('');
-
-    /* i18n-exempt-start: HTML заключения — содержимое ДОКУМЕНТА, не текст интерфейса */
-    const recsBlock = recs.length === 0
-        ? `<dd class="muted">Дополнительные услуги не рекомендованы.</dd>`
-        : recs.map(rec => `
-            <div class="rx-row">
-              <div class="rx-name">${escapeHtml(rec.__service_name)}</div>
-              <div class="muted small">Рекомендовал ${escapeHtml(rec.__doctor_name || '—')}${rec.notes ? ' · ' + escapeHtml(rec.notes) : ''}</div>
-            </div>`).join('');
-    /* i18n-exempt-end */
-
-    // UNIFY_PRINT_V2 — print the consultation via the single conclusion renderer (data, not bodyHtml),
-    // so the doctor's printout == the #documents «Заключение» preview.
-    const stripHtml = (x) => String(x || '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li)>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\n{3,}/g, '\n\n').trim();
-    const data = {
-        title: 'Заключение приёма',
-        patientName, mrn: p.mrn || '', phone: p.phone || '', dob: p.dob || p.birth_date || '', sex: p.gender || p.sex || '',
-        doctorName: svc.doctorName || me().full_name || '', doctorSpec: svc.doctorSpec || me().specialty || '', service: svc.name || '',   // DOC_DOCTOR_FALLBACK_V1 — no assigned doctor → use the signed-in clinician's profile (matches the phone source)
-        complaint: stripHtml(f.chief_complaint), hpi: stripHtml(f.hpi), labs: stripHtml(f.labs_text),
-        instrumental: stripHtml(f.instrumental_text), exam: stripHtml(f.physical_exam),
-        dx: stripHtml(f.primary_diagnosis) || _mainDxText(), icd10: stripHtml(f.icd10), therapy: stripHtml(f.therapy_text),   // DX_SAVE_FIX_V1
-        recsText: stripHtml(f.recommendations_text),
-        doctorPhone: wsState.docPhone ? (stripHtml(f.doctor_phone) || (wsState.wsDoctorKnown ? wsState.wsDoctorPhone : (me().phone || ''))) : '',   // DOC_PHONE_SOURCE_V1
-        showDoctor: wsState.docDoctorInfo !== false,   // DOC_DOCTOR_TOGGLE_V1
-        prescriptions: prescriptions.map(rx => ({ name: rx.name, dose: rx.dose, freq: rx.freq, dur: rx.dur, notes: rx.notes, nurse: rx.nurse })),
-        diagnoses: (wsState.payload && wsState.payload.diagnoses || []).map(x => ({ code: x.code, name: x.name, type: x.type, typeLabel: DX_TYPE_RU[x.type] || '' })),   // DX_ALL_IN_DOC_V1
-        referrals: recs.map(rec => ({ name: rec.__service_name, note: rec.__doctor_name || '' })),
-    };
     try {
         const _dt = wsState.docType || 'conclusion';   // DOCTYPE_FROM_DOCUMENTS_V1
-        // DIAG_PRINT_REALDATA_V1 — for «Диагностика» the print/finalize path used
-        // to pass data:null, so renderDesignedVariant fell back to sampleImaging()
-        // and printed the canned «Рахимов Жасур · МРТ» sample instead of the real
-        // study. Build the diag-shaped payload (Описание ← instrumental, Заключение
-        // ← diagnosis), mirroring the on-screen blank in renderBlank().
-        let _data = null;
-        if (_dt === 'conclusion') _data = data;
-        // CABINET_FIX_V1_DIAG — те же данные, что у бланка на экране и в архиве
-        // (diagDocData): пациент и услуга есть ВСЕГДА, поэтому пустой бланк
-        // печатается бланком этого пациента, а не образцом «Рахимов Жасур».
-        else if (_dt === 'diag') _data = diagDocData(buildBlankData(ctx), { editor: false, images: wsState.diagImages || [] });
+        // CABINET_FIX_V1_R1 (ревью п. 12) — печать — тот же снимок, что уходит в
+        // архив при подписи (docSnapshot): своя сборка печати не знала порядка
+        // разделов и теряла «Осмотр» и «Заключение» приёма.
+        // DIAG_PRINT_REALDATA_V1 / CABINET_FIX_V1_DIAG — у диагностики пациент и
+        // услуга есть ВСЕГДА: пустой бланк — бланк этого пациента, не образец.
+        // CABINET_FIX_V1_R1 (ревью п. 1) — текст, которого бланк не показывает,
+        // молча на бумагу не теряется: печать спрашивает.
+        const _hidden = hiddenTextFor(f, _dt);
+        if (_hidden.length && !confirm(trf('На бумагу не попадёт текст, которого нет в бланке «{type}»: {list}. Печатать всё равно?', { type: typeWord(_dt), list: _hidden.join(', ') }))) return;
+        const _data = docSnapshot(ctx, _dt);
         // i18n-exempt: печатное заключение — печатный документ
         printableSheet({ type: _dt, data: _data, title: 'Заключение · ' + patientName, idLine: p.mrn || '', settings: loadDocSettings() });
     } catch (e) {
@@ -4864,7 +5058,7 @@ async function handlePrint(ctx) {
 // before entering the on-screen modal AND the print-window HTML.
 async function openRecipeModal(ctx) {
     // Read fresh — payload may be null/stale at click time (mirrors handlePrint).
-    if (!wsState.payload) wsState.payload = await readPayload(ctx);
+    await currentPayload(ctx);   // CABINET_FIX_V1_R1 — записи именно этой строки
     const items = (wsState.payload?.prescriptions || []);
     if (!items.length) {
         toast('Нет назначений для рецепта', 'info');
@@ -5162,6 +5356,28 @@ function _mainDxText() {
     const m = (wsState.payload && wsState.payload.diagnoses || []).find(d => d && d.type === 'main');
     return m ? ((m.code ? m.code + ' — ' : '') + (m.name || '')).trim() : '';
 }
+/**
+ * CABINET_FIX_V1_R1 (ревью п. 7) — кто подписывает документ: имя и специальность
+ * ОДНОГО человека. Было: имя — врача услуги (иначе моё), специальность — врача
+ * услуги (иначе МОЯ): у врача без специальности в карточке подписывалась чужая.
+ * Экспорт — для проверки.
+ */
+export function docSigner(svc, meUser) {
+    const s = svc || {}, m = meUser || {};
+    if (s.doctorName) return { doctorName: s.doctorName, doctorSpec: s.doctorSpec || '' };
+    return { doctorName: m.full_name || '', doctorSpec: m.specialty || '' };
+}
+/**
+ * CABINET_FIX_V1_R1 (ревью п. 12) — ОДИН снимок документа для печати и архива:
+ * «Печать» приёма собирала свои данные без порядка разделов и теряла «Осмотр»
+ * (и «Заключение»), а архив их сохранял. Экспорт — для проверки.
+ */
+export function docSnapshot(ctx, type = wsState.docType) {
+    const base = buildBlankData(ctx);
+    if (type === 'diag') return diagDocData(base, { editor: false, images: wsState.diagImages || [] });
+    base.__editor = false;
+    return base;
+}
 function buildBlankData(ctx) {
     const f = collectFields(ctx);
     const p = ctx.patient || {};
@@ -5173,7 +5389,8 @@ function buildBlankData(ctx) {
         mrn: p.mrn || '', phone: p.phone || '',
         dob: p.dob || p.birth_date || '',
         sex: (p.gender === 'M' ? 'Муж.' : p.gender === 'F' ? 'Жен.' : (p.gender || p.sex || '')),
-        doctorName: svc.doctorName || me().full_name || '', doctorSpec: svc.doctorSpec || me().specialty || '', service: svc.name || '',   // DOC_DOCTOR_FALLBACK_V1 — no assigned doctor → use the signed-in clinician's profile (matches the phone source)
+        ...docSigner(svc, me()),   // DOC_DOCTOR_FALLBACK_V1 — no assigned doctor → the signed-in clinician · CABINET_FIX_V1_R1 — имя и специальность одного человека
+        service: svc.name || '',
         issueDate: new Date().toLocaleDateString('ru-RU'),
         prescriptions: (wsState.payload && wsState.payload.prescriptions || []).map(rx => ({ name: rx.name, dose: rx.dose, freq: rx.freq, dur: rx.dur, notes: rx.notes, nurse: rx.nurse })),
         // DX_ALL_IN_DOC_V1 — every diagnosis (incl. сопутствующие/осложнения/фоновые)
@@ -5191,6 +5408,17 @@ function buildBlankData(ctx) {
     data.showDoctor = wsState.docDoctorInfo !== false;   // DOC_DOCTOR_TOGGLE_V1
     data.activeFields = DOC_SECTIONS.filter(sd => wsSectionOn(sd.sec)).map(sd => sd.field);   // WS_TEMPLATE_SECTIONS_V1
     data.sectionOrder = (wsState.sectionOrder && wsState.sectionOrder.slice()) || DOC_SECTIONS.map(sd => sd.field);   // WS_REORDER_V1
+    // CABINET_FIX_V1_R1 (ревью п. 1, 3) — «Описание» диагностики и «Лабораторные»
+    // старых шаблонов на «Приёме» видны своими разделами — на экране, в печати и
+    // в архиве (раньше текст лежал под бланком невидимым и на бумагу не попадал).
+    const _extra = [['labs_text', data.labs], ['instrumental_text', data.instrumental]].filter(([, v]) => v).map(([k]) => k);
+    if (_extra.length) {
+        const order = data.sectionOrder.filter((k) => !_extra.includes(k));
+        const ex = order.indexOf('physical_exam');
+        order.splice(ex < 0 ? order.length : ex + 1, 0, ..._extra);
+        data.sectionOrder = order;
+        data.activeFields = data.activeFields.concat(_extra.filter((k) => !data.activeFields.includes(k)));
+    }
     return data;
 }
 /**

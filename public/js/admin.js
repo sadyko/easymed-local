@@ -60,7 +60,7 @@ import { renderServices }     from './admin/views/services.js?v=aug31a';   // SE
 import { renderRegistration } from './admin/views/registration.js?v=aug17f';
 import { renderRoomCalendar } from './admin/views/room-calendar.js?v=aug17e';   // RESCAL_WIRE_V1 — «Календарь записи» (legacy Scheduling retired)
 import { renderConsultation }     from './admin/views/consultation.js?v=rmt1';
-import { renderServiceWorkspace } from './admin/views/service-workspace.js?v=cabrx1';   // OWN_PRICE_REPEAT_V1 — штамп кабинета врача · OWN_PRICE_TIER_RATIO_V1 (ревью) · CABINET_FIX_V1_DIAG — бланк диагностики · CABINET_FIX_V1_TPL — шаблоны · RX_TEMPLATES_V1 — рецепты (тот же штамп в documents.js и admission-modal.js)
+import { renderServiceWorkspace } from './admin/views/service-workspace.js?v=cabr1';   // OWN_PRICE_REPEAT_V1 — штамп кабинета врача · OWN_PRICE_TIER_RATIO_V1 (ревью) · CABINET_FIX_V1_DIAG — бланк диагностики · CABINET_FIX_V1_TPL — шаблоны · RX_TEMPLATES_V1 — рецепты · CABINET_FIX_V1_R1 — ревью 1 (тот же штамп в documents.js и admission-modal.js)
 import { renderPatientCard }  from './admin/views/patient-card.js?v=labshared1';   // PATIENT_CARD_DESIGN_V2 + SVC_ROW_ACTIONS_V1 (?v must match service-workspace.js)
 import { renderPlaceholder }  from './admin/views/placeholder.js';
 import { renderSectionCrud }  from './admin/views/section-crud.js?v=ecs1';   // EMPLOYEE_CARD_SAVE_V1 — штамп: employee-editor.js берёт разбор ФИО из shared/employee-name.js
@@ -82,7 +82,7 @@ import { renderDoctorRoom }   from './admin/views/doctor-room.js?v=docroom1';   
 import { renderEmployees }    from './admin/views/employees.js?v=ecs2';   // EMPLOYEE_CARD_SAVE_V1 — ФИО из full_name, отказ называет пустые поля; ecs2 — ревью: нетронутое ФИО побайтно, стёртый телефон · RATES_HONEST_V1 — штамп карточки (ревью 1) · EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen) · rmt1 = RATES_MODE_TYPED_V1
 import { renderMarketing }    from './admin/views/marketing.js?v=btnright1';
 import { renderCallCenter }   from './admin/views/callcenter.js';
-import { renderDocuments }    from './admin/views/documents.js?v=pa3';   // CABINET_FIX_V1_TPL — шаблоны — библиотека кабинета врача · RX_TEMPLATES_V1 — штамп кабинета · PRINT_AUTO_V1 — pa3: предпросмотр шаблона — только показ
+import { renderDocuments }    from './admin/views/documents.js?v=cabr1';   // CABINET_FIX_V1_TPL — шаблоны — библиотека кабинета врача · RX_TEMPLATES_V1 — штамп кабинета · PRINT_AUTO_V1 — pa3: предпросмотр шаблона — только показ · CABINET_FIX_V1_R1 — cabr1: штамп кабинета
 import { renderDiscountsSettings } from './admin/views/discounts-settings.js?v=btnright1';   // PATIENT_DISCOUNTS_V1
 import { renderApiSettings } from './admin/views/api-settings.js?v=api4';   // CLINIC_API_V1
 import { renderWithViewOnly } from './admin/view-only.js';   // ADMIN_ROWS_GRANTABLE_V1
