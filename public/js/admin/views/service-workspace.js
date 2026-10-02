@@ -2544,6 +2544,18 @@ export function lineSigning(vsId) { return LINE_SIGNING.has(Number(vsId)); }
 // снимается словами (запись, дошедшая ещё позже, несёт старую основу и ничего не
 // перезапишет — сервер ответит ей 409). Строка → метка ожидания.
 const LINE_PENDING = new Map();
+// CABINET_FIX_V1_R6 (ревью 6, п. 2) — записи истории строки (savedAt), которые этот
+// экран (корень приёма; переживает перерисовку, как [U]) читал или записал: черновик
+// не из этого набора, найденный при отказе «документ изменился», — версия другого окна (kept).
+function seenEntries(ctx) {
+    const root = ctx && ctx.container;
+    if (!root) return new Set();
+    if (!root.__wsSeen) root.__wsSeen = new Map();
+    const k = Number(ctx.visitServiceId);
+    if (!root.__wsSeen.has(k)) root.__wsSeen.set(k, new Set());
+    return root.__wsSeen.get(k);
+}
+function markSeen(ctx, payload) { const set = seenEntries(ctx); for (const e of (payload && Array.isArray(payload.history) ? payload.history : [])) if (e && e.savedAt) set.add(String(e.savedAt)); }
 /** Ответа на запись строки ещё нет (после срока)? Экспорт — для проверки. */
 export function lineWritePending(vsId) { return LINE_PENDING.has(Number(vsId)); }
 // CABINET_FIX_V1_R4 — сроки: повтор неудачной загрузки (с паузой, растущей до
@@ -2677,7 +2689,7 @@ async function readPayload(ctx) {
         return failed;
     }
     // CABINET_FIX_V1_R5 (ревью 5, A) — основа копии — то, что лежит у строки, ровно как строка.
-    const based = (pl) => { PAYLOAD_BASE.set(pl, notesBaseOf(data ? data.notes : null)); return ownPayload(pl, ctx.visitServiceId); };
+    const based = (pl) => { PAYLOAD_BASE.set(pl, notesBaseOf(data ? data.notes : null)); markSeen(ctx, pl); return ownPayload(pl, ctx.visitServiceId); };   // markSeen — CABINET_FIX_V1_R6
     if (!data?.notes) return based(emptyPayload());
     let parsed = null;
     // CABINET_FIX_V1_R5 (B) — заметка медсестры, лежавшая текстом до первого сохранения кабинета, — не теряется.
@@ -2724,12 +2736,14 @@ export async function currentPayload(ctx) {
 // (их записало другое окно), помечаются kept: их не заменяет ни следующий
 // «Черновик», ни подпись этой вкладки — текст другого окна остаётся в истории
 // («Возобновить»). Возвращает { ok, foreign } — сколько таких черновиков.
+// Свои — записи истории, которые этот экран уже читал или сам записал
+// (seenEntries): его прежний черновик, заменённый в памяти перед записью, — не чужой.
 async function adoptServerRecords(ctx, attempted = null) {
+    const st = stateOf(ctx);
+    const known = new Set(seenEntries(ctx));
+    for (const src of [st.payload, attempted]) for (const e of (src && Array.isArray(src.history) ? src.history : [])) if (e && e.savedAt) known.add(String(e.savedAt));
     const fresh = await readPayload(ctx);
     if (FAILED_READ.has(fresh)) return { ok: false, foreign: 0 };
-    const st = stateOf(ctx);
-    const known = new Set();
-    for (const src of [st.payload, attempted]) for (const e of (src && Array.isArray(src.history) ? src.history : [])) if (e && e.savedAt) known.add(String(e.savedAt));
     let foreign = 0;
     for (const e of fresh.history || []) if (e && e.kind === 'draft' && !e.kept && !known.has(String(e.savedAt))) { e.kept = 1; foreign++; }
     st.payload = fresh;
@@ -2837,6 +2851,7 @@ async function settleWrite(ctx, payload, sent, res, opts, late, extraUpdate = {}
     }
     ownPayload(payload, ctx.visitServiceId);
     PAYLOAD_BASE.set(payload, notesBaseOf(sent));   // CABINET_FIX_V1_R5 (A) — у строки теперь лежит ровно это
+    markSeen(ctx, payload);                          // CABINET_FIX_V1_R6 (п. 2) — записанное этой вкладкой — своё
     // CABINET_FIX_V1_R3 (F1) — записанное — в состояние СВОЕЙ строки, открыта она
     // или отложена: иначе строка, отложенная во время подписи, возвращалась с
     // записями до подписи, и следующий «Черновик» стирал подписанную версию.

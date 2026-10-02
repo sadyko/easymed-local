@@ -164,6 +164,15 @@ test('п. 2: документ изменился без чужого черно�
     assert.ok(await WS.saveDraft(a, { silent: true }));
     assert.equal(parsed(22).nurseNote, 'в/в');
     assert.deepEqual(draftTexts(22), ['Жалобы']);
+    // свой прежний черновик (записанный этой вкладкой) — не «версия из другого окна»:
+    // после новой заметки медсестры он заменяется, как всегда, а не копится
+    const o2 = JSON.parse(NOTES.get(22)); o2.nurseNote = 'в/в, повторно'; NOTES.set(22, JSON.stringify(o2));
+    put(a, 'chief_complaint', 'Жалобы 2');
+    TOASTS.length = 0;
+    assert.equal(await WS.saveDraft(a, { silent: true }), false);
+    assert.ok(!TOASTS.some((t) => /Версия из другого окна/.test(t)), 'свой черновик назван версией другого окна: ' + TOASTS.join(' | '));
+    assert.ok(await WS.saveDraft(a, { silent: true }));
+    assert.deepEqual(draftTexts(22), ['Жалобы 2'], 'свой прежний черновик остался как «чужой»');
 });
 
 // ─── п. 3: заметка медсестры — корректный JSON ───────────────────────────────
