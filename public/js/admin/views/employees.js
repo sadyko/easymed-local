@@ -17,7 +17,7 @@ import { importExportButtons } from './section-import-export.js?v=aug17e';   // 
 import { soleBranchId } from '../branch-context.js?v=bc3';                  // SOLE_BRANCH_V1
 import { specialtyOptions, canonicalSpecialty, SPECIALTY_ROWS } from '../specialties.js?v=spec2';   // SPECIALTY_LIST_V1 + SPECIALTIES_CLONED_V1 + MULTI_SPECIALTY_V1
 import { referralRewardEditor, saveReferralReward } from './referral-reward-editor.js';   // REPORTS_V2 — рабочая ставка за направления (источник врача)
-import { employeeNameParts, employeeSaveGaps, NAME_KEYS } from '../../shared/employee-name.js';   // EMPLOYEE_CARD_SAVE_V1 — имя из full_name и что держит сохранение
+import { employeeNameParts, employeeSaveGaps, NAME_KEYS } from '../../shared/employee-name.js?v=ecs2';   // EMPLOYEE_CARD_SAVE_V1 — имя из full_name и что держит сохранение; ecs2 — ревью: нетронутое ФИО побайтно, стёртый телефон
 
 const ROLES = [
     ['registrar', 'Регистратор'], ['doctor', 'Врач'], ['nurse', 'Медсестра'],
@@ -458,13 +458,18 @@ function openEditor(user, root) {
     // сохранения: он стоит в своём разделе, пока поля не заполнят, а не гаснет
     // тостом через 2,4 с. `ctrls` — поля раздела на экране, чтобы отметить пустое
     // и поставить в него курсор.
-    const was = { last_name: emp.last_name, first_name: emp.first_name, middle_name: emp.middle_name, staff_type: emp.staff_type };
+    // Ревью: телефон тоже — стёртый сейчас держит сохранение, как категория.
+    // `user` (строка с сервера) решает, вернутся ли нетронутые части имени тем же
+    // full_name (namesRoundTrip): иначе они не уходят.
+    const was = { last_name: emp.last_name, first_name: emp.first_name, middle_name: emp.middle_name, staff_type: emp.staff_type, phone: emp.phone };
     let refusal = null;
     let statusBox = null;
     const ctrls = {};
     const FIELD_LABEL = { last_name: 'Фамилия', first_name: 'Имя', phone: 'Телефон', staff_type: 'Категория сотрудника', username: 'Логин', password: 'Пароль' };
-    const saveGaps = () => employeeSaveGaps({ isEdit, now: emp, was });
+    const saveGaps = () => employeeSaveGaps({ isEdit, now: emp, was, stored: user || {} });
     const namesTouched = () => NAME_KEYS.some((k) => String(emp[k] || '').trim() !== String(was[k] || '').trim());
+    const emptyNow = (k) => !String(emp[k] || '').trim();
+    const emptyAtOpen = (k) => !String(was[k] || '').trim();
     // STAFF_SYNC_V1 — карточка сотрудника, приехавшего из главной клиники,
     // ОТКРЫВАЕТСЯ, но не правится. Открывается — потому что филиалу нужно
     // видеть телефон врача и его специальность; не правится — потому что
@@ -515,10 +520,12 @@ function openEditor(user, root) {
         if (active === 'personal') {
             // Одно слово в full_name (или имени нет вовсе), ФИО не правили: части
             // имени не уходят, и сервер оставит full_name прежним.
-            if (!saveGaps().sendNames && !namesTouched()) notes.push('Фамилия или имя не заполнены. Остальные разделы карточки сохраняются, а ФИО останется прежним, пока не заполните оба поля.');
-            if (!String(emp.phone || '').trim()) notes.push('Телефон не заполнен');
+            if ((emptyNow('last_name') || emptyNow('first_name')) && !namesTouched()) notes.push('Фамилия или имя не заполнены. Остальные разделы карточки сохраняются, а ФИО останется прежним, пока не заполните оба поля.');
+            // Пометка — только о том, чего не было с самого начала; стёртое сейчас
+            // называет отказ сохранения.
+            if (emptyNow('phone') && emptyAtOpen('phone')) notes.push('Телефон не заполнен');
         }
-        if (active === 'job' && !String(emp.staff_type || '').trim()) notes.push('Категория сотрудника не выбрана');
+        if (active === 'job' && emptyNow('staff_type') && emptyAtOpen('staff_type')) notes.push('Категория сотрудника не выбрана');
         return notes;
     }
     function paintStatus() {

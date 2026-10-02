@@ -52,6 +52,38 @@ export function employeeNameParts(row) {
     return { last_name: r.last_name || '', first_name: r.first_name || '', middle_name: r.middle_name || '' };
 }
 
+// Часть имени так, как её запишет сервер (routes/users.js parseEmployeeFields:
+// String(v).slice(0, 120).trim()).
+const serverPart = (v) => String(v === null || v === undefined ? '' : v).slice(0, 120).trim();
+
+/**
+ * full_name, который сервер соберёт из присланных частей (routes/users.js:
+ * parseEmployeeFields режет часть до 120 знаков и обрезает пробелы по краям,
+ * deriveFullName склеивает непустые через один пробел).
+ */
+export function serverFullName(parts) {
+    const p = parts || {};
+    return NAME_KEYS.map((k) => serverPart(p[k])).filter(Boolean).join(' ');
+}
+
+/**
+ * Ревью EMPLOYEE_CARD_SAVE_V1 — можно ли отправить НЕТРОНУТЫЕ части имени, ничего
+ * не изменив. Сервер пересобирает full_name из присланных частей: двойной,
+ * неразрывный, крайний пробел или табуляция схлопнулись бы, часть длиннее 120
+ * знаков обрезалась бы, а разобранная строка без отчества стёрла бы отчество из
+ * его колонки. Поэтому — только если full_name вернётся ПОБАЙТНО тем же и ни одна
+ * заполненная колонка не перепишется другим значением. Иначе части не уходят, и
+ * имя остаётся как лежит.
+ *
+ * @param {{ full_name?: string, last_name?: string, first_name?: string, middle_name?: string }} stored строка сотрудника, как её прислал сервер
+ * @param {{ last_name?: string, first_name?: string, middle_name?: string }} parts что карточка отправила бы
+ */
+export function namesRoundTrip(stored, parts) {
+    const s = stored || {};
+    if (serverFullName(parts) !== String(s.full_name === null || s.full_name === undefined ? '' : s.full_name)) return false;
+    return NAME_KEYS.every((k) => blank(s[k]) || serverPart(s[k]) === serverPart((parts || {})[k]));
+}
+
 /**
  * Что останавливает «Сохранить сотрудника» и уходят ли части имени.
  *
@@ -60,31 +92,38 @@ export function employeeNameParts(row) {
  *     затем логин и пароль (как прежде).
  *   * СУЩЕСТВУЮЩИЙ — карточка сохраняет то, что в ней правили. Фамилия и Имя
  *     обязательны, только если правили само ФИО (хоть одну из трёх частей) и
- *     оставили пустыми. Не трогали, а пусто (одно слово в full_name) — части
- *     имени просто НЕ отправляются: сервер оставит full_name прежним, а ставки,
- *     стационар, зарплата и прочее сохранятся. Телефон не обязателен.
- *     Категорию останавливает только та, которую стёрли сейчас: у `admin`
- *     первого запуска её не было никогда.
+ *     оставили пустыми. ФИО не трогали — части имени уходят, только если сервер
+ *     соберёт из них побайтно тот же full_name (namesRoundTrip); иначе — и когда
+ *     имени нет (одно слово в full_name) — НЕ отправляются: full_name остаётся
+ *     прежним, а ставки, стационар, зарплата и прочее сохраняются.
+ *     Телефон и категория держат сохранение, только если их стёрли сейчас
+ *     (ревью: стёртый телефон уходил пустым, а стёртая категория — нет). Пустые
+ *     с самого начала — не держат: у демо-врачей и `admin` первого запуска их
+ *     не было никогда.
  *
- * @param {{ isEdit: boolean, now: object, was?: object }} a
- *   now — значения карточки сейчас; was — с какими она открылась (для правки)
+ * @param {{ isEdit: boolean, now: object, was?: object, stored?: object }} a
+ *   now — значения карточки сейчас; was — с какими она открылась (для правки);
+ *   stored — строка сотрудника с сервера (full_name и колонки имени)
  * @returns {{ refuse: null | { section: 'personal'|'job'|'access', keys: string[] }, sendNames: boolean }}
  */
-export function employeeSaveGaps({ isEdit, now, was = {} }) {
+export function employeeSaveGaps({ isEdit, now, was = {}, stored = {} }) {
     const changed = (k) => text(now[k]) !== text(was[k]);
+    const cleared = (k) => blank(now[k]) && !blank(was[k]);   // было заполнено — стёрли сейчас
     const nameGaps = ['last_name', 'first_name'].filter((k) => blank(now[k]));
+    const namesEdited = NAME_KEYS.some(changed);
     let personal, job, access;
     if (!isEdit) {
         personal = blank(now.phone) ? nameGaps.concat('phone') : nameGaps;
         job = blank(now.staff_type) ? ['staff_type'] : [];
         access = ['username', 'password'].filter((k) => blank(now[k]));
     } else {
-        personal = NAME_KEYS.some(changed) ? nameGaps : [];
-        job = blank(now.staff_type) && changed('staff_type') ? ['staff_type'] : [];
+        personal = (namesEdited ? nameGaps : []).concat(cleared('phone') ? ['phone'] : []);
+        job = cleared('staff_type') ? ['staff_type'] : [];
         access = blank(now.username) ? ['username'] : [];
     }
     const refuse = personal.length ? { section: 'personal', keys: personal }
         : job.length ? { section: 'job', keys: job }
             : access.length ? { section: 'access', keys: access } : null;
-    return { refuse, sendNames: nameGaps.length === 0 };
+    const sendNames = nameGaps.length === 0 && (!isEdit || namesEdited || namesRoundTrip(stored, now));
+    return { refuse, sendNames };
 }

@@ -10,7 +10,7 @@
 // одни ставки. Ни один запрос не уходил.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { splitFullName, employeeNameParts, employeeSaveGaps, NAME_KEYS } from './employee-name.js';
+import { splitFullName, employeeNameParts, employeeSaveGaps, namesRoundTrip, NAME_KEYS } from './employee-name.js';
 
 const EMPTY = { last_name: '', first_name: '', middle_name: '' };
 
@@ -21,7 +21,7 @@ test('splitFullName: первое слово — фамилия, второе �
     assert.deepEqual(splitFullName("Karimov Anvar Akmal o'g'li"), { last_name: 'Karimov', first_name: 'Anvar', middle_name: "Akmal o'g'li" });
     assert.deepEqual(splitFullName('Ғуломова Ўғилой Тошпўлат қизи'), { last_name: 'Ғуломова', first_name: 'Ўғилой', middle_name: 'Тошпўлат қизи' });
     // Лишние пробелы, табуляция и неразрывный пробел — не слова.
-    assert.deepEqual(splitFullName('  Абдуллаев \t Шерзод   Рустамович  '), { last_name: 'Абдуллаев', first_name: 'Шерзод', middle_name: 'Рустамович' });
+    assert.deepEqual(splitFullName('  Абдуллаев \t Шерзод\u00a0  Рустамович  '), { last_name: 'Абдуллаев', first_name: 'Шерзод', middle_name: 'Рустамович' });
     // Одно слово — фамилия; имени нет, и оно не выдумывается.
     assert.deepEqual(splitFullName('Administrator'), { last_name: 'Administrator', first_name: '', middle_name: '' });
     assert.deepEqual(splitFullName('   '), EMPTY);
@@ -81,8 +81,61 @@ test('существующий: ФИО, которое не трогали, не
 });
 
 test('существующий: телефон не обязателен; заполненные Фамилия и Имя уходят', () => {
-    const was = { last_name: 'Абдуллаев', first_name: 'Шерзод', middle_name: '', staff_type: 'doctor' };
-    assert.deepEqual(employeeSaveGaps({ isEdit: true, now: { ...was, phone: '', username: 'demo' }, was }), { refuse: null, sendNames: true });
+    const was = { last_name: 'Абдуллаев', first_name: 'Шерзод', middle_name: '', staff_type: 'doctor', phone: '' };
+    const stored = { full_name: 'Абдуллаев Шерзод', last_name: null, first_name: null, middle_name: null };
+    assert.deepEqual(employeeSaveGaps({ isEdit: true, now: { ...was, username: 'demo' }, was, stored }), { refuse: null, sendNames: true });
+});
+
+// EMPLOYEE_CARD_SAVE_V1, ревью — ФИО, которое не правили, не меняется НИ НА БАЙТ.
+// Сервер пересобирает full_name из присланных частей: схлопывает пробелы (двойной,
+// по краям, неразрывный, табуляция), режет часть длиннее 120 знаков, а разобранная
+// строка без отчества стирает отчество, лежавшее в своей колонке. Поэтому
+// нетронутые части уходят, только если сервер соберёт из них РОВНО тот же
+// full_name и ни одна заполненная колонка не потеряется.
+test('namesRoundTrip: нетронутые части уходят, только если full_name останется побайтно тем же', () => {
+    const split = (full, extra = {}) => ({ full_name: full, last_name: null, first_name: null, middle_name: null, ...extra });
+    const send = (row) => namesRoundTrip(row, employeeNameParts(row));
+    assert.equal(send(split('Абдуллаев Шерзод')), true);
+    assert.equal(send(split('Каюмов Араббек Акмалович')), true);
+    assert.equal(send(split('Абдуллаев  Шерзод')), false, 'двойной пробел');
+    assert.equal(send(split('Абдуллаев\u00a0Шерзод')), false, 'неразрывный пробел');
+    assert.equal(send(split('Абдуллаев\tШерзод')), false, 'табуляция');
+    assert.equal(send(split(' Абдуллаев Шерзод')), false, 'пробел в начале');
+    assert.equal(send(split('Абдуллаев Шерзод ')), false, 'пробел в конце');
+    assert.equal(send(split('Абдуллаев ' + 'Ш'.repeat(121))), false, 'часть длиннее 120 знаков');
+    assert.equal(send(split('Абдуллаев ' + 'Ш'.repeat(120))), true, '120 знаков — как есть');
+    assert.equal(send(split('Абдуллаев Шерзод', { middle_name: 'Рустамович' })), false, 'отчество в своей колонке стёрлось бы');
+    // Колонки заполнены и сходятся с full_name — отправка ничего не меняет.
+    assert.equal(send({ full_name: 'Хирургов Хасан', last_name: 'Хирургов', first_name: 'Хасан', middle_name: '' }), true);
+    // Колонки и full_name разошлись — нетронутое имя full_name не переписывает.
+    assert.equal(send({ full_name: 'Хирургов Хасан Ака', last_name: 'Хирургов', first_name: 'Хасан', middle_name: '' }), false);
+});
+
+test('существующий: нетронутое имя, которое не вернётся тем же full_name, не отправляется — сохранение не держит', () => {
+    for (const full of ['Абдуллаев  Шерзод', 'Абдуллаев\u00a0Шерзод', 'Абдуллаев ' + 'Ш'.repeat(121)]) {
+        const stored = { full_name: full, last_name: null, first_name: null, middle_name: null };
+        const was = { ...employeeNameParts(stored), staff_type: 'doctor', phone: '' };
+        assert.deepEqual(employeeSaveGaps({ isEdit: true, now: { ...was, username: 'demo' }, was, stored }), { refuse: null, sendNames: false }, JSON.stringify(full));
+    }
+    const stored = { full_name: 'Абдуллаев Шерзод', last_name: null, first_name: null, middle_name: 'Рустамович' };
+    const was = { ...employeeNameParts(stored), staff_type: 'doctor', phone: '' };
+    assert.deepEqual(employeeSaveGaps({ isEdit: true, now: { ...was, username: 'demo' }, was, stored }), { refuse: null, sendNames: false });
+    // ФИО ПРАВИЛИ — части уходят: человек сам написал, каким быть имени.
+    assert.deepEqual(employeeSaveGaps({ isEdit: true, now: { ...was, middle_name: 'Рустамович', username: 'demo' }, was, stored }), { refuse: null, sendNames: true });
+});
+
+test('существующий: телефон стёрли сейчас — «Не заполнено: Телефон»; пустой с самого начала — не держит', () => {
+    const was = { last_name: 'A', first_name: 'B', middle_name: '', staff_type: 'doctor', phone: '+998 90 123 45 67' };
+    assert.deepEqual(employeeSaveGaps({ isEdit: true, now: { ...was, phone: '', username: 'a' }, was }).refuse, { section: 'personal', keys: ['phone'] });
+    assert.deepEqual(employeeSaveGaps({ isEdit: true, now: { ...was, phone: '  ', username: 'a' }, was }).refuse, { section: 'personal', keys: ['phone'] });
+    // Стёрли и фамилию, и телефон — отказ называет оба.
+    assert.deepEqual(employeeSaveGaps({ isEdit: true, now: { ...was, last_name: '', phone: '', username: 'a' }, was }).refuse,
+        { section: 'personal', keys: ['last_name', 'phone'] });
+    // Телефон поменяли — не пусто, не держит.
+    assert.equal(employeeSaveGaps({ isEdit: true, now: { ...was, phone: '+998 91 000 00 00', username: 'a' }, was }).refuse, null);
+    // Телефона не было — и нет: не держит.
+    const none = { ...was, phone: '' };
+    assert.equal(employeeSaveGaps({ isEdit: true, now: { ...none, username: 'a' }, was: none }).refuse, null);
 });
 
 test('существующий: правят ФИО — Фамилия и Имя обязательны, в отказе названы именно пустые', () => {

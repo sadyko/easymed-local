@@ -79,7 +79,7 @@ import { renderMarNurse }    from './admin/views/mar-nurse.js?v=inp8';   // MAR_
 import { renderKitchenSheet } from './admin/views/kitchen-sheet.js?v=diet1';   // KITCHEN_SHEET_V1 — порционник (Задача 7; экран был написан без маршрута)
 import { renderDischarge }   from './admin/views/discharge.js?v=disch1';   // TWO_STEP_DISCHARGE_V1 — «Выписки к оформлению» (Задача 8; экран был написан без маршрута)
 import { renderDoctorRoom }   from './admin/views/doctor-room.js?v=docroom1';   // DOCTOR_ROOM_V1 — Кабинет врача (consultation queue)
-import { renderEmployees }    from './admin/views/employees.js?v=ecs1';   // EMPLOYEE_CARD_SAVE_V1 — ФИО из full_name, отказ называет пустые поля · RATES_HONEST_V1 — штамп карточки (ревью 1) · EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen) · rmt1 = RATES_MODE_TYPED_V1
+import { renderEmployees }    from './admin/views/employees.js?v=ecs2';   // EMPLOYEE_CARD_SAVE_V1 — ФИО из full_name, отказ называет пустые поля; ecs2 — ревью: нетронутое ФИО побайтно, стёртый телефон · RATES_HONEST_V1 — штамп карточки (ревью 1) · EMPLOYEE_EDITOR_V3 — per-service rate tables; v11 = RATE_LOAD_V2 (fixed rate survives reopen) · rmt1 = RATES_MODE_TYPED_V1
 import { renderMarketing }    from './admin/views/marketing.js?v=btnright1';
 import { renderCallCenter }   from './admin/views/callcenter.js';
 import { renderDocuments }    from './admin/views/documents.js?v=pa3';   // CABINET_FIX_V1_TPL — шаблоны — библиотека кабинета врача · RX_TEMPLATES_V1 — штамп кабинета · PRINT_AUTO_V1 — pa3: предпросмотр шаблона — только показ

@@ -7,7 +7,7 @@ import { createApp } from '../app.js';
 import { parseEmployeeFields } from './users.js';
 import { licensedDataDir } from '../services/control/licensed-fixture.js';   // LICENCE_CORE_V1
 import { listen } from '../../control-plane/server/test-helpers/listen.js';
-import { employeeNameParts } from '../../public/js/shared/employee-name.js';   // EMPLOYEE_CARD_SAVE_V1
+import { employeeNameParts, employeeSaveGaps } from '../../public/js/shared/employee-name.js';   // EMPLOYEE_CARD_SAVE_V1
 
 // Mirrors server/app.test.js's harness (startServer/post) since that file
 // does not export its helpers.
@@ -702,6 +702,44 @@ test('EMPLOYEE_CARD_SAVE_V1: сотрудник только с full_name — с
       const r = row(id);
       assert.equal(r.full_name, full);
       assert.deepEqual([r.last_name, r.first_name, r.middle_name], [full.split(' ')[0], full.split(' ')[1], full.split(' ').slice(2).join(' ')]);
+    }
+  } finally { server.close(); }
+});
+
+// EMPLOYEE_CARD_SAVE_V1, ревью — нетронутое ФИО не меняется ни на байт. Карточка
+// шлёт части имени, только если сервер соберёт из них РОВНО тот же full_name и
+// ни одна заполненная колонка не потеряется (employeeSaveGaps → sendNames).
+// Здесь — настоящий PATCH с тем, что карточка отправила бы: full_name и отчество
+// в своей колонке остаются как были.
+test('EMPLOYEE_CARD_SAVE_V1: нетронутое ФИО (двойной/неразрывный пробел, длинная часть, отчество в колонке) — full_name побайтно прежний', async () => {
+  const { db, server, base } = await startServer();
+  try {
+    const admin = await loginAdmin(base);
+    const rows = [
+      ['dbl', 'Абдуллаев  Шерзод', ''],
+      ['nbsp', 'Абдуллаев\u00a0Шерзод', ''],
+      ['lead', ' Абдуллаев Шерзод', ''],
+      ['long', 'Абдуллаев ' + 'Ш'.repeat(121), ''],
+      ['midcol', 'Абдуллаев Шерзод', 'Рустамович'],
+      ['clean', 'Абдуллаев Шерзод', ''],
+    ];
+    for (const [username, full, middle] of rows) {
+      const id = Number(db.prepare(
+        "INSERT INTO users (username, password_hash, full_name, middle_name, role, is_doctor, is_active) VALUES (?, 'demo', ?, ?, 'doctor', 1, 1)",
+      ).run(username, full, middle).lastInsertRowid);
+      const stored = db.prepare('SELECT full_name, last_name, first_name, middle_name FROM users WHERE id = ?').get(id);
+      const was = { ...employeeNameParts(stored), staff_type: 'doctor', phone: '' };
+      const gaps = employeeSaveGaps({ isEdit: true, now: { ...was, username }, was, stored });
+      assert.equal(gaps.refuse, null, username);
+      const body = { phone: '', service_rates: [{ service_id: 1, pct: 25 }] };
+      if (gaps.sendNames) Object.assign(body, employeeNameParts(stored));
+      const res = await patch(base, '/api/users/' + id, body, admin);
+      assert.equal(res.status, 200, username);
+      const after = db.prepare('SELECT full_name, middle_name FROM users WHERE id = ?').get(id);
+      assert.equal(after.full_name, full, username + ': full_name изменился');
+      // Колонки имени в базе — NOT NULL DEFAULT '': отчество пустое или «Рустамович» и остаётся таким.
+      assert.equal(after.middle_name, middle, username + ': отчество в колонке');
+      assert.equal(gaps.sendNames, username === 'clean', username + ': sendNames');
     }
   } finally { server.close(); }
 });

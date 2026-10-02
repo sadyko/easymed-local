@@ -97,6 +97,21 @@ const FIRST_ADMIN = {
   role: 'admin', is_active: true, is_local: true, extra_roles: [],
   staff_type: null, is_doctor: false, service_rates: [], referral_rates: [],
 };
+// Ревью — full_name, которое сервер не соберёт обратно тем же: каждый из них
+// карточка сохраняет БЕЗ частей имени, и full_name остаётся побайтно прежним.
+const doc = (id, username, full, extra = {}) => ({
+  id, username, full_name: full, last_name: null, first_name: null, middle_name: null, phone: '',
+  role: 'doctor', is_active: true, is_local: true, extra_roles: [], staff_type: 'doctor', is_doctor: true,
+  specialty: 'Терапевт', service_rates: [], referral_rates: [], inpatient_rates: [], ...extra,
+});
+const ODD = [
+  doc(60, 'dbl', 'Абдуллаев  Шерзод'),                                   // двойной пробел
+  doc(61, 'nbsp', 'Абдуллаев\u00a0Шерзод'),                               // неразрывный пробел
+  doc(62, 'long', 'Абдуллаев ' + 'Ш'.repeat(121)),                        // часть длиннее 120 знаков
+  doc(63, 'midcol', 'Абдуллаев Шерзод', { middle_name: 'Рустамович' }),  // отчество в своей колонке
+];
+// Сотрудник с телефоном — для «стёрли телефон».
+const WITH_PHONE = doc(70, 'nurse.ph', 'Каримова Дилноза', { last_name: 'Каримова', first_name: 'Дилноза', middle_name: '', phone: '+998901112233', role: 'nurse', staff_type: 'mid_low', is_doctor: false });
 const SERVICES = [
   { id: 1, name: 'Консультация терапевта', price: 150000, type: 'consultation', type_id: null, category_id: null },
   { id: 2, name: 'Перевязка', price: 100000, type: 'procedure', type_id: null, category_id: null },
@@ -107,7 +122,7 @@ const dbCalls = [];
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   const method = opts.method || 'GET';
-  if (u === '/api/users' && method === 'GET') return { ok: true, json: async () => ({ users: [DEMO, ONEWORD, FIRST_ADMIN] }) };
+  if (u === '/api/users' && method === 'GET') return { ok: true, json: async () => ({ users: [DEMO, ONEWORD, FIRST_ADMIN, ...ODD, WITH_PHONE] }) };
   if (u.startsWith('/api/users')) { writes.push({ u, method, body: JSON.parse(opts.body) }); return { ok: true, json: async () => ({ user: {} }) }; }
   if (u === '/api/db') {
     const desc = opts.body ? JSON.parse(opts.body) : {};
@@ -315,4 +330,56 @@ test('новый сотрудник: Фамилия, Имя и Телефон о
   await save(card);
   assert.equal(writes.length, 0);
   assert.equal(alertText(card), 'Не заполнено: Категория сотрудника', 'следующий отказ — категория в «Должности»');
+});
+
+// EMPLOYEE_CARD_SAVE_V1, ревью — ФИО, которое не правили, не меняется ни на байт:
+// сервер пересобрал бы full_name из частей (пробелы схлопнулись бы, длинная часть
+// обрезалась бы, отчество из своей колонки стёрлось бы). Карточка эти части не шлёт.
+for (const u of ODD) {
+  test('нетронутое ФИО «' + u.username + '»: ставки сохраняются, частей имени в PATCH нет', async () => {
+    const card = await openCard(u.username);
+    assert.ok(!textOf(card).includes('Фамилия или имя не заполнены'), 'фамилия и имя есть — пометки о неполном ФИО быть не должно');
+    await tab(card, 'Услуги и ставки');
+    tick(rowOf(card, 'Перевязка'));
+    await flush();
+    await save(card);
+    assert.equal(writes.length, 1, 'карточка не ушла на сервер');
+    const body = writes[0].body;
+    for (const k of ['last_name', 'first_name', 'middle_name', 'full_name']) assert.ok(!(k in body), k + ' ушло — full_name пересобрался бы');
+    assert.deepEqual(body.service_rates.map((r) => r.service_id), [2]);
+  });
+}
+
+test('ФИО правили — части уходят, даже если full_name был с двойным пробелом', async () => {
+  const card = await openCard('dbl');
+  type(middleName(card), 'Рустамович');
+  await save(card);
+  assert.equal(writes.length, 1);
+  assert.deepEqual([writes[0].body.last_name, writes[0].body.first_name, writes[0].body.middle_name], ['Абдуллаев', 'Шерзод', 'Рустамович']);
+});
+
+// Ревью — телефон: стёртая категория отказывала, а стёртый телефон уходил ''.
+// Теперь одно правило: стёрли сейчас и оставили пустым — отказ; пустой с самого
+// начала — не держит (демо-врачи, `admin`).
+test('стёрли телефон существующему — «Не заполнено: Телефон», запрос не уходит', async () => {
+  const card = await openCard('nurse.ph');
+  assert.ok(!textOf(card).includes('Телефон не заполнен'), 'телефон есть — пометки быть не должно');
+  const ph = phoneWrap(card);
+  ph.input.value = '';
+  ph.input.dispatchEvent({ type: 'input' });
+  ph.dispatchEvent({ type: 'input' });
+  await tab(card, 'Занятость и зарплата');
+  await save(card);
+  assert.equal(writes.length, 0, 'пустой телефон ушёл на сервер');
+  assert.equal(alertText(card), 'Не заполнено: Телефон');
+  assert.ok(!textOf(card).includes('Телефон не заполнен'), 'пометка повторяет отказ');
+  // Вписали номер — отказ уходит, сохранение проходит.
+  const ph2 = phoneWrap(card);
+  ph2.input.value = '+998 90 111 22 44';
+  ph2.input.dispatchEvent({ type: 'input' });
+  ph2.dispatchEvent({ type: 'input' });
+  assert.equal(alertText(card), null, 'отказ остался после ввода номера');
+  await save(card);
+  assert.equal(writes.length, 1);
+  assert.ok(writes[0].body.phone.replace(/\D/g, '').endsWith('901112244'), writes[0].body.phone);
 });
