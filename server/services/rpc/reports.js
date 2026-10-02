@@ -4394,10 +4394,18 @@ const DOC_TEXT_SQL = (body, jsonPath) => `CASE WHEN json_valid(${body})
 // документ как врачебный, только если его автор (created_by) — врач этой
 // строки (исполнитель может быть и не врачом), врач (is_doctor) или
 // администратор — ролью или дополнительной ролью (как isAdminUser).
-const DOCTOR_AUTHOR_SQL = (d, lineDoctorExpr) => `EXISTS (SELECT 1 FROM users dau WHERE dau.id = ${d}.created_by
+// JOURNALS_V1_RJ2 (финальное ревью, F2) — документы, подписанные в кабинете до
+// v3.12.0 (970cc91), записаны без created_by: кабинет вставлял их сам, автора
+// сервер ставит только с тех пор (visit_document_archive). Но тело такого
+// документа всегда несёт meta.signedBy (DOC_AMEND_AUDIT_V1, handleSignFinalize
+// той версии) — это подпись в кабинете. Без автора и без неё (запись через
+// /api/db) документ по-прежнему не читается.
+const DOCTOR_AUTHOR_SQL = (d, lineDoctorExpr) => `(EXISTS (SELECT 1 FROM users dau WHERE dau.id = ${d}.created_by
      AND (dau.id = ${lineDoctorExpr} OR dau.is_doctor = 1 OR dau.role = 'admin'
           OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(dau.extra_roles) THEN dau.extra_roles ELSE '[]' END) dar
-                      WHERE dar.value = 'admin')))`;
+                      WHERE dar.value = 'admin')))
+     OR (${d}.created_by IS NULL AND json_valid(${d}.body)
+         AND json_extract(${d}.body, '$.meta.signedBy') IS NOT NULL))`;
 
 function journalVisitLines(db, args, ctx, { from, to, idsJson }) {
   const range = rangeOf('v.visit_date', from, to);

@@ -412,6 +412,25 @@ test('заключение — только документ врача: авт�
   } finally { db.close(); }
 });
 
+// JOURNALS_V1_RJ2 (финальное ревью, F2) — документы, подписанные в кабинете до
+// v3.12.0 (970cc91, 27.09), записаны без created_by: кабинет вставлял их сам,
+// а автора сервер ставит только с тех пор. Но кабинет ВСЕГДА писал в тело
+// meta.signedBy (DOC_AMEND_AUDIT_V1) — по нему такой документ и признаётся
+// подписанным. Без автора и без meta.signedBy (запись через /api/db) — нет.
+test('заключение: документ до 3.12 без автора, но с meta.signedBy — подписан; без автора и без подписи — не читается', () => {
+  const db = clinic();
+  try {
+    const doc = db.prepare(`INSERT INTO visit_documents (visit_service_id, visit_id, patient_id, doc_type, body, created_by, created_at)
+                            VALUES (?, ?, ?, ?, ?, NULL, ?)`);
+    doc.run(1, 1, 1, 'diag', JSON.stringify({ description: 'Печень без особенностей', conclusion: 'Норма (до 3.12)',
+      meta: { signedBy: 'УЗИст У.У.', signedAt: '2026-03-09T08:00:00.000Z', version: 1 } }), at('2026-03-09'));
+    doc.run(10, 8, 2, 'diag', JSON.stringify({ conclusion: 'Вписано без подписи' }), at('2026-03-02'));
+    const c = col(journal(db), 'Заключение');
+    assert.equal(c[2], 'Норма (до 3.12)', 'подписанный в кабинете до 3.12 — заключение есть');
+    assert.equal(c[0], 'Выполнено', 'без автора и без meta.signedBy — документа нет, статус строки');
+  } finally { db.close(); }
+});
+
 // JOURNALS_V1_RJ1 (ревью, п. 10b) — поле тела документа, записанное объектом
 // или списком, печаталось сырым JSON. Берётся только текст (или число); иначе
 // поле пустое, и правило идёт дальше («Диагноз», статус строки).
