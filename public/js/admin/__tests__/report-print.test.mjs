@@ -89,12 +89,23 @@ test('печать: больше 5000 строк — первые 5000 и пре
   assert.equal((html.match(/<tr>/g) || []).length, 1 + 5000 + 1, 'шапка + 5000 строк + итог');
   assert.ok(html.includes('<td>Пациент 5000</td>') && !html.includes('<td>Пациент 5001</td>'));
   const flat = html.replace(/[\s ]/g, '');
-  assert.ok(flat.includes('Напечатаныпервые5000строкиз5003—полныйотчётвыгрузитевExcel.'), 'нет строки-предупреждения');
+  // JOURNALS_V1_RJ2C (ревью, п. 2) — у отчёта с «Итого» строка говорит прямо,
+  // что итог — по всем строкам, а не по напечатанным.
+  assert.ok(flat.includes('Напечатаныпервые5000строкиз5003;«Итого»—повсем5003строкам.ПолныйотчётвыгрузитевExcel.'), 'нет строки-предупреждения об итоге по всем строкам');
   assert.ok(html.includes('<p class="rp-cap">') && html.indexOf('<p class="rp-cap">') < html.indexOf('<table'), 'предупреждение — над таблицей');
   const all = 5003 * 5004 / 2 * 1000;
   const shown = 5000 * 5001 / 2 * 1000;
   assert.ok(html.includes(all.toLocaleString('ru-RU')), 'итог не по всем строкам ответа');
   assert.ok(!html.includes(shown.toLocaleString('ru-RU')), 'итог посчитан по напечатанным строкам');
+});
+
+test('печать: больше 5000 строк без «Итого» — прежняя строка, без слов об итоге', () => {
+  const r = { columns: ['ФИО', 'Услуга'], rows: Array.from({ length: 5003 }, (_, i) => ['Пациент ' + (i + 1), 'ЭКГ']), summable_columns: [] };
+  const html = reportPrintHtml(r, { title: 'Журнал услуг', from: '2026-10-01', to: '2026-10-02' }, tx);
+  assert.ok(!html.includes('<tfoot>'));
+  const flat = html.replace(/[\s ]/g, '');
+  assert.ok(flat.includes('Напечатаныпервые5000строкиз5003—полныйотчётвыгрузитевExcel.'), 'нет строки-предупреждения');
+  assert.ok(!flat.includes('«Итого»'), 'строка говорит об итоге, которого нет');
 });
 
 test('печать: 5000 строк и меньше — все, без предупреждения', () => {

@@ -68,10 +68,13 @@ export function reportPrintHtml(r, meta, tx) {
     const capped = rows.length > PRINT_ROW_CAP;
     const body = rest.slice(0, Math.min(rows.length, PRINT_ROW_CAP));
     const totals = rest.length > rows.length ? rest[rows.length] : null;
-    const capLine = capped
-        ? tx.trf('Напечатаны первые {n} строк из {total} — полный отчёт выгрузите в Excel.', {
-            n: PRINT_ROW_CAP.toLocaleString('ru-RU'), total: rows.length.toLocaleString('ru-RU') })
-        : '';
+    // JOURNALS_V1_RJ2C (ревью, п. 2) — у отчёта с «Итого» строка говорит прямо,
+    // что итог под напечатанными строками — по всем строкам отчёта.
+    const capParams = { n: PRINT_ROW_CAP.toLocaleString('ru-RU'), total: rows.length.toLocaleString('ru-RU') };
+    const capLine = !capped ? ''
+        : totals
+            ? tx.trf('Напечатаны первые {n} строк из {total}; «Итого» — по всем {total} строкам. Полный отчёт выгрузите в Excel.', capParams)
+            : tx.trf('Напечатаны первые {n} строк из {total} — полный отчёт выгрузите в Excel.', capParams);
     const isNum = head.map((_, ci) => {
         const probe = rows.find((x) => x[ci] != null && x[ci] !== '');
         return typeof (probe && probe[ci]) === 'number';

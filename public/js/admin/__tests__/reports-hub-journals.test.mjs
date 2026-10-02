@@ -99,7 +99,7 @@ test('предпросмотр обрезает длинный текст до 3
 });
 
 test('«Печать» рядом со «Скачать Excel»: страница из уже полученного ответа, без второго запроса', () => {
-  assert.match(hub, /import \{ reportPrintHtml \} from '\.\/report-print\.js\?v=jrn3';/);
+  assert.match(hub, /import \{ reportPrintHtml \} from '\.\/report-print\.js\?v=jrn4';/);
   const btn = hub.slice(hub.indexOf('const printBtn = h('), hub.indexOf('const generateBtn = h('));
   assert.ok(btn.length > 100, 'нет кнопки «Печать»');
   assert.match(btn, /reportPrintHtml\(r, \{ title: printTitle\(\), \.\.\.\(st\.resultMeta \|\| \{ from: st\.from, to: st\.to \}\) \}, reportTx\(\)\)/);
@@ -132,5 +132,5 @@ test('«Скачать Excel»: кнопка берётся до await и сно
 // с прежним адресом браузер взял бы из своего кэша модулей.
 test('штамп reports-hub.js в admin.js — последний в серии журналов', () => {
   const admin = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin.js'), 'utf8');
-  assert.match(admin, /from '\.\/admin\/views\/reports-hub\.js\?v=jrn7';/);
+  assert.match(admin, /from '\.\/admin\/views\/reports-hub\.js\?v=jrn8';/);
 });

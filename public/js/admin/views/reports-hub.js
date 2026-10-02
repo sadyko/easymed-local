@@ -45,7 +45,7 @@ import { CATEGORY_LABEL } from './inventory-shared.js';
 import { reportKindAllowed } from '../permissions.js';
 // JOURNALS_V1_SERVICE — окно выбора услуг журнала и запомненный выбор.
 import { openReportServicePicker, loadRememberedServices, rememberServices, browserStorage, servicesButtonText, currentUserId } from './report-service-picker.js?v=jrn3';   // JOURNALS_V1 — jrn2 поиск во всю ширину; JOURNALS_V1_RJ2C — jrn3 предел у галочки и «Готово», выбор у каждого сотрудника свой
-import { reportPrintHtml } from './report-print.js?v=jrn3';   // JOURNALS_V1_PRINT — печатная страница отчёта (jrn2 — перенос без разрыва слов); JOURNALS_V1_RJ2C — jrn3 не больше 5000 строк
+import { reportPrintHtml } from './report-print.js?v=jrn4';   // JOURNALS_V1_PRINT — печатная страница отчёта (jrn2 — перенос без разрыва слов); JOURNALS_V1_RJ2C — jrn3 не больше 5000 строк, jrn4 «Итого — по всем строкам»
 
 // Экспортируется, чтобы определения (в т.ч. рисовалку графиков) можно было
 // проверить тестом — страница целиком без DOM не поднимается.
