@@ -87,7 +87,7 @@ import { renderApiSettings } from './admin/views/api-settings.js?v=api4';   // C
 import { renderWithViewOnly } from './admin/view-only.js';   // ADMIN_ROWS_GRANTABLE_V1
 import { renderDoctorPay } from './admin/views/doctor-pay.js?v=rh2';   // DOCTOR_PAY_BULK_V1 · RATES_HONEST_V1 — штамп (ревью 1)
 import { renderCashierSettings } from './admin/views/cashier-settings.js?v=shiftmode1';   // CASHIER_SHIFT_MODE_V1
-import { renderRoomsSetup } from './admin/views/rooms-setup.js?v=rooms7';   // ROOMS_SETUP_V1 — кабинеты и палаты одним разделом
+import { renderRoomsSetup } from './admin/views/rooms-setup.js?v=jrn1';   // ROOMS_SETUP_V1 — кабинеты и палаты одним разделом; JOURNALS_V1_WARD_CLASS — класс палаты
 import { renderDepartments } from './admin/views/departments.js?v=dept1';   // DEPARTMENTS_V1 — отделы: руководитель, команда, помещения, снабжение
 import { renderTelegramSettings } from './admin/views/telegram-settings.js?v=tg3';   // TELEGRAM_BOT_V1
 import { renderTelephonySettings } from './admin/views/telephony-settings.js?v=tel1';   // TELEPHONY_V1 — Binotel call-center integration

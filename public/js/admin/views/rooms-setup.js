@@ -26,6 +26,9 @@ import { mountFacilityPlan } from './facility-plan.js';
 // ROLE_REPORTS_SETTINGS_V1 (ревью I2) — не администратору цены палат и коек не
 // показываются и не отправляются: их меняет только администратор.
 import { settingsGrantColumns, stripToGrant } from '../permissions.js';
+// JOURNALS_V1_WARD_CLASS — класс палаты (Люкс / Полулюкс / Обычная) для
+// «Реестра стационарных пациентов»; словарь общий с сервером.
+import { WARD_CLASSES, WARD_CLASS_RU, normalizeWardClass } from '../../shared/ward-class.js';
 
 // ROOM_CATS_V1 — типы сгруппированы в четыре категории по постановке владельца.
 // cat — это ТОЛЬКО раскладка выбора; на запись она не влияет: kind по-прежнему
@@ -109,7 +112,7 @@ async function load() {
         supabase.from('floors').select('id, name, level, active').order('level', { ascending: true }),
         // FACILITY_PLAN_V1 — отделение и координаты плана едут вместе с помещением.
         supabase.from('rooms').select('id, name, code, room_type, capacity, queue_mode, floor_id, department_id, active, plan_x, plan_y, plan_w, plan_h').order('name', { ascending: true }),
-        supabase.from('wards').select('id, name, code, type, floor_id, department_id, billing_mode, price_per_hour, price_per_day, active, plan_x, plan_y, plan_w, plan_h').order('name', { ascending: true }),
+        supabase.from('wards').select('id, name, code, type, floor_id, department_id, billing_mode, price_per_hour, price_per_day, active, plan_x, plan_y, plan_w, plan_h, ward_class').order('name', { ascending: true }),   // ward_class — JOURNALS_V1_WARD_CLASS
         supabase.from('beds').select('id, ward_id, code, type, status, active').limit(5000),
         supabase.from('users').select('id, full_name, is_doctor, specialty, room_id, is_active').limit(1000),
         supabase.from('departments').select('id, name, kind, active').limit(500),
@@ -444,6 +447,7 @@ function openWizard(row, presets) {
         beds: 4,
         billing_mode: src && src.billing_mode ? src.billing_mode : 'daily',
         price: src ? (src.billing_mode === 'hourly' ? src.price_per_hour : src.price_per_day) || 0 : 0,
+        ward_class: src && src.ward_class ? src.ward_class : '',   // JOURNALS_V1_WARD_CLASS
     };
 
     function step1() {
@@ -526,6 +530,12 @@ function openWizard(row, presets) {
                 h('option', { value: 'hourly', selected: d.billing_mode === 'hourly' }, tr('За час')))));
             if (!settingsGrantColumns('wards')) m.bodyEl.appendChild(priceFld);
             else m.bodyEl.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, tr('Цены и проценты меняет только администратор.')));
+            // JOURNALS_V1_WARD_CLASS — класс палаты печатается в «Реестре
+            // стационарных пациентов» колонкой «Тип палаты». Это не деньги:
+            // его меняет и «Помещения: Изменение».
+            m.bodyEl.appendChild(field(tr('Класс палаты'), h('select', { class: 'inp', onchange: (e) => { d.ward_class = e.target.value; } },
+                h('option', { value: '', selected: !d.ward_class }, tr('— не задан —')),
+                ...WARD_CLASSES.map((k) => h('option', { value: k, selected: d.ward_class === k }, tr(WARD_CLASS_RU[k]))))));
         } else {
             m.bodyEl.appendChild(field(tr('Очередь'), h('select', { class: 'inp', onchange: (e) => { d.queue_mode = e.target.value; } },
                 ...QUEUE_MODES.map(([v, lb]) => h('option', { value: v, selected: d.queue_mode === v }, tr(lb)))),
@@ -611,6 +621,7 @@ async function save(d, row) {
         billing_mode: d.billing_mode,
         price_per_day: d.billing_mode === 'daily' ? price : 0,
         price_per_hour: d.billing_mode === 'hourly' ? price : 0,
+        ward_class: normalizeWardClass(d.ward_class),   // JOURNALS_V1_WARD_CLASS — пусто = не задан
         active: d.active,
     };
     const wardBody = stripToGrant('wards', payload);
