@@ -280,7 +280,7 @@ export function renderDesignedVariant(type, variant, s, d) {
     d = d || {};
     if (type === 'conclusion') return (variant === 'compact') ? conclusionCompact(s, d) : conclusionClassic(s, d);
     if (type === 'lab') { const ld = (d && d.groups && d.groups.length) ? d : sampleLab(); return (variant === 'compact') ? labCompact(s, ld) : labClassic(s, ld); }
-    if (type === 'diag') { const id = (d && (d.__editor || d.description || d.conclusion)) ? d : sampleImaging(); return (variant === 'compact') ? imagingCompact(s, id) : imagingClassic(s, id); }
+    if (type === 'diag') { const id = isPatientDiag(d) ? d : sampleImaging(); return (variant === 'compact') ? imagingCompact(s, id) : imagingClassic(s, id); }   // CABINET_FIX_V1_DIAG
     if (type === 'invoice') { const vd = (d && d.items && d.items.length) ? d : sampleInvoice(); return (variant === 'thermal') ? invoiceThermal(s, vd) : (variant === 'compact') ? invoiceCompact(s, vd) : invoiceClassic(s, vd); }
     if (type === 'fiscal') return fiscalClassic(s, (d && d.items && d.items.length) ? d : sampleFiscal());
     if (type === 'check') return receiptClassic(s, (d && d.items && d.items.length) ? d : sampleReceipt());
@@ -386,6 +386,22 @@ function sampleInvoice() {
 }
 
 function paras(t) { return String(t || '').split(/\n\n+|\n/).map(x => x.trim()).filter(Boolean); }
+// CABINET_FIX_V1_DIAG (2026-10-02) — ОБРАЗЕЦ — ТОЛЬКО ДЛЯ ПРЕДПРОСМОТРА.
+//
+// Бланк исследования брал образец «Рахимов Жасур / МРТ головного мозга»,
+// если в данных не было ни описания, ни заключения. Кабинет врача печатает без
+// __editor, и пустой бланк — или бланк, чьи поля кабинет не собрал, — уходил
+// на бумагу с чужим пациентом. Образец нужен ровно одному месту: предпросмотру
+// в «Документах», который зовёт без данных вовсе. Всё, что называет пациента
+// или услугу, — документ этого пациента, даже пустой.
+function isPatientDiag(d) {
+    return !!(d && (d.__editor || d.description || d.conclusion || d.patientName || d.mrn || d.service));
+}
+// CABINET_FIX_V1_DIAG — подпись — основная специальность врача из карточки
+// сотрудника; «Врач-рентгенолог» был зашит и печатался и под УЗИ.
+function diagSignerRole(d) {
+    return String(d.radiologistSpec || d.doctorSpec || '').trim() || 'Врач';
+}
 function sampleImaging() {
     return {
         docNo: 'MR-2024-005140', dateIn: '01.10.2024', dateOut: dateNumeric(new Date()),
@@ -804,7 +820,12 @@ function imagingImages(d) {
 }
 
 function imagingClassic(s, d) {
-    const st = d.study || {};
+    // CABINET_FIX_V1_DIAG — «Исследование» — название услуги. Объект study не
+    // строил никто, кроме образца, и у КАЖДОЙ услуги в шапке стоял «—»: на
+    // экране, на бумаге и в архиве. В данных бланка (и в архивном теле уже
+    // подписанных документов) есть `service` — его и берём; study, если его
+    // передали, сильнее.
+    const st = Object.assign({ kind: d.service || '' }, d.study || {});
     const films = (d.films || []).slice(0, 3);
     const f = (l, uz, v) => v ? `<div class="fl">${esc(l)}${uz ? ` <i>· ${esc(uz)}</i>` : ''}</div><div class="fv">${esc(v)}</div>` : '';
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Диагностика · ${esc(d.patientName || '')}</title><style>
@@ -835,17 +856,18 @@ ${PRINT_FONT_FACE_CSS}
       { label: 'Пациент', uz: 'Bemor', value: shortName(d.patientName) },
       { label: 'Дата рождения', uz: 'Tugʻilgan sana', value: d.dob },
       { label: 'Исследование', uz: 'Tekshiruv', value: st.kind },
-      { label: 'Область', uz: 'Soha', value: st.area },
+      // CABINET_FIX_V1_DIAG — пустая «Область» не печатается прочерком.
+      ...(st.area ? [{ label: 'Область', uz: 'Soha', value: st.area }] : []),
     ],
   })}
-  <div class="cards">
+  ${(st.device || st.protocol) ? `<div class="cards">
     <div class="card"><div class="ct">Исследование <span class="uz">· Tekshiruv</span></div><div class="fgrid">${f('Аппарат', 'Apparat', st.device)}${f('Протокол', 'Protokol', st.protocol)}</div></div>
-  </div>
+  </div>` : ''}
   ${films.length ? `<div class="films">${films.map(fl => `<div class="film"><div class="lab">${FILM_SVG}<div class="t">Место для снимка</div></div><div class="cap">${esc(fl.caption || '')}</div><div class="cap2">${esc(fl.sub || '')}</div></div>`).join('')}</div>` : ''}
   <div class="sec"><div class="sec-h"><span class="ru">Описание</span><span class="uz">· Tavsif</span></div><div class="sec-b" data-field="instrumental_text">${paras(d.description).map(p => `<p>${esc(p)}</p>`).join('') || (d.__editor ? '' : '<p>—</p>')}</div></div>
   ${(d.conclusion || d.__editor) ? `<div class="concl"><div class="ch">Заключение <span class="uz">· Xulosa</span></div><p data-field="primary_diagnosis">${esc(d.conclusion)}</p></div>` : ''}
   ${imagingImages(d)}
-  <div class="signoff"><div class="sig"><div class="role">Врач-рентгенолог <i>· Rentgenolog shifokor</i></div><div class="mark">${SIG_SVG}</div><div class="name">${esc(d.radiologist || '—')}</div><div class="spec">${esc(d.radiologistSpec || '')} · подпись</div></div>
+  <div class="signoff"><div class="sig"><div class="role">${esc(diagSignerRole(d))} <i>· Shifokor</i></div><div class="mark">${SIG_SVG}</div><div class="name">${esc(d.radiologist || '—')}</div><div class="spec">подпись</div></div>
     <div class="sign-right"></div></div>
   ${s.legalNote ? `<div class="legal">${esc(s.legalNote)}</div>` : ''}
   <div class="foot"><div class="fl">${s.web ? `<b>${esc(s.web)}</b> · ` : ''}${esc(s.clinicName || '')}</div><div class="fr">${esc(s.phone || '')}</div></div>
@@ -856,7 +878,7 @@ ${PRINT_FONT_FACE_CSS}
 // IMAGING / DIAGNOSTICS · COMPACT
 // ---------------------------------------------------------------------------
 function imagingCompact(s, d) {
-    const st = d.study || {};
+    const st = Object.assign({ kind: d.service || '' }, d.study || {});   // CABINET_FIX_V1_DIAG — см. imagingClassic
     const fld = (l, v) => v ? `<div class="fld"><span class="l">${esc(l)}</span><span class="d"></span><span class="v">${esc(v)}</span></div>` : '';
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Диагностика · ${esc(d.patientName || '')}</title><style>
 ${PRINT_FONT_FACE_CSS}
@@ -889,7 +911,7 @@ ${ECONOMY_BW_CSS}
   <div class="sec-b" data-field="instrumental_text">${paras(d.description).map(p => `<p>${esc(p)}</p>`).join('') || (d.__editor ? '' : '<p>—</p>')}</div>
   ${(d.conclusion || d.__editor) ? `<div class="concl"><div class="ch">Заключение · Xulosa</div><p data-field="primary_diagnosis">${esc(d.conclusion)}</p></div>` : ''}
   ${imagingImages(d)}
-  <div class="signoff"><div class="sig"><div class="role">Врач-рентгенолог</div><div class="name">${esc(d.radiologist || '—')}</div><div class="spec">${esc(d.radiologistSpec || '')} · подпись</div></div>
+  <div class="signoff"><div class="sig"><div class="role">${esc(diagSignerRole(d))}</div><div class="name">${esc(d.radiologist || '—')}</div><div class="spec">подпись</div></div>
     <div class="sign-right"></div></div>
   ${s.legalNote ? `<div class="legal">${esc(s.legalNote)}</div>` : ''}
   ${s.footerNote ? `<div class="thanks-eco">${esc(s.footerNote)}</div>` : ''}

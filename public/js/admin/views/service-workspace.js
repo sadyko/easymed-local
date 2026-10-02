@@ -31,7 +31,7 @@ import { insertRow, currentUser } from '../data.js';   // AURORA_CONSULT_TOOLBAR
 import { currentClinicId } from '../tenant-tables.js';   // AURORA_CONSULT_TOOLBAR_V1
 import { BRANCH_BUCKET, signedUrl } from '../storage.js?v=aurora20b';   // SLICED2_PRINT_HEADER (dynamic company name + logo)
 import { printableSheet, loadDocSettings } from './doc-settings.js?v=noqr1';   // UNIFY_PRINT_V1 — ?v=db9 must match in EVERY importer
-import { renderDesignedVariant } from './doc-variants.js?v=noqr1';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1)
+import { renderDesignedVariant } from './doc-variants.js?v=cabdiag1';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1) · CABINET_FIX_V1_DIAG — cabdiag1
 import { openVitalsDialog } from './patient-card.js?v=labshared1';   // CARD_SPEC_V1 — same URL as admin.js (one instance)
 import { serviceGroupLabel, TYPE_TO_GROUP_NAME } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — chips must survive a NULL type_id
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
@@ -179,12 +179,16 @@ export function renderServiceWorkspace(container, { onNavigate, payload }) {
     ctx.deptKind = '';
     if (ctx.visitServiceId) {
         supabase.from('visit_services')
-            .select('services(service_types(name), departments(kind))')
+            .select('services(type, service_types(name), departments(kind))')   // CABINET_FIX_V1_DIAG — + группа услуги
             .eq('id', ctx.visitServiceId).single()
             .then(({ data }) => {
                 ctx.deptKind = (data && data.services && data.services.departments && data.services.departments.kind) || '';
                 ctx.typeName = ((data && data.services && data.services.service_types && data.services.service_types.name) || '').toLowerCase();
-                if (ctx.deptKind === 'diagnostics' && wsState.docType !== 'diag') {
+                ctx.svcType = (data && data.services && data.services.type) || '';   // CABINET_FIX_V1_DIAG
+                // CABINET_FIX_V1_DIAG — у диагностических услуг клиники отделения
+                // нет, и бланк «Диагностика» не включался НИКОГДА: врач выбирал его
+                // руками на каждом УЗИ. Правило — opensAsDiagnostics ниже.
+                if (opensAsDiagnostics({ deptKind: ctx.deptKind, svcType: ctx.svcType, typeName: ctx.typeName }) && wsState.docType !== 'diag') {
                     wsState.docType = 'diag';
                     const _sel = ctx.container && ctx.container.querySelector('[data-doctype]');
                     if (_sel) _sel.value = 'diag';
@@ -1095,6 +1099,13 @@ function soapForm(ctx) {
         // WS_PAPER_TOOLS_V1 removed — «Услуги приёма», «Рецепт», «Рекомендации» card stack deleted from
         // the document; their functions live as buttons in the «Черновик» sheet action bar
         // (PAPER_SVC_BTN_V1 / PAPER_RX_BTN_V1 / PAPER_RECSVC_BTN_V1). «Рекомендации» also stays in the rail.
+        // CABINET_FIX_V1_DIAG — «Описание» бланка диагностики (instrumental_text).
+        // Поля под бланком у него не было: набранное в бланке _syncBlankField
+        // писать было некуда, и описание не сохранялось, не печаталось и не
+        // попадало в архив; вставка шаблона диагностики тоже клала его в никуда.
+        // Хранилище стоит вне разделов листа — свернуть его нечему.
+        h('div', { 'data-diag-fields': '', style: { display: 'none' } },
+            h('div', { class: 'a4-input', 'data-field': 'instrumental_text', contentEditable: 'true' })),
         // Hidden legacy controls (follow_up / referral) — preserve save/print round-trip.
         h('div', { style: { display: 'none' } },
             h('select', { 'data-field': 'follow_up' },
@@ -2227,15 +2238,46 @@ function emptyPayload() {
     return { [DRAFT_TAG]: 1, current: null, history: [] };
 }
 
+// CABINET_FIX_V1_DIAG (2026-10-02) — ДВА ПОЛЯ БЛАНКА ИССЛЕДОВАНИЯ.
+//
+// «Описание» — instrumental_text, «Заключение» — primary_diagnosis (та же
+// запись, что строка «Диагноз» приёма: её читают вставка результатов, журнал
+// услуг и уже сохранённые шаблоны диагностики). У бланка диагностики оба
+// собираются ВСЕГДА: «Заключение» живёт в разделе «Диагноз», который свёрнут
+// по умолчанию, и collectFields его пропускал — набранное заключение не
+// сохранялось, не печаталось и не попадало в архив, если не выбран код МКБ-10.
+const DIAG_FIELDS = ['instrumental_text', 'primary_diagnosis'];
+
+/**
+ * Открывается ли услуга бланком «Диагностика» сама.
+ * Группа «Диагностика» (services.type = 'imaging'), вид услуги «Диагностика»
+ * или «Лучевая диагностика», отделение диагностики. Анализ с видом
+ * «Диагностика» (в базе dev — «C-реактивный белок») — нет: это лаборатория.
+ */
+export function opensAsDiagnostics({ deptKind = '', svcType = '', typeName = '' } = {}) {
+    if (deptKind === 'diagnostics') return true;
+    if (svcType === 'imaging') return true;
+    const t = String(typeName || '').trim().toLowerCase();
+    // i18n-exempt: имена вида услуги из справочника клиники (service_types.name) — сравнение данных, не текст экрана
+    return svcType !== 'lab' && (t === 'диагностика' || t === 'лучевая диагностика');
+}
+
 // Collect every [data-field] element under the page root into a flat object.
 // contentEditable A4 fields carry their value in innerHTML; plain
 // inputs/selects/textareas in .value. (AURORA_CONSULT_EDITOR_V1)
-function collectFields(ctx) {
+// CABINET_FIX_V1_DIAG — opts.docType: род документа (по умолчанию — выбранный в
+// кабинете); у диагностики DIAG_FIELDS собираются и из свёрнутого раздела.
+// opts.always: ключи, которые собираются всегда (сбор шаблона «Из текущего
+// документа» берёт разделы своего рода, открыты они или нет).
+// Экспорт — только для поведенческой проверки (cabinet-diag-blank.test.mjs).
+export function collectFields(ctx, opts = {}) {
     const root = ctx.container;
     const out  = {};
+    const docType = opts.docType || wsState.docType;
+    const always = new Set([...(docType === 'diag' ? DIAG_FIELDS : []), ...(opts.always || [])]);
     for (const el of root.querySelectorAll('[data-field]')) {
-        if (el.closest('.a4-sec-off')) continue;   // WS_FLEX_DOC_V1 — removed sections don't save/print
         const k = el.getAttribute('data-field');
+        if (el.closest('.a4-sec-off') && !always.has(k)) continue;   // WS_FLEX_DOC_V1 — removed sections don't save/print
         if (el.classList.contains('a4-input')) {
             out[k] = (el.innerHTML || '').trim();
         } else {
@@ -2345,7 +2387,7 @@ async function hydrateWorkspace(ctx) {
         paintPrescriptions(ctx);
         paintDispensed(ctx);                          // RX_SEPARATE_V1 — show empty/guard state immediately
         loadDispensedItems(ctx).then(() => paintDispensed(ctx));  // then fill async
-        paintDiagnoses(ctx);
+        paintDiagnoses(ctx, { keepBand: true });   // CABINET_FIX_V1_DIAG — открытие не стирает «Заключение»
         paintOwnServices(ctx);
         await loadRecommendations(ctx);
         paintRecommendations(ctx);
@@ -3021,7 +3063,7 @@ const ICD_SEED = [
 ];
 /* i18n-exempt-end */
 
-function paintDiagnoses(ctx) {
+function paintDiagnoses(ctx, opts = {}) {
     const list = ctx.container?.querySelector('[data-dx-list]');
     const items = wsState.payload?.diagnoses || [];
     const countEl = ctx.container?.querySelector('[data-dx-count]');
@@ -3042,18 +3084,50 @@ function paintDiagnoses(ctx) {
             )));
         }
     }
-    syncDiagnosisToDoc(ctx);
+    syncDiagnosisToDoc(ctx, opts);
+}
+
+/**
+ * CABINET_FIX_V1_DIAG — строка «Диагноз» (primary_diagnosis) и основной код МКБ-10.
+ *
+ * Строку переписывали ВСЕГДА: есть основной диагноз — «код — название», нет —
+ * пусто. Но та же строка — «Заключение» бланка диагностики, и открытие
+ * сохранённого документа (hydrate → paintDiagnoses) стирало набранное
+ * заключение у каждого исследования без кода МКБ. Теперь:
+ *   • keep (открытие документа): сохранённый текст сильнее — код встаёт только
+ *     в пустую строку;
+ *   • выбран основной диагноз — строка получает его, как прежде, и помнит, что
+ *     это текст от кода (data-auto-dx);
+ *   • основного диагноза нет — стирается только то, что строка получила от
+ *     кода, а не то, что набрал врач.
+ * Экспорт — только для поведенческой проверки.
+ */
+export function applyDxBand(band, main, { keep = false } = {}) {
+    if (!band) return;
+    const auto = main ? `${main.code} — ${main.name}` : '';
+    const text = String(band.textContent || '');
+    if (auto) {
+        if (keep && text.trim() && text !== auto) return;
+        band.innerHTML = auto;
+        band.setAttribute('data-auto-dx', auto);
+        return;
+    }
+    const marked = band.getAttribute('data-auto-dx');
+    if (marked != null && text === marked) {
+        band.innerHTML = '';
+        band.removeAttribute('data-auto-dx');
+    }
 }
 
 // Mirror the main diagnosis into the legacy primary_diagnosis band + icd10.
-function syncDiagnosisToDoc(ctx) {
+function syncDiagnosisToDoc(ctx, opts = {}) {
     try { setTimeout(() => renderBlank(ctx), 0); } catch (e) {}   // WYSIWYG_BLANK_V1
     const main = (wsState.payload?.diagnoses || []).find(d => d.type === 'main');
     // DX_SAVE_FIX_V1 — the diagnosis section starts collapsed; collectFields skips collapsed
     // sections, so a picked diagnosis got dropped on save. Open the section when a dx is set.
     if (main) { ensureDocSections(); if (!wsState.docSections.has('diagnosis')) { wsState.docSections.add('diagnosis'); try { syncSections(ctx); } catch (e) {} } }
     const band = ctx.container?.querySelector('.a4-input[data-field="primary_diagnosis"]');
-    if (band) band.innerHTML = main ? `${main.code} — ${main.name}` : '';
+    applyDxBand(band, main, { keep: !!opts.keepBand });   // CABINET_FIX_V1_DIAG
     const icd = ctx.container?.querySelector('[data-field="icd10"]');
     if (icd && 'value' in icd) icd.value = main ? (main.code || '') : '';
 }
@@ -3789,14 +3863,8 @@ async function handleSignFinalize(ctx) {
         const _isDiag       = (ctx.deptKind === 'diagnostics') || (wsState.docType === 'diag');
         const _archiveType  = _isDiag ? 'diag' : 'protocol';
         const _snap = buildBlankData(ctx); _snap.__editor = false;
-        const _docData = _isDiag ? {
-            __editor: false,
-            patientName: _snap.patientName, mrn: _snap.mrn, dob: _snap.dob, sex: _snap.sex,
-            doctorName: _snap.doctorName, doctorSpec: _snap.doctorSpec, service: _snap.service,
-            radiologist: _snap.doctorName, radiologistSpec: _snap.doctorSpec, issueDate: _snap.issueDate,
-            description: _snap.instrumental || '', conclusion: _snap.dx || '',
-            images: (wsState.diagImages || []).slice(),   // DIAG_IMAGES_V1 — persist snapshots with the signed doc
-        } : _snap;
+        // CABINET_FIX_V1_DIAG — архив диагностики — те же данные, что экран и печать.
+        const _docData = _isDiag ? diagDocData(_snap, { editor: false, images: wsState.diagImages || [] }) : _snap;   // DIAG_IMAGES_V1 — persist snapshots with the signed doc
         // DOC_AMEND_AUDIT_V1 — attestation stamp on the archived snapshot (signer / when / version).
         _docData.meta = { signedBy: _actor.full_name || '', signedAt: entry.savedAt, version: _prevSigned.length + 1 };
         const _archiveTitle = (_isDiag ? 'Заключение' : 'Протокол осмотра')
@@ -4433,13 +4501,10 @@ async function handlePrint(ctx) {
         // ← diagnosis), mirroring the on-screen blank in renderBlank().
         let _data = null;
         if (_dt === 'conclusion') _data = data;
-        else if (_dt === 'diag') _data = {
-            patientName, mrn: p.mrn || '', dob: p.dob || p.birth_date || '', sex: p.gender || p.sex || '',
-            doctorName: svc.doctorName || me().full_name || '', doctorSpec: svc.doctorSpec || me().specialty || '', service: svc.name || '',   // DOC_DOCTOR_FALLBACK_V1 — no assigned doctor → use the signed-in clinician's profile (matches the phone source)
-            radiologist: svc.doctorName || '', radiologistSpec: svc.doctorSpec || '',
-            description: data.instrumental || '', conclusion: data.dx || '',
-            images: wsState.diagImages || [],   // DIAG_IMAGES_V1
-        };
+        // CABINET_FIX_V1_DIAG — те же данные, что у бланка на экране и в архиве
+        // (diagDocData): пациент и услуга есть ВСЕГДА, поэтому пустой бланк
+        // печатается бланком этого пациента, а не образцом «Рахимов Жасур».
+        else if (_dt === 'diag') _data = diagDocData(buildBlankData(ctx), { editor: false, images: wsState.diagImages || [] });
         // i18n-exempt: печатное заключение — печатный документ
         printableSheet({ type: _dt, data: _data, title: 'Заключение · ' + patientName, idLine: p.mrn || '', settings: loadDocSettings() });
     } catch (e) {
@@ -4783,6 +4848,25 @@ function buildBlankData(ctx) {
     data.sectionOrder = (wsState.sectionOrder && wsState.sectionOrder.slice()) || DOC_SECTIONS.map(sd => sd.field);   // WS_REORDER_V1
     return data;
 }
+/**
+ * CABINET_FIX_V1_DIAG — ОДНИ ДАННЫЕ бланка исследования для экрана, печати и
+ * архива. Их собирали трижды (renderBlank, handlePrint, handleSignFinalize) и
+ * по-разному: печать брала врача без запасного «я», архив — со своим набором
+ * полей. `base` — buildBlankData(ctx): «Описание» ← instrumental, «Заключение»
+ * ← dx (primary_diagnosis или основной диагноз), «Исследование» ← service.
+ * Экспорт — только для поведенческой проверки.
+ */
+export function diagDocData(base, { editor = false, images = [] } = {}) {
+    const b = base || {};
+    return {
+        __editor: !!editor,
+        patientName: b.patientName || '', mrn: b.mrn || '', dob: b.dob || '', sex: b.sex || '',
+        doctorName: b.doctorName || '', doctorSpec: b.doctorSpec || '', service: b.service || '',
+        radiologist: b.doctorName || '', radiologistSpec: b.doctorSpec || '', issueDate: b.issueDate || '',
+        description: b.instrumental || '', conclusion: b.dx || '',
+        images: (images || []).slice(),   // DIAG_IMAGES_V1
+    };
+}
 function setBlankMode(ctx, on) {
     const root = ctx.container;
     const scroll = root.querySelector('.a4-scroll');
@@ -4813,15 +4897,7 @@ function renderBlank(ctx) {
     else if (type === 'diag') {
         // DIAG_EDITABLE_V1 — editable imaging report: «Описание» ↔ instrumental_text,
         // «Заключение» ↔ primary_diagnosis (the same record the conclusion document edits).
-        const base = buildBlankData(ctx);
-        data = {
-            __editor: true,
-            patientName: base.patientName, mrn: base.mrn, dob: base.dob, sex: base.sex,
-            doctorName: base.doctorName, doctorSpec: base.doctorSpec, service: base.service,
-            radiologist: base.doctorName, radiologistSpec: base.doctorSpec,
-            description: base.instrumental || '', conclusion: base.dx || '',
-            images: wsState.diagImages || [],   // DIAG_IMAGES_V1
-        };
+        data = diagDocData(buildBlankData(ctx), { editor: true, images: wsState.diagImages || [] });   // CABINET_FIX_V1_DIAG
     }
     const html = renderDesignedVariant(type, (s.variant && s.variant[type]) || 'classic', s, data);
     if (!html) { wrap.textContent = tr('Шаблон недоступен.'); return; }
