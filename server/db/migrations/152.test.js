@@ -26,8 +26,11 @@ test('152 выдаёт колл-центру группу «Колл-центр�
   const db = freshDb();
   try {
     assert.equal(grantsOf(db, 'callcenter')['reports.callcenter'], 'view');
-    const other = Object.keys(grantsOf(db, 'callcenter')).filter((k) => k.startsWith('reports'));
+    // JOURNALS_V1_RJ1 — «выданы» — это уровень выше «Нет»: 235 записала оператору
+    // «Журналы: Нет» (его группы отчётов настроены), это не выдача.
+    const other = Object.entries(grantsOf(db, 'callcenter')).filter(([k, v]) => k.startsWith('reports') && v !== 'none').map(([k]) => k);
     assert.deepEqual(other, ['reports.callcenter'], 'оператору выданы другие группы отчётов');
+    assert.equal(grantsOf(db, 'callcenter')['reports.journals'], 'none');   // JOURNALS_V1_RJ1
     for (const role of ['admin', 'registrar', 'doctor', 'nurse', 'cashier', 'lab', 'inventory', 'head_doctor', 'senior_nurse']) {
       // REPORTS_AUDIT_FIX_V1 — 179 записала кассиру и складу явное «Нет»; «выдан» — это «view».
       assert.notEqual(grantsOf(db, role)['reports.callcenter'], 'view', 'ключ выдан роли ' + role);

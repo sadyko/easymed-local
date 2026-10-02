@@ -29,7 +29,8 @@ test('141 выдаёт колл-центру его работу: звонки, 
   try {
     // ROLE_REPORTS_SETTINGS_V1 — миграция 152 добавила оператору группу
     // отчётов «Колл-центр»; здесь сверяются только ключи этой миграции.
-    const cc = Object.fromEntries(Object.entries(grantsOf(db, 'callcenter')).filter(([k]) => k !== 'reports.callcenter'));
+    // JOURNALS_V1_RJ1 — и 235 записала ему «Журналы: Нет» (группы отчётов настроены).
+    const cc = Object.fromEntries(Object.entries(grantsOf(db, 'callcenter')).filter(([k]) => k !== 'reports.callcenter' && k !== 'reports.journals'));
     assert.deepEqual(cc, {
       'crm.calls': 'view',
       'crm.dial': 'edit',
