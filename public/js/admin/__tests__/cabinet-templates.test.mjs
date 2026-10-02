@@ -237,6 +237,17 @@ test('C/E/F: правит автор или администратор; прич
     assert.match(ws, /doc_type: tplDocType\(d\.doc_type\)/, 'doc_type снова уходит числом');
 });
 
+test('один экземпляр модуля кабинета: «Документы» и окно стационара зовут его с тем же штампом, что admin.js', () => {
+    const admin = fs.readFileSync(path.join(HERE, '..', '..', 'admin.js'), 'utf8');
+    const stamp = (admin.match(/views\/service-workspace\.js\?v=([\w-]+)'/) || [])[1];
+    assert.ok(stamp, 'штамп кабинета в admin.js не найден');
+    for (const [name, src] of [['documents.js', DOCS_SRC], ['admission-modal.js', ADM_SRC]]) {
+        const m = src.match(/import\('\.\/service-workspace\.js(?:\?v=([\w-]+))?'\)/);
+        assert.ok(m, name + ' не зовёт библиотеку кабинета');
+        assert.equal(m[1], stamp, name + ': другой штамп — второй экземпляр модуля со своим состоянием окна');
+    }
+});
+
 test('подписи окна шаблонов переведены на три языка', async () => {
     const { STRINGS } = await import('../i18n-strings.js');
     for (const key of ['Приём', 'Диагностика', 'Шаблоны документов', 'Тип документа переключён: {type}']) {

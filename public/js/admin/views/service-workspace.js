@@ -2521,15 +2521,87 @@ function paintPrescriptions(ctx) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// RX_TEMPLATES_V1 (2026-10-02) — ШАБЛОНЫ РЕЦЕПТОВ И «СВОИ» ПРЕПАРАТЫ.
+//
+// Владелец: «we need to add in to a doctors cabinet the reciept saving option
+// for the drugs», решение «Both»: шаблоны целого рецепта и подсказки своих
+// препаратов при вводе названия; у каждого врача свои.
+//   • Шаблон рецепта — consultation_templates с doc_type '3' и телом
+//     { rx: [{ name, dose, freq, dur, notes, nurse }] } — без миграции, с теми
+//     же правилами «личный / общий», что у шаблонов документов (сервер).
+//   • Подсказки — по порядку: мои прошлые рецепты (rx_my_drugs, частые
+//     первыми), мои шаблоны рецептов, справочник клиники (products.is_drug,
+//     только название). Отдельного экрана «избранного» нет — список
+//     складывается сам из работы врача.
+// ---------------------------------------------------------------------------
+const RX_SUGGEST_MAX = 8;
+/**
+ * Подсказки для введённого названия. Источники — в порядке приоритета; один
+ * препарат (без учёта регистра) — одна строка, из первого источника, где он
+ * встретился. Экспорт — для поведенческой проверки.
+ */
+export function rxSuggest(query, { mine = [], templates = [], catalog = [] } = {}, limit = RX_SUGGEST_MAX) {
+    const q = String(query || '').trim().toLowerCase();
+    if (!q) return [];
+    const seen = new Set();
+    const out = [];
+    const push = (src, r, full) => {
+        const name = String((r && r.name) || '').trim();
+        const key = name.toLowerCase();
+        if (!name || seen.has(key) || !key.includes(q)) return;
+        seen.add(key);
+        out.push({ src, name, dose: full ? String(r.dose || '') : '', freq: full ? String(r.freq || '') : '', dur: full ? String(r.dur || '') : '' });
+    };
+    for (const r of mine) push('mine', r, true);
+    for (const r of templates) push('tpl', r, true);
+    for (const r of catalog) push('catalog', r, false);
+    return out.slice(0, limit);
+}
+const RX_FIELDS = ['name', 'dose', 'freq', 'dur', 'notes', 'nurse'];
+const rxClean = (r) => { const o = {}; for (const k of RX_FIELDS) o[k] = String((r && r[k]) || '').trim(); return o; };
+/** Тело шаблона рецепта из строк окна: только строки с названием. Экспорт — для проверки. */
+export function rxTemplateBody(rows) {
+    return { rx: (rows || []).map(rxClean).filter((r) => r.name) };
+}
+/** Строки рецепта из шаблона. Экспорт — для проверки. */
+export function rxRowsFromTemplate(t) {
+    const rx = t && t.body && Array.isArray(t.body.rx) ? t.body.rx : [];
+    return rx.map(rxClean).filter((r) => r.name);
+}
+// Источники подсказок читаются ОДИН раз на открытие окна: врач назначает подряд,
+// и за эти минуты ни его рецепты, ни справочник не меняются.
+async function loadRxSources() {
+    const out = { mine: [], templates: [], catalog: [], tpls: [] };
+    const [mine, tpls, cat] = await Promise.all([
+        supabase.rpc('rx_my_drugs', {}).then(({ data }) => (data && data.rows) || []).catch(() => []),
+        supabase.from('consultation_templates').select('*').order('updated_at', { ascending: false })
+            .then(({ data }) => data || []).catch(() => []),
+        // active = 1, а не true: флаги в этой базе — числа (как в mar-sheet.js).
+        supabase.from('products').select('id, name, is_drug, category').eq('active', 1).order('name')
+            .then(({ data }) => (data || []).filter((p) => p && (Number(p.is_drug) === 1 || p.category === 'drug'))).catch(() => []),
+    ]);
+    out.mine = mine;
+    out.tpls = tplKindRows(tpls, '3');
+    out.templates = [].concat(...out.tpls.filter((t) => isMine(t)).map(rxRowsFromTemplate));
+    out.catalog = cat;
+    return out;
+}
+
 function openPrescriptionDialog(ctx, editIndex) {
     const existing = (editIndex != null) ? (wsState.payload?.prescriptions || [])[editIndex] : null;
 
     const overlay = h('div', { class: 'modal', style: { zIndex: '130' } });
     overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: () => overlay.remove() }));
 
+    // RX_TEMPLATES_V1 — источники подсказок (асинхронно; пока не пришли — подсказок нет).
+    const rxSrc = { mine: [], templates: [], catalog: [], tpls: [], loaded: false };
+    const rxReady = loadRxSources().then((s) => { Object.assign(rxSrc, s, { loaded: true }); return rxSrc; });
+    const SRC_WORD = { mine: 'мои назначения', tpl: 'мой шаблон', catalog: 'справочник клиники' };
+
     // RX_MULTI_V1 — one editable drug row; read() returns the entry, el is the DOM.
     function drugRow(seed, removable, onRemove) {
-        const nameInput  = h('input', { value: seed?.name  || '', placeholder: 'напр. Метформин' });
+        const nameInput  = h('input', { value: seed?.name  || '', placeholder: 'напр. Метформин', autocomplete: 'off' });
         const doseInput  = h('input', { value: seed?.dose  || '', placeholder: 'напр. 500 мг' });
         const freqInput  = h('input', { value: seed?.freq  || '', placeholder: 'напр. 2 раза в день во время еды' });
         const durInput   = h('input', { value: seed?.dur   || '', placeholder: 'напр. 90 дней' });
@@ -2537,11 +2609,60 @@ function openPrescriptionDialog(ctx, editIndex) {
         if (seed?.notes) notesInput.value = seed.notes;
         const nurseInput = h('textarea', { rows: '2', placeholder: 'напр. в/м 2 раза в день, после еды; контроль АД…' });
         if (seed?.nurse) nurseInput.value = seed.nurse;
+
+        // RX_TEMPLATES_V1 — подсказки под названием: стрелки, Enter, Esc и мышь.
+        const suggestEl = h('div', { 'data-rx-suggest': '', role: 'listbox',
+            style: { display: 'none', position: 'absolute', left: '0', right: '0', top: '100%', zIndex: '5', marginTop: '2px',
+                background: 'var(--white, #fff)', border: '1px solid var(--ink-200)', borderRadius: '8px',
+                boxShadow: '0 8px 24px rgba(15,23,42,.14)', maxHeight: '240px', overflowY: 'auto' } });
+        let sugg = [];
+        let active = -1;
+        const hideSuggest = () => { suggestEl.style.display = 'none'; sugg = []; active = -1; };
+        const pick = (s) => {
+            nameInput.value = s.name;
+            if (s.dose) doseInput.value = s.dose;
+            if (s.freq) freqInput.value = s.freq;
+            if (s.dur) durInput.value = s.dur;
+            hideSuggest();
+            nameInput.focus();
+        };
+        const paintSuggest = () => {
+            clear(suggestEl);
+            if (!sugg.length) { suggestEl.style.display = 'none'; return; }
+            sugg.forEach((s, i) => {
+                const meta = [s.dose, s.freq, s.dur].filter(Boolean).join(' · ');
+                suggestEl.appendChild(h('button', { type: 'button', 'data-rx-pick': '', role: 'option',
+                    'aria-selected': i === active ? 'true' : 'false',
+                    style: { display: 'flex', alignItems: 'baseline', gap: '8px', width: '100%', textAlign: 'left', border: '0',
+                        padding: '7px 10px', cursor: 'pointer', font: 'inherit', fontSize: '13.5px', color: 'var(--ink-900)',
+                        background: i === active ? 'var(--primary-50)' : 'transparent' },
+                    onmousedown: (e) => { e.preventDefault(); pick(s); } },
+                    h('span', { style: { fontWeight: 600, flex: '0 1 auto', minWidth: 0, overflowWrap: 'anywhere' } }, s.name),
+                    meta ? h('span', { style: { fontSize: '12.5px', color: 'var(--ink-600)', flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere' } }, meta) : h('span', { style: { flex: '1 1 auto' } }),
+                    h('span', { style: { fontSize: '12.5px', color: 'var(--ink-500)', whiteSpace: 'nowrap' } }, tr(SRC_WORD[s.src] || ''))));
+            });
+            suggestEl.style.display = '';
+        };
+        const refresh = () => {
+            sugg = rxSuggest(nameInput.value, rxSrc);
+            active = -1;
+            paintSuggest();
+        };
+        nameInput.addEventListener('input', () => { if (rxSrc.loaded) refresh(); else rxReady.then(refresh); });
+        nameInput.addEventListener('keydown', (e) => {
+            if (suggestEl.style.display === 'none' || !sugg.length) return;
+            if (e.key === 'ArrowDown') { e.preventDefault(); active = (active + 1) % sugg.length; paintSuggest(); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); active = (active - 1 + sugg.length) % sugg.length; paintSuggest(); }
+            else if (e.key === 'Enter' && active >= 0) { e.preventDefault(); pick(sugg[active]); }
+            else if (e.key === 'Escape') { e.stopPropagation(); hideSuggest(); }
+        });
+        nameInput.addEventListener('blur', () => setTimeout(hideSuggest, 150));
+
         const el = h('div', { style: { border: '1px solid var(--ink-150, #e3e6ec)', borderRadius: '10px', padding: '12px 12px 4px', marginBottom: '10px', position: 'relative' } },
             removable ? h('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: 'Убрать препарат', style: { position: 'absolute', top: '7px', right: '7px', color: 'var(--crit-700)' }, onclick: onRemove }, Icon('Trash', { size: 12 })) : null,
-            h('div', { class: 'field' },
+            h('div', { class: 'field', style: { position: 'relative' } },
                 h('label', null, 'Название препарата ', h('span', { style: { color: 'var(--crit-500)' } }, '*')),
-                nameInput),
+                nameInput, suggestEl),
             h('div', { class: 'field-row', style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' } },
                 h('div', { class: 'field' }, h('label', null, 'Доза'),        doseInput),
                 h('div', { class: 'field' }, h('label', null, 'Длительность'), durInput)),
@@ -2549,7 +2670,7 @@ function openPrescriptionDialog(ctx, editIndex) {
             h('div', { class: 'field' }, h('label', null, 'Примечания'),        notesInput),
             h('div', { class: 'field' }, h('label', null, 'Инструкция для медсестры (стационар)'), nurseInput),
         );
-        return { el, read: () => ({ name: nameInput.value.trim(), dose: doseInput.value.trim(), freq: freqInput.value.trim(), dur: durInput.value.trim(), notes: notesInput.value.trim(), nurse: nurseInput.value.trim() }) };
+        return { el, nameInput, read: () => ({ name: nameInput.value.trim(), dose: doseInput.value.trim(), freq: freqInput.value.trim(), dur: durInput.value.trim(), notes: notesInput.value.trim(), nurse: nurseInput.value.trim() }) };
     }
 
     const rows = [];
@@ -2570,12 +2691,83 @@ function openPrescriptionDialog(ctx, editIndex) {
     const addBtn = existing ? null : h('button', { class: 'btn btn-outline', type: 'button', style: { marginBottom: '6px' }, onclick: () => { const r = addRow(); const inp = r.el.querySelector('input'); if (inp) inp.focus(); } },
         Icon('Plus', { size: 13 }), ' Добавить препарат');
 
+    // RX_TEMPLATES_V1 — «Из шаблона» и «Сохранить как шаблон»: только когда окно —
+    // весь рецепт (правка одной строки шаблонов не касается).
+    const tplPanel = h('div', { 'data-rx-tpl-panel': '', style: { display: 'none', margin: '0 0 10px', padding: '10px 12px',
+        border: '1px solid var(--ink-150, #e3e6ec)', borderRadius: '10px', background: 'var(--ink-25)' } });
+    const closePanel = () => { tplPanel.style.display = 'none'; clear(tplPanel); };
+    function showFromTemplate() {
+        clear(tplPanel);
+        tplPanel.style.display = '';
+        tplPanel.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Загрузка…'));
+        rxReady.then(() => {
+            clear(tplPanel);
+            const list = rxSrc.tpls;
+            if (!list.length) { tplPanel.appendChild(h('div', { class: 'muted', style: { fontSize: '12.5px' } }, 'Шаблонов рецептов пока нет')); return; }
+            const box = h('div', { 'data-rx-tpl-list': '', style: { display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '220px', overflowY: 'auto' } });
+            for (const t of list) {
+                const drugs = rxRowsFromTemplate(t);
+                box.appendChild(h('button', { type: 'button', class: 'btn btn-outline btn-sm', 'data-rx-tpl-pick': '',
+                    style: { justifyContent: 'flex-start', gap: '8px', textAlign: 'left', flexWrap: 'wrap' },
+                    onclick: () => {
+                        // Пустая первая строка — заготовка окна, а не препарат: шаблон её заменяет.
+                        if (rows.length === 1 && !rows[0].read().name) { rows[0].el.remove(); rows.length = 0; }
+                        for (const d of drugs) addRow(d);
+                        closePanel();
+                        toast(trf('Добавлено препаратов: {n}', { n: drugs.length }), 'ok');
+                    } },
+                    h('b', { style: { fontWeight: 600 } }, t.name || '—'),
+                    scopePill(t.scope),
+                    h('span', { class: 'muted', style: { fontSize: '12.5px' } }, drugs.map((d) => d.name).join(', '))));
+            }
+            tplPanel.appendChild(box);
+        });
+    }
+    function showSaveAsTemplate() {
+        clear(tplPanel);
+        tplPanel.style.display = '';
+        let scope = 'private';
+        const nameIn = h('input', { 'data-rx-tpl-name': '', class: 'tplm-input', placeholder: 'Например: Ангина — взрослые' });
+        const scopeBtn = (val, label, ic) => h('button', { type: 'button', 'data-rx-tpl-scope': val,
+            class: 'tplm-scopebtn' + (val === scope ? ' on' : ''),
+            onclick: () => { scope = val; tplPanel.querySelectorAll('[data-rx-tpl-scope]').forEach((b) => b.classList.toggle('on', b.getAttribute('data-rx-tpl-scope') === val)); } },
+            Icon(ic, { size: 13 }), ' ', label);
+        const saveBtn = h('button', { type: 'button', class: 'btn btn-primary btn-sm', 'data-rx-tpl-save': '', onclick: async () => {
+            const body = rxTemplateBody(rows.map((r) => r.read()));
+            if (!body.rx.length) { toast('Добавьте хотя бы один препарат', 'warn'); return; }
+            const name = nameIn.value.trim();
+            if (!name) { toast('Укажите название шаблона', 'warn'); nameIn.focus(); return; }
+            saveBtn.disabled = true;
+            try {
+                const { error } = await supabase.from('consultation_templates')
+                    .insert({ name, scope, doc_type: '3', body: rxTemplateBody(rows.map((r) => r.read())), author_id: myId(), author_name: myName() })
+                    .select('id').maybeSingle();
+                if (error) { toast(trf('Не удалось сохранить: {msg}', { msg: errText(error) }), 'fail'); return; }
+                toast('Шаблон рецепта сохранён', 'ok');
+                closePanel();
+                Object.assign(rxSrc, await loadRxSources());   // новый шаблон — сразу в «Из шаблона» и в подсказках
+            } finally { if (saveBtn.isConnected) saveBtn.disabled = false; }
+        } }, Icon('Check', { size: 13 }), ' Сохранить');
+        tplPanel.append(
+            h('div', { class: 'tplm-field' }, h('label', null, 'Название шаблона'), nameIn),
+            h('div', { class: 'tplm-scopepick', style: { margin: '8px 0' } },
+                scopeBtn('private', 'Личный', 'User'), scopeBtn('shared', 'Общий', 'Globe')),
+            h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end' } },
+                h('button', { type: 'button', class: 'btn btn-ghost btn-sm', onclick: closePanel }, 'Отмена'), saveBtn));
+        setTimeout(() => nameIn.focus(), 30);
+    }
+    const tplBar = existing ? null : h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' } },
+        h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: showFromTemplate }, Icon('Doc', { size: 13 }), ' ', 'Из шаблона'),
+        h('button', { type: 'button', class: 'btn btn-outline btn-sm', onclick: showSaveAsTemplate }, Icon('Plus', { size: 13 }), ' ', 'Сохранить как шаблон'));
+
     const card = h('div', { class: 'modal-card', style: { width: '540px', maxHeight: '86vh', display: 'flex', flexDirection: 'column' } },
         h('header', { class: 'modal-head' },
             h('h2', null, Icon('Pill', { size: 16 }), ' ', existing ? 'Изменить рецепт' : (_seed.length ? 'Рецепт — редактирование' : 'Новый рецепт')),
             h('button', { class: 'modal-close', onclick: () => overlay.remove() }, '×'),
         ),
         h('div', { class: 'modal-body', style: { overflowY: 'auto' } },
+            tplBar,
+            tplPanel,
             rowsWrap,
             addBtn,
         ),

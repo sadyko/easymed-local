@@ -198,6 +198,10 @@ const READ_ONLY_RPCS = new Set([
   // ROLES_SAVE_TRUTH_V1 — «Роли»: что у роли есть сейчас. Чистое чтение: экран
   // прав открывается и при просроченной лицензии, только ничего не сохраняет.
   'role_effective_grants',
+  // RX_TEMPLATES_V1 — «свои» препараты врача для подсказок рецепта: чистое
+  // чтение его прошлых рецептов. Клиника с просроченной лицензией рецепт не
+  // сохранит (запись), но подсказки при наборе названия — только чтение.
+  'rx_my_drugs',   // RX_TEMPLATES_V1
 ]);
 
 // The way back in. These must work while locked or a clinic that wants to pay

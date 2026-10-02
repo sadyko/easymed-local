@@ -10790,4 +10790,14 @@ export const STRINGS = {
   "Тип документа переключён: {type}": {"en":"Document type switched: {type}","ru":"Тип документа переключён: {type}","uz":"Hujjat turi almashtirildi: {type}"},   // CABINET_FIX_V1_TPL
   "нет ответа сервера": {"en":"no response from the server","ru":"нет ответа сервера","uz":"serverdan javob yo'q"},   // CABINET_FIX_V1_TPL
   "Не удалось открыть шаблоны: {msg}": {"en":"Could not open the templates: {msg}","ru":"Не удалось открыть шаблоны: {msg}","uz":"Shablonlarni ochib bo'lmadi: {msg}"},   // CABINET_FIX_V1_TPL
+  // RX_TEMPLATES_V1 (2026-10-02) — окно «Новый рецепт»: шаблоны рецептов и подсказки своих препаратов (service-workspace.js, rpc/rx.js)
+  "Шаблонов рецептов пока нет": {"en":"No prescription templates yet","ru":"Шаблонов рецептов пока нет","uz":"Hozircha retsept shablonlari yo'q"},   // RX_TEMPLATES_V1
+  "Добавлено препаратов: {n}": {"en":"Drugs added: {n}","ru":"Добавлено препаратов: {n}","uz":"Qo'shilgan dorilar: {n}"},   // RX_TEMPLATES_V1
+  "Например: Ангина — взрослые": {"en":"For example: Tonsillitis — adults","ru":"Например: Ангина — взрослые","uz":"Masalan: Angina — kattalar"},   // RX_TEMPLATES_V1
+  "Добавьте хотя бы один препарат": {"en":"Add at least one drug","ru":"Добавьте хотя бы один препарат","uz":"Kamida bitta dori qo'shing"},   // RX_TEMPLATES_V1
+  "Шаблон рецепта сохранён": {"en":"Prescription template saved","ru":"Шаблон рецепта сохранён","uz":"Retsept shabloni saqlandi"},   // RX_TEMPLATES_V1
+  "мои назначения": {"en":"my prescriptions","ru":"мои назначения","uz":"mening tayinlovlarim"},   // RX_TEMPLATES_V1
+  "мой шаблон": {"en":"my template","ru":"мой шаблон","uz":"mening shablonim"},   // RX_TEMPLATES_V1
+  "справочник клиники": {"en":"clinic catalogue","ru":"справочник клиники","uz":"klinika ma'lumotnomasi"},   // RX_TEMPLATES_V1
+  "Подсказки препаратов — только врачу или администратору.": {"en":"Drug suggestions are for doctors and administrators only.","ru":"Подсказки препаратов — только врачу или администратору.","uz":"Dori takliflari faqat shifokor yoki administrator uchun."},   // RX_TEMPLATES_V1
 };

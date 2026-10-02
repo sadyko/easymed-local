@@ -1292,7 +1292,7 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     // коде — владелец: «its still not applied». В тестах кольцо не всплывало:
     // там модули грузятся поодиночке и в другом порядке.
     const applyTemplate = async () => {
-        const { openTemplateLibraryModal } = await import('./service-workspace.js?v=cabtpl1');   // CABINET_FIX_V1_TPL — тот же экземпляр, что у кабинета (штамп admin.js)
+        const { openTemplateLibraryModal } = await import('./service-workspace.js?v=cabrx1');   // CABINET_FIX_V1_TPL — тот же экземпляр, что у кабинета (штамп admin.js) · RX_TEMPLATES_V1
         openTemplateLibraryModal(null, {
         dt: 2,
         // CABINET_FIX_V1_TPL (F) — «Из текущего документа» берёт текст ЭТОГО

@@ -92,6 +92,7 @@ import {
   patientCardSetServiceDoctor, requireServicesEdit, requireServicesDelete,
 } from './patient-card.js';   // PATIENT_TAB_ACCESS_V1
 import { visitDocumentArchive } from './patient-card.js';   // V3120_FIX (F2) — подпись протокола отзывает прежний, а не стирает
+import { rxMyDrugs } from './rx.js';   // RX_TEMPLATES_V1 — «свои» препараты врача для подсказок рецепта
 
 export const RPC = {
   // PATIENT_TAB_ACCESS_V1 — карта пациента по вкладкам: одна дверь на чтение,
@@ -318,6 +319,9 @@ export const RPC = {
   dispense_visit_item:       (db, args, user) => dispenseItem(db, { product_id: args.p_item_id, quantity: args.p_qty, visit_id: args.p_visit_id, doctor_id: args.p_doctor_id ?? null }, user),
   void_dispensed_visit_item: (db, args, user) => voidDispense(db, { visit_service_id: args.p_line }, user),
   request_admission:         (db, args, user) => requestAdmission(db, { patient_id: args.p_patient_id, doctor_id: args.p_doctor_id ?? null, pathway: args.p_pathway, chief_complaint: args.p_chief_complaint ?? '', diagnosis: args.p_diagnosis ?? '' }, user),
+  // RX_TEMPLATES_V1 — подсказки рецепта: препараты из СВОИХ прошлых рецептов
+  // врача (visit_services.notes), частые первыми; только чтение (READ_ONLY_RPCS).
+  rx_my_drugs:               (db, args, user) => rxMyDrugs(db, args, user),   // RX_TEMPLATES_V1
 
   // BED_CONSOLE_V1 — стационарная консоль койки: выдача препаратов (easymed
   // p_* имена), счёт по госпитализации, перевод и скидка на проживание.
