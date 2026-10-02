@@ -4396,7 +4396,9 @@ const DOCTOR_AUTHOR_SQL = (d, lineDoctorExpr) => `EXISTS (SELECT 1 FROM users da
 
 function journalVisitLines(db, args, ctx, { from, to, idsJson }) {
   const range = rangeOf('v.visit_date', from, to);
-  const bf = branchFilter(args, 'v.branch_id');
+  // JOURNALS_V1_RJ1 (ревью, п. 8) — визит без филиала — свой (а приехавший из
+  // соседнего здания без филиала — нет), как у прочих отчётов: OWN_BRANCH_OR.
+  const bf = branchFilter(args, OWN_BRANCH_OR('v.branch_id'));
   const gf = buildingWhere(db, ctx, args, 'visit_services', 'vs');
   const day = localDate('v.visit_date');
   return db.prepare(`

@@ -224,6 +224,21 @@ test('возвраты настоящей кассой: полный возвр�
   } finally { db.close(); }
 });
 
+// JOURNALS_V1_RJ1 (ревью, п. 8) — визит без филиала — свой (OWN_BRANCH_OR, как у
+// прочих отчётов); прежде отбор по своему филиалу терял все такие визиты.
+test('филиал: визит без филиала — свой; приехавший из соседнего здания без филиала — не свой', () => {
+  const db = clinic();
+  try {
+    const all = col(journal(db), 'Дата');
+    assert.deepEqual(col(journal(db, { branch_ids: [1] }), 'Дата'), all, 'свой филиал — все строки: у визитов филиал не записан');
+    db.prepare("INSERT INTO branches (id, letter, name) VALUES (2, 'B', 'Филиал Б')").run();
+    db.prepare('UPDATE visits SET branch_id = 2 WHERE id = 1').run();                     // 09.03 — в филиале Б
+    db.prepare("UPDATE visits SET branch_id = NULL, sync_origin = 'B' WHERE id = 4").run();   // 13.03 — приехал из здания Б
+    assert.deepEqual(col(journal(db, { branch_ids: [2] }), 'Дата'), ['2026-03-09']);
+    assert.deepEqual(col(journal(db, { branch_ids: [1] }), 'Дата'), all.filter((d) => d !== '2026-03-09' && d !== '2026-03-13'));
+  } finally { db.close(); }
+});
+
 // JOURNALS_V1_RJ1 (ревью, п. 7) — выписан и снова положен в тот же день: по
 // одному дню оба случая «шли», и строка доставалась последнему поступившему.
 // Теперь сначала — случай, в чьё ВРЕМЯ попадает строка (её scheduled_at, иначе
