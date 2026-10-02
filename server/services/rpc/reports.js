@@ -4381,9 +4381,18 @@ const IN_BED_ON_DAY_SQL = (patientExpr, dayExpr, timeExpr) => `(SELECT ab.id FRO
 // pay_refund_releases на невыставленной строке: правило NOT_RELEASED_SQL выше,
 // то же, что у окна визита (visit_refunded_lines) и у выплаты врачу. Обычная
 // отмена неоплаченного счёта отметки не ставит — сделанная работа остаётся.
-const NOT_REFUNDED_LINE_SQL = (line, kind) => `NOT EXISTS (SELECT 1 FROM invoice_items rfi JOIN invoices rfv ON rfv.id = rfi.invoice_id
-     WHERE rfi.id = ${line}.invoice_item_id AND rfv.status = 'refunded')
+const NOT_REFUNDED_INVOICE_SQL = (line) => `NOT EXISTS (SELECT 1 FROM invoice_items rfi JOIN invoices rfv ON rfv.id = rfi.invoice_id
+     WHERE rfi.id = ${line}.invoice_item_id AND rfv.status = 'refunded')`;   // JOURNALS_V1_RJ2 — общая часть визита и акта
+const NOT_REFUNDED_LINE_SQL = (line, kind) => `${NOT_REFUNDED_INVOICE_SQL(line)}
        AND ${NOT_RELEASED_SQL(kind, line)}`;   // JOURNALS_V1_RJ1
+// JOURNALS_V1_RJ2 (финальное ревью, F6) — СТРОКА АКТА И ВОЗВРАТ ПО СЧЁТУ
+// ГОСПИТАЛИЗАЦИИ. Полный возврат, пока пациент лежит, — поправка счёта: работа
+// сделана и будет выставлена заново, строка остаётся. Отметка возврата,
+// поставленная после выписки (или в её минуту), — деньги за эту работу пациенту
+// вернули: строки нет. Время отметки — pay_refund_releases.created_at.
+const NOT_RELEASED_AFTER_STAY_SQL = (ias, a) => `NOT (${ias}.invoice_item_id IS NULL AND EXISTS (
+     SELECT 1 FROM pay_refund_releases prs WHERE prs.kind = 'in' AND prs.line_id = ${ias}.id
+        AND ${a}.discharged_at IS NOT NULL AND julianday(prs.created_at) >= julianday(${a}.discharged_at)))`;
 // JOURNALS_V1_RJ1 (ревью, п. 10b) — поле тела документа — только ТЕКСТ (или
 // число): объект или список json_extract отдал бы сырым JSON, и он печатался
 // бы в журнале. Иначе поле пустое — правило «Заключения» идёт дальше.
@@ -4429,10 +4438,15 @@ function journalVisitLines(db, args, ctx, { from, to, idsJson }) {
       JOIN services s ON s.id = vs.service_id
       LEFT JOIN users pu ON pu.id = vs.doctor_id
       LEFT JOIN referral_sources rs ON rs.id = v.referral_source_id
+      -- JOURNALS_V1_RJ2 (F6) — возвраты по счёту строки, как у выплаты врачу (PAY_REFUND_V1):
+      -- счёт, оставленный открытым после полного возврата (void_when_zero: false), строку не оставляет.
+      LEFT JOIN invoice_items jri ON jri.id = vs.invoice_item_id
+      ${REFUND_JOIN('jrf', 'jri.invoice_id')}
      WHERE vs.service_id IN (SELECT value FROM json_each(?))
        AND ${JOURNAL_PAID_SQL('vs')}
        AND ${LIVE_VISIT_SQL('v')}
        AND ${NOT_REFUNDED_LINE_SQL('vs', 'out')}   -- JOURNALS_V1_RJ1
+       AND ${NOT_FULLY_REFUNDED_SQL('jrf')}   -- JOURNALS_V1_RJ2 (F6) — то же правило, что у выплаты врачу
        AND ${range.sql}${bf.clause}${gf.clause}`).all(idsJson, ...range.params, ...bf.params, ...gf.params);
 }
 
@@ -4464,7 +4478,8 @@ function journalAdmissionLines(db, args, ctx, { from, to, idsJson }) {
        AND COALESCE(ias.notes, '') NOT LIKE 'ACCOMMODATION%'
        AND COALESCE(ias.billable, 1) = 1
        AND COALESCE(a.status, '') <> 'cancelled'
-       AND ${NOT_REFUNDED_LINE_SQL('ias', 'in')}   -- JOURNALS_V1_RJ1
+       AND ${NOT_REFUNDED_INVOICE_SQL('ias')}
+       AND ${NOT_RELEASED_AFTER_STAY_SQL('ias', 'a')}   -- JOURNALS_V1_RJ2 (F6) — возврат, пока лежит, строку не убирает
        AND ${range.sql}${bf.clause}${gf.clause}`).all(idsJson, ...range.params, ...bf.params, ...gf.params);
 }
 

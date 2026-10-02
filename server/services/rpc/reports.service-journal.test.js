@@ -10,7 +10,7 @@ import { migrate } from '../../db/migrate.js';
 import { runReport, __setReportsPushDown } from './reports.js';
 // JOURNALS_V1_RJ1 — возвраты — настоящими RPC кассы, не руками в invoices.
 import { createInvoiceForVisit, createInvoiceForAdmission, recordPayment, refundPayment, refundInvoiceLine } from './billing.js';
-import { openCashShift } from './cashier.js';
+import { openCashShift, voidInvoice } from './cashier.js';   // voidInvoice: JOURNALS_V1_RJ2 (F6)
 
 const admin = { id: 9, role: 'admin' };
 const registrar = { id: 7, role: 'registrar' };   // JOURNALS_V1_RJ1
@@ -300,6 +300,49 @@ test('прошла кассу: queued, collected, in_progress, resulted, complet
     });
     const r = journal(db, { from: '2026-03-20', to: '2026-03-26', service_ids: [SVC.usgKid] });
     assert.deepEqual(col(r, 'Дата'), ['2026-03-20', '2026-03-21', '2026-03-22', '2026-03-23', '2026-03-24']);
+  } finally { db.close(); }
+});
+
+// JOURNALS_V1_RJ2 (финальное ревью, F6) — края возвратов, настоящими RPC кассы.
+// (а) refund_payment с void_when_zero:false: счёт оставлен открытым, денег на
+//     нём ноль, строка к нему привязана. Выплата врачу её не платит
+//     (NOT_FULLY_REFUNDED_SQL) — журнал считает так же. Частичный возврат —
+//     строка остаётся (как и у выплаты).
+// (б) Полный возврат по счёту госпитализации, пока пациент лежит: работа
+//     сделана и будет выставлена заново — строка акта остаётся. Возврат после
+//     выписки — строки нет (тест «возвраты настоящей кассой» выше).
+test('возвраты: полный возврат с открытым счётом — строки нет (как у выплаты врачу); частичный — есть; возврат по счёту лежащего пациента — строка акта есть', () => {
+  const db = clinic();
+  try {
+    const visitLine = (vid, vsId, patient, day, svc) => {
+      db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (?, ?, ?, 'arrived')").run(vid, patient, at(day));
+      db.prepare("INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status) VALUES (?,?,?,1,1,0,0,'completed')").run(vsId, vid, svc);
+      const inv = createInvoiceForVisit(db, { visit_id: vid, visit_service_ids: [vsId] }, registrar).invoice;
+      recordPayment(db, { invoice_id: inv.id, amount: inv.total_amount, method: 'cash' }, cashier);
+      return inv;
+    };
+    const days = () => col(journal(db, { from: '2026-03-27', to: '2026-03-28' }), 'Дата');
+    const open = visitLine(22, 53, 1, '2026-03-27', SVC.usgKid);
+    const part = visitLine(23, 54, 1, '2026-03-28', SVC.usgKid);
+    assert.deepEqual(days(), ['2026-03-27', '2026-03-28']);
+    const payOf = (inv) => db.prepare('SELECT id FROM payments WHERE invoice_id = ? AND amount > 0').get(inv.id).id;
+    refundPayment(db, { payment_id: payOf(open), void_when_zero: false }, cashier);
+    refundPayment(db, { payment_id: payOf(part), amount: 20000 }, cashier);
+    assert.notEqual(db.prepare('SELECT status FROM invoices WHERE id = ?').get(open.id).status, 'void', 'стенд не тот: счёт отменён');
+    assert.ok(itemOf(db, 53), 'стенд не тот: строка отпущена со счёта');
+    assert.deepEqual(days(), ['2026-03-28'], 'полностью возвращённая строка открытого счёта — не в журнале; частично — в журнале');
+    // (б) Валиев лежит (ИБ-8): счёт на ЭКГ 22.03 оплачен и полностью возвращён.
+    assert.ok(col(journal(db), 'Дата').includes('2026-03-22'));
+    const admInv = createInvoiceForAdmission(db, { admission_id: 2, admission_service_ids: [5] }, registrar).invoice;
+    recordPayment(db, { invoice_id: admInv.id, amount: admInv.total_amount, method: 'cash' }, cashier);
+    fullRefund(db, admInv.id);
+    assert.notEqual(db.prepare('SELECT status FROM invoices WHERE id = ?').get(admInv.id).status, 'void', 'касса не отменяет счёт лежащего пациента');
+    assert.ok(col(journal(db), 'Дата').includes('2026-03-22'), 'возврат, пока пациент лежит, — работа сделана, строка остаётся');
+    // Кассир всё же отменил счёт с подтверждением «пациент в койке»: строка отпущена
+    // с отметкой возврата — работа сделана, её выставят заново; строка остаётся.
+    voidInvoice(db, { invoice_id: admInv.id, in_bed_ack: true, reason: 'счёт переделывают' }, cashier);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM pay_refund_releases WHERE kind = 'in' AND line_id = 5").get().n, 1, 'стенд не тот: отметки нет');
+    assert.ok(col(journal(db), 'Дата').includes('2026-03-22'), 'отмена счёта лежащего пациента после возврата убрала сделанную работу');
   } finally { db.close(); }
 });
 
