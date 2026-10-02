@@ -14,11 +14,19 @@
 //   • станция ответила без ссылки: разговор кончился меньше десяти минут
 //     назад — «запись ещё готовится» (not_ready), раньше — «записи нет»;
 //   • линия звонка удалена из настроек — своя причина (no_line).
+//
+// CALL_RECORDING_NOT_READY_ERR_V1 — как станция отвечает, пока запись ещё
+// готовится, вживую не пойман (два часа наблюдения — ни одного звонка). Если
+// это status "0" с комментарием (у нас — server_error), то в первые десять
+// минут после разговора ошибка станции и неразборчивый ответ читаются как
+// «готовится» (экран спросит снова); позже — своей причиной. Нет связи,
+// «не чаще» и ключ — всегда своей: это настоящие поломки.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { telephonyCallRecording } from './telephony.js';
+import { pbxRecordingUrl } from '../telephony/onlinepbx.js';
 import { RECORDING_NOT_READY_WINDOW_MS, RECORDING_SERVER_RETRY_MS } from '../../../public/js/shared/call-recording.js';
 
 const NOW = Date.parse('2026-10-02T04:40:00Z');
@@ -71,10 +79,12 @@ test('нет связи — один повтор через паузу, и сс
   assert.match(s.asked[0].uuid, /^uuid-\d+$/, 'станцию спросили с «onlinepbx:» в номере звонка');
 });
 
-test('нет связи, ошибка станции, неразборчивый ответ — повтор ОДИН, потом честная причина', async () => {
+const OLD = RECORDING_NOT_READY_WINDOW_MS + 60_000;   // CALL_RECORDING_NOT_READY_ERR_V1 — давний звонок: ошибка станции — своей причиной
+
+test('нет связи, ошибка станции, неразборчивый ответ — повтор ОДИН, потом честная причина (давний звонок)', async () => {
   for (const reason of ['offline', 'server_error', 'bad_response']) {
     const { db, providerId } = fresh();
-    const id = addCall(db, providerId, { endedAgoMs: 60_000 });
+    const id = addCall(db, providerId, { endedAgoMs: OLD });
     const s = station({ ok: false, reason });
     assert.deepEqual(await telephonyCallRecording(db, { call_id: id }, admin, s.deps), { url: '', reason }, reason);
     assert.equal(s.asked.length, 2, reason + ': повторов не один');
@@ -93,9 +103,9 @@ test('«не чаще» и «ключ не подходит» — без пов�
   }
 });
 
-test('незнакомый отказ станции — «ответила ошибкой», а не «записи нет»', async () => {
+test('незнакомый отказ станции — «ответила ошибкой», а не «записи нет» (давний звонок)', async () => {
   const { db, providerId } = fresh();
-  const id = addCall(db, providerId, { endedAgoMs: 60_000 });
+  const id = addCall(db, providerId, { endedAgoMs: OLD });
   const s = station({ ok: false, reason: 'something_new' });
   assert.deepEqual(await telephonyCallRecording(db, { call_id: id }, admin, s.deps), { url: '', reason: 'server_error' });
   assert.equal(s.asked.length, 1);
@@ -148,4 +158,71 @@ test('ссылка — прежний ответ {url} без лишних по�
   const s = station({ ok: true, data: LINK });
   assert.deepEqual(await telephonyCallRecording(db, { call_id: id }, admin, s.deps), { url: LINK });
   assert.equal(s.asked.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// CALL_RECORDING_NOT_READY_ERR_V1 — «готовится» и тогда, когда станция в первые
+// минуты отвечает ОШИБКОЙ, а не пустым ответом.
+
+// Настоящий разбор ответа onlinePBX (onlinepbx.js post) на поддельной сети:
+// status "0" + комментарий → server_error, как и было бы вживую.
+function stationSaying(body, { status = 200 } = {}) {
+  const asked = [];
+  const sleeps = [];
+  const fetchImpl = async (url) => {
+    asked.push(String(url));
+    return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  };
+  const deps = {
+    pbxRecordingUrlImpl: (domain, uuid, o) => pbxRecordingUrl(domain, uuid, { ...o, fetchImpl }),
+    sleep: async (ms) => { sleeps.push(ms); },
+    now: () => NOW,
+  };
+  return { asked, sleeps, deps };
+}
+
+test('свежий звонок, станция отвечает status "0" — «готовится», повтор сервера был', async () => {
+  const { db, providerId } = fresh();
+  const id = addCall(db, providerId, { endedAgoMs: 2 * 60_000 });
+  const s = stationSaying({ status: '0', comment: 'record is not ready' });
+  assert.deepEqual(await telephonyCallRecording(db, { call_id: id }, admin, s.deps), { url: '', reason: 'not_ready' });
+  assert.equal(s.asked.length, 2, 'серверный повтор пропал');
+  assert.deepEqual(s.sleeps, [RECORDING_SERVER_RETRY_MS]);
+});
+
+test('давний звонок, станция отвечает status "0" — «ответил ошибкой» (server_error), а не вечное «готовится»', async () => {
+  const { db, providerId } = fresh();
+  const id = addCall(db, providerId, { endedAgoMs: OLD });
+  const s = stationSaying({ status: '0', comment: 'record is not ready' });
+  assert.deepEqual(await telephonyCallRecording(db, { call_id: id }, admin, s.deps), { url: '', reason: 'server_error' });
+});
+
+test('свежий звонок: ошибка станции, неразборчивый и незнакомый ответ — «готовится»; давний — своей причиной', async () => {
+  for (const [answer, oldReason] of [
+    [{ ok: false, reason: 'server_error', comment: 'x' }, 'server_error'],
+    [{ ok: false, reason: 'bad_response' }, 'bad_response'],
+    [{ ok: false, reason: 'something_new' }, 'server_error'],
+  ]) {
+    const tag = JSON.stringify(answer);
+    const a = fresh();
+    const freshCall = addCall(a.db, a.providerId, { endedAgoMs: RECORDING_NOT_READY_WINDOW_MS - 1000 });
+    assert.deepEqual(await telephonyCallRecording(a.db, { call_id: freshCall }, admin, station(answer).deps), { url: '', reason: 'not_ready' }, tag);
+    const b = fresh();
+    const old = addCall(b.db, b.providerId, { endedAgoMs: RECORDING_NOT_READY_WINDOW_MS + 1000 });
+    assert.deepEqual(await telephonyCallRecording(b.db, { call_id: old }, admin, station(answer).deps), { url: '', reason: oldReason }, tag);
+  }
+});
+
+test('свежий звонок: нет связи, «не чаще», ключ — своей причиной, не «готовится»: это настоящие поломки', async () => {
+  for (const reason of ['offline', 'rate_limited', 'bad_credentials']) {
+    const { db, providerId } = fresh();
+    const id = addCall(db, providerId, { endedAgoMs: 60_000 });
+    assert.deepEqual(await telephonyCallRecording(db, { call_id: id }, admin, station({ ok: false, reason }).deps), { url: '', reason }, reason);
+  }
+  // И через настоящий разбор: 429 — rate_limited.
+  const { db, providerId } = fresh();
+  const id = addCall(db, providerId, { endedAgoMs: 60_000 });
+  const s = stationSaying({}, { status: 429 });
+  assert.deepEqual(await telephonyCallRecording(db, { call_id: id }, admin, s.deps), { url: '', reason: 'rate_limited' });
+  assert.equal(s.asked.length, 1, '«не чаще» переспросили');
 });

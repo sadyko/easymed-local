@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import {
   RECORDING_MESSAGES, RECORDING_WAITING, RECORDING_GAVE_UP, RECORDING_RETRY_EVERY_MS, RECORDING_RETRY_TRIES,
   RECORDING_NOT_READY_WINDOW_MS, recordingMessage, fillRecordingText, askRecordingUntilReady,
+  RECORDING_NOT_READY_FAIL_REASONS, recordingFailReason,   // CALL_RECORDING_NOT_READY_ERR_V1
 } from './call-recording.js';
 import { STRINGS } from '../admin/i18n-strings.js';
 
@@ -136,4 +137,19 @@ test('настоящий таймер: следующий запрос — ро�
   await flush();
   assert.equal(rpc.count(), 2);
   assert.deepEqual(await done, { url: 'https://rec/3.mp3' });
+});
+
+// CALL_RECORDING_NOT_READY_ERR_V1 — ответ станции, пока запись готовится, вживую
+// не пойман: в первые 10 минут после разговора ошибка станции и неразборчивый
+// ответ — «готовится»; нет связи, «не чаще» и ключ — всегда своей причиной.
+test('отказ станции в первые 10 минут: ошибка и неразборчивый ответ — «готовится», настоящие поломки — своей причиной', () => {
+  assert.deepEqual([...RECORDING_NOT_READY_FAIL_REASONS], ['server_error', 'bad_response']);
+  assert.equal(recordingFailReason('server_error', true), 'not_ready');
+  assert.equal(recordingFailReason('bad_response', true), 'not_ready');
+  assert.equal(recordingFailReason('server_error', false), 'server_error');
+  assert.equal(recordingFailReason('bad_response', false), 'bad_response');
+  for (const r of ['offline', 'rate_limited', 'bad_credentials']) {
+    assert.equal(recordingFailReason(r, true), r, r + ' спрятан за «готовится»');
+    assert.equal(recordingFailReason(r, false), r);
+  }
 });

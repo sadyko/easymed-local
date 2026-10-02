@@ -24,6 +24,24 @@ export const RECORDING_NOT_READY_WINDOW_MS = 10 * 60 * 1000;
 export const RECORDING_SERVER_RETRY_MS = 1500;
 export const RECORDING_SERVER_RETRY_REASONS = Object.freeze(['offline', 'server_error', 'bad_response']);
 
+// CALL_RECORDING_NOT_READY_ERR_V1 (2026-10-02) — КАК СТАНЦИЯ ОТВЕЧАЕТ, ПОКА
+// ЗАПИСЬ ЕЩЁ ГОТОВИТСЯ, ВЖИВУЮ НЕ ПОЙМАНО: два часа наблюдения за живой
+// станцией клиники не дали ни одного принятого звонка. Ответ может быть
+// пустым (status "1" без ссылки — not_ready по сроку выше), а может быть
+// отказом — status "0" с комментарием, который onlinepbx.js читает как
+// server_error, или ответом, который не разобрать (bad_response). Чтобы
+// оператор не читал «onlinePBX ответил ошибкой» там, где запись просто ещё
+// склеивается, в первые RECORDING_NOT_READY_WINDOW_MS после разговора эти
+// два отказа (уже после серверного повтора) считаются «готовится» — и экран
+// спрашивает снова сам. Нет связи, «не чаще» и неподходящий ключ — настоящие
+// поломки: их оператор видит своей причиной всегда. Позже окна — тоже своей.
+export const RECORDING_NOT_READY_FAIL_REASONS = Object.freeze(['server_error', 'bad_response']);
+
+/** Итоговая причина отказа станции: endedRecently — разговор кончился меньше окна назад. */
+export function recordingFailReason(reason, endedRecently) {
+  return endedRecently && RECORDING_NOT_READY_FAIL_REASONS.includes(reason) ? 'not_ready' : reason;
+}
+
 /** Экран: «готовится» — спрашиваем снова каждые 10 секунд, не больше 6 раз (около минуты). */
 export const RECORDING_RETRY_EVERY_MS = 10 * 1000;
 export const RECORDING_RETRY_TRIES = 6;

@@ -23,7 +23,8 @@ import { dialCall } from '../telephony/dial.js';
 import { recordingUrlOf } from '../telephony/recording.js';
 import { pbxHistory, pbxRecordingUrl, pbxAuth, normalizeDomain } from '../telephony/onlinepbx.js';
 // CALL_RECORDING_REASONS_V1 — сроки «запись готовится» и повтора: одно место с экраном.
-import { RECORDING_NOT_READY_WINDOW_MS, RECORDING_SERVER_RETRY_MS, RECORDING_SERVER_RETRY_REASONS } from '../../../public/js/shared/call-recording.js';
+import { RECORDING_NOT_READY_WINDOW_MS, RECORDING_SERVER_RETRY_MS, RECORDING_SERVER_RETRY_REASONS,
+         recordingFailReason } from '../../../public/js/shared/call-recording.js';   // CALL_RECORDING_NOT_READY_ERR_V1 — recordingFailReason
 import { normalizeMzDomain } from '../telephony/moizvonki.js';   // ADMIN_ROWS_GRANTABLE_V1 (ревью I2)
 
 export class RpcError extends Error {
@@ -488,10 +489,13 @@ export async function telephonyCallRecording(db, args, user, { pbxRecordingUrlIm
     await sleep(RECORDING_SERVER_RETRY_MS);
     r = await ask();
   }
-  if (!r || !r.ok) return { url: '', reason: r && PBX_FAIL_REASONS.has(r.reason) ? r.reason : 'server_error' };
-  const url = (typeof r.data === 'string' && /^https?:\/\//.test(r.data)) ? r.data : '';
-  if (url) return { url };
   const ended = callEndedAt(call);
   const fresh = Number.isFinite(ended) && now() - ended < RECORDING_NOT_READY_WINDOW_MS;
+  // CALL_RECORDING_NOT_READY_ERR_V1 — ответ станции «ещё готовится» вживую не
+  // пойман: в первые 10 минут ошибка станции и неразборчивый ответ (уже после
+  // повтора) — тоже «готовится»; правило — recordingFailReason в shared.
+  if (!r || !r.ok) return { url: '', reason: recordingFailReason(r && PBX_FAIL_REASONS.has(r.reason) ? r.reason : 'server_error', fresh) };
+  const url = (typeof r.data === 'string' && /^https?:\/\//.test(r.data)) ? r.data : '';
+  if (url) return { url };
   return { url: '', reason: fresh ? 'not_ready' : 'not_found' };
 }
