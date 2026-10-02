@@ -644,7 +644,24 @@ const ARCHIVE_TYPES = Object.freeze(['protocol', 'diag']);
  *
  * Подписывает исполнитель строки (или строка без исполнителя) и администратор.
  * args: { visit_service_id, doc_type: 'protocol'|'diag', title, body }
+ *
+ * CABINET_FIX_V1_R1 (2026-10-02, ревью п. 2) — отзывается только документ ТОГО
+ * ЖЕ вида. Раньше подпись отзывала и протокол, и заключение диагностики строки:
+ * УЗИ, подписанное «Приёмом» и переподписанное бланком «Диагностика», теряло
+ * текст приёма из архива. И пустая подпись (без текста, изображений и рецепта)
+ * не отзывает прежний документ того же вида, в котором содержание есть.
  */
+// CABINET_FIX_V1_R1 — «есть ли в снимке документа что-то, кроме шапки»: текст
+// разделов (протокол — buildBlankData кабинета, диагностика — diagDocData),
+// изображения, рецепт.
+const DOC_TEXT_KEYS = Object.freeze(['complaint', 'hpi', 'labs', 'instrumental', 'exam', 'dx', 'therapy',
+  'recsText', 'conclusionText', 'description', 'conclusion']);
+function docHasContent(body) {
+  if (!body || typeof body !== 'object') return false;
+  if (DOC_TEXT_KEYS.some((k) => typeof body[k] === 'string' && body[k].trim())) return true;
+  return (Array.isArray(body.images) && body.images.length > 0)
+    || (Array.isArray(body.prescriptions) && body.prescriptions.some((r) => r && String(r.name || '').trim()));
+}
 export function visitDocumentArchive(db, args, user) {
   const roles = effectiveRoles(user);
   // V3121_ROLES — роль проверяется ПОСЛЕ того, как известна строка: подписывает
@@ -673,9 +690,18 @@ export function visitDocumentArchive(db, args, user) {
     throw new RpcError('Подписать документ приёма может врач, который оказывает услугу.', 403);
   }
   const run = db.transaction(() => {
-    db.prepare(`UPDATE visit_documents SET voided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'), voided_by = ?,
+    // CABINET_FIX_V1_R1 — только тот же вид; пустая подпись не заменяет документ с содержанием.
+    const prev = db.prepare(`SELECT id, body FROM visit_documents
+      WHERE visit_service_id = ? AND doc_type = ? AND voided_at IS NULL`).all(vsId, docType);
+    const replaceable = docHasContent(body) ? prev : prev.filter((r) => {
+      let b = null;
+      try { b = JSON.parse(r.body || 'null'); } catch { b = null; }
+      return !docHasContent(b);
+    });
+    const voidOne = db.prepare(`UPDATE visit_documents SET voided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'), voided_by = ?,
         void_reason = 'Заменён новой подписью'
-      WHERE visit_service_id = ? AND doc_type IN ('protocol','diag') AND voided_at IS NULL`).run(me, vsId);
+      WHERE id = ? AND voided_at IS NULL`);
+    for (const r of replaceable) voidOne.run(me, r.id);
     const info = db.prepare(`INSERT INTO visit_documents (visit_service_id, visit_id, patient_id, doc_type, title, body, created_by)
       VALUES (?,?,?,?,?,?,?)`).run(vsId, line.visit_id, line.patient_id, docType, title, JSON.stringify(body), me);
     return { id: Number(info.lastInsertRowid) };

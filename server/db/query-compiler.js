@@ -790,6 +790,12 @@ function insertStatement(table, values, allowed) {
 //   { on: 'insert' }        — при вставке всегда = я;
 //   { with: 'done_at' }     — пишется вместе с этой колонкой: она не пустая —
 //                             я, пустая — NULL; нет её в правке — не трогается.
+// CABINET_FIX_V1_R1 — поле сессии для штампа: имя сотрудника, иначе логин; без сессии — NULL.
+function sessionField(user, key) {
+  if (!user) return null;
+  if (key === 'full_name') return String(user.full_name || user.username || '').trim() || null;
+  return null;
+}
 function stampValues(table, op, values, user) {
   const stamps = actorStamps(table);
   if (!stamps) return { values, extra: [] };
@@ -798,7 +804,8 @@ function stampValues(table, op, values, user) {
   const extra = [];
   for (const [col, rule] of Object.entries(stamps)) {
     delete out[col];
-    if (rule.on === op) { out[col] = me; extra.push(col); continue; }
+    // CABINET_FIX_V1_R1 — { on, from: 'full_name' }: не номер, а поле сессии (имя автора шаблона).
+    if (rule.on === op) { out[col] = rule.from ? sessionField(user, rule.from) : me; extra.push(col); continue; }   // CABINET_FIX_V1_R1
     if (rule.with && Object.prototype.hasOwnProperty.call(out, rule.with)
         && writableColumns(table, op).includes(rule.with)) {
       out[col] = out[rule.with] == null ? null : me;

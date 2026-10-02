@@ -33,7 +33,11 @@ export class RpcError extends Error {
 const MAX_ROWS = 200;
 // Сколько последних строк врача с рецептом разбирать. Подсказке хватает
 // недавней работы; без предела врач с десятью годами приёмов разбирал бы всё.
-const SCAN_LIMIT = 5000;
+// CABINET_FIX_V1_R1 (ревью п. 10) — 5000 разборов JSON на открытие окна стоили
+// до 400 мс синхронной работы сервера: теперь строки только за последние
+// 12 месяцев и не больше 2000, а экран держит ответ до конца сеанса.
+const SCAN_LIMIT = 2000;   // CABINET_FIX_V1_R1
+const SCAN_DAYS = 365;     // CABINET_FIX_V1_R1
 
 const clip = (v, n = 200) => String(v == null ? '' : v).trim().slice(0, n);
 
@@ -53,10 +57,10 @@ export function rxMyDrugs(db, args, user) {
   // Новые строки первыми: первая встреча препарата — его последний рецепт.
   const rows = db.prepare(`
     SELECT notes FROM visit_services
-     WHERE doctor_id = ? AND notes LIKE '%"prescriptions":[{%'
+     WHERE doctor_id = ? AND created_at >= ? AND notes LIKE '%"prescriptions":[{%'
      ORDER BY id DESC
      LIMIT ${SCAN_LIMIT}
-  `).all(me);
+  `).all(me, new Date(Date.now() - SCAN_DAYS * 24 * 3600 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z'));   // CABINET_FIX_V1_R1 — за год
 
   const byKey = new Map();
   for (const r of rows) {

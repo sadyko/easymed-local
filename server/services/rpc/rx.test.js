@@ -94,3 +94,34 @@ test('rx_my_drugs зарегистрирован, только читает (REA
   assert.deepEqual(getRpc('rx_my_drugs')(db, {}, doc).rows.map((r) => r.name), ['Амоксициллин']);
   assert.equal(isReadOnlyRpc('rx_my_drugs'), true, 'клиника с просроченной лицензией не увидит подсказок');
 });
+
+// CABINET_FIX_V1_R1 (2026-10-02, ревью п. 10 и пробел тестов) — rx_my_drugs
+// разбирал до 5000 JSON-записей синхронно на каждое открытие окна (400 мс на
+// большой базе, сервер в это время стоит). Теперь — строки врача только за
+// последние 12 месяцев и не больше 2000; номер врача — только из сессии.
+test('CABINET_FIX_V1_R1: rx_my_drugs — только последние 12 месяцев', () => {
+  const db = seed();
+  rx(db, 1, [{ name: 'Свежий', dose: '1' }]);
+  rx(db, 1, [{ name: 'Прошлогодний', dose: '1' }]);
+  const old = new Date(Date.now() - 400 * 24 * 3600 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  db.prepare('UPDATE visit_services SET created_at = ? WHERE id = ?').run(old, vsId);
+  assert.deepEqual(rxMyDrugs(db, {}, doc).rows.map((r) => r.name), ['Свежий'], 'рецепт старше года в подсказках');
+});
+
+test('CABINET_FIX_V1_R1: rx_my_drugs — не больше 2000 последних строк врача', () => {
+  const db = seed();
+  rx(db, 1, [{ name: 'Самый старый', dose: '1' }]);
+  const ins = db.prepare("INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status, notes) VALUES (?, 1, 1, 1, 1, 1, 1, 'completed', ?)");
+  const notes = JSON.stringify({ __service_workspace_v1: 1, prescriptions: [{ name: 'Новый' }] });
+  db.transaction(() => { for (let i = 0; i < 2000; i++) ins.run(++vsId, notes); })();
+  assert.deepEqual(rxMyDrugs(db, {}, doc).rows.map((r) => r.name), ['Новый'], 'разобрано больше 2000 строк');
+});
+
+test('CABINET_FIX_V1_R1: номер врача — только из сессии: чужой doctor_id в аргументах не читается', () => {
+  const db = seed();
+  rx(db, 1, [{ name: 'Мой', dose: '1' }]);
+  rx(db, 2, [{ name: 'Чужой', dose: '1' }]);
+  for (const args of [{ doctor_id: 2 }, { user_id: 2 }, { p_doctor_id: 2 }]) {
+    assert.deepEqual(rxMyDrugs(db, args, doc).rows.map((r) => r.name), ['Мой'], JSON.stringify(args));
+  }
+});

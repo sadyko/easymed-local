@@ -221,3 +221,44 @@ test('CABINET_FIX_V1_TPL: doc_type ложится строкой «0/1/2/3», и
   await db(base, doc, { table: 'consultation_templates', op: 'update', values: { doc_type: 2 }, filters: [{ col: 'id', op: 'eq', val: id }] });
   assert.equal(conn.prepare('SELECT doc_type FROM consultation_templates WHERE id = ?').get(id).doc_type, '2');
 });
+
+// ---------------------------------------------------------------------------
+// CABINET_FIX_V1_R1 (2026-10-02, ревью п. 8, 11) — имя автора ставит сервер;
+// правка и удаление, которые ограничение не пропустило, отвечают отказом.
+//
+// author_name писал экран: шаблон можно было подписать чужим ИМЕНЕМ (автор по
+// номеру уже ставился сервером). А правка чужого шаблона проходила мимо строки
+// (0 строк) и отвечала 200 — окно говорило «Шаблон обновлён».
+// ---------------------------------------------------------------------------
+test('CABINET_FIX_V1_R1: имя автора — из сессии; в правке его нет', async (t) => {
+  const { conn, server, base } = await startClinic();
+  t.after(() => { server.close(); conn.close(); });
+  const doc2 = await loginAs(base, 'doc2');
+  const r = await db(base, doc2, { table: 'consultation_templates', op: 'insert',
+    values: [{ name: 'Имя', scope: 'private', doc_type: '0', body: BODY, author_name: 'Каримова Азиза' }] });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const row = () => conn.prepare("SELECT id, author_name FROM consultation_templates WHERE name = 'Имя'").get();
+  assert.equal(row().author_name, 'Юсупов Бахтиёр', 'имя автора взято из запроса');
+  await db(base, doc2, { table: 'consultation_templates', op: 'update', values: { author_name: 'Каримова Азиза' }, filters: [{ col: 'id', op: 'eq', val: row().id }] });
+  assert.equal(row().author_name, 'Юсупов Бахтиёр', 'имя автора правится запросом');
+});
+
+test('CABINET_FIX_V1_R1: правка и удаление чужого шаблона — 403 с понятной причиной, а не 200', async (t) => {
+  const { conn, server, base } = await startClinic();
+  t.after(() => { server.close(); conn.close(); });
+  const doc = await loginAs(base, 'doc');
+  const doc2 = await loginAs(base, 'doc2');
+  const admin = await loginAs(base, 'admin');
+  await db(base, doc, { table: 'consultation_templates', op: 'insert', values: [{ name: 'Общий', scope: 'shared', doc_type: '0', body: BODY }] });
+  const id = conn.prepare("SELECT id FROM consultation_templates WHERE name = 'Общий'").get().id;
+  const upd = await db(base, doc2, { table: 'consultation_templates', op: 'update', values: { name: 'взлом' }, filters: [{ col: 'id', op: 'eq', val: id }], returning: true });
+  assert.equal(upd.status, 403, 'чужая правка ответила ' + upd.status + ' — окно скажет «Шаблон обновлён»');
+  assert.match(upd.json.error.message, /автор или администратор/);
+  const del = await db(base, doc2, { table: 'consultation_templates', op: 'delete', filters: [{ col: 'id', op: 'eq', val: id }] });
+  assert.equal(del.status, 403);
+  assert.ok(conn.prepare('SELECT id FROM consultation_templates WHERE id = ?').get(id), 'шаблон удалён');
+  // автор и администратор — по-прежнему 200
+  assert.equal((await db(base, doc, { table: 'consultation_templates', op: 'update', values: { name: 'Общий 2' }, filters: [{ col: 'id', op: 'eq', val: id }] })).status, 200);
+  assert.equal((await db(base, admin, { table: 'consultation_templates', op: 'update', values: { name: 'Общий 3' }, filters: [{ col: 'id', op: 'eq', val: id }] })).status, 200);
+  assert.equal((await db(base, admin, { table: 'consultation_templates', op: 'delete', filters: [{ col: 'id', op: 'eq', val: id }] })).status, 200);
+});

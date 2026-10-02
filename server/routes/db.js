@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { surgeryWithoutBedRefusal } from '../services/domain/surgery-bed.js';   // CASHIER_HEAD_V1 (ревью I4)
 import { setLiveColumns, setForeignKeyColumns, compile, CompileError } from '../db/query-compiler.js';
 import { readableColumns, MAIN_CLINIC_TABLES, rowScope } from '../db/schema-registry.js';
+import { zeroRowRefusal } from '../db/schema-registry.js';   // CABINET_FIX_V1_R1 — 0 строк у шаблонов — отказ, а не 200
 import { scopeLifted } from '../db/row-scope.js';   // V3120_FIX — кто назначает заявку CRM другому
 // STAFF_SYNC_V1 — «филиал я или сама по себе клиника» решается по базе, а не по
 // сборке: одна и та же установка сегодня одиночная, завтра филиал.
@@ -410,7 +411,10 @@ export function dbRoutes(db) {
         // crmEvidenceTargets), а заявки считаем ПОСЛЕ: хук молчит при любой
         // ошибке, но и запускать его по строкам, которые не записались, незачем.
         const evidence = crmEvidenceTargets(db, meta, req.body, req.user);
-        db.prepare(sql).run(...params);
+        const updInfo = db.prepare(sql).run(...params);
+        // CABINET_FIX_V1_R1 — таблица, где 0 задетых строк значит «ограничение не
+        // пропустило» (шаблоны: правит автор или администратор), отвечает отказом.
+        if (updInfo.changes === 0 && zeroRowRefusal(meta.table)) return res.status(403).json({ error: { code: 'forbidden', message: zeroRowRefusal(meta.table) } });
         if (evidence.length) crmServiceEvidence(db, evidence);
         mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
         if (!meta.returning) return res.json({ data: null });
@@ -423,7 +427,8 @@ export function dbRoutes(db) {
       }
 
       if (meta.op === 'delete') {
-        db.prepare(sql).run(...params);
+        const delInfo = db.prepare(sql).run(...params);
+        if (delInfo.changes === 0 && zeroRowRefusal(meta.table)) return res.status(403).json({ error: { code: 'forbidden', message: zeroRowRefusal(meta.table) } });   // CABINET_FIX_V1_R1
         mirrorAfter(db, mirror, meta, req.body, req.user);   // CRM_CALENDAR_MIRROR_V1
         return res.json({ data: null });
       }

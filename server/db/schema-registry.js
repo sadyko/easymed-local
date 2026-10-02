@@ -1010,7 +1010,7 @@ export const REGISTRY = {
   consultation_templates: {
     read:  { roles: ALL_STAFF, columns: ['id','name','doc_type','scope','body','author_id','author_name','created_at','updated_at'] },
     // CABINET_FIX_V1_TPL — author_id из списка вставки убран: его ставит сервер (stamps ниже).
-    write: { insert: { roles: ['admin','doctor'], columns: ['name','doc_type','scope','body','author_name'] },
+    write: { insert: { roles: ['admin','doctor'], columns: ['name','doc_type','scope','body'] },   // CABINET_FIX_V1_R1 — и имя автора ставит сервер (stamps)
              update: { roles: ['admin','doctor'], columns: ['name','doc_type','scope','body'] },
              delete: { roles: ['admin','doctor'] } },
     filters: ['id','author_id','scope','updated_at'],
@@ -1029,7 +1029,12 @@ export const REGISTRY = {
     // удаляет только автор; администратор — всё. Автора ставит сервер из
     // сессии: подписать шаблон чужим именем — значит положить его в чужие «Мои».
     scope:   { column: 'author_id', allRoles: ['admin'], readAlso: { column: 'scope', value: 'shared' } },   // CABINET_FIX_V1_TPL
-    stamps:  { author_id: { on: 'insert' } },   // CABINET_FIX_V1_TPL
+    // CABINET_FIX_V1_R1 (ревью п. 8) — и ИМЯ автора — из сессии: экран мог подписать шаблон чужим именем.
+    stamps:  { author_id: { on: 'insert' }, author_name: { on: 'insert', from: 'full_name' } },   // CABINET_FIX_V1_TPL · CABINET_FIX_V1_R1
+    // CABINET_FIX_V1_R1 (ревью п. 11) — правка или удаление, которые ограничение
+    // по автору не пропустило, задевают 0 строк — и отвечали 200: окно говорило
+    // «Шаблон обновлён». Для этой таблицы 0 строк — отказ с причиной (routes/db.js).
+    zeroRowRefusal: 'Шаблон не изменён: менять и удалять его может только автор или администратор (или шаблон уже удалён).',   // CABINET_FIX_V1_R1
     // CABINET_FIX_V1_TPL — doc_type — код рода ('0' приём, '1' диагностика,
     // '2' история болезни, '3' рецепт) в TEXT-колонке. Окно слало число, и
     // better-sqlite3 связывал его как REAL: в базе dev шаблон лежит как '1.0'.
@@ -1766,6 +1771,8 @@ export function writableColumns(t, op) { const e = REGISTRY[t]; return e && e.wr
 export function filterAllowed(t, col) { return !!REGISTRY[t] && REGISTRY[t].filters.includes(col); }
 export function jsonColumns(t) { return (REGISTRY[t] && REGISTRY[t].json) ? [...REGISTRY[t].json] : []; }
 // CABINET_FIX_V1_TPL — TEXT-колонки с кодом: число из запроса пишется строкой ('1', не '1.0').
+// CABINET_FIX_V1_R1 — правка/удаление, задевшие 0 строк, — отказ с этой причиной (только у таблиц, где объявлено).
+export function zeroRowRefusal(t) { const e = REGISTRY[t]; return (e && typeof e.zeroRowRefusal === 'string') ? e.zeroRowRefusal : null; }
 export function textColumns(t) { return (REGISTRY[t] && REGISTRY[t].text) ? [...REGISTRY[t].text] : []; }
 export function embedEntry(t, name) {
   const e = REGISTRY[t];
