@@ -10,6 +10,7 @@ import { readIdentity } from '../services/branch-sync/identity.js';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 import { constraintRefusal, errorBody } from '../services/server-message.js';   // V3120_I18N
+import { signedVersionsDropped, SIGNED_CONFLICT_MESSAGE } from '../services/domain/cabinet-notes.js';   // CABINET_FIX_V1_R4
 // CRM_REAL_BOOKING_V1 — статус услуги двигают экраны, и двигают они его через
 // эту дверь: работа над пациентом доказывает, что он пришёл.
 import { crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../services/crm/visit-status.js';
@@ -189,6 +190,22 @@ function refuseVisitLineWrite(db, meta, body, user) {
   return null;
 }
 
+// CABINET_FIX_V1_R4 (ревью 4, п. 2) — подписанная версия документа кабинета не
+// стирается записью из другого окна (вторая вкладка, другой компьютер, экран,
+// перерисованный во время подписи): см. services/domain/cabinet-notes.js.
+// Строки — тем же compile(), что и сама правка (те же права и отбор).
+function refuseSignedNotesLoss(db, meta, body, user) {   // CABINET_FIX_V1_R4
+  if (!meta || meta.table !== 'visit_services' || meta.op !== 'update') return null;   // CABINET_FIX_V1_R4
+  const values = body && body.values && !Array.isArray(body.values) ? body.values : null;   // CABINET_FIX_V1_R4
+  if (!values || typeof values.notes !== 'string') return null;   // CABINET_FIX_V1_R4
+  let rows = [];   // CABINET_FIX_V1_R4
+  try {   // CABINET_FIX_V1_R4
+    const sel = compile({ table: body.table, op: 'select', columns: 'id,notes', filters: body.filters }, user, { db });   // CABINET_FIX_V1_R4
+    rows = db.prepare(sel.sql).all(...sel.params);   // CABINET_FIX_V1_R4
+  } catch { return null; }   // CABINET_FIX_V1_R4 — не прочитать — решает сама правка (те же права)
+  return rows.some((r) => signedVersionsDropped(r.notes, values.notes)) ? SIGNED_CONFLICT_MESSAGE : null;   // CABINET_FIX_V1_R4
+}   // CABINET_FIX_V1_R4
+
 /**
  * CRM_REAL_BOOKING_V1 — РАБОТА НАД ПАЦИЕНТОМ ДОКАЗЫВАЕТ, ЧТО ОН ПРИШЁЛ.
  *
@@ -329,6 +346,8 @@ export function dbRoutes(db) {
     if (visitLineRefusal) {
       return res.status(409).json({ error: { code: 'conflict', message: visitLineRefusal } });
     }
+    const signedLoss = refuseSignedNotesLoss(db, compiled.meta, req.body, req.user);   // CABINET_FIX_V1_R4
+    if (signedLoss) return res.status(409).json({ error: { code: 'signed_conflict', message: signedLoss } });   // CABINET_FIX_V1_R4
 
     // CRM_CALENDAR_MIRROR_V1 — что заденет правка (и отказ, если она трогает
     // услугу заявки, уже выставленную или начатую). До выполнения: база ещё
