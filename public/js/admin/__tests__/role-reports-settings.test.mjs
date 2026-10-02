@@ -112,19 +112,31 @@ test('роль только с «Журналами» видит две плит
 // «Отчёты» (reports-hub) нет, ключа `reports` нет, есть одна группа «Журналы:
 // Просмотр». Пункт меню и маршрут хаба открываются по группе (как у оператора
 // колл-центра ниже) — иначе выданные журналы были бы недостижимы.
-test('главный врач после миграции 235: пункт меню и маршрут «Отчётов» открыты, внутри — только журналы', async () => {
+//
+// «Главный врач» — только ДОПОЛНИТЕЛЬНАЯ роль (EXTRA_ONLY_ROLES, services/roles.js):
+// человек — врач, а admin.js объединяет строки «doctor» и «head_doctor»
+// (setEffectiveFromRoles). Так и проверяется (найдено проверкой в браузере:
+// с основной ролью head_doctor приложение пустое целиком — такой роли не бывает).
+test('врач с ролью «Главный врач» после миграции 235: пункт меню и маршрут «Отчётов» открыты, внутри — только журналы', async () => {
   const { openDb } = await import('../../../../server/db/connection.js');
   const { migrate } = await import('../../../../server/db/migrate.js');
   const db = openDb(':memory:');
-  let row;
+  const rows = {};
   try {
     migrate(db);
-    row = db.prepare("SELECT permissions FROM role_permissions WHERE role = 'head_doctor'").get();
+    for (const r of ['doctor', 'head_doctor']) rows[r] = JSON.parse(db.prepare('SELECT permissions FROM role_permissions WHERE role = ?').get(r).permissions);
   } finally { db.close(); }
-  const p = JSON.parse(row.permissions);
+  const p = rows.head_doctor;
   assert.ok(!p.sections.includes('reports-hub') && !('reports' in p.grants), 'стенд не тот: у главного врача появился раздел «Отчёты»');
+  assert.ok(!rows.doctor.sections.includes('reports-hub'), 'стенд не тот: у врача появился раздел «Отчёты»');
   assert.equal(p.grants['reports.journals'], 'view');
-  perms.setEffectiveFromRole({ name: 'head_doctor', permissions: p });
+  // Врач без надстройки отчётов не видит.
+  perms.setEffectiveFromRoles([{ name: 'doctor', permissions: rows.doctor }]);
+  try {
+    assert.deepStrictEqual(visibleReports(), []);
+    assert.equal(perms.isModuleAllowed('reports-hub'), false);
+  } finally { perms.setFullAccess('Admin'); }
+  perms.setEffectiveFromRoles([{ name: 'doctor', permissions: rows.doctor }, { name: 'head_doctor', permissions: p }]);
   try {
     assert.deepStrictEqual(visibleReports(), ['service_journal', 'inpatient_register']);
     assert.equal(perms.isModuleAllowed('reports-hub'), true, 'пункта меню «Отчёты» нет');
