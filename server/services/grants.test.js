@@ -309,7 +309,8 @@ test('каждая строка справочника называет пров
   // разделов не прибавил: группы отчётов и плитки настроек — окна прежних
   // разделов «Отчёты» и «Настройки».
   assert.equal(CATALOG.length, 18, 'в справочнике восемнадцать разделов');
-  assert.equal(CATALOG.find((s) => s.key === 'reports').windows.length, 8, 'восемь групп отчётов, Telegram-бот — восьмая');
+  // JOURNALS_V1_ACCESS — девятая группа «Журналы» (журнал услуг и реестр стационарных пациентов).
+  assert.equal(CATALOG.find((s) => s.key === 'reports').windows.length, 9, 'девять групп отчётов: «Журналы» — после «По услугам», Telegram-бот — последняя');
   // PACKAGES_V1 — двадцать шестая плитка «Пакеты услуг» и её «Цены и проценты».
   assert.equal(CATALOG.find((s) => s.key === 'settings').windows.length, 26, 'плитки хаба настроек');
   assert.equal(CATALOG.find((s) => s.key === 'settings').actions.length, 8, '«Цены и проценты» у восьми плиток');

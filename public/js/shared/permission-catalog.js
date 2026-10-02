@@ -289,6 +289,12 @@ export const CATALOG = [
       { key: 'reports.doctor_pay', label: 'Оплата врачей', desc: 'Зарплаты врачей, стационарная доля, отчёты по врачам — начисления каждого врача. Свои начисления врач видит в кабинете всегда.', levels: ['none', 'view', 'edit'], levelDesc: { edit: 'Закрывает месяц оплаты врачей.' }, enforced: 'rpc:run_report' },
       { key: 'reports.referrals',  label: 'Рефералы', desc: 'Кто направил пациентов и вознаграждение за направления.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
       { key: 'reports.services',   label: 'По услугам и рентабельность', desc: 'Отчёт по услугам, по специальностям и рентабельность операций.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
+      // JOURNALS_V1_ACCESS (владелец, 02.10: настройку ролей доверяю) — журнал
+      // услуг и реестр стационарных пациентов: диагнозы, заключения, паспорта,
+      // телефоны и оплаты. Ненастроенная роль — прежнее правило групп
+      // (администратор и раздел «Отчёты»); штатным кассиру и складу миграция 235
+      // записала «Нет», главному врачу — «Просмотр».
+      { key: 'reports.journals',   label: 'Журналы', desc: 'Журнал услуг (УЗИ, ЭКГ и любые выбранные) и реестр стационарных пациентов: диагнозы, заключения, паспортные данные, телефоны и оплаты пациентов.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
       { key: 'reports.stock',      label: 'Закупки и склад', desc: 'Приход, расход, остатки и сроки годности.', levels: ['none', 'view'], enforced: 'rpc:run_report' },
       { key: 'reports.callcenter', label: 'Колл-центр', desc: 'Загрузка стойки, воронка заявок и работа операторов.', levels: ['none', 'view'], enforced: 'rpc:callcenter_report' },
       // ADMIN_ROWS_GRANTABLE_V1 — охват Telegram-бота выдаётся «Просмотром»
@@ -429,6 +435,7 @@ export const REPORT_GROUP = Object.freeze({
   by_specialty: 'reports.services',     // DOCTOR_LINES_SPECIALTY_V1 — «По специальностям»
   procurement: 'reports.stock', stock_consumption: 'reports.stock',
   stock_statement: 'reports.stock', stock_expiry: 'reports.stock',
+  service_journal: 'reports.journals', inpatient_register: 'reports.journals',   // JOURNALS_V1_ACCESS — журнал услуг и реестр стационарных пациентов
   callcenter: 'reports.callcenter',
   // ADMIN_ROWS_GRANTABLE_V1 — охват бота: своя группа с правилом перехода
   // «только администратор» (у строки `adminDefault`).
