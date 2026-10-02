@@ -130,9 +130,12 @@ test('каждая запись кабинета несёт основу (чер
 test('п. 2: две вкладки — версия другой вкладки остаётся в истории, второе «Сохранить» её не стирает; подпись её не убирает', async () => {
     const a = await opened(21, notesOf({ chief_complaint: 'Исходно' }), { container: new El('div') });
     const b = await opened(21, null, { container: new El('div') });
+    // CABINET_FIX_V1_R7 — две вкладки браузера: у каждой своя метка (в браузере — своя загрузка страницы)
+    WS.__setTabIdForTests('tab-A');
     touch(a);
     put(a, 'chief_complaint', 'ТЕКСТ-A');
     assert.ok(await WS.saveDraft(a, { silent: true }));
+    WS.__setTabIdForTests('tab-B');
     touch(b);
     put(b, 'chief_complaint', 'ТЕКСТ-B');
     TOASTS.length = 0;
@@ -151,6 +154,7 @@ test('п. 2: две вкладки — версия другой вкладки 
     await WS.signDocument(b);
     assert.deepEqual(kinds(21), ['draft', 'signed']);
     assert.deepEqual(draftTexts(21), ['ТЕКСТ-A']);
+    WS.__setTabIdForTests('tab-r6');
 });
 
 test('п. 2: документ изменился без чужого черновика (заметка медсестры) — без слов о «версии из другого окна»', async () => {
