@@ -4360,12 +4360,19 @@ const JOURNAL_PAID_SQL = (vs) => `${vs}.status IN (${sqlList(LAB_RESULT_STATUSES
 // заявки admitted_at = время заявки; не отмена — у неё нет выписки) не позже
 // дня и не выписан раньше него. Несколько — последняя поступившая.
 const STAYED_STATUSES = [...IN_BED_STATUSES, 'discharged'];
-const IN_BED_ON_DAY_SQL = (patientExpr, dayExpr) => `(SELECT ab.id FROM admissions ab
+// JOURNALS_V1_RJ1 (ревью, п. 7) — выписан и снова положен в тот же день: по
+// дню «шли» оба случая. Сначала — случай, в чьё ВРЕМЯ попадает строка
+// (timeExpr: её scheduled_at, иначе время визита; сравнение julianday — метки
+// ISO с «Z» и без); не попала ни в один — прежнее правило дня, последний.
+const IN_BED_ON_DAY_SQL = (patientExpr, dayExpr, timeExpr) => `(SELECT ab.id FROM admissions ab
      WHERE ab.patient_id = ${patientExpr}
        AND ab.status IN (${sqlList(STAYED_STATUSES)})
        AND ${localDate('ab.admitted_at')} <= ${dayExpr}
        AND (ab.discharged_at IS NULL OR ${localDate('ab.discharged_at')} >= ${dayExpr})
-     ORDER BY ab.admitted_at DESC, ab.id DESC LIMIT 1)`;
+     ORDER BY CASE WHEN julianday(ab.admitted_at) <= julianday(${timeExpr})
+                    AND (ab.discharged_at IS NULL OR julianday(ab.discharged_at) >= julianday(${timeExpr}))
+                   THEN 0 ELSE 1 END,   -- JOURNALS_V1_RJ1
+              ab.admitted_at DESC, ab.id DESC LIMIT 1)`;
 // Строка, чей счёт возвращён: денег за неё у клиники нет — «возврат не показывается».
 // JOURNALS_V1_RJ1 (ревью, п. 1) — касса так счёт почти не помечает: полный
 // возврат ОТМЕНЯЕТ счёт (refund_payment → closeFullyRefunded → voidInvoice),
@@ -4401,7 +4408,7 @@ function journalVisitLines(db, args, ctx, { from, to, idsJson }) {
            -- JOURNALS_V1_CONCLUSION — статус строки для «Заключения» без документа: отмечена
            -- выполненной; день «Проверить и выдать» лаборатории (verified_at).
            CASE WHEN vs.status = 'completed' THEN 1 ELSE 0 END AS done, ${localDate('vs.verified_at')} AS released_day,
-           ${IN_BED_ON_DAY_SQL('v.patient_id', day)} AS admission_id
+           ${IN_BED_ON_DAY_SQL('v.patient_id', day, 'COALESCE(vs.scheduled_at, v.visit_date)')} AS admission_id   -- JOURNALS_V1_RJ1 — время строки
       FROM visit_services vs
       JOIN visits v   ON v.id = vs.visit_id
       JOIN services s ON s.id = vs.service_id

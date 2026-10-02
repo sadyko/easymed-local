@@ -224,6 +224,31 @@ test('возвраты настоящей кассой: полный возвр�
   } finally { db.close(); }
 });
 
+// JOURNALS_V1_RJ1 (ревью, п. 7) — выписан и снова положен в тот же день: по
+// одному дню оба случая «шли», и строка доставалась последнему поступившему.
+// Теперь сначала — случай, в чьё ВРЕМЯ попадает строка (её scheduled_at, иначе
+// время визита); не попала ни в один — прежнее правило дня, последний.
+test('стационар: выписан и снова положен в тот же день — строка идёт к случаю, в чьё время она была', () => {
+  const db = clinic();
+  try {
+    const ibOn12 = (svc) => objectsOf(journal(db, { from: '2026-03-12', to: '2026-03-12' }))
+      .filter((o) => o['Услуга'] === svc).map((o) => o['ИБ №']);
+    db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (42, 1, '2026-03-12T15:00:00Z', 'arrived')").run();
+    db.prepare("INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status) VALUES (42, 42, ?, 1, 1, 0, 0, 'completed')").run(SVC.usgKid);
+    assert.deepEqual(ibOn12('УЗИ почек'), ['ИБ-7'], 'после выписки в день выписки, без нового случая — правило дня');
+    // Азизов выписан 12.03 в 07:00 (ИБ-7) и снова положен в 10:00 (ИБ-10).
+    db.prepare(`INSERT INTO admissions (id, admission_no, patient_id, attending_doctor_id, status, admitted_at, discharged_at)
+                VALUES (5, 'ИБ-10', 1, 2, 'active', '2026-03-12T10:00:00Z', NULL)`).run();
+    // Визит открыт в 06:00 (до выписки), а строка назначена на 13:00 — время строки.
+    db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (41, 1, '2026-03-12T06:00:00Z', 'arrived')").run();
+    db.prepare(`INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status, scheduled_at)
+                VALUES (41, 41, ?, 1, 1, 0, 0, 'completed', '2026-03-12T13:00:00Z')`).run(SVC.usgAbd);
+    assert.deepEqual(ibOn12('ЭКГ'), ['ИБ-7'], 'ЭКГ в 07:00 — ещё первый случай, а не последний поступивший');
+    assert.deepEqual(ibOn12('УЗИ почек'), ['ИБ-10'], 'в 15:00 — второй случай');
+    assert.deepEqual(ibOn12('УЗИ брюшной полости'), ['ИБ-10'], 'время строки (scheduled_at 13:00), а не визита (06:00)');
+  } finally { db.close(); }
+});
+
 // JOURNALS_V1_RJ1 (ревью, п. 3) — строка акта в журнале, только когда отмечена
 // «Выполнено» (performed_at, как IN_DONE_SQL выплаты врачу), и датирована днём
 // выполнения: запланированная медсестрой на завтра — ещё не оказанная услуга.
