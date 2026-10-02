@@ -2562,19 +2562,54 @@ export function __setTimingForTests(t) { Object.assign(TIMING, t || {}); }
 // CABINET_FIX_V1_R7 (ревью 7, п. 4) — МЕТКА ВКЛАДКИ: одна на загрузку страницы, пишется в
 // каждый черновик (tab). Вкладка заменяет только черновики со своей меткой.
 let TAB_ID = 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+// CABINET_FIX_V1_R8 (ревью 8, п. 2) — ПРЕЖНИЕ ЗАГРУЗКИ ЭТОЙ ЖЕ ВКЛАДКИ — СВОИ. Каждая
+// загрузка страницы берёт новую метку; уходя (pagehide: F5, переход, закрытие),
+// страница дописывает свою метку в список вкладки в sessionStorage. Новая загрузка
+// считает своими метки из этого списка — только страниц, которые уже ушли. Своя
+// живая метка туда не попадает, поэтому две ЖИВЫЕ вкладки своими друг другу не
+// становятся — и после «Дублировать» (браузер копирует sessionStorage: у копии те же
+// ушедшие страницы, но своя метка, а живая страница оригинала в списке не значится).
+// sessionStorage недоступен — как раньше: своя только метка этой загрузки.
+const OWN_PAGES_KEY = 'easymed.ws.ownPageIds';
+function readOwnPages() {
+    try {
+        const raw = globalThis.sessionStorage ? globalThis.sessionStorage.getItem(OWN_PAGES_KEY) : null;
+        const list = raw ? JSON.parse(raw) : [];
+        return new Set(Array.isArray(list) ? list.map(String) : []);
+    } catch (e) { return new Set(); }
+}
+let OWN_PAGES = readOwnPages();
+function rememberThisPage() {
+    try {
+        const list = [...readOwnPages()].filter((x) => x !== TAB_ID);
+        list.push(TAB_ID);
+        globalThis.sessionStorage.setItem(OWN_PAGES_KEY, JSON.stringify(list.slice(-50)));
+    } catch (e) { /* без sessionStorage — как раньше */ }
+}
+try { if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener('pagehide', rememberThisPage); } catch (e) { /* без окна — проверки */ }
+const ownTab = (id) => !!id && (id === TAB_ID || OWN_PAGES.has(String(id)));
 /** Только для проверок: вкладки браузера в одном процессе. */
 export function __setTabIdForTests(id) { TAB_ID = String(id); }
-// Свой черновик: с меткой этой вкладки или без метки (до обновления), не отмеченный kept.
-function ownDraft(e) { return !!e && e.kind === 'draft' && (e.tab === TAB_ID || (!e.tab && !e.kept)); }
+/** Только для проверок: перезагрузка страницы этой вкладки (pagehide + новая загрузка). */
+export function __reloadPageForTests(id) { rememberThisPage(); TAB_ID = String(id); OWN_PAGES = readOwnPages(); }
+// Свой черновик: с меткой этой загрузки или прежней загрузки этой вкладки, или без
+// метки (до обновления) и не отмеченный kept.
+function ownDraft(e) { return !!e && e.kind === 'draft' && (ownTab(e.tab) || (!e.tab && !e.kept)); }
 /**
  * История без своих черновиков; от каждой чужой вкладки — один, последний (без
  * метки, но kept, — тоже один). Так «Черновик» и подпись этой вкладки не трогают
  * чужие черновики, а они не копятся.
+ * CABINET_FIX_V1_R8 (п. 2) — opts.sign: подпись оставляет только «живые» чужие
+ * черновики — сохранённые после прошлой подписи строки. Черновик другой вкладки,
+ * уже переживший одну подпись (его вкладка с тех пор не сохраняла), уходит:
+ * вкладка, которая ещё работает, при следующем сохранении запишет свой текст снова.
  */
-function keepForeignDrafts(history) {
+function keepForeignDrafts(history, opts = {}) {
     const list = Array.isArray(history) ? history : [];
+    let lastSigned = '';
+    if (opts.sign) for (const e of list) if (e && e.kind === 'signed' && String(e.savedAt) > lastSigned) lastSigned = String(e.savedAt);
     const last = new Map();
-    list.forEach((e, i) => { if (e && e.kind === 'draft' && !ownDraft(e)) last.set(e.tab || '', i); });
+    list.forEach((e, i) => { if (e && e.kind === 'draft' && !ownDraft(e) && (!opts.sign || String(e.savedAt) > lastSigned)) last.set(e.tab || '', i); });
     return list.filter((e, i) => !(e && e.kind === 'draft') || (!ownDraft(e) && last.get(e.tab || '') === i));
 }
 /** CABINET_FIX_V1_R7 (п. 5) — «Возобновить» черновик в форму; несохранённое на экране — только с согласия. Экспорт — для проверки. */
@@ -2765,7 +2800,7 @@ async function adoptServerRecords(ctx, attempted = null) {
     if (FAILED_READ.has(fresh)) return { ok: false, foreign: 0 };
     let foreign = 0;
     for (const e of fresh.history || []) {
-        if (!e || e.kind !== 'draft' || e.tab === TAB_ID || known.has(entryKey(e))) continue;
+        if (!e || e.kind !== 'draft' || ownTab(e.tab) || known.has(entryKey(e))) continue;   // ownTab — CABINET_FIX_V1_R8
         if (!e.tab) { if (e.kept) continue; e.kept = 1; }
         foreign++;
     }
@@ -2864,7 +2899,11 @@ async function settleWrite(ctx, payload, sent, res, opts, late, extraUpdate = {}
                 const fresh = stateOf(ctx).payload;
                 let again = null;
                 try { again = opts.reapply(ownPayload(derivePayload(fresh, JSON.parse(JSON.stringify(fresh))), ctx.visitServiceId)); } catch (e) { console.warn('[workspace] reapply:', e); }
-                if (!again) { toast(tr('Документ изменился, пока шло сохранение. Список обновлён — повторите действие, если оно ещё нужно.'), 'fail'); return false; }
+                if (!again) {
+                    toast(tr('Документ изменился, пока шло сохранение. Список обновлён — повторите действие, если оно ещё нужно.'), 'fail');
+                    if (typeof opts.onStale === 'function') { try { opts.onStale(fresh); } catch (e) { console.warn('[workspace] onStale:', e); } }   // CABINET_FIX_V1_R8 (п. 1)
+                    return false;
+                }
                 const ok = await writePayload(ctx, again, extraUpdate, { ...opts, reapply: null });
                 if (ok) toast(tr('Документ изменился, пока шло сохранение — изменение применено к новой версии.'), 'ok');
                 return ok;
@@ -3236,6 +3275,8 @@ export function openPrescriptionDialog(ctx, editIndex) {   // CABINET_FIX_V1_R4 
         const doseInput  = h('input', { value: seed?.dose  || '', placeholder: 'напр. 500 мг' });
         const freqInput  = h('input', { value: seed?.freq  || '', placeholder: 'напр. 2 раза в день во время еды' });
         const durInput   = h('input', { value: seed?.dur   || '', placeholder: 'напр. 90 дней' });
+        // CABINET_FIX_V1_R8 (п. 1) — и значение поля (не только атрибут): строки, заполненные заново новой версией, читаются как показаны.
+        nameInput.value = seed?.name || ''; doseInput.value = seed?.dose || ''; freqInput.value = seed?.freq || ''; durInput.value = seed?.dur || '';
         const notesInput = h('textarea', { rows: '2', placeholder: 'Необязательно — указания, предупреждения…' });
         if (seed?.notes) notesInput.value = seed.notes;
         const nurseInput = h('textarea', { rows: '2', placeholder: 'напр. в/м 2 раза в день, после еды; контроль АД…' });
@@ -3315,9 +3356,32 @@ export function openPrescriptionDialog(ctx, editIndex) {   // CABINET_FIX_V1_R4 
     }
     // RX_MANAGE_V1 — «Рецепт» opens the WHOLE current prescription so any drug can be
     // edited or removed (корзина), and new ones added; single-drug edit still works.
-    const _seed = existing ? [existing] : ((wsState.payload && wsState.payload.prescriptions || []).filter(x => x && x.name));
-    if (_seed.length) _seed.forEach(sd => { addRow(sd).seed = sd; });   // seed — CABINET_FIX_V1_R7 (п. 1)
-    else addRow();
+    // CABINET_FIX_V1_R8 (п. 1) — let: после «повторите» окно заполняется новой версией (seedRows).
+    let _seed = existing ? [existing] : ((wsState.payload && wsState.payload.prescriptions || []).filter(x => x && x.name));
+    // Препарат окна «Изменить рецепт» — по содержимому (не по номеру editIndex).
+    let target = existing || null;
+    function seedRows(list) {
+        for (const r of rows.splice(0)) r.el.remove();
+        _seed = list.slice();
+        if (_seed.length) _seed.forEach(sd => { addRow(sd).seed = sd; });   // seed — CABINET_FIX_V1_R7 (п. 1)
+        else addRow();
+    }
+    seedRows(_seed);
+    // CABINET_FIX_V1_R8 (п. 1) — правку не повторить (рецепт изменился): окно показывает то,
+    // что лежит у строки сейчас; врач видит новую версию и вносит правку заново. «Изменить
+    // рецепт»: тот же препарат — по названию, если он один такой; иначе окно закрывается.
+    function refillFrom(p) {
+        const list = (p && Array.isArray(p.prescriptions) ? p.prescriptions : []).filter((x) => x && x.name);
+        if (target) {
+            const nm = String(target.name || '').trim();
+            const same = list.filter((x) => String(x.name || '').trim() === nm);
+            if (same.length !== 1) { overlay.remove(); return; }
+            target = same[0];
+            seedRows([target]);
+            return;
+        }
+        seedRows(list);
+    }
 
     // Only in «new» mode can you stack several drugs.
     const addBtn = existing ? null : h('button', { class: 'btn btn-outline', type: 'button', style: { marginBottom: '6px' }, onclick: () => { const r = addRow(); const inp = r.el.querySelector('input'); if (inp) inp.focus(); } },
@@ -3440,9 +3504,9 @@ export function openPrescriptionDialog(ctx, editIndex) {   // CABINET_FIX_V1_R4 
                 btn.disabled = true;
                 try {
                     const entries = rows.map(r => r.read()).filter(e => e.name);
-                    const payload = await currentPayload(ctx);
-                    payload.prescriptions = Array.isArray(payload.prescriptions) ? payload.prescriptions : [];
-                    const was = editIndex != null ? (payload.prescriptions[editIndex] ?? null) : null;   // CABINET_FIX_V1_R6 (п. 6)
+                    const cached = await currentPayload(ctx);
+                    if (FAILED_READ.has(cached)) { refuseWhileLoading(ctx, { force: true }); return; }
+                    const cachedList = Array.isArray(cached.prescriptions) ? cached.prescriptions : [];
                     // CABINET_FIX_V1_R7 (п. 1) — что окно сделало с каждым препаратом, с которым открылось
                     // (оставило, изменило, убрало), и что добавило.
                     const plan = _seed.map((sd) => {
@@ -3452,22 +3516,20 @@ export function openPrescriptionDialog(ctx, editIndex) {   // CABINET_FIX_V1_R4 
                         return rxSame(e, sd) ? { sd, op: 'keep' } : { sd, op: 'edit', e };
                     });
                     const added = rows.filter((r) => !r.seed).map((r) => r.read()).filter((e) => e.name);
-                    if (editIndex != null) {
+                    if (target) {
                         if (!entries.length) { toast('Укажите название препарата.', 'fail'); return; }
-                        payload.prescriptions[editIndex] = entries[0];
-                    } else {
-                        if (!entries.length && payload.prescriptions.length && !confirm(tr('Удалить все препараты из рецепта?'))) return;
-                        payload.prescriptions = entries;   // RX_MANAGE_V1 — the dialog is the full list
-                    }
-                    // CABINET_FIX_V1_R6 (п. 6) · CABINET_FIX_V1_R7 (п. 1) — документ изменился: те же
-                    // правки — в новую версию, по самим препаратам (по содержимому), а не по номеру и не
-                    // «весь список окна»: препарат, добавленный другим окном, остаётся. Препарат,
-                    // который здесь меняли или убирали, а в новой версии его уже нет в прежнем виде
-                    // (изменён или убран другим окном), — не угадывать: null, врачу — «повторите».
+                    } else if (!entries.length && cachedList.length && !confirm(tr('Удалить все препараты из рецепта?'))) return;
+                    // CABINET_FIX_V1_R6 (п. 6) · CABINET_FIX_V1_R7 (п. 1) · CABINET_FIX_V1_R8 (п. 1) — правки
+                    // окна ложатся на список строки, по самим препаратам (по содержимому), а не по номеру
+                    // и не «весь список окна»: препарат, добавленный другим окном, остаётся. Препарат,
+                    // который здесь меняли или убирали, а в списке его уже нет в прежнем виде (изменён
+                    // или убран другим окном), — не угадывать: null, врачу — «повторите». Так пишется
+                    // КАЖДАЯ запись окна: и первое «Сохранить» (на копию списка вкладки — он мог
+                    // обновиться, пока окно было открыто), и повтор после отказа.
                     const reapply = (p) => {
-                        const list = Array.isArray(p.prescriptions) ? p.prescriptions : [];
-                        if (editIndex != null) {
-                            const i = list.findIndex((x) => rxSame(x, was));
+                        const list = Array.isArray(p.prescriptions) ? p.prescriptions.slice() : [];
+                        if (target) {
+                            const i = list.findIndex((x) => rxSame(x, target));
                             if (i < 0) return null;
                             list[i] = entries[0]; p.prescriptions = list; return p;
                         }
@@ -3485,7 +3547,9 @@ export function openPrescriptionDialog(ctx, editIndex) {   // CABINET_FIX_V1_R4 
                         p.prescriptions = out;
                         return p;
                     };
-                    if (!await writePayload(ctx, payload, {}, { reapply })) return;
+                    const first = reapply(ownPayload(derivePayload(cached, JSON.parse(JSON.stringify(cached))), ctx.visitServiceId));
+                    if (!first) { toast(tr('Документ изменился, пока шло сохранение. Список обновлён — повторите действие, если оно ещё нужно.'), 'fail'); refillFrom(cached); return; }
+                    if (!await writePayload(ctx, first, {}, { reapply, onStale: refillFrom })) return;
                     paintPrescriptions(ctx);
                     overlay.remove();
                     toast(existing ? 'Рецепт обновлён.' : 'Рецепт сохранён.');
@@ -5185,7 +5249,7 @@ async function handleSignFinalize(ctx) {
     payload.diagImages = diagImages;   // DIAG_IMAGES_V1
     payload.docType = docType;   // CABINET_FIX_V1_TPL
     payload.dxSplit = 1;   // CABINET_FIX_V1_R3 (F7)
-    payload.history = keepForeignDrafts(payload.history);   // CABINET_FIX_V1_R6 (п. 2) · CABINET_FIX_V1_R7 (п. 4) — подпись убирает только свои черновики
+    payload.history = keepForeignDrafts(payload.history, { sign: true });   // CABINET_FIX_V1_R6 (п. 2) · CABINET_FIX_V1_R7 (п. 4) · CABINET_FIX_V1_R8 (п. 2) — подпись убирает свои черновики и чужие, пережившие прошлую подпись
     payload.history.push(entry);
     // DOC_AMEND_AUDIT_V1 — attestation stamp on the archived snapshot (signer / when / version).
     _docData.meta = { signedBy: _actor.full_name || '', signedAt: entry.savedAt, version: _prevSigned.length + 1 };
