@@ -10,9 +10,7 @@
 
 import { h, Icon, PageHead, toast, clear } from '../ui.js';
 import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ
-import { sanitizeRichHtml } from '../sanitize.js';
 import { supabase } from '../../supabase.js';
-import { currentUser } from '../data.js';
 import {
     DEFAULT_DOC_SETTINGS,
     loadDocSettings,
@@ -740,139 +738,23 @@ function setVariant(type, key) {
 
 // DOC_TEMPLATES_V1 — manage the shared «Шаблоны заключений» (consultation_templates) from #documents.
 // Same library the workspace «Шаблоны» button uses; «Общие» = shared to all clinic doctors.
-const TPL_SECTIONS = [
-    ['chief_complaint', 'Жалобы'], ['hpi', 'Анамнез'], ['labs_text', 'Лабораторные'],
-    ['instrumental_text', 'Инструментальные'], ['physical_exam', 'Осмотр'],
-    ['primary_diagnosis', 'Диагноз'], ['therapy_text', 'Терапия'], ['recommendations_text', 'Рекомендации'],
-];
-
+//
+// CABINET_FIX_V1_TPL (2026-10-02) — ТОТ ЖЕ РЕДАКТОР, ЧТО В КАБИНЕТЕ ВРАЧА.
+// Здесь был свой второй редактор, и он разошёлся с кабинетом во всём: не
+// писал автора (шаблон становился ничьим — «Мои» его не находили), писал в
+// doc_type ПОДПИСЬ «Приём (осмотр, консультация)» вместо кода рода, не знал
+// «Заключения», «Описания» диагностики и разделов истории болезни и вырезал
+// HTML при каждой правке. Теперь «Документы» открывают библиотеку кабинета
+// в режиме управления: все шаблоны документов, те же разделы и правила
+// (правит автор или администратор — так же решает сервер), без «Использовать»
+// — вставлять здесь некуда. Модуль кабинета грузится в момент нажатия
+// (динамический import — разрешённый способ позвать соседний экран).
 async function openDocTemplatesModal() {
-    const me = currentUser() || {};
-    const st = { rows: [], filter: 'all', q: '', mode: 'view', selId: null, draft: null };
-    const overlay = h('div', { class: 'modal', style: { zIndex: '170' } });
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
-
-    const listEl = h('div', { class: 'tplm-list' });
-    const detailEl = h('div', { class: 'tplm-detail' });
-    const footMeta = h('span', { class: 'muted', style: { fontSize: '12.5px', display: 'inline-flex', alignItems: 'center', gap: '6px' } });
-    const searchInp = h('input', { class: 'tplm-input', type: 'search', placeholder: 'Поиск по названию…', style: { maxWidth: '320px' }, oninput: (e) => { st.q = e.target.value; paintList(); } });
-
-    let barEl;
-    const fbtn = (id, label) => h('button', { class: 'btn btn-sm ' + (st.filter === id ? 'btn-primary' : 'btn-outline'), onclick: () => { st.filter = id; const nb = buildBar(); barEl.replaceWith(nb); barEl = nb; paintList(); } }, label);
-    function buildBar() {
-        return h('div', { class: 'tplm-bar' },
-            searchInp,
-            h('div', { style: { display: 'flex', gap: '6px' } }, fbtn('all', 'Все'), fbtn('mine', 'Мои'), fbtn('shared', 'Общие')),
-            h('span', { style: { flex: 1 } }),
-            h('button', { class: 'btn btn-outline', onclick: () => startNew() }, Icon('Plus', { size: 14 }), ' Новый шаблон'));
-    }
-    barEl = buildBar();
-
-    overlay.appendChild(h('div', { class: 'modal-backdrop', onclick: close }));
-    overlay.appendChild(h('div', { class: 'modal-card', style: { width: '900px', maxWidth: 'calc(100vw - 32px)', height: '85vh', display: 'flex', flexDirection: 'column' } },
-        h('header', { class: 'modal-head' }, h('h2', null, Icon('Doc', { size: 16 }), ' Шаблоны заключений'), h('button', { class: 'modal-close', onclick: close }, '×')),
-        barEl,
-        h('div', { class: 'modal-body', style: { display: 'grid', gridTemplateColumns: '300px 1fr', gap: '0', padding: '0', flex: '1', overflow: 'hidden' } }, listEl, detailEl),
-        h('footer', { class: 'modal-foot' }, footMeta, h('span', { style: { flex: 1 } }), h('button', { class: 'btn', onclick: close }, 'Закрыть'))));
-    document.body.appendChild(overlay);
-    document.addEventListener('keydown', onKey);
-    await load(); paintList(); paintDetail(); paintFootMeta();
-
-    async function load() {
-        try {
-            const { data } = await supabase.from('consultation_templates')
-                .select('id,name,doc_type,scope,body,author_id,author_name,updated_at').order('updated_at', { ascending: false });
-            st.rows = data || [];
-        } catch (e) { st.rows = []; toast('Не удалось загрузить шаблоны', 'fail'); }
-    }
-    function filtered() {
-        const ql = st.q.trim().toLowerCase();
-        return st.rows.filter(r =>
-            (st.filter === 'all' || (st.filter === 'mine' && r.author_id === me.id) || (st.filter === 'shared' && r.scope === 'shared'))
-            && (!ql || (r.name || '').toLowerCase().includes(ql)));
-    }
-    function paintFootMeta() {
-        clear(footMeta);
-        footMeta.appendChild(h('span', null, trf('{n} шаблон(ов)', { n: st.rows.length }), ' · '));
-        footMeta.appendChild(Icon('Globe', { size: 12 }));
-        footMeta.appendChild(h('span', null, ' общие видны всем врачам клиники'));
-    }
-    function paintList() {
-        clear(listEl);
-        const rows = filtered();
-        if (!rows.length) { listEl.appendChild(h('div', { class: 'tplm-empty' }, st.rows.length ? 'Ничего не найдено' : 'Пока нет шаблонов')); return; }
-        for (const r of rows) {
-            const on = st.selId === r.id;
-            listEl.appendChild(h('div', { class: 'tplm-item' + (on ? ' on' : ''), onclick: () => { st.selId = r.id; st.mode = 'view'; st.draft = null; paintList(); paintDetail(); } },
-                h('div', { class: 'tplm-item-main' },
-                    h('div', { class: 'tplm-name' }, r.name || '(без названия)'),
-                    h('div', { class: 'tplm-meta' }, (r.scope === 'shared' ? 'Общий' : 'Личный') + ' · ' + (r.author_name || '—'))),
-                r.scope === 'shared' ? Icon('Globe', { size: 13 }) : Icon('User', { size: 13 })));
-        }
-    }
-    function startNew() { st.mode = 'edit'; st.selId = null; st.draft = { name: '', scope: 'shared', doc_type: 'Приём (осмотр, консультация)', body: {} }; paintDetail(); }
-    function startEdit(r) { st.mode = 'edit'; st.selId = r.id; st.draft = { id: r.id, name: r.name || '', scope: r.scope || 'shared', doc_type: r.doc_type || 'Приём (осмотр, консультация)', body: { ...(r.body || {}) } }; paintDetail(); }
-    function paintDetail() {
-        clear(detailEl);
-        if (st.mode === 'edit') return void paintEditor();
-        const r = st.rows.find(x => x.id === st.selId);
-        if (!r) { detailEl.appendChild(h('div', { class: 'tplm-empty' }, 'Выберите шаблон слева')); return; }
-        const filled = TPL_SECTIONS.filter(([k]) => (r.body || {})[k]);
-        detailEl.appendChild(h('div', { class: 'tplm-form' },
-            h('div', { class: 'tplm-detail-head' },
-                h('b', { style: { fontSize: '15px', color: 'var(--ink-900)' } }, r.name || '(без названия)'),
-                h('span', { style: { flex: 1 } }),
-                h('button', { class: 'btn btn-outline btn-sm', onclick: () => startEdit(r) }, Icon('Edit', { size: 13 }), ' Изменить'),
-                h('button', { class: 'btn btn-outline btn-sm', style: { color: 'var(--crit-700)' }, onclick: () => askDelete(r) }, Icon('Trash', { size: 13 }))),
-            h('div', { class: 'tplm-meta', style: { marginTop: '2px' } }, (r.scope === 'shared' ? 'Общий для всех врачей' : 'Только я') + ' · ' + (r.author_name || '—')),
-            ...filled.map(([k, lbl]) => h('div', { style: { marginTop: '12px' } },
-                h('div', { style: { fontSize: '12.5px', fontWeight: 700, color: 'var(--ink-500)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '3px' } }, lbl),
-                h('div', { style: { fontSize: '13.5px', color: 'var(--ink-800)', whiteSpace: 'pre-wrap', lineHeight: '1.5' }, html: sanitizeRichHtml(r.body[k]) }))),
-            filled.length ? null : h('div', { class: 'muted', style: { marginTop: '12px', fontSize: '12.5px' } }, 'Шаблон без заполненных секций.')));
-    }
-    function paintEditor() {
-        const d = st.draft;
-        clear(detailEl);
-        const nameIn = h('input', { class: 'tplm-input', value: d.name, oninput: (e) => { d.name = e.target.value; } });
-        const sbtn = (val, label, icon) => h('button', { class: 'btn btn-sm ' + (d.scope === val ? 'btn-primary' : 'btn-outline'), onclick: () => { d.scope = val; paintEditor(); } }, Icon(icon, { size: 13 }), ' ' + label);
-        detailEl.appendChild(h('div', { class: 'tplm-form' },
-            h('b', { style: { fontSize: '13.5px', color: 'var(--ink-900)' } }, d.id ? 'Изменение шаблона' : 'Новый шаблон'),
-            h('div', { class: 'tplm-field' }, h('label', null, 'Название'), nameIn),
-            h('div', { class: 'tplm-field' }, h('label', null, 'Видимость'),
-                h('div', { style: { display: 'flex', gap: '6px' } }, sbtn('shared', 'Общий для всех', 'Globe'), sbtn('private', 'Только я', 'User'))),
-            h('div', { class: 'tplm-form-secs' }, ...TPL_SECTIONS.map(([k, lbl]) => h('div', { class: 'tplm-field' },
-                h('label', null, lbl),
-                h('textarea', { class: 'tplm-input', rows: '2', value: String(d.body[k] || '').replace(/<[^>]+>/g, ''), oninput: (e) => { d.body[k] = e.target.value; } })))),
-            h('div', { style: { display: 'flex', gap: '8px', marginTop: '6px' } },
-                h('button', { class: 'btn btn-ghost', onclick: () => { st.mode = 'view'; st.draft = null; paintDetail(); } }, 'Отмена'),
-                h('span', { style: { flex: 1 } }),
-                h('button', { class: 'btn btn-primary', onclick: (ev) => save(ev.currentTarget) }, Icon('Check', { size: 14 }), ' Сохранить шаблон'))));
-    }
-    async function save(btn) {
-        const d = st.draft;
-        if (!d.name.trim()) { toast('Укажите название шаблона', 'warn'); return; }
-        if (btn) btn.disabled = true;
-        const body = {};
-        for (const [k] of TPL_SECTIONS) { const v = String(d.body[k] || '').trim(); if (v) body[k] = v; }
-        try {
-            if (d.id) {
-                const { error } = await supabase.from('consultation_templates').update({ name: d.name.trim(), scope: d.scope, body, doc_type: d.doc_type }).eq('id', d.id);
-                if (error) throw error; toast('Шаблон обновлён', 'ok');
-            } else {
-                const { data, error } = await supabase.from('consultation_templates').insert({ name: d.name.trim(), scope: d.scope, doc_type: d.doc_type, body, author_name: (me.full_name || me.username || 'Врач') }).select('id').maybeSingle();
-                if (error) throw error; toast('Шаблон сохранён', 'ok'); if (data) st.selId = data.id;
-            }
-        } catch (e) { toast('Не удалось сохранить', 'fail'); if (btn) btn.disabled = false; return; }
-        await load(); st.mode = 'view'; st.draft = null; paintList(); paintDetail(); paintFootMeta();
-    }
-    function askDelete(r) {
-        if (!confirm(trf('Удалить шаблон «{name}»?', { name: r.name || '' }))) return;
-        (async () => {
-            try { const { error } = await supabase.from('consultation_templates').delete().eq('id', r.id); if (error) throw error; toast('Шаблон удалён', 'ok'); }
-            catch (e) { toast('Не удалось удалить', 'fail'); return; }
-            st.selId = null; await load(); paintList(); paintDetail(); paintFootMeta();
-        })();
+    try {
+        const { openTemplateLibraryModal } = await import('./service-workspace.js?v=cabtpl1');   // CABINET_FIX_V1_TPL — тот же штамп, что в admin.js
+        openTemplateLibraryModal(null, { manage: true });
+    } catch (e) {
+        toast(trf('Не удалось открыть шаблоны: {msg}', { msg: (e && e.message) || '' }), 'fail');
     }
 }
 

@@ -29,6 +29,7 @@ import { logPatientActivity } from './activity-log.js';
 import { canDelete as canDeleteRole, patientTabCanEdit } from '../permissions.js';
 import { insertRow, currentUser } from '../data.js';   // AURORA_CONSULT_TOOLBAR_V1 + AURORA_CONSULT_TEMPLATES_V1
 import { currentClinicId } from '../tenant-tables.js';   // AURORA_CONSULT_TOOLBAR_V1
+import { isAdminActor } from '../admin-actor.js';   // CABINET_FIX_V1_TPL — администратор правит любой шаблон
 import { BRANCH_BUCKET, signedUrl } from '../storage.js?v=aurora20b';   // SLICED2_PRINT_HEADER (dynamic company name + logo)
 import { printableSheet, loadDocSettings } from './doc-settings.js?v=noqr1';   // UNIFY_PRINT_V1 — ?v=db9 must match in EVERY importer
 import { renderDesignedVariant } from './doc-variants.js?v=cabdiag1';   // WYSIWYG_BLANK_V1 — stateless renderer, own ?v is safe (STAMP_ONLY_V1) · CABINET_FIX_V1_DIAG — cabdiag1
@@ -188,7 +189,7 @@ export function renderServiceWorkspace(container, { onNavigate, payload }) {
                 // CABINET_FIX_V1_DIAG — у диагностических услуг клиники отделения
                 // нет, и бланк «Диагностика» не включался НИКОГДА: врач выбирал его
                 // руками на каждом УЗИ. Правило — opensAsDiagnostics ниже.
-                if (opensAsDiagnostics({ deptKind: ctx.deptKind, svcType: ctx.svcType, typeName: ctx.typeName }) && wsState.docType !== 'diag') {
+                if (!ctx.docTypeSaved && opensAsDiagnostics({ deptKind: ctx.deptKind, svcType: ctx.svcType, typeName: ctx.typeName }) && wsState.docType !== 'diag') {   // CABINET_FIX_V1_TPL — сохранённый тип сильнее
                     wsState.docType = 'diag';
                     const _sel = ctx.container && ctx.container.querySelector('[data-doctype]');
                     if (_sel) _sel.value = 'diag';
@@ -876,11 +877,7 @@ function soapForm(ctx) {
     const doctypeSel = h('select', {
         'data-doctype': '',
         style: { height: '34px', padding: '0 10px', border: '1px solid var(--ink-200)', borderRadius: 'var(--r-sm)', background: 'var(--white)', fontFamily: 'inherit', fontSize: '13.5px', color: 'var(--ink-900)' },
-        onchange: (ev) => {
-            wsState.docType = ev.currentTarget.value || 'conclusion';
-            if (!wsState.blank) setBlankMode(ctx, true);
-            else renderBlank(ctx);
-        },
+        onchange: (ev) => setDocType(ctx, ev.currentTarget.value || 'conclusion'),   // CABINET_FIX_V1_TPL — одна дверь смены типа
     },
         // WS_DOCTYPE_TWO_V1 (2026-09-10) — владелец: «remove from the dropdown
         // list of the doctors workspace the everything except diagnostics and
@@ -2193,22 +2190,26 @@ const wsState = { payload: null, recommendations: [], emr: null, emrFilter: 'all
 let tplState = { rows: [], filter: 'all', q: '', selId: null, mode: 'view', draft: null };
 // The ONLY safe template body keys — a4Section .a4-input fields. EXCLUDES the auto-synced
 // primary_diagnosis and the hidden non-document controls (icd10 / follow_up / referral).
+// CABINET_FIX_V1_TPL — ровно разделы листа приёма (DOC_SECTIONS без «Диагноза»).
+// «Лабораторные» и «Инструментальные» здесь были, а на листе приёма таких
+// разделов нет: шаблон с ними вставлялся в поля, которых врач не видит. Старые
+// шаблоны с этими ключами вставляются своими разделами врача (TPL_LEGACY_FREE).
 const TPL_BODY_KEYS = [
     'chief_complaint',      // ЖАЛОБЫ
     'hpi',                  // АНАМНЕЗ
-    'labs_text',            // ЛАБОРАТОРНЫЕ
-    'instrumental_text',    // ИНСТРУМЕНТАЛЬНЫЕ
     'physical_exam',        // ОСМОТР
     'therapy_text',         // ТЕРАПИЯ
     'recommendations_text', // РЕКОМЕНДАЦИИ
     'conclusion_text',      // ЗАКЛЮЧЕНИЕ (WS_CONCLUSION_V1)
 ];
 const TPL_LABELS = {
-    chief_complaint: 'Жалобы', hpi: 'Анамнез', labs_text: 'Лабораторные',
-    instrumental_text: 'Инструментальные', physical_exam: 'Осмотр',
+    chief_complaint: 'Жалобы', hpi: 'Анамнез', physical_exam: 'Осмотр',
     therapy_text: 'Терапия', recommendations_text: 'Рекомендации',
     conclusion_text: 'Заключение',
 };
+/* i18n-exempt-start: имена разделов, которые уходят В ДОКУМЕНТ (свой раздел врача), не текст экрана */
+const TPL_LEGACY_FREE = [['labs_text', 'Лабораторные исследования'], ['instrumental_text', 'Инструментальные исследования']];
+/* i18n-exempt-end */
 // DOC_TPL_DIAG_V1 — templates can also target the imaging «Диагностика» document.
 const TPL_DIAG_KEYS = ['instrumental_text', 'primary_diagnosis'];
 const TPL_DIAG_LABELS = { instrumental_text: 'Описание', primary_diagnosis: 'Заключение' };
@@ -2228,8 +2229,50 @@ const TPL_TYPES = [
     { dt: 1, label: 'Диагностика (описание, заключение)', keys: TPL_DIAG_KEYS, labels: TPL_DIAG_LABELS },
     { dt: 2, label: 'История болезни (разделы документа)', keys: TPL_CASE_KEYS, labels: TPL_CASE_LABELS },
 ];
-function tplTypeOf(dt) { return TPL_TYPES.find(t => t.dt === (Number(dt) || 0)) || TPL_TYPES[0]; }
-function tplTypeWord(dt) { return Number(dt) === 1 ? '· Диагностика' : Number(dt) === 2 ? '· История болезни' : '· Приём'; }
+/**
+ * CABINET_FIX_V1_TPL — код рода шаблона строкой: '0' приём, '1' диагностика,
+ * '2' история болезни, '3' рецепт (RX_TEMPLATES_V1). Окно слало число, и в
+ * базе dev шаблон диагностики лежит как '1.0' (число связывалось как REAL):
+ * такой читается как '1'. Неизвестное — приём, как и раньше.
+ */
+export function tplDocType(v) {
+    const n = Math.trunc(Number(v));
+    return Number.isFinite(n) && n >= 0 && n <= 3 ? String(n) : '0';
+}
+function tplTypeOf(dt) { return TPL_TYPES.find(t => t.dt === Number(tplDocType(dt))) || TPL_TYPES[0]; }
+function tplTypeWord(dt) { const k = tplDocType(dt); return k === '1' ? '· Диагностика' : k === '2' ? '· История болезни' : '· Приём'; }
+/**
+ * CABINET_FIX_V1_TPL — какие шаблоны показывает окно.
+ *   '0' / '1' — кабинет врача: ТОЛЬКО род текущего типа документа. Раньше
+ *               окно кабинета показывало все роды сразу, и «Использовать» на
+ *               шаблоне другого рода клало текст в поля, которых на видимом
+ *               бланке нет: «ничего не вставилось».
+ *   '2'       — окно истории болезни (стационар);
+ *   'docs'    — «Документы»: все шаблоны документов;
+ *   '3'       — окно рецепта (RX_TEMPLATES_V1).
+ * Рецепты среди шаблонов документов не показываются, и наоборот.
+ * Экспорт — только для поведенческой проверки.
+ */
+export function tplKindRows(rows, kind) {
+    const k = String(kind);
+    return (rows || []).filter((t) => {
+        const dt = tplDocType(t && t.doc_type);
+        return k === 'docs' ? dt !== '3' : dt === k;
+    });
+}
+// Род шаблонов, который кабинет показывает сейчас: тип документа на экране.
+function cabinetKind() { return wsState.docType === 'diag' ? '1' : '0'; }
+/**
+ * CABINET_FIX_V1_TPL — ОДНА ДВЕРЬ СМЕНЫ ТИПА ДОКУМЕНТА: выпадающий список и
+ * «Использовать» шаблона другого рода. Экспорт — для поведенческой проверки.
+ */
+export function setDocType(ctx, type) {
+    wsState.docType = type === 'diag' ? 'diag' : 'conclusion';
+    const sel = ctx && ctx.container && ctx.container.querySelector('[data-doctype]');
+    if (sel && sel.value !== wsState.docType) sel.value = wsState.docType;
+    if (!wsState.blank) setBlankMode(ctx, true);
+    else renderBlank(ctx);
+}
 const me = () => currentUser() || {};
 const myId = () => me().id || null;
 const myName = () => me().full_name || me().username || 'доктор';
@@ -2287,12 +2330,16 @@ export function collectFields(ctx, opts = {}) {
     return out;
 }
 
-function applyFields(ctx, fields) {
+// CABINET_FIX_V1_TPL — opts.template: вставка шаблона, а не открытие документа.
+// Свои разделы врача строятся заново только при открытии: у шаблона их нет
+// никогда, и «Использовать» стирало свои разделы приёма. Экспорт — для
+// поведенческой проверки (cabinet-templates.test.mjs).
+export function applyFields(ctx, fields, opts = {}) {
     try { setTimeout(() => renderBlank(ctx), 0); } catch (e) {}   // WYSIWYG_BLANK_V1
     if (!fields) return;
     // WS_EXAM_AND_FREE_V1 — свои разделы создаются ДО подстановки значений:
     // подставлять текст в коробку, которой ещё нет, некуда.
-    try { wsRestoreFreeSections(ctx, fields); } catch (e2) { /* приём откроется без них */ }
+    if (!opts.template) { try { wsRestoreFreeSections(ctx, fields); } catch (e2) { /* приём откроется без них */ } }
     const root = ctx.container;
     for (const el of root.querySelectorAll('[data-field]')) {
         const k = el.getAttribute('data-field');
@@ -2382,6 +2429,10 @@ async function hydrateWorkspace(ctx) {
         const payload = await readPayload(ctx);
         wsState.payload = payload;
         wsState.diagImages = Array.isArray(payload.diagImages) ? payload.diagImages.slice() : [];   // DIAG_IMAGES_V1 — restore uploaded images
+        // CABINET_FIX_V1_TPL — тип документа — тот, с которым его сохранили: врач
+        // переключил тип, вставил шаблон, сохранил — и при следующем открытии видит
+        // тот же бланк, а не выбранный по услуге (текст другого типа под ним не виден).
+        if (payload.docType === 'diag' || payload.docType === 'conclusion') { ctx.docTypeSaved = true; if (wsState.docType !== payload.docType) setDocType(ctx, payload.docType); }
         if (payload.current) applyFields(ctx, payload.current);
         paintHistoryList(ctx);
         paintPrescriptions(ctx);
@@ -3337,9 +3388,10 @@ async function tplLoad() {
 
 // Client-side filter (RLS already scoped server-side):
 //   all → everything returned · mine → author_id===myId() · shared → scope==='shared'
-function tplVisible() {
+// CABINET_FIX_V1_TPL — и по роду (tplKindRows): окно показывает свой род.
+function tplVisible(kind = 'docs') {
     const q = (tplState.q || '').trim().toLowerCase();
-    return tplState.rows.filter(t =>
+    return tplKindRows(tplState.rows, kind).filter(t =>
         (t.name || '').toLowerCase().includes(q) &&
         (tplState.filter === 'all'
             || (tplState.filter === 'mine' && myId() && t.author_id === myId())
@@ -3347,6 +3399,14 @@ function tplVisible() {
     );
 }
 const isMine = (t) => !!t && !!myId() && t.author_id === myId();
+// CABINET_FIX_V1_TPL — правит и удаляет автор или администратор: то же правило,
+// что у сервера (schema-registry.js consultation_templates.scope). Экран его
+// только повторяет — решает сервер.
+const canManage = (t) => isMine(t) || isAdminActor();
+// CABINET_FIX_V1_TPL (E) — причина отказа сервера, а не голое «Не удалось сохранить».
+const errText = (e) => String((e && (e.message || e.error)) || e || '').trim() || tr('нет ответа сервера');
+// Пустая редактируемая область — это <br> или пробелы: не текст шаблона.
+const tplHasText = (v) => /\S/.test(String(v || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '));
 
 function tplDate(ts) { try { return new Date(ts).toLocaleDateString('ru-RU'); } catch (e) { return ''; } }
 
@@ -3362,17 +3422,66 @@ function tplEmptyDraft(only = null) {
         : ((typeof wsState !== 'undefined' && wsState.docType === 'diag') ? 1 : 0);
     return { id: null, name: '', scope: 'private', doc_type: dt, body: tplBlankBody(dt) };
 }
-function tplDraftFrom(t) {
-    const body = tplBlankBody(t.doc_type);
-    for (const k of tplTypeOf(t.doc_type).keys) body[k] = (t.body && t.body[k]) || '';
-    return { id: t.id, name: t.name || '', scope: t.scope || 'private', doc_type: t.doc_type || 0, body };
+// CABINET_FIX_V1_TPL (D) — род черновика — ЧИСЛО того же рода, что у строки:
+// '1.0' из базы dev не совпадал с 1 строго, и тип не подсвечивался при правке.
+// Экспорт — для поведенческой проверки.
+export function tplDraftFrom(t) {
+    const dt = Number(tplDocType(t.doc_type));
+    const body = tplBlankBody(dt);
+    for (const k of tplTypeOf(dt).keys) body[k] = (t.body && t.body[k]) || '';
+    return { id: t.id, name: t.name || '', scope: t.scope || 'private', doc_type: dt, body };
 }
 // Collect the current A4 document's safe sections only (omits primary_diagnosis/icd10/follow_up/referral).
-function tplCollectDocBody(ctx, dt) {
-    const all = collectFields(ctx);
+// CABINET_FIX_V1_TPL (A) — разделы своего рода собираются, открыты они или нет:
+// «Заключение» диагностики лежит в свёрнутом разделе «Диагноз».
+// profile.read — текст документа, из которого открыто окно (история болезни).
+function tplCollectDocBody(ctx, dt, profile = null) {
+    const keys = tplTypeOf(dt).keys;
+    const all = (profile && typeof profile.read === 'function') ? (profile.read() || {})
+        : ctx ? collectFields(ctx, { always: keys }) : {};
     const out = {};
-    for (const k of tplTypeOf(dt).keys) { const v = (all[k] || '').trim(); if (v) out[k] = v; }
+    for (const k of keys) { const v = String(all[k] || '').trim(); if (v) out[k] = v; }
     return out;
+}
+
+/**
+ * CABINET_FIX_V1_TPL — «Использовать»: вставить шаблон в документ.
+ *
+ * Окно стационара (profile.apply) вставляет само: у истории болезни свои
+ * разделы. Кабинет сначала ставит тип документа по РОДУ шаблона — шаблон
+ * приёма на бланке диагностики (и наоборот) клал текст в поля, которых на
+ * видимом бланке нет, и «ничего не вставлялось»; затем кладёт поля, открывает
+ * их разделы и не трогает свои разделы врача. Старые шаблоны приёма с
+ * «Лабораторными» / «Инструментальными» — таких разделов на листе приёма нет —
+ * вставляются своими разделами врача с этим именем.
+ * Экспорт — для поведенческой проверки.
+ */
+export function tplApply(ctx, t, profile = null) {
+    // Sanitize cross-authored (esp. shared) template HTML before it enters the live editor.
+    const _src = (t && t.body) || {}, _clean = {};
+    for (const _k of Object.keys(_src)) _clean[_k] = sanitizeRichHtml(_src[_k]);
+    // CASE_DOC_TEMPLATES_V1 — вставляет тот, кто открыл: у документа истории
+    // болезни свои разделы, и applyFields кабинета их не знает.
+    if (profile && typeof profile.apply === 'function') { profile.apply(_clean); return null; }
+    if (!ctx) return null;
+    const dt = tplDocType(t && t.doc_type);
+    const type = dt === '1' ? 'diag' : 'conclusion';
+    if (wsState.docType !== type) setDocType(ctx, type);
+    const fields = {};
+    for (const k of tplTypeOf(dt).keys) if (_clean[k] != null && String(_clean[k]).trim()) fields[k] = _clean[k];
+    applyFields(ctx, fields, { template: true });
+    if (dt === '0') {
+        for (const [k, title] of TPL_LEGACY_FREE) {
+            if (!_clean[k] || !String(_clean[k]).trim()) continue;
+            const box = wsAddFreeSection(ctx, title);
+            const inp = box && box.querySelector('.a4-input');
+            if (inp) inp.innerHTML = _clean[k];
+        }
+    }
+    wsState.saved = false;
+    try { resetSaveBtn(ctx); } catch (e) { /* кнопка нарисуется позже */ }
+    if (wsState.blank) { try { renderBlank(ctx); } catch (e) { /* бланк перерисуется позже */ } }
+    return type;
 }
 
 /**
@@ -3383,12 +3492,23 @@ function tplCollectDocBody(ctx, dt) {
  * шаблона (doc_type) и куда его вставлять. Всё остальное — список, поиск,
  * «мои/общие», создание, правка, удаление — одно и то же, и должно им остаться.
  *
+ * CABINET_FIX_V1_TPL — и из «Документов» ({ manage: true }): там тот же
+ * редактор, а не второй свой (без автора, с подписью вместо рода и с
+ * вырезанным HTML); вставлять там некуда — «Использовать» нет.
+ *
  * @param {object} ctx экран кабинета (для профиля не нужен — передавайте null)
- * @param {{dt:number, apply:(fields:object)=>void, read?:()=>object}} [profile]
+ * @param {{dt?:number, apply?:(fields:object)=>void, read?:()=>object, manage?:boolean}} [profile]
  */
 export function openTemplateLibraryModal(ctx, profile = null) {
-    const only = profile ? Number(profile.dt) : null;
-    tplState = { rows: [], filter: 'all', q: '', selId: null, mode: 'view', draft: null };
+    const only = profile && profile.dt != null ? Number(profile.dt) : null;
+    const manage = !!(profile && profile.manage);   // CABINET_FIX_V1_TPL — «Документы»
+    // CABINET_FIX_V1_TPL — род списка: окно стационара — свой; «Документы» —
+    // все шаблоны документов; кабинет — род ТЕКУЩЕГО типа документа, прочитанный
+    // в момент открытия (тип мог смениться после открытия приёма).
+    const kind = only !== null ? String(only) : manage ? 'docs' : cabinetKind();
+    tplState = { rows: [], filter: 'all', q: '', selId: null, mode: 'view', draft: null, kind };
+    // «Из текущего документа» — есть откуда брать: кабинет или окно с read().
+    const canReadDoc = !manage && (profile ? typeof profile.read === 'function' : !!ctx);
 
     const backdrop = h('div', { class: 'modal-backdrop' });
     const modal    = h('div', { class: 'modal' });
@@ -3411,17 +3531,38 @@ export function openTemplateLibraryModal(ctx, profile = null) {
                 paintList();
             } }, ru));
 
+    // CABINET_FIX_V1_TPL — в кабинете: род списка. По умолчанию — тип документа
+    // на экране; второй род виден по нажатию, и «Использовать» на нём сам
+    // переключит тип документа (tplApply).
+    const kindBtns = (only === null && !manage) ? [['0', 'Приём'], ['1', 'Диагностика']].map(([k, ru]) =>
+        h('button', { type: 'button', 'data-tpl-kind': k, class: (k === tplState.kind ? 'on' : ''),
+            onclick: () => { setKind(k); } }, ru)) : null;
+    function setKind(k) {
+        if (tplState.kind === k) return;
+        tplState.kind = k;
+        modal.querySelectorAll('[data-tpl-kind]').forEach(b => b.classList.toggle('on', b.getAttribute('data-tpl-kind') === k));
+        const first = tplVisible(k)[0];
+        tplState.selId = first ? first.id : null;
+        tplState.mode = 'view'; tplState.draft = null;
+        paintList(); paintDetail(); paintFoot();
+    }
+
     const newBtn = h('button', { class: 'btn btn-outline btn-sm', type: 'button',
-        onclick: () => { tplState.mode = 'new'; tplState.draft = tplEmptyDraft(only); paintDetail(); paintFoot(); } },
+        onclick: () => {
+            tplState.mode = 'new';
+            tplState.draft = tplEmptyDraft(only !== null ? only : (tplState.kind === '1' ? 1 : tplState.kind === '0' ? 0 : null));
+            paintDetail(); paintFoot();
+        } },
         Icon('Plus', { size: 14 }), ' Новый шаблон');
 
     const card = h('div', { class: 'modal-card tplm-card' },
         h('header', { class: 'modal-head' },
-            h('h2', { style: { margin: 0 } }, Icon('Doc', { size: 16 }), ' Шаблоны заключений'),
+            h('h2', { style: { margin: 0 } }, Icon('Doc', { size: 16 }), ' ', manage ? 'Шаблоны документов' : 'Шаблоны заключений'),
             h('button', { class: 'modal-close', type: 'button', onclick: close }, '×'),
         ),
         h('div', { class: 'tplm-bar' },
             h('div', { class: 'tplm-search' }, Icon('Search', { size: 14 }), searchIn),
+            kindBtns ? h('div', { class: 'segmented tplm-seg' }, ...kindBtns) : null,
             h('div', { class: 'segmented tplm-seg' }, ...segBtns),
             h('span', { class: 'grow' }),
             newBtn,
@@ -3439,14 +3580,14 @@ export function openTemplateLibraryModal(ctx, profile = null) {
         clear(listEl);
         // Шаблон приёма в документ истории болезни не вставляется: у них разные
         // разделы. Показывать его тут значило бы предлагать то, что не сработает.
-        const rows = only === null ? tplVisible() : tplVisible().filter((t) => Number(t.doc_type) === only);
+        // CABINET_FIX_V1_TPL — то же правило и в кабинете (tplKindRows).
+        const rows = tplVisible(tplState.kind);
         if (!rows.length) {
             listEl.appendChild(h('div', { class: 'tplm-empty' }, tplState.rows.length ? 'Ничего не найдено' : 'Пока нет шаблонов'));
             return;
         }
         for (const t of rows) {
-            const mine = isMine(t);
-            const rowact = mine ? h('div', { class: 'tplm-rowact' },
+            const rowact = canManage(t) ? h('div', { class: 'tplm-rowact' },
                 h('button', { class: 'icon-btn sm', type: 'button', title: 'Изменить',
                     onclick: (e) => { e.stopPropagation(); tplState.selId = t.id; tplState.mode = 'edit'; tplState.draft = tplDraftFrom(t); paintList(); paintDetail(); paintFoot(); } },
                     Icon('Edit', { size: 14 })),
@@ -3473,15 +3614,15 @@ export function openTemplateLibraryModal(ctx, profile = null) {
         if (tplState.mode === 'new' || tplState.mode === 'edit') { paintForm(); return; }
         const sel = tplState.rows.find(r => r.id === tplState.selId);
         if (!sel) { detailEl.appendChild(h('div', { class: 'tplm-empty' }, 'Выберите шаблон слева')); return; }
-        const mine = isMine(sel);
+        const may = canManage(sel);
 
         const acts = h('div', { style: { display: 'flex', gap: '8px', flexShrink: 0 } },
-            h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => tplUse(sel) },
+            manage ? null : h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => tplUse(sel) },
                 Icon('Plus', { size: 14 }), ' Использовать'),
-            mine ? h('button', { class: 'btn btn-outline btn-sm', type: 'button',
+            may ? h('button', { class: 'btn btn-outline btn-sm', type: 'button',
                 onclick: () => { tplState.mode = 'edit'; tplState.draft = tplDraftFrom(sel); paintDetail(); paintFoot(); } },
                 Icon('Edit', { size: 14 }), ' Изменить') : null,
-            mine ? h('button', { class: 'btn btn-outline btn-sm', type: 'button',
+            may ? h('button', { class: 'btn btn-outline btn-sm', type: 'button',
                 style: { color: 'var(--crit-700)' }, onclick: () => tplConfirmDelete(sel) },
                 Icon('Trash', { size: 14 }), ' Удалить') : null,
         );
@@ -3499,10 +3640,13 @@ export function openTemplateLibraryModal(ctx, profile = null) {
         let any = false;
         for (const k of tplTypeOf(sel.doc_type).keys) {
             const v = (sel.body && sel.body[k]) || '';
-            if (!String(v).trim()) continue;
+            if (!tplHasText(v)) continue;
             any = true;
             const body = h('div', { class: 'tplm-sec-b' });
-            body.innerHTML = esc(v);   // INERT — stored HTML shown as escaped text
+            // CABINET_FIX_V1_TPL — форматирование шаблона видно, как в документе:
+            // тело очищено тем же sanitizeRichHtml, что и при вставке. Раньше
+            // HTML показывался текстом — «Почки<br>норма».
+            body.innerHTML = sanitizeRichHtml(v);
             secWrap.appendChild(h('div', { class: 'tplm-sec' },
                 h('div', { class: 'tplm-sec-l' }, tplTypeOf(sel.doc_type).labels[k] || k),
                 body,
@@ -3520,7 +3664,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
 
         const scopeBtn = (val, ru, ic) => h('button', { type: 'button',
             class: 'tplm-scopebtn' + (d.scope === val ? ' on' : ''),
-            onclick: () => { d.scope = val; modal.querySelectorAll('.tplm-scopebtn').forEach(b => b.classList.toggle('on', b.getAttribute('data-sv') === val)); },
+            onclick: () => { d.scope = val; modal.querySelectorAll('.tplm-scopebtn[data-sv]').forEach(b => b.classList.toggle('on', b.getAttribute('data-sv') === val)); },
             'data-sv': val }, Icon(ic, { size: 14 }), ' ' + ru);
 
         const secFields = h('div', { class: 'tplm-form-secs' });
@@ -3528,19 +3672,27 @@ export function openTemplateLibraryModal(ctx, profile = null) {
             clear(secFields);
             const _T = tplTypeOf(d.doc_type);
             for (const k of _T.keys) {
-                const ta = h('textarea', { class: 'tplm-textarea', placeholder: 'Текст секции…',
-                    oninput: (e) => { d.body[k] = e.currentTarget.value; } });
-                ta.value = d.body[k] || '';
+                // CABINET_FIX_V1_TPL — раздел правится как документ, с его
+                // форматированием (HTML не вырезается и не показывается тегами).
+                const ed = h('div', { class: 'tplm-textarea', 'data-tpl-sec': k, contentEditable: 'true',
+                    'data-ph': tr('Текст секции…'),
+                    style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '260px', overflowY: 'auto' },
+                    oninput: (e) => { d.body[k] = e.currentTarget.innerHTML; } });
+                ed.innerHTML = sanitizeRichHtml(d.body[k] || '');
                 secFields.appendChild(h('div', { class: 'tplm-field' },
-                    h('label', null, _T.labels[k] || k), ta));
+                    h('label', null, _T.labels[k] || k), ed));
             }
         }
         paintSecFields();
 
-        const fromDoc = h('button', { class: 'btn btn-outline btn-sm', type: 'button',
-            onclick: () => { d.body = { ...tplBlankBody(d.doc_type), ...tplCollectDocBody(ctx, d.doc_type) }; paintSecFields(); toast('Заполнено из текущего документа', 'ok'); } },
-            Icon('Doc', { size: 14 }), ' Из текущего документа');
+        const fromDoc = canReadDoc ? h('button', { class: 'btn btn-outline btn-sm', type: 'button',
+            onclick: () => { d.body = { ...tplBlankBody(d.doc_type), ...tplCollectDocBody(ctx, d.doc_type, profile) }; paintSecFields(); toast('Заполнено из текущего документа', 'ok'); } },
+            Icon('Doc', { size: 14 }), ' Из текущего документа') : null;
 
+        // Род шаблона: окно стационара — свой, кабинет — приём или диагностика,
+        // «Документы» — любой из трёх.
+        const types = only !== null ? TPL_TYPES.filter(_T => _T.dt === only)
+            : manage ? TPL_TYPES : TPL_TYPES.filter(_T => _T.dt !== 2);
         detailEl.appendChild(h('div', { class: 'tplm-form' },
             h('b', { style: { fontSize: '13.5px', color: 'var(--ink-900)' } }, d.id ? 'Изменение шаблона' : 'Новый шаблон'),
             h('div', { class: 'tplm-field' },
@@ -3553,7 +3705,7 @@ export function openTemplateLibraryModal(ctx, profile = null) {
                 )),
             h('div', { class: 'tplm-field' },
                 h('label', null, 'Тип документа'),
-                h('div', { class: 'tplm-scopepick' }, TPL_TYPES.map(_T => h('button', { type: 'button',
+                h('div', { class: 'tplm-scopepick' }, types.map(_T => h('button', { type: 'button',
                     class: 'tplm-scopebtn' + (d.doc_type === _T.dt ? ' on' : ''), 'data-dt': String(_T.dt),
                     onclick: () => {
                         if (d.doc_type === _T.dt) return;
@@ -3563,9 +3715,9 @@ export function openTemplateLibraryModal(ctx, profile = null) {
                         modal.querySelectorAll('.tplm-scopepick [data-dt]').forEach(b => b.classList.toggle('on', b.getAttribute('data-dt') === String(_T.dt)));
                         paintSecFields();
                     } }, Icon('Doc', { size: 13 }), ' ' + _T.label)))),
-            h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+            fromDoc ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
                 fromDoc,
-                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'или заполните секции вручную')),
+                h('span', { class: 'muted', style: { fontSize: '12.5px' } }, 'или заполните секции вручную')) : null,
             secFields,
         ));
     }
@@ -3582,28 +3734,19 @@ export function openTemplateLibraryModal(ctx, profile = null) {
             return;
         }
         footEl.appendChild(h('span', { class: 'muted', style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12.5px' } },
-            trf('{n} шаблон(ов)', { n: tplState.rows.length }), ' · ', Icon('Globe', { size: 12 }), ' общие видны всем врачам клиники'));
+            trf('{n} шаблон(ов)', { n: tplVisible(tplState.kind).length }), ' · ', Icon('Globe', { size: 12 }), ' общие видны всем врачам клиники'));
         footEl.appendChild(h('span', { class: 'grow' }));
         footEl.appendChild(h('button', { class: 'btn btn-ghost', type: 'button', onclick: close }, 'Закрыть'));
     }
 
     // ---- «Использовать» — fill A4 + re-gate finish -----------------------
     function tplUse(t) {
-        // Sanitize cross-authored (esp. shared) template HTML before it enters the live editor.
-        const _src = t.body || {}, _clean = {};
-        for (const _k of Object.keys(_src)) _clean[_k] = sanitizeRichHtml(_src[_k]);
-        // CASE_DOC_TEMPLATES_V1 — вставляет тот, кто открыл: у документа истории
-        // болезни свои разделы, и applyFields кабинета их не знает.
-        if (profile && typeof profile.apply === 'function') {
-            profile.apply(_clean);
-            close();
-            return;
-        }
-        applyFields(ctx, _clean);
-        wsState.saved = false;
-        resetSaveBtn(ctx);
-        toast('Шаблон вставлен', 'ok');
+        const before = wsState.docType;
+        const type = tplApply(ctx, t, profile);   // CABINET_FIX_V1_TPL
         close();
+        if (profile) return;
+        toast('Шаблон вставлен', 'ok');
+        if (type && type !== before) toast(trf('Тип документа переключён: {type}', { type: tr(type === 'diag' ? 'Диагностика' : 'Приём') }), 'info');
     }
 
     // ---- save (INSERT new / UPDATE existing) -----------------------------
@@ -3611,13 +3754,14 @@ export function openTemplateLibraryModal(ctx, profile = null) {
         const d = tplState.draft;
         if (!d || !d.name.trim()) { toast('Укажите название шаблона', 'warn'); return; }
         const body = {};
-        for (const k of tplTypeOf(d.doc_type).keys) { const v = (d.body[k] || '').trim(); if (v) body[k] = v; }
+        for (const k of tplTypeOf(d.doc_type).keys) { const v = String(d.body[k] || '').trim(); if (tplHasText(v)) body[k] = v; }
         if (d.id) {
             // UPDATE — only these 4 columns, by id. NEVER company_id/author_id.
+            // CABINET_FIX_V1_TPL (D) — род строкой: '0' / '1' / '2', не 1.0.
             const { error } = await supabase.from('consultation_templates')
-                .update({ name: d.name.trim(), scope: d.scope, body, doc_type: d.doc_type })
+                .update({ name: d.name.trim(), scope: d.scope, body, doc_type: tplDocType(d.doc_type) })
                 .eq('id', d.id);
-            if (error) { toast('Не удалось сохранить', 'fail'); return; }
+            if (error) { toast(trf('Не удалось сохранить: {msg}', { msg: errText(error) }), 'fail'); return; }
             toast('Шаблон обновлён', 'ok');
         } else {
             // TPL_AUTHOR_LOCAL_V1 — автора ставим САМИ. Комментарий «DB fills
@@ -3626,13 +3770,18 @@ export function openTemplateLibraryModal(ctx, profile = null) {
             // isMine() отвечал «нет» на СОБСТВЕННЫЙ шаблон врача, и сразу после
             // сохранения у него пропадали и «Изменить», и «Удалить», и вкладка
             // «Мои». Имя автора отсюда и так уходит строкой ниже — id к нему.
+            // CABINET_FIX_V1_TPL — сервер ставит автора из сессии сам (stamps).
             const { data, error } = await supabase.from('consultation_templates')
-                .insert({ name: d.name.trim(), scope: d.scope, doc_type: d.doc_type, body, author_id: myId(), author_name: myName() })
+                .insert({ name: d.name.trim(), scope: d.scope, doc_type: tplDocType(d.doc_type), body, author_id: myId(), author_name: myName() })
                 .select('id').maybeSingle();
-            if (error) { toast('Не удалось сохранить', 'fail'); return; }
+            if (error) { toast(trf('Не удалось сохранить: {msg}', { msg: errText(error) }), 'fail'); return; }
             toast('Шаблон сохранён', 'ok');
             if (data && data.id) tplState.selId = data.id;
         }
+        // Сохранённый шаблон другого рода — список переходит на его род, иначе
+        // он «пропал бы» сразу после сохранения.
+        const savedKind = tplDocType(d.doc_type);
+        if (kindBtns && savedKind !== tplState.kind) { tplState.kind = savedKind; modal.querySelectorAll('[data-tpl-kind]').forEach(b => b.classList.toggle('on', b.getAttribute('data-tpl-kind') === savedKind)); }
         tplState.rows = await tplLoad();
         tplState.mode = 'view'; tplState.draft = null;
         paintList(); paintDetail(); paintFoot();
@@ -3648,12 +3797,13 @@ export function openTemplateLibraryModal(ctx, profile = null) {
                     h('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => bg.remove() }, 'Отмена'),
                     h('button', { class: 'btn btn-danger btn-sm', type: 'button', onclick: async () => {
                         const { error } = await supabase.from('consultation_templates').delete().eq('id', t.id);
-                        if (error) { toast('Не удалось удалить', 'fail'); return; }
+                        if (error) { toast(trf('Не удалось удалить: {msg}', { msg: errText(error) }), 'fail'); return; }
                         bg.remove();
                         if (tplState.selId === t.id) tplState.selId = null;
                         toast('Шаблон удалён', 'ok');
                         tplState.rows = await tplLoad();
-                        if (tplState.rows.length && !tplState.selId) tplState.selId = tplState.rows[0].id;
+                        const first = tplVisible(tplState.kind)[0];
+                        if (first && !tplState.selId) tplState.selId = first.id;
                         tplState.mode = 'view'; tplState.draft = null;
                         paintList(); paintDetail(); paintFoot();
                     } }, 'Удалить'),
@@ -3667,7 +3817,8 @@ export function openTemplateLibraryModal(ctx, profile = null) {
     (async () => {
         listEl.appendChild(h('div', { class: 'tplm-empty' }, 'Загрузка…'));
         tplState.rows = await tplLoad();
-        if (tplState.rows.length && !tplState.selId) tplState.selId = tplState.rows[0].id;
+        const first = tplVisible(tplState.kind)[0];
+        if (first && !tplState.selId) tplState.selId = first.id;
         paintList(); paintDetail(); paintFoot();
         setTimeout(() => searchIn.focus(), 30);
     })();
@@ -3809,6 +3960,7 @@ async function handleSaveDraft(ctx, opts = {}) {
     const payload = wsState.payload || await readPayload(ctx);
     payload.current = fields;
     payload.diagImages = (wsState.diagImages || []).slice();   // DIAG_IMAGES_V1 — survive draft reopen
+    payload.docType = wsState.docType;   // CABINET_FIX_V1_TPL — тип документа открывается тем, каким сохранён
     payload.history = payload.history.filter(e => e.kind !== 'draft');
     payload.history.push(entry);
     if (!await writePayload(ctx, payload)) return false;
@@ -3850,6 +4002,7 @@ async function handleSignFinalize(ctx) {
     const payload = wsState.payload || await readPayload(ctx);
     payload.current = fields;
     payload.diagImages = (wsState.diagImages || []).slice();   // DIAG_IMAGES_V1
+    payload.docType = wsState.docType;   // CABINET_FIX_V1_TPL
     payload.history = payload.history.filter(e => e.kind !== 'draft');
     payload.history.push(entry);
     if (!await writePayload(ctx, payload, { status: 'completed' })) return;

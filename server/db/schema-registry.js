@@ -1009,7 +1009,8 @@ export const REGISTRY = {
   // Shared SOAP templates. documents.js, service-workspace.js. (doctor/admin own them)
   consultation_templates: {
     read:  { roles: ALL_STAFF, columns: ['id','name','doc_type','scope','body','author_id','author_name','created_at','updated_at'] },
-    write: { insert: { roles: ['admin','doctor'], columns: ['name','doc_type','scope','body','author_id','author_name'] },
+    // CABINET_FIX_V1_TPL — author_id из списка вставки убран: его ставит сервер (stamps ниже).
+    write: { insert: { roles: ['admin','doctor'], columns: ['name','doc_type','scope','body','author_name'] },
              update: { roles: ['admin','doctor'], columns: ['name','doc_type','scope','body'] },
              delete: { roles: ['admin','doctor'] } },
     filters: ['id','author_id','scope','updated_at'],
@@ -1020,6 +1021,20 @@ export const REGISTRY = {
     // окно говорило только «Не удалось сохранить». Механизм существовал и
     // работал у пяти других таблиц — здесь его просто забыли объявить.
     json:    ['body'],
+    // CABINET_FIX_V1_TPL (2026-10-02) — «ЛИЧНЫЙ» ЛИЧНЫЙ НА СЕРВЕРЕ. Строки не
+    // были ограничены ничем: «Все» в окне шаблонов показывали чужие личные
+    // шаблоны, а любой врач через /api/db правил и удалял любой шаблон —
+    // «Изменить» и «Удалить» прятал только экран. Теперь (query-compiler.js
+    // scopeFor): читает автор, а общий (scope = 'shared') — все; правит и
+    // удаляет только автор; администратор — всё. Автора ставит сервер из
+    // сессии: подписать шаблон чужим именем — значит положить его в чужие «Мои».
+    scope:   { column: 'author_id', allRoles: ['admin'], readAlso: { column: 'scope', value: 'shared' } },   // CABINET_FIX_V1_TPL
+    stamps:  { author_id: { on: 'insert' } },   // CABINET_FIX_V1_TPL
+    // CABINET_FIX_V1_TPL — doc_type — код рода ('0' приём, '1' диагностика,
+    // '2' история болезни, '3' рецепт) в TEXT-колонке. Окно слало число, и
+    // better-sqlite3 связывал его как REAL: в базе dev шаблон лежит как '1.0'.
+    // Число в такой колонке пишется строкой (query-compiler.js bindWrite).
+    text:    ['doc_type'],   // CABINET_FIX_V1_TPL
     embed:   {},
   },
   // Per-doctor consultation prices (admin config). appointments.js, consultation-types.js, employee-editor.js.
@@ -1750,6 +1765,8 @@ export function readableColumns(t) { return REGISTRY[t] ? [...REGISTRY[t].read.c
 export function writableColumns(t, op) { const e = REGISTRY[t]; return e && e.write[op] ? [...e.write[op].columns] : []; }
 export function filterAllowed(t, col) { return !!REGISTRY[t] && REGISTRY[t].filters.includes(col); }
 export function jsonColumns(t) { return (REGISTRY[t] && REGISTRY[t].json) ? [...REGISTRY[t].json] : []; }
+// CABINET_FIX_V1_TPL — TEXT-колонки с кодом: число из запроса пишется строкой ('1', не '1.0').
+export function textColumns(t) { return (REGISTRY[t] && REGISTRY[t].text) ? [...REGISTRY[t].text] : []; }
 export function embedEntry(t, name) {
   const e = REGISTRY[t];
   return e && e.embed && Object.prototype.hasOwnProperty.call(e.embed, name) ? e.embed[name] : null;   // V3120_FIX — у crm_tags связей нет вовсе

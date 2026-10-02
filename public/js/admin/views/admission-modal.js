@@ -1292,9 +1292,12 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     // коде — владелец: «its still not applied». В тестах кольцо не всплывало:
     // там модули грузятся поодиночке и в другом порядке.
     const applyTemplate = async () => {
-        const { openTemplateLibraryModal } = await import('./service-workspace.js');
+        const { openTemplateLibraryModal } = await import('./service-workspace.js?v=cabtpl1');   // CABINET_FIX_V1_TPL — тот же экземпляр, что у кабинета (штамп admin.js)
         openTemplateLibraryModal(null, {
         dt: 2,
+        // CABINET_FIX_V1_TPL (F) — «Из текущего документа» берёт текст ЭТОГО
+        // документа. Без read() окно звало collectFields(null) кабинета и падало.
+        read: () => { const o = {}; for (const k of RICH_KEYS) if (rich[k]) o[k] = readRich(rich[k]); return o; },
         apply: (fields) => {
             let put = 0, kept = 0;
             for (const k of RICH_KEYS) {

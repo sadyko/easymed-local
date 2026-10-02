@@ -6,6 +6,7 @@ import { restrictedRead } from './schema-registry.js';   // FINAL_ROLES_SYNC_FIX
 import { readWhere, ownRowsRule, bulkWriteKeys } from './schema-registry.js';   // V3120_FIX (F2, M9)
 import { insertRequiresAny } from './schema-registry.js';   // V3120_FINAL
 import { readOrder } from './schema-registry.js';   // MRN_BEYOND_99999_V1 — «MRN» сортируется номером
+import { textColumns } from './schema-registry.js';   // CABINET_FIX_V1_TPL — код рода в TEXT пишется строкой
 import { patientDataRefusal } from './patient-data-gate.js';   // V3120_FIX (M4)
 import { liftAllows } from './pay-visibility.js';
 import { withTemplate } from '../services/server-message.js';   // V3120_I18N
@@ -80,6 +81,9 @@ function bindWrite(table, col, v) {
     return JSON.stringify(v);
   }
   if (v === '' && isReferenceColumn(table, col)) return null;
+  // CABINET_FIX_V1_TPL — число в TEXT-колонке с кодом (реестр `text`) пишется
+  // строкой: better-sqlite3 связывает число JS как REAL, и TEXT получал '1.0'.
+  if (typeof v === 'number' && Number.isFinite(v) && textColumns(table).includes(col)) return String(v);
   return bindable(v);
 }
 
@@ -133,7 +137,10 @@ function starColumns(table) {
 // запроса и ПСЕВДОНИМ соединения у embed'а (CRM_HEAD_MERGE_TAGS_V1, ревью I5:
 // присоединённая таблица с владельцем подчиняется тому же правилу, что и
 // запрошенная напрямую).
-function scopeFor(table, user, db, qual = table) {
+// CABINET_FIX_V1_TPL — `op`: 'select' — чтение (и embed), иначе запись. У
+// правила бывает `readAlso` — строки, которые ЧИТАЕТ каждый, а правит только
+// владелец (общий шаблон заключения: виден всем врачам, меняет автор).
+function scopeFor(table, user, db, qual = table, op = 'select') {
   const sc = rowScope(table);
   if (!sc) return null;
   // CRM_DEDUP_SEARCH_TASKS_V1 — ОГРАНИЧЕНИЕ ЧЕРЕЗ РОДИТЕЛЯ. Строка-потомок
@@ -172,6 +179,9 @@ function scopeFor(table, user, db, qual = table) {
   const parts = [`"${qual}"."${sc.column}" = ?`];
   const params = [me];
   if (sc.nullVisible) parts.push(`"${qual}"."${sc.column}" IS NULL`);
+  // CABINET_FIX_V1_TPL — readAlso: { column, value } — постоянная колонка
+  // реестра и связанное значение; только на чтение.
+  if (op === 'select' && sc.readAlso) { parts.push(`"${qual}"."${sc.readAlso.column}" = ?`); params.push(sc.readAlso.value); }
   return { clause: '(' + parts.join(' OR ') + ')', params };
 }
 
@@ -935,7 +945,7 @@ function compileUpdate(desc, table, user, db) {
   const { clause, params: filterParams } = compileFilters(desc.filters, table);
   requireRowTarget(desc, table, 'update');   // после разбора: неверное условие называется своим именем
   if (!clause) throw new CompileError(NO_TARGET_MSG, 400);
-  const scope = scopeFor(table, user, db);
+  const scope = scopeFor(table, user, db, table, 'update');   // CABINET_FIX_V1_TPL — readAlso не правится
   let where = scope ? `(${clause}) AND ${scope.clause}` : clause;
   params.push(...filterParams);
   if (scope) params.push(...scope.params);
@@ -983,7 +993,7 @@ function compileDelete(desc, table, user, db) {
   const { clause, params } = compileFilters(desc.filters, table);
   requireRowTarget(desc, table, 'delete');
   if (!clause) throw new CompileError(NO_TARGET_MSG, 400);
-  const scope = scopeFor(table, user, db);
+  const scope = scopeFor(table, user, db, table, 'delete');   // CABINET_FIX_V1_TPL — readAlso не удаляется
   const where = scope ? `(${clause}) AND ${scope.clause}` : clause;
   if (scope) params.push(...scope.params);
   const sql = `DELETE FROM "${table}" WHERE ${where}`;

@@ -10785,4 +10785,9 @@ export const STRINGS = {
   "Проверьте права этой роли": {"en":"Check this role's permissions","ru":"Проверьте права этой роли","uz":"Ushbu rol huquqlarini tekshiring"},
   "Если «только просмотр» выбран нарочно — оставьте как есть. «Вернуть права по умолчанию» даёт то, что основа роли получает по умолчанию, и не больше.": {"en":"If \"view only\" was chosen on purpose, keep it as is. \"Restore default permissions\" gives what the role's base gets by default, and no more.","ru":"Если «только просмотр» выбран нарочно — оставьте как есть. «Вернуть права по умолчанию» даёт то, что основа роли получает по умолчанию, и не больше.","uz":"Agar «faqat ko'rish» ataylab tanlangan bo'lsa — o'z holicha qoldiring. «Standart huquqlarni qaytarish» rol asosi standart bo'yicha oladigan huquqlarni beradi, undan ortiq emas."},
   // V3121_ROLES — END
+  // CABINET_FIX_V1_TPL (2026-10-02) — шаблоны окна врача и «Документов» (service-workspace.js, documents.js)
+  "Шаблоны документов": {"en":"Document templates","ru":"Шаблоны документов","uz":"Hujjat shablonlari"},   // CABINET_FIX_V1_TPL
+  "Тип документа переключён: {type}": {"en":"Document type switched: {type}","ru":"Тип документа переключён: {type}","uz":"Hujjat turi almashtirildi: {type}"},   // CABINET_FIX_V1_TPL
+  "нет ответа сервера": {"en":"no response from the server","ru":"нет ответа сервера","uz":"serverdan javob yo'q"},   // CABINET_FIX_V1_TPL
+  "Не удалось открыть шаблоны: {msg}": {"en":"Could not open the templates: {msg}","ru":"Не удалось открыть шаблоны: {msg}","uz":"Shablonlarni ochib bo'lmadi: {msg}"},   // CABINET_FIX_V1_TPL
 };
