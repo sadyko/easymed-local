@@ -5,10 +5,12 @@
 // Настоящая форма кабинета в DOM-стенде и фальшивый сервер, который держит то
 // же правило, что /api/db (services/domain/cabinet-notes.js): запись, потерявшая
 // подписанную версию, — 409.
-import test from 'node:test';
+import nodeTest from 'node:test';
+// CABINET_FIX_V1_R5 (F) — тест, который повис бы, падает по сроку, а не держит весь файл
+const test = (name, fn) => nodeTest(name, { timeout: 20000 }, fn);
 import assert from 'node:assert/strict';
 import { installFakeDom, El, CONFIRMS, TOASTS, answerConfirm } from './cabinet-harness.mjs';
-import { signedVersionsDropped, SIGNED_CONFLICT_MESSAGE } from '../../../../server/services/domain/cabinet-notes.js';
+import { notesWriteRefusal, NOTES_BASE_KEY } from '../../shared/cabinet-notes.js';   // CABINET_FIX_V1_R5 — правило сервера («сравнить и заменить»)
 
 installFakeDom();
 // Разбор разметки «как есть» (санитайзер кабинета без DOMParser экранирует её —
@@ -63,12 +65,15 @@ globalThis.fetch = async (url, opts) => {
         if (body.table === 'visit_services' && body.op === 'update') {
             await wait('write:' + id);
             if (FAIL.has('write:' + id)) return resp(false, 500, { error: { message: 'сбой записи' } });
-            if (body.values && body.values.notes != null && signedVersionsDropped(NOTES.get(id), body.values.notes)) {
-                LOG.push({ kind: '409', id });
-                return resp(false, 409, { error: { code: 'signed_conflict', message: SIGNED_CONFLICT_MESSAGE } });
+            const values = { ...(body.values || {}) };
+            const base = values[NOTES_BASE_KEY];
+            delete values[NOTES_BASE_KEY];
+            if (Object.prototype.hasOwnProperty.call(values, 'notes')) {
+                const refusal = notesWriteRefusal(NOTES.has(id) ? NOTES.get(id) : null, values.notes, base);
+                if (refusal) { LOG.push({ kind: '409', id }); return resp(false, 409, { error: { code: 'notes_conflict', reason: refusal.reason, message: refusal.message } }); }
             }
-            LOG.push({ kind: 'line', id, values: body.values });
-            if (body.values && body.values.notes != null) NOTES.set(id, body.values.notes);
+            LOG.push({ kind: 'line', id, values });
+            if (values.notes != null) NOTES.set(id, values.notes);
             return ok(null);
         }
         if (body.table === 'patient_conditions' && body.op === 'delete') {
@@ -142,7 +147,8 @@ test('2: другое окно подписало строку — «Сохра�
     TOASTS.length = 0;
     assert.equal(await WS.saveDraft(a, { silent: true }), false, 'черновик со старой копией записан');
     assert.deepEqual(kinds(3), ['signed'], 'подписанная версия стёрта');
-    assert.ok(TOASTS.some((t) => /подписан в другом окне.*Ваш текст остался на экране/.test(t)), 'врач не узнал, что произошло: ' + TOASTS.join(' | '));
+    // CABINET_FIX_V1_R5 — одно сообщение для обеих причин (другое окно, своя поздняя запись)
+    assert.ok(TOASTS.some((t) => /Документ изменился, пока шло сохранение.*Ваш текст остался на экране/.test(t)), 'врач не узнал, что произошло: ' + TOASTS.join(' | '));
     assert.equal(field(a, 'chief_complaint').innerHTML, 'Кашель, МОЯ ПРАВКА', 'текст врача пропал с экрана');
     assert.ok(await WS.saveDraft(a, { silent: true }), 'повторное «Сохранить» не прошло');
     assert.deepEqual(kinds(3), ['signed', 'draft']);
@@ -318,7 +324,7 @@ test('9: «строка1<br><div>строка2</div>» — одна новая �
 });
 
 // ─── 10. Зависшая запись подписи; смена языка во время загрузки ───────────────
-test('10a: запись подписи не отвечает — через срок замок снят, врач предупреждён, строка снова пишет; поздний ответ ничего не стирает', async () => {
+test('10a: запись подписи не отвечает — через срок замок подписи снят, врач предупреждён; строка пишет, когда ответ пришёл; поздний ответ ничего не стирает', async () => {
     WS.__setTimingForTests({ signTimeoutMs: 60 });
     try {
         const a = await opened(13, notesOf(null));
@@ -326,13 +332,12 @@ test('10a: запись подписи не отвечает — через ср
         answerConfirm(true); TOASTS.length = 0;
         const release = hold('write:13');
         await WS.signDocument(a);
-        assert.ok(TOASTS.some((t) => /Сервер не ответил — проверьте и повторите/.test(t)), 'зависание не названо');
+        assert.ok(TOASTS.some((t) => /Сервер не ответил вовремя/.test(t)), 'зависание не названо');   // CABINET_FIX_V1_R5 (D) — ждём ответа
         assert.equal(WS.lineSigning(13), false, 'замок подписи остался');
         assert.ok(a.container.querySelectorAll('[data-ws-finish]').every((b) => !b.disabled), '«Завершить приём» заперта навсегда');
-        release(); await tick(10);                                   // поздний ответ подписи дошёл
+        release(); await tick(10);                                   // поздний ответ подписи дошёл — подпись доделала своё
         put(a, 'chief_complaint', 'Жалобы, позже');
-        await WS.saveDraft(a, { silent: true });                     // старая копия — сервер отказывает, история принимается
-        assert.ok(await WS.saveDraft(a, { silent: true }));
+        assert.ok(await WS.saveDraft(a, { silent: true }), 'после поздней подписи строка не пишется');
         assert.deepEqual(kinds(13), ['signed', 'draft'], 'поздний ответ подписи и черновик разошлись');
     } finally { WS.__setTimingForTests({ signTimeoutMs: 30000 }); }
 });

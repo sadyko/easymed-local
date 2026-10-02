@@ -4,7 +4,9 @@
 //
 // Настоящая форма кабинета в DOM-стенде (cabinet-harness.mjs) и фальшивый
 // сервер, у которого любой ответ можно задержать.
-import test from 'node:test';
+import nodeTest from 'node:test';
+// CABINET_FIX_V1_R5 (F) — тест, который повис бы, падает по сроку, а не держит весь файл
+const test = (name, fn) => nodeTest(name, { timeout: 20000 }, fn);
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';

@@ -36,6 +36,7 @@ import { renderDesignedVariant } from './doc-variants.js?v=cabr3';   // WYSIWYG_
 import { openVitalsDialog } from './patient-card.js?v=labshared1';   // CARD_SPEC_V1 — same URL as admin.js (one instance)
 import { serviceGroupLabel, TYPE_TO_GROUP_NAME } from './service-group.js?v=aug17e';   // SERVICE_GROUPS_V1 — chips must survive a NULL type_id
 import { PRINT_FONT_FACE_CSS } from '../../shared/print-fonts.js';   // ONEST_TYPOGRAPHY_V1 — @font-face для печатных окон
+import { notesBaseOf, NOTES_BASE_KEY } from '../../shared/cabinet-notes.js';   // CABINET_FIX_V1_R5 (A) — основа записи строки кабинета
 
 // AURORA_REAL_VITALS_V1 — the vitals strip is filled async from patient_vitals (see vitalsStrip / loadVitals).
 
@@ -1286,7 +1287,7 @@ function paintRtab(ctx) {
                     h('div', { style: { fontSize: '12.5px', fontWeight: 600, color: 'var(--ink-900)' } }, 'Черновик'),
                     h('div', { class: 'muted', style: { fontSize: '12.5px' } }, dateTimeShort(e.savedAt)),
                 ),
-                h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => { applyFields(ctx, e.fields); toast('Черновик загружен', 'ok'); } },
+                h('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: () => { applyFields(ctx, e.fields); wsState.saved = false; resetSaveBtn(ctx); toast('Черновик загружен', 'ok'); } },   // CABINET_FIX_V1_R5 (E)
                     Icon('Repeat', { size: 12 }), ' Возобновить'),
             )));
         }
@@ -2461,6 +2462,10 @@ export function applyFields(ctx, fields, opts = {}) {
         }
         syncSections(ctx);
     } catch (e) {}
+    // CABINET_FIX_V1_R5 (E, R4-3) — то, что легло в лист («Возобновить», «Загрузить в
+    // форму», шаблон), — и есть несохранённое этой строки: смена языка не возвращает
+    // прежний набор поверх загруженной версии. Во время загрузки — ничего (wsLoading).
+    markUnsaved(ctx);
 }
 
 function updateSavedMarker(ctx, label) {
@@ -2509,6 +2514,20 @@ const ownPayload = (p, vsId) => {
     if (p && typeof p === 'object') { PAYLOAD_LINE.set(p, vsId == null ? null : Number(vsId)); PAYLOAD_GEN.set(p, genOf(vsId)); }
     return p;
 };
+// CABINET_FIX_V1_R5 (ревью 5, A) — ОСНОВА ЗАПИСИ: отпечаток сохранённых notes, с
+// которых сделана эта копия записей (notesBaseOf). Запись несёт её серверу
+// (__notes_base), и сервер отказывает, если у строки лежит уже другое — так
+// старая копия (вторая вкладка, поздняя подпись) ничего не перезаписывает.
+const PAYLOAD_BASE = new WeakMap();
+/** Копия записей (подпись, удаление) — того же происхождения, что источник: строка, поколение, основа. */
+const derivePayload = (src, obj) => {
+    if (src && obj && typeof obj === 'object') {
+        if (PAYLOAD_LINE.has(src)) PAYLOAD_LINE.set(obj, PAYLOAD_LINE.get(src));
+        if (PAYLOAD_GEN.has(src)) PAYLOAD_GEN.set(obj, PAYLOAD_GEN.get(src));
+        if (PAYLOAD_BASE.has(src)) PAYLOAD_BASE.set(obj, PAYLOAD_BASE.get(src));
+    }
+    return obj;
+};
 const payloadFresh = (p, vsId) => !!p && PAYLOAD_GEN.get(p) === genOf(vsId);
 /** CABINET_FIX_V1_R4 — копии записей строки во всех экранах устарели (подпись дошла). Экспорт — для проверки. */
 export function invalidateLine(vsId) { if (vsId != null) LINE_GEN.set(Number(vsId), genOf(vsId) + 1); }
@@ -2518,9 +2537,15 @@ export function invalidateLine(vsId) { if (vsId != null) LINE_GEN.set(Number(vsI
 const LINE_SIGNING = new Set();
 /** Подпись строки «в пути»? Экспорт — для проверки. */
 export function lineSigning(vsId) { return LINE_SIGNING.has(Number(vsId)); }
+// CABINET_FIX_V1_R5 (ревью 5, D) — запись строки, на которую сервер не ответил в
+// срок, ещё «в пути»: пока её ответа нет, строка не пишется (поздний ответ не
+// гонится с новой записью), а кнопки доступны и объясняют.
+const LINE_PENDING = new Set();
+/** Ответа на запись строки ещё нет (после срока)? Экспорт — для проверки. */
+export function lineWritePending(vsId) { return LINE_PENDING.has(Number(vsId)); }
 // CABINET_FIX_V1_R4 — сроки: повтор неудачной загрузки (с паузой, растущей до
 // 30 с) и ожидание записи подписи (сервер не ответил — замок снимается).
-const TIMING = { retryBaseMs: 1500, retryMaxMs: 30000, signTimeoutMs: 30000 };
+const TIMING = { retryBaseMs: 1500, retryMaxMs: 30000, signTimeoutMs: 30000, writeTimeoutMs: 30000 };   // writeTimeoutMs — CABINET_FIX_V1_R5 (E): у любой записи строки
 /** Только для проверок. */
 export function __setTimingForTests(t) { Object.assign(TIMING, t || {}); }
 const withTimeout = (thenable, ms) => {
@@ -2648,12 +2673,15 @@ async function readPayload(ctx) {
         FAILED_READ.add(failed);   // CABINET_FIX_V1_R3 (F3) — не прочитано ≠ пусто
         return failed;
     }
-    if (!data?.notes) return ownPayload(emptyPayload(), ctx.visitServiceId);
+    // CABINET_FIX_V1_R5 (ревью 5, A) — основа копии — то, что лежит у строки, ровно как строка.
+    const based = (pl) => { PAYLOAD_BASE.set(pl, notesBaseOf(data ? data.notes : null)); return ownPayload(pl, ctx.visitServiceId); };
+    if (!data?.notes) return based(emptyPayload());
     let parsed = null;
-    try { parsed = JSON.parse(data.notes); } catch { return ownPayload(emptyPayload(), ctx.visitServiceId); }
-    if (!parsed || parsed[DRAFT_TAG] !== 1) return ownPayload(emptyPayload(), ctx.visitServiceId);
+    // CABINET_FIX_V1_R5 (B) — заметка медсестры, лежавшая текстом до первого сохранения кабинета, — не теряется.
+    try { parsed = JSON.parse(data.notes); } catch { return based({ ...emptyPayload(), nurseNote: String(data.notes) }); }
+    if (!parsed || parsed[DRAFT_TAG] !== 1) return based(emptyPayload());
     if (!Array.isArray(parsed.history)) parsed.history = [];
-    return ownPayload(parsed, ctx.visitServiceId);
+    return based(parsed);
 }
 
 /**
@@ -2704,8 +2732,11 @@ async function adoptServerRecords(ctx) {
 /**
  * opts.sign — запись самой подписи (пока подпись «в пути», остальные записи
  * строки отказывают: иначе запись из старого объекта стёрла бы подписанную
- * версию). opts.timeoutMs — сервер не ответил за срок: отказ (замок не
- * держится вечно). Экспорт — для проверки.
+ * версию). opts.timeoutMs — срок ответа (по умолчанию TIMING.writeTimeoutMs).
+ * CABINET_FIX_V1_R5 (ревью 5, A, D) — запись несёт основу (сравнить и
+ * заменить на сервере). Сервер не ответил в срок: врач предупреждён, строка
+ * заперта до ответа; когда ответ придёт, opts.onLate(ok) доделывает своё
+ * (подпись — архив, заключение визита). Экспорт — для проверки.
  */
 export async function writePayload(ctx, payload, extraUpdate = {}, opts = {}) {
     if (!ctx.visitServiceId) return false;
@@ -2719,32 +2750,56 @@ export async function writePayload(ctx, payload, extraUpdate = {}, opts = {}) {
     // CABINET_FIX_V1_R3 (F3) — записи, которые не прочитались, не пишутся: это стёрло бы документ.
     // CABINET_FIX_V1_R4 (п. 3) — как и любая запись строки, чьи записи ещё не легли в лист.
     if (FAILED_READ.has(payload) || wsLoading(ctx)) { refuseWhileLoading(ctx, { force: true }); return false; }
+    const k = Number(ctx.visitServiceId);
+    // CABINET_FIX_V1_R5 (D) — ответа на прошлую запись строки ещё нет: новая не гонится с ним.
+    if (LINE_PENDING.has(k)) { toast(tr('Сервер ещё не ответил на прошлое сохранение — подождите и повторите.'), 'fail'); return false; }
     // CABINET_FIX_V1_R3 (F1, F11) · CABINET_FIX_V1_R4 — пока подпись строки «в пути» (в любом её экране), другие записи ждут.
-    if (LINE_SIGNING.has(Number(ctx.visitServiceId)) && !opts.sign) { toast(tr('Документ подписывается — подождите секунду и повторите.'), 'fail'); return false; }
-    const req = supabase.from('visit_services')
-        .update({ notes: JSON.stringify(payload), ...extraUpdate })
-        .eq('id', ctx.visitServiceId);
-    const res = opts.timeoutMs ? await withTimeout(req, opts.timeoutMs) : await req;
-    // CABINET_FIX_V1_R4 (п. 10a) — сервер не ответил: замок подписи снимается словами.
-    // Если запись дойдёт позже, она ничего не сотрёт: сервер не пускает историю без подписанной версии.
-    if (res && res.timedOut) { toast(tr('Сервер не ответил — проверьте и повторите.'), 'fail'); return false; }
+    if (LINE_SIGNING.has(k) && !opts.sign) { toast(tr('Документ подписывается — подождите секунду и повторите.'), 'fail'); return false; }
+    const sent = JSON.stringify(payload);
+    const values = { notes: sent, ...extraUpdate };
+    const base = PAYLOAD_BASE.get(payload);
+    if (base != null) values[NOTES_BASE_KEY] = base;   // CABINET_FIX_V1_R5 (A) — сравнить и заменить
+    const req = Promise.resolve(supabase.from('visit_services').update(values).eq('id', ctx.visitServiceId));
+    const ms = opts.timeoutMs != null ? opts.timeoutMs : TIMING.writeTimeoutMs;
+    const res = ms ? await withTimeout(req, ms) : await req;
+    if (res && res.timedOut) {
+        // CABINET_FIX_V1_R5 (D) — строка заперта, пока не придёт ответ; тогда — доделать.
+        LINE_PENDING.add(k);
+        req.then((late) => late, (e) => ({ error: { message: String((e && e.message) || e) } }))
+            .then((late) => { LINE_PENDING.delete(k); return settleWrite(ctx, payload, sent, late, opts, true); })
+            .catch((e) => console.warn('[workspace] late write:', e));
+        toast(tr('Сервер не ответил вовремя. Ждём ответа — сохранять можно будет, когда он придёт.'), 'fail');
+        return false;
+    }
+    return settleWrite(ctx, payload, sent, res, opts, false);
+}
+// Ответ на запись строки — сразу или после срока (late).
+async function settleWrite(ctx, payload, sent, res, opts, late) {
     const { error } = res || {};
     if (error) {
-        if (error.code === 'signed_conflict') {   // CABINET_FIX_V1_R4 (п. 2) — подписано в другом окне
+        if (error.code === 'notes_conflict' || error.code === 'signed_conflict') {   // CABINET_FIX_V1_R4 (п. 2) · CABINET_FIX_V1_R5 (A)
             await adoptServerRecords(ctx);
-            toast(tr('Документ подписан в другом окне. Ваш текст остался на экране — нажмите «Сохранить» ещё раз.'), 'fail');
-            return false;
+            toast(late && opts.sign
+                ? tr('Подпись не прошла: документ изменился, пока шло сохранение. Ваш текст остался на экране — сохраните и подпишите ещё раз.')
+                : tr('Документ изменился, пока шло сохранение. Ваш текст остался на экране — нажмите «Сохранить» ещё раз.'), 'fail');
+        } else {
+            toast(trf('Не удалось сохранить: {msg}', { msg: error.message }), 'fail');
         }
-        toast(trf('Не удалось сохранить: {msg}', { msg: error.message }), 'fail');
+        if (late && opts.onLate) { try { await opts.onLate(false); } catch (e) { console.warn('[workspace] late:', e); } }
         return false;
     }
     ownPayload(payload, ctx.visitServiceId);
+    PAYLOAD_BASE.set(payload, notesBaseOf(sent));   // CABINET_FIX_V1_R5 (A) — у строки теперь лежит ровно это
     // CABINET_FIX_V1_R3 (F1) — записанное — в состояние СВОЕЙ строки, открыта она
     // или отложена: иначе строка, отложенная во время подписи, возвращалась с
     // записями до подписи, и следующий «Черновик» стирал подписанную версию.
     const st = stateOf(ctx);
     st.payload = payload;
     st.payloadVs = ctx.visitServiceId;
+    if (late) {
+        if (opts.onLate) { try { await opts.onLate(true); } catch (e) { console.warn('[workspace] late:', e); } }
+        else toast(tr('Сохранение дошло до сервера с опозданием — документ сохранён.'), 'ok');
+    }
     return true;
 }
 
@@ -3519,7 +3574,7 @@ function historyRow(item, isFirst, ctx, originalIdx) {
     const trashBtn = canDelete ? h('button', {
         type: 'button',
         title: item.kind === 'referral' ? 'Удалить направление' : 'Удалить черновик',
-        onclick: (ev) => { ev.stopPropagation(); handleDeleteEntry(ctx, originalIdx); },
+        onclick: (ev) => { ev.stopPropagation(); handleDeleteEntry(ctx, item); },   // CABINET_FIX_V1_R5 (E) — по самой записи, не по номеру
         onmouseenter: (ev) => { ev.currentTarget.style.background = 'var(--crit-50)'; ev.currentTarget.style.color = 'var(--crit-700)'; },
         onmouseleave: (ev) => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = 'var(--ink-400)'; },
         style: {
@@ -3592,7 +3647,9 @@ export function entryDx(f, diagnoses = wsState.payload && wsState.payload.diagno
         // CABINET_FIX_V1_R4 (п. 6) — кода записи нет среди диагнозов строки (его сняли):
         // строка кода как есть, затем текст; у записи до ревью 2 код уже стоит первой строкой текста.
         const t = parts.text;
-        if (t && t.split('\n')[0].trim().startsWith(code)) return t;
+        const first = t ? t.split('\n')[0].trim() : '';
+        // CABINET_FIX_V1_R5 (E) — код — до границы: «J20» не «съедает» строку «J20.9 — …».
+        if (first.startsWith(code) && !/[0-9A-Za-zА-Яа-яЁё.]/.test(first.charAt(code.length))) return t;
         return [code, t].filter(Boolean).join('\n');
     }
     return parts.full || (code || '');
@@ -3666,6 +3723,7 @@ function wsAddSection(ctx, sec) { ensureDocSections(); wsState.docSections.add(s
  * Пустой раздел убирается без вопроса. Экспорт — для проверки.
  */
 export function wsRemoveSection(ctx, sec) {
+    if (refuseWhileLoading(ctx)) return false;   // CABINET_FIX_V1_R5 (E) — во время загрузки «×» молча отменялось бы
     const def = DOC_SECTIONS.find((d) => d.sec === sec);
     const el = def && ctx && ctx.container && ctx.container.querySelector('.a4-input[data-field="' + def.field + '"]');
     // CABINET_FIX_V1_R3 — «Диагноз» с выбранными кодами МКБ-10: убранный раздел
@@ -3712,7 +3770,7 @@ async function removeAllDiagnoses(ctx) {
     const payload = await currentPayload(ctx);
     if (FAILED_READ.has(payload)) { refuseWhileLoading(ctx, { force: true }); return false; }
     const removed = Array.isArray(payload.diagnoses) ? payload.diagnoses.slice() : [];
-    const next = ownPayload({ ...payload, diagnoses: [] }, ctx.visitServiceId);
+    const next = ownPayload(derivePayload(payload, { ...payload, diagnoses: [] }), ctx.visitServiceId);   // CABINET_FIX_V1_R5 — копия с основой
     if (!await writePayload(ctx, next)) return false;
     if (wsState.ctx === ctx) { try { paintDiagnoses(ctx); } catch (e) { /* бланк перерисуется позже */ } }
     else ctx.__wsDirty = true;
@@ -4823,11 +4881,16 @@ async function handleSaveDraft(ctx, opts = {}) {
     payload.dxSplit = 1;   // CABINET_FIX_V1_R3 (F7) — «Диагноз» сохранён после ревью 2: код в нём — текст врача
     payload.history = payload.history.filter(e => e.kind !== 'draft');
     payload.history.push(entry);
-    if (!await writePayload(ctx, payload)) return false;
-    clearUnsaved(ctx, tCollect);   // CABINET_FIX_V1_R4 ([U])
-    paintHistoryList(ctx);
-    if (wsState.ctx === ctx && wsState.rtab === 'drafts') paintRtab(ctx);
-    updateSavedMarker(ctx, trf('Сохранено · {time}', { time: shortTime(entry.savedAt) }));
+    const saved = () => {
+        clearUnsaved(ctx, tCollect);   // CABINET_FIX_V1_R4 ([U])
+        paintHistoryList(ctx);
+        if (wsState.ctx === ctx && wsState.rtab === 'drafts') paintRtab(ctx);
+        updateSavedMarker(ctx, trf('Сохранено · {time}', { time: shortTime(entry.savedAt) }));
+    };
+    // CABINET_FIX_V1_R5 (D) — ответ после срока: черновик сохранён — сказать об этом.
+    const onLate = async (ok) => { if (ok) { saved(); toast(tr('Сохранение дошло до сервера с опозданием — документ сохранён.'), 'ok'); } };
+    if (!await writePayload(ctx, payload, {}, { onLate })) return false;
+    saved();
     if (!opts.silent) toast('Черновик сохранён', 'ok');
     return true;
 }
@@ -4876,6 +4939,8 @@ async function handleSignFinalize(ctx) {
     const vsKey = Number(ctx.visitServiceId);
     // CABINET_FIX_V1_R3 (F11) · CABINET_FIX_V1_R4 — второй щелчок, пока подпись строки «в пути» (в любом её экране), — ничего.
     if (LINE_SIGNING.has(vsKey)) return;
+    // CABINET_FIX_V1_R5 (D) — ответа на прошлую подпись (запись) строки ещё нет: кнопка доступна и объясняет.
+    if (LINE_PENDING.has(vsKey)) { toast(tr('Сервер ещё не ответил на прошлое сохранение — подождите и повторите.'), 'fail'); return; }
     if (wsState.ctx !== ctx) { toast(tr('Документ открыт в другой строке — вернитесь к нему и повторите.'), 'fail'); return; }
     if (refuseWhileLoading(ctx)) return;   // CABINET_FIX_V1_R3 (F3)
     // CABINET_FIX_V1_R4 (п. 2) — копия записей устарела (подпись из другого экрана
@@ -4883,7 +4948,8 @@ async function handleSignFinalize(ctx) {
     // синхронно, из открытой строки.
     if (!wsState.payload || wsState.payloadVs !== ctx.visitServiceId || PAYLOAD_LINE.get(wsState.payload) !== vsKey
         || FAILED_READ.has(wsState.payload) || !payloadFresh(wsState.payload, ctx.visitServiceId)) {
-        const fresh = await currentPayload(ctx);
+        const fresh = await withTimeout(currentPayload(ctx), TIMING.writeTimeoutMs);   // CABINET_FIX_V1_R5 (E) — не висеть вечно
+        if (fresh && fresh.timedOut) { toast(tr('Сервер не ответил — проверьте и повторите.'), 'fail'); return; }
         if (FAILED_READ.has(fresh) || wsState.ctx !== ctx || wsState.payload !== fresh || LINE_SIGNING.has(vsKey)) {
             toast(tr('Документ ещё загружается — подождите секунду и повторите.'), 'fail'); return;
         }
@@ -4900,7 +4966,7 @@ async function handleSignFinalize(ctx) {
         .some(x => String(x || '').replace(/<[^>]*>/g, '').trim()) || !!_mainDxText();   // CABINET_FIX_V1_R2 — основной диагноз в документе — тоже текст
     const _actor = (typeof window !== 'undefined' && window.easymed && window.easymed.state && window.easymed.state.user) || {};
     // Снимок этой строки — ДО любых ожиданий (см. выше).
-    const payload = ownPayload(JSON.parse(JSON.stringify(wsState.payload)), ctx.visitServiceId);
+    const payload = ownPayload(derivePayload(wsState.payload, JSON.parse(JSON.stringify(wsState.payload))), ctx.visitServiceId);   // CABINET_FIX_V1_R5 — копия с основой
     if (!Array.isArray(payload.history)) payload.history = [];
     const diagImages = (wsState.diagImages || []).slice();
     const _base = buildBlankData(ctx);
@@ -4942,9 +5008,11 @@ async function handleSignFinalize(ctx) {
     // CABINET_FIX_V1_R3 (F11) — подпись «в пути»: второй щелчок и другие записи строки ждут.
     LINE_SIGNING.add(vsKey);   // CABINET_FIX_V1_R4 — замок строки, а не экрана
     setSignBusy(ctx, true);
-    try {
-        // CABINET_FIX_V1_R4 (п. 10a) — сервер не ответил за срок: замок снимается, врач предупреждён.
-        if (!await writePayload(ctx, payload, { status: 'completed' }, { sign: true, timeoutMs: TIMING.signTimeoutMs })) return;
+    // CABINET_FIX_V1_R5 (ревью 5, D) — всё, что подпись делает после записи
+    // (архив, заключение визита, статус), — одной функцией: сразу и когда запись
+    // дошла уже после срока (раньше поздняя подпись оставляла строку подписанной
+    // без копии в архиве и без заключения визита).
+    const afterSigned = async (late) => {
         // CABINET_FIX_V1_R4 (п. 2) — подпись дошла: копии записей строки во всех её экранах
         // устарели (перечитаются), кроме только что записанной; замок записи снят.
         invalidateLine(ctx.visitServiceId);
@@ -5011,11 +5079,20 @@ async function handleSignFinalize(ctx) {
 
         paintHistoryList(ctx);   // CABINET_FIX_V1_R2 — рисует, только если строка открыта
         updateSavedMarker(ctx, trf('Подписано · {time}', { time: shortTime(entry.savedAt) }));
-        if (_archived) toast(visitCompleted ? 'Документ подписан. Приём пациента завершён.' : 'Документ подписан. Услуга отмечена выполненной.');
+        if (_archived && late) toast(tr('Подпись дошла до сервера с опозданием — документ подписан.'), 'ok');   // CABINET_FIX_V1_R5 (D)
+        else if (_archived) toast(visitCompleted ? 'Документ подписан. Приём пациента завершён.' : 'Документ подписан. Услуга отмечена выполненной.');
         else toast(tr('Подпись сохранена, но копия документа для печати в архив не записалась. Подпишите документ ещё раз или обратитесь к администратору.'), 'warn');   // CABINET_FIX_V1_R4 (п. 7)
 
         // Bounce back to the My services list so the queue refreshes — только из этой строки.
-        if (ctx.onNavigate) setTimeout(() => { if (wsState.ctx === ctx) ctx.onNavigate('consultation'); }, 600);
+        // CABINET_FIX_V1_R5 (D) — поздний ответ не уводит: врач после «не ответил вовремя»
+        // мог продолжить работу в строке; ему — уведомление и отметка «Подписано».
+        if (ctx.onNavigate && !late) setTimeout(() => { if (wsState.ctx === ctx) ctx.onNavigate('consultation'); }, 600);
+    };
+    try {
+        // CABINET_FIX_V1_R4 (п. 10a) · CABINET_FIX_V1_R5 (D) — сервер не ответил за срок: врач
+        // предупреждён, строка заперта до ответа; ответ придёт — подпись доделает своё.
+        if (!await writePayload(ctx, payload, { status: 'completed' }, { sign: true, timeoutMs: TIMING.signTimeoutMs, onLate: async (ok) => { if (ok) await afterSigned(true); } })) return;
+        await afterSigned(false);
     } finally {
         LINE_SIGNING.delete(vsKey);   // CABINET_FIX_V1_R3 (F11) · CABINET_FIX_V1_R4
         setSignBusy(ctx, false);
@@ -5027,6 +5104,8 @@ export const signDocument = (ctx) => handleSignFinalize(ctx);
 export const saveDraft = (ctx, opts) => handleSaveDraft(ctx, opts);
 export const finishVisit = (ctx) => tryFinish(ctx);
 export const hydrateLine = (ctx) => hydrateWorkspace(ctx);
+export const deleteHistoryEntry = (ctx, item) => handleDeleteEntry(ctx, item);   // CABINET_FIX_V1_R5 — экспорт для проверки
+export const diagAddImages = (ctx, files) => _diagAddImages(ctx, files);          // CABINET_FIX_V1_R5 — экспорт для проверки
 export const pastePickField = (ctx, html, defaultField, okMsg) => _pastePickField(ctx, html, defaultField, okMsg);   // CABINET_FIX_V1_R4 — экспорт для проверки
 
 // Recompute the parent visit's status from its services. The visit is marked
@@ -5061,17 +5140,22 @@ async function syncVisitStatus(visitId) {
 // Delete a Conclusions entry by its index in the chronological history array.
 // Drafts and referrals can be deleted; signed conclusions remain as audit.
 // ---------------------------------------------------------------------------
-async function handleDeleteEntry(ctx, originalIdx) {
+// CABINET_FIX_V1_R5 (ревью 5, E) — запись удаляется по ней самой (вид + savedAt), а
+// не по номеру в списке: после перечитывания записей номер мог указать на другую.
+async function handleDeleteEntry(ctx, item) {
     const payload = await currentPayload(ctx);
-    const entry = payload.history[originalIdx];
-    if (!entry || (entry.kind !== 'draft' && entry.kind !== 'referral')) {
+    const history = Array.isArray(payload.history) ? payload.history : [];
+    const idx = item ? history.findIndex((e) => e && e.kind === item.kind && e.savedAt === item.savedAt) : -1;
+    if (idx < 0) { toast(tr('Эта запись уже изменилась — список обновлён.'), 'fail'); paintHistoryList(ctx); return; }
+    const entry = history[idx];
+    if (entry.kind !== 'draft' && entry.kind !== 'referral') {
         toast('Эту запись нельзя удалить.', 'fail');
         return;
     }
     const label = entry.kind === 'referral' ? 'referral' : 'draft';
     if (!confirm(tr('Удалить эту запись?'))) return;
-    payload.history.splice(originalIdx, 1);
-    if (!await writePayload(ctx, payload)) return;
+    const next = ownPayload(derivePayload(payload, { ...payload, history: history.filter((_, i) => i !== idx) }), ctx.visitServiceId);
+    if (!await writePayload(ctx, next)) return;
     paintHistoryList(ctx);
     toast(label.charAt(0).toUpperCase() + label.slice(1) + ' deleted.');
 }
@@ -5131,6 +5215,7 @@ function openSnapshotModal(ctx, item) {
             title: 'Скопировать эти значения в форму. Они не сохранятся, пока вы не нажмёте «Сохранить черновик».',
             onclick: () => {
                 applyFields(ctx, item.fields);
+                wsState.saved = false; resetSaveBtn(ctx);   // CABINET_FIX_V1_R5 (E) — «Ещё не сохранено», несохранённое — эта версия
                 close();
                 toast('Данные загружены в форму. Нажмите «Сохранить черновик», чтобы сохранить.');
             },
@@ -6105,6 +6190,7 @@ function _compressImage(file, maxDim, quality) {
     });
 }
 async function _diagAddImages(ctx, fileList) {
+    if (refuseWhileLoading(ctx)) return;   // CABINET_FIX_V1_R5 (E) — снимок заменился бы при загрузке
     const files = [...(fileList || [])].filter(f => /^image\//.test(f.type));
     if (!files.length) return;
     const MAX = 12;
@@ -6258,6 +6344,7 @@ function _wireBlankEditing(ctx, frame) {
     // renders with __editor:true.
     for (const b of doc.querySelectorAll('[data-img-add]')) b.addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();
+        if (refuseWhileLoading(ctx)) return;   // CABINET_FIX_V1_R5 (E)
         const inp = document.createElement('input');
         inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true; inp.style.display = 'none';
         inp.addEventListener('change', () => { _diagAddImages(ctx, inp.files); inp.remove(); });
@@ -6265,6 +6352,7 @@ function _wireBlankEditing(ctx, frame) {
     });
     for (const b of doc.querySelectorAll('[data-img-rm]')) b.addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();
+        if (refuseWhileLoading(ctx)) return;   // CABINET_FIX_V1_R5 (E)
         const i = Number(b.getAttribute('data-img-rm'));
         if (i >= 0 && i < (wsState.diagImages || []).length) {
             wsState.diagImages.splice(i, 1); wsState.saved = false; resetSaveBtn(ctx); renderBlank(ctx);

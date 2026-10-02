@@ -144,13 +144,27 @@ test('п. 2: старый документ «Приёма» у УЗИ откры
     assert.match(code(WS_SRC), /const _saved = savedDocType\(payload\);\s*if \(_saved\) \{ ctx\.docTypeSaved = true;/, 'открытие не восстанавливает тип старого документа');
 });
 
-test('п. 2: новая подпись беднее прежней — спросить, назвав пропадающие разделы', () => {
+test('п. 2: новая подпись беднее прежней — спросить, назвав пропадающие разделы', async () => {
     const prev = { chief_complaint: 'Боль', physical_exam: 'Норма', therapy_text: '' };
     assert.deepEqual(WS.lostOnResign(prev, { chief_complaint: 'Боль', physical_exam: '' }), ['Осмотр']);
     assert.deepEqual(WS.lostOnResign(prev, { chief_complaint: 'Боль, слабость', physical_exam: 'Норма' }), []);
     assert.deepEqual(WS.lostOnResign(null, {}), []);
-    const c = code(WS_SRC);
-    assert.match(c, /const _lost = _last \? lostOnResign\(_last\.fields, fields, \{ diagnoses: payload\.diagnoses \}\) : \[\];/);   // CABINET_FIX_V1_R3 (F9) · CABINET_FIX_V1_R4 (п. 1) — диагнозы строки
+    // CABINET_FIX_V1_R5 (F) — поведением, а не текстом исходника: подпись строки, у которой в
+    // подписанной версии был «Осмотр», а сейчас он пуст, спрашивает и называет его.
+    NOTES.set(1, JSON.stringify({ __service_workspace_v1: 1, dxSplit: 1, current: prev,
+        history: [{ kind: 'signed', savedAt: '2026-10-01T08:00:00.000Z', by: null, byName: 'Каримов Алишер', fields: prev }] }));
+    const ctx = realCabinet('conclusion');
+    await WS.hydrateLine(ctx);
+    field(ctx, 'physical_exam').innerHTML = '';
+    answerConfirm(false); CONFIRMS.length = 0;
+    await WS.signDocument(ctx);   // «Документ уже подписан… новую версию?» — «Нет»: ничего не пишется
+    answerConfirm(true); CONFIRMS.length = 0;
+    const writes = WRITES.length;
+    const origConfirm = globalThis.confirm;
+    globalThis.confirm = (m) => { CONFIRMS.push(String(m)); return !/пусты разделы/.test(String(m)); };   // «новую версию?» — да, «пусты разделы» — нет
+    try { await WS.signDocument(ctx); } finally { globalThis.confirm = origConfirm; }
+    assert.ok(CONFIRMS.some((m) => /пусты разделы.*Осмотр/.test(m)), 'подпись не назвала пропадающий «Осмотр»: ' + CONFIRMS.join(' | '));
+    assert.equal(WRITES.length, writes, 'отказ на вопросе о пустых разделах — а подпись записана');
 });
 
 test('п. 3: правка старого шаблона не стирает его ключи; «Использовать» кладёт «Диагноз» и старые разделы', () => {

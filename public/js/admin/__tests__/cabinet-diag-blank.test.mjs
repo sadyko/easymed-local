@@ -202,10 +202,8 @@ test('кабинет: проводка правил бланка диагнос�
     // хранилище «Описания» под бланком — вне свёрнутых разделов
     assert.match(code, /'data-diag-fields': ''[\s\S]{0,200}'data-field': 'instrumental_text'/, 'у «Описания» нет поля под бланком');
     // открытие сохранённого документа не стирает строку «Диагноз»
-    // CABINET_FIX_V1_R3 (F7) · CABINET_FIX_V1_R4 (п. 12) — открытие (keepBand) чистит только записи до
-    // ревью 2 (без dxSplit): поведением — cabinet-review-r4.test.mjs, «12 (F7)»; здесь — что открытие
-    // вообще идёт через paintDiagnoses с keepBand.
-    assert.match(code, /paintDiagnoses\(ctx, \{ keepBand: [^}]+\}\)/, 'hydrate снова стирает «Заключение» диагностики');
+    // CABINET_FIX_V1_R5 (F) — проверяется поведением, на настоящей форме: cabinet-review-r5.test.mjs
+    // («открытие документа диагностики не стирает «Заключение»») и cabinet-review-r4.test.mjs («12 (F7)»).
     // экран, печать и архив берут данные бланка исследования из одного места
     // CABINET_FIX_V1_R1 — печать и архив берут ОДИН снимок (docSnapshot), а он у
     // диагностики — diagDocData; экран — тоже diagDocData.
