@@ -71,3 +71,38 @@ test('пустая подпись не отзывает прежний доку�
   sign(db3, 'protocol', { v: 2 });
   assert.deepEqual(active(db3).map((d) => d[1]), [{ v: 2 }]);
 });
+
+// CABINET_FIX_V1_R2 (ревью 2, п. 7) — «есть ли в документе содержание» решалось
+// списком ключей: images:[''] считалось изображением, а текст под любым другим
+// ключом (bodyHtml, dxText, свой раздел) — пустотой, и такой документ отзывался
+// пустой подписью. Теперь содержание — любой непустой текст тела, кроме шапки;
+// пустые строки в списках — не содержание.
+test('ревью 2, п. 7: images:[\'\'] — пустая подпись, она не отзывает документ с текстом', () => {
+  const db = seed();
+  sign(db, 'diag', DIAG);
+  sign(db, 'diag', { ...DIAG_EMPTY, images: [''] });
+  assert.equal(active(db).length, 2, 'подпись с пустой строкой вместо изображения заменила документ с текстом');
+});
+
+test('ревью 2, п. 7: текст под ЛЮБЫМ ключом тела — содержание: такой документ пустая подпись не отзывает', () => {
+  for (const extra of [{ bodyHtml: '<p>Осмотр: без особенностей</p>' }, { dxText: 'Текст врача' }, { free_1: 'Свой раздел врача' }]) {
+    const db = seed();
+    sign(db, 'protocol', { patientName: 'Азизов Бахтиёр', doctorName: 'Каримов Алишер', ...extra });
+    sign(db, 'protocol', { patientName: 'Азизов Бахтиёр', doctorName: 'Каримов Алишер', complaint: '', images: [''], activeFields: ['chief_complaint'], sectionOrder: ['chief_complaint'], meta: { signedBy: 'Каримов Алишер', version: 2 } });
+    const docs = active(db);
+    assert.equal(docs.length, 2, JSON.stringify(extra) + ': документ с текстом отозван пустой подписью');
+    // а документ с текстом под таким ключом сам заменяет прежний
+    const db2 = seed();
+    sign(db2, 'protocol', PROTOCOL);
+    sign(db2, 'protocol', { patientName: 'Азизов Бахтиёр', ...extra });
+    assert.equal(active(db2).length, 1, JSON.stringify(extra) + ': документ с текстом не заменил прежний');
+  }
+});
+
+test('ревью 2, п. 7: шапка (пациент, врач, порядок разделов, отметка подписи) — не содержание', () => {
+  const db = seed();
+  const head = { patientName: 'Азизов Бахтиёр', mrn: 'P-1', dob: '1980-01-01', sex: 'Муж.', phone: '+998', doctorName: 'Каримов Алишер', doctorSpec: 'Уролог', service: 'УЗИ почек', issueDate: '02.10.2026', title: 'Заключение приёма', radiologist: 'Каримов Алишер', radiologistSpec: 'Уролог', doctorPhone: '+998', showDoctor: true, __editor: false, activeFields: ['chief_complaint'], sectionOrder: ['chief_complaint'], meta: { signedBy: 'Каримов Алишер', signedAt: '2026-10-02', version: 1 }, referrals: [{ id: 1, name: 'ОАК', note: 'Каримов' }], diagnoses: [], prescriptions: [] };
+  sign(db, 'protocol', head);
+  sign(db, 'protocol', { ...head, issueDate: '03.10.2026' });
+  assert.equal(active(db).length, 1, 'документ из одной шапки не заменился следующей подписью');
+});

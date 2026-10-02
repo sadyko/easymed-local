@@ -651,16 +651,23 @@ const ARCHIVE_TYPES = Object.freeze(['protocol', 'diag']);
  * текст приёма из архива. И пустая подпись (без текста, изображений и рецепта)
  * не отзывает прежний документ того же вида, в котором содержание есть.
  */
-// CABINET_FIX_V1_R1 — «есть ли в снимке документа что-то, кроме шапки»: текст
-// разделов (протокол — buildBlankData кабинета, диагностика — diagDocData),
-// изображения, рецепт.
-const DOC_TEXT_KEYS = Object.freeze(['complaint', 'hpi', 'labs', 'instrumental', 'exam', 'dx', 'therapy',
-  'recsText', 'conclusionText', 'description', 'conclusion']);
-function docHasContent(body) {
-  if (!body || typeof body !== 'object') return false;
-  if (DOC_TEXT_KEYS.some((k) => typeof body[k] === 'string' && body[k].trim())) return true;
-  return (Array.isArray(body.images) && body.images.length > 0)
-    || (Array.isArray(body.prescriptions) && body.prescriptions.some((r) => r && String(r.name || '').trim()));
+// CABINET_FIX_V1_R1 — «есть ли в снимке документа что-то, кроме шапки».
+// CABINET_FIX_V1_R2 (ревью 2, п. 7) — не списком ключей текста: список считал
+// images:[''] изображением, а текст под любым другим ключом (свой раздел врача,
+// dxText, разметка) — пустотой, и такой документ отзывался пустой подписью.
+// Теперь содержание — ЛЮБАЯ непустая строка тела (и вложенных списков и
+// объектов), кроме шапки: пациент, врач, услуга, даты, порядок разделов,
+// отметка подписи, направления из другого модуля. Пустые строки и разметка без
+// текста (<br>, пустые <div>) — не содержание; числа и флаги — тоже.
+const DOC_HEAD_KEYS = Object.freeze(new Set(['patientName', 'mrn', 'phone', 'dob', 'sex', 'doctorName', 'doctorSpec',
+  'service', 'issueDate', 'title', 'radiologist', 'radiologistSpec', 'doctorPhone', 'showDoctor', '__editor',
+  'activeFields', 'sectionOrder', 'meta', 'docNo', 'dateIn', 'dateOut', 'study', 'referrals', 'type', 'typeLabel', 'id']));
+function docHasContent(body, depth = 0) {
+  if (body == null || depth > 8) return false;
+  if (typeof body === 'string') return body.replace(/<(?!img\b)[^>]*>/gi, '').replace(/&nbsp;/g, ' ').trim() !== '';
+  if (Array.isArray(body)) return body.some((x) => docHasContent(x, depth + 1));
+  if (typeof body === 'object') return Object.keys(body).some((k) => !DOC_HEAD_KEYS.has(k) && docHasContent(body[k], depth + 1));
+  return false;
 }
 export function visitDocumentArchive(db, args, user) {
   const roles = effectiveRoles(user);
