@@ -370,3 +370,17 @@ test('ревью 5 (B): «Выполнено» на строке с докуме
   assert.deepEqual(again.history.map((e) => e.kind), ['signed']);
   assert.equal(again.nurseNote, undefined);
 });
+
+// CABINET_FIX_V1_R6 (ревью 6, п. 3) — заметка, которая сама по себе корректный JSON
+// («37.5», «true», «[1,2]»), — текст, а не записи кабинета: список показывает её как есть,
+// новая заметка её заменяет (как всякую текстовую), а не теряется и не ломает документ.
+test('ревью 6 (п. 3): заметка-«число» — текст: видна в списке, «Выполнено» с новой заметкой её заменяет', () => {
+  const db = seed();
+  outLine(db, { id: 1, doctorId: 2, status: 'queued' });
+  for (const note of ['37.5', 'true', '[1,2]']) {
+    db.prepare("UPDATE visit_services SET notes = ?, status = 'queued' WHERE id = 1").run(note);
+    assert.equal(proceduresList(db, {}, ACTOR.nurse).rows.find((r) => r.id === 1).notes, note, 'заметка ' + note + ' не видна');
+    procedureComplete(db, { kind: 'outpatient', id: 1, notes: 'повторно ' + note }, ACTOR.nurse);
+    assert.equal(db.prepare('SELECT notes FROM visit_services WHERE id = 1').get().notes, 'повторно ' + note);
+  }
+});

@@ -20,6 +20,7 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 // CABINET_FIX_V1_R5 (ревью 5, C) — предел тела для документа кабинета врача (см. ниже).   // CABINET_FIX_V1_R5
 const CABINET_BODY_LIMIT = '8mb';   // CABINET_FIX_V1_R5
 const CABINET_DOC_ROUTE = /^\/api\/(db|rpc\/visit_document_archive)(\/|\?|$)/;   // CABINET_FIX_V1_R5
+const CABINET_ARCHIVE_ROUTE = /^\/api\/rpc\/visit_document_archive(\/|\?|$)/;   // CABINET_FIX_V1_R6
 
 export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   setDataDir(dataDir);   // LICENCE_CORE_V1 — RPC handlers get no `req`; they read it from here.
@@ -76,8 +77,18 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   // до ~6 МБ, плюс текст версий. При 100 КБ строка с одним снимком не   // CABINET_FIX_V1_R5
   // сохранялась и не подписывалась («Некорректный запрос»). Предел этих двух   // CABINET_FIX_V1_R5
   // дверей — 8 МБ; остальное — как было.   // CABINET_FIX_V1_R5
-  app.use('/api/db', express.json({ limit: CABINET_BODY_LIMIT }));   // CABINET_FIX_V1_R5
-  app.use('/api/rpc/visit_document_archive', express.json({ limit: CABINET_BODY_LIMIT }));   // CABINET_FIX_V1_R5
+  // CABINET_FIX_V1_R6 (ревью 6, п. 7) — тело до 8 МБ разбирается только для вошедшего:   // CABINET_FIX_V1_R6
+  // у этих двух дверей сессия проверяется ДО разбора тела (без входа — 401, тело не   // CABINET_FIX_V1_R6
+  // читается). Пользователь кладётся в запрос один раз — общий attachUser ниже его не   // CABINET_FIX_V1_R6
+  // перечитывает.   // CABINET_FIX_V1_R6
+  const attachUserOnce = attachUser(db);   // CABINET_FIX_V1_R6
+  const authBeforeBigBody = (req, res, next) => attachUserOnce(req, res, () => {   // CABINET_FIX_V1_R6
+    if (!req.user) return res.status(401).json({ error: { code: 'unauthorized', message: 'Нужно войти в систему.' } });   // CABINET_FIX_V1_R6
+    req.__userAttached = true;   // CABINET_FIX_V1_R6
+    next();   // CABINET_FIX_V1_R6
+  });   // CABINET_FIX_V1_R6
+  app.use('/api/db', authBeforeBigBody, express.json({ limit: CABINET_BODY_LIMIT }));   // CABINET_FIX_V1_R5 · CABINET_FIX_V1_R6
+  app.use('/api/rpc/visit_document_archive', authBeforeBigBody, express.json({ limit: CABINET_BODY_LIMIT }));   // CABINET_FIX_V1_R5 · CABINET_FIX_V1_R6
   app.use('/api/rpc', express.json({ limit: '2mb' }));
   app.use('/api', express.json({ limit: '100kb' }));
   // V3120_FIX — /api/health ТРОГАЕТ БАЗУ. Раньше он отвечал {ok:true}, даже
@@ -94,7 +105,7 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
     }
     res.json({ ok: true });
   });
-  app.use(attachUser(db));
+  app.use((req, res, next) => (req.__userAttached ? next() : attachUserOnce(req, res, next)));   // CABINET_FIX_V1_R6 — уже положен (двери кабинета выше) — не перечитывать
   app.use(attachControl(db, dataDir));   // LICENCE_CORE_V1
   app.use('/api/auth', authRoutes(db));
   // TELEPHONY_V1 — Binotel's webhook receivers, in /api/auth's slot: BEFORE
@@ -185,10 +196,14 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
     // CABINET_FIX_V1_R5 (ревью 5, C) — слишком большое тело — честно и что делать,   // CABINET_FIX_V1_R5
     // а не «Некорректный запрос».   // CABINET_FIX_V1_R5
     if (status === 413 || err.type === 'entity.too.large') {   // CABINET_FIX_V1_R5
-      const doc = CABINET_DOC_ROUTE.test(req.originalUrl || req.url || '');   // CABINET_FIX_V1_R5
-      return res.status(413).json({ error: { code: 'too_large', message: doc   // CABINET_FIX_V1_R5
+      const url = req.originalUrl || req.url || '';   // CABINET_FIX_V1_R6
+      // CABINET_FIX_V1_R6 (п. 7) — /api/db пишет любые таблицы: слова общие; о снимках   // CABINET_FIX_V1_R6
+      // говорит копия подписи, а кабинет — сам, по коду too_large.   // CABINET_FIX_V1_R6
+      return res.status(413).json({ error: { code: 'too_large', message: CABINET_ARCHIVE_ROUTE.test(url)   // CABINET_FIX_V1_R5 · CABINET_FIX_V1_R6
         ? 'Документ слишком большой для сохранения (больше 8 МБ) — уберите часть снимков или замените их снимками поменьше и сохраните снова.'   // CABINET_FIX_V1_R5
-        : 'Запрос слишком большой — сократите данные и повторите.' } });   // CABINET_FIX_V1_R5
+        : CABINET_DOC_ROUTE.test(url)   // CABINET_FIX_V1_R6
+          ? 'Запрос слишком большой для сохранения (больше 8 МБ) — сократите данные и повторите.'   // CABINET_FIX_V1_R6
+          : 'Запрос слишком большой — сократите данные и повторите.' } });   // CABINET_FIX_V1_R5
     }   // CABINET_FIX_V1_R5
     res.status(status).json({
       error: status >= 500

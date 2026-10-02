@@ -15,6 +15,10 @@
 //   • у строки не JSON кабинета (пусто, текст других экранов) — запись без
 //     основы проходит как прежде; с основой — основа должна совпасть (две
 //     «первые» записи из двух окон: вторая видит первую).
+//   • CABINET_FIX_V1_R6 — СОВМЕСТИМОСТЬ (убрать в следующем выпуске): запись
+//     БЕЗ основы на строке с JSON кабинета (вкладка, открытая до обновления) —
+//     по правилу ревью 4: JSON кабинета, все подписанные версии на месте;
+//     заметка медсестры, которой в записи нет, сохраняется (notesCompatValue).
 // Чистые функции без DOM: их импортируют и сервер (routes/db.js,
 // rpc/procedures.js), и кабинет (service-workspace.js), и проверки.
 export const NOTES_TAG = '__service_workspace_v1';
@@ -74,10 +78,34 @@ export function notesWriteRefusal(storedRaw, nextValue, base) {
         if (base != null && base !== notesBaseOf(storedRaw)) return { reason: 'stale', message: NOTES_CONFLICT_MESSAGE };
         return null;
     }
-    if (base == null || base !== notesBaseOf(storedRaw)) return { reason: 'stale', message: NOTES_CONFLICT_MESSAGE };
+    // CABINET_FIX_V1_R6 (ревью 6, п. 1) — ПРАВИЛО СОВМЕСТИМОСТИ, УБРАТЬ В СЛЕДУЮЩЕМ
+    // ВЫПУСКЕ. Вкладка, открытая до обновления сервера (кабинет 3.15.0), держит старый
+    // код и основы не шлёт; отказ «нет основы» запирал ей и «Черновик», и подпись, а F5
+    // терял набранное. Запись БЕЗ основы проходит по правилу ревью 4: это JSON кабинета
+    // и все подписанные версии строки на месте (заметку медсестры переносит
+    // notesCompatValue). Запись С основой — «сравнить и заменить» целиком; новый
+    // кабинет основу шлёт всегда.
+    if (base != null && base !== notesBaseOf(storedRaw)) return { reason: 'stale', message: NOTES_CONFLICT_MESSAGE };
     if (!validCabinet(typeof nextValue === 'string' ? nextValue : null)) return { reason: 'not_cabinet', message: NOTES_NOT_CABINET_MESSAGE };
     if (signedVersionsDropped(storedRaw, nextValue)) return { reason: 'signed_dropped', message: NOTES_CONFLICT_MESSAGE };
     return null;
+}
+
+/**
+ * CABINET_FIX_V1_R6 (ревью 6, п. 1) — ПРАВИЛО СОВМЕСТИМОСТИ (убрать вместе с веткой
+ * «без основы» выше). Вкладка 3.15.0 не знает о заметке медсестры (nurseNote) и
+ * пишет записи без неё. Если у строки заметка есть, а в записи без основы ключа
+ * nurseNote нет — записывается присланное плюс сохранённая заметка. Иначе — null:
+ * пишется ровно присланное (запись с основой — всегда так).
+ */
+export function notesCompatValue(storedRaw, nextValue, base) {
+    if (base != null || !storedIsCabinet(storedRaw)) return null;
+    const prev = parse(storedRaw);
+    const next = validCabinet(typeof nextValue === 'string' ? nextValue : null);
+    if (!prev || !next) return null;
+    if (typeof prev.nurseNote !== 'string' || !prev.nurseNote) return null;
+    if (Object.prototype.hasOwnProperty.call(next, 'nurseNote')) return null;
+    return JSON.stringify({ ...next, nurseNote: prev.nurseNote });
 }
 
 // CABINET_FIX_V1_R5 (ревью 5, B) — ЗАМЕТКА МЕДСЕСТРЫ («Выполнено» процедуры). У

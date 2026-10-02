@@ -10,7 +10,7 @@ import { readIdentity } from '../services/branch-sync/identity.js';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 import { constraintRefusal, errorBody } from '../services/server-message.js';   // V3120_I18N
-import { notesWriteRefusal, storedIsCabinet, NOTES_BASE_KEY, NOTES_CONFLICT_MESSAGE } from '../services/domain/cabinet-notes.js';   // CABINET_FIX_V1_R4 · CABINET_FIX_V1_R5
+import { notesWriteRefusal, storedIsCabinet, NOTES_BASE_KEY, NOTES_CONFLICT_MESSAGE, notesCompatValue } from '../services/domain/cabinet-notes.js';   // CABINET_FIX_V1_R4 · CABINET_FIX_V1_R5 · CABINET_FIX_V1_R6
 // CRM_REAL_BOOKING_V1 — статус услуги двигают экраны, и двигают они его через
 // эту дверь: работа над пациентом доказывает, что он пришёл.
 import { crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../services/crm/visit-status.js';
@@ -210,7 +210,9 @@ function takeNotesBase(body) {   // CABINET_FIX_V1_R5
   }   // CABINET_FIX_V1_R5
   return base;   // CABINET_FIX_V1_R5
 }   // CABINET_FIX_V1_R5
-export function refuseNotesWrite(db, meta, body, user, base) {   // CABINET_FIX_V1_R5 — экспорт для проверки
+// CABINET_FIX_V1_R6 — out.rewrite: запись одной строки без основы (вкладка 3.15.0),   // CABINET_FIX_V1_R6
+// к которой сервер добавляет сохранённую заметку медсестры (notesCompatValue).   // CABINET_FIX_V1_R6
+export function refuseNotesWrite(db, meta, body, user, base, out = null) {   // CABINET_FIX_V1_R5 — экспорт для проверки · CABINET_FIX_V1_R6
   if (!meta || meta.table !== 'visit_services' || (meta.op !== 'update' && meta.op !== 'upsert')) return null;   // CABINET_FIX_V1_R5
   const values = body && body.values && !Array.isArray(body.values) ? body.values : null;   // CABINET_FIX_V1_R5
   if (!values || !Object.prototype.hasOwnProperty.call(values, 'notes')) return null;   // CABINET_FIX_V1_R5
@@ -232,6 +234,10 @@ export function refuseNotesWrite(db, meta, body, user, base) {   // CABINET_FIX_
     const refusal = notesWriteRefusal(r.notes, values.notes, base);   // CABINET_FIX_V1_R5
     if (refusal) return refusal;   // CABINET_FIX_V1_R5
   }   // CABINET_FIX_V1_R5
+  if (out && rows.length === 1) {   // CABINET_FIX_V1_R6 — совместимость, убрать вместе с правилом «без основы»
+    const v = notesCompatValue(rows[0].notes, values.notes, base);   // CABINET_FIX_V1_R6
+    if (v != null) out.rewrite = v;   // CABINET_FIX_V1_R6
+  }   // CABINET_FIX_V1_R6
   return null;   // CABINET_FIX_V1_R5
 }   // CABINET_FIX_V1_R5
 
@@ -377,8 +383,16 @@ export function dbRoutes(db) {
     if (visitLineRefusal) {
       return res.status(409).json({ error: { code: 'conflict', message: visitLineRefusal } });
     }
-    const notesRefusal = refuseNotesWrite(db, compiled.meta, req.body, req.user, notesBase);   // CABINET_FIX_V1_R4 · CABINET_FIX_V1_R5
+    const notesOut = {};   // CABINET_FIX_V1_R6
+    const notesRefusal = refuseNotesWrite(db, compiled.meta, req.body, req.user, notesBase, notesOut);   // CABINET_FIX_V1_R4 · CABINET_FIX_V1_R5 · CABINET_FIX_V1_R6
     if (notesRefusal) return res.status(409).json({ error: { code: 'notes_conflict', reason: notesRefusal.reason, message: notesRefusal.message } });   // CABINET_FIX_V1_R5
+    // CABINET_FIX_V1_R6 — СОВМЕСТИМОСТЬ (убрать в следующем выпуске): вкладка 3.15.0 пишет   // CABINET_FIX_V1_R6
+    // записи без заметки медсестры — сохранённая заметка добавляется, правка собирается заново   // CABINET_FIX_V1_R6
+    // (тот же синхронный путь: между чтением и записью ничего не вклинится).   // CABINET_FIX_V1_R6
+    if (notesOut.rewrite != null) {   // CABINET_FIX_V1_R6
+      req.body.values.notes = notesOut.rewrite;   // CABINET_FIX_V1_R6
+      compiled = compile(req.body, req.user, { db });   // CABINET_FIX_V1_R6
+    }   // CABINET_FIX_V1_R6
 
     // CRM_CALENDAR_MIRROR_V1 — что заденет правка (и отказ, если она трогает
     // услугу заявки, уже выставленную или начатую). До выполнения: база ещё
