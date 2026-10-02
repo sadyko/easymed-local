@@ -81,6 +81,7 @@ function cabinet(id, type = 'conclusion', patient = {}, payload = { __service_wo
     container.appendChild(WS.soapForm(ctx));
     WS.setDocType(ctx, type);
     NOTES.set(id, JSON.stringify(payload));
+    ctx.__hydrated = true;   // CABINET_FIX_V1_R4 — открытая строка (вставки незагруженного листа отказывают); loaded() — загрузка записей
     return ctx;
 }
 // CABINET_FIX_V1_R3 (F3) — строка открыта так, как её открывает кабинет: записи легли в лист

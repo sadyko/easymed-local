@@ -47,6 +47,7 @@ function realCabinet(type = 'conclusion', patient = {}) {
     WS.activateWorkspace(ctx);
     container.appendChild(WS.soapForm(ctx));
     WS.setDocType(ctx, type);
+    ctx.__hydrated = true;   // CABINET_FIX_V1_R4 — открытая строка: записи легли в лист (вставки и записи незагруженного листа отказывают)
     return ctx;
 }
 const field = (ctx, k) => ctx.container.querySelector('[data-field="' + k + '"]');
@@ -149,7 +150,7 @@ test('п. 2: новая подпись беднее прежней — спро�
     assert.deepEqual(WS.lostOnResign(prev, { chief_complaint: 'Боль, слабость', physical_exam: 'Норма' }), []);
     assert.deepEqual(WS.lostOnResign(null, {}), []);
     const c = code(WS_SRC);
-    assert.match(c, /const _lost = _last \? lostOnResign\(_last\.fields, fields, \{ dxCode: [^}]*\}\) : \[\];/);   // CABINET_FIX_V1_R3 (F9) — + код МКБ строкой
+    assert.match(c, /const _lost = _last \? lostOnResign\(_last\.fields, fields, \{ diagnoses: payload\.diagnoses \}\) : \[\];/);   // CABINET_FIX_V1_R3 (F9) · CABINET_FIX_V1_R4 (п. 1) — диагнозы строки
 });
 
 test('п. 3: правка старого шаблона не стирает его ключи; «Использовать» кладёт «Диагноз» и старые разделы', () => {
@@ -240,7 +241,7 @@ test('п. 13: ответ прежней строки, пришедший поз�
     let release;
     HOLD.set(1, new Promise((r) => { release = r; }));
     const ctxA = { container: new El('div'), visitServiceId: 1, patient: {} };
-    const ctxB = { container: new El('div'), visitServiceId: 2, patient: {} };
+    const ctxB = { container: new El('div'), visitServiceId: 2, patient: {}, __hydrated: true };   // CABINET_FIX_V1_R4 — лист B загружен
     WS.activateWorkspace(ctxA);
     const pA = WS.loadLinePayload(ctxA);          // ответ строки A «в пути»
     WS.activateWorkspace(ctxB);                   // врач открыл строку B

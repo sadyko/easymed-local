@@ -31,7 +31,16 @@ export class El {
     removeAttribute(k) { delete this.attrs[k]; }
     addEventListener(t, fn) { (this._l[t] || (this._l[t] = [])).push(fn); }
     removeEventListener() {}
-    dispatch(type, ev = {}) { for (const fn of this._l[type] || []) fn({ currentTarget: this, target: this, preventDefault() {}, stopPropagation() {}, ...ev }); }
+    // CABINET_FIX_V1_R4 — как в браузере: после того как обработчик вернул
+    // управление (на первом await), event.currentTarget — null.
+    dispatch(type, ev = {}) {
+        for (const fn of this._l[type] || []) {
+            const e = { currentTarget: this, target: this, preventDefault() {}, stopPropagation() {}, ...ev };
+            const r = fn(e);
+            e.currentTarget = null;
+            if (r && typeof r.then === 'function') this._pending = r;
+        }
+    }
     appendChild(c) { if (c && typeof c === 'object') { if (c.parentElement) c.parentElement.removeChild(c); this.children.push(c); c.parentElement = this; } return c; }
     append(...cs) { cs.forEach((c) => this.appendChild(c)); }
     insertBefore(c, ref) { const i = this.children.indexOf(ref); if (i < 0) return this.appendChild(c); this.children.splice(i, 0, c); c.parentElement = this; return c; }
@@ -71,6 +80,9 @@ class Txt extends El { constructor(t) { super('#text'); this._text = String(t); 
 
 // Документ iframe бланка: разметку бланка стенд не разбирает (её проверяют
 // тесты doc-variants), но всё, что кабинет делает с документом, должно не падать.
+// CABINET_FIX_V1_R4 — поля бланка ([data-field]) стенд всё же достаёт из
+// записанной разметки: так проверяется, редактируются ли они (запор на время
+// загрузки строки). Остальная разметка не разбирается.
 function fakeDocument() {
     const root = new El('html');
     const head = new El('head');
@@ -78,7 +90,12 @@ function fakeDocument() {
     root.appendChild(head); root.appendChild(body);
     return {
         documentElement: root, head, body, html: '',
-        open() { this.html = ''; }, write(s) { this.html += String(s); }, close() {},
+        open() { this.html = ''; head.children = []; body.children = []; }, write(s) { this.html += String(s); },
+        close() {
+            const re = /<([a-z][a-z0-9]*)\b([^<>]*?)\sdata-field="([^"]+)"([^<>]*)>/gi;
+            let m;
+            while ((m = re.exec(this.html))) { const el = new El(m[1]); el.setAttribute('data-field', m[3]); body.appendChild(el); }
+        },
         createElement: (t) => new El(t), createTextNode: (t) => new Txt(t),
         querySelector: (sel) => root.querySelector(sel), querySelectorAll: (sel) => root.querySelectorAll(sel),
         addEventListener() {}, removeEventListener() {}, getSelection: () => null, createRange: () => ({ selectNodeContents() {}, collapse() {} }),

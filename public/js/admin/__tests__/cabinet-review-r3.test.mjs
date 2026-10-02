@@ -210,12 +210,7 @@ test('F7: «J06.9 — ОРВИ<br>Текст», записанное после 
     put(marked, 'primary_diagnosis', 'J06.9 — ОРВИ<br>Текст');   // как пришло (санитайзер стенда без DOMParser экранирует)
     WS.syncDiagnosisToDoc(marked, { keepBand: !JSON.parse(NOTES.get(8)).dxSplit });
     assert.equal(field(marked, 'primary_diagnosis').innerHTML, 'J06.9 — ОРВИ<br>Текст', 'текст, вставленный шаблоном после ревью 2, срезан');
-    assert.match(code(WS_SRC), /paintDiagnoses\(ctx, \{ keepBand: !payload\.dxSplit \}\)/, 'открытие чистит и новые записи');
-    for (const [kind, k] of [['черновик', 'saveDraft'], ['подпись', 'signDocument']]) {
-        const c = code(WS_SRC);
-        const fn = k === 'saveDraft' ? c.slice(c.indexOf('async function handleSaveDraft('), c.indexOf('const RESIGN_FIELDS')) : c.slice(c.indexOf('async function handleSignFinalize('), c.indexOf('async function syncVisitStatus('));
-        assert.match(fn, /payload\.dxSplit = 1;/, kind + ' не помечает запись ревью 2+');
-    }
+    // CABINET_FIX_V1_R4 (п. 12) — открытие и отметка dxSplit черновиком и подписью — поведением: cabinet-review-r4.test.mjs, «12 (F7)»
     const band = (html) => { const e = new El('div'); e.innerHTML = html; return e; };
     const old = band('J06.9 — ОРВИ<br>Текст');
     WS.applyDxBand(old, ORVI, { keep: true });
@@ -229,19 +224,20 @@ test('F7: «J06.9 — ОРВИ<br>Текст», записанное после 
 test('F8: «Диагноз» подписанной записи — её код (icd10) с названием, а не нынешний основной диагноз строки', () => {
     const f = { primary_diagnosis: 'Текст врача', icd10: 'N28.9' };
     const now = [{ code: 'E71.0', name: 'Болезнь "кленового сиропа"', type: 'main' }, { code: 'N28.9', name: 'Болезнь почки', type: 'concomitant' }];
-    assert.equal(WS.entryDx(f, [MSUD]), 'Текст врача', 'под «Подписано» — нынешний основной диагноз');
+    // CABINET_FIX_V1_R4 (п. 6) — кода записи нет среди диагнозов строки: строка кода, затем текст
+    assert.equal(WS.entryDx(f, [MSUD]), 'N28.9\nТекст врача', 'под «Подписано» — нынешний основной диагноз (или код записи потерян)');
     assert.equal(WS.entryDx(f, [{ code: 'N28.9', name: 'Болезнь почки', type: 'main' }]), 'N28.9 — Болезнь почки\nТекст врача');
-    assert.equal(WS.entryDx({ primary_diagnosis: '', icd10: 'N28.9' }, now), 'N28.9');
-    const c = code(WS_SRC);
-    const fill = c.slice(c.indexOf('async function fillServiceConclusion('), c.indexOf('async function fillLabResults('));
-    assert.match(fill, /entryDx\(f, payload && payload\.diagnoses\)/, '«Вставить результаты» берёт нынешний диагноз');
+    // код записи в строке сейчас — сопутствующий: название берётся, код — основной этой записи
+    assert.equal(WS.entryDx({ primary_diagnosis: '', icd10: 'N28.9' }, now), 'N28.9 — Болезнь почки');
+    // поведение «Вставить результаты» — cabinet-review-r4.test.mjs, п. 6 (fillServiceConclusion)
 });
 
 // ─── F9: код — тоже содержимое «Диагноза» ─────────────────────────────────
 test('F9: «Диагноз» записи до ревью 2 был только кодом — при новой подписи с тем же кодом он не «пуст»', () => {
-    assert.deepEqual(WS.lostOnResign({ primary_diagnosis: 'E71.0 — Болезнь "кленового сиропа"' }, { primary_diagnosis: '' }, { dxCode: true }), []);
+    // CABINET_FIX_V1_R4 (п. 1) — opts.diagnoses: «Диагноз», бывший ТОЛЬКО строкой выбранного кода, — не пропал
+    assert.deepEqual(WS.lostOnResign({ primary_diagnosis: 'E71.0 — Болезнь "кленового сиропа"' }, { primary_diagnosis: '' }, { diagnoses: [MSUD] }), []);
     assert.deepEqual(WS.lostOnResign({ primary_diagnosis: 'E71.0 — Болезнь "кленового сиропа"' }, { primary_diagnosis: '' }), ['Диагноз'], 'без кода — пропал');
-    assert.match(code(WS_SRC), /lostOnResign\(_last\.fields, fields, \{ dxCode: !!_mainDxText\(payload\.diagnoses\) \}\)/);
+    // поведение при подписи — cabinet-review-r4.test.mjs, п. 1
 });
 
 // ─── F10: строки Chrome ────────────────────────────────────────────────────
