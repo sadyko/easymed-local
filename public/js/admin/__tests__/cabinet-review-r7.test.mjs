@@ -172,6 +172,23 @@ test('п. 1: окно рецепта: препарат изменён и в др
     assert.ok(!TOASTS.some((t) => /изменение применено|Рецепт сохранён|Рецепт обновлён/.test(t)), 'успех при невыполненной правке: ' + TOASTS.join(' | '));
 });
 
+test('п. 1: правка одного препарата после отказа находит его по содержимому (другое окно пересохранило рецепт в полном виде)', async () => {
+    closeDialogs();
+    const a = await opened(85, notesOf({ chief_complaint: 'Исходно' }, { prescriptions: [{ name: 'Парацетамол', dose: '500 мг' }] }));
+    touch(a);
+    // другое окно сохранило весь рецепт окном рецепта: те же поля, полный вид строки, и добавило препарат
+    const full = (name, dose) => ({ name, dose, freq: '', dur: '', notes: '', nurse: '' });
+    otherWindowWrites(85, 'ДРУГОЕ', { prescriptions: [full('Парацетамол', '500 мг'), full('Амоксициллин', '1 г')] });
+    TOASTS.length = 0;
+    WS.openPrescriptionDialog(a, 0);
+    const d = rxDialog();
+    d.names[d.names.length - 1].value = 'Парацетамол';
+    d.doses[d.doses.length - 1].value = '1000 мг';
+    await clickSave();
+    assert.deepEqual(parsed(85).prescriptions.map((p) => p.name + ' ' + p.dose), ['Парацетамол 1000 мг', 'Амоксициллин 1 г'], 'правка одного препарата не легла после отказа');
+    assert.ok(TOASTS.some((t) => /изменение применено/.test(t)), TOASTS.join(' | '));
+});
+
 // ─── п. 2: «×» у «Диагноза» — только подтверждённые коды ──────────────────────
 test('п. 2: «×» у «Диагноза» после отказа убирает только коды из вопроса, код другого окна остаётся', async () => {
     const a = await opened(74, notesOf({ chief_complaint: 'Исходно' }, { diagnoses: [{ code: 'J06.9', name: 'ОРВИ', type: 'main' }] }));

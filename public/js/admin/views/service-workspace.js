@@ -2546,11 +2546,10 @@ export function lineSigning(vsId) { return LINE_SIGNING.has(Number(vsId)); }
 const LINE_PENDING = new Map();
 // Ключ записи истории — время, вкладка И содержимое: два черновика в одну миллисекунду — разные.
 const entryKey = (e) => String(e.savedAt) + '|' + String(e.tab || '') + '|' + JSON.stringify(e.fields === undefined ? null : e.fields);
-// CABINET_FIX_V1_R7 (ревью 7, п. 4) — ПОЗДНИЙ ОТВЕТ НЕ ВОЗВРАЩАЕТ СТАРУЮ КОПИЮ. Номер
-// записи строки (WRITE_SEQ) и номер записи, чьё состояние сейчас у строки (STATE_SEQ:
-// удачная запись или перечитывание после отказа). Ответ старой записи, пришедший
-// после более новой, копию строки не заменяет (иначе следующее сохранение несло бы
-// старую основу и получало лишний отказ).
+// CABINET_FIX_V1_R7 (ревью 7, п. 6) — ПОЗДНИЙ ОТВЕТ НЕ ВОЗВРАЩАЕТ СТАРУЮ КОПИЮ. Номер
+// записи строки (WRITE_SEQ) и номер последней удачной записи (STATE_SEQ). Ответ
+// старой записи, пришедший после более новой удачной, копию строки не заменяет
+// (иначе следующее сохранение несло бы старую основу и получало лишний отказ).
 const WRITE_SEQ = new Map();
 const STATE_SEQ = new Map();
 /** Ответа на запись строки ещё нет (после срока)? Экспорт — для проверки. */
@@ -2758,7 +2757,7 @@ export async function currentPayload(ctx) {
 // ни «Черновик», ни подпись этой вкладки (keepForeignDrafts). Черновик без метки
 // (вкладка 3.15.0), которого эта вкладка не знала, помечается kept — как в ревью 6.
 // Возвращает { ok, foreign } — сколько чужих черновиков пришло нового.
-async function adoptServerRecords(ctx, attempted = null, seq = 0) {
+async function adoptServerRecords(ctx, attempted = null) {
     const st = stateOf(ctx);
     const known = new Set();
     for (const src of [st.payload, attempted]) for (const e of (src && Array.isArray(src.history) ? src.history : [])) if (e && e.savedAt) known.add(entryKey(e));
@@ -2770,8 +2769,6 @@ async function adoptServerRecords(ctx, attempted = null, seq = 0) {
         if (!e.tab) { if (e.kept) continue; e.kept = 1; }
         foreign++;
     }
-    const k = Number(ctx.visitServiceId);
-    STATE_SEQ.set(k, Math.max(STATE_SEQ.get(k) || 0, seq));   // CABINET_FIX_V1_R7 (п. 6)
     st.payload = fresh;
     st.payloadVs = ctx.visitServiceId;
     st.saved = false;
@@ -2862,7 +2859,7 @@ async function settleWrite(ctx, payload, sent, res, opts, late, extraUpdate = {}
     const { error } = res || {};
     if (error) {
         if (error.code === 'notes_conflict' || error.code === 'signed_conflict') {   // CABINET_FIX_V1_R4 (п. 2) · CABINET_FIX_V1_R5 (A)
-            const adopted = await adoptServerRecords(ctx, payload, seq);
+            const adopted = await adoptServerRecords(ctx, payload);
             if (!late && typeof opts.reapply === 'function' && adopted.ok) {
                 const fresh = stateOf(ctx).payload;
                 let again = null;
@@ -2883,8 +2880,8 @@ async function settleWrite(ctx, payload, sent, res, opts, late, extraUpdate = {}
         return false;
     }
     ownPayload(payload, ctx.visitServiceId);
-    // CABINET_FIX_V1_R7 (п. 6) — ответ старой записи после более новой (или после
-    // перечитывания): запись дошла, но копию строки не возвращаем к ней.
+    // CABINET_FIX_V1_R7 (п. 6) — ответ старой записи после более новой удачной: запись
+    // дошла, но копию строки не возвращаем к ней.
     const kSeq = Number(ctx.visitServiceId);
     if (seq && seq < (STATE_SEQ.get(kSeq) || 0)) {
         if (late && opts.onLate) { try { await opts.onLate(true); } catch (e) { console.warn('[workspace] late:', e); } }

@@ -1292,7 +1292,7 @@ export function buildReviewEditor({ admission, kind = 'primary', mode = 'edit', 
     // коде — владелец: «its still not applied». В тестах кольцо не всплывало:
     // там модули грузятся поодиночке и в другом порядке.
     const applyTemplate = async () => {
-        const { openTemplateLibraryModal } = await import('./service-workspace.js?v=cabr7');   // CABINET_FIX_V1_TPL — тот же экземпляр, что у кабинета (штамп admin.js) · RX_TEMPLATES_V1 · CABINET_FIX_V1_R1 · CABINET_FIX_V1_R2 — cabr2 · CABINET_FIX_V1_R3 — cabr3 · CABINET_FIX_V1_R4 — cabr4 · CABINET_FIX_V1_R5 — cabr5 · CABINET_FIX_V1_R6 — cabr6 · cabr6b (п. 2, свои черновики) · cabr6c (ключ записи) · CABINET_FIX_V1_R7 — cabr7
+        const { openTemplateLibraryModal } = await import('./service-workspace.js?v=cabr7b');   // CABINET_FIX_V1_TPL — тот же экземпляр, что у кабинета (штамп admin.js) · RX_TEMPLATES_V1 · CABINET_FIX_V1_R1 · CABINET_FIX_V1_R2 — cabr2 · CABINET_FIX_V1_R3 — cabr3 · CABINET_FIX_V1_R4 — cabr4 · CABINET_FIX_V1_R5 — cabr5 · CABINET_FIX_V1_R6 — cabr6 · cabr6b (п. 2, свои черновики) · cabr6c (ключ записи) · CABINET_FIX_V1_R7 — cabr7 · cabr7b
         openTemplateLibraryModal(null, {
         dt: 2,
         // CABINET_FIX_V1_TPL (F) — «Из текущего документа» берёт текст ЭТОГО
