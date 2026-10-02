@@ -4384,6 +4384,11 @@ const IN_BED_ON_DAY_SQL = (patientExpr, dayExpr, timeExpr) => `(SELECT ab.id FRO
 const NOT_REFUNDED_LINE_SQL = (line, kind) => `NOT EXISTS (SELECT 1 FROM invoice_items rfi JOIN invoices rfv ON rfv.id = rfi.invoice_id
      WHERE rfi.id = ${line}.invoice_item_id AND rfv.status = 'refunded')
        AND ${NOT_RELEASED_SQL(kind, line)}`;   // JOURNALS_V1_RJ1
+// JOURNALS_V1_RJ1 (ревью, п. 10b) — поле тела документа — только ТЕКСТ (или
+// число): объект или список json_extract отдал бы сырым JSON, и он печатался
+// бы в журнале. Иначе поле пустое — правило «Заключения» идёт дальше.
+const DOC_TEXT_SQL = (body, jsonPath) => `CASE WHEN json_valid(${body})
+       AND json_type(${body}, '${jsonPath}') IN ('text', 'integer', 'real') THEN json_extract(${body}, '${jsonPath}') END`;
 // JOURNALS_V1_RJ1 (ревью, п. 6) — «подписанное врачом». Реестр (/api/db) пускает
 // писать документы diag/protocol и регистратуру, и медсестру; журнал читает
 // документ как врачебный, только если его автор (created_by) — врач этой
@@ -4495,7 +4500,7 @@ function journalFacts(db, lines, { from, to, idsJson }) {
   const dxDocs = indexConsultDocs(db.prepare(`   -- JOURNALS_V1_RJ1 — раз и по «пациент|врач»
     SELECT d.patient_id, COALESCE(dvs.doctor_id, d.created_by) AS doctor_id, ${localDate('d.created_at')} AS day,
            CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.diagnoses') END AS diagnoses,
-           CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.dx') END AS dx
+           ${DOC_TEXT_SQL('d.body', '$.dx')} AS dx   -- JOURNALS_V1_RJ1 — только текст
       FROM visit_documents d
       LEFT JOIN visit_services dvs ON dvs.id = d.visit_service_id
      WHERE d.doc_type = 'protocol' AND d.voided_at IS NULL
@@ -4509,9 +4514,9 @@ function journalFacts(db, lines, { from, to, idsJson }) {
   const conclusions = new Map();
   for (const d of db.prepare(`
     SELECT d.visit_service_id AS vs_id,
-           CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.conclusion') END AS conclusion,
-           CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.conclusionText') END AS conclusionText,
-           CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.dx') END AS dx,
+           ${DOC_TEXT_SQL('d.body', '$.conclusion')} AS conclusion,           -- JOURNALS_V1_RJ1 — только текст
+           ${DOC_TEXT_SQL('d.body', '$.conclusionText')} AS conclusionText,   -- JOURNALS_V1_RJ1
+           ${DOC_TEXT_SQL('d.body', '$.dx')} AS dx,                           -- JOURNALS_V1_RJ1
            CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.diagnoses') END AS diagnoses   -- JOURNALS_V1_CONCLUSION: «Диагноз», если «Заключение» пусто; описание — не заключение
       FROM visit_documents d
       LEFT JOIN visit_services cvs ON cvs.id = d.visit_service_id   -- JOURNALS_V1_RJ1 — врач строки
@@ -4627,8 +4632,12 @@ export function reportChoices(db, args, user) {
   if (!Object.prototype.hasOwnProperty.call(REPORTS_RU, kind)) throw rpcT(RpcError, 'Неизвестный отчёт: {kind}. Обновите страницу.', { kind: String(kind) }, 400);
   if (!Object.prototype.hasOwnProperty.call(REPORT_CHOICES, arg)) throw rpcT(RpcError, 'Неизвестный фильтр отчёта: {arg}.', { arg: String(arg) }, 400);
   requireReportKind(db, user, kind);
+  // JOURNALS_V1_RJ1 (ревью, п. 10c) — журналы фильтров-списков не берут: роль
+  // «только Журналы» не получает отсюда ни врачей, ни поставщиков.
+  if (JOURNAL_KINDS.has(kind)) return { choices: [] };
   return { choices: REPORT_CHOICES[arg](db) };
 }
+const JOURNAL_KINDS = new Set(['service_journal', 'inpatient_register']);   // JOURNALS_V1_RJ1
 
 const REPORTS_RU = {
   total_revenue:    totalRevenueReport,

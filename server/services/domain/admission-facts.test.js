@@ -49,6 +49,24 @@ test('оплачено — без отменённых и возвращённы
   } finally { db.close(); }
 });
 
+// JOURNALS_V1_RJ1 (ревью, п. 10a) — «Дата оплаты»: платёж, возвращённый целиком
+// (отрицательные строки с пометкой REFUND#<платёж> — правило refundedOfPayment
+// кассы), оплатой не считается; возвращённый частично — считается.
+test('последняя оплата — без платежей, возвращённых целиком; частично возвращённый — оплата', () => {
+  const db = clinic();
+  try {
+    const pay = db.prepare('INSERT INTO payments (invoice_id, amount, method, paid_at, notes) VALUES (?,?,?,?,?)');
+    const late = pay.run(10, 50000, 'cash', '2026-03-17T07:00:00Z', '').lastInsertRowid;
+    pay.run(10, -50000, 'cash', '2026-03-17T09:00:00Z', 'REFUND#' + late);
+    assert.equal(fact(db, ADMISSION_LAST_PAID_AT_SQL('a')), '2026-03-15T07:00:00Z', 'возвращённый целиком — не оплата');
+    const later = pay.run(10, 80000, 'card', '2026-03-19T07:00:00Z', '').lastInsertRowid;
+    pay.run(10, -30000, 'card', '2026-03-19T09:00:00Z', 'REFUND#' + later + ' LINE#5');
+    assert.equal(fact(db, ADMISSION_LAST_PAID_AT_SQL('a')), '2026-03-19T07:00:00Z', 'частично возвращённый — оплата');
+    pay.run(10, 40000, 'cash', '2026-03-20T07:00:00Z', 'REFUND#' + later + '0');   // чужая пометка (REFUND#…0) — не про этот платёж
+    assert.equal(fact(db, ADMISSION_LAST_PAID_AT_SQL('a')), '2026-03-20T07:00:00Z');
+  } finally { db.close(); }
+});
+
 test('диагноз: при поступлении, иначе последний опубликованный непустой осмотр', () => {
   const db = clinic();
   try {

@@ -412,6 +412,23 @@ test('заключение — только документ врача: авт�
   } finally { db.close(); }
 });
 
+// JOURNALS_V1_RJ1 (ревью, п. 10b) — поле тела документа, записанное объектом
+// или списком, печаталось сырым JSON. Берётся только текст (или число); иначе
+// поле пустое, и правило идёт дальше («Диагноз», статус строки).
+test('заключение: поле-объект в теле документа — не текст: сырой JSON не печатается, правило идёт дальше', () => {
+  const db = clinic();
+  try {
+    const doc = db.prepare(`INSERT INTO visit_documents (visit_service_id, visit_id, patient_id, doc_type, body, created_by, created_at)
+                            VALUES (?, ?, ?, ?, ?, 1, ?)`);
+    doc.run(7, 5, 2, 'diag', JSON.stringify({ conclusion: { text: 'Объект' }, dx: ['I10'] }), at('2026-03-15'));
+    doc.run(10, 8, 2, 'protocol', JSON.stringify({ conclusionText: { a: 1 }, dx: 'I10 — Гипертензия' }), at('2026-03-02'));
+    const c = col(journal(db), 'Заключение');
+    assert.equal(c[0], 'I10 — Гипертензия', '«Заключение»-объект — дальше «Диагноз»');
+    assert.equal(c[7], '', 'ни текста, ни статуса (строка в работе) — пусто');
+    assert.ok(!c.some((t) => /[{[]/.test(String(t))), 'сырой JSON в колонке: ' + c.join(' | '));
+  } finally { db.close(); }
+});
+
 test('заключение анализа: выдан — «Результаты выданы дд.мм.гггг» (день «Проверить и выдать»), не выдан — пусто; документ врача — первым', () => {
   const db = clinic();
   try {

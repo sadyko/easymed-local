@@ -8,6 +8,7 @@ import { migrate } from '../db/migrate.js';
 import { canSeeReportKey, requireReportKind, reportGroupOf } from './report-access.js';
 import { fallbackLevel } from './gate-fallbacks.js';
 import { REPORT_GROUP, catalogByKey } from '../../public/js/shared/permission-catalog.js';
+import { reportChoices } from './rpc/reports.js';   // JOURNALS_V1_RJ1
 
 function seed() {
   const db = openDb(':memory:');
@@ -61,5 +62,23 @@ test('настроенная роль — по ключу; закрытый ра
       assert.throws(() => requireReportKind(db, as('journals_off'), kind), (e) => e.status === 403, kind);
       assert.doesNotThrow(() => requireReportKind(db, as('journals_only'), kind), kind);
     }
+  } finally { db.close(); }
+});
+
+// JOURNALS_V1_RJ1 (ревью, п. 10c) — report_choices выдаётся за воротами вида
+// отчёта, и журналы его пускали: роль «только Журналы» получала список врачей
+// и поставщиков, которых журналам не нужно. Журналу — пустой список.
+test('report_choices: журналы не отдают списков врачей и поставщиков; ворота прежние; другим отчётам — как было', () => {
+  const db = seed();
+  try {
+    db.prepare("INSERT INTO users (id, username, password_hash, role, full_name, is_doctor) VALUES (31, 'doc31', 'x', 'doctor', 'Врач Тридцать', 1)").run();
+    for (const kind of ['service_journal', 'inpatient_register']) {
+      for (const arg of ['doctor_id', 'supplier_id']) {
+        assert.deepEqual(reportChoices(db, { kind, arg }, as('journals_only')), { choices: [] }, kind + ' / ' + arg);
+      }
+    }
+    assert.throws(() => reportChoices(db, { kind: 'service_journal', arg: 'doctor_id' }, as('journals_off')), (e) => e.status === 403);
+    const ADMIN = { id: 1, role: 'admin', extra_roles: [] };
+    assert.ok(reportChoices(db, { kind: 'doctor_lines', arg: 'doctor_id' }, ADMIN).choices.some(([, name]) => name === 'Врач Тридцать'));
   } finally { db.close(); }
 });

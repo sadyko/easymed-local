@@ -190,7 +190,7 @@
 | ФИО ЛВ | лечащий врач |
 | Сумма оплаты | сумма `invoices.paid_amount` счетов случая (`invoices.admission_id`), кроме `void`/`refunded` — как `paid_total` в `admissions_register` |
 | Тип палаты | класс палаты случая (п. 3) |
-| Дата оплаты | местный день последней оплаты по счетам случая (`payments.paid_at`), иначе пусто |
+| Дата оплаты | местный день последней оплаты по счетам случая (`payments.paid_at`), иначе пусто; платёж, возвращённый целиком (строки `REFUND#<платёж>`, как `refundedOfPayment`), — не оплата (`JOURNALS_V1_RJ1`, ревью п. 10a) |
 | Страна | `patients.country` |
 | Регион | `patients.region` |
 | Адрес | `patients.district`, `patients.address` через запятую, как в реестре |
