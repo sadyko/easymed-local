@@ -32,7 +32,7 @@
 import { supabase } from '../../supabase.js';
 import { h, Icon, clear, toast, PageHead } from '../ui.js';
 import { tr, trf, getLang, monthName } from '../i18n.js';   // I18N_COVERAGE_V1 — перевод СНАЧАЛА, подстановка ПОТОМ (в ccTrendLine параметр tr затеняет импорт — там только trf)
-import { reportTotals, localizeReport, reportSheets } from './report-totals.js?v=rt2';   // REPORT_TOTALS_V1; V3120_FIX — перевод и Excel с итогом
+import { reportTotals, localizeReport, reportSheets, clipPreviewText } from './report-totals.js?v=rt3';   // REPORT_TOTALS_V1; V3120_FIX — перевод и Excel с итогом; JOURNALS_V1 — обрезка длинного текста
 // V3120_FIX (I18N) — словарь языка экрана для чистых функций report-totals.js.
 const reportTx = () => ({ tr, trf, lang: getLang(), monthName });
 // BUILDING_FRESHNESS_V1 — решение «это хорошая новость или плохая» живёт в
@@ -1180,14 +1180,20 @@ async function openReportBuilder(rep) {
                     ...columns.map((_, ci) => {
                         const v = loc.rows[i][ci];
                         const isNum = typeof v === 'number';
+                        // JOURNALS_V1_SERVICE — длинный текст (заключение) — до 300
+                        // знаков и с переносом; в Excel и при печати — целиком.
+                        const text = v == null || v === '' ? '—' : (isNum ? Number(v).toLocaleString('ru-RU') : clipPreviewText(String(v)));
+                        const long = !isNum && text.length > 60;
                         return h('td', {
                             style: {
-                                padding: '6px 10px', whiteSpace: 'nowrap', color: 'var(--ink-800)',
+                                padding: '6px 10px', whiteSpace: long ? 'normal' : 'nowrap', color: 'var(--ink-800)',
+                                minWidth: long ? '260px' : '0',
+                                verticalAlign: 'top',   // JOURNALS_V1_SERVICE — перенесённая ячейка не сдвигает соседние вниз
                                 textAlign: isNum ? 'right' : 'left',
                                 fontVariantNumeric: isNum ? 'tabular-nums' : 'normal',
                                 borderBottom: '1px solid var(--ink-50)',
                             },
-                        }, v == null || v === '' ? '—' : (isNum ? Number(v).toLocaleString('ru-RU') : String(v)));
+                        }, text);
                     }),
                 ))),
                 hasTotals ? h('tfoot', null, h('tr', null,

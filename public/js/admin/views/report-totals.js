@@ -93,7 +93,10 @@ const YM_RE = /\b(\d{4})-(0[1-9]|1[0-2])\b(?!-\d)/g;
 // SUPPLIERS_VAT_V1 — «Категория» (восемь категорий товара у «Прихода по
 // поставщикам» и «Остатков»; у «Рефералов» — названия клиники, их tr()
 // оставляет как есть) и «Ставка НДС» («без НДС», «не указан»).
-export const ENUM_COLS = new Set(['Где', 'Вид', 'Статус', 'Статус счёта', 'Режим ставок', 'Оплата', 'Роль', 'Категория', 'Ставка НДС']);
+// JOURNALS_V1 — у журналов «Пол» («Муж.»/«Жен.»), «Тип палаты» (Люкс /
+// Полулюкс / Обычная) и «Кто направил» («Стационар», «сам»; имена врачей и
+// источников tr() оставляет как есть) — тоже слова словаря.
+export const ENUM_COLS = new Set(['Где', 'Вид', 'Статус', 'Статус счёта', 'Режим ставок', 'Оплата', 'Роль', 'Категория', 'Ставка НДС', 'Пол', 'Тип палаты', 'Кто направил']);
 
 export function localizeReport(r, tx) {
     const res = r || {};
@@ -119,6 +122,15 @@ export function localizeReport(r, tx) {
         pendingNote: res.pending_items && res.pending_items.note
             ? viaT(res.pending_items.note, res.pending_items.note_t) : null,
     };
+}
+
+// JOURNALS_V1_SERVICE — длинный текст (заключение врача) на экране обрезается
+// до 300 знаков; в Excel и при печати — целиком (reportSheets / report-print.js
+// читают исходные строки).
+export const PREVIEW_TEXT_CAP = 300;
+export function clipPreviewText(text, cap = PREVIEW_TEXT_CAP) {
+    const s = String(text == null ? '' : text);
+    return s.length > cap ? s.slice(0, cap - 1).trimEnd() + '…' : s;
 }
 
 // Листы выгрузки: report — таблица (+ строка «Итого»), notes — примечания или null.

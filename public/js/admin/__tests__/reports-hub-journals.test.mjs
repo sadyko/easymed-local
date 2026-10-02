@@ -88,6 +88,18 @@ test('выбор услуг помнится в браузере и открыв
   assert.match(fn, /paintChoices\(\); resetResult\(\);/);
   assert.match(hub, /if \(o\.type === 'services'\) \{ choiceRow\.appendChild\(servicesOption\(o\)\); continue; \}/);
   assert.match(hub, /supabase\.from\('services'\)\.select\('id, name, active'\)/);
+});
+
+test('предпросмотр обрезает длинный текст до 300 знаков и переносит его; итог и Excel — по исходным строкам', () => {
+  assert.match(hub, /import \{ reportTotals, localizeReport, reportSheets, clipPreviewText \} from '\.\/report-totals\.js\?v=rt3';/);
+  const cells = hub.slice(hub.indexOf('h(\'tbody\', null, ...shown.map('), hub.indexOf('hasTotals ? h(\'tfoot\''));
+  assert.match(cells, /clipPreviewText\(String\(v\)\)/);
+  assert.match(cells, /whiteSpace: long \? 'normal' : 'nowrap'/);
+});
+
+// Каждая задача, менявшая reports-hub.js, меняет и его штамп в admin.js: модуль
+// с прежним адресом браузер взял бы из своего кэша модулей.
+test('штамп reports-hub.js в admin.js — последний в серии журналов', () => {
   const admin = fs.readFileSync(path.join(ROOT, 'public', 'js', 'admin.js'), 'utf8');
-  assert.match(admin, /from '\.\/admin\/views\/reports-hub\.js\?v=jrn2';/, 'штамп reports-hub.js не обновлён после окна выбора');
+  assert.match(admin, /from '\.\/admin\/views\/reports-hub\.js\?v=jrn3';/);
 });

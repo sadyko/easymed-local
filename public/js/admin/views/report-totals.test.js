@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isSummableHeader, reportTotals, localizeReport, reportSheets } from './report-totals.js';
+import { isSummableHeader, reportTotals, localizeReport, reportSheets, clipPreviewText, PREVIEW_TEXT_CAP } from './report-totals.js';
 
 test('деньги и количества суммируются', () => {
   for (const h of ['Сумма без скидки', 'Оплачено', 'Остаток / долг', 'Total', 'Discount', 'Кол-во', 'Выручка']) {
@@ -125,4 +125,24 @@ test('reportSheets: строка «Итого» по тем же правила�
   const skipped = reportSheets({ ...REPORT, total_skip_rows: [1] }, txFor('en'));
   assert.equal(skipped.report[skipped.report.length - 1][2], 1000, 'строки вне итога не складываются');
   assert.equal(reportSheets({ ...REPORT, notes: [], notes_t: [] }, txFor('en')).notes, null);
+});
+
+// JOURNALS_V1 — длинный текст (заключение врача) на экране — до 300 знаков;
+// в Excel и при печати — целиком.
+test('JOURNALS_V1: длинный текст на экране — до 300 знаков с «…», короткий — как есть', () => {
+  assert.equal(PREVIEW_TEXT_CAP, 300);
+  const out = clipPreviewText('а'.repeat(450));
+  assert.equal(out.length, 300);
+  assert.ok(out.endsWith('…'));
+  assert.equal(clipPreviewText('а'.repeat(300)), 'а'.repeat(300));
+  assert.equal(clipPreviewText('Гепатомегалия'), 'Гепатомегалия');
+  assert.equal(clipPreviewText(null), '');
+});
+
+test('JOURNALS_V1: «Пол», «Тип палаты», «Кто направил» — слова словаря; Excel несёт заключение целиком', () => {
+  const dict = { 'Муж.': 'Male', 'Полулюкс': 'Semi-lux', 'сам': 'self-referred' };
+  const tx = { tr: (s) => dict[s] || s, trf: (t) => t, lang: 'en', monthName: () => '' };
+  const r = { columns: ['ФИО', 'Пол', 'Тип палаты', 'Кто направил', 'Заключение'], rows: [['Азизов', 'Муж.', 'Полулюкс', 'сам', 'Х'.repeat(400)]] };
+  assert.deepEqual(localizeReport(r, tx).rows[0].slice(0, 4), ['Азизов', 'Male', 'Semi-lux', 'self-referred']);
+  assert.equal(reportSheets(r, tx).report[1][4].length, 400);
 });
