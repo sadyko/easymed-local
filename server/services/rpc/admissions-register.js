@@ -18,6 +18,9 @@ import { RpcError } from './inpatient-flow.js';
 import { hasAnyRole } from '../roles.js';
 // GRANTS_V1 — права по справочнику (Настройки → Роли); прежние списки ролей — значение по умолчанию.
 import { requireGrant } from '../grants.js';
+// JOURNALS_V1_REGISTER — «оплачено» и диагноз осмотра — одно правило с «Реестром
+// стационарных пациентов» (domain/admission-facts.js).
+import { ADMISSION_PAID_TOTAL_SQL, ADMISSION_REVIEW_DIAGNOSIS_SQL, admissionDiagnosisText } from '../domain/admission-facts.js';
 
 export const REGISTER_ROLES = ['admin', 'doctor', 'head_doctor', 'nurse', 'senior_nurse', 'registrar', 'cashier'];
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -39,11 +42,8 @@ export function admissionsRegister(db, args, user) {
            w.name AS ward_name, w.type AS ward_type, b.code AS bed_code, b.type AS bed_type,
            dep.name AS ward_department,
            -- Диагноз пишет осмотр: в заявке его часто ещё нет, а в журнале он
-           -- обязан быть. Берём последний ОПУБЛИКОВАННЫЙ непустой.
-           (SELECT r.diagnosis FROM admission_reviews r
-             WHERE r.admission_id = a.id AND r.published_at IS NOT NULL
-               AND r.diagnosis IS NOT NULL AND TRIM(r.diagnosis) <> ''
-             ORDER BY r.published_at DESC, r.id DESC LIMIT 1) AS review_diagnosis,
+           -- обязан быть. Последний ОПУБЛИКОВАННЫЙ непустой (domain/admission-facts.js).
+           ${ADMISSION_REVIEW_DIAGNOSIS_SQL('a')} AS review_diagnosis,
            doc.full_name AS attending_name,
            py.name AS payer_name,
            (SELECT COALESCE(SUM(s.total), 0) FROM admission_services s WHERE s.admission_id = a.id) AS act_total,
@@ -51,7 +51,7 @@ export function admissionsRegister(db, args, user) {
            -- входят: по ним денег не ждут, и минус в балансе после отмены
            -- счёта был бы долгом, которого нет.
            (SELECT COALESCE(SUM(i.total_amount), 0) FROM invoices i WHERE i.admission_id = a.id AND i.status NOT IN ('void', 'refunded')) AS invoiced_total,
-           (SELECT COALESCE(SUM(i.paid_amount), 0) FROM invoices i WHERE i.admission_id = a.id AND i.status NOT IN ('void', 'refunded')) AS paid_total,
+           ${ADMISSION_PAID_TOTAL_SQL('a')} AS paid_total,
            -- DEBT_FLOW_V1 — сколько по этой госпитализации ОФОРМЛЕНО долгом
            -- (счета со статусом 'debt'): журнал ставит красную метку «Долг».
            (SELECT COALESCE(SUM(i.total_amount - i.paid_amount), 0) FROM invoices i WHERE i.admission_id = a.id AND i.status = 'debt') AS debt_total
@@ -68,7 +68,7 @@ export function admissionsRegister(db, args, user) {
     rows: rows.map((r) => ({
       ...r,
       // ADMISSIONS_REGISTER_V2 — одно слово «диагноз» на экране и в выгрузке.
-      diagnosis: String(r.admission_diagnosis || '').trim() || String(r.review_diagnosis || '').trim() || '',
+      diagnosis: admissionDiagnosisText(r.admission_diagnosis, r.review_diagnosis),
       act_total: round2(r.act_total),
       invoiced_total: round2(r.invoiced_total),
       paid_total: round2(r.paid_total),
