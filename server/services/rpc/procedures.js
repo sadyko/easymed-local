@@ -42,6 +42,7 @@ import { pageInt } from './page-args.js';   // V3120_FINAL — числа и п�
 import { hasColumn } from '../domain/buildings.js';
 // CRM_REAL_BOOKING_V1 — работа над пациентом это доказательство его прихода.
 import { crmServiceEvidence } from '../crm/visit-status.js';
+import { mergeNurseNote, nurseNoteOf } from '../domain/cabinet-notes.js';   // CABINET_FIX_V1_R5 (B) — заметка медсестры не стирает документ кабинета
 
 export class RpcError extends Error {
   constructor(msg, status = 400) { super(msg); this.status = status; }
@@ -179,7 +180,7 @@ export function proceduresList(db, args, user) {
     done: r.status === 'completed',
     done_at: r.verified_at || null,
     done_by: r.done_by || '',
-    notes: r.notes || '',
+    notes: nurseNoteOf(r.notes),   // CABINET_FIX_V1_R5 (B) — у строки с документом кабинета — заметка медсестры из его JSON
     when: r.visit_date || r.created_at,
     visit_id: r.visit_id == null ? null : r.visit_id,
     patient_id: r.patient_id == null ? null : r.patient_id,
@@ -345,13 +346,17 @@ export function procedureComplete(db, args, user) {
     if (line.status === 'added') {
       throw new RpcError('Услуга не проведена кассой — сначала оплата или долг.', 400);
     }
+    // CABINET_FIX_V1_R5 (ревью 5, B) — заметка медсестры не стирает записи кабинета
+    // врача: у строки с его JSON она ложится туда же под своим ключом (nurseNote),
+    // у прочих — текстом, как прежде (mergeNurseNote).
+    const stored = db.prepare('SELECT notes FROM visit_services WHERE id = ?').get(id);
     db.prepare(`UPDATE visit_services
                    SET status = 'completed',
                        notes = ?,
                        verified_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
                        verified_by = ?,
                        doctor_id = COALESCE(doctor_id, ?)
-                 WHERE id = ?`).run(notes || null, me, me, id);
+                 WHERE id = ?`).run(mergeNurseNote(stored ? stored.notes : null, notes), me, me, id);   // CABINET_FIX_V1_R5 (B)
   } else {
     db.prepare(`UPDATE admission_services
                    SET performed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),

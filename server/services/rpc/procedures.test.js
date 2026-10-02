@@ -344,3 +344,29 @@ test('уже выставленный счёт визита не переоце�
   assert.equal(again.subtotal, 150000);
   assert.equal(again.total_amount, 150000);
 });
+
+// CABINET_FIX_V1_R5 (ревью 5, B) — «Выполнено» процедуры писало заметку медсестры
+// прямо в visit_services.notes (или NULL) — а там у строки, открытой в кабинете
+// врача, лежит его документ (JSON с историей версий): черновик стирался, через
+// прямой вызов — и подписанная версия. Теперь у строки с записями кабинета
+// заметка ложится в тот же JSON под своим ключом (nurseNote), история и текст
+// врача — целы; список процедур показывает заметку, а не JSON.
+test('ревью 5 (B): «Выполнено» на строке с документом кабинета — документ цел, заметка медсестры под своим ключом и видна в списке', () => {
+  const db = seed();
+  outLine(db, { id: 1, doctorId: 2, status: 'queued' });
+  const cabinet = { __service_workspace_v1: 1, current: { chief_complaint: 'Боль' }, history: [{ kind: 'signed', savedAt: '2026-10-02T08:00:00.000Z', fields: { chief_complaint: 'Боль' } }] };
+  db.prepare('UPDATE visit_services SET notes = ? WHERE id = 1').run(JSON.stringify(cabinet));
+  procedureComplete(db, { kind: 'outpatient', id: 1, notes: 'в/в, реакции нет' }, ACTOR.nurse);
+  const stored = JSON.parse(db.prepare('SELECT notes FROM visit_services WHERE id = 1').get().notes);
+  assert.deepEqual(stored.history.map((e) => e.kind), ['signed'], 'подписанная версия стёрта отметкой «Выполнено»');
+  assert.equal(stored.current.chief_complaint, 'Боль');
+  assert.equal(stored.nurseNote, 'в/в, реакции нет');
+  const shown = proceduresList(db, {}, ACTOR.nurse).rows.find((r) => r.id === 1);
+  assert.equal(shown.notes, 'в/в, реакции нет', 'в списке — JSON кабинета вместо заметки');
+  // без заметки — документ всё равно цел
+  db.prepare("UPDATE visit_services SET status = 'queued' WHERE id = 1").run();
+  procedureComplete(db, { kind: 'outpatient', id: 1 }, ACTOR.nurse);
+  const again = JSON.parse(db.prepare('SELECT notes FROM visit_services WHERE id = 1').get().notes);
+  assert.deepEqual(again.history.map((e) => e.kind), ['signed']);
+  assert.equal(again.nurseNote, undefined);
+});

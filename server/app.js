@@ -17,6 +17,10 @@ import { branchSyncRoutes } from './routes/branch-sync.js';   // BRANCH_SYNC_V1
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
+// CABINET_FIX_V1_R5 (ревью 5, C) — предел тела для документа кабинета врача (см. ниже).   // CABINET_FIX_V1_R5
+const CABINET_BODY_LIMIT = '8mb';   // CABINET_FIX_V1_R5
+const CABINET_DOC_ROUTE = /^\/api\/(db|rpc\/visit_document_archive)(\/|\?|$)/;   // CABINET_FIX_V1_R5
+
 export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   setDataDir(dataDir);   // LICENCE_CORE_V1 — RPC handlers get no `req`; they read it from here.
   const app = express();
@@ -65,6 +69,15 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
   // rows in one RPC call; 2000 Cyrillic rows is ~460 KB. Registered before the
   // global /api parser so body-parser's first-wins rule gives RPCs the larger
   // budget while every other endpoint keeps the tight 100 KB limit.
+  // CABINET_FIX_V1_R5 (ревью 5, C) — ДОКУМЕНТ КАБИНЕТА ВРАЧА СО СНИМКАМИ.   // CABINET_FIX_V1_R5
+  // Записи кабинета (visit_services.notes через /api/db) и снимок подписи   // CABINET_FIX_V1_R5
+  // (rpc visit_document_archive) несут снимки исследования: кабинет сжимает   // CABINET_FIX_V1_R5
+  // каждый до 1400 px JPEG 0,82 (~0,2–0,5 МБ в base64), их до 12 на документ —   // CABINET_FIX_V1_R5
+  // до ~6 МБ, плюс текст версий. При 100 КБ строка с одним снимком не   // CABINET_FIX_V1_R5
+  // сохранялась и не подписывалась («Некорректный запрос»). Предел этих двух   // CABINET_FIX_V1_R5
+  // дверей — 8 МБ; остальное — как было.   // CABINET_FIX_V1_R5
+  app.use('/api/db', express.json({ limit: CABINET_BODY_LIMIT }));   // CABINET_FIX_V1_R5
+  app.use('/api/rpc/visit_document_archive', express.json({ limit: CABINET_BODY_LIMIT }));   // CABINET_FIX_V1_R5
   app.use('/api/rpc', express.json({ limit: '2mb' }));
   app.use('/api', express.json({ limit: '100kb' }));
   // V3120_FIX — /api/health ТРОГАЕТ БАЗУ. Раньше он отвечал {ok:true}, даже
@@ -169,6 +182,14 @@ export function createApp(db, { dataDir = path.join(ROOT, 'data') } = {}) {
     }
     else console.warn('[client error]', status, err.type || err.code);
     if (res.headersSent) return next(err);
+    // CABINET_FIX_V1_R5 (ревью 5, C) — слишком большое тело — честно и что делать,   // CABINET_FIX_V1_R5
+    // а не «Некорректный запрос».   // CABINET_FIX_V1_R5
+    if (status === 413 || err.type === 'entity.too.large') {   // CABINET_FIX_V1_R5
+      const doc = CABINET_DOC_ROUTE.test(req.originalUrl || req.url || '');   // CABINET_FIX_V1_R5
+      return res.status(413).json({ error: { code: 'too_large', message: doc   // CABINET_FIX_V1_R5
+        ? 'Документ слишком большой для сохранения (больше 8 МБ) — уберите часть снимков или замените их снимками поменьше и сохраните снова.'   // CABINET_FIX_V1_R5
+        : 'Запрос слишком большой — сократите данные и повторите.' } });   // CABINET_FIX_V1_R5
+    }   // CABINET_FIX_V1_R5
     res.status(status).json({
       error: status >= 500
         ? { code: 'internal', message: 'Ошибка сервера. Повторите позже.' }

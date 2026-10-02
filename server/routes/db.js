@@ -10,7 +10,7 @@ import { readIdentity } from '../services/branch-sync/identity.js';
 import { lockedResponse } from '../services/control/gate.js';   // LICENCE_CORE_V1
 import { recordEvent } from '../services/ops-log.js';   // OPS_EVENTS_V1
 import { constraintRefusal, errorBody } from '../services/server-message.js';   // V3120_I18N
-import { signedVersionsDropped, SIGNED_CONFLICT_MESSAGE } from '../services/domain/cabinet-notes.js';   // CABINET_FIX_V1_R4
+import { notesWriteRefusal, storedIsCabinet, NOTES_BASE_KEY, NOTES_CONFLICT_MESSAGE } from '../services/domain/cabinet-notes.js';   // CABINET_FIX_V1_R4 · CABINET_FIX_V1_R5
 // CRM_REAL_BOOKING_V1 — статус услуги двигают экраны, и двигают они его через
 // эту дверь: работа над пациентом доказывает, что он пришёл.
 import { crmServiceEvidence, EVIDENCE_SERVICE_STATUSES } from '../services/crm/visit-status.js';
@@ -190,21 +190,50 @@ function refuseVisitLineWrite(db, meta, body, user) {
   return null;
 }
 
-// CABINET_FIX_V1_R4 (ревью 4, п. 2) — подписанная версия документа кабинета не
-// стирается записью из другого окна (вторая вкладка, другой компьютер, экран,
-// перерисованный во время подписи): см. services/domain/cabinet-notes.js.
-// Строки — тем же compile(), что и сама правка (те же права и отбор).
-function refuseSignedNotesLoss(db, meta, body, user) {   // CABINET_FIX_V1_R4
-  if (!meta || meta.table !== 'visit_services' || meta.op !== 'update') return null;   // CABINET_FIX_V1_R4
-  const values = body && body.values && !Array.isArray(body.values) ? body.values : null;   // CABINET_FIX_V1_R4
-  if (!values || typeof values.notes !== 'string') return null;   // CABINET_FIX_V1_R4
-  let rows = [];   // CABINET_FIX_V1_R4
-  try {   // CABINET_FIX_V1_R4
-    const sel = compile({ table: body.table, op: 'select', columns: 'id,notes', filters: body.filters }, user, { db });   // CABINET_FIX_V1_R4
-    rows = db.prepare(sel.sql).all(...sel.params);   // CABINET_FIX_V1_R4
-  } catch { return null; }   // CABINET_FIX_V1_R4 — не прочитать — решает сама правка (те же права)
-  return rows.some((r) => signedVersionsDropped(r.notes, values.notes)) ? SIGNED_CONFLICT_MESSAGE : null;   // CABINET_FIX_V1_R4
-}   // CABINET_FIX_V1_R4
+// CABINET_FIX_V1_R4 (ревью 4, п. 2) · CABINET_FIX_V1_R5 (ревью 5, A) — ЗАПИСИ КАБИНЕТА   // CABINET_FIX_V1_R5
+// ВРАЧА — «СРАВНИТЬ И ЗАМЕНИТЬ» (правило — public/js/shared/cabinet-notes.js).   // CABINET_FIX_V1_R5
+// Запись notes строки, у которой лежит JSON кабинета, обязана нести основу   // CABINET_FIX_V1_R5
+// (__notes_base — отпечаток notes, с которых её сделали), совпавшую с тем, что   // CABINET_FIX_V1_R5
+// лежит, быть JSON кабинета и сохранить все подписанные версии; иначе — 409.   // CABINET_FIX_V1_R5
+// Сохранённые notes читаются ПРОСТЫМ чтением сервера (без отбора прав): отказ   // CABINET_FIX_V1_R5
+// чтения не должен открывать дверь. Правка нескольких строк сразу, затрагивающая   // CABINET_FIX_V1_R5
+// записи кабинета, — отказ; не прочитать строки такой правки — отказ.   // CABINET_FIX_V1_R5
+function takeNotesBase(body) {   // CABINET_FIX_V1_R5
+  const v = body && body.values;   // CABINET_FIX_V1_R5
+  const rows = Array.isArray(v) ? v : (v && typeof v === 'object' ? [v] : []);   // CABINET_FIX_V1_R5
+  let base = null;   // CABINET_FIX_V1_R5
+  for (const r of rows) {   // CABINET_FIX_V1_R5
+    if (r && Object.prototype.hasOwnProperty.call(r, NOTES_BASE_KEY)) {   // CABINET_FIX_V1_R5
+      if (typeof r[NOTES_BASE_KEY] === 'string') base = r[NOTES_BASE_KEY];   // CABINET_FIX_V1_R5
+      delete r[NOTES_BASE_KEY];   // CABINET_FIX_V1_R5
+    }   // CABINET_FIX_V1_R5
+  }   // CABINET_FIX_V1_R5
+  return base;   // CABINET_FIX_V1_R5
+}   // CABINET_FIX_V1_R5
+export function refuseNotesWrite(db, meta, body, user, base) {   // CABINET_FIX_V1_R5 — экспорт для проверки
+  if (!meta || meta.table !== 'visit_services' || (meta.op !== 'update' && meta.op !== 'upsert')) return null;   // CABINET_FIX_V1_R5
+  const values = body && body.values && !Array.isArray(body.values) ? body.values : null;   // CABINET_FIX_V1_R5
+  if (!values || !Object.prototype.hasOwnProperty.call(values, 'notes')) return null;   // CABINET_FIX_V1_R5
+  const byId = db.prepare('SELECT id, notes FROM visit_services WHERE id = ?');   // CABINET_FIX_V1_R5
+  const f = Array.isArray(body.filters) ? body.filters : [];   // CABINET_FIX_V1_R5
+  let rows = [];   // CABINET_FIX_V1_R5
+  if (meta.op === 'upsert') {   // CABINET_FIX_V1_R5
+    if (values.id != null) rows = byId.all(values.id);   // CABINET_FIX_V1_R5
+  } else if (f.length === 1 && f[0] && f[0].col === 'id' && f[0].op === 'eq') {   // CABINET_FIX_V1_R5
+    rows = byId.all(f[0].val);   // CABINET_FIX_V1_R5
+  } else {   // CABINET_FIX_V1_R5
+    try {   // CABINET_FIX_V1_R5
+      const sel = compile({ table: body.table, op: 'select', columns: 'id', filters: body.filters }, user, { db });   // CABINET_FIX_V1_R5
+      rows = db.prepare(sel.sql).all(...sel.params).map((r) => byId.get(r.id)).filter(Boolean);   // CABINET_FIX_V1_R5
+    } catch { return { reason: 'unread', message: 'Записи строки не прочитаны — правка не выполнена.' }; }   // CABINET_FIX_V1_R5
+    if (rows.length > 1 && rows.some((r) => storedIsCabinet(r.notes))) return { reason: 'multi', message: NOTES_CONFLICT_MESSAGE };   // CABINET_FIX_V1_R5
+  }   // CABINET_FIX_V1_R5
+  for (const r of rows) {   // CABINET_FIX_V1_R5
+    const refusal = notesWriteRefusal(r.notes, values.notes, base);   // CABINET_FIX_V1_R5
+    if (refusal) return refusal;   // CABINET_FIX_V1_R5
+  }   // CABINET_FIX_V1_R5
+  return null;   // CABINET_FIX_V1_R5
+}   // CABINET_FIX_V1_R5
 
 /**
  * CRM_REAL_BOOKING_V1 — РАБОТА НАД ПАЦИЕНТОМ ДОКАЗЫВАЕТ, ЧТО ОН ПРИШЁЛ.
@@ -244,6 +273,8 @@ export function dbRoutes(db) {
   const r = Router();
 
   r.post('/', (req, res) => {
+    // CABINET_FIX_V1_R5 — основа записи записей кабинета — не колонка: снимается до compile().
+    const notesBase = takeNotesBase(req.body);   // CABINET_FIX_V1_R5
     let compiled;
     try {
       compiled = compile(req.body || {}, req.user, { db });   // CRM_HEAD_MERGE_TAGS_V1 — база нужна праву «crm.all»
@@ -346,8 +377,8 @@ export function dbRoutes(db) {
     if (visitLineRefusal) {
       return res.status(409).json({ error: { code: 'conflict', message: visitLineRefusal } });
     }
-    const signedLoss = refuseSignedNotesLoss(db, compiled.meta, req.body, req.user);   // CABINET_FIX_V1_R4
-    if (signedLoss) return res.status(409).json({ error: { code: 'signed_conflict', message: signedLoss } });   // CABINET_FIX_V1_R4
+    const notesRefusal = refuseNotesWrite(db, compiled.meta, req.body, req.user, notesBase);   // CABINET_FIX_V1_R4 · CABINET_FIX_V1_R5
+    if (notesRefusal) return res.status(409).json({ error: { code: 'notes_conflict', reason: notesRefusal.reason, message: notesRefusal.message } });   // CABINET_FIX_V1_R5
 
     // CRM_CALENDAR_MIRROR_V1 — что заденет правка (и отказ, если она трогает
     // услугу заявки, уже выставленную или начатую). До выполнения: база ещё
