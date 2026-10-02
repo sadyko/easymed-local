@@ -149,7 +149,7 @@ test('п. 2: новая подпись беднее прежней — спро�
     assert.deepEqual(WS.lostOnResign(prev, { chief_complaint: 'Боль, слабость', physical_exam: 'Норма' }), []);
     assert.deepEqual(WS.lostOnResign(null, {}), []);
     const c = code(WS_SRC);
-    assert.match(c, /const _lost = _last \? lostOnResign\(_last\.fields, fields\) : \[\];/);
+    assert.match(c, /const _lost = _last \? lostOnResign\(_last\.fields, fields, \{ dxCode: [^}]*\}\) : \[\];/);   // CABINET_FIX_V1_R3 (F9) — + код МКБ строкой
 });
 
 test('п. 3: правка старого шаблона не стирает его ключи; «Использовать» кладёт «Диагноз» и старые разделы', () => {

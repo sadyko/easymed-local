@@ -83,7 +83,9 @@ function cabinet(id, type = 'conclusion', patient = {}, payload = { __service_wo
     NOTES.set(id, JSON.stringify(payload));
     return ctx;
 }
-async function loaded(ctx) { await WS.loadLinePayload(ctx); return ctx; }
+// CABINET_FIX_V1_R3 (F3) — строка открыта так, как её открывает кабинет: записи легли в лист
+// (подпись и черновик незагруженной строки отказывают).
+async function loaded(ctx) { await WS.hydrateLine(ctx); return ctx; }
 const field = (ctx, k) => ctx.container.querySelector('[data-field="' + k + '"]');
 const put = (ctx, k, v) => { field(ctx, k).innerHTML = v; };
 
@@ -178,7 +180,8 @@ test('п. 2: «Диагноз» целиком (печать, вставка р�
     assert.equal(WS.dxParts('', [{ code: 'K29.7', name: 'Гастрит', type: 'concomitant' }]).full, '', 'сопутствующий выдан за основной');
     const c = code(WS_SRC);
     const fill = c.slice(c.indexOf('async function fillServiceConclusion('), c.indexOf('async function fillLabResults('));
-    assert.match(fill, /dxParts\(f\.primary_diagnosis, payload && payload\.diagnoses\)\.full/, '«Вставить результаты» теряет код МКБ');
+    // CABINET_FIX_V1_R3 (F8) — через entryDx: код подписанной записи (её icd10), не нынешний
+    assert.match(fill, /entryDx\(f, payload && payload\.diagnoses\)/, '«Вставить результаты» теряет код МКБ');
     assert.ok(!/f\.primary_diagnosis \|\| '—'/.test(fill) && !/esc\(f\.primary_diagnosis\)/.test(fill));
 });
 

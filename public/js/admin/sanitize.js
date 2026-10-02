@@ -12,6 +12,9 @@
 const BAD_TAGS = new Set([
     'SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META',
     'BASE', 'FORM', 'INPUT', 'BUTTON', 'TEXTAREA', 'SVG', 'MATH',
+    // CABINET_FIX_V1_R3 — «сырые» элементы: разобранные без скриптов (DOMParser),
+    // при вставке в живой документ они читаются иначе (mXSS через <noscript>).
+    'NOSCRIPT', 'NOEMBED', 'NOFRAMES', 'TEMPLATE', 'XMP', 'PLAINTEXT',
 ]);
 
 export function escapeHtml(input) {

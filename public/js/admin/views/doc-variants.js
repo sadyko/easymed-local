@@ -459,9 +459,11 @@ function dxRows(d, txCls) {
 }
 // CABINET_FIX_V1_R2 — «Заключение» исследования: так же — код своей строкой, текст врача отдельно.
 function diagConclusion(d) {
-    if (d.conclusionText == null) return `<p data-field="primary_diagnosis">${esc(d.conclusion)}</p>`;
+    // CABINET_FIX_V1_R3 (F2) — текст врача — conclusionBody; снимки ревью 2 клали его в conclusionText.
+    const body = d.conclusionBody != null ? d.conclusionBody : (d.conclusionAuto != null ? d.conclusionText : null);
+    if (body == null) return `<p data-field="primary_diagnosis">${esc(d.conclusion)}</p>`;
     return (d.conclusionAuto ? `<p class="dx-auto" data-dx-auto="1" contenteditable="false" style="font-weight:700;">${esc(d.conclusionAuto)}</p>` : '')
-        + `<p data-field="primary_diagnosis">${esc(d.conclusionText)}</p>`;
+        + `<p data-field="primary_diagnosis">${esc(body)}</p>`;
 }
 // CABINET_FIX_V1_R2 (ревью 2, п. 5) — рецепт и остальные диагнозы приёма на
 // бланке исследования: снимок диагностики их не нёс, и при подписи из
