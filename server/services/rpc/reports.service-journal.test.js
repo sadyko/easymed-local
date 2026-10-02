@@ -347,6 +347,31 @@ test('заключение: подписанный документ — «Зак
   } finally { db.close(); }
 });
 
+// JOURNALS_V1_RJ1 (ревью, п. 6) — «подписанное врачом»: /api/db пускает и
+// регистратуру, и медсестру писать документы diag/protocol. Документ врача —
+// только если его автор (created_by) — врач этой строки, врач (is_doctor) или
+// администратор (роль или дополнительная роль); остальное журнал не читает.
+test('заключение — только документ врача: автор — врач строки, любой врач или администратор; документ регистратора — нет', () => {
+  const db = clinic();
+  try {
+    const u = db.prepare('INSERT INTO users (id, username, password_hash, role, full_name, is_doctor, extra_roles) VALUES (?,?,?,?,?,?,?)');
+    u.run(6, 'nurse', 'x', 'nurse', 'Медсестра М.М.', 0, '[]');
+    u.run(5, 'reg2', 'x', 'registrar', 'Регистратор-админ', 0, JSON.stringify(['admin']));
+    db.prepare('UPDATE visit_services SET doctor_id = 6 WHERE id = 8').run();   // исполнитель строки — медсестра
+    const doc = db.prepare(`INSERT INTO visit_documents (visit_service_id, visit_id, patient_id, doc_type, body, created_by, created_at)
+                            VALUES (?, ?, ?, 'diag', ?, ?, ?)`);
+    const j = (t) => JSON.stringify({ conclusion: t });
+    doc.run(10, 8, 2, j('Регистратор вписал'), 7, '2026-03-02T09:00:00Z');   // не врач — не читается
+    doc.run(1, 1, 1, j('Другой врач'), 2, '2026-03-09T09:00:00Z');
+    doc.run(4, 4, 1, j('Админ по совместительству'), 5, '2026-03-13T09:00:00Z');
+    doc.run(7, 5, 2, j('Админ подписал'), 9, '2026-03-15T09:00:00Z');
+    doc.run(8, 6, 3, j('Исполнитель-медсестра'), 6, '2026-03-25T09:00:00Z');
+    const c = col(journal(db), 'Заключение');
+    assert.deepEqual([c[0], c[2], c[6], c[7], c[9]],
+      ['Выполнено', 'Другой врач', 'Админ по совместительству', 'Админ подписал', 'Исполнитель-медсестра']);
+  } finally { db.close(); }
+});
+
 test('заключение анализа: выдан — «Результаты выданы дд.мм.гггг» (день «Проверить и выдать»), не выдан — пусто; документ врача — первым', () => {
   const db = clinic();
   try {

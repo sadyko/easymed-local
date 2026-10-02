@@ -4377,6 +4377,15 @@ const IN_BED_ON_DAY_SQL = (patientExpr, dayExpr) => `(SELECT ab.id FROM admissio
 const NOT_REFUNDED_LINE_SQL = (line, kind) => `NOT EXISTS (SELECT 1 FROM invoice_items rfi JOIN invoices rfv ON rfv.id = rfi.invoice_id
      WHERE rfi.id = ${line}.invoice_item_id AND rfv.status = 'refunded')
        AND ${NOT_RELEASED_SQL(kind, line)}`;   // JOURNALS_V1_RJ1
+// JOURNALS_V1_RJ1 (ревью, п. 6) — «подписанное врачом». Реестр (/api/db) пускает
+// писать документы diag/protocol и регистратуру, и медсестру; журнал читает
+// документ как врачебный, только если его автор (created_by) — врач этой
+// строки (исполнитель может быть и не врачом), врач (is_doctor) или
+// администратор — ролью или дополнительной ролью (как isAdminUser).
+const DOCTOR_AUTHOR_SQL = (d, lineDoctorExpr) => `EXISTS (SELECT 1 FROM users dau WHERE dau.id = ${d}.created_by
+     AND (dau.id = ${lineDoctorExpr} OR dau.is_doctor = 1 OR dau.role = 'admin'
+          OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(dau.extra_roles) THEN dau.extra_roles ELSE '[]' END) dar
+                      WHERE dar.value = 'admin')))`;
 
 function journalVisitLines(db, args, ctx, { from, to, idsJson }) {
   const range = rangeOf('v.visit_date', from, to);
@@ -4481,6 +4490,7 @@ function journalFacts(db, lines, { from, to, idsJson }) {
       FROM visit_documents d
       LEFT JOIN visit_services dvs ON dvs.id = d.visit_service_id
      WHERE d.doc_type = 'protocol' AND d.voided_at IS NULL
+       AND ${DOCTOR_AUTHOR_SQL('d', 'dvs.doctor_id')}   -- JOURNALS_V1_RJ1 — консультация врача, не чья-то запись
        AND d.patient_id IN (SELECT value FROM json_each(?))
        AND ${localDate('d.created_at')} BETWEEN date(?, '-${CONSULT_DX_DAYS} days') AND date(?)
      ORDER BY d.created_at DESC, d.id DESC`).all(pids, from, to)
@@ -4495,8 +4505,10 @@ function journalFacts(db, lines, { from, to, idsJson }) {
            CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.dx') END AS dx,
            CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.diagnoses') END AS diagnoses   -- JOURNALS_V1_CONCLUSION: «Диагноз», если «Заключение» пусто; описание — не заключение
       FROM visit_documents d
+      LEFT JOIN visit_services cvs ON cvs.id = d.visit_service_id   -- JOURNALS_V1_RJ1 — врач строки
      WHERE d.visit_service_id IN (SELECT value FROM json_each(?))
        AND d.doc_type IN ('diag', 'protocol') AND d.voided_at IS NULL
+       AND ${DOCTOR_AUTHOR_SQL('d', 'cvs.doctor_id')}   -- JOURNALS_V1_RJ1 — только документ врача
      ORDER BY d.created_at DESC, d.id DESC`).all(uniq(lines.filter((l) => l.src === 'vs').map((l) => l.line_id)))) {
     if (!conclusions.has(d.vs_id)) conclusions.set(d.vs_id, conclusionOfDoc(d));
   }
