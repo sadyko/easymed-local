@@ -97,9 +97,16 @@ import { lineUnitPrice, packageDiscountPct } from '../domain/pricing.js';
 import { specialtyGroupName } from '../../../public/js/shared/specialty-list.js';
 // JOURNALS_V1 — журналы: правила без базы, общие с вкладкой «Госпитализации»
 // фрагменты SQL и словарь класса палаты (один модуль на сервер и браузер).
-import { birthYear } from '../domain/journal-rules.js';
-import { ADMISSION_PAID_TOTAL_SQL, ADMISSION_LAST_PAID_AT_SQL } from '../domain/admission-facts.js';
+import {   // JOURNALS_V1
+  birthYear, genderWord, parseServiceIds, parseKindOfCare, dedupeJournalLines, sortJournalLines, patientOrdinals,
+  indexRecommendations, referrerOf, referralDiagnosis, diagnosisOfBody, conclusionOfDoc, JOURNAL_SERVICE_MAX, CONSULT_DX_DAYS,
+} from '../domain/journal-rules.js';
+import { ADMISSION_PAID_TOTAL_SQL, ADMISSION_LAST_PAID_AT_SQL, ADMISSION_REVIEW_DIAGNOSIS_SQL } from '../domain/admission-facts.js';   // JOURNALS_V1
 import { wardClassLabel } from '../../../public/js/shared/ward-class.js';
+// JOURNALS_V1_SERVICE — «прошла кассу» — тот же список, по которому принимается
+// результат анализа; «пациент лежит» — те же состояния, что у доски коек.
+import { LAB_RESULT_STATUSES } from '../visit-status-guard.js';
+import { IN_BED_STATUSES } from '../../../public/js/shared/admission-status.js';
 
 /**
  * Начисления врача (кабинет): свои — ВСЕГДА, и ни одна галочка «Отчётов» этого
@@ -4323,6 +4330,153 @@ function inpatientRegisterReport(db, args, ctx) {
   };
 }
 
+// JOURNALS_V1_SERVICE — «Журнал услуг»: строка — одна оказанная выбранная
+// услуга. Строка визита — прошедшая кассу (queued и дальше: LAB_RESULT_STATUSES,
+// других статусов после кассы у строк визита нет — миграция 041, billing.js,
+// procedures.js, consultation.js), не отменённая, визит не отменён и не «не
+// пришёл», счёт строки не возвращён. Строка случая (admission_services) —
+// услуга (не товар, не койко-дни), пациенту (billable), госпитализация не
+// отменена, счёт не возвращён; дата — «Выполнено», иначе начисление.
+const JOURNAL_COLUMNS = ['№', 'Ич. рақам (Пор. № пациента)', 'ФИО', 'Пол', 'Год рождения', 'ИБ №', 'Кто направил',
+  'Диагноз при направлении', 'Дата', 'Услуга', 'Заключение', 'Врач', 'Лечащий врач'];
+const JOURNAL_INPATIENT_ONLY = new Set(['ИБ №', 'Лечащий врач']);
+const JOURNAL_EMPTY_MSG = 'Выберите услуги — журнал строится только по выбранным услугам.';
+const JOURNAL_TOO_MANY_T = 'Слишком много услуг в журнале: не больше {max}. Сузьте выбор.';
+const JOURNAL_CARE_MSG = 'Тип — «Все», «Стационар» или «Амбулатория».';
+const JOURNAL_SERVICE_NOTE = 'Строка — одна оказанная услуга из выбранных: амбулаторная — прошедшая кассу и не отменённая, стационарная — из акта госпитализации. «Стационар» — если в этот день пациент лежал в стационаре; одна и та же услуга в визите и в акте за один день показана один раз.';
+const JOURNAL_REFERRER_NOTE = '«Кто направил»: у стационара — лечащий врач; у амбулатории — врач, рекомендовавший услугу в кабинете, иначе источник направления визита, иначе «сам». «Диагноз при направлении»: у стационара — диагноз при поступлении или последнего опубликованного осмотра; у амбулатории — основной диагноз подписанной консультации направившего врача за 30 дней.';
+const JOURNAL_CONCLUSION_NOTE = 'Заключение — только подписанное врачом; черновики не показываются. На экране длинное заключение обрезано, в Excel и при печати — целиком.';
+const sqlList = (xs) => xs.map((s) => "'" + s + "'").join(', ');
+const JOURNAL_PAID_SQL = (vs) => `${vs}.status IN (${sqlList(LAB_RESULT_STATUSES)})`;
+// Госпитализация, которая шла в этот местный день: поступил (не заявка — у
+// заявки admitted_at = время заявки; не отмена — у неё нет выписки) не позже
+// дня и не выписан раньше него. Несколько — последняя поступившая.
+const STAYED_STATUSES = [...IN_BED_STATUSES, 'discharged'];
+const IN_BED_ON_DAY_SQL = (patientExpr, dayExpr) => `(SELECT ab.id FROM admissions ab
+     WHERE ab.patient_id = ${patientExpr}
+       AND ab.status IN (${sqlList(STAYED_STATUSES)})
+       AND ${localDate('ab.admitted_at')} <= ${dayExpr}
+       AND (ab.discharged_at IS NULL OR ${localDate('ab.discharged_at')} >= ${dayExpr})
+     ORDER BY ab.admitted_at DESC, ab.id DESC LIMIT 1)`;
+// Строка, чей счёт возвращён: денег за неё у клиники нет — «возврат не показывается».
+const NOT_REFUNDED_LINE_SQL = (line) => `NOT EXISTS (SELECT 1 FROM invoice_items rfi JOIN invoices rfv ON rfv.id = rfi.invoice_id
+     WHERE rfi.id = ${line}.invoice_item_id AND rfv.status = 'refunded')`;
+
+function journalVisitLines(db, args, ctx, { from, to, idsJson }) {
+  const range = rangeOf('v.visit_date', from, to);
+  const bf = branchFilter(args, 'v.branch_id');
+  const gf = buildingWhere(db, ctx, args, 'visit_services', 'vs');
+  const day = localDate('v.visit_date');
+  return db.prepare(`
+    SELECT 'vs' AS src, vs.id AS line_id, ${originExpr(db, 'visit_services', 'vs')} AS origin,
+           v.patient_id AS patient_id, ${day} AS day,
+           vs.service_id AS service_id, s.name AS service,
+           COALESCE(NULLIF(pu.full_name, ''), pu.username) AS performer,
+           rs.name AS visit_source, rs.doctor_id AS visit_source_doctor_id,
+           ${IN_BED_ON_DAY_SQL('v.patient_id', day)} AS admission_id
+      FROM visit_services vs
+      JOIN visits v   ON v.id = vs.visit_id
+      JOIN services s ON s.id = vs.service_id
+      LEFT JOIN users pu ON pu.id = vs.doctor_id
+      LEFT JOIN referral_sources rs ON rs.id = v.referral_source_id
+     WHERE vs.service_id IN (SELECT value FROM json_each(?))
+       AND ${JOURNAL_PAID_SQL('vs')}
+       AND ${LIVE_VISIT_SQL('v')}
+       AND ${NOT_REFUNDED_LINE_SQL('vs')}
+       AND ${range.sql}${bf.clause}${gf.clause}`).all(idsJson, ...range.params, ...bf.params, ...gf.params);
+}
+
+function journalAdmissionLines(db, args, ctx, { from, to, idsJson }) {
+  const when = 'COALESCE(ias.performed_at, ias.created_at)';
+  const range = rangeOf(when, from, to);
+  const bf = branchFilter(args, OWN_BRANCH_SQL);   // счёт госпитализации — без филиала: свой
+  const gf = buildingWhere(db, ctx, args, 'admission_services', 'ias');
+  return db.prepare(`
+    SELECT 'as' AS src, ias.id AS line_id, '' AS origin,
+           a.patient_id AS patient_id, ${localDate(when)} AS day,
+           ias.service_id AS service_id, s.name AS service,
+           COALESCE(NULLIF(pu.full_name, ''), pu.username) AS performer,
+           NULL AS visit_source, NULL AS visit_source_doctor_id,
+           a.id AS admission_id
+      FROM admission_services ias
+      JOIN admissions a ON a.id = ias.admission_id
+      JOIN services s   ON s.id = ias.service_id
+      LEFT JOIN users pu ON pu.id = COALESCE(ias.performer_id, ias.doctor_id)
+     WHERE ias.service_id IN (SELECT value FROM json_each(?))
+       AND ias.clinic_item_id IS NULL
+       AND COALESCE(ias.notes, '') NOT LIKE 'ACCOMMODATION%'
+       AND COALESCE(ias.billable, 1) = 1
+       AND COALESCE(a.status, '') <> 'cancelled'
+       AND ${NOT_REFUNDED_LINE_SQL('ias')}
+       AND ${range.sql}${bf.clause}${gf.clause}`).all(idsJson, ...range.params, ...bf.params, ...gf.params);
+}
+
+// JOURNALS_V1_SERVICE — сведения к строкам журнала: по одному запросу на вид
+// сведений, ключами строк (json_each), а не запросом на строку. from, to и
+// idsJson — окно рекомендаций и консультаций направивших.
+function journalFacts(db, lines, { from, to, idsJson }) {
+  const uniq = (xs) => JSON.stringify([...new Set(xs.filter((x) => x != null))]);
+  const patients = new Map(db.prepare(`
+    SELECT id, full_name, gender, date_of_birth FROM patients
+     WHERE id IN (SELECT value FROM json_each(?))`).all(uniq(lines.map((l) => l.patient_id))).map((p) => [p.id, p]));
+  const admissions = new Map(db.prepare(`
+    SELECT a.id, a.admission_no, a.attending_doctor_id, a.admission_diagnosis,
+           COALESCE(NULLIF(u.full_name, ''), u.username) AS attending,
+           ${ADMISSION_REVIEW_DIAGNOSIS_SQL('a')} AS review_diagnosis
+      FROM admissions a LEFT JOIN users u ON u.id = a.attending_doctor_id
+     WHERE a.id IN (SELECT value FROM json_each(?))`).all(uniq(lines.map((l) => l.admission_id))).map((a) => [a.id, a]));
+  return { patients, admissions, recs: new Map(), dxDocs: [], conclusions: new Map() };   // JOURNALS_V1_SERVICE — цепочки амбулатории — задача 7
+}
+
+function serviceJournalReport(db, args, ctx) {
+  const parsed = parseServiceIds(args && args.service_ids);
+  if (parsed.error === 'too_many') throw rpcT(RpcError, JOURNAL_TOO_MANY_T, { max: String(JOURNAL_SERVICE_MAX) }, 400);
+  if (parsed.error) throw new RpcError(JOURNAL_EMPTY_MSG, 400);
+  const care = parseKindOfCare(args && args.kind_of_care);
+  if (!care) throw new RpcError(JOURNAL_CARE_MSG, 400);
+  const { from, to } = resolveRange(db, args);
+  // Один параметр-массив, а не 2000 знаков «?»: неизвестный id просто не
+  // находит строк.
+  const idsJson = JSON.stringify(parsed.ids);
+  const raw = [
+    ...journalVisitLines(db, args, ctx, { from, to, idsJson }),
+    ...journalAdmissionLines(db, args, ctx, { from, to, idsJson }),
+  ];
+  const kept = dedupeJournalLines(raw)
+    .filter((l) => care === 'all' || (care === 'inpatient') === (l.admission_id != null));
+  const facts = journalFacts(db, kept, { from, to, idsJson });
+  const lines = sortJournalLines(kept.map((l) => ({ ...l, patient: (facts.patients.get(l.patient_id) || {}).full_name || '' })), ruCompare);
+  const ordinals = patientOrdinals(lines);
+  const columns = JOURNAL_COLUMNS.filter((c) => !(care === 'outpatient' && JOURNAL_INPATIENT_ONLY.has(c)));
+  const rows = lines.map((l, i) => {
+    const p = facts.patients.get(l.patient_id) || {};
+    const adm = l.admission_id != null ? facts.admissions.get(l.admission_id) || null : null;
+    const ref = referrerOf(l, facts.recs, adm);
+    const cells = {
+      '№': i + 1,
+      'Ич. рақам (Пор. № пациента)': ordinals[i],
+      'ФИО': p.full_name || '',
+      'Пол': genderWord(p.gender),
+      'Год рождения': birthYear(p.date_of_birth),
+      'ИБ №': adm ? (String(adm.admission_no || '').trim() || '#' + adm.id) : '',
+      'Кто направил': ref.text,
+      'Диагноз при направлении': referralDiagnosis(l, adm, ref, facts.dxDocs),
+      'Дата': l.day || '',
+      'Услуга': l.service || '',
+      'Заключение': l.src === 'vs' ? (facts.conclusions.get(l.line_id) || '') : '',
+      'Врач': l.performer || '',
+      'Лечащий врач': adm ? (adm.attending || '') : '',
+    };
+    return columns.map((c) => cells[c]);
+  });
+  return {
+    columns, rows,
+    by_building: summariseByBuilding(ctx, lines, {}),
+    total_label: '',
+    notes: [JOURNAL_SERVICE_NOTE, JOURNAL_REFERRER_NOTE, JOURNAL_CONCLUSION_NOTE],
+  };
+}
+
 // DOCTOR_LINES_SPECIALTY_V1 — варианты фильтра-выпадающего списка хаба
 // (option type 'select'): report_choices({ kind, arg }) → { choices: [[value,
 // label]] }. За ТЕМИ ЖЕ воротами, что сам отчёт: кому «Оплата врачей» закрыта,
@@ -4379,6 +4533,7 @@ const REPORTS_RU = {
   stock_expiry:      stockExpiryReport,
   // JOURNALS_V1 — журналы: группа «Журналы» (reports.journals).
   inpatient_register: inpatientRegisterReport,   // JOURNALS_V1_REGISTER — реестр стационарных пациентов
+  service_journal:    serviceJournalReport,      // JOURNALS_V1_SERVICE — журнал услуг
 };
 
 // OWNER_REPORT_V1 — chart data for «Отчёт владельца»: period KPIs, last-12-months
