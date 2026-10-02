@@ -1,11 +1,15 @@
 // JOURNALS_V1 — правила журналов без базы: таблица примеров.
 import test from 'node:test';
+import fs from 'node:fs';   // JOURNALS_V1_RJ1
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import {
   birthYear, JOURNAL_SERVICE_MAX, KINDS_OF_CARE, parseServiceIds, parseKindOfCare, genderWord, dayMinus,
   dedupeJournalLines, sortJournalLines, patientOrdinals, indexRecommendations, referrerOf,
   diagnosisOfBody, consultDiagnosis, referralDiagnosis, conclusionOfDoc,
   ruDay, journalConclusion, RESULTS_RELEASED_T, DONE_WORD,   // JOURNALS_V1_CONCLUSION
+  indexConsultDocs,   // JOURNALS_V1_RJ1
 } from './journal-rules.js';
 
 test('год рождения — первые четыре знака даты, если это год', () => {
@@ -145,4 +149,34 @@ test('заключение строки: документ врача, иначе
   // в. Прочая услуга без документа: отмечена выполненной — «Выполнено».
   assert.deepEqual(journalConclusion({ done: 1, released_day: null }, '', false), { text: 'Выполнено', template: 'Выполнено', params: {} });
   assert.deepEqual(journalConclusion({ done: 0, released_day: '2026-03-19' }, null, false), blank);
+});
+
+// JOURNALS_V1_RJ1 (ревью, п. 4) — диагноз консультации искался линейно по всем
+// документам на каждую строку: 20 000 строк × 20 000 документов — 200 млн
+// сравнений. Теперь документы раскладываются один раз по «пациент|врач».
+test('диагноз консультации: документы — индексом «пациент|врач»; 20 000 строк × 20 000 документов — меньше секунды', () => {
+  const docs = [   // новые сначала
+    { patient_id: 1, doctor_id: 2, day: '2026-03-10', text: 'позже визита' },
+    { patient_id: 1, doctor_id: 2, day: '2026-03-09', text: 'R10.4 — Боль в животе' },
+    { patient_id: 1, doctor_id: 4, day: '2026-02-01', text: 'I25 — ИБС' },
+  ];
+  const idx = indexConsultDocs(docs);
+  assert.ok(idx instanceof Map);
+  assert.deepEqual([...idx.keys()].sort(), ['1|2', '1|4']);
+  assert.equal(consultDiagnosis(idx, 1, 2, '2026-03-09'), 'R10.4 — Боль в животе');
+  assert.equal(consultDiagnosis(idx, 1, '4', '2026-03-02'), 'I25 — ИБС', 'врач строкой — тот же ключ');
+  assert.equal(consultDiagnosis(idx, 2, 2, '2026-03-09'), '');
+  const N = 20000;
+  const many = Array.from({ length: N }, (_, i) => ({ patient_id: i + 1, doctor_id: (i % 50) + 1, day: '2026-03-01', text: 'D' + i }));
+  const lines = Array.from({ length: N }, (_, i) => ({ admission_id: null, patient_id: N - i, day: '2026-03-10' }));
+  const t0 = performance.now();
+  const big = indexConsultDocs(many);
+  let hits = 0;
+  for (const l of lines) if (referralDiagnosis(l, null, { doctorId: ((l.patient_id - 1) % 50) + 1 }, big)) hits++;
+  const ms = performance.now() - t0;
+  assert.equal(hits, N);
+  assert.ok(ms < 1000, 'диагнозы 20 000 строк за ' + Math.round(ms) + ' мс — снова квадратично?');
+  // Журнал раскладывает документы индексом один раз (reports.js journalFacts).
+  const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'rpc', 'reports.js'), 'utf8');
+  assert.match(src, /dxDocs = indexConsultDocs\(/, 'журнал передаёт в referralDiagnosis список, а не индекс');
 });

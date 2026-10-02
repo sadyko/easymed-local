@@ -101,6 +101,7 @@ import {   // JOURNALS_V1
   birthYear, genderWord, parseServiceIds, parseKindOfCare, dedupeJournalLines, sortJournalLines, patientOrdinals,
   indexRecommendations, referrerOf, referralDiagnosis, diagnosisOfBody, conclusionOfDoc, JOURNAL_SERVICE_MAX, CONSULT_DX_DAYS,
   journalConclusion,   // JOURNALS_V1_CONCLUSION — «Заключение»: документ врача, иначе статус строки
+  indexConsultDocs,    // JOURNALS_V1_RJ1 — консультации по «пациент|врач», не поиск по всем на строку
 } from '../domain/journal-rules.js';
 import { ADMISSION_PAID_TOTAL_SQL, ADMISSION_LAST_PAID_AT_SQL, ADMISSION_REVIEW_DIAGNOSIS_SQL } from '../domain/admission-facts.js';   // JOURNALS_V1
 import { wardClassLabel } from '../../../public/js/shared/ward-class.js';
@@ -4470,7 +4471,7 @@ function journalFacts(db, lines, { from, to, idsJson }) {
   // врач его строки (подписать может и администратор), иначе подписавший.
   // Тело читается json_extract: у документов бывают снимки base64, их не
   // грузим; битое тело (json_valid) даёт пусто, а не ошибку.
-  const dxDocs = db.prepare(`
+  const dxDocs = indexConsultDocs(db.prepare(`   -- JOURNALS_V1_RJ1 — раз и по «пациент|врач»
     SELECT d.patient_id, COALESCE(dvs.doctor_id, d.created_by) AS doctor_id, ${localDate('d.created_at')} AS day,
            CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.diagnoses') END AS diagnoses,
            CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.dx') END AS dx
@@ -4480,7 +4481,7 @@ function journalFacts(db, lines, { from, to, idsJson }) {
        AND d.patient_id IN (SELECT value FROM json_each(?))
        AND ${localDate('d.created_at')} BETWEEN date(?, '-${CONSULT_DX_DAYS} days') AND date(?)
      ORDER BY d.created_at DESC, d.id DESC`).all(pids, from, to)
-    .map((d) => ({ patient_id: d.patient_id, doctor_id: d.doctor_id, day: d.day, text: diagnosisOfBody(d) }));
+    .map((d) => ({ patient_id: d.patient_id, doctor_id: d.doctor_id, day: d.day, text: diagnosisOfBody(d) })));   // JOURNALS_V1_RJ1
   // JOURNALS_V1_SERVICE — «Заключение»: последний неотозванный подписанный
   // документ строки визита (diag — заключение исследования, protocol — приём).
   const conclusions = new Map();

@@ -143,12 +143,33 @@ export function diagnosisOfBody(doc) {
   return String((doc && doc.dx) || '').trim();
 }
 
-/** docs — подписанные консультации пациентов, новые сначала: { patient_id, doctor_id, day, text }. */
+// JOURNALS_V1_RJ1 (ревью, п. 4) — консультации раскладываются ОДИН раз по
+// «пациент|врач» (как indexRecommendations): иначе поиск на каждую строку шёл
+// по всем документам периода — квадратично (20 000 × 20 000).
+const consultKey = (patientId, doctorId) => Number(patientId) + '|' + Number(doctorId);
+/** Подписанные консультации (новые сначала) → Map «пациент|врач» → список в том же порядке. */
+export function indexConsultDocs(docs) {
+  const map = new Map();
+  for (const d of docs || []) {
+    if (!d || d.doctor_id == null) continue;
+    const k = consultKey(d.patient_id, d.doctor_id);
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(d);
+  }
+  return map;
+}
+
+/**
+ * docs — индекс indexConsultDocs (журнал) или список консультаций, новые
+ * сначала: { patient_id, doctor_id, day, text }. Список — для малых выборок.
+ */
 export function consultDiagnosis(docs, patientId, doctorId, day) {
   if (doctorId == null) return '';
   const lo = dayMinus(day, CONSULT_DX_DAYS);
-  const d = (docs || []).find((x) => x.patient_id === patientId && Number(x.doctor_id) === Number(doctorId)
-    && String(x.day) <= String(day) && String(x.day) >= lo && x.text);
+  const list = docs instanceof Map   // JOURNALS_V1_RJ1
+    ? (docs.get(consultKey(patientId, doctorId)) || [])
+    : (docs || []).filter((x) => x.patient_id === patientId && Number(x.doctor_id) === Number(doctorId));
+  const d = list.find((x) => String(x.day) <= String(day) && String(x.day) >= lo && x.text);
   return d ? d.text : '';
 }
 
