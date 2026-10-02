@@ -51,7 +51,9 @@ export class RenderError extends Error {}
 // Скрипт автопечати нужен окну браузера и мешает --print-to-pdf: он вызывает
 // window.print() внутри headless-процесса. Вырезаем — на вид документа это не
 // влияет, печать инициирует сам Chrome ключом командной строки.
-function stripAutoPrint(html) {
+// PRINT_AUTO_V1 — экспорт для проверки: шаблон вырезает и скрипт общего
+// помощника печати (public/js/shared/print-auto.js), не только обёртки.
+export function stripAutoPrint(html) {
   return html.replace(/<script>[\s\S]*?window\.print\(\)[\s\S]*?<\/script>/g, '');
 }
 

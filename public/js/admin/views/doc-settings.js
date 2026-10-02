@@ -20,6 +20,8 @@ import { tr, trf } from '../i18n.js';   // I18N_COVERAGE_V1
 // Здесь остаётся то, что без браузера не живёт: загрузка/сохранение настроек
 // и открытие окна печати. Реэкспорт ниже сохраняет прежний публичный API.
 import { buildSheetHtml, esc, INPATIENT_DOC_DEFAULT_TEXT } from '../../shared/doc-render.js';   // INPATIENT_DOCS_V1
+// PRINT_AUTO_V1 — «Печать» сразу открывает окно принтера: скрипт печати — одним помощником.
+import { ensureAutoPrint } from '../../shared/print-auto.js';
 
 const KEY = 'easymed:doc-settings:v1';
 let _cache = null;   // DB/localStorage-hydrated branding (clinic-global)
@@ -186,10 +188,16 @@ export { buildSheetHtml, esc };
 // printableSheet — opens the branded sheet in a new window and auto-prints.
 // External callers (invoice receipt button etc.) call this with `type` +
 // `data`. Falls back to an inline iframe preview if pop-ups are blocked.
+//
+// PRINT_AUTO_V1 (владелец, 02.10) — «печатает сам» было правдой только для
+// запасной обёртки doc-render.js: оформленные бланки doc-variants.js (кабинет
+// врача, лаборатория, счёт, чек и квитанция кассы — receipt-print.js тоже
+// печатает отсюда) открывались страницей без печати. Теперь окно получает
+// скрипт печати общим помощником ensureAutoPrint — только если своего нет.
 // ---------------------------------------------------------------------------
 export function printableSheet({ type = 'invoice', title = null, idLine = null, data = null, bodyHtml = null, settings = null, head = null } = {}) {
     const s = settings || loadDocSettings();
-    const html = buildSheetHtml({ type, s, data, idLine, title, bodyHtml, head });
+    const html = ensureAutoPrint(buildSheetHtml({ type, s, data, idLine, title, bodyHtml, head }));   // PRINT_AUTO_V1
     const w = window.open('', '_blank', 'width=900,height=1100');
     if (w) { w.document.open(); w.document.write(html); w.document.close(); return; }
     openInlinePrintPreview(html);
@@ -215,11 +223,32 @@ function openInlinePrintPreview(html) {
     overlay.querySelector('.modal-close').onclick = close;
     overlay.querySelector('.btn').onclick = close;
     const iframe = overlay.querySelector('iframe');
-    overlay.querySelector('.btn-primary').onclick = () => { try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch (e) {} };
+    const printFrame = () => { try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch (e) {} };
+    const printBtn = overlay.querySelector('.btn-primary');
+    printBtn.onclick = printFrame;
     document.body.appendChild(overlay);
     const stripped = html.replace(/<script>[\s\S]*?<\/script>/g, '');
     const doc = iframe.contentDocument || iframe.contentWindow?.document;
     if (doc) { doc.open(); doc.write(stripped); doc.close(); }
+    // PRINT_AUTO_V1 — окно заблокировано, а шагов не больше: окно принтера
+    // открывается и здесь само (после загрузки бланка и шрифтов), «Печать» —
+    // в фокусе: Enter или одно нажатие печатает ещё раз.
+    try { printBtn.focus(); } catch (e) { /* фокус — удобство */ }
+    autoPrintFrame(iframe, doc, printFrame);
+}
+
+// PRINT_AUTO_V1 — печать бланка в iframe после его загрузки и шрифтов, один раз.
+function autoPrintFrame(iframe, doc, printFrame) {
+    if (!doc) return;
+    let done = false;
+    const go = () => {
+        if (done) return;
+        done = true;
+        (doc.fonts && doc.fonts.ready ? doc.fonts.ready : Promise.resolve())
+            .then(() => setTimeout(printFrame, 250), () => setTimeout(printFrame, 250));
+    };
+    if (doc.readyState === 'complete') { go(); return; }
+    try { iframe.contentWindow.addEventListener('load', go); } catch (e) { go(); }
 }
 
 // Same renderer the preview pane uses — exposed so the editor doesn't need
