@@ -4416,16 +4416,63 @@ function journalAdmissionLines(db, args, ctx, { from, to, idsJson }) {
 // idsJson — окно рекомендаций и консультаций направивших.
 function journalFacts(db, lines, { from, to, idsJson }) {
   const uniq = (xs) => JSON.stringify([...new Set(xs.filter((x) => x != null))]);
+  const pids = uniq(lines.map((l) => l.patient_id));   // JOURNALS_V1_SERVICE — пациенты нужны трём выборкам
   const patients = new Map(db.prepare(`
     SELECT id, full_name, gender, date_of_birth FROM patients
-     WHERE id IN (SELECT value FROM json_each(?))`).all(uniq(lines.map((l) => l.patient_id))).map((p) => [p.id, p]));
+     WHERE id IN (SELECT value FROM json_each(?))`).all(pids).map((p) => [p.id, p]));   // JOURNALS_V1_SERVICE
   const admissions = new Map(db.prepare(`
     SELECT a.id, a.admission_no, a.attending_doctor_id, a.admission_diagnosis,
            COALESCE(NULLIF(u.full_name, ''), u.username) AS attending,
            ${ADMISSION_REVIEW_DIAGNOSIS_SQL('a')} AS review_diagnosis
       FROM admissions a LEFT JOIN users u ON u.id = a.attending_doctor_id
      WHERE a.id IN (SELECT value FROM json_each(?))`).all(uniq(lines.map((l) => l.admission_id))).map((a) => [a.id, a]));
-  return { patients, admissions, recs: new Map(), dxDocs: [], conclusions: new Map() };   // JOURNALS_V1_SERVICE — цепочки амбулатории — задача 7
+  // JOURNALS_V1_SERVICE — «Кто направил» у амбулатории: рекомендация врача из
+  // кабинета этой услуги этому пациенту, не позже последнего дня периода
+  // (ближайшую к дню строки выбирает referrerOf). Удалённая в кабинете (status
+  // 'cancelled') — не направление. Имя — карточка врача, иначе записанное.
+  const recs = indexRecommendations(db.prepare(`
+    SELECT r.patient_id, r.service_id, ${localDate('r.created_at')} AS day, r.recommended_by AS doctor_id,
+           COALESCE(NULLIF(u.full_name, ''), NULLIF(r.recommended_by_name, '')) AS name
+      FROM recommended_services r
+      LEFT JOIN users u ON u.id = r.recommended_by
+     WHERE r.patient_id IN (SELECT value FROM json_each(?))
+       AND r.service_id IN (SELECT value FROM json_each(?))
+       AND COALESCE(r.status, '') <> 'cancelled'
+       AND ${localDate('r.created_at')} <= date(?)
+     ORDER BY r.created_at DESC, r.id DESC`).all(pids, idsJson, to));
+  // JOURNALS_V1_SERVICE — «Диагноз при направлении» у амбулатории: подписанная
+  // консультация (protocol, не отозвана) за CONSULT_DX_DAYS до начала периода
+  // и по его конец; точное окно строки — consultDiagnosis. Врач документа —
+  // врач его строки (подписать может и администратор), иначе подписавший.
+  // Тело читается json_extract: у документов бывают снимки base64, их не
+  // грузим; битое тело (json_valid) даёт пусто, а не ошибку.
+  const dxDocs = db.prepare(`
+    SELECT d.patient_id, COALESCE(dvs.doctor_id, d.created_by) AS doctor_id, ${localDate('d.created_at')} AS day,
+           CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.diagnoses') END AS diagnoses,
+           CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.dx') END AS dx
+      FROM visit_documents d
+      LEFT JOIN visit_services dvs ON dvs.id = d.visit_service_id
+     WHERE d.doc_type = 'protocol' AND d.voided_at IS NULL
+       AND d.patient_id IN (SELECT value FROM json_each(?))
+       AND ${localDate('d.created_at')} BETWEEN date(?, '-${CONSULT_DX_DAYS} days') AND date(?)
+     ORDER BY d.created_at DESC, d.id DESC`).all(pids, from, to)
+    .map((d) => ({ patient_id: d.patient_id, doctor_id: d.doctor_id, day: d.day, text: diagnosisOfBody(d) }));
+  // JOURNALS_V1_SERVICE — «Заключение»: последний неотозванный подписанный
+  // документ строки визита (diag — заключение исследования, protocol — приём).
+  const conclusions = new Map();
+  for (const d of db.prepare(`
+    SELECT d.visit_service_id AS vs_id,
+           CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.conclusion') END AS conclusion,
+           CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.conclusionText') END AS conclusionText,
+           CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.dx') END AS dx,
+           CASE WHEN json_valid(d.body) THEN json_extract(d.body, '$.description') END AS description
+      FROM visit_documents d
+     WHERE d.visit_service_id IN (SELECT value FROM json_each(?))
+       AND d.doc_type IN ('diag', 'protocol') AND d.voided_at IS NULL
+     ORDER BY d.created_at DESC, d.id DESC`).all(uniq(lines.filter((l) => l.src === 'vs').map((l) => l.line_id)))) {
+    if (!conclusions.has(d.vs_id)) conclusions.set(d.vs_id, conclusionOfDoc(d));
+  }
+  return { patients, admissions, recs, dxDocs, conclusions };   // JOURNALS_V1_SERVICE
 }
 
 function serviceJournalReport(db, args, ctx) {

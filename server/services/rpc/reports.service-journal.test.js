@@ -169,3 +169,58 @@ test('итога нет; здания — только соседнее — пу
     try { assert.deepEqual(journal(db).rows, r.rows); } finally { __setReportsPushDown(true); }
   } finally { db.close(); }
 });
+
+// ── Цепочки: рекомендации из кабинета, консультации направивших, заключения ──
+function chains(db) {
+  const rec = db.prepare(`INSERT INTO recommended_services (patient_id, service_id, recommended_by, recommended_by_name, status, created_at)
+                          VALUES (?,?,?,?,?,?)`);
+  rec.run(1, SVC.usgAbd, 2, 'Терапевт Т.Т.', 'pending', at('2026-03-05'));
+  rec.run(1, SVC.usgAbd, 3, 'Лечащий Л.Л.', 'cancelled', at('2026-03-08'));   // удалена в кабинете — не направление
+  rec.run(1, SVC.usgAbd, 4, 'Кардиолог К.К.', 'done', at('2026-03-12'));
+  rec.run(2, SVC.usgAbd, null, 'Внешний Врач', 'pending', at('2026-03-20'));   // позже визита — не в счёт
+  const doc = db.prepare(`INSERT INTO visit_documents (visit_service_id, visit_id, patient_id, doc_type, body, created_by, created_at, voided_at)
+                          VALUES (?,?,?,?,?,?,?,?)`);
+  const j = (o) => JSON.stringify(o);
+  // Консультация терапевта (строка 11, врач 2); подписал администратор.
+  doc.run(11, 9, 1, 'protocol', j({ diagnoses: [{ code: 'K29', name: 'Гастрит', type: 'concomitant' }, { code: 'R10.4', name: 'Боль в животе', type: 'main' }], dx: 'Боль в животе' }), 9, '2026-03-09T07:00:00Z', null);
+  doc.run(11, 9, 1, 'protocol', j({ diagnoses: [{ code: 'Z00', name: 'Осмотр', type: 'main' }] }), 2, '2026-03-09T07:30:00Z', '2026-03-09T07:40:00Z');   // отозван
+  doc.run(null, null, 1, 'protocol', j({ dx: 'I25 — ИБС' }), 4, '2026-02-01T07:00:00Z', null);   // кардиолог, но за 41 день до визита 4
+  doc.run(null, null, 4, 'protocol', j({ dx: 'I20 — Стенокардия' }), 4, '2026-03-04T07:00:00Z', null);
+  // Заключения строк журнала.
+  doc.run(2, 2, 1, 'diag', j({ conclusion: 'Старое заключение' }), 1, '2026-03-10T08:00:00Z', '2026-03-10T08:30:00Z');   // отозвано
+  doc.run(2, 2, 1, 'diag', j({ description: 'Печень увеличена', conclusion: 'Гепатомегалия' }), 1, '2026-03-10T08:30:00Z', null);
+  doc.run(3, 3, 1, 'protocol', j({ conclusionText: 'Синусовый ритм, ЧСС 72', dx: 'I49' }), 1, at('2026-03-12'), null);
+  doc.run(1, 1, 1, 'diag', j({ conclusion: '', description: 'Без патологии' }), 1, at('2026-03-09'), null);
+  doc.run(4, 4, 1, 'diag', j({ conclusion: 'Отозванное' }), 1, at('2026-03-13'), '2026-03-13T08:00:00Z');
+  doc.run(8, 6, 3, 'diag', '{oops', 1, at('2026-03-25'), null);   // битое тело — пусто, не 500
+  doc.run(7, 5, 2, 'diag', j({ conclusion: 'Х'.repeat(400) }), 1, at('2026-03-15'), null);
+}
+
+test('кто направил: ближайшая рекомендация не позже дня визита; удалённая и поздняя — не в счёт', () => {
+  const db = clinic();
+  try {
+    chains(db);
+    assert.deepEqual(col(journal(db), 'Кто направил'), ['сам', 'Кардиолог К.К.', 'Терапевт Т.Т.', 'Лечащий Л.Л.', 'Лечащий Л.Л.',
+      'Лечащий Л.Л.', 'Кардиолог К.К.', 'Клиника «Шифо»', 'Стационар', 'Стационар']);
+  } finally { db.close(); }
+});
+
+test('диагноз при направлении: основной диагноз подписанной консультации направившего врача за 30 дней', () => {
+  const db = clinic();
+  try {
+    chains(db);
+    assert.deepEqual(col(journal(db), 'Диагноз при направлении'), ['', 'I20 — Стенокардия', 'R10.4 — Боль в животе',
+      'K35.8 — Острый аппендицит', 'K35.8 — Острый аппендицит', 'K35.8 — Острый аппендицит', '', '', 'I10 — Гипертензия', 'I10 — Гипертензия']);
+  } finally { db.close(); }
+});
+
+test('заключение: только подписанное, отозванное не берётся, битое тело — пусто, длинное — целиком', () => {
+  const db = clinic();
+  try {
+    chains(db);
+    const c = col(journal(db), 'Заключение');
+    assert.deepEqual(c.slice(0, 7), ['', '', 'Без патологии', 'Гепатомегалия', '', 'Синусовый ритм, ЧСС 72', '']);
+    assert.equal(c[7].length, 400, 'сервер отдаёт заключение целиком — обрезает только экран');
+    assert.deepEqual(c.slice(8), ['', '']);
+  } finally { db.close(); }
+});
