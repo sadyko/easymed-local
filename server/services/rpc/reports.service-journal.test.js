@@ -89,7 +89,8 @@ function clinic() {
                          VALUES (?,?,?,?,?,1,0,0,?,?,?,?)`);
   as.run(1, 1, SVC.usgAbd, 3, 1, 1, null, at('2026-03-11'), at('2026-03-10'));    // строка случая — всегда стационар
   as.run(2, 1, SVC.usgAbd, 3, 1, 1, null, at('2026-03-10'), at('2026-03-10'));    // та же работа, что визит 2 — один раз
-  as.run(3, 2, SVC.ecg, 3, null, 1, null, null, at('2026-03-21'));                // не отмечена «Выполнено» — день начисления
+  as.run(3, 2, SVC.ecg, 3, null, 1, null, null, at('2026-03-21'));                // JOURNALS_V1_RJ1 — запланирована, не выполнена: не в журнале
+  as.run(5, 2, SVC.ecg, 3, null, 1, null, at('2026-03-22'), at('2026-03-21'));    // JOURNALS_V1_RJ1 — выполнена 22.03 без исполнителя: врач — назначивший
   as.run(4, 1, SVC.usgAbd, 3, 1, 0, null, at('2026-03-11'), at('2026-03-11'));    // «в учёт расходов» — не пациенту
   return db;
 }
@@ -101,7 +102,7 @@ test('строки: оплаченные визиты и строки акта; 
     assert.deepEqual(r.columns, ['№', 'Ич. рақам (Пор. № пациента)', 'ФИО', 'Пол', 'Год рождения', 'ИБ №', 'Кто направил',
       'Диагноз при направлении', 'Дата', 'Услуга', 'Заключение', 'Врач', 'Лечащий врач']);
     assert.deepEqual(col(r, 'Дата'), ['2026-03-02', '2026-03-05', '2026-03-09', '2026-03-10', '2026-03-11', '2026-03-12',
-      '2026-03-13', '2026-03-15', '2026-03-21', '2026-03-25']);
+      '2026-03-13', '2026-03-15', '2026-03-22', '2026-03-25']);
     assert.deepEqual(col(r, 'ФИО'), ['Бекова Дилноза', 'Гулямова Нигора', 'Азизов Бахтиёр', 'Азизов Бахтиёр', 'Азизов Бахтиёр',
       'Азизов Бахтиёр', 'Азизов Бахтиёр', 'Бекова Дилноза', 'Валиев Сардор', 'Валиев Сардор']);
     assert.deepEqual(col(r, 'Услуга'), ['УЗИ брюшной полости', 'ЭКГ', 'УЗИ брюшной полости', 'УЗИ брюшной полости', 'УЗИ брюшной полости',
@@ -135,7 +136,7 @@ test('тип: «Стационар» и «Амбулатория» делят ж
   const db = clinic();
   try {
     const inp = journal(db, { kind_of_care: 'inpatient' });
-    assert.deepEqual(col(inp, 'Дата'), ['2026-03-10', '2026-03-11', '2026-03-12', '2026-03-21', '2026-03-25']);
+    assert.deepEqual(col(inp, 'Дата'), ['2026-03-10', '2026-03-11', '2026-03-12', '2026-03-22', '2026-03-25']);
     assert.deepEqual(col(inp, 'Ич. рақам (Пор. № пациента)'), [1, 1, 1, 2, 2], 'номер — по строкам этого журнала');
     const out = journal(db, { kind_of_care: 'outpatient' });
     assert.ok(!out.columns.includes('ИБ №') && !out.columns.includes('Лечащий врач'));
@@ -223,6 +224,45 @@ test('возвраты настоящей кассой: полный возвр�
   } finally { db.close(); }
 });
 
+// JOURNALS_V1_RJ1 (ревью, п. 3) — строка акта в журнале, только когда отмечена
+// «Выполнено» (performed_at, как IN_DONE_SQL выплаты врачу), и датирована днём
+// выполнения: запланированная медсестрой на завтра — ещё не оказанная услуга.
+test('стационар: запланированная строка акта — не в журнале, пока не выполнена; дата — день выполнения; план + визит — одна строка', () => {
+  const db = clinic();
+  try {
+    const ecgDays = (r) => objectsOf(r).filter((o) => o['Услуга'] === 'ЭКГ').map((o) => o['Дата']);
+    assert.deepEqual(ecgDays(journal(db)), ['2026-03-05', '2026-03-12', '2026-03-22'], 'запланированная 21.03 — не в журнале');
+    // План на день визита, заведённый накануне: визит есть, плана в журнале нет.
+    db.prepare(`INSERT INTO admission_services (id, admission_id, service_id, doctor_id, quantity, unit_price, total, billable, planned_at, created_at)
+                VALUES (6, 2, ?, 3, 1, 0, 0, 1, ?, ?)`).run(SVC.usgAbd, at('2026-03-25'), at('2026-03-24'));
+    const abdDays = (r) => objectsOf(r).filter((o) => o['Услуга'] === 'УЗИ брюшной полости' && o['ФИО'] === 'Валиев Сардор').map((o) => o['Дата']);
+    assert.deepEqual(abdDays(journal(db)), ['2026-03-25'], 'план 24.03 не стал строкой');
+    // Выполнили в день визита — та же работа, одна строка (строка визита).
+    db.prepare('UPDATE admission_services SET performed_at = ? WHERE id = 6').run(at('2026-03-25'));
+    assert.deepEqual(abdDays(journal(db)), ['2026-03-25']);
+    // Запланированную 21.03 выполнили 23.03 — строка 23.03, не 21.03.
+    db.prepare('UPDATE admission_services SET performed_at = ? WHERE id = 3').run(at('2026-03-23'));
+    assert.deepEqual(ecgDays(journal(db)), ['2026-03-05', '2026-03-12', '2026-03-22', '2026-03-23']);
+  } finally { db.close(); }
+});
+
+// JOURNALS_V1_RJ1 (ревью) — «прошла кассу» — каждый статус списка, queued тоже:
+// мутант без queued прежде выживал только случайно (его строку подменяла строка акта).
+test('прошла кассу: queued, collected, in_progress, resulted, completed — в журнале; added и cancelled — нет', () => {
+  const db = clinic();
+  try {
+    const statuses = ['queued', 'collected', 'in_progress', 'resulted', 'completed', 'added', 'cancelled'];
+    statuses.forEach((st, i) => {
+      const day = '2026-03-' + String(20 + i);
+      db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (?, 4, ?, 'arrived')").run(30 + i, at(day));
+      db.prepare('INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status) VALUES (?,?,?,1,1,0,0,?)')
+        .run(60 + i, 30 + i, SVC.usgKid, st);
+    });
+    const r = journal(db, { from: '2026-03-20', to: '2026-03-26', service_ids: [SVC.usgKid] });
+    assert.deepEqual(col(r, 'Дата'), ['2026-03-20', '2026-03-21', '2026-03-22', '2026-03-23', '2026-03-24']);
+  } finally { db.close(); }
+});
+
 // ── Цепочки: рекомендации из кабинета, консультации направивших, заключения ──
 function chains(db) {
   const rec = db.prepare(`INSERT INTO recommended_services (patient_id, service_id, recommended_by, recommended_by_name, status, created_at)
@@ -283,9 +323,9 @@ test('заключение: подписанный документ — «Зак
     assert.deepEqual(c.slice(0, 7), ['Выполнено', 'I20.8 — Стенокардия напряжения', 'Выполнено', 'Гепатомегалия', 'Выполнено',
       'Синусовый ритм, ЧСС 72', 'Выполнено']);
     assert.equal(c[7].length, 400, 'сервер отдаёт заключение целиком — обрезает только экран');
-    assert.deepEqual(c.slice(8), ['', 'Выполнено'], 'строка акта без «Выполнено» — пусто; битое тело документа — статус строки');
+    assert.deepEqual(c.slice(8), ['Выполнено', 'Выполнено'], 'выполненная строка акта — «Выполнено»; битое тело документа — статус строки');
     const ci = r.columns.indexOf('Заключение');
-    assert.deepEqual(r.cells_t.filter((t) => t[1] === ci), [0, 2, 4, 6, 9].map((ri) => [ri, ci, 'Выполнено', {}]),
+    assert.deepEqual(r.cells_t.filter((t) => t[1] === ci), [0, 2, 4, 6, 8, 9].map((ri) => [ri, ci, 'Выполнено', {}]),
       'статус переводится шаблоном: столбец «Заключение» — не перечисление');
   } finally { db.close(); }
 });

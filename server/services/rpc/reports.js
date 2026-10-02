@@ -4404,7 +4404,11 @@ function journalVisitLines(db, args, ctx, { from, to, idsJson }) {
 }
 
 function journalAdmissionLines(db, args, ctx, { from, to, idsJson }) {
-  const when = 'COALESCE(ias.performed_at, ias.created_at)';
+  // JOURNALS_V1_RJ1 (ревью, п. 3) — строка акта — только ВЫПОЛНЕННАЯ (отметка
+  // performed_at, как IN_DONE_SQL выплаты врачу) и датирована днём выполнения:
+  // запланированная на завтра — ещё не оказанная услуга. Период по сырому
+  // performed_at читает индекс idx_admission_services_performed (мигр. 210).
+  const when = 'ias.performed_at';
   const range = rangeOf(when, from, to);
   const bf = branchFilter(args, OWN_BRANCH_SQL);   // счёт госпитализации — без филиала: свой
   const gf = buildingWhere(db, ctx, args, 'admission_services', 'ias');
@@ -4422,6 +4426,7 @@ function journalAdmissionLines(db, args, ctx, { from, to, idsJson }) {
       JOIN services s   ON s.id = ias.service_id
       LEFT JOIN users pu ON pu.id = COALESCE(ias.performer_id, ias.doctor_id)
      WHERE ias.service_id IN (SELECT value FROM json_each(?))
+       AND ias.performed_at IS NOT NULL   -- JOURNALS_V1_RJ1 — только выполненная
        AND ias.clinic_item_id IS NULL
        AND COALESCE(ias.notes, '') NOT LIKE 'ACCOMMODATION%'
        AND COALESCE(ias.billable, 1) = 1
