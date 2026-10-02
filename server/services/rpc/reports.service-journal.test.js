@@ -8,8 +8,16 @@ import assert from 'node:assert/strict';
 import { openDb } from '../../db/connection.js';
 import { migrate } from '../../db/migrate.js';
 import { runReport, __setReportsPushDown } from './reports.js';
+// JOURNALS_V1_RJ1 — возвраты — настоящими RPC кассы, не руками в invoices.
+import { createInvoiceForVisit, createInvoiceForAdmission, recordPayment, refundPayment, refundInvoiceLine } from './billing.js';
+import { openCashShift } from './cashier.js';
 
 const admin = { id: 9, role: 'admin' };
+const registrar = { id: 7, role: 'registrar' };   // JOURNALS_V1_RJ1
+const cashier = { id: 8, role: 'cashier', full_name: 'Кассир' };   // JOURNALS_V1_RJ1
+const itemOf = (db, vsId) => db.prepare('SELECT invoice_item_id i FROM visit_services WHERE id = ?').get(vsId).i;   // JOURNALS_V1_RJ1
+const fullRefund = (db, invoiceId) => refundPayment(db, {   // JOURNALS_V1_RJ1 — полный возврат: касса отменяет счёт
+  payment_id: db.prepare('SELECT id FROM payments WHERE invoice_id = ? AND amount > 0').get(invoiceId).id }, cashier);
 const MARCH = { from: '2026-03-01', to: '2026-03-31' };
 const SVC = { usgAbd: 1, usgKid: 2, ecg: 3, consult: 4 };
 const at = (day) => day + 'T07:00:00Z';   // 07:00 UTC — тот же местный день при поясе от −6 до +16
@@ -30,6 +38,8 @@ function clinic() {
   u.run(3, 'att', 'x', 'doctor', 'Лечащий Л.Л.', 1);
   u.run(4, 'card', 'x', 'doctor', 'Кардиолог К.К.', 1);
   u.run(9, 'adm', 'x', 'admin', 'Админ', 0);
+  u.run(7, 'reg', 'x', 'registrar', 'Регистратор', 0);   // JOURNALS_V1_RJ1
+  u.run(8, 'cash', 'x', 'cashier', 'Кассир', 0);         // JOURNALS_V1_RJ1
   const s = db.prepare('INSERT INTO services (id, name, price) VALUES (?,?,?)');
   s.run(SVC.usgAbd, 'УЗИ брюшной полости', 150000);
   s.run(SVC.usgKid, 'УЗИ почек', 120000);
@@ -68,9 +78,13 @@ function clinic() {
   v.run(9, 1, at('2026-03-09'), 'arrived', null);   vs.run(11, 9, SVC.consult, 2, 'completed');  // услуга не выбрана
   v.run(10, 2, at('2026-03-16'), 'arrived', null);  vs.run(12, 10, SVC.usgAbd, 1, 'completed');  // счёт возвращён
   v.run(11, 2, at('2026-03-17'), 'cancelled', null); vs.run(13, 11, SVC.usgAbd, 1, 'queued');    // визит отменён
-  db.prepare("INSERT INTO invoices (id, invoice_number, patient_id, visit_id, total_amount, paid_amount, status) VALUES (70, 'INV-70', 2, 10, 150000, 0, 'refunded')").run();
-  db.prepare("INSERT INTO invoice_items (id, invoice_id, service_id, description, quantity, unit_price, total) VALUES (70, 70, 1, 'УЗИ брюшной полости', 1, 150000, 150000)").run();
-  db.prepare('UPDATE visit_services SET invoice_item_id = 70 WHERE id = 12').run();
+  // JOURNALS_V1_RJ1 — визит 10: оплачен и полностью возвращён НАСТОЯЩЕЙ кассой
+  // (refund_payment → счёт отменён, строка отпущена со счёта с отметкой
+  // pay_refund_releases); статус строки остаётся 'completed'.
+  openCashShift(db, { opening_float: 0 }, cashier);
+  const inv10 = createInvoiceForVisit(db, { visit_id: 10, visit_service_ids: [12] }, registrar).invoice;
+  recordPayment(db, { invoice_id: inv10.id, amount: inv10.total_amount, method: 'cash' }, cashier);
+  fullRefund(db, inv10.id);
   const as = db.prepare(`INSERT INTO admission_services (id, admission_id, service_id, doctor_id, performer_id, quantity, unit_price, total, billable, notes, performed_at, created_at)
                          VALUES (?,?,?,?,?,1,0,0,?,?,?,?)`);
   as.run(1, 1, SVC.usgAbd, 3, 1, 1, null, at('2026-03-11'), at('2026-03-10'));    // строка случая — всегда стационар
@@ -167,6 +181,45 @@ test('итога нет; здания — только соседнее — пу
     assert.deepEqual(journal(db, { buildings: ['B'] }).rows, []);
     __setReportsPushDown(false);
     try { assert.deepEqual(journal(db).rows, r.rows); } finally { __setReportsPushDown(true); }
+  } finally { db.close(); }
+});
+
+// JOURNALS_V1_RJ1 (ревью, п. 1) — «возврат не показывается». Касса не ставит
+// счёту 'refunded': полный возврат отменяет счёт (closeFullyRefunded →
+// voidInvoice), возврат строкой отпускает строку со счёта — и строка остаётся
+// 'completed' без invoice_item_id. Признак — отметка pay_refund_releases, та же,
+// что у visit_refunded_lines (окно визита) и у выплаты врачу.
+test('возвраты настоящей кассой: полный возврат и возврат строкой убирают строку; сосед по счёту и отмена неоплаченного счёта — остаются', () => {
+  const db = clinic();
+  try {
+    assert.equal(db.prepare('SELECT status FROM visit_services WHERE id = 12').get().status, 'completed', 'строка возвращённого счёта осталась «выполненной»');
+    assert.equal(itemOf(db, 12), null);
+    assert.ok(!col(journal(db), 'Дата').includes('2026-03-16'), 'полностью возвращённый визит 10 — не в журнале');
+    // Возврат строкой: из двух строк счёта вернули УЗИ почек, ЭКГ осталась.
+    db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (20, 2, ?, 'arrived')").run(at('2026-03-19'));
+    const line = db.prepare('INSERT INTO visit_services (id, visit_id, service_id, doctor_id, quantity, unit_price, total, status) VALUES (?,20,?,1,1,0,0,?)');
+    line.run(50, SVC.usgKid, 'completed');
+    line.run(51, SVC.ecg, 'completed');
+    const inv = createInvoiceForVisit(db, { visit_id: 20, visit_service_ids: [50, 51] }, registrar).invoice;
+    recordPayment(db, { invoice_id: inv.id, amount: inv.total_amount, method: 'cash' }, cashier);
+    refundInvoiceLine(db, { invoice_item_id: itemOf(db, 50) }, cashier);
+    let r = journal(db, { from: '2026-03-19', to: '2026-03-19' });
+    assert.deepEqual(col(r, 'Услуга'), ['ЭКГ'], 'возвращённая строкой услуга — не в журнале, соседняя — в журнале');
+    // Обычная отмена неоплаченного счёта (страховой счёт отменили, денег не было) — работа сделана, строка остаётся.
+    db.prepare("INSERT INTO visits (id, patient_id, visit_date, status) VALUES (21, 1, ?, 'arrived')").run(at('2026-03-27'));
+    line.run(52, SVC.usgKid, 'completed');
+    db.prepare('UPDATE visit_services SET visit_id = 21 WHERE id = 52').run();
+    const unpaid = createInvoiceForVisit(db, { visit_id: 21, visit_service_ids: [52] }, registrar).invoice;
+    db.prepare("UPDATE invoices SET status = 'void' WHERE id = ?").run(unpaid.id);
+    db.prepare('UPDATE visit_services SET invoice_item_id = NULL WHERE id = 52').run();
+    assert.deepEqual(col(journal(db, { from: '2026-03-27', to: '2026-03-27' }), 'Услуга'), ['УЗИ почек']);
+    // Стационар: счёт госпитализации оплачен и полностью возвращён — строки акта нет.
+    assert.ok(col(journal(db), 'Дата').includes('2026-03-11'), 'до возврата строка акта 11.03 в журнале');
+    const admInv = createInvoiceForAdmission(db, { admission_id: 1, admission_service_ids: [1] }, registrar).invoice;
+    recordPayment(db, { invoice_id: admInv.id, amount: admInv.total_amount, method: 'cash' }, cashier);
+    fullRefund(db, admInv.id);
+    r = journal(db);
+    assert.ok(!col(r, 'Дата').includes('2026-03-11'), 'возвращённая строка акта — не в журнале');
   } finally { db.close(); }
 });
 

@@ -4365,8 +4365,16 @@ const IN_BED_ON_DAY_SQL = (patientExpr, dayExpr) => `(SELECT ab.id FROM admissio
        AND (ab.discharged_at IS NULL OR ${localDate('ab.discharged_at')} >= ${dayExpr})
      ORDER BY ab.admitted_at DESC, ab.id DESC LIMIT 1)`;
 // Строка, чей счёт возвращён: денег за неё у клиники нет — «возврат не показывается».
-const NOT_REFUNDED_LINE_SQL = (line) => `NOT EXISTS (SELECT 1 FROM invoice_items rfi JOIN invoices rfv ON rfv.id = rfi.invoice_id
-     WHERE rfi.id = ${line}.invoice_item_id AND rfv.status = 'refunded')`;
+// JOURNALS_V1_RJ1 (ревью, п. 1) — касса так счёт почти не помечает: полный
+// возврат ОТМЕНЯЕТ счёт (refund_payment → closeFullyRefunded → voidInvoice),
+// возврат строкой (refund_invoice_line) отпускает строку со счёта, и строка
+// остаётся 'completed' без invoice_item_id. Признак возврата — отметка
+// pay_refund_releases на невыставленной строке: правило NOT_RELEASED_SQL выше,
+// то же, что у окна визита (visit_refunded_lines) и у выплаты врачу. Обычная
+// отмена неоплаченного счёта отметки не ставит — сделанная работа остаётся.
+const NOT_REFUNDED_LINE_SQL = (line, kind) => `NOT EXISTS (SELECT 1 FROM invoice_items rfi JOIN invoices rfv ON rfv.id = rfi.invoice_id
+     WHERE rfi.id = ${line}.invoice_item_id AND rfv.status = 'refunded')
+       AND ${NOT_RELEASED_SQL(kind, line)}`;   // JOURNALS_V1_RJ1
 
 function journalVisitLines(db, args, ctx, { from, to, idsJson }) {
   const range = rangeOf('v.visit_date', from, to);
@@ -4391,7 +4399,7 @@ function journalVisitLines(db, args, ctx, { from, to, idsJson }) {
      WHERE vs.service_id IN (SELECT value FROM json_each(?))
        AND ${JOURNAL_PAID_SQL('vs')}
        AND ${LIVE_VISIT_SQL('v')}
-       AND ${NOT_REFUNDED_LINE_SQL('vs')}
+       AND ${NOT_REFUNDED_LINE_SQL('vs', 'out')}   -- JOURNALS_V1_RJ1
        AND ${range.sql}${bf.clause}${gf.clause}`).all(idsJson, ...range.params, ...bf.params, ...gf.params);
 }
 
@@ -4418,7 +4426,7 @@ function journalAdmissionLines(db, args, ctx, { from, to, idsJson }) {
        AND COALESCE(ias.notes, '') NOT LIKE 'ACCOMMODATION%'
        AND COALESCE(ias.billable, 1) = 1
        AND COALESCE(a.status, '') <> 'cancelled'
-       AND ${NOT_REFUNDED_LINE_SQL('ias')}
+       AND ${NOT_REFUNDED_LINE_SQL('ias', 'in')}   -- JOURNALS_V1_RJ1
        AND ${range.sql}${bf.clause}${gf.clause}`).all(idsJson, ...range.params, ...bf.params, ...gf.params);
 }
 
