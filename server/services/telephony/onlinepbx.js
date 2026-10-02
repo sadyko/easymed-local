@@ -113,6 +113,28 @@ export async function pbxAuth(domain, authKey, { newKey = false, ...opts } = {})
   return { ok: true, key_id: String(data.key_id), key: String(data.key) };
 }
 
+// ONLINEPBX_KEY_SHARE_V1, ревью — в описании параметра new сказано
+// «обязательное значение "true"»: станция может однажды начать отвергать
+// new=false. Тогда без запасного пути встали бы опрос, «Прослушать» и
+// «Позвонить» — до следующего выпуска. Поэтому отказ на new=false ошибкой
+// станции или неразборчивым ответом — один повтор с new=true. Нет связи,
+// «не чаще» и неверный ключ — без повтора: новый ключ там не поможет.
+const SHARED_AUTH_FALLBACK_REASONS = new Set(['server_error', 'bad_response']);
+
+/**
+ * Общий ключ: new=false, а если станция этот запрос отвергла (ошибка станции,
+ * неразборчивый ответ) — один раз new=true. `onAttempt` — на каждую
+ * авторизацию (pbxCall считает их в пределах MAX_PBX_AUTHS_PER_CALL).
+ */
+export async function pbxAuthShared(domain, authKey, { onAttempt, ...opts } = {}) {
+  const a = await pbxAuth(domain, authKey, opts);   // по умолчанию — new=false
+  if (onAttempt) onAttempt();
+  if (a.ok || !SHARED_AUTH_FALLBACK_REASONS.has(a.reason)) return a;
+  const b = await pbxAuth(domain, authKey, { ...opts, newKey: true });
+  if (onAttempt) onAttempt();
+  return b;
+}
+
 /**
  * Один запрос к API с уже выданным ключом. `creds` — {key_id, key}.
  *
@@ -127,10 +149,16 @@ export async function pbxCall(domain, pathName, params, { creds, authKey, onRene
   const d = normalizeDomain(domain);
   let c = creds && creds.key_id && creds.key ? creds : null;
   let auths = 0;
-  // Первая авторизация вызова — общий ключ, вторая — новый.
+  // Первая авторизация вызова — общий ключ (а если станция отвергла new=false
+  // — тут же новый, это вторая авторизация), следующая — новый ключ.
   const renew = async () => {
-    const a = await pbxAuth(d, authKey, { ...opts, newKey: auths > 0 });
-    auths += 1;
+    let a;
+    if (auths === 0) {
+      a = await pbxAuthShared(d, authKey, { ...opts, onAttempt: () => { auths += 1; } });
+    } else {
+      a = await pbxAuth(d, authKey, { ...opts, newKey: true });
+      auths += 1;
+    }
     if (!a.ok) return a;
     c = { key_id: a.key_id, key: a.key };
     if (onRenew) await onRenew(c);

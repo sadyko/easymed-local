@@ -20,7 +20,7 @@
 //
 // ЧИТАТЬ НАДО vendor (через providerKind ниже) И НИКОГДА kind. Это закреплено
 // тестом: запрос с фильтром по kind молча потеряет «Мои Звонки».
-import { pbxAuth, pbxCall, pbxHistory, normalizeDomain } from './onlinepbx.js';
+import { pbxAuthShared, pbxCall, pbxHistory, normalizeDomain } from './onlinepbx.js';   // ONLINEPBX_KEY_SHARE_V1 — pbxAuthShared
 import { mzHistory, normalizeMzDomain } from './moizvonki.js';   // MOIZVONKI_V1
 
 export class ProviderError extends Error {
@@ -240,7 +240,7 @@ export function testMessage(reason, kind = 'onlinepbx') {
  * сохранённые. Проверка — настоящий запрос истории за последнюю минуту:
  * ключ выдан, домен отвечает, история читается.
  */
-export async function testProvider(db, args = {}, { pbxHistoryImpl = pbxHistory, pbxAuthImpl = pbxAuth, mzHistoryImpl = mzHistory } = {}) {
+export async function testProvider(db, args = {}, { pbxHistoryImpl = pbxHistory, pbxAuthImpl = pbxAuthShared, mzHistoryImpl = mzHistory } = {}) {   // ONLINEPBX_KEY_SHARE_V1 — общий ключ, new=true лишь запасным
   const row = args.id ? getProviderRow(db, args.id) : null;
   const cfg = row ? providerConfig(row) : {};
   const sec = row ? providerSecrets(row) : {};

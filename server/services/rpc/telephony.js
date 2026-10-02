@@ -21,7 +21,7 @@ import { listProviders, saveProvider, deleteProvider, testProvider, ProviderErro
 import { dialCall } from '../telephony/dial.js';
 // CALL_RECORDING_V1 — разбор ссылки на запись и история станции.
 import { recordingUrlOf } from '../telephony/recording.js';
-import { pbxHistory, pbxRecordingUrl, pbxAuth, normalizeDomain } from '../telephony/onlinepbx.js';
+import { pbxHistory, pbxRecordingUrl, pbxAuthShared, normalizeDomain } from '../telephony/onlinepbx.js';   // ONLINEPBX_KEY_SHARE_V1 — pbxAuthShared
 // CALL_RECORDING_REASONS_V1 — сроки «запись готовится» и повтора: одно место с экраном.
 import { RECORDING_NOT_READY_WINDOW_MS, RECORDING_SERVER_RETRY_MS, RECORDING_SERVER_RETRY_REASONS,
          recordingFailReason } from '../../../public/js/shared/call-recording.js';   // CALL_RECORDING_NOT_READY_ERR_V1 — recordingFailReason
@@ -212,7 +212,7 @@ function domainChangeRefusal(existing, a, user) {
   return reentered ? null : 'Адрес подключения меняется только вместе с ключом API: введите ключ заново.';
 }
 
-export async function telephonyProviderSave(db, args, user, { pbxAuthImpl = pbxAuth } = {}) {
+export async function telephonyProviderSave(db, args, user, { pbxAuthImpl = pbxAuthShared } = {}) {   // ONLINEPBX_KEY_SHARE_V1 — проверка ключа: общий ключ, new=true лишь запасным
   requireLevel(db, user, 'edit');
   const a = args || {};
   const existing = a.id ? getProviderRow(db, a.id) : null;
