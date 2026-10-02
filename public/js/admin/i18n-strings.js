@@ -10846,4 +10846,5 @@ export const STRINGS = {
   // CABINET_FIX_V1_R7 (2026-10-03) — ревью 7: «Возобновить» при несохранённом тексте, поздний отказ подписи (service-workspace.js)
   "На экране есть несохранённый текст. Заменить его этим черновиком?": {"en":"There is unsaved text on the screen. Replace it with this draft?","ru":"На экране есть несохранённый текст. Заменить его этим черновиком?","uz":"Ekranda saqlanmagan matn bor. Uni shu qoralama bilan almashtirasizmi?"},
   "Подпись так и не прошла: документ не подписан. Проверьте его и подпишите ещё раз.": {"en":"The signature never went through: the document is not signed. Check it and sign again.","ru":"Подпись так и не прошла: документ не подписан. Проверьте его и подпишите ещё раз.","uz":"Imzo o'tmadi: hujjat imzolanmagan. Uni tekshiring va qayta imzolang."},
+  "На экране есть несохранённый текст. Заменить его этой версией?": {"en":"There is unsaved text on the screen. Replace it with this version?","ru":"На экране есть несохранённый текст. Заменить его этой версией?","uz":"Ekranda saqlanmagan matn bor. Uni shu versiya bilan almashtirasizmi?"},   // CABINET_FIX_V1_R7 — «Загрузить в форму»
 };

@@ -5295,6 +5295,7 @@ export const addDiagnosisEntry = (ctx, d) => addDiagnosis(ctx, d);              
 export const removeDiagnosisEntry = (ctx, idx) => removeDiagnosis(ctx, idx);      // CABINET_FIX_V1_R6 — экспорт для проверки
 export const removePrescriptionEntry = (ctx, idx) => removePrescription(ctx, idx); // CABINET_FIX_V1_R6 — экспорт для проверки
 export const removeOwnServiceEntry = (ctx, idx) => removeOwnService(ctx, idx);    // CABINET_FIX_V1_R6 — экспорт для проверки
+export const openSnapshot = (ctx, item) => openSnapshotModal(ctx, item);           // CABINET_FIX_V1_R7 — экспорт для проверки
 export const pastePickField = (ctx, html, defaultField, okMsg) => _pastePickField(ctx, html, defaultField, okMsg);   // CABINET_FIX_V1_R4 — экспорт для проверки
 
 // Recompute the parent visit's status from its services. The visit is marked
@@ -5410,6 +5411,8 @@ function openSnapshotModal(ctx, item) {
             class: 'btn btn-primary',
             title: 'Скопировать эти значения в форму. Они не сохранятся, пока вы не нажмёте «Сохранить черновик».',
             onclick: () => {
+                // CABINET_FIX_V1_R7 (п. 5) — несохранённое на экране заменяется только с согласия; «Нет» — окно остаётся, текст цел.
+                if (unsavedFor(ctx) && !confirm(tr('На экране есть несохранённый текст. Заменить его этой версией?'))) return;
                 applyFields(ctx, item.fields);
                 wsState.saved = false; resetSaveBtn(ctx);   // CABINET_FIX_V1_R5 (E) — «Ещё не сохранено», несохранённое — эта версия
                 close();

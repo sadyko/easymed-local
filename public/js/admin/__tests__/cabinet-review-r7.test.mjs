@@ -304,6 +304,34 @@ test('п. 5: «Возобновить» при несохранённом тек
     assert.equal(field(a, 'chief_complaint').innerHTML, 'ИЗ ЧЕРНОВИКА');
 });
 
+test('п. 5: «Загрузить в форму» (окно версии) при несохранённом тексте — спрашивает; «Нет» — текст на экране цел', async () => {
+    closeDialogs();
+    const V = { kind: 'signed', savedAt: '2026-10-03T06:00:00.000Z', by: null, byName: 'Каримов Алишер', fields: { chief_complaint: 'ИЗ ВЕРСИИ' } };
+    const a = await opened(86, notesOf({ chief_complaint: 'Исходно' }, { history: [V] }));
+    const loadBtn = () => document.body.querySelectorAll('button').filter((b) => /Загрузить в форму/.test(b.textContent)).pop();
+    // ничего не набрано — без вопроса
+    CONFIRMS.length = 0;
+    WS.openSnapshot(a, V);
+    loadBtn().dispatch('click');
+    assert.equal(CONFIRMS.length, 0, 'спросила, хотя несохранённого нет');
+    assert.equal(field(a, 'chief_complaint').innerHTML, 'ИЗ ВЕРСИИ');
+    assert.ok(await WS.saveDraft(a, { silent: true }));
+    // набрано и не сохранено — вопрос; «Нет» — текст цел
+    closeDialogs();
+    typeIn(a, 'chief_complaint', 'НАБРАНО');
+    answerConfirm(false);
+    WS.openSnapshot(a, V);
+    loadBtn().dispatch('click');
+    assert.equal(CONFIRMS.length, 1, 'не спросила перед заменой несохранённого текста');
+    assert.match(CONFIRMS[0], /несохранённый текст/);
+    assert.equal(field(a, 'chief_complaint').innerHTML, 'НАБРАНО', 'несохранённый текст заменён без согласия');
+    // «Да» — версия в форме
+    answerConfirm(true);
+    loadBtn().dispatch('click');
+    assert.equal(field(a, 'chief_complaint').innerHTML, 'ИЗ ВЕРСИИ');
+    closeDialogs();
+});
+
 // ─── п. 6: поздние ответы после потолка ожидания ─────────────────────────────
 test('п. 6: поздний успех старой записи после потолка не возвращает старую копию — следующее сохранение без лишнего отказа', async () => {
     WS.__setTimingForTests({ writeTimeoutMs: 50, pendingMaxMs: 120 });
@@ -348,6 +376,7 @@ test('подписи ревью 7 — на трёх языках', async () => {
     for (const key of [
         'На экране есть несохранённый текст. Заменить его этим черновиком?',
         'Подпись так и не прошла: документ не подписан. Проверьте его и подпишите ещё раз.',
+        'На экране есть несохранённый текст. Заменить его этой версией?',
     ]) {
         const e = STRINGS[key];
         assert.ok(e, 'строки нет в словаре: ' + key);
